@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Folder,
@@ -18,7 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { SFTPListDir } from "../../../wailsjs/go/main/App";
+import { SFTPListDir, SFTPGetwd } from "../../../wailsjs/go/main/App";
 import { sftp_svc } from "../../../wailsjs/go/models";
 
 interface RemoteFileBrowserProps {
@@ -26,7 +26,7 @@ interface RemoteFileBrowserProps {
   onOpenChange: (open: boolean) => void;
   sessionId: string;
   mode: "upload" | "download";
-  onConfirm: (remotePath: string, isDir: boolean) => void;
+  onConfirm: (remotePath: string, isDir: boolean, uploadType?: "file" | "dir") => void;
 }
 
 function formatSize(bytes: number): string {
@@ -57,6 +57,9 @@ export function RemoteFileBrowser({
   const [selected, setSelected] = useState<string | null>(null);
   const [selectedIsDir, setSelectedIsDir] = useState(false);
 
+  // 记住每个 session 上次浏览的目录
+  const lastPathRef = useRef<Record<string, string>>({});
+
   const loadDir = useCallback(
     async (dirPath: string) => {
       setLoading(true);
@@ -68,6 +71,7 @@ export function RemoteFileBrowser({
         setEntries(result || []);
         setCurrentPath(dirPath);
         setPathInput(dirPath);
+        lastPathRef.current[sessionId] = dirPath;
       } catch (e) {
         setError(String(e));
       } finally {
@@ -78,8 +82,16 @@ export function RemoteFileBrowser({
   );
 
   useEffect(() => {
-    if (open && sessionId) {
-      loadDir("/");
+    if (!open || !sessionId) return;
+    const lastPath = lastPathRef.current[sessionId];
+    if (lastPath) {
+      // 有记忆，直接加载上次目录
+      loadDir(lastPath);
+    } else {
+      // 首次打开，获取远程 home 目录
+      SFTPGetwd(sessionId)
+        .then((home) => loadDir(home || "/"))
+        .catch(() => loadDir("/"));
     }
   }, [open, sessionId, loadDir]);
 
@@ -111,23 +123,17 @@ export function RemoteFileBrowser({
     }
   };
 
-  const handleConfirm = () => {
-    if (mode === "upload") {
-      // 上传：目标是当前目录或选中的目录
-      const targetDir = selected && selectedIsDir ? selected : currentPath;
-      onConfirm(targetDir.endsWith("/") ? targetDir : targetDir + "/", true);
-    } else {
-      // 下载：选中文件或目录
-      if (!selected) return;
-      onConfirm(selected, selectedIsDir);
-    }
+  const handleUpload = (uploadType: "file" | "dir") => {
+    const targetDir = selected && selectedIsDir ? selected : currentPath;
+    onConfirm(targetDir.endsWith("/") ? targetDir : targetDir + "/", true, uploadType);
     onOpenChange(false);
   };
 
-  const canConfirm =
-    mode === "upload"
-      ? true // 上传始终可以确认（使用当前目录）
-      : !!selected; // 下载需要选中
+  const handleDownload = () => {
+    if (!selected) return;
+    onConfirm(selected, selectedIsDir);
+    onOpenChange(false);
+  };
 
   const dialogTitle =
     mode === "upload"
@@ -252,9 +258,20 @@ export function RemoteFileBrowser({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t("action.cancel")}
           </Button>
-          <Button onClick={handleConfirm} disabled={!canConfirm}>
-            {t("action.confirm")}
-          </Button>
+          {mode === "upload" ? (
+            <>
+              <Button onClick={() => handleUpload("file")}>
+                {t("sftp.upload")}
+              </Button>
+              <Button onClick={() => handleUpload("dir")}>
+                {t("sftp.uploadDir")}
+              </Button>
+            </>
+          ) : (
+            <Button onClick={handleDownload} disabled={!selected}>
+              {t("action.confirm")}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

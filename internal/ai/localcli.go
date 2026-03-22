@@ -100,13 +100,18 @@ func (p *LocalCLIProvider) chatClaude(ctx context.Context, messages []Message) (
 			}
 		}
 
-		// 进程结束但没收到 result 事件
+		// 进程结束但没收到 result 事件，检查是否有错误
 		if parser.SessionID != "" {
 			p.mu.Lock()
 			p.sessionID = parser.SessionID
 			p.mu.Unlock()
 		}
-		proc.Wait()
+		err := proc.Wait()
+		if stderrStr := proc.Stderr(); stderrStr != "" {
+			ch <- StreamEvent{Type: "error", Error: stderrStr}
+		} else if err != nil {
+			ch <- StreamEvent{Type: "error", Error: fmt.Sprintf("CLI 进程退出: %s", err)}
+		}
 		ch <- StreamEvent{Type: "done"}
 	}()
 
@@ -139,36 +144,31 @@ func (p *LocalCLIProvider) buildClaudeArgs(userMsg, systemPrompt string) []strin
 	return args
 }
 
-// chatCodex 使用 codex exec --json 模式
+// chatCodex 使用 Codex app-server 持久进程
 func (p *LocalCLIProvider) chatCodex(ctx context.Context, messages []Message) (<-chan StreamEvent, error) {
-	// codex exec 不支持 session resume，每次需要完整 prompt
-	prompt := messagesToPrompt(messages)
+	userMsg, _ := extractLastUserAndSystem(messages)
+	if userMsg == "" {
+		return nil, fmt.Errorf("没有用户消息")
+	}
 
-	proc, err := StartCLIProcess(ctx, p.cliPath, []string{"exec", "--json", prompt})
-	if err != nil {
-		return nil, err
+	// 懒启动 app-server
+	if p.codexServer == nil {
+		server := NewCodexAppServer()
+		if err := server.Start(ctx, p.cliPath); err != nil {
+			return nil, fmt.Errorf("启动 Codex app-server 失败: %w", err)
+		}
+		p.codexServer = server
 	}
 
 	ch := make(chan StreamEvent, 64)
 	go func() {
 		defer close(ch)
-		defer proc.Stop()
-
-		parser := NewCodexEventParser()
-		lines := proc.ReadLines(ctx)
-
-		for line := range lines {
-			events, done := parser.ParseLine(line)
-			for _, ev := range events {
-				ch <- ev
-			}
-			if done {
-				ch <- StreamEvent{Type: "done"}
-				return
-			}
+		err := p.codexServer.SendTurn(ctx, userMsg, func(ev StreamEvent) {
+			ch <- ev
+		})
+		if err != nil {
+			ch <- StreamEvent{Type: "error", Error: err.Error()}
 		}
-
-		proc.Wait()
 		ch <- StreamEvent{Type: "done"}
 	}()
 

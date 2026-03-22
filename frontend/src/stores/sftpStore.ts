@@ -104,6 +104,16 @@ function subscribeProgress(
             },
           }));
           EventsOff(eventName);
+          // 5 秒后自动清除已完成的传输
+          setTimeout(() => {
+            const current = get().transfers[transferId];
+            if (current && current.status === "done") {
+              set((state) => {
+                const { [transferId]: _, ...rest } = state.transfers;
+                return { transfers: rest };
+              });
+            }
+          }, 5000);
           break;
         case "error":
           set((state) => ({

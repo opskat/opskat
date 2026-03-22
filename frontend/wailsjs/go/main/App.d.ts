@@ -83,6 +83,8 @@ export function SFTPDownload(arg1:string,arg2:string):Promise<string>;
 
 export function SFTPDownloadDir(arg1:string,arg2:string):Promise<string>;
 
+export function SFTPGetwd(arg1:string):Promise<string>;
+
 export function SFTPListDir(arg1:string,arg2:string):Promise<Array<sftp_svc.FileEntry>>;
 
 export function SFTPUpload(arg1:string,arg2:string):Promise<string>;

@@ -314,6 +314,11 @@ func (a *App) DisconnectSSH(sessionID string) {
 
 // --- SFTP 文件传输 ---
 
+// SFTPGetwd 获取远程工作目录（用户 home）
+func (a *App) SFTPGetwd(sessionID string) (string, error) {
+	return a.sftpService.Getwd(sessionID)
+}
+
 // SFTPListDir 列出远程目录内容
 func (a *App) SFTPListDir(sessionID, dirPath string) ([]sftp_svc.FileEntry, error) {
 	return a.sftpService.ListDir(sessionID, dirPath)

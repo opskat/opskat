@@ -77,6 +77,15 @@ func (s *Service) getSFTPClient(sessionID string) (*sftp.Client, error) {
 	return client, nil
 }
 
+// Getwd 获取远程工作目录（用户 home）
+func (s *Service) Getwd(sessionID string) (string, error) {
+	sftpClient, err := s.getSFTPClient(sessionID)
+	if err != nil {
+		return "", err
+	}
+	return sftpClient.Getwd()
+}
+
 // FileEntry 远程文件/目录条目
 type FileEntry struct {
 	Name    string `json:"name"`

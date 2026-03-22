@@ -150,6 +150,10 @@ export function SFTPDownloadDir(arg1, arg2) {
   return window['go']['main']['App']['SFTPDownloadDir'](arg1, arg2);
 }
 
+export function SFTPGetwd(arg1) {
+  return window['go']['main']['App']['SFTPGetwd'](arg1);
+}
+
 export function SFTPListDir(arg1, arg2) {
   return window['go']['main']['App']['SFTPListDir'](arg1, arg2);
 }

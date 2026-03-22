@@ -2,6 +2,7 @@ package ai
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,7 @@ type CLIProcess struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
+	stderr bytes.Buffer // 捕获 stderr 用于错误报告
 	mu     sync.Mutex
 }
 
@@ -30,8 +32,13 @@ func StartCLIProcess(ctx context.Context, cliPath string, args []string) (*CLIPr
 		stdin.Close()
 		return nil, fmt.Errorf("获取 stdout 失败: %w", err)
 	}
-	// stderr 丢弃，避免阻塞
-	cmd.Stderr = nil
+
+	p := &CLIProcess{
+		cmd:    cmd,
+		stdin:  stdin,
+		stdout: stdout,
+	}
+	cmd.Stderr = &p.stderr
 
 	if err := cmd.Start(); err != nil {
 		stdin.Close()
@@ -39,11 +46,7 @@ func StartCLIProcess(ctx context.Context, cliPath string, args []string) (*CLIPr
 		return nil, fmt.Errorf("启动 CLI 失败: %w", err)
 	}
 
-	return &CLIProcess{
-		cmd:    cmd,
-		stdin:  stdin,
-		stdout: stdout,
-	}, nil
+	return p, nil
 }
 
 // WriteJSON 向 stdin 写入一行 JSON（NDJSON 格式）
@@ -81,6 +84,11 @@ func (p *CLIProcess) ReadLines(ctx context.Context) <-chan string {
 // Wait 等待进程结束
 func (p *CLIProcess) Wait() error {
 	return p.cmd.Wait()
+}
+
+// Stderr 返回 stderr 内容
+func (p *CLIProcess) Stderr() string {
+	return p.stderr.String()
 }
 
 // Stop 停止进程
