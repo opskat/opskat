@@ -1,0 +1,12 @@
+build/bin
+node_modules
+frontend/dist
+temp
+
+.claude
+frontend/.claude
+
+CLAUDE.md
+
+*.db
+

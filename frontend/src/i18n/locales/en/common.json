@@ -1,0 +1,68 @@
+{
+  "app": {
+    "title": "Ops Cat",
+    "subtitle": "AI-first IT Asset Management",
+    "hint": "Select an asset from the sidebar to get started"
+  },
+  "nav": {
+    "home": "Home",
+    "settings": "Settings"
+  },
+  "action": {
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "save": "Save",
+    "delete": "Delete",
+    "edit": "Edit",
+    "add": "Add"
+  },
+  "theme": {
+    "toggle": "Toggle theme",
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
+  },
+  "language": {
+    "label": "Language",
+    "zh-CN": "中文",
+    "en": "English"
+  },
+  "asset": {
+    "title": "Assets",
+    "ungrouped": "Ungrouped",
+    "addAsset": "Add Asset",
+    "addGroup": "Add Group",
+    "name": "Name",
+    "host": "Host",
+    "port": "Port",
+    "username": "Username",
+    "authType": "Auth Type",
+    "authPassword": "Password",
+    "authKey": "Key",
+    "group": "Group",
+    "description": "Description",
+    "groupName": "Group Name",
+    "search": "Search..."
+  },
+  "ssh": {
+    "connect": "Connect",
+    "disconnect": "Disconnect",
+    "password": "Password",
+    "terminal": "Terminal"
+  },
+  "settings": {
+    "providerType": "Provider Type",
+    "model": "Model",
+    "cliPath": "CLI Path",
+    "cliType": "CLI Type",
+    "detectedCLIs": "Detected local CLIs",
+    "configured": "Configured",
+    "saved": "Saved"
+  },
+  "ai": {
+    "title": "AI Assistant",
+    "placeholder": "Type a message...",
+    "send": "Send",
+    "notConfigured": "Please configure AI Provider in Settings"
+  }
+}
