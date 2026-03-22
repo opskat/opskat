@@ -47,13 +47,15 @@ function AlertDialogOverlay({
 function AlertDialogContent({
   className,
   size = "default",
+  onOverlayClick,
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Content> & {
   size?: "default" | "sm"
+  onOverlayClick?: () => void
 }) {
   return (
     <AlertDialogPortal>
-      <AlertDialogOverlay />
+      <AlertDialogOverlay onClick={onOverlayClick} />
       <AlertDialogPrimitive.Content
         data-slot="alert-dialog-content"
         data-size={size}

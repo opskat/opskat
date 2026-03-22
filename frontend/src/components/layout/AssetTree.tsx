@@ -66,6 +66,7 @@ export function AssetTree({
     id: number;
     assetCount: number;
   } | null>(null);
+  const [deleteAssetConfirm, setDeleteAssetConfirm] = useState<asset_entity.Asset | null>(null);
 
   useEffect(() => {
     fetchAssets();
@@ -185,7 +186,7 @@ export function AssetTree({
               onConnectAsset={onConnectAsset}
               onEditGroup={onEditGroup}
               onDeleteGroup={handleDeleteGroup}
-              onDeleteAsset={deleteAsset}
+              onDeleteAsset={(asset) => setDeleteAssetConfirm(asset)}
               depth={0}
               t={t}
             />
@@ -212,7 +213,7 @@ export function AssetTree({
               onConnectAsset={onConnectAsset}
               onEditGroup={onEditGroup}
               onDeleteGroup={handleDeleteGroup}
-              onDeleteAsset={deleteAsset}
+              onDeleteAsset={(asset) => setDeleteAssetConfirm(asset)}
               depth={0}
               t={t}
             />
@@ -245,6 +246,33 @@ export function AssetTree({
               onClick={() => handleConfirmDelete(true)}
             >
               {t("asset.deleteAssets")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog
+        open={!!deleteAssetConfirm}
+        onOpenChange={(open) => !open && setDeleteAssetConfirm(null)}
+      >
+        <AlertDialogContent onOverlayClick={() => setDeleteAssetConfirm(null)}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("asset.deleteAssetTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("asset.deleteAssetDesc", { name: deleteAssetConfirm?.Name })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("action.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (deleteAssetConfirm) {
+                  deleteAsset(deleteAssetConfirm.ID);
+                }
+                setDeleteAssetConfirm(null);
+              }}
+            >
+              {t("action.delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -288,7 +316,7 @@ function GroupItem({
   onConnectAsset: (asset: asset_entity.Asset) => void;
   onEditGroup: (group: group_entity.Group) => void;
   onDeleteGroup: (id: number) => void;
-  onDeleteAsset: (id: number) => void;
+  onDeleteAsset: (asset: asset_entity.Asset) => void;
   depth: number;
   t: (key: string) => string;
 }) {
@@ -406,7 +434,7 @@ function GroupItem({
                   </ContextMenuItem>
                   <ContextMenuItem
                     className="text-destructive"
-                    onClick={() => onDeleteAsset(asset.ID)}
+                    onClick={() => onDeleteAsset(asset)}
                   >
                     {t("action.delete")}
                   </ContextMenuItem>

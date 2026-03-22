@@ -1,7 +1,18 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Server, Pencil, Trash2, TerminalSquare, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { useAssetStore } from "@/stores/assetStore";
 import { asset_entity } from "../../../wailsjs/go/models";
@@ -43,6 +54,7 @@ interface AssetDetailProps {
 export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }: AssetDetailProps) {
   const { t } = useTranslation();
   const { assets } = useAssetStore();
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   let sshConfig: SSHConfig | null = null;
   try {
@@ -87,12 +99,28 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
             variant="ghost"
             size="icon"
             className="h-8 w-8 text-destructive hover:text-destructive"
-            onClick={onDelete}
+            onClick={() => setShowDeleteConfirm(true)}
           >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
+      <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <AlertDialogContent onOverlayClick={() => setShowDeleteConfirm(false)}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("asset.deleteAssetTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("asset.deleteAssetDesc", { name: asset.Name })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("action.cancel")}</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={onDelete}>
+              {t("action.delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <div className="flex-1 p-4 space-y-4 overflow-y-auto">
         {sshConfig && (
           <div className="rounded-xl border bg-card p-4">
