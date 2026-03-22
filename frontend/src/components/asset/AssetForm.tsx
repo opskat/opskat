@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
-import { Plus, Trash2, ChevronDown, ChevronRight, Eye, EyeOff } from "lucide-react";
+import { Plus, Trash2, ChevronDown, ChevronRight, Eye, EyeOff, FolderOpen, Loader2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -27,7 +27,10 @@ import {
   SaveCredential,
   LoadCredential,
   ListSSHKeys,
+  ListLocalSSHKeys,
+  SelectSSHKeyFile,
 } from "../../../wailsjs/go/main/App";
+import { main } from "../../../wailsjs/go/models";
 
 interface AssetFormProps {
   open: boolean;
@@ -94,8 +97,10 @@ export function AssetForm({
   const [keyId, setKeyId] = useState(0);
   const [managedKeys, setManagedKeys] = useState<ssh_key_entity.SSHKey[]>([]);
 
-  // SSH fields
-  const [privateKeys, setPrivateKeys] = useState("");
+  // SSH fields - local key
+  const [localKeys, setLocalKeys] = useState<main.LocalSSHKeyInfo[]>([]);
+  const [selectedKeyPaths, setSelectedKeyPaths] = useState<string[]>([]);
+  const [scanningKeys, setScanningKeys] = useState(false);
   const [jumpHostId, setJumpHostId] = useState(0);
   const [forwardedPorts, setForwardedPorts] = useState<ForwardedPort[]>([]);
   const [proxyEnabled, setProxyEnabled] = useState(false);
@@ -127,12 +132,17 @@ export function AssetForm({
   };
   const groupOptions = buildGroupOptions();
 
-  // Load managed keys when dialog opens
+  // Load managed keys and scan local keys when dialog opens
   useEffect(() => {
     if (open) {
       ListSSHKeys()
         .then((keys) => setManagedKeys(keys || []))
         .catch(() => setManagedKeys([]));
+      setScanningKeys(true);
+      ListLocalSSHKeys()
+        .then((keys) => setLocalKeys(keys || []))
+        .catch(() => setLocalKeys([]))
+        .finally(() => setScanningKeys(false));
     }
   }, [open]);
 
@@ -159,10 +169,10 @@ export function AssetForm({
           } else {
             setPassword("");
           }
-          setKeySource(cfg.key_source === "file" ? "file" : "managed");
+          setKeySource((cfg.key_source === "file" || cfg.key_source === "local") ? "file" : "managed");
           setKeyId(cfg.key_id || 0);
 
-          setPrivateKeys((cfg.private_keys || []).join("\n"));
+          setSelectedKeyPaths(cfg.private_keys || []);
           setJumpHostId(cfg.jump_host_id || 0);
           setForwardedPorts(cfg.forwarded_ports || []);
           if (cfg.proxy) {
@@ -211,7 +221,7 @@ export function AssetForm({
     setEncryptedPassword("");
     setKeySource("managed");
     setKeyId(0);
-    setPrivateKeys("");
+    setSelectedKeyPaths([]);
     setJumpHostId(0);
     setForwardedPorts([]);
     setProxyEnabled(false);
@@ -224,11 +234,6 @@ export function AssetForm({
   };
 
   const handleSubmit = async () => {
-    const keys = privateKeys
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
     const sshConfig: SSHConfig = {
       host,
       port,
@@ -256,8 +261,8 @@ export function AssetForm({
       if (keySource === "managed" && keyId > 0) {
         sshConfig.key_id = keyId;
       }
-      if (keySource === "file" && keys.length > 0) {
-        sshConfig.private_keys = keys;
+      if (keySource === "file" && selectedKeyPaths.length > 0) {
+        sshConfig.private_keys = selectedKeyPaths;
       }
     }
 
@@ -384,7 +389,6 @@ export function AssetForm({
                     {t("asset.authPassword")}
                   </SelectItem>
                   <SelectItem value="key">{t("asset.authKey")}</SelectItem>
-                  <SelectItem value="agent">{t("asset.authAgent")}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -475,13 +479,87 @@ export function AssetForm({
 
               {keySource === "file" && (
                 <div className="grid gap-2">
-                  <Label>{t("asset.privateKeys")}</Label>
-                  <Textarea
-                    value={privateKeys}
-                    onChange={(e) => setPrivateKeys(e.target.value)}
-                    placeholder={t("asset.privateKeysPlaceholder")}
-                    rows={2}
-                  />
+                  <Label>{t("asset.discoveredKeys")}</Label>
+                  {scanningKeys ? (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      {t("asset.scanningKeys")}
+                    </div>
+                  ) : localKeys.length > 0 ? (
+                    <div className="grid gap-1.5">
+                      {localKeys.map((k) => {
+                        const selected = selectedKeyPaths.includes(k.path);
+                        return (
+                          <label
+                            key={k.path}
+                            className="flex items-center gap-2 text-xs cursor-pointer hover:bg-accent rounded px-2 py-1.5"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              onChange={() => {
+                                if (selected) {
+                                  setSelectedKeyPaths(selectedKeyPaths.filter((p) => p !== k.path));
+                                } else {
+                                  setSelectedKeyPaths([...selectedKeyPaths, k.path]);
+                                }
+                              }}
+                              className="rounded"
+                            />
+                            <span className="font-medium truncate">{k.path.split("/").pop()}</span>
+                            <span className="text-muted-foreground">({k.keyType})</span>
+                            <span className="text-muted-foreground truncate ml-auto" title={k.fingerprint}>
+                              {k.fingerprint.substring(0, 20)}...
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">{t("asset.noLocalKeys")}</p>
+                  )}
+
+                  {/* 已选的非发现密钥（手动浏览添加的） */}
+                  {selectedKeyPaths
+                    .filter((p) => !localKeys.some((k) => k.path === p))
+                    .map((path) => (
+                      <div key={path} className="flex items-center gap-2 text-xs px-2 py-1.5 bg-accent rounded">
+                        <span className="truncate flex-1">{path}</span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5 shrink-0"
+                          onClick={() => setSelectedKeyPaths(selectedKeyPaths.filter((p) => p !== path))}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ))}
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-full mt-1"
+                    onClick={async () => {
+                      try {
+                        const info = await SelectSSHKeyFile();
+                        if (info && !selectedKeyPaths.includes(info.path)) {
+                          setSelectedKeyPaths([...selectedKeyPaths, info.path]);
+                          // 如果不在发现列表中，添加到 localKeys 方便显示信息
+                          if (!localKeys.some((k) => k.path === info.path)) {
+                            setLocalKeys([...localKeys, info]);
+                          }
+                        }
+                      } catch (e) {
+                        toast.error(String(e));
+                      }
+                    }}
+                  >
+                    <FolderOpen className="h-3.5 w-3.5 mr-1.5" />
+                    {t("asset.browseKeyFile")}
+                  </Button>
                 </div>
               )}
             </div>

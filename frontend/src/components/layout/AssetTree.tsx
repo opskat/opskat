@@ -41,6 +41,7 @@ interface AssetTreeProps {
   onAddGroup: () => void;
   onEditGroup: (group: group_entity.Group) => void;
   onEditAsset: (asset: asset_entity.Asset) => void;
+  onCopyAsset: (asset: asset_entity.Asset) => void;
   onConnectAsset: (asset: asset_entity.Asset) => void;
   onSelectAsset: (asset: asset_entity.Asset) => void;
 }
@@ -51,6 +52,7 @@ export function AssetTree({
   onAddGroup,
   onEditGroup,
   onEditAsset,
+  onCopyAsset,
   onConnectAsset,
   onSelectAsset,
 }: AssetTreeProps) {
@@ -179,6 +181,7 @@ export function AssetTree({
               onSelectAsset={onSelectAsset}
               onAddAsset={() => onAddAsset(group.ID)}
               onEditAsset={onEditAsset}
+              onCopyAsset={onCopyAsset}
               onConnectAsset={onConnectAsset}
               onEditGroup={onEditGroup}
               onDeleteGroup={handleDeleteGroup}
@@ -205,6 +208,7 @@ export function AssetTree({
               onSelectAsset={onSelectAsset}
               onAddAsset={() => onAddAsset(0)}
               onEditAsset={onEditAsset}
+              onCopyAsset={onCopyAsset}
               onConnectAsset={onConnectAsset}
               onEditGroup={onEditGroup}
               onDeleteGroup={handleDeleteGroup}
@@ -261,6 +265,7 @@ function GroupItem({
   onSelectAsset,
   onAddAsset,
   onEditAsset,
+  onCopyAsset,
   onConnectAsset,
   onEditGroup,
   onDeleteGroup,
@@ -279,6 +284,7 @@ function GroupItem({
   onSelectAsset: (asset: asset_entity.Asset) => void;
   onAddAsset: () => void;
   onEditAsset: (asset: asset_entity.Asset) => void;
+  onCopyAsset: (asset: asset_entity.Asset) => void;
   onConnectAsset: (asset: asset_entity.Asset) => void;
   onEditGroup: (group: group_entity.Group) => void;
   onDeleteGroup: (id: number) => void;
@@ -349,6 +355,7 @@ function GroupItem({
               onSelectAsset={onSelectAsset}
               onAddAsset={onAddAsset}
               onEditAsset={onEditAsset}
+              onCopyAsset={onCopyAsset}
               onConnectAsset={onConnectAsset}
               onEditGroup={onEditGroup}
               onDeleteGroup={onDeleteGroup}
@@ -393,6 +400,9 @@ function GroupItem({
                   </ContextMenuItem>
                   <ContextMenuItem onClick={() => onEditAsset(asset)}>
                     {t("action.edit")}
+                  </ContextMenuItem>
+                  <ContextMenuItem onClick={() => onCopyAsset(asset)}>
+                    {t("action.copy")}
                   </ContextMenuItem>
                   <ContextMenuItem
                     className="text-destructive"

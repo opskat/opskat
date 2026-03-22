@@ -15,7 +15,6 @@ const (
 const (
 	AuthTypePassword = "password"
 	AuthTypeKey      = "key"
-	AuthTypeAgent    = "agent"
 )
 
 // 状态常量

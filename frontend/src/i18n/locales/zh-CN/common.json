@@ -17,7 +17,8 @@
     "saving": "保存中...",
     "delete": "删除",
     "edit": "编辑",
-    "add": "添加"
+    "add": "添加",
+    "copy": "复制"
   },
   "theme": {
     "toggle": "切换主题",
@@ -64,7 +65,6 @@
     "proxyPort": "代理端口",
     "proxyUsername": "代理用户名",
     "proxyPassword": "代理密码",
-    "authAgent": "Agent",
     "parentGroup": "父分组",
     "parentGroupNone": "顶层分组",
     "deleteGroupTitle": "删除分组",
@@ -79,7 +79,13 @@
     "selectKey": "选择密钥",
     "selectKeyPlaceholder": "选择一个托管密钥",
     "noManagedKeys": "暂无托管密钥，请先在设置中添加",
-    "connect": "连接"
+    "connect": "连接",
+    "discoveredKeys": "发现的密钥 (~/.ssh)",
+    "noLocalKeys": "未发现本地密钥",
+    "scanningKeys": "正在扫描...",
+    "browseKeyFile": "浏览...",
+    "selectedKeys": "已选密钥",
+    "keyFingerprint": "指纹"
   },
   "sshKey": {
     "title": "SSH 密钥",

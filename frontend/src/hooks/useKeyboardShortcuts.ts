@@ -30,21 +30,43 @@ export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar }: Short
       e.preventDefault();
       e.stopPropagation();
 
-      const { tabs, activeTabId, setActiveTab, splitPane, closePane } =
+      const { tabs, activeTabId, assetInfoOpen, setActiveTab, openAssetInfo, closeAssetInfo, splitPane, closePane } =
         useTerminalStore.getState();
+
+      // Build a virtual tab list: [asset info (if open), ...terminal tabs]
+      // Asset info tab is represented as null, terminal tabs by their id
+      const allTabIds: (string | null)[] = [];
+      if (assetInfoOpen) allTabIds.push(null);
+      for (const tab of tabs) allTabIds.push(tab.id);
+
+      // Current active: null means asset info is showing
+      const currentId = activeTabId ?? (assetInfoOpen ? null : undefined);
+
+      const switchTo = (id: string | null) => {
+        if (id === null) {
+          openAssetInfo();
+        } else {
+          setActiveTab(id);
+        }
+      };
 
       // Tab switching: tab.1 ~ tab.9
       const tabMatch = action.match(/^tab\.(\d)$/);
       if (tabMatch) {
         const idx = parseInt(tabMatch[1]) - 1;
-        if (idx < tabs.length) {
-          setActiveTab(tabs[idx].id);
+        if (idx < allTabIds.length) {
+          switchTo(allTabIds[idx]);
         }
         return;
       }
 
       switch (action) {
         case "tab.close": {
+          // Close asset info tab if it's currently active
+          if (currentId === null && assetInfoOpen) {
+            closeAssetInfo();
+            break;
+          }
           if (!activeTabId) break;
           const tab = tabs.find((t) => t.id === activeTabId);
           if (tab) {
@@ -53,17 +75,17 @@ export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar }: Short
           break;
         }
         case "tab.prev": {
-          if (tabs.length === 0) break;
-          const curIdx = tabs.findIndex((t) => t.id === activeTabId);
-          const prevIdx = curIdx <= 0 ? tabs.length - 1 : curIdx - 1;
-          setActiveTab(tabs[prevIdx].id);
+          if (allTabIds.length === 0) break;
+          const curIdx = currentId === undefined ? -1 : allTabIds.indexOf(currentId);
+          const prevIdx = curIdx <= 0 ? allTabIds.length - 1 : curIdx - 1;
+          switchTo(allTabIds[prevIdx]);
           break;
         }
         case "tab.next": {
-          if (tabs.length === 0) break;
-          const curIdx = tabs.findIndex((t) => t.id === activeTabId);
-          const nextIdx = curIdx >= tabs.length - 1 ? 0 : curIdx + 1;
-          setActiveTab(tabs[nextIdx].id);
+          if (allTabIds.length === 0) break;
+          const curIdx = currentId === undefined ? -1 : allTabIds.indexOf(currentId);
+          const nextIdx = curIdx >= allTabIds.length - 1 ? 0 : curIdx + 1;
+          switchTo(allTabIds[nextIdx]);
           break;
         }
         case "split.vertical": {

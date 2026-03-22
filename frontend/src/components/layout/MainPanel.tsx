@@ -26,7 +26,7 @@ export function MainPanel({
 }: MainPanelProps) {
   const { t } = useTranslation();
   const isFullscreen = useFullscreen();
-  const { tabs, activeTabId, setActiveTab, removeTab, connectingAssetIds } = useTerminalStore();
+  const { tabs, activeTabId, assetInfoOpen, setActiveTab, removeTab, closeAssetInfo, openAssetInfo, connectingAssetIds } = useTerminalStore();
 
   const dragRegion = (
     <div
@@ -37,6 +37,7 @@ export function MainPanel({
 
   const isHome = activePage === "home";
   const showTerminal = isHome && activeTabId && tabs.some((tab) => tab.id === activeTabId);
+  const showAssetInfo = isHome && !showTerminal && assetInfoOpen && selectedAsset;
 
   return (
     <div className="flex flex-1 flex-col min-w-0">
@@ -44,26 +45,35 @@ export function MainPanel({
       {dragRegion}
 
       {/* Tab bar — always rendered so terminals stay mounted */}
-      {tabs.length > 0 && (
+      {(assetInfoOpen || tabs.length > 0) && (
         <div
           className="flex items-center border-b overflow-x-auto bg-background"
           style={{ display: isHome ? undefined : "none" }}
         >
-          {selectedAsset && (
-            <button
+          {assetInfoOpen && selectedAsset && (
+            <div
               className={cn(
                 "relative flex items-center gap-1.5 px-3 py-2 text-sm shrink-0 cursor-pointer transition-colors duration-150",
-                !showTerminal
+                showAssetInfo
                   ? "text-foreground"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
               )}
-              onClick={() => setActiveTab(null)}
+              onClick={() => openAssetInfo()}
             >
               {selectedAsset.Name}
-              {!showTerminal && (
+              <button
+                className="ml-1.5 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors duration-150"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  closeAssetInfo();
+                }}
+              >
+                <X className="h-3 w-3" />
+              </button>
+              {showAssetInfo && (
                 <span className="absolute bottom-0 left-1 right-1 h-0.5 rounded-full bg-primary" />
               )}
-            </button>
+            </div>
           )}
           {tabs.map((tab) => {
             const allDisconnected = Object.values(tab.panes).every(
@@ -130,7 +140,7 @@ export function MainPanel({
           </div>
         ))}
 
-        {!showTerminal && selectedAsset && (
+        {showAssetInfo && (
           <AssetDetail
             asset={selectedAsset}
             isConnecting={connectingAssetIds.has(selectedAsset.ID)}
@@ -140,7 +150,7 @@ export function MainPanel({
           />
         )}
 
-        {!showTerminal && !selectedAsset && (
+        {!showTerminal && !showAssetInfo && (
           <div className="flex items-center justify-center h-full bg-gradient-to-br from-background via-background to-primary/5">
             <div className="text-center space-y-4">
               <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10">

@@ -110,7 +110,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
                     ? t("asset.authPassword") + (sshConfig.password ? " ●" : "")
                     : sshConfig.auth_type === "key"
                     ? t("asset.authKey") + (sshConfig.key_source === "managed" ? ` (${t("asset.keySourceManaged")})` : sshConfig.key_source === "file" ? ` (${t("asset.keySourceFile")})` : "")
-                    : t("asset.authAgent")
+                    : sshConfig.auth_type
                 }
               />
             </div>

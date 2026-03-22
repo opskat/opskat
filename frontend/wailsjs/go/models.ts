@@ -360,6 +360,22 @@ export namespace main {
 	        this.encrypted = source["encrypted"];
 	    }
 	}
+	export class LocalSSHKeyInfo {
+	    path: string;
+	    keyType: string;
+	    fingerprint: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LocalSSHKeyInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.keyType = source["keyType"];
+	        this.fingerprint = source["fingerprint"];
+	    }
+	}
 	export class SSHConnectRequest {
 	    assetId: number;
 	    password: string;

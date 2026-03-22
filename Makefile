@@ -3,10 +3,13 @@
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
     BIN_PATH := ./build/bin/ops-cat.app/Contents/MacOS/ops-cat
+    UPX_FLAGS := --best --force-macos
 else ifeq ($(UNAME_S),Linux)
     BIN_PATH := ./build/bin/ops-cat
+    UPX_FLAGS := --best
 else
     BIN_PATH := ./build/bin/ops-cat.exe
+    UPX_FLAGS := --best
 endif
 
 # 开发模式（前后端热重载）
@@ -24,7 +27,7 @@ build:
 # 构建生产版本（UPX 压缩，需要安装 upx）
 build-upx:
 	wails build -ldflags="-s -w"
-	upx --best --force-macos $(BIN_PATH)
+	upx $(UPX_FLAGS) $(BIN_PATH)
 
 # 安装前端依赖
 install:

@@ -50,8 +50,8 @@ function App() {
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<group_entity.Group | null>(null);
 
-const { assets, selectedAssetId, selectAsset, deleteAsset, getAssetPath } = useAssetStore();
-  const { connect } = useTerminalStore();
+const { assets, selectedAssetId, selectAsset, deleteAsset, getAsset, getAssetPath } = useAssetStore();
+  const { connect, openAssetInfo } = useTerminalStore();
   const selectedAsset = assets.find((a) => a.ID === selectedAssetId) || null;
 
   const handleAddAsset = (groupId?: number) => {
@@ -65,9 +65,25 @@ const { assets, selectedAssetId, selectAsset, deleteAsset, getAssetPath } = useA
     setAssetFormOpen(true);
   };
 
+  const handleCopyAsset = async (asset: asset_entity.Asset) => {
+    try {
+      const fullAsset = await getAsset(asset.ID);
+      const copied = new asset_entity.Asset({
+        ...fullAsset,
+        ID: 0,
+        Name: `${fullAsset.Name} - 副本`,
+      });
+      setEditingAsset(copied);
+      setAssetFormOpen(true);
+    } catch (e) {
+      toast.error(String(e));
+    }
+  };
+
   const handleSelectAsset = (asset: asset_entity.Asset) => {
     selectAsset(asset.ID);
     setActivePage("home");
+    openAssetInfo();
   };
 
   const handleDeleteAsset = async (id: number) => {
@@ -111,6 +127,7 @@ const { assets, selectedAssetId, selectAsset, deleteAsset, getAssetPath } = useA
                 setGroupDialogOpen(true);
               }}
               onEditAsset={handleEditAsset}
+              onCopyAsset={handleCopyAsset}
               onConnectAsset={handleConnectAsset}
               onSelectAsset={handleSelectAsset}
             />

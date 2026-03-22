@@ -17,7 +17,8 @@
     "saving": "Saving...",
     "delete": "Delete",
     "edit": "Edit",
-    "add": "Add"
+    "add": "Add",
+    "copy": "Copy"
   },
   "theme": {
     "toggle": "Toggle theme",
@@ -64,7 +65,6 @@
     "proxyPort": "Proxy Port",
     "proxyUsername": "Proxy Username",
     "proxyPassword": "Proxy Password",
-    "authAgent": "Agent",
     "parentGroup": "Parent Group",
     "parentGroupNone": "Top Level",
     "deleteGroupTitle": "Delete Group",
@@ -79,7 +79,13 @@
     "selectKey": "Select Key",
     "selectKeyPlaceholder": "Select a managed key",
     "noManagedKeys": "No managed keys yet. Add one in Settings first.",
-    "connect": "Connect"
+    "connect": "Connect",
+    "discoveredKeys": "Discovered Keys (~/.ssh)",
+    "noLocalKeys": "No local keys found",
+    "scanningKeys": "Scanning...",
+    "browseKeyFile": "Browse...",
+    "selectedKeys": "Selected Keys",
+    "keyFingerprint": "Fingerprint"
   },
   "sshKey": {
     "title": "SSH Keys",

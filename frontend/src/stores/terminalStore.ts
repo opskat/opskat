@@ -92,6 +92,7 @@ function setRatioAtPath(
 interface TerminalState {
   tabs: TerminalTab[];
   activeTabId: string | null;
+  assetInfoOpen: boolean;
   connectingAssetIds: Set<number>;
 
   connect: (
@@ -105,6 +106,8 @@ interface TerminalState {
   setActiveTab: (id: string | null) => void;
   removeTab: (id: string) => void;
   markClosed: (id: string) => void;
+  openAssetInfo: () => void;
+  closeAssetInfo: () => void;
 
   // Split pane actions
   setActivePaneId: (tabId: string, paneId: string) => void;
@@ -119,6 +122,7 @@ interface TerminalState {
 export const useTerminalStore = create<TerminalState>((set, get) => ({
   tabs: [],
   activeTabId: null,
+  assetInfoOpen: false,
   connectingAssetIds: new Set(),
 
   connect: async (assetId, assetName, password, cols, rows) => {
@@ -177,6 +181,16 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   },
 
   setActiveTab: (id) => set({ activeTabId: id }),
+
+  openAssetInfo: () => set({ assetInfoOpen: true, activeTabId: null }),
+
+  closeAssetInfo: () => {
+    const { tabs } = get();
+    set({
+      assetInfoOpen: false,
+      activeTabId: tabs.length > 0 ? tabs[0].id : null,
+    });
+  },
 
   removeTab: (id) => {
     const tab = get().tabs.find((t) => t.id === id);

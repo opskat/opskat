@@ -93,7 +93,7 @@ type ConnectConfig struct {
 	Host        string
 	Port        int
 	Username    string
-	AuthType    string // password | key | agent
+	AuthType    string // password | key
 	Password    string
 	Key         string   // PEM 格式私钥（直接传入）
 	PrivateKeys []string // 私钥文件路径列表
@@ -425,9 +425,6 @@ func buildAuthMethods(authType, password, key string, privateKeyPaths []string) 
 		if len(methods) == 0 {
 			return nil, fmt.Errorf("密钥认证方式需要提供私钥")
 		}
-	case "agent":
-		// TODO: 支持 SSH agent
-		return nil, fmt.Errorf("暂不支持 SSH Agent 认证")
 	default:
 		return nil, fmt.Errorf("不支持的认证方式: %s", authType)
 	}

@@ -58,6 +58,8 @@ export function ListBackupGists(arg1:string):Promise<Array<backup_svc.GistInfo>>
 
 export function ListGroups():Promise<Array<group_entity.Group>>;
 
+export function ListLocalSSHKeys():Promise<Array<main.LocalSSHKeyInfo>>;
+
 export function ListSSHKeys():Promise<Array<ssh_key_entity.SSHKey>>;
 
 export function LoadCredential(arg1:string):Promise<string>;
@@ -69,6 +71,8 @@ export function ResizeSSH(arg1:string,arg2:number,arg3:number):Promise<void>;
 export function SaveCredential(arg1:string):Promise<string>;
 
 export function SelectImportFile():Promise<main.ImportFileInfo>;
+
+export function SelectSSHKeyFile():Promise<main.LocalSSHKeyInfo>;
 
 export function SendAIMessage(arg1:string,arg2:Array<ai.Message>):Promise<void>;
 

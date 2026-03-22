@@ -371,8 +371,6 @@ func mapAuthType(tabbyAuth string) string {
 		return asset_entity.AuthTypeKey
 	case "password":
 		return asset_entity.AuthTypePassword
-	case "agent":
-		return asset_entity.AuthTypeAgent
 	default:
 		return asset_entity.AuthTypePassword
 	}

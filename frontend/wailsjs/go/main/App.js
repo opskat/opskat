@@ -102,6 +102,10 @@ export function ListGroups() {
   return window['go']['main']['App']['ListGroups']();
 }
 
+export function ListLocalSSHKeys() {
+  return window['go']['main']['App']['ListLocalSSHKeys']();
+}
+
 export function ListSSHKeys() {
   return window['go']['main']['App']['ListSSHKeys']();
 }
@@ -124,6 +128,10 @@ export function SaveCredential(arg1) {
 
 export function SelectImportFile() {
   return window['go']['main']['App']['SelectImportFile']();
+}
+
+export function SelectSSHKeyFile() {
+  return window['go']['main']['App']['SelectSSHKeyFile']();
 }
 
 export function SendAIMessage(arg1, arg2) {

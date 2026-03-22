@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"ops-cat/internal/ai"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/cago-frame/cago/pkg/i18n"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"golang.org/x/crypto/ssh"
 )
 
 // App Wails应用主结构体，替代controller层
@@ -293,6 +295,119 @@ func (a *App) ResizeSSH(sessionID string, cols int, rows int) error {
 // DisconnectSSH 断开 SSH 连接
 func (a *App) DisconnectSSH(sessionID string) {
 	a.sshManager.Disconnect(sessionID)
+}
+
+// --- 本地 SSH 密钥发现 ---
+
+// LocalSSHKeyInfo 本地 SSH 密钥信息
+type LocalSSHKeyInfo struct {
+	Path        string `json:"path"`
+	KeyType     string `json:"keyType"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+// ListLocalSSHKeys 扫描 ~/.ssh 目录，返回有效的私钥列表
+func (a *App) ListLocalSSHKeys() ([]LocalSSHKeyInfo, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("获取用户目录失败: %w", err)
+	}
+	sshDir := filepath.Join(homeDir, ".ssh")
+
+	entries, err := os.ReadDir(sshDir)
+	if err != nil {
+		// ~/.ssh 不存在时返回空列表
+		if os.IsNotExist(err) {
+			return []LocalSSHKeyInfo{}, nil
+		}
+		return nil, fmt.Errorf("读取 .ssh 目录失败: %w", err)
+	}
+
+	// 需要跳过的文件
+	skipFiles := map[string]bool{
+		"known_hosts":     true,
+		"known_hosts.old": true,
+		"config":          true,
+		"authorized_keys": true,
+		"environment":     true,
+	}
+
+	var keys []LocalSSHKeyInfo
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		// 跳过公钥、已知文件和隐藏文件
+		if strings.HasSuffix(name, ".pub") || skipFiles[name] || strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".sock") {
+			continue
+		}
+
+		fullPath := filepath.Join(sshDir, name)
+		info, err := parseLocalSSHKey(fullPath)
+		if err != nil {
+			continue // 不是有效私钥，跳过
+		}
+		keys = append(keys, *info)
+	}
+
+	if keys == nil {
+		keys = []LocalSSHKeyInfo{}
+	}
+	return keys, nil
+}
+
+// SelectSSHKeyFile 打开文件选择框选择密钥文件，默认定位到 ~/.ssh
+func (a *App) SelectSSHKeyFile() (*LocalSSHKeyInfo, error) {
+	homeDir, _ := os.UserHomeDir()
+	defaultDir := filepath.Join(homeDir, ".ssh")
+
+	filePath, err := wailsRuntime.OpenFileDialog(a.ctx, wailsRuntime.OpenDialogOptions{
+		Title:            "选择 SSH 私钥文件",
+		DefaultDirectory: defaultDir,
+		Filters: []wailsRuntime.FileFilter{
+			{DisplayName: "All Files", Pattern: "*"},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("打开文件对话框失败: %w", err)
+	}
+	if filePath == "" {
+		return nil, nil // 用户取消
+	}
+
+	info, err := parseLocalSSHKey(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("所选文件不是有效的 SSH 私钥: %w", err)
+	}
+	return info, nil
+}
+
+// parseLocalSSHKey 解析本地私钥文件，返回密钥信息
+func parseLocalSSHKey(path string) (*LocalSSHKeyInfo, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	// 快速检查：私钥文件通常以 "-----BEGIN" 开头或是 OpenSSH 格式
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty file")
+	}
+
+	signer, err := ssh.ParsePrivateKey(data)
+	if err != nil {
+		return nil, err
+	}
+
+	pubKey := signer.PublicKey()
+	fingerprint := ssh.FingerprintSHA256(pubKey)
+	keyType := pubKey.Type()
+
+	return &LocalSSHKeyInfo{
+		Path:        path,
+		KeyType:     keyType,
+		Fingerprint: fingerprint,
+	}, nil
 }
 
 // --- AI 操作 ---
