@@ -8,12 +8,9 @@ import (
 	"os"
 
 	"ops-cat/internal/model/entity/asset_entity"
-	"ops-cat/internal/model/entity/audit_entity"
 	"ops-cat/internal/repository/group_repo"
 	"ops-cat/internal/service/asset_svc"
 
-	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
@@ -164,76 +161,6 @@ func ToOpenAITools(defs []ToolDef) []Tool {
 		}
 	}
 	return tools
-}
-
-// RegisterToMCP 将工具定义注册到 MCP Server
-func RegisterToMCP(s *server.MCPServer, defs []ToolDef) {
-	for _, def := range defs {
-		mcpTool := toMCPTool(def)
-		handler := def.Handler
-		toolName := def.Name
-		s.AddTool(mcpTool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			ctx = WithAuditSource(ctx, "mcp")
-			var args map[string]any
-			if m, ok := req.Params.Arguments.(map[string]any); ok {
-				args = m
-			} else {
-				args = make(map[string]any)
-			}
-			result, err := handler(ctx, args)
-
-			// 审计日志
-			argsJSON, _ := json.Marshal(args)
-			assetID := argInt64(args, "asset_id")
-			if assetID == 0 {
-				assetID = argInt64(args, "id")
-			}
-			success := 1
-			errMsg := ""
-			if err != nil {
-				success = 0
-				errMsg = err.Error()
-			}
-			go WriteAuditLog(ctx, &audit_entity.AuditLog{
-				Source:   "mcp",
-				ToolName: toolName,
-				AssetID:  assetID,
-				Command:  ExtractCommandForAudit(toolName, args),
-				Request:  truncateString(string(argsJSON), 4096),
-				Result:   truncateString(result, 4096),
-				Error:    errMsg,
-				Success:  success,
-			})
-
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			return mcp.NewToolResultText(result), nil
-		})
-	}
-}
-
-func toMCPTool(def ToolDef) mcp.Tool {
-	opts := []mcp.ToolOption{
-		mcp.WithDescription(def.Description),
-	}
-	for _, p := range def.Params {
-		switch p.Type {
-		case ParamString:
-			if p.Required {
-				opts = append(opts, mcp.WithString(p.Name, mcp.Required(), mcp.Description(p.Description)))
-			} else {
-				opts = append(opts, mcp.WithString(p.Name, mcp.Description(p.Description)))
-			}
-		case ParamNumber:
-			if p.Required {
-				opts = append(opts, mcp.WithNumber(p.Name, mcp.Required(), mcp.Description(p.Description)))
-			} else {
-				opts = append(opts, mcp.WithNumber(p.Name, mcp.Description(p.Description)))
-			}
-		}
-	}
-	return mcp.NewTool(def.Name, opts...)
 }
 
 // --- SSH 客户端缓存（内置 Agent 同一次 Chat 中复用连接）---
@@ -387,7 +314,7 @@ func handleRunCommand(ctx context.Context, args map[string]any) (string, error) 
 		return runCommandWithCache(ctx, cache, assetID, sshCfg, command)
 	}
 
-	// 无缓存（MCP 模式），创建一次性连接
+	// 无缓存，创建一次性连接
 	password, key, err := resolveAssetCredentials(ctx, sshCfg)
 	if err != nil {
 		return "", fmt.Errorf("解析凭据失败: %w", err)

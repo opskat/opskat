@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { X, TerminalSquare, Cat, Settings, KeyRound, MessageSquare } from "lucide-react";
+import { X, TerminalSquare, Cat, Settings, KeyRound, MessageSquare, ScrollText } from "lucide-react";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { AssetDetail } from "@/components/asset/AssetDetail";
 import { GroupDetail } from "@/components/asset/GroupDetail";
@@ -7,6 +7,7 @@ import { SplitPane } from "@/components/terminal/SplitPane";
 import { TerminalToolbar } from "@/components/terminal/TerminalToolbar";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { SSHKeyManager } from "@/components/settings/SSHKeyManager";
+import { AuditLogPage } from "@/components/audit/AuditLogPage";
 import { AIChatContent } from "@/components/ai/AIChatContent";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useAIStore } from "@/stores/aiStore";
@@ -18,6 +19,7 @@ const AI_TAB_PREFIX = "ai:";
 const pageTabMeta: Record<string, { icon: typeof Settings; labelKey: string }> = {
   settings: { icon: Settings, labelKey: "nav.settings" },
   sshkeys: { icon: KeyRound, labelKey: "nav.sshKeys" },
+  audit: { icon: ScrollText, labelKey: "nav.audit" },
 };
 
 interface MainPanelProps {
@@ -349,6 +351,11 @@ export function MainPanel({
                 <SSHKeyManager />
               </div>
             </div>
+          </div>
+        )}
+        {activePageTab === "audit" && (
+          <div className="absolute inset-0 bg-background">
+            <AuditLogPage />
           </div>
         )}
       </div>

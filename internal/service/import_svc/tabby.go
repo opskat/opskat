@@ -10,6 +10,7 @@ import (
 	"ops-cat/internal/model/entity/group_entity"
 	"ops-cat/internal/repository/asset_repo"
 	"ops-cat/internal/repository/group_repo"
+	"ops-cat/internal/service/credential_svc"
 
 	"gopkg.in/yaml.v3"
 )
@@ -37,26 +38,35 @@ type PreviewGroup struct {
 
 // PreviewItem 预览条目
 type PreviewItem struct {
-	Index    int    `json:"index"`    // 在原始列表中的索引
-	Name     string `json:"name"`
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	Username string `json:"username"`
-	AuthType string `json:"authType"`
-	GroupID  string `json:"groupId"` // Tabby 分组 UUID
-	Exists   bool   `json:"exists"`  // 是否已存在
+	Index       int    `json:"index"`       // 在原始列表中的索引
+	Name        string `json:"name"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	Username    string `json:"username"`
+	AuthType    string `json:"authType"`
+	GroupID     string `json:"groupId"`     // Tabby 分组 UUID
+	Exists      bool   `json:"exists"`      // 是否已存在
+	HasPassword bool   `json:"hasPassword"` // vault 中是否有密码
 }
 
 // PreviewResult 预览结果
 type PreviewResult struct {
-	Groups []PreviewGroup `json:"groups"`
-	Items  []PreviewItem  `json:"items"`
+	Groups   []PreviewGroup `json:"groups"`
+	Items    []PreviewItem  `json:"items"`
+	HasVault bool           `json:"hasVault"` // 是否有加密 vault
+}
+
+// ImportOptions 导入选项
+type ImportOptions struct {
+	Passphrase string `json:"passphrase"` // Tabby vault 密码
+	Overwrite  bool   `json:"overwrite"`  // 覆盖已存在的资产
 }
 
 // tabbyConfig Tabby 配置文件顶层结构
 type tabbyConfig struct {
-	Profiles []tabbyProfile `yaml:"profiles"`
-	Groups   []tabbyGroup   `yaml:"groups"`
+	Profiles []tabbyProfile    `yaml:"profiles"`
+	Groups   []tabbyGroup      `yaml:"groups"`
+	Vault    *tabbyStoredVault `yaml:"vault"`
 }
 
 // tabbyGroup Tabby 分组定义
@@ -106,6 +116,9 @@ func PreviewTabbyConfig(ctx context.Context, data []byte) (*PreviewResult, error
 		return nil, fmt.Errorf("解析 Tabby 配置失败: %w", err)
 	}
 
+	// 检测 vault
+	hasVault := cfg.Vault != nil && cfg.Vault.Contents != ""
+
 	// 构建 Tabby groupID → name 映射
 	tabbyGroupMap := make(map[string]string, len(cfg.Groups))
 	var groups []PreviewGroup
@@ -154,26 +167,37 @@ func PreviewTabbyConfig(ctx context.Context, data []byte) (*PreviewResult, error
 		}
 
 		items = append(items, PreviewItem{
-			Index:    idx,
-			Name:     name,
-			Host:     host,
-			Port:     port,
-			Username: username,
-			AuthType: mapAuthType(p.Options.Auth),
-			GroupID:  p.Group,
-			Exists:   exists,
+			Index:       idx,
+			Name:        name,
+			Host:        host,
+			Port:        port,
+			Username:    username,
+			AuthType:    mapAuthType(p.Options.Auth),
+			GroupID:     p.Group,
+			Exists:      exists,
+			HasPassword: hasVault, // vault 存在时所有 profile 可能有密码
 		})
 		idx++
 	}
 
-	return &PreviewResult{Groups: groups, Items: items}, nil
+	return &PreviewResult{Groups: groups, Items: items, HasVault: hasVault}, nil
 }
 
 // ImportTabbySelected 导入用户选中的 Tabby 连接
-func ImportTabbySelected(ctx context.Context, data []byte, selectedIndexes []int) (*ImportResult, error) {
+func ImportTabbySelected(ctx context.Context, data []byte, selectedIndexes []int, opts ImportOptions) (*ImportResult, error) {
 	var cfg tabbyConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("解析 Tabby 配置失败: %w", err)
+	}
+
+	// 解密 vault 获取密码映射
+	var vaultPasswords map[string]string
+	if opts.Passphrase != "" && cfg.Vault != nil && cfg.Vault.Contents != "" {
+		vault, err := decryptTabbyVault(cfg.Vault, opts.Passphrase)
+		if err != nil {
+			return nil, fmt.Errorf("解密 Tabby vault 失败: %w", err)
+		}
+		vaultPasswords = buildVaultPasswordMap(vault)
 	}
 
 	// 筛选 SSH profiles
@@ -209,18 +233,18 @@ func ImportTabbySelected(ctx context.Context, data []byte, selectedIndexes []int
 		tabbyGroupMap[g.ID] = g.Name
 	}
 
-	// 加载已有资产用于重复检测
+	// 加载已有资产用于重复检测和覆盖
 	existingAssets, err := asset_repo.Asset().List(ctx, asset_repo.ListOptions{Type: asset_entity.AssetTypeSSH})
 	if err != nil {
 		return nil, fmt.Errorf("查询已有资产失败: %w", err)
 	}
-	existingSet := make(map[string]bool, len(existingAssets))
+	existingMap := make(map[string]*asset_entity.Asset, len(existingAssets))
 	for _, a := range existingAssets {
 		sshCfg, err := a.GetSSHConfig()
 		if err != nil {
 			continue
 		}
-		existingSet[fmt.Sprintf("%s:%d:%s", sshCfg.Host, sshCfg.Port, sshCfg.Username)] = true
+		existingMap[fmt.Sprintf("%s:%d:%s", sshCfg.Host, sshCfg.Port, sshCfg.Username)] = a
 	}
 
 	existingGroups, err := group_repo.Group().List(ctx)
@@ -258,7 +282,9 @@ func ImportTabbySelected(ctx context.Context, data []byte, selectedIndexes []int
 		}
 
 		dupKey := fmt.Sprintf("%s:%d:%s", host, port, username)
-		if existingSet[dupKey] {
+		existingAsset := existingMap[dupKey]
+
+		if existingAsset != nil && !opts.Overwrite {
 			result.Skipped++
 			continue
 		}
@@ -311,32 +337,67 @@ func ImportTabbySelected(ctx context.Context, data []byte, selectedIndexes []int
 			sshCfg.KeySource = "file"
 		}
 
-		asset := &asset_entity.Asset{
-			Name: name, Type: asset_entity.AssetTypeSSH, GroupID: groupID,
-			Icon: "server", Status: asset_entity.StatusActive,
-		}
-		if err := asset.SetSSHConfig(sshCfg); err != nil {
-			result.Failed++
-			result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("序列化配置失败: %v", err)})
-			continue
+		// 从 vault 中提取密码并加密存储
+		if password, ok := vaultPasswords[profile.ID]; ok && password != "" {
+			encrypted, err := encryptPassword(password)
+			if err == nil {
+				sshCfg.Password = encrypted
+			}
 		}
 
-		now := time.Now().Unix()
-		asset.Createtime = now
-		asset.Updatetime = now
+		if existingAsset != nil && opts.Overwrite {
+			// 覆盖模式：保留已有密码（如果新数据没有密码）
+			if sshCfg.Password == "" {
+				if oldCfg, err := existingAsset.GetSSHConfig(); err == nil && oldCfg.Password != "" {
+					sshCfg.Password = oldCfg.Password
+				}
+			}
+			existingAsset.Name = name
+			if groupID != 0 {
+				existingAsset.GroupID = groupID
+			}
+			if err := existingAsset.SetSSHConfig(sshCfg); err != nil {
+				result.Failed++
+				result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("序列化配置失败: %v", err)})
+				continue
+			}
+			existingAsset.Updatetime = time.Now().Unix()
+			if err := asset_repo.Asset().Update(ctx, existingAsset); err != nil {
+				result.Failed++
+				result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("更新资产失败: %v", err)})
+				continue
+			}
+			tabbyNameToID[profile.Name] = existingAsset.ID
+			result.Success++
+		} else {
+			// 新建资产
+			asset := &asset_entity.Asset{
+				Name: name, Type: asset_entity.AssetTypeSSH, GroupID: groupID,
+				Icon: "server", Status: asset_entity.StatusActive,
+			}
+			if err := asset.SetSSHConfig(sshCfg); err != nil {
+				result.Failed++
+				result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("序列化配置失败: %v", err)})
+				continue
+			}
 
-		if err := asset_repo.Asset().Create(ctx, asset); err != nil {
-			result.Failed++
-			result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("创建资产失败: %v", err)})
-			continue
+			now := time.Now().Unix()
+			asset.Createtime = now
+			asset.Updatetime = now
+
+			if err := asset_repo.Asset().Create(ctx, asset); err != nil {
+				result.Failed++
+				result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("创建资产失败: %v", err)})
+				continue
+			}
+
+			existingMap[dupKey] = asset
+			tabbyNameToID[profile.Name] = asset.ID
+			result.Success++
 		}
-
-		existingSet[dupKey] = true
-		tabbyNameToID[profile.Name] = asset.ID
-		result.Success++
 
 		if profile.Options.JumpHost != "" {
-			pendingJumpHosts = append(pendingJumpHosts, jumpHostPending{assetID: asset.ID, jumpHostName: profile.Options.JumpHost})
+			pendingJumpHosts = append(pendingJumpHosts, jumpHostPending{assetID: tabbyNameToID[profile.Name], jumpHostName: profile.Options.JumpHost})
 		}
 	}
 
@@ -366,6 +427,11 @@ func ImportTabbySelected(ctx context.Context, data []byte, selectedIndexes []int
 	}
 
 	return result, nil
+}
+
+// encryptPassword 使用 credential_svc 加密密码
+func encryptPassword(password string) (string, error) {
+	return credential_svc.Default().Encrypt(password)
 }
 
 func mapAuthType(tabbyAuth string) string {

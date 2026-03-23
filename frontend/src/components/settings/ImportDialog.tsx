@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { Server, Folder, ChevronDown, ChevronRight } from "lucide-react";
+import { Server, Folder, ChevronDown, ChevronRight, KeyRound } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -14,12 +14,17 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { import_svc } from "../../../wailsjs/go/models";
 import { useAssetStore } from "@/stores/assetStore";
 
+export interface ImportCallOptions {
+  passphrase: string;
+  overwrite: boolean;
+}
+
 interface ImportDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   preview: import_svc.PreviewResult | null;
   title: string;
-  onImport: (selectedIndexes: number[]) => Promise<import_svc.ImportResult>;
+  onImport: (selectedIndexes: number[], options: ImportCallOptions) => Promise<import_svc.ImportResult>;
 }
 
 export function ImportDialog({ open, onOpenChange, preview, title, onImport }: ImportDialogProps) {
@@ -28,6 +33,8 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [importing, setImporting] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(["__all__"]));
+  const [passphrase, setPassphrase] = useState("");
+  const [overwrite, setOverwrite] = useState(false);
 
   // 当 preview 变化时重置选择（默认选中所有不存在的）
   useMemo(() => {
@@ -39,6 +46,8 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
         }
       }
       setSelected(defaultSelected);
+      setPassphrase("");
+      setOverwrite(false);
       // 默认展开所有分组
       const groups = new Set(["__ungrouped__", ...(preview.groups || []).map((g) => g.id)]);
       setExpandedGroups(groups);
@@ -46,6 +55,9 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
   }, [preview]);
 
   if (!preview) return null;
+
+  const hasVault = preview.hasVault;
+  const hasExisting = (preview.items || []).some((i) => i.exists);
 
   // 按分组归类
   const groupMap = new Map<string, string>();
@@ -106,7 +118,7 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
     if (selected.size === 0) return;
     setImporting(true);
     try {
-      const result = await onImport(Array.from(selected));
+      const result = await onImport(Array.from(selected), { passphrase, overwrite });
       toast.success(
         t("import.result", {
           total: result.total,
@@ -136,6 +148,20 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
+
+        {/* Vault 密码输入 */}
+        {hasVault && (
+          <div className="flex items-center gap-2">
+            <KeyRound className="h-4 w-4 text-muted-foreground shrink-0" />
+            <input
+              type="password"
+              className="flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              placeholder={t("import.vaultPassphrase")}
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+            />
+          </div>
+        )}
 
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span>
@@ -204,7 +230,7 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
                         <label
                           key={item.index}
                           className={`flex items-center gap-1.5 rounded-md pl-9 pr-2 py-1.5 text-sm cursor-pointer hover:bg-muted ${
-                            item.exists ? "opacity-50" : ""
+                            item.exists && !overwrite ? "opacity-50" : ""
                           }`}
                         >
                           <input
@@ -219,8 +245,8 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
                             {item.host}:{item.port}
                           </span>
                           {item.exists && (
-                            <span className="text-xs text-yellow-500 shrink-0">
-                              {t("import.exists")}
+                            <span className={`text-xs shrink-0 ${overwrite ? "text-blue-500" : "text-yellow-500"}`}>
+                              {overwrite ? t("import.overwrite") : t("import.exists")}
                             </span>
                           )}
                         </label>
@@ -232,6 +258,19 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
             })}
           </div>
         </ScrollArea>
+
+        {/* 覆盖开关 */}
+        {hasExisting && (
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={overwrite}
+              onChange={(e) => setOverwrite(e.target.checked)}
+              className="rounded"
+            />
+            <span>{t("import.overwriteExisting")}</span>
+          </label>
+        )}
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>

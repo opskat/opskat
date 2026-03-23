@@ -1,4 +1,6 @@
-import { Home, Settings, Cat, KeyRound, PanelLeftClose, PanelLeftOpen, EyeOff, Bot } from "lucide-react";
+import { Home, Settings, KeyRound, PanelLeftClose, PanelLeftOpen, EyeOff, Bot, ScrollText } from "lucide-react";
+import logoLight from "@/assets/images/logo.png";
+import logoDark from "@/assets/images/logo-dark.png";
 import { useTranslation } from "react-i18next";
 import {
   Tooltip,
@@ -26,6 +28,7 @@ export function Sidebar({ activePage, onPageChange, sidebarCollapsed, onToggleSi
   const navItems = [
     { id: "home", icon: Home, label: t("nav.home") },
     { id: "sshkeys", icon: KeyRound, label: t("nav.sshKeys") },
+    { id: "audit", icon: ScrollText, label: t("nav.audit") },
   ];
 
   return (
@@ -37,8 +40,9 @@ export function Sidebar({ activePage, onPageChange, sidebarCollapsed, onToggleSi
       />
 
       {/* App logo */}
-      <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
-        <Cat className="h-5 w-5 text-primary" />
+      <div className="mb-3 flex h-9 w-9 items-center justify-center">
+        <img src={logoLight} alt="ops-cat" className="h-8 w-8 rounded-lg dark:hidden" />
+        <img src={logoDark} alt="ops-cat" className="h-8 w-8 rounded-lg hidden dark:block" />
       </div>
 
       {/* Navigation */}

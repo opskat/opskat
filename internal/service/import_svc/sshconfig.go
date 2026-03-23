@@ -81,7 +81,7 @@ func PreviewSSHConfig(ctx context.Context, data []byte) (*PreviewResult, error) 
 }
 
 // ImportSSHConfigSelected 导入用户选中的 SSH Config 连接
-func ImportSSHConfigSelected(ctx context.Context, data []byte, selectedIndexes []int) (*ImportResult, error) {
+func ImportSSHConfigSelected(ctx context.Context, data []byte, selectedIndexes []int, opts ImportOptions) (*ImportResult, error) {
 	hosts := parseSSHConfig(string(data))
 
 	// 构建选中索引集合
@@ -102,18 +102,18 @@ func ImportSSHConfigSelected(ctx context.Context, data []byte, selectedIndexes [
 		return result, nil
 	}
 
-	// 加载已有资产用于重复检测
+	// 加载已有资产用于重复检测和覆盖
 	existingAssets, err := asset_repo.Asset().List(ctx, asset_repo.ListOptions{Type: asset_entity.AssetTypeSSH})
 	if err != nil {
 		return nil, fmt.Errorf("查询已有资产失败: %w", err)
 	}
-	existingSet := make(map[string]bool, len(existingAssets))
+	existingMap := make(map[string]*asset_entity.Asset, len(existingAssets))
 	for _, a := range existingAssets {
 		sshCfg, err := a.GetSSHConfig()
 		if err != nil {
 			continue
 		}
-		existingSet[fmt.Sprintf("%s:%d:%s", sshCfg.Host, sshCfg.Port, sshCfg.Username)] = true
+		existingMap[fmt.Sprintf("%s:%d:%s", sshCfg.Host, sshCfg.Port, sshCfg.Username)] = a
 	}
 
 	existingGroups, err := group_repo.Group().List(ctx)
@@ -122,7 +122,7 @@ func ImportSSHConfigSelected(ctx context.Context, data []byte, selectedIndexes [
 	}
 	groupCache := buildGroupCache(existingGroups)
 
-	// 第一轮：创建资产，记录 alias → assetID
+	// 第一轮：创建或更新资产，记录 alias → assetID
 	aliasToID := make(map[string]int64)
 	type jumpPending struct {
 		assetID   int64
@@ -145,7 +145,9 @@ func ImportSSHConfigSelected(ctx context.Context, data []byte, selectedIndexes [
 		}
 
 		dupKey := fmt.Sprintf("%s:%d:%s", h.hostName, port, user)
-		if existingSet[dupKey] {
+		existingAsset := existingMap[dupKey]
+
+		if existingAsset != nil && !opts.Overwrite {
 			result.Skipped++
 			continue
 		}
@@ -174,35 +176,56 @@ func ImportSSHConfigSelected(ctx context.Context, data []byte, selectedIndexes [
 		groupID := int64(0)
 		_ = groupCache // 预留分组逻辑
 
-		asset := &asset_entity.Asset{
-			Name:    name,
-			Type:    asset_entity.AssetTypeSSH,
-			GroupID: groupID,
-			Icon:    "server",
-			Status:  asset_entity.StatusActive,
-		}
-		if err := asset.SetSSHConfig(sshCfg); err != nil {
-			result.Failed++
-			result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("序列化配置失败: %v", err)})
-			continue
-		}
+		if existingAsset != nil && opts.Overwrite {
+			// 覆盖模式：保留已有密码
+			if oldCfg, err := existingAsset.GetSSHConfig(); err == nil && oldCfg.Password != "" {
+				sshCfg.Password = oldCfg.Password
+			}
+			existingAsset.Name = name
+			if err := existingAsset.SetSSHConfig(sshCfg); err != nil {
+				result.Failed++
+				result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("序列化配置失败: %v", err)})
+				continue
+			}
+			existingAsset.Updatetime = time.Now().Unix()
+			if err := asset_repo.Asset().Update(ctx, existingAsset); err != nil {
+				result.Failed++
+				result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("更新资产失败: %v", err)})
+				continue
+			}
+			aliasToID[h.alias] = existingAsset.ID
+			result.Success++
+		} else {
+			asset := &asset_entity.Asset{
+				Name:    name,
+				Type:    asset_entity.AssetTypeSSH,
+				GroupID: groupID,
+				Icon:    "server",
+				Status:  asset_entity.StatusActive,
+			}
+			if err := asset.SetSSHConfig(sshCfg); err != nil {
+				result.Failed++
+				result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("序列化配置失败: %v", err)})
+				continue
+			}
 
-		now := time.Now().Unix()
-		asset.Createtime = now
-		asset.Updatetime = now
+			now := time.Now().Unix()
+			asset.Createtime = now
+			asset.Updatetime = now
 
-		if err := asset_repo.Asset().Create(ctx, asset); err != nil {
-			result.Failed++
-			result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("创建资产失败: %v", err)})
-			continue
+			if err := asset_repo.Asset().Create(ctx, asset); err != nil {
+				result.Failed++
+				result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("创建资产失败: %v", err)})
+				continue
+			}
+
+			existingMap[dupKey] = asset
+			aliasToID[h.alias] = asset.ID
+			result.Success++
 		}
-
-		existingSet[dupKey] = true
-		aliasToID[h.alias] = asset.ID
-		result.Success++
 
 		if h.proxyJump != "" {
-			pendingJumps = append(pendingJumps, jumpPending{assetID: asset.ID, proxyJump: h.proxyJump})
+			pendingJumps = append(pendingJumps, jumpPending{assetID: aliasToID[h.alias], proxyJump: h.proxyJump})
 		}
 	}
 

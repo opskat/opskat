@@ -9,7 +9,8 @@
     "sshKeys": "SSH Keys",
     "settings": "Settings",
     "appearance": "Appearance",
-    "ai": "AI Assistant"
+    "ai": "AI Assistant",
+    "audit": "Audit Log"
   },
   "action": {
     "confirm": "Confirm",
@@ -161,7 +162,10 @@
     "selectAll": "Select all",
     "selectNone": "Deselect all",
     "confirmImport": "Import {{count}} items",
-    "exists": "Exists"
+    "exists": "Exists",
+    "overwrite": "Overwrite",
+    "overwriteExisting": "Overwrite existing assets",
+    "vaultPassphrase": "Enter Tabby Vault master password to import passwords"
   },
   "ssh": {
     "connect": "Connect",
@@ -191,9 +195,7 @@
     "cliType": "CLI Type",
     "detectedCLIs": "Detected local CLIs",
     "configured": "Configured",
-    "saved": "Saved",
-    "mcpPort": "MCP Port",
-    "mcpPortPlaceholder": "Leave empty for random port"
+    "saved": "Saved"
   },
   "backup": {
     "title": "Backup",
@@ -233,6 +235,22 @@
     "deviceFlowOpen": "Open Browser",
     "gistCreateNew": "Create new backup",
     "gistUpdate": "Update: {{desc}}"
+  },
+  "setup": {
+    "title": "Configure AI Provider",
+    "subtitle": "Choose a method to start using the AI assistant",
+    "localCLI": "Local CLI",
+    "localCLIDesc": "Use Claude Code or Codex CLI installed on your machine",
+    "openAIDesc": "Use an OpenAI-compatible API endpoint",
+    "recommended": "Recommended",
+    "notComplete": "Not Fully Complete",
+    "cliConfig": "CLI Configuration",
+    "integration": "Integration",
+    "autoInstall": "Auto-install on setup",
+    "opsctlManualHint": "Manual install required",
+    "opsctlRequired": "opsctl CLI not installed. Skill features may be limited. Install in Settings > Integration.",
+    "complete": "Complete Setup",
+    "config": "Configuration"
   },
   "ai": {
     "title": "AI Assistant",
@@ -347,7 +365,7 @@
     "pathHint": "Add this directory to your PATH if not already included",
     "noEmbedded": "No embedded binary. Build with: make build-embed",
     "manualInstall": "Manual Install",
-    "manualInstallHint": "Or install from source:",
+    "manualInstallHint": "Download the binary for your platform from GitHub Releases",
     "dataDir": "Data Directory",
     "dataDirDesc": "Shared database location used by both desktop app and CLI",
     "refresh": "Refresh",
@@ -371,7 +389,9 @@
     "typeExec": "Execute Command",
     "typeCp": "File Transfer",
     "typeCreate": "Create Asset",
-    "typeUpdate": "Update Asset"
+    "typeUpdate": "Update Asset",
+    "allowSession": "Allow Session",
+    "sessionHint": "From AI session"
   },
   "planApproval": {
     "title": "Batch Plan Approval",
@@ -383,6 +403,24 @@
     "typeCreate": "Create",
     "typeUpdate": "Update",
     "itemCount": "{{count}} operation(s) total"
+  },
+  "audit": {
+    "title": "Audit Log",
+    "source": "Source",
+    "sourceAll": "All",
+    "toolName": "Tool",
+    "assetName": "Asset",
+    "command": "Command",
+    "result": "Result",
+    "success": "Success",
+    "failed": "Failed",
+    "time": "Time",
+    "detail": "Detail",
+    "request": "Request",
+    "response": "Response",
+    "error": "Error",
+    "empty": "No audit logs yet",
+    "total": "{{total}} record(s)"
   },
   "sftp": {
     "upload": "Upload File",

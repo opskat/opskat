@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, Settings2, Loader2 } from "lucide-react";
+import { Send, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import Markdown from "react-markdown";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAIStore, type ChatMessage } from "@/stores/aiStore";
 import { ToolBlock } from "@/components/ai/ToolBlock";
+import { AISetupWizard } from "@/components/ai/AISetupWizard";
 
 interface AIChatContentProps {
   tabId: string;
@@ -13,7 +14,7 @@ interface AIChatContentProps {
 
 export function AIChatContent({ tabId }: AIChatContentProps) {
   const { t } = useTranslation();
-  const { configured, sendToTab, isAnySending } = useAIStore();
+  const { configured, sendToTab } = useAIStore();
   const tabState = useAIStore((s) => s.tabStates[tabId]) || {
     messages: [],
     sending: false,
@@ -22,15 +23,21 @@ export function AIChatContent({ tabId }: AIChatContentProps) {
 
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // 切换 tab 时自动聚焦输入框
+  useEffect(() => {
+    textareaRef.current?.focus();
+  }, [tabId]);
+
   const handleSend = () => {
     const text = input.trim();
-    if (!text || sending || isAnySending()) return;
+    if (!text || sending) return;
     setInput("");
     sendToTab(tabId, text);
   };
@@ -47,18 +54,9 @@ export function AIChatContent({ tabId }: AIChatContentProps) {
     }
   };
 
-  // 未配置
+  // 未配置：显示引导设置
   if (!configured) {
-    return (
-      <div className="flex h-full items-center justify-center p-4">
-        <div className="text-center space-y-2">
-          <Settings2 className="h-8 w-8 text-muted-foreground mx-auto" />
-          <p className="text-sm text-muted-foreground">
-            {t("ai.notConfigured")}
-          </p>
-        </div>
-      </div>
-    );
+    return <AISetupWizard />;
   }
 
   return (
@@ -93,6 +91,7 @@ export function AIChatContent({ tabId }: AIChatContentProps) {
       <div className="border-t p-3">
         <div className="max-w-3xl mx-auto flex gap-2">
           <textarea
+            ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -113,7 +112,7 @@ export function AIChatContent({ tabId }: AIChatContentProps) {
             size="icon"
             className="h-9 w-9 shrink-0 rounded-xl"
             onClick={handleSend}
-            disabled={sending || isAnySending() || !input.trim()}
+            disabled={sending || !input.trim()}
           >
             {sending ? (
               <Loader2 className="h-4 w-4 animate-spin" />

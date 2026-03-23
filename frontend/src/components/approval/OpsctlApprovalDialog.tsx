@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { EventsOn, EventsOff } from "../../../wailsjs/runtime/runtime";
-import { RespondOpsctlApproval } from "../../../wailsjs/go/main/App";
+import { RespondOpsctlApproval, RespondOpsctlApprovalSession } from "../../../wailsjs/go/main/App";
 import { ShieldAlert } from "lucide-react";
 
 interface ApprovalEvent {
@@ -20,6 +20,7 @@ interface ApprovalEvent {
   asset_name: string;
   command: string;
   detail: string;
+  session_id?: string;
 }
 
 export function OpsctlApprovalDialog() {
@@ -45,6 +46,14 @@ export function OpsctlApprovalDialog() {
     setEvent(null);
   }, [event]);
 
+  const respondSession = useCallback(() => {
+    if (event && event.session_id) {
+      RespondOpsctlApprovalSession(event.confirm_id, true, true, event.session_id);
+    }
+    setOpen(false);
+    setEvent(null);
+  }, [event]);
+
   const typeLabel = event ? t(`opsctlApproval.type${event.type.charAt(0).toUpperCase() + event.type.slice(1)}`) : "";
 
   return (
@@ -61,6 +70,11 @@ export function OpsctlApprovalDialog() {
         </DialogHeader>
         {event && (
           <div className="space-y-3">
+            {event.session_id && (
+              <div className="text-xs text-blue-500 font-medium">
+                {t("opsctlApproval.sessionHint")}
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <span className="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium">{typeLabel}</span>
               {event.asset_name && (
@@ -82,9 +96,14 @@ export function OpsctlApprovalDialog() {
           <Button variant="outline" onClick={() => respond(false)}>
             {t("opsctlApproval.deny")}
           </Button>
-          <Button onClick={() => respond(true)}>
+          <Button variant="secondary" onClick={() => respond(true)}>
             {t("opsctlApproval.allow")}
           </Button>
+          {event?.session_id && (
+            <Button onClick={respondSession}>
+              {t("opsctlApproval.allowSession")}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

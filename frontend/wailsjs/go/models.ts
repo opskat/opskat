@@ -131,6 +131,47 @@ export namespace asset_entity {
 
 }
 
+export namespace audit_entity {
+	
+	export class AuditLog {
+	    ID: number;
+	    Source: string;
+	    ToolName: string;
+	    AssetID: number;
+	    AssetName: string;
+	    Command: string;
+	    Request: string;
+	    Result: string;
+	    Error: string;
+	    Success: number;
+	    ConversationID: number;
+	    PlanSessionID: string;
+	    Createtime: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new AuditLog(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ID = source["ID"];
+	        this.Source = source["Source"];
+	        this.ToolName = source["ToolName"];
+	        this.AssetID = source["AssetID"];
+	        this.AssetName = source["AssetName"];
+	        this.Command = source["Command"];
+	        this.Request = source["Request"];
+	        this.Result = source["Result"];
+	        this.Error = source["Error"];
+	        this.Success = source["Success"];
+	        this.ConversationID = source["ConversationID"];
+	        this.PlanSessionID = source["PlanSessionID"];
+	        this.Createtime = source["Createtime"];
+	    }
+	}
+
+}
+
 export namespace backup_svc {
 	
 	export class DeviceFlowInfo {
@@ -349,6 +390,7 @@ export namespace import_svc {
 	    authType: string;
 	    groupId: string;
 	    exists: boolean;
+	    hasPassword: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new PreviewItem(source);
@@ -364,11 +406,13 @@ export namespace import_svc {
 	        this.authType = source["authType"];
 	        this.groupId = source["groupId"];
 	        this.exists = source["exists"];
+	        this.hasPassword = source["hasPassword"];
 	    }
 	}
 	export class PreviewResult {
 	    groups: PreviewGroup[];
 	    items: PreviewItem[];
+	    hasVault: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new PreviewResult(source);
@@ -378,6 +422,7 @@ export namespace import_svc {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.groups = this.convertValues(source["groups"], PreviewGroup);
 	        this.items = this.convertValues(source["items"], PreviewItem);
+	        this.hasVault = source["hasVault"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -403,6 +448,38 @@ export namespace import_svc {
 
 export namespace main {
 	
+	export class AuditLogListResult {
+	    items: audit_entity.AuditLog[];
+	    total: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new AuditLogListResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], audit_entity.AuditLog);
+	        this.total = source["total"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ConversationDisplayMessage {
 	    role: string;
 	    content: string;

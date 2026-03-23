@@ -43,11 +43,14 @@ type CodexAppServer struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 
-	// OnPermissionRequest MCP 工具调用权限确认回调
+	// OnPermissionRequest 工具调用权限确认回调
 	OnPermissionRequest func(req PermissionRequest) PermissionResponse
 
-	// MCP 工具确认响应 channel（会话内审批用）
+	// 工具确认响应 channel（会话内审批用）
 	confirmCh chan PermissionResponse
+
+	// approvedItems 跟踪已通过审批的 item ID，避免 item/started 重复创建 tool block
+	approvedItems sync.Map
 }
 
 // NewCodexAppServer 创建 Codex App Server 客户端
@@ -60,16 +63,12 @@ func NewCodexAppServer() *CodexAppServer {
 }
 
 // Start 启动 codex app-server 进程并完成初始化握手
-// mcpServerURL 不为空时通过 -c 参数注入 MCP server 配置
-func (s *CodexAppServer) Start(ctx context.Context, cliPath, workDir, mcpServerURL string) error {
+func (s *CodexAppServer) Start(ctx context.Context, cliPath, workDir string, env map[string]string) error {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 	s.cliPath = cliPath
 
 	args := []string{"app-server"}
-	if mcpServerURL != "" {
-		args = append(args, "-c", fmt.Sprintf("mcp_servers.ops-cat.url=%q", mcpServerURL))
-	}
-	proc, err := StartCLIProcess(s.ctx, cliPath, args, workDir)
+	proc, err := StartCLIProcess(s.ctx, cliPath, args, workDir, env)
 	if err != nil {
 		return err
 	}
@@ -328,7 +327,7 @@ func (s *CodexAppServer) handleNotification(msg codexJSONRPC, onEvent func(Strea
 			s.handleItemCompleted(&p.Item, onEvent)
 		}
 
-	// ── MCP 工具权限确认（只处理一种格式，避免弹两次）──
+	// ── 工具权限确认（只处理一种格式，避免弹两次）──
 	case "item/tool/requestUserInput":
 		s.handleUserInputRequest(msg.ID, params, onEvent)
 
@@ -352,7 +351,7 @@ func (s *CodexAppServer) handleNotification(msg codexJSONRPC, onEvent func(Strea
 		}
 		return true
 
-	// ── v1 item 事件（可能包含 MCP 工具调用）──
+	// ── v1 item 事件 ──
 	case "codex/event/item_started":
 		var p struct {
 			Item codexItem `json:"item"`
@@ -429,6 +428,10 @@ func (s *CodexAppServer) handleNotification(msg codexJSONRPC, onEvent func(Strea
 func (s *CodexAppServer) handleItemStarted(item *codexItem, onEvent func(StreamEvent)) {
 	switch item.Type {
 	case "commandExecution":
+		// 已通过审批的命令，confirm block 已存在，跳过重复创建 tool block
+		if _, approved := s.approvedItems.LoadAndDelete(item.ID); approved {
+			return
+		}
 		if item.Command != "" {
 			onEvent(StreamEvent{Type: "tool_start", ToolName: "Bash", ToolInput: item.Command})
 		}
@@ -551,8 +554,8 @@ type codexUserInputQuestion struct {
 	} `json:"options"`
 }
 
-// handleUserInputRequest 处理 Codex MCP 工具权限确认请求
-// MCP 工具调用自动同意，因为 MCP Server 的 PolicyChecker 已负责安全审核
+// handleUserInputRequest 处理 Codex 工具权限确认请求
+// 工具调用自动同意，审批由 opsctl approval 机制负责
 func (s *CodexAppServer) handleUserInputRequest(requestID *int64, params json.RawMessage, onEvent func(StreamEvent)) {
 	var req struct {
 		ThreadID  string                   `json:"threadId"`
@@ -570,7 +573,7 @@ func (s *CodexAppServer) handleUserInputRequest(requestID *int64, params json.Ra
 		q.ID, q.Header, q.Question, q.Options, requestID)
 
 	// 不发 tool_start 事件：item/started 已在 requestUserInput 之前触发，由 handleItemStarted 处理
-	// 自动选择 "Approve this Session"（第二个选项），避免与 MCP PolicyChecker 双重审批
+	// 自动选择 "Approve this Session"（第二个选项）
 	answer := "Allow"
 	if len(q.Options) > 1 {
 		answer = q.Options[1].Label // "Approve this Session"
@@ -595,7 +598,7 @@ func (s *CodexAppServer) handleUserInputRequest(requestID *int64, params json.Ra
 			Result: resultData,
 		}
 		if err := s.proc.WriteJSON(replyMsg); err != nil {
-			log.Printf("[MCP] resolveUserInput response write failed: %v", err)
+			log.Printf("[Codex] resolveUserInput response write failed: %v", err)
 		}
 	} else {
 		s.sendNotification("item/tool/resolveUserInput", map[string]any{
@@ -627,6 +630,9 @@ func (s *CodexAppServer) handleCommandApproval(requestID *int64, params json.Raw
 
 	log.Printf("[Codex] handleCommandApproval: itemID=%s reason=%q command=%q", req.ItemID, req.Reason, req.Command)
 
+	// 记录已审批的 item ID，避免 item/started 重复创建 tool block
+	s.approvedItems.Store(req.ItemID, struct{}{})
+
 	// 生成 confirmID，通知前端在聊天内显示审批按钮
 	confirmID := fmt.Sprintf("codex_%s_%d", req.ItemID, time.Now().UnixNano())
 	onEvent(StreamEvent{
@@ -643,6 +649,8 @@ func (s *CodexAppServer) handleCommandApproval(requestID *int64, params json.Raw
 	case resp := <-s.confirmCh:
 		if resp.Behavior == "deny" {
 			decision = "cancel"
+			// 拒绝时不会有 item/started，清理记录
+			s.approvedItems.Delete(req.ItemID)
 		}
 		// 通知前端更新 ToolBlock 状态
 		resultContent := resp.Behavior
@@ -656,6 +664,7 @@ func (s *CodexAppServer) handleCommandApproval(requestID *int64, params json.Raw
 		})
 	case <-s.ctx.Done():
 		decision = "cancel"
+		s.approvedItems.Delete(req.ItemID)
 	}
 
 	log.Printf("[Codex] handleCommandApproval: decision=%s", decision)

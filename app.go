@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -23,7 +24,9 @@ import (
 	"ops-cat/internal/model/entity/group_entity"
 	"ops-cat/internal/model/entity/plan_entity"
 	"ops-cat/internal/model/entity/ssh_key_entity"
+	"ops-cat/internal/model/entity/audit_entity"
 	"ops-cat/internal/repository/asset_repo"
+	"ops-cat/internal/repository/audit_repo"
 	"ops-cat/internal/repository/group_repo"
 	"ops-cat/internal/repository/plan_repo"
 	"ops-cat/internal/service/asset_svc"
@@ -39,6 +42,12 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/crypto/ssh"
 )
+
+//go:embed skill/SKILL.md
+var skillMDContent string
+
+//go:embed skill/references/commands.md
+var skillCommandsMDContent string
 
 // ConfirmResponse 命令确认响应
 type ConfirmResponse struct {
@@ -66,12 +75,12 @@ type App struct {
 	sftpService           *sftp_svc.Service
 	aiAgent               *ai.Agent
 	aiProvider            ai.Provider // 保留 provider 引用，用于权限回调注入
-	mcpServer             *ai.MCPServer
 	githubAuthCancel      context.CancelFunc
 	permissionChan        chan ai.PermissionResponse // 前端权限响应 channel（CLI 工具用）
 	pendingConfirms       sync.Map                   // map[string]chan ConfirmResponse（run_command 确认用）
 	pendingApprovals      sync.Map                   // map[string]chan bool（opsctl 审批用）
 	approvalServer        *approval.Server           // opsctl 审批 Unix socket 服务
+	approvedSessions      sync.Map                   // map[string]bool（已批准的 session）
 	pendingAuthResponses  sync.Map                   // map[string]chan []string（keyboard-interactive 认证响应用）
 	pendingConnections    sync.Map                   // map[string]context.CancelFunc（异步连接取消用）
 	mu                    sync.Mutex                 // 保护 connCounter
@@ -92,37 +101,10 @@ func NewApp() *App {
 	}
 }
 
-// GetMCPPort 获取当前 MCP 端口配置
-func (a *App) GetMCPPort() int {
-	cfg := bootstrap.GetConfig()
-	if cfg == nil {
-		return 0
-	}
-	return cfg.MCPPort
-}
-
-// SetMCPPort 设置 MCP 端口并保存到配置
-func (a *App) SetMCPPort(port int) error {
-	cfg := bootstrap.GetConfig()
-	if cfg == nil {
-		cfg = &bootstrap.AppConfig{}
-	}
-	cfg.MCPPort = port
-	return bootstrap.SaveConfig(cfg)
-}
-
 // SetAIProvider 设置 AI provider 并创建 agent
 func (a *App) SetAIProvider(providerType, apiBase, apiKey, model string) error {
-	// 停止旧的 MCP Server
-	a.stopMCPServer()
 	a.aiProviderType = providerType
 	a.aiModel = model
-
-	// 从配置读取 MCP 端口
-	mcpPort := 0
-	if cfg := bootstrap.GetConfig(); cfg != nil {
-		mcpPort = cfg.MCPPort
-	}
 
 	// 创建共用的命令权限检查器
 	checker := ai.NewCommandPolicyChecker(a.makeCommandConfirmFunc())
@@ -139,24 +121,15 @@ func (a *App) SetAIProvider(providerType, apiBase, apiKey, model string) error {
 			wailsRuntime.EventsEmit(a.ctx, "ai:permission", req)
 			return <-a.permissionChan
 		}
-		// 启动 MCP Server（使用应用数据目录作为默认配置目录），共用同一个 checker
-		mcpSrv := ai.NewMCPServer(checker)
-		if err := mcpSrv.Start(a.ctx, bootstrap.AppDataDir(), mcpPort); err != nil {
-			return fmt.Errorf("MCP Server 启动失败: %w", err)
-		} else {
-			a.mcpServer = mcpSrv
-			// 如果有当前会话的工作目录，写入 MCP 配置
-			cliProvider.SetMCPServerURL(mcpSrv.URL())
-			if a.currentConversationID > 0 {
-				conv, err := conversation_svc.Conversation().Get(a.langCtx(), a.currentConversationID)
-				if err == nil && conv.WorkDir != "" {
-					_ = mcpSrv.WriteConfigToDir(conv.WorkDir)
-					cliProvider.SetMCPWorkDir(conv.WorkDir)
-				} else {
-					cliProvider.SetMCPWorkDir(mcpSrv.ConfigDir())
-				}
-			} else {
-				cliProvider.SetMCPWorkDir(mcpSrv.ConfigDir())
+		// 注入 session 重置回调：清理 approvedSessions
+		cliProvider.OnSessionReset = func(sessionID string) {
+			a.approvedSessions.Delete(sessionID)
+		}
+		// 设置工作目录
+		if a.currentConversationID > 0 {
+			conv, err := conversation_svc.Conversation().Get(a.langCtx(), a.currentConversationID)
+			if err == nil && conv.WorkDir != "" {
+				cliProvider.SetWorkDir(conv.WorkDir)
 			}
 		}
 		a.aiProvider = cliProvider
@@ -167,14 +140,6 @@ func (a *App) SetAIProvider(providerType, apiBase, apiKey, model string) error {
 	}
 	a.aiAgent = ai.NewAgent(provider, ai.NewAuditingExecutor(ai.NewDefaultToolExecutor()), checker)
 	return nil
-}
-
-// stopMCPServer 停止 MCP Server 并清理
-func (a *App) stopMCPServer() {
-	if a.mcpServer != nil {
-		a.mcpServer.Stop()
-		a.mcpServer = nil
-	}
 }
 
 // startup Wails启动回调
@@ -191,6 +156,13 @@ func (a *App) startApprovalServer() {
 			return a.handlePlanApproval(req)
 		}
 
+		// session 自动放行
+		if req.SessionID != "" {
+			if _, ok := a.approvedSessions.Load(req.SessionID); ok {
+				return approval.ApprovalResponse{Approved: true}
+			}
+		}
+
 		// 单条审批
 		confirmID := fmt.Sprintf("opsctl_%d", time.Now().UnixNano())
 
@@ -201,6 +173,7 @@ func (a *App) startApprovalServer() {
 			"asset_name": req.AssetName,
 			"command":    req.Command,
 			"detail":     req.Detail,
+			"session_id": req.SessionID,
 		})
 
 		ch := make(chan bool, 1)
@@ -230,7 +203,7 @@ func (a *App) startApprovalServer() {
 // handlePlanApproval 处理批量计划审批
 func (a *App) handlePlanApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
 	ctx := a.langCtx()
-	sessionID := req.PlanSessionID
+	sessionID := req.SessionID
 
 	// 写入 DB
 	session := &plan_entity.PlanSession{
@@ -286,10 +259,10 @@ func (a *App) handlePlanApproval(req approval.ApprovalRequest) approval.Approval
 	case approved := <-ch:
 		if approved {
 			_ = plan_repo.Plan().UpdateSessionStatus(ctx, sessionID, plan_entity.PlanStatusApproved)
-			return approval.ApprovalResponse{Approved: true, PlanSessionID: sessionID}
+			return approval.ApprovalResponse{Approved: true, SessionID: sessionID}
 		}
 		_ = plan_repo.Plan().UpdateSessionStatus(ctx, sessionID, plan_entity.PlanStatusRejected)
-		return approval.ApprovalResponse{Approved: false, Reason: "user denied", PlanSessionID: sessionID}
+		return approval.ApprovalResponse{Approved: false, Reason: "user denied", SessionID: sessionID}
 	case <-a.ctx.Done():
 		_ = plan_repo.Plan().UpdateSessionStatus(ctx, sessionID, plan_entity.PlanStatusRejected)
 		return approval.ApprovalResponse{Approved: false, Reason: "app shutting down"}
@@ -310,6 +283,14 @@ func (a *App) RespondOpsctlApproval(confirmID string, approved bool) {
 // RespondPlanApproval 前端响应计划审批请求
 func (a *App) RespondPlanApproval(sessionID string, approved bool) {
 	a.RespondOpsctlApproval(sessionID, approved)
+}
+
+// RespondOpsctlApprovalSession 前端响应审批并可选允许整个 session
+func (a *App) RespondOpsctlApprovalSession(confirmID string, approved bool, approveSession bool, sessionID string) {
+	if approved && approveSession && sessionID != "" {
+		a.approvedSessions.Store(sessionID, true)
+	}
+	a.RespondOpsctlApproval(confirmID, approved)
 }
 
 // cleanup 关闭审批服务等资源
@@ -1273,10 +1254,7 @@ func (a *App) switchToConversation(conv *conversation_entity.Conversation) {
 
 		// 切换工作目录
 		if conv.WorkDir != "" {
-			if a.mcpServer != nil {
-				_ = a.mcpServer.WriteConfigToDir(conv.WorkDir)
-			}
-			p.SetMCPWorkDir(conv.WorkDir)
+			p.SetWorkDir(conv.WorkDir)
 		}
 	}
 }
@@ -1295,7 +1273,8 @@ func (a *App) DeleteConversation(id int64) error {
 }
 
 // SendAIMessage 发送 AI 消息，通过 Wails Events 流式返回
-func (a *App) SendAIMessage(messages []ai.Message) error {
+// convID 指定目标会话，支持多会话并发发送
+func (a *App) SendAIMessage(convID int64, messages []ai.Message) error {
 	if a.aiAgent == nil {
 		return fmt.Errorf("请先配置 AI Provider")
 	}
@@ -1303,15 +1282,16 @@ func (a *App) SendAIMessage(messages []ai.Message) error {
 	ctx := a.langCtx()
 
 	// 自动创建会话（首次发消息时）
-	if a.currentConversationID == 0 {
-		_, err := a.CreateConversation()
+	if convID == 0 {
+		conv, err := a.CreateConversation()
 		if err != nil {
 			return fmt.Errorf("创建会话失败: %w", err)
 		}
+		convID = conv.ID
 	}
 
 	// 更新会话标题（如果仍是默认标题"新对话"）
-	if conv, err := conversation_svc.Conversation().Get(ctx, a.currentConversationID); err == nil && conv.Title == "新对话" {
+	if conv, err := conversation_svc.Conversation().Get(ctx, convID); err == nil && conv.Title == "新对话" {
 		for _, msg := range messages {
 			if msg.Role == ai.RoleUser {
 				title := string(msg.Content)
@@ -1325,7 +1305,6 @@ func (a *App) SendAIMessage(messages []ai.Message) error {
 		}
 	}
 
-	convID := a.currentConversationID
 	eventName := fmt.Sprintf("ai:event:%d", convID)
 
 	// 添加系统提示
@@ -1378,15 +1357,16 @@ func (a *App) persistConversationState(convID int64, messages []ai.Message) {
 }
 
 // SaveConversationMessages 前端调用，保存显示消息到数据库
-func (a *App) SaveConversationMessages(displayMsgs []ConversationDisplayMessage) error {
-	if a.currentConversationID == 0 {
+// convID 指定目标会话，支持多会话独立保存
+func (a *App) SaveConversationMessages(convID int64, displayMsgs []ConversationDisplayMessage) error {
+	if convID == 0 {
 		return nil
 	}
 	ctx := a.langCtx()
 	var msgs []*conversation_entity.Message
 	for i, dm := range displayMsgs {
 		msg := &conversation_entity.Message{
-			ConversationID: a.currentConversationID,
+			ConversationID: convID,
 			Role:           dm.Role,
 			Content:        dm.Content,
 			SortOrder:      i,
@@ -1395,7 +1375,7 @@ func (a *App) SaveConversationMessages(displayMsgs []ConversationDisplayMessage)
 		_ = msg.SetBlocks(dm.Blocks)
 		msgs = append(msgs, msg)
 	}
-	return conversation_svc.Conversation().SaveMessages(ctx, a.currentConversationID, msgs)
+	return conversation_svc.Conversation().SaveMessages(ctx, convID, msgs)
 }
 
 // GetCurrentConversationID 获取当前会话ID
@@ -1411,7 +1391,7 @@ func (a *App) DetectLocalCLIs() []ai.CLIInfo {
 // RespondPermission 前端响应权限确认请求（CLI 工具用）
 func (a *App) RespondPermission(behavior, message string) {
 	resp := ai.PermissionResponse{Behavior: behavior, Message: message}
-	// Codex MCP 工具确认走 confirmCh
+	// Codex 工具确认走 confirmCh
 	if p, ok := a.aiProvider.(*ai.LocalCLIProvider); ok {
 		if srv := p.GetCodexServer(); srv != nil {
 			srv.RespondConfirm(resp)
@@ -1470,7 +1450,7 @@ func (a *App) RespondCommandConfirm(confirmID, behavior string) {
 		}
 		return
 	}
-	// 否则转发到 Codex MCP 工具确认
+	// 否则转发到 Codex 工具确认
 	if p, ok := a.aiProvider.(*ai.LocalCLIProvider); ok {
 		if srv := p.GetCodexServer(); srv != nil {
 			srv.RespondConfirm(ai.PermissionResponse{Behavior: behavior})
@@ -1582,7 +1562,7 @@ func (a *App) PreviewTabbyConfig() (*import_svc.PreviewResult, error) {
 }
 
 // ImportTabbySelected 导入用户选中的 Tabby 连接
-func (a *App) ImportTabbySelected(selectedIndexes []int) (*import_svc.ImportResult, error) {
+func (a *App) ImportTabbySelected(selectedIndexes []int, passphrase string, overwrite bool) (*import_svc.ImportResult, error) {
 	data, err := a.readTabbyConfig()
 	if err != nil {
 		return nil, err
@@ -1590,7 +1570,10 @@ func (a *App) ImportTabbySelected(selectedIndexes []int) (*import_svc.ImportResu
 	if data == nil {
 		return nil, nil
 	}
-	return import_svc.ImportTabbySelected(a.langCtx(), data, selectedIndexes)
+	return import_svc.ImportTabbySelected(a.langCtx(), data, selectedIndexes, import_svc.ImportOptions{
+		Passphrase: passphrase,
+		Overwrite:  overwrite,
+	})
 }
 
 // PreviewSSHConfig 预览 SSH Config 文件（不写入数据库）
@@ -1607,7 +1590,7 @@ func (a *App) PreviewSSHConfig() (*import_svc.PreviewResult, error) {
 }
 
 // ImportSSHConfigSelected 导入用户选中的 SSH Config 连接
-func (a *App) ImportSSHConfigSelected(selectedIndexes []int) (*import_svc.ImportResult, error) {
+func (a *App) ImportSSHConfigSelected(selectedIndexes []int, overwrite bool) (*import_svc.ImportResult, error) {
 	data, err := a.readSSHConfig()
 	if err != nil {
 		return nil, err
@@ -1615,7 +1598,9 @@ func (a *App) ImportSSHConfigSelected(selectedIndexes []int) (*import_svc.Import
 	if data == nil {
 		return nil, nil
 	}
-	return import_svc.ImportSSHConfigSelected(a.langCtx(), data, selectedIndexes)
+	return import_svc.ImportSSHConfigSelected(a.langCtx(), data, selectedIndexes, import_svc.ImportOptions{
+		Overwrite: overwrite,
+	})
 }
 
 // readSSHConfig 读取 SSH Config 文件
@@ -2019,11 +2004,19 @@ func (a *App) DetectClaudeSkill() SkillInfo {
 	if err != nil {
 		return SkillInfo{}
 	}
-	skillPath := filepath.Join(home, ".claude", "commands", "ops-cat.md")
+	skillDir := filepath.Join(home, ".claude", "skills", "opsctl")
+	skillPath := filepath.Join(skillDir, "SKILL.md")
 	if _, err := os.Stat(skillPath); err == nil {
-		return SkillInfo{Installed: true, Path: skillPath}
+		return SkillInfo{Installed: true, Path: skillDir}
 	}
-	return SkillInfo{Path: skillPath}
+	return SkillInfo{Path: skillDir}
+}
+
+// skillMDWithDataDir 返回注入数据目录后的 SKILL.md 内容
+func skillMDWithDataDir() string {
+	dataDir := bootstrap.AppDataDir()
+	insertion := "## Data Directory\n\n" + dataDir + "\n\n"
+	return strings.Replace(skillMDContent, "## Global Flags", insertion+"## Global Flags", 1)
 }
 
 // InstallClaudeSkill 安装 Claude Code Skill 文件
@@ -2033,67 +2026,53 @@ func (a *App) InstallClaudeSkill() (string, error) {
 		return "", fmt.Errorf("get home directory failed: %w", err)
 	}
 
-	skillDir := filepath.Join(home, ".claude", "commands")
-	if err := os.MkdirAll(skillDir, 0755); err != nil {
+	skillDir := filepath.Join(home, ".claude", "skills", "opsctl")
+	refsDir := filepath.Join(skillDir, "references")
+	if err := os.MkdirAll(refsDir, 0755); err != nil {
 		return "", fmt.Errorf("create directory failed: %w", err)
 	}
 
-	skillPath := filepath.Join(skillDir, "ops-cat.md")
-	content := a.generateSkillContent()
-
-	if err := os.WriteFile(skillPath, []byte(content), 0644); err != nil {
-		return "", fmt.Errorf("write skill file failed: %w", err)
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillMDWithDataDir()), 0644); err != nil {
+		return "", fmt.Errorf("write SKILL.md failed: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(refsDir, "commands.md"), []byte(skillCommandsMDContent), 0644); err != nil {
+		return "", fmt.Errorf("write commands.md failed: %w", err)
 	}
 
-	return skillPath, nil
+	// 清理旧的 skill 文件
+	oldSkillPath := filepath.Join(home, ".claude", "commands", "ops-cat.md")
+	os.Remove(oldSkillPath)
+
+	return skillDir, nil
 }
 
 // GetSkillPreview 获取 Skill 文件内容预览
 func (a *App) GetSkillPreview() string {
-	return a.generateSkillContent()
+	return "--- SKILL.md ---\n\n" + skillMDWithDataDir() +
+		"\n\n--- references/commands.md ---\n\n" + skillCommandsMDContent
 }
 
-func (a *App) generateSkillContent() string {
-	dataDir := bootstrap.AppDataDir()
+// --- 审计日志 ---
 
-	return fmt.Sprintf(`# ops-cat Asset Management
-
-Use the opsctl CLI to manage server assets configured in the ops-cat desktop app.
-The CLI shares the same SQLite database and credentials, so any asset visible in the GUI is available here.
-
-## Data Directory
-
-%s
-
-## Available Commands
-
-### List resources
-- `+"`"+`opsctl list assets [--type ssh] [--group-id <id>]`+"`"+` — List all assets (optionally filter by type or group)
-- `+"`"+`opsctl list groups`+"`"+` — List all asset groups
-
-### Get resource details
-- `+"`"+`opsctl get asset <id>`+"`"+` — Show full details for a single asset (JSON)
-
-### Execute remote commands
-- `+"`"+`opsctl exec <asset-id> -- <command>`+"`"+` — Run a command on the remote server via SSH
-  - Supports stdin piping: `+"`"+`echo "data" | opsctl exec 1 -- cat`+"`"+`
-  - Supports chaining: `+"`"+`opsctl exec 1 -- cat /etc/hosts | opsctl exec 2 -- tee /tmp/hosts`+"`"+`
-
-### File transfer (scp-style)
-- `+"`"+`opsctl cp <local-path> <asset-id>:<remote-path>`+"`"+` — Upload file to remote server
-- `+"`"+`opsctl cp <asset-id>:<remote-path> <local-path>`+"`"+` — Download file from remote server
-- `+"`"+`opsctl cp <src-id>:<path> <dst-id>:<path>`+"`"+` — Transfer file between two remote servers (direct streaming)
-
-### Create / Update assets
-- `+"`"+`opsctl create asset --name <name> --host <host> --port <port> --username <user> [--auth-type password|key] [--group-id <id>]`+"`"+`
-- `+"`"+`opsctl update asset <id> [--name <name>] [--host <host>] [--port <port>] [--username <user>]`+"`"+`
-
-## Workflow Tips
-
-1. Start by listing assets: `+"`"+`opsctl list assets`+"`"+`
-2. Use `+"`"+`opsctl exec <id> -- <command>`+"`"+` to inspect or manage servers
-3. Use `+"`"+`opsctl cp`+"`"+` for file transfers between local and remote, or between servers
-4. All output is JSON, suitable for piping to jq or other tools
-`, dataDir)
+// AuditLogListResult 审计日志列表结果
+type AuditLogListResult struct {
+	Items []*audit_entity.AuditLog `json:"items"`
+	Total int64                    `json:"total"`
 }
 
+// ListAuditLogs 查询审计日志
+func (a *App) ListAuditLogs(source string, assetID int64, offset, limit int) (*AuditLogListResult, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	items, total, err := audit_repo.Audit().List(a.langCtx(), audit_repo.ListOptions{
+		Source:  source,
+		AssetID: assetID,
+		Offset:  offset,
+		Limit:   limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &AuditLogListResult{Items: items, Total: total}, nil
+}

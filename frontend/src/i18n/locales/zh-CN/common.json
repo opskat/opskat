@@ -9,7 +9,8 @@
     "sshKeys": "SSH 密钥",
     "settings": "设置",
     "appearance": "外观",
-    "ai": "AI 助手"
+    "ai": "AI 助手",
+    "audit": "审计日志"
   },
   "action": {
     "confirm": "确认",
@@ -161,7 +162,10 @@
     "selectAll": "全选",
     "selectNone": "取消全选",
     "confirmImport": "导入 {{count}} 项",
-    "exists": "已存在"
+    "exists": "已存在",
+    "overwrite": "覆盖",
+    "overwriteExisting": "覆盖已存在的资产",
+    "vaultPassphrase": "输入 Tabby Vault 主密码以导入密码"
   },
   "ssh": {
     "connect": "连接",
@@ -191,9 +195,7 @@
     "cliType": "CLI 类型",
     "detectedCLIs": "检测到本地 CLI",
     "configured": "已配置",
-    "saved": "已保存",
-    "mcpPort": "MCP 端口",
-    "mcpPortPlaceholder": "留空则随机分配"
+    "saved": "已保存"
   },
   "backup": {
     "title": "备份",
@@ -233,6 +235,22 @@
     "deviceFlowOpen": "打开浏览器",
     "gistCreateNew": "创建新备份",
     "gistUpdate": "更新: {{desc}}"
+  },
+  "setup": {
+    "title": "配置 AI 提供商",
+    "subtitle": "选择一种方式开始使用 AI 助手",
+    "localCLI": "本地 CLI",
+    "localCLIDesc": "使用本机安装的 Claude Code 或 Codex CLI",
+    "openAIDesc": "使用 OpenAI 兼容的 API 接口",
+    "recommended": "推荐",
+    "notComplete": "功能未完善",
+    "cliConfig": "CLI 配置",
+    "integration": "集成组件",
+    "autoInstall": "完成时自动安装",
+    "opsctlManualHint": "需手动安装",
+    "opsctlRequired": "opsctl CLI 未安装，Skill 功能可能受限。可在设置 > 集成中安装。",
+    "complete": "完成配置",
+    "config": "配置"
   },
   "ai": {
     "title": "AI 助手",
@@ -347,7 +365,7 @@
     "pathHint": "如果该目录不在 PATH 中，请手动添加",
     "noEmbedded": "未嵌入二进制文件，请使用 make build-embed 构建",
     "manualInstall": "手动安装",
-    "manualInstallHint": "或从源码安装：",
+    "manualInstallHint": "从 GitHub Release 页面下载对应平台的二进制文件",
     "dataDir": "数据目录",
     "dataDirDesc": "桌面端和 CLI 共享的数据库位置",
     "refresh": "刷新",
@@ -371,7 +389,9 @@
     "typeExec": "执行命令",
     "typeCp": "文件传输",
     "typeCreate": "创建资产",
-    "typeUpdate": "更新资产"
+    "typeUpdate": "更新资产",
+    "allowSession": "允许当前会话",
+    "sessionHint": "来自 AI 会话"
   },
   "planApproval": {
     "title": "批量计划审批",
@@ -383,6 +403,24 @@
     "typeCreate": "创建",
     "typeUpdate": "更新",
     "itemCount": "共 {{count}} 项操作"
+  },
+  "audit": {
+    "title": "审计日志",
+    "source": "来源",
+    "sourceAll": "全部",
+    "toolName": "工具",
+    "assetName": "资产",
+    "command": "命令",
+    "result": "结果",
+    "success": "成功",
+    "failed": "失败",
+    "time": "时间",
+    "detail": "详情",
+    "request": "请求",
+    "response": "响应",
+    "error": "错误",
+    "empty": "暂无审计日志",
+    "total": "共 {{total}} 条"
   },
   "sftp": {
     "upload": "上传文件",

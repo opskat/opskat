@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 )
@@ -20,11 +21,17 @@ type CLIProcess struct {
 	mu     sync.Mutex
 }
 
-// StartCLIProcess 启动 CLI 子进程，workDir 为可选工作目录
-func StartCLIProcess(ctx context.Context, cliPath string, args []string, workDir string) (*CLIProcess, error) {
+// StartCLIProcess 启动 CLI 子进程，workDir 为可选工作目录，env 为额外环境变量
+func StartCLIProcess(ctx context.Context, cliPath string, args []string, workDir string, env map[string]string) (*CLIProcess, error) {
 	cmd := exec.CommandContext(ctx, cliPath, args...)
 	if workDir != "" {
 		cmd.Dir = workDir
+	}
+	if len(env) > 0 {
+		cmd.Env = os.Environ()
+		for k, v := range env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

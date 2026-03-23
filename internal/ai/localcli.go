@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	"github.com/google/uuid"
 )
 
 // PermissionRequest CLI 工具权限请求
@@ -29,27 +31,32 @@ type LocalCLIProvider struct {
 	sessionID string // Claude session ID，跨调用保持
 	mu        sync.Mutex
 
-	// MCP 工作目录，包含 .mcp.json（Claude CLI 用）
-	mcpWorkDir string
+	// CLI 工作目录
+	workDir string
 
-	// MCP Server URL（Codex 通过 -c 参数传入）
-	mcpServerURL string
+	// opsctl 审批 session ID，注入到子进程环境变量
+	opsctlSessionID string
 
 	// Codex app-server 实例
 	codexServer *CodexAppServer
 
 	// OnPermissionRequest 权限确认回调，由外部注入
 	OnPermissionRequest func(req PermissionRequest) PermissionResponse
+
+	// OnSessionReset 会话重置回调，通知桌面端清理 approvedSessions
+	OnSessionReset func(sessionID string)
 }
 
-// SetMCPWorkDir 设置 MCP 配置所在的工作目录
-func (p *LocalCLIProvider) SetMCPWorkDir(dir string) {
-	p.mcpWorkDir = dir
+// SetWorkDir 设置 CLI 工作目录
+func (p *LocalCLIProvider) SetWorkDir(dir string) {
+	p.workDir = dir
 }
 
-// SetMCPServerURL 设置 MCP Server URL（Codex 通过 -c 参数传入）
-func (p *LocalCLIProvider) SetMCPServerURL(url string) {
-	p.mcpServerURL = url
+// GetOpsctlSessionID 获取当前 opsctl session ID
+func (p *LocalCLIProvider) GetOpsctlSessionID() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.opsctlSessionID
 }
 
 // GetCodexServer 返回 Codex app-server 实例（用于转发确认响应）
@@ -60,9 +67,10 @@ func (p *LocalCLIProvider) GetCodexServer() *CodexAppServer {
 // NewLocalCLIProvider 创建本地 CLI provider
 func NewLocalCLIProvider(name, cliPath, cliType string) *LocalCLIProvider {
 	return &LocalCLIProvider{
-		name:    name,
-		cliPath: cliPath,
-		cliType: cliType,
+		name:            name,
+		cliPath:         cliPath,
+		cliType:         cliType,
+		opsctlSessionID: uuid.New().String(),
 	}
 }
 
@@ -79,6 +87,19 @@ func (p *LocalCLIProvider) Chat(ctx context.Context, messages []Message, _ []Too
 	}
 }
 
+// buildEnv 构建子进程环境变量
+func (p *LocalCLIProvider) buildEnv() map[string]string {
+	p.mu.Lock()
+	sid := p.opsctlSessionID
+	p.mu.Unlock()
+
+	env := make(map[string]string)
+	if sid != "" {
+		env["OPS_CAT_SESSION_ID"] = sid
+	}
+	return env
+}
+
 // chatClaude 使用 Claude CLI stream-json 模式
 func (p *LocalCLIProvider) chatClaude(ctx context.Context, messages []Message) (<-chan StreamEvent, error) {
 	// 提取最新 user 消息和 system prompt
@@ -90,8 +111,8 @@ func (p *LocalCLIProvider) chatClaude(ctx context.Context, messages []Message) (
 	// 构建 CLI 参数
 	args := p.buildClaudeArgs(userMsg, systemPrompt)
 
-	// 启动 CLI 进程（在 MCP 工作目录下，让 CLI 自动发现 .mcp.json）
-	proc, err := StartCLIProcess(ctx, p.cliPath, args, p.mcpWorkDir)
+	// 启动 CLI 进程
+	proc, err := StartCLIProcess(ctx, p.cliPath, args, p.workDir, p.buildEnv())
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +197,7 @@ func (p *LocalCLIProvider) chatCodex(ctx context.Context, messages []Message) (<
 	if p.codexServer == nil {
 		server := NewCodexAppServer()
 		server.OnPermissionRequest = p.OnPermissionRequest
-		if err := server.Start(ctx, p.cliPath, p.mcpWorkDir, p.mcpServerURL); err != nil {
+		if err := server.Start(ctx, p.cliPath, p.workDir, p.buildEnv()); err != nil {
 			return nil, fmt.Errorf("启动 Codex app-server 失败: %w", err)
 		}
 		p.codexServer = server
@@ -231,11 +252,19 @@ func (p *LocalCLIProvider) SetSessionID(id string) {
 // ResetSession 重置会话（用户清空聊天时调用）
 func (p *LocalCLIProvider) ResetSession() {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	oldSessionID := p.opsctlSessionID
 	p.sessionID = ""
+	p.opsctlSessionID = uuid.New().String()
+	p.mu.Unlock()
+
 	if p.codexServer != nil {
 		p.codexServer.Stop()
 		p.codexServer = nil
+	}
+
+	// 通知桌面端清理旧 session
+	if p.OnSessionReset != nil && oldSessionID != "" {
+		p.OnSessionReset(oldSessionID)
 	}
 }
 

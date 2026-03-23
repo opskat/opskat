@@ -16,7 +16,7 @@ type ApprovalRequest struct {
 	AssetName     string     `json:"asset_name,omitempty"`
 	Command       string     `json:"command,omitempty"`
 	Detail        string     `json:"detail"`
-	PlanSessionID string     `json:"plan_session_id,omitempty"`       // plan submit 时由 CLI 生成
+	SessionID     string     `json:"session_id,omitempty"`            // 统一 session 标识（审批 session 或 plan session）
 	PlanItems     []PlanItem `json:"plan_items,omitempty"`            // type="plan" 时使用
 	Description   string     `json:"description,omitempty"`           // 计划描述
 }
@@ -32,9 +32,10 @@ type PlanItem struct {
 
 // ApprovalResponse is sent from the desktop app back to opsctl.
 type ApprovalResponse struct {
-	Approved      bool   `json:"approved"`
-	Reason        string `json:"reason,omitempty"`
-	PlanSessionID string `json:"plan_session_id,omitempty"` // plan 审批返回
+	Approved       bool   `json:"approved"`
+	Reason         string `json:"reason,omitempty"`
+	SessionID      string `json:"session_id,omitempty"`       // plan 审批返回 / session 标识
+	ApproveSession bool   `json:"approve_session,omitempty"`  // 用户选择了"允许当前会话"
 }
 
 // SocketPath returns the approval socket path for the given data directory.

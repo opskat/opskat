@@ -17,7 +17,7 @@ dev:
 	wails dev
 
 # 直接运行（不热重载）
-run: build
+run: build-embed
 	$(BIN_PATH)
 
 # 构建生产版本

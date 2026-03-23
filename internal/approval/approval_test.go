@@ -27,14 +27,14 @@ func TestApprovalRequest_JSON(t *testing.T) {
 			assert.Equal(t, "exec", decoded.Type)
 			assert.Equal(t, int64(1), decoded.AssetID)
 			assert.Equal(t, "uptime", decoded.Command)
-			assert.Empty(t, decoded.PlanSessionID)
+			assert.Empty(t, decoded.SessionID)
 			assert.Empty(t, decoded.PlanItems)
 		})
 
 		convey.Convey("计划审批请求", func() {
 			req := ApprovalRequest{
 				Type:          "plan",
-				PlanSessionID: "abc-123",
+				SessionID: "abc-123",
 				Description:   "deploy nginx",
 				PlanItems: []PlanItem{
 					{Type: "exec", AssetID: 1, AssetName: "web-01", Command: "systemctl stop nginx"},
@@ -49,19 +49,19 @@ func TestApprovalRequest_JSON(t *testing.T) {
 			err = json.Unmarshal(data, &decoded)
 			assert.NoError(t, err)
 			assert.Equal(t, "plan", decoded.Type)
-			assert.Equal(t, "abc-123", decoded.PlanSessionID)
+			assert.Equal(t, "abc-123", decoded.SessionID)
 			assert.Len(t, decoded.PlanItems, 3)
 			assert.Equal(t, "systemctl stop nginx", decoded.PlanItems[0].Command)
 			assert.Equal(t, "cp", decoded.PlanItems[1].Type)
 		})
 
-		convey.Convey("带 plan-session 的 exec 请求", func() {
+		convey.Convey("带 session 的 exec 请求", func() {
 			req := ApprovalRequest{
 				Type:          "exec",
 				AssetID:       1,
 				AssetName:     "web-01",
 				Command:       "uptime",
-				PlanSessionID: "session-xyz",
+				SessionID: "session-xyz",
 			}
 			data, err := json.Marshal(req)
 			assert.NoError(t, err)
@@ -70,7 +70,7 @@ func TestApprovalRequest_JSON(t *testing.T) {
 			err = json.Unmarshal(data, &decoded)
 			assert.NoError(t, err)
 			assert.Equal(t, "exec", decoded.Type)
-			assert.Equal(t, "session-xyz", decoded.PlanSessionID)
+			assert.Equal(t, "session-xyz", decoded.SessionID)
 		})
 	})
 }
@@ -86,11 +86,11 @@ func TestApprovalResponse_JSON(t *testing.T) {
 			err = json.Unmarshal(data, &decoded)
 			assert.NoError(t, err)
 			assert.True(t, decoded.Approved)
-			assert.Empty(t, decoded.PlanSessionID)
+			assert.Empty(t, decoded.SessionID)
 		})
 
 		convey.Convey("计划审批响应带 session ID", func() {
-			resp := ApprovalResponse{Approved: true, PlanSessionID: "plan-abc"}
+			resp := ApprovalResponse{Approved: true, SessionID: "plan-abc"}
 			data, err := json.Marshal(resp)
 			assert.NoError(t, err)
 
@@ -98,7 +98,7 @@ func TestApprovalResponse_JSON(t *testing.T) {
 			err = json.Unmarshal(data, &decoded)
 			assert.NoError(t, err)
 			assert.True(t, decoded.Approved)
-			assert.Equal(t, "plan-abc", decoded.PlanSessionID)
+			assert.Equal(t, "plan-abc", decoded.SessionID)
 		})
 
 		convey.Convey("拒绝响应带原因", func() {

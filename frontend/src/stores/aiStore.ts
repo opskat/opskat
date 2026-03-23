@@ -370,16 +370,12 @@ export const useAIStore = create<AIState>((set, get) => {
       const tab = state.openTabs.find((t) => t.id === tabId);
       const tabState = state.tabStates[tabId];
 
-      // 保存消息
+      // 保存消息（直接传 convID，无需先切换会话）
       if (tab?.conversationId && tabState?.messages.length) {
-        // 先切换后端到这个会话再保存
-        SwitchConversation(tab.conversationId)
-          .then(() =>
-            SaveConversationMessages(
-              toDisplayMessages(tabState.messages)
-            )
-          )
-          .catch(() => {});
+        SaveConversationMessages(
+          tab.conversationId,
+          toDisplayMessages(tabState.messages)
+        ).catch(() => {});
       }
 
       // 清理事件监听
@@ -443,11 +439,10 @@ export const useAIStore = create<AIState>((set, get) => {
 
     sendToTab: async (tabId: string, content: string) => {
       const state = get();
-      // 全局并发锁：只允许一个 tab 发送
-      if (state.isAnySending()) return;
-
       const tabState = state.tabStates[tabId];
       if (!tabState) return;
+      // 仅检查当前 tab 是否正在发送，不阻塞其他 tab
+      if (tabState.sending) return;
 
       let actualContent = content;
 
@@ -558,13 +553,6 @@ export const useAIStore = create<AIState>((set, get) => {
           updateTab(tabId, { sending: false });
           return;
         }
-      } else {
-        // 确保后端指向正确的会话
-        try {
-          await SwitchConversation(convId);
-        } catch {
-          // SwitchConversation 失败不阻塞发送
-        }
       }
 
       // 设置事件监听
@@ -638,7 +626,7 @@ export const useAIStore = create<AIState>((set, get) => {
                   }
                 }
                 // 匹配不到时 fallback 到最后一个 running 的 tool block
-                // （MCP 工具的 tool_start 和 tool_result 可能 toolName 不同）
+                // （工具的 tool_start 和 tool_result 可能 toolName 不同）
                 if (matchIdx === -1) {
                   for (let i = newBlocks.length - 1; i >= 0; i--) {
                     const b = newBlocks[i];
@@ -750,9 +738,12 @@ export const useAIStore = create<AIState>((set, get) => {
               // 持久化消息
               const finalMsgs =
                 get().tabStates[tabId]?.messages || [];
-              SaveConversationMessages(
-                toDisplayMessages(finalMsgs)
-              ).catch(() => {});
+              if (convId) {
+                SaveConversationMessages(
+                  convId,
+                  toDisplayMessages(finalMsgs)
+                ).catch(() => {});
+              }
               // 刷新会话列表（标题可能更新），完成后同步 tab 标题
               get().fetchConversations().then(() => {
                 const convs = get().conversations;
@@ -811,7 +802,7 @@ export const useAIStore = create<AIState>((set, get) => {
       });
 
       try {
-        await SendAIMessage(apiMessages);
+        await SendAIMessage(convId!, apiMessages);
       } catch {
         updateTab(tabId, { sending: false });
         cleanupListener(tabId);

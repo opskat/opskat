@@ -45,8 +45,6 @@ import {
   ImportTabbySelected,
   PreviewSSHConfig,
   ImportSSHConfigSelected,
-  GetMCPPort,
-  SetMCPPort,
   DetectOpsctl,
   GetOpsctlInstallDir,
   InstallOpsctl,
@@ -57,7 +55,7 @@ import {
 } from "../../../wailsjs/go/main/App";
 import { backup_svc } from "../../../wailsjs/go/models";
 import { import_svc } from "../../../wailsjs/go/models";
-import { ImportDialog } from "@/components/settings/ImportDialog";
+import { ImportDialog, ImportCallOptions } from "@/components/settings/ImportDialog";
 import {
   Bot, Palette, Check, HardDrive, Download, Upload, Import,
   Github, LogOut, Loader2, Copy, ExternalLink, Eye, EyeOff, Shuffle, Keyboard,
@@ -141,12 +139,10 @@ function IntegrationSection() {
   const handleInstallCLI = async () => {
     setInstalling(true);
     try {
-      const path = await InstallOpsctl("");
+      await InstallOpsctl(installDir);
       toast.success(t("integration.installSuccess"));
       await detect();
-      // Show PATH hint
-      const dir = path.substring(0, path.lastIndexOf("/"));
-      toast.info(`${t("integration.pathHint")}: ${dir}`);
+      toast.info(`${t("integration.pathHint")}: ${installDir}`);
     } catch (e: any) {
       toast.error(`${t("integration.installFailed")}: ${e?.message || String(e)}`);
     } finally {
@@ -222,9 +218,13 @@ function IntegrationSection() {
             <div className="space-y-3">
               {opsctlInfo.embedded ? (
                 <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">{t("integration.installDir")}</span>
-                    <span className="font-mono text-xs">{installDir}</span>
+                  <div className="grid gap-1.5">
+                    <Label className="text-sm">{t("integration.installDir")}</Label>
+                    <Input
+                      value={installDir}
+                      onChange={(e) => setInstallDir(e.target.value)}
+                      className="font-mono text-xs h-8"
+                    />
                   </div>
                   <Button onClick={handleInstallCLI} disabled={installing} size="sm">
                     {installing ? (
@@ -241,15 +241,15 @@ function IntegrationSection() {
               <div className="space-y-1">
                 <p className="text-sm font-medium">{t("integration.manualInstall")}</p>
                 <p className="text-xs text-muted-foreground">{t("integration.manualInstallHint")}</p>
-                <div className="flex items-center gap-2 mt-1">
-                  <code className="text-xs bg-muted px-2 py-1 rounded font-mono">go install ops-cat/cmd/opsctl@latest</code>
-                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => {
-                    navigator.clipboard.writeText("go install ops-cat/cmd/opsctl@latest");
-                    toast.success(t("sshKey.copied"));
-                  }}>
-                    <Copy className="h-3 w-3" />
-                  </Button>
-                </div>
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="h-auto p-0 text-xs"
+                  onClick={() => BrowserOpenURL("https://github.com/CodFrm/ops-cat/release")}
+                >
+                  <ExternalLink className="h-3 w-3 mr-1" />
+                  GitHub Releases
+                </Button>
               </div>
             </div>
           )}
@@ -333,15 +333,7 @@ export function SettingsPage() {
   const [model, setModel] = useState(
     localStorage.getItem("ai_model") || "gpt-4o"
   );
-  const [mcpPort, setMcpPort] = useState("");
   const [saved, setSaved] = useState(false);
-
-  // 从后端加载 MCP 端口
-  useEffect(() => {
-    GetMCPPort().then((port) => {
-      if (port > 0) setMcpPort(String(port));
-    });
-  }, []);
 
   // 文件备份
   const [fileExporting, setFileExporting] = useState(false);
@@ -356,7 +348,7 @@ export function SettingsPage() {
   const [importPreview, setImportPreview] = useState<import_svc.PreviewResult | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [importDialogTitle, setImportDialogTitle] = useState("");
-  const [importFn, setImportFn] = useState<((indexes: number[]) => Promise<import_svc.ImportResult>) | null>(null);
+  const [importFn, setImportFn] = useState<((indexes: number[], options: ImportCallOptions) => Promise<import_svc.ImportResult>) | null>(null);
   const [tabbyLoading, setTabbyLoading] = useState(false);
   const [sshConfigLoading, setSSHConfigLoading] = useState(false);
 
@@ -432,11 +424,6 @@ export function SettingsPage() {
     localStorage.setItem("ai_api_key", apiKey);
     localStorage.setItem("ai_model", model);
     try {
-      // 保存 MCP 端口到后端配置
-      const port = Number(mcpPort) || 0;
-      if (port > 0) {
-        await SetMCPPort(port);
-      }
       await configure(providerType, apiBase, apiKey, model);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -512,7 +499,9 @@ export function SettingsPage() {
       if (result) {
         setImportPreview(result);
         setImportDialogTitle(t("import.tabby"));
-        setImportFn(() => ImportTabbySelected);
+        setImportFn(() => (indexes: number[], opts: ImportCallOptions) =>
+          ImportTabbySelected(indexes, opts.passphrase, opts.overwrite)
+        );
         setImportDialogOpen(true);
       }
     } catch (e: any) {
@@ -530,7 +519,9 @@ export function SettingsPage() {
       if (result) {
         setImportPreview(result);
         setImportDialogTitle(t("import.sshConfig"));
-        setImportFn(() => ImportSSHConfigSelected);
+        setImportFn(() => (indexes: number[], opts: ImportCallOptions) =>
+          ImportSSHConfigSelected(indexes, opts.overwrite)
+        );
         setImportDialogOpen(true);
       }
     } catch (e: any) {
@@ -724,16 +715,6 @@ export function SettingsPage() {
                           <SelectItem value="codex">Codex</SelectItem>
                         </SelectContent>
                       </Select>
-                    </div>
-                    <div className="grid gap-2">
-                      <Label>{t("settings.mcpPort")}</Label>
-                      <Input
-                        value={mcpPort}
-                        onChange={(e) => setMcpPort(e.target.value)}
-                        placeholder={t("settings.mcpPortPlaceholder")}
-                        className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                        type="number"
-                      />
                     </div>
                     {localCLIs.length > 0 && (
                       <div className="text-sm text-muted-foreground">

@@ -53,7 +53,7 @@ export function ConversationListPanel({
     openConversationTab,
     openNewConversationTab,
     deleteConversation,
-    isAnySending,
+    tabStates,
   } = useAIStore();
 
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
@@ -106,7 +106,6 @@ export function ConversationListPanel({
   );
 
   const handleOpenConversation = async (conversationId: number) => {
-    if (isAnySending()) return;
     try {
       const tabId = await openConversationTab(conversationId);
       onOpenConversation?.(tabId);
@@ -120,9 +119,16 @@ export function ConversationListPanel({
     onOpenConversation?.(tabId);
   };
 
+  // 仅在该会话的 tab 正在发送时阻止删除
+  const isConvSending = (convId: number) => {
+    const tab = openTabs.find((t) => t.conversationId === convId);
+    if (!tab) return false;
+    return tabStates[tab.id]?.sending || false;
+  };
+
   const handleDelete = (e: React.MouseEvent, id: number) => {
     e.stopPropagation();
-    if (isAnySending()) return;
+    if (isConvSending(id)) return;
     setDeleteTarget(id);
   };
 
@@ -221,7 +227,7 @@ export function ConversationListPanel({
                         size="icon"
                         className="h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
                         onClick={(e) => handleDelete(e, conv.ID)}
-                        disabled={isAnySending()}
+                        disabled={isConvSending(conv.ID)}
                       >
                         <Trash2 className="h-3 w-3" />
                       </Button>

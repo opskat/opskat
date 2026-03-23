@@ -106,10 +106,6 @@ export function GetLanguage() {
   return window['go']['main']['App']['GetLanguage']();
 }
 
-export function GetMCPPort() {
-  return window['go']['main']['App']['GetMCPPort']();
-}
-
 export function GetOpsctlInstallDir() {
   return window['go']['main']['App']['GetOpsctlInstallDir']();
 }
@@ -130,8 +126,8 @@ export function ImportFromGist(arg1, arg2, arg3) {
   return window['go']['main']['App']['ImportFromGist'](arg1, arg2, arg3);
 }
 
-export function ImportSSHConfigSelected(arg1) {
-  return window['go']['main']['App']['ImportSSHConfigSelected'](arg1);
+export function ImportSSHConfigSelected(arg1, arg2) {
+  return window['go']['main']['App']['ImportSSHConfigSelected'](arg1, arg2);
 }
 
 export function ImportSSHKeyFile(arg1, arg2) {
@@ -142,8 +138,8 @@ export function ImportSSHKeyPEM(arg1, arg2, arg3) {
   return window['go']['main']['App']['ImportSSHKeyPEM'](arg1, arg2, arg3);
 }
 
-export function ImportTabbySelected(arg1) {
-  return window['go']['main']['App']['ImportTabbySelected'](arg1);
+export function ImportTabbySelected(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ImportTabbySelected'](arg1, arg2, arg3);
 }
 
 export function InstallClaudeSkill() {
@@ -156,6 +152,10 @@ export function InstallOpsctl(arg1) {
 
 export function ListAssets(arg1, arg2) {
   return window['go']['main']['App']['ListAssets'](arg1, arg2);
+}
+
+export function ListAuditLogs(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ListAuditLogs'](arg1, arg2, arg3, arg4);
 }
 
 export function ListBackupGists(arg1) {
@@ -218,6 +218,10 @@ export function RespondOpsctlApproval(arg1, arg2) {
   return window['go']['main']['App']['RespondOpsctlApproval'](arg1, arg2);
 }
 
+export function RespondOpsctlApprovalSession(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['RespondOpsctlApprovalSession'](arg1, arg2, arg3, arg4);
+}
+
 export function RespondPermission(arg1, arg2) {
   return window['go']['main']['App']['RespondPermission'](arg1, arg2);
 }
@@ -254,8 +258,8 @@ export function SFTPUploadDir(arg1, arg2) {
   return window['go']['main']['App']['SFTPUploadDir'](arg1, arg2);
 }
 
-export function SaveConversationMessages(arg1) {
-  return window['go']['main']['App']['SaveConversationMessages'](arg1);
+export function SaveConversationMessages(arg1, arg2) {
+  return window['go']['main']['App']['SaveConversationMessages'](arg1, arg2);
 }
 
 export function SaveCredential(arg1) {
@@ -270,8 +274,8 @@ export function SelectSSHKeyFile() {
   return window['go']['main']['App']['SelectSSHKeyFile']();
 }
 
-export function SendAIMessage(arg1) {
-  return window['go']['main']['App']['SendAIMessage'](arg1);
+export function SendAIMessage(arg1, arg2) {
+  return window['go']['main']['App']['SendAIMessage'](arg1, arg2);
 }
 
 export function SetAIProvider(arg1, arg2, arg3, arg4) {
@@ -280,10 +284,6 @@ export function SetAIProvider(arg1, arg2, arg3, arg4) {
 
 export function SetLanguage(arg1) {
   return window['go']['main']['App']['SetLanguage'](arg1);
-}
-
-export function SetMCPPort(arg1) {
-  return window['go']['main']['App']['SetMCPPort'](arg1);
 }
 
 export function SplitSSH(arg1, arg2, arg3) {

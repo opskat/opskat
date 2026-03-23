@@ -62,8 +62,6 @@ export function GetInitContext(arg1:number,arg2:number):Promise<string>;
 
 export function GetLanguage():Promise<string>;
 
-export function GetMCPPort():Promise<number>;
-
 export function GetOpsctlInstallDir():Promise<string>;
 
 export function GetSSHKeyPublicKey(arg1:number):Promise<string>;
@@ -74,19 +72,21 @@ export function GetSkillPreview():Promise<string>;
 
 export function ImportFromGist(arg1:string,arg2:string,arg3:string):Promise<void>;
 
-export function ImportSSHConfigSelected(arg1:Array<number>):Promise<import_svc.ImportResult>;
+export function ImportSSHConfigSelected(arg1:Array<number>,arg2:boolean):Promise<import_svc.ImportResult>;
 
 export function ImportSSHKeyFile(arg1:string,arg2:string):Promise<ssh_key_entity.SSHKey>;
 
 export function ImportSSHKeyPEM(arg1:string,arg2:string,arg3:string):Promise<ssh_key_entity.SSHKey>;
 
-export function ImportTabbySelected(arg1:Array<number>):Promise<import_svc.ImportResult>;
+export function ImportTabbySelected(arg1:Array<number>,arg2:string,arg3:boolean):Promise<import_svc.ImportResult>;
 
 export function InstallClaudeSkill():Promise<string>;
 
 export function InstallOpsctl(arg1:string):Promise<string>;
 
 export function ListAssets(arg1:string,arg2:number):Promise<Array<asset_entity.Asset>>;
+
+export function ListAuditLogs(arg1:string,arg2:number,arg3:number,arg4:number):Promise<main.AuditLogListResult>;
 
 export function ListBackupGists(arg1:string):Promise<Array<backup_svc.GistInfo>>;
 
@@ -118,6 +118,8 @@ export function RespondCommandConfirm(arg1:string,arg2:string):Promise<void>;
 
 export function RespondOpsctlApproval(arg1:string,arg2:boolean):Promise<void>;
 
+export function RespondOpsctlApprovalSession(arg1:string,arg2:boolean,arg3:boolean,arg4:string):Promise<void>;
+
 export function RespondPermission(arg1:string,arg2:string):Promise<void>;
 
 export function RespondPlanApproval(arg1:string,arg2:boolean):Promise<void>;
@@ -136,7 +138,7 @@ export function SFTPUpload(arg1:string,arg2:string):Promise<string>;
 
 export function SFTPUploadDir(arg1:string,arg2:string):Promise<string>;
 
-export function SaveConversationMessages(arg1:Array<main.ConversationDisplayMessage>):Promise<void>;
+export function SaveConversationMessages(arg1:number,arg2:Array<main.ConversationDisplayMessage>):Promise<void>;
 
 export function SaveCredential(arg1:string):Promise<string>;
 
@@ -144,13 +146,11 @@ export function SelectImportFile():Promise<main.ImportFileInfo>;
 
 export function SelectSSHKeyFile():Promise<main.LocalSSHKeyInfo>;
 
-export function SendAIMessage(arg1:Array<ai.Message>):Promise<void>;
+export function SendAIMessage(arg1:number,arg2:Array<ai.Message>):Promise<void>;
 
 export function SetAIProvider(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
 
 export function SetLanguage(arg1:string):Promise<void>;
-
-export function SetMCPPort(arg1:number):Promise<void>;
 
 export function SplitSSH(arg1:string,arg2:number,arg3:number):Promise<string>;
 

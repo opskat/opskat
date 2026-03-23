@@ -28,7 +28,7 @@ func main() {
 		log.Fatalf("初始化失败: %v", err)
 	}
 
-	// 加载应用配置（MCP 端口等）
+	// 加载应用配置
 	if _, err := bootstrap.LoadConfig(dataDir); err != nil {
 		log.Printf("加载配置失败: %v", err)
 	}

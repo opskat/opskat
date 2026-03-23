@@ -159,7 +159,7 @@ func truncateString(s string, maxLen int) string {
 	return s[:maxLen]
 }
 
-// WriteAuditLog 供外部直接写入审计日志（opsctl / MCP 路径使用）
+// WriteAuditLog 供外部直接写入审计日志（opsctl 路径使用）
 func WriteAuditLog(ctx context.Context, entry *audit_entity.AuditLog) {
 	if entry.Createtime == 0 {
 		entry.Createtime = time.Now().Unix()
