@@ -36,6 +36,7 @@ Assets can be referenced by:
 | `session start` | Create a new approval session |
 | `session end` | End the current active session |
 | `session status` | Show the current active session ID |
+| `init <asset\|--group N>` | Discover server environment and update asset description ([details](references/ops-init.md)) |
 
 For detailed command documentation, see [references/commands.md](references/commands.md).
 
@@ -77,6 +78,16 @@ On the first operation, the user will be prompted to approve. If they choose **"
 ```bash
 SESSION=$(opsctl plan submit < plan.json)
 opsctl --session $SESSION exec web-01 -- systemctl restart app
+```
+
+## Init — Asset Environment Discovery
+
+Auto-discover server environment via SSH and persist a structured description to the asset's `description` field. See [references/ops-init.md](references/ops-init.md) for full instructions.
+
+```bash
+/opsctl init web-server       # Single asset
+/opsctl init --group 2        # All assets in group
+/opsctl init                  # Interactive selection
 ```
 
 ## Common Patterns

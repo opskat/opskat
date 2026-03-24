@@ -562,6 +562,28 @@ export namespace main {
 	        this.embedded = source["embedded"];
 	    }
 	}
+	export class PortForwardRequest {
+	    sessionId: string;
+	    type: string;
+	    localHost: string;
+	    localPort: number;
+	    remoteHost: string;
+	    remotePort: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PortForwardRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sessionId = source["sessionId"];
+	        this.type = source["type"];
+	        this.localHost = source["localHost"];
+	        this.localPort = source["localPort"];
+	        this.remoteHost = source["remoteHost"];
+	        this.remotePort = source["remotePort"];
+	    }
+	}
 	export class SSHConnectRequest {
 	    assetId: number;
 	    password: string;
@@ -655,6 +677,35 @@ export namespace ssh_key_entity {
 
 }
 
+export namespace ssh_svc {
+	
+	export class PortForwardInfo {
+	    id: string;
+	    type: string;
+	    localHost: string;
+	    localPort: number;
+	    remoteHost: string;
+	    remotePort: number;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PortForwardInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.type = source["type"];
+	        this.localHost = source["localHost"];
+	        this.localPort = source["localPort"];
+	        this.remoteHost = source["remoteHost"];
+	        this.remotePort = source["remotePort"];
+	        this.error = source["error"];
+	    }
+	}
+
+}
+
 export namespace sshpool {
 	
 	export class PoolEntryInfo {
@@ -671,6 +722,33 @@ export namespace sshpool {
 	        this.asset_id = source["asset_id"];
 	        this.ref_count = source["ref_count"];
 	        this.last_used = source["last_used"];
+	    }
+	}
+
+}
+
+export namespace update_svc {
+	
+	export class UpdateInfo {
+	    hasUpdate: boolean;
+	    currentVersion: string;
+	    latestVersion: string;
+	    releaseNotes: string;
+	    releaseURL: string;
+	    publishedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpdateInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hasUpdate = source["hasUpdate"];
+	        this.currentVersion = source["currentVersion"];
+	        this.latestVersion = source["latestVersion"];
+	        this.releaseNotes = source["releaseNotes"];
+	        this.releaseURL = source["releaseURL"];
+	        this.publishedAt = source["publishedAt"];
 	    }
 	}
 

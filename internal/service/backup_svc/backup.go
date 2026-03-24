@@ -94,7 +94,7 @@ func Import(ctx context.Context, data *BackupData) error {
 				if err == nil && cfg.JumpHostID > 0 {
 					oldJumpHostID = cfg.JumpHostID
 					cfg.JumpHostID = 0
-					a.SetSSHConfig(cfg)
+					_ = a.SetSSHConfig(cfg)
 				}
 			}
 
@@ -166,4 +166,3 @@ func sortGroups(groups []*group_entity.Group) []*group_entity.Group {
 	}
 	return sorted
 }
-

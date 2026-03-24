@@ -1,4 +1,4 @@
-.PHONY: dev run build build-embed clean install build-cli build-cli-upx install-cli
+.PHONY: dev run build build-embed clean install build-cli build-cli-upx install-cli lint
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -12,6 +12,10 @@ else
     UPX_FLAGS := --best
 endif
 
+VERSION ?= dev
+VERSION_PKG := github.com/cago-frame/cago/configs
+LDFLAGS := -s -w -X $(VERSION_PKG).Version=$(VERSION)
+
 # 开发模式（前后端热重载）
 dev:
 	wails dev
@@ -22,19 +26,19 @@ run: build-embed
 
 # 构建生产版本
 build:
-	wails build -ldflags="-s -w"
+	wails build -ldflags="$(LDFLAGS)"
 
 # 构建生产版本（内嵌 opsctl CLI）
 build-embed: build-cli-embed
-	wails build -ldflags="-s -w" -tags embed_opsctl
+	wails build -ldflags="$(LDFLAGS)" -tags embed_opsctl
 
 # 构建 opsctl 用于嵌入桌面端
 build-cli-embed:
-	go build -ldflags="-s -w" -o ./internal/embedded/opsctl_bin ./cmd/opsctl/
+	go build -ldflags="$(LDFLAGS)" -o ./internal/embedded/opsctl_bin ./cmd/opsctl/
 
 # 构建生产版本（UPX 压缩，需要安装 upx）
 build-upx:
-	wails build -ldflags="-s -w"
+	wails build -ldflags="$(LDFLAGS)"
 	upx $(UPX_FLAGS) $(BIN_PATH)
 
 # 安装前端依赖
@@ -43,7 +47,7 @@ install:
 
 # 构建 opsctl CLI
 build-cli:
-	go build -ldflags="-s -w" -o ./build/bin/opsctl ./cmd/opsctl/
+	go build -ldflags="$(LDFLAGS)" -o ./build/bin/opsctl ./cmd/opsctl/
 
 # 构建 opsctl CLI（UPX 压缩）
 build-cli-upx: build-cli
@@ -51,7 +55,15 @@ build-cli-upx: build-cli
 
 # 安装 opsctl 到 GOPATH/bin
 install-cli:
-	go install ./cmd/opsctl/
+	go install -ldflags="$(LDFLAGS)" ./cmd/opsctl/
+
+# 代码检查
+lint:
+	golangci-lint run --timeout 10m
+
+# 代码检查并自动修复
+lint-fix:
+	golangci-lint run --timeout 10m --fix
 
 # 清理构建产物
 clean:

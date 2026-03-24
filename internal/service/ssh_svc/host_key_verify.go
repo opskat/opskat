@@ -19,8 +19,8 @@ type HostKeyAction int
 
 const (
 	HostKeyAcceptAndSave HostKeyAction = iota // 接受并记住
-	HostKeyAcceptOnce                          // 仅本次接受
-	HostKeyReject                              // 取消/拒绝
+	HostKeyAcceptOnce                         // 仅本次接受
+	HostKeyReject                             // 取消/拒绝
 )
 
 // HostKeyEvent 主机密钥校验事件
@@ -30,7 +30,7 @@ type HostKeyEvent struct {
 	KeyType        string `json:"keyType"`
 	Fingerprint    string `json:"fingerprint"`
 	IsChanged      bool   `json:"isChanged"`      // true=密钥已变更（危险）
-	OldFingerprint string `json:"oldFingerprint"`  // 变更时的旧指纹
+	OldFingerprint string `json:"oldFingerprint"` // 变更时的旧指纹
 }
 
 // HostKeyVerifyFunc 主机密钥校验回调，由调用方实现不同的交互方式

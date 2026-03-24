@@ -43,7 +43,7 @@ type openAIRequest struct {
 type openAIStreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string     `json:"content"`
+			Content   string `json:"content"`
 			ToolCalls []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
@@ -79,12 +79,12 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec
 	if err != nil {
 		return nil, fmt.Errorf("请求失败: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		errBody, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("API 错误 %d: %s", resp.StatusCode, string(errBody))
 	}
@@ -96,7 +96,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 
 func (p *OpenAIProvider) readStream(ctx context.Context, body io.ReadCloser, ch chan<- StreamEvent) {
 	defer close(ch)
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 
 	// 累积 tool calls（流式中 tool_calls 是分片的）
 	toolCallMap := make(map[int]*ToolCall)
@@ -105,7 +105,7 @@ func (p *OpenAIProvider) readStream(ctx context.Context, body io.ReadCloser, ch 
 	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
-			ch <- StreamEvent{Type: "error", Error: "cancelled"}
+			ch <- StreamEvent{Type: "error", Error: "canceled"}
 			return
 		default:
 		}

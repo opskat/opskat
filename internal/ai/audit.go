@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"ops-cat/internal/model/entity/audit_entity"
-	"ops-cat/internal/repository/audit_repo"
 	"ops-cat/internal/repository/asset_repo"
+	"ops-cat/internal/repository/audit_repo"
 )
 
 // --- Context keys ---
@@ -88,7 +88,7 @@ func (a *AuditingExecutor) Close() error {
 
 func (a *AuditingExecutor) writeAuditLog(ctx context.Context, name string, argsJSON string, result string, execErr error) {
 	var args map[string]any
-	json.Unmarshal([]byte(argsJSON), &args)
+	_ = json.Unmarshal([]byte(argsJSON), &args)
 
 	assetID := argInt64(args, "asset_id")
 	if assetID == 0 {

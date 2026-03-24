@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { Columns2, Rows2, RotateCcw, Power } from "lucide-react";
+import { Columns2, Rows2, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTerminalStore } from "@/stores/terminalStore";
+import { PortForwardPopover } from "./PortForwardPopover";
 
 interface SessionToolbarProps {
   tabId: string;
@@ -38,19 +39,19 @@ export function SessionToolbar({ tabId }: SessionToolbarProps) {
   const tab = useTerminalStore((s) => s.tabs.find((t) => t.id === tabId));
   const splitPane = useTerminalStore((s) => s.splitPane);
   const reconnect = useTerminalStore((s) => s.reconnect);
-  const disconnect = useTerminalStore((s) => s.disconnect);
+
+  // hooks 必须在所有条件分支之前调用
+  const activePane = tab ? tab.panes[tab.activePaneId] : undefined;
+  const activeConnected = activePane?.connected ?? false;
+  const uptime = useUptime(activePane?.connectedAt, activeConnected);
 
   if (!tab) return null;
 
   // 连接中的 tab 没有有效的 pane，不显示工具栏
   if (Object.keys(tab.panes).length === 0) return null;
 
-  const activePane = tab.panes[tab.activePaneId];
   const paneValues = Object.values(tab.panes);
   const anyConnected = paneValues.some((p) => p.connected);
-  const activeConnected = activePane?.connected ?? false;
-
-  const uptime = useUptime(activePane?.connectedAt, activeConnected);
 
   const hostInfo = tab.username && tab.host
     ? `${tab.username}@${tab.host}${tab.port !== 22 ? `:${tab.port}` : ""}`
@@ -85,28 +86,13 @@ export function SessionToolbar({ tabId }: SessionToolbarProps) {
         </>
       )}
 
-      {/* 端口转发标签 */}
-      {tab.forwardedPorts.length > 0 && (
-        <>
-          <span className="text-muted-foreground/40">|</span>
-          {tab.forwardedPorts.map((fp, i) => {
-            const prefix = fp.type === "remote" ? "R" : fp.type === "dynamic" ? "D" : "L";
-            const label = fp.type === "dynamic"
-              ? `${prefix}:${fp.localPort}`
-              : `${prefix}:${fp.localPort}\u2192${fp.remoteHost || "localhost"}:${fp.remotePort}`;
-            return (
-              <span
-                key={i}
-                className="px-1.5 py-0.5 rounded-sm bg-muted text-muted-foreground font-mono"
-              >
-                {label}
-              </span>
-            );
-          })}
-        </>
-      )}
-
       <div className="flex-1" />
+
+      {/* 端口转发 */}
+      <PortForwardPopover
+        sessionId={activePane?.sessionId}
+        disabled={!anyConnected}
+      />
 
       {/* 分割窗格按钮 */}
       <Button
@@ -128,26 +114,15 @@ export function SessionToolbar({ tabId }: SessionToolbarProps) {
         <Columns2 className="h-3.5 w-3.5" />
       </Button>
 
-      {/* 重连 / 断开 */}
-      {!activeConnected ? (
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          title={t("ssh.session.reconnect")}
-          onClick={() => reconnect(tabId)}
-        >
-          <RotateCcw className="h-3.5 w-3.5" />
-        </Button>
-      ) : (
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          title={t("ssh.session.disconnect")}
-          onClick={() => disconnect(tab.activePaneId)}
-        >
-          <Power className="h-3.5 w-3.5" />
-        </Button>
-      )}
+      {/* 重新连接 */}
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        title={t("ssh.session.reconnect")}
+        onClick={() => reconnect(tabId)}
+      >
+        <RotateCcw className="h-3.5 w-3.5" />
+      </Button>
     </div>
   );
 }

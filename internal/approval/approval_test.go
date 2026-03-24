@@ -33,9 +33,9 @@ func TestApprovalRequest_JSON(t *testing.T) {
 
 		convey.Convey("计划审批请求", func() {
 			req := ApprovalRequest{
-				Type:          "plan",
-				SessionID: "abc-123",
-				Description:   "deploy nginx",
+				Type:        "plan",
+				SessionID:   "abc-123",
+				Description: "deploy nginx",
 				PlanItems: []PlanItem{
 					{Type: "exec", AssetID: 1, AssetName: "web-01", Command: "systemctl stop nginx"},
 					{Type: "cp", AssetID: 1, AssetName: "web-01", Detail: "upload config"},
@@ -57,10 +57,10 @@ func TestApprovalRequest_JSON(t *testing.T) {
 
 		convey.Convey("带 session 的 exec 请求", func() {
 			req := ApprovalRequest{
-				Type:          "exec",
-				AssetID:       1,
-				AssetName:     "web-01",
-				Command:       "uptime",
+				Type:      "exec",
+				AssetID:   1,
+				AssetName: "web-01",
+				Command:   "uptime",
 				SessionID: "session-xyz",
 			}
 			data, err := json.Marshal(req)

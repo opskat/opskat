@@ -21,6 +21,7 @@ import (
 	"github.com/cago-frame/cago/database/db"
 
 	_ "ops-cat/internal/pkg/code"
+
 	_ "github.com/cago-frame/cago/database/db/sqlite"
 )
 

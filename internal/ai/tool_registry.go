@@ -180,7 +180,7 @@ func NewSSHClientCache() *SSHClientCache {
 // Close 关闭所有缓存的 SSH 连接
 func (c *SSHClientCache) Close() error {
 	for id, client := range c.clients {
-		client.Close()
+		_ = client.Close()
 		delete(c.clients, id)
 	}
 	return nil
@@ -204,7 +204,7 @@ func (c *SSHClientCache) getOrCreate(ctx context.Context, assetID int64, cfg *as
 
 func (c *SSHClientCache) remove(assetID int64) {
 	if client, ok := c.clients[assetID]; ok {
-		client.Close()
+		_ = client.Close()
 		delete(c.clients, assetID)
 	}
 }
@@ -486,17 +486,17 @@ func handleUploadFile(ctx context.Context, args map[string]any) (string, error) 
 	}
 
 	err = executeWithSFTP(sshCfg, password, key, func(client *sftp.Client) error {
-		srcFile, err := os.Open(localPath)
+		srcFile, err := os.Open(localPath) //nolint:gosec
 		if err != nil {
 			return fmt.Errorf("打开本地文件失败: %w", err)
 		}
-		defer srcFile.Close()
+		defer func() { _ = srcFile.Close() }()
 
 		dstFile, err := client.Create(remotePath)
 		if err != nil {
 			return fmt.Errorf("创建远程文件失败: %w", err)
 		}
-		defer dstFile.Close()
+		defer func() { _ = dstFile.Close() }()
 
 		_, err = io.Copy(dstFile, srcFile)
 		return err
@@ -525,13 +525,13 @@ func handleDownloadFile(ctx context.Context, args map[string]any) (string, error
 		if err != nil {
 			return fmt.Errorf("打开远程文件失败: %w", err)
 		}
-		defer srcFile.Close()
+		defer func() { _ = srcFile.Close() }()
 
-		dstFile, err := os.Create(localPath)
+		dstFile, err := os.Create(localPath) //nolint:gosec
 		if err != nil {
 			return fmt.Errorf("创建本地文件失败: %w", err)
 		}
-		defer dstFile.Close()
+		defer func() { _ = dstFile.Close() }()
 
 		_, err = io.Copy(dstFile, srcFile)
 		return err

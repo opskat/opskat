@@ -27,7 +27,7 @@ func LoadConfig(dataDir string) (*AppConfig, error) {
 		}
 		configPath = filepath.Join(dataDir, "config.json")
 
-		data, err := os.ReadFile(configPath)
+		data, err := os.ReadFile(configPath) //nolint:gosec // path from app data directory
 		if err != nil {
 			appConfig = &AppConfig{}
 			loadErr = saveConfigFile()

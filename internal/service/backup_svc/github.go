@@ -13,7 +13,7 @@ import (
 
 const (
 	githubClientID     = "Ov23li4zpB1UQXpx4h5r"
-	githubClientSecret = "1973fe43dd08301b332cc2e9bdc28b5695cfd84d"
+	githubClientSecret = "1973fe43dd08301b332cc2e9bdc28b5695cfd84d" //nolint:gosec // OAuth app client secret, public by design
 	gistBackupFilename = "ops-cat-backup.encrypted.json"
 )
 
@@ -50,11 +50,11 @@ func StartDeviceFlow() (*DeviceFlowInfo, error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // URL constructed from trusted config
 	if err != nil {
 		return nil, fmt.Errorf("请求 GitHub Device Flow 失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		DeviceCode      string `json:"device_code"`
@@ -117,11 +117,11 @@ func pollOnce(deviceCode string) (token string, done bool, err error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // URL constructed from trusted config
 	if err != nil {
 		return "", false, fmt.Errorf("请求 GitHub 失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return "", false, fmt.Errorf("GitHub 返回 HTTP %d", resp.StatusCode)
@@ -161,11 +161,11 @@ func GetGitHubUser(token string) (*GitHubUser, error) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // URL constructed from trusted config
 	if err != nil {
 		return nil, fmt.Errorf("请求 GitHub 失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("GitHub API 错误: %d", resp.StatusCode)
@@ -210,11 +210,11 @@ func CreateOrUpdateGist(token, gistID string, content []byte) (*GistInfo, error)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // URL constructed from trusted config
 	if err != nil {
 		return nil, fmt.Errorf("请求 GitHub 失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 && resp.StatusCode != 201 {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -248,11 +248,11 @@ func GetGistContent(token, gistID string) ([]byte, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // URL constructed from trusted config
 	if err != nil {
 		return nil, fmt.Errorf("请求 GitHub 失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("GitHub API 错误: %d", resp.StatusCode)
@@ -269,7 +269,7 @@ func GetGistContent(token, gistID string) ([]byte, error) {
 
 	file, ok := gist.Files[gistBackupFilename]
 	if !ok {
-		return nil, fmt.Errorf("Gist 中未找到备份文件 %s", gistBackupFilename)
+		return nil, fmt.Errorf("gist 中未找到备份文件 %s", gistBackupFilename)
 	}
 
 	return []byte(file.Content), nil
@@ -281,11 +281,11 @@ func ListBackupGists(token string) ([]*GistInfo, error) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // URL constructed from trusted config
 	if err != nil {
 		return nil, fmt.Errorf("请求 GitHub 失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("GitHub API 错误: %d", resp.StatusCode)

@@ -292,7 +292,7 @@ func TestHandleUserInputRequest(t *testing.T) {
 			So(written.Method, ShouldBeEmpty)
 
 			var result map[string]any
-			json.Unmarshal(written.Result, &result)
+			_ = json.Unmarshal(written.Result, &result)
 			answers := result["answers"].(map[string]any)
 			qAnswer := answers["mcp_q1"].(map[string]any)
 			answerList := qAnswer["answers"].([]any)
@@ -801,7 +801,7 @@ func TestMCPResponseJSONFormat(t *testing.T) {
 			So(err, ShouldBeNil)
 
 			var parsed map[string]any
-			json.Unmarshal(fullJSON, &parsed)
+			_ = json.Unmarshal(fullJSON, &parsed)
 
 			So(parsed["id"], ShouldEqual, float64(42))
 			_, hasMethod := parsed["method"]
@@ -824,7 +824,7 @@ func TestMCPResponseJSONFormat(t *testing.T) {
 
 			fullJSON, _ := json.Marshal(replyMsg)
 			var parsed map[string]any
-			json.Unmarshal(fullJSON, &parsed)
+			_ = json.Unmarshal(fullJSON, &parsed)
 
 			So(parsed["id"], ShouldEqual, float64(0))
 		})

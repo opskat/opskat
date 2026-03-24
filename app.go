@@ -21,11 +21,11 @@ import (
 	"ops-cat/internal/bootstrap"
 	"ops-cat/internal/embedded"
 	"ops-cat/internal/model/entity/asset_entity"
+	"ops-cat/internal/model/entity/audit_entity"
 	"ops-cat/internal/model/entity/conversation_entity"
 	"ops-cat/internal/model/entity/group_entity"
 	"ops-cat/internal/model/entity/plan_entity"
 	"ops-cat/internal/model/entity/ssh_key_entity"
-	"ops-cat/internal/model/entity/audit_entity"
 	"ops-cat/internal/repository/asset_repo"
 	"ops-cat/internal/repository/audit_repo"
 	"ops-cat/internal/repository/group_repo"
@@ -38,8 +38,10 @@ import (
 	"ops-cat/internal/service/sftp_svc"
 	"ops-cat/internal/service/ssh_key_svc"
 	"ops-cat/internal/service/ssh_svc"
+	"ops-cat/internal/service/update_svc"
 	"ops-cat/internal/sshpool"
 
+	"github.com/cago-frame/cago/configs"
 	"github.com/cago-frame/cago/pkg/i18n"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/crypto/ssh"
@@ -850,6 +852,17 @@ func (a *App) ConnectSSHAsync(req SSHConnectRequest) (string, error) {
 			return
 		}
 
+		// 自动启动资产配置中的端口转发
+		for _, fp := range sshCfg.ForwardedPorts {
+			a.sshManager.AddPortForward(sessionID, ssh_svc.PortForwardConfig{
+				Type:       fp.Type,
+				LocalHost:  fp.LocalHost,
+				LocalPort:  fp.LocalPort,
+				RemoteHost: fp.RemoteHost,
+				RemotePort: fp.RemotePort,
+			})
+		}
+
 		emitEvent(SSHConnectEvent{Type: "connected", SessionID: sessionID})
 	}()
 
@@ -1018,6 +1031,37 @@ func (a *App) SplitSSH(existingSessionID string, cols, rows int) (string, error)
 // DisconnectSSH 断开 SSH 连接
 func (a *App) DisconnectSSH(sessionID string) {
 	a.sshManager.Disconnect(sessionID)
+}
+
+// PortForwardRequest 端口转发请求
+type PortForwardRequest struct {
+	SessionID  string `json:"sessionId"`
+	Type       string `json:"type"` // "local" | "remote"
+	LocalHost  string `json:"localHost"`
+	LocalPort  int    `json:"localPort"`
+	RemoteHost string `json:"remoteHost"`
+	RemotePort int    `json:"remotePort"`
+}
+
+// AddPortForward 添加端口转发
+func (a *App) AddPortForward(req PortForwardRequest) *ssh_svc.PortForwardInfo {
+	return a.sshManager.AddPortForward(req.SessionID, ssh_svc.PortForwardConfig{
+		Type:       req.Type,
+		LocalHost:  req.LocalHost,
+		LocalPort:  req.LocalPort,
+		RemoteHost: req.RemoteHost,
+		RemotePort: req.RemotePort,
+	})
+}
+
+// RemovePortForward 移除端口转发
+func (a *App) RemovePortForward(forwardID string) {
+	a.sshManager.RemovePortForward(forwardID)
+}
+
+// ListPortForwards 列出会话关联的端口转发
+func (a *App) ListPortForwards(sessionID string) []ssh_svc.PortForwardInfo {
+	return a.sshManager.ListPortForwards(sessionID)
 }
 
 // --- SFTP 文件传输 ---
@@ -1272,7 +1316,7 @@ func (a *App) SelectSSHKeyFile() (*LocalSSHKeyInfo, error) {
 
 // parseLocalSSHKey 解析本地私钥文件，返回密钥信息
 func parseLocalSSHKey(path string) (*LocalSSHKeyInfo, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // path is from user file dialog
 	if err != nil {
 		return nil, err
 	}
@@ -1301,8 +1345,8 @@ func parseLocalSSHKey(path string) (*LocalSSHKeyInfo, error) {
 
 // ConversationDisplayMessage 返回给前端的会话消息（用于恢复显示）
 type ConversationDisplayMessage struct {
-	Role    string                          `json:"role"`
-	Content string                          `json:"content"`
+	Role    string                             `json:"role"`
+	Content string                             `json:"content"`
 	Blocks  []conversation_entity.ContentBlock `json:"blocks"`
 }
 
@@ -1446,12 +1490,11 @@ func (a *App) SendAIMessage(convID int64, messages []ai.Message) error {
 	eventName := fmt.Sprintf("ai:event:%d", convID)
 
 	// 添加系统提示
-	fullMessages := []ai.Message{
-		{
-			Role:    ai.RoleSystem,
-			Content: "You are the Ops Cat AI assistant, helping users manage IT assets. You can list assets, view details, add assets, and run commands on SSH servers. Respond in the same language the user uses.",
-		},
-	}
+	fullMessages := make([]ai.Message, 0, 1+len(messages))
+	fullMessages = append(fullMessages, ai.Message{
+		Role:    ai.RoleSystem,
+		Content: "You are the Ops Cat AI assistant, helping users manage IT assets. You can list assets, view details, add assets, and run commands on SSH servers. Respond in the same language the user uses.",
+	})
 	fullMessages = append(fullMessages, messages...)
 
 	go func() {
@@ -1625,7 +1668,7 @@ func (a *App) GetInitContext(assetID int64, groupID int64) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("获取资产列表失败: %w", err)
 		}
-		sb.WriteString(fmt.Sprintf("=== 分组「%s」初始化分析 ===\n\n", group.Name))
+		fmt.Fprintf(&sb, "=== 分组「%s」初始化分析 ===\n\n", group.Name)
 		if len(assets) == 0 {
 			sb.WriteString("该分组下没有资产。\n")
 		}
@@ -1654,20 +1697,20 @@ func (a *App) GetInitContext(assetID int64, groupID int64) (string, error) {
 // formatAssetContext 格式化单个资产的上下文信息
 func (a *App) formatAssetContext(asset *asset_entity.Asset) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("- 名称: %s (ID: %d)\n", asset.Name, asset.ID))
-	sb.WriteString(fmt.Sprintf("  类型: %s\n", asset.Type))
+	fmt.Fprintf(&sb, "- 名称: %s (ID: %d)\n", asset.Name, asset.ID)
+	fmt.Fprintf(&sb, "  类型: %s\n", asset.Type)
 
 	if asset.IsSSH() {
 		cfg, err := asset.GetSSHConfig()
 		if err == nil {
-			sb.WriteString(fmt.Sprintf("  地址: %s:%d\n", cfg.Host, cfg.Port))
-			sb.WriteString(fmt.Sprintf("  用户: %s\n", cfg.Username))
-			sb.WriteString(fmt.Sprintf("  认证: %s\n", cfg.AuthType))
+			fmt.Fprintf(&sb, "  地址: %s:%d\n", cfg.Host, cfg.Port)
+			fmt.Fprintf(&sb, "  用户: %s\n", cfg.Username)
+			fmt.Fprintf(&sb, "  认证: %s\n", cfg.AuthType)
 		}
 	}
 
 	if asset.Description != "" {
-		sb.WriteString(fmt.Sprintf("  描述: %s\n", asset.Description))
+		fmt.Fprintf(&sb, "  描述: %s\n", asset.Description)
 	}
 	return sb.String()
 }
@@ -1759,7 +1802,7 @@ func (a *App) readSSHConfig() ([]byte, error) {
 			return nil, nil
 		}
 	}
-	data, err := os.ReadFile(filePath)
+	data, err := os.ReadFile(filePath) //nolint:gosec // filePath is from file dialog or known config path
 	if err != nil {
 		return nil, fmt.Errorf("读取文件失败: %w", err)
 	}
@@ -1785,7 +1828,7 @@ func (a *App) readTabbyConfig() ([]byte, error) {
 			return nil, nil
 		}
 	}
-	data, err := os.ReadFile(filePath)
+	data, err := os.ReadFile(filePath) //nolint:gosec // filePath is from file dialog or known config path
 	if err != nil {
 		return nil, fmt.Errorf("读取文件失败: %w", err)
 	}
@@ -1819,7 +1862,7 @@ func detectTabbyConfigPath() string {
 	}
 
 	for _, path := range candidates {
-		if _, err := os.Stat(path); err == nil {
+		if _, err := os.Stat(path); err == nil { //nolint:gosec // path is from known config locations
 			return path
 		}
 	}
@@ -1902,7 +1945,7 @@ func (a *App) SelectImportFile() (*ImportFileInfo, error) {
 		return nil, nil
 	}
 
-	fileData, err := os.ReadFile(filePath)
+	fileData, err := os.ReadFile(filePath) //nolint:gosec // filePath is from file dialog
 	if err != nil {
 		return nil, fmt.Errorf("读取文件失败: %w", err)
 	}
@@ -1915,7 +1958,7 @@ func (a *App) SelectImportFile() (*ImportFileInfo, error) {
 
 // ExecuteImportFile 执行文件导入
 func (a *App) ExecuteImportFile(filePath, password string) error {
-	fileData, err := os.ReadFile(filePath)
+	fileData, err := os.ReadFile(filePath) //nolint:gosec // filePath is from previous file dialog selection
 	if err != nil {
 		return fmt.Errorf("读取文件失败: %w", err)
 	}
@@ -2110,7 +2153,7 @@ func (a *App) DetectOpsctl() OpsctlInfo {
 	}
 	info.Installed = true
 	info.Path = path
-	out, err := exec.Command(path, "version").Output()
+	out, err := exec.Command(path, "version").Output() //nolint:gosec // path is from exec.LookPath
 	if err == nil {
 		info.Version = strings.TrimSpace(string(out))
 	}
@@ -2179,7 +2222,7 @@ func (a *App) InstallClaudeSkill() (string, error) {
 
 	// 清理旧的 skill 文件
 	oldSkillPath := filepath.Join(home, ".claude", "commands", "ops-cat.md")
-	os.Remove(oldSkillPath)
+	_ = os.Remove(oldSkillPath)
 
 	return skillDir, nil
 }
@@ -2213,4 +2256,42 @@ func (a *App) ListAuditLogs(source string, assetID int64, offset, limit int) (*A
 		return nil, err
 	}
 	return &AuditLogListResult{Items: items, Total: total}, nil
+}
+
+// --- 更新 ---
+
+// GetAppVersion 返回当前应用版本
+func (a *App) GetAppVersion() string {
+	return configs.Version
+}
+
+// CheckForUpdate 检查是否有新版本
+func (a *App) CheckForUpdate() (*update_svc.UpdateInfo, error) {
+	return update_svc.CheckForUpdate()
+}
+
+// DownloadAndInstallUpdate 下载并安装更新
+// 更新完成后需要用户重启应用
+func (a *App) DownloadAndInstallUpdate() error {
+	err := update_svc.DownloadAndUpdate(func(downloaded, total int64) {
+		wailsRuntime.EventsEmit(a.ctx, "update:progress", map[string]int64{
+			"downloaded": downloaded,
+			"total":      total,
+		})
+	})
+	if err != nil {
+		return err
+	}
+
+	// 更新后重新安装 opsctl（如果已安装）
+	opsctlInfo := a.DetectOpsctl()
+	if opsctlInfo.Installed && embedded.HasEmbeddedOpsctl() {
+		installDir := filepath.Dir(opsctlInfo.Path)
+		if _, err := embedded.InstallOpsctl(installDir); err != nil {
+			// opsctl 更新失败不阻塞主更新
+			wailsRuntime.EventsEmit(a.ctx, "update:opsctl-error", err.Error())
+		}
+	}
+
+	return nil
 }

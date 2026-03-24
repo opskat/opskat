@@ -87,7 +87,7 @@ func executeSSHCommand(cfg *asset_entity.SSHConfig, password, key string, comman
 	if err != nil {
 		return "", err
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	return runSSHCommand(client, command)
 }
@@ -98,7 +98,7 @@ func runSSHCommand(client *ssh.Client, command string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("创建会话失败: %w", err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	var stdout, stderr bytes.Buffer
 	session.Stdout = &stdout
@@ -124,13 +124,13 @@ func executeWithSFTP(cfg *asset_entity.SSHConfig, password, key string, fn func(
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	sftpClient, err := sftp.NewClient(client)
 	if err != nil {
 		return fmt.Errorf("创建SFTP客户端失败: %w", err)
 	}
-	defer sftpClient.Close()
+	defer func() { _ = sftpClient.Close() }()
 
 	return fn(sftpClient)
 }
@@ -155,13 +155,13 @@ func ExecWithStdio(ctx context.Context, assetID int64, command string, stdin io.
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	session, err := client.NewSession()
 	if err != nil {
 		return fmt.Errorf("创建会话失败: %w", err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	if stdin != nil {
 		session.Stdin = stdin
@@ -193,39 +193,39 @@ func CopyBetweenAssets(ctx context.Context, srcAssetID int64, srcPath string, ds
 	if err != nil {
 		return fmt.Errorf("源资产SSH连接失败: %w", err)
 	}
-	defer srcClient.Close()
+	defer func() { _ = srcClient.Close() }()
 
 	dstClient, err := createSSHClient(dstCfg, dstPassword, dstKey)
 	if err != nil {
 		return fmt.Errorf("目标资产SSH连接失败: %w", err)
 	}
-	defer dstClient.Close()
+	defer func() { _ = dstClient.Close() }()
 
 	// 创建 SFTP 客户端
 	srcSFTP, err := sftp.NewClient(srcClient)
 	if err != nil {
 		return fmt.Errorf("源资产SFTP连接失败: %w", err)
 	}
-	defer srcSFTP.Close()
+	defer func() { _ = srcSFTP.Close() }()
 
 	dstSFTP, err := sftp.NewClient(dstClient)
 	if err != nil {
 		return fmt.Errorf("目标资产SFTP连接失败: %w", err)
 	}
-	defer dstSFTP.Close()
+	defer func() { _ = dstSFTP.Close() }()
 
 	// 流式传输
 	srcFile, err := srcSFTP.Open(srcPath)
 	if err != nil {
 		return fmt.Errorf("打开源文件失败: %w", err)
 	}
-	defer srcFile.Close()
+	defer func() { _ = srcFile.Close() }()
 
 	dstFile, err := dstSFTP.Create(dstPath)
 	if err != nil {
 		return fmt.Errorf("创建目标文件失败: %w", err)
 	}
-	defer dstFile.Close()
+	defer func() { _ = dstFile.Close() }()
 
 	if _, err := io.Copy(dstFile, srcFile); err != nil {
 		return fmt.Errorf("文件传输失败: %w", err)

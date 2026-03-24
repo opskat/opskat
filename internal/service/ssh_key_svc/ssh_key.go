@@ -187,7 +187,7 @@ func ImportFromFile(ctx context.Context, name, comment, filePath string) (*ssh_k
 		return nil, fmt.Errorf("密钥名称不能为空")
 	}
 
-	data, err := os.ReadFile(filePath)
+	data, err := os.ReadFile(filePath) //nolint:gosec // file path from user config
 	if err != nil {
 		return nil, fmt.Errorf("读取密钥文件失败: %w", err)
 	}

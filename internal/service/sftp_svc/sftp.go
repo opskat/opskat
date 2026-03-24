@@ -19,7 +19,7 @@ import (
 // TransferProgress 传输进度事件
 type TransferProgress struct {
 	TransferID     string `json:"transferId"`
-	Status         string `json:"status"`         // "progress" | "done" | "error"
+	Status         string `json:"status"` // "progress" | "done" | "error"
 	CurrentFile    string `json:"currentFile"`
 	FilesCompleted int    `json:"filesCompleted"`
 	FilesTotal     int    `json:"filesTotal"`
@@ -57,7 +57,7 @@ func (s *Service) getSFTPClient(sessionID string) (*sftp.Client, error) {
 		}
 		// 已失效，移除
 		s.clients.Delete(sessionID)
-		client.Close()
+		_ = client.Close()
 	}
 
 	sess, ok := s.sshManager.GetSession(sessionID)
@@ -142,11 +142,11 @@ func (s *Service) Upload(ctx context.Context, transferID, sessionID, localPath, 
 		return err
 	}
 
-	localFile, err := os.Open(localPath)
+	localFile, err := os.Open(localPath) //nolint:gosec // file path from user config
 	if err != nil {
 		return fmt.Errorf("打开本地文件失败: %w", err)
 	}
-	defer localFile.Close()
+	defer func() { _ = localFile.Close() }()
 
 	stat, err := localFile.Stat()
 	if err != nil {
@@ -157,7 +157,7 @@ func (s *Service) Upload(ctx context.Context, transferID, sessionID, localPath, 
 	if err != nil {
 		return fmt.Errorf("创建远程文件失败: %w", err)
 	}
-	defer remoteFile.Close()
+	defer func() { _ = remoteFile.Close() }()
 
 	return s.copyWithProgress(ctx, transferID, remoteFile, localFile, stat.Size(), 1, onProgress)
 }
@@ -180,18 +180,18 @@ func (s *Service) Download(ctx context.Context, transferID, sessionID, remotePat
 	if err != nil {
 		return fmt.Errorf("打开远程文件失败: %w", err)
 	}
-	defer remoteFile.Close()
+	defer func() { _ = remoteFile.Close() }()
 
 	stat, err := remoteFile.Stat()
 	if err != nil {
 		return fmt.Errorf("获取远程文件信息失败: %w", err)
 	}
 
-	localFile, err := os.Create(localPath)
+	localFile, err := os.Create(localPath) //nolint:gosec // file path from user config
 	if err != nil {
 		return fmt.Errorf("创建本地文件失败: %w", err)
 	}
-	defer localFile.Close()
+	defer func() { _ = localFile.Close() }()
 
 	return s.copyWithProgress(ctx, transferID, localFile, remoteFile, stat.Size(), 1, onProgress)
 }
@@ -255,17 +255,17 @@ func (s *Service) UploadDir(ctx context.Context, transferID, sessionID, localDir
 		}
 
 		// 上传文件
-		localFile, err := os.Open(path)
+		localFile, err := os.Open(path) //nolint:gosec // file path from user config
 		if err != nil {
 			return err
 		}
-		defer localFile.Close()
+		defer func() { _ = localFile.Close() }()
 
 		remoteFile, err := sftpClient.Create(remoteFull)
 		if err != nil {
 			return err
 		}
-		defer remoteFile.Close()
+		defer func() { _ = remoteFile.Close() }()
 
 		buf := make([]byte, 32*1024)
 		for {
@@ -396,24 +396,24 @@ func (s *Service) DownloadDir(ctx context.Context, transferID, sessionID, remote
 			return err
 		}
 
-		localFile, err := os.Create(localFull)
+		localFile, err := os.Create(localFull) //nolint:gosec // file path from user config
 		if err != nil {
-			remoteFile.Close()
+			_ = remoteFile.Close()
 			return err
 		}
 
 		buf := make([]byte, 32*1024)
 		for {
 			if ctx.Err() != nil {
-				localFile.Close()
-				remoteFile.Close()
+				_ = localFile.Close()
+				_ = remoteFile.Close()
 				return ctx.Err()
 			}
 			n, readErr := remoteFile.Read(buf)
 			if n > 0 {
 				if _, writeErr := localFile.Write(buf[:n]); writeErr != nil {
-					localFile.Close()
-					remoteFile.Close()
+					_ = localFile.Close()
+					_ = remoteFile.Close()
 					return writeErr
 				}
 				bytesDone += int64(n)
@@ -441,14 +441,14 @@ func (s *Service) DownloadDir(ctx context.Context, transferID, sessionID, remote
 				break
 			}
 			if readErr != nil {
-				localFile.Close()
-				remoteFile.Close()
+				_ = localFile.Close()
+				_ = remoteFile.Close()
 				return readErr
 			}
 		}
 
-		localFile.Close()
-		remoteFile.Close()
+		_ = localFile.Close()
+		_ = remoteFile.Close()
 		filesCompleted++
 	}
 
@@ -465,7 +465,7 @@ func (s *Service) Cancel(transferID string) {
 // CleanupSession 清理 SSH 会话关联的 SFTP 客户端
 func (s *Service) CleanupSession(sessionID string) {
 	if v, ok := s.clients.LoadAndDelete(sessionID); ok {
-		v.(*sftp.Client).Close()
+		_ = v.(*sftp.Client).Close()
 	}
 }
 

@@ -33,10 +33,10 @@ type claudeContentBlock struct {
 
 // claudeStreamSubEvent stream_event 内部事件
 type claudeStreamSubEvent struct {
-	Type         string               `json:"type"` // content_block_start, content_block_delta, content_block_stop, message_start, message_delta, message_stop
-	Index        int                  `json:"index"`
-	Delta        *claudeDelta         `json:"delta"`
-	ContentBlock *claudeContentBlock  `json:"content_block"`
+	Type         string              `json:"type"` // content_block_start, content_block_delta, content_block_stop, message_start, message_delta, message_stop
+	Index        int                 `json:"index"`
+	Delta        *claudeDelta        `json:"delta"`
+	ContentBlock *claudeContentBlock `json:"content_block"`
 }
 
 type claudeDelta struct {

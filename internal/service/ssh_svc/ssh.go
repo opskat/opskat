@@ -21,6 +21,7 @@ type sharedClient struct {
 	refCount int
 	closers  []io.Closer // 跳板机 client 等额外资源
 	closed   bool
+	onClose  func(*sharedClient) // 连接完全关闭时的回调
 }
 
 func newSharedClient(client *ssh.Client, closers []io.Closer) *sharedClient {
@@ -43,9 +44,12 @@ func (sc *sharedClient) release() {
 	sc.refCount--
 	if sc.refCount <= 0 && !sc.closed {
 		sc.closed = true
-		sc.client.Close()
+		_ = sc.client.Close()
 		for _, c := range sc.closers {
-			c.Close()
+			_ = c.Close()
+		}
+		if sc.onClose != nil {
+			sc.onClose(sc)
 		}
 	}
 }
@@ -60,7 +64,7 @@ type Session struct {
 	stdout   io.Reader
 	mu       sync.Mutex
 	closed   bool
-	onData   func(data []byte)     // 终端输出回调
+	onData   func(data []byte)      // 终端输出回调
 	onClosed func(sessionID string) // 会话关闭回调
 }
 
@@ -93,7 +97,7 @@ func (s *Session) Close() {
 		return
 	}
 	s.closed = true
-	s.session.Close()
+	_ = s.session.Close()
 	s.shared.release()
 	if s.onClosed != nil {
 		go s.onClosed(s.ID)
@@ -114,9 +118,10 @@ func (s *Session) IsClosed() bool {
 
 // Manager 管理所有 SSH 会话
 type Manager struct {
-	sessions sync.Map // map[string]*Session
-	counter  int64
-	mu       sync.Mutex
+	sessions     sync.Map // map[string]*Session
+	portForwards sync.Map // map[string]*portForward
+	counter      int64
+	mu           sync.Mutex
 }
 
 // NewManager 创建会话管理器
@@ -137,7 +142,7 @@ type ConnectConfig struct {
 	Cols        int
 	Rows        int
 	OnData      func(sessionID string, data []byte) // 终端输出回调
-	OnClosed    func(sessionID string)               // 关闭回调
+	OnClosed    func(sessionID string)              // 关闭回调
 
 	// 进度回调（异步连接用），step: resolve/connect/auth/shell
 	OnProgress func(step, message string)
@@ -211,6 +216,9 @@ func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
 	}
 
 	shared := newSharedClient(client, extraClosers)
+	shared.onClose = func(sc *sharedClient) {
+		m.cleanupForwards(sc)
+	}
 
 	emitProgress(&cfg, "shell", "正在启动终端...")
 
@@ -243,24 +251,24 @@ func (m *Manager) createSession(shared *sharedClient, assetID int64, cols, rows 
 		ssh.TTY_OP_ISPEED: 14400,
 		ssh.TTY_OP_OSPEED: 14400,
 	}); err != nil {
-		session.Close()
+		_ = session.Close()
 		return "", fmt.Errorf("请求PTY失败: %w", err)
 	}
 
 	stdin, err := session.StdinPipe()
 	if err != nil {
-		session.Close()
+		_ = session.Close()
 		return "", fmt.Errorf("获取stdin失败: %w", err)
 	}
 
 	stdout, err := session.StdoutPipe()
 	if err != nil {
-		session.Close()
+		_ = session.Close()
 		return "", fmt.Errorf("获取stdout失败: %w", err)
 	}
 
 	if err := session.Shell(); err != nil {
-		session.Close()
+		_ = session.Close()
 		return "", fmt.Errorf("启动shell失败: %w", err)
 	}
 
@@ -330,7 +338,7 @@ func (m *Manager) dial(cfg ConnectConfig, sshConfig *ssh.ClientConfig, targetAdd
 		emitProgress(&cfg, "auth", "正在认证...")
 		c, chans, reqs, err := ssh.NewClientConn(conn, targetAddr, sshConfig)
 		if err != nil {
-			conn.Close()
+			_ = conn.Close()
 			return nil, nil, fmt.Errorf("SSH握手失败: %w", err)
 		}
 		return ssh.NewClient(c, chans, reqs), closers, nil
@@ -378,7 +386,7 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 
 		c, chans, reqs, err := ssh.NewClientConn(conn, firstAddr, firstConfig)
 		if err != nil {
-			conn.Close()
+			_ = conn.Close()
 			return nil, nil, fmt.Errorf("跳板机SSH握手失败: %w", err)
 		}
 		currentClient = ssh.NewClient(c, chans, reqs)
@@ -400,7 +408,7 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 		jumpAuth, err := buildAuthMethods(jump.AuthType, jump.Password, jump.Key, nil, nil)
 		if err != nil {
 			for _, c := range closers {
-				c.Close()
+				_ = c.Close()
 			}
 			return nil, nil, fmt.Errorf("跳板机认证配置失败: %w", err)
 		}
@@ -414,16 +422,16 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 		conn, err := currentClient.Dial("tcp", jumpAddr)
 		if err != nil {
 			for _, c := range closers {
-				c.Close()
+				_ = c.Close()
 			}
 			return nil, nil, fmt.Errorf("通过跳板机连接下一跳失败: %w", err)
 		}
 
 		c, chans, reqs, err := ssh.NewClientConn(conn, jumpAddr, jumpConfig)
 		if err != nil {
-			conn.Close()
+			_ = conn.Close()
 			for _, c := range closers {
-				c.Close()
+				_ = c.Close()
 			}
 			return nil, nil, fmt.Errorf("跳板机SSH握手失败: %w", err)
 		}
@@ -437,7 +445,7 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 	conn, err := currentClient.Dial("tcp", targetAddr)
 	if err != nil {
 		for _, c := range closers {
-			c.Close()
+			_ = c.Close()
 		}
 		return nil, nil, fmt.Errorf("通过跳板机连接目标失败: %w", err)
 	}
@@ -446,9 +454,9 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 
 	c, chans, reqs, err := ssh.NewClientConn(conn, targetAddr, targetConfig)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		for _, c := range closers {
-			c.Close()
+			_ = c.Close()
 		}
 		return nil, nil, fmt.Errorf("目标SSH握手失败: %w", err)
 	}
@@ -525,7 +533,7 @@ func buildAuthMethods(authType, password, key string, privateKeyPaths []string,
 		}
 		// 从文件路径读取私钥
 		for _, path := range privateKeyPaths {
-			data, err := os.ReadFile(path)
+			data, err := os.ReadFile(path) //nolint:gosec // file path from user config
 			if err != nil {
 				return nil, fmt.Errorf("读取私钥文件 %s 失败: %w", path, err)
 			}
@@ -610,9 +618,9 @@ func (m *Manager) TestConnection(cfg ConnectConfig) error {
 	if err != nil {
 		return err
 	}
-	client.Close()
+	_ = client.Close()
 	for _, c := range closers {
-		c.Close()
+		_ = c.Close()
 	}
 	return nil
 }

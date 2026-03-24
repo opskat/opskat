@@ -1,0 +1,41 @@
+version: "2"
+linters:
+  enable:
+    - bodyclose
+    - copyloopvar
+    - durationcheck
+    - gosec
+    - loggercheck
+    - makezero
+    - misspell
+    - nilerr
+    - nolintlint
+    - prealloc
+    - predeclared
+    - rowserrcheck
+    - staticcheck
+
+  settings:
+    gosec:
+      excludes:
+        - G106
+        - G115
+        - G117
+        - G301
+        - G302
+        - G306
+        - G401
+        - G402
+        - G404
+        - G501
+        - G505
+    misspell:
+      locale: US
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+run:
+  timeout: 10m

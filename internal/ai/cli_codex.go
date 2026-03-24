@@ -82,9 +82,9 @@ func (s *CodexAppServer) Start(ctx context.Context, cliPath, workDir string, env
 		stderrStr := proc.Stderr()
 		s.Stop()
 		if stderrStr != "" {
-			return fmt.Errorf("Codex 初始化失败: %w\nstderr: %s", err, stderrStr)
+			return fmt.Errorf("codex 初始化失败: %w\nstderr: %s", err, stderrStr)
 		}
-		return fmt.Errorf("Codex 初始化失败: %w", err)
+		return fmt.Errorf("codex 初始化失败: %w", err)
 	}
 
 	return nil
@@ -199,19 +199,19 @@ func (s *CodexAppServer) SendTurn(ctx context.Context, text string, onEvent func
 
 // codexItem Codex item 通用结构（camelCase 类型名）
 type codexItem struct {
-	Type     string          `json:"type"`
-	ID       string          `json:"id"`
-	Command  string          `json:"command"`          // commandExecution
-	Path     string          `json:"path"`             // fileRead / fileWrite
+	Type             string          `json:"type"`
+	ID               string          `json:"id"`
+	Command          string          `json:"command"`          // commandExecution
+	Path             string          `json:"path"`             // fileRead / fileWrite
 	Output           string          `json:"output"`           // commandExecution completed
 	AggregatedOutput string          `json:"aggregatedOutput"` // commandExecution completed (Codex 格式)
-	Content  json.RawMessage `json:"content"`          // 可能是 string 或 array
-	ExitCode *int            `json:"exitCode"`         // commandExecution completed
-	Text     string          `json:"text"`             // agentMessage completed
-	Tool     string          `json:"tool"`             // mcpToolCall: 工具名
-	Server   string          `json:"server"`           // mcpToolCall: MCP server 名
-	Args     json.RawMessage `json:"arguments"`        // mcpToolCall: 参数（JSON）
-	Result   json.RawMessage `json:"result"`           // mcpToolCall: 结果（嵌套结构）
+	Content          json.RawMessage `json:"content"`          // 可能是 string 或 array
+	ExitCode         *int            `json:"exitCode"`         // commandExecution completed
+	Text             string          `json:"text"`             // agentMessage completed
+	Tool             string          `json:"tool"`             // mcpToolCall: 工具名
+	Server           string          `json:"server"`           // mcpToolCall: MCP server 名
+	Args             json.RawMessage `json:"arguments"`        // mcpToolCall: 参数（JSON）
+	Result           json.RawMessage `json:"result"`           // mcpToolCall: 结果（嵌套结构）
 }
 
 // contentString 安全提取 content 字段为字符串
@@ -601,7 +601,7 @@ func (s *CodexAppServer) handleUserInputRequest(requestID *int64, params json.Ra
 			log.Printf("[Codex] resolveUserInput response write failed: %v", err)
 		}
 	} else {
-		s.sendNotification("item/tool/resolveUserInput", map[string]any{
+		_ = s.sendNotification("item/tool/resolveUserInput", map[string]any{
 			"threadId": req.ThreadID,
 			"turnId":   req.TurnID,
 			"itemId":   req.ItemID,
@@ -721,7 +721,7 @@ func (s *CodexAppServer) sendRequest(method string, params any) (json.RawMessage
 	select {
 	case resp := <-ch:
 		if resp.Error != nil {
-			return nil, fmt.Errorf("Codex RPC 错误: %s", resp.Error.Message)
+			return nil, fmt.Errorf("codex RPC 错误: %s", resp.Error.Message)
 		}
 		return resp.Result, nil
 	case <-time.After(30 * time.Second):
@@ -730,9 +730,9 @@ func (s *CodexAppServer) sendRequest(method string, params any) (json.RawMessage
 		s.pendingMu.Unlock()
 		stderrStr := s.proc.Stderr()
 		if stderrStr != "" {
-			return nil, fmt.Errorf("Codex 请求超时 (%s)\nstderr: %s", method, stderrStr)
+			return nil, fmt.Errorf("codex 请求超时 (%s)\nstderr: %s", method, stderrStr)
 		}
-		return nil, fmt.Errorf("Codex 请求超时: %s", method)
+		return nil, fmt.Errorf("codex 请求超时: %s", method)
 	case <-s.ctx.Done():
 		return nil, s.ctx.Err()
 	}

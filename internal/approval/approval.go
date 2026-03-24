@@ -11,19 +11,19 @@ import (
 
 // ApprovalRequest is sent from opsctl to the desktop app.
 type ApprovalRequest struct {
-	Type          string     `json:"type"`                            // "exec"|"cp"|"create"|"update"|"plan"
-	AssetID       int64      `json:"asset_id,omitempty"`
-	AssetName     string     `json:"asset_name,omitempty"`
-	Command       string     `json:"command,omitempty"`
-	Detail        string     `json:"detail"`
-	SessionID     string     `json:"session_id,omitempty"`            // 统一 session 标识（审批 session 或 plan session）
-	PlanItems     []PlanItem `json:"plan_items,omitempty"`            // type="plan" 时使用
-	Description   string     `json:"description,omitempty"`           // 计划描述
+	Type        string     `json:"type"` // "exec"|"cp"|"create"|"update"|"plan"
+	AssetID     int64      `json:"asset_id,omitempty"`
+	AssetName   string     `json:"asset_name,omitempty"`
+	Command     string     `json:"command,omitempty"`
+	Detail      string     `json:"detail"`
+	SessionID   string     `json:"session_id,omitempty"`  // 统一 session 标识（审批 session 或 plan session）
+	PlanItems   []PlanItem `json:"plan_items,omitempty"`  // type="plan" 时使用
+	Description string     `json:"description,omitempty"` // 计划描述
 }
 
 // PlanItem 计划中的单条操作
 type PlanItem struct {
-	Type      string `json:"type"`       // "exec", "cp", "create", "update"
+	Type      string `json:"type"` // "exec", "cp", "create", "update"
 	AssetID   int64  `json:"asset_id"`
 	AssetName string `json:"asset_name"`
 	Command   string `json:"command"`
@@ -34,8 +34,8 @@ type PlanItem struct {
 type ApprovalResponse struct {
 	Approved       bool   `json:"approved"`
 	Reason         string `json:"reason,omitempty"`
-	SessionID      string `json:"session_id,omitempty"`       // plan 审批返回 / session 标识
-	ApproveSession bool   `json:"approve_session,omitempty"`  // 用户选择了"允许当前会话"
+	SessionID      string `json:"session_id,omitempty"`      // plan 审批返回 / session 标识
+	ApproveSession bool   `json:"approve_session,omitempty"` // 用户选择了"允许当前会话"
 }
 
 // SocketPath returns the approval socket path for the given data directory.
@@ -72,11 +72,11 @@ func (s *Server) Start(socketPath string) error {
 		// Try to connect - if successful, another instance is running
 		conn, err := net.Dial("unix", socketPath)
 		if err == nil {
-			conn.Close()
+			_ = conn.Close()
 			return fmt.Errorf("another instance is already listening on %s", socketPath)
 		}
 		// Stale socket, remove it
-		os.Remove(socketPath)
+		_ = os.Remove(socketPath)
 	}
 
 	listener, err := net.Listen("unix", socketPath)
@@ -95,7 +95,7 @@ func (s *Server) Start(socketPath string) error {
 func (s *Server) Stop() {
 	close(s.done)
 	if s.listener != nil {
-		s.listener.Close()
+		_ = s.listener.Close()
 	}
 	s.wg.Wait()
 }
@@ -119,18 +119,18 @@ func (s *Server) acceptLoop() {
 
 func (s *Server) handleConn(conn net.Conn) {
 	defer s.wg.Done()
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	var req ApprovalRequest
 	decoder := json.NewDecoder(conn)
 	if err := decoder.Decode(&req); err != nil {
 		resp := ApprovalResponse{Approved: false, Reason: "invalid request"}
-		json.NewEncoder(conn).Encode(resp)
+		_ = json.NewEncoder(conn).Encode(resp)
 		return
 	}
 
 	resp := s.handler(req)
-	json.NewEncoder(conn).Encode(resp)
+	_ = json.NewEncoder(conn).Encode(resp)
 }
 
 // --- Client ---
@@ -142,7 +142,7 @@ func RequestApproval(socketPath string, req ApprovalRequest) (ApprovalResponse, 
 	if err != nil {
 		return ApprovalResponse{}, fmt.Errorf("cannot connect to desktop app (is it running?): %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return ApprovalResponse{}, fmt.Errorf("send request: %w", err)

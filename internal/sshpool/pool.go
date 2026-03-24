@@ -70,9 +70,9 @@ func (e *poolEntry) close() {
 		return
 	}
 	e.closed = true
-	e.client.Close()
+	_ = e.client.Close()
 	for _, c := range e.closers {
-		c.Close()
+		_ = c.Close()
 	}
 }
 
@@ -141,9 +141,9 @@ func (p *Pool) Get(ctx context.Context, assetID int64) (*ssh.Client, error) {
 	if existing, ok := p.entries[assetID]; ok {
 		p.mu.Unlock()
 		// 关闭我们刚创建的，使用已存在的
-		client.Close()
+		_ = client.Close()
 		for _, c := range closers {
-			c.Close()
+			_ = c.Close()
 		}
 		if existing.isAlive() {
 			existing.acquire()

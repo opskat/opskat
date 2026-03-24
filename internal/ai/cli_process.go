@@ -23,7 +23,7 @@ type CLIProcess struct {
 
 // StartCLIProcess 启动 CLI 子进程，workDir 为可选工作目录，env 为额外环境变量
 func StartCLIProcess(ctx context.Context, cliPath string, args []string, workDir string, env map[string]string) (*CLIProcess, error) {
-	cmd := exec.CommandContext(ctx, cliPath, args...)
+	cmd := exec.CommandContext(ctx, cliPath, args...) //nolint:gosec
 	if workDir != "" {
 		cmd.Dir = workDir
 	}
@@ -39,7 +39,7 @@ func StartCLIProcess(ctx context.Context, cliPath string, args []string, workDir
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		stdin.Close()
+		_ = stdin.Close()
 		return nil, fmt.Errorf("获取 stdout 失败: %w", err)
 	}
 
@@ -51,8 +51,8 @@ func StartCLIProcess(ctx context.Context, cliPath string, args []string, workDir
 	cmd.Stderr = &p.stderr
 
 	if err := cmd.Start(); err != nil {
-		stdin.Close()
-		stdout.Close()
+		_ = stdin.Close()
+		_ = stdout.Close()
 		return nil, fmt.Errorf("启动 CLI 失败: %w", err)
 	}
 
@@ -103,8 +103,8 @@ func (p *CLIProcess) Stderr() string {
 
 // Stop 停止进程
 func (p *CLIProcess) Stop() {
-	p.stdin.Close()
+	_ = p.stdin.Close()
 	if p.cmd.Process != nil {
-		p.cmd.Process.Kill()
+		_ = p.cmd.Process.Kill()
 	}
 }

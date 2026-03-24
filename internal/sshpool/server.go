@@ -18,7 +18,7 @@ import (
 
 // ProxyRequest 代理请求（JSON 握手消息）
 type ProxyRequest struct {
-	Op         string `json:"op"`                    // "exec" | "upload" | "download" | "copy"
+	Op         string `json:"op"` // "exec" | "upload" | "download" | "copy"
 	AssetID    int64  `json:"asset_id"`
 	Command    string `json:"command,omitempty"`
 	Cols       int    `json:"cols,omitempty"`
@@ -62,10 +62,10 @@ func (s *Server) Start(socketPath string) error {
 	if _, err := os.Stat(socketPath); err == nil {
 		conn, err := net.Dial("unix", socketPath)
 		if err == nil {
-			conn.Close()
+			_ = conn.Close()
 			return fmt.Errorf("another instance is already listening on %s", socketPath)
 		}
-		os.Remove(socketPath)
+		_ = os.Remove(socketPath)
 	}
 
 	listener, err := net.Listen("unix", socketPath)
@@ -85,7 +85,7 @@ func (s *Server) Start(socketPath string) error {
 func (s *Server) Stop() {
 	close(s.done)
 	if s.listener != nil {
-		s.listener.Close()
+		_ = s.listener.Close()
 	}
 	s.wg.Wait()
 }
@@ -109,7 +109,7 @@ func (s *Server) acceptLoop() {
 
 func (s *Server) handleConn(conn net.Conn) {
 	defer s.wg.Done()
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	reader := bufio.NewReader(conn)
 
@@ -155,7 +155,7 @@ func (s *Server) handleExec(conn net.Conn, reader *bufio.Reader, req ProxyReques
 		writeJSONResponse(conn, false, fmt.Sprintf("create session: %v", err))
 		return
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	// 如果需要 PTY
 	if req.PTY {
@@ -218,7 +218,7 @@ func (s *Server) handleExec(conn net.Conn, reader *bufio.Reader, req ProxyReques
 		for {
 			n, err := stdout.Read(buf)
 			if n > 0 {
-				WriteFrame(conn, FrameStdout, buf[:n])
+				_ = WriteFrame(conn, FrameStdout, buf[:n])
 			}
 			if err != nil {
 				break
@@ -232,7 +232,7 @@ func (s *Server) handleExec(conn net.Conn, reader *bufio.Reader, req ProxyReques
 		for {
 			n, err := stderr.Read(buf)
 			if n > 0 {
-				WriteFrame(conn, FrameStderr, buf[:n])
+				_ = WriteFrame(conn, FrameStderr, buf[:n])
 			}
 			if err != nil {
 				break
@@ -246,15 +246,15 @@ func (s *Server) handleExec(conn net.Conn, reader *bufio.Reader, req ProxyReques
 		for {
 			frameType, payload, err := ReadFrame(reader)
 			if err != nil {
-				stdin.Close()
+				_ = stdin.Close()
 				return
 			}
 			switch frameType {
 			case FrameStdin:
-				stdin.Write(payload)
+				_, _ = stdin.Write(payload)
 			case FrameResize:
 				if cols, rows, err := ParseResize(payload); err == nil {
-					session.WindowChange(int(rows), int(cols))
+					_ = session.WindowChange(int(rows), int(cols))
 				}
 			}
 		}
@@ -266,12 +266,12 @@ func (s *Server) handleExec(conn net.Conn, reader *bufio.Reader, req ProxyReques
 		if exitErr, ok := err.(*ssh.ExitError); ok {
 			exitCode = exitErr.ExitStatus()
 		} else {
-			WriteError(conn, err.Error())
+			_ = WriteError(conn, err.Error())
 			return
 		}
 	}
 
-	WriteExitCode(conn, exitCode)
+	_ = WriteExitCode(conn, exitCode)
 	// 等待客户端读循环结束（连接关闭时自然退出）
 	<-done
 }
@@ -291,35 +291,35 @@ func (s *Server) handleUpload(conn net.Conn, reader *bufio.Reader, req ProxyRequ
 		writeJSONResponse(conn, false, fmt.Sprintf("create sftp client: %v", err))
 		return
 	}
-	defer sftpClient.Close()
+	defer func() { _ = sftpClient.Close() }()
 
 	writeJSONResponse(conn, true, "")
 
 	remoteFile, err := sftpClient.Create(req.DstPath)
 	if err != nil {
-		WriteFrame(conn, FrameFileErr, []byte(fmt.Sprintf("create remote file: %v", err)))
+		_ = WriteFrame(conn, FrameFileErr, []byte(fmt.Sprintf("create remote file: %v", err)))
 		return
 	}
-	defer remoteFile.Close()
+	defer func() { _ = remoteFile.Close() }()
 
 	// 读取 FileData 帧直到 FileEOF
 	for {
 		frameType, payload, err := ReadFrame(reader)
 		if err != nil {
-			WriteFrame(conn, FrameFileErr, []byte(fmt.Sprintf("read frame: %v", err)))
+			_ = WriteFrame(conn, FrameFileErr, []byte(fmt.Sprintf("read frame: %v", err)))
 			return
 		}
 		switch frameType {
 		case FrameFileData:
 			if _, err := remoteFile.Write(payload); err != nil {
-				WriteFrame(conn, FrameFileErr, []byte(fmt.Sprintf("write remote file: %v", err)))
+				_ = WriteFrame(conn, FrameFileErr, []byte(fmt.Sprintf("write remote file: %v", err)))
 				return
 			}
 		case FrameFileEOF:
-			WriteFrame(conn, FrameOK, nil)
+			_ = WriteFrame(conn, FrameOK, nil)
 			return
 		default:
-			WriteFrame(conn, FrameFileErr, []byte(fmt.Sprintf("unexpected frame type: 0x%02x", frameType)))
+			_ = WriteFrame(conn, FrameFileErr, []byte(fmt.Sprintf("unexpected frame type: 0x%02x", frameType)))
 			return
 		}
 	}
@@ -340,14 +340,14 @@ func (s *Server) handleDownload(conn net.Conn, req ProxyRequest) {
 		writeJSONResponse(conn, false, fmt.Sprintf("create sftp client: %v", err))
 		return
 	}
-	defer sftpClient.Close()
+	defer func() { _ = sftpClient.Close() }()
 
 	remoteFile, err := sftpClient.Open(req.SrcPath)
 	if err != nil {
 		writeJSONResponse(conn, false, fmt.Sprintf("open remote file: %v", err))
 		return
 	}
-	defer remoteFile.Close()
+	defer func() { _ = remoteFile.Close() }()
 
 	writeJSONResponse(conn, true, "")
 
@@ -361,11 +361,11 @@ func (s *Server) handleDownload(conn net.Conn, req ProxyRequest) {
 			}
 		}
 		if err == io.EOF {
-			WriteFrame(conn, FrameFileEOF, nil)
+			_ = WriteFrame(conn, FrameFileEOF, nil)
 			return
 		}
 		if err != nil {
-			WriteFrame(conn, FrameFileErr, []byte(fmt.Sprintf("read remote file: %v", err)))
+			_ = WriteFrame(conn, FrameFileErr, []byte(fmt.Sprintf("read remote file: %v", err)))
 			return
 		}
 	}
@@ -393,7 +393,7 @@ func (s *Server) handleCopy(conn net.Conn, req ProxyRequest) {
 		writeJSONResponse(conn, false, fmt.Sprintf("create source sftp: %v", err))
 		return
 	}
-	defer srcSFTP.Close()
+	defer func() { _ = srcSFTP.Close() }()
 
 	dstSFTP, err := sftp.NewClient(dstClient)
 	if err != nil {
@@ -401,30 +401,30 @@ func (s *Server) handleCopy(conn net.Conn, req ProxyRequest) {
 		writeJSONResponse(conn, false, fmt.Sprintf("create destination sftp: %v", err))
 		return
 	}
-	defer dstSFTP.Close()
+	defer func() { _ = dstSFTP.Close() }()
 
 	srcFile, err := srcSFTP.Open(req.SrcPath)
 	if err != nil {
 		writeJSONResponse(conn, false, fmt.Sprintf("open source file: %v", err))
 		return
 	}
-	defer srcFile.Close()
+	defer func() { _ = srcFile.Close() }()
 
 	dstFile, err := dstSFTP.Create(req.DstPath)
 	if err != nil {
 		writeJSONResponse(conn, false, fmt.Sprintf("create destination file: %v", err))
 		return
 	}
-	defer dstFile.Close()
+	defer func() { _ = dstFile.Close() }()
 
 	writeJSONResponse(conn, true, "")
 
 	if _, err := io.Copy(dstFile, srcFile); err != nil {
-		WriteFrame(conn, FrameError, []byte(fmt.Sprintf("copy: %v", err)))
+		_ = WriteFrame(conn, FrameError, []byte(fmt.Sprintf("copy: %v", err)))
 		return
 	}
 
-	WriteFrame(conn, FrameOK, nil)
+	_ = WriteFrame(conn, FrameOK, nil)
 }
 
 // handleSSHError 处理 SSH 连接错误，移除可能已断开的连接
@@ -453,5 +453,5 @@ func writeJSONResponse(conn net.Conn, ok bool, errMsg string) {
 	resp := ProxyResponse{OK: ok, Error: errMsg}
 	data, _ := json.Marshal(resp)
 	data = append(data, '\n')
-	conn.Write(data)
+	_, _ = conn.Write(data)
 }

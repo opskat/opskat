@@ -34,7 +34,7 @@ func NewAgent(provider Provider, executor ToolExecutor, checker *CommandPolicyCh
 func (a *Agent) Chat(ctx context.Context, messages []Message, onEvent func(StreamEvent)) error {
 	// Chat 结束后关闭 executor 持有的资源（如缓存的 SSH 连接）
 	if closer, ok := a.executor.(io.Closer); ok {
-		defer closer.Close()
+		defer func() { _ = closer.Close() }()
 	}
 
 	// 注入 PolicyChecker 到 context

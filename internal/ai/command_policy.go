@@ -125,9 +125,7 @@ func (c *CommandPolicyChecker) Check(ctx context.Context, assetID int64, command
 	// "始终允许" → 每个子命令加入会话白名单
 	if alwaysAllow {
 		c.mu.Lock()
-		for _, cmd := range subCmds {
-			c.sessionAllowed = append(c.sessionAllowed, cmd)
-		}
+		c.sessionAllowed = append(c.sessionAllowed, subCmds...)
 		c.mu.Unlock()
 	}
 
@@ -216,7 +214,7 @@ func ExtractSubCommands(command string) ([]string, error) {
 		default:
 			// CallExpr、其他命令类型 — 打印为字符串
 			var buf strings.Builder
-			printer.Print(&buf, stmt.Cmd)
+			_ = printer.Print(&buf, stmt.Cmd)
 			cmdStr := strings.TrimSpace(buf.String())
 			if cmdStr != "" {
 				cmds = append(cmds, cmdStr)
@@ -447,11 +445,11 @@ func findHintRules(command string, allowRules []string) []string {
 
 func formatDenyMessage(assetName, command, reason string, hints []string) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("命令执行被拒绝（%s）。\n命令: %s", reason, command))
+	fmt.Fprintf(&sb, "命令执行被拒绝（%s）。\n命令: %s", reason, command)
 	if len(hints) > 0 {
 		sb.WriteString("\n\n该资产允许的相关命令格式：\n")
 		for _, h := range hints {
-			sb.WriteString(fmt.Sprintf("- %s\n", h))
+			fmt.Fprintf(&sb, "- %s\n", h)
 		}
 		sb.WriteString("\n请按照上述格式调整命令后重试。")
 	}
@@ -476,7 +474,7 @@ func collectPolicies(asset *asset_entity.Asset, groups []*group_entity.Group) []
 }
 
 func collectDenyRules(policies []*asset_entity.CommandPolicy) []string {
-	var rules []string
+	rules := make([]string, 0, len(policies))
 	for _, p := range policies {
 		rules = append(rules, p.DenyList...)
 	}
@@ -484,7 +482,7 @@ func collectDenyRules(policies []*asset_entity.CommandPolicy) []string {
 }
 
 func collectAllowRules(policies []*asset_entity.CommandPolicy) []string {
-	var rules []string
+	rules := make([]string, 0, len(policies))
 	for _, p := range policies {
 		rules = append(rules, p.AllowList...)
 	}

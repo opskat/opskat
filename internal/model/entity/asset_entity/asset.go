@@ -47,19 +47,19 @@ func DefaultCommandPolicy() *CommandPolicy {
 
 // Asset 通用资产实体（充血模型）
 type Asset struct {
-	ID            int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	Name          string `gorm:"column:name;type:varchar(255);not null"`
-	Type          string `gorm:"column:type;type:varchar(50);not null;index"`
-	GroupID       int64  `gorm:"column:group_id;index"`
-	Icon          string `gorm:"column:icon;type:varchar(100)"`
-	Tags          string `gorm:"column:tags;type:text"`
-	Description   string `gorm:"column:description;type:text"`
-	Config        string `gorm:"column:config;type:text"`
-	CmdPolicy     string `gorm:"column:command_policy;type:text"`
-	SortOrder     int    `gorm:"column:sort_order;default:0"`
-	Status        int    `gorm:"column:status;default:1"`
-	Createtime    int64  `gorm:"column:createtime"`
-	Updatetime    int64  `gorm:"column:updatetime"`
+	ID          int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	Name        string `gorm:"column:name;type:varchar(255);not null"`
+	Type        string `gorm:"column:type;type:varchar(50);not null;index"`
+	GroupID     int64  `gorm:"column:group_id;index"`
+	Icon        string `gorm:"column:icon;type:varchar(100)"`
+	Tags        string `gorm:"column:tags;type:text"`
+	Description string `gorm:"column:description;type:text"`
+	Config      string `gorm:"column:config;type:text"`
+	CmdPolicy   string `gorm:"column:command_policy;type:text"`
+	SortOrder   int    `gorm:"column:sort_order;default:0"`
+	Status      int    `gorm:"column:status;default:1"`
+	Createtime  int64  `gorm:"column:createtime"`
+	Updatetime  int64  `gorm:"column:updatetime"`
 }
 
 // TableName GORM表名
@@ -73,9 +73,9 @@ type SSHConfig struct {
 	Port           int             `json:"port"`
 	Username       string          `json:"username"`
 	AuthType       string          `json:"auth_type"`
-	Password       string          `json:"password,omitempty"`       // 加密后的密码
-	KeyID          int64           `json:"key_id,omitempty"`         // 托管密钥 ID
-	KeySource      string          `json:"key_source,omitempty"`     // "managed" | "file"
+	Password       string          `json:"password,omitempty"`   // 加密后的密码
+	KeyID          int64           `json:"key_id,omitempty"`     // 托管密钥 ID
+	KeySource      string          `json:"key_source,omitempty"` // "managed" | "file"
 	PrivateKeys    []string        `json:"private_keys,omitempty"`
 	JumpHostID     int64           `json:"jump_host_id,omitempty"`
 	ForwardedPorts []ForwardedPort `json:"forwarded_ports,omitempty"`
@@ -85,7 +85,7 @@ type SSHConfig struct {
 
 // ForwardedPort 端口转发配置
 type ForwardedPort struct {
-	Type       string `json:"type"`        // "local" | "remote" | "dynamic"
+	Type       string `json:"type"` // "local" | "remote" | "dynamic"
 	LocalHost  string `json:"local_host"`
 	LocalPort  int    `json:"local_port"`
 	RemoteHost string `json:"remote_host"`
@@ -94,7 +94,7 @@ type ForwardedPort struct {
 
 // ProxyConfig 代理配置
 type ProxyConfig struct {
-	Type     string `json:"type"`                  // "socks5" | "socks4" | "http"
+	Type     string `json:"type"` // "socks5" | "socks4" | "http"
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
 	Username string `json:"username,omitempty"`

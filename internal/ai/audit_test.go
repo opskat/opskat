@@ -33,15 +33,6 @@ func (m *mockAuditRepo) List(_ context.Context, _ audit_repo.ListOptions) ([]*au
 	return m.logs, int64(len(m.logs)), nil
 }
 
-func (m *mockAuditRepo) getLastLog() *audit_entity.AuditLog {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.logs) == 0 {
-		return nil
-	}
-	return m.logs[len(m.logs)-1]
-}
-
 func TestContext_AuditSource(t *testing.T) {
 	convey.Convey("审计来源 context", t, func() {
 		convey.Convey("默认返回空字符串", func() {

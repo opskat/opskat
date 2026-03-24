@@ -38,7 +38,7 @@ type PreviewGroup struct {
 
 // PreviewItem 预览条目
 type PreviewItem struct {
-	Index       int    `json:"index"`       // 在原始列表中的索引
+	Index       int    `json:"index"` // 在原始列表中的索引
 	Name        string `json:"name"`
 	Host        string `json:"host"`
 	Port        int    `json:"port"`
@@ -124,7 +124,7 @@ func PreviewTabbyConfig(ctx context.Context, data []byte) (*PreviewResult, error
 	var groups []PreviewGroup
 	for _, g := range cfg.Groups {
 		tabbyGroupMap[g.ID] = g.Name
-		groups = append(groups, PreviewGroup{ID: g.ID, Name: g.Name})
+		groups = append(groups, PreviewGroup(g))
 	}
 
 	// 加载已有资产用于重复检测

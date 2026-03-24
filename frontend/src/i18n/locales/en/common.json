@@ -193,7 +193,11 @@
       "splitH": "Split Horizontal",
       "splitV": "Split Vertical",
       "connected": "Connected",
-      "disconnected": "Disconnected"
+      "disconnected": "Disconnected",
+      "portForward": "Port Forward",
+      "addForward": "Add Forward",
+      "noForwards": "No port forwards",
+      "port": "Port"
     }
   },
   "settings": {
@@ -388,6 +392,27 @@
     "skillPath": "Skill Path",
     "skillPreview": "Preview",
     "update": "Update"
+  },
+  "appUpdate": {
+    "title": "About",
+    "desc": "Version info & updates",
+    "currentVersion": "Current Version",
+    "checkUpdate": "Check for Updates",
+    "checking": "Checking...",
+    "latestVersion": "You are on the latest version",
+    "newVersion": "New version available",
+    "releaseNotes": "Release Notes",
+    "download": "Download & Update",
+    "downloading": "Downloading...",
+    "downloadProgress": "Download progress: {{percent}}%",
+    "updateSuccess": "Update successful. Please restart the app to apply.",
+    "updateFailed": "Update failed",
+    "checkFailed": "Failed to check for updates",
+    "opsctlUpdated": "opsctl has been updated",
+    "opsctlUpdateFailed": "opsctl update failed: {{error}}",
+    "restartNow": "Restart Now",
+    "restartLater": "Later",
+    "viewRelease": "View Release"
   },
   "opsctlApproval": {
     "title": "CLI Operation Approval",

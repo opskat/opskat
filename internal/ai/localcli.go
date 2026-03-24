@@ -268,24 +268,6 @@ func (p *LocalCLIProvider) ResetSession() {
 	}
 }
 
-// messagesToPrompt 将消息列表转换为文本 prompt（Codex 回退用）
-func messagesToPrompt(messages []Message) string {
-	var parts []string
-	for _, msg := range messages {
-		switch msg.Role {
-		case RoleSystem:
-			parts = append(parts, "[System]\n"+msg.Content)
-		case RoleUser:
-			parts = append(parts, msg.Content)
-		case RoleAssistant:
-			parts = append(parts, "[Assistant]\n"+msg.Content)
-		case RoleTool:
-			parts = append(parts, "[Tool Result]\n"+msg.Content)
-		}
-	}
-	return strings.Join(parts, "\n\n")
-}
-
 // DetectLocalCLIs 检测本地安装的 AI CLI 工具
 func DetectLocalCLIs() []CLIInfo {
 	var results []CLIInfo
