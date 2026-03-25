@@ -57,7 +57,7 @@ function tryConsume(
   firstArr: string[],
   charIdx: number,
   query: string,
-  queryIdx: number,
+  queryIdx: number
 ): boolean {
   if (queryIdx >= query.length) return true;
   if (charIdx >= pinyinArr.length) return false;
