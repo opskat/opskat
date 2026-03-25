@@ -158,7 +158,10 @@ jobs:
       - name: Package (Windows installer)
         if: matrix.goos == 'windows'
         shell: pwsh
-        run: Move-Item -Path "build\bin\opskat-amd64-installer.exe" -Destination "opskat-${{ matrix.platform }}-installer.exe"
+        run: |
+          Get-ChildItem -Path "build\bin" -Recurse | Write-Host
+          $installer = Get-ChildItem -Path "build\bin" -Filter "*installer*.exe" -Recurse | Select-Object -First 1
+          Move-Item -Path $installer.FullName -Destination "opskat-${{ matrix.platform }}-installer.exe"
 
       - uses: actions/upload-artifact@v7
         with:
