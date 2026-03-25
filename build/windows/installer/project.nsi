@@ -28,7 +28,7 @@ Unicode true
 ## !define PRODUCT_EXECUTABLE  "Application.exe"      # Default "${INFO_PROJECTNAME}.exe"
 ## !define UNINST_KEY_NAME     "UninstKeyInRegistry"  # Default "${INFO_COMPANYNAME}${INFO_PRODUCTNAME}"
 ####
-## !define REQUEST_EXECUTION_LEVEL "admin"            # Default "admin"  see also https://nsis.sourceforge.io/Docs/Chapter4.html
+!define REQUEST_EXECUTION_LEVEL "user"
 ####
 ## Include the wails tools
 ####
@@ -72,7 +72,7 @@ ManifestDPIAware true
 
 Name "${INFO_PRODUCTNAME}"
 OutFile "..\..\bin\${INFO_PROJECTNAME}-${ARCH}-installer.exe" # Name of the installer's file.
-InstallDir "$PROGRAMFILES64\${INFO_PRODUCTNAME}" # Default installing folder ($PROGRAMFILES is Program Files folder).
+InstallDir "$LOCALAPPDATA\${INFO_PRODUCTNAME}" # User-level install, data and binary in the same directory.
 ShowInstDetails show # This will always show the installation details.
 
 Function .onInit
@@ -94,7 +94,18 @@ Section
     !insertmacro wails.associateFiles
     !insertmacro wails.associateCustomProtocols
 
-    !insertmacro wails.writeUninstaller
+    # Write uninstaller (user-level: HKCU instead of HKLM)
+    WriteUninstaller "$INSTDIR\uninstall.exe"
+    SetRegView 64
+    WriteRegStr HKCU "${UNINST_KEY}" "Publisher" "${INFO_COMPANYNAME}"
+    WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${INFO_PRODUCTNAME}"
+    WriteRegStr HKCU "${UNINST_KEY}" "DisplayVersion" "${INFO_PRODUCTVERSION}"
+    WriteRegStr HKCU "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\${PRODUCT_EXECUTABLE}"
+    WriteRegStr HKCU "${UNINST_KEY}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
+    WriteRegStr HKCU "${UNINST_KEY}" "QuietUninstallString" "$\"$INSTDIR\uninstall.exe$\" /S"
+    ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
+    IntFmt $0 "0x%08X" $0
+    WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" "$0"
 SectionEnd
 
 Section "uninstall"
@@ -102,7 +113,11 @@ Section "uninstall"
 
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
 
-    RMDir /r $INSTDIR
+    # Only delete app files, preserve user data (db, config, logs)
+    Delete "$INSTDIR\${PRODUCT_EXECUTABLE}"
+    Delete "$INSTDIR\uninstall.exe"
+    Delete "$INSTDIR\opsctl.exe"
+    RMDir "$INSTDIR" # Only removes if empty
 
     Delete "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk"
     Delete "$DESKTOP\${INFO_PRODUCTNAME}.lnk"
@@ -110,5 +125,7 @@ Section "uninstall"
     !insertmacro wails.unassociateFiles
     !insertmacro wails.unassociateCustomProtocols
 
-    !insertmacro wails.deleteUninstaller
+    # Delete uninstaller registry (user-level: HKCU)
+    SetRegView 64
+    DeleteRegKey HKCU "${UNINST_KEY}"
 SectionEnd

@@ -43,7 +43,12 @@ func AppDataDir() string {
 		home, _ := os.UserHomeDir()
 		return filepath.Join(home, "Library", "Application Support", "opskat")
 	case "windows":
-		return filepath.Join(os.Getenv("APPDATA"), "opskat")
+		localAppData := os.Getenv("LOCALAPPDATA")
+		if localAppData == "" {
+			home, _ := os.UserHomeDir()
+			localAppData = filepath.Join(home, "AppData", "Local")
+		}
+		return filepath.Join(localAppData, "opskat")
 	default:
 		home, _ := os.UserHomeDir()
 		return filepath.Join(home, ".config", "opskat")

@@ -501,9 +501,9 @@ func updateWindows(archivePath, execPath string) error {
 	return updateWindowsFromZip(archivePath, execPath)
 }
 
-// updateWindowsFromInstaller 运行 NSIS 安装程序静默更新（通过 UAC 提权）
+// updateWindowsFromInstaller 运行 NSIS 安装程序静默更新（用户级安装，无需 UAC）
 func updateWindowsFromInstaller(installerPath string) error {
-	return runInstallerElevated(installerPath, "/S")
+	return runInstaller(installerPath, "/S")
 }
 
 // updateWindowsFromZip 从 zip 提取二进制并替换
