@@ -17,3 +17,6 @@ opskat
 internal/embedded/opsctl_bin
 
 .opskat
+
+coverage.out
+coverage.html

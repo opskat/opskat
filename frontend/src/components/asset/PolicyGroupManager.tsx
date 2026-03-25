@@ -213,10 +213,7 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent
-        className="sm:max-w-4xl max-h-[80vh] overflow-hidden flex flex-col"
-        onInteractOutside={(e) => e.preventDefault()}
-      >
+      <DialogContent className="sm:max-w-4xl max-h-[80vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle>{t("asset.policyGroup.manage")}</DialogTitle>
         </DialogHeader>

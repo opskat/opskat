@@ -32,18 +32,17 @@ Assets can be referenced by:
 | `list groups` | List all asset groups (no description) |
 | `get asset <asset>` | Get asset details including description and SSH config |
 | `get group <group>` | Get group details including description |
-| `create asset --type ssh --name X --host X --username X [--port N] [--auth-type key\|password] [--group-id N]` | Create SSH asset (needs approval) |
-| `create asset --type database --driver mysql\|postgresql --name X --host X --username X [--port N] [--read-only] [--ssh-asset ID]` | Create database asset |
-| `create asset --type redis --name X --host X [--port N] [--ssh-asset ID]` | Create Redis asset |
-| `update asset <asset> [--name X] [--host X] [--port N] [--username X] [--group-id N]` | Update asset (needs approval) |
+| `create asset --name X --host X --username X [--type ssh\|database\|redis] [--port N] [--auth-type key\|password] [--driver mysql\|postgresql] [--database X] [--read-only] [--ssh-asset X] [--group-id N] [--description X]` | Create asset (needs approval). Port auto-detects by type (22/3306/5432/6379) |
+| `update asset <asset> [--name X] [--host X] [--port N] [--username X] [--description X] [--group-id N]` | Update asset (needs approval) |
 | `ssh <asset>` | Interactive SSH terminal (no approval needed) |
 | `exec <asset> -- <command>` | Execute remote command (approval/policy checked) |
 | `sql <asset> "<SQL>"` | Execute SQL on database asset (approval/policy checked) |
 | `sql <asset> -f <file.sql>` | Execute SQL from file |
 | `redis <asset> "<command>"` | Execute Redis command (approval/policy checked) |
 | `cp <src> <dst>` | File transfer: local↔remote or remote↔remote (needs approval) |
-| `grant submit [asset] [--group <name\|id>]` | Submit batch grant from stdin JSON, returns session ID. Optional asset/group sets default scope. |
-| `session start` | Create a new approval session |
+| `grant submit <asset> <pattern>...` | Simple mode: submit exec patterns for an asset (no stdin needed) |
+| `grant submit [--group X] [asset...] < input` | JSON mode: complex grants from stdin with per-item asset/group overrides |
+| `session start` | Create session in `.opskat/sessions/<scope>` (auto-created on first write if omitted) |
 | `session end` | End the current active session |
 | `session status` | Show the current active session ID |
 | `init <asset\|--group N>` | Discover server environment and update asset description ([details](references/ops-init.md)) |
@@ -54,11 +53,15 @@ For detailed command documentation, see [references/commands.md](references/comm
 
 Most write operations require desktop app approval via Unix socket (`<data-dir>/approval.sock`).
 
-**Exec approval flow**:
-1. Check asset's command policy (allow-list → execute, deny-list → reject)
+**Approval flow** (exec/sql/redis):
+1. Check asset's policy (command/query/redis allow-list → execute, deny-list → reject)
 2. Check grant items with pattern matching (approved grants → auto-allow matching commands)
 3. Check session remembered patterns → auto-allow
 4. Fall back to desktop app approval (blocks until response)
+
+**Offline mode** (desktop app not running):
+- SSH/SQL/Redis: Policy/grant match still auto-approves; otherwise shows allowed commands and rejects
+- CP/Create/Update: Always requires desktop app (errors if offline)
 
 **Permission pre-request flow** (`request_permission` tool):
 1. AI submits command patterns (one per line, supports `*` wildcard) for a target asset
@@ -87,34 +90,37 @@ Scenarios that require an immediate stop:
 
 ## Session Workflow
 
-For consecutive opsctl operations, create a session to avoid per-operation approval:
+Sessions allow batch approval of operations. They auto-create on first write if none exists, so explicit `session start` is optional.
+
+**Session storage**: `.opskat/sessions/<scope>` in CWD (walks up directory tree). Scope is derived from terminal env vars (`TERM_SESSION_ID`, `ITERM_SESSION_ID`, `WT_SESSION`, `WINDOWID`) so different terminal windows get separate sessions. **Sessions expire after 24 hours.**
+
+**Session ID resolution priority**:
+1. `--session <id>` global flag (explicit)
+2. `OPSKAT_SESSION_ID` environment variable (desktop app injects this)
+3. `.opskat/sessions/<scope>` file (auto-created, walks up directory tree)
 
 ```bash
-# Create session
+# Auto session (no manual steps needed)
+opsctl exec web-01 -- uptime       # auto-creates session on first call
+opsctl exec web-02 -- df -h        # reuses same session, auto-approved after first allow
+
+# Or explicit session management
 SESSION=$(opsctl session start)
-
-# Use --session flag (or OPSKAT_SESSION_ID env var)
 opsctl --session $SESSION exec web-01 -- uptime
-opsctl --session $SESSION exec web-02 -- df -h
 opsctl --session $SESSION cp ./config.yml web-01:/etc/app/
-
-# End session when done
 opsctl session end
 ```
 
-On the first operation, the user will be prompted to approve. If they choose **"Remember"**, the command pattern is stored for auto-approval of matching commands.
-
-**Session ID resolution priority**:
-1. `--session <id>` global flag
-2. `OPSKAT_SESSION_ID` environment variable
-3. Active session file (created by `opsctl session start`)
+On the first operation, the user will be prompted to approve. If they choose **"Allow Session"**, subsequent operations in the same session are auto-approved.
 
 **Grant workflow** — pre-approve command patterns:
 ```bash
-# Submit grant for a specific asset
+# Simple mode: asset + patterns (no stdin needed)
+SESSION=$(opsctl grant submit web-01 "systemctl *" "df -h" "uptime")
+# Group mode
+SESSION=$(opsctl grant submit --group production "uptime" "df -h")
+# JSON mode for complex grants
 SESSION=$(opsctl grant submit web-01 < grant.json)
-# Submit grant for a group (applies to all assets in group)
-SESSION=$(opsctl grant submit --group production < grant.json)
 # Commands matching grant patterns auto-pass
 opsctl --session $SESSION exec web-01 -- systemctl restart app
 ```

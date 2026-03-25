@@ -18,9 +18,12 @@ import (
 // 不包含用户确认逻辑 — NeedConfirm 时由调用方处理。
 // assetType: "ssh" | "database" | "redis" | "exec"（exec 等同于 ssh）
 func CheckPermission(ctx context.Context, assetType string, assetID int64, command string) CheckResult {
-	// exec 是 opsctl 使用的类型名，等同于 ssh
-	if assetType == "exec" {
+	// opsctl 使用的类型名映射到内部类型
+	switch assetType {
+	case "exec":
 		assetType = asset_entity.AssetTypeSSH
+	case "sql":
+		assetType = asset_entity.AssetTypeDatabase
 	}
 
 	switch assetType {

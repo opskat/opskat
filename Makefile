@@ -1,4 +1,4 @@
-.PHONY: dev run build build-embed clean install build-cli build-cli-upx install-cli lint
+.PHONY: dev run build build-embed clean install build-cli build-cli-upx install-cli lint test test-cover
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -65,6 +65,17 @@ lint:
 lint-fix:
 	golangci-lint run --timeout 10m --fix
 
+# 运行测试
+test:
+	go test ./internal/... ./cmd/opsctl/...
+
+# 测试覆盖率（生成 HTML 报告并在浏览器打开）
+test-cover:
+	go test -coverprofile=coverage.out ./internal/... ./cmd/opsctl/...
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "覆盖率报告已生成: coverage.html"
+	@open coverage.html 2>/dev/null || xdg-open coverage.html 2>/dev/null || echo "请手动打开 coverage.html"
+
 # 清理构建产物
 clean:
-	rm -rf build/bin frontend/dist internal/embedded/opsctl_bin
+	rm -rf build/bin frontend/dist internal/embedded/opsctl_bin coverage.out coverage.html

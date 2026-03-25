@@ -85,22 +85,30 @@ opsctl --session $SESSION exec web-01 -- systemctl restart nginx
 
 ### `create asset [flags]`
 
-Create a new SSH asset. Requires approval.
+Create a new asset (ssh, database, or redis). Requires approval.
 
 **Required flags**:
 - `--name <string>` — Display name
 - `--host <string>` — Hostname or IP
-- `--username <string>` — SSH username
+- `--username <string>` — Login username
 
 **Optional flags**:
-- `--port <int>` — SSH port (default: 22)
-- `--auth-type <string>` — "password" or "key" (default: "password")
+- `--type <string>` — Asset type: "ssh" (default), "database", or "redis"
+- `--port <int>` — Port number (default: auto by type — 22/3306/5432/6379)
+- `--auth-type <string>` — SSH auth method: "password" or "key" (SSH type only)
+- `--driver <string>` — Database driver: "mysql" or "postgresql" (database type, required)
+- `--database <string>` — Default database name (database type)
+- `--read-only` — Enable read-only mode (database type)
+- `--ssh-asset <asset>` — SSH asset name/ID for tunnel connection (database/redis types)
 - `--group-id <int>` — Group ID (0 = ungrouped)
 - `--description <string>` — Description
 
 ```bash
 opsctl create asset --name "Web Server" --host 10.0.0.1 --username root
-opsctl create asset --name "DB" --host db.internal --port 2222 --username admin --auth-type key --group-id 2
+opsctl create asset --type database --driver mysql --name "Prod DB" --host db.internal --username app
+opsctl create asset --type database --driver postgresql --name "Analytics" --host pg.internal --port 5432 --username readonly --read-only
+opsctl create asset --type redis --name "Cache" --host redis.internal --username default
+opsctl create asset --type database --driver mysql --name "DB via SSH" --host 127.0.0.1 --username app --ssh-asset web-server
 ```
 
 ## update
@@ -139,51 +147,86 @@ SCP-style file transfer via SFTP. Requires approval.
 
 ## grant
 
-### `grant submit`
+### `grant submit <asset> <pattern>...` (simple mode)
 
-Submit batch grant for approval. Read JSON from stdin.
+Submit exec command patterns for a single asset. No stdin needed.
+
+```bash
+opsctl grant submit web-01 "systemctl *" "df -h" "uptime"
+opsctl grant submit --group production "uptime" "df -h"
+```
+
+### `grant submit [options] [asset...] < input` (JSON mode)
+
+Complex grants from stdin with per-item asset/group overrides.
+
+**Options**:
+- `--group <name|id>` — Default group for items without asset/group (repeatable: `--group g1 --group g2`)
 
 **Input JSON**:
 ```json
 {
   "description": "Grant description",
   "items": [
-    {"type": "exec", "asset": "web-server", "command": "uptime"},
+    {"type": "exec", "asset": "web-01", "command": "uptime"},
+    {"type": "exec", "group": "production", "command": "systemctl status *"},
     {"type": "cp", "asset": "web-server", "detail": "upload config.yml"},
-    {"type": "create", "asset": "", "detail": "create new server"},
-    {"type": "update", "asset": "web-server", "detail": "update config"}
+    {"type": "exec", "command": "df -h"}
   ]
 }
 ```
 
 **Item fields**:
 - `type` — "exec", "cp", "create", "update"
-- `asset` — Asset name or ID (optional for create)
-- `command` — Command string (for exec)
+- `asset` — Asset name or ID (targets a single asset)
+- `group` — Group name or ID (targets all assets in the group)
+- `command` — Shell command pattern (supports `*` wildcard)
 - `detail` — Human-readable description
+
+Items without asset/group inherit from positional args and `--group` flags (expanded to one item per target).
 
 **Output**: Session ID (UUID) on approval, error on denial.
 
 ```bash
-SESSION=$(opsctl grant submit < grant.json)
+# Single asset
+SESSION=$(opsctl grant submit web-01 < grant.json)
+# Multiple assets (each item expanded to all targets)
+SESSION=$(echo '{"items":[{"type":"exec","command":"uptime"}]}' | opsctl grant submit web-01 web-02 web-03)
+# Per-item overrides (no expansion)
+SESSION=$(opsctl grant submit < complex-grant.json)
+# Use session
 opsctl --session $SESSION exec web-01 -- uptime
 ```
 
 ## session
 
+Sessions are auto-created on the first write operation if none exists. Explicit `session start` is only needed if you want to manage the lifecycle manually.
+
+**Storage**: `.opskat/sessions/<scope>` in CWD (walks up directory tree). Scope is derived from terminal env vars (`TERM_SESSION_ID`, `ITERM_SESSION_ID`, `WT_SESSION`, `WINDOWID`) so different terminal windows get separate sessions. **Sessions expire after 24 hours.**
+
+**Session ID resolution priority**:
+1. `--session <id>` global flag (explicit)
+2. `OPSKAT_SESSION_ID` environment variable (desktop app injects this)
+3. `.opskat/sessions/<scope>` file (auto-created, walks up directory tree)
+
 ### `session start`
 
-Create a new approval session. Writes session ID to `<data-dir>/active-session` and prints to stdout.
+Create a session and print its ID. Writes to `.opskat/sessions/<scope>` in CWD.
 
 ### `session end`
 
-End the current active session (removes the active-session file).
+End the current active session (removes the session file).
 
 ### `session status`
 
 Show the current active session ID.
 
 ```bash
+# Auto session (no manual steps needed)
+opsctl exec web-01 -- uptime       # auto-creates session on first call
+opsctl exec web-02 -- df -h        # reuses same session
+
+# Or explicit management
 SESSION=$(opsctl session start)
 opsctl --session $SESSION exec web-01 -- uptime
 opsctl session end
