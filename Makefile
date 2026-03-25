@@ -1,15 +1,12 @@
-.PHONY: dev run build build-embed clean install build-cli build-cli-upx install-cli lint test test-cover install-skill
+.PHONY: dev run build build-embed clean install build-cli install-cli lint test test-cover install-skill
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
     BIN_PATH := ./build/bin/opskat.app/Contents/MacOS/opskat
-    UPX_FLAGS := --best --force-macos
 else ifeq ($(UNAME_S),Linux)
     BIN_PATH := ./build/bin/opskat
-    UPX_FLAGS := --best
 else
     BIN_PATH := ./build/bin/opskat.exe
-    UPX_FLAGS := --best
 endif
 
 VERSION ?= 1.0.0
@@ -36,11 +33,6 @@ build-embed: build-cli-embed
 build-cli-embed:
 	go build -ldflags="$(LDFLAGS)" -o ./internal/embedded/opsctl_bin ./cmd/opsctl/
 
-# 构建生产版本（UPX 压缩，需要安装 upx）
-build-upx:
-	wails build -ldflags="$(LDFLAGS)"
-	upx $(UPX_FLAGS) $(BIN_PATH)
-
 # 安装前端依赖
 install:
 	cd frontend && pnpm install
@@ -48,10 +40,6 @@ install:
 # 构建 opsctl CLI
 build-cli:
 	go build -ldflags="$(LDFLAGS)" -o ./build/bin/opsctl ./cmd/opsctl/
-
-# 构建 opsctl CLI（UPX 压缩）
-build-cli-upx: build-cli
-	upx $(UPX_FLAGS) ./build/bin/opsctl
 
 # 安装 opsctl 到 GOPATH/bin
 install-cli:

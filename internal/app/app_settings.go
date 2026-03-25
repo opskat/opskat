@@ -489,13 +489,23 @@ func (a *App) DetectOpsctl() OpsctlInfo {
 	info := OpsctlInfo{
 		Embedded: embedded.HasEmbeddedOpsctl(),
 	}
-	path, err := exec.LookPath("opsctl")
+	opsctlPath, err := exec.LookPath("opsctl")
 	if err != nil {
-		return info
+		// LookPath 用的是进程启动时的 PATH，安装后当前进程感知不到
+		// 直接检查默认安装路径
+		binName := "opsctl"
+		if runtime.GOOS == "windows" {
+			binName = "opsctl.exe"
+		}
+		candidate := filepath.Join(embedded.DefaultInstallDir(), binName)
+		if _, statErr := os.Stat(candidate); statErr != nil {
+			return info
+		}
+		opsctlPath = candidate
 	}
 	info.Installed = true
-	info.Path = path
-	out, err := exec.Command(path, "version").Output() //nolint:gosec // path is from exec.LookPath
+	info.Path = opsctlPath
+	out, err := exec.Command(opsctlPath, "version").Output() //nolint:gosec // path is from LookPath or known install dir
 	if err == nil {
 		info.Version = strings.TrimSpace(string(out))
 	}

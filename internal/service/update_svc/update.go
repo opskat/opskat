@@ -496,14 +496,42 @@ func replaceBinary(newBin, execPath string) error {
 // updateWindows 更新 Windows 二进制
 func updateWindows(archivePath, execPath string) error {
 	if strings.HasSuffix(archivePath, ".exe") {
-		return updateWindowsFromInstaller(archivePath)
+		return updateWindowsFromInstaller(archivePath, execPath)
 	}
 	return updateWindowsFromZip(archivePath, execPath)
 }
 
 // updateWindowsFromInstaller 运行 NSIS 安装程序静默更新（用户级安装，无需 UAC）
-func updateWindowsFromInstaller(installerPath string) error {
-	return runInstaller(installerPath, "/S")
+// Windows 不能覆盖正在运行的 exe，需要先 rename 再运行安装程序
+func updateWindowsFromInstaller(installerPath, execPath string) error {
+	installDir := filepath.Dir(execPath)
+
+	// Windows 允许 rename 正在运行的 exe，但不允许覆盖
+	backupPath := execPath + ".old"
+	if err := os.Remove(backupPath); err != nil {
+		logger.Default().Warn("remove old backup", zap.String("path", backupPath), zap.Error(err))
+	}
+	if err := os.Rename(execPath, backupPath); err != nil {
+		return fmt.Errorf("backup running binary failed: %w", err)
+	}
+
+	// 运行 NSIS 安装程序，/D= 必须是最后一个参数且指定安装目录
+	if err := runInstaller(installerPath, "/S", "/D="+installDir); err != nil {
+		if renameErr := os.Rename(backupPath, execPath); renameErr != nil {
+			logger.Default().Error("restore backup after failed install", zap.Error(renameErr))
+		}
+		return err
+	}
+
+	// 验证新 exe 是否已安装到位
+	if _, err := os.Stat(execPath); err != nil {
+		if renameErr := os.Rename(backupPath, execPath); renameErr != nil {
+			logger.Default().Error("restore backup after missing binary", zap.Error(renameErr))
+		}
+		return fmt.Errorf("installer did not produce binary at %s", execPath)
+	}
+
+	return nil
 }
 
 // updateWindowsFromZip 从 zip 提取二进制并替换

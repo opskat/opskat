@@ -114,14 +114,25 @@ jobs:
       - name: Free disk space (macOS)
         if: matrix.goos == 'darwin'
         run: |
+          echo "=== Before cleanup ==="
+          df -h /
+          # Xcode platforms not needed for codesign/notarize (~6GB+)
+          sudo rm -rf /Applications/Xcode*.app/Contents/Developer/Platforms/iPhoneOS.platform || true
+          sudo rm -rf /Applications/Xcode*.app/Contents/Developer/Platforms/iPhoneSimulator.platform || true
+          sudo rm -rf /Applications/Xcode*.app/Contents/Developer/Platforms/WatchOS.platform || true
+          sudo rm -rf /Applications/Xcode*.app/Contents/Developer/Platforms/WatchSimulator.platform || true
+          sudo rm -rf /Applications/Xcode*.app/Contents/Developer/Platforms/AppleTVOS.platform || true
+          sudo rm -rf /Applications/Xcode*.app/Contents/Developer/Platforms/AppleTVSimulator.platform || true
+          sudo rm -rf /Applications/Xcode*.app/Contents/Developer/Platforms/XROS.platform || true
+          sudo rm -rf /Applications/Xcode*.app/Contents/Developer/Platforms/XRSimulator.platform || true
+          # Android SDK (~7GB)
           rm -rf ~/Library/Android/sdk || true
+          # iOS simulators & device support (~4-7GB)
           rm -rf ~/Library/Developer/CoreSimulator || true
           rm -rf ~/Library/Developer/Xcode/DerivedData || true
-          rm -rf ~/Library/Caches/Homebrew || true
-          rm -rf /usr/local/share/dotnet || true
-          rm -rf /usr/local/share/powershell || true
-          rm -rf /usr/local/lib/ruby || true
-          df -h / || true
+          rm -rf ~/Library/Developer/Xcode/iOS\ DeviceSupport || true
+          echo "=== After cleanup ==="
+          df -h /
 
       - uses: actions/setup-go@v6
         with:
