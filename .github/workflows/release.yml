@@ -52,6 +52,12 @@ jobs:
         run: |
           rm -rf ~/Library/Android/sdk || true
           rm -rf ~/Library/Developer/CoreSimulator || true
+          rm -rf ~/Library/Caches/Homebrew || true
+          rm -rf /Users/runner/hostedtoolcache || true
+          sudo rm -rf /usr/local/share/powershell || true
+          sudo rm -rf /usr/local/lib/node_modules || true
+          sudo rm -rf /usr/local/share/chromium || true
+          df -h /
 
       - uses: actions/setup-go@v6
         with:
