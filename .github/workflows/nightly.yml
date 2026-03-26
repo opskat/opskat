@@ -121,7 +121,6 @@ jobs:
           sudo rm -rf /usr/local/share/powershell || true
           sudo rm -rf /usr/local/lib/node_modules || true
           sudo rm -rf /usr/local/share/chromium || true
-          df -h /
 
       - uses: actions/setup-go@v6
         with:
