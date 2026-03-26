@@ -92,7 +92,12 @@ func cmdRedisCmd(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, ar
 		return 1
 	}
 
-	command := strings.Join(args[1:], " ")
+	fs := flag.NewFlagSet("redis", flag.ContinueOnError)
+	db := fs.Int("n", -1, "Redis database number (0-15)")
+	fs.Usage = func() { printRedisUsage() }
+	_ = fs.Parse(args[1:])
+
+	command := strings.Join(fs.Args(), " ")
 	if command == "" {
 		fmt.Fprintln(os.Stderr, "Error: Redis command is required")
 		printRedisUsage()
@@ -116,10 +121,14 @@ func cmdRedisCmd(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, ar
 		return 1
 	}
 
-	return callHandler(auditCtx, handlers, "exec_redis", map[string]any{
+	params := map[string]any{
 		"asset_id": float64(asset.ID),
 		"command":  command,
-	})
+	}
+	if *db >= 0 {
+		params["db"] = float64(*db)
+	}
+	return callHandler(auditCtx, handlers, "exec_redis", params)
 }
 
 func printSQLUsage() {
@@ -149,11 +158,14 @@ Examples:
 
 func printRedisUsage() {
 	fmt.Fprint(os.Stderr, `Usage:
-  opsctl [--session <id>] redis <asset> "<command>"
+  opsctl [--session <id>] redis <asset> [flags] "<command>"
 
 Arguments:
   asset     Redis asset name or numeric ID
   command   Redis command (e.g. "GET mykey", "HGETALL user:1")
+
+Flags:
+  -n <db>   Override the default database number (0-15)
 
 Approval:
   Commands are checked against the asset's Redis policy:
@@ -163,7 +175,7 @@ Approval:
 Examples:
   opsctl redis cache "GET session:abc123"
   opsctl redis cache "HGETALL user:1"
+  opsctl redis cache -n 2 "KEYS user:*"
   opsctl redis cache "SET key value EX 3600"
-  opsctl redis cache "KEYS user:*"
 `)
 }

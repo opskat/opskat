@@ -72,6 +72,11 @@ func handleExecRedis(ctx context.Context, args map[string]any) (string, error) {
 		return "", fmt.Errorf("获取Redis配置失败: %w", err)
 	}
 
+	// 覆盖默认数据库
+	if _, ok := args["db"]; ok {
+		cfg.Database = int(argInt64(args, "db"))
+	}
+
 	client, closer, err := getOrDialRedis(ctx, assetID, cfg)
 	if err != nil {
 		return "", fmt.Errorf("连接Redis失败: %w", err)

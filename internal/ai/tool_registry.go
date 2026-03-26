@@ -160,6 +160,7 @@ func AllToolDefs() []ToolDef {
 			Params: []ParamDef{
 				{Name: "asset_id", Type: ParamNumber, Description: "Redis asset ID. Use list_assets with asset_type='redis' to find.", Required: true},
 				{Name: "command", Type: ParamString, Description: "Redis command (e.g. 'GET mykey', 'HGETALL user:1', 'SET key value EX 3600').", Required: true},
+				{Name: "db", Type: ParamNumber, Description: "Override the default Redis database number (0-15)."},
 			},
 			Handler:          handleExecRedis,
 			CommandExtractor: func(args map[string]any) string { return argString(args, "command") },

@@ -81,6 +81,38 @@ echo "data" | opsctl exec web-server -- cat
 opsctl exec web-01 -- systemctl restart nginx
 ```
 
+## sql
+
+### `sql <asset> [flags] "<SQL>"`
+
+Execute SQL on a database asset (MySQL, PostgreSQL). Requires approval.
+
+**Flags**:
+- `-f <file>` — Read SQL from file instead of argument
+- `-d <database>` — Override the default database for this execution
+
+```bash
+opsctl sql prod-db "SELECT * FROM users LIMIT 10"
+opsctl sql prod-db -f migration.sql
+opsctl sql prod-db -d other_db "SHOW TABLES"
+```
+
+## redis
+
+### `redis <asset> [flags] "<command>"`
+
+Execute a Redis command on a Redis asset. Requires approval.
+
+**Flags**:
+- `-n <db>` — Override the default database number (0-15)
+
+```bash
+opsctl redis cache "GET session:abc123"
+opsctl redis cache "HGETALL user:1"
+opsctl redis cache -n 2 "KEYS user:*"
+opsctl redis cache "SET key value EX 3600"
+```
+
 ## batch
 
 ### `batch [args...]`
