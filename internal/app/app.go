@@ -153,6 +153,11 @@ func (a *App) activateWindow() {
 	wailsRuntime.WindowSetAlwaysOnTop(a.ctx, false)
 }
 
+// OnSecondInstanceLaunch 第二个实例启动时激活当前窗口
+func (a *App) OnSecondInstanceLaunch() {
+	a.activateWindow()
+}
+
 // --- SSH 凭证解析（被多个文件共用的辅助方法）---
 
 // appPoolDialer 实现 sshpool.PoolDialer，使用 credential_resolver 解析凭据

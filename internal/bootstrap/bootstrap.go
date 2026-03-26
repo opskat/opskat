@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/opskat/opskat/internal/repository/ai_provider_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"github.com/opskat/opskat/internal/repository/conversation_repo"
@@ -113,6 +114,7 @@ func registerRepositories() {
 	host_key_repo.RegisterHostKey(host_key_repo.NewHostKey())
 	forward_repo.RegisterForward(forward_repo.NewForward())
 	policy_group_repo.RegisterPolicyGroup(policy_group_repo.NewPolicyGroup())
+	ai_provider_repo.RegisterAIProvider(ai_provider_repo.NewAIProvider())
 }
 
 // resolveKDFSalt 从 config.json 获取 salt，不存在则生成并持久化

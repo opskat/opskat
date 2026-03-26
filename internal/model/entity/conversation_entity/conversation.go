@@ -17,6 +17,7 @@ type Conversation struct {
 	Title        string `gorm:"column:title;type:varchar(255)"`
 	ProviderType string `gorm:"column:provider_type;type:varchar(50);not null"`
 	Model        string `gorm:"column:model;type:varchar(100)"`
+	ProviderID   int64  `gorm:"column:provider_id" json:"providerId"`
 	SessionData  string `gorm:"column:session_data;type:text"`
 	WorkDir      string `gorm:"column:work_dir;type:varchar(500)"`
 	Status       int    `gorm:"column:status;default:1"`

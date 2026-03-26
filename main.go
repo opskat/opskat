@@ -70,6 +70,12 @@ func main() {
 		Bind: []interface{}{
 			a,
 		},
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId: "com.opskat.desktop",
+			OnSecondInstanceLaunch: func(secondInstanceData options.SecondInstanceData) {
+				a.OnSecondInstanceLaunch()
+			},
+		},
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop:     true,
 			DisableWebViewDrop: true,
