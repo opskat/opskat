@@ -23,10 +23,8 @@ func migration202603260001() *gormigrate.Migration {
 				return err
 			}
 
-			// 2. Conversation 表新增 provider_id 字段
-			if err := tx.Exec("ALTER TABLE conversations ADD COLUMN provider_id INTEGER DEFAULT 0").Error; err != nil {
-				// SQLite 不支持 IF NOT EXISTS 对 column，忽略已存在的错误
-			}
+			// 2. Conversation 表新增 provider_id 字段（忽略已存在错误，SQLite 不支持 IF NOT EXISTS）
+			_ = tx.Exec("ALTER TABLE conversations ADD COLUMN provider_id INTEGER DEFAULT 0").Error
 
 			// 3. 从 config.json 迁移现有配置
 			migrateConfigToDB(tx)
@@ -44,7 +42,7 @@ func migrateConfigToDB(tx *gorm.DB) {
 	dataDir := appDataDir()
 	configPath := filepath.Join(dataDir, "config.json")
 
-	data, err := os.ReadFile(configPath)
+	data, err := os.ReadFile(configPath) //nolint:gosec // configPath 来自固定平台路径，非用户输入
 	if err != nil {
 		return
 	}

@@ -40,12 +40,12 @@ func (p *AnthropicProvider) Name() string { return p.name }
 // --- Anthropic API 请求/响应类型 ---
 
 type anthropicRequest struct {
-	Model     string                `json:"model"`
-	System    string                `json:"system,omitempty"`
-	Messages  []anthropicMessage    `json:"messages"`
-	Tools     []anthropicTool       `json:"tools,omitempty"`
-	MaxTokens int                   `json:"max_tokens"`
-	Stream    bool                  `json:"stream"`
+	Model     string             `json:"model"`
+	System    string             `json:"system,omitempty"`
+	Messages  []anthropicMessage `json:"messages"`
+	Tools     []anthropicTool    `json:"tools,omitempty"`
+	MaxTokens int                `json:"max_tokens"`
+	Stream    bool               `json:"stream"`
 }
 
 type anthropicMessage struct {
@@ -80,16 +80,16 @@ type anthropicSSEEvent struct {
 }
 
 type anthropicBlockStart struct {
-	Type  string `json:"type"` // "text" | "tool_use"
-	ID    string `json:"id,omitempty"`
-	Name  string `json:"name,omitempty"`
-	Text  string `json:"text,omitempty"`
+	Type string `json:"type"` // "text" | "tool_use"
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
+	Text string `json:"text,omitempty"`
 }
 
 type anthropicDelta struct {
-	Type           string `json:"type"` // "text_delta" | "input_json_delta"
-	Text           string `json:"text,omitempty"`
-	PartialJSON    string `json:"partial_json,omitempty"`
+	Type        string `json:"type"` // "text_delta" | "input_json_delta"
+	Text        string `json:"text,omitempty"`
+	PartialJSON string `json:"partial_json,omitempty"`
 }
 
 type anthropicStreamError struct {

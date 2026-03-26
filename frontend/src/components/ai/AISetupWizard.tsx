@@ -97,19 +97,11 @@ export function AISetupWizard() {
             <div className="rounded-lg border p-4 space-y-3">
               <div className="grid gap-2">
                 <Label className="text-xs">{t("settings.providerName")}</Label>
-                <Input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="h-8 text-sm"
-                />
+                <Input value={name} onChange={(e) => setName(e.target.value)} className="h-8 text-sm" />
               </div>
               <div className="grid gap-2">
                 <Label className="text-xs">{t("settings.apiBase")}</Label>
-                <Input
-                  value={apiBase}
-                  onChange={(e) => setApiBase(e.target.value)}
-                  className="h-8 text-sm"
-                />
+                <Input value={apiBase} onChange={(e) => setApiBase(e.target.value)} className="h-8 text-sm" />
               </div>
               <div className="grid gap-2">
                 <Label className="text-xs">{t("settings.apiKey")}</Label>
@@ -122,11 +114,7 @@ export function AISetupWizard() {
               </div>
               <div className="grid gap-2">
                 <Label className="text-xs">{t("settings.model")}</Label>
-                <Input
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  className="h-8 text-sm"
-                />
+                <Input value={model} onChange={(e) => setModel(e.target.value)} className="h-8 text-sm" />
               </div>
             </div>
 
@@ -135,11 +123,7 @@ export function AISetupWizard() {
               disabled={!apiBase.trim() || !apiKey.trim() || completing}
               className="w-full"
             >
-              {completing ? (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              ) : (
-                <ArrowRight className="h-4 w-4 mr-2" />
-              )}
+              {completing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ArrowRight className="h-4 w-4 mr-2" />}
               {t("setup.complete")}
             </Button>
           </div>

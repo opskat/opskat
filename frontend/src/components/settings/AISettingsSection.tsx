@@ -6,7 +6,14 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,7 +42,19 @@ import {
   SetActiveAIProvider,
 } from "../../../wailsjs/go/app/App";
 import { app } from "../../../wailsjs/go/models";
-import { Check, Loader2, ExternalLink, RefreshCw, ChevronDown, ChevronUp, Info, FolderOpen, Pencil, Trash2, Plus } from "lucide-react";
+import {
+  Check,
+  Loader2,
+  ExternalLink,
+  RefreshCw,
+  ChevronDown,
+  ChevronUp,
+  Info,
+  FolderOpen,
+  Pencil,
+  Trash2,
+  Plus,
+} from "lucide-react";
 import { toast } from "sonner";
 import { BrowserOpenURL } from "../../../wailsjs/runtime/runtime";
 
@@ -548,7 +567,12 @@ export function AISettingsSection() {
       </Dialog>
 
       {/* Delete Confirmation */}
-      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t("settings.deleteProvider")}</AlertDialogTitle>
@@ -556,7 +580,9 @@ export function AISettingsSection() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t("action.cancel")}</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={handleDelete}>{t("action.delete")}</AlertDialogAction>
+            <AlertDialogAction variant="destructive" onClick={handleDelete}>
+              {t("action.delete")}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

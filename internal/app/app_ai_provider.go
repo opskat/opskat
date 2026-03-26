@@ -44,7 +44,7 @@ func (a *App) ListAIProviders() ([]AIProviderInfo, error) {
 func (a *App) GetActiveAIProvider() (*AIProviderInfo, error) {
 	p, err := ai_provider_svc.AIProvider().GetActive(a.langCtx())
 	if err != nil {
-		return nil, nil // 无激活 provider 时返回 nil
+		return nil, nil //nolint:nilerr // 无激活 provider 时返回 nil 表示未配置
 	}
 	decrypted, _ := ai_provider_svc.AIProvider().DecryptAPIKey(p)
 	return &AIProviderInfo{
@@ -84,7 +84,7 @@ func (a *App) CreateAIProvider(name, providerType, apiBase, apiKey, model string
 func (a *App) UpdateAIProvider(id int64, name, providerType, apiBase, apiKey, model string) error {
 	p, err := ai_provider_svc.AIProvider().Get(a.langCtx(), id)
 	if err != nil {
-		return fmt.Errorf("Provider 不存在: %w", err)
+		return fmt.Errorf("provider 不存在: %w", err)
 	}
 	p.Name = name
 	p.Type = providerType
@@ -105,7 +105,7 @@ func (a *App) UpdateAIProvider(id int64, name, providerType, apiBase, apiKey, mo
 func (a *App) DeleteAIProvider(id int64) error {
 	p, err := ai_provider_svc.AIProvider().Get(a.langCtx(), id)
 	if err != nil {
-		return fmt.Errorf("Provider 不存在: %w", err)
+		return fmt.Errorf("provider 不存在: %w", err)
 	}
 	if p.IsActive {
 		a.aiAgent = nil
