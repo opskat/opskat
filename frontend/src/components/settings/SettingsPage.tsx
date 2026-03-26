@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -12,13 +11,6 @@ import { UpdateSection } from "@/components/settings/UpdateSection";
 
 export function SettingsPage() {
   const { t } = useTranslation();
-
-  // AI Provider state (kept here so parent can coordinate if needed)
-  const [providerType, setProviderType] = useState("openai");
-  const [apiBase, setApiBase] = useState("https://api.openai.com/v1");
-  const [apiKey, setApiKey] = useState("");
-  const [apiKeyPlaceholder, setApiKeyPlaceholder] = useState("");
-  const [model, setModel] = useState("gpt-4o");
 
   return (
     <div className="flex flex-col h-full">
@@ -60,18 +52,7 @@ export function SettingsPage() {
 
           {/* AI Provider */}
           <TabsContent value="ai" className="space-y-4">
-            <AISettingsSection
-              providerType={providerType}
-              setProviderType={setProviderType}
-              apiBase={apiBase}
-              setApiBase={setApiBase}
-              apiKey={apiKey}
-              setApiKey={setApiKey}
-              apiKeyPlaceholder={apiKeyPlaceholder}
-              setApiKeyPlaceholder={setApiKeyPlaceholder}
-              model={model}
-              setModel={setModel}
-            />
+            <AISettingsSection />
           </TabsContent>
 
           {/* Import */}

@@ -6,7 +6,17 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { useAIStore } from "@/stores/aiStore";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   DetectOpsctl,
   GetOpsctlInstallDir,
@@ -16,20 +26,20 @@ import {
   GetSkillPreview,
   GetDataDir,
   GetAppVersion,
-  LoadAISetting,
   OpenDirectory,
   GetPluginReferenceDir,
+  ListAIProviders,
+  CreateAIProvider,
+  UpdateAIProvider,
+  DeleteAIProvider,
+  SetActiveAIProvider,
 } from "../../../wailsjs/go/app/App";
-import { Check, Loader2, ExternalLink, RefreshCw, ChevronDown, ChevronUp, Info, FolderOpen } from "lucide-react";
+import { app } from "../../../wailsjs/go/models";
+import { Check, Loader2, ExternalLink, RefreshCw, ChevronDown, ChevronUp, Info, FolderOpen, Pencil, Trash2, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { BrowserOpenURL } from "../../../wailsjs/runtime/runtime";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
-function maskApiKey(key: string): string {
-  if (key.length <= 8) return "****";
-  return key.slice(0, 4) + "****" + key.slice(-4);
-}
 
 function IntegrationSection() {
   const { t } = useTranslation();
@@ -323,152 +333,235 @@ function IntegrationSection() {
   );
 }
 
-export interface AISettingsSectionProps {
-  providerType: string;
-  setProviderType: (v: string) => void;
-  apiBase: string;
-  setApiBase: (v: string) => void;
-  apiKey: string;
-  setApiKey: (v: string) => void;
-  apiKeyPlaceholder: string;
-  setApiKeyPlaceholder: (v: string) => void;
-  model: string;
-  setModel: (v: string) => void;
+function getDefaultApiBase(providerType: string): string {
+  if (providerType === "anthropic") return "https://api.anthropic.com";
+  return "https://api.openai.com/v1";
 }
 
-export function AISettingsSection({
-  providerType,
-  setProviderType,
-  apiBase,
-  setApiBase,
-  apiKey,
-  setApiKey,
-  apiKeyPlaceholder,
-  setApiKeyPlaceholder,
-  model,
-  setModel,
-}: AISettingsSectionProps) {
+export function AISettingsSection() {
   const { t } = useTranslation();
-  const { configure, configured, detectCLIs, localCLIs } = useAIStore();
-  const [saved, setSaved] = useState(false);
+  const [providers, setProviders] = useState<app.AIProviderInfo[]>([]);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingProvider, setEditingProvider] = useState<app.AIProviderInfo | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<app.AIProviderInfo | null>(null);
+  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    detectCLIs();
-  }, [detectCLIs]);
+  // Form fields
+  const [formName, setFormName] = useState("");
+  const [formType, setFormType] = useState("openai");
+  const [formApiBase, setFormApiBase] = useState("");
+  const [formApiKey, setFormApiKey] = useState("");
+  const [formModel, setFormModel] = useState("");
 
-  useEffect(() => {
-    LoadAISetting()
-      .then((info) => {
-        if (info && info.configured) {
-          setProviderType(info.providerType);
-          setApiBase(info.apiBase);
-          setModel(info.model);
-          setApiKeyPlaceholder(info.maskedApiKey || "");
-        }
-      })
-      .catch(() => {});
-  }, [setProviderType, setApiBase, setModel, setApiKeyPlaceholder]);
-
-  const handleSaveAI = async () => {
+  const loadProviders = useCallback(async () => {
     try {
-      await configure(providerType, apiBase, apiKey, model);
-      if (apiKey) {
-        setApiKeyPlaceholder(maskApiKey(apiKey));
-        setApiKey("");
-      }
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      const list = await ListAIProviders();
+      setProviders(list || []);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errMsg(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    loadProviders();
+  }, [loadProviders]);
+
+  const openAddDialog = () => {
+    setEditingProvider(null);
+    setFormName("");
+    setFormType("openai");
+    setFormApiBase("");
+    setFormApiKey("");
+    setFormModel("");
+    setDialogOpen(true);
+  };
+
+  const openEditDialog = (provider: app.AIProviderInfo) => {
+    setEditingProvider(provider);
+    setFormName(provider.name);
+    setFormType(provider.type);
+    setFormApiBase(provider.apiBase);
+    setFormApiKey("");
+    setFormModel(provider.model);
+    setDialogOpen(true);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      if (editingProvider) {
+        await UpdateAIProvider(editingProvider.id, formName, formType, formApiBase, formApiKey, formModel);
+      } else {
+        const created = await CreateAIProvider(formName, formType, formApiBase, formApiKey, formModel);
+        // If this is the first provider, set it as active
+        if (providers.length === 0 && created.id) {
+          await SetActiveAIProvider(created.id);
+        }
+      }
+      toast.success(t("settings.saved"));
+      setDialogOpen(false);
+      await loadProviders();
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      await DeleteAIProvider(deleteTarget.id);
+      toast.success(t("settings.saved"));
+      setDeleteTarget(null);
+      await loadProviders();
+    } catch (e) {
+      toast.error(errMsg(e));
+    }
+  };
+
+  const handleSetActive = async (id: number) => {
+    try {
+      await SetActiveAIProvider(id);
+      await loadProviders();
+    } catch (e) {
+      toast.error(errMsg(e));
     }
   };
 
   return (
     <>
+      {/* Provider list */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">AI Provider</CardTitle>
-          <CardDescription>{configured ? "✓ " + t("settings.configured") : t("ai.notConfigured")}</CardDescription>
+          <CardTitle className="text-base">{t("settings.providers")}</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-2">
-            <Label>{t("settings.providerType")}</Label>
-            <Select value={providerType} onValueChange={setProviderType}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="openai" disabled>
-                  OpenAI Compatible ({t("setup.developing")})
-                </SelectItem>
-                <SelectItem value="local_cli">Local CLI</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          {providerType === "openai" && (
-            <>
-              <div className="grid gap-2">
-                <Label>API Base URL</Label>
-                <Input value={apiBase} onChange={(e) => setApiBase(e.target.value)} />
-              </div>
-              <div className="grid gap-2">
-                <Label>API Key</Label>
-                <Input
-                  type="password"
-                  value={apiKey}
-                  placeholder={apiKeyPlaceholder || "sk-..."}
-                  onChange={(e) => setApiKey(e.target.value)}
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label>{t("settings.model")}</Label>
-                <Input value={model} onChange={(e) => setModel(e.target.value)} />
-              </div>
-            </>
-          )}
-          {providerType === "local_cli" && (
-            <>
-              <div className="grid gap-2">
-                <Label>{t("settings.cliType")}</Label>
-                <Select
-                  value={model}
-                  onValueChange={(v) => {
-                    setModel(v);
-                    const detected = localCLIs.find((c) => c.type === v);
-                    setApiBase(detected ? detected.path : "");
-                  }}
+        <CardContent className="space-y-3">
+          {providers.length === 0 ? (
+            <p className="text-sm text-muted-foreground">{t("settings.noProviders")}</p>
+          ) : (
+            <div className="space-y-2">
+              {providers.map((provider) => (
+                <div
+                  key={provider.id}
+                  className={`flex items-center justify-between rounded-md border p-3 ${
+                    provider.isActive ? "border-primary bg-primary/5" : ""
+                  }`}
                 >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="claude">Claude Code</SelectItem>
-                    <SelectItem value="codex">Codex</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2">
-                <Label>{t("settings.cliPath")}</Label>
-                <Input
-                  value={apiBase}
-                  onChange={(e) => setApiBase(e.target.value)}
-                  placeholder={localCLIs.find((c) => c.type === model)?.path || t("settings.cliPathHint")}
-                />
-                <p className="text-xs text-muted-foreground">{t("settings.cliPathHint")}</p>
-              </div>
-              {localCLIs.length > 0 && (
-                <div className="text-sm text-muted-foreground">
-                  {t("settings.detectedCLIs")}: {localCLIs.map((c) => `${c.name} (${c.path})`).join(", ")}
+                  <div className="flex items-center gap-2 min-w-0">
+                    {provider.isActive && <Check className="h-4 w-4 text-primary shrink-0" />}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium truncate">{provider.name}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {provider.type === "anthropic" ? t("settings.anthropic") : t("settings.openai")}
+                        </span>
+                      </div>
+                      <span className="text-xs text-muted-foreground">{provider.model}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {!provider.isActive && (
+                      <Button variant="ghost" size="sm" onClick={() => handleSetActive(provider.id)}>
+                        {t("settings.setActive")}
+                      </Button>
+                    )}
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEditDialog(provider)}>
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-destructive hover:text-destructive"
+                      onClick={() => setDeleteTarget(provider)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </div>
-              )}
-            </>
+              ))}
+            </div>
           )}
-          <Button onClick={handleSaveAI} className="gap-1">
-            {saved ? <Check className="h-4 w-4" /> : null}
-            {saved ? t("settings.saved") : t("action.save")}
+          <Button variant="outline" size="sm" onClick={openAddDialog}>
+            <Plus className="h-3.5 w-3.5 mr-1.5" />
+            {t("settings.addProvider")}
           </Button>
         </CardContent>
       </Card>
+
+      {/* Add/Edit Dialog */}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editingProvider ? t("settings.editProvider") : t("settings.addProvider")}</DialogTitle>
+            <DialogDescription>
+              {editingProvider ? t("settings.editProvider") : t("settings.addProvider")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="grid gap-2">
+              <Label>{t("settings.providerName")}</Label>
+              <Input value={formName} onChange={(e) => setFormName(e.target.value)} />
+            </div>
+            <div className="grid gap-2">
+              <Label>{t("settings.providerType")}</Label>
+              <Select value={formType} onValueChange={setFormType}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="openai">{t("settings.openai")}</SelectItem>
+                  <SelectItem value="anthropic">{t("settings.anthropic")}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label>{t("settings.apiBase")}</Label>
+              <Input
+                value={formApiBase}
+                onChange={(e) => setFormApiBase(e.target.value)}
+                placeholder={getDefaultApiBase(formType)}
+              />
+              <p className="text-xs text-muted-foreground">{t("settings.defaultApiBase")}</p>
+            </div>
+            <div className="grid gap-2">
+              <Label>{t("settings.apiKey")}</Label>
+              <Input
+                type="password"
+                value={formApiKey}
+                onChange={(e) => setFormApiKey(e.target.value)}
+                placeholder={editingProvider ? editingProvider.maskedApiKey : "sk-..."}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label>{t("settings.model")}</Label>
+              <Input value={formModel} onChange={(e) => setFormModel(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button onClick={handleSave} disabled={saving}>
+              {saving ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : null}
+              {t("action.save")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("settings.deleteProvider")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("settings.deleteProviderConfirm")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("action.cancel")}</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={handleDelete}>{t("action.delete")}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* CLI Integration */}
       <IntegrationSection />
     </>
   );
