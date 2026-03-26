@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { Loader2, Trash2, Pencil, Check, X, Plus } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -55,8 +56,8 @@ function EditableCell({
     try {
       await onSave(editVal);
       setEditing(false);
-    } catch {
-      /* keep editing */
+    } catch (err) {
+      toast.error(String(err));
     }
     setSaving(false);
   };
@@ -136,8 +137,8 @@ function AddRowForm({
         setScore("0");
         setValue("");
       }
-    } catch {
-      /* ignore */
+    } catch (err) {
+      toast.error(String(err));
     }
     setAdding(false);
   };

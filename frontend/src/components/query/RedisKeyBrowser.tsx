@@ -1,7 +1,22 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
-import { Database, RefreshCw, Loader2, Search, Key, AlertCircle, Copy, Trash2 } from "lucide-react";
+import {
+  Database,
+  RefreshCw,
+  Loader2,
+  Search,
+  Key,
+  AlertCircle,
+  Copy,
+  Trash2,
+  List,
+  FolderTree,
+  ChevronRight,
+  ChevronDown,
+  Folder,
+  FolderOpen,
+} from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -17,6 +32,95 @@ interface RedisKeyBrowserProps {
 }
 
 const KEY_ROW_HEIGHT = 28;
+const SEPARATOR = ":";
+
+// --- Tree logic ---
+
+interface TreeNode {
+  name: string; // segment name (e.g. "user")
+  fullKey: string | null; // non-null = leaf node (actual Redis key)
+  children: Map<string, TreeNode>;
+  keyCount: number; // total leaf keys under this node
+}
+
+function buildKeyTree(keys: string[]): TreeNode {
+  const root: TreeNode = { name: "", fullKey: null, children: new Map(), keyCount: 0 };
+  for (const key of keys) {
+    const parts = key.split(SEPARATOR);
+    let node = root;
+    for (let i = 0; i < parts.length; i++) {
+      const segment = parts[i];
+      const isLast = i === parts.length - 1;
+      if (isLast) {
+        // Leaf — always create a unique entry with full key
+        const existing = node.children.get(segment);
+        if (existing && existing.fullKey === null) {
+          // A folder already exists with this name; add as a leaf child with the full key
+          // Use the full key as child key to avoid conflicts
+          node.children.set(key, { name: segment, fullKey: key, children: new Map(), keyCount: 1 });
+        } else {
+          node.children.set(segment, { name: segment, fullKey: key, children: new Map(), keyCount: 1 });
+        }
+      } else {
+        if (!node.children.has(segment)) {
+          node.children.set(segment, { name: segment, fullKey: null, children: new Map(), keyCount: 0 });
+        }
+        node = node.children.get(segment)!;
+      }
+    }
+    // Update counts up the path
+    let n = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (n.children.has(parts[i])) {
+        n = n.children.get(parts[i])!;
+        n.keyCount++;
+      }
+    }
+    root.keyCount++;
+  }
+  return root;
+}
+
+interface FlatTreeRow {
+  depth: number;
+  name: string;
+  fullKey: string | null; // null = folder
+  keyCount: number;
+  isExpanded: boolean;
+  nodeId: string; // unique ID for expansion tracking (prefix path)
+}
+
+function flattenTree(root: TreeNode, expandedSet: Set<string>): FlatTreeRow[] {
+  const result: FlatTreeRow[] = [];
+  const walk = (node: TreeNode, depth: number, prefix: string) => {
+    // Sort children: folders first, then leaves
+    const entries = Array.from(node.children.values()).sort((a, b) => {
+      const aIsFolder = a.fullKey === null ? 0 : 1;
+      const bIsFolder = b.fullKey === null ? 0 : 1;
+      if (aIsFolder !== bIsFolder) return aIsFolder - bIsFolder;
+      return a.name.localeCompare(b.name);
+    });
+    for (const child of entries) {
+      const nodeId = prefix ? `${prefix}${SEPARATOR}${child.name}` : child.name;
+      const isExpanded = expandedSet.has(nodeId);
+      result.push({
+        depth,
+        name: child.name,
+        fullKey: child.fullKey,
+        keyCount: child.keyCount,
+        isExpanded,
+        nodeId,
+      });
+      if (child.fullKey === null && isExpanded) {
+        walk(child, depth + 1, nodeId);
+      }
+    }
+  };
+  walk(root, 0, "");
+  return result;
+}
+
+// --- Component ---
 
 export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
   const { t } = useTranslation();
@@ -27,14 +131,30 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // View mode: "list" or "tree"
+  const [viewMode, setViewMode] = useState<"list" | "tree">("list");
+  const [treeExpanded, setTreeExpanded] = useState<Set<string>>(new Set());
+
   // Context menu state
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; key: string } | null>(null);
   const ctxMenuRef = useRef<HTMLDivElement>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
+  // Build tree data
+  const keyTree = useMemo(() => {
+    if (viewMode !== "tree" || !state) return null;
+    return buildKeyTree(state.keys);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, state?.keys]);
+
+  const flatRows = useMemo(() => {
+    if (!keyTree) return [];
+    return flattenTree(keyTree, treeExpanded);
+  }, [keyTree, treeExpanded]);
+
   // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
-    count: state?.keys.length ?? 0,
+    count: viewMode === "tree" ? flatRows.length : (state?.keys.length ?? 0),
     getScrollElement: () => scrollRef.current,
     estimateSize: () => KEY_ROW_HEIGHT,
     overscan: 20,
@@ -44,6 +164,11 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
     scanKeys(tabId, true);
     loadDbKeyCounts(tabId);
   }, [tabId, scanKeys, loadDbKeyCounts]);
+
+  // Reset tree expansion when DB changes
+  useEffect(() => {
+    setTreeExpanded(new Set());
+  }, [state?.currentDb]);
 
   // Close context menu on outside click / escape
   useEffect(() => {
@@ -105,6 +230,18 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
     [tabId, selectKey]
   );
 
+  const toggleTreeNode = useCallback((nodeId: string) => {
+    setTreeExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(nodeId)) {
+        next.delete(nodeId);
+      } else {
+        next.add(nodeId);
+      }
+      return next;
+    });
+  }, []);
+
   const handleCopyKeyName = useCallback(() => {
     if (!ctxMenu) return;
     navigator.clipboard.writeText(ctxMenu.key);
@@ -124,8 +261,8 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
       await ExecuteRedisArgs(tabMeta.assetId, ["DEL", deleteTarget], state.currentDb);
       removeKey(tabId, deleteTarget);
       loadDbKeyCounts(tabId);
-    } catch {
-      /* ignore */
+    } catch (err) {
+      toast.error(String(err));
     }
     setDeleteTarget(null);
   }, [deleteTarget, tabMeta, state, tabId, removeKey, loadDbKeyCounts]);
@@ -157,6 +294,14 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
             })}
           </SelectContent>
         </Select>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={() => setViewMode((v) => (v === "list" ? "tree" : "list"))}
+          title={viewMode === "list" ? t("query.treeView") : t("query.listView")}
+        >
+          {viewMode === "list" ? <FolderTree className="size-3.5" /> : <List className="size-3.5" />}
+        </Button>
         <Button variant="ghost" size="icon-xs" onClick={handleRefresh} disabled={state.loadingKeys}>
           <RefreshCw className={`size-3.5 ${state.loadingKeys ? "animate-spin" : ""}`} />
         </Button>
@@ -188,10 +333,65 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
         </div>
       )}
 
-      {/* Virtualized key list */}
+      {/* Virtualized key list / tree */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
           {virtualizer.getVirtualItems().map((virtualRow) => {
+            if (viewMode === "tree") {
+              const row = flatRows[virtualRow.index];
+              if (!row) return null;
+              const isLeaf = row.fullKey !== null;
+              return (
+                <button
+                  key={virtualRow.key}
+                  className={`absolute left-0 flex w-full items-center gap-1 text-left text-xs hover:bg-accent ${
+                    isLeaf && state.selectedKey === row.fullKey ? "bg-accent text-accent-foreground" : ""
+                  }`}
+                  style={{
+                    top: virtualRow.start,
+                    height: virtualRow.size,
+                    paddingLeft: `${row.depth * 16 + 8}px`,
+                    paddingRight: "8px",
+                  }}
+                  onClick={() => {
+                    if (isLeaf) {
+                      handleSelectKey(row.fullKey!);
+                    } else {
+                      toggleTreeNode(row.nodeId);
+                    }
+                  }}
+                  onContextMenu={
+                    isLeaf
+                      ? (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setCtxMenu({ x: e.clientX, y: e.clientY, key: row.fullKey! });
+                        }
+                      : undefined
+                  }
+                >
+                  {isLeaf ? (
+                    <Key className="size-3 shrink-0 text-muted-foreground" />
+                  ) : row.isExpanded ? (
+                    <>
+                      <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
+                      <FolderOpen className="size-3 shrink-0 text-muted-foreground" />
+                    </>
+                  ) : (
+                    <>
+                      <ChevronRight className="size-3 shrink-0 text-muted-foreground" />
+                      <Folder className="size-3 shrink-0 text-muted-foreground" />
+                    </>
+                  )}
+                  <span className="truncate font-mono">{row.name}</span>
+                  {!isLeaf && (
+                    <span className="ml-auto shrink-0 text-muted-foreground text-[10px]">{row.keyCount}</span>
+                  )}
+                </button>
+              );
+            }
+
+            // Flat list mode
             const key = state.keys[virtualRow.index];
             return (
               <button

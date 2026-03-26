@@ -20,6 +20,23 @@ interface RedisResult {
   value: unknown;
 }
 
+function formatTtl(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return s > 0 ? `${m}m${s}s` : `${m}m`;
+  }
+  if (seconds < 86400) {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    return m > 0 ? `${h}h${m}m` : `${h}h`;
+  }
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  return h > 0 ? `${d}d${h}h` : `${d}d`;
+}
+
 const TYPE_COLORS: Record<string, string> = {
   string: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
   hash: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
@@ -125,8 +142,8 @@ export function RedisKeyDetail({ tabId }: RedisKeyDetailProps) {
       await ExecuteRedisArgs(tabMeta.assetId, ["DEL", state.selectedKey], state.currentDb);
       removeKey(tabId, state.selectedKey);
       loadDbKeyCounts(tabId);
-    } catch {
-      /* ignore */
+    } catch (err) {
+      toast.error(String(err));
     }
     setDeleting(false);
   }, [tabMeta, state, tabId, removeKey, loadDbKeyCounts]);
@@ -158,8 +175,8 @@ export function RedisKeyDetail({ tabId }: RedisKeyDetailProps) {
     try {
       await ExecuteRedisArgs(tabMeta.assetId, ["EXPIRE", state.selectedKey, String(seconds)], state.currentDb);
       selectKey(tabId, state.selectedKey);
-    } catch {
-      /* ignore */
+    } catch (err) {
+      toast.error(String(err));
     }
     setEditingTtl(false);
   }, [tabMeta, state, ttlInput, tabId, selectKey]);
@@ -169,8 +186,8 @@ export function RedisKeyDetail({ tabId }: RedisKeyDetailProps) {
     try {
       await ExecuteRedisArgs(tabMeta.assetId, ["PERSIST", state.selectedKey], state.currentDb);
       selectKey(tabId, state.selectedKey);
-    } catch {
-      /* ignore */
+    } catch (err) {
+      toast.error(String(err));
     }
     setEditingTtl(false);
   }, [tabMeta, state, tabId, selectKey]);
@@ -183,7 +200,7 @@ export function RedisKeyDetail({ tabId }: RedisKeyDetailProps) {
   const ttl = keyInfo?.ttl ?? -1;
   const isCollection = type === "hash" || type === "list" || type === "set" || type === "zset";
 
-  const ttlDisplay = ttl === -1 ? t("query.ttlPersist") : t("query.ttlSeconds", { seconds: ttl });
+  const ttlDisplay = ttl === -1 ? t("query.ttlPersist") : formatTtl(ttl);
 
   return (
     <div className="flex h-full flex-col">
@@ -244,7 +261,7 @@ export function RedisKeyDetail({ tabId }: RedisKeyDetailProps) {
                 <span
                   className="text-xs text-muted-foreground cursor-pointer hover:text-foreground"
                   onClick={startTtlEdit}
-                  title={t("query.setTtl")}
+                  title={ttl > 0 ? `${ttl}s` : undefined}
                 >
                   {t("query.ttl")}: {ttlDisplay}
                 </span>

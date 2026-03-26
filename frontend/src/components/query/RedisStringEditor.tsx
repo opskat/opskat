@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { Loader2, Pencil } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -56,8 +57,8 @@ export function RedisStringEditor({ tabId, t }: { tabId: string; t: (key: string
       await ExecuteRedisArgs(tabMeta.assetId, ["SET", state.selectedKey!, editVal], db);
       selectKey(tabId, state.selectedKey!);
       setEditing(false);
-    } catch {
-      /* keep editing */
+    } catch (err) {
+      toast.error(String(err));
     }
     setSaving(false);
   };

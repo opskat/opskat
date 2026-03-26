@@ -1,8 +1,9 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { Play, Loader2 } from "lucide-react";
+import { Play, Loader2, History } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
@@ -45,6 +46,8 @@ export function SqlEditorTab({ tabId, innerTabId }: SqlEditorTabProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDangerConfirm, setShowDangerConfirm] = useState(false);
+  const [sqlHistory, setSqlHistory] = useState<string[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
 
   // Set default database when databases load
   useEffect(() => {
@@ -67,9 +70,24 @@ export function SqlEditorTab({ tabId, innerTabId }: SqlEditorTabProps) {
     return /^(DELETE|DROP|TRUNCATE|ALTER)\b/.test(upper);
   }, []);
 
+  // Get the SQL text to execute: selected text if any, otherwise full text
+  const getExecutableSQL = useCallback(() => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      const { selectionStart, selectionEnd } = textarea;
+      if (selectionStart !== selectionEnd) {
+        return sql.substring(selectionStart, selectionEnd).trim();
+      }
+    }
+    return sql.trim();
+  }, [sql]);
+
   const doExecute = useCallback(async () => {
-    const trimmed = sql.trim();
-    if (!trimmed || !assetId) return;
+    const execSql = getExecutableSQL();
+    if (!execSql || !assetId) return;
+
+    // Record to history (dedup, max 30)
+    setSqlHistory((prev) => [execSql, ...prev.filter((s) => s !== execSql)].slice(0, 30));
 
     setLoading(true);
     setError(null);
@@ -78,7 +96,7 @@ export function SqlEditorTab({ tabId, innerTabId }: SqlEditorTabProps) {
     setRows([]);
 
     try {
-      const result = await ExecuteSQL(assetId, trimmed, selectedDb);
+      const result = await ExecuteSQL(assetId, execSql, selectedDb);
       const parsed: SQLResult = JSON.parse(result);
 
       if (parsed.affected_rows !== undefined) {
@@ -92,26 +110,39 @@ export function SqlEditorTab({ tabId, innerTabId }: SqlEditorTabProps) {
     } finally {
       setLoading(false);
     }
-  }, [sql, assetId, selectedDb]);
+  }, [getExecutableSQL, assetId, selectedDb]);
 
   const execute = useCallback(() => {
-    const trimmed = sql.trim();
-    if (!trimmed || !assetId) return;
-    if (isDangerousSQL(trimmed)) {
+    const execSql = getExecutableSQL();
+    if (!execSql || !assetId) return;
+    if (isDangerousSQL(execSql)) {
       setShowDangerConfirm(true);
     } else {
       doExecute();
     }
-  }, [sql, assetId, isDangerousSQL, doExecute]);
+  }, [getExecutableSQL, assetId, isDangerousSQL, doExecute]);
 
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         e.preventDefault();
         execute();
+        return;
+      }
+      // Tab key inserts two spaces instead of moving focus
+      if (e.key === "Tab") {
+        e.preventDefault();
+        const textarea = e.currentTarget;
+        const { selectionStart, selectionEnd } = textarea;
+        const newValue = sql.substring(0, selectionStart) + "  " + sql.substring(selectionEnd);
+        setSql(newValue);
+        // Restore cursor position after state update
+        requestAnimationFrame(() => {
+          textarea.selectionStart = textarea.selectionEnd = selectionStart + 2;
+        });
       }
     },
-    [execute]
+    [execute, sql]
   );
 
   return (
@@ -142,6 +173,31 @@ export function SqlEditorTab({ tabId, innerTabId }: SqlEditorTabProps) {
               ))}
             </SelectContent>
           </Select>
+          {sqlHistory.length > 0 && (
+            <Popover open={showHistory} onOpenChange={setShowHistory}>
+              <PopoverTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-7 text-xs gap-1">
+                  <History className="h-3.5 w-3.5" />
+                  {t("query.history")}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-[400px] max-h-[300px] overflow-auto p-1">
+                {sqlHistory.map((item, idx) => (
+                  <button
+                    key={idx}
+                    className="w-full text-left px-2 py-1.5 text-xs font-mono rounded hover:bg-accent truncate block"
+                    onClick={() => {
+                      setSql(item);
+                      setShowHistory(false);
+                    }}
+                    title={item}
+                  >
+                    {item.length > 80 ? item.substring(0, 80) + "..." : item}
+                  </button>
+                ))}
+              </PopoverContent>
+            </Popover>
+          )}
         </div>
         {/* Textarea */}
         <textarea

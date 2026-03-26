@@ -172,7 +172,15 @@ export function TableDataTab({ tabId, database, table }: TableDataTabProps) {
       const tableName =
         driver === "postgresql" ? `"${table}"` : `${quoteIdent(database, driver)}.${quoteIdent(table, driver)}`;
 
-      statements.push(`UPDATE ${tableName} SET ${setClauses.join(", ")} WHERE ${whereClauses.join(" AND ")} LIMIT 1;`);
+      if (driver === "postgresql") {
+        statements.push(
+          `UPDATE ${tableName} SET ${setClauses.join(", ")} WHERE ctid = (SELECT ctid FROM ${tableName} WHERE ${whereClauses.join(" AND ")} LIMIT 1);`
+        );
+      } else {
+        statements.push(
+          `UPDATE ${tableName} SET ${setClauses.join(", ")} WHERE ${whereClauses.join(" AND ")} LIMIT 1;`
+        );
+      }
     }
     return statements;
   }, [edits, rows, columns, driver, database, table]);
