@@ -35,6 +35,7 @@ func cmdCreate(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args
 		sshAsset := fs.String("ssh-asset", "", "SSH asset name/ID for tunnel connection (for database/redis)")
 		groupID := fs.Int64("group-id", 0, "Group ID to assign the asset to (0 = ungrouped)")
 		description := fs.String("description", "", "Optional description or notes")
+		icon := fs.String("icon", "", "Icon name (e.g. server, kubernetes, docker)")
 		fs.Usage = func() { printCreateAssetUsage() }
 		_ = fs.Parse(args[1:])
 
@@ -99,6 +100,9 @@ func cmdCreate(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args
 		if *description != "" {
 			params["description"] = *description
 		}
+		if *icon != "" {
+			params["icon"] = *icon
+		}
 		// Require approval
 		if _, err := requireApproval(ctx, approval.ApprovalRequest{
 			Type:      "create",
@@ -146,6 +150,7 @@ func cmdUpdate(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args
 		username := fs.String("username", "", "New SSH login username")
 		description := fs.String("description", "", "New description")
 		groupID := fs.Int64("group-id", -1, "New group ID (-1 = unchanged, 0 = ungrouped)")
+		icon := fs.String("icon", "", "New icon name (e.g. server, kubernetes, docker)")
 		fs.Usage = func() { printUpdateAssetUsage() }
 		_ = fs.Parse(args[2:])
 
@@ -169,6 +174,9 @@ func cmdUpdate(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args
 		}
 		if *groupID >= 0 {
 			params["group_id"] = float64(*groupID)
+		}
+		if *icon != "" {
+			params["icon"] = *icon
 		}
 		// Require approval
 		if _, err := requireApproval(ctx, approval.ApprovalRequest{
@@ -219,6 +227,17 @@ Optional Flags:
   --ssh-asset <asset>     SSH asset name/ID for tunnel connection (database/redis types)
   --group-id <int>        Group ID to assign the asset to (0 = ungrouped)
   --description <string>  Optional description or notes
+  --icon <string>         Icon name (default: auto by type)
+
+Available Icons:
+  Infrastructure: server, database, cloud, monitor, laptop, router, hard-drive,
+                  globe, shield, container, cpu, network
+  Cloud:          aws, azure, gcp, alicloud, tencentcloud, huaweicloud, cloudflare
+  DB/Middleware:   mysql, postgresql, redis, mongodb, elasticsearch, kafka, mariadb,
+                  sqlite, rabbitmq, etcd, clickhouse
+  System/OS:      docker, kubernetes, linux, windows, ubuntu, centos, debian,
+                  redhat, macos
+  DevOps:         nginx, grafana, prometheus
 
 Approval:
   Requires desktop app approval. Session auto-created if not specified.
@@ -257,6 +276,7 @@ Flags (only provided fields are updated, others remain unchanged):
   --username <string>     New SSH login username
   --description <string>  New description
   --group-id <int>        New group ID (-1 = unchanged, 0 = ungrouped)
+  --icon <string>         New icon name (see 'opsctl create asset --help' for list)
 
 Approval:
   Requires desktop app approval. Session auto-created if not specified.

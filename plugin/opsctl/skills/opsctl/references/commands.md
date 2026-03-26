@@ -143,6 +143,12 @@ Create a new asset (ssh, database, or redis). Requires approval.
 - `--ssh-asset <asset>` — SSH asset name/ID for tunnel connection (database/redis types)
 - `--group-id <int>` — Group ID (0 = ungrouped)
 - `--description <string>` — Description
+- `--icon <string>` — Icon name (default: auto by type). Available icons:
+  - Infrastructure: server, database, cloud, monitor, laptop, router, hard-drive, globe, shield, container, cpu, network
+  - Cloud: aws, azure, gcp, alicloud, tencentcloud, huaweicloud, cloudflare
+  - DB/Middleware: mysql, postgresql, redis, mongodb, elasticsearch, kafka, mariadb, sqlite, rabbitmq, etcd, clickhouse
+  - System/OS: docker, kubernetes, linux, windows, ubuntu, centos, debian, redhat, macos
+  - DevOps: nginx, grafana, prometheus
 
 ```bash
 opsctl create asset --name "Web Server" --host 10.0.0.1 --username root
@@ -165,10 +171,12 @@ Update an existing asset. Only provided fields change. Requires approval.
 - `--username <string>` — New SSH username
 - `--description <string>` — New description
 - `--group-id <int>` — New group ID (-1 = unchanged, 0 = ungrouped)
+- `--icon <string>` — New icon name (see `opsctl create asset --help` for full list)
 
 ```bash
 opsctl update asset web-server --name "New Name"
 opsctl update asset 1 --host 192.168.1.100 --port 2222
+opsctl update asset 1 --icon kubernetes
 ```
 
 ## cp

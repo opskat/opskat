@@ -145,9 +145,12 @@ func handleAddAsset(ctx context.Context, args map[string]any) (string, error) {
 	groupID := argInt64(args, "group_id")
 	description := argString(args, "description")
 
+	icon := argString(args, "icon")
+
 	asset := &asset_entity.Asset{
 		Name:        name,
 		Type:        assetType,
+		Icon:        icon,
 		GroupID:     groupID,
 		Description: description,
 	}
@@ -222,6 +225,9 @@ func handleUpdateAsset(ctx context.Context, args map[string]any) (string, error)
 	}
 	if _, ok := args["group_id"]; ok {
 		asset.GroupID = argInt64(args, "group_id")
+	}
+	if icon := argString(args, "icon"); icon != "" {
+		asset.Icon = icon
 	}
 
 	switch asset.Type {
