@@ -244,12 +244,8 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
             {t("ssh.session.splitV")}
           </ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem onClick={() => toggleFileManager(tabId)}>
-            {t("ssh.contextMenu.sftp")}
-          </ContextMenuItem>
-          <ContextMenuItem onClick={() => reconnect(tabId)}>
-            {t("ssh.session.reconnect")}
-          </ContextMenuItem>
+          <ContextMenuItem onClick={() => toggleFileManager(tabId)}>{t("ssh.contextMenu.sftp")}</ContextMenuItem>
+          <ContextMenuItem onClick={() => reconnect(tabId)}>{t("ssh.session.reconnect")}</ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem onClick={() => closePane(tabId, sessionId)}>
             {t("ssh.contextMenu.closePane")}

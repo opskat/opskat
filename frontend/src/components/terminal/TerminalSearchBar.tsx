@@ -129,10 +129,22 @@ export function TerminalSearchBar({ visible, onClose, searchAddon }: TerminalSea
         <Regex className="h-3.5 w-3.5" />
       </Button>
       <div className={cn("flex items-center border-l ml-0.5 pl-1")}>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => doSearch("previous")} title={t("ssh.search.previous")}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => doSearch("previous")}
+          title={t("ssh.search.previous")}
+        >
           <ChevronUp className="h-3.5 w-3.5" />
         </Button>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => doSearch("next")} title={t("ssh.search.next")}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => doSearch("next")}
+          title={t("ssh.search.next")}
+        >
           <ChevronDown className="h-3.5 w-3.5" />
         </Button>
       </div>
