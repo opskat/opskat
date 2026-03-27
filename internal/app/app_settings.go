@@ -1007,7 +1007,7 @@ func (a *App) startAutoUpdateCheck() {
 			return
 		}
 
-		info, err := update_svc.CheckForUpdate(a.GetUpdateChannel(), "")
+		info, err := update_svc.CheckForUpdate(a.GetUpdateChannel(), a.GetDownloadMirror())
 		if err != nil {
 			logger.Default().Warn("auto check update failed", zap.Error(err))
 			return
@@ -1049,15 +1049,37 @@ func (a *App) SetUpdateChannel(channel string) error {
 	return bootstrap.SaveConfig(cfg)
 }
 
+// GetDownloadMirror 获取当前下载镜像 URL 前缀
+func (a *App) GetDownloadMirror() string {
+	cfg := bootstrap.GetConfig()
+	if cfg == nil {
+		return ""
+	}
+	return cfg.DownloadMirror
+}
+
+// SetDownloadMirror 设置下载镜像
+// mirror 为镜像 URL 前缀（如 "https://ghfast.top/"），空字符串表示直连 GitHub
+func (a *App) SetDownloadMirror(mirror string) error {
+	cfg := bootstrap.GetConfig()
+	cfg.DownloadMirror = mirror
+	return bootstrap.SaveConfig(cfg)
+}
+
+// GetAvailableMirrors 返回可用的下载镜像列表
+func (a *App) GetAvailableMirrors() []update_svc.MirrorInfo {
+	return update_svc.GetAvailableMirrors()
+}
+
 // CheckForUpdate 检查是否有新版本
 func (a *App) CheckForUpdate() (*update_svc.UpdateInfo, error) {
-	return update_svc.CheckForUpdate(a.GetUpdateChannel(), "")
+	return update_svc.CheckForUpdate(a.GetUpdateChannel(), a.GetDownloadMirror())
 }
 
 // DownloadAndInstallUpdate 下载并安装更新
 // 更新完成后需要用户重启应用
-func (a *App) DownloadAndInstallUpdate() error {
-	err := update_svc.DownloadAndUpdate(a.GetUpdateChannel(), "", false, func(downloaded, total int64) {
+func (a *App) DownloadAndInstallUpdate(skipChecksum bool) error {
+	err := update_svc.DownloadAndUpdate(a.GetUpdateChannel(), a.GetDownloadMirror(), skipChecksum, func(downloaded, total int64) {
 		wailsRuntime.EventsEmit(a.ctx, "update:progress", map[string]int64{
 			"downloaded": downloaded,
 			"total":      total,
