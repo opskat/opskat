@@ -35,13 +35,17 @@ It also ships a standalone CLI tool (`opsctl`) sharing the same core, for headle
 
 ## Demo
 
-https://github.com/opskat/opskat/releases/download/v1.0.0/demo.mp4
+https://github.com/user-attachments/assets/06627133-373b-4e53-8d76-ebe7fce0866e
 
 ## ✨ Core Features
 
 ### 🤖 AI Agent
 
-Multi-turn conversations with tool calling. Supports OpenAI-compatible API, Claude CLI, and Codex CLI. The agent can manage assets, run commands, execute queries, transfer files, and more — all routed through the same policy and audit pipeline.
+Multi-turn conversations with tool calling. Supports OpenAI-compatible API, Claude CLI, and Codex CLI. The agent can manage assets, run commands, exe
+
+Uploading demo.mp4…
+
+cute queries, transfer files, and more — all routed through the same policy and audit pipeline.
 
 ### 🖥️ Asset Management
 
