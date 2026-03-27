@@ -56,7 +56,7 @@ type anthropicRequest struct {
 }
 
 type anthropicThinking struct {
-	Type         string `json:"type"`          // "enabled"
+	Type         string `json:"type"` // "enabled"
 	BudgetTokens int    `json:"budget_tokens"`
 }
 
@@ -361,12 +361,13 @@ func (p *AnthropicProvider) readStream(ctx context.Context, body io.ReadCloser, 
 			if !ok {
 				continue
 			}
-			if bs.blockType == "tool_use" {
+			switch bs.blockType {
+			case "tool_use":
 				tc := ToolCall{ID: bs.toolID, Type: "function"}
 				tc.Function.Name = bs.toolName
 				tc.Function.Arguments = bs.inputJSON.String()
 				ch <- StreamEvent{Type: "tool_call", ToolCalls: []ToolCall{tc}}
-			} else if bs.blockType == "thinking" {
+			case "thinking":
 				ch <- StreamEvent{Type: "thinking_done"}
 			}
 			delete(blocks, event.Index)

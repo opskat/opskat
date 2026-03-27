@@ -13,7 +13,7 @@ import (
 type RunnerState int
 
 const (
-	RunnerIdle     RunnerState = iota
+	RunnerIdle RunnerState = iota
 	RunnerRunning
 	RunnerRetrying
 	RunnerStopping
