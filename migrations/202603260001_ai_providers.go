@@ -9,8 +9,11 @@ import (
 	"time"
 
 	"github.com/opskat/opskat/internal/model/entity/ai_provider_entity"
+	"github.com/opskat/opskat/internal/status"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/go-gormigrate/gormigrate/v2"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -23,8 +26,18 @@ func migration202603260001() *gormigrate.Migration {
 				return err
 			}
 
-			// 2. Conversation 表新增 provider_id 字段（忽略已存在错误，SQLite 不支持 IF NOT EXISTS）
-			_ = tx.Exec("ALTER TABLE conversations ADD COLUMN provider_id INTEGER DEFAULT 0").Error
+			// 2. Conversation 表新增 provider_id 字段
+			if !tx.Migrator().HasColumn("conversations", "provider_id") {
+				if err := tx.Exec("ALTER TABLE conversations ADD COLUMN provider_id INTEGER DEFAULT 0").Error; err != nil {
+					logger.Default().Warn("migration 202603260001: 添加 conversations.provider_id 列失败", zap.Error(err))
+					status.Add(status.Entry{
+						Level:   status.LevelWarn,
+						Source:  "migration",
+						Message: "添加 conversations.provider_id 列失败",
+						Detail:  err.Error(),
+					})
+				}
+			}
 
 			// 3. 从 config.json 迁移现有配置
 			migrateConfigToDB(tx)
