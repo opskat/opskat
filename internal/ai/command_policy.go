@@ -81,9 +81,9 @@ func setCheckResult(ctx context.Context, result CheckResult) {
 type CommandConfirmFunc func(kind string, items []ApprovalItem, agentRole string) ApprovalResponse
 
 // GrantRequestFunc Grant 审批回调，创建 grant 并等待用户审批
-// patterns 为命令模式列表，用户可能在审批弹窗中编辑
+// items 为多资产的审批条目列表，用户可能在审批弹窗中编辑
 // 返回 (approved, 用户编辑后的 patterns)
-type GrantRequestFunc func(assetID int64, assetName string, patterns []string, reason string) (approved bool, finalPatterns []string)
+type GrantRequestFunc func(items []ApprovalItem, reason string) (approved bool, finalPatterns []string)
 
 // ApprovedPattern 会话级已批准的命令模式
 type ApprovedPattern struct {
@@ -139,9 +139,65 @@ func (c *CommandPolicyChecker) SubmitGrant(ctx context.Context, assetID int64, p
 		}
 	}
 
-	approved, finalPatterns := c.grantRequestFunc(assetID, assetName, patterns, reason)
+	items := make([]ApprovalItem, 0, len(patterns))
+	for _, p := range patterns {
+		items = append(items, ApprovalItem{
+			Type:      "grant",
+			AssetID:   assetID,
+			AssetName: assetName,
+			Command:   p,
+			Detail:    reason,
+		})
+	}
+
+	approved, finalPatterns := c.grantRequestFunc(items, reason)
 	if !approved {
 		return CheckResult{Decision: Deny, Message: policyMsg(ctx, "user denied grant approval", "用户拒绝 Grant 审批"), DecisionSource: SourceGrantDeny, MatchedPattern: strings.Join(patterns, "; ")}
+	}
+
+	return CheckResult{Decision: Allow, Message: policyFmt(ctx, "grant approved, %d patterns", "Grant 已批准，共 %d 条模式", len(finalPatterns)), DecisionSource: SourceGrantAllow, MatchedPattern: strings.Join(finalPatterns, "; ")}
+}
+
+// GrantItem represents a single asset's patterns in a multi-asset grant request.
+type GrantItem struct {
+	AssetID  int64
+	Patterns []string
+}
+
+// SubmitGrantMulti 提交多资产 grant 审批请求
+func (c *CommandPolicyChecker) SubmitGrantMulti(ctx context.Context, items []GrantItem, reason string) CheckResult {
+	if c.grantRequestFunc == nil {
+		return CheckResult{Decision: Deny, Message: policyMsg(ctx, "no grant approval mechanism", "无 Grant 审批机制")}
+	}
+
+	approvalItems := make([]ApprovalItem, 0)
+	var allPatterns []string
+	for _, item := range items {
+		assetName := ""
+		if item.AssetID > 0 {
+			asset, err := asset_svc.Asset().Get(ctx, item.AssetID)
+			if err != nil {
+				logger.Default().Warn("get asset for grant submission", zap.Int64("assetID", item.AssetID), zap.Error(err))
+			}
+			if asset != nil {
+				assetName = asset.Name
+			}
+		}
+		for _, p := range item.Patterns {
+			approvalItems = append(approvalItems, ApprovalItem{
+				Type:      "grant",
+				AssetID:   item.AssetID,
+				AssetName: assetName,
+				Command:   p,
+				Detail:    reason,
+			})
+			allPatterns = append(allPatterns, p)
+		}
+	}
+
+	approved, finalPatterns := c.grantRequestFunc(approvalItems, reason)
+	if !approved {
+		return CheckResult{Decision: Deny, Message: policyMsg(ctx, "user denied grant approval", "用户拒绝 Grant 审批"), DecisionSource: SourceGrantDeny, MatchedPattern: strings.Join(allPatterns, "; ")}
 	}
 
 	return CheckResult{Decision: Allow, Message: policyFmt(ctx, "grant approved, %d patterns", "Grant 已批准，共 %d 条模式", len(finalPatterns)), DecisionSource: SourceGrantAllow, MatchedPattern: strings.Join(finalPatterns, "; ")}

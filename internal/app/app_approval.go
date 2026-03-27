@@ -325,21 +325,10 @@ func (a *App) makeCommandConfirmFunc() ai.CommandConfirmFunc {
 
 // makeGrantRequestFunc 创建 Grant 审批回调，使用 inline approval
 func (a *App) makeGrantRequestFunc() ai.GrantRequestFunc {
-	return func(assetID int64, assetName string, patterns []string, reason string) (bool, []string) {
+	return func(items []ai.ApprovalItem, reason string) (bool, []string) {
 		convID := a.currentConversationID
 		confirmID := fmt.Sprintf("grant_%d_%d", convID, time.Now().UnixNano())
 		eventName := fmt.Sprintf("ai:event:%d", convID)
-
-		items := make([]ai.ApprovalItem, 0, len(patterns))
-		for _, p := range patterns {
-			items = append(items, ai.ApprovalItem{
-				Type:      "grant",
-				AssetID:   assetID,
-				AssetName: assetName,
-				Command:   p,
-				Detail:    reason,
-			})
-		}
 
 		wailsRuntime.EventsEmit(a.ctx, eventName, ai.StreamEvent{
 			Type:        "approval_request",
@@ -364,14 +353,22 @@ func (a *App) makeGrantRequestFunc() ai.GrantRequestFunc {
 			if resp.Decision == "deny" {
 				return false, nil
 			}
+			var finalPatterns []string
 			if len(resp.EditedItems) > 0 {
-				var finalPatterns []string
 				for _, item := range resp.EditedItems {
-					finalPatterns = append(finalPatterns, item.Command)
+					cmd := strings.TrimSpace(item.Command)
+					if cmd != "" {
+						finalPatterns = append(finalPatterns, cmd)
+						ai.SaveGrantPattern(a.langCtx(), fmt.Sprintf("conv_%d", convID), item.AssetID, item.AssetName, cmd)
+					}
 				}
-				return true, finalPatterns
+			} else {
+				for _, item := range items {
+					finalPatterns = append(finalPatterns, item.Command)
+					ai.SaveGrantPattern(a.langCtx(), fmt.Sprintf("conv_%d", convID), item.AssetID, item.AssetName, item.Command)
+				}
 			}
-			return true, patterns
+			return true, finalPatterns
 		case <-a.ctx.Done():
 			return false, nil
 		case <-a.shutdownCh:

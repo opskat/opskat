@@ -167,15 +167,14 @@ func AllToolDefs() []ToolDef {
 		},
 		{
 			Name:        "request_permission",
-			Description: "Request approval for a grant of command patterns BEFORE executing them. Submit command patterns (one per line, supports '*' wildcard) for a target asset. The user will review and may edit the patterns before approving. Once approved, subsequent run_command calls matching any approved pattern will be auto-approved. Call this proactively when you intend to run multiple commands on the same asset.",
+			Description: "Request approval for grant of command patterns BEFORE executing them. Submit command patterns (one per line, supports '*' wildcard) for one or more target assets. The user will review and may edit the patterns before approving. Once approved, subsequent run_command/exec_sql/exec_redis calls matching any approved pattern will be auto-approved.",
 			Params: []ParamDef{
-				{Name: "asset_id", Type: ParamNumber, Description: "Target server asset ID.", Required: true},
-				{Name: "command_patterns", Type: ParamString, Description: "Command patterns, one per line. Supports '*' wildcard (e.g. 'cat /var/log/*\\nsystemctl * nginx').", Required: true},
+				{Name: "items", Type: ParamString, Description: `JSON array of items. Each item: {"asset_id": <number>, "command_patterns": "<patterns separated by newline>"}. Example: [{"asset_id":1,"command_patterns":"cat /var/log/*\nsystemctl * nginx"},{"asset_id":2,"command_patterns":"SELECT * FROM users"}]`, Required: true},
 				{Name: "reason", Type: ParamString, Description: "Brief explanation of why these permissions are needed.", Required: true},
 			},
 			Handler: handleRequestGrant,
 			CommandExtractor: func(args map[string]any) string {
-				v := argString(args, "command_patterns")
+				v := argString(args, "items")
 				if reason := argString(args, "reason"); reason != "" {
 					return "grant: " + v + " reason: " + reason
 				}

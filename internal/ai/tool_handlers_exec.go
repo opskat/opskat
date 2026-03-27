@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -19,26 +20,42 @@ import (
 )
 
 func handleRequestGrant(ctx context.Context, args map[string]any) (string, error) {
-	assetID := argInt64(args, "asset_id")
-	commandPatterns := argString(args, "command_patterns")
+	itemsJSON := argString(args, "items")
 	reason := argString(args, "reason")
-	if assetID == 0 {
-		return "", fmt.Errorf("missing required parameter: asset_id")
-	}
-	if commandPatterns == "" {
-		return "", fmt.Errorf("missing required parameter: command_patterns")
+	if itemsJSON == "" {
+		return "", fmt.Errorf("missing required parameter: items")
 	}
 
-	// 按行拆分模式
-	var patterns []string
-	for _, line := range strings.Split(commandPatterns, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			patterns = append(patterns, line)
-		}
+	var rawItems []struct {
+		AssetID         int64  `json:"asset_id"`
+		CommandPatterns string `json:"command_patterns"`
 	}
-	if len(patterns) == 0 {
-		return "", fmt.Errorf("command_patterns must not be empty")
+	if err := json.Unmarshal([]byte(itemsJSON), &rawItems); err != nil {
+		return "", fmt.Errorf("invalid items JSON: %w", err)
+	}
+	if len(rawItems) == 0 {
+		return "", fmt.Errorf("items must not be empty")
+	}
+
+	var grantItems []GrantItem
+	for _, raw := range rawItems {
+		if raw.AssetID == 0 {
+			return "", fmt.Errorf("each item must have a non-zero asset_id")
+		}
+		var patterns []string
+		for _, line := range strings.Split(raw.CommandPatterns, "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				patterns = append(patterns, line)
+			}
+		}
+		if len(patterns) == 0 {
+			continue
+		}
+		grantItems = append(grantItems, GrantItem{AssetID: raw.AssetID, Patterns: patterns})
+	}
+	if len(grantItems) == 0 {
+		return "", fmt.Errorf("no valid command patterns provided")
 	}
 
 	checker := GetPolicyChecker(ctx)
@@ -46,7 +63,7 @@ func handleRequestGrant(ctx context.Context, args map[string]any) (string, error
 		return "", fmt.Errorf("permission checker not available")
 	}
 
-	result := checker.SubmitGrant(ctx, assetID, patterns, reason)
+	result := checker.SubmitGrantMulti(ctx, grantItems, reason)
 	setCheckResult(ctx, result)
 	return result.Message, nil
 }
