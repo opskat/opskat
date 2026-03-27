@@ -166,7 +166,7 @@ func fetchReleaseFromMirror(channel, mirrorPrefix string) (*ReleaseInfo, error) 
 
 	mirroredURL := applyMirror(infoURL, mirrorPrefix)
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(mirroredURL) //nolint:gosec,noctx // mirror URL constructed from constants
+	resp, err := client.Get(mirroredURL) //nolint:noctx // mirror URL constructed from constants
 	if err != nil {
 		return nil, fmt.Errorf("request mirror failed: %w", err)
 	}
