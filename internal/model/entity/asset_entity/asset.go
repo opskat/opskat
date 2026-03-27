@@ -107,6 +107,7 @@ type DatabaseConfig struct {
 	CredentialID int64          `json:"credential_id,omitempty"` // 统一凭证 ID（密码）
 	Database     string         `json:"database,omitempty"`      // 默认数据库
 	SSLMode      string         `json:"ssl_mode,omitempty"`      // postgresql: disable/require/verify-full
+	TLS          bool           `json:"tls,omitempty"`           // mysql: 启用 TLS 加密连接
 	Params       string         `json:"params,omitempty"`        // 额外连接参数
 	ReadOnly     bool           `json:"read_only,omitempty"`     // 连接级只读
 	SSHAssetID   int64          `json:"ssh_asset_id,omitempty"`  // 0=直连, >0=SSH隧道

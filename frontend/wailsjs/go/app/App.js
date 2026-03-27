@@ -158,6 +158,10 @@ export function GetAsset(arg1) {
   return window['go']['app']['App']['GetAsset'](arg1);
 }
 
+export function GetAssetPassword(arg1) {
+  return window['go']['app']['App']['GetAssetPassword'](arg1);
+}
+
 export function GetCredentialPublicKey(arg1) {
   return window['go']['app']['App']['GetCredentialPublicKey'](arg1);
 }

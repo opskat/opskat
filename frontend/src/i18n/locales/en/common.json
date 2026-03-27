@@ -350,6 +350,24 @@
       "splitV": "Split Vertical",
       "connected": "Connected",
       "disconnected": "Disconnected"
+    },
+    "contextMenu": {
+      "copy": "Copy",
+      "paste": "Paste",
+      "selectAll": "Select All",
+      "find": "Find",
+      "sftp": "File Manager",
+      "closePane": "Close Pane",
+      "closeTab": "Close Tab"
+    },
+    "search": {
+      "placeholder": "Search...",
+      "caseSensitive": "Match Case",
+      "wholeWord": "Match Whole Word",
+      "regex": "Use Regular Expression",
+      "previous": "Previous",
+      "next": "Next",
+      "close": "Close"
     }
   },
   "settings": {

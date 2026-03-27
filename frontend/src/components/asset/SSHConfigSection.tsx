@@ -58,6 +58,7 @@ export interface SSHConfigSectionProps {
   proxyPassword: string;
   setProxyPassword: (v: string) => void;
   encryptedProxyPassword: string;
+  editAssetId?: number;
 }
 
 export function SSHConfigSection({
@@ -103,6 +104,7 @@ export function SSHConfigSection({
   proxyPassword,
   setProxyPassword,
   encryptedProxyPassword,
+  editAssetId,
 }: SSHConfigSectionProps) {
   const { t } = useTranslation();
 
@@ -232,6 +234,7 @@ export function SSHConfigSection({
           managedPasswords={managedPasswords}
           placeholder={t("asset.passwordPlaceholder")}
           hasExistingPassword={!!encryptedPassword}
+          editAssetId={editAssetId}
         />
       )}
 

@@ -61,6 +61,7 @@ interface DatabaseConfig {
   credential_id?: number;
   database?: string;
   ssl_mode?: string;
+  tls?: boolean;
   params?: string;
   read_only?: boolean;
   ssh_asset_id?: number;
@@ -255,6 +256,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       setDriver(cfg.driver || "mysql");
       setDatabase(cfg.database || "");
       setSslMode(cfg.ssl_mode || "disable");
+      setTls(cfg.tls || false);
       setReadOnly(cfg.read_only || false);
       setDbSshAssetId(cfg.ssh_asset_id || 0);
       setParams(cfg.params || "");
@@ -338,6 +340,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setDriver("mysql");
     setDatabase("");
     setSslMode("disable");
+    setTls(false);
     setReadOnly(false);
     setDbSshAssetId(0);
     setParams("");
@@ -412,6 +415,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     const cfg: DatabaseConfig = { driver, host, port, username };
     if (database) cfg.database = database;
     if (driver === "postgresql" && sslMode !== "disable") cfg.ssl_mode = sslMode;
+    if (driver === "mysql" && tls) cfg.tls = true;
     if (readOnly) cfg.read_only = true;
     if (dbSshAssetId > 0) cfg.ssh_asset_id = dbSshAssetId;
     if (params) cfg.params = params;
@@ -524,6 +528,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       }
       if (database) dbConfig.database = database;
       if (driver === "postgresql" && sslMode !== "disable") dbConfig.ssl_mode = sslMode;
+      if (driver === "mysql" && tls) dbConfig.tls = true;
       if (readOnly) dbConfig.read_only = true;
       if (dbSshAssetId > 0) dbConfig.ssh_asset_id = dbSshAssetId;
       if (params) dbConfig.params = params;
@@ -682,6 +687,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               proxyPassword={proxyPassword}
               setProxyPassword={setProxyPassword}
               encryptedProxyPassword={encryptedProxyPassword}
+              editAssetId={editAsset?.ID}
             />
           )}
 
@@ -698,6 +704,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               setDatabase={setDatabase}
               sslMode={sslMode}
               setSslMode={setSslMode}
+              tls={tls}
+              setTls={setTls}
               readOnly={readOnly}
               setReadOnly={setReadOnly}
               dbSshAssetId={dbSshAssetId}
@@ -712,6 +720,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               passwordCredentialId={passwordCredentialId}
               setPasswordCredentialId={setPasswordCredentialId}
               managedPasswords={managedPasswords}
+              editAssetId={editAsset?.ID}
             />
           )}
 
@@ -735,6 +744,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               passwordCredentialId={passwordCredentialId}
               setPasswordCredentialId={setPasswordCredentialId}
               managedPasswords={managedPasswords}
+              editAssetId={editAsset?.ID}
             />
           )}
 

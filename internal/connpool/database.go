@@ -98,6 +98,9 @@ func openMySQLWithTunnel(cfg *asset_entity.DatabaseConfig, password string, tunn
 	mysqlCfg.Net = dialer
 	mysqlCfg.Addr = fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	mysqlCfg.DBName = cfg.Database
+	if cfg.TLS {
+		mysqlCfg.TLSConfig = "skip-verify"
+	}
 	if cfg.Params != "" {
 		mysqlCfg.Params = parseParams(cfg.Params)
 	}
@@ -121,6 +124,9 @@ func buildDSN(cfg *asset_entity.DatabaseConfig, password string) (driverName str
 		mysqlCfg.Net = "tcp"
 		mysqlCfg.Addr = fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 		mysqlCfg.DBName = cfg.Database
+		if cfg.TLS {
+			mysqlCfg.TLSConfig = "skip-verify"
+		}
 		if cfg.Params != "" {
 			mysqlCfg.Params = parseParams(cfg.Params)
 		}

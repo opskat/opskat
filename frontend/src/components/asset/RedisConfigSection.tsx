@@ -26,6 +26,7 @@ export interface RedisConfigSectionProps {
   passwordCredentialId: number;
   setPasswordCredentialId: (v: number) => void;
   managedPasswords: credential_entity.Credential[];
+  editAssetId?: number;
 }
 
 export function RedisConfigSection({
@@ -47,6 +48,7 @@ export function RedisConfigSection({
   passwordCredentialId,
   setPasswordCredentialId,
   managedPasswords,
+  editAssetId,
 }: RedisConfigSectionProps) {
   const { t } = useTranslation();
 
@@ -86,6 +88,7 @@ export function RedisConfigSection({
         onCredentialIdChange={setPasswordCredentialId}
         managedPasswords={managedPasswords}
         hasExistingPassword={!!encryptedPassword}
+        editAssetId={editAssetId}
       />
 
       {/* TLS */}

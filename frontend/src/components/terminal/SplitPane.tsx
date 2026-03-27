@@ -28,7 +28,7 @@ export function SplitPane({ node, tabId, isTabActive, activePaneId, showFocusRin
         {showFocusRing && isFocused && (
           <div className="absolute inset-0 ring-1 ring-primary/40 rounded-sm pointer-events-none z-10" />
         )}
-        <Terminal sessionId={node.sessionId} active={isTabActive} />
+        <Terminal sessionId={node.sessionId} active={isTabActive} tabId={tabId} />
       </div>
     );
   }

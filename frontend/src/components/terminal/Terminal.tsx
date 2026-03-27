@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef } from "react";
 import { Terminal as XTerminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 import { WriteSSH, ResizeSSH } from "../../../wailsjs/go/app/App";
 import { EventsOn, EventsOff } from "../../../wailsjs/runtime/runtime";
@@ -9,17 +10,38 @@ import { useTerminalStore } from "@/stores/terminalStore";
 import { useTerminalThemeStore, toXtermTheme } from "@/stores/terminalThemeStore";
 import { builtinThemes, defaultLightTheme, defaultDarkTheme } from "@/data/terminalThemes";
 import { useResolvedTheme } from "@/components/theme-provider";
+import { useTranslation } from "react-i18next";
+import {
+  ContextMenu,
+  ContextMenuTrigger,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+} from "@/components/ui/context-menu";
+import { TerminalSearchBar } from "./TerminalSearchBar";
+import { useSFTPStore } from "@/stores/sftpStore";
+import { useTabStore } from "@/stores/tabStore";
+
+export interface TerminalHandle {
+  toggleSearch: () => void;
+}
 
 interface TerminalProps {
   sessionId: string;
   active: boolean;
+  tabId: string;
 }
 
-export function Terminal({ sessionId, active }: TerminalProps) {
+export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal({ sessionId, active, tabId }, ref) {
+  const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const searchAddonRef = useRef<SearchAddon | null>(null);
   const activeRef = useRef(active);
+  const [showSearch, setShowSearch] = useState(false);
+  const [hasSelection, setHasSelection] = useState(false);
   const fontSize = useTerminalThemeStore((s) => s.fontSize);
   const selectedThemeId = useTerminalThemeStore((s) => s.selectedThemeId);
   const customThemes = useTerminalThemeStore((s) => s.customThemes);
@@ -33,6 +55,30 @@ export function Terminal({ sessionId, active }: TerminalProps) {
     return theme ? toXtermTheme(theme) : undefined;
   }, [selectedThemeId, customThemes, resolvedTheme]);
 
+  useImperativeHandle(ref, () => ({
+    toggleSearch: () => setShowSearch((v) => !v),
+  }));
+
+  const handleCopy = useCallback(() => {
+    const selection = termRef.current?.getSelection();
+    if (selection) {
+      navigator.clipboard.writeText(selection);
+    }
+  }, []);
+
+  const handlePaste = useCallback(() => {
+    navigator.clipboard.readText().then((text) => {
+      if (text && termRef.current) {
+        const encoded = btoa(String.fromCharCode(...new TextEncoder().encode(text)));
+        WriteSSH(sessionId, encoded).catch(console.error);
+      }
+    });
+  }, [sessionId]);
+
+  const handleSelectAll = useCallback(() => {
+    termRef.current?.selectAll();
+  }, []);
+
   useEffect(() => {
     if (!containerRef.current) return;
 
@@ -44,7 +90,9 @@ export function Terminal({ sessionId, active }: TerminalProps) {
     });
 
     const fitAddon = new FitAddon();
+    const searchAddon = new SearchAddon();
     term.loadAddon(fitAddon);
+    term.loadAddon(searchAddon);
     term.open(containerRef.current);
 
     // 初始 fit
@@ -53,12 +101,23 @@ export function Terminal({ sessionId, active }: TerminalProps) {
     });
 
     // Let global shortcut handler handle shortcut keys instead of xterm
+    // Also intercept Ctrl+F for search
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+      if (e.key === "f" && (e.ctrlKey || e.metaKey) && e.type === "keydown") {
+        setShowSearch((v) => !v);
+        return false;
+      }
       return !matchShortcut(e, useShortcutStore.getState().shortcuts);
     });
 
     termRef.current = term;
     fitAddonRef.current = fitAddon;
+    searchAddonRef.current = searchAddon;
+
+    // 跟踪选中状态
+    const selDispose = term.onSelectionChange(() => {
+      setHasSelection(!!term.getSelection());
+    });
 
     // 用户输入 → 后端
     const onDataDispose = term.onData((data) => {
@@ -102,6 +161,7 @@ export function Terminal({ sessionId, active }: TerminalProps) {
 
     return () => {
       clearTimeout(resizeTimer);
+      selDispose.dispose();
       onDataDispose.dispose();
       EventsOff(eventName);
       EventsOff(closedEvent);
@@ -109,6 +169,7 @@ export function Terminal({ sessionId, active }: TerminalProps) {
       term.dispose();
       termRef.current = null;
       fitAddonRef.current = null;
+      searchAddonRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
@@ -136,5 +197,68 @@ export function Terminal({ sessionId, active }: TerminalProps) {
     }
   }, [active]);
 
-  return <div ref={containerRef} className="h-full w-full" style={{ padding: "4px" }} />;
-}
+  const paneConnected = useTerminalStore((s) => s.tabData[tabId]?.panes[sessionId]?.connected ?? false);
+  const splitPane = useTerminalStore((s) => s.splitPane);
+  const reconnect = useTerminalStore((s) => s.reconnect);
+  const closePane = useTerminalStore((s) => s.closePane);
+  const toggleFileManager = useSFTPStore((s) => s.toggleFileManager);
+  const closeTab = useTabStore((s) => s.closeTab);
+
+  return (
+    <div className="relative h-full w-full flex flex-col">
+      <TerminalSearchBar
+        visible={showSearch}
+        onClose={() => {
+          setShowSearch(false);
+          termRef.current?.focus();
+        }}
+        searchAddon={searchAddonRef.current}
+      />
+      <ContextMenu>
+        <ContextMenuTrigger className="flex-1 min-h-0">
+          <div ref={containerRef} className="h-full w-full" style={{ padding: "4px" }} />
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem onClick={handleCopy} disabled={!hasSelection}>
+            {t("ssh.contextMenu.copy")}
+            <ContextMenuShortcut>⌘C</ContextMenuShortcut>
+          </ContextMenuItem>
+          <ContextMenuItem onClick={handlePaste}>
+            {t("ssh.contextMenu.paste")}
+            <ContextMenuShortcut>⌘V</ContextMenuShortcut>
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onClick={handleSelectAll}>
+            {t("ssh.contextMenu.selectAll")}
+            <ContextMenuShortcut>⌘A</ContextMenuShortcut>
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => setShowSearch(true)}>
+            {t("ssh.contextMenu.find")}
+            <ContextMenuShortcut>⌘F</ContextMenuShortcut>
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onClick={() => splitPane(tabId, "horizontal")} disabled={!paneConnected}>
+            {t("ssh.session.splitH")}
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => splitPane(tabId, "vertical")} disabled={!paneConnected}>
+            {t("ssh.session.splitV")}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onClick={() => toggleFileManager(tabId)}>
+            {t("ssh.contextMenu.sftp")}
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => reconnect(tabId)}>
+            {t("ssh.session.reconnect")}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onClick={() => closePane(tabId, sessionId)}>
+            {t("ssh.contextMenu.closePane")}
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => closeTab(tabId)} variant="destructive">
+            {t("ssh.contextMenu.closeTab")}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    </div>
+  );
+});

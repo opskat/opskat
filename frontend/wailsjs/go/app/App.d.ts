@@ -94,6 +94,8 @@ export function GetAppVersion():Promise<string>;
 
 export function GetAsset(arg1:number):Promise<asset_entity.Asset>;
 
+export function GetAssetPassword(arg1:number):Promise<string>;
+
 export function GetCredentialPublicKey(arg1:number):Promise<string>;
 
 export function GetCredentialUsage(arg1:number):Promise<Array<string>>;

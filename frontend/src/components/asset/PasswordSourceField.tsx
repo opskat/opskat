@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { credential_entity } from "../../../wailsjs/go/models";
+import { GetAssetPassword } from "../../../wailsjs/go/app/App";
 
 interface PasswordSourceFieldProps {
   source: "inline" | "managed";
@@ -19,6 +20,8 @@ interface PasswordSourceFieldProps {
   placeholder?: string;
   /** Placeholder shown when an existing encrypted password is set */
   hasExistingPassword?: boolean;
+  /** Asset ID for decrypting existing password on reveal */
+  editAssetId?: number;
 }
 
 export function PasswordSourceField({
@@ -31,9 +34,31 @@ export function PasswordSourceField({
   managedPasswords,
   placeholder = "",
   hasExistingPassword = false,
+  editAssetId,
 }: PasswordSourceFieldProps) {
   const { t } = useTranslation();
   const [showPassword, setShowPassword] = useState(false);
+  const [decrypting, setDecrypting] = useState(false);
+  const [decryptedOnce, setDecryptedOnce] = useState(false);
+
+  const handleTogglePassword = useCallback(async () => {
+    // 如果要显示密码，且有已保存的密码但用户未输入新密码，调用后端解密
+    if (!showPassword && hasExistingPassword && !password && editAssetId && !decryptedOnce) {
+      setDecrypting(true);
+      try {
+        const plaintext = await GetAssetPassword(editAssetId);
+        if (plaintext) {
+          onPasswordChange(plaintext);
+          setDecryptedOnce(true);
+        }
+      } catch {
+        // 解密失败时静默处理，仍然切换显示状态
+      } finally {
+        setDecrypting(false);
+      }
+    }
+    setShowPassword(!showPassword);
+  }, [showPassword, hasExistingPassword, password, editAssetId, decryptedOnce, onPasswordChange]);
 
   return (
     <div className="grid gap-3 border rounded-lg p-3">
@@ -57,7 +82,7 @@ export function PasswordSourceField({
               type={showPassword ? "text" : "password"}
               value={password}
               onChange={(e) => onPasswordChange(e.target.value)}
-              placeholder={hasExistingPassword ? t("asset.passwordUnchanged") : placeholder}
+              placeholder={hasExistingPassword && !decryptedOnce ? t("asset.passwordUnchanged") : placeholder}
               className="pr-9"
             />
             <Button
@@ -65,9 +90,16 @@ export function PasswordSourceField({
               variant="ghost"
               size="icon"
               className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
-              onClick={() => setShowPassword(!showPassword)}
+              onClick={handleTogglePassword}
+              disabled={decrypting}
             >
-              {showPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              {decrypting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : showPassword ? (
+                <EyeOff className="h-3.5 w-3.5" />
+              ) : (
+                <Eye className="h-3.5 w-3.5" />
+              )}
             </Button>
           </div>
         </div>

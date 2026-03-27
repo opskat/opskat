@@ -19,6 +19,8 @@ export interface DatabaseConfigSectionProps {
   setDatabase: (v: string) => void;
   sslMode: string;
   setSslMode: (v: string) => void;
+  tls: boolean;
+  setTls: (v: boolean) => void;
   readOnly: boolean;
   setReadOnly: (v: boolean) => void;
   dbSshAssetId: number;
@@ -34,6 +36,7 @@ export interface DatabaseConfigSectionProps {
   passwordCredentialId: number;
   setPasswordCredentialId: (v: number) => void;
   managedPasswords: credential_entity.Credential[];
+  editAssetId?: number;
 }
 
 export function DatabaseConfigSection({
@@ -48,6 +51,8 @@ export function DatabaseConfigSection({
   setDatabase,
   sslMode,
   setSslMode,
+  tls,
+  setTls,
   readOnly,
   setReadOnly,
   dbSshAssetId,
@@ -62,6 +67,7 @@ export function DatabaseConfigSection({
   passwordCredentialId,
   setPasswordCredentialId,
   managedPasswords,
+  editAssetId,
 }: DatabaseConfigSectionProps) {
   const { t } = useTranslation();
 
@@ -97,6 +103,7 @@ export function DatabaseConfigSection({
         onCredentialIdChange={setPasswordCredentialId}
         managedPasswords={managedPasswords}
         hasExistingPassword={!!encryptedPassword}
+        editAssetId={editAssetId}
       />
 
       {/* Database name */}
@@ -124,6 +131,14 @@ export function DatabaseConfigSection({
               <SelectItem value="verify-full">verify-full</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+      )}
+
+      {/* TLS (MySQL only) */}
+      {driver === "mysql" && (
+        <div className="flex items-center justify-between">
+          <Label>TLS</Label>
+          <Switch checked={tls} onCheckedChange={setTls} />
         </div>
       )}
 

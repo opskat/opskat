@@ -1,6 +1,6 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "opskat",
+  "name": "OpsKat",
   "outputfilename": "opskat",
   "frontend:install": "pnpm install",
   "frontend:build": "pnpm run build",

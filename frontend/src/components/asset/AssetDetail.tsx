@@ -40,6 +40,7 @@ interface DatabaseConfig {
   password?: string;
   database?: string;
   ssl_mode?: string;
+  tls?: boolean;
   params?: string;
   read_only?: boolean;
   ssh_asset_id?: number;
@@ -343,6 +344,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
               {dbConfig.ssl_mode && dbConfig.ssl_mode !== "disable" && (
                 <InfoItem label={t("asset.sslMode")} value={dbConfig.ssl_mode} />
               )}
+              {dbConfig.tls && <InfoItem label="TLS" value="✓" />}
               {dbConfig.read_only && <InfoItem label={t("asset.readOnly")} value="✓" />}
               {dbConfig.params && <InfoItem label={t("asset.params")} value={dbConfig.params} mono />}
             </div>

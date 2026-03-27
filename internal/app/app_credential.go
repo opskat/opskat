@@ -3,9 +3,11 @@ package app
 import (
 	"fmt"
 
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/service/credential_mgr_svc"
+	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -16,6 +18,43 @@ import (
 // EncryptPassword 加密密码，返回加密后的字符串（用于前端保存资产配置）
 func (a *App) EncryptPassword(plaintext string) (string, error) {
 	return credential_svc.Default().Encrypt(plaintext)
+}
+
+// GetAssetPassword 获取指定资产的解密密码（用于编辑时回看密码）
+func (a *App) GetAssetPassword(assetID int64) (string, error) {
+	ctx := a.langCtx()
+	asset, err := asset_repo.Asset().Find(ctx, assetID)
+	if err != nil {
+		return "", fmt.Errorf("asset not found: %w", err)
+	}
+
+	resolver := credential_resolver.Default()
+	switch asset.Type {
+	case asset_entity.AssetTypeSSH:
+		cfg, err := asset.GetSSHConfig()
+		if err != nil {
+			return "", fmt.Errorf("get SSH config failed: %w", err)
+		}
+		password, _, err := resolver.ResolveSSHCredentials(ctx, cfg)
+		return password, err
+
+	case asset_entity.AssetTypeDatabase:
+		cfg, err := asset.GetDatabaseConfig()
+		if err != nil {
+			return "", fmt.Errorf("get database config failed: %w", err)
+		}
+		return resolver.ResolveDatabasePassword(ctx, cfg)
+
+	case asset_entity.AssetTypeRedis:
+		cfg, err := asset.GetRedisConfig()
+		if err != nil {
+			return "", fmt.Errorf("get Redis config failed: %w", err)
+		}
+		return resolver.ResolveRedisPassword(ctx, cfg)
+
+	default:
+		return "", fmt.Errorf("unsupported asset type: %s", asset.Type)
+	}
 }
 
 // --- 密钥管理 ---

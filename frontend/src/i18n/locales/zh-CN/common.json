@@ -350,6 +350,24 @@
       "splitV": "垂直分割",
       "connected": "已连接",
       "disconnected": "已断开"
+    },
+    "contextMenu": {
+      "copy": "复制",
+      "paste": "粘贴",
+      "selectAll": "全选",
+      "find": "查找",
+      "sftp": "文件管理器",
+      "closePane": "关闭窗格",
+      "closeTab": "关闭标签页"
+    },
+    "search": {
+      "placeholder": "搜索...",
+      "caseSensitive": "区分大小写",
+      "wholeWord": "全字匹配",
+      "regex": "正则表达式",
+      "previous": "上一个",
+      "next": "下一个",
+      "close": "关闭"
     }
   },
   "settings": {
