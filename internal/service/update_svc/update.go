@@ -735,6 +735,29 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// parseChecksums 解析 SHA256SUMS.txt 内容
+// 格式: "<sha256hex>  <filename>" 或 "<sha256hex> <filename>" (sha256sum 输出格式)
+func parseChecksums(content string) map[string]string {
+	result := make(map[string]string)
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// sha256sum 输出格式: hash + 两个空格 + 文件名，也兼容单空格
+		parts := strings.Fields(line)
+		if len(parts) != 2 {
+			continue
+		}
+		hash := parts[0]
+		filename := parts[1]
+		// sha256sum 在二进制模式下文件名前可能有 * 前缀
+		filename = strings.TrimPrefix(filename, "*")
+		result[filename] = hash
+	}
+	return result
+}
+
 // compareVersions 比较两个版本号，支持预发布后缀
 // 如 "1.0.0" vs "1.0.0-beta.1"，"1.0.0-beta.1" vs "1.0.0-beta.2"
 // 返回: >0 表示 a 更新, <0 表示 b 更新, 0 表示相同

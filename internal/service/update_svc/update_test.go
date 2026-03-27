@@ -143,3 +143,38 @@ func TestSplitPreRelease(t *testing.T) {
 		assert.Equal(t, "beta.1.nightly.20260325", pre)
 	})
 }
+
+func TestParseChecksums(t *testing.T) {
+	convey.Convey("解析 SHA256SUMS.txt", t, func() {
+		convey.Convey("正常格式", func() {
+			input := "abc123def456  opskat-1.0.0-darwin-arm64.dmg\n" +
+				"789abc012def  opskat-1.0.0-linux-amd64.tar.gz\n"
+			result := parseChecksums(input)
+			assert.Equal(t, "abc123def456", result["opskat-1.0.0-darwin-arm64.dmg"])
+			assert.Equal(t, "789abc012def", result["opskat-1.0.0-linux-amd64.tar.gz"])
+		})
+
+		convey.Convey("忽略空行", func() {
+			input := "abc123  file1.tar.gz\n\n789def  file2.dmg\n"
+			result := parseChecksums(input)
+			assert.Len(t, result, 2)
+		})
+
+		convey.Convey("忽略格式不正确的行", func() {
+			input := "abc123  file1.tar.gz\nbadline\nabc123  file2.tar.gz\n"
+			result := parseChecksums(input)
+			assert.Len(t, result, 2)
+		})
+
+		convey.Convey("空输入", func() {
+			result := parseChecksums("")
+			assert.Empty(t, result)
+		})
+
+		convey.Convey("单空格分隔也支持", func() {
+			input := "abc123 file1.tar.gz\n"
+			result := parseChecksums(input)
+			assert.Equal(t, "abc123", result["file1.tar.gz"])
+		})
+	})
+}
