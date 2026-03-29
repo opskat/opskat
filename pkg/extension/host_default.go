@@ -4,9 +4,15 @@ package extension
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 
 	"go.uber.org/zap"
 )
+
+// TunnelDialer dials a TCP address through an SSH tunnel.
+type TunnelDialer interface {
+	Dial(tunnelAssetID int64, addr string) (net.Conn, error)
+}
 
 // Dependency interfaces for DefaultHostProvider
 type CredentialGetter interface {
@@ -31,12 +37,14 @@ type ActionEventHandler interface {
 }
 
 type DefaultHostConfig struct {
-	Logger       *zap.Logger
-	Credentials  CredentialGetter
-	AssetConfigs AssetConfigGetter
-	FileDialogs  FileDialogOpener
-	KV           KVStore
-	ActionEvents ActionEventHandler
+	Logger           *zap.Logger
+	Credentials      CredentialGetter
+	AssetConfigs     AssetConfigGetter
+	FileDialogs      FileDialogOpener
+	KV               KVStore
+	ActionEvents     ActionEventHandler
+	TunnelDialer     TunnelDialer // SSH tunnel dialer (nil = no tunnel support)
+	AssetSSHTunnelID int64        // Current asset's SSH tunnel ID (0 = direct)
 }
 
 type DefaultHostProvider struct {
@@ -56,7 +64,14 @@ func (h *DefaultHostProvider) IOOpen(params IOOpenParams) (uint32, IOMeta, error
 	case "file":
 		return h.io.OpenFile(params.Path, params.Mode)
 	case "http":
-		return 0, IOMeta{}, fmt.Errorf("http IO handles not yet implemented")
+		var dial DialFunc
+		if h.cfg.AssetSSHTunnelID > 0 && h.cfg.TunnelDialer != nil {
+			tunnelID := h.cfg.AssetSSHTunnelID
+			dial = func(network, addr string) (net.Conn, error) {
+				return h.cfg.TunnelDialer.Dial(tunnelID, addr)
+			}
+		}
+		return h.io.OpenHTTP(params, dial)
 	default:
 		return 0, IOMeta{}, fmt.Errorf("unknown IO type: %q", params.Type)
 	}
@@ -76,7 +91,7 @@ func (h *DefaultHostProvider) IOWrite(handleID uint32, data []byte) (int, error)
 }
 
 func (h *DefaultHostProvider) IOFlush(handleID uint32) (*IOMeta, error) {
-	return nil, fmt.Errorf("flush not supported for this handle type")
+	return h.io.Flush(handleID)
 }
 
 func (h *DefaultHostProvider) IOClose(handleID uint32) error {

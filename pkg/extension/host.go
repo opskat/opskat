@@ -22,17 +22,12 @@ type HostProvider interface {
 }
 
 type IOOpenParams struct {
-	Type      string            `json:"type"`
-	Path      string            `json:"path"`
-	Mode      string            `json:"mode"`
-	Method    string            `json:"method"`
-	URL       string            `json:"url"`
-	Headers   map[string]string `json:"headers"`
-	SSHTunnel *SSHTunnelOpts    `json:"sshTunnel,omitempty"`
-}
-
-type SSHTunnelOpts struct {
-	AssetID int64 `json:"assetId"`
+	Type    string            `json:"type"`
+	Path    string            `json:"path"`
+	Mode    string            `json:"mode"`
+	Method  string            `json:"method"`
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers"`
 }
 
 type DialogOptions struct {

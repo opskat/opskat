@@ -22,7 +22,21 @@ type ioEntry struct {
 	writer io.Writer
 	closer io.Closer
 	meta   IOMeta
+	http   *httpHandle // non-nil for HTTP handles
 }
+
+// Adapter types to bridge httpHandle to io.Reader/Writer/Closer.
+type httpReadAdapter struct{ h *httpHandle }
+
+func (a *httpReadAdapter) Read(p []byte) (int, error) { return a.h.Read(p) }
+
+type httpWriteAdapter struct{ h *httpHandle }
+
+func (a *httpWriteAdapter) Write(p []byte) (int, error) { return a.h.Write(p) }
+
+type httpCloseAdapter struct{ h *httpHandle }
+
+func (a *httpCloseAdapter) Close() error { return a.h.Close() }
 
 // IOHandleManager manages IO handles for a single WASM invocation.
 type IOHandleManager struct {
@@ -135,6 +149,39 @@ func (m *IOHandleManager) CloseAll() {
 			e.closer.Close()
 		}
 	}
+}
+
+// OpenHTTP creates an HTTP handle, wraps it with adapters, and stores it.
+func (m *IOHandleManager) OpenHTTP(params IOOpenParams, dial DialFunc) (uint32, IOMeta, error) {
+	h, err := newHTTPHandle(params, dial)
+	if err != nil {
+		return 0, IOMeta{}, err
+	}
+
+	entry := &ioEntry{
+		reader: &httpReadAdapter{h: h},
+		writer: &httpWriteAdapter{h: h},
+		closer: &httpCloseAdapter{h: h},
+		http:   h,
+	}
+
+	id := m.nextID.Add(1) - 1
+	m.mu.Lock()
+	m.handles[id] = entry
+	m.mu.Unlock()
+	return id, entry.meta, nil
+}
+
+// Flush flushes the HTTP handle (sends the request and waits for response).
+func (m *IOHandleManager) Flush(id uint32) (*IOMeta, error) {
+	e, err := m.get(id)
+	if err != nil {
+		return nil, err
+	}
+	if e.http == nil {
+		return nil, fmt.Errorf("handle %d is not an HTTP handle", id)
+	}
+	return e.http.Flush()
 }
 
 func (m *IOHandleManager) get(id uint32) (*ioEntry, error) {
