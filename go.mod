@@ -95,6 +95,7 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/samber/lo v1.49.1 // indirect
 	github.com/smarty/assertions v1.15.0 // indirect
+	github.com/tetratelabs/wazero v1.11.0 // indirect
 	github.com/tkrajina/go-reflector v0.5.8 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.12 // indirect
