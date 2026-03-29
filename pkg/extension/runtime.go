@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/tetratelabs/wazero"
+	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 )
 
@@ -139,18 +140,126 @@ func (p *Plugin) call(ctx context.Context, fnName string, input []byte) (json.Ra
 	return stdout.Bytes(), nil
 }
 
-// registerHostModule registers all host functions as a wazero host module named "opskat".
-// For Phase 1, this registers the module structure. The actual host function
-// implementations will be refined when the guest SDK is built in Phase 2.
+// registerHostModule registers all 12 host functions as a wazero host module named "opskat".
+// Guest and host share memory using the convention:
+//   - Guest exports malloc(size) -> ptr and free(ptr)
+//   - Return values packed as uint64: high 32 bits = ptr, low 32 bits = size
+//   - Errors returned as JSON {"error": "message"}
 func registerHostModule(ctx context.Context, r wazero.Runtime, host HostProvider) error {
-	_, err := r.NewHostModuleBuilder("opskat").
-		NewFunctionBuilder().
-		WithFunc(func(level, msg uint32) {
-			// host_log placeholder - uses host to route logs
-			// Actual memory-based implementation in Phase 2
-			_ = host
-		}).Export("host_log").
-		Instantiate(ctx)
+	b := r.NewHostModuleBuilder("opskat")
+
+	// host_log(level_ptr, level_len, msg_ptr, msg_len)
+	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, levelPtr, levelLen, msgPtr, msgLen uint32) {
+		level := readGuestString(mod, levelPtr, levelLen)
+		msg := readGuestString(mod, msgPtr, msgLen)
+		host.Log(level, msg)
+	}).Export("host_log")
+
+	// host_io_open(params_ptr, params_len) -> packed(result_ptr, result_len)
+	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, paramsPtr, paramsLen uint32) uint64 {
+		var params IOOpenParams
+		if err := json.Unmarshal(readGuestBytes(mod, paramsPtr, paramsLen), &params); err != nil {
+			return encodeError(ctx, mod, err)
+		}
+		handleID, meta, err := host.IOOpen(params)
+		if err != nil {
+			return encodeError(ctx, mod, err)
+		}
+		return writeGuestJSON(ctx, mod, map[string]any{"handle_id": handleID, "meta": meta})
+	}).Export("host_io_open")
+
+	// host_io_read(handle_id, size) -> packed(data_ptr, data_len)
+	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, handleID, size uint32) uint64 {
+		data, err := host.IORead(handleID, int(size))
+		if err != nil {
+			return encodeError(ctx, mod, err)
+		}
+		return writeGuestBytes(ctx, mod, data)
+	}).Export("host_io_read")
+
+	// host_io_write(handle_id, data_ptr, data_len) -> n
+	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, handleID, dataPtr, dataLen uint32) uint32 {
+		data := readGuestBytes(mod, dataPtr, dataLen)
+		n, err := host.IOWrite(handleID, data)
+		if err != nil {
+			return 0
+		}
+		return uint32(n)
+	}).Export("host_io_write")
+
+	// host_io_flush(handle_id) -> packed(meta_ptr, meta_len)
+	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, handleID uint32) uint64 {
+		meta, err := host.IOFlush(handleID)
+		if err != nil {
+			return encodeError(ctx, mod, err)
+		}
+		return writeGuestJSON(ctx, mod, meta)
+	}).Export("host_io_flush")
+
+	// host_io_close(handle_id)
+	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, handleID uint32) {
+		host.IOClose(handleID)
+	}).Export("host_io_close")
+
+	// host_credential_get(asset_id) -> packed(result_ptr, result_len)
+	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, assetID uint64) uint64 {
+		cred, err := host.GetCredential(int64(assetID))
+		if err != nil {
+			return encodeError(ctx, mod, err)
+		}
+		return writeGuestBytes(ctx, mod, []byte(cred))
+	}).Export("host_credential_get")
+
+	// host_asset_get_config(asset_id) -> packed(result_ptr, result_len)
+	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, assetID uint64) uint64 {
+		cfg, err := host.GetAssetConfig(int64(assetID))
+		if err != nil {
+			return encodeError(ctx, mod, err)
+		}
+		return writeGuestBytes(ctx, mod, cfg)
+	}).Export("host_asset_get_config")
+
+	// host_file_dialog(params_ptr, params_len) -> packed(result_ptr, result_len)
+	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, paramsPtr, paramsLen uint32) uint64 {
+		var req struct {
+			Type string        `json:"type"`
+			Opts DialogOptions `json:"opts"`
+		}
+		if err := json.Unmarshal(readGuestBytes(mod, paramsPtr, paramsLen), &req); err != nil {
+			return encodeError(ctx, mod, err)
+		}
+		result, err := host.FileDialog(req.Type, req.Opts)
+		if err != nil {
+			return encodeError(ctx, mod, err)
+		}
+		return writeGuestBytes(ctx, mod, []byte(result))
+	}).Export("host_file_dialog")
+
+	// host_kv_get(key_ptr, key_len) -> packed(val_ptr, val_len)
+	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, keyPtr, keyLen uint32) uint64 {
+		key := readGuestString(mod, keyPtr, keyLen)
+		val, err := host.KVGet(key)
+		if err != nil {
+			return encodeError(ctx, mod, err)
+		}
+		return writeGuestBytes(ctx, mod, val)
+	}).Export("host_kv_get")
+
+	// host_kv_set(key_ptr, key_len, val_ptr, val_len)
+	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, keyPtr, keyLen, valPtr, valLen uint32) {
+		key := readGuestString(mod, keyPtr, keyLen)
+		val := readGuestBytes(mod, valPtr, valLen)
+		host.KVSet(key, val)
+	}).Export("host_kv_set")
+
+	// host_action_event(type_ptr, type_len, data_ptr, data_len)
+	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, typePtr, typeLen, dataPtr, dataLen uint32) {
+		eventType := readGuestString(mod, typePtr, typeLen)
+		data := readGuestBytes(mod, dataPtr, dataLen)
+		host.ActionEvent(eventType, data)
+	}).Export("host_action_event")
+
+	_, err := b.Instantiate(ctx)
 	return err
 }
 
