@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/opskat/opskat/internal/model/entity/policy"
 )
@@ -248,4 +249,41 @@ func FindBuiltin(id string) *PolicyGroup {
 // IsBuiltinID 检查 ID 是否为内置权限组
 func IsBuiltinID(id string) bool {
 	return strings.HasPrefix(id, policy.BuiltinPrefix)
+}
+
+const ExtensionPrefix = "ext:"
+
+var (
+	extensionGroupMu  sync.RWMutex
+	extensionGroupMap = make(map[string]*PolicyGroup)
+)
+
+// IsExtensionID returns true if the ID has the ext: prefix.
+func IsExtensionID(id string) bool {
+	return strings.HasPrefix(id, ExtensionPrefix)
+}
+
+// RegisterExtensionGroup registers an extension-provided policy group.
+func RegisterExtensionGroup(pg *PolicyGroup) {
+	extensionGroupMu.Lock()
+	defer extensionGroupMu.Unlock()
+	extensionGroupMap[pg.BuiltinID] = pg
+}
+
+// FindExtensionGroup looks up an extension policy group by ID.
+func FindExtensionGroup(id string) *PolicyGroup {
+	extensionGroupMu.RLock()
+	defer extensionGroupMu.RUnlock()
+	return extensionGroupMap[id]
+}
+
+// UnregisterExtensionGroups removes all extension groups for a given policy type.
+func UnregisterExtensionGroups(policyType string) {
+	extensionGroupMu.Lock()
+	defer extensionGroupMu.Unlock()
+	for id, pg := range extensionGroupMap {
+		if pg.PolicyType == policyType {
+			delete(extensionGroupMap, id)
+		}
+	}
 }
