@@ -22,15 +22,15 @@ type BatchItem struct {
 
 // ApprovalRequest is sent from opsctl to the desktop app.
 type ApprovalRequest struct {
-	Token       string      `json:"token,omitempty"` // 认证 token
-	Type        string      `json:"type"`            // "exec"|"cp"|"create"|"update"|"grant"|"batch"
-	AssetID     int64       `json:"asset_id,omitempty"`
-	AssetName   string      `json:"asset_name,omitempty"`
-	Command     string      `json:"command,omitempty"`
-	Detail      string      `json:"detail"`
-	SessionID   string      `json:"session_id,omitempty"`  // 统一 session 标识（审批 session 或 grant session）
-	GrantItems  []GrantItem `json:"grant_items,omitempty"` // type="grant" 时使用
-	BatchItems  []BatchItem `json:"batch_items,omitempty"` // type="batch" 时使用
+	Token       string          `json:"token,omitempty"` // 认证 token
+	Type        string          `json:"type"`            // "exec"|"cp"|"create"|"update"|"grant"|"batch"|"ext_tool"
+	AssetID     int64           `json:"asset_id,omitempty"`
+	AssetName   string          `json:"asset_name,omitempty"`
+	Command     string          `json:"command,omitempty"`
+	Detail      string          `json:"detail"`
+	SessionID   string          `json:"session_id,omitempty"`  // 统一 session 标识（审批 session 或 grant session）
+	GrantItems  []GrantItem     `json:"grant_items,omitempty"` // type="grant" 时使用
+	BatchItems  []BatchItem     `json:"batch_items,omitempty"` // type="batch" 时使用
 	Description string          `json:"description,omitempty"` // 授权描述
 	Extension   string          `json:"extension,omitempty"`   // type="ext_tool": extension name
 	Tool        string          `json:"tool,omitempty"`        // type="ext_tool": tool name
