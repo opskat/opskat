@@ -19,6 +19,7 @@ import { useAssetStore } from "@/stores/assetStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type InfoTabMeta } from "@/stores/tabStore";
+import { useExtensionStore } from "@/extension";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { asset_entity, group_entity } from "../wailsjs/go/models";
 import { EventsOn, WindowToggleMaximise } from "../wailsjs/runtime/runtime";
@@ -249,6 +250,30 @@ function App() {
       useQueryStore.getState().openQueryTab(asset);
       return;
     }
+
+    // Check if this is an extension asset type
+    const ext = useExtensionStore.getState().getExtensionForAssetType(asset.Type);
+    if (ext) {
+      const connectPage = ext.manifest.frontend?.pages.find(
+        (p) => p.slot === "asset.connect",
+      );
+      if (connectPage) {
+        useTabStore.getState().openTab({
+          id: `ext-${asset.ID}-${connectPage.id}`,
+          type: "page",
+          label: asset.Name,
+          icon: ext.manifest.icon,
+          meta: {
+            type: "page",
+            pageId: connectPage.id,
+            extensionName: ext.name,
+            assetId: asset.ID,
+          },
+        });
+        return;
+      }
+    }
+
     if (asset.Type !== "ssh") return;
     try {
       await connect(asset);

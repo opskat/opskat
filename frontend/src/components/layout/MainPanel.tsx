@@ -31,6 +31,7 @@ import {
 } from "@opskat/ui";
 import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
 import { asset_entity } from "../../../wailsjs/go/models";
+import { ExtensionPage } from "@/extension";
 
 const pageTabMeta: Record<string, { icon: typeof Settings; labelKey: string }> = {
   settings: { icon: Settings, labelKey: "nav.settings" },
@@ -276,13 +277,29 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
       case "page": {
         const meta = tab.meta as PageTabMeta;
         const pageMeta = pageTabMeta[meta.pageId];
-        if (!pageMeta) return null;
+        if (pageMeta) {
+          return (
+            <TabItem
+              key={tab.id}
+              tabKey={tab.id}
+              icon={pageMeta.icon}
+              label={t(pageMeta.labelKey)}
+              isActive={isActive}
+              onClick={() => activateTab(tab.id)}
+              onClose={() => closeTab(tab.id)}
+            />
+          );
+        }
+        // Extension page tab — use tab.icon and tab.label directly
+        const TabIcon = tab.icon ? getIconComponent(tab.icon) : Server;
+        const iconStyle = tab.icon ? { color: getIconColor(tab.icon) } : undefined;
         return (
           <TabItem
             key={tab.id}
             tabKey={tab.id}
-            icon={pageMeta.icon}
-            label={t(pageMeta.labelKey)}
+            icon={TabIcon}
+            iconStyle={iconStyle}
+            label={tab.label}
             isActive={isActive}
             onClick={() => activateTab(tab.id)}
             onClose={() => closeTab(tab.id)}
@@ -352,6 +369,15 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
               </div>
             );
           default:
+            if (meta.extensionName) {
+              return (
+                <ExtensionPage
+                  extensionName={meta.extensionName}
+                  pageId={meta.pageId}
+                  assetId={meta.assetId}
+                />
+              );
+            }
             return null;
         }
       }
