@@ -24,6 +24,7 @@ import { useAssetStore } from "@/stores/assetStore";
 import { asset_entity, credential_entity } from "../../../wailsjs/go/models";
 import {
   EncryptPassword,
+  GetAvailableAssetTypes,
   ListCredentialsByType,
   ListLocalSSHKeys,
   TestSSHConnection,
@@ -34,6 +35,7 @@ import { app } from "../../../wailsjs/go/models";
 import { SSHConfigSection } from "@/components/asset/SSHConfigSection";
 import { DatabaseConfigSection } from "@/components/asset/DatabaseConfigSection";
 import { RedisConfigSection } from "@/components/asset/RedisConfigSection";
+import { useExtensionStore, ExtensionPage } from "@/extension";
 
 interface AssetFormProps {
   open: boolean;
@@ -87,7 +89,7 @@ interface RedisConfig {
   ssh_asset_id?: number;
 }
 
-type AssetType = "ssh" | "database" | "redis";
+type AssetType = "ssh" | "database" | "redis" | (string & {});
 
 const DEFAULT_PORTS: Record<string, number> = {
   ssh: 22,
@@ -109,6 +111,9 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
   // Asset type
   const [assetType, setAssetType] = useState<AssetType>("ssh");
+  const [availableTypes, setAvailableTypes] = useState<
+    { type: string; extensionName?: string; displayName: string; sshTunnel?: boolean }[]
+  >([]);
 
   // Basic fields
   const [name, setName] = useState("");
@@ -174,6 +179,9 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         .then((keys) => setLocalKeys(keys || []))
         .catch(() => setLocalKeys([]))
         .finally(() => setScanningKeys(false));
+      GetAvailableAssetTypes()
+        .then((types) => setAvailableTypes(types || []))
+        .catch(() => setAvailableTypes([]));
     }
   }, [open]);
 
@@ -555,6 +563,9 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       }
       if (tls) redisConfig.tls = true;
       config = JSON.stringify(redisConfig);
+    } else {
+      // Extension type: keep existing config (set by extension's ConfigForm)
+      config = editAsset?.Config || "{}";
     }
 
     const asset = new asset_entity.Asset({
@@ -589,7 +600,9 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       ? t("asset.typeSSH")
       : assetType === "database"
         ? t("asset.typeDatabase")
-        : t("asset.typeRedis");
+        : assetType === "redis"
+          ? t("asset.typeRedis")
+          : availableTypes.find((at) => at.type === assetType)?.displayName || assetType;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -612,6 +625,13 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                   <SelectItem value="ssh">{t("asset.typeSSH")}</SelectItem>
                   <SelectItem value="database">{t("asset.typeDatabase")}</SelectItem>
                   <SelectItem value="redis">{t("asset.typeRedis")}</SelectItem>
+                  {availableTypes
+                    .filter((at) => !!at.extensionName)
+                    .map((at) => (
+                      <SelectItem key={at.type} value={at.type}>
+                        {at.displayName}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>
@@ -755,7 +775,25 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             />
           )}
 
+          {/* Extension type config */}
+          {assetType !== "ssh" && assetType !== "database" && assetType !== "redis" && (() => {
+            const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
+            if (!extInfo) return null;
+            const configPage = extInfo.manifest.frontend?.pages.find(
+              (p) => p.component === "ConfigForm",
+            );
+            if (!configPage) return null;
+            return (
+              <ExtensionPage
+                extensionName={extInfo.name}
+                pageId={configPage.id}
+                assetId={editAsset?.ID}
+              />
+            );
+          })()}
+
           {/* Test Connection */}
+          {(assetType === "ssh" || assetType === "database" || assetType === "redis") && (
           <Button
             type="button"
             variant="outline"
@@ -773,6 +811,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlugZap className="h-3.5 w-3.5" />}
             {testing ? t("asset.testing") : t("asset.testConnection")}
           </Button>
+          )}
 
           {/* Group - Tree Selector */}
           <div className="grid gap-2">
