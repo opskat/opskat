@@ -31,7 +31,10 @@ type ApprovalRequest struct {
 	SessionID   string      `json:"session_id,omitempty"`  // 统一 session 标识（审批 session 或 grant session）
 	GrantItems  []GrantItem `json:"grant_items,omitempty"` // type="grant" 时使用
 	BatchItems  []BatchItem `json:"batch_items,omitempty"` // type="batch" 时使用
-	Description string      `json:"description,omitempty"` // 授权描述
+	Description string          `json:"description,omitempty"` // 授权描述
+	Extension   string          `json:"extension,omitempty"`   // type="ext_tool": extension name
+	Tool        string          `json:"tool,omitempty"`        // type="ext_tool": tool name
+	ToolArgs    json.RawMessage `json:"tool_args,omitempty"`   // type="ext_tool": tool arguments
 }
 
 // GrantItem 授权中的单条操作
@@ -53,6 +56,8 @@ type ApprovalResponse struct {
 	ApproveGrant   bool        `json:"approve_grant,omitempty"`   // 用户选择了"记住并允许"
 	MatchedPattern string      `json:"matched_pattern,omitempty"` // session 匹配时命中的规则模式
 	EditedItems    []GrantItem `json:"edited_items,omitempty"`    // 用户编辑后的 grant items
+	ToolResult     string      `json:"tool_result,omitempty"`     // type="ext_tool": execution result (JSON)
+	ToolError      string      `json:"tool_error,omitempty"`      // type="ext_tool": execution error message
 }
 
 // SocketPath returns the approval socket path for the given data directory.
