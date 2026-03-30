@@ -48,7 +48,9 @@ func main() {
 
 	// Create data directory next to manifest
 	dataDir := filepath.Join(filepath.Dir(*manifest), ".devserver")
-	os.MkdirAll(dataDir, 0755)
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		logger.Fatal("create data dir", zap.Error(err))
+	}
 
 	// Create host + plugin
 	host := NewDevServerHost(dataDir)
@@ -57,7 +59,11 @@ func main() {
 	if err != nil {
 		logger.Fatal("load plugin", zap.Error(err))
 	}
-	defer plugin.Close(ctx)
+	defer func() {
+		if err := plugin.Close(ctx); err != nil {
+			logger.Warn("close plugin", zap.Error(err))
+		}
+	}()
 
 	// Start server
 	srv := NewServer(m, plugin, host, *extDir, *extFrontend)

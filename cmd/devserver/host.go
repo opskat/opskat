@@ -86,7 +86,8 @@ func (h *DevServerHost) GetCredential(assetID int64) (string, error) {
 	}
 	var cred string
 	if err := json.Unmarshal(data, &cred); err != nil {
-		return string(data), nil
+		// Not a JSON string — treat raw file content as the credential
+		return string(data), nil //nolint:nilerr // intentional fallback
 	}
 	return cred, nil
 }

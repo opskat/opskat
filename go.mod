@@ -26,6 +26,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.25.12
 	mvdan.cc/sh/v3 v3.13.0
+	nhooyr.io/websocket v1.8.17
 )
 
 require (

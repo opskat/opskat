@@ -347,4 +347,6 @@ modernc.org/sqlite v1.23.1 h1:nrSBg4aRQQwq59JpvGEQ15tNxoO5pX/kUjcRNwSAGQM=
 modernc.org/sqlite v1.23.1/go.mod h1:OrDj17Mggn6MhE+iPbBNf7RGKODDE9NFT0f3EwDzJqk=
 mvdan.cc/sh/v3 v3.13.0 h1:dSfq/MVsY4w0Vsi6Lbs0IcQquMVqLdKLESAOZjuHdLg=
 mvdan.cc/sh/v3 v3.13.0/go.mod h1:KV1GByGPc/Ho0X1E6Uz9euhsIQEj4hwyKnodLlFLoDM=
+nhooyr.io/websocket v1.8.17 h1:KEVeLJkUywCKVsnLIDlD/5gtayKp8VoCkksHCGGfT9Y=
+nhooyr.io/websocket v1.8.17/go.mod h1:rN9OFWIUwuxg4fR5tELlYC04bXYowCP9GX47ivo2l+c=
 nullprogram.com/x/optparse v1.0.0/go.mod h1:KdyPE+Igbe0jQUrVfMqDMeJQIJZEuyV7pjYmp6pbG50=
