@@ -906,5 +906,15 @@
     "showDetail": "Show detail",
     "hideDetail": "Hide detail",
     "count": "{{count}} issue(s)"
+  },
+  "extension": {
+    "title": "Extensions",
+    "installed": "Installed Extensions",
+    "noExtensions": "No extensions installed",
+    "noExtensionsDesc": "Extensions are installed to the extensions/ folder in the app data directory",
+    "version": "Version",
+    "reload": "Reload",
+    "reloadSuccess": "Extensions reloaded",
+    "reloadError": "Reload failed"
   }
 }

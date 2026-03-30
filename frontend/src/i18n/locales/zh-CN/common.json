@@ -906,5 +906,15 @@
     "showDetail": "查看详情",
     "hideDetail": "收起详情",
     "count": "{{count}} 个问题"
+  },
+  "extension": {
+    "title": "扩展",
+    "installed": "已安装扩展",
+    "noExtensions": "未安装扩展",
+    "noExtensionsDesc": "扩展安装到应用数据目录的 extensions/ 文件夹下",
+    "version": "版本",
+    "reload": "重新加载",
+    "reloadSuccess": "扩展已重新加载",
+    "reloadError": "重新加载失败"
   }
 }
