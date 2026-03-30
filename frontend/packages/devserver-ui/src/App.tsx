@@ -3,8 +3,9 @@ import { ToolPanel } from "./panels/ToolPanel";
 import { ActionPanel } from "./panels/ActionPanel";
 import { ConfigPanel } from "./panels/ConfigPanel";
 import { LogPanel } from "./panels/LogPanel";
+import { ExtensionPanel } from "./panels/ExtensionPanel";
 
-type Tab = "tools" | "actions" | "config" | "logs";
+type Tab = "tools" | "actions" | "config" | "logs" | "extension";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("tools");
@@ -14,6 +15,7 @@ export default function App() {
     { id: "actions", label: "Actions" },
     { id: "config", label: "Config" },
     { id: "logs", label: "Logs" },
+    { id: "extension", label: "Extension" },
   ];
 
   return (
@@ -41,6 +43,7 @@ export default function App() {
         {activeTab === "actions" && <ActionPanel />}
         {activeTab === "config" && <ConfigPanel />}
         {activeTab === "logs" && <LogPanel />}
+        {activeTab === "extension" && <ExtensionPanel />}
       </main>
     </div>
   );
