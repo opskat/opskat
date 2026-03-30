@@ -12,6 +12,7 @@ export default defineConfig({
     proxy: {
       "/api": "http://localhost:3456",
       "/ws": { target: "ws://localhost:3456", ws: true },
+      "/extensions": "http://localhost:3456",
     },
   },
 });

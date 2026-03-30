@@ -1,18 +1,16 @@
 import { useState } from "react";
 import { ToolPanel } from "./panels/ToolPanel";
-import { ActionPanel } from "./panels/ActionPanel";
 import { ConfigPanel } from "./panels/ConfigPanel";
 import { LogPanel } from "./panels/LogPanel";
 import { ExtensionPanel } from "./panels/ExtensionPanel";
 
-type Tab = "tools" | "actions" | "config" | "logs" | "extension";
+type Tab = "tools" | "config" | "logs" | "extension";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("tools");
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "tools", label: "Tools" },
-    { id: "actions", label: "Actions" },
     { id: "config", label: "Config" },
     { id: "logs", label: "Logs" },
     { id: "extension", label: "Extension" },
@@ -38,7 +36,6 @@ export default function App() {
       </header>
       <main className="flex-1 overflow-auto p-4">
         {activeTab === "tools" && <ToolPanel />}
-        {activeTab === "actions" && <ActionPanel />}
         {activeTab === "config" && <ConfigPanel />}
         {activeTab === "logs" && <LogPanel />}
         {activeTab === "extension" && <ExtensionPanel />}

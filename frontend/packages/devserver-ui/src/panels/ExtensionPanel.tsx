@@ -1,24 +1,40 @@
 // frontend/packages/devserver-ui/src/panels/ExtensionPanel.tsx
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
+import ReactDOM from "react-dom/client";
+import * as ui from "@opskat/ui";
 import type { ComponentType } from "react";
+
+interface ExtPage {
+  id: string;
+  slot?: string;
+  i18n: { name: string };
+  component: string;
+}
 
 interface ExtManifest {
   name: string;
   frontend?: {
     entry: string;
     styles: string;
-    pages: { id: string; slot?: string; component: string }[];
+    pages: ExtPage[];
   };
 }
+
+// Passthrough i18n stub: returns the key itself.
+const i18nStub = {
+  t: (key: string) => key,
+  language: "en",
+  changeLanguage: () => Promise.resolve(),
+};
 
 function injectDevServerAPI(): void {
   if ((window as any).__OPSKAT_EXT__) return;
 
   (window as any).__OPSKAT_EXT__ = {
     React,
-    ReactDOM: null,
-    i18n: null,
-    ui: {},
+    ReactDOM,
+    i18n: i18nStub,
+    ui,
     api: {
       async callTool(_extName: string, tool: string, args: unknown) {
         const res = await fetch(`/api/tool/${tool}`, {
@@ -74,9 +90,13 @@ function injectDevServerAPI(): void {
 export function ExtensionPanel() {
   const [manifest, setManifest] = useState<ExtManifest | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [Component, setComponent] = useState<ComponentType<any> | null>(null);
+  const [components, setComponents] = useState<Record<string, ComponentType<any>>>({});
+  const [activePageId, setActivePageId] = useState<string | null>(null);
+  const [moduleLoaded, setModuleLoaded] = useState(false);
+  const [loadingModule, setLoadingModule] = useState(false);
   const injected = useRef(false);
 
+  // Step 1: Load manifest only (lightweight)
   useEffect(() => {
     (async () => {
       try {
@@ -90,31 +110,52 @@ export function ExtensionPanel() {
           return;
         }
 
-        if (!injected.current) {
-          injectDevServerAPI();
-          injected.current = true;
-        }
-
-        if (m.frontend.styles) {
-          const link = document.createElement("link");
-          link.rel = "stylesheet";
-          link.href = `/extensions/${m.name}/${m.frontend.styles}`;
-          document.head.appendChild(link);
-        }
-
-        const mod = await import(/* @vite-ignore */ `/extensions/${m.name}/${m.frontend.entry}`);
-
-        const page = m.frontend.pages.find((p) => p.slot === "asset.connect") || m.frontend.pages[0];
-        if (page && mod[page.component]) {
-          setComponent(() => mod[page.component]);
-        } else {
-          setError(`Component "${page?.component}" not found in module exports`);
+        // Default to first page but don't load module yet
+        if (m.frontend.pages.length > 0) {
+          setActivePageId(m.frontend.pages[0].id);
         }
       } catch (err) {
         setError(String(err));
       }
     })();
   }, []);
+
+  // Step 2: Load module on demand when user clicks "Load"
+  const loadModule = useCallback(async () => {
+    if (!manifest?.frontend || moduleLoaded || loadingModule) return;
+    setLoadingModule(true);
+    setError(null);
+
+    try {
+      if (!injected.current) {
+        injectDevServerAPI();
+        injected.current = true;
+      }
+
+      const m = manifest;
+      if (m.frontend!.styles) {
+        const link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.href = `/extensions/${m.name}/${m.frontend!.styles}`;
+        document.head.appendChild(link);
+      }
+
+      const mod = await import(/* @vite-ignore */ `/extensions/${m.name}/${m.frontend!.entry}`);
+
+      const loaded: Record<string, ComponentType<any>> = {};
+      for (const page of m.frontend!.pages) {
+        if (mod[page.component]) {
+          loaded[page.component] = mod[page.component];
+        }
+      }
+      setComponents(loaded);
+      setModuleLoaded(true);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLoadingModule(false);
+    }
+  }, [manifest, moduleLoaded, loadingModule]);
 
   if (error) {
     return (
@@ -125,16 +166,58 @@ export function ExtensionPanel() {
   }
 
   if (!manifest) {
-    return <div className="p-4 text-gray-500">Loading extension manifest...</div>;
+    return <div className="p-4 text-muted-foreground">Loading extension manifest...</div>;
   }
 
-  if (!Component) {
-    return <div className="p-4 text-gray-500">Loading extension frontend...</div>;
-  }
+  const pages = manifest.frontend?.pages ?? [];
+  const activePage = pages.find((p) => p.id === activePageId);
+  const Component = activePage && moduleLoaded ? components[activePage.component] : null;
 
   return (
-    <div className="h-full">
-      <Component assetId={0} />
+    <div className="h-full flex flex-col">
+      {/* Page tabs */}
+      <div className="flex items-center gap-2 border-b pb-2 mb-4">
+        {pages.map((page) => (
+          <button
+            key={page.id}
+            onClick={() => setActivePageId(page.id)}
+            className={`px-3 py-1 rounded text-sm ${
+              activePageId === page.id ? "bg-primary text-primary-foreground" : "hover:bg-muted"
+            }`}
+          >
+            {page.i18n?.name || page.id}
+            {page.slot && <span className="ml-1 text-xs opacity-60">({page.slot})</span>}
+          </button>
+        ))}
+
+        {!moduleLoaded && (
+          <button
+            onClick={loadModule}
+            disabled={loadingModule || !activePageId}
+            className="ml-auto px-4 py-1 rounded text-sm bg-primary text-primary-foreground disabled:opacity-50"
+          >
+            {loadingModule ? "Loading..." : "Load Extension"}
+          </button>
+        )}
+      </div>
+
+      {/* Page content */}
+      <div className="flex-1 overflow-auto">
+        {!moduleLoaded && !loadingModule && (
+          <div className="text-muted-foreground text-sm">
+            Select a page and click &ldquo;Load Extension&rdquo; to render the extension frontend.
+          </div>
+        )}
+        {moduleLoaded && !activePage && (
+          <div className="text-muted-foreground">No pages defined in manifest</div>
+        )}
+        {activePage && moduleLoaded && !Component && (
+          <div className="text-red-500">
+            Component &ldquo;{activePage.component}&rdquo; not found in module exports
+          </div>
+        )}
+        {activePage && Component && <Component assetId={0} />}
+      </div>
     </div>
   );
 }

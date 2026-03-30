@@ -73,14 +73,16 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/kv", s.handleListKV)
 	s.mux.HandleFunc("/ws/events", s.handleWebSocket)
 
-	// Extension frontend proxy or static
+	// Extension frontend proxy or static — route under /extensions/{name}/ so that
+	// the frontend loader's import(`/extensions/${name}/${entry}`) resolves correctly.
+	extPrefix := "/extensions/" + s.manifest.Name
 	if s.extFrontend != "" {
 		target, _ := url.Parse(s.extFrontend)
 		proxy := httputil.NewSingleHostReverseProxy(target)
-		s.mux.Handle("/extensions/", http.StripPrefix("/extensions", proxy))
+		s.mux.Handle(extPrefix+"/", http.StripPrefix(extPrefix, proxy))
 	} else {
-		s.mux.Handle("/extensions/", http.StripPrefix("/extensions/",
-			http.FileServer(http.Dir(filepath.Join(s.extDir, "frontend")))))
+		s.mux.Handle(extPrefix+"/", http.StripPrefix(extPrefix+"/",
+			http.FileServer(http.Dir(s.extDir))))
 	}
 
 	// DevServer frontend SPA (embedded static files)

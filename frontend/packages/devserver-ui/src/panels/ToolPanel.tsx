@@ -1,8 +1,48 @@
 import { useState, useEffect } from "react";
 
+interface ToolDefUI {
+  name: string;
+  i18n: { description: string };
+  parameters?: Record<string, unknown>;
+}
+
 interface Manifest {
   name: string;
-  tools: { name: string; i18n: { description: string } }[];
+  tools: ToolDefUI[];
+}
+
+function generateDefaults(schema: Record<string, unknown> | undefined): unknown {
+  if (!schema || schema.type !== "object") return {};
+  const props = schema.properties as Record<string, Record<string, unknown>> | undefined;
+  if (!props) return {};
+  const result: Record<string, unknown> = {};
+  for (const [key, prop] of Object.entries(props)) {
+    if (prop.default !== undefined) {
+      result[key] = prop.default;
+    } else {
+      switch (prop.type) {
+        case "string":
+          result[key] = "";
+          break;
+        case "number":
+        case "integer":
+          result[key] = 0;
+          break;
+        case "boolean":
+          result[key] = false;
+          break;
+        case "array":
+          result[key] = [];
+          break;
+        case "object":
+          result[key] = generateDefaults(prop as Record<string, unknown>);
+          break;
+        default:
+          result[key] = null;
+      }
+    }
+  }
+  return result;
 }
 
 export function ToolPanel() {
@@ -18,6 +58,16 @@ export function ToolPanel() {
       .then((r) => r.json())
       .then(setManifest);
   }, []);
+
+  const handleToolChange = (toolName: string) => {
+    setSelectedTool(toolName);
+    const tool = manifest?.tools?.find((t) => t.name === toolName);
+    if (tool?.parameters) {
+      setArgs(JSON.stringify(generateDefaults(tool.parameters), null, 2));
+    } else {
+      setArgs("{}");
+    }
+  };
 
   const execute = async () => {
     setLoading(true);
@@ -50,7 +100,7 @@ export function ToolPanel() {
         <label className="block text-sm font-medium mb-1">Tool</label>
         <select
           value={selectedTool}
-          onChange={(e) => setSelectedTool(e.target.value)}
+          onChange={(e) => handleToolChange(e.target.value)}
           className="w-full border rounded px-3 py-2 bg-background"
         >
           <option value="">Select a tool...</option>
