@@ -10,6 +10,7 @@ import (
 
 	"github.com/opskat/opskat/internal/repository/ai_provider_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
+	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"github.com/opskat/opskat/internal/repository/conversation_repo"
@@ -117,6 +118,7 @@ func registerRepositories() {
 	policy_group_repo.RegisterPolicyGroup(policy_group_repo.NewPolicyGroup())
 	ai_provider_repo.RegisterAIProvider(ai_provider_repo.NewAIProvider())
 	extension_data_repo.RegisterExtensionData(extension_data_repo.NewExtensionData())
+	extension_state_repo.RegisterExtensionState(extension_state_repo.NewExtensionState())
 }
 
 // resolveKDFSalt 从 config.json 获取 salt，不存在则生成并持久化
