@@ -227,6 +227,24 @@ export namespace app {
 	        this.isActive = source["isActive"];
 	    }
 	}
+	export class AssetTypeInfo {
+	    type: string;
+	    extensionName?: string;
+	    displayName: string;
+	    sshTunnel: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AssetTypeInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.extensionName = source["extensionName"];
+	        this.displayName = source["displayName"];
+	        this.sshTunnel = source["sshTunnel"];
+	    }
+	}
 	export class AuditLogListResult {
 	    items: audit_entity.AuditLog[];
 	    total: number;
@@ -273,6 +291,48 @@ export namespace app {
 	        this.role = source["role"];
 	        this.content = source["content"];
 	        this.blocks = this.convertValues(source["blocks"], conversation_entity.ContentBlock);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ExtensionInfo {
+	    name: string;
+	    version: string;
+	    icon: string;
+	    displayName: string;
+	    description: string;
+	    enabled: boolean;
+	    manifest?: extension.Manifest;
+
+	    static createFrom(source: any = {}) {
+	        return new ExtensionInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.version = source["version"];
+	        this.icon = source["icon"];
+	        this.displayName = source["displayName"];
+	        this.description = source["description"];
+	        this.enabled = source["enabled"];
+	        this.manifest = this.convertValues(source["manifest"], extension.Manifest);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -880,6 +940,339 @@ export namespace credential_entity {
 	        this.updatetime = source["updatetime"];
 	    }
 	}
+
+}
+
+export namespace extension {
+	
+	export class I18nName {
+	    name: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new I18nName(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	    }
+	}
+	export class AssetTypeDef {
+	    type: string;
+	    i18n: I18nName;
+	    configSchema: Record<string, any>;
+	
+	    static createFrom(source: any = {}) {
+	        return new AssetTypeDef(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.i18n = this.convertValues(source["i18n"], I18nName);
+	        this.configSchema = source["configSchema"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class PageDef {
+	    id: string;
+	    slot?: string;
+	    i18n: I18nName;
+	    component: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PageDef(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.slot = source["slot"];
+	        this.i18n = this.convertValues(source["i18n"], I18nName);
+	        this.component = source["component"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class FrontendDef {
+	    entry: string;
+	    styles: string;
+	    pages: PageDef[];
+	
+	    static createFrom(source: any = {}) {
+	        return new FrontendDef(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.entry = source["entry"];
+	        this.styles = source["styles"];
+	        this.pages = this.convertValues(source["pages"], PageDef);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class I18nDesc {
+	    description: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new I18nDesc(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.description = source["description"];
+	    }
+	}
+	
+	export class I18nNameDesc {
+	    name: string;
+	    description: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new I18nNameDesc(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.description = source["description"];
+	    }
+	}
+	export class PolicyGroupDef {
+	    id: string;
+	    i18n: I18nNameDesc;
+	    policy: Record<string, any>;
+	
+	    static createFrom(source: any = {}) {
+	        return new PolicyGroupDef(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.i18n = this.convertValues(source["i18n"], I18nNameDesc);
+	        this.policy = source["policy"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class PoliciesDef {
+	    type: string;
+	    actions: string[];
+	    groups: PolicyGroupDef[];
+	    default: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new PoliciesDef(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.actions = source["actions"];
+	        this.groups = this.convertValues(source["groups"], PolicyGroupDef);
+	        this.default = source["default"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ToolDef {
+	    name: string;
+	    i18n: I18nDesc;
+	    parameters: Record<string, any>;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolDef(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.i18n = this.convertValues(source["i18n"], I18nDesc);
+	        this.parameters = source["parameters"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ManifestBackend {
+	    runtime: string;
+	    binary: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ManifestBackend(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.runtime = source["runtime"];
+	        this.binary = source["binary"];
+	    }
+	}
+	export class ManifestI18n {
+	    displayName: string;
+	    description: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ManifestI18n(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.displayName = source["displayName"];
+	        this.description = source["description"];
+	    }
+	}
+	export class Manifest {
+	    name: string;
+	    version: string;
+	    icon: string;
+	    minAppVersion: string;
+	    i18n: ManifestI18n;
+	    backend: ManifestBackend;
+	    assetTypes: AssetTypeDef[];
+	    tools: ToolDef[];
+	    policies: PoliciesDef;
+	    frontend: FrontendDef;
+	
+	    static createFrom(source: any = {}) {
+	        return new Manifest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.version = source["version"];
+	        this.icon = source["icon"];
+	        this.minAppVersion = source["minAppVersion"];
+	        this.i18n = this.convertValues(source["i18n"], ManifestI18n);
+	        this.backend = this.convertValues(source["backend"], ManifestBackend);
+	        this.assetTypes = this.convertValues(source["assetTypes"], AssetTypeDef);
+	        this.tools = this.convertValues(source["tools"], ToolDef);
+	        this.policies = this.convertValues(source["policies"], PoliciesDef);
+	        this.frontend = this.convertValues(source["frontend"], FrontendDef);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	
+	
+	
 
 }
 
