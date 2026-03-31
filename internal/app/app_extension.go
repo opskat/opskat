@@ -271,9 +271,13 @@ func (a *App) UninstallExtension(name string, cleanData bool) error {
 
 	// Clean database records
 	ctx := context.Background()
-	extension_state_repo.ExtensionState().Delete(ctx, name)
+	if err := extension_state_repo.ExtensionState().Delete(ctx, name); err != nil {
+		zap.L().Warn("delete extension state", zap.String("name", name), zap.Error(err))
+	}
 	if cleanData {
-		extension_data_repo.ExtensionData().DeleteAll(ctx, name)
+		if err := extension_data_repo.ExtensionData().DeleteAll(ctx, name); err != nil {
+			zap.L().Warn("delete extension data", zap.String("name", name), zap.Error(err))
+		}
 	}
 
 	wailsRuntime.EventsEmit(a.ctx, "ext:reload", nil)
@@ -372,14 +376,18 @@ func (a *App) ensureExtensionState(name string, enabled bool) {
 	state, err := extension_state_repo.ExtensionState().Find(ctx, name)
 	if err != nil {
 		// Not found, create
-		extension_state_repo.ExtensionState().Create(ctx, &extension_state_entity.ExtensionState{
+		if err := extension_state_repo.ExtensionState().Create(ctx, &extension_state_entity.ExtensionState{
 			Name:    name,
 			Enabled: enabled,
-		})
+		}); err != nil {
+			zap.L().Warn("create extension state", zap.String("name", name), zap.Error(err))
+		}
 		return
 	}
 	state.Enabled = enabled
-	extension_state_repo.ExtensionState().Update(ctx, state)
+	if err := extension_state_repo.ExtensionState().Update(ctx, state); err != nil {
+		zap.L().Warn("update extension state", zap.String("name", name), zap.Error(err))
+	}
 }
 
 // ReloadExtensions re-scans extensions directory and updates the bridge.
@@ -397,6 +405,15 @@ func (a *App) ReloadExtensions() error {
 	a.extBridge = extension.NewBridge()
 	for _, ext := range a.extManager.ListExtensions() {
 		a.extBridge.Register(ext)
+	}
+
+	// Unload disabled extensions
+	states, _ := extension_state_repo.ExtensionState().FindAll(context.Background())
+	for _, state := range states {
+		if !state.Enabled {
+			a.extBridge.Unregister(state.Name)
+			_ = a.extManager.Unload(a.langCtx(), state.Name)
+		}
 	}
 
 	ai.SetExecToolExecutor(a.extBridge)
