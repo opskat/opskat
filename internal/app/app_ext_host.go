@@ -14,33 +14,11 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// appCredentialGetter implements extension.CredentialGetter
-type appCredentialGetter struct{}
-
-func (g *appCredentialGetter) GetCredential(assetID int64) (string, error) {
-	ctx := context.Background()
-	asset, err := asset_repo.Asset().Find(ctx, assetID)
-	if err != nil {
-		return "", fmt.Errorf("asset %d not found: %w", assetID, err)
-	}
-	if asset.Config == "" {
-		return "", nil
-	}
-	var cfg struct {
-		Password     string `json:"password"`
-		CredentialID int64  `json:"credential_id"`
-	}
-	if err := json.Unmarshal([]byte(asset.Config), &cfg); err != nil {
-		return "", err
-	}
-	if cfg.Password != "" {
-		return credential_svc.Default().Decrypt(cfg.Password)
-	}
-	return "", nil
+// appAssetConfigGetter implements extension.AssetConfigGetter.
+// It decrypts format:"password" fields in the config before returning to the extension.
+type appAssetConfigGetter struct {
+	app *App
 }
-
-// appAssetConfigGetter implements extension.AssetConfigGetter
-type appAssetConfigGetter struct{}
 
 func (g *appAssetConfigGetter) GetAssetConfig(assetID int64) (json.RawMessage, error) {
 	ctx := context.Background()
@@ -51,7 +29,8 @@ func (g *appAssetConfigGetter) GetAssetConfig(assetID int64) (json.RawMessage, e
 	if asset.Config == "" {
 		return json.RawMessage("{}"), nil
 	}
-	return json.RawMessage(asset.Config), nil
+	raw := json.RawMessage(asset.Config)
+	return decryptConfigPasswordFields(raw, asset.Type, g.app.extSvc.Bridge())
 }
 
 // appFileDialogOpener implements extension.FileDialogOpener
@@ -121,6 +100,70 @@ func (h *appActionEventHandler) OnActionEvent(eventType string, data json.RawMes
 		"data":      json.RawMessage(data),
 	})
 	return nil
+}
+
+// getDecryptedExtConfig returns the asset config with password fields decrypted.
+func getDecryptedExtConfig(assetID int64, bridge *extension.Bridge) (string, error) {
+	ctx := context.Background()
+	asset, err := asset_repo.Asset().Find(ctx, assetID)
+	if err != nil {
+		return "", fmt.Errorf("asset %d not found: %w", assetID, err)
+	}
+	if asset.Config == "" {
+		return "{}", nil
+	}
+	raw := json.RawMessage(asset.Config)
+	decrypted, err := decryptConfigPasswordFields(raw, asset.Type, bridge)
+	if err != nil {
+		return "", err
+	}
+	return string(decrypted), nil
+}
+
+// decryptConfigPasswordFields decrypts fields marked as format:"password" in the configSchema.
+func decryptConfigPasswordFields(raw json.RawMessage, assetType string, bridge *extension.Bridge) (json.RawMessage, error) {
+	if bridge == nil {
+		return raw, nil
+	}
+	// Find the extension that provides this asset type
+	var schema map[string]any
+	for _, at := range bridge.GetAssetTypes() {
+		if at.Type == assetType {
+			schema = at.ConfigSchema
+			break
+		}
+	}
+	if len(schema) == 0 {
+		return raw, nil
+	}
+	passwordFields := extension.PasswordFieldsFromSchema(schema)
+	if len(passwordFields) == 0 {
+		return raw, nil
+	}
+
+	var cfg map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return raw, nil
+	}
+
+	for _, field := range passwordFields {
+		val, ok := cfg[field]
+		if !ok {
+			continue
+		}
+		var encrypted string
+		if err := json.Unmarshal(val, &encrypted); err != nil || encrypted == "" {
+			continue
+		}
+		decrypted, err := credential_svc.Default().Decrypt(encrypted)
+		if err != nil {
+			// May already be plaintext (e.g. test_connection); keep as-is
+			continue
+		}
+		b, _ := json.Marshal(decrypted)
+		cfg[field] = b
+	}
+	return json.Marshal(cfg)
 }
 
 // appTunnelDialer implements extension.TunnelDialer using the SSH pool

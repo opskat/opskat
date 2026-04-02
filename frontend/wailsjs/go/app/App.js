@@ -214,6 +214,10 @@ export function GetDownloadMirror() {
   return window['go']['app']['App']['GetDownloadMirror']();
 }
 
+export function GetExtensionDetail(arg1) {
+  return window['go']['app']['App']['GetExtensionDetail'](arg1);
+}
+
 export function GetExtensionManifest(arg1) {
   return window['go']['app']['App']['GetExtensionManifest'](arg1);
 }
@@ -292,6 +296,10 @@ export function InitAIProvider() {
 
 export function InstallExtension() {
   return window['go']['app']['App']['InstallExtension']();
+}
+
+export function InstallExtensionFromDirectory() {
+  return window['go']['app']['App']['InstallExtensionFromDirectory']();
 }
 
 export function InstallOpsctl(arg1) {
@@ -530,6 +538,10 @@ export function TestSSHConnection(arg1, arg2) {
   return window['go']['app']['App']['TestSSHConnection'](arg1, arg2);
 }
 
+export function UninstallExtension(arg1, arg2) {
+  return window['go']['app']['App']['UninstallExtension'](arg1, arg2);
+}
+
 export function UpdateAIProvider(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8) {
   return window['go']['app']['App']['UpdateAIProvider'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
 }
@@ -556,10 +568,6 @@ export function UpdateForwardConfig(arg1, arg2, arg3, arg4) {
 
 export function UpdateGroup(arg1) {
   return window['go']['app']['App']['UpdateGroup'](arg1);
-}
-
-export function UninstallExtension(arg1, arg2) {
-  return window['go']['app']['App']['UninstallExtension'](arg1, arg2);
 }
 
 export function UpdatePolicyGroup(arg1) {

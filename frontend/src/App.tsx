@@ -19,13 +19,27 @@ import { useAssetStore } from "@/stores/assetStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type InfoTabMeta } from "@/stores/tabStore";
-import { useExtensionStore, initExtensions } from "@/extension";
+import { useExtensionStore } from "@/extension";
+import { bootstrapExtensions } from "@/extension/init";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { asset_entity, group_entity } from "../wailsjs/go/models";
 import { EventsOn, WindowToggleMaximise } from "../wailsjs/runtime/runtime";
 
 function App() {
   const { t } = useTranslation();
+
+  // 异步加载数据，不阻塞首屏渲染
+  useEffect(() => {
+    bootstrapExtensions().catch((err) => console.error("Extension bootstrap failed:", err));
+    useAssetStore
+      .getState()
+      .fetchAssets()
+      .catch((err) => console.error("Fetch assets failed:", err));
+    useAssetStore
+      .getState()
+      .fetchGroups()
+      .catch((err) => console.error("Fetch groups failed:", err));
+  }, []);
 
   // 监听外部数据变更（opsctl 等），自动刷新 UI
   useEffect(() => {
@@ -76,11 +90,6 @@ function App() {
     });
     return () => cancel();
   }, [t]);
-
-  // Bootstrap extension system
-  useEffect(() => {
-    initExtensions().catch(console.error);
-  }, []);
 
   // 双击拖拽区域最大化/还原窗口
   useEffect(() => {

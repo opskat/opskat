@@ -61,10 +61,13 @@ func (h *DevServerHost) IOOpen(params extension.IOOpenParams) (uint32, extension
 func (h *DevServerHost) IORead(handleID uint32, size int) ([]byte, error) {
 	buf := make([]byte, size)
 	n, err := h.io.Read(handleID, buf)
+	if n > 0 {
+		return buf[:n], nil // Return data first; EOF will be seen on the next Read.
+	}
 	if err != nil {
 		return nil, err
 	}
-	return buf[:n], nil
+	return buf[:0], nil
 }
 
 func (h *DevServerHost) IOWrite(handleID uint32, data []byte) (int, error) {
@@ -79,23 +82,16 @@ func (h *DevServerHost) IOClose(handleID uint32) error {
 	return h.io.Close(handleID)
 }
 
-func (h *DevServerHost) GetCredential(assetID int64) (string, error) {
-	data, err := os.ReadFile(filepath.Join(h.dataDir, "credential.json"))
-	if err != nil {
-		return "", fmt.Errorf("read credential: %w", err)
-	}
-	var cred string
-	if err := json.Unmarshal(data, &cred); err != nil {
-		// Not a JSON string — treat raw file content as the credential
-		return string(data), nil //nolint:nilerr // intentional fallback
-	}
-	return cred, nil
-}
-
 func (h *DevServerHost) GetAssetConfig(assetID int64) (json.RawMessage, error) {
 	data, err := os.ReadFile(filepath.Join(h.dataDir, "config.json"))
 	if err != nil {
+		if os.IsNotExist(err) {
+			return json.RawMessage("{}"), nil
+		}
 		return nil, fmt.Errorf("read config: %w", err)
+	}
+	if len(data) == 0 {
+		return json.RawMessage("{}"), nil
 	}
 	return json.RawMessage(data), nil
 }

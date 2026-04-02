@@ -283,11 +283,11 @@ func (a *App) handleGrantApproval(req approval.ApprovalRequest) approval.Approva
 
 // handleExtToolExec 处理 opsctl ext exec 的委托执行请求
 func (a *App) handleExtToolExec(req approval.ApprovalRequest) approval.ApprovalResponse {
-	if a.extManager == nil {
+	if a.extSvc == nil {
 		return approval.ApprovalResponse{ToolError: "extension system not initialized"}
 	}
 
-	ext := a.extManager.GetExtension(req.Extension)
+	ext := a.extSvc.Manager().GetExtension(req.Extension)
 	if ext == nil {
 		return approval.ApprovalResponse{ToolError: fmt.Sprintf("extension %q not found", req.Extension)}
 	}

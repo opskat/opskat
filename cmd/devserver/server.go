@@ -66,7 +66,6 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/manifest", s.handleGetManifest)
 	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	s.mux.HandleFunc("PUT /api/config", s.handlePutConfig)
-	s.mux.HandleFunc("PUT /api/credential", s.handlePutCredential)
 	s.mux.HandleFunc("POST /api/tool/{name}", s.handleCallTool)
 	s.mux.HandleFunc("POST /api/action/{name}", s.handleCallAction)
 	s.mux.HandleFunc("POST /api/policy/{tool}", s.handleCheckPolicy)
@@ -137,16 +136,6 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	data, _ := io.ReadAll(r.Body)
 	err := os.WriteFile(filepath.Join(s.host.dataDir, "config.json"), data, 0644)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-func (s *Server) handlePutCredential(w http.ResponseWriter, r *http.Request) {
-	data, _ := io.ReadAll(r.Body)
-	err := os.WriteFile(filepath.Join(s.host.dataDir, "credential.json"), data, 0644)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

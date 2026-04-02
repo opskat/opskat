@@ -5,10 +5,8 @@ import { cn, Input, Button } from "@opskat/ui";
 import { TestPolicyRule } from "../../../wailsjs/go/app/App";
 import { app } from "../../../wailsjs/go/models";
 
-type PolicyType = "ssh" | "database" | "redis";
-
 interface PolicyTestPanelProps {
-  policyType: PolicyType;
+  policyType: string;
   buildPolicyJSON: () => string;
   assetID?: number;
   groupID?: number;
@@ -21,7 +19,7 @@ interface TestResult {
   message: string;
 }
 
-const PLACEHOLDER_MAP: Record<PolicyType, string> = {
+const PLACEHOLDER_MAP: Record<string, string> = {
   ssh: "asset.policyTestPlaceholder",
   database: "asset.policyTestSqlPlaceholder",
   redis: "asset.policyTestRedisPlaceholder",

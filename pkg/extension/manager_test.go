@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/zap"
@@ -62,6 +63,30 @@ func TestManager(t *testing.T) {
 		Convey("GetExtension returns nil for unknown", func() {
 			ext := mgr.GetExtension("nonexistent")
 			So(ext, ShouldBeNil)
+		})
+
+		Convey("Watch calls onChange on filesystem event", func() {
+			watchCtx, watchCancel := context.WithCancel(ctx)
+			defer watchCancel()
+
+			called := make(chan struct{}, 1)
+			err := mgr.Watch(watchCtx, func() {
+				select {
+				case called <- struct{}{}:
+				default:
+				}
+			})
+			So(err, ShouldBeNil)
+
+			// Trigger a filesystem event
+			os.WriteFile(filepath.Join(dir, "trigger.txt"), []byte("x"), 0644)
+
+			select {
+			case <-called:
+				// success
+			case <-time.After(2 * time.Second):
+				So("onChange not called", ShouldEqual, "")
+			}
 		})
 
 		Reset(func() {

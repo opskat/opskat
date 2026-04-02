@@ -200,9 +200,10 @@ func (a *App) SendAIMessage(convID int64, messages []ai.Message, aiCtx ai.AICont
 	builder := ai.NewPromptBuilder(lang, aiCtx)
 
 	// Inject extension SKILL.md based on connected asset types
-	if a.extBridge != nil {
+	if a.extSvc != nil {
+		bridge := a.extSvc.Bridge()
 		for _, tab := range aiCtx.OpenTabs {
-			if skillMD := a.extBridge.GetSkillMD(tab.Type); skillMD != "" {
+			if skillMD := bridge.GetSkillMD(tab.Type); skillMD != "" {
 				builder.SetExtensionSkillMD(skillMD)
 				break
 			}

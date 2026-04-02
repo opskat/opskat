@@ -14,18 +14,6 @@ func TestDevServerHostProvider(t *testing.T) {
 	Convey("DevServerHostProvider", t, func() {
 		dir := t.TempDir()
 
-		Convey("GetCredential reads from credential file", func() {
-			credFile := filepath.Join(dir, "credential.json")
-			os.WriteFile(credFile, []byte(`"AK:SK"`), 0644)
-
-			h := NewDevServerHost(dir)
-			defer h.CloseAll()
-
-			cred, err := h.GetCredential(0)
-			So(err, ShouldBeNil)
-			So(cred, ShouldEqual, "AK:SK")
-		})
-
 		Convey("GetAssetConfig reads from config file", func() {
 			cfgFile := filepath.Join(dir, "config.json")
 			os.WriteFile(cfgFile, []byte(`{"endpoint":"https://oss.example.com"}`), 0644)

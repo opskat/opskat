@@ -71,15 +71,6 @@ func TestServerAPI(t *testing.T) {
 			So(result["endpoint"], ShouldEqual, "updated")
 		})
 
-		Convey("PUT /api/credential writes credential file", func() {
-			body := bytes.NewReader([]byte(`"AK:SK"`))
-			req := httptest.NewRequest("PUT", "/api/credential", body)
-			w := httptest.NewRecorder()
-			srv.ServeHTTP(w, req)
-
-			So(w.Code, ShouldEqual, 200)
-		})
-
 		Convey("POST /api/tool/echo returns error when plugin is nil", func() {
 			body := bytes.NewReader([]byte(`{"key":"value"}`))
 			req := httptest.NewRequest("POST", "/api/tool/echo", body)

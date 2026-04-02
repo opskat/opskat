@@ -10,9 +10,11 @@ import (
 	"github.com/opskat/opskat/internal/ai"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/bootstrap"
-	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/repository/extension_data_repo"
+	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
+	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/internal/service/sftp_svc"
 	"github.com/opskat/opskat/internal/service/ssh_svc"
 	"github.com/opskat/opskat/internal/sshpool"
@@ -75,8 +77,7 @@ type App struct {
 	connCounter             int64                      // 连接ID计数器
 	currentConversationID   int64                      // 当前活跃会话ID
 	runners                 sync.Map                   // map[int64]*ai.ConversationRunner
-	extManager              *extension.Manager
-	extBridge               *extension.Bridge
+	extSvc                  *extension_svc.Service
 }
 
 // NewApp 创建App实例
@@ -113,11 +114,10 @@ func (a *App) Startup(ctx context.Context) {
 
 	// Initialize extension system
 	extDir := filepath.Join(dataDir, "extensions")
-	a.extBridge = extension.NewBridge()
-	a.extManager = extension.NewManager(extDir, func(extName string) extension.HostProvider {
+	mgr := extension.NewManager(extDir, func(extName string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{
 			Logger:       zap.L(),
-			AssetConfigs: &appAssetConfigGetter{bridge: a.extBridge},
+			AssetConfigs: &appAssetConfigGetter{app: a},
 			FileDialogs:  &appFileDialogOpener{ctx: a.ctx},
 			KV:           &appKVStore{extName: extName},
 			ActionEvents: &appActionEventHandler{ctx: a.ctx, extName: extName},
@@ -125,36 +125,27 @@ func (a *App) Startup(ctx context.Context) {
 		})
 	}, zap.L())
 
-	if _, err := a.extManager.Scan(ctx); err != nil {
-		zap.L().Error("scan extensions failed", zap.Error(err))
-	}
+	a.extSvc = extension_svc.New(
+		mgr,
+		extension_state_repo.ExtensionState(),
+		extension_data_repo.ExtensionData(),
+		zap.L(),
+		func(b *extension.Bridge) { ai.SetExecToolExecutor(b) },
+		func() { wailsRuntime.EventsEmit(a.ctx, "ext:reload", nil) },
+	)
 
-	// Register loaded extensions into bridge
-	for _, ext := range a.extManager.ListExtensions() {
-		a.extBridge.Register(ext)
-	}
-
-	// Wire exec_tool handler
-	ai.SetExecToolExecutor(a.extBridge)
-
-	// Unload disabled extensions
-	{
-		ctx2 := context.Background()
-		states, _ := extension_state_repo.ExtensionState().FindAll(ctx2)
-		for _, state := range states {
-			if !state.Enabled {
-				a.extBridge.Unregister(state.Name)
-				_ = a.extManager.Unload(ctx, state.Name)
-			}
+	// 异步初始化扩展，避免阻塞 Startup（WASM 编译较慢）
+	go func() {
+		if err := a.extSvc.Init(ctx); err != nil {
+			zap.L().Error("extension init failed", zap.Error(err))
 		}
-	}
+		// 通知前端扩展已就绪
+		wailsRuntime.EventsEmit(a.ctx, "ext:ready", nil)
 
-	// Start hot-reload watcher
-	if err := a.extManager.Watch(ctx, a.extBridge, func() {
-		wailsRuntime.EventsEmit(a.ctx, "ext:reload", nil)
-	}); err != nil {
-		zap.L().Warn("extension watcher failed", zap.Error(err))
-	}
+		if err := a.extSvc.StartWatch(ctx); err != nil {
+			zap.L().Warn("extension watcher failed", zap.Error(err))
+		}
+	}()
 }
 
 // Cleanup 关闭审批服务等资源
@@ -171,8 +162,8 @@ func (a *App) Cleanup() {
 	if a.approvalServer != nil {
 		a.approvalServer.Stop()
 	}
-	if a.extManager != nil {
-		a.extManager.Close(context.Background())
+	if a.extSvc != nil {
+		a.extSvc.Close(context.Background())
 	}
 }
 

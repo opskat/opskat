@@ -2,6 +2,7 @@ package extension
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/tetratelabs/wazero"
 	"go.uber.org/zap"
 )
 
@@ -18,7 +20,62 @@ type Extension struct {
 	Dir      string
 	Manifest *Manifest
 	Plugin   *Plugin
-	SkillMD  string // Contents of SKILL.md
+	SkillMD  string                       // Contents of SKILL.md
+	Locales  map[string]map[string]string // lang → key → translated text
+}
+
+// Translate resolves an i18n key for the given language.
+// Falls back to "en", then returns the key itself.
+func (e *Extension) Translate(lang, key string) string {
+	return translateFromLocales(e.Locales, lang, key)
+}
+
+// translateFromLocales resolves an i18n key from a locales map.
+func translateFromLocales(locales map[string]map[string]string, lang, key string) string {
+	if locales != nil {
+		if m, ok := locales[lang]; ok {
+			if v, ok := m[key]; ok {
+				return v
+			}
+		}
+		if m, ok := locales["en"]; ok {
+			if v, ok := m[key]; ok {
+				return v
+			}
+		}
+	}
+	return key
+}
+
+// Translate resolves an i18n key for the given language.
+func (mi *ManifestInfo) Translate(lang, key string) string {
+	return translateFromLocales(mi.Locales, lang, key)
+}
+
+// LoadLocales reads all JSON files from the extension's locales/ directory.
+// Language codes are normalized to lowercase for consistent matching (e.g. "zh-CN" → "zh-cn").
+func LoadLocales(dir string) map[string]map[string]string {
+	localesDir := filepath.Join(dir, "locales")
+	entries, err := os.ReadDir(localesDir)
+	if err != nil {
+		return nil
+	}
+	result := make(map[string]map[string]string)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		lang := strings.ToLower(strings.TrimSuffix(entry.Name(), ".json"))
+		data, err := os.ReadFile(filepath.Join(localesDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var m map[string]string
+		if json.Unmarshal(data, &m) == nil {
+			result[lang] = m
+		}
+	}
+	return result
 }
 
 // Manager handles extension discovery, loading, and lifecycle.
@@ -28,14 +85,21 @@ type Manager struct {
 	logger     *zap.Logger
 	mu         sync.RWMutex
 	extensions map[string]*Extension
+	wasmCache  wazero.CompilationCache
 }
 
 func NewManager(dir string, newHost func(extName string) HostProvider, logger *zap.Logger) *Manager {
+	cacheDir := filepath.Join(dir, ".cache")
+	cache, err := wazero.NewCompilationCacheWithDir(cacheDir)
+	if err != nil {
+		logger.Warn("failed to create wasm compilation cache, will compile without cache", zap.Error(err))
+	}
 	return &Manager{
 		dir:        dir,
 		newHost:    newHost,
 		logger:     logger,
 		extensions: make(map[string]*Extension),
+		wasmCache:  cache,
 	}
 }
 
@@ -107,10 +171,20 @@ func (m *Manager) Close(ctx context.Context) {
 			ext.Plugin.Close(ctx)
 		}
 	}
+	// wasmCache 不在这里关闭 — Close 也用于 Reload，缓存需要跨 reload 复用
 }
 
-// Watch monitors the extensions directory for changes and reloads.
-func (m *Manager) Watch(ctx context.Context, bridge *Bridge, onReload func()) error {
+// Shutdown closes all extensions and releases the compilation cache.
+func (m *Manager) Shutdown(ctx context.Context) {
+	m.Close(ctx)
+	if m.wasmCache != nil {
+		m.wasmCache.Close(ctx)
+	}
+}
+
+// Watch monitors the extensions directory for changes and calls onChange.
+// The caller is responsible for handling the reload logic.
+func (m *Manager) Watch(ctx context.Context, onChange func()) error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return fmt.Errorf("create watcher: %w", err)
@@ -137,12 +211,11 @@ func (m *Manager) Watch(ctx context.Context, bridge *Bridge, onReload func()) er
 					return
 				}
 				if event.Op&(fsnotify.Create|fsnotify.Remove|fsnotify.Write|fsnotify.Rename) != 0 {
-					m.logger.Info("extension directory changed, reloading",
+					m.logger.Info("extension directory changed",
 						zap.String("file", event.Name),
 						zap.String("op", event.Op.String()))
-					m.reload(ctx, bridge)
-					if onReload != nil {
-						onReload()
+					if onChange != nil {
+						onChange()
 					}
 				}
 			case err, ok := <-watcher.Errors:
@@ -157,22 +230,18 @@ func (m *Manager) Watch(ctx context.Context, bridge *Bridge, onReload func()) er
 	return nil
 }
 
-func (m *Manager) reload(ctx context.Context, bridge *Bridge) {
-	m.Close(ctx)
-
-	if _, err := m.Scan(ctx); err != nil {
-		m.logger.Error("reload scan failed", zap.Error(err))
-		return
+// LoadManifestInfo reads a manifest from disk without loading the WASM plugin.
+func LoadManifestInfo(dir string) (*ManifestInfo, error) {
+	manifestPath := filepath.Join(dir, "manifest.json")
+	data, err := os.ReadFile(manifestPath) //nolint:gosec // extension directories are trusted
+	if err != nil {
+		return nil, err
 	}
-
-	for _, name := range bridge.ListNames() {
-		bridge.Unregister(name)
+	manifest, err := ParseManifest(data)
+	if err != nil {
+		return nil, err
 	}
-	for _, ext := range m.ListExtensions() {
-		bridge.Register(ext)
-	}
-
-	m.logger.Info("extensions reloaded", zap.Int("count", len(m.ListExtensions())))
+	return &ManifestInfo{Name: manifest.Name, Dir: dir, Manifest: manifest, Locales: LoadLocales(dir)}, nil
 }
 
 func (m *Manager) LoadExtension(ctx context.Context, dir string) (*Manifest, error) {
@@ -199,7 +268,7 @@ func (m *Manager) LoadExtension(ctx context.Context, dir string) (*Manifest, err
 	}
 
 	host := m.newHost(manifest.Name)
-	plugin, err := LoadPlugin(ctx, manifest, wasmBytes, host)
+	plugin, err := LoadPlugin(ctx, manifest, wasmBytes, host, m.wasmCache)
 	if err != nil {
 		host.CloseAll()
 		return nil, fmt.Errorf("load plugin: %w", err)
@@ -211,6 +280,7 @@ func (m *Manager) LoadExtension(ctx context.Context, dir string) (*Manifest, err
 		Manifest: manifest,
 		Plugin:   plugin,
 		SkillMD:  skillMD,
+		Locales:  LoadLocales(dir),
 	}
 
 	m.mu.Lock()
@@ -226,6 +296,7 @@ type ManifestInfo struct {
 	Name     string
 	Dir      string
 	Manifest *Manifest
+	Locales  map[string]map[string]string
 }
 
 // ScanManifests reads manifests from disk without loading WASM plugins.
@@ -257,6 +328,7 @@ func (m *Manager) ScanManifests() ([]*ManifestInfo, error) {
 			Name:     manifest.Name,
 			Dir:      extDir,
 			Manifest: manifest,
+			Locales:  LoadLocales(extDir),
 		})
 	}
 	return result, nil

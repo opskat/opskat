@@ -2,6 +2,10 @@
 package extension
 
 import (
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,14 +66,56 @@ func TestDefaultHostProvider(t *testing.T) {
 		})
 
 		Convey("unconfigured services return errors", func() {
-			_, err := host.GetCredential(1)
-			So(err, ShouldNotBeNil)
-
-			_, err = host.GetAssetConfig(1)
+			_, err := host.GetAssetConfig(1)
 			So(err, ShouldNotBeNil)
 
 			_, err = host.KVGet("key")
 			So(err, ShouldNotBeNil)
 		})
+	})
+}
+
+func TestDefaultHostProvider_IOReadEOF(t *testing.T) {
+	Convey("IORead preserves data when underlying reader returns (n, io.EOF)", t, func() {
+		// Simulate a small HTTP response where Read returns data+EOF in one call.
+		// This is the exact scenario that caused "deserialization failed, failed to copy error response body, EOF".
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `<?xml version="1.0"?><Error><Code>AccessDenied</Code></Error>`)
+		}))
+		defer srv.Close()
+
+		logger, _ := zap.NewDevelopment()
+		host := NewDefaultHostProvider(DefaultHostConfig{Logger: logger})
+		defer host.CloseAll()
+
+		id, _, err := host.IOOpen(IOOpenParams{
+			Type:   "http",
+			Method: "GET",
+			URL:    srv.URL,
+		})
+		So(err, ShouldBeNil)
+
+		meta, err := host.IOFlush(id)
+		So(err, ShouldBeNil)
+		So(meta.Status, ShouldEqual, 403)
+
+		// Read entire response body through IORead
+		var body []byte
+		for {
+			data, err := host.IORead(id, 4096)
+			if len(data) > 0 {
+				body = append(body, data...)
+			}
+			if err != nil {
+				So(err, ShouldEqual, io.EOF)
+				break
+			}
+		}
+
+		So(string(body), ShouldContainSubstring, "AccessDenied")
+
+		So(host.IOClose(id), ShouldBeNil)
 	})
 }

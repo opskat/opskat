@@ -15,10 +15,6 @@ type TunnelDialer interface {
 }
 
 // Dependency interfaces for DefaultHostProvider
-type CredentialGetter interface {
-	GetCredential(assetID int64) (string, error)
-}
-
 type AssetConfigGetter interface {
 	GetAssetConfig(assetID int64) (json.RawMessage, error)
 }
@@ -37,9 +33,8 @@ type ActionEventHandler interface {
 }
 
 type DefaultHostConfig struct {
-	Logger           *zap.Logger
-	Credentials      CredentialGetter
-	AssetConfigs     AssetConfigGetter
+	Logger       *zap.Logger
+	AssetConfigs AssetConfigGetter
 	FileDialogs      FileDialogOpener
 	KV               KVStore
 	ActionEvents     ActionEventHandler
@@ -80,10 +75,13 @@ func (h *DefaultHostProvider) IOOpen(params IOOpenParams) (uint32, IOMeta, error
 func (h *DefaultHostProvider) IORead(handleID uint32, size int) ([]byte, error) {
 	buf := make([]byte, size)
 	n, err := h.io.Read(handleID, buf)
+	if n > 0 {
+		return buf[:n], nil // Return data first; EOF will be seen on the next Read.
+	}
 	if err != nil {
 		return nil, err
 	}
-	return buf[:n], nil
+	return buf[:0], nil
 }
 
 func (h *DefaultHostProvider) IOWrite(handleID uint32, data []byte) (int, error) {
@@ -96,13 +94,6 @@ func (h *DefaultHostProvider) IOFlush(handleID uint32) (*IOMeta, error) {
 
 func (h *DefaultHostProvider) IOClose(handleID uint32) error {
 	return h.io.Close(handleID)
-}
-
-func (h *DefaultHostProvider) GetCredential(assetID int64) (string, error) {
-	if h.cfg.Credentials == nil {
-		return "", fmt.Errorf("credential getter not configured")
-	}
-	return h.cfg.Credentials.GetCredential(assetID)
 }
 
 func (h *DefaultHostProvider) GetAssetConfig(assetID int64) (json.RawMessage, error) {

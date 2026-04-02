@@ -8,7 +8,9 @@ interface ExtensionEntry {
 }
 
 interface ExtensionState {
+  ready: boolean;
   extensions: Record<string, ExtensionEntry>;
+  setReady: (ready: boolean) => void;
   register: (name: string, manifest: ExtManifest) => void;
   unregister: (name: string) => void;
   setLoaded: (name: string, loaded: LoadedExtension) => void;
@@ -17,7 +19,12 @@ interface ExtensionState {
 }
 
 export const useExtensionStore = create<ExtensionState>((set, get) => ({
+  ready: false,
   extensions: {},
+
+  setReady(ready) {
+    set({ ready });
+  },
 
   register(name, manifest) {
     set((s) => ({ extensions: { ...s.extensions, [name]: { manifest } } }));

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { Loader2, PlugZap } from "lucide-react";
@@ -25,6 +25,7 @@ import { asset_entity, credential_entity } from "../../../wailsjs/go/models";
 import {
   EncryptPassword,
   GetAvailableAssetTypes,
+  GetDecryptedExtensionConfig,
   ListCredentialsByType,
   ListLocalSSHKeys,
   TestSSHConnection,
@@ -35,7 +36,8 @@ import { app } from "../../../wailsjs/go/models";
 import { SSHConfigSection } from "@/components/asset/SSHConfigSection";
 import { DatabaseConfigSection } from "@/components/asset/DatabaseConfigSection";
 import { RedisConfigSection } from "@/components/asset/RedisConfigSection";
-import { useExtensionStore, ExtensionPage } from "@/extension";
+import { useExtensionStore } from "@/extension";
+import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
 
 interface AssetFormProps {
   open: boolean;
@@ -115,6 +117,11 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     { type: string; extensionName?: string; displayName: string; sshTunnel?: boolean }[]
   >([]);
 
+  // Extension display name is already translated by the backend
+  const resolveExtDisplayName = useCallback((at: { displayName: string }) => {
+    return at.displayName;
+  }, []);
+
   // Basic fields
   const [name, setName] = useState("");
   const [groupId, setGroupId] = useState(0);
@@ -162,6 +169,9 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   // Redis fields
   const [tls, setTls] = useState(false);
 
+  // Extension config
+  const [extConfig, setExtConfig] = useState<Record<string, unknown>>({});
+
   // Exclude self from jump host / SSH tunnel selection
   const jumpHostExcludeIds = editAsset?.ID ? [editAsset.ID] : undefined;
 
@@ -201,6 +211,16 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           loadDatabaseConfig(editAsset);
         } else if (editType === "redis") {
           loadRedisConfig(editAsset);
+        } else {
+          // Extension type: load decrypted config
+          const extInfo = useExtensionStore.getState().getExtensionForAssetType(editType);
+          if (extInfo && editAsset.ID) {
+            GetDecryptedExtensionConfig(editAsset.ID, extInfo.name)
+              .then((cfg) => setExtConfig(JSON.parse(cfg || "{}")))
+              .catch(() => setExtConfig(JSON.parse(editAsset.Config || "{}")));
+          } else {
+            setExtConfig(JSON.parse(editAsset.Config || "{}"));
+          }
         }
       } else {
         setAssetType("ssh");
@@ -212,6 +232,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         resetSSHFields();
         resetDatabaseFields();
         resetRedisFields();
+        setExtConfig({});
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -564,8 +585,22 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       if (tls) redisConfig.tls = true;
       config = JSON.stringify(redisConfig);
     } else {
-      // Extension type: keep existing config (set by extension's ConfigForm)
-      config = editAsset?.Config || "{}";
+      // Extension type: encrypt password fields from configSchema before saving
+      const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
+      const schema = extInfo?.manifest.assetTypes?.find((at) => at.type === assetType)?.configSchema as
+        | { properties?: Record<string, { format?: string }> }
+        | undefined;
+      const configCopy = { ...extConfig };
+      if (schema?.properties) {
+        for (const [key, prop] of Object.entries(schema.properties)) {
+          if (prop.format === "password" && configCopy[key]) {
+            const encrypted = await EncryptPassword(String(configCopy[key]));
+            if (encrypted === undefined) return;
+            configCopy[key] = encrypted;
+          }
+        }
+      }
+      config = JSON.stringify(configCopy);
     }
 
     const asset = new asset_entity.Asset({
@@ -602,7 +637,10 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         ? t("asset.typeDatabase")
         : assetType === "redis"
           ? t("asset.typeRedis")
-          : availableTypes.find((at) => at.type === assetType)?.displayName || assetType;
+          : (() => {
+              const found = availableTypes.find((at) => at.type === assetType);
+              return found ? resolveExtDisplayName(found) : assetType;
+            })();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -629,7 +667,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                     .filter((at) => !!at.extensionName)
                     .map((at) => (
                       <SelectItem key={at.type} value={at.type}>
-                        {at.displayName}
+                        {resolveExtDisplayName(at)}
                       </SelectItem>
                     ))}
                 </SelectContent>
@@ -643,7 +681,15 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder={assetType === "ssh" ? "web-01" : assetType === "database" ? "prod-db" : "cache-01"}
+              placeholder={
+                assetType === "ssh"
+                  ? "web-01"
+                  : assetType === "database"
+                    ? "prod-db"
+                    : assetType === "redis"
+                      ? "cache-01"
+                      : `my-${assetType}`
+              }
             />
           </div>
 
@@ -782,9 +828,17 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             (() => {
               const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
               if (!extInfo) return null;
-              const configPage = extInfo.manifest.frontend?.pages.find((p) => p.component === "ConfigForm");
-              if (!configPage) return null;
-              return <ExtensionPage extensionName={extInfo.name} pageId={configPage.id} assetId={editAsset?.ID} />;
+              const assetTypeDef = extInfo.manifest.assetTypes?.find((at) => at.type === assetType);
+              if (!assetTypeDef?.configSchema) return null;
+              return (
+                <ExtensionConfigForm
+                  extensionName={extInfo.name}
+                  configSchema={assetTypeDef.configSchema as Record<string, unknown>}
+                  value={extConfig}
+                  onChange={setExtConfig}
+                  hasBackend={!!extInfo.manifest.backend}
+                />
+              );
             })()}
 
           {/* Test Connection */}
@@ -824,7 +878,10 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t("action.cancel")}
           </Button>
-          <Button onClick={handleSubmit} disabled={saving || !name || !host}>
+          <Button
+            onClick={handleSubmit}
+            disabled={saving || !name || (["ssh", "database", "redis"].includes(assetType) && !host)}
+          >
             {t("action.save")}
           </Button>
         </DialogFooter>

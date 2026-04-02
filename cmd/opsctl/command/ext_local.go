@@ -12,7 +12,6 @@ import (
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
-	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/pkg/extension"
 
 	"go.uber.org/zap"
@@ -26,7 +25,6 @@ func localExtExec(extName string, toolName string, toolArgs json.RawMessage) int
 	mgr := extension.NewManager(extDir, func(name string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{
 			Logger:       zap.L(),
-			Credentials:  &cliCredentialGetter{},
 			AssetConfigs: &cliAssetConfigGetter{},
 			FileDialogs:  &cliFileDialogOpener{},
 			KV:           &cliKVStore{extName: name},
@@ -61,30 +59,6 @@ func localExtExec(extName string, toolName string, toolArgs json.RawMessage) int
 }
 
 // --- CLI-specific HostProvider adapters ---
-
-// cliCredentialGetter reads credentials from the database (available after bootstrap.Init).
-type cliCredentialGetter struct{}
-
-func (g *cliCredentialGetter) GetCredential(assetID int64) (string, error) {
-	ctx := context.Background()
-	asset, err := asset_repo.Asset().Find(ctx, assetID)
-	if err != nil {
-		return "", fmt.Errorf("asset %d not found: %w", assetID, err)
-	}
-	if asset.Config == "" {
-		return "", nil
-	}
-	var cfg struct {
-		Password string `json:"password"`
-	}
-	if err := json.Unmarshal([]byte(asset.Config), &cfg); err != nil {
-		return "", err
-	}
-	if cfg.Password != "" {
-		return credential_svc.Default().Decrypt(cfg.Password)
-	}
-	return "", nil
-}
 
 // cliAssetConfigGetter reads asset config from the database.
 type cliAssetConfigGetter struct{}

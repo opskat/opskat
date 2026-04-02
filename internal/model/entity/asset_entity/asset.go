@@ -261,7 +261,8 @@ func (a *Asset) Validate() error {
 	case AssetTypeRedis:
 		return a.validateRedis()
 	default:
-		return fmt.Errorf("无效的资产类型: %s", a.Type)
+		// 扩展资产类型由扩展自行校验
+		return nil
 	}
 }
 

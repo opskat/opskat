@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { RefreshCw, Puzzle, Plus, MoreVertical, Info, Trash2 } from "lucide-react";
+import { RefreshCw, Puzzle, Plus, MoreVertical, Info, Trash2, FolderOpen, FileArchive } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -32,6 +32,7 @@ import {
   ListInstalledExtensions,
   ReloadExtensions,
   InstallExtension,
+  InstallExtensionFromDirectory,
   UninstallExtension,
   EnableExtension,
   DisableExtension,
@@ -95,10 +96,10 @@ export function ExtensionSection() {
     }
   };
 
-  const handleInstall = async () => {
+  const handleInstall = async (fromDir?: boolean) => {
     setInstalling(true);
     try {
-      const result = await InstallExtension();
+      const result = fromDir ? await InstallExtensionFromDirectory() : await InstallExtension();
       if (result) {
         await loadExtensions();
         toast.success(t("extension.installSuccess"));
@@ -163,10 +164,24 @@ export function ExtensionSection() {
             </CardDescription>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={handleInstall} disabled={installing} className="gap-1">
-              <Plus className="h-3.5 w-3.5" />
-              {t("extension.install")}
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" disabled={installing} className="gap-1">
+                  <Plus className="h-3.5 w-3.5" />
+                  {t("extension.install")}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => handleInstall(false)}>
+                  <FileArchive className="h-4 w-4 mr-2" />
+                  {t("extension.installFromZip")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleInstall(true)}>
+                  <FolderOpen className="h-4 w-4 mr-2" />
+                  {t("extension.installFromDir")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button variant="outline" size="sm" onClick={handleReload} disabled={reloading} className="gap-1">
               <RefreshCw className={`h-3.5 w-3.5 ${reloading ? "animate-spin" : ""}`} />
               {t("extension.reload")}

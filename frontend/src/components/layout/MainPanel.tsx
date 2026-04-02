@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { X, Settings, KeyRound, MessageSquare, ScrollText, ArrowRightLeft, Server, Folder } from "lucide-react";
+import { X, Settings, KeyRound, MessageSquare, ScrollText, ArrowRightLeft, Server, Folder, Loader2 } from "lucide-react";
 import logoLight from "@/assets/images/logo.png";
 import logoDark from "@/assets/images/logo-dark.png";
 import { useFullscreen } from "@/hooks/useFullscreen";
@@ -176,7 +176,7 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
   const tabData = useTerminalStore((s) => s.tabData);
   const connectingAssetIds = useTerminalStore((s) => s.connectingAssetIds);
 
-  const { assets, groups } = useAssetStore();
+  const { assets, groups, initialized } = useAssetStore();
   const { fileManagerOpenTabs, fileManagerWidth, setFileManagerWidth } = useSFTPStore();
 
   const dragKeyRef = useRef<string | null>(null);
@@ -380,7 +380,16 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
         const meta = activeTab.meta as InfoTabMeta;
         if (meta.targetType === "asset") {
           const asset = assets.find((a) => a.ID === meta.targetId);
-          if (!asset) return null;
+          if (!asset) {
+            if (!initialized) {
+              return (
+                <div className="flex items-center justify-center h-full">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                </div>
+              );
+            }
+            return null;
+          }
           return (
             <AssetDetail
               asset={asset}
@@ -392,7 +401,16 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
           );
         } else {
           const group = groups.find((g) => g.ID === meta.targetId);
-          if (!group) return null;
+          if (!group) {
+            if (!initialized) {
+              return (
+                <div className="flex items-center justify-center h-full">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                </div>
+              );
+            }
+            return null;
+          }
           return <GroupDetail group={group} />;
         }
       }

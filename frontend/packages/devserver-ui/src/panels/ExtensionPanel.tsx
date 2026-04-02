@@ -3,6 +3,8 @@ import React, { useEffect, useState, useRef, useCallback } from "react";
 import ReactDOM from "react-dom/client";
 import * as ui from "@opskat/ui";
 import type { ComponentType } from "react";
+import { useLocale } from "../hooks/useLocale";
+import { useLanguage } from "../hooks/useLanguage";
 
 interface ExtPage {
   id: string;
@@ -20,10 +22,11 @@ interface ExtManifest {
   };
 }
 
-// Passthrough i18n stub: returns the key itself.
+// i18n stub with mutable translations — updated when locale data loads.
+const i18nTranslations: Record<string, string> = {};
 const i18nStub = {
-  t: (key: string) => key,
-  language: "en",
+  t: (key: string) => i18nTranslations[key] ?? key,
+  language: navigator.language || "zh-CN",
   changeLanguage: () => Promise.resolve(),
 };
 
@@ -95,6 +98,16 @@ export function ExtensionPanel() {
   const [moduleLoaded, setModuleLoaded] = useState(false);
   const [loadingModule, setLoadingModule] = useState(false);
   const injected = useRef(false);
+  const { language } = useLanguage();
+  const { t, translations } = useLocale(manifest?.name);
+
+  // Sync locale data and language into the mutable i18n stub so extension frontend can use it.
+  useEffect(() => {
+    Object.keys(i18nTranslations).forEach((k) => delete i18nTranslations[k]);
+    Object.assign(i18nTranslations, translations);
+    i18nStub.language = language;
+    window.dispatchEvent(new CustomEvent("opskat-language-change"));
+  }, [translations, language]);
 
   // Step 1: Load manifest only (lightweight)
   useEffect(() => {
@@ -185,7 +198,7 @@ export function ExtensionPanel() {
               activePageId === page.id ? "bg-primary text-primary-foreground" : "hover:bg-muted"
             }`}
           >
-            {page.i18n?.name || page.id}
+            {t(page.i18n?.name) || page.id}
             {page.slot && <span className="ml-1 text-xs opacity-60">({page.slot})</span>}
           </button>
         ))}
@@ -208,13 +221,9 @@ export function ExtensionPanel() {
             Select a page and click &ldquo;Load Extension&rdquo; to render the extension frontend.
           </div>
         )}
-        {moduleLoaded && !activePage && (
-          <div className="text-muted-foreground">No pages defined in manifest</div>
-        )}
+        {moduleLoaded && !activePage && <div className="text-muted-foreground">No pages defined in manifest</div>}
         {activePage && moduleLoaded && !Component && (
-          <div className="text-red-500">
-            Component &ldquo;{activePage.component}&rdquo; not found in module exports
-          </div>
+          <div className="text-red-500">Component &ldquo;{activePage.component}&rdquo; not found in module exports</div>
         )}
         {activePage && Component && <Component assetId={0} />}
       </div>

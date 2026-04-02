@@ -9,6 +9,7 @@ import {forward_entity} from '../models';
 import {group_entity} from '../models';
 import {credential_entity} from '../models';
 import {backup_svc} from '../models';
+import {extension_svc} from '../models';
 import {extension} from '../models';
 import {sshpool} from '../models';
 import {status} from '../models';
@@ -123,6 +124,8 @@ export function GetDefaultPolicy(arg1:string):Promise<string>;
 
 export function GetDownloadMirror():Promise<string>;
 
+export function GetExtensionDetail(arg1:string):Promise<extension_svc.ExtensionInfo>;
+
 export function GetExtensionManifest(arg1:string):Promise<extension.Manifest>;
 
 export function GetGitHubToken():Promise<string>;
@@ -161,7 +164,9 @@ export function ImportTabbySelected(arg1:Array<number>,arg2:string,arg3:boolean)
 
 export function InitAIProvider():Promise<void>;
 
-export function InstallExtension():Promise<app.ExtensionInfo>;
+export function InstallExtension():Promise<extension_svc.ExtensionInfo>;
+
+export function InstallExtensionFromDirectory():Promise<extension_svc.ExtensionInfo>;
 
 export function InstallOpsctl(arg1:string):Promise<string>;
 
@@ -187,7 +192,7 @@ export function ListForwardConfigs():Promise<Array<app.ForwardConfigWithStatus>>
 
 export function ListGroups():Promise<Array<group_entity.Group>>;
 
-export function ListInstalledExtensions():Promise<Array<app.ExtensionInfo>>;
+export function ListInstalledExtensions():Promise<Array<extension_svc.ExtensionInfo>>;
 
 export function ListLocalSSHKeys():Promise<Array<app.LocalSSHKeyInfo>>;
 
@@ -281,6 +286,8 @@ export function TestRedisConnection(arg1:string,arg2:string):Promise<void>;
 
 export function TestSSHConnection(arg1:string,arg2:string):Promise<void>;
 
+export function UninstallExtension(arg1:string,arg2:boolean):Promise<void>;
+
 export function UpdateAIProvider(arg1:number,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:number,arg8:number):Promise<void>;
 
 export function UpdateAsset(arg1:asset_entity.Asset):Promise<void>;
@@ -294,8 +301,6 @@ export function UpdateCredentialPassword(arg1:number,arg2:string):Promise<void>;
 export function UpdateForwardConfig(arg1:number,arg2:string,arg3:number,arg4:Array<forward_entity.ForwardRule>):Promise<forward_entity.ForwardConfig>;
 
 export function UpdateGroup(arg1:group_entity.Group):Promise<void>;
-
-export function UninstallExtension(arg1:string,arg2:boolean):Promise<void>;
 
 export function UpdatePolicyGroup(arg1:policy_group_entity.PolicyGroup):Promise<void>;
 

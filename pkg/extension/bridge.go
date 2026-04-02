@@ -1,9 +1,11 @@
 package extension
 
 import (
+	"encoding/json"
 	"sync"
 
 	"github.com/opskat/opskat/internal/model/entity/policy"
+	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
 )
 
 // ExtAssetType represents an extension-provided asset type.
@@ -77,6 +79,16 @@ func (b *Bridge) Register(ext *Extension) {
 			I18n:          pg.I18n,
 			Policy:        pg.Policy,
 		})
+		// 注册到全局 entity，使 ListPolicyGroups 可以返回扩展权限组
+		policyJSON, _ := json.Marshal(pg.Policy)
+		policy_group_entity.RegisterExtensionGroup(&policy_group_entity.PolicyGroup{
+			BuiltinID:     pg.ID,
+			Name:          pg.I18n.Name,
+			Description:   pg.I18n.Description,
+			PolicyType:    m.Policies.Type,
+			Policy:        string(policyJSON),
+			ExtensionName: ext.Name,
+		})
 	}
 
 	b.toolIndex[ext.Name] = make(map[string]*Extension)
@@ -106,6 +118,9 @@ func (b *Bridge) Unregister(name string) {
 		}
 	}
 	b.policyGroups = filteredPG
+
+	// 清理全局 entity 中的扩展权限组
+	policy_group_entity.UnregisterExtensionGroupsByExtension(name)
 
 	delete(b.toolIndex, name)
 

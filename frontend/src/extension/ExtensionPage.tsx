@@ -36,18 +36,29 @@ class ExtensionErrorBoundary extends React.Component<
   }
 }
 
+/** Grace period (ms) before showing "not registered" error. */
+const NOT_REGISTERED_TIMEOUT = 5000;
+
 export function ExtensionPage({ extensionName, pageId, assetId }: ExtensionPageProps) {
-  const extensions = useExtensionStore((s) => s.extensions);
+  const ready = useExtensionStore((s) => s.ready);
+  const entry = useExtensionStore((s) => s.extensions[extensionName]);
   const setLoaded = useExtensionStore((s) => s.setLoaded);
   const [loaded, setLoadedLocal] = useState<LoadedExtension | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const entry = extensions[extensionName];
+    if (!ready) return;
+
     if (!entry) {
-      setError(`Extension "${extensionName}" not registered`);
-      return;
+      // Extension not registered yet — wait for ext:reload to bring it in.
+      // Only show error after a grace period.
+      const timer = setTimeout(() => {
+        setError(`Extension "${extensionName}" not registered`);
+      }, NOT_REGISTERED_TIMEOUT);
+      return () => clearTimeout(timer);
     }
+
+    setError(null);
 
     if (entry.loaded) {
       setLoadedLocal(entry.loaded);
@@ -70,7 +81,7 @@ export function ExtensionPage({ extensionName, pageId, assetId }: ExtensionPageP
     return () => {
       cancelled = true;
     };
-  }, [extensionName, pageId]);
+  }, [ready, entry, extensionName, pageId, setLoaded]);
 
   if (error) {
     return (

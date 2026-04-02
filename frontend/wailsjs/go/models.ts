@@ -311,48 +311,6 @@ export namespace app {
 		    return a;
 		}
 	}
-	export class ExtensionInfo {
-	    name: string;
-	    version: string;
-	    icon: string;
-	    displayName: string;
-	    description: string;
-	    enabled: boolean;
-	    manifest?: extension.Manifest;
-
-	    static createFrom(source: any = {}) {
-	        return new ExtensionInfo(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.version = source["version"];
-	        this.icon = source["icon"];
-	        this.displayName = source["displayName"];
-	        this.description = source["description"];
-	        this.enabled = source["enabled"];
-	        this.manifest = this.convertValues(source["manifest"], extension.Manifest);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
 	export class RuleWithStatus {
 	    id: number;
 	    configId: number;
@@ -1276,6 +1234,53 @@ export namespace extension {
 
 }
 
+export namespace extension_svc {
+	
+	export class ExtensionInfo {
+	    name: string;
+	    version: string;
+	    icon: string;
+	    displayName: string;
+	    description: string;
+	    enabled: boolean;
+	    manifest?: extension.Manifest;
+	
+	    static createFrom(source: any = {}) {
+	        return new ExtensionInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.version = source["version"];
+	        this.icon = source["icon"];
+	        this.displayName = source["displayName"];
+	        this.description = source["description"];
+	        this.enabled = source["enabled"];
+	        this.manifest = this.convertValues(source["manifest"], extension.Manifest);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace forward_entity {
 	
 	export class ForwardConfig {
@@ -1532,6 +1537,7 @@ export namespace policy_group_entity {
 	    policyType: string;
 	    policy: string;
 	    builtin: boolean;
+	    extensionName?: string;
 	    createtime: number;
 	    updatetime: number;
 	
@@ -1547,6 +1553,7 @@ export namespace policy_group_entity {
 	        this.policyType = source["policyType"];
 	        this.policy = source["policy"];
 	        this.builtin = source["builtin"];
+	        this.extensionName = source["extensionName"];
 	        this.createtime = source["createtime"];
 	        this.updatetime = source["updatetime"];
 	    }

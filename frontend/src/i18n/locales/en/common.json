@@ -47,7 +47,8 @@
     "copy": "Copy",
     "close": "Close",
     "submit": "Submit",
-    "openInTab": "Open in New Tab"
+    "openInTab": "Open in New Tab",
+    "open": "Open"
   },
   "tab": {
     "close": "Close",
@@ -221,6 +222,7 @@
       "noMore": "No more groups to add",
       "manage": "Manage Groups",
       "builtinSection": "Built-in",
+      "extensionSection": "Extension",
       "customSection": "Custom",
       "empty": "No custom groups yet",
       "create": "Create",
@@ -919,6 +921,8 @@
     "reloadSuccess": "Extensions reloaded",
     "reloadError": "Reload failed",
     "install": "Install Extension",
+    "installFromZip": "From ZIP",
+    "installFromDir": "From Directory",
     "installSuccess": "Extension installed successfully",
     "installError": "Installation failed",
     "uninstall": "Uninstall",

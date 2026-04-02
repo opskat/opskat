@@ -55,7 +55,7 @@ func main() {
 	// Create host + plugin
 	host := NewDevServerHost(dataDir)
 	ctx := context.Background()
-	plugin, err := extension.LoadPlugin(ctx, m, wasmBytes, host)
+	plugin, err := extension.LoadPlugin(ctx, m, wasmBytes, host, nil)
 	if err != nil {
 		logger.Fatal("load plugin", zap.Error(err))
 	}

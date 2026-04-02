@@ -1,6 +1,7 @@
 export { cn } from "./lib/utils";
 export { pinyinMatch } from "./lib/pinyin";
 export { useIMEComposing } from "./hooks/useIMEComposing";
+export { useResizeHandle } from "./hooks/useResizeHandle";
 export * from "./components/alert-dialog";
 export * from "./components/button";
 export * from "./components/card";

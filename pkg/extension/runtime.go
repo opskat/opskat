@@ -23,8 +23,13 @@ type Plugin struct {
 }
 
 // LoadPlugin compiles a WASM binary and prepares it for execution.
-func LoadPlugin(ctx context.Context, manifest *Manifest, wasmBytes []byte, host HostProvider) (*Plugin, error) {
-	r := wazero.NewRuntime(ctx)
+// If cache is non-nil, compiled modules are cached to disk for faster subsequent loads.
+func LoadPlugin(ctx context.Context, manifest *Manifest, wasmBytes []byte, host HostProvider, cache wazero.CompilationCache) (*Plugin, error) {
+	cfg := wazero.NewRuntimeConfig()
+	if cache != nil {
+		cfg = cfg.WithCompilationCache(cache)
+	}
+	r := wazero.NewRuntimeWithConfig(ctx, cfg)
 
 	wasi_snapshot_preview1.MustInstantiate(ctx, r)
 
@@ -129,7 +134,9 @@ func (p *Plugin) call(ctx context.Context, fnName string, input []byte) (json.Ra
 		WithStdout(stdout).
 		WithStderr(stderr).
 		WithArgs(fnName).
-		WithName("")
+		WithName("").
+		WithSysWalltime().
+		WithSysNanotime()
 
 	mod, err := p.runtime.InstantiateModule(ctx, p.compiled, cfg)
 	if err != nil {
@@ -137,7 +144,18 @@ func (p *Plugin) call(ctx context.Context, fnName string, input []byte) (json.Ra
 	}
 	defer mod.Close(ctx)
 
-	return stdout.Bytes(), nil
+	// The guest SDK encodes handler errors as {"error":"..."} on stdout.
+	// Detect this and propagate as a Go error so callers (Wails, AI bridge,
+	// devserver) can distinguish success from failure.
+	out := stdout.Bytes()
+	var errEnvelope struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(out, &errEnvelope) == nil && errEnvelope.Error != "" {
+		return nil, fmt.Errorf("%s", errEnvelope.Error)
+	}
+
+	return out, nil
 }
 
 // registerHostModule registers all 12 host functions as a wazero host module named "opskat".
@@ -171,6 +189,13 @@ func registerHostModule(ctx context.Context, r wazero.Runtime, host HostProvider
 	// host_io_read(handle_id, size) -> packed(data_ptr, data_len)
 	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, handleID, size uint32) uint64 {
 		data, err := host.IORead(handleID, int(size))
+		if err == io.EOF {
+			// Signal EOF as empty result (size=0). The guest SDK's
+			// IOHandle.Read converts len(data)==0 into the real io.EOF.
+			// Encoding io.EOF as a JSON error would produce fmt.Errorf("EOF")
+			// on the guest, which != io.EOF and breaks io.ReadAll / AWS SDK.
+			return writeGuestBytes(ctx, mod, nil)
+		}
 		if err != nil {
 			return encodeError(ctx, mod, err)
 		}
@@ -200,15 +225,6 @@ func registerHostModule(ctx context.Context, r wazero.Runtime, host HostProvider
 	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, handleID uint32) {
 		host.IOClose(handleID)
 	}).Export("host_io_close")
-
-	// host_credential_get(asset_id) -> packed(result_ptr, result_len)
-	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, assetID uint64) uint64 {
-		cred, err := host.GetCredential(int64(assetID))
-		if err != nil {
-			return encodeError(ctx, mod, err)
-		}
-		return writeGuestBytes(ctx, mod, []byte(cred))
-	}).Export("host_credential_get")
 
 	// host_asset_get_config(asset_id) -> packed(result_ptr, result_len)
 	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, assetID uint64) uint64 {

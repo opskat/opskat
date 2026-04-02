@@ -5,7 +5,7 @@ import { cn, Button, ScrollArea, ConfirmDialog } from "@opskat/ui";
 import { useAIStore } from "@/stores/aiStore";
 import { useTabStore, type AITabMeta } from "@/stores/tabStore";
 import { useFullscreen } from "@/hooks/useFullscreen";
-import { useResizeHandle } from "@/hooks/useResizeHandle";
+import { useResizeHandle } from "@opskat/ui";
 
 // resize constants kept near usage for clarity
 

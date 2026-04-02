@@ -69,6 +69,7 @@ test-cover:
 # 构建 DevServer UI 前端
 build-devserver-ui:
 	cd frontend/packages/devserver-ui && pnpm build
+	@touch cmd/devserver/embed.go
 
 # 运行扩展 DevServer（需指定 EXT=扩展名，如 make devserver EXT=oss）
 devserver: build-devserver-ui

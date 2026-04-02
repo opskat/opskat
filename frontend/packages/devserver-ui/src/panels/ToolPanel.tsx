@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useLocale } from "../hooks/useLocale";
 
 interface ToolDefUI {
   name: string;
@@ -47,6 +48,7 @@ function generateDefaults(schema: Record<string, unknown> | undefined): unknown 
 
 export function ToolPanel() {
   const [manifest, setManifest] = useState<Manifest | null>(null);
+  const { t } = useLocale(manifest?.name);
   const [selectedTool, setSelectedTool] = useState("");
   const [args, setArgs] = useState("{}");
   const [result, setResult] = useState<string | null>(null);
@@ -61,7 +63,7 @@ export function ToolPanel() {
 
   const handleToolChange = (toolName: string) => {
     setSelectedTool(toolName);
-    const tool = manifest?.tools?.find((t) => t.name === toolName);
+    const tool = manifest?.tools?.find((item) => item.name === toolName);
     if (tool?.parameters) {
       setArgs(JSON.stringify(generateDefaults(tool.parameters), null, 2));
     } else {
@@ -104,9 +106,9 @@ export function ToolPanel() {
           className="w-full border rounded px-3 py-2 bg-background"
         >
           <option value="">Select a tool...</option>
-          {manifest?.tools?.map((t) => (
-            <option key={t.name} value={t.name}>
-              {t.name} — {t.i18n?.description}
+          {manifest?.tools?.map((tool) => (
+            <option key={tool.name} value={tool.name}>
+              {tool.name} — {t(tool.i18n?.description)}
             </option>
           ))}
         </select>

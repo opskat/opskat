@@ -1,33 +1,13 @@
 package app
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 
-	"github.com/opskat/opskat/internal/ai"
-	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
-	"github.com/opskat/opskat/internal/repository/asset_repo"
-	"github.com/opskat/opskat/internal/repository/extension_data_repo"
-	"github.com/opskat/opskat/internal/repository/extension_state_repo"
+	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
-	"go.uber.org/zap"
 )
-
-// ExtensionInfo is the frontend-facing extension descriptor.
-type ExtensionInfo struct {
-	Name        string              `json:"name"`
-	Version     string              `json:"version"`
-	Icon        string              `json:"icon"`
-	DisplayName string              `json:"displayName"`
-	Description string              `json:"description"`
-	Enabled     bool                `json:"enabled"`
-	Manifest    *extension.Manifest `json:"manifest"`
-}
 
 // AssetTypeInfo combines built-in and extension asset types for the frontend.
 type AssetTypeInfo struct {
@@ -38,63 +18,19 @@ type AssetTypeInfo struct {
 }
 
 // ListInstalledExtensions returns all loaded extensions.
-func (a *App) ListInstalledExtensions() []ExtensionInfo {
-	if a.extManager == nil {
+func (a *App) ListInstalledExtensions() []extension_svc.ExtensionInfo {
+	if a.extSvc == nil {
 		return nil
 	}
-
-	// Build set of loaded (enabled) extensions
-	loaded := make(map[string]*extension.Extension)
-	for _, ext := range a.extManager.ListExtensions() {
-		loaded[ext.Name] = ext
-	}
-
-	// Scan all manifests from disk (includes disabled ones)
-	allManifests, err := a.extManager.ScanManifests()
-	if err != nil {
-		zap.L().Warn("scan manifests failed", zap.Error(err))
-		// Fall back to only loaded extensions
-		result := make([]ExtensionInfo, 0, len(loaded))
-		for _, ext := range loaded {
-			result = append(result, ExtensionInfo{
-				Name:        ext.Name,
-				Version:     ext.Manifest.Version,
-				Icon:        ext.Manifest.Icon,
-				DisplayName: ext.Manifest.I18n.DisplayName,
-				Description: ext.Manifest.I18n.Description,
-				Enabled:     true,
-				Manifest:    ext.Manifest,
-			})
-		}
-		return result
-	}
-
-	result := make([]ExtensionInfo, 0, len(allManifests))
-	for _, mi := range allManifests {
-		ext, isLoaded := loaded[mi.Name]
-		info := ExtensionInfo{
-			Name:        mi.Name,
-			Version:     mi.Manifest.Version,
-			Icon:        mi.Manifest.Icon,
-			DisplayName: mi.Manifest.I18n.DisplayName,
-			Description: mi.Manifest.I18n.Description,
-			Enabled:     isLoaded,
-			Manifest:    mi.Manifest,
-		}
-		if isLoaded {
-			info.Manifest = ext.Manifest
-		}
-		result = append(result, info)
-	}
-	return result
+	return a.extSvc.ListInstalled(a.lang)
 }
 
 // GetExtensionManifest returns a single extension's manifest.
 func (a *App) GetExtensionManifest(name string) (*extension.Manifest, error) {
-	if a.extManager == nil {
+	if a.extSvc == nil {
 		return nil, fmt.Errorf("extension system not initialized")
 	}
-	ext := a.extManager.GetExtension(name)
+	ext := a.extSvc.Manager().GetExtension(name)
 	if ext == nil {
 		return nil, fmt.Errorf("extension %q not found", name)
 	}
@@ -108,12 +44,18 @@ func (a *App) GetAvailableAssetTypes() []AssetTypeInfo {
 		{Type: "database", DisplayName: "Database"},
 		{Type: "redis", DisplayName: "Redis"},
 	}
-	if a.extBridge != nil {
-		for _, at := range a.extBridge.GetAssetTypes() {
+	if a.extSvc != nil {
+		bridge := a.extSvc.Bridge()
+		lang := a.lang
+		for _, at := range bridge.GetAssetTypes() {
+			displayName := at.I18n.Name
+			if ext := a.extSvc.Manager().GetExtension(at.ExtensionName); ext != nil {
+				displayName = ext.Translate(lang, at.I18n.Name)
+			}
 			types = append(types, AssetTypeInfo{
 				Type:          at.Type,
 				ExtensionName: at.ExtensionName,
-				DisplayName:   at.I18n.Name,
+				DisplayName:   displayName,
 				SSHTunnel:     true,
 			})
 		}
@@ -123,10 +65,10 @@ func (a *App) GetAvailableAssetTypes() []AssetTypeInfo {
 
 // CallExtensionAction calls an extension action and streams events via Wails Events.
 func (a *App) CallExtensionAction(extName, action string, argsJSON string) (string, error) {
-	if a.extBridge == nil {
+	if a.extSvc == nil {
 		return "", fmt.Errorf("extension system not initialized")
 	}
-	ext := a.extManager.GetExtension(extName)
+	ext := a.extSvc.Manager().GetExtension(extName)
 	if ext == nil {
 		return "", fmt.Errorf("extension %q not loaded", extName)
 	}
@@ -150,10 +92,10 @@ func (a *App) CallExtensionAction(extName, action string, argsJSON string) (stri
 
 // CallExtensionTool calls an extension tool (for frontend config testing etc.)
 func (a *App) CallExtensionTool(extName, tool string, argsJSON string) (string, error) {
-	if a.extBridge == nil {
+	if a.extSvc == nil {
 		return "", fmt.Errorf("extension system not initialized")
 	}
-	ext := a.extManager.GetExtension(extName)
+	ext := a.extSvc.Manager().GetExtension(extName)
 	if ext == nil {
 		return "", fmt.Errorf("extension %q not loaded", extName)
 	}
@@ -176,249 +118,113 @@ func (a *App) CallExtensionTool(extName, tool string, argsJSON string) (string, 
 }
 
 // GetDecryptedExtensionConfig returns the asset config with password fields decrypted.
-// Used by the frontend when editing an extension-type asset.
 func (a *App) GetDecryptedExtensionConfig(assetID int64, extName string) (string, error) {
-	ctx := context.Background()
-	asset, err := asset_repo.Asset().Find(ctx, assetID)
-	if err != nil {
-		return "", fmt.Errorf("asset %d not found: %w", assetID, err)
+	if a.extSvc == nil {
+		return "", fmt.Errorf("extension system not initialized")
 	}
-	if asset.Config == "" {
-		return "{}", nil
-	}
-	raw := json.RawMessage(asset.Config)
-	decrypted, err := decryptConfigPasswordFields(raw, asset.Type, a.extBridge)
-	if err != nil {
-		return "", err
-	}
-	return string(decrypted), nil
+	return getDecryptedExtConfig(assetID, a.extSvc.Bridge())
 }
 
-// InstallExtension opens a file dialog and installs an extension from zip or directory.
-func (a *App) InstallExtension() (*ExtensionInfo, error) {
-	if a.extManager == nil {
+// InstallExtension opens a file dialog and installs an extension from a zip file.
+func (a *App) InstallExtension() (*extension_svc.ExtensionInfo, error) {
+	if a.extSvc == nil {
 		return nil, fmt.Errorf("extension system not initialized")
 	}
 
 	selected, err := wailsRuntime.OpenFileDialog(a.ctx, wailsRuntime.OpenDialogOptions{
-		Title: "Select Extension",
+		Title: "Select Extension Package",
 		Filters: []wailsRuntime.FileFilter{
 			{DisplayName: "Extension Package (*.zip)", Pattern: "*.zip"},
-			{DisplayName: "All Files", Pattern: "*.*"},
 		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("file dialog: %w", err)
 	}
 	if selected == "" {
-		return nil, nil // user cancelled
+		return nil, nil // user canceled
 	}
 
-	// Check if selected path is a directory
-	info, err := os.Stat(selected)
+	return a.installExtensionFromPath(selected)
+}
+
+// InstallExtensionFromDirectory opens a directory dialog and installs a local extension.
+func (a *App) InstallExtensionFromDirectory() (*extension_svc.ExtensionInfo, error) {
+	if a.extSvc == nil {
+		return nil, fmt.Errorf("extension system not initialized")
+	}
+
+	selected, err := wailsRuntime.OpenDirectoryDialog(a.ctx, wailsRuntime.OpenDialogOptions{
+		Title: "Select Extension Directory",
+	})
 	if err != nil {
-		return nil, fmt.Errorf("stat selected path: %w", err)
+		return nil, fmt.Errorf("directory dialog: %w", err)
 	}
-	sourcePath := selected
-	if info.IsDir() {
-		// Directory selected — use directly
-	} else if !strings.HasSuffix(strings.ToLower(selected), ".zip") {
-		return nil, fmt.Errorf("unsupported file type: %s", selected)
+	if selected == "" {
+		return nil, nil // user canceled
 	}
 
-	manifest, err := a.extManager.Install(a.langCtx(), sourcePath)
+	return a.installExtensionFromPath(selected)
+}
+
+func (a *App) installExtensionFromPath(sourcePath string) (*extension_svc.ExtensionInfo, error) {
+	manifest, err := a.extSvc.Install(a.langCtx(), sourcePath)
 	if err != nil {
-		return nil, fmt.Errorf("install extension: %w", err)
+		return nil, err
 	}
 
-	// Register in bridge
-	ext := a.extManager.GetExtension(manifest.Name)
+	ext := a.extSvc.Manager().GetExtension(manifest.Name)
+	lm := manifest
 	if ext != nil {
-		a.extBridge.Register(ext)
-		ai.SetExecToolExecutor(a.extBridge)
+		lm = manifest.Localized(func(key string) string { return ext.Translate(a.lang, key) })
 	}
 
-	// Save enabled state
-	a.ensureExtensionState(manifest.Name, true)
-
-	wailsRuntime.EventsEmit(a.ctx, "ext:reload", nil)
-
-	return &ExtensionInfo{
-		Name:        manifest.Name,
-		Version:     manifest.Version,
-		Icon:        manifest.Icon,
-		DisplayName: manifest.I18n.DisplayName,
-		Description: manifest.I18n.Description,
+	return &extension_svc.ExtensionInfo{
+		Name:        lm.Name,
+		Version:     lm.Version,
+		Icon:        lm.Icon,
+		DisplayName: lm.I18n.DisplayName,
+		Description: lm.I18n.Description,
 		Enabled:     true,
-		Manifest:    manifest,
+		Manifest:    lm,
 	}, nil
 }
 
 // UninstallExtension removes an extension and optionally cleans up its data.
 func (a *App) UninstallExtension(name string, cleanData bool) error {
-	if a.extManager == nil {
+	if a.extSvc == nil {
 		return fmt.Errorf("extension system not initialized")
 	}
-
-	// Unregister from bridge first
-	a.extBridge.Unregister(name)
-	ai.SetExecToolExecutor(a.extBridge)
-
-	// Uninstall (unload + remove directory)
-	if err := a.extManager.Uninstall(a.langCtx(), name); err != nil {
-		return fmt.Errorf("uninstall extension: %w", err)
-	}
-
-	// Clean database records
-	ctx := context.Background()
-	if err := extension_state_repo.ExtensionState().Delete(ctx, name); err != nil {
-		zap.L().Warn("delete extension state", zap.String("name", name), zap.Error(err))
-	}
-	if cleanData {
-		if err := extension_data_repo.ExtensionData().DeleteAll(ctx, name); err != nil {
-			zap.L().Warn("delete extension data", zap.String("name", name), zap.Error(err))
-		}
-	}
-
-	wailsRuntime.EventsEmit(a.ctx, "ext:reload", nil)
-	return nil
+	return a.extSvc.Uninstall(a.langCtx(), name, cleanData)
 }
 
 // EnableExtension loads a disabled extension and registers it.
 func (a *App) EnableExtension(name string) error {
-	if a.extManager == nil {
+	if a.extSvc == nil {
 		return fmt.Errorf("extension system not initialized")
 	}
-
-	// Check if already loaded
-	if ext := a.extManager.GetExtension(name); ext != nil {
-		return nil // already enabled
-	}
-
-	dir := a.extManager.ExtDir(name)
-	if _, err := a.extManager.LoadExtension(a.langCtx(), dir); err != nil {
-		return fmt.Errorf("load extension: %w", err)
-	}
-
-	ext := a.extManager.GetExtension(name)
-	if ext != nil {
-		a.extBridge.Register(ext)
-		ai.SetExecToolExecutor(a.extBridge)
-	}
-
-	a.ensureExtensionState(name, true)
-
-	wailsRuntime.EventsEmit(a.ctx, "ext:reload", nil)
-	return nil
+	return a.extSvc.Enable(a.langCtx(), name)
 }
 
 // DisableExtension unloads a running extension without removing files.
 func (a *App) DisableExtension(name string) error {
-	if a.extManager == nil {
+	if a.extSvc == nil {
 		return fmt.Errorf("extension system not initialized")
 	}
-
-	a.extBridge.Unregister(name)
-	_ = a.extManager.Unload(a.langCtx(), name)
-	ai.SetExecToolExecutor(a.extBridge)
-
-	a.ensureExtensionState(name, false)
-
-	wailsRuntime.EventsEmit(a.ctx, "ext:reload", nil)
-	return nil
+	return a.extSvc.Disable(a.langCtx(), name)
 }
 
 // GetExtensionDetail returns the full manifest and state for a single extension.
-func (a *App) GetExtensionDetail(name string) (*ExtensionInfo, error) {
-	if a.extManager == nil {
+func (a *App) GetExtensionDetail(name string) (*extension_svc.ExtensionInfo, error) {
+	if a.extSvc == nil {
 		return nil, fmt.Errorf("extension system not initialized")
 	}
-
-	// Try loaded extension first
-	ext := a.extManager.GetExtension(name)
-	if ext != nil {
-		return &ExtensionInfo{
-			Name:        ext.Name,
-			Version:     ext.Manifest.Version,
-			Icon:        ext.Manifest.Icon,
-			DisplayName: ext.Manifest.I18n.DisplayName,
-			Description: ext.Manifest.I18n.Description,
-			Enabled:     true,
-			Manifest:    ext.Manifest,
-		}, nil
-	}
-
-	// Try reading manifest from disk (disabled extension)
-	dir := a.extManager.ExtDir(name)
-	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
-	if err != nil {
-		return nil, fmt.Errorf("extension %q not found", name)
-	}
-	manifest, err := extension.ParseManifest(data)
-	if err != nil {
-		return nil, fmt.Errorf("parse manifest: %w", err)
-	}
-
-	return &ExtensionInfo{
-		Name:        manifest.Name,
-		Version:     manifest.Version,
-		Icon:        manifest.Icon,
-		DisplayName: manifest.I18n.DisplayName,
-		Description: manifest.I18n.Description,
-		Enabled:     false,
-		Manifest:    manifest,
-	}, nil
-}
-
-// ensureExtensionState creates or updates the extension_state record.
-func (a *App) ensureExtensionState(name string, enabled bool) {
-	ctx := context.Background()
-	state, err := extension_state_repo.ExtensionState().Find(ctx, name)
-	if err != nil {
-		// Not found, create
-		if err := extension_state_repo.ExtensionState().Create(ctx, &extension_state_entity.ExtensionState{
-			Name:    name,
-			Enabled: enabled,
-		}); err != nil {
-			zap.L().Warn("create extension state", zap.String("name", name), zap.Error(err))
-		}
-		return
-	}
-	state.Enabled = enabled
-	if err := extension_state_repo.ExtensionState().Update(ctx, state); err != nil {
-		zap.L().Warn("update extension state", zap.String("name", name), zap.Error(err))
-	}
+	return a.extSvc.GetDetail(name, a.lang)
 }
 
 // ReloadExtensions re-scans extensions directory and updates the bridge.
 func (a *App) ReloadExtensions() error {
-	if a.extManager == nil {
+	if a.extSvc == nil {
 		return fmt.Errorf("extension system not initialized")
 	}
-
-	a.extManager.Close(a.langCtx())
-
-	if _, err := a.extManager.Scan(a.langCtx()); err != nil {
-		return fmt.Errorf("scan extensions: %w", err)
-	}
-
-	a.extBridge = extension.NewBridge()
-	for _, ext := range a.extManager.ListExtensions() {
-		a.extBridge.Register(ext)
-	}
-
-	// Unload disabled extensions
-	states, _ := extension_state_repo.ExtensionState().FindAll(context.Background())
-	for _, state := range states {
-		if !state.Enabled {
-			a.extBridge.Unregister(state.Name)
-			_ = a.extManager.Unload(a.langCtx(), state.Name)
-		}
-	}
-
-	ai.SetExecToolExecutor(a.extBridge)
-
-	wailsRuntime.EventsEmit(a.ctx, "ext:reload", nil)
-	zap.L().Info("extensions reloaded")
-	return nil
+	return a.extSvc.Reload(a.langCtx())
 }

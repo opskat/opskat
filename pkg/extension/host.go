@@ -11,7 +11,6 @@ type HostProvider interface {
 	IOWrite(handleID uint32, data []byte) (int, error)
 	IOFlush(handleID uint32) (*IOMeta, error)
 	IOClose(handleID uint32) error
-	GetCredential(assetID int64) (string, error)
 	GetAssetConfig(assetID int64) (json.RawMessage, error)
 	FileDialog(dialogType string, opts DialogOptions) (string, error)
 	Log(level, msg string)
