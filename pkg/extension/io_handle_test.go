@@ -17,7 +17,7 @@ func TestIOHandleManager(t *testing.T) {
 		Convey("file read handle", func() {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "test.txt")
-			os.WriteFile(path, []byte("hello world"), 0644)
+			So(os.WriteFile(path, []byte("hello world"), 0644), ShouldBeNil)
 
 			h, meta, err := mgr.OpenFile(path, "read")
 			So(err, ShouldBeNil)
@@ -52,7 +52,7 @@ func TestIOHandleManager(t *testing.T) {
 
 			So(mgr.Close(h), ShouldBeNil)
 
-			data, _ := os.ReadFile(path)
+			data, _ := os.ReadFile(path) //nolint:gosec // test file with known path
 			So(string(data), ShouldEqual, "written")
 		})
 
@@ -64,7 +64,7 @@ func TestIOHandleManager(t *testing.T) {
 		Convey("CloseAll closes all handles", func() {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "a.txt")
-			os.WriteFile(path, []byte("a"), 0644)
+			So(os.WriteFile(path, []byte("a"), 0644), ShouldBeNil)
 
 			h, _, _ := mgr.OpenFile(path, "read")
 			mgr.CloseAll()

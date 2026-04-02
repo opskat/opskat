@@ -22,6 +22,12 @@ interface ExtManifest {
   };
 }
 
+declare global {
+  interface Window {
+    __OPSKAT_EXT__?: Record<string, unknown>;
+  }
+}
+
 // i18n stub with mutable translations — updated when locale data loads.
 const i18nTranslations: Record<string, string> = {};
 const i18nStub = {
@@ -31,9 +37,9 @@ const i18nStub = {
 };
 
 function injectDevServerAPI(): void {
-  if ((window as any).__OPSKAT_EXT__) return;
+  if (window.__OPSKAT_EXT__) return;
 
-  (window as any).__OPSKAT_EXT__ = {
+  window.__OPSKAT_EXT__ = {
     React,
     ReactDOM,
     i18n: i18nStub,
@@ -93,7 +99,7 @@ function injectDevServerAPI(): void {
 export function ExtensionPanel() {
   const [manifest, setManifest] = useState<ExtManifest | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [components, setComponents] = useState<Record<string, ComponentType<any>>>({});
+  const [components, setComponents] = useState<Record<string, ComponentType<Record<string, unknown>>>>({});
   const [activePageId, setActivePageId] = useState<string | null>(null);
   const [moduleLoaded, setModuleLoaded] = useState(false);
   const [loadingModule, setLoadingModule] = useState(false);
@@ -155,7 +161,7 @@ export function ExtensionPanel() {
 
       const mod = await import(/* @vite-ignore */ `/extensions/${m.name}/${m.frontend!.entry}`);
 
-      const loaded: Record<string, ComponentType<any>> = {};
+      const loaded: Record<string, ComponentType<Record<string, unknown>>> = {};
       for (const page of m.frontend!.pages) {
         if (mod[page.component]) {
           loaded[page.component] = mod[page.component];

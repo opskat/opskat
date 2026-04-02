@@ -9,6 +9,9 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
 )
 
 type httpPhase int
@@ -23,17 +26,17 @@ const (
 type DialFunc func(network, addr string) (net.Conn, error)
 
 type httpHandle struct {
-	mu        sync.Mutex
-	client    *http.Client
-	method    string
-	url       string
-	headers   map[string]string
-	ctx       context.Context
-	cancel    context.CancelFunc
-	bodyBuf   *bytes.Buffer  // buffered request body (for POST/PUT/PATCH)
-	resp      *http.Response
-	phase     httpPhase
-	hasBody   bool // true for POST/PUT/PATCH
+	mu      sync.Mutex
+	client  *http.Client
+	method  string
+	url     string
+	headers map[string]string
+	ctx     context.Context
+	cancel  context.CancelFunc
+	bodyBuf *bytes.Buffer // buffered request body (for POST/PUT/PATCH)
+	resp    *http.Response
+	phase   httpPhase
+	hasBody bool // true for POST/PUT/PATCH
 }
 
 // newHTTPHandle creates an HTTP handle ready for writing (POST/PUT/PATCH)
@@ -119,7 +122,7 @@ func (h *httpHandle) Flush() (*IOMeta, error) {
 	client := h.client
 	h.mu.Unlock()
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) //nolint:bodyclose // body is read by Read() and closed by Close()
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
@@ -168,7 +171,9 @@ func (h *httpHandle) Close() error {
 	h.phase = httpPhaseClosed
 	h.cancel()
 	if h.resp != nil {
-		h.resp.Body.Close()
+		if err := h.resp.Body.Close(); err != nil {
+			logger.Default().Warn("close HTTP response body", zap.Error(err))
+		}
 	}
 	return nil
 }

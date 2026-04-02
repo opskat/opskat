@@ -14,10 +14,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/opskat/opskat/pkg/extension"
-	"go.uber.org/zap"
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/opskat/opskat/pkg/extension"
+	"go.uber.org/zap"
 )
 
 // Server serves the DevServer HTTP API, WebSocket event streaming, and extension frontend.
@@ -114,7 +114,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // ListenAndServe starts the HTTP server on the given address.
 func (s *Server) ListenAndServe(addr string) error {
-	return http.ListenAndServe(addr, s)
+	return http.ListenAndServe(addr, s) //nolint:gosec // local development server
 }
 
 // --- API Handlers ---
@@ -130,7 +130,9 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		zap.L().Warn("write response", zap.Error(err))
+	}
 }
 
 func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +158,9 @@ func (s *Server) handleCallTool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(result)
+	if _, err := w.Write(result); err != nil { //nolint:gosec // dev server, result is from trusted plugin
+		zap.L().Warn("write response", zap.Error(err))
+	}
 }
 
 func (s *Server) handleCallAction(w http.ResponseWriter, r *http.Request) {
@@ -172,7 +176,9 @@ func (s *Server) handleCallAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(result)
+	if _, err := w.Write(result); err != nil { //nolint:gosec // dev server, result is from trusted plugin
+		zap.L().Warn("write response", zap.Error(err))
+	}
 }
 
 func (s *Server) handleCheckPolicy(w http.ResponseWriter, r *http.Request) {
@@ -216,7 +222,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		s.wsMu.Lock()
 		delete(s.wsClients, conn)
 		s.wsMu.Unlock()
-		conn.Close(websocket.StatusNormalClosure, "")
+		if err := conn.Close(websocket.StatusNormalClosure, ""); err != nil {
+			zap.L().Warn("websocket close", zap.Error(err))
+		}
 	}()
 
 	for {
@@ -238,5 +246,7 @@ func (s *Server) broadcast(msg any) {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		zap.L().Warn("encode json response", zap.Error(err))
+	}
 }

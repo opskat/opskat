@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/fsnotify/fsnotify"
 	"github.com/tetratelabs/wazero"
 	"go.uber.org/zap"
@@ -66,7 +67,7 @@ func LoadLocales(dir string) map[string]map[string]string {
 			continue
 		}
 		lang := strings.ToLower(strings.TrimSuffix(entry.Name(), ".json"))
-		data, err := os.ReadFile(filepath.Join(localesDir, entry.Name()))
+		data, err := os.ReadFile(filepath.Join(localesDir, entry.Name())) //nolint:gosec // path constructed from ReadDir within known locales directory
 		if err != nil {
 			continue
 		}
@@ -168,7 +169,9 @@ func (m *Manager) Close(ctx context.Context) {
 	m.mu.Unlock()
 	for _, ext := range exts {
 		if ext.Plugin != nil {
-			ext.Plugin.Close(ctx)
+			if err := ext.Plugin.Close(ctx); err != nil {
+				logger.Default().Warn("close extension plugin", zap.String("name", ext.Name), zap.Error(err))
+			}
 		}
 	}
 	// wasmCache 不在这里关闭 — Close 也用于 Reload，缓存需要跨 reload 复用
@@ -178,7 +181,9 @@ func (m *Manager) Close(ctx context.Context) {
 func (m *Manager) Shutdown(ctx context.Context) {
 	m.Close(ctx)
 	if m.wasmCache != nil {
-		m.wasmCache.Close(ctx)
+		if err := m.wasmCache.Close(ctx); err != nil {
+			logger.Default().Warn("close wasm compilation cache", zap.Error(err))
+		}
 	}
 }
 
@@ -191,17 +196,25 @@ func (m *Manager) Watch(ctx context.Context, onChange func()) error {
 	}
 
 	if err := os.MkdirAll(m.dir, 0755); err != nil {
-		watcher.Close()
+		if closeErr := watcher.Close(); closeErr != nil {
+			logger.Default().Warn("close watcher after mkdir error", zap.Error(closeErr))
+		}
 		return fmt.Errorf("create extensions dir: %w", err)
 	}
 
 	if err := watcher.Add(m.dir); err != nil {
-		watcher.Close()
+		if closeErr := watcher.Close(); closeErr != nil {
+			logger.Default().Warn("close watcher after add error", zap.Error(closeErr))
+		}
 		return fmt.Errorf("watch extensions dir: %w", err)
 	}
 
 	go func() {
-		defer watcher.Close()
+		defer func() {
+			if err := watcher.Close(); err != nil {
+				logger.Default().Warn("close filesystem watcher", zap.Error(err))
+			}
+		}()
 		for {
 			select {
 			case <-ctx.Done():
@@ -246,7 +259,7 @@ func LoadManifestInfo(dir string) (*ManifestInfo, error) {
 
 func (m *Manager) LoadExtension(ctx context.Context, dir string) (*Manifest, error) {
 	manifestPath := filepath.Join(dir, "manifest.json")
-	data, err := os.ReadFile(manifestPath)
+	data, err := os.ReadFile(manifestPath) //nolint:gosec // extension directories are trusted
 	if err != nil {
 		return nil, fmt.Errorf("read manifest: %w", err)
 	}
@@ -257,13 +270,13 @@ func (m *Manager) LoadExtension(ctx context.Context, dir string) (*Manifest, err
 	}
 
 	wasmPath := filepath.Join(dir, manifest.Backend.Binary)
-	wasmBytes, err := os.ReadFile(wasmPath)
+	wasmBytes, err := os.ReadFile(wasmPath) //nolint:gosec // path constructed from trusted extension directory
 	if err != nil {
 		return nil, fmt.Errorf("read wasm binary: %w", err)
 	}
 
 	skillMD := ""
-	if skillData, err := os.ReadFile(filepath.Join(dir, "SKILL.md")); err == nil {
+	if skillData, err := os.ReadFile(filepath.Join(dir, "SKILL.md")); err == nil { //nolint:gosec // path constructed from trusted extension directory
 		skillMD = string(skillData)
 	}
 
@@ -316,7 +329,7 @@ func (m *Manager) ScanManifests() ([]*ManifestInfo, error) {
 		}
 		extDir := filepath.Join(m.dir, entry.Name())
 		manifestPath := filepath.Join(extDir, "manifest.json")
-		data, err := os.ReadFile(manifestPath)
+		data, err := os.ReadFile(manifestPath) //nolint:gosec // path constructed from ReadDir within extensions directory
 		if err != nil {
 			continue
 		}
@@ -346,7 +359,11 @@ func (m *Manager) Install(ctx context.Context, sourcePath string) (*Manifest, er
 		if err != nil {
 			return nil, fmt.Errorf("create temp dir: %w", err)
 		}
-		defer os.RemoveAll(tmpDir)
+		defer func() {
+			if err := os.RemoveAll(tmpDir); err != nil {
+				logger.Default().Warn("remove temp dir", zap.String("dir", tmpDir), zap.Error(err))
+			}
+		}()
 		if err := extractZip(sourcePath, tmpDir); err != nil {
 			return nil, fmt.Errorf("extract zip: %w", err)
 		}
@@ -355,7 +372,7 @@ func (m *Manager) Install(ctx context.Context, sourcePath string) (*Manifest, er
 
 	// Read and validate manifest
 	manifestPath := filepath.Join(sourceDir, "manifest.json")
-	data, err := os.ReadFile(manifestPath)
+	data, err := os.ReadFile(manifestPath) //nolint:gosec // path constructed from validated source directory
 	if err != nil {
 		return nil, fmt.Errorf("read manifest: %w", err)
 	}
@@ -385,7 +402,9 @@ func (m *Manager) Install(ctx context.Context, sourcePath string) (*Manifest, er
 
 	// Load the extension
 	if _, err := m.LoadExtension(ctx, destDir); err != nil {
-		os.RemoveAll(destDir)
+		if removeErr := os.RemoveAll(destDir); removeErr != nil {
+			logger.Default().Warn("remove extension dir after load failure", zap.String("dir", destDir), zap.Error(removeErr))
+		}
 		return nil, fmt.Errorf("load extension: %w", err)
 	}
 

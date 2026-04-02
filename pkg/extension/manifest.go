@@ -33,8 +33,8 @@ type ManifestBackend struct {
 }
 
 type AssetTypeDef struct {
-	Type         string          `json:"type"`
-	I18n         I18nName        `json:"i18n"`
+	Type         string         `json:"type"`
+	I18n         I18nName       `json:"i18n"`
 	ConfigSchema map[string]any `json:"configSchema"`
 }
 

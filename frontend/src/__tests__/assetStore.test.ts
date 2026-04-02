@@ -213,7 +213,10 @@ describe("assetStore", () => {
 
     it("stays false when fetchAssets throws", async () => {
       vi.mocked(ListAssets).mockRejectedValue(new Error("fail"));
-      await useAssetStore.getState().fetchAssets().catch(() => {});
+      await useAssetStore
+        .getState()
+        .fetchAssets()
+        .catch(() => {});
       expect(useAssetStore.getState().initialized).toBe(false);
     });
   });

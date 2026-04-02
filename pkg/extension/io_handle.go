@@ -7,6 +7,9 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // IOMeta contains metadata about an IO handle.
@@ -57,18 +60,20 @@ func (m *IOHandleManager) OpenFile(path string, mode string) (uint32, IOMeta, er
 	var entry ioEntry
 	switch mode {
 	case "read":
-		f, err := os.Open(path)
+		f, err := os.Open(path) //nolint:gosec // path provided by extension runtime within sandbox
 		if err != nil {
 			return 0, IOMeta{}, fmt.Errorf("open file for read: %w", err)
 		}
 		info, err := f.Stat()
 		if err != nil {
-			f.Close()
+			if closeErr := f.Close(); closeErr != nil {
+				logger.Default().Warn("close file after stat error", zap.Error(closeErr))
+			}
 			return 0, IOMeta{}, fmt.Errorf("stat file: %w", err)
 		}
 		entry = ioEntry{reader: f, closer: f, meta: IOMeta{Size: info.Size()}}
 	case "write":
-		f, err := os.Create(path)
+		f, err := os.Create(path) //nolint:gosec // path provided by extension runtime within sandbox
 		if err != nil {
 			return 0, IOMeta{}, fmt.Errorf("open file for write: %w", err)
 		}
@@ -146,7 +151,9 @@ func (m *IOHandleManager) CloseAll() {
 	m.mu.Unlock()
 	for _, e := range handles {
 		if e.closer != nil {
-			e.closer.Close()
+			if err := e.closer.Close(); err != nil {
+				logger.Default().Warn("close IO handle", zap.Error(err))
+			}
 		}
 	}
 }

@@ -23,7 +23,7 @@ var minimalWASM = []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
 
 func writeTestExtension(dir, name string) {
 	extDir := filepath.Join(dir, name)
-	os.MkdirAll(extDir, 0755)
+	_ = os.MkdirAll(extDir, 0755)
 	manifest := map[string]any{
 		"name":    name,
 		"version": "1.0.0",
@@ -36,8 +36,8 @@ func writeTestExtension(dir, name string) {
 		},
 	}
 	data, _ := json.Marshal(manifest)
-	os.WriteFile(filepath.Join(extDir, "manifest.json"), data, 0644)
-	os.WriteFile(filepath.Join(extDir, "main.wasm"), minimalWASM, 0644)
+	_ = os.WriteFile(filepath.Join(extDir, "manifest.json"), data, 0644)
+	_ = os.WriteFile(filepath.Join(extDir, "main.wasm"), minimalWASM, 0644)
 }
 
 func newTestManager(dir string) *extension.Manager {

@@ -8,9 +8,11 @@ import (
 	"io"
 	"sync"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+	"go.uber.org/zap"
 )
 
 // Plugin represents a loaded WASM extension.
@@ -35,13 +37,17 @@ func LoadPlugin(ctx context.Context, manifest *Manifest, wasmBytes []byte, host 
 
 	// Register host functions module
 	if err := registerHostModule(ctx, r, host); err != nil {
-		r.Close(ctx)
+		if closeErr := r.Close(ctx); closeErr != nil {
+			logger.Default().Warn("close wasm runtime after host module error", zap.Error(closeErr))
+		}
 		return nil, fmt.Errorf("register host functions: %w", err)
 	}
 
 	compiled, err := r.CompileModule(ctx, wasmBytes)
 	if err != nil {
-		r.Close(ctx)
+		if closeErr := r.Close(ctx); closeErr != nil {
+			logger.Default().Warn("close wasm runtime after compile error", zap.Error(closeErr))
+		}
 		return nil, fmt.Errorf("compile wasm: %w", err)
 	}
 
@@ -142,7 +148,11 @@ func (p *Plugin) call(ctx context.Context, fnName string, input []byte) (json.Ra
 	if err != nil {
 		return nil, fmt.Errorf("instantiate module for %s: %w", fnName, err)
 	}
-	defer mod.Close(ctx)
+	defer func() {
+		if err := mod.Close(ctx); err != nil {
+			logger.Default().Warn("close wasm module", zap.Error(err))
+		}
+	}()
 
 	// The guest SDK encodes handler errors as {"error":"..."} on stdout.
 	// Detect this and propagate as a Go error so callers (Wails, AI bridge,
@@ -223,7 +233,9 @@ func registerHostModule(ctx context.Context, r wazero.Runtime, host HostProvider
 
 	// host_io_close(handle_id)
 	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, handleID uint32) {
-		host.IOClose(handleID)
+		if err := host.IOClose(handleID); err != nil {
+			logger.Default().Warn("close IO handle from host", zap.Uint32("handleID", handleID), zap.Error(err))
+		}
 	}).Export("host_io_close")
 
 	// host_asset_get_config(asset_id) -> packed(result_ptr, result_len)
@@ -265,14 +277,18 @@ func registerHostModule(ctx context.Context, r wazero.Runtime, host HostProvider
 	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, keyPtr, keyLen, valPtr, valLen uint32) {
 		key := readGuestString(mod, keyPtr, keyLen)
 		val := readGuestBytes(mod, valPtr, valLen)
-		host.KVSet(key, val)
+		if err := host.KVSet(key, val); err != nil {
+			logger.Default().Warn("host KV set", zap.String("key", key), zap.Error(err))
+		}
 	}).Export("host_kv_set")
 
 	// host_action_event(type_ptr, type_len, data_ptr, data_len)
 	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, typePtr, typeLen, dataPtr, dataLen uint32) {
 		eventType := readGuestString(mod, typePtr, typeLen)
 		data := readGuestBytes(mod, dataPtr, dataLen)
-		host.ActionEvent(eventType, data)
+		if err := host.ActionEvent(eventType, data); err != nil {
+			logger.Default().Warn("host action event", zap.String("eventType", eventType), zap.Error(err))
+		}
 	}).Export("host_action_event")
 
 	_, err := b.Instantiate(ctx)

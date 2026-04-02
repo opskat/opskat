@@ -25,7 +25,7 @@ func TestDefaultHostProvider(t *testing.T) {
 		Convey("IOOpen file read", func() {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "test.txt")
-			os.WriteFile(path, []byte("content"), 0644)
+			So(os.WriteFile(path, []byte("content"), 0644), ShouldBeNil)
 
 			id, meta, err := host.IOOpen(IOOpenParams{Type: "file", Path: path, Mode: "read"})
 			So(err, ShouldBeNil)
@@ -51,7 +51,7 @@ func TestDefaultHostProvider(t *testing.T) {
 			So(n, ShouldEqual, 6)
 
 			So(host.IOClose(id), ShouldBeNil)
-			data, _ := os.ReadFile(path)
+			data, _ := os.ReadFile(path) //nolint:gosec // test file with known path
 			So(string(data), ShouldEqual, "output")
 		})
 
@@ -82,7 +82,7 @@ func TestDefaultHostProvider_IOReadEOF(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprint(w, `<?xml version="1.0"?><Error><Code>AccessDenied</Code></Error>`)
+			_, _ = fmt.Fprint(w, `<?xml version="1.0"?><Error><Code>AccessDenied</Code></Error>`)
 		}))
 		defer srv.Close()
 

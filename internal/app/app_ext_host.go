@@ -143,7 +143,7 @@ func decryptConfigPasswordFields(raw json.RawMessage, assetType string, bridge *
 
 	var cfg map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return raw, nil
+		return raw, err
 	}
 
 	for _, field := range passwordFields {

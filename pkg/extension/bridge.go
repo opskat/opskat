@@ -31,8 +31,8 @@ type Bridge struct {
 	extensions      map[string]*Extension
 	assetTypes      []ExtAssetType
 	policyGroups    []ExtPolicyGroup
-	defaultPolicies map[string][]string            // asset type → default policy group IDs
-	skillMDs        map[string]string              // asset type → SKILL.md content
+	defaultPolicies map[string][]string              // asset type → default policy group IDs
+	skillMDs        map[string]string                // asset type → SKILL.md content
 	toolIndex       map[string]map[string]*Extension // extName → toolName → Extension
 }
 

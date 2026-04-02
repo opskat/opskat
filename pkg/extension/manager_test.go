@@ -32,7 +32,7 @@ func TestManager(t *testing.T) {
 
 		Convey("Scan discovers valid extension", func() {
 			extDir := filepath.Join(dir, "test-ext")
-			os.MkdirAll(extDir, 0755)
+			_ = os.MkdirAll(extDir, 0755)
 
 			manifest := map[string]any{
 				"name":    "test-ext",
@@ -40,11 +40,11 @@ func TestManager(t *testing.T) {
 				"backend": map[string]any{"runtime": "wasm", "binary": "main.wasm"},
 			}
 			data, _ := json.Marshal(manifest)
-			os.WriteFile(filepath.Join(extDir, "manifest.json"), data, 0644)
+			So(os.WriteFile(filepath.Join(extDir, "manifest.json"), data, 0644), ShouldBeNil)
 
 			// Minimal valid WASM module
-			os.WriteFile(filepath.Join(extDir, "main.wasm"),
-				[]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}, 0644)
+			So(os.WriteFile(filepath.Join(extDir, "main.wasm"),
+				[]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}, 0644), ShouldBeNil)
 
 			exts, err := mgr.Scan(ctx)
 			So(err, ShouldBeNil)
@@ -53,7 +53,7 @@ func TestManager(t *testing.T) {
 		})
 
 		Convey("Scan skips directories without manifest", func() {
-			os.MkdirAll(filepath.Join(dir, "no-manifest"), 0755)
+			_ = os.MkdirAll(filepath.Join(dir, "no-manifest"), 0755)
 
 			exts, err := mgr.Scan(ctx)
 			So(err, ShouldBeNil)
@@ -79,7 +79,7 @@ func TestManager(t *testing.T) {
 			So(err, ShouldBeNil)
 
 			// Trigger a filesystem event
-			os.WriteFile(filepath.Join(dir, "trigger.txt"), []byte("x"), 0644)
+			So(os.WriteFile(filepath.Join(dir, "trigger.txt"), []byte("x"), 0644), ShouldBeNil)
 
 			select {
 			case <-called:

@@ -42,7 +42,7 @@ func (h *ExtensionAssetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	info, err := os.Stat(filePath)
+	info, err := os.Stat(filePath) //nolint:gosec // path validated by traversal check above
 	if err != nil || info.IsDir() {
 		http.NotFound(w, r)
 		return

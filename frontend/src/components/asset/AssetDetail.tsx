@@ -390,37 +390,53 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
         )}
 
         {/* Extension Config Info */}
-        {extAssetTypeDef?.configSchema && (() => {
-          const schema = extAssetTypeDef.configSchema as { propertyOrder?: string[]; properties?: Record<string, { title?: string; format?: string; type?: string }> };
-          const props = schema.properties ?? {};
-          const order = schema.propertyOrder;
-          const keys = order ? order.filter((k) => k in props) : Object.keys(props);
-          let parsed: Record<string, unknown> = {};
-          try { parsed = JSON.parse(asset.Config || "{}"); } catch { /* ignore */ }
-          return (
-            <div className="rounded-xl border bg-card p-4">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-                {extInfo?.manifest.i18n.displayName || asset.Type}
-              </h3>
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                {keys.map((key) => {
-                  const prop = props[key];
-                  if (!prop) return null;
-                  const val = parsed[key];
-                  if (val === undefined || val === null || val === "") return null;
-                  return (
-                    <InfoItem
-                      key={key}
-                      label={prop.title || key}
-                      value={prop.format === "password" ? "●●●●●●" : prop.type === "boolean" ? (val ? "✓" : "✗") : String(val)}
-                      mono={prop.type !== "boolean"}
-                    />
-                  );
-                })}
+        {extAssetTypeDef?.configSchema &&
+          (() => {
+            const schema = extAssetTypeDef.configSchema as {
+              propertyOrder?: string[];
+              properties?: Record<string, { title?: string; format?: string; type?: string }>;
+            };
+            const props = schema.properties ?? {};
+            const order = schema.propertyOrder;
+            const keys = order ? order.filter((k) => k in props) : Object.keys(props);
+            let parsed: Record<string, unknown> = {};
+            try {
+              parsed = JSON.parse(asset.Config || "{}");
+            } catch {
+              /* ignore */
+            }
+            return (
+              <div className="rounded-xl border bg-card p-4">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+                  {extInfo?.manifest.i18n.displayName || asset.Type}
+                </h3>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  {keys.map((key) => {
+                    const prop = props[key];
+                    if (!prop) return null;
+                    const val = parsed[key];
+                    if (val === undefined || val === null || val === "") return null;
+                    return (
+                      <InfoItem
+                        key={key}
+                        label={prop.title || key}
+                        value={
+                          prop.format === "password"
+                            ? "●●●●●●"
+                            : prop.type === "boolean"
+                              ? val
+                                ? "✓"
+                                : "✗"
+                              : String(val)
+                        }
+                        mono={prop.type !== "boolean"}
+                      />
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          );
-        })()}
+            );
+          })()}
 
         {/* SSH Command Policy */}
         {asset.Type === "ssh" && (

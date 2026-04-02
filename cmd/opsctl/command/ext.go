@@ -65,7 +65,7 @@ func cmdExtList() int {
 			continue
 		}
 		manifestPath := filepath.Join(extDir, entry.Name(), "manifest.json")
-		data, err := os.ReadFile(manifestPath)
+		data, err := os.ReadFile(manifestPath) //nolint:gosec // path constructed from ReadDir within extensions directory
 		if err != nil {
 			continue // skip dirs without manifest
 		}
@@ -117,7 +117,7 @@ func cmdExtExec(args []string) int {
 	toolName := args[1]
 
 	// Parse --args flag from remaining args
-	var toolArgs json.RawMessage = json.RawMessage("{}")
+	var toolArgs = json.RawMessage("{}")
 	for i := 2; i < len(args); i++ {
 		if args[i] == "--args" && i+1 < len(args) {
 			toolArgs = json.RawMessage(args[i+1])

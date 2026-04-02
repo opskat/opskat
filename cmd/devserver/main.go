@@ -41,7 +41,7 @@ func main() {
 
 	// Load WASM
 	wasmPath := filepath.Join(*extDir, m.Backend.Binary)
-	wasmBytes, err := os.ReadFile(wasmPath)
+	wasmBytes, err := os.ReadFile(wasmPath) //nolint:gosec // user-specified CLI argument
 	if err != nil {
 		logger.Fatal("read wasm", zap.String("path", wasmPath), zap.Error(err))
 	}

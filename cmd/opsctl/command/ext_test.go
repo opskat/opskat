@@ -14,7 +14,7 @@ func TestExtListManifestParsing(t *testing.T) {
 		Convey("reads manifest and extracts tools", func() {
 			dir := t.TempDir()
 			extDir := filepath.Join(dir, "test-ext")
-			os.MkdirAll(extDir, 0755)
+			So(os.MkdirAll(extDir, 0755), ShouldBeNil)
 
 			manifest := map[string]any{
 				"name":    "test-ext",
@@ -29,14 +29,14 @@ func TestExtListManifestParsing(t *testing.T) {
 				},
 			}
 			data, _ := json.Marshal(manifest)
-			os.WriteFile(filepath.Join(extDir, "manifest.json"), data, 0644)
+			So(os.WriteFile(filepath.Join(extDir, "manifest.json"), data, 0644), ShouldBeNil)
 
 			// Read and parse manually (same logic as cmdExtList)
 			entries, err := os.ReadDir(dir)
 			So(err, ShouldBeNil)
 			So(len(entries), ShouldEqual, 1)
 
-			manifestData, err := os.ReadFile(filepath.Join(dir, entries[0].Name(), "manifest.json"))
+			manifestData, err := os.ReadFile(filepath.Join(dir, entries[0].Name(), "manifest.json")) //nolint:gosec // test file with known path
 			So(err, ShouldBeNil)
 
 			var parsed struct {
@@ -60,7 +60,7 @@ func TestExtListManifestParsing(t *testing.T) {
 
 		Convey("skips directories without manifest", func() {
 			dir := t.TempDir()
-			os.MkdirAll(filepath.Join(dir, "no-manifest"), 0755)
+			So(os.MkdirAll(filepath.Join(dir, "no-manifest"), 0755), ShouldBeNil)
 
 			entries, err := os.ReadDir(dir)
 			So(err, ShouldBeNil)
@@ -71,7 +71,7 @@ func TestExtListManifestParsing(t *testing.T) {
 					continue
 				}
 				manifestPath := filepath.Join(dir, entry.Name(), "manifest.json")
-				if _, err := os.ReadFile(manifestPath); err != nil {
+				if _, err := os.ReadFile(manifestPath); err != nil { //nolint:gosec // test file with known path
 					continue
 				}
 				count++
@@ -98,7 +98,7 @@ func TestExtExecArgParsing(t *testing.T) {
 			So(json.Valid(toolArgs), ShouldBeTrue)
 
 			var parsed map[string]any
-			json.Unmarshal(toolArgs, &parsed)
+			So(json.Unmarshal(toolArgs, &parsed), ShouldBeNil)
 			So(parsed["asset_id"], ShouldEqual, float64(1))
 		})
 
@@ -117,7 +117,7 @@ func TestExtExecArgParsing(t *testing.T) {
 
 		Convey("defaults to empty object", func() {
 			args := []string{"oss", "list_buckets"}
-			var toolArgs json.RawMessage = json.RawMessage("{}")
+			var toolArgs = json.RawMessage("{}")
 			for i := 2; i < len(args); i++ {
 				if args[i] == "--args" && i+1 < len(args) {
 					toolArgs = json.RawMessage(args[i+1])

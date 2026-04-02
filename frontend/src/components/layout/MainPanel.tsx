@@ -1,6 +1,16 @@
 import { createContext, useCallback, useContext, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { X, Settings, KeyRound, MessageSquare, ScrollText, ArrowRightLeft, Server, Folder, Loader2 } from "lucide-react";
+import {
+  X,
+  Settings,
+  KeyRound,
+  MessageSquare,
+  ScrollText,
+  ArrowRightLeft,
+  Server,
+  Folder,
+  Loader2,
+} from "lucide-react";
 import logoLight from "@/assets/images/logo.png";
 import logoDark from "@/assets/images/logo-dark.png";
 import { useFullscreen } from "@/hooks/useFullscreen";

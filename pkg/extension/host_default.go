@@ -33,8 +33,8 @@ type ActionEventHandler interface {
 }
 
 type DefaultHostConfig struct {
-	Logger       *zap.Logger
-	AssetConfigs AssetConfigGetter
+	Logger           *zap.Logger
+	AssetConfigs     AssetConfigGetter
 	FileDialogs      FileDialogOpener
 	KV               KVStore
 	ActionEvents     ActionEventHandler

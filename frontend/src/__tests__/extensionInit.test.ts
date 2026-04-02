@@ -71,9 +71,7 @@ describe("initExtensions (bootstrap + subscribe)", () => {
   });
 
   it("registers enabled extensions and sets ready=true", async () => {
-    vi.mocked(ListInstalledExtensions).mockResolvedValue([
-      { name: "oss", enabled: true, manifest },
-    ] as any);
+    vi.mocked(ListInstalledExtensions).mockResolvedValue([{ name: "oss", enabled: true, manifest }] as any);
 
     await initExtensions();
 
@@ -83,9 +81,7 @@ describe("initExtensions (bootstrap + subscribe)", () => {
   });
 
   it("skips disabled extensions", async () => {
-    vi.mocked(ListInstalledExtensions).mockResolvedValue([
-      { name: "oss", enabled: false, manifest },
-    ] as any);
+    vi.mocked(ListInstalledExtensions).mockResolvedValue([{ name: "oss", enabled: false, manifest }] as any);
 
     await initExtensions();
 
@@ -117,9 +113,7 @@ describe("initExtensions (bootstrap + subscribe)", () => {
   it("unregisters extensions that are no longer installed", async () => {
     useExtensionStore.getState().register("old-ext", manifest as any);
 
-    vi.mocked(ListInstalledExtensions).mockResolvedValue([
-      { name: "oss", enabled: true, manifest },
-    ] as any);
+    vi.mocked(ListInstalledExtensions).mockResolvedValue([{ name: "oss", enabled: true, manifest }] as any);
 
     await initExtensions();
 
@@ -159,9 +153,7 @@ describe("refreshExtensions (internal)", () => {
   });
 
   it("does not set ready — only bootstrap sets ready", async () => {
-    vi.mocked(ListInstalledExtensions).mockResolvedValue([
-      { name: "oss", enabled: true, manifest },
-    ] as any);
+    vi.mocked(ListInstalledExtensions).mockResolvedValue([{ name: "oss", enabled: true, manifest }] as any);
 
     await _refreshExtensions();
 

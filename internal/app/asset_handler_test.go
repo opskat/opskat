@@ -11,12 +11,12 @@ import (
 func TestExtensionAssetHandler(t *testing.T) {
 	dir := t.TempDir()
 	extDir := filepath.Join(dir, "test-ext", "frontend")
-	os.MkdirAll(extDir, 0755)
-	os.WriteFile(filepath.Join(extDir, "index.js"), []byte("export function Page(){}"), 0644)
+	_ = os.MkdirAll(extDir, 0755)
+	_ = os.WriteFile(filepath.Join(extDir, "index.js"), []byte("export function Page(){}"), 0644)
 
 	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("fallback"))
+		_, _ = w.Write([]byte("fallback"))
 	})
 
 	handler := NewExtensionAssetHandler(dir, fallback)

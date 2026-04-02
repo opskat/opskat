@@ -18,7 +18,7 @@ func TestServerAPI(t *testing.T) {
 	Convey("DevServer API", t, func() {
 		dir := t.TempDir()
 		dataDir := filepath.Join(dir, ".devserver")
-		os.MkdirAll(dataDir, 0755)
+		_ = os.MkdirAll(dataDir, 0755)
 
 		// Create minimal test manifest
 		m := &extension.Manifest{
@@ -40,12 +40,12 @@ func TestServerAPI(t *testing.T) {
 
 			So(w.Code, ShouldEqual, 200)
 			var result map[string]any
-			json.Unmarshal(w.Body.Bytes(), &result)
+			_ = json.Unmarshal(w.Body.Bytes(), &result)
 			So(result["name"], ShouldEqual, "test-ext")
 		})
 
 		Convey("GET /api/config reads config file", func() {
-			os.WriteFile(filepath.Join(dataDir, "config.json"), []byte(`{"endpoint":"test"}`), 0644)
+			_ = os.WriteFile(filepath.Join(dataDir, "config.json"), []byte(`{"endpoint":"test"}`), 0644)
 
 			req := httptest.NewRequest("GET", "/api/config", nil)
 			w := httptest.NewRecorder()
@@ -53,7 +53,7 @@ func TestServerAPI(t *testing.T) {
 
 			So(w.Code, ShouldEqual, 200)
 			var result map[string]any
-			json.Unmarshal(w.Body.Bytes(), &result)
+			_ = json.Unmarshal(w.Body.Bytes(), &result)
 			So(result["endpoint"], ShouldEqual, "test")
 		})
 
@@ -65,9 +65,9 @@ func TestServerAPI(t *testing.T) {
 
 			So(w.Code, ShouldEqual, 200)
 
-			data, _ := os.ReadFile(filepath.Join(dataDir, "config.json"))
+			data, _ := os.ReadFile(filepath.Join(dataDir, "config.json")) //nolint:gosec // test file with known path
 			var result map[string]any
-			json.Unmarshal(data, &result)
+			_ = json.Unmarshal(data, &result)
 			So(result["endpoint"], ShouldEqual, "updated")
 		})
 

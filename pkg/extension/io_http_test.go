@@ -24,7 +24,7 @@ func TestHTTPHandle(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "text/plain")
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("hello from server"))
+				_, _ = w.Write([]byte("hello from server"))
 			}))
 			defer srv.Close()
 
@@ -53,7 +53,7 @@ func TestHTTPHandle(t *testing.T) {
 				body, _ := io.ReadAll(r.Body)
 				w.Header().Set("Content-Type", "text/plain")
 				w.WriteHeader(http.StatusCreated)
-				w.Write([]byte("got:" + string(body)))
+				_, _ = w.Write([]byte("got:" + string(body)))
 			}))
 			defer srv.Close()
 
@@ -177,7 +177,7 @@ func TestHTTPHandle(t *testing.T) {
 		Convey("custom dial function is used", func() {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("tunneled"))
+				_, _ = w.Write([]byte("tunneled"))
 			}))
 			defer srv.Close()
 
@@ -217,7 +217,7 @@ func TestIOHandleManagerHTTP(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "text/plain")
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("manager test"))
+				_, _ = w.Write([]byte("manager test"))
 			}))
 			defer srv.Close()
 

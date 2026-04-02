@@ -16,7 +16,7 @@ func TestDevServerHostProvider(t *testing.T) {
 
 		Convey("GetAssetConfig reads from config file", func() {
 			cfgFile := filepath.Join(dir, "config.json")
-			os.WriteFile(cfgFile, []byte(`{"endpoint":"https://oss.example.com"}`), 0644)
+			_ = os.WriteFile(cfgFile, []byte(`{"endpoint":"https://oss.example.com"}`), 0644)
 
 			h := NewDevServerHost(dir)
 			defer h.CloseAll()
@@ -25,7 +25,7 @@ func TestDevServerHostProvider(t *testing.T) {
 			So(err, ShouldBeNil)
 
 			var out map[string]string
-			json.Unmarshal(cfg, &out)
+			_ = json.Unmarshal(cfg, &out)
 			So(out["endpoint"], ShouldEqual, "https://oss.example.com")
 		})
 

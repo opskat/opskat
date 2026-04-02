@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
 )
 
 func extractZip(zipPath, destDir string) error {
@@ -14,7 +17,11 @@ func extractZip(zipPath, destDir string) error {
 	if err != nil {
 		return err
 	}
-	defer r.Close()
+	defer func() {
+		if err := r.Close(); err != nil {
+			logger.Default().Warn("close zip reader", zap.Error(err))
+		}
+	}()
 
 	for _, f := range r.File {
 		name := filepath.Clean(f.Name)
@@ -24,7 +31,7 @@ func extractZip(zipPath, destDir string) error {
 		target := filepath.Join(destDir, name)
 
 		if f.FileInfo().IsDir() {
-			os.MkdirAll(target, 0755)
+			_ = os.MkdirAll(target, 0755)
 			continue
 		}
 
@@ -32,20 +39,26 @@ func extractZip(zipPath, destDir string) error {
 			return err
 		}
 
-		out, err := os.Create(target)
+		out, err := os.Create(target) //nolint:gosec // target validated by traversal check above
 		if err != nil {
 			return err
 		}
 
 		rc, err := f.Open()
 		if err != nil {
-			out.Close()
+			if closeErr := out.Close(); closeErr != nil {
+				logger.Default().Warn("close output file", zap.Error(closeErr))
+			}
 			return err
 		}
 
-		_, err = io.Copy(out, rc)
-		rc.Close()
-		out.Close()
+		_, err = io.Copy(out, rc) //nolint:gosec // extensions are from trusted registry
+		if closeErr := rc.Close(); closeErr != nil {
+			logger.Default().Warn("close zip entry reader", zap.Error(closeErr))
+		}
+		if closeErr := out.Close(); closeErr != nil {
+			logger.Default().Warn("close output file", zap.Error(closeErr))
+		}
 		if err != nil {
 			return err
 		}
@@ -69,10 +82,10 @@ func copyDir(src, dst string) error {
 			return os.MkdirAll(target, 0755)
 		}
 
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) //nolint:gosec // path from filepath.Walk within validated src directory
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(target, data, 0644)
+		return os.WriteFile(target, data, 0644) //nolint:gosec // target derived from validated src/dst directories
 	})
 }
