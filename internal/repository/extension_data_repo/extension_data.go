@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	MaxKVValueSize    = 1024 * 1024       // 1MB per value
-	MaxKVPerExtension = 10 * 1024 * 1024  // 10MB total per extension
+	MaxKVValueSize    = 1024 * 1024      // 1MB per value
+	MaxKVPerExtension = 10 * 1024 * 1024 // 10MB total per extension
 )
 
 type ExtensionDataRepo interface {

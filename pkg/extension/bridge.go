@@ -37,9 +37,9 @@ type Bridge struct {
 	extensions      map[string]*Extension
 	assetTypes      []ExtAssetType
 	policyGroups    []ExtPolicyGroup
-	defaultPolicies map[string][]string                  // asset type → default policy group IDs
-	skillMDs        map[string]SkillMDWithExtension       // asset type → SKILL.md content + ext name
-	toolIndex       map[string]map[string]*Extension      // extName → toolName → Extension
+	defaultPolicies map[string][]string              // asset type → default policy group IDs
+	skillMDs        map[string]SkillMDWithExtension  // asset type → SKILL.md content + ext name
+	toolIndex       map[string]map[string]*Extension // extName → toolName → Extension
 }
 
 func NewBridge() *Bridge {

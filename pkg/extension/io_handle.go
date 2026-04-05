@@ -25,7 +25,7 @@ type IOMeta struct {
 const maxIOHandles = (1 << 31) - 1
 
 type ioEntry struct {
-	id     uint32    // stored for defense-in-depth reuse detection in get()
+	id     uint32 // stored for defense-in-depth reuse detection in get()
 	reader io.Reader
 	writer io.Writer
 	closer io.Closer
