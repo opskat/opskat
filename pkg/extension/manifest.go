@@ -22,7 +22,6 @@ var SupportedHostABIs = []string{"1.0"}
 var (
 	semverRe     = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 	nameRe       = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
-	sha256HexRe  = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
 	policyIDRe   = regexp.MustCompile(`^ext:[a-z0-9][a-z0-9_-]{0,63}(:[a-z0-9][a-z0-9_-]{0,63})*$`)
 	credentialRe = regexp.MustCompile(`^(|read)$`) // "" or "read"
 )
@@ -40,7 +39,6 @@ type Manifest struct {
 	Icon          string          `json:"icon"`
 	MinAppVersion string          `json:"minAppVersion"`
 	HostABI       string          `json:"hostABI"`
-	BinarySHA256  string          `json:"binarySha256"`
 	Capabilities  Capabilities    `json:"capabilities"`
 	I18n          ManifestI18n    `json:"i18n"`
 	Backend       ManifestBackend `json:"backend"`
@@ -248,12 +246,6 @@ func (m *Manifest) validate() error {
 	}
 	if !isSupportedHostABI(m.HostABI) {
 		return fmt.Errorf("manifest: hostABI %q not supported by this runtime (supported: %v)", m.HostABI, SupportedHostABIs)
-	}
-	if m.BinarySHA256 == "" {
-		return fmt.Errorf("manifest: binarySha256 is required")
-	}
-	if !sha256HexRe.MatchString(m.BinarySHA256) {
-		return fmt.Errorf("manifest: binarySha256 must be 64 hex characters (got %q)", m.BinarySHA256)
 	}
 	if !credentialRe.MatchString(m.Capabilities.Credentials) {
 		return fmt.Errorf("manifest: capabilities.credentials must be \"\" or \"read\" (got %q)", m.Capabilities.Credentials)

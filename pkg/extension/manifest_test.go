@@ -6,8 +6,6 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 )
 
-const testValidSHA256 = "93a44bbb96c751218e4c00d479e4c14358122a389acca16205b1e4d0dc5f9476"
-
 func TestParseManifest(t *testing.T) {
 	Convey("ParseManifest", t, func() {
 		Convey("should parse a valid manifest", func() {
@@ -17,7 +15,6 @@ func TestParseManifest(t *testing.T) {
 				"icon": "cloud-storage",
 				"minAppVersion": "1.2.0",
 				"hostABI": "1.0",
-				"binarySha256": "` + testValidSHA256 + `",
 				"i18n": {
 					"displayName": "manifest.displayName",
 					"description": "manifest.description"
@@ -74,7 +71,6 @@ func TestParseManifest(t *testing.T) {
 			So(m.Version, ShouldEqual, "1.0.0")
 			So(m.MinAppVersion, ShouldEqual, "1.2.0")
 			So(m.HostABI, ShouldEqual, "1.0")
-			So(m.BinarySHA256, ShouldEqual, testValidSHA256)
 			So(m.Backend.Runtime, ShouldEqual, "wasm")
 			So(m.Backend.Binary, ShouldEqual, "main.wasm")
 			So(len(m.AssetTypes), ShouldEqual, 1)
@@ -99,56 +95,42 @@ func TestParseManifest(t *testing.T) {
 		})
 
 		Convey("should reject invalid minAppVersion", func() {
-			data := []byte(`{"name": "x", "version": "1.0.0", "minAppVersion": "invalid", "hostABI":"1.0", "binarySha256":"` + testValidSHA256 + `"}`)
+			data := []byte(`{"name": "x", "version": "1.0.0", "minAppVersion": "invalid", "hostABI":"1.0"}`)
 			_, err := ParseManifest(data)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "minAppVersion")
 		})
 
 		Convey("should reject manifest missing hostABI", func() {
-			data := []byte(`{"name": "x", "version": "1.0.0", "binarySha256":"` + testValidSHA256 + `"}`)
+			data := []byte(`{"name": "x", "version": "1.0.0"}`)
 			_, err := ParseManifest(data)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "hostABI is required")
 		})
 
 		Convey("should reject manifest with unsupported hostABI", func() {
-			data := []byte(`{"name": "x", "version": "1.0.0", "hostABI": "9.9", "binarySha256":"` + testValidSHA256 + `"}`)
+			data := []byte(`{"name": "x", "version": "1.0.0", "hostABI": "9.9"}`)
 			_, err := ParseManifest(data)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "not supported")
 		})
 
-		Convey("should reject manifest missing binarySha256", func() {
-			data := []byte(`{"name": "x", "version": "1.0.0", "hostABI":"1.0"}`)
-			_, err := ParseManifest(data)
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "binarySha256 is required")
-		})
-
-		Convey("should reject manifest with invalid binarySha256 format", func() {
-			data := []byte(`{"name": "x", "version": "1.0.0", "hostABI":"1.0", "binarySha256": "not-a-hash"}`)
-			_, err := ParseManifest(data)
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "64 hex")
-		})
-
 		Convey("should reject manifest with invalid name characters", func() {
-			data := []byte(`{"name": "../../etc/passwd", "version": "1.0.0", "hostABI":"1.0", "binarySha256":"` + testValidSHA256 + `"}`)
+			data := []byte(`{"name": "../../etc/passwd", "version": "1.0.0", "hostABI":"1.0"}`)
 			_, err := ParseManifest(data)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "name must match")
 		})
 
 		Convey("should reject manifest with uppercase name", func() {
-			data := []byte(`{"name": "MyExt", "version": "1.0.0", "hostABI":"1.0", "binarySha256":"` + testValidSHA256 + `"}`)
+			data := []byte(`{"name": "MyExt", "version": "1.0.0", "hostABI":"1.0"}`)
 			_, err := ParseManifest(data)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "name must match")
 		})
 
 		Convey("should accept valid name characters", func() {
-			data := []byte(`{"name": "my-ext_1", "version": "1.0.0", "hostABI":"1.0", "binarySha256":"` + testValidSHA256 + `"}`)
+			data := []byte(`{"name": "my-ext_1", "version": "1.0.0", "hostABI":"1.0"}`)
 			_, err := ParseManifest(data)
 			So(err, ShouldBeNil)
 		})
@@ -158,7 +140,6 @@ func TestParseManifest(t *testing.T) {
 				"name": "oss",
 				"version": "1.0.0",
 				"hostABI": "1.0",
-				"binarySha256": "` + testValidSHA256 + `",
 				"frontend": {
 					"pages": [{
 						"id": "connect",
@@ -177,7 +158,7 @@ func TestParseManifest(t *testing.T) {
 		Convey("should reject policy group without ext: prefix", func() {
 			data := []byte(`{
 				"name": "x", "version": "1.0.0", "minAppVersion": "1.0.0",
-				"hostABI": "1.0", "binarySha256": "` + testValidSHA256 + `",
+				"hostABI": "1.0",
 				"backend": {"runtime": "wasm", "binary": "main.wasm"},
 				"policies": {
 					"type": "x", "actions": ["read"],
@@ -192,7 +173,7 @@ func TestParseManifest(t *testing.T) {
 		Convey("should reject invalid credentials capability", func() {
 			data := []byte(`{
 				"name": "x", "version": "1.0.0",
-				"hostABI": "1.0", "binarySha256": "` + testValidSHA256 + `",
+				"hostABI": "1.0",
 				"capabilities": { "credentials": "write" }
 			}`)
 			_, err := ParseManifest(data)

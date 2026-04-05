@@ -2,8 +2,6 @@ package extension
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -289,12 +287,6 @@ func (m *Manager) LoadExtension(ctx context.Context, dir string) (*Manifest, err
 	wasmBytes, err := os.ReadFile(wasmPath) //nolint:gosec // path constructed from trusted extension directory
 	if err != nil {
 		return nil, fmt.Errorf("read wasm binary: %w", err)
-	}
-
-	sum := sha256.Sum256(wasmBytes)
-	actualSHA := hex.EncodeToString(sum[:])
-	if !strings.EqualFold(actualSHA, manifest.BinarySHA256) {
-		return nil, fmt.Errorf("binary sha256 mismatch: manifest=%s actual=%s", manifest.BinarySHA256, actualSHA)
 	}
 
 	const maxSkillMDBytes = 4 * 1024
