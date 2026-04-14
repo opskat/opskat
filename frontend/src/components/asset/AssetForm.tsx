@@ -62,6 +62,7 @@ interface SSHConfig {
   password?: string;
   credential_id?: number;
   private_keys?: string[];
+  private_key_passphrase?: string;
   jump_host_id?: number;
   proxy?: ProxyConfig | null;
 }
@@ -150,6 +151,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   // SSH fields - local key
   const [localKeys, setLocalKeys] = useState<app.LocalSSHKeyInfo[]>([]);
   const [selectedKeyPaths, setSelectedKeyPaths] = useState<string[]>([]);
+  const [privateKeyPassphrase, setPrivateKeyPassphrase] = useState("");
+  const [encryptedPrivateKeyPassphrase, setEncryptedPrivateKeyPassphrase] = useState("");
   const [scanningKeys, setScanningKeys] = useState(false);
   const [sshTunnelId, setSshTunnelId] = useState(0);
   const [proxyType, setProxyType] = useState("socks5");
@@ -258,6 +261,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       setKeySource(cfg.private_keys && cfg.private_keys.length > 0 ? "file" : "managed");
       setCredentialId(cfg.auth_type === "key" ? cfg.credential_id || 0 : 0);
       setSelectedKeyPaths(cfg.private_keys || []);
+      setPrivateKeyPassphrase(""); // passphrase 已加密，不回显
+      setEncryptedPrivateKeyPassphrase(cfg.private_key_passphrase || "");
 
       // Unified SSH tunnel: prefer asset-level field, fall back to config
       const tunnelId = asset.sshTunnelId || cfg.jump_host_id || 0;
@@ -370,6 +375,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setKeySource("managed");
     setCredentialId(0);
     setSelectedKeyPaths([]);
+    setPrivateKeyPassphrase("");
+    setEncryptedPrivateKeyPassphrase("");
     setConnectionType("direct");
     setSshTunnelId(0);
     resetProxyFields();
@@ -423,7 +430,15 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     };
     if (authType === "key") {
       if (keySource === "managed" && credentialId > 0) sshConfig.credential_id = credentialId;
-      if (keySource === "file" && selectedKeyPaths.length > 0) sshConfig.private_keys = selectedKeyPaths;
+      if (keySource === "file" && selectedKeyPaths.length > 0) {
+        sshConfig.private_keys = selectedKeyPaths;
+        // 测试连接时：优先使用用户输入的明文 passphrase，否则使用存储的加密值
+        if (privateKeyPassphrase) {
+          sshConfig.private_key_passphrase = privateKeyPassphrase;
+        } else if (encryptedPrivateKeyPassphrase) {
+          sshConfig.private_key_passphrase = encryptedPrivateKeyPassphrase;
+        }
+      }
     }
     if (!password && encryptedPassword) {
       sshConfig.password = encryptedPassword;
@@ -535,7 +550,18 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
       if (authType === "key") {
         if (keySource === "managed" && credentialId > 0) sshConfig.credential_id = credentialId;
-        if (keySource === "file" && selectedKeyPaths.length > 0) sshConfig.private_keys = selectedKeyPaths;
+        if (keySource === "file" && selectedKeyPaths.length > 0) {
+          sshConfig.private_keys = selectedKeyPaths;
+          if (privateKeyPassphrase) {
+            // 用户输入了新的 passphrase，加密存储
+            const encrypted = await EncryptPassword(privateKeyPassphrase);
+            if (encrypted === undefined) return;
+            sshConfig.private_key_passphrase = encrypted;
+          } else if (encryptedPrivateKeyPassphrase) {
+            // 用户没有输入新的 passphrase，保留原有的加密值
+            sshConfig.private_key_passphrase = encryptedPrivateKeyPassphrase;
+          }
+        }
       }
 
       if (connectionType === "proxy" && proxyHost) {
@@ -745,6 +771,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               setLocalKeys={setLocalKeys}
               selectedKeyPaths={selectedKeyPaths}
               setSelectedKeyPaths={setSelectedKeyPaths}
+              privateKeyPassphrase={privateKeyPassphrase}
+              setPrivateKeyPassphrase={setPrivateKeyPassphrase}
               scanningKeys={scanningKeys}
               sshTunnelId={sshTunnelId}
               setSshTunnelId={setSshTunnelId}

@@ -425,6 +425,7 @@ export namespace app {
 	    path: string;
 	    keyType: string;
 	    fingerprint: string;
+	    isEncrypted: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new LocalSSHKeyInfo(source);
@@ -435,6 +436,7 @@ export namespace app {
 	        this.path = source["path"];
 	        this.keyType = source["keyType"];
 	        this.fingerprint = source["fingerprint"];
+	        this.isEncrypted = source["isEncrypted"];
 	    }
 	}
 	export class OpsctlInfo {

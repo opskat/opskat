@@ -79,15 +79,16 @@ func (Asset) TableName() string {
 
 // SSHConfig SSH类型的特定配置
 type SSHConfig struct {
-	Host         string       `json:"host"`
-	Port         int          `json:"port"`
-	Username     string       `json:"username"`
-	AuthType     string       `json:"auth_type"`
-	Password     string       `json:"password,omitempty"`      // 加密后的密码（内联，向后兼容）
-	CredentialID int64        `json:"credential_id,omitempty"` // 统一凭证 ID（密码或密钥）
-	PrivateKeys  []string     `json:"private_keys,omitempty"`  // 本地密钥文件路径（向后兼容）
-	JumpHostID   int64        `json:"jump_host_id,omitempty"`  // Deprecated: use Asset.SSHTunnelID
-	Proxy        *ProxyConfig `json:"proxy,omitempty"`
+	Host                 string       `json:"host"`
+	Port                 int          `json:"port"`
+	Username             string       `json:"username"`
+	AuthType             string       `json:"auth_type"`
+	Password             string       `json:"password,omitempty"`            // 加密后的密码（内联，向后兼容）
+	CredentialID         int64        `json:"credential_id,omitempty"`       // 统一凭证 ID（密码或密钥）
+	PrivateKeys          []string     `json:"private_keys,omitempty"`        // 本地密钥文件路径（向后兼容）
+	PrivateKeyPassphrase string       `json:"private_key_passphrase,omitempty"` // 本地密钥密码（加密存储）
+	JumpHostID           int64        `json:"jump_host_id,omitempty"`        // Deprecated: use Asset.SSHTunnelID
+	Proxy                *ProxyConfig `json:"proxy,omitempty"`
 }
 
 // ProxyConfig 代理配置

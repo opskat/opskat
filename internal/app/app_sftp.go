@@ -238,6 +238,7 @@ type LocalSSHKeyInfo struct {
 	Path        string `json:"path"`
 	KeyType     string `json:"keyType"`
 	Fingerprint string `json:"fingerprint"`
+	IsEncrypted bool   `json:"isEncrypted"` // 密钥是否需要 passphrase
 }
 
 // ListLocalSSHKeys 扫描 ~/.ssh 目录，返回有效的私钥列表
@@ -318,6 +319,7 @@ func (a *App) SelectSSHKeyFile() (*LocalSSHKeyInfo, error) {
 }
 
 // parseLocalSSHKey 解析本地私钥文件，返回密钥信息
+// 如果密钥有 passphrase 保护，返回 IsEncrypted=true
 func parseLocalSSHKey(path string) (*LocalSSHKeyInfo, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // path is from user file dialog
 	if err != nil {
@@ -330,6 +332,29 @@ func parseLocalSSHKey(path string) (*LocalSSHKeyInfo, error) {
 
 	signer, err := ssh.ParsePrivateKey(data)
 	if err != nil {
+		// 检查是否是加密密钥
+		errStr := err.Error()
+		if strings.Contains(errStr, "password protected") ||
+			strings.Contains(errStr, "encrypted") ||
+			strings.Contains(errStr, "passphrase") {
+			// 尝试解析 PEM 格式获取密钥类型
+			keyType := "unknown"
+			if strings.Contains(string(data), "OPENSSH PRIVATE KEY") {
+				keyType = "ssh-ed25519" // OpenSSH 格式默认 ED25519，实际类型需要 passphrase 后才能确定
+			} else if strings.Contains(string(data), "RSA PRIVATE KEY") {
+				keyType = "ssh-rsa"
+			} else if strings.Contains(string(data), "EC PRIVATE KEY") {
+				keyType = "ecdsa-sha2-nistp256"
+			} else if strings.Contains(string(data), "DSA PRIVATE KEY") {
+				keyType = "ssh-dss"
+			}
+			return &LocalSSHKeyInfo{
+				Path:        path,
+				KeyType:     keyType,
+				Fingerprint: "",
+				IsEncrypted: true,
+			}, nil
+		}
 		return nil, err
 	}
 
@@ -341,5 +366,6 @@ func parseLocalSSHKey(path string) (*LocalSSHKeyInfo, error) {
 		Path:        path,
 		KeyType:     keyType,
 		Fingerprint: fingerprint,
+		IsEncrypted: false,
 	}, nil
 }

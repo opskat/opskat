@@ -2,12 +2,12 @@ package credential_mgr_svc
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/x509"
 	"encoding/pem"
 	"fmt"
 	"os"
@@ -23,10 +23,11 @@ import (
 
 // GenerateKeyRequest SSH 密钥生成请求
 type GenerateKeyRequest struct {
-	Name    string `json:"name"`
-	Comment string `json:"comment"`
-	KeyType string `json:"keyType"` // rsa, ed25519, ecdsa
-	KeySize int    `json:"keySize"` // RSA: 2048/4096; ECDSA: 256/384/521; ED25519 忽略
+	Name       string `json:"name"`
+	Comment    string `json:"comment"`
+	KeyType    string `json:"keyType"`    // rsa, ed25519, ecdsa
+	KeySize    int    `json:"keySize"`    // RSA: 2048/4096; ECDSA: 256/384/521; ED25519 忽略
+	Passphrase string `json:"passphrase"` // 私钥密码（可选）
 }
 
 // CreatePasswordRequest 密码凭证创建请求
@@ -93,6 +94,25 @@ func GetDecryptedPrivateKey(ctx context.Context, id int64) (string, error) {
 	return plaintext, nil
 }
 
+// GetDecryptedPassphrase 获取解密后的私钥密码
+func GetDecryptedPassphrase(ctx context.Context, id int64) (string, error) {
+	cred, err := credential_repo.Credential().Find(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("凭证不存在: %w", err)
+	}
+	if !cred.IsSSHKey() {
+		return "", fmt.Errorf("凭证类型不是 SSH 密钥")
+	}
+	if cred.Passphrase == "" {
+		return "", nil // 无密码，返回空字符串
+	}
+	plaintext, err := credential_svc.Default().Decrypt(cred.Passphrase)
+	if err != nil {
+		return "", fmt.Errorf("解密 passphrase 失败: %w", err)
+	}
+	return plaintext, nil
+}
+
 // Delete 删除凭证
 func Delete(ctx context.Context, id int64) error {
 	return credential_repo.Credential().Delete(ctx, id)
@@ -135,7 +155,7 @@ func GenerateSSHKey(ctx context.Context, req GenerateKeyRequest) (*credential_en
 		return nil, fmt.Errorf("密钥名称不能为空")
 	}
 
-	var privateKeyPEM []byte
+	var privateKey crypto.PrivateKey
 	var publicKeyStr string
 	var fingerprint string
 
@@ -144,15 +164,12 @@ func GenerateSSHKey(ctx context.Context, req GenerateKeyRequest) (*credential_en
 		if req.KeySize != 2048 && req.KeySize != 4096 {
 			req.KeySize = 4096
 		}
-		privateKey, err := rsa.GenerateKey(rand.Reader, req.KeySize)
+		rsaKey, err := rsa.GenerateKey(rand.Reader, req.KeySize)
 		if err != nil {
 			return nil, fmt.Errorf("生成 RSA 密钥失败: %w", err)
 		}
-		privateKeyPEM = pem.EncodeToMemory(&pem.Block{
-			Type:  "RSA PRIVATE KEY",
-			Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
-		})
-		pub, err := gossh.NewPublicKey(&privateKey.PublicKey)
+		privateKey = rsaKey
+		pub, err := gossh.NewPublicKey(&rsaKey.PublicKey)
 		if err != nil {
 			return nil, err
 		}
@@ -165,14 +182,7 @@ func GenerateSSHKey(ctx context.Context, req GenerateKeyRequest) (*credential_en
 		if err != nil {
 			return nil, fmt.Errorf("生成 ED25519 密钥失败: %w", err)
 		}
-		privBytes, err := x509.MarshalPKCS8PrivateKey(privKey)
-		if err != nil {
-			return nil, err
-		}
-		privateKeyPEM = pem.EncodeToMemory(&pem.Block{
-			Type:  "PRIVATE KEY",
-			Bytes: privBytes,
-		})
+		privateKey = privKey
 		pub, err := gossh.NewPublicKey(pubKey)
 		if err != nil {
 			return nil, err
@@ -191,19 +201,12 @@ func GenerateSSHKey(ctx context.Context, req GenerateKeyRequest) (*credential_en
 			req.KeySize = 256
 			curve = elliptic.P256()
 		}
-		privateKey, err := ecdsa.GenerateKey(curve, rand.Reader)
+		ecdsaKey, err := ecdsa.GenerateKey(curve, rand.Reader)
 		if err != nil {
 			return nil, fmt.Errorf("生成 ECDSA 密钥失败: %w", err)
 		}
-		privBytes, err := x509.MarshalECPrivateKey(privateKey)
-		if err != nil {
-			return nil, err
-		}
-		privateKeyPEM = pem.EncodeToMemory(&pem.Block{
-			Type:  "EC PRIVATE KEY",
-			Bytes: privBytes,
-		})
-		pub, err := gossh.NewPublicKey(&privateKey.PublicKey)
+		privateKey = ecdsaKey
+		pub, err := gossh.NewPublicKey(&ecdsaKey.PublicKey)
 		if err != nil {
 			return nil, err
 		}
@@ -219,6 +222,19 @@ func GenerateSSHKey(ctx context.Context, req GenerateKeyRequest) (*credential_en
 		comment = req.Name
 	}
 	publicKeyStr = appendComment(publicKeyStr, comment)
+
+	// 根据 passphrase 是否存在生成私钥 PEM
+	var privateKeyBlock *pem.Block
+	var err error
+	if req.Passphrase != "" {
+		privateKeyBlock, err = gossh.MarshalPrivateKeyWithPassphrase(privateKey, comment, []byte(req.Passphrase))
+	} else {
+		privateKeyBlock, err = gossh.MarshalPrivateKey(privateKey, comment)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("序列化私钥失败: %w", err)
+	}
+	privateKeyPEM := pem.EncodeToMemory(privateKeyBlock)
 
 	encryptedPrivateKey, err := credential_svc.Default().Encrypt(string(privateKeyPEM))
 	if err != nil {
@@ -239,6 +255,15 @@ func GenerateSSHKey(ctx context.Context, req GenerateKeyRequest) (*credential_en
 		Updatetime:  now,
 	}
 
+	// 如果提供了 passphrase，加密存储
+	if req.Passphrase != "" {
+		encryptedPassphrase, err := credential_svc.Default().Encrypt(req.Passphrase)
+		if err != nil {
+			return nil, fmt.Errorf("加密 passphrase 失败: %w", err)
+		}
+		cred.Passphrase = encryptedPassphrase
+	}
+
 	if err := credential_repo.Credential().Create(ctx, cred); err != nil {
 		return nil, fmt.Errorf("保存密钥失败: %w", err)
 	}
@@ -246,7 +271,7 @@ func GenerateSSHKey(ctx context.Context, req GenerateKeyRequest) (*credential_en
 }
 
 // ImportSSHKeyFromFile 从文件导入私钥
-func ImportSSHKeyFromFile(ctx context.Context, name, comment, filePath string) (*credential_entity.Credential, error) {
+func ImportSSHKeyFromFile(ctx context.Context, name, comment, filePath, passphrase string) (*credential_entity.Credential, error) {
 	if name == "" {
 		return nil, fmt.Errorf("密钥名称不能为空")
 	}
@@ -256,18 +281,34 @@ func ImportSSHKeyFromFile(ctx context.Context, name, comment, filePath string) (
 		return nil, fmt.Errorf("读取密钥文件失败: %w", err)
 	}
 
-	return ImportSSHKeyFromPEM(ctx, name, comment, string(data))
+	return ImportSSHKeyFromPEM(ctx, name, comment, string(data), passphrase)
 }
 
 // ImportSSHKeyFromPEM 从 PEM 字符串导入私钥
-func ImportSSHKeyFromPEM(ctx context.Context, name, comment, pemData string) (*credential_entity.Credential, error) {
+func ImportSSHKeyFromPEM(ctx context.Context, name, comment, pemData, passphrase string) (*credential_entity.Credential, error) {
 	if name == "" {
 		return nil, fmt.Errorf("密钥名称不能为空")
 	}
 
-	signer, err := gossh.ParsePrivateKey([]byte(pemData))
+	var signer gossh.Signer
+	var err error
+
+	// 先尝试无 passphrase 解析
+	signer, err = gossh.ParsePrivateKey([]byte(pemData))
 	if err != nil {
-		return nil, fmt.Errorf("解析私钥失败: %w", err)
+		// 如果失败且提供了 passphrase，尝试带 passphrase 解析
+		if passphrase != "" {
+			signer, err = gossh.ParsePrivateKeyWithPassphrase([]byte(pemData), []byte(passphrase))
+			if err != nil {
+				return nil, fmt.Errorf("解析私钥失败（可能 passphrase 不正确）: %w", err)
+			}
+		} else {
+			// 无 passphrase 但解析失败，可能密钥有加密
+			if strings.Contains(err.Error(), "password protected") || strings.Contains(err.Error(), "encrypted") {
+				return nil, fmt.Errorf("私钥已加密，请提供 passphrase")
+			}
+			return nil, fmt.Errorf("解析私钥失败: %w", err)
+		}
 	}
 
 	pub := signer.PublicKey()
@@ -286,6 +327,15 @@ func ImportSSHKeyFromPEM(ctx context.Context, name, comment, pemData string) (*c
 		return nil, fmt.Errorf("加密私钥失败: %w", err)
 	}
 
+	// 如果提供了 passphrase，加密后存储
+	var encryptedPassphrase string
+	if passphrase != "" {
+		encryptedPassphrase, err = credential_svc.Default().Encrypt(passphrase)
+		if err != nil {
+			return nil, fmt.Errorf("加密 passphrase 失败: %w", err)
+		}
+	}
+
 	now := time.Now().Unix()
 	cred := &credential_entity.Credential{
 		Name:        name,
@@ -294,6 +344,7 @@ func ImportSSHKeyFromPEM(ctx context.Context, name, comment, pemData string) (*c
 		KeyType:     keyType,
 		KeySize:     keySize,
 		PrivateKey:  encryptedPrivateKey,
+		Passphrase:  encryptedPassphrase,
 		PublicKey:   publicKeyStr,
 		Fingerprint: fingerprint,
 		Createtime:  now,
@@ -364,6 +415,30 @@ func UpdatePassword(ctx context.Context, id int64, password string) error {
 	}
 
 	cred.Password = encryptedPassword
+	cred.Updatetime = time.Now().Unix()
+
+	return credential_repo.Credential().Update(ctx, cred)
+}
+
+// UpdatePassphrase 更新 SSH 密钥的 passphrase
+func UpdatePassphrase(ctx context.Context, id int64, passphrase string) error {
+	cred, err := credential_repo.Credential().Find(ctx, id)
+	if err != nil {
+		return fmt.Errorf("凭证不存在: %w", err)
+	}
+	if !cred.IsSSHKey() {
+		return fmt.Errorf("凭证类型不是 SSH 密钥")
+	}
+
+	var encryptedPassphrase string
+	if passphrase != "" {
+		encryptedPassphrase, err = credential_svc.Default().Encrypt(passphrase)
+		if err != nil {
+			return fmt.Errorf("加密 passphrase 失败: %w", err)
+		}
+	}
+
+	cred.Passphrase = encryptedPassphrase
 	cred.Updatetime = time.Now().Unix()
 
 	return credential_repo.Credential().Update(ctx, cred)

@@ -105,20 +105,20 @@ func handleRunCommand(ctx context.Context, args map[string]any) (string, error) 
 	}
 
 	// 无缓存，创建一次性连接
-	password, key, err := credential_resolver.Default().ResolveSSHCredentials(ctx, sshCfg)
+	password, key, passphrase, err := credential_resolver.Default().ResolveSSHCredentials(ctx, sshCfg)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve credentials: %w", err)
 	}
-	return executeSSHCommand(sshCfg, password, key, command)
+	return executeSSHCommand(sshCfg, password, key, passphrase, command)
 }
 
 func runCommandWithCache(ctx context.Context, cache *SSHClientCache, assetID int64, cfg *asset_entity.SSHConfig, command string) (string, error) {
 	dial := func() (*ssh.Client, io.Closer, error) {
-		password, key, err := credential_resolver.Default().ResolveSSHCredentials(ctx, cfg)
+		password, key, passphrase, err := credential_resolver.Default().ResolveSSHCredentials(ctx, cfg)
 		if err != nil {
 			return nil, nil, err
 		}
-		client, err := createSSHClient(cfg, password, key)
+		client, err := createSSHClient(cfg, password, key, passphrase)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -154,12 +154,12 @@ func handleUploadFile(ctx context.Context, args map[string]any) (string, error) 
 		return "", fmt.Errorf("missing required parameters: asset_id, local_path, remote_path")
 	}
 
-	_, sshCfg, password, key, err := resolveAssetSSH(ctx, assetID)
+	_, sshCfg, password, key, passphrase, err := resolveAssetSSH(ctx, assetID)
 	if err != nil {
 		return "", err
 	}
 
-	err = executeWithSFTP(sshCfg, password, key, func(client *sftp.Client) error {
+	err = executeWithSFTP(sshCfg, password, key, passphrase, func(client *sftp.Client) error {
 		srcFile, err := os.Open(localPath) //nolint:gosec
 		if err != nil {
 			return fmt.Errorf("failed to open local file: %w", err)
@@ -197,12 +197,12 @@ func handleDownloadFile(ctx context.Context, args map[string]any) (string, error
 		return "", fmt.Errorf("missing required parameters: asset_id, remote_path, local_path")
 	}
 
-	_, sshCfg, password, key, err := resolveAssetSSH(ctx, assetID)
+	_, sshCfg, password, key, passphrase, err := resolveAssetSSH(ctx, assetID)
 	if err != nil {
 		return "", err
 	}
 
-	err = executeWithSFTP(sshCfg, password, key, func(client *sftp.Client) error {
+	err = executeWithSFTP(sshCfg, password, key, passphrase, func(client *sftp.Client) error {
 		srcFile, err := client.Open(remotePath)
 		if err != nil {
 			return fmt.Errorf("failed to open remote file: %w", err)

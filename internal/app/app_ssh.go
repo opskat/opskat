@@ -41,8 +41,8 @@ func (a *App) ConnectSSH(req SSHConnectRequest) (string, error) {
 		return "", err
 	}
 
-	// 解析存储的凭证
-	storedPassword, storedKey := a.resolveSSHCredentials(sshCfg)
+	// 解析存储的凭证（包含 passphrase）
+	storedPassword, storedKey, storedPassphrase := a.resolveSSHCredentialsFull(sshCfg)
 	password := req.Password
 	key := req.Key
 	if password == "" {
@@ -59,6 +59,7 @@ func (a *App) ConnectSSH(req SSHConnectRequest) (string, error) {
 		AuthType:          sshCfg.AuthType,
 		Password:          password,
 		Key:               key,
+		KeyPassphrase:     storedPassphrase,
 		PrivateKeys:       sshCfg.PrivateKeys,
 		AssetID:           req.AssetID,
 		Cols:              req.Cols,
@@ -149,7 +150,7 @@ func (a *App) ConnectSSHAsync(req SSHConnectRequest) (string, error) {
 		}
 
 		// 解析凭证
-		storedPassword, storedKey := a.resolveSSHCredentials(sshCfg)
+		storedPassword, storedKey, storedPassphrase := a.resolveSSHCredentialsFull(sshCfg)
 		password := req.Password
 		key := req.Key
 		if password == "" {
@@ -166,6 +167,7 @@ func (a *App) ConnectSSHAsync(req SSHConnectRequest) (string, error) {
 			AuthType:    sshCfg.AuthType,
 			Password:    password,
 			Key:         key,
+			KeyPassphrase: storedPassphrase,
 			PrivateKeys: sshCfg.PrivateKeys,
 			AssetID:     req.AssetID,
 			Cols:        req.Cols,
@@ -319,10 +321,15 @@ func (a *App) TestSSHConnection(configJSON string, plainPassword string) error {
 		return fmt.Errorf("配置解析失败: %w", err)
 	}
 
-	storedPassword, key := a.resolveSSHCredentials(&sshCfg)
+	storedPassword, key, passphrase := a.resolveSSHCredentialsFull(&sshCfg)
 	password := plainPassword
 	if password == "" {
 		password = storedPassword
+	}
+	// 测试连接时，如果前端传入明文 passphrase（未加密），直接使用
+	keyPassphrase := sshCfg.PrivateKeyPassphrase
+	if keyPassphrase == "" {
+		keyPassphrase = passphrase
 	}
 
 	connectCfg := ssh_svc.ConnectConfig{
@@ -332,6 +339,7 @@ func (a *App) TestSSHConnection(configJSON string, plainPassword string) error {
 		AuthType:          sshCfg.AuthType,
 		Password:          password,
 		Key:               key,
+		KeyPassphrase:     keyPassphrase,
 		PrivateKeys:       sshCfg.PrivateKeys,
 		Proxy:             sshCfg.Proxy,
 		HostKeyVerifyFunc: ssh_svc.AutoTrustFirstRejectChangeVerifyFunc(),

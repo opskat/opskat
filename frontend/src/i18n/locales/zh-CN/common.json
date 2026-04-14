@@ -159,6 +159,7 @@
     "connectInNewTab": "在新标签连接",
     "discoveredKeys": "发现的密钥 (~/.ssh)",
     "noLocalKeys": "未发现本地密钥",
+    "keyEncrypted": "密钥需要 passphrase",
     "scanningKeys": "正在扫描...",
     "browseKeyFile": "浏览...",
     "selectedKeys": "已选密钥",
@@ -278,6 +279,13 @@
     "editTitle": "编辑 SSH 密钥",
     "comment": "注释",
     "commentPlaceholder": "公钥注释（留空则使用名称）",
+    "passphrase": "Passphrase",
+    "passphrasePlaceholder": "私钥密码（如有加密）",
+    "passphrasePlaceholderOptional": "私钥密码（可选，留空则不加密）",
+    "changePassphrase": "修改 Passphrase",
+    "changePassphraseTitle": "修改 SSH 密钥 Passphrase",
+    "newPassphrase": "新 Passphrase",
+    "passphraseChanged": "Passphrase 已更新",
     "empty": "暂无密钥，点击上方按钮添加"
   },
   "credential": {

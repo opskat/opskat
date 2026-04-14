@@ -112,16 +112,32 @@ func decryptTabbyVault(vault *tabbyStoredVault, passphrase string) (*tabbyVault,
 	return &result, nil
 }
 
-// buildVaultPasswordMap 从解密后的 vault 构建 profileID → password 映射
-func buildVaultPasswordMap(vault *tabbyVault) map[string]string {
-	passwords := make(map[string]string)
+// vaultSecretInfo 包含密码类型信息
+type vaultSecretInfo struct {
+	Type     string
+	Value    string
+}
+
+// buildVaultSecretMap 从解密后的 vault 构建 profileID → secretInfo 映射
+func buildVaultSecretMap(vault *tabbyVault) map[string]vaultSecretInfo {
+	secrets := make(map[string]vaultSecretInfo)
 	for _, secret := range vault.Secrets {
 		if secret.Type == "ssh:password" || secret.Type == "ssh:key-passphrase" {
 			key := secret.secretKey()
 			if key != "" && secret.Value != "" {
-				passwords[key] = secret.Value
+				secrets[key] = vaultSecretInfo{Type: secret.Type, Value: secret.Value}
 			}
 		}
+	}
+	return secrets
+}
+
+// buildVaultPasswordMap 从解密后的 vault 构建 profileID → password 映射（向后兼容）
+func buildVaultPasswordMap(vault *tabbyVault) map[string]string {
+	secrets := buildVaultSecretMap(vault)
+	passwords := make(map[string]string)
+	for k, v := range secrets {
+		passwords[k] = v.Value
 	}
 	return passwords
 }

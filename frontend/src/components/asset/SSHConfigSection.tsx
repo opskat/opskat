@@ -1,7 +1,7 @@
-import { Trash2, FolderOpen, Loader2 } from "lucide-react";
+import { Trash2, FolderOpen, Loader2, Lock } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { Button, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
+import { Button, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Tooltip, TooltipContent, TooltipTrigger } from "@opskat/ui";
 import { AssetSelect } from "@/components/asset/AssetSelect";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
 import { SelectSSHKeyFile } from "../../../wailsjs/go/app/App";
@@ -38,6 +38,8 @@ export interface SSHConfigSectionProps {
   setLocalKeys: (v: app.LocalSSHKeyInfo[]) => void;
   selectedKeyPaths: string[];
   setSelectedKeyPaths: (v: string[]) => void;
+  privateKeyPassphrase: string;
+  setPrivateKeyPassphrase: (v: string) => void;
   scanningKeys: boolean;
   // SSH tunnel (jump host)
   sshTunnelId: number;
@@ -86,6 +88,8 @@ export function SSHConfigSection({
   setLocalKeys,
   selectedKeyPaths,
   setSelectedKeyPaths,
+  privateKeyPassphrase,
+  setPrivateKeyPassphrase,
   scanningKeys,
   sshTunnelId,
   setSshTunnelId,
@@ -303,11 +307,21 @@ export function SSHConfigSection({
                           }}
                           className="rounded"
                         />
+                        {k.isEncrypted && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Lock className="h-3 w-3 text-amber-500" />
+                            </TooltipTrigger>
+                            <TooltipContent>{t("asset.keyEncrypted")}</TooltipContent>
+                          </Tooltip>
+                        )}
                         <span className="font-medium truncate">{k.path.split("/").pop()}</span>
                         <span className="text-muted-foreground">({k.keyType})</span>
-                        <span className="text-muted-foreground truncate ml-auto" title={k.fingerprint}>
-                          {k.fingerprint.substring(0, 20)}...
-                        </span>
+                        {k.fingerprint && (
+                          <span className="text-muted-foreground truncate ml-auto" title={k.fingerprint}>
+                            {k.fingerprint.substring(0, 20)}...
+                          </span>
+                        )}
                       </label>
                     );
                   })}
@@ -355,6 +369,20 @@ export function SSHConfigSection({
                 <FolderOpen className="h-3.5 w-3.5 mr-1.5" />
                 {t("asset.browseKeyFile")}
               </Button>
+
+              {/* Passphrase for local key file */}
+              {selectedKeyPaths.length > 0 && (
+                <div className="grid gap-1.5 mt-2">
+                  <Label className="text-xs">{t("sshKey.passphrase")}</Label>
+                  <Input
+                    type="password"
+                    className="h-8 text-xs"
+                    value={privateKeyPassphrase}
+                    onChange={(e) => setPrivateKeyPassphrase(e.target.value)}
+                    placeholder={t("sshKey.passphrasePlaceholder")}
+                  />
+                </div>
+              )}
             </div>
           )}
         </div>

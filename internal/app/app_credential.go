@@ -35,7 +35,7 @@ func (a *App) GetAssetPassword(assetID int64) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("get SSH config failed: %w", err)
 		}
-		password, _, err := resolver.ResolveSSHCredentials(ctx, cfg)
+		password, _, _, err := resolver.ResolveSSHCredentials(ctx, cfg)
 		return password, err
 
 	case asset_entity.AssetTypeDatabase:
@@ -80,17 +80,18 @@ func (a *App) CreatePasswordCredential(name, username, password, description str
 }
 
 // GenerateSSHKey 生成新的 SSH 密钥对
-func (a *App) GenerateSSHKey(name, comment, keyType string, keySize int) (*credential_entity.Credential, error) {
+func (a *App) GenerateSSHKey(name, comment, keyType string, keySize int, passphrase string) (*credential_entity.Credential, error) {
 	return credential_mgr_svc.GenerateSSHKey(a.langCtx(), credential_mgr_svc.GenerateKeyRequest{
-		Name:    name,
-		Comment: comment,
-		KeyType: keyType,
-		KeySize: keySize,
+		Name:       name,
+		Comment:    comment,
+		KeyType:    keyType,
+		KeySize:    keySize,
+		Passphrase: passphrase,
 	})
 }
 
 // ImportSSHKeyFile 通过文件选择框导入 SSH 密钥
-func (a *App) ImportSSHKeyFile(name, comment string) (*credential_entity.Credential, error) {
+func (a *App) ImportSSHKeyFile(name, comment, passphrase string) (*credential_entity.Credential, error) {
 	filePath, err := wailsRuntime.OpenFileDialog(a.ctx, wailsRuntime.OpenDialogOptions{
 		Title: "选择 SSH 私钥文件",
 	})
@@ -100,12 +101,12 @@ func (a *App) ImportSSHKeyFile(name, comment string) (*credential_entity.Credent
 	if filePath == "" {
 		return nil, nil
 	}
-	return credential_mgr_svc.ImportSSHKeyFromFile(a.langCtx(), name, comment, filePath)
+	return credential_mgr_svc.ImportSSHKeyFromFile(a.langCtx(), name, comment, filePath, passphrase)
 }
 
 // ImportSSHKeyPEM 通过粘贴 PEM 内容导入 SSH 密钥
-func (a *App) ImportSSHKeyPEM(name, comment, pemData string) (*credential_entity.Credential, error) {
-	return credential_mgr_svc.ImportSSHKeyFromPEM(a.langCtx(), name, comment, pemData)
+func (a *App) ImportSSHKeyPEM(name, comment, pemData, passphrase string) (*credential_entity.Credential, error) {
+	return credential_mgr_svc.ImportSSHKeyFromPEM(a.langCtx(), name, comment, pemData, passphrase)
 }
 
 // UpdateCredential 更新凭证
@@ -122,6 +123,11 @@ func (a *App) UpdateCredential(id int64, name, comment, description, username st
 // UpdateCredentialPassword 更新密码凭证的密码
 func (a *App) UpdateCredentialPassword(id int64, password string) error {
 	return credential_mgr_svc.UpdatePassword(a.langCtx(), id, password)
+}
+
+// UpdateCredentialPassphrase 更新 SSH 密钥的 passphrase
+func (a *App) UpdateCredentialPassphrase(id int64, passphrase string) error {
+	return credential_mgr_svc.UpdatePassphrase(a.langCtx(), id, passphrase)
 }
 
 // GetCredentialUsage 获取引用此凭证的资产名称列表

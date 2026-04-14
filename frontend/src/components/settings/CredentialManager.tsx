@@ -32,6 +32,7 @@ import {
   GetCredentialUsage,
   CreatePasswordCredential,
   UpdateCredentialPassword,
+  UpdateCredentialPassphrase,
 } from "../../../wailsjs/go/app/App";
 import { credential_entity } from "../../../wailsjs/go/models";
 
@@ -52,6 +53,7 @@ export function CredentialManager() {
   const [deleteCred, setDeleteCred] = useState<credential_entity.Credential | null>(null);
   const [deleteUsage, setDeleteUsage] = useState<string[]>([]);
   const [changePasswordCred, setChangePasswordCred] = useState<credential_entity.Credential | null>(null);
+  const [changePassphraseCred, setChangePassphraseCred] = useState<credential_entity.Credential | null>(null);
 
   const fetchCredentials = useCallback(async () => {
     setLoading(true);
@@ -171,19 +173,34 @@ export function CredentialManager() {
               </div>
               <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                 {cred.type === "ssh_key" && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        onClick={() => handleCopyPublicKey(cred.id)}
-                      >
-                        <Copy className="h-3.5 w-3.5" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>{t("sshKey.copyPublicKey")}</TooltipContent>
-                  </Tooltip>
+                  <>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => handleCopyPublicKey(cred.id)}
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{t("sshKey.copyPublicKey")}</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => setChangePassphraseCred(cred)}
+                        >
+                          <KeyRound className="h-3.5 w-3.5" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{t("sshKey.changePassphrase")}</TooltipContent>
+                    </Tooltip>
+                  </>
                 )}
                 {cred.type === "password" && (
                   <Tooltip>
@@ -247,6 +264,12 @@ export function CredentialManager() {
         credential={changePasswordCred}
         onSuccess={fetchCredentials}
       />
+      <ChangePassphraseDialog
+        open={!!changePassphraseCred}
+        onOpenChange={(open) => !open && setChangePassphraseCred(null)}
+        credential={changePassphraseCred}
+        onSuccess={fetchCredentials}
+      />
 
       {/* Delete confirmation */}
       <Dialog open={!!deleteCred} onOpenChange={(open) => !open && setDeleteCred(null)}>
@@ -290,6 +313,7 @@ function GenerateKeyDialog({
   const [comment, setComment] = useState("");
   const [keyType, setKeyType] = useState("ed25519");
   const [keySize, setKeySize] = useState(4096);
+  const [passphrase, setPassphrase] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -298,13 +322,14 @@ function GenerateKeyDialog({
       setComment("");
       setKeyType("ed25519");
       setKeySize(4096);
+      setPassphrase("");
     }
   }, [open]);
 
   const handleGenerate = async () => {
     setSaving(true);
     try {
-      await GenerateSSHKey(name, comment, keyType, keySize);
+      await GenerateSSHKey(name, comment, keyType, keySize, passphrase);
       toast.success(t("sshKey.generateSuccess"));
       onOpenChange(false);
       onSuccess();
@@ -382,6 +407,15 @@ function GenerateKeyDialog({
               </Select>
             </div>
           )}
+          <div className="grid gap-2">
+            <Label>{t("sshKey.passphrase")}</Label>
+            <Input
+              type="password"
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+              placeholder={t("sshKey.passphrasePlaceholderOptional")}
+            />
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
@@ -409,6 +443,7 @@ function ImportKeyDialog({
   const [name, setName] = useState("");
   const [comment, setComment] = useState("");
   const [pemContent, setPemContent] = useState("");
+  const [passphrase, setPassphrase] = useState("");
   const [mode, setMode] = useState<"file" | "pem">("file");
   const [saving, setSaving] = useState(false);
 
@@ -417,6 +452,7 @@ function ImportKeyDialog({
       setName("");
       setComment("");
       setPemContent("");
+      setPassphrase("");
       setMode("file");
     }
   }, [open]);
@@ -424,7 +460,7 @@ function ImportKeyDialog({
   const handleImportFile = async () => {
     setSaving(true);
     try {
-      const result = await ImportSSHKeyFile(name, comment);
+      const result = await ImportSSHKeyFile(name, comment, passphrase);
       if (result) {
         toast.success(t("sshKey.importSuccess"));
         onOpenChange(false);
@@ -440,7 +476,7 @@ function ImportKeyDialog({
   const handleImportPEM = async () => {
     setSaving(true);
     try {
-      await ImportSSHKeyPEM(name, comment, pemContent);
+      await ImportSSHKeyPEM(name, comment, pemContent, passphrase);
       toast.success(t("sshKey.importSuccess"));
       onOpenChange(false);
       onSuccess();
@@ -468,6 +504,15 @@ function ImportKeyDialog({
               value={comment}
               onChange={(e) => setComment(e.target.value)}
               placeholder={t("sshKey.commentPlaceholder")}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label>{t("sshKey.passphrase")}</Label>
+            <Input
+              type="password"
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+              placeholder={t("sshKey.passphrasePlaceholder")}
             />
           </div>
           <div className="flex gap-2">
@@ -820,6 +865,86 @@ function ChangePasswordDialog({
             {t("action.cancel")}
           </Button>
           <Button onClick={handleSave} disabled={saving || !password}>
+            {saving ? t("action.saving") : t("action.save")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ChangePassphraseDialog({
+  open,
+  onOpenChange,
+  credential,
+  onSuccess,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  credential: credential_entity.Credential | null;
+  onSuccess: () => void;
+}) {
+  const { t } = useTranslation();
+  const [passphrase, setPassphrase] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setPassphrase("");
+      setVisible(false);
+    }
+  }, [open]);
+
+  const handleSave = async () => {
+    if (!credential) return;
+    setSaving(true);
+    try {
+      await UpdateCredentialPassphrase(credential.id, passphrase);
+      toast.success(t("sshKey.passphraseChanged"));
+      onOpenChange(false);
+      onSuccess();
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t("sshKey.changePassphraseTitle")}</DialogTitle>
+        </DialogHeader>
+        <div className="grid gap-4 py-2">
+          <div className="grid gap-2">
+            <Label>{t("sshKey.newPassphrase")}</Label>
+            <div className="relative">
+              <Input
+                type={visible ? "text" : "password"}
+                value={passphrase}
+                onChange={(e) => setPassphrase(e.target.value)}
+                placeholder={t("sshKey.passphrasePlaceholder")}
+                className="pr-9"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                onClick={() => setVisible(!visible)}
+              >
+                {visible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              </Button>
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            {t("action.cancel")}
+          </Button>
+          <Button onClick={handleSave} disabled={saving}>
             {saving ? t("action.saving") : t("action.save")}
           </Button>
         </DialogFooter>

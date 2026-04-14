@@ -20,7 +20,7 @@ import (
 )
 
 // createSSHClient 创建 SSH 客户端，支持 password 和 key 认证
-func createSSHClient(cfg *asset_entity.SSHConfig, password, key string) (*ssh.Client, error) {
+func createSSHClient(cfg *asset_entity.SSHConfig, password, key, passphrase string) (*ssh.Client, error) {
 	var authMethods []ssh.AuthMethod
 	switch cfg.AuthType {
 	case "password":
@@ -29,7 +29,7 @@ func createSSHClient(cfg *asset_entity.SSHConfig, password, key string) (*ssh.Cl
 		}
 	case "key":
 		if key != "" {
-			signer, err := ssh.ParsePrivateKey([]byte(key))
+			signer, err := parseSSHPrivateKey([]byte(key), passphrase)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse private key: %w", err)
 			}
@@ -55,29 +55,45 @@ func createSSHClient(cfg *asset_entity.SSHConfig, password, key string) (*ssh.Cl
 	return client, nil
 }
 
+// parseSSHPrivateKey 解析私钥，支持 passphrase
+func parseSSHPrivateKey(data []byte, passphrase string) (ssh.Signer, error) {
+	signer, err := ssh.ParsePrivateKey(data)
+	if err == nil {
+		return signer, nil
+	}
+	if passphrase != "" {
+		signer, err = ssh.ParsePrivateKeyWithPassphrase(data, []byte(passphrase))
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse encrypted private key: %w", err)
+		}
+		return signer, nil
+	}
+	return nil, err
+}
+
 // resolveAssetSSH 根据资产 ID 解析 SSH 连接所需信息（内部使用 credential_resolver）
-func resolveAssetSSH(ctx context.Context, assetID int64) (*asset_entity.Asset, *asset_entity.SSHConfig, string, string, error) {
+func resolveAssetSSH(ctx context.Context, assetID int64) (*asset_entity.Asset, *asset_entity.SSHConfig, string, string, string, error) {
 	asset, err := asset_svc.Asset().Get(ctx, assetID)
 	if err != nil {
-		return nil, nil, "", "", fmt.Errorf("asset not found: %w", err)
+		return nil, nil, "", "", "", fmt.Errorf("asset not found: %w", err)
 	}
 	if !asset.IsSSH() {
-		return nil, nil, "", "", fmt.Errorf("asset is not SSH type")
+		return nil, nil, "", "", "", fmt.Errorf("asset is not SSH type")
 	}
 	sshCfg, err := asset.GetSSHConfig()
 	if err != nil {
-		return nil, nil, "", "", fmt.Errorf("failed to get SSH config: %w", err)
+		return nil, nil, "", "", "", fmt.Errorf("failed to get SSH config: %w", err)
 	}
-	password, key, err := credential_resolver.Default().ResolveSSHCredentials(ctx, sshCfg)
+	password, key, passphrase, err := credential_resolver.Default().ResolveSSHCredentials(ctx, sshCfg)
 	if err != nil {
-		return nil, nil, "", "", fmt.Errorf("failed to resolve credentials: %w", err)
+		return nil, nil, "", "", "", fmt.Errorf("failed to resolve credentials: %w", err)
 	}
-	return asset, sshCfg, password, key, nil
+	return asset, sshCfg, password, key, passphrase, nil
 }
 
 // executeSSHCommand 执行一次性 SSH 命令并返回输出（每次新建连接）
-func executeSSHCommand(cfg *asset_entity.SSHConfig, password, key string, command string) (string, error) {
-	client, err := createSSHClient(cfg, password, key)
+func executeSSHCommand(cfg *asset_entity.SSHConfig, password, key, passphrase string, command string) (string, error) {
+	client, err := createSSHClient(cfg, password, key, passphrase)
 	if err != nil {
 		return "", err
 	}
@@ -121,8 +137,8 @@ func runSSHCommand(client *ssh.Client, command string) (string, error) {
 }
 
 // executeWithSFTP 创建临时 SSH+SFTP 连接并执行操作
-func executeWithSFTP(cfg *asset_entity.SSHConfig, password, key string, fn func(*sftp.Client) error) error {
-	client, err := createSSHClient(cfg, password, key)
+func executeWithSFTP(cfg *asset_entity.SSHConfig, password, key, passphrase string, fn func(*sftp.Client) error) error {
+	client, err := createSSHClient(cfg, password, key, passphrase)
 	if err != nil {
 		return err
 	}
@@ -147,21 +163,21 @@ func executeWithSFTP(cfg *asset_entity.SSHConfig, password, key string, fn func(
 
 // DialSSHClient 创建 SSH 客户端连接，自动解析凭据。调用者需要关闭 client。
 func DialSSHClient(ctx context.Context, assetID int64) (*ssh.Client, error) {
-	_, sshCfg, password, key, err := resolveAssetSSH(ctx, assetID)
+	_, sshCfg, password, key, passphrase, err := resolveAssetSSH(ctx, assetID)
 	if err != nil {
 		return nil, err
 	}
-	return createSSHClient(sshCfg, password, key)
+	return createSSHClient(sshCfg, password, key, passphrase)
 }
 
 // ExecWithStdio 在远程服务器执行命令，直接连接 stdio（支持管道）
 func ExecWithStdio(ctx context.Context, assetID int64, command string, stdin io.Reader, stdout, stderr io.Writer) error {
-	_, sshCfg, password, key, err := resolveAssetSSH(ctx, assetID)
+	_, sshCfg, password, key, passphrase, err := resolveAssetSSH(ctx, assetID)
 	if err != nil {
 		return err
 	}
 
-	client, err := createSSHClient(sshCfg, password, key)
+	client, err := createSSHClient(sshCfg, password, key, passphrase)
 	if err != nil {
 		return err
 	}
@@ -193,19 +209,19 @@ func ExecWithStdio(ctx context.Context, assetID int64, command string, stdin io.
 // CopyBetweenAssets 在两个资产间直接传输文件（SFTP 流式，不经本地磁盘）
 func CopyBetweenAssets(ctx context.Context, srcAssetID int64, srcPath string, dstAssetID int64, dstPath string) error {
 	// 解析源资产凭证
-	_, srcCfg, srcPassword, srcKey, err := resolveAssetSSH(ctx, srcAssetID)
+	_, srcCfg, srcPassword, srcKey, srcPassphrase, err := resolveAssetSSH(ctx, srcAssetID)
 	if err != nil {
 		return fmt.Errorf("failed to resolve source asset: %w", err)
 	}
 
 	// 解析目标资产凭证
-	_, dstCfg, dstPassword, dstKey, err := resolveAssetSSH(ctx, dstAssetID)
+	_, dstCfg, dstPassword, dstKey, dstPassphrase, err := resolveAssetSSH(ctx, dstAssetID)
 	if err != nil {
 		return fmt.Errorf("failed to resolve destination asset: %w", err)
 	}
 
 	// 创建 SSH 客户端
-	srcClient, err := createSSHClient(srcCfg, srcPassword, srcKey)
+	srcClient, err := createSSHClient(srcCfg, srcPassword, srcKey, srcPassphrase)
 	if err != nil {
 		return fmt.Errorf("source asset SSH connection failed: %w", err)
 	}
@@ -215,7 +231,7 @@ func CopyBetweenAssets(ctx context.Context, srcAssetID int64, srcPath string, ds
 		}
 	}()
 
-	dstClient, err := createSSHClient(dstCfg, dstPassword, dstKey)
+	dstClient, err := createSSHClient(dstCfg, dstPassword, dstKey, dstPassphrase)
 	if err != nil {
 		return fmt.Errorf("destination asset SSH connection failed: %w", err)
 	}
@@ -278,11 +294,11 @@ func CopyBetweenAssets(ctx context.Context, srcAssetID int64, srcPath string, ds
 type AIPoolDialer struct{}
 
 func (d *AIPoolDialer) DialAsset(ctx context.Context, assetID int64) (*ssh.Client, []io.Closer, error) {
-	sshCfg, password, key, _, err := credential_resolver.Default().ResolveSSHConnectConfig(ctx, assetID)
+	sshCfg, password, key, passphrase, _, err := credential_resolver.Default().ResolveSSHConnectConfig(ctx, assetID)
 	if err != nil {
 		return nil, nil, err
 	}
-	client, err := createSSHClient(sshCfg, password, key)
+	client, err := createSSHClient(sshCfg, password, key, passphrase)
 	if err != nil {
 		return nil, nil, err
 	}

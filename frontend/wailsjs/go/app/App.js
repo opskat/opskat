@@ -162,8 +162,8 @@ export function ForceUninstallExtension(arg1, arg2) {
   return window['go']['app']['App']['ForceUninstallExtension'](arg1, arg2);
 }
 
-export function GenerateSSHKey(arg1, arg2, arg3, arg4) {
-  return window['go']['app']['App']['GenerateSSHKey'](arg1, arg2, arg3, arg4);
+export function GenerateSSHKey(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['app']['App']['GenerateSSHKey'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function GetActiveAIProvider() {
@@ -282,12 +282,12 @@ export function ImportSSHConfigSelected(arg1, arg2) {
   return window['go']['app']['App']['ImportSSHConfigSelected'](arg1, arg2);
 }
 
-export function ImportSSHKeyFile(arg1, arg2) {
-  return window['go']['app']['App']['ImportSSHKeyFile'](arg1, arg2);
+export function ImportSSHKeyFile(arg1, arg2, arg3) {
+  return window['go']['app']['App']['ImportSSHKeyFile'](arg1, arg2, arg3);
 }
 
-export function ImportSSHKeyPEM(arg1, arg2, arg3) {
-  return window['go']['app']['App']['ImportSSHKeyPEM'](arg1, arg2, arg3);
+export function ImportSSHKeyPEM(arg1, arg2, arg3, arg4) {
+  return window['go']['app']['App']['ImportSSHKeyPEM'](arg1, arg2, arg3, arg4);
 }
 
 export function ImportTabbySelected(arg1, arg2, arg3) {
@@ -560,6 +560,10 @@ export function UpdateAssetPassword(arg1, arg2) {
 
 export function UpdateCredential(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['app']['App']['UpdateCredential'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function UpdateCredentialPassphrase(arg1, arg2) {
+  return window['go']['app']['App']['UpdateCredentialPassphrase'](arg1, arg2);
 }
 
 export function UpdateCredentialPassword(arg1, arg2) {

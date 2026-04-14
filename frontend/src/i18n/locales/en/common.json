@@ -159,6 +159,7 @@
     "connectInNewTab": "Connect in New Tab",
     "discoveredKeys": "Discovered Keys (~/.ssh)",
     "noLocalKeys": "No local keys found",
+    "keyEncrypted": "Key requires passphrase",
     "scanningKeys": "Scanning...",
     "browseKeyFile": "Browse...",
     "selectedKeys": "Selected Keys",
@@ -278,6 +279,13 @@
     "editTitle": "Edit SSH Key",
     "comment": "Comment",
     "commentPlaceholder": "Public key comment (defaults to name if empty)",
+    "passphrase": "Passphrase",
+    "passphrasePlaceholder": "Private key password (if encrypted)",
+    "passphrasePlaceholderOptional": "Private key password (optional, leave empty for no encryption)",
+    "changePassphrase": "Change Passphrase",
+    "changePassphraseTitle": "Change SSH Key Passphrase",
+    "newPassphrase": "New Passphrase",
+    "passphraseChanged": "Passphrase changed",
     "empty": "No keys yet. Use the buttons above to add one."
   },
   "credential": {

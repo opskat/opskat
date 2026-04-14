@@ -193,13 +193,13 @@ func ImportTabbySelected(ctx context.Context, data []byte, selectedIndexes []int
 	}
 
 	// 解密 vault 获取密码映射
-	var vaultPasswords map[string]string
+	var vaultSecrets map[string]vaultSecretInfo
 	if opts.Passphrase != "" && cfg.Vault != nil && cfg.Vault.Contents != "" {
 		vault, err := decryptTabbyVault(cfg.Vault, opts.Passphrase)
 		if err != nil {
 			return nil, fmt.Errorf("解密 Tabby vault 失败: %w", err)
 		}
-		vaultPasswords = buildVaultPasswordMap(vault)
+		vaultSecrets = buildVaultSecretMap(vault)
 	}
 
 	// 筛选 SSH profiles
@@ -327,11 +327,15 @@ func ImportTabbySelected(ctx context.Context, data []byte, selectedIndexes []int
 			Host: host, Port: port, Username: username, AuthType: authType,
 			PrivateKeys: privateKeys, Proxy: proxyCfg,
 		}
-		// 从 vault 中提取密码并加密存储
-		if password, ok := vaultPasswords[profile.ID]; ok && password != "" {
-			encrypted, err := encryptPassword(password)
+		// 从 vault 中提取密码/passphrase 并加密存储
+		if secret, ok := vaultSecrets[profile.ID]; ok && secret.Value != "" {
+			encrypted, err := encryptPassword(secret.Value)
 			if err == nil {
-				sshCfg.Password = encrypted
+				if secret.Type == "ssh:key-passphrase" && authType == "key" {
+					sshCfg.PrivateKeyPassphrase = encrypted
+				} else {
+					sshCfg.Password = encrypted
+				}
 			}
 		}
 

@@ -141,6 +141,7 @@ type ConnectConfig struct {
 	AuthType    string // password | key | keyboard-interactive
 	Password    string
 	Key         string   // PEM 格式私钥（直接传入）
+	KeyPassphrase string // 私钥密码（用于加密的私钥）
 	PrivateKeys []string // 私钥文件路径列表
 	AssetID     int64
 	Cols        int
@@ -164,12 +165,13 @@ type ConnectConfig struct {
 
 // JumpHostEntry 跳板机连接信息
 type JumpHostEntry struct {
-	Host     string
-	Port     int
-	Username string
-	AuthType string
-	Password string
-	Key      string
+	Host       string
+	Port       int
+	Username   string
+	AuthType   string
+	Password   string
+	Key        string
+	Passphrase string
 }
 
 // emitProgress 安全调用进度回调
@@ -181,7 +183,7 @@ func emitProgress(cfg *ConnectConfig, step, message string) {
 
 // Dial 仅建立 SSH 连接（不创建 PTY/Session），用于连接池等场景
 func (m *Manager) Dial(cfg ConnectConfig) (*ssh.Client, []io.Closer, error) {
-	authMethods, err := buildAuthMethods(cfg.AuthType, cfg.Password, cfg.Key, cfg.PrivateKeys, cfg.OnAuthChallenge)
+	authMethods, err := buildAuthMethods(cfg.AuthType, cfg.Password, cfg.Key, cfg.KeyPassphrase, cfg.PrivateKeys, cfg.OnAuthChallenge)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -200,7 +202,7 @@ func (m *Manager) Dial(cfg ConnectConfig) (*ssh.Client, []io.Closer, error) {
 // Connect 建立 SSH 连接并启动 PTY 会话
 func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
 	// 构建目标认证方式
-	authMethods, err := buildAuthMethods(cfg.AuthType, cfg.Password, cfg.Key, cfg.PrivateKeys, cfg.OnAuthChallenge)
+	authMethods, err := buildAuthMethods(cfg.AuthType, cfg.Password, cfg.Key, cfg.KeyPassphrase, cfg.PrivateKeys, cfg.OnAuthChallenge)
 	if err != nil {
 		return "", err
 	}
@@ -377,7 +379,7 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 
 	emitProgress(&cfg, "connect", fmt.Sprintf("正在连接跳板机 %s...", firstAddr))
 
-	firstAuth, err := buildAuthMethods(firstJump.AuthType, firstJump.Password, firstJump.Key, nil, nil)
+	firstAuth, err := buildAuthMethods(firstJump.AuthType, firstJump.Password, firstJump.Key, firstJump.Passphrase, nil, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("跳板机认证配置失败: %w", err)
 	}
@@ -421,7 +423,7 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 
 		emitProgress(&cfg, "connect", fmt.Sprintf("正在连接跳板机 %s...", jumpAddr))
 
-		jumpAuth, err := buildAuthMethods(jump.AuthType, jump.Password, jump.Key, nil, nil)
+		jumpAuth, err := buildAuthMethods(jump.AuthType, jump.Password, jump.Key, jump.Passphrase, nil, nil)
 		if err != nil {
 			for _, c := range closers {
 				if closeErr := c.Close(); closeErr != nil {
@@ -522,7 +524,7 @@ func dialViaProxy(proxyCfg *asset_entity.ProxyConfig, targetAddr string) (net.Co
 }
 
 // buildAuthMethods 构建 SSH 认证方式
-func buildAuthMethods(authType, password, key string, privateKeyPaths []string,
+func buildAuthMethods(authType, password, key, keyPassphrase string, privateKeyPaths []string,
 	onAuthChallenge func(prompts []string, echo []bool) ([]string, error)) ([]ssh.AuthMethod, error) {
 	var methods []ssh.AuthMethod
 
@@ -555,7 +557,7 @@ func buildAuthMethods(authType, password, key string, privateKeyPaths []string,
 	case "key":
 		// 优先使用直接传入的 key
 		if key != "" {
-			signer, err := ssh.ParsePrivateKey([]byte(key))
+			signer, err := parsePrivateKey([]byte(key), keyPassphrase)
 			if err != nil {
 				return nil, fmt.Errorf("解析密钥失败: %w", err)
 			}
@@ -567,7 +569,7 @@ func buildAuthMethods(authType, password, key string, privateKeyPaths []string,
 			if err != nil {
 				return nil, fmt.Errorf("读取私钥文件 %s 失败: %w", path, err)
 			}
-			signer, err := ssh.ParsePrivateKey(data)
+			signer, err := parsePrivateKey(data, keyPassphrase)
 			if err != nil {
 				return nil, fmt.Errorf("解析私钥文件 %s 失败: %w", path, err)
 			}
@@ -583,6 +585,24 @@ func buildAuthMethods(authType, password, key string, privateKeyPaths []string,
 	}
 
 	return methods, nil
+}
+
+// parsePrivateKey 解析私钥，支持 passphrase
+func parsePrivateKey(data []byte, passphrase string) (ssh.Signer, error) {
+	// 先尝试无 passphrase 解析
+	signer, err := ssh.ParsePrivateKey(data)
+	if err == nil {
+		return signer, nil
+	}
+	// 如果失败且提供了 passphrase，尝试带 passphrase 解析
+	if passphrase != "" {
+		signer, err = ssh.ParsePrivateKeyWithPassphrase(data, []byte(passphrase))
+		if err != nil {
+			return nil, fmt.Errorf("解析加密私钥失败（可能 passphrase 不正确）: %w", err)
+		}
+		return signer, nil
+	}
+	return nil, err
 }
 
 // readOutput 持续读取终端输出并回调
@@ -678,7 +698,7 @@ func (m *Manager) DisconnectAll() {
 
 // TestConnection 测试 SSH 连接（仅验证连通性，不创建会话）
 func (m *Manager) TestConnection(cfg ConnectConfig) error {
-	authMethods, err := buildAuthMethods(cfg.AuthType, cfg.Password, cfg.Key, cfg.PrivateKeys, cfg.OnAuthChallenge)
+	authMethods, err := buildAuthMethods(cfg.AuthType, cfg.Password, cfg.Key, cfg.KeyPassphrase, cfg.PrivateKeys, cfg.OnAuthChallenge)
 	if err != nil {
 		return err
 	}
