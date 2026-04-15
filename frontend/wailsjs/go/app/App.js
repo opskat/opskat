@@ -562,8 +562,8 @@ export function UpdateCredential(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['app']['App']['UpdateCredential'](arg1, arg2, arg3, arg4, arg5);
 }
 
-export function UpdateCredentialPassphrase(arg1, arg2) {
-  return window['go']['app']['App']['UpdateCredentialPassphrase'](arg1, arg2);
+export function UpdateCredentialPassphrase(arg1, arg2, arg3) {
+  return window['go']['app']['App']['UpdateCredentialPassphrase'](arg1, arg2, arg3);
 }
 
 export function UpdateCredentialPassword(arg1, arg2) {

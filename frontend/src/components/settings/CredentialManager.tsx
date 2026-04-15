@@ -857,26 +857,6 @@ function ChangePasswordDialog({
                   <Shuffle className="h-3.5 w-3.5" />
                 </Button>
               </div>
-          </div>
-          <div className="grid gap-2">
-            <Label>{t("sshKey.confirmPassphrase")}</Label>
-            <div className="relative">
-              <Input
-                type={visibleConfirm ? "text" : "password"}
-                value={confirmPassphrase}
-                onChange={(e) => setConfirmPassphrase(e.target.value)}
-                placeholder={t("sshKey.passphrasePlaceholder")}
-                className="pr-9"
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
-                onClick={() => setVisibleConfirm(!visibleConfirm)}
-              >
-                {visibleConfirm ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-              </Button>
             </div>
           </div>
         </div>
@@ -990,6 +970,27 @@ function ChangePassphraseDialog({
                 onClick={() => setVisibleNew(!visibleNew)}
               >
                 {visibleNew ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              </Button>
+            </div>
+          </div>
+          <div className="grid gap-2">
+            <Label>{t("sshKey.confirmPassphrase")}</Label>
+            <div className="relative">
+              <Input
+                type={visibleConfirm ? "text" : "password"}
+                value={confirmPassphrase}
+                onChange={(e) => setConfirmPassphrase(e.target.value)}
+                placeholder={t("sshKey.passphrasePlaceholder")}
+                className="pr-9"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                onClick={() => setVisibleConfirm(!visibleConfirm)}
+              >
+                {visibleConfirm ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
               </Button>
             </div>
           </div>

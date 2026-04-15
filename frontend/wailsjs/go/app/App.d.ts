@@ -298,7 +298,7 @@ export function UpdateAssetPassword(arg1:number,arg2:string):Promise<void>;
 
 export function UpdateCredential(arg1:number,arg2:string,arg3:string,arg4:string,arg5:string):Promise<credential_entity.Credential>;
 
-export function UpdateCredentialPassphrase(arg1:number,arg2:string):Promise<void>;
+export function UpdateCredentialPassphrase(arg1:number,arg2:string,arg3:string):Promise<void>;
 
 export function UpdateCredentialPassword(arg1:number,arg2:string):Promise<void>;
 
