@@ -857,6 +857,26 @@ function ChangePasswordDialog({
                   <Shuffle className="h-3.5 w-3.5" />
                 </Button>
               </div>
+          </div>
+          <div className="grid gap-2">
+            <Label>{t("sshKey.confirmPassphrase")}</Label>
+            <div className="relative">
+              <Input
+                type={visibleConfirm ? "text" : "password"}
+                value={confirmPassphrase}
+                onChange={(e) => setConfirmPassphrase(e.target.value)}
+                placeholder={t("sshKey.passphrasePlaceholder")}
+                className="pr-9"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                onClick={() => setVisibleConfirm(!visibleConfirm)}
+              >
+                {visibleConfirm ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              </Button>
             </div>
           </div>
         </div>
@@ -887,21 +907,29 @@ function ChangePassphraseDialog({
   const { t } = useTranslation();
   const [oldPassphrase, setOldPassphrase] = useState("");
   const [newPassphrase, setNewPassphrase] = useState("");
+  const [confirmPassphrase, setConfirmPassphrase] = useState("");
   const [saving, setSaving] = useState(false);
   const [visibleOld, setVisibleOld] = useState(false);
   const [visibleNew, setVisibleNew] = useState(false);
+  const [visibleConfirm, setVisibleConfirm] = useState(false);
 
   useEffect(() => {
     if (open) {
       setOldPassphrase("");
       setNewPassphrase("");
+      setConfirmPassphrase("");
       setVisibleOld(false);
       setVisibleNew(false);
+      setVisibleConfirm(false);
     }
   }, [open]);
 
   const handleSave = async () => {
     if (!credential) return;
+    if (newPassphrase !== confirmPassphrase) {
+      toast.error(t("sshKey.passphraseMismatch"));
+      return;
+    }
     setSaving(true);
     try {
       await UpdateCredentialPassphrase(credential.id, oldPassphrase, newPassphrase);
@@ -924,6 +952,7 @@ function ChangePassphraseDialog({
         <div className="grid gap-4 py-2">
           <div className="grid gap-2">
             <Label>{t("sshKey.oldPassphrase")}</Label>
+            <p className="text-xs text-muted-foreground">{t("sshKey.oldPassphraseHint")}</p>
             <div className="relative">
               <Input
                 type={visibleOld ? "text" : "password"}

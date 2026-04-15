@@ -285,7 +285,10 @@
     "changePassphrase": "Change Passphrase",
     "changePassphraseTitle": "Change SSH Key Passphrase",
     "oldPassphrase": "Old Passphrase",
+    "oldPassphraseHint": "Leave empty if the key has no passphrase",
     "newPassphrase": "New Passphrase",
+    "confirmPassphrase": "Confirm New Passphrase",
+    "passphraseMismatch": "New passphrase entries do not match",
     "passphraseChanged": "Passphrase changed",
     "empty": "No keys yet. Use the buttons above to add one."
   },

@@ -285,7 +285,10 @@
     "changePassphrase": "修改 Passphrase",
     "changePassphraseTitle": "修改 SSH 密钥 Passphrase",
     "oldPassphrase": "旧 Passphrase",
+    "oldPassphraseHint": "如果密钥之前未设置密码，请留空",
     "newPassphrase": "新 Passphrase",
+    "confirmPassphrase": "确认新 Passphrase",
+    "passphraseMismatch": "两次输入的新 Passphrase 不一致",
     "passphraseChanged": "Passphrase 已更新",
     "empty": "暂无密钥，点击上方按钮添加"
   },
