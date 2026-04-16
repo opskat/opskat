@@ -1,5 +1,11 @@
 import { create } from "zustand";
-import { ExecuteSQL, ExecuteRedis, ExecuteRedisArgs, ListMongoDatabases, ListMongoCollections } from "../../wailsjs/go/app/App";
+import {
+  ExecuteSQL,
+  ExecuteRedis,
+  ExecuteRedisArgs,
+  ListMongoDatabases,
+  ListMongoCollections,
+} from "../../wailsjs/go/app/App";
 import { asset_entity } from "../../wailsjs/go/models";
 import { useTabStore, registerTabCloseHook, registerTabRestoreHook, type QueryTabMeta } from "./tabStore";
 import { useAssetStore } from "./assetStore";

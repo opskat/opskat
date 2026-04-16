@@ -54,7 +54,11 @@ func DialMongoDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_enti
 	}
 
 	var tunnel *SSHTunnel
-	if asset.SSHTunnelID > 0 && sshPool != nil {
+	tunnelID := asset.SSHTunnelID
+	if tunnelID == 0 {
+		tunnelID = cfg.SSHAssetID // backward compat
+	}
+	if tunnelID > 0 && sshPool != nil {
 		var host string
 		var port int
 		var err error
@@ -67,7 +71,7 @@ func DialMongoDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_enti
 			host = cfg.Host
 			port = cfg.Port
 		}
-		tunnel = NewSSHTunnel(asset.SSHTunnelID, host, port, sshPool)
+		tunnel = NewSSHTunnel(tunnelID, host, port, sshPool)
 		clientOpts.SetDialer(&mongoTunnelDialer{tunnel: tunnel})
 		// 禁止副本集发现，强制直连，避免驱动尝试连接副本集其他节点
 		clientOpts.SetDirect(true)
@@ -131,6 +135,9 @@ func buildMongoURI(cfg *asset_entity.MongoDBConfig, password string) string {
 		params.Set("replicaSet", cfg.ReplicaSet)
 	}
 	if len(params) > 0 {
+		if cfg.Database == "" {
+			uri += "/"
+		}
 		uri += "?" + params.Encode()
 	}
 

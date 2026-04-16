@@ -130,16 +130,16 @@ export function ExecuteImportFile(arg1, arg2, arg3) {
   return window['go']['app']['App']['ExecuteImportFile'](arg1, arg2, arg3);
 }
 
+export function ExecuteMongo(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['app']['App']['ExecuteMongo'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function ExecuteRedis(arg1, arg2, arg3) {
   return window['go']['app']['App']['ExecuteRedis'](arg1, arg2, arg3);
 }
 
 export function ExecuteRedisArgs(arg1, arg2, arg3) {
   return window['go']['app']['App']['ExecuteRedisArgs'](arg1, arg2, arg3);
-}
-
-export function ExecuteMongo(arg1, arg2, arg3, arg4, arg5) {
-  return window['go']['app']['App']['ExecuteMongo'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function ExecuteSQL(arg1, arg2, arg3) {
@@ -354,14 +354,6 @@ export function ListCredentialsByType(arg1) {
   return window['go']['app']['App']['ListCredentialsByType'](arg1);
 }
 
-export function ListMongoCollections(arg1, arg2) {
-  return window['go']['app']['App']['ListMongoCollections'](arg1, arg2);
-}
-
-export function ListMongoDatabases(arg1) {
-  return window['go']['app']['App']['ListMongoDatabases'](arg1);
-}
-
 export function ListForwardConfigs() {
   return window['go']['app']['App']['ListForwardConfigs']();
 }
@@ -376,6 +368,14 @@ export function ListInstalledExtensions() {
 
 export function ListLocalSSHKeys() {
   return window['go']['app']['App']['ListLocalSSHKeys']();
+}
+
+export function ListMongoCollections(arg1, arg2) {
+  return window['go']['app']['App']['ListMongoCollections'](arg1, arg2);
+}
+
+export function ListMongoDatabases(arg1) {
+  return window['go']['app']['App']['ListMongoDatabases'](arg1);
 }
 
 export function ListPolicyGroups(arg1) {

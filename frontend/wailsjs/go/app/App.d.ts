@@ -82,11 +82,11 @@ export function EncryptPassword(arg1:string):Promise<string>;
 
 export function ExecuteImportFile(arg1:string,arg2:string,arg3:backup_svc.ImportOptions):Promise<backup_svc.ImportResult>;
 
+export function ExecuteMongo(arg1:number,arg2:string,arg3:string,arg4:string,arg5:string):Promise<string>;
+
 export function ExecuteRedis(arg1:number,arg2:string,arg3:number):Promise<string>;
 
 export function ExecuteRedisArgs(arg1:number,arg2:Array<string>,arg3:number):Promise<string>;
-
-export function ExecuteMongo(arg1:number,arg2:string,arg3:string,arg4:string,arg5:string):Promise<string>;
 
 export function ExecuteSQL(arg1:number,arg2:string,arg3:string):Promise<string>;
 
@@ -194,10 +194,6 @@ export function ListCredentials():Promise<Array<credential_entity.Credential>>;
 
 export function ListCredentialsByType(arg1:string):Promise<Array<credential_entity.Credential>>;
 
-export function ListMongoCollections(arg1:number,arg2:string):Promise<string>;
-
-export function ListMongoDatabases(arg1:number):Promise<string>;
-
 export function ListForwardConfigs():Promise<Array<app.ForwardConfigWithStatus>>;
 
 export function ListGroups():Promise<Array<group_entity.Group>>;
@@ -205,6 +201,10 @@ export function ListGroups():Promise<Array<group_entity.Group>>;
 export function ListInstalledExtensions():Promise<Array<extension_svc.ExtensionInfo>>;
 
 export function ListLocalSSHKeys():Promise<Array<app.LocalSSHKeyInfo>>;
+
+export function ListMongoCollections(arg1:number,arg2:string):Promise<string>;
+
+export function ListMongoDatabases(arg1:number):Promise<string>;
 
 export function ListPolicyGroups(arg1:string):Promise<Array<policy_group_entity.PolicyGroupItem>>;
 

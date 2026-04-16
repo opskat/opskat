@@ -102,7 +102,7 @@ function TabItem({
         <div
           className={cn(
             "relative flex items-center py-2 text-sm cursor-pointer select-none transition-colors duration-150",
-            "flex-1 basis-0 min-w-0 gap-1.5 px-3",
+            "min-w-0 max-w-[200px] gap-1.5 px-3",
             isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
           )}
           style={noTabStyle}
