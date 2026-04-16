@@ -13,8 +13,8 @@ type stubHandler struct {
 	port int
 }
 
-func (s *stubHandler) Type() string         { return s.typ }
-func (s *stubHandler) DefaultPort() int     { return s.port }
+func (s *stubHandler) Type() string     { return s.typ }
+func (s *stubHandler) DefaultPort() int { return s.port }
 func (s *stubHandler) SafeView(_ *asset_entity.Asset) map[string]any {
 	return map[string]any{"stub": true}
 }

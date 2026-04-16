@@ -26,8 +26,8 @@ func (c *tunnelConn) Close() error {
 }
 
 func (c *tunnelConn) SetDeadline(_ time.Time) error      { return nil }
-func (c *tunnelConn) SetReadDeadline(_ time.Time) error   { return nil }
-func (c *tunnelConn) SetWriteDeadline(_ time.Time) error  { return nil }
+func (c *tunnelConn) SetReadDeadline(_ time.Time) error  { return nil }
+func (c *tunnelConn) SetWriteDeadline(_ time.Time) error { return nil }
 
 // SSHTunnel 管理通过 SSH 资产建立的 TCP 隧道
 type SSHTunnel struct {

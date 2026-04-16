@@ -67,14 +67,30 @@ func toSafeView(a *asset_entity.Asset) safeAssetView {
 	}
 	if h, ok := assettype.Get(a.Type); ok {
 		if fields := h.SafeView(a); fields != nil {
-			if val, ok := fields["host"].(string); ok { v.Host = val }
-			if val, ok := fields["port"].(int); ok { v.Port = val }
-			if val, ok := fields["username"].(string); ok { v.Username = val }
-			if val, ok := fields["driver"].(string); ok { v.Driver = val }
-			if val, ok := fields["database"].(string); ok { v.Database = val }
-			if val, ok := fields["read_only"].(bool); ok { v.ReadOnly = val }
-			if val, ok := fields["redis_db"].(int); ok { v.RedisDB = val }
-			if val, ok := fields["auth_type"].(string); ok { v.AuthType = val }
+			if val, ok := fields["host"].(string); ok {
+				v.Host = val
+			}
+			if val, ok := fields["port"].(int); ok {
+				v.Port = val
+			}
+			if val, ok := fields["username"].(string); ok {
+				v.Username = val
+			}
+			if val, ok := fields["driver"].(string); ok {
+				v.Driver = val
+			}
+			if val, ok := fields["database"].(string); ok {
+				v.Database = val
+			}
+			if val, ok := fields["read_only"].(bool); ok {
+				v.ReadOnly = val
+			}
+			if val, ok := fields["redis_db"].(int); ok {
+				v.RedisDB = val
+			}
+			if val, ok := fields["auth_type"].(string); ok {
+				v.AuthType = val
+			}
 		}
 	}
 	return v
