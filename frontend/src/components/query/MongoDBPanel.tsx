@@ -175,7 +175,7 @@ const MONGO_OPERATIONS = [
   "deleteOne",
   "deleteMany",
   "aggregate",
-  "count",
+  "countDocuments",
 ] as const;
 
 interface MongoQueryContentProps {
@@ -204,7 +204,7 @@ function MongoQueryContent({ assetId, innerTab }: MongoQueryContentProps) {
     deleteOne: t("query.mongoDelete"),
     deleteMany: t("query.mongoDeleteMany"),
     aggregate: t("query.mongoAggregate"),
-    count: t("query.mongoCount"),
+    countDocuments: t("query.mongoCount"),
   };
 
   const handleExecute = useCallback(

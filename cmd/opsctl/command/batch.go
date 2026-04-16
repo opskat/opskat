@@ -252,9 +252,24 @@ func executeBatchItem(ctx context.Context, handlers map[string]ai.ToolHandlerFun
 			"command":  cmd.command,
 		})
 	case "mongo":
+		// Parse command as JSON: {"operation":"find","database":"db","collection":"col","query":"{}"}
+		var mongoArgs struct {
+			Operation  string `json:"operation"`
+			Database   string `json:"database"`
+			Collection string `json:"collection"`
+			Query      string `json:"query"`
+		}
+		if err := json.Unmarshal([]byte(cmd.command), &mongoArgs); err != nil {
+			result.Error = fmt.Sprintf("invalid mongo args JSON: %v", err)
+			result.ExitCode = -1
+			return result
+		}
 		result = executeBatchHandler(ctx, handlers, "exec_mongo", cmd, map[string]any{
-			"asset_id": float64(cmd.asset.ID),
-			"query":    cmd.command,
+			"asset_id":   float64(cmd.asset.ID),
+			"operation":  mongoArgs.Operation,
+			"database":   mongoArgs.Database,
+			"collection": mongoArgs.Collection,
+			"query":      mongoArgs.Query,
 		})
 	default:
 		result.Error = fmt.Sprintf("unsupported type: %s", cmd.cmdType)

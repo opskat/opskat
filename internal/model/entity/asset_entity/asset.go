@@ -437,6 +437,15 @@ func (a *Asset) CanConnect() bool {
 			return false
 		}
 		return cfg.Host != "" && cfg.Port > 0
+	case AssetTypeMongoDB:
+		cfg, err := a.GetMongoDBConfig()
+		if err != nil {
+			return false
+		}
+		if cfg.ConnectionURI != "" {
+			return true
+		}
+		return cfg.Host != "" && cfg.Port > 0
 	}
 	return false
 }

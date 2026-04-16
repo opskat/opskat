@@ -550,6 +550,14 @@ func collectMongoDBPolicies(ctx context.Context, asset *asset_entity.Asset) *ass
 	if len(policies) == 0 {
 		return nil
 	}
+	// 解析引用的权限组
+	for _, p := range policies {
+		if len(p.Groups) > 0 {
+			grpAllowTypes, grpDenyTypes := resolveMongoGroups(ctx, p.Groups)
+			p.AllowTypes = append(p.AllowTypes, grpAllowTypes...)
+			p.DenyTypes = append(p.DenyTypes, grpDenyTypes...)
+		}
+	}
 	// 合并：allow_types 取第一个非空（资产优先），deny_types 全部合并
 	merged := &asset_entity.MongoPolicy{}
 	for _, p := range policies {

@@ -206,7 +206,7 @@ Create a new asset (ssh, database, or redis). Requires approval.
 opsctl create asset --name "Web Server" --host 10.0.0.1 --username root
 opsctl create asset --type database --driver mysql --name "Prod DB" --host db.internal --username app
 opsctl create asset --type database --driver postgresql --name "Analytics" --host pg.internal --port 5432 --username readonly --read-only
-opsctl create asset --type database --driver mongodb --name "MongoDB" --host mongo.internal --username app --database admin
+opsctl create asset --type mongodb --name "MongoDB" --host mongo.internal --port 27017 --username admin
 opsctl create asset --type redis --name "Cache" --host redis.internal --username default
 opsctl create asset --type database --driver mysql --name "DB via SSH" --host 127.0.0.1 --username app --ssh-asset web-server
 ```
