@@ -138,6 +138,10 @@ export function ExecuteRedisArgs(arg1, arg2, arg3) {
   return window['go']['app']['App']['ExecuteRedisArgs'](arg1, arg2, arg3);
 }
 
+export function ExecuteMongo(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['app']['App']['ExecuteMongo'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function ExecuteSQL(arg1, arg2, arg3) {
   return window['go']['app']['App']['ExecuteSQL'](arg1, arg2, arg3);
 }
@@ -540,6 +544,10 @@ export function SwitchConversation(arg1) {
 
 export function TestDatabaseConnection(arg1, arg2) {
   return window['go']['app']['App']['TestDatabaseConnection'](arg1, arg2);
+}
+
+export function TestMongoDBConnection(arg1, arg2) {
+  return window['go']['app']['App']['TestMongoDBConnection'](arg1, arg2);
 }
 
 export function TestPolicyRule(arg1) {

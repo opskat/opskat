@@ -86,6 +86,8 @@ export function ExecuteRedis(arg1:number,arg2:string,arg3:number):Promise<string
 
 export function ExecuteRedisArgs(arg1:number,arg2:Array<string>,arg3:number):Promise<string>;
 
+export function ExecuteMongo(arg1:number,arg2:string,arg3:string,arg4:string,arg5:string):Promise<string>;
+
 export function ExecuteSQL(arg1:number,arg2:string,arg3:string):Promise<string>;
 
 export function ExecuteSQLPaged(arg1:number,arg2:string,arg3:string,arg4:number,arg5:number):Promise<string>;
@@ -287,6 +289,8 @@ export function StopForwardConfig(arg1:number):Promise<void>;
 export function SwitchConversation(arg1:number):Promise<Array<app.ConversationDisplayMessage>>;
 
 export function TestDatabaseConnection(arg1:string,arg2:string):Promise<void>;
+
+export function TestMongoDBConnection(arg1:string,arg2:string):Promise<void>;
 
 export function TestPolicyRule(arg1:app.PolicyTestRequest):Promise<app.PolicyTestResult>;
 
