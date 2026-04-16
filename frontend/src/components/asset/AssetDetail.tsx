@@ -4,12 +4,13 @@ import { Server, Pencil, Trash2, TerminalSquare, Loader2 } from "lucide-react";
 import Markdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
-import { cn, Button, Separator, ConfirmDialog } from "@opskat/ui";
+import { Button, Separator, ConfirmDialog } from "@opskat/ui";
 import { toast } from "sonner";
 import { useAssetStore } from "@/stores/assetStore";
 import { useExtensionStore } from "@/extension";
 import { getAssetType, isBuiltinType } from "@/lib/assetTypes";
 import { CommandPolicyCard } from "@/components/asset/CommandPolicyCard";
+import { InfoItem } from "@/components/asset/detail/InfoItem";
 import { asset_entity } from "../../../wailsjs/go/models";
 import { GetDefaultPolicy } from "../../../wailsjs/go/app/App";
 
@@ -260,7 +261,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
               }))}
               buildPolicyJSON={() =>
                 JSON.stringify({
-                  ...Object.fromEntries(Object.entries(policyFields).filter(([, v]) => v.length > 0)),
+                  ...Object.fromEntries(pol.fields.map((f) => [f.key, policyFields[f.key] || []])),
                   ...(policyGroups.length > 0 ? { groups: policyGroups } : {}),
                 })
               }
@@ -349,15 +350,6 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
           </>
         )}
       </div>
-    </div>
-  );
-}
-
-function InfoItem({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div>
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <p className={cn("mt-0.5 text-sm", mono && "font-mono")}>{value}</p>
     </div>
   );
 }

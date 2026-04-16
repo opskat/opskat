@@ -44,7 +44,7 @@ func (h *databaseHandler) DefaultPolicy() any { return asset_entity.DefaultQuery
 func (h *databaseHandler) ApplyCreateArgs(a *asset_entity.Asset, args map[string]any) error {
 	driver := ArgString(args, "driver")
 	if driver == "" {
-		return fmt.Errorf("driver is required for database asset")
+		return fmt.Errorf("database type requires driver parameter (mysql or postgresql)")
 	}
 	return a.SetDatabaseConfig(&asset_entity.DatabaseConfig{
 		Driver:     asset_entity.DatabaseDriver(driver),

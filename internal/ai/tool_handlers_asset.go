@@ -148,7 +148,8 @@ func handleAddAsset(ctx context.Context, args map[string]any) (string, error) {
 		return "", fmt.Errorf("unsupported asset type: %s", assetType)
 	}
 	if err := h.ApplyCreateArgs(asset, args); err != nil {
-		return "", fmt.Errorf("failed to apply config: %w", err)
+		// Database 的 driver 缺失等校验错误需返回；SetXxxConfig 序列化失败仅 warn（保持原始行为）
+		return "", err
 	}
 
 	if err := asset_svc.Asset().Create(ctx, asset); err != nil {
