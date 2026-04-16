@@ -379,6 +379,7 @@
     },
     "contextMenu": {
       "copy": "Copy",
+      "copied": "Copied to clipboard",
       "paste": "Paste",
       "selectAll": "Select All",
       "find": "Find",
