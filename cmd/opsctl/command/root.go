@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/opskat/opskat/internal/ai"
+	_ "github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/buildinfo"
 	"github.com/opskat/opskat/internal/sshpool"
