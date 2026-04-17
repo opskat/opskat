@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import { asset_entity, group_entity } from "../../wailsjs/go/models";
 import {
   ListAssets,
@@ -17,6 +18,7 @@ interface AssetState {
   groups: group_entity.Group[];
   selectedAssetId: number | null;
   selectedGroupId: number | null;
+  collapsedGroupIds: number[];
   loading: boolean;
   initialized: boolean;
 
@@ -32,84 +34,107 @@ interface AssetState {
   deleteGroup: (id: number, deleteAssets: boolean) => Promise<void>;
   selectAsset: (id: number | null) => void;
   selectGroup: (id: number | null) => void;
+  toggleGroupCollapsed: (id: number) => void;
+  isGroupCollapsed: (id: number) => boolean;
   refresh: () => Promise<void>;
 }
 
-export const useAssetStore = create<AssetState>((set, get) => ({
-  assets: [],
-  groups: [],
-  selectedAssetId: null,
-  selectedGroupId: null,
-  loading: false,
-  initialized: false,
+export const useAssetStore = create<AssetState>()(
+  persist(
+    (set, get) => ({
+      assets: [],
+      groups: [],
+      selectedAssetId: null,
+      selectedGroupId: null,
+      collapsedGroupIds: [],
+      loading: false,
+      initialized: false,
 
-  fetchAssets: async (assetType = "", groupId = 0) => {
-    set({ loading: true });
-    try {
-      const assets = await ListAssets(assetType, groupId);
-      set({ assets: assets || [], initialized: true });
-    } finally {
-      set({ loading: false });
+      fetchAssets: async (assetType = "", groupId = 0) => {
+        set({ loading: true });
+        try {
+          const assets = await ListAssets(assetType, groupId);
+          set({ assets: assets || [], initialized: true });
+        } finally {
+          set({ loading: false });
+        }
+      },
+
+      fetchGroups: async () => {
+        const groups = await ListGroups();
+        set({ groups: groups || [] });
+      },
+
+      createAsset: async (asset) => {
+        await CreateAsset(asset);
+        await get().refresh();
+      },
+
+      updateAsset: async (asset) => {
+        await UpdateAsset(asset);
+        await get().refresh();
+      },
+
+      deleteAsset: async (id) => {
+        await DeleteAsset(id);
+        set({ selectedAssetId: null });
+        await get().refresh();
+      },
+
+      getAsset: async (id) => {
+        return await GetAsset(id);
+      },
+
+      getAssetPath: (asset) => {
+        const { groups } = get();
+        const parts: string[] = [asset.Name];
+        let groupId = asset.GroupID;
+        while (groupId > 0) {
+          const group = groups.find((g) => g.ID === groupId);
+          if (!group) break;
+          parts.unshift(group.Name);
+          groupId = group.ParentID;
+        }
+        return parts.join(" / ");
+      },
+
+      createGroup: async (group) => {
+        await CreateGroup(group);
+        await get().fetchGroups();
+      },
+
+      updateGroup: async (group) => {
+        await UpdateGroup(group);
+        await get().fetchGroups();
+      },
+
+      deleteGroup: async (id, deleteAssets) => {
+        await DeleteGroup(id, deleteAssets);
+        await get().refresh();
+      },
+
+      selectAsset: (id) => set({ selectedAssetId: id }),
+      selectGroup: (id) => set({ selectedGroupId: id }),
+
+      toggleGroupCollapsed: (id) =>
+        set((state) => {
+          const exists = state.collapsedGroupIds.includes(id);
+          return {
+            collapsedGroupIds: exists
+              ? state.collapsedGroupIds.filter((g) => g !== id)
+              : [...state.collapsedGroupIds, id],
+          };
+        }),
+
+      isGroupCollapsed: (id) => get().collapsedGroupIds.includes(id),
+
+      refresh: async () => {
+        await Promise.all([get().fetchAssets(), get().fetchGroups()]);
+      },
+    }),
+    {
+      name: "asset_tree",
+      partialize: (state) => ({ collapsedGroupIds: state.collapsedGroupIds }),
     }
-  },
-
-  fetchGroups: async () => {
-    const groups = await ListGroups();
-    set({ groups: groups || [] });
-  },
-
-  createAsset: async (asset) => {
-    await CreateAsset(asset);
-    await get().refresh();
-  },
-
-  updateAsset: async (asset) => {
-    await UpdateAsset(asset);
-    await get().refresh();
-  },
-
-  deleteAsset: async (id) => {
-    await DeleteAsset(id);
-    set({ selectedAssetId: null });
-    await get().refresh();
-  },
-
-  getAsset: async (id) => {
-    return await GetAsset(id);
-  },
-
-  getAssetPath: (asset) => {
-    const { groups } = get();
-    const parts: string[] = [asset.Name];
-    let groupId = asset.GroupID;
-    while (groupId > 0) {
-      const group = groups.find((g) => g.ID === groupId);
-      if (!group) break;
-      parts.unshift(group.Name);
-      groupId = group.ParentID;
-    }
-    return parts.join(" / ");
-  },
-
-  createGroup: async (group) => {
-    await CreateGroup(group);
-    await get().fetchGroups();
-  },
-
-  updateGroup: async (group) => {
-    await UpdateGroup(group);
-    await get().fetchGroups();
-  },
-
-  deleteGroup: async (id, deleteAssets) => {
-    await DeleteGroup(id, deleteAssets);
-    await get().refresh();
-  },
-
-  selectAsset: (id) => set({ selectedAssetId: id }),
-  selectGroup: (id) => set({ selectedGroupId: id }),
-
-  refresh: async () => {
-    await Promise.all([get().fetchAssets(), get().fetchGroups()]);
-  },
-}));
+  )
+);

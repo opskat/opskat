@@ -383,7 +383,8 @@ function GroupItem({
   depth: number;
   t: (key: string) => string;
 }) {
-  const [expanded, setExpanded] = useState(true);
+  const expanded = useAssetStore((s) => !s.collapsedGroupIds.includes(group.ID));
+  const toggleGroupCollapsed = useAssetStore((s) => s.toggleGroupCollapsed);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const children = group.ID > 0 ? childGroups(group.ID) : [];
   const totalCount = countAssetsInGroup(group.ID);
@@ -392,7 +393,7 @@ function GroupItem({
     <div
       className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium hover:bg-sidebar-accent cursor-pointer transition-colors duration-150"
       style={{ paddingLeft: `${8 + depth * 12}px` }}
-      onClick={() => setExpanded(!expanded)}
+      onClick={() => toggleGroupCollapsed(group.ID)}
     >
       {expanded ? (
         <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
