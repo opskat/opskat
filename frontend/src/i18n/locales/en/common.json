@@ -619,6 +619,21 @@
     "hideSidebar": "Hide Toolbar",
     "showSidebar": "Show Toolbar"
   },
+  "sideTabs": {
+    "title": "Open Tabs",
+    "filterPlaceholder": "Filter tabs...",
+    "clearFilter": "Clear filter",
+    "count": "{{count}}",
+    "countFiltered": "{{filtered}}/{{total}}",
+    "closeAll": "Close all tabs",
+    "switchToTop": "Switch to top tab bar",
+    "switchToLeft": "Switch to left tab bar",
+    "assetsPanel": "Assets panel",
+    "tabsPanel": "Tabs panel",
+    "hidePanel": "Hide side panel",
+    "emptyHint": "No matching tabs",
+    "noTabs": "No open tabs"
+  },
   "terminal": {
     "title": "Terminal",
     "desc": "Terminal color scheme and font settings",

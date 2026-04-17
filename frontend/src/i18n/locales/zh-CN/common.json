@@ -619,6 +619,21 @@
     "hideSidebar": "隐藏工具条",
     "showSidebar": "显示工具条"
   },
+  "sideTabs": {
+    "title": "打开的 Tabs",
+    "filterPlaceholder": "过滤 tab 名称...",
+    "clearFilter": "清除过滤",
+    "count": "{{count}} 个",
+    "countFiltered": "{{filtered}}/{{total}}",
+    "closeAll": "关闭全部",
+    "switchToTop": "切换到顶部 Tab 栏",
+    "switchToLeft": "切换到左侧 Tab 栏",
+    "assetsPanel": "Assets 面板",
+    "tabsPanel": "Tabs 面板",
+    "hidePanel": "隐藏左侧栏",
+    "emptyHint": "暂无匹配的 tab",
+    "noTabs": "没有打开的 tab"
+  },
   "terminal": {
     "title": "终端",
     "desc": "终端配色与字体设置",
