@@ -133,15 +133,22 @@ export function AIChatContent({ tabId }: AIChatContentProps) {
           {messages.length === 0 && (
             <p className="text-sm text-muted-foreground text-center mt-16">{t("ai.placeholder")}</p>
           )}
-          {messages.map((msg, i) => (
-            <div key={i} className="text-sm">
-              {msg.role === "user" ? (
-                <UserMessage msg={msg} />
-              ) : (
-                <AssistantMessage msg={msg} index={i} sending={sending} onRegenerate={handleRegenerate} />
-              )}
-            </div>
-          ))}
+          {messages.map((msg, i) => {
+            const isLast = i === messages.length - 1;
+            // 最后一条（流式目标）不启用 content-visibility，避免流式过程中被浏览器延迟渲染
+            const cvStyle: React.CSSProperties | undefined = isLast
+              ? undefined
+              : { contentVisibility: "auto", containIntrinsicSize: "auto 120px" };
+            return (
+              <div key={i} className="text-sm" style={cvStyle}>
+                {msg.role === "user" ? (
+                  <UserMessage msg={msg} />
+                ) : (
+                  <AssistantMessage msg={msg} index={i} sending={sending} onRegenerate={handleRegenerate} />
+                )}
+              </div>
+            );
+          })}
           <div ref={bottomRef} />
         </div>
       </ScrollArea>
