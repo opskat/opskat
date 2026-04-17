@@ -109,9 +109,15 @@ export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar }: Short
         case "panel.ai":
           onToggleAIPanel();
           break;
-        case "panel.sidebar":
-          onToggleSidebar();
+        case "panel.sidebar": {
+          const layout = useLayoutStore.getState().tabBarLayout;
+          if (layout === "left") {
+            useLayoutStore.getState().toggleVisible();
+          } else {
+            onToggleSidebar();
+          }
           break;
+        }
         case "page.home": {
           const homeTab = tabs.find((t) => t.type === "terminal" || t.type === "info");
           if (homeTab) tabStore.activateTab(homeTab.id);

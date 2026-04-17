@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useLayoutStore, isCollapsed, MIN_PANEL_WIDTH } from "@/stores/layoutStore";
 
 interface LeftPanelProps {
@@ -12,10 +12,12 @@ export function LeftPanel({ children }: LeftPanelProps) {
   const effectiveWidth = collapsed ? MIN_PANEL_WIDTH : width;
   const startXRef = useRef(0);
   const startWRef = useRef(0);
+  const [resizing, setResizing] = useState(false);
 
   const onResizeStart = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
+      setResizing(true);
       startXRef.current = e.clientX;
       startWRef.current = width;
 
@@ -24,6 +26,7 @@ export function LeftPanel({ children }: LeftPanelProps) {
         setPanelWidth(startWRef.current + delta);
       };
       const onUp = () => {
+        setResizing(false);
         document.removeEventListener("mousemove", onMove);
         document.removeEventListener("mouseup", onUp);
       };
@@ -34,12 +37,15 @@ export function LeftPanel({ children }: LeftPanelProps) {
   );
 
   return (
-    <div className="relative shrink-0 overflow-hidden border-r" style={{ width: effectiveWidth }}>
-      {children}
-      <div
-        onMouseDown={onResizeStart}
-        className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize z-10 hover:bg-primary/20 active:bg-primary/30"
-      />
-    </div>
+    <>
+      <div className="relative shrink-0 overflow-hidden border-r" style={{ width: effectiveWidth }}>
+        {children}
+        <div
+          onMouseDown={onResizeStart}
+          className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize z-10 hover:bg-primary/20 active:bg-primary/30"
+        />
+      </div>
+      {resizing && <div className="fixed inset-0 z-50 cursor-col-resize" />}
+    </>
   );
 }

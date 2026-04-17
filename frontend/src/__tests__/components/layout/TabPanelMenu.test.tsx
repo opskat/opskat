@@ -70,7 +70,7 @@ describe("TabPanelMenu", () => {
     const fn = vi.fn();
     render(<TabPanelMenu mode="top" onOpenFilter={fn} />);
     openMenu(screen.getByRole("button"));
-    fireEvent.click(screen.getByText("shortcuts.panel.filter"));
+    fireEvent.click(screen.getByText("shortcut.panel.filter"));
     expect(fn).toHaveBeenCalled();
   });
 

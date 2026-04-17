@@ -116,7 +116,7 @@ export function SideTabList() {
               "shrink-0 rounded-sm p-1",
               filterOpen ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"
             )}
-            aria-label={t("shortcuts.panel.filter")}
+            aria-label={t("shortcut.panel.filter")}
           >
             <Search className="h-3.5 w-3.5" />
           </button>

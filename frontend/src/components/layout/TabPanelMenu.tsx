@@ -49,7 +49,7 @@ export function TabPanelMenu({ mode, onOpenFilter }: TabPanelMenuProps) {
         )}
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={onOpenFilter}>
-          <span className="flex-1">{t("shortcuts.panel.filter")}</span>
+          <span className="flex-1">{t("shortcut.panel.filter")}</span>
           <span className="text-xs text-muted-foreground ml-4">{formatBinding(shortcuts["panel.filter"])}</span>
         </DropdownMenuItem>
         <DropdownMenuItem onClick={closeAll}>{t("sideTabs.closeAll")}</DropdownMenuItem>

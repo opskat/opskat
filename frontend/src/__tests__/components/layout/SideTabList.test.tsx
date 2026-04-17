@@ -69,7 +69,7 @@ describe("SideTabList", () => {
       activeTabId: "a",
     });
     renderSide();
-    fireEvent.click(screen.getByLabelText("shortcuts.panel.filter"));
+    fireEvent.click(screen.getByLabelText("shortcut.panel.filter"));
     const input = screen.getByPlaceholderText("sideTabs.filterPlaceholder");
     fireEvent.change(input, { target: { value: "red" } });
     const marks = screen.getAllByText("red");
@@ -83,7 +83,7 @@ describe("SideTabList", () => {
       activeTabId: "a",
     });
     renderSide();
-    fireEvent.click(screen.getByLabelText("shortcuts.panel.filter"));
+    fireEvent.click(screen.getByLabelText("shortcut.panel.filter"));
     const input = screen.getByPlaceholderText("sideTabs.filterPlaceholder");
     fireEvent.change(input, { target: { value: "xyz" } });
     fireEvent.keyDown(input, { key: "Escape" });
