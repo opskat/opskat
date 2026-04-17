@@ -33,4 +33,24 @@ describe("AIChatContent (Phase 1 refactor)", () => {
     render(<AIChatContent tabId={tabId} />);
     expect(screen.getByText("从 conversationMessages 读到")).toBeInTheDocument();
   });
+
+  it("accepts conversationId directly without tabId and renders messages", () => {
+    useAIStore.setState({
+      conversationMessages: { 99: [{ role: "user", content: "直接用 convId", blocks: [] }] },
+      conversationStreaming: { 99: { sending: false, pendingQueue: [] } },
+    });
+
+    render(<AIChatContent conversationId={99} />);
+    expect(screen.getByText("直接用 convId")).toBeInTheDocument();
+  });
+
+  it("compact mode adds data-compact attribute for CSS hooks", () => {
+    useAIStore.setState({
+      conversationMessages: { 1: [] },
+      conversationStreaming: { 1: { sending: false, pendingQueue: [] } },
+    });
+
+    const { container } = render(<AIChatContent conversationId={1} compact />);
+    expect(container.querySelector("[data-compact='true']")).toBeTruthy();
+  });
 });
