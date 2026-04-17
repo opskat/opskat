@@ -1,16 +1,5 @@
-import { createContext, useContext, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  X,
-  Settings,
-  KeyRound,
-  MessageSquare,
-  ScrollText,
-  ArrowRightLeft,
-  Server,
-  Folder,
-  Loader2,
-} from "lucide-react";
+import { Loader2 } from "lucide-react";
 import logoLight from "@/assets/images/logo.png";
 import logoDark from "@/assets/images/logo-dark.png";
 import { useFullscreen } from "@/hooks/useFullscreen";
@@ -30,160 +19,11 @@ import { RedisPanel } from "@/components/query/RedisPanel";
 import { MongoDBPanel } from "@/components/query/MongoDBPanel";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useAssetStore } from "@/stores/assetStore";
-import { useTabStore, type Tab, type QueryTabMeta, type PageTabMeta, type InfoTabMeta } from "@/stores/tabStore";
+import { useTabStore, type QueryTabMeta, type PageTabMeta, type InfoTabMeta } from "@/stores/tabStore";
 import { useSFTPStore } from "@/stores/sftpStore";
-import {
-  cn,
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@opskat/ui";
-import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
 import { asset_entity } from "../../../wailsjs/go/models";
 import { ExtensionPage } from "@/extension";
-
-const pageTabMeta: Record<string, { icon: typeof Settings; labelKey: string }> = {
-  settings: { icon: Settings, labelKey: "nav.settings" },
-  forward: { icon: ArrowRightLeft, labelKey: "nav.forward" },
-  sshkeys: { icon: KeyRound, labelKey: "nav.sshKeys" },
-  audit: { icon: ScrollText, labelKey: "nav.audit" },
-};
-
-interface TabBarContextValue {
-  tabs: Tab[];
-  dragKeyRef: React.RefObject<string | null>;
-  reorder: (fromId: string, toId: string) => void;
-  moveTo: (id: string, toIndex: number) => void;
-}
-
-const TabBarContext = createContext<TabBarContextValue>({
-  tabs: [],
-  dragKeyRef: { current: null },
-  reorder: () => {},
-  moveTo: () => {},
-});
-
-interface TabItemProps {
-  tabKey: string;
-  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
-  iconStyle?: React.CSSProperties;
-  label: string;
-  title?: string;
-  isActive: boolean;
-  onClick: () => void;
-  onClose: () => void;
-  extra?: React.ReactNode;
-  indicatorColor?: string;
-}
-
-function TabItem({
-  tabKey,
-  icon: Icon,
-  iconStyle,
-  label,
-  title,
-  isActive,
-  onClick,
-  onClose,
-  extra,
-  indicatorColor,
-}: TabItemProps) {
-  const { t } = useTranslation();
-  const { tabs, dragKeyRef, reorder, moveTo } = useContext(TabBarContext);
-  const noTabStyle = { "--wails-draggable": "no-drag" } as React.CSSProperties;
-  const globalIndex = tabs.findIndex((tab) => tab.id === tabKey);
-  const total = tabs.length;
-
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger className="contents">
-        <div
-          className={cn(
-            "relative flex items-center py-2 text-sm cursor-pointer select-none transition-colors duration-150",
-            "min-w-0 max-w-[200px] gap-1.5 px-3",
-            isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-          )}
-          style={noTabStyle}
-          title={title ?? label}
-          onClick={onClick}
-          draggable
-          onDragStart={(e) => {
-            dragKeyRef.current = tabKey;
-            e.dataTransfer.effectAllowed = "move";
-          }}
-          onDragOver={(e) => {
-            if (dragKeyRef.current) {
-              e.preventDefault();
-              e.dataTransfer.dropEffect = "move";
-            }
-          }}
-          onDragEnter={(e) => {
-            e.preventDefault();
-            if (!dragKeyRef.current || dragKeyRef.current === tabKey) return;
-            reorder(dragKeyRef.current, tabKey);
-          }}
-          onDragEnd={() => {
-            dragKeyRef.current = null;
-          }}
-        >
-          <Icon className="h-3.5 w-3.5 shrink-0" style={iconStyle} />
-          <span className="truncate min-w-0">{label}</span>
-          {extra}
-          <button
-            className="ml-auto shrink-0 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors duration-150"
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose();
-            }}
-          >
-            <X className="h-3 w-3" />
-          </button>
-          {(isActive || indicatorColor) && (
-            <span
-              className={cn("absolute bottom-0 left-1 right-1 h-0.5 rounded-full", !indicatorColor && "bg-primary")}
-              style={indicatorColor ? { backgroundColor: indicatorColor } : undefined}
-            />
-          )}
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem onClick={onClose}>{t("tab.close")}</ContextMenuItem>
-        <ContextMenuItem onClick={() => useTabStore.getState().closeOtherTabs(tabKey)} disabled={total <= 1}>
-          {t("tab.closeOthers")}
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={() => useTabStore.getState().closeLeftTabs(tabKey)} disabled={globalIndex <= 0}>
-          {t("tab.closeLeft")}
-        </ContextMenuItem>
-        <ContextMenuItem
-          onClick={() => useTabStore.getState().closeRightTabs(tabKey)}
-          disabled={globalIndex >= total - 1}
-        >
-          {t("tab.closeRight")}
-        </ContextMenuItem>
-        {total > 1 && (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={() => moveTo(tabKey, globalIndex - 1)} disabled={globalIndex <= 0}>
-              {t("tab.moveLeft")}
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => moveTo(tabKey, globalIndex + 1)} disabled={globalIndex >= total - 1}>
-              {t("tab.moveRight")}
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => moveTo(tabKey, 0)} disabled={globalIndex <= 0}>
-              {t("tab.moveToStart")}
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => moveTo(tabKey, total - 1)} disabled={globalIndex >= total - 1}>
-              {t("tab.moveToEnd")}
-            </ContextMenuItem>
-          </>
-        )}
-      </ContextMenuContent>
-    </ContextMenu>
-  );
-}
+import { TopTabBar } from "./TopTabBar";
 
 interface MainPanelProps {
   onEditAsset: (asset: asset_entity.Asset) => void;
@@ -197,18 +37,12 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
 
   const tabs = useTabStore((s) => s.tabs);
   const activeTabId = useTabStore((s) => s.activeTabId);
-  const activateTab = useTabStore((s) => s.activateTab);
-  const closeTab = useTabStore((s) => s.closeTab);
-  const reorderTab = useTabStore((s) => s.reorderTab);
-  const moveTabTo = useTabStore((s) => s.moveTabTo);
 
   const tabData = useTerminalStore((s) => s.tabData);
   const connectingAssetIds = useTerminalStore((s) => s.connectingAssetIds);
 
   const { assets, groups, initialized } = useAssetStore();
   const { fileManagerOpenTabs, fileManagerWidth, setFileManagerWidth } = useSFTPStore();
-
-  const dragKeyRef = useRef<string | null>(null);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
   const hasTabs = tabs.length > 0;
@@ -219,129 +53,6 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
   const aiTabs = tabs.filter((tab) => tab.type === "ai");
   // Collect query tabs for visibility-based rendering
   const queryTabs = tabs.filter((tab) => tab.type === "query");
-
-  const tabBarCtx: TabBarContextValue = {
-    tabs,
-    dragKeyRef,
-    reorder: reorderTab,
-    moveTo: moveTabTo,
-  };
-
-  function renderTabItem(tab: Tab) {
-    const isActive = tab.id === activeTabId;
-
-    switch (tab.type) {
-      case "terminal": {
-        const data = tabData[tab.id];
-        const paneValues = data ? Object.values(data.panes) : [];
-        const allDisconnected = paneValues.length > 0 && paneValues.every((p) => !p.connected);
-        const TabIcon = tab.icon ? getIconComponent(tab.icon) : Server;
-        const iconStyle = tab.icon ? { color: getIconColor(tab.icon) } : undefined;
-        return (
-          <TabItem
-            key={tab.id}
-            tabKey={tab.id}
-            icon={TabIcon}
-            iconStyle={iconStyle}
-            label={tab.label}
-            isActive={isActive}
-            onClick={() => activateTab(tab.id)}
-            onClose={() => closeTab(tab.id)}
-            extra={allDisconnected ? <span className="h-1.5 w-1.5 rounded-full bg-destructive shrink-0" /> : undefined}
-            indicatorColor={iconStyle?.color}
-          />
-        );
-      }
-
-      case "ai": {
-        return (
-          <TabItem
-            key={tab.id}
-            tabKey={tab.id}
-            icon={MessageSquare}
-            label={tab.label}
-            isActive={isActive}
-            onClick={() => activateTab(tab.id)}
-            onClose={() => closeTab(tab.id)}
-          />
-        );
-      }
-
-      case "query": {
-        const TabIcon = tab.icon ? getIconComponent(tab.icon) : Server;
-        const iconStyle = tab.icon ? { color: getIconColor(tab.icon) } : undefined;
-        return (
-          <TabItem
-            key={tab.id}
-            tabKey={tab.id}
-            icon={TabIcon}
-            iconStyle={iconStyle}
-            label={tab.label}
-            isActive={isActive}
-            onClick={() => activateTab(tab.id)}
-            onClose={() => closeTab(tab.id)}
-            indicatorColor={iconStyle?.color}
-          />
-        );
-      }
-
-      case "page": {
-        const meta = tab.meta as PageTabMeta;
-        const pageMeta = pageTabMeta[meta.pageId];
-        if (pageMeta) {
-          return (
-            <TabItem
-              key={tab.id}
-              tabKey={tab.id}
-              icon={pageMeta.icon}
-              label={t(pageMeta.labelKey)}
-              isActive={isActive}
-              onClick={() => activateTab(tab.id)}
-              onClose={() => closeTab(tab.id)}
-            />
-          );
-        }
-        // Extension page tab — use tab.icon and tab.label directly
-        const TabIcon = tab.icon ? getIconComponent(tab.icon) : Server;
-        const iconStyle = tab.icon ? { color: getIconColor(tab.icon) } : undefined;
-        return (
-          <TabItem
-            key={tab.id}
-            tabKey={tab.id}
-            icon={TabIcon}
-            iconStyle={iconStyle}
-            label={tab.label}
-            isActive={isActive}
-            onClick={() => activateTab(tab.id)}
-            onClose={() => closeTab(tab.id)}
-            indicatorColor={iconStyle?.color}
-          />
-        );
-      }
-
-      case "info": {
-        const meta = tab.meta as InfoTabMeta;
-        const TabIcon = tab.icon ? getIconComponent(tab.icon) : meta.targetType === "group" ? Folder : Server;
-        const iconStyle = tab.icon ? { color: getIconColor(tab.icon) } : undefined;
-        return (
-          <TabItem
-            key={tab.id}
-            tabKey={tab.id}
-            icon={TabIcon}
-            iconStyle={iconStyle}
-            label={tab.label}
-            isActive={isActive}
-            onClick={() => activateTab(tab.id)}
-            onClose={() => closeTab(tab.id)}
-            indicatorColor={iconStyle?.color}
-          />
-        );
-      }
-
-      default:
-        return null;
-    }
-  }
 
   function renderActiveContent() {
     if (!activeTab) return null;
@@ -445,16 +156,7 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
       )}
 
       {/* Tab bar with integrated drag region */}
-      {hasTabs && (
-        <TabBarContext.Provider value={tabBarCtx}>
-          <div
-            className={`flex items-center border-b overflow-hidden bg-background ${isFullscreen ? "pt-2" : "pt-10"}`}
-            style={{ "--wails-draggable": "drag" } as React.CSSProperties}
-          >
-            {tabs.map((tab) => renderTabItem(tab))}
-          </div>
-        </TabBarContext.Provider>
-      )}
+      {hasTabs && <TopTabBar />}
 
       {/* Content area */}
       <div className="flex-1 relative min-h-0 overflow-hidden">
