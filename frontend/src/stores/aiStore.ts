@@ -232,6 +232,10 @@ interface AIState {
   providerName: string;
   modelName: string;
 
+  // 侧边助手状态
+  sidebarConversationId: number | null;
+  sidebarUIState: { inputDraft: string; scrollTop: number };
+
   // 配置
   checkConfigured: () => Promise<void>;
 
@@ -251,6 +255,13 @@ interface AIState {
   // 会话管理
   fetchConversations: () => Promise<void>;
   deleteConversation: (id: number) => Promise<void>;
+
+  // 侧边助手 actions
+  bindSidebar: (conversationId: number | null) => void;
+  promoteSidebarToTab: () => Promise<string | null>;
+  createAndBindSidebarConversation: () => Promise<number>;
+  validateSidebarConversation: () => void;
+  setSidebarInputDraft: (draft: string) => void;
 
   // 查询
   isAnySending: () => boolean;
@@ -334,6 +345,12 @@ export const useAIStore = create<AIState>((set, get) => {
     providerName: "",
     modelName: "",
 
+    sidebarConversationId: (() => {
+      const saved = localStorage.getItem("ai_sidebar_conversation_id");
+      return saved ? parseInt(saved, 10) : null;
+    })(),
+    sidebarUIState: { inputDraft: localStorage.getItem("ai_sidebar_input_draft") || "", scrollTop: 0 },
+
     checkConfigured: async () => {
       try {
         const active = await GetActiveAIProvider();
@@ -351,6 +368,7 @@ export const useAIStore = create<AIState>((set, get) => {
       try {
         const convs = await ListConversations();
         set({ conversations: convs || [] });
+        get().validateSidebarConversation();
       } catch {
         set({ conversations: [] });
       }
@@ -371,9 +389,61 @@ export const useAIStore = create<AIState>((set, get) => {
       }
     },
 
+    // === 侧边助手 ===
+
+    bindSidebar: (conversationId: number | null) => {
+      set({ sidebarConversationId: conversationId });
+      if (conversationId === null) {
+        localStorage.removeItem("ai_sidebar_conversation_id");
+      } else {
+        localStorage.setItem("ai_sidebar_conversation_id", String(conversationId));
+      }
+    },
+
+    createAndBindSidebarConversation: async () => {
+      const conv = await CreateConversation();
+      set((state) => ({
+        conversations: [conv, ...state.conversations],
+        conversationMessages: { ...state.conversationMessages, [conv.ID]: [] },
+        conversationStreaming: {
+          ...state.conversationStreaming,
+          [conv.ID]: { sending: false, pendingQueue: [] },
+        },
+      }));
+      get().bindSidebar(conv.ID);
+      return conv.ID;
+    },
+
+    promoteSidebarToTab: async () => {
+      const convId = get().sidebarConversationId;
+      if (convId == null) return null;
+      const tabId = await get().openConversationTab(convId);
+      return tabId;
+    },
+
+    validateSidebarConversation: () => {
+      const convId = get().sidebarConversationId;
+      if (convId == null) return;
+      const exists = get().conversations.some((c) => c.ID === convId);
+      if (!exists) {
+        get().bindSidebar(null);
+        localStorage.removeItem("ai_sidebar_last_bound");
+      }
+    },
+
+    setSidebarInputDraft: (draft: string) => {
+      set({ sidebarUIState: { ...get().sidebarUIState, inputDraft: draft } });
+      localStorage.setItem("ai_sidebar_input_draft", draft);
+    },
+
     // === Tab 管理 ===
 
     openConversationTab: async (conversationId: number) => {
+      // Single-host invariant: evict sidebar when it holds the same conv
+      if (get().sidebarConversationId === conversationId) {
+        get().bindSidebar(null);
+      }
+
       const tabStore = useTabStore.getState();
 
       // If already open, activate

@@ -271,3 +271,66 @@ describe("conversationMessages (Phase 1)", () => {
     expect(eventNames).toContain("ai:event:77");
   });
 });
+
+describe("sidebar state", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useTabStore.setState({ tabs: [], activeTabId: null });
+    useAIStore.setState({
+      tabStates: {},
+      conversations: [],
+      conversationMessages: {},
+      conversationStreaming: {},
+      sidebarConversationId: null,
+      sidebarUIState: { inputDraft: "", scrollTop: 0 },
+    });
+  });
+
+  it("bindSidebar sets sidebarConversationId", () => {
+    useAIStore.getState().bindSidebar(10);
+    expect(useAIStore.getState().sidebarConversationId).toBe(10);
+  });
+
+  it("bindSidebar persists to localStorage", () => {
+    useAIStore.getState().bindSidebar(20);
+    expect(localStorage.getItem("ai_sidebar_conversation_id")).toBe("20");
+  });
+
+  it("bindSidebar(null) removes the localStorage key", () => {
+    localStorage.setItem("ai_sidebar_conversation_id", "30");
+    useAIStore.getState().bindSidebar(null);
+    expect(localStorage.getItem("ai_sidebar_conversation_id")).toBeNull();
+  });
+
+  it("validateSidebarConversation clears sidebar if bound conv was deleted", () => {
+    useAIStore.setState({
+      sidebarConversationId: 999,
+      conversations: [{ ID: 1, Title: "t", Updatetime: 0 } as any],
+    });
+    localStorage.setItem("ai_sidebar_last_bound", "999");
+
+    useAIStore.getState().validateSidebarConversation();
+
+    expect(useAIStore.getState().sidebarConversationId).toBeNull();
+    expect(localStorage.getItem("ai_sidebar_last_bound")).toBeNull();
+  });
+
+  it("validateSidebarConversation keeps binding if conv still exists", () => {
+    useAIStore.setState({
+      sidebarConversationId: 1,
+      conversations: [{ ID: 1, Title: "t", Updatetime: 0 } as any],
+    });
+    useAIStore.getState().validateSidebarConversation();
+    expect(useAIStore.getState().sidebarConversationId).toBe(1);
+  });
+
+  it("openConversationTab evicts sidebar when the same convId is in sidebar", () => {
+    useAIStore.setState({
+      sidebarConversationId: 42,
+      conversations: [{ ID: 42, Title: "t", Updatetime: 0 } as any],
+    });
+    vi.mocked(SwitchConversation).mockResolvedValue([] as any);
+    void useAIStore.getState().openConversationTab(42);
+    expect(useAIStore.getState().sidebarConversationId).toBeNull();
+  });
+});
