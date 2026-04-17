@@ -18,6 +18,7 @@ import {
   AlertDialogTitle,
 } from "@opskat/ui";
 import { useAIStore, useAISendOnEnter, type ChatMessage, type ContentBlock } from "@/stores/aiStore";
+import { useTabStore, type AITabMeta } from "@/stores/tabStore";
 import { ToolBlock } from "@/components/ai/ToolBlock";
 import { ThinkingBlock } from "@/components/ai/ThinkingBlock";
 import { AgentBlock } from "@/components/ai/AgentBlock";
@@ -27,6 +28,10 @@ import { AISetupWizard } from "@/components/ai/AISetupWizard";
 // 常量化 Markdown 插件数组，避免每次渲染创建新引用导致 Markdown 重解析
 const mdRemarkPlugins = [remarkGfm];
 const mdRehypePlugins = [rehypeSanitize];
+
+// 稳定引用的默认值，避免 zustand selector 每次返回新对象导致无限渲染
+const EMPTY_MESSAGES: ChatMessage[] = [];
+const DEFAULT_STREAMING = { sending: false, pendingQueue: [] as string[] };
 
 interface AIChatContentProps {
   tabId: string;
@@ -61,12 +66,18 @@ function splitBlocksByApproval(blocks: ContentBlock[]): Array<{ type: "bubble" |
 export function AIChatContent({ tabId }: AIChatContentProps) {
   const { t } = useTranslation();
   const { configured, sendToTab, stopGeneration, regenerate, removeFromQueue, clearQueue } = useAIStore();
-  const tabState = useAIStore((s) => s.tabStates[tabId]) || {
-    messages: [],
-    sending: false,
-    pendingQueue: [],
-  };
-  const { messages, sending, pendingQueue } = tabState;
+  const conversationId = useTabStore((s) => {
+    const tab = s.tabs.find((x) => x.id === tabId);
+    return tab ? (tab.meta as AITabMeta).conversationId : null;
+  });
+
+  const messages = useAIStore((s) =>
+    conversationId != null ? s.conversationMessages[conversationId] || EMPTY_MESSAGES : EMPTY_MESSAGES
+  );
+  const streaming = useAIStore((s) =>
+    conversationId != null ? s.conversationStreaming[conversationId] || DEFAULT_STREAMING : DEFAULT_STREAMING
+  );
+  const { sending, pendingQueue } = streaming;
 
   const [input, setInput] = useState("");
   const [regenerateTarget, setRegenerateTarget] = useState<number | null>(null);
@@ -111,7 +122,7 @@ export function AIChatContent({ tabId }: AIChatContentProps) {
     // - nativeEvent.isComposing: DOM 标准
     // - keyCode === 229: 浏览器对 IME 正在处理该键的底层标识（跨浏览器最稳）
     // - composingRef.current: compositionstart/end 追踪兜底
-    // eslint-disable-next-line @typescript-eslint/no-deprecated
+
     if (e.nativeEvent.isComposing || e.keyCode === 229 || composingRef.current) return;
     if (sendOnEnter) {
       if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
