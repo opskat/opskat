@@ -41,7 +41,7 @@ export function TabPanelMenu({ mode, onOpenFilter }: TabPanelMenuProps) {
           <MoreHorizontal className="h-3.5 w-3.5" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[220px]">
+      <DropdownMenuContent align="end" className="min-w-[220px]" onCloseAutoFocus={(e) => e.preventDefault()}>
         {mode === "top" ? (
           <DropdownMenuItem onClick={() => setLayout("left")}>{t("sideTabs.switchToLeft")}</DropdownMenuItem>
         ) : (

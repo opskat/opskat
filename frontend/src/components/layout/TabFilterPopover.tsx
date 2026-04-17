@@ -5,6 +5,7 @@ import { Popover, PopoverAnchor, PopoverContent } from "@opskat/ui";
 import { useTabStore } from "@/stores/tabStore";
 import { filterMatches, highlightMatch } from "@/lib/highlightMatch";
 import { TabFilterInput } from "./TabFilterInput";
+import { resolveTabLabel } from "./pageTabMeta";
 
 interface TabFilterPopoverProps {
   open: boolean;
@@ -27,7 +28,9 @@ export function TabFilterPopover({ open, onOpenChange, children }: TabFilterPopo
     }
   }, [open]);
 
-  const matched = useMemo(() => tabs.filter((tab) => filterMatches(tab.label, query)), [tabs, query]);
+  const items = useMemo(() => tabs.map((tab) => ({ tab, label: resolveTabLabel(tab, t) })), [tabs, t]);
+
+  const matched = useMemo(() => items.filter(({ label }) => filterMatches(label, query)), [items, query]);
 
   const activate = (id: string) => {
     activateTab(id);
@@ -48,7 +51,7 @@ export function TabFilterPopover({ open, onOpenChange, children }: TabFilterPopo
           }}
           onClose={() => onOpenChange(false)}
           onEnter={() => {
-            if (matched[cursor]) activate(matched[cursor].id);
+            if (matched[cursor]) activate(matched[cursor].tab.id);
           }}
           onArrow={(dir) => {
             setCursor((c) => {
@@ -62,7 +65,7 @@ export function TabFilterPopover({ open, onOpenChange, children }: TabFilterPopo
           {matched.length === 0 ? (
             <p className="px-3 py-2 text-xs text-muted-foreground">{t("sideTabs.emptyHint")}</p>
           ) : (
-            matched.map((tab, idx) => (
+            matched.map(({ tab, label }, idx) => (
               <button
                 key={tab.id}
                 onClick={() => activate(tab.id)}
@@ -72,7 +75,7 @@ export function TabFilterPopover({ open, onOpenChange, children }: TabFilterPopo
                 }
               >
                 <span className="truncate flex-1">
-                  {highlightMatch(tab.label, query).map((seg, i) =>
+                  {highlightMatch(label, query).map((seg, i) =>
                     seg.match ? (
                       <mark key={i} className="bg-transparent text-primary font-medium">
                         {seg.text}

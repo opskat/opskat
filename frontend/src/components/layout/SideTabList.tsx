@@ -1,25 +1,21 @@
 import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Search, Server, Folder, MessageSquare, Settings, KeyRound, ScrollText, ArrowRightLeft } from "lucide-react";
+import { Search, Server, Folder, MessageSquare } from "lucide-react";
 import { cn } from "@opskat/ui";
-import { useTabStore, type Tab, type PageTabMeta, type InfoTabMeta } from "@/stores/tabStore";
+import { useTabStore, type Tab, type InfoTabMeta } from "@/stores/tabStore";
 import { useTerminalStore } from "@/stores/terminalStore";
+import { useFullscreen } from "@/hooks/useFullscreen";
 import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
 import { filterMatches, highlightMatch } from "@/lib/highlightMatch";
 import { useLayoutStore, isCollapsed } from "@/stores/layoutStore";
 import { SideTabItem, SideTabDragContext } from "./SideTabItem";
 import { TabFilterInput } from "./TabFilterInput";
 import { TabPanelMenu } from "./TabPanelMenu";
-
-const pageTabMeta: Record<string, { icon: typeof Settings; labelKey: string }> = {
-  settings: { icon: Settings, labelKey: "nav.settings" },
-  forward: { icon: ArrowRightLeft, labelKey: "nav.forward" },
-  sshkeys: { icon: KeyRound, labelKey: "nav.sshKeys" },
-  audit: { icon: ScrollText, labelKey: "nav.audit" },
-};
+import { getBuiltinPageMeta, resolveTabLabel } from "./pageTabMeta";
 
 export function SideTabList() {
   const { t } = useTranslation();
+  const isFullscreen = useFullscreen();
   const tabs = useTabStore((s) => s.tabs);
   const activeTabId = useTabStore((s) => s.activeTabId);
   const activateTab = useTabStore((s) => s.activateTab);
@@ -37,21 +33,11 @@ export function SideTabList() {
   const [query, setQuery] = useState("");
   const dragKeyRef = useRef<string | null>(null);
 
-  const resolveLabel = (tab: Tab): string => {
-    if (tab.type === "page") {
-      const meta = tab.meta as PageTabMeta;
-      const pm = pageTabMeta[meta.pageId];
-      if (pm) return t(pm.labelKey);
-    }
-    return tab.label;
-  };
-
   const matchedWithLabel = useMemo(
     () =>
       tabs
-        .map((tab) => ({ tab, displayLabel: resolveLabel(tab) }))
+        .map((tab) => ({ tab, displayLabel: resolveTabLabel(tab, t) }))
         .filter(({ displayLabel }) => filterMatches(displayLabel, query)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [tabs, query, t]
   );
 
@@ -89,8 +75,7 @@ export function SideTabList() {
       return { Icon, iconStyle: color ? { color } : undefined, indicatorColor: color };
     }
     // page
-    const meta = tab.meta as PageTabMeta;
-    const pm = pageTabMeta[meta.pageId];
+    const pm = getBuiltinPageMeta(tab);
     if (pm) return { Icon: pm.icon };
     const Icon = tab.icon ? getIconComponent(tab.icon) : Server;
     const color = tab.icon ? getIconColor(tab.icon) : undefined;
@@ -98,9 +83,13 @@ export function SideTabList() {
   };
 
   return (
-    <div data-tab-panel className="flex flex-col h-full bg-background">
+    <div data-tab-panel className="flex flex-col h-full bg-sidebar">
+      <div
+        className={`${isFullscreen ? "h-2" : "h-10"} w-full shrink-0`}
+        style={{ "--wails-draggable": "drag" } as React.CSSProperties}
+      />
       {!collapsed && (
-        <div className="flex items-center gap-1 px-2 py-1.5 border-b shrink-0">
+        <div className="flex items-center gap-1 px-2 py-1.5 border-b border-panel-divider shrink-0">
           <span className="text-xs font-medium uppercase text-muted-foreground tracking-wide flex-1">
             {t("sideTabs.title")}
           </span>

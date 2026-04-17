@@ -1,9 +1,9 @@
 import { createContext, useContext, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { X, Settings, KeyRound, MessageSquare, ScrollText, ArrowRightLeft, Server, Folder } from "lucide-react";
+import { X, MessageSquare, Server, Folder } from "lucide-react";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { useTabDragAndDrop } from "@/hooks/useTabDragAndDrop";
-import { useTabStore, type Tab, type PageTabMeta, type InfoTabMeta } from "@/stores/tabStore";
+import { useTabStore, type Tab, type InfoTabMeta } from "@/stores/tabStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import {
   cn,
@@ -17,13 +17,7 @@ import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
 import { TabPanelMenu } from "./TabPanelMenu";
 import { TabFilterPopover } from "./TabFilterPopover";
 import { useLayoutStore } from "@/stores/layoutStore";
-
-const pageTabMeta: Record<string, { icon: typeof Settings; labelKey: string }> = {
-  settings: { icon: Settings, labelKey: "nav.settings" },
-  forward: { icon: ArrowRightLeft, labelKey: "nav.forward" },
-  sshkeys: { icon: KeyRound, labelKey: "nav.sshKeys" },
-  audit: { icon: ScrollText, labelKey: "nav.audit" },
-};
+import { getBuiltinPageMeta } from "./pageTabMeta";
 
 interface TabBarContextValue {
   tabs: Tab[];
@@ -227,8 +221,7 @@ export function TopTabBar() {
       }
 
       case "page": {
-        const meta = tab.meta as PageTabMeta;
-        const pageMeta = pageTabMeta[meta.pageId];
+        const pageMeta = getBuiltinPageMeta(tab);
         if (pageMeta) {
           return (
             <TabItem
