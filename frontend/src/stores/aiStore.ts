@@ -145,7 +145,15 @@ function flushStreamBuffer(tabId: string) {
       return { ...msg, content, blocks };
     });
     if (!updated) return state;
-    return { tabStates: { ...state.tabStates, [tabId]: { ...tabState, messages: updated } } };
+
+    const tab = useTabStore.getState().tabs.find((t) => t.id === tabId);
+    const convId = tab ? (tab.meta as AITabMeta).conversationId : null;
+
+    return {
+      tabStates: { ...state.tabStates, [tabId]: { ...tabState, messages: updated } },
+      conversationMessages:
+        convId != null ? { ...state.conversationMessages, [convId]: updated } : state.conversationMessages,
+    };
   });
 }
 
@@ -293,7 +301,32 @@ export const useAIStore = create<AIState>((set, get) => {
         pendingQueue: [],
       };
       const newTabState = { ...current, ...updates };
-      return { tabStates: { ...state.tabStates, [tabId]: newTabState } };
+
+      // Resolve convId from tab meta for dual-write
+      const tab = useTabStore.getState().tabs.find((t) => t.id === tabId);
+      const convId = tab ? (tab.meta as AITabMeta).conversationId : null;
+
+      const newConvMessages =
+        convId != null && updates.messages !== undefined
+          ? { ...state.conversationMessages, [convId]: updates.messages }
+          : state.conversationMessages;
+
+      const newConvStreaming =
+        convId != null && (updates.sending !== undefined || updates.pendingQueue !== undefined)
+          ? {
+              ...state.conversationStreaming,
+              [convId]: {
+                sending: updates.sending ?? state.conversationStreaming[convId]?.sending ?? false,
+                pendingQueue: updates.pendingQueue ?? state.conversationStreaming[convId]?.pendingQueue ?? [],
+              },
+            }
+          : state.conversationStreaming;
+
+      return {
+        tabStates: { ...state.tabStates, [tabId]: newTabState },
+        conversationMessages: newConvMessages,
+        conversationStreaming: newConvStreaming,
+      };
     });
   }
 
@@ -381,6 +414,15 @@ export const useAIStore = create<AIState>((set, get) => {
           tabStates: {
             ...state.tabStates,
             [tabId]: { messages, sending: false, pendingQueue: [] },
+          },
+        }));
+
+        // Dual-write to conversation-keyed stores (Phase 1 transition)
+        useAIStore.setState((state) => ({
+          conversationMessages: { ...state.conversationMessages, [conversationId]: messages },
+          conversationStreaming: {
+            ...state.conversationStreaming,
+            [conversationId]: { sending: false, pendingQueue: [] },
           },
         }));
 
@@ -1036,6 +1078,15 @@ async function restoreAITabs(tabs: Tab[]) {
           useAIStore.setState((s) => ({
             tabStates: { ...s.tabStates, [tab.id]: { messages, sending: false, pendingQueue: [] } },
           }));
+          if (meta.conversationId) {
+            useAIStore.setState((s) => ({
+              conversationMessages: { ...s.conversationMessages, [meta.conversationId!]: messages },
+              conversationStreaming: {
+                ...s.conversationStreaming,
+                [meta.conversationId!]: { sending: false, pendingQueue: [] },
+              },
+            }));
+          }
           const conv = conversations.find((c) => c.ID === meta.conversationId);
           if (conv && conv.Title !== tab.label) {
             tabStore.updateTab(tab.id, { label: conv.Title, meta: { ...meta, title: conv.Title } });

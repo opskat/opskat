@@ -12,6 +12,7 @@ import {
   ListConversations,
   DeleteConversation,
   SwitchConversation,
+  SendAIMessage,
 } from "../../wailsjs/go/app/App";
 
 describe("aiStore", () => {
@@ -248,5 +249,25 @@ describe("conversationMessages (Phase 1)", () => {
       sending: true,
       pendingQueue: ["q1", "q2"],
     });
+  });
+
+  it("sendToTab writes to both tabStates and conversationMessages for an existing conversation", async () => {
+    const tabId = "ai-42";
+    useTabStore.setState({
+      tabs: [{ id: tabId, type: "ai", label: "t", meta: { type: "ai", conversationId: 42, title: "t" } }],
+      activeTabId: tabId,
+    });
+    useAIStore.setState({
+      tabStates: { [tabId]: { messages: [], sending: false, pendingQueue: [] } },
+    });
+
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
+
+    await useAIStore.getState().sendToTab(tabId, "hello");
+
+    const ts = useAIStore.getState().tabStates[tabId];
+    const cms = useAIStore.getState().conversationMessages[42];
+    expect(ts.messages.filter((m) => m.role === "user").map((m) => m.content)).toEqual(["hello"]);
+    expect(cms.filter((m) => m.role === "user").map((m) => m.content)).toEqual(["hello"]);
   });
 });
