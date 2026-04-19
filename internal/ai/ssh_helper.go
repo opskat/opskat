@@ -3,6 +3,7 @@ package ai
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -92,7 +93,7 @@ func resolveAssetSSH(ctx context.Context, assetID int64) (*asset_entity.Asset, *
 }
 
 // executeSSHCommand 执行一次性 SSH 命令并返回输出（每次新建连接）
-func executeSSHCommand(cfg *asset_entity.SSHConfig, password, key, passphrase string, command string) (string, error) {
+func executeSSHCommand(ctx context.Context, cfg *asset_entity.SSHConfig, password, key, passphrase string, command string) (string, error) {
 	client, err := createSSHClient(cfg, password, key, passphrase)
 	if err != nil {
 		return "", err
@@ -103,11 +104,11 @@ func executeSSHCommand(cfg *asset_entity.SSHConfig, password, key, passphrase st
 		}
 	}()
 
-	return runSSHCommand(client, command)
+	return runSSHCommand(ctx, client, command)
 }
 
 // runSSHCommand 在已有的 SSH 客户端上执行命令
-func runSSHCommand(client *ssh.Client, command string) (string, error) {
+func runSSHCommand(ctx context.Context, client *ssh.Client, command string) (string, error) {
 	session, err := client.NewSession()
 	if err != nil {
 		return "", fmt.Errorf("failed to create session: %w", err)
@@ -122,11 +123,29 @@ func runSSHCommand(client *ssh.Client, command string) (string, error) {
 	session.Stdout = &stdout
 	session.Stderr = &stderr
 
-	if err := session.Run(command); err != nil {
-		if stderr.Len() > 0 {
-			return "", fmt.Errorf("command failed: %s", stderr.String())
+	runCh := make(chan error, 1)
+	go func() {
+		runCh <- session.Run(command)
+	}()
+
+	select {
+	case err := <-runCh:
+		if err != nil {
+			if stderr.Len() > 0 {
+				return "", fmt.Errorf("command failed: %s", stderr.String())
+			}
+			return "", fmt.Errorf("command failed: %w", err)
 		}
-		return "", fmt.Errorf("command failed: %w", err)
+	case <-ctx.Done():
+		// 仅关闭 session 可能不足以唤醒底层 Run/Wait，这里连 client 一并关闭来打断阻塞。
+		if err := session.Close(); err != nil && !errors.Is(err, io.EOF) {
+			logger.Default().Warn("close SSH session on cancel", zap.Error(err))
+		}
+		
+		if err := client.Close(); err != nil && !errors.Is(err, io.EOF) {
+			logger.Default().Warn("close SSH client on cancel", zap.Error(err))
+		}
+		return "", ctx.Err()
 	}
 
 	output := stdout.String()
@@ -134,6 +153,16 @@ func runSSHCommand(client *ssh.Client, command string) (string, error) {
 		output += "\nSTDERR:\n" + stderr.String()
 	}
 	return output, nil
+}
+
+// executeSSHCommandDetached 执行一次性 SSH 命令并忽略调用方上下文（非 AI 流程使用）
+func executeSSHCommandDetached(cfg *asset_entity.SSHConfig, password, key, passphrase string, command string) (string, error) {
+	return executeSSHCommand(context.Background(), cfg, password, key, passphrase, command)
+}
+
+// runSSHCommandDetached 在已有 SSH 客户端上执行命令并忽略调用方上下文（非 AI 流程使用）
+func runSSHCommandDetached(client *ssh.Client, command string) (string, error) {
+	return runSSHCommand(context.Background(), client, command)
 }
 
 // executeWithSFTP 创建临时 SSH+SFTP 连接并执行操作

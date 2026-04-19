@@ -83,6 +83,10 @@ interface TabState {
 // 模块级 per-tab 事件监听管理（不放 zustand，因为含函数引用）
 const tabEventListeners = new Map<string, { cancel: (() => void) | null; generation: number }>();
 
+// 每个 tab 只保留一个待执行的落盘定时器。
+// 流式输出期间会持续增量更新消息，如果每次都立即保存，磁盘写入会过于频繁。
+const persistTimers = new Map<string, number>();
+
 function getOrCreateListener(tabId: string) {
   if (!tabEventListeners.has(tabId)) {
     tabEventListeners.set(tabId, { cancel: null, generation: 0 });
@@ -95,6 +99,7 @@ function cleanupListener(tabId: string) {
   if (listener?.cancel) listener.cancel();
   tabEventListeners.delete(tabId);
   cleanupStreamBuffer(tabId);
+  cleanupPersistTimer(tabId);
 }
 
 // === 流式事件缓冲（性能优化：合并高频 content/thinking 事件，按帧刷新）===
@@ -147,12 +152,55 @@ function flushStreamBuffer(tabId: string) {
     if (!updated) return state;
     return { tabStates: { ...state.tabStates, [tabId]: { ...tabState, messages: updated } } };
   });
+
+  const tab = useTabStore.getState().tabs.find((t) => t.id === tabId);
+  const convId = tab ? (tab.meta as AITabMeta).conversationId : null;
+
+  // 增量内容刷入消息列表后，同步安排一次防抖落盘。
+  schedulePersist(tabId, convId, true);
 }
 
 function cleanupStreamBuffer(tabId: string) {
   const buf = streamBuffers.get(tabId);
   if (buf?.raf != null) cancelAnimationFrame(buf.raf);
   streamBuffers.delete(tabId);
+}
+
+// cleanupPersistTimer 清理指定 tab 尚未执行的落盘定时器。
+function cleanupPersistTimer(tabId: string) {
+  const timer = persistTimers.get(tabId);
+  if (timer !== undefined) {
+    window.clearTimeout(timer);
+    persistTimers.delete(tabId);
+  }
+}
+
+// persistConversationSnapshot 将当前 tab 的会话快照保存到持久化存储。
+// expectedConvId 用来校验目标会话
+function persistConversationSnapshot(tabId: string, expectedConvId?: number | null, includeStreaming = false) {
+  const tab = useTabStore.getState().tabs.find((t) => t.id === tabId);
+  const convId = tab ? (tab.meta as AITabMeta).conversationId : null;
+  if (!convId) return;
+  if (expectedConvId != null && convId !== expectedConvId) return;
+
+  const tabState = useAIStore.getState().tabStates[tabId];
+  if (!tabState) return;
+
+  SaveConversationMessages(convId, toDisplayMessages(tabState.messages, includeStreaming)).catch(() => {});
+}
+
+// schedulePersist 为当前 tab 安排一次短延迟的对话快照保存。
+// 这里会记住调度时对应的 conversationId，防止同一个 tab 切换会话后发生误存。
+function schedulePersist(tabId: string, expectedConvId?: number | null, includeStreaming = false) {
+  // 流式输出期间做一次短延迟防抖：
+  // 1. 降低高频写入带来的性能开销；
+  // 2. 让应用异常退出前，尽量已经落下最近一段对话快照。
+  cleanupPersistTimer(tabId);
+  const timer = window.setTimeout(() => {
+    persistTimers.delete(tabId);
+    persistConversationSnapshot(tabId, expectedConvId, includeStreaming);
+  }, 300);
+  persistTimers.set(tabId, timer);
 }
 
 // === 辅助函数 ===
@@ -179,9 +227,9 @@ function appendText(blocks: ContentBlock[], text: string): ContentBlock[] {
   return newBlocks;
 }
 
-function toDisplayMessages(msgs: ChatMessage[]): app.ConversationDisplayMessage[] {
+function toDisplayMessages(msgs: ChatMessage[], includeStreaming = false): app.ConversationDisplayMessage[] {
   return msgs
-    .filter((m) => !m.streaming)
+    .filter((m) => includeStreaming || !m.streaming)
     .map(
       (m) =>
         new app.ConversationDisplayMessage({
@@ -289,6 +337,14 @@ export const useAIStore = create<AIState>((set, get) => {
       const newTabState = { ...current, ...updates };
       return { tabStates: { ...state.tabStates, [tabId]: newTabState } };
     });
+
+    if (updates.messages !== undefined) {
+      const tab = useTabStore.getState().tabs.find((t) => t.id === tabId);
+      const convId = tab ? (tab.meta as AITabMeta).conversationId : null;
+
+      // 消息列表发生变化后，补一轮防抖持久化。
+      schedulePersist(tabId, convId, true);
+    }
   }
 
   return {
@@ -793,10 +849,8 @@ export const useAIStore = create<AIState>((set, get) => {
             }
 
             // 保存消息
-            const finalMsgs = get().tabStates[tabId]?.messages || [];
-            if (convId) {
-              SaveConversationMessages(convId, toDisplayMessages(finalMsgs)).catch(() => {});
-            }
+            if (convId) persistConversationSnapshot(tabId, convId);
+
             get().fetchConversations();
 
             // 消费队列
@@ -830,10 +884,9 @@ export const useAIStore = create<AIState>((set, get) => {
             }
 
             // Persist messages
-            const finalMsgs = get().tabStates[tabId]?.messages || [];
-            if (convId) {
-              SaveConversationMessages(convId, toDisplayMessages(finalMsgs)).catch(() => {});
-            }
+            // 最终完成后立即落盘，保证标题刷新前后都能恢复到完整会话内容。
+            if (convId) persistConversationSnapshot(tabId, convId);
+
             // Refresh conversations (title may have updated)
             get()
               .fetchConversations()
@@ -871,6 +924,10 @@ export const useAIStore = create<AIState>((set, get) => {
             } else {
               updateTab(tabId, { sending: false });
             }
+
+            // 错误态同样需要落盘，否则强制重启后会丢掉最后一次失败上下文。
+            if (convId) persistConversationSnapshot(tabId, convId);
+
             break;
           }
         }
@@ -975,7 +1032,8 @@ registerTabCloseHook((tab) => {
 
   // Save messages
   if (meta.conversationId && tabState?.messages.length) {
-    SaveConversationMessages(meta.conversationId, toDisplayMessages(tabState.messages)).catch(() => {});
+    // 关闭标签前补一次最终快照，避免最后一段对话未落盘。
+    persistConversationSnapshot(tab.id, meta.conversationId);
   }
 
   // Clean up event listener
