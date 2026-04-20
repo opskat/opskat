@@ -33,11 +33,11 @@ describe("SideAssistantPanel", () => {
     cleanup();
   });
 
-  it("collapsed state shows edge rail", () => {
-    render(<SideAssistantPanel collapsed={true} onToggle={() => {}} />);
-    // With the mocked t() returning keys, the title of the rail is "ai.sidebar.expand".
-    // The header title "ai.sidebar.title" is NOT rendered in collapsed mode.
+  it("collapsed state renders nothing (triggered from left Sidebar / shortcut instead)", () => {
+    const { container } = render(<SideAssistantPanel collapsed={true} onToggle={() => {}} />);
+    expect(container).toBeEmptyDOMElement();
     expect(screen.queryByText("ai.sidebar.title")).not.toBeInTheDocument();
+    expect(screen.queryByText("ai.sidebar.emptyGuide")).not.toBeInTheDocument();
   });
 
   it("expanded with no conversation shows empty guide", () => {
@@ -72,6 +72,59 @@ describe("SideAssistantPanel", () => {
 
     fireEvent.click(screen.getByText("Conv A"));
     expect(useAIStore.getState().sidebarConversationId).toBe(1);
+  });
+
+  it("clicking outside the history popup closes it (within panel)", async () => {
+    useAIStore.setState({
+      conversations: [{ ID: 1, Title: "Conv A", Updatetime: Math.floor(Date.now() / 1000) } as any],
+      sidebarConversationId: null,
+    });
+    render(<SideAssistantPanel collapsed={false} onToggle={() => {}} />);
+
+    fireEvent.click(screen.getByTitle("ai.sidebar.history"));
+    expect(await screen.findByText("Conv A")).toBeInTheDocument();
+
+    // Click somewhere inside the panel but outside the dropdown popup.
+    fireEvent.mouseDown(screen.getByText("ai.sidebar.emptyGuide"));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Conv A")).not.toBeInTheDocument();
+    });
+  });
+
+  it("clicking outside the history popup closes it (outside panel)", async () => {
+    useAIStore.setState({
+      conversations: [{ ID: 1, Title: "Conv A", Updatetime: Math.floor(Date.now() / 1000) } as any],
+    });
+    render(
+      <div>
+        <button data-testid="outside">outside</button>
+        <SideAssistantPanel collapsed={false} onToggle={() => {}} />
+      </div>
+    );
+
+    fireEvent.click(screen.getByTitle("ai.sidebar.history"));
+    expect(await screen.findByText("Conv A")).toBeInTheDocument();
+
+    fireEvent.mouseDown(screen.getByTestId("outside"));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Conv A")).not.toBeInTheDocument();
+    });
+  });
+
+  it("clicking inside the history popup keeps it open", async () => {
+    useAIStore.setState({
+      conversations: [{ ID: 1, Title: "Conv A", Updatetime: Math.floor(Date.now() / 1000) } as any],
+    });
+    render(<SideAssistantPanel collapsed={false} onToggle={() => {}} />);
+
+    fireEvent.click(screen.getByTitle("ai.sidebar.history"));
+    const item = await screen.findByText("Conv A");
+
+    // mousedown inside the popup must not close it (the search input/list area).
+    fireEvent.mouseDown(item);
+    expect(screen.getByText("Conv A")).toBeInTheDocument();
   });
 
   it("clicking promote button promotes sidebar conversation and clears sidebar binding", async () => {

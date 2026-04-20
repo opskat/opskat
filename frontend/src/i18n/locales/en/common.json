@@ -595,9 +595,7 @@
       "promoteToTab": "Open in main tab",
       "promoteHint": "Opened in tab",
       "collapse": "Collapse",
-      "expand": "Expand",
-      "followMainTab": "Follow main tab",
-      "emptyGuide": "Click + to start a new chat, or pick one from 📋 History",
+      "emptyGuide": "Click + to start a new chat, or pick one from <history/> History",
       "noConversation": "No conversation selected",
       "attachedAssets": "Attached assets"
     }
@@ -633,7 +631,8 @@
   "panel": {
     "toggleSidebar": "Toggle Sidebar",
     "hideSidebar": "Hide Toolbar",
-    "showSidebar": "Show Toolbar"
+    "showSidebar": "Show Toolbar",
+    "showAIPanel": "Show AI Assistant"
   },
   "sideTabs": {
     "title": "Open Tabs",

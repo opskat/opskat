@@ -25,7 +25,14 @@ export function SideAssistantHeader({
         <span className="text-sm font-medium">{t("ai.sidebar.title")}</span>
       </div>
       <div className="flex gap-0.5">
-        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onOpenHistory} title={t("ai.sidebar.history")}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6"
+          onClick={onOpenHistory}
+          title={t("ai.sidebar.history")}
+          data-history-trigger=""
+        >
           <History className="h-3.5 w-3.5" />
         </Button>
         <Button

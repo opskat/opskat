@@ -17,6 +17,16 @@ import {
 } from "../../wailsjs/go/app/App";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
 
+async function waitForStoreCondition(predicate: () => boolean, timeoutMs = 1000) {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error("waitForStoreCondition: timed out");
+    }
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
 describe("aiStore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -275,6 +285,7 @@ describe("conversationMessages (Phase 1)", () => {
 
 describe("sidebar state", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     localStorage.clear();
     useTabStore.setState({ tabs: [], activeTabId: null });
     useAIStore.setState({
@@ -301,6 +312,48 @@ describe("sidebar state", () => {
     localStorage.setItem("ai_sidebar_conversation_id", "30");
     useAIStore.getState().bindSidebar(null);
     expect(localStorage.getItem("ai_sidebar_conversation_id")).toBeNull();
+  });
+
+  it("bindSidebar loads conversation messages when binding to an unseen convId", async () => {
+    vi.mocked(SwitchConversation).mockResolvedValue([
+      { role: "user", content: "hi", blocks: [] },
+      { role: "assistant", content: "hello", blocks: [] },
+    ] as any);
+
+    useAIStore.getState().bindSidebar(42);
+
+    await waitForStoreCondition(() => useAIStore.getState().conversationMessages[42] !== undefined);
+
+    expect(SwitchConversation).toHaveBeenCalledWith(42);
+    expect(useAIStore.getState().conversationMessages[42]).toHaveLength(2);
+    expect(useAIStore.getState().conversationStreaming[42]).toEqual({ sending: false, pendingQueue: [] });
+  });
+
+  it("bindSidebar skips loading when messages for that convId are already present", async () => {
+    useAIStore.setState({
+      conversationMessages: { 55: [{ role: "user", content: "cached", blocks: [], streaming: false }] },
+      conversationStreaming: { 55: { sending: false, pendingQueue: [] } },
+    });
+
+    useAIStore.getState().bindSidebar(55);
+    // Wait one microtask tick for the fire-and-forget promise to settle.
+    await Promise.resolve();
+
+    expect(SwitchConversation).not.toHaveBeenCalled();
+    expect(useAIStore.getState().conversationMessages[55]).toHaveLength(1);
+  });
+
+  it("fetchConversations loads messages for sidebar-bound conv restored from localStorage", async () => {
+    vi.mocked(ListConversations).mockResolvedValue([{ ID: 7, Title: "Restored", Updatetime: 0 }] as any);
+    vi.mocked(SwitchConversation).mockResolvedValue([{ role: "user", content: "from backend", blocks: [] }] as any);
+    // Simulate localStorage restore: sidebarConversationId set, but no messages in store.
+    useAIStore.setState({ sidebarConversationId: 7, conversationMessages: {}, conversationStreaming: {} });
+
+    await useAIStore.getState().fetchConversations();
+    await waitForStoreCondition(() => useAIStore.getState().conversationMessages[7] !== undefined);
+
+    expect(SwitchConversation).toHaveBeenCalledWith(7);
+    expect(useAIStore.getState().conversationMessages[7]).toHaveLength(1);
   });
 
   it("validateSidebarConversation clears sidebar if bound conv was deleted", () => {

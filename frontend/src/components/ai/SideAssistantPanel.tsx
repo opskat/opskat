@@ -1,5 +1,4 @@
-import { useState, useEffect, useRef } from "react";
-import { Bot } from "lucide-react";
+import { useState, useEffect } from "react";
 import { cn, useResizeHandle } from "@opskat/ui";
 import { useAIStore } from "@/stores/aiStore";
 import { useTabStore } from "@/stores/tabStore";
@@ -8,7 +7,8 @@ import { SideAssistantHeader } from "./SideAssistantHeader";
 import { SideAssistantContextBar } from "./SideAssistantContextBar";
 import { SideAssistantHistoryDropdown } from "./SideAssistantHistoryDropdown";
 import { AIChatContent } from "./AIChatContent";
-import { useTranslation } from "react-i18next";
+import { Trans } from "react-i18next";
+import { History } from "lucide-react";
 
 interface SideAssistantPanelProps {
   collapsed: boolean;
@@ -16,7 +16,6 @@ interface SideAssistantPanelProps {
 }
 
 export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelProps) {
-  const { t } = useTranslation();
   const isFullscreen = useFullscreen();
   const {
     sidebarConversationId,
@@ -30,7 +29,6 @@ export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelPr
   } = useAIStore();
 
   const [historyOpen, setHistoryOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
 
   const {
     width,
@@ -48,13 +46,16 @@ export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelPr
     if (configured) fetchConversations();
   }, [configured, fetchConversations]);
 
-  // Close history dropdown on click outside
+  // Close history dropdown on click outside the popup (but not the trigger,
+  // which manages its own toggle).
   useEffect(() => {
     if (!historyOpen) return;
     const handler = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-        setHistoryOpen(false);
-      }
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest("[data-history-dropdown]")) return;
+      if (target.closest("[data-history-trigger]")) return;
+      setHistoryOpen(false);
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
@@ -94,21 +95,10 @@ export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelPr
     }
   };
 
-  if (collapsed) {
-    return (
-      <div
-        className="shrink-0 border-l border-panel-divider bg-sidebar flex flex-col items-center py-2 cursor-pointer hover:bg-sidebar-accent transition-colors"
-        style={{ width: 32 }}
-        onClick={onToggle}
-        title={t("ai.sidebar.expand")}
-      >
-        <Bot className="h-4 w-4 text-primary mt-1" />
-      </div>
-    );
-  }
+  if (collapsed) return null;
 
   return (
-    <div ref={rootRef} className="relative overflow-visible shrink-0 transition-[width] duration-200" style={{ width }}>
+    <div className="relative overflow-visible shrink-0 transition-[width] duration-200" style={{ width }}>
       <div
         className="relative flex h-full shrink-0 flex-col border-l border-panel-divider bg-sidebar"
         style={{ width }}
@@ -145,7 +135,12 @@ export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelPr
 
         {sidebarConversationId == null ? (
           <div className="flex-1 flex items-center justify-center p-4 text-center text-sm text-muted-foreground">
-            {t("ai.sidebar.emptyGuide")}
+            <Trans
+              i18nKey="ai.sidebar.emptyGuide"
+              components={{
+                history: <History className="inline-block h-3.5 w-3.5 mx-0.5 align-text-bottom" />,
+              }}
+            />
           </div>
         ) : (
           <div className="flex-1 min-h-0 flex flex-col">

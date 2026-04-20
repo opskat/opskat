@@ -219,6 +219,27 @@ function convertDisplayMessages(displayMsgs: app.ConversationDisplayMessage[]): 
   }));
 }
 
+// 单次加载会话历史消息：仅当当前 store 尚未持有该 convId 的消息时才触发后端拉取。
+// 侧边绑定 / localStorage 恢复走这条路径，避免侧边显示已有会话时"消息为空"的表现。
+async function ensureConversationMessagesLoaded(convId: number) {
+  if (useAIStore.getState().conversationMessages[convId] !== undefined) return;
+  try {
+    const displayMsgs = await SwitchConversation(convId);
+    const messages = convertDisplayMessages(displayMsgs);
+    useAIStore.setState((s) => ({
+      conversationMessages:
+        s.conversationMessages[convId] !== undefined
+          ? s.conversationMessages
+          : { ...s.conversationMessages, [convId]: messages },
+      conversationStreaming: s.conversationStreaming[convId]
+        ? s.conversationStreaming
+        : { ...s.conversationStreaming, [convId]: { sending: false, pendingQueue: [] } },
+    }));
+  } catch {
+    // ignore — 保持原状态；下次再绑定时会重试
+  }
+}
+
 // === 模块级 conversation 操作（被 sendToTab / sendFromSidebar / regenerate 等共用）===
 
 function updateConversation(
@@ -811,6 +832,12 @@ export const useAIStore = create<AIState>((set, get) => {
         const convs = await ListConversations();
         set({ conversations: convs || [] });
         get().validateSidebarConversation();
+        // 启动时 sidebarConversationId 从 localStorage 恢复，但消息未加载。
+        // 在验证通过（conv 仍存在）后触发一次历史消息拉取。
+        const sidebarId = get().sidebarConversationId;
+        if (sidebarId != null) {
+          void ensureConversationMessagesLoaded(sidebarId);
+        }
       } catch {
         set({ conversations: [] });
       }
@@ -851,6 +878,9 @@ export const useAIStore = create<AIState>((set, get) => {
       } else {
         localStorage.setItem("ai_sidebar_conversation_id", String(conversationId));
         localStorage.setItem("ai_sidebar_last_bound", String(conversationId));
+        // 侧边绑定的会话需要立即把历史消息加载进来，否则 AIChatContent 读到空数组会显示"无消息"。
+        // fire-and-forget：helper 内部做了"已加载则跳过"判断。
+        void ensureConversationMessagesLoaded(conversationId);
       }
     },
 

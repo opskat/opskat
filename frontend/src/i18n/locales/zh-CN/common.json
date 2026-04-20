@@ -595,9 +595,7 @@
       "promoteToTab": "转为主面板 Tab",
       "promoteHint": "已在 Tab 中打开",
       "collapse": "折叠",
-      "expand": "展开",
-      "followMainTab": "跟随主面板",
-      "emptyGuide": "点击 + 新建对话，或从 📋 历史中继续",
+      "emptyGuide": "点击 + 新建对话，或从 <history/> 历史中继续",
       "noConversation": "未选择对话",
       "attachedAssets": "关联资产"
     }
@@ -633,7 +631,8 @@
   "panel": {
     "toggleSidebar": "切换资产列表",
     "hideSidebar": "隐藏工具条",
-    "showSidebar": "显示工具条"
+    "showSidebar": "显示工具条",
+    "showAIPanel": "显示 AI 助手"
   },
   "sideTabs": {
     "title": "打开的 Tabs",

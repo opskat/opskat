@@ -458,7 +458,8 @@ function App() {
               onDeleteAsset={handleDeleteAsset}
               onConnectAsset={handleConnectAsset}
             />
-            <SideAssistantPanel collapsed={aiPanelCollapsed} onToggle={() => setAiPanelCollapsed(!aiPanelCollapsed)} />
+            <SideAssistantPanel collapsed={aiPanelCollapsed} onToggle={toggleAIPanel} />
+            {aiPanelCollapsed && <EdgeRevealStrip side="right" onClick={toggleAIPanel} />}
           </div>
 
           <AssetForm

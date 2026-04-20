@@ -52,7 +52,10 @@ export function SideAssistantHistoryDropdown({
 
   return (
     <>
-      <div className="absolute right-0 top-full z-40 mt-1 w-[280px] max-h-[400px] overflow-hidden rounded-md border border-panel-divider bg-popover shadow-lg">
+      <div
+        data-history-dropdown=""
+        className="absolute right-0 top-full z-40 mt-1 w-[280px] max-h-[400px] overflow-hidden rounded-md border border-panel-divider bg-popover shadow-lg"
+      >
         <div className="p-2 border-b border-panel-divider">
           <div className="relative">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
