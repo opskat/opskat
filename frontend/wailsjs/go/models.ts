@@ -1,5 +1,25 @@
 export namespace ai {
 	
+	export class MentionedAsset {
+	    assetId: number;
+	    name: string;
+	    type: string;
+	    host: string;
+	    groupPath: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MentionedAsset(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.assetId = source["assetId"];
+	        this.name = source["name"];
+	        this.type = source["type"];
+	        this.host = source["host"];
+	        this.groupPath = source["groupPath"];
+	    }
+	}
 	export class TabInfo {
 	    type: string;
 	    assetId: number;
@@ -18,6 +38,7 @@ export namespace ai {
 	}
 	export class AIContext {
 	    openTabs: TabInfo[];
+	    mentionedAssets: MentionedAsset[];
 	
 	    static createFrom(source: any = {}) {
 	        return new AIContext(source);
@@ -26,6 +47,7 @@ export namespace ai {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.openTabs = this.convertValues(source["openTabs"], TabInfo);
+	        this.mentionedAssets = this.convertValues(source["mentionedAssets"], MentionedAsset);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -102,6 +124,7 @@ export namespace ai {
 		    return a;
 		}
 	}
+	
 	export class ToolCall {
 	    id: string;
 	    type: string;
@@ -281,6 +304,7 @@ export namespace app {
 	    role: string;
 	    content: string;
 	    blocks: conversation_entity.ContentBlock[];
+	    mentions: conversation_entity.MentionRef[];
 	
 	    static createFrom(source: any = {}) {
 	        return new ConversationDisplayMessage(source);
@@ -291,6 +315,7 @@ export namespace app {
 	        this.role = source["role"];
 	        this.content = source["content"];
 	        this.blocks = this.convertValues(source["blocks"], conversation_entity.ContentBlock);
+	        this.mentions = this.convertValues(source["mentions"], conversation_entity.MentionRef);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -861,6 +886,24 @@ export namespace conversation_entity {
 	        this.Status = source["Status"];
 	        this.Createtime = source["Createtime"];
 	        this.Updatetime = source["Updatetime"];
+	    }
+	}
+	export class MentionRef {
+	    assetId: number;
+	    name: string;
+	    start: number;
+	    end: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new MentionRef(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.assetId = source["assetId"];
+	        this.name = source["name"];
+	        this.start = source["start"];
+	        this.end = source["end"];
 	    }
 	}
 

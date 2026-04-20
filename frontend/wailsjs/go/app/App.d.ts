@@ -182,8 +182,6 @@ export function ListAIProviders():Promise<Array<app.AIProviderInfo>>;
 
 export function ListAssets(arg1:string,arg2:number):Promise<Array<asset_entity.Asset>>;
 
-export function LoadConversationMessages(arg1:number):Promise<Array<app.ConversationDisplayMessage>>;
-
 export function ListAuditLogs(arg1:string,arg2:number,arg3:number,arg4:number,arg5:number,arg6:number,arg7:string):Promise<app.AuditLogListResult>;
 
 export function ListAuditSessions(arg1:number):Promise<Array<audit_repo.SessionInfo>>;
@@ -209,6 +207,8 @@ export function ListMongoCollections(arg1:number,arg2:string):Promise<string>;
 export function ListMongoDatabases(arg1:number):Promise<string>;
 
 export function ListPolicyGroups(arg1:string):Promise<Array<policy_group_entity.PolicyGroupItem>>;
+
+export function LoadConversationMessages(arg1:number):Promise<Array<app.ConversationDisplayMessage>>;
 
 export function MoveAsset(arg1:number,arg2:string):Promise<void>;
 
