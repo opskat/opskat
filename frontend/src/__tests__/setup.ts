@@ -1,5 +1,10 @@
-import { vi } from "vitest";
+import { vi, afterEach } from "vitest";
 import "@testing-library/jest-dom/vitest";
+import { cleanup } from "@testing-library/react";
+
+// RTL does not auto-register cleanup when vitest globals are disabled.
+// Register it explicitly so each test renders in isolation.
+afterEach(() => cleanup());
 
 // Mock Wails runtime
 vi.mock("../../wailsjs/runtime/runtime", () => ({
