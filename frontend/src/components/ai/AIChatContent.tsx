@@ -247,7 +247,12 @@ export function AIChatContent({
                     : `${/mac/i.test(navigator.userAgent) ? "⌘+Enter" : "Ctrl+Enter"} ${t("ai.sendShortcutHint")}`}
                 </span>
                 {sending ? (
-                  <Button size="icon" variant="destructive" className="h-7 w-7 shrink-0 rounded-lg" onClick={handleStop}>
+                  <Button
+                    size="icon"
+                    variant="destructive"
+                    className="h-7 w-7 shrink-0 rounded-lg"
+                    onClick={handleStop}
+                  >
                     <Square className="h-3 w-3" />
                   </Button>
                 ) : (

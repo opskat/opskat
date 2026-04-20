@@ -1,5 +1,6 @@
 import { forwardRef, useImperativeHandle, useMemo, useState, useEffect } from "react";
 import { flushSync } from "react-dom";
+import { useTranslation } from "react-i18next";
 import { Server, Database, HardDrive, Leaf } from "lucide-react";
 import { useAssetStore } from "@/stores/assetStore";
 import type { asset_entity, group_entity } from "../../../wailsjs/go/models";
@@ -66,10 +67,8 @@ function rank(a: asset_entity.Asset, groupPath: string, q: string): number {
   return 3;
 }
 
-export const MentionList = forwardRef<MentionListRef, MentionListProps>(function MentionList(
-  { query, command },
-  ref
-) {
+export const MentionList = forwardRef<MentionListRef, MentionListProps>(function MentionList({ query, command }, ref) {
+  const { t } = useTranslation();
   const { assets, groups } = useAssetStore();
   const [selectedIndex, setSelectedIndex] = useState(0);
 
@@ -126,7 +125,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(function
   if (items.length === 0) {
     return (
       <div className="bg-popover text-popover-foreground rounded-md border shadow-md px-3 py-2 text-xs text-muted-foreground">
-        未找到资产
+        {t("ai.mentionNotFound", "未找到资产")}
       </div>
     );
   }

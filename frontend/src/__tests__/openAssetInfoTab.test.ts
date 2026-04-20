@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { openAssetInfoTab } from "@/lib/openAssetInfoTab";
 import { useAssetStore } from "@/stores/assetStore";

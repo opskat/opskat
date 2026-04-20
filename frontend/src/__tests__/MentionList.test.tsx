@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { createRef } from "react";
@@ -13,13 +14,14 @@ function seed(assets: any[], groups: any[] = []) {
 
 describe("MentionList", () => {
   beforeEach(() => {
-    seed([
-      { ID: 42, Name: "prod-db", Type: "mysql", GroupID: 0 },
-      { ID: 43, Name: "prod-web", Type: "ssh", GroupID: 1 },
-      { ID: 44, Name: "cache-1", Type: "redis", GroupID: 0 },
-    ], [
-      { ID: 1, Name: "生产", ParentID: 0 },
-    ]);
+    seed(
+      [
+        { ID: 42, Name: "prod-db", Type: "mysql", GroupID: 0 },
+        { ID: 43, Name: "prod-web", Type: "ssh", GroupID: 1 },
+        { ID: 44, Name: "cache-1", Type: "redis", GroupID: 0 },
+      ],
+      [{ ID: 1, Name: "生产", ParentID: 0 }]
+    );
   });
 
   it("按资产名过滤", async () => {
@@ -41,7 +43,7 @@ describe("MentionList", () => {
 
   it("无匹配显示未找到", () => {
     render(<MentionList query="nope" command={() => {}} />);
-    expect(screen.getByText("未找到资产")).toBeInTheDocument();
+    expect(screen.getByText("ai.mentionNotFound")).toBeInTheDocument();
   });
 
   it("Enter 触发 command 提交选中项", async () => {

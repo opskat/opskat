@@ -580,6 +580,8 @@
     "chars": "chars",
     "pendingMessages": "Pending messages",
     "clearQueue": "Clear",
+    "mentionNotFound": "No assets found",
+    "mentionAssetDeleted": "Asset deleted",
     "regenerate": "Regenerate",
     "regenerateTitle": "Regenerate",
     "regenerateConfirm": "Regenerating will delete this message and all messages after it. Are you sure?",
