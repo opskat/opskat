@@ -580,6 +580,7 @@
     "chars": "chars",
     "pendingMessages": "Pending messages",
     "clearQueue": "Clear",
+    "copied": "Copied to clipboard",
     "regenerate": "Regenerate",
     "regenerateTitle": "Regenerate",
     "regenerateConfirm": "Regenerating will delete this message and all messages after it. Are you sure?",

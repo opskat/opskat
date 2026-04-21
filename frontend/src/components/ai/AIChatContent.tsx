@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect, memo, useCallback, createContext, useContext } from "react";
 import { useIMEComposing } from "@/hooks/useIMEComposing";
-import { Loader2, CornerDownLeft, Square, RefreshCw, X, Trash2 } from "lucide-react";
+import { Loader2, CornerDownLeft, Square, RefreshCw, X, Trash2, Copy } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import Markdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
+import { toast } from "sonner";
 import {
   Button,
   ScrollArea,
@@ -16,6 +17,10 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
 } from "@opskat/ui";
 import { useAIStore, useAISendOnEnter, type ChatMessage, type ContentBlock } from "@/stores/aiStore";
 import { useTabStore, type AITabMeta } from "@/stores/tabStore";
@@ -28,6 +33,10 @@ import { AISetupWizard } from "@/components/ai/AISetupWizard";
 // 常量化 Markdown 插件数组，避免每次渲染创建新引用导致 Markdown 重解析
 const mdRemarkPlugins = [remarkGfm];
 const mdRehypePlugins = [rehypeSanitize];
+// 统一助手消息选中态样式，避免不同消息气泡的选区表现不一致。
+const messageSelectionClass = "select-text selection:bg-primary/25 selection:text-foreground";
+// 单独控制用户气泡的选中态颜色，保证主色背景下仍能看清选区。
+const userMessageSelectionClass = "select-text selection:bg-white/35 selection:text-primary-foreground";
 
 // 稳定引用的默认值，避免 zustand selector 每次返回新对象导致无限渲染
 const EMPTY_MESSAGES: ChatMessage[] = [];
@@ -74,6 +83,141 @@ function splitBlocksByApproval(blocks: ContentBlock[]): Array<{ type: "bubble" |
   return segments;
 }
 
+// 输入框历史切换只在首行首字符触发
+function shouldNavigateInputHistory(textarea: HTMLTextAreaElement) {
+  if (textarea.selectionStart !== textarea.selectionEnd) return false;
+  return textarea.selectionStart === 0;
+}
+
+// 进入历史切换后，允许继续用上下键连续浏览
+function shouldContinueInputHistory(textarea: HTMLTextAreaElement) {
+  return textarea.selectionStart === textarea.selectionEnd;
+}
+
+type InputHistoryDirection = "up" | "down";
+
+interface InputHistoryNavigationOptions {
+  direction: InputHistoryDirection;
+  textarea: HTMLTextAreaElement;
+  input: string;
+  historyIndex: number;
+  userMessageHistory: string[];
+}
+
+interface InputHistoryEventOptions {
+  event: React.KeyboardEvent<HTMLTextAreaElement>;
+  textarea: HTMLTextAreaElement | null;
+  input: string;
+  historyIndex: number;
+  userMessageHistory: string[];
+}
+
+interface InputHistoryHandlerOptions extends InputHistoryEventOptions {
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  setHistoryIndex: React.Dispatch<React.SetStateAction<number>>;
+  setInput: React.Dispatch<React.SetStateAction<string>>;
+}
+
+// 统一判断输入框是否应该进入或继续执行上下历史切换。
+function getInputHistoryNavigationState({
+  direction,
+  textarea,
+  input,
+  historyIndex,
+  userMessageHistory,
+}: InputHistoryNavigationOptions) {
+  const currentHistoryMessage = historyIndex >= 0 ? userMessageHistory[historyIndex] : null;
+  const isBrowsingHistory = currentHistoryMessage != null && input === currentHistoryMessage;
+  const canNavigate = isBrowsingHistory ? shouldContinueInputHistory(textarea) : shouldNavigateInputHistory(textarea);
+
+  if (!canNavigate) return null;
+  if (direction === "up" && userMessageHistory.length === 0) return null;
+  if (direction === "down" && (!isBrowsingHistory || historyIndex < 0)) return null;
+
+  const nextHistoryIndex =
+    direction === "up" ? Math.min(historyIndex + 1, userMessageHistory.length - 1) : historyIndex - 1;
+  const nextMessage = nextHistoryIndex >= 0 ? userMessageHistory[nextHistoryIndex] : "";
+
+  return { nextHistoryIndex, nextMessage };
+}
+
+// 统一处理上下键历史切换的事件准入和下一步状态计算。
+function getInputHistoryNavigationFromEvent({
+  event,
+  textarea,
+  input,
+  historyIndex,
+  userMessageHistory,
+}: InputHistoryEventOptions) {
+  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return null;
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return null;
+  if (!textarea) return null;
+
+  return getInputHistoryNavigationState({
+    direction: event.key === "ArrowUp" ? "up" : "down",
+    textarea,
+    input,
+    historyIndex,
+    userMessageHistory,
+  });
+}
+
+// 历史切换后把光标放到消息末尾，保持连续上下翻阅时的输入体验一致。
+function applyInputHistoryMessage(
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>,
+  nextHistoryIndex: number,
+  nextMessage: string,
+  setHistoryIndex: React.Dispatch<React.SetStateAction<number>>,
+  setInput: React.Dispatch<React.SetStateAction<string>>
+) {
+  setHistoryIndex(nextHistoryIndex);
+  setInput(nextMessage);
+
+  requestAnimationFrame(() => {
+    textareaRef.current?.focus();
+    textareaRef.current?.setSelectionRange(nextMessage.length, nextMessage.length);
+  });
+}
+
+// 把输入框历史切换作为独立子流程处理，避免把原有按键主流程撑厚。
+function handleInputHistoryKeyDown({
+  event,
+  textarea,
+  textareaRef,
+  input,
+  historyIndex,
+  userMessageHistory,
+  setHistoryIndex,
+  setInput,
+}: InputHistoryHandlerOptions) {
+  const nextHistoryState = getInputHistoryNavigationFromEvent({
+    event,
+    textarea,
+    input,
+    historyIndex,
+    userMessageHistory,
+  });
+
+  if (!nextHistoryState) return false;
+
+  event.preventDefault();
+  applyInputHistoryMessage(
+    textareaRef,
+    nextHistoryState.nextHistoryIndex,
+    nextHistoryState.nextMessage,
+    setHistoryIndex,
+    setInput
+  );
+  return true;
+}
+
+// 统一处理消息复制反馈，保持和项目其他复制交互一致。
+async function copyMessageText(text: string, copiedText: string) {
+  if (!text.trim()) return;
+  await navigator.clipboard.writeText(text);
+  toast.success(copiedText, { duration: 1500, position: "top-center" });
+}
+
 export function AIChatContent({
   tabId,
   conversationId: propConvId,
@@ -97,9 +241,14 @@ export function AIChatContent({
     conversationId != null ? s.conversationStreaming[conversationId] || DEFAULT_STREAMING : DEFAULT_STREAMING
   );
   const { sending, pendingQueue } = streaming;
+  const userMessageHistory = [...messages]
+    .filter((msg) => msg.role === "user" && msg.content.trim())
+    .map((msg) => msg.content)
+    .reverse();
 
   const [input, setInput] = useState("");
   const [regenerateTarget, setRegenerateTarget] = useState<number | null>(null);
+  const [historyIndex, setHistoryIndex] = useState(-1);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { composingRef, onCompositionStart, onCompositionEnd } = useIMEComposing();
@@ -116,6 +265,7 @@ export function AIChatContent({
     const text = input.trim();
     if (!text) return;
     setInput("");
+    setHistoryIndex(-1);
     if (onSendOverride) {
       void onSendOverride(text);
     } else if (tabId) {
@@ -153,6 +303,20 @@ export function AIChatContent({
     // - composingRef.current: compositionstart/end 追踪兜底
 
     if (e.nativeEvent.isComposing || e.keyCode === 229 || composingRef.current) return;
+    // 在允许的光标位置接管上下键，统一处理用户消息历史切换。
+    if (
+      handleInputHistoryKeyDown({
+        event: e,
+        textarea: textareaRef.current,
+        textareaRef,
+        input,
+        historyIndex,
+        userMessageHistory,
+        setHistoryIndex,
+        setInput,
+      })
+    )
+      return;
     if (sendOnEnter) {
       if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
         e.preventDefault();
@@ -247,7 +411,10 @@ export function AIChatContent({
               <textarea
                 ref={textareaRef}
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  setHistoryIndex(-1);
+                }}
                 onKeyDown={handleKeyDown}
                 onCompositionStart={onCompositionStart}
                 onCompositionEnd={onCompositionEnd}
@@ -309,13 +476,44 @@ export function AIChatContent({
 const UserMessage = memo(function UserMessage({ msg }: { msg: ChatMessage }) {
   const compactCtx = useCompact();
   const maxWidthClass = compactCtx ? "max-w-[95%]" : "max-w-[85%]";
+  const { t } = useTranslation();
+
+  // 用户消息直接复制展示文本，避免额外转换造成内容偏差。
+  const handleCopy = useCallback(() => {
+    void copyMessageText(msg.content, t("ai.copied", "已复制到剪贴板"));
+  }, [msg.content, t]);
+
+  // 右键复制时优先取当前选中文本，没有选区再回退到整条消息。
+  const handleContextCopy = useCallback(() => {
+    const selectedText = window.getSelection?.()?.toString().trim() ?? "";
+    const copyText = selectedText && msg.content.includes(selectedText) ? selectedText : msg.content;
+    void copyMessageText(copyText, t("ai.copied", "已复制到剪贴板"));
+  }, [msg.content, t]);
   return (
-    <div className="flex flex-col items-end gap-1.5">
+    <div className="flex flex-col items-end gap-1.5 group/user">
       <span className="text-xs font-semibold text-muted-foreground tracking-wide">You</span>
-      <div
-        className={`inline-block rounded-xl rounded-br-sm bg-primary px-3.5 py-2.5 text-primary-foreground ${maxWidthClass} text-left shadow-sm break-words`}
-      >
-        {msg.content}
+      <div className={`flex items-start justify-end gap-2 ${maxWidthClass}`}>
+        <button
+          className="mt-1 text-muted-foreground/70 transition-colors hover:text-foreground"
+          onClick={handleCopy}
+          title={t("action.copy", "复制")}
+          aria-label={t("action.copy", "复制")}
+        >
+          <Copy className="h-3.5 w-3.5" />
+        </button>
+
+        <ContextMenu>
+          <ContextMenuTrigger>
+            <div
+              className={`inline-block rounded-xl rounded-br-sm bg-primary px-3.5 py-2.5 text-primary-foreground text-left shadow-sm break-words ${userMessageSelectionClass}`}
+            >
+              {msg.content}
+            </div>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem onClick={handleContextCopy}>{t("action.copy", "复制")}</ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
       </div>
     </div>
   );
@@ -392,7 +590,9 @@ const AssistantMessage = memo(function AssistantMessage({
   return (
     <div className="flex flex-col items-start gap-1.5 group/assistant">
       <span className="text-xs font-semibold text-primary tracking-wide">Assistant</span>
-      <div className="rounded-xl rounded-bl-sm bg-muted px-3.5 py-2.5 max-w-[95%] min-w-0 overflow-hidden break-words prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-pre:my-1 prose-pre:overflow-x-auto shadow-sm">
+      <div
+        className={`rounded-xl rounded-bl-sm bg-muted px-3.5 py-2.5 max-w-[95%] min-w-0 overflow-hidden break-words prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-pre:my-1 prose-pre:overflow-x-auto shadow-sm ${messageSelectionClass}`}
+      >
         <Markdown remarkPlugins={mdRemarkPlugins} rehypePlugins={mdRehypePlugins}>
           {msg.content}
         </Markdown>
@@ -422,7 +622,7 @@ const BubbleSegment = memo(function BubbleSegment({
   const maxWidthClass = compactCtx ? "max-w-full" : "max-w-[95%]";
   return (
     <div
-      className={`rounded-xl rounded-bl-sm bg-muted px-3.5 py-3 ${maxWidthClass} min-w-0 overflow-hidden shadow-sm space-y-2`}
+      className={`rounded-xl rounded-bl-sm bg-muted px-3.5 py-3 ${maxWidthClass} min-w-0 overflow-hidden shadow-sm space-y-2 ${messageSelectionClass}`}
     >
       {blocks.map((block, idx) =>
         block.type === "text" ? (

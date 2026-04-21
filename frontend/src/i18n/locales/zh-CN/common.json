@@ -580,6 +580,7 @@
     "chars": "字",
     "pendingMessages": "等待发送",
     "clearQueue": "清空",
+    "copied": "已复制到剪贴板",
     "regenerate": "重新生成",
     "regenerateTitle": "重新生成",
     "regenerateConfirm": "重新生成将删除此消息及之后的所有对话记录，确定要继续吗？",
