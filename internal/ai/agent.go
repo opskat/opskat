@@ -56,7 +56,7 @@ func (a *Agent) GetPolicyChecker() *CommandPolicyChecker {
 
 // Chat 发起对话，处理 tool 调用循环，通过回调流式返回内容
 // getPendingMessages 可选，用于在工具调用后、下一轮 LLM 调用前注入排队的用户消息
-func (a *Agent) Chat(ctx context.Context, messages []Message, onEvent func(StreamEvent), getPendingMessages func() []Message) error {
+func (a *Agent) Chat(ctx context.Context, messages []Message, onEvent func(StreamEvent), getPendingMessages func() []pendingMessage) error {
 	// 每次 Chat 创建独立 executor，结束后关闭其持有的资源（如缓存的 SSH 连接）
 	executor := a.newExecutor()
 	if closer, ok := executor.(io.Closer); ok {
@@ -184,12 +184,14 @@ func (a *Agent) Chat(ctx context.Context, messages []Message, onEvent func(Strea
 			})
 		}
 
-		// 工具执行完毕后，检查排队的用户消息并注入
+		// 工具执行完毕后，检查排队的用户消息并注入。
+		// queue_consumed 事件的 Content 必须是给前端展示的原始用户输入，
+		// 不能携带 RenderMentionContext 注入到 LLM 的 raw 上下文。
 		if getPendingMessages != nil {
 			if pending := getPendingMessages(); len(pending) > 0 {
-				for _, msg := range pending {
-					onEvent(StreamEvent{Type: "queue_consumed", Content: msg.Content})
-					messages = append(messages, msg)
+				for _, p := range pending {
+					onEvent(StreamEvent{Type: "queue_consumed", Content: p.displayContent})
+					messages = append(messages, p.msg)
 				}
 			}
 		}

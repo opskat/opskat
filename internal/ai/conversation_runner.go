@@ -38,6 +38,13 @@ var retryDelays = []time.Duration{
 	15 * time.Second,
 }
 
+// pendingMessage 排队的用户消息：msg 注入到 LLM 上下文，displayContent 用于通知前端展示。
+// 两者可不同 —— 例如带 @ 提及时，msg.Content 会附加 mention 上下文，displayContent 仍是原始用户输入。
+type pendingMessage struct {
+	msg            Message
+	displayContent string
+}
+
 // ConversationRunner 管理单个 AI 会话的生命周期（启动、停止、重试）
 type ConversationRunner struct {
 	agent       *Agent
@@ -46,7 +53,7 @@ type ConversationRunner struct {
 	retry       int
 	done        chan struct{}
 	mu          sync.Mutex
-	pendingMsgs []Message
+	pendingMsgs []pendingMessage
 }
 
 // NewConversationRunner 创建新的 runner
@@ -102,15 +109,19 @@ func (r *ConversationRunner) Stop() {
 }
 
 // QueueMessage 向正在运行的会话追加一条用户消息，
-// 会在下一次工具调用结束后、下一轮 LLM 调用前被消费
-func (r *ConversationRunner) QueueMessage(msg Message) {
+// 会在下一次工具调用结束后、下一轮 LLM 调用前被消费。
+// displayContent 是给前端展示的原始内容；为空时回退到 msg.Content。
+func (r *ConversationRunner) QueueMessage(displayContent string, msg Message) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.pendingMsgs = append(r.pendingMsgs, msg)
+	if displayContent == "" {
+		displayContent = msg.Content
+	}
+	r.pendingMsgs = append(r.pendingMsgs, pendingMessage{msg: msg, displayContent: displayContent})
 }
 
 // drainPendingMessages 取出并清空所有待处理消息
-func (r *ConversationRunner) drainPendingMessages() []Message {
+func (r *ConversationRunner) drainPendingMessages() []pendingMessage {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if len(r.pendingMsgs) == 0 {
@@ -126,6 +137,9 @@ func (r *ConversationRunner) run(ctx context.Context, messages []Message, onEven
 		r.mu.Lock()
 		r.state = RunnerIdle
 		r.cancel = nil
+		// 清空残留的排队消息：本轮 Chat 已结束，未消费的队列归前端 drainQueue 重新发送，
+		// 否则下一次 Start 复用同一个 runner 时会被误当作新一轮的 mid-cycle 消息再次注入。
+		r.pendingMsgs = nil
 		r.mu.Unlock()
 		close(r.done)
 	}()

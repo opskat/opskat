@@ -300,7 +300,7 @@ func (a *App) QueueAIMessage(convID int64, content string, mentions []ai.Mention
 	if mentionCtx := ai.RenderMentionContext(mentions); mentionCtx != "" {
 		body = mentionCtx + "\n\n" + content
 	}
-	runner.QueueMessage(ai.Message{
+	runner.QueueMessage(content, ai.Message{
 		Role:    ai.RoleUser,
 		Content: body,
 	})
