@@ -36,6 +36,8 @@ import { AISetupWizard } from "@/components/ai/AISetupWizard";
 // 常量化 Markdown 插件数组，避免每次渲染创建新引用导致 Markdown 重解析
 const mdRemarkPlugins = [remarkGfm];
 const mdRehypePlugins = [rehypeSanitize];
+// 统一助手消息选中态样式，避免不同气泡的选区反馈不一致。
+const messageSelectionClass = "select-text selection:bg-primary/25 selection:text-foreground";
 
 // 稳定引用的默认值，避免 zustand selector 每次返回新对象导致无限渲染
 const EMPTY_MESSAGES: ChatMessage[] = [];
@@ -105,6 +107,10 @@ export function AIChatContent({
     conversationId != null ? s.conversationStreaming[conversationId] || DEFAULT_STREAMING : DEFAULT_STREAMING
   );
   const { sending, pendingQueue } = streaming;
+  const userMessageHistory = [...messages]
+    .filter((msg) => msg.role === "user" && msg.content.trim())
+    .map((msg) => msg.content)
+    .reverse();
 
   const [regenerateTarget, setRegenerateTarget] = useState<number | null>(null);
   const [empty, setEmpty] = useState(true);
@@ -238,6 +244,7 @@ export function AIChatContent({
                 onSubmit={handleSend}
                 onEmptyChange={setEmpty}
                 sendOnEnter={sendOnEnter}
+                userMessageHistory={userMessageHistory}
                 placeholder={t("ai.sendPlaceholder")}
               />
               <div className="flex items-center justify-between px-3 pb-2">
@@ -361,7 +368,9 @@ const AssistantMessage = memo(function AssistantMessage({
   return (
     <div className="flex flex-col items-start gap-1.5 group/assistant">
       <span className="text-xs font-semibold text-primary tracking-wide">Assistant</span>
-      <div className="rounded-xl rounded-bl-sm bg-muted px-3.5 py-2.5 max-w-[95%] min-w-0 overflow-hidden break-words prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-pre:my-1 prose-pre:overflow-x-auto shadow-sm">
+      <div
+        className={`rounded-xl rounded-bl-sm bg-muted px-3.5 py-2.5 max-w-[95%] min-w-0 overflow-hidden break-words prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-pre:my-1 prose-pre:overflow-x-auto shadow-sm ${messageSelectionClass}`}
+      >
         <Markdown remarkPlugins={mdRemarkPlugins} rehypePlugins={mdRehypePlugins}>
           {msg.content}
         </Markdown>
@@ -391,7 +400,7 @@ const BubbleSegment = memo(function BubbleSegment({
   const maxWidthClass = compactCtx ? "max-w-full" : "max-w-[95%]";
   return (
     <div
-      className={`rounded-xl rounded-bl-sm bg-muted px-3.5 py-3 ${maxWidthClass} min-w-0 overflow-hidden shadow-sm space-y-2`}
+      className={`rounded-xl rounded-bl-sm bg-muted px-3.5 py-3 ${maxWidthClass} min-w-0 overflow-hidden shadow-sm space-y-2 ${messageSelectionClass}`}
     >
       {blocks.map((block, idx) =>
         block.type === "text" ? (
