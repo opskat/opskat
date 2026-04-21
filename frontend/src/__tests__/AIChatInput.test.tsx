@@ -40,6 +40,25 @@ describe("AIChatInput", () => {
     expect(screen.getByRole("option").textContent).toContain("prod-db");
   });
 
+  it("提及弹窗激活时 Enter 选中候选项而不触发发送", async () => {
+    const onSubmit = vi.fn();
+    render(<AIChatInput onSubmit={onSubmit} sendOnEnter={true} />);
+    const editor = screen.getByRole("textbox");
+    await userEvent.click(editor);
+    await userEvent.keyboard("@prod");
+    await waitFor(() => expect(screen.getByRole("listbox")).toBeInTheDocument());
+    await userEvent.keyboard("{Enter}");
+    // Enter 应被 suggestion 消费用于插入 mention，不应触发 onSubmit
+    expect(onSubmit).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+    // 再次 Enter 应正常发送，mention 已插入
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const [text, mentions] = onSubmit.mock.calls[0];
+    expect(text).toMatch(/@prod-db/);
+    expect(mentions).toEqual([expect.objectContaining({ assetId: 42, name: "prod-db" })]);
+  });
+
   it("选中 mention 后提交回调 mentions 包含 assetId", async () => {
     const onSubmit = vi.fn();
     const editorRef = { current: null as Editor | null };

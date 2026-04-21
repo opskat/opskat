@@ -77,6 +77,9 @@ export const AIChatInput = forwardRef<AIChatInputHandle, AIChatInputProps>(funct
   }, [onEmptyChange]);
 
   const triggerSubmitRef = useRef<() => void>(() => {});
+  // @ 提及弹窗是否处于激活状态。ProseMirror 会先调用 editorProps.handleKeyDown
+  // 再分发给插件，所以需要在此处主动让路，避免 Enter 直接触发发送。
+  const mentionActiveRef = useRef(false);
 
   const editor = useEditor({
     extensions: [
@@ -105,6 +108,7 @@ export const AIChatInput = forwardRef<AIChatInputHandle, AIChatInputProps>(funct
             });
             return {
               onStart: (props: SuggestionProps<MentionItem>) => {
+                mentionActiveRef.current = true;
                 component = new ReactRenderer(MentionList, {
                   props: makeProps(props),
                   editor: props.editor,
@@ -134,6 +138,7 @@ export const AIChatInput = forwardRef<AIChatInputHandle, AIChatInputProps>(funct
                 return component?.ref?.onKeyDown(props) || false;
               },
               onExit: () => {
+                mentionActiveRef.current = false;
                 popup[0]?.destroy();
                 component?.destroy();
               },
@@ -151,6 +156,10 @@ export const AIChatInput = forwardRef<AIChatInputHandle, AIChatInputProps>(funct
         const shouldSendOnEnter = sendOnEnterRef.current;
         const isEnter = event.key === "Enter";
         const mod = event.ctrlKey || event.metaKey;
+        // 提及弹窗激活时，把 Enter 让给 suggestion 插件用于选中候选项
+        if (isEnter && mentionActiveRef.current) {
+          return false;
+        }
         if (isEnter && shouldSendOnEnter && !event.shiftKey && !mod) {
           event.preventDefault();
           triggerSubmitRef.current();
