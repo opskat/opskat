@@ -1,12 +1,13 @@
 import { useAssetStore } from "@/stores/assetStore";
 import { useTabStore, type InfoTabMeta } from "@/stores/tabStore";
 import { toast } from "sonner";
+import i18n from "../i18n";
 
 /** 打开资产详情 info tab；资产已删除时 toast 提示。 */
 export function openAssetInfoTab(assetId: number): void {
   const asset = useAssetStore.getState().assets.find((a) => a.ID === assetId);
   if (!asset) {
-    toast.error("资产已删除");
+    toast.error(i18n.t("common.mentionAssetDeleted"));
     return;
   }
   const tabStore = useTabStore.getState();

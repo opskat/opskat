@@ -1,5 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, vi } from "vitest";
+
+vi.mock("../i18n", () => ({
+  default: { t: (key: string, fallback?: string) => fallback || key },
+}));
+
 import { openAssetInfoTab } from "@/lib/openAssetInfoTab";
 import { useAssetStore } from "@/stores/assetStore";
 import { useTabStore } from "@/stores/tabStore";
@@ -33,7 +38,7 @@ describe("openAssetInfoTab", () => {
 
   it("资产不存在时 toast 提示不开 tab", () => {
     openAssetInfoTab(999);
-    expect(toast.error).toHaveBeenCalledWith("资产已删除");
+    expect(toast.error).toHaveBeenCalledWith("common.mentionAssetDeleted");
     expect(useTabStore.getState().tabs).toHaveLength(0);
   });
 });

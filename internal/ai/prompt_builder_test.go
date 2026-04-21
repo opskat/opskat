@@ -21,7 +21,7 @@ func TestBuildMentionContext(t *testing.T) {
 				},
 			})
 			got := b.buildMentionContext()
-			So(got, ShouldContainSubstring, "用户本次消息引用的资产")
+			So(got, ShouldContainSubstring, "Assets referenced in the user's message")
 			So(got, ShouldContainSubstring, "@prod-db")
 			So(got, ShouldContainSubstring, "ID=42")
 			So(got, ShouldContainSubstring, "type=mysql")
@@ -68,5 +68,23 @@ func TestBuildIncludesMentionContext(t *testing.T) {
 		got := b.Build()
 		So(got, ShouldContainSubstring, "@srv")
 		So(got, ShouldContainSubstring, "ID=1")
+	})
+}
+
+func TestRenderMentionContext(t *testing.T) {
+	Convey("RenderMentionContext", t, func() {
+		Convey("空切片返回空串", func() {
+			So(RenderMentionContext(nil), ShouldEqual, "")
+			So(RenderMentionContext([]MentionedAsset{}), ShouldEqual, "")
+		})
+		Convey("非空切片与 buildMentionContext 输出一致", func() {
+			mentions := []MentionedAsset{
+				{AssetID: 7, Name: "srv", Type: "ssh", Host: "h", GroupPath: "prod"},
+			}
+			direct := RenderMentionContext(mentions)
+			viaBuilder := NewPromptBuilder("en", AIContext{MentionedAssets: mentions}).buildMentionContext()
+			So(direct, ShouldEqual, viaBuilder)
+			So(direct, ShouldContainSubstring, "Assets referenced in the user's message")
+		})
 	})
 }

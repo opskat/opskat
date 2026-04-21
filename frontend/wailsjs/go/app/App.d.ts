@@ -226,7 +226,7 @@ export function PreviewSSHConfig():Promise<import_svc.PreviewResult>;
 
 export function PreviewTabbyConfig():Promise<import_svc.PreviewResult>;
 
-export function QueueAIMessage(arg1:number,arg2:string):Promise<void>;
+export function QueueAIMessage(arg1:number,arg2:string,arg3:Array<ai.MentionedAsset>):Promise<void>;
 
 export function ReloadExtensions():Promise<void>;
 

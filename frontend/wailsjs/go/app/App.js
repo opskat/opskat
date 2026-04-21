@@ -418,8 +418,8 @@ export function PreviewTabbyConfig() {
   return window['go']['app']['App']['PreviewTabbyConfig']();
 }
 
-export function QueueAIMessage(arg1, arg2) {
-  return window['go']['app']['App']['QueueAIMessage'](arg1, arg2);
+export function QueueAIMessage(arg1, arg2, arg3) {
+  return window['go']['app']['App']['QueueAIMessage'](arg1, arg2, arg3);
 }
 
 export function ReloadExtensions() {

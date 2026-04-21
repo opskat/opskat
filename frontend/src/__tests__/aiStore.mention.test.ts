@@ -94,4 +94,38 @@ describe("aiStore mentions", () => {
     expect(q[0]).toMatchObject({ text: "queued @prod-db" });
     expect(q[0].mentions).toEqual([{ assetId: 42, name: "prod-db", start: 7, end: 15 }]);
   });
+
+  it("排队时 QueueAIMessage 带上已解析的 MentionedAssets", () => {
+    useAIStore.setState((s) => ({
+      conversationStreaming: {
+        ...s.conversationStreaming,
+        1: { sending: true, pendingQueue: [] },
+      },
+    }));
+    useAIStore.getState().sendToTab("t1", "queued @prod-db", [{ assetId: 42, name: "prod-db", start: 7, end: 15 }]);
+    expect(QueueAIMessage).toHaveBeenCalledTimes(1);
+    const [convId, text, mentioned] = vi.mocked(QueueAIMessage).mock.calls[0] as any[];
+    expect(convId).toBe(1);
+    expect(text).toBe("queued @prod-db");
+    expect(mentioned).toHaveLength(1);
+    expect(mentioned[0]).toMatchObject({
+      assetId: 42,
+      name: "prod-db",
+      type: "mysql",
+      host: "10.0.0.5",
+      groupPath: "数据库",
+    });
+  });
+
+  it("排队时资产已删除则 QueueAIMessage 的 mentions 为空数组", () => {
+    useAIStore.setState((s) => ({
+      conversationStreaming: {
+        ...s.conversationStreaming,
+        1: { sending: true, pendingQueue: [] },
+      },
+    }));
+    useAIStore.getState().sendToTab("t1", "queued @ghost", [{ assetId: 999, name: "ghost", start: 7, end: 13 }]);
+    const [, , mentioned] = vi.mocked(QueueAIMessage).mock.calls[0] as any[];
+    expect(mentioned).toEqual([]);
+  });
 });

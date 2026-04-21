@@ -686,6 +686,38 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
   }
 }
 
+// 将一组 MentionRef 解析为后端使用的 MentionedAsset（查 assetStore，按 assetId 去重，资产已删除跳过）
+function resolveMentionedAssets(mentions: MentionRef[] | undefined): ai.MentionedAsset[] {
+  if (!mentions || mentions.length === 0) return [];
+  const assetStore = useAssetStore.getState();
+  const groupPathMap = buildGroupPathMap(assetStore.groups);
+  const seen = new Set<number>();
+  const out: ai.MentionedAsset[] = [];
+  for (const mr of mentions) {
+    if (seen.has(mr.assetId)) continue;
+    seen.add(mr.assetId);
+    const asset = assetStore.assets.find((a) => a.ID === mr.assetId);
+    if (!asset) continue;
+    let host = "";
+    try {
+      const cfg = JSON.parse(asset.Config || "{}");
+      host = cfg.host || "";
+    } catch {
+      /* ignore */
+    }
+    out.push(
+      new ai.MentionedAsset({
+        assetId: asset.ID,
+        name: asset.Name,
+        type: asset.Type,
+        host,
+        groupPath: asset.GroupID ? groupPathMap.get(asset.GroupID) || "" : "",
+      })
+    );
+  }
+  return out;
+}
+
 // 核心发送：完全基于 convId，共享给 sendToTab / sendFromSidebar / regenerate
 async function _sendForConversation(convId: number, content: string, mentions?: MentionRef[]) {
   const state = useAIStore.getState();
@@ -697,7 +729,7 @@ async function _sendForConversation(convId: number, content: string, mentions?: 
       updateConversation(convId, {
         pendingQueue: [...streaming.pendingQueue, { text: content.trim(), mentions }],
       });
-      QueueAIMessage(convId, content.trim()).catch(() => {});
+      QueueAIMessage(convId, content.trim(), resolveMentionedAssets(mentions)).catch(() => {});
     }
     return;
   }
@@ -769,36 +801,13 @@ async function _sendForConversation(convId: number, content: string, mentions?: 
         })
     );
 
-  // 收集所有 user 消息的 mentions，查 assetStore 组装 MentionedAssets（按 assetId 去重）
-  const assetStore = useAssetStore.getState();
-  const groupPathMap = buildGroupPathMap(assetStore.groups);
-  const mentionedAssets: ai.MentionedAsset[] = [];
-  const seenIds = new Set<number>();
+  // 收集所有 user 消息的 mentions（按 assetId 去重、资产已删除跳过）
+  const allMentions: MentionRef[] = [];
   for (const m of newMessages) {
     if (m.role !== "user" || !m.mentions) continue;
-    for (const mr of m.mentions) {
-      if (seenIds.has(mr.assetId)) continue;
-      seenIds.add(mr.assetId);
-      const asset = assetStore.assets.find((a) => a.ID === mr.assetId);
-      if (!asset) continue; // 资产已删除跳过
-      let host = "";
-      try {
-        const cfg = JSON.parse(asset.Config || "{}");
-        host = cfg.host || "";
-      } catch {
-        /* ignore */
-      }
-      mentionedAssets.push(
-        new ai.MentionedAsset({
-          assetId: asset.ID,
-          name: asset.Name,
-          type: asset.Type,
-          host,
-          groupPath: asset.GroupID ? groupPathMap.get(asset.GroupID) || "" : "",
-        })
-      );
-    }
+    allMentions.push(...m.mentions);
   }
+  const mentionedAssets = resolveMentionedAssets(allMentions);
 
   const aiContext = new ai.AIContext({ openTabs, mentionedAssets });
 

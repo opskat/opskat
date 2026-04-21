@@ -287,16 +287,22 @@ func (a *App) getOrCreateRunner(convID int64) *ai.ConversationRunner {
 }
 
 // QueueAIMessage 在生成过程中追加用户消息到队列，
-// 会在下一次工具调用结束后被注入到对话上下文
-func (a *App) QueueAIMessage(convID int64, content string) error {
+// 会在下一次工具调用结束后被注入到对话上下文。
+// 若消息带 @ 提及的资产，将资产上下文渲染后 prepend 到消息正文，
+// 以便 agent 在后续轮次看到 mention 信息（系统提示在 Start 时已定型，无法再次重建）。
+func (a *App) QueueAIMessage(convID int64, content string, mentions []ai.MentionedAsset) error {
 	v, ok := a.runners.Load(convID)
 	if !ok {
 		return fmt.Errorf("会话 %d 没有正在运行的生成", convID)
 	}
 	runner := v.(*ai.ConversationRunner)
+	body := content
+	if mentionCtx := ai.RenderMentionContext(mentions); mentionCtx != "" {
+		body = mentionCtx + "\n\n" + content
+	}
 	runner.QueueMessage(ai.Message{
 		Role:    ai.RoleUser,
-		Content: content,
+		Content: body,
 	})
 	return nil
 }

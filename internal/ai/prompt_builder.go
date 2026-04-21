@@ -165,12 +165,18 @@ func (b *PromptBuilder) buildUserDenialGuidance() string {
 }
 
 func (b *PromptBuilder) buildMentionContext() string {
-	if len(b.context.MentionedAssets) == 0 {
+	return RenderMentionContext(b.context.MentionedAssets)
+}
+
+// RenderMentionContext 渲染一组被 @ 提及的资产为 prompt 片段。
+// 供 PromptBuilder 与 QueueAIMessage（生成过程中追加消息）复用。
+func RenderMentionContext(mentions []MentionedAsset) string {
+	if len(mentions) == 0 {
 		return ""
 	}
 	var lines []string
-	lines = append(lines, "# 用户本次消息引用的资产")
-	for _, a := range b.context.MentionedAssets {
+	lines = append(lines, "# Assets referenced in the user's message")
+	for _, a := range mentions {
 		segs := []string{
 			fmt.Sprintf("ID=%d", a.AssetID),
 			fmt.Sprintf("type=%s", a.Type),
@@ -182,6 +188,6 @@ func (b *PromptBuilder) buildMentionContext() string {
 		lines = append(lines, fmt.Sprintf("- @%s (%s)", a.Name, strings.Join(segs, ", ")))
 	}
 	lines = append(lines, "")
-	lines = append(lines, "当用户用 @资产名 引用时，优先使用上述资产信息，不要按名字猜测。")
+	lines = append(lines, "When the user refers to an asset by @name, use the information above — do not guess by name alone.")
 	return strings.Join(lines, "\n")
 }

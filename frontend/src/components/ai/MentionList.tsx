@@ -28,6 +28,7 @@ function iconForType(type: string) {
     case "mysql":
     case "postgresql":
     case "mongo":
+    case "mongodb":
       return <Database className="h-3.5 w-3.5 text-muted-foreground" />;
     case "redis":
       return <HardDrive className="h-3.5 w-3.5 text-muted-foreground" />;
