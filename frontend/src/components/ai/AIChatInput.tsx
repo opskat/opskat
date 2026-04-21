@@ -21,6 +21,7 @@ export interface AIChatInputProps {
   onSubmit: (text: string, mentions: MentionRef[]) => void;
   onEmptyChange?: (empty: boolean) => void;
   sendOnEnter: boolean;
+  userMessageHistory?: string[];
   placeholder?: string;
   disabled?: boolean;
   /** 仅用于测试：暴露 TipTap editor 以便测试代码直接操作富文本。 */
@@ -32,6 +33,17 @@ interface ProseMirrorLikeNode {
   text?: string;
   attrs: Record<string, unknown>;
   descendants: (fn: (node: ProseMirrorLikeNode) => boolean | void) => void;
+}
+
+type InputHistoryDirection = "up" | "down";
+
+interface InputHistoryNavigationOptions {
+  direction: InputHistoryDirection;
+  currentText: string;
+  historyIndex: number;
+  userMessageHistory: string[];
+  canStartHistory: boolean;
+  canContinueHistory: boolean;
 }
 
 /** 从 TipTap doc 提取纯文本 + mention 引用。 */
@@ -58,13 +70,68 @@ function extractTextAndMentions(doc: ProseMirrorLikeNode): {
   return { text: text.replace(/\n+$/g, ""), mentions };
 }
 
+// 仅在首行首字符接管向上历史，避免影响富文本输入的原生光标移动。
+function shouldStartInputHistory(editor: Editor) {
+  const { selection } = editor.state;
+  return selection.empty && selection.from === 1;
+}
+
+// 进入历史浏览后，只要还是折叠光标就允许继续用上下键切换。
+function shouldContinueInputHistory(editor: Editor) {
+  return editor.state.selection.empty;
+}
+
+// 统一计算上下键历史切换的目标内容，避免把判断分散在按键处理中。
+function getInputHistoryNavigationState({
+  direction,
+  currentText,
+  historyIndex,
+  userMessageHistory,
+  canStartHistory,
+  canContinueHistory,
+}: InputHistoryNavigationOptions) {
+  const currentHistoryMessage = historyIndex >= 0 ? userMessageHistory[historyIndex] : null;
+  const isBrowsingHistory = currentHistoryMessage != null && currentText === currentHistoryMessage;
+  const canNavigate = isBrowsingHistory ? canContinueHistory : canStartHistory;
+
+  if (!canNavigate) return null;
+  if (direction === "up" && userMessageHistory.length === 0) return null;
+  if (direction === "down" && (!isBrowsingHistory || historyIndex < 0)) return null;
+
+  const nextHistoryIndex =
+    direction === "up" ? Math.min(historyIndex + 1, userMessageHistory.length - 1) : historyIndex - 1;
+  const nextMessage = nextHistoryIndex >= 0 ? userMessageHistory[nextHistoryIndex] : "";
+
+  return { nextHistoryIndex, nextMessage };
+}
+
+// 把历史消息写回编辑器，并把光标定位到末尾，保证连续切换时体验稳定。
+function applyInputHistoryMessage(editor: Editor, nextMessage: string) {
+  const historyDoc = {
+    type: "doc",
+    content:
+      nextMessage.length > 0
+        ? nextMessage.split("\n").map((line) => ({
+            type: "paragraph",
+            content: line.length > 0 ? [{ type: "text", text: line }] : [],
+          }))
+        : [{ type: "paragraph" }],
+  };
+
+  editor.commands.setContent(historyDoc);
+  editor.commands.focus("end");
+}
+
 export const AIChatInput = forwardRef<AIChatInputHandle, AIChatInputProps>(function AIChatInput(
-  { onSubmit, onEmptyChange, sendOnEnter, placeholder, disabled, editorRef },
+  { onSubmit, onEmptyChange, sendOnEnter, userMessageHistory = [], placeholder, disabled, editorRef },
   ref
 ) {
   const submitRef = useRef(onSubmit);
   const sendOnEnterRef = useRef(sendOnEnter);
   const onEmptyChangeRef = useRef(onEmptyChange);
+  const historyRef = useRef(userMessageHistory);
+  const historyIndexRef = useRef(-1);
+  const applyingHistoryRef = useRef(false);
 
   useEffect(() => {
     submitRef.current = onSubmit;
@@ -75,6 +142,11 @@ export const AIChatInput = forwardRef<AIChatInputHandle, AIChatInputProps>(funct
   useEffect(() => {
     onEmptyChangeRef.current = onEmptyChange;
   }, [onEmptyChange]);
+  useEffect(() => {
+    // 历史列表变化（切换会话、新消息到达等）时复位浏览游标，避免旧 index 落到错位条目。
+    historyRef.current = userMessageHistory;
+    historyIndexRef.current = -1;
+  }, [userMessageHistory]);
 
   const triggerSubmitRef = useRef<() => void>(() => {});
   // @ 提及弹窗是否处于激活状态。ProseMirror 会先调用 editorProps.handleKeyDown
@@ -153,9 +225,39 @@ export const AIChatInput = forwardRef<AIChatInputHandle, AIChatInputProps>(funct
         role: "textbox",
       },
       handleKeyDown: (_view, event) => {
+        if (!editor) return false;
+
         const shouldSendOnEnter = sendOnEnterRef.current;
         const isEnter = event.key === "Enter";
         const mod = event.ctrlKey || event.metaKey;
+
+        // 在允许的光标位置接管上下键，统一处理用户消息历史切换。
+        if (
+          (event.key === "ArrowUp" || event.key === "ArrowDown") &&
+          !event.altKey &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.shiftKey
+        ) {
+          const { text: currentText } = extractTextAndMentions(editor.state.doc as unknown as ProseMirrorLikeNode);
+          const nextHistoryState = getInputHistoryNavigationState({
+            direction: event.key === "ArrowUp" ? "up" : "down",
+            currentText,
+            historyIndex: historyIndexRef.current,
+            userMessageHistory: historyRef.current,
+            canStartHistory: shouldStartInputHistory(editor),
+            canContinueHistory: shouldContinueInputHistory(editor),
+          });
+
+          if (nextHistoryState) {
+            event.preventDefault();
+            historyIndexRef.current = nextHistoryState.nextHistoryIndex;
+            applyingHistoryRef.current = true;
+            applyInputHistoryMessage(editor, nextHistoryState.nextMessage);
+            return true;
+          }
+        }
+
         // 提及弹窗激活时，把 Enter 让给 suggestion 插件用于选中候选项
         if (isEnter && mentionActiveRef.current) {
           return false;
@@ -174,6 +276,11 @@ export const AIChatInput = forwardRef<AIChatInputHandle, AIChatInputProps>(funct
       },
     },
     onUpdate: ({ editor: ed }) => {
+      if (applyingHistoryRef.current) {
+        applyingHistoryRef.current = false;
+      } else {
+        historyIndexRef.current = -1;
+      }
       onEmptyChangeRef.current?.(ed.isEmpty);
     },
     editable: !disabled,
@@ -194,6 +301,7 @@ export const AIChatInput = forwardRef<AIChatInputHandle, AIChatInputProps>(funct
       if (editor.isEmpty) return;
       const { text, mentions } = extractTextAndMentions(editor.state.doc as unknown as ProseMirrorLikeNode);
       if (!text.trim() && mentions.length === 0) return;
+      historyIndexRef.current = -1;
       submitRef.current(text, mentions);
       editor.commands.clearContent();
     };

@@ -59,6 +59,64 @@ describe("AIChatInput", () => {
     expect(mentions).toEqual([expect.objectContaining({ assetId: 42, name: "prod-db" })]);
   });
 
+  it("ArrowUp 在首字符位置接管：取最近一条用户消息", async () => {
+    const editorRef = { current: null as Editor | null };
+    const history = ["最新", "次新", "更早"];
+    render(<AIChatInput onSubmit={vi.fn()} sendOnEnter={true} editorRef={editorRef} userMessageHistory={history} />);
+    await waitFor(() => expect(editorRef.current).not.toBeNull());
+    const editor = screen.getByRole("textbox");
+    await userEvent.click(editor);
+    await userEvent.keyboard("{ArrowUp}");
+    await waitFor(() => expect(editorRef.current!.getText()).toBe("最新"));
+  });
+
+  it("重复 ArrowUp 逐步回溯更早的用户消息", async () => {
+    const editorRef = { current: null as Editor | null };
+    const history = ["最新", "次新", "更早"];
+    render(<AIChatInput onSubmit={vi.fn()} sendOnEnter={true} editorRef={editorRef} userMessageHistory={history} />);
+    await waitFor(() => expect(editorRef.current).not.toBeNull());
+    const editor = screen.getByRole("textbox");
+    await userEvent.click(editor);
+    await userEvent.keyboard("{ArrowUp}");
+    await waitFor(() => expect(editorRef.current!.getText()).toBe("最新"));
+    await userEvent.keyboard("{ArrowUp}");
+    await waitFor(() => expect(editorRef.current!.getText()).toBe("次新"));
+    await userEvent.keyboard("{ArrowUp}");
+    await waitFor(() => expect(editorRef.current!.getText()).toBe("更早"));
+    // 到达最老记录后再按 ArrowUp 应保持最老一条，不越界
+    await userEvent.keyboard("{ArrowUp}");
+    expect(editorRef.current!.getText()).toBe("更早");
+  });
+
+  it("ArrowDown 向前浏览，最终回到空输入", async () => {
+    const editorRef = { current: null as Editor | null };
+    const history = ["最新", "次新"];
+    render(<AIChatInput onSubmit={vi.fn()} sendOnEnter={true} editorRef={editorRef} userMessageHistory={history} />);
+    await waitFor(() => expect(editorRef.current).not.toBeNull());
+    const editor = screen.getByRole("textbox");
+    await userEvent.click(editor);
+    await userEvent.keyboard("{ArrowUp}{ArrowUp}");
+    await waitFor(() => expect(editorRef.current!.getText()).toBe("次新"));
+    await userEvent.keyboard("{ArrowDown}");
+    await waitFor(() => expect(editorRef.current!.getText()).toBe("最新"));
+    await userEvent.keyboard("{ArrowDown}");
+    await waitFor(() => expect(editorRef.current!.getText()).toBe(""));
+  });
+
+  it("光标不在首字符时 ArrowUp 不接管历史", async () => {
+    const editorRef = { current: null as Editor | null };
+    const history = ["history message"];
+    render(<AIChatInput onSubmit={vi.fn()} sendOnEnter={true} editorRef={editorRef} userMessageHistory={history} />);
+    await waitFor(() => expect(editorRef.current).not.toBeNull());
+    // 通过 editor API 写入文本并把光标放到末尾，避免 userEvent + contenteditable 的段落偏差影响断言
+    editorRef.current!.chain().focus().insertContent("typing").focus("end").run();
+    const textBefore = editorRef.current!.getText();
+    await userEvent.keyboard("{ArrowUp}");
+    // ArrowUp 不应替换为历史记录；文本保持不变即可证明拦截被跳过
+    expect(editorRef.current!.getText()).toBe(textBefore);
+    expect(editorRef.current!.getText()).not.toBe("history message");
+  });
+
   it("选中 mention 后提交回调 mentions 包含 assetId", async () => {
     const onSubmit = vi.fn();
     const editorRef = { current: null as Editor | null };
