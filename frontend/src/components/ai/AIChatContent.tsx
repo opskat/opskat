@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, memo, useCallback, createContext, useContext } from "react";
+import { useState, useRef, useEffect, useMemo, memo, useCallback, createContext, useContext } from "react";
 import { Loader2, CornerDownLeft, Square, RefreshCw, X, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import Markdown from "react-markdown";
@@ -107,10 +107,17 @@ export function AIChatContent({
     conversationId != null ? s.conversationStreaming[conversationId] || DEFAULT_STREAMING : DEFAULT_STREAMING
   );
   const { sending, pendingQueue } = streaming;
-  const userMessageHistory = [...messages]
-    .filter((msg) => msg.role === "user" && msg.content.trim())
-    .map((msg) => msg.content)
-    .reverse();
+  // 从最新到最旧收集非空用户消息，用 useMemo 避免无关渲染也构造新数组。
+  const userMessageHistory = useMemo(() => {
+    const history: string[] = [];
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg.role === "user" && msg.content.trim()) {
+        history.push(msg.content);
+      }
+    }
+    return history;
+  }, [messages]);
 
   const [regenerateTarget, setRegenerateTarget] = useState<number | null>(null);
   const [empty, setEmpty] = useState(true);

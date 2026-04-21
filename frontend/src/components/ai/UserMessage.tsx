@@ -32,11 +32,15 @@ function buildSegments(content: string, mentions: MentionRef[] | undefined): Seg
   return segs;
 }
 
-// 统一复制提示，保证按钮复制和右键复制的反馈一致。
-async function copyUserMessageText(text: string, copiedText: string) {
+// 统一复制提示，保证按钮复制和右键复制的反馈一致；剪贴板不可用时给出错误提示，避免 unhandled rejection。
+async function copyUserMessageText(text: string, copiedText: string, failedText: string) {
   if (!text.trim()) return;
-  await navigator.clipboard.writeText(text);
-  toast.success(copiedText, { duration: 1500, position: "top-center" });
+  try {
+    await navigator.clipboard.writeText(text);
+    toast.success(copiedText, { duration: 1500, position: "top-center" });
+  } catch {
+    toast.error(failedText, { duration: 2000, position: "top-center" });
+  }
 }
 
 export const UserMessage = memo(function UserMessage({ msg }: { msg: ChatMessage }) {
@@ -47,14 +51,14 @@ export const UserMessage = memo(function UserMessage({ msg }: { msg: ChatMessage
 
   // 用户消息复制默认取整条内容，减少额外转换带来的偏差。
   const handleCopy = useCallback(() => {
-    void copyUserMessageText(msg.content, t("ai.copied", "已复制到剪贴板"));
+    void copyUserMessageText(msg.content, t("ai.copied", "已复制到剪贴板"), t("ai.copyFailed", "复制失败"));
   }, [msg.content, t]);
 
   // 右键复制优先保留当前选区，没有选区时回退到整条消息。
   const handleContextCopy = useCallback(() => {
     const selectedText = window.getSelection?.()?.toString().trim() ?? "";
     const copyText = selectedText && msg.content.includes(selectedText) ? selectedText : msg.content;
-    void copyUserMessageText(copyText, t("ai.copied", "已复制到剪贴板"));
+    void copyUserMessageText(copyText, t("ai.copied", "已复制到剪贴板"), t("ai.copyFailed", "复制失败"));
   }, [msg.content, t]);
 
   return (

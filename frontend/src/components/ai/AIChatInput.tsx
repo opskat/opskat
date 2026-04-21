@@ -143,7 +143,9 @@ export const AIChatInput = forwardRef<AIChatInputHandle, AIChatInputProps>(funct
     onEmptyChangeRef.current = onEmptyChange;
   }, [onEmptyChange]);
   useEffect(() => {
+    // 历史列表变化（切换会话、新消息到达等）时复位浏览游标，避免旧 index 落到错位条目。
     historyRef.current = userMessageHistory;
+    historyIndexRef.current = -1;
   }, [userMessageHistory]);
 
   const triggerSubmitRef = useRef<() => void>(() => {});
