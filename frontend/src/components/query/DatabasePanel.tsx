@@ -96,8 +96,7 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
                 key={tab.id}
                 className="absolute inset-0"
                 style={{
-                  visibility: isActive ? "visible" : "hidden",
-                  pointerEvents: isActive ? "auto" : "none",
+                  display: isActive ? "block" : "none",
                 }}
               >
                 {tab.type === "table" ? (
