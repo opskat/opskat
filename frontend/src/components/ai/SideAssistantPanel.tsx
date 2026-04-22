@@ -55,6 +55,11 @@ export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelPr
       if (!target) return;
       if (target.closest("[data-history-dropdown]")) return;
       if (target.closest("[data-history-trigger]")) return;
+      // 忽略从下拉中弹出的 Popover / Dialog —— 它们通过 portal 渲染到 body，
+      // 否则会被判为"外部点击"：mousedown 关闭下拉 → 确认按钮随下拉卸载 →
+      // click 事件不派发，删除永远触发不了。
+      if (target.closest('[data-slot^="popover"]')) return;
+      if (target.closest('[data-slot^="alert-dialog"]')) return;
       setHistoryOpen(false);
     };
     document.addEventListener("mousedown", handler);

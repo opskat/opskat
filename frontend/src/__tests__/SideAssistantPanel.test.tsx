@@ -4,7 +4,12 @@ import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/re
 import { useAIStore } from "../stores/aiStore";
 import { useTabStore } from "../stores/tabStore";
 import { SideAssistantPanel } from "../components/ai/SideAssistantPanel";
-import { CreateConversation, ListConversations, LoadConversationMessages } from "../../wailsjs/go/app/App";
+import {
+  CreateConversation,
+  ListConversations,
+  LoadConversationMessages,
+  DeleteConversation,
+} from "../../wailsjs/go/app/App";
 
 // Note: setup.ts mocks react-i18next so `t(key)` returns the raw key.
 // So button titles become the i18n keys themselves (e.g. "ai.sidebar.newChat").
@@ -125,6 +130,32 @@ describe("SideAssistantPanel", () => {
     // mousedown inside the popup must not close it (the search input/list area).
     fireEvent.mouseDown(item);
     expect(screen.getByText("Conv A")).toBeInTheDocument();
+  });
+
+  it("confirming delete in the history popup triggers DeleteConversation (dropdown close must not preempt portal click)", async () => {
+    vi.mocked(DeleteConversation).mockResolvedValue(undefined);
+    useAIStore.setState({
+      conversations: [{ ID: 1, Title: "Conv A", Updatetime: Math.floor(Date.now() / 1000) } as any],
+    });
+    render(<SideAssistantPanel collapsed={false} onToggle={() => {}} />);
+
+    fireEvent.click(screen.getByTitle("ai.sidebar.history"));
+    const item = await screen.findByText("Conv A");
+
+    // trash button sits in the same row as the conversation title (ghost icon button).
+    const row = item.closest("div")!.parentElement!;
+    const trashBtn = row.querySelector("button")!;
+    fireEvent.click(trashBtn);
+
+    // Delete confirmation is a Popover portaled to body. mousedown on the Confirm
+    // button must not cause the panel's click-outside handler to unmount the dropdown
+    // (and with it, the popover) before click fires.
+    const confirmBtn = await screen.findByText("action.delete");
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(DeleteConversation).toHaveBeenCalledWith(1);
+    });
   });
 
   it("clicking promote button promotes sidebar conversation and clears sidebar binding", async () => {
