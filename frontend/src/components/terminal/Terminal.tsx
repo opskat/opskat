@@ -237,7 +237,13 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
         }}
         searchAddon={searchAddonRef.current}
       />
-      <ContextMenu>
+      <ContextMenu
+        onOpenChange={(open) => {
+          if (!open) {
+            requestAnimationFrame(() => termRef.current?.focus());
+          }
+        }}
+      >
         <ContextMenuTrigger className="flex-1 min-h-0">
           <div ref={containerRef} className="h-full w-full" style={{ padding: "4px" }} />
         </ContextMenuTrigger>
