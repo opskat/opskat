@@ -72,6 +72,7 @@ type Message struct {
 	ToolCallID     string `gorm:"column:tool_call_id;type:varchar(100)"`
 	Blocks         string `gorm:"column:blocks;type:text"`
 	Mentions       string `gorm:"column:mentions;type:text"`
+	TokenUsage     string `gorm:"column:token_usage;type:text"` // JSON: TokenUsage，仅 assistant 消息可能有
 	SortOrder      int    `gorm:"column:sort_order;default:0"`
 	Createtime     int64  `gorm:"column:createtime"`
 }
@@ -113,6 +114,40 @@ func (m *Message) SetBlocks(blocks []ContentBlock) error {
 		return err
 	}
 	m.Blocks = string(data)
+	return nil
+}
+
+// TokenUsage 一条 assistant 消息累计消耗的 token 数
+type TokenUsage struct {
+	InputTokens         int `json:"inputTokens,omitempty"`
+	OutputTokens        int `json:"outputTokens,omitempty"`
+	CacheCreationTokens int `json:"cacheCreationTokens,omitempty"`
+	CacheReadTokens     int `json:"cacheReadTokens,omitempty"`
+}
+
+// GetTokenUsage 反序列化 token_usage 字段
+func (m *Message) GetTokenUsage() (*TokenUsage, error) {
+	if m.TokenUsage == "" {
+		return nil, nil
+	}
+	var u TokenUsage
+	if err := json.Unmarshal([]byte(m.TokenUsage), &u); err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// SetTokenUsage 序列化 token_usage 字段；nil 或全零值视为清空
+func (m *Message) SetTokenUsage(u *TokenUsage) error {
+	if u == nil || (u.InputTokens == 0 && u.OutputTokens == 0 && u.CacheCreationTokens == 0 && u.CacheReadTokens == 0) {
+		m.TokenUsage = ""
+		return nil
+	}
+	data, err := json.Marshal(u)
+	if err != nil {
+		return err
+	}
+	m.TokenUsage = string(data)
 	return nil
 }
 

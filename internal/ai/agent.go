@@ -107,6 +107,10 @@ func (a *Agent) Chat(ctx context.Context, messages []Message, onEvent func(Strea
 				onEvent(event)
 			case "tool_start", "tool_result", "approval_request", "approval_result":
 				onEvent(event)
+			case "usage":
+				// 单次 Chat 调用可能在 agent 内部触发多轮 provider 调用（tool loop），
+				// 每轮的 usage 都向前端转发，由前端累加到当前 assistant 消息。
+				onEvent(event)
 			case "tool_call":
 				toolCalls = event.ToolCalls
 				hasToolCall = true

@@ -1,6 +1,18 @@
 import { useState, useRef, useEffect, useMemo, memo, useCallback, createContext, useContext } from "react";
-import { Loader2, CornerDownLeft, Square, RefreshCw, X, Trash2 } from "lucide-react";
+import {
+  Loader2,
+  CornerDownLeft,
+  Square,
+  RefreshCw,
+  X,
+  Trash2,
+  Copy,
+  ArrowUp,
+  ArrowDown,
+  Database,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import Markdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
@@ -15,6 +27,10 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
 } from "@opskat/ui";
 import {
   useAIStore,
@@ -23,6 +39,7 @@ import {
   type ContentBlock,
   type PendingQueueItem,
   type MentionRef,
+  type TokenUsage,
 } from "@/stores/aiStore";
 import { AIChatInput, type AIChatInputHandle } from "@/components/ai/AIChatInput";
 import { UserMessage } from "@/components/ai/UserMessage";
@@ -304,7 +321,84 @@ export function AIChatContent({
   );
 }
 
-const AssistantMessage = memo(function AssistantMessage({
+// 从 assistant 消息中提取纯文本内容供复制：优先取 block 内的 text 块，回退到 content。
+// 工具调用/思考/Agent/审批块不进入复制结果，避免把 JSON 和执行日志塞进剪贴板。
+function extractAssistantText(msg: ChatMessage): string {
+  if (msg.blocks && msg.blocks.length > 0) {
+    const parts: string[] = [];
+    for (const b of msg.blocks) {
+      if (b.type === "text" && b.content) parts.push(b.content);
+    }
+    if (parts.length > 0) return parts.join("\n\n").trim();
+  }
+  return (msg.content || "").trim();
+}
+
+// 人性化 token 数字：<1k 直显；<10k 保留 1 位小数；更大直接用 k/M 后缀。
+function formatTokenCount(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 10_000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+  if (n < 1_000_000) return Math.round(n / 1000) + "k";
+  return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
+}
+
+const TokenUsageBadge = memo(function TokenUsageBadge({ usage }: { usage: TokenUsage }) {
+  const { t } = useTranslation();
+  const input = usage.inputTokens || 0;
+  const output = usage.outputTokens || 0;
+  const cacheWrite = usage.cacheCreationTokens || 0;
+  const cacheRead = usage.cacheReadTokens || 0;
+  // 合计输入包含 cache write / read，让使用者一眼看到本轮实际消耗的 prompt 规模
+  const totalInput = input + cacheWrite + cacheRead;
+  if (totalInput === 0 && output === 0) return null;
+  const hasCache = cacheRead > 0 || cacheWrite > 0;
+
+  return (
+    <TooltipProvider delayDuration={200}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70 tabular-nums select-none cursor-default">
+            <span className="inline-flex items-center gap-0.5">
+              <ArrowUp className="h-3 w-3" />
+              {formatTokenCount(totalInput)}
+            </span>
+            <span className="inline-flex items-center gap-0.5">
+              <ArrowDown className="h-3 w-3" />
+              {formatTokenCount(output)}
+            </span>
+            {hasCache && <Database className="h-3 w-3 text-primary/60" />}
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="top" align="end" className="text-xs">
+          <div className="space-y-0.5 tabular-nums min-w-[120px]">
+            <div className="flex justify-between gap-3">
+              <span className="text-muted-foreground">{t("ai.tokenUsage.input", "输入")}</span>
+              <span>{input.toLocaleString()}</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-muted-foreground">{t("ai.tokenUsage.output", "输出")}</span>
+              <span>{output.toLocaleString()}</span>
+            </div>
+            {cacheWrite > 0 && (
+              <div className="flex justify-between gap-3">
+                <span className="text-muted-foreground">{t("ai.tokenUsage.cacheWrite", "缓存写入")}</span>
+                <span>{cacheWrite.toLocaleString()}</span>
+              </div>
+            )}
+            {cacheRead > 0 && (
+              <div className="flex justify-between gap-3">
+                <span className="text-muted-foreground">{t("ai.tokenUsage.cacheRead", "缓存命中")}</span>
+                <span>{cacheRead.toLocaleString()}</span>
+              </div>
+            )}
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+});
+
+const AssistantToolbar = memo(function AssistantToolbar({
   msg,
   index,
   sending,
@@ -316,6 +410,75 @@ const AssistantMessage = memo(function AssistantMessage({
   onRegenerate: (index: number) => void;
 }) {
   const { t } = useTranslation();
+  const showActions = !sending && !msg.streaming;
+  const copyText = extractAssistantText(msg);
+
+  const handleCopy = useCallback(async () => {
+    if (!copyText) return;
+    try {
+      await navigator.clipboard.writeText(copyText);
+      toast.success(t("ai.copied", "已复制到剪贴板"), { duration: 1500, position: "top-center" });
+    } catch {
+      toast.error(t("ai.copyFailed", "复制失败"), { duration: 2000, position: "top-center" });
+    }
+  }, [copyText, t]);
+
+  const hasUsage =
+    !!msg.tokenUsage &&
+    (msg.tokenUsage.inputTokens || 0) +
+      (msg.tokenUsage.outputTokens || 0) +
+      (msg.tokenUsage.cacheCreationTokens || 0) +
+      (msg.tokenUsage.cacheReadTokens || 0) >
+      0;
+
+  if (!showActions && !hasUsage) return null;
+
+  return (
+    <div className="flex items-center w-full max-w-[95%] min-h-[18px] pl-0.5">
+      <div className="flex items-center gap-2">
+        {showActions && copyText && (
+          <button
+            type="button"
+            className="opacity-0 group-hover/assistant:opacity-100 transition-opacity text-muted-foreground/50 hover:text-primary"
+            onClick={handleCopy}
+            title={t("action.copy", "复制")}
+            aria-label={t("action.copy", "复制")}
+          >
+            <Copy className="h-3.5 w-3.5" />
+          </button>
+        )}
+        {showActions && (
+          <button
+            type="button"
+            className="opacity-0 group-hover/assistant:opacity-100 transition-opacity text-muted-foreground/50 hover:text-primary"
+            onClick={() => onRegenerate(index)}
+            title={t("ai.regenerate", "重新生成")}
+            aria-label={t("ai.regenerate", "重新生成")}
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      {hasUsage && (
+        <div className="ml-auto">
+          <TokenUsageBadge usage={msg.tokenUsage!} />
+        </div>
+      )}
+    </div>
+  );
+});
+
+const AssistantMessage = memo(function AssistantMessage({
+  msg,
+  index,
+  sending,
+  onRegenerate,
+}: {
+  msg: ChatMessage;
+  index: number;
+  sending: boolean;
+  onRegenerate: (index: number) => void;
+}) {
   const hasBlocks = msg.blocks && msg.blocks.length > 0;
   const isEmpty = !hasBlocks && msg.content === "";
 
@@ -343,8 +506,6 @@ const AssistantMessage = memo(function AssistantMessage({
     );
   }
 
-  const showRegenerate = !sending && !msg.streaming;
-
   if (hasBlocks) {
     const segments = splitBlocksByApproval(msg.blocks);
     return (
@@ -359,15 +520,7 @@ const AssistantMessage = memo(function AssistantMessage({
             <BubbleSegment key={si} blocks={seg.blocks} streaming={msg.streaming && si === segments.length - 1} />
           )
         )}
-        {showRegenerate && (
-          <button
-            className="opacity-0 group-hover/assistant:opacity-100 transition-opacity text-muted-foreground/50 hover:text-primary"
-            onClick={() => onRegenerate(index)}
-            title={t("ai.regenerate", "重新生成")}
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </button>
-        )}
+        <AssistantToolbar msg={msg} index={index} sending={sending} onRegenerate={onRegenerate} />
       </div>
     );
   }
@@ -383,15 +536,7 @@ const AssistantMessage = memo(function AssistantMessage({
         </Markdown>
         {msg.streaming && <Loader2 className="h-3 w-3 animate-spin inline-block ml-1" />}
       </div>
-      {showRegenerate && (
-        <button
-          className="opacity-0 group-hover/assistant:opacity-100 transition-opacity text-muted-foreground/50 hover:text-primary"
-          onClick={() => onRegenerate(index)}
-          title={t("ai.regenerate", "重新生成")}
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-        </button>
-      )}
+      <AssistantToolbar msg={msg} index={index} sending={sending} onRegenerate={onRegenerate} />
     </div>
   );
 });

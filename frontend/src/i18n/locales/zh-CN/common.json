@@ -585,6 +585,16 @@
     "regenerate": "重新生成",
     "regenerateTitle": "重新生成",
     "regenerateConfirm": "重新生成将删除此消息及之后的所有对话记录，确定要继续吗？",
+    "copyMessage": "复制消息",
+    "copyMessageFailed": "复制失败",
+    "tokenUsage": {
+      "input": "输入",
+      "output": "输出",
+      "cacheWrite": "缓存写入",
+      "cacheRead": "缓存命中",
+      "total": "合计",
+      "tooltip": "本次回复 token 使用量"
+    },
     "retrying": "重试中",
     "newConversation": "新对话",
     "sidebar": {

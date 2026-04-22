@@ -97,6 +97,21 @@ type anthropicSSEEvent struct {
 	ContentBlock *anthropicBlockStart  `json:"content_block,omitempty"`
 	Delta        *anthropicDelta       `json:"delta,omitempty"`
 	Error        *anthropicStreamError `json:"error,omitempty"`
+	// message_start 时 SSE 载荷形如 {"message": {"usage": {...}}}
+	// message_delta 时直接在事件上有顶层 usage 字段
+	Message *anthropicStreamMessage `json:"message,omitempty"`
+	Usage   *anthropicUsage         `json:"usage,omitempty"`
+}
+
+type anthropicStreamMessage struct {
+	Usage *anthropicUsage `json:"usage,omitempty"`
+}
+
+type anthropicUsage struct {
+	InputTokens              int `json:"input_tokens,omitempty"`
+	OutputTokens             int `json:"output_tokens,omitempty"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }
 
 type anthropicBlockStart struct {
@@ -302,6 +317,10 @@ func (p *AnthropicProvider) readStream(ctx context.Context, body io.ReadCloser, 
 
 	// 跟踪每个 content block 的状态
 	blocks := make(map[int]*blockState)
+	// Anthropic 的 usage 分布在 message_start（输入相关）和 message_delta（输出相关）两个事件，
+	// 用累加器合并为一条 usage 事件，避免前端做两次合并。
+	accumulated := Usage{}
+	usageStarted := false
 
 	scanner := bufio.NewScanner(body)
 	for scanner.Scan() {
@@ -324,6 +343,22 @@ func (p *AnthropicProvider) readStream(ctx context.Context, body io.ReadCloser, 
 		}
 
 		switch event.Type {
+		case "message_start":
+			if event.Message != nil && event.Message.Usage != nil {
+				u := event.Message.Usage
+				accumulated.InputTokens += u.InputTokens
+				accumulated.CacheCreationTokens += u.CacheCreationInputTokens
+				accumulated.CacheReadTokens += u.CacheReadInputTokens
+				// message_start 里的 output_tokens 只是占位，正式值在 message_delta
+				usageStarted = true
+			}
+
+		case "message_delta":
+			if event.Usage != nil {
+				accumulated.OutputTokens += event.Usage.OutputTokens
+				usageStarted = true
+			}
+
 		case "content_block_start":
 			if event.ContentBlock == nil {
 				continue
@@ -373,6 +408,10 @@ func (p *AnthropicProvider) readStream(ctx context.Context, body io.ReadCloser, 
 			delete(blocks, event.Index)
 
 		case "message_stop":
+			if usageStarted {
+				u := accumulated
+				ch <- StreamEvent{Type: "usage", Usage: &u}
+			}
 			ch <- StreamEvent{Type: "done"}
 			return
 
@@ -391,5 +430,9 @@ func (p *AnthropicProvider) readStream(ctx context.Context, body io.ReadCloser, 
 	}
 
 	// 如果流意外结束（没有 message_stop），仍发送 done
+	if usageStarted {
+		u := accumulated
+		ch <- StreamEvent{Type: "usage", Usage: &u}
+	}
 	ch <- StreamEvent{Type: "done"}
 }

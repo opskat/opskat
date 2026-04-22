@@ -44,9 +44,19 @@ type ToolFunction struct {
 	Parameters  interface{} `json:"parameters"` // JSON Schema
 }
 
+// Usage 本轮 LLM 调用的 token 使用情况
+// 语义统一：InputTokens 仅包含本次真正新增的输入；CacheReadTokens / CacheCreationTokens
+// 分开统计缓存命中与缓存写入，便于前端展示和成本核算。
+type Usage struct {
+	InputTokens         int `json:"input_tokens,omitempty"`
+	OutputTokens        int `json:"output_tokens,omitempty"`
+	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"` // Anthropic cache write
+	CacheReadTokens     int `json:"cache_read_tokens,omitempty"`     // Anthropic cache read / OpenAI cached prompt tokens
+}
+
 // StreamEvent 流式响应事件
 type StreamEvent struct {
-	Type      string     `json:"type"`                 // "content" | "tool_start" | "tool_result" | "tool_call" | "approval_request" | "approval_result" | "agent_start" | "agent_end" | "done" | "error" | "thinking" | "thinking_done" | "stopped" | "retry"
+	Type      string     `json:"type"`                 // "content" | "tool_start" | "tool_result" | "tool_call" | "approval_request" | "approval_result" | "agent_start" | "agent_end" | "done" | "error" | "thinking" | "thinking_done" | "stopped" | "retry" | "usage"
 	Content   string     `json:"content,omitempty"`    // type=content/tool_result/approval_result/agent_end 时的文本
 	ToolName  string     `json:"tool_name,omitempty"`  // type=tool_start/tool_result 时的工具名
 	ToolInput string     `json:"tool_input,omitempty"` // type=tool_start 时的输入摘要
@@ -60,6 +70,8 @@ type StreamEvent struct {
 	Items       []ApprovalItem `json:"items,omitempty"`       // 审批项列表
 	Description string         `json:"description,omitempty"` // grant 描述
 	SessionID   string         `json:"session_id,omitempty"`  // grant session ID
+	// type=usage 时的 token 统计（前端累加到当前 assistant 消息）
+	Usage *Usage `json:"usage,omitempty"`
 }
 
 // PermissionResponse 权限响应

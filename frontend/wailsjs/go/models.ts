@@ -305,6 +305,7 @@ export namespace app {
 	    content: string;
 	    blocks: conversation_entity.ContentBlock[];
 	    mentions: conversation_entity.MentionRef[];
+	    tokenUsage?: conversation_entity.TokenUsage;
 	
 	    static createFrom(source: any = {}) {
 	        return new ConversationDisplayMessage(source);
@@ -316,6 +317,7 @@ export namespace app {
 	        this.content = source["content"];
 	        this.blocks = this.convertValues(source["blocks"], conversation_entity.ContentBlock);
 	        this.mentions = this.convertValues(source["mentions"], conversation_entity.MentionRef);
+	        this.tokenUsage = this.convertValues(source["tokenUsage"], conversation_entity.TokenUsage);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -904,6 +906,24 @@ export namespace conversation_entity {
 	        this.name = source["name"];
 	        this.start = source["start"];
 	        this.end = source["end"];
+	    }
+	}
+	export class TokenUsage {
+	    inputTokens?: number;
+	    outputTokens?: number;
+	    cacheCreationTokens?: number;
+	    cacheReadTokens?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TokenUsage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.inputTokens = source["inputTokens"];
+	        this.outputTokens = source["outputTokens"];
+	        this.cacheCreationTokens = source["cacheCreationTokens"];
+	        this.cacheReadTokens = source["cacheReadTokens"];
 	    }
 	}
 

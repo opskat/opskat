@@ -30,6 +30,28 @@ func isExpectedCloseErr(err error) bool {
 		errors.Is(err, net.ErrClosed)
 }
 
+// closeOnCancel 启动 watcher goroutine，ctx 取消时调用所有 closers。
+// 用于打断 SFTP io.Copy 等不感知 ctx 的阻塞操作 —— 关闭底层连接后，
+// Copy 会立即因 net.ErrClosed 返回。
+// 返回的 stop 函数必须 defer 调用，确保正常路径下 watcher 退出，不泄漏 goroutine。
+// Close 错误忽略：connection 可能已被正常路径关闭，Close 是幂等的。
+func closeOnCancel(ctx context.Context, closers ...io.Closer) func() {
+	if ctx == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			for _, c := range closers {
+				_ = c.Close()
+			}
+		case <-done:
+		}
+	}()
+	return func() { close(done) }
+}
+
 // createSSHClient 创建 SSH 客户端，支持 password 和 key 认证
 func createSSHClient(cfg *asset_entity.SSHConfig, password, key, passphrase string) (*ssh.Client, error) {
 	var authMethods []ssh.AuthMethod
@@ -168,14 +190,16 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, command string) (str
 	return output, nil
 }
 
-// executeWithSFTP 创建临时 SSH+SFTP 连接并执行操作
-func executeWithSFTP(cfg *asset_entity.SSHConfig, password, key, passphrase string, fn func(*sftp.Client) error) error {
+// executeWithSFTP 创建临时 SSH+SFTP 连接并执行操作。
+// ctx 取消时主动关闭底层连接以打断 fn 内部可能的 io.Copy 阻塞，
+// 从而让 AI 停止会话能立即生效（否则大文件传输会挂住 runner.Stop）。
+func executeWithSFTP(ctx context.Context, cfg *asset_entity.SSHConfig, password, key, passphrase string, fn func(*sftp.Client) error) error {
 	client, err := createSSHClient(cfg, password, key, passphrase)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if err := client.Close(); err != nil {
+		if err := client.Close(); err != nil && !isExpectedCloseErr(err) {
 			logger.Default().Warn("close SFTP SSH client", zap.Error(err))
 		}
 	}()
@@ -185,12 +209,23 @@ func executeWithSFTP(cfg *asset_entity.SSHConfig, password, key, passphrase stri
 		return fmt.Errorf("failed to create SFTP client: %w", err)
 	}
 	defer func() {
-		if err := sftpClient.Close(); err != nil {
+		if err := sftpClient.Close(); err != nil && !isExpectedCloseErr(err) {
 			logger.Default().Warn("close SFTP client", zap.Error(err))
 		}
 	}()
 
-	return fn(sftpClient)
+	// 顺序：先关 sftpClient 结束 SFTP 会话，再关 SSH client 打断底层 TCP。
+	stopWatch := closeOnCancel(ctx, sftpClient, client)
+	defer stopWatch()
+
+	if err := fn(sftpClient); err != nil {
+		// ctx 已取消时，优先返回 ctx.Err()，避免把底层 EOF/closed 暴露给上层。
+		if ctx != nil && ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
+	return nil
 }
 
 // DialSSHClient 创建 SSH 客户端连接，自动解析凭据。调用者需要关闭 client。
@@ -258,7 +293,7 @@ func CopyBetweenAssets(ctx context.Context, srcAssetID int64, srcPath string, ds
 		return fmt.Errorf("source asset SSH connection failed: %w", err)
 	}
 	defer func() {
-		if err := srcClient.Close(); err != nil {
+		if err := srcClient.Close(); err != nil && !isExpectedCloseErr(err) {
 			logger.Default().Warn("close source SSH client", zap.Error(err))
 		}
 	}()
@@ -268,7 +303,7 @@ func CopyBetweenAssets(ctx context.Context, srcAssetID int64, srcPath string, ds
 		return fmt.Errorf("destination asset SSH connection failed: %w", err)
 	}
 	defer func() {
-		if err := dstClient.Close(); err != nil {
+		if err := dstClient.Close(); err != nil && !isExpectedCloseErr(err) {
 			logger.Default().Warn("close destination SSH client", zap.Error(err))
 		}
 	}()
@@ -279,7 +314,7 @@ func CopyBetweenAssets(ctx context.Context, srcAssetID int64, srcPath string, ds
 		return fmt.Errorf("source asset SFTP connection failed: %w", err)
 	}
 	defer func() {
-		if err := srcSFTP.Close(); err != nil {
+		if err := srcSFTP.Close(); err != nil && !isExpectedCloseErr(err) {
 			logger.Default().Warn("close source SFTP client", zap.Error(err))
 		}
 	}()
@@ -289,10 +324,14 @@ func CopyBetweenAssets(ctx context.Context, srcAssetID int64, srcPath string, ds
 		return fmt.Errorf("destination asset SFTP connection failed: %w", err)
 	}
 	defer func() {
-		if err := dstSFTP.Close(); err != nil {
+		if err := dstSFTP.Close(); err != nil && !isExpectedCloseErr(err) {
 			logger.Default().Warn("close destination SFTP client", zap.Error(err))
 		}
 	}()
+
+	// ctx 取消时关闭两端 SFTP + SSH，打断 io.Copy 的 SFTP 读写阻塞。
+	stopWatch := closeOnCancel(ctx, srcSFTP, dstSFTP, srcClient, dstClient)
+	defer stopWatch()
 
 	// 流式传输
 	srcFile, err := srcSFTP.Open(srcPath)
@@ -300,7 +339,7 @@ func CopyBetweenAssets(ctx context.Context, srcAssetID int64, srcPath string, ds
 		return fmt.Errorf("failed to open source file: %w", err)
 	}
 	defer func() {
-		if err := srcFile.Close(); err != nil {
+		if err := srcFile.Close(); err != nil && !isExpectedCloseErr(err) {
 			logger.Default().Warn("close source file", zap.String("path", srcPath), zap.Error(err))
 		}
 	}()
@@ -310,12 +349,15 @@ func CopyBetweenAssets(ctx context.Context, srcAssetID int64, srcPath string, ds
 		return fmt.Errorf("failed to create destination file: %w", err)
 	}
 	defer func() {
-		if err := dstFile.Close(); err != nil {
+		if err := dstFile.Close(); err != nil && !isExpectedCloseErr(err) {
 			logger.Default().Warn("close destination file", zap.String("path", dstPath), zap.Error(err))
 		}
 	}()
 
 	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("file transfer failed: %w", err)
 	}
 

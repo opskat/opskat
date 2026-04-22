@@ -67,7 +67,7 @@ export const UserMessage = memo(function UserMessage({ msg }: { msg: ChatMessage
       <div className={`flex items-start justify-end gap-2 ${maxWidthClass}`}>
         <button
           type="button"
-          className="mt-1 text-muted-foreground/70 transition-colors hover:text-foreground"
+          className="mt-1 opacity-0 group-hover/user:opacity-100 transition-opacity text-muted-foreground/50 hover:text-primary"
           onClick={handleCopy}
           title={t("action.copy", "复制")}
           aria-label={t("action.copy", "复制")}

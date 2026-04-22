@@ -12,7 +12,7 @@ import {
   SaveConversationMessages,
 } from "../../wailsjs/go/app/App";
 import { ai, conversation_entity, app } from "../../wailsjs/go/models";
-import { EventsOn } from "../../wailsjs/runtime/runtime";
+import { EventsOn, EventsEmit } from "../../wailsjs/runtime/runtime";
 import i18n from "../i18n";
 import { useTabStore, registerTabCloseHook, registerTabRestoreHook, type AITabMeta, type Tab } from "./tabStore";
 import { useAssetStore } from "./assetStore";
@@ -53,12 +53,21 @@ export interface ContentBlock {
   approvalSessionId?: string;
 }
 
+// Assistant 消息累计 token 使用量；单次用户 turn 可能跨多轮 LLM 调用，前端按 usage 事件累加。
+export interface TokenUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheCreationTokens?: number;
+  cacheReadTokens?: number;
+}
+
 export interface ChatMessage {
   role: "user" | "assistant" | "tool";
   content: string;
   blocks: ContentBlock[];
   streaming?: boolean;
   mentions?: MentionRef[];
+  tokenUsage?: TokenUsage;
 }
 
 export interface PendingQueueItem {
@@ -88,6 +97,13 @@ interface StreamEventData {
   }>;
   description?: string;
   session_id?: string;
+  // usage 事件：后端下发每轮 LLM 调用的 token 使用量
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_creation_tokens?: number;
+    cache_read_tokens?: number;
+  };
 }
 
 interface TabState {
@@ -145,6 +161,13 @@ function schedulePersist(convId: number, includeStreaming = false) {
     persistConversationSnapshot(convId, includeStreaming);
   }, 300);
   persistTimers.set(convId, timer);
+}
+
+// persistNow 取消 schedulePersist 的防抖定时器，立即落盘一次。
+// 用于低频关键事件（用户发送、工具调用、审批等），避免防抖窗口内崩溃丢数据。
+function persistNow(convId: number, includeStreaming = false) {
+  cleanupPersistTimer(convId);
+  persistConversationSnapshot(convId, includeStreaming);
 }
 
 // === 流式事件缓冲（性能优化：合并高频 content/thinking 事件，按帧刷新）===
@@ -275,6 +298,7 @@ function toDisplayMessages(msgs: ChatMessage[], includeStreaming = false): app.C
                 end: mr.end,
               })
           ),
+          tokenUsage: m.tokenUsage ? new conversation_entity.TokenUsage(m.tokenUsage) : undefined,
         })
     );
 }
@@ -296,6 +320,14 @@ function convertDisplayMessages(displayMsgs: app.ConversationDisplayMessage[]): 
       start: mr.start,
       end: mr.end,
     })),
+    tokenUsage: dm.tokenUsage
+      ? {
+          inputTokens: dm.tokenUsage.inputTokens,
+          outputTokens: dm.tokenUsage.outputTokens,
+          cacheCreationTokens: dm.tokenUsage.cacheCreationTokens,
+          cacheReadTokens: dm.tokenUsage.cacheReadTokens,
+        }
+      : undefined,
     streaming: false,
   }));
 }
@@ -413,6 +445,25 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
   const msgs = useAIStore.getState().conversationMessages[convId] || currentMsgs;
 
   switch (event.type) {
+    case "usage": {
+      if (!event.usage) break;
+      const delta = event.usage;
+      const updated = updateLastAssistant(msgs, (msg) => {
+        const prev = msg.tokenUsage || {};
+        const merged: TokenUsage = {
+          inputTokens: (prev.inputTokens || 0) + (delta.input_tokens || 0),
+          outputTokens: (prev.outputTokens || 0) + (delta.output_tokens || 0),
+          cacheCreationTokens: (prev.cacheCreationTokens || 0) + (delta.cache_creation_tokens || 0),
+          cacheReadTokens: (prev.cacheReadTokens || 0) + (delta.cache_read_tokens || 0),
+        };
+        return { ...msg, tokenUsage: merged };
+      });
+      if (updated) {
+        updateConversation(convId, { messages: updated });
+      }
+      break;
+    }
+
     case "agent_start": {
       const updated = updateLastAssistant(msgs, (msg) => ({
         ...msg,
@@ -428,7 +479,10 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
           },
         ],
       }));
-      if (updated) updateConversation(convId, { messages: updated });
+      if (updated) {
+        updateConversation(convId, { messages: updated });
+        persistNow(convId, true);
+      }
       break;
     }
 
@@ -443,7 +497,10 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
         }
         return { ...msg, blocks: newBlocks };
       });
-      if (updated) updateConversation(convId, { messages: updated });
+      if (updated) {
+        updateConversation(convId, { messages: updated });
+        persistNow(convId, true);
+      }
       break;
     }
 
@@ -476,7 +533,10 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
 
         return { ...msg, blocks: newBlocks };
       });
-      if (updated) updateConversation(convId, { messages: updated });
+      if (updated) {
+        updateConversation(convId, { messages: updated });
+        persistNow(convId, true);
+      }
       break;
     }
 
@@ -545,7 +605,10 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
         }
         return { ...msg, blocks: newBlocks };
       });
-      if (updated) updateConversation(convId, { messages: updated });
+      if (updated) {
+        updateConversation(convId, { messages: updated });
+        persistNow(convId, true);
+      }
       break;
     }
 
@@ -565,7 +628,10 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
         });
         return { ...msg, blocks: newBlocks };
       });
-      if (updated) updateConversation(convId, { messages: updated });
+      if (updated) {
+        updateConversation(convId, { messages: updated });
+        persistNow(convId, true);
+      }
 
       if (document.hidden) {
         try {
@@ -589,7 +655,10 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
         );
         return { ...msg, blocks: newBlocks };
       });
-      if (updated) updateConversation(convId, { messages: updated });
+      if (updated) {
+        updateConversation(convId, { messages: updated });
+        persistNow(convId, true);
+      }
       break;
     }
 
@@ -600,7 +669,10 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
         );
         return { ...msg, blocks: newBlocks };
       });
-      if (updated) updateConversation(convId, { messages: updated });
+      if (updated) {
+        updateConversation(convId, { messages: updated });
+        persistNow(convId, true);
+      }
       break;
     }
 
@@ -630,6 +702,8 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
       });
       const newQueue = curQueue.length > 0 ? curQueue.slice(1) : [];
       updateConversation(convId, { messages: nextMsgs, pendingQueue: newQueue });
+      // 排队消息被消费（插入新 user + 开启新 assistant）属于低频关键事件，立即落盘。
+      persistNow(convId, true);
       break;
     }
 
@@ -811,6 +885,9 @@ async function _sendForConversation(convId: number, content: string, mentions?: 
       blocks: [],
     });
     updateConversation(convId, { messages: newMessages, sending: true });
+    // 用户消息是用户亲手输入的内容，最不应该丢；绕过 300ms 防抖立即落盘。
+    // includeStreaming=true 保留历史未完成 block（如有），与 schedulePersist 的默认行为一致。
+    persistNow(convId, true);
   }
 
   const assistantMsg: ChatMessage = {
@@ -1378,6 +1455,50 @@ async function restoreAITabs(tabs: Tab[]) {
 
 registerTabRestoreHook("ai", (tabs) => {
   restoreAITabs(tabs).catch(() => {});
+});
+
+// === Shutdown Flush: 关窗前兜底落盘所有活跃会话 ===
+
+// flushAllConversations 同步发起所有会话落盘（fire-and-forget）。
+// beforeunload 场景用这个：页面即将销毁，没法 await Promise，只能靠 postMessage 已经送达 Go 端。
+function flushAllConversations() {
+  const allMsgs = useAIStore.getState().conversationMessages;
+  for (const convIdStr of Object.keys(allMsgs)) {
+    const convId = Number(convIdStr);
+    if (!convId) continue;
+    persistNow(convId, true);
+  }
+}
+
+// flushAllConversationsAsync 等待所有会话落盘完成后返回。
+// Wails OnBeforeClose 场景用这个：后端在等 ai:flush-done 回执再放行。
+async function flushAllConversationsAsync(): Promise<void> {
+  const allMsgs = useAIStore.getState().conversationMessages;
+  const promises: Promise<unknown>[] = [];
+  for (const convIdStr of Object.keys(allMsgs)) {
+    const convId = Number(convIdStr);
+    if (!convId) continue;
+    cleanupPersistTimer(convId);
+    const msgs = allMsgs[convId];
+    if (!msgs) continue;
+    promises.push(SaveConversationMessages(convId, toDisplayMessages(msgs, true)).catch(() => {}));
+  }
+  await Promise.allSettled(promises);
+}
+
+// beforeunload 在 Wails v2 WebView 里通常不会触发（WebView 被直接销毁，不走 navigation 卸载流程），
+// 但保留作为兜底：极端场景（开发者工具刷新、devserver 热更新、WebView 异常重启）下仍可能派发。
+// 主路径是 OnBeforeClose 的 ai:flush-all/ai:flush-done ack 机制，不要依赖 beforeunload。
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", flushAllConversations);
+}
+
+// Wails OnBeforeClose 会 emit ai:flush-all，前端等所有 IPC 回执到位后
+// 再 emit ai:flush-done 通知后端放行，避免后端暴力 sleep。
+EventsOn("ai:flush-all", () => {
+  flushAllConversationsAsync().finally(() => {
+    EventsEmit("ai:flush-done");
+  });
 });
 
 // === AI Send on Enter 设置 ===

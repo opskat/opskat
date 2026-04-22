@@ -39,11 +39,17 @@ func (p *OpenAIProvider) Name() string { return p.name }
 
 // openAIRequest OpenAI API 请求体
 type openAIRequest struct {
-	Model     string    `json:"model"`
-	Messages  []Message `json:"messages"`
-	Tools     []Tool    `json:"tools,omitempty"`
-	Stream    bool      `json:"stream"`
-	MaxTokens int       `json:"max_tokens,omitempty"`
+	Model         string               `json:"model"`
+	Messages      []Message            `json:"messages"`
+	Tools         []Tool               `json:"tools,omitempty"`
+	Stream        bool                 `json:"stream"`
+	StreamOptions *openAIStreamOptions `json:"stream_options,omitempty"`
+	MaxTokens     int                  `json:"max_tokens,omitempty"`
+}
+
+// openAIStreamOptions stream 专用选项，include_usage=true 后最后一个 chunk 会带 usage
+type openAIStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 // openAIStreamChunk SSE 流式响应 chunk
@@ -63,14 +69,25 @@ type openAIStreamChunk struct {
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
+	// include_usage 时 API 在最后一个 chunk 返回 usage（choices 为空数组）
+	Usage *openAIUsage `json:"usage,omitempty"`
+}
+
+type openAIUsage struct {
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	PromptTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
 }
 
 func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []Tool) (<-chan StreamEvent, error) {
 	reqBody := openAIRequest{
-		Model:     p.model,
-		Messages:  messages,
-		Stream:    true,
-		MaxTokens: p.maxOutputTokens,
+		Model:         p.model,
+		Messages:      messages,
+		Stream:        true,
+		StreamOptions: &openAIStreamOptions{IncludeUsage: true},
+		MaxTokens:     p.maxOutputTokens,
 	}
 	if len(tools) > 0 {
 		reqBody.Tools = tools
@@ -124,6 +141,8 @@ func (p *OpenAIProvider) readStream(ctx context.Context, body io.ReadCloser, ch 
 
 	toolCallMap := make(map[int]*ToolCall)
 	thinkingActive := false
+	// include_usage=true 时最后一个 chunk 的 choices 为空，usage 字段带最终统计
+	var finalUsage *openAIUsage
 
 	scanner := bufio.NewScanner(body)
 	for scanner.Scan() {
@@ -146,6 +165,11 @@ func (p *OpenAIProvider) readStream(ctx context.Context, body io.ReadCloser, ch 
 		var chunk openAIStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue
+		}
+
+		// 最后一个 usage-only chunk：choices 为空，usage 为最终值
+		if chunk.Usage != nil {
+			finalUsage = chunk.Usage
 		}
 
 		if len(chunk.Choices) == 0 {
@@ -221,6 +245,17 @@ func (p *OpenAIProvider) readStream(ctx context.Context, body io.ReadCloser, ch 
 		if len(calls) > 0 {
 			ch <- StreamEvent{Type: "tool_call", ToolCalls: calls}
 		}
+	}
+
+	if finalUsage != nil {
+		// OpenAI 的 prompt_tokens 包含 cached 部分；拆开便于与 Anthropic 对齐展示
+		cached := finalUsage.PromptTokensDetails.CachedTokens
+		input := max(finalUsage.PromptTokens-cached, 0)
+		ch <- StreamEvent{Type: "usage", Usage: &Usage{
+			InputTokens:     input,
+			OutputTokens:    finalUsage.CompletionTokens,
+			CacheReadTokens: cached,
+		}}
 	}
 
 	ch <- StreamEvent{Type: "done"}

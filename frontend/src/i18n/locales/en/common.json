@@ -585,6 +585,16 @@
     "regenerate": "Regenerate",
     "regenerateTitle": "Regenerate",
     "regenerateConfirm": "Regenerating will delete this message and all messages after it. Are you sure?",
+    "copyMessage": "Copy message",
+    "copyMessageFailed": "Copy failed",
+    "tokenUsage": {
+      "input": "Input",
+      "output": "Output",
+      "cacheWrite": "Cache write",
+      "cacheRead": "Cache read",
+      "total": "Total",
+      "tooltip": "Token usage for this reply"
+    },
     "retrying": "Retrying",
     "newConversation": "New conversation",
     "sidebar": {
