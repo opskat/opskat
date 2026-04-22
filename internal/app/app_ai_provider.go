@@ -110,6 +110,7 @@ func (a *App) DeleteAIProvider(id int64) error {
 	}
 	if p.IsActive {
 		a.aiAgent = nil
+		a.resetRunners()
 	}
 	return ai_provider_svc.AIProvider().Delete(a.langCtx(), id)
 }

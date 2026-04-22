@@ -49,7 +49,21 @@ func (a *App) activateProvider(p *ai_provider_entity.AIProvider) error {
 	a.aiAgent = ai.NewAgent(provider, func() ai.ToolExecutor {
 		return ai.NewAuditingExecutor(ai.NewDefaultToolExecutor(), ai.NewDefaultAuditWriter())
 	}, checker, config)
+	a.resetRunners()
 	return nil
+}
+
+// resetRunners 停止并清空所有缓存的 ConversationRunner。
+// Why: runner 在创建时会捕获当时的 aiAgent 引用，供应商切换后若不清空，
+// 已有会话会继续使用旧 provider，必须重启软件才生效。
+func (a *App) resetRunners() {
+	a.runners.Range(func(key, value any) bool {
+		if r, ok := value.(*ai.ConversationRunner); ok {
+			r.Stop()
+		}
+		a.runners.Delete(key)
+		return true
+	})
 }
 
 // InitAIProvider 启动时加载激活的 Provider
