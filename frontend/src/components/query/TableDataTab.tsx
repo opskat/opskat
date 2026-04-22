@@ -32,7 +32,7 @@ import {
 } from "@opskat/ui";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { ExecuteSQL } from "../../../wailsjs/go/app/App";
-import { QueryResultTable, CellEdit } from "./QueryResultTable";
+import { QueryResultTable, CellEdit, SortDir } from "./QueryResultTable";
 import { SqlPreviewDialog } from "./SqlPreviewDialog";
 import { toast } from "sonner";
 
@@ -88,6 +88,8 @@ export function TableDataTab({ tabId, database, table }: TableDataTabProps) {
   const [orderByInput, setOrderByInput] = useState("");
   const [whereClause, setWhereClause] = useState("");
   const [orderByClause, setOrderByClause] = useState("");
+  const [sortColumn, setSortColumn] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>(null);
   const [applyVersion, setApplyVersion] = useState(0);
 
   const driver = queryMeta?.driver;
@@ -125,7 +127,11 @@ export function TableDataTab({ tabId, database, table }: TableDataTabProps) {
       const tableName =
         driver === "postgresql" ? `"${table}"` : `${quoteIdent(database, driver)}.${quoteIdent(table, driver)}`;
       const where = whereClause.trim();
-      const orderBy = orderByClause.trim();
+      // Header-click sort takes precedence over the manual ORDER BY input.
+      const orderBy =
+        sortColumn && sortDir
+          ? `${quoteIdent(sortColumn, driver)} ${sortDir === "asc" ? "ASC" : "DESC"}`
+          : orderByClause.trim();
       const wherePart = where ? ` WHERE ${where}` : "";
       const orderByPart = orderBy ? ` ORDER BY ${orderBy}` : "";
       const sql = `SELECT * FROM ${tableName}${wherePart}${orderByPart} LIMIT ${pageSize} OFFSET ${offset}`;
@@ -143,7 +149,7 @@ export function TableDataTab({ tabId, database, table }: TableDataTabProps) {
         setLoading(false);
       }
     },
-    [assetId, database, table, driver, pageSize, whereClause, orderByClause]
+    [assetId, database, table, driver, pageSize, whereClause, orderByClause, sortColumn, sortDir]
   );
 
   useEffect(() => {
@@ -279,10 +285,27 @@ export function TableDataTab({ tabId, database, table }: TableDataTabProps) {
   const handleApplyQuery = useCallback(() => {
     setWhereClause(whereInput.trim());
     setOrderByClause(orderByInput.trim());
+    // Manual ORDER BY input overrides the header-click sort state.
+    if (orderByInput.trim()) {
+      setSortColumn(null);
+      setSortDir(null);
+    }
     setPage(0);
     setEdits(new Map());
     setApplyVersion((v) => v + 1);
   }, [whereInput, orderByInput]);
+
+  const handleSortChange = useCallback((col: string | null, dir: SortDir) => {
+    setSortColumn(col);
+    setSortDir(dir);
+    // Header click takes precedence — clear the manual ORDER BY input so the user
+    // can see which sort is actually applied.
+    setOrderByInput("");
+    setOrderByClause("");
+    setPage(0);
+    setEdits(new Map());
+    setApplyVersion((v) => v + 1);
+  }, []);
 
   const handleViewDDL = useCallback(async () => {
     if (!assetId) return;
@@ -414,6 +437,10 @@ export function TableDataTab({ tabId, database, table }: TableDataTabProps) {
         onCellEdit={handleCellEdit}
         showRowNumber
         rowNumberOffset={page * pageSize}
+        sortColumn={sortColumn}
+        sortDir={sortDir}
+        onSortChange={handleSortChange}
+        enableColumnFilter
       />
 
       {/* Edit action bar */}
