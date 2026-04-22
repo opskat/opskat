@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type * as MonacoNS from "monaco-editor";
 import { useResolvedTheme } from "./theme-provider";
@@ -11,7 +11,10 @@ import {
 export type CodeEditorLanguage = "sql" | "javascript" | "json" | "plaintext";
 
 export interface CodeEditorProps {
-  value: string;
+  /** 受控：父组件拥有文本 state，每次变化通过 onChange 回吐 */
+  value?: string;
+  /** 非受控：仅在挂载时注入初始值，后续由编辑器自管；通过 onMount/editor ref 读写 */
+  defaultValue?: string;
   onChange?: (value: string) => void;
   language?: CodeEditorLanguage;
   readOnly?: boolean;
@@ -60,6 +63,7 @@ const DEFAULT_OPTIONS: MonacoNS.editor.IStandaloneEditorConstructionOptions = {
 
 export function CodeEditor({
   value,
+  defaultValue,
   onChange,
   language = "sql",
   readOnly = false,
@@ -71,6 +75,7 @@ export function CodeEditor({
   dynamicCompletions,
   className,
 }: CodeEditorProps) {
+  const isControlled = value !== undefined;
   const resolvedTheme = useResolvedTheme();
   const editorRef = useRef<MonacoNS.editor.IStandaloneCodeEditor | null>(null);
   const modelUriRef = useRef<string | null>(null);
@@ -107,17 +112,41 @@ export function CodeEditor({
     editorRef.current?.updateOptions({ readOnly });
   }, [readOnly]);
 
-  const showPlaceholder = !!placeholder && !value;
+  // 非受控时，占位符是否显示不跟 React state 走 —— 由 mount 后的 editor 内容决定
+  const [uncontrolledIsEmpty, setUncontrolledIsEmpty] = useState(() => !defaultValue);
+  const showPlaceholder = !!placeholder && (isControlled ? !value : uncontrolledIsEmpty);
+
+  const handleMountWithPlaceholder = useCallback<OnMount>(
+    (editor, monaco) => {
+      handleMount(editor, monaco);
+      if (!isControlled && placeholder) {
+        const model = editor.getModel();
+        if (model) {
+          // 仅在空/非空跨越时才 setState，避免每个按键一次 React 重渲
+          let prevEmpty = model.getValue().length === 0;
+          setUncontrolledIsEmpty(prevEmpty);
+          model.onDidChangeContent(() => {
+            const nowEmpty = model.getValue().length === 0;
+            if (nowEmpty !== prevEmpty) {
+              prevEmpty = nowEmpty;
+              setUncontrolledIsEmpty(nowEmpty);
+            }
+          });
+        }
+      }
+    },
+    [handleMount, isControlled, placeholder]
+  );
 
   return (
     <div className={`relative h-full w-full ${className ?? ""}`}>
       <Editor
         height={height}
         language={language}
-        value={value}
+        {...(isControlled ? { value } : { defaultValue: defaultValue ?? "" })}
         theme={resolvedTheme === "dark" ? "opskat-dark" : "opskat-light"}
-        onChange={(v) => onChange?.(v ?? "")}
-        onMount={handleMount}
+        onChange={onChange ? (v) => onChange(v ?? "") : undefined}
+        onMount={handleMountWithPlaceholder}
         options={{
           ...DEFAULT_OPTIONS,
           ...options,

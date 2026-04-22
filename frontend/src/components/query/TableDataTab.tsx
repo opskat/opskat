@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { memo, useEffect, useState, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ChevronLeft,
@@ -73,7 +73,8 @@ function quoteIdent(name: string, driver?: string): string {
 
 const REFRESH_SHORTCUT_LABEL = isMac ? "⌘R" : "Ctrl+R";
 
-export function TableDataTab(props: TableDataTabProps) {
+// 字符串 props 稳定 —— memo 避免 DatabasePanel 的 innerTabs 结构变化传导
+export const TableDataTab = memo(function TableDataTab(props: TableDataTabProps) {
   const { t } = useTranslation();
   const { markTableTabLoaded } = useQueryStore();
   const innerTab = useQueryStore((s) => s.dbStates[props.tabId]?.innerTabs.find((it) => it.id === props.innerTabId));
@@ -114,7 +115,7 @@ export function TableDataTab(props: TableDataTabProps) {
   }
 
   return <TableDataTabContent {...props} />;
-}
+});
 
 function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTabProps) {
   const { t } = useTranslation();

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, useDeferredValue } from "react";
 import { useTranslation } from "react-i18next";
 import { X, Table2, Code2, Database, Loader2, Play, Filter, Download } from "lucide-react";
 import type * as MonacoNS from "monaco-editor";
@@ -20,17 +20,20 @@ interface MongoDBPanelProps {
 
 export function MongoDBPanel({ tabId }: MongoDBPanelProps) {
   const { t } = useTranslation();
-  const { mongoStates, closeMongoInnerTab, setActiveMongoInnerTab } = useQueryStore();
-  const mongoState = mongoStates[tabId];
+  const mongoState = useQueryStore((s) => s.mongoStates[tabId]);
+  const closeMongoInnerTab = useQueryStore((s) => s.closeMongoInnerTab);
+  const setActiveMongoInnerTab = useQueryStore((s) => s.setActiveMongoInnerTab);
 
   const tab = useTabStore((s) => s.tabs.find((t) => t.id === tabId));
   const meta = tab?.meta as QueryTabMeta | undefined;
   const assetId = meta?.assetId ?? 0;
 
+  const sidebarRef = useRef<HTMLDivElement>(null);
   const { size: sidebarWidth, handleMouseDown } = useResizeHandle({
     defaultSize: 200,
     minSize: 140,
     maxSize: 400,
+    targetRef: sidebarRef,
   });
 
   if (!mongoState) return null;
@@ -41,6 +44,7 @@ export function MongoDBPanel({ tabId }: MongoDBPanelProps) {
     <div className="flex h-full w-full">
       {/* Left sidebar: Collection browser */}
       <div
+        ref={sidebarRef}
         className="shrink-0 border-r border-border bg-sidebar h-full overflow-hidden"
         style={{ width: sidebarWidth }}
       >
@@ -352,12 +356,16 @@ interface MongoQueryContentProps {
 
 function MongoQueryContent({ tabId, assetId, innerTab }: MongoQueryContentProps) {
   const { t } = useTranslation();
-  const { updateMongoInnerTab, mongoStates } = useQueryStore();
-  const mongoState = mongoStates[tabId];
+  const mongoState = useQueryStore((s) => s.mongoStates[tabId]);
+  const updateMongoInnerTab = useQueryStore((s) => s.updateMongoInnerTab);
   const availableDbs = mongoState?.databases ?? [];
 
   // 优先用 inner tab 自己记住的库，否则用当前选中的库
   const [database, setDatabase] = useState<string>(innerTab.database || mongoState?.activeDatabase || "");
+  // 编辑器内容由 Monaco 自管（非受控）。queryRef 持最新值，query state 仅在 debounce 后同步用于驱动
+  // parsePreview / canExecute / 占位提示等低频派生信息。按键本身不再触发 React 重渲。
+  const editorRef = useRef<MonacoNS.editor.IStandaloneCodeEditor | null>(null);
+  const queryRef = useRef(innerTab.queryText || "");
   const [query, setQuery] = useState(innerTab.queryText || "");
   const [data, setData] = useState("");
   const [loading, setLoading] = useState(false);
@@ -367,34 +375,55 @@ function MongoQueryContent({ tabId, assetId, innerTab }: MongoQueryContentProps)
   const [limit, setLimit] = useState(100);
 
   // Editor/result split — drag the bar between them to adjust editor height.
+  const editorAreaRef = useRef<HTMLDivElement>(null);
   const { size: editorHeight, handleMouseDown: handleSplitterDown } = useResizeHandle({
     axis: "y",
     defaultSize: innerTab.editorHeight && innerTab.editorHeight > 0 ? innerTab.editorHeight : 200,
     minSize: 120,
     maxSize: 800,
     onResizeEnd: (h) => updateMongoInnerTab(tabId, innerTab.id, { editorHeight: h }),
+    targetRef: editorAreaRef,
   });
 
-  // Persist editable fields to store on change so a reload restores them.
+  // database 低频，直接 sync；queryText 走 commit 时机
   useEffect(() => {
-    updateMongoInnerTab(tabId, innerTab.id, { database, queryText: query });
-  }, [database, query, tabId, innerTab.id, updateMongoInnerTab]);
+    updateMongoInnerTab(tabId, innerTab.id, { database });
+  }, [database, tabId, innerTab.id, updateMongoInnerTab]);
+
+  const commitQueryRef = useRef<() => void>(() => {
+    updateMongoInnerTab(tabId, innerTab.id, { queryText: queryRef.current });
+  });
+  useEffect(() => {
+    commitQueryRef.current = () => {
+      updateMongoInnerTab(tabId, innerTab.id, { queryText: queryRef.current });
+    };
+  }, [tabId, innerTab.id, updateMongoInnerTab]);
+
+  useEffect(() => {
+    return () => {
+      commitQueryRef.current();
+    };
+  }, []);
 
   // 预览解析结果（显示在编辑器下方小字提示），parse 错误不在此提示——只在执行时报错
+  // useDeferredValue 让 parser 以低优先级跑，遇到紧急渲染（如切 Tab）可被打断
+  const deferredQuery = useDeferredValue(query);
+  const deferredDatabase = useDeferredValue(database);
   const parsePreview = useMemo(() => {
-    if (!query.trim()) return null;
-    const r = parseMongosh(query, database);
+    if (!deferredQuery.trim()) return null;
+    const r = parseMongosh(deferredQuery, deferredDatabase);
     if (!r.ok) return null;
     return r.value;
-  }, [query, database]);
+  }, [deferredQuery, deferredDatabase]);
 
   const execute = useCallback(
     async (execSkip = 0, execLimit = limit) => {
-      if (!query.trim()) {
+      const q = queryRef.current;
+      if (!q.trim()) {
         toast.error(t("query.mongoshEmpty"));
         return;
       }
-      const parsed = parseMongosh(query, database);
+      const parsed = parseMongosh(q, database);
       if (!parsed.ok) {
         setData(JSON.stringify({ error: parsed.error.message }));
         toast.error(parsed.error.message);
@@ -429,7 +458,7 @@ function MongoQueryContent({ tabId, assetId, innerTab }: MongoQueryContentProps)
         setLoading(false);
       }
     },
-    [assetId, database, query, limit, t]
+    [assetId, database, limit, t]
   );
 
   const handlePageChange = useCallback((newSkip: number) => execute(newSkip), [execute]);
@@ -448,8 +477,29 @@ function MongoQueryContent({ tabId, assetId, innerTab }: MongoQueryContentProps)
   }, [execute]);
 
   const handleEditorMount = useCallback((editor: MonacoNS.editor.IStandaloneCodeEditor, monaco: typeof MonacoNS) => {
+    editorRef.current = editor;
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
       executeRef.current(0);
+    });
+
+    // 订阅内容变化：更新 ref，debounce 300ms 同步 query state + 提交 store
+    const model = editor.getModel();
+    if (model) {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      model.onDidChangeContent(() => {
+        queryRef.current = model.getValue();
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          timer = null;
+          setQuery(queryRef.current);
+          commitQueryRef.current();
+        }, 300);
+      });
+    }
+
+    editor.onDidBlurEditorWidget(() => {
+      setQuery(queryRef.current);
+      commitQueryRef.current();
     });
   }, []);
 
@@ -509,7 +559,7 @@ function MongoQueryContent({ tabId, assetId, innerTab }: MongoQueryContentProps)
   return (
     <div className="flex flex-col h-full">
       {/* Query editor area */}
-      <div className="shrink-0 flex flex-col p-3 gap-2" style={{ height: editorHeight }}>
+      <div ref={editorAreaRef} className="shrink-0 flex flex-col p-3 gap-2" style={{ height: editorHeight }}>
         <div className="flex items-center gap-2 shrink-0">
           {/* Current database */}
           <Select
@@ -558,8 +608,7 @@ function MongoQueryContent({ tabId, assetId, innerTab }: MongoQueryContentProps)
 
         <div className="flex-1 min-h-0 overflow-hidden border border-border rounded-md bg-background">
           <CodeEditor
-            value={query}
-            onChange={setQuery}
+            defaultValue={innerTab.queryText || ""}
             language="javascript"
             placeholder={t("query.mongoshPlaceholder")}
             onMount={handleEditorMount}

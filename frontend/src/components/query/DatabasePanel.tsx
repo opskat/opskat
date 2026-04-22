@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { X, Table2, Code2, Database } from "lucide-react";
 import { useQueryStore } from "@/stores/queryStore";
@@ -12,13 +13,16 @@ interface DatabasePanelProps {
 
 export function DatabasePanel({ tabId }: DatabasePanelProps) {
   const { t } = useTranslation();
-  const { dbStates, closeInnerTab, setActiveInnerTab } = useQueryStore();
-  const dbState = dbStates[tabId];
+  const dbState = useQueryStore((s) => s.dbStates[tabId]);
+  const closeInnerTab = useQueryStore((s) => s.closeInnerTab);
+  const setActiveInnerTab = useQueryStore((s) => s.setActiveInnerTab);
 
+  const sidebarRef = useRef<HTMLDivElement>(null);
   const { size: sidebarWidth, handleMouseDown } = useResizeHandle({
     defaultSize: 200,
     minSize: 140,
     maxSize: 400,
+    targetRef: sidebarRef,
   });
 
   if (!dbState) return null;
@@ -29,6 +33,7 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
     <div className="flex h-full w-full">
       {/* Left sidebar: Database tree */}
       <div
+        ref={sidebarRef}
         className="shrink-0 border-r border-border bg-sidebar h-full overflow-hidden"
         style={{ width: sidebarWidth }}
       >

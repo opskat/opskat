@@ -230,24 +230,39 @@ export function QueryResultTable({
   // or when we're in read-only mode (local client-side sort on the current page).
   const canSort = isControlledSort || !editable;
 
-  // Column resize handler
+  // Column resize handler — 拖拽期间只改 DOM（rAF 合批），松手一次性 setState，避免整表 60Hz 重渲
   const handleResizeStart = useCallback((e: React.MouseEvent, col: string) => {
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
-    const th = (e.target as HTMLElement).closest("th")!;
+    const th = (e.target as HTMLElement).closest("th") as HTMLElement | null;
+    if (!th) return;
     const startWidth = th.offsetWidth;
 
+    let pending = startWidth;
+    let rafId: number | null = null;
+    const flushToDom = () => {
+      rafId = null;
+      th.style.width = `${pending}px`;
+    };
+
     const onMouseMove = (me: MouseEvent) => {
-      const newWidth = Math.max(50, startWidth + me.clientX - startX);
-      setColWidths((prev) => ({ ...prev, [col]: newWidth }));
+      pending = Math.max(50, startWidth + me.clientX - startX);
+      if (rafId == null) rafId = requestAnimationFrame(flushToDom);
     };
 
     const onMouseUp = () => {
+      if (rafId != null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
       document.body.style.removeProperty("cursor");
       document.body.style.removeProperty("user-select");
+      // 清掉 inline width，让 React 通过 setColWidths 接管最终宽度
+      th.style.width = "";
+      setColWidths((prev) => ({ ...prev, [col]: pending }));
     };
 
     document.body.style.cursor = "col-resize";
