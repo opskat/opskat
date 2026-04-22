@@ -81,7 +81,7 @@ type App struct {
 	currentConversationID   int64                      // 当前活跃会话ID
 	runners                 sync.Map                   // map[int64]*ai.ConversationRunner
 	extSvc                  *extension_svc.Service
-	flushAckCh              chan struct{}              // OnBeforeClose 等待前端确认 flush 完成
+	flushAckCh              chan struct{} // OnBeforeClose 等待前端确认 flush 完成
 }
 
 // NewApp 创建App实例

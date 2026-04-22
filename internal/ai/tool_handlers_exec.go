@@ -165,13 +165,13 @@ func handleUploadFile(ctx context.Context, args map[string]any) (string, error) 
 		return "", err
 	}
 
-	err = executeWithSFTP(sshCfg, password, key, passphrase, func(client *sftp.Client) error {
+	err = executeWithSFTP(ctx, sshCfg, password, key, passphrase, func(client *sftp.Client) error {
 		srcFile, err := os.Open(localPath) //nolint:gosec
 		if err != nil {
 			return fmt.Errorf("failed to open local file: %w", err)
 		}
 		defer func() {
-			if err := srcFile.Close(); err != nil {
+			if err := srcFile.Close(); err != nil && !isExpectedCloseErr(err) {
 				logger.Default().Warn("close local file", zap.String("path", localPath), zap.Error(err))
 			}
 		}()
@@ -181,7 +181,7 @@ func handleUploadFile(ctx context.Context, args map[string]any) (string, error) 
 			return fmt.Errorf("failed to create remote file: %w", err)
 		}
 		defer func() {
-			if err := dstFile.Close(); err != nil {
+			if err := dstFile.Close(); err != nil && !isExpectedCloseErr(err) {
 				logger.Default().Warn("close remote file", zap.String("path", remotePath), zap.Error(err))
 			}
 		}()
@@ -208,13 +208,13 @@ func handleDownloadFile(ctx context.Context, args map[string]any) (string, error
 		return "", err
 	}
 
-	err = executeWithSFTP(sshCfg, password, key, passphrase, func(client *sftp.Client) error {
+	err = executeWithSFTP(ctx, sshCfg, password, key, passphrase, func(client *sftp.Client) error {
 		srcFile, err := client.Open(remotePath)
 		if err != nil {
 			return fmt.Errorf("failed to open remote file: %w", err)
 		}
 		defer func() {
-			if err := srcFile.Close(); err != nil {
+			if err := srcFile.Close(); err != nil && !isExpectedCloseErr(err) {
 				logger.Default().Warn("close remote file", zap.String("path", remotePath), zap.Error(err))
 			}
 		}()
@@ -224,7 +224,7 @@ func handleDownloadFile(ctx context.Context, args map[string]any) (string, error
 			return fmt.Errorf("failed to create local file: %w", err)
 		}
 		defer func() {
-			if err := dstFile.Close(); err != nil {
+			if err := dstFile.Close(); err != nil && !isExpectedCloseErr(err) {
 				logger.Default().Warn("close local file", zap.String("path", localPath), zap.Error(err))
 			}
 		}()
