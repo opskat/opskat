@@ -8,6 +8,7 @@ on:
 env:
   VERSION: ${{ github.ref_name }}
   COMMIT_ID: ${{ github.sha }}
+  NODE_OPTIONS: --max-old-space-size=4096
 
 jobs:
   build-desktop:

@@ -12,6 +12,9 @@ concurrency:
   group: nightly
   cancel-in-progress: true
 
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
 jobs:
   sync:
     name: Sync from main
