@@ -10,9 +10,6 @@ import { SessionToolbar } from "@/components/terminal/SessionToolbar";
 import { TerminalToolbar } from "@/components/terminal/TerminalToolbar";
 import { FileManagerPanel } from "@/components/terminal/FileManagerPanel";
 import { SettingsPage } from "@/components/settings/SettingsPage";
-import { CredentialManager } from "@/components/settings/CredentialManager";
-import { AuditLogPage } from "@/components/audit/AuditLogPage";
-import { PortForwardPage } from "@/components/forward/PortForwardPage";
 import { AIChatContent } from "@/components/ai/AIChatContent";
 import { DatabasePanel } from "@/components/query/DatabasePanel";
 import { RedisPanel } from "@/components/query/RedisPanel";
@@ -89,36 +86,16 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
         const meta = activeTab.meta as PageTabMeta;
         switch (meta.pageId) {
           case "settings":
-            return (
-              <div className="absolute inset-0 bg-background">
-                <SettingsPage />
-              </div>
-            );
-          case "sshkeys":
-            return (
-              <div className="absolute inset-0 bg-background flex flex-col">
-                <div className="px-4 py-3 border-b">
-                  <h2 className="font-semibold">{t("nav.sshKeys")}</h2>
-                </div>
-                <div className="flex-1 overflow-y-auto p-4">
-                  <div className="max-w-4xl mx-auto">
-                    <CredentialManager />
-                  </div>
-                </div>
-              </div>
-            );
-          case "audit":
-            return (
-              <div className="absolute inset-0 bg-background">
-                <AuditLogPage />
-              </div>
-            );
           case "forward":
+          case "sshkeys":
+          case "audit": {
+            const settingTab = meta.settingTab || (meta.pageId === "settings" ? undefined : meta.pageId);
             return (
               <div className="absolute inset-0 bg-background">
-                <PortForwardPage />
+                <SettingsPage initialTab={settingTab} />
               </div>
             );
+          }
           default:
             if (meta.extensionName) {
               return <ExtensionPage extensionName={meta.extensionName} pageId={meta.pageId} assetId={meta.assetId} />;

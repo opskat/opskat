@@ -317,9 +317,13 @@ function App() {
       tabStore.activateTab(homeTab?.id || tabStore.tabs[0]?.id || "");
       return;
     }
-    // Page tabs: settings, forward, sshkeys, audit
     const existing = tabStore.tabs.find((t) => t.id === page);
     if (existing) {
+      if (page === "settings") {
+        tabStore.updateTab("settings", {
+          meta: { type: "page", pageId: "settings" },
+        });
+      }
       tabStore.activateTab(page);
     } else {
       tabStore.openTab({

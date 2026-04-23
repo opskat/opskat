@@ -1,16 +1,4 @@
-import {
-  Home,
-  Settings,
-  KeyRound,
-  PanelLeftClose,
-  PanelLeftOpen,
-  EyeOff,
-  Bot,
-  ScrollText,
-  ArrowRightLeft,
-  Server,
-  LayoutList,
-} from "lucide-react";
+import { Home, Settings, PanelLeftClose, PanelLeftOpen, EyeOff, Bot, Server, LayoutList } from "lucide-react";
 import logoLight from "@/assets/images/logo.png";
 import logoDark from "@/assets/images/logo-dark.png";
 import { useTranslation } from "react-i18next";
@@ -47,12 +35,7 @@ export function Sidebar({
   const setActivePanel = useLayoutStore((s) => s.setActivePanel);
   const toggleVisible = useLayoutStore((s) => s.toggleVisible);
 
-  const navItems = [
-    { id: "home", icon: Home, label: t("nav.home") },
-    { id: "forward", icon: ArrowRightLeft, label: t("nav.forward") },
-    { id: "sshkeys", icon: KeyRound, label: t("nav.sshKeys") },
-    { id: "audit", icon: ScrollText, label: t("nav.audit") },
-  ];
+  const navItems = [{ id: "home", icon: Home, label: t("nav.home") }];
 
   const sidePanels: Array<{ id: SidePanel; icon: typeof Server; label: string }> = [
     { id: "assets", icon: Server, label: t("sideTabs.assetsPanel") },
