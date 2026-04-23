@@ -188,7 +188,7 @@ func (p *Plugin) call(ctx context.Context, fnName string, input []byte) (json.Ra
 	return out, nil
 }
 
-// registerHostModule registers all 12 host functions as a wazero host module named "opskat".
+// registerHostModule registers all 14 host functions as a wazero host module named "opskat".
 // Guest and host share memory using the convention:
 //   - Guest exports malloc(size) -> ptr and free(ptr)
 //   - Return values packed as uint64: high 32 bits = ptr, low 32 bits = size
@@ -258,6 +258,15 @@ func registerHostModule(ctx context.Context, r wazero.Runtime, host HostProvider
 		}
 	}).Export("host_io_close")
 
+	// host_io_set_deadline(handle_id, kind_ptr, kind_len, unix_nanos) -> packed(err_ptr, err_len) or 0 on success
+	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, handleID, kindPtr, kindLen uint32, unixNanos int64) uint64 {
+		kind := readGuestString(mod, kindPtr, kindLen)
+		if err := host.IOSetDeadline(handleID, kind, unixNanos); err != nil {
+			return encodeError(ctx, mod, err)
+		}
+		return 0
+	}).Export("host_io_set_deadline")
+
 	// host_asset_get_config(asset_id) -> packed(result_ptr, result_len)
 	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, assetID uint64) uint64 {
 		cfg, err := host.GetAssetConfig(int64(assetID))
@@ -310,6 +319,14 @@ func registerHostModule(ctx context.Context, r wazero.Runtime, host HostProvider
 			logger.Default().Warn("host action event", zap.String("eventType", eventType), zap.Error(err))
 		}
 	}).Export("host_action_event")
+
+	// host_action_should_stop() -> 0 or 1
+	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module) uint32 {
+		if host.ActionShouldStop() {
+			return 1
+		}
+		return 0
+	}).Export("host_action_should_stop")
 
 	_, err := b.Instantiate(ctx)
 	return err
