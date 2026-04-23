@@ -397,8 +397,8 @@ function syncConversationTitleLocally(convId: number, title: string) {
   }
 }
 
-// replay 前先乐观更新标题；即使后端失败，下一次列表刷新也会再尝试拉正。
-async function updateConversationTitleForReplay(convId: number, content: string) {
+// 所有“首条消息决定标题”的场景都走同一条同步链路，避免首次发送和编辑重发出现两套规则。
+async function updateConversationTitleForMessage(convId: number, content: string) {
   const title = buildConversationTitle(content);
   syncConversationTitleLocally(convId, title);
   try {
@@ -406,6 +406,14 @@ async function updateConversationTitleForReplay(convId: number, content: string)
   } catch {
     // ignore — 下一次 fetchConversations 仍会尝试从后端刷新标题
   }
+}
+
+function shouldSyncConversationTitleBeforeSend(convId: number, content: string) {
+  if (!content.trim()) return false;
+  const streaming = useAIStore.getState().conversationStreaming[convId] || { sending: false, pendingQueue: [] };
+  if (streaming.sending) return false;
+  const messages = useAIStore.getState().conversationMessages[convId] || [];
+  return messages.length === 0;
 }
 
 // === 模块级 conversation 操作（被 sendToTab / sendFromSidebar / regenerate 等共用）===
@@ -1347,40 +1355,35 @@ export const useAIStore = create<AIState>((set, get) => {
 
       // Ensure tab has a conversation ID *before* writing any message state —
       // conversationMessages / conversationStreaming are keyed by convId.
+      let createdConversation = false;
       if (!convId) {
         try {
           const conv = await CreateConversation();
           convId = conv.ID;
+          createdConversation = true;
           const curTab = useTabStore.getState().tabs.find((t) => t.id === tabId);
           useTabStore.getState().updateTab(tabId, {
             meta: { type: "ai", conversationId: convId, title: curTab?.label || "对话" },
           });
-          get().fetchConversations();
         } catch {
           return;
         }
       }
 
-      // First message becomes conversation title —— tab-only concern
-      const streaming = get().conversationStreaming[convId] || { sending: false, pendingQueue: [] };
-      if (!streaming.sending && content.trim()) {
-        const msgsForConv = get().conversationMessages[convId] || [];
-        if (msgsForConv.length === 0) {
-          const title = content.length > 30 ? content.slice(0, 30) + "…" : content;
-          const curTab = useTabStore.getState().tabs.find((t) => t.id === tabId);
-          if (curTab) {
-            useTabStore.getState().updateTab(tabId, {
-              label: title,
-              meta: { ...(curTab.meta as AITabMeta), title } as AITabMeta,
-            });
-          }
-        }
+      if (shouldSyncConversationTitleBeforeSend(convId, content)) {
+        await updateConversationTitleForMessage(convId, content);
+      }
+      if (createdConversation) {
+        void get().fetchConversations();
       }
 
       await _sendForConversation(convId, content, mentions);
     },
 
     sendFromSidebar: async (convId: number, content: string, mentions?: MentionRef[]) => {
+      if (shouldSyncConversationTitleBeforeSend(convId, content)) {
+        await updateConversationTitleForMessage(convId, content);
+      }
       await _sendForConversation(convId, content, mentions);
     },
 
@@ -1402,7 +1405,7 @@ export const useAIStore = create<AIState>((set, get) => {
       const firstUserIndex = messages.findIndex((message) => message.role === "user");
       if (firstUserIndex === messageIndex) {
         // 首条 user message 同时决定会话标题，编辑后要先同步标题再 replay。
-        await updateConversationTitleForReplay(convId, content);
+        await updateConversationTitleForMessage(convId, content);
       }
 
       const truncated = messages.slice(0, messageIndex);

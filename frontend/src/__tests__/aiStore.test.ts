@@ -266,6 +266,28 @@ describe("conversationMessages (Phase 1)", () => {
     expect(cms.filter((m) => m.role === "user").map((m) => m.content)).toEqual(["hello"]);
   });
 
+  it("sendToTab syncs local and backend titles for the first user message", async () => {
+    const tabId = "ai-52";
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
+    vi.mocked(UpdateConversationTitle).mockResolvedValue(undefined as any);
+    useTabStore.setState({
+      tabs: [{ id: tabId, type: "ai", label: "旧标题", meta: { type: "ai", conversationId: 52, title: "旧标题" } }],
+      activeTabId: tabId,
+    });
+    useAIStore.setState({
+      tabStates: { [tabId]: {} },
+      conversations: [{ ID: 52, Title: "旧标题", Updatetime: 0 } as any],
+      conversationMessages: { 52: [] },
+      conversationStreaming: { 52: { sending: false, pendingQueue: [] } },
+    });
+
+    await useAIStore.getState().sendToTab(tabId, "first prompt");
+
+    expect(UpdateConversationTitle).toHaveBeenCalledWith(52, "first prompt");
+    expect(useAIStore.getState().conversations.find((conv) => conv.ID === 52)?.Title).toBe("first prompt");
+    expect(useTabStore.getState().tabs.find((tab) => tab.id === tabId)?.label).toBe("first prompt");
+  });
+
   it("event listener is keyed by conversationId, not tabId", async () => {
     vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
     vi.mocked(EventsOn).mockReturnValue(() => {});
@@ -407,6 +429,23 @@ describe("sidebar state", () => {
     const msgs = useAIStore.getState().conversationMessages[88];
     expect(msgs.some((m) => m.role === "user" && m.content === "ping")).toBe(true);
     expect(vi.mocked(EventsOn).mock.calls.some((c) => c[0] === "ai:event:88")).toBe(true);
+  });
+
+  it("sendFromSidebar syncs local and backend titles for the first user message", async () => {
+    vi.mocked(EventsOn).mockReturnValue(() => {});
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
+    vi.mocked(UpdateConversationTitle).mockResolvedValue(undefined as any);
+    useAIStore.setState({
+      sidebarConversationId: 89,
+      conversations: [{ ID: 89, Title: "旧标题", Updatetime: 0 } as any],
+      conversationMessages: { 89: [] },
+      conversationStreaming: { 89: { sending: false, pendingQueue: [] } },
+    });
+
+    await useAIStore.getState().sendFromSidebar(89, "sidebar first");
+
+    expect(UpdateConversationTitle).toHaveBeenCalledWith(89, "sidebar first");
+    expect(useAIStore.getState().conversations.find((conv) => conv.ID === 89)?.Title).toBe("sidebar first");
   });
 
   it("stopConversation calls StopAIGeneration with the convId", async () => {

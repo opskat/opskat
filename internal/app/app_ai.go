@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 func maskAPIKey(key string) string {
@@ -155,12 +157,14 @@ func (a *App) ListConversations() ([]*conversation_entity.Conversation, error) {
 // UpdateConversationTitle 更新会话标题。
 func (a *App) UpdateConversationTitle(id int64, title string) error {
 	ctx := a.langCtx()
-	conv, err := conversation_svc.Conversation().Get(ctx, id)
-	if err != nil {
+	err := conversation_svc.Conversation().UpdateTitle(ctx, id, normalizeConversationTitle(title))
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return fmt.Errorf("会话不存在: %w", err)
 	}
-	conv.Title = normalizeConversationTitle(title)
-	return conversation_svc.Conversation().Update(ctx, conv)
+	return fmt.Errorf("更新会话标题失败: %w", err)
 }
 
 // SwitchConversation 切换到指定会话，返回显示消息
