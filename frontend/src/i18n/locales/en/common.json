@@ -1237,6 +1237,14 @@
       "redis": "Redis",
       "mongo": "Mongo",
       "prompt": "Prompt"
+    },
+    "popover": {
+      "searchPlaceholder": "Search snippets…",
+      "insert": "Insert",
+      "sendWithEnter": "Insert + Enter",
+      "empty": "No snippets for this context.",
+      "openManager": "Create in Snippets page",
+      "triggerButton": "Insert snippet"
     }
   }
 }

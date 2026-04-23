@@ -1237,6 +1237,14 @@
       "redis": "Redis",
       "mongo": "Mongo",
       "prompt": "Prompt"
+    },
+    "popover": {
+      "searchPlaceholder": "搜索片段…",
+      "insert": "插入",
+      "sendWithEnter": "插入并回车",
+      "empty": "此场景暂无片段。",
+      "openManager": "到代码片段页创建",
+      "triggerButton": "插入代码片段"
     }
   }
 }
