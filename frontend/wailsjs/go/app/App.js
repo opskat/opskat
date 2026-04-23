@@ -74,6 +74,10 @@ export function CreatePolicyGroup(arg1) {
   return window['go']['app']['App']['CreatePolicyGroup'](arg1);
 }
 
+export function CreateSnippet(arg1) {
+  return window['go']['app']['App']['CreateSnippet'](arg1);
+}
+
 export function DeleteAIProvider(arg1) {
   return window['go']['app']['App']['DeleteAIProvider'](arg1);
 }
@@ -102,6 +106,10 @@ export function DeletePolicyGroup(arg1) {
   return window['go']['app']['App']['DeletePolicyGroup'](arg1);
 }
 
+export function DeleteSnippet(arg1) {
+  return window['go']['app']['App']['DeleteSnippet'](arg1);
+}
+
 export function DetectOpsctl() {
   return window['go']['app']['App']['DetectOpsctl']();
 }
@@ -124,6 +132,10 @@ export function DownloadAndInstallUpdate(arg1) {
 
 export function DrainAIFlushAck() {
   return window['go']['app']['App']['DrainAIFlushAck']();
+}
+
+export function DuplicateSnippet(arg1) {
+  return window['go']['app']['App']['DuplicateSnippet'](arg1);
 }
 
 export function EnableExtension(arg1) {
@@ -278,6 +290,10 @@ export function GetSkillPreview() {
   return window['go']['app']['App']['GetSkillPreview']();
 }
 
+export function GetSnippet(arg1) {
+  return window['go']['app']['App']['GetSnippet'](arg1);
+}
+
 export function GetStoredGitHubUser() {
   return window['go']['app']['App']['GetStoredGitHubUser']();
 }
@@ -390,6 +406,14 @@ export function ListPolicyGroups(arg1) {
   return window['go']['app']['App']['ListPolicyGroups'](arg1);
 }
 
+export function ListSnippetCategories() {
+  return window['go']['app']['App']['ListSnippetCategories']();
+}
+
+export function ListSnippets(arg1) {
+  return window['go']['app']['App']['ListSnippets'](arg1);
+}
+
 export function LoadConversationMessages(arg1) {
   return window['go']['app']['App']['LoadConversationMessages'](arg1);
 }
@@ -428,6 +452,10 @@ export function PreviewTabbyConfig() {
 
 export function QueueAIMessage(arg1, arg2, arg3) {
   return window['go']['app']['App']['QueueAIMessage'](arg1, arg2, arg3);
+}
+
+export function RecordSnippetUse(arg1) {
+  return window['go']['app']['App']['RecordSnippetUse'](arg1);
 }
 
 export function ReloadExtensions() {
@@ -616,6 +644,10 @@ export function UpdateGroup(arg1) {
 
 export function UpdatePolicyGroup(arg1) {
   return window['go']['app']['App']['UpdatePolicyGroup'](arg1);
+}
+
+export function UpdateSnippet(arg1) {
+  return window['go']['app']['App']['UpdateSnippet'](arg1);
 }
 
 export function WaitAIFlushAck() {

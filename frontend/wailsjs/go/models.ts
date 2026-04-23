@@ -1721,6 +1721,163 @@ export namespace sftp_svc {
 
 }
 
+export namespace snippet_entity {
+	
+	export class Snippet {
+	    ID: number;
+	    Name: string;
+	    Category: string;
+	    Content: string;
+	    Description: string;
+	    Tags: string;
+	    AssetID?: number;
+	    Source: string;
+	    SourceRef: string;
+	    UseCount: number;
+	    // Go type: time
+	    LastUsedAt?: any;
+	    Status: number;
+	    // Go type: time
+	    CreatedAt: any;
+	    // Go type: time
+	    UpdatedAt: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new Snippet(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ID = source["ID"];
+	        this.Name = source["Name"];
+	        this.Category = source["Category"];
+	        this.Content = source["Content"];
+	        this.Description = source["Description"];
+	        this.Tags = source["Tags"];
+	        this.AssetID = source["AssetID"];
+	        this.Source = source["Source"];
+	        this.SourceRef = source["SourceRef"];
+	        this.UseCount = source["UseCount"];
+	        this.LastUsedAt = this.convertValues(source["LastUsedAt"], null);
+	        this.Status = source["Status"];
+	        this.CreatedAt = this.convertValues(source["CreatedAt"], null);
+	        this.UpdatedAt = this.convertValues(source["UpdatedAt"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
+export namespace snippet_svc {
+	
+	export class Category {
+	    id: string;
+	    assetType: string;
+	    label: string;
+	    source: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Category(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.assetType = source["assetType"];
+	        this.label = source["label"];
+	        this.source = source["source"];
+	    }
+	}
+	export class CreateReq {
+	    name: string;
+	    category: string;
+	    content: string;
+	    description: string;
+	    tags: string;
+	    assetId?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CreateReq(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.category = source["category"];
+	        this.content = source["content"];
+	        this.description = source["description"];
+	        this.tags = source["tags"];
+	        this.assetId = source["assetId"];
+	    }
+	}
+	export class ListReq {
+	    categories: string[];
+	    assetId?: number;
+	    includeGlobal: boolean;
+	    keyword: string;
+	    tag: string;
+	    limit: number;
+	    offset: number;
+	    orderBy: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ListReq(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.categories = source["categories"];
+	        this.assetId = source["assetId"];
+	        this.includeGlobal = source["includeGlobal"];
+	        this.keyword = source["keyword"];
+	        this.tag = source["tag"];
+	        this.limit = source["limit"];
+	        this.offset = source["offset"];
+	        this.orderBy = source["orderBy"];
+	    }
+	}
+	export class UpdateReq {
+	    id: number;
+	    name: string;
+	    content: string;
+	    description: string;
+	    tags: string;
+	    assetId?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpdateReq(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.content = source["content"];
+	        this.description = source["description"];
+	        this.tags = source["tags"];
+	        this.assetId = source["assetId"];
+	    }
+	}
+
+}
+
 export namespace sshpool {
 	
 	export class PoolEntryInfo {
