@@ -1193,6 +1193,9 @@
     "emptyStateFiltered": "No snippets match current filter.",
     "readOnlyTooltip": "Managed by extension — duplicate to edit",
     "globalBinding": "— Global (no binding) —",
+    "unknownCategory": "unknown:{{name}}",
+    "unknownCategoryTooltip": "This snippet's category is no longer registered. The providing extension may have been uninstalled.",
+    "orphanedSuffix": "(orphaned)",
     "columns": {
       "category": "Category",
       "name": "Name",

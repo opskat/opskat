@@ -36,6 +36,15 @@ type SnippetRepo interface {
 	FindBySourceRef(ctx context.Context, source, ref string) (*snippet_entity.Snippet, error)
 	TouchUsage(ctx context.Context, id int64) error
 	DetachFromAsset(ctx context.Context, assetID int64) error
+
+	// UpsertExtensionSeed 以 (source, source_ref) 为联合键幂等写入扩展 seed。
+	// 命中已有行则覆盖 name/category/content/description/tags + updated_at，
+	// 保留 use_count/last_used_at/status/created_at。
+	// 不存在则插入并为 src.ID 赋值。仅供扩展 seed 同步路径使用，不对用户侧暴露。
+	UpsertExtensionSeed(ctx context.Context, src *snippet_entity.Snippet) error
+	// DeleteExtensionSeedsMissing 硬删除 source 下 source_ref 不在 keepRefs 内的记录。
+	// keepRefs 为空等价于 HardDeleteBySource(source)（清空该扩展全部 seed）。
+	DeleteExtensionSeedsMissing(ctx context.Context, source string, keepRefs []string) error
 }
 
 var defaultSnippet SnippetRepo

@@ -269,6 +269,100 @@ func TestSnippetRepo_DetachFromAsset(t *testing.T) {
 	}
 }
 
+func TestSnippetRepo_UpsertExtensionSeed_Insert(t *testing.T) {
+	ctx, r := setupRepo(t)
+	s := &snippet_entity.Snippet{
+		Name: "List topics", Category: "kafka", Content: "kafka-topics --list",
+		Source: "ext:kafka-ext", SourceRef: "list-topics", Status: snippet_entity.StatusActive,
+	}
+	require.NoError(t, r.UpsertExtensionSeed(ctx, s))
+	assert.NotZero(t, s.ID)
+
+	got, err := r.FindBySourceRef(ctx, "ext:kafka-ext", "list-topics")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "List topics", got.Name)
+	assert.Equal(t, "kafka", got.Category)
+}
+
+func TestSnippetRepo_UpsertExtensionSeed_UpdatePreservesCounters(t *testing.T) {
+	ctx, r := setupRepo(t)
+
+	// 初次插入
+	first := &snippet_entity.Snippet{
+		Name: "n1", Category: "kafka", Content: "v1",
+		Source: "ext:kafka-ext", SourceRef: "seed-1", Status: snippet_entity.StatusActive,
+	}
+	require.NoError(t, r.UpsertExtensionSeed(ctx, first))
+
+	// 模拟使用数
+	require.NoError(t, r.TouchUsage(ctx, first.ID))
+	require.NoError(t, r.TouchUsage(ctx, first.ID))
+
+	// 再次 upsert：name/content 变更，use_count/last_used_at 必须保留
+	second := &snippet_entity.Snippet{
+		Name: "n1-updated", Category: "kafka", Content: "v2", Description: "new desc",
+		Tags:   "a,b",
+		Source: "ext:kafka-ext", SourceRef: "seed-1", Status: snippet_entity.StatusActive,
+	}
+	require.NoError(t, r.UpsertExtensionSeed(ctx, second))
+	assert.Equal(t, first.ID, second.ID, "ID should be the existing row's ID")
+
+	got, err := r.FindBySourceRef(ctx, "ext:kafka-ext", "seed-1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "n1-updated", got.Name)
+	assert.Equal(t, "v2", got.Content)
+	assert.Equal(t, "new desc", got.Description)
+	assert.Equal(t, "a,b", got.Tags)
+	assert.EqualValues(t, 2, got.UseCount, "use_count must be preserved across upsert")
+	assert.NotNil(t, got.LastUsedAt)
+}
+
+func TestSnippetRepo_DeleteExtensionSeedsMissing(t *testing.T) {
+	ctx, r := setupRepo(t)
+	// 3 条扩展 seed + 1 条用户片段
+	for _, key := range []string{"k1", "k2", "k3"} {
+		s := &snippet_entity.Snippet{
+			Name: key, Category: snippet_entity.CategoryShell, Content: "x",
+			Source: "ext:foo", SourceRef: key, Status: snippet_entity.StatusActive,
+		}
+		require.NoError(t, r.Create(ctx, s))
+	}
+	user := newSnippet("user-one", snippet_entity.CategoryShell, nil)
+	require.NoError(t, r.Create(ctx, user))
+
+	// 只保留 k1
+	require.NoError(t, r.DeleteExtensionSeedsMissing(ctx, "ext:foo", []string{"k1"}))
+
+	remaining, err := r.Find(ctx, SnippetQuery{})
+	require.NoError(t, err)
+	names := map[string]bool{}
+	for _, s := range remaining {
+		names[s.Name] = true
+	}
+	assert.True(t, names["k1"], "k1 should remain")
+	assert.False(t, names["k2"], "k2 should be deleted")
+	assert.False(t, names["k3"], "k3 should be deleted")
+	assert.True(t, names["user-one"], "user-created snippet must not be affected")
+}
+
+func TestSnippetRepo_DeleteExtensionSeedsMissing_EmptyKeepClearsAll(t *testing.T) {
+	ctx, r := setupRepo(t)
+	for _, key := range []string{"k1", "k2"} {
+		s := &snippet_entity.Snippet{
+			Name: key, Category: snippet_entity.CategoryShell, Content: "x",
+			Source: "ext:foo", SourceRef: key, Status: snippet_entity.StatusActive,
+		}
+		require.NoError(t, r.Create(ctx, s))
+	}
+	require.NoError(t, r.DeleteExtensionSeedsMissing(ctx, "ext:foo", nil))
+
+	list, err := r.Find(ctx, SnippetQuery{Sources: []string{"ext:foo"}})
+	require.NoError(t, err)
+	assert.Empty(t, list)
+}
+
 func TestSnippetRepo_HardDeleteBySource(t *testing.T) {
 	ctx, r := setupRepo(t)
 	s1 := newSnippet("a", snippet_entity.CategoryShell, nil)

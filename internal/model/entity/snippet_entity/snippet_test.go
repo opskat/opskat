@@ -17,9 +17,13 @@ func TestSnippet_Validate(t *testing.T) {
 			s := &Snippet{Name: "  ", Category: CategoryShell, Content: "ls", Source: SourceUser}
 			assert.Error(t, s.Validate())
 		})
-		convey.Convey("非法分类返回错误", func() {
-			s := &Snippet{Name: "x", Category: "bogus", Content: "ls", Source: SourceUser}
+		convey.Convey("category 为空返回错误（格式性校验，合法分类由 svc 层基于注册表判定）", func() {
+			s := &Snippet{Name: "x", Category: "  ", Content: "ls", Source: SourceUser}
 			assert.Error(t, s.Validate())
+		})
+		convey.Convey("entity 层不再对非内置分类做拒绝（交由 svc 基于注册表判定）", func() {
+			s := &Snippet{Name: "x", Category: "kafka-ext", Content: "ls", Source: "ext:kafka-ext"}
+			assert.NoError(t, s.Validate())
 		})
 		convey.Convey("内容为空白返回错误", func() {
 			s := &Snippet{Name: "x", Category: CategoryShell, Content: "   ", Source: SourceUser}

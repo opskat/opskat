@@ -1193,6 +1193,9 @@
     "emptyStateFiltered": "没有符合当前筛选条件的片段。",
     "readOnlyTooltip": "由扩展管理 — 请复制后再编辑",
     "globalBinding": "— 全局（不绑定资产）—",
+    "unknownCategory": "未知分类:{{name}}",
+    "unknownCategoryTooltip": "该片段的分类已不存在，提供此分类的扩展可能已被卸载。",
+    "orphanedSuffix": "（孤立）",
     "columns": {
       "category": "分类",
       "name": "名称",

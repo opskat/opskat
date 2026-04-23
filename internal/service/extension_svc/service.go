@@ -11,6 +11,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
+	"github.com/opskat/opskat/internal/service/snippet_svc"
 	"github.com/opskat/opskat/pkg/extension"
 	"go.uber.org/zap"
 )
@@ -28,12 +29,13 @@ type ExtensionInfo struct {
 
 // Service manages the extension lifecycle: init, reload, enable/disable, install/uninstall.
 type Service struct {
-	manager   *extension.Manager
-	bridge    *extension.Bridge
-	stateRepo extension_state_repo.ExtensionStateRepo
-	dataRepo  extension_data_repo.ExtensionDataRepo
-	assetRepo asset_repo.AssetRepo
-	logger    *zap.Logger
+	manager     *extension.Manager
+	bridge      *extension.Bridge
+	stateRepo   extension_state_repo.ExtensionStateRepo
+	dataRepo    extension_data_repo.ExtensionDataRepo
+	assetRepo   asset_repo.AssetRepo
+	snippetHook SnippetExtensionHook
+	logger      *zap.Logger
 
 	onBridgeChanged func(bridge *extension.Bridge)
 	onReload        func()
@@ -42,7 +44,8 @@ type Service struct {
 	initDone atomic.Bool
 }
 
-// New creates a new extension lifecycle service.
+// New creates a new extension lifecycle service. snippetHook is optional — pass nil
+// to disable snippet integration (existing tests that don't exercise snippets do this).
 func New(
 	manager *extension.Manager,
 	stateRepo extension_state_repo.ExtensionStateRepo,
@@ -51,6 +54,7 @@ func New(
 	logger *zap.Logger,
 	onBridgeChanged func(bridge *extension.Bridge),
 	onReload func(),
+	snippetHook SnippetExtensionHook,
 ) *Service {
 	return &Service{
 		manager:         manager,
@@ -58,6 +62,7 @@ func New(
 		stateRepo:       stateRepo,
 		dataRepo:        dataRepo,
 		assetRepo:       assetRepo,
+		snippetHook:     snippetHook,
 		logger:          logger,
 		onBridgeChanged: onBridgeChanged,
 		onReload:        onReload,
@@ -129,6 +134,9 @@ func (s *Service) Enable(ctx context.Context, name string) error {
 	if ext := s.manager.GetExtension(name); ext != nil {
 		s.bridge.Register(ext)
 	}
+	if s.snippetHook != nil {
+		s.snippetHook.RefreshCategories()
+	}
 	s.notifyBridgeChanged()
 	s.ensureState(ctx, name, true)
 	s.notifyReload()
@@ -142,6 +150,9 @@ func (s *Service) Disable(ctx context.Context, name string) error {
 
 	s.bridge.Unregister(name)
 	_ = s.manager.Unload(ctx, name)
+	if s.snippetHook != nil {
+		s.snippetHook.RefreshCategories()
+	}
 	s.notifyBridgeChanged()
 	s.ensureState(ctx, name, false)
 	s.notifyReload()
@@ -149,6 +160,14 @@ func (s *Service) Disable(ctx context.Context, name string) error {
 }
 
 // Install installs an extension from a file/directory path.
+//
+// Flow:
+//  1. manager.Install parses manifest + copies files + loads WASM.
+//  2. Cross-extension snippet category id conflict check: if the new manifest declares
+//     a snippets.categories[].id that collides with another currently installed
+//     extension's category, roll back via manager.Uninstall and return an error.
+//  3. snippet hook: RefreshCategories → SyncExtensionSeeds.
+//  4. bridge.Register, notify, persist enabled state.
 func (s *Service) Install(ctx context.Context, sourcePath string) (*extension.Manifest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -158,6 +177,32 @@ func (s *Service) Install(ctx context.Context, sourcePath string) (*extension.Ma
 		return nil, fmt.Errorf("install extension: %w", err)
 	}
 
+	// Cross-extension category id dedup (after install+load, before bridge.Register).
+	// Intra-manifest duplicates are already rejected by manifest.validate().
+	if s.snippetHook != nil && len(manifest.Snippets.Categories) > 0 {
+		if conflict := s.findCrossExtensionCategoryConflict(manifest); conflict != "" {
+			// Roll back manager-side state (files + loaded WASM).
+			if rbErr := s.manager.Uninstall(ctx, manifest.Name); rbErr != nil {
+				return nil, fmt.Errorf("cannot install %q: snippet category %q already registered; rollback also failed: %v",
+					manifest.Name, conflict, rbErr)
+			}
+			return nil, fmt.Errorf("cannot install %q: snippet category %q is already registered by another extension",
+				manifest.Name, conflict)
+		}
+	}
+
+	// Snippet hook: refresh categories first so SyncExtensionSeeds sees the new ones when
+	// validating seed.category (although manifest already validated, this keeps the
+	// registry consistent for immediate queries from the frontend).
+	if s.snippetHook != nil {
+		s.snippetHook.RefreshCategories()
+		seeds := manifestSeedsToSvc(manifest)
+		if err := s.snippetHook.SyncExtensionSeeds(ctx, manifest.Name, seeds); err != nil {
+			s.logger.Warn("sync extension seeds failed",
+				zap.String("name", manifest.Name), zap.Error(err))
+		}
+	}
+
 	if ext := s.manager.GetExtension(manifest.Name); ext != nil {
 		s.bridge.Register(ext)
 	}
@@ -165,6 +210,54 @@ func (s *Service) Install(ctx context.Context, sourcePath string) (*extension.Ma
 	s.ensureState(ctx, manifest.Name, true)
 	s.notifyReload()
 	return manifest, nil
+}
+
+// findCrossExtensionCategoryConflict scans currently loaded extensions (excluding the
+// just-installed one) and returns the first category id from the new manifest that
+// clashes with an existing extension's declaration. Empty string = no conflict.
+//
+// Note: this relies on the new extension already being loaded into the manager by
+// manager.Install; we filter it out so a reinstall/upgrade of the same extension
+// does not self-conflict.
+func (s *Service) findCrossExtensionCategoryConflict(newManifest *extension.Manifest) string {
+	if len(newManifest.Snippets.Categories) == 0 {
+		return ""
+	}
+	newCats := make(map[string]struct{}, len(newManifest.Snippets.Categories))
+	for _, c := range newManifest.Snippets.Categories {
+		newCats[c.ID] = struct{}{}
+	}
+	for _, ext := range s.manager.ListExtensions() {
+		if ext == nil || ext.Manifest == nil || ext.Name == newManifest.Name {
+			continue
+		}
+		for _, c := range ext.Manifest.Snippets.Categories {
+			if _, hit := newCats[c.ID]; hit {
+				return c.ID
+			}
+		}
+	}
+	return ""
+}
+
+// manifestSeedsToSvc copies manifest.Snippets.Seed into snippet_svc.SeedDef to avoid
+// snippet_svc importing pkg/extension.
+func manifestSeedsToSvc(m *extension.Manifest) []snippet_svc.SeedDef {
+	if m == nil || len(m.Snippets.Seed) == 0 {
+		return nil
+	}
+	out := make([]snippet_svc.SeedDef, 0, len(m.Snippets.Seed))
+	for _, s := range m.Snippets.Seed {
+		out = append(out, snippet_svc.SeedDef{
+			Key:         s.Key,
+			Name:        s.Name,
+			Category:    s.Category,
+			Content:     s.Content,
+			Description: s.Description,
+			Tags:        s.Tags,
+		})
+	}
+	return out
 }
 
 // Uninstall removes an extension and optionally cleans its data.
@@ -188,11 +281,27 @@ func (s *Service) Uninstall(ctx context.Context, name string, cleanData bool, fo
 		}
 	}
 
+	// Snippet hook: remove seeds + refresh categories BEFORE manager.Uninstall removes
+	// the manifest from memory. Hook failures are logged but do not block uninstall —
+	// leftover seeds are cleaned up on the next install or via manual DB ops.
+	if s.snippetHook != nil {
+		if err := s.snippetHook.RemoveExtensionSeeds(ctx, name); err != nil {
+			s.logger.Warn("remove extension seeds failed",
+				zap.String("name", name), zap.Error(err))
+		}
+	}
+
 	s.bridge.Unregister(name)
 	s.notifyBridgeChanged()
 
 	if err := s.manager.Uninstall(ctx, name); err != nil {
 		return fmt.Errorf("uninstall extension: %w", err)
+	}
+
+	// Refresh categories AFTER the extension is unloaded from the manager, so the
+	// snippet category registry rebuilds without the uninstalled extension's entries.
+	if s.snippetHook != nil {
+		s.snippetHook.RefreshCategories()
 	}
 
 	if err := s.stateRepo.Delete(ctx, name); err != nil {

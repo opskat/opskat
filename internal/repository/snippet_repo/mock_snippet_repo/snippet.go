@@ -56,6 +56,20 @@ func (mr *MockSnippetRepoMockRecorder) Create(ctx, s any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockSnippetRepo)(nil).Create), ctx, s)
 }
 
+// DeleteExtensionSeedsMissing mocks base method.
+func (m *MockSnippetRepo) DeleteExtensionSeedsMissing(ctx context.Context, source string, keepRefs []string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteExtensionSeedsMissing", ctx, source, keepRefs)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeleteExtensionSeedsMissing indicates an expected call of DeleteExtensionSeedsMissing.
+func (mr *MockSnippetRepoMockRecorder) DeleteExtensionSeedsMissing(ctx, source, keepRefs any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteExtensionSeedsMissing", reflect.TypeOf((*MockSnippetRepo)(nil).DeleteExtensionSeedsMissing), ctx, source, keepRefs)
+}
+
 // DetachFromAsset mocks base method.
 func (m *MockSnippetRepo) DetachFromAsset(ctx context.Context, assetID int64) error {
 	m.ctrl.T.Helper()
@@ -169,4 +183,18 @@ func (m *MockSnippetRepo) Update(ctx context.Context, s *snippet_entity.Snippet)
 func (mr *MockSnippetRepoMockRecorder) Update(ctx, s any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockSnippetRepo)(nil).Update), ctx, s)
+}
+
+// UpsertExtensionSeed mocks base method.
+func (m *MockSnippetRepo) UpsertExtensionSeed(ctx context.Context, src *snippet_entity.Snippet) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpsertExtensionSeed", ctx, src)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpsertExtensionSeed indicates an expected call of UpsertExtensionSeed.
+func (mr *MockSnippetRepoMockRecorder) UpsertExtensionSeed(ctx, src any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpsertExtensionSeed", reflect.TypeOf((*MockSnippetRepo)(nil).UpsertExtensionSeed), ctx, src)
 }

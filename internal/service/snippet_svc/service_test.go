@@ -259,3 +259,85 @@ func TestSnippetSvc_ListCategories(t *testing.T) {
 	svc := NewSnippetSvc(NewCategoryRegistry())
 	assert.Len(t, svc.ListCategories(), 5)
 }
+
+func TestSnippetSvc_KnownCategoryIDs(t *testing.T) {
+	reg := NewCategoryRegistry()
+	reg.SetExtensionProvider(ExtensionCategoryProviderFunc(func() []ExtensionCategory {
+		return []ExtensionCategory{
+			{ID: "kafka", AssetType: "kafka", Label: "Kafka", ExtensionRef: "kafka-ext"},
+		}
+	}))
+	reg.RefreshFromExtensions()
+	svc := NewSnippetSvc(reg)
+	ids := svc.KnownCategoryIDs()
+	assert.Contains(t, ids, snippet_entity.CategoryShell)
+	assert.Contains(t, ids, "kafka")
+}
+
+func TestSnippetSvc_RefreshCategories(t *testing.T) {
+	reg := NewCategoryRegistry()
+	var supplied []ExtensionCategory
+	reg.SetExtensionProvider(ExtensionCategoryProviderFunc(func() []ExtensionCategory {
+		return supplied
+	}))
+	svc := NewSnippetSvc(reg)
+	assert.Len(t, svc.ListCategories(), 5)
+
+	supplied = []ExtensionCategory{{ID: "kafka", AssetType: "kafka", Label: "Kafka", ExtensionRef: "kx"}}
+	svc.RefreshCategories()
+	assert.Len(t, svc.ListCategories(), 6)
+
+	supplied = nil
+	svc.RefreshCategories()
+	assert.Len(t, svc.ListCategories(), 5)
+}
+
+func TestSnippetSvc_SyncExtensionSeeds(t *testing.T) {
+	convey.Convey("SyncExtensionSeeds 幂等同步", t, func() {
+		convey.Convey("新建 + upsert + 清理 missing", func() {
+			f := setupSvcTest(t)
+			// 先匹配 3 次 upsert
+			f.snippets.EXPECT().UpsertExtensionSeed(gomock.Any(), gomock.Any()).Return(nil).Times(3)
+			// 再匹配一次 prune
+			f.snippets.EXPECT().DeleteExtensionSeedsMissing(gomock.Any(),
+				"ext:foo", gomock.InAnyOrder([]string{"k1", "k2", "k3"})).Return(nil)
+
+			err := f.svc.SyncExtensionSeeds(context.Background(), "foo", []SeedDef{
+				{Key: "k1", Name: "n1", Category: snippet_entity.CategoryShell, Content: "echo 1"},
+				{Key: "k2", Name: "n2", Category: snippet_entity.CategoryShell, Content: "echo 2", Tags: []string{"a", "B"}},
+				{Key: "k3", Name: "n3", Category: snippet_entity.CategoryShell, Content: "echo 3"},
+			})
+			assert.NoError(t, err)
+		})
+
+		convey.Convey("空 seed 列表也会触发 prune（清空）", func() {
+			f := setupSvcTest(t)
+			f.snippets.EXPECT().DeleteExtensionSeedsMissing(gomock.Any(), "ext:foo", gomock.Any()).Return(nil)
+			assert.NoError(t, f.svc.SyncExtensionSeeds(context.Background(), "foo", nil))
+		})
+
+		convey.Convey("extName 为空拒绝", func() {
+			f := setupSvcTest(t)
+			assert.Error(t, f.svc.SyncExtensionSeeds(context.Background(), "", nil))
+		})
+
+		convey.Convey("seed 校验失败中断", func() {
+			f := setupSvcTest(t)
+			// 无期望的 repo 调用；seed.Key 为空直接拒绝
+			err := f.svc.SyncExtensionSeeds(context.Background(), "foo", []SeedDef{
+				{Key: "", Name: "n", Category: snippet_entity.CategoryShell, Content: "x"},
+			})
+			assert.Error(t, err)
+		})
+	})
+}
+
+func TestSnippetSvc_RemoveExtensionSeeds(t *testing.T) {
+	f := setupSvcTest(t)
+	f.snippets.EXPECT().HardDeleteBySource(gomock.Any(), "ext:foo").Return(nil)
+	assert.NoError(t, f.svc.RemoveExtensionSeeds(context.Background(), "foo"))
+
+	// extName 为空拒绝
+	f2 := setupSvcTest(t)
+	assert.Error(t, f2.svc.RemoveExtensionSeeds(context.Background(), ""))
+}

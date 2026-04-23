@@ -146,6 +146,50 @@ describe("SnippetsPage", () => {
     await waitFor(() => expect(DuplicateSnippet).toHaveBeenCalledWith(42));
   });
 
+  it("renders orphaned category badge and exposes it in the filter dropdown", async () => {
+    // Registered categories only include built-ins; list contains a snippet whose
+    // Category "kafka" is unknown (extension providing it was uninstalled).
+    const rows = [
+      {
+        ID: 1,
+        Name: "orphaned-one",
+        Category: "kafka",
+        Content: "kafka-topics --list",
+        Description: "",
+        Tags: "",
+        Source: "user",
+        SourceRef: "",
+        UseCount: 0,
+        Status: 1,
+        CreatedAt: "2024-01-01T00:00:00Z",
+        UpdatedAt: "2024-01-01T00:00:00Z",
+      },
+    ];
+    vi.mocked(ListSnippets).mockResolvedValue(rows as any);
+    useSnippetStore.setState({ list: rows as any });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText("orphaned-one")).toBeInTheDocument());
+
+    // With the stubbed t() returning the key verbatim (no interpolation), the
+    // orphan badge renders the literal i18n key. The cell shows that — prior
+    // to this fix it would have shown the raw Category string "kafka".
+    const badges = screen.getAllByText("snippet.unknownCategory");
+    expect(badges.length).toBeGreaterThan(0);
+    // The tooltip-providing title attribute carries the i18n key as well.
+    const badgeEl = badges[0];
+    expect(badgeEl.getAttribute("title")).toBe("snippet.unknownCategoryTooltip");
+
+    // Open the category filter dropdown and assert the orphan row appears.
+    const filterBtn = screen.getByRole("button", { name: /snippet.allCategories/ });
+    fireEvent.click(filterBtn);
+    // Registered (shell, prompt) + orphan (kafka) => 3 checkboxes.
+    await waitFor(() => {
+      const checkboxes = screen.getAllByRole("checkbox");
+      expect(checkboxes.length).toBe(3);
+    });
+  });
+
   it("resolves asset name via assetStore", async () => {
     useAssetStore.setState({
       assets: [{ ID: 5, Name: "prod-db", Type: "database", GroupID: 0 } as any],

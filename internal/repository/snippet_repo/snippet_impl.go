@@ -154,3 +154,59 @@ func (r *snippetRepo) DetachFromAsset(ctx context.Context, assetID int64) error 
 		time.Now(), assetID,
 	).Error
 }
+
+// UpsertExtensionSeed 幂等写入扩展 seed，以 (source, source_ref) 为联合键。
+// 事务内先查后写：命中则更新允许字段，未命中则 Create 并回填 ID。
+func (r *snippetRepo) UpsertExtensionSeed(ctx context.Context, src *snippet_entity.Snippet) error {
+	if src == nil {
+		return errors.New("snippet is required")
+	}
+	if src.Source == "" || src.SourceRef == "" {
+		return errors.New("source and source_ref are required for extension seed upsert")
+	}
+	return db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing snippet_entity.Snippet
+		err := tx.Where("source = ? AND source_ref = ?", src.Source, src.SourceRef).
+			First(&existing).Error
+		if err == nil {
+			// 命中：仅覆盖允许字段；保留 use_count/last_used_at/status/created_at。
+			updates := map[string]interface{}{
+				"name":        src.Name,
+				"category":    src.Category,
+				"content":     src.Content,
+				"description": src.Description,
+				"tags":        src.Tags,
+				"asset_id":    nil, // seed 默认无绑定；用户无法改扩展 seed，故无覆盖旧值风险
+				"updated_at":  time.Now(),
+			}
+			if err := tx.Model(&snippet_entity.Snippet{}).
+				Where("id = ?", existing.ID).
+				Updates(updates).Error; err != nil {
+				return err
+			}
+			src.ID = existing.ID
+			src.UseCount = existing.UseCount
+			src.LastUsedAt = existing.LastUsedAt
+			src.CreatedAt = existing.CreatedAt
+			return nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		// 未命中：插入。
+		return tx.Create(src).Error
+	})
+}
+
+// DeleteExtensionSeedsMissing 硬删 source 下 source_ref 不在 keepRefs 的行。
+// keepRefs 为空时等价于清空该 source。
+func (r *snippetRepo) DeleteExtensionSeedsMissing(ctx context.Context, source string, keepRefs []string) error {
+	if source == "" {
+		return errors.New("source is required")
+	}
+	q := db.Ctx(ctx).Where("source = ?", source)
+	if len(keepRefs) > 0 {
+		q = q.Where("source_ref NOT IN ?", keepRefs)
+	}
+	return q.Delete(&snippet_entity.Snippet{}).Error
+}

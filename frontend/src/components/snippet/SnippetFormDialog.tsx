@@ -155,6 +155,15 @@ export function SnippetFormDialog({ open, mode, initial, defaultCategory, onOpen
                     {c.label}
                   </SelectItem>
                 ))}
+                {/* In edit mode on an orphaned category, surface it as a disabled
+                    option so the Select can still render the value. Users cannot
+                    create new snippets in orphaned categories (category is
+                    immutable in edit anyway). */}
+                {mode === "edit" && category && !categories.some((c) => c.id === category) && (
+                  <SelectItem key={`orphan-${category}`} value={category} disabled>
+                    {t("snippet.unknownCategory", { name: category })}
+                  </SelectItem>
+                )}
               </SelectContent>
             </Select>
           </div>

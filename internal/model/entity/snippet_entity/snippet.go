@@ -82,13 +82,17 @@ type Snippet struct {
 // TableName GORM 表名
 func (Snippet) TableName() string { return "snippets" }
 
-// Validate 校验必填字段
+// Validate 校验必填字段。
+//
+// 注意：category 仅做"非空"校验；"是否为已注册分类"由 service 层查询 CategoryRegistry
+// 决定（注册表包含内置 5 类 + 运行时已加载扩展声明的分类）。entity 层若直接判定会
+// 拒绝掉扩展分类，破坏 PR 5 的扩展集成。
 func (s *Snippet) Validate() error {
 	if strings.TrimSpace(s.Name) == "" {
 		return errors.New("snippet name is required")
 	}
-	if !IsValidCategory(s.Category) {
-		return errors.New("snippet category is invalid")
+	if strings.TrimSpace(s.Category) == "" {
+		return errors.New("snippet category is required")
 	}
 	if strings.TrimSpace(s.Content) == "" {
 		return errors.New("snippet content is required")

@@ -112,6 +112,24 @@ export function SnippetsPage() {
     return m;
   }, [categories]);
 
+  // Orphan categories: snippets referencing a category id that is no longer
+  // registered (e.g. the providing extension was uninstalled). Exposed in the
+  // filter dropdown + column badge; Create/Edit form still only lists registered.
+  const orphanCategoryIds = useMemo(() => {
+    const registered = new Set(orderedCategoryIds);
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const s of list) {
+      if (!s.Category || registered.has(s.Category) || seen.has(s.Category)) continue;
+      seen.add(s.Category);
+      out.push(s.Category);
+    }
+    out.sort();
+    return out;
+  }, [list, orderedCategoryIds]);
+
+  const isOrphanCategory = useCallback((id: string) => !!id && !categoryLabelById[id], [categoryLabelById]);
+
   const toggleCategoryFilter = useCallback(
     (id: string) => {
       const next = filter.categories.includes(id)
@@ -169,7 +187,9 @@ export function SnippetsPage() {
   const selectedCategoryLabel =
     filter.categories.length === 0
       ? t("snippet.allCategories")
-      : filter.categories.map((id) => categoryLabelById[id] ?? id).join(", ");
+      : filter.categories
+          .map((id) => (categoryLabelById[id] ? categoryLabelById[id] : t("snippet.unknownCategory", { name: id })))
+          .join(", ");
 
   const isEmpty = list.length === 0 && !listLoading;
   const hasActiveFilter = filter.categories.length > 0 || filter.keyword.trim() !== "" || filter.tag.trim() !== "";
@@ -235,6 +255,32 @@ export function SnippetsPage() {
                     </label>
                   );
                 })}
+                {orphanCategoryIds.length > 0 && (
+                  <>
+                    <div className="my-1 h-px bg-border" />
+                    {orphanCategoryIds.map((id) => {
+                      const checked = filter.categories.includes(id);
+                      return (
+                        <label
+                          key={`orphan-${id}`}
+                          className="flex items-center gap-2 px-2 py-1.5 text-xs rounded hover:bg-accent cursor-pointer"
+                          title={t("snippet.unknownCategoryTooltip")}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleCategoryFilter(id)}
+                            className="h-3.5 w-3.5"
+                          />
+                          <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-mono bg-muted text-muted-foreground">
+                            {t("snippet.unknownCategory", { name: id })}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground">{t("snippet.orphanedSuffix")}</span>
+                        </label>
+                      );
+                    })}
+                  </>
+                )}
               </div>
             </PopoverContent>
           </Popover>
@@ -293,14 +339,23 @@ export function SnippetsPage() {
               return (
                 <tr key={s.ID} className="border-b hover:bg-muted/50 transition-colors">
                   <td className="px-4 py-2">
-                    <span
-                      className={cn(
-                        "inline-block px-1.5 py-0.5 rounded text-[10px] font-mono",
-                        categoryBadgeClass(s.Category, orderedCategoryIds)
-                      )}
-                    >
-                      {categoryLabelById[s.Category] ?? s.Category}
-                    </span>
+                    {isOrphanCategory(s.Category) ? (
+                      <span
+                        className="inline-block px-1.5 py-0.5 rounded text-[10px] font-mono bg-muted text-muted-foreground"
+                        title={t("snippet.unknownCategoryTooltip")}
+                      >
+                        {t("snippet.unknownCategory", { name: s.Category })}
+                      </span>
+                    ) : (
+                      <span
+                        className={cn(
+                          "inline-block px-1.5 py-0.5 rounded text-[10px] font-mono",
+                          categoryBadgeClass(s.Category, orderedCategoryIds)
+                        )}
+                      >
+                        {categoryLabelById[s.Category] ?? s.Category}
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-2">
                     <div className="flex items-center gap-1.5">
