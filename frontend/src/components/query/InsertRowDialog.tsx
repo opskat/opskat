@@ -43,8 +43,32 @@ function sqlQuote(value: string): string {
 }
 
 function quoteIdent(name: string, driver?: string): string {
-  if (driver === "postgresql") return `"${name}"`;
-  return `\`${name}\``;
+  if (driver === "postgresql") return `"${name.replace(/"/g, '""')}"`;
+  return `\`${name.replace(/`/g, "``")}\``;
+}
+
+export interface BuildInsertSqlInput {
+  driver?: string;
+  database: string;
+  table: string;
+  columnsValues: { name: string; value: string }[];
+}
+
+export function buildInsertSql({ driver, database, table, columnsValues }: BuildInsertSqlInput): string {
+  const tableName =
+    driver === "postgresql"
+      ? quoteIdent(table, driver)
+      : `${quoteIdent(database, driver)}.${quoteIdent(table, driver)}`;
+
+  if (columnsValues.length === 0) {
+    return driver === "postgresql"
+      ? `INSERT INTO ${tableName} DEFAULT VALUES`
+      : `INSERT INTO ${tableName} () VALUES ()`;
+  }
+
+  const cols = columnsValues.map((item) => quoteIdent(item.name, driver)).join(", ");
+  const vals = columnsValues.map((item) => sqlQuote(item.value)).join(", ");
+  return `INSERT INTO ${tableName} (${cols}) VALUES (${vals})`;
 }
 
 function escapeLiteral(value: string): string {
@@ -149,27 +173,17 @@ export function InsertRowDialog({
     if (!assetId) return;
 
     for (const col of requiredColumns) {
-      if (!values[col.name] || values[col.name].trim() === "") {
+      if (!Object.prototype.hasOwnProperty.call(values, col.name)) {
         toast.error(t("query.insertRequiredField", { field: col.name }));
         return;
       }
     }
 
-    const selected = columns
-      .map((col) => ({ col, value: values[col.name] ?? "" }))
-      .filter((item) => item.value.trim() !== "");
+    const columnsValues = columns
+      .filter((col) => Object.prototype.hasOwnProperty.call(values, col.name))
+      .map((col) => ({ name: col.name, value: values[col.name] ?? "" }));
 
-    const tableName =
-      driver === "postgresql" ? `"${table}"` : `${quoteIdent(database, driver)}.${quoteIdent(table, driver)}`;
-
-    const sql =
-      selected.length === 0
-        ? driver === "postgresql"
-          ? `INSERT INTO ${tableName} DEFAULT VALUES`
-          : `INSERT INTO ${tableName} () VALUES ()`
-        : `INSERT INTO ${tableName} (${selected.map((item) => quoteIdent(item.col.name, driver)).join(", ")}) VALUES (${selected
-            .map((item) => sqlQuote(item.value))
-            .join(", ")})`;
+    const sql = buildInsertSql({ driver, database, table, columnsValues });
 
     setSubmitting(true);
     try {

@@ -517,7 +517,19 @@ export function AlterTableDialog({
     setPreviewStatements(built.statements);
     setPendingNextTableName(built.nextTableName);
     setShowSqlPreview(true);
-  }, [assetId, validateDraft, driver, database, table, tableNameDraft, tableCommentDraft, originalTableComment, originalColumns, columns, t]);
+  }, [
+    assetId,
+    validateDraft,
+    driver,
+    database,
+    table,
+    tableNameDraft,
+    tableCommentDraft,
+    originalTableComment,
+    originalColumns,
+    columns,
+    t,
+  ]);
 
   const handleConfirmSubmit = useCallback(async () => {
     if (!assetId || previewStatements.length === 0) return;
@@ -602,9 +614,15 @@ export function AlterTableDialog({
                   <div className="grid grid-cols-20 gap-2 px-1">
                     <Label className="col-span-3 text-[11px] text-muted-foreground">{t("query.columnNameLabel")}</Label>
                     <Label className="col-span-4 text-[11px] text-muted-foreground">{t("query.columnTypeLabel")}</Label>
-                    <Label className="col-span-4 text-[11px] text-muted-foreground">{t("query.defaultValueLabel")}</Label>
-                    <Label className="col-span-6 text-[11px] text-muted-foreground">{t("query.columnCommentLabel")}</Label>
-                    <Label className="col-span-2 text-[11px] text-muted-foreground">{t("query.columnNullableLabel")}</Label>
+                    <Label className="col-span-4 text-[11px] text-muted-foreground">
+                      {t("query.defaultValueLabel")}
+                    </Label>
+                    <Label className="col-span-6 text-[11px] text-muted-foreground">
+                      {t("query.columnCommentLabel")}
+                    </Label>
+                    <Label className="col-span-2 text-[11px] text-muted-foreground">
+                      {t("query.columnNullableLabel")}
+                    </Label>
                     <Label className="col-span-1 text-[11px] text-muted-foreground">&nbsp;</Label>
                   </div>
 
@@ -653,7 +671,9 @@ export function AlterTableDialog({
                             onCheckedChange={(checked) => updateColumn(col.id, { nullable: checked })}
                             disabled={submitting}
                           />
-                          <span className="text-[11px] text-muted-foreground">{col.nullable ? "NULL" : "NOT NULL"}</span>
+                          <span className="text-[11px] text-muted-foreground">
+                            {col.nullable ? "NULL" : "NOT NULL"}
+                          </span>
                         </div>
                         <div className="col-span-1 flex justify-end">
                           <Button

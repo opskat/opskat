@@ -35,8 +35,8 @@ interface ColumnDraft {
 }
 
 function quoteIdent(name: string, driver?: string): string {
-  if (driver === "postgresql") return `"${name}"`;
-  return `\`${name}\``;
+  if (driver === "postgresql") return `"${name.replace(/"/g, '""')}"`;
+  return `\`${name.replace(/`/g, "``")}\``;
 }
 
 function sqlQuote(value: string): string {
@@ -51,6 +51,26 @@ function formatDefaultValue(value: string): string {
   if (/^(true|false|null)$/i.test(v)) return v.toUpperCase();
   if (/^(current_timestamp(?:\(\))?|now\(\))$/i.test(v)) return v;
   return sqlQuote(v);
+}
+
+export interface BuildCreateTableSqlInput {
+  driver?: string;
+  database: string;
+  name: string;
+  columns: { name: string; type: string; nullable: boolean; defaultValue: string }[];
+}
+
+export function buildCreateTableSql({ driver, database, name, columns }: BuildCreateTableSqlInput): string {
+  const tableRef =
+    driver === "postgresql" ? quoteIdent(name, driver) : `${quoteIdent(database, driver)}.${quoteIdent(name, driver)}`;
+
+  const defs = columns.map((col) => {
+    const nullable = col.nullable ? "" : " NOT NULL";
+    const def = col.defaultValue.trim() ? ` DEFAULT ${formatDefaultValue(col.defaultValue)}` : "";
+    return `${quoteIdent(col.name.trim(), driver)} ${col.type.trim()}${nullable}${def}`;
+  });
+
+  return `CREATE TABLE ${tableRef} (\n  ${defs.join(",\n  ")}\n)`;
 }
 
 function createEmptyColumn(id: number): ColumnDraft {
@@ -120,18 +140,17 @@ export function CreateTableDialog({
       }
     }
 
-    const tableRef =
-      driver === "postgresql"
-        ? quoteIdent(name, driver)
-        : `${quoteIdent(database, driver)}.${quoteIdent(name, driver)}`;
-
-    const defs = columns.map((col) => {
-      const nullable = col.nullable ? "" : " NOT NULL";
-      const def = col.defaultValue.trim() ? ` DEFAULT ${formatDefaultValue(col.defaultValue)}` : "";
-      return `${quoteIdent(col.name.trim(), driver)} ${col.type.trim()}${nullable}${def}`;
+    const sql = buildCreateTableSql({
+      driver,
+      database,
+      name,
+      columns: columns.map((col) => ({
+        name: col.name,
+        type: col.type,
+        nullable: col.nullable,
+        defaultValue: col.defaultValue,
+      })),
     });
-
-    const sql = `CREATE TABLE ${tableRef} (\n  ${defs.join(",\n  ")}\n)`;
 
     setSubmitting(true);
     try {

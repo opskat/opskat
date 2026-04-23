@@ -1,7 +1,17 @@
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
-import { Button, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Input, Label } from "@opskat/ui";
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  Input,
+  Label,
+} from "@opskat/ui";
 import { ExecuteSQL } from "../../../wailsjs/go/app/App";
 import { toast } from "sonner";
 
@@ -71,9 +81,7 @@ export function CreateDatabaseDialog({
   const { t } = useTranslation();
   const [databaseName, setDatabaseName] = useState("");
   const [charset, setCharset] = useState(driver === "postgresql" ? "UTF8" : "utf8mb4");
-  const [collation, setCollation] = useState(
-    driver === "postgresql" ? "en_US.UTF-8" : "utf8mb4_0900_ai_ci"
-  );
+  const [collation, setCollation] = useState(driver === "postgresql" ? "en_US.UTF-8" : "utf8mb4_0900_ai_ci");
   const [submitting, setSubmitting] = useState(false);
 
   const resetForm = useCallback(() => {
@@ -159,7 +167,13 @@ export function CreateDatabaseDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => onOpenChange(false)} disabled={submitting}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs"
+            onClick={() => onOpenChange(false)}
+            disabled={submitting}
+          >
             {t("action.cancel")}
           </Button>
           <Button size="sm" className="h-8 text-xs" onClick={handleSubmit} disabled={submitting}>

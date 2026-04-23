@@ -66,7 +66,11 @@ describe("DatabaseTree", () => {
     fireEvent.click(screen.getByText("query.createDatabaseSubmit"));
 
     await waitFor(() => {
-      expect(ExecuteSQL).toHaveBeenCalledWith(1, "CREATE DATABASE `reports` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci", "appdb");
+      expect(ExecuteSQL).toHaveBeenCalledWith(
+        1,
+        "CREATE DATABASE `reports` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci",
+        "appdb"
+      );
     });
   });
 });

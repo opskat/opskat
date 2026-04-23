@@ -78,15 +78,15 @@ describe("buildAlterStatements", () => {
 
     expect(result.nextTableName).toBe("users_v2");
     expect(result.statements).toEqual([
-      "ALTER TABLE \"users\" RENAME TO \"users_v2\"",
-      "ALTER TABLE \"users_v2\" ADD COLUMN \"age\" integer",
-      "ALTER TABLE \"users_v2\" RENAME COLUMN \"name\" TO \"full_name\"",
-      "ALTER TABLE \"users_v2\" ALTER COLUMN \"full_name\" TYPE varchar(120)",
-      "ALTER TABLE \"users_v2\" ALTER COLUMN \"full_name\" SET NOT NULL",
-      "ALTER TABLE \"users_v2\" ALTER COLUMN \"full_name\" SET DEFAULT 'anonymous'",
+      'ALTER TABLE "users" RENAME TO "users_v2"',
+      'ALTER TABLE "users_v2" ADD COLUMN "age" integer',
+      'ALTER TABLE "users_v2" RENAME COLUMN "name" TO "full_name"',
+      'ALTER TABLE "users_v2" ALTER COLUMN "full_name" TYPE varchar(120)',
+      'ALTER TABLE "users_v2" ALTER COLUMN "full_name" SET NOT NULL',
+      'ALTER TABLE "users_v2" ALTER COLUMN "full_name" SET DEFAULT \'anonymous\'',
       "COMMENT ON TABLE \"users_v2\" IS 'new table comment'",
-      "COMMENT ON COLUMN \"users_v2\".\"full_name\" IS 'full name comment'",
-      "COMMENT ON COLUMN \"users_v2\".\"age\" IS 'age in years'",
+      'COMMENT ON COLUMN "users_v2"."full_name" IS \'full name comment\'',
+      'COMMENT ON COLUMN "users_v2"."age" IS \'age in years\'',
     ]);
   });
 });
