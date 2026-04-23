@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { matchShortcut, formatBinding, formatModKey, DEFAULT_SHORTCUTS, type ShortcutBinding } from "../stores/shortcutStore";
+import {
+  matchShortcut,
+  formatBinding,
+  formatModKey,
+  DEFAULT_SHORTCUTS,
+  type ShortcutBinding,
+} from "../stores/shortcutStore";
 
 // In happy-dom test env, isMac = false (non-Mac).
 
