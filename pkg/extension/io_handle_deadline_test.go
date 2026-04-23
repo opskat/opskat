@@ -14,7 +14,7 @@ func TestIOHandleManagerSetDeadline(t *testing.T) {
 
 		Convey("When registering a net.Conn", func() {
 			serverConn, clientConn := net.Pipe()
-			defer serverConn.Close()
+			defer serverConn.Close() //nolint:errcheck
 			id, err := m.Register(clientConn, clientConn, clientConn, IOMeta{})
 			So(err, ShouldBeNil)
 

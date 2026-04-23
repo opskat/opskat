@@ -12,7 +12,7 @@ func NewActionCancellation() *ActionCancellation {
 	return &ActionCancellation{}
 }
 
-// Cancel marks the action as cancelled. Idempotent.
+// Cancel marks the action as canceled. Idempotent.
 func (c *ActionCancellation) Cancel() {
 	c.stop.Store(true)
 }
