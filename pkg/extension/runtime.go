@@ -19,12 +19,13 @@ import (
 
 // Plugin represents a loaded WASM extension.
 type Plugin struct {
-	manifest *Manifest
-	compiled wazero.CompiledModule
-	runtime  wazero.Runtime
-	host     HostProvider
-	mu       sync.Mutex
-	closed   atomic.Bool
+	manifest     *Manifest
+	compiled     wazero.CompiledModule
+	runtime      wazero.Runtime
+	host         HostProvider
+	mu           sync.Mutex
+	closed       atomic.Bool
+	activeCancel atomic.Pointer[ActionCancellation]
 }
 
 // LoadPlugin compiles a WASM binary and prepares it for execution.
@@ -83,7 +84,23 @@ func (p *Plugin) CallAction(ctx context.Context, actionName string, args json.Ra
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s input: %w", "execute_action", err)
 	}
+
+	cancel := NewActionCancellation()
+	p.host.SetActiveCancellation(cancel)
+	defer p.host.SetActiveCancellation(nil)
+	p.activeCancel.Store(cancel)
+	defer p.activeCancel.Store(nil)
+
 	return p.call(ctx, "execute_action", input)
+}
+
+// CancelActiveAction triggers cancellation of the currently running action.
+// Due to Plugin.mu serializing CallAction invocations, at most one action
+// runs per plugin at a time — this cancels that one. No-op if idle.
+func (p *Plugin) CancelActiveAction() {
+	if c := p.activeCancel.Load(); c != nil {
+		c.Cancel()
+	}
 }
 
 // CheckPolicy calls check_policy on the extension.
