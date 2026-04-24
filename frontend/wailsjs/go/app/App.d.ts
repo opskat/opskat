@@ -128,6 +128,8 @@ export function GetAvailableAssetTypes():Promise<Array<app.AssetTypeInfo>>;
 
 export function GetAvailableMirrors():Promise<Array<update_svc.MirrorInfo>>;
 
+export function GetBugReportInfo():Promise<app.BugReportInfo>;
+
 export function GetCredentialPublicKey(arg1:number):Promise<string>;
 
 export function GetCredentialUsage(arg1:number):Promise<Array<string>>;
@@ -135,6 +137,8 @@ export function GetCredentialUsage(arg1:number):Promise<Array<string>>;
 export function GetCurrentConversationID():Promise<number>;
 
 export function GetDataDir():Promise<string>;
+
+export function GetDebugMode():Promise<boolean>;
 
 export function GetDecryptedExtensionConfig(arg1:number,arg2:string):Promise<string>;
 
@@ -238,6 +242,8 @@ export function OnSecondInstanceLaunch():Promise<void>;
 
 export function OpenDirectory(arg1:string):Promise<void>;
 
+export function OpenLogsDir():Promise<void>;
+
 export function PreviewGistBackup(arg1:string,arg2:string,arg3:string):Promise<backup_svc.BackupSummary>;
 
 export function PreviewImportFile(arg1:string,arg2:string):Promise<backup_svc.BackupSummary>;
@@ -293,6 +299,8 @@ export function SelectSSHKeyFile():Promise<app.LocalSSHKeyInfo>;
 export function SendAIMessage(arg1:number,arg2:Array<ai.Message>,arg3:ai.AIContext):Promise<void>;
 
 export function SetActiveAIProvider(arg1:number):Promise<void>;
+
+export function SetDebugMode(arg1:boolean):Promise<void>;
 
 export function SetDownloadMirror(arg1:string):Promise<void>;
 

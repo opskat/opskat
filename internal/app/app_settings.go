@@ -1033,6 +1033,71 @@ func (a *App) GetAppVersion() string {
 	return v
 }
 
+// BugReportInfo 用于前端拼接 GitHub Issue 预填 URL 的诊断信息。
+type BugReportInfo struct {
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+	OS      string `json:"os"`
+	Arch    string `json:"arch"`
+	OSLabel string `json:"osLabel"`
+}
+
+// GetDebugMode 返回当前是否开启 debug 日志
+func (a *App) GetDebugMode() bool {
+	cfg := bootstrap.GetConfig()
+	if cfg == nil {
+		return false
+	}
+	return cfg.DebugMode
+}
+
+// SetDebugMode 开启/关闭 debug 日志，写入配置并重建全局 logger
+func (a *App) SetDebugMode(enabled bool) error {
+	cfg := bootstrap.GetConfig()
+	if cfg == nil {
+		return fmt.Errorf("config not loaded")
+	}
+	cfg.DebugMode = enabled
+	if err := bootstrap.SaveConfig(cfg); err != nil {
+		return err
+	}
+	return bootstrap.InitLogger()
+}
+
+// OpenLogsDir 在系统文件管理器中打开日志目录
+func (a *App) OpenLogsDir() error {
+	dir := bootstrap.GetLogsDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return a.OpenDirectory(dir)
+}
+
+// GetBugReportInfo 返回用于 Bug 反馈模板预填的系统信息。
+// OSLabel 需要与 .github/ISSUE_TEMPLATE/bug_report.yml 中 os 下拉选项保持一致。
+func (a *App) GetBugReportInfo() BugReportInfo {
+	osLabel := ""
+	switch runtime.GOOS {
+	case "darwin":
+		if runtime.GOARCH == "arm64" {
+			osLabel = "macOS (Apple Silicon)"
+		} else {
+			osLabel = "macOS (Intel)"
+		}
+	case "windows":
+		osLabel = "Windows"
+	case "linux":
+		osLabel = "Linux"
+	}
+	return BugReportInfo{
+		Version: configs.Version,
+		Commit:  buildinfo.ShortCommitID(),
+		OS:      runtime.GOOS,
+		Arch:    runtime.GOARCH,
+		OSLabel: osLabel,
+	}
+}
+
 // GetUpdateChannel 获取当前更新通道
 func (a *App) GetUpdateChannel() string {
 	cfg := bootstrap.GetConfig()
