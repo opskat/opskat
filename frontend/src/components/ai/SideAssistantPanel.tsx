@@ -50,8 +50,7 @@ export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelPr
     storageKey: "ai_sidebar_width",
     targetRef: panelRef,
   });
-  // Keep the conversation rail light on narrower panels so the chat area
-  // stays usable, but give it enough width to avoid awkward multi-line rows.
+  // 窄面板下尽量把空间留给聊天区，但也要避免会话项被压成别扭的多行。
   const isCompactSessionRail = width < 430;
   const sessionRailWidth = width >= 500 ? 176 : isCompactSessionRail ? 128 : 156;
 
@@ -59,8 +58,7 @@ export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelPr
     if (configured) fetchConversations();
   }, [configured, fetchConversations]);
 
-  // Close history dropdown on click outside the popup (but not the trigger,
-  // which manages its own toggle).
+  // 点击历史下拉外部时关闭弹层，但触发按钮本身仍由自己的 toggle 控制。
   useEffect(() => {
     if (!historyOpen) return;
     const handler = (e: MouseEvent) => {
