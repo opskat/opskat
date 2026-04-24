@@ -44,10 +44,11 @@ describe("SideAssistantPanel", () => {
     cleanup();
   });
 
-  it("collapsed state renders nothing", () => {
+  it("collapsed state collapses outer width to 0 while keeping the panel DOM for animation", () => {
     const { container } = render(<SideAssistantPanel collapsed={true} onToggle={() => {}} />);
-    expect(container).toBeEmptyDOMElement();
-    expect(screen.queryByText("ai.sidebar.title")).not.toBeInTheDocument();
+    const outer = container.firstChild as HTMLElement;
+    expect(outer).toBeTruthy();
+    expect(outer.style.width).toBe("0px");
   });
 
   it("expanded with no sidebar tabs shows the empty guide", () => {
