@@ -581,6 +581,8 @@
     "permissionRequestHint": "AI is requesting command execution permission. You can edit the pattern before approving.",
     "permissionPatternPlaceholder": "Command pattern, supports * wildcard",
     "permissionApprove": "Approve",
+    "renameConversation": "Rename conversation",
+    "renameConversationPlaceholder": "Enter conversation title",
     "deleteConversationTitle": "Delete Conversation",
     "deleteConversationDesc": "Are you sure you want to delete this conversation? This action cannot be undone.",
     "agentStart": "Sub-agent started",

@@ -119,6 +119,16 @@ const conversationListeners = new Map<number, { cancel: (() => void) | null; gen
 // 每个 conversation 只保留一个待执行的落盘定时器。
 // 流式输出期间会持续增量更新消息，如果每次都立即保存，磁盘写入会过于频繁。
 const persistTimers = new Map<number, number>();
+const conversationRenameVersions = new Map<number, number>();
+const conversationRenameInFlight = new Set<number>();
+let conversationListBarrier = 0;
+let conversationListRequestId = 0;
+let latestAppliedConversationListRequestId = 0;
+
+type ConversationListRequestToken = {
+  requestId: number;
+  barrier: number;
+};
 
 function getOrCreateConvListener(convId: number) {
   if (!conversationListeners.has(convId)) {
@@ -379,6 +389,47 @@ function buildConversationTitle(content: string) {
   return chars.slice(0, CONVERSATION_TITLE_MAX_CHARS).join("");
 }
 
+function beginConversationRenameVersion(convId: number) {
+  const nextVersion = (conversationRenameVersions.get(convId) || 0) + 1;
+  conversationRenameVersions.set(convId, nextVersion);
+  return nextVersion;
+}
+
+function isLatestConversationRename(convId: number, version: number) {
+  return conversationRenameVersions.get(convId) === version;
+}
+
+function invalidateConversationListRequests() {
+  conversationListBarrier += 1;
+  return conversationListBarrier;
+}
+
+function beginConversationListRequest(): ConversationListRequestToken {
+  conversationListRequestId += 1;
+  return { requestId: conversationListRequestId, barrier: conversationListBarrier };
+}
+
+function canApplyConversationListRequest(request: ConversationListRequestToken) {
+  if (request.barrier !== conversationListBarrier) {
+    return false;
+  }
+  return request.requestId >= latestAppliedConversationListRequestId;
+}
+
+function markConversationListRequestApplied(request: ConversationListRequestToken) {
+  latestAppliedConversationListRequestId = request.requestId;
+}
+
+function applyConversationListSnapshot(convs: conversation_entity.Conversation[]) {
+  useAIStore.setState({ conversations: convs || [] });
+  useAIStore.getState().validateSidebarConversation();
+  // 启动时 sidebarConversationId 可能来自 localStorage；列表同步后补一次历史消息装载。
+  const sidebarId = useAIStore.getState().sidebarConversationId;
+  if (sidebarId != null) {
+    void ensureConversationMessagesLoaded(sidebarId);
+  }
+}
+
 // 先同步当前内存里的会话列表和标签页标题，避免用户编辑后侧栏仍短暂显示旧标题。
 function syncConversationTitleLocally(convId: number, title: string) {
   useAIStore.setState((state) => ({
@@ -397,15 +448,86 @@ function syncConversationTitleLocally(convId: number, title: string) {
   }
 }
 
+function getConversationTitleFallback(convId: number) {
+  const tab = useTabStore
+    .getState()
+    .tabs.find((item) => item.type === "ai" && (item.meta as AITabMeta).conversationId === convId);
+  if (!tab) return DEFAULT_CONVERSATION_TITLE;
+  const meta = tab.meta as AITabMeta;
+  return meta.title || tab.label || DEFAULT_CONVERSATION_TITLE;
+}
+
+async function refreshConversationListAfterRename(convId: number, renameVersion: number) {
+  try {
+    const refreshRequest = beginConversationListRequest();
+    const convs = await ListConversations();
+    if (!isLatestConversationRename(convId, renameVersion)) {
+      return;
+    }
+    if (!canApplyConversationListRequest(refreshRequest)) {
+      return;
+    }
+    if (!Array.isArray(convs)) {
+      return;
+    }
+    markConversationListRequestApplied(refreshRequest);
+    applyConversationListSnapshot(convs || []);
+  } catch (refreshError) {
+    if (isLatestConversationRename(convId, renameVersion)) {
+      console.warn("刷新会话列表失败，保留本地重命名结果:", refreshError);
+    }
+  }
+}
+
+async function renameConversationInternal(
+  convId: number,
+  title: string,
+  options: { waitForListRefresh?: boolean } = {}
+) {
+  const normalizedTitle = buildConversationTitle(title);
+  const previousTitle = useAIStore.getState().conversations.find((conv) => conv.ID === convId)?.Title;
+  const rollbackTitle = previousTitle ?? getConversationTitleFallback(convId);
+  if (previousTitle === normalizedTitle) {
+    return true;
+  }
+  if (conversationRenameInFlight.has(convId)) {
+    return false;
+  }
+  conversationRenameInFlight.add(convId);
+  const renameVersion = beginConversationRenameVersion(convId);
+
+  // 重命名是显式用户动作，先做本地乐观更新，避免历史列表 / 当前上下文条 / 已打开 Tab
+  // 出现短暂不一致；失败时再回滚到旧标题。
+  invalidateConversationListRequests();
+  syncConversationTitleLocally(convId, normalizedTitle);
+
+  try {
+    await UpdateConversationTitle(convId, normalizedTitle);
+    if (!isLatestConversationRename(convId, renameVersion)) {
+      return true;
+    }
+    const refreshPromise = refreshConversationListAfterRename(convId, renameVersion);
+    // 首条消息发送 / replay 只需要保证标题持久化成功，不应该被列表刷新阻塞。
+    if (options.waitForListRefresh === false) {
+      void refreshPromise;
+      return true;
+    }
+    await refreshPromise;
+    return true;
+  } catch (error) {
+    if (isLatestConversationRename(convId, renameVersion)) {
+      syncConversationTitleLocally(convId, rollbackTitle);
+      console.error("重命名会话失败:", error);
+    }
+    return false;
+  } finally {
+    conversationRenameInFlight.delete(convId);
+  }
+}
+
 // 所有“首条消息决定标题”的场景都走同一条同步链路，避免首次发送和编辑重发出现两套规则。
 async function updateConversationTitleForMessage(convId: number, content: string) {
-  const title = buildConversationTitle(content);
-  syncConversationTitleLocally(convId, title);
-  try {
-    await UpdateConversationTitle(convId, title);
-  } catch {
-    // ignore — 下一次 fetchConversations 仍会尝试从后端刷新标题
-  }
+  await renameConversationInternal(convId, content, { waitForListRefresh: false });
 }
 
 function shouldSyncConversationTitleBeforeSend(convId: number, content: string) {
@@ -1098,6 +1220,7 @@ interface AIState {
 
   // 会话管理
   fetchConversations: () => Promise<void>;
+  renameConversation: (id: number, title: string) => Promise<boolean>;
   deleteConversation: (id: number) => Promise<void>;
 
   // 侧边助手 actions
@@ -1147,19 +1270,24 @@ export const useAIStore = create<AIState>((set, get) => {
     },
 
     fetchConversations: async () => {
+      const request = beginConversationListRequest();
       try {
         const convs = await ListConversations();
-        set({ conversations: convs || [] });
-        get().validateSidebarConversation();
-        // 启动时 sidebarConversationId 从 localStorage 恢复，但消息未加载。
-        // 在验证通过（conv 仍存在）后触发一次历史消息拉取。
-        const sidebarId = get().sidebarConversationId;
-        if (sidebarId != null) {
-          void ensureConversationMessagesLoaded(sidebarId);
+        if (!canApplyConversationListRequest(request)) {
+          return;
         }
+        markConversationListRequestApplied(request);
+        applyConversationListSnapshot(convs || []);
       } catch {
-        set({ conversations: [] });
+        // 临时失败保留现有列表，避免把刚完成的本地乐观标题或会话条目清空。
+        if (!canApplyConversationListRequest(request)) {
+          return;
+        }
       }
+    },
+
+    renameConversation: async (id: number, title: string) => {
+      return renameConversationInternal(id, title, { waitForListRefresh: true });
     },
 
     deleteConversation: async (id: number) => {
@@ -1181,6 +1309,18 @@ export const useAIStore = create<AIState>((set, get) => {
         if (lastBound && parseInt(lastBound, 10) === id) {
           localStorage.removeItem("ai_sidebar_last_bound");
         }
+
+        // 删除已被后端确认后，先从本地列表和消息缓存移除，避免后续列表刷新失败时把已删会话留在 UI。
+        invalidateConversationListRequests();
+        set((state) => {
+          const { [id]: _removedMessages, ...remainingMessages } = state.conversationMessages;
+          const { [id]: _removedStreaming, ...remainingStreaming } = state.conversationStreaming;
+          return {
+            conversations: state.conversations.filter((conv) => conv.ID !== id),
+            conversationMessages: remainingMessages,
+            conversationStreaming: remainingStreaming,
+          };
+        });
 
         await get().fetchConversations();
       } catch (e) {
@@ -1355,16 +1495,20 @@ export const useAIStore = create<AIState>((set, get) => {
 
       // Ensure tab has a conversation ID *before* writing any message state —
       // conversationMessages / conversationStreaming are keyed by convId.
-      let createdConversation = false;
       if (!convId) {
         try {
           const conv = await CreateConversation();
           convId = conv.ID;
-          createdConversation = true;
           const curTab = useTabStore.getState().tabs.find((t) => t.id === tabId);
           useTabStore.getState().updateTab(tabId, {
             meta: { type: "ai", conversationId: convId, title: curTab?.label || "对话" },
           });
+          // 新建会话先写入本地列表，保证后续自动重命名失败时，历史列表里仍能看到该会话。
+          set((currentState) => ({
+            conversations: currentState.conversations.some((convItem) => convItem.ID === conv.ID)
+              ? currentState.conversations
+              : [conv, ...currentState.conversations],
+          }));
         } catch {
           return;
         }
@@ -1372,9 +1516,6 @@ export const useAIStore = create<AIState>((set, get) => {
 
       if (shouldSyncConversationTitleBeforeSend(convId, content)) {
         await updateConversationTitleForMessage(convId, content);
-      }
-      if (createdConversation) {
-        void get().fetchConversations();
       }
 
       await _sendForConversation(convId, content, mentions);
