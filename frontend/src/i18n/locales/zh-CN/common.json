@@ -806,7 +806,14 @@
     "checksumFetchFailed": "无法从 GitHub 获取校验文件 (SHA256SUMS.txt)，下载的文件将无法验证完整性。",
     "checksumSkipConfirm": "是否跳过校验继续下载？",
     "checksumSkipAction": "跳过校验并继续",
-    "checksumSkipCancel": "取消"
+    "checksumSkipCancel": "取消",
+    "reportBug": "Bug 反馈",
+    "reportBugDesc": "打开 GitHub 反馈模板，自动带上版本与系统信息",
+    "debugMode": "Debug 日志",
+    "debugModeDesc": "开启后日志级别降为 debug，便于问题排查；问题解决后建议关闭",
+    "debugModeOn": "Debug 日志已开启",
+    "debugModeOff": "Debug 日志已关闭",
+    "openLogsDir": "打开日志目录"
   },
   "opsctlApproval": {
     "title": "CLI 操作审批",

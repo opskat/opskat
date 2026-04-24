@@ -218,6 +218,10 @@ export function GetAvailableMirrors() {
   return window['go']['app']['App']['GetAvailableMirrors']();
 }
 
+export function GetBugReportInfo() {
+  return window['go']['app']['App']['GetBugReportInfo']();
+}
+
 export function GetCredentialPublicKey(arg1) {
   return window['go']['app']['App']['GetCredentialPublicKey'](arg1);
 }
@@ -232,6 +236,10 @@ export function GetCurrentConversationID() {
 
 export function GetDataDir() {
   return window['go']['app']['App']['GetDataDir']();
+}
+
+export function GetDebugMode() {
+  return window['go']['app']['App']['GetDebugMode']();
 }
 
 export function GetDecryptedExtensionConfig(arg1, arg2) {
@@ -438,6 +446,10 @@ export function OpenDirectory(arg1) {
   return window['go']['app']['App']['OpenDirectory'](arg1);
 }
 
+export function OpenLogsDir() {
+  return window['go']['app']['App']['OpenLogsDir']();
+}
+
 export function PreviewGistBackup(arg1, arg2, arg3) {
   return window['go']['app']['App']['PreviewGistBackup'](arg1, arg2, arg3);
 }
@@ -548,6 +560,10 @@ export function SendAIMessage(arg1, arg2, arg3) {
 
 export function SetActiveAIProvider(arg1) {
   return window['go']['app']['App']['SetActiveAIProvider'](arg1);
+}
+
+export function SetDebugMode(arg1) {
+  return window['go']['app']['App']['SetDebugMode'](arg1);
 }
 
 export function SetDownloadMirror(arg1) {

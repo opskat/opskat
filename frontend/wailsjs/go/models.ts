@@ -300,6 +300,26 @@ export namespace app {
 		    return a;
 		}
 	}
+	export class BugReportInfo {
+	    version: string;
+	    commit: string;
+	    os: string;
+	    arch: string;
+	    osLabel: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BugReportInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.version = source["version"];
+	        this.commit = source["commit"];
+	        this.os = source["os"];
+	        this.arch = source["arch"];
+	        this.osLabel = source["osLabel"];
+	    }
+	}
 	export class ConversationDisplayMessage {
 	    role: string;
 	    content: string;
