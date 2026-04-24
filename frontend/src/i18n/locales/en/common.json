@@ -22,6 +22,10 @@
   },
   "nav": {
     "home": "Home",
+    "database": "Database",
+    "ssh": "SSH",
+    "redis": "Redis",
+    "mongodb": "MongoDB",
     "sshKeys": "Credentials",
     "settings": "Settings",
     "appearance": "Appearance",

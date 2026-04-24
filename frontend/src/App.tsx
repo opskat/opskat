@@ -21,13 +21,38 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useAssetStore } from "@/stores/assetStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useQueryStore } from "@/stores/queryStore";
-import { getAssetType } from "@/lib/assetTypes";
-import { useTabStore, type InfoTabMeta } from "@/stores/tabStore";
+import { getAssetType, normalizeAssetSection } from "@/lib/assetTypes";
+import { useTabStore, type InfoTabMeta, type QueryTabMeta, type Tab } from "@/stores/tabStore";
 import { useExtensionStore } from "@/extension";
 import { bootstrapExtensions } from "@/extension/init";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { asset_entity, group_entity } from "../wailsjs/go/models";
 import { EventsOn, WindowToggleMaximise } from "../wailsjs/runtime/runtime";
+
+type HomeSection = "home" | "database" | "ssh" | "redis" | "mongodb";
+
+function tabBelongsToSection(tab: Tab, section: HomeSection): boolean {
+  if (section === "home") return true;
+
+  if (tab.type === "terminal") {
+    return section === "ssh";
+  }
+
+  if (tab.type === "query") {
+    const assetType = normalizeAssetSection((tab.meta as QueryTabMeta).assetType);
+    return assetType === section;
+  }
+
+  if (tab.type === "info") {
+    const meta = tab.meta as InfoTabMeta;
+    if (meta.targetType !== "asset") return false;
+    const asset = useAssetStore.getState().assets.find((a) => a.ID === meta.targetId);
+    if (!asset) return false;
+    return normalizeAssetSection(asset.Type) === section;
+  }
+
+  return false;
+}
 
 function App() {
   const { t } = useTranslation();
@@ -124,6 +149,7 @@ function App() {
   });
   const [assetTreeResizing, setAssetTreeResizing] = useState(false);
   const assetTreeWidthRef = useRef(assetTreeWidth);
+  const [homeSection, setHomeSection] = useState<HomeSection>("home");
 
   const toggleAIPanel = useCallback(() => {
     setAiPanelCollapsed((prev) => {
@@ -311,10 +337,18 @@ function App() {
   // Sidebar page navigation
   const handlePageChange = useCallback((page: string) => {
     const tabStore = useTabStore.getState();
-    if (page === "home") {
-      // Activate first non-page tab, or deactivate
-      const homeTab = tabStore.tabs.find((t) => t.type === "terminal" || t.type === "info");
-      tabStore.activateTab(homeTab?.id || tabStore.tabs[0]?.id || "");
+    if (page === "home" || page === "database" || page === "ssh" || page === "redis" || page === "mongodb") {
+      const section = page as HomeSection;
+      setHomeSection(section);
+      const candidateTabs = tabStore.tabs.filter(
+        (t) => t.type === "terminal" || t.type === "query" || t.type === "info"
+      );
+      const target = candidateTabs.find((t) => tabBelongsToSection(t, section));
+      if (target) {
+        tabStore.activateTab(target.id);
+      } else if (section === "home") {
+        tabStore.activateTab(tabStore.tabs[0]?.id || "");
+      }
       return;
     }
     const existing = tabStore.tabs.find((t) => t.id === page);
@@ -342,12 +376,16 @@ function App() {
   // Derive active page for sidebar highlighting
   const activeTab = useTabStore((s) => s.tabs.find((t) => t.id === s.activeTabId));
   const activePage = !activeTab
-    ? "home"
+    ? homeSection
     : activeTab.type === "page"
       ? activeTab.id
-      : activeTab.type === "terminal" || activeTab.type === "info"
-        ? "home"
-        : "other";
+      : activeTab.type === "terminal"
+        ? "ssh"
+        : activeTab.type === "query"
+          ? (normalizeAssetSection((activeTab.meta as QueryTabMeta).assetType) ?? "other")
+          : activeTab.type === "info"
+            ? homeSection
+            : "other";
 
   return (
     <ThemeProvider defaultTheme="system">
@@ -374,6 +412,7 @@ function App() {
                     {activeSidePanel === "assets" ? (
                       <AssetTree
                         collapsed={false}
+                        homeSection={homeSection}
                         sidebarHidden={sidebarHidden}
                         onShowSidebar={toggleSidebarHidden}
                         onAddAsset={handleAddAsset}
@@ -398,7 +437,7 @@ function App() {
                         onOpenInfoTab={handleOpenInfoTab}
                       />
                     ) : (
-                      <SideTabList />
+                      <SideTabList homeSection={homeSection} />
                     )}
                   </LeftPanel>
                 )}
@@ -423,6 +462,7 @@ function App() {
                 >
                   <AssetTree
                     collapsed={false}
+                    homeSection={homeSection}
                     sidebarHidden={sidebarHidden}
                     onShowSidebar={toggleSidebarHidden}
                     onAddAsset={handleAddAsset}
@@ -461,6 +501,7 @@ function App() {
               onEditAsset={handleEditAsset}
               onDeleteAsset={handleDeleteAsset}
               onConnectAsset={handleConnectAsset}
+              homeSection={homeSection}
             />
             <SideAssistantPanel collapsed={aiPanelCollapsed} onToggle={toggleAIPanel} />
             {aiPanelCollapsed && <EdgeRevealStrip side="right" onClick={toggleAIPanel} />}

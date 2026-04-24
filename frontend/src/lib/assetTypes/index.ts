@@ -14,6 +14,17 @@ export function getBuiltinTypes(): AssetTypeDefinition[] {
   return [...registry.values()];
 }
 
+export function normalizeAssetSection(type: string): "database" | "ssh" | "redis" | "mongodb" | undefined {
+  const normalized = type.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized === "mysql" || normalized === "postgresql") return "database";
+  if (normalized === "mongo") return "mongodb";
+  if (normalized === "database" || normalized === "ssh" || normalized === "redis" || normalized === "mongodb") {
+    return normalized;
+  }
+  return undefined;
+}
+
 // Side-effect imports — register all built-in types
 import "./ssh";
 import "./database";

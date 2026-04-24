@@ -1,4 +1,17 @@
-import { Home, Settings, PanelLeftClose, PanelLeftOpen, EyeOff, Bot, Server, LayoutList } from "lucide-react";
+import {
+  Home,
+  Settings,
+  PanelLeftClose,
+  PanelLeftOpen,
+  EyeOff,
+  Bot,
+  Server,
+  LayoutList,
+  Database,
+  Monitor,
+  Cylinder,
+  Leaf,
+} from "lucide-react";
 import logoLight from "@/assets/images/logo.png";
 import logoDark from "@/assets/images/logo-dark.png";
 import { useTranslation } from "react-i18next";
@@ -16,6 +29,8 @@ interface SidebarProps {
   aiPanelCollapsed: boolean;
   onToggleAIPanel: () => void;
 }
+
+type HomeSection = "home" | "database" | "ssh" | "redis" | "mongodb";
 
 export function Sidebar({
   activePage,
@@ -35,8 +50,13 @@ export function Sidebar({
   const setActivePanel = useLayoutStore((s) => s.setActivePanel);
   const toggleVisible = useLayoutStore((s) => s.toggleVisible);
 
-  const navItems = [{ id: "home", icon: Home, label: t("nav.home") }];
-
+  const navItems: Array<{ id: HomeSection; icon: typeof Home; label: string }> = [
+    { id: "home", icon: Home, label: t("nav.home") },
+    { id: "database", icon: Database, label: t("nav.database") },
+    { id: "ssh", icon: Monitor, label: t("nav.ssh") },
+    { id: "redis", icon: Cylinder, label: t("nav.redis") },
+    { id: "mongodb", icon: Leaf, label: t("nav.mongodb") },
+  ];
   const sidePanels: Array<{ id: SidePanel; icon: typeof Server; label: string }> = [
     { id: "assets", icon: Server, label: t("sideTabs.assetsPanel") },
     { id: "tabs", icon: LayoutList, label: t("sideTabs.tabsPanel") },

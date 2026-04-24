@@ -16,9 +16,10 @@ import { RedisPanel } from "@/components/query/RedisPanel";
 import { MongoDBPanel } from "@/components/query/MongoDBPanel";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useAssetStore } from "@/stores/assetStore";
-import { useTabStore, type QueryTabMeta, type PageTabMeta, type InfoTabMeta } from "@/stores/tabStore";
+import { useTabStore, type Tab, type QueryTabMeta, type PageTabMeta, type InfoTabMeta } from "@/stores/tabStore";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { useShortcutStore, formatBinding, type ShortcutAction } from "@/stores/shortcutStore";
+import { normalizeAssetSection } from "@/lib/assetTypes";
 import { asset_entity } from "../../../wailsjs/go/models";
 import { ExtensionPage } from "@/extension";
 import { TopTabBar } from "./TopTabBar";
@@ -28,9 +29,24 @@ interface MainPanelProps {
   onEditAsset: (asset: asset_entity.Asset) => void;
   onDeleteAsset: (id: number) => void;
   onConnectAsset: (asset: asset_entity.Asset) => void;
+  homeSection?: "home" | "database" | "ssh" | "redis" | "mongodb";
 }
 
-export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPanelProps) {
+function matchHomeSection(tab: Tab, section?: string) {
+  if (!section || section === "home") return true;
+  if (tab.type === "terminal") return section === "ssh";
+  if (tab.type === "query") return normalizeAssetSection((tab.meta as QueryTabMeta).assetType) === section;
+  if (tab.type === "info") {
+    const meta = tab.meta as InfoTabMeta;
+    if (meta.targetType !== "asset") return false;
+    const asset = useAssetStore.getState().assets.find((a) => a.ID === meta.targetId);
+    if (!asset) return false;
+    return normalizeAssetSection(asset.Type) === section;
+  }
+  return false;
+}
+
+export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset, homeSection = "home" }: MainPanelProps) {
   const { t } = useTranslation();
   const isFullscreen = useFullscreen();
 
@@ -71,12 +87,16 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
   const hasTabs = tabs.length > 0;
 
+  const visibleTabs = tabs.filter((tab) => matchHomeSection(tab, homeSection));
+
+  const visibleActiveTab = activeTab && matchHomeSection(activeTab, homeSection) ? activeTab : null;
+
   // Collect all terminal tabs for visibility-based rendering
-  const terminalTabs = tabs.filter((tab) => tab.type === "terminal");
+  const terminalTabs = visibleTabs.filter((tab) => tab.type === "terminal");
   // Collect AI tabs for visibility-based rendering
-  const aiTabs = tabs.filter((tab) => tab.type === "ai");
+  const aiTabs = visibleTabs.filter((tab) => tab.type === "ai");
   // Collect query tabs for visibility-based rendering
-  const queryTabs = tabs.filter((tab) => tab.type === "query");
+  const queryTabs = visibleTabs.filter((tab) => tab.type === "query");
 
   function renderActiveContent() {
     if (!activeTab) return null;
@@ -160,7 +180,7 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
       )}
 
       {/* Tab bar with integrated drag region (top layout only) */}
-      {hasTabs && tabBarLayout === "top" && <TopTabBar />}
+      {hasTabs && tabBarLayout === "top" && <TopTabBar homeSection={homeSection} />}
 
       {/* Content area */}
       <div className="flex-1 relative min-h-0 overflow-hidden">
@@ -223,6 +243,9 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
           );
         })}
 
+        {visibleActiveTab && visibleActiveTab.type === "page" && (
+          <div className="absolute inset-0 bg-background">{renderActiveContent()}</div>
+        )}
         {/* Query tabs: display-based — sticky thead would leak as a composited
             layer if the parent only toggled visibility. State is in zustand,
             so display:none is safe here. */}
@@ -247,12 +270,12 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
         })}
 
         {/* Page and info tabs: rendered only when active */}
-        {activeTab && (activeTab.type === "page" || activeTab.type === "info") && (
+        {visibleActiveTab && visibleActiveTab.type === "info" && (
           <div className="absolute inset-0 bg-background">{renderActiveContent()}</div>
         )}
 
         {/* Welcome screen when no active tab */}
-        {!activeTab && (
+        {!visibleActiveTab && (
           <div className="absolute inset-0 flex items-center justify-center overflow-y-auto bg-gradient-to-br from-background via-background to-primary/5 p-6">
             <div className="text-center space-y-5">
               <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10">

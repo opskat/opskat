@@ -2,22 +2,41 @@ import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Search, Server, Folder, MessageSquare } from "lucide-react";
 import { cn } from "@opskat/ui";
-import { useTabStore, type Tab, type InfoTabMeta } from "@/stores/tabStore";
+import { useTabStore, type Tab, type InfoTabMeta, type QueryTabMeta } from "@/stores/tabStore";
 import { useTerminalStore } from "@/stores/terminalStore";
+import { useAssetStore } from "@/stores/assetStore";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
 import { filterMatches, highlightMatch } from "@/lib/highlightMatch";
+import { normalizeAssetSection } from "@/lib/assetTypes";
 import { useLayoutStore, isCollapsed } from "@/stores/layoutStore";
 import { SideTabItem, SideTabDragContext } from "./SideTabItem";
 import { TabFilterInput } from "./TabFilterInput";
 import { TabPanelMenu } from "./TabPanelMenu";
 import { getBuiltinPageMeta, resolveTabLabel } from "./pageTabMeta";
 
-export function SideTabList() {
+type HomeSection = "home" | "database" | "ssh" | "redis" | "mongodb";
+
+function matchHomeSection(tab: Tab, section: HomeSection) {
+  if (section === "home") return true;
+  if (tab.type === "terminal") return section === "ssh";
+  if (tab.type === "query") return normalizeAssetSection((tab.meta as QueryTabMeta).assetType) === section;
+  if (tab.type === "info") {
+    const meta = tab.meta as InfoTabMeta;
+    if (meta.targetType !== "asset") return false;
+    const asset = useAssetStore.getState().assets.find((a) => a.ID === meta.targetId);
+    if (!asset) return false;
+    return normalizeAssetSection(asset.Type) === section;
+  }
+  return false;
+}
+
+export function SideTabList({ homeSection = "home" }: { homeSection?: HomeSection }) {
   const { t } = useTranslation();
   const isFullscreen = useFullscreen();
   const tabs = useTabStore((s) => s.tabs);
   const activeTabId = useTabStore((s) => s.activeTabId);
+  const visibleTabs = useMemo(() => tabs.filter((tab) => matchHomeSection(tab, homeSection)), [tabs, homeSection]);
   const activateTab = useTabStore((s) => s.activateTab);
   const closeTab = useTabStore((s) => s.closeTab);
   const reorderTab = useTabStore((s) => s.reorderTab);
@@ -35,16 +54,16 @@ export function SideTabList() {
 
   const matchedWithLabel = useMemo(
     () =>
-      tabs
+      visibleTabs
         .map((tab) => ({ tab, displayLabel: resolveTabLabel(tab, t) }))
         .filter(({ displayLabel }) => filterMatches(displayLabel, query)),
-    [tabs, query, t]
+    [visibleTabs, query, t]
   );
 
   // 稳定 Context value —— 否则每次父组件 render 都会强制所有 SideTabItem 消费者重渲
   const dragContextValue = useMemo(
-    () => ({ dragKeyRef, reorder: reorderTab, moveTo: moveTabTo, tabs }),
-    [reorderTab, moveTabTo, tabs]
+    () => ({ dragKeyRef, reorder: reorderTab, moveTo: moveTabTo, tabs: visibleTabs }),
+    [reorderTab, moveTabTo, visibleTabs]
   );
 
   const resolveMeta = (
@@ -101,8 +120,8 @@ export function SideTabList() {
           </span>
           <span className="text-xs text-muted-foreground">
             {query
-              ? t("sideTabs.countFiltered", { filtered: matchedWithLabel.length, total: tabs.length })
-              : t("sideTabs.count", { count: tabs.length })}
+              ? t("sideTabs.countFiltered", { filtered: matchedWithLabel.length, total: visibleTabs.length })
+              : t("sideTabs.count", { count: visibleTabs.length })}
           </span>
           <button
             type="button"
@@ -138,7 +157,7 @@ export function SideTabList() {
         <div className="flex-1 overflow-y-auto py-1 px-1">
           {matchedWithLabel.length === 0 ? (
             <p className="px-3 py-2 text-xs text-muted-foreground text-center">
-              {tabs.length === 0 ? t("sideTabs.noTabs") : t("sideTabs.emptyHint")}
+              {visibleTabs.length === 0 ? t("sideTabs.noTabs") : t("sideTabs.emptyHint")}
             </p>
           ) : (
             matchedWithLabel.map(({ tab, displayLabel }) => {

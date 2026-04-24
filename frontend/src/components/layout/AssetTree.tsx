@@ -41,15 +41,18 @@ import {
 } from "@opskat/ui";
 import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
 import { filterAssets } from "@/lib/assetSearch";
-import { getAssetType } from "@/lib/assetTypes";
+import { getAssetType, normalizeAssetSection } from "@/lib/assetTypes";
 import { useAssetStore } from "@/stores/assetStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useActiveAssetIds } from "@/hooks/useActiveAssetIds";
 import { MoveAsset, MoveGroup } from "../../../wailsjs/go/app/App";
 import { asset_entity, group_entity } from "../../../wailsjs/go/models";
 
+type HomeSection = "home" | "database" | "ssh" | "redis" | "mongodb";
+
 interface AssetTreeProps {
   collapsed: boolean;
+  homeSection?: HomeSection;
   sidebarHidden?: boolean;
   onShowSidebar?: () => void;
   onAddAsset: (groupId?: number) => void;
@@ -66,6 +69,7 @@ interface AssetTreeProps {
 
 export function AssetTree({
   collapsed,
+  homeSection = "home",
   sidebarHidden,
   onShowSidebar,
   onAddAsset,
@@ -99,7 +103,11 @@ export function AssetTree({
 
   if (collapsed) return null;
 
-  const filteredAssets = filter ? filterAssets(assets, groups, { query: filter }).map((r) => r.asset) : assets;
+  const sectionAssets =
+    homeSection === "home" ? assets : assets.filter((asset) => normalizeAssetSection(asset.Type) === homeSection);
+  const filteredAssets = filter
+    ? filterAssets(sectionAssets, groups, { query: filter }).map((r) => r.asset)
+    : sectionAssets;
 
   // Group assets by GroupID
   const groupedAssets = new Map<number, asset_entity.Asset[]>();
@@ -118,6 +126,8 @@ export function AssetTree({
     }
     return count;
   };
+
+  const visibleRootGroups = childGroups(0).filter((group) => countAssetsInGroup(group.ID) > 0);
 
   const handleDeleteGroup = (id: number) => {
     const directAssetCount = (groupedAssets.get(id) || []).length;
@@ -216,7 +226,7 @@ export function AssetTree({
         <ContextMenu>
           <ContextMenuTrigger className="block min-h-full">
             <div className="p-2 space-y-0.5">
-              {childGroups(0).map((group) => (
+              {visibleRootGroups.map((group) => (
                 <GroupItem
                   key={group.ID}
                   group={group}
@@ -276,7 +286,7 @@ export function AssetTree({
                   t={t}
                 />
               )}
-              {filteredAssets.length === 0 && groups.length === 0 && (
+              {filteredAssets.length === 0 && (
                 <p className="text-xs text-muted-foreground text-center py-4">{t("asset.addAsset")}</p>
               )}
             </div>

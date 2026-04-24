@@ -22,6 +22,10 @@
   },
   "nav": {
     "home": "首页",
+    "database": "数据库",
+    "ssh": "SSH",
+    "redis": "Redis",
+    "mongodb": "MongoDB",
     "sshKeys": "密钥管理",
     "settings": "设置",
     "appearance": "外观",
