@@ -44,8 +44,9 @@ describe("SideAssistantPanel", () => {
     cleanup();
   });
 
-  it("collapsed state collapses outer width to 0 while keeping the panel DOM for animation", () => {
+  it("collapsed state collapses outer width to 0 (panel stays in DOM for width animation)", () => {
     const { container } = render(<SideAssistantPanel collapsed={true} onToggle={() => {}} />);
+    // Outer wrapper animates via width; collapsed means width: 0.
     const outer = container.firstChild as HTMLElement;
     expect(outer).toBeTruthy();
     expect(outer.style.width).toBe("0px");
