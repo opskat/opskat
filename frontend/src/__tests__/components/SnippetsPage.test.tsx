@@ -3,9 +3,16 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { TooltipProvider } from "@opskat/ui";
 import { useSnippetStore } from "../../stores/snippetStore";
-import { useAssetStore } from "../../stores/assetStore";
 import { SnippetsPage } from "../../components/snippet/SnippetsPage";
 import { ListSnippets, ListSnippetCategories, DuplicateSnippet } from "../../../wailsjs/go/app/App";
+
+// Monaco editor is a heavy dependency; stub it out so the form dialog renders
+// without a real Monaco instance in happy-dom.
+vi.mock("@/components/CodeEditor", () => ({
+  CodeEditor: ({ value, onChange }: { value: string; onChange: (v: string) => void }) => (
+    <textarea aria-label="snippet.form.labelContent" value={value ?? ""} onChange={(e) => onChange(e.target.value)} />
+  ),
+}));
 
 function renderPage() {
   return render(
@@ -26,16 +33,7 @@ describe("SnippetsPage", () => {
       categoriesLoading: false,
       list: [],
       listLoading: false,
-      filter: { categories: [], keyword: "", tag: "" },
-    });
-    useAssetStore.setState({
-      assets: [],
-      groups: [],
-      selectedAssetId: null,
-      selectedGroupId: null,
-      collapsedGroupIds: [],
-      loading: false,
-      initialized: true,
+      filter: { categories: [], keyword: "" },
     });
     vi.mocked(ListSnippetCategories).mockResolvedValue([
       { id: "shell", assetType: "ssh", label: "Shell", source: "builtin" } as any,
@@ -56,6 +54,12 @@ describe("SnippetsPage", () => {
     expect(screen.getByText("snippet.columns.updated")).toBeInTheDocument();
   });
 
+  it("does not render asset or tags column headers", () => {
+    renderPage();
+    expect(screen.queryByText("snippet.columns.asset")).toBeNull();
+    expect(screen.queryByText("snippet.columns.tags")).toBeNull();
+  });
+
   it("renders read-only lock icon for ext-sourced rows and disables Edit/Delete", async () => {
     const rows = [
       {
@@ -64,7 +68,7 @@ describe("SnippetsPage", () => {
         Category: "shell",
         Content: "ls",
         Description: "",
-        Tags: "",
+        LastAssetIDs: "",
         Source: "user",
         SourceRef: "",
         UseCount: 0,
@@ -78,7 +82,7 @@ describe("SnippetsPage", () => {
         Category: "shell",
         Content: "ls",
         Description: "",
-        Tags: "",
+        LastAssetIDs: "",
         Source: "ext:myext",
         SourceRef: "1",
         UseCount: 0,
@@ -127,7 +131,7 @@ describe("SnippetsPage", () => {
         Category: "shell",
         Content: "ls",
         Description: "",
-        Tags: "",
+        LastAssetIDs: "",
         Source: "user",
         SourceRef: "",
         UseCount: 0,
@@ -156,7 +160,7 @@ describe("SnippetsPage", () => {
         Category: "kafka",
         Content: "kafka-topics --list",
         Description: "",
-        Tags: "",
+        LastAssetIDs: "",
         Source: "user",
         SourceRef: "",
         UseCount: 0,
@@ -188,33 +192,5 @@ describe("SnippetsPage", () => {
       const checkboxes = screen.getAllByRole("checkbox");
       expect(checkboxes.length).toBe(3);
     });
-  });
-
-  it("resolves asset name via assetStore", async () => {
-    useAssetStore.setState({
-      assets: [{ ID: 5, Name: "prod-db", Type: "database", GroupID: 0 } as any],
-    });
-    const seeded = [
-      {
-        ID: 1,
-        Name: "q",
-        Category: "shell",
-        Content: "ls",
-        Description: "",
-        Tags: "",
-        AssetID: 5,
-        Source: "user",
-        SourceRef: "",
-        UseCount: 0,
-        Status: 1,
-        CreatedAt: "2024-01-01T00:00:00Z",
-        UpdatedAt: "2024-01-01T00:00:00Z",
-      },
-    ];
-    // Mount's loadList() would otherwise clobber the seeded list with [].
-    vi.mocked(ListSnippets).mockResolvedValue(seeded as any);
-    useSnippetStore.setState({ list: seeded as any });
-    renderPage();
-    expect(await screen.findByText("prod-db")).toBeInTheDocument();
   });
 });

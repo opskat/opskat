@@ -15,7 +15,6 @@ import {
   cn,
 } from "@opskat/ui";
 import { useSnippetStore } from "@/stores/snippetStore";
-import { useAssetStore } from "@/stores/assetStore";
 import { snippet_entity } from "../../../wailsjs/go/models";
 import { SnippetFormDialog } from "./SnippetFormDialog";
 
@@ -63,10 +62,7 @@ export function SnippetsPage() {
   const duplicateSnippet = useSnippetStore((s) => s.duplicate);
   const removeSnippet = useSnippetStore((s) => s.remove);
 
-  const assets = useAssetStore((s) => s.assets);
-
   const [searchInput, setSearchInput] = useState(filter.keyword);
-  const [tagInput, setTagInput] = useState(filter.tag);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<"create" | "edit">("create");
   const [editTarget, setEditTarget] = useState<snippet_entity.Snippet | undefined>(undefined);
@@ -92,18 +88,6 @@ export function SnippetsPage() {
     // not re-run the timer every time the store re-emits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchInput]);
-
-  const tagTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (tagTimerRef.current) clearTimeout(tagTimerRef.current);
-    tagTimerRef.current = setTimeout(() => {
-      if (tagInput !== filter.tag) setFilter({ tag: tagInput });
-    }, 300);
-    return () => {
-      if (tagTimerRef.current) clearTimeout(tagTimerRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tagInput]);
 
   const orderedCategoryIds = useMemo(() => categories.map((c) => c.id), [categories]);
   const categoryLabelById = useMemo(() => {
@@ -178,12 +162,6 @@ export function SnippetsPage() {
     }
   };
 
-  const assetNameById = useMemo(() => {
-    const m: Record<number, string> = {};
-    for (const a of assets) m[a.ID] = a.Name;
-    return m;
-  }, [assets]);
-
   const selectedCategoryLabel =
     filter.categories.length === 0
       ? t("snippet.allCategories")
@@ -192,7 +170,7 @@ export function SnippetsPage() {
           .join(", ");
 
   const isEmpty = list.length === 0 && !listLoading;
-  const hasActiveFilter = filter.categories.length > 0 || filter.keyword.trim() !== "" || filter.tag.trim() !== "";
+  const hasActiveFilter = filter.categories.length > 0 || filter.keyword.trim() !== "";
 
   return (
     <div className="flex flex-col h-full">
@@ -285,14 +263,6 @@ export function SnippetsPage() {
             </PopoverContent>
           </Popover>
 
-          {/* Tag filter */}
-          <Input
-            value={tagInput}
-            onChange={(e) => setTagInput(e.target.value)}
-            placeholder={t("snippet.filterByTag")}
-            className="h-8 w-40 text-xs"
-          />
-
           <Button size="sm" className="h-8 text-xs gap-1.5" onClick={onClickNew}>
             <Plus className="h-3.5 w-3.5" />
             {t("snippet.newButton")}
@@ -307,8 +277,6 @@ export function SnippetsPage() {
             <tr className="text-left text-muted-foreground">
               <th className="px-4 py-2 font-medium w-24">{t("snippet.columns.category")}</th>
               <th className="px-4 py-2 font-medium">{t("snippet.columns.name")}</th>
-              <th className="px-4 py-2 font-medium w-40">{t("snippet.columns.asset")}</th>
-              <th className="px-4 py-2 font-medium w-48">{t("snippet.columns.tags")}</th>
               <th className="px-4 py-2 font-medium w-40">{t("snippet.columns.updated")}</th>
               <th className="px-4 py-2 font-medium w-28">{t("snippet.columns.source")}</th>
               <th className="px-4 py-2 font-medium w-28 text-right">{t("snippet.columns.actions")}</th>
@@ -317,25 +285,20 @@ export function SnippetsPage() {
           <tbody>
             {listLoading && list.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">
+                <td colSpan={5} className="px-4 py-12 text-center text-muted-foreground">
                   <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
                 </td>
               </tr>
             )}
             {isEmpty && (
               <tr>
-                <td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">
+                <td colSpan={5} className="px-4 py-12 text-center text-muted-foreground">
                   {hasActiveFilter ? t("snippet.emptyStateFiltered") : t("snippet.emptyState")}
                 </td>
               </tr>
             )}
             {list.map((s) => {
               const readOnly = isReadOnly(s);
-              const tagList = (s.Tags || "")
-                .split(",")
-                .map((x) => x.trim())
-                .filter(Boolean);
-              const assetLabel = s.AssetID != null ? (assetNameById[s.AssetID] ?? `#${s.AssetID}`) : "—";
               return (
                 <tr key={s.ID} className="border-b hover:bg-muted/50 transition-colors">
                   <td className="px-4 py-2">
@@ -373,18 +336,6 @@ export function SnippetsPage() {
                           — {s.Description}
                         </span>
                       )}
-                    </div>
-                  </td>
-                  <td className="px-4 py-2 text-xs text-muted-foreground truncate max-w-40" title={assetLabel}>
-                    {assetLabel}
-                  </td>
-                  <td className="px-4 py-2">
-                    <div className="flex flex-wrap gap-1">
-                      {tagList.map((tg) => (
-                        <span key={tg} className="inline-block px-1.5 py-0.5 rounded bg-muted text-[10px] font-mono">
-                          {tg}
-                        </span>
-                      ))}
                     </div>
                   </td>
                   <td className="px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">

@@ -2,9 +2,16 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { useSnippetStore } from "../../stores/snippetStore";
-import { useAssetStore } from "../../stores/assetStore";
 import { SnippetFormDialog } from "../../components/snippet/SnippetFormDialog";
 import { CreateSnippet, UpdateSnippet, ListSnippets } from "../../../wailsjs/go/app/App";
+
+// Monaco editor is a heavy dependency; stub it out so the dialog renders
+// without a real Monaco instance in jsdom.
+vi.mock("@/components/CodeEditor", () => ({
+  CodeEditor: ({ value, onChange }: { value: string; onChange: (v: string) => void }) => (
+    <textarea aria-label="snippet.form.labelContent" value={value ?? ""} onChange={(e) => onChange(e.target.value)} />
+  ),
+}));
 
 describe("SnippetFormDialog", () => {
   beforeEach(() => {
@@ -17,16 +24,7 @@ describe("SnippetFormDialog", () => {
       categoriesLoading: false,
       list: [],
       listLoading: false,
-      filter: { categories: [], keyword: "", tag: "" },
-    });
-    useAssetStore.setState({
-      assets: [{ ID: 1, Name: "s1", Type: "ssh", GroupID: 0 } as any],
-      groups: [],
-      selectedAssetId: null,
-      selectedGroupId: null,
-      collapsedGroupIds: [],
-      loading: false,
-      initialized: true,
+      filter: { categories: [], keyword: "" },
     });
     vi.mocked(ListSnippets).mockResolvedValue([]);
   });
@@ -48,9 +46,6 @@ describe("SnippetFormDialog", () => {
     const contentInput = screen.getByLabelText("snippet.form.labelContent") as HTMLTextAreaElement;
     fireEvent.change(contentInput, { target: { value: "ls -al" } });
 
-    const tagsInput = screen.getByLabelText("snippet.form.labelTags") as HTMLInputElement;
-    fireEvent.change(tagsInput, { target: { value: "FOO, Bar ,baz" } });
-
     const submit = screen.getByRole("button", { name: "snippet.actions.create" });
     expect(submit).not.toBeDisabled();
     fireEvent.click(submit);
@@ -58,7 +53,6 @@ describe("SnippetFormDialog", () => {
     await waitFor(() => expect(CreateSnippet).toHaveBeenCalled());
     const arg = vi.mocked(CreateSnippet).mock.calls[0][0] as any;
     expect(arg.name).toBe("ls"); // trimmed
-    expect(arg.tags).toBe("foo,bar,baz"); // normalized
     expect(arg.content).toBe("ls -al");
     expect(arg.category).toBe("shell"); // first category by default
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
@@ -72,8 +66,7 @@ describe("SnippetFormDialog", () => {
       Category: "shell",
       Content: "ls",
       Description: "d",
-      Tags: "a,b",
-      AssetID: 1,
+      LastAssetIDs: "",
       Source: "user",
       SourceRef: "",
       UseCount: 0,
@@ -102,22 +95,9 @@ describe("SnippetFormDialog", () => {
     expect(arg.name).toBe("new");
   });
 
-  it("hides Asset binding field when selected category has empty assetType (prompt)", () => {
-    const initial = {
-      ID: 1,
-      Name: "x",
-      Category: "prompt",
-      Content: "c",
-      Description: "",
-      Tags: "",
-      Source: "user",
-      SourceRef: "",
-      UseCount: 0,
-      Status: 1,
-      CreatedAt: "2024-01-01T00:00:00Z",
-      UpdatedAt: "2024-01-01T00:00:00Z",
-    } as any;
-    render(<SnippetFormDialog open={true} mode="edit" initial={initial} onOpenChange={() => {}} />);
+  it("does not render Tags or Asset binding fields", () => {
+    render(<SnippetFormDialog open={true} mode="create" onOpenChange={() => {}} />);
+    expect(screen.queryByLabelText("snippet.form.labelTags")).toBeNull();
     expect(screen.queryByLabelText("snippet.form.labelAsset")).toBeNull();
   });
 

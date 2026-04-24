@@ -12,8 +12,6 @@ type Snippet = snippet_entity.Snippet;
 export interface SnippetPopoverProps {
   /** Category filter; fixes which snippets are listed (e.g. "shell", "sql", "mongo"). */
   category: string;
-  /** Optional asset binding — when provided, list = (category) AND (global OR bound to this asset). */
-  assetId?: number;
   /** Parent-supplied trigger element; wrapped via Radix `asChild`. */
   trigger: React.ReactNode;
   /** Invoked when the user picks a snippet. */
@@ -48,7 +46,6 @@ function matchesKeyword(s: Snippet, kw: string): boolean {
 
 export function SnippetPopover({
   category,
-  assetId,
   trigger,
   onInsert,
   showSendWithEnter = false,
@@ -62,8 +59,8 @@ export function SnippetPopover({
 
   // Dedupe + cancel-stale: newer fetches override older ones (rapid prop flips or reopen).
   const reqIdRef = useRef(0);
-  // Cache per (category, assetId) for the popover's lifetime. Reset when props change.
-  const cacheKey = `${category}::${assetId ?? ""}`;
+  // Cache per category for the popover's lifetime. Reset when props change.
+  const cacheKey = category;
   const cachedKeyRef = useRef<string | null>(null);
 
   const loadCategories = useSnippetStore((s) => s.loadCategories);
@@ -78,10 +75,7 @@ export function SnippetPopover({
       // generated constructor signature expects a source object with all fields.
       const req = {
         categories: [category],
-        assetId: assetId,
-        includeGlobal: assetId != null,
         keyword: "",
-        tag: "",
         limit: 0,
         offset: 0,
         orderBy: "",
@@ -95,9 +89,9 @@ export function SnippetPopover({
     } finally {
       if (myId === reqIdRef.current) setLoading(false);
     }
-  }, [category, assetId, cacheKey]);
+  }, [category, cacheKey]);
 
-  // Load-on-open (with cache) + re-fetch when props (category/assetId) change.
+  // Load-on-open (with cache) + re-fetch when props (category) change.
   useEffect(() => {
     if (!open) return;
     if (!categoriesLoaded) void loadCategories().catch(() => {});

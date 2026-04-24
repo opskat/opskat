@@ -612,7 +612,6 @@ function MongoQueryContent({ tabId, assetId, innerTab }: MongoQueryContentProps)
 
           <SnippetPopover
             category="mongo"
-            assetId={assetId || undefined}
             onInsert={handleSnippetInsert}
             trigger={
               <Button

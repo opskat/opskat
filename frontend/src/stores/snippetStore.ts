@@ -8,20 +8,21 @@ import {
   DeleteSnippet,
   DuplicateSnippet,
   RecordSnippetUse,
+  SetSnippetLastAssets,
+  GetSnippetLastAssets,
 } from "../../wailsjs/go/app/App";
 
 type Snippet = snippet_entity.Snippet;
 type Category = snippet_svc.Category;
 
 // Monotonic request counter for loadList. Rapid filter changes (typing in
-// search / tag, drawer opens in PR 3) can overlap; a slow earlier response
+// search, drawer opens in PR 3) can overlap; a slow earlier response
 // must not clobber the UI with stale data.
 let loadListReqId = 0;
 
 export type SnippetFilter = {
   categories: string[]; // empty = all
   keyword: string;
-  tag: string;
 };
 
 interface SnippetState {
@@ -40,6 +41,8 @@ interface SnippetState {
   remove: (id: number) => Promise<void>;
   duplicate: (id: number) => Promise<Snippet>;
   recordUse: (id: number) => void;
+  setLastAssets: (snippetId: number, assetIds: number[]) => Promise<void>;
+  getLastAssets: (snippetId: number) => Promise<number[]>;
 }
 
 export const useSnippetStore = create<SnippetState>()((set, get) => ({
@@ -47,7 +50,7 @@ export const useSnippetStore = create<SnippetState>()((set, get) => ({
   categoriesLoading: false,
   list: [],
   listLoading: false,
-  filter: { categories: [], keyword: "", tag: "" },
+  filter: { categories: [], keyword: "" },
 
   loadCategories: async () => {
     set({ categoriesLoading: true });
@@ -65,14 +68,9 @@ export const useSnippetStore = create<SnippetState>()((set, get) => ({
     const { filter } = get();
     set({ listLoading: true });
     try {
-      // Wails generated class uses camelCase; management page lists everything
-      // (AssetID omitted → pointer stays nil → include all, global and bound).
       const req: snippet_svc.ListReq = {
         categories: filter.categories,
-        assetId: undefined,
-        includeGlobal: true,
         keyword: filter.keyword,
-        tag: filter.tag,
         limit: 0,
         offset: 0,
         orderBy: "",
@@ -94,7 +92,6 @@ export const useSnippetStore = create<SnippetState>()((set, get) => ({
     const next = { ...cur, ...patch };
     if (
       cur.keyword === next.keyword &&
-      cur.tag === next.tag &&
       cur.categories.length === next.categories.length &&
       cur.categories.every((c, i) => c === next.categories[i])
     ) {
@@ -132,5 +129,14 @@ export const useSnippetStore = create<SnippetState>()((set, get) => ({
     void Promise.resolve()
       .then(() => RecordSnippetUse(id))
       .catch(() => {});
+  },
+
+  setLastAssets: async (snippetId: number, assetIds: number[]) => {
+    await SetSnippetLastAssets(snippetId, assetIds);
+  },
+
+  getLastAssets: async (snippetId: number): Promise<number[]> => {
+    const ids = await GetSnippetLastAssets(snippetId);
+    return ids ?? [];
   },
 }));

@@ -14,7 +14,7 @@ function makeSnippet(partial: Partial<any>): any {
     Category: "shell",
     Content: "echo hello",
     Description: "",
-    Tags: "",
+    LastAssetIDs: "",
     Source: "user",
     SourceRef: "",
     UseCount: 0,
@@ -48,7 +48,7 @@ describe("SnippetPopover", () => {
       categoriesLoading: false,
       list: [],
       listLoading: false,
-      filter: { categories: [], keyword: "", tag: "" },
+      filter: { categories: [], keyword: "" },
     });
     useTabStore.setState({ tabs: [], activeTabId: null });
     vi.mocked(ListSnippetCategories).mockResolvedValue([
@@ -149,47 +149,13 @@ describe("SnippetPopover", () => {
     expect(secondCall.categories).toEqual(["sql"]);
   });
 
-  it("re-fetches when assetId prop changes", async () => {
-    const { rerender } = render(
-      <TooltipProvider>
-        <SnippetPopover category="shell" assetId={10} onInsert={vi.fn()} trigger={<button>open</button>} />
-      </TooltipProvider>
-    );
-    fireEvent.click(screen.getByText("open"));
-    await waitFor(() => expect(ListSnippets).toHaveBeenCalledTimes(1));
-    const firstReq = vi.mocked(ListSnippets).mock.calls[0][0] as any;
-    expect(firstReq.assetId).toBe(10);
-    expect(firstReq.includeGlobal).toBe(true);
-
-    fireEvent.keyDown(document.body, { key: "Escape" });
-    rerender(
-      <TooltipProvider>
-        <SnippetPopover category="shell" assetId={20} onInsert={vi.fn()} trigger={<button>open</button>} />
-      </TooltipProvider>
-    );
-    fireEvent.click(screen.getByText("open"));
-
-    await waitFor(() => expect(ListSnippets).toHaveBeenCalledTimes(2));
-    const secondReq = vi.mocked(ListSnippets).mock.calls[1][0] as any;
-    expect(secondReq.assetId).toBe(20);
-  });
-
-  it("passes assetId and includeGlobal=true when assetId is provided", async () => {
-    renderPopover({ assetId: 42 });
-    fireEvent.click(screen.getByText("open"));
-    await waitFor(() => expect(ListSnippets).toHaveBeenCalledTimes(1));
-    const req = vi.mocked(ListSnippets).mock.calls[0][0] as any;
-    expect(req.categories).toEqual(["shell"]);
-    expect(req.assetId).toBe(42);
-    expect(req.includeGlobal).toBe(true);
-  });
-
-  it("omits assetId and sets includeGlobal=false when no asset provided", async () => {
+  it("fetches snippets without assetId or includeGlobal fields", async () => {
     renderPopover();
     fireEvent.click(screen.getByText("open"));
     await waitFor(() => expect(ListSnippets).toHaveBeenCalledTimes(1));
     const req = vi.mocked(ListSnippets).mock.calls[0][0] as any;
+    expect(req.categories).toEqual(["shell"]);
     expect(req.assetId).toBeUndefined();
-    expect(req.includeGlobal).toBe(false);
+    expect(req.includeGlobal).toBeUndefined();
   });
 });

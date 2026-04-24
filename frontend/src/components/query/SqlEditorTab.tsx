@@ -338,7 +338,6 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
           </Select>
           <SnippetPopover
             category="sql"
-            assetId={assetId || undefined}
             onInsert={handleSnippetInsert}
             trigger={
               <Button

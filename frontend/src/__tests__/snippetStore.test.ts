@@ -9,6 +9,8 @@ import {
   DeleteSnippet,
   DuplicateSnippet,
   RecordSnippetUse,
+  SetSnippetLastAssets,
+  GetSnippetLastAssets,
 } from "../../wailsjs/go/app/App";
 
 describe("snippetStore", () => {
@@ -19,7 +21,7 @@ describe("snippetStore", () => {
       categoriesLoading: false,
       list: [],
       listLoading: false,
-      filter: { categories: [], keyword: "", tag: "" },
+      filter: { categories: [], keyword: "" },
     });
     vi.mocked(ListSnippetCategories).mockResolvedValue([]);
     vi.mocked(ListSnippets).mockResolvedValue([]);
@@ -55,15 +57,13 @@ describe("snippetStore", () => {
 
   describe("loadList", () => {
     it("passes current filter to ListSnippets", async () => {
-      useSnippetStore.setState({ filter: { categories: ["shell", "sql"], keyword: "foo", tag: "bar" } });
+      useSnippetStore.setState({ filter: { categories: ["shell", "sql"], keyword: "foo" } });
       vi.mocked(ListSnippets).mockResolvedValue([]);
       await useSnippetStore.getState().loadList();
       expect(ListSnippets).toHaveBeenCalledTimes(1);
       const arg = vi.mocked(ListSnippets).mock.calls[0][0] as any;
       expect(arg.categories).toEqual(["shell", "sql"]);
       expect(arg.keyword).toBe("foo");
-      expect(arg.tag).toBe("bar");
-      expect(arg.includeGlobal).toBe(true);
       expect(arg.limit).toBe(0);
       expect(arg.offset).toBe(0);
     });
@@ -97,20 +97,20 @@ describe("snippetStore", () => {
     it("merges partial filter and triggers loadList", async () => {
       vi.mocked(ListSnippets).mockResolvedValue([]);
       useSnippetStore.getState().setFilter({ keyword: "abc" });
-      expect(useSnippetStore.getState().filter).toEqual({ categories: [], keyword: "abc", tag: "" });
+      expect(useSnippetStore.getState().filter).toEqual({ categories: [], keyword: "abc" });
       // setFilter triggers loadList asynchronously
       await vi.waitFor(() => expect(ListSnippets).toHaveBeenCalled());
     });
 
     it("merges categories without clobbering other fields", () => {
-      useSnippetStore.setState({ filter: { categories: [], keyword: "x", tag: "y" } });
+      useSnippetStore.setState({ filter: { categories: [], keyword: "x" } });
       useSnippetStore.getState().setFilter({ categories: ["shell"] });
-      expect(useSnippetStore.getState().filter).toEqual({ categories: ["shell"], keyword: "x", tag: "y" });
+      expect(useSnippetStore.getState().filter).toEqual({ categories: ["shell"], keyword: "x" });
     });
 
     it("short-circuits when patch doesn't change filter", async () => {
       vi.mocked(ListSnippets).mockResolvedValue([]);
-      useSnippetStore.setState({ filter: { categories: [], keyword: "", tag: "" } });
+      useSnippetStore.setState({ filter: { categories: [], keyword: "" } });
       useSnippetStore.getState().setFilter({ keyword: "" });
       // Give microtasks a chance to flush.
       await Promise.resolve();
@@ -119,7 +119,7 @@ describe("snippetStore", () => {
 
     it("short-circuits on equal categories array (same ids, same order)", async () => {
       vi.mocked(ListSnippets).mockResolvedValue([]);
-      useSnippetStore.setState({ filter: { categories: ["shell", "sql"], keyword: "", tag: "" } });
+      useSnippetStore.setState({ filter: { categories: ["shell", "sql"], keyword: "" } });
       useSnippetStore.getState().setFilter({ categories: ["shell", "sql"] });
       await Promise.resolve();
       expect(ListSnippets).not.toHaveBeenCalled();
@@ -197,6 +197,27 @@ describe("snippetStore", () => {
       useSnippetStore.getState().recordUse(7);
       await new Promise((r) => setTimeout(r, 0));
       expect(RecordSnippetUse).toHaveBeenCalledWith(7);
+    });
+  });
+
+  describe("setLastAssets / getLastAssets", () => {
+    it("setLastAssets calls SetSnippetLastAssets with id and array", async () => {
+      vi.mocked(SetSnippetLastAssets).mockResolvedValue(undefined);
+      await useSnippetStore.getState().setLastAssets(5, [1, 2, 3]);
+      expect(SetSnippetLastAssets).toHaveBeenCalledWith(5, [1, 2, 3]);
+    });
+
+    it("getLastAssets returns ids from GetSnippetLastAssets", async () => {
+      vi.mocked(GetSnippetLastAssets).mockResolvedValue([10, 20] as any);
+      const ids = await useSnippetStore.getState().getLastAssets(5);
+      expect(GetSnippetLastAssets).toHaveBeenCalledWith(5);
+      expect(ids).toEqual([10, 20]);
+    });
+
+    it("getLastAssets returns empty array when response is null", async () => {
+      vi.mocked(GetSnippetLastAssets).mockResolvedValue(null as any);
+      const ids = await useSnippetStore.getState().getLastAssets(5);
+      expect(ids).toEqual([]);
     });
   });
 });

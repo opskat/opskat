@@ -15,10 +15,9 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Textarea,
 } from "@opskat/ui";
 import { useSnippetStore } from "@/stores/snippetStore";
-import { useAssetStore } from "@/stores/assetStore";
+import { CodeEditor, type CodeEditorLanguage } from "@/components/CodeEditor";
 import { snippet_entity } from "../../../wailsjs/go/models";
 
 export interface SnippetFormDialogProps {
@@ -30,27 +29,16 @@ export interface SnippetFormDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-function normalizeTags(raw: string): string {
-  return raw
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter((s) => s.length > 0)
-    .join(",");
-}
-
 export function SnippetFormDialog({ open, mode, initial, defaultCategory, onOpenChange }: SnippetFormDialogProps) {
   const { t } = useTranslation();
   const categories = useSnippetStore((s) => s.categories);
   const list = useSnippetStore((s) => s.list);
   const createSnippet = useSnippetStore((s) => s.create);
   const updateSnippet = useSnippetStore((s) => s.update);
-  const assets = useAssetStore((s) => s.assets);
 
   const [category, setCategory] = useState<string>("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [tags, setTags] = useState("");
-  const [assetId, setAssetId] = useState<string>(""); // "" = global
   const [content, setContent] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -62,29 +50,33 @@ export function SnippetFormDialog({ open, mode, initial, defaultCategory, onOpen
       setCategory(initial.Category);
       setName(initial.Name);
       setDescription(initial.Description ?? "");
-      setTags(initial.Tags ?? "");
-      setAssetId(initial.AssetID != null ? String(initial.AssetID) : "");
       setContent(initial.Content ?? "");
     } else {
       setCategory(defaultCategory ?? categories[0]?.id ?? "");
       setName("");
       setDescription("");
-      setTags("");
-      setAssetId("");
       setContent("");
     }
     setNameTouched(false);
     setSubmitting(false);
   }, [open, mode, initial, defaultCategory, categories]);
 
-  const selectedCategory = useMemo(() => categories.find((c) => c.id === category), [categories, category]);
-  const assetType = selectedCategory?.assetType ?? "";
-  const showAssetField = assetType !== "";
-
-  const filteredAssets = useMemo(() => {
-    if (!showAssetField) return [];
-    return assets.filter((a) => a.Type === assetType);
-  }, [assets, assetType, showAssetField]);
+  const contentLanguage: CodeEditorLanguage = useMemo(() => {
+    switch (category) {
+      case "shell":
+        return "shell";
+      case "sql":
+        return "sql";
+      case "redis":
+        return "plaintext";
+      case "mongo":
+        return "javascript";
+      case "prompt":
+        return "markdown";
+      default:
+        return "plaintext";
+    }
+  }, [category]);
 
   // Duplicate-name hint (same category, same name, different id).
   const duplicateHint = useMemo(() => {
@@ -103,16 +95,12 @@ export function SnippetFormDialog({ open, mode, initial, defaultCategory, onOpen
     if (!canSubmit) return;
     setSubmitting(true);
     try {
-      const normalizedTags = normalizeTags(tags);
-      const parsedAssetId = assetId ? Number(assetId) : undefined;
       if (mode === "create") {
         await createSnippet({
           name: name.trim(),
           category,
           content,
           description,
-          tags: normalizedTags,
-          assetId: showAssetField ? parsedAssetId : undefined,
         } as unknown as import("../../../wailsjs/go/models").snippet_svc.CreateReq);
         toast.success(t("snippet.toast.created"));
       } else if (initial) {
@@ -121,8 +109,6 @@ export function SnippetFormDialog({ open, mode, initial, defaultCategory, onOpen
           name: name.trim(),
           content,
           description,
-          tags: normalizedTags,
-          assetId: showAssetField ? parsedAssetId : undefined,
         } as unknown as import("../../../wailsjs/go/models").snippet_svc.UpdateReq);
         toast.success(t("snippet.toast.updated"));
       }
@@ -142,7 +128,7 @@ export function SnippetFormDialog({ open, mode, initial, defaultCategory, onOpen
         </DialogHeader>
 
         <div className="grid gap-4">
-          {/* Category */}
+          {/* Category / Target */}
           <div className="grid gap-1.5">
             <Label htmlFor="snippet-category">{t("snippet.form.labelCategory")}</Label>
             <Select value={category} onValueChange={setCategory} disabled={mode === "edit"}>
@@ -155,10 +141,6 @@ export function SnippetFormDialog({ open, mode, initial, defaultCategory, onOpen
                     {c.label}
                   </SelectItem>
                 ))}
-                {/* In edit mode on an orphaned category, surface it as a disabled
-                    option so the Select can still render the value. Users cannot
-                    create new snippets in orphaned categories (category is
-                    immutable in edit anyway). */}
                 {mode === "edit" && category && !categories.some((c) => c.id === category) && (
                   <SelectItem key={`orphan-${category}`} value={category} disabled>
                     {t("snippet.unknownCategory", { name: category })}
@@ -176,7 +158,6 @@ export function SnippetFormDialog({ open, mode, initial, defaultCategory, onOpen
               value={name}
               onChange={(e) => setName(e.target.value)}
               onBlur={() => setNameTouched(true)}
-              placeholder=""
             />
             {duplicateHint && <p className="text-amber-500 text-xs">{t("snippet.form.duplicateNameHint")}</p>}
           </div>
@@ -187,42 +168,12 @@ export function SnippetFormDialog({ open, mode, initial, defaultCategory, onOpen
             <Input id="snippet-desc" value={description} onChange={(e) => setDescription(e.target.value)} />
           </div>
 
-          {/* Tags */}
+          {/* Content (Monaco) */}
           <div className="grid gap-1.5">
-            <Label htmlFor="snippet-tags">{t("snippet.form.labelTags")}</Label>
-            <Input id="snippet-tags" value={tags} onChange={(e) => setTags(e.target.value)} placeholder="foo,bar,baz" />
-          </div>
-
-          {/* Asset binding */}
-          {showAssetField && (
-            <div className="grid gap-1.5">
-              <Label htmlFor="snippet-asset">{t("snippet.form.labelAsset")}</Label>
-              <Select value={assetId || "__global__"} onValueChange={(v) => setAssetId(v === "__global__" ? "" : v)}>
-                <SelectTrigger id="snippet-asset" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__global__">{t("snippet.globalBinding")}</SelectItem>
-                  {filteredAssets.map((a) => (
-                    <SelectItem key={a.ID} value={String(a.ID)}>
-                      {a.Name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            <Label>{t("snippet.form.labelContent")}</Label>
+            <div className="h-80 border rounded-md overflow-hidden">
+              <CodeEditor value={content} onChange={setContent} language={contentLanguage} fontSize={12} />
             </div>
-          )}
-
-          {/* Content */}
-          <div className="grid gap-1.5">
-            <Label htmlFor="snippet-content">{t("snippet.form.labelContent")}</Label>
-            <Textarea
-              id="snippet-content"
-              rows={12}
-              className="font-mono text-xs min-h-56"
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-            />
           </div>
         </div>
 

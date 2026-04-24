@@ -4,7 +4,6 @@ import { FolderOpen, Folder, FileCode } from "lucide-react";
 import { Button } from "@opskat/ui";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { useTerminalStore } from "@/stores/terminalStore";
-import { useTabStore, type TerminalTabMeta } from "@/stores/tabStore";
 import { SnippetPopover } from "@/components/snippet/SnippetPopover";
 import { WriteSSH } from "../../../wailsjs/go/app/App";
 
@@ -28,9 +27,7 @@ export function TerminalToolbar({ tabId }: TerminalToolbarProps) {
   const tabData = useTerminalStore((s) => s.tabData[tabId]);
   const toggleFileManager = useSFTPStore((s) => s.toggleFileManager);
   const isOpen = useSFTPStore((s) => s.fileManagerOpenTabs[tabId]);
-  const tab = useTabStore((s) => s.tabs.find((t) => t.id === tabId));
 
-  const assetId = tab?.type === "terminal" ? (tab.meta as TerminalTabMeta).assetId : undefined;
   const activePaneId = tabData?.activePaneId;
   const activePaneConnected = activePaneId ? (tabData?.panes[activePaneId]?.connected ?? false) : false;
 
@@ -53,7 +50,6 @@ export function TerminalToolbar({ tabId }: TerminalToolbarProps) {
       <div className="flex-1" />
       <SnippetPopover
         category="shell"
-        assetId={assetId}
         showSendWithEnter
         onInsert={handleSnippetInsert}
         trigger={
