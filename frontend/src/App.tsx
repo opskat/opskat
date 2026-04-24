@@ -22,7 +22,7 @@ import { useAssetStore } from "@/stores/assetStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useQueryStore } from "@/stores/queryStore";
 import { getAssetType, normalizeAssetSection } from "@/lib/assetTypes";
-import { useTabStore, type InfoTabMeta, type QueryTabMeta, type Tab } from "@/stores/tabStore";
+import { useTabStore, type InfoTabMeta, type PageTabMeta, type Tab } from "@/stores/tabStore";
 import { useExtensionStore } from "@/extension";
 import { bootstrapExtensions } from "@/extension/init";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
@@ -172,6 +172,19 @@ function App() {
     });
   }, []);
 
+  const hideAssetListAfterConnect = useCallback(() => {
+    const layout = useLayoutStore.getState();
+    if (layout.tabBarLayout === "left") {
+      if (layout.leftPanelVisible) {
+        layout.toggleVisible();
+      }
+      return;
+    }
+
+    setAssetTreeCollapsed(true);
+    localStorage.setItem("sidebar_collapsed", "true");
+  }, []);
+
   const handleAssetTreeResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setAssetTreeResizing(true);
@@ -240,32 +253,6 @@ function App() {
 
   const handleSelectAsset = (asset: asset_entity.Asset) => {
     selectAsset(asset.ID);
-    const tabStore = useTabStore.getState();
-    const previewTabId = "info-preview";
-    const existing = tabStore.tabs.find((t) => t.id === previewTabId);
-    const meta: InfoTabMeta = {
-      type: "info",
-      targetType: "asset",
-      targetId: asset.ID,
-      name: asset.Name,
-      icon: asset.Icon || undefined,
-    };
-    if (existing) {
-      tabStore.updateTab(previewTabId, {
-        label: asset.Name,
-        icon: asset.Icon || undefined,
-        meta,
-      });
-      tabStore.activateTab(previewTabId);
-    } else {
-      tabStore.openTab({
-        id: previewTabId,
-        type: "info",
-        label: asset.Name,
-        icon: asset.Icon || undefined,
-        meta,
-      });
-    }
   };
 
   const handleOpenInfoTab = useCallback((type: "asset" | "group", id: number, name: string, icon?: string) => {
@@ -293,6 +280,7 @@ function App() {
     const def = getAssetType(asset.Type);
     if (def?.connectAction === "query") {
       useQueryStore.getState().openQueryTab(asset);
+      hideAssetListAfterConnect();
       return;
     }
 
@@ -313,6 +301,7 @@ function App() {
             assetId: asset.ID,
           },
         });
+        hideAssetListAfterConnect();
         return;
       }
     }
@@ -320,6 +309,7 @@ function App() {
     if (def?.connectAction !== "terminal") return;
     try {
       await connect(asset);
+      hideAssetListAfterConnect();
     } catch (e) {
       toast.error(`${asset.Name}: ${String(e)}`);
     }
@@ -329,45 +319,88 @@ function App() {
     if (!getAssetType(asset.Type)?.canConnectInNewTab) return;
     try {
       await connect(asset, "", true);
+      hideAssetListAfterConnect();
     } catch (e) {
       toast.error(`${asset.Name}: ${String(e)}`);
     }
   };
 
   // Sidebar page navigation
-  const handlePageChange = useCallback((page: string) => {
-    const tabStore = useTabStore.getState();
-    if (page === "home" || page === "database" || page === "ssh" || page === "redis" || page === "mongodb") {
-      const section = page as HomeSection;
-      setHomeSection(section);
-      const candidateTabs = tabStore.tabs.filter(
-        (t) => t.type === "terminal" || t.type === "query" || t.type === "info"
-      );
-      const target = candidateTabs.find((t) => tabBelongsToSection(t, section));
-      if (target) {
-        tabStore.activateTab(target.id);
-      } else if (section === "home") {
-        tabStore.activateTab(tabStore.tabs[0]?.id || "");
+  const handlePageChange = useCallback(
+    (page: string) => {
+      const tabStore = useTabStore.getState();
+      if (page === "home" || page === "database" || page === "ssh" || page === "redis" || page === "mongodb") {
+        const section = page as HomeSection;
+        setHomeSection(section);
+
+        const terminalConnectedCount = Object.values(useTerminalStore.getState().tabData).reduce((count, tabData) => {
+          return count + Object.values(tabData.panes).filter((pane) => pane.connected).length;
+        }, 0);
+        const queryConnectionCount = tabStore.tabs.filter((tab) => tab.type === "query").length;
+        const extensionConnectionCount = tabStore.tabs.filter((tab) => {
+          if (tab.type !== "page") return false;
+          const meta = tab.meta as PageTabMeta;
+          return Boolean(meta.extensionName && typeof meta.assetId === "number");
+        }).length;
+        const openAssetConnections = terminalConnectedCount + queryConnectionCount + extensionConnectionCount;
+
+        const layout = useLayoutStore.getState();
+        const clickedSameSection = section === homeSection;
+
+        if (clickedSameSection && openAssetConnections > 1) {
+          if (layout.tabBarLayout === "left") {
+            layout.toggleVisible();
+          } else {
+            setAssetTreeCollapsed((prev) => {
+              const next = !prev;
+              localStorage.setItem("sidebar_collapsed", String(next));
+              return next;
+            });
+          }
+        } else {
+          if (layout.tabBarLayout === "left") {
+            if (!layout.leftPanelVisible) {
+              layout.toggleVisible();
+            }
+          } else {
+            setAssetTreeCollapsed((prev) => {
+              if (!prev) return prev;
+              localStorage.setItem("sidebar_collapsed", "false");
+              return false;
+            });
+          }
+        }
+
+        const candidateTabs = tabStore.tabs.filter(
+          (t) => t.type === "terminal" || t.type === "query" || t.type === "info"
+        );
+        const target = candidateTabs.find((t) => tabBelongsToSection(t, section));
+        if (target) {
+          tabStore.activateTab(target.id);
+        } else if (section === "home") {
+          tabStore.activateTab(tabStore.tabs[0]?.id || "");
+        }
+        return;
       }
-      return;
-    }
-    const existing = tabStore.tabs.find((t) => t.id === page);
-    if (existing) {
-      if (page === "settings") {
-        tabStore.updateTab("settings", {
-          meta: { type: "page", pageId: "settings" },
+      const existing = tabStore.tabs.find((t) => t.id === page);
+      if (existing) {
+        if (page === "settings") {
+          tabStore.updateTab("settings", {
+            meta: { type: "page", pageId: "settings" },
+          });
+        }
+        tabStore.activateTab(page);
+      } else {
+        tabStore.openTab({
+          id: page,
+          type: "page",
+          label: page,
+          meta: { type: "page", pageId: page },
         });
       }
-      tabStore.activateTab(page);
-    } else {
-      tabStore.openTab({
-        id: page,
-        type: "page",
-        label: page,
-        meta: { type: "page", pageId: page },
-      });
-    }
-  }, []);
+    },
+    [homeSection]
+  );
 
   const tabBarLayout = useLayoutStore((s) => s.tabBarLayout);
   const leftPanelVisible = useLayoutStore((s) => s.leftPanelVisible);
@@ -375,17 +408,7 @@ function App() {
 
   // Derive active page for sidebar highlighting
   const activeTab = useTabStore((s) => s.tabs.find((t) => t.id === s.activeTabId));
-  const activePage = !activeTab
-    ? homeSection
-    : activeTab.type === "page"
-      ? activeTab.id
-      : activeTab.type === "terminal"
-        ? "ssh"
-        : activeTab.type === "query"
-          ? (normalizeAssetSection((activeTab.meta as QueryTabMeta).assetType) ?? "other")
-          : activeTab.type === "info"
-            ? homeSection
-            : "other";
+  const activePage = activeTab?.type === "page" ? activeTab.id : homeSection;
 
   return (
     <ThemeProvider defaultTheme="system">

@@ -562,7 +562,7 @@ function GroupItem({
                   {onOpenInfoTab && (
                     <ContextMenuItem onClick={() => onOpenInfoTab("asset", asset.ID, asset.Name, asset.Icon)}>
                       <Eye className="h-3.5 w-3.5 mr-1.5" />
-                      {t("action.openInTab")}
+                      {t("action.editPermission")}
                     </ContextMenuItem>
                   )}
                   <ContextMenuItem onClick={() => onEditAsset(asset)}>
