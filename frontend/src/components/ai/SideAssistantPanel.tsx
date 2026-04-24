@@ -50,6 +50,7 @@ export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelPr
     storageKey: "ai_sidebar_width",
     targetRef: panelRef,
   });
+  const sessionRailWidth = width >= 460 ? 144 : width >= 360 ? 128 : 112;
 
   useEffect(() => {
     if (configured) fetchConversations();
@@ -150,38 +151,48 @@ export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelPr
           )}
         </div>
 
-        {sidebarTabs.length > 0 && (
-          <SideAssistantTabBar
-            tabs={sidebarTabs}
-            activeTabId={activeSidebarTabId}
-            getStatus={getSidebarTabStatus}
-            onActivate={activateSidebarTab}
-            onClose={closeSidebarTab}
-          />
-        )}
+        <div className="flex min-h-0 flex-1" data-ai-session-layout="rail-right">
+          <div className="flex min-w-0 flex-1 flex-col">
+            <SideAssistantContextBar conversationId={activeConversationId} />
 
-        <SideAssistantContextBar conversationId={activeConversationId} />
+            {!activeSidebarTab ? (
+              <div className="flex-1 flex items-center justify-center p-4 text-center text-sm text-muted-foreground">
+                <Trans
+                  i18nKey="ai.sidebar.emptyGuide"
+                  components={{
+                    history: <History className="inline-block h-3.5 w-3.5 mx-0.5 align-text-bottom" />,
+                  }}
+                />
+              </div>
+            ) : (
+              <div className="flex-1 min-h-0 flex flex-col">
+                <AIChatContent
+                  sideTabId={activeSidebarTab.id}
+                  conversationId={activeConversationId}
+                  compact
+                  onSendOverride={handleSendOverride}
+                  onStopOverride={handleStopOverride}
+                />
+              </div>
+            )}
+          </div>
 
-        {!activeSidebarTab ? (
-          <div className="flex-1 flex items-center justify-center p-4 text-center text-sm text-muted-foreground">
-            <Trans
-              i18nKey="ai.sidebar.emptyGuide"
-              components={{
-                history: <History className="inline-block h-3.5 w-3.5 mx-0.5 align-text-bottom" />,
-              }}
-            />
-          </div>
-        ) : (
-          <div className="flex-1 min-h-0 flex flex-col">
-            <AIChatContent
-              sideTabId={activeSidebarTab.id}
-              conversationId={activeConversationId}
-              compact
-              onSendOverride={handleSendOverride}
-              onStopOverride={handleStopOverride}
-            />
-          </div>
-        )}
+          {sidebarTabs.length > 0 && (
+            <aside
+              className="min-h-0 shrink-0 border-l border-panel-divider/80 bg-muted/15"
+              style={{ width: sessionRailWidth }}
+              data-ai-session-rail="right"
+            >
+              <SideAssistantTabBar
+                tabs={sidebarTabs}
+                activeTabId={activeSidebarTabId}
+                getStatus={getSidebarTabStatus}
+                onActivate={activateSidebarTab}
+                onClose={closeSidebarTab}
+              />
+            </aside>
+          )}
+        </div>
       </div>
     </div>
   );

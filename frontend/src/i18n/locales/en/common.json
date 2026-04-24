@@ -619,6 +619,7 @@
     "newConversation": "New conversation",
     "sidebar": {
       "title": "AI Assistant",
+      "sessions": "Sessions",
       "newChat": "New chat",
       "history": "History",
       "historySearchPlaceholder": "Search history…",

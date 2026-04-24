@@ -22,56 +22,82 @@ export function SideAssistantTabBar({ tabs, activeTabId, getStatus, onActivate, 
   const { t } = useTranslation();
 
   return (
-    <div className="border-b border-panel-divider px-2 py-1.5" role="tablist" aria-label={t("ai.sidebar.title")}>
-      <div className="flex gap-1 overflow-x-auto pb-0.5">
-        {tabs.map((tab) => {
-          const isActive = tab.id === activeTabId;
-          const status = getStatus(tab.id);
-          return (
-            <div
-              key={tab.id}
-              className={cn(
-                "group flex min-w-0 items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-colors",
-                isActive
-                  ? "border-primary/40 bg-background text-foreground shadow-sm"
-                  : "border-transparent bg-muted/50 text-muted-foreground hover:bg-muted"
-              )}
-              role="presentation"
-            >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={isActive}
-                className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                onClick={() => onActivate(tab.id)}
-              >
-                {status ? (
-                  <span
-                    className={cn("h-1.5 w-1.5 shrink-0 rounded-full", statusClassNames[status])}
-                    title={t(`ai.sidebar.status.${status}`)}
-                  />
-                ) : (
-                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-transparent" />
+    <div
+      className="flex h-full flex-col"
+      role="tablist"
+      aria-orientation="vertical"
+      aria-label={t("ai.sidebar.sessions")}
+    >
+      <div className="flex items-center justify-between border-b border-panel-divider px-3 py-2">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80">
+          {t("ai.sidebar.sessions")}
+        </span>
+        <span className="rounded-full bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+          {tabs.length}
+        </span>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+        <div className="space-y-1.5">
+          {tabs.map((tab) => {
+            const isActive = tab.id === activeTabId;
+            const status = getStatus(tab.id);
+            const subtitle = status ? t(`ai.sidebar.status.${status}`) : t("ai.sidebar.newChat");
+            return (
+              <div
+                key={tab.id}
+                className={cn(
+                  "group relative min-w-0 rounded-xl border text-xs transition-colors",
+                  isActive
+                    ? "border-primary/30 bg-background text-foreground shadow-sm ring-1 ring-primary/10"
+                    : "border-transparent bg-background/35 text-muted-foreground hover:bg-background/80"
                 )}
-                <span className="truncate">{tab.title || t("ai.newConversation")}</span>
-              </button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-4 w-4 shrink-0 opacity-60 hover:opacity-100"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onClose(tab.id);
-                }}
-                title={t("tab.close")}
-                aria-label={t("tab.close")}
+                role="presentation"
               >
-                <X className="h-3 w-3" />
-              </Button>
-            </div>
-          );
-        })}
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  className="flex w-full min-w-0 items-start gap-2 rounded-[inherit] px-2.5 py-2.5 pr-8 text-left"
+                  onClick={() => onActivate(tab.id)}
+                  title={tab.title || t("ai.newConversation")}
+                >
+                  {status ? (
+                    <span
+                      className={cn("mt-1 h-1.5 w-1.5 shrink-0 rounded-full", statusClassNames[status])}
+                      title={t(`ai.sidebar.status.${status}`)}
+                    />
+                  ) : (
+                    <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-transparent" />
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium leading-5 text-foreground">
+                      {tab.title || t("ai.newConversation")}
+                    </span>
+                    <span className="block truncate text-[11px] leading-4 text-muted-foreground">{subtitle}</span>
+                  </span>
+                </button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className={cn(
+                    "absolute right-1.5 top-1.5 h-5 w-5 shrink-0 rounded-md opacity-0 transition-opacity hover:opacity-100",
+                    isActive && "opacity-70"
+                  )}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onClose(tab.id);
+                  }}
+                  title={t("tab.close")}
+                  aria-label={t("tab.close")}
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

@@ -619,6 +619,7 @@
     "newConversation": "新对话",
     "sidebar": {
       "title": "AI 助手",
+      "sessions": "会话",
       "newChat": "新对话",
       "history": "历史",
       "historySearchPlaceholder": "搜索历史…",

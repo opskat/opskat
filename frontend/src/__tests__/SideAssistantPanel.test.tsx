@@ -68,6 +68,28 @@ describe("SideAssistantPanel", () => {
     expect(screen.queryByText("ai.sidebar.emptyGuide")).not.toBeInTheDocument();
   });
 
+  it("renders the session selector as a right-side vertical rail", () => {
+    useAIStore.setState({
+      sidebarTabs: [buildSidebarTab("sidebar-1", 1, "Conv A"), buildSidebarTab("sidebar-2", 2, "Conv B")],
+      activeSidebarTabId: "sidebar-1",
+      conversations: [
+        { ID: 1, Title: "Conv A", Updatetime: Math.floor(Date.now() / 1000) } as any,
+        { ID: 2, Title: "Conv B", Updatetime: Math.floor(Date.now() / 1000) } as any,
+      ],
+      conversationMessages: { 1: [], 2: [] },
+      conversationStreaming: {
+        1: { sending: false, pendingQueue: [] },
+        2: { sending: false, pendingQueue: [] },
+      },
+    });
+
+    render(<SideAssistantPanel collapsed={false} onToggle={() => {}} />);
+
+    const tablist = screen.getByRole("tablist", { name: "ai.sidebar.sessions" });
+    expect(tablist).toHaveAttribute("aria-orientation", "vertical");
+    expect(tablist.closest('[data-ai-session-rail="right"]')).not.toBeNull();
+  });
+
   it("history selection binds the active blank tab instead of opening a duplicate", async () => {
     useAIStore.setState({
       sidebarTabs: [buildSidebarTab("sidebar-blank", null)],
