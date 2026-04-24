@@ -1222,6 +1222,7 @@
     },
     "runDrawer": {
       "title": "选择要运行的资产",
+      "description": "多选目标资产，运行片段到各资产的编辑器或终端",
       "searchPlaceholder": "搜索资产…",
       "noAssets": "没有可运行的资产"
     },

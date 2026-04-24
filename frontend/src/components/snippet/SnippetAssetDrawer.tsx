@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Play, Search, X } from "lucide-react";
 import { toast } from "sonner";
-import { Button, Dialog, DialogContent, DialogHeader, DialogTitle, Input, cn } from "@opskat/ui";
+import { Button, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Input, cn } from "@opskat/ui";
 import { useAssetStore } from "@/stores/assetStore";
 import { useSnippetStore } from "@/stores/snippetStore";
 import { snippet_entity } from "../../../wailsjs/go/models";
@@ -36,17 +36,21 @@ export function SnippetAssetDrawer({ snippet, onClose }: SnippetAssetDrawerProps
 
   // Load last-used assets on mount
   useEffect(() => {
-    GetSnippetLastAssets(snippet.ID)
-      .then((ids) => {
-        // Filter to only those still present in matchingAssets
-        const valid = new Set<number>();
-        const matchingIds = new Set(matchingAssets.map((a) => a.ID));
-        for (const id of ids ?? []) {
-          if (matchingIds.has(id)) valid.add(id);
-        }
-        setSelected(valid);
-      })
-      .catch(() => {});
+    let cancelled = false;
+    void (async () => {
+      const ids = await GetSnippetLastAssets(snippet.ID).catch(() => null);
+      if (cancelled) return;
+      // Filter to only those still present in matchingAssets
+      const valid = new Set<number>();
+      const matchingIds = new Set(matchingAssets.map((a) => a.ID));
+      for (const id of ids ?? []) {
+        if (matchingIds.has(id)) valid.add(id);
+      }
+      setSelected(valid);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [snippet.ID, matchingAssets]);
 
   const filteredAssets = useMemo(() => {
@@ -99,11 +103,12 @@ export function SnippetAssetDrawer({ snippet, onClose }: SnippetAssetDrawerProps
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent
-        className="fixed right-0 top-0 h-full w-96 max-w-full rounded-none border-l sm:max-w-sm translate-x-0 translate-y-0 left-auto data-[state=open]:slide-in-from-right data-[state=closed]:slide-out-to-right"
+        className="fixed right-0 top-0 h-full w-96 max-w-full rounded-none border-l sm:max-w-sm translate-x-0 translate-y-0 left-auto data-[state=open]:slide-in-from-right data-[state=closed]:slide-out-to-right data-[state=open]:zoom-in-100 data-[state=closed]:zoom-out-100"
         showCloseButton={false}
       >
         <DialogHeader className="flex-row items-center justify-between pb-2 border-b">
           <DialogTitle className="text-sm font-medium">{t("snippet.runDrawer.title")}</DialogTitle>
+          <DialogDescription className="sr-only">{t("snippet.runDrawer.description")}</DialogDescription>
           <Button variant="ghost" size="icon-xs" onClick={onClose} aria-label={t("action.close")}>
             <X className="h-3.5 w-3.5" />
           </Button>

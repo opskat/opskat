@@ -1222,8 +1222,9 @@
     },
     "runDrawer": {
       "title": "Select assets to run on",
+      "description": "Select one or more assets to run this snippet on",
       "searchPlaceholder": "Search assets…",
-      "noAssets": "No runnable assets"
+      "noAssets": "No matching assets"
     },
     "confirmDelete": {
       "title": "Delete snippet?",
