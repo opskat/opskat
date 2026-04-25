@@ -1,7 +1,20 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
-import { Loader2, Copy, ArrowUp, ArrowDown, ArrowUpDown, Filter, Search } from "lucide-react";
+import {
+  Loader2,
+  Copy,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
+  Filter,
+  Search,
+  ClipboardPaste,
+  RefreshCw,
+  CircleSlash,
+  Type,
+  ClipboardType,
+} from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@opskat/ui";
 import { toast } from "sonner";
 
@@ -26,6 +39,9 @@ interface QueryResultTableProps {
   editable?: boolean;
   edits?: Map<string, unknown>; // key: "rowIdx:col"
   onCellEdit?: (edit: CellEdit) => void;
+  onSetCellValue?: (edit: CellEdit) => void;
+  onPasteCell?: (edit: CellEdit) => void;
+  onRefresh?: () => void;
   showRowNumber?: boolean;
   rowNumberOffset?: number;
   // Controlled sorting (server-side). If provided, clicking a header calls onSortChange
@@ -60,6 +76,9 @@ export function cellValueToText(v: unknown): string {
 // Set so they don't collide with the literal string "null" etc.
 const NULL_KEY = "__opskat_null_sentinel__";
 
+const CONTEXT_MENU_ITEM_CLASS =
+  "relative flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground";
+
 function valueKey(v: unknown): string {
   if (v == null) return NULL_KEY;
   return cellValueToText(v);
@@ -88,6 +107,9 @@ export function QueryResultTable({
   editable,
   edits,
   onCellEdit,
+  onSetCellValue,
+  onPasteCell,
+  onRefresh,
   showRowNumber,
   rowNumberOffset = 0,
   sortColumn: controlledSortCol,
@@ -173,7 +195,13 @@ export function QueryResultTable({
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Context menu state
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; value: unknown } | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number;
+    y: number;
+    rowIdx: number;
+    col: string;
+    value: unknown;
+  } | null>(null);
   const ctxMenuRef = useRef<HTMLDivElement>(null);
 
   // Reset local sort and column widths when columns change
@@ -317,19 +345,69 @@ export function QueryResultTable({
     [rows, onCellEdit]
   );
 
-  const handleCopyCell = useCallback(() => {
+  const setCellValueHandler = onSetCellValue ?? onCellEdit;
+  const pasteCellHandler = onPasteCell ?? onSetCellValue ?? onCellEdit;
+  const canSetCellValue = !!editable && !!setCellValueHandler;
+  const canPasteCell = !!editable && !!pasteCellHandler;
+
+  const handleCopyCell = useCallback(async () => {
     if (!ctxMenu) return;
-    navigator.clipboard.writeText(cellValueToText(ctxMenu.value));
-    toast.success(t("query.copied"));
-    setCtxMenu(null);
+    try {
+      await navigator.clipboard.writeText(cellValueToText(ctxMenu.value));
+      toast.success(t("query.copied"));
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setCtxMenu(null);
+    }
   }, [ctxMenu, t]);
+
+  const handleCopyFieldName = useCallback(async () => {
+    if (!ctxMenu) return;
+    try {
+      await navigator.clipboard.writeText(ctxMenu.col);
+      toast.success(t("query.copied"));
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setCtxMenu(null);
+    }
+  }, [ctxMenu, t]);
+
+  const handleSetCellValue = useCallback(
+    (value: unknown) => {
+      if (!ctxMenu) return;
+      const edit = { rowIdx: ctxMenu.rowIdx, col: ctxMenu.col, value };
+      setCellValueHandler?.(edit);
+      setCtxMenu(null);
+    },
+    [ctxMenu, setCellValueHandler]
+  );
+
+  const handlePasteCell = useCallback(async () => {
+    if (!ctxMenu) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      const edit = { rowIdx: ctxMenu.rowIdx, col: ctxMenu.col, value: text };
+      pasteCellHandler?.(edit);
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setCtxMenu(null);
+    }
+  }, [ctxMenu, pasteCellHandler]);
+
+  const handleRefreshFromMenu = useCallback(() => {
+    onRefresh?.();
+    setCtxMenu(null);
+  }, [onRefresh]);
 
   const handleCellContextMenu = useCallback((e: React.MouseEvent, origIdx: number, col: string, value: unknown) => {
     e.preventDefault();
     e.stopPropagation();
     setSelectedCell({ origIdx, col });
     containerRef.current?.focus();
-    setCtxMenu({ x: e.clientX, y: e.clientY, value });
+    setCtxMenu({ x: e.clientX, y: e.clientY, rowIdx: origIdx, col, value });
   }, []);
 
   const handleCellClick = useCallback((origIdx: number, col: string) => {
@@ -596,15 +674,50 @@ export function QueryResultTable({
             ref={ctxMenuRef}
             className="z-50 min-w-[8rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md animate-in fade-in-0 zoom-in-95"
             style={{ position: "fixed", top: ctxMenu.y + 2, left: ctxMenu.x + 2 }}
+            role="menu"
           >
-            <div
-              role="menuitem"
-              className="relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground"
-              onClick={handleCopyCell}
-            >
+            {canSetCellValue && (
+              <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={CONTEXT_MENU_ITEM_CLASS}
+                  onClick={() => handleSetCellValue("")}
+                >
+                  <Type className="h-3.5 w-3.5" />
+                  {t("query.setEmptyString")}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={CONTEXT_MENU_ITEM_CLASS}
+                  onClick={() => handleSetCellValue(null)}
+                >
+                  <CircleSlash className="h-3.5 w-3.5" />
+                  {t("query.setNull")}
+                </button>
+              </>
+            )}
+            <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS} onClick={handleCopyCell}>
               <Copy className="h-3.5 w-3.5" />
               {t("query.copyValue")}
-            </div>
+            </button>
+            <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS} onClick={handleCopyFieldName}>
+              <ClipboardType className="h-3.5 w-3.5" />
+              {t("query.copyFieldName")}
+            </button>
+            {canPasteCell && (
+              <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS} onClick={handlePasteCell}>
+                <ClipboardPaste className="h-3.5 w-3.5" />
+                {t("query.pasteValue")}
+              </button>
+            )}
+            {onRefresh && (
+              <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS} onClick={handleRefreshFromMenu}>
+                <RefreshCw className="h-3.5 w-3.5" />
+                {t("query.refreshTable")}
+              </button>
+            )}
           </div>,
           document.body
         )}

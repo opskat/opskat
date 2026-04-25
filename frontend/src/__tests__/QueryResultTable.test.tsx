@@ -1,7 +1,36 @@
-import { describe, it, expect } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryResultTable, cellValueToText } from "@/components/query/QueryResultTable";
+
+const { toastError, toastSuccess } = vi.hoisted(() => ({
+  toastError: vi.fn(),
+  toastSuccess: vi.fn(),
+}));
+
+vi.mock("sonner", () => ({
+  toast: {
+    error: toastError,
+    success: toastSuccess,
+  },
+}));
+
+const writeText = vi.fn();
+const readText = vi.fn();
+
+beforeEach(() => {
+  writeText.mockReset();
+  readText.mockReset();
+  toastError.mockReset();
+  toastSuccess.mockReset();
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText,
+      readText,
+    },
+  });
+});
 
 describe("cellValueToText", () => {
   it("null / undefined → empty string", () => {
@@ -88,5 +117,103 @@ describe("QueryResultTable — object cell values", () => {
     const row = a59Label.closest("label")!;
     const countSpan = row.querySelector("span.tabular-nums")!;
     expect(countSpan.textContent).toBe("2");
+  });
+});
+
+describe("QueryResultTable — cell context actions", () => {
+  const columns = ["id", "name"];
+  const rows = [
+    { id: 1, name: "alice" },
+    { id: 2, name: "bob" },
+  ];
+
+  function openMenu(props: Partial<React.ComponentProps<typeof QueryResultTable>> = {}) {
+    render(<QueryResultTable columns={columns} rows={rows} editable {...props} />);
+    const cell = document.querySelector('[data-cell-key="1:name"]') as HTMLElement;
+    fireEvent.contextMenu(cell, { clientX: 40, clientY: 50 });
+  }
+
+  it("shows the table cell context actions", () => {
+    openMenu({ onSetCellValue: vi.fn(), onPasteCell: vi.fn(), onRefresh: vi.fn() });
+
+    expect(screen.getByText("query.setEmptyString")).toBeInTheDocument();
+    expect(screen.getByText("query.setNull")).toBeInTheDocument();
+    expect(screen.getByText("query.copyValue")).toBeInTheDocument();
+    expect(screen.getByText("query.copyFieldName")).toBeInTheDocument();
+    expect(screen.getByText("query.pasteValue")).toBeInTheDocument();
+    expect(screen.getByText("query.refreshTable")).toBeInTheDocument();
+  });
+
+  it("hides edit and refresh actions when the table has no matching capability", () => {
+    openMenu({ editable: false });
+
+    expect(screen.queryByText("query.setEmptyString")).not.toBeInTheDocument();
+    expect(screen.queryByText("query.setNull")).not.toBeInTheDocument();
+    expect(screen.queryByText("query.pasteValue")).not.toBeInTheDocument();
+    expect(screen.queryByText("query.refreshTable")).not.toBeInTheDocument();
+    expect(screen.getByText("query.copyValue")).toBeInTheDocument();
+    expect(screen.getByText("query.copyFieldName")).toBeInTheDocument();
+  });
+
+  it("set NULL creates an edit for the right cell", async () => {
+    const user = userEvent.setup();
+    const onSetCellValue = vi.fn();
+    openMenu({ onSetCellValue });
+
+    await user.click(screen.getByText("query.setNull"));
+
+    expect(onSetCellValue).toHaveBeenCalledWith({ rowIdx: 1, col: "name", value: null });
+  });
+
+  it("set empty string creates an edit for the right cell", async () => {
+    const user = userEvent.setup();
+    const onSetCellValue = vi.fn();
+    openMenu({ onSetCellValue });
+
+    await user.click(screen.getByText("query.setEmptyString"));
+
+    expect(onSetCellValue).toHaveBeenCalledWith({ rowIdx: 1, col: "name", value: "" });
+  });
+
+  it("copy field name writes the current column name to clipboard", async () => {
+    openMenu();
+
+    fireEvent.click(screen.getByText("query.copyFieldName"));
+
+    expect(writeText).toHaveBeenCalledWith("name");
+  });
+
+  it("paste reads clipboard text and creates an edit for the right cell", async () => {
+    const onPasteCell = vi.fn();
+    readText.mockResolvedValue("clipboard text");
+    openMenu({ onPasteCell });
+
+    fireEvent.click(screen.getByText("query.pasteValue"));
+
+    await waitFor(() => expect(readText).toHaveBeenCalledOnce());
+    expect(onPasteCell).toHaveBeenCalledWith({ rowIdx: 1, col: "name", value: "clipboard text" });
+  });
+
+  it("paste clipboard read failure does not create an edit and closes the menu", async () => {
+    const onPasteCell = vi.fn();
+    readText.mockRejectedValue(new Error("clipboard denied"));
+    openMenu({ onPasteCell });
+
+    fireEvent.click(screen.getByText("query.pasteValue"));
+
+    await waitFor(() => expect(readText).toHaveBeenCalledOnce());
+    expect(onPasteCell).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith("Error: clipboard denied");
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+  });
+
+  it("refresh invokes the refresh callback", async () => {
+    const user = userEvent.setup();
+    const onRefresh = vi.fn();
+    openMenu({ onRefresh });
+
+    await user.click(screen.getByText("query.refreshTable"));
+
+    expect(onRefresh).toHaveBeenCalledOnce();
   });
 });

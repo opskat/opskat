@@ -578,6 +578,9 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         editable
         edits={edits}
         onCellEdit={handleCellEdit}
+        onSetCellValue={handleCellEdit}
+        onPasteCell={handleCellEdit}
+        onRefresh={handleRefresh}
         showRowNumber
         rowNumberOffset={page * pageSize}
         sortColumn={sortColumn}
