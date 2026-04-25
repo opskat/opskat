@@ -865,8 +865,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
           );
           const newEntries = parseStreamEntries(JSON.parse(r).value);
           // XRANGE 起始 ID 为闭区间，翻页时只会重复返回首个 lastId 条目，跳过即可
-          const pageEntries =
-            newEntries.length > 0 && newEntries[0].id === lastId ? newEntries.slice(1) : newEntries;
+          const pageEntries = newEntries.length > 0 && newEntries[0].id === lastId ? newEntries.slice(1) : newEntries;
           newValue = [...(info.value as RedisStreamEntry[]), ...pageEntries];
           newOffset = (newValue as RedisStreamEntry[]).length;
           newCursor = pageEntries.length > 0 ? pageEntries[pageEntries.length - 1].id : lastId;
