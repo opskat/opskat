@@ -2,14 +2,9 @@ import { useRef, useState, useMemo } from "react";
 import { Loader2, X } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Button, ScrollArea } from "@opskat/ui";
-import { useQueryStore, RedisKeyInfo } from "@/stores/queryStore";
+import { useQueryStore, RedisKeyInfo, RedisStreamEntry } from "@/stores/queryStore";
 
 const VALUE_ROW_HEIGHT = 30;
-
-export interface RedisStreamEntry {
-  id: string;
-  fields: Record<string, string>;
-}
 
 function formatFields(fields: Record<string, string>): string {
   const entries = Object.entries(fields);

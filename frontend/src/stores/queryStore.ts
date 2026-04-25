@@ -864,12 +864,12 @@ export const useQueryStore = create<QueryState>((set, get) => ({
             db
           );
           const newEntries = parseStreamEntries(JSON.parse(r).value);
-          // 闭区间会包含 lastId 本身，过滤掉已加载的条目（兼容所有 Redis 版本）
-          const existingIds = new Set((info.value as RedisStreamEntry[]).map((e) => e.id));
-          const filtered = newEntries.filter((e) => !existingIds.has(e.id));
-          newValue = [...(info.value as RedisStreamEntry[]), ...filtered];
+          // XRANGE 起始 ID 为闭区间，翻页时只会重复返回首个 lastId 条目，跳过即可
+          const pageEntries =
+            newEntries.length > 0 && newEntries[0].id === lastId ? newEntries.slice(1) : newEntries;
+          newValue = [...(info.value as RedisStreamEntry[]), ...pageEntries];
           newOffset = (newValue as RedisStreamEntry[]).length;
-          newCursor = filtered.length > 0 ? filtered[filtered.length - 1].id : lastId;
+          newCursor = pageEntries.length > 0 ? pageEntries[pageEntries.length - 1].id : lastId;
           newHasMore = newOffset < info.total;
           break;
         }

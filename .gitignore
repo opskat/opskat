@@ -1,6 +1,11 @@
 build/bin
 node_modules
 frontend/dist
+
+# Node
+frontend/wailsjs/
+frontend/package.json.md5
+
 temp
 
 .claude
