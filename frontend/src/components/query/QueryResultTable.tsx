@@ -617,15 +617,18 @@ export function QueryResultTable({
           ? selectedRowOrder
           : [ctxMenu.kind === "row" ? ctxMenu.rowIdx : -1];
       const columnCopyColumns =
-        ctxMenu.kind === "column" && selectedColumns.has(ctxMenu.col) && selectedColumnOrder.length > 0
+        (ctxMenu.kind === "column" || ctxMenu.kind === "cell") &&
+        selectedColumns.has(ctxMenu.col) &&
+        selectedColumnOrder.length > 0
           ? selectedColumnOrder
           : [ctxMenu.kind === "column" ? ctxMenu.col : ""];
+      const hasColumnSelection = columnCopyColumns.length > 0 && columnCopyColumns[0] !== "";
       const text =
         ctxMenu.kind === "row" || (ctxMenu.kind === "cell" && rowCopyIndices.length > 0 && rowCopyIndices[0] !== -1)
           ? rowCopyIndices
               .map((rowIdx) => displayColumns.map((col) => cellValueToText(rows[rowIdx]?.[col])).join("\t"))
               .join("\n")
-          : ctxMenu.kind === "column"
+          : ctxMenu.kind === "column" || (ctxMenu.kind === "cell" && hasColumnSelection)
             ? sortedIndices
                 .map((rowIdx) => columnCopyColumns.map((col) => cellValueToText(rows[rowIdx]?.[col])).join("\t"))
                 .join("\n")
@@ -705,6 +708,9 @@ export function QueryResultTable({
               : rows[ctxMenu.rowIdx],
       };
       if (ctxMenu.kind === "column" && selectedColumns.has(ctxMenu.col) && selColOrder.length > 0) {
+        ctx.selectedColumns = selColOrder;
+        ctx.selectedRowIndices = sortedIndices;
+      } else if (ctxMenu.kind === "cell" && selectedColumns.has(ctxMenu.col) && selColOrder.length > 0) {
         ctx.selectedColumns = selColOrder;
         ctx.selectedRowIndices = sortedIndices;
       } else if (ctxMenu.kind === "row" && selectedRowIdxs.has(ctxMenu.rowIdx) && selRowOrder.length > 0) {
@@ -1527,7 +1533,7 @@ export function QueryResultTable({
                       <ChevronRight className="h-3.5 w-3.5" />
                     </button>
                     <div
-                      className={`absolute left-full top-0 z-50 min-w-[10rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md animate-in fade-in-0 zoom-in-95 ${copyAsSubOpen ? "block" : "hidden"}`}
+                      className={`absolute left-full top-0 z-50 min-w-[14rem] rounded-md border bg-popover p-1 text-popover-foreground shadow-md animate-in fade-in-0 zoom-in-95 ${copyAsSubOpen ? "block" : "hidden"}`}
                     >
                       <button
                         type="button"
