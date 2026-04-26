@@ -1054,6 +1054,18 @@ describe("DeepSeek-v4 多轮 tool 调用历史展开", () => {
     { role: "user" as const, content: "再看 redis", blocks: [], streaming: false },
   ];
 
+  const buildSidebarTabFor = (convId: number) => ({
+    id: `sidebar-${convId}`,
+    conversationId: convId,
+    title: "新对话",
+    createdAt: 1,
+    uiState: {
+      inputDraft: { content: "", mentions: [] },
+      scrollTop: 0,
+      editTarget: null,
+    },
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
@@ -1065,18 +1077,19 @@ describe("DeepSeek-v4 多轮 tool 调用历史展开", () => {
   it("DeepSeek-v4 模型：assistant blocks 展开为 assistant(tool_calls)+tool+assistant(text) 多条标准消息", async () => {
     useAIStore.setState({
       modelName: "deepseek-v4-pro",
-      sidebarConversationId: 100,
+      sidebarTabs: [buildSidebarTabFor(100)],
+      activeSidebarTabId: "sidebar-100",
       conversationMessages: { 100: buildHistory() },
       conversationStreaming: { 100: { sending: false, pendingQueue: [] } },
     });
 
-    await useAIStore.getState().sendFromSidebar(100, "再看 redis");
+    await useAIStore.getState().sendFromSidebarTab("sidebar-100", "再看 redis");
 
     const args = vi.mocked(SendAIMessage).mock.calls.at(-1)!;
     const apiMsgs = args[1] as any[];
 
     // user / assistant(thinking+tool_calls) / tool / assistant(final text) / user / user
-    // 注意 sendFromSidebar 会再追加一条 user 消息
+    // 注意 sendFromSidebarTab 会再追加一条 user 消息
     const roles = apiMsgs.map((m) => m.role);
     expect(roles).toEqual(["user", "assistant", "tool", "assistant", "user", "user"]);
 
@@ -1101,12 +1114,13 @@ describe("DeepSeek-v4 多轮 tool 调用历史展开", () => {
   it("非 DeepSeek-v4 模型：保持原有塌缩行为，不展开 tool_calls，不带 reasoning_content", async () => {
     useAIStore.setState({
       modelName: "deepseek-chat",
-      sidebarConversationId: 101,
+      sidebarTabs: [buildSidebarTabFor(101)],
+      activeSidebarTabId: "sidebar-101",
       conversationMessages: { 101: buildHistory() },
       conversationStreaming: { 101: { sending: false, pendingQueue: [] } },
     });
 
-    await useAIStore.getState().sendFromSidebar(101, "再看 redis");
+    await useAIStore.getState().sendFromSidebarTab("sidebar-101", "再看 redis");
 
     const args = vi.mocked(SendAIMessage).mock.calls.at(-1)!;
     const apiMsgs = args[1] as any[];
@@ -1147,12 +1161,13 @@ describe("DeepSeek-v4 多轮 tool 调用历史展开", () => {
 
     useAIStore.setState({
       modelName: "deepseek-v4-pro",
-      sidebarConversationId: 102,
+      sidebarTabs: [buildSidebarTabFor(102)],
+      activeSidebarTabId: "sidebar-102",
       conversationMessages: { 102: legacyHistory },
       conversationStreaming: { 102: { sending: false, pendingQueue: [] } },
     });
 
-    await useAIStore.getState().sendFromSidebar(102, "next");
+    await useAIStore.getState().sendFromSidebarTab("sidebar-102", "next");
 
     const args = vi.mocked(SendAIMessage).mock.calls.at(-1)!;
     const apiMsgs = args[1] as any[];
