@@ -554,3 +554,53 @@ func TestParseWebDAVBackupListSkipsBadEntries(t *testing.T) {
 		So(err, ShouldNotBeNil)
 	})
 }
+
+func TestApplyWebDAVAuth(t *testing.T) {
+	Convey("applyWebDAVAuth", t, func() {
+		makeReq := func() *http.Request {
+			req, err := http.NewRequest("GET", "https://example.com/dav/", nil)
+			So(err, ShouldBeNil)
+			return req
+		}
+
+		Convey("none 不写 Authorization 头", func() {
+			req := makeReq()
+			applyWebDAVAuth(req, WebDAVConfig{AuthType: WebDAVAuthNone})
+			So(req.Header.Get("Authorization"), ShouldEqual, "")
+		})
+
+		Convey("basic 走 SetBasicAuth", func() {
+			req := makeReq()
+			applyWebDAVAuth(req, WebDAVConfig{
+				AuthType: WebDAVAuthBasic,
+				Username: "alice",
+				Password: "s3cret",
+			})
+			user, pass, ok := req.BasicAuth()
+			So(ok, ShouldBeTrue)
+			So(user, ShouldEqual, "alice")
+			So(pass, ShouldEqual, "s3cret")
+		})
+
+		Convey("bearer 写 Authorization: Bearer <token>", func() {
+			req := makeReq()
+			applyWebDAVAuth(req, WebDAVConfig{
+				AuthType: WebDAVAuthBearer,
+				Token:    "abc.def.ghi",
+			})
+			So(req.Header.Get("Authorization"), ShouldEqual, "Bearer abc.def.ghi")
+		})
+
+		Convey("bearer 但 token 为空时不写头", func() {
+			req := makeReq()
+			applyWebDAVAuth(req, WebDAVConfig{AuthType: WebDAVAuthBearer})
+			So(req.Header.Get("Authorization"), ShouldEqual, "")
+		})
+
+		Convey("空 AuthType 视作 none", func() {
+			req := makeReq()
+			applyWebDAVAuth(req, WebDAVConfig{})
+			So(req.Header.Get("Authorization"), ShouldEqual, "")
+		})
+	})
+}

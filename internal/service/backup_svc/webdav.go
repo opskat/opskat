@@ -18,6 +18,15 @@ const (
 	webDAVDefaultDirectory = "opskat"
 )
 
+// WebDAVAuthType 描述 WebDAV 服务器接受的鉴权方式。
+type WebDAVAuthType string
+
+const (
+	WebDAVAuthNone   WebDAVAuthType = "none"
+	WebDAVAuthBasic  WebDAVAuthType = "basic"
+	WebDAVAuthBearer WebDAVAuthType = "bearer"
+)
+
 // webDAVHTTPClient 不跟随重定向：3xx 会把 PUT/PROPFIND/MKCOL/DELETE 改写成 GET，导致难以排查的失败；
 // 由 webDAVRequest 显式处理 3xx 并要求用户修正 URL。
 var webDAVHTTPClient = &http.Client{
@@ -36,9 +45,11 @@ func ValidateWebDAVURL(raw string) error {
 
 // WebDAVConfig contains the connection details used for WebDAV backup transport.
 type WebDAVConfig struct {
-	URL      string `json:"url"`
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
+	URL      string         `json:"url"`
+	AuthType WebDAVAuthType `json:"authType"`
+	Username string         `json:"username,omitempty"` // 仅 basic
+	Password string         `json:"password,omitempty"` // 仅 basic
+	Token    string         `json:"token,omitempty"`    // 仅 bearer
 }
 
 // WebDAVBackupInfo is the frontend-facing metadata for a remote backup file.
@@ -207,6 +218,21 @@ func webDAVRequest(cfg WebDAVConfig, method, target string, body []byte, headers
 		return resp.StatusCode, respBody, fmt.Errorf("WebDAV server redirected to %q (HTTP %d); please configure the final WebDAV URL directly", location, resp.StatusCode)
 	}
 	return resp.StatusCode, respBody, nil
+}
+
+// applyWebDAVAuth 按 cfg.AuthType 给 req 注入鉴权头。
+// 抽成函数：单测可直接验证 header；新增 Digest 等鉴权方式时仅改这一处。
+func applyWebDAVAuth(req *http.Request, cfg WebDAVConfig) {
+	switch cfg.AuthType {
+	case WebDAVAuthBasic:
+		req.SetBasicAuth(cfg.Username, cfg.Password)
+	case WebDAVAuthBearer:
+		if cfg.Token != "" {
+			req.Header.Set("Authorization", "Bearer "+cfg.Token)
+		}
+	case WebDAVAuthNone, "":
+		// no-op
+	}
 }
 
 func webDAVDirectoryURL(raw string) (string, error) {
