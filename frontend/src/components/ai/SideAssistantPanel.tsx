@@ -192,7 +192,6 @@ export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelPr
                 activeTabId={activeSidebarTabId}
                 getStatus={getSidebarTabStatus}
                 collapsed={true}
-                width={36}
                 onActivate={activateSidebarTab}
                 onClose={closeSidebarTab}
                 onNewChat={handleNewChat}

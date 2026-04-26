@@ -9,7 +9,6 @@ interface SideAssistantTabBarProps {
   activeTabId: string | null;
   getStatus: (tabId: string) => SidebarTabStatus;
   collapsed: boolean;
-  width: number;
   onActivate: (tabId: string) => void;
   onClose: (tabId: string) => void;
   onNewChat: () => void;
@@ -177,9 +176,13 @@ export function SideAssistantTabBar({
                   >
                     {letter}
                     {status === "running" ? (
-                      <LoaderCircle className="absolute -bottom-1 -right-1 h-3 w-3 animate-spin text-sky-500" />
+                      <LoaderCircle
+                        aria-hidden="true"
+                        className="absolute -bottom-1 -right-1 h-3 w-3 animate-spin text-sky-500"
+                      />
                     ) : status ? (
                       <span
+                        aria-hidden="true"
                         className={cn(
                           "absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-sidebar",
                           statusDotColor[status]

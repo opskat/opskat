@@ -4,7 +4,6 @@ import { SideAssistantTabBar } from "../SideAssistantTabBar";
 import type { SidebarAITab } from "@/stores/aiStore";
 
 const baseProps = {
-  width: 150,
   collapsed: true,
   activeTabId: "t1",
   getStatus: () => null,
