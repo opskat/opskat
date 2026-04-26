@@ -945,6 +945,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         onAddColumnFilter={handleAddColumnFilter}
         onDeleteRow={handleDeleteRow}
         onHideColumn={handleHideColumn}
+        onVisibleColumnToggle={handleVisibleColumnToggle}
         onSelectedCellChange={handleSelectedCellChange}
         onRefresh={handleRefresh}
         showRowNumber

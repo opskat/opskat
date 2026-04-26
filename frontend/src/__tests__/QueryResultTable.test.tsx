@@ -184,6 +184,25 @@ describe("QueryResultTable — cell context actions", () => {
     expect(document.querySelector('[data-row-selected="true"]')).toBeNull();
   });
 
+  it("shift-clicking a column header selects a continuous column range", () => {
+    render(
+      <QueryResultTable
+        columns={["id", "name", "email"]}
+        rows={[
+          { id: 1, name: "alice", email: "a@example.com" },
+          { id: 2, name: "bob", email: "b@example.com" },
+        ]}
+      />
+    );
+
+    fireEvent.click(screen.getByText("id"));
+    fireEvent.click(screen.getByText("email"), { shiftKey: true });
+
+    expect(document.querySelectorAll('[data-column-selected="id"]')).toHaveLength(3);
+    expect(document.querySelectorAll('[data-column-selected="name"]')).toHaveLength(3);
+    expect(document.querySelectorAll('[data-column-selected="email"]')).toHaveLength(3);
+  });
+
   it("column more menu invokes sort, clear sort, and add filter actions", async () => {
     const user = userEvent.setup();
     const onSortByColumn = vi.fn();
@@ -225,11 +244,28 @@ describe("QueryResultTable — cell context actions", () => {
     expect(screen.getByText("query.copyValue")).toBeInTheDocument();
     expect(screen.getByText("query.copyFieldName")).toBeInTheDocument();
     expect(screen.getByText("query.copyAs")).toBeInTheDocument();
+    expect(screen.getByText("query.showHideColumns")).toBeInTheDocument();
     expect(screen.getByText("query.hideColumn")).toBeInTheDocument();
+    expect(screen.getByText("query.freezeColumn")).toBeInTheDocument();
+    expect(screen.getByText("query.setColumnWidth")).toBeInTheDocument();
+    expect(screen.getByText("query.sizeColumnToFit")).toBeInTheDocument();
+    expect(screen.getByText("query.sizeAllColumnsToFit")).toBeInTheDocument();
     expect(screen.getByText("query.showFieldType")).toBeInTheDocument();
+    expect(screen.getByText("query.showComment")).toBeInTheDocument();
     expect(screen.queryByText("query.setNull")).not.toBeInTheDocument();
     expect(screen.queryByText("query.pasteValue")).not.toBeInTheDocument();
     expect(screen.queryByText("query.filterByCellValue")).not.toBeInTheDocument();
+  });
+
+  it("sets a column width from the column context menu", async () => {
+    const prompt = vi.fn().mockReturnValue("220");
+    Object.defineProperty(window, "prompt", { configurable: true, value: prompt });
+    openColumnMenu({ onHideColumn: vi.fn() });
+
+    fireEvent.click(screen.getByText("query.setColumnWidth"));
+
+    const header = document.querySelector('[data-column-header-key="name"]') as HTMLElement;
+    expect(header.style.width).toBe("220px");
   });
 
   it("shows the table cell context actions", () => {
@@ -241,6 +277,17 @@ describe("QueryResultTable — cell context actions", () => {
     expect(screen.getByText("query.copyFieldName")).toBeInTheDocument();
     expect(screen.getByText("query.pasteValue")).toBeInTheDocument();
     expect(screen.getByText("query.refreshTable")).toBeInTheDocument();
+  });
+
+  it("keeps copy and copy as next to each other in the context menu", () => {
+    openMenu({ onCopyAs: vi.fn(), onPasteCell: vi.fn() });
+
+    const labels = Array.from(screen.getByRole("menu").children)
+      .map((child) => child.textContent?.trim())
+      .filter(Boolean);
+
+    const copyIndex = labels.indexOf("query.copyValue");
+    expect(labels.slice(copyIndex, copyIndex + 2)).toEqual(["query.copyValue", "query.copyAs"]);
   });
 
   it("right-clicking a row number selects the full row and shows row actions only", () => {

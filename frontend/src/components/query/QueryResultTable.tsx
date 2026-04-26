@@ -73,6 +73,7 @@ interface QueryResultTableProps {
   onAddColumnFilter?: (col: string) => void;
   onDeleteRow?: (rowIdx: number) => void;
   onHideColumn?: (col: string) => void;
+  onVisibleColumnToggle?: (col: string) => void;
   onSelectedCellChange?: (cell: SelectedCellContext | null) => void;
   onSelectedRowsChange?: (rowIdxs: number[]) => void;
   onRefresh?: () => void;
@@ -226,6 +227,7 @@ export function QueryResultTable({
   onAddColumnFilter,
   onDeleteRow,
   onHideColumn,
+  onVisibleColumnToggle,
   onSelectedCellChange,
   onSelectedRowsChange,
   onRefresh,
@@ -322,10 +324,15 @@ export function QueryResultTable({
   // Selected cell state — click-to-focus + arrow key navigation
   const [selectedCell, setSelectedCell] = useState<{ origIdx: number; col: string } | null>(null);
   const [selectedRowIdxs, setSelectedRowIdxs] = useState<Set<number>>(() => new Set());
-  const [selectedColumn, setSelectedColumn] = useState<string | null>(null);
+  const [selectedColumns, setSelectedColumns] = useState<Set<string>>(() => new Set());
+  const columnSelectionAnchorRef = useRef<string | null>(null);
   const rowSelectionAnchorRef = useRef<number | null>(null);
   const rowDragSelectionRef = useRef<{ anchor: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [showColumnChooser, setShowColumnChooser] = useState(false);
+  const [showFieldTypes, setShowFieldTypes] = useState(true);
+  const [showColumnComments, setShowColumnComments] = useState(false);
+  const [frozenColumnCount, setFrozenColumnCount] = useState(0);
 
   // Context menu state
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null);
@@ -345,7 +352,8 @@ export function QueryResultTable({
     setSelectedCell(null);
     setSelectedRowIdxs(new Set());
     rowSelectionAnchorRef.current = null;
-    setSelectedColumn(null);
+    setSelectedColumns(new Set());
+    columnSelectionAnchorRef.current = null;
     onSelectedCellChange?.(null);
     onSelectedRowsChange?.([]);
     setEditingCell(null);
@@ -356,7 +364,8 @@ export function QueryResultTable({
     setSelectedCell(null);
     setSelectedRowIdxs(new Set());
     rowSelectionAnchorRef.current = null;
-    setSelectedColumn(null);
+    setSelectedColumns(new Set());
+    columnSelectionAnchorRef.current = null;
     onSelectedCellChange?.(null);
     onSelectedRowsChange?.([]);
     setEditingCell(null);
@@ -368,7 +377,8 @@ export function QueryResultTable({
     setSelectedCell({ origIdx: focusCellRequest.rowIdx, col: focusCellRequest.col });
     setSelectedRowIdxs(new Set());
     rowSelectionAnchorRef.current = null;
-    setSelectedColumn(null);
+    setSelectedColumns(new Set());
+    columnSelectionAnchorRef.current = null;
     setEditingCell(cellKey(focusCellRequest.rowIdx, focusCellRequest.col));
     onSelectedCellChange?.({ rowIdx: focusCellRequest.rowIdx, col: focusCellRequest.col });
     onSelectedRowsChange?.([]);
@@ -384,6 +394,16 @@ export function QueryResultTable({
       return sortDir === "asc" ? cmp : -cmp;
     });
   }, [rows, sortCol, sortDir, isControlledSort, filteredIndices]);
+
+  const frozenColumnOffsets = useMemo(() => {
+    const offsets: Record<string, number> = {};
+    let left = showRowNumber ? 50 : 0;
+    for (const col of displayColumns.slice(0, frozenColumnCount)) {
+      offsets[col] = left;
+      left += colWidths[col] ?? 160;
+    }
+    return offsets;
+  }, [colWidths, displayColumns, frozenColumnCount, showRowNumber]);
 
   // Sorting is enabled whenever we have an onSortChange callback (server-side)
   // or when we're in read-only mode (local client-side sort on the current page).
@@ -486,22 +506,91 @@ export function QueryResultTable({
     ctxMenu?.kind === "cell" ? getDateEditMode(ctxMenu.col, columnTypes?.[ctxMenu.col], ctxMenu.value) : null;
   const canSetDateTime = canSetCellValue && !!dateEditMode;
   const menuColumn = ctxMenu?.kind === "column" ? ctxMenu.col : ctxMenu?.kind === "cell" ? ctxMenu.col : null;
+  const visibleColumnSet = useMemo(() => new Set(visibleColumns ?? columns), [columns, visibleColumns]);
+
+  const getColumnFitWidth = useCallback(
+    (col: string) => {
+      const maxTextLength = Math.max(
+        col.length,
+        columnTypes?.[col]?.length ?? 0,
+        ...rows.map((row) => cellValueToText(row[col]).length)
+      );
+      return Math.max(80, Math.min(420, maxTextLength * 8 + 48));
+    },
+    [columnTypes, rows]
+  );
+
+  const handleOpenColumnChooser = useCallback(() => {
+    setShowColumnChooser(true);
+    setCtxMenu(null);
+  }, []);
+
+  const handleFreezeColumn = useCallback(() => {
+    if (!menuColumn) return;
+    const columnIndex = displayColumns.indexOf(menuColumn);
+    if (columnIndex === -1) return;
+    setFrozenColumnCount((prev) => (prev === columnIndex + 1 ? 0 : columnIndex + 1));
+    setCtxMenu(null);
+  }, [displayColumns, menuColumn]);
+
+  const handleSetColumnWidth = useCallback(() => {
+    if (!menuColumn) return;
+    const currentWidth = colWidths[menuColumn] ?? getColumnFitWidth(menuColumn);
+    const input = window.prompt(t("query.columnWidthPrompt"), String(currentWidth));
+    const width = Number(input);
+    if (input != null && Number.isFinite(width)) {
+      setColWidths((prev) => ({ ...prev, [menuColumn]: Math.max(50, Math.round(width)) }));
+    }
+    setCtxMenu(null);
+  }, [colWidths, getColumnFitWidth, menuColumn, t]);
+
+  const handleSizeColumnToFit = useCallback(() => {
+    if (!menuColumn) return;
+    setColWidths((prev) => ({ ...prev, [menuColumn]: getColumnFitWidth(menuColumn) }));
+    setCtxMenu(null);
+  }, [getColumnFitWidth, menuColumn]);
+
+  const handleSizeAllColumnsToFit = useCallback(() => {
+    setColWidths((prev) => {
+      const next = { ...prev };
+      for (const col of displayColumns) next[col] = getColumnFitWidth(col);
+      return next;
+    });
+    setCtxMenu(null);
+  }, [displayColumns, getColumnFitWidth]);
+
+  const handleToggleFieldTypes = useCallback(() => {
+    setShowFieldTypes((show) => !show);
+    setCtxMenu(null);
+  }, []);
+
+  const handleToggleColumnComments = useCallback(() => {
+    setShowColumnComments((show) => !show);
+    setCtxMenu(null);
+  }, []);
 
   const handleCopyCell = useCallback(async () => {
     if (!ctxMenu) return;
     try {
       const selectedRowOrder = sortedIndices.filter((rowIdx) => selectedRowIdxs.has(rowIdx));
+      const selectedColumnOrder = displayColumns.filter((col) => selectedColumns.has(col));
       const rowCopyIndices =
         ctxMenu.kind === "row" && selectedRowIdxs.has(ctxMenu.rowIdx) && selectedRowOrder.length > 0
           ? selectedRowOrder
           : [ctxMenu.kind === "row" ? ctxMenu.rowIdx : -1];
+      const columnCopyColumns =
+        ctxMenu.kind === "column" && selectedColumns.has(ctxMenu.col) && selectedColumnOrder.length > 0
+          ? selectedColumnOrder
+          : [ctxMenu.kind === "column" ? ctxMenu.col : ""];
       const text =
         ctxMenu.kind === "row"
           ? rowCopyIndices
               .map((rowIdx) => displayColumns.map((col) => cellValueToText(rows[rowIdx]?.[col])).join("\t"))
               .join("\n")
           : ctxMenu.kind === "column"
-            ? sortedIndices.map((rowIdx) => cellValueToText(rows[rowIdx]?.[ctxMenu.col])).join("\n")
+            ? sortedIndices
+                .map((rowIdx) => columnCopyColumns.map((col) => cellValueToText(rows[rowIdx]?.[col])).join("\t"))
+                .join("\n")
             : cellValueToText(ctxMenu.value);
       await navigator.clipboard.writeText(text);
       toast.success(t("query.copied"));
@@ -510,20 +599,25 @@ export function QueryResultTable({
     } finally {
       setCtxMenu(null);
     }
-  }, [ctxMenu, displayColumns, rows, selectedRowIdxs, sortedIndices, t]);
+  }, [ctxMenu, displayColumns, rows, selectedColumns, selectedRowIdxs, sortedIndices, t]);
 
   const handleCopyFieldName = useCallback(async () => {
     const col = ctxMenu?.kind === "cell" || ctxMenu?.kind === "column" ? ctxMenu.col : null;
     if (!col) return;
     try {
-      await navigator.clipboard.writeText(col);
+      const selectedColumnOrder = displayColumns.filter((column) => selectedColumns.has(column));
+      const text =
+        ctxMenu?.kind === "column" && selectedColumns.has(col) && selectedColumnOrder.length > 0
+          ? selectedColumnOrder.join("\t")
+          : col;
+      await navigator.clipboard.writeText(text);
       toast.success(t("query.copied"));
     } catch (e) {
       toast.error(String(e));
     } finally {
       setCtxMenu(null);
     }
-  }, [ctxMenu, t]);
+  }, [ctxMenu, displayColumns, selectedColumns, t]);
 
   const handleSetCellValue = useCallback(
     (value: unknown) => {
@@ -668,7 +762,8 @@ export function QueryResultTable({
       setSelectedCell({ origIdx, col });
       setSelectedRowIdxs(new Set());
       rowSelectionAnchorRef.current = null;
-      setSelectedColumn(null);
+      setSelectedColumns(new Set());
+      columnSelectionAnchorRef.current = null;
       onSelectedCellChange?.({ rowIdx: origIdx, col });
       onSelectedRowsChange?.([]);
       containerRef.current?.focus();
@@ -710,7 +805,8 @@ export function QueryResultTable({
       const ordered = sortedIndices.filter((rowIdx) => next.has(rowIdx));
       setSelectedCell(null);
       setSelectedRowIdxs(next);
-      setSelectedColumn(null);
+      setSelectedColumns(new Set());
+      columnSelectionAnchorRef.current = null;
       onSelectedCellChange?.(ordered.length > 0 ? { rowIdx: origIdx, col: "" } : null);
       onSelectedRowsChange?.(ordered);
       containerRef.current?.focus();
@@ -719,16 +815,45 @@ export function QueryResultTable({
   );
 
   const selectColumn = useCallback(
-    (col: string) => {
+    (col: string, event?: Pick<React.MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">) => {
+      const anchor = columnSelectionAnchorRef.current;
+      const isRange = !!event?.shiftKey && anchor != null;
+      const isToggle = !!event?.ctrlKey || !!event?.metaKey;
+      let next: Set<string>;
+
+      if (isRange) {
+        const anchorIdx = displayColumns.indexOf(anchor);
+        const targetIdx = displayColumns.indexOf(col);
+        if (anchorIdx === -1 || targetIdx === -1) {
+          next = new Set([col]);
+        } else {
+          const start = Math.min(anchorIdx, targetIdx);
+          const end = Math.max(anchorIdx, targetIdx);
+          next = new Set(displayColumns.slice(start, end + 1));
+        }
+      } else if (isToggle) {
+        next = new Set(selectedColumns);
+        if (next.has(col)) next.delete(col);
+        else next.add(col);
+        columnSelectionAnchorRef.current = col;
+      } else {
+        next = new Set([col]);
+        columnSelectionAnchorRef.current = col;
+      }
+
+      if (isRange && next.size > 0) {
+        columnSelectionAnchorRef.current = anchor;
+      }
+
       setSelectedCell(null);
       setSelectedRowIdxs(new Set());
       rowSelectionAnchorRef.current = null;
-      setSelectedColumn(col);
+      setSelectedColumns(next);
       onSelectedCellChange?.(null);
       onSelectedRowsChange?.([]);
       containerRef.current?.focus();
     },
-    [onSelectedCellChange, onSelectedRowsChange]
+    [displayColumns, onSelectedCellChange, onSelectedRowsChange, selectedColumns]
   );
 
   const handleCellContextMenu = useCallback(
@@ -750,7 +875,8 @@ export function QueryResultTable({
         selectRow(origIdx);
       } else {
         setSelectedCell(null);
-        setSelectedColumn(null);
+        setSelectedColumns(new Set());
+        columnSelectionAnchorRef.current = null;
         onSelectedCellChange?.({ rowIdx: origIdx, col: "" });
         containerRef.current?.focus();
       }
@@ -792,10 +918,19 @@ export function QueryResultTable({
     (e: React.MouseEvent, col: string) => {
       e.preventDefault();
       e.stopPropagation();
-      selectColumn(col);
+      if (!selectedColumns.has(col)) {
+        selectColumn(col);
+      } else {
+        setSelectedCell(null);
+        setSelectedRowIdxs(new Set());
+        rowSelectionAnchorRef.current = null;
+        onSelectedCellChange?.(null);
+        onSelectedRowsChange?.([]);
+        containerRef.current?.focus();
+      }
       setCtxMenu({ kind: "column", variant: "context", x: e.clientX, y: e.clientY, col });
     },
-    [selectColumn]
+    [onSelectedCellChange, onSelectedRowsChange, selectColumn, selectedColumns]
   );
 
   const handleColumnActionsClick = useCallback(
@@ -823,11 +958,12 @@ export function QueryResultTable({
       // (the input's onKeyDown calls setEditingCell(null) on Escape).
       if (editingCell) return;
       if (!selectedCell) {
-        if ((selectedRowIdxs.size > 0 || selectedColumn != null) && e.key === "Escape") {
+        if ((selectedRowIdxs.size > 0 || selectedColumns.size > 0) && e.key === "Escape") {
           e.preventDefault();
           setSelectedRowIdxs(new Set());
           rowSelectionAnchorRef.current = null;
-          setSelectedColumn(null);
+          setSelectedColumns(new Set());
+          columnSelectionAnchorRef.current = null;
           onSelectedCellChange?.(null);
           onSelectedRowsChange?.([]);
         }
@@ -877,7 +1013,7 @@ export function QueryResultTable({
       editingCell,
       selectedCell,
       selectedRowIdxs,
-      selectedColumn,
+      selectedColumns,
       sortedIndices,
       displayColumns,
       editable,
@@ -925,14 +1061,20 @@ export function QueryResultTable({
           <thead className="bg-muted sticky top-0">
             <tr>
               {showRowNumber && (
-                <th className="border border-border px-2 py-1.5 text-center font-semibold text-muted-foreground whitespace-nowrap w-[50px]">
+                <th
+                  className={`border border-border px-2 py-1.5 text-center font-semibold text-muted-foreground whitespace-nowrap w-[50px] ${
+                    frozenColumnCount > 0 ? "sticky left-0 z-40 bg-muted" : ""
+                  }`}
+                >
                   #
                 </th>
               )}
               {displayColumns.map((col) => {
                 const isSorted = sortCol === col;
                 const width = colWidths[col];
-                const isColumnSelected = selectedColumn === col;
+                const isColumnSelected = selectedColumns.has(col);
+                const frozenLeft = frozenColumnOffsets[col];
+                const isFrozen = frozenLeft != null;
                 const typeText = columnTypes?.[col];
                 const TypeIcon = getColumnTypeIcon(typeText);
                 return (
@@ -944,10 +1086,13 @@ export function QueryResultTable({
                       isColumnSelected
                         ? "bg-primary/25 text-foreground ring-2 ring-inset ring-primary/50"
                         : "text-muted-foreground"
-                    }`}
-                    style={width ? { width: `${width}px`, minWidth: `${width}px` } : undefined}
+                    } ${isFrozen ? "sticky z-30 bg-muted" : ""}`}
+                    style={{
+                      ...(width ? { width: `${width}px`, minWidth: `${width}px` } : {}),
+                      ...(isFrozen ? { left: `${frozenLeft}px` } : {}),
+                    }}
                     title={col}
-                    onClick={() => selectColumn(col)}
+                    onClick={(e) => selectColumn(col, e)}
                     onContextMenu={(e) => handleColumnContextMenu(e, col)}
                   >
                     <div className="flex items-start gap-1">
@@ -961,10 +1106,15 @@ export function QueryResultTable({
                               <ArrowDown className="h-3 w-3 shrink-0" />
                             ) : null)}
                         </div>
-                        {typeText && (
+                        {showFieldTypes && typeText && (
                           <div className="mt-1 flex min-w-0 items-center gap-1 text-xs font-normal text-blue-700/80 dark:text-blue-300/80">
                             <TypeIcon className="h-3.5 w-3.5 shrink-0" />
                             <span className="truncate">{typeText}</span>
+                          </div>
+                        )}
+                        {showColumnComments && (
+                          <div className="mt-1 truncate text-xs font-normal text-muted-foreground">
+                            {t("query.noComment")}
                           </div>
                         )}
                       </div>
@@ -1059,7 +1209,7 @@ export function QueryResultTable({
                         isRowSelected
                           ? "bg-primary/15 text-foreground ring-2 ring-inset ring-primary/50 relative z-10"
                           : ""
-                      }`}
+                      } ${frozenColumnCount > 0 ? "sticky left-0 z-20 bg-inherit" : ""}`}
                       onMouseDown={(e) => handleRowMouseDown(e, origIdx)}
                       onMouseEnter={() => handleRowMouseEnter(origIdx)}
                       onContextMenu={(e) => handleRowContextMenu(e, origIdx)}
@@ -1074,6 +1224,8 @@ export function QueryResultTable({
                     const isEditing = editingCell === ck;
                     const isSelected = selectedCell?.origIdx === origIdx && selectedCell?.col === col;
                     const width = colWidths[col];
+                    const frozenLeft = frozenColumnOffsets[col];
+                    const isFrozen = frozenLeft != null;
                     const dateModeForCell = getDateEditMode(col, columnTypes?.[col], displayValue);
                     const showDateAction =
                       editable && isSelected && !isEditing && !!dateModeForCell && !!setCellValueHandler;
@@ -1089,15 +1241,18 @@ export function QueryResultTable({
                         key={col}
                         data-cell-key={ck}
                         data-row-selected={isRowSelected ? "true" : undefined}
-                        data-column-selected={selectedColumn === col ? col : undefined}
+                        data-column-selected={selectedColumns.has(col) ? col : undefined}
                         className={`border border-border px-2 ${cellPaddingClass} whitespace-nowrap cursor-default ${
                           isEdited ? "bg-yellow-100 dark:bg-yellow-900/30" : ""
-                        } ${isRowSelected || selectedColumn === col ? "bg-primary/15" : ""} ${focusClass}`}
-                        style={
-                          width
+                        } ${isRowSelected || selectedColumns.has(col) ? "bg-primary/15" : ""} ${
+                          isFrozen ? "sticky z-10 bg-inherit" : ""
+                        } ${focusClass}`}
+                        style={{
+                          ...(width
                             ? { width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }
-                            : { maxWidth: "400px" }
-                        }
+                            : { maxWidth: "400px" }),
+                          ...(isFrozen ? { left: `${frozenLeft}px` } : {}),
+                        }}
                         title={displayValue == null ? "NULL" : cellValueToText(displayValue)}
                         onClick={() => handleCellClick(origIdx, col)}
                         onDoubleClick={() => {
@@ -1258,37 +1413,8 @@ export function QueryResultTable({
                   <Copy className="h-3.5 w-3.5" />
                   {t("query.copyValue")}
                 </button>
-                {(ctxMenu.kind === "cell" || ctxMenu.kind === "column") && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={CONTEXT_MENU_ITEM_CLASS}
-                    onClick={handleCopyFieldName}
-                  >
-                    <ClipboardType className="h-3.5 w-3.5" />
-                    {t("query.copyFieldName")}
-                  </button>
-                )}
-                {ctxMenu.kind === "cell" && canPasteCell && (
-                  <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS} onClick={handlePasteCell}>
-                    <ClipboardPaste className="h-3.5 w-3.5" />
-                    {t("query.pasteValue")}
-                  </button>
-                )}
-                {ctxMenu.kind === "cell" && canGenerateUuid && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={CONTEXT_MENU_ITEM_CLASS}
-                    onClick={handleGenerateUuid}
-                  >
-                    <WandSparkles className="h-3.5 w-3.5" />
-                    {t("query.generateUuid")}
-                  </button>
-                )}
                 {onCopyAs && (
                   <>
-                    <div className="my-1 h-px bg-border" />
                     <div className="px-2 py-1 text-[11px] font-medium text-muted-foreground">{t("query.copyAs")}</div>
                     <button
                       type="button"
@@ -1337,22 +1463,111 @@ export function QueryResultTable({
                     </button>
                   </>
                 )}
-                {ctxMenu.kind === "column" && ctxMenu.variant === "context" && onHideColumn && (
+                {(ctxMenu.kind === "cell" || ctxMenu.kind === "column") && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={CONTEXT_MENU_ITEM_CLASS}
+                    onClick={handleCopyFieldName}
+                  >
+                    <ClipboardType className="h-3.5 w-3.5" />
+                    {t("query.copyFieldName")}
+                  </button>
+                )}
+                {ctxMenu.kind === "cell" && canPasteCell && (
+                  <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS} onClick={handlePasteCell}>
+                    <ClipboardPaste className="h-3.5 w-3.5" />
+                    {t("query.pasteValue")}
+                  </button>
+                )}
+                {ctxMenu.kind === "cell" && canGenerateUuid && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={CONTEXT_MENU_ITEM_CLASS}
+                    onClick={handleGenerateUuid}
+                  >
+                    <WandSparkles className="h-3.5 w-3.5" />
+                    {t("query.generateUuid")}
+                  </button>
+                )}
+                {ctxMenu.kind === "column" && ctxMenu.variant === "context" && (
                   <>
                     <div className="my-1 h-px bg-border" />
                     <button
                       type="button"
                       role="menuitem"
                       className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={handleOpenColumnChooser}
+                    >
+                      <MoreHorizontal className="h-3.5 w-3.5" />
+                      {t("query.showHideColumns")}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
                       onClick={handleHideColumn}
+                      disabled={!onHideColumn}
                     >
                       <FilterX className="h-3.5 w-3.5" />
                       {t("query.hideColumn")}
                     </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={handleFreezeColumn}
+                    >
+                      <span className="w-3.5 text-center">{frozenColumnCount > 0 ? "✓" : ""}</span>
+                      {t("query.freezeColumn")}
+                    </button>
                     <div className="my-1 h-px bg-border" />
-                    <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS}>
-                      <span className="w-3.5 text-center">✓</span>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={handleSetColumnWidth}
+                    >
+                      <MoreHorizontal className="h-3.5 w-3.5" />
+                      {t("query.setColumnWidth")}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={handleSizeColumnToFit}
+                    >
+                      <MoreHorizontal className="h-3.5 w-3.5" />
+                      {t("query.sizeColumnToFit")}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={handleSizeAllColumnsToFit}
+                    >
+                      <MoreHorizontal className="h-3.5 w-3.5" />
+                      {t("query.sizeAllColumnsToFit")}
+                    </button>
+                    <div className="my-1 h-px bg-border" />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={handleToggleFieldTypes}
+                    >
+                      <span className="w-3.5 text-center">{showFieldTypes ? "✓" : ""}</span>
                       {t("query.showFieldType")}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={handleToggleColumnComments}
+                    >
+                      <span className="w-3.5 text-center">{showColumnComments ? "✓" : ""}</span>
+                      {t("query.showComment")}
                     </button>
                   </>
                 )}
@@ -1424,6 +1639,44 @@ export function QueryResultTable({
                 )}
               </>
             )}
+          </div>,
+          document.body
+        )}
+      {showColumnChooser &&
+        createPortal(
+          <div
+            className="fixed z-50 w-72 rounded-md border bg-popover p-3 text-popover-foreground shadow-lg"
+            style={{ top: "50%", left: "50%", transform: "translate(-50%, -50%)" }}
+            role="dialog"
+            aria-label={t("query.showHideColumns")}
+          >
+            <div className="mb-2 text-sm font-medium">{t("query.showHideColumns")}</div>
+            <div className="max-h-72 space-y-1 overflow-auto">
+              {columns.map((col) => {
+                const checked = visibleColumnSet.has(col);
+                return (
+                  <label key={col} className="flex items-center gap-2 rounded px-2 py-1 text-xs hover:bg-accent">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-primary"
+                      checked={checked}
+                      disabled={!onVisibleColumnToggle || (checked && visibleColumnSet.size === 1)}
+                      onChange={() => onVisibleColumnToggle?.(col)}
+                    />
+                    <span className="truncate font-mono">{col}</span>
+                  </label>
+                );
+              })}
+            </div>
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90"
+                onClick={() => setShowColumnChooser(false)}
+              >
+                {t("action.ok")}
+              </button>
+            </div>
           </div>,
           document.body
         )}
