@@ -399,6 +399,14 @@ func (a *App) GetGitHubUser(token string) (*backup_svc.GitHubUser, error) {
 	return backup_svc.GetGitHubUser(token)
 }
 
+// WebDAVStoredConfig 是前端可读取的 WebDAV 配置，不包含明文密码。
+type WebDAVStoredConfig struct {
+	URL         string `json:"url"`
+	Username    string `json:"username,omitempty"`
+	PasswordSet bool   `json:"passwordSet"`
+	Configured  bool   `json:"configured"`
+}
+
 // --- Gist 备份 ---
 
 // ExportToGist 加密并上传备份到 Gist
@@ -469,6 +477,169 @@ func (a *App) ImportFromGist(gistID, password, token string, opts backup_svc.Imp
 	}
 
 	return backup_svc.Import(a.langCtx(), &data, &opts, credential_svc.Default())
+}
+
+// --- WebDAV 备份 ---
+
+// SaveWebDAVConfig 保存 WebDAV 备份配置。密码为空时保留已有密码。
+func (a *App) SaveWebDAVConfig(rawURL, username, password string) error {
+	cfg := bootstrap.GetConfig()
+	if cfg == nil {
+		return fmt.Errorf("config not loaded")
+	}
+	rawURL = strings.TrimSpace(rawURL)
+	username = strings.TrimSpace(username)
+	if rawURL == "" {
+		return fmt.Errorf("WebDAV URL 不能为空")
+	}
+	// 校验 URL：拒绝形如 https://user:pass@host/path 的 URL，避免把明文凭据写进 config.json。
+	if err := backup_svc.ValidateWebDAVURL(rawURL); err != nil {
+		return err
+	}
+	cfg.WebDAVURL = rawURL
+	cfg.WebDAVUsername = username
+	if password != "" {
+		encrypted, err := credential_svc.Default().Encrypt(password)
+		if err != nil {
+			return fmt.Errorf("加密 WebDAV 密码失败: %w", err)
+		}
+		cfg.WebDAVPassword = encrypted
+	}
+	return bootstrap.SaveConfig(cfg)
+}
+
+// GetWebDAVConfig 获取已保存的 WebDAV 配置状态。
+func (a *App) GetWebDAVConfig() (*WebDAVStoredConfig, error) {
+	cfg := bootstrap.GetConfig()
+	if cfg == nil {
+		return &WebDAVStoredConfig{}, nil
+	}
+	return &WebDAVStoredConfig{
+		URL:         cfg.WebDAVURL,
+		Username:    cfg.WebDAVUsername,
+		PasswordSet: cfg.WebDAVPassword != "",
+		Configured:  strings.TrimSpace(cfg.WebDAVURL) != "",
+	}, nil
+}
+
+// ClearWebDAVConfig 清除 WebDAV 备份配置。
+func (a *App) ClearWebDAVConfig() error {
+	cfg := bootstrap.GetConfig()
+	if cfg == nil {
+		return fmt.Errorf("config not loaded")
+	}
+	cfg.WebDAVURL = ""
+	cfg.WebDAVUsername = ""
+	cfg.WebDAVPassword = ""
+	return bootstrap.SaveConfig(cfg)
+}
+
+// TestWebDAVConfig 测试 WebDAV 目录是否可访问。
+func (a *App) TestWebDAVConfig(rawURL, username, password string) error {
+	rawURL = strings.TrimSpace(rawURL)
+	username = strings.TrimSpace(username)
+	cfg := backup_svc.WebDAVConfig{URL: rawURL, Username: username, Password: password}
+
+	stored := bootstrap.GetConfig()
+	if password == "" && stored != nil &&
+		strings.TrimSpace(stored.WebDAVURL) == rawURL &&
+		strings.TrimSpace(stored.WebDAVUsername) == username &&
+		stored.WebDAVPassword != "" {
+		decrypted, err := credential_svc.Default().Decrypt(stored.WebDAVPassword)
+		if err != nil {
+			return fmt.Errorf("解密 WebDAV 密码失败: %w", err)
+		}
+		cfg.Password = decrypted
+	}
+
+	return backup_svc.TestWebDAVConnection(cfg)
+}
+
+// ListWebDAVBackups 列出 WebDAV 目录中的 OpsKat 备份。
+func (a *App) ListWebDAVBackups() ([]*backup_svc.WebDAVBackupInfo, error) {
+	cfg, err := a.webDAVConfigFromStorage()
+	if err != nil {
+		return nil, err
+	}
+	return backup_svc.ListWebDAVBackups(cfg)
+}
+
+// ExportToWebDAV 加密并上传备份到 WebDAV。
+func (a *App) ExportToWebDAV(password string, opts backup_svc.ExportOptions) (*backup_svc.WebDAVBackupInfo, error) {
+	if password == "" {
+		return nil, fmt.Errorf("WebDAV 备份必须设置备份密码")
+	}
+	cfg, err := a.webDAVConfigFromStorage()
+	if err != nil {
+		return nil, err
+	}
+
+	var crypto backup_svc.CredentialCrypto
+	if opts.IncludeCredentials {
+		crypto = credential_svc.Default()
+	}
+
+	data, err := backup_svc.Export(a.langCtx(), &opts, crypto)
+	if err != nil {
+		return nil, err
+	}
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+
+	encrypted, err := backup_svc.EncryptBackup(jsonData, password)
+	if err != nil {
+		return nil, err
+	}
+
+	return backup_svc.CreateOrUpdateWebDAVBackup(cfg, encrypted)
+}
+
+// ImportFromWebDAV 从 WebDAV 导入备份。
+func (a *App) ImportFromWebDAV(name, password string, opts backup_svc.ImportOptions) (*backup_svc.ImportResult, error) {
+	cfg, err := a.webDAVConfigFromStorage()
+	if err != nil {
+		return nil, err
+	}
+	content, err := backup_svc.GetWebDAVBackupContent(cfg, name)
+	if err != nil {
+		return nil, err
+	}
+
+	jsonData, err := backup_svc.DecryptBackup(content, password)
+	if err != nil {
+		return nil, err
+	}
+
+	var data backup_svc.BackupData
+	if err := json.Unmarshal(jsonData, &data); err != nil {
+		return nil, fmt.Errorf("解析备份数据失败: %w", err)
+	}
+
+	return backup_svc.Import(a.langCtx(), &data, &opts, credential_svc.Default())
+}
+
+func (a *App) webDAVConfigFromStorage() (backup_svc.WebDAVConfig, error) {
+	cfg := bootstrap.GetConfig()
+	if cfg == nil || strings.TrimSpace(cfg.WebDAVURL) == "" {
+		return backup_svc.WebDAVConfig{}, fmt.Errorf("WebDAV 未配置")
+	}
+
+	password := ""
+	if cfg.WebDAVPassword != "" {
+		decrypted, err := credential_svc.Default().Decrypt(cfg.WebDAVPassword)
+		if err != nil {
+			return backup_svc.WebDAVConfig{}, fmt.Errorf("解密 WebDAV 密码失败: %w", err)
+		}
+		password = decrypted
+	}
+
+	return backup_svc.WebDAVConfig{
+		URL:      cfg.WebDAVURL,
+		Username: cfg.WebDAVUsername,
+		Password: password,
+	}, nil
 }
 
 // GetDataDir 返回应用数据目录
