@@ -54,8 +54,8 @@ export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelPr
 
   // rail 折叠状态独立持久化（与面板宽解耦）
   const [railCollapsed, setRailCollapsed] = useState<boolean>(() => {
-    const v = localStorage.getItem("ai_sidebar_rail_collapsed");
-    return v === null ? true : v === "true";
+    // 默认窄态：仅当显式存了 "false" 才展开；null/损坏值都按 collapsed=true 处理
+    return localStorage.getItem("ai_sidebar_rail_collapsed") !== "false";
   });
   const toggleRailCollapsed = () => {
     setRailCollapsed((prev) => {
