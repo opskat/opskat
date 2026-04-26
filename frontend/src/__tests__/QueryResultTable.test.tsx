@@ -429,8 +429,10 @@ describe("QueryResultTable — cell context actions", () => {
     fireEvent.contextMenu(cell, { clientX: 40, clientY: 50 });
 
     await user.click(screen.getByText("query.setDateTime"));
-    const input = screen.getByLabelText("query.dateTimeValue");
-    fireEvent.change(input, { target: { value: "2026-04-27T08:09:10" } });
+    const dateInput = screen.getByLabelText("Date");
+    const timeInput = screen.getByLabelText("Time");
+    fireEvent.change(dateInput, { target: { value: "2026-04-27" } });
+    fireEvent.change(timeInput, { target: { value: "08:09:10" } });
     await user.click(screen.getByText("action.ok"));
 
     expect(onSetCellValue).toHaveBeenCalledWith({
@@ -455,8 +457,10 @@ describe("QueryResultTable — cell context actions", () => {
 
     await user.click(screen.getByText("2026-04-26 10:13:43"));
     await user.click(screen.getByTitle("query.openDateTimePicker"));
-    const input = screen.getByLabelText("query.dateTimeValue");
-    fireEvent.change(input, { target: { value: "2026-04-28T11:12:13" } });
+    const dateInput = screen.getByLabelText("Date");
+    const timeInput = screen.getByLabelText("Time");
+    fireEvent.change(dateInput, { target: { value: "2026-04-28" } });
+    fireEvent.change(timeInput, { target: { value: "11:12:13" } });
     await user.click(screen.getByText("action.ok"));
 
     expect(onSetCellValue).toHaveBeenCalledWith({

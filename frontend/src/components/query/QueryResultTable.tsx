@@ -167,10 +167,15 @@ function padDatePart(value: string | number): string {
   return String(value).padStart(2, "0");
 }
 
-function formatDateToInputValue(value: unknown, _mode: DateEditMode): string {
+function formatDateToInputValue(value: unknown): string {
   const fromDate = (date: Date) => {
-    const datePart = `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`;
-    return `${datePart}T${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}:${padDatePart(date.getSeconds())}`;
+    const y = date.getFullYear();
+    const m = padDatePart(date.getMonth() + 1);
+    const d = padDatePart(date.getDate());
+    const hh = padDatePart(date.getHours());
+    const mm = padDatePart(date.getMinutes());
+    const ss = padDatePart(date.getSeconds());
+    return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
   };
 
   if (value instanceof Date && !Number.isNaN(value.getTime())) return fromDate(value);
@@ -179,19 +184,17 @@ function formatDateToInputValue(value: unknown, _mode: DateEditMode): string {
     const trimmed = value.trim();
     const match = trimmed.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T\s,]+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
     if (match) {
-      const [, y, m, d, hh = "0", mm = "0", ss = "0"] = match;
-      const datePart = `${y}-${padDatePart(m)}-${padDatePart(d)}`;
-      return `${datePart}T${padDatePart(hh)}:${padDatePart(mm)}:${padDatePart(ss)}`;
+      const [, y, m, d, hh = "00", mm = "00", ss = "00"] = match;
+      return `${y}-${padDatePart(m)}-${padDatePart(d)} ${padDatePart(hh)}:${padDatePart(mm)}:${padDatePart(ss)}`;
     }
   }
 
   return fromDate(new Date());
 }
 
-function formatDateInputValue(value: string, _mode: DateEditMode): string {
-  const [datePart, timePart = "00:00:00"] = value.split("T");
-  const [hh = "00", mm = "00", ss = "00"] = timePart.split(":");
-  return `${datePart} ${padDatePart(hh)}:${padDatePart(mm)}:${padDatePart(ss)}`;
+function splitDateAndTime(datetime: string): { date: string; time: string } {
+  const [date, time = "00:00:00"] = datetime.split(" ");
+  return { date, time };
 }
 
 function getDateEditMode(col: string, type?: string, value?: unknown): DateEditMode | null {
@@ -356,8 +359,8 @@ export function QueryResultTable({
   const [dateEditor, setDateEditor] = useState<{
     rowIdx: number;
     col: string;
-    mode: DateEditMode;
-    value: string;
+    date: string;
+    time: string;
     x: number;
     y: number;
   } | null>(null);
@@ -728,11 +731,12 @@ export function QueryResultTable({
     if (!ctxMenu || ctxMenu.kind !== "cell") return;
     const mode = getDateEditMode(ctxMenu.col, columnTypes?.[ctxMenu.col], ctxMenu.value);
     if (!mode) return;
+    const { date, time } = splitDateAndTime(formatDateToInputValue(ctxMenu.value));
     setDateEditor({
       rowIdx: ctxMenu.rowIdx,
       col: ctxMenu.col,
-      mode,
-      value: formatDateToInputValue(ctxMenu.value, mode),
+      date,
+      time,
       x: ctxMenu.x,
       y: ctxMenu.y,
     });
@@ -744,11 +748,12 @@ export function QueryResultTable({
       const mode = getDateEditMode(col, columnTypes?.[col], value);
       if (!mode) return;
       const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+      const { date, time } = splitDateAndTime(formatDateToInputValue(value));
       setDateEditor({
         rowIdx,
         col,
-        mode,
-        value: formatDateToInputValue(value, mode),
+        date,
+        time,
         x: rect.left,
         y: rect.bottom + 4,
       });
@@ -761,7 +766,7 @@ export function QueryResultTable({
     setCellValueHandler?.({
       rowIdx: dateEditor.rowIdx,
       col: dateEditor.col,
-      value: formatDateInputValue(dateEditor.value, dateEditor.mode),
+      value: `${dateEditor.date} ${dateEditor.time}`,
     });
     setDateEditor(null);
   }, [dateEditor, setCellValueHandler]);
@@ -1875,22 +1880,38 @@ export function QueryResultTable({
             aria-label={t("query.dateTimeDialogTitle")}
           >
             <div className="mb-2 text-sm font-medium">{t("query.dateTimeDialogTitle")}</div>
-            <label className="block">
-              <span className="sr-only">{t("query.dateTimeValue")}</span>
-              <input
-                aria-label={t("query.dateTimeValue")}
-                type="datetime-local"
-                step={1}
-                className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus:ring-2 focus:ring-ring"
-                value={dateEditor.value}
-                onChange={(e) => setDateEditor((prev) => (prev ? { ...prev, value: e.target.value } : prev))}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleCommitDateEditor();
-                  if (e.key === "Escape") setDateEditor(null);
-                }}
-                autoFocus
-              />
-            </label>
+            <div className="flex gap-2">
+              <label className="flex-1">
+                <span className="mb-1 block text-xs text-muted-foreground">Date</span>
+                <input
+                  aria-label="Date"
+                  type="date"
+                  className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+                  value={dateEditor.date}
+                  onChange={(e) => setDateEditor((prev) => (prev ? { ...prev, date: e.target.value } : prev))}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleCommitDateEditor();
+                    if (e.key === "Escape") setDateEditor(null);
+                  }}
+                  autoFocus
+                />
+              </label>
+              <label className="w-28">
+                <span className="mb-1 block text-xs text-muted-foreground">Time</span>
+                <input
+                  aria-label="Time"
+                  type="time"
+                  step={1}
+                  className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+                  value={dateEditor.time}
+                  onChange={(e) => setDateEditor((prev) => (prev ? { ...prev, time: e.target.value } : prev))}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleCommitDateEditor();
+                    if (e.key === "Escape") setDateEditor(null);
+                  }}
+                />
+              </label>
+            </div>
             <div className="mt-3 flex justify-end gap-2">
               <button
                 type="button"
