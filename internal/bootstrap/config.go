@@ -19,8 +19,10 @@ type AppConfig struct {
 	GitHubToken     string `json:"github_token,omitempty"`      // 加密后的 GitHub token
 	GitHubUser      string `json:"github_user,omitempty"`       // GitHub 用户名（非敏感）
 	WebDAVURL       string `json:"webdav_url,omitempty"`        // WebDAV 备份目录
-	WebDAVUsername  string `json:"webdav_username,omitempty"`   // WebDAV 用户名（非敏感）
-	WebDAVPassword  string `json:"webdav_password,omitempty"`   // 加密后的 WebDAV 密码
+	WebDAVAuthType  string `json:"webdav_auth_type,omitempty"`  // "none" | "basic" | "bearer"
+	WebDAVUsername  string `json:"webdav_username,omitempty"`   // WebDAV 用户名（非敏感，仅 basic）
+	WebDAVPassword  string `json:"webdav_password,omitempty"`   // 加密后的 WebDAV 密码（仅 basic）
+	WebDAVToken     string `json:"webdav_token,omitempty"`      // 加密后的 Bearer token（仅 bearer）
 	LastUpdateCheck int64  `json:"last_update_check,omitempty"` // 上次自动检查更新的 Unix 时间戳
 	DebugMode       bool   `json:"debug_mode,omitempty"`        // 开启后日志级别降为 debug
 }
