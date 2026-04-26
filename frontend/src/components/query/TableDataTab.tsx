@@ -1,6 +1,6 @@
 import { memo, useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { Filter, FileCode2, Copy, TriangleAlert, Download } from "lucide-react";
+import { FileCode2, Copy, TriangleAlert, Download } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -10,7 +10,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   Button,
-  Input,
   ScrollArea,
 } from "@opskat/ui";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
@@ -28,11 +27,19 @@ import {
 import { SqlPreviewDialog } from "./SqlPreviewDialog";
 import { ImportTableDataDialog } from "./ImportTableDataDialog";
 import { ExportTableDataDialog } from "./ExportTableDataDialog";
+import { TableFilterBuilder } from "./TableFilterBuilder";
 import { TableDataStatusBar, TableEditorToolbar, type TableExportFormat } from "./TableEditorToolbar";
 import { toast } from "sonner";
 import { toInsertSql, toTsv, toTsvData, toTsvFields, toUpdateSql } from "@/lib/tableExport";
 import { buildInsertStatement, validateInsertRow, type TableColumnRule } from "@/lib/tableEdit";
 import { buildDeleteStatement, buildFilterByCellValueClause, quoteIdent, sqlQuote } from "@/lib/tableSql";
+import {
+  buildFilterWhereClause,
+  buildSortOrderByClause,
+  createFilterCondition,
+  type TableFilterItem,
+  type TableSortItem,
+} from "@/lib/tableFilter";
 import { cellValueToText } from "@/lib/cellValue";
 
 interface TableDataTabProps {
@@ -123,8 +130,8 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const [showDDLDialog, setShowDDLDialog] = useState(false);
   const [ddlLoading, setDdlLoading] = useState(false);
   const [ddlSQL, setDdlSQL] = useState("");
-  const [whereInput, setWhereInput] = useState("");
-  const [orderByInput, setOrderByInput] = useState("");
+  const [filters, setFilters] = useState<TableFilterItem[]>([]);
+  const [sorts, setSorts] = useState<TableSortItem[]>([]);
   const [whereClause, setWhereClause] = useState("");
   const [orderByClause, setOrderByClause] = useState("");
   const [sortColumn, setSortColumn] = useState<string | null>(null);
@@ -593,10 +600,11 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   }, [isOuterActive, isInnerActive, handleRefresh]);
 
   const handleApplyQuery = useCallback(() => {
-    setWhereClause(whereInput.trim());
-    setOrderByClause(orderByInput.trim());
-    // Manual ORDER BY input overrides the header-click sort state.
-    if (orderByInput.trim()) {
+    setWhereClause(buildFilterWhereClause(filters, driver));
+    const sortClause = buildSortOrderByClause(sorts, driver);
+    setOrderByClause(sortClause);
+    // Builder ORDER BY overrides the header-click sort state.
+    if (sortClause) {
       setSortColumn(null);
       setSortDir(null);
     }
@@ -604,14 +612,14 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     setEdits(new Map());
     setNewRows([]);
     setApplyVersion((v) => v + 1);
-  }, [whereInput, orderByInput]);
+  }, [driver, filters, sorts]);
 
   const handleSortChange = useCallback((col: string | null, dir: SortDir) => {
     setSortColumn(col);
     setSortDir(dir);
-    // Header click takes precedence — clear the manual ORDER BY input so the user
+    // Header click takes precedence — clear the builder ORDER BY state so the user
     // can see which sort is actually applied.
-    setOrderByInput("");
+    setSorts([]);
     setOrderByClause("");
     setPage(0);
     setEdits(new Map());
@@ -622,7 +630,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const handleFilterByCellValue = useCallback(
     ({ col, value }: { col: string; value: unknown }) => {
       const clause = buildFilterByCellValueClause(col, value, driver);
-      setWhereInput(clause);
+      setFilters([createFilterCondition(`cell-${col}`, col, { value })]);
       setWhereClause(clause);
       setPage(0);
       setEdits(new Map());
@@ -640,9 +648,9 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   );
 
   const handleClearFilterSort = useCallback(() => {
-    setWhereInput("");
+    setFilters([]);
     setWhereClause("");
-    setOrderByInput("");
+    setSorts([]);
     setOrderByClause("");
     setSortColumn(null);
     setSortDir(null);
@@ -771,12 +779,9 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     [columns]
   );
 
-  const handleAddColumnFilter = useCallback(
-    (column: string) => {
-      setWhereInput(`${quoteIdent(column, driver)} = `);
-    },
-    [driver]
-  );
+  const handleAddColumnFilter = useCallback((column: string) => {
+    setFilters((prev) => [...prev, createFilterCondition(`column-${column}-${Date.now()}`, column)]);
+  }, []);
 
   const handleViewDDL = useCallback(async () => {
     if (!assetId) return;
@@ -859,42 +864,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
 
   return (
     <div className="flex flex-col h-full">
-      {/* Filter bar */}
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-muted/20 shrink-0">
-        <div className="flex items-center gap-1 flex-1 min-w-0">
-          <span className="text-[11px] font-mono text-muted-foreground">WHERE</span>
-          <Input
-            className="h-7 text-xs font-mono"
-            value={whereInput}
-            onChange={(e) => setWhereInput(e.target.value)}
-            placeholder={t("query.wherePlaceholder")}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                handleApplyQuery();
-              }
-            }}
-          />
-        </div>
-        <div className="flex items-center gap-1 flex-1 min-w-0">
-          <span className="text-[11px] font-mono text-muted-foreground whitespace-nowrap">ORDER BY</span>
-          <Input
-            className="h-7 text-xs font-mono"
-            value={orderByInput}
-            onChange={(e) => setOrderByInput(e.target.value)}
-            placeholder={t("query.orderByPlaceholder")}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                handleApplyQuery();
-              }
-            }}
-          />
-        </div>
-        <Button variant="outline" size="sm" className="h-7 text-xs gap-1 shrink-0" onClick={handleApplyQuery}>
-          <Filter className="h-3.5 w-3.5" />
-          {t("query.applyFilter")}
-        </Button>
+      <div className="flex items-center gap-2 border-b border-border bg-muted/20 px-3 py-1.5 shrink-0">
         <Button variant="outline" size="sm" className="h-7 text-xs gap-1 shrink-0" onClick={handleViewDDL}>
           <FileCode2 className="h-3.5 w-3.5" />
           {t("query.viewDDL")}
@@ -933,6 +903,17 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
           </span>
         )}
       </div>
+
+      <TableFilterBuilder
+        columns={columns}
+        rows={rows}
+        filters={filters}
+        sorts={sorts}
+        driver={driver}
+        onChange={setFilters}
+        onSortsChange={setSorts}
+        onApply={handleApplyQuery}
+      />
 
       {/* Table content */}
       <QueryResultTable

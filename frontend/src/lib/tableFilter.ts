@@ -1,0 +1,197 @@
+import { quoteIdent, sqlQuote } from "./tableSql";
+
+export type TableFilterJoin = "and" | "or";
+export type TableFilterOperator = "=";
+export type TableSortDir = "asc" | "desc";
+
+export interface TableFilterCondition {
+  kind: "condition";
+  id: string;
+  column: string;
+  operator: TableFilterOperator;
+  value?: unknown;
+  enabled: boolean;
+  join: TableFilterJoin;
+}
+
+export interface TableFilterGroup {
+  kind: "group";
+  id: string;
+  items: TableFilterItem[];
+  join: TableFilterJoin;
+}
+
+export type TableFilterItem = TableFilterCondition | TableFilterGroup;
+
+export interface TableSortItem {
+  id: string;
+  column: string;
+  dir: TableSortDir;
+}
+
+interface CreateFilterConditionOptions {
+  value?: unknown;
+  enabled?: boolean;
+  join?: TableFilterJoin;
+}
+
+let filterIdSeq = 0;
+
+function nextFilterId(prefix = "filter"): string {
+  filterIdSeq += 1;
+  return `${prefix}-${filterIdSeq}`;
+}
+
+export function createFilterCondition(
+  id: string,
+  column: string,
+  options: CreateFilterConditionOptions = {}
+): TableFilterCondition {
+  return {
+    kind: "condition",
+    id,
+    column,
+    operator: "=",
+    value: options.value,
+    enabled: options.enabled ?? true,
+    join: options.join ?? "and",
+  };
+}
+
+function usedColumns(items: TableFilterItem[]): Set<string> {
+  const out = new Set<string>();
+  for (const item of items) {
+    if (item.kind === "condition") out.add(item.column);
+    else for (const col of usedColumns(item.items)) out.add(col);
+  }
+  return out;
+}
+
+export function pickNextFilterColumn(items: TableFilterItem[], columns: string[]): string | null {
+  if (columns.length === 0) return null;
+  const used = usedColumns(items);
+  return columns.find((column) => !used.has(column)) ?? columns[0];
+}
+
+export function addFilterCondition(
+  items: TableFilterItem[],
+  columns: string[],
+  _driver?: string,
+  id = nextFilterId()
+): TableFilterItem[] {
+  const column = pickNextFilterColumn(items, columns);
+  if (!column) return items;
+  return [...items, createFilterCondition(id, column)];
+}
+
+export function addFilterGroup(
+  items: TableFilterItem[],
+  _columns: string[],
+  _driver?: string,
+  id = nextFilterId("group")
+): TableFilterItem[] {
+  return [...items, { kind: "group", id, items: [], join: "and" }];
+}
+
+export function toggleFilterJoin(items: TableFilterItem[], id: string): TableFilterItem[] {
+  return items.map((item) => {
+    if (item.id === id) {
+      return { ...item, join: item.join === "and" ? "or" : "and" };
+    }
+    if (item.kind === "group") return { ...item, items: toggleFilterJoin(item.items, id) };
+    return item;
+  });
+}
+
+function hasValue(value: unknown): boolean {
+  return value !== undefined;
+}
+
+function conditionSql(condition: TableFilterCondition, driver?: string): string {
+  if (!condition.enabled || !hasValue(condition.value)) return "";
+  if (condition.value == null) return `${quoteIdent(condition.column, driver)} IS NULL`;
+  return `${quoteIdent(condition.column, driver)} ${condition.operator} ${sqlQuote(condition.value)}`;
+}
+
+function buildItemsWhere(items: TableFilterItem[], driver?: string): string {
+  const parts: { sql: string; join: TableFilterJoin }[] = [];
+  for (const item of items) {
+    const sql = item.kind === "condition" ? conditionSql(item, driver) : buildItemsWhere(item.items, driver);
+    if (!sql) continue;
+    parts.push({ sql: item.kind === "group" ? `(${sql})` : sql, join: item.join });
+  }
+
+  return parts.reduce((acc, part, index) => {
+    if (index === 0) return part.sql;
+    return `${acc} ${parts[index - 1].join.toUpperCase()} ${part.sql}`;
+  }, "");
+}
+
+export function buildFilterWhereClause(items: TableFilterItem[], driver?: string): string {
+  return buildItemsWhere(items, driver);
+}
+
+export function updateFilterItem(
+  items: TableFilterItem[],
+  id: string,
+  patch: Partial<TableFilterCondition>
+): TableFilterItem[] {
+  return items.map((item) => {
+    if (item.kind === "condition" && item.id === id) return { ...item, ...patch };
+    if (item.kind === "group") return { ...item, items: updateFilterItem(item.items, id, patch) };
+    return item;
+  });
+}
+
+export function updateFilterGroupItems(
+  items: TableFilterItem[],
+  id: string,
+  updater: (children: TableFilterItem[]) => TableFilterItem[]
+): TableFilterItem[] {
+  return items.map((item) => {
+    if (item.kind === "group" && item.id === id) return { ...item, items: updater(item.items) };
+    if (item.kind === "group") return { ...item, items: updateFilterGroupItems(item.items, id, updater) };
+    return item;
+  });
+}
+
+export function createSortCriterion(id: string, column: string, dir: TableSortDir = "asc"): TableSortItem {
+  return { id, column, dir };
+}
+
+function usedSortColumns(items: TableSortItem[]): Set<string> {
+  return new Set(items.map((item) => item.column));
+}
+
+function pickNextSortColumn(items: TableSortItem[], columns: string[]): string | null {
+  if (columns.length === 0) return null;
+  const used = usedSortColumns(items);
+  return columns.find((column) => !used.has(column)) ?? columns[0];
+}
+
+export function addSortCriterion(
+  items: TableSortItem[],
+  columns: string[],
+  _driver?: string,
+  id = nextFilterId("sort")
+): TableSortItem[] {
+  const column = pickNextSortColumn(items, columns);
+  if (!column) return items;
+  return [...items, createSortCriterion(id, column)];
+}
+
+export function toggleSortDirection(items: TableSortItem[], id: string): TableSortItem[] {
+  return items.map((item) => (item.id === id ? { ...item, dir: item.dir === "asc" ? "desc" : "asc" } : item));
+}
+
+export function updateSortCriterion(
+  items: TableSortItem[],
+  id: string,
+  patch: Partial<TableSortItem>
+): TableSortItem[] {
+  return items.map((item) => (item.id === id ? { ...item, ...patch } : item));
+}
+
+export function buildSortOrderByClause(items: TableSortItem[], driver?: string): string {
+  return items.map((item) => `${quoteIdent(item.column, driver)} ${item.dir.toUpperCase()}`).join(", ");
+}

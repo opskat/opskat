@@ -207,6 +207,18 @@ describe("QueryResultTable — cell context actions", () => {
     expect(onAddColumnFilter).toHaveBeenCalledWith("name");
   });
 
+  it("header filter button adds a server-side filter when a handler is provided", async () => {
+    const user = userEvent.setup();
+    const onAddColumnFilter = vi.fn();
+
+    render(<QueryResultTable columns={columns} rows={rows} enableColumnFilter onAddColumnFilter={onAddColumnFilter} />);
+
+    await user.click(screen.getAllByTitle("query.filterColumn")[0]);
+
+    expect(onAddColumnFilter).toHaveBeenCalledWith("id");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("right-clicking a column header shows column actions instead of cell actions", () => {
     openColumnMenu({ onCopyAs: vi.fn(), onHideColumn: vi.fn() });
 

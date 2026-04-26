@@ -1,0 +1,59 @@
+import { describe, expect, it } from "vitest";
+import {
+  addFilterCondition,
+  addFilterGroup,
+  addSortCriterion,
+  buildFilterWhereClause,
+  buildSortOrderByClause,
+  createFilterCondition,
+  createSortCriterion,
+  toggleFilterJoin,
+  toggleSortDirection,
+  type TableFilterItem,
+} from "@/lib/tableFilter";
+
+describe("table filter helpers", () => {
+  it("adds the next unused column in display order", () => {
+    const items = [createFilterCondition("email", "email")];
+    const next = addFilterCondition(items, ["id", "email", "name"], "mysql");
+
+    expect(next).toHaveLength(2);
+    expect(next[1]).toMatchObject({ kind: "condition", column: "id", operator: "=", enabled: true });
+  });
+
+  it("toggles joins between AND and OR", () => {
+    const items = [createFilterCondition("email", "email", { join: "and" })];
+
+    expect(toggleFilterJoin(items, "email")[0]).toMatchObject({ join: "or" });
+    expect(toggleFilterJoin(toggleFilterJoin(items, "email"), "email")[0]).toMatchObject({ join: "and" });
+  });
+
+  it("builds SQL with OR joins and bracket groups", () => {
+    const items: TableFilterItem[] = [
+      createFilterCondition("email", "email", { value: "11223", join: "or" }),
+      addFilterGroup([], ["id", "name"], "mysql", "group-1")[0],
+    ];
+    const group = items[1];
+    if (group.kind !== "group") throw new Error("expected group");
+    group.items = [createFilterCondition("id", "id", { value: 2 })];
+
+    expect(buildFilterWhereClause(items, "mysql")).toBe("`email` = '11223' OR (`id` = '2')");
+  });
+
+  it("adds sort criteria by unused field order and toggles direction", () => {
+    const first = addSortCriterion([], ["id", "email", "name"], "mysql", "sort-id");
+    const second = addSortCriterion(first, ["id", "email", "name"], "mysql", "sort-email");
+
+    expect(second).toEqual([createSortCriterion("sort-id", "id"), createSortCriterion("sort-email", "email")]);
+    expect(toggleSortDirection(second, "sort-id")[0]).toMatchObject({ dir: "desc" });
+  });
+
+  it("builds ORDER BY SQL from sort criteria", () => {
+    expect(
+      buildSortOrderByClause(
+        [createSortCriterion("sort-id", "id", "asc"), createSortCriterion("sort-name", "name", "desc")],
+        "mysql"
+      )
+    ).toBe("`id` ASC, `name` DESC");
+  });
+});

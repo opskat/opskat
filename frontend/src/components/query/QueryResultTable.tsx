@@ -872,6 +872,21 @@ export function QueryResultTable({
                       </button>
                       {enableColumnFilter &&
                         (() => {
+                          if (onAddColumnFilter) {
+                            return (
+                              <button
+                                type="button"
+                                className="shrink-0 rounded p-0.5 opacity-60 hover:bg-accent hover:text-accent-foreground hover:opacity-100"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onAddColumnFilter(col);
+                                }}
+                                title={t("query.filterColumn")}
+                              >
+                                <Filter className="h-3 w-3" />
+                              </button>
+                            );
+                          }
                           const curFilter = columnFilters.get(col);
                           const distinctCount = columnDistincts.get(col)?.length ?? 0;
                           // "Active" = user has a non-empty selection that doesn't cover
