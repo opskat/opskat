@@ -110,6 +110,9 @@ const NULL_KEY = "__opskat_null_sentinel__";
 const CONTEXT_MENU_ITEM_CLASS =
   "relative flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground";
 
+const CONTEXT_MENU_ITEM_GRID_CLASS =
+  "relative grid w-full cursor-default grid-cols-[auto_1fr] items-center gap-x-2 rounded-sm px-2 py-1.5 text-left text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground";
+
 const CELL_FILTER_OPTIONS: { operator: CellValueFilterOperator; labelKey: string }[] = [
   { operator: "=", labelKey: "query.filterFieldEqualsValue" },
   { operator: "!=", labelKey: "query.filterFieldNotEqualsValue" },
@@ -1561,29 +1564,29 @@ export function QueryResultTable({
                       <button
                         type="button"
                         role="menuitem"
-                        className={CONTEXT_MENU_ITEM_CLASS}
+                        className={CONTEXT_MENU_ITEM_GRID_CLASS}
                         onClick={() => handleCopyAs("tsv-data")}
                       >
                         <ClipboardList className="h-3.5 w-3.5" />
-                        {t("query.copyAsTsvData")}
+                        <span>{t("query.copyAsTsvData")}</span>
                       </button>
                       <button
                         type="button"
                         role="menuitem"
-                        className={CONTEXT_MENU_ITEM_CLASS}
+                        className={CONTEXT_MENU_ITEM_GRID_CLASS}
                         onClick={() => handleCopyAs("tsv-fields")}
                       >
                         <ClipboardList className="h-3.5 w-3.5" />
-                        {t("query.copyAsTsvFields")}
+                        <span>{t("query.copyAsTsvFields")}</span>
                       </button>
                       <button
                         type="button"
                         role="menuitem"
-                        className={CONTEXT_MENU_ITEM_CLASS}
+                        className={CONTEXT_MENU_ITEM_GRID_CLASS}
                         onClick={() => handleCopyAs("tsv-fields-data")}
                       >
                         <ClipboardList className="h-3.5 w-3.5" />
-                        {t("query.copyAsTsvFieldsAndData")}
+                        <span>{t("query.copyAsTsvFieldsAndData")}</span>
                       </button>
                     </div>
                   </div>
