@@ -49,7 +49,7 @@ interface TableDataTabProps {
   table: string;
 }
 
-const DEFAULT_PAGE_SIZE = 100;
+const DEFAULT_PAGE_SIZE = 1000;
 
 interface SQLResult {
   columns?: string[];
@@ -118,7 +118,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const [newRows, setNewRows] = useState<Record<string, unknown>[]>([]);
   const [totalRows, setTotalRows] = useState<number | null>(null);
   const [page, setPage] = useState(0);
-  const pageSize = DEFAULT_PAGE_SIZE;
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [pageInput, setPageInput] = useState("1");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -132,6 +132,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const [ddlSQL, setDdlSQL] = useState("");
   const [filters, setFilters] = useState<TableFilterItem[]>([]);
   const [sorts, setSorts] = useState<TableSortItem[]>([]);
+  const [showFilterSort, setShowFilterSort] = useState(false);
   const [whereClause, setWhereClause] = useState("");
   const [orderByClause, setOrderByClause] = useState("");
   const [sortColumn, setSortColumn] = useState<string | null>(null);
@@ -571,6 +572,13 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     setPage(target);
   }, [pageInput, page, totalPages]);
 
+  const handlePageSizeChange = useCallback((nextPageSize: number) => {
+    setPageSize(nextPageSize);
+    setPage(0);
+    setEdits(new Map());
+    setNewRows([]);
+  }, []);
+
   const handleRefresh = useCallback(() => {
     fetchData(page);
     fetchCount();
@@ -631,6 +639,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     ({ col, value }: { col: string; value: unknown }) => {
       const clause = buildFilterByCellValueClause(col, value, driver);
       setFilters([createFilterCondition(`cell-${col}`, col, { value })]);
+      setShowFilterSort(true);
       setWhereClause(clause);
       setPage(0);
       setEdits(new Map());
@@ -781,6 +790,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
 
   const handleAddColumnFilter = useCallback((column: string) => {
     setFilters((prev) => [...prev, createFilterCondition(`column-${column}-${Date.now()}`, column)]);
+    setShowFilterSort(true);
   }, []);
 
   const handleViewDDL = useCallback(async () => {
@@ -861,6 +871,8 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const hasEdits = pendingEditCount > 0;
   const hasSelectedRow = selectedRowIdx != null && tableRows[selectedRowIdx] != null;
   const effectiveVisibleColumns = visibleColumns.length > 0 ? visibleColumns : columns;
+  const hasActiveFilterSort =
+    filters.length > 0 || sorts.length > 0 || !!whereClause || !!orderByClause || !!sortColumn || !!sortDir;
 
   return (
     <div className="flex flex-col h-full">
@@ -871,7 +883,6 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         </Button>
         <TableEditorToolbar
           hasEdits={hasEdits}
-          hasSelectedRow={hasSelectedRow}
           loading={loading || importing}
           submitting={submitting || deleting}
           canExport={rows.length > 0}
@@ -883,8 +894,9 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
           onExportFormatChange={setExportFormat}
           onVisibleColumnToggle={handleVisibleColumnToggle}
           onRowDensityChange={setRowDensity}
-          onAddRow={handleAddInlineRow}
-          onDeleteRow={handleDeleteSelectedRow}
+          filterSortOpen={showFilterSort}
+          filterSortActive={hasActiveFilterSort}
+          onToggleFilterSort={() => setShowFilterSort((open) => !open)}
           onSubmit={() => openSqlDialog("confirm")}
           onDiscard={handleDiscard}
           onRefresh={handleRefresh}
@@ -904,16 +916,18 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         )}
       </div>
 
-      <TableFilterBuilder
-        columns={columns}
-        rows={rows}
-        filters={filters}
-        sorts={sorts}
-        driver={driver}
-        onChange={setFilters}
-        onSortsChange={setSorts}
-        onApply={handleApplyQuery}
-      />
+      {showFilterSort && (
+        <TableFilterBuilder
+          columns={columns}
+          rows={rows}
+          filters={filters}
+          sorts={sorts}
+          driver={driver}
+          onChange={setFilters}
+          onSortsChange={setSorts}
+          onApply={handleApplyQuery}
+        />
+      )}
 
       {/* Table content */}
       <QueryResultTable
@@ -962,6 +976,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         totalRows={totalRows}
         page={page}
         totalPages={totalPages}
+        pageSize={pageSize}
         pageInput={pageInput}
         hasPrev={hasPrev}
         hasNext={hasNext}
@@ -973,6 +988,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         onStopLoading={handleStopLoading}
         onPageInputChange={setPageInput}
         onPageInputConfirm={handlePageInputConfirm}
+        onPageSizeChange={handlePageSizeChange}
         onFirstPage={() => setPage(0)}
         onPreviousPage={() => setPage((p) => p - 1)}
         onNextPage={() => setPage((p) => p + 1)}

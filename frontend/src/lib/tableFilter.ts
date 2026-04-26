@@ -155,6 +155,46 @@ export function updateFilterGroupItems(
   });
 }
 
+export function removeFilterItem(items: TableFilterItem[], id: string): TableFilterItem[] {
+  return items
+    .filter((item) => item.id !== id)
+    .map((item) => (item.kind === "group" ? { ...item, items: removeFilterItem(item.items, id) } : item));
+}
+
+export function unwrapFilterGroup(items: TableFilterItem[], id: string): TableFilterItem[] {
+  const next: TableFilterItem[] = [];
+  for (const item of items) {
+    if (item.kind === "group" && item.id === id) {
+      next.push(...item.items);
+      continue;
+    }
+    next.push(item.kind === "group" ? { ...item, items: unwrapFilterGroup(item.items, id) } : item);
+  }
+  return next;
+}
+
+export function setAllFilterItemsEnabled(items: TableFilterItem[], enabled: boolean): TableFilterItem[] {
+  return items.map((item) =>
+    item.kind === "group" ? { ...item, items: setAllFilterItemsEnabled(item.items, enabled) } : { ...item, enabled }
+  );
+}
+
+export function moveFilterItem(items: TableFilterItem[], id: string, direction: "up" | "down"): TableFilterItem[] {
+  const index = items.findIndex((item) => item.id === id);
+  if (index !== -1) {
+    const target = direction === "up" ? index - 1 : index + 1;
+    if (target < 0 || target >= items.length) return items;
+    const next = [...items];
+    const [item] = next.splice(index, 1);
+    next.splice(target, 0, item);
+    return next;
+  }
+
+  return items.map((item) =>
+    item.kind === "group" ? { ...item, items: moveFilterItem(item.items, id, direction) } : item
+  );
+}
+
 export function createSortCriterion(id: string, column: string, dir: TableSortDir = "asc"): TableSortItem {
   return { id, column, dir };
 }

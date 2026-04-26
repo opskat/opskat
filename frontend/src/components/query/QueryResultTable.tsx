@@ -569,6 +569,20 @@ export function QueryResultTable({
     setCtxMenu(null);
   }, [columnTypes, ctxMenu]);
 
+  const handleOpenDateEditorForCell = useCallback(
+    (rowIdx: number, col: string, value: unknown) => {
+      const mode = getDateEditMode(col, columnTypes?.[col], value);
+      if (!mode) return;
+      setDateEditor({
+        rowIdx,
+        col,
+        mode,
+        value: formatDateToInputValue(value, mode),
+      });
+    },
+    [columnTypes]
+  );
+
   const handleCommitDateEditor = useCallback(() => {
     if (!dateEditor) return;
     setCellValueHandler?.({
@@ -967,6 +981,9 @@ export function QueryResultTable({
                     const isEditing = editingCell === ck;
                     const isSelected = selectedCell?.origIdx === origIdx && selectedCell?.col === col;
                     const width = colWidths[col];
+                    const dateModeForCell = getDateEditMode(col, columnTypes?.[col], displayValue);
+                    const showDateAction =
+                      editable && isSelected && !isEditing && !!dateModeForCell && !!setCellValueHandler;
 
                     const focusClass = isEditing
                       ? "ring-2 ring-inset ring-primary bg-primary/5 relative z-10"
@@ -1014,12 +1031,31 @@ export function QueryResultTable({
                               }
                             }}
                           />
-                        ) : renderCell ? (
-                          renderCell(displayValue, { rowIdx: origIdx, col })
-                        ) : displayValue == null ? (
-                          <span className="text-muted-foreground italic">NULL</span>
                         ) : (
-                          <span className="truncate block">{cellValueToText(displayValue)}</span>
+                          <div className="flex min-w-0 items-center gap-1">
+                            <div className="min-w-0 flex-1">
+                              {renderCell ? (
+                                renderCell(displayValue, { rowIdx: origIdx, col })
+                              ) : displayValue == null ? (
+                                <span className="text-muted-foreground italic">NULL</span>
+                              ) : (
+                                <span className="truncate block">{cellValueToText(displayValue)}</span>
+                              )}
+                            </div>
+                            {showDateAction && (
+                              <button
+                                type="button"
+                                className="flex h-6 w-7 shrink-0 items-center justify-center rounded bg-primary text-primary-foreground hover:bg-primary/90"
+                                title={t("query.openDateTimePicker")}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleOpenDateEditorForCell(origIdx, col, displayValue);
+                                }}
+                              >
+                                <MoreHorizontal className="h-4 w-4" />
+                              </button>
+                            )}
+                          </div>
                         )}
                       </td>
                     );

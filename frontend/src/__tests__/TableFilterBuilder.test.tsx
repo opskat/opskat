@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TableFilterBuilder } from "@/components/query/TableFilterBuilder";
 import { createFilterCondition, type TableFilterItem, type TableSortItem } from "@/lib/tableFilter";
@@ -80,6 +80,30 @@ describe("TableFilterBuilder", () => {
     expect(group).toMatchObject({ kind: "group" });
     if (group.kind !== "group") throw new Error("expected group");
     expect(group.items[0]).toMatchObject({ kind: "condition", column: "email" });
+  });
+
+  it("opens a filter row context menu and deletes one condition", async () => {
+    const user = userEvent.setup();
+    const filters: TableFilterItem[] = [createFilterCondition("f-id", "id"), createFilterCondition("f-email", "email")];
+    const onChange = vi.fn();
+
+    render(
+      <TableFilterBuilder
+        columns={["id", "email", "name"]}
+        rows={[]}
+        filters={filters}
+        sorts={[]}
+        driver="mysql"
+        onChange={onChange}
+        onSortsChange={vi.fn()}
+        onApply={vi.fn()}
+      />
+    );
+
+    fireEvent.contextMenu(screen.getByTestId("filter-item-f-id"), { clientX: 20, clientY: 30 });
+    await user.click(screen.getByText("query.deleteFilterItem"));
+
+    expect(onChange).toHaveBeenCalledWith([expect.objectContaining({ id: "f-email" })]);
   });
 
   it("adds sort criteria and toggles sort direction from the field suffix control", async () => {

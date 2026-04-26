@@ -323,6 +323,32 @@ describe("QueryResultTable — cell context actions", () => {
     });
   });
 
+  it("opens the date editor from the selected date cell action", async () => {
+    const user = userEvent.setup();
+    const onSetCellValue = vi.fn();
+    render(
+      <QueryResultTable
+        columns={["id", "created_at"]}
+        rows={[{ id: 1, created_at: "2026-04-26 10:13:43" }]}
+        editable
+        columnTypes={{ created_at: "timestamp" }}
+        onSetCellValue={onSetCellValue}
+      />
+    );
+
+    await user.click(screen.getByText("2026-04-26 10:13:43"));
+    await user.click(screen.getByTitle("query.openDateTimePicker"));
+    const input = screen.getByLabelText("query.dateTimeValue");
+    fireEvent.change(input, { target: { value: "2026-04-28T11:12:13" } });
+    await user.click(screen.getByText("action.ok"));
+
+    expect(onSetCellValue).toHaveBeenCalledWith({
+      rowIdx: 0,
+      col: "created_at",
+      value: "2026-04-28 11:12:13",
+    });
+  });
+
   it("copy field name writes the current column name to clipboard", async () => {
     openMenu();
 

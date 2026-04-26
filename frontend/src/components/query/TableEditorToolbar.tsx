@@ -6,6 +6,7 @@ import {
   ChevronsRight,
   Download,
   Eye,
+  ListFilter,
   Loader2,
   Minus,
   Plus,
@@ -13,11 +14,11 @@ import {
   Save,
   Settings2,
   Square,
-  Trash2,
   Undo2,
   Upload,
   X,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Button,
@@ -43,7 +44,6 @@ export type { TableExportFormat };
 
 interface TableEditorToolbarProps {
   hasEdits: boolean;
-  hasSelectedRow: boolean;
   loading: boolean;
   submitting: boolean;
   canExport: boolean;
@@ -55,8 +55,9 @@ interface TableEditorToolbarProps {
   onExportFormatChange?: (format: TableExportFormat) => void;
   onVisibleColumnToggle?: (column: string) => void;
   onRowDensityChange?: (density: RowDensity) => void;
-  onAddRow: () => void;
-  onDeleteRow: () => void;
+  filterSortOpen: boolean;
+  filterSortActive?: boolean;
+  onToggleFilterSort: () => void;
   onSubmit: () => void;
   onDiscard: () => void;
   onRefresh: () => void;
@@ -68,7 +69,6 @@ interface TableEditorToolbarProps {
 
 export function TableEditorToolbar({
   hasEdits,
-  hasSelectedRow,
   loading,
   submitting,
   canExport,
@@ -80,8 +80,9 @@ export function TableEditorToolbar({
   onExportFormatChange,
   onVisibleColumnToggle,
   onRowDensityChange,
-  onAddRow,
-  onDeleteRow,
+  filterSortOpen,
+  filterSortActive = false,
+  onToggleFilterSort,
   onSubmit,
   onDiscard,
   onRefresh,
@@ -95,17 +96,15 @@ export function TableEditorToolbar({
 
   return (
     <div className="flex items-center gap-1.5 shrink-0">
-      <Button variant="ghost" size="icon-xs" title={t("query.addRow")} onClick={onAddRow}>
-        <Plus className="h-3.5 w-3.5" />
-      </Button>
       <Button
-        variant="ghost"
+        variant={filterSortOpen ? "secondary" : "ghost"}
         size="icon-xs"
-        title={t("query.deleteRecord")}
-        onClick={onDeleteRow}
-        disabled={!hasSelectedRow || submitting}
+        title={t("query.filterSort")}
+        aria-pressed={filterSortOpen}
+        className={filterSortActive && !filterSortOpen ? "text-primary" : undefined}
+        onClick={onToggleFilterSort}
       >
-        <Trash2 className="h-3.5 w-3.5" />
+        <ListFilter className="h-3.5 w-3.5" />
       </Button>
       <div className="mx-0.5 h-5 w-px bg-border" />
       <Button
@@ -213,6 +212,7 @@ interface TableDataStatusBarProps {
   totalRows: number | null;
   page: number;
   totalPages: number | null;
+  pageSize: number;
   pageInput: string;
   hasPrev: boolean;
   hasNext: boolean;
@@ -224,6 +224,7 @@ interface TableDataStatusBarProps {
   onStopLoading: () => void;
   onPageInputChange: (value: string) => void;
   onPageInputConfirm: () => void;
+  onPageSizeChange: (value: number) => void;
   onFirstPage: () => void;
   onPreviousPage: () => void;
   onNextPage: () => void;
@@ -240,6 +241,7 @@ export function TableDataStatusBar({
   totalRows,
   page,
   totalPages,
+  pageSize,
   pageInput,
   hasPrev,
   hasNext,
@@ -251,6 +253,7 @@ export function TableDataStatusBar({
   onStopLoading,
   onPageInputChange,
   onPageInputConfirm,
+  onPageSizeChange,
   onFirstPage,
   onPreviousPage,
   onNextPage,
@@ -262,6 +265,23 @@ export function TableDataStatusBar({
 }: TableDataStatusBarProps) {
   const { t } = useTranslation();
   const hasPendingEdits = pendingEditCount > 0;
+  const [pageSizeDraft, setPageSizeDraft] = useState(String(pageSize));
+
+  useEffect(() => {
+    setPageSizeDraft(String(pageSize));
+  }, [pageSize]);
+
+  const commitPageSize = () => {
+    const next = Math.max(1, Math.min(100000, Math.floor(Number(pageSizeDraft))));
+    if (!Number.isFinite(next)) {
+      setPageSizeDraft(String(pageSize));
+      return;
+    }
+    setPageSizeDraft(String(next));
+    if (next !== pageSize) onPageSizeChange(next);
+  };
+
+  const actionTone = "text-foreground disabled:text-muted-foreground disabled:opacity-35";
 
   return (
     <div className="flex h-9 items-center gap-2 border-t border-border bg-muted/30 px-2 shrink-0">
@@ -269,6 +289,7 @@ export function TableDataStatusBar({
         <Button
           variant="ghost"
           size="icon-xs"
+          className={actionTone}
           onClick={onAddRow}
           disabled={loading || submitting}
           title={t("query.addRow")}
@@ -278,6 +299,7 @@ export function TableDataStatusBar({
         <Button
           variant="ghost"
           size="icon-xs"
+          className={actionTone}
           onClick={onDeleteRow}
           disabled={!hasSelectedRow || loading || submitting}
           title={t("query.deleteRecord")}
@@ -287,6 +309,7 @@ export function TableDataStatusBar({
         <Button
           variant="ghost"
           size="icon-xs"
+          className={actionTone}
           onClick={onApplyChanges}
           disabled={!hasPendingEdits || loading || submitting}
           title={t("query.applyChanges")}
@@ -296,18 +319,27 @@ export function TableDataStatusBar({
         <Button
           variant="ghost"
           size="icon-xs"
+          className={actionTone}
           onClick={onDiscardChanges}
           disabled={!hasPendingEdits || loading || submitting}
           title={t("query.discardChanges")}
         >
           <X className="h-3.5 w-3.5" />
         </Button>
-        <Button variant="ghost" size="icon-xs" onClick={onRefresh} disabled={loading} title={refreshTitle}>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className={actionTone}
+          onClick={onRefresh}
+          disabled={loading}
+          title={refreshTitle}
+        >
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
         </Button>
         <Button
           variant="ghost"
           size="icon-xs"
+          className={actionTone}
           onClick={onStopLoading}
           disabled={!loading}
           title={t("query.stopLoading")}
@@ -334,6 +366,7 @@ export function TableDataStatusBar({
         <Button
           variant="ghost"
           size="icon-xs"
+          className={actionTone}
           disabled={!hasPrev || loading}
           onClick={onFirstPage}
           title={t("query.firstPage")}
@@ -343,6 +376,7 @@ export function TableDataStatusBar({
         <Button
           variant="ghost"
           size="icon-xs"
+          className={actionTone}
           disabled={!hasPrev || loading}
           onClick={onPreviousPage}
           title={t("query.prevPage")}
@@ -362,6 +396,7 @@ export function TableDataStatusBar({
         <Button
           variant="ghost"
           size="icon-xs"
+          className={actionTone}
           disabled={!hasNext || loading}
           onClick={onNextPage}
           title={t("query.nextPage")}
@@ -372,6 +407,7 @@ export function TableDataStatusBar({
           <Button
             variant="ghost"
             size="icon-xs"
+            className={actionTone}
             disabled={!hasNext || loading}
             onClick={onLastPage}
             title={t("query.lastPage")}
@@ -379,6 +415,30 @@ export function TableDataStatusBar({
             <ChevronsRight className="h-3.5 w-3.5" />
           </Button>
         )}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon-xs" className={actionTone} title={t("query.tableFooterSettings")}>
+              <Settings2 className="h-3.5 w-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-52 p-3">
+            <label className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">{t("query.pageSize")}</span>
+              <Input
+                aria-label={t("query.pageSize")}
+                className="h-7 text-xs"
+                inputMode="numeric"
+                value={pageSizeDraft}
+                onChange={(event) => setPageSizeDraft(event.target.value)}
+                onBlur={commitPageSize}
+                onKeyDown={(event) => {
+                  event.stopPropagation();
+                  if (event.key === "Enter") commitPageSize();
+                }}
+              />
+            </label>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   );

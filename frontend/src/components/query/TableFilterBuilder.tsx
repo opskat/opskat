@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useState } from "react";
-import { ArrowDownNarrowWide, ArrowUpNarrowWide, Check, Plus, Search } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { ArrowDown, ArrowDownNarrowWide, ArrowUp, ArrowUpNarrowWide, Check, Plus, Search, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button, Input, Popover, PopoverContent, PopoverTrigger, ScrollArea } from "@opskat/ui";
 import { cellValueToText } from "@/lib/cellValue";
@@ -8,9 +9,13 @@ import {
   addFilterGroup,
   addSortCriterion,
   createFilterCondition,
+  moveFilterItem,
   pickNextFilterColumn,
+  removeFilterItem,
+  setAllFilterItemsEnabled,
   toggleFilterJoin,
   toggleSortDirection,
+  unwrapFilterGroup,
   updateFilterGroupItems,
   updateFilterItem,
   updateSortCriterion,
@@ -18,6 +23,18 @@ import {
   type TableFilterItem,
   type TableSortItem,
 } from "@/lib/tableFilter";
+
+const FILTER_ACTION_BUTTON_CLASS =
+  "border-primary/70 text-primary hover:bg-primary/10 disabled:border-border disabled:text-muted-foreground disabled:opacity-40";
+const FILTER_MENU_ITEM_CLASS =
+  "flex w-full cursor-default items-center gap-2 rounded-sm px-3 py-1.5 text-left text-sm outline-hidden hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-40";
+
+type FilterContextTarget = {
+  id: string;
+  kind: "condition" | "group";
+  x: number;
+  y: number;
+};
 
 interface TableFilterBuilderProps {
   columns: string[];
@@ -73,6 +90,9 @@ export function TableFilterBuilder({
   onApply,
 }: TableFilterBuilderProps) {
   const { t } = useTranslation();
+  const [selectedFilterId, setSelectedFilterId] = useState<string | null>(null);
+  const [ctxTarget, setCtxTarget] = useState<FilterContextTarget | null>(null);
+  const ctxMenuRef = useRef<HTMLDivElement>(null);
 
   const addCondition = useCallback(() => {
     onChange(addFilterCondition(filters, columns, driver));
@@ -80,18 +100,89 @@ export function TableFilterBuilder({
   const addSort = useCallback(() => {
     onSortsChange(addSortCriterion(sorts, columns, driver));
   }, [columns, driver, onSortsChange, sorts]);
+  const addGroup = useCallback(() => {
+    onChange(addFilterGroup(filters, columns, driver));
+  }, [columns, driver, filters, onChange]);
+
+  useEffect(() => {
+    if (!ctxTarget) return;
+    const close = () => setCtxTarget(null);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    const onPointer = (event: PointerEvent) => {
+      if (ctxMenuRef.current?.contains(event.target as Node)) return;
+      close();
+    };
+    const timer = setTimeout(() => document.addEventListener("pointerdown", onPointer, true), 50);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("pointerdown", onPointer, true);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [ctxTarget]);
+
+  const openContextMenu = useCallback((target: FilterContextTarget) => {
+    setSelectedFilterId(target.id);
+    setCtxTarget(target);
+  }, []);
+
+  const closeContextMenu = useCallback(() => setCtxTarget(null), []);
+
+  const handleDeleteFilterItem = useCallback(() => {
+    if (!ctxTarget) return;
+    onChange(removeFilterItem(filters, ctxTarget.id));
+    setSelectedFilterId(null);
+    setCtxTarget(null);
+  }, [ctxTarget, filters, onChange]);
+
+  const handleUnwrapGroup = useCallback(() => {
+    if (!ctxTarget || ctxTarget.kind !== "group") return;
+    onChange(unwrapFilterGroup(filters, ctxTarget.id));
+    setSelectedFilterId(null);
+    setCtxTarget(null);
+  }, [ctxTarget, filters, onChange]);
+
+  const handleMoveFilterItem = useCallback(
+    (direction: "up" | "down") => {
+      if (!ctxTarget) return;
+      onChange(moveFilterItem(filters, ctxTarget.id, direction));
+      setCtxTarget(null);
+    },
+    [ctxTarget, filters, onChange]
+  );
 
   return (
     <div className="shrink-0 border-b border-border bg-background">
       <div className="px-3 pt-2 pb-1">
         <div className="mb-1.5 flex items-center gap-3">
           <span className="text-sm font-semibold text-foreground">{t("query.filterBuilderTitle")}</span>
+          <ArrowUp className="h-4 w-4 text-muted-foreground" />
+          <ArrowDown className="h-4 w-4 text-muted-foreground" />
         </div>
         <div className="min-h-[132px] space-y-1">
           {filters.length === 0 ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Button variant="outline" size="icon-xs" title={t("query.addFilter")} onClick={addCondition}>
+              <Button
+                variant="outline"
+                size="icon-xs"
+                className={FILTER_ACTION_BUTTON_CLASS}
+                title={t("query.addFilter")}
+                onClick={addCondition}
+                disabled={columns.length === 0}
+              >
                 <Plus className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon-xs"
+                className={FILTER_ACTION_BUTTON_CLASS}
+                title={t("query.addFilterGroup")}
+                onClick={addGroup}
+                disabled={columns.length === 0}
+              >
+                ()+
               </Button>
               <span>{t("query.filterBuilderEmpty")}</span>
             </div>
@@ -103,6 +194,9 @@ export function TableFilterBuilder({
               driver={driver}
               rootItems={filters}
               onChange={onChange}
+              selectedId={selectedFilterId}
+              onSelect={setSelectedFilterId}
+              onContextMenu={openContextMenu}
             />
           )}
         </div>
@@ -122,6 +216,116 @@ export function TableFilterBuilder({
           {t("query.applyFilterSort")}
         </Button>
       </div>
+      {ctxTarget &&
+        createPortal(
+          <div
+            ref={ctxMenuRef}
+            className="z-50 min-w-56 overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-lg"
+            style={{ position: "fixed", top: ctxTarget.y + 2, left: ctxTarget.x + 2 }}
+            role="menu"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              className={FILTER_MENU_ITEM_CLASS}
+              onClick={() => {
+                addCondition();
+                closeContextMenu();
+              }}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {t("query.addFilter")}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className={FILTER_MENU_ITEM_CLASS}
+              onClick={() => {
+                addGroup();
+                closeContextMenu();
+              }}
+            >
+              <span className="w-3.5 text-center">()</span>
+              {t("query.addFilterGroup")}
+            </button>
+            <div className="my-1 h-px bg-border" />
+            <button type="button" role="menuitem" className={FILTER_MENU_ITEM_CLASS} onClick={handleDeleteFilterItem}>
+              <Trash2 className="h-3.5 w-3.5" />
+              {t("query.deleteFilterItem")}
+            </button>
+            {ctxTarget.kind === "group" && (
+              <button type="button" role="menuitem" className={FILTER_MENU_ITEM_CLASS} onClick={handleUnwrapGroup}>
+                {t("query.deleteFilterGroupOnly")}
+              </button>
+            )}
+            <button
+              type="button"
+              role="menuitem"
+              className={FILTER_MENU_ITEM_CLASS}
+              onClick={() => {
+                onChange([]);
+                closeContextMenu();
+              }}
+            >
+              {t("query.clearAllFilters")}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className={FILTER_MENU_ITEM_CLASS}
+              onClick={() => {
+                onChange([]);
+                onSortsChange([]);
+                closeContextMenu();
+              }}
+            >
+              {t("query.clearFilterSort")}
+            </button>
+            <div className="my-1 h-px bg-border" />
+            <button
+              type="button"
+              role="menuitem"
+              className={FILTER_MENU_ITEM_CLASS}
+              onClick={() => handleMoveFilterItem("up")}
+            >
+              <ArrowUp className="h-3.5 w-3.5" />
+              {t("query.moveFilterUp")}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className={FILTER_MENU_ITEM_CLASS}
+              onClick={() => handleMoveFilterItem("down")}
+            >
+              <ArrowDown className="h-3.5 w-3.5" />
+              {t("query.moveFilterDown")}
+            </button>
+            <div className="my-1 h-px bg-border" />
+            <button
+              type="button"
+              role="menuitem"
+              className={FILTER_MENU_ITEM_CLASS}
+              onClick={() => {
+                onChange(setAllFilterItemsEnabled(filters, true));
+                closeContextMenu();
+              }}
+            >
+              {t("query.enableAllFilters")}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className={FILTER_MENU_ITEM_CLASS}
+              onClick={() => {
+                onChange(setAllFilterItemsEnabled(filters, false));
+                closeContextMenu();
+              }}
+            >
+              {t("query.disableAllFilters")}
+            </button>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
@@ -171,9 +375,23 @@ interface FilterItemsProps {
   driver?: string;
   groupId?: string;
   onChange: (items: TableFilterItem[]) => void;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  onContextMenu: (target: FilterContextTarget) => void;
 }
 
-function FilterItems({ columns, rows, items, rootItems, driver, groupId, onChange }: FilterItemsProps) {
+function FilterItems({
+  columns,
+  rows,
+  items,
+  rootItems,
+  driver,
+  groupId,
+  onChange,
+  selectedId,
+  onSelect,
+  onContextMenu,
+}: FilterItemsProps) {
   const { t } = useTranslation();
 
   const addSibling = useCallback(() => {
@@ -202,10 +420,24 @@ function FilterItems({ columns, rows, items, rootItems, driver, groupId, onChang
   if (items.length === 0) {
     return (
       <div className="ml-4 flex items-center gap-2 text-xs text-muted-foreground">
-        <Button variant="outline" size="icon-xs" title={t("query.addFilter")} onClick={addSibling}>
+        <Button
+          variant="outline"
+          size="icon-xs"
+          className={FILTER_ACTION_BUTTON_CLASS}
+          title={t("query.addFilter")}
+          onClick={addSibling}
+          disabled={columns.length === 0}
+        >
           <Plus className="h-3.5 w-3.5" />
         </Button>
-        <Button variant="outline" size="icon-xs" title={t("query.addFilterGroup")} onClick={addSiblingGroup}>
+        <Button
+          variant="outline"
+          size="icon-xs"
+          className={FILTER_ACTION_BUTTON_CLASS}
+          title={t("query.addFilterGroup")}
+          onClick={addSiblingGroup}
+          disabled={columns.length === 0}
+        >
           ()+
         </Button>
         <span>{t("query.filterBuilderEmpty")}</span>
@@ -227,10 +459,32 @@ function FilterItems({ columns, rows, items, rootItems, driver, groupId, onChang
             onChange={onChange}
             onAddAfter={addSibling}
             onAddGroupAfter={addSiblingGroup}
+            selected={selectedId === item.id}
+            onSelect={() => onSelect(item.id)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              onContextMenu({ id: item.id, kind: "condition", x: event.clientX, y: event.clientY });
+            }}
           />
         ) : (
-          <div key={item.id} className="space-y-1">
+          <div
+            key={item.id}
+            data-testid={`filter-item-${item.id}`}
+            className={`space-y-1 rounded-sm px-1 py-0.5 ${selectedId === item.id ? "bg-primary/10" : ""}`}
+            onClick={() => onSelect(item.id)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              onContextMenu({ id: item.id, kind: "group", x: event.clientX, y: event.clientY });
+            }}
+          >
             <div className="flex items-center gap-2 text-sm text-foreground">
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-primary"
+                checked
+                readOnly
+                aria-label={t("query.filterEnabled")}
+              />
               <span className="font-mono">(</span>
             </div>
             <div className="ml-5">
@@ -242,6 +496,9 @@ function FilterItems({ columns, rows, items, rootItems, driver, groupId, onChang
                 driver={driver}
                 groupId={item.id}
                 onChange={onChange}
+                selectedId={selectedId}
+                onSelect={onSelect}
+                onContextMenu={onContextMenu}
               />
             </div>
             <div className="flex items-center gap-2 text-sm text-foreground">
@@ -272,6 +529,9 @@ interface FilterConditionRowProps {
   onChange: (items: TableFilterItem[]) => void;
   onAddAfter: () => void;
   onAddGroupAfter: () => void;
+  selected: boolean;
+  onSelect: () => void;
+  onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => void;
 }
 
 function FilterConditionRow({
@@ -283,6 +543,9 @@ function FilterConditionRow({
   onChange,
   onAddAfter,
   onAddGroupAfter,
+  selected,
+  onSelect,
+  onContextMenu,
 }: FilterConditionRowProps) {
   const { t } = useTranslation();
 
@@ -293,7 +556,12 @@ function FilterConditionRow({
   );
 
   return (
-    <div className="flex items-center gap-2 text-sm">
+    <div
+      data-testid={`filter-item-${item.id}`}
+      className={`flex items-center gap-2 rounded-sm px-1 py-0.5 text-sm ${selected ? "bg-primary/10" : ""}`}
+      onClick={onSelect}
+      onContextMenu={onContextMenu}
+    >
       <input
         type="checkbox"
         className="h-4 w-4 accent-primary"
@@ -304,7 +572,7 @@ function FilterConditionRow({
       <select
         value={item.column}
         onChange={(event) => setItem({ column: event.target.value, value: undefined })}
-        className="h-7 rounded border-0 bg-transparent px-1 text-sm font-medium text-primary outline-none"
+        className="h-7 min-w-20 appearance-none rounded-none border-0 bg-transparent px-1 text-sm font-medium text-primary shadow-none outline-none hover:bg-transparent focus:bg-transparent focus:ring-0"
         aria-label={t("query.filterColumnName")}
       >
         {columns.map((column) => (
@@ -315,10 +583,24 @@ function FilterConditionRow({
       </select>
       <span className="text-muted-foreground">=</span>
       <FilterValuePicker value={item.value} suggestions={suggestions} onChange={(value) => setItem({ value })} />
-      <Button variant="outline" size="icon-xs" title={t("query.addFilter")} onClick={onAddAfter}>
+      <Button
+        variant="outline"
+        size="icon-xs"
+        className={FILTER_ACTION_BUTTON_CLASS}
+        title={t("query.addFilter")}
+        onClick={onAddAfter}
+        disabled={columns.length === 0}
+      >
         <Plus className="h-3.5 w-3.5" />
       </Button>
-      <Button variant="outline" size="icon-xs" title={t("query.addFilterGroup")} onClick={onAddGroupAfter}>
+      <Button
+        variant="outline"
+        size="icon-xs"
+        className={FILTER_ACTION_BUTTON_CLASS}
+        title={t("query.addFilterGroup")}
+        onClick={onAddGroupAfter}
+        disabled={columns.length === 0}
+      >
         ()+
       </Button>
       {!isLast && (

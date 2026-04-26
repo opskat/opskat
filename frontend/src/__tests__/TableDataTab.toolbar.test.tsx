@@ -8,13 +8,12 @@ describe("TableDataTab toolbar", () => {
     render(
       <TableEditorToolbar
         hasEdits={false}
-        hasSelectedRow={false}
         loading={false}
         submitting={false}
         canExport
         canImport
-        onAddRow={vi.fn()}
-        onDeleteRow={vi.fn()}
+        filterSortOpen={false}
+        onToggleFilterSort={vi.fn()}
         onSubmit={vi.fn()}
         onDiscard={vi.fn()}
         onRefresh={vi.fn()}
@@ -25,8 +24,9 @@ describe("TableDataTab toolbar", () => {
       />
     );
 
-    expect(screen.getByTitle("query.addRow")).toBeEnabled();
-    expect(screen.getByTitle("query.deleteRecord")).toBeDisabled();
+    expect(screen.getByTitle("query.filterSort")).toBeEnabled();
+    expect(screen.queryByTitle("query.addRow")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("query.deleteRecord")).not.toBeInTheDocument();
     expect(screen.getByTitle("query.submitEdits")).toBeDisabled();
     expect(screen.getByTitle("query.discardEdits")).toBeDisabled();
     expect(screen.getByTitle("query.previewSql")).toBeDisabled();
@@ -36,23 +36,22 @@ describe("TableDataTab toolbar", () => {
     expect(screen.getByTitle("query.exportData")).toBeEnabled();
   });
 
-  it("enables selected-row and pending-edit actions and forwards toolbar handlers", async () => {
+  it("enables pending-edit actions and forwards toolbar handlers", async () => {
     const user = userEvent.setup();
-    const onDeleteRow = vi.fn();
     const onSubmit = vi.fn();
     const onDiscard = vi.fn();
     const onPreviewSql = vi.fn();
+    const onToggleFilterSort = vi.fn();
 
     render(
       <TableEditorToolbar
         hasEdits
-        hasSelectedRow
         loading={false}
         submitting={false}
         canExport
         canImport
-        onAddRow={vi.fn()}
-        onDeleteRow={onDeleteRow}
+        filterSortOpen={false}
+        onToggleFilterSort={onToggleFilterSort}
         onSubmit={onSubmit}
         onDiscard={onDiscard}
         onRefresh={vi.fn()}
@@ -63,12 +62,12 @@ describe("TableDataTab toolbar", () => {
       />
     );
 
-    await user.click(screen.getByTitle("query.deleteRecord"));
+    await user.click(screen.getByTitle("query.filterSort"));
     await user.click(screen.getByTitle("query.submitEdits"));
     await user.click(screen.getByTitle("query.discardEdits"));
     await user.click(screen.getByTitle("query.previewSql"));
 
-    expect(onDeleteRow).toHaveBeenCalledOnce();
+    expect(onToggleFilterSort).toHaveBeenCalledOnce();
     expect(onSubmit).toHaveBeenCalledOnce();
     expect(onDiscard).toHaveBeenCalledOnce();
     expect(onPreviewSql).toHaveBeenCalledOnce();
@@ -86,6 +85,7 @@ describe("TableDataTab toolbar", () => {
         totalRows={12}
         page={0}
         totalPages={3}
+        pageSize={1000}
         pageInput="1"
         hasPrev={false}
         hasNext
@@ -97,6 +97,7 @@ describe("TableDataTab toolbar", () => {
         onStopLoading={vi.fn()}
         onPageInputChange={vi.fn()}
         onPageInputConfirm={vi.fn()}
+        onPageSizeChange={vi.fn()}
         onFirstPage={vi.fn()}
         onPreviousPage={vi.fn()}
         onNextPage={vi.fn()}
@@ -132,6 +133,7 @@ describe("TableDataTab toolbar", () => {
         totalRows={12}
         page={0}
         totalPages={3}
+        pageSize={1000}
         pageInput="1"
         hasPrev={false}
         hasNext
@@ -143,6 +145,7 @@ describe("TableDataTab toolbar", () => {
         onStopLoading={vi.fn()}
         onPageInputChange={vi.fn()}
         onPageInputConfirm={vi.fn()}
+        onPageSizeChange={vi.fn()}
         onFirstPage={vi.fn()}
         onPreviousPage={vi.fn()}
         onNextPage={vi.fn()}
@@ -159,5 +162,48 @@ describe("TableDataTab toolbar", () => {
 
     expect(onApplyChanges).toHaveBeenCalledOnce();
     expect(onDiscardChanges).toHaveBeenCalledOnce();
+  });
+
+  it("changes the footer page limit from the settings menu", async () => {
+    const user = userEvent.setup();
+    const onPageSizeChange = vi.fn();
+
+    render(
+      <TableDataStatusBar
+        pendingEditCount={0}
+        sqlSummary=""
+        totalRows={1200}
+        page={0}
+        totalPages={2}
+        pageSize={1000}
+        pageInput="1"
+        hasPrev={false}
+        hasNext
+        hasSelectedRow={false}
+        submitting={false}
+        loading={false}
+        refreshTitle="query.refreshTable"
+        onRefresh={vi.fn()}
+        onStopLoading={vi.fn()}
+        onPageInputChange={vi.fn()}
+        onPageInputConfirm={vi.fn()}
+        onPageSizeChange={onPageSizeChange}
+        onFirstPage={vi.fn()}
+        onPreviousPage={vi.fn()}
+        onNextPage={vi.fn()}
+        onLastPage={vi.fn()}
+        onAddRow={vi.fn()}
+        onDeleteRow={vi.fn()}
+        onApplyChanges={vi.fn()}
+        onDiscardChanges={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByTitle("query.tableFooterSettings"));
+    const limitInput = screen.getByLabelText("query.pageSize");
+    await user.clear(limitInput);
+    await user.type(limitInput, "500{Enter}");
+
+    expect(onPageSizeChange).toHaveBeenCalledWith(500);
   });
 });
