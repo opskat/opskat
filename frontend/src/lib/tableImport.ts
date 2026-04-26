@@ -4,6 +4,14 @@ export type Delimiter = "," | "\t";
 export type ImportNullStrategy = "empty-is-empty-string" | "empty-is-null" | "literal-null";
 export type ImportDataFormat = "text" | "csv" | "json" | "xml";
 export type ImportFieldDelimiter = "," | "\t" | ";" | "|" | " ";
+export type ImportMode = "append" | "update" | "append-update" | "append-skip" | "delete" | "copy";
+
+export interface ImportAdvancedOptions {
+  extendedInsert?: boolean;
+  maxStatementSizeKb?: number;
+  emptyStringAsNull?: boolean;
+  ignoreForeignKeyConstraint?: boolean;
+}
 
 export interface ParsedDelimitedTable {
   headers: string[];
@@ -27,6 +35,9 @@ export interface BuildImportInsertSqlArgs {
   rows: string[][];
   mapping: Record<string, string>;
   nullStrategy: ImportNullStrategy;
+  mode?: ImportMode;
+  primaryKeys?: string[];
+  advancedOptions?: ImportAdvancedOptions;
   driver?: string;
 }
 
@@ -218,14 +229,62 @@ function importValue(cell: string, nullStrategy: ImportNullStrategy): unknown {
   return cell;
 }
 
+function whereClauseForRow(
+  row: string[],
+  mapped: { source: string; index: number; target: string }[],
+  nullStrategy: ImportNullStrategy,
+  driver?: string
+): string {
+  return mapped
+    .map((item) => {
+      const value = importValue(row[item.index] ?? "", nullStrategy);
+      const column = quoteIdent(item.target, driver);
+      return value == null ? `${column} IS NULL` : `${column} = ${sqlQuote(value)}`;
+    })
+    .join(" AND ");
+}
+
+function chunkExtendedInsertStatements({
+  insertPrefix,
+  valuesSql,
+  suffix,
+  maxStatementSize,
+}: {
+  insertPrefix: string;
+  valuesSql: string[];
+  suffix: string;
+  maxStatementSize: number;
+}): string[] {
+  const statements: string[] = [];
+  let chunk: string[] = [];
+
+  for (const valueSql of valuesSql) {
+    const candidate = [...chunk, valueSql];
+    const statement = `${insertPrefix} ${candidate.join(", ")}${suffix};`;
+    if (chunk.length > 0 && statement.length > maxStatementSize) {
+      statements.push(`${insertPrefix} ${chunk.join(", ")}${suffix};`);
+      chunk = [valueSql];
+    } else {
+      chunk = candidate;
+    }
+  }
+
+  if (chunk.length > 0) statements.push(`${insertPrefix} ${chunk.join(", ")}${suffix};`);
+  return statements;
+}
+
 export function buildImportInsertSql({
   tableName,
   headers,
   rows,
   mapping,
   nullStrategy,
+  mode = "append",
+  primaryKeys = [],
+  advancedOptions,
   driver,
 }: BuildImportInsertSqlArgs): string[] {
+  const effectiveNullStrategy = advancedOptions?.emptyStringAsNull ? "empty-is-null" : nullStrategy;
   const mapped = headers
     .map((source, index) => ({ source, index, target: mapping[source] }))
     .filter((item): item is { source: string; index: number; target: string } => !!item.target);
@@ -234,9 +293,79 @@ export function buildImportInsertSql({
 
   const quotedTable = quoteTableName(tableName, driver);
   const columnSql = mapped.map((item) => quoteIdent(item.target, driver)).join(", ");
+  const primaryKeySet = new Set(primaryKeys);
+  const keyMapped = mapped.filter((item) => primaryKeySet.has(item.target));
+  const valueMapped = mapped.filter((item) => !primaryKeySet.has(item.target));
 
-  return rows.map((row) => {
-    const values = mapped.map((item) => sqlQuote(importValue(row[item.index] ?? "", nullStrategy))).join(", ");
-    return `INSERT INTO ${quotedTable} (${columnSql}) VALUES (${values});`;
-  });
+  if (
+    (mode === "update" || mode === "append-update" || mode === "append-skip" || mode === "delete") &&
+    keyMapped.length === 0
+  ) {
+    return [];
+  }
+
+  const rowValuesSql = rows.map(
+    (row) => `(${mapped.map((item) => sqlQuote(importValue(row[item.index] ?? "", effectiveNullStrategy))).join(", ")})`
+  );
+
+  const buildInsertStatements = (insertKeyword: string, suffix = "") => {
+    if (advancedOptions?.extendedInsert) {
+      return chunkExtendedInsertStatements({
+        insertPrefix: `${insertKeyword} ${quotedTable} (${columnSql}) VALUES`,
+        valuesSql: rowValuesSql,
+        suffix,
+        maxStatementSize: Math.max(1, advancedOptions.maxStatementSizeKb ?? 1024) * 1024,
+      });
+    }
+
+    return rowValuesSql.map((values) => `${insertKeyword} ${quotedTable} (${columnSql}) VALUES ${values}${suffix};`);
+  };
+
+  let statements: string[];
+  if (mode === "update") {
+    if (valueMapped.length === 0) return [];
+    statements = rows.map((row) => {
+      const setSql = valueMapped
+        .map(
+          (item) =>
+            `${quoteIdent(item.target, driver)} = ${sqlQuote(importValue(row[item.index] ?? "", effectiveNullStrategy))}`
+        )
+        .join(", ");
+      return `UPDATE ${quotedTable} SET ${setSql} WHERE ${whereClauseForRow(row, keyMapped, effectiveNullStrategy, driver)};`;
+    });
+  } else if (mode === "append-update") {
+    const insertPrefix = "INSERT INTO";
+    const updateSql =
+      driver === "postgresql"
+        ? ` ON CONFLICT (${keyMapped.map((item) => quoteIdent(item.target, driver)).join(", ")}) DO UPDATE SET ${valueMapped
+            .map((item) => `${quoteIdent(item.target, driver)} = excluded.${quoteIdent(item.target, driver)}`)
+            .join(", ")}`
+        : ` ON DUPLICATE KEY UPDATE ${valueMapped
+            .map((item) => `${quoteIdent(item.target, driver)} = VALUES(${quoteIdent(item.target, driver)})`)
+            .join(", ")}`;
+    statements =
+      valueMapped.length === 0
+        ? buildInsertStatements("INSERT IGNORE INTO")
+        : buildInsertStatements(insertPrefix, updateSql);
+  } else if (mode === "append-skip") {
+    if (driver === "postgresql") {
+      const suffix = ` ON CONFLICT (${keyMapped.map((item) => quoteIdent(item.target, driver)).join(", ")}) DO NOTHING`;
+      statements = buildInsertStatements("INSERT INTO", suffix);
+    } else {
+      statements = buildInsertStatements("INSERT IGNORE INTO");
+    }
+  } else if (mode === "delete") {
+    statements = rows.map(
+      (row) => `DELETE FROM ${quotedTable} WHERE ${whereClauseForRow(row, keyMapped, effectiveNullStrategy, driver)};`
+    );
+  } else {
+    statements = buildInsertStatements("INSERT INTO");
+    if (mode === "copy") statements = [`DELETE FROM ${quotedTable};`, ...statements];
+  }
+
+  if (advancedOptions?.ignoreForeignKeyConstraint && driver !== "postgresql") {
+    statements = ["SET FOREIGN_KEY_CHECKS = 0;", ...statements, "SET FOREIGN_KEY_CHECKS = 1;"];
+  }
+
+  return statements;
 }

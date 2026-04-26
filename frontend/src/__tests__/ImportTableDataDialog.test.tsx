@@ -5,7 +5,7 @@ import { ImportTableDataDialog } from "@/components/query/ImportTableDataDialog"
 import * as App from "../../wailsjs/go/app/App";
 
 describe("ImportTableDataDialog", () => {
-  async function walkCsvWizardToSummary(user: ReturnType<typeof userEvent.setup>) {
+  async function walkCsvWizardToMode(user: ReturnType<typeof userEvent.setup>) {
     await user.click(screen.getByLabelText("query.importTypeCsv"));
     await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
     const file = new File(["id,name\n1,Alice"], "users.csv", { type: "text/csv" });
@@ -14,6 +14,11 @@ describe("ImportTableDataDialog", () => {
     await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
     await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
     await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
+    await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
+  }
+
+  async function walkCsvWizardToSummary(user: ReturnType<typeof userEvent.setup>) {
+    await walkCsvWizardToMode(user);
     await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
   }
 
@@ -115,6 +120,40 @@ describe("ImportTableDataDialog", () => {
     expect(screen.getByRole("button", { name: "query.importWizardStart" })).toBeEnabled();
   });
 
+  it("shows import mode before summary and exposes advanced settings", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ImportTableDataDialog
+        open
+        onOpenChange={vi.fn()}
+        assetId={1}
+        database="appdb"
+        table="users"
+        columns={["id", "name"]}
+        primaryKeys={["id"]}
+        driver="mysql"
+        onSuccess={vi.fn()}
+      />
+    );
+
+    await walkCsvWizardToMode(user);
+
+    expect(screen.getByText("query.importModeIntro")).toBeInTheDocument();
+    expect(screen.getByLabelText("query.importModeAppend")).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: "query.importAdvancedSettings" }));
+
+    expect(screen.getByText("query.importAdvancedTitle")).toBeInTheDocument();
+    expect(screen.getByLabelText("query.importAdvancedExtendedInsert")).toBeChecked();
+    expect(screen.getByLabelText("query.importAdvancedContinueOnError")).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: "query.importAdvancedOk" }));
+    await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
+
+    expect(screen.getByText("query.importSummaryIntro")).toBeInTheDocument();
+  });
+
   it("walks through JSON import wizard and starts importing mapped rows", async () => {
     const user = userEvent.setup();
     vi.mocked(App.ExecuteSQL).mockResolvedValue(JSON.stringify({ affected_rows: 1 }));
@@ -149,6 +188,7 @@ describe("ImportTableDataDialog", () => {
     expect(await screen.findByText("query.importMappingIntro")).toBeInTheDocument();
     expect(screen.getAllByText("id").length).toBeGreaterThan(0);
     expect(screen.getAllByText("email").length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
     await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
 
     await user.click(screen.getByRole("button", { name: "query.importWizardStart" }));

@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
   Button,
   Dialog,
   DialogContent,
@@ -27,6 +34,7 @@ import {
   parseImportSourceText,
   type ImportDataFormat,
   type ImportFieldDelimiter,
+  type ImportMode,
   type ImportNullStrategy,
   type ParsedDelimitedTable,
 } from "@/lib/tableImport";
@@ -46,7 +54,7 @@ interface ImportTableDataDialogProps {
   onSuccess: () => void;
 }
 
-type WizardStep = "type" | "source" | "delimiter" | "options" | "mapping" | "summary";
+type WizardStep = "type" | "source" | "delimiter" | "options" | "mapping" | "mode" | "summary";
 type SourceItem = { id: string; name: string; kind: "file" | "url"; text: string };
 type ImportProgress = {
   processed: number;
@@ -57,7 +65,8 @@ type ImportProgress = {
   seconds: number;
 };
 
-const steps: WizardStep[] = ["type", "source", "delimiter", "options", "mapping", "summary"];
+const steps: WizardStep[] = ["type", "source", "delimiter", "options", "mapping", "mode", "summary"];
+const importModes: ImportMode[] = ["append", "update", "append-update", "append-skip", "delete", "copy"];
 const importFileRules: Record<ImportDataFormat, { extensions: string[]; mimes: string[] }> = {
   text: {
     extensions: [".txt", ".tsv"],
@@ -116,6 +125,16 @@ function nextAutoMapping(headers: string[], columns: string[]): Record<string, s
   return mapping;
 }
 
+function importModeNeedsPrimaryKey(mode: ImportMode): boolean {
+  return mode === "update" || mode === "append-update" || mode === "append-skip" || mode === "delete";
+}
+
+function importModeAffects(mode: ImportMode): keyof Pick<ImportProgress, "added" | "updated" | "deleted"> {
+  if (mode === "update") return "updated";
+  if (mode === "delete") return "deleted";
+  return "added";
+}
+
 export function ImportTableDataDialog({
   open,
   onOpenChange,
@@ -123,7 +142,7 @@ export function ImportTableDataDialog({
   database,
   table,
   columns,
-  primaryKeys: tablePrimaryKeys = [],
+  primaryKeys: tablePrimaryKeys,
   driver,
   onSubmittingChange,
   onSubmitStart,
@@ -155,8 +174,15 @@ export function ImportTableDataDialog({
   const [decimalSymbol, setDecimalSymbol] = useState(".");
   const [binaryEncoding, setBinaryEncoding] = useState("base64");
   const [mapping, setMapping] = useState<Record<string, string>>({});
-  const [primaryKeys, setPrimaryKeys] = useState<Set<string>>(new Set(tablePrimaryKeys));
+  const [primaryKeys, setPrimaryKeys] = useState<Set<string>>(new Set(tablePrimaryKeys ?? []));
   const [nullStrategy, setNullStrategy] = useState<ImportNullStrategy>("literal-null");
+  const [importMode, setImportMode] = useState<ImportMode>("append");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [extendedInsert, setExtendedInsert] = useState(true);
+  const [maxStatementSizeKb, setMaxStatementSizeKb] = useState(1024);
+  const [emptyStringAsNull, setEmptyStringAsNull] = useState(false);
+  const [ignoreForeignKeyConstraint, setIgnoreForeignKeyConstraint] = useState(false);
+  const [continueOnError, setContinueOnError] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [progress, setProgress] = useState<ImportProgress>({
@@ -175,8 +201,15 @@ export function ImportTableDataDialog({
     setUrlDraft("");
     setLogLines([]);
     setProgress({ processed: 0, added: 0, updated: 0, deleted: 0, error: 0, seconds: 0 });
-    setPrimaryKeys(new Set(tablePrimaryKeys));
-  }, [open]);
+    setPrimaryKeys(new Set(tablePrimaryKeys ?? []));
+    setImportMode("append");
+    setAdvancedOpen(false);
+    setExtendedInsert(true);
+    setMaxStatementSizeKb(1024);
+    setEmptyStringAsNull(false);
+    setIgnoreForeignKeyConstraint(false);
+    setContinueOnError(true);
+  }, [open, tablePrimaryKeys]);
 
   useEffect(() => {
     setSources([]);
@@ -219,6 +252,10 @@ export function ImportTableDataDialog({
   }, [columns, parsed.headers]);
 
   const tableName = driver === "postgresql" ? table : `${database}.${table}`;
+  const primaryKeyColumns = useMemo(
+    () => Array.from(primaryKeys).filter((column) => Object.values(mapping).includes(column)),
+    [mapping, primaryKeys]
+  );
   const statements = useMemo(
     () =>
       buildImportInsertSql({
@@ -227,12 +264,34 @@ export function ImportTableDataDialog({
         rows: parsed.rows,
         mapping,
         nullStrategy,
+        mode: importMode,
+        primaryKeys: primaryKeyColumns,
+        advancedOptions: {
+          extendedInsert,
+          maxStatementSizeKb,
+          emptyStringAsNull,
+          ignoreForeignKeyConstraint,
+        },
         driver,
       }),
-    [driver, mapping, nullStrategy, parsed.headers, parsed.rows, tableName]
+    [
+      driver,
+      emptyStringAsNull,
+      extendedInsert,
+      ignoreForeignKeyConstraint,
+      importMode,
+      mapping,
+      maxStatementSizeKb,
+      nullStrategy,
+      parsed.headers,
+      parsed.rows,
+      primaryKeyColumns,
+      tableName,
+    ]
   );
   const unmappedHeaders = parsed.headers.filter((header) => !mapping[header]);
   const hasMappedColumns = parsed.headers.length > unmappedHeaders.length;
+  const modeMissingPrimaryKey = importModeNeedsPrimaryKey(importMode) && primaryKeyColumns.length === 0;
   const step = steps[stepIndex];
   const isDelimitedFormat = format === "text" || format === "csv";
   const canNext =
@@ -240,7 +299,8 @@ export function ImportTableDataDialog({
     (step === "source" && sources.length > 0 && parsed.headers.length > 0) ||
     step === "delimiter" ||
     step === "options" ||
-    (step === "mapping" && hasMappedColumns);
+    (step === "mapping" && hasMappedColumns) ||
+    (step === "mode" && !modeMissingPrimaryKey && statements.length > 0);
   const canStart = step === "summary" && statements.length > 0 && !submitting;
 
   const handleFiles = useCallback(
@@ -290,6 +350,7 @@ export function ImportTableDataDialog({
     const nextLogLines = [
       "[IMP] Import start",
       `[IMP] Import type - ${format.toUpperCase()} file`,
+      `[IMP] Import mode - ${importMode}`,
       ...sources.map((source) => `[IMP] Import from - ${source.name}`),
       `[IMP] Import data [${table}]`,
     ];
@@ -297,6 +358,8 @@ export function ImportTableDataDialog({
     setProgress({ processed: 0, added: 0, updated: 0, deleted: 0, error: 0, seconds: 0 });
 
     let added = 0;
+    let updated = 0;
+    let deleted = 0;
     let error = 0;
     try {
       for (let index = 0; index < statements.length; index++) {
@@ -305,7 +368,11 @@ export function ImportTableDataDialog({
           const result = await ExecuteSQL(assetId, statements[index], database);
           if (isSubmitCancelled?.(requestId)) return;
           const parsedResult = JSON.parse(result || "{}") as { affected_rows?: number };
-          added += Number(parsedResult.affected_rows ?? 0);
+          const affected = Number(parsedResult.affected_rows ?? 0);
+          const affectedBucket = importModeAffects(importMode);
+          if (affectedBucket === "updated") updated += affected;
+          else if (affectedBucket === "deleted") deleted += affected;
+          else added += affected;
         } catch (e) {
           error += 1;
           const message = e instanceof Error ? e.message : String(e);
@@ -313,12 +380,13 @@ export function ImportTableDataDialog({
           nextLogLines.push(`[ERR] ${statements[index]}`);
           setLogLines([...nextLogLines]);
           toast.error(message);
+          if (!continueOnError) break;
         }
         setProgress({
           processed: index + 1,
           added,
-          updated: 0,
-          deleted: 0,
+          updated,
+          deleted,
           error,
           seconds: (performance.now() - startedAt) / 1000,
         });
@@ -329,7 +397,7 @@ export function ImportTableDataDialog({
         onSuccess();
       } else {
         nextLogLines.push(
-          `[IMP] Processed: ${statements.length}, Added: ${added}, Updated: 0, Deleted: 0, Errors: ${error}`
+          `[IMP] Processed: ${statements.length}, Added: ${added}, Updated: ${updated}, Deleted: ${deleted}, Errors: ${error}`
         );
         nextLogLines.push("[IMP] Finished with error");
         setLogLines([...nextLogLines]);
@@ -342,6 +410,8 @@ export function ImportTableDataDialog({
     assetId,
     database,
     format,
+    importMode,
+    continueOnError,
     isSubmitCancelled,
     onOpenChange,
     onSubmitStart,
@@ -740,6 +810,41 @@ export function ImportTableDataDialog({
       );
     }
 
+    if (step === "mode") {
+      return (
+        <div className="space-y-5">
+          <p className="text-sm font-medium">{t("query.importModeIntro")}</p>
+          <div className="space-y-3">
+            <Label className="text-sm">{t("query.importModeLabel")}</Label>
+            {importModes.map((mode) => (
+              <label key={mode} className="flex w-fit cursor-pointer items-start gap-2 text-sm leading-6">
+                <input
+                  type="radio"
+                  name="import-mode"
+                  checked={importMode === mode}
+                  onChange={() => setImportMode(mode)}
+                  className="mt-1"
+                />
+                <span>
+                  {t(`query.importMode${mode.replace(/(^|-)([a-z])/g, (_, __, letter) => letter.toUpperCase())}`)}
+                </span>
+              </label>
+            ))}
+          </div>
+          {modeMissingPrimaryKey && (
+            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {t("query.importModePrimaryKeyRequired")}
+            </div>
+          )}
+          <div className="flex justify-end pt-20">
+            <Button type="button" variant="outline" size="sm" onClick={() => setAdvancedOpen(true)}>
+              {t("query.importAdvancedSettings")}
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="space-y-4">
         <p className="break-words text-sm font-medium">{t("query.importSummaryIntro")}</p>
@@ -834,6 +939,68 @@ export function ImportTableDataDialog({
           </div>
         </DialogFooter>
       </DialogContent>
+      <AlertDialog open={advancedOpen} onOpenChange={setAdvancedOpen}>
+        <AlertDialogContent className="max-w-xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("query.importAdvancedTitle")}</AlertDialogTitle>
+          </AlertDialogHeader>
+          <div className="space-y-3 py-2 text-sm">
+            <label className="flex w-fit items-center gap-3">
+              <input
+                type="checkbox"
+                checked={extendedInsert}
+                onChange={(event) => setExtendedInsert(event.target.checked)}
+              />
+              {t("query.importAdvancedExtendedInsert")}
+            </label>
+            <label className="flex w-fit items-center gap-3 pl-7">
+              <input
+                type="checkbox"
+                checked={extendedInsert}
+                onChange={(event) => setExtendedInsert(event.target.checked)}
+              />
+              {t("query.importAdvancedMaxStatementSize")}
+              <Input
+                type="number"
+                min={1}
+                value={maxStatementSizeKb}
+                disabled={!extendedInsert}
+                onChange={(event) => setMaxStatementSizeKb(Number(event.target.value) || 1)}
+                className="h-8 w-28 text-xs"
+              />
+              <span>KB</span>
+            </label>
+            <label className="flex w-fit items-center gap-3">
+              <input
+                type="checkbox"
+                checked={emptyStringAsNull}
+                onChange={(event) => setEmptyStringAsNull(event.target.checked)}
+              />
+              {t("query.importAdvancedEmptyStringAsNull")}
+            </label>
+            <label className="flex w-fit items-center gap-3">
+              <input
+                type="checkbox"
+                checked={ignoreForeignKeyConstraint}
+                onChange={(event) => setIgnoreForeignKeyConstraint(event.target.checked)}
+              />
+              {t("query.importAdvancedIgnoreForeignKey")}
+            </label>
+            <label className="flex w-fit items-center gap-3">
+              <input
+                type="checkbox"
+                checked={continueOnError}
+                onChange={(event) => setContinueOnError(event.target.checked)}
+              />
+              {t("query.importAdvancedContinueOnError")}
+            </label>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("query.importAdvancedCancel")}</AlertDialogCancel>
+            <AlertDialogAction>{t("query.importAdvancedOk")}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }

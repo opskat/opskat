@@ -50,6 +50,35 @@ describe("table import helpers", () => {
     ).toEqual(["INSERT INTO `appdb`.`users` (`id`, `name`) VALUES ('1', NULL);"]);
   });
 
+  it("builds SQL for primary-key based import modes", () => {
+    const base = {
+      tableName: "appdb.users",
+      headers: ["id", "name", "email"],
+      rows: [["1", "Alice", "alice@example.test"]],
+      mapping: { id: "id", name: "name", email: "email" },
+      nullStrategy: "literal-null" as const,
+      primaryKeys: ["id"],
+      driver: "mysql",
+    };
+
+    expect(buildImportInsertSql({ ...base, mode: "update" })).toEqual([
+      "UPDATE `appdb`.`users` SET `name` = 'Alice', `email` = 'alice@example.test' WHERE `id` = '1';",
+    ]);
+    expect(buildImportInsertSql({ ...base, mode: "append-update" })).toEqual([
+      "INSERT INTO `appdb`.`users` (`id`, `name`, `email`) VALUES ('1', 'Alice', 'alice@example.test') ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `email` = VALUES(`email`);",
+    ]);
+    expect(buildImportInsertSql({ ...base, mode: "append-skip" })).toEqual([
+      "INSERT IGNORE INTO `appdb`.`users` (`id`, `name`, `email`) VALUES ('1', 'Alice', 'alice@example.test');",
+    ]);
+    expect(buildImportInsertSql({ ...base, mode: "delete" })).toEqual([
+      "DELETE FROM `appdb`.`users` WHERE `id` = '1';",
+    ]);
+    expect(buildImportInsertSql({ ...base, mode: "copy" })).toEqual([
+      "DELETE FROM `appdb`.`users`;",
+      "INSERT INTO `appdb`.`users` (`id`, `name`, `email`) VALUES ('1', 'Alice', 'alice@example.test');",
+    ]);
+  });
+
   it("detects TSV when tabs outnumber commas in the header", () => {
     expect(detectDelimiter("id\tname\tnote\n1\tAlice\tok")).toBe("\t");
     expect(detectDelimiter("id,name,note\n1,Alice,ok")).toBe(",");
