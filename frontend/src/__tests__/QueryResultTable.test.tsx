@@ -1,7 +1,8 @@
 import { beforeEach, describe, it, expect, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { QueryResultTable, cellValueToText } from "@/components/query/QueryResultTable";
+import { QueryResultTable } from "@/components/query/QueryResultTable";
+import { cellValueToText } from "@/lib/cellValue";
 
 const { toastError, toastSuccess } = vi.hoisted(() => ({
   toastError: vi.fn(),
@@ -133,6 +134,92 @@ describe("QueryResultTable — cell context actions", () => {
     fireEvent.contextMenu(cell, { clientX: 40, clientY: 50 });
   }
 
+  function openRowMenu(props: Partial<React.ComponentProps<typeof QueryResultTable>> = {}) {
+    render(<QueryResultTable columns={columns} rows={rows} editable showRowNumber {...props} />);
+    const rowHeader = document.querySelector('[data-row-header-key="1"]') as HTMLElement;
+    fireEvent.contextMenu(rowHeader, { clientX: 20, clientY: 40 });
+  }
+
+  function openColumnMenu(props: Partial<React.ComponentProps<typeof QueryResultTable>> = {}) {
+    render(
+      <QueryResultTable
+        columns={columns}
+        rows={rows}
+        editable
+        columnTypes={{ id: "int", name: "varchar(128)" }}
+        {...props}
+      />
+    );
+    const header = document.querySelector('[data-column-header-key="name"]') as HTMLElement;
+    fireEvent.contextMenu(header, { clientX: 40, clientY: 20 });
+  }
+
+  function openColumnMoreMenu(props: Partial<React.ComponentProps<typeof QueryResultTable>> = {}) {
+    cleanup();
+    render(
+      <QueryResultTable
+        columns={columns}
+        rows={rows}
+        editable
+        columnTypes={{ id: "int", name: "varchar(128)" }}
+        {...props}
+      />
+    );
+    fireEvent.click(screen.getByTitle("query.columnActions:name"));
+  }
+
+  it("shows field types under column names", () => {
+    render(<QueryResultTable columns={columns} rows={rows} columnTypes={{ id: "int", name: "varchar(128)" }} />);
+
+    expect(screen.getByText("int")).toBeInTheDocument();
+    expect(screen.getByText("varchar(128)")).toBeInTheDocument();
+  });
+
+  it("left-clicking a column header selects the full column", () => {
+    render(<QueryResultTable columns={columns} rows={rows} columnTypes={{ id: "int", name: "varchar(128)" }} />);
+    fireEvent.click(screen.getByText("name"));
+
+    const selected = document.querySelectorAll('[data-column-selected="name"]');
+    expect(selected).toHaveLength(rows.length + 1);
+    expect(document.querySelector('[data-row-selected="true"]')).toBeNull();
+  });
+
+  it("column more menu invokes sort, clear sort, and add filter actions", async () => {
+    const user = userEvent.setup();
+    const onSortByColumn = vi.fn();
+    const onClearFilterSort = vi.fn();
+    const onAddColumnFilter = vi.fn();
+    openColumnMoreMenu({ onSortByColumn, onClearFilterSort, onAddColumnFilter });
+
+    await user.click(screen.getByText("query.sortAsc"));
+    expect(onSortByColumn).toHaveBeenCalledWith("name", "asc");
+
+    openColumnMoreMenu({ onSortByColumn, onClearFilterSort, onAddColumnFilter });
+    await user.click(screen.getByText("query.sortDesc"));
+    expect(onSortByColumn).toHaveBeenCalledWith("name", "desc");
+
+    openColumnMoreMenu({ onSortByColumn, onClearFilterSort, onAddColumnFilter });
+    await user.click(screen.getByText("query.removeAllSorts"));
+    expect(onClearFilterSort).toHaveBeenCalledOnce();
+
+    openColumnMoreMenu({ onSortByColumn, onClearFilterSort, onAddColumnFilter });
+    await user.click(screen.getByText("query.addFilter"));
+    expect(onAddColumnFilter).toHaveBeenCalledWith("name");
+  });
+
+  it("right-clicking a column header shows column actions instead of cell actions", () => {
+    openColumnMenu({ onCopyAs: vi.fn(), onHideColumn: vi.fn() });
+
+    expect(screen.getByText("query.copyValue")).toBeInTheDocument();
+    expect(screen.getByText("query.copyFieldName")).toBeInTheDocument();
+    expect(screen.getByText("query.copyAs")).toBeInTheDocument();
+    expect(screen.getByText("query.hideColumn")).toBeInTheDocument();
+    expect(screen.getByText("query.showFieldType")).toBeInTheDocument();
+    expect(screen.queryByText("query.setNull")).not.toBeInTheDocument();
+    expect(screen.queryByText("query.pasteValue")).not.toBeInTheDocument();
+    expect(screen.queryByText("query.filterByCellValue")).not.toBeInTheDocument();
+  });
+
   it("shows the table cell context actions", () => {
     openMenu({ onSetCellValue: vi.fn(), onPasteCell: vi.fn(), onRefresh: vi.fn() });
 
@@ -142,6 +229,28 @@ describe("QueryResultTable — cell context actions", () => {
     expect(screen.getByText("query.copyFieldName")).toBeInTheDocument();
     expect(screen.getByText("query.pasteValue")).toBeInTheDocument();
     expect(screen.getByText("query.refreshTable")).toBeInTheDocument();
+  });
+
+  it("right-clicking a row number selects the full row and shows row actions only", () => {
+    openRowMenu({ onDeleteRow: vi.fn(), onCopyAs: vi.fn(), onFilterByCellValue: vi.fn(), onSortByColumn: vi.fn() });
+
+    const selectedCells = document.querySelectorAll('[data-row-selected="true"]');
+    expect(selectedCells).toHaveLength(columns.length + 1);
+    expect(screen.getByText("query.deleteRecord")).toBeInTheDocument();
+    expect(screen.getByText("query.copyValue")).toBeInTheDocument();
+    expect(screen.getByText("query.copyAs")).toBeInTheDocument();
+    expect(screen.queryByText("query.copyFieldName")).not.toBeInTheDocument();
+    expect(screen.queryByText("query.setNull")).not.toBeInTheDocument();
+    expect(screen.queryByText("query.filterByCellValue")).not.toBeInTheDocument();
+    expect(screen.queryByText("query.sortAscending")).not.toBeInTheDocument();
+  });
+
+  it("row context copy writes the selected row as tab separated values", async () => {
+    openRowMenu();
+
+    fireEvent.click(screen.getByText("query.copyValue"));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("2\tbob"));
   });
 
   it("hides edit and refresh actions when the table has no matching capability", () => {
@@ -173,6 +282,33 @@ describe("QueryResultTable — cell context actions", () => {
     await user.click(screen.getByText("query.setEmptyString"));
 
     expect(onSetCellValue).toHaveBeenCalledWith({ rowIdx: 1, col: "name", value: "" });
+  });
+
+  it("date-like cells show a date action and commit a datetime value", async () => {
+    const user = userEvent.setup();
+    const onSetCellValue = vi.fn();
+    render(
+      <QueryResultTable
+        columns={["id", "created_at"]}
+        rows={[{ id: 1, created_at: "2026-04-26 10:13:43" }]}
+        editable
+        columnTypes={{ created_at: "timestamp" }}
+        onSetCellValue={onSetCellValue}
+      />
+    );
+    const cell = document.querySelector('[data-cell-key="0:created_at"]') as HTMLElement;
+    fireEvent.contextMenu(cell, { clientX: 40, clientY: 50 });
+
+    await user.click(screen.getByText("query.setDateTime"));
+    const input = screen.getByLabelText("query.dateTimeValue");
+    fireEvent.change(input, { target: { value: "2026-04-27T08:09:10" } });
+    await user.click(screen.getByText("action.ok"));
+
+    expect(onSetCellValue).toHaveBeenCalledWith({
+      rowIdx: 0,
+      col: "created_at",
+      value: "2026-04-27 08:09:10",
+    });
   });
 
   it("copy field name writes the current column name to clipboard", async () => {

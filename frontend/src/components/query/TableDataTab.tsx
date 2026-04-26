@@ -113,6 +113,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const isInnerActive = useQueryStore((s) => s.dbStates[tabId]?.activeInnerTabId === innerTabId);
 
   const [columns, setColumns] = useState<string[]>([]);
+  const [columnTypes, setColumnTypes] = useState<Record<string, string>>({});
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [totalRows, setTotalRows] = useState<number | null>(null);
   const [page, setPage] = useState(0);
@@ -188,11 +189,39 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     }
   }, [assetId, database, table, driver]);
 
+  const fetchColumnTypes = useCallback(async () => {
+    if (!assetId) return;
+    try {
+      let sql: string;
+      if (driver === "postgresql") {
+        const escapedTable = table.replace(/'/g, "''");
+        sql =
+          `SELECT column_name, data_type, udt_name FROM information_schema.columns ` +
+          `WHERE table_schema = 'public' AND table_name = '${escapedTable}' ORDER BY ordinal_position`;
+      } else {
+        sql = `SHOW COLUMNS FROM ${quoteIdent(database, driver)}.${quoteIdent(table, driver)}`;
+      }
+      const result = await ExecuteSQL(assetId, sql, database);
+      const parsed: SQLResult = JSON.parse(result);
+      const next: Record<string, string> = {};
+      for (const row of parsed.rows ?? []) {
+        const name = String(row["column_name"] ?? row["Field"] ?? row["field"] ?? "");
+        const type = String(row["data_type"] ?? row["Type"] ?? row["type"] ?? row["udt_name"] ?? "");
+        if (name && type) next[name] = type;
+      }
+      setColumnTypes(next);
+    } catch {
+      setColumnTypes({});
+    }
+  }, [assetId, database, table, driver]);
+
   useEffect(() => {
     setPrimaryKeys([]);
     setPkLoaded(false);
     fetchPrimaryKeys();
-  }, [fetchPrimaryKeys]);
+    setColumnTypes({});
+    fetchColumnTypes();
+  }, [fetchPrimaryKeys, fetchColumnTypes]);
 
   // Fetch total count
   const fetchCount = useCallback(async () => {
@@ -634,6 +663,24 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     [columns]
   );
 
+  const handleHideColumn = useCallback(
+    (column: string) => {
+      setVisibleColumns((prev) => {
+        const current = prev.length > 0 ? prev : columns;
+        if (!current.includes(column) || current.length === 1) return current;
+        return current.filter((col) => col !== column);
+      });
+    },
+    [columns]
+  );
+
+  const handleAddColumnFilter = useCallback(
+    (column: string) => {
+      setWhereInput(`${quoteIdent(column, driver)} = `);
+    },
+    [driver]
+  );
+
   const handleViewDDL = useCallback(async () => {
     if (!assetId) return;
     setShowDDLDialog(true);
@@ -812,7 +859,9 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         onFilterByCellValue={handleFilterByCellValue}
         onSortByColumn={handleSortByColumn}
         onClearFilterSort={handleClearFilterSort}
+        onAddColumnFilter={handleAddColumnFilter}
         onDeleteRow={handleDeleteRow}
+        onHideColumn={handleHideColumn}
         onSelectedCellChange={handleSelectedCellChange}
         onRefresh={handleRefresh}
         showRowNumber
@@ -822,6 +871,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         onSortChange={handleSortChange}
         enableColumnFilter
         visibleColumns={effectiveVisibleColumns}
+        columnTypes={columnTypes}
         rowDensity={rowDensity}
       />
 

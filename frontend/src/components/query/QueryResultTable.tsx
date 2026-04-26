@@ -6,7 +6,6 @@ import {
   Copy,
   ArrowUp,
   ArrowDown,
-  ArrowUpDown,
   Filter,
   FilterX,
   Search,
@@ -18,9 +17,13 @@ import {
   Trash2,
   WandSparkles,
   ClipboardList,
+  CalendarClock,
+  MoreHorizontal,
+  Hash,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@opskat/ui";
 import { toast } from "sonner";
+import { cellValueToText } from "@/lib/cellValue";
 
 export interface CellEdit {
   rowIdx: number;
@@ -63,7 +66,9 @@ interface QueryResultTableProps {
   onFilterByCellValue?: (ctx: CellActionContext) => void;
   onSortByColumn?: (col: string, dir: Exclude<SortDir, null>) => void;
   onClearFilterSort?: () => void;
+  onAddColumnFilter?: (col: string) => void;
   onDeleteRow?: (rowIdx: number) => void;
+  onHideColumn?: (col: string) => void;
   onSelectedCellChange?: (cell: SelectedCellContext | null) => void;
   onRefresh?: () => void;
   showRowNumber?: boolean;
@@ -77,25 +82,11 @@ interface QueryResultTableProps {
   // current-page distinct values. Filtering is fully client-side.
   enableColumnFilter?: boolean;
   visibleColumns?: string[];
+  columnTypes?: Record<string, string>;
   rowDensity?: RowDensity;
   // Override the display-mode cell rendering. Does not affect edit-mode (input).
   // When provided, the returned node replaces the default NULL / String(value) span.
   renderCell?: (value: unknown, ctx: RenderCellContext) => React.ReactNode;
-}
-
-// Serialize a cell value for title tooltip / clipboard / filter keys. Objects
-// stringify as JSON (not "[object Object]"); primitives via String(). Exported
-// for unit tests.
-export function cellValueToText(v: unknown): string {
-  if (v == null) return "";
-  if (typeof v === "object") {
-    try {
-      return JSON.stringify(v);
-    } catch {
-      return String(v);
-    }
-  }
-  return String(v);
 }
 
 // Sentinel key used to represent NULL / undefined values in the column-filter
@@ -112,6 +103,92 @@ function valueKey(v: unknown): string {
 
 function cellKey(rowIdx: number, col: string) {
   return `${rowIdx}:${col}`;
+}
+
+type DateEditMode = "date" | "datetime";
+
+type CellContextMenu = {
+  kind: "cell";
+  x: number;
+  y: number;
+  rowIdx: number;
+  col: string;
+  value: unknown;
+};
+
+type RowContextMenu = {
+  kind: "row";
+  x: number;
+  y: number;
+  rowIdx: number;
+};
+
+type ColumnContextMenu = {
+  kind: "column";
+  variant: "context" | "actions";
+  x: number;
+  y: number;
+  col: string;
+};
+
+type ContextMenuState = CellContextMenu | RowContextMenu | ColumnContextMenu;
+
+function getColumnTypeIcon(type?: string) {
+  const normalized = type?.toLowerCase() ?? "";
+  if (/(int|decimal|numeric|float|double|real|serial|number)/.test(normalized)) return Hash;
+  if (/(date|time|timestamp)/.test(normalized)) return CalendarClock;
+  return Type;
+}
+
+function padDatePart(value: string | number): string {
+  return String(value).padStart(2, "0");
+}
+
+function formatDateToInputValue(value: unknown, mode: DateEditMode): string {
+  const fromDate = (date: Date) => {
+    const datePart = `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`;
+    if (mode === "date") return datePart;
+    return `${datePart}T${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}:${padDatePart(date.getSeconds())}`;
+  };
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return fromDate(value);
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    const match = trimmed.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T\s,]+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+    if (match) {
+      const [, y, m, d, hh = "0", mm = "0", ss = "0"] = match;
+      const datePart = `${y}-${padDatePart(m)}-${padDatePart(d)}`;
+      if (mode === "date") return datePart;
+      return `${datePart}T${padDatePart(hh)}:${padDatePart(mm)}:${padDatePart(ss)}`;
+    }
+  }
+
+  return fromDate(new Date());
+}
+
+function formatDateInputValue(value: string, mode: DateEditMode): string {
+  if (mode === "date") return value;
+  const [datePart, timePart = "00:00:00"] = value.split("T");
+  const [hh = "00", mm = "00", ss = "00"] = timePart.split(":");
+  return `${datePart} ${padDatePart(hh)}:${padDatePart(mm)}:${padDatePart(ss)}`;
+}
+
+function getDateEditMode(col: string, type?: string, value?: unknown): DateEditMode | null {
+  const normalizedType = type?.toLowerCase() ?? "";
+  if (/\b(date)\b/.test(normalizedType) && !/(time|timestamp|datetime)/.test(normalizedType)) return "date";
+  if (/(timestamp|datetime|time)/.test(normalizedType)) return "datetime";
+
+  const normalizedCol = col.toLowerCase();
+  const dateLikeName =
+    /(^|_)(date|time)$/.test(normalizedCol) || /(^|_)(created|updated|deleted)_at$/.test(normalizedCol);
+  if (!dateLikeName) return null;
+  if (value == null || value instanceof Date) return "datetime";
+  if (typeof value !== "string") return null;
+  if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[T\s,]+\d{1,2}:\d{1,2}(?::\d{1,2})?)?/.test(value.trim())) {
+    return value.includes(":") ? "datetime" : "date";
+  }
+  return null;
 }
 
 function compareValues(a: unknown, b: unknown): number {
@@ -140,7 +217,9 @@ export function QueryResultTable({
   onFilterByCellValue,
   onSortByColumn,
   onClearFilterSort,
+  onAddColumnFilter,
   onDeleteRow,
+  onHideColumn,
   onSelectedCellChange,
   onRefresh,
   showRowNumber,
@@ -150,6 +229,7 @@ export function QueryResultTable({
   onSortChange,
   enableColumnFilter,
   visibleColumns,
+  columnTypes,
   rowDensity = "default",
   renderCell,
 }: QueryResultTableProps) {
@@ -233,15 +313,17 @@ export function QueryResultTable({
 
   // Selected cell state — click-to-focus + arrow key navigation
   const [selectedCell, setSelectedCell] = useState<{ origIdx: number; col: string } | null>(null);
+  const [selectedRowIdx, setSelectedRowIdx] = useState<number | null>(null);
+  const [selectedColumn, setSelectedColumn] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Context menu state
-  const [ctxMenu, setCtxMenu] = useState<{
-    x: number;
-    y: number;
+  const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null);
+  const [dateEditor, setDateEditor] = useState<{
     rowIdx: number;
     col: string;
-    value: unknown;
+    mode: DateEditMode;
+    value: string;
   } | null>(null);
   const ctxMenuRef = useRef<HTMLDivElement>(null);
 
@@ -251,6 +333,8 @@ export function QueryResultTable({
     setLocalSortDir(null);
     setColWidths({});
     setSelectedCell(null);
+    setSelectedRowIdx(null);
+    setSelectedColumn(null);
     onSelectedCellChange?.(null);
     setEditingCell(null);
   }, [columns, onSelectedCellChange]);
@@ -258,6 +342,8 @@ export function QueryResultTable({
   // Reset selection / editing when row set changes (paging, refresh, filter)
   useEffect(() => {
     setSelectedCell(null);
+    setSelectedRowIdx(null);
+    setSelectedColumn(null);
     onSelectedCellChange?.(null);
     setEditingCell(null);
   }, [rows, onSelectedCellChange]);
@@ -272,30 +358,6 @@ export function QueryResultTable({
       return sortDir === "asc" ? cmp : -cmp;
     });
   }, [rows, sortCol, sortDir, isControlledSort, filteredIndices]);
-
-  const toggleSort = useCallback(
-    (col: string) => {
-      let nextCol: string | null;
-      let nextDir: SortDir;
-      if (sortCol !== col) {
-        nextCol = col;
-        nextDir = "asc";
-      } else if (sortDir === "asc") {
-        nextCol = col;
-        nextDir = "desc";
-      } else {
-        nextCol = null;
-        nextDir = null;
-      }
-      if (isControlledSort) {
-        onSortChange?.(nextCol, nextDir);
-      } else {
-        setLocalSortCol(nextCol);
-        setLocalSortDir(nextDir);
-      }
-    },
-    [sortCol, sortDir, isControlledSort, onSortChange]
-  );
 
   // Sorting is enabled whenever we have an onSortChange callback (server-side)
   // or when we're in read-only mode (local client-side sort on the current page).
@@ -394,23 +456,34 @@ export function QueryResultTable({
   const canSetCellValue = !!editable && !!setCellValueHandler;
   const canPasteCell = !!editable && !!pasteCellHandler;
   const canGenerateUuid = !!editable && !!uuidCellHandler;
+  const dateEditMode =
+    ctxMenu?.kind === "cell" ? getDateEditMode(ctxMenu.col, columnTypes?.[ctxMenu.col], ctxMenu.value) : null;
+  const canSetDateTime = canSetCellValue && !!dateEditMode;
+  const menuColumn = ctxMenu?.kind === "column" ? ctxMenu.col : ctxMenu?.kind === "cell" ? ctxMenu.col : null;
 
   const handleCopyCell = useCallback(async () => {
     if (!ctxMenu) return;
     try {
-      await navigator.clipboard.writeText(cellValueToText(ctxMenu.value));
+      const text =
+        ctxMenu.kind === "row"
+          ? displayColumns.map((col) => cellValueToText(rows[ctxMenu.rowIdx]?.[col])).join("\t")
+          : ctxMenu.kind === "column"
+            ? sortedIndices.map((rowIdx) => cellValueToText(rows[rowIdx]?.[ctxMenu.col])).join("\n")
+            : cellValueToText(ctxMenu.value);
+      await navigator.clipboard.writeText(text);
       toast.success(t("query.copied"));
     } catch (e) {
       toast.error(String(e));
     } finally {
       setCtxMenu(null);
     }
-  }, [ctxMenu, t]);
+  }, [ctxMenu, displayColumns, rows, sortedIndices, t]);
 
   const handleCopyFieldName = useCallback(async () => {
-    if (!ctxMenu) return;
+    const col = ctxMenu?.kind === "cell" || ctxMenu?.kind === "column" ? ctxMenu.col : null;
+    if (!col) return;
     try {
-      await navigator.clipboard.writeText(ctxMenu.col);
+      await navigator.clipboard.writeText(col);
       toast.success(t("query.copied"));
     } catch (e) {
       toast.error(String(e));
@@ -421,7 +494,7 @@ export function QueryResultTable({
 
   const handleSetCellValue = useCallback(
     (value: unknown) => {
-      if (!ctxMenu) return;
+      if (!ctxMenu || ctxMenu.kind !== "cell") return;
       const edit = { rowIdx: ctxMenu.rowIdx, col: ctxMenu.col, value };
       setCellValueHandler?.(edit);
       setCtxMenu(null);
@@ -430,7 +503,7 @@ export function QueryResultTable({
   );
 
   const handlePasteCell = useCallback(async () => {
-    if (!ctxMenu) return;
+    if (!ctxMenu || ctxMenu.kind !== "cell") return;
     try {
       const text = await navigator.clipboard.readText();
       const edit = { rowIdx: ctxMenu.rowIdx, col: ctxMenu.col, value: text };
@@ -443,7 +516,7 @@ export function QueryResultTable({
   }, [ctxMenu, pasteCellHandler]);
 
   const handleGenerateUuid = useCallback(() => {
-    if (!ctxMenu) return;
+    if (!ctxMenu || ctxMenu.kind !== "cell") return;
     uuidCellHandler?.({ rowIdx: ctxMenu.rowIdx, col: ctxMenu.col, value: crypto.randomUUID() });
     setCtxMenu(null);
   }, [ctxMenu, uuidCellHandler]);
@@ -451,11 +524,44 @@ export function QueryResultTable({
   const handleCopyAs = useCallback(
     (format: CopyAsFormat) => {
       if (!ctxMenu) return;
-      onCopyAs?.(format, { rowIdx: ctxMenu.rowIdx, col: ctxMenu.col, value: ctxMenu.value });
+      const fallbackRowIdx = sortedIndices[0] ?? 0;
+      onCopyAs?.(format, {
+        rowIdx: ctxMenu.kind === "cell" || ctxMenu.kind === "row" ? ctxMenu.rowIdx : fallbackRowIdx,
+        col: ctxMenu.kind === "cell" || ctxMenu.kind === "column" ? ctxMenu.col : (displayColumns[0] ?? ""),
+        value:
+          ctxMenu.kind === "cell"
+            ? ctxMenu.value
+            : ctxMenu.kind === "column"
+              ? rows[fallbackRowIdx]?.[ctxMenu.col]
+              : rows[ctxMenu.rowIdx],
+      });
       setCtxMenu(null);
     },
-    [ctxMenu, onCopyAs]
+    [ctxMenu, displayColumns, onCopyAs, rows, sortedIndices]
   );
+
+  const handleOpenDateEditor = useCallback(() => {
+    if (!ctxMenu || ctxMenu.kind !== "cell") return;
+    const mode = getDateEditMode(ctxMenu.col, columnTypes?.[ctxMenu.col], ctxMenu.value);
+    if (!mode) return;
+    setDateEditor({
+      rowIdx: ctxMenu.rowIdx,
+      col: ctxMenu.col,
+      mode,
+      value: formatDateToInputValue(ctxMenu.value, mode),
+    });
+    setCtxMenu(null);
+  }, [columnTypes, ctxMenu]);
+
+  const handleCommitDateEditor = useCallback(() => {
+    if (!dateEditor) return;
+    setCellValueHandler?.({
+      rowIdx: dateEditor.rowIdx,
+      col: dateEditor.col,
+      value: formatDateInputValue(dateEditor.value, dateEditor.mode),
+    });
+    setDateEditor(null);
+  }, [dateEditor, setCellValueHandler]);
 
   const handleRefreshFromMenu = useCallback(() => {
     onRefresh?.();
@@ -463,27 +569,49 @@ export function QueryResultTable({
   }, [onRefresh]);
 
   const handleFilterByCellValue = useCallback(() => {
-    if (!ctxMenu) return;
+    if (!ctxMenu || ctxMenu.kind !== "cell") return;
     onFilterByCellValue?.({ rowIdx: ctxMenu.rowIdx, col: ctxMenu.col, value: ctxMenu.value });
     setCtxMenu(null);
   }, [ctxMenu, onFilterByCellValue]);
 
   const handleSortByColumn = useCallback(
     (dir: Exclude<SortDir, null>) => {
-      if (!ctxMenu) return;
-      onSortByColumn?.(ctxMenu.col, dir);
+      const col = ctxMenu?.kind === "cell" || ctxMenu?.kind === "column" ? ctxMenu.col : null;
+      if (!col) return;
+      if (onSortByColumn) onSortByColumn(col, dir);
+      else if (isControlledSort) onSortChange?.(col, dir);
+      else {
+        setLocalSortCol(col);
+        setLocalSortDir(dir);
+      }
       setCtxMenu(null);
     },
-    [ctxMenu, onSortByColumn]
+    [ctxMenu, isControlledSort, onSortByColumn, onSortChange]
   );
+
+  const handleAddColumnFilter = useCallback(() => {
+    if (!menuColumn) return;
+    onAddColumnFilter?.(menuColumn);
+    setCtxMenu(null);
+  }, [menuColumn, onAddColumnFilter]);
+
+  const handleHideColumn = useCallback(() => {
+    if (!menuColumn) return;
+    onHideColumn?.(menuColumn);
+    setCtxMenu(null);
+  }, [menuColumn, onHideColumn]);
 
   const handleClearFilterSort = useCallback(() => {
     onClearFilterSort?.();
+    if (!onClearFilterSort) {
+      setLocalSortCol(null);
+      setLocalSortDir(null);
+    }
     setCtxMenu(null);
   }, [onClearFilterSort]);
 
   const handleDeleteRow = useCallback(() => {
-    if (!ctxMenu) return;
+    if (!ctxMenu || ctxMenu.kind === "column") return;
     onDeleteRow?.(ctxMenu.rowIdx);
     setCtxMenu(null);
   }, [ctxMenu, onDeleteRow]);
@@ -491,7 +619,31 @@ export function QueryResultTable({
   const selectCell = useCallback(
     (origIdx: number, col: string) => {
       setSelectedCell({ origIdx, col });
+      setSelectedRowIdx(null);
+      setSelectedColumn(null);
       onSelectedCellChange?.({ rowIdx: origIdx, col });
+      containerRef.current?.focus();
+    },
+    [onSelectedCellChange]
+  );
+
+  const selectRow = useCallback(
+    (origIdx: number) => {
+      setSelectedCell(null);
+      setSelectedRowIdx(origIdx);
+      setSelectedColumn(null);
+      onSelectedCellChange?.({ rowIdx: origIdx, col: "" });
+      containerRef.current?.focus();
+    },
+    [onSelectedCellChange]
+  );
+
+  const selectColumn = useCallback(
+    (col: string) => {
+      setSelectedCell(null);
+      setSelectedRowIdx(null);
+      setSelectedColumn(col);
+      onSelectedCellChange?.(null);
       containerRef.current?.focus();
     },
     [onSelectedCellChange]
@@ -502,9 +654,40 @@ export function QueryResultTable({
       e.preventDefault();
       e.stopPropagation();
       selectCell(origIdx, col);
-      setCtxMenu({ x: e.clientX, y: e.clientY, rowIdx: origIdx, col, value });
+      setCtxMenu({ kind: "cell", x: e.clientX, y: e.clientY, rowIdx: origIdx, col, value });
     },
     [selectCell]
+  );
+
+  const handleRowContextMenu = useCallback(
+    (e: React.MouseEvent, origIdx: number) => {
+      e.preventDefault();
+      e.stopPropagation();
+      selectRow(origIdx);
+      setCtxMenu({ kind: "row", x: e.clientX, y: e.clientY, rowIdx: origIdx });
+    },
+    [selectRow]
+  );
+
+  const handleColumnContextMenu = useCallback(
+    (e: React.MouseEvent, col: string) => {
+      e.preventDefault();
+      e.stopPropagation();
+      selectColumn(col);
+      setCtxMenu({ kind: "column", variant: "context", x: e.clientX, y: e.clientY, col });
+    },
+    [selectColumn]
+  );
+
+  const handleColumnActionsClick = useCallback(
+    (e: React.MouseEvent, col: string) => {
+      e.preventDefault();
+      e.stopPropagation();
+      selectColumn(col);
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      setCtxMenu({ kind: "column", variant: "actions", x: rect.left, y: rect.bottom, col });
+    },
+    [selectColumn]
   );
 
   const handleCellClick = useCallback(
@@ -520,7 +703,15 @@ export function QueryResultTable({
       // When editing, the input owns key events — only Escape handled here already
       // (the input's onKeyDown calls setEditingCell(null) on Escape).
       if (editingCell) return;
-      if (!selectedCell) return;
+      if (!selectedCell) {
+        if ((selectedRowIdx != null || selectedColumn != null) && e.key === "Escape") {
+          e.preventDefault();
+          setSelectedRowIdx(null);
+          setSelectedColumn(null);
+          onSelectedCellChange?.(null);
+        }
+        return;
+      }
 
       const colIdx = displayColumns.indexOf(selectedCell.col);
       const displayIdx = sortedIndices.indexOf(selectedCell.origIdx);
@@ -561,7 +752,17 @@ export function QueryResultTable({
       e.preventDefault();
       selectCell(sortedIndices[nextDisplayIdx], displayColumns[nextColIdx]);
     },
-    [editingCell, selectedCell, sortedIndices, displayColumns, editable, onSelectedCellChange, selectCell]
+    [
+      editingCell,
+      selectedCell,
+      selectedRowIdx,
+      selectedColumn,
+      sortedIndices,
+      displayColumns,
+      editable,
+      onSelectedCellChange,
+      selectCell,
+    ]
   );
 
   // Scroll the selected cell into view when navigating
@@ -609,28 +810,50 @@ export function QueryResultTable({
               {displayColumns.map((col) => {
                 const isSorted = sortCol === col;
                 const width = colWidths[col];
+                const isColumnSelected = selectedColumn === col;
+                const typeText = columnTypes?.[col];
+                const TypeIcon = getColumnTypeIcon(typeText);
                 return (
                   <th
                     key={col}
-                    className={`relative border border-border px-2 ${headerPaddingClass} text-left font-semibold text-muted-foreground whitespace-nowrap select-none`}
+                    data-column-header-key={col}
+                    data-column-selected={isColumnSelected ? col : undefined}
+                    className={`group relative border border-border px-2 ${headerPaddingClass} text-left font-semibold whitespace-nowrap select-none ${
+                      isColumnSelected
+                        ? "bg-primary/25 text-foreground ring-2 ring-inset ring-primary/50"
+                        : "text-muted-foreground"
+                    }`}
                     style={width ? { width: `${width}px`, minWidth: `${width}px` } : undefined}
-                    title={canSort ? t("query.sortColumn") : col}
+                    title={col}
+                    onClick={() => selectColumn(col)}
+                    onContextMenu={(e) => handleColumnContextMenu(e, col)}
                   >
-                    <div className="flex items-center gap-1">
-                      <span
-                        className={`inline-flex items-center gap-1 flex-1 min-w-0 ${canSort ? "cursor-pointer" : ""}`}
-                        onClick={() => canSort && toggleSort(col)}
+                    <div className="flex items-start gap-1">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-center gap-1">
+                          <span className="truncate text-sm text-foreground">{col}</span>
+                          {canSort &&
+                            (isSorted && sortDir === "asc" ? (
+                              <ArrowUp className="h-3 w-3 shrink-0" />
+                            ) : isSorted && sortDir === "desc" ? (
+                              <ArrowDown className="h-3 w-3 shrink-0" />
+                            ) : null)}
+                        </div>
+                        {typeText && (
+                          <div className="mt-1 flex min-w-0 items-center gap-1 text-xs font-normal text-blue-700/80 dark:text-blue-300/80">
+                            <TypeIcon className="h-3.5 w-3.5 shrink-0" />
+                            <span className="truncate">{typeText}</span>
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="shrink-0 rounded px-0.5 text-primary opacity-60 hover:bg-accent hover:opacity-100 focus:opacity-100"
+                        title={`${t("query.columnActions")}:${col}`}
+                        onClick={(e) => handleColumnActionsClick(e, col)}
                       >
-                        <span className="truncate">{col}</span>
-                        {canSort &&
-                          (isSorted && sortDir === "asc" ? (
-                            <ArrowUp className="h-3 w-3 shrink-0" />
-                          ) : isSorted && sortDir === "desc" ? (
-                            <ArrowDown className="h-3 w-3 shrink-0" />
-                          ) : (
-                            <ArrowUpDown className="h-3 w-3 shrink-0 opacity-30" />
-                          ))}
-                      </span>
+                        <MoreHorizontal className="h-4 w-4" />
+                      </button>
                       {enableColumnFilter &&
                         (() => {
                           const curFilter = columnFilters.get(col);
@@ -688,10 +911,21 @@ export function QueryResultTable({
           <tbody>
             {sortedIndices.map((origIdx, idx) => {
               const row = rows[origIdx];
+              const isRowSelected = selectedRowIdx === origIdx;
               return (
                 <tr key={origIdx} className={idx % 2 === 0 ? "bg-background" : "bg-muted/40"}>
                   {showRowNumber && (
-                    <td className="border border-border px-2 py-1 text-center text-muted-foreground whitespace-nowrap w-[50px]">
+                    <td
+                      data-row-header-key={origIdx}
+                      data-row-selected={isRowSelected ? "true" : undefined}
+                      className={`border border-border px-2 py-1 text-center text-muted-foreground whitespace-nowrap w-[50px] cursor-default select-none ${
+                        isRowSelected
+                          ? "bg-primary/15 text-foreground ring-2 ring-inset ring-primary/50 relative z-10"
+                          : ""
+                      }`}
+                      onClick={() => selectRow(origIdx)}
+                      onContextMenu={(e) => handleRowContextMenu(e, origIdx)}
+                    >
                       {rowNumberOffset + origIdx + 1}
                     </td>
                   )}
@@ -713,9 +947,11 @@ export function QueryResultTable({
                       <td
                         key={col}
                         data-cell-key={ck}
+                        data-row-selected={isRowSelected ? "true" : undefined}
+                        data-column-selected={selectedColumn === col ? col : undefined}
                         className={`border border-border px-2 ${cellPaddingClass} whitespace-nowrap cursor-default ${
                           isEdited ? "bg-yellow-100 dark:bg-yellow-900/30" : ""
-                        } ${focusClass}`}
+                        } ${isRowSelected || selectedColumn === col ? "bg-primary/15" : ""} ${focusClass}`}
                         style={
                           width
                             ? { width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }
@@ -773,155 +1009,305 @@ export function QueryResultTable({
             style={{ position: "fixed", top: ctxMenu.y + 2, left: ctxMenu.x + 2 }}
             role="menu"
           >
-            {canSetCellValue && (
+            {ctxMenu.kind === "column" && ctxMenu.variant === "actions" ? (
               <>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={CONTEXT_MENU_ITEM_CLASS}
-                  onClick={() => handleSetCellValue("")}
-                >
-                  <Type className="h-3.5 w-3.5" />
-                  {t("query.setEmptyString")}
+                {(onSortByColumn || canSort) && (
+                  <>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={() => handleSortByColumn("asc")}
+                    >
+                      <ArrowUp className="h-3.5 w-3.5" />
+                      {t("query.sortAsc")}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={() => handleSortByColumn("desc")}
+                    >
+                      <ArrowDown className="h-3.5 w-3.5" />
+                      {t("query.sortDesc")}
+                    </button>
+                  </>
+                )}
+                {(onClearFilterSort || canSort) && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={CONTEXT_MENU_ITEM_CLASS}
+                    onClick={handleClearFilterSort}
+                  >
+                    <FilterX className="h-3.5 w-3.5" />
+                    {t("query.removeAllSorts")}
+                  </button>
+                )}
+                {onAddColumnFilter && (
+                  <>
+                    <div className="my-1 h-px bg-border" />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={handleAddColumnFilter}
+                    >
+                      <Filter className="h-3.5 w-3.5" />
+                      {t("query.addFilter")}
+                    </button>
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                {ctxMenu.kind === "cell" && canSetCellValue && (
+                  <>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={() => handleSetCellValue("")}
+                    >
+                      <Type className="h-3.5 w-3.5" />
+                      {t("query.setEmptyString")}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={() => handleSetCellValue(null)}
+                    >
+                      <CircleSlash className="h-3.5 w-3.5" />
+                      {t("query.setNull")}
+                    </button>
+                    {canSetDateTime && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className={CONTEXT_MENU_ITEM_CLASS}
+                        onClick={handleOpenDateEditor}
+                      >
+                        <CalendarClock className="h-3.5 w-3.5" />
+                        {t("query.setDateTime")}
+                      </button>
+                    )}
+                  </>
+                )}
+                <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS} onClick={handleCopyCell}>
+                  <Copy className="h-3.5 w-3.5" />
+                  {t("query.copyValue")}
                 </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={CONTEXT_MENU_ITEM_CLASS}
-                  onClick={() => handleSetCellValue(null)}
-                >
-                  <CircleSlash className="h-3.5 w-3.5" />
-                  {t("query.setNull")}
-                </button>
+                {(ctxMenu.kind === "cell" || ctxMenu.kind === "column") && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={CONTEXT_MENU_ITEM_CLASS}
+                    onClick={handleCopyFieldName}
+                  >
+                    <ClipboardType className="h-3.5 w-3.5" />
+                    {t("query.copyFieldName")}
+                  </button>
+                )}
+                {ctxMenu.kind === "cell" && canPasteCell && (
+                  <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS} onClick={handlePasteCell}>
+                    <ClipboardPaste className="h-3.5 w-3.5" />
+                    {t("query.pasteValue")}
+                  </button>
+                )}
+                {ctxMenu.kind === "cell" && canGenerateUuid && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={CONTEXT_MENU_ITEM_CLASS}
+                    onClick={handleGenerateUuid}
+                  >
+                    <WandSparkles className="h-3.5 w-3.5" />
+                    {t("query.generateUuid")}
+                  </button>
+                )}
+                {onCopyAs && (
+                  <>
+                    <div className="my-1 h-px bg-border" />
+                    <div className="px-2 py-1 text-[11px] font-medium text-muted-foreground">{t("query.copyAs")}</div>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={() => handleCopyAs("insert")}
+                    >
+                      <ClipboardList className="h-3.5 w-3.5" />
+                      {t("query.copyAsInsert")}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={() => handleCopyAs("update")}
+                    >
+                      <ClipboardList className="h-3.5 w-3.5" />
+                      {t("query.copyAsUpdate")}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={() => handleCopyAs("tsv-data")}
+                    >
+                      <ClipboardList className="h-3.5 w-3.5" />
+                      {t("query.copyAsTsvData")}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={() => handleCopyAs("tsv-fields")}
+                    >
+                      <ClipboardList className="h-3.5 w-3.5" />
+                      {t("query.copyAsTsvFields")}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={() => handleCopyAs("tsv-fields-data")}
+                    >
+                      <ClipboardList className="h-3.5 w-3.5" />
+                      {t("query.copyAsTsvFieldsAndData")}
+                    </button>
+                  </>
+                )}
+                {ctxMenu.kind === "column" && ctxMenu.variant === "context" && onHideColumn && (
+                  <>
+                    <div className="my-1 h-px bg-border" />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={handleHideColumn}
+                    >
+                      <FilterX className="h-3.5 w-3.5" />
+                      {t("query.hideColumn")}
+                    </button>
+                    <div className="my-1 h-px bg-border" />
+                    <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS}>
+                      <span className="w-3.5 text-center">✓</span>
+                      {t("query.showFieldType")}
+                    </button>
+                  </>
+                )}
+                {ctxMenu.kind === "cell" && onFilterByCellValue && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={CONTEXT_MENU_ITEM_CLASS}
+                    onClick={handleFilterByCellValue}
+                  >
+                    <Filter className="h-3.5 w-3.5" />
+                    {t("query.filterByCellValue")}
+                  </button>
+                )}
+                {ctxMenu.kind === "cell" && onSortByColumn && (
+                  <>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={() => handleSortByColumn("asc")}
+                    >
+                      <ArrowUp className="h-3.5 w-3.5" />
+                      {t("query.sortAscending")}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={CONTEXT_MENU_ITEM_CLASS}
+                      onClick={() => handleSortByColumn("desc")}
+                    >
+                      <ArrowDown className="h-3.5 w-3.5" />
+                      {t("query.sortDescending")}
+                    </button>
+                  </>
+                )}
+                {ctxMenu.kind !== "column" && onClearFilterSort && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={CONTEXT_MENU_ITEM_CLASS}
+                    onClick={handleClearFilterSort}
+                  >
+                    <FilterX className="h-3.5 w-3.5" />
+                    {t("query.clearFilterSort")}
+                  </button>
+                )}
+                {onRefresh && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={CONTEXT_MENU_ITEM_CLASS}
+                    onClick={handleRefreshFromMenu}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    {t("query.refreshTable")}
+                  </button>
+                )}
+                {ctxMenu.kind !== "column" && editable && onDeleteRow && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={`${CONTEXT_MENU_ITEM_CLASS} text-destructive hover:text-destructive`}
+                    onClick={handleDeleteRow}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    {t("query.deleteRecord")}
+                  </button>
+                )}
               </>
             )}
-            <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS} onClick={handleCopyCell}>
-              <Copy className="h-3.5 w-3.5" />
-              {t("query.copyValue")}
-            </button>
-            <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS} onClick={handleCopyFieldName}>
-              <ClipboardType className="h-3.5 w-3.5" />
-              {t("query.copyFieldName")}
-            </button>
-            {canPasteCell && (
-              <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS} onClick={handlePasteCell}>
-                <ClipboardPaste className="h-3.5 w-3.5" />
-                {t("query.pasteValue")}
-              </button>
-            )}
-            {canGenerateUuid && (
-              <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS} onClick={handleGenerateUuid}>
-                <WandSparkles className="h-3.5 w-3.5" />
-                {t("query.generateUuid")}
-              </button>
-            )}
-            {onCopyAs && (
-              <>
-                <div className="my-1 h-px bg-border" />
-                <div className="px-2 py-1 text-[11px] font-medium text-muted-foreground">{t("query.copyAs")}</div>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={CONTEXT_MENU_ITEM_CLASS}
-                  onClick={() => handleCopyAs("insert")}
-                >
-                  <ClipboardList className="h-3.5 w-3.5" />
-                  {t("query.copyAsInsert")}
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={CONTEXT_MENU_ITEM_CLASS}
-                  onClick={() => handleCopyAs("update")}
-                >
-                  <ClipboardList className="h-3.5 w-3.5" />
-                  {t("query.copyAsUpdate")}
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={CONTEXT_MENU_ITEM_CLASS}
-                  onClick={() => handleCopyAs("tsv-data")}
-                >
-                  <ClipboardList className="h-3.5 w-3.5" />
-                  {t("query.copyAsTsvData")}
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={CONTEXT_MENU_ITEM_CLASS}
-                  onClick={() => handleCopyAs("tsv-fields")}
-                >
-                  <ClipboardList className="h-3.5 w-3.5" />
-                  {t("query.copyAsTsvFields")}
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={CONTEXT_MENU_ITEM_CLASS}
-                  onClick={() => handleCopyAs("tsv-fields-data")}
-                >
-                  <ClipboardList className="h-3.5 w-3.5" />
-                  {t("query.copyAsTsvFieldsAndData")}
-                </button>
-              </>
-            )}
-            {onFilterByCellValue && (
+          </div>,
+          document.body
+        )}
+      {dateEditor &&
+        createPortal(
+          <div
+            className="fixed z-50 w-72 rounded-md border bg-popover p-3 text-popover-foreground shadow-lg"
+            style={{ top: "50%", left: "50%", transform: "translate(-50%, -50%)" }}
+            role="dialog"
+            aria-label={t("query.dateTimeDialogTitle")}
+          >
+            <div className="mb-2 text-sm font-medium">{t("query.dateTimeDialogTitle")}</div>
+            <label className="block">
+              <span className="sr-only">{t("query.dateTimeValue")}</span>
+              <input
+                aria-label={t("query.dateTimeValue")}
+                type={dateEditor.mode === "date" ? "date" : "datetime-local"}
+                step={dateEditor.mode === "date" ? undefined : 1}
+                className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+                value={dateEditor.value}
+                onChange={(e) => setDateEditor((prev) => (prev ? { ...prev, value: e.target.value } : prev))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleCommitDateEditor();
+                  if (e.key === "Escape") setDateEditor(null);
+                }}
+                autoFocus
+              />
+            </label>
+            <div className="mt-3 flex justify-end gap-2">
               <button
                 type="button"
-                role="menuitem"
-                className={CONTEXT_MENU_ITEM_CLASS}
-                onClick={handleFilterByCellValue}
+                className="rounded-md border px-3 py-1.5 text-sm hover:bg-accent"
+                onClick={() => setDateEditor(null)}
               >
-                <Filter className="h-3.5 w-3.5" />
-                {t("query.filterByCellValue")}
+                {t("action.cancel")}
               </button>
-            )}
-            {onSortByColumn && (
-              <>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={CONTEXT_MENU_ITEM_CLASS}
-                  onClick={() => handleSortByColumn("asc")}
-                >
-                  <ArrowUp className="h-3.5 w-3.5" />
-                  {t("query.sortAscending")}
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={CONTEXT_MENU_ITEM_CLASS}
-                  onClick={() => handleSortByColumn("desc")}
-                >
-                  <ArrowDown className="h-3.5 w-3.5" />
-                  {t("query.sortDescending")}
-                </button>
-              </>
-            )}
-            {onClearFilterSort && (
-              <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS} onClick={handleClearFilterSort}>
-                <FilterX className="h-3.5 w-3.5" />
-                {t("query.clearFilterSort")}
-              </button>
-            )}
-            {onRefresh && (
-              <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS} onClick={handleRefreshFromMenu}>
-                <RefreshCw className="h-3.5 w-3.5" />
-                {t("query.refreshTable")}
-              </button>
-            )}
-            {editable && onDeleteRow && (
               <button
                 type="button"
-                role="menuitem"
-                className={`${CONTEXT_MENU_ITEM_CLASS} text-destructive hover:text-destructive`}
-                onClick={handleDeleteRow}
+                className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90"
+                onClick={handleCommitDateEditor}
               >
-                <Trash2 className="h-3.5 w-3.5" />
-                {t("query.deleteRecord")}
+                {t("action.ok")}
               </button>
-            )}
+            </div>
           </div>,
           document.body
         )}
@@ -952,7 +1338,7 @@ function ColumnValuePanel({ col, entries, selected, onChange }: ColumnValuePanel
   // user has not touched this column yet — every checkbox renders empty and all
   // rows pass the filter. Once the user checks any value, `selected` becomes a
   // whitelist Set; only rows whose value is in the Set survive.
-  const selectedSet = selected ?? new Set<string>();
+  const selectedSet = useMemo(() => selected ?? new Set<string>(), [selected]);
   const allKeys = useMemo(() => entries.map((e) => e.key), [entries]);
   const allChecked = allKeys.length > 0 && selectedSet.size === allKeys.length;
 

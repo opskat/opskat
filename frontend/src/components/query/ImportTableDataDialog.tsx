@@ -64,6 +64,9 @@ export function ImportTableDataDialog({
     [driver, headers, mapping, nullStrategy, rows, tableName]
   );
   const previewRows = rows.slice(0, 20);
+  const unmappedHeaders = useMemo(() => headers.filter((header) => !mapping[header]), [headers, mapping]);
+  const hasHeaders = headers.length > 0;
+  const hasMappedColumns = headers.length > unmappedHeaders.length;
 
   const handleFile = useCallback(
     async (file: File | undefined) => {
@@ -190,6 +193,22 @@ export function ImportTableDataDialog({
                     </div>
                   ))}
                 </div>
+                {unmappedHeaders.length > 0 && (
+                  <div
+                    className={`rounded-md border px-3 py-2 text-xs ${
+                      hasMappedColumns
+                        ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                        : "border-destructive/40 bg-destructive/10 text-destructive"
+                    }`}
+                  >
+                    {hasMappedColumns
+                      ? t("query.importUnmappedColumns", {
+                          count: unmappedHeaders.length,
+                          columns: unmappedHeaders.join(", "),
+                        })
+                      : t("query.importNoMappedColumns")}
+                  </div>
+                )}
               </div>
             )}
 
@@ -228,7 +247,7 @@ export function ImportTableDataDialog({
             <Button
               size="sm"
               className="h-8 text-xs gap-1"
-              disabled={submitting || statements.length === 0}
+              disabled={submitting || statements.length === 0 || (hasHeaders && !hasMappedColumns)}
               onClick={() => setPreviewOpen(true)}
             >
               <Upload className="h-3.5 w-3.5" />
