@@ -38,6 +38,7 @@ interface ImportTableDataDialogProps {
   database: string;
   table: string;
   columns: string[];
+  primaryKeys?: string[];
   driver?: string;
   onSubmittingChange?: (submitting: boolean) => void;
   onSubmitStart?: () => number;
@@ -122,6 +123,7 @@ export function ImportTableDataDialog({
   database,
   table,
   columns,
+  primaryKeys: tablePrimaryKeys = [],
   driver,
   onSubmittingChange,
   onSubmitStart,
@@ -153,7 +155,7 @@ export function ImportTableDataDialog({
   const [decimalSymbol, setDecimalSymbol] = useState(".");
   const [binaryEncoding, setBinaryEncoding] = useState("base64");
   const [mapping, setMapping] = useState<Record<string, string>>({});
-  const [primaryKeys, setPrimaryKeys] = useState<Set<string>>(new Set(columns[0] ? [columns[0]] : []));
+  const [primaryKeys, setPrimaryKeys] = useState<Set<string>>(new Set(tablePrimaryKeys));
   const [nullStrategy, setNullStrategy] = useState<ImportNullStrategy>("literal-null");
   const [submitting, setSubmitting] = useState(false);
   const [logLines, setLogLines] = useState<string[]>([]);
@@ -173,6 +175,7 @@ export function ImportTableDataDialog({
     setUrlDraft("");
     setLogLines([]);
     setProgress({ processed: 0, added: 0, updated: 0, deleted: 0, error: 0, seconds: 0 });
+    setPrimaryKeys(new Set(tablePrimaryKeys));
   }, [open]);
 
   useEffect(() => {
@@ -651,14 +654,14 @@ export function ImportTableDataDialog({
             </span>
           </div>
           <div className="h-[300px] rounded-md border">
-            <div className="grid grid-cols-[1fr_1fr_130px] border-b bg-muted/40 px-3 py-2 text-xs font-medium">
+            <div className="grid grid-cols-[1fr_200px_130px] border-b bg-muted/40 px-3 py-2 text-xs font-medium">
               <span>{t("query.importSourceField")}</span>
               <span>{t("query.importTargetField")}</span>
               <span>{t("query.importPrimaryKey")}</span>
             </div>
             <ScrollArea className="h-[260px]">
               {parsed.headers.map((header) => (
-                <div key={header} className="grid grid-cols-[1fr_1fr_130px] items-center gap-3 px-3 py-1.5 text-sm">
+                <div key={header} className="grid grid-cols-[1fr_200px_130px] items-center gap-3 px-3 py-1.5 text-sm">
                   <span className="truncate font-mono" title={header}>
                     {header}
                   </span>

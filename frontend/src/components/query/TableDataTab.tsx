@@ -1075,6 +1075,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         database={database}
         table={table}
         columns={columns}
+        primaryKeys={primaryKeys}
         driver={driver}
         onSubmittingChange={setImporting}
         onSubmitStart={handleImportSubmitStart}

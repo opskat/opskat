@@ -303,6 +303,16 @@ describe("QueryResultTable — cell context actions", () => {
     expect(screen.getByRole("menu")).not.toHaveClass("overflow-hidden");
   });
 
+  it("does not clip the filter submenu outside the context menu", async () => {
+    const user = userEvent.setup();
+    openMenu({ onFilterByCellValue: vi.fn(), onClearFilterSort: vi.fn(), onAddColumnFilter: vi.fn() });
+
+    await user.hover(screen.getByText("query.filter"));
+
+    expect(screen.getByRole("menu")).not.toHaveClass("overflow-hidden");
+    expect(screen.getByText("query.filterFieldNotEqualsValue")).toBeVisible();
+  });
+
   it("right-clicking a row number selects the full row and shows row actions only", () => {
     openRowMenu({ onDeleteRow: vi.fn(), onCopyAs: vi.fn(), onFilterByCellValue: vi.fn(), onSortByColumn: vi.fn() });
 
