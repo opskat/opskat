@@ -50,9 +50,36 @@ export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelPr
     storageKey: "ai_sidebar_width",
     targetRef: panelRef,
   });
-  // 窄面板下尽量把空间留给聊天区，但也要避免会话项被压成别扭的多行。
-  const isCompactSessionRail = width < 430;
-  const sessionRailWidth = width >= 500 ? 176 : isCompactSessionRail ? 128 : 156;
+  const railRef = useRef<HTMLDivElement>(null);
+
+  // rail 折叠状态独立持久化（与面板宽解耦）
+  const [railCollapsed, setRailCollapsed] = useState<boolean>(() => {
+    const v = localStorage.getItem("ai_sidebar_rail_collapsed");
+    return v === null ? true : v === "true";
+  });
+  const toggleRailCollapsed = () => {
+    setRailCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem("ai_sidebar_rail_collapsed", String(next));
+      return next;
+    });
+  };
+
+  // 宽态 rail 自身的宽度（仅 !railCollapsed 时启用拖拽）
+  const {
+    size: railExpandedWidth,
+    isResizing: railResizing,
+    handleMouseDown: handleRailResizeStart,
+  } = useResizeHandle({
+    defaultSize: 150,
+    minSize: 120,
+    maxSize: 220,
+    reverse: true,
+    storageKey: "ai_sidebar_rail_width",
+    targetRef: railRef,
+  });
+
+  const railRenderWidth = railCollapsed ? 36 : railExpandedWidth;
 
   useEffect(() => {
     if (configured) fetchConversations();
@@ -183,19 +210,27 @@ export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelPr
 
           {sidebarTabs.length > 0 && (
             <aside
-              className="min-h-0 shrink-0 border-l border-panel-divider/70 bg-sidebar/65"
-              style={{ width: sessionRailWidth }}
+              ref={railRef}
+              className="relative min-h-0 shrink-0 border-l border-panel-divider/70 bg-sidebar/65"
+              style={{ width: railRenderWidth }}
               data-ai-session-rail="right"
             >
+              {!railCollapsed && (
+                <div
+                  className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize z-10 hover:bg-primary/20 active:bg-primary/30 transition-colors"
+                  onMouseDown={handleRailResizeStart}
+                />
+              )}
+              {railResizing && <div className="fixed inset-0 z-50 cursor-col-resize" />}
               <SideAssistantTabBar
                 tabs={sidebarTabs}
                 activeTabId={activeSidebarTabId}
                 getStatus={getSidebarTabStatus}
-                collapsed={true}
+                collapsed={railCollapsed}
                 onActivate={activateSidebarTab}
                 onClose={closeSidebarTab}
                 onNewChat={handleNewChat}
-                onToggleCollapsed={() => {}}
+                onToggleCollapsed={toggleRailCollapsed}
               />
             </aside>
           )}
