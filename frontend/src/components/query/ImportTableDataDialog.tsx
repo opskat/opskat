@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Button,
@@ -8,6 +8,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  Input,
   Label,
   ScrollArea,
   Select,
@@ -15,12 +16,20 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Separator,
 } from "@opskat/ui";
-import { Loader2, Upload } from "lucide-react";
+import { FilePlus2, Link, Loader2, Play, Table2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ExecuteSQL } from "../../../wailsjs/go/app/App";
-import { buildImportInsertSql, detectDelimiter, parseDelimitedText, type ImportNullStrategy } from "@/lib/tableImport";
-import { SqlPreviewDialog } from "./SqlPreviewDialog";
+import {
+  buildImportInsertSql,
+  detectDelimiter,
+  parseImportSourceText,
+  type ImportDataFormat,
+  type ImportFieldDelimiter,
+  type ImportNullStrategy,
+  type ParsedDelimitedTable,
+} from "@/lib/tableImport";
 
 interface ImportTableDataDialogProps {
   open: boolean;
@@ -34,6 +43,53 @@ interface ImportTableDataDialogProps {
   onSubmitStart?: () => number;
   isSubmitCancelled?: (requestId: number) => boolean;
   onSuccess: () => void;
+}
+
+type WizardStep = "type" | "source" | "delimiter" | "options" | "mapping" | "summary";
+type SourceItem = { id: string; name: string; kind: "file" | "url"; text: string };
+type ImportProgress = {
+  processed: number;
+  added: number;
+  updated: number;
+  deleted: number;
+  error: number;
+  seconds: number;
+};
+
+const steps: WizardStep[] = ["type", "source", "delimiter", "options", "mapping", "summary"];
+const enterpriseFormats = ["excel", "access", "odbc", "dbase", "paradox"] as const;
+
+function formatAccept(format: ImportDataFormat): string {
+  if (format === "json") return ".json,application/json";
+  if (format === "xml") return ".xml,application/xml,text/xml";
+  if (format === "csv") return ".csv,text/csv";
+  return ".txt,.csv,.tsv,text/plain,text/csv,text/tab-separated-values";
+}
+
+function mergeParsedTables(tables: ParsedDelimitedTable[]): ParsedDelimitedTable {
+  const headers: string[] = [];
+  for (const table of tables) {
+    for (const header of table.headers) {
+      if (header && !headers.includes(header)) headers.push(header);
+    }
+  }
+
+  return {
+    headers,
+    rows: tables.flatMap((table) =>
+      table.rows.map((row) => headers.map((header) => row[table.headers.indexOf(header)] ?? ""))
+    ),
+  };
+}
+
+function nextAutoMapping(headers: string[], columns: string[]): Record<string, string> {
+  const lowerColumnMap = new Map(columns.map((column) => [column.toLowerCase(), column]));
+  const mapping: Record<string, string> = {};
+  for (const header of headers) {
+    const exact = columns.includes(header) ? header : lowerColumnMap.get(header.toLowerCase());
+    if (exact) mapping[header] = exact;
+  }
+  return mapping;
 }
 
 export function ImportTableDataDialog({
@@ -50,230 +106,660 @@ export function ImportTableDataDialog({
   onSuccess,
 }: ImportTableDataDialogProps) {
   const { t } = useTranslation();
-  const [headers, setHeaders] = useState<string[]>([]);
-  const [rows, setRows] = useState<string[][]>([]);
-  const [delimiter, setDelimiter] = useState<"," | "\t">(",");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [stepIndex, setStepIndex] = useState(0);
+  const [format, setFormat] = useState<ImportDataFormat>("text");
+  const [sources, setSources] = useState<SourceItem[]>([]);
+  const [urlDraft, setUrlDraft] = useState("");
+  const [loadingUrl, setLoadingUrl] = useState(false);
+  const [recordDelimiter, setRecordDelimiter] = useState("lf");
+  const [importShape, setImportShape] = useState<"delimited" | "fixed">("delimited");
+  const [fieldDelimiter, setFieldDelimiter] = useState<ImportFieldDelimiter>("\t");
+  const [customDelimiter, setCustomDelimiter] = useState("");
+  const [textQualifier, setTextQualifier] = useState('"');
+  const [fieldNameRowEnabled, setFieldNameRowEnabled] = useState(true);
+  const [fieldNameRow, setFieldNameRow] = useState(1);
+  const [dataStartRow, setDataStartRow] = useState(2);
+  const [dataEndRow, setDataEndRow] = useState("");
+  const [dateOrder, setDateOrder] = useState("dmy");
+  const [dateTimeOrder, setDateTimeOrder] = useState("date-time");
+  const [dateDelimiter, setDateDelimiter] = useState("/");
+  const [yearDelimiterEnabled, setYearDelimiterEnabled] = useState(false);
+  const [yearDelimiter, setYearDelimiter] = useState("/");
+  const [timeDelimiter, setTimeDelimiter] = useState(":");
+  const [decimalSymbol, setDecimalSymbol] = useState(".");
+  const [binaryEncoding, setBinaryEncoding] = useState("base64");
   const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [primaryKeys, setPrimaryKeys] = useState<Set<string>>(new Set(columns[0] ? [columns[0]] : []));
   const [nullStrategy, setNullStrategy] = useState<ImportNullStrategy>("literal-null");
-  const [previewOpen, setPreviewOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [progress, setProgress] = useState<ImportProgress>({
+    processed: 0,
+    added: 0,
+    updated: 0,
+    deleted: 0,
+    error: 0,
+    seconds: 0,
+  });
+
+  useEffect(() => {
+    if (!open) return;
+    setStepIndex(0);
+    setSources([]);
+    setUrlDraft("");
+    setProgress({ processed: 0, added: 0, updated: 0, deleted: 0, error: 0, seconds: 0 });
+  }, [open]);
+
+  useEffect(() => {
+    setSources([]);
+    setStepIndex(0);
+    setFieldDelimiter(format === "csv" ? "," : "\t");
+  }, [format]);
+
+  const parsed = useMemo(() => {
+    if (sources.length === 0) return { headers: [], rows: [] };
+    const delimiter = customDelimiter ? (customDelimiter[0] as ImportFieldDelimiter) : fieldDelimiter;
+    return mergeParsedTables(
+      sources.map((source) =>
+        parseImportSourceText({
+          text: source.text,
+          format,
+          fieldDelimiter: delimiter,
+          fixedWidth: importShape === "fixed",
+          fieldNameRowEnabled,
+          fieldNameRow,
+          dataStartRow,
+          dataEndRow: dataEndRow ? Number(dataEndRow) : undefined,
+        })
+      )
+    );
+  }, [
+    customDelimiter,
+    dataEndRow,
+    dataStartRow,
+    fieldDelimiter,
+    fieldNameRow,
+    fieldNameRowEnabled,
+    format,
+    importShape,
+    sources,
+  ]);
+
+  useEffect(() => {
+    setMapping(nextAutoMapping(parsed.headers, columns));
+  }, [columns, parsed.headers]);
 
   const tableName = driver === "postgresql" ? table : `${database}.${table}`;
   const statements = useMemo(
-    () => buildImportInsertSql({ tableName, headers, rows, mapping, nullStrategy, driver }),
-    [driver, headers, mapping, nullStrategy, rows, tableName]
+    () =>
+      buildImportInsertSql({
+        tableName,
+        headers: parsed.headers,
+        rows: parsed.rows,
+        mapping,
+        nullStrategy,
+        driver,
+      }),
+    [driver, mapping, nullStrategy, parsed.headers, parsed.rows, tableName]
   );
-  const previewRows = rows.slice(0, 20);
-  const unmappedHeaders = useMemo(() => headers.filter((header) => !mapping[header]), [headers, mapping]);
-  const hasHeaders = headers.length > 0;
-  const hasMappedColumns = headers.length > unmappedHeaders.length;
+  const unmappedHeaders = parsed.headers.filter((header) => !mapping[header]);
+  const hasMappedColumns = parsed.headers.length > unmappedHeaders.length;
+  const step = steps[stepIndex];
+  const isDelimitedFormat = format === "text" || format === "csv";
+  const canNext =
+    step === "type" ||
+    (step === "source" && sources.length > 0 && parsed.headers.length > 0) ||
+    step === "delimiter" ||
+    step === "options" ||
+    (step === "mapping" && hasMappedColumns);
+  const canStart = step === "summary" && statements.length > 0 && !submitting;
 
-  const handleFile = useCallback(
-    async (file: File | undefined) => {
-      if (!file) return;
-      try {
+  const handleFiles = useCallback(
+    async (files: FileList | null) => {
+      if (!files?.length) return;
+      const nextSources: SourceItem[] = [];
+      for (const file of Array.from(files)) {
         const text = await file.text();
-        const nextDelimiter = detectDelimiter(text);
-        const parsed = parseDelimitedText(text, nextDelimiter);
-        const nextMapping: Record<string, string> = {};
-        for (const header of parsed.headers) {
-          if (columns.includes(header)) nextMapping[header] = header;
-        }
-        setDelimiter(nextDelimiter);
-        setHeaders(parsed.headers);
-        setRows(parsed.rows);
-        setMapping(nextMapping);
-      } catch (e) {
-        toast.error(String(e));
+        nextSources.push({ id: `${file.name}-${file.size}-${Date.now()}`, name: file.name, kind: "file", text });
+        if (format === "text" || format === "csv") setFieldDelimiter(detectDelimiter(text));
       }
+      setSources((prev) => [...prev, ...nextSources]);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     },
-    [columns]
+    [format]
   );
 
-  const handleConfirm = useCallback(async () => {
-    if (!assetId || statements.length === 0) return;
-    const requestId = onSubmitStart?.() ?? 0;
-    setSubmitting(true);
-    onSubmittingChange?.(true);
-    let affected = 0;
+  const handleAddUrl = useCallback(async () => {
+    const url = urlDraft.trim();
+    if (!url) return;
+    setLoadingUrl(true);
     try {
-      for (const sql of statements) {
-        if (isSubmitCancelled?.(requestId)) return;
-        const result = await ExecuteSQL(assetId, sql, database);
-        if (isSubmitCancelled?.(requestId)) return;
-        const parsed = JSON.parse(result || "{}") as { affected_rows?: number };
-        affected += Number(parsed.affected_rows ?? 0);
-      }
-      toast.success(t("query.importSuccess", { affected }));
-      setPreviewOpen(false);
-      onOpenChange(false);
-      onSuccess();
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+      const text = await response.text();
+      setSources((prev) => [...prev, { id: `${url}-${Date.now()}`, name: url, kind: "url", text }]);
+      setUrlDraft("");
     } catch (e) {
       toast.error(String(e));
+    } finally {
+      setLoadingUrl(false);
+    }
+  }, [urlDraft]);
+
+  const handleStart = useCallback(async () => {
+    if (!assetId || statements.length === 0) return;
+    const requestId = onSubmitStart?.() ?? 0;
+    const startedAt = performance.now();
+    setSubmitting(true);
+    onSubmittingChange?.(true);
+    setProgress({ processed: 0, added: 0, updated: 0, deleted: 0, error: 0, seconds: 0 });
+
+    let added = 0;
+    let error = 0;
+    try {
+      for (let index = 0; index < statements.length; index++) {
+        if (isSubmitCancelled?.(requestId)) return;
+        try {
+          const result = await ExecuteSQL(assetId, statements[index], database);
+          if (isSubmitCancelled?.(requestId)) return;
+          const parsedResult = JSON.parse(result || "{}") as { affected_rows?: number };
+          added += Number(parsedResult.affected_rows ?? 0);
+        } catch (e) {
+          error += 1;
+          toast.error(String(e));
+        }
+        setProgress({
+          processed: index + 1,
+          added,
+          updated: 0,
+          deleted: 0,
+          error,
+          seconds: (performance.now() - startedAt) / 1000,
+        });
+      }
+      if (error === 0) {
+        toast.success(t("query.importSuccess", { affected: added }));
+        onOpenChange(false);
+        onSuccess();
+      }
     } finally {
       setSubmitting(false);
       onSubmittingChange?.(false);
     }
   }, [assetId, database, isSubmitCancelled, onOpenChange, onSubmitStart, onSubmittingChange, onSuccess, statements, t]);
 
-  return (
-    <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-4xl" showCloseButton={!submitting}>
-          <DialogHeader>
-            <DialogTitle>{t("query.importDialogTitle")}</DialogTitle>
-            <DialogDescription>{t("query.importDialogDesc", { table })}</DialogDescription>
-          </DialogHeader>
+  const goNext = () => {
+    if (!canNext || stepIndex >= steps.length - 1) return;
+    setStepIndex((value) => value + 1);
+  };
 
-          <div className="grid gap-3">
-            <div className="flex items-center gap-2">
-              <Label className="text-xs shrink-0">{t("query.importFile")}</Label>
-              <input
-                type="file"
-                accept=".csv,.tsv,text/csv,text/tab-separated-values,text/plain"
-                className="h-8 flex-1 rounded-md border border-input bg-background px-2 py-1 text-xs"
-                disabled={submitting}
-                onChange={(event) => handleFile(event.target.files?.[0])}
-              />
-              <span className="text-xs text-muted-foreground">{delimiter === "\t" ? "TSV" : "CSV"}</span>
+  const renderStep = () => {
+    if (step === "type") {
+      return (
+        <div className="space-y-5">
+          <p className="text-sm font-medium">{t("query.importWizardTypeIntro")}</p>
+          <div className="space-y-3">
+            <Label className="text-sm">{t("query.importWizardTypeLabel")}</Label>
+            {(["text", "csv", "json", "xml"] as ImportDataFormat[]).map((item) => (
+              <label key={item} className="flex w-fit cursor-pointer items-center gap-2 text-sm">
+                <input type="radio" name="import-type" checked={format === item} onChange={() => setFormat(item)} />
+                {t(`query.importType${item[0].toUpperCase()}${item.slice(1)}`)}
+              </label>
+            ))}
+            {enterpriseFormats.map((item) => (
+              <label key={item} className="flex w-fit items-center gap-2 text-sm text-muted-foreground opacity-55">
+                <input type="radio" disabled />
+                {t(`query.importType${item[0].toUpperCase()}${item.slice(1)}`)}
+                <span className="rounded bg-orange-500 px-1 py-0.5 text-[10px] font-semibold text-white">Ent</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    if (step === "source") {
+      return (
+        <div className="space-y-3">
+          <p className="text-sm font-medium">{t("query.importSourceIntro")}</p>
+          <div className="h-[280px] rounded-md border">
+            <div className="grid grid-cols-[1fr_120px] border-b bg-muted/40 px-3 py-2 text-xs font-medium">
+              <span>{t("query.importSource")}</span>
+              <span>{t("query.importSourceKind")}</span>
             </div>
+            <ScrollArea className="h-[240px]">
+              {sources.map((source) => (
+                <div key={source.id} className="grid grid-cols-[1fr_120px_32px] items-center gap-2 px-3 py-2 text-sm">
+                  <span className="truncate" title={source.name}>
+                    {source.name}
+                  </span>
+                  <span className="text-xs text-muted-foreground">{t(`query.importSource${source.kind}`)}</span>
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="ghost"
+                    onClick={() => setSources((prev) => prev.filter((item) => item.id !== source.id))}
+                    title={t("action.delete")}
+                  >
+                    <Trash2 />
+                  </Button>
+                </div>
+              ))}
+            </ScrollArea>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={formatAccept(format)}
+              className="sr-only"
+              onChange={(event) => handleFiles(event.target.files)}
+            />
+            <Button type="button" size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}>
+              <FilePlus2 className="h-3.5 w-3.5" />
+              {t("query.importAddFile")}
+            </Button>
+            <div className="flex min-w-[280px] flex-1 items-center gap-2">
+              <Input
+                value={urlDraft}
+                onChange={(event) => setUrlDraft(event.target.value)}
+                placeholder={t("query.importUrlPlaceholder")}
+                className="h-8 text-xs"
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={loadingUrl || !urlDraft.trim()}
+                onClick={handleAddUrl}
+              >
+                {loadingUrl ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link className="h-3.5 w-3.5" />}
+                {t("query.importAddUrl")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      );
+    }
 
-            {headers.length > 0 && (
-              <div className="grid gap-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-medium">{t("query.importMapping")}</span>
-                  <Select value={nullStrategy} onValueChange={(value) => setNullStrategy(value as ImportNullStrategy)}>
-                    <SelectTrigger size="sm" className="h-7 w-[180px] text-xs">
+    if (step === "delimiter") {
+      return (
+        <div className="space-y-5">
+          <p className="text-sm font-medium">{t("query.importDelimiterIntro")}</p>
+          <div className="flex items-center gap-3">
+            <Label className="w-36 justify-end text-sm">{t("query.importRecordDelimiter")}</Label>
+            <Select value={recordDelimiter} onValueChange={setRecordDelimiter}>
+              <SelectTrigger className="h-8 w-32 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="lf">LF</SelectItem>
+                <SelectItem value="crlf">CRLF</SelectItem>
+                <SelectItem value="cr">CR</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <label className="flex w-fit items-center gap-2 text-sm">
+            <input
+              type="radio"
+              checked={importShape === "delimited"}
+              disabled={!isDelimitedFormat}
+              onChange={() => setImportShape("delimited")}
+            />
+            {t("query.importDelimited")}
+          </label>
+          <label className="flex w-fit items-center gap-2 text-sm">
+            <input type="radio" checked={importShape === "fixed"} onChange={() => setImportShape("fixed")} />
+            {t("query.importFixedWidth")}
+          </label>
+          <div className="ml-7 space-y-3">
+            <div className="flex items-center gap-3">
+              <Label className="w-36 justify-end text-sm">{t("query.importFieldDelimiter")}</Label>
+              <Select
+                value={fieldDelimiter}
+                disabled={importShape !== "delimited"}
+                onValueChange={(value) => setFieldDelimiter(value as ImportFieldDelimiter)}
+              >
+                <SelectTrigger className="h-8 w-44 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="\t">{t("query.exportDelimiterTab")}</SelectItem>
+                  <SelectItem value=",">{t("query.exportDelimiterComma")}</SelectItem>
+                  <SelectItem value=";">{t("query.exportDelimiterSemicolon")}</SelectItem>
+                  <SelectItem value="|">{t("query.exportDelimiterPipe")}</SelectItem>
+                  <SelectItem value=" ">{t("query.exportDelimiterSpace")}</SelectItem>
+                </SelectContent>
+              </Select>
+              <Input
+                value={customDelimiter}
+                onChange={(event) => setCustomDelimiter(event.target.value.slice(0, 1))}
+                className="h-8 w-16 text-xs"
+              />
+            </div>
+            <div className="flex items-center gap-3">
+              <Label className="w-36 justify-end text-sm">{t("query.importTextQualifier")}</Label>
+              <Select value={textQualifier} disabled={importShape !== "delimited"} onValueChange={setTextQualifier}>
+                <SelectTrigger className="h-8 w-32 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={'"'}>"</SelectItem>
+                  <SelectItem value="'">'</SelectItem>
+                  <SelectItem value="none">{t("query.exportQualifierNone")}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (step === "options") {
+      return (
+        <div className="space-y-5">
+          <p className="text-sm font-medium">{t("query.importOptionsTitle")}</p>
+          <div className="space-y-3">
+            <label className="flex items-center gap-3 text-sm">
+              <input
+                type="checkbox"
+                checked={fieldNameRowEnabled}
+                onChange={(event) => setFieldNameRowEnabled(event.target.checked)}
+              />
+              {t("query.importFieldNameRow")}
+              <span>{t("query.importRow")}</span>
+              <Input
+                type="number"
+                value={fieldNameRow}
+                disabled={!fieldNameRowEnabled}
+                min={1}
+                onChange={(event) => setFieldNameRow(Number(event.target.value))}
+                className="h-8 w-20 text-xs"
+              />
+            </label>
+            <div className="flex items-center gap-3 pl-7 text-sm">
+              {t("query.importDataRow")}
+              <span>{t("query.importRow")}</span>
+              <Input
+                type="number"
+                value={dataStartRow}
+                min={1}
+                onChange={(event) => setDataStartRow(Number(event.target.value))}
+                className="h-8 w-20 text-xs"
+              />
+              <span>~</span>
+              <span>{t("query.importRow")}</span>
+              <Input
+                value={dataEndRow}
+                onChange={(event) => setDataEndRow(event.target.value.replace(/\D/g, ""))}
+                placeholder={t("query.importEndOfFile")}
+                className="h-8 w-28 text-xs"
+              />
+            </div>
+          </div>
+          <Separator />
+          <div className="grid grid-cols-[1fr_1fr] gap-6">
+            <div className="space-y-3">
+              <div className="text-sm font-semibold">{t("query.importDateTimeFormats")}</div>
+              <div className="grid grid-cols-[140px_1fr] items-center gap-2 text-sm">
+                <Label className="justify-end">{t("query.exportDateOrder")}</Label>
+                <Select value={dateOrder} onValueChange={setDateOrder}>
+                  <SelectTrigger className="h-8 w-40 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="dmy">DMY</SelectItem>
+                    <SelectItem value="mdy">MDY</SelectItem>
+                    <SelectItem value="ymd">YMD</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Label className="justify-end">{t("query.importDateTimeOrder")}</Label>
+                <Select value={dateTimeOrder} onValueChange={setDateTimeOrder}>
+                  <SelectTrigger className="h-8 w-48 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="date-time">{t("query.importDateTimeOrderDateTime")}</SelectItem>
+                    <SelectItem value="time-date">{t("query.importDateTimeOrderTimeDate")}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Label className="justify-end">{t("query.exportDateDelimiter")}</Label>
+                <Input
+                  value={dateDelimiter}
+                  onChange={(event) => setDateDelimiter(event.target.value)}
+                  className="h-8 w-28"
+                />
+                <label className="contents">
+                  <span className="flex justify-end gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={yearDelimiterEnabled}
+                      onChange={(event) => setYearDelimiterEnabled(event.target.checked)}
+                    />
+                    {t("query.importYearDelimiter")}
+                  </span>
+                  <Input
+                    value={yearDelimiter}
+                    disabled={!yearDelimiterEnabled}
+                    onChange={(event) => setYearDelimiter(event.target.value)}
+                    className="h-8 w-28"
+                  />
+                </label>
+                <Label className="justify-end">{t("query.exportTimeDelimiter")}</Label>
+                <Input
+                  value={timeDelimiter}
+                  onChange={(event) => setTimeDelimiter(event.target.value)}
+                  className="h-8 w-28"
+                />
+              </div>
+            </div>
+            <div className="space-y-3 text-sm">
+              <div className="font-semibold">{t("query.importDateTimeExample")}</div>
+              <div className="space-y-1 text-muted-foreground">
+                <div>24/8/23 15:30:38</div>
+                <div>24/8/2023 15:30:38</div>
+                <div>24/Aug/23 15:30:38</div>
+                <div>24/August/23 15:30:38</div>
+              </div>
+            </div>
+          </div>
+          <div className="space-y-3">
+            <div className="text-sm font-semibold">{t("query.importOtherFormats")}</div>
+            <div className="grid grid-cols-[180px_180px] items-center gap-2 text-sm">
+              <Label className="justify-end">{t("query.exportDecimalSymbol")}</Label>
+              <Input value={decimalSymbol} onChange={(event) => setDecimalSymbol(event.target.value)} className="h-8" />
+              <Label className="justify-end">{t("query.exportBinaryEncoding")}</Label>
+              <Select value={binaryEncoding} onValueChange={setBinaryEncoding}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="base64">Base64</SelectItem>
+                  <SelectItem value="hex">Hex</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (step === "mapping") {
+      return (
+        <div className="space-y-3">
+          <p className="text-sm font-medium">{t("query.importMappingIntro")}</p>
+          <div className="flex h-8 items-center gap-2 rounded-md border px-3 text-sm">
+            <Table2 className="h-4 w-4 text-primary" />
+            <span>
+              {table} &lt;- {sources.map((source) => source.name.replace(/\.[^.]+$/, "")).join(", ")}
+            </span>
+          </div>
+          <div className="h-[300px] rounded-md border">
+            <div className="grid grid-cols-[1fr_1fr_130px] border-b bg-muted/40 px-3 py-2 text-xs font-medium">
+              <span>{t("query.importSourceField")}</span>
+              <span>{t("query.importTargetField")}</span>
+              <span>{t("query.importPrimaryKey")}</span>
+            </div>
+            <ScrollArea className="h-[260px]">
+              {parsed.headers.map((header) => (
+                <div key={header} className="grid grid-cols-[1fr_1fr_130px] items-center gap-3 px-3 py-1.5 text-sm">
+                  <span className="truncate font-mono" title={header}>
+                    {header}
+                  </span>
+                  <Select
+                    value={mapping[header] || "__skip__"}
+                    onValueChange={(value) =>
+                      setMapping((prev) => {
+                        const next = { ...prev };
+                        if (value === "__skip__") delete next[header];
+                        else next[header] = value;
+                        return next;
+                      })
+                    }
+                  >
+                    <SelectTrigger className="h-8 text-xs">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="literal-null" className="text-xs">
-                        {t("query.importNullLiteral")}
-                      </SelectItem>
-                      <SelectItem value="empty-is-null" className="text-xs">
-                        {t("query.importNullEmpty")}
-                      </SelectItem>
-                      <SelectItem value="empty-is-empty-string" className="text-xs">
-                        {t("query.importNullEmptyString")}
-                      </SelectItem>
+                      <SelectItem value="__skip__">{t("query.importSkipColumn")}</SelectItem>
+                      {columns.map((column) => (
+                        <SelectItem key={column} value={column}>
+                          {column}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
+                  <input
+                    type="checkbox"
+                    checked={primaryKeys.has(mapping[header])}
+                    disabled={!mapping[header]}
+                    onChange={(event) =>
+                      setPrimaryKeys((prev) => {
+                        const next = new Set(prev);
+                        if (event.target.checked) next.add(mapping[header]);
+                        else next.delete(mapping[header]);
+                        return next;
+                      })
+                    }
+                  />
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  {headers.map((header) => (
-                    <div key={header} className="flex items-center gap-2">
-                      <span className="min-w-0 flex-1 truncate text-xs font-mono" title={header}>
-                        {header}
-                      </span>
-                      <Select
-                        value={mapping[header] || "__skip__"}
-                        onValueChange={(value) =>
-                          setMapping((prev) => {
-                            const next = { ...prev };
-                            if (value === "__skip__") delete next[header];
-                            else next[header] = value;
-                            return next;
-                          })
-                        }
-                      >
-                        <SelectTrigger size="sm" className="h-7 w-[180px] text-xs">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__skip__" className="text-xs">
-                            {t("query.importSkipColumn")}
-                          </SelectItem>
-                          {columns.map((column) => (
-                            <SelectItem key={column} value={column} className="text-xs">
-                              {column}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  ))}
-                </div>
-                {unmappedHeaders.length > 0 && (
-                  <div
-                    className={`rounded-md border px-3 py-2 text-xs ${
-                      hasMappedColumns
-                        ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
-                        : "border-destructive/40 bg-destructive/10 text-destructive"
-                    }`}
-                  >
-                    {hasMappedColumns
-                      ? t("query.importUnmappedColumns", {
-                          count: unmappedHeaders.length,
-                          columns: unmappedHeaders.join(", "),
-                        })
-                      : t("query.importNoMappedColumns")}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {previewRows.length > 0 && (
-              <ScrollArea className="h-[260px] rounded-md border border-border">
-                <table className="w-full border-collapse text-xs font-mono">
-                  <thead className="sticky top-0 bg-muted">
-                    <tr>
-                      {headers.map((header) => (
-                        <th key={header} className="border border-border px-2 py-1 text-left font-semibold">
-                          {header}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {previewRows.map((row, rowIdx) => (
-                      <tr key={rowIdx} className={rowIdx % 2 === 0 ? "bg-background" : "bg-muted/30"}>
-                        {headers.map((header, colIdx) => (
-                          <td key={header} className="max-w-[220px] truncate border border-border px-2 py-1">
-                            {row[colIdx]}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </ScrollArea>
-            )}
+              ))}
+            </ScrollArea>
           </div>
-
-          <DialogFooter>
-            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => onOpenChange(false)}>
-              {t("action.cancel")}
-            </Button>
-            <Button
-              size="sm"
-              className="h-8 text-xs gap-1"
-              disabled={submitting || statements.length === 0 || (hasHeaders && !hasMappedColumns)}
-              onClick={() => setPreviewOpen(true)}
+          <div className="flex items-center justify-between gap-2">
+            <Select value={nullStrategy} onValueChange={(value) => setNullStrategy(value as ImportNullStrategy)}>
+              <SelectTrigger className="h-8 w-[240px] text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="literal-null">{t("query.importNullLiteral")}</SelectItem>
+                <SelectItem value="empty-is-null">{t("query.importNullEmpty")}</SelectItem>
+                <SelectItem value="empty-is-empty-string">{t("query.importNullEmptyString")}</SelectItem>
+              </SelectContent>
+            </Select>
+            <span className="text-xs text-muted-foreground">
+              {t("query.importPreviewRows", { count: parsed.rows.length })}
+            </span>
+          </div>
+          {unmappedHeaders.length > 0 && (
+            <div
+              className={`rounded-md border px-3 py-2 text-xs ${
+                hasMappedColumns
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                  : "border-destructive/40 bg-destructive/10 text-destructive"
+              }`}
             >
-              <Upload className="h-3.5 w-3.5" />
-              {t("query.designTablePreviewChanges")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <SqlPreviewDialog
-        open={previewOpen}
-        onOpenChange={(nextOpen) => {
-          if (!submitting) setPreviewOpen(nextOpen);
-        }}
-        statements={statements}
-        onConfirm={handleConfirm}
-        submitting={submitting}
-        warning={
-          submitting ? (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              {t("query.executing")}
+              {hasMappedColumns
+                ? t("query.importUnmappedColumns", {
+                    count: unmappedHeaders.length,
+                    columns: unmappedHeaders.join(", "),
+                  })
+                : t("query.importNoMappedColumns")}
             </div>
-          ) : undefined
-        }
-      />
-    </>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-4">
+        <p className="text-sm font-medium">{t("query.importSummaryIntro")}</p>
+        <div className="grid w-56 grid-cols-[1fr_auto] gap-x-4 gap-y-1 text-sm">
+          <span className="text-right">{t("query.importTableCount")}</span>
+          <span>
+            {sources.length > 0 ? 1 : 0}/{sources.length > 0 ? 1 : 0}
+          </span>
+          <span className="text-right">{t("query.importProcessed")}</span>
+          <span>{progress.processed}</span>
+          <span className="text-right">{t("query.importAdded")}</span>
+          <span>{progress.added}</span>
+          <span className="text-right">{t("query.importUpdated")}</span>
+          <span>{progress.updated}</span>
+          <span className="text-right">{t("query.importDeleted")}</span>
+          <span>{progress.deleted}</span>
+          <span className="text-right">{t("query.importError")}</span>
+          <span>{progress.error}</span>
+          <span className="text-right">{t("query.importTime")}</span>
+          <span>{progress.seconds.toFixed(1)}s</span>
+        </div>
+        <div className="h-[210px] rounded-md border bg-muted/10 p-3 font-mono text-xs">
+          {statements.slice(0, 8).map((statement, index) => (
+            <div key={index} className="truncate">
+              {statement}
+            </div>
+          ))}
+        </div>
+        <div className="h-2 rounded-full bg-muted">
+          <div
+            className="h-full rounded-full bg-primary transition-all"
+            style={{ width: `${statements.length ? (progress.processed / statements.length) * 100 : 0}%` }}
+          />
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-5xl gap-0 overflow-hidden p-0" showCloseButton={!submitting}>
+        <DialogHeader className="border-b px-6 py-4">
+          <DialogTitle>{t("query.importDialogTitle")}</DialogTitle>
+          <DialogDescription>{t("query.importDialogDesc", { table })}</DialogDescription>
+        </DialogHeader>
+
+        <div className="min-h-[520px] px-6 py-5">{renderStep()}</div>
+
+        <DialogFooter className="border-t bg-muted/40 px-6 py-4">
+          <div className="mr-auto">
+            <Button type="button" variant="outline" size="sm" disabled={step !== "summary"}>
+              {t("query.importSaveProfile")}
+            </Button>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={submitting || stepIndex === 0}
+            onClick={() => setStepIndex(stepIndex - 1)}
+          >
+            {t("query.importWizardBack")}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={submitting || step === "summary" || !canNext}
+            onClick={goNext}
+          >
+            {t("query.importWizardNext")}
+          </Button>
+          <Button type="button" size="sm" disabled={!canStart} onClick={handleStart}>
+            {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+            {t("query.importWizardStart")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

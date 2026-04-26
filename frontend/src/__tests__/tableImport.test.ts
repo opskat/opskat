@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildImportInsertSql, detectDelimiter, parseDelimitedText } from "@/lib/tableImport";
+import { buildImportInsertSql, detectDelimiter, parseDelimitedText, parseImportSourceText } from "@/lib/tableImport";
 
 describe("table import helpers", () => {
   it("parses quoted CSV cells with commas, quotes, and embedded newlines", () => {
@@ -53,5 +53,38 @@ describe("table import helpers", () => {
   it("detects TSV when tabs outnumber commas in the header", () => {
     expect(detectDelimiter("id\tname\tnote\n1\tAlice\tok")).toBe("\t");
     expect(detectDelimiter("id,name,note\n1,Alice,ok")).toBe(",");
+  });
+
+  it("parses JSON arrays of objects into headers and rows", () => {
+    expect(
+      parseImportSourceText({
+        text: JSON.stringify([
+          { id: 1, name: "Alice", active: true },
+          { id: 2, name: "Bob", note: { tier: "gold" } },
+        ]),
+        format: "json",
+      })
+    ).toEqual({
+      headers: ["id", "name", "active", "note"],
+      rows: [
+        ["1", "Alice", "true", ""],
+        ["2", "Bob", "", '{"tier":"gold"}'],
+      ],
+    });
+  });
+
+  it("parses XML repeated elements into headers and rows", () => {
+    expect(
+      parseImportSourceText({
+        text: "<users><user><id>1</id><name>Alice</name></user><user><id>2</id><name>Bob</name></user></users>",
+        format: "xml",
+      })
+    ).toEqual({
+      headers: ["id", "name"],
+      rows: [
+        ["1", "Alice"],
+        ["2", "Bob"],
+      ],
+    });
   });
 });

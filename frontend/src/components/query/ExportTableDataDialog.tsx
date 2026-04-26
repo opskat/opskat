@@ -99,18 +99,20 @@ interface TableExportWriteOptions {
   append: boolean;
 }
 
+type WriteTableExportFileFn = (filePath: string, content: string, options: TableExportWriteOptions) => Promise<void>;
+
 async function writeTableExportFile(
   filePath: string,
   content: string,
   options: TableExportWriteOptions
 ): Promise<void> {
-  const wailsWrite = (window as unknown as { go?: { app?: { App?: { WriteTableExportFile?: unknown } } } }).go?.app?.App
-    ?.WriteTableExportFile;
+  const wailsWrite = (window as unknown as { go?: { app?: { App?: { WriteTableExportFile?: WriteTableExportFileFn } } } }).go
+    ?.app?.App?.WriteTableExportFile;
   if (typeof wailsWrite === "function") {
     await wailsWrite(filePath, content, options);
     return;
   }
-  await WriteTableExportFile(filePath, content);
+  await (WriteTableExportFile as unknown as WriteTableExportFileFn)(filePath, content, options);
 }
 
 function getContainingDirectory(filePath: string): string {
