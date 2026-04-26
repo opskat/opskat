@@ -188,6 +188,83 @@ func (c *captureMockProvider) Chat(ctx context.Context, msgs []Message, tools []
 	return c.inner.Chat(ctx, msgs, tools)
 }
 
+func TestAgent_ToolCallMessageCarriesReasoningContent(t *testing.T) {
+	convey.Convey("Agent tool 调用后构造的 assistant 消息同时携带 thinking 与 reasoning_content（修复 DeepSeek thinking 多轮 400）", t, func() {
+		var capturedMessages []Message
+		provider := &mockProvider{
+			responses: [][]StreamEvent{
+				// 第一轮：LLM 输出 thinking + tool_call（DeepSeek thinking 模式典型形态）
+				{
+					{Type: "thinking", Content: "先看一下"},
+					{Type: "thinking", Content: "有哪些资产"},
+					{Type: "thinking_done"},
+					{Type: "tool_call", ToolCalls: []ToolCall{
+						{ID: "call_1", Type: "function", Function: struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						}{Name: "list_assets", Arguments: `{}`}},
+					}},
+					{Type: "done"},
+				},
+				// 第二轮：LLM 返回最终回复
+				{
+					{Type: "content", Content: "完成"},
+					{Type: "done"},
+				},
+			},
+		}
+		captureProvider := &captureMockProvider{inner: provider, captured: &capturedMessages}
+		executor := &mockExecutor{results: map[string]string{"list_assets": `[]`}}
+		agent := NewAgent(captureProvider, func() ToolExecutor { return executor }, nil, NewDefaultConfig())
+
+		err := agent.Chat(context.Background(), []Message{
+			{Role: RoleUser, Content: "列出资产"},
+		}, func(e StreamEvent) {}, nil)
+		assert.NoError(t, err)
+
+		var assistantMsg *Message
+		for i := range capturedMessages {
+			if capturedMessages[i].Role == RoleAssistant {
+				assistantMsg = &capturedMessages[i]
+				break
+			}
+		}
+		assert.NotNil(t, assistantMsg, "第二轮应包含上一轮 assistant 消息")
+		expected := "先看一下有哪些资产"
+		assert.Equal(t, expected, assistantMsg.Thinking, "Thinking 字段累积全部 thinking 片段")
+		assert.Equal(t, expected, assistantMsg.ReasoningContent, "ReasoningContent 必须与 Thinking 同步——DeepSeek 多轮要求原样回传")
+	})
+}
+
+func TestMessage_ReasoningContentJSON(t *testing.T) {
+	convey.Convey("Message.ReasoningContent 序列化为 reasoning_content（DeepSeek/OpenAI 兼容字段）", t, func() {
+		msg := Message{
+			Role:             RoleAssistant,
+			Content:          "",
+			Thinking:         "thoughts",
+			ReasoningContent: "thoughts",
+		}
+		data, err := json.Marshal(msg)
+		assert.NoError(t, err)
+
+		var raw map[string]any
+		assert.NoError(t, json.Unmarshal(data, &raw))
+		assert.Equal(t, "thoughts", raw["thinking"])
+		assert.Equal(t, "thoughts", raw["reasoning_content"])
+	})
+
+	convey.Convey("ReasoningContent 为空时通过 omitempty 不出现在 JSON 中", t, func() {
+		msg := Message{Role: RoleAssistant, Content: "hello"}
+		data, err := json.Marshal(msg)
+		assert.NoError(t, err)
+
+		var raw map[string]any
+		assert.NoError(t, json.Unmarshal(data, &raw))
+		_, exists := raw["reasoning_content"]
+		assert.False(t, exists, "空字符串应被 omitempty 略掉")
+	})
+}
+
 func TestAgent_ToolCallLoop(t *testing.T) {
 	convey.Convey("Agent tool 调用循环", t, func() {
 		provider := &mockProvider{
