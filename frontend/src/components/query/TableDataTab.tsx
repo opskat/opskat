@@ -883,7 +883,6 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         </Button>
         <TableEditorToolbar
           hasEdits={hasEdits}
-          loading={loading || importing}
           submitting={submitting || deleting}
           canExport={rows.length > 0}
           canImport={columns.length > 0}
@@ -899,8 +898,6 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
           onToggleFilterSort={() => setShowFilterSort((open) => !open)}
           onSubmit={() => openSqlDialog("confirm")}
           onDiscard={handleDiscard}
-          onRefresh={handleRefresh}
-          onStopLoading={handleStopLoading}
           onImport={() => setShowImportDialog(true)}
           onExport={handleExport}
           onPreviewSql={() => openSqlDialog("preview")}

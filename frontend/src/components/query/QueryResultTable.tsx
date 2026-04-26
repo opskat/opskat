@@ -74,6 +74,7 @@ interface QueryResultTableProps {
   onDeleteRow?: (rowIdx: number) => void;
   onHideColumn?: (col: string) => void;
   onSelectedCellChange?: (cell: SelectedCellContext | null) => void;
+  onSelectedRowsChange?: (rowIdxs: number[]) => void;
   onRefresh?: () => void;
   showRowNumber?: boolean;
   rowNumberOffset?: number;
@@ -226,6 +227,7 @@ export function QueryResultTable({
   onDeleteRow,
   onHideColumn,
   onSelectedCellChange,
+  onSelectedRowsChange,
   onRefresh,
   showRowNumber,
   rowNumberOffset = 0,
@@ -319,8 +321,10 @@ export function QueryResultTable({
 
   // Selected cell state — click-to-focus + arrow key navigation
   const [selectedCell, setSelectedCell] = useState<{ origIdx: number; col: string } | null>(null);
-  const [selectedRowIdx, setSelectedRowIdx] = useState<number | null>(null);
+  const [selectedRowIdxs, setSelectedRowIdxs] = useState<Set<number>>(() => new Set());
   const [selectedColumn, setSelectedColumn] = useState<string | null>(null);
+  const rowSelectionAnchorRef = useRef<number | null>(null);
+  const rowDragSelectionRef = useRef<{ anchor: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Context menu state
@@ -339,30 +343,36 @@ export function QueryResultTable({
     setLocalSortDir(null);
     setColWidths({});
     setSelectedCell(null);
-    setSelectedRowIdx(null);
+    setSelectedRowIdxs(new Set());
+    rowSelectionAnchorRef.current = null;
     setSelectedColumn(null);
     onSelectedCellChange?.(null);
+    onSelectedRowsChange?.([]);
     setEditingCell(null);
-  }, [columns, onSelectedCellChange]);
+  }, [columns, onSelectedCellChange, onSelectedRowsChange]);
 
   // Reset selection / editing when row set changes (paging, refresh, filter)
   useEffect(() => {
     setSelectedCell(null);
-    setSelectedRowIdx(null);
+    setSelectedRowIdxs(new Set());
+    rowSelectionAnchorRef.current = null;
     setSelectedColumn(null);
     onSelectedCellChange?.(null);
+    onSelectedRowsChange?.([]);
     setEditingCell(null);
-  }, [rows, onSelectedCellChange]);
+  }, [rows, onSelectedCellChange, onSelectedRowsChange]);
 
   useEffect(() => {
     if (!focusCellRequest) return;
     if (!rows[focusCellRequest.rowIdx] || !displayColumns.includes(focusCellRequest.col)) return;
     setSelectedCell({ origIdx: focusCellRequest.rowIdx, col: focusCellRequest.col });
-    setSelectedRowIdx(null);
+    setSelectedRowIdxs(new Set());
+    rowSelectionAnchorRef.current = null;
     setSelectedColumn(null);
     setEditingCell(cellKey(focusCellRequest.rowIdx, focusCellRequest.col));
     onSelectedCellChange?.({ rowIdx: focusCellRequest.rowIdx, col: focusCellRequest.col });
-  }, [displayColumns, focusCellRequest, onSelectedCellChange, rows]);
+    onSelectedRowsChange?.([]);
+  }, [displayColumns, focusCellRequest, onSelectedCellChange, onSelectedRowsChange, rows]);
 
   // Sorted row indices (only for uncontrolled/local sort). Controlled sort is
   // server-side, so rows are already in the requested order. Always based on
@@ -480,9 +490,16 @@ export function QueryResultTable({
   const handleCopyCell = useCallback(async () => {
     if (!ctxMenu) return;
     try {
+      const selectedRowOrder = sortedIndices.filter((rowIdx) => selectedRowIdxs.has(rowIdx));
+      const rowCopyIndices =
+        ctxMenu.kind === "row" && selectedRowIdxs.has(ctxMenu.rowIdx) && selectedRowOrder.length > 0
+          ? selectedRowOrder
+          : [ctxMenu.kind === "row" ? ctxMenu.rowIdx : -1];
       const text =
         ctxMenu.kind === "row"
-          ? displayColumns.map((col) => cellValueToText(rows[ctxMenu.rowIdx]?.[col])).join("\t")
+          ? rowCopyIndices
+              .map((rowIdx) => displayColumns.map((col) => cellValueToText(rows[rowIdx]?.[col])).join("\t"))
+              .join("\n")
           : ctxMenu.kind === "column"
             ? sortedIndices.map((rowIdx) => cellValueToText(rows[rowIdx]?.[ctxMenu.col])).join("\n")
             : cellValueToText(ctxMenu.value);
@@ -493,7 +510,7 @@ export function QueryResultTable({
     } finally {
       setCtxMenu(null);
     }
-  }, [ctxMenu, displayColumns, rows, sortedIndices, t]);
+  }, [ctxMenu, displayColumns, rows, selectedRowIdxs, sortedIndices, t]);
 
   const handleCopyFieldName = useCallback(async () => {
     const col = ctxMenu?.kind === "cell" || ctxMenu?.kind === "column" ? ctxMenu.col : null;
@@ -649,34 +666,69 @@ export function QueryResultTable({
   const selectCell = useCallback(
     (origIdx: number, col: string) => {
       setSelectedCell({ origIdx, col });
-      setSelectedRowIdx(null);
+      setSelectedRowIdxs(new Set());
+      rowSelectionAnchorRef.current = null;
       setSelectedColumn(null);
       onSelectedCellChange?.({ rowIdx: origIdx, col });
+      onSelectedRowsChange?.([]);
       containerRef.current?.focus();
     },
-    [onSelectedCellChange]
+    [onSelectedCellChange, onSelectedRowsChange]
   );
 
   const selectRow = useCallback(
-    (origIdx: number) => {
+    (origIdx: number, event?: Pick<React.MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">) => {
+      const anchor = rowSelectionAnchorRef.current;
+      const isRange = !!event?.shiftKey && anchor != null;
+      const isToggle = !!event?.ctrlKey || !!event?.metaKey;
+      let next: Set<number>;
+
+      if (isRange) {
+        const anchorDisplayIdx = sortedIndices.indexOf(anchor);
+        const targetDisplayIdx = sortedIndices.indexOf(origIdx);
+        if (anchorDisplayIdx === -1 || targetDisplayIdx === -1) {
+          next = new Set([origIdx]);
+        } else {
+          const start = Math.min(anchorDisplayIdx, targetDisplayIdx);
+          const end = Math.max(anchorDisplayIdx, targetDisplayIdx);
+          next = new Set(sortedIndices.slice(start, end + 1));
+        }
+      } else if (isToggle) {
+        next = new Set(selectedRowIdxs);
+        if (next.has(origIdx)) next.delete(origIdx);
+        else next.add(origIdx);
+        rowSelectionAnchorRef.current = origIdx;
+      } else {
+        next = new Set([origIdx]);
+        rowSelectionAnchorRef.current = origIdx;
+      }
+
+      if (isRange && next.size > 0) {
+        rowSelectionAnchorRef.current = anchor;
+      }
+
+      const ordered = sortedIndices.filter((rowIdx) => next.has(rowIdx));
       setSelectedCell(null);
-      setSelectedRowIdx(origIdx);
+      setSelectedRowIdxs(next);
       setSelectedColumn(null);
-      onSelectedCellChange?.({ rowIdx: origIdx, col: "" });
+      onSelectedCellChange?.(ordered.length > 0 ? { rowIdx: origIdx, col: "" } : null);
+      onSelectedRowsChange?.(ordered);
       containerRef.current?.focus();
     },
-    [onSelectedCellChange]
+    [onSelectedCellChange, onSelectedRowsChange, selectedRowIdxs, sortedIndices]
   );
 
   const selectColumn = useCallback(
     (col: string) => {
       setSelectedCell(null);
-      setSelectedRowIdx(null);
+      setSelectedRowIdxs(new Set());
+      rowSelectionAnchorRef.current = null;
       setSelectedColumn(col);
       onSelectedCellChange?.(null);
+      onSelectedRowsChange?.([]);
       containerRef.current?.focus();
     },
-    [onSelectedCellChange]
+    [onSelectedCellChange, onSelectedRowsChange]
   );
 
   const handleCellContextMenu = useCallback(
@@ -693,8 +745,45 @@ export function QueryResultTable({
     (e: React.MouseEvent, origIdx: number) => {
       e.preventDefault();
       e.stopPropagation();
-      selectRow(origIdx);
+      rowDragSelectionRef.current = null;
+      if (!selectedRowIdxs.has(origIdx)) {
+        selectRow(origIdx);
+      } else {
+        setSelectedCell(null);
+        setSelectedColumn(null);
+        onSelectedCellChange?.({ rowIdx: origIdx, col: "" });
+        containerRef.current?.focus();
+      }
       setCtxMenu({ kind: "row", x: e.clientX, y: e.clientY, rowIdx: origIdx });
+    },
+    [onSelectedCellChange, selectRow, selectedRowIdxs]
+  );
+
+  const handleRowMouseDown = useCallback(
+    (e: React.MouseEvent, origIdx: number) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      selectRow(origIdx, e);
+
+      if (e.shiftKey || e.ctrlKey || e.metaKey) {
+        rowDragSelectionRef.current = null;
+        return;
+      }
+
+      rowDragSelectionRef.current = { anchor: origIdx };
+      const stopDrag = () => {
+        rowDragSelectionRef.current = null;
+        document.removeEventListener("mouseup", stopDrag);
+      };
+      document.addEventListener("mouseup", stopDrag);
+    },
+    [selectRow]
+  );
+
+  const handleRowMouseEnter = useCallback(
+    (origIdx: number) => {
+      if (!rowDragSelectionRef.current) return;
+      selectRow(origIdx, { shiftKey: true, ctrlKey: false, metaKey: false });
     },
     [selectRow]
   );
@@ -734,11 +823,13 @@ export function QueryResultTable({
       // (the input's onKeyDown calls setEditingCell(null) on Escape).
       if (editingCell) return;
       if (!selectedCell) {
-        if ((selectedRowIdx != null || selectedColumn != null) && e.key === "Escape") {
+        if ((selectedRowIdxs.size > 0 || selectedColumn != null) && e.key === "Escape") {
           e.preventDefault();
-          setSelectedRowIdx(null);
+          setSelectedRowIdxs(new Set());
+          rowSelectionAnchorRef.current = null;
           setSelectedColumn(null);
           onSelectedCellChange?.(null);
+          onSelectedRowsChange?.([]);
         }
         return;
       }
@@ -785,12 +876,13 @@ export function QueryResultTable({
     [
       editingCell,
       selectedCell,
-      selectedRowIdx,
+      selectedRowIdxs,
       selectedColumn,
       sortedIndices,
       displayColumns,
       editable,
       onSelectedCellChange,
+      onSelectedRowsChange,
       selectCell,
     ]
   );
@@ -956,7 +1048,7 @@ export function QueryResultTable({
           <tbody>
             {sortedIndices.map((origIdx, idx) => {
               const row = rows[origIdx];
-              const isRowSelected = selectedRowIdx === origIdx;
+              const isRowSelected = selectedRowIdxs.has(origIdx);
               return (
                 <tr key={origIdx} className={idx % 2 === 0 ? "bg-background" : "bg-muted/40"}>
                   {showRowNumber && (
@@ -968,7 +1060,8 @@ export function QueryResultTable({
                           ? "bg-primary/15 text-foreground ring-2 ring-inset ring-primary/50 relative z-10"
                           : ""
                       }`}
-                      onClick={() => selectRow(origIdx)}
+                      onMouseDown={(e) => handleRowMouseDown(e, origIdx)}
+                      onMouseEnter={() => handleRowMouseEnter(origIdx)}
                       onContextMenu={(e) => handleRowContextMenu(e, origIdx)}
                     >
                       {rowNumberOffset + origIdx + 1}

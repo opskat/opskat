@@ -8,7 +8,6 @@ describe("TableDataTab toolbar", () => {
     render(
       <TableEditorToolbar
         hasEdits={false}
-        loading={false}
         submitting={false}
         canExport
         canImport
@@ -16,8 +15,6 @@ describe("TableDataTab toolbar", () => {
         onToggleFilterSort={vi.fn()}
         onSubmit={vi.fn()}
         onDiscard={vi.fn()}
-        onRefresh={vi.fn()}
-        onStopLoading={vi.fn()}
         onImport={vi.fn()}
         onExport={vi.fn()}
         onPreviewSql={vi.fn()}
@@ -30,8 +27,8 @@ describe("TableDataTab toolbar", () => {
     expect(screen.getByTitle("query.submitEdits")).toBeDisabled();
     expect(screen.getByTitle("query.discardEdits")).toBeDisabled();
     expect(screen.getByTitle("query.previewSql")).toBeDisabled();
-    expect(screen.getByTitle("query.refreshTable")).toBeEnabled();
-    expect(screen.getByTitle("query.stopLoading")).toBeDisabled();
+    expect(screen.queryByTitle("query.refreshTable")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("query.stopLoading")).not.toBeInTheDocument();
     expect(screen.getByTitle("query.importData")).toBeEnabled();
     expect(screen.getByTitle("query.exportData")).toBeEnabled();
   });
@@ -46,7 +43,6 @@ describe("TableDataTab toolbar", () => {
     render(
       <TableEditorToolbar
         hasEdits
-        loading={false}
         submitting={false}
         canExport
         canImport
@@ -54,8 +50,6 @@ describe("TableDataTab toolbar", () => {
         onToggleFilterSort={onToggleFilterSort}
         onSubmit={onSubmit}
         onDiscard={onDiscard}
-        onRefresh={vi.fn()}
-        onStopLoading={vi.fn()}
         onImport={vi.fn()}
         onExport={vi.fn()}
         onPreviewSql={onPreviewSql}

@@ -73,13 +73,13 @@ describe("TableDataTab loading cancellation", () => {
 
     render(<TableDataTab tabId="query-1" innerTabId="table-1" database="appdb" table="users" />);
 
-    await user.click(screen.getAllByTitle("query.stopLoading")[0]);
+    await user.click(screen.getByTitle("query.stopLoading"));
     firstPk.resolve(JSON.stringify({ rows: [] }));
     firstColumns.resolve(JSON.stringify({ rows: [] }));
     firstCount.resolve(JSON.stringify({ rows: [{ cnt: 1 }] }));
     firstRows.resolve(JSON.stringify({ columns: ["id", "name"], rows: [{ id: 1, name: "old" }] }));
 
-    await user.click(screen.getAllByTitle("query.refreshTable")[0]);
+    await user.click(screen.getByTitle(/^query\.refreshTable/));
     secondRows.resolve(JSON.stringify({ columns: ["id", "name"], rows: [{ id: 2, name: "new" }] }));
     secondCount.resolve(JSON.stringify({ rows: [{ cnt: 1 }] }));
 

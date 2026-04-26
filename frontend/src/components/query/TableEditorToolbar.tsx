@@ -44,7 +44,6 @@ export type { TableExportFormat };
 
 interface TableEditorToolbarProps {
   hasEdits: boolean;
-  loading: boolean;
   submitting: boolean;
   canExport: boolean;
   canImport?: boolean;
@@ -60,8 +59,6 @@ interface TableEditorToolbarProps {
   onToggleFilterSort: () => void;
   onSubmit: () => void;
   onDiscard: () => void;
-  onRefresh: () => void;
-  onStopLoading: () => void;
   onImport: () => void;
   onExport: () => void;
   onPreviewSql: () => void;
@@ -69,7 +66,6 @@ interface TableEditorToolbarProps {
 
 export function TableEditorToolbar({
   hasEdits,
-  loading,
   submitting,
   canExport,
   canImport = false,
@@ -85,8 +81,6 @@ export function TableEditorToolbar({
   onToggleFilterSort,
   onSubmit,
   onDiscard,
-  onRefresh,
-  onStopLoading,
   onImport,
   onExport,
   onPreviewSql,
@@ -133,13 +127,6 @@ export function TableEditorToolbar({
         disabled={editActionDisabled}
       >
         <Eye className="h-3.5 w-3.5" />
-      </Button>
-      <div className="mx-0.5 h-5 w-px bg-border" />
-      <Button variant="ghost" size="icon-xs" title={t("query.refreshTable")} onClick={onRefresh} disabled={loading}>
-        <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-      </Button>
-      <Button variant="ghost" size="icon-xs" title={t("query.stopLoading")} onClick={onStopLoading} disabled={!loading}>
-        <Square className="h-3.5 w-3.5" />
       </Button>
       <div className="mx-0.5 h-5 w-px bg-border" />
       <Button variant="ghost" size="icon-xs" title={t("query.importData")} onClick={onImport} disabled={!canImport}>

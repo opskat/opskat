@@ -257,6 +257,53 @@ describe("QueryResultTable — cell context actions", () => {
     expect(screen.queryByText("query.sortAscending")).not.toBeInTheDocument();
   });
 
+  it("mouse-selects multiple rows with shift range and ctrl toggles", () => {
+    const manyRows = [
+      { id: 1, name: "alice" },
+      { id: 2, name: "bob" },
+      { id: 3, name: "carol" },
+      { id: 4, name: "dave" },
+    ];
+    render(<QueryResultTable columns={columns} rows={manyRows} editable showRowNumber />);
+
+    const row0 = document.querySelector('[data-row-header-key="0"]') as HTMLElement;
+    const row2 = document.querySelector('[data-row-header-key="2"]') as HTMLElement;
+    const row1 = document.querySelector('[data-row-header-key="1"]') as HTMLElement;
+
+    fireEvent.mouseDown(row0);
+    fireEvent.mouseDown(row2, { shiftKey: true });
+
+    expect(document.querySelectorAll('[data-row-selected="true"]')).toHaveLength((columns.length + 1) * 3);
+
+    fireEvent.mouseDown(row1, { ctrlKey: true });
+
+    expect(document.querySelectorAll('[data-row-selected="true"]')).toHaveLength((columns.length + 1) * 2);
+    expect(row0).toHaveAttribute("data-row-selected", "true");
+    expect(row1).not.toHaveAttribute("data-row-selected");
+    expect(row2).toHaveAttribute("data-row-selected", "true");
+  });
+
+  it("mouse-dragging row numbers selects a continuous row range", () => {
+    const manyRows = [
+      { id: 1, name: "alice" },
+      { id: 2, name: "bob" },
+      { id: 3, name: "carol" },
+      { id: 4, name: "dave" },
+    ];
+    render(<QueryResultTable columns={columns} rows={manyRows} editable showRowNumber />);
+
+    const row0 = document.querySelector('[data-row-header-key="0"]') as HTMLElement;
+    const row3 = document.querySelector('[data-row-header-key="3"]') as HTMLElement;
+
+    fireEvent.mouseDown(row0, { button: 0 });
+    fireEvent.mouseEnter(row3, { buttons: 1 });
+    fireEvent.mouseUp(row3);
+
+    expect(document.querySelectorAll('[data-row-selected="true"]')).toHaveLength((columns.length + 1) * 4);
+    expect(row0).toHaveAttribute("data-row-selected", "true");
+    expect(row3).toHaveAttribute("data-row-selected", "true");
+  });
+
   it("row context copy writes the selected row as tab separated values", async () => {
     openRowMenu();
 
