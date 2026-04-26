@@ -57,13 +57,36 @@ type ImportProgress = {
 };
 
 const steps: WizardStep[] = ["type", "source", "delimiter", "options", "mapping", "summary"];
-const enterpriseFormats = ["excel", "access", "odbc", "dbase", "paradox"] as const;
+const importFileRules: Record<ImportDataFormat, { extensions: string[]; mimes: string[] }> = {
+  text: {
+    extensions: [".txt", ".tsv"],
+    mimes: ["text/plain", "text/tab-separated-values"],
+  },
+  csv: {
+    extensions: [".csv"],
+    mimes: ["text/csv"],
+  },
+  json: {
+    extensions: [".json"],
+    mimes: ["application/json"],
+  },
+  xml: {
+    extensions: [".xml"],
+    mimes: ["application/xml", "text/xml"],
+  },
+};
 
 function formatAccept(format: ImportDataFormat): string {
-  if (format === "json") return ".json,application/json";
-  if (format === "xml") return ".xml,application/xml,text/xml";
-  if (format === "csv") return ".csv,text/csv";
-  return ".txt,.csv,.tsv,text/plain,text/csv,text/tab-separated-values";
+  const rule = importFileRules[format];
+  return [...rule.extensions, ...rule.mimes].join(",");
+}
+
+function isAcceptedFileForFormat(file: File, format: ImportDataFormat): boolean {
+  const rule = importFileRules[format];
+  const lowerName = file.name.toLowerCase();
+  const matchesExtension = rule.extensions.some((extension) => lowerName.endsWith(extension));
+  const matchesMime = file.type !== "" && rule.mimes.includes(file.type);
+  return matchesExtension || matchesMime;
 }
 
 function mergeParsedTables(tables: ParsedDelimitedTable[]): ParsedDelimitedTable {
@@ -133,6 +156,7 @@ export function ImportTableDataDialog({
   const [primaryKeys, setPrimaryKeys] = useState<Set<string>>(new Set(columns[0] ? [columns[0]] : []));
   const [nullStrategy, setNullStrategy] = useState<ImportNullStrategy>("literal-null");
   const [submitting, setSubmitting] = useState(false);
+  const [logLines, setLogLines] = useState<string[]>([]);
   const [progress, setProgress] = useState<ImportProgress>({
     processed: 0,
     added: 0,
@@ -147,12 +171,14 @@ export function ImportTableDataDialog({
     setStepIndex(0);
     setSources([]);
     setUrlDraft("");
+    setLogLines([]);
     setProgress({ processed: 0, added: 0, updated: 0, deleted: 0, error: 0, seconds: 0 });
   }, [open]);
 
   useEffect(() => {
     setSources([]);
     setStepIndex(0);
+    setLogLines([]);
     setFieldDelimiter(format === "csv" ? "," : "\t");
   }, [format]);
 
@@ -218,15 +244,21 @@ export function ImportTableDataDialog({
     async (files: FileList | null) => {
       if (!files?.length) return;
       const nextSources: SourceItem[] = [];
+      let rejected = 0;
       for (const file of Array.from(files)) {
+        if (!isAcceptedFileForFormat(file, format)) {
+          rejected += 1;
+          continue;
+        }
         const text = await file.text();
         nextSources.push({ id: `${file.name}-${file.size}-${Date.now()}`, name: file.name, kind: "file", text });
         if (format === "text" || format === "csv") setFieldDelimiter(detectDelimiter(text));
       }
+      if (rejected > 0) toast.error(t("query.importUnsupportedFileType", { count: rejected }));
       setSources((prev) => [...prev, ...nextSources]);
       if (fileInputRef.current) fileInputRef.current.value = "";
     },
-    [format]
+    [format, t]
   );
 
   const handleAddUrl = useCallback(async () => {
@@ -252,6 +284,13 @@ export function ImportTableDataDialog({
     const startedAt = performance.now();
     setSubmitting(true);
     onSubmittingChange?.(true);
+    const nextLogLines = [
+      "[IMP] Import start",
+      `[IMP] Import type - ${format.toUpperCase()} file`,
+      ...sources.map((source) => `[IMP] Import from - ${source.name}`),
+      `[IMP] Import data [${table}]`,
+    ];
+    setLogLines(nextLogLines);
     setProgress({ processed: 0, added: 0, updated: 0, deleted: 0, error: 0, seconds: 0 });
 
     let added = 0;
@@ -266,7 +305,11 @@ export function ImportTableDataDialog({
           added += Number(parsedResult.affected_rows ?? 0);
         } catch (e) {
           error += 1;
-          toast.error(String(e));
+          const message = e instanceof Error ? e.message : String(e);
+          nextLogLines.push(`[ERR] ${message}`);
+          nextLogLines.push(`[ERR] ${statements[index]}`);
+          setLogLines([...nextLogLines]);
+          toast.error(message);
         }
         setProgress({
           processed: index + 1,
@@ -281,12 +324,31 @@ export function ImportTableDataDialog({
         toast.success(t("query.importSuccess", { affected: added }));
         onOpenChange(false);
         onSuccess();
+      } else {
+        nextLogLines.push(
+          `[IMP] Processed: ${statements.length}, Added: ${added}, Updated: 0, Deleted: 0, Errors: ${error}`
+        );
+        nextLogLines.push("[IMP] Finished with error");
+        setLogLines([...nextLogLines]);
       }
     } finally {
       setSubmitting(false);
       onSubmittingChange?.(false);
     }
-  }, [assetId, database, isSubmitCancelled, onOpenChange, onSubmitStart, onSubmittingChange, onSuccess, statements, t]);
+  }, [
+    assetId,
+    database,
+    format,
+    isSubmitCancelled,
+    onOpenChange,
+    onSubmitStart,
+    onSubmittingChange,
+    onSuccess,
+    sources,
+    statements,
+    table,
+    t,
+  ]);
 
   const goNext = () => {
     if (!canNext || stepIndex >= steps.length - 1) return;
@@ -304,13 +366,6 @@ export function ImportTableDataDialog({
               <label key={item} className="flex w-fit cursor-pointer items-center gap-2 text-sm">
                 <input type="radio" name="import-type" checked={format === item} onChange={() => setFormat(item)} />
                 {t(`query.importType${item[0].toUpperCase()}${item.slice(1)}`)}
-              </label>
-            ))}
-            {enterpriseFormats.map((item) => (
-              <label key={item} className="flex w-fit items-center gap-2 text-sm text-muted-foreground opacity-55">
-                <input type="radio" disabled />
-                {t(`query.importType${item[0].toUpperCase()}${item.slice(1)}`)}
-                <span className="rounded bg-orange-500 px-1 py-0.5 text-[10px] font-semibold text-white">Ent</span>
               </label>
             ))}
           </div>
@@ -684,7 +739,7 @@ export function ImportTableDataDialog({
 
     return (
       <div className="space-y-4">
-        <p className="text-sm font-medium">{t("query.importSummaryIntro")}</p>
+        <p className="break-words text-sm font-medium">{t("query.importSummaryIntro")}</p>
         <div className="grid w-56 grid-cols-[1fr_auto] gap-x-4 gap-y-1 text-sm">
           <span className="text-right">{t("query.importTableCount")}</span>
           <span>
@@ -703,16 +758,25 @@ export function ImportTableDataDialog({
           <span className="text-right">{t("query.importTime")}</span>
           <span>{progress.seconds.toFixed(1)}s</span>
         </div>
-        <div className="h-[210px] rounded-md border bg-muted/10 p-3 font-mono text-xs">
-          {statements.slice(0, 8).map((statement, index) => (
-            <div key={index} className="truncate">
-              {statement}
-            </div>
-          ))}
+        <div className="h-[210px] max-w-full overflow-auto rounded-md border bg-muted/10 p-3 font-mono text-xs">
+          {logLines.length > 0
+            ? logLines.map((line, index) => (
+                <div
+                  key={index}
+                  className={line.startsWith("[ERR]") ? "whitespace-pre-wrap text-destructive" : "whitespace-pre-wrap"}
+                >
+                  {line}
+                </div>
+              ))
+            : statements.slice(0, 8).map((statement, index) => (
+                <div key={index} className="truncate">
+                  {statement}
+                </div>
+              ))}
         </div>
         <div className="h-2 rounded-full bg-muted">
           <div
-            className="h-full rounded-full bg-primary transition-all"
+            className={`h-full rounded-full transition-all ${progress.error > 0 ? "bg-destructive" : "bg-primary"}`}
             style={{ width: `${statements.length ? (progress.processed / statements.length) * 100 : 0}%` }}
           />
         </div>
@@ -722,42 +786,49 @@ export function ImportTableDataDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl gap-0 overflow-hidden p-0" showCloseButton={!submitting}>
+      <DialogContent
+        className="max-h-[calc(100vh-2rem)] max-w-[calc(100vw-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:!max-w-5xl"
+        showCloseButton={!submitting}
+      >
         <DialogHeader className="border-b px-6 py-4">
           <DialogTitle>{t("query.importDialogTitle")}</DialogTitle>
           <DialogDescription>{t("query.importDialogDesc", { table })}</DialogDescription>
         </DialogHeader>
 
-        <div className="min-h-[520px] px-6 py-5">{renderStep()}</div>
+        <div className="min-h-0 overflow-y-auto px-6 py-5">
+          <div className="min-h-[420px] sm:min-h-[520px]">{renderStep()}</div>
+        </div>
 
-        <DialogFooter className="border-t bg-muted/40 px-6 py-4">
-          <div className="mr-auto">
-            <Button type="button" variant="outline" size="sm" disabled={step !== "summary"}>
+        <DialogFooter className="!flex-row flex-wrap items-center gap-2 border-t bg-muted/40 px-6 py-4 sm:!justify-end">
+          <div>
+            <Button type="button" variant="outline" size="sm" disabled>
               {t("query.importSaveProfile")}
             </Button>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={submitting || stepIndex === 0}
-            onClick={() => setStepIndex(stepIndex - 1)}
-          >
-            {t("query.importWizardBack")}
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={submitting || step === "summary" || !canNext}
-            onClick={goNext}
-          >
-            {t("query.importWizardNext")}
-          </Button>
-          <Button type="button" size="sm" disabled={!canStart} onClick={handleStart}>
-            {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-            {t("query.importWizardStart")}
-          </Button>
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={submitting || stepIndex === 0}
+              onClick={() => setStepIndex(stepIndex - 1)}
+            >
+              {t("query.importWizardBack")}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={submitting || step === "summary" || !canNext}
+              onClick={goNext}
+            >
+              {t("query.importWizardNext")}
+            </Button>
+            <Button type="button" size="sm" disabled={!canStart} onClick={handleStart}>
+              {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+              {t("query.importWizardStart")}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

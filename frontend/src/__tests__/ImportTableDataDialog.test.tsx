@@ -1,10 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ImportTableDataDialog } from "@/components/query/ImportTableDataDialog";
 import * as App from "../../wailsjs/go/app/App";
 
 describe("ImportTableDataDialog", () => {
+  async function walkCsvWizardToSummary(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByLabelText("query.importTypeCsv"));
+    await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
+    const file = new File(["id,name\n1,Alice"], "users.csv", { type: "text/csv" });
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await user.upload(input, file);
+    await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
+    await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
+    await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
+    await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
+  }
+
   it("shows an explicit warning when no uploaded columns map to table columns", async () => {
     const user = userEvent.setup();
 
@@ -21,6 +33,7 @@ describe("ImportTableDataDialog", () => {
       />
     );
 
+    await user.click(screen.getByLabelText("query.importTypeCsv"));
     await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
     const file = new File(["external_id,full_name\n1,Alice"], "users.csv", { type: "text/csv" });
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -31,6 +44,75 @@ describe("ImportTableDataDialog", () => {
 
     expect(await screen.findByText("query.importNoMappedColumns")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "query.importWizardNext" })).toBeDisabled();
+  });
+
+  it("does not show enterprise-only import format placeholders", () => {
+    render(
+      <ImportTableDataDialog
+        open
+        onOpenChange={vi.fn()}
+        assetId={1}
+        database="appdb"
+        table="users"
+        columns={["id", "name"]}
+        driver="mysql"
+        onSuccess={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByText("query.importTypeExcel")).not.toBeInTheDocument();
+    expect(screen.queryByText("query.importTypeAccess")).not.toBeInTheDocument();
+    expect(screen.queryByText("Ent")).not.toBeInTheDocument();
+  });
+
+  it("rejects files that do not match the selected import type", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ImportTableDataDialog
+        open
+        onOpenChange={vi.fn()}
+        assetId={1}
+        database="appdb"
+        table="users"
+        columns={["id", "name"]}
+        driver="mysql"
+        onSuccess={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByLabelText("query.importTypeJson"));
+    await user.click(screen.getByRole("button", { name: "query.importWizardNext" }));
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, {
+      target: { files: [new File(["id,name\n1,Alice"], "users.csv", { type: "text/csv" })] },
+    });
+
+    await waitFor(() => expect(screen.queryByText("users.csv")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "query.importWizardNext" })).toBeDisabled();
+  });
+
+  it("does not expose Save Profile as a clickable no-op on the final import step", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ImportTableDataDialog
+        open
+        onOpenChange={vi.fn()}
+        assetId={1}
+        database="appdb"
+        table="users"
+        columns={["id", "name"]}
+        driver="mysql"
+        onSuccess={vi.fn()}
+      />
+    );
+
+    await walkCsvWizardToSummary(user);
+
+    expect(screen.getByRole("button", { name: "query.importSaveProfile" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "query.importWizardStart" })).toBeEnabled();
   });
 
   it("walks through JSON import wizard and starts importing mapped rows", async () => {
@@ -76,5 +158,30 @@ describe("ImportTableDataDialog", () => {
       "INSERT INTO `appdb`.`users` (`id`, `name`, `email`) VALUES ('1', 'Alice', 'alice@example.test');",
       "appdb"
     );
+  });
+
+  it("shows import execution errors in the summary log", async () => {
+    const user = userEvent.setup();
+    vi.mocked(App.ExecuteSQL).mockRejectedValueOnce(new Error("Incorrect datetime value"));
+
+    render(
+      <ImportTableDataDialog
+        open
+        onOpenChange={vi.fn()}
+        assetId={1}
+        database="appdb"
+        table="users"
+        columns={["id", "name"]}
+        driver="mysql"
+        onSuccess={vi.fn()}
+      />
+    );
+
+    await walkCsvWizardToSummary(user);
+    await user.click(screen.getByRole("button", { name: "query.importWizardStart" }));
+
+    expect(await screen.findByText(/^\[ERR\].*Incorrect datetime value/)).toBeInTheDocument();
+    expect(screen.getByText("query.importError")).toBeInTheDocument();
+    expect(screen.getByText("[IMP] Processed: 1, Added: 0, Updated: 0, Deleted: 0, Errors: 1")).toBeInTheDocument();
   });
 });

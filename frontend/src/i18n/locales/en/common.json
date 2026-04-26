@@ -1141,6 +1141,7 @@
     "importDeleted": "Deleted:",
     "importError": "Error:",
     "importTime": "Time:",
+    "importUnsupportedFileType": "{{count}} file(s) skipped because they do not match the selected import type",
     "exportData": "Export Data",
     "exportFormat": "Export Format",
     "exportSuccess": "Exported {{format}}",
