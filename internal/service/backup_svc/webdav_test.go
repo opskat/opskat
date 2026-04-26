@@ -1,9 +1,11 @@
 package backup_svc
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
@@ -44,6 +46,13 @@ func TestWebDAVBackups(t *testing.T) {
         <d:getcontentlength>12</d:getcontentlength>
         <d:getlastmodified>Sat, 25 Apr 2026 10:00:00 GMT</d:getlastmodified>
       </d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/dav/opskat/opskat-backup-20260425.json</d:href>
+    <d:propstat>
+      <d:prop><d:getcontentlength>7</d:getcontentlength></d:prop>
       <d:status>HTTP/1.1 200 OK</d:status>
     </d:propstat>
   </d:response>
@@ -91,9 +100,10 @@ func TestWebDAVBackups(t *testing.T) {
 			So(putPass, ShouldEqual, "dav-pass")
 		})
 
-		Convey("lists only OpsKat backup files", func() {
+		Convey("lists only encrypted OpsKat backup files", func() {
 			backups, err := ListWebDAVBackups(cfg)
 			So(err, ShouldBeNil)
+			// 仅匹配 .encrypted.json，明文的 opskat-backup-20260425.json 与 notes.txt 都被过滤掉。
 			So(backups, ShouldHaveLength, 1)
 			So(propfindAuthOK, ShouldBeTrue)
 			So(propfindUser, ShouldEqual, "dav-user")
@@ -127,6 +137,240 @@ func TestWebDAVBackups(t *testing.T) {
 			So(getAuthOK, ShouldBeTrue)
 			So(getUser, ShouldEqual, "dav-user")
 			So(getPass, ShouldEqual, "dav-pass")
+		})
+	})
+}
+
+func TestValidateWebDAVURL(t *testing.T) {
+	Convey("ValidateWebDAVURL", t, func() {
+		Convey("accepts plain http and https URLs", func() {
+			So(ValidateWebDAVURL("http://example.com/dav/"), ShouldBeNil)
+			So(ValidateWebDAVURL("https://example.com/dav/opskat/"), ShouldBeNil)
+		})
+		Convey("rejects empty URL", func() {
+			err := ValidateWebDAVURL("")
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "WebDAV URL is required")
+		})
+		Convey("rejects URLs with non-http(s) scheme", func() {
+			err := ValidateWebDAVURL("ftp://example.com/dav/")
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "http://")
+		})
+		Convey("rejects URLs missing host", func() {
+			err := ValidateWebDAVURL("https:///dav/")
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "host")
+		})
+		Convey("rejects URLs containing userinfo to avoid storing plaintext credentials", func() {
+			err := ValidateWebDAVURL("https://user:pass@example.com/dav/")
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "credentials")
+
+			err = ValidateWebDAVURL("https://user@example.com/dav/")
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "credentials")
+		})
+	})
+}
+
+func TestWebDAVFileURLRejectsPathTraversal(t *testing.T) {
+	Convey("webDAVFileURL rejects path-traversal-like names", t, func() {
+		base := "https://example.com/dav/"
+		Convey("accepts simple filenames", func() {
+			out, err := webDAVFileURL(base, "opskat-backup.encrypted.json")
+			So(err, ShouldBeNil)
+			So(out, ShouldEqual, "https://example.com/dav/opskat/opskat-backup.encrypted.json")
+		})
+		Convey("rejects names containing '/'", func() {
+			_, err := webDAVFileURL(base, "foo/bar.json")
+			So(err, ShouldNotBeNil)
+		})
+		Convey("rejects names containing '\\'", func() {
+			_, err := webDAVFileURL(base, `foo\bar.json`)
+			So(err, ShouldNotBeNil)
+		})
+		Convey("rejects '.' and '..'", func() {
+			_, err := webDAVFileURL(base, ".")
+			So(err, ShouldNotBeNil)
+			_, err = webDAVFileURL(base, "..")
+			So(err, ShouldNotBeNil)
+		})
+	})
+}
+
+func TestWebDAVNameFromHref(t *testing.T) {
+	Convey("webDAVNameFromHref", t, func() {
+		Convey("returns the unescaped filename for a normal href", func() {
+			So(webDAVNameFromHref("/dav/opskat/opskat-backup.encrypted.json"),
+				ShouldEqual, "opskat-backup.encrypted.json")
+		})
+		Convey("handles trailing slash on directory hrefs", func() {
+			So(webDAVNameFromHref("/dav/opskat/"), ShouldEqual, "opskat")
+		})
+		Convey("returns empty when href encodes a path separator", func() {
+			// %2F 解码后是 '/'，会被 webDAVFileURL 拒绝，所以这里直接返回空名让上层过滤掉。
+			So(webDAVNameFromHref("/dav/opskat/foo%2Fbar.encrypted.json"), ShouldEqual, "")
+		})
+		Convey("returns the unescaped name for normal escaped chars", func() {
+			// %20 等普通转义不引入路径分隔符，正常解码返回。
+			So(webDAVNameFromHref("/dav/opskat/opskat-backup%20copy.encrypted.json"),
+				ShouldEqual, "opskat-backup copy.encrypted.json")
+		})
+		Convey("returns the dated encrypted backup name unchanged", func() {
+			So(webDAVNameFromHref("/dav/opskat/opskat-backup-20260425.encrypted.json"),
+				ShouldEqual, "opskat-backup-20260425.encrypted.json")
+		})
+	})
+}
+
+func TestIsOpsKatBackupName(t *testing.T) {
+	Convey("isOpsKatBackupName", t, func() {
+		Convey("matches the canonical encrypted backup filename", func() {
+			So(isOpsKatBackupName("opskat-backup.encrypted.json"), ShouldBeTrue)
+		})
+		Convey("matches dated encrypted backups", func() {
+			So(isOpsKatBackupName("opskat-backup-20260425.encrypted.json"), ShouldBeTrue)
+		})
+		Convey("rejects plaintext local exports", func() {
+			// ExportToFile 在不带密码时产生 opskat-backup-YYYYMMDD.json（明文），
+			// 这种文件不应被 ImportFromWebDAV 选中并尝试 DecryptBackup。
+			So(isOpsKatBackupName("opskat-backup-20260425.json"), ShouldBeFalse)
+		})
+		Convey("rejects empty and unrelated names", func() {
+			So(isOpsKatBackupName(""), ShouldBeFalse)
+			So(isOpsKatBackupName("notes.txt"), ShouldBeFalse)
+			So(isOpsKatBackupName("backup.encrypted.json"), ShouldBeFalse)
+		})
+	})
+}
+
+func TestEnsureWebDAVDirectoryAcceptsConflict(t *testing.T) {
+	Convey("ensureWebDAVDirectory treats 409/405 as 'directory already exists'", t, func() {
+		mkcolStatus := http.StatusCreated
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "MKCOL" {
+				w.WriteHeader(mkcolStatus)
+				return
+			}
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}))
+		defer srv.Close()
+
+		cfg := WebDAVConfig{URL: srv.URL + "/dav/opskat/"}
+
+		Convey("201 Created succeeds", func() {
+			mkcolStatus = http.StatusCreated
+			So(ensureWebDAVDirectory(cfg, srv.URL+"/dav/opskat/"), ShouldBeNil)
+		})
+		Convey("405 Method Not Allowed (RFC 4918 §9.3.1) succeeds", func() {
+			mkcolStatus = http.StatusMethodNotAllowed
+			So(ensureWebDAVDirectory(cfg, srv.URL+"/dav/opskat/"), ShouldBeNil)
+		})
+		Convey("409 Conflict succeeds (Nextcloud/ownCloud 等服务器在目录已存在时返回 409)", func() {
+			mkcolStatus = http.StatusConflict
+			So(ensureWebDAVDirectory(cfg, srv.URL+"/dav/opskat/"), ShouldBeNil)
+		})
+		Convey("403 Forbidden fails", func() {
+			mkcolStatus = http.StatusForbidden
+			So(ensureWebDAVDirectory(cfg, srv.URL+"/dav/opskat/"), ShouldNotBeNil)
+		})
+	})
+}
+
+func TestWebDAVRequestRejectsRedirects(t *testing.T) {
+	Convey("webDAVRequest does not silently follow redirects", t, func() {
+		var putHits int
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "PUT" {
+				putHits++
+				w.Header().Set("Location", "https://elsewhere.example/dav/opskat/opskat-backup.encrypted.json")
+				w.WriteHeader(http.StatusFound)
+				return
+			}
+			if r.Method == "MKCOL" {
+				w.WriteHeader(http.StatusCreated)
+				return
+			}
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}))
+		defer srv.Close()
+
+		cfg := WebDAVConfig{URL: srv.URL + "/dav/opskat/"}
+		_, err := CreateOrUpdateWebDAVBackup(cfg, []byte("payload"))
+		So(err, ShouldNotBeNil)
+		// 默认 http.Client 会自动跟随 302 并把 PUT 改成 GET，导致备份内容丢失；
+		// CheckRedirect 拦截后这里应直接返回错误且只发出 1 次 PUT。
+		So(err.Error(), ShouldContainSubstring, "redirect")
+		So(putHits, ShouldEqual, 1)
+	})
+}
+
+func TestTestWebDAVConnectionVerifiesWriteCapability(t *testing.T) {
+	Convey("TestWebDAVConnection", t, func() {
+		Convey("performs MKCOL + PUT(probe) + DELETE(probe) and reports success on writable servers", func() {
+			var mkcolHits, putHits, deleteHits int
+			var lastPutPath, lastDeletePath string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method {
+				case "MKCOL":
+					mkcolHits++
+					w.WriteHeader(http.StatusCreated)
+				case "PUT":
+					putHits++
+					lastPutPath = r.URL.Path
+					w.WriteHeader(http.StatusCreated)
+				case "DELETE":
+					deleteHits++
+					lastDeletePath = r.URL.Path
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					w.WriteHeader(http.StatusMethodNotAllowed)
+				}
+			}))
+			defer srv.Close()
+
+			cfg := WebDAVConfig{URL: srv.URL + "/dav/opskat/"}
+			err := TestWebDAVConnection(cfg)
+			So(err, ShouldBeNil)
+			So(mkcolHits, ShouldEqual, 1)
+			So(putHits, ShouldEqual, 1)
+			So(deleteHits, ShouldEqual, 1)
+			So(strings.HasPrefix(lastPutPath, "/dav/opskat/.opskat-webdav-connection-test-"), ShouldBeTrue)
+			So(lastPutPath, ShouldEqual, lastDeletePath)
+		})
+
+		Convey("reports failure when PUT is rejected (e.g. read-only server)", func() {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method {
+				case "MKCOL":
+					w.WriteHeader(http.StatusMethodNotAllowed)
+				case "PUT":
+					w.WriteHeader(http.StatusForbidden)
+				case "DELETE":
+					w.WriteHeader(http.StatusForbidden)
+				default:
+					w.WriteHeader(http.StatusMethodNotAllowed)
+				}
+			}))
+			defer srv.Close()
+
+			cfg := WebDAVConfig{URL: srv.URL + "/dav/opskat/"}
+			err := TestWebDAVConnection(cfg)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, fmt.Sprintf("HTTP %d", http.StatusForbidden))
+		})
+
+		Convey("reports failure when MKCOL is rejected with a non-success non-conflict status", func() {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusForbidden)
+			}))
+			defer srv.Close()
+
+			cfg := WebDAVConfig{URL: srv.URL + "/dav/opskat/"}
+			err := TestWebDAVConnection(cfg)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "create directory failed")
 		})
 	})
 }

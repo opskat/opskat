@@ -18,7 +18,21 @@ const (
 	webDAVDefaultDirectory = "opskat"
 )
 
-var webDAVHTTPClient = &http.Client{Timeout: 30 * time.Second}
+// webDAVHTTPClient 不跟随重定向：3xx 会把 PUT/PROPFIND/MKCOL/DELETE 改写成 GET，导致难以排查的失败；
+// 由 webDAVRequest 显式处理 3xx 并要求用户修正 URL。
+var webDAVHTTPClient = &http.Client{
+	Timeout: 30 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
+// ValidateWebDAVURL 校验给定的 WebDAV URL 是否符合保存条件：scheme 为 http/https、有 host、不内嵌账号密码。
+// 在 App 层保存配置之前调用，确保不会把含明文凭据的 URL 写到 config.json。
+func ValidateWebDAVURL(raw string) error {
+	_, err := parseWebDAVBaseURL(raw)
+	return err
+}
 
 // WebDAVConfig contains the connection details used for WebDAV backup transport.
 type WebDAVConfig struct {
@@ -49,12 +63,12 @@ func CreateOrUpdateWebDAVBackup(cfg WebDAVConfig, content []byte) (*WebDAVBackup
 	if err != nil {
 		return nil, err
 	}
-	resp, body, err := webDAVRequest(cfg, http.MethodPut, fileURL, content, nil)
+	status, body, err := webDAVRequest(cfg, http.MethodPut, fileURL, content, nil)
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
-		return nil, fmt.Errorf("WebDAV upload failed: HTTP %d: %s", resp.StatusCode, string(body))
+	if status != http.StatusOK && status != http.StatusCreated && status != http.StatusNoContent {
+		return nil, fmt.Errorf("WebDAV upload failed: HTTP %d: %s", status, string(body))
 	}
 	return &WebDAVBackupInfo{
 		Name:      webDAVBackupFilename,
@@ -71,18 +85,18 @@ func ListWebDAVBackups(cfg WebDAVConfig) ([]*WebDAVBackupInfo, error) {
 		return nil, err
 	}
 	body := []byte(`<?xml version="1.0" encoding="utf-8"?><propfind xmlns="DAV:"><prop><getlastmodified/><getcontentlength/><resourcetype/></prop></propfind>`)
-	resp, respBody, err := webDAVRequest(cfg, "PROPFIND", dirURL, body, map[string]string{
+	status, respBody, err := webDAVRequest(cfg, "PROPFIND", dirURL, body, map[string]string{
 		"Depth":        "1",
 		"Content-Type": "application/xml; charset=utf-8",
 	})
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode != 207 && resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == http.StatusNotFound {
+	if status != 207 && status != http.StatusOK {
+		if status == http.StatusNotFound {
 			return []*WebDAVBackupInfo{}, nil
 		}
-		return nil, fmt.Errorf("WebDAV list failed: HTTP %d: %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("WebDAV list failed: HTTP %d: %s", status, string(respBody))
 	}
 	return parseWebDAVBackupList(respBody)
 }
@@ -93,44 +107,82 @@ func GetWebDAVBackupContent(cfg WebDAVConfig, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, body, err := webDAVRequest(cfg, http.MethodGet, fileURL, nil, nil)
+	status, body, err := webDAVRequest(cfg, http.MethodGet, fileURL, nil, nil)
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("WebDAV download failed: HTTP %d: %s", resp.StatusCode, string(body))
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("WebDAV download failed: HTTP %d: %s", status, string(body))
 	}
 	return body, nil
 }
 
-// TestWebDAVConnection verifies that the configured WebDAV directory is reachable.
+// TestWebDAVConnection verifies that the configured WebDAV directory is reachable AND writable.
+// 仅靠 PROPFIND/列表无法验证写权限：只读只读账号或路径配置错误时也可能返回 200/207 或 404，
+// 因此这里走一遍 MKCOL → PUT(probe) → DELETE(probe) 探测，让 UI 的“测试连接”能给出真实结果。
 func TestWebDAVConnection(cfg WebDAVConfig) error {
-	_, err := ListWebDAVBackups(cfg)
-	return err
-}
-
-func ensureWebDAVDirectory(cfg WebDAVConfig, dirURL string) error {
-	resp, body, err := webDAVRequest(cfg, "MKCOL", dirURL, nil, nil)
+	dirURL, err := webDAVDirectoryURL(cfg.URL)
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode == http.StatusOK ||
-		resp.StatusCode == http.StatusCreated ||
-		resp.StatusCode == http.StatusNoContent ||
-		resp.StatusCode == http.StatusMethodNotAllowed {
-		return nil
+	if err := ensureWebDAVDirectory(cfg, dirURL); err != nil {
+		return err
 	}
-	return fmt.Errorf("WebDAV create directory failed: HTTP %d: %s", resp.StatusCode, string(body))
+
+	probeName := ".opskat-webdav-connection-test-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	probeURL, err := webDAVFileURL(cfg.URL, probeName)
+	if err != nil {
+		return err
+	}
+
+	status, body, err := webDAVRequest(cfg, http.MethodPut, probeURL, []byte("ok"), nil)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK && status != http.StatusCreated && status != http.StatusNoContent {
+		return fmt.Errorf("WebDAV connection test upload failed: HTTP %d: %s", status, string(body))
+	}
+
+	status, body, err = webDAVRequest(cfg, http.MethodDelete, probeURL, nil, nil)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK &&
+		status != http.StatusAccepted &&
+		status != http.StatusNoContent &&
+		status != http.StatusNotFound {
+		return fmt.Errorf("WebDAV connection test cleanup failed: HTTP %d: %s", status, string(body))
+	}
+
+	return nil
 }
 
-func webDAVRequest(cfg WebDAVConfig, method, target string, body []byte, headers map[string]string) (*http.Response, []byte, error) {
+func ensureWebDAVDirectory(cfg WebDAVConfig, dirURL string) error {
+	status, body, err := webDAVRequest(cfg, "MKCOL", dirURL, nil, nil)
+	if err != nil {
+		return err
+	}
+	// 405 = MKCOL on existing collection (RFC 4918 §9.3.1)。
+	// 部分服务器（Nextcloud/ownCloud）在目录已存在时会返回 409 Conflict，也视作成功。
+	if status == http.StatusOK ||
+		status == http.StatusCreated ||
+		status == http.StatusNoContent ||
+		status == http.StatusMethodNotAllowed ||
+		status == http.StatusConflict {
+		return nil
+	}
+	return fmt.Errorf("WebDAV create directory failed: HTTP %d: %s", status, string(body))
+}
+
+// webDAVRequest 只暴露状态码 + 响应体，避免把已 Close 的 *http.Response 抛回给调用方造成误用。
+func webDAVRequest(cfg WebDAVConfig, method, target string, body []byte, headers map[string]string) (int, []byte, error) {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
 	req, err := http.NewRequest(method, target, reader)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create WebDAV request: %w", err)
+		return 0, nil, fmt.Errorf("create WebDAV request: %w", err)
 	}
 	if cfg.Username != "" || cfg.Password != "" {
 		req.SetBasicAuth(cfg.Username, cfg.Password)
@@ -140,14 +192,21 @@ func webDAVRequest(cfg WebDAVConfig, method, target string, body []byte, headers
 	}
 	resp, err := webDAVHTTPClient.Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("request WebDAV: %w", err)
+		return 0, nil, fmt.Errorf("request WebDAV: %w", err)
 	}
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read WebDAV response: %w", err)
+		return 0, nil, fmt.Errorf("read WebDAV response: %w", err)
 	}
-	return resp, respBody, nil
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		location := strings.TrimSpace(resp.Header.Get("Location"))
+		if location == "" {
+			return resp.StatusCode, respBody, fmt.Errorf("WebDAV server returned redirect HTTP %d; please configure the final WebDAV URL directly", resp.StatusCode)
+		}
+		return resp.StatusCode, respBody, fmt.Errorf("WebDAV server redirected to %q (HTTP %d); please configure the final WebDAV URL directly", location, resp.StatusCode)
+	}
+	return resp.StatusCode, respBody, nil
 }
 
 func webDAVDirectoryURL(raw string) (string, error) {
@@ -163,7 +222,9 @@ func webDAVFileURL(raw, name string) (string, error) {
 	if name == "" {
 		name = webDAVBackupFilename
 	}
-	if name != path.Base(name) || strings.Contains(name, "\\") {
+	// 额外拒绝 "."、".." 以及 path.Base 之后才能识别的 "\\" 路径分隔符，
+	// 防止任何形式的路径穿越被拼到目录 URL 后面。
+	if name == "." || name == ".." || strings.ContainsAny(name, `/\`) || name != path.Base(name) {
 		return "", fmt.Errorf("invalid WebDAV backup name %q", name)
 	}
 	u, err := parseWebDAVBaseURL(raw)
@@ -199,6 +260,12 @@ func parseWebDAVBaseURL(raw string) (*url.URL, error) {
 	}
 	if u.Host == "" {
 		return nil, fmt.Errorf("WebDAV URL must include a host")
+	}
+	// 拒绝形如 https://user:pass@host/path 的 URL：
+	// 这里保存进 config 的是 URL 本身（明文），同时账号密码已经有专门的 Username/Password 字段，
+	// 否则用户的密码会以明文写入 config.json，并且会被 BasicAuth 重复发送。
+	if u.User != nil {
+		return nil, fmt.Errorf("WebDAV URL must not include credentials; use the username and password fields instead")
 	}
 	u.RawQuery = ""
 	u.Fragment = ""
@@ -271,16 +338,30 @@ func (r webDAVResponse) bestProp() webDAVProp {
 }
 
 func webDAVNameFromHref(href string) string {
+	// 关键点：url.Parse 后用 EscapedPath() 而不是 .Path——后者会把 %2F 还原成字面上的 '/'，
+	// 让下面的 path.Base 错误地把其当成路径分隔符，从而绕过对路径穿越名字的过滤。
+	raw := href
 	if u, err := url.Parse(href); err == nil {
-		href = u.Path
+		raw = u.EscapedPath()
 	}
-	name, err := url.PathUnescape(path.Base(strings.TrimRight(href, "/")))
+	rawName := path.Base(strings.TrimRight(raw, "/"))
+	name, err := url.PathUnescape(rawName)
 	if err != nil {
-		return path.Base(strings.TrimRight(href, "/"))
+		return ""
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return ""
 	}
 	return name
 }
 
+// isOpsKatBackupName 仅匹配 OpsKat 上传到 WebDAV 的加密备份文件。
+// ExportToFile 也会产生 opskat-backup-YYYYMMDD.json（明文）但只会出现在本地，
+// 这里限定 .encrypted.json，避免用户把明文备份手动放进同一个目录后被当成可解密的备份导入。
 func isOpsKatBackupName(name string) bool {
-	return name == webDAVBackupFilename || (strings.HasPrefix(name, "opskat-backup-") && strings.HasSuffix(name, ".json"))
+	if name == "" {
+		return false
+	}
+	return name == webDAVBackupFilename ||
+		(strings.HasPrefix(name, "opskat-backup-") && strings.HasSuffix(name, ".encrypted.json"))
 }

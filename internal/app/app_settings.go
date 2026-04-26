@@ -492,6 +492,10 @@ func (a *App) SaveWebDAVConfig(rawURL, username, password string) error {
 	if rawURL == "" {
 		return fmt.Errorf("WebDAV URL 不能为空")
 	}
+	// 校验 URL：拒绝形如 https://user:pass@host/path 的 URL，避免把明文凭据写进 config.json。
+	if err := backup_svc.ValidateWebDAVURL(rawURL); err != nil {
+		return err
+	}
 	cfg.WebDAVURL = rawURL
 	cfg.WebDAVUsername = username
 	if password != "" {
