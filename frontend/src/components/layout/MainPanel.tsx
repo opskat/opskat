@@ -75,11 +75,8 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
   const hasTabs = tabs.length > 0;
 
-  // Collect all terminal tabs for visibility-based rendering
   const terminalTabs = tabs.filter((tab) => tab.type === "terminal");
-  // Collect AI tabs for visibility-based rendering
   const aiTabs = tabs.filter((tab) => tab.type === "ai");
-  // Collect query tabs for visibility-based rendering
   const queryTabs = tabs.filter((tab) => tab.type === "query");
 
   function renderActiveContent() {
@@ -253,6 +250,9 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
           );
         })}
 
+        {activeTab && activeTab.type === "page" && (
+          <div className="absolute inset-0 bg-background">{renderActiveContent()}</div>
+        )}
         {/* Query tabs: display-based — sticky thead would leak as a composited
             layer if the parent only toggled visibility. State is in zustand,
             so display:none is safe here. */}
@@ -277,7 +277,7 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
         })}
 
         {/* Page and info tabs: rendered only when active */}
-        {activeTab && (activeTab.type === "page" || activeTab.type === "info") && (
+        {activeTab && activeTab.type === "info" && (
           <div className="absolute inset-0 bg-background">{renderActiveContent()}</div>
         )}
 
