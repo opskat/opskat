@@ -14,9 +14,16 @@ import {
   HardDrive,
   UserCheck,
   AlertCircle,
+  ChevronRight,
+  ChevronDown,
 } from "lucide-react";
 import type { asset_entity } from "../../../wailsjs/go/models";
-import { GetK8sClusterInfo, GetK8sNamespaceResources } from "../../../wailsjs/go/app/App";
+import {
+  GetK8sClusterInfo,
+  GetK8sNamespaceResources,
+  GetK8sNamespacePods,
+  GetK8sPodDetail,
+} from "../../../wailsjs/go/app/App";
 
 interface NodeInfo {
   name: string;
@@ -52,7 +59,12 @@ interface ClusterInfo {
   namespaces: NamespaceInfo[];
 }
 
-type InnerTabId = "overview" | `node:${string}` | `ns:${string}` | `ns-res:${string}:${string}`;
+type InnerTabId =
+  | "overview"
+  | `node:${string}`
+  | `ns:${string}`
+  | `ns-res:${string}:${string}`
+  | `pod:${string}:${string}`;
 
 interface InnerTab {
   id: InnerTabId;
@@ -63,6 +75,61 @@ interface ResourceTypeDef {
   key: keyof NamespaceResourcesData;
   labelKey: string;
   icon: React.FC<{ className?: string; style?: React.CSSProperties }>;
+}
+
+interface PodListItem {
+  name: string;
+  namespace: string;
+  status: string;
+  node_name: string;
+  pod_ip: string;
+  age: string;
+  ready: string;
+  restart_count: number;
+}
+
+interface ContainerDetail {
+  name: string;
+  image: string;
+  state: string;
+  ready: boolean;
+  restart_count: number;
+}
+
+interface ConditionDetail {
+  type: string;
+  status: string;
+  reason: string;
+  message: string;
+}
+
+interface EventDetail {
+  type: string;
+  reason: string;
+  message: string;
+  first_time: string;
+  last_time: string;
+  count: number;
+}
+
+interface PodDetail {
+  name: string;
+  namespace: string;
+  status: string;
+  node_name: string;
+  pod_ip: string;
+  host_ip: string;
+  creation_time: string;
+  age: string;
+  ready: string;
+  restart_count: number;
+  qos_class: string;
+  containers: ContainerDetail[];
+  conditions: ConditionDetail[];
+  events: EventDetail[];
+  labels: Record<string, string>;
+  annotations: Record<string, string>;
+  yaml: string;
 }
 
 const RESOURCE_TYPES: ResourceTypeDef[] = [
@@ -88,9 +155,16 @@ export function K8sClusterPage({ asset }: Props) {
   const [activeTabId, setActiveTabId] = useState<InnerTabId>("overview");
   const [expandedNodes, setExpandedNodes] = useState(false);
   const [expandedNamespaces, setExpandedNamespaces] = useState<Set<string>>(new Set());
+  const [expandedPods, setExpandedPods] = useState<Set<string>>(new Set());
   const [namespaceResources, setNamespaceResources] = useState<Record<string, NamespaceResourcesData>>({});
   const [loadingNamespaces, setLoadingNamespaces] = useState<Set<string>>(new Set());
   const [namespaceErrors, setNamespaceErrors] = useState<Record<string, string>>({});
+  const [namespacePodList, setNamespacePodList] = useState<Record<string, PodListItem[]>>({});
+  const [loadingPods, setLoadingPods] = useState<Set<string>>(new Set());
+  const [podErrors, setPodErrors] = useState<Record<string, string>>({});
+  const [podDetails, setPodDetails] = useState<Record<string, PodDetail>>({});
+  const [loadingPodDetails, setLoadingPodDetails] = useState<Set<string>>(new Set());
+  const [podDetailErrors, setPodDetailErrors] = useState<Record<string, string>>({});
 
   const loadInfo = () => {
     setLoading(true);
@@ -102,9 +176,16 @@ export function K8sClusterPage({ asset }: Props) {
         setInnerTabs([{ id: "overview", label: t("asset.k8sClusterOverview") }]);
         setActiveTabId("overview");
         setExpandedNamespaces(new Set());
+        setExpandedPods(new Set());
         setNamespaceResources({});
         setLoadingNamespaces(new Set());
         setNamespaceErrors({});
+        setNamespacePodList({});
+        setLoadingPods(new Set());
+        setPodErrors({});
+        setPodDetails({});
+        setLoadingPodDetails(new Set());
+        setPodDetailErrors({});
       })
       .catch((e: unknown) => {
         setError(String(e));
@@ -156,12 +237,85 @@ export function K8sClusterPage({ asset }: Props) {
     });
   };
 
+  const loadPods = useCallback(
+    (ns: string) => {
+      if (namespacePodList[ns] || loadingPods.has(ns)) return;
+
+      setLoadingPods((prev) => new Set(prev).add(ns));
+      GetK8sNamespacePods(asset.ID, ns)
+        .then((result: string) => {
+          const data = JSON.parse(result) as PodListItem[];
+          setNamespacePodList((prev) => ({ ...prev, [ns]: data }));
+          setPodErrors((prev) => {
+            const next = { ...prev };
+            delete next[ns];
+            return next;
+          });
+        })
+        .catch((e: unknown) => {
+          setPodErrors((prev) => ({ ...prev, [ns]: String(e) }));
+        })
+        .finally(() => {
+          setLoadingPods((prev) => {
+            const next = new Set(prev);
+            next.delete(ns);
+            return next;
+          });
+        });
+    },
+    [asset.ID, namespacePodList, loadingPods]
+  );
+
+  const togglePods = (ns: string) => {
+    setExpandedPods((prev) => {
+      const next = new Set(prev);
+      if (next.has(ns)) {
+        next.delete(ns);
+      } else {
+        next.add(ns);
+        loadPods(ns);
+      }
+      return next;
+    });
+  };
+
+  const loadPodDetail = useCallback(
+    (ns: string, podName: string) => {
+      const key = `${ns}/${podName}`;
+      if (podDetails[key] || loadingPodDetails.has(key)) return;
+
+      setLoadingPodDetails((prev) => new Set(prev).add(key));
+      GetK8sPodDetail(asset.ID, ns, podName)
+        .then((result: string) => {
+          const data = JSON.parse(result) as PodDetail;
+          setPodDetails((prev) => ({ ...prev, [key]: data }));
+          setPodDetailErrors((prev) => {
+            const next = { ...prev };
+            delete next[key];
+            return next;
+          });
+        })
+        .catch((e: unknown) => {
+          setPodDetailErrors((prev) => ({ ...prev, [key]: String(e) }));
+        })
+        .finally(() => {
+          setLoadingPodDetails((prev) => {
+            const next = new Set(prev);
+            next.delete(key);
+            return next;
+          });
+        });
+    },
+    [asset.ID, podDetails, loadingPodDetails]
+  );
+
   useEffect(() => {
     loadInfo();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asset.ID]);
 
-  const activeNs = info && activeTabId.startsWith("ns:") ? info.namespaces.find((n) => n.name === activeTabId.slice(3)) : null;
+  const activeNs =
+    info && activeTabId.startsWith("ns:") ? info.namespaces.find((n) => n.name === activeTabId.slice(3)) : null;
 
   useEffect(() => {
     if (activeNs && !namespaceResources[activeNs.name] && !loadingNamespaces.has(activeNs.name)) {
@@ -178,6 +332,12 @@ export function K8sClusterPage({ asset }: Props) {
       setInnerTabs([...innerTabs, { id, label }]);
     }
     setActiveTabId(id);
+    if (id.startsWith("pod:")) {
+      const parts = id.split(":");
+      const ns = parts[1];
+      const podName = parts.slice(2).join(":");
+      loadPodDetail(ns, podName);
+    }
   };
 
   const closeTab = (id: InnerTabId) => {
@@ -315,6 +475,79 @@ export function K8sClusterPage({ asset }: Props) {
                   {namespaceResources[ns.name] &&
                     RESOURCE_TYPES.map((rt) => {
                       const count = namespaceResources[ns.name][rt.key] as number;
+                      const isPods = rt.key === "pods";
+                      const podsExpanded = expandedPods.has(ns.name);
+                      if (isPods) {
+                        return (
+                          <div key={rt.key}>
+                            <div
+                              className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                              onClick={() => togglePods(ns.name)}
+                            >
+                              {podsExpanded ? (
+                                <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                              ) : (
+                                <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                              )}
+                              <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
+                              <span className="truncate">{t(rt.labelKey)}</span>
+                              <span className="ml-auto text-[10px] text-muted-foreground">{count}</span>
+                            </div>
+                            {podsExpanded && (
+                              <div className="ml-3">
+                                {loadingPods.has(ns.name) && (
+                                  <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                    {t("asset.k8sLoadingPods")}
+                                  </div>
+                                )}
+                                {podErrors[ns.name] && (
+                                  <div
+                                    className="flex items-start gap-1 pl-12 pr-2 py-1 text-xs text-destructive cursor-pointer"
+                                    title={podErrors[ns.name]}
+                                    onClick={() => {
+                                      const next = { ...podErrors };
+                                      delete next[ns.name];
+                                      setPodErrors(next);
+                                      loadPods(ns.name);
+                                    }}
+                                  >
+                                    <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                                    <span>{t("asset.k8sNamespaceResourceError")}</span>
+                                  </div>
+                                )}
+                                {namespacePodList[ns.name]?.length === 0 && (
+                                  <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                    {t("asset.k8sNoPods")}
+                                  </div>
+                                )}
+                                {namespacePodList[ns.name]?.map((pod) => (
+                                  <div
+                                    key={pod.name}
+                                    className={`flex items-center gap-1.5 pl-12 pr-2 py-1 rounded-md text-xs cursor-pointer ml-1 ${
+                                      activeTabId === `pod:${ns.name}:${pod.name}`
+                                        ? "bg-muted font-medium"
+                                        : "hover:bg-muted/50"
+                                    }`}
+                                    onClick={() => openTab(`pod:${ns.name}:${pod.name}`, pod.name)}
+                                  >
+                                    <span
+                                      className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                        pod.status === "Running"
+                                          ? "bg-green-500"
+                                          : pod.status === "Pending"
+                                            ? "bg-yellow-500"
+                                            : "bg-red-500"
+                                      }`}
+                                    />
+                                    <span className="truncate">{pod.name}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }
                       return (
                         <div
                           key={rt.key}
@@ -353,6 +586,8 @@ export function K8sClusterPage({ asset }: Props) {
                     <Server className="h-3 w-3" />
                   ) : tab.id.startsWith("node:") ? (
                     <Box className="h-3 w-3" />
+                  ) : tab.id.startsWith("pod:") ? (
+                    <Circle className="h-3 w-3" />
                   ) : tab.id.startsWith("ns-res:") ? (
                     (() => {
                       const resType = RESOURCE_TYPES.find((rt) => tab.id.endsWith(`:${rt.key}`));
@@ -570,6 +805,240 @@ export function K8sClusterPage({ asset }: Props) {
                       <div className="text-xs text-muted-foreground mb-1">{t("asset.k8sNamespaceResources")}</div>
                       <div className="text-2xl font-mono font-semibold">{count}</div>
                     </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+          {activeTabId.startsWith("pod:") &&
+            (() => {
+              const parts = activeTabId.split(":");
+              const ns = parts[1];
+              const podName = parts.slice(2).join(":");
+              const key = `${ns}/${podName}`;
+              const detail = podDetails[key];
+              const loading = loadingPodDetails.has(key);
+              const err = podDetailErrors[key];
+
+              if (loading) {
+                return (
+                  <div className="flex items-center justify-center h-full">
+                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  </div>
+                );
+              }
+              if (err) {
+                return (
+                  <div className="flex flex-col items-center justify-center h-full gap-4 p-8">
+                    <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive max-w-md text-center">
+                      {err}
+                    </div>
+                    <button
+                      onClick={() => {
+                        const next = { ...podDetailErrors };
+                        delete next[key];
+                        setPodDetailErrors(next);
+                        loadPodDetail(ns, podName);
+                      }}
+                      className="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm hover:bg-muted"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      {t("action.retry")}
+                    </button>
+                  </div>
+                );
+              }
+              if (!detail) return null;
+
+              const getStatusColor = (status: string) => {
+                if (status === "Running") return "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400";
+                if (status === "Pending")
+                  return "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/50 dark:text-yellow-400";
+                return "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400";
+              };
+
+              const getContainerStateColor = (state: string) => {
+                if (state.startsWith("Running"))
+                  return "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400";
+                if (state.startsWith("Waiting"))
+                  return "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/50 dark:text-yellow-400";
+                return "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400";
+              };
+
+              return (
+                <div className="max-w-5xl mx-auto p-6 space-y-6">
+                  <div className="rounded-xl border bg-card p-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="text-base font-semibold font-mono">{detail.name}</h3>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {detail.namespace} &middot; {detail.node_name}
+                        </p>
+                      </div>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${getStatusColor(detail.status)}`}>
+                        {detail.status}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                      <div className="rounded-lg bg-muted/50 p-3">
+                        <div className="text-xs text-muted-foreground mb-1">{t("asset.k8sPodIP")}</div>
+                        <div className="font-mono text-sm font-medium">{detail.pod_ip || "-"}</div>
+                      </div>
+                      <div className="rounded-lg bg-muted/50 p-3">
+                        <div className="text-xs text-muted-foreground mb-1">{t("asset.k8sPodHostIP")}</div>
+                        <div className="font-mono text-sm font-medium">{detail.host_ip || "-"}</div>
+                      </div>
+                      <div className="rounded-lg bg-muted/50 p-3">
+                        <div className="text-xs text-muted-foreground mb-1">{t("asset.k8sPodCreationTime")}</div>
+                        <div className="text-sm font-medium">{detail.creation_time}</div>
+                      </div>
+                      <div className="rounded-lg bg-muted/50 p-3">
+                        <div className="text-xs text-muted-foreground mb-1">{t("asset.k8sPodReady")}</div>
+                        <div className="font-mono text-sm font-medium">{detail.ready}</div>
+                      </div>
+                      <div className="rounded-lg bg-muted/50 p-3">
+                        <div className="text-xs text-muted-foreground mb-1">{t("asset.k8sPodQosClass")}</div>
+                        <div className="text-sm font-medium">{detail.qos_class}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border bg-card p-6">
+                    <h4 className="text-sm font-semibold mb-3">{t("asset.k8sPodContainers")}</h4>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b">
+                            <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">
+                              {t("asset.k8sPodName")}
+                            </th>
+                            <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">Image</th>
+                            <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">
+                              {t("asset.k8sPodStatus")}
+                            </th>
+                            <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">
+                              {t("asset.k8sPodReady")}
+                            </th>
+                            <th className="text-left py-2 text-xs text-muted-foreground font-medium">
+                              {t("asset.k8sPodRestarts")}
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {detail.containers.map((c) => (
+                            <tr key={c.name} className="border-b last:border-0">
+                              <td className="py-2 pr-4 font-mono">{c.name}</td>
+                              <td className="py-2 pr-4 font-mono text-muted-foreground">{c.image}</td>
+                              <td className="py-2 pr-4">
+                                <span
+                                  className={`text-xs px-1.5 py-0.5 rounded-full ${getContainerStateColor(c.state)}`}
+                                >
+                                  {c.state}
+                                </span>
+                              </td>
+                              <td className="py-2 pr-4">
+                                <span className={c.ready ? "text-green-600" : "text-red-600"}>
+                                  {c.ready ? "\u2713" : "\u2717"}
+                                </span>
+                              </td>
+                              <td className="py-2 font-mono">{c.restart_count}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border bg-card p-6">
+                    <h4 className="text-sm font-semibold mb-3">{t("asset.k8sPodConditions")}</h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {detail.conditions.map((c) => (
+                        <div key={c.type} className="rounded-lg border p-3">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-sm font-medium">{c.type}</span>
+                            <span
+                              className={`text-xs px-1.5 py-0.5 rounded-full ${
+                                c.status === "True"
+                                  ? "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400"
+                                  : "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400"
+                              }`}
+                            >
+                              {c.status}
+                            </span>
+                          </div>
+                          {c.reason && <p className="text-xs text-muted-foreground">{c.reason}</p>}
+                          {c.message && <p className="text-xs text-muted-foreground mt-0.5">{c.message}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border bg-card p-6">
+                    <h4 className="text-sm font-semibold mb-3">{t("asset.k8sPodEvents")}</h4>
+                    {detail.events.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">{t("asset.k8sNoEvents")}</p>
+                    ) : (
+                      <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b">
+                              <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">Type</th>
+                              <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">Reason</th>
+                              <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">Message</th>
+                              <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">Count</th>
+                              <th className="text-left py-2 text-xs text-muted-foreground font-medium">Last Seen</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {detail.events.map((e, i) => (
+                              <tr key={i} className="border-b last:border-0">
+                                <td className="py-2 pr-4">
+                                  <span
+                                    className={`text-xs px-1.5 py-0.5 rounded-full ${
+                                      e.type === "Warning"
+                                        ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/50 dark:text-yellow-400"
+                                        : "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400"
+                                    }`}
+                                  >
+                                    {e.type}
+                                  </span>
+                                </td>
+                                <td className="py-2 pr-4 text-xs">{e.reason}</td>
+                                <td className="py-2 pr-4 text-xs text-muted-foreground max-w-xs truncate">
+                                  {e.message}
+                                </td>
+                                <td className="py-2 pr-4 font-mono text-xs">{e.count}</td>
+                                <td className="py-2 text-xs text-muted-foreground">{e.last_time}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  {Object.keys(detail.labels).length > 0 && (
+                    <div className="rounded-xl border bg-card p-6">
+                      <h4 className="text-sm font-semibold mb-3">{t("asset.k8sPodLabels")}</h4>
+                      <div className="flex flex-wrap gap-2">
+                        {Object.entries(detail.labels).map(([k, v]) => (
+                          <span
+                            key={k}
+                            className="inline-flex items-center rounded-md border bg-muted/50 px-2 py-0.5 text-xs font-mono"
+                          >
+                            {k}: {v}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="rounded-xl border bg-card p-6">
+                    <h4 className="text-sm font-semibold mb-3">{t("asset.k8sPodYAML")}</h4>
+                    <pre className="bg-muted/50 rounded-lg p-4 text-xs font-mono max-h-96 overflow-y-auto whitespace-pre-wrap">
+                      {detail.yaml}
+                    </pre>
                   </div>
                 </div>
               );

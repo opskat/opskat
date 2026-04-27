@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"sigs.k8s.io/yaml"
 )
 
 type NodeInfo struct {
@@ -36,34 +38,9 @@ type ClusterInfo struct {
 }
 
 func GetClusterInfo(ctx context.Context, kubeconfig, apiServer, token string) (*ClusterInfo, error) {
-	var config *rest.Config
-	var err error
-
-	if kubeconfig != "" {
-		clientCfg, err := clientcmd.Load([]byte(kubeconfig))
-		if err != nil {
-			return nil, fmt.Errorf("parse kubeconfig: %w", err)
-		}
-		config, err = clientcmd.NewDefaultClientConfig(*clientCfg, &clientcmd.ConfigOverrides{}).ClientConfig()
-		if err != nil {
-			return nil, fmt.Errorf("build rest config from kubeconfig: %w", err)
-		}
-	} else if apiServer != "" {
-		config = &rest.Config{
-			Host:        apiServer,
-			BearerToken: token,
-			TLSClientConfig: rest.TLSClientConfig{
-				Insecure: true,
-			},
-			Timeout: 30 * time.Second,
-		}
-	} else {
-		return nil, fmt.Errorf("kubeconfig or api_server is required")
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
+	clientset, err := buildClient(kubeconfig, apiServer, token)
 	if err != nil {
-		return nil, fmt.Errorf("create k8s clientset: %w", err)
+		return nil, err
 	}
 
 	info := &ClusterInfo{}
@@ -111,18 +88,7 @@ func GetClusterInfo(ctx context.Context, kubeconfig, apiServer, token string) (*
 	return info, nil
 }
 
-type NamespaceResources struct {
-	Namespace       string `json:"namespace"`
-	Pods            int    `json:"pods"`
-	Deployments     int    `json:"deployments"`
-	Services        int    `json:"services"`
-	ConfigMaps      int    `json:"config_maps"`
-	Secrets         int    `json:"secrets"`
-	PVCs            int    `json:"pvcs"`
-	ServiceAccounts int    `json:"service_accounts"`
-}
-
-func GetNamespaceResources(ctx context.Context, kubeconfig, apiServer, token, namespace string) (*NamespaceResources, error) {
+func buildClient(kubeconfig, apiServer, token string) (*kubernetes.Clientset, error) {
 	var config *rest.Config
 	var err error
 
@@ -151,6 +117,80 @@ func GetNamespaceResources(ctx context.Context, kubeconfig, apiServer, token, na
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("create k8s clientset: %w", err)
+	}
+	return clientset, nil
+}
+
+type PodListItem struct {
+	Name         string `json:"name"`
+	Namespace    string `json:"namespace"`
+	Status       string `json:"status"`
+	NodeName     string `json:"node_name"`
+	PodIP        string `json:"pod_ip"`
+	Age          string `json:"age"`
+	Ready        string `json:"ready"`
+	RestartCount int32  `json:"restart_count"`
+}
+
+type ContainerDetail struct {
+	Name         string `json:"name"`
+	Image        string `json:"image"`
+	State        string `json:"state"`
+	Ready        bool   `json:"ready"`
+	RestartCount int32  `json:"restart_count"`
+}
+
+type ConditionDetail struct {
+	Type    string `json:"type"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+}
+
+type EventDetail struct {
+	Type      string `json:"type"`
+	Reason    string `json:"reason"`
+	Message   string `json:"message"`
+	FirstTime string `json:"first_time"`
+	LastTime  string `json:"last_time"`
+	Count     int32  `json:"count"`
+}
+
+type PodDetail struct {
+	Name         string            `json:"name"`
+	Namespace    string            `json:"namespace"`
+	Status       string            `json:"status"`
+	NodeName     string            `json:"node_name"`
+	PodIP        string            `json:"pod_ip"`
+	HostIP       string            `json:"host_ip"`
+	CreationTime string            `json:"creation_time"`
+	Age          string            `json:"age"`
+	Ready        string            `json:"ready"`
+	RestartCount int32             `json:"restart_count"`
+	QosClass     string            `json:"qos_class"`
+	Containers   []ContainerDetail `json:"containers"`
+	Conditions   []ConditionDetail `json:"conditions"`
+	Events       []EventDetail     `json:"events"`
+	Labels       map[string]string `json:"labels"`
+	Annotations  map[string]string `json:"annotations"`
+	YAML         string            `json:"yaml"`
+}
+
+type NamespaceResources struct {
+	Namespace       string `json:"namespace"`
+	Pods            int    `json:"pods"`
+	Deployments     int    `json:"deployments"`
+	Services        int    `json:"services"`
+	ConfigMaps      int    `json:"config_maps"`
+	Secrets         int    `json:"secrets"`
+	PVCs            int    `json:"pvcs"`
+	ServiceAccounts int    `json:"service_accounts"`
+}
+
+func GetNamespaceResources(ctx context.Context, kubeconfig, apiServer, token, namespace string) (*NamespaceResources, error) {
+	clientset, err := buildClient(kubeconfig, apiServer, token)
+	if err != nil {
+		return nil, err
 	}
 
 	res := &NamespaceResources{Namespace: namespace}
@@ -211,4 +251,200 @@ func getNodeRoles(node *corev1.Node) []string {
 		roles = append(roles, "worker")
 	}
 	return roles
+}
+
+func GetNamespacePods(ctx context.Context, kubeconfig, apiServer, token, namespace string) ([]PodListItem, error) {
+	clientset, err := buildClient(kubeconfig, apiServer, token)
+	if err != nil {
+		return nil, err
+	}
+
+	podList, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list pods: %w", err)
+	}
+
+	now := time.Now()
+	result := make([]PodListItem, 0, len(podList.Items))
+	for _, pod := range podList.Items {
+		readyContainers := int32(0)
+		totalContainers := len(pod.Spec.Containers)
+		status := string(pod.Status.Phase)
+		restarts := int32(0)
+		for _, cs := range pod.Status.ContainerStatuses {
+			if cs.Ready {
+				readyContainers++
+			}
+			restarts += cs.RestartCount
+		}
+		if pod.Status.Reason != "" {
+			status = pod.Status.Reason
+		}
+		for _, cs := range pod.Status.ContainerStatuses {
+			if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+				status = cs.State.Waiting.Reason
+			}
+		}
+		age := fmtDuration(now.Sub(pod.CreationTimestamp.Time))
+		result = append(result, PodListItem{
+			Name:         pod.Name,
+			Namespace:    pod.Namespace,
+			Status:       status,
+			NodeName:     pod.Spec.NodeName,
+			PodIP:        pod.Status.PodIP,
+			Age:          age,
+			Ready:        fmt.Sprintf("%d/%d", readyContainers, totalContainers),
+			RestartCount: restarts,
+		})
+	}
+	return result, nil
+}
+
+func GetPodDetail(ctx context.Context, kubeconfig, apiServer, token, namespace, podName string) (*PodDetail, error) {
+	clientset, err := buildClient(kubeconfig, apiServer, token)
+	if err != nil {
+		return nil, err
+	}
+
+	pod, err := clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("get pod %s/%s: %w", namespace, podName, err)
+	}
+
+	now := time.Now()
+
+	readyContainers := int32(0)
+	totalContainers := len(pod.Spec.Containers)
+	restarts := int32(0)
+	containers := make([]ContainerDetail, 0, len(pod.Spec.Containers))
+	for i, c := range pod.Spec.Containers {
+		state := "Unknown"
+		ready := false
+		cr := int32(0)
+		if i < len(pod.Status.ContainerStatuses) {
+			cs := pod.Status.ContainerStatuses[i]
+			ready = cs.Ready
+			cr = cs.RestartCount
+			restarts += cr
+			if ready {
+				readyContainers++
+			}
+			if cs.State.Running != nil {
+				state = "Running"
+			} else if cs.State.Waiting != nil {
+				state = "Waiting: " + cs.State.Waiting.Reason
+			} else if cs.State.Terminated != nil {
+				state = "Terminated: " + cs.State.Terminated.Reason
+			}
+		}
+		containers = append(containers, ContainerDetail{
+			Name:         c.Name,
+			Image:        c.Image,
+			State:        state,
+			Ready:        ready,
+			RestartCount: cr,
+		})
+	}
+
+	status := string(pod.Status.Phase)
+	if pod.Status.Reason != "" {
+		status = pod.Status.Reason
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+			status = cs.State.Waiting.Reason
+		}
+	}
+
+	conditions := make([]ConditionDetail, 0, len(pod.Status.Conditions))
+	for _, c := range pod.Status.Conditions {
+		conditions = append(conditions, ConditionDetail{
+			Type:    string(c.Type),
+			Status:  string(c.Status),
+			Reason:  c.Reason,
+			Message: c.Message,
+		})
+	}
+
+	events, _ := getPodEvents(ctx, clientset, namespace, podName)
+
+	jsonBytes, err := json.Marshal(&pod)
+	var yamlData []byte
+	if err == nil {
+		yamlData, err = yaml.JSONToYAML(jsonBytes)
+	}
+	if err != nil {
+		yamlData = []byte(fmt.Sprintf("error marshaling YAML: %v", err))
+	}
+
+	labels := make(map[string]string)
+	for k, v := range pod.Labels {
+		labels[k] = v
+	}
+	annotations := make(map[string]string)
+	for k, v := range pod.Annotations {
+		annotations[k] = v
+	}
+
+	return &PodDetail{
+		Name:         pod.Name,
+		Namespace:    pod.Namespace,
+		Status:       status,
+		NodeName:     pod.Spec.NodeName,
+		PodIP:        pod.Status.PodIP,
+		HostIP:       pod.Status.HostIP,
+		CreationTime: pod.CreationTimestamp.Format("2006-01-02 15:04:05"),
+		Age:          fmtDuration(now.Sub(pod.CreationTimestamp.Time)),
+		Ready:        fmt.Sprintf("%d/%d", readyContainers, totalContainers),
+		RestartCount: restarts,
+		QosClass:     string(pod.Status.QOSClass),
+		Containers:   containers,
+		Conditions:   conditions,
+		Events:       events,
+		Labels:       labels,
+		Annotations:  annotations,
+		YAML:         string(yamlData),
+	}, nil
+}
+
+func getPodEvents(ctx context.Context, clientset *kubernetes.Clientset, namespace, podName string) ([]EventDetail, error) {
+	eventsList, err := clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
+		FieldSelector: "involvedObject.name=" + podName,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]EventDetail, 0, len(eventsList.Items))
+	for _, e := range eventsList.Items {
+		result = append(result, EventDetail{
+			Type:      e.Type,
+			Reason:    e.Reason,
+			Message:   e.Message,
+			FirstTime: e.FirstTimestamp.Format("2006-01-02 15:04:05"),
+			LastTime:  e.LastTimestamp.Format("2006-01-02 15:04:05"),
+			Count:     e.Count,
+		})
+	}
+	if result == nil {
+		result = []EventDetail{}
+	}
+	return result, nil
+}
+
+func fmtDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		h := int(d.Hours())
+		m := int(d.Minutes()) % 60
+		return fmt.Sprintf("%dh%dm", h, m)
+	}
+	days := int(d.Hours()) / 24
+	h := int(d.Hours()) % 24
+	return fmt.Sprintf("%dd%dh", days, h)
 }

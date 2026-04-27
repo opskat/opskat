@@ -77,3 +77,71 @@ func (a *App) GetK8sNamespaceResources(assetID int64, namespace string) (string,
 	}
 	return string(result), nil
 }
+
+func (a *App) GetK8sNamespacePods(assetID int64, namespace string) (string, error) {
+	ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+	defer cancel()
+
+	asset, err := asset_svc.Asset().Get(ctx, assetID)
+	if err != nil {
+		return "", fmt.Errorf("get asset: %w", err)
+	}
+	if !asset.IsK8s() {
+		return "", fmt.Errorf("asset %d is not a K8S cluster", assetID)
+	}
+
+	cfg, err := asset.GetK8sConfig()
+	if err != nil {
+		return "", fmt.Errorf("get K8S config: %w", err)
+	}
+
+	token := cfg.Token
+	if token == "" && cfg.Kubeconfig == "" && cfg.ApiServer == "" {
+		return "", fmt.Errorf("no kubeconfig or api_server configured for this K8S asset")
+	}
+
+	pods, err := k8s.GetNamespacePods(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace)
+	if err != nil {
+		return "", fmt.Errorf("get K8S namespace pods: %w", err)
+	}
+
+	result, err := json.Marshal(pods)
+	if err != nil {
+		return "", fmt.Errorf("marshal namespace pods: %w", err)
+	}
+	return string(result), nil
+}
+
+func (a *App) GetK8sPodDetail(assetID int64, namespace, podName string) (string, error) {
+	ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+	defer cancel()
+
+	asset, err := asset_svc.Asset().Get(ctx, assetID)
+	if err != nil {
+		return "", fmt.Errorf("get asset: %w", err)
+	}
+	if !asset.IsK8s() {
+		return "", fmt.Errorf("asset %d is not a K8S cluster", assetID)
+	}
+
+	cfg, err := asset.GetK8sConfig()
+	if err != nil {
+		return "", fmt.Errorf("get K8S config: %w", err)
+	}
+
+	token := cfg.Token
+	if token == "" && cfg.Kubeconfig == "" && cfg.ApiServer == "" {
+		return "", fmt.Errorf("no kubeconfig or api_server configured for this K8S asset")
+	}
+
+	detail, err := k8s.GetPodDetail(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace, podName)
+	if err != nil {
+		return "", fmt.Errorf("get K8S pod detail: %w", err)
+	}
+
+	result, err := json.Marshal(detail)
+	if err != nil {
+		return "", fmt.Errorf("marshal pod detail: %w", err)
+	}
+	return string(result), nil
+}
