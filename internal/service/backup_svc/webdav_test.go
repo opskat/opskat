@@ -616,7 +616,7 @@ func TestValidateWebDAVConfig(t *testing.T) {
 		})
 
 		Convey("URL 含 user:pass@ 沿用 ValidateWebDAVURL 行为报错", func() {
-			cfg := WebDAVConfig{
+			cfg := WebDAVConfig{ //nolint:gosec // 用例本身就是要拒绝带凭据的 URL
 				URL:      "https://user:pass@example.com/dav/",
 				AuthType: WebDAVAuthNone,
 			}
