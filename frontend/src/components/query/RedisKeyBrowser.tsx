@@ -12,6 +12,7 @@ import {
   Trash2,
   List,
   FolderTree,
+  Plus,
   ChevronRight,
   ChevronDown,
   Folder,
@@ -32,6 +33,7 @@ import {
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { RedisDeleteKeys } from "../../../wailsjs/go/app/App";
+import { RedisCreateKeyDialog } from "./RedisCreateKeyDialog";
 
 interface RedisKeyBrowserProps {
   tabId: string;
@@ -145,14 +147,16 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // View mode: "list" or "tree"
-  const [viewMode, setViewMode] = useState<"list" | "tree">("list");
+  // View mode: "list" or "tree". Redis keys are hierarchical in most real datasets,
+  // so match Redis GUI conventions by opening in tree mode first.
+  const [viewMode, setViewMode] = useState<"list" | "tree">("tree");
   const [treeExpanded, setTreeExpanded] = useState<Set<string>>(new Set());
 
   // Context menu state
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; key: string } | null>(null);
   const ctxMenuRef = useRef<HTMLDivElement>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
 
   // Build tree data
   const keyTree = useMemo(() => {
@@ -232,10 +236,6 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
     loadDbKeyCounts(tabId);
   }, [tabId, scanKeys, loadDbKeyCounts]);
 
-  const handleLoadMore = useCallback(() => {
-    scanKeys(tabId, false);
-  }, [tabId, scanKeys]);
-
   const handleSelectKey = useCallback(
     (key: string) => {
       selectKey(tabId, key);
@@ -282,31 +282,28 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
 
   if (!state) return null;
 
+  const handleScroll = () => {
+    if (!state.hasMore || state.loadingKeys) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceToBottom <= KEY_ROW_HEIGHT * 4) {
+      scanKeys(tabId, false);
+    }
+  };
+
+  const handleCreatedKey = async (key: string) => {
+    await scanKeys(tabId, true);
+    await loadDbKeyCounts(tabId);
+    await selectKey(tabId, key);
+  };
+
   const dbOptions = Array.from({ length: Math.max(16, state.currentDb + 1) }, (_, i) => i);
 
   return (
     <div className="flex h-full flex-col">
-      {/* DB selector + refresh */}
+      {/* Browser actions */}
       <div className="flex items-center gap-1 border-b px-2 py-1.5">
-        <Database className="size-3.5 shrink-0 text-muted-foreground" />
-        <Select value={String(state.currentDb)} onValueChange={handleDbChange}>
-          <SelectTrigger size="sm" className="h-7 flex-1 text-xs">
-            <SelectValue placeholder={t("query.selectDb")} />
-          </SelectTrigger>
-          <SelectContent>
-            {dbOptions.map((db) => {
-              const count = state.dbKeyCounts[db];
-              return (
-                <SelectItem key={db} value={String(db)}>
-                  <span className="flex items-center gap-1.5">
-                    <span>db{db}</span>
-                    {count !== undefined && count > 0 && <span className="text-muted-foreground">({count})</span>}
-                  </span>
-                </SelectItem>
-              );
-            })}
-          </SelectContent>
-        </Select>
         <Button
           variant="ghost"
           size="icon-xs"
@@ -315,7 +312,10 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
         >
           {viewMode === "list" ? <FolderTree className="size-3.5" /> : <List className="size-3.5" />}
         </Button>
-        <Button variant="ghost" size="icon-xs" onClick={handleRefresh} disabled={state.loadingKeys}>
+        <Button variant="ghost" size="icon-xs" onClick={() => setCreateDialogOpen(true)} title={t("query.createRedisKey")}>
+          <Plus className="size-3.5" />
+        </Button>
+        <Button variant="ghost" size="icon-xs" onClick={handleRefresh} disabled={state.loadingKeys} title={t("query.refreshTree")}>
           <RefreshCw className={`size-3.5 ${state.loadingKeys ? "animate-spin" : ""}`} />
         </Button>
       </div>
@@ -347,7 +347,7 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
       )}
 
       {/* Virtualized key list / tree */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto" onScroll={handleScroll}>
         <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
           {virtualizer.getVirtualItems().map((virtualRow) => {
             if (viewMode === "tree") {
@@ -437,13 +437,37 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
         )}
       </div>
 
-      {/* Load more */}
-      {state.hasMore && !state.loadingKeys && (
-        <div className="border-t px-2 py-1.5">
-          <Button variant="ghost" size="sm" className="h-7 w-full text-xs" onClick={handleLoadMore}>
-            {t("query.loadMore")}
-          </Button>
-        </div>
+      {/* DB selector */}
+      <div data-testid="redis-db-footer" className="flex items-center gap-1 border-t px-2 py-1.5">
+        <Database className="size-3.5 shrink-0 text-muted-foreground" />
+        <Select value={String(state.currentDb)} onValueChange={handleDbChange}>
+          <SelectTrigger size="sm" className="h-7 flex-1 text-xs">
+            <SelectValue placeholder={t("query.selectDb")} />
+          </SelectTrigger>
+          <SelectContent>
+            {dbOptions.map((db) => {
+              const count = state.dbKeyCounts[db];
+              return (
+                <SelectItem key={db} value={String(db)}>
+                  <span className="flex items-center gap-1.5">
+                    <span>db{db}</span>
+                    {count !== undefined && count > 0 && <span className="text-muted-foreground">({count})</span>}
+                  </span>
+                </SelectItem>
+              );
+            })}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {tabMeta && (
+        <RedisCreateKeyDialog
+          open={createDialogOpen}
+          assetId={tabMeta.assetId}
+          db={state.currentDb}
+          onOpenChange={setCreateDialogOpen}
+          onCreated={handleCreatedKey}
+        />
       )}
 
       {/* Key context menu */}
