@@ -10,10 +10,6 @@ import {
   ArrowRightLeft,
   Server,
   LayoutList,
-  Database,
-  Monitor,
-  Cylinder,
-  Leaf,
   FileCode,
 } from "lucide-react";
 import logoLight from "@/assets/images/logo.png";
@@ -56,12 +52,6 @@ export function Sidebar({
 
   const navGroups: NavItem[][] = [
     [{ id: "home", icon: Home, label: t("nav.home") }],
-    [
-      { id: "database", icon: Database, label: t("nav.database") },
-      { id: "ssh", icon: Monitor, label: t("nav.ssh") },
-      { id: "redis", icon: Cylinder, label: t("nav.redis") },
-      { id: "mongodb", icon: Leaf, label: t("nav.mongodb") },
-    ],
     [
       { id: "forward", icon: ArrowRightLeft, label: t("nav.forward") },
       { id: "sshkeys", icon: KeyRound, label: t("nav.sshKeys") },

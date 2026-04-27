@@ -4,28 +4,21 @@ import { Search, Server, Folder, MessageSquare } from "lucide-react";
 import { cn } from "@opskat/ui";
 import { useTabStore, type Tab, type InfoTabMeta } from "@/stores/tabStore";
 import { useTerminalStore } from "@/stores/terminalStore";
-import { useAssetStore } from "@/stores/assetStore";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
 import { filterMatches, highlightMatch } from "@/lib/highlightMatch";
-import { type HomeSection } from "@/lib/assetTypes";
-import { tabBelongsToSection } from "@/lib/tabSection";
 import { useLayoutStore, isCollapsed } from "@/stores/layoutStore";
 import { SideTabItem, SideTabDragContext } from "./SideTabItem";
 import { TabFilterInput } from "./TabFilterInput";
 import { TabPanelMenu } from "./TabPanelMenu";
 import { getBuiltinPageMeta, resolveTabLabel } from "./pageTabMeta";
 
-export function SideTabList({ homeSection = "home" }: { homeSection?: HomeSection }) {
+export function SideTabList() {
   const { t } = useTranslation();
   const isFullscreen = useFullscreen();
   const tabs = useTabStore((s) => s.tabs);
   const activeTabId = useTabStore((s) => s.activeTabId);
-  const assets = useAssetStore((s) => s.assets);
-  const visibleTabs = useMemo(
-    () => tabs.filter((tab) => tabBelongsToSection(tab, homeSection, assets)),
-    [tabs, homeSection, assets]
-  );
+  const visibleTabs = tabs;
   const activateTab = useTabStore((s) => s.activateTab);
   const closeTab = useTabStore((s) => s.closeTab);
   const reorderTab = useTabStore((s) => s.reorderTab);

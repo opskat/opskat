@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import {
   ChevronRight,
@@ -41,16 +41,18 @@ import {
 } from "@opskat/ui";
 import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
 import { filterAssets } from "@/lib/assetSearch";
-import { getAssetType, normalizeAssetSection, type HomeSection } from "@/lib/assetTypes";
+import { getAssetType } from "@/lib/assetTypes";
+import { getAssetTypeOptions, matchSelectedTypes } from "@/lib/assetTypes/options";
+import { AssetTypeFilterButton } from "@/components/asset/AssetTypeFilterButton";
 import { useAssetStore } from "@/stores/assetStore";
 import { useTerminalStore } from "@/stores/terminalStore";
+import { useExtensionStore } from "@/extension";
 import { useActiveAssetIds } from "@/hooks/useActiveAssetIds";
 import { MoveAsset, MoveGroup } from "../../../wailsjs/go/app/App";
 import { asset_entity, group_entity } from "../../../wailsjs/go/models";
 
 interface AssetTreeProps {
   collapsed: boolean;
-  homeSection?: HomeSection;
   sidebarHidden?: boolean;
   onShowSidebar?: () => void;
   onAddAsset: (groupId?: number) => void;
@@ -65,9 +67,29 @@ interface AssetTreeProps {
   onOpenInfoTab?: (type: "asset" | "group", id: number, name: string, icon?: string) => void;
 }
 
+const FILTER_LS_KEY = "asset_tree_type_filter";
+
+function loadFilter(): string[] {
+  try {
+    const raw = localStorage.getItem(FILTER_LS_KEY);
+    if (!raw) return [];
+    if (raw === '"all"' || raw === "all") return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.every((v) => typeof v === "string")) {
+      return parsed as string[];
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+function saveFilter(value: string[]) {
+  localStorage.setItem(FILTER_LS_KEY, JSON.stringify(value));
+}
+
 export function AssetTree({
   collapsed,
-  homeSection = "home",
   sidebarHidden,
   onShowSidebar,
   onAddAsset,
@@ -86,8 +108,10 @@ export function AssetTree({
   const { assets, groups, selectedAssetId, fetchAssets, fetchGroups, deleteAsset, deleteGroup, refresh } =
     useAssetStore();
   const connectingAssetIds = useTerminalStore((s) => s.connectingAssetIds);
+  const extensions = useExtensionStore((s) => s.extensions);
   const activeAssetIds = useActiveAssetIds();
   const [filter, setFilter] = useState("");
+  const [selectedTypes, setSelectedTypes] = useState<string[]>(loadFilter);
   const [deleteConfirm, setDeleteConfirm] = useState<{
     id: number;
     assetCount: number;
@@ -99,13 +123,18 @@ export function AssetTree({
     fetchGroups();
   }, [fetchAssets, fetchGroups]);
 
+  useEffect(() => {
+    saveFilter(selectedTypes);
+  }, [selectedTypes]);
+
+  const typeOptions = useMemo(() => getAssetTypeOptions(extensions), [extensions]);
+
   if (collapsed) return null;
 
-  const sectionAssets =
-    homeSection === "home" ? assets : assets.filter((asset) => normalizeAssetSection(asset.Type) === homeSection);
+  const typeFilteredAssets = matchSelectedTypes(assets, selectedTypes, typeOptions);
   const filteredAssets = filter
-    ? filterAssets(sectionAssets, groups, { query: filter }).map((r) => r.asset)
-    : sectionAssets;
+    ? filterAssets(typeFilteredAssets, groups, { query: filter }).map((r) => r.asset)
+    : typeFilteredAssets;
 
   // Group assets by GroupID
   const groupedAssets = new Map<number, asset_entity.Asset[]>();
@@ -210,14 +239,17 @@ export function AssetTree({
             </Button>
           </div>
         </div>
-        <div className="relative">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
-          <input
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder={t("asset.search") || "Search..."}
-            className="h-7 w-full rounded-md border border-sidebar-border bg-sidebar pl-7 pr-2 text-xs outline-none focus:border-ring focus:ring-1 focus:ring-ring/50 placeholder:text-muted-foreground/60 transition-colors duration-150"
-          />
+        <div className="flex items-center gap-1">
+          <div className="relative flex-1">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder={t("asset.search") || "Search..."}
+              className="h-7 w-full rounded-md border border-sidebar-border bg-sidebar pl-7 pr-2 text-xs outline-none focus:border-ring focus:ring-1 focus:ring-ring/50 placeholder:text-muted-foreground/60 transition-colors duration-150"
+            />
+          </div>
+          <AssetTypeFilterButton value={selectedTypes} options={typeOptions} onChange={setSelectedTypes} />
         </div>
       </div>
       <ScrollArea className="flex-1 min-h-0">
