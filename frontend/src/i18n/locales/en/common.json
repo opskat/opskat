@@ -22,6 +22,10 @@
   },
   "nav": {
     "home": "Home",
+    "database": "Database",
+    "ssh": "SSH",
+    "redis": "Redis",
+    "mongodb": "MongoDB",
     "sshKeys": "Credentials",
     "settings": "Settings",
     "appearance": "Appearance",
@@ -65,6 +69,7 @@
     "close": "Close",
     "submit": "Submit",
     "openInTab": "Open in New Tab",
+    "editPermission": "Edit Permission",
     "open": "Open"
   },
   "tab": {
