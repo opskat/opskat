@@ -167,6 +167,7 @@ export function SideAssistantHistoryDropdown({
                         className="h-6 w-6 shrink-0"
                         onClick={() => void submitRename(conv.ID)}
                         title={t("action.save")}
+                        aria-label={t("action.save")}
                         disabled={renameSaving}
                       >
                         <Check className="h-3 w-3" />
@@ -177,6 +178,7 @@ export function SideAssistantHistoryDropdown({
                         className="h-6 w-6 shrink-0"
                         onClick={cancelRename}
                         title={t("action.cancel")}
+                        aria-label={t("action.cancel")}
                         disabled={renameSaving}
                       >
                         <X className="h-3 w-3" />
@@ -217,6 +219,7 @@ export function SideAssistantHistoryDropdown({
                       startRename(conv.ID, conv.Title);
                     }}
                     title={t("ai.renameConversation")}
+                    aria-label={t("ai.renameConversation")}
                   >
                     <Pencil className="h-3 w-3" />
                   </Button>
@@ -232,6 +235,7 @@ export function SideAssistantHistoryDropdown({
                           isDeleting && "opacity-100"
                         )}
                         title={t("action.delete")}
+                        aria-label={t("action.delete")}
                         onClick={(e) => e.stopPropagation()}
                       >
                         <Trash2 className="h-3 w-3" />

@@ -1767,18 +1767,6 @@ export const useAIStore = create<AIState>((set, get) => {
         }
         cleanupConvListener(id);
 
-        // 删除已被后端确认后，先从本地列表和消息缓存移除，避免后续列表刷新失败时把已删会话留在 UI。
-        invalidateConversationListRequests();
-        set((state) => {
-          const { [id]: _removedMessages, ...remainingMessages } = state.conversationMessages;
-          const { [id]: _removedStreaming, ...remainingStreaming } = state.conversationStreaming;
-          return {
-            conversations: state.conversations.filter((conv) => conv.ID !== id),
-            conversationMessages: remainingMessages,
-            conversationStreaming: remainingStreaming,
-          };
-        });
-
         await get().fetchConversations();
       } catch (e) {
         console.error("删除会话失败:", e);

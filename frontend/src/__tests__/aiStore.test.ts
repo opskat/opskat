@@ -805,9 +805,10 @@ describe("sidebar state", () => {
     vi.mocked(EventsOn).mockReturnValue(() => {});
     vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
     vi.mocked(CreateConversation).mockResolvedValue({ ID: 89, Title: "旧标题", Updatetime: 0 } as any);
-    vi.mocked(ListConversations).mockResolvedValue([{ ID: 89, Title: "sidebar first", Updatetime: 0 }] as any);
     vi.mocked(UpdateConversationTitle).mockResolvedValue(undefined as any);
-    vi.mocked(ListConversations).mockResolvedValue([{ ID: 89, Title: "sidebar first", Updatetime: 1 }] as any);
+    vi.mocked(ListConversations)
+      .mockResolvedValueOnce([{ ID: 89, Title: "sidebar first", Updatetime: 0 }] as any)
+      .mockResolvedValue([{ ID: 89, Title: "sidebar first", Updatetime: 1 }] as any);
     useAIStore.setState({
       sidebarTabs: [buildSidebarTab("sidebar-89", null)],
       activeSidebarTabId: "sidebar-89",

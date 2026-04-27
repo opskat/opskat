@@ -102,6 +102,7 @@ export function SideAssistantContextBar({ conversationId }: SideAssistantContext
           className="h-6 w-6 shrink-0"
           onClick={() => void submitRename()}
           title={t("action.save")}
+          aria-label={t("action.save")}
           disabled={saving}
         >
           <Check className="h-3.5 w-3.5" />
@@ -112,6 +113,7 @@ export function SideAssistantContextBar({ conversationId }: SideAssistantContext
           className="h-6 w-6 shrink-0"
           onClick={cancelRename}
           title={t("action.cancel")}
+          aria-label={t("action.cancel")}
           disabled={saving}
         >
           <X className="h-3.5 w-3.5" />
@@ -131,6 +133,7 @@ export function SideAssistantContextBar({ conversationId }: SideAssistantContext
         className="h-6 w-6 shrink-0"
         onClick={startRename}
         title={t("ai.renameConversation")}
+        aria-label={t("ai.renameConversation")}
         disabled={!conv}
       >
         <Pencil className="h-3.5 w-3.5" />
