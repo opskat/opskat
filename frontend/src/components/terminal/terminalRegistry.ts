@@ -22,7 +22,10 @@ interface InternalInstance extends TerminalInstance {
 // re-renders don't unmount/dispose the terminal and lose scrollback.
 const registry = new Map<string, InternalInstance>();
 
-export function getOrCreateTerminal(sessionId: string, init: { fontSize: number; theme?: ITheme }): TerminalInstance {
+export function getOrCreateTerminal(
+  sessionId: string,
+  init: { fontSize: number; theme?: ITheme; scrollback: number }
+): TerminalInstance {
   const cached = registry.get(sessionId);
   if (cached) return cached;
 
@@ -35,6 +38,7 @@ export function getOrCreateTerminal(sessionId: string, init: { fontSize: number;
     fontSize: init.fontSize,
     fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
     theme: init.theme,
+    scrollback: init.scrollback,
   });
 
   const fitAddon = new FitAddon();
