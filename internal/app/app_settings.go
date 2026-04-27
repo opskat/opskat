@@ -419,6 +419,21 @@ type WebDAVSaveInput struct {
 	Token    string `json:"token"`
 }
 
+// toServiceConfig 将入参转换为 backup_svc.WebDAVConfig，并在 AuthType 为空时兜底为 WebDAVAuthNone。
+func (in WebDAVSaveInput) toServiceConfig() backup_svc.WebDAVConfig {
+	cfg := backup_svc.WebDAVConfig{
+		URL:      strings.TrimSpace(in.URL),
+		AuthType: backup_svc.WebDAVAuthType(in.AuthType),
+		Username: strings.TrimSpace(in.Username),
+		Password: in.Password,
+		Token:    strings.TrimSpace(in.Token),
+	}
+	if cfg.AuthType == "" {
+		cfg.AuthType = backup_svc.WebDAVAuthNone
+	}
+	return cfg
+}
+
 // --- Gist 备份 ---
 
 // ExportToGist 加密并上传备份到 Gist
@@ -499,16 +514,7 @@ func (a *App) SaveWebDAVConfig(in WebDAVSaveInput) error {
 	if cfg == nil {
 		return fmt.Errorf("config not loaded")
 	}
-	svcCfg := backup_svc.WebDAVConfig{
-		URL:      strings.TrimSpace(in.URL),
-		AuthType: backup_svc.WebDAVAuthType(in.AuthType),
-		Username: strings.TrimSpace(in.Username),
-		Password: in.Password,
-		Token:    strings.TrimSpace(in.Token),
-	}
-	if svcCfg.AuthType == "" {
-		svcCfg.AuthType = backup_svc.WebDAVAuthNone
-	}
+	svcCfg := in.toServiceConfig()
 	if err := backup_svc.ValidateWebDAVConfig(svcCfg); err != nil {
 		return err
 	}
@@ -591,16 +597,7 @@ func (a *App) ClearWebDAVConfig() error {
 // TestWebDAVConfig 用入参里的字段测试 WebDAV 目录连通性与写权限。
 // 完全使用入参字段，不再回退到已存配置——前端已回填明文凭据。
 func (a *App) TestWebDAVConfig(in WebDAVSaveInput) error {
-	svcCfg := backup_svc.WebDAVConfig{
-		URL:      strings.TrimSpace(in.URL),
-		AuthType: backup_svc.WebDAVAuthType(in.AuthType),
-		Username: strings.TrimSpace(in.Username),
-		Password: in.Password,
-		Token:    strings.TrimSpace(in.Token),
-	}
-	if svcCfg.AuthType == "" {
-		svcCfg.AuthType = backup_svc.WebDAVAuthNone
-	}
+	svcCfg := in.toServiceConfig()
 	if err := backup_svc.ValidateWebDAVConfig(svcCfg); err != nil {
 		return err
 	}
