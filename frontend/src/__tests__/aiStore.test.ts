@@ -92,6 +92,32 @@ describe("aiStore", () => {
 
       expect(useAIStore.getState().conversations).toEqual([]);
     });
+
+    it("keeps the latest successful result when a later overlapping refresh fails", async () => {
+      let resolveFirstFetch: ((value: any) => void) | undefined;
+      vi.mocked(ListConversations)
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveFirstFetch = resolve;
+            }) as any
+        )
+        .mockRejectedValueOnce(new Error("later refresh failed"));
+
+      useAIStore.setState({
+        conversations: [{ ID: 0, Title: "旧会话", Updatetime: 0 } as any],
+      });
+
+      const firstFetch = useAIStore.getState().fetchConversations();
+      const secondFetch = useAIStore.getState().fetchConversations();
+
+      await secondFetch;
+      resolveFirstFetch?.([{ ID: 8, Title: "新会话", Updatetime: 1 }] as any);
+      await firstFetch;
+
+      expect(useAIStore.getState().conversations.map((conv) => conv.ID)).toEqual([8]);
+      expect(useAIStore.getState().conversations[0]?.Title).toBe("新会话");
+    });
   });
 
   describe("deleteConversation", () => {
@@ -119,6 +145,209 @@ describe("aiStore", () => {
       await useAIStore.getState().deleteConversation(1);
 
       expect(useTabStore.getState().tabs).toHaveLength(0);
+    });
+
+    it("keeps a deleted conversation removed locally when the follow-up refresh fails", async () => {
+      vi.mocked(DeleteConversation).mockResolvedValue(undefined as any);
+      vi.mocked(ListConversations).mockRejectedValue(new Error("refresh failed"));
+
+      useAIStore.setState({
+        conversations: [
+          { ID: 1, Title: "Chat 1", Updatetime: 0 } as any,
+          { ID: 2, Title: "Chat 2", Updatetime: 0 } as any,
+        ],
+        sidebarTabs: [
+          {
+            id: "sidebar-1",
+            conversationId: 1,
+            title: "Chat 1",
+            createdAt: 1,
+            uiState: { inputDraft: { content: "", mentions: [] }, scrollTop: 0, editTarget: null },
+          },
+        ],
+        activeSidebarTabId: "sidebar-1",
+        conversationMessages: {
+          1: [{ role: "user", content: "hello", blocks: [] }],
+          2: [{ role: "user", content: "world", blocks: [] }],
+        },
+        conversationStreaming: {
+          1: { sending: false, pendingQueue: [] },
+          2: { sending: false, pendingQueue: [] },
+        },
+      });
+
+      await useAIStore.getState().deleteConversation(1);
+
+      expect(useAIStore.getState().conversations.map((conv) => conv.ID)).toEqual([2]);
+      expect(useAIStore.getState().sidebarTabs).toEqual([]);
+      expect(useAIStore.getState().conversationMessages[1]).toBeUndefined();
+      expect(useAIStore.getState().conversationStreaming[1]).toBeUndefined();
+    });
+  });
+
+  describe("renameConversation", () => {
+    it("normalizes the title and syncs sidebar/main AI hosts optimistically", async () => {
+      vi.mocked(UpdateConversationTitle).mockResolvedValue(undefined as any);
+      vi.mocked(ListConversations).mockResolvedValue([{ ID: 9, Title: "新标题", Updatetime: 10 }] as any);
+
+      useTabStore.setState({
+        tabs: [{ id: "ai-9", type: "ai", label: "旧标题", meta: { type: "ai", conversationId: 9, title: "旧标题" } }],
+        activeTabId: "ai-9",
+      });
+      useAIStore.setState({
+        conversations: [{ ID: 9, Title: "旧标题", Updatetime: 0 } as any],
+        sidebarTabs: [
+          {
+            id: "sidebar-9",
+            conversationId: 9,
+            title: "旧标题",
+            createdAt: 1,
+            uiState: { inputDraft: { content: "", mentions: [] }, scrollTop: 0, editTarget: null },
+          },
+        ],
+        activeSidebarTabId: "sidebar-9",
+      });
+
+      const renamed = await useAIStore.getState().renameConversation(9, "  新标题  ");
+
+      expect(renamed).toBe(true);
+      expect(UpdateConversationTitle).toHaveBeenCalledWith(9, "新标题");
+      expect(useAIStore.getState().conversations.find((conv) => conv.ID === 9)?.Title).toBe("新标题");
+      expect(useAIStore.getState().sidebarTabs.find((tab) => tab.id === "sidebar-9")?.title).toBe("新标题");
+      expect(useTabStore.getState().tabs.find((tab) => tab.id === "ai-9")?.label).toBe("新标题");
+      expect((useTabStore.getState().tabs.find((tab) => tab.id === "ai-9")?.meta as AITabMeta)?.title).toBe("新标题");
+    });
+
+    it("rolls back the optimistic title when backend rename fails", async () => {
+      vi.mocked(UpdateConversationTitle).mockRejectedValue(new Error("fail"));
+
+      useTabStore.setState({
+        tabs: [{ id: "ai-3", type: "ai", label: "旧标题", meta: { type: "ai", conversationId: 3, title: "旧标题" } }],
+        activeTabId: "ai-3",
+      });
+      useAIStore.setState({
+        conversations: [{ ID: 3, Title: "旧标题", Updatetime: 0 } as any],
+        sidebarTabs: [
+          {
+            id: "sidebar-3",
+            conversationId: 3,
+            title: "旧标题",
+            createdAt: 1,
+            uiState: { inputDraft: { content: "", mentions: [] }, scrollTop: 0, editTarget: null },
+          },
+        ],
+      });
+
+      const renamed = await useAIStore.getState().renameConversation(3, "新标题");
+
+      expect(renamed).toBe(false);
+      expect(useAIStore.getState().conversations.find((conv) => conv.ID === 3)?.Title).toBe("旧标题");
+      expect(useAIStore.getState().sidebarTabs.find((tab) => tab.id === "sidebar-3")?.title).toBe("旧标题");
+      expect(useTabStore.getState().tabs.find((tab) => tab.id === "ai-3")?.label).toBe("旧标题");
+      expect((useTabStore.getState().tabs.find((tab) => tab.id === "ai-3")?.meta as AITabMeta)?.title).toBe("旧标题");
+    });
+
+    it("keeps the optimistic title when backend rename succeeds but the refresh fails", async () => {
+      vi.mocked(UpdateConversationTitle).mockResolvedValue(undefined as any);
+      vi.mocked(ListConversations).mockRejectedValue(new Error("refresh failed"));
+
+      useTabStore.setState({
+        tabs: [{ id: "ai-5", type: "ai", label: "旧标题", meta: { type: "ai", conversationId: 5, title: "旧标题" } }],
+        activeTabId: "ai-5",
+      });
+      useAIStore.setState({
+        conversations: [{ ID: 5, Title: "旧标题", Updatetime: 0 } as any],
+        sidebarTabs: [
+          {
+            id: "sidebar-5",
+            conversationId: 5,
+            title: "旧标题",
+            createdAt: 1,
+            uiState: { inputDraft: { content: "", mentions: [] }, scrollTop: 0, editTarget: null },
+          },
+        ],
+      });
+
+      const renamed = await useAIStore.getState().renameConversation(5, "新标题");
+
+      expect(renamed).toBe(true);
+      expect(useAIStore.getState().conversations.find((conv) => conv.ID === 5)?.Title).toBe("新标题");
+      expect(useAIStore.getState().sidebarTabs.find((tab) => tab.id === "sidebar-5")?.title).toBe("新标题");
+      expect(useTabStore.getState().tabs.find((tab) => tab.id === "ai-5")?.label).toBe("新标题");
+      expect((useTabStore.getState().tabs.find((tab) => tab.id === "ai-5")?.meta as AITabMeta)?.title).toBe("新标题");
+    });
+
+    it("rejects an overlapping rename for the same conversation while the first one is in flight", async () => {
+      let resolveFirstRename: ((value: any) => void) | undefined;
+      vi.mocked(UpdateConversationTitle).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirstRename = resolve;
+          }) as any
+      );
+
+      useTabStore.setState({
+        tabs: [{ id: "ai-6", type: "ai", label: "旧标题", meta: { type: "ai", conversationId: 6, title: "旧标题" } }],
+        activeTabId: "ai-6",
+      });
+      useAIStore.setState({
+        conversations: [{ ID: 6, Title: "旧标题", Updatetime: 0 } as any],
+      });
+
+      const firstRename = useAIStore.getState().renameConversation(6, "第一次标题");
+      const secondRename = useAIStore.getState().renameConversation(6, "第二次标题");
+
+      expect(await secondRename).toBe(false);
+      resolveFirstRename?.(undefined);
+      await firstRename;
+
+      expect(useAIStore.getState().conversations.find((conv) => conv.ID === 6)?.Title).toBe("第一次标题");
+      expect(useTabStore.getState().tabs.find((tab) => tab.id === "ai-6")?.label).toBe("第一次标题");
+      expect((useTabStore.getState().tabs.find((tab) => tab.id === "ai-6")?.meta as AITabMeta)?.title).toBe(
+        "第一次标题"
+      );
+    });
+
+    it("ignores a stale fetchConversations result that returns after a rename starts", async () => {
+      let resolveStaleFetch: ((value: any) => void) | undefined;
+      vi.mocked(ListConversations)
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveStaleFetch = resolve;
+            }) as any
+        )
+        .mockResolvedValueOnce([{ ID: 7, Title: "新标题", Updatetime: 10 }] as any);
+      vi.mocked(UpdateConversationTitle).mockResolvedValue(undefined as any);
+
+      useTabStore.setState({
+        tabs: [{ id: "ai-7", type: "ai", label: "旧标题", meta: { type: "ai", conversationId: 7, title: "旧标题" } }],
+        activeTabId: "ai-7",
+      });
+      useAIStore.setState({
+        conversations: [{ ID: 7, Title: "旧标题", Updatetime: 0 } as any],
+        sidebarTabs: [
+          {
+            id: "sidebar-7",
+            conversationId: 7,
+            title: "旧标题",
+            createdAt: 1,
+            uiState: { inputDraft: { content: "", mentions: [] }, scrollTop: 0, editTarget: null },
+          },
+        ],
+      });
+
+      const staleFetch = useAIStore.getState().fetchConversations();
+      const rename = useAIStore.getState().renameConversation(7, "新标题");
+
+      await rename;
+      resolveStaleFetch?.([{ ID: 7, Title: "旧标题", Updatetime: 1 }] as any);
+      await staleFetch;
+
+      expect(useAIStore.getState().conversations.find((conv) => conv.ID === 7)?.Title).toBe("新标题");
+      expect(useAIStore.getState().sidebarTabs.find((tab) => tab.id === "sidebar-7")?.title).toBe("新标题");
+      expect(useTabStore.getState().tabs.find((tab) => tab.id === "ai-7")?.label).toBe("新标题");
+      expect((useTabStore.getState().tabs.find((tab) => tab.id === "ai-7")?.meta as AITabMeta)?.title).toBe("新标题");
     });
   });
 
@@ -322,6 +551,102 @@ describe("conversationMessages (Phase 1)", () => {
     expect(useTabStore.getState().tabs.find((tab) => tab.id === tabId)?.label).toBe("first prompt");
   });
 
+  it("sendToTab does not wait for list refresh before sending the first message", async () => {
+    const tabId = "ai-54";
+    let resolveRefresh: ((value: any) => void) | undefined;
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
+    vi.mocked(UpdateConversationTitle).mockResolvedValue(undefined as any);
+    vi.mocked(ListConversations).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRefresh = resolve;
+        }) as any
+    );
+    useTabStore.setState({
+      tabs: [{ id: tabId, type: "ai", label: "旧标题", meta: { type: "ai", conversationId: 54, title: "旧标题" } }],
+      activeTabId: tabId,
+    });
+    useAIStore.setState({
+      tabStates: { [tabId]: createTabState() },
+      conversations: [{ ID: 54, Title: "旧标题", Updatetime: 0 } as any],
+      conversationMessages: { 54: [] },
+      conversationStreaming: { 54: { sending: false, pendingQueue: [] } },
+    });
+
+    const callsBeforeSend = vi.mocked(SendAIMessage).mock.calls.length;
+    const sendPromise = useAIStore.getState().sendToTab(tabId, "first prompt");
+
+    await waitForStoreCondition(() => vi.mocked(SendAIMessage).mock.calls.length === callsBeforeSend + 1);
+    expect(UpdateConversationTitle).toHaveBeenCalledWith(54, "first prompt");
+
+    resolveRefresh?.([{ ID: 54, Title: "first prompt", Updatetime: 1 }] as any);
+    await sendPromise;
+  });
+
+  it("newly created AI tabs refresh conversations only once on the first send", async () => {
+    const tabId = "ai-new-70";
+    vi.mocked(CreateConversation).mockResolvedValue({ ID: 70, Title: "新对话", Updatetime: 0 } as any);
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
+    vi.mocked(UpdateConversationTitle).mockResolvedValue(undefined as any);
+    vi.mocked(ListConversations).mockResolvedValue([{ ID: 70, Title: "first prompt", Updatetime: 1 }] as any);
+    useTabStore.setState({
+      tabs: [{ id: tabId, type: "ai", label: "新对话", meta: { type: "ai", conversationId: null, title: "新对话" } }],
+      activeTabId: tabId,
+    });
+    useAIStore.setState({
+      tabStates: { [tabId]: {} },
+      conversations: [],
+    });
+
+    const callsBeforeSend = vi.mocked(ListConversations).mock.calls.length;
+    await useAIStore.getState().sendToTab(tabId, "first prompt");
+
+    expect(vi.mocked(ListConversations).mock.calls.length - callsBeforeSend).toBe(1);
+  });
+
+  it("sendToTab rolls back the tab title when the first-send rename fails for a newly bound conversation", async () => {
+    const tabId = "ai-new-53";
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
+    vi.mocked(UpdateConversationTitle).mockRejectedValue(new Error("rename failed"));
+    useTabStore.setState({
+      tabs: [{ id: tabId, type: "ai", label: "新对话", meta: { type: "ai", conversationId: 53, title: "新对话" } }],
+      activeTabId: tabId,
+    });
+    useAIStore.setState({
+      tabStates: { [tabId]: {} },
+      conversations: [],
+      conversationMessages: { 53: [] },
+      conversationStreaming: { 53: { sending: false, pendingQueue: [] } },
+    });
+
+    await useAIStore.getState().sendToTab(tabId, "first prompt");
+
+    expect(UpdateConversationTitle).toHaveBeenCalledWith(53, "first prompt");
+    expect(useTabStore.getState().tabs.find((tab) => tab.id === tabId)?.label).toBe("新对话");
+    expect((useTabStore.getState().tabs.find((tab) => tab.id === tabId)?.meta as AITabMeta | undefined)?.title).toBe(
+      "新对话"
+    );
+  });
+
+  it("keeps a newly created conversation in the list when the first-send rename fails", async () => {
+    const tabId = "ai-new-71";
+    vi.mocked(CreateConversation).mockResolvedValue({ ID: 71, Title: "新对话", Updatetime: 0 } as any);
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
+    vi.mocked(UpdateConversationTitle).mockRejectedValue(new Error("rename failed"));
+    useTabStore.setState({
+      tabs: [{ id: tabId, type: "ai", label: "新对话", meta: { type: "ai", conversationId: null, title: "新对话" } }],
+      activeTabId: tabId,
+    });
+    useAIStore.setState({
+      tabStates: { [tabId]: {} },
+      conversations: [],
+    });
+
+    await useAIStore.getState().sendToTab(tabId, "first prompt");
+
+    expect(useAIStore.getState().conversations.find((conv) => conv.ID === 71)?.Title).toBe("新对话");
+    expect(vi.mocked(SendAIMessage).mock.calls.at(-1)?.[0]).toBe(71);
+  });
   it("event listener is keyed by conversationId, not tabId", async () => {
     vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
     vi.mocked(EventsOn).mockReturnValue(() => {});
@@ -480,8 +805,10 @@ describe("sidebar state", () => {
     vi.mocked(EventsOn).mockReturnValue(() => {});
     vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
     vi.mocked(CreateConversation).mockResolvedValue({ ID: 89, Title: "旧标题", Updatetime: 0 } as any);
-    vi.mocked(ListConversations).mockResolvedValue([{ ID: 89, Title: "sidebar first", Updatetime: 0 }] as any);
     vi.mocked(UpdateConversationTitle).mockResolvedValue(undefined as any);
+    vi.mocked(ListConversations)
+      .mockResolvedValueOnce([{ ID: 89, Title: "sidebar first", Updatetime: 0 }] as any)
+      .mockResolvedValue([{ ID: 89, Title: "sidebar first", Updatetime: 1 }] as any);
     useAIStore.setState({
       sidebarTabs: [buildSidebarTab("sidebar-89", null)],
       activeSidebarTabId: "sidebar-89",
@@ -734,8 +1061,10 @@ describe("editAndResendConversation", () => {
     ]);
   });
 
-  it("updates local and backend titles when editing the first user turn", async () => {
+  it("updates local and backend titles when editing the first user turn if the current title still matches the old first prompt", async () => {
     vi.mocked(EventsOn).mockReturnValue(() => {});
+    vi.mocked(UpdateConversationTitle).mockResolvedValue(undefined as any);
+    vi.mocked(ListConversations).mockResolvedValue([{ ID: 92, Title: "new first prompt", Updatetime: 1 }] as any);
     useTabStore.setState({
       tabs: [
         { id: "ai-92", type: "ai", label: "old title", meta: { type: "ai", conversationId: 92, title: "old title" } },
@@ -762,6 +1091,91 @@ describe("editAndResendConversation", () => {
     expect((useTabStore.getState().tabs.find((tab) => tab.id === "ai-92")?.meta as AITabMeta | undefined)?.title).toBe(
       "new first prompt"
     );
+  });
+
+  it("keeps a user-customized title when editing the first user turn", async () => {
+    vi.mocked(EventsOn).mockReturnValue(() => {});
+    useTabStore.setState({
+      tabs: [
+        {
+          id: "ai-94",
+          type: "ai",
+          label: "custom title",
+          meta: { type: "ai", conversationId: 94, title: "custom title" },
+        },
+      ],
+      activeTabId: "ai-94",
+    });
+    useAIStore.setState({
+      conversations: [{ ID: 94, Title: "custom title", Updatetime: 0 } as any],
+      tabStates: { "ai-94": createTabState() },
+      conversationMessages: {
+        94: [
+          { role: "user", content: "old title", blocks: [] },
+          { role: "assistant", content: "answer", blocks: [] },
+        ],
+      },
+      conversationStreaming: { 94: { sending: false, pendingQueue: [] } },
+      sidebarTabs: [
+        {
+          id: "sidebar-94",
+          conversationId: 94,
+          title: "custom title",
+          createdAt: 1,
+          uiState: { inputDraft: { content: "", mentions: [] }, scrollTop: 0, editTarget: null },
+        },
+      ],
+      activeSidebarTabId: "sidebar-94",
+    });
+
+    await useAIStore.getState().editAndResendConversation(94, 0, "new first prompt");
+
+    expect(UpdateConversationTitle).not.toHaveBeenCalled();
+    expect(useAIStore.getState().conversations.find((conv) => conv.ID === 94)?.Title).toBe("custom title");
+    expect(useAIStore.getState().sidebarTabs.find((tab) => tab.id === "sidebar-94")?.title).toBe("custom title");
+    expect(useTabStore.getState().tabs.find((tab) => tab.id === "ai-94")?.label).toBe("custom title");
+    expect(
+      (vi.mocked(SendAIMessage).mock.calls[0]?.[1] as Array<{ role: string; content: string }>).map((m) => [
+        m.role,
+        m.content,
+      ])
+    ).toEqual([["user", "new first prompt"]]);
+  });
+
+  it("editAndResendConversation does not wait for list refresh before replaying the first turn", async () => {
+    vi.mocked(EventsOn).mockReturnValue(() => {});
+    let resolveRefresh: ((value: any) => void) | undefined;
+    vi.mocked(ListConversations).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRefresh = resolve;
+        }) as any
+    );
+    useTabStore.setState({
+      tabs: [
+        { id: "ai-93", type: "ai", label: "old title", meta: { type: "ai", conversationId: 93, title: "old title" } },
+      ],
+      activeTabId: "ai-93",
+    });
+    useAIStore.setState({
+      conversations: [{ ID: 93, Title: "old title", Updatetime: 0 } as any],
+      tabStates: { "ai-93": createTabState() },
+      conversationMessages: {
+        93: [
+          { role: "user", content: "old title", blocks: [] },
+          { role: "assistant", content: "answer", blocks: [] },
+        ],
+      },
+      conversationStreaming: { 93: { sending: false, pendingQueue: [] } },
+    });
+
+    const replayPromise = useAIStore.getState().editAndResendConversation(93, 0, "new first prompt");
+
+    await waitForStoreCondition(() => vi.mocked(SendAIMessage).mock.calls.length === 1);
+    expect(UpdateConversationTitle).toHaveBeenCalledWith(93, "new first prompt");
+
+    resolveRefresh?.([{ ID: 93, Title: "new first prompt", Updatetime: 1 }] as any);
+    await replayPromise;
   });
 });
 
@@ -1003,6 +1417,8 @@ describe("sidebar and main tab multi-host behavior", () => {
     }) as any);
     vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
     vi.mocked(StopAIGeneration).mockResolvedValue(undefined as any);
+    vi.mocked(UpdateConversationTitle).mockResolvedValue(undefined as any);
+    vi.mocked(ListConversations).mockResolvedValue([{ ID: 60, Title: "first", Updatetime: 1 }] as any);
 
     useAIStore.setState({
       sidebarTabs: [
