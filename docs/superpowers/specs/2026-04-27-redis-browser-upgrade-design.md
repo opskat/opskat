@@ -4,7 +4,7 @@
 
 OpsKat already has a Redis asset type, a key browser, a key detail pane, command execution, SSH tunnel support, credential resolution, AI/opsctl Redis policy checks, and audit infrastructure. The current GUI Redis path is still thin: most operations are assembled in the frontend and executed through generic `ExecuteRedis` / `ExecuteRedisArgs` bindings.
 
-This change upgrades Redis management as an OpsKat-native feature rather than copying tiny-rdm wholesale. tiny-rdm is used as a reference for feature coverage and UX patterns, while OpsKat keeps its existing asset model, credential handling, Wails IPC, Zustand stores, shared UI primitives, and service-layer conventions.
+This change upgrades Redis management as an OpsKat-native feature while using mature Redis client workflows as feature coverage and UX references. OpsKat keeps its existing asset model, credential handling, Wails IPC, Zustand stores, shared UI primitives, and service-layer conventions.
 
 ## Scope
 

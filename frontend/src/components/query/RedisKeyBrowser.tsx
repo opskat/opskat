@@ -51,7 +51,7 @@ interface TreeNode {
   keyCount: number; // total leaf keys under this node
 }
 
-function buildKeyTree(keys: string[], separator: string): TreeNode {
+export function buildKeyTree(keys: string[], separator: string): TreeNode {
   const root: TreeNode = { name: "", fullKey: null, children: new Map(), keyCount: 0 };
   const sep = separator || DEFAULT_SEPARATOR;
   for (const key of keys) {
@@ -61,12 +61,12 @@ function buildKeyTree(keys: string[], separator: string): TreeNode {
       const segment = parts[i];
       const isLast = i === parts.length - 1;
       if (isLast) {
-        // Leaf — always create a unique entry with full key
         const existing = node.children.get(segment);
-        if (existing && existing.fullKey === null) {
-          // A folder already exists with this name; add as a leaf child with the full key
-          // Use the full key as child key to avoid conflicts
-          node.children.set(key, { name: segment, fullKey: key, children: new Map(), keyCount: 1 });
+        if (existing) {
+          if (existing.fullKey === null) {
+            existing.fullKey = key;
+            existing.keyCount++;
+          }
         } else {
           node.children.set(segment, { name: segment, fullKey: key, children: new Map(), keyCount: 1 });
         }
@@ -96,17 +96,18 @@ interface FlatTreeRow {
   fullKey: string | null; // null = folder
   keyCount: number;
   isExpanded: boolean;
+  hasChildren: boolean;
   nodeId: string; // unique ID for expansion tracking (prefix path)
 }
 
-function flattenTree(root: TreeNode, expandedSet: Set<string>, separator: string): FlatTreeRow[] {
+export function flattenTree(root: TreeNode, expandedSet: Set<string>, separator: string): FlatTreeRow[] {
   const result: FlatTreeRow[] = [];
   const sep = separator || DEFAULT_SEPARATOR;
   const walk = (node: TreeNode, depth: number, prefix: string) => {
     // Sort children: folders first, then leaves
     const entries = Array.from(node.children.values()).sort((a, b) => {
-      const aIsFolder = a.fullKey === null ? 0 : 1;
-      const bIsFolder = b.fullKey === null ? 0 : 1;
+      const aIsFolder = a.children.size > 0 ? 0 : 1;
+      const bIsFolder = b.children.size > 0 ? 0 : 1;
       if (aIsFolder !== bIsFolder) return aIsFolder - bIsFolder;
       return a.name.localeCompare(b.name);
     });
@@ -119,15 +120,44 @@ function flattenTree(root: TreeNode, expandedSet: Set<string>, separator: string
         fullKey: child.fullKey,
         keyCount: child.keyCount,
         isExpanded,
+        hasChildren: child.children.size > 0,
         nodeId,
       });
-      if (child.fullKey === null && isExpanded) {
+      if (child.children.size > 0 && isExpanded) {
         walk(child, depth + 1, nodeId);
       }
     }
   };
   walk(root, 0, "");
   return result;
+}
+
+function isDefaultFilter(pattern: string) {
+  const trimmed = pattern.trim();
+  return trimmed === "" || trimmed === "*";
+}
+
+function escapeRegex(value: string) {
+  return value.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
+}
+
+export function makeLocalKeyMatcher(pattern: string): (key: string) => boolean {
+  const trimmed = pattern.trim();
+  if (isDefaultFilter(trimmed)) return () => true;
+  if (/[*?]/.test(trimmed)) {
+    const source = trimmed
+      .split("")
+      .map((char) => {
+        if (char === "*") return ".*";
+        if (char === "?") return ".";
+        return escapeRegex(char);
+      })
+      .join("");
+    const re = new RegExp(`^${source}$`, "i");
+    return (key) => re.test(key);
+  }
+  const needle = trimmed.toLocaleLowerCase();
+  return (key) => key.toLocaleLowerCase().includes(needle);
 }
 
 interface RedisDbSelectorProps {
@@ -308,7 +338,6 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
   const tab = useTabStore((s) => s.tabs.find((tb) => tb.id === tabId));
   const tabMeta = tab?.meta as QueryTabMeta | undefined;
   const keySeparator = tabMeta?.redisKeySeparator || DEFAULT_SEPARATOR;
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // View mode: "list" or "tree". Redis keys are hierarchical in most real datasets,
@@ -321,13 +350,25 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
   const ctxMenuRef = useRef<HTMLDivElement>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const committedFilter = state?.keyFilter === "*" ? "" : (state?.keyFilter ?? "");
+  const [draftFilter, setDraftFilter] = useState(committedFilter);
+
+  useEffect(() => {
+    setDraftFilter(committedFilter);
+  }, [committedFilter, state?.currentDb, tabId]);
+
+  const visibleKeys = useMemo(() => {
+    if (!state) return [];
+    const matcher = makeLocalKeyMatcher(draftFilter);
+    return state.keys.filter(matcher);
+  }, [draftFilter, state?.keys, state]);
 
   // Build tree data
   const keyTree = useMemo(() => {
     if (viewMode !== "tree" || !state) return null;
-    return buildKeyTree(state.keys, keySeparator);
+    return buildKeyTree(visibleKeys, keySeparator);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode, state?.keys, keySeparator]);
+  }, [viewMode, visibleKeys, keySeparator]);
 
   const flatRows = useMemo(() => {
     if (!keyTree) return [];
@@ -335,16 +376,19 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
   }, [keyTree, treeExpanded, keySeparator]);
 
   const virtualizer = useVirtualizer({
-    count: viewMode === "tree" ? flatRows.length : (state?.keys.length ?? 0),
+    count: viewMode === "tree" ? flatRows.length : visibleKeys.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => KEY_ROW_HEIGHT,
     overscan: 20,
   });
   const currentDbTotal = state ? state.dbKeyCounts[state.currentDb] : undefined;
-  const keyFilterIsDefault = !state || state.keyFilter.trim() === "" || state.keyFilter === "*";
+  const keyFilterIsDefault = !state || isDefaultFilter(state.keyFilter);
+  const draftFilterIsDefault = isDefaultFilter(draftFilter);
+  const isLocalOnlyFilter = draftFilter.trim() !== committedFilter.trim();
   const treeCountsIncomplete = Boolean(
     state &&
-      (state.hasMore || (keyFilterIsDefault && currentDbTotal !== undefined && currentDbTotal > state.keys.length))
+    draftFilterIsDefault &&
+    (state.hasMore || (keyFilterIsDefault && currentDbTotal !== undefined && currentDbTotal > state.keys.length))
   );
 
   useEffect(() => {
@@ -353,8 +397,17 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
   }, [tabId, scanKeys, loadDbKeyCounts]);
 
   useEffect(() => {
-    if (!state || viewMode !== "tree" || !keyFilterIsDefault || state.loadingKeys || !state.hasMore) return;
-    if (currentDbTotal === undefined || currentDbTotal > MAX_TREE_PREFETCH_KEYS || state.keys.length >= currentDbTotal) return;
+    if (
+      !state ||
+      viewMode !== "tree" ||
+      !keyFilterIsDefault ||
+      !draftFilterIsDefault ||
+      state.loadingKeys ||
+      !state.hasMore
+    )
+      return;
+    if (currentDbTotal === undefined || currentDbTotal > MAX_TREE_PREFETCH_KEYS || state.keys.length >= currentDbTotal)
+      return;
     const timer = window.setTimeout(() => {
       scanKeys(tabId, false);
     }, 80);
@@ -362,6 +415,7 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
   }, [
     currentDbTotal,
     keyFilterIsDefault,
+    draftFilterIsDefault,
     scanKeys,
     state?.currentDb,
     state?.hasMore,
@@ -407,25 +461,33 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
     [tabId, selectRedisDb]
   );
 
-  const handleFilterChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const pattern = e.target.value || "*";
-      setKeyFilter(tabId, pattern);
+  const handleFilterChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setDraftFilter(e.target.value);
+  }, []);
 
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
+  const commitFilterAndScan = useCallback(async () => {
+    setKeyFilter(tabId, draftFilter.trim() || "*");
+    await scanKeys(tabId, true);
+  }, [draftFilter, scanKeys, setKeyFilter, tabId]);
+
+  const handleFilterKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commitFilterAndScan();
       }
-      debounceRef.current = setTimeout(() => {
-        scanKeys(tabId, true);
-      }, 300);
+      if (e.key === "Escape") {
+        setDraftFilter(committedFilter);
+      }
     },
-    [tabId, setKeyFilter, scanKeys]
+    [commitFilterAndScan, committedFilter]
   );
 
   const handleRefresh = useCallback(() => {
+    setKeyFilter(tabId, draftFilter.trim() || "*");
     scanKeys(tabId, true);
     loadDbKeyCounts(tabId);
-  }, [tabId, scanKeys, loadDbKeyCounts]);
+  }, [draftFilter, tabId, setKeyFilter, scanKeys, loadDbKeyCounts]);
 
   const handleSelectKey = useCallback(
     (key: string) => {
@@ -474,7 +536,7 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
   if (!state) return null;
 
   const handleScroll = () => {
-    if (!state.hasMore || state.loadingKeys) return;
+    if (!state.hasMore || state.loadingKeys || isLocalOnlyFilter) return;
     const el = scrollRef.current;
     if (!el) return;
     const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -483,7 +545,10 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
     }
   };
 
-  const handleCreatedKey = async (key: string) => {
+  const handleCreatedKey = async (key: string, createdDb: number) => {
+    if (createdDb !== state.currentDb) {
+      await selectRedisDb(tabId, createdDb);
+    }
     await scanKeys(tabId, true);
     await loadDbKeyCounts(tabId);
     await selectKey(tabId, key);
@@ -503,10 +568,21 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
         >
           {viewMode === "list" ? <FolderTree className="size-3.5" /> : <List className="size-3.5" />}
         </Button>
-        <Button variant="ghost" size="icon-xs" onClick={() => setCreateDialogOpen(true)} title={t("query.createRedisKey")}>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={() => setCreateDialogOpen(true)}
+          title={t("query.createRedisKey")}
+        >
           <Plus className="size-3.5" />
         </Button>
-        <Button variant="ghost" size="icon-xs" onClick={handleRefresh} disabled={state.loadingKeys} title={t("query.refreshTree")}>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={handleRefresh}
+          disabled={state.loadingKeys}
+          title={t("query.refreshTree")}
+        >
           <RefreshCw className={`size-3.5 ${state.loadingKeys ? "animate-spin" : ""}`} />
         </Button>
       </div>
@@ -518,15 +594,16 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
           <Input
             className="h-7 pl-7 text-xs"
             placeholder={t("query.filterKeys")}
-            value={state.keyFilter === "*" ? "" : state.keyFilter}
+            value={draftFilter}
             onChange={handleFilterChange}
+            onKeyDown={handleFilterKeyDown}
           />
         </div>
       </div>
 
       {/* Key count */}
       <div className="border-b px-2 py-1 text-xs text-muted-foreground">
-        {t("query.keyCount", { count: state.keys.length })}
+        {t("query.keyCount", { count: visibleKeys.length })}
       </div>
 
       {/* Error message */}
@@ -550,12 +627,13 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
             if (viewMode === "tree") {
               const row = flatRows[virtualRow.index];
               if (!row) return null;
-              const isLeaf = row.fullKey !== null;
+              const isKey = row.fullKey !== null;
+              const isFolder = row.hasChildren;
               return (
                 <button
                   key={virtualRow.key}
                   className={`absolute left-0 flex w-full items-center gap-1 text-left text-xs hover:bg-accent ${
-                    isLeaf && state.selectedKey === row.fullKey ? "bg-accent text-accent-foreground" : ""
+                    isKey && state.selectedKey === row.fullKey ? "bg-accent text-accent-foreground" : ""
                   }`}
                   style={{
                     top: virtualRow.start,
@@ -564,14 +642,14 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
                     paddingRight: "8px",
                   }}
                   onClick={() => {
-                    if (isLeaf) {
-                      handleSelectKey(row.fullKey!);
-                    } else {
+                    if (isFolder) {
                       toggleTreeNode(row.nodeId);
+                    } else if (isKey) {
+                      handleSelectKey(row.fullKey!);
                     }
                   }}
                   onContextMenu={
-                    isLeaf
+                    isKey
                       ? (e) => {
                           e.preventDefault();
                           e.stopPropagation();
@@ -580,21 +658,21 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
                       : undefined
                   }
                 >
-                  {isLeaf ? (
-                    <Key className="size-3 shrink-0 text-muted-foreground" />
-                  ) : row.isExpanded ? (
+                  {isFolder && row.isExpanded ? (
                     <>
                       <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
                       <FolderOpen className="size-3 shrink-0 text-muted-foreground" />
                     </>
-                  ) : (
+                  ) : isFolder ? (
                     <>
                       <ChevronRight className="size-3 shrink-0 text-muted-foreground" />
                       <Folder className="size-3 shrink-0 text-muted-foreground" />
                     </>
+                  ) : (
+                    <Key className="size-3 shrink-0 text-muted-foreground" />
                   )}
                   <span className="truncate font-mono">{row.name}</span>
-                  {!isLeaf && (
+                  {isFolder && (
                     <span className="ml-auto shrink-0 text-muted-foreground text-[10px]">
                       {row.keyCount}
                       {treeCountsIncomplete ? "+" : ""}
@@ -605,7 +683,7 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
             }
 
             // Flat list mode
-            const key = state.keys[virtualRow.index];
+            const key = visibleKeys[virtualRow.index];
             return (
               <button
                 key={key}
@@ -653,6 +731,7 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
           open={createDialogOpen}
           assetId={tabMeta.assetId}
           db={state.currentDb}
+          dbOptions={dbOptions}
           onOpenChange={setCreateDialogOpen}
           onCreated={handleCreatedKey}
         />

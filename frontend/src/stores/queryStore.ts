@@ -72,6 +72,8 @@ export interface RedisTabState {
   loadingKeys: boolean;
   hasMore: boolean;
   dbKeyCounts: Record<number, number>;
+  scanRequestId?: number;
+  keyDetailRequestId?: number;
   error: string | null;
 }
 
@@ -125,6 +127,7 @@ interface QueryState {
   loadMoreValues: (tabId: string) => Promise<void>;
   setKeyFilter: (tabId: string, pattern: string) => void;
   loadDbKeyCounts: (tabId: string) => Promise<void>;
+  clearSelectedKey: (tabId: string, key?: string) => void;
   removeKey: (tabId: string, key: string) => void;
 
   // MongoDB actions
@@ -168,6 +171,8 @@ function defaultRedisState(options: { database?: number } = {}): RedisTabState {
     loadingKeys: false,
     hasMore: true,
     dbKeyCounts: {},
+    scanRequestId: 0,
+    keyDetailRequestId: 0,
     error: null,
   };
 }
@@ -187,7 +192,7 @@ function defaultMongoState(): MongoDBTabState {
 function toRedisMatchPattern(pattern: string): string {
   const trimmed = pattern.trim();
   if (!trimmed) return "*";
-  if (/[\\*?\[]/.test(trimmed)) return trimmed;
+  if (trimmed.includes("*") || trimmed.includes("?") || trimmed.includes("[")) return trimmed;
   return `*${trimmed}*`;
 }
 
@@ -624,9 +629,10 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     set((s) => ({
       redisStates: {
         ...s.redisStates,
-        [tabId]: { ...state, loadingKeys: true },
+        [tabId]: { ...state, loadingKeys: true, scanRequestId: (state.scanRequestId || 0) + 1 },
       },
     }));
+    const requestId = (state.scanRequestId || 0) + 1;
 
     try {
       const result = await RedisScanKeys({
@@ -639,26 +645,30 @@ export const useQueryStore = create<QueryState>((set, get) => ({
         exact: false,
       });
 
-      const allKeys = reset ? result.keys || [] : [...state.keys, ...(result.keys || [])];
-
       set((s) => ({
         redisStates: {
           ...s.redisStates,
-          [tabId]: {
-            ...s.redisStates[tabId],
-            scanCursor: result.cursor || "0",
-            keys: allKeys,
-            hasMore: !!result.hasMore,
-            loadingKeys: false,
-            error: null,
-          },
+          [tabId]:
+            s.redisStates[tabId]?.scanRequestId === requestId
+              ? {
+                  ...s.redisStates[tabId],
+                  scanCursor: result.cursor || "0",
+                  keys: reset ? result.keys || [] : [...s.redisStates[tabId].keys, ...(result.keys || [])],
+                  hasMore: !!result.hasMore,
+                  loadingKeys: false,
+                  error: null,
+                }
+              : s.redisStates[tabId],
         },
       }));
     } catch (err) {
       set((s) => ({
         redisStates: {
           ...s.redisStates,
-          [tabId]: { ...s.redisStates[tabId], loadingKeys: false, error: String(err) },
+          [tabId]:
+            s.redisStates[tabId]?.scanRequestId === requestId
+              ? { ...s.redisStates[tabId], loadingKeys: false, error: String(err) }
+              : s.redisStates[tabId],
         },
       }));
     }
@@ -689,11 +699,12 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     const state = get().redisStates[tabId];
     if (!tab || !state) return;
     const db = state.currentDb;
+    const requestId = (state.keyDetailRequestId || 0) + 1;
 
     set((s) => ({
       redisStates: {
         ...s.redisStates,
-        [tabId]: { ...s.redisStates[tabId], selectedKey: key, keyInfo: null },
+        [tabId]: { ...s.redisStates[tabId], selectedKey: key, keyInfo: null, keyDetailRequestId: requestId },
       },
     }));
 
@@ -707,15 +718,26 @@ export const useQueryStore = create<QueryState>((set, get) => ({
         count: REDIS_PAGE_SIZE,
       });
 
-      set((s) => ({
-        redisStates: {
-          ...s.redisStates,
-          [tabId]: {
-            ...s.redisStates[tabId],
-            keyInfo: toRedisKeyInfo(detail as RedisKeyDetailResult),
+      set((s) => {
+        const current = s.redisStates[tabId];
+        if (
+          !current ||
+          current.keyDetailRequestId !== requestId ||
+          current.selectedKey !== key ||
+          current.currentDb !== db
+        ) {
+          return { redisStates: s.redisStates };
+        }
+        return {
+          redisStates: {
+            ...s.redisStates,
+            [tabId]: {
+              ...current,
+              keyInfo: toRedisKeyInfo(detail as RedisKeyDetailResult),
+            },
           },
-        },
-      }));
+        };
+      });
     } catch {
       /* ignore */
     }
@@ -724,16 +746,22 @@ export const useQueryStore = create<QueryState>((set, get) => ({
   loadMoreValues: async (tabId) => {
     const tab = getQueryTabFromTabStore(tabId);
     const state = get().redisStates[tabId];
-    if (!tab || !state?.keyInfo || !state.selectedKey || !state.keyInfo.hasMoreValues) return;
+    if (!tab || !state?.keyInfo || !state.selectedKey || !state.keyInfo.hasMoreValues || state.keyInfo.loadingMore)
+      return;
 
     const key = state.selectedKey;
     const info = state.keyInfo;
     const db = state.currentDb;
+    const requestId = (state.keyDetailRequestId || 0) + 1;
 
     set((s) => ({
       redisStates: {
         ...s.redisStates,
-        [tabId]: { ...s.redisStates[tabId], keyInfo: { ...info, loadingMore: true } },
+        [tabId]: {
+          ...s.redisStates[tabId],
+          keyDetailRequestId: requestId,
+          keyInfo: { ...info, loadingMore: true },
+        },
       },
     }));
 
@@ -762,29 +790,51 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       newOffset = next.valueOffset;
       newHasMore = next.hasMoreValues;
 
-      set((s) => ({
-        redisStates: {
-          ...s.redisStates,
-          [tabId]: {
-            ...s.redisStates[tabId],
-            keyInfo: {
-              ...info,
-              value: newValue,
-              valueCursor: newCursor,
-              valueOffset: newOffset,
-              hasMoreValues: newHasMore,
-              loadingMore: false,
+      set((s) => {
+        const current = s.redisStates[tabId];
+        if (
+          !current ||
+          current.keyDetailRequestId !== requestId ||
+          current.selectedKey !== key ||
+          current.currentDb !== db
+        ) {
+          return { redisStates: s.redisStates };
+        }
+        return {
+          redisStates: {
+            ...s.redisStates,
+            [tabId]: {
+              ...current,
+              keyInfo: {
+                ...info,
+                value: newValue,
+                valueCursor: newCursor,
+                valueOffset: newOffset,
+                hasMoreValues: newHasMore,
+                loadingMore: false,
+              },
             },
           },
-        },
-      }));
+        };
+      });
     } catch {
-      set((s) => ({
-        redisStates: {
-          ...s.redisStates,
-          [tabId]: { ...s.redisStates[tabId], keyInfo: { ...info, loadingMore: false } },
-        },
-      }));
+      set((s) => {
+        const current = s.redisStates[tabId];
+        if (
+          !current ||
+          current.keyDetailRequestId !== requestId ||
+          current.selectedKey !== key ||
+          current.currentDb !== db
+        ) {
+          return { redisStates: s.redisStates };
+        }
+        return {
+          redisStates: {
+            ...s.redisStates,
+            [tabId]: { ...current, keyInfo: { ...info, loadingMore: false } },
+          },
+        };
+      });
     }
   },
 
@@ -821,6 +871,22 @@ export const useQueryStore = create<QueryState>((set, get) => ({
         },
       }));
     }
+  },
+
+  clearSelectedKey: (tabId, key) => {
+    const state = get().redisStates[tabId];
+    if (!state || (key && state.selectedKey !== key)) return;
+    set((s) => ({
+      redisStates: {
+        ...s.redisStates,
+        [tabId]: {
+          ...s.redisStates[tabId],
+          selectedKey: null,
+          keyInfo: null,
+          keyDetailRequestId: (s.redisStates[tabId].keyDetailRequestId || 0) + 1,
+        },
+      },
+    }));
   },
 
   removeKey: (tabId, key) => {

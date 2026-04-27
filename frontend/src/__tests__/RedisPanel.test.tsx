@@ -1,9 +1,16 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { RedisPanel } from "../components/query/RedisPanel";
 import { useQueryStore } from "../stores/queryStore";
 import { useTabStore } from "../stores/tabStore";
-import { ExecuteRedis, RedisClientList, RedisCommandHistory, RedisListDatabases, RedisScanKeys, RedisSlowLog } from "../../wailsjs/go/app/App";
+import {
+  ExecuteRedis,
+  RedisClientList,
+  RedisCommandHistory,
+  RedisListDatabases,
+  RedisScanKeys,
+  RedisSlowLog,
+} from "../../wailsjs/go/app/App";
 
 describe("RedisPanel", () => {
   beforeEach(() => {
@@ -56,6 +63,133 @@ describe("RedisPanel", () => {
     expect(screen.queryByText("query.noKeySelected")).not.toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getAllByText("7.2.4").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("keeps multiple key detail tabs open and lets users close a tab", async () => {
+    render(<RedisPanel tabId="query-10" />);
+
+    act(() => {
+      useQueryStore.setState((s) => ({
+        redisStates: {
+          ...s.redisStates,
+          "query-10": {
+            ...s.redisStates["query-10"],
+            selectedKey: "common:user:1",
+            keyInfo: {
+              type: "string",
+              ttl: -1,
+              total: -1,
+              value: "one",
+              valueCursor: "0",
+              valueOffset: 0,
+              hasMoreValues: false,
+              loadingMore: false,
+            },
+          },
+        },
+      }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /common:user:1/ })).toHaveAttribute("aria-selected", "true");
+    });
+
+    act(() => {
+      useQueryStore.setState((s) => ({
+        redisStates: {
+          ...s.redisStates,
+          "query-10": {
+            ...s.redisStates["query-10"],
+            selectedKey: "dispatcher:task:2",
+            keyInfo: {
+              type: "string",
+              ttl: -1,
+              total: -1,
+              value: "two",
+              valueCursor: "0",
+              valueOffset: 0,
+              hasMoreValues: false,
+              loadingMore: false,
+            },
+          },
+        },
+      }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /common:user:1/ })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: /dispatcher:task:2/ })).toHaveAttribute("aria-selected", "true");
+    });
+
+    fireEvent.click(screen.getByLabelText("query.closeRedisKeyTab common:user:1"));
+
+    expect(screen.queryByRole("tab", { name: /common:user:1/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /dispatcher:task:2/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("clears selected key when closing the last detail tab so the same key can reopen", async () => {
+    render(<RedisPanel tabId="query-10" />);
+
+    act(() => {
+      useQueryStore.setState((s) => ({
+        redisStates: {
+          ...s.redisStates,
+          "query-10": {
+            ...s.redisStates["query-10"],
+            selectedKey: "common:user:1",
+            keyInfo: {
+              type: "string",
+              ttl: -1,
+              total: -1,
+              value: "one",
+              valueCursor: "0",
+              valueOffset: 0,
+              hasMoreValues: false,
+              loadingMore: false,
+            },
+          },
+        },
+      }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /common:user:1/ })).toHaveAttribute("aria-selected", "true");
+    });
+
+    fireEvent.click(screen.getByLabelText("query.closeRedisKeyTab common:user:1"));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tab", { name: /common:user:1/ })).not.toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "query.redisOverview" })).toHaveAttribute("aria-selected", "true");
+    });
+    expect(useQueryStore.getState().redisStates["query-10"].selectedKey).toBeNull();
+    expect(useQueryStore.getState().redisStates["query-10"].keyInfo).toBeNull();
+
+    act(() => {
+      useQueryStore.setState((s) => ({
+        redisStates: {
+          ...s.redisStates,
+          "query-10": {
+            ...s.redisStates["query-10"],
+            selectedKey: "common:user:1",
+            keyInfo: {
+              type: "string",
+              ttl: -1,
+              total: -1,
+              value: "one",
+              valueCursor: "0",
+              valueOffset: 0,
+              hasMoreValues: false,
+              loadingMore: false,
+            },
+          },
+        },
+      }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /common:user:1/ })).toHaveAttribute("aria-selected", "true");
     });
   });
 });

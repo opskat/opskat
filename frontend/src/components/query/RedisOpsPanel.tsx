@@ -161,7 +161,7 @@ export function RedisOpsPanel({ tabId }: RedisOpsPanelProps) {
 
   useEffect(() => {
     if (!autoRefresh) return;
-    const timer = window.setInterval(refresh, 10_000);
+    const timer = window.setInterval(refresh, 2_000);
     return () => window.clearInterval(timer);
   }, [autoRefresh, refresh]);
 
@@ -186,7 +186,10 @@ export function RedisOpsPanel({ tabId }: RedisOpsPanelProps) {
   const memoryRows = [
     { label: t("query.redisMemoryUsed"), value: pickValue(values, "used_memory_human") },
     { label: t("query.redisMemoryPeak"), value: pickValue(values, "used_memory_peak_human") },
-    { label: t("query.redisLuaMemory"), value: pickValue(values, "used_memory_lua_human", pickValue(values, "used_memory_lua")) },
+    {
+      label: t("query.redisLuaMemory"),
+      value: pickValue(values, "used_memory_lua_human", pickValue(values, "used_memory_lua")),
+    },
   ];
   const statusRows = [
     { label: t("query.redisConnectedClients"), value: pickValue(values, "connected_clients") },

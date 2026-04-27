@@ -26,5 +26,15 @@ func TestCommandHistory(t *testing.T) {
 func TestFormatCommandForHistory(t *testing.T) {
 	got := formatCommandForHistory([]any{"SET", "my key", "value with spaces"})
 
-	assert.Equal(t, `SET "my key" "value with spaces"`, got)
+	assert.Equal(t, `SET "my key" <redacted>`, got)
+	assert.NotContains(t, got, "value with spaces")
+}
+
+func TestFormatCommandForHistoryRedactsWriteValues(t *testing.T) {
+	assert.Equal(t, `HSET session token <redacted>`, formatCommandForHistory([]any{"HSET", "session", "token", "secret"}))
+	assert.Equal(t, `RPUSH queue <redacted>`, formatCommandForHistory([]any{"RPUSH", "queue", "payload"}))
+	assert.Equal(t, `XADD events * token <redacted>`, formatCommandForHistory([]any{"XADD", "events", "*", "token", "secret"}))
+
+	got := formatCommandForHistory([]any{"GET", "session:token"})
+	assert.Equal(t, "GET session:token", got)
 }

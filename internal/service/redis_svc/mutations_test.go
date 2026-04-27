@@ -31,21 +31,34 @@ func TestRedisMutations(t *testing.T) {
 	})
 
 	t.Run("sets string without splitting spaces", func(t *testing.T) {
-		exec := &fakeRedisExecutor{}
+		exec := &fakeRedisExecutor{results: []any{int64(-1), nil}}
 
 		err := setStringValue(ctx, exec, RedisStringSetRequest{Key: "k", Value: "hello world", Format: RedisValueFormatRaw})
 
 		require.NoError(t, err)
-		assert.Equal(t, []any{"SET", "k", "hello world"}, exec.calls[0])
+		assert.Equal(t, []any{"PTTL", "k"}, exec.calls[0])
+		assert.Equal(t, []any{"SET", "k", "hello world"}, exec.calls[1])
 	})
 
 	t.Run("decodes hex before setting string", func(t *testing.T) {
-		exec := &fakeRedisExecutor{}
+		exec := &fakeRedisExecutor{results: []any{int64(-1), nil}}
 
 		err := setStringValue(ctx, exec, RedisStringSetRequest{Key: "k", Value: "6869", Format: RedisValueFormatHex})
 
 		require.NoError(t, err)
-		assert.Equal(t, []any{"SET", "k", "hi"}, exec.calls[0])
+		assert.Equal(t, []any{"PTTL", "k"}, exec.calls[0])
+		assert.Equal(t, []any{"SET", "k", "hi"}, exec.calls[1])
+	})
+
+	t.Run("preserves existing string ttl when editing", func(t *testing.T) {
+		exec := &fakeRedisExecutor{results: []any{int64(12500), nil, nil}}
+
+		err := setStringValue(ctx, exec, RedisStringSetRequest{Key: "k", Value: "v", Format: RedisValueFormatRaw})
+
+		require.NoError(t, err)
+		assert.Equal(t, []any{"PTTL", "k"}, exec.calls[0])
+		assert.Equal(t, []any{"SET", "k", "v"}, exec.calls[1])
+		assert.Equal(t, []any{"PEXPIRE", "k", int64(12500)}, exec.calls[2])
 	})
 
 	t.Run("deletes multiple keys with one command", func(t *testing.T) {

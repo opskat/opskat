@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { RedisOpsPanel } from "../components/query/RedisOpsPanel";
 import { useTabStore } from "../stores/tabStore";
 import { useQueryStore } from "../stores/queryStore";
@@ -37,6 +37,10 @@ describe("RedisOpsPanel", () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("renders redis info details, keyspace stats, and searchable info rows", async () => {
     vi.mocked(ExecuteRedis).mockResolvedValue(
       JSON.stringify({
@@ -64,5 +68,33 @@ describe("RedisOpsPanel", () => {
     expect(screen.getByText("redis_git_sha1")).toBeInTheDocument();
     expect(screen.queryByText("redis_build_id")).not.toBeInTheDocument();
     expect(screen.queryByText("process_id")).not.toBeInTheDocument();
+  });
+
+  it("refreshes every two seconds while auto refresh is enabled", async () => {
+    vi.useFakeTimers();
+    vi.mocked(ExecuteRedis).mockResolvedValue(
+      JSON.stringify({
+        type: "string",
+        value: "# Server\r\nredis_version:7.4.8\r\n",
+      })
+    );
+
+    render(<RedisOpsPanel tabId="query-10" />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(ExecuteRedis).toHaveBeenCalledTimes(1);
+    vi.mocked(ExecuteRedis).mockClear();
+
+    fireEvent.click(screen.getByRole("switch"));
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(ExecuteRedis).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ExecuteRedis).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(ExecuteRedis).toHaveBeenCalledTimes(2);
   });
 });

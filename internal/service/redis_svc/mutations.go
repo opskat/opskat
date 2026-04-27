@@ -41,9 +41,18 @@ func setStringValue(ctx context.Context, exec redisExecutor, req RedisStringSetR
 	if err != nil {
 		return err
 	}
+	ttlMillis := int64(-2)
+	if ttl, ttlErr := exec.Do(ctx, "PTTL", req.Key); ttlErr == nil {
+		ttlMillis = toInt64(ttl)
+	}
 	_, err = exec.Do(ctx, "SET", req.Key, value)
 	if err != nil {
 		return fmt.Errorf("set Redis string value: %w", err)
+	}
+	if ttlMillis > 0 {
+		if _, err = exec.Do(ctx, "PEXPIRE", req.Key, ttlMillis); err != nil {
+			return fmt.Errorf("restore Redis string ttl: %w", err)
+		}
 	}
 	return nil
 }

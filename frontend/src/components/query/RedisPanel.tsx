@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Activity, Key } from "lucide-react";
+import { Activity, Key, X } from "lucide-react";
 import { useResizeHandle } from "@opskat/ui";
 import { RedisKeyBrowser } from "./RedisKeyBrowser";
 import { RedisKeyDetail } from "./RedisKeyDetail";
@@ -11,10 +11,23 @@ interface RedisPanelProps {
   tabId: string;
 }
 
+const REDIS_OVERVIEW_VIEW = "overview";
+
+function getKeyViewId(key: string) {
+  return `key:${key}`;
+}
+
+function getKeyFromView(view: string) {
+  return view.startsWith("key:") ? view.slice(4) : null;
+}
+
 export function RedisPanel({ tabId }: RedisPanelProps) {
   const { t } = useTranslation();
   const selectedKey = useQueryStore((s) => s.redisStates[tabId]?.selectedKey);
-  const [activeView, setActiveView] = useState<"overview" | "key">("overview");
+  const selectKey = useQueryStore((s) => s.selectKey);
+  const clearSelectedKey = useQueryStore((s) => s.clearSelectedKey);
+  const [activeView, setActiveView] = useState<string>(REDIS_OVERVIEW_VIEW);
+  const [openKeys, setOpenKeys] = useState<string[]>([]);
   const sidebarRef = useRef<HTMLDivElement>(null);
   const { size: sidebarWidth, handleMouseDown } = useResizeHandle({
     defaultSize: 220,
@@ -25,11 +38,43 @@ export function RedisPanel({ tabId }: RedisPanelProps) {
 
   useEffect(() => {
     if (selectedKey) {
-      setActiveView("key");
-    } else {
-      setActiveView("overview");
+      setOpenKeys((prev) => (prev.includes(selectedKey) ? prev : [...prev, selectedKey]));
+      setActiveView(getKeyViewId(selectedKey));
     }
   }, [selectedKey]);
+
+  const activeKey = getKeyFromView(activeView);
+
+  useEffect(() => {
+    if (!selectedKey && activeKey) {
+      setActiveView(REDIS_OVERVIEW_VIEW);
+    }
+  }, [activeKey, selectedKey]);
+
+  const activateKeyTab = (key: string) => {
+    setActiveView(getKeyViewId(key));
+    if (selectedKey !== key) {
+      selectKey(tabId, key);
+    }
+  };
+
+  const closeKeyTab = (key: string) => {
+    setOpenKeys((prev) => {
+      const next = prev.filter((item) => item !== key);
+      if (activeKey === key) {
+        const currentIndex = prev.indexOf(key);
+        const fallback = next[Math.min(currentIndex, next.length - 1)] ?? null;
+        if (fallback) {
+          setActiveView(getKeyViewId(fallback));
+          selectKey(tabId, fallback);
+        } else {
+          setActiveView(REDIS_OVERVIEW_VIEW);
+          clearSelectedKey(tabId, key);
+        }
+      }
+      return next;
+    });
+  };
 
   return (
     <div className="flex h-full w-full">
@@ -46,40 +91,61 @@ export function RedisPanel({ tabId }: RedisPanelProps) {
         <div className="flex shrink-0 items-center overflow-x-auto border-b bg-muted/30">
           <button
             role="tab"
-            aria-selected={activeView === "overview"}
+            aria-selected={activeView === REDIS_OVERVIEW_VIEW}
             className={`flex items-center gap-1.5 border-r px-3 py-1.5 text-xs transition-colors ${
-              activeView === "overview"
+              activeView === REDIS_OVERVIEW_VIEW
                 ? "bg-background text-foreground"
                 : "text-muted-foreground hover:bg-background/50 hover:text-foreground"
             }`}
-            onClick={() => setActiveView("overview")}
+            onClick={() => setActiveView(REDIS_OVERVIEW_VIEW)}
           >
             <Activity className="size-3" />
             {t("query.redisOverview")}
           </button>
-          {selectedKey && (
-            <button
-              role="tab"
-              aria-selected={activeView === "key"}
-              className={`flex max-w-[280px] items-center gap-1.5 border-r px-3 py-1.5 text-xs transition-colors ${
-                activeView === "key"
-                  ? "bg-background text-foreground"
-                  : "text-muted-foreground hover:bg-background/50 hover:text-foreground"
-              }`}
-              onClick={() => setActiveView("key")}
-            >
-              <Key className="size-3 shrink-0" />
-              <span className="truncate font-mono">{selectedKey}</span>
-            </button>
-          )}
+          {openKeys.map((key) => {
+            const viewId = getKeyViewId(key);
+            const selected = activeView === viewId;
+            return (
+              <div
+                key={key}
+                className={`flex max-w-[320px] shrink-0 items-center border-r text-xs transition-colors ${
+                  selected
+                    ? "bg-background text-foreground"
+                    : "text-muted-foreground hover:bg-background/50 hover:text-foreground"
+                }`}
+              >
+                <button
+                  role="tab"
+                  aria-selected={selected}
+                  className="flex min-w-0 flex-1 items-center gap-1.5 px-3 py-1.5 text-left"
+                  onClick={() => activateKeyTab(key)}
+                >
+                  <Key className="size-3 shrink-0" />
+                  <span className="truncate font-mono">{key}</span>
+                </button>
+                <button
+                  type="button"
+                  aria-label={`${t("query.closeRedisKeyTab")} ${key}`}
+                  title={t("action.close")}
+                  className="mr-1 flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    closeKeyTab(key);
+                  }}
+                >
+                  <X className="size-3" />
+                </button>
+              </div>
+            );
+          })}
         </div>
 
         <div className="relative min-h-0 flex-1">
-          <div className="absolute inset-0" style={{ display: activeView === "overview" ? "block" : "none" }}>
+          <div className="absolute inset-0" style={{ display: activeView === REDIS_OVERVIEW_VIEW ? "block" : "none" }}>
             <RedisOpsPanel tabId={tabId} />
           </div>
-          {selectedKey && (
-            <div className="absolute inset-0" style={{ display: activeView === "key" ? "block" : "none" }}>
+          {selectedKey && activeKey && (
+            <div className="absolute inset-0" style={{ display: selectedKey === activeKey ? "block" : "none" }}>
               <RedisKeyDetail tabId={tabId} />
             </div>
           )}

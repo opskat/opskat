@@ -256,12 +256,13 @@ func scanKeys(ctx context.Context, exec redisExecutor, req RedisScanRequest) (Re
 
 	cursor := req.Cursor
 	keys := make([]string, 0)
-	maxBatches := 1
-	if req.Match != "*" || req.Type != "" {
-		maxBatches = maxRedisScanBatches
+	scanCount := req.Count
+	filteredScan := req.Match != "*" || req.Type != ""
+	if filteredScan && scanCount < filteredRedisScanBatchCount {
+		scanCount = filteredRedisScanBatchCount
 	}
-	for batch := 0; batch < maxBatches; batch++ {
-		args := []any{"SCAN", cursor, "MATCH", req.Match, "COUNT", req.Count}
+	for {
+		args := []any{"SCAN", cursor, "MATCH", req.Match, "COUNT", scanCount}
 		if req.Type != "" {
 			args = append(args, "TYPE", req.Type)
 		}
@@ -275,7 +276,7 @@ func scanKeys(ctx context.Context, exec redisExecutor, req RedisScanRequest) (Re
 		}
 		cursor = nextCursor
 		keys = append(keys, nextKeys...)
-		if cursor == "0" || len(keys) > 0 {
+		if !filteredScan || cursor == "0" || int64(len(keys)) >= req.Count {
 			break
 		}
 	}

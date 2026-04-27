@@ -1,9 +1,15 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { RedisKeyBrowser } from "../components/query/RedisKeyBrowser";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { RedisKeyBrowser, buildKeyTree, flattenTree, makeLocalKeyMatcher } from "../components/query/RedisKeyBrowser";
 import { useQueryStore } from "../stores/queryStore";
 import { useTabStore } from "../stores/tabStore";
-import { RedisListDatabases, RedisScanKeys, RedisSetStringValue } from "../../wailsjs/go/app/App";
+import {
+  RedisHashSet,
+  RedisListDatabases,
+  RedisScanKeys,
+  RedisSetKeyTTL,
+  RedisSetStringValue,
+} from "../../wailsjs/go/app/App";
 
 describe("RedisKeyBrowser", () => {
   beforeEach(() => {
@@ -46,6 +52,10 @@ describe("RedisKeyBrowser", () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("defaults to tree view and keeps database selection in the footer", () => {
     render(<RedisKeyBrowser tabId="query-10" />);
 
@@ -58,15 +68,19 @@ describe("RedisKeyBrowser", () => {
 
   it("creates a string key from the add key dialog", async () => {
     vi.mocked(RedisSetStringValue).mockResolvedValue(undefined);
+    vi.mocked(RedisSetKeyTTL).mockResolvedValue(undefined);
 
     render(<RedisKeyBrowser tabId="query-10" />);
 
     fireEvent.click(screen.getByTitle("query.createRedisKey"));
-    fireEvent.change(screen.getByPlaceholderText("query.redisKeyNamePlaceholder"), {
+    fireEvent.change(screen.getByTestId("redis-create-key-input"), {
       target: { value: "new:key" },
     });
-    fireEvent.change(screen.getByPlaceholderText("query.newValue"), {
+    fireEvent.change(screen.getByTestId("redis-create-string-value"), {
       target: { value: "hello" },
+    });
+    fireEvent.change(screen.getByTestId("redis-create-ttl-input"), {
+      target: { value: "60" },
     });
     fireEvent.click(screen.getByText("query.createRedisKeySubmit"));
 
@@ -79,6 +93,40 @@ describe("RedisKeyBrowser", () => {
         format: "raw",
       });
     });
+    expect(RedisSetKeyTTL).toHaveBeenCalledWith(10, 0, "new:key", 60);
+  });
+
+  it("creates a hash key with multiple initial fields", async () => {
+    vi.mocked(RedisHashSet).mockResolvedValue(undefined);
+
+    render(<RedisKeyBrowser tabId="query-10" />);
+
+    fireEvent.click(screen.getByTitle("query.createRedisKey"));
+    fireEvent.change(screen.getByTestId("redis-create-key-input"), {
+      target: { value: "profile:1" },
+    });
+    fireEvent.click(screen.getByTestId("redis-create-type-trigger"));
+    fireEvent.click(await screen.findByRole("option", { name: "hash" }));
+    fireEvent.change(screen.getByTestId("redis-create-hash-field-0"), {
+      target: { value: "name" },
+    });
+    fireEvent.change(screen.getByTestId("redis-create-hash-value-0"), {
+      target: { value: "Ada" },
+    });
+    fireEvent.click(screen.getByTestId("redis-create-add-row"));
+    fireEvent.change(screen.getByTestId("redis-create-hash-field-1"), {
+      target: { value: "role" },
+    });
+    fireEvent.change(screen.getByTestId("redis-create-hash-value-1"), {
+      target: { value: "admin" },
+    });
+    fireEvent.click(screen.getByText("query.createRedisKeySubmit"));
+
+    await waitFor(() => {
+      expect(RedisHashSet).toHaveBeenCalledTimes(2);
+    });
+    expect(RedisHashSet).toHaveBeenNthCalledWith(1, 10, 0, "profile:1", "name", "Ada");
+    expect(RedisHashSet).toHaveBeenNthCalledWith(2, 10, 0, "profile:1", "role", "admin");
   });
 
   it("opens a lightweight database menu and selects a db", async () => {
@@ -102,5 +150,49 @@ describe("RedisKeyBrowser", () => {
       );
     });
     expect(screen.queryByTestId("redis-db-menu")).not.toBeInTheDocument();
+  });
+
+  it("keeps prefix keys expandable when a key also has children", () => {
+    const tree = buildKeyTree(["root", "root:session"], ":");
+    const collapsed = flattenTree(tree, new Set(), ":");
+    const expanded = flattenTree(tree, new Set(["root"]), ":");
+
+    expect(collapsed[0]).toEqual(
+      expect.objectContaining({
+        name: "root",
+        fullKey: "root",
+        hasChildren: true,
+        keyCount: 2,
+      })
+    );
+    expect(expanded.map((row) => row.name)).toEqual(["root", "session"]);
+  });
+
+  it("filters locally while typing and searches Redis on Enter", async () => {
+    const matcher = makeLocalKeyMatcher("dispatcher");
+    expect(["common:user:1", "dispatcher:task:1"].filter(matcher)).toEqual(["dispatcher:task:1"]);
+
+    vi.useFakeTimers();
+    render(<RedisKeyBrowser tabId="query-10" />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(RedisScanKeys).toHaveBeenCalled();
+    vi.mocked(RedisScanKeys).mockClear();
+
+    fireEvent.change(screen.getByPlaceholderText("query.filterKeys"), { target: { value: "dispatcher" } });
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+      await Promise.resolve();
+    });
+
+    expect(RedisScanKeys).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.keyDown(screen.getByPlaceholderText("query.filterKeys"), { key: "Enter" });
+      await Promise.resolve();
+    });
+
+    expect(RedisScanKeys).toHaveBeenCalledWith(expect.objectContaining({ match: "*dispatcher*" }));
   });
 });

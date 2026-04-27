@@ -2,6 +2,7 @@ package redis_svc
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -46,12 +47,12 @@ func TestScanKeys(t *testing.T) {
 		got, err := scanKeys(context.Background(), exec, RedisScanRequest{
 			Cursor: "0",
 			Match:  "user:*",
-			Count:  100,
+			Count:  2,
 			Type:   "hash",
 		})
 
 		require.NoError(t, err)
-		assert.Equal(t, []any{"SCAN", "0", "MATCH", "user:*", "COUNT", int64(100), "TYPE", "hash"}, exec.calls[0])
+		assert.Equal(t, []any{"SCAN", "0", "MATCH", "user:*", "COUNT", filteredRedisScanBatchCount, "TYPE", "hash"}, exec.calls[0])
 		assert.Equal(t, "17", got.Cursor)
 		assert.True(t, got.HasMore)
 		assert.Equal(t, []string{"a", "b"}, got.Keys)
@@ -87,10 +88,67 @@ func TestScanKeys(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Len(t, exec.calls, 2)
-		assert.Equal(t, []any{"SCAN", "0", "MATCH", "*2fe43136-1b38-43c3-b4bf-82b19c66c7bf*", "COUNT", int64(100)}, exec.calls[0])
-		assert.Equal(t, []any{"SCAN", "42", "MATCH", "*2fe43136-1b38-43c3-b4bf-82b19c66c7bf*", "COUNT", int64(100)}, exec.calls[1])
+		assert.Equal(t, []any{"SCAN", "0", "MATCH", "*2fe43136-1b38-43c3-b4bf-82b19c66c7bf*", "COUNT", filteredRedisScanBatchCount}, exec.calls[0])
+		assert.Equal(t, []any{"SCAN", "42", "MATCH", "*2fe43136-1b38-43c3-b4bf-82b19c66c7bf*", "COUNT", filteredRedisScanBatchCount}, exec.calls[1])
 		assert.Equal(t, "0", got.Cursor)
 		assert.Equal(t, []string{"common:event:2fe43136-1b38-43c3-b4bf-82b19c66c7bf"}, got.Keys)
+		assert.False(t, got.HasMore)
+	})
+
+	t.Run("continues filtered scan until requested page is filled", func(t *testing.T) {
+		exec := &fakeRedisExecutor{results: []any{
+			[]any{"42", []any{"root:1"}},
+			[]any{"0", []any{"root:2"}},
+		}}
+
+		got, err := scanKeys(context.Background(), exec, RedisScanRequest{
+			Cursor: "0",
+			Match:  "*root*",
+			Count:  2,
+		})
+
+		require.NoError(t, err)
+		require.Len(t, exec.calls, 2)
+		assert.Equal(t, []string{"root:1", "root:2"}, got.Keys)
+		assert.Equal(t, "0", got.Cursor)
+		assert.False(t, got.HasMore)
+	})
+
+	t.Run("keeps all matches from oversized filtered scan batch", func(t *testing.T) {
+		exec := &fakeRedisExecutor{results: []any{
+			[]any{"0", []any{"root:1", "root:2", "root:3"}},
+		}}
+
+		got, err := scanKeys(context.Background(), exec, RedisScanRequest{
+			Cursor: "0",
+			Match:  "*root*",
+			Count:  2,
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"root:1", "root:2", "root:3"}, got.Keys)
+		assert.Equal(t, "0", got.Cursor)
+		assert.False(t, got.HasMore)
+	})
+
+	t.Run("continues sparse filtered scan beyond small fixed batch budgets", func(t *testing.T) {
+		results := make([]any, 0, 202)
+		for i := 1; i <= 201; i++ {
+			results = append(results, []any{fmt.Sprint(i), []any{}})
+		}
+		results = append(results, []any{"0", []any{"root:user"}})
+		exec := &fakeRedisExecutor{results: results}
+
+		got, err := scanKeys(context.Background(), exec, RedisScanRequest{
+			Cursor: "0",
+			Match:  "*root*",
+			Count:  100,
+		})
+
+		require.NoError(t, err)
+		require.Len(t, exec.calls, 202)
+		assert.Equal(t, []string{"root:user"}, got.Keys)
+		assert.Equal(t, "0", got.Cursor)
 		assert.False(t, got.HasMore)
 	})
 }
