@@ -202,7 +202,9 @@ export function BackupSection() {
         const cfg = await GetWebDAVConfig();
         if (!cfg) return;
         setWebDAVURL(cfg.url || "");
-        setWebDAVAuthType((cfg.authType as "none" | "basic" | "bearer") || "basic");
+        const known: ReadonlyArray<"none" | "basic" | "bearer"> = ["none", "basic", "bearer"];
+        const incoming = cfg.authType ?? "";
+        setWebDAVAuthType(known.includes(incoming as "none" | "basic" | "bearer") ? (incoming as "none" | "basic" | "bearer") : "basic");
         setWebDAVUsername(cfg.username || "");
         setWebDAVPassword(cfg.password || "");
         setWebDAVToken(cfg.token || "");
