@@ -283,6 +283,8 @@ describe("QueryResultTable — cell context actions", () => {
     const idCell = document.querySelector('[data-cell-key="0:id"]') as HTMLElement;
 
     expect(idCell).toHaveClass("sticky");
+    expect(idHeader).toHaveClass("sticky");
+    expect(idHeader).not.toHaveClass("relative");
     expect(idHeader.style.width).toBe("160px");
     expect(idHeader.style.minWidth).toBe("160px");
     expect(idHeader.style.maxWidth).toBe("160px");

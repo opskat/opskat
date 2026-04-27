@@ -1187,7 +1187,7 @@ export function QueryResultTable({
                     key={col}
                     data-column-header-key={col}
                     data-column-selected={isColumnSelected ? col : undefined}
-                    className={`group relative border border-border px-2 ${headerPaddingClass} text-left font-semibold whitespace-nowrap select-none ${
+                    className={`group ${isFrozen ? "" : "relative"} border border-border px-2 ${headerPaddingClass} text-left font-semibold whitespace-nowrap select-none ${
                       isColumnSelected
                         ? "bg-primary/25 text-foreground ring-2 ring-inset ring-primary/50"
                         : isFrozen
@@ -1316,7 +1316,9 @@ export function QueryResultTable({
                       data-row-selected={isRowSelected ? "true" : undefined}
                       className={`border border-border px-2 py-1 text-center text-muted-foreground whitespace-nowrap w-[50px] cursor-default select-none ${
                         isRowSelected
-                          ? "bg-primary/15 text-foreground ring-2 ring-inset ring-primary/50 relative z-10"
+                          ? `bg-primary/15 text-foreground ring-2 ring-inset ring-primary/50 ${
+                              hasFrozenColumns ? "z-30" : "relative z-10"
+                            }`
                           : hasFrozenColumns
                             ? "bg-background"
                             : ""
@@ -1362,8 +1364,7 @@ export function QueryResultTable({
                               : isFrozen
                                 ? "bg-background"
                                 : ""
-                        } ${isFrozen ? "sticky z-10" : ""}
-                        } ${focusClass}`}
+                        } ${isFrozen ? "sticky z-10" : ""} ${focusClass}`}
                         style={{
                           width: `${width}px`,
                           minWidth: `${width}px`,
