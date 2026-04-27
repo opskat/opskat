@@ -133,6 +133,59 @@ describe("TableFilterBuilder", () => {
     expect(onChange).toHaveBeenLastCalledWith([expect.objectContaining({ id: "f-name", operator: "!=" })]);
   });
 
+  it("moves the selected filter criterion with the toolbar arrows", async () => {
+    const user = userEvent.setup();
+    let filters: TableFilterItem[] = [
+      createFilterCondition("f-id", "id"),
+      createFilterCondition("f-email", "email"),
+      createFilterCondition("f-name", "name"),
+    ];
+    const onChange = vi.fn((next: TableFilterItem[]) => {
+      filters = next;
+    });
+    const view = render(
+      <TableFilterBuilder
+        columns={["id", "email", "name"]}
+        rows={[]}
+        filters={filters}
+        sorts={[]}
+        driver="mysql"
+        onChange={onChange}
+        onSortsChange={vi.fn()}
+        onApply={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByTestId("filter-item-f-email"));
+    await user.click(screen.getByTitle("query.moveFilterUp"));
+
+    expect(onChange).toHaveBeenLastCalledWith([
+      expect.objectContaining({ id: "f-email" }),
+      expect.objectContaining({ id: "f-id" }),
+      expect.objectContaining({ id: "f-name" }),
+    ]);
+
+    view.rerender(
+      <TableFilterBuilder
+        columns={["id", "email", "name"]}
+        rows={[]}
+        filters={filters}
+        sorts={[]}
+        driver="mysql"
+        onChange={onChange}
+        onSortsChange={vi.fn()}
+        onApply={vi.fn()}
+      />
+    );
+    await user.click(screen.getByTitle("query.moveFilterDown"));
+
+    expect(onChange).toHaveBeenLastCalledWith([
+      expect.objectContaining({ id: "f-id" }),
+      expect.objectContaining({ id: "f-email" }),
+      expect.objectContaining({ id: "f-name" }),
+    ]);
+  });
+
   it("offers separate delete choices for brackets", async () => {
     const user = userEvent.setup();
     const child = createFilterCondition("f-email", "email");
