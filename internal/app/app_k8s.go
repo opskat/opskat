@@ -43,3 +43,37 @@ func (a *App) GetK8sClusterInfo(assetID int64) (string, error) {
 	}
 	return string(result), nil
 }
+
+func (a *App) GetK8sNamespaceResources(assetID int64, namespace string) (string, error) {
+	ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+	defer cancel()
+
+	asset, err := asset_svc.Asset().Get(ctx, assetID)
+	if err != nil {
+		return "", fmt.Errorf("get asset: %w", err)
+	}
+	if !asset.IsK8s() {
+		return "", fmt.Errorf("asset %d is not a K8S cluster", assetID)
+	}
+
+	cfg, err := asset.GetK8sConfig()
+	if err != nil {
+		return "", fmt.Errorf("get K8S config: %w", err)
+	}
+
+	token := cfg.Token
+	if token == "" && cfg.Kubeconfig == "" && cfg.ApiServer == "" {
+		return "", fmt.Errorf("no kubeconfig or api_server configured for this K8S asset")
+	}
+
+	res, err := k8s.GetNamespaceResources(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace)
+	if err != nil {
+		return "", fmt.Errorf("get K8S namespace resources: %w", err)
+	}
+
+	result, err := json.Marshal(res)
+	if err != nil {
+		return "", fmt.Errorf("marshal namespace resources: %w", err)
+	}
+	return string(result), nil
+}

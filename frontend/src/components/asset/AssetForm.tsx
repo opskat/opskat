@@ -854,9 +854,9 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             : assetType === "k8s"
               ? t("asset.typeK8s")
               : (() => {
-                const found = availableTypes.find((at) => at.type === assetType);
-                return found ? resolveExtDisplayName(found) : assetType;
-              })();
+                  const found = availableTypes.find((at) => at.type === assetType);
+                  return found ? resolveExtDisplayName(found) : assetType;
+                })();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1094,11 +1094,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               </div>
               <div className="grid gap-2">
                 <Label>{t("asset.k8sNamespace")}</Label>
-                <Input
-                  value={k8sNamespace}
-                  onChange={(e) => setK8sNamespace(e.target.value)}
-                  placeholder="default"
-                />
+                <Input value={k8sNamespace} onChange={(e) => setK8sNamespace(e.target.value)} placeholder="default" />
               </div>
               <div className="grid gap-2">
                 <Label>{t("asset.k8sContext")}</Label>
@@ -1114,7 +1110,11 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                   type="password"
                   value={k8sToken}
                   onChange={(e) => setK8sToken(e.target.value)}
-                  placeholder={encryptedK8sToken ? "\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF" : t("asset.k8sTokenPlaceholder") || "Bearer token"}
+                  placeholder={
+                    encryptedK8sToken
+                      ? "\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF"
+                      : t("asset.k8sTokenPlaceholder") || "Bearer token"
+                  }
                 />
               </div>
               <div className="grid gap-2">

@@ -1,8 +1,22 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2, Server, Box, Layers, RefreshCw } from "lucide-react";
+import {
+  Loader2,
+  Server,
+  Box,
+  Layers,
+  RefreshCw,
+  Circle,
+  Grid3X3,
+  Container,
+  FileText,
+  Key,
+  HardDrive,
+  UserCheck,
+  AlertCircle,
+} from "lucide-react";
 import type { asset_entity } from "../../../wailsjs/go/models";
-import { GetK8sClusterInfo } from "../../../wailsjs/go/app/App";
+import { GetK8sClusterInfo, GetK8sNamespaceResources } from "../../../wailsjs/go/app/App";
 
 interface NodeInfo {
   name: string;
@@ -20,6 +34,17 @@ interface NamespaceInfo {
   status: string;
 }
 
+interface NamespaceResourcesData {
+  namespace: string;
+  pods: number;
+  deployments: number;
+  services: number;
+  config_maps: number;
+  secrets: number;
+  pvcs: number;
+  service_accounts: number;
+}
+
 interface ClusterInfo {
   version: string;
   platform: string;
@@ -27,12 +52,28 @@ interface ClusterInfo {
   namespaces: NamespaceInfo[];
 }
 
-type InnerTabId = "overview" | `node:${string}` | `ns:${string}`;
+type InnerTabId = "overview" | `node:${string}` | `ns:${string}` | `ns-res:${string}:${string}`;
 
 interface InnerTab {
   id: InnerTabId;
   label: string;
 }
+
+interface ResourceTypeDef {
+  key: keyof NamespaceResourcesData;
+  labelKey: string;
+  icon: React.FC<{ className?: string; style?: React.CSSProperties }>;
+}
+
+const RESOURCE_TYPES: ResourceTypeDef[] = [
+  { key: "pods", labelKey: "asset.k8sPods", icon: Circle },
+  { key: "deployments", labelKey: "asset.k8sDeployments", icon: Grid3X3 },
+  { key: "services", labelKey: "asset.k8sServices", icon: Container },
+  { key: "config_maps", labelKey: "asset.k8sConfigMaps", icon: FileText },
+  { key: "secrets", labelKey: "asset.k8sSecrets", icon: Key },
+  { key: "pvcs", labelKey: "asset.k8sPVCs", icon: HardDrive },
+  { key: "service_accounts", labelKey: "asset.k8sServiceAccounts", icon: UserCheck },
+];
 
 interface Props {
   asset: asset_entity.Asset;
@@ -45,10 +86,11 @@ export function K8sClusterPage({ asset }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [innerTabs, setInnerTabs] = useState<InnerTab[]>([{ id: "overview", label: t("asset.k8sClusterOverview") }]);
   const [activeTabId, setActiveTabId] = useState<InnerTabId>("overview");
-  const [expanded, setExpanded] = useState<{ nodes: boolean; namespaces: boolean }>({
-    nodes: false,
-    namespaces: false,
-  });
+  const [expandedNodes, setExpandedNodes] = useState(false);
+  const [expandedNamespaces, setExpandedNamespaces] = useState<Set<string>>(new Set());
+  const [namespaceResources, setNamespaceResources] = useState<Record<string, NamespaceResourcesData>>({});
+  const [loadingNamespaces, setLoadingNamespaces] = useState<Set<string>>(new Set());
+  const [namespaceErrors, setNamespaceErrors] = useState<Record<string, string>>({});
 
   const loadInfo = () => {
     setLoading(true);
@@ -59,6 +101,10 @@ export function K8sClusterPage({ asset }: Props) {
         setInfo(data);
         setInnerTabs([{ id: "overview", label: t("asset.k8sClusterOverview") }]);
         setActiveTabId("overview");
+        setExpandedNamespaces(new Set());
+        setNamespaceResources({});
+        setLoadingNamespaces(new Set());
+        setNamespaceErrors({});
       })
       .catch((e: unknown) => {
         setError(String(e));
@@ -68,10 +114,60 @@ export function K8sClusterPage({ asset }: Props) {
       });
   };
 
+  const loadNamespaceResources = useCallback(
+    (ns: string) => {
+      if (namespaceResources[ns] || loadingNamespaces.has(ns)) return;
+
+      setLoadingNamespaces((prev) => new Set(prev).add(ns));
+      GetK8sNamespaceResources(asset.ID, ns)
+        .then((result: string) => {
+          const data = JSON.parse(result) as NamespaceResourcesData;
+          setNamespaceResources((prev) => ({ ...prev, [ns]: data }));
+          setNamespaceErrors((prev) => {
+            const next = { ...prev };
+            delete next[ns];
+            return next;
+          });
+        })
+        .catch((e: unknown) => {
+          setNamespaceErrors((prev) => ({ ...prev, [ns]: String(e) }));
+        })
+        .finally(() => {
+          setLoadingNamespaces((prev) => {
+            const next = new Set(prev);
+            next.delete(ns);
+            return next;
+          });
+        });
+    },
+    [asset.ID, namespaceResources, loadingNamespaces]
+  );
+
+  const toggleNamespace = (ns: string) => {
+    setExpandedNamespaces((prev) => {
+      const next = new Set(prev);
+      if (next.has(ns)) {
+        next.delete(ns);
+      } else {
+        next.add(ns);
+        loadNamespaceResources(ns);
+      }
+      return next;
+    });
+  };
+
   useEffect(() => {
     loadInfo();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asset.ID]);
+
+  const activeNs = info && activeTabId.startsWith("ns:") ? info.namespaces.find((n) => n.name === activeTabId.slice(3)) : null;
+
+  useEffect(() => {
+    if (activeNs && !namespaceResources[activeNs.name] && !loadingNamespaces.has(activeNs.name)) {
+      loadNamespaceResources(activeNs.name);
+    }
+  }, [activeNs, namespaceResources, loadingNamespaces, loadNamespaceResources]);
 
   const openTab = (id: InnerTabId, label: string) => {
     if (id === "overview") {
@@ -121,11 +217,7 @@ export function K8sClusterPage({ asset }: Props) {
 
   if (!info) return null;
 
-  const activeTab = innerTabs.find((t) => t.id === activeTabId);
   const activeNode = activeTabId.startsWith("node:") ? info.nodes.find((n) => n.name === activeTabId.slice(5)) : null;
-  const activeNs = activeTabId.startsWith("ns:")
-    ? info.namespaces.find((n) => n.name === activeTabId.slice(3))
-    : null;
 
   return (
     <div className="flex h-full w-full">
@@ -156,14 +248,14 @@ export function K8sClusterPage({ asset }: Props) {
 
           <div
             className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs cursor-pointer hover:bg-muted/50"
-            onClick={() => setExpanded({ ...expanded, nodes: !expanded.nodes })}
+            onClick={() => setExpandedNodes(!expandedNodes)}
           >
-            <span className="text-[10px] w-3">{expanded.nodes ? "\u25BC" : "\u25B6"}</span>
+            <span className="text-[10px] w-3">{expandedNodes ? "\u25BC" : "\u25B6"}</span>
             <Box className="h-3.5 w-3.5" />
             {t("asset.k8sNodes")}
             <span className="ml-auto text-[10px] text-muted-foreground">{info.nodes.length}</span>
           </div>
-          {expanded.nodes &&
+          {expandedNodes &&
             info.nodes.map((node) => (
               <div
                 key={node.name}
@@ -181,27 +273,64 @@ export function K8sClusterPage({ asset }: Props) {
               </div>
             ))}
 
-          <div
-            className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs cursor-pointer hover:bg-muted/50"
-            onClick={() => setExpanded({ ...expanded, namespaces: !expanded.namespaces })}
-          >
-            <span className="text-[10px] w-3">{expanded.namespaces ? "\u25BC" : "\u25B6"}</span>
+          <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs text-muted-foreground/70 mt-1">
             <Layers className="h-3.5 w-3.5" />
             {t("asset.k8sNamespaces")}
-            <span className="ml-auto text-[10px] text-muted-foreground">{info.namespaces.length}</span>
+            <span className="ml-auto text-[10px]">{info.namespaces.length}</span>
           </div>
-          {expanded.namespaces &&
-            info.namespaces.map((ns) => (
+          {info.namespaces.map((ns) => (
+            <div key={ns.name}>
               <div
-                key={ns.name}
-                className={`flex items-center gap-1.5 pl-8 pr-2 py-1.5 rounded-md text-xs cursor-pointer ml-1 ${
-                  activeTabId === `ns:${ns.name}` ? "bg-muted font-medium" : "hover:bg-muted/50"
-                }`}
-                onClick={() => openTab(`ns:${ns.name}`, ns.name)}
+                className="flex items-center gap-1.5 pl-6 pr-2 py-1.5 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                onClick={() => toggleNamespace(ns.name)}
               >
+                <span className="text-[10px] w-3 translate-x-[-2px]">
+                  {expandedNamespaces.has(ns.name) ? "\u25BC" : "\u25B6"}
+                </span>
                 <span className="truncate">{ns.name}</span>
               </div>
-            ))}
+              {expandedNamespaces.has(ns.name) && (
+                <div className="ml-3">
+                  {loadingNamespaces.has(ns.name) && (
+                    <div className="flex items-center gap-1.5 pl-8 pr-2 py-1 text-xs text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      {t("asset.k8sLoadingNamespace")}
+                    </div>
+                  )}
+                  {namespaceErrors[ns.name] && (
+                    <div
+                      className="flex items-start gap-1 pl-8 pr-2 py-1 text-xs text-destructive cursor-pointer"
+                      title={namespaceErrors[ns.name]}
+                      onClick={() => {
+                        const next = { ...namespaceErrors };
+                        delete next[ns.name];
+                        setNamespaceErrors(next);
+                        loadNamespaceResources(ns.name);
+                      }}
+                    >
+                      <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                      <span>{t("asset.k8sNamespaceResourceError")}</span>
+                    </div>
+                  )}
+                  {namespaceResources[ns.name] &&
+                    RESOURCE_TYPES.map((rt) => {
+                      const count = namespaceResources[ns.name][rt.key] as number;
+                      return (
+                        <div
+                          key={rt.key}
+                          className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                          onClick={() => openTab(`ns-res:${ns.name}:${rt.key}`, `${rt.key} (${ns.name})`)}
+                        >
+                          <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
+                          <span className="truncate">{t(rt.labelKey)}</span>
+                          <span className="ml-auto text-[10px] text-muted-foreground">{count}</span>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       </div>
 
@@ -224,6 +353,12 @@ export function K8sClusterPage({ asset }: Props) {
                     <Server className="h-3 w-3" />
                   ) : tab.id.startsWith("node:") ? (
                     <Box className="h-3 w-3" />
+                  ) : tab.id.startsWith("ns-res:") ? (
+                    (() => {
+                      const resType = RESOURCE_TYPES.find((rt) => tab.id.endsWith(`:${rt.key}`));
+                      if (resType) return <resType.icon className="h-3 w-3" style={{}} />;
+                      return <Layers className="h-3 w-3" />;
+                    })()
                   ) : (
                     <Layers className="h-3 w-3" />
                   )}
@@ -365,14 +500,80 @@ export function K8sClusterPage({ asset }: Props) {
           {activeNs && (
             <div className="max-w-4xl mx-auto p-6 space-y-6">
               <div className="rounded-xl border bg-card p-6">
-                <h3 className="text-base font-semibold mb-2">{activeNs.name}</h3>
-                <div className="rounded-lg bg-muted/50 p-4">
-                  <div className="text-xs text-muted-foreground mb-1">Status</div>
-                  <div className="font-mono font-medium">{activeNs.status}</div>
-                </div>
+                <h3 className="text-base font-semibold mb-1">{activeNs.name}</h3>
+                <p className="text-xs text-muted-foreground mb-4">
+                  {t("asset.k8sNamespace")}:{" "}
+                  <span className={activeNs.status === "Active" ? "text-green-600" : ""}>{activeNs.status}</span>
+                </p>
+                {loadingNamespaces.has(activeNs.name) ? (
+                  <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    {t("asset.k8sLoadingNamespace")}
+                  </div>
+                ) : namespaceErrors[activeNs.name] ? (
+                  <div
+                    className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive cursor-pointer"
+                    onClick={() => {
+                      const next = { ...namespaceErrors };
+                      delete next[activeNs.name];
+                      setNamespaceErrors(next);
+                      loadNamespaceResources(activeNs.name);
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="h-4 w-4" />
+                      {t("asset.k8sNamespaceResourceError")}
+                    </div>
+                    <p className="text-xs mt-1 opacity-70">{namespaceErrors[activeNs.name]}</p>
+                  </div>
+                ) : namespaceResources[activeNs.name] ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {RESOURCE_TYPES.map((rt) => {
+                      const count = namespaceResources[activeNs.name][rt.key] as number;
+                      return (
+                        <div
+                          key={rt.key}
+                          className="rounded-lg border p-3 cursor-pointer hover:bg-muted/30 transition-colors"
+                          onClick={() => openTab(`ns-res:${activeNs.name}:${rt.key}`, `${rt.key} (${activeNs.name})`)}
+                        >
+                          <div className="flex items-center gap-2 mb-1">
+                            <rt.icon className="h-4 w-4 text-muted-foreground" style={{}} />
+                            <span className="text-sm font-medium">{t(rt.labelKey)}</span>
+                          </div>
+                          <span className="text-2xl font-mono font-semibold">{count}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
               </div>
             </div>
           )}
+
+          {activeTabId.startsWith("ns-res:") &&
+            (() => {
+              const parts = activeTabId.split(":");
+              const ns = parts[1];
+              const resKey = parts[2];
+              const rt = RESOURCE_TYPES.find((r) => r.key === resKey);
+              const res = namespaceResources[ns];
+              const count = res ? (res[resKey as keyof NamespaceResourcesData] as number) : 0;
+              return (
+                <div className="max-w-4xl mx-auto p-6 space-y-6">
+                  <div className="rounded-xl border bg-card p-6">
+                    <div className="flex items-center gap-3 mb-4">
+                      {rt && <rt.icon className="h-5 w-5 text-muted-foreground" style={{}} />}
+                      <h3 className="text-base font-semibold">{rt ? t(rt.labelKey) : resKey}</h3>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">{ns}</span>
+                    </div>
+                    <div className="rounded-lg bg-muted/50 p-4">
+                      <div className="text-xs text-muted-foreground mb-1">{t("asset.k8sNamespaceResources")}</div>
+                      <div className="text-2xl font-mono font-semibold">{count}</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
         </div>
       </div>
     </div>

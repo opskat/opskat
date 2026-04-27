@@ -353,7 +353,7 @@ function _migrateOldKeys(): SavedTabStore | null {
             assetId: number;
             assetName: string;
             assetIcon: string;
-  assetType: "database" | "redis" | "mongodb" | "k8s";
+            assetType: "database" | "redis" | "mongodb" | "k8s";
             driver?: string;
             defaultDatabase?: string;
           }) => {
