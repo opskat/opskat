@@ -1,5 +1,5 @@
-import { useState, useMemo } from "react";
-import { MessageSquare, Plus, Search, Trash2 } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { Check, MessageSquare, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn, Button, Input, Popover, PopoverContent, PopoverTrigger } from "@opskat/ui";
 import { useAIStore } from "@/stores/aiStore";
@@ -32,7 +32,7 @@ export function SideAssistantHistoryDropdown({
 }: SideAssistantHistoryDropdownProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.language || "zh-CN";
-  const { conversations, deleteConversation, sidebarTabs } = useAIStore();
+  const { conversations, deleteConversation, renameConversation, sidebarTabs } = useAIStore();
   const workspaceTabs = useTabStore((s) => s.tabs);
   const openInTabIds = useMemo(() => {
     const ids = new Set<number>();
@@ -139,47 +139,37 @@ export function SideAssistantHistoryDropdown({
               >
                 <MessageSquare className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <div className="flex-1 min-w-0">
-                  <p className="truncate">{conv.Title}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {formatRelativeTime(conv.Updatetime, locale)}
-                    {isInTab && ` · ${t("ai.sidebar.promoteHint")}`}
-                  </p>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100"
-                  title={t("action.openInTab")}
-                  aria-label={t("action.openInTab")}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onOpenInTab(conv.ID);
-                  }}
-                >
-                  <Plus className="h-3 w-3" />
-                </Button>
-                <Popover open={isDeleting} onOpenChange={(open) => setDeleteTarget(open ? conv.ID : null)}>
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className={cn("h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100", isDeleting && "opacity-100")}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent
-                    side="top"
-                    align="end"
-                    sideOffset={6}
-                    className="w-auto p-3"
-                    onOpenAutoFocus={(e) => e.preventDefault()}
-                  >
-                    <p className="text-xs mb-2">{t("ai.deleteConversationDesc")}</p>
-                    <div className="flex gap-2 justify-end">
-                      <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setDeleteTarget(null)}>
-                        {t("action.cancel")}
+                  {isRenaming ? (
+                    <div className="flex items-center gap-1" onClick={(event) => event.stopPropagation()}>
+                      <Input
+                        value={renameDraft}
+                        onChange={(event) => setRenameDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                          if ((event.nativeEvent as KeyboardEvent).isComposing) {
+                            return;
+                          }
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            void submitRename(conv.ID);
+                          }
+                          if (event.key === "Escape") {
+                            event.preventDefault();
+                            cancelRename();
+                          }
+                        }}
+                        className="h-7 text-xs"
+                        autoFocus
+                        placeholder={t("ai.renameConversationPlaceholder")}
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 shrink-0"
+                        onClick={() => void submitRename(conv.ID)}
+                        title={t("action.save")}
+                        disabled={renameSaving}
+                      >
+                        <Check className="h-3 w-3" />
                       </Button>
                       <Button
                         variant="ghost"
@@ -207,6 +197,21 @@ export function SideAssistantHistoryDropdown({
                     variant="ghost"
                     size="icon"
                     className="h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100"
+                    title={t("action.openInTab")}
+                    aria-label={t("action.openInTab")}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpenInTab(conv.ID);
+                    }}
+                  >
+                    <Plus className="h-3 w-3" />
+                  </Button>
+                )}
+                {!isRenaming && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100"
                     onClick={(event) => {
                       event.stopPropagation();
                       startRename(conv.ID, conv.Title);
@@ -226,8 +231,8 @@ export function SideAssistantHistoryDropdown({
                           "h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100",
                           isDeleting && "opacity-100"
                         )}
-                        onClick={(e) => e.stopPropagation()}
                         title={t("action.delete")}
+                        onClick={(e) => e.stopPropagation()}
                       >
                         <Trash2 className="h-3 w-3" />
                       </Button>

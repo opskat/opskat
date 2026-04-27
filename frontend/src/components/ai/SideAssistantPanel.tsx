@@ -185,7 +185,7 @@ export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelPr
 
         <div className="flex min-h-0 flex-1" data-ai-session-layout="rail-right">
           <div className="flex min-w-0 flex-1 flex-col">
-            <SideAssistantContextBar conversationId={activeConversationId} />
+            <SideAssistantContextBar key={activeConversationId ?? "empty"} conversationId={activeConversationId} />
 
             {!activeSidebarTab ? (
               <div className="flex-1 flex items-center justify-center p-4 text-center text-sm text-muted-foreground">

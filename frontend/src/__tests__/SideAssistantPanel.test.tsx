@@ -6,6 +6,10 @@ import { useTabStore } from "../stores/tabStore";
 import { SideAssistantPanel } from "../components/ai/SideAssistantPanel";
 import { ListConversations, LoadConversationMessages, DeleteConversation } from "../../wailsjs/go/app/App";
 
+const defaultAIActions = {
+  renameConversation: useAIStore.getState().renameConversation,
+};
+
 function buildSidebarTab(id: string, conversationId: number | null, title = "New conversation") {
   return {
     id,
@@ -20,10 +24,6 @@ function buildSidebarTab(id: string, conversationId: number | null, title = "New
   };
 }
 
-const defaultAIActions = {
-  renameConversation: useAIStore.getState().renameConversation,
-};
-
 describe("SideAssistantPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -34,6 +34,7 @@ describe("SideAssistantPanel", () => {
       conversations: [],
       conversationMessages: {},
       conversationStreaming: {},
+      renameConversation: defaultAIActions.renameConversation,
       sidebarTabs: [],
       activeSidebarTabId: null,
       tabStates: {},
@@ -247,12 +248,8 @@ describe("SideAssistantPanel", () => {
     render(<SideAssistantPanel collapsed={false} onToggle={() => {}} />);
 
     fireEvent.click(screen.getByTitle("ai.sidebar.history"));
-    const item = await screen.findByText("Conv A");
-    const row = item.closest("div")!.parentElement!;
-    const trashBtn = row.querySelector('button[aria-label="action.openInTab"]')
-      ? row.querySelectorAll("button")[1]
-      : row.querySelector("button");
-    fireEvent.click(trashBtn as Element);
+    await screen.findByText("Conv A");
+    fireEvent.click(screen.getByTitle("action.delete"));
 
     fireEvent.click(await screen.findByText("action.delete"));
 
@@ -261,34 +258,14 @@ describe("SideAssistantPanel", () => {
     });
   });
 
-  it("promote keeps the sidebar tab and opens a main workspace AI tab", async () => {
-    useAIStore.setState({
-      sidebarTabs: [buildSidebarTab("sidebar-5", 5, "Conv")],
-      activeSidebarTabId: "sidebar-5",
-      conversations: [{ ID: 5, Title: "Conv", Updatetime: 0 } as any],
-      conversationMessages: { 5: [] },
-      conversationStreaming: { 5: { sending: false, pendingQueue: [] } },
-    });
-
-    render(<SideAssistantPanel collapsed={false} onToggle={() => {}} />);
-
-    fireEvent.click(screen.getByTitle("ai.sidebar.promoteToTab"));
-
-    await waitFor(() => {
-      expect(
-        useTabStore.getState().tabs.some((tab) => tab.type === "ai" && (tab.meta as any).conversationId === 5)
-      ).toBe(true);
-    });
-    expect(useAIStore.getState().sidebarTabs[0].conversationId).toBe(5);
-  });
-
   it("current conversation can be renamed from the context bar", async () => {
     const renameConversation = vi.fn().mockResolvedValue(true);
     useAIStore.setState({
       conversations: [{ ID: 7, Title: "旧标题", Updatetime: Math.floor(Date.now() / 1000) } as any],
       conversationMessages: { 7: [] },
       conversationStreaming: { 7: { sending: false, pendingQueue: [] } },
-      sidebarConversationId: 7,
+      sidebarTabs: [buildSidebarTab("sidebar-7", 7, "旧标题")],
+      activeSidebarTabId: "sidebar-7",
       renameConversation,
     } as any);
     render(<SideAssistantPanel collapsed={false} onToggle={() => {}} />);
@@ -310,7 +287,8 @@ describe("SideAssistantPanel", () => {
       conversations: [{ ID: 71, Title: "旧标题", Updatetime: Math.floor(Date.now() / 1000) } as any],
       conversationMessages: { 71: [] },
       conversationStreaming: { 71: { sending: false, pendingQueue: [] } },
-      sidebarConversationId: 71,
+      sidebarTabs: [buildSidebarTab("sidebar-71", 71, "旧标题")],
+      activeSidebarTabId: "sidebar-71",
       renameConversation,
     } as any);
     render(<SideAssistantPanel collapsed={false} onToggle={() => {}} />);
@@ -327,7 +305,8 @@ describe("SideAssistantPanel", () => {
     useAIStore.setState({
       conversationMessages: { 11: [] },
       conversationStreaming: { 11: { sending: false, pendingQueue: [] } },
-      sidebarConversationId: 11,
+      sidebarTabs: [buildSidebarTab("sidebar-11", 11, "待加载")],
+      activeSidebarTabId: "sidebar-11",
       conversations: [],
     } as any);
     render(<SideAssistantPanel collapsed={false} onToggle={() => {}} />);
@@ -341,7 +320,8 @@ describe("SideAssistantPanel", () => {
       conversations: [{ ID: 8, Title: "旧标题", Updatetime: Math.floor(Date.now() / 1000) } as any],
       conversationMessages: { 8: [] },
       conversationStreaming: { 8: { sending: false, pendingQueue: [] } },
-      sidebarConversationId: 8,
+      sidebarTabs: [buildSidebarTab("sidebar-8", 8, "旧标题")],
+      activeSidebarTabId: "sidebar-8",
       renameConversation,
     } as any);
     render(<SideAssistantPanel collapsed={false} onToggle={() => {}} />);
@@ -383,7 +363,8 @@ describe("SideAssistantPanel", () => {
         21: { sending: false, pendingQueue: [] },
         22: { sending: false, pendingQueue: [] },
       },
-      sidebarConversationId: 21,
+      sidebarTabs: [buildSidebarTab("sidebar-21", 21, "会话 A"), buildSidebarTab("sidebar-22", 22, "会话 B")],
+      activeSidebarTabId: "sidebar-21",
       renameConversation,
     } as any);
     render(<SideAssistantPanel collapsed={false} onToggle={() => {}} />);
@@ -394,7 +375,7 @@ describe("SideAssistantPanel", () => {
     });
     fireEvent.click(screen.getByTitle("action.save"));
 
-    useAIStore.setState({ sidebarConversationId: 22 } as any);
+    useAIStore.setState({ activeSidebarTabId: "sidebar-22" } as any);
     await waitFor(() => {
       expect(screen.getByTitle("ai.renameConversation")).toBeInTheDocument();
     });
@@ -408,10 +389,12 @@ describe("SideAssistantPanel", () => {
     });
   });
 
-  it("history rename edits the conversation without rebinding the sidebar", async () => {
+  it("history rename edits the conversation without rebinding the active blank tab", async () => {
     const renameConversation = vi.fn().mockResolvedValue(true);
     useAIStore.setState({
       conversations: [{ ID: 1, Title: "Conv A", Updatetime: Math.floor(Date.now() / 1000) } as any],
+      sidebarTabs: [buildSidebarTab("sidebar-blank", null)],
+      activeSidebarTabId: "sidebar-blank",
       renameConversation,
     } as any);
     render(<SideAssistantPanel collapsed={false} onToggle={() => {}} />);
@@ -427,7 +410,8 @@ describe("SideAssistantPanel", () => {
     await waitFor(() => {
       expect(renameConversation).toHaveBeenCalledWith(1, "Conv Renamed");
     });
-    expect(useAIStore.getState().sidebarConversationId).toBeNull();
+    expect(useAIStore.getState().activeSidebarTabId).toBe("sidebar-blank");
+    expect(useAIStore.getState().sidebarTabs[0].conversationId).toBeNull();
   });
 
   it("history rename ignores Enter while IME composition is active", async () => {
@@ -511,5 +495,26 @@ describe("SideAssistantPanel", () => {
     await waitFor(() => {
       expect(screen.queryByPlaceholderText("ai.renameConversationPlaceholder")).not.toBeInTheDocument();
     });
+  });
+
+  it("promote keeps the sidebar tab and opens a main workspace AI tab", async () => {
+    useAIStore.setState({
+      sidebarTabs: [buildSidebarTab("sidebar-5", 5, "Conv")],
+      activeSidebarTabId: "sidebar-5",
+      conversations: [{ ID: 5, Title: "Conv", Updatetime: 0 } as any],
+      conversationMessages: { 5: [] },
+      conversationStreaming: { 5: { sending: false, pendingQueue: [] } },
+    });
+
+    render(<SideAssistantPanel collapsed={false} onToggle={() => {}} />);
+
+    fireEvent.click(screen.getByTitle("ai.sidebar.promoteToTab"));
+
+    await waitFor(() => {
+      expect(
+        useTabStore.getState().tabs.some((tab) => tab.type === "ai" && (tab.meta as any).conversationId === 5)
+      ).toBe(true);
+    });
+    expect(useAIStore.getState().sidebarTabs[0].conversationId).toBe(5);
   });
 });
