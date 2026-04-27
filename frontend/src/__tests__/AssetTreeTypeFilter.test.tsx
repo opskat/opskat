@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { TooltipProvider } from "@opskat/ui";
 import { AssetTypeFilterButton } from "@/components/asset/AssetTypeFilterButton";
 import { getAssetTypeOptions } from "@/lib/assetTypes/options";
 
 vi.mock("react-i18next", () => ({
-  useTranslation: () => ({ t: (k: string, vars?: Record<string, unknown>) => (vars ? `${k}:${JSON.stringify(vars)}` : k) }),
+  useTranslation: () => ({
+    t: (k: string, vars?: Record<string, unknown>) => (vars ? `${k}:${JSON.stringify(vars)}` : k),
+  }),
 }));
 
 describe("AssetTypeFilterButton", () => {
@@ -19,21 +22,33 @@ describe("AssetTypeFilterButton", () => {
   });
 
   it('renders without active dot when value is "all"', async () => {
-    render(<AssetTypeFilterButton value="all" options={builtinOpts} onChange={() => {}} />);
+    render(
+      <TooltipProvider>
+        <AssetTypeFilterButton value="all" options={builtinOpts} onChange={() => {}} />
+      </TooltipProvider>
+    );
     const btn = screen.getByRole("button", { name: /asset.filterByType/i });
     expect(btn).toBeTruthy();
     expect(btn.querySelector('[data-active="true"]')).toBeNull();
   });
 
   it("renders an active marker when partial selection", () => {
-    render(<AssetTypeFilterButton value={["ssh"]} options={builtinOpts} onChange={() => {}} />);
+    render(
+      <TooltipProvider>
+        <AssetTypeFilterButton value={["ssh"]} options={builtinOpts} onChange={() => {}} />
+      </TooltipProvider>
+    );
     const btn = screen.getByRole("button", { name: /asset.filterByTypeActive/i });
     expect(btn.querySelector('[data-active="true"]')).not.toBeNull();
   });
 
   it("opens popover and lists built-in options", async () => {
     const user = userEvent.setup();
-    render(<AssetTypeFilterButton value="all" options={builtinOpts} onChange={() => {}} />);
+    render(
+      <TooltipProvider>
+        <AssetTypeFilterButton value="all" options={builtinOpts} onChange={() => {}} />
+      </TooltipProvider>
+    );
     await user.click(screen.getByRole("button", { name: /asset.filterByType/i }));
     expect(screen.getByText("asset.filterAllTypes")).toBeTruthy();
     expect(screen.getByText("nav.ssh")).toBeTruthy();
@@ -45,7 +60,11 @@ describe("AssetTypeFilterButton", () => {
   it('toggling "All types" while not all switches selection to "all"', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    render(<AssetTypeFilterButton value={["ssh"]} options={builtinOpts} onChange={onChange} />);
+    render(
+      <TooltipProvider>
+        <AssetTypeFilterButton value={["ssh"]} options={builtinOpts} onChange={onChange} />
+      </TooltipProvider>
+    );
     await user.click(screen.getByRole("button", { name: /asset.filterByTypeActive/i }));
     await user.click(screen.getByText("asset.filterAllTypes"));
     expect(onChange).toHaveBeenCalledWith("all");
@@ -54,7 +73,11 @@ describe("AssetTypeFilterButton", () => {
   it("toggling a single type from all narrows selection to other 3", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    render(<AssetTypeFilterButton value="all" options={builtinOpts} onChange={onChange} />);
+    render(
+      <TooltipProvider>
+        <AssetTypeFilterButton value="all" options={builtinOpts} onChange={onChange} />
+      </TooltipProvider>
+    );
     await user.click(screen.getByRole("button", { name: /asset.filterByType/i }));
     await user.click(screen.getByText("nav.ssh"));
     expect(onChange).toHaveBeenCalledWith(["database", "redis", "mongodb"]);
@@ -63,7 +86,11 @@ describe("AssetTypeFilterButton", () => {
   it('unchecking the last selected type falls back to "all"', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    render(<AssetTypeFilterButton value={["ssh"]} options={builtinOpts} onChange={onChange} />);
+    render(
+      <TooltipProvider>
+        <AssetTypeFilterButton value={["ssh"]} options={builtinOpts} onChange={onChange} />
+      </TooltipProvider>
+    );
     await user.click(screen.getByRole("button", { name: /asset.filterByTypeActive/i }));
     await user.click(screen.getByText("nav.ssh"));
     expect(onChange).toHaveBeenCalledWith("all");
@@ -82,7 +109,11 @@ describe("AssetTypeFilterButton", () => {
         },
       },
     } as never);
-    render(<AssetTypeFilterButton value="all" options={opts} onChange={() => {}} />);
+    render(
+      <TooltipProvider>
+        <AssetTypeFilterButton value="all" options={opts} onChange={() => {}} />
+      </TooltipProvider>
+    );
     await user.click(screen.getByRole("button", { name: /asset.filterByType/i }));
     expect(screen.getByText("asset.filterExtensions")).toBeTruthy();
     expect(screen.getByText("Kubernetes")).toBeTruthy();
@@ -90,7 +121,11 @@ describe("AssetTypeFilterButton", () => {
 
   it("does not render Extensions section header when no extension options", async () => {
     const user = userEvent.setup();
-    render(<AssetTypeFilterButton value="all" options={builtinOpts} onChange={() => {}} />);
+    render(
+      <TooltipProvider>
+        <AssetTypeFilterButton value="all" options={builtinOpts} onChange={() => {}} />
+      </TooltipProvider>
+    );
     await user.click(screen.getByRole("button", { name: /asset.filterByType/i }));
     expect(screen.queryByText("asset.filterExtensions")).toBeNull();
   });
