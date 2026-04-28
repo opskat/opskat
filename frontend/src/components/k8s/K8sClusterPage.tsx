@@ -1628,7 +1628,29 @@ export function K8sClusterPage({ asset }: Props) {
                     )}
                   />
 
-                  <K8sConditionList conditions={detail.conditions} title={t("asset.k8sPodConditions")} />
+                  <K8sLogsPanel
+                    containers={detail.containers}
+                    namespace={detail.namespace}
+                    podName={detail.name}
+                    logContainer={logContainer}
+                    logTailLines={logTailLines}
+                    logStreamID={logStreamID}
+                    logError={logError}
+                    logLines={logLines}
+                    onContainerChange={(container) => {
+                      setLogContainer(container);
+                      if (logStreamID) {
+                        stopLogStream();
+                        startLogStream(detail.namespace, detail.name, container, logTailLines);
+                      }
+                    }}
+                    onTailLinesChange={(lines) => setLogTailLines(lines)}
+                    onStart={() => {
+                      const container = logContainer || detail.containers[0]?.name || "";
+                      startLogStream(detail.namespace, detail.name, container, logTailLines);
+                    }}
+                    onStop={stopLogStream}
+                  />
 
                   <K8sTableSection
                     title={t("asset.k8sPodEvents")}
@@ -1658,33 +1680,11 @@ export function K8sClusterPage({ asset }: Props) {
                     )}
                   />
 
+                  <K8sConditionList conditions={detail.conditions} title={t("asset.k8sPodConditions")} />
+
                   <K8sTagList tags={detail.labels} title={t("asset.k8sPodLabels")} />
 
                   <K8sCodeBlock code={detail.yaml} title={t("asset.k8sPodYAML")} />
-
-                  <K8sLogsPanel
-                    containers={detail.containers}
-                    namespace={detail.namespace}
-                    podName={detail.name}
-                    logContainer={logContainer}
-                    logTailLines={logTailLines}
-                    logStreamID={logStreamID}
-                    logError={logError}
-                    logLines={logLines}
-                    onContainerChange={(container) => {
-                      setLogContainer(container);
-                      if (logStreamID) {
-                        stopLogStream();
-                        startLogStream(detail.namespace, detail.name, container, logTailLines);
-                      }
-                    }}
-                    onTailLinesChange={(lines) => setLogTailLines(lines)}
-                    onStart={() => {
-                      const container = logContainer || detail.containers[0]?.name || "";
-                      startLogStream(detail.namespace, detail.name, container, logTailLines);
-                    }}
-                    onStop={stopLogStream}
-                  />
                 </div>
               );
             })()}
