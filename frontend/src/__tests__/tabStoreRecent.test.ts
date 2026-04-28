@@ -92,4 +92,36 @@ describe("tabStore → recentAssetStore integration", () => {
     useTabStore.getState().openTab(queryTab);
     expect(useRecentAssetStore.getState().recentIds[0]).toBe(42);
   });
+
+  it("records targetId for an info tab when targetType is 'asset'", () => {
+    const infoTab: Tab = {
+      id: "info-asset-99",
+      type: "info",
+      label: "Asset 99",
+      meta: {
+        type: "info",
+        targetType: "asset",
+        targetId: 99,
+        name: "Asset 99",
+      },
+    };
+    useTabStore.getState().openTab(infoTab);
+    expect(useRecentAssetStore.getState().recentIds[0]).toBe(99);
+  });
+
+  it("does not record targetId for an info tab when targetType is 'group'", () => {
+    const infoTab: Tab = {
+      id: "info-group-5",
+      type: "info",
+      label: "Group 5",
+      meta: {
+        type: "info",
+        targetType: "group",
+        targetId: 5,
+        name: "Group 5",
+      },
+    };
+    useTabStore.getState().openTab(infoTab);
+    expect(useRecentAssetStore.getState().recentIds).toHaveLength(0);
+  });
 });

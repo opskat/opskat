@@ -134,13 +134,15 @@ export const useTabStore = create<TabStoreState>((set, get) => ({
       tabs: [...s.tabs, tab],
       activeTabId: activate ? tab.id : s.activeTabId,
     }));
-    // Record recently opened asset (terminal, query, page metas carry assetId)
+    // Record recently opened asset (terminal/query/page carry assetId; info uses targetId for assets)
     const { meta } = tab;
     let assetId = 0;
     if (meta.type === "terminal" || meta.type === "query") {
       assetId = meta.assetId;
     } else if (meta.type === "page" && meta.assetId != null) {
       assetId = meta.assetId;
+    } else if (meta.type === "info" && meta.targetType === "asset") {
+      assetId = meta.targetId;
     }
     if (assetId > 0) {
       useRecentAssetStore.getState().touch(assetId);
