@@ -203,8 +203,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const [kubeconfig, setKubeconfig] = useState("");
   const [k8sNamespace, setK8sNamespace] = useState("");
   const [k8sContext, setK8sContext] = useState("");
-  const [k8sToken, setK8sToken] = useState("");
-  const [encryptedK8sToken, setEncryptedK8sToken] = useState("");
 
   // Extension config
   const [extConfig, setExtConfig] = useState<Record<string, unknown>>({});
@@ -430,8 +428,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       setKubeconfig(cfg.kubeconfig || "");
       setK8sNamespace(cfg.namespace || "");
       setK8sContext(cfg.context || "");
-      setEncryptedK8sToken(cfg.token || "");
-      setK8sToken("");
       setSshTunnelId(asset.sshTunnelId || cfg.ssh_asset_id || 0);
       setHost(""); // K8S uses kubeconfig, not host
       setPort(6443);
@@ -507,8 +503,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setKubeconfig("");
     setK8sNamespace("");
     setK8sContext("");
-    setK8sToken("");
-    setEncryptedK8sToken("");
   };
 
   const handleTypeChange = (newType: AssetType) => {
@@ -777,13 +771,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       if (kubeconfig) k8sConfig.kubeconfig = kubeconfig;
       if (k8sNamespace) k8sConfig.namespace = k8sNamespace;
       if (k8sContext) k8sConfig.context = k8sContext;
-      if (k8sToken) {
-        const encrypted = await EncryptPassword(k8sToken);
-        if (encrypted === undefined) return;
-        k8sConfig.token = encrypted;
-      } else if (encryptedK8sToken) {
-        k8sConfig.token = encryptedK8sToken;
-      }
       config = JSON.stringify(k8sConfig);
     } else {
       // Extension type: encrypt password fields from configSchema before saving
@@ -1105,19 +1092,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                 />
               </div>
               <div className="grid gap-2">
-                <Label>{t("asset.k8sToken")}</Label>
-                <Input
-                  type="password"
-                  value={k8sToken}
-                  onChange={(e) => setK8sToken(e.target.value)}
-                  placeholder={
-                    encryptedK8sToken
-                      ? "\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF"
-                      : t("asset.k8sTokenPlaceholder") || "Bearer token"
-                  }
-                />
-              </div>
-              <div className="grid gap-2">
                 <Label>{t("asset.sshTunnel")}</Label>
                 <AssetSelect
                   value={sshTunnelId}
@@ -1200,7 +1174,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               (["ssh", "database", "redis"].includes(assetType) && !host) ||
               (assetType === "mongodb" && mongoConnectionMode === "manual" && !host) ||
               (assetType === "mongodb" && mongoConnectionMode === "uri" && !connectionURI) ||
-              (assetType === "k8s" && !kubeconfig && !k8sNamespace)
+              (assetType === "k8s" && !kubeconfig)
             }
           >
             {t("action.save")}

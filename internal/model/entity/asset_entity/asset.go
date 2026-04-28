@@ -148,8 +148,6 @@ type MongoDBConfig struct {
 // K8sConfig K8S集群类型的特定配置
 type K8sConfig struct {
 	Kubeconfig string `json:"kubeconfig,omitempty"` // kubeconfig YAML 内容
-	ApiServer  string `json:"api_server,omitempty"` // API Server 地址（与 kubeconfig 二选一）
-	Token      string `json:"token,omitempty"`      // Bearer Token（加密存储）
 	Namespace  string `json:"namespace,omitempty"`  // 默认命名空间
 	Context    string `json:"context,omitempty"`    // kubeconfig context 名称
 	SSHAssetID int64  `json:"ssh_asset_id,omitempty"`
@@ -157,7 +155,7 @@ type K8sConfig struct {
 
 // K8sConfig PasswordSource implementation
 func (c *K8sConfig) GetCredentialID() int64 { return 0 }
-func (c *K8sConfig) GetPassword() string    { return c.Token }
+func (c *K8sConfig) GetPassword() string    { return "" }
 
 // DatabaseConfig PasswordSource implementation
 func (c *DatabaseConfig) GetCredentialID() int64 { return c.CredentialID }
@@ -495,8 +493,8 @@ func (a *Asset) validateK8s() error {
 	if err != nil {
 		return fmt.Errorf("K8S配置无效: %w", err)
 	}
-	if cfg.Kubeconfig == "" && cfg.ApiServer == "" {
-		return errors.New("K8S集群kubeconfig或API Server地址不能同时为空")
+	if cfg.Kubeconfig == "" {
+		return errors.New("K8S集群kubeconfig不能为空")
 	}
 	return nil
 }
@@ -539,7 +537,7 @@ func (a *Asset) CanConnect() bool {
 		if err != nil {
 			return false
 		}
-		return cfg.Kubeconfig != "" || cfg.ApiServer != ""
+		return cfg.Kubeconfig != ""
 	}
 	return false
 }

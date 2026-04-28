@@ -34,13 +34,11 @@ func (a *App) GetK8sClusterInfo(assetID int64) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("get K8S config: %w", err)
 	}
-
-	token := cfg.Token
-	if token == "" && cfg.Kubeconfig == "" && cfg.ApiServer == "" {
-		return "", fmt.Errorf("no kubeconfig or api_server configured for this K8S asset")
+	if cfg.Kubeconfig == "" {
+		return "", fmt.Errorf("no kubeconfig configured for this K8S asset")
 	}
 
-	info, err := k8s.GetClusterInfo(ctx, cfg.Kubeconfig, cfg.ApiServer, token, a.k8sClientOptions(asset, cfg)...)
+	info, err := k8s.GetClusterInfo(ctx, cfg.Kubeconfig, a.k8sClientOptions(asset, cfg)...)
 	if err != nil {
 		return "", fmt.Errorf("get K8S cluster info: %w", err)
 	}
@@ -68,13 +66,11 @@ func (a *App) GetK8sNamespaceResources(assetID int64, namespace string) (string,
 	if err != nil {
 		return "", fmt.Errorf("get K8S config: %w", err)
 	}
-
-	token := cfg.Token
-	if token == "" && cfg.Kubeconfig == "" && cfg.ApiServer == "" {
-		return "", fmt.Errorf("no kubeconfig or api_server configured for this K8S asset")
+	if cfg.Kubeconfig == "" {
+		return "", fmt.Errorf("no kubeconfig configured for this K8S asset")
 	}
 
-	res, err := k8s.GetNamespaceResources(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace, a.k8sClientOptions(asset, cfg)...)
+	res, err := k8s.GetNamespaceResources(ctx, cfg.Kubeconfig, namespace, a.k8sClientOptions(asset, cfg)...)
 	if err != nil {
 		return "", fmt.Errorf("get K8S namespace resources: %w", err)
 	}
@@ -102,13 +98,11 @@ func (a *App) GetK8sNamespacePods(assetID int64, namespace string) (string, erro
 	if err != nil {
 		return "", fmt.Errorf("get K8S config: %w", err)
 	}
-
-	token := cfg.Token
-	if token == "" && cfg.Kubeconfig == "" && cfg.ApiServer == "" {
-		return "", fmt.Errorf("no kubeconfig or api_server configured for this K8S asset")
+	if cfg.Kubeconfig == "" {
+		return "", fmt.Errorf("no kubeconfig configured for this K8S asset")
 	}
 
-	pods, err := k8s.GetNamespacePods(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace, a.k8sClientOptions(asset, cfg)...)
+	pods, err := k8s.GetNamespacePods(ctx, cfg.Kubeconfig, namespace, a.k8sClientOptions(asset, cfg)...)
 	if err != nil {
 		return "", fmt.Errorf("get K8S namespace pods: %w", err)
 	}
@@ -136,13 +130,11 @@ func (a *App) GetK8sNamespaceDeployments(assetID int64, namespace string) (strin
 	if err != nil {
 		return "", fmt.Errorf("get K8S config: %w", err)
 	}
-
-	token := cfg.Token
-	if token == "" && cfg.Kubeconfig == "" && cfg.ApiServer == "" {
-		return "", fmt.Errorf("no kubeconfig or api_server configured for this K8S asset")
+	if cfg.Kubeconfig == "" {
+		return "", fmt.Errorf("no kubeconfig configured for this K8S asset")
 	}
 
-	deployments, err := k8s.GetNamespaceDeployments(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace, a.k8sClientOptions(asset, cfg)...)
+	deployments, err := k8s.GetNamespaceDeployments(ctx, cfg.Kubeconfig, namespace, a.k8sClientOptions(asset, cfg)...)
 	if err != nil {
 		return "", fmt.Errorf("get K8S namespace deployments: %w", err)
 	}
@@ -170,13 +162,11 @@ func (a *App) GetK8sNamespaceServices(assetID int64, namespace string) (string, 
 	if err != nil {
 		return "", fmt.Errorf("get K8S config: %w", err)
 	}
-
-	token := cfg.Token
-	if token == "" && cfg.Kubeconfig == "" && cfg.ApiServer == "" {
-		return "", fmt.Errorf("no kubeconfig or api_server configured for this K8S asset")
+	if cfg.Kubeconfig == "" {
+		return "", fmt.Errorf("no kubeconfig configured for this K8S asset")
 	}
 
-	services, err := k8s.GetNamespaceServices(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace, a.k8sClientOptions(asset, cfg)...)
+	services, err := k8s.GetNamespaceServices(ctx, cfg.Kubeconfig, namespace, a.k8sClientOptions(asset, cfg)...)
 	if err != nil {
 		return "", fmt.Errorf("get K8S namespace services: %w", err)
 	}
@@ -204,13 +194,11 @@ func (a *App) GetK8sNamespaceConfigMaps(assetID int64, namespace string) (string
 	if err != nil {
 		return "", fmt.Errorf("get K8S config: %w", err)
 	}
-
-	token := cfg.Token
-	if token == "" && cfg.Kubeconfig == "" && cfg.ApiServer == "" {
-		return "", fmt.Errorf("no kubeconfig or api_server configured for this K8S asset")
+	if cfg.Kubeconfig == "" {
+		return "", fmt.Errorf("no kubeconfig configured for this K8S asset")
 	}
 
-	configmaps, err := k8s.GetNamespaceConfigMaps(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace, a.k8sClientOptions(asset, cfg)...)
+	configmaps, err := k8s.GetNamespaceConfigMaps(ctx, cfg.Kubeconfig, namespace, a.k8sClientOptions(asset, cfg)...)
 	if err != nil {
 		return "", fmt.Errorf("get K8S namespace configmaps: %w", err)
 	}
@@ -238,13 +226,11 @@ func (a *App) GetK8sNamespaceSecrets(assetID int64, namespace string) (string, e
 	if err != nil {
 		return "", fmt.Errorf("get K8S config: %w", err)
 	}
-
-	token := cfg.Token
-	if token == "" && cfg.Kubeconfig == "" && cfg.ApiServer == "" {
-		return "", fmt.Errorf("no kubeconfig or api_server configured for this K8S asset")
+	if cfg.Kubeconfig == "" {
+		return "", fmt.Errorf("no kubeconfig configured for this K8S asset")
 	}
 
-	secrets, err := k8s.GetNamespaceSecrets(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace, a.k8sClientOptions(asset, cfg)...)
+	secrets, err := k8s.GetNamespaceSecrets(ctx, cfg.Kubeconfig, namespace, a.k8sClientOptions(asset, cfg)...)
 	if err != nil {
 		return "", fmt.Errorf("get K8S namespace secrets: %w", err)
 	}
@@ -272,13 +258,11 @@ func (a *App) GetK8sPodDetail(assetID int64, namespace, podName string) (string,
 	if err != nil {
 		return "", fmt.Errorf("get K8S config: %w", err)
 	}
-
-	token := cfg.Token
-	if token == "" && cfg.Kubeconfig == "" && cfg.ApiServer == "" {
-		return "", fmt.Errorf("no kubeconfig or api_server configured for this K8S asset")
+	if cfg.Kubeconfig == "" {
+		return "", fmt.Errorf("no kubeconfig configured for this K8S asset")
 	}
 
-	detail, err := k8s.GetPodDetail(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace, podName, a.k8sClientOptions(asset, cfg)...)
+	detail, err := k8s.GetPodDetail(ctx, cfg.Kubeconfig, namespace, podName, a.k8sClientOptions(asset, cfg)...)
 	if err != nil {
 		return "", fmt.Errorf("get K8S pod detail: %w", err)
 	}
@@ -303,10 +287,8 @@ func (a *App) StartK8sPodLogs(assetID int64, namespace, podName, container strin
 	if err != nil {
 		return "", fmt.Errorf("get K8S config: %w", err)
 	}
-
-	token := cfg.Token
-	if token == "" && cfg.Kubeconfig == "" && cfg.ApiServer == "" {
-		return "", fmt.Errorf("no kubeconfig or api_server configured for this K8S asset")
+	if cfg.Kubeconfig == "" {
+		return "", fmt.Errorf("no kubeconfig configured for this K8S asset")
 	}
 
 	streamID := fmt.Sprintf("k8s-log-%d", atomic.AddInt64(&a.k8sLogStreamCounter, 1))
@@ -314,7 +296,7 @@ func (a *App) StartK8sPodLogs(assetID int64, namespace, podName, container strin
 	ctx, cancel := context.WithCancel(a.ctx)
 	a.k8sLogStreams.Store(streamID, cancel)
 
-	reader, err := k8s.StreamPodLogs(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace, podName, container, tailLines, a.k8sClientOptions(asset, cfg)...)
+	reader, err := k8s.StreamPodLogs(ctx, cfg.Kubeconfig, namespace, podName, container, tailLines, a.k8sClientOptions(asset, cfg)...)
 	if err != nil {
 		cancel()
 		a.k8sLogStreams.Delete(streamID)

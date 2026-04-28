@@ -10,7 +10,7 @@ Add real K8S cluster connectivity via `k8s.io/client-go`, enabling users to conn
 ## Scope
 
 - Add `k8s.io/client-go` and related K8S Go libraries
-- Build a K8S client layer that creates a `kubernetes.Clientset` from asset config (kubeconfig YAML or api_server + token)
+- Build a K8S client layer that creates a `kubernetes.Clientset` from asset config (kubeconfig YAML)
 - Create a Wails binding `GetK8sClusterInfo(assetID int64) (string, error)` that returns cluster info JSON
 - On the frontend, change K8S asset type to `canConnect: true` and show cluster info in a dialog on connect
 
@@ -26,7 +26,7 @@ Frontend (K8sDetailInfoCard + K8sClusterInfoDialog)
    └─ GetK8sClusterInfo(assetId) → Wails IPC
         └─ Backend app_k8s.go (thin binding)
              └─ k8s/client.go (K8sClient)
-                  ├─ Build rest.Config from kubeconfig or api_server+token
+                  ├─ Build rest.Config from kubeconfig
                   ├─ Create kubernetes.Clientset
                   └─ GetClusterInfo():
                        ├─ ServerVersion()
@@ -69,14 +69,8 @@ func NewClient(cfg *K8sConfig) (*K8sClient, error)
   1. If cfg.Kubeconfig != "":
        restConfig = clientcmd.RESTConfigFromKubeConfig([]byte(cfg.Kubeconfig))
        If cfg.Context != "": override restConfig with specified context
-  2. Else if cfg.ApiServer != "":
-       restConfig = &rest.Config{
-         Host:        cfg.ApiServer,
-         BearerToken: cfg.Token,  // already decrypted by caller
-         TLSClientConfig: rest.TLSClientConfig{Insecure: true},
-       }
-  3. Create clientset = kubernetes.NewForConfig(restConfig)
-  4. Ping: clientset.ServerVersion() to validate connectivity
+  2. Create clientset = kubernetes.NewForConfig(restConfig)
+  3. Ping: clientset.ServerVersion() to validate connectivity
 ```
 
 ## ClusterInfo Response Schema
@@ -114,7 +108,7 @@ func NewClient(cfg *K8sConfig) (*K8sClient, error)
 
 ## Security
 
-- K8S token is stored encrypted (AES-256-GCM) in asset config, decrypted on connect
+- Credentials should be embedded in kubeconfig; standalone API server + bearer token auth is not supported
 - TLS verification skipped (`Insecure: true`) for internal clusters; CA cert support can be added later
 - Connection timeout: 30 seconds
 - Node/node resource data is read-only, no secrets/configmaps exposed

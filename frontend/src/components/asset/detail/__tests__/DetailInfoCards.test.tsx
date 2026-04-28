@@ -219,7 +219,7 @@ describe("MongoDBDetailInfoCard", () => {
 describe("K8sDetailInfoCard", () => {
   it("shows SSH tunnel from asset field", () => {
     const tunnelFn = vi.fn((id?: number) => (id === 7 ? "k8s-bastion" : null));
-    const asset = makeAssetWithTunnel("k8s", { api_server: "https://172.31.30.6:6443" }, 7);
+    const asset = makeAssetWithTunnel("k8s", { kubeconfig: "apiVersion: v1" }, 7);
     const { getByText } = render(<K8sDetailInfoCard asset={asset} sshTunnelName={tunnelFn} />);
     expect(getByText("k8s-bastion")).toBeInTheDocument();
   });

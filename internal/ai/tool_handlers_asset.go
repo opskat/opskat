@@ -149,9 +149,9 @@ func handleAddAsset(ctx context.Context, args map[string]any) (string, error) {
 	}
 	switch assetType {
 	case asset_entity.AssetTypeK8s:
-		// K8S uses kubeconfig or api_server instead of host/port
-		if argString(args, "kubeconfig") == "" && argString(args, "api_server") == "" {
-			return "", fmt.Errorf("missing required parameter: kubeconfig or api_server for k8s type")
+		// K8S uses kubeconfig instead of host/port.
+		if argString(args, "kubeconfig") == "" {
+			return "", fmt.Errorf("missing required parameter: kubeconfig for k8s type")
 		}
 	default:
 		if host == "" || port == 0 || username == "" {

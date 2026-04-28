@@ -73,7 +73,7 @@ func AllToolDefs() []ToolDef {
 		},
 		{
 			Name:        "add_asset",
-			Description: `Add a new asset to the inventory. Supports types: "ssh", "database", "redis", "mongodb", "k8s". For database, specify driver ("mysql" or "postgresql"). For k8s, specify kubeconfig or api_server. Credentials (password / private_key / token) are stored encrypted; never echo them back to the user.`,
+			Description: `Add a new asset to the inventory. Supports types: "ssh", "database", "redis", "mongodb", "k8s". For database, specify driver ("mysql" or "postgresql"). For k8s, specify kubeconfig. Credentials (password / private_key) are stored encrypted; never echo them back to the user.`,
 			Params: []ParamDef{
 				{Name: "name", Type: ParamString, Description: `Display name for the asset.`, Required: true},
 				{Name: "type", Type: ParamString, Description: `Asset type: "ssh" (default), "database", "redis", "mongodb", or "k8s".`},

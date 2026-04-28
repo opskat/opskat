@@ -55,8 +55,8 @@ func WithDial(dial func(ctx context.Context, network, address string) (net.Conn,
 	}
 }
 
-func GetClusterInfo(ctx context.Context, kubeconfig, apiServer, token string, opts ...ClientOption) (*ClusterInfo, error) {
-	clientset, err := buildClient(kubeconfig, apiServer, token, opts...)
+func GetClusterInfo(ctx context.Context, kubeconfig string, opts ...ClientOption) (*ClusterInfo, error) {
+	clientset, err := buildClient(kubeconfig, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +106,7 @@ func GetClusterInfo(ctx context.Context, kubeconfig, apiServer, token string, op
 	return info, nil
 }
 
-func buildClient(kubeconfig, apiServer, token string, opts ...ClientOption) (*kubernetes.Clientset, error) {
+func buildClient(kubeconfig string, opts ...ClientOption) (*kubernetes.Clientset, error) {
 	var config *rest.Config
 	var err error
 	clientOpts := &clientOptions{}
@@ -114,27 +114,18 @@ func buildClient(kubeconfig, apiServer, token string, opts ...ClientOption) (*ku
 		opt(clientOpts)
 	}
 
-	if kubeconfig != "" {
-		clientCfg, err := clientcmd.Load([]byte(kubeconfig))
-		if err != nil {
-			return nil, fmt.Errorf("parse kubeconfig: %w", err)
-		}
-		config, err = clientcmd.NewDefaultClientConfig(*clientCfg, &clientcmd.ConfigOverrides{}).ClientConfig()
-		if err != nil {
-			return nil, fmt.Errorf("build rest config from kubeconfig: %w", err)
-		}
-	} else if apiServer != "" {
-		config = &rest.Config{
-			Host:        apiServer,
-			BearerToken: token,
-			TLSClientConfig: rest.TLSClientConfig{
-				Insecure: true,
-			},
-			Timeout: 30 * time.Second,
-		}
-	} else {
-		return nil, fmt.Errorf("kubeconfig or api_server is required")
+	if kubeconfig == "" {
+		return nil, fmt.Errorf("kubeconfig is required")
 	}
+	clientCfg, err := clientcmd.Load([]byte(kubeconfig))
+	if err != nil {
+		return nil, fmt.Errorf("parse kubeconfig: %w", err)
+	}
+	config, err = clientcmd.NewDefaultClientConfig(*clientCfg, &clientcmd.ConfigOverrides{}).ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("build rest config from kubeconfig: %w", err)
+	}
+	config.Timeout = 30 * time.Second
 	if clientOpts.dial != nil {
 		config.Dial = clientOpts.dial
 		config.Proxy = func(*http.Request) (*url.URL, error) {
@@ -257,8 +248,8 @@ type NamespaceResources struct {
 	ServiceAccounts int    `json:"service_accounts"`
 }
 
-func GetNamespaceResources(ctx context.Context, kubeconfig, apiServer, token, namespace string, opts ...ClientOption) (*NamespaceResources, error) {
-	clientset, err := buildClient(kubeconfig, apiServer, token, opts...)
+func GetNamespaceResources(ctx context.Context, kubeconfig, namespace string, opts ...ClientOption) (*NamespaceResources, error) {
+	clientset, err := buildClient(kubeconfig, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -323,8 +314,8 @@ func getNodeRoles(node *corev1.Node) []string {
 	return roles
 }
 
-func GetNamespacePods(ctx context.Context, kubeconfig, apiServer, token, namespace string, opts ...ClientOption) ([]PodListItem, error) {
-	clientset, err := buildClient(kubeconfig, apiServer, token, opts...)
+func GetNamespacePods(ctx context.Context, kubeconfig, namespace string, opts ...ClientOption) ([]PodListItem, error) {
+	clientset, err := buildClient(kubeconfig, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -373,8 +364,8 @@ func podListItem(pod corev1.Pod, now time.Time) PodListItem {
 	}
 }
 
-func GetNamespaceDeployments(ctx context.Context, kubeconfig, apiServer, token, namespace string, opts ...ClientOption) ([]DeploymentListItem, error) {
-	clientset, err := buildClient(kubeconfig, apiServer, token, opts...)
+func GetNamespaceDeployments(ctx context.Context, kubeconfig, namespace string, opts ...ClientOption) ([]DeploymentListItem, error) {
+	clientset, err := buildClient(kubeconfig, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -420,8 +411,8 @@ func GetNamespaceDeployments(ctx context.Context, kubeconfig, apiServer, token, 
 	return result, nil
 }
 
-func GetNamespaceServices(ctx context.Context, kubeconfig, apiServer, token, namespace string, opts ...ClientOption) ([]ServiceListItem, error) {
-	clientset, err := buildClient(kubeconfig, apiServer, token, opts...)
+func GetNamespaceServices(ctx context.Context, kubeconfig, namespace string, opts ...ClientOption) ([]ServiceListItem, error) {
+	clientset, err := buildClient(kubeconfig, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -461,8 +452,8 @@ func GetNamespaceServices(ctx context.Context, kubeconfig, apiServer, token, nam
 	return result, nil
 }
 
-func GetNamespaceConfigMaps(ctx context.Context, kubeconfig, apiServer, token, namespace string, opts ...ClientOption) ([]ConfigMapListItem, error) {
-	clientset, err := buildClient(kubeconfig, apiServer, token, opts...)
+func GetNamespaceConfigMaps(ctx context.Context, kubeconfig, namespace string, opts ...ClientOption) ([]ConfigMapListItem, error) {
+	clientset, err := buildClient(kubeconfig, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -485,8 +476,8 @@ func GetNamespaceConfigMaps(ctx context.Context, kubeconfig, apiServer, token, n
 	return result, nil
 }
 
-func GetNamespaceSecrets(ctx context.Context, kubeconfig, apiServer, token, namespace string, opts ...ClientOption) ([]SecretListItem, error) {
-	clientset, err := buildClient(kubeconfig, apiServer, token, opts...)
+func GetNamespaceSecrets(ctx context.Context, kubeconfig, namespace string, opts ...ClientOption) ([]SecretListItem, error) {
+	clientset, err := buildClient(kubeconfig, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -514,8 +505,8 @@ func GetNamespaceSecrets(ctx context.Context, kubeconfig, apiServer, token, name
 	return result, nil
 }
 
-func GetPodDetail(ctx context.Context, kubeconfig, apiServer, token, namespace, podName string, opts ...ClientOption) (*PodDetail, error) {
-	clientset, err := buildClient(kubeconfig, apiServer, token, opts...)
+func GetPodDetail(ctx context.Context, kubeconfig, namespace, podName string, opts ...ClientOption) (*PodDetail, error) {
+	clientset, err := buildClient(kubeconfig, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -663,8 +654,8 @@ func fmtDuration(d time.Duration) string {
 	return fmt.Sprintf("%dd%dh", days, h)
 }
 
-func StreamPodLogs(ctx context.Context, kubeconfig, apiServer, token, namespace, podName, container string, tailLines int64, opts ...ClientOption) (io.ReadCloser, error) {
-	clientset, err := buildClient(kubeconfig, apiServer, token, opts...)
+func StreamPodLogs(ctx context.Context, kubeconfig, namespace, podName, container string, tailLines int64, opts ...ClientOption) (io.ReadCloser, error) {
+	clientset, err := buildClient(kubeconfig, opts...)
 	if err != nil {
 		return nil, err
 	}
