@@ -29,6 +29,7 @@ import {
   GetK8sPodDetail,
 } from "../../../wailsjs/go/app/App";
 import {
+  Input,
   useResizeHandle,
   ContextMenu,
   ContextMenuTrigger,
@@ -867,6 +868,24 @@ export function K8sClusterPage({ asset }: Props) {
     });
   }, []);
 
+  interface ResourceSearchInputProps {
+    value: string;
+    onChange: (value: string) => void;
+    placeholder?: string;
+  }
+
+  const ResourceSearchInput = ({ value, onChange, placeholder }: ResourceSearchInputProps) => (
+    <div className="relative my-1 ml-9 mr-2">
+      <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+      <Input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="h-6 w-full pl-7 text-xs"
+      />
+    </div>
+  );
+
   useEffect(() => {
     loadInfo();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1162,20 +1181,16 @@ export function K8sClusterPage({ asset }: Props) {
                                     </div>
                                     {deploymentsExpanded && (
                                       <div className="ml-3">
-                                        <div className="relative my-1 ml-7 mr-2">
-                                          <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-                                          <input
-                                            value={resourceSearch[`deployments:${ns.name}`] || ""}
-                                            onChange={(e) =>
-                                              setResourceSearch((prev) => ({
-                                                ...prev,
-                                                [`deployments:${ns.name}`]: e.target.value,
-                                              }))
-                                            }
-                                            placeholder={t("asset.search")}
-                                            className="h-7 w-full rounded-md border bg-background pl-7 pr-2 text-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[2px] focus-visible:ring-ring/40"
-                                          />
-                                        </div>
+                                        <ResourceSearchInput
+                                          value={resourceSearch[`deployments:${ns.name}`] || ""}
+                                          onChange={(v) =>
+                                            setResourceSearch((prev) => ({
+                                              ...prev,
+                                              [`deployments:${ns.name}`]: v,
+                                            }))
+                                          }
+                                          placeholder={t("asset.search")}
+                                        />
                                         {loadingDeployments.has(ns.name) && (
                                           <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
                                             <Loader2 className="h-3 w-3 animate-spin" />
@@ -1341,20 +1356,16 @@ export function K8sClusterPage({ asset }: Props) {
                                     </div>
                                     {podsExpanded && (
                                       <div className="ml-3">
-                                        <div className="relative my-1 ml-7 mr-2">
-                                          <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-                                          <input
-                                            value={resourceSearch[`pods:${ns.name}`] || ""}
-                                            onChange={(e) =>
-                                              setResourceSearch((prev) => ({
-                                                ...prev,
-                                                [`pods:${ns.name}`]: e.target.value,
-                                              }))
-                                            }
-                                            placeholder={t("asset.search")}
-                                            className="h-7 w-full rounded-md border bg-background pl-7 pr-2 text-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[2px] focus-visible:ring-ring/40"
-                                          />
-                                        </div>
+                                        <ResourceSearchInput
+                                          value={resourceSearch[`pods:${ns.name}`] || ""}
+                                          onChange={(v) =>
+                                            setResourceSearch((prev) => ({
+                                              ...prev,
+                                              [`pods:${ns.name}`]: v,
+                                            }))
+                                          }
+                                          placeholder={t("asset.search")}
+                                        />
                                         {loadingPods.has(ns.name) && (
                                           <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
                                             <Loader2 className="h-3 w-3 animate-spin" />
@@ -1444,20 +1455,16 @@ export function K8sClusterPage({ asset }: Props) {
                                     </div>
                                     {servicesExpanded && (
                                       <div className="ml-3">
-                                        <div className="relative my-1 ml-7 mr-2">
-                                          <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-                                          <input
-                                            value={resourceSearch[`services:${ns.name}`] || ""}
-                                            onChange={(e) =>
-                                              setResourceSearch((prev) => ({
-                                                ...prev,
-                                                [`services:${ns.name}`]: e.target.value,
-                                              }))
-                                            }
-                                            placeholder={t("asset.search")}
-                                            className="h-7 w-full rounded-md border bg-background pl-7 pr-2 text-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[2px] focus-visible:ring-ring/40"
-                                          />
-                                        </div>
+                                        <ResourceSearchInput
+                                          value={resourceSearch[`services:${ns.name}`] || ""}
+                                          onChange={(v) =>
+                                            setResourceSearch((prev) => ({
+                                              ...prev,
+                                              [`services:${ns.name}`]: v,
+                                            }))
+                                          }
+                                          placeholder={t("asset.search")}
+                                        />
                                         {loadingServices.has(ns.name) && (
                                           <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
                                             <Loader2 className="h-3 w-3 animate-spin" />
@@ -1542,20 +1549,16 @@ export function K8sClusterPage({ asset }: Props) {
                                     </div>
                                     {configMapsExpanded && (
                                       <div className="ml-3">
-                                        <div className="relative my-1 ml-7 mr-2">
-                                          <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-                                          <input
-                                            value={resourceSearch[`config_maps:${ns.name}`] || ""}
-                                            onChange={(e) =>
-                                              setResourceSearch((prev) => ({
-                                                ...prev,
-                                                [`config_maps:${ns.name}`]: e.target.value,
-                                              }))
-                                            }
-                                            placeholder={t("asset.search")}
-                                            className="h-7 w-full rounded-md border bg-background pl-7 pr-2 text-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[2px] focus-visible:ring-ring/40"
-                                          />
-                                        </div>
+                                        <ResourceSearchInput
+                                          value={resourceSearch[`config_maps:${ns.name}`] || ""}
+                                          onChange={(v) =>
+                                            setResourceSearch((prev) => ({
+                                              ...prev,
+                                              [`config_maps:${ns.name}`]: v,
+                                            }))
+                                          }
+                                          placeholder={t("asset.search")}
+                                        />
                                         {loadingConfigMaps.has(ns.name) && (
                                           <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
                                             <Loader2 className="h-3 w-3 animate-spin" />
@@ -1637,20 +1640,16 @@ export function K8sClusterPage({ asset }: Props) {
                                     </div>
                                     {secretsExpanded && (
                                       <div className="ml-3">
-                                        <div className="relative my-1 ml-7 mr-2">
-                                          <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-                                          <input
-                                            value={resourceSearch[`secrets:${ns.name}`] || ""}
-                                            onChange={(e) =>
-                                              setResourceSearch((prev) => ({
-                                                ...prev,
-                                                [`secrets:${ns.name}`]: e.target.value,
-                                              }))
-                                            }
-                                            placeholder={t("asset.search")}
-                                            className="h-7 w-full rounded-md border bg-background pl-7 pr-2 text-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[2px] focus-visible:ring-ring/40"
-                                          />
-                                        </div>
+                                        <ResourceSearchInput
+                                          value={resourceSearch[`secrets:${ns.name}`] || ""}
+                                          onChange={(v) =>
+                                            setResourceSearch((prev) => ({
+                                              ...prev,
+                                              [`secrets:${ns.name}`]: v,
+                                            }))
+                                          }
+                                          placeholder={t("asset.search")}
+                                        />
                                         {loadingSecrets.has(ns.name) && (
                                           <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
                                             <Loader2 className="h-3 w-3 animate-spin" />
