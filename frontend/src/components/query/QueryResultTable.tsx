@@ -1186,6 +1186,9 @@ export function QueryResultTable({
                 const isFrozen = frozenLeft != null;
                 const typeText = columnTypes?.[col];
                 const TypeIcon = getColumnTypeIcon(typeText);
+                const selectedHeaderClass = isFrozen
+                  ? "query-table-frozen-header-selected text-foreground ring-2 ring-inset ring-primary/50"
+                  : "bg-primary/25 text-foreground ring-2 ring-inset ring-primary/50";
                 return (
                   <th
                     key={col}
@@ -1193,7 +1196,7 @@ export function QueryResultTable({
                     data-column-selected={isColumnSelected ? col : undefined}
                     className={`group ${isFrozen ? "" : "relative"} border border-border px-2 ${headerPaddingClass} text-left font-semibold whitespace-nowrap select-none ${
                       isColumnSelected
-                        ? "bg-primary/25 text-foreground ring-2 ring-inset ring-primary/50"
+                        ? selectedHeaderClass
                         : isFrozen
                           ? "text-muted-foreground bg-muted"
                           : "text-muted-foreground"
@@ -1312,6 +1315,7 @@ export function QueryResultTable({
             {sortedIndices.map((origIdx, idx) => {
               const row = rows[origIdx];
               const isRowSelected = selectedRowIdxs.has(origIdx);
+              const selectedRowHeaderBgClass = hasFrozenColumns ? "query-table-frozen-cell-selected" : "bg-primary/15";
               return (
                 <tr key={origIdx} className={idx % 2 === 0 ? "bg-background" : "bg-muted/40"}>
                   {showRowNumber && (
@@ -1320,7 +1324,7 @@ export function QueryResultTable({
                       data-row-selected={isRowSelected ? "true" : undefined}
                       className={`border border-border px-2 py-1 text-center text-muted-foreground whitespace-nowrap w-[50px] cursor-default select-none ${
                         isRowSelected
-                          ? `bg-primary/15 text-foreground ring-2 ring-inset ring-primary/50 ${
+                          ? `${selectedRowHeaderBgClass} text-foreground ring-2 ring-inset ring-primary/50 ${
                               hasFrozenColumns ? "z-30" : "relative z-10"
                             }`
                           : hasFrozenColumns
@@ -1348,8 +1352,13 @@ export function QueryResultTable({
                       editable && isSelected && !isEditing && !!dateModeForCell && !!setCellValueHandler;
 
                     const focusPositionClass = isFrozen ? "z-20" : "relative z-10";
+                    const editedBgClass = isFrozen
+                      ? "query-table-frozen-cell-edited"
+                      : "bg-yellow-100 dark:bg-yellow-900/30";
+                    const selectedBgClass = isFrozen ? "query-table-frozen-cell-selected" : "bg-primary/15";
+                    const editingBgClass = isFrozen ? "query-table-frozen-cell-focus" : "bg-primary/5";
                     const focusClass = isEditing
-                      ? `ring-2 ring-inset ring-primary bg-primary/5 ${focusPositionClass}`
+                      ? `ring-2 ring-inset ring-primary ${editingBgClass} ${focusPositionClass}`
                       : isSelected
                         ? `ring-2 ring-inset ring-primary/60 ${focusPositionClass}`
                         : "";
@@ -1362,9 +1371,9 @@ export function QueryResultTable({
                         data-column-selected={selectedColumns.has(col) ? col : undefined}
                         className={`border border-border px-2 ${cellPaddingClass} whitespace-nowrap cursor-default ${
                           isEdited
-                            ? "bg-yellow-100 dark:bg-yellow-900/30"
+                            ? editedBgClass
                             : isRowSelected || selectedColumns.has(col)
-                              ? "bg-primary/15"
+                              ? selectedBgClass
                               : isFrozen
                                 ? "bg-background"
                                 : ""

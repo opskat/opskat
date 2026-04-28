@@ -380,6 +380,37 @@ describe("QueryResultTable — cell context actions", () => {
     expect(rowNum).toHaveClass("sticky");
   });
 
+  it("uses opaque selected backgrounds for frozen selected columns", async () => {
+    const user = userEvent.setup();
+    render(
+      <QueryResultTable
+        columns={["id", "name", "email"]}
+        rows={[
+          { id: 1, name: "alice", email: "alice@example.com" },
+          { id: 2, name: "bob", email: "bob@example.com" },
+        ]}
+        editable
+        showRowNumber
+      />
+    );
+
+    fireEvent.contextMenu(document.querySelector('[data-column-header-key="name"]') as HTMLElement, {
+      clientX: 180,
+      clientY: 20,
+    });
+    await user.click(screen.getByText("query.freezeColumn"));
+
+    const nameHeader = document.querySelector('[data-column-header-key="name"]') as HTMLElement;
+    const nameCell = document.querySelector('[data-cell-key="0:name"]') as HTMLElement;
+
+    await user.click(nameHeader);
+
+    expect(nameHeader).toHaveClass("query-table-frozen-header-selected");
+    expect(nameHeader).not.toHaveClass("bg-primary/25");
+    expect(nameCell).toHaveClass("query-table-frozen-cell-selected");
+    expect(nameCell).not.toHaveClass("bg-primary/15");
+  });
+
   it("shows the table cell context actions", () => {
     openMenu({ onSetCellValue: vi.fn(), onPasteCell: vi.fn(), onRefresh: vi.fn() });
 
