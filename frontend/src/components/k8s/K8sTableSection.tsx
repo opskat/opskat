@@ -28,7 +28,7 @@ export function K8sTableSection<T>({ title, columns, data, renderRow, emptyText 
                 {columns.map((col) => (
                   <th
                     key={col.key}
-                    className={`text-left py-2 pr-4 text-xs text-muted-foreground font-medium ${col.className || ""}`}
+                    className={`text-left py-2 pr-4 text-xs text-muted-foreground font-medium whitespace-nowrap ${col.className || ""}`}
                   >
                     {col.label}
                   </th>
