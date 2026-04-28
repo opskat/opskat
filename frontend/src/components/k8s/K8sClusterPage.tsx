@@ -1580,257 +1580,108 @@ export function K8sClusterPage({ asset }: Props) {
 
               return (
                 <div className="max-w-5xl mx-auto p-4 space-y-4">
-                  <div className="rounded-xl border bg-card p-6">
-                    <div className="flex items-center justify-between mb-4">
-                      <div>
-                        <h3 className="text-base font-semibold font-mono">{detail.name}</h3>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          {detail.namespace} &middot; {detail.node_name}
-                        </p>
-                      </div>
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${getStatusColor(detail.status)}`}>
-                        {detail.status}
-                      </span>
-                    </div>
+                  <K8sSectionCard>
+                    <K8sResourceHeader
+                      name={detail.name}
+                      subtitle={`${detail.namespace} · ${detail.node_name}`}
+                      status={{ text: detail.status, variant: getK8sStatusColor(detail.status) }}
+                    />
+                    <K8sMetadataGrid
+                      items={[
+                        { label: t("asset.k8sPodIP"), value: detail.pod_ip || "-", mono: true },
+                        { label: t("asset.k8sPodHostIP"), value: detail.host_ip || "-", mono: true },
+                        { label: t("asset.k8sPodCreationTime"), value: detail.creation_time },
+                        { label: t("asset.k8sPodReady"), value: detail.ready, mono: true },
+                        { label: t("asset.k8sPodQosClass"), value: detail.qos_class },
+                      ]}
+                    />
+                  </K8sSectionCard>
 
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                      <div className="rounded-lg bg-muted/50 p-3">
-                        <div className="text-xs text-muted-foreground mb-1">{t("asset.k8sPodIP")}</div>
-                        <div className="font-mono text-sm font-medium">{detail.pod_ip || "-"}</div>
-                      </div>
-                      <div className="rounded-lg bg-muted/50 p-3">
-                        <div className="text-xs text-muted-foreground mb-1">{t("asset.k8sPodHostIP")}</div>
-                        <div className="font-mono text-sm font-medium">{detail.host_ip || "-"}</div>
-                      </div>
-                      <div className="rounded-lg bg-muted/50 p-3">
-                        <div className="text-xs text-muted-foreground mb-1">{t("asset.k8sPodCreationTime")}</div>
-                        <div className="text-sm font-medium">{detail.creation_time}</div>
-                      </div>
-                      <div className="rounded-lg bg-muted/50 p-3">
-                        <div className="text-xs text-muted-foreground mb-1">{t("asset.k8sPodReady")}</div>
-                        <div className="font-mono text-sm font-medium">{detail.ready}</div>
-                      </div>
-                      <div className="rounded-lg bg-muted/50 p-3">
-                        <div className="text-xs text-muted-foreground mb-1">{t("asset.k8sPodQosClass")}</div>
-                        <div className="text-sm font-medium">{detail.qos_class}</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border bg-card p-6">
-                    <h4 className="text-sm font-semibold mb-3">{t("asset.k8sPodContainers")}</h4>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b">
-                            <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">
-                              {t("asset.k8sPodName")}
-                            </th>
-                            <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">Image</th>
-                            <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">
-                              {t("asset.k8sPodStatus")}
-                            </th>
-                            <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">
-                              {t("asset.k8sPodReady")}
-                            </th>
-                            <th className="text-left py-2 text-xs text-muted-foreground font-medium">
-                              {t("asset.k8sPodRestarts")}
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {detail.containers.map((c) => (
-                            <tr key={c.name} className="border-b last:border-0">
-                              <td className="py-2 pr-4 font-mono">{c.name}</td>
-                              <td className="py-2 pr-4 font-mono text-muted-foreground">{c.image}</td>
-                              <td className="py-2 pr-4">
-                                <span
-                                  className={`text-xs px-1.5 py-0.5 rounded-full ${getContainerStateColor(c.state)}`}
-                                >
-                                  {c.state}
-                                </span>
-                              </td>
-                              <td className="py-2 pr-4">
-                                <span className={c.ready ? "text-green-600" : "text-red-600"}>
-                                  {c.ready ? "\u2713" : "\u2717"}
-                                </span>
-                              </td>
-                              <td className="py-2 font-mono">{c.restart_count}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border bg-card p-6">
-                    <h4 className="text-sm font-semibold mb-3">{t("asset.k8sPodConditions")}</h4>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {detail.conditions.map((c) => (
-                        <div key={c.type} className="rounded-lg border p-3">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-sm font-medium">{c.type}</span>
-                            <span
-                              className={`text-xs px-1.5 py-0.5 rounded-full ${
-                                c.status === "True"
-                                  ? "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400"
-                                  : "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400"
-                              }`}
-                            >
-                              {c.status}
-                            </span>
-                          </div>
-                          {c.reason && <p className="text-xs text-muted-foreground">{c.reason}</p>}
-                          {c.message && <p className="text-xs text-muted-foreground mt-0.5">{c.message}</p>}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border bg-card p-6">
-                    <h4 className="text-sm font-semibold mb-3">{t("asset.k8sPodEvents")}</h4>
-                    {detail.events.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">{t("asset.k8sNoEvents")}</p>
-                    ) : (
-                      <div className="overflow-x-auto max-h-64 overflow-y-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b">
-                              <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">Type</th>
-                              <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">Reason</th>
-                              <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">Message</th>
-                              <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">Count</th>
-                              <th className="text-left py-2 text-xs text-muted-foreground font-medium">Last Seen</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {detail.events.map((e, i) => (
-                              <tr key={i} className="border-b last:border-0">
-                                <td className="py-2 pr-4">
-                                  <span
-                                    className={`text-xs px-1.5 py-0.5 rounded-full ${
-                                      e.type === "Warning"
-                                        ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/50 dark:text-yellow-400"
-                                        : "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400"
-                                    }`}
-                                  >
-                                    {e.type}
-                                  </span>
-                                </td>
-                                <td className="py-2 pr-4 text-xs">{e.reason}</td>
-                                <td className="py-2 pr-4 text-xs text-muted-foreground max-w-xs truncate">
-                                  {e.message}
-                                </td>
-                                <td className="py-2 pr-4 font-mono text-xs">{e.count}</td>
-                                <td className="py-2 text-xs text-muted-foreground">{e.last_time}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </div>
-
-                  {Object.keys(detail.labels).length > 0 && (
-                    <div className="rounded-xl border bg-card p-6">
-                      <h4 className="text-sm font-semibold mb-3">{t("asset.k8sPodLabels")}</h4>
-                      <div className="flex flex-wrap gap-2">
-                        {Object.entries(detail.labels).map(([k, v]) => (
-                          <span
-                            key={k}
-                            className="inline-flex items-center rounded-md border bg-muted/50 px-2 py-0.5 text-xs font-mono"
-                          >
-                            {k}: {v}
+                  <K8sTableSection
+                    title={t("asset.k8sPodContainers")}
+                    columns={[
+                      { key: "name", label: t("asset.k8sPodName") },
+                      { key: "image", label: "Image" },
+                      { key: "state", label: t("asset.k8sPodStatus") },
+                      { key: "ready", label: t("asset.k8sPodReady") },
+                      { key: "restarts", label: t("asset.k8sPodRestarts") },
+                    ]}
+                    data={detail.containers}
+                    emptyText={t("asset.k8sNoEvents")}
+                    renderRow={(c) => (
+                      <tr key={c.name} className="border-b last:border-0">
+                        <td className="py-2 pr-4 font-mono text-sm">{c.name}</td>
+                        <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">{c.image}</td>
+                        <td className="py-2 pr-4">
+                          <span className={`text-xs px-1.5 py-0.5 rounded-full ${statusVariantToClass(getContainerStateColor(c.state))}`}>
+                            {c.state}
                           </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="rounded-xl border bg-card p-6">
-                    <h4 className="text-sm font-semibold mb-3">{t("asset.k8sPodYAML")}</h4>
-                    <pre className="bg-muted/50 rounded-lg p-4 text-xs font-mono max-h-96 overflow-y-auto whitespace-pre-wrap">
-                      {detail.yaml}
-                    </pre>
-                  </div>
-
-                  <div className="rounded-xl border bg-card p-6">
-                    <div className="flex items-center justify-between mb-3">
-                      <h4 className="text-sm font-semibold flex items-center gap-2">
-                        <ScrollText className="h-4 w-4" />
-                        {t("asset.k8sPodLogs")}
-                      </h4>
-                      <div className="flex items-center gap-2">
-                        <select
-                          className="h-7 rounded-md border bg-background px-2 text-xs"
-                          value={logContainer || detail.containers[0]?.name || ""}
-                          onChange={(e) => {
-                            setLogContainer(e.target.value);
-                            if (logStreamID) {
-                              stopLogStream();
-                              startLogStream(detail.namespace, detail.name, e.target.value, logTailLines);
-                            }
-                          }}
-                          disabled={!!logStreamID}
-                        >
-                          {detail.containers.map((c) => (
-                            <option key={c.name} value={c.name}>
-                              {c.name}
-                            </option>
-                          ))}
-                        </select>
-                        <input
-                          type="number"
-                          className="h-7 w-16 rounded-md border bg-background px-2 text-xs"
-                          value={logTailLines}
-                          onChange={(e) => setLogTailLines(Number(e.target.value))}
-                          disabled={!!logStreamID}
-                          min={1}
-                          max={10000}
-                          title={t("asset.k8sPodLogsTailLines")}
-                        />
-                        {logStreamID ? (
-                          <button
-                            onClick={stopLogStream}
-                            className="inline-flex items-center gap-1.5 rounded-md border border-destructive/50 px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10"
-                          >
-                            <Square className="h-3 w-3" />
-                            {t("asset.k8sPodLogsStop")}
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => {
-                              const container = logContainer || detail.containers[0]?.name || "";
-                              startLogStream(detail.namespace, detail.name, container, logTailLines);
-                            }}
-                            className="inline-flex items-center gap-1.5 rounded-md border border-primary/50 px-3 py-1.5 text-xs text-primary hover:bg-primary/10"
-                          >
-                            <Play className="h-3 w-3" />
-                            {t("asset.k8sPodLogsStart")}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    {logError && (
-                      <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive mb-3">
-                        {t("asset.k8sPodLogsError")}: {logError}
-                      </div>
+                        </td>
+                        <td className="py-2 pr-4">
+                          <span className={c.ready ? "text-green-600" : "text-red-600"}>
+                            {c.ready ? "\u2713" : "\u2717"}
+                          </span>
+                        </td>
+                        <td className="py-2 font-mono text-sm">{c.restart_count}</td>
+                      </tr>
                     )}
-                    <div className="bg-black rounded-lg p-4 text-xs font-mono max-h-96 overflow-y-auto">
-                      {logLines.length === 0 && !logStreamID && !logError && (
-                        <span className="text-gray-500">{t("asset.k8sPodLogsStopped")}</span>
-                      )}
-                      {logStreamID && logLines.length === 0 && (
-                        <span className="text-gray-500">{t("asset.k8sPodLogsStreaming")}</span>
-                      )}
-                      {logLines.map((line, i) => (
-                        <span key={i} className="text-green-400">
-                          {line}
-                        </span>
-                      ))}
-                      <div ref={logEndRef} />
-                    </div>
-                  </div>
+                  />
+
+                  <K8sConditionList conditions={detail.conditions} title={t("asset.k8sPodConditions")} />
+
+                  <K8sTableSection
+                    title={t("asset.k8sPodEvents")}
+                    columns={[
+                      { key: "type", label: "Type" },
+                      { key: "reason", label: "Reason" },
+                      { key: "message", label: "Message" },
+                      { key: "count", label: "Count" },
+                      { key: "last_time", label: "Last Seen" },
+                    ]}
+                    data={detail.events}
+                    emptyText={t("asset.k8sNoEvents")}
+                    renderRow={(e, i) => (
+                      <tr key={i} className="border-b last:border-0">
+                        <td className="py-2 pr-4">
+                          <span className={`text-xs px-1.5 py-0.5 rounded-full ${statusVariantToClass(e.type === "Warning" ? "warning" : "info")}`}>
+                            {e.type}
+                          </span>
+                        </td>
+                        <td className="py-2 pr-4 text-xs">{e.reason}</td>
+                        <td className="py-2 pr-4 text-xs text-muted-foreground max-w-xs truncate">{e.message}</td>
+                        <td className="py-2 pr-4 font-mono text-xs">{e.count}</td>
+                        <td className="py-2 text-xs text-muted-foreground">{e.last_time}</td>
+                      </tr>
+                    )}
+                  />
+
+                  <K8sTagList tags={detail.labels} title={t("asset.k8sPodLabels")} />
+
+                  <K8sCodeBlock code={detail.yaml} title={t("asset.k8sPodYAML")} />
+
+                  <K8sLogsPanel
+                    containers={detail.containers}
+                    namespace={detail.namespace}
+                    podName={detail.name}
+                    logContainer={logContainer}
+                    logTailLines={logTailLines}
+                    logStreamID={logStreamID}
+                    logError={logError}
+                    logLines={logLines}
+                    onContainerChange={(container) => {
+                      setLogContainer(container);
+                      if (logStreamID) {
+                        stopLogStream();
+                        startLogStream(detail.namespace, detail.name, container, logTailLines);
+                      }
+                    }}
+                    onTailLinesChange={(lines) => setLogTailLines(lines)}
+                    onStart={() => {
+                      const container = logContainer || detail.containers[0]?.name || "";
+                      startLogStream(detail.namespace, detail.name, container, logTailLines);
+                    }}
+                    onStop={stopLogStream}
+                  />
                 </div>
               );
             })()}
