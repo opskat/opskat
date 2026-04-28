@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -38,8 +41,20 @@ type ClusterInfo struct {
 	Namespaces []NamespaceInfo `json:"namespaces"`
 }
 
-func GetClusterInfo(ctx context.Context, kubeconfig, apiServer, token string) (*ClusterInfo, error) {
-	clientset, err := buildClient(kubeconfig, apiServer, token)
+type ClientOption func(*clientOptions)
+
+type clientOptions struct {
+	dial func(ctx context.Context, network, address string) (net.Conn, error)
+}
+
+func WithDial(dial func(ctx context.Context, network, address string) (net.Conn, error)) ClientOption {
+	return func(opts *clientOptions) {
+		opts.dial = dial
+	}
+}
+
+func GetClusterInfo(ctx context.Context, kubeconfig, apiServer, token string, opts ...ClientOption) (*ClusterInfo, error) {
+	clientset, err := buildClient(kubeconfig, apiServer, token, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -89,9 +104,13 @@ func GetClusterInfo(ctx context.Context, kubeconfig, apiServer, token string) (*
 	return info, nil
 }
 
-func buildClient(kubeconfig, apiServer, token string) (*kubernetes.Clientset, error) {
+func buildClient(kubeconfig, apiServer, token string, opts ...ClientOption) (*kubernetes.Clientset, error) {
 	var config *rest.Config
 	var err error
+	clientOpts := &clientOptions{}
+	for _, opt := range opts {
+		opt(clientOpts)
+	}
 
 	if kubeconfig != "" {
 		clientCfg, err := clientcmd.Load([]byte(kubeconfig))
@@ -113,6 +132,12 @@ func buildClient(kubeconfig, apiServer, token string) (*kubernetes.Clientset, er
 		}
 	} else {
 		return nil, fmt.Errorf("kubeconfig or api_server is required")
+	}
+	if clientOpts.dial != nil {
+		config.Dial = clientOpts.dial
+		config.Proxy = func(*http.Request) (*url.URL, error) {
+			return nil, nil
+		}
 	}
 
 	clientset, err := kubernetes.NewForConfig(config)
@@ -188,8 +213,8 @@ type NamespaceResources struct {
 	ServiceAccounts int    `json:"service_accounts"`
 }
 
-func GetNamespaceResources(ctx context.Context, kubeconfig, apiServer, token, namespace string) (*NamespaceResources, error) {
-	clientset, err := buildClient(kubeconfig, apiServer, token)
+func GetNamespaceResources(ctx context.Context, kubeconfig, apiServer, token, namespace string, opts ...ClientOption) (*NamespaceResources, error) {
+	clientset, err := buildClient(kubeconfig, apiServer, token, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -254,8 +279,8 @@ func getNodeRoles(node *corev1.Node) []string {
 	return roles
 }
 
-func GetNamespacePods(ctx context.Context, kubeconfig, apiServer, token, namespace string) ([]PodListItem, error) {
-	clientset, err := buildClient(kubeconfig, apiServer, token)
+func GetNamespacePods(ctx context.Context, kubeconfig, apiServer, token, namespace string, opts ...ClientOption) ([]PodListItem, error) {
+	clientset, err := buildClient(kubeconfig, apiServer, token, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -301,8 +326,8 @@ func GetNamespacePods(ctx context.Context, kubeconfig, apiServer, token, namespa
 	return result, nil
 }
 
-func GetPodDetail(ctx context.Context, kubeconfig, apiServer, token, namespace, podName string) (*PodDetail, error) {
-	clientset, err := buildClient(kubeconfig, apiServer, token)
+func GetPodDetail(ctx context.Context, kubeconfig, apiServer, token, namespace, podName string, opts ...ClientOption) (*PodDetail, error) {
+	clientset, err := buildClient(kubeconfig, apiServer, token, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -450,8 +475,8 @@ func fmtDuration(d time.Duration) string {
 	return fmt.Sprintf("%dd%dh", days, h)
 }
 
-func StreamPodLogs(ctx context.Context, kubeconfig, apiServer, token, namespace, podName, container string, tailLines int64) (io.ReadCloser, error) {
-	clientset, err := buildClient(kubeconfig, apiServer, token)
+func StreamPodLogs(ctx context.Context, kubeconfig, apiServer, token, namespace, podName, container string, tailLines int64, opts ...ClientOption) (io.ReadCloser, error) {
+	clientset, err := buildClient(kubeconfig, apiServer, token, opts...)
 	if err != nil {
 		return nil, err
 	}

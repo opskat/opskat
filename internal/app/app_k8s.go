@@ -6,11 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/opskat/opskat/internal/k8s"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/asset_svc"
+	"github.com/opskat/opskat/internal/sshpool"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -36,7 +40,7 @@ func (a *App) GetK8sClusterInfo(assetID int64) (string, error) {
 		return "", fmt.Errorf("no kubeconfig or api_server configured for this K8S asset")
 	}
 
-	info, err := k8s.GetClusterInfo(ctx, cfg.Kubeconfig, cfg.ApiServer, token)
+	info, err := k8s.GetClusterInfo(ctx, cfg.Kubeconfig, cfg.ApiServer, token, a.k8sClientOptions(asset, cfg)...)
 	if err != nil {
 		return "", fmt.Errorf("get K8S cluster info: %w", err)
 	}
@@ -70,7 +74,7 @@ func (a *App) GetK8sNamespaceResources(assetID int64, namespace string) (string,
 		return "", fmt.Errorf("no kubeconfig or api_server configured for this K8S asset")
 	}
 
-	res, err := k8s.GetNamespaceResources(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace)
+	res, err := k8s.GetNamespaceResources(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace, a.k8sClientOptions(asset, cfg)...)
 	if err != nil {
 		return "", fmt.Errorf("get K8S namespace resources: %w", err)
 	}
@@ -104,7 +108,7 @@ func (a *App) GetK8sNamespacePods(assetID int64, namespace string) (string, erro
 		return "", fmt.Errorf("no kubeconfig or api_server configured for this K8S asset")
 	}
 
-	pods, err := k8s.GetNamespacePods(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace)
+	pods, err := k8s.GetNamespacePods(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace, a.k8sClientOptions(asset, cfg)...)
 	if err != nil {
 		return "", fmt.Errorf("get K8S namespace pods: %w", err)
 	}
@@ -138,7 +142,7 @@ func (a *App) GetK8sPodDetail(assetID int64, namespace, podName string) (string,
 		return "", fmt.Errorf("no kubeconfig or api_server configured for this K8S asset")
 	}
 
-	detail, err := k8s.GetPodDetail(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace, podName)
+	detail, err := k8s.GetPodDetail(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace, podName, a.k8sClientOptions(asset, cfg)...)
 	if err != nil {
 		return "", fmt.Errorf("get K8S pod detail: %w", err)
 	}
@@ -174,7 +178,7 @@ func (a *App) StartK8sPodLogs(assetID int64, namespace, podName, container strin
 	ctx, cancel := context.WithCancel(a.ctx)
 	a.k8sLogStreams.Store(streamID, cancel)
 
-	reader, err := k8s.StreamPodLogs(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace, podName, container, tailLines)
+	reader, err := k8s.StreamPodLogs(ctx, cfg.Kubeconfig, cfg.ApiServer, token, namespace, podName, container, tailLines, a.k8sClientOptions(asset, cfg)...)
 	if err != nil {
 		cancel()
 		a.k8sLogStreams.Delete(streamID)
@@ -210,4 +214,40 @@ func (a *App) StopK8sPodLogs(streamID string) {
 	if cancel, ok := a.k8sLogStreams.LoadAndDelete(streamID); ok {
 		cancel.(context.CancelFunc)()
 	}
+}
+
+func (a *App) k8sClientOptions(asset *asset_entity.Asset, cfg *asset_entity.K8sConfig) []k8s.ClientOption {
+	tunnelID := asset.SSHTunnelID
+	if tunnelID == 0 {
+		tunnelID = cfg.SSHAssetID
+	}
+	if tunnelID == 0 || a.sshPool == nil {
+		return nil
+	}
+
+	return []k8s.ClientOption{k8s.WithDial(func(ctx context.Context, network, address string) (net.Conn, error) {
+		client, err := a.sshPool.Get(ctx, tunnelID)
+		if err != nil {
+			return nil, fmt.Errorf("get SSH tunnel: %w", err)
+		}
+		conn, err := client.Dial(network, address)
+		if err != nil {
+			a.sshPool.Release(tunnelID)
+			return nil, fmt.Errorf("dial K8S API through SSH tunnel: %w", err)
+		}
+		return &k8sTunnelConn{Conn: conn, pool: a.sshPool, assetID: tunnelID}, nil
+	})}
+}
+
+type k8sTunnelConn struct {
+	net.Conn
+	pool    *sshpool.Pool
+	assetID int64
+	once    sync.Once
+}
+
+func (c *k8sTunnelConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(func() { c.pool.Release(c.assetID) })
+	return err
 }

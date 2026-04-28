@@ -16,6 +16,7 @@ import {
   AlertCircle,
   ChevronRight,
   ChevronDown,
+  Search,
   Play,
   Square,
   ScrollText,
@@ -30,6 +31,7 @@ import {
   StopK8sPodLogs,
 } from "../../../wailsjs/go/app/App";
 import { EventsOn, EventsOff } from "../../../wailsjs/runtime/runtime";
+import { useResizeHandle } from "@opskat/ui";
 
 interface NodeInfo {
   name: string;
@@ -162,6 +164,7 @@ export function K8sClusterPage({ asset }: Props) {
   const [expandedNodes, setExpandedNodes] = useState(false);
   const [expandedNamespaces, setExpandedNamespaces] = useState<Set<string>>(new Set());
   const [expandedPods, setExpandedPods] = useState<Set<string>>(new Set());
+  const [namespaceResourceSearch, setNamespaceResourceSearch] = useState<Record<string, string>>({});
   const [namespaceResources, setNamespaceResources] = useState<Record<string, NamespaceResourcesData>>({});
   const [loadingNamespaces, setLoadingNamespaces] = useState<Set<string>>(new Set());
   const [namespaceErrors, setNamespaceErrors] = useState<Record<string, string>>({});
@@ -176,8 +179,20 @@ export function K8sClusterPage({ asset }: Props) {
   const [logContainer, setLogContainer] = useState("");
   const [logTailLines, setLogTailLines] = useState(200);
   const [logError, setLogError] = useState<string | null>(null);
+  const sidebarRef = useRef<HTMLDivElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
   const logStreamIDRef = useRef<string | null>(null);
+  const {
+    size: sidebarWidth,
+    isResizing: sidebarResizing,
+    handleMouseDown: handleSidebarResize,
+  } = useResizeHandle({
+    defaultSize: 208,
+    minSize: 160,
+    maxSize: 420,
+    storageKey: "k8s_sidebar_width",
+    targetRef: sidebarRef,
+  });
 
   const loadInfo = () => {
     setLoading(true);
@@ -190,6 +205,7 @@ export function K8sClusterPage({ asset }: Props) {
         setActiveTabId("overview");
         setExpandedNamespaces(new Set());
         setExpandedPods(new Set());
+        setNamespaceResourceSearch({});
         setNamespaceResources({});
         setLoadingNamespaces(new Set());
         setNamespaceErrors({});
@@ -451,10 +467,20 @@ export function K8sClusterPage({ asset }: Props) {
   if (!info) return null;
 
   const activeNode = activeTabId.startsWith("node:") ? info.nodes.find((n) => n.name === activeTabId.slice(5)) : null;
+  const podMatchesSearch = (pod: PodListItem, query: string) => {
+    const normalized = query.toLowerCase();
+    return [pod.name, pod.status, pod.node_name, pod.pod_ip, pod.ready]
+      .filter(Boolean)
+      .some((value) => value.toLowerCase().includes(normalized));
+  };
 
   return (
     <div className="flex h-full w-full">
-      <div className="shrink-0 w-52 border-r border-border bg-sidebar h-full overflow-y-auto">
+      <div
+        ref={sidebarRef}
+        className="shrink-0 border-r border-border bg-sidebar h-full overflow-y-auto"
+        style={{ width: sidebarWidth }}
+      >
         <div className="p-3 border-b border-border">
           <h2 className="text-sm font-semibold truncate">{asset.Name}</h2>
           <p className="text-xs text-muted-foreground mt-0.5">v{info.version}</p>
@@ -546,93 +572,130 @@ export function K8sClusterPage({ asset }: Props) {
                     </div>
                   )}
                   {namespaceResources[ns.name] &&
-                    RESOURCE_TYPES.map((rt) => {
-                      const count = namespaceResources[ns.name][rt.key] as number;
-                      const isPods = rt.key === "pods";
-                      const podsExpanded = expandedPods.has(ns.name);
-                      if (isPods) {
-                        return (
-                          <div key={rt.key}>
-                            <div
-                              className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
-                              onClick={() => togglePods(ns.name)}
-                            >
-                              {podsExpanded ? (
-                                <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                              ) : (
-                                <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-                              )}
-                              <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
-                              <span className="truncate">{t(rt.labelKey)}</span>
-                              <span className="ml-auto text-[10px] text-muted-foreground">{count}</span>
-                            </div>
-                            {podsExpanded && (
-                              <div className="ml-3">
-                                {loadingPods.has(ns.name) && (
-                                  <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
-                                    <Loader2 className="h-3 w-3 animate-spin" />
-                                    {t("asset.k8sLoadingPods")}
-                                  </div>
-                                )}
-                                {podErrors[ns.name] && (
-                                  <div
-                                    className="flex items-start gap-1 pl-12 pr-2 py-1 text-xs text-destructive cursor-pointer"
-                                    title={podErrors[ns.name]}
-                                    onClick={() => {
-                                      const next = { ...podErrors };
-                                      delete next[ns.name];
-                                      setPodErrors(next);
-                                      loadPods(ns.name);
-                                    }}
-                                  >
-                                    <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
-                                    <span>{t("asset.k8sNamespaceResourceError")}</span>
-                                  </div>
-                                )}
-                                {namespacePodList[ns.name]?.length === 0 && (
-                                  <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
-                                    {t("asset.k8sNoPods")}
-                                  </div>
-                                )}
-                                {namespacePodList[ns.name]?.map((pod) => (
-                                  <div
-                                    key={pod.name}
-                                    className={`flex items-center gap-1.5 pl-12 pr-2 py-1 rounded-md text-xs cursor-pointer ml-1 ${
-                                      activeTabId === `pod:${ns.name}:${pod.name}`
-                                        ? "bg-muted font-medium"
-                                        : "hover:bg-muted/50"
-                                    }`}
-                                    onClick={() => openTab(`pod:${ns.name}:${pod.name}`, pod.name)}
-                                  >
-                                    <span
-                                      className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                                        pod.status === "Running"
-                                          ? "bg-green-500"
-                                          : pod.status === "Pending"
-                                            ? "bg-yellow-500"
-                                            : "bg-red-500"
-                                      }`}
-                                    />
-                                    <span className="truncate">{pod.name}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      }
+                    (() => {
+                      const query = (namespaceResourceSearch[ns.name] || "").trim();
+                      const normalizedQuery = query.toLowerCase();
+                      const visibleResourceTypes = RESOURCE_TYPES.filter((rt) => {
+                        if (!normalizedQuery) return true;
+                        const resourceLabel = t(rt.labelKey).toLowerCase();
+                        if (resourceLabel.includes(normalizedQuery) || rt.key.includes(normalizedQuery)) return true;
+                        if (rt.key !== "pods") return false;
+                        return namespacePodList[ns.name]?.some((pod) => podMatchesSearch(pod, normalizedQuery));
+                      });
+
                       return (
-                        <div
-                          key={rt.key}
-                          className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
-                          onClick={() => openTab(`ns-res:${ns.name}:${rt.key}`, `${rt.key} (${ns.name})`)}
-                        >
-                          <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
-                          <span className="truncate">{t(rt.labelKey)}</span>
-                          <span className="ml-auto text-[10px] text-muted-foreground">{count}</span>
-                        </div>
+                        <>
+                          <div className="relative my-1 ml-7 mr-2">
+                            <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+                            <input
+                              value={namespaceResourceSearch[ns.name] || ""}
+                              onChange={(e) =>
+                                setNamespaceResourceSearch((prev) => ({ ...prev, [ns.name]: e.target.value }))
+                              }
+                              placeholder={t("asset.search")}
+                              className="h-7 w-full rounded-md border bg-background pl-7 pr-2 text-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[2px] focus-visible:ring-ring/40"
+                            />
+                          </div>
+                          {visibleResourceTypes.length === 0 && (
+                            <div className="flex items-center gap-1.5 pl-8 pr-2 py-1 text-xs text-muted-foreground">
+                              {t("asset.k8sNoResourceMatches")}
+                            </div>
+                          )}
+                          {visibleResourceTypes.map((rt) => {
+                            const count = namespaceResources[ns.name][rt.key] as number;
+                            const isPods = rt.key === "pods";
+                            const podsExpanded = expandedPods.has(ns.name);
+                            if (isPods) {
+                              const pods = namespacePodList[ns.name];
+                              const visiblePods = normalizedQuery
+                                ? pods?.filter((pod) => podMatchesSearch(pod, normalizedQuery))
+                                : pods;
+                              const displayCount = normalizedQuery && pods ? visiblePods?.length || 0 : count;
+                              return (
+                                <div key={rt.key}>
+                                  <div
+                                    className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                                    onClick={() => togglePods(ns.name)}
+                                  >
+                                    {podsExpanded ? (
+                                      <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                    ) : (
+                                      <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                    )}
+                                    <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
+                                    <span className="truncate">{t(rt.labelKey)}</span>
+                                    <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
+                                  </div>
+                                  {podsExpanded && (
+                                    <div className="ml-3">
+                                      {loadingPods.has(ns.name) && (
+                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                          <Loader2 className="h-3 w-3 animate-spin" />
+                                          {t("asset.k8sLoadingPods")}
+                                        </div>
+                                      )}
+                                      {podErrors[ns.name] && (
+                                        <div
+                                          className="flex items-start gap-1 pl-12 pr-2 py-1 text-xs text-destructive cursor-pointer"
+                                          title={podErrors[ns.name]}
+                                          onClick={() => {
+                                            const next = { ...podErrors };
+                                            delete next[ns.name];
+                                            setPodErrors(next);
+                                            loadPods(ns.name);
+                                          }}
+                                        >
+                                          <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                                          <span>{t("asset.k8sNamespaceResourceError")}</span>
+                                        </div>
+                                      )}
+                                      {visiblePods?.length === 0 && (
+                                        <div className="flex items-center gap-1.5 pl-12 pr-2 py-1 text-xs text-muted-foreground">
+                                          {t("asset.k8sNoPods")}
+                                        </div>
+                                      )}
+                                      {visiblePods?.map((pod) => (
+                                        <div
+                                          key={pod.name}
+                                          className={`flex items-center gap-1.5 pl-12 pr-2 py-1 rounded-md text-xs cursor-pointer ml-1 ${
+                                            activeTabId === `pod:${ns.name}:${pod.name}`
+                                              ? "bg-muted font-medium"
+                                              : "hover:bg-muted/50"
+                                          }`}
+                                          onClick={() => openTab(`pod:${ns.name}:${pod.name}`, pod.name)}
+                                        >
+                                          <span
+                                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                              pod.status === "Running"
+                                                ? "bg-green-500"
+                                                : pod.status === "Pending"
+                                                  ? "bg-yellow-500"
+                                                  : "bg-red-500"
+                                            }`}
+                                          />
+                                          <span className="truncate">{pod.name}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            }
+                            return (
+                              <div
+                                key={rt.key}
+                                className="flex items-center gap-1.5 pl-8 pr-2 py-1 rounded-md text-xs cursor-pointer hover:bg-muted/50"
+                                onClick={() => openTab(`ns-res:${ns.name}:${rt.key}`, `${rt.key} (${ns.name})`)}
+                              >
+                                <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
+                                <span className="truncate">{t(rt.labelKey)}</span>
+                                <span className="ml-auto text-[10px] text-muted-foreground">{count}</span>
+                              </div>
+                            );
+                          })}
+                        </>
                       );
-                    })}
+                    })()}
                 </div>
               )}
             </div>
@@ -640,7 +703,11 @@ export function K8sClusterPage({ asset }: Props) {
         </div>
       </div>
 
-      <div className="w-[3px] shrink-0 cursor-col-resize hover:bg-ring/40 active:bg-ring/60 transition-colors" />
+      <div
+        className="w-[3px] shrink-0 cursor-col-resize hover:bg-ring/40 active:bg-ring/60 transition-colors"
+        onMouseDown={handleSidebarResize}
+      />
+      {sidebarResizing && <div className="fixed inset-0 z-50 cursor-col-resize" />}
 
       <div className="flex-1 min-w-0 flex flex-col h-full">
         {innerTabs.length > 0 && (

@@ -21,6 +21,8 @@ export function K8sDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProps)
     /* ignore */
   }
   if (!cfg) return null;
+  const tunnelID = asset.sshTunnelId || cfg.ssh_asset_id;
+  const tunnelName = sshTunnelName(tunnelID);
 
   return (
     <div className="rounded-xl border bg-card p-4">
@@ -31,9 +33,9 @@ export function K8sDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProps)
         {cfg.context && <InfoItem label={t("asset.k8sContext")} value={cfg.context} mono />}
         {cfg.token && <InfoItem label={t("asset.k8sToken")} value={"\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF"} />}
       </div>
-      {sshTunnelName(cfg.ssh_asset_id) && (
+      {tunnelName && (
         <div className="mt-3 pt-3 border-t text-sm">
-          <InfoItem label={t("asset.sshTunnel")} value={sshTunnelName(cfg.ssh_asset_id)!} mono />
+          <InfoItem label={t("asset.sshTunnel")} value={tunnelName} mono />
         </div>
       )}
     </div>

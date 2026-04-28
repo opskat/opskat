@@ -276,6 +276,7 @@
     "k8sNamespaceResources": "Resources",
     "k8sLoadingNamespace": "Loading resources...",
     "k8sNamespaceResourceError": "Failed to load resources",
+    "k8sNoResourceMatches": "No matching resources",
     "k8sPodName": "Name",
     "k8sPodStatus": "Status",
     "k8sPodNode": "Node",

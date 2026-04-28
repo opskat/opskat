@@ -276,6 +276,7 @@
     "k8sNamespaceResources": "资源",
     "k8sLoadingNamespace": "加载资源中...",
     "k8sNamespaceResourceError": "加载资源失败",
+    "k8sNoResourceMatches": "未找到匹配资源",
     "k8sPodName": "名称",
     "k8sPodStatus": "状态",
     "k8sPodNode": "节点",
