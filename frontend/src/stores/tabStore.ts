@@ -28,6 +28,9 @@ export interface QueryTabMeta {
   assetType: "database" | "redis" | "mongodb";
   driver?: string;
   defaultDatabase?: string;
+  redisDatabase?: number;
+  redisScanPageSize?: number;
+  redisKeySeparator?: string;
 }
 
 export interface PageTabMeta {
