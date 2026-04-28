@@ -1,7 +1,8 @@
-import { useRef, useEffect } from "react";
+import { forwardRef } from "react";
 import { useTranslation } from "react-i18next";
 import { ScrollText, Square, Play } from "lucide-react";
 import { K8sSectionCard } from "./K8sSectionCard";
+import { K8sLogTerminal, type K8sLogTerminalHandle } from "./K8sLogTerminal";
 
 interface K8sLogsPanelProps {
   containers: { name: string }[];
@@ -11,31 +12,27 @@ interface K8sLogsPanelProps {
   logTailLines: number;
   logStreamID: string | null;
   logError: string | null;
-  logLines: string[];
   onContainerChange: (container: string) => void;
   onTailLinesChange: (lines: number) => void;
   onStart: () => void;
   onStop: () => void;
 }
 
-export function K8sLogsPanel({
-  containers,
-  logContainer,
-  logTailLines,
-  logStreamID,
-  logError,
-  logLines,
-  onContainerChange,
-  onTailLinesChange,
-  onStart,
-  onStop,
-}: K8sLogsPanelProps) {
+export const K8sLogsPanel = forwardRef<K8sLogTerminalHandle, K8sLogsPanelProps>(function K8sLogsPanel(
+  {
+    containers,
+    logContainer,
+    logTailLines,
+    logStreamID,
+    logError,
+    onContainerChange,
+    onTailLinesChange,
+    onStart,
+    onStop,
+  },
+  ref
+) {
   const { t } = useTranslation();
-  const logEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logLines]);
 
   return (
     <K8sSectionCard>
@@ -91,20 +88,7 @@ export function K8sLogsPanel({
           {t("asset.k8sPodLogsError")}: {logError}
         </div>
       )}
-      <div className="bg-black rounded-lg p-3 text-xs font-mono max-h-96 overflow-y-auto">
-        {logLines.length === 0 && !logStreamID && !logError && (
-          <span className="text-gray-500">{t("asset.k8sPodLogsStopped")}</span>
-        )}
-        {logStreamID && logLines.length === 0 && (
-          <span className="text-gray-500">{t("asset.k8sPodLogsStreaming")}</span>
-        )}
-        {logLines.map((line, i) => (
-          <span key={i} className="text-green-400 block">
-            {line}
-          </span>
-        ))}
-        <div ref={logEndRef} />
-      </div>
+      <K8sLogTerminal ref={ref} />
     </K8sSectionCard>
   );
-}
+})

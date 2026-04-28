@@ -244,13 +244,12 @@ export function K8sClusterPage({ asset }: Props) {
   const [loadingPodDetails, setLoadingPodDetails] = useState<Set<string>>(new Set());
   const [podDetailErrors, setPodDetailErrors] = useState<Record<string, string>>({});
   const [logStreamID, setLogStreamID] = useState<string | null>(null);
-  const [logLines, setLogLines] = useState<string[]>([]);
   const [logContainer, setLogContainer] = useState("");
   const [logTailLines, setLogTailLines] = useState(200);
   const [logError, setLogError] = useState<string | null>(null);
   const sidebarRef = useRef<HTMLDivElement>(null);
-  const logEndRef = useRef<HTMLDivElement>(null);
   const logStreamIDRef = useRef<string | null>(null);
+  const logTerminalRef = useRef<{ write: (data: string) => void; clear: () => void } | null>(null);
   const {
     size: sidebarWidth,
     isResizing: sidebarResizing,
@@ -617,7 +616,7 @@ export function K8sClusterPage({ asset }: Props) {
   const startLogStream = useCallback(
     (ns: string, podName: string, container: string, tailLines: number) => {
       stopLogStream();
-      setLogLines([]);
+      logTerminalRef.current?.clear();
       setLogError(null);
       setLogContainer(container);
 
@@ -631,7 +630,7 @@ export function K8sClusterPage({ asset }: Props) {
 
           EventsOn(dataEvent, (data: string) => {
             const decoded = atob(data);
-            setLogLines((prev) => [...prev, decoded]);
+            logTerminalRef.current?.write(decoded);
           });
 
           EventsOn(errEvent, (err: string) => {
@@ -659,12 +658,6 @@ export function K8sClusterPage({ asset }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    if (logEndRef.current) {
-      logEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [logLines]);
 
   useEffect(() => {
     loadInfo();
@@ -697,7 +690,7 @@ export function K8sClusterPage({ asset }: Props) {
       // 重置日志状态，避免旧 Pod 的容器名残留
       stopLogStream();
       setLogContainer("");
-      setLogLines([]);
+      logTerminalRef.current?.clear();
       setLogError(null);
     }
   };
@@ -1635,6 +1628,7 @@ export function K8sClusterPage({ asset }: Props) {
                   />
 
                   <K8sLogsPanel
+                    ref={logTerminalRef}
                     containers={detail.containers}
                     namespace={detail.namespace}
                     podName={detail.name}
@@ -1642,7 +1636,6 @@ export function K8sClusterPage({ asset }: Props) {
                     logTailLines={logTailLines}
                     logStreamID={logStreamID}
                     logError={logError}
-                    logLines={logLines}
                     onContainerChange={(container) => {
                       setLogContainer(container);
                       if (logStreamID) {
