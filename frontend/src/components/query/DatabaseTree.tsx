@@ -273,7 +273,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                   {/* Tables */}
                   {isExpanded && (
                     <div className="ml-3">
-                      {!dbTables ? (
+                      {dbState.loadingTables[db] || !dbTables ? (
                         <div className="flex items-center gap-1.5 px-2 py-1">
                           <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
                         </div>

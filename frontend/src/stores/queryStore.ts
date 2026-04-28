@@ -41,6 +41,7 @@ export type InnerTab =
 export interface DatabaseTabState {
   databases: string[];
   tables: Record<string, string[]>; // db -> table[]
+  loadingTables: Record<string, boolean>; // db -> isLoading
   expandedDbs: string[];
   loadingDbs: boolean;
   innerTabs: InnerTab[];
@@ -154,6 +155,7 @@ function defaultDbState(): DatabaseTabState {
   return {
     databases: [],
     tables: {},
+    loadingTables: {},
     expandedDbs: [],
     loadingDbs: false,
     innerTabs: [],
@@ -415,6 +417,11 @@ export const useQueryStore = create<QueryState>((set, get) => ({
           [tabId]: { ...s.dbStates[tabId], databases, loadingDbs: false, error: null },
         },
       }));
+
+      // Also refresh tables for already-expanded databases that still exist,
+      // otherwise the top-level refresh button leaves stale table lists.
+      const expanded = get().dbStates[tabId]?.expandedDbs ?? [];
+      await Promise.all(expanded.filter((db) => databases.includes(db)).map((db) => get().loadTables(tabId, db)));
     } catch (err) {
       set((s) => ({
         dbStates: {
@@ -428,6 +435,16 @@ export const useQueryStore = create<QueryState>((set, get) => ({
   loadTables: async (tabId, database) => {
     const tab = getQueryTabFromTabStore(tabId);
     if (!tab) return;
+
+    set((s) => ({
+      dbStates: {
+        ...s.dbStates,
+        [tabId]: {
+          ...s.dbStates[tabId],
+          loadingTables: { ...s.dbStates[tabId].loadingTables, [database]: true },
+        },
+      },
+    }));
 
     try {
       const sql =
@@ -449,14 +466,22 @@ export const useQueryStore = create<QueryState>((set, get) => ({
           [tabId]: {
             ...s.dbStates[tabId],
             tables: { ...s.dbStates[tabId].tables, [database]: tables },
+            loadingTables: { ...s.dbStates[tabId].loadingTables, [database]: false },
           },
         },
       }));
     } catch (err) {
+      // Reset table list to [] (not undefined) so the UI exits the loading
+      // state instead of showing an infinite spinner.
       set((s) => ({
         dbStates: {
           ...s.dbStates,
-          [tabId]: { ...s.dbStates[tabId], error: s.dbStates[tabId]?.error || String(err) },
+          [tabId]: {
+            ...s.dbStates[tabId],
+            tables: { ...s.dbStates[tabId].tables, [database]: [] },
+            loadingTables: { ...s.dbStates[tabId].loadingTables, [database]: false },
+            error: s.dbStates[tabId]?.error || String(err),
+          },
         },
       }));
     }
@@ -465,16 +490,6 @@ export const useQueryStore = create<QueryState>((set, get) => ({
   refreshTables: async (tabId, database) => {
     const state = get().dbStates[tabId];
     if (!state) return;
-    // Clear existing tables for this database and reload
-    set((s) => ({
-      dbStates: {
-        ...s.dbStates,
-        [tabId]: {
-          ...s.dbStates[tabId],
-          tables: { ...s.dbStates[tabId].tables, [database]: undefined as unknown as string[] },
-        },
-      },
-    }));
     await get().loadTables(tabId, database);
   },
 
