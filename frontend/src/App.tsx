@@ -118,6 +118,7 @@ function App() {
     () => localStorage.getItem("sidebar_collapsed") === "true"
   );
   const [aiPanelCollapsed, setAiPanelCollapsed] = useState(() => localStorage.getItem("ai_panel_collapsed") === "true");
+  const [commandOpen, setCommandOpen] = useState(false);
   const [assetTreeWidth, setAssetTreeWidth] = useState(() => {
     const saved = localStorage.getItem("asset_tree_width");
     return saved ? Math.max(160, Math.min(480, Number(saved))) : 224;
@@ -169,9 +170,14 @@ function App() {
     document.addEventListener("mouseup", onMouseUp);
   }, []);
 
+  const toggleCommandPalette = useCallback(() => {
+    setCommandOpen((prev) => !prev);
+  }, []);
+
   useKeyboardShortcuts({
     onToggleAIPanel: toggleAIPanel,
     onToggleSidebar: toggleSidebar,
+    onToggleCommandPalette: toggleCommandPalette,
   });
 
   // 资产表单
@@ -441,6 +447,8 @@ function App() {
               onEditAsset={handleEditAsset}
               onDeleteAsset={handleDeleteAsset}
               onConnectAsset={handleConnectAsset}
+              commandOpen={commandOpen}
+              setCommandOpen={setCommandOpen}
             />
             <SideAssistantPanel collapsed={aiPanelCollapsed} onToggle={toggleAIPanel} />
             {aiPanelCollapsed && <EdgeRevealStrip side="right" onClick={toggleAIPanel} />}

@@ -13,7 +13,7 @@ require (
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20260324055600-60e988689cc6
 	github.com/pkg/sftp v1.13.10
-	github.com/redis/go-redis/v9 v9.7.0
+	github.com/redis/go-redis/v9 v9.7.3
 	github.com/smartystreets/goconvey v1.8.1
 	github.com/stretchr/testify v1.11.1
 	github.com/tetratelabs/wazero v1.11.0

@@ -28,14 +28,17 @@ import { asset_entity } from "../../../wailsjs/go/models";
 import { ExtensionPage } from "@/extension";
 import { TopTabBar } from "./TopTabBar";
 import { useLayoutStore } from "@/stores/layoutStore";
+import { CommandPalette } from "@/components/command/CommandPalette";
 
 interface MainPanelProps {
   onEditAsset: (asset: asset_entity.Asset) => void;
   onDeleteAsset: (id: number) => void;
   onConnectAsset: (asset: asset_entity.Asset) => void;
+  commandOpen: boolean;
+  setCommandOpen: (open: boolean) => void;
 }
 
-export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPanelProps) {
+export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset, commandOpen, setCommandOpen }: MainPanelProps) {
   const { t } = useTranslation();
   const isFullscreen = useFullscreen();
 
@@ -339,6 +342,8 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
           </div>
         )}
       </div>
+
+      <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} onConnectAsset={onConnectAsset} />
     </div>
   );
 }
