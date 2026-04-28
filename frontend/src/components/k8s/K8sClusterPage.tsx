@@ -1702,73 +1702,43 @@ export function K8sClusterPage({ asset }: Props) {
               }
 
               return (
-                <div className="max-w-4xl mx-auto p-6 space-y-6">
-                  <div className="rounded-xl border bg-card p-6">
-                    <div className="flex items-center justify-between mb-4">
-                      <div>
-                        <h3 className="text-base font-semibold font-mono">{svc.name}</h3>
-                        <p className="text-xs text-muted-foreground mt-0.5">{svc.namespace}</p>
-                      </div>
-                      <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400">
-                        {svc.type}
-                      </span>
-                    </div>
+                <div className="max-w-5xl mx-auto p-4 space-y-4">
+                  <K8sSectionCard>
+                    <K8sResourceHeader
+                      name={svc.name}
+                      subtitle={svc.namespace}
+                      status={{ text: svc.type, variant: "info" }}
+                    />
+                    <K8sMetadataGrid
+                      items={[
+                        { label: t("asset.k8sServiceType"), value: svc.type, mono: true },
+                        { label: t("asset.k8sServiceClusterIP"), value: svc.cluster_ip || "-", mono: true },
+                        { label: t("asset.k8sPodAge"), value: svc.age, mono: true },
+                      ]}
+                    />
+                  </K8sSectionCard>
 
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                      <div className="rounded-lg bg-muted/50 p-3">
-                        <div className="text-xs text-muted-foreground mb-1">{t("asset.k8sServiceType")}</div>
-                        <div className="font-mono text-sm font-medium">{svc.type}</div>
-                      </div>
-                      <div className="rounded-lg bg-muted/50 p-3">
-                        <div className="text-xs text-muted-foreground mb-1">{t("asset.k8sServiceClusterIP")}</div>
-                        <div className="font-mono text-sm font-medium">{svc.cluster_ip || "-"}</div>
-                      </div>
-                      <div className="rounded-lg bg-muted/50 p-3">
-                        <div className="text-xs text-muted-foreground mb-1">{t("asset.k8sPodAge")}</div>
-                        <div className="font-mono text-sm font-medium">{svc.age}</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border bg-card p-6">
-                    <h4 className="text-sm font-semibold mb-3">{t("asset.k8sServicePorts")}</h4>
-                    {svc.ports.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">{t("asset.k8sNoEvents")}</p>
-                    ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b">
-                              <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">
-                                {t("asset.k8sPodName")}
-                              </th>
-                              <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">
-                                {t("asset.k8sServicePort")}
-                              </th>
-                              <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">
-                                {t("asset.k8sServiceTargetPort")}
-                              </th>
-                              <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">
-                                {t("asset.k8sServiceProtocol")}
-                              </th>
-                              <th className="text-left py-2 text-xs text-muted-foreground font-medium">NodePort</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {svc.ports.map((p, i) => (
-                              <tr key={i} className="border-b last:border-0">
-                                <td className="py-2 pr-4 font-mono text-muted-foreground">{p.name || "-"}</td>
-                                <td className="py-2 pr-4 font-mono">{p.port}</td>
-                                <td className="py-2 pr-4 font-mono text-muted-foreground">{p.target_port || "-"}</td>
-                                <td className="py-2 pr-4 text-xs">{p.protocol}</td>
-                                <td className="py-2 font-mono text-muted-foreground">{p.node_port || "-"}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
+                  <K8sTableSection
+                    title={t("asset.k8sServicePorts")}
+                    columns={[
+                      { key: "name", label: t("asset.k8sPodName") },
+                      { key: "port", label: t("asset.k8sServicePort") },
+                      { key: "target_port", label: t("asset.k8sServiceTargetPort") },
+                      { key: "protocol", label: t("asset.k8sServiceProtocol") },
+                      { key: "node_port", label: "NodePort" },
+                    ]}
+                    data={svc.ports}
+                    emptyText={t("asset.k8sNoEvents")}
+                    renderRow={(p, i) => (
+                      <tr key={i} className="border-b last:border-0">
+                        <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">{p.name || "-"}</td>
+                        <td className="py-2 pr-4 font-mono text-sm">{p.port}</td>
+                        <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">{p.target_port || "-"}</td>
+                        <td className="py-2 pr-4 text-xs">{p.protocol}</td>
+                        <td className="py-2 font-mono text-xs text-muted-foreground">{p.node_port || "-"}</td>
+                      </tr>
                     )}
-                  </div>
+                  />
                 </div>
               );
             })()}
@@ -1791,43 +1761,30 @@ export function K8sClusterPage({ asset }: Props) {
               const dataEntries = Object.entries(cm.data || {});
 
               return (
-                <div className="max-w-4xl mx-auto p-6 space-y-6">
-                  <div className="rounded-xl border bg-card p-6">
-                    <div className="flex items-center justify-between mb-4">
-                      <div>
-                        <h3 className="text-base font-semibold font-mono">{cm.name}</h3>
-                        <p className="text-xs text-muted-foreground mt-0.5">{cm.namespace}</p>
-                      </div>
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
-                        {dataEntries.length} key{dataEntries.length !== 1 ? "s" : ""}
-                      </span>
-                    </div>
+                <div className="max-w-5xl mx-auto p-4 space-y-4">
+                  <K8sSectionCard>
+                    <K8sResourceHeader
+                      name={cm.name}
+                      subtitle={cm.namespace}
+                      status={{ text: `${dataEntries.length} key${dataEntries.length !== 1 ? "s" : ""}`, variant: "neutral" }}
+                    />
+                    <K8sMetadataGrid items={[{ label: t("asset.k8sPodAge"), value: cm.age, mono: true }]} />
+                  </K8sSectionCard>
 
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                      <div className="rounded-lg bg-muted/50 p-3">
-                        <div className="text-xs text-muted-foreground mb-1">{t("asset.k8sPodAge")}</div>
-                        <div className="font-mono text-sm font-medium">{cm.age}</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border bg-card p-6">
-                    <h4 className="text-sm font-semibold mb-3">Data</h4>
+                  <K8sSectionCard title="Data">
                     {dataEntries.length === 0 ? (
                       <p className="text-xs text-muted-foreground">{t("asset.k8sNoEvents")}</p>
                     ) : (
                       <div className="space-y-3">
                         {dataEntries.map(([key, value]) => (
-                          <div key={key} className="rounded-lg border p-3">
-                            <div className="text-xs text-muted-foreground mb-1 font-medium">{key}</div>
-                            <pre className="bg-muted/50 rounded p-3 text-xs font-mono max-h-64 overflow-y-auto whitespace-pre-wrap">
-                              {value}
-                            </pre>
+                          <div key={key}>
+                            <div className="text-xs text-muted-foreground font-medium mb-1">{key}</div>
+                            <K8sCodeBlock code={value} maxHeight="max-h-64" />
                           </div>
                         ))}
                       </div>
                     )}
-                  </div>
+                  </K8sSectionCard>
                 </div>
               );
             })()}
@@ -1857,50 +1814,41 @@ export function K8sClusterPage({ asset }: Props) {
               };
 
               return (
-                <div className="max-w-4xl mx-auto p-6 space-y-6">
-                  <div className="rounded-xl border bg-card p-6">
-                    <div className="flex items-center justify-between mb-4">
-                      <div>
-                        <h3 className="text-base font-semibold font-mono">{secret.name}</h3>
-                        <p className="text-xs text-muted-foreground mt-0.5">{secret.namespace}</p>
-                      </div>
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
-                        {secret.type}
-                      </span>
-                    </div>
+                <div className="max-w-5xl mx-auto p-4 space-y-4">
+                  <K8sSectionCard>
+                    <K8sResourceHeader
+                      name={secret.name}
+                      subtitle={secret.namespace}
+                      status={{ text: secret.type, variant: "neutral" }}
+                    />
+                    <K8sMetadataGrid
+                      items={[
+                        { label: t("asset.k8sSecretType"), value: secret.type, mono: true },
+                        { label: t("asset.k8sPodAge"), value: secret.age, mono: true },
+                      ]}
+                    />
+                  </K8sSectionCard>
 
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                      <div className="rounded-lg bg-muted/50 p-3">
-                        <div className="text-xs text-muted-foreground mb-1">{t("asset.k8sSecretType")}</div>
-                        <div className="font-mono text-sm font-medium">{secret.type}</div>
-                      </div>
-                      <div className="rounded-lg bg-muted/50 p-3">
-                        <div className="text-xs text-muted-foreground mb-1">{t("asset.k8sPodAge")}</div>
-                        <div className="font-mono text-sm font-medium">{secret.age}</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border bg-card p-6">
-                    <h4 className="text-sm font-semibold mb-3">{t("asset.k8sSecretData")}</h4>
+                  <K8sSectionCard title={t("asset.k8sSecretData")}>
                     {dataEntries.length === 0 ? (
                       <p className="text-xs text-muted-foreground">{t("asset.k8sNoEvents")}</p>
                     ) : (
                       <div className="space-y-3">
-                        {dataEntries.map(([key, value]) => (
-                          <div key={key} className="rounded-lg border p-3">
-                            <div className="flex items-center justify-between mb-1">
-                              <span className="text-xs text-muted-foreground font-medium">{key}</span>
-                              <span className="text-[10px] text-muted-foreground">{decodeValue(value).length}B</span>
+                        {dataEntries.map(([key, value]) => {
+                          const decoded = decodeValue(value);
+                          return (
+                            <div key={key}>
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-xs text-muted-foreground font-medium">{key}</span>
+                                <span className="text-[10px] text-muted-foreground">{decoded.length}B</span>
+                              </div>
+                              <K8sCodeBlock code={decoded} maxHeight="max-h-32" />
                             </div>
-                            <pre className="bg-muted/50 rounded p-3 text-xs font-mono max-h-32 overflow-y-auto whitespace-pre-wrap break-all">
-                              {decodeValue(value)}
-                            </pre>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
-                  </div>
+                  </K8sSectionCard>
                 </div>
               );
             })()}
