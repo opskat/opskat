@@ -242,11 +242,13 @@ export function CommandPalette({ open, onOpenChange, onConnectAsset }: CommandPa
 
     if (e.key === "ArrowDown") {
       e.preventDefault();
+      if (flatRows.length === 0) return;
       setActiveIndex((i) => Math.min(i + 1, flatRows.length - 1));
       return;
     }
     if (e.key === "ArrowUp") {
       e.preventDefault();
+      if (flatRows.length === 0) return;
       setActiveIndex((i) => Math.max(i - 1, 0));
       return;
     }
@@ -342,73 +344,79 @@ export function CommandPalette({ open, onOpenChange, onConnectAsset }: CommandPa
             {emptyKey ? (
               <p className="px-4 py-8 text-center text-sm text-muted-foreground">{t(emptyKey)}</p>
             ) : (
-              sections.map((section) => (
-                <div key={section.label}>
-                  <p className="px-3 py-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    {section.label}
-                  </p>
-                  {section.rows.map((row) => {
-                    const idx = rowIndex++;
-                    const isActive = idx === activeIndex;
+              <div role="listbox" aria-label={t("commandPalette.placeholder")}>
+                {sections.map((section) => (
+                  <div key={section.label}>
+                    <p className="px-3 py-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      {section.label}
+                    </p>
+                    {section.rows.map((row) => {
+                      const idx = rowIndex++;
+                      const isActive = idx === activeIndex;
 
-                    if (row.kind === "tab") {
-                      const { tab } = row;
-                      const key = badgeKey(tab);
-                      const segments = highlightMatch(tab.label, query);
+                      if (row.kind === "tab") {
+                        const { tab } = row;
+                        const key = badgeKey(tab);
+                        const segments = highlightMatch(tab.label, query);
+                        return (
+                          <button
+                            key={row.id}
+                            type="button"
+                            role="option"
+                            data-active-index={idx}
+                            aria-selected={isActive}
+                            className={cn(
+                              "flex w-full items-center gap-2.5 px-3 py-2 cursor-pointer select-none rounded-sm mx-1 text-left",
+                              isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
+                            )}
+                            onClick={() => activateRow(row)}
+                            onMouseEnter={() => setActiveIndex(idx)}
+                          >
+                            {/* Green dot: open tab indicator */}
+                            <span className="h-1.5 w-1.5 rounded-full bg-green-500 shrink-0" />
+                            {renderIcon(resolveTabIcon(tab))}
+                            <span className="flex-1 truncate text-sm">
+                              <HighlightedText segments={segments} />
+                            </span>
+                            {key && (
+                              <span className="shrink-0 rounded-sm bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                                {t(key)}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      }
+
+                      // Asset row
+                      const { asset, groupPath } = row;
+                      const assetIconMeta = resolveAssetIcon(asset);
+                      const segments = highlightMatch(asset.Name, query);
+
                       return (
-                        <div
+                        <button
                           key={row.id}
+                          type="button"
+                          role="option"
                           data-active-index={idx}
                           aria-selected={isActive}
                           className={cn(
-                            "flex items-center gap-2.5 px-3 py-2 cursor-pointer select-none rounded-sm mx-1",
+                            "flex w-full items-center gap-2.5 px-3 py-2 cursor-pointer select-none rounded-sm mx-1 text-left",
                             isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
                           )}
                           onClick={() => activateRow(row)}
                           onMouseEnter={() => setActiveIndex(idx)}
                         >
-                          {/* Green dot: open tab indicator */}
-                          <span className="h-1.5 w-1.5 rounded-full bg-green-500 shrink-0" />
-                          {renderIcon(resolveTabIcon(tab))}
-                          <span className="flex-1 truncate text-sm">
+                          {renderIcon(assetIconMeta)}
+                          <span className="flex-1 min-w-0 truncate text-sm">
                             <HighlightedText segments={segments} />
+                            {groupPath && <span className="ml-2 text-xs text-muted-foreground">{groupPath}</span>}
                           </span>
-                          {key && (
-                            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-                              {t(key)}
-                            </span>
-                          )}
-                        </div>
+                        </button>
                       );
-                    }
-
-                    // Asset row
-                    const { asset, groupPath } = row;
-                    const assetIconMeta = resolveAssetIcon(asset);
-                    const segments = highlightMatch(asset.Name, query);
-
-                    return (
-                      <div
-                        key={row.id}
-                        data-active-index={idx}
-                        aria-selected={isActive}
-                        className={cn(
-                          "flex items-center gap-2.5 px-3 py-2 cursor-pointer select-none rounded-sm mx-1",
-                          isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
-                        )}
-                        onClick={() => activateRow(row)}
-                        onMouseEnter={() => setActiveIndex(idx)}
-                      >
-                        {renderIcon(assetIconMeta)}
-                        <span className="flex-1 min-w-0 truncate text-sm">
-                          <HighlightedText segments={segments} />
-                          {groupPath && <span className="ml-2 text-xs text-muted-foreground">{groupPath}</span>}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              ))
+                    })}
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </ScrollArea>

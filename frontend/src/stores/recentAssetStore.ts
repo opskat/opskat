@@ -12,7 +12,13 @@ interface RecentAssetState {
 function loadRecent(): number[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
+    if (!raw) {
+      return [];
+    }
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === "number" && Number.isFinite(item))
+      ? parsed
+      : [];
   } catch {
     return [];
   }
