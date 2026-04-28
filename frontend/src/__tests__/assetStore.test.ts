@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useAssetStore } from "../stores/assetStore";
+import { useRecentAssetStore } from "../stores/recentAssetStore";
 import {
   ListAssets,
   ListGroups,
@@ -18,6 +19,7 @@ vi.mocked(ListGroups).mockResolvedValue([]);
 describe("assetStore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     useAssetStore.setState({
       assets: [],
       groups: [],
@@ -26,6 +28,7 @@ describe("assetStore", () => {
       loading: false,
       initialized: false,
     });
+    useRecentAssetStore.setState({ recentIds: [] });
   });
 
   describe("fetchAssets", () => {
@@ -111,6 +114,36 @@ describe("assetStore", () => {
       await useAssetStore.getState().deleteAsset(1);
       expect(DeleteAsset).toHaveBeenCalledWith(1);
       expect(useAssetStore.getState().selectedAssetId).toBeNull();
+    });
+
+    it("deleteAsset removes the asset from recentAssetStore after backend succeeds", async () => {
+      vi.mocked(DeleteAsset).mockResolvedValue(undefined as any);
+      vi.mocked(ListAssets).mockResolvedValue([]);
+      vi.mocked(ListGroups).mockResolvedValue([]);
+
+      // Pre-seed the recent store as if the asset was previously opened
+      useRecentAssetStore.getState().touch(42);
+      expect(useRecentAssetStore.getState().recentIds.includes(42)).toBe(true);
+
+      await useAssetStore.getState().deleteAsset(42);
+
+      expect(useRecentAssetStore.getState().recentIds.includes(42)).toBe(false);
+    });
+
+    it("does not remove from recentAssetStore when backend deleteAsset fails", async () => {
+      vi.mocked(DeleteAsset).mockRejectedValue(new Error("backend error"));
+      vi.mocked(ListAssets).mockResolvedValue([]);
+      vi.mocked(ListGroups).mockResolvedValue([]);
+
+      useRecentAssetStore.getState().touch(99);
+
+      await useAssetStore
+        .getState()
+        .deleteAsset(99)
+        .catch(() => {});
+
+      // Recent entry should remain because the backend call failed
+      expect(useRecentAssetStore.getState().recentIds.includes(99)).toBe(true);
     });
 
     it("getAsset calls backend", async () => {

@@ -12,6 +12,7 @@ import {
   UpdateGroup,
   DeleteGroup,
 } from "../../wailsjs/go/app/App";
+import { useRecentAssetStore } from "./recentAssetStore";
 
 interface AssetState {
   assets: asset_entity.Asset[];
@@ -77,6 +78,7 @@ export const useAssetStore = create<AssetState>()(
 
       deleteAsset: async (id) => {
         await DeleteAsset(id);
+        useRecentAssetStore.getState().remove(id);
         set({ selectedAssetId: null });
         await get().refresh();
       },
