@@ -28,6 +28,7 @@ describe("terminalStore.connect", () => {
     useTabStore.setState({ tabs: [], activeTabId: null });
     useTerminalStore.setState({
       tabData: {},
+      sessionSync: {},
       connections: {},
       connectingAssetIds: new Set(),
     });
@@ -77,6 +78,7 @@ describe("terminalStore.connect", () => {
           splitTree: { type: "terminal", sessionId: "session-abc" },
           activePaneId: "session-abc",
           panes: { "session-abc": { sessionId: "session-abc", connected: true, connectedAt: Date.now() } },
+          directoryFollowMode: "off",
         },
       },
     });
@@ -175,6 +177,7 @@ describe("terminalStore.connect", () => {
           splitTree: { type: "terminal", sessionId: "session-abc" },
           activePaneId: "session-abc",
           panes: { "session-abc": { sessionId: "session-abc", connected: true, connectedAt: Date.now() } },
+          directoryFollowMode: "off",
         },
       },
     });
@@ -254,5 +257,46 @@ describe("terminalStore.connect", () => {
 
     resolveConnect!("conn-5");
     await promise;
+  });
+});
+
+describe("terminalStore directory sync", () => {
+  beforeEach(() => {
+    useTerminalStore.setState({
+      tabData: {
+        tab1: {
+          splitTree: { type: "terminal", sessionId: "s1" },
+          activePaneId: "s1",
+          panes: { s1: { sessionId: "s1", connected: true, connectedAt: Date.now() } },
+          directoryFollowMode: "off",
+        },
+      },
+      sessionSync: {},
+    });
+  });
+
+  it("stores sync state per session", () => {
+    useTerminalStore.getState().setSessionSyncState("s1", {
+      sessionId: "s1",
+      cwd: "/srv/app",
+      cwdKnown: true,
+      shell: "/bin/bash",
+      shellType: "bash",
+      supported: true,
+      promptReady: true,
+      promptClean: true,
+      busy: false,
+      status: "ready",
+    });
+
+    expect(useTerminalStore.getState().sessionSync.s1?.cwd).toBe("/srv/app");
+  });
+
+  it("toggles directory follow mode per tab", () => {
+    useTerminalStore.getState().setDirectoryFollowMode("tab1", "always");
+    expect(useTerminalStore.getState().tabData.tab1.directoryFollowMode).toBe("always");
+
+    useTerminalStore.getState().setDirectoryFollowMode("tab1", "off");
+    expect(useTerminalStore.getState().tabData.tab1.directoryFollowMode).toBe("off");
   });
 });

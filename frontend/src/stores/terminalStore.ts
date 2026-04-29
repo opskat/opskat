@@ -5,6 +5,7 @@ import {
   RespondAuthChallenge,
   RespondHostKeyVerify,
   DisconnectSSH,
+  GetSSHSyncState,
   SplitSSH,
   UpdateAssetPassword,
   WriteSSH,
@@ -35,11 +36,28 @@ export interface TerminalPane {
   connectedAt: number;
 }
 
+export interface TerminalDirectorySyncState {
+  sessionId: string;
+  cwd?: string;
+  cwdKnown: boolean;
+  shell?: string;
+  shellType?: string;
+  supported: boolean;
+  promptReady: boolean;
+  promptClean: boolean;
+  busy: boolean;
+  status: "initializing" | "ready" | "unsupported";
+  lastError?: string;
+}
+
+export type TerminalDirectoryFollowMode = "off" | "always";
+
 // Business data per terminal tab (split tree, panes, connection state)
 export interface TerminalTabData {
   splitTree: SplitNode;
   activePaneId: string;
   panes: Record<string, TerminalPane>;
+  directoryFollowMode: TerminalDirectoryFollowMode;
   /** Snippet content to send once the first pane becomes connected. Cleared after write. */
   pendingInput?: string;
 }
@@ -148,6 +166,37 @@ export function getTerminalActiveAssetIds(): Set<number> {
     }
   }
   return ids;
+}
+
+const syncListeners = new Set<string>();
+
+function registerSessionSyncListener(sessionId: string) {
+  if (!sessionId || syncListeners.has(sessionId)) return;
+  syncListeners.add(sessionId);
+
+  const eventName = `ssh:sync:${sessionId}`;
+  EventsOn(eventName, (state: TerminalDirectorySyncState) => {
+    useTerminalStore.getState().setSessionSyncState(sessionId, state);
+  });
+
+  GetSSHSyncState(sessionId)
+    .then((state) => {
+      if (!syncListeners.has(sessionId)) return;
+      useTerminalStore.getState().setSessionSyncState(sessionId, state as TerminalDirectorySyncState);
+    })
+    .catch(() => {
+      /* ignore initial sync fetch errors; live event will reconcile */
+    });
+}
+
+function unregisterSessionSyncListener(sessionId: string) {
+  if (!syncListeners.delete(sessionId)) return;
+  EventsOff(`ssh:sync:${sessionId}`);
+  useTerminalStore.setState((state) => {
+    const next = { ...state.sessionSync };
+    delete next[sessionId];
+    return { sessionSync: next };
+  });
 }
 
 // === Connection event listener (shared by connect/reconnect/restore) ===
@@ -291,6 +340,7 @@ function setupConnectionListener(
 interface TerminalState {
   // Business data keyed by tab id
   tabData: Record<string, TerminalTabData>;
+  sessionSync: Record<string, TerminalDirectorySyncState>;
   connectingAssetIds: Set<number>;
   connections: Record<string, ConnectionState>;
 
@@ -312,6 +362,8 @@ interface TerminalState {
 
   // Split pane actions
   setActivePaneId: (tabId: string, paneId: string) => void;
+  setSessionSyncState: (sessionId: string, state: TerminalDirectorySyncState) => void;
+  setDirectoryFollowMode: (tabId: string, mode: TerminalDirectoryFollowMode) => void;
   splitPane: (tabId: string, direction: "horizontal" | "vertical") => void;
   closePane: (tabId: string, sessionId: string) => void;
   setSplitRatio: (tabId: string, path: number[], ratio: number) => void;
@@ -319,6 +371,7 @@ interface TerminalState {
 
 export const useTerminalStore = create<TerminalState>((set, get) => ({
   tabData: {},
+  sessionSync: {},
   connectingAssetIds: new Set(),
   connections: {},
 
@@ -389,6 +442,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             splitTree: { type: "connecting", connectionId },
             activePaneId: connectionId,
             panes: {},
+            directoryFollowMode: "off",
             pendingInput: opts?.initialInput,
           },
         },
@@ -428,6 +482,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
               splitTree: newTree,
               activePaneId: sessionId,
               panes: { [sessionId]: { sessionId, connected: true, connectedAt: Date.now() } },
+              directoryFollowMode: data.directoryFollowMode,
               // pendingInput intentionally not forwarded — write happens below
             };
 
@@ -439,6 +494,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
           // Update tab id in tabStore
           tabStore.replaceTabId(connectionId, sessionId);
+          registerSessionSyncListener(sessionId);
 
           // Write pending snippet input (no trailing \r — user sees content and decides to execute)
           if (pendingInput) {
@@ -477,6 +533,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const sessionId = data.activePaneId;
     const pane = data.panes[sessionId];
 
+    unregisterSessionSyncListener(sessionId);
     if (pane?.connected) {
       DisconnectSSH(sessionId);
     }
@@ -555,6 +612,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
               connections: newConnections,
             };
           });
+          registerSessionSyncListener(newSessionId);
         });
       })
       .catch((err) => {
@@ -710,6 +768,31 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     });
   },
 
+  setSessionSyncState: (sessionId, syncState) => {
+    set((state) => ({
+      sessionSync: {
+        ...state.sessionSync,
+        [sessionId]: syncState,
+      },
+    }));
+  },
+
+  setDirectoryFollowMode: (tabId, mode) => {
+    set((state) => {
+      const data = state.tabData[tabId];
+      if (!data) return state;
+      return {
+        tabData: {
+          ...state.tabData,
+          [tabId]: {
+            ...data,
+            directoryFollowMode: mode,
+          },
+        },
+      };
+    });
+  },
+
   splitPane: (tabId, direction) => {
     const data = get().tabData[tabId];
     if (!data) return;
@@ -761,6 +844,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             },
           };
         });
+        registerSessionSyncListener(sessionId);
       })
       .catch((err) => {
         console.error("Split connection failed:", err);
@@ -783,6 +867,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     if (!data) return;
 
     const pane = data.panes[sessionId];
+    unregisterSessionSyncListener(sessionId);
     if (pane?.connected) {
       DisconnectSSH(sessionId);
     }
@@ -809,7 +894,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     set((state) => ({
       tabData: {
         ...state.tabData,
-        [tabId]: { splitTree: newTree, activePaneId: newActivePaneId, panes: newPanes },
+        [tabId]: {
+          ...data,
+          splitTree: newTree,
+          activePaneId: newActivePaneId,
+          panes: newPanes,
+        },
       },
     }));
 
@@ -849,6 +939,7 @@ registerTabCloseHook((tab) => {
   // Disconnect all panes and drop their persistent xterm instances.
   if (data) {
     for (const pane of Object.values(data.panes)) {
+      unregisterSessionSyncListener(pane.sessionId);
       if (pane.connected) {
         DisconnectSSH(pane.sessionId);
       }
@@ -880,6 +971,7 @@ registerTabRestoreHook("terminal", (tabs) => {
       splitTree: { type: "terminal", sessionId: tab.id },
       activePaneId: tab.id,
       panes: { [tab.id]: { sessionId: tab.id, connected: false, connectedAt: 0 } },
+      directoryFollowMode: "off",
     };
   }
   useTerminalStore.setState({ tabData });

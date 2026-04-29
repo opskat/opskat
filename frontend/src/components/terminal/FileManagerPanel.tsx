@@ -18,10 +18,12 @@ import {
   FolderOpen,
 } from "lucide-react";
 import { cn, Button, Input, ScrollArea, ConfirmDialog } from "@opskat/ui";
-import { SFTPListDir, SFTPGetwd, SFTPDelete } from "../../../wailsjs/go/app/App";
+import { ChangeSSHDirectory, SFTPListDir, SFTPGetwd, SFTPDelete } from "../../../wailsjs/go/app/App";
 import { OnFileDrop, OnFileDropOff } from "../../../wailsjs/runtime/runtime";
 import { useSFTPStore } from "@/stores/sftpStore";
+import { useTerminalStore } from "@/stores/terminalStore";
 import { sftp_svc } from "../../../wailsjs/go/models";
+import { toast } from "sonner";
 
 // --- Helpers ---
 
@@ -38,6 +40,23 @@ function formatDate(timestamp: number): string {
     month: "2-digit",
     day: "2-digit",
   });
+}
+
+function normalizeRemotePath(basePath: string, nextPath: string): string {
+  const raw = nextPath.trim();
+  if (!raw) return basePath || "/";
+  const combined = raw.startsWith("/") ? raw : `${basePath === "/" ? "" : basePath}/${raw}`;
+  const parts = combined.split("/");
+  const normalized: string[] = [];
+  for (const part of parts) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      normalized.pop();
+      continue;
+    }
+    normalized.push(part);
+  }
+  return "/" + normalized.join("/");
 }
 
 const HANDLE_PX = 4;
@@ -235,6 +254,32 @@ function TransferRow({
   );
 }
 
+function formatSyncError(t: (key: string) => string, error: unknown): string {
+  const message = String(error);
+  switch (message) {
+    case "DIRSYNC_UNSUPPORTED":
+      return t("sftp.sync.unsupported");
+    case "DIRSYNC_CWD_UNKNOWN":
+      return t("sftp.sync.cwdUnknown");
+    case "DIRSYNC_BUSY":
+      return t("sftp.sync.busy");
+    case "DIRSYNC_PENDING":
+      return t("sftp.sync.pending");
+    case "DIRSYNC_TIMEOUT":
+      return t("sftp.sync.timeout");
+    case "DIRSYNC_NOT_FOUND":
+      return t("sftp.sync.notFound");
+    case "DIRSYNC_NOT_DIRECTORY":
+      return t("sftp.sync.notDirectory");
+    case "DIRSYNC_ACCESS_DENIED":
+      return t("sftp.sync.accessDenied");
+    case "DIRSYNC_REMOTE_CHDIR_FAILED":
+      return t("sftp.sync.remoteFailed");
+    default:
+      return message;
+  }
+}
+
 // --- Main Panel ---
 
 interface FileManagerPanelProps {
@@ -245,12 +290,13 @@ interface FileManagerPanelProps {
   onWidthChange: (width: number) => void;
 }
 
-export function FileManagerPanel({ sessionId, isOpen, width, onWidthChange }: FileManagerPanelProps) {
+export function FileManagerPanel({ tabId, sessionId, isOpen, width, onWidthChange }: FileManagerPanelProps) {
   const { t } = useTranslation();
 
-  // File browsing state
-  const [currentPath, setCurrentPath] = useState("/");
-  const [pathInput, setPathInput] = useState("/");
+  const storedPath = useSFTPStore((s) => s.fileManagerPaths[tabId]);
+  const currentPath = storedPath || "/";
+  const setCurrentPath = useSFTPStore((s) => s.setFileManagerPath);
+  const [pathInput, setPathInput] = useState(currentPath);
   const [entries, setEntries] = useState<sftp_svc.FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -275,6 +321,7 @@ export function FileManagerPanel({ sessionId, isOpen, width, onWidthChange }: Fi
   // Track whether initial load happened
   const loadedRef = useRef(false);
   const lastSessionRef = useRef<string | null>(null);
+  const loadRequestRef = useRef(0);
 
   // Refs
   const panelRef = useRef<HTMLDivElement>(null);
@@ -289,6 +336,10 @@ export function FileManagerPanel({ sessionId, isOpen, width, onWidthChange }: Fi
   const startDownloadDir = useSFTPStore((s) => s.startDownloadDir);
   const allTransfers = useSFTPStore((s) => s.transfers);
   const clearCompletedForSession = useSFTPStore((s) => s.clearCompletedForSession);
+  const directoryFollowMode = useTerminalStore((s) => s.tabData[tabId]?.directoryFollowMode ?? "off");
+  const setDirectoryFollowMode = useTerminalStore((s) => s.setDirectoryFollowMode);
+  const sessionSync = useTerminalStore((s) => s.sessionSync[sessionId]);
+  const paneConnected = useTerminalStore((s) => s.tabData[tabId]?.panes[sessionId]?.connected ?? false);
 
   const sessionTransfers = useMemo(
     () => Object.values(allTransfers).filter((t) => t.sessionId === sessionId),
@@ -298,21 +349,81 @@ export function FileManagerPanel({ sessionId, isOpen, width, onWidthChange }: Fi
   // === File browsing ===
   const loadDir = useCallback(
     async (dirPath: string) => {
+      const requestId = ++loadRequestRef.current;
+      const normalizedPath = normalizeRemotePath(currentPathRef.current, dirPath);
       setLoading(true);
       setError(null);
       setSelected(null);
       try {
-        const result = await SFTPListDir(sessionId, dirPath);
+        const result = await SFTPListDir(sessionId, normalizedPath);
+        if (requestId !== loadRequestRef.current) return false;
         setEntries(result || []);
-        setCurrentPath(dirPath);
-        setPathInput(dirPath);
+        setCurrentPath(tabId, normalizedPath);
+        setPathInput(normalizedPath);
+        return true;
       } catch (e) {
+        if (requestId !== loadRequestRef.current) return false;
         setError(String(e));
+        return false;
       } finally {
-        setLoading(false);
+        if (requestId === loadRequestRef.current) {
+          setLoading(false);
+        }
       }
     },
-    [sessionId]
+    [sessionId, setCurrentPath, tabId]
+  );
+
+  useEffect(() => {
+    setPathInput(currentPath);
+  }, [currentPath]);
+
+  const showSyncError = useCallback(
+    (err: unknown) => {
+      toast.error(formatSyncError(t, err));
+    },
+    [t]
+  );
+
+  const syncPanelFromTerminal = useCallback(async () => {
+    if (!sessionSync) {
+      showSyncError("DIRSYNC_CWD_UNKNOWN");
+      return false;
+    }
+    if (!sessionSync.supported) {
+      showSyncError("DIRSYNC_UNSUPPORTED");
+      return false;
+    }
+    if (!sessionSync.cwdKnown || !sessionSync.cwd) {
+      showSyncError("DIRSYNC_CWD_UNKNOWN");
+      return false;
+    }
+    return loadDir(sessionSync.cwd);
+  }, [loadDir, sessionSync, showSyncError]);
+
+  const syncTerminalToPath = useCallback(
+    async (targetPath: string) => {
+      try {
+        await ChangeSSHDirectory(sessionId, targetPath);
+        return true;
+      } catch (e) {
+        showSyncError(e);
+        return false;
+      }
+    },
+    [sessionId, showSyncError]
+  );
+
+  const navigateToPath = useCallback(
+    async (dirPath: string) => {
+      const targetPath = normalizeRemotePath(currentPathRef.current, dirPath);
+      if (directoryFollowMode === "always") {
+        const changed = await syncTerminalToPath(targetPath);
+        if (!changed) return false;
+      }
+      return loadDir(targetPath);
+    },
+    [directoryFollowMode, loadDir, syncTerminalToPath]
   );
 
   // Load directory only once on first open, or when session changes
@@ -325,17 +436,33 @@ export function FileManagerPanel({ sessionId, isOpen, width, onWidthChange }: Fi
     if (!isOpen || loadedRef.current) return;
     loadedRef.current = true;
 
+    if (directoryFollowMode === "always" && sessionSync?.cwdKnown && sessionSync.cwd) {
+      void loadDir(sessionSync.cwd);
+      return;
+    }
+    if (storedPath) {
+      void loadDir(storedPath);
+      return;
+    }
+
     SFTPGetwd(sessionId)
       .then((home) => loadDir(home || "/"))
       .catch(() => loadDir("/"));
-  }, [sessionId, isOpen, loadDir]);
+  }, [sessionId, isOpen, directoryFollowMode, sessionSync?.cwdKnown, sessionSync?.cwd, storedPath, loadDir]);
+
+  useEffect(() => {
+    if (!isOpen || directoryFollowMode !== "always") return;
+    if (!sessionSync?.cwdKnown || !sessionSync.cwd) return;
+    if (sessionSync.cwd === currentPath) return;
+    void loadDir(sessionSync.cwd);
+  }, [currentPath, directoryFollowMode, isOpen, loadDir, sessionSync?.cwd, sessionSync?.cwdKnown]);
 
   // Auto-refresh after upload completes
   const doneUploadCount = sessionTransfers.filter((t) => t.status === "done" && t.direction === "upload").length;
   const prevDoneCount = useRef(0);
   useEffect(() => {
     if (doneUploadCount > prevDoneCount.current) {
-      loadDir(currentPath);
+      void loadDir(currentPathRef.current);
     }
     prevDoneCount.current = doneUploadCount;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -350,14 +477,30 @@ export function FileManagerPanel({ sessionId, isOpen, width, onWidthChange }: Fi
   const goUp = () => {
     if (currentPath === "/") return;
     const parent = currentPath.replace(/\/[^/]+\/?$/, "") || "/";
-    loadDir(parent);
+    void navigateToPath(parent);
   };
 
   const goHome = () => {
     SFTPGetwd(sessionId)
-      .then((home) => loadDir(home || "/"))
-      .catch(() => loadDir("/"));
+      .then((home) => navigateToPath(home || "/"))
+      .catch(() => navigateToPath("/"));
   };
+
+  const toggleFollowMode = useCallback(async () => {
+    if (directoryFollowMode === "always") {
+      setDirectoryFollowMode(tabId, "off");
+      return;
+    }
+
+    if (sessionSync?.busy) {
+      showSyncError("DIRSYNC_BUSY");
+      return;
+    }
+
+    const synced = await syncPanelFromTerminal();
+    if (!synced) return;
+    setDirectoryFollowMode(tabId, "always");
+  }, [directoryFollowMode, sessionSync?.busy, setDirectoryFollowMode, showSyncError, syncPanelFromTerminal, tabId]);
 
   // === Drag and drop (Wails native) — only when panel is open ===
   useEffect(() => {
@@ -441,13 +584,13 @@ export function FileManagerPanel({ sessionId, isOpen, width, onWidthChange }: Fi
     if (!deleteTarget) return;
     try {
       await SFTPDelete(sessionId, deleteTarget.path, deleteTarget.isDir);
-      loadDir(currentPath);
+      await loadDir(currentPathRef.current);
     } catch (e) {
       setError(String(e));
     } finally {
       setDeleteTarget(null);
     }
-  }, [deleteTarget, sessionId, currentPath, loadDir]);
+  }, [deleteTarget, loadDir, sessionId]);
 
   // === Context menu actions ===
   const handleCtxAction = useCallback(
@@ -458,7 +601,7 @@ export function FileManagerPanel({ sessionId, isOpen, width, onWidthChange }: Fi
 
       switch (action) {
         case "open":
-          if (entry?.isDir) loadDir(getFullPath(entry));
+          if (entry?.isDir) void navigateToPath(getFullPath(entry));
           break;
         case "download":
           if (entry) startDownload(sessionId, getFullPath(entry));
@@ -482,16 +625,16 @@ export function FileManagerPanel({ sessionId, isOpen, width, onWidthChange }: Fi
           }
           break;
         case "refresh":
-          loadDir(currentPath);
+          void loadDir(currentPathRef.current);
           break;
       }
     },
     [
       ctxMenu,
       sessionId,
-      currentPath,
       loadDir,
       getFullPath,
+      navigateToPath,
       startUpload,
       startUploadDir,
       startDownload,
@@ -558,6 +701,39 @@ export function FileManagerPanel({ sessionId, isOpen, width, onWidthChange }: Fi
             <div className="flex items-center gap-0.5 px-1 py-1 border-b shrink-0">
               <Button
                 variant="ghost"
+                size="xs"
+                className="px-1.5 text-[10px] font-mono"
+                onClick={() => void syncPanelFromTerminal()}
+                title={t("sftp.sync.panelFromTerminal")}
+                aria-label={t("sftp.sync.panelFromTerminal")}
+                disabled={!paneConnected}
+              >
+                T→F
+              </Button>
+              <Button
+                variant="ghost"
+                size="xs"
+                className="px-1.5 text-[10px] font-mono"
+                onClick={() => void syncTerminalToPath(currentPath)}
+                title={t("sftp.sync.terminalFromPanel")}
+                aria-label={t("sftp.sync.terminalFromPanel")}
+                disabled={!paneConnected}
+              >
+                F→T
+              </Button>
+              <Button
+                variant={directoryFollowMode === "always" ? "secondary" : "ghost"}
+                size="xs"
+                className="px-1.5 text-[10px] font-medium"
+                onClick={() => void toggleFollowMode()}
+                title={t("sftp.sync.followToggle")}
+                aria-label={t("sftp.sync.followToggle")}
+                disabled={!paneConnected}
+              >
+                {t("sftp.sync.followShort")}
+              </Button>
+              <Button
+                variant="ghost"
                 size="icon-xs"
                 onClick={goUp}
                 disabled={currentPath === "/"}
@@ -573,10 +749,15 @@ export function FileManagerPanel({ sessionId, isOpen, width, onWidthChange }: Fi
                 value={pathInput}
                 onChange={(e) => setPathInput(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") loadDir(pathInput.trim());
+                  if (e.key === "Enter") void navigateToPath(pathInput.trim());
                 }}
               />
-              <Button variant="ghost" size="icon-xs" onClick={() => loadDir(currentPath)} title={t("sftp.refresh")}>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => void loadDir(currentPathRef.current)}
+                title={t("sftp.refresh")}
+              >
                 <RefreshCw className="h-3.5 w-3.5" />
               </Button>
             </div>
@@ -599,7 +780,12 @@ export function FileManagerPanel({ sessionId, isOpen, width, onWidthChange }: Fi
                   <div className="flex flex-col items-center justify-center py-8 gap-1 px-2">
                     <span className="text-destructive text-center text-xs">{t("sftp.loadError")}</span>
                     <span className="text-muted-foreground text-center break-all text-[10px]">{error}</span>
-                    <Button variant="outline" size="xs" onClick={() => loadDir(currentPath)} className="mt-1">
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={() => void loadDir(currentPathRef.current)}
+                      className="mt-1"
+                    >
                       {t("sftp.retry")}
                     </Button>
                   </div>
@@ -633,7 +819,7 @@ export function FileManagerPanel({ sessionId, isOpen, width, onWidthChange }: Fi
                           style={{ contentVisibility: "auto", containIntrinsicSize: "auto 28px" }}
                           onClick={() => setSelected(fullPath)}
                           onDoubleClick={() => {
-                            if (entry.isDir) loadDir(fullPath);
+                            if (entry.isDir) void navigateToPath(fullPath);
                           }}
                           onContextMenu={(e) => {
                             e.preventDefault();

@@ -90,6 +90,26 @@ func (s *Service) Getwd(sessionID string) (string, error) {
 	return sftpClient.Getwd()
 }
 
+// ValidateDirectory 校验远程目录存在且可访问。
+func (s *Service) ValidateDirectory(sessionID, dirPath string) error {
+	sftpClient, err := s.getSFTPClient(sessionID)
+	if err != nil {
+		return err
+	}
+
+	info, err := sftpClient.Stat(dirPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("DIRSYNC_NOT_FOUND")
+		}
+		return fmt.Errorf("DIRSYNC_ACCESS_DENIED")
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("DIRSYNC_NOT_DIRECTORY")
+	}
+	return nil
+}
+
 // FileEntry 远程文件/目录条目
 type FileEntry struct {
 	Name    string `json:"name"`

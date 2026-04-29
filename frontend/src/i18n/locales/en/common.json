@@ -1006,7 +1006,22 @@
     "selectUploadTarget": "Select upload destination",
     "selectDownloadFile": "Select file to download",
     "deleteConfirmTitle": "Confirm Delete",
-    "deleteConfirmDesc": "Are you sure you want to delete \"{{name}}\"? This cannot be undone."
+    "deleteConfirmDesc": "Are you sure you want to delete \"{{name}}\"? This cannot be undone.",
+    "sync": {
+      "panelFromTerminal": "Sync file manager to terminal directory",
+      "terminalFromPanel": "Change terminal directory to current file manager directory",
+      "followToggle": "Keep terminal and file manager directories in sync for this tab",
+      "followShort": "Sync",
+      "unsupported": "The current shell does not support directory sync",
+      "cwdUnknown": "The terminal has not reported a working directory yet",
+      "busy": "Wait until the active pane returns to a clean prompt",
+      "pending": "A directory change is already in progress",
+      "timeout": "Timed out waiting for the terminal to change directory",
+      "notFound": "The target directory does not exist",
+      "notDirectory": "The selected path is not a directory",
+      "accessDenied": "The target directory cannot be accessed",
+      "remoteFailed": "The terminal rejected the directory change"
+    }
   },
   "error": {
     "boundary": {

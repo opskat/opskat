@@ -1,11 +1,22 @@
 package ssh_svc
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 )
+
+func newTestSyncSession(token string) *Session {
+	sess := &Session{syncToken: token}
+	sess.initSyncState("/bin/bash", shellTypeBash, true)
+	return sess
+}
+
+func buildTestSyncSequence(token, payload string) []byte {
+	return []byte(syncSequencePrefix + token + ":" + payload + syncSequenceTerm)
+}
 
 func TestManager_Basic(t *testing.T) {
 	convey.Convey("SSH Manager 基础功能", t, func() {
@@ -97,4 +108,235 @@ func TestSession_ClosedBehavior(t *testing.T) {
 			})
 		})
 	})
+}
+
+func TestNormalizeShellType(t *testing.T) {
+	assert.Equal(t, shellTypeBash, normalizeShellType("/bin/bash"))
+	assert.Equal(t, shellTypeZsh, normalizeShellType("/usr/bin/zsh"))
+	assert.Equal(t, shellTypeUnsupported, normalizeShellType("/usr/bin/fish"))
+}
+
+func TestSession_FilterOutputCapturesInitMarker(t *testing.T) {
+	sess := newTestSyncSession("real-token")
+
+	raw := []byte("hello" + syncSequencePrefix + "real-token:init:pid:4242" + syncSequenceTerm + "world")
+	filtered := sess.filterOutput(raw)
+
+	assert.Equal(t, "helloworld", string(filtered))
+	assert.Equal(t, 4242, sess.shellPID)
+	assert.True(t, sess.syncDirty)
+}
+
+func TestSession_FilterOutputAcceptsValidatedPromptProof(t *testing.T) {
+	sess := newTestSyncSession("real-token")
+	sess.promptNonce = "prompt-once"
+	sess.shellPID = 4242
+	sess.probeShellStateFn = func(_ int) (shellProbeResult, error) {
+		return shellProbeResult{cwd: "/srv/app", promptReady: true}, nil
+	}
+
+	raw := buildTestSyncSequence("real-token", "prompt:prompt-once:prompt-next:/srv/app")
+	filtered := sess.filterOutput(raw)
+
+	assert.Empty(t, filtered)
+	state := sess.GetSyncState()
+	assert.Equal(t, "/srv/app", state.Cwd)
+	assert.True(t, state.CwdKnown)
+	assert.True(t, state.PromptReady)
+	assert.Equal(t, "prompt-next", sess.promptNonce)
+}
+
+func TestSession_ProbeMissDoesNotBreakNextPromptProof(t *testing.T) {
+	sess := newTestSyncSession("real-token")
+	sess.promptNonce = "prompt-one"
+	sess.shellPID = 4242
+	promptReady := false
+	sess.probeShellStateFn = func(_ int) (shellProbeResult, error) {
+		return shellProbeResult{cwd: "/srv/app", promptReady: promptReady}, nil
+	}
+
+	firstProof := buildTestSyncSequence("real-token", "prompt:prompt-one:prompt-two:/srv/app")
+	replayedFirst := sess.filterOutput(firstProof)
+	assert.Equal(t, string(firstProof), string(replayedFirst))
+	assert.Equal(t, "prompt-one", sess.promptNonce)
+	assert.Equal(t, "prompt-two", sess.promptPendingNonce)
+
+	promptReady = true
+	secondProof := buildTestSyncSequence("real-token", "prompt:prompt-two:prompt-three:/srv/app")
+	filteredSecond := sess.filterOutput(secondProof)
+	assert.Empty(t, filteredSecond)
+
+	state := sess.GetSyncState()
+	assert.True(t, state.PromptReady)
+	assert.True(t, state.CwdKnown)
+	assert.Equal(t, "/srv/app", state.Cwd)
+	assert.Equal(t, "prompt-three", sess.promptNonce)
+	assert.Empty(t, sess.promptPendingNonce)
+}
+
+func TestSession_OldPromptProofReplayFailsAfterConsumption(t *testing.T) {
+	sess := newTestSyncSession("real-token")
+	sess.promptNonce = "prompt-once"
+	sess.shellPID = 4242
+	sess.probeShellStateFn = func(_ int) (shellProbeResult, error) {
+		return shellProbeResult{cwd: "/srv/app", promptReady: true}, nil
+	}
+
+	raw := buildTestSyncSequence("real-token", "prompt:prompt-once:prompt-next:/srv/app")
+	assert.Empty(t, sess.filterOutput(raw))
+
+	replayed := sess.filterOutput(raw)
+	assert.Equal(t, string(raw), string(replayed))
+
+	state := sess.GetSyncState()
+	assert.True(t, state.PromptReady)
+	assert.Equal(t, "/srv/app", state.Cwd)
+	assert.Equal(t, "prompt-next", sess.promptNonce)
+}
+
+func TestSession_PrepareDirectoryChangeRequiresCleanPrompt(t *testing.T) {
+	sess := newTestSyncSession("real-token")
+	sess.notePrompt("/srv/app")
+	sess.markUserInput([]byte("ls"))
+
+	_, err := sess.prepareDirectoryChange("/srv/logs", make(chan error, 1))
+	assert.EqualError(t, err, "DIRSYNC_BUSY")
+}
+
+func TestSession_FilterOutputIgnoresSpoofedMarkers(t *testing.T) {
+	sess := newTestSyncSession("real-token")
+	sess.notePrompt("/srv/app")
+	sess.markUserInput([]byte("ls\r"))
+
+	fakeCwd := buildTestSyncSequence("fake-token", "cwd:/srv/fake")
+	filtered := sess.filterOutput(fakeCwd)
+
+	assert.Equal(t, string(fakeCwd), string(filtered))
+
+	state := sess.GetSyncState()
+	assert.Empty(t, state.Cwd)
+	assert.False(t, state.CwdKnown)
+	assert.False(t, state.PromptReady)
+	assert.False(t, state.PromptClean)
+	assert.True(t, state.Busy)
+	assert.Empty(t, state.LastError)
+}
+
+func TestSession_ReplayedReadableMarkerCannotFinishPendingDirectoryChange(t *testing.T) {
+	sess := newTestSyncSession("real-token")
+	sess.notePrompt("/srv/app")
+
+	resultCh := make(chan error, 1)
+	_, err := sess.prepareDirectoryChange("/srv/logs", resultCh)
+	assert.NoError(t, err)
+
+	replayedChdir := buildTestSyncSequence("real-token", "chdir:ok:/srv/logs")
+	filtered := sess.filterOutput(replayedChdir)
+
+	assert.Equal(t, string(replayedChdir), string(filtered))
+	assert.NotNil(t, sess.pendingDirChange)
+	assert.NotEmpty(t, sess.pendingDirNonce)
+
+	select {
+	case result := <-resultCh:
+		t.Fatalf("expected pending dir change to remain unresolved, got %v", result)
+	default:
+	}
+
+	state := sess.GetSyncState()
+	assert.False(t, state.PromptReady)
+	assert.True(t, state.Busy)
+	assert.False(t, state.CwdKnown)
+	assert.Empty(t, state.LastError)
+}
+
+func TestSession_ProbeCwdDoesNotRestoreReadyDuringBuiltinWait(t *testing.T) {
+	sess := newTestSyncSession("real-token")
+	sess.notePrompt("/srv/app")
+	sess.markUserInput([]byte("read foo\r"))
+	sess.noteObservedCwd("/srv/app")
+
+	state := sess.GetSyncState()
+	assert.False(t, state.PromptReady)
+	assert.False(t, state.PromptClean)
+	assert.True(t, state.CwdKnown)
+	assert.Equal(t, "/srv/app", state.Cwd)
+	assert.True(t, state.Busy)
+	assert.Equal(t, directorySyncInitializing, state.Status)
+}
+
+func TestSession_OrdinaryCommandCanRestoreReadyAgain(t *testing.T) {
+	sess := newTestSyncSession("real-token")
+	sess.promptNonce = "prompt-once"
+	sess.shellPID = 4242
+	sess.probeShellStateFn = func(_ int) (shellProbeResult, error) {
+		return shellProbeResult{cwd: "/srv/app", promptReady: true}, nil
+	}
+	assert.Empty(t, sess.filterOutput(buildTestSyncSequence("real-token", "prompt:prompt-once:prompt-two:/srv/app")))
+	sess.markUserInput([]byte("ls\r"))
+
+	replayedOld := sess.filterOutput(buildTestSyncSequence("real-token", "prompt:prompt-once:prompt-two:/srv/app"))
+	assert.NotEmpty(t, replayedOld)
+
+	filtered := sess.filterOutput(buildTestSyncSequence("real-token", "prompt:prompt-two:prompt-three:/srv/app"))
+	assert.Empty(t, filtered)
+
+	state := sess.GetSyncState()
+	assert.True(t, state.PromptReady)
+	assert.True(t, state.PromptClean)
+	assert.True(t, state.CwdKnown)
+	assert.Equal(t, "/srv/app", state.Cwd)
+	assert.False(t, state.Busy)
+	assert.Equal(t, "prompt-three", sess.promptNonce)
+}
+
+func TestSession_OrdinaryOutputCannotSpoofReady(t *testing.T) {
+	sess := newTestSyncSession("real-token")
+	sess.promptNonce = "prompt-once"
+	sess.shellPID = 4242
+	promptReady := true
+	sess.probeShellStateFn = func(_ int) (shellProbeResult, error) {
+		return shellProbeResult{cwd: "/srv/app", promptReady: promptReady}, nil
+	}
+	assert.Empty(t, sess.filterOutput(buildTestSyncSequence("real-token", "prompt:prompt-once:prompt-two:/srv/app")))
+	sess.markUserInput([]byte("read foo\r"))
+	promptReady = false
+
+	replayedPrompt := buildTestSyncSequence("real-token", "prompt:prompt-two:prompt-three:/srv/fake")
+	filtered := sess.filterOutput(replayedPrompt)
+
+	assert.Equal(t, string(replayedPrompt), string(filtered))
+
+	state := sess.GetSyncState()
+	assert.False(t, state.PromptReady)
+	assert.False(t, state.CwdKnown)
+	assert.True(t, state.Busy)
+	assert.Equal(t, directorySyncInitializing, state.Status)
+	assert.Equal(t, "prompt-two", sess.promptNonce)
+}
+
+func TestSession_FilterOutputBoundsParserRemainder(t *testing.T) {
+	sess := newTestSyncSession("real-token")
+	firstChunk := []byte(syncSequencePrefix + "real-token:cwd:" + strings.Repeat("x", syncSequenceParserMaxBytes/2))
+	secondChunk := []byte(strings.Repeat("y", syncSequenceParserMaxBytes))
+
+	filteredFirst := sess.filterOutput(firstChunk)
+	assert.Empty(t, filteredFirst)
+	assert.LessOrEqual(t, len(sess.parserRemainder), syncSequenceParserMaxBytes)
+
+	filteredSecond := sess.filterOutput(secondChunk)
+	assert.Equal(t, string(append(append([]byte(nil), firstChunk...), secondChunk...)), string(filteredSecond))
+	assert.Len(t, sess.parserRemainder, 0)
+
+	state := sess.GetSyncState()
+	assert.Equal(t, directorySyncMarkerOverflow, state.LastError)
+	assert.False(t, state.PromptReady)
+	assert.True(t, state.Busy)
+}
+
+func TestParseShellProbeOutput(t *testing.T) {
+	result, err := parseShellProbeOutput([]byte("cwd=/srv/app\x00prompt=1\x00"))
+	assert.NoError(t, err)
+	assert.Equal(t, "/srv/app", result.cwd)
+	assert.True(t, result.promptReady)
 }
