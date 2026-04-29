@@ -109,11 +109,10 @@ func (s *Service) ResolveDirectory(sessionID, dirPath string) (string, error) {
 		return "", dirsync.Error(dirsync.CodeNotDirectory)
 	}
 
-	realPath, err := sftpClient.RealPath(dirPath)
-	if err != nil || realPath == "" {
-		return dirPath, nil
+	if realPath, realPathErr := sftpClient.RealPath(dirPath); realPathErr == nil && realPath != "" {
+		return realPath, nil
 	}
-	return realPath, nil
+	return dirPath, nil
 }
 
 // ValidateDirectory 校验远程目录存在且可访问。
