@@ -44,3 +44,4 @@ coverage_new.out
 .idea
 
 .github/pr-assets/
+build/windows/installer/tmp/
