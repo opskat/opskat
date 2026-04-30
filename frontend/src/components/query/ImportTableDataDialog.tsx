@@ -27,7 +27,6 @@ import {
 } from "@opskat/ui";
 import { FilePlus2, Link, Loader2, Play, Table2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { ExecuteSQL } from "../../../wailsjs/go/app/App";
 import {
   buildImportInsertSql,
   detectDelimiter,
@@ -65,6 +64,31 @@ type ImportProgress = {
   error: number;
   seconds: number;
 };
+type TableImportBatchRequest = {
+  statements: string[];
+  mode: ImportMode;
+  continueOnError: boolean;
+  disableForeignKeyChecks: boolean;
+};
+type TableImportBatchError = {
+  index: number;
+  statement?: string;
+  message: string;
+};
+type TableImportBatchResult = {
+  processed: number;
+  added: number;
+  updated: number;
+  deleted: number;
+  error: number;
+  rolledBack?: boolean;
+  errors?: TableImportBatchError[];
+};
+type ExecuteTableImportFn = (
+  assetId: number,
+  database: string,
+  request: TableImportBatchRequest
+) => Promise<TableImportBatchResult>;
 
 const steps: WizardStep[] = ["type", "source", "delimiter", "options", "mapping", "mode", "summary"];
 const importModes: ImportMode[] = ["append", "update", "append-update", "append-skip", "delete", "copy"];
@@ -130,10 +154,17 @@ function importModeNeedsPrimaryKey(mode: ImportMode): boolean {
   return mode === "update" || mode === "append-update" || mode === "append-skip" || mode === "delete";
 }
 
-function importModeAffects(mode: ImportMode): keyof Pick<ImportProgress, "added" | "updated" | "deleted"> {
-  if (mode === "update") return "updated";
-  if (mode === "delete") return "deleted";
-  return "added";
+async function executeTableImport(
+  assetId: number,
+  database: string,
+  request: TableImportBatchRequest
+): Promise<TableImportBatchResult> {
+  const wailsImport = (window as unknown as { go?: { app?: { App?: { ExecuteTableImport?: ExecuteTableImportFn } } } })
+    .go?.app?.App?.ExecuteTableImport;
+  if (typeof wailsImport !== "function") {
+    throw new Error("ExecuteTableImport binding unavailable");
+  }
+  return wailsImport(assetId, database, request);
 }
 
 export function ImportTableDataDialog({
@@ -359,51 +390,61 @@ export function ImportTableDataDialog({
     setLogLines(nextLogLines);
     setProgress({ processed: 0, added: 0, updated: 0, deleted: 0, error: 0, seconds: 0 });
 
-    let added = 0;
-    let updated = 0;
-    let deleted = 0;
-    let error = 0;
     try {
-      for (let index = 0; index < statements.length; index++) {
-        if (isSubmitCancelled?.(requestId)) return;
-        try {
-          const result = await ExecuteSQL(assetId, statements[index], database);
-          if (isSubmitCancelled?.(requestId)) return;
-          const parsedResult = JSON.parse(result || "{}") as { affected_rows?: number };
-          const affected = Number(parsedResult.affected_rows ?? 0);
-          const affectedBucket = importModeAffects(importMode);
-          if (affectedBucket === "updated") updated += affected;
-          else if (affectedBucket === "deleted") deleted += affected;
-          else added += affected;
-        } catch (e) {
-          error += 1;
-          const message = e instanceof Error ? e.message : String(e);
-          nextLogLines.push(`[ERR] ${message}`);
-          nextLogLines.push(`[ERR] ${statements[index]}`);
-          setLogLines([...nextLogLines]);
-          toast.error(message);
-          if (!continueOnError) break;
-        }
-        setProgress({
-          processed: index + 1,
-          added,
-          updated,
-          deleted,
-          error,
-          seconds: (performance.now() - startedAt) / 1000,
-        });
+      if (isSubmitCancelled?.(requestId)) return;
+      const result = await executeTableImport(assetId, database, {
+        statements,
+        mode: importMode,
+        continueOnError,
+        disableForeignKeyChecks: ignoreForeignKeyConstraint && driver !== "postgresql",
+      });
+      if (isSubmitCancelled?.(requestId)) return;
+
+      const added = Number(result.added ?? 0);
+      const updated = Number(result.updated ?? 0);
+      const deleted = Number(result.deleted ?? 0);
+      const error = Number(result.error ?? 0);
+      const processed = Number(result.processed ?? statements.length);
+      for (const item of result.errors ?? []) {
+        nextLogLines.push(`[ERR] ${item.message}`);
+        if (item.statement) nextLogLines.push(`[ERR] ${item.statement}`);
       }
+      setProgress({
+        processed,
+        added,
+        updated,
+        deleted,
+        error,
+        seconds: (performance.now() - startedAt) / 1000,
+      });
       if (error === 0) {
-        toast.success(t("query.importSuccess", { affected: added }));
+        toast.success(t("query.importSuccess", { affected: added + updated + deleted }));
         onOpenChange(false);
         onSuccess();
       } else {
         nextLogLines.push(
-          `[IMP] Processed: ${statements.length}, Added: ${added}, Updated: ${updated}, Deleted: ${deleted}, Errors: ${error}`
+          `[IMP] Processed: ${processed}, Added: ${added}, Updated: ${updated}, Deleted: ${deleted}, Errors: ${error}`
         );
+        if (result.rolledBack) nextLogLines.push("[IMP] Rolled back");
         nextLogLines.push("[IMP] Finished with error");
         setLogLines([...nextLogLines]);
+        const firstError = result.errors?.[0]?.message;
+        if (firstError) toast.error(firstError);
       }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      nextLogLines.push(`[ERR] ${message}`);
+      nextLogLines.push("[IMP] Finished with error");
+      setLogLines([...nextLogLines]);
+      setProgress({
+        processed: 0,
+        added: 0,
+        updated: 0,
+        deleted: 0,
+        error: 1,
+        seconds: (performance.now() - startedAt) / 1000,
+      });
+      toast.error(message);
     } finally {
       setSubmitting(false);
       onSubmittingChange?.(false);
@@ -413,6 +454,8 @@ export function ImportTableDataDialog({
     database,
     format,
     importMode,
+    driver,
+    ignoreForeignKeyConstraint,
     continueOnError,
     isSubmitCancelled,
     onOpenChange,

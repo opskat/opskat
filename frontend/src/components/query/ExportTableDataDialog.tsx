@@ -93,6 +93,7 @@ const defaultExportOptions: TableExportOptions = {
   decimalSymbol: ".",
   binaryDataEncoding: "base64",
 };
+const EXPORT_ALL_CHUNK_SIZE = 1000;
 
 interface TableExportWriteOptions {
   encoding: TableExportEncoding;
@@ -123,6 +124,11 @@ function getContainingDirectory(filePath: string): string {
   return filePath.slice(0, slash);
 }
 
+function exportChunkSeparator(format: TableExportFormat, options: TableExportOptions): string {
+  if (format === "sql") return "\n";
+  return options.recordDelimiter === "crlf" ? "\r\n" : "\n";
+}
+
 export function ExportTableDataDialog({
   open,
   onOpenChange,
@@ -133,8 +139,6 @@ export function ExportTableDataDialog({
   columns,
   rows,
   totalRows,
-  page,
-  pageSize,
   whereClause,
   orderByClause,
   sortColumn,
@@ -241,46 +245,71 @@ export function ExportTableDataDialog({
       appendLog(`[EXP] Encoding - ${encoding}`);
       appendLog(`[EXP] Export Scope - ${scope === "all" ? t("query.exportAllData") : t("query.exportPageData")}`);
 
-      let exportRows = rows;
-      if (scope === "all") {
-        appendLog("[EXP] Getting all data ...");
-        const sql = buildTableExportSelectSql({
-          database,
-          table,
-          driver,
-          scope,
-          whereClause,
-          orderByClause,
-          sortColumn,
-          sortDir,
-          page,
-          pageSize,
-        });
-        const result = await ExecuteSQL(assetId, sql, database);
-        const parsed = JSON.parse(result || "{}") as SQLResult;
-        exportRows = parsed.rows ?? [];
-      } else {
-        appendLog("[EXP] Getting current page data ...");
-      }
-
-      const content = buildTableExportContent({
-        format,
-        columns: selectedColumns,
-        rows: exportRows,
-        tableName,
-        driver,
-        includeHeaders,
-        options: exportOptions,
-      });
+      let processedRows = 0;
       appendLog(`[EXP] Export table [${table}]`);
       appendLog(`[EXP] Export to - ${filePath}`);
-      await writeTableExportFile(filePath, content, { encoding, append: !!exportOptions.append });
+      if (scope === "all") {
+        appendLog("[EXP] Getting all data ...");
+        let chunkIndex = 0;
+        let wroteChunk = false;
+        while (true) {
+          const sql = buildTableExportSelectSql({
+            database,
+            table,
+            driver,
+            scope: "page",
+            whereClause,
+            orderByClause,
+            sortColumn,
+            sortDir,
+            page: chunkIndex,
+            pageSize: EXPORT_ALL_CHUNK_SIZE,
+          });
+          const result = await ExecuteSQL(assetId, sql, database);
+          const parsed = JSON.parse(result || "{}") as SQLResult;
+          const chunkRows = parsed.rows ?? [];
+          const content = buildTableExportContent({
+            format,
+            columns: selectedColumns,
+            rows: chunkRows,
+            tableName,
+            driver,
+            includeHeaders: includeHeaders && chunkIndex === 0,
+            options: exportOptions,
+          });
+          const chunkContent =
+            wroteChunk && content ? `${exportChunkSeparator(format, exportOptions)}${content}` : content;
+          if (chunkIndex === 0 || chunkContent) {
+            await writeTableExportFile(filePath, chunkContent, {
+              encoding,
+              append: wroteChunk || !!exportOptions.append,
+            });
+            wroteChunk = true;
+          }
+          processedRows += chunkRows.length;
+          if (chunkRows.length < EXPORT_ALL_CHUNK_SIZE) break;
+          chunkIndex += 1;
+        }
+      } else {
+        appendLog("[EXP] Getting current page data ...");
+        processedRows = rows.length;
+        const content = buildTableExportContent({
+          format,
+          columns: selectedColumns,
+          rows,
+          tableName,
+          driver,
+          includeHeaders,
+          options: exportOptions,
+        });
+        await writeTableExportFile(filePath, content, { encoding, append: !!exportOptions.append });
+      }
 
       const elapsed = ((performance.now() - startedAt) / 1000).toFixed(3);
-      appendLog(`[EXP] Processed ${exportRows.length} row(s) in ${elapsed}s`);
+      appendLog(`[EXP] Processed ${processedRows} row(s) in ${elapsed}s`);
       appendLog("[EXP] Finished successfully");
       setCompleted(true);
-      toast.success(t("query.exportSuccessDetailed", { count: exportRows.length }));
+      toast.success(t("query.exportSuccessDetailed", { count: processedRows }));
     } catch (e) {
       appendLog(`[EXP] Failed - ${String(e)}`);
       toast.error(String(e));
@@ -300,8 +329,6 @@ export function ExportTableDataDialog({
     includeHeaders,
     meta.label,
     orderByClause,
-    page,
-    pageSize,
     rows,
     scope,
     selectedColumns,

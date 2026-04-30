@@ -79,6 +79,21 @@ describe("table import helpers", () => {
     ]);
   });
 
+  it("keeps foreign-key toggling out of generated row statements", () => {
+    expect(
+      buildImportInsertSql({
+        tableName: "appdb.users",
+        headers: ["id"],
+        rows: [["1"]],
+        mapping: { id: "id" },
+        nullStrategy: "literal-null",
+        mode: "copy",
+        advancedOptions: { ignoreForeignKeyConstraint: true },
+        driver: "mysql",
+      })
+    ).toEqual(["DELETE FROM `appdb`.`users`;", "INSERT INTO `appdb`.`users` (`id`) VALUES ('1');"]);
+  });
+
   it("uses ON CONFLICT DO NOTHING for postgresql append-update with no value columns", () => {
     expect(
       buildImportInsertSql({

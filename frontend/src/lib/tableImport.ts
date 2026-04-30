@@ -361,9 +361,5 @@ export function buildImportInsertSql({
     if (mode === "copy") statements = [`DELETE FROM ${quotedTable};`, ...statements];
   }
 
-  if (advancedOptions?.ignoreForeignKeyConstraint && driver !== "postgresql") {
-    statements = ["SET FOREIGN_KEY_CHECKS = 0;", ...statements, "SET FOREIGN_KEY_CHECKS = 1;"];
-  }
-
   return statements;
 }
