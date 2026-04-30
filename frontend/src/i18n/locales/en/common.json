@@ -774,6 +774,10 @@
   "terminal": {
     "title": "Terminal",
     "desc": "Terminal color scheme and font settings",
+    "fontFamily": "Font",
+    "defaultFont": "Default Font",
+    "customFont": "Custom",
+    "customFontPlaceholder": "Enter font-family, e.g. Iosevka Term, monospace",
     "fontSize": "Font Size",
     "scrollback": "Scrollback",
     "scrollbackUnit": "lines",

@@ -8,6 +8,7 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
   Card,
@@ -20,6 +21,11 @@ import { useTheme, useResolvedTheme } from "@/components/theme-provider";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 import { useTerminalThemeStore, SCROLLBACK_MIN, SCROLLBACK_MAX } from "@/stores/terminalThemeStore";
 import { builtinThemes, defaultLightTheme, defaultDarkTheme, TerminalTheme } from "@/data/terminalThemes";
+import {
+  CUSTOM_TERMINAL_FONT_PRESET_ID,
+  DEFAULT_TERMINAL_FONT_PRESET_ID,
+  terminalFontPresets,
+} from "@/data/terminalFonts";
 import { TerminalThemeEditor } from "@/components/settings/TerminalThemeEditor";
 
 export function AppearanceSection() {
@@ -96,6 +102,10 @@ export function TerminalSection() {
     setSelectedThemeId,
     fontSize,
     setFontSize,
+    fontPresetId,
+    customFontFamily,
+    setFontPresetId,
+    setCustomFontFamily,
     scrollback,
     setScrollback,
     customThemes,
@@ -106,6 +116,10 @@ export function TerminalSection() {
   const resolvedTheme = useResolvedTheme();
   const [themeEditorOpen, setThemeEditorOpen] = useState(false);
   const [editingTheme, setEditingTheme] = useState<TerminalTheme | undefined>(undefined);
+  const fontSelectValue =
+    fontPresetId === CUSTOM_TERMINAL_FONT_PRESET_ID || terminalFontPresets.some((preset) => preset.id === fontPresetId)
+      ? fontPresetId
+      : DEFAULT_TERMINAL_FONT_PRESET_ID;
 
   return (
     <>
@@ -114,6 +128,34 @@ export function TerminalSection() {
           <CardTitle className="text-base">{t("terminal.title")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* Font family */}
+          <div className="grid gap-2">
+            <Label>{t("terminal.fontFamily")}</Label>
+            <Select value={fontSelectValue} onValueChange={setFontPresetId}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="min-w-[18rem]">
+                {terminalFontPresets.map((preset) => (
+                  <SelectItem key={preset.id} value={preset.id}>
+                    <span className="min-w-0 flex-1 truncate" style={{ fontFamily: preset.fontFamily }}>
+                      {preset.id === DEFAULT_TERMINAL_FONT_PRESET_ID ? t("terminal.defaultFont") : preset.name}
+                    </span>
+                  </SelectItem>
+                ))}
+                <SelectSeparator />
+                <SelectItem value={CUSTOM_TERMINAL_FONT_PRESET_ID}>{t("terminal.customFont")}</SelectItem>
+              </SelectContent>
+            </Select>
+            {fontPresetId === CUSTOM_TERMINAL_FONT_PRESET_ID && (
+              <Input
+                value={customFontFamily}
+                onChange={(e) => setCustomFontFamily(e.target.value)}
+                placeholder={t("terminal.customFontPlaceholder")}
+              />
+            )}
+          </div>
+
           {/* Font size */}
           <div className="grid gap-2">
             <Label>{t("terminal.fontSize")}</Label>
