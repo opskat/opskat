@@ -692,16 +692,17 @@ func (s *Session) EnableSync() error {
 
 	go s.emitSyncState(state)
 
-	if cmd == "" {
-		s.clearBootstrap(bootstrapCh)
-		return dirsync.Error(dirSyncErrUnsupported)
-	}
+	// cmd == "" is unreachable: shellTypeUnsupported was rejected at line 660
+	// and buildEnableSyncCommand only returns "" for that case. No defensive
+	// branch needed; if invariants change, the write below will fail visibly.
+
 	if err := s.writeInternal([]byte(cmd)); err != nil {
 		s.clearBootstrap(bootstrapCh)
 		s.syncMu.Lock()
 		s.syncState.Supported = false
 		s.syncState.Status = directorySyncUnsupported
 		s.syncState.LastError = err.Error()
+		s.syncDirty = false
 		st := s.syncState
 		s.syncMu.Unlock()
 		s.emitSyncState(st)
@@ -718,6 +719,7 @@ func (s *Session) EnableSync() error {
 			s.syncState.Status = directorySyncUnsupported
 			s.syncState.LastError = err.Error()
 			s.shellPID = 0
+			s.syncDirty = false
 		}
 		st := s.syncState
 		s.syncMu.Unlock()
@@ -736,7 +738,10 @@ func (s *Session) EnableSync() error {
 
 	// init:pid confirms the shell ran our injection, but cwd is filled by the
 	// next prompt nonce or the probe loop. Poll briefly so the first F→T click
-	// after lazy enable doesn't race a not-yet-arrived prompt.
+	// after lazy enable doesn't race a not-yet-arrived prompt. We don't surface
+	// an error if the grace expires — the shell is alive (init:pid arrived);
+	// the frontend will see cwd populate via the ssh:sync event whenever it
+	// finally lands.
 	deadline := time.Now().Add(syncFirstCwdGrace)
 	for time.Now().Before(deadline) {
 		s.syncMu.Lock()
@@ -752,6 +757,11 @@ func (s *Session) EnableSync() error {
 
 // DisableSync removes hooks from the running shell and flips state back to
 // unsupported. Best-effort: if the stdin write fails, state is still cleared.
+//
+// No frontend caller wires this up yet — kept for symmetry with EnableSync
+// and as the entry point when an explicit "disable directory sync" toggle
+// ships. If the toggle never lands, this and buildDisableSyncCommand can be
+// dropped.
 func (s *Session) DisableSync() {
 	s.syncMu.Lock()
 	if !s.syncState.Supported {
