@@ -497,3 +497,42 @@ func TestEnableSyncIdempotent(t *testing.T) {
 		t.Fatalf("idempotent enable should return nil, got %v", err)
 	}
 }
+
+func TestEnableSyncReturnsErrorIfDisableRacesIn(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer func() { _ = pw.Close() }()
+	sess := &Session{
+		ID:        "test-race",
+		stdin:     pw,
+		shellPath: "/bin/bash",
+		shellType: shellTypeBash,
+	}
+	sess.initSyncState(sess.shellPath, sess.shellType, false)
+	go func() { _, _ = io.Copy(io.Discard, pr) }()
+
+	prev := syncEnableTimeout
+	syncEnableTimeout = 500 * time.Millisecond
+	defer func() { syncEnableTimeout = prev }()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- sess.EnableSync() }()
+
+	// Wait briefly so EnableSync has set up syncBootstrapCh.
+	time.Sleep(50 * time.Millisecond)
+
+	// Simulate a disable racing in before init:pid arrives.
+	sess.disableDirectorySync(dirSyncErrUnsupported)
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("EnableSync must report error when DisableSync races in")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("EnableSync did not return after DisableSync; bootstrap channel not closed?")
+	}
+
+	if state := sess.GetSyncState(); state.Supported {
+		t.Fatalf("Supported must be false after disable race, got %#v", state)
+	}
+}

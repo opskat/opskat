@@ -301,6 +301,9 @@ func (s *Session) disableDirectorySync(reason string) {
 	s.syncState.Busy = false
 	s.syncState.Status = directorySyncUnsupported
 	s.syncState.LastError = reason
+	bootstrapCh := s.syncBootstrapCh
+	s.syncBootstrapCh = nil
+	s.shellPID = 0
 	state := s.syncState
 	s.syncMu.Unlock()
 
@@ -308,6 +311,9 @@ func (s *Session) disableDirectorySync(reason string) {
 	if ch != nil {
 		ch <- err
 		close(ch)
+	}
+	if bootstrapCh != nil {
+		close(bootstrapCh)
 	}
 	s.emitSyncState(state)
 }
@@ -711,6 +717,15 @@ func (s *Session) EnableSync() error {
 		s.syncMu.Unlock()
 		s.emitSyncState(st)
 		return err
+	}
+
+	// Bootstrap channel closed. Could be init:pid (success) or DisableSync
+	// racing in (failure). Re-check state under lock.
+	s.syncMu.Lock()
+	ok := s.syncState.Supported && s.shellPID > 0
+	s.syncMu.Unlock()
+	if !ok {
+		return dirsync.Error(dirSyncErrUnsupported)
 	}
 	return nil
 }
