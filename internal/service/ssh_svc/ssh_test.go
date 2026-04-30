@@ -431,3 +431,29 @@ func TestSession_ProbeLoopDisablesSyncWhenPromptProbeHasNoCwd(t *testing.T) {
 			state.LastError == dirSyncErrProbeUnsupported
 	}, 500*time.Millisecond, 10*time.Millisecond)
 }
+
+func TestSessionStartsWithSupportedFalse(t *testing.T) {
+	sess := &Session{ID: "test"}
+	sess.initSyncState("/bin/bash", shellTypeBash, false)
+
+	state := sess.GetSyncState()
+	if state.Supported {
+		t.Fatal("Supported must be false until EnableSync is invoked")
+	}
+	if state.ShellType != shellTypeBash {
+		t.Fatalf("ShellType not retained: %q", state.ShellType)
+	}
+	if state.Status != directorySyncUnsupported {
+		t.Fatalf("Status should be unsupported initially, got %q", state.Status)
+	}
+}
+
+func TestSessionPersistsShellInfo(t *testing.T) {
+	sess := &Session{ID: "test", shellPath: "/usr/bin/zsh", shellType: shellTypeZsh}
+	if sess.shellPath != "/usr/bin/zsh" {
+		t.Fatalf("shellPath not persisted: %q", sess.shellPath)
+	}
+	if sess.shellType != shellTypeZsh {
+		t.Fatalf("shellType not persisted: %q", sess.shellType)
+	}
+}

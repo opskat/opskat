@@ -72,6 +72,13 @@ type Session struct {
 	onClosed func(sessionID string) // 会话关闭回调
 	onSync   func(sessionID string, state DirectorySyncState)
 
+	// shellPath / shellType are detected once at session creation by
+	// detectRemoteShell. They are read by EnableSync to build the right
+	// hook-installer payload. Empty / "unsupported" means lazy sync is
+	// not available for this session.
+	shellPath string
+	shellType string
+
 	syncMu             sync.Mutex
 	syncState          DirectorySyncState
 	pendingDirChange   chan error
@@ -319,41 +326,26 @@ func (m *Manager) createSession(shared *sharedClient, assetID int64, cols, rows 
 	sessionID := fmt.Sprintf("ssh-%d", m.counter)
 	m.mu.Unlock()
 
-	syncToken, err := generateSyncToken()
-	if err != nil {
-		if closeErr := session.Close(); closeErr != nil {
-			logger.Default().Warn("close session after sync token failure", zap.Error(closeErr))
-		}
-		return "", fmt.Errorf("生成目录同步令牌失败: %w", err)
-	}
-	promptNonce, err := generateSyncToken()
-	if err != nil {
-		if closeErr := session.Close(); closeErr != nil {
-			logger.Default().Warn("close session after prompt nonce failure", zap.Error(closeErr))
-		}
-		return "", fmt.Errorf("生成提示符校验令牌失败: %w", err)
-	}
-
+	shellPath, shellType := detectRemoteShell(shared.client)
 	sess := &Session{
-		ID:          sessionID,
-		AssetID:     assetID,
-		shared:      shared,
-		session:     session,
-		stdin:       stdin,
-		stdout:      stdout,
-		onData:      func(data []byte) { onData(sessionID, data) },
-		onClosed:    onClosed,
-		syncToken:   syncToken,
-		promptNonce: promptNonce,
+		ID:        sessionID,
+		AssetID:   assetID,
+		shared:    shared,
+		session:   session,
+		stdin:     stdin,
+		stdout:    stdout,
+		shellPath: shellPath,
+		shellType: shellType,
+		onData:    func(data []byte) { onData(sessionID, data) },
+		onClosed:  onClosed,
 	}
 	if onSync != nil {
 		sess.onSync = func(_ string, state DirectorySyncState) { onSync(sessionID, state) }
 	}
 
-	shellPath, shellType := detectRemoteShell(shared.client)
-	// Lazy injection: always start a native interactive shell so sshd can emit
-	// "Last login" / motd / banner. Sync hooks are installed on demand via
-	// Session.EnableSync (added in a later task). Until then, sync stays off.
+	// Always start a native interactive shell so sshd emits "Last login" /
+	// motd / banner. Sync hooks are installed on demand via Session.EnableSync
+	// (added in Task 3); until then, sync stays off.
 	sess.initSyncState(shellPath, shellType, false)
 
 	if err := session.Shell(); err != nil {
