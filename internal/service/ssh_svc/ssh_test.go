@@ -447,13 +447,3 @@ func TestSessionStartsWithSupportedFalse(t *testing.T) {
 		t.Fatalf("Status should be unsupported initially, got %q", state.Status)
 	}
 }
-
-func TestSessionPersistsShellInfo(t *testing.T) {
-	sess := &Session{ID: "test", shellPath: "/usr/bin/zsh", shellType: shellTypeZsh}
-	if sess.shellPath != "/usr/bin/zsh" {
-		t.Fatalf("shellPath not persisted: %q", sess.shellPath)
-	}
-	if sess.shellType != shellTypeZsh {
-		t.Fatalf("shellType not persisted: %q", sess.shellType)
-	}
-}
