@@ -214,6 +214,30 @@ interface Props {
   asset: asset_entity.Asset;
 }
 
+interface K8sPageSnapshot {
+  info: ClusterInfo | null;
+  innerTabs: InnerTab[];
+  activeTabId: InnerTabId;
+  expandedNodes: boolean;
+  expandedNamespaces: string[];
+  expandedPods: string[];
+  expandedDeployments: string[];
+  expandedServices: string[];
+  expandedConfigMaps: string[];
+  expandedSecrets: string[];
+  expandedDeploymentItems: string[];
+  resourceSearch: Record<string, string>;
+  namespaceResources: Record<string, NamespaceResourcesData>;
+  namespacePodList: Record<string, PodListItem[]>;
+  namespaceDeploymentList: Record<string, DeploymentListItem[]>;
+  namespaceServiceList: Record<string, ServiceListItem[]>;
+  namespaceConfigMapList: Record<string, ConfigMapListItem[]>;
+  namespaceSecretList: Record<string, SecretListItem[]>;
+  podDetails: Record<string, PodDetail>;
+  logTabStates: Record<string, import("./K8sLogsPanel").LogTabState>;
+  autoRefreshingItems: string[];
+}
+
 interface ResourceSearchInputProps {
   value: string;
   onChange: (value: string) => void;
@@ -234,46 +258,82 @@ function ResourceSearchInput({ value, onChange, placeholder }: ResourceSearchInp
   );
 }
 
+const k8sPageStateCache = new Map<number, K8sPageSnapshot>();
+
 export function K8sClusterPage({ asset }: Props) {
   const { t } = useTranslation();
-  const [loading, setLoading] = useState(true);
+  const initialSnapshot = k8sPageStateCache.get(asset.ID);
+  const defaultNamespace = (() => {
+    try {
+      const cfg = JSON.parse(asset.Config || "{}") as { namespace?: string };
+      return (cfg.namespace || "").trim();
+    } catch {
+      return "";
+    }
+  })();
+  const [loading, setLoading] = useState(!initialSnapshot);
   const [refreshing, setRefreshing] = useState(false);
-  const [info, setInfo] = useState<ClusterInfo | null>(null);
+  const [info, setInfo] = useState<ClusterInfo | null>(initialSnapshot?.info || null);
   const [error, setError] = useState<string | null>(null);
-  const [innerTabs, setInnerTabs] = useState<InnerTab[]>([{ id: "overview", label: t("asset.k8sClusterOverview") }]);
-  const [activeTabId, setActiveTabId] = useState<InnerTabId>("overview");
-  const [expandedNodes, setExpandedNodes] = useState(false);
-  const [expandedNamespaces, setExpandedNamespaces] = useState<Set<string>>(new Set());
-  const [expandedPods, setExpandedPods] = useState<Set<string>>(new Set());
-  const [expandedDeployments, setExpandedDeployments] = useState<Set<string>>(new Set());
-  const [expandedServices, setExpandedServices] = useState<Set<string>>(new Set());
-  const [expandedConfigMaps, setExpandedConfigMaps] = useState<Set<string>>(new Set());
-  const [expandedSecrets, setExpandedSecrets] = useState<Set<string>>(new Set());
-  const [expandedDeploymentItems, setExpandedDeploymentItems] = useState<Set<string>>(new Set());
-  const [resourceSearch, setResourceSearch] = useState<Record<string, string>>({});
-  const [namespaceResources, setNamespaceResources] = useState<Record<string, NamespaceResourcesData>>({});
+  const [innerTabs, setInnerTabs] = useState<InnerTab[]>(
+    initialSnapshot?.innerTabs || [{ id: "overview", label: t("asset.k8sClusterOverview") }]
+  );
+  const [activeTabId, setActiveTabId] = useState<InnerTabId>(initialSnapshot?.activeTabId || "overview");
+  const [expandedNodes, setExpandedNodes] = useState(initialSnapshot?.expandedNodes || false);
+  const [expandedNamespaces, setExpandedNamespaces] = useState<Set<string>>(new Set(initialSnapshot?.expandedNamespaces || []));
+  const [expandedPods, setExpandedPods] = useState<Set<string>>(new Set(initialSnapshot?.expandedPods || []));
+  const [expandedDeployments, setExpandedDeployments] = useState<Set<string>>(
+    new Set(initialSnapshot?.expandedDeployments || [])
+  );
+  const [expandedServices, setExpandedServices] = useState<Set<string>>(new Set(initialSnapshot?.expandedServices || []));
+  const [expandedConfigMaps, setExpandedConfigMaps] = useState<Set<string>>(
+    new Set(initialSnapshot?.expandedConfigMaps || [])
+  );
+  const [expandedSecrets, setExpandedSecrets] = useState<Set<string>>(new Set(initialSnapshot?.expandedSecrets || []));
+  const [expandedDeploymentItems, setExpandedDeploymentItems] = useState<Set<string>>(
+    new Set(initialSnapshot?.expandedDeploymentItems || [])
+  );
+  const [resourceSearch, setResourceSearch] = useState<Record<string, string>>(initialSnapshot?.resourceSearch || {});
+  const [namespaceResources, setNamespaceResources] = useState<Record<string, NamespaceResourcesData>>(
+    initialSnapshot?.namespaceResources || {}
+  );
   const [loadingNamespaces, setLoadingNamespaces] = useState<Set<string>>(new Set());
   const [namespaceErrors, setNamespaceErrors] = useState<Record<string, string>>({});
-  const [namespacePodList, setNamespacePodList] = useState<Record<string, PodListItem[]>>({});
+  const [namespacePodList, setNamespacePodList] = useState<Record<string, PodListItem[]>>(
+    initialSnapshot?.namespacePodList || {}
+  );
   const [loadingPods, setLoadingPods] = useState<Set<string>>(new Set());
   const [podErrors, setPodErrors] = useState<Record<string, string>>({});
-  const [namespaceDeploymentList, setNamespaceDeploymentList] = useState<Record<string, DeploymentListItem[]>>({});
+  const [namespaceDeploymentList, setNamespaceDeploymentList] = useState<Record<string, DeploymentListItem[]>>(
+    initialSnapshot?.namespaceDeploymentList || {}
+  );
   const [loadingDeployments, setLoadingDeployments] = useState<Set<string>>(new Set());
   const [deploymentErrors, setDeploymentErrors] = useState<Record<string, string>>({});
-  const [namespaceServiceList, setNamespaceServiceList] = useState<Record<string, ServiceListItem[]>>({});
+  const [namespaceServiceList, setNamespaceServiceList] = useState<Record<string, ServiceListItem[]>>(
+    initialSnapshot?.namespaceServiceList || {}
+  );
   const [loadingServices, setLoadingServices] = useState<Set<string>>(new Set());
   const [serviceErrors, setServiceErrors] = useState<Record<string, string>>({});
-  const [namespaceConfigMapList, setNamespaceConfigMapList] = useState<Record<string, ConfigMapListItem[]>>({});
+  const [namespaceConfigMapList, setNamespaceConfigMapList] = useState<Record<string, ConfigMapListItem[]>>(
+    initialSnapshot?.namespaceConfigMapList || {}
+  );
   const [loadingConfigMaps, setLoadingConfigMaps] = useState<Set<string>>(new Set());
   const [configMapErrors, setConfigMapErrors] = useState<Record<string, string>>({});
-  const [namespaceSecretList, setNamespaceSecretList] = useState<Record<string, SecretListItem[]>>({});
+  const [namespaceSecretList, setNamespaceSecretList] = useState<Record<string, SecretListItem[]>>(
+    initialSnapshot?.namespaceSecretList || {}
+  );
   const [loadingSecrets, setLoadingSecrets] = useState<Set<string>>(new Set());
   const [secretErrors, setSecretErrors] = useState<Record<string, string>>({});
-  const [podDetails, setPodDetails] = useState<Record<string, PodDetail>>({});
+  const [podDetails, setPodDetails] = useState<Record<string, PodDetail>>(initialSnapshot?.podDetails || {});
   const [loadingPodDetails, setLoadingPodDetails] = useState<Set<string>>(new Set());
   const [podDetailErrors, setPodDetailErrors] = useState<Record<string, string>>({});
-  const [logTabStates, setLogTabStates] = useState<Record<string, import("./K8sLogsPanel").LogTabState>>({});
+  const [logTabStates, setLogTabStates] = useState<Record<string, import("./K8sLogsPanel").LogTabState>>(
+    initialSnapshot?.logTabStates || {}
+  );
   const [refreshingItems, setRefreshingItems] = useState<Set<string>>(new Set());
+  const [autoRefreshingItems, setAutoRefreshingItems] = useState<Set<string>>(
+    new Set(initialSnapshot?.autoRefreshingItems || [])
+  );
   const sidebarRef = useRef<HTMLDivElement>(null);
   const {
     size: sidebarWidth,
@@ -287,44 +347,60 @@ export function K8sClusterPage({ asset }: Props) {
     targetRef: sidebarRef,
   });
 
-  const loadInfo = () => {
-    setLoading(true);
+  const loadInfo = (resetState = !initialSnapshot) => {
+    if (resetState || !info) {
+      setLoading(true);
+    }
     setError(null);
     GetK8sClusterInfo(asset.ID)
       .then((result: string) => {
         const data = JSON.parse(result) as ClusterInfo;
         setInfo(data);
-        setInnerTabs([{ id: "overview", label: t("asset.k8sClusterOverview") }]);
-        setActiveTabId("overview");
-        setExpandedNamespaces(new Set());
-        setExpandedPods(new Set());
-        setExpandedDeployments(new Set());
-        setExpandedServices(new Set());
-        setExpandedConfigMaps(new Set());
-        setExpandedSecrets(new Set());
-        setExpandedDeploymentItems(new Set());
-        setResourceSearch({});
-        setNamespaceResources({});
-        setLoadingNamespaces(new Set());
-        setNamespaceErrors({});
-        setNamespacePodList({});
-        setLoadingPods(new Set());
-        setPodErrors({});
-        setNamespaceDeploymentList({});
-        setLoadingDeployments(new Set());
-        setDeploymentErrors({});
-        setNamespaceServiceList({});
-        setLoadingServices(new Set());
-        setServiceErrors({});
-        setNamespaceConfigMapList({});
-        setLoadingConfigMaps(new Set());
-        setConfigMapErrors({});
-        setNamespaceSecretList({});
-        setLoadingSecrets(new Set());
-        setSecretErrors({});
-        setPodDetails({});
-        setLoadingPodDetails(new Set());
-        setPodDetailErrors({});
+        if (resetState) {
+          const hasDefaultNamespace = defaultNamespace && data.namespaces.some((ns) => ns.name === defaultNamespace);
+          if (hasDefaultNamespace) {
+            setInnerTabs([
+              { id: "overview", label: t("asset.k8sClusterOverview") },
+              { id: `ns:${defaultNamespace}`, label: defaultNamespace },
+            ]);
+            setActiveTabId(`ns:${defaultNamespace}`);
+            setExpandedNamespaces(new Set([defaultNamespace]));
+          } else {
+            setInnerTabs([{ id: "overview", label: t("asset.k8sClusterOverview") }]);
+            setActiveTabId("overview");
+            setExpandedNamespaces(new Set());
+          }
+          setExpandedNodes(false);
+          setExpandedPods(new Set());
+          setExpandedDeployments(new Set());
+          setExpandedServices(new Set());
+          setExpandedConfigMaps(new Set());
+          setExpandedSecrets(new Set());
+          setExpandedDeploymentItems(new Set());
+          setResourceSearch({});
+          setNamespaceResources({});
+          setLoadingNamespaces(new Set());
+          setNamespaceErrors({});
+          setNamespacePodList({});
+          setLoadingPods(new Set());
+          setPodErrors({});
+          setNamespaceDeploymentList({});
+          setLoadingDeployments(new Set());
+          setDeploymentErrors({});
+          setNamespaceServiceList({});
+          setLoadingServices(new Set());
+          setServiceErrors({});
+          setNamespaceConfigMapList({});
+          setLoadingConfigMaps(new Set());
+          setConfigMapErrors({});
+          setNamespaceSecretList({});
+          setLoadingSecrets(new Set());
+          setSecretErrors({});
+          setPodDetails({});
+          setLoadingPodDetails(new Set());
+          setPodDetailErrors({});
+          setAutoRefreshingItems(new Set());
+        }
       })
       .catch((e: unknown) => {
         setError(String(e));
@@ -336,6 +412,7 @@ export function K8sClusterPage({ asset }: Props) {
 
   const refreshInfo = () => {
     setRefreshing(true);
+    setAutoRefreshingItems(new Set());
     const promises: Promise<unknown>[] = [];
 
     promises.push(
@@ -838,6 +915,69 @@ export function K8sClusterPage({ asset }: Props) {
     [asset.ID, refreshingItems]
   );
 
+  const silentReloadPodDetail = useCallback(
+    (ns: string, podName: string) => {
+      const key = `${ns}/${podName}`;
+      GetK8sPodDetail(asset.ID, ns, podName)
+        .then((result: string) => {
+          const data = JSON.parse(result) as PodDetail;
+          setPodDetails((prev) => ({ ...prev, [key]: data }));
+          setPodDetailErrors((prev) => {
+            const next = { ...prev };
+            delete next[key];
+            return next;
+          });
+        })
+        .catch((e: unknown) => {
+          setPodDetailErrors((prev) => ({ ...prev, [key]: String(e) }));
+        });
+    },
+    [asset.ID]
+  );
+
+  const toggleAutoRefresh = useCallback(
+    (itemKey: string, ns: string, name: string) => {
+      if (autoRefreshingItems.has(itemKey)) {
+        setAutoRefreshingItems((prev) => {
+          const next = new Set(prev);
+          next.delete(itemKey);
+          return next;
+        });
+      } else {
+        setAutoRefreshingItems((prev) => new Set(prev).add(itemKey));
+        const colonIdx = itemKey.indexOf(":");
+        const type = itemKey.slice(0, colonIdx);
+        switch (type) {
+          case "pod":
+            refreshPodItem(ns, name);
+            silentReloadPodDetail(ns, name);
+            break;
+          case "deploy":
+            refreshDeploymentItem(ns, name);
+            break;
+          case "svc":
+            refreshServiceItem(ns, name);
+            break;
+          case "cm":
+            refreshConfigMapItem(ns, name);
+            break;
+          case "secret":
+            refreshSecretItem(ns, name);
+            break;
+        }
+      }
+    },
+    [
+      autoRefreshingItems,
+      refreshPodItem,
+      refreshDeploymentItem,
+      refreshServiceItem,
+      refreshConfigMapItem,
+      refreshSecretItem,
+      silentReloadPodDetail,
+    ]
+  );
+
   const toggleDeploymentItem = (ns: string, deploymentName: string) => {
     const key = `${ns}/${deploymentName}`;
     setExpandedDeploymentItems((prev) => {
@@ -852,9 +992,9 @@ export function K8sClusterPage({ asset }: Props) {
   };
 
   const loadPodDetail = useCallback(
-    (ns: string, podName: string) => {
+    (ns: string, podName: string, force = false) => {
       const key = `${ns}/${podName}`;
-      if (podDetails[key] || loadingPodDetails.has(key)) return;
+      if (!force && (podDetails[key] || loadingPodDetails.has(key))) return;
 
       setLoadingPodDetails((prev) => new Set(prev).add(key));
       GetK8sPodDetail(asset.ID, ns, podName)
@@ -893,6 +1033,105 @@ export function K8sClusterPage({ asset }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asset.ID]);
 
+  useEffect(() => {
+    k8sPageStateCache.set(asset.ID, {
+      info,
+      innerTabs,
+      activeTabId,
+      expandedNodes,
+      expandedNamespaces: [...expandedNamespaces],
+      expandedPods: [...expandedPods],
+      expandedDeployments: [...expandedDeployments],
+      expandedServices: [...expandedServices],
+      expandedConfigMaps: [...expandedConfigMaps],
+      expandedSecrets: [...expandedSecrets],
+      expandedDeploymentItems: [...expandedDeploymentItems],
+      resourceSearch,
+      namespaceResources,
+      namespacePodList,
+      namespaceDeploymentList,
+      namespaceServiceList,
+      namespaceConfigMapList,
+      namespaceSecretList,
+      podDetails,
+      logTabStates,
+      autoRefreshingItems: [...autoRefreshingItems],
+    });
+  }, [
+    asset.ID,
+    info,
+    innerTabs,
+    activeTabId,
+    expandedNodes,
+    expandedNamespaces,
+    expandedPods,
+    expandedDeployments,
+    expandedServices,
+    expandedConfigMaps,
+    expandedSecrets,
+    expandedDeploymentItems,
+    resourceSearch,
+    namespaceResources,
+    namespacePodList,
+    namespaceDeploymentList,
+    namespaceServiceList,
+    namespaceConfigMapList,
+    namespaceSecretList,
+    podDetails,
+    logTabStates,
+    autoRefreshingItems,
+  ]);
+
+  const refreshPodItemRef = useRef(refreshPodItem);
+  refreshPodItemRef.current = refreshPodItem;
+  const refreshDeploymentItemRef = useRef(refreshDeploymentItem);
+  refreshDeploymentItemRef.current = refreshDeploymentItem;
+  const refreshServiceItemRef = useRef(refreshServiceItem);
+  refreshServiceItemRef.current = refreshServiceItem;
+  const refreshConfigMapItemRef = useRef(refreshConfigMapItem);
+  refreshConfigMapItemRef.current = refreshConfigMapItem;
+  const refreshSecretItemRef = useRef(refreshSecretItem);
+  refreshSecretItemRef.current = refreshSecretItem;
+  const silentReloadPodDetailRef = useRef(silentReloadPodDetail);
+  silentReloadPodDetailRef.current = silentReloadPodDetail;
+
+  useEffect(() => {
+    if (autoRefreshingItems.size === 0) return;
+
+    const interval = setInterval(() => {
+      autoRefreshingItems.forEach((itemKey) => {
+        const colonIdx = itemKey.indexOf(":");
+        if (colonIdx === -1) return;
+        const slashIdx = itemKey.indexOf("/");
+        if (slashIdx === -1) return;
+        const type = itemKey.slice(0, colonIdx);
+        const ns = itemKey.slice(colonIdx + 1, slashIdx);
+        const name = itemKey.slice(slashIdx + 1);
+
+        switch (type) {
+          case "pod":
+            refreshPodItemRef.current(ns, name);
+            silentReloadPodDetailRef.current(ns, name);
+            break;
+          case "deploy":
+            refreshDeploymentItemRef.current(ns, name);
+            break;
+          case "svc":
+            refreshServiceItemRef.current(ns, name);
+            break;
+          case "cm":
+            refreshConfigMapItemRef.current(ns, name);
+            break;
+          case "secret":
+            refreshSecretItemRef.current(ns, name);
+            break;
+        }
+      });
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [autoRefreshingItems]);
+
   const activeNs =
     info && activeTabId.startsWith("ns:") ? info.namespaces.find((n) => n.name === activeTabId.slice(3)) : null;
 
@@ -901,6 +1140,32 @@ export function K8sClusterPage({ asset }: Props) {
       loadNamespaceResources(activeNs.name);
     }
   }, [activeNs, namespaceResources, loadingNamespaces, loadNamespaceResources]);
+
+  // Reload active pod detail whenever auto-refresh is active for the current pod tab
+  useEffect(() => {
+    if (!activeTabId.startsWith("pod:")) return;
+    const parts = activeTabId.split(":");
+    const ns = parts[1];
+    const podName = parts.slice(2).join(":");
+    const itemKey = `pod:${ns}/${podName}`;
+    if (!autoRefreshingItems.has(itemKey)) return;
+
+    const key = `${ns}/${podName}`;
+    GetK8sPodDetail(asset.ID, ns, podName)
+      .then((result: string) => {
+        const data = JSON.parse(result) as PodDetail;
+        setPodDetails((prev) => ({ ...prev, [key]: data }));
+        setPodDetailErrors((prev) => {
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
+      })
+      .catch((e: unknown) => {
+        setPodDetailErrors((prev) => ({ ...prev, [key]: String(e) }));
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRefreshingItems, activeTabId]);
 
   const openTab = (id: InnerTabId, label: string) => {
     if (id === "overview") {
@@ -915,7 +1180,7 @@ export function K8sClusterPage({ asset }: Props) {
       const parts = id.split(":");
       const ns = parts[1];
       const podName = parts.slice(2).join(":");
-      loadPodDetail(ns, podName);
+      loadPodDetail(ns, podName, true);
     }
   };
 
@@ -999,7 +1264,7 @@ export function K8sClusterPage({ asset }: Props) {
           {error}
         </div>
         <button
-          onClick={loadInfo}
+          onClick={() => loadInfo()}
           className="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm hover:bg-muted"
         >
           <RefreshCw className="h-3.5 w-3.5" />
@@ -1274,12 +1539,16 @@ export function K8sClusterPage({ asset }: Props) {
                                                   className="ml-0.5 inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
                                                   onClick={(e) => {
                                                     e.stopPropagation();
-                                                    refreshDeploymentItem(ns.name, deployment.name);
+                                                    toggleAutoRefresh(
+                                                      `deploy:${ns.name}/${deployment.name}`,
+                                                      ns.name,
+                                                      deployment.name
+                                                    );
                                                   }}
                                                   title={t("action.refresh")}
                                                 >
                                                   <RefreshCw
-                                                    className={`h-3 w-3 ${refreshingItems.has(`deploy:${ns.name}/${deployment.name}`) ? "animate-spin" : ""}`}
+                                                    className={`h-3 w-3 ${refreshingItems.has(`deploy:${ns.name}/${deployment.name}`) || autoRefreshingItems.has(`deploy:${ns.name}/${deployment.name}`) ? "animate-spin" : ""}`}
                                                   />
                                                 </button>
                                               </div>
@@ -1314,12 +1583,16 @@ export function K8sClusterPage({ asset }: Props) {
                                                         className="ml-auto inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
                                                         onClick={(e) => {
                                                           e.stopPropagation();
-                                                          refreshDeploymentItem(ns.name, deployment.name);
+                                                          toggleAutoRefresh(
+                                                            `pod:${ns.name}/${pod.name}`,
+                                                            ns.name,
+                                                            pod.name
+                                                          );
                                                         }}
                                                         title={t("action.refresh")}
                                                       >
                                                         <RefreshCw
-                                                          className={`h-3 w-3 ${refreshingItems.has(`deploy:${ns.name}/${deployment.name}`) ? "animate-spin" : ""}`}
+                                                          className={`h-3 w-3 ${refreshingItems.has(`pod:${ns.name}/${pod.name}`) || autoRefreshingItems.has(`pod:${ns.name}/${pod.name}`) ? "animate-spin" : ""}`}
                                                         />
                                                       </button>
                                                     </div>
@@ -1418,12 +1691,12 @@ export function K8sClusterPage({ asset }: Props) {
                                               className="ml-auto inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
                                               onClick={(e) => {
                                                 e.stopPropagation();
-                                                refreshPodItem(ns.name, pod.name);
+                                                toggleAutoRefresh(`pod:${ns.name}/${pod.name}`, ns.name, pod.name);
                                               }}
                                               title={t("action.refresh")}
                                             >
                                               <RefreshCw
-                                                className={`h-3 w-3 ${refreshingItems.has(`pod:${ns.name}/${pod.name}`) ? "animate-spin" : ""}`}
+                                                className={`h-3 w-3 ${refreshingItems.has(`pod:${ns.name}/${pod.name}`) || autoRefreshingItems.has(`pod:${ns.name}/${pod.name}`) ? "animate-spin" : ""}`}
                                               />
                                             </button>
                                           </div>
@@ -1512,12 +1785,12 @@ export function K8sClusterPage({ asset }: Props) {
                                               className="ml-0.5 inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
                                               onClick={(e) => {
                                                 e.stopPropagation();
-                                                refreshServiceItem(ns.name, svc.name);
+                                                toggleAutoRefresh(`svc:${ns.name}/${svc.name}`, ns.name, svc.name);
                                               }}
                                               title={t("action.refresh")}
                                             >
                                               <RefreshCw
-                                                className={`h-3 w-3 ${refreshingItems.has(`svc:${ns.name}/${svc.name}`) ? "animate-spin" : ""}`}
+                                                className={`h-3 w-3 ${refreshingItems.has(`svc:${ns.name}/${svc.name}`) || autoRefreshingItems.has(`svc:${ns.name}/${svc.name}`) ? "animate-spin" : ""}`}
                                               />
                                             </button>
                                           </div>
@@ -1603,12 +1876,12 @@ export function K8sClusterPage({ asset }: Props) {
                                               className="ml-auto inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
                                               onClick={(e) => {
                                                 e.stopPropagation();
-                                                refreshConfigMapItem(ns.name, cm.name);
+                                                toggleAutoRefresh(`cm:${ns.name}/${cm.name}`, ns.name, cm.name);
                                               }}
                                               title={t("action.refresh")}
                                             >
                                               <RefreshCw
-                                                className={`h-3 w-3 ${refreshingItems.has(`cm:${ns.name}/${cm.name}`) ? "animate-spin" : ""}`}
+                                                className={`h-3 w-3 ${refreshingItems.has(`cm:${ns.name}/${cm.name}`) || autoRefreshingItems.has(`cm:${ns.name}/${cm.name}`) ? "animate-spin" : ""}`}
                                               />
                                             </button>
                                           </div>
@@ -1695,12 +1968,12 @@ export function K8sClusterPage({ asset }: Props) {
                                               className="ml-0.5 inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
                                               onClick={(e) => {
                                                 e.stopPropagation();
-                                                refreshSecretItem(ns.name, s.name);
+                                                toggleAutoRefresh(`secret:${ns.name}/${s.name}`, ns.name, s.name);
                                               }}
                                               title={t("action.refresh")}
                                             >
                                               <RefreshCw
-                                                className={`h-3 w-3 ${refreshingItems.has(`secret:${ns.name}/${s.name}`) ? "animate-spin" : ""}`}
+                                                className={`h-3 w-3 ${refreshingItems.has(`secret:${ns.name}/${s.name}`) || autoRefreshingItems.has(`secret:${ns.name}/${s.name}`) ? "animate-spin" : ""}`}
                                               />
                                             </button>
                                           </div>

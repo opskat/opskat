@@ -291,6 +291,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         resetDatabaseFields();
         resetRedisFields();
         resetMongoDBFields();
+        resetK8sFields();
         setExtConfig({});
       }
     }
