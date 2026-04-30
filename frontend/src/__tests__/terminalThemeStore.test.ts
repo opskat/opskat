@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { useTerminalThemeStore, SCROLLBACK_DEFAULT } from "../stores/terminalThemeStore";
 import { builtinThemes, type TerminalTheme } from "../data/terminalThemes";
 
+type TerminalThemeStoreState = ReturnType<typeof useTerminalThemeStore.getState>;
+
 function makeCustomTheme(id: string, name: string): TerminalTheme {
   return {
     id,
@@ -35,6 +37,9 @@ describe("terminalThemeStore", () => {
       selectedThemeId: "default",
       customThemes: [],
       fontSize: 14,
+      fontPresetId: "default",
+      customFontFamily: "",
+      fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
       scrollback: SCROLLBACK_DEFAULT,
     });
   });
@@ -60,6 +65,38 @@ describe("terminalThemeStore", () => {
     it("clamps to maximum 32", () => {
       useTerminalThemeStore.getState().setFontSize(100);
       expect(useTerminalThemeStore.getState().fontSize).toBe(32);
+    });
+  });
+
+  describe("font presets", () => {
+    const defaultFontFamily = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace";
+
+    it("defaults to the existing terminal font stack", () => {
+      expect(useTerminalThemeStore.getState().fontFamily).toBe(defaultFontFamily);
+    });
+
+    it("selects a known preset and applies its terminal font family", () => {
+      const state: TerminalThemeStoreState = useTerminalThemeStore.getState();
+
+      state.setFontPresetId("fira-code");
+
+      expect(useTerminalThemeStore.getState().fontPresetId).toBe("fira-code");
+      expect(useTerminalThemeStore.getState().fontFamily).toBe("'Fira Code'");
+    });
+
+    it("uses the edited custom font family and falls back when blank", () => {
+      const state: TerminalThemeStoreState = useTerminalThemeStore.getState();
+
+      state.setCustomFontFamily("  Iosevka Term, monospace  ");
+
+      expect(useTerminalThemeStore.getState().fontPresetId).toBe("custom");
+      expect(useTerminalThemeStore.getState().customFontFamily).toBe("Iosevka Term, monospace");
+      expect(useTerminalThemeStore.getState().fontFamily).toBe("Iosevka Term, monospace");
+
+      useTerminalThemeStore.getState().setCustomFontFamily("   ");
+
+      expect(useTerminalThemeStore.getState().customFontFamily).toBe("");
+      expect(useTerminalThemeStore.getState().fontFamily).toBe(defaultFontFamily);
     });
   });
 

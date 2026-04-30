@@ -774,6 +774,10 @@
   "terminal": {
     "title": "终端",
     "desc": "终端配色与字体设置",
+    "fontFamily": "字体",
+    "defaultFont": "默认字体",
+    "customFont": "自定义",
+    "customFontPlaceholder": "输入 font-family，例如 Iosevka Term, monospace",
     "fontSize": "字体大小",
     "scrollback": "回滚缓冲区",
     "scrollbackUnit": "行",
