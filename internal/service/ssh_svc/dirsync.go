@@ -656,7 +656,7 @@ func (s *Session) EnableSync() error {
 		s.syncMu.Unlock()
 		return nil
 	}
-	if s.shellType == shellTypeUnsupported || s.shellType == "" {
+	if s.shellType == shellTypeUnsupported {
 		s.syncMu.Unlock()
 		return dirsync.Error(dirSyncErrUnsupported)
 	}
@@ -665,6 +665,22 @@ func (s *Session) EnableSync() error {
 		ch := s.syncBootstrapCh
 		s.syncMu.Unlock()
 		return waitForSyncBootstrap(ch)
+	}
+
+	// Lazy shell detection: deferred from createSession to avoid the probe
+	// channel consuming PAM motd output before the main session shows it.
+	if s.shellType == "" {
+		s.syncMu.Unlock()
+		shellPath, shellType := detectRemoteShell(s.shared.client)
+		s.syncMu.Lock()
+		s.shellPath = shellPath
+		s.shellType = shellType
+		s.syncState.Shell = shellPath
+		s.syncState.ShellType = shellType
+		if shellType == shellTypeUnsupported {
+			s.syncMu.Unlock()
+			return dirsync.Error(dirSyncErrUnsupported)
+		}
 	}
 
 	token, err := generateSyncToken()

@@ -327,27 +327,25 @@ func (m *Manager) createSession(shared *sharedClient, assetID int64, cols, rows 
 	sessionID := fmt.Sprintf("ssh-%d", m.counter)
 	m.mu.Unlock()
 
-	shellPath, shellType := detectRemoteShell(shared.client)
 	sess := &Session{
-		ID:        sessionID,
-		AssetID:   assetID,
-		shared:    shared,
-		session:   session,
-		stdin:     stdin,
-		stdout:    stdout,
-		shellPath: shellPath,
-		shellType: shellType,
-		onData:    func(data []byte) { onData(sessionID, data) },
-		onClosed:  onClosed,
+		ID:       sessionID,
+		AssetID:  assetID,
+		shared:   shared,
+		session:  session,
+		stdin:    stdin,
+		stdout:   stdout,
+		onData:   func(data []byte) { onData(sessionID, data) },
+		onClosed: onClosed,
 	}
 	if onSync != nil {
 		sess.onSync = func(_ string, state DirectorySyncState) { onSync(sessionID, state) }
 	}
 
-	// Always start a native interactive shell so sshd emits "Last login" /
-	// motd / banner. Sync hooks are installed on demand via Session.EnableSync
-	// (added in Task 3); until then, sync stays off.
-	sess.initSyncState(shellPath, shellType, false)
+	// Start a native interactive shell so sshd emits "Last login" / motd /
+	// banner natively. Shell-type detection and sync hooks are deferred to
+	// Session.EnableSync — opening a probe SSH channel here would consume the
+	// PAM motd output before the user's main session sees it.
+	sess.initSyncState("", "", false)
 
 	if err := session.Shell(); err != nil {
 		if closeErr := session.Close(); closeErr != nil {
