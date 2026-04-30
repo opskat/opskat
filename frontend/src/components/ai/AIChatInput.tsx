@@ -555,7 +555,9 @@ export const AIChatInput = forwardRef<AIChatInputHandle, AIChatInputProps>(funct
       if (!text.trim() && mentions.length === 0) return;
       historyIndexRef.current = -1;
       submitRef.current(text, mentions);
-      editor.commands.clearContent();
+      // emitUpdate=true：默认 false 时 onUpdate 不会触发，外部 inputDraft 仍保留旧内容；
+      // 侧边助手随后创建会话、conversationId 变化时会按草稿把刚发送的消息回填到输入框。
+      editor.commands.clearContent(true);
     };
   }, [editor]);
 

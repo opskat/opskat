@@ -58,6 +58,7 @@ import {
 import { toast } from "sonner";
 import { BrowserOpenURL } from "../../../wailsjs/runtime/runtime";
 import { AIProviderForm, type AIProviderFormValues } from "@/components/ai/AIProviderForm";
+import { useAIStore } from "@/stores/aiStore";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -365,6 +366,7 @@ export function AISettingsSection() {
     try {
       const list = await ListAIProviders();
       setProviders(list || []);
+      await useAIStore.getState().checkConfigured();
     } catch (e) {
       toast.error(errMsg(e));
     }

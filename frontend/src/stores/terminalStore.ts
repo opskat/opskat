@@ -15,7 +15,12 @@ import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
 import { bytesToBase64 } from "../lib/terminalEncode";
 import { useTabStore, registerTabCloseHook, registerTabRestoreHook, type TerminalTabMeta } from "./tabStore";
 import { useAssetStore } from "./assetStore";
-import { disposeTerminal } from "@/components/terminal/terminalRegistry";
+
+function disposeTerminalInstance(sessionId: string): void {
+  import("@/components/terminal/terminalRegistry")
+    .then(({ disposeTerminal }) => disposeTerminal(sessionId))
+    .catch((error) => console.error(`Failed to dispose terminal instance ${sessionId}:`, error));
+}
 
 // Split tree types
 export type SplitNode =
@@ -554,7 +559,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     ConnectSSHAsync(req)
       .then((connectionId) => {
         // Dispose the old persistent xterm; the slot is replaced by a "connecting" node.
-        disposeTerminal(sessionId);
+        disposeTerminalInstance(sessionId);
         set((s) => {
           const d = s.tabData[tabId];
           if (!d) return s;
@@ -910,7 +915,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }));
 
     // Drop the persistent xterm now that it's no longer in the tree.
-    disposeTerminal(sessionId);
+    disposeTerminalInstance(sessionId);
   },
 
   setSplitRatio: (tabId, path, ratio) => {
@@ -949,7 +954,7 @@ registerTabCloseHook((tab) => {
       if (pane.connected) {
         DisconnectSSH(pane.sessionId);
       }
-      disposeTerminal(pane.sessionId);
+      disposeTerminalInstance(pane.sessionId);
     }
   }
 
