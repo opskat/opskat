@@ -356,10 +356,18 @@ func (m *Manager) createSession(shared *sharedClient, assetID int64, cols, rows 
 
 	if supported {
 		if err := session.Start(buildInteractiveShellCommand(shellPath, shellType, syncToken, promptNonce)); err != nil {
-			if closeErr := session.Close(); closeErr != nil {
-				logger.Default().Warn("close session after wrapped shell start failure", zap.Error(closeErr))
+			logger.Default().Warn("wrapped shell start failed, fallback to plain shell",
+				zap.Error(err),
+				zap.String("shellPath", shellPath),
+				zap.String("shellType", shellType),
+			)
+			sess.initSyncState(shellPath, shellType, false)
+			if err := session.Shell(); err != nil {
+				if closeErr := session.Close(); closeErr != nil {
+					logger.Default().Warn("close session after shell fallback failure", zap.Error(closeErr))
+				}
+				return "", fmt.Errorf("启动shell失败: %w", err)
 			}
-			return "", fmt.Errorf("启动终端失败: %w", err)
 		}
 	} else if err := session.Shell(); err != nil {
 		if closeErr := session.Close(); closeErr != nil {
