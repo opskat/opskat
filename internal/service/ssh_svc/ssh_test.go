@@ -352,15 +352,6 @@ func TestParseShellProbeOutput(t *testing.T) {
 	assert.True(t, result.promptReady)
 }
 
-func TestBuildInteractiveShellCommand_BashDoesNotSourceProfiles(t *testing.T) {
-	command := buildInteractiveShellCommand("/bin/bash", shellTypeBash, "token", "nonce")
-
-	assert.NotContains(t, command, ".bash_profile")
-	assert.NotContains(t, command, ".bash_login")
-	assert.NotContains(t, command, ".profile")
-	assert.Contains(t, command, ".bashrc")
-}
-
 func TestSession_PendingDirectoryChangeAcceptsCanonicalCwd(t *testing.T) {
 	sess := newTestSyncSession("real-token")
 	sess.notePrompt("/home/me")

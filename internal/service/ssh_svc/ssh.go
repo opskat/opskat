@@ -351,25 +351,12 @@ func (m *Manager) createSession(shared *sharedClient, assetID int64, cols, rows 
 	}
 
 	shellPath, shellType := detectRemoteShell(shared.client)
-	supported := shellType == shellTypeBash || shellType == shellTypeZsh || shellType == shellTypeKsh || shellType == shellTypeMksh
-	sess.initSyncState(shellPath, shellType, supported)
+	// Lazy injection: always start a native interactive shell so sshd can emit
+	// "Last login" / motd / banner. Sync hooks are installed on demand via
+	// Session.EnableSync (added in a later task). Until then, sync stays off.
+	sess.initSyncState(shellPath, shellType, false)
 
-	if supported {
-		if err := session.Start(buildInteractiveShellCommand(shellPath, shellType, syncToken, promptNonce)); err != nil {
-			logger.Default().Warn("wrapped shell start failed, fallback to plain shell",
-				zap.Error(err),
-				zap.String("shellPath", shellPath),
-				zap.String("shellType", shellType),
-			)
-			sess.initSyncState(shellPath, shellType, false)
-			if err := session.Shell(); err != nil {
-				if closeErr := session.Close(); closeErr != nil {
-					logger.Default().Warn("close session after shell fallback failure", zap.Error(closeErr))
-				}
-				return "", fmt.Errorf("启动shell失败: %w", err)
-			}
-		}
-	} else if err := session.Shell(); err != nil {
+	if err := session.Shell(); err != nil {
 		if closeErr := session.Close(); closeErr != nil {
 			logger.Default().Warn("close session after shell start failure", zap.Error(closeErr))
 		}
