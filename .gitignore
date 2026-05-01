@@ -44,3 +44,5 @@ coverage_new.out
 .idea
 
 .github/pr-assets/
+docs/superpowers/
+.gocache/

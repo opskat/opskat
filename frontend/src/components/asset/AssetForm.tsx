@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
-import { Loader2, PlugZap } from "lucide-react";
+import { Eye, EyeOff, Loader2, PlugZap } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -20,6 +20,7 @@ import {
 } from "@opskat/ui";
 import { IconPicker } from "@/components/asset/IconPicker";
 import { GroupSelect } from "@/components/asset/GroupSelect";
+import { AssetSelect } from "@/components/asset/AssetSelect";
 import { useAssetStore } from "@/stores/assetStore";
 import { asset_entity, credential_entity } from "../../../wailsjs/go/models";
 import {
@@ -117,7 +118,7 @@ interface MongoDBConfig {
   ssh_asset_id?: number;
 }
 
-type AssetType = "ssh" | "database" | "redis" | "mongodb" | (string & {});
+type AssetType = "ssh" | "database" | "redis" | "mongodb" | "k8s" | (string & {});
 
 const DEFAULT_PORTS: Record<string, number> = {
   ssh: 22,
@@ -125,6 +126,7 @@ const DEFAULT_PORTS: Record<string, number> = {
   postgresql: 5432,
   redis: 6379,
   mongodb: 27017,
+  k8s: 6443,
 };
 
 const DEFAULT_ICONS: Record<string, string> = {
@@ -133,6 +135,7 @@ const DEFAULT_ICONS: Record<string, string> = {
   postgresql: "postgresql",
   redis: "redis",
   mongodb: "mongodb",
+  k8s: "kubernetes",
 };
 
 export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }: AssetFormProps) {
@@ -214,6 +217,12 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const [replicaSet, setReplicaSet] = useState("");
   const [authSource, setAuthSource] = useState("");
 
+  // K8S fields
+  const [kubeconfig, setKubeconfig] = useState("");
+  const [k8sNamespace, setK8sNamespace] = useState("");
+  const [k8sContext, setK8sContext] = useState("");
+  const [showKubeconfig, setShowKubeconfig] = useState(false);
+
   // Extension config
   const [extConfig, setExtConfig] = useState<Record<string, unknown>>({});
 
@@ -258,6 +267,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           loadRedisConfig(editAsset);
         } else if (editType === "mongodb") {
           loadMongoDBConfig(editAsset);
+        } else if (editType === "k8s") {
+          loadK8sConfig(editAsset);
         } else {
           // Extension type: load decrypted config
           const extInfo = useExtensionStore.getState().getExtensionForAssetType(editType);
@@ -280,6 +291,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         resetDatabaseFields();
         resetRedisFields();
         resetMongoDBFields();
+        resetK8sFields();
         setExtConfig({});
       }
     }
@@ -439,6 +451,25 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     }
   };
 
+  const loadK8sConfig = (asset: asset_entity.Asset) => {
+    try {
+      const cfg = JSON.parse(asset.Config || "{}");
+      setKubeconfig(cfg.kubeconfig || "");
+      setK8sNamespace(cfg.namespace || "");
+      setK8sContext(cfg.context || "");
+      setShowKubeconfig(false);
+      setSshTunnelId(asset.sshTunnelId || cfg.ssh_asset_id || 0);
+      setHost(""); // K8S uses kubeconfig, not host
+      setPort(6443);
+      setUsername("");
+      setPassword("");
+      setEncryptedPassword("");
+    } catch {
+      resetSharedFields("k8s");
+      resetK8sFields();
+    }
+  };
+
   // Reset shared connection fields with type-appropriate defaults
   const resetSharedFields = (type: AssetType, dbDriver = "mysql") => {
     setHost("");
@@ -506,6 +537,14 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setTls(false);
   };
 
+  // K8S-exclusive fields only
+  const resetK8sFields = () => {
+    setKubeconfig("");
+    setK8sNamespace("");
+    setK8sContext("");
+    setShowKubeconfig(false);
+  };
+
   const handleTypeChange = (newType: AssetType) => {
     if (newType === assetType) return;
     setAssetType(newType);
@@ -519,6 +558,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setPasswordSource("inline");
     setPasswordCredentialId(0);
     setIcon(newType === "database" ? DEFAULT_ICONS[driver] || "mysql" : DEFAULT_ICONS[newType] || "server");
+    if (newType === "k8s") setHost("");
   };
 
   const handleDriverChange = (newDriver: string) => {
@@ -796,6 +836,12 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       if (database) mongoConfig.database = database;
       if (tls) mongoConfig.tls = true;
       config = JSON.stringify(mongoConfig);
+    } else if (assetType === "k8s") {
+      const k8sConfig: Record<string, unknown> = {};
+      if (kubeconfig) k8sConfig.kubeconfig = kubeconfig;
+      if (k8sNamespace) k8sConfig.namespace = k8sNamespace;
+      if (k8sContext) k8sConfig.context = k8sContext;
+      config = JSON.stringify(k8sConfig);
     } else {
       // Extension type: encrypt password fields from configSchema before saving
       const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
@@ -828,9 +874,13 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           ? connectionType === "jumphost" && sshTunnelId > 0
             ? sshTunnelId
             : 0
-          : sshTunnelId > 0
-            ? sshTunnelId
-            : 0,
+          : assetType === "k8s"
+            ? sshTunnelId > 0
+              ? sshTunnelId
+              : 0
+            : sshTunnelId > 0
+              ? sshTunnelId
+              : 0,
     });
 
     setSaving(true);
@@ -858,10 +908,12 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           ? t("asset.typeRedis")
           : assetType === "mongodb"
             ? t("asset.typeMongoDB")
-            : (() => {
-                const found = availableTypes.find((at) => at.type === assetType);
-                return found ? resolveExtDisplayName(found) : assetType;
-              })();
+            : assetType === "k8s"
+              ? t("asset.typeK8s")
+              : (() => {
+                  const found = availableTypes.find((at) => at.type === assetType);
+                  return found ? resolveExtDisplayName(found) : assetType;
+                })();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -885,6 +937,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                   <SelectItem value="database">{t("asset.typeDatabase")}</SelectItem>
                   <SelectItem value="redis">{t("asset.typeRedis")}</SelectItem>
                   <SelectItem value="mongodb">{t("asset.typeMongoDB")}</SelectItem>
+                  <SelectItem value="k8s">{t("asset.typeK8s")}</SelectItem>
                   {availableTypes
                     .filter((at) => !!at.extensionName)
                     .map((at) => (
@@ -912,7 +965,9 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                       ? "cache-01"
                       : assetType === "mongodb"
                         ? "mongo-01"
-                        : `my-${assetType}`
+                        : assetType === "k8s"
+                          ? "prod-cluster"
+                          : `my-${assetType}`
               }
             />
           </div>
@@ -1099,11 +1154,67 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             />
           )}
 
+          {/* K8S config */}
+          {assetType === "k8s" && (
+            <div className="grid gap-3 border rounded-lg p-4">
+              <div className="grid gap-2">
+                <Label>{t("asset.k8sKubeconfig")}</Label>
+                {showKubeconfig ? (
+                  <div className="relative min-w-0 overflow-hidden">
+                    <Textarea
+                      value={kubeconfig}
+                      onChange={(e) => setKubeconfig(e.target.value)}
+                      placeholder={t("asset.k8sKubeconfigPlaceholder") || "Paste kubeconfig YAML content..."}
+                      rows={4}
+                      className="font-mono text-xs pr-9 whitespace-pre-wrap break-all"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="absolute right-1 top-2 h-7 w-7"
+                      onClick={() => setShowKubeconfig(false)}
+                    >
+                      <EyeOff className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ) : (
+                  <Button type="button" variant="outline" className="w-full" onClick={() => setShowKubeconfig(true)}>
+                    <Eye className="h-3.5 w-3.5 mr-1" />
+                    {editAsset ? t("asset.k8sRevealKubeconfig") : t("asset.k8sEnterKubeconfig")}
+                  </Button>
+                )}
+              </div>
+              <div className="grid gap-2">
+                <Label>{t("asset.k8sNamespace")}</Label>
+                <Input value={k8sNamespace} onChange={(e) => setK8sNamespace(e.target.value)} placeholder="default" />
+              </div>
+              <div className="grid gap-2">
+                <Label>{t("asset.k8sContext")}</Label>
+                <Input
+                  value={k8sContext}
+                  onChange={(e) => setK8sContext(e.target.value)}
+                  placeholder="current context"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>{t("asset.sshTunnel")}</Label>
+                <AssetSelect
+                  value={sshTunnelId}
+                  onValueChange={setSshTunnelId}
+                  filterType="ssh"
+                  placeholder={t("asset.sshTunnelNone")}
+                />
+              </div>
+            </div>
+          )}
+
           {/* Extension type config */}
           {assetType !== "ssh" &&
             assetType !== "database" &&
             assetType !== "redis" &&
             assetType !== "mongodb" &&
+            assetType !== "k8s" &&
             (() => {
               const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
               if (!extInfo) return null;
@@ -1168,7 +1279,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               !name ||
               (["ssh", "database", "redis"].includes(assetType) && !host) ||
               (assetType === "mongodb" && mongoConnectionMode === "manual" && !host) ||
-              (assetType === "mongodb" && mongoConnectionMode === "uri" && !connectionURI)
+              (assetType === "mongodb" && mongoConnectionMode === "uri" && !connectionURI) ||
+              (assetType === "k8s" && !kubeconfig)
             }
           >
             {t("action.save")}

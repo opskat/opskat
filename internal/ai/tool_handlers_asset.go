@@ -39,6 +39,10 @@ type safeAssetView struct {
 	ReadOnly bool   `json:"read_only,omitempty"`
 	// Redis 专属
 	RedisDB int `json:"redis_db,omitempty"`
+	// K8s 专属
+	Namespace   string `json:"namespace,omitempty"`
+	K8sContext  string `json:"context,omitempty"`
+	SSHTunnelID int64  `json:"ssh_tunnel_id,omitempty"`
 }
 
 // safeGroupListView 列表视图（不含描述）
@@ -93,6 +97,15 @@ func toSafeView(a *asset_entity.Asset) safeAssetView {
 			if val, ok := fields["auth_type"].(string); ok {
 				v.AuthType = val
 			}
+			if val, ok := fields["namespace"].(string); ok {
+				v.Namespace = val
+			}
+			if val, ok := fields["context"].(string); ok {
+				v.K8sContext = val
+			}
+			if val, ok := fields["ssh_tunnel_id"].(int64); ok {
+				v.SSHTunnelID = val
+			}
 		}
 	}
 	return v
@@ -140,13 +153,23 @@ func handleAddAsset(ctx context.Context, args map[string]any) (string, error) {
 	host := argString(args, "host")
 	port := argInt(args, "port")
 	username := argString(args, "username")
-	if name == "" || host == "" || port == 0 || username == "" {
-		return "", fmt.Errorf("missing required parameters: name, host, port, username")
-	}
-
 	assetType := argString(args, "type")
 	if assetType == "" {
 		assetType = asset_entity.AssetTypeSSH
+	}
+	if name == "" {
+		return "", fmt.Errorf("missing required parameter: name")
+	}
+	switch assetType {
+	case asset_entity.AssetTypeK8s:
+		// K8S uses kubeconfig instead of host/port.
+		if argString(args, "kubeconfig") == "" {
+			return "", fmt.Errorf("missing required parameter: kubeconfig for k8s type")
+		}
+	default:
+		if host == "" || port == 0 || username == "" {
+			return "", fmt.Errorf("missing required parameters: host, port, username")
+		}
 	}
 	groupID := argInt64(args, "group_id")
 	description := argString(args, "description")
