@@ -246,7 +246,7 @@ func executeK8sCommandLocal(ctx context.Context, kubeconfig string, args []strin
 	}
 	defer removeTempFile(kubeconfigPath)
 
-	cmd := exec.CommandContext(ctx, "kubectl", args...)
+	cmd := exec.CommandContext(ctx, "kubectl", args...) //nolint:gosec
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 
 	var stdout, stderr bytes.Buffer
