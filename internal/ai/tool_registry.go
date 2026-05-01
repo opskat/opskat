@@ -48,7 +48,7 @@ func AllToolDefs() []ToolDef {
 			Name:        "list_assets",
 			Description: "List managed remote server assets. Returns an array of assets (with ID, name, type, group, etc.). This is typically the first step to discover asset IDs for other operations. Supports filtering by type and group. Use get_asset to view asset description and connection details.",
 			Params: []ParamDef{
-				{Name: "asset_type", Type: ParamString, Description: `Filter by asset type. Supported: "ssh", "database", "redis", "mongodb". Omit to return all types.`},
+				{Name: "asset_type", Type: ParamString, Description: `Filter by asset type. Supported: "ssh", "database", "redis", "mongodb", "kafka". Omit to return all types.`},
 				{Name: "group_id", Type: ParamNumber, Description: "Filter by group ID. Omit or set to 0 to list all groups."},
 			},
 			Handler: handleListAssets,
@@ -218,8 +218,53 @@ func AllToolDefs() []ToolDef {
 			CommandExtractor: func(args map[string]any) string { return argString(args, "operation") },
 		},
 		{
+			Name:        "kafka_cluster",
+			Description: "Read Kafka cluster metadata for a Kafka asset. Grouped operations: overview, brokers. Credentials are resolved automatically.",
+			Params: []ParamDef{
+				{Name: "asset_id", Type: ParamNumber, Description: "Kafka asset ID. Use list_assets with asset_type='kafka' to find.", Required: true},
+				{Name: "operation", Type: ParamString, Description: "Operation: overview, brokers. Defaults to overview."},
+			},
+			Handler: handleKafkaCluster,
+			CommandExtractor: func(args map[string]any) string {
+				cmd, _ := kafkaClusterCommand(normalizeKafkaOperation(argString(args, "operation"), "overview"))
+				return cmd
+			},
+		},
+		{
+			Name:        "kafka_topic",
+			Description: "Read Kafka topic metadata for a Kafka asset. Grouped operations: list, get. Use get with topic to inspect partitions and replicas.",
+			Params: []ParamDef{
+				{Name: "asset_id", Type: ParamNumber, Description: "Kafka asset ID. Use list_assets with asset_type='kafka' to find.", Required: true},
+				{Name: "operation", Type: ParamString, Description: "Operation: list, get. Defaults to list."},
+				{Name: "topic", Type: ParamString, Description: "Topic name. Required for operation=get."},
+				{Name: "include_internal", Type: ParamString, Description: `Set to "true" to include internal topics when operation=list.`},
+				{Name: "search", Type: ParamString, Description: "Optional case-insensitive topic name filter for operation=list."},
+				{Name: "page", Type: ParamNumber, Description: "Page number for operation=list. Defaults to 1."},
+				{Name: "page_size", Type: ParamNumber, Description: "Page size for operation=list. Defaults to 50, max 500."},
+			},
+			Handler: handleKafkaTopic,
+			CommandExtractor: func(args map[string]any) string {
+				cmd, _ := kafkaTopicCommand(normalizeKafkaOperation(argString(args, "operation"), "list"), argString(args, "topic"))
+				return cmd
+			},
+		},
+		{
+			Name:        "kafka_consumer_group",
+			Description: "Read Kafka consumer group metadata and lag for a Kafka asset. Grouped operations: list, get.",
+			Params: []ParamDef{
+				{Name: "asset_id", Type: ParamNumber, Description: "Kafka asset ID. Use list_assets with asset_type='kafka' to find.", Required: true},
+				{Name: "operation", Type: ParamString, Description: "Operation: list, get. Defaults to list."},
+				{Name: "group", Type: ParamString, Description: "Consumer group name. Required for operation=get."},
+			},
+			Handler: handleKafkaConsumerGroup,
+			CommandExtractor: func(args map[string]any) string {
+				cmd, _ := kafkaConsumerGroupCommand(normalizeKafkaOperation(argString(args, "operation"), "list"), argString(args, "group"))
+				return cmd
+			},
+		},
+		{
 			Name:        "request_permission",
-			Description: "Request approval for grant of command patterns BEFORE executing them. Submit command patterns (one per line, supports '*' wildcard) for one or more target assets. The user will review and may edit the patterns before approving. Once approved, subsequent run_command/exec_sql/exec_redis calls matching any approved pattern will be auto-approved.",
+			Description: "Request approval for grant of command patterns BEFORE executing them. Submit command patterns (one per line, supports '*' wildcard) for one or more target assets. The user will review and may edit the patterns before approving. Once approved, subsequent run_command/exec_sql/exec_redis/exec_mongo/kafka_* calls matching any approved pattern will be auto-approved.",
 			Params: []ParamDef{
 				{Name: "items", Type: ParamString, Description: `JSON array of items. Each item: {"asset_id": <number>, "command_patterns": "<patterns separated by newline>"}. Example: [{"asset_id":1,"command_patterns":"cat /var/log/*\nsystemctl * nginx"},{"asset_id":2,"command_patterns":"SELECT * FROM users"}]`, Required: true},
 				{Name: "reason", Type: ParamString, Description: "Brief explanation of why these permissions are needed.", Required: true},
