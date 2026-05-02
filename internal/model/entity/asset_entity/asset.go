@@ -3,6 +3,9 @@ package asset_entity
 import (
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
+	"strings"
 
 	"github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/pkg/jsonfield"
@@ -14,6 +17,7 @@ const (
 	AssetTypeDatabase = "database"
 	AssetTypeRedis    = "redis"
 	AssetTypeMongoDB  = "mongodb"
+	AssetTypeKafka    = "kafka"
 )
 
 // DatabaseDriver 数据库驱动类型
@@ -152,6 +156,72 @@ type MongoDBConfig struct {
 	SSHAssetID    int64  `json:"ssh_asset_id,omitempty"` // Deprecated: use Asset.SSHTunnelID
 }
 
+// Kafka SASL 机制常量
+const (
+	KafkaSASLNone        = "none"
+	KafkaSASLPlain       = "plain"
+	KafkaSASLSCRAMSHA256 = "scram-sha-256"
+	KafkaSASLSCRAMSHA512 = "scram-sha-512"
+)
+
+// KafkaConfig Kafka 类型的特定配置
+type KafkaConfig struct {
+	Brokers               []string                  `json:"brokers"`
+	ClientID              string                    `json:"client_id,omitempty"`
+	SASLMechanism         string                    `json:"sasl_mechanism,omitempty"`
+	Username              string                    `json:"username,omitempty"`
+	Password              string                    `json:"password,omitempty"`
+	CredentialID          int64                     `json:"credential_id,omitempty"`
+	TLS                   bool                      `json:"tls,omitempty"`
+	TLSInsecure           bool                      `json:"tls_insecure,omitempty"`
+	TLSServerName         string                    `json:"tls_server_name,omitempty"`
+	TLSCAFile             string                    `json:"tls_ca_file,omitempty"`
+	TLSCertFile           string                    `json:"tls_cert_file,omitempty"`
+	TLSKeyFile            string                    `json:"tls_key_file,omitempty"`
+	RequestTimeoutSeconds int                       `json:"request_timeout_seconds,omitempty"`
+	MessagePreviewBytes   int                       `json:"message_preview_bytes,omitempty"`
+	MessageFetchLimit     int                       `json:"message_fetch_limit,omitempty"`
+	SSHAssetID            int64                     `json:"ssh_asset_id,omitempty"` // Deprecated: use Asset.SSHTunnelID
+	SchemaRegistry        KafkaSchemaRegistryConfig `json:"schema_registry,omitempty"`
+	Connect               KafkaConnectConfig        `json:"connect,omitempty"`
+}
+
+// KafkaSchemaRegistryConfig Schema Registry companion 配置
+type KafkaSchemaRegistryConfig struct {
+	Enabled       bool   `json:"enabled,omitempty"`
+	URL           string `json:"url,omitempty"`
+	AuthType      string `json:"auth_type,omitempty"`
+	Username      string `json:"username,omitempty"`
+	Password      string `json:"password,omitempty"`
+	CredentialID  int64  `json:"credential_id,omitempty"`
+	TLSInsecure   bool   `json:"tls_insecure,omitempty"`
+	TLSServerName string `json:"tls_server_name,omitempty"`
+	TLSCAFile     string `json:"tls_ca_file,omitempty"`
+	TLSCertFile   string `json:"tls_cert_file,omitempty"`
+	TLSKeyFile    string `json:"tls_key_file,omitempty"`
+}
+
+// KafkaConnectConfig Kafka Connect companion 配置
+type KafkaConnectConfig struct {
+	Enabled  bool                        `json:"enabled,omitempty"`
+	Clusters []KafkaConnectClusterConfig `json:"clusters,omitempty"`
+}
+
+// KafkaConnectClusterConfig 单个 Kafka Connect 集群配置
+type KafkaConnectClusterConfig struct {
+	Name          string `json:"name,omitempty"`
+	URL           string `json:"url,omitempty"`
+	AuthType      string `json:"auth_type,omitempty"`
+	Username      string `json:"username,omitempty"`
+	Password      string `json:"password,omitempty"`
+	CredentialID  int64  `json:"credential_id,omitempty"`
+	TLSInsecure   bool   `json:"tls_insecure,omitempty"`
+	TLSServerName string `json:"tls_server_name,omitempty"`
+	TLSCAFile     string `json:"tls_ca_file,omitempty"`
+	TLSCertFile   string `json:"tls_cert_file,omitempty"`
+	TLSKeyFile    string `json:"tls_key_file,omitempty"`
+}
+
 // DatabaseConfig PasswordSource implementation
 func (c *DatabaseConfig) GetCredentialID() int64 { return c.CredentialID }
 func (c *DatabaseConfig) GetPassword() string    { return c.Password }
@@ -163,6 +233,18 @@ func (c *RedisConfig) GetPassword() string    { return c.Password }
 // MongoDBConfig PasswordSource implementation
 func (c *MongoDBConfig) GetCredentialID() int64 { return c.CredentialID }
 func (c *MongoDBConfig) GetPassword() string    { return c.Password }
+
+// KafkaConfig PasswordSource implementation
+func (c *KafkaConfig) GetCredentialID() int64 { return c.CredentialID }
+func (c *KafkaConfig) GetPassword() string    { return c.Password }
+
+// KafkaSchemaRegistryConfig PasswordSource implementation
+func (c *KafkaSchemaRegistryConfig) GetCredentialID() int64 { return c.CredentialID }
+func (c *KafkaSchemaRegistryConfig) GetPassword() string    { return c.Password }
+
+// KafkaConnectClusterConfig PasswordSource implementation
+func (c *KafkaConnectClusterConfig) GetCredentialID() int64 { return c.CredentialID }
+func (c *KafkaConnectClusterConfig) GetPassword() string    { return c.Password }
 
 // QueryPolicy SQL 权限策略（类型别名，定义在 policy 包）
 type QueryPolicy = policy.QueryPolicy
@@ -181,6 +263,12 @@ type MongoPolicy = policy.MongoPolicy
 
 // DefaultMongoPolicy 返回默认 MongoDB 权限策略
 var DefaultMongoPolicy = policy.DefaultMongoPolicy
+
+// KafkaPolicy Kafka 权限策略（类型别名，定义在 policy 包）
+type KafkaPolicy = policy.KafkaPolicy
+
+// DefaultKafkaPolicy 返回默认 Kafka 权限策略
+var DefaultKafkaPolicy = policy.DefaultKafkaPolicy
 
 // --- 充血模型方法 ---
 
@@ -202,6 +290,11 @@ func (a *Asset) IsRedis() bool {
 // IsMongoDB 判断是否MongoDB类型
 func (a *Asset) IsMongoDB() bool {
 	return a.Type == AssetTypeMongoDB
+}
+
+// IsKafka 判断是否 Kafka 类型
+func (a *Asset) IsKafka() bool {
+	return a.Type == AssetTypeKafka
 }
 
 // GetSSHConfig 解析SSH配置
@@ -276,6 +369,24 @@ func (a *Asset) SetMongoDBConfig(cfg *MongoDBConfig) error {
 	return nil
 }
 
+// GetKafkaConfig 解析 Kafka 配置
+func (a *Asset) GetKafkaConfig() (*KafkaConfig, error) {
+	if !a.IsKafka() {
+		return nil, errors.New("资产不是Kafka类型")
+	}
+	return jsonfield.Unmarshal[KafkaConfig](a.Config, "Kafka配置")
+}
+
+// SetKafkaConfig 序列化 Kafka 配置到 Config 字段
+func (a *Asset) SetKafkaConfig(cfg *KafkaConfig) error {
+	s, err := jsonfield.Marshal(cfg, "Kafka配置")
+	if err != nil {
+		return err
+	}
+	a.Config = s
+	return nil
+}
+
 // GetQueryPolicy 解析SQL权限策略（database类型）
 func (a *Asset) GetQueryPolicy() (*QueryPolicy, error) {
 	return jsonfield.UnmarshalOrDefault[QueryPolicy](a.CmdPolicy, "SQL权限策略")
@@ -327,6 +438,23 @@ func (a *Asset) SetMongoPolicy(p *MongoPolicy) error {
 	return nil
 }
 
+// GetKafkaPolicy 解析 Kafka 权限策略
+func (a *Asset) GetKafkaPolicy() (*KafkaPolicy, error) {
+	return jsonfield.UnmarshalOrDefault[KafkaPolicy](a.CmdPolicy, "Kafka权限策略")
+}
+
+// SetKafkaPolicy 序列化 Kafka 权限策略
+func (a *Asset) SetKafkaPolicy(p *KafkaPolicy) error {
+	s, err := jsonfield.MarshalOrClear(p, func(v *KafkaPolicy) bool {
+		return v.IsEmpty()
+	}, "Kafka权限策略")
+	if err != nil {
+		return err
+	}
+	a.CmdPolicy = s
+	return nil
+}
+
 // Validate 校验资产必填字段和类型配置的完整性
 func (a *Asset) Validate() error {
 	if a.Name == "" {
@@ -346,6 +474,8 @@ func (a *Asset) Validate() error {
 		return a.validateRedis()
 	case AssetTypeMongoDB:
 		return a.validateMongoDB()
+	case AssetTypeKafka:
+		return a.validateKafka()
 	default:
 		// 扩展资产类型由扩展自行校验
 		return nil
@@ -434,6 +564,71 @@ func (a *Asset) validateMongoDB() error {
 	return nil
 }
 
+// validateKafka 校验 Kafka 类型特定配置
+func (a *Asset) validateKafka() error {
+	cfg, err := a.GetKafkaConfig()
+	if err != nil {
+		return fmt.Errorf("kafka配置无效: %w", err)
+	}
+	if len(cfg.Brokers) == 0 {
+		return errors.New("kafka broker不能为空")
+	}
+	for _, broker := range cfg.Brokers {
+		if err := validateKafkaBroker(broker); err != nil {
+			return err
+		}
+	}
+	switch normalizeKafkaSASLMechanism(cfg.SASLMechanism) {
+	case KafkaSASLNone:
+	case KafkaSASLPlain, KafkaSASLSCRAMSHA256, KafkaSASLSCRAMSHA512:
+		if strings.TrimSpace(cfg.Username) == "" {
+			return errors.New("kafka SASL用户名不能为空")
+		}
+		if cfg.CredentialID == 0 && strings.TrimSpace(cfg.Password) == "" {
+			return errors.New("kafka SASL密码不能为空")
+		}
+	default:
+		return fmt.Errorf("不支持的Kafka SASL机制: %s", cfg.SASLMechanism)
+	}
+	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
+		return errors.New("kafka TLS客户端证书和私钥必须同时配置")
+	}
+	if cfg.RequestTimeoutSeconds < 0 || cfg.RequestTimeoutSeconds > 300 {
+		return errors.New("kafka 请求超时时间无效")
+	}
+	if cfg.MessagePreviewBytes < 0 || cfg.MessagePreviewBytes > 1024*1024 {
+		return errors.New("kafka 消息预览大小无效")
+	}
+	if cfg.MessageFetchLimit < 0 || cfg.MessageFetchLimit > 1000 {
+		return errors.New("kafka 消息读取数量无效")
+	}
+	return nil
+}
+
+func validateKafkaBroker(broker string) error {
+	broker = strings.TrimSpace(broker)
+	if broker == "" {
+		return errors.New("kafka broker不能为空")
+	}
+	host, portText, err := net.SplitHostPort(broker)
+	if err != nil || strings.TrimSpace(host) == "" {
+		return fmt.Errorf("kafka broker必须为host:port格式: %s", broker)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port <= 0 || port > 65535 {
+		return fmt.Errorf("kafka broker端口无效: %s", broker)
+	}
+	return nil
+}
+
+func normalizeKafkaSASLMechanism(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" {
+		return KafkaSASLNone
+	}
+	return v
+}
+
 // CanConnect 判断资产是否处于可连接状态
 func (a *Asset) CanConnect() bool {
 	if a.Status != StatusActive {
@@ -467,6 +662,12 @@ func (a *Asset) CanConnect() bool {
 			return true
 		}
 		return cfg.Host != "" && cfg.Port > 0
+	case AssetTypeKafka:
+		cfg, err := a.GetKafkaConfig()
+		if err != nil {
+			return false
+		}
+		return len(cfg.Brokers) > 0
 	}
 	return false
 }

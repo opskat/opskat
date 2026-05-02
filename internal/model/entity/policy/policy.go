@@ -68,12 +68,32 @@ func DefaultMongoPolicy() *MongoPolicy {
 	return &MongoPolicy{Groups: []string{BuiltinMongoReadOnly, BuiltinMongoDangerousDeny}}
 }
 
+// KafkaPolicy Kafka 权限策略
+type KafkaPolicy struct {
+	AllowList []string `json:"allow_list"`       // 允许的 Kafka action/resource 模式
+	DenyList  []string `json:"deny_list"`        // 拒绝的 Kafka action/resource 模式
+	Groups    []string `json:"groups,omitempty"` // 引用的权限组 ID
+}
+
+// IsEmpty 检查策略是否为空
+func (p *KafkaPolicy) IsEmpty() bool {
+	return len(p.AllowList) == 0 && len(p.DenyList) == 0 && len(p.Groups) == 0
+}
+
+// DefaultKafkaPolicy 返回默认 Kafka 权限策略（引用内置权限组）
+func DefaultKafkaPolicy() *KafkaPolicy {
+	return &KafkaPolicy{
+		Groups: []string{BuiltinKafkaMetadataReadOnly, BuiltinKafkaDangerousDeny},
+	}
+}
+
 // Holder 策略持有者接口，Asset 和 Group 均实现此接口
 type Holder interface {
 	GetCommandPolicy() (*CommandPolicy, error)
 	GetQueryPolicy() (*QueryPolicy, error)
 	GetRedisPolicy() (*RedisPolicy, error)
 	GetMongoPolicy() (*MongoPolicy, error)
+	GetKafkaPolicy() (*KafkaPolicy, error)
 }
 
 // DefaultRedisPolicy 返回默认 Redis 权限策略（引用内置权限组）
@@ -86,17 +106,24 @@ func DefaultRedisPolicy() *RedisPolicy {
 // --- 内置权限组 ID 常量 ---
 
 const (
-	BuiltinLinuxReadOnly      = "builtin:linux-readonly"
-	BuiltinK8sReadOnly        = "builtin:k8s-readonly"
-	BuiltinDockerReadOnly     = "builtin:docker-readonly"
-	BuiltinDangerousDeny      = "builtin:dangerous-deny"
-	BuiltinSQLReadOnly        = "builtin:sql-readonly"
-	BuiltinSQLDangerousDeny   = "builtin:sql-dangerous-deny"
-	BuiltinRedisReadOnly      = "builtin:redis-readonly"
-	BuiltinRedisDangerousDeny = "builtin:redis-dangerous-deny"
-	BuiltinMongoReadOnly      = "builtin:mongo-readonly"
-	BuiltinMongoReadWrite     = "builtin:mongo-readwrite"
-	BuiltinMongoDangerousDeny = "builtin:mongo-dangerous-deny"
+	BuiltinLinuxReadOnly         = "builtin:linux-readonly"
+	BuiltinK8sReadOnly           = "builtin:k8s-readonly"
+	BuiltinDockerReadOnly        = "builtin:docker-readonly"
+	BuiltinDangerousDeny         = "builtin:dangerous-deny"
+	BuiltinSQLReadOnly           = "builtin:sql-readonly"
+	BuiltinSQLDangerousDeny      = "builtin:sql-dangerous-deny"
+	BuiltinRedisReadOnly         = "builtin:redis-readonly"
+	BuiltinRedisDangerousDeny    = "builtin:redis-dangerous-deny"
+	BuiltinMongoReadOnly         = "builtin:mongo-readonly"
+	BuiltinMongoReadWrite        = "builtin:mongo-readwrite"
+	BuiltinMongoDangerousDeny    = "builtin:mongo-dangerous-deny"
+	BuiltinKafkaMetadataReadOnly = "builtin:kafka-metadata-readonly"
+	BuiltinKafkaMessageRead      = "builtin:kafka-message-read"
+	BuiltinKafkaSchemaReadOnly   = "builtin:kafka-schema-readonly"
+	BuiltinKafkaConnectReadOnly  = "builtin:kafka-connect-readonly"
+	BuiltinKafkaOperator         = "builtin:kafka-operator"
+	BuiltinKafkaSecurityAdmin    = "builtin:kafka-security-admin"
+	BuiltinKafkaDangerousDeny    = "builtin:kafka-dangerous-deny"
 
 	// BuiltinPrefix 内置权限组 ID 前缀
 	BuiltinPrefix = "builtin:"

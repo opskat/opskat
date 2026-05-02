@@ -48,5 +48,5 @@ func (h *ExtensionAssetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	http.ServeFile(w, r, filePath)
+	http.ServeFile(w, r, filePath) //nolint:gosec // filePath is validated to stay within the extension directory.
 }

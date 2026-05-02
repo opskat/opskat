@@ -13,6 +13,7 @@ vi.mock("react-i18next", () => ({
 
 describe("AssetTypeFilterButton", () => {
   const builtinOpts = getAssetTypeOptions({});
+  const builtinValues = builtinOpts.map((o) => o.value);
 
   beforeEach(() => {
     cleanup();
@@ -55,6 +56,7 @@ describe("AssetTypeFilterButton", () => {
     expect(screen.getByText("nav.database")).toBeTruthy();
     expect(screen.getByText("nav.redis")).toBeTruthy();
     expect(screen.getByText("nav.mongodb")).toBeTruthy();
+    expect(screen.getByText("nav.kafka")).toBeTruthy();
   });
 
   it('clicking "All types" from empty selects every option', async () => {
@@ -67,7 +69,7 @@ describe("AssetTypeFilterButton", () => {
     );
     await user.click(screen.getByRole("button", { name: /asset.filterByType/i }));
     await user.click(screen.getByText("asset.filterAllTypes"));
-    expect(onChange).toHaveBeenCalledWith(["ssh", "database", "redis", "mongodb"]);
+    expect(onChange).toHaveBeenCalledWith(builtinValues);
   });
 
   it('clicking "All types" when everything is checked deselects all', async () => {
@@ -75,11 +77,7 @@ describe("AssetTypeFilterButton", () => {
     const onChange = vi.fn();
     render(
       <TooltipProvider>
-        <AssetTypeFilterButton
-          value={["ssh", "database", "redis", "mongodb"]}
-          options={builtinOpts}
-          onChange={onChange}
-        />
+        <AssetTypeFilterButton value={builtinValues} options={builtinOpts} onChange={onChange} />
       </TooltipProvider>
     );
     await user.click(screen.getByRole("button", { name: /asset.filterByTypeActive/i }));

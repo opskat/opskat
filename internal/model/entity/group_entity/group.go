@@ -18,6 +18,7 @@ type Group struct {
 	QryPolicy   string `gorm:"column:query_policy;type:text"`
 	RdsPolicy   string `gorm:"column:redis_policy;type:text"`
 	MgoPolicy   string `gorm:"column:mongo_policy;type:text"`
+	KfkPolicy   string `gorm:"column:kafka_policy;type:text"`
 	SortOrder   int    `gorm:"column:sort_order;default:0"`
 	Createtime  int64  `gorm:"column:createtime"`
 	Updatetime  int64  `gorm:"column:updatetime"`
@@ -106,5 +107,22 @@ func (g *Group) SetMongoPolicy(p *policy.MongoPolicy) error {
 		return err
 	}
 	g.MgoPolicy = s
+	return nil
+}
+
+// GetKafkaPolicy 解析 Kafka 权限策略
+func (g *Group) GetKafkaPolicy() (*policy.KafkaPolicy, error) {
+	return jsonfield.UnmarshalOrDefault[policy.KafkaPolicy](g.KfkPolicy, "Kafka权限策略")
+}
+
+// SetKafkaPolicy 序列化 Kafka 权限策略
+func (g *Group) SetKafkaPolicy(p *policy.KafkaPolicy) error {
+	s, err := jsonfield.MarshalOrClear(p, func(v *policy.KafkaPolicy) bool {
+		return v.IsEmpty()
+	}, "Kafka权限策略")
+	if err != nil {
+		return err
+	}
+	g.KfkPolicy = s
 	return nil
 }

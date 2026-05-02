@@ -17,6 +17,9 @@ const policyTypeMap: Record<string, string> = {
   ssh: "command",
   database: "query",
   redis: "redis",
+  mongodb: "mongo",
+  mongo: "mongo",
+  kafka: "kafka",
 };
 
 /** 获取内置权限组的 i18n 短 ID（去掉 builtin: 前缀） */
