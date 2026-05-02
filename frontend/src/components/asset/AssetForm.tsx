@@ -39,7 +39,12 @@ import { SSHConfigSection } from "@/components/asset/SSHConfigSection";
 import { DatabaseConfigSection } from "@/components/asset/DatabaseConfigSection";
 import { RedisConfigSection } from "@/components/asset/RedisConfigSection";
 import { MongoDBConfigSection } from "@/components/asset/MongoDBConfigSection";
-import { KafkaConfigSection } from "@/components/asset/KafkaConfigSection";
+import {
+  KafkaConfigSection,
+  type KafkaCompanionAuthForm,
+  type KafkaConnectClusterForm,
+  type KafkaSchemaRegistryForm,
+} from "@/components/asset/KafkaConfigSection";
 import { useExtensionStore } from "@/extension";
 import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
 
@@ -136,6 +141,41 @@ interface KafkaConfig {
   message_preview_bytes?: number;
   message_fetch_limit?: number;
   ssh_asset_id?: number;
+  schema_registry?: KafkaSchemaRegistryConfig;
+  connect?: KafkaConnectConfig;
+}
+
+interface KafkaSchemaRegistryConfig {
+  enabled?: boolean;
+  url?: string;
+  auth_type?: string;
+  username?: string;
+  password?: string;
+  credential_id?: number;
+  tls_insecure?: boolean;
+  tls_server_name?: string;
+  tls_ca_file?: string;
+  tls_cert_file?: string;
+  tls_key_file?: string;
+}
+
+interface KafkaConnectConfig {
+  enabled?: boolean;
+  clusters?: KafkaConnectClusterConfig[];
+}
+
+interface KafkaConnectClusterConfig {
+  name?: string;
+  url?: string;
+  auth_type?: string;
+  username?: string;
+  password?: string;
+  credential_id?: number;
+  tls_insecure?: boolean;
+  tls_server_name?: string;
+  tls_ca_file?: string;
+  tls_cert_file?: string;
+  tls_key_file?: string;
 }
 
 type AssetType = "ssh" | "database" | "redis" | "mongodb" | "kafka" | (string & {});
@@ -157,6 +197,67 @@ const DEFAULT_ICONS: Record<string, string> = {
   mongodb: "mongodb",
   kafka: "kafka",
 };
+
+function defaultKafkaCompanionAuth(): KafkaCompanionAuthForm {
+  return {
+    authType: "none",
+    username: "",
+    password: "",
+    encryptedPassword: "",
+    passwordSource: "inline",
+    credentialId: 0,
+    tlsInsecure: false,
+    tlsServerName: "",
+    tlsCAFile: "",
+    tlsCertFile: "",
+    tlsKeyFile: "",
+  };
+}
+
+function defaultKafkaSchemaRegistry(): KafkaSchemaRegistryForm {
+  return {
+    enabled: false,
+    url: "",
+    ...defaultKafkaCompanionAuth(),
+  };
+}
+
+function kafkaSchemaRegistryFromConfig(cfg?: KafkaSchemaRegistryConfig): KafkaSchemaRegistryForm {
+  return {
+    enabled: !!cfg?.enabled,
+    url: cfg?.url || "",
+    authType: cfg?.auth_type || "none",
+    username: cfg?.username || "",
+    password: "",
+    encryptedPassword: cfg?.password || "",
+    passwordSource: cfg?.credential_id ? "managed" : "inline",
+    credentialId: cfg?.credential_id || 0,
+    tlsInsecure: !!cfg?.tls_insecure,
+    tlsServerName: cfg?.tls_server_name || "",
+    tlsCAFile: cfg?.tls_ca_file || "",
+    tlsCertFile: cfg?.tls_cert_file || "",
+    tlsKeyFile: cfg?.tls_key_file || "",
+  };
+}
+
+function newKafkaConnectCluster(cfg?: KafkaConnectClusterConfig, index = 0): KafkaConnectClusterForm {
+  return {
+    id: `connect-${Date.now().toString(36)}-${index}-${Math.random().toString(36).slice(2)}`,
+    name: cfg?.name || "",
+    url: cfg?.url || "",
+    authType: cfg?.auth_type || "none",
+    username: cfg?.username || "",
+    password: "",
+    encryptedPassword: cfg?.password || "",
+    passwordSource: cfg?.credential_id ? "managed" : "inline",
+    credentialId: cfg?.credential_id || 0,
+    tlsInsecure: !!cfg?.tls_insecure,
+    tlsServerName: cfg?.tls_server_name || "",
+    tlsCAFile: cfg?.tls_ca_file || "",
+    tlsCertFile: cfg?.tls_cert_file || "",
+    tlsKeyFile: cfg?.tls_key_file || "",
+  };
+}
 
 export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }: AssetFormProps) {
   const { t } = useTranslation();
@@ -249,6 +350,14 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const [kafkaRequestTimeoutSeconds, setKafkaRequestTimeoutSeconds] = useState(30);
   const [kafkaMessagePreviewBytes, setKafkaMessagePreviewBytes] = useState(4096);
   const [kafkaMessageFetchLimit, setKafkaMessageFetchLimit] = useState(50);
+  const [kafkaSchemaRegistry, setKafkaSchemaRegistryState] =
+    useState<KafkaSchemaRegistryForm>(defaultKafkaSchemaRegistry());
+  const [kafkaConnectEnabled, setKafkaConnectEnabled] = useState(false);
+  const [kafkaConnectClusters, setKafkaConnectClusters] = useState<KafkaConnectClusterForm[]>([]);
+
+  const setKafkaSchemaRegistry = useCallback((patch: Partial<KafkaSchemaRegistryForm>) => {
+    setKafkaSchemaRegistryState((current) => ({ ...current, ...patch }));
+  }, []);
 
   // Extension config
   const [extConfig, setExtConfig] = useState<Record<string, unknown>>({});
@@ -495,6 +604,11 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       setKafkaMessagePreviewBytes(cfg.message_preview_bytes || 4096);
       setKafkaMessageFetchLimit(cfg.message_fetch_limit || 50);
       setSshTunnelId(asset.sshTunnelId || cfg.ssh_asset_id || 0);
+      setKafkaSchemaRegistryState(kafkaSchemaRegistryFromConfig(cfg.schema_registry));
+      setKafkaConnectEnabled(!!cfg.connect?.enabled);
+      setKafkaConnectClusters(
+        (cfg.connect?.clusters || []).map((cluster, index) => newKafkaConnectCluster(cluster, index))
+      );
 
       if (cfg.credential_id) {
         setPasswordSource("managed");
@@ -594,6 +708,9 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setKafkaMessagePreviewBytes(4096);
     setKafkaMessageFetchLimit(50);
     setSshTunnelId(0);
+    setKafkaSchemaRegistryState(defaultKafkaSchemaRegistry());
+    setKafkaConnectEnabled(false);
+    setKafkaConnectClusters([]);
   };
 
   const handleTypeChange = (newType: AssetType) => {
@@ -806,6 +923,97 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     return "";
   };
 
+  const encryptKafkaCompanionPassword = async (
+    plainPassword: string,
+    existingEncryptedPassword: string
+  ): Promise<string | undefined> => {
+    if (plainPassword) {
+      try {
+        return await EncryptPassword(plainPassword);
+      } catch {
+        toast.error("Failed to encrypt password");
+        return undefined;
+      }
+    }
+    if (existingEncryptedPassword) return existingEncryptedPassword;
+    return "";
+  };
+
+  const applyKafkaCompanionAuth = async (
+    cfg: KafkaSchemaRegistryConfig | KafkaConnectClusterConfig,
+    form: KafkaCompanionAuthForm
+  ): Promise<boolean> => {
+    const authType = form.authType || "none";
+    if (authType === "none") return true;
+    cfg.auth_type = authType;
+    if (form.username.trim()) cfg.username = form.username.trim();
+    if (form.passwordSource === "managed" && form.credentialId > 0) {
+      cfg.credential_id = form.credentialId;
+      return true;
+    }
+    const encrypted = await encryptKafkaCompanionPassword(form.password, form.encryptedPassword);
+    if (encrypted === undefined) return false;
+    if (encrypted) cfg.password = encrypted;
+    return true;
+  };
+
+  const applyKafkaCompanionTLS = (
+    cfg: KafkaSchemaRegistryConfig | KafkaConnectClusterConfig,
+    form: KafkaCompanionAuthForm
+  ) => {
+    if (form.tlsInsecure) cfg.tls_insecure = true;
+    if (form.tlsServerName.trim()) cfg.tls_server_name = form.tlsServerName.trim();
+    if (form.tlsCAFile.trim()) cfg.tls_ca_file = form.tlsCAFile.trim();
+    if (form.tlsCertFile.trim()) cfg.tls_cert_file = form.tlsCertFile.trim();
+    if (form.tlsKeyFile.trim()) cfg.tls_key_file = form.tlsKeyFile.trim();
+  };
+
+  const validateKafkaCompanions = (): boolean => {
+    if (kafkaSchemaRegistry.enabled && !kafkaSchemaRegistry.url.trim()) {
+      toast.error(t("asset.kafkaSchemaRegistryURLRequired"));
+      return false;
+    }
+    if (kafkaConnectEnabled) {
+      const clusters = kafkaConnectClusters.filter((cluster) => cluster.name.trim() || cluster.url.trim());
+      if (clusters.length === 0) {
+        toast.error(t("asset.kafkaConnectClusterRequired"));
+        return false;
+      }
+      if (clusters.some((cluster) => !cluster.name.trim() || !cluster.url.trim())) {
+        toast.error(t("asset.kafkaConnectClusterInvalid"));
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const buildKafkaSchemaRegistryConfig = async (): Promise<KafkaSchemaRegistryConfig | undefined> => {
+    if (!kafkaSchemaRegistry.enabled) return undefined;
+    const cfg: KafkaSchemaRegistryConfig = {
+      enabled: true,
+      url: kafkaSchemaRegistry.url.trim(),
+    };
+    if (!(await applyKafkaCompanionAuth(cfg, kafkaSchemaRegistry))) return undefined;
+    applyKafkaCompanionTLS(cfg, kafkaSchemaRegistry);
+    return cfg;
+  };
+
+  const buildKafkaConnectConfig = async (): Promise<KafkaConnectConfig | undefined> => {
+    if (!kafkaConnectEnabled) return undefined;
+    const cfg: KafkaConnectConfig = { enabled: true, clusters: [] };
+    const clusters = kafkaConnectClusters.filter((cluster) => cluster.name.trim() || cluster.url.trim());
+    for (const cluster of clusters) {
+      const next: KafkaConnectClusterConfig = {
+        name: cluster.name.trim(),
+        url: cluster.url.trim(),
+      };
+      if (!(await applyKafkaCompanionAuth(next, cluster))) return undefined;
+      applyKafkaCompanionTLS(next, cluster);
+      cfg.clusters?.push(next);
+    }
+    return cfg;
+  };
+
   const encryptProxyPassword = async (): Promise<string | undefined> => {
     if (proxyPassword) {
       try {
@@ -933,6 +1141,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       if (tls) mongoConfig.tls = true;
       config = JSON.stringify(mongoConfig);
     } else if (assetType === "kafka") {
+      if (!validateKafkaCompanions()) return;
       const kafkaConfig = buildKafkaConfig();
       if (kafkaSaslMechanism !== "none") {
         if (passwordSource === "managed" && passwordCredentialId > 0) {
@@ -942,6 +1151,16 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           if (encrypted === undefined) return;
           if (encrypted) kafkaConfig.password = encrypted;
         }
+      }
+      const schemaRegistryConfig = await buildKafkaSchemaRegistryConfig();
+      if (kafkaSchemaRegistry.enabled) {
+        if (!schemaRegistryConfig) return;
+        kafkaConfig.schema_registry = schemaRegistryConfig;
+      }
+      const connectConfig = await buildKafkaConnectConfig();
+      if (kafkaConnectEnabled) {
+        if (!connectConfig) return;
+        kafkaConfig.connect = connectConfig;
       }
       config = JSON.stringify(kafkaConfig);
     } else {
@@ -1291,6 +1510,12 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               setPasswordCredentialId={setPasswordCredentialId}
               managedPasswords={managedPasswords}
               editAssetId={editAsset?.ID}
+              schemaRegistry={kafkaSchemaRegistry}
+              setSchemaRegistry={setKafkaSchemaRegistry}
+              connectEnabled={kafkaConnectEnabled}
+              setConnectEnabled={setKafkaConnectEnabled}
+              connectClusters={kafkaConnectClusters}
+              setConnectClusters={setKafkaConnectClusters}
             />
           )}
 
