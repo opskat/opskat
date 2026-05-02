@@ -296,6 +296,25 @@ func AllToolDefs() []ToolDef {
 			},
 		},
 		{
+			Name:        "kafka_schema",
+			Description: "Read and manage Schema Registry subjects for a Kafka asset when Schema Registry is configured. Grouped operations: list_subjects, list_versions, get, check_compatibility, register, delete.",
+			Params: []ParamDef{
+				{Name: "asset_id", Type: ParamNumber, Description: "Kafka asset ID. Use list_assets with asset_type='kafka' to find.", Required: true},
+				{Name: "operation", Type: ParamString, Description: "Operation: list_subjects, list_versions, get, check_compatibility, register, delete. Defaults to list_subjects."},
+				{Name: "subject", Type: ParamString, Description: "Schema subject. Required except operation=list_subjects."},
+				{Name: "version", Type: ParamString, Description: "Schema version number or latest. Defaults to latest for get/check_compatibility. Optional for delete; omitted deletes the subject."},
+				{Name: "schema", Type: ParamString, Description: "Schema content for register/check_compatibility."},
+				{Name: "schema_type", Type: ParamString, Description: "Schema type such as AVRO, JSON, or PROTOBUF. Optional."},
+				{Name: "references", Type: ParamString, Description: `Schema references as JSON array, e.g. [{"name":"Common","subject":"common-value","version":1}]. Optional.`},
+				{Name: "permanent", Type: ParamString, Description: `Set to "true" for permanent delete where supported.`},
+			},
+			Handler: handleKafkaSchema,
+			CommandExtractor: func(args map[string]any) string {
+				cmd, _ := kafkaSchemaCommand(normalizeKafkaOperation(argString(args, "operation"), "list_subjects"), argString(args, "subject"))
+				return cmd
+			},
+		},
+		{
 			Name:        "kafka_message",
 			Description: "Browse or produce bounded Kafka messages for a Kafka asset. Grouped operations: browse, inspect, produce. Message reads and writes are policy-controlled; returned payload previews are truncated.",
 			Params: []ParamDef{

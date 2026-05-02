@@ -71,6 +71,26 @@ func TestKafkaToolCommandMapping(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "acl.write *", cmd)
 
+	cmd, err = kafkaSchemaCommand("list_subjects", "")
+	require.NoError(t, err)
+	assert.Equal(t, "schema.read *", cmd)
+
+	cmd, err = kafkaSchemaCommand("get", "orders-value")
+	require.NoError(t, err)
+	assert.Equal(t, "schema.read orders-value", cmd)
+
+	cmd, err = kafkaSchemaCommand("check_compatibility", "orders-value")
+	require.NoError(t, err)
+	assert.Equal(t, "schema.read orders-value", cmd)
+
+	cmd, err = kafkaSchemaCommand("register", "orders-value")
+	require.NoError(t, err)
+	assert.Equal(t, "schema.write orders-value", cmd)
+
+	cmd, err = kafkaSchemaCommand("delete", "orders-value")
+	require.NoError(t, err)
+	assert.Equal(t, "schema.delete orders-value", cmd)
+
 	cmd, err = kafkaMessageCommand("browse", "orders")
 	require.NoError(t, err)
 	assert.Equal(t, "message.read orders", cmd)
@@ -94,6 +114,9 @@ func TestKafkaToolCommandMapping(t *testing.T) {
 
 	_, err = kafkaACLCommand("grant")
 	assert.Error(t, err)
+
+	_, err = kafkaSchemaCommand("get", "")
+	assert.Error(t, err)
 }
 
 func TestAllToolDefsContainsGroupedKafkaTools(t *testing.T) {
@@ -106,6 +129,7 @@ func TestAllToolDefsContainsGroupedKafkaTools(t *testing.T) {
 	assert.Contains(t, tools, "kafka_topic")
 	assert.Contains(t, tools, "kafka_consumer_group")
 	assert.Contains(t, tools, "kafka_acl")
+	assert.Contains(t, tools, "kafka_schema")
 	assert.Contains(t, tools, "kafka_message")
 	assert.NotContains(t, tools, "kafka_topic_delete")
 
@@ -131,6 +155,12 @@ func TestAllToolDefsContainsGroupedKafkaTools(t *testing.T) {
 		"operation": "create",
 	})
 	assert.Equal(t, "acl.write *", cmd)
+
+	cmd = tools["kafka_schema"].CommandExtractor(map[string]any{
+		"operation": "register",
+		"subject":   "orders-value",
+	})
+	assert.Equal(t, "schema.write orders-value", cmd)
 }
 
 func TestKafkaMessageArgs(t *testing.T) {
@@ -254,6 +284,40 @@ func TestKafkaACLArgs(t *testing.T) {
 	assert.Equal(t, "describe", deleteReq.Operation)
 }
 
+func TestKafkaSchemaArgs(t *testing.T) {
+	registerReq, err := kafkaRegisterSchemaRequestFromArgs(7, map[string]any{
+		"subject":     "orders-value",
+		"schema":      `{"type":"record","name":"Order","fields":[]}`,
+		"schema_type": "AVRO",
+		"references":  `[{"name":"Common","subject":"common-value","version":1}]`,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(7), registerReq.AssetID)
+	assert.Equal(t, "orders-value", registerReq.Subject)
+	assert.Equal(t, "AVRO", registerReq.SchemaType)
+	require.Len(t, registerReq.References, 1)
+	assert.Equal(t, "common-value", registerReq.References[0].Subject)
+
+	checkReq, err := kafkaCheckSchemaCompatibilityRequestFromArgs(7, map[string]any{
+		"subject": "orders-value",
+		"version": "latest",
+		"schema":  `{"type":"record","name":"Order","fields":[]}`,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "latest", checkReq.Version)
+
+	deleteReq := kafkaDeleteSchemaRequestFromArgs(7, map[string]any{
+		"subject":   "orders-value",
+		"version":   "2",
+		"permanent": "true",
+	})
+	assert.True(t, deleteReq.Permanent)
+	assert.Equal(t, "2", deleteReq.Version)
+
+	_, err = kafkaSchemaReferencesFromJSON(`{"bad":true}`)
+	assert.Error(t, err)
+}
+
 func TestKafkaMessagePermissionStopsBeforeConnection(t *testing.T) {
 	ctx, mockAsset, _ := setupPolicyTest(t)
 	asset := &asset_entity.Asset{
@@ -299,6 +363,31 @@ func TestKafkaACLPermissionStopsBeforeConnection(t *testing.T) {
 		"host":          "*",
 		"acl_operation": "read",
 		"permission":    "allow",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, result, "Kafka")
+}
+
+func TestKafkaSchemaPermissionStopsBeforeConnection(t *testing.T) {
+	ctx, mockAsset, _ := setupPolicyTest(t)
+	asset := &asset_entity.Asset{
+		ID:   1,
+		Name: "kafka-prod",
+		Type: asset_entity.AssetTypeKafka,
+		CmdPolicy: mustJSON(asset_entity.KafkaPolicy{
+			DenyList: []string{"schema.write *"},
+		}),
+	}
+	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+	ctx = WithPolicyChecker(ctx, NewCommandPolicyChecker(nil))
+	result, err := handleKafkaSchema(ctx, map[string]any{
+		"asset_id":      float64(1),
+		"operation":     "register",
+		"subject":       "orders-value",
+		"schema":        `{"type":"record","name":"Order","fields":[]}`,
+		"schema_type":   "AVRO",
+		"compatibility": "FULL",
 	})
 	require.NoError(t, err)
 	assert.Contains(t, result, "Kafka")

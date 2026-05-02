@@ -307,6 +307,73 @@ func handleKafkaACL(ctx context.Context, args map[string]any) (string, error) {
 	}
 }
 
+func handleKafkaSchema(ctx context.Context, args map[string]any) (string, error) {
+	assetID := argInt64(args, "asset_id")
+	operation := normalizeKafkaOperation(argString(args, "operation"), "list_subjects")
+	if assetID == 0 {
+		return "", fmt.Errorf("missing required parameter: asset_id")
+	}
+	command, err := kafkaSchemaCommand(operation, argString(args, "subject"))
+	if err != nil {
+		return "", err
+	}
+	if result, ok := checkKafkaToolPermission(ctx, assetID, command); !ok {
+		return result.Message, nil
+	}
+
+	svc := kafka_svc.New(getSSHPool(ctx))
+	defer svc.Close()
+
+	switch operation {
+	case "list_subjects":
+		result, err := svc.ListSchemaSubjects(ctx, assetID)
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(map[string]any{"subjects": result, "count": len(result)})
+	case "list_versions":
+		result, err := svc.GetSchemaSubjectVersions(ctx, assetID, strings.TrimSpace(argString(args, "subject")))
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(result)
+	case "get", "describe":
+		result, err := svc.GetSchema(ctx, assetID, strings.TrimSpace(argString(args, "subject")), argString(args, "version"))
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(result)
+	case "check_compatibility":
+		req, err := kafkaCheckSchemaCompatibilityRequestFromArgs(assetID, args)
+		if err != nil {
+			return "", err
+		}
+		result, err := svc.CheckSchemaCompatibility(ctx, req)
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(result)
+	case "register":
+		req, err := kafkaRegisterSchemaRequestFromArgs(assetID, args)
+		if err != nil {
+			return "", err
+		}
+		result, err := svc.RegisterSchema(ctx, req)
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(result)
+	case "delete":
+		result, err := svc.DeleteSchema(ctx, kafkaDeleteSchemaRequestFromArgs(assetID, args))
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(result)
+	default:
+		return "", fmt.Errorf("unsupported kafka_schema operation: %s", operation)
+	}
+}
+
 func handleKafkaMessage(ctx context.Context, args map[string]any) (string, error) {
 	assetID := argInt64(args, "asset_id")
 	operation := normalizeKafkaOperation(argString(args, "operation"), "browse")
@@ -655,6 +722,83 @@ func kafkaDeleteACLRequestFromArgs(assetID int64, args map[string]any) kafka_svc
 		Operation:    argString(args, "acl_operation"),
 		Permission:   argString(args, "permission"),
 	}
+}
+
+func kafkaSchemaCommand(operation, subject string) (string, error) {
+	switch operation {
+	case "list_subjects":
+		return "schema.read *", nil
+	case "list_versions", "get", "describe", "check_compatibility":
+		subject = strings.TrimSpace(subject)
+		if subject == "" {
+			return "", fmt.Errorf("subject is required for kafka_schema %s", operation)
+		}
+		return "schema.read " + subject, nil
+	case "register":
+		subject = strings.TrimSpace(subject)
+		if subject == "" {
+			return "", fmt.Errorf("subject is required for kafka_schema %s", operation)
+		}
+		return "schema.write " + subject, nil
+	case "delete":
+		subject = strings.TrimSpace(subject)
+		if subject == "" {
+			return "", fmt.Errorf("subject is required for kafka_schema %s", operation)
+		}
+		return "schema.delete " + subject, nil
+	default:
+		return "", fmt.Errorf("unsupported kafka_schema operation: %s", operation)
+	}
+}
+
+func kafkaRegisterSchemaRequestFromArgs(assetID int64, args map[string]any) (kafka_svc.RegisterSchemaRequest, error) {
+	references, err := kafkaSchemaReferencesFromJSON(argString(args, "references"))
+	if err != nil {
+		return kafka_svc.RegisterSchemaRequest{}, err
+	}
+	return kafka_svc.RegisterSchemaRequest{
+		AssetID:    assetID,
+		Subject:    argString(args, "subject"),
+		Schema:     argString(args, "schema"),
+		SchemaType: argString(args, "schema_type"),
+		References: references,
+	}, nil
+}
+
+func kafkaCheckSchemaCompatibilityRequestFromArgs(assetID int64, args map[string]any) (kafka_svc.CheckSchemaCompatibilityRequest, error) {
+	references, err := kafkaSchemaReferencesFromJSON(argString(args, "references"))
+	if err != nil {
+		return kafka_svc.CheckSchemaCompatibilityRequest{}, err
+	}
+	return kafka_svc.CheckSchemaCompatibilityRequest{
+		AssetID:    assetID,
+		Subject:    argString(args, "subject"),
+		Version:    argString(args, "version"),
+		Schema:     argString(args, "schema"),
+		SchemaType: argString(args, "schema_type"),
+		References: references,
+	}, nil
+}
+
+func kafkaDeleteSchemaRequestFromArgs(assetID int64, args map[string]any) kafka_svc.DeleteSchemaRequest {
+	return kafka_svc.DeleteSchemaRequest{
+		AssetID:   assetID,
+		Subject:   argString(args, "subject"),
+		Version:   argString(args, "version"),
+		Permanent: argBool(args, "permanent"),
+	}
+}
+
+func kafkaSchemaReferencesFromJSON(raw string) ([]kafka_svc.SchemaReference, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var references []kafka_svc.SchemaReference
+	if err := json.Unmarshal([]byte(raw), &references); err != nil {
+		return nil, fmt.Errorf("references must be a JSON array: %w", err)
+	}
+	return references, nil
 }
 
 func kafkaMessageCommand(operation, topic string) (string, error) {
