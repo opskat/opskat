@@ -69,8 +69,15 @@ func TestCheckKafkaPolicy(t *testing.T) {
 func TestCheckKafkaPolicy_TopicAdminDenyWins(t *testing.T) {
 	ctx := context.Background()
 	p := &asset_entity.KafkaPolicy{
-		AllowList: []string{"topic.create *", "topic.config.write *", "topic.partitions.write *", "topic.records.delete *"},
-		DenyList:  []string{"topic.delete *", "topic.records.delete *"},
+		AllowList: []string{
+			"topic.create *",
+			"topic.config.write *",
+			"topic.partitions.write *",
+			"topic.records.delete *",
+			"consumer_group.offset.write *",
+			"consumer_group.delete *",
+		},
+		DenyList: []string{"topic.delete *", "topic.records.delete *", "consumer_group.delete *"},
 	}
 
 	created := CheckKafkaPolicy(ctx, p, "topic.create orders")
@@ -88,6 +95,13 @@ func TestCheckKafkaPolicy_TopicAdminDenyWins(t *testing.T) {
 	records := CheckKafkaPolicy(ctx, p, "topic.records.delete orders")
 	assert.Equal(t, Deny, records.Decision)
 	assert.Equal(t, "topic.records.delete *", records.MatchedPattern)
+
+	reset := CheckKafkaPolicy(ctx, p, "consumer_group.offset.write billing")
+	assert.Equal(t, Allow, reset.Decision)
+
+	deleteGroup := CheckKafkaPolicy(ctx, p, "consumer_group.delete billing")
+	assert.Equal(t, Deny, deleteGroup.Decision)
+	assert.Equal(t, "consumer_group.delete *", deleteGroup.MatchedPattern)
 }
 
 func TestCheckPermission_Kafka(t *testing.T) {

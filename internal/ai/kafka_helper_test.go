@@ -51,6 +51,14 @@ func TestKafkaToolCommandMapping(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "consumer_group.read billing-worker", cmd)
 
+	cmd, err = kafkaConsumerGroupCommand("reset_offset", "billing-worker")
+	require.NoError(t, err)
+	assert.Equal(t, "consumer_group.offset.write billing-worker", cmd)
+
+	cmd, err = kafkaConsumerGroupCommand("delete", "billing-worker")
+	require.NoError(t, err)
+	assert.Equal(t, "consumer_group.delete billing-worker", cmd)
+
 	cmd, err = kafkaMessageCommand("browse", "orders")
 	require.NoError(t, err)
 	assert.Equal(t, "message.read orders", cmd)
@@ -96,6 +104,12 @@ func TestAllToolDefsContainsGroupedKafkaTools(t *testing.T) {
 		"topic":     "orders",
 	})
 	assert.Equal(t, "topic.records.delete orders", cmd)
+
+	cmd = tools["kafka_consumer_group"].CommandExtractor(map[string]any{
+		"operation": "reset_offset",
+		"group":     "billing-worker",
+	})
+	assert.Equal(t, "consumer_group.offset.write billing-worker", cmd)
 }
 
 func TestKafkaMessageArgs(t *testing.T) {
@@ -155,6 +169,29 @@ func TestKafkaTopicAdminArgs(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestKafkaConsumerGroupAdminArgs(t *testing.T) {
+	req, err := kafkaResetConsumerGroupOffsetRequestFromArgs(7, map[string]any{
+		"group":      "billing",
+		"topic":      "orders",
+		"mode":       "offset",
+		"offset":     float64(123),
+		"partitions": `[0,1]`,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(7), req.AssetID)
+	assert.Equal(t, "billing", req.Group)
+	assert.Equal(t, "orders", req.Topic)
+	assert.Equal(t, int64(123), req.Offset)
+	assert.Equal(t, []int32{0, 1}, req.Partitions)
+
+	partitions, err := kafkaInt32SliceFromJSON(`[2,3]`)
+	require.NoError(t, err)
+	assert.Equal(t, []int32{2, 3}, partitions)
+
+	_, err = kafkaInt32SliceFromJSON(`{"bad":true}`)
+	assert.Error(t, err)
+}
+
 func TestKafkaMessagePermissionStopsBeforeConnection(t *testing.T) {
 	ctx, mockAsset, _ := setupPolicyTest(t)
 	asset := &asset_entity.Asset{
@@ -195,6 +232,30 @@ func TestKafkaTopicAdminPermissionStopsBeforeConnection(t *testing.T) {
 		"asset_id":  float64(1),
 		"operation": "delete",
 		"topic":     "orders",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, result, "Kafka")
+}
+
+func TestKafkaConsumerGroupAdminPermissionStopsBeforeConnection(t *testing.T) {
+	ctx, mockAsset, _ := setupPolicyTest(t)
+	asset := &asset_entity.Asset{
+		ID:   1,
+		Name: "kafka-prod",
+		Type: asset_entity.AssetTypeKafka,
+		CmdPolicy: mustJSON(asset_entity.KafkaPolicy{
+			DenyList: []string{"consumer_group.offset.write *"},
+		}),
+	}
+	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+	ctx = WithPolicyChecker(ctx, NewCommandPolicyChecker(nil))
+	result, err := handleKafkaConsumerGroup(ctx, map[string]any{
+		"asset_id":  float64(1),
+		"operation": "reset_offset",
+		"group":     "billing",
+		"topic":     "orders",
+		"mode":      "latest",
 	})
 	require.NoError(t, err)
 	assert.Contains(t, result, "Kafka")

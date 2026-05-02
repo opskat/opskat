@@ -241,6 +241,26 @@ func handleKafkaConsumerGroup(ctx context.Context, args map[string]any) (string,
 			result["total_lag"] = lag.Lag.Total()
 		}
 		return marshalResult(map[string]any{"group": result})
+	case "reset_offset":
+		req, err := kafkaResetConsumerGroupOffsetRequestFromArgs(assetID, args)
+		if err != nil {
+			return "", err
+		}
+		svc := kafka_svc.New(getSSHPool(ctx))
+		defer svc.Close()
+		result, err := svc.ResetConsumerGroupOffset(ctx, req)
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(result)
+	case "delete":
+		svc := kafka_svc.New(getSSHPool(ctx))
+		defer svc.Close()
+		result, err := svc.DeleteConsumerGroup(ctx, assetID, strings.TrimSpace(argString(args, "group")))
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(result)
 	default:
 		return "", fmt.Errorf("unsupported kafka_consumer_group operation: %s", operation)
 	}
@@ -499,9 +519,49 @@ func kafkaConsumerGroupCommand(operation, group string) (string, error) {
 			return "", fmt.Errorf("group is required for kafka_consumer_group %s", operation)
 		}
 		return "consumer_group.read " + group, nil
+	case "reset_offset":
+		group = strings.TrimSpace(group)
+		if group == "" {
+			return "", fmt.Errorf("group is required for kafka_consumer_group %s", operation)
+		}
+		return "consumer_group.offset.write " + group, nil
+	case "delete":
+		group = strings.TrimSpace(group)
+		if group == "" {
+			return "", fmt.Errorf("group is required for kafka_consumer_group %s", operation)
+		}
+		return "consumer_group.delete " + group, nil
 	default:
 		return "", fmt.Errorf("unsupported kafka_consumer_group operation: %s", operation)
 	}
+}
+
+func kafkaResetConsumerGroupOffsetRequestFromArgs(assetID int64, args map[string]any) (kafka_svc.ResetConsumerGroupOffsetRequest, error) {
+	partitions, err := kafkaInt32SliceFromJSON(argString(args, "partitions"))
+	if err != nil {
+		return kafka_svc.ResetConsumerGroupOffsetRequest{}, err
+	}
+	return kafka_svc.ResetConsumerGroupOffsetRequest{
+		AssetID:         assetID,
+		Group:           argString(args, "group"),
+		Topic:           argString(args, "topic"),
+		Partitions:      partitions,
+		Mode:            argString(args, "mode"),
+		Offset:          argInt64(args, "offset"),
+		TimestampMillis: argInt64(args, "timestamp_millis"),
+	}, nil
+}
+
+func kafkaInt32SliceFromJSON(raw string) ([]int32, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var values []int32
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil, fmt.Errorf("partitions must be a JSON array of integers: %w", err)
+	}
+	return values, nil
 }
 
 func kafkaMessageCommand(operation, topic string) (string, error) {

@@ -256,11 +256,16 @@ func AllToolDefs() []ToolDef {
 		},
 		{
 			Name:        "kafka_consumer_group",
-			Description: "Read Kafka consumer group metadata and lag for a Kafka asset. Grouped operations: list, get.",
+			Description: "Read and manage Kafka consumer groups for a Kafka asset. Grouped operations: list, get, reset_offset, delete.",
 			Params: []ParamDef{
 				{Name: "asset_id", Type: ParamNumber, Description: "Kafka asset ID. Use list_assets with asset_type='kafka' to find.", Required: true},
-				{Name: "operation", Type: ParamString, Description: "Operation: list, get. Defaults to list."},
-				{Name: "group", Type: ParamString, Description: "Consumer group name. Required for operation=get."},
+				{Name: "operation", Type: ParamString, Description: "Operation: list, get, reset_offset, delete. Defaults to list."},
+				{Name: "group", Type: ParamString, Description: "Consumer group name. Required except operation=list."},
+				{Name: "topic", Type: ParamString, Description: "Topic name for operation=reset_offset."},
+				{Name: "partitions", Type: ParamString, Description: "Optional JSON array of partitions for operation=reset_offset. Omit to reset all partitions in the topic."},
+				{Name: "mode", Type: ParamString, Description: "Offset reset mode: earliest, latest, offset, timestamp. Defaults to latest."},
+				{Name: "offset", Type: ParamNumber, Description: "Offset for mode=offset."},
+				{Name: "timestamp_millis", Type: ParamNumber, Description: "Unix milliseconds for mode=timestamp."},
 			},
 			Handler: handleKafkaConsumerGroup,
 			CommandExtractor: func(args map[string]any) string {
