@@ -56,3 +56,23 @@ func (a *App) KafkaBrowseMessages(req kafka_svc.BrowseMessagesRequest) (kafka_sv
 func (a *App) KafkaProduceMessage(req kafka_svc.ProduceMessageRequest) (kafka_svc.ProduceMessageResponse, error) {
 	return a.kafkaSvc().ProduceMessage(a.langCtx(), req)
 }
+
+func (a *App) KafkaCreateTopic(req kafka_svc.CreateTopicRequest) (kafka_svc.TopicOperationResponse, error) {
+	return a.kafkaSvc().CreateTopic(a.langCtx(), req)
+}
+
+func (a *App) KafkaDeleteTopic(assetID int64, topic string) (kafka_svc.TopicOperationResponse, error) {
+	return a.kafkaSvc().DeleteTopic(a.langCtx(), assetID, topic)
+}
+
+func (a *App) KafkaAlterTopicConfig(req kafka_svc.AlterTopicConfigRequest) (kafka_svc.TopicOperationResponse, error) {
+	return a.kafkaSvc().AlterTopicConfig(a.langCtx(), req)
+}
+
+func (a *App) KafkaIncreasePartitions(req kafka_svc.IncreasePartitionsRequest) (kafka_svc.TopicOperationResponse, error) {
+	return a.kafkaSvc().IncreasePartitions(a.langCtx(), req)
+}
+
+func (a *App) KafkaDeleteRecords(req kafka_svc.DeleteRecordsRequest) (kafka_svc.DeleteRecordsResponse, error) {
+	return a.kafkaSvc().DeleteRecords(a.langCtx(), req)
+}

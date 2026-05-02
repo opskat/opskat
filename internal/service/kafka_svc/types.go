@@ -61,6 +61,59 @@ type TopicPartition struct {
 	Error           string  `json:"error,omitempty"`
 }
 
+type CreateTopicRequest struct {
+	AssetID           int64             `json:"assetId"`
+	Topic             string            `json:"topic"`
+	Partitions        int32             `json:"partitions"`
+	ReplicationFactor int16             `json:"replicationFactor"`
+	Configs           map[string]string `json:"configs,omitempty"`
+}
+
+type TopicOperationResponse struct {
+	Topic   string `json:"topic"`
+	Message string `json:"message,omitempty"`
+}
+
+type AlterTopicConfigRequest struct {
+	AssetID int64                 `json:"assetId"`
+	Topic   string                `json:"topic"`
+	Configs []TopicConfigMutation `json:"configs"`
+}
+
+type TopicConfigMutation struct {
+	Name  string `json:"name"`
+	Value string `json:"value,omitempty"`
+	Op    string `json:"op,omitempty"`
+}
+
+type IncreasePartitionsRequest struct {
+	AssetID    int64  `json:"assetId"`
+	Topic      string `json:"topic"`
+	Partitions int    `json:"partitions"`
+}
+
+type DeleteRecordsRequest struct {
+	AssetID    int64                    `json:"assetId"`
+	Topic      string                   `json:"topic"`
+	Partitions []DeleteRecordsPartition `json:"partitions"`
+}
+
+type DeleteRecordsPartition struct {
+	Partition int32 `json:"partition"`
+	Offset    int64 `json:"offset"`
+}
+
+type DeleteRecordsResponse struct {
+	Topic      string                         `json:"topic"`
+	Partitions []DeleteRecordsPartitionResult `json:"partitions"`
+}
+
+type DeleteRecordsPartitionResult struct {
+	Partition    int32  `json:"partition"`
+	LowWatermark int64  `json:"lowWatermark"`
+	Error        string `json:"error,omitempty"`
+}
+
 type ConsumerGroup struct {
 	Group        string `json:"group"`
 	Coordinator  int32  `json:"coordinator"`
