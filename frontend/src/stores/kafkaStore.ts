@@ -1,16 +1,20 @@
 import { create } from "zustand";
 import {
+  KafkaBrowseMessages,
   KafkaClusterOverview,
   KafkaGetConsumerGroup,
   KafkaGetTopic,
   KafkaListBrokers,
   KafkaListConsumerGroups,
   KafkaListTopics,
+  KafkaProduceMessage,
 } from "../../wailsjs/go/app/App";
 import { registerTabCloseHook, type QueryTabMeta } from "./tabStore";
 import { useTabStore } from "./tabStore";
 
 export type KafkaView = "overview" | "brokers" | "topics" | "consumerGroups";
+export type KafkaMessageStartMode = "newest" | "oldest" | "offset" | "timestamp";
+export type KafkaPayloadEncoding = "text" | "json" | "hex" | "base64";
 
 export interface KafkaClusterOverviewInfo {
   assetId: number;
@@ -102,6 +106,63 @@ export interface KafkaTopicListResponse {
   pageSize: number;
 }
 
+export interface KafkaRecordHeader {
+  key: string;
+  value?: string;
+  valueBytes: number;
+  valueEncoding: string;
+  valueTruncated: boolean;
+}
+
+export interface KafkaRecord {
+  topic: string;
+  partition: number;
+  offset: number;
+  timestamp: string;
+  timestampMillis: number;
+  key?: string;
+  keyBytes: number;
+  keyEncoding: string;
+  keyTruncated: boolean;
+  value?: string;
+  valueBytes: number;
+  valueEncoding: string;
+  valueTruncated: boolean;
+  headers?: KafkaRecordHeader[];
+}
+
+export interface KafkaBrowseMessagesResponse {
+  topic: string;
+  partitions: number[];
+  startMode: KafkaMessageStartMode;
+  limit: number;
+  maxBytes: number;
+  records: KafkaRecord[];
+  nextOffset?: Record<string, number>;
+  errors?: string[];
+}
+
+export interface KafkaMessageBrowserState {
+  partition: string;
+  startMode: KafkaMessageStartMode;
+  offset: string;
+  timestampMillis: string;
+  limit: number;
+  maxBytes: number;
+  decodeMode: KafkaPayloadEncoding;
+  maxWaitMillis: number;
+  response?: KafkaBrowseMessagesResponse;
+}
+
+export interface KafkaProduceState {
+  partition: string;
+  key: string;
+  value: string;
+  headers: string;
+  keyEncoding: KafkaPayloadEncoding;
+  valueEncoding: KafkaPayloadEncoding;
+}
+
 export interface KafkaTabState {
   activeView: KafkaView;
   overview?: KafkaClusterOverviewInfo;
@@ -115,10 +176,14 @@ export interface KafkaTabState {
   consumerGroups: KafkaConsumerGroup[];
   selectedGroup?: string;
   groupDetail?: KafkaConsumerGroupDetail;
+  messageBrowser: KafkaMessageBrowserState;
+  produceMessage: KafkaProduceState;
   loadingOverview: boolean;
   loadingBrokers: boolean;
   loadingTopics: boolean;
   loadingTopicDetail: boolean;
+  loadingMessages: boolean;
+  producingMessage: boolean;
   loadingGroups: boolean;
   loadingGroupDetail: boolean;
   error: string | null;
@@ -130,10 +195,14 @@ interface KafkaStoreState {
   setActiveView: (tabId: string, view: KafkaView) => void;
   setTopicSearch: (tabId: string, value: string) => void;
   setIncludeInternal: (tabId: string, value: boolean) => void;
+  setMessageBrowser: (tabId: string, patch: Partial<KafkaMessageBrowserState>) => void;
+  setProduceMessage: (tabId: string, patch: Partial<KafkaProduceState>) => void;
   loadOverview: (tabId: string) => Promise<void>;
   loadBrokers: (tabId: string) => Promise<void>;
   loadTopics: (tabId: string) => Promise<void>;
   loadTopicDetail: (tabId: string, topic: string) => Promise<void>;
+  browseMessages: (tabId: string) => Promise<void>;
+  produceKafkaMessage: (tabId: string) => Promise<void>;
   loadConsumerGroups: (tabId: string) => Promise<void>;
   loadConsumerGroupDetail: (tabId: string, group: string) => Promise<void>;
   refreshActiveView: (tabId: string) => Promise<void>;
@@ -148,13 +217,41 @@ function defaultKafkaState(): KafkaTabState {
     topicSearch: "",
     includeInternal: false,
     consumerGroups: [],
+    messageBrowser: defaultMessageBrowserState(),
+    produceMessage: defaultProduceState(),
     loadingOverview: false,
     loadingBrokers: false,
     loadingTopics: false,
     loadingTopicDetail: false,
+    loadingMessages: false,
+    producingMessage: false,
     loadingGroups: false,
     loadingGroupDetail: false,
     error: null,
+  };
+}
+
+function defaultMessageBrowserState(): KafkaMessageBrowserState {
+  return {
+    partition: "",
+    startMode: "newest",
+    offset: "",
+    timestampMillis: "",
+    limit: 50,
+    maxBytes: 4096,
+    decodeMode: "text",
+    maxWaitMillis: 1000,
+  };
+}
+
+function defaultProduceState(): KafkaProduceState {
+  return {
+    partition: "",
+    key: "",
+    value: "",
+    headers: "",
+    keyEncoding: "text",
+    valueEncoding: "text",
   };
 }
 
@@ -187,6 +284,32 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
   setIncludeInternal: (tabId, value) => {
     get().ensureTab(tabId);
     set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], includeInternal: value } } }));
+  },
+
+  setMessageBrowser: (tabId, patch) => {
+    get().ensureTab(tabId);
+    set((s) => ({
+      states: {
+        ...s.states,
+        [tabId]: {
+          ...s.states[tabId],
+          messageBrowser: { ...s.states[tabId].messageBrowser, ...patch },
+        },
+      },
+    }));
+  },
+
+  setProduceMessage: (tabId, patch) => {
+    get().ensureTab(tabId);
+    set((s) => ({
+      states: {
+        ...s.states,
+        [tabId]: {
+          ...s.states[tabId],
+          produceMessage: { ...s.states[tabId].produceMessage, ...patch },
+        },
+      },
+    }));
   },
 
   loadOverview: async (tabId) => {
@@ -263,7 +386,13 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
     set((s) => ({
       states: {
         ...s.states,
-        [tabId]: { ...s.states[tabId], selectedTopic: topic, topicDetail: undefined, loadingTopicDetail: true },
+        [tabId]: {
+          ...s.states[tabId],
+          selectedTopic: topic,
+          topicDetail: undefined,
+          messageBrowser: { ...s.states[tabId].messageBrowser, response: undefined },
+          loadingTopicDetail: true,
+        },
       },
     }));
     try {
@@ -274,6 +403,92 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
     } catch (err) {
       set((s) => ({
         states: { ...s.states, [tabId]: { ...s.states[tabId], loadingTopicDetail: false, error: String(err) } },
+      }));
+    }
+  },
+
+  browseMessages: async (tabId) => {
+    const assetId = getKafkaAssetId(tabId);
+    if (!assetId) return;
+    get().ensureTab(tabId);
+    const state = get().states[tabId] || defaultKafkaState();
+    const topic = state.selectedTopic;
+    if (!topic) return;
+    const browser = state.messageBrowser;
+    set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], loadingMessages: true } } }));
+    try {
+      const req: Record<string, unknown> = {
+        assetId,
+        topic,
+        startMode: browser.startMode,
+        limit: browser.limit,
+        maxBytes: browser.maxBytes,
+        decodeMode: browser.decodeMode,
+        maxWaitMillis: browser.maxWaitMillis,
+      };
+      const partition = parseOptionalInteger(browser.partition, "partition");
+      if (partition !== undefined) req.partition = partition;
+      if (browser.startMode === "offset") req.offset = parseRequiredInteger(browser.offset, "offset");
+      if (browser.startMode === "timestamp") {
+        req.timestampMillis = parseRequiredInteger(browser.timestampMillis, "timestampMillis");
+      }
+      const response = (await KafkaBrowseMessages(req)) as KafkaBrowseMessagesResponse;
+      set((s) => ({
+        states: {
+          ...s.states,
+          [tabId]: {
+            ...s.states[tabId],
+            messageBrowser: { ...s.states[tabId].messageBrowser, response },
+            loadingMessages: false,
+            error: null,
+          },
+        },
+      }));
+    } catch (err) {
+      set((s) => ({
+        states: { ...s.states, [tabId]: { ...s.states[tabId], loadingMessages: false, error: String(err) } },
+      }));
+    }
+  },
+
+  produceKafkaMessage: async (tabId) => {
+    const assetId = getKafkaAssetId(tabId);
+    if (!assetId) return;
+    get().ensureTab(tabId);
+    const state = get().states[tabId] || defaultKafkaState();
+    const topic = state.selectedTopic;
+    if (!topic) return;
+    const form = state.produceMessage;
+    set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], producingMessage: true } } }));
+    try {
+      const req: Record<string, unknown> = {
+        assetId,
+        topic,
+        key: form.key,
+        keyEncoding: form.keyEncoding,
+        value: form.value,
+        valueEncoding: form.valueEncoding,
+      };
+      const partition = parseOptionalInteger(form.partition, "partition");
+      if (partition !== undefined) req.partition = partition;
+      const headers = parseHeaders(form.headers);
+      if (headers.length > 0) req.headers = headers;
+      await KafkaProduceMessage(req);
+      set((s) => ({
+        states: {
+          ...s.states,
+          [tabId]: {
+            ...s.states[tabId],
+            producingMessage: false,
+            produceMessage: { ...s.states[tabId].produceMessage, value: "" },
+            error: null,
+          },
+        },
+      }));
+      await get().browseMessages(tabId);
+    } catch (err) {
+      set((s) => ({
+        states: { ...s.states, [tabId]: { ...s.states[tabId], producingMessage: false, error: String(err) } },
       }));
     }
   },
@@ -334,6 +549,30 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
     }
   },
 }));
+
+function parseOptionalInteger(value: string, field: string): number | undefined {
+  const text = value.trim();
+  if (!text) return undefined;
+  return parseRequiredInteger(text, field);
+}
+
+function parseRequiredInteger(value: string, field: string): number {
+  const n = Number(value.trim());
+  if (!Number.isInteger(n)) {
+    throw new Error(`${field} must be an integer`);
+  }
+  return n;
+}
+
+function parseHeaders(value: string): { key: string; value?: string; encoding?: KafkaPayloadEncoding }[] {
+  const text = value.trim();
+  if (!text) return [];
+  const parsed = JSON.parse(text);
+  if (!Array.isArray(parsed)) {
+    throw new Error("headers must be a JSON array");
+  }
+  return parsed;
+}
 
 registerTabCloseHook((tab) => {
   if (tab.type !== "query") return;

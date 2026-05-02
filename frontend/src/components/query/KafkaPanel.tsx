@@ -1,10 +1,23 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Activity, AlertCircle, Database, ListTree, Loader2, RefreshCw, Search, Server, Users } from "lucide-react";
-import { Button, Input } from "@opskat/ui";
+import { Activity, AlertCircle, Database, ListTree, Loader2, RefreshCw, Search, Send, Server, Users } from "lucide-react";
+import {
+  Button,
+  ConfirmDialog,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Textarea,
+} from "@opskat/ui";
 import {
   type KafkaConsumerGroup,
   type KafkaConsumerGroupDetail,
+  type KafkaMessageStartMode,
+  type KafkaPayloadEncoding,
+  type KafkaRecord,
   type KafkaTabState,
   type KafkaTopicSummary,
   type KafkaView,
@@ -140,10 +153,30 @@ function defaultPanelState(): KafkaTabState {
     topicSearch: "",
     includeInternal: false,
     consumerGroups: [],
+    messageBrowser: {
+      partition: "",
+      startMode: "newest",
+      offset: "",
+      timestampMillis: "",
+      limit: 50,
+      maxBytes: 4096,
+      decodeMode: "text",
+      maxWaitMillis: 1000,
+    },
+    produceMessage: {
+      partition: "",
+      key: "",
+      value: "",
+      headers: "",
+      keyEncoding: "text",
+      valueEncoding: "text",
+    },
     loadingOverview: false,
     loadingBrokers: false,
     loadingTopics: false,
     loadingTopicDetail: false,
+    loadingMessages: false,
+    producingMessage: false,
     loadingGroups: false,
     loadingGroupDetail: false,
     error: null,
@@ -314,7 +347,7 @@ function TopicsView({ tabId, state }: { tabId: string; state: KafkaTabState }) {
           )}
         </div>
         <div className="min-h-0 overflow-auto">
-          <TopicDetailPanel state={state} />
+          <TopicDetailPanel tabId={tabId} state={state} />
         </div>
       </div>
     </div>
@@ -359,7 +392,7 @@ function TopicTable({
   );
 }
 
-function TopicDetailPanel({ state }: { state: KafkaTabState }) {
+function TopicDetailPanel({ tabId, state }: { tabId: string; state: KafkaTabState }) {
   const { t } = useTranslation();
   if (state.loadingTopicDetail) return <LoadingBlock />;
   if (!state.selectedTopic) return <EmptyState text={t("query.kafkaSelectTopic")} />;
@@ -399,7 +432,297 @@ function TopicDetailPanel({ state }: { state: KafkaTabState }) {
           </tbody>
         </table>
       </div>
+      <MessageBrowser tabId={tabId} state={state} />
+      <ProduceMessagePanel tabId={tabId} state={state} />
     </div>
+  );
+}
+
+function MessageBrowser({ tabId, state }: { tabId: string; state: KafkaTabState }) {
+  const { t } = useTranslation();
+  const setMessageBrowser = useKafkaStore((s) => s.setMessageBrowser);
+  const browseMessages = useKafkaStore((s) => s.browseMessages);
+  const browser = state.messageBrowser;
+  const records = browser.response?.records || [];
+
+  return (
+    <div className="overflow-hidden rounded-md border">
+      <div className="flex items-center justify-between border-b px-3 py-2">
+        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {t("query.kafkaMessages")}
+        </div>
+        <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => browseMessages(tabId)}>
+          {state.loadingMessages ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+          {t("query.kafkaBrowseMessages")}
+        </Button>
+      </div>
+      <div className="grid gap-2 border-b bg-muted/20 p-3 text-xs md:grid-cols-6">
+        <Input
+          className="h-8 font-mono"
+          value={browser.partition}
+          onChange={(e) => setMessageBrowser(tabId, { partition: e.target.value })}
+          placeholder={t("query.kafkaAllPartitions")}
+        />
+        <Select
+          value={browser.startMode}
+          onValueChange={(value) => setMessageBrowser(tabId, { startMode: value as KafkaMessageStartMode })}
+        >
+          <SelectTrigger className="h-8">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="newest">{t("query.kafkaStartNewest")}</SelectItem>
+            <SelectItem value="oldest">{t("query.kafkaStartOldest")}</SelectItem>
+            <SelectItem value="offset">{t("query.kafkaStartOffset")}</SelectItem>
+            <SelectItem value="timestamp">{t("query.kafkaStartTimestamp")}</SelectItem>
+          </SelectContent>
+        </Select>
+        <Input
+          className="h-8 font-mono"
+          value={browser.startMode === "timestamp" ? browser.timestampMillis : browser.offset}
+          onChange={(e) =>
+            setMessageBrowser(
+              tabId,
+              browser.startMode === "timestamp" ? { timestampMillis: e.target.value } : { offset: e.target.value }
+            )
+          }
+          disabled={browser.startMode === "newest" || browser.startMode === "oldest"}
+          placeholder={browser.startMode === "timestamp" ? t("query.kafkaTimestampMillis") : t("query.kafkaOffset")}
+        />
+        <NumberInput
+          value={browser.limit}
+          onChange={(value) => setMessageBrowser(tabId, { limit: value })}
+          placeholder={t("query.kafkaLimit")}
+        />
+        <NumberInput
+          value={browser.maxBytes}
+          onChange={(value) => setMessageBrowser(tabId, { maxBytes: value })}
+          placeholder={t("query.kafkaMaxBytes")}
+        />
+        <Select
+          value={browser.decodeMode}
+          onValueChange={(value) => setMessageBrowser(tabId, { decodeMode: value as KafkaPayloadEncoding })}
+        >
+          <SelectTrigger className="h-8">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="text">text</SelectItem>
+            <SelectItem value="json">json</SelectItem>
+            <SelectItem value="hex">hex</SelectItem>
+            <SelectItem value="base64">base64</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      {browser.response?.errors?.length ? (
+        <div className="border-b bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+          {browser.response.errors.join("; ")}
+        </div>
+      ) : null}
+      {state.loadingMessages && !records.length ? (
+        <LoadingBlock />
+      ) : records.length === 0 ? (
+        <EmptyState text={t("query.kafkaNoMessages")} />
+      ) : (
+        <MessageTable records={records} />
+      )}
+    </div>
+  );
+}
+
+function NumberInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+  placeholder: string;
+}) {
+  return (
+    <Input
+      className="h-8 font-mono"
+      type="number"
+      value={value}
+      min={1}
+      onChange={(e) => onChange(Number(e.target.value) || 1)}
+      placeholder={placeholder}
+    />
+  );
+}
+
+function MessageTable({ records }: { records: KafkaRecord[] }) {
+  const { t } = useTranslation();
+  return (
+    <table className="w-full text-xs">
+      <thead className="bg-muted/40 text-muted-foreground">
+        <tr>
+          <th className="px-3 py-2 text-right font-medium">P</th>
+          <th className="px-3 py-2 text-right font-medium">Offset</th>
+          <th className="px-3 py-2 text-left font-medium">{t("query.kafkaMessageKey")}</th>
+          <th className="px-3 py-2 text-left font-medium">{t("query.kafkaMessageValue")}</th>
+          <th className="px-3 py-2 text-left font-medium">{t("query.kafkaHeaders")}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {records.map((record) => (
+          <tr key={`${record.partition}:${record.offset}`} className="border-t align-top">
+            <td className="px-3 py-2 text-right font-mono">{record.partition}</td>
+            <td className="px-3 py-2 text-right font-mono">
+              <div>{record.offset}</div>
+              <div className="mt-1 text-[10px] text-muted-foreground">{record.timestamp}</div>
+            </td>
+            <td className="max-w-[180px] px-3 py-2">
+              <PayloadPreview
+                value={record.key}
+                bytes={record.keyBytes}
+                encoding={record.keyEncoding}
+                truncated={record.keyTruncated}
+              />
+            </td>
+            <td className="max-w-[260px] px-3 py-2">
+              <PayloadPreview
+                value={record.value}
+                bytes={record.valueBytes}
+                encoding={record.valueEncoding}
+                truncated={record.valueTruncated}
+              />
+            </td>
+            <td className="max-w-[180px] px-3 py-2">
+              {record.headers?.length ? (
+                <div className="space-y-1">
+                  {record.headers.map((header, index) => (
+                    <div key={`${header.key}:${index}`} className="min-w-0">
+                      <span className="font-mono text-muted-foreground">{header.key}</span>
+                      <PayloadPreview
+                        value={header.value}
+                        bytes={header.valueBytes}
+                        encoding={header.valueEncoding}
+                        truncated={header.valueTruncated}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <span className="text-muted-foreground">-</span>
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function PayloadPreview({
+  value,
+  bytes,
+  encoding,
+  truncated,
+}: {
+  value?: string;
+  bytes: number;
+  encoding: string;
+  truncated: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="min-w-0">
+      <div className="mb-1 flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
+        <span>{encoding}</span>
+        <span>{bytes}B</span>
+        {truncated && <span className="rounded border px-1 text-[9px]">{t("query.kafkaTruncated")}</span>}
+      </div>
+      <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 font-mono text-[11px] leading-relaxed">
+        {value || "-"}
+      </pre>
+    </div>
+  );
+}
+
+function ProduceMessagePanel({ tabId, state }: { tabId: string; state: KafkaTabState }) {
+  const { t } = useTranslation();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const setProduceMessage = useKafkaStore((s) => s.setProduceMessage);
+  const produceKafkaMessage = useKafkaStore((s) => s.produceKafkaMessage);
+  const form = state.produceMessage;
+
+  return (
+    <div className="overflow-hidden rounded-md border">
+      <div className="border-b px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {t("query.kafkaProduceMessage")}
+      </div>
+      <div className="space-y-3 p-3">
+        <div className="grid gap-2 md:grid-cols-[120px_1fr_120px_120px]">
+          <Input
+            className="h-8 font-mono text-xs"
+            value={form.partition}
+            onChange={(e) => setProduceMessage(tabId, { partition: e.target.value })}
+            placeholder={t("query.kafkaAllPartitions")}
+          />
+          <Input
+            className="h-8 font-mono text-xs"
+            value={form.key}
+            onChange={(e) => setProduceMessage(tabId, { key: e.target.value })}
+            placeholder={t("query.kafkaMessageKey")}
+          />
+          <EncodingSelect value={form.keyEncoding} onChange={(value) => setProduceMessage(tabId, { keyEncoding: value })} />
+          <EncodingSelect
+            value={form.valueEncoding}
+            onChange={(value) => setProduceMessage(tabId, { valueEncoding: value })}
+          />
+        </div>
+        <Textarea
+          className="min-h-24 font-mono text-xs"
+          value={form.value}
+          onChange={(e) => setProduceMessage(tabId, { value: e.target.value })}
+          placeholder={t("query.kafkaMessageValue")}
+        />
+        <Textarea
+          className="min-h-16 font-mono text-xs"
+          value={form.headers}
+          onChange={(e) => setProduceMessage(tabId, { headers: e.target.value })}
+          placeholder={t("query.kafkaHeadersPlaceholder")}
+        />
+        <div className="flex justify-end">
+          <Button className="h-8 gap-1.5" size="sm" disabled={state.producingMessage} onClick={() => setConfirmOpen(true)}>
+            {state.producingMessage ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+            {t("query.kafkaSendMessage")}
+          </Button>
+        </div>
+      </div>
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title={t("query.kafkaProduceConfirmTitle")}
+        description={t("query.kafkaProduceConfirmDesc", { topic: state.selectedTopic || "" })}
+        cancelText={t("action.cancel")}
+        confirmText={t("query.kafkaSendMessage")}
+        onConfirm={() => produceKafkaMessage(tabId)}
+      />
+    </div>
+  );
+}
+
+function EncodingSelect({
+  value,
+  onChange,
+}: {
+  value: KafkaPayloadEncoding;
+  onChange: (value: KafkaPayloadEncoding) => void;
+}) {
+  return (
+    <Select value={value} onValueChange={(next) => onChange(next as KafkaPayloadEncoding)}>
+      <SelectTrigger className="h-8 text-xs">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="text">text</SelectItem>
+        <SelectItem value="json">json</SelectItem>
+        <SelectItem value="hex">hex</SelectItem>
+        <SelectItem value="base64">base64</SelectItem>
+      </SelectContent>
+    </Select>
   );
 }
 
