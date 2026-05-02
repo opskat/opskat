@@ -96,3 +96,27 @@ func (a *App) KafkaCreateACL(req kafka_svc.CreateACLRequest) (kafka_svc.ACLMutat
 func (a *App) KafkaDeleteACL(req kafka_svc.DeleteACLRequest) (kafka_svc.ACLMutationResponse, error) {
 	return a.kafkaSvc().DeleteACL(a.langCtx(), req)
 }
+
+func (a *App) KafkaListSchemaSubjects(assetID int64) ([]string, error) {
+	return a.kafkaSvc().ListSchemaSubjects(a.langCtx(), assetID)
+}
+
+func (a *App) KafkaGetSchemaSubjectVersions(assetID int64, subject string) (kafka_svc.SchemaSubjectVersions, error) {
+	return a.kafkaSvc().GetSchemaSubjectVersions(a.langCtx(), assetID, subject)
+}
+
+func (a *App) KafkaGetSchema(assetID int64, subject string, version string) (kafka_svc.SchemaVersionDetail, error) {
+	return a.kafkaSvc().GetSchema(a.langCtx(), assetID, subject, version)
+}
+
+func (a *App) KafkaCheckSchemaCompatibility(req kafka_svc.CheckSchemaCompatibilityRequest) (kafka_svc.CheckSchemaCompatibilityResponse, error) {
+	return a.kafkaSvc().CheckSchemaCompatibility(a.langCtx(), req)
+}
+
+func (a *App) KafkaRegisterSchema(req kafka_svc.RegisterSchemaRequest) (kafka_svc.RegisterSchemaResponse, error) {
+	return a.kafkaSvc().RegisterSchema(a.langCtx(), req)
+}
+
+func (a *App) KafkaDeleteSchema(req kafka_svc.DeleteSchemaRequest) (kafka_svc.DeleteSchemaResponse, error) {
+	return a.kafkaSvc().DeleteSchema(a.langCtx(), req)
+}

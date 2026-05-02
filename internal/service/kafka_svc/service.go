@@ -119,22 +119,30 @@ func (s *Service) withOneOffClient(ctx context.Context, assetID int64, extraOpts
 }
 
 func resolveKafkaAsset(ctx context.Context, assetID int64) (*asset_entity.Asset, *asset_entity.KafkaConfig, string, error) {
-	asset, err := asset_svc.Asset().Get(ctx, assetID)
+	asset, cfg, err := resolveKafkaAssetConfig(ctx, assetID)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("资产不存在: %w", err)
-	}
-	if !asset.IsKafka() {
-		return nil, nil, "", fmt.Errorf("资产不是 Kafka 类型")
-	}
-	cfg, err := asset.GetKafkaConfig()
-	if err != nil {
-		return nil, nil, "", fmt.Errorf("获取 Kafka 配置失败: %w", err)
+		return nil, nil, "", err
 	}
 	password, err := credential_resolver.Default().ResolvePasswordGeneric(ctx, cfg)
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("解析 Kafka 凭据失败: %w", err)
 	}
 	return asset, cfg, password, nil
+}
+
+func resolveKafkaAssetConfig(ctx context.Context, assetID int64) (*asset_entity.Asset, *asset_entity.KafkaConfig, error) {
+	asset, err := asset_svc.Asset().Get(ctx, assetID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("资产不存在: %w", err)
+	}
+	if !asset.IsKafka() {
+		return nil, nil, fmt.Errorf("资产不是 Kafka 类型")
+	}
+	cfg, err := asset.GetKafkaConfig()
+	if err != nil {
+		return nil, nil, fmt.Errorf("获取 Kafka 配置失败: %w", err)
+	}
+	return asset, cfg, nil
 }
 
 func applyKafkaAdminTimeout(admin *kadm.Client, cfg *asset_entity.KafkaConfig) {

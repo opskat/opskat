@@ -242,6 +242,69 @@ type ACLMutationResponse struct {
 	Count int        `json:"count"`
 }
 
+type SchemaReference struct {
+	Name    string `json:"name"`
+	Subject string `json:"subject"`
+	Version int    `json:"version"`
+}
+
+type SchemaSubjectVersions struct {
+	Subject  string `json:"subject"`
+	Versions []int  `json:"versions"`
+}
+
+type SchemaVersionDetail struct {
+	Subject    string            `json:"subject"`
+	ID         int               `json:"id"`
+	Version    int               `json:"version"`
+	Schema     string            `json:"schema"`
+	SchemaType string            `json:"schemaType,omitempty"`
+	References []SchemaReference `json:"references,omitempty"`
+}
+
+type RegisterSchemaRequest struct {
+	AssetID    int64             `json:"assetId"`
+	Subject    string            `json:"subject"`
+	Schema     string            `json:"schema"`
+	SchemaType string            `json:"schemaType,omitempty"`
+	References []SchemaReference `json:"references,omitempty"`
+}
+
+type RegisterSchemaResponse struct {
+	Subject string `json:"subject"`
+	ID      int    `json:"id"`
+}
+
+type CheckSchemaCompatibilityRequest struct {
+	AssetID    int64             `json:"assetId"`
+	Subject    string            `json:"subject"`
+	Version    string            `json:"version,omitempty"`
+	Schema     string            `json:"schema"`
+	SchemaType string            `json:"schemaType,omitempty"`
+	References []SchemaReference `json:"references,omitempty"`
+}
+
+type CheckSchemaCompatibilityResponse struct {
+	Subject    string   `json:"subject"`
+	Version    string   `json:"version"`
+	Compatible bool     `json:"compatible"`
+	Messages   []string `json:"messages,omitempty"`
+}
+
+type DeleteSchemaRequest struct {
+	AssetID   int64  `json:"assetId"`
+	Subject   string `json:"subject"`
+	Version   string `json:"version,omitempty"`
+	Permanent bool   `json:"permanent,omitempty"`
+}
+
+type DeleteSchemaResponse struct {
+	Subject        string `json:"subject"`
+	Version        string `json:"version,omitempty"`
+	Versions       []int  `json:"versions,omitempty"`
+	DeletedVersion int    `json:"deletedVersion,omitempty"`
+}
+
 type BrowseMessagesRequest struct {
 	AssetID         int64  `json:"assetId"`
 	Topic           string `json:"topic"`
