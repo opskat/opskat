@@ -91,6 +91,26 @@ func TestKafkaToolCommandMapping(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "schema.delete orders-value", cmd)
 
+	cmd, err = kafkaConnectCommand("list_connectors", "")
+	require.NoError(t, err)
+	assert.Equal(t, "connect.read *", cmd)
+
+	cmd, err = kafkaConnectCommand("get_connector", "sink-orders")
+	require.NoError(t, err)
+	assert.Equal(t, "connect.read sink-orders", cmd)
+
+	cmd, err = kafkaConnectCommand("create", "sink-orders")
+	require.NoError(t, err)
+	assert.Equal(t, "connect.write sink-orders", cmd)
+
+	cmd, err = kafkaConnectCommand("pause", "sink-orders")
+	require.NoError(t, err)
+	assert.Equal(t, "connect.state.write sink-orders", cmd)
+
+	cmd, err = kafkaConnectCommand("delete", "sink-orders")
+	require.NoError(t, err)
+	assert.Equal(t, "connect.delete sink-orders", cmd)
+
 	cmd, err = kafkaMessageCommand("browse", "orders")
 	require.NoError(t, err)
 	assert.Equal(t, "message.read orders", cmd)
@@ -117,6 +137,9 @@ func TestKafkaToolCommandMapping(t *testing.T) {
 
 	_, err = kafkaSchemaCommand("get", "")
 	assert.Error(t, err)
+
+	_, err = kafkaConnectCommand("get_connector", "")
+	assert.Error(t, err)
 }
 
 func TestAllToolDefsContainsGroupedKafkaTools(t *testing.T) {
@@ -130,6 +153,7 @@ func TestAllToolDefsContainsGroupedKafkaTools(t *testing.T) {
 	assert.Contains(t, tools, "kafka_consumer_group")
 	assert.Contains(t, tools, "kafka_acl")
 	assert.Contains(t, tools, "kafka_schema")
+	assert.Contains(t, tools, "kafka_connect")
 	assert.Contains(t, tools, "kafka_message")
 	assert.NotContains(t, tools, "kafka_topic_delete")
 
@@ -161,6 +185,12 @@ func TestAllToolDefsContainsGroupedKafkaTools(t *testing.T) {
 		"subject":   "orders-value",
 	})
 	assert.Equal(t, "schema.write orders-value", cmd)
+
+	cmd = tools["kafka_connect"].CommandExtractor(map[string]any{
+		"operation": "restart",
+		"connector": "sink-orders",
+	})
+	assert.Equal(t, "connect.state.write sink-orders", cmd)
 }
 
 func TestKafkaMessageArgs(t *testing.T) {
@@ -318,6 +348,31 @@ func TestKafkaSchemaArgs(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestKafkaConnectArgs(t *testing.T) {
+	configReq, err := kafkaConnectorConfigRequestFromArgs(7, map[string]any{
+		"cluster":   "local",
+		"connector": "sink-orders",
+		"config":    `{"connector.class":"FileStreamSink"}`,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(7), configReq.AssetID)
+	assert.Equal(t, "local", configReq.Cluster)
+	assert.Equal(t, "sink-orders", configReq.Name)
+	assert.Equal(t, "FileStreamSink", configReq.Config["connector.class"])
+
+	restartReq := kafkaRestartConnectorRequestFromArgs(7, map[string]any{
+		"cluster":       "local",
+		"connector":     "sink-orders",
+		"include_tasks": "true",
+		"only_failed":   "true",
+	})
+	assert.True(t, restartReq.IncludeTasks)
+	assert.True(t, restartReq.OnlyFailed)
+
+	_, err = kafkaConnectorConfigRequestFromArgs(7, map[string]any{"config": `[]`})
+	assert.Error(t, err)
+}
+
 func TestKafkaMessagePermissionStopsBeforeConnection(t *testing.T) {
 	ctx, mockAsset, _ := setupPolicyTest(t)
 	asset := &asset_entity.Asset{
@@ -388,6 +443,29 @@ func TestKafkaSchemaPermissionStopsBeforeConnection(t *testing.T) {
 		"schema":        `{"type":"record","name":"Order","fields":[]}`,
 		"schema_type":   "AVRO",
 		"compatibility": "FULL",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, result, "Kafka")
+}
+
+func TestKafkaConnectPermissionStopsBeforeConnection(t *testing.T) {
+	ctx, mockAsset, _ := setupPolicyTest(t)
+	asset := &asset_entity.Asset{
+		ID:   1,
+		Name: "kafka-prod",
+		Type: asset_entity.AssetTypeKafka,
+		CmdPolicy: mustJSON(asset_entity.KafkaPolicy{
+			DenyList: []string{"connect.state.write *"},
+		}),
+	}
+	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+	ctx = WithPolicyChecker(ctx, NewCommandPolicyChecker(nil))
+	result, err := handleKafkaConnect(ctx, map[string]any{
+		"asset_id":  float64(1),
+		"operation": "restart",
+		"cluster":   "local",
+		"connector": "sink-orders",
 	})
 	require.NoError(t, err)
 	assert.Contains(t, result, "Kafka")

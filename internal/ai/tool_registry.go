@@ -315,6 +315,24 @@ func AllToolDefs() []ToolDef {
 			},
 		},
 		{
+			Name:        "kafka_connect",
+			Description: "Read and manage Kafka Connect connectors for a Kafka asset when Kafka Connect is configured. Grouped operations: list_clusters, list_connectors, get_connector, create, update_config, pause, resume, restart, delete.",
+			Params: []ParamDef{
+				{Name: "asset_id", Type: ParamNumber, Description: "Kafka asset ID. Use list_assets with asset_type='kafka' to find.", Required: true},
+				{Name: "operation", Type: ParamString, Description: "Operation: list_clusters, list_connectors, get_connector, create, update_config, pause, resume, restart, delete. Defaults to list_connectors."},
+				{Name: "cluster", Type: ParamString, Description: "Kafka Connect cluster name. Optional when the asset has exactly one Connect cluster."},
+				{Name: "connector", Type: ParamString, Description: "Connector name. Required except list_clusters/list_connectors."},
+				{Name: "config", Type: ParamString, Description: "Connector config as JSON object for create/update_config."},
+				{Name: "include_tasks", Type: ParamString, Description: `Set to "true" for restart to include tasks.`},
+				{Name: "only_failed", Type: ParamString, Description: `Set to "true" for restart to restart only failed tasks.`},
+			},
+			Handler: handleKafkaConnect,
+			CommandExtractor: func(args map[string]any) string {
+				cmd, _ := kafkaConnectCommand(normalizeKafkaOperation(argString(args, "operation"), "list_connectors"), argString(args, "connector"))
+				return cmd
+			},
+		},
+		{
 			Name:        "kafka_message",
 			Description: "Browse or produce bounded Kafka messages for a Kafka asset. Grouped operations: browse, inspect, produce. Message reads and writes are policy-controlled; returned payload previews are truncated.",
 			Params: []ParamDef{

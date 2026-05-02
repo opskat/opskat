@@ -374,6 +374,92 @@ func handleKafkaSchema(ctx context.Context, args map[string]any) (string, error)
 	}
 }
 
+func handleKafkaConnect(ctx context.Context, args map[string]any) (string, error) {
+	assetID := argInt64(args, "asset_id")
+	operation := normalizeKafkaOperation(argString(args, "operation"), "list_connectors")
+	if assetID == 0 {
+		return "", fmt.Errorf("missing required parameter: asset_id")
+	}
+	command, err := kafkaConnectCommand(operation, argString(args, "connector"))
+	if err != nil {
+		return "", err
+	}
+	if result, ok := checkKafkaToolPermission(ctx, assetID, command); !ok {
+		return result.Message, nil
+	}
+
+	svc := kafka_svc.New(getSSHPool(ctx))
+	defer svc.Close()
+
+	cluster := argString(args, "cluster")
+	switch operation {
+	case "list_clusters":
+		result, err := svc.ListConnectClusters(ctx, assetID)
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(map[string]any{"clusters": result, "count": len(result)})
+	case "list_connectors":
+		result, err := svc.ListConnectors(ctx, kafka_svc.ListConnectorsRequest{AssetID: assetID, Cluster: cluster})
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(map[string]any{"connectors": result, "count": len(result)})
+	case "get_connector", "get", "describe":
+		result, err := svc.GetConnector(ctx, assetID, cluster, strings.TrimSpace(argString(args, "connector")))
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(result)
+	case "create":
+		req, err := kafkaConnectorConfigRequestFromArgs(assetID, args)
+		if err != nil {
+			return "", err
+		}
+		result, err := svc.CreateConnector(ctx, req)
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(result)
+	case "update_config":
+		req, err := kafkaConnectorConfigRequestFromArgs(assetID, args)
+		if err != nil {
+			return "", err
+		}
+		result, err := svc.UpdateConnectorConfig(ctx, req)
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(result)
+	case "pause":
+		result, err := svc.PauseConnector(ctx, assetID, cluster, strings.TrimSpace(argString(args, "connector")))
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(result)
+	case "resume":
+		result, err := svc.ResumeConnector(ctx, assetID, cluster, strings.TrimSpace(argString(args, "connector")))
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(result)
+	case "restart":
+		result, err := svc.RestartConnector(ctx, kafkaRestartConnectorRequestFromArgs(assetID, args))
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(result)
+	case "delete":
+		result, err := svc.DeleteConnector(ctx, assetID, cluster, strings.TrimSpace(argString(args, "connector")))
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(result)
+	default:
+		return "", fmt.Errorf("unsupported kafka_connect operation: %s", operation)
+	}
+}
+
 func handleKafkaMessage(ctx context.Context, args map[string]any) (string, error) {
 	assetID := argInt64(args, "asset_id")
 	operation := normalizeKafkaOperation(argString(args, "operation"), "browse")
@@ -799,6 +885,65 @@ func kafkaSchemaReferencesFromJSON(raw string) ([]kafka_svc.SchemaReference, err
 		return nil, fmt.Errorf("references must be a JSON array: %w", err)
 	}
 	return references, nil
+}
+
+func kafkaConnectCommand(operation, connector string) (string, error) {
+	switch operation {
+	case "list_clusters", "list_connectors":
+		return "connect.read *", nil
+	case "get_connector", "get", "describe":
+		connector = strings.TrimSpace(connector)
+		if connector == "" {
+			return "", fmt.Errorf("connector is required for kafka_connect %s", operation)
+		}
+		return "connect.read " + connector, nil
+	case "create", "update_config":
+		connector = strings.TrimSpace(connector)
+		if connector == "" {
+			return "", fmt.Errorf("connector is required for kafka_connect %s", operation)
+		}
+		return "connect.write " + connector, nil
+	case "pause", "resume", "restart":
+		connector = strings.TrimSpace(connector)
+		if connector == "" {
+			return "", fmt.Errorf("connector is required for kafka_connect %s", operation)
+		}
+		return "connect.state.write " + connector, nil
+	case "delete":
+		connector = strings.TrimSpace(connector)
+		if connector == "" {
+			return "", fmt.Errorf("connector is required for kafka_connect %s", operation)
+		}
+		return "connect.delete " + connector, nil
+	default:
+		return "", fmt.Errorf("unsupported kafka_connect operation: %s", operation)
+	}
+}
+
+func kafkaConnectorConfigRequestFromArgs(assetID int64, args map[string]any) (kafka_svc.ConnectorConfigRequest, error) {
+	config, err := kafkaStringMapFromJSON(argString(args, "config"))
+	if err != nil {
+		return kafka_svc.ConnectorConfigRequest{}, err
+	}
+	if len(config) == 0 {
+		return kafka_svc.ConnectorConfigRequest{}, fmt.Errorf("config is required for kafka_connect connector config operation")
+	}
+	return kafka_svc.ConnectorConfigRequest{
+		AssetID: assetID,
+		Cluster: argString(args, "cluster"),
+		Name:    argString(args, "connector"),
+		Config:  config,
+	}, nil
+}
+
+func kafkaRestartConnectorRequestFromArgs(assetID int64, args map[string]any) kafka_svc.RestartConnectorRequest {
+	return kafka_svc.RestartConnectorRequest{
+		AssetID:      assetID,
+		Cluster:      argString(args, "cluster"),
+		Name:         argString(args, "connector"),
+		IncludeTasks: argBool(args, "include_tasks"),
+		OnlyFailed:   argBool(args, "only_failed"),
+	}
 }
 
 func kafkaMessageCommand(operation, topic string) (string, error) {
