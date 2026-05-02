@@ -263,6 +263,33 @@ func AllToolDefs() []ToolDef {
 			},
 		},
 		{
+			Name:        "kafka_message",
+			Description: "Browse or produce bounded Kafka messages for a Kafka asset. Grouped operations: browse, inspect, produce. Message reads and writes are policy-controlled; returned payload previews are truncated.",
+			Params: []ParamDef{
+				{Name: "asset_id", Type: ParamNumber, Description: "Kafka asset ID. Use list_assets with asset_type='kafka' to find.", Required: true},
+				{Name: "operation", Type: ParamString, Description: "Operation: browse, inspect, produce. Defaults to browse."},
+				{Name: "topic", Type: ParamString, Description: "Topic name.", Required: true},
+				{Name: "partition", Type: ParamNumber, Description: "Optional partition. Required for inspect."},
+				{Name: "start_mode", Type: ParamString, Description: "Browse start mode: newest, oldest, offset, timestamp. Defaults to newest."},
+				{Name: "offset", Type: ParamNumber, Description: "Start offset for browse start_mode=offset, or exact offset for inspect."},
+				{Name: "timestamp_millis", Type: ParamNumber, Description: "Unix milliseconds for browse start_mode=timestamp, or produce timestamp override."},
+				{Name: "limit", Type: ParamNumber, Description: "Browse record limit. Defaults to asset settings; max 1000."},
+				{Name: "max_bytes", Type: ParamNumber, Description: "Max key/value/header preview bytes per field. Defaults to asset settings."},
+				{Name: "decode_mode", Type: ParamString, Description: "Browse decode mode: text, json, hex, base64. Defaults to text; binary data is returned as base64."},
+				{Name: "max_wait_millis", Type: ParamNumber, Description: "Browse poll wait in milliseconds. Defaults to 1000; max 30000."},
+				{Name: "key", Type: ParamString, Description: "Produce key. Optional."},
+				{Name: "key_encoding", Type: ParamString, Description: "Produce key encoding: text, json, hex, base64. Defaults to text."},
+				{Name: "value", Type: ParamString, Description: "Produce value. Empty string is allowed."},
+				{Name: "value_encoding", Type: ParamString, Description: "Produce value encoding: text, json, hex, base64. Defaults to text."},
+				{Name: "headers", Type: ParamString, Description: `Produce headers as JSON array, e.g. [{"key":"trace","value":"abc","encoding":"text"}]. Optional.`},
+			},
+			Handler: handleKafkaMessage,
+			CommandExtractor: func(args map[string]any) string {
+				cmd, _ := kafkaMessageCommand(normalizeKafkaOperation(argString(args, "operation"), "browse"), argString(args, "topic"))
+				return cmd
+			},
+		},
+		{
 			Name:        "request_permission",
 			Description: "Request approval for grant of command patterns BEFORE executing them. Submit command patterns (one per line, supports '*' wildcard) for one or more target assets. The user will review and may edit the patterns before approving. Once approved, subsequent run_command/exec_sql/exec_redis/exec_mongo/kafka_* calls matching any approved pattern will be auto-approved.",
 			Params: []ParamDef{

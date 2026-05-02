@@ -38,8 +38,8 @@ func TestMatchKafkaRule(t *testing.T) {
 func TestCheckKafkaPolicy(t *testing.T) {
 	ctx := context.Background()
 	p := &asset_entity.KafkaPolicy{
-		AllowList: []string{"topic.* *", "message.read orders-*"},
-		DenyList:  []string{"topic.delete *"},
+		AllowList: []string{"topic.* *", "message.read orders-*", "message.write *"},
+		DenyList:  []string{"topic.delete *", "message.write prod-*"},
 	}
 
 	denied := CheckKafkaPolicy(ctx, p, "topic.delete orders")
@@ -52,7 +52,17 @@ func TestCheckKafkaPolicy(t *testing.T) {
 	assert.Equal(t, SourcePolicyAllow, allowed.DecisionSource)
 	assert.Equal(t, "topic.* *", allowed.MatchedPattern)
 
-	needConfirm := CheckKafkaPolicy(ctx, p, "message.write orders")
+	allowed = CheckKafkaPolicy(ctx, p, "message.write orders")
+	assert.Equal(t, Allow, allowed.Decision)
+	assert.Equal(t, SourcePolicyAllow, allowed.DecisionSource)
+	assert.Equal(t, "message.write *", allowed.MatchedPattern)
+
+	denied = CheckKafkaPolicy(ctx, p, "message.write prod-orders")
+	assert.Equal(t, Deny, denied.Decision)
+	assert.Equal(t, SourcePolicyDeny, denied.DecisionSource)
+	assert.Equal(t, "message.write prod-*", denied.MatchedPattern)
+
+	needConfirm := CheckKafkaPolicy(ctx, p, "message.read invoices")
 	assert.Equal(t, NeedConfirm, needConfirm.Decision)
 }
 

@@ -5,6 +5,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
+
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
 func TestKafkaToolCommandMapping(t *testing.T) {
@@ -28,18 +31,83 @@ func TestKafkaToolCommandMapping(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "consumer_group.read billing-worker", cmd)
 
+	cmd, err = kafkaMessageCommand("browse", "orders")
+	require.NoError(t, err)
+	assert.Equal(t, "message.read orders", cmd)
+
+	cmd, err = kafkaMessageCommand("inspect", "orders")
+	require.NoError(t, err)
+	assert.Equal(t, "message.read orders", cmd)
+
+	cmd, err = kafkaMessageCommand("produce", "orders")
+	require.NoError(t, err)
+	assert.Equal(t, "message.write orders", cmd)
+
 	_, err = kafkaTopicCommand("get", "")
+	assert.Error(t, err)
+
+	_, err = kafkaMessageCommand("browse", "")
+	assert.Error(t, err)
+
+	_, err = kafkaMessageCommand("delete", "orders")
 	assert.Error(t, err)
 }
 
 func TestAllToolDefsContainsGroupedKafkaTools(t *testing.T) {
-	tools := map[string]bool{}
+	tools := map[string]ToolDef{}
 	for _, def := range AllToolDefs() {
-		tools[def.Name] = true
+		tools[def.Name] = def
 	}
 
-	assert.True(t, tools["kafka_cluster"])
-	assert.True(t, tools["kafka_topic"])
-	assert.True(t, tools["kafka_consumer_group"])
-	assert.False(t, tools["kafka_topic_delete"])
+	assert.Contains(t, tools, "kafka_cluster")
+	assert.Contains(t, tools, "kafka_topic")
+	assert.Contains(t, tools, "kafka_consumer_group")
+	assert.Contains(t, tools, "kafka_message")
+	assert.NotContains(t, tools, "kafka_topic_delete")
+
+	cmd := tools["kafka_message"].CommandExtractor(map[string]any{
+		"operation": "produce",
+		"topic":     "orders",
+	})
+	assert.Equal(t, "message.write orders", cmd)
+}
+
+func TestKafkaMessageArgs(t *testing.T) {
+	partition, err := argOptionalInt32(map[string]any{"partition": float64(2)}, "partition")
+	require.NoError(t, err)
+	require.NotNil(t, partition)
+	assert.Equal(t, int32(2), *partition)
+
+	headers, err := kafkaProduceHeadersFromArgs(map[string]any{
+		"headers": `[{"key":"trace","value":"abc","encoding":"text"}]`,
+	})
+	require.NoError(t, err)
+	require.Len(t, headers, 1)
+	assert.Equal(t, "trace", headers[0].Key)
+
+	_, err = kafkaProduceHeadersFromArgs(map[string]any{"headers": `{"key":"trace"}`})
+	assert.Error(t, err)
+}
+
+func TestKafkaMessagePermissionStopsBeforeConnection(t *testing.T) {
+	ctx, mockAsset, _ := setupPolicyTest(t)
+	asset := &asset_entity.Asset{
+		ID:   1,
+		Name: "kafka-prod",
+		Type: asset_entity.AssetTypeKafka,
+		CmdPolicy: mustJSON(asset_entity.KafkaPolicy{
+			DenyList: []string{"message.write *"},
+		}),
+	}
+	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+	ctx = WithPolicyChecker(ctx, NewCommandPolicyChecker(nil))
+	result, err := handleKafkaMessage(ctx, map[string]any{
+		"asset_id":  float64(1),
+		"operation": "produce",
+		"topic":     "orders",
+		"value":     "hello",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, result, "Kafka")
 }

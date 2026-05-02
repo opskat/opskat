@@ -2,9 +2,12 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -16,6 +19,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
+	"github.com/opskat/opskat/internal/service/kafka_svc"
 )
 
 // --- Kafka connection cache ---
@@ -186,6 +190,60 @@ func handleKafkaConsumerGroup(ctx context.Context, args map[string]any) (string,
 	}
 }
 
+func handleKafkaMessage(ctx context.Context, args map[string]any) (string, error) {
+	assetID := argInt64(args, "asset_id")
+	operation := normalizeKafkaOperation(argString(args, "operation"), "browse")
+	topic := argString(args, "topic")
+	if assetID == 0 {
+		return "", fmt.Errorf("missing required parameter: asset_id")
+	}
+	command, err := kafkaMessageCommand(operation, topic)
+	if err != nil {
+		return "", err
+	}
+	if result, ok := checkKafkaToolPermission(ctx, assetID, command); !ok {
+		return result.Message, nil
+	}
+
+	svc := kafka_svc.New(getSSHPool(ctx))
+	defer svc.Close()
+
+	switch operation {
+	case "browse":
+		req, err := kafkaBrowseRequestFromArgs(assetID, args)
+		if err != nil {
+			return "", err
+		}
+		result, err := svc.BrowseMessages(ctx, req)
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(result)
+	case "inspect":
+		req, err := kafkaInspectRequestFromArgs(assetID, args)
+		if err != nil {
+			return "", err
+		}
+		result, err := svc.BrowseMessages(ctx, req)
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(result)
+	case "produce":
+		req, err := kafkaProduceRequestFromArgs(assetID, args)
+		if err != nil {
+			return "", err
+		}
+		result, err := svc.ProduceMessage(ctx, req)
+		if err != nil {
+			return "", err
+		}
+		return marshalKafkaResult(result)
+	default:
+		return "", fmt.Errorf("unsupported kafka_message operation: %s", operation)
+	}
+}
+
 func checkKafkaToolPermission(ctx context.Context, assetID int64, command string) (CheckResult, bool) {
 	if checker := GetPolicyChecker(ctx); checker != nil {
 		result := checker.CheckForAsset(ctx, assetID, asset_entity.AssetTypeKafka, command)
@@ -292,6 +350,155 @@ func kafkaConsumerGroupCommand(operation, group string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported kafka_consumer_group operation: %s", operation)
 	}
+}
+
+func kafkaMessageCommand(operation, topic string) (string, error) {
+	topic = strings.TrimSpace(topic)
+	if topic == "" {
+		return "", fmt.Errorf("topic is required for kafka_message %s", operation)
+	}
+	switch operation {
+	case "browse", "inspect":
+		return "message.read " + topic, nil
+	case "produce":
+		return "message.write " + topic, nil
+	default:
+		return "", fmt.Errorf("unsupported kafka_message operation: %s", operation)
+	}
+}
+
+func kafkaBrowseRequestFromArgs(assetID int64, args map[string]any) (kafka_svc.BrowseMessagesRequest, error) {
+	partition, err := argOptionalInt32(args, "partition")
+	if err != nil {
+		return kafka_svc.BrowseMessagesRequest{}, err
+	}
+	return kafka_svc.BrowseMessagesRequest{
+		AssetID:         assetID,
+		Topic:           argString(args, "topic"),
+		Partition:       partition,
+		StartMode:       argString(args, "start_mode"),
+		Offset:          argInt64(args, "offset"),
+		TimestampMillis: argInt64(args, "timestamp_millis"),
+		Limit:           argInt(args, "limit"),
+		MaxBytes:        argInt(args, "max_bytes"),
+		DecodeMode:      argString(args, "decode_mode"),
+		MaxWaitMillis:   argInt(args, "max_wait_millis"),
+	}, nil
+}
+
+func kafkaInspectRequestFromArgs(assetID int64, args map[string]any) (kafka_svc.BrowseMessagesRequest, error) {
+	partition, err := argOptionalInt32(args, "partition")
+	if err != nil {
+		return kafka_svc.BrowseMessagesRequest{}, err
+	}
+	if partition == nil {
+		return kafka_svc.BrowseMessagesRequest{}, fmt.Errorf("partition is required for kafka_message inspect")
+	}
+	if _, ok := args["offset"]; !ok {
+		return kafka_svc.BrowseMessagesRequest{}, fmt.Errorf("offset is required for kafka_message inspect")
+	}
+	return kafka_svc.BrowseMessagesRequest{
+		AssetID:       assetID,
+		Topic:         argString(args, "topic"),
+		Partition:     partition,
+		StartMode:     "offset",
+		Offset:        argInt64(args, "offset"),
+		Limit:         1,
+		MaxBytes:      argInt(args, "max_bytes"),
+		DecodeMode:    argString(args, "decode_mode"),
+		MaxWaitMillis: argInt(args, "max_wait_millis"),
+	}, nil
+}
+
+func kafkaProduceRequestFromArgs(assetID int64, args map[string]any) (kafka_svc.ProduceMessageRequest, error) {
+	partition, err := argOptionalInt32(args, "partition")
+	if err != nil {
+		return kafka_svc.ProduceMessageRequest{}, err
+	}
+	headers, err := kafkaProduceHeadersFromArgs(args)
+	if err != nil {
+		return kafka_svc.ProduceMessageRequest{}, err
+	}
+	return kafka_svc.ProduceMessageRequest{
+		AssetID:         assetID,
+		Topic:           argString(args, "topic"),
+		Partition:       partition,
+		Key:             argString(args, "key"),
+		KeyEncoding:     argString(args, "key_encoding"),
+		Value:           argString(args, "value"),
+		ValueEncoding:   argString(args, "value_encoding"),
+		Headers:         headers,
+		TimestampMillis: argInt64(args, "timestamp_millis"),
+	}, nil
+}
+
+func kafkaProduceHeadersFromArgs(args map[string]any) ([]kafka_svc.ProduceMessageHeader, error) {
+	raw := strings.TrimSpace(argString(args, "headers"))
+	if raw == "" {
+		return nil, nil
+	}
+	var headers []kafka_svc.ProduceMessageHeader
+	if err := json.Unmarshal([]byte(raw), &headers); err != nil {
+		return nil, fmt.Errorf("headers must be a JSON array: %w", err)
+	}
+	return headers, nil
+}
+
+func marshalKafkaResult(result any) (string, error) {
+	data, err := json.Marshal(result)
+	if err != nil {
+		logger.Default().Error("marshal Kafka result", zap.Error(err))
+		return "", fmt.Errorf("序列化 Kafka 结果失败: %w", err)
+	}
+	return string(data), nil
+}
+
+func argOptionalInt32(args map[string]any, key string) (*int32, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return nil, nil
+	}
+
+	var n int64
+	switch v := value.(type) {
+	case int:
+		n = int64(v)
+	case int32:
+		n = int64(v)
+	case int64:
+		n = v
+	case float64:
+		if math.Trunc(v) != v {
+			return nil, fmt.Errorf("%s must be an integer", key)
+		}
+		n = int64(v)
+	case json.Number:
+		parsed, err := v.Int64()
+		if err != nil {
+			return nil, fmt.Errorf("%s must be an integer: %w", key, err)
+		}
+		n = parsed
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil, nil
+		}
+		parsed, err := strconv.ParseInt(strings.TrimSpace(v), 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("%s must be an integer: %w", key, err)
+		}
+		n = parsed
+	default:
+		return nil, fmt.Errorf("%s must be an integer", key)
+	}
+	const (
+		minInt32 = -1 << 31
+		maxInt32 = 1<<31 - 1
+	)
+	if n < minInt32 || n > maxInt32 {
+		return nil, fmt.Errorf("%s is out of int32 range", key)
+	}
+	out := int32(n)
+	return &out, nil
 }
 
 func listKafkaTopics(ctx context.Context, admin *kadm.Client, includeInternal bool) (kadm.TopicDetails, error) {
