@@ -34,6 +34,7 @@ import {
   KafkaResetConsumerGroupOffset,
   KafkaUpdateConnectorConfig,
 } from "../../wailsjs/go/app/App";
+import { kafka_svc } from "../../wailsjs/go/models";
 import { registerTabCloseHook, type QueryTabMeta } from "./tabStore";
 import { useTabStore } from "./tabStore";
 
@@ -736,7 +737,7 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
     get().ensureTab(tabId);
     set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: true } } }));
     try {
-      await KafkaAlterTopicConfig({ assetId, topic, configs });
+      await KafkaAlterTopicConfig(new kafka_svc.AlterTopicConfigRequest({ assetId, topic, configs }));
       set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: false, error: null } } }));
       await get().loadTopicDetail(tabId, topic);
     } catch (err) {
@@ -770,7 +771,7 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
     get().ensureTab(tabId);
     set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: true } } }));
     try {
-      await KafkaDeleteRecords({ assetId, topic, partitions });
+      await KafkaDeleteRecords(new kafka_svc.DeleteRecordsRequest({ assetId, topic, partitions }));
       set((s) => ({
         states: {
           ...s.states,
@@ -1003,7 +1004,9 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
     get().ensureTab(tabId);
     set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], schemaAdminLoading: true } } }));
     try {
-      const result = (await KafkaCheckSchemaCompatibility({ assetId, ...req })) as KafkaSchemaCompatibilityResponse;
+      const result = (await KafkaCheckSchemaCompatibility(
+        new kafka_svc.CheckSchemaCompatibilityRequest({ assetId, ...req })
+      )) as KafkaSchemaCompatibilityResponse;
       set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], schemaAdminLoading: false, error: null } } }));
       return result;
     } catch (err) {
@@ -1020,7 +1023,7 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
     get().ensureTab(tabId);
     set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], schemaAdminLoading: true } } }));
     try {
-      await KafkaRegisterSchema({ assetId, ...req });
+      await KafkaRegisterSchema(new kafka_svc.RegisterSchemaRequest({ assetId, ...req }));
       set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], schemaAdminLoading: false, error: null } } }));
       await get().loadSchemaSubjects(tabId);
       await get().loadSchemaVersions(tabId, req.subject);
@@ -1244,7 +1247,7 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
     const browser = state.messageBrowser;
     set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], loadingMessages: true } } }));
     try {
-      const req: Record<string, unknown> = {
+      const req = new kafka_svc.BrowseMessagesRequest({
         assetId,
         topic,
         startMode: browser.startMode,
@@ -1252,7 +1255,7 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
         maxBytes: browser.maxBytes,
         decodeMode: browser.decodeMode,
         maxWaitMillis: browser.maxWaitMillis,
-      };
+      });
       const partition = parseOptionalInteger(browser.partition, "partition");
       if (partition !== undefined) req.partition = partition;
       if (browser.startMode === "offset") req.offset = parseRequiredInteger(browser.offset, "offset");
@@ -1288,14 +1291,14 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
     const form = state.produceMessage;
     set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], producingMessage: true } } }));
     try {
-      const req: Record<string, unknown> = {
+      const req = new kafka_svc.ProduceMessageRequest({
         assetId,
         topic,
         key: form.key,
         keyEncoding: form.keyEncoding,
         value: form.value,
         valueEncoding: form.valueEncoding,
-      };
+      });
       const partition = parseOptionalInteger(form.partition, "partition");
       if (partition !== undefined) req.partition = partition;
       const headers = parseHeaders(form.headers);
