@@ -161,6 +161,53 @@ describe("MentionList", () => {
     expect(itemTexts.indexOf("prod-db")).toBeLessThan(itemTexts.findIndex((text) => text.includes("app.users")));
   });
 
+  it("空查询时打开过的表排在打开库和默认库之前", () => {
+    useTabStore.setState({
+      activeTabId: "query-42",
+      tabs: [
+        {
+          id: "query-42",
+          type: "query",
+          label: "prod-db",
+          meta: {
+            type: "query",
+            assetId: 42,
+            assetName: "prod-db",
+            assetIcon: "mysql",
+            assetType: "database",
+            driver: "mysql",
+            defaultDatabase: "app",
+          },
+        },
+      ],
+    } as any);
+    useQueryStore.setState({
+      dbStates: {
+        "query-42": {
+          databases: ["app", "audit"],
+          tables: { app: ["users", "orders"], audit: [] },
+          loadingTables: {},
+          expandedDbs: ["app", "audit"],
+          loadingDbs: false,
+          innerTabs: [
+            { id: "table:app.users", type: "table", database: "app", table: "users" },
+            { id: "table:app.orders", type: "table", database: "app", table: "orders" },
+            { id: "sql:1", type: "sql", title: "SQL 1", selectedDb: "audit" },
+          ],
+          activeInnerTabId: "sql:1",
+          error: null,
+        },
+      },
+      redisStates: {},
+      mongoStates: {},
+    } as any);
+
+    render(<MentionList query="" command={() => {}} />);
+
+    const itemTexts = screen.getAllByRole("option").map((item) => item.textContent ?? "");
+    expect(itemTexts.slice(0, 4)).toEqual(["prod-db/app.users", "prod-db/app.orders", "prod-db/audit", "prod-db/app"]);
+  });
+
   it("键盘选择按单列排序结果移动", () => {
     const ref = createRef<MentionListRef>();
     useTabStore.setState({
@@ -299,7 +346,51 @@ describe("MentionList", () => {
     expect(items[1]).toHaveTextContent("prod-db/app.users");
   });
 
-  it("查询非默认的已加载库名时，不把库列表项作为候选", () => {
+  it("查询同时命中库名和表名时，库候选排在表候选前", () => {
+    useTabStore.setState({
+      activeTabId: "query-42",
+      tabs: [
+        {
+          id: "query-42",
+          type: "query",
+          label: "prod-db",
+          meta: {
+            type: "query",
+            assetId: 42,
+            assetName: "prod-db",
+            assetIcon: "mysql",
+            assetType: "database",
+            driver: "mysql",
+            defaultDatabase: "users",
+          },
+        },
+      ],
+    } as any);
+    useQueryStore.setState({
+      dbStates: {
+        "query-42": {
+          databases: ["users", "app"],
+          tables: { app: ["users"] },
+          loadingTables: {},
+          expandedDbs: ["app"],
+          loadingDbs: false,
+          innerTabs: [],
+          activeInnerTabId: null,
+          error: null,
+        },
+      },
+      redisStates: {},
+      mongoStates: {},
+    } as any);
+
+    render(<MentionList query="users" command={() => {}} />);
+
+    const items = screen.getAllByRole("option");
+    expect(items[0]).toHaveTextContent("prod-db/users");
+    expect(items[1]).toHaveTextContent("prod-db/app.users");
+  });
+
+  it("查询展开的非默认库名时显示库候选", () => {
     useTabStore.setState({
       activeTabId: "query-42",
       tabs: [
@@ -326,6 +417,50 @@ describe("MentionList", () => {
           tables: { app: ["users"], audit: [] },
           loadingTables: {},
           expandedDbs: ["app", "audit"],
+          loadingDbs: false,
+          innerTabs: [],
+          activeInnerTabId: null,
+          error: null,
+        },
+      },
+      redisStates: {},
+      mongoStates: {},
+    } as any);
+
+    render(<MentionList query="audit" command={() => {}} />);
+
+    const items = screen.getAllByRole("option");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent("prod-db/audit");
+  });
+
+  it("查询未展开的非默认已加载库名时，不把库列表项作为候选", () => {
+    useTabStore.setState({
+      activeTabId: "query-42",
+      tabs: [
+        {
+          id: "query-42",
+          type: "query",
+          label: "prod-db",
+          meta: {
+            type: "query",
+            assetId: 42,
+            assetName: "prod-db",
+            assetIcon: "mysql",
+            assetType: "database",
+            driver: "mysql",
+            defaultDatabase: "app",
+          },
+        },
+      ],
+    } as any);
+    useQueryStore.setState({
+      dbStates: {
+        "query-42": {
+          databases: ["app", "audit"],
+          tables: { app: ["users"], audit: [] },
+          loadingTables: {},
+          expandedDbs: ["app"],
           loadingDbs: false,
           innerTabs: [],
           activeInnerTabId: null,

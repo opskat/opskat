@@ -89,10 +89,9 @@ function mentionMatchRank(item: MentionItem, query: string): number | null {
   return contextRank === null ? null : contextRank + 3;
 }
 
-function queryKindRank(item: MentionItem, sourceRank: number) {
-  if (sourceRank === 0) return 0;
-  if (item.kind === "table") return 1;
-  if (item.kind === "database") return 2;
+function queryKindRank(item: MentionItem) {
+  if (item.kind === "database") return 1;
+  if (item.kind === "table") return 2;
   return 3;
 }
 
@@ -122,9 +121,9 @@ function buildDatabaseMentionItems(activeTab: ActiveDatabaseTab | null, dbState:
     database,
     table,
   });
-  const pushDatabase = (database: string | undefined) => {
+  const pushDatabase = (database: string | undefined, sourceRank = database === meta.defaultDatabase ? 3 : 2) => {
     if (!database) return;
-    push(databaseItem(database), database === meta.defaultDatabase ? 1 : 2);
+    push(databaseItem(database), sourceRank);
   };
   const pushTable = (database: string | undefined, table: string | undefined) => {
     if (!database || !table) return;
@@ -134,13 +133,16 @@ function buildDatabaseMentionItems(activeTab: ActiveDatabaseTab | null, dbState:
   if (activeInner?.type === "table") {
     push(tableItem(activeInner.database, activeInner.table), 0);
   } else if (activeInner?.type === "sql") {
-    if (activeInner.selectedDb) push(databaseItem(activeInner.selectedDb), 0);
+    if (activeInner.selectedDb) push(databaseItem(activeInner.selectedDb), 2);
+  }
+  for (const database of dbState.expandedDbs) {
+    pushDatabase(database, 2);
   }
   pushDatabase(meta.defaultDatabase);
   for (const tab of dbState.innerTabs) {
     if (tab.type === "table") {
       const item = tableItem(tab.database, tab.table);
-      push(item, 4);
+      push(item, 1);
     }
   }
   for (const db of dbState.databases) {
@@ -200,8 +202,8 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(function
     ranked.sort((a, b) => {
       if (hasQuery) {
         if (a.matchRank !== b.matchRank) return a.matchRank - b.matchRank;
-        const aKindRank = queryKindRank(a.item, a.sourceRank);
-        const bKindRank = queryKindRank(b.item, b.sourceRank);
+        const aKindRank = queryKindRank(a.item);
+        const bKindRank = queryKindRank(b.item);
         if (aKindRank !== bKindRank) return aKindRank - bKindRank;
       }
       if (a.sourceRank !== b.sourceRank) return a.sourceRank - b.sourceRank;
