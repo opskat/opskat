@@ -1110,6 +1110,8 @@
       "localCenterRemote": "Left local / center final / right remote",
       "previous": "Previous conflict",
       "next": "Next conflict",
+      "acceptLocal": "Accept Local",
+      "acceptRemote": "Accept Remote",
       "closeDirtyTitle": "Discard unsaved merge draft?",
       "closeDirtyDesc": "Closing keeps the conflict record, but the unsaved final draft edits in this dialog will be lost.",
       "closeDirtyConfirm": "Discard and Close"

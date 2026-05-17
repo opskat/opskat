@@ -122,7 +122,76 @@ func (s *Service) restoreSessions() error {
 	for _, id := range cleaned {
 		s.emit(Event{Type: eventSessionCleaned, Session: &Session{ID: id}})
 	}
+
+	// 程序重启后，对仍在活跃窗口内的 dirty 会话做一次远程冲突检测。
+	// 这些会话在关机前可能已有本地修改，但远程在此期间也可能被其他人改写。
+	// 检测在后台异步执行，不阻塞启动流程；发现冲突时通过正常的 eventSessionConflict 通知前端。
+	for _, session := range restored {
+		if isSyncSuppressedRecord(session) {
+			continue
+		}
+		if session.State != sessionStateDirty && session.State != sessionStateClean {
+			continue
+		}
+		go s.checkRemoteConflictAfterRestore(session.ID)
+	}
+
 	return nil
+}
+
+func (s *Service) checkRemoteConflictAfterRestore(sessionID string) {
+	session := s.getSession(sessionID)
+	if session == nil || isSyncSuppressedRecord(session) {
+		return
+	}
+
+	transport, err := s.resolveDocumentTransport(session)
+	if err != nil {
+		return
+	}
+	session, err = s.bindSessionTransport(sessionID, transport)
+	if err != nil {
+		return
+	}
+
+	localData, err := readLocalEditableFile(session.LocalPath, s.maxReadFileSizeBytes())
+	if err != nil {
+		return
+	}
+	localHash := hashBytes(localData)
+	baseHash := sessionBaseHash(session)
+
+	if transport.Missing {
+		result := s.markSessionState(sessionID, sessionStateRemoteMissing, true, localHash)
+		saveResult := &SaveResult{
+			Status:   saveStatusRemoteMissing,
+			Message:  "远程文件不存在，请先确认是否需要重新创建远程文件",
+			Session:  result,
+			Conflict: s.describeConflict(result, ""),
+		}
+		s.pauseAutoSaveForDocument(result.DocumentKey)
+		s.emit(Event{Type: eventSessionConflict, Session: result, SaveResult: saveResult})
+		return
+	}
+
+	remoteData, _, err := readRemoteEditableFile(s.remote, session.SessionID, session.RemotePath, s.maxReadFileSizeBytes())
+	if err != nil {
+		return
+	}
+	remoteHash := hashBytes(remoteData)
+	if remoteHash == baseHash {
+		return
+	}
+
+	result := s.markSessionState(sessionID, sessionStateConflict, true, localHash)
+	saveResult := &SaveResult{
+		Status:   saveStatusConflict,
+		Message:  "远程文件已有新版本，请先比对差异，再决定重新读取或强制覆盖",
+		Session:  result,
+		Conflict: s.describeConflict(result, ""),
+	}
+	s.pauseAutoSaveForDocument(result.DocumentKey)
+	s.emit(Event{Type: eventSessionConflict, Session: result, SaveResult: saveResult})
 }
 
 func (s *Service) normalizeLoadedSessionLocked(session *Session) {

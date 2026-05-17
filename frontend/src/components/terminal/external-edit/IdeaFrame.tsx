@@ -81,13 +81,14 @@ export function ExternalEditIdeaFrame({
 }
 
 interface IdeaEditorPaneProps {
+  actions?: ReactNode;
   badge: string;
   children: ReactNode;
   tone: "local" | "final" | "remote";
   title: string;
 }
 
-export function ExternalEditIdeaEditorPane({ badge, children, tone, title }: IdeaEditorPaneProps) {
+export function ExternalEditIdeaEditorPane({ actions, badge, children, tone, title }: IdeaEditorPaneProps) {
   return (
     <div
       className={cn("flex min-h-0 flex-col bg-[#1f2329]", tone === "final" && "ring-1 ring-amber-400/40")}
@@ -110,14 +111,17 @@ export function ExternalEditIdeaEditorPane({ badge, children, tone, title }: Ide
         >
           {title}
         </span>
-        <span
-          className={cn(
-            "rounded px-2 py-0.5 text-[10px] uppercase tracking-wide",
-            tone === "final" ? "bg-amber-400/20 text-amber-100" : "bg-slate-800 text-slate-300"
-          )}
-        >
-          {badge}
-        </span>
+        <div className="flex items-center gap-1.5">
+          {actions}
+          <span
+            className={cn(
+              "rounded px-2 py-0.5 text-[10px] uppercase tracking-wide",
+              tone === "final" ? "bg-amber-400/20 text-amber-100" : "bg-slate-800 text-slate-300"
+            )}
+          >
+            {badge}
+          </span>
+        </div>
       </div>
       {children}
     </div>

@@ -1095,6 +1095,8 @@
       "localCenterRemote": "左本地 / 中最终 / 右远端",
       "previous": "上一处冲突",
       "next": "下一处冲突",
+      "acceptLocal": "接受本地",
+      "acceptRemote": "接受远端",
       "closeDirtyTitle": "放弃未提交的合并稿？",
       "closeDirtyDesc": "关闭合并窗口不会删除冲突记录，但当前未保存的最终稿编辑会丢失。",
       "closeDirtyConfirm": "放弃并关闭"

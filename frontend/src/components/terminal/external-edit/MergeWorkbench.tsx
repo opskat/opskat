@@ -108,6 +108,34 @@ export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClo
     []
   );
 
+  const handleAcceptLocal = useCallback(() => {
+    if (conflictBlocks.length === 0) return;
+    const block = conflictBlocks[Math.min(Math.max(activeBlockIndex, 0), conflictBlocks.length - 1)];
+    const localLines = (mergeResult.localContent || "").split("\n");
+    const finalLines = finalContent.split("\n");
+    const { startLine: localStart, endLine: localEnd } = blockLineRange(block, "local");
+    const { startLine: finalStart, endLine: finalEnd } = blockLineRange(block, "final");
+    const replacement = block.kind === "delete" ? [] : localLines.slice(localStart - 1, localEnd);
+    const before = finalLines.slice(0, finalStart - 1);
+    const after = finalEnd >= finalStart ? finalLines.slice(finalEnd) : finalLines.slice(finalStart - 1);
+    setFinalContent([...before, ...replacement, ...after].join("\n"));
+    setDirty(true);
+  }, [activeBlockIndex, conflictBlocks, finalContent, mergeResult.localContent]);
+
+  const handleAcceptRemote = useCallback(() => {
+    if (conflictBlocks.length === 0) return;
+    const block = conflictBlocks[Math.min(Math.max(activeBlockIndex, 0), conflictBlocks.length - 1)];
+    const remoteLines = (mergeResult.remoteContent || "").split("\n");
+    const finalLines = finalContent.split("\n");
+    const { startLine: remoteStart, endLine: remoteEnd } = blockLineRange(block, "remote");
+    const { startLine: finalStart, endLine: finalEnd } = blockLineRange(block, "final");
+    const replacement = block.kind === "insert" ? [] : remoteLines.slice(remoteStart - 1, remoteEnd);
+    const before = finalLines.slice(0, finalStart - 1);
+    const after = finalEnd >= finalStart ? finalLines.slice(finalEnd) : finalLines.slice(finalStart - 1);
+    setFinalContent([...before, ...replacement, ...after].join("\n"));
+    setDirty(true);
+  }, [activeBlockIndex, conflictBlocks, finalContent, mergeResult.remoteContent]);
+
   const handleApply = async () => {
     try {
       await applyMerge(mergeResult.primaryDraftSessionId, finalContent, mergeResult.remoteHash);
@@ -189,6 +217,17 @@ export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClo
             badge={t("externalEdit.merge.readOnlySide")}
             title={t("externalEdit.merge.localDraft")}
             tone="local"
+            actions={
+              conflictTotal > 0 ? (
+                <button
+                  className="rounded bg-emerald-700/70 px-2 py-0.5 text-[10px] text-emerald-100 hover:bg-emerald-600/80 active:bg-emerald-500/80"
+                  onClick={handleAcceptLocal}
+                  title={t("externalEdit.merge.acceptLocal")}
+                >
+                  {t("externalEdit.merge.acceptLocal")}
+                </button>
+              ) : undefined
+            }
           >
             <CodeEditor
               className="min-h-0 flex-1 overflow-hidden"
@@ -239,6 +278,17 @@ export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClo
             badge={t("externalEdit.merge.readOnlySide")}
             title={t("externalEdit.merge.remoteDraft")}
             tone="remote"
+            actions={
+              conflictTotal > 0 ? (
+                <button
+                  className="rounded bg-sky-700/70 px-2 py-0.5 text-[10px] text-sky-100 hover:bg-sky-600/80 active:bg-sky-500/80"
+                  onClick={handleAcceptRemote}
+                  title={t("externalEdit.merge.acceptRemote")}
+                >
+                  {t("externalEdit.merge.acceptRemote")}
+                </button>
+              ) : undefined
+            }
           >
             <CodeEditor
               className="min-h-0 flex-1 overflow-hidden"
