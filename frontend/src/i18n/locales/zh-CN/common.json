@@ -425,22 +425,70 @@
       "deleteConfirmTitle": "确认删除权限组",
       "deleteConfirm": "确定删除权限组 \"{{name}}\"？此操作不可撤销。",
       "builtin": {
-        "linux-readonly": { "name": "Linux 常用只读", "desc": "常用 Linux 只读命令" },
-        "k8s-readonly": { "name": "Kubernetes 只读", "desc": "Kubernetes 只读操作命令" },
-        "k8s-dangerous-deny": { "name": "Kubernetes 高危拒绝", "desc": "拒绝执行高危 Kubernetes 命令" },
-        "docker-readonly": { "name": "Docker 只读", "desc": "Docker 只读操作命令" },
-        "dangerous-deny": { "name": "高危命令拒绝", "desc": "拒绝执行高危系统命令" },
-        "sql-readonly": { "name": "SQL 只读", "desc": "只允许查询类 SQL 语句" },
-        "sql-dangerous-deny": { "name": "SQL 高危拒绝", "desc": "拒绝高危 SQL 操作" },
-        "redis-readonly": { "name": "Redis 只读", "desc": "只允许 Redis 只读命令" },
-        "redis-dangerous-deny": { "name": "Redis 高危拒绝", "desc": "拒绝 Redis 高危命令" },
-        "kafka-metadata-readonly": { "name": "Kafka 元数据只读", "desc": "允许读取集群、Broker、Topic 和消费组元数据" },
-        "kafka-message-read": { "name": "Kafka 消息读取", "desc": "允许读取消息内容" },
-        "kafka-schema-readonly": { "name": "Schema Registry 只读", "desc": "允许读取 Schema Registry 元数据和 Schema" },
-        "kafka-connect-readonly": { "name": "Kafka Connect 只读", "desc": "允许读取连接器状态和配置" },
-        "kafka-operator": { "name": "Kafka 运维操作", "desc": "允许 Topic、分区和消费组偏移等管理操作" },
-        "kafka-security-admin": { "name": "Kafka 安全管理", "desc": "允许管理 Kafka ACL" },
-        "kafka-dangerous-deny": { "name": "Kafka 高危拒绝", "desc": "拒绝删除、截断和安全变更等高危操作" }
+        "linux-readonly": {
+          "name": "Linux 常用只读",
+          "desc": "常用 Linux 只读命令"
+        },
+        "k8s-readonly": {
+          "name": "Kubernetes 只读",
+          "desc": "Kubernetes 只读操作命令"
+        },
+        "k8s-dangerous-deny": {
+          "name": "Kubernetes 高危拒绝",
+          "desc": "拒绝执行高危 Kubernetes 命令"
+        },
+        "docker-readonly": {
+          "name": "Docker 只读",
+          "desc": "Docker 只读操作命令"
+        },
+        "dangerous-deny": {
+          "name": "高危命令拒绝",
+          "desc": "拒绝执行高危系统命令"
+        },
+        "sql-readonly": {
+          "name": "SQL 只读",
+          "desc": "只允许查询类 SQL 语句"
+        },
+        "sql-dangerous-deny": {
+          "name": "SQL 高危拒绝",
+          "desc": "拒绝高危 SQL 操作"
+        },
+        "redis-readonly": {
+          "name": "Redis 只读",
+          "desc": "只允许 Redis 只读命令"
+        },
+        "redis-dangerous-deny": {
+          "name": "Redis 高危拒绝",
+          "desc": "拒绝 Redis 高危命令"
+        },
+        "kafka-metadata-readonly": {
+          "name": "Kafka 元数据只读",
+          "desc": "允许读取集群、Broker、Topic 和消费组元数据"
+        },
+        "kafka-message-read": {
+          "name": "Kafka 消息读取",
+          "desc": "允许读取消息内容"
+        },
+        "kafka-schema-readonly": {
+          "name": "Schema Registry 只读",
+          "desc": "允许读取 Schema Registry 元数据和 Schema"
+        },
+        "kafka-connect-readonly": {
+          "name": "Kafka Connect 只读",
+          "desc": "允许读取连接器状态和配置"
+        },
+        "kafka-operator": {
+          "name": "Kafka 运维操作",
+          "desc": "允许 Topic、分区和消费组偏移等管理操作"
+        },
+        "kafka-security-admin": {
+          "name": "Kafka 安全管理",
+          "desc": "允许管理 Kafka ACL"
+        },
+        "kafka-dangerous-deny": {
+          "name": "Kafka 高危拒绝",
+          "desc": "拒绝删除、截断和安全变更等高危操作"
+        }
       }
     }
   },
@@ -1008,6 +1056,7 @@
     }
   },
   "externalEdit": {
+    "saving": "正在自动保存…",
     "panel": {
       "title": "外部编辑",
       "conflicts": "冲突文件",
@@ -1095,8 +1144,6 @@
       "localCenterRemote": "左本地 / 中最终 / 右远端",
       "previous": "上一处冲突",
       "next": "下一处冲突",
-      "acceptLocal": "接受本地",
-      "acceptRemote": "接受远端",
       "closeDirtyTitle": "放弃未提交的合并稿？",
       "closeDirtyDesc": "关闭合并窗口不会删除冲突记录，但当前未保存的最终稿编辑会丢失。",
       "closeDirtyConfirm": "放弃并关闭"
@@ -1243,7 +1290,6 @@
     "batchDescription": "以下 {{count}} 条操作需要您的批准",
     "alwaysAllow": "始终允许",
     "approve": "批准",
-    "allow": "允许",
     "scopeAll": "所有资产"
   },
   "audit": {

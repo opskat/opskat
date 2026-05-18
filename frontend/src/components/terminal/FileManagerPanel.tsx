@@ -122,6 +122,7 @@ export function FileManagerPanel({
   const compareResult = useExternalEditStore((s) => s.compareResult);
   const mergeResult = useExternalEditStore((s) => s.mergeResult);
   const selectedError = useExternalEditStore((s) => s.selectedError);
+  const autoSavePhases = useExternalEditStore((s) => s.autoSavePhases);
   const openErrorDetail = useExternalEditStore((s) => s.openErrorDetail);
   const prepareMerge = useExternalEditStore((s) => s.prepareMerge);
   const resolveConflict = useExternalEditStore((s) => s.resolveConflict);
@@ -528,6 +529,7 @@ export function FileManagerPanel({
         onOpenChange={setPendingDialogOpen}
         pendingItems={pendingItems}
         savingSessionId={savingSessionId}
+        autoSavePhases={autoSavePhases}
         mergePrepareErrors={mergePrepareErrors}
         continueEditLabel={continueEditLabel}
         onOpenErrorDetail={openErrorDetail}

@@ -24,8 +24,8 @@ function mergePaneLineClass(block: TextDiffBlock, pane: MergePaneRole, active: b
   if (pane === "local") {
     return block.kind === "delete" ? "" : "external-edit-merge-line-local-change";
   }
-  if (block.kind === "delete") return "external-edit-merge-line-final-local";
-  if (block.kind === "insert") return "external-edit-merge-line-final-remote";
+  if (block.kind === "delete") return "";
+  if (block.kind === "insert") return "external-edit-merge-line-final-local";
   return "external-edit-merge-line-final-combined";
 }
 
@@ -37,8 +37,8 @@ function mergePaneGutterClass(block: TextDiffBlock, pane: MergePaneRole, active:
   if (pane === "local") {
     return block.kind === "delete" ? "" : "external-edit-merge-gutter-local";
   }
-  if (block.kind === "insert") return "external-edit-merge-gutter-remote";
-  if (block.kind === "delete") return "external-edit-merge-gutter-local";
+  if (block.kind === "insert") return "external-edit-merge-gutter-local";
+  if (block.kind === "delete") return "";
   return "external-edit-merge-gutter-combined";
 }
 

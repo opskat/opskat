@@ -425,20 +425,50 @@
       "deleteConfirmTitle": "Confirm Delete Policy Group",
       "deleteConfirm": "Delete policy group \"{{name}}\"? This action cannot be undone.",
       "builtin": {
-        "linux-readonly": { "name": "Linux Read-Only", "desc": "Common Linux read-only commands" },
-        "k8s-readonly": { "name": "Kubernetes Read-Only", "desc": "Kubernetes read-only commands" },
-        "k8s-dangerous-deny": { "name": "Kubernetes Dangerous Deny", "desc": "Deny dangerous Kubernetes commands" },
-        "docker-readonly": { "name": "Docker Read-Only", "desc": "Docker read-only commands" },
-        "dangerous-deny": { "name": "Dangerous Command Deny", "desc": "Deny dangerous system commands" },
-        "sql-readonly": { "name": "SQL Read-Only", "desc": "Allow query-only SQL statements" },
-        "sql-dangerous-deny": { "name": "SQL Dangerous Deny", "desc": "Deny dangerous SQL operations" },
-        "redis-readonly": { "name": "Redis Read-Only", "desc": "Allow Redis read-only commands" },
-        "redis-dangerous-deny": { "name": "Redis Dangerous Deny", "desc": "Deny dangerous Redis commands" },
+        "linux-readonly": {
+          "name": "Linux Read-Only",
+          "desc": "Common Linux read-only commands"
+        },
+        "k8s-readonly": {
+          "name": "Kubernetes Read-Only",
+          "desc": "Kubernetes read-only commands"
+        },
+        "k8s-dangerous-deny": {
+          "name": "Kubernetes Dangerous Deny",
+          "desc": "Deny dangerous Kubernetes commands"
+        },
+        "docker-readonly": {
+          "name": "Docker Read-Only",
+          "desc": "Docker read-only commands"
+        },
+        "dangerous-deny": {
+          "name": "Dangerous Command Deny",
+          "desc": "Deny dangerous system commands"
+        },
+        "sql-readonly": {
+          "name": "SQL Read-Only",
+          "desc": "Allow query-only SQL statements"
+        },
+        "sql-dangerous-deny": {
+          "name": "SQL Dangerous Deny",
+          "desc": "Deny dangerous SQL operations"
+        },
+        "redis-readonly": {
+          "name": "Redis Read-Only",
+          "desc": "Allow Redis read-only commands"
+        },
+        "redis-dangerous-deny": {
+          "name": "Redis Dangerous Deny",
+          "desc": "Deny dangerous Redis commands"
+        },
         "kafka-metadata-readonly": {
           "name": "Kafka Metadata Read-Only",
           "desc": "Allow cluster, broker, topic, and consumer group metadata reads"
         },
-        "kafka-message-read": { "name": "Kafka Message Read", "desc": "Allow reading message payloads" },
+        "kafka-message-read": {
+          "name": "Kafka Message Read",
+          "desc": "Allow reading message payloads"
+        },
         "kafka-schema-readonly": {
           "name": "Schema Registry Read-Only",
           "desc": "Allow reading Schema Registry metadata and schemas"
@@ -451,7 +481,10 @@
           "name": "Kafka Operator",
           "desc": "Allow topic, partition, and consumer group offset management"
         },
-        "kafka-security-admin": { "name": "Kafka Security Admin", "desc": "Allow Kafka ACL management" },
+        "kafka-security-admin": {
+          "name": "Kafka Security Admin",
+          "desc": "Allow Kafka ACL management"
+        },
         "kafka-dangerous-deny": {
           "name": "Kafka Dangerous Deny",
           "desc": "Deny destructive and security-sensitive Kafka operations"
@@ -1023,6 +1056,7 @@
     }
   },
   "externalEdit": {
+    "saving": "Auto-saving…",
     "panel": {
       "title": "External Edit",
       "conflicts": "Conflicting Files",
@@ -1110,8 +1144,6 @@
       "localCenterRemote": "Left local / center final / right remote",
       "previous": "Previous conflict",
       "next": "Next conflict",
-      "acceptLocal": "Accept Local",
-      "acceptRemote": "Accept Remote",
       "closeDirtyTitle": "Discard unsaved merge draft?",
       "closeDirtyDesc": "Closing keeps the conflict record, but the unsaved final draft edits in this dialog will be lost.",
       "closeDirtyConfirm": "Discard and Close"
@@ -1258,7 +1290,6 @@
     "batchDescription": "The following {{count}} operations require your approval",
     "alwaysAllow": "Always Allow",
     "approve": "Approve",
-    "allow": "Allow",
     "scopeAll": "All Assets"
   },
   "audit": {

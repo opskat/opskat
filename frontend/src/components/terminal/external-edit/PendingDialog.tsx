@@ -22,6 +22,7 @@ interface PendingDialogProps {
   onOpenChange: (open: boolean) => void;
   pendingItems: ExternalEditPendingItem[];
   savingSessionId: string | null;
+  autoSavePhases?: Record<string, "pending" | "running">;
   mergePrepareErrors: Record<string, string>;
   continueEditLabel: string;
   onOpenErrorDetail: (sessionId: string) => void;
@@ -36,6 +37,7 @@ export function ExternalEditPendingDialog({
   onOpenChange,
   pendingItems,
   savingSessionId,
+  autoSavePhases,
   mergePrepareErrors,
   continueEditLabel,
   onOpenErrorDetail,
@@ -83,11 +85,18 @@ export function ExternalEditPendingDialog({
                 >
                   <div className="flex flex-col gap-3">
                     <div className="min-w-0 space-y-1.5" data-testid={`external-edit-pending-content-${session.id}`}>
-                      <div
-                        className="break-words font-medium text-foreground"
-                        data-testid={`external-edit-pending-file-${session.id}`}
-                      >
-                        {fileName}
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="break-words font-medium text-foreground"
+                          data-testid={`external-edit-pending-file-${session.id}`}
+                        >
+                          {fileName}
+                        </span>
+                        {autoSavePhases?.[session.documentKey] && (
+                          <span className="shrink-0 rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-medium text-sky-400">
+                            {t("externalEdit.saving")}
+                          </span>
+                        )}
                       </div>
                       <div
                         className="break-all whitespace-normal text-xs text-muted-foreground"
