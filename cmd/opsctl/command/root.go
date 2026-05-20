@@ -8,7 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/opskat/opskat/internal/ai"
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/helper"
 	_ "github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/buildinfo"
@@ -84,7 +85,7 @@ func Execute() int {
 	}
 
 	// CLI 默认使用英文策略消息
-	ctx = ai.WithPolicyLang(ctx, "en")
+	ctx = aictx.WithPolicyLang(ctx, "en")
 
 	// Load app config (MCP port, etc.)
 	resolvedDataDir := *dataDir
@@ -98,9 +99,9 @@ func Execute() int {
 	handlers := buildHandlerMap()
 
 	// 创建 SSH 连接池，供 redis/sql 命令的 SSH 隧道使用
-	sshPool := sshpool.NewPool(&ai.AIPoolDialer{}, 5*time.Minute)
+	sshPool := sshpool.NewPool(&helper.AIPoolDialer{}, 5*time.Minute)
 	defer sshPool.Close()
-	ctx = ai.WithSSHPool(ctx, sshPool)
+	ctx = helper.WithSSHPool(ctx, sshPool)
 
 	// Resolve session ID: flag > env > active-session file
 	resolvedSession := resolveSessionID(*sessionFlag)

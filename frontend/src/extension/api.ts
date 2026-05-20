@@ -1,5 +1,5 @@
 // frontend/src/extension/api.ts
-import { CallExtensionAction, CallExtensionTool } from "../../wailsjs/go/app/App";
+import { CallExtensionAction, CallExtensionTool } from "../../wailsjs/go/extension/Extension";
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
 import type { ExtAPI, ExtEvent } from "./types";
 

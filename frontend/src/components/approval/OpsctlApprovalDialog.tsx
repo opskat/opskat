@@ -12,8 +12,8 @@ import {
   Textarea,
 } from "@opskat/ui";
 import { useWailsEvent } from "@/hooks/useWailsEvent";
-import { RespondOpsctlApproval } from "../../../wailsjs/go/app/App";
-import { ai } from "../../../wailsjs/go/models";
+import { RespondOpsctlApproval } from "../../../wailsjs/go/opsctl/Opsctl";
+import { permission } from "../../../wailsjs/go/models";
 import { ShieldAlert, Terminal, Database, Server, FolderOpen, Globe, Usb } from "lucide-react";
 
 interface ApprovalItemData {
@@ -196,7 +196,7 @@ export function OpsctlApprovalDialog() {
     (decision: string) => {
       if (!current) return;
 
-      const resp = new ai.ApprovalResponse();
+      const resp = new permission.ApprovalResponse();
       resp.decision = decision;
 
       const shouldSendEdits =
@@ -205,7 +205,7 @@ export function OpsctlApprovalDialog() {
       if (shouldSendEdits) {
         const edits = editState[current.id] || {};
         resp.edited_items = current.items.map((item, i) => {
-          const edited = new ai.ApprovalItem();
+          const edited = new permission.ApprovalItem();
           edited.type = item.type;
           edited.asset_id = item.asset_id;
           edited.asset_name = item.asset_name;

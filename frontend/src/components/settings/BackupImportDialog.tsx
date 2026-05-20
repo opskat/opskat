@@ -14,7 +14,8 @@ import {
   Switch,
   Separator,
 } from "@opskat/ui";
-import { PreviewImportFile, ExecuteImportFile } from "../../../wailsjs/go/app/App";
+import { PreviewImportFile } from "../../../wailsjs/go/system/System";
+import { ExecuteImportFile } from "../../../wailsjs/go/system/System";
 import { backup_svc } from "../../../wailsjs/go/models";
 import { useAssetStore } from "@/stores/assetStore";
 import { useShortcutStore } from "@/stores/shortcutStore";

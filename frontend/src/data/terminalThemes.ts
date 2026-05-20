@@ -6,6 +6,10 @@ export interface TerminalTheme {
   cursor: string;
   cursorAccent?: string;
   selectionBackground?: string;
+  // 显式设这两个字段让 xterm WebGL 选区走"统一 selectionFg"渲染路径，
+  // 避免每个 (char, originalFg, selectionBg) 都重新栅格化，消除选中文字"字体变样"。
+  selectionForeground?: string;
+  selectionInactiveBackground?: string;
   black: string;
   red: string;
   green: string;
@@ -32,6 +36,7 @@ export const defaultLightTheme: TerminalTheme = {
   foreground: "#2b3040",
   cursor: "#2b3040",
   selectionBackground: "#bdd0ea",
+  selectionForeground: "#2b3040",
   black: "#2b3040",
   red: "#e45649",
   green: "#50a14f",
@@ -58,6 +63,7 @@ export const defaultDarkTheme: TerminalTheme = {
   foreground: "#e7ecf0",
   cursor: "#e7ecf0",
   selectionBackground: "#1e3050",
+  selectionForeground: "#e7ecf0",
   black: "#09121c",
   red: "#f07178",
   green: "#a6d189",
@@ -85,6 +91,7 @@ export const builtinThemes: TerminalTheme[] = [
     cursor: "#c0caf5",
     cursorAccent: "#1a1b26",
     selectionBackground: "#33467c",
+    selectionForeground: "#a9b1d6",
     black: "#15161e",
     red: "#f7768e",
     green: "#9ece6a",
@@ -110,6 +117,7 @@ export const builtinThemes: TerminalTheme[] = [
     cursor: "#f8f8f2",
     cursorAccent: "#282a36",
     selectionBackground: "#44475a",
+    selectionForeground: "#f8f8f2",
     black: "#21222c",
     red: "#ff5555",
     green: "#50fa7b",
@@ -135,6 +143,7 @@ export const builtinThemes: TerminalTheme[] = [
     cursor: "#528bff",
     cursorAccent: "#282c34",
     selectionBackground: "#3e4451",
+    selectionForeground: "#abb2bf",
     black: "#282c34",
     red: "#e06c75",
     green: "#98c379",
@@ -160,6 +169,7 @@ export const builtinThemes: TerminalTheme[] = [
     cursor: "#93a1a1",
     cursorAccent: "#002b36",
     selectionBackground: "#073642",
+    selectionForeground: "#839496",
     black: "#073642",
     red: "#dc322f",
     green: "#859900",
@@ -185,6 +195,7 @@ export const builtinThemes: TerminalTheme[] = [
     cursor: "#586e75",
     cursorAccent: "#fdf6e3",
     selectionBackground: "#eee8d5",
+    selectionForeground: "#657b83",
     black: "#073642",
     red: "#dc322f",
     green: "#859900",
@@ -210,6 +221,7 @@ export const builtinThemes: TerminalTheme[] = [
     cursor: "#f8f8f0",
     cursorAccent: "#272822",
     selectionBackground: "#49483e",
+    selectionForeground: "#f8f8f2",
     black: "#272822",
     red: "#f92672",
     green: "#a6e22e",
@@ -235,6 +247,7 @@ export const builtinThemes: TerminalTheme[] = [
     cursor: "#d8dee9",
     cursorAccent: "#2e3440",
     selectionBackground: "#434c5e",
+    selectionForeground: "#d8dee9",
     black: "#3b4252",
     red: "#bf616a",
     green: "#a3be8c",
@@ -260,6 +273,7 @@ export const builtinThemes: TerminalTheme[] = [
     cursor: "#ebdbb2",
     cursorAccent: "#282828",
     selectionBackground: "#504945",
+    selectionForeground: "#ebdbb2",
     black: "#282828",
     red: "#cc241d",
     green: "#98971a",
@@ -285,6 +299,7 @@ export const builtinThemes: TerminalTheme[] = [
     cursor: "#c9d1d9",
     cursorAccent: "#0d1117",
     selectionBackground: "#264f78",
+    selectionForeground: "#c9d1d9",
     black: "#484f58",
     red: "#ff7b72",
     green: "#3fb950",
@@ -310,6 +325,7 @@ export const builtinThemes: TerminalTheme[] = [
     cursor: "#f5e0dc",
     cursorAccent: "#1e1e2e",
     selectionBackground: "#45475a",
+    selectionForeground: "#cdd6f4",
     black: "#45475a",
     red: "#f38ba8",
     green: "#a6e3a1",
@@ -335,6 +351,7 @@ export const builtinThemes: TerminalTheme[] = [
     cursor: "#00ff41",
     cursorAccent: "#0a0e14",
     selectionBackground: "#0d3b1e",
+    selectionForeground: "#00ff41",
     black: "#0a0e14",
     red: "#ff0033",
     green: "#00ff41",
@@ -360,6 +377,7 @@ export const builtinThemes: TerminalTheme[] = [
     cursor: "#fc5fa3",
     cursorAccent: "#000000",
     selectionBackground: "#3c3c3c",
+    selectionForeground: "#efefef",
     black: "#000000",
     red: "#e15a60",
     green: "#98c379",

@@ -140,6 +140,8 @@ export function toXtermTheme(theme: TerminalTheme) {
     cursor: theme.cursor,
     cursorAccent: theme.cursorAccent,
     selectionBackground: theme.selectionBackground,
+    selectionForeground: theme.selectionForeground,
+    selectionInactiveBackground: theme.selectionInactiveBackground,
     black: theme.black,
     red: theme.red,
     green: theme.green,

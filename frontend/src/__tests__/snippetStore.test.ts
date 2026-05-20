@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useSnippetStore } from "../stores/snippetStore";
+import { ListSnippetCategories } from "../../wailsjs/go/extension/Extension";
 import {
-  ListSnippetCategories,
   ListSnippets,
   CreateSnippet,
   UpdateSnippet,
@@ -11,7 +11,7 @@ import {
   RecordSnippetUse,
   SetSnippetLastAssets,
   GetSnippetLastAssets,
-} from "../../wailsjs/go/app/App";
+} from "../../wailsjs/go/extension/Extension";
 
 describe("snippetStore", () => {
   beforeEach(() => {

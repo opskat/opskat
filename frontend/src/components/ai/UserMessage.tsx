@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@opskat/ui";
 import type { ChatMessage } from "@/stores/aiStore";
 import { useCompact } from "@/components/ai/AIChatContentContext";
-import { openAssetInfoTab } from "@/lib/openAssetInfoTab";
+import { openMentionTarget } from "@/lib/openMentionTarget";
 import { parseMentionContent } from "@/lib/mentionXml";
 
 // 单独控制用户消息选中态，保证主色气泡里也能明确看到选区范围。
@@ -38,14 +38,14 @@ export const UserMessage = memo(function UserMessage({ msg, index, onEdit }: Use
 
   // 用户消息复制默认取整条内容，减少额外转换带来的偏差。
   const handleCopy = useCallback(() => {
-    void copyUserMessageText(msg.content, t("ai.copied", "已复制到剪贴板"), t("ai.copyFailed", "复制失败"));
+    void copyUserMessageText(msg.content, t("ai.copied"), t("ai.copyFailed"));
   }, [msg.content, t]);
 
   // 右键复制优先保留当前选区，没有选区时回退到整条消息。
   const handleContextCopy = useCallback(() => {
     const selectedText = window.getSelection?.()?.toString().trim() ?? "";
     const copyText = selectedText && msg.content.includes(selectedText) ? selectedText : msg.content;
-    void copyUserMessageText(copyText, t("ai.copied", "已复制到剪贴板"), t("ai.copyFailed", "复制失败"));
+    void copyUserMessageText(copyText, t("ai.copied"), t("ai.copyFailed"));
   }, [msg.content, t]);
 
   const canEdit = !!onEdit && index != null;
@@ -68,7 +68,7 @@ export const UserMessage = memo(function UserMessage({ msg, index, onEdit }: Use
                 <button
                   key={i}
                   type="button"
-                  onClick={() => openAssetInfoTab(s.attrs.assetId)}
+                  onClick={() => openMentionTarget(s.attrs)}
                   className="inline-flex items-center rounded bg-primary-foreground/20 px-1 py-0.5 text-xs font-medium hover:bg-primary-foreground/30 hover:underline cursor-pointer"
                 >
                   {s.text}
@@ -78,8 +78,8 @@ export const UserMessage = memo(function UserMessage({ msg, index, onEdit }: Use
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          {canEdit && <ContextMenuItem onClick={handleEdit}>{t("ai.editMessage", "编辑消息")}</ContextMenuItem>}
-          <ContextMenuItem onClick={handleContextCopy}>{t("action.copy", "复制")}</ContextMenuItem>
+          {canEdit && <ContextMenuItem onClick={handleEdit}>{t("ai.editMessage")}</ContextMenuItem>}
+          <ContextMenuItem onClick={handleContextCopy}>{t("action.copy")}</ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
       <div className="flex items-center gap-2 min-h-[18px] pr-0.5">
@@ -88,8 +88,8 @@ export const UserMessage = memo(function UserMessage({ msg, index, onEdit }: Use
             type="button"
             className="opacity-0 group-hover/user:opacity-100 transition-opacity text-muted-foreground/50 hover:text-primary"
             onClick={handleEdit}
-            title={t("ai.editMessage", "编辑消息")}
-            aria-label={t("ai.editMessage", "编辑消息")}
+            title={t("ai.editMessage")}
+            aria-label={t("ai.editMessage")}
           >
             <Pencil className="h-3.5 w-3.5" />
           </button>
@@ -98,8 +98,8 @@ export const UserMessage = memo(function UserMessage({ msg, index, onEdit }: Use
           type="button"
           className="opacity-0 group-hover/user:opacity-100 transition-opacity text-muted-foreground/50 hover:text-primary"
           onClick={handleCopy}
-          title={t("action.copy", "复制")}
-          aria-label={t("action.copy", "复制")}
+          title={t("action.copy")}
+          aria-label={t("action.copy")}
         >
           <Copy className="h-3.5 w-3.5" />
         </button>

@@ -5,24 +5,25 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/opskat/opskat/internal/ai"
-
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/audit"
+	"github.com/opskat/opskat/internal/ai/tool"
 	. "github.com/smartystreets/goconvey/convey"
 )
 
 // mockAuditWriter 捕获审计日志写入
 type mockAuditWriter struct {
 	mu    sync.Mutex
-	calls []ai.ToolCallInfo
+	calls []audit.ToolCallInfo
 }
 
-func (m *mockAuditWriter) WriteToolCall(_ context.Context, info ai.ToolCallInfo) {
+func (m *mockAuditWriter) WriteToolCall(_ context.Context, info audit.ToolCallInfo) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, info)
 }
 
-func (m *mockAuditWriter) lastCall() ai.ToolCallInfo {
+func (m *mockAuditWriter) lastCall() audit.ToolCallInfo {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.calls[len(m.calls)-1]
@@ -35,7 +36,7 @@ func TestCallHandler_Decision(t *testing.T) {
 		opsctlAuditWriter = mock
 		defer func() { opsctlAuditWriter = origWriter }()
 
-		handlers := map[string]ai.ToolHandlerFunc{
+		handlers := map[string]tool.ToolHandlerFunc{
 			"exec_sql": func(_ context.Context, args map[string]any) (string, error) {
 				return `{"rows":[]}`, nil
 			},
@@ -45,9 +46,9 @@ func TestCallHandler_Decision(t *testing.T) {
 		}
 
 		Convey("传入 decision 时审计日志包含决策信息", func() {
-			decision := &ai.CheckResult{
-				Decision:       ai.Allow,
-				DecisionSource: ai.SourcePolicyAllow,
+			decision := &aictx.CheckResult{
+				Decision:       aictx.Allow,
+				DecisionSource: aictx.SourcePolicyAllow,
 				MatchedPattern: "SELECT *",
 			}
 			exitCode := callHandler(context.Background(), handlers, "exec_sql", map[string]any{
@@ -61,15 +62,15 @@ func TestCallHandler_Decision(t *testing.T) {
 			info := mock.lastCall()
 			So(info.ToolName, ShouldEqual, "exec_sql")
 			So(info.Decision, ShouldNotBeNil)
-			So(info.Decision.Decision, ShouldEqual, ai.Allow)
-			So(info.Decision.DecisionSource, ShouldEqual, ai.SourcePolicyAllow)
+			So(info.Decision.Decision, ShouldEqual, aictx.Allow)
+			So(info.Decision.DecisionSource, ShouldEqual, aictx.SourcePolicyAllow)
 			So(info.Decision.MatchedPattern, ShouldEqual, "SELECT *")
 		})
 
 		Convey("exec_redis 传入 decision 时审计日志包含决策信息", func() {
-			decision := &ai.CheckResult{
-				Decision:       ai.Allow,
-				DecisionSource: ai.SourceUserAllow,
+			decision := &aictx.CheckResult{
+				Decision:       aictx.Allow,
+				DecisionSource: aictx.SourceUserAllow,
 			}
 			exitCode := callHandler(context.Background(), handlers, "exec_redis", map[string]any{
 				"asset_id": float64(1),
@@ -81,8 +82,8 @@ func TestCallHandler_Decision(t *testing.T) {
 
 			info := mock.lastCall()
 			So(info.Decision, ShouldNotBeNil)
-			So(info.Decision.Decision, ShouldEqual, ai.Allow)
-			So(info.Decision.DecisionSource, ShouldEqual, ai.SourceUserAllow)
+			So(info.Decision.Decision, ShouldEqual, aictx.Allow)
+			So(info.Decision.DecisionSource, ShouldEqual, aictx.SourceUserAllow)
 		})
 
 		Convey("不传 decision 时审计日志 Decision 为 nil", func() {

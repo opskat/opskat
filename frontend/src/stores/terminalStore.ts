@@ -1,6 +1,6 @@
 import { create } from "zustand";
+import { ConnectSSHAsync } from "../../wailsjs/go/ssh/SSH";
 import {
-  ConnectSSHAsync,
   CancelSSHConnect,
   RespondAuthChallenge,
   RespondHostKeyVerify,
@@ -9,11 +9,9 @@ import {
   SplitSSH,
   UpdateAssetPassword,
   WriteSSH,
-  WriteSerial,
-  ConnectSerialAsync,
-  DisconnectSerial,
-} from "../../wailsjs/go/app/App";
-import { app, asset_entity } from "../../wailsjs/go/models";
+} from "../../wailsjs/go/ssh/SSH";
+import { WriteSerial, ConnectSerialAsync, DisconnectSerial } from "../../wailsjs/go/serial/Serial";
+import { ssh as ssh_models, asset_entity } from "../../wailsjs/go/models";
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
 import { bytesToBase64 } from "../lib/terminalEncode";
 import { useTabStore, registerTabCloseHook, registerTabRestoreHook, type TerminalTabMeta } from "./tabStore";
@@ -450,7 +448,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       if (isSerial) {
         connectionId = await ConnectSerialAsync({ assetId });
       } else {
-        const req = new app.SSHConnectRequest({
+        const req = new ssh_models.SSHConnectRequest({
           assetId,
           password,
           key: "",
@@ -606,7 +604,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const connectPromise = isSerial
       ? ConnectSerialAsync({ assetId: meta.assetId })
       : ConnectSSHAsync(
-          new app.SSHConnectRequest({
+          new ssh_models.SSHConnectRequest({
             assetId: meta.assetId,
             password: "",
             key: "",

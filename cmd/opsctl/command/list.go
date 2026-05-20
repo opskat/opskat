@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/opskat/opskat/internal/ai"
+	"github.com/opskat/opskat/internal/ai/tool"
 )
 
-func cmdList(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args []string) int {
+func cmdList(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		printListUsage()
 		if len(args) > 0 {
@@ -45,7 +45,7 @@ func cmdList(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args [
 	}
 }
 
-func cmdGet(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args []string) int {
+func cmdGet(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		printGetUsage()
 		if len(args) > 0 {

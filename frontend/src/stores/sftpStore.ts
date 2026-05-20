@@ -1,12 +1,12 @@
 import { create } from "zustand";
+import { SFTPUpload } from "../../wailsjs/go/ssh/SSH";
 import {
-  SFTPUpload,
   SFTPUploadDir,
   SFTPUploadFile,
   SFTPDownload,
   SFTPDownloadDir,
   SFTPCancelTransfer,
-} from "../../wailsjs/go/app/App";
+} from "../../wailsjs/go/ssh/SSH";
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
 import { registerTabCloseHook, registerTabReplaceHook } from "./tabStore";
 

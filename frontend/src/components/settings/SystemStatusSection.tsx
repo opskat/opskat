@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@opskat/ui";
 import { CircleCheck, Info, TriangleAlert, OctagonX, ChevronDown, ChevronRight } from "lucide-react";
-import { GetSystemStatus } from "../../../wailsjs/go/app/App";
+import { GetSystemStatus } from "../../../wailsjs/go/system/System";
 
 interface StatusEntry {
   level: "info" | "warn" | "error";

@@ -27,7 +27,7 @@ import {
   ContextMenuSeparator,
   ConfirmDialog,
 } from "@opskat/ui";
-import { ExecuteSQL } from "../../../wailsjs/go/app/App";
+import { ExecuteSQL } from "../../../wailsjs/go/query/Query";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";

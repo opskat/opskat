@@ -12,7 +12,11 @@ import (
 	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
-	"github.com/opskat/opskat/internal/ai"
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/audit"
+	"github.com/opskat/opskat/internal/ai/helper"
+	"github.com/opskat/opskat/internal/ai/permission"
+	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -29,7 +33,7 @@ type batchInput struct {
 
 type batchCommand struct {
 	Asset   string `json:"asset"`
-	Type    string `json:"type,omitempty"` // "exec"|"sql"|"redis", default "exec"
+	Type    string `json:"type,omitempty"` // "exec"|"sql"|"redis"|"mongo", default "exec"
 	Command string `json:"command"`
 }
 
@@ -52,14 +56,14 @@ type batchOutput struct {
 // resolvedBatchCmd is a batch command with resolved asset info.
 type resolvedBatchCmd struct {
 	asset    *asset_entity.Asset
-	cmdType  string // "exec"|"sql"|"redis"
+	cmdType  string // "exec"|"sql"|"redis"|"mongo"
 	command  string
-	decision *ai.CheckResult // 策略预检结果，用于审计
+	decision *aictx.CheckResult // 策略预检结果，用于审计
 }
 
 var validBatchTypes = map[string]bool{"exec": true, "sql": true, "redis": true, "mongo": true}
 
-func cmdBatch(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args []string, session string) int {
+func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
 		printBatchUsage()
 		return 0
@@ -99,20 +103,20 @@ func cmdBatch(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args 
 	// Step 3: Policy pre-check — split into auto-allow / auto-deny / need-confirm
 	type permBucket struct {
 		idx    int
-		result ai.CheckResult
+		result aictx.CheckResult
 	}
 	var autoAllow, autoDeny, needConfirm []permBucket
 
 	for i, cmd := range resolved {
-		permCtx := ai.WithSessionID(ctx, session)
-		pr := ai.CheckPermission(permCtx, cmd.cmdType, cmd.asset.ID, cmd.command)
+		permCtx := aictx.WithSessionID(ctx, session)
+		pr := permission.CheckPermission(permCtx, cmd.cmdType, cmd.asset.ID, cmd.command)
 		prCopy := pr
 		resolved[i].decision = &prCopy
 		bucket := permBucket{idx: i, result: pr}
 		switch pr.Decision {
-		case ai.Allow:
+		case aictx.Allow:
 			autoAllow = append(autoAllow, bucket)
-		case ai.Deny:
+		case aictx.Deny:
 			autoDeny = append(autoDeny, bucket)
 		default:
 			needConfirm = append(needConfirm, bucket)
@@ -131,8 +135,8 @@ func cmdBatch(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args 
 		}
 	}
 
-	auditCtx := ai.WithSessionID(ctx, session)
-	auditCtx = ai.WithAuditSource(auditCtx, "opsctl")
+	auditCtx := aictx.WithSessionID(ctx, session)
+	auditCtx = aictx.WithAuditSource(auditCtx, "opsctl")
 
 	// Fill in denied results + write audit for each denied command
 	for _, b := range autoDeny {
@@ -161,24 +165,24 @@ func cmdBatch(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args 
 			})
 		}
 
-		approvalResult, approvalErr := requireBatchApproval(ctx, batchItems, session)
+		approvalResult, approvalErr := requireBatchApproval(batchItems, session)
 		if approvalErr != nil {
 			// All need-confirm commands are denied — write audit for each
 			for _, b := range needConfirm {
 				cmd := resolved[b.idx]
 				results[b.idx].Error = fmt.Sprintf("approval failed: %v", approvalErr)
 				argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, cmd.asset.ID, truncateStr(cmd.command, 200))
-				decision := &ai.CheckResult{Decision: ai.Deny, DecisionSource: approvalResult.DecisionSource}
+				decision := &aictx.CheckResult{Decision: aictx.Deny, DecisionSource: approvalResult.DecisionSource}
 				writeOpsctlAudit(auditCtx, batchAuditTool(cmd.cmdType), argsJSON, "", approvalErr, decision)
 			}
 		} else {
 			session = approvalResult.SessionID
-			auditCtx = ai.WithSessionID(auditCtx, session)
+			auditCtx = aictx.WithSessionID(auditCtx, session)
 			// Update decision to user_allow for approved commands
 			for _, b := range needConfirm {
-				resolved[b.idx].decision = &ai.CheckResult{
-					Decision:       ai.Allow,
-					DecisionSource: ai.SourceUserAllow,
+				resolved[b.idx].decision = &aictx.CheckResult{
+					Decision:       aictx.Allow,
+					DecisionSource: aictx.SourceUserAllow,
 				}
 				execSet[b.idx] = true
 			}
@@ -230,7 +234,7 @@ func cmdBatch(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args 
 }
 
 // executeBatchItem runs a single command and returns the result.
-func executeBatchItem(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, cmd resolvedBatchCmd) batchResult {
+func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, cmd resolvedBatchCmd) batchResult {
 	result := batchResult{
 		AssetID:   cmd.asset.ID,
 		AssetName: cmd.asset.Name,
@@ -296,8 +300,8 @@ func executeBatchExec(ctx context.Context, cmd resolvedBatchCmd) batchResult {
 		Command:   cmd.command,
 	}
 
-	outBuf := ai.NewLimitedBuffer(auditOutputLimit)
-	errBuf := ai.NewLimitedBuffer(auditOutputLimit)
+	outBuf := audit.NewLimitedBuffer(auditOutputLimit)
+	errBuf := audit.NewLimitedBuffer(auditOutputLimit)
 
 	if proxy := getSSHProxyClient(); proxy != nil {
 		exitCode, execErr := proxy.Exec(sshpool.ProxyRequest{
@@ -314,7 +318,7 @@ func executeBatchExec(ctx context.Context, cmd resolvedBatchCmd) batchResult {
 	}
 
 	// Fallback: direct SSH
-	execErr := ai.ExecWithStdio(ctx, cmd.asset.ID, cmd.command, nil, outBuf, errBuf)
+	execErr := helper.ExecWithStdio(ctx, cmd.asset.ID, cmd.command, nil, outBuf, errBuf)
 	result.Stdout = outBuf.String()
 	result.Stderr = errBuf.String()
 	if execErr != nil {
@@ -329,8 +333,8 @@ func executeBatchExec(ctx context.Context, cmd resolvedBatchCmd) batchResult {
 	return result
 }
 
-// executeBatchHandler runs a sql/redis command via the tool handler.
-func executeBatchHandler(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, toolName string, cmd resolvedBatchCmd, params map[string]any) batchResult {
+// executeBatchHandler runs a data command via the tool handler.
+func executeBatchHandler(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, toolName string, cmd resolvedBatchCmd, params map[string]any) batchResult {
 	result := batchResult{
 		AssetID:   cmd.asset.ID,
 		AssetName: cmd.asset.Name,
@@ -338,7 +342,7 @@ func executeBatchHandler(ctx context.Context, handlers map[string]ai.ToolHandler
 		Command:   cmd.command,
 	}
 
-	ctx = ai.WithAuditSource(ctx, "opsctl")
+	ctx = aictx.WithAuditSource(ctx, "opsctl")
 	handler, ok := handlers[toolName]
 	if !ok {
 		result.Error = fmt.Sprintf("unknown tool: %s", toolName)
@@ -359,7 +363,7 @@ func executeBatchHandler(ctx context.Context, handlers map[string]ai.ToolHandler
 }
 
 // requireBatchApproval sends a single batch approval request to the desktop app.
-func requireBatchApproval(ctx context.Context, items []approval.BatchItem, session string) (ApprovalResult, error) {
+func requireBatchApproval(items []approval.BatchItem, session string) (ApprovalResult, error) {
 	if session == "" {
 		id := newSessionID()
 		if err := writeActiveSession(id); err != nil {
@@ -390,8 +394,8 @@ func requireBatchApproval(ctx context.Context, items []approval.BatchItem, sessi
 	})
 	if err != nil {
 		return ApprovalResult{
-			Decision:       ai.Deny,
-			DecisionSource: ai.SourcePolicyDeny,
+			Decision:       aictx.Deny,
+			DecisionSource: aictx.SourcePolicyDeny,
 			SessionID:      session,
 		}, fmt.Errorf("desktop app is not running: %v", err)
 	}
@@ -401,15 +405,15 @@ func requireBatchApproval(ctx context.Context, items []approval.BatchItem, sessi
 			reason = "denied"
 		}
 		return ApprovalResult{
-			Decision:       ai.Deny,
-			DecisionSource: ai.SourceUserDeny,
+			Decision:       aictx.Deny,
+			DecisionSource: aictx.SourceUserDeny,
 			SessionID:      session,
 		}, fmt.Errorf("batch denied: %s", reason)
 	}
 
 	return ApprovalResult{
-		Decision:       ai.Allow,
-		DecisionSource: ai.SourceUserAllow,
+		Decision:       aictx.Allow,
+		DecisionSource: aictx.SourceUserAllow,
 		SessionID:      session,
 	}, nil
 }

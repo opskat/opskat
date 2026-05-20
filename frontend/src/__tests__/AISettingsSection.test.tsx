@@ -2,14 +2,9 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AISettingsSection } from "@/components/settings/AISettingsSection";
-import {
-  DetectOpsctl,
-  DetectSkills,
-  GetAppVersion,
-  GetDataDir,
-  GetOpsctlInstallDir,
-  ListAIProviders,
-} from "../../wailsjs/go/app/App";
+import { DetectOpsctl } from "../../wailsjs/go/system/System";
+import { DetectSkills, GetAppVersion, GetDataDir, GetOpsctlInstallDir } from "../../wailsjs/go/system/System";
+import { ListAIProviders } from "../../wailsjs/go/ai/AI";
 import { BrowserOpenURL } from "../../wailsjs/runtime/runtime";
 
 describe("AISettingsSection", () => {

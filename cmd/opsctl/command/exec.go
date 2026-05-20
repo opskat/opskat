@@ -7,7 +7,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/opskat/opskat/internal/ai"
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/audit"
+	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/sshpool"
 
@@ -49,7 +51,7 @@ func cmdExec(ctx context.Context, args []string, session string) int {
 		SessionID: session,
 	})
 	// 注入 SessionID 到 context，供审计写入器使用
-	auditCtx := ai.WithSessionID(ctx, approvalResult.SessionID)
+	auditCtx := aictx.WithSessionID(ctx, approvalResult.SessionID)
 
 	if err != nil {
 		writeOpsctlAudit(auditCtx, "exec", argsJSON, "", err, approvalResult.ToCheckResult())
@@ -66,8 +68,8 @@ func cmdExec(ctx context.Context, args []string, session string) int {
 	}
 
 	// 捕获输出用于审计日志
-	outBuf := ai.NewLimitedBuffer(auditOutputLimit)
-	errBuf := ai.NewLimitedBuffer(auditOutputLimit)
+	outBuf := audit.NewLimitedBuffer(auditOutputLimit)
+	errBuf := audit.NewLimitedBuffer(auditOutputLimit)
 	stdoutW := io.MultiWriter(os.Stdout, outBuf)
 	stderrW := io.MultiWriter(os.Stderr, errBuf)
 
@@ -87,7 +89,7 @@ func cmdExec(ctx context.Context, args []string, session string) int {
 	}
 
 	// Fallback: 直连
-	execErr := ai.ExecWithStdio(ctx, assetID, command, stdin, stdoutW, stderrW)
+	execErr := helper.ExecWithStdio(ctx, assetID, command, stdin, stdoutW, stderrW)
 
 	// 审计日志
 	exitCode := 0

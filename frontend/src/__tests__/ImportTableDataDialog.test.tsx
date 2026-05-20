@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ImportTableDataDialog } from "@/components/query/ImportTableDataDialog";
-import * as App from "../../wailsjs/go/app/App";
+import * as App from "../../wailsjs/go/query/Query";
 
 type MockTableImportResult = {
   processed: number;

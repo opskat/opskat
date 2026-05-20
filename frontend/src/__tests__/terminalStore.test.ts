@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { ConnectSSHAsync, DisconnectSSH, GetSSHSyncState } from "../../wailsjs/go/app/App";
+import { ConnectSSHAsync } from "../../wailsjs/go/ssh/SSH";
+import { DisconnectSSH, GetSSHSyncState } from "../../wailsjs/go/ssh/SSH";
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
 import { useTabStore } from "../stores/tabStore";
 import {

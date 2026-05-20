@@ -7,11 +7,12 @@ import (
 	"os"
 	"strings"
 
-	"github.com/opskat/opskat/internal/ai"
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 )
 
-func cmdSQL(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args []string, session string) int {
+func cmdSQL(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		printSQLUsage()
 		if len(args) > 0 {
@@ -60,7 +61,7 @@ func cmdSQL(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args []
 		Detail:    fmt.Sprintf("opsctl sql %s %q", args[0], truncateStr(sqlText, 100)),
 		SessionID: session,
 	})
-	auditCtx := ai.WithSessionID(ctx, approvalResult.SessionID)
+	auditCtx := aictx.WithSessionID(ctx, approvalResult.SessionID)
 	if approvalErr != nil {
 		writeOpsctlAudit(auditCtx, "exec_sql", argsJSON, "", approvalErr, approvalResult.ToCheckResult())
 		fmt.Fprintf(os.Stderr, "Error: %v\n", approvalErr)
@@ -77,7 +78,7 @@ func cmdSQL(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args []
 	return callHandler(auditCtx, handlers, "exec_sql", params, approvalResult.ToCheckResult())
 }
 
-func cmdRedisCmd(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args []string, session string) int {
+func cmdRedisCmd(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		printRedisUsage()
 		if len(args) > 0 {
@@ -114,7 +115,7 @@ func cmdRedisCmd(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, ar
 		Detail:    fmt.Sprintf("opsctl redis %s %q", args[0], truncateStr(command, 100)),
 		SessionID: session,
 	})
-	auditCtx := ai.WithSessionID(ctx, approvalResult.SessionID)
+	auditCtx := aictx.WithSessionID(ctx, approvalResult.SessionID)
 	if approvalErr != nil {
 		writeOpsctlAudit(auditCtx, "exec_redis", argsJSON, "", approvalErr, approvalResult.ToCheckResult())
 		fmt.Fprintf(os.Stderr, "Error: %v\n", approvalErr)
@@ -131,7 +132,7 @@ func cmdRedisCmd(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, ar
 	return callHandler(auditCtx, handlers, "exec_redis", params, approvalResult.ToCheckResult())
 }
 
-func cmdMongo(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args []string, session string) int {
+func cmdMongo(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		printMongoUsage()
 		if len(args) > 0 {
@@ -180,7 +181,7 @@ func cmdMongo(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args 
 		Detail:    fmt.Sprintf("opsctl mongo %s -d %s -c %s -o %s %s", args[0], *database, *collection, *operation, truncateStr(query, 100)),
 		SessionID: session,
 	})
-	auditCtx := ai.WithSessionID(ctx, approvalResult.SessionID)
+	auditCtx := aictx.WithSessionID(ctx, approvalResult.SessionID)
 	if approvalErr != nil {
 		writeOpsctlAudit(auditCtx, "exec_mongo", argsJSON, "", approvalErr, approvalResult.ToCheckResult())
 		fmt.Fprintf(os.Stderr, "Error: %v\n", approvalErr)

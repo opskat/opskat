@@ -5,7 +5,8 @@ import { toast } from "sonner";
 import { Button, Input, ScrollArea } from "@opskat/ui";
 import { useQueryStore, RedisKeyInfo, RedisStreamEntry } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
-import { RedisStreamAdd, RedisStreamDelete } from "../../../wailsjs/go/app/App";
+import { RedisStreamAdd } from "../../../wailsjs/go/redis/Redis";
+import { RedisStreamDelete } from "../../../wailsjs/go/redis/Redis";
 
 const VALUE_ROW_HEIGHT = 30;
 

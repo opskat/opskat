@@ -4,7 +4,8 @@ import { RedisKeyDetail } from "../components/query/RedisKeyDetail";
 import { RedisStreamViewer } from "../components/query/RedisStreamViewer";
 import { useQueryStore } from "../stores/queryStore";
 import { useTabStore } from "../stores/tabStore";
-import { ExecuteRedisArgs, RedisGetKeyDetail, RedisSetKeyTTL, RedisStreamAdd } from "../../wailsjs/go/app/App";
+import { ExecuteRedisArgs } from "../../wailsjs/go/query/Query";
+import { RedisGetKeyDetail, RedisSetKeyTTL, RedisStreamAdd } from "../../wailsjs/go/redis/Redis";
 
 describe("RedisKeyDetail", () => {
   beforeEach(() => {

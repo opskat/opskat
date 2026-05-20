@@ -15,8 +15,9 @@ import {
   ScrollableContainer,
 } from "@opskat/ui";
 import { Check, ChevronsUpDown, Loader2, RefreshCw } from "lucide-react";
-import { FetchAIModels, GetModelDefaults } from "../../../wailsjs/go/app/App";
-import { app } from "../../../wailsjs/go/models";
+import { FetchAIModels } from "../../../wailsjs/go/ai/AI";
+import { GetModelDefaults } from "../../../wailsjs/go/ai/AI";
+import { ai } from "../../../wailsjs/go/models";
 import { toast } from "sonner";
 
 function getDefaultApiBase(providerType: string): string {
@@ -94,7 +95,7 @@ export function AIProviderForm({
     initialValues?.reasoningEffort ?? "none"
   );
 
-  const [modelOptions, setModelOptions] = useState<app.AIModelInfo[]>([]);
+  const [modelOptions, setModelOptions] = useState<ai.AIModelInfo[]>([]);
   const [modelPopoverOpen, setModelPopoverOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
   const [fetchingModels, setFetchingModels] = useState(false);
@@ -150,7 +151,7 @@ export function AIProviderForm({
   }, [formApiKey, formType, formApiBase, t]);
 
   const handleSelectModel = useCallback(
-    (model: app.AIModelInfo) => {
+    (model: ai.AIModelInfo) => {
       setFormModel(model.id);
       setModelPopoverOpen(false);
       if (model.maxOutputTokens > 0) {

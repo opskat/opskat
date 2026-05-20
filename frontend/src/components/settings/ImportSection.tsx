@@ -1,12 +1,8 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle } from "@opskat/ui";
-import {
-  PreviewTabbyConfig,
-  ImportTabbySelected,
-  PreviewSSHConfig,
-  ImportSSHConfigSelected,
-} from "../../../wailsjs/go/app/App";
+import { PreviewTabbyConfig } from "../../../wailsjs/go/system/System";
+import { ImportTabbySelected, PreviewSSHConfig, ImportSSHConfigSelected } from "../../../wailsjs/go/system/System";
 import { import_svc } from "../../../wailsjs/go/models";
 import { ImportDialog, ImportCallOptions } from "@/components/settings/ImportDialog";
 import { Import } from "lucide-react";

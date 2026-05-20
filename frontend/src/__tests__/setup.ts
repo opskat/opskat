@@ -18,21 +18,30 @@ vi.mock("../../wailsjs/runtime/runtime", () => ({
   WindowIsFullscreen: vi.fn().mockResolvedValue(false),
 }));
 
-// Mock Wails backend bindings
-vi.mock("../../wailsjs/go/app/App", async () => {
-  // Read the real module's export names and replace each with vi.fn().
-  // mockResolvedValue(undefined) 让所有 binding 默认返回 Promise<undefined>，
-  // 与真实 Wails binding 的签名一致，避免 `.catch(() => {})` 在 undefined 上报错。
-  const actual = await vi.importActual<Record<string, unknown>>("../../wailsjs/go/app/App");
+// Mock Wails backend bindings — one factory per binder package.
+// mockResolvedValue(undefined) 让所有 binding 默认返回 Promise<undefined>，
+// 与真实 Wails binding 的签名一致，避免 `.catch(() => {})` 在 undefined 上报错。
+async function mockBinderModule(modulePath: string) {
+  const actual = await vi.importActual<Record<string, unknown>>(modulePath);
   const mocked: Record<string, unknown> = {};
   for (const key of Object.keys(actual)) {
     mocked[key] = vi.fn().mockResolvedValue(undefined);
   }
-  for (const key of ["SelectTableExportFile", "WriteTableExportFile"]) {
-    mocked[key] ??= vi.fn().mockResolvedValue(undefined);
-  }
   return mocked;
-});
+}
+vi.mock("../../wailsjs/go/system/System", () => mockBinderModule("../../wailsjs/go/system/System"));
+vi.mock("../../wailsjs/go/ssh/SSH", () => mockBinderModule("../../wailsjs/go/ssh/SSH"));
+vi.mock("../../wailsjs/go/query/Query", () => mockBinderModule("../../wailsjs/go/query/Query"));
+vi.mock("../../wailsjs/go/redis/Redis", () => mockBinderModule("../../wailsjs/go/redis/Redis"));
+vi.mock("../../wailsjs/go/kafka/Kafka", () => mockBinderModule("../../wailsjs/go/kafka/Kafka"));
+vi.mock("../../wailsjs/go/k8s/K8s", () => mockBinderModule("../../wailsjs/go/k8s/K8s"));
+vi.mock("../../wailsjs/go/serial/Serial", () => mockBinderModule("../../wailsjs/go/serial/Serial"));
+vi.mock("../../wailsjs/go/ai/AI", () => mockBinderModule("../../wailsjs/go/ai/AI"));
+vi.mock("../../wailsjs/go/opsctl/Opsctl", () => mockBinderModule("../../wailsjs/go/opsctl/Opsctl"));
+vi.mock("../../wailsjs/go/extension/Extension", () => mockBinderModule("../../wailsjs/go/extension/Extension"));
+vi.mock("../../wailsjs/go/external_edit/ExternalEdit", () =>
+  mockBinderModule("../../wailsjs/go/external_edit/ExternalEdit")
+);
 
 // Mock react-i18next
 vi.mock("react-i18next", () => ({

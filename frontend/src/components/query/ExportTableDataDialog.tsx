@@ -24,7 +24,9 @@ import {
 } from "@opskat/ui";
 import { Check, ChevronDown, Download, ExternalLink, FolderOpen, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { ExecuteSQL, OpenDirectory, SelectTableExportFile, WriteTableExportFile } from "../../../wailsjs/go/app/App";
+import { ExecuteSQL } from "../../../wailsjs/go/query/Query";
+import { OpenDirectory } from "../../../wailsjs/go/system/System";
+import { SelectTableExportFile, WriteTableExportFile } from "../../../wailsjs/go/query/Query";
 import {
   buildTableExportContent,
   buildTableExportSelectSql,

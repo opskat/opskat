@@ -4,7 +4,8 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { TooltipProvider } from "@opskat/ui";
 import { useSnippetStore } from "../../stores/snippetStore";
 import { SnippetsPage } from "../../components/snippet/SnippetsPage";
-import { ListSnippets, ListSnippetCategories, DuplicateSnippet } from "../../../wailsjs/go/app/App";
+import { ListSnippets } from "../../../wailsjs/go/extension/Extension";
+import { ListSnippetCategories, DuplicateSnippet } from "../../../wailsjs/go/extension/Extension";
 
 // Monaco editor is a heavy dependency; stub it out so the form dialog renders
 // without a real Monaco instance in happy-dom.

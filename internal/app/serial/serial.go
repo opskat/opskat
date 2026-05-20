@@ -1,0 +1,41 @@
+// Package serial 实现 serial binder：串口连接、读写、重置。
+package serial
+
+import (
+	"context"
+	"sync"
+	"sync/atomic"
+
+	"github.com/opskat/opskat/internal/service/serial_svc"
+)
+
+// LangProvider 由 system binder 实现。
+type LangProvider interface {
+	Lang() string
+}
+
+// Serial binder。
+type Serial struct {
+	appCtx  context.Context
+	ctx     context.Context
+	lang    LangProvider
+	manager *serial_svc.Manager
+
+	connCounter        atomic.Int64
+	pendingConnections sync.Map // map[string]context.CancelFunc 异步连接取消用
+}
+
+// New 构造 serial binder。
+func New(appCtx context.Context, lang LangProvider, mgr *serial_svc.Manager) *Serial {
+	return &Serial{appCtx: appCtx, lang: lang, manager: mgr}
+}
+
+// Startup 保存 Wails ctx。
+func (s *Serial) Startup(ctx context.Context) { s.ctx = ctx }
+
+// Cleanup 关闭所有串口。
+func (s *Serial) Cleanup() {
+	if s.manager != nil {
+		s.manager.CloseAll()
+	}
+}

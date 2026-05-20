@@ -2,7 +2,7 @@ import type { asset_entity } from "../../../wailsjs/go/models";
 import { useTerminalStore, type TerminalTabData } from "@/stores/terminalStore";
 import { useTabStore, type TerminalTabMeta } from "@/stores/tabStore";
 import { useQueryStore } from "@/stores/queryStore";
-import { WriteSSH } from "../../../wailsjs/go/app/App";
+import { WriteSSH } from "../../../wailsjs/go/ssh/SSH";
 import { bytesToBase64 } from "@/lib/terminalEncode";
 
 /**

@@ -5,7 +5,7 @@ import { ReactRenderer } from "@tiptap/react";
 import Suggestion, { type SuggestionKeyDownProps, type SuggestionProps } from "@tiptap/suggestion";
 import tippy, { type Instance } from "tippy.js";
 import { useSnippetStore } from "@/stores/snippetStore";
-import { ListSnippets } from "../../../../wailsjs/go/app/App";
+import { ListSnippets } from "../../../../wailsjs/go/extension/Extension";
 import { snippet_svc } from "../../../../wailsjs/go/models";
 import { MentionList, type MentionItem, type MentionListRef } from "../MentionList";
 import {
@@ -13,6 +13,27 @@ import {
   type SnippetSuggestionItem,
   type SnippetSuggestionListRef,
 } from "../SnippetSuggestionList";
+
+const ContextMention = Mention.extend({
+  addAttributes() {
+    const parentAttributes = this.parent?.() ?? {};
+    return {
+      ...parentAttributes,
+      kind: {
+        default: "asset",
+      },
+      database: {
+        default: null,
+      },
+      table: {
+        default: null,
+      },
+      driver: {
+        default: null,
+      },
+    };
+  },
+});
 
 function firstLine(s: string): string {
   const index = s.indexOf("\n");
@@ -71,7 +92,7 @@ function createSuggestionPopup<TItem>(props: SuggestionProps<TItem>, content: El
 }
 
 export function createMentionExtension(activeRef: MutableRefObject<boolean>) {
-  return Mention.configure({
+  return ContextMention.configure({
     HTMLAttributes: {
       class: "ai-mention inline-flex items-center rounded bg-primary/10 text-primary px-1 py-0.5 text-xs font-medium",
     },
@@ -84,7 +105,14 @@ export function createMentionExtension(activeRef: MutableRefObject<boolean>) {
         const makeProps = (props: SuggestionProps<MentionItem>) => ({
           query: props.query,
           command: (item: MentionItem) => {
-            props.command({ id: String(item.id), label: item.label } as unknown as MentionItem);
+            props.command({
+              id: String(item.id),
+              label: item.label,
+              kind: item.kind,
+              database: item.database,
+              table: item.table,
+              driver: item.driver,
+            } as unknown as MentionItem);
           },
         });
         return {

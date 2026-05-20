@@ -21,7 +21,9 @@ import {
   TabsList,
   TabsTrigger,
 } from "@opskat/ui";
-import { ListAuditLogs, ListAuditSessions, GetSSHPoolConnections } from "../../../wailsjs/go/app/App";
+import { ListAuditLogs } from "../../../wailsjs/go/system/System";
+import { ListAuditSessions } from "../../../wailsjs/go/system/System";
+import { GetSSHPoolConnections } from "../../../wailsjs/go/ssh/SSH";
 import { audit_entity, audit_repo, sshpool } from "../../../wailsjs/go/models";
 
 const PAGE_SIZE = 20;
@@ -304,7 +306,7 @@ export function AuditLogPage() {
                         setTimeRange("custom");
                         setPage(0);
                       }}
-                      className="flex-1 text-xs border rounded-md px-2 py-1.5 bg-background outline-none focus:ring-1 focus:ring-ring"
+                      className="flex-1 text-xs border rounded-md px-2 py-1.5 bg-background outline-none focus-visible:ring-1 focus-visible:ring-ring/45"
                     />
                   </div>
                   <div className="flex items-center gap-2">
@@ -317,7 +319,7 @@ export function AuditLogPage() {
                         setTimeRange("custom");
                         setPage(0);
                       }}
-                      className="flex-1 text-xs border rounded-md px-2 py-1.5 bg-background outline-none focus:ring-1 focus:ring-ring"
+                      className="flex-1 text-xs border rounded-md px-2 py-1.5 bg-background outline-none focus-visible:ring-1 focus-visible:ring-ring/45"
                     />
                   </div>
                 </div>

@@ -1,7 +1,8 @@
 import { useCallback, type MutableRefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { ChangeSSHDirectory, EnableSSHSync, GetSSHSyncState } from "../../../../wailsjs/go/app/App";
+import { ChangeSSHDirectory } from "../../../../wailsjs/go/ssh/SSH";
+import { EnableSSHSync, GetSSHSyncState } from "../../../../wailsjs/go/ssh/SSH";
 import { DIRSYNC_ERROR_CODES, type DirSyncErrorCode, formatDirSyncError } from "@/lib/dirSyncErrors";
 import { useTerminalStore, type TerminalDirectorySyncState } from "@/stores/terminalStore";
 import { normalizeRemotePath } from "./utils";

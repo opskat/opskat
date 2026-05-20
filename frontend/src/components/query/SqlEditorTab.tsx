@@ -18,7 +18,7 @@ import {
 } from "@opskat/ui";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
-import { ExecuteSQLPaged } from "../../../wailsjs/go/app/App";
+import { ExecuteSQLPaged } from "../../../wailsjs/go/query/Query";
 import { QueryResultTable } from "./QueryResultTable";
 import { CodeEditor } from "@/components/CodeEditor";
 import { SnippetPopover } from "@/components/snippet/SnippetPopover";

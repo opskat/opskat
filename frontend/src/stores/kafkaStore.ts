@@ -1,6 +1,6 @@
 import { create } from "zustand";
+import { KafkaAlterTopicConfig } from "../../wailsjs/go/kafka/Kafka";
 import {
-  KafkaAlterTopicConfig,
   KafkaBrowseMessages,
   KafkaClusterOverview,
   KafkaCheckSchemaCompatibility,
@@ -35,7 +35,7 @@ import {
   KafkaResumeConnector,
   KafkaResetConsumerGroupOffset,
   KafkaUpdateConnectorConfig,
-} from "../../wailsjs/go/app/App";
+} from "../../wailsjs/go/kafka/Kafka";
 import { kafka_svc } from "../../wailsjs/go/models";
 import { registerTabCloseHook, type QueryTabMeta } from "./tabStore";
 import { useTabStore } from "./tabStore";

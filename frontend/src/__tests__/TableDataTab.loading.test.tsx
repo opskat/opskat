@@ -4,7 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { TableDataTab } from "@/components/query/TableDataTab";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
-import { ExecuteSQL, OpenTable } from "../../wailsjs/go/app/App";
+import { ExecuteSQL } from "../../wailsjs/go/query/Query";
+import { OpenTable } from "../../wailsjs/go/query/Query";
 
 // 构造 OpenTable 返回的 JSON 字符串(与后端 query_svc.OpenTableResult 对齐)。
 function openTablePayload(opts: {

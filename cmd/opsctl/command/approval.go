@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/opskat/opskat/internal/ai"
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/bootstrap"
 
@@ -16,15 +17,15 @@ import (
 
 // ApprovalResult 审批结果，包含决策来源信息（用于审计）
 type ApprovalResult struct {
-	Decision       ai.Decision // Allow | Deny
-	DecisionSource string      // ai.Source* 常量
-	MatchedPattern string      // 匹配的规则或模式
-	SessionID      string      // 会话 ID
+	Decision       aictx.Decision // Allow | Deny
+	DecisionSource string         // ai.Source* 常量
+	MatchedPattern string         // 匹配的规则或模式
+	SessionID      string         // 会话 ID
 }
 
 // ToCheckResult 转换为 CheckResult（供 AuditWriter 使用）
-func (ar ApprovalResult) ToCheckResult() *ai.CheckResult {
-	return &ai.CheckResult{
+func (ar ApprovalResult) ToCheckResult() *aictx.CheckResult {
+	return &aictx.CheckResult{
 		Decision:       ar.Decision,
 		DecisionSource: ar.DecisionSource,
 		MatchedPattern: ar.MatchedPattern,
@@ -45,24 +46,24 @@ func requireApproval(ctx context.Context, req approval.ApprovalRequest) (Approva
 	}
 
 	// Stage 2: 统一权限检查（策略 + DB Grant）— 与 AI run_command 共用 CheckPermission
-	var permResult ai.CheckResult
+	var permResult aictx.CheckResult
 	var policyHints []string
 	if req.AssetID > 0 && req.Command != "" {
 		// 注入 sessionID 到 context，供 matchGrantPatterns 使用
-		permCtx := ai.WithSessionID(ctx, req.SessionID)
-		permResult = ai.CheckPermission(permCtx, req.Type, req.AssetID, req.Command)
+		permCtx := aictx.WithSessionID(ctx, req.SessionID)
+		permResult = permission.CheckPermission(permCtx, req.Type, req.AssetID, req.Command)
 
 		switch permResult.Decision {
-		case ai.Allow:
+		case aictx.Allow:
 			return ApprovalResult{
-				Decision:       ai.Allow,
+				Decision:       aictx.Allow,
 				DecisionSource: permResult.DecisionSource,
 				MatchedPattern: permResult.MatchedPattern,
 				SessionID:      req.SessionID,
 			}, nil
-		case ai.Deny:
+		case aictx.Deny:
 			return ApprovalResult{
-				Decision:       ai.Deny,
+				Decision:       aictx.Deny,
 				DecisionSource: permResult.DecisionSource,
 				MatchedPattern: permResult.MatchedPattern,
 				SessionID:      req.SessionID,
@@ -89,8 +90,8 @@ func requireApproval(ctx context.Context, req approval.ApprovalRequest) (Approva
 			// 离线拒绝：给出允许的命令提示
 			msg := formatOfflineDenyMessage(req.Type, req.Command, policyHints)
 			return ApprovalResult{
-				Decision:       ai.Deny,
-				DecisionSource: ai.SourcePolicyDeny,
+				Decision:       aictx.Deny,
+				DecisionSource: aictx.SourcePolicyDeny,
 				SessionID:      req.SessionID,
 			}, fmt.Errorf("%s", msg)
 		default:
@@ -104,8 +105,8 @@ func requireApproval(ctx context.Context, req approval.ApprovalRequest) (Approva
 			reason = "denied"
 		}
 		return ApprovalResult{
-			Decision:       ai.Deny,
-			DecisionSource: ai.SourceUserDeny,
+			Decision:       aictx.Deny,
+			DecisionSource: aictx.SourceUserDeny,
 			SessionID:      req.SessionID,
 		}, fmt.Errorf("operation denied: %s", reason)
 	}
@@ -118,8 +119,8 @@ func requireApproval(ctx context.Context, req approval.ApprovalRequest) (Approva
 	}
 
 	return ApprovalResult{
-		Decision:       ai.Allow,
-		DecisionSource: ai.SourceUserAllow,
+		Decision:       aictx.Allow,
+		DecisionSource: aictx.SourceUserAllow,
 		SessionID:      req.SessionID,
 	}, nil
 }
@@ -138,6 +139,19 @@ func formatOfflineDenyMessage(reqType, command string, hints []string) string {
 		sb.WriteString("Redis command did not match any allowed policy")
 	case "mongo":
 		sb.WriteString("MongoDB operation did not match any allowed policy")
+	}
+
+	if command = strings.TrimSpace(command); command != "" {
+		label := "Command"
+		switch reqType {
+		case "sql":
+			label = "SQL"
+		case "redis":
+			label = "Redis command"
+		case "mongo":
+			label = "MongoDB operation"
+		}
+		fmt.Fprintf(&sb, "\n%s: %s", label, truncateStr(command, 200))
 	}
 
 	if len(hints) > 0 {

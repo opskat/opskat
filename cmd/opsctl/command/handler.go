@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/opskat/opskat/internal/ai"
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/audit"
+	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/bootstrap"
 
@@ -14,15 +16,15 @@ import (
 	"go.uber.org/zap"
 )
 
-func buildHandlerMap() map[string]ai.ToolHandlerFunc {
-	m := make(map[string]ai.ToolHandlerFunc)
-	for _, def := range ai.AllToolDefs() {
+func buildHandlerMap() map[string]tool.ToolHandlerFunc {
+	m := make(map[string]tool.ToolHandlerFunc)
+	for _, def := range tool.AllToolDefs() {
 		m[def.Name] = def.Handler
 	}
 	return m
 }
 
-func callHandler(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, toolName string, params map[string]any, decision ...*ai.CheckResult) int {
+func callHandler(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, toolName string, params map[string]any, decision ...*aictx.CheckResult) int {
 	handler, ok := handlers[toolName]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "Internal error: unknown tool %s\n", toolName)
@@ -33,7 +35,7 @@ func callHandler(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, to
 		params = map[string]any{}
 	}
 
-	ctx = ai.WithAuditSource(ctx, "opsctl")
+	ctx = aictx.WithAuditSource(ctx, "opsctl")
 	result, err := handler(ctx, params)
 
 	// 写审计日志
@@ -41,7 +43,7 @@ func callHandler(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, to
 	if marshalErr != nil {
 		logger.Default().Warn("marshal audit params", zap.Error(marshalErr))
 	}
-	var dec *ai.CheckResult
+	var dec *aictx.CheckResult
 	if len(decision) > 0 {
 		dec = decision[0]
 	}
@@ -80,11 +82,11 @@ func callHandler(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, to
 }
 
 // opsctlAuditWriter 全局审计写入器
-var opsctlAuditWriter ai.AuditWriter = ai.NewDefaultAuditWriter()
+var opsctlAuditWriter audit.AuditWriter = audit.NewDefaultAuditWriter()
 
 // writeOpsctlAudit 统一的审计日志写入函数
-func writeOpsctlAudit(ctx context.Context, toolName, argsJSON, result string, execErr error, decision *ai.CheckResult) {
-	opsctlAuditWriter.WriteToolCall(ctx, ai.ToolCallInfo{
+func writeOpsctlAudit(ctx context.Context, toolName, argsJSON, result string, execErr error, decision *aictx.CheckResult) {
+	opsctlAuditWriter.WriteToolCall(ctx, audit.ToolCallInfo{
 		ToolName: toolName,
 		ArgsJSON: argsJSON,
 		Result:   result,

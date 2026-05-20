@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { DatabaseTree } from "../components/query/DatabaseTree";
 import { useQueryStore } from "../stores/queryStore";
 import { useTabStore } from "../stores/tabStore";
-import { ExecuteSQL } from "../../wailsjs/go/app/App";
+import { ExecuteSQL } from "../../wailsjs/go/query/Query";
 
 vi.mock("@/components/CodeEditor", () => ({
   CodeEditor: ({ value }: { value: string }) => <pre data-testid="code-editor">{value}</pre>,

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button, Input, Label, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@opskat/ui";
 import { TerminalTheme } from "@/data/terminalThemes";
@@ -17,6 +17,7 @@ const defaultCustomTheme: Omit<TerminalTheme, "id" | "name"> = {
   cursor: "#f5e0dc",
   cursorAccent: "#1e1e2e",
   selectionBackground: "#45475a",
+  selectionForeground: "#cdd6f4",
   black: "#45475a",
   red: "#f38ba8",
   green: "#a6e3a1",
@@ -41,6 +42,7 @@ const colorFields: { key: keyof Omit<TerminalTheme, "id" | "name">; labelKey: st
   { key: "cursor", labelKey: "terminal.color.cursor" },
   { key: "cursorAccent", labelKey: "terminal.color.cursorAccent" },
   { key: "selectionBackground", labelKey: "terminal.color.selection" },
+  { key: "selectionForeground", labelKey: "terminal.color.selectionFg" },
   { key: "black", labelKey: "terminal.color.black" },
   { key: "red", labelKey: "terminal.color.red" },
   { key: "green", labelKey: "terminal.color.green" },
@@ -59,35 +61,57 @@ const colorFields: { key: keyof Omit<TerminalTheme, "id" | "name">; labelKey: st
   { key: "brightWhite", labelKey: "terminal.color.brightWhite" },
 ];
 
+interface TerminalThemeDraftState {
+  sourceKey: string;
+  name: string;
+  colors: Record<string, string>;
+}
+
+function getThemeEditorSourceKey(theme?: TerminalTheme) {
+  return theme?.id || "new";
+}
+
+function getThemeColors(theme?: TerminalTheme): Record<string, string> {
+  const colors: Record<string, string> = {};
+  for (const field of colorFields) {
+    colors[field.key] = theme?.[field.key] || defaultCustomTheme[field.key] || "";
+  }
+  return colors;
+}
+
+function createThemeDraftState(sourceKey: string, theme?: TerminalTheme): TerminalThemeDraftState {
+  return {
+    sourceKey,
+    name: theme?.name || "",
+    colors: getThemeColors(theme),
+  };
+}
+
 export function TerminalThemeEditor({ open, onOpenChange, theme, onSave }: TerminalThemeEditorProps) {
   const { t } = useTranslation();
-  const [name, setName] = useState("");
-  const [colors, setColors] = useState<Record<string, string>>({});
+  const sourceKey = getThemeEditorSourceKey(theme);
+  const initialDraft = createThemeDraftState(sourceKey, theme);
+  const [draftState, setDraftState] = useState(initialDraft);
+  const draft = draftState.sourceKey === sourceKey ? draftState : initialDraft;
+  const { name, colors } = draft;
 
-  useEffect(() => {
-    /* eslint-disable react-hooks/set-state-in-effect */
-    if (open) {
-      if (theme) {
-        setName(theme.name);
-        const c: Record<string, string> = {};
-        for (const f of colorFields) {
-          c[f.key] = theme[f.key] || "";
-        }
-        setColors(c);
-      } else {
-        setName("");
-        const c: Record<string, string> = {};
-        for (const f of colorFields) {
-          c[f.key] = defaultCustomTheme[f.key] || "";
-        }
-        setColors(c);
-      }
+  const updateDraft = (patch: Partial<Omit<TerminalThemeDraftState, "sourceKey">>) => {
+    setDraftState((current) => ({
+      ...(current.sourceKey === sourceKey ? current : initialDraft),
+      ...patch,
+      sourceKey,
+    }));
+  };
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      setDraftState(initialDraft);
     }
-    /* eslint-enable react-hooks/set-state-in-effect */
-  }, [open, theme]);
+    onOpenChange(nextOpen);
+  };
 
   const handleColorChange = (key: string, value: string) => {
-    setColors((prev) => ({ ...prev, [key]: value }));
+    updateDraft({ colors: { ...colors, [key]: value } });
   };
 
   const handleSave = () => {
@@ -106,7 +130,7 @@ export function TerminalThemeEditor({ open, onOpenChange, theme, onSave }: Termi
       }
     }
     onSave(result);
-    onOpenChange(false);
+    handleOpenChange(false);
   };
 
   const handleExport = () => {
@@ -133,12 +157,7 @@ export function TerminalThemeEditor({ open, onOpenChange, theme, onSave }: Termi
         toast.error(t("terminal.invalidThemeJson"));
         return;
       }
-      setName(parsed.name || "");
-      const c: Record<string, string> = {};
-      for (const f of colorFields) {
-        c[f.key] = (parsed as unknown as Record<string, string>)[f.key] || defaultCustomTheme[f.key] || "";
-      }
-      setColors(c);
+      updateDraft({ name: parsed.name || "", colors: getThemeColors(parsed) });
       toast.success(t("terminal.importedFromClipboard"));
     } catch {
       toast.error(t("terminal.invalidThemeJson"));
@@ -146,7 +165,7 @@ export function TerminalThemeEditor({ open, onOpenChange, theme, onSave }: Termi
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-lg max-h-[80vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{theme ? t("terminal.editTheme") : t("terminal.newTheme")}</DialogTitle>
@@ -157,7 +176,7 @@ export function TerminalThemeEditor({ open, onOpenChange, theme, onSave }: Termi
             <Label>{t("terminal.themeName")}</Label>
             <Input
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => updateDraft({ name: e.target.value })}
               placeholder={t("terminal.themeNamePlaceholder")}
             />
           </div>
@@ -281,7 +300,7 @@ export function TerminalThemeEditor({ open, onOpenChange, theme, onSave }: Termi
               {t("terminal.exportJson")}
             </Button>
           </div>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => handleOpenChange(false)}>
             {t("action.cancel")}
           </Button>
           <Button onClick={handleSave}>{t("action.save")}</Button>

@@ -23,8 +23,8 @@ import {
   Input,
   Switch,
 } from "@opskat/ui";
+import { GetAppVersion } from "../../../wailsjs/go/system/System";
 import {
-  GetAppVersion,
   GetUpdateChannel,
   SetUpdateChannel,
   CheckForUpdate,
@@ -37,7 +37,7 @@ import {
   SetDebugMode,
   OpenLogsDir,
   RestartApp,
-} from "../../../wailsjs/go/app/App";
+} from "../../../wailsjs/go/system/System";
 import { Bug, Download, FolderOpen, Loader2, ExternalLink, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { BrowserOpenURL, EventsOn } from "../../../wailsjs/runtime/runtime";

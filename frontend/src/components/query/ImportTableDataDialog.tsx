@@ -27,7 +27,7 @@ import {
 } from "@opskat/ui";
 import { FilePlus2, Link, Loader2, Play, Table2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { ExecuteSQL } from "../../../wailsjs/go/app/App";
+import { ExecuteSQL } from "../../../wailsjs/go/query/Query";
 import {
   buildImportInsertSql,
   detectDelimiter,

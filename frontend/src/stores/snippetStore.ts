@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { snippet_entity, snippet_svc } from "../../wailsjs/go/models";
+import { ListSnippetCategories } from "../../wailsjs/go/extension/Extension";
 import {
-  ListSnippetCategories,
   ListSnippets,
   CreateSnippet,
   UpdateSnippet,
@@ -10,7 +10,7 @@ import {
   RecordSnippetUse,
   SetSnippetLastAssets,
   GetSnippetLastAssets,
-} from "../../wailsjs/go/app/App";
+} from "../../wailsjs/go/extension/Extension";
 
 type Snippet = snippet_entity.Snippet;
 type Category = snippet_svc.Category;

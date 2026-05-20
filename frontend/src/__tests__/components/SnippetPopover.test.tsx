@@ -5,7 +5,8 @@ import { TooltipProvider } from "@opskat/ui";
 import { useSnippetStore } from "../../stores/snippetStore";
 import { useTabStore } from "../../stores/tabStore";
 import { SnippetPopover } from "../../components/snippet/SnippetPopover";
-import { ListSnippets, ListSnippetCategories, RecordSnippetUse } from "../../../wailsjs/go/app/App";
+import { ListSnippets } from "../../../wailsjs/go/extension/Extension";
+import { ListSnippetCategories, RecordSnippetUse } from "../../../wailsjs/go/extension/Extension";
 
 function makeSnippet(partial: Partial<any>): any {
   return {

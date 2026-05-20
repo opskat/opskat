@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { RedisOpsPanel } from "../components/query/RedisOpsPanel";
 import { useTabStore } from "../stores/tabStore";
 import { useQueryStore } from "../stores/queryStore";
-import { ExecuteRedis } from "../../wailsjs/go/app/App";
+import { ExecuteRedis } from "../../wailsjs/go/query/Query";
 
 describe("RedisOpsPanel", () => {
   beforeEach(() => {

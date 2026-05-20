@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { Button, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { credential_entity } from "../../../wailsjs/go/models";
-import { GetAssetPassword } from "../../../wailsjs/go/app/App";
+import { GetAssetPassword } from "../../../wailsjs/go/system/System";
 
 interface PasswordSourceFieldProps {
   source: "inline" | "managed";

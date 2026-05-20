@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { SFTPListDir } from "../../../../wailsjs/go/app/App";
+import { SFTPListDir } from "../../../../wailsjs/go/ssh/SSH";
 import { sftp_svc } from "../../../../wailsjs/go/models";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { normalizeRemotePath } from "./utils";

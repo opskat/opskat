@@ -2,8 +2,8 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { FlaskConical, ShieldCheck, ShieldX, ShieldAlert, Loader2 } from "lucide-react";
 import { cn, Input, Button } from "@opskat/ui";
-import { TestPolicyRule } from "../../../wailsjs/go/app/App";
-import { app } from "../../../wailsjs/go/models";
+import { TestPolicyRule } from "../../../wailsjs/go/system/System";
+import { system as system_models } from "../../../wailsjs/go/models";
 
 interface PolicyTestPanelProps {
   policyType: string;
@@ -60,7 +60,7 @@ export function PolicyTestPanel({ policyType, buildPolicyJSON, assetID, groupID 
     setTesting(true);
     setResult(null);
     try {
-      const req = new app.PolicyTestRequest({
+      const req = new system_models.PolicyTestRequest({
         policyType,
         policyJSON: buildPolicyJSON(),
         command: cmd,

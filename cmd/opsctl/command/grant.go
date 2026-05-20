@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/opskat/opskat/internal/ai"
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/bootstrap"
 
@@ -215,8 +215,8 @@ func cmdGrantSubmit(ctx context.Context, args []string, session string) int {
 
 	// 构建审计用的请求 JSON（使用解析后的 grantItems，包含资产信息）
 	argsJSON, _ := json.Marshal(grantAuditArgs(input.Description, grantItems))
-	auditCtx := ai.WithAuditSource(ctx, "opsctl")
-	auditCtx = ai.WithSessionID(auditCtx, sessionID)
+	auditCtx := aictx.WithAuditSource(ctx, "opsctl")
+	auditCtx = aictx.WithSessionID(auditCtx, sessionID)
 
 	resp, err := approval.RequestApprovalWithToken(sockPath, authToken, approval.ApprovalRequest{
 		Type:        "grant",
@@ -225,8 +225,8 @@ func cmdGrantSubmit(ctx context.Context, args []string, session string) int {
 		Description: input.Description,
 	})
 	if err != nil {
-		writeOpsctlAudit(auditCtx, "grant_submit", string(argsJSON), "", err, &ai.CheckResult{
-			Decision: ai.Deny, DecisionSource: ai.SourceGrantDeny,
+		writeOpsctlAudit(auditCtx, "grant_submit", string(argsJSON), "", err, &aictx.CheckResult{
+			Decision: aictx.Deny, DecisionSource: aictx.SourceGrantDeny,
 		})
 		fmt.Fprintf(os.Stderr, "Error: desktop app is not running -- grant approval requires the running desktop app\n(%v)\n", err)
 		return 1
@@ -237,8 +237,8 @@ func cmdGrantSubmit(ctx context.Context, args []string, session string) int {
 		if reason == "" {
 			reason = "denied"
 		}
-		writeOpsctlAudit(auditCtx, "grant_submit", string(argsJSON), "", fmt.Errorf("grant denied: %s", reason), &ai.CheckResult{
-			Decision: ai.Deny, DecisionSource: ai.SourceGrantDeny,
+		writeOpsctlAudit(auditCtx, "grant_submit", string(argsJSON), "", fmt.Errorf("grant denied: %s", reason), &aictx.CheckResult{
+			Decision: aictx.Deny, DecisionSource: aictx.SourceGrantDeny,
 		})
 		fmt.Fprintf(os.Stderr, "Grant denied: %s\n", reason)
 		return 1
@@ -249,8 +249,8 @@ func cmdGrantSubmit(ctx context.Context, args []string, session string) int {
 	if len(resp.EditedItems) > 0 {
 		auditArgs, _ = json.Marshal(grantAuditArgs(input.Description, resp.EditedItems))
 	}
-	writeOpsctlAudit(auditCtx, "grant_submit", string(auditArgs), resp.SessionID, nil, &ai.CheckResult{
-		Decision: ai.Allow, DecisionSource: ai.SourceGrantAllow,
+	writeOpsctlAudit(auditCtx, "grant_submit", string(auditArgs), resp.SessionID, nil, &aictx.CheckResult{
+		Decision: aictx.Allow, DecisionSource: aictx.SourceGrantAllow,
 	})
 
 	// 输出 session ID 到 stdout

@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/opskat/opskat/internal/ai"
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/helper"
+	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/sshpool"
 )
 
-func cmdCp(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args []string, session string) int {
+func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		printCpUsage()
 		if len(args) > 0 {
@@ -54,7 +56,7 @@ func cmdCp(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args []s
 			Detail:    detail,
 			SessionID: session,
 		})
-		auditCtx := ai.WithSessionID(ctx, approvalResult.SessionID)
+		auditCtx := aictx.WithSessionID(ctx, approvalResult.SessionID)
 		if err != nil {
 			writeOpsctlAudit(auditCtx, "cp", argsJSON, "", err, approvalResult.ToCheckResult())
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -101,7 +103,7 @@ func cmdCp(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args []s
 
 	default:
 		// Asset-to-asset transfer: remote -> remote
-		cpErr = ai.CopyBetweenAssets(ctx, srcAssetID, srcPath, dstAssetID, dstPath)
+		cpErr = helper.CopyBetweenAssets(ctx, srcAssetID, srcPath, dstAssetID, dstPath)
 		auditResult := `{"status":"completed"}`
 		if cpErr != nil {
 			auditResult = fmt.Sprintf(`{"error":%q}`, cpErr.Error())

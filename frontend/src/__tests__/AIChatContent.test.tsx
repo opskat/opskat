@@ -6,12 +6,8 @@ import i18n from "../i18n";
 import { useAIStore } from "../stores/aiStore";
 import { useTabStore } from "../stores/tabStore";
 import { AIChatContent } from "../components/ai/AIChatContent";
-import {
-  CreateConversation,
-  ListConversations,
-  SendAIMessage,
-  UpdateConversationTitle,
-} from "../../wailsjs/go/app/App";
+import { CreateConversation } from "../../wailsjs/go/ai/AI";
+import { ListConversations, SendAIMessage, UpdateConversationTitle } from "../../wailsjs/go/ai/AI";
 
 const requestAnimationFrameMock = vi.fn((callback: FrameRequestCallback) => {
   callback(0);

@@ -8,6 +8,14 @@ import {
   useExternalEditStore,
 } from "../stores/externalEditStore";
 import type { ExternalEditSession } from "../lib/externalEditApi";
+import {
+  CompareExternalEditSession,
+  ContinueExternalEditSession,
+  PrepareExternalEditMerge,
+  RecoverExternalEditSession,
+  RefreshExternalEditSession,
+  SaveExternalEditSession,
+} from "../../wailsjs/go/external_edit/ExternalEdit";
 
 function makeSession(partial: Partial<ExternalEditSession> & { id: string }): ExternalEditSession {
   return {
@@ -499,9 +507,7 @@ describe("external edit clipboard residue runtime state", () => {
       resumeRequired: true,
       sourceSessionId: "stale-original",
     });
-    Object.assign(window.go!.app!.App!, {
-      RefreshExternalEditSession: vi.fn().mockResolvedValue(refreshed),
-    });
+    vi.mocked(RefreshExternalEditSession).mockResolvedValue(refreshed as never);
 
     const session = await useExternalEditStore.getState().refreshSession(refreshed.id);
 
@@ -524,9 +530,7 @@ describe("external edit clipboard residue runtime state", () => {
       updatedAt: 20,
     });
     const resumed = { ...recovery, resumeRequired: false, updatedAt: 30 };
-    Object.assign(window.go!.app!.App!, {
-      RecoverExternalEditSession: vi.fn().mockResolvedValue(resumed),
-    });
+    vi.mocked(RecoverExternalEditSession).mockResolvedValue(resumed as never);
     useExternalEditStore.setState({
       sessions: { [recovery.id]: recovery },
     });
@@ -585,9 +589,7 @@ describe("external edit clipboard residue runtime state", () => {
       updatedAt: 20,
     });
     const continued = { ...runtimePending, pendingReview: false, updatedAt: 30 };
-    Object.assign(window.go!.app!.App!, {
-      ContinueExternalEditSession: vi.fn().mockResolvedValue(continued),
-    });
+    vi.mocked(ContinueExternalEditSession).mockResolvedValue(continued as never);
     useExternalEditStore.setState({
       sessions: { [runtimePending.id]: runtimePending },
     });
@@ -679,35 +681,33 @@ describe("external edit clipboard residue runtime state", () => {
   it("ignores clipboard residue returned from save, compare, merge, continue-edit recovery, and selected detail actions", async () => {
     const clipboard = makeClipboardResidueSession();
     const valid = makeSession({ id: "valid", documentKey: "101:/srv/app/demo.txt", state: "dirty", updatedAt: 10 });
-    Object.assign(window.go!.app!.App!, {
-      SaveExternalEditSession: vi.fn().mockResolvedValue({
-        status: "conflict_remote_changed",
-        session: clipboard,
-        conflict: { documentKey: clipboard.documentKey, primaryDraftSessionId: clipboard.id },
-      }),
-      CompareExternalEditSession: vi.fn().mockResolvedValue({
-        documentKey: clipboard.documentKey,
-        primaryDraftSessionId: clipboard.id,
-        fileName: "clipboard.png",
-        remotePath: clipboard.remotePath,
-        localContent: "local",
-        remoteContent: "remote",
-        readOnly: true,
-        session: clipboard,
-      }),
-      PrepareExternalEditMerge: vi.fn().mockResolvedValue({
-        documentKey: clipboard.documentKey,
-        primaryDraftSessionId: clipboard.id,
-        fileName: "clipboard.png",
-        remotePath: clipboard.remotePath,
-        localContent: "local",
-        remoteContent: "remote",
-        finalContent: "local",
-        remoteHash: "remote-hash",
-        session: clipboard,
-      }),
-      RecoverExternalEditSession: vi.fn().mockResolvedValue(clipboard),
-    });
+    vi.mocked(SaveExternalEditSession).mockResolvedValue({
+      status: "conflict_remote_changed",
+      session: clipboard,
+      conflict: { documentKey: clipboard.documentKey, primaryDraftSessionId: clipboard.id },
+    } as never);
+    vi.mocked(CompareExternalEditSession).mockResolvedValue({
+      documentKey: clipboard.documentKey,
+      primaryDraftSessionId: clipboard.id,
+      fileName: "clipboard.png",
+      remotePath: clipboard.remotePath,
+      localContent: "local",
+      remoteContent: "remote",
+      readOnly: true,
+      session: clipboard,
+    } as never);
+    vi.mocked(PrepareExternalEditMerge).mockResolvedValue({
+      documentKey: clipboard.documentKey,
+      primaryDraftSessionId: clipboard.id,
+      fileName: "clipboard.png",
+      remotePath: clipboard.remotePath,
+      localContent: "local",
+      remoteContent: "remote",
+      finalContent: "local",
+      remoteHash: "remote-hash",
+      session: clipboard,
+    } as never);
+    vi.mocked(RecoverExternalEditSession).mockResolvedValue(clipboard as never);
     useExternalEditStore.setState({
       sessions: { clipboard, valid },
       autoSavePhases: {

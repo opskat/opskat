@@ -1,8 +1,8 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { asset_entity, group_entity } from "../../wailsjs/go/models";
+import { ListAssets } from "../../wailsjs/go/system/System";
 import {
-  ListAssets,
   CreateAsset,
   UpdateAsset,
   DeleteAsset,
@@ -11,7 +11,7 @@ import {
   CreateGroup,
   UpdateGroup,
   DeleteGroup,
-} from "../../wailsjs/go/app/App";
+} from "../../wailsjs/go/system/System";
 import { useRecentAssetStore } from "./recentAssetStore";
 import { formatAssetPath } from "@/lib/groupPath";
 

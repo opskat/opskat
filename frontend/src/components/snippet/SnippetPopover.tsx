@@ -4,7 +4,7 @@ import { Search, Lock, CornerDownLeft, Loader2, FileCode } from "lucide-react";
 import { Button, Input, Popover, PopoverContent, PopoverTrigger, cn } from "@opskat/ui";
 import { useSnippetStore } from "@/stores/snippetStore";
 import { useTabStore } from "@/stores/tabStore";
-import { ListSnippets } from "../../../wailsjs/go/app/App";
+import { ListSnippets } from "../../../wailsjs/go/extension/Extension";
 import type { snippet_entity, snippet_svc } from "../../../wailsjs/go/models";
 
 type Snippet = snippet_entity.Snippet;

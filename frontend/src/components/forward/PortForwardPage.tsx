@@ -1,6 +1,17 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Play, Square, Pencil, Trash2, CircleCheck, CircleAlert, CircleDot, CircleMinus } from "lucide-react";
+import {
+  Plus,
+  Play,
+  Square,
+  Pencil,
+  Trash2,
+  CircleCheck,
+  CircleAlert,
+  CircleDot,
+  CircleMinus,
+  Loader2,
+} from "lucide-react";
 import {
   Button,
   Input,
@@ -18,15 +29,15 @@ import {
   ConfirmDialog,
 } from "@opskat/ui";
 import { AssetSelect } from "@/components/asset/AssetSelect";
+import { ListForwardConfigs } from "../../../wailsjs/go/ssh/SSH";
 import {
-  ListForwardConfigs,
   CreateForwardConfig,
   UpdateForwardConfig,
   DeleteForwardConfig,
   StartForwardConfig,
   StopForwardConfig,
-} from "../../../wailsjs/go/app/App";
-import { app, forward_entity } from "../../../wailsjs/go/models";
+} from "../../../wailsjs/go/ssh/SSH";
+import { ssh as ssh_models, forward_entity } from "../../../wailsjs/go/models";
 
 // 编辑中的规则（无 id）
 interface EditRule {
@@ -47,8 +58,26 @@ const emptyRule = (): EditRule => ({
 
 export function PortForwardPage() {
   const { t } = useTranslation();
-  const [configs, setConfigs] = useState<app.ForwardConfigWithStatus[]>([]);
+  const [configs, setConfigs] = useState<ssh_models.ForwardConfigWithStatus[]>([]);
   const [loading, setLoading] = useState(false);
+  const [pendingIds, setPendingIds] = useState<Set<number>>(new Set());
+
+  const withPending = useCallback(async (id: number, fn: () => Promise<void>) => {
+    setPendingIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+    try {
+      await fn();
+    } finally {
+      setPendingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  }, []);
 
   // 编辑弹窗
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -79,7 +108,7 @@ export function PortForwardPage() {
     setDialogOpen(true);
   };
 
-  const openEdit = (cfg: app.ForwardConfigWithStatus) => {
+  const openEdit = (cfg: ssh_models.ForwardConfigWithStatus) => {
     setEditId(cfg.id);
     setEditName(cfg.name);
     setEditAssetId(cfg.assetId);
@@ -129,34 +158,37 @@ export function PortForwardPage() {
     refresh();
   };
 
-  const handleStart = async (id: number) => {
-    await StartForwardConfig(id);
-    refresh();
-  };
+  const handleStart = (id: number) =>
+    withPending(id, async () => {
+      await StartForwardConfig(id);
+      await refresh();
+    });
 
-  const handleStop = async (id: number) => {
-    await StopForwardConfig(id);
-    refresh();
-  };
+  const handleStop = (id: number) =>
+    withPending(id, async () => {
+      await StopForwardConfig(id);
+      await refresh();
+    });
 
-  const handleAssetChange = async (cfg: app.ForwardConfigWithStatus, assetId: number) => {
-    const wasRunning = cfg.status !== "stopped";
-    const rules = cfg.rules.map(
-      (r) =>
-        new forward_entity.ForwardRule({
-          type: r.type,
-          localHost: r.localHost,
-          localPort: r.localPort,
-          remoteHost: r.remoteHost,
-          remotePort: r.remotePort,
-        })
-    );
-    await UpdateForwardConfig(cfg.id, cfg.name, assetId, rules);
-    if (wasRunning) {
-      await StartForwardConfig(cfg.id);
-    }
-    refresh();
-  };
+  const handleAssetChange = (cfg: ssh_models.ForwardConfigWithStatus, assetId: number) =>
+    withPending(cfg.id, async () => {
+      const wasRunning = cfg.status !== "stopped";
+      const rules = cfg.rules.map(
+        (r) =>
+          new forward_entity.ForwardRule({
+            type: r.type,
+            localHost: r.localHost,
+            localPort: r.localPort,
+            remoteHost: r.remoteHost,
+            remotePort: r.remotePort,
+          })
+      );
+      await UpdateForwardConfig(cfg.id, cfg.name, assetId, rules);
+      if (wasRunning) {
+        await StartForwardConfig(cfg.id);
+      }
+      await refresh();
+    });
 
   const updateRule = (idx: number, field: keyof EditRule, value: string) => {
     setEditRules((prev) => prev.map((r, i) => (i === idx ? { ...r, [field]: value } : r)));
@@ -204,75 +236,103 @@ export function PortForwardPage() {
         )}
 
         <div className="grid gap-4 max-w-3xl mx-auto">
-          {configs.map((cfg) => (
-            <div key={cfg.id} className="border rounded-lg p-4">
-              {/* 卡片头部 */}
-              <div className="flex items-center gap-3 mb-3">
-                <span className="font-medium text-sm flex-1">{cfg.name}</span>
+          {configs.map((cfg) => {
+            const pending = pendingIds.has(cfg.id);
+            return (
+              <div key={cfg.id} className="border rounded-lg p-4">
+                {/* 卡片头部 */}
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="font-medium text-sm flex-1">{cfg.name}</span>
 
-                {/* 资产选择（直接在卡片上切换） */}
-                <AssetSelect
-                  value={cfg.assetId}
-                  onValueChange={(v) => handleAssetChange(cfg, v)}
-                  filterType="ssh"
-                  className="h-7 w-44 text-xs"
-                />
+                  {/* 资产选择（直接在卡片上切换） */}
+                  <div className={pending ? "pointer-events-none opacity-50" : undefined}>
+                    <AssetSelect
+                      value={cfg.assetId}
+                      onValueChange={(v) => handleAssetChange(cfg, v)}
+                      filterType="ssh"
+                      className="h-7 w-44 text-xs"
+                    />
+                  </div>
 
-                {/* 状态 */}
-                <div className="flex items-center gap-1 text-xs min-w-20">
-                  {statusIcon(cfg.status)}
-                  <span>{statusLabel(cfg.status)}</span>
+                  {/* 状态 */}
+                  <div className="flex items-center gap-1 text-xs min-w-20">
+                    {pending ? (
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                    ) : (
+                      statusIcon(cfg.status)
+                    )}
+                    <span>{pending ? t("forward.processing") : statusLabel(cfg.status)}</span>
+                  </div>
+
+                  {/* 操作按钮 */}
+                  {cfg.status === "stopped" ? (
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      onClick={() => handleStart(cfg.id)}
+                      title={t("forward.start")}
+                      disabled={pending}
+                    >
+                      {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      onClick={() => handleStop(cfg.id)}
+                      title={t("forward.stop")}
+                      disabled={pending}
+                    >
+                      {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={() => openEdit(cfg)}
+                    title={t("forward.edit")}
+                    disabled={pending}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={() => setDeleteTarget({ id: cfg.id, name: cfg.name })}
+                    title={t("forward.delete")}
+                    disabled={pending}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
                 </div>
 
-                {/* 操作按钮 */}
-                {cfg.status === "stopped" ? (
-                  <Button variant="ghost" size="icon-xs" onClick={() => handleStart(cfg.id)} title={t("forward.start")}>
-                    <Play className="h-3.5 w-3.5" />
-                  </Button>
-                ) : (
-                  <Button variant="ghost" size="icon-xs" onClick={() => handleStop(cfg.id)} title={t("forward.stop")}>
-                    <Square className="h-3.5 w-3.5" />
-                  </Button>
-                )}
-                <Button variant="ghost" size="icon-xs" onClick={() => openEdit(cfg)} title={t("forward.edit")}>
-                  <Pencil className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  onClick={() => setDeleteTarget({ id: cfg.id, name: cfg.name })}
-                  title={t("forward.delete")}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
+                {/* 规则列表 */}
+                <div className="space-y-1">
+                  {cfg.rules.map((rule) => {
+                    const prefix = rule.type === "remote" ? "R" : rule.type === "dynamic" ? "D" : "L";
+                    const label =
+                      rule.type === "dynamic"
+                        ? `${prefix}  ${rule.localHost}:${rule.localPort} (SOCKS5)`
+                        : `${prefix}  ${rule.localHost}:${rule.localPort} \u2192 ${rule.remoteHost}:${rule.remotePort}`;
+                    return (
+                      <div key={rule.id} className="flex items-center gap-2 text-xs font-mono text-muted-foreground">
+                        {rule.status === "running" ? (
+                          <CircleCheck className="h-3 w-3 text-green-500 shrink-0" />
+                        ) : rule.status === "error" ? (
+                          <span title={rule.error} className="cursor-help shrink-0">
+                            <CircleAlert className="h-3 w-3 text-destructive" />
+                          </span>
+                        ) : (
+                          <CircleMinus className="h-3 w-3 text-muted-foreground/40 shrink-0" />
+                        )}
+                        <span>{label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-
-              {/* 规则列表 */}
-              <div className="space-y-1">
-                {cfg.rules.map((rule) => {
-                  const prefix = rule.type === "remote" ? "R" : rule.type === "dynamic" ? "D" : "L";
-                  const label =
-                    rule.type === "dynamic"
-                      ? `${prefix}  ${rule.localHost}:${rule.localPort} (SOCKS5)`
-                      : `${prefix}  ${rule.localHost}:${rule.localPort} \u2192 ${rule.remoteHost}:${rule.remotePort}`;
-                  return (
-                    <div key={rule.id} className="flex items-center gap-2 text-xs font-mono text-muted-foreground">
-                      {rule.status === "running" ? (
-                        <CircleCheck className="h-3 w-3 text-green-500 shrink-0" />
-                      ) : rule.status === "error" ? (
-                        <span title={rule.error} className="cursor-help shrink-0">
-                          <CircleAlert className="h-3 w-3 text-destructive" />
-                        </span>
-                      ) : (
-                        <CircleMinus className="h-3 w-3 text-muted-foreground/40 shrink-0" />
-                      )}
-                      <span>{label}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 

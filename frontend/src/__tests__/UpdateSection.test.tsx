@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { UpdateSection } from "@/components/settings/UpdateSection";
+import { CheckForUpdate } from "../../wailsjs/go/system/System";
 import {
-  CheckForUpdate,
   DownloadAndInstallUpdate,
   GetAppVersion,
   GetAvailableMirrors,
@@ -11,7 +11,7 @@ import {
   GetDownloadMirror,
   GetUpdateChannel,
   RestartApp,
-} from "../../wailsjs/go/app/App";
+} from "../../wailsjs/go/system/System";
 import { BrowserOpenURL, EventsOn, Quit } from "../../wailsjs/runtime/runtime";
 
 describe("UpdateSection", () => {

@@ -1,4 +1,19 @@
-type MaybePromise<T> = Promise<T>;
+import {
+  GetExternalEditSettings,
+  SaveExternalEditSettings,
+  SelectExternalEditorExecutable,
+  SelectExternalEditWorkspaceRoot,
+  OpenExternalEdit as OpenExternalEditBinding,
+  ListExternalEditSessions,
+  SaveExternalEditSession,
+  RefreshExternalEditSession,
+  ResolveExternalEditConflict,
+  CompareExternalEditSession,
+  PrepareExternalEditMerge,
+  ApplyExternalEditMerge,
+  RecoverExternalEditSession,
+  ContinueExternalEditSession,
+} from "../../wailsjs/go/external_edit/ExternalEdit";
 
 export interface ExternalEditEditorConfig {
   id: string;
@@ -148,93 +163,60 @@ export interface ExternalEditMergeApplyRequest {
   remoteHash: string;
 }
 
-declare global {
-  interface Window {
-    go?: {
-      app?: {
-        App?: {
-          GetExternalEditSettings?: () => MaybePromise<ExternalEditSettings>;
-          SaveExternalEditSettings?: (input: ExternalEditSettingsInput) => MaybePromise<ExternalEditSettings>;
-          SelectExternalEditorExecutable?: () => MaybePromise<string>;
-          SelectExternalEditWorkspaceRoot?: () => MaybePromise<string>;
-          OpenExternalEdit?: (req: ExternalEditOpenRequest) => MaybePromise<ExternalEditSession>;
-          ListExternalEditSessions?: () => MaybePromise<ExternalEditSession[]>;
-          SaveExternalEditSession?: (sessionId: string) => MaybePromise<ExternalEditSaveResult>;
-          RefreshExternalEditSession?: (sessionId: string) => MaybePromise<ExternalEditSession>;
-          ResolveExternalEditConflict?: (sessionId: string, resolution: string) => MaybePromise<ExternalEditSaveResult>;
-          CompareExternalEditSession?: (sessionId: string) => MaybePromise<ExternalEditCompareResult>;
-          PrepareExternalEditMerge?: (sessionId: string) => MaybePromise<ExternalEditMergePrepareResult>;
-          ApplyExternalEditMerge?: (req: ExternalEditMergeApplyRequest) => MaybePromise<ExternalEditSaveResult>;
-          RecoverExternalEditSession?: (sessionId: string) => MaybePromise<ExternalEditSession>;
-          ContinueExternalEditSession?: (sessionId: string) => MaybePromise<ExternalEditSession>;
-        };
-      };
-    };
-  }
-}
-
-function appBindings() {
-  const bindings = window.go?.app?.App;
-  if (!bindings) {
-    throw new Error("Wails app bindings unavailable");
-  }
-  return bindings;
-}
-
 // 这里只保留最薄的一层调用封装，让 store / 组件共享同一批 IPC 名称，
-// 同时把 Wails 运行时缺失的报错集中在一个边界里处理。
-export function getExternalEditSettings() {
-  return appBindings().GetExternalEditSettings!();
+// 同时把 Wails 生成绑定的具体路径集中在一个边界里。
+export function getExternalEditSettings(): Promise<ExternalEditSettings> {
+  return GetExternalEditSettings() as unknown as Promise<ExternalEditSettings>;
 }
 
-export function saveExternalEditSettings(input: ExternalEditSettingsInput) {
-  return appBindings().SaveExternalEditSettings!(input);
+export function saveExternalEditSettings(input: ExternalEditSettingsInput): Promise<ExternalEditSettings> {
+  return SaveExternalEditSettings(input as never) as unknown as Promise<ExternalEditSettings>;
 }
 
-export function selectExternalEditorExecutable() {
-  return appBindings().SelectExternalEditorExecutable!();
+export function selectExternalEditorExecutable(): Promise<string> {
+  return SelectExternalEditorExecutable();
 }
 
-export function selectExternalEditWorkspaceRoot() {
-  return appBindings().SelectExternalEditWorkspaceRoot!();
+export function selectExternalEditWorkspaceRoot(): Promise<string> {
+  return SelectExternalEditWorkspaceRoot();
 }
 
-export function openExternalEdit(req: ExternalEditOpenRequest) {
-  return appBindings().OpenExternalEdit!(req);
+export function openExternalEdit(req: ExternalEditOpenRequest): Promise<ExternalEditSession> {
+  return OpenExternalEditBinding(req as never) as unknown as Promise<ExternalEditSession>;
 }
 
-export function listExternalEditSessions() {
-  return appBindings().ListExternalEditSessions!();
+export function listExternalEditSessions(): Promise<ExternalEditSession[]> {
+  return ListExternalEditSessions() as unknown as Promise<ExternalEditSession[]>;
 }
 
-export function saveExternalEditSession(sessionId: string) {
-  return appBindings().SaveExternalEditSession!(sessionId);
+export function saveExternalEditSession(sessionId: string): Promise<ExternalEditSaveResult> {
+  return SaveExternalEditSession(sessionId) as unknown as Promise<ExternalEditSaveResult>;
 }
 
-export function refreshExternalEditSession(sessionId: string) {
-  return appBindings().RefreshExternalEditSession!(sessionId);
+export function refreshExternalEditSession(sessionId: string): Promise<ExternalEditSession> {
+  return RefreshExternalEditSession(sessionId) as unknown as Promise<ExternalEditSession>;
 }
 
-export function resolveExternalEditConflict(sessionId: string, resolution: string) {
-  return appBindings().ResolveExternalEditConflict!(sessionId, resolution);
+export function resolveExternalEditConflict(sessionId: string, resolution: string): Promise<ExternalEditSaveResult> {
+  return ResolveExternalEditConflict(sessionId, resolution) as unknown as Promise<ExternalEditSaveResult>;
 }
 
-export function compareExternalEditSession(sessionId: string) {
-  return appBindings().CompareExternalEditSession!(sessionId);
+export function compareExternalEditSession(sessionId: string): Promise<ExternalEditCompareResult> {
+  return CompareExternalEditSession(sessionId) as unknown as Promise<ExternalEditCompareResult>;
 }
 
-export function prepareExternalEditMerge(sessionId: string) {
-  return appBindings().PrepareExternalEditMerge!(sessionId);
+export function prepareExternalEditMerge(sessionId: string): Promise<ExternalEditMergePrepareResult> {
+  return PrepareExternalEditMerge(sessionId) as unknown as Promise<ExternalEditMergePrepareResult>;
 }
 
-export function applyExternalEditMerge(req: ExternalEditMergeApplyRequest) {
-  return appBindings().ApplyExternalEditMerge!(req);
+export function applyExternalEditMerge(req: ExternalEditMergeApplyRequest): Promise<ExternalEditSaveResult> {
+  return ApplyExternalEditMerge(req as never) as unknown as Promise<ExternalEditSaveResult>;
 }
 
-export function recoverExternalEditSession(sessionId: string) {
-  return appBindings().RecoverExternalEditSession!(sessionId);
+export function recoverExternalEditSession(sessionId: string): Promise<ExternalEditSession> {
+  return RecoverExternalEditSession(sessionId) as unknown as Promise<ExternalEditSession>;
 }
 
-export function continueExternalEditSession(sessionId: string) {
-  return appBindings().ContinueExternalEditSession!(sessionId);
+export function continueExternalEditSession(sessionId: string): Promise<ExternalEditSession> {
+  return ContinueExternalEditSession(sessionId) as unknown as Promise<ExternalEditSession>;
 }

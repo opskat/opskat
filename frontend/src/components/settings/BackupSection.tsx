@@ -23,8 +23,8 @@ import {
   DialogTitle,
 } from "@opskat/ui";
 import { useAssetStore } from "@/stores/assetStore";
+import { SelectImportFile } from "../../../wailsjs/go/system/System";
 import {
-  SelectImportFile,
   StartGitHubDeviceFlow,
   WaitGitHubDeviceAuth,
   CancelGitHubAuth,
@@ -43,7 +43,7 @@ import {
   ListWebDAVBackups,
   ExportToWebDAV,
   ImportFromWebDAV,
-} from "../../../wailsjs/go/app/App";
+} from "../../../wailsjs/go/system/System";
 import { backup_svc } from "../../../wailsjs/go/models";
 import { ExportDialog } from "@/components/settings/ExportDialog";
 import { BackupImportDialog } from "@/components/settings/BackupImportDialog";

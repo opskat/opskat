@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@opskat/ui";
-import { SFTPDelete, SFTPGetwd } from "../../../wailsjs/go/app/App";
+import { SFTPDelete, SFTPGetwd } from "../../../wailsjs/go/ssh/SSH";
 import { sftp_svc } from "../../../wailsjs/go/models";
 import { openExternalEdit, type ExternalEditMergePrepareResult, type ExternalEditSession } from "@/lib/externalEditApi";
 import {

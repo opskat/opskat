@@ -7,7 +7,8 @@ import { useTerminalStore, type TerminalDirectorySyncState } from "../stores/ter
 import { useSFTPStore, type SFTPTransfer } from "../stores/sftpStore";
 import { useExternalEditStore } from "../stores/externalEditStore";
 import { type ExternalEditMergePrepareResult, type ExternalEditSession } from "../lib/externalEditApi";
-import { ChangeSSHDirectory, SFTPListDir } from "../../wailsjs/go/app/App";
+import { ChangeSSHDirectory, SFTPListDir } from "../../wailsjs/go/ssh/SSH";
+import { OpenExternalEdit, PrepareExternalEditMerge } from "../../wailsjs/go/external_edit/ExternalEdit";
 
 const { toastError } = vi.hoisted(() => ({
   toastError: vi.fn(),
@@ -173,12 +174,7 @@ function makeTransfer(
 describe("FileManagerPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    window.go ??= { app: { App: {} } };
-    window.go.app ??= { App: {} };
-    window.go.app.App ??= {};
-    Object.assign(window.go.app.App, {
-      PrepareExternalEditMerge: vi.fn(),
-    });
+    vi.mocked(PrepareExternalEditMerge).mockResolvedValue(undefined as never);
     useTerminalStore.setState({
       tabData: {
         tab1: {
@@ -799,17 +795,9 @@ describe("FileManagerPanel", () => {
 
   it("sanitizes oversize failures during the first external-edit open", async () => {
     const user = userEvent.setup();
-    const openExternalEditBinding = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new Error("读取远程文件失败: 远程文件过大，无法完整读取: /srv/app/secrets.txt (2097152 bytes > 1048576 bytes)")
-      );
-    window.go ??= { app: { App: {} } };
-    window.go.app ??= { App: {} };
-    window.go.app.App ??= {};
-    Object.assign(window.go.app.App, {
-      OpenExternalEdit: openExternalEditBinding,
-    });
+    vi.mocked(OpenExternalEdit).mockRejectedValueOnce(
+      new Error("读取远程文件失败: 远程文件过大，无法完整读取: /srv/app/secrets.txt (2097152 bytes > 1048576 bytes)")
+    );
     vi.mocked(SFTPListDir).mockResolvedValueOnce([{ name: "secrets.txt", isDir: false, size: 2097152, modTime: 0 }]);
 
     render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
@@ -821,7 +809,7 @@ describe("FileManagerPanel", () => {
         "当前文件超过最大读取阈值，无法继续完整读取。请前往 设置 > External Edit 调整最大读取大小后再重试"
       )
     ).toBeInTheDocument();
-    expect(openExternalEditBinding).toHaveBeenCalled();
+    expect(OpenExternalEdit).toHaveBeenCalled();
     expect(screen.queryByText(/\/srv\/app\/secrets\.txt/)).not.toBeInTheDocument();
     expect(screen.queryByText(/2097152 bytes/)).not.toBeInTheDocument();
   });

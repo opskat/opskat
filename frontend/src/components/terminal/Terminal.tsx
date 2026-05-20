@@ -2,7 +2,9 @@ import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
 import type { Terminal as XTerminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { SearchAddon } from "@xterm/addon-search";
-import { WriteSSH, WriteSerial, ResizeSSH, ResizeSerialTerminal } from "../../../wailsjs/go/app/App";
+import { WriteSSH } from "../../../wailsjs/go/ssh/SSH";
+import { WriteSerial, ResizeSerialTerminal } from "../../../wailsjs/go/serial/Serial";
+import { ResizeSSH } from "../../../wailsjs/go/ssh/SSH";
 import { useShortcutStore, formatBinding, formatModKey } from "@/stores/shortcutStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useTerminalThemeStore, toXtermTheme } from "@/stores/terminalThemeStore";

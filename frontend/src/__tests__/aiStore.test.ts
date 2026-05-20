@@ -7,8 +7,8 @@ vi.mock("../i18n", () => ({
 
 import { useAIStore, getAISendOnEnter, setAISendOnEnter } from "../stores/aiStore";
 import { useTabStore, type AITabMeta } from "../stores/tabStore";
+import { CreateConversation } from "../../wailsjs/go/ai/AI";
 import {
-  CreateConversation,
   GetActiveAIProvider,
   ListConversations,
   DeleteConversation,
@@ -19,7 +19,7 @@ import {
   UpdateConversationTitle,
   RemoveQueuedAIMessage,
   ClearQueuedAIMessages,
-} from "../../wailsjs/go/app/App";
+} from "../../wailsjs/go/ai/AI";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
 
 async function waitForStoreCondition(predicate: () => boolean, timeoutMs = 1000) {

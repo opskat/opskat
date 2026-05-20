@@ -24,8 +24,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@opskat/ui";
+import { DetectOpsctl } from "../../../wailsjs/go/system/System";
 import {
-  DetectOpsctl,
   GetOpsctlInstallDir,
   InstallOpsctl,
   DetectSkills,
@@ -35,13 +35,15 @@ import {
   GetAppVersion,
   OpenDirectory,
   GetPluginReferenceDir,
+} from "../../../wailsjs/go/system/System";
+import {
   ListAIProviders,
   CreateAIProvider,
   UpdateAIProvider,
   DeleteAIProvider,
   SetActiveAIProvider,
-} from "../../../wailsjs/go/app/App";
-import { app } from "../../../wailsjs/go/models";
+} from "../../../wailsjs/go/ai/AI";
+import { ai } from "../../../wailsjs/go/models";
 import {
   Check,
   Loader2,
@@ -356,10 +358,10 @@ function IntegrationSection() {
 
 export function AISettingsSection() {
   const { t } = useTranslation();
-  const [providers, setProviders] = useState<app.AIProviderInfo[]>([]);
+  const [providers, setProviders] = useState<ai.AIProviderInfo[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingProvider, setEditingProvider] = useState<app.AIProviderInfo | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<app.AIProviderInfo | null>(null);
+  const [editingProvider, setEditingProvider] = useState<ai.AIProviderInfo | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ai.AIProviderInfo | null>(null);
   const [saving, setSaving] = useState(false);
 
   const loadProviders = useCallback(async () => {
@@ -381,7 +383,7 @@ export function AISettingsSection() {
     setDialogOpen(true);
   };
 
-  const openEditDialog = (provider: app.AIProviderInfo) => {
+  const openEditDialog = (provider: ai.AIProviderInfo) => {
     setEditingProvider(provider);
     setDialogOpen(true);
   };

@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { Button, Textarea, ScrollArea } from "@opskat/ui";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
-import { RedisSetStringValue } from "../../../wailsjs/go/app/App";
+import { RedisSetStringValue } from "../../../wailsjs/go/redis/Redis";
 
 interface JsonToken {
   value: string;

@@ -21,8 +21,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@opskat/ui";
+import { ListCredentials } from "../../../wailsjs/go/system/System";
 import {
-  ListCredentials,
   GenerateSSHKey,
   ImportSSHKeyFile,
   ImportSSHKeyPEM,
@@ -33,7 +33,7 @@ import {
   CreatePasswordCredential,
   UpdateCredentialPassword,
   UpdateCredentialPassphrase,
-} from "../../../wailsjs/go/app/App";
+} from "../../../wailsjs/go/system/System";
 import { credential_entity } from "../../../wailsjs/go/models";
 
 function generatePassword(length = 20): string {

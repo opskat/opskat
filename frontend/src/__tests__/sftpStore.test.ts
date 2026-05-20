@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useSFTPStore, type SFTPTransfer } from "../stores/sftpStore";
-import { SFTPUpload, SFTPDownload, SFTPCancelTransfer } from "../../wailsjs/go/app/App";
+import { SFTPUpload } from "../../wailsjs/go/ssh/SSH";
+import { SFTPDownload, SFTPCancelTransfer } from "../../wailsjs/go/ssh/SSH";
 
 function makeTransfer(
   id: string,

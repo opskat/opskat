@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useExtensionStore } from "../extension/store";
-import { ListInstalledExtensions } from "../../wailsjs/go/app/App";
+import { ListInstalledExtensions } from "../../wailsjs/go/extension/Extension";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
 
 // Mock extension dependencies

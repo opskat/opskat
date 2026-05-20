@@ -15,7 +15,8 @@ import {
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { useQueryStore } from "@/stores/queryStore";
 import { isMac, formatModKey } from "@/stores/shortcutStore";
-import { ExecuteSQL, OpenTable } from "../../../wailsjs/go/app/App";
+import { ExecuteSQL } from "../../../wailsjs/go/query/Query";
+import { OpenTable } from "../../../wailsjs/go/query/Query";
 import {
   QueryResultTable,
   CellEdit,

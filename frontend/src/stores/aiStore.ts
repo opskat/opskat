@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { create } from "zustand";
+import { SendAIMessage } from "../../wailsjs/go/ai/AI";
 import {
-  SendAIMessage,
   StopAIGeneration,
   QueueAIMessage,
   RemoveQueuedAIMessage,
@@ -13,11 +13,18 @@ import {
   DeleteConversation,
   SaveConversationMessages,
   UpdateConversationTitle,
-} from "../../wailsjs/go/app/App";
-import { ai, conversation_entity, app } from "../../wailsjs/go/models";
+} from "../../wailsjs/go/ai/AI";
+import { ai, conversation_entity, runner } from "../../wailsjs/go/models";
 import { EventsOn, EventsEmit } from "../../wailsjs/runtime/runtime";
 import i18n from "../i18n";
-import { useTabStore, registerTabCloseHook, registerTabRestoreHook, type AITabMeta, type Tab } from "./tabStore";
+import {
+  useTabStore,
+  registerTabCloseHook,
+  registerTabRestoreHook,
+  type AITabMeta,
+  type QueryTabMeta,
+  type Tab,
+} from "./tabStore";
 import { stripMentionTags } from "@/lib/mentionXml";
 import { classifyError, type ErrorKind } from "@/lib/aiError";
 
@@ -57,11 +64,6 @@ export interface ContentBlock {
   errorKind?: ErrorKind;
   errorDetail?: string;
 }
-
-type PersistedConversationContentBlock = conversation_entity.ContentBlock & {
-  errorKind?: ErrorKind;
-  errorDetail?: string;
-};
 
 // Assistant 消息累计 token 使用量；单次用户 turn 可能跨多轮 LLM 调用，前端按 usage 事件累加。
 export interface TokenUsage {
@@ -207,7 +209,7 @@ async function createConversationForEmptyHost(
 }
 
 function getDefaultSidebarTitle() {
-  return i18n.t("ai.newConversation", "新对话");
+  return i18n.t("ai.newConversation");
 }
 
 function createSidebarTabId() {
@@ -310,7 +312,7 @@ function loadInitialSidebarState() {
         migratedLegacy: false,
       };
     } catch {
-      // ignore invalid persisted data and fall back to legacy migration
+      // ignore invalid persisted data and fall back to sidebar state migration
     }
   }
 
@@ -324,7 +326,7 @@ function loadInitialSidebarState() {
     legacyLastBound !== null ||
     localStorage.getItem(LEGACY_SIDEBAR_INPUT_DRAFT_KEY) !== null;
 
-  // 从旧版单 sidebar key 平滑迁移到多 tab 模型：
+  // 从单 sidebar key 平滑迁移到多 tab 模型：
   // 只要检测到任意旧 key，就恢复成一个初始侧边 tab，避免升级后直接丢上下文。
   if (!hasLegacyState) {
     return {
@@ -537,62 +539,49 @@ function materializeRetryStatusAsError(msg: ChatMessage): ChatMessage {
   };
 }
 
-function toDisplayMessages(msgs: ChatMessage[], includeStreaming = false): app.ConversationDisplayMessage[] {
+function toDisplayMessages(msgs: ChatMessage[], includeStreaming = false): ai.ConversationDisplayMessage[] {
   // includeStreaming=true 的路径都是"非自然终态落盘"（tab 关闭 / 切会话 / 应用退出），
   // 在这里把 retryStatus 物化为 interrupted ErrorBlock；其余路径 retryStatus 自动 omit
   // （ChatMessage 顶层字段不进入 ConversationDisplayMessage）。
   const prepared = includeStreaming ? msgs.map(materializeRetryStatusAsError) : msgs;
   return prepared
     .filter((m) => includeStreaming || !m.streaming)
-    .map((m) => {
-      const displayMessage = new app.ConversationDisplayMessage({
-        role: m.role,
-        content: m.content,
-        blocks: m.blocks.map(
-          (b) =>
-            new conversation_entity.ContentBlock({
-              type: b.type,
-              content: b.content,
-              toolName: b.toolName,
-              toolInput: b.toolInput,
-              status: includeStreaming ? normalizeSnapshotStatus(b.status) : b.status,
-              ...(b.errorKind ? { errorKind: b.errorKind } : {}),
-              ...(b.errorDetail ? { errorDetail: b.errorDetail } : {}),
-            })
-        ),
-        tokenUsage: m.tokenUsage ? new conversation_entity.TokenUsage(m.tokenUsage) : undefined,
-      });
-
-      // Wails 当前生成的 ContentBlock TS 类还没声明 errorKind/errorDetail；
-      // 重新构造后需要把这两个持久化字段补回实例本身，保证 save/load round-trip 不丢。
-      m.blocks.forEach((b, index) => {
-        const persistedBlock = displayMessage.blocks[index] as PersistedConversationContentBlock | undefined;
-        if (!persistedBlock) return;
-        if (b.errorKind) persistedBlock.errorKind = b.errorKind;
-        if (b.errorDetail) persistedBlock.errorDetail = b.errorDetail;
-      });
-
-      return displayMessage;
-    });
+    .map(
+      (m) =>
+        new ai.ConversationDisplayMessage({
+          role: m.role,
+          content: m.content,
+          blocks: m.blocks.map(
+            (b) =>
+              new conversation_entity.ContentBlock({
+                type: b.type,
+                content: b.content,
+                toolName: b.toolName,
+                toolInput: b.toolInput,
+                status: includeStreaming ? normalizeSnapshotStatus(b.status) : b.status,
+                errorKind: b.errorKind,
+                errorDetail: b.errorDetail,
+              })
+          ),
+          tokenUsage: m.tokenUsage ? new conversation_entity.TokenUsage(m.tokenUsage) : undefined,
+        })
+    );
 }
 
-function convertDisplayMessages(displayMsgs: app.ConversationDisplayMessage[]): ChatMessage[] {
-  return (displayMsgs || []).map((dm: app.ConversationDisplayMessage) => ({
+function convertDisplayMessages(displayMsgs: ai.ConversationDisplayMessage[]): ChatMessage[] {
+  return (displayMsgs || []).map((dm: ai.ConversationDisplayMessage) => ({
     id: crypto.randomUUID(),
     role: dm.role as "user" | "assistant" | "tool",
     content: dm.content,
-    blocks: (dm.blocks || []).map((rawBlock: conversation_entity.ContentBlock) => {
-      const b = rawBlock as PersistedConversationContentBlock;
-      return {
-        type: b.type as ContentBlock["type"],
-        content: b.content,
-        toolName: b.toolName,
-        toolInput: b.toolInput,
-        status: b.status as ContentBlock["status"],
-        errorKind: b.errorKind,
-        errorDetail: b.errorDetail,
-      };
-    }),
+    blocks: (dm.blocks || []).map((b: conversation_entity.ContentBlock) => ({
+      type: b.type as ContentBlock["type"],
+      content: b.content,
+      toolName: b.toolName,
+      toolInput: b.toolInput,
+      status: b.status as ContentBlock["status"],
+      errorKind: b.errorKind as ErrorKind | undefined,
+      errorDetail: b.errorDetail,
+    })),
     tokenUsage: dm.tokenUsage
       ? {
           inputTokens: dm.tokenUsage.inputTokens,
@@ -1420,11 +1409,11 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
 //
 // 这样跨 turn 时 DeepSeek/OpenAI 能看到上一 turn 的中间 tool_calls 与结果，
 // 同时也满足 DeepSeek thinking 模式"带 tool_calls 的 assistant 必须回传 reasoning_content"的强制要求。
-function expandToAPIMessages(messages: ChatMessage[]): ai.Message[] {
-  const out: ai.Message[] = [];
+function expandToAPIMessages(messages: ChatMessage[]): runner.Message[] {
+  const out: runner.Message[] = [];
   for (const m of messages) {
     if (m.role !== "assistant") {
-      out.push(new ai.Message({ role: m.role, content: m.content }));
+      out.push(new runner.Message({ role: m.role, content: m.content }));
       continue;
     }
 
@@ -1441,7 +1430,7 @@ function expandToAPIMessages(messages: ChatMessage[]): ai.Message[] {
         payload.reasoning_content = thinking;
       }
       if (pendingToolCalls.length > 0) payload.tool_calls = pendingToolCalls.slice();
-      out.push(new ai.Message(payload));
+      out.push(new runner.Message(payload));
       thinking = "";
       text = "";
       pendingToolCalls.length = 0;
@@ -1466,7 +1455,7 @@ function expandToAPIMessages(messages: ChatMessage[]): ai.Message[] {
         payload.thinking = allThinking;
         payload.reasoning_content = allThinking;
       }
-      out.push(new ai.Message(payload));
+      out.push(new runner.Message(payload));
       continue;
     }
 
@@ -1483,7 +1472,7 @@ function expandToAPIMessages(messages: ChatMessage[]): ai.Message[] {
         });
         flushAssistant();
         out.push(
-          new ai.Message({
+          new runner.Message({
             role: "tool",
             content: b.content,
             tool_call_id: b.toolCallId,
@@ -1579,7 +1568,7 @@ async function _sendForConversation(convId: number, content: string) {
   const needExpand = modelName.startsWith("deepseek-v4");
   const apiMessages = needExpand
     ? expandToAPIMessages(newMessages)
-    : newMessages.map((m) => new ai.Message({ role: m.role, content: m.content }));
+    : newMessages.map((m) => new runner.Message({ role: m.role, content: m.content }));
 
   // 收集当前 Tab 上下文
   const allTabs = useTabStore.getState().tabs;
@@ -1588,16 +1577,16 @@ async function _sendForConversation(convId: number, content: string) {
       (t): t is Tab & { meta: { assetId: number; assetName?: string } } =>
         t.type !== "ai" && t.type !== "page" && t.meta != null && "assetId" in t.meta
     )
-    .map(
-      (t) =>
-        new ai.TabInfo({
-          type: t.type,
-          assetId: t.meta.assetId || 0,
-          assetName: t.meta.assetName || t.label || "",
-        })
-    );
+    .map((t) => {
+      const type = t.type === "query" ? (t.meta as QueryTabMeta).assetType : t.type === "terminal" ? "ssh" : t.type;
+      return new runner.TabInfo({
+        type,
+        assetId: t.meta.assetId || 0,
+        assetName: t.meta.assetName || t.label || "",
+      });
+    });
 
-  const aiContext = new ai.AIContext({ openTabs });
+  const aiContext = new runner.AIContext({ openTabs });
 
   try {
     await SendAIMessage(convId, apiMessages, aiContext);
@@ -2072,7 +2061,7 @@ export const useAIStore = create<AIState>((set, get) => {
 
     openNewConversationTab: () => {
       const tabId = `ai-new-${Date.now()}`;
-      const title = i18n.t("ai.newConversation", "新对话");
+      const title = i18n.t("ai.newConversation");
 
       useTabStore.getState().openTab({
         id: tabId,

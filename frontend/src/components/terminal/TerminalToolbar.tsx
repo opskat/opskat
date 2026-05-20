@@ -5,7 +5,8 @@ import { Button } from "@opskat/ui";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { SnippetPopover } from "@/components/snippet/SnippetPopover";
-import { WriteSSH, WriteSerial } from "../../../wailsjs/go/app/App";
+import { WriteSSH } from "../../../wailsjs/go/ssh/SSH";
+import { WriteSerial } from "../../../wailsjs/go/serial/Serial";
 import { bytesToBase64 } from "@/lib/terminalEncode";
 
 interface TerminalToolbarProps {

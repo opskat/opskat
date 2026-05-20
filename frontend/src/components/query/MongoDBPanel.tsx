@@ -10,7 +10,7 @@ import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { isMac, formatModKey } from "@/stores/shortcutStore";
 import { MongoDBCollectionBrowser } from "./MongoDBCollectionBrowser";
 import { MongoDBResultView } from "./MongoDBResultView";
-import { ExecuteMongo } from "../../../wailsjs/go/app/App";
+import { ExecuteMongo } from "../../../wailsjs/go/query/Query";
 import { CodeEditor } from "@/components/CodeEditor";
 import { SnippetPopover } from "@/components/snippet/SnippetPopover";
 import { parseMongosh, type ParsedMongosh } from "@/lib/mongosh-parser";

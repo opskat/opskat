@@ -8,7 +8,8 @@ import { filterAssetTreeAssets } from "@/lib/assetTree";
 import { useAssetStore } from "@/stores/assetStore";
 import { useSnippetStore } from "@/stores/snippetStore";
 import { snippet_entity } from "../../../wailsjs/go/models";
-import { GetSnippetLastAssets, SetSnippetLastAssets, RecordSnippetUse } from "../../../wailsjs/go/app/App";
+import { GetSnippetLastAssets } from "../../../wailsjs/go/extension/Extension";
+import { SetSnippetLastAssets, RecordSnippetUse } from "../../../wailsjs/go/extension/Extension";
 import { runSnippetOnAsset } from "./snippetRun";
 
 interface SnippetAssetDrawerProps {

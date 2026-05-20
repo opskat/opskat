@@ -16,9 +16,9 @@ import {
 } from "@opskat/ui";
 import { AssetSelect } from "@/components/asset/AssetSelect";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
-import { SelectSSHKeyFile } from "../../../wailsjs/go/app/App";
+import { SelectSSHKeyFile } from "../../../wailsjs/go/ssh/SSH";
 import { credential_entity } from "../../../wailsjs/go/models";
-import { app } from "../../../wailsjs/go/models";
+import { ssh as ssh_models } from "../../../wailsjs/go/models";
 
 export interface SSHConfigSectionProps {
   host: string;
@@ -46,8 +46,8 @@ export interface SSHConfigSectionProps {
   credentialId: number;
   setCredentialId: (v: number) => void;
   managedKeys: credential_entity.Credential[];
-  localKeys: app.LocalSSHKeyInfo[];
-  setLocalKeys: (v: app.LocalSSHKeyInfo[]) => void;
+  localKeys: ssh_models.LocalSSHKeyInfo[];
+  setLocalKeys: (v: ssh_models.LocalSSHKeyInfo[]) => void;
   selectedKeyPaths: string[];
   setSelectedKeyPaths: (v: string[]) => void;
   privateKeyPassphrase: string;

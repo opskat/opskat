@@ -26,7 +26,7 @@ import {
   Switch,
 } from "@opskat/ui";
 import { backup_svc } from "../../../wailsjs/go/models";
-import { ExportToFile } from "../../../wailsjs/go/app/App";
+import { ExportToFile } from "../../../wailsjs/go/system/System";
 import { AssetMultiSelect } from "@/components/asset/AssetMultiSelect";
 import { useAssetStore } from "@/stores/assetStore";
 import { useShortcutStore, DEFAULT_SHORTCUTS } from "@/stores/shortcutStore";

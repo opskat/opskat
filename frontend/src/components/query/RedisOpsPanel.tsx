@@ -15,7 +15,7 @@ import {
 import { Button, Input, Switch } from "@opskat/ui";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { useQueryStore } from "@/stores/queryStore";
-import { ExecuteRedis } from "../../../wailsjs/go/app/App";
+import { ExecuteRedis } from "../../../wailsjs/go/query/Query";
 
 interface RedisInfoRow {
   section: string;

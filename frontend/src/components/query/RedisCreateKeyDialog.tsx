@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -17,8 +17,8 @@ import {
   SelectValue,
   Textarea,
 } from "@opskat/ui";
+import { RedisHashSet } from "../../../wailsjs/go/redis/Redis";
 import {
-  RedisHashSet,
   RedisListPush,
   RedisScanKeys,
   RedisSetAdd,
@@ -26,7 +26,7 @@ import {
   RedisSetStringValue,
   RedisStreamAdd,
   RedisZSetAdd,
-} from "../../../wailsjs/go/app/App";
+} from "../../../wailsjs/go/redis/Redis";
 
 type RedisCreateType = "string" | "hash" | "list" | "set" | "zset" | "stream";
 
@@ -112,12 +112,6 @@ export function RedisCreateKeyDialog({
     },
     [db]
   );
-
-  useEffect(() => {
-    if (open) {
-      reset(db);
-    }
-  }, [db, open, reset]);
 
   const close = useCallback(() => {
     reset();

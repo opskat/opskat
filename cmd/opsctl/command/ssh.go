@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/opskat/opskat/internal/ai"
+	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/sshpool"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -78,7 +78,7 @@ func cmdSSHViaProxy(proxy *sshpool.Client, assetID int64) int {
 
 // cmdSSHDirect 直连建立交互式 SSH（原逻辑）
 func cmdSSHDirect(ctx context.Context, assetID int64) int {
-	client, cleanup, err := ai.DialSSHClient(ctx, assetID)
+	client, cleanup, err := helper.DialSSHClient(ctx, assetID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1

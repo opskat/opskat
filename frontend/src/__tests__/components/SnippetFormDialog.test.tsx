@@ -3,7 +3,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { useSnippetStore } from "../../stores/snippetStore";
 import { SnippetFormDialog } from "../../components/snippet/SnippetFormDialog";
-import { CreateSnippet, UpdateSnippet, ListSnippets } from "../../../wailsjs/go/app/App";
+import { CreateSnippet } from "../../../wailsjs/go/extension/Extension";
+import { UpdateSnippet, ListSnippets } from "../../../wailsjs/go/extension/Extension";
 
 // Monaco editor is a heavy dependency; stub it out so the dialog renders
 // without a real Monaco instance in jsdom.

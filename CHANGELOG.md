@@ -1,3 +1,79 @@
+<a name="1.6.2"></a>
+
+## 1.6.2 (2026-05-18)
+
+修复 xterm WebGL 终端选区高频更新时选中文字出现字体"变样"的渲染问题。
+
+### 🎨 UI 改进
+
+- 🎨 终端选区显式设置前景色，消除选区高频更新时选中文字字体变样 (by @CodFrm)
+
+<a name="1.6.1"></a>
+
+## 1.6.1 (2026-05-18)
+
+修复 SSH 终端在按空格/大写字母时被 rollover 旁路误判而双发字符的回归；端口转发启停过程加上 loading 反馈，避免拨号期间用户误以为无响应反复点击导致连接被拆。
+
+### 🐛 Bug 修复
+
+- 🐛 修复 SSH 终端按空格被双发（rollover 旁路对走 keypress 路径的字符误判补发） (by @CodFrm)
+
+### 🎨 UI 改进
+
+- 🎨 端口转发启停增加 loading 反馈（按钮 spinner + 状态区"处理中…"，拨号中禁用资产下拉以防止隐式 restart） (by @CodFrm)
+
+<a name="1.6.0"></a>
+
+## 1.6.0 (2026-05-17)
+
+本次版本新增串口（COM/TTY）资产与 AI 串口命令执行，为 AI 助手加入资产上下文选择能力，将 AI 子系统迁移到 cago-frame/agents 框架；新增 VSCode 风搜索/命令面板、资产树拖拽重排、SSH 资产右键文件管理、SSH 60s 保活心跳、Anthropic/OpenAI provider 思考模式等多项功能，并在数据库查询面板与 AI 流式输出做了显著性能优化；修复 SSH 私钥 + MFA 接续认证、更新后重启未自动启动、终端 IME 丢字、SSH Powerline/Nerd Font 渲染等多项问题。
+
+### 🚀 主要新功能
+
+- 💥 支持串口（COM/TTY）资产、终端连接与 AI 串口命令 ([#89](https://github.com/opskat/opskat/pull/89)) (by @fqscfqj)
+- 💥 支持 AI 助手选择资产上下文 ([#121](https://github.com/opskat/opskat/pull/121)) (by @CodFrm)
+- ✨ 顶部增加 VSCode 风搜索/命令面板与资产、AI 面板折叠按钮 ([#113](https://github.com/opskat/opskat/pull/113)) (by @CodFrm)
+- ✨ SSH 资产右键支持一键打开文件管理 ([#104](https://github.com/opskat/opskat/pull/104)) (by @lonelyman0108)
+- ✨ 资产树支持拖拽重排 + 修复嵌套分组添加资产回填错分组 ([#101](https://github.com/opskat/opskat/pull/101)) (by @lonelyman0108)
+- ✨ 密钥关联用户名 + 资产表单根据所选密钥自动填 username ([#88](https://github.com/opskat/opskat/pull/88)) (by @CodFrm)
+- ✨ SSH 60s 保活心跳 + 断开后回车重连 ([#81](https://github.com/opskat/opskat/pull/81)) (by @CodFrm)
+- ✨ 新增公共 SSH 客户端包 ([#82](https://github.com/opskat/opskat/pull/82)) (by @CodFrm)
+- ✨ 为 Anthropic provider 添加思考模式（reasoning effort）支持 ([#76](https://github.com/opskat/opskat/pull/76)) (by @CodFrm)
+- ✨ 为 OpenAI 兼容 provider 添加思考模式（reasoning effort）支持 ([#74](https://github.com/opskat/opskat/pull/74)) (by @fqscfqj)
+- ✨ 保存窗口尺寸配置 (by @CodFrm)
+
+### ⚡️ 性能优化
+
+- ⚡️ 数据库查询面板连接复用 + OpenTable 首屏合并 + 大表虚拟化 ([#116](https://github.com/opskat/opskat/pull/116)) (by @CodFrm)
+- ⚡️ AI 流式输出性能优化 + 组件拆分重构 ([#93](https://github.com/opskat/opskat/pull/93)) (by @CodFrm)
+
+### ♻️ 重构
+
+- ♻️ 将 AI 子系统迁移到 cago-frame/agents 框架 ([#92](https://github.com/opskat/opskat/pull/92)) (by @CodFrm)
+- ♻️ 代码瘦身与前端体验优化 ([#119](https://github.com/opskat/opskat/pull/119)) (by @CodFrm)
+- ♻️ AI 本地工具改名 local_* 与远程工具视觉隔离 ([#110](https://github.com/opskat/opskat/pull/110)) (by @CodFrm)
+
+### 🔒 安全性
+
+- 🔒 加固组合命令权限校验 ([#107](https://github.com/opskat/opskat/pull/107)) (by @CodFrm)
+
+### 🐛 Bug 修复
+
+- 🐛 修复 SSH 私钥认证后无法继续 keyboard-interactive(MFA/OTP) ([#109](https://github.com/opskat/opskat/pull/109)) (by @CodFrm)
+- 🐛 修复更新后立即重启未自动启动 ([#106](https://github.com/opskat/opskat/pull/106)) (by @CodFrm)
+- 🐛 修复 SSH 终端 Powerline/Nerd Font 图标渲染为方框 + 字体下拉改读系统字体推荐/其他两区 + 主题切换回显当前选中 ([#103](https://github.com/opskat/opskat/pull/103)) (by @lonelyman0108)
+- 🐛 设置子标签持久化 + 资产测试连接可取消 + 重构资产表单布局 ([#102](https://github.com/opskat/opskat/pull/102)) (by @lonelyman0108)
+- 🐛 修复 SFTP 传输进度 tab 作用域 ([#95](https://github.com/opskat/opskat/pull/95)) (by @CodFrm)
+- 🐛 Terminal IME：旁路 xterm key-rollover input 丢字 bug ([#105](https://github.com/opskat/opskat/pull/105)) (by @CodFrm)
+- 🐛 Terminal IME：抽 TerminalInputBridge + isComposing 早返回 [#94](https://github.com/opskat/opskat/issues/94) ([#98](https://github.com/opskat/opskat/pull/98)) (by @CodFrm)
+- 🐛 修复 AI 助手输入框快捷换行 ([#111](https://github.com/opskat/opskat/pull/111)) (by @CodFrm)
+- 🐛 修复未分组资产树展开 ([#73](https://github.com/opskat/opskat/pull/73)) (by @CodFrm)
+- 🐛 修复 AI mention 弹出兜底 ([#72](https://github.com/opskat/opskat/pull/72)) (by @CodFrm)
+
+### 📄 文档
+
+- 📄 为 README 添加介绍视频链接 ([#87](https://github.com/opskat/opskat/pull/87)) (by @Pililink)
+
 <a name="1.5.0"></a>
 
 ## 1.5.0 (2026-05-06)

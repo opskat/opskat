@@ -5,8 +5,8 @@ import { toast } from "sonner";
 import { Button, Input, ConfirmDialog } from "@opskat/ui";
 import { useQueryStore, RedisKeyInfo } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
+import { RedisHashDelete } from "../../../wailsjs/go/redis/Redis";
 import {
-  RedisHashDelete,
   RedisHashSet,
   RedisListDelete,
   RedisListPush,
@@ -15,7 +15,7 @@ import {
   RedisSetRemove,
   RedisZSetAdd,
   RedisZSetRemove,
-} from "../../../wailsjs/go/app/App";
+} from "../../../wailsjs/go/redis/Redis";
 
 const VALUE_ROW_HEIGHT = 30;
 

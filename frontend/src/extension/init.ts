@@ -1,5 +1,5 @@
 // frontend/src/extension/init.ts
-import { ListInstalledExtensions } from "../../wailsjs/go/app/App";
+import { ListInstalledExtensions } from "../../wailsjs/go/extension/Extension";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
 import { useExtensionStore } from "./store";
 import { injectExtensionAPI } from "./inject";

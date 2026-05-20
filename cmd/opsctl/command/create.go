@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/opskat/opskat/internal/ai"
+	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/assettype"
 )
 
-func cmdCreate(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args []string, session string) int {
+func cmdCreate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		printCreateUsage()
 		if len(args) > 0 {
@@ -153,7 +153,7 @@ func cmdCreate(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args
 	}
 }
 
-func cmdUpdate(ctx context.Context, handlers map[string]ai.ToolHandlerFunc, args []string, session string) int {
+func cmdUpdate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		printUpdateUsage()
 		if len(args) > 0 {
