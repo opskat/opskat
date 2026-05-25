@@ -15,7 +15,7 @@ type MatchFunc func(rule, command string) bool
 
 // PolicyTestInput 策略测试入参
 type PolicyTestInput struct {
-	PolicyType string // "ssh" | "database" | "redis" | "k8s"
+	PolicyType string // "ssh" | "database" | "redis" | "k8s" | "etcd"
 	AssetID    int64  // 资产ID（从资产的 groupID 开始解析组链）
 	GroupID    int64  // 资产组ID（从父组开始解析，当前组策略由 Current* 字段提供）
 
@@ -24,6 +24,7 @@ type PolicyTestInput struct {
 	CurrentQuery *asset_entity.QueryPolicy
 	CurrentRedis *asset_entity.RedisPolicy
 	CurrentK8s   *asset_entity.K8sPolicy
+	CurrentEtcd  *asset_entity.EtcdPolicy
 }
 
 // PolicyTestOutput 策略测试结果
@@ -52,6 +53,8 @@ func TestPolicy(ctx context.Context, input PolicyTestInput, command string) Poli
 		return testRedisPolicy(ctx, input.CurrentRedis, groups, command)
 	case "k8s":
 		return testK8sPolicy(ctx, input.CurrentK8s, groups, command)
+	case "etcd":
+		return testEtcdPolicy(ctx, input.CurrentEtcd, groups, command)
 	}
 	return PolicyTestOutput{Decision: aictx.NeedConfirm}
 }
@@ -299,6 +302,40 @@ func testRedisPolicy(ctx context.Context, current *asset_entity.RedisPolicy, gro
 	return PolicyTestOutput{Decision: aictx.Allow}
 }
 
+// --- Etcd ---
+
+func testEtcdPolicy(ctx context.Context, current *asset_entity.EtcdPolicy, groups []*group_entity.Group, command string) PolicyTestOutput {
+	// EtcdPolicy 是 RedisPolicy 的类型别名，规则匹配复用 MatchRedisRule / checkRedisPolicyRules。
+	// 先检查组通用规则（用 MatchRedisRule，空格分隔的子串匹配同样适用于 etcd 命令）
+	groupDeny, groupAllow := collectGroupGenericRules(ctx, groups)
+	if out := checkGenericDeny(groupDeny, command, MatchRedisRule); out != nil {
+		out.Message = PolicyFmt(ctx, "etcd command denied by group policy: %s", "etcd 命令被组策略禁止: %s", command)
+		return *out
+	}
+
+	merged := mergeEtcdPoliciesForTest(ctx, current, groups)
+	result := checkRedisPolicyRules(ctx, EffectiveEtcdPolicy(ctx, merged), command)
+
+	if result.Decision == aictx.Deny {
+		return PolicyTestOutput{
+			Decision:       aictx.Deny,
+			MatchedPattern: result.MatchedPattern,
+			MatchedSource:  "", // 当前资产策略
+			Message:        result.Message,
+		}
+	}
+
+	// 与 Redis 路径一致：组通用 allow 只用来把 aictx.NeedConfirm 升为 aictx.Allow，
+	// 资产策略已是 aictx.Allow 时不能再被组规则改写 MatchedSource。
+	if result.Decision == aictx.NeedConfirm {
+		if out := checkGenericAllow(groupAllow, command, MatchRedisRule); out != nil {
+			return *out
+		}
+		return PolicyTestOutput{Decision: aictx.NeedConfirm}
+	}
+	return PolicyTestOutput{Decision: aictx.Allow}
+}
+
 // --- K8S ---
 
 func testK8sPolicy(ctx context.Context, current *asset_entity.K8sPolicy, groups []*group_entity.Group, command string) PolicyTestOutput {
@@ -411,6 +448,29 @@ func mergeRedisPoliciesForTest(ctx context.Context, current *asset_entity.RedisP
 	merged := &asset_entity.RedisPolicy{}
 	for _, p := range policies {
 		expanded := expandRedisPolicy(ctx, p)
+		if len(merged.AllowList) == 0 && len(expanded.AllowList) > 0 {
+			merged.AllowList = AppendUnique(merged.AllowList, expanded.AllowList...)
+		}
+		merged.DenyList = AppendUnique(merged.DenyList, expanded.DenyList...)
+	}
+	return merged
+}
+
+func mergeEtcdPoliciesForTest(ctx context.Context, current *asset_entity.EtcdPolicy, groups []*group_entity.Group) *asset_entity.EtcdPolicy {
+	var policies []*asset_entity.EtcdPolicy
+	if current != nil {
+		policies = append(policies, current)
+	}
+	for _, g := range groups {
+		p, err := g.GetEtcdPolicy()
+		if err == nil && p != nil {
+			policies = append(policies, p)
+		}
+	}
+
+	merged := &asset_entity.EtcdPolicy{}
+	for _, p := range policies {
+		expanded := expandEtcdPolicy(ctx, p)
 		if len(merged.AllowList) == 0 && len(expanded.AllowList) > 0 {
 			merged.AllowList = AppendUnique(merged.AllowList, expanded.AllowList...)
 		}
