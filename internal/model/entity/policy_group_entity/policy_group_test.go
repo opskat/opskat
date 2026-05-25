@@ -1,6 +1,7 @@
 package policy_group_entity
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/opskat/opskat/internal/model/entity/policy"
@@ -120,8 +121,8 @@ func TestBuiltinGroups(t *testing.T) {
 	convey.Convey("BuiltinGroups内置权限组列表", t, func() {
 		groups := BuiltinGroups()
 
-		convey.Convey("共返回19个内置组", func() {
-			assert.Len(t, groups, 19)
+		convey.Convey("共返回21个内置组", func() {
+			assert.Len(t, groups, 21)
 		})
 
 		convey.Convey("所有内置组ID均以builtin:开头", func() {
@@ -181,5 +182,50 @@ func TestBuiltinGroups(t *testing.T) {
 			assert.NotNil(t, FindBuiltin(policy.BuiltinKafkaMetadataReadOnly))
 			assert.NotNil(t, FindBuiltin(policy.BuiltinKafkaDangerousDeny))
 		})
+
+		convey.Convey("etcd类型内置组有2个", func() {
+			var count int
+			for _, g := range groups {
+				if g.PolicyType == PolicyTypeEtcd {
+					count++
+				}
+			}
+			assert.Equal(t, 2, count)
+		})
 	})
+}
+
+func TestBuiltinGroups_Etcd(t *testing.T) {
+	groups := BuiltinGroups()
+	var readOnly, deny *PolicyGroup
+	for _, g := range groups {
+		switch g.BuiltinID {
+		case policy.BuiltinEtcdReadOnly:
+			readOnly = g
+		case policy.BuiltinEtcdDangerousDeny:
+			deny = g
+		}
+	}
+	assert.NotNil(t, readOnly, "etcd read-only builtin group missing")
+	assert.NotNil(t, deny, "etcd dangerous-deny builtin group missing")
+	assert.Equal(t, PolicyTypeEtcd, readOnly.PolicyType)
+	assert.Equal(t, PolicyTypeEtcd, deny.PolicyType)
+
+	var pRO policy.EtcdPolicy
+	assert.NoError(t, json.Unmarshal([]byte(readOnly.Policy), &pRO))
+	assert.Contains(t, pRO.AllowList, "get *")
+
+	var pDeny policy.EtcdPolicy
+	assert.NoError(t, json.Unmarshal([]byte(deny.Policy), &pDeny))
+	assert.Contains(t, pDeny.DenyList, "member remove *")
+}
+
+func TestPolicyGroup_ValidateEtcdType(t *testing.T) {
+	pg := &PolicyGroup{Name: "test etcd group", PolicyType: PolicyTypeEtcd, Policy: "{}"}
+	assert.NoError(t, pg.Validate())
+}
+
+func TestPolicyGroup_FindBuiltinEtcd(t *testing.T) {
+	assert.NotNil(t, FindBuiltin(policy.BuiltinEtcdReadOnly))
+	assert.NotNil(t, FindBuiltin(policy.BuiltinEtcdDangerousDeny))
 }
