@@ -439,3 +439,34 @@ func TestValidateKafka(t *testing.T) {
 		})
 	})
 }
+
+func TestAsset_IsEtcd(t *testing.T) {
+	convey.Convey("IsEtcd", t, func() {
+		a := &Asset{Type: AssetTypeEtcd}
+		assert.True(t, a.IsEtcd())
+		assert.False(t, a.IsRedis())
+	})
+}
+
+func TestAsset_GetSetEtcdConfig(t *testing.T) {
+	convey.Convey("Get/SetEtcdConfig 往返", t, func() {
+		a := &Asset{Type: AssetTypeEtcd}
+		cfg := &EtcdConfig{
+			Endpoints: []string{"10.0.0.1:2379", "10.0.0.2:2379"},
+			Username:  "root",
+			TLS:       true,
+		}
+		assert.NoError(t, a.SetEtcdConfig(cfg))
+		got, err := a.GetEtcdConfig()
+		assert.NoError(t, err)
+		assert.Equal(t, cfg.Endpoints, got.Endpoints)
+		assert.Equal(t, cfg.Username, got.Username)
+		assert.True(t, got.TLS)
+	})
+
+	convey.Convey("GetEtcdConfig 非 etcd 资产返回错误", t, func() {
+		a := &Asset{Type: AssetTypeSSH}
+		_, err := a.GetEtcdConfig()
+		assert.Error(t, err)
+	})
+}

@@ -20,6 +20,7 @@ const (
 	AssetTypeKafka    = "kafka"
 	AssetTypeK8s      = "k8s"
 	AssetTypeSerial   = "serial"
+	AssetTypeEtcd     = "etcd"
 )
 
 // DatabaseDriver 数据库驱动类型
@@ -143,6 +144,24 @@ type RedisConfig struct {
 	SSHAssetID            int64  `json:"ssh_asset_id,omitempty"`            // Deprecated: use Asset.SSHTunnelID
 }
 
+// EtcdConfig etcd类型的特定配置
+type EtcdConfig struct {
+	Endpoints    []string `json:"endpoints"`                 // 至少 1 个 host:port
+	Username     string   `json:"username,omitempty"`        // 留空 = 不启用 RBAC
+	Password     string   `json:"password,omitempty"`        // AES-256-GCM 密文
+	CredentialID int64    `json:"credential_id,omitempty"`
+
+	TLS           bool   `json:"tls,omitempty"`
+	TLSInsecure   bool   `json:"tls_insecure,omitempty"`
+	TLSServerName string `json:"tls_server_name,omitempty"`
+	TLSCAFile     string `json:"tls_ca_file,omitempty"`
+	TLSCertFile   string `json:"tls_cert_file,omitempty"`
+	TLSKeyFile    string `json:"tls_key_file,omitempty"`
+
+	DialTimeoutSeconds    int `json:"dial_timeout_seconds,omitempty"`
+	CommandTimeoutSeconds int `json:"command_timeout_seconds,omitempty"`
+}
+
 // MongoDBConfig MongoDB类型的特定配置
 type MongoDBConfig struct {
 	ConnectionURI string `json:"connection_uri,omitempty"` // 完整连接 URI（优先于手动配置）
@@ -255,6 +274,10 @@ func (c *DatabaseConfig) GetPassword() string    { return c.Password }
 func (c *RedisConfig) GetCredentialID() int64 { return c.CredentialID }
 func (c *RedisConfig) GetPassword() string    { return c.Password }
 
+// EtcdConfig PasswordSource implementation
+func (c *EtcdConfig) GetCredentialID() int64 { return c.CredentialID }
+func (c *EtcdConfig) GetPassword() string    { return c.Password }
+
 // MongoDBConfig PasswordSource implementation
 func (c *MongoDBConfig) GetCredentialID() int64 { return c.CredentialID }
 func (c *MongoDBConfig) GetPassword() string    { return c.Password }
@@ -342,6 +365,11 @@ func (a *Asset) IsSerial() bool {
 	return a.Type == AssetTypeSerial
 }
 
+// IsEtcd 判断是否etcd类型
+func (a *Asset) IsEtcd() bool {
+	return a.Type == AssetTypeEtcd
+}
+
 // GetSSHConfig 解析SSH配置
 func (a *Asset) GetSSHConfig() (*SSHConfig, error) {
 	if !a.IsSSH() {
@@ -389,6 +417,24 @@ func (a *Asset) GetRedisConfig() (*RedisConfig, error) {
 // SetRedisConfig 序列化Redis配置到Config字段
 func (a *Asset) SetRedisConfig(cfg *RedisConfig) error {
 	s, err := jsonfield.Marshal(cfg, "Redis配置")
+	if err != nil {
+		return err
+	}
+	a.Config = s
+	return nil
+}
+
+// GetEtcdConfig 解析etcd配置
+func (a *Asset) GetEtcdConfig() (*EtcdConfig, error) {
+	if !a.IsEtcd() {
+		return nil, errors.New("资产不是etcd类型")
+	}
+	return jsonfield.Unmarshal[EtcdConfig](a.Config, "etcd配置")
+}
+
+// SetEtcdConfig 序列化etcd配置到Config字段
+func (a *Asset) SetEtcdConfig(cfg *EtcdConfig) error {
+	s, err := jsonfield.Marshal(cfg, "etcd配置")
 	if err != nil {
 		return err
 	}
