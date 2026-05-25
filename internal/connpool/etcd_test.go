@@ -52,3 +52,33 @@ func TestBuildEtcdClientConfig_CustomDialTimeout(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 12*time.Second, c.DialTimeout)
 }
+
+func TestEtcdPool_InvalidateRemovesEntry(t *testing.T) {
+	pool := newEtcdPool()
+	pool.put(1, &etcdEntry{client: nil, lastUsed: time.Now().Unix()})
+	pool.put(2, &etcdEntry{client: nil, lastUsed: time.Now().Unix()})
+	assert.NotNil(t, pool.get(1))
+
+	pool.invalidate(1)
+	assert.Nil(t, pool.get(1))
+	assert.NotNil(t, pool.get(2))
+}
+
+func TestEtcdPool_GCStaleEntries(t *testing.T) {
+	pool := newEtcdPool()
+	pool.put(1, &etcdEntry{lastUsed: time.Now().Add(-10 * time.Minute).Unix()})
+	pool.put(2, &etcdEntry{lastUsed: time.Now().Unix()})
+
+	pool.gc(5 * time.Minute)
+	assert.Nil(t, pool.get(1))
+	assert.NotNil(t, pool.get(2))
+}
+
+func TestEtcdPool_GetRefreshesLastUsed(t *testing.T) {
+	pool := newEtcdPool()
+	old := time.Now().Add(-3 * time.Minute).Unix()
+	pool.put(1, &etcdEntry{lastUsed: old})
+	pool.get(1) // 此 get 应刷新 lastUsed
+	e := pool.get(1)
+	assert.True(t, e.lastUsed > old, "lastUsed should advance after get")
+}
