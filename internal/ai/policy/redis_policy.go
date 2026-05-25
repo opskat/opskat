@@ -99,6 +99,13 @@ func CheckRedisPolicy(ctx context.Context, policy *asset_entity.RedisPolicy, cmd
 	return checkRedisPolicyRules(ctx, merged, cmd)
 }
 
+// CheckEtcdPolicy 检查 etcd 命令是否符合策略（EtcdPolicy 是 RedisPolicy 的类型别名，
+// 命令格式 "op [key] [value]" 与 Redis "cmd [args]" 同构，复用 MatchRedisRule 匹配）。
+func CheckEtcdPolicy(ctx context.Context, policy *asset_entity.EtcdPolicy, cmd string) aictx.CheckResult {
+	merged := EffectiveEtcdPolicy(ctx, policy)
+	return checkRedisPolicyRules(ctx, merged, cmd)
+}
+
 // checkRedisPolicyRules 检查 Redis 命令是否符合给定策略（不合并默认策略）
 func checkRedisPolicyRules(ctx context.Context, policy *asset_entity.RedisPolicy, cmd string) aictx.CheckResult {
 	if policy == nil {

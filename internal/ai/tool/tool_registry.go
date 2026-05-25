@@ -45,6 +45,7 @@ func AllToolDefs() []ToolDef {
 		{"exec_sql", helper.HandleExecSQL},
 		{"exec_redis", helper.HandleExecRedis},
 		{"exec_mongo", helper.HandleExecMongo},
+		{"exec_etcd", helper.HandleExecEtcd},
 		{"exec_k8s", handleExecK8s},
 		{"kafka_cluster", helper.HandleKafkaCluster},
 		{"kafka_topic", helper.HandleKafkaTopic},

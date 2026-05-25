@@ -262,6 +262,8 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 		approvalType = "sql"
 	case asset_entity.AssetTypeRedis:
 		approvalType = "redis"
+	case asset_entity.AssetTypeEtcd:
+		approvalType = "etcd"
 	case asset_entity.AssetTypeMongoDB:
 		approvalType = "mongo"
 	case asset_entity.AssetTypeKafka:
@@ -414,6 +416,33 @@ func collectRedisPolicies(ctx context.Context, asset *asset_entity.Asset) *asset
 	}
 	// 合并：allow_list 取第一个非空（资产优先），deny_list 全部合并
 	merged := &asset_entity.RedisPolicy{}
+	for _, p := range policies {
+		if len(merged.AllowList) == 0 && len(p.AllowList) > 0 {
+			merged.AllowList = p.AllowList
+		}
+		merged.DenyList = policy.AppendUnique(merged.DenyList, p.DenyList...)
+	}
+	return merged
+}
+
+// collectEtcdPolicies 收集资产 + 组链的 etcd 权限策略并合并
+// EtcdPolicy 与 RedisPolicy 同构（类型别名），但策略组类型为 etcd，须用 ResolveEtcdGroups 解析。
+func collectEtcdPolicies(ctx context.Context, asset *asset_entity.Asset) *asset_entity.EtcdPolicy {
+	holders := policyHoldersForAsset(ctx, asset)
+	policies := collectPoliciesFromChain(holders, func(h policyent.Holder) (*asset_entity.EtcdPolicy, error) {
+		return h.GetEtcdPolicy()
+	})
+	if len(policies) == 0 {
+		return nil
+	}
+	for _, p := range policies {
+		if len(p.Groups) > 0 {
+			grpAllow, grpDeny := policy.ResolveEtcdGroups(ctx, p.Groups)
+			p.AllowList = append(p.AllowList, grpAllow...)
+			p.DenyList = append(p.DenyList, grpDeny...)
+		}
+	}
+	merged := &asset_entity.EtcdPolicy{}
 	for _, p := range policies {
 		if len(merged.AllowList) == 0 && len(p.AllowList) > 0 {
 			merged.AllowList = p.AllowList

@@ -462,6 +462,90 @@ func TestCheckPermission_Redis(t *testing.T) {
 	})
 }
 
+func TestCheckPermission_Etcd(t *testing.T) {
+	Convey("CheckPermission Etcd", t, func() {
+		ctx, mockAsset, _ := setupPolicyTest(t)
+
+		Convey("allow list match → aictx.Allow", func() {
+			asset := &asset_entity.Asset{
+				ID:   1,
+				Type: asset_entity.AssetTypeEtcd,
+				CmdPolicy: mustJSON(asset_entity.EtcdPolicy{
+					AllowList: []string{"get *", "member list"},
+				}),
+			}
+			mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+			result := CheckPermission(ctx, asset_entity.AssetTypeEtcd, 1, "get /config")
+			So(result.Decision, ShouldEqual, aictx.Allow)
+			So(result.DecisionSource, ShouldEqual, aictx.SourcePolicyAllow)
+		})
+
+		Convey("deny list match → aictx.Deny", func() {
+			asset := &asset_entity.Asset{
+				ID:   1,
+				Type: asset_entity.AssetTypeEtcd,
+				CmdPolicy: mustJSON(asset_entity.EtcdPolicy{
+					DenyList: []string{"member remove *"},
+				}),
+			}
+			mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+			result := CheckPermission(ctx, asset_entity.AssetTypeEtcd, 1, "member remove abc")
+			So(result.Decision, ShouldEqual, aictx.Deny)
+			So(result.DecisionSource, ShouldEqual, aictx.SourcePolicyDeny)
+		})
+
+		Convey("aictx.NeedConfirm returns etcd commands as HintRules", func() {
+			asset := &asset_entity.Asset{
+				ID:   1,
+				Type: asset_entity.AssetTypeEtcd,
+				CmdPolicy: mustJSON(asset_entity.EtcdPolicy{
+					AllowList: []string{"get *", "member list"},
+				}),
+			}
+			mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+			result := CheckPermission(ctx, asset_entity.AssetTypeEtcd, 1, "put /flags/x true")
+			So(result.Decision, ShouldEqual, aictx.NeedConfirm)
+			So(result.HintRules, ShouldContain, "get *")
+			So(result.HintRules, ShouldContain, "member list")
+		})
+
+		Convey("grant match bypasses aictx.NeedConfirm", func() {
+			asset := &asset_entity.Asset{
+				ID:   1,
+				Type: asset_entity.AssetTypeEtcd,
+				CmdPolicy: mustJSON(asset_entity.EtcdPolicy{
+					AllowList: []string{"get *"},
+				}),
+			}
+			mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+			stubGrant := newStubGrantRepo()
+			origGrant := grant_repo.Grant()
+			grant_repo.RegisterGrant(stubGrant)
+			t.Cleanup(func() {
+				if origGrant != nil {
+					grant_repo.RegisterGrant(origGrant)
+				}
+			})
+
+			stubGrant.sessions["sess-etcd"] = &grant_entity.GrantSession{
+				ID: "sess-etcd", Status: grant_entity.GrantStatusApproved,
+			}
+			stubGrant.items["sess-etcd"] = []*grant_entity.GrantItem{
+				{GrantSessionID: "sess-etcd", AssetID: 1, Command: "put *"},
+			}
+
+			grantCtx := aictx.WithSessionID(ctx, "sess-etcd")
+			result := CheckPermission(grantCtx, asset_entity.AssetTypeEtcd, 1, "put /flags/x true")
+			So(result.Decision, ShouldEqual, aictx.Allow)
+			So(result.DecisionSource, ShouldEqual, aictx.SourceGrantAllow)
+		})
+	})
+}
+
 func TestCheckPermission_K8s(t *testing.T) {
 	Convey("CheckPermission K8s", t, func() {
 		ctx, mockAsset, _ := setupPolicyTest(t)

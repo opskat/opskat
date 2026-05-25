@@ -29,7 +29,7 @@ func TestTools_RegistryShape(t *testing.T) {
 			// exec
 			"run_command", "upload_file", "download_file", "request_permission", "batch_command",
 			// data
-			"exec_sql", "exec_redis", "exec_mongo", "exec_k8s",
+			"exec_sql", "exec_redis", "exec_mongo", "exec_k8s", "exec_etcd",
 			// kafka
 			"kafka_cluster", "kafka_topic", "kafka_consumer_group", "kafka_acl",
 			"kafka_schema", "kafka_connect", "kafka_message",
@@ -46,7 +46,7 @@ func TestTools_RegistryShape(t *testing.T) {
 		Convey("命令类工具标 Serial", func() {
 			serialNames := []string{
 				"run_command", "upload_file", "download_file", "request_permission",
-				"exec_sql", "exec_redis", "exec_mongo", "exec_k8s",
+				"exec_sql", "exec_redis", "exec_mongo", "exec_k8s", "exec_etcd",
 				"exec_tool",
 				"kafka_cluster", "kafka_topic", "kafka_consumer_group", "kafka_acl",
 				"kafka_schema", "kafka_connect", "kafka_message",

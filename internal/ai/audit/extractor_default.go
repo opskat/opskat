@@ -1,6 +1,10 @@
 package audit
 
-import "github.com/opskat/opskat/internal/ai/aictx"
+import (
+	"strings"
+
+	"github.com/opskat/opskat/internal/ai/aictx"
+)
 
 // 注册非协议特有的常见工具提取器；协议特有(kafka_*, exec_k8s)在各自子包 init() 注册。
 func init() {
@@ -14,6 +18,21 @@ func init() {
 	RegisterExtractor("exec_sql", func(a map[string]any) string { return aictx.ArgString(a, "sql") })
 	RegisterExtractor("exec_redis", func(a map[string]any) string { return aictx.ArgString(a, "command") })
 	RegisterExtractor("exec_mongo", func(a map[string]any) string { return aictx.ArgString(a, "operation") })
+	RegisterExtractor("exec_etcd", func(a map[string]any) string {
+		// 与 helper.FormatEtcdCommand 保持等价；audit 不便引 helper（避免循环），手写一份。
+		op := strings.ReplaceAll(aictx.ArgString(a, "op"), "_", " ")
+		parts := []string{op}
+		if k := aictx.ArgString(a, "key"); k != "" {
+			parts = append(parts, k)
+		}
+		if v := aictx.ArgString(a, "value"); v != "" {
+			parts = append(parts, v)
+		}
+		if prefix, ok := a["prefix"].(bool); ok && prefix {
+			parts = append(parts, "--prefix")
+		}
+		return strings.Join(parts, " ")
+	})
 	RegisterExtractor("request_permission", func(a map[string]any) string {
 		v := aictx.ArgString(a, "items")
 		if reason := aictx.ArgString(a, "reason"); reason != "" {

@@ -40,6 +40,8 @@ func CheckPermission(ctx context.Context, assetType string, assetID int64, comma
 		return checkDatabasePermission(ctx, assetID, command)
 	case asset_entity.AssetTypeRedis:
 		return checkRedisPermission(ctx, assetID, command)
+	case asset_entity.AssetTypeEtcd:
+		return checkEtcdPermission(ctx, assetID, command)
 	case asset_entity.AssetTypeMongoDB:
 		return checkMongoDBPermission(ctx, assetID, command)
 	case asset_entity.AssetTypeKafka:
@@ -196,6 +198,39 @@ func checkRedisPermission(ctx context.Context, assetID int64, command string) ai
 
 	// aictx.NeedConfirm：收集允许的 Redis 命令作为提示
 	merged := policy.EffectiveRedisPolicy(ctx, mergedPolicy)
+	if len(merged.AllowList) > 0 {
+		result.HintRules = merged.AllowList
+	}
+	return result
+}
+
+// --- Etcd ---
+
+// checkEtcdPermission 镜像 Redis 策略检查流程：组通用 → etcd 策略 → grant 匹配。
+// EtcdPolicy 是 RedisPolicy 的类型别名，匹配规则复用 MatchRedisRule。
+func checkEtcdPermission(ctx context.Context, assetID int64, command string) aictx.CheckResult {
+	groupResult := policy.CheckGroupGenericPolicy(ctx, assetID, []string{command}, policy.MatchRedisRule)
+	if groupResult.Decision == aictx.Deny {
+		return groupResult
+	}
+
+	asset := resolveAssetForPolicy(ctx, assetID)
+	mergedPolicy := collectEtcdPolicies(ctx, asset)
+	result := policy.CheckEtcdPolicy(ctx, mergedPolicy, command)
+
+	if result.Decision == aictx.NeedConfirm && groupResult.Decision == aictx.Allow {
+		return groupResult
+	}
+
+	if result.Decision != aictx.NeedConfirm {
+		return result
+	}
+
+	if grantResult := matchGrantForAsset(ctx, assetID, command); grantResult != nil {
+		return *grantResult
+	}
+
+	merged := policy.EffectiveEtcdPolicy(ctx, mergedPolicy)
 	if len(merged.AllowList) > 0 {
 		result.HintRules = merged.AllowList
 	}
