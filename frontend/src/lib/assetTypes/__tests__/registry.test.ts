@@ -32,6 +32,7 @@ describe("AssetType Registry", () => {
       "kafka",
       "k8s",
       "serial",
+      "etcd",
     ]);
   });
 
