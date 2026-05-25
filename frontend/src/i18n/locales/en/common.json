@@ -2298,5 +2298,41 @@
       "empty": "No prompt snippets yet",
       "openManager": "Create in Snippets page"
     }
+  },
+  "etcd": {
+    "form": {
+      "endpoints": "Endpoints",
+      "endpointsHint": "At least 1 host:port, one per line",
+      "addEndpoint": "Add endpoint",
+      "tlsSection": "TLS / mTLS",
+      "advancedSection": "Advanced",
+      "dialTimeout": "Dial timeout (s)",
+      "commandTimeout": "Command timeout (s)",
+      "test": "Test connection",
+      "tlsServerName": "Server name",
+      "tlsCAFile": "CA certificate path",
+      "tlsCertFile": "Client certificate path",
+      "tlsKeyFile": "Client private key path",
+      "tlsInsecure": "Skip certificate verification"
+    },
+    "tree": {
+      "title": "Keyspace",
+      "filterPlaceholder": "Filter key",
+      "truncated": "+{{count}} hidden, limit={{limit}}"
+    },
+    "query": {
+      "placeholder": "get /config --prefix",
+      "templates": "Templates",
+      "execute": "Execute",
+      "history": "History",
+      "deleteConfirmTitle": "Confirm delete",
+      "deleteConfirmBody": "Will delete key: {{key}}",
+      "deletePrefixWarning": "Bulk delete via --prefix. Please confirm."
+    },
+    "error": {
+      "endpointsRequired": "At least one endpoint required",
+      "compactionRev": "Revision compacted; oldest available: {{rev}}",
+      "connFailed": "Failed to connect to etcd"
+    }
   }
 }

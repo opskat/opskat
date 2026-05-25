@@ -2298,5 +2298,41 @@
       "empty": "还没有 prompt 片段",
       "openManager": "到代码片段页创建"
     }
+  },
+  "etcd": {
+    "form": {
+      "endpoints": "Endpoints",
+      "endpointsHint": "至少 1 条 host:port，可多行",
+      "addEndpoint": "添加 endpoint",
+      "tlsSection": "TLS / mTLS",
+      "advancedSection": "高级",
+      "dialTimeout": "Dial 超时（秒）",
+      "commandTimeout": "命令超时（秒）",
+      "test": "测试连接",
+      "tlsServerName": "Server Name",
+      "tlsCAFile": "CA 证书路径",
+      "tlsCertFile": "客户端证书路径",
+      "tlsKeyFile": "客户端私钥路径",
+      "tlsInsecure": "跳过证书校验"
+    },
+    "tree": {
+      "title": "Keyspace",
+      "filterPlaceholder": "过滤 key",
+      "truncated": "+{{count}} 隐藏，limit={{limit}}"
+    },
+    "query": {
+      "placeholder": "get /config --prefix",
+      "templates": "模板",
+      "execute": "执行",
+      "history": "历史",
+      "deleteConfirmTitle": "确认删除",
+      "deleteConfirmBody": "将删除 key: {{key}}",
+      "deletePrefixWarning": "即将通过 --prefix 批量删除，请确认。"
+    },
+    "error": {
+      "endpointsRequired": "至少需要 1 个 endpoint",
+      "compactionRev": "该版本已被压缩，最早可用版本: {{rev}}",
+      "connFailed": "连接 etcd 失败"
+    }
   }
 }
