@@ -176,3 +176,47 @@ func TestGroup_RedisPolicy(t *testing.T) {
 		})
 	})
 }
+
+func TestGroup_EtcdPolicy(t *testing.T) {
+	Convey("etcd 权限策略序列化与反序列化", t, func() {
+		Convey("设置策略后可正确读取", func() {
+			g := &Group{Name: "测试分组"}
+			p := &policy.EtcdPolicy{
+				AllowList: []string{"get *", "put *"},
+				DenyList:  []string{"member remove *"},
+				Groups:    []string{policy.BuiltinEtcdReadOnly, policy.BuiltinEtcdDangerousDeny},
+			}
+			err := g.SetEtcdPolicy(p)
+			assert.NoError(t, err)
+
+			got, err := g.GetEtcdPolicy()
+			assert.NoError(t, err)
+			assert.Equal(t, p.AllowList, got.AllowList)
+			assert.Equal(t, p.DenyList, got.DenyList)
+			assert.Equal(t, p.Groups, got.Groups)
+		})
+
+		Convey("设置空策略时清空字段", func() {
+			g := &Group{Name: "测试分组"}
+			err := g.SetEtcdPolicy(&policy.EtcdPolicy{
+				AllowList: []string{"get *"},
+			})
+			assert.NoError(t, err)
+			assert.NotEmpty(t, g.EtdPolicy)
+
+			err = g.SetEtcdPolicy(&policy.EtcdPolicy{})
+			assert.NoError(t, err)
+			assert.Empty(t, g.EtdPolicy)
+		})
+
+		Convey("字段为空时GetEtcdPolicy返回零值", func() {
+			g := &Group{Name: "测试分组"}
+			got, err := g.GetEtcdPolicy()
+			assert.NoError(t, err)
+			assert.NotNil(t, got)
+			assert.Empty(t, got.AllowList)
+			assert.Empty(t, got.DenyList)
+			assert.Empty(t, got.Groups)
+		})
+	})
+}

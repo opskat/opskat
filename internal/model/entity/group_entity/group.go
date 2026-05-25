@@ -20,6 +20,7 @@ type Group struct {
 	MgoPolicy   string `gorm:"column:mongo_policy;type:text"`
 	KfkPolicy   string `gorm:"column:kafka_policy;type:text"`
 	K8sPol      string `gorm:"column:k8s_policy;type:text"`
+	EtdPolicy   string `gorm:"column:etcd_policy;type:text"`
 	SortOrder   int    `gorm:"column:sort_order;default:0"`
 	Createtime  int64  `gorm:"column:createtime"`
 	Updatetime  int64  `gorm:"column:updatetime"`
@@ -142,5 +143,22 @@ func (g *Group) SetK8sPolicy(p *policy.K8sPolicy) error {
 		return err
 	}
 	g.K8sPol = s
+	return nil
+}
+
+// GetEtcdPolicy 解析 etcd 权限策略
+func (g *Group) GetEtcdPolicy() (*policy.EtcdPolicy, error) {
+	return jsonfield.UnmarshalOrDefault[policy.EtcdPolicy](g.EtdPolicy, "etcd权限策略")
+}
+
+// SetEtcdPolicy 序列化 etcd 权限策略
+func (g *Group) SetEtcdPolicy(p *policy.EtcdPolicy) error {
+	s, err := jsonfield.MarshalOrClear(p, func(v *policy.EtcdPolicy) bool {
+		return v.IsEmpty()
+	}, "etcd权限策略")
+	if err != nil {
+		return err
+	}
+	g.EtdPolicy = s
 	return nil
 }

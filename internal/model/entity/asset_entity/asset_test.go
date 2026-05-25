@@ -516,3 +516,36 @@ func TestAsset_CanConnectEtcd(t *testing.T) {
 		assert.False(t, a.CanConnect())
 	})
 }
+
+func TestAsset_GetSetEtcdPolicy(t *testing.T) {
+	convey.Convey("Get/SetEtcdPolicy 往返", t, func() {
+		a := &Asset{Type: AssetTypeEtcd}
+		p := &EtcdPolicy{
+			AllowList: []string{"get *", "put *"},
+			DenyList:  []string{"member remove *"},
+		}
+		assert.NoError(t, a.SetEtcdPolicy(p))
+		got, err := a.GetEtcdPolicy()
+		assert.NoError(t, err)
+		assert.Equal(t, p.AllowList, got.AllowList)
+		assert.Equal(t, p.DenyList, got.DenyList)
+	})
+
+	convey.Convey("SetEtcdPolicy 空策略清空字段", t, func() {
+		a := &Asset{Type: AssetTypeEtcd}
+		assert.NoError(t, a.SetEtcdPolicy(&EtcdPolicy{AllowList: []string{"get *"}}))
+		assert.NotEmpty(t, a.CmdPolicy)
+		assert.NoError(t, a.SetEtcdPolicy(&EtcdPolicy{}))
+		assert.Empty(t, a.CmdPolicy)
+	})
+
+	convey.Convey("CmdPolicy 为空时 GetEtcdPolicy 返回零值", t, func() {
+		a := &Asset{Type: AssetTypeEtcd}
+		got, err := a.GetEtcdPolicy()
+		assert.NoError(t, err)
+		assert.NotNil(t, got)
+		assert.Empty(t, got.AllowList)
+		assert.Empty(t, got.DenyList)
+		assert.Empty(t, got.Groups)
+	})
+}

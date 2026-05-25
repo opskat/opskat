@@ -26,6 +26,7 @@ func RunMigrations(db *gorm.DB) error {
 		migration202605060001(),
 		migration202605070001(),
 		migration202605120001(),
+		migration202605260001(),
 	})
 	return m.Migrate()
 }

@@ -324,6 +324,12 @@ type K8sPolicy = policy.K8sPolicy
 // DefaultK8sPolicy 返回默认 K8S 权限策略
 var DefaultK8sPolicy = policy.DefaultK8sPolicy
 
+// EtcdPolicy etcd 权限策略（类型别名，定义在 policy 包）
+type EtcdPolicy = policy.EtcdPolicy
+
+// DefaultEtcdPolicy 返回默认 etcd 权限策略
+var DefaultEtcdPolicy = policy.DefaultEtcdPolicy
+
 // SerialConfig PasswordSource implementation（串口无密码，返回空）
 func (c *SerialConfig) GetCredentialID() int64 { return 0 }
 func (c *SerialConfig) GetPassword() string    { return "" }
@@ -592,6 +598,23 @@ func (a *Asset) SetK8sPolicy(p *K8sPolicy) error {
 	s, err := jsonfield.MarshalOrClear(p, func(v *K8sPolicy) bool {
 		return v.IsEmpty()
 	}, "K8S权限策略")
+	if err != nil {
+		return err
+	}
+	a.CmdPolicy = s
+	return nil
+}
+
+// GetEtcdPolicy 解析etcd权限策略
+func (a *Asset) GetEtcdPolicy() (*EtcdPolicy, error) {
+	return jsonfield.UnmarshalOrDefault[EtcdPolicy](a.CmdPolicy, "etcd权限策略")
+}
+
+// SetEtcdPolicy 序列化etcd权限策略
+func (a *Asset) SetEtcdPolicy(p *EtcdPolicy) error {
+	s, err := jsonfield.MarshalOrClear(p, func(v *EtcdPolicy) bool {
+		return v.IsEmpty()
+	}, "etcd权限策略")
 	if err != nil {
 		return err
 	}
