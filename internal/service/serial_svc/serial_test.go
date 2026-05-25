@@ -263,6 +263,15 @@ func TestSessionExecCommandReturnsErrorWhenSessionClosed(t *testing.T) {
 	capture := sess.cmdCapture
 	sess.mu.Unlock()
 	capture.Append([]byte("partial output"))
+
+	// Ensure ExecCommand has consumed the appended chunk before closing the session.
+	// Otherwise, close and signal delivery may race on slower CI machines, making
+	// this test occasionally observe empty output.
+	require.Eventually(t, func() bool {
+		capture.mu.Lock()
+		defer capture.mu.Unlock()
+		return len(capture.chunks) == 0
+	}, time.Second, 5*time.Millisecond)
 	sess.Close()
 
 	select {
