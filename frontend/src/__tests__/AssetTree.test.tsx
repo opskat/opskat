@@ -180,6 +180,18 @@ describe("AssetTree double-click → connection flow", () => {
       ],
       activeTabId: null,
     });
+    useTerminalStore.setState({
+      tabData: {
+        "session-abc": {
+          splitTree: { type: "terminal", sessionId: "session-abc" },
+          activePaneId: "session-abc",
+          panes: {
+            "session-abc": { sessionId: "session-abc", transport: "ssh", connected: true, connectedAt: Date.now() },
+          },
+          directoryFollowMode: "off",
+        },
+      },
+    });
 
     const sshAsset = makeAsset(1, "ssh", "Web Server");
     const { handleConnectAsset } = makeHandleConnectAsset();

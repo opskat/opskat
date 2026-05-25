@@ -130,6 +130,17 @@ export interface ConnectionState {
   };
 }
 
+function isReusableAssetTerminalTab(
+  tabId: string,
+  tabData: Record<string, TerminalTabData>,
+  connections: Record<string, ConnectionState>
+): boolean {
+  const data = tabData[tabId];
+  if (!data) return false;
+  if (Object.keys(data.panes).length > 0) return true;
+  return data.splitTree.type === "connecting" && !!connections[tabId];
+}
+
 // Helper: get all session IDs from a split tree (skips pending/connecting)
 export function getSessionIds(node: SplitNode): string[] {
   if (node.type === "terminal") return [node.sessionId];
@@ -424,16 +435,29 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
     const tabStore = useTabStore.getState();
 
-    // If there's already a tab for this asset (connected or connecting), switch to it
+    // 已有可复用的健康 tab（已连接或连接中）时直接复用。
+    // 命中的 tab 若状态残缺（例如缺少 tabData/panes），先关闭再新建连接，避免 UI 卡空白。
     if (!forceNew) {
-      const existingTab = tabStore.tabs.find((t) => {
+      const assetTabs = tabStore.tabs.filter((t) => {
         if (t.type !== "terminal") return false;
         const m = t.meta as TerminalTabMeta;
         return m.assetId === assetId;
       });
-      if (existingTab) {
-        tabStore.activateTab(existingTab.id);
-        return existingTab.id;
+      if (assetTabs.length > 0) {
+        const state = get();
+        const reusableTab = assetTabs.find((t) =>
+          isReusableAssetTerminalTab(t.id, state.tabData, state.connections)
+        );
+        if (reusableTab) {
+          tabStore.activateTab(reusableTab.id);
+          return reusableTab.id;
+        }
+
+        // 命中的 tab 全部是 stale：关闭后继续走新建连接。
+        const staleTabIds = assetTabs.map((t) => t.id);
+        for (const staleTabID of staleTabIds) {
+          tabStore.closeTab(staleTabID);
+        }
       }
     }
 
@@ -509,7 +533,33 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
           let pendingInput: string | undefined;
           set((s) => {
             const data = s.tabData[connectionId];
-            if (!data) return s;
+            if (!data) {
+              // 竞态兜底：connected 事件到达前，tabData 可能已丢失。
+              // 这里重建最小可用终端状态，避免底部工具栏和面板不渲染。
+              const fallbackTransport: TerminalTransport = isSerial ? "serial" : "ssh";
+              const fallbackTabData: Record<string, TerminalTabData> = {
+                ...s.tabData,
+                [sessionId]: {
+                  splitTree: { type: "terminal" as const, sessionId },
+                  activePaneId: sessionId,
+                  panes: {
+                    [sessionId]: {
+                      sessionId,
+                      transport: fallbackTransport,
+                      connected: true,
+                      connectedAt: Date.now(),
+                    },
+                  },
+                  directoryFollowMode: "off" as const,
+                },
+              };
+              delete fallbackTabData[connectionId];
+
+              const newConnections = { ...s.connections };
+              delete newConnections[connectionId];
+
+              return { tabData: fallbackTabData, connections: newConnections };
+            }
 
             pendingInput = data.pendingInput;
 

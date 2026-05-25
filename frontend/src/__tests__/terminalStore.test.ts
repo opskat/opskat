@@ -144,6 +144,14 @@ describe("terminalStore.connect", () => {
       activeTabId: null,
     });
     useTerminalStore.setState({
+      tabData: {
+        "conn-pending": {
+          splitTree: { type: "connecting", connectionId: "conn-pending" },
+          activePaneId: "conn-pending",
+          panes: {},
+          directoryFollowMode: "off",
+        },
+      },
       connections: {
         "conn-pending": {
           connectionId: "conn-pending",
@@ -164,6 +172,42 @@ describe("terminalStore.connect", () => {
     expect(ConnectSSHAsync).not.toHaveBeenCalled();
     expect(useTabStore.getState().activeTabId).toBe("conn-pending");
     expect(result).toBe("conn-pending");
+  });
+
+  it("should drop stale existing tab and create a new connection", async () => {
+    useTabStore.setState({
+      tabs: [
+        {
+          id: "stale-tab",
+          type: "terminal",
+          label: "Server 3",
+          meta: {
+            type: "terminal",
+            assetId: 3,
+            assetName: "Server 3",
+            assetIcon: "",
+            host: "10.0.0.3",
+            port: 22,
+            username: "root",
+          },
+        },
+      ],
+      activeTabId: "stale-tab",
+    });
+    useTerminalStore.setState({
+      tabData: {},
+      connections: {},
+    });
+
+    vi.mocked(ConnectSSHAsync).mockResolvedValue("conn-3");
+
+    const result = await useTerminalStore.getState().connect(makeSSHAsset(3));
+
+    expect(ConnectSSHAsync).toHaveBeenCalledTimes(1);
+    expect(result).toBe("conn-3");
+    expect(useTabStore.getState().tabs).toHaveLength(1);
+    expect(useTabStore.getState().tabs[0].id).toBe("conn-3");
+    expect(useTabStore.getState().activeTabId).toBe("conn-3");
   });
 
   it("should allow different assets to open separate tabs", async () => {
@@ -248,6 +292,18 @@ describe("terminalStore.connect", () => {
         },
       ],
       activeTabId: null,
+    });
+    useTerminalStore.setState({
+      tabData: {
+        "session-abc": {
+          splitTree: { type: "terminal", sessionId: "session-abc" },
+          activePaneId: "session-abc",
+          panes: {
+            "session-abc": { sessionId: "session-abc", transport: "ssh", connected: true, connectedAt: Date.now() },
+          },
+          directoryFollowMode: "off",
+        },
+      },
     });
 
     const asset = makeSSHAsset(1);
@@ -382,6 +438,34 @@ describe("terminalStore sync listener lifecycle", () => {
     expect(EventsOn).toHaveBeenCalledWith("ssh:sync:s1", expect.any(Function));
     expect(GetSSHSyncState).toHaveBeenCalledWith("s1");
     expect(useTerminalStore.getState().sessionSync.s1?.cwd).toBe("/var/www");
+  });
+
+  it("rebuilds terminal tabData when connected event arrives after tabData loss", async () => {
+    vi.mocked(ConnectSSHAsync).mockResolvedValueOnce("conn-race");
+    vi.mocked(GetSSHSyncState).mockResolvedValueOnce(makeSyncState({ sessionId: "s-race", cwd: "/srv/race" }));
+
+    await useTerminalStore.getState().connect(makeSSHAsset(9));
+
+    useTerminalStore.setState((state) => {
+      const next = { ...state.tabData };
+      delete next["conn-race"];
+      return { tabData: next };
+    });
+
+    const connectHandler = eventHandlers.get("ssh:connect:conn-race");
+    expect(connectHandler).toEqual(expect.any(Function));
+    if (!connectHandler) {
+      throw new Error("missing connect handler for conn-race");
+    }
+
+    connectHandler({ type: "connected", sessionId: "s-race" });
+    await Promise.resolve();
+
+    const state = useTerminalStore.getState();
+    expect(state.tabData["s-race"]).toBeDefined();
+    expect(state.tabData["s-race"]?.activePaneId).toBe("s-race");
+    expect(state.tabData["s-race"]?.panes["s-race"]?.connected).toBe(true);
+    expect(useTabStore.getState().tabs.some((t) => t.id === "s-race")).toBe(true);
   });
 
   it("does not register a duplicate sync listener for the same session", async () => {
