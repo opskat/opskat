@@ -440,34 +440,6 @@ describe("terminalStore sync listener lifecycle", () => {
     expect(useTerminalStore.getState().sessionSync.s1?.cwd).toBe("/var/www");
   });
 
-  it("rebuilds terminal tabData when connected event arrives after tabData loss", async () => {
-    vi.mocked(ConnectSSHAsync).mockResolvedValueOnce("conn-race");
-    vi.mocked(GetSSHSyncState).mockResolvedValueOnce(makeSyncState({ sessionId: "s-race", cwd: "/srv/race" }));
-
-    await useTerminalStore.getState().connect(makeSSHAsset(9));
-
-    useTerminalStore.setState((state) => {
-      const next = { ...state.tabData };
-      delete next["conn-race"];
-      return { tabData: next };
-    });
-
-    const connectHandler = eventHandlers.get("ssh:connect:conn-race");
-    expect(connectHandler).toEqual(expect.any(Function));
-    if (!connectHandler) {
-      throw new Error("missing connect handler for conn-race");
-    }
-
-    connectHandler({ type: "connected", sessionId: "s-race" });
-    await Promise.resolve();
-
-    const state = useTerminalStore.getState();
-    expect(state.tabData["s-race"]).toBeDefined();
-    expect(state.tabData["s-race"]?.activePaneId).toBe("s-race");
-    expect(state.tabData["s-race"]?.panes["s-race"]?.connected).toBe(true);
-    expect(useTabStore.getState().tabs.some((t) => t.id === "s-race")).toBe(true);
-  });
-
   it("does not register a duplicate sync listener for the same session", async () => {
     const connectHandler = await connectAndEmitSuccess("conn-1", "s1");
 
