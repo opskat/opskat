@@ -119,16 +119,92 @@ func TestDispatchDel_WithPrefix(t *testing.T) {
 	assert.Equal(t, int64(3), res.Count)
 }
 
-func TestDispatch_RoutingAndUnsupported(t *testing.T) {
+func TestDispatchLeaseGrant(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	kv := mock_kv.NewMockKV(ctrl)
-	kv.EXPECT().Get(gomock.Any(), "/r", gomock.Any()).Return(&clientv3.GetResponse{Header: &etcdserverpb.ResponseHeader{}}, nil)
+	lease := mock_kv.NewMockLease(ctrl)
+	lease.EXPECT().
+		Grant(gomock.Any(), int64(60)).
+		Return(&clientv3.LeaseGrantResponse{ID: clientv3.LeaseID(0xabc), TTL: 60}, nil)
 
-	// Dispatch 接受 KV 接口(不是 *clientv3.Client) — 让 Dispatch 签名按测试推断
-	res, err := Dispatch(context.Background(), kv, &ExecRequest{Op: "get", Key: "/r"})
+	res, err := dispatchLeaseGrant(context.Background(), lease, &ExecRequest{Op: "lease_grant", Args: map[string]any{"ttl": int64(60)}})
 	require.NoError(t, err)
-	assert.Equal(t, "get", res.Op)
+	assert.Equal(t, "lease_grant", res.Op)
+	require.Len(t, res.KVs, 1)
+	assert.Equal(t, int64(0xabc), res.KVs[0].Lease)
+}
 
-	_, err = Dispatch(context.Background(), kv, &ExecRequest{Op: "lease_grant", Args: map[string]any{"ttl": int64(60)}})
-	assert.Error(t, err, "lease_grant should be unsupported in Task 10 (handled in Task 11)")
+func TestDispatchLeaseGrant_MissingTTL(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	lease := mock_kv.NewMockLease(ctrl)
+	// Grant should NOT be called — ttl missing
+	res, err := dispatchLeaseGrant(context.Background(), lease, &ExecRequest{Op: "lease_grant"})
+	assert.Nil(t, res)
+	assert.Error(t, err)
+}
+
+func TestDispatchLeaseRevoke(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	lease := mock_kv.NewMockLease(ctrl)
+	lease.EXPECT().
+		Revoke(gomock.Any(), clientv3.LeaseID(0xabc)).
+		Return(&clientv3.LeaseRevokeResponse{}, nil)
+
+	res, err := dispatchLeaseRevoke(context.Background(), lease, &ExecRequest{Op: "lease_revoke", LeaseID: 0xabc})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), res.Count)
+}
+
+func TestDispatchLeaseList(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	lease := mock_kv.NewMockLease(ctrl)
+	lease.EXPECT().
+		Leases(gomock.Any()).
+		Return(&clientv3.LeaseLeasesResponse{Leases: []clientv3.LeaseStatus{
+			{ID: clientv3.LeaseID(1)}, {ID: clientv3.LeaseID(2)},
+		}}, nil)
+
+	res, err := dispatchLeaseList(context.Background(), lease)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), res.Count)
+	require.Len(t, res.KVs, 2)
+}
+
+func TestDispatchMemberList(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	cluster := mock_kv.NewMockCluster(ctrl)
+	cluster.EXPECT().
+		MemberList(gomock.Any()).
+		Return(&clientv3.MemberListResponse{Members: []*etcdserverpb.Member{
+			{ID: 1, Name: "n1", ClientURLs: []string{"http://10.0.0.1:2379"}},
+			{ID: 2, Name: "n2", ClientURLs: []string{"http://10.0.0.2:2379"}},
+		}}, nil)
+
+	res, err := dispatchMemberList(context.Background(), cluster, &ExecRequest{Op: "member_list"})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), res.Count)
+	require.Len(t, res.KVs, 2)
+}
+
+func TestDispatchEndpointStatus(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ms := mock_kv.NewMockMaintenance(ctrl)
+	ms.EXPECT().
+		Status(gomock.Any(), "127.0.0.1:2379").
+		Return(&clientv3.StatusResponse{Version: "3.5.16", DbSize: 4096, Leader: 1}, nil)
+
+	res, err := dispatchEndpointStatus(context.Background(), ms, &ExecRequest{Op: "endpoint_status", Key: "127.0.0.1:2379"})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), res.Count)
+	require.Len(t, res.KVs, 1)
+	assert.Equal(t, "127.0.0.1:2379", res.KVs[0].Key)
+	assert.Contains(t, res.KVs[0].Value, "3.5.16")
+}
+
+func TestDispatchEndpointStatus_MissingKey(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ms := mock_kv.NewMockMaintenance(ctrl)
+	// Status should NOT be called — key missing
+	res, err := dispatchEndpointStatus(context.Background(), ms, &ExecRequest{Op: "endpoint_status"})
+	assert.Nil(t, res)
+	assert.Error(t, err)
 }
