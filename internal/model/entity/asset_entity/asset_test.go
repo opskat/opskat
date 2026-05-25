@@ -470,3 +470,49 @@ func TestAsset_GetSetEtcdConfig(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
+
+func TestAsset_ValidateEtcd(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     *EtcdConfig
+		wantErr bool
+	}{
+		{"valid single", &EtcdConfig{Endpoints: []string{"127.0.0.1:2379"}}, false},
+		{"valid cluster", &EtcdConfig{Endpoints: []string{"10.0.0.1:2379", "10.0.0.2:2379"}}, false},
+		{"empty endpoints", &EtcdConfig{}, true},
+		{"endpoint missing port", &EtcdConfig{Endpoints: []string{"10.0.0.1"}}, true},
+		{"endpoint invalid port", &EtcdConfig{Endpoints: []string{"10.0.0.1:abc"}}, true},
+		{"endpoint port out of range", &EtcdConfig{Endpoints: []string{"10.0.0.1:70000"}}, true},
+		{"endpoint missing host", &EtcdConfig{Endpoints: []string{":2379"}}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &Asset{Name: "test", Type: AssetTypeEtcd}
+			assert.NoError(t, a.SetEtcdConfig(tc.cfg))
+			err := a.Validate()
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestAsset_CanConnectEtcd(t *testing.T) {
+	convey.Convey("etcd 端点非空且 Status=Active 可连接", t, func() {
+		a := &Asset{Type: AssetTypeEtcd, Status: StatusActive}
+		assert.NoError(t, a.SetEtcdConfig(&EtcdConfig{Endpoints: []string{"127.0.0.1:2379"}}))
+		assert.True(t, a.CanConnect())
+	})
+	convey.Convey("etcd 端点为空不可连接", t, func() {
+		a := &Asset{Type: AssetTypeEtcd, Status: StatusActive}
+		assert.NoError(t, a.SetEtcdConfig(&EtcdConfig{Endpoints: nil}))
+		assert.False(t, a.CanConnect())
+	})
+	convey.Convey("etcd Status 非 Active 不可连接", t, func() {
+		a := &Asset{Type: AssetTypeEtcd, Status: StatusDeleted}
+		assert.NoError(t, a.SetEtcdConfig(&EtcdConfig{Endpoints: []string{"127.0.0.1:2379"}}))
+		assert.False(t, a.CanConnect())
+	})
+}

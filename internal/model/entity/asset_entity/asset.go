@@ -624,6 +624,8 @@ func (a *Asset) Validate() error {
 		return a.validateK8s()
 	case AssetTypeSerial:
 		return a.validateSerial()
+	case AssetTypeEtcd:
+		return a.validateEtcd()
 	default:
 		// 扩展资产类型由扩展自行校验
 		return nil
@@ -798,6 +800,28 @@ func (a *Asset) validateSerial() error {
 	return nil
 }
 
+// validateEtcd 校验etcd类型特定配置
+func (a *Asset) validateEtcd() error {
+	cfg, err := a.GetEtcdConfig()
+	if err != nil {
+		return fmt.Errorf("etcd配置无效: %w", err)
+	}
+	if len(cfg.Endpoints) == 0 {
+		return errors.New("etcd endpoints不能为空")
+	}
+	for _, ep := range cfg.Endpoints {
+		host, portText, err := net.SplitHostPort(ep)
+		if err != nil || strings.TrimSpace(host) == "" {
+			return fmt.Errorf("etcd endpoint必须为host:port格式: %s", ep)
+		}
+		port, err := strconv.Atoi(portText)
+		if err != nil || port <= 0 || port > 65535 {
+			return fmt.Errorf("etcd endpoint端口无效: %s", ep)
+		}
+	}
+	return nil
+}
+
 func validateKafkaBroker(broker string) error {
 	broker = strings.TrimSpace(broker)
 	if broker == "" {
@@ -873,6 +897,12 @@ func (a *Asset) CanConnect() bool {
 			return false
 		}
 		return cfg.PortPath != ""
+	case AssetTypeEtcd:
+		cfg, err := a.GetEtcdConfig()
+		if err != nil {
+			return false
+		}
+		return len(cfg.Endpoints) > 0
 	}
 	return false
 }
