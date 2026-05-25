@@ -10,7 +10,7 @@ import { bytesToBase64 } from "@/lib/terminalEncode";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useShortcutStore } from "@/stores/shortcutStore";
 import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
-import { withTerminalFontFallback } from "@/data/terminalFonts";
+import { withTerminalFontFallback, withTerminalFontIsolation } from "@/data/terminalFonts";
 import i18n from "@/i18n";
 import { createTerminalInputBridge, type TerminalInputBridge } from "./terminalInputBridge";
 import { attachXtermRolloverGuard } from "./xtermRolloverGuard";
@@ -48,10 +48,15 @@ export function getOrCreateTerminal(
   container.style.height = "100%";
   container.style.width = "100%";
 
+  const resolvedFontFamily = withTerminalFontFallback(init.fontFamily);
+
   const term = new XTerminal({
     cursorBlink: true,
     fontSize: init.fontSize,
-    fontFamily: withTerminalFontFallback(init.fontFamily),
+    // 给每个 session 加独占 sentinel，避免 xterm 全局 CharAtlasCache 在 fontFamily/
+    // fontSize/theme 相同的 terminal 之间共享 TextureAtlas（详见 withTerminalFontIsolation
+    // 的注释）。共享 atlas 会让一个 session 的 clearTextureAtlas 污染所有其它 session。
+    fontFamily: withTerminalFontIsolation(sessionId, resolvedFontFamily),
     theme: init.theme,
     scrollback: init.scrollback,
   });
@@ -86,19 +91,50 @@ export function getOrCreateTerminal(
   // 而且让设置面板的开关如实反映当前可用性。用户可以手动再打开重试。
   let webglAddon: WebglAddon | null = null;
   let webglContextLossSub: { dispose: () => void } | null = null;
+  let webglFirstWriteSub: { dispose: () => void } | null = null;
+  let webglPostWriteRenderSub: { dispose: () => void } | null = null;
   if (init.webglEnabled !== false) {
     try {
       const addon = new WebglAddon();
       webglContextLossSub = addon.onContextLoss(() => {
         addon.dispose();
         webglAddon = null;
-        useTerminalThemeStore.getState().setWebglEnabled(false);
+        const store = useTerminalThemeStore.getState();
+        store.reportWebglFailure({
+          cause: "context-loss",
+          message: "WebGL context lost",
+          at: Date.now(),
+        });
+        store.setWebglEnabled(false);
       });
       term.loadAddon(addon);
       webglAddon = addon;
+      // Wails 的 WebKit webview 上，WebGL atlas 在首次填充字形时 Canvas2D 偶尔用
+      // 还没解析稳定的字体绘字，随机出现"全粗 / 全细 / 混杂"。手动切字体能恢复，
+      // 是因为 addon 见到 fontFamily 变化时会清 atlas → 下一帧重新填，那时字体已
+      // 稳定。我们在这里复刻同一动作：
+      //   首次 onWriteParsed（数据进了 xterm）→ 下一次 onRender（数据画到了
+      //   atlas）→ 立刻 clearTextureAtlas → 让后续帧用稳定状态重填。
+      // 不能直接订阅 loadAddon 后的首个 onRender —— xterm 会立刻调度一帧空帧（只
+      // 有光标），atlas 几乎没填，那时清掉就过早 dispose 订阅，等真正的文本数据
+      // 进来时已经没人清了。
+      // 安全前提：withTerminalFontIsolation 让这个 session 独占自己的 atlas，所以
+      // clearTextureAtlas 不会影响其它 session（否则会污染共享 atlas 引发乱码）。
+      webglFirstWriteSub = term.onWriteParsed(() => {
+        webglFirstWriteSub?.dispose();
+        webglFirstWriteSub = null;
+        webglPostWriteRenderSub = term.onRender(() => {
+          webglPostWriteRenderSub?.dispose();
+          webglPostWriteRenderSub = null;
+          addon.clearTextureAtlas();
+        });
+      });
     } catch (err) {
-      console.warn("WebGL renderer unavailable, falling back to DOM renderer", err);
-      useTerminalThemeStore.getState().setWebglEnabled(false);
+      const name = (err as Error)?.name;
+      const message = (err as Error)?.message ?? String(err);
+      const store = useTerminalThemeStore.getState();
+      store.reportWebglFailure({ cause: "init-threw", name, message, at: Date.now() });
+      store.setWebglEnabled(false);
     }
   }
 
@@ -142,6 +178,10 @@ export function getOrCreateTerminal(
       EventsOff(closedEvent);
       webglContextLossSub?.dispose();
       webglContextLossSub = null;
+      webglFirstWriteSub?.dispose();
+      webglFirstWriteSub = null;
+      webglPostWriteRenderSub?.dispose();
+      webglPostWriteRenderSub = null;
       webglAddon?.dispose();
       webglAddon = null;
       term.dispose();

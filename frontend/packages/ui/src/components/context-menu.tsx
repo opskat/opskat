@@ -1,5 +1,6 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
+import { Slot } from "radix-ui";
 
 import { cn } from "../lib/utils";
 
@@ -25,19 +26,22 @@ function useCtx() {
 function ContextMenu({
   children,
   onOpenChange,
+  open: controlledOpen,
 }: {
   children: React.ReactNode;
   onOpenChange?: (open: boolean) => void;
+  open?: boolean;
 }) {
-  const [open, setOpen] = React.useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
   const [position, setPosition] = React.useState({ x: 0, y: 0 });
 
   const handleOpenChange = React.useCallback(
     (value: boolean) => {
-      setOpen(value);
+      if (controlledOpen === undefined) setUncontrolledOpen(value);
       onOpenChange?.(value);
     },
-    [onOpenChange]
+    [controlledOpen, onOpenChange]
   );
 
   const ctx = React.useMemo(
@@ -50,16 +54,21 @@ function ContextMenu({
 
 function ContextMenuTrigger({
   children,
+  onContextMenu,
+  asChild = false,
   ...props
-}: React.HTMLAttributes<HTMLSpanElement> & { children: React.ReactNode }) {
+}: React.HTMLAttributes<HTMLElement> & { children: React.ReactNode; asChild?: boolean }) {
   const ctx = useCtx();
+  const Comp = asChild ? Slot.Root : "span";
 
   return (
-    <span
+    <Comp
       data-slot="context-menu-trigger"
       {...props}
       className={cn("select-none", props.className)}
-      onContextMenu={(e) => {
+      onContextMenu={(e: React.MouseEvent<HTMLElement>) => {
+        onContextMenu?.(e);
+        if (e.defaultPrevented) return;
         e.preventDefault();
         e.stopPropagation();
         ctx.setPosition({ x: e.clientX, y: e.clientY });
@@ -67,11 +76,17 @@ function ContextMenuTrigger({
       }}
     >
       {children}
-    </span>
+    </Comp>
   );
 }
 
-function ContextMenuContent({ className, style: styleProp, children, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+function ContextMenuContent({
+  className,
+  style: styleProp,
+  children,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement> & { alignToStylePosition?: boolean }) {
+  const { alignToStylePosition = false, ...contentProps } = props;
   const ctx = useCtx();
   const ref = React.useRef<HTMLDivElement>(null);
   const [pos, setPos] = React.useState({ top: 0, left: 0 });
@@ -84,18 +99,22 @@ function ContextMenuContent({ className, style: styleProp, children, ...props }:
     const rect = ref.current.getBoundingClientRect();
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    const GAP = 2;
+    const GAP = alignToStylePosition ? 0 : 2;
 
-    let left = ctx.position.x + GAP;
-    let top = ctx.position.y + GAP;
+    const style = styleProp as React.CSSProperties | undefined;
+    const anchorX = alignToStylePosition && typeof style?.left === "number" ? style.left : ctx.position.x;
+    const anchorY = alignToStylePosition && typeof style?.top === "number" ? style.top : ctx.position.y;
+
+    let left = anchorX + GAP;
+    let top = anchorY + GAP;
 
     // Flip horizontal if menu overflows right edge
     if (left + rect.width > vw) {
-      left = ctx.position.x - rect.width - GAP;
+      left = anchorX - rect.width - GAP;
     }
     // Flip vertical if menu overflows bottom edge (往上弹)
     if (top + rect.height > vh) {
-      top = ctx.position.y - rect.height - GAP;
+      top = anchorY - rect.height - GAP;
     }
 
     // Clamp to viewport bounds
@@ -104,7 +123,7 @@ function ContextMenuContent({ className, style: styleProp, children, ...props }:
 
     setPos({ top, left });
     setVisible(true);
-  }, [ctx.open, ctx.position]);
+  }, [ctx.open, ctx.position, alignToStylePosition, styleProp]);
 
   // Enable pointer events after delay to prevent right-click release from
   // accidentally triggering menu items
@@ -165,7 +184,7 @@ function ContextMenuContent({ className, style: styleProp, children, ...props }:
         visibility: visible ? "visible" : "hidden",
         pointerEvents: interactive ? "auto" : "none",
       }}
-      {...props}
+      {...contentProps}
     >
       {children}
     </div>,

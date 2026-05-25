@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -73,18 +74,31 @@ func (w *recordingWriteCloser) lastWrite() []byte {
 
 func extractInitTokenFromEnableCommand(t *testing.T, cmd []byte) string {
 	t.Helper()
-	const marker = "1337;opskat:"
 	text := string(cmd)
-	idx := strings.LastIndex(text, marker)
-	if idx < 0 {
-		t.Fatalf("enable command missing init marker: %q", text)
+	if marker := "1337;opskat:"; strings.Contains(text, marker) {
+		idx := strings.LastIndex(text, marker)
+		remainder := text[idx+len(marker):]
+		token, _, ok := strings.Cut(remainder, ":init:pid:")
+		if ok && token != "" {
+			return token
+		}
 	}
-	remainder := text[idx+len(marker):]
-	token, _, ok := strings.Cut(remainder, ":init:pid:")
-	if !ok || token == "" {
-		t.Fatalf("enable command missing init token: %q", text)
+
+	const start = "<<'OPSKAT_SCRIPT'\n"
+	startIdx := strings.Index(text, start)
+	if startIdx < 0 {
+		t.Fatalf("enable command missing script heredoc: %q", text)
 	}
-	return token
+	encodedStart := startIdx + len(start)
+	encodedEnd := strings.Index(text[encodedStart:], "\nOPSKAT_SCRIPT")
+	if encodedEnd < 0 {
+		t.Fatalf("enable command missing script terminator: %q", text)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(text[encodedStart : encodedStart+encodedEnd])
+	if err != nil {
+		t.Fatalf("enable command script is not valid base64: %v", err)
+	}
+	return extractInitTokenFromEnableCommand(t, decoded)
 }
 
 func TestManager_Basic(t *testing.T) {
@@ -411,6 +425,196 @@ func TestSession_FilterOutputBoundsParserRemainder(t *testing.T) {
 	assert.Equal(t, directorySyncMarkerOverflow, state.LastError)
 	assert.False(t, state.PromptReady)
 	assert.True(t, state.Busy)
+}
+
+func TestSession_InternalWriteEchoIsFiltered(t *testing.T) {
+	sess := newTestSyncSession()
+	pattern := sess.queueInternalEchoSuppression([]byte("builtin cd -- '/root/你好好好'\r"))
+	assert.NotEmpty(t, pattern)
+
+	filtered := sess.filterOutput([]byte("builtin cd -- '/root/你好好好'\r\n➜  你好好好 "))
+
+	assert.Equal(t, "➜  你好好好 ", string(filtered))
+}
+
+func TestSession_InternalWriteEchoSkipsPromptBeforeCommand(t *testing.T) {
+	sess := newTestSyncSession()
+	sess.queueInternalEchoSuppression([]byte("opskat_next_prompt_nonce(){ echo hidden; }\r"))
+
+	filtered := sess.filterOutput([]byte("➜  ~ opskat_next_prompt_nonce(){ echo hidden; }\r\n"))
+
+	assert.Equal(t, "➜  ~ \r\n", string(filtered))
+}
+
+func TestSession_InternalWriteEchoSkipsMultilineWrap(t *testing.T) {
+	sess := newTestSyncSession()
+	sess.queueInternalEchoSuppression([]byte("opskat_next_prompt_nonce(){ local n r;n=$(date +%s%N);r=${RANDOM:-0};printf '%s' \"$n\";};\r"))
+
+	filtered := sess.filterOutput([]byte("➜  ~ opskat_next_prompt_nonce(){ local n r;n=$(date +%s%N);r=\r\n${RANDOM:-0};printf '%s' \"$n\";};\r\n"))
+
+	assert.Equal(t, "➜  ~ \r\n", string(filtered))
+}
+
+func TestSession_InternalWriteEchoSkipsAnsiRedrawInsideCommand(t *testing.T) {
+	sess := newTestSyncSession()
+	sess.queueInternalEchoSuppression([]byte("opskat_next_prompt_nonce(){ echo hidden; }\r"))
+
+	filtered := sess.filterOutput([]byte("\x1b[32m➜\x1b[0m  ~ opskat_next_prompt_nonce(){ \x1b[Kecho hidden; }\r\n"))
+
+	assert.Equal(t, "\x1b[32m➜\x1b[0m  ~ \r\n", string(filtered))
+}
+
+func TestSession_InternalWriteEchoSkipsRealZshEnableScriptAndCdEcho(t *testing.T) {
+	sess := newTestSyncSession()
+	script := buildEnableSyncScript(shellTypeZsh, "1478836e13850c0c0d9306a8d4d87297", "e19c0654c4fbe85db213985d80308e48")
+	sess.beginInternalScriptEchoSuppression()
+
+	encoded := base64.StdEncoding.EncodeToString([]byte(script))
+	filtered := sess.filterOutput([]byte("➜  ~ stty -echo 2>/dev/null\r\n➜  ~ base64 -d > '/tmp/.opskat-sync-1779413970435411000-1.sh' <<'OPSKAT_SCRIPT'\r\nheredoc> " + encoded[:120] + "\r\n" + encoded[120:] + "\r\nheredoc> OPSKAT_SCRIPT\r\n➜  ~ source '/tmp/.opskat-sync-1779413970435411000-1.sh'\r\n➜  ~ rm -f '/tmp/.opskat-sync-1779413970435411000-1.sh'\r\n➜  ~ stty echo 2>/dev/null\r\n"))
+
+	assert.Empty(t, string(filtered))
+}
+
+func TestSession_InternalTempScriptEchoFilterSurvivesPromptSuffixAndSuppressesNextCommand(t *testing.T) {
+	sess := newTestSyncSession()
+	script := buildEnableSyncScript(shellTypeZsh, "a0d4fc6672c8100d5e50ecb56465cd4f", "d55259fc1a2c8cd50e9724580602febb")
+	tempPath := "/tmp/.opskat-sync-1779415450104142000-1.sh"
+	sess.beginInternalScriptEchoSuppression()
+
+	encoded := base64.StdEncoding.EncodeToString([]byte(script))
+	chunks := []string{
+		"➜  ~ stty -echo 2>/dev/null#\r\n",
+		"➜  ~ base64 -d > '" + tempPath + "' <<'OPSKAT_SCRIPT'\r\n",
+		"heredoc> " + encoded[:72],
+		encoded[72:144] + "\r\n",
+		encoded[144:216],
+		encoded[216:] + "\r\n",
+		"heredoc> OPSKAT_SCRIPT\r\n",
+		"➜  ~ source '" + tempPath + "'\r\n",
+		"➜  ~ rm -f '" + tempPath + "'\r\n",
+		"➜  ~ stty2>/dev/nullv/null\r\n",
+	}
+	var out strings.Builder
+	for _, chunk := range chunks {
+		out.Write(sess.filterOutput([]byte(chunk)))
+	}
+
+	sess.queueInternalEchoSuppression([]byte("builtin cd -- '/root/你好好好'\r"))
+	out.Write(sess.filterOutput([]byte("➜  ~ builtin cd -- '/root/你好好好'\r\n➜  ~ ")))
+	filtered := out.String()
+
+	assert.NotContains(t, filtered, "stty")
+	assert.NotContains(t, filtered, "base64")
+	assert.NotContains(t, filtered, "heredoc")
+	assert.NotContains(t, filtered, "opskat_prompt_proof")
+	assert.NotContains(t, filtered, "builtin cd")
+}
+
+func TestSession_InternalTempScriptEchoFilterDropsBlankHeredocPrompt(t *testing.T) {
+	sess := newTestSyncSession()
+	sess.beginInternalScriptEchoSuppression()
+
+	filtered := sess.filterOutput([]byte("heredoc> \r\n➜  ~ \r\n➜  ~ rm -f '/tmp/.opskat-sync-1779418826108658000-1.sh'\r\n➜  ~ stty echo 2>/dev/null\r\n"))
+	text := string(filtered)
+
+	assert.NotContains(t, text, "heredoc")
+	assert.NotContains(t, text, "➜  ~")
+	assert.NotContains(t, text, "rm -f")
+	assert.NotContains(t, text, "stty echo")
+}
+
+func TestSession_InternalTempScriptEchoFilterDropsHiddenLineTerminators(t *testing.T) {
+	sess := newTestSyncSession()
+	sess.beginInternalScriptEchoSuppression()
+
+	filtered := sess.filterOutput([]byte("➜  ~ \r\n➜  ~ rm -f '/tmp/.opskat-sync-1779423605356277000-1.sh'\r\n➜  ~ stty echo 2>/dev/null\r\n"))
+
+	assert.Empty(t, string(filtered))
+}
+
+func TestSession_InternalDirectoryChangeEchoFilterSuppressesShellMangledCd(t *testing.T) {
+	sess := newTestSyncSession()
+	sess.queueInternalEchoSuppression([]byte(buildDirectoryChangeCommand("/root/你好好好")))
+
+	filtered := sess.filterOutput([]byte("builtin cd    '/root/你好好好'\r\n➜  你好好好 "))
+
+	assert.Equal(t, "➜  你好好好 ", string(filtered))
+}
+
+func TestSession_InternalDirectoryChangeEchoFilterSuppressesPromptPrefixedMangledCdLine(t *testing.T) {
+	sess := newTestSyncSession()
+	sess.queueInternalEchoSuppression([]byte(buildDirectoryChangeCommand("/root/docker")))
+
+	filtered := sess.filterOutput([]byte("➜  ~ builtin cd    '/root/docker'\r\n➜  docker "))
+
+	assert.Equal(t, "➜  docker ", string(filtered))
+}
+
+func TestSession_DirectDirectoryChangeWritesOnlyCdCommand(t *testing.T) {
+	stdin := &recordingWriteCloser{}
+	sess := &Session{stdin: stdin}
+
+	err := sess.ChangeDirectoryDirect("/root/docker")
+
+	assert.NoError(t, err)
+	assert.Equal(t, "builtin cd -- '/root/docker'\r", string(stdin.lastWrite()))
+	assert.NotEmpty(t, sess.echoSuppressions)
+}
+
+func TestSession_EnableSyncDoesNotWriteUserVisibleHookSource(t *testing.T) {
+	stdin := &recordingWriteCloser{}
+	sess := &Session{
+		stdin:     stdin,
+		shellPath: "/bin/zsh",
+		shellType: shellTypeZsh,
+	}
+	sess.initSyncState("/bin/zsh", shellTypeZsh, false)
+	oldTimeout := syncEnableTimeout
+	syncEnableTimeout = 10 * time.Millisecond
+	defer func() { syncEnableTimeout = oldTimeout }()
+
+	_ = sess.EnableSync()
+	written := string(stdin.lastWrite())
+
+	assert.NotContains(t, written, "opskat_next_prompt_nonce(){")
+	assert.NotContains(t, written, "opskat_prompt_proof(){")
+	assert.NotContains(t, written, "add-zsh-hook")
+	assert.Contains(t, written, "source")
+}
+
+func TestSession_InternalWriteEchoFilterPreservesPartialMismatch(t *testing.T) {
+	sess := newTestSyncSession()
+	sess.queueInternalEchoSuppression([]byte("builtin cd -- '/srv/app'\r"))
+
+	filtered := sess.filterOutput([]byte("builtin pwd\r\n/srv/app\r\n"))
+
+	assert.Equal(t, "builtin pwd\r\n/srv/app\r\n", string(filtered))
+}
+
+func TestSession_InternalWriteEchoFilterHandlesChunks(t *testing.T) {
+	sess := newTestSyncSession()
+	sess.queueInternalEchoSuppression([]byte("builtin cd -- '/srv/app'\r"))
+
+	first := sess.filterOutput([]byte("builtin cd -- "))
+	second := sess.filterOutput([]byte("'/srv/app'\r\nready"))
+
+	assert.Empty(t, first)
+	assert.Equal(t, "\r\nready", string(second))
+}
+
+func TestSession_ProbePromptRestoresCleanPrompt(t *testing.T) {
+	sess := newTestSyncSession()
+	sess.notePrompt("/srv/app")
+	sess.markUserInput([]byte("ls\r"))
+
+	sess.noteProbePrompt("/srv/app")
+
+	state := sess.GetSyncState()
+	assert.True(t, state.PromptReady)
+	assert.True(t, state.PromptClean)
+	assert.True(t, state.CwdKnown)
+	assert.False(t, state.Busy)
+	assert.Equal(t, directorySyncReady, state.Status)
 }
 
 func TestParseShellProbeOutput(t *testing.T) {

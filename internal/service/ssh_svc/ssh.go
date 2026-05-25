@@ -89,12 +89,17 @@ type Session struct {
 
 	syncEnableMu       sync.Mutex
 	syncMu             sync.Mutex
+	outputFilterMu     sync.Mutex
 	syncState          DirectorySyncState
 	pendingDirChange   chan error
 	pendingDirNonce    string
 	pendingDirTarget   string
 	pendingDirExpected string
 	parserRemainder    []byte
+	echoSuppressions   [][]byte
+	echoSuppressionIdx int
+	internalScriptEcho bool
+	internalEchoDropLn bool
 	syncToken          string
 	promptNonce        string
 	promptPendingNonce string
@@ -102,6 +107,7 @@ type Session struct {
 	syncDirty          bool
 	syncBootstrapCh    chan struct{} // closed when EnableSync receives init:pid; nil when not bootstrapping
 	syncProbeActive    bool
+	internalScriptSeq  int
 	probeShellStateFn  func(int) (shellProbeResult, error)
 }
 
@@ -163,12 +169,63 @@ func (s *Session) IsClosed() bool {
 }
 
 func (s *Session) writeInternal(data []byte) error {
+	pattern := s.queueInternalEchoSuppression(data)
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
+	closed := s.closed
+	var err error
+	if !closed {
+		_, err = s.stdin.Write(data)
+	}
+	s.mu.Unlock()
+
+	if closed {
+		s.removeQueuedEchoSuppression(pattern)
 		return fmt.Errorf("session is closed")
 	}
-	_, err := s.stdin.Write(data)
+	if err != nil {
+		// 部分写入也要清掉队列项：截断的远端回显匹配不到完整 pattern，
+		// 留在队列里会误吞后续无关输出。
+		s.removeQueuedEchoSuppression(pattern)
+	}
+	return err
+}
+
+func (s *Session) nextInternalScriptPath() string {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	s.internalScriptSeq++
+	return fmt.Sprintf("/tmp/.opskat-sync-%d-%d.sh", time.Now().UnixNano(), s.internalScriptSeq)
+}
+
+func (s *Session) writeInternalScript(script string) error {
+	if script == "" {
+		return fmt.Errorf("internal script is empty")
+	}
+	return s.writeInternalTempScript(s.nextInternalScriptPath(), script)
+}
+
+func (s *Session) writeInternalTempScript(tempPath string, script string) error {
+	command := buildSourceTempScriptCommand(tempPath, script)
+	s.beginInternalScriptEchoSuppression()
+
+	s.mu.Lock()
+	closed := s.closed
+	var err error
+	if !closed {
+		_, err = s.stdin.Write([]byte(command))
+	}
+	s.mu.Unlock()
+
+	if closed {
+		s.endInternalScriptEchoSuppression()
+		return fmt.Errorf("session is closed")
+	}
+	if err != nil {
+		// 同 writeInternal：写失败（含部分写入）都要关掉脚本回显抑制，
+		// 否则后续输出会被持续吞掉。
+		s.endInternalScriptEchoSuppression()
+	}
 	return err
 }
 

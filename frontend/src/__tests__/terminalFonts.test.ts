@@ -21,8 +21,8 @@ describe("terminalFonts", () => {
   });
 
   const DEFAULT_STACK =
-    "'JetBrainsMono NFM', 'JetBrainsMono Nerd Font Mono', 'MesloLGM NF', 'MesloLGM Nerd Font', " +
-    "'FiraCode NFM', 'FiraCode Nerd Font Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace";
+    "Menlo, Consolas, 'DejaVu Sans Mono', 'JetBrainsMono NFM', 'JetBrainsMono Nerd Font Mono', " +
+    "'JetBrains Mono', monospace";
 
   it("uses the default font stack when the custom value is blank", () => {
     expect(resolveTerminalFontFamily("  ")).toBe(DEFAULT_STACK);
@@ -34,8 +34,8 @@ describe("terminalFonts", () => {
 
   it("adds shared fallbacks at terminal runtime without duplicating the primary font", () => {
     expect(withTerminalFontFallback("'Fira Code'")).toBe(
-      "'Fira Code', 'JetBrainsMono NFM', 'JetBrainsMono Nerd Font Mono', 'MesloLGM NF', 'MesloLGM Nerd Font', " +
-        "'FiraCode NFM', 'FiraCode Nerd Font Mono', 'JetBrains Mono', 'Cascadia Code', Menlo, monospace"
+      "'Fira Code', Menlo, Consolas, 'DejaVu Sans Mono', 'JetBrainsMono NFM', 'JetBrainsMono Nerd Font Mono', " +
+        "'JetBrains Mono', monospace"
     );
   });
 
@@ -229,8 +229,9 @@ describe("terminalFonts", () => {
     });
 
     it("returns the first fallback entry that is installed", () => {
-      expect(resolveDefaultFontPrimary(["JetBrainsMono NFM", "Menlo"])).toBe("JetBrainsMono NFM");
-      expect(resolveDefaultFontPrimary(["Menlo", "JetBrains Mono"])).toBe("JetBrains Mono");
+      expect(resolveDefaultFontPrimary(["JetBrainsMono NFM", "Menlo"])).toBe("Menlo");
+      expect(resolveDefaultFontPrimary(["Consolas", "JetBrains Mono"])).toBe("Consolas");
+      expect(resolveDefaultFontPrimary(["JetBrains Mono"])).toBe("JetBrains Mono");
     });
 
     it("returns null when no real family in the chain is installed (generic monospace doesn't count)", () => {

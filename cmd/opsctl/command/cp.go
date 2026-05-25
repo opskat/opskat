@@ -8,7 +8,6 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/tool"
-	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/sshpool"
 )
 
@@ -40,29 +39,11 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 	srcIsRemote := srcAssetID > 0
 	dstIsRemote := dstAssetID > 0
 
-	detail := fmt.Sprintf("opsctl cp %s %s", src, dst)
 	argsJSON := fmt.Sprintf(`{"src":%q,"dst":%q}`, src, dst)
 
-	// Require approval for any remote operation
-	var approvalResult ApprovalResult
-	if srcIsRemote || dstIsRemote {
-		approvalAssetID := srcAssetID
-		if dstIsRemote {
-			approvalAssetID = dstAssetID
-		}
-		approvalResult, err = requireApproval(ctx, approval.ApprovalRequest{
-			Type:      "cp",
-			AssetID:   approvalAssetID,
-			Detail:    detail,
-			SessionID: session,
-		})
-		auditCtx := aictx.WithSessionID(ctx, approvalResult.SessionID)
-		if err != nil {
-			writeOpsctlAudit(auditCtx, "cp", argsJSON, "", err, approvalResult.ToCheckResult())
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
-		}
-		ctx = auditCtx
+	// cp 不需要审批；若调用方提供了 session，仍注入到 ctx 以便审计归组
+	if session != "" {
+		ctx = aictx.WithSessionID(ctx, session)
 	}
 
 	// 尝试通过 proxy 执行文件传输
@@ -72,7 +53,7 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 		if exitCode != 0 {
 			cpErr = fmt.Errorf("cp via proxy failed with exit code %d", exitCode)
 		}
-		writeOpsctlAudit(ctx, "cp", argsJSON, fmt.Sprintf(`{"status":"completed","exit_code":%d}`, exitCode), cpErr, approvalResult.ToCheckResult())
+		writeOpsctlAudit(ctx, "cp", argsJSON, fmt.Sprintf(`{"status":"completed","exit_code":%d}`, exitCode), cpErr, nil)
 		return exitCode
 	}
 
@@ -89,7 +70,7 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 			"asset_id":    float64(dstAssetID),
 			"local_path":  src,
 			"remote_path": dstPath,
-		}, approvalResult.ToCheckResult())
+		}, nil)
 		return exitCode
 
 	case srcIsRemote && !dstIsRemote:
@@ -98,7 +79,7 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 			"asset_id":    float64(srcAssetID),
 			"remote_path": srcPath,
 			"local_path":  dst,
-		}, approvalResult.ToCheckResult())
+		}, nil)
 		return exitCode
 
 	default:
@@ -108,7 +89,7 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 		if cpErr != nil {
 			auditResult = fmt.Sprintf(`{"error":%q}`, cpErr.Error())
 		}
-		writeOpsctlAudit(ctx, "cp", argsJSON, auditResult, cpErr, approvalResult.ToCheckResult())
+		writeOpsctlAudit(ctx, "cp", argsJSON, auditResult, cpErr, nil)
 		if cpErr != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", cpErr)
 			return 1
@@ -188,9 +169,6 @@ Transfer Modes:
   Local -> Remote     Upload a file to a remote server via SFTP
   Remote -> Local     Download a file from a remote server via SFTP
   Remote -> Remote    Stream a file directly between two assets (no local disk)
-
-Approval:
-  Requires desktop app approval. Session auto-created if not specified.
 
 Examples:
   opsctl cp ./config.yml web-server:/etc/app/config.yml   Upload by name

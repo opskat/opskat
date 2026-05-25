@@ -127,6 +127,20 @@ func (mr *MockGroupRepoMockRecorder) Update(ctx, group any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockGroupRepo)(nil).Update), ctx, group)
 }
 
+// UpdateName mocks base method.
+func (m *MockGroupRepo) UpdateName(ctx context.Context, id int64, name string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateName", ctx, id, name)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateName indicates an expected call of UpdateName.
+func (mr *MockGroupRepoMockRecorder) UpdateName(ctx, id, name any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateName", reflect.TypeOf((*MockGroupRepo)(nil).UpdateName), ctx, id, name)
+}
+
 // UpdateSortOrder mocks base method.
 func (m *MockGroupRepo) UpdateSortOrder(ctx context.Context, id int64, sortOrder int) error {
 	m.ctrl.T.Helper()

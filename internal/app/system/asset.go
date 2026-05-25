@@ -207,6 +207,11 @@ func (s *System) CreateGroup(group *group_entity.Group) error {
 	return group_svc.Group().Create(i18n.Ctx(s.ctx, s.Lang()), group)
 }
 
+// RenameGroup 重命名分组
+func (s *System) RenameGroup(id int64, name string) error {
+	return group_svc.Group().Rename(i18n.Ctx(s.ctx, s.Lang()), id, name)
+}
+
 // UpdateGroup 更新分组
 func (s *System) UpdateGroup(group *group_entity.Group) error {
 	return group_svc.Group().Update(i18n.Ctx(s.ctx, s.Lang()), group)

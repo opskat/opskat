@@ -1,17 +1,34 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { Download, FolderDown, FolderOpen, PencilLine, RefreshCw, Trash2, Upload } from "lucide-react";
+import { createPortal } from "react-dom";
+import {
+  Clipboard,
+  Copy,
+  Download,
+  Edit3,
+  FilePlus,
+  FolderDown,
+  FolderOpen,
+  FolderPlus,
+  Info,
+  KeyRound,
+  PencilLine,
+  RefreshCw,
+  Scissors,
+  Terminal,
+  Trash2,
+} from "lucide-react";
 import { cn } from "@opskat/ui";
 import { type CtxMenuState } from "./types";
 
 interface FloatingMenuProps {
+  canPaste: boolean;
   ctx: CtxMenuState;
   onAction: (action: string) => void;
   onClose: () => void;
 }
 
-export function FloatingMenu({ ctx, onAction, onClose }: FloatingMenuProps) {
+export function FloatingMenu({ canPaste, ctx, onAction, onClose }: FloatingMenuProps) {
   const { t } = useTranslation();
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ top: 0, left: 0 });
@@ -57,27 +74,37 @@ export function FloatingMenu({ ctx, onAction, onClose }: FloatingMenuProps) {
     };
   }, [onClose]);
 
-  const item = (action: string, icon: ReactNode, label: string, variant?: "destructive") => (
+  const item = (
+    action: string,
+    icon: ReactNode,
+    label: string,
+    opts: { destructive?: boolean; disabled?: boolean } = {}
+  ) => (
     <div
       key={action}
       className={cn(
         "flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm cursor-default select-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-        variant === "destructive"
+        opts.disabled && "pointer-events-none opacity-40",
+        opts.destructive
           ? "text-destructive hover:bg-destructive/10 [&_svg]:text-destructive"
           : "hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='text-'])]:text-muted-foreground"
       )}
-      onClick={() => onAction(action)}
+      onClick={() => !opts.disabled && onAction(action)}
     >
       {icon}
       {label}
     </div>
   );
 
+  const separator = <div className="-mx-1 my-1 h-px bg-border" />;
+  const multiCount = ctx.selectedEntries.length;
+  const multi = multiCount > 1;
+
   return createPortal(
     <div
       ref={ref}
       className={cn(
-        "z-50 min-w-[10rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md",
+        "z-50 min-w-[13rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md",
         visible && "animate-in fade-in-0 zoom-in-95"
       )}
       style={{
@@ -88,33 +115,64 @@ export function FloatingMenu({ ctx, onAction, onClose }: FloatingMenuProps) {
         pointerEvents: interactive ? "auto" : "none",
       }}
     >
-      {ctx.entry ? (
+      {multi ? (
+        <>
+          {item("downloadSelected", <Download />, t("sftp.menu.downloadSelected", { count: multiCount }))}
+          {separator}
+          {item("cutSelected", <Scissors />, t("sftp.menu.cutSelected", { count: multiCount }))}
+          {item("copySelected", <Copy />, t("sftp.menu.copySelected", { count: multiCount }))}
+          {item("paste", <Clipboard />, t("sftp.menu.paste"), { disabled: !canPaste })}
+          {separator}
+          {item("deleteSelected", <Trash2 />, t("sftp.menu.deleteSelected", { count: multiCount }), {
+            destructive: true,
+          })}
+        </>
+      ) : ctx.entry ? (
         ctx.entry.isDir ? (
           <>
-            {item("open", <FolderOpen />, t("sftp.openFolder"))}
-            {item("downloadDir", <FolderDown />, t("sftp.downloadDir"))}
-            <div className="-mx-1 my-1 h-px bg-border" />
-            {item("delete", <Trash2 />, t("action.delete"), "destructive")}
+            {item("open", <FolderOpen />, t("action.open"))}
+            {item("openTerminal", <Terminal />, t("sftp.menu.openTerminal"))}
+            {item("downloadDir", <FolderDown />, t("sftp.menu.downloadFolder"))}
+            {separator}
+            {item("cut", <Scissors />, t("sftp.menu.cut"))}
+            {item("copy", <Copy />, t("sftp.menu.copy"))}
+            {item("paste", <Clipboard />, t("sftp.menu.paste"), { disabled: !canPaste })}
+            {separator}
+            {item("rename", <Edit3 />, t("sftp.menu.rename"))}
+            {item("permission", <KeyRound />, t("sftp.menu.permission"))}
+            {item("properties", <Info />, t("sftp.menu.properties"))}
+            {separator}
+            {item("delete", <Trash2 />, t("sftp.menu.delete"), { destructive: true })}
           </>
         ) : (
           <>
             {ctx.canExternalEdit && (
               <>
                 {item("externalEdit", <PencilLine />, t("externalEdit.actions.open"))}
-                <div className="-mx-1 my-1 h-px bg-border" />
+                {separator}
               </>
             )}
-            {item("download", <Download />, t("sftp.download"))}
-            <div className="-mx-1 my-1 h-px bg-border" />
-            {item("delete", <Trash2 />, t("action.delete"), "destructive")}
+            {item("download", <Download />, t("sftp.menu.downloadFile"))}
+            {separator}
+            {item("cut", <Scissors />, t("sftp.menu.cut"))}
+            {item("copy", <Copy />, t("sftp.menu.copy"))}
+            {item("paste", <Clipboard />, t("sftp.menu.paste"), { disabled: !canPaste })}
+            {separator}
+            {item("rename", <Edit3 />, t("sftp.menu.rename"))}
+            {item("permission", <KeyRound />, t("sftp.menu.permission"))}
+            {item("properties", <Info />, t("sftp.menu.properties"))}
+            {separator}
+            {item("delete", <Trash2 />, t("sftp.menu.delete"), { destructive: true })}
           </>
         )
       ) : (
         <>
-          {item("upload", <Upload />, t("sftp.upload"))}
-          {item("uploadDir", <Upload />, t("sftp.uploadDir"))}
-          <div className="-mx-1 my-1 h-px bg-border" />
-          {item("refresh", <RefreshCw />, t("sftp.refresh"))}
+          {item("refresh", <RefreshCw />, t("action.refresh"))}
+          {separator}
+          {item("newFolder", <FolderPlus />, t("sftp.newFolder"))}
+          {item("newFile", <FilePlus />, t("sftp.menu.newFile"))}
+          {item("paste", <Clipboard />, t("sftp.menu.paste"), { disabled: !canPaste })}
+          {item("copyCurrentPath", <Copy />, t("sftp.menu.copyCurrentPath"))}
         </>
       )}
     </div>,

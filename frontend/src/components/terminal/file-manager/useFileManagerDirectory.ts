@@ -12,7 +12,7 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
   const [entries, setEntries] = useState<sftp_svc.FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelectedState] = useState<string[]>([]);
   const loadRequestRef = useRef(0);
   const currentPathRef = useRef(currentPath);
   currentPathRef.current = currentPath;
@@ -23,7 +23,7 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
       const normalizedPath = normalizeRemotePath(currentPathRef.current, dirPath);
       setLoading(true);
       setError(null);
-      setSelected(null);
+      setSelectedState([]);
       try {
         const result = await SFTPListDir(sessionId, normalizedPath);
         if (requestId !== loadRequestRef.current) return false;
@@ -43,6 +43,10 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
     },
     [sessionId, setCurrentPath, tabId]
   );
+
+  const setSelected = useCallback((next: string[] | ((prev: string[]) => string[])) => {
+    setSelectedState(next);
+  }, []);
 
   useEffect(() => {
     setPathInput(currentPath);

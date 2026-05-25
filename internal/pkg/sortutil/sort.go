@@ -58,6 +58,22 @@ func MoveItem[T any](id int64, direction string, items []T,
 		return fmt.Errorf("item not found")
 	}
 
+	if hasDuplicateOrder(items, getOrder) {
+		reordered, changed, err := moveItemInSlice(direction, items, idx)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			return nil
+		}
+		for i, item := range reordered {
+			if err := updateOrder(getID(item), (i+1)*10); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	switch direction {
 	case "up":
 		if idx == 0 {
@@ -93,5 +109,45 @@ func MoveItem[T any](id int64, direction string, items []T,
 		return updateOrder(id, firstOrder-1)
 	default:
 		return fmt.Errorf("invalid direction: %s", direction)
+	}
+}
+
+func hasDuplicateOrder[T any](items []T, getOrder func(T) int) bool {
+	seen := make(map[int]struct{}, len(items))
+	for _, item := range items {
+		order := getOrder(item)
+		if _, ok := seen[order]; ok {
+			return true
+		}
+		seen[order] = struct{}{}
+	}
+	return false
+}
+
+func moveItemInSlice[T any](direction string, items []T, idx int) ([]T, bool, error) {
+	next := append([]T(nil), items...)
+	switch direction {
+	case "up":
+		if idx == 0 {
+			return next, false, nil
+		}
+		next[idx-1], next[idx] = next[idx], next[idx-1]
+		return next, true, nil
+	case "down":
+		if idx == len(next)-1 {
+			return next, false, nil
+		}
+		next[idx], next[idx+1] = next[idx+1], next[idx]
+		return next, true, nil
+	case "top":
+		if idx == 0 {
+			return next, false, nil
+		}
+		moved := next[idx]
+		copy(next[1:idx+1], next[0:idx])
+		next[0] = moved
+		return next, true, nil
+	default:
+		return nil, false, fmt.Errorf("invalid direction: %s", direction)
 	}
 }

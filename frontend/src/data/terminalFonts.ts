@@ -11,21 +11,25 @@ export interface TerminalFontOption {
 
 export const DEFAULT_TERMINAL_FONT_PRESET_ID = "default";
 export const CUSTOM_TERMINAL_FONT_PRESET_ID = "custom";
-// Nerd Font families come first so per-glyph CSS font fallback supplies icons
-// (apple, folder, clock, etc.) for prompts like powerlevel10k / starship when
-// the user's primary font is a non-patched monospace. Both naming conventions
-// are listed: short "NFM" (nerd-fonts v3.1+) and long "Nerd Font Mono" (v3.0).
+// Platform default mono fonts come first so per-glyph CSS fallback resolves
+// ASCII letters/numbers from a single family with consistent Regular+Bold.
+// Only one of Menlo / Consolas / DejaVu Sans Mono is installed on any given
+// system, so this acts as platform-specific without explicit detection (mac
+// → Menlo, Windows → Consolas, Linux → DejaVu Sans Mono — all ship with
+// matching Bold weights). The old chain put Nerd Font variants first; when
+// some of those entries were missing a Bold variant the browser synthesized
+// faux bold for part of a line and produced a visible bold/regular mosaic.
+// Nerd Font variants come *after* the platform defaults so they only supply
+// glyphs the system mono lacks — Powerline / icon characters in prompts like
+// powerlevel10k / starship. Both v3.1+ short "NFM" and v3.0 long "Nerd Font
+// Mono" names are listed.
 export const DEFAULT_TERMINAL_FONT_FALLBACKS = [
+  "Menlo",
+  "Consolas",
+  "'DejaVu Sans Mono'",
   "'JetBrainsMono NFM'",
   "'JetBrainsMono Nerd Font Mono'",
-  "'MesloLGM NF'",
-  "'MesloLGM Nerd Font'",
-  "'FiraCode NFM'",
-  "'FiraCode Nerd Font Mono'",
   "'JetBrains Mono'",
-  "'Fira Code'",
-  "'Cascadia Code'",
-  "Menlo",
   "monospace",
 ];
 export const DEFAULT_TERMINAL_FONT_FAMILY = DEFAULT_TERMINAL_FONT_FALLBACKS.join(", ");
@@ -153,6 +157,22 @@ function normalizeFontFamilyToken(fontFamily: string): string {
     .trim()
     .replace(/^['"]|['"]$/g, "")
     .toLowerCase();
+}
+
+// 给一个 fontFamily 字符串前面塞一个独占 sentinel 字体名，目的是让 xterm.js
+// 的 CharAtlasCache 不在多个 terminal 之间共享 TextureAtlas。
+//
+// 背景：CharAtlasCache 用 (fontFamily, fontSize, fontWeight, colors[256], dpr, ...)
+// 当 key 做全局缓存，所有 config 相同的 terminal 实例**物理共享**同一个 TextureAtlas
+// 对象。这意味着一个 terminal 调 clearTextureAtlas()（修首帧字形 bug）会清掉所有共
+// 享者的字形缓存，导致其它 terminal 下次绘字时撞上 WebKit Canvas2D 首次绘字的不稳
+// 定窗口、写进错字形 → UTF-8 乱码 / 字体粗细异常。
+//
+// CSS 字体解析时未注册的字体名直接跳过到下一项，所以加这个 sentinel 视觉零差异；
+// 但 string equality 不等 → configEquals 必然 false → 每个 terminal 独占 atlas。
+// 代价：每个 terminal 各自一份 atlas（~MB 级），但避免了跨实例污染。
+export function withTerminalFontIsolation(sessionId: string, fontFamily: string): string {
+  return `"opskat-isolate-${sessionId}", ${fontFamily}`;
 }
 
 export function withTerminalFontFallback(fontFamily: string): string {

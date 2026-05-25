@@ -1,10 +1,12 @@
 package ssh
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/opskat/opskat/internal/service/sftp_svc"
 
@@ -225,6 +227,50 @@ func (s *SSH) SFTPDelete(sessionID, remotePath string, isDir bool) error {
 		return s.sftp.RemoveDir(sessionID, remotePath)
 	}
 	return s.sftp.Remove(sessionID, remotePath)
+}
+
+// SFTPMkdir 新建远程目录。
+func (s *SSH) SFTPMkdir(sessionID, remotePath string) error {
+	return s.sftp.Mkdir(sessionID, remotePath)
+}
+
+// SFTPCreateFile 新建空远程文件。
+func (s *SSH) SFTPCreateFile(sessionID, remotePath string) error {
+	return s.sftp.CreateFile(sessionID, remotePath)
+}
+
+// SFTPRename 重命名或移动远程路径。
+func (s *SSH) SFTPRename(sessionID, oldPath, newPath string) error {
+	return s.sftp.Rename(sessionID, oldPath, newPath)
+}
+
+// SFTPPaste 粘贴远程文件/目录剪贴板内容。
+func (s *SSH) SFTPPaste(req sftp_svc.PasteRequest) error {
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = s.appCtx
+	}
+	return s.sftp.Paste(ctx, req)
+}
+
+// SFTPProperties 获取远程文件/目录属性。
+// 目录递归统计有 5s 超时保护，超时时返回近似值并置 truncated=true。
+func (s *SSH) SFTPProperties(sessionID, remotePath string) (sftp_svc.FileProperties, error) {
+	base := s.ctx
+	if base == nil {
+		base = s.appCtx
+	}
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(base, 5*time.Second)
+	defer cancel()
+	return s.sftp.Properties(ctx, sessionID, remotePath)
+}
+
+// SFTPApplyPermissions 修改远程权限与属主。
+func (s *SSH) SFTPApplyPermissions(sessionID string, req sftp_svc.PermissionApplyRequest) error {
+	return s.sftp.ApplyPermissions(sessionID, req)
 }
 
 // --- 本地 SSH 密钥发现 ---

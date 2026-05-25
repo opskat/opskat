@@ -406,6 +406,19 @@ func (s *SSH) ChangeSSHDirectory(sessionID, targetPath string) error {
 	}
 
 	state := sess.GetSyncState()
+	resolvedPath := targetPath
+	if strings.HasPrefix(resolvedPath, "/") {
+		resolvedPath = path.Clean(resolvedPath)
+		expectedPath, err := s.sftp.ResolveDirectory(sessionID, resolvedPath)
+		if err != nil {
+			return err
+		}
+		if !state.Supported || !state.CwdKnown || !state.PromptReady || !state.PromptClean {
+			return sess.ChangeDirectoryDirect(resolvedPath)
+		}
+		return sess.ChangeDirectoryTo(resolvedPath, expectedPath)
+	}
+
 	if !state.Supported {
 		if err := sess.EnableSync(); err != nil {
 			return err
@@ -415,8 +428,10 @@ func (s *SSH) ChangeSSHDirectory(sessionID, targetPath string) error {
 	if !state.CwdKnown {
 		return dirsync.Error(dirsync.CodeCwdUnknown)
 	}
+	if !state.PromptReady || !state.PromptClean {
+		return dirsync.Error(dirsync.CodeBusy)
+	}
 
-	resolvedPath := targetPath
 	if !strings.HasPrefix(resolvedPath, "/") {
 		resolvedPath = path.Join(state.Cwd, resolvedPath)
 	}

@@ -217,7 +217,7 @@ func TestMoveItem(t *testing.T) {
 			So(err.Error(), ShouldContainSubstring, "invalid direction")
 		})
 
-		Convey("up - 相同 order 值时自动递增以避免冲突", func() {
+		Convey("up - 相同 order 值时按移动后的顺序重新编号", func() {
 			items := []testItem{
 				{id: 1, order: 10},
 				{id: 2, order: 10}, // 与前一个 order 相同
@@ -229,14 +229,13 @@ func TestMoveItem(t *testing.T) {
 			err := MoveItem(int64(2), "up", items, getID, getOrder, recordUpdate(&calls))
 			So(err, ShouldBeNil)
 			So(len(calls), ShouldEqual, 2)
-			// curOrder becomes prevOrder+1 = 11 to avoid conflict
 			So(calls[0].id, ShouldEqual, 2)
 			So(calls[0].order, ShouldEqual, 10)
 			So(calls[1].id, ShouldEqual, 1)
-			So(calls[1].order, ShouldEqual, 11)
+			So(calls[1].order, ShouldEqual, 20)
 		})
 
-		Convey("down - 相同 order 值时自动递增以避免冲突", func() {
+		Convey("down - 相同 order 值时按移动后的顺序重新编号", func() {
 			items := []testItem{
 				{id: 1, order: 10},
 				{id: 2, order: 10}, // 与后一个 order 相同
@@ -248,11 +247,32 @@ func TestMoveItem(t *testing.T) {
 			err := MoveItem(int64(1), "down", items, getID, getOrder, recordUpdate(&calls))
 			So(err, ShouldBeNil)
 			So(len(calls), ShouldEqual, 2)
-			// nextOrder becomes curOrder+1 = 11 to avoid conflict
-			So(calls[0].id, ShouldEqual, 1)
-			So(calls[0].order, ShouldEqual, 11)
-			So(calls[1].id, ShouldEqual, 2)
-			So(calls[1].order, ShouldEqual, 10)
+			So(calls[0].id, ShouldEqual, 2)
+			So(calls[0].order, ShouldEqual, 10)
+			So(calls[1].id, ShouldEqual, 1)
+			So(calls[1].order, ShouldEqual, 20)
+		})
+
+		Convey("down - 多个相同 order 值时只下移一位并重新编号", func() {
+			items := []testItem{
+				{id: 1, order: 0},
+				{id: 2, order: 0},
+				{id: 3, order: 0},
+			}
+			var calls []struct {
+				id    int64
+				order int
+			}
+			err := MoveItem(int64(1), "down", items, getID, getOrder, recordUpdate(&calls))
+			So(err, ShouldBeNil)
+			So(calls, ShouldResemble, []struct {
+				id    int64
+				order int
+			}{
+				{id: 2, order: 10},
+				{id: 1, order: 20},
+				{id: 3, order: 30},
+			})
 		})
 
 		Convey("updateOrder 错误传播", func() {

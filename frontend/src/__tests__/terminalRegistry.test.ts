@@ -10,7 +10,9 @@ const hoisted = vi.hoisted(() => {
   const webglAddonCtor = vi.fn();
   const webglAddonDisposeSpy = vi.fn();
   const webglContextLossDisposeSpy = vi.fn();
+  const webglClearTextureAtlasSpy = vi.fn();
   const setWebglEnabledSpy = vi.fn();
+  const reportWebglFailureSpy = vi.fn();
   const disposeOrder: string[] = [];
   const state: { capturedOnKey: ((e: { key: string }) => void) | null } = {
     capturedOnKey: null,
@@ -25,7 +27,9 @@ const hoisted = vi.hoisted(() => {
     webglAddonCtor,
     webglAddonDisposeSpy,
     webglContextLossDisposeSpy,
+    webglClearTextureAtlasSpy,
     setWebglEnabledSpy,
+    reportWebglFailureSpy,
     disposeOrder,
     state,
   };
@@ -54,6 +58,8 @@ vi.mock("@xterm/xterm", () => {
       hoisted.state.capturedOnKey = handler;
       return { dispose: vi.fn() };
     });
+    onWriteParsed = vi.fn(() => ({ dispose: vi.fn() }));
+    onRender = vi.fn(() => ({ dispose: vi.fn() }));
     attachCustomKeyEventHandler = vi.fn();
     dispose = vi.fn(() => {
       hoisted.disposeOrder.push("term");
@@ -90,6 +96,9 @@ vi.mock("@xterm/addon-webgl", () => {
         hoisted.webglContextLossDisposeSpy();
       }),
     }));
+    clearTextureAtlas = vi.fn(() => {
+      hoisted.webglClearTextureAtlasSpy();
+    });
     dispose = vi.fn(() => {
       hoisted.disposeOrder.push("webgl");
       hoisted.webglAddonDisposeSpy();
@@ -112,11 +121,15 @@ vi.mock("@/stores/terminalThemeStore", () => ({
   useTerminalThemeStore: {
     getState: () => ({
       setWebglEnabled: hoisted.setWebglEnabledSpy,
+      reportWebglFailure: hoisted.reportWebglFailureSpy,
     }),
   },
 }));
 
-vi.mock("@/data/terminalFonts", () => ({ withTerminalFontFallback: (s: string) => s }));
+vi.mock("@/data/terminalFonts", () => ({
+  withTerminalFontFallback: (s: string) => s,
+  withTerminalFontIsolation: (_id: string, s: string) => s,
+}));
 vi.mock("@/lib/terminalEncode", () => ({ bytesToBase64: () => "" }));
 
 vi.mock("@/i18n", () => ({
@@ -137,7 +150,9 @@ describe("terminalRegistry", () => {
     hoisted.webglAddonCtor.mockClear();
     hoisted.webglAddonDisposeSpy.mockClear();
     hoisted.webglContextLossDisposeSpy.mockClear();
+    hoisted.webglClearTextureAtlasSpy.mockClear();
     hoisted.setWebglEnabledSpy.mockClear();
+    hoisted.reportWebglFailureSpy.mockClear();
     hoisted.disposeOrder.length = 0;
   });
 

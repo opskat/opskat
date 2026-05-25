@@ -74,6 +74,24 @@ func TestGroupSvc_Update(t *testing.T) {
 	})
 }
 
+func TestGroupSvc_Rename(t *testing.T) {
+	ctx, mockGroupRepo, _ := setupTest(t)
+
+	convey.Convey("重命名分组", t, func() {
+		convey.Convey("只更新名称字段，避免覆盖图标/描述/策略", func() {
+			mockGroupRepo.EXPECT().UpdateName(gomock.Any(), int64(1), "新名称").Return(nil)
+
+			err := Group().Rename(ctx, 1, "新名称")
+			assert.NoError(t, err)
+		})
+
+		convey.Convey("名称为空时 Validate 拦截，不调用 repo.UpdateName", func() {
+			err := Group().Rename(ctx, 1, "")
+			assert.Error(t, err)
+		})
+	})
+}
+
 func TestGroupSvc_Delete(t *testing.T) {
 	ctx, mockGroupRepo, mockAssetRepo := setupTest(t)
 
@@ -132,6 +150,26 @@ func TestGroupSvc_List(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Len(t, got, 2)
 		})
+	})
+}
+
+func TestGroupSvc_Move(t *testing.T) {
+	convey.Convey("Move：同父级分组存在重复 sort_order 时，下移只移动一位", t, func() {
+		ctx, mockGroupRepo, _ := setupTest(t)
+		moving := &group_entity.Group{ID: 1, ParentID: 0, SortOrder: 0}
+		all := []*group_entity.Group{
+			moving,
+			{ID: 2, ParentID: 0, SortOrder: 0},
+			{ID: 3, ParentID: 0, SortOrder: 0},
+		}
+		mockGroupRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(moving, nil)
+		mockGroupRepo.EXPECT().List(gomock.Any()).Return(all, nil)
+		mockGroupRepo.EXPECT().UpdateSortOrder(gomock.Any(), int64(2), 10).Return(nil)
+		mockGroupRepo.EXPECT().UpdateSortOrder(gomock.Any(), int64(1), 20).Return(nil)
+		mockGroupRepo.EXPECT().UpdateSortOrder(gomock.Any(), int64(3), 30).Return(nil)
+
+		err := Group().Move(ctx, 1, "down")
+		assert.NoError(t, err)
 	})
 }
 

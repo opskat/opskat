@@ -311,7 +311,7 @@ export function CommandPalette({ open, onClose, onConnectAsset }: CommandPalette
       </div>
 
       {/* Results list */}
-      <ScrollArea className="max-h-96">
+      <ScrollArea className="[&>[data-slot=scroll-area-viewport]]:max-h-96">
         <div ref={listRef} className="py-1">
           {emptyKey ? (
             <p className="px-4 py-8 text-center text-sm text-muted-foreground">{t(emptyKey)}</p>

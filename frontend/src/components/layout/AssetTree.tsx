@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import {
   ChevronRight,
@@ -19,6 +19,7 @@ import {
   Trash2,
   TerminalSquare,
   ExternalLink,
+  Settings2,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -45,7 +46,17 @@ import {
 } from "@opskat/ui";
 import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
 import { filterAssets } from "@/lib/assetSearch";
-import { getAssetTreeMoveBeforeId, type AssetTreeSortableItem } from "@/lib/assetTreeReorder";
+import {
+  flattenTree,
+  computeInsertionPoint,
+  insertionToReorderArgs,
+  rowKey,
+  useAssetTreeDndStore,
+  type InsertionPoint,
+  type Row,
+  type RowRect,
+} from "@/lib/assetTreeDnd";
+import { reorderAssetsOptimistically } from "@/lib/assetTreeReorderOptimistic";
 import { getAssetType } from "@/lib/assetTypes";
 import { getAssetTypeOptions, matchSelectedTypes } from "@/lib/assetTypes/options";
 import { AssetTypeFilterButton } from "@/components/asset/AssetTypeFilterButton";
@@ -56,9 +67,18 @@ import { useActiveAssetIds } from "@/hooks/useActiveAssetIds";
 import { MoveAsset } from "../../../wailsjs/go/system/System";
 import { MoveGroup, ReorderAsset, ReorderGroup } from "../../../wailsjs/go/system/System";
 import { asset_entity, group_entity } from "../../../wailsjs/go/models";
-import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
-import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragCancelEvent,
+  type DragEndEvent,
+  type DragMoveEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import { useSortable } from "@dnd-kit/sortable";
 
 interface AssetTreeProps {
   collapsed: boolean;
@@ -107,6 +127,80 @@ function saveHideEmpty(value: boolean) {
   localStorage.setItem(HIDE_EMPTY_LS_KEY, value ? "true" : "false");
 }
 
+function afterDragCleanupFrame() {
+  return new Promise<void>((resolve) => {
+    if (typeof window !== "undefined" && window.requestAnimationFrame) {
+      window.requestAnimationFrame(() => resolve());
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
+}
+
+function projectIndicator(
+  point: InsertionPoint,
+  rowsList: Row[],
+  rects: Map<string, RowRect>
+): { y: number | null; depth: number | null } {
+  if (point.kind === "invalid") {
+    return { y: null, depth: null };
+  }
+  if (point.kind === "root-end") {
+    if (rowsList.length > 0) {
+      const last = rowsList[rowsList.length - 1];
+      const rect = rects.get(rowKey(last));
+      if (rect) return { y: rect.bottom, depth: 0 };
+    }
+    return { y: null, depth: null };
+  }
+  if (point.kind === "before-asset" || point.kind === "before-group") {
+    const target =
+      point.kind === "before-asset"
+        ? rowsList.find((r) => r.kind === "asset" && r.assetID === point.assetID)
+        : rowsList.find((r) => r.kind === "group-header" && r.groupID === point.groupID);
+    if (!target) return { y: null, depth: null };
+    const rect = rects.get(rowKey(target));
+    if (!rect) return { y: null, depth: null };
+    return { y: rect.top, depth: point.depth };
+  }
+  if (point.kind === "after-asset") {
+    const target = rowsList.find((r) => r.kind === "asset" && r.assetID === point.assetID);
+    if (!target) return { y: null, depth: null };
+    const rect = rects.get(rowKey(target));
+    if (!rect) return { y: null, depth: null };
+    return { y: rect.bottom, depth: point.depth };
+  }
+  // into-group-first
+  const target = rowsList.find((r) => r.kind === "group-header" && r.groupID === point.groupID);
+  if (!target) return { y: null, depth: null };
+  const rect = rects.get(rowKey(target));
+  if (!rect) return { y: null, depth: null };
+  return { y: rect.bottom, depth: point.depth + 1 };
+}
+
+function DropIndicator() {
+  const y = useAssetTreeDndStore((s) => s.indicatorY);
+  const depth = useAssetTreeDndStore((s) => s.indicatorDepth);
+  if (y === null) return null;
+  return (
+    <div
+      className="pointer-events-none absolute right-2 z-20 h-px bg-primary transition-[top,left] duration-100 ease-out"
+      style={{
+        top: y - 0.5,
+        left: `${20 + (depth ?? 0) * 12}px`,
+      }}
+    >
+      <span className="absolute -left-1 top-1/2 h-2 w-2 -translate-y-1/2 rounded-full bg-primary" />
+    </div>
+  );
+}
+
+function parseActive(id: string): { kind: "asset" | "group"; id: number } | null {
+  const m = /^(asset|group)-(\d+)$/.exec(id);
+  if (!m) return null;
+  return { kind: m[1] as "asset" | "group", id: Number(m[2]) };
+}
+
 export function AssetTree({
   collapsed,
   sidebarHidden,
@@ -125,8 +219,17 @@ export function AssetTree({
 }: AssetTreeProps) {
   const { t } = useTranslation();
   const isFullscreen = useFullscreen();
-  const { assets, groups, selectedAssetId, fetchAssets, fetchGroups, deleteAsset, deleteGroup, refresh } =
-    useAssetStore();
+  const {
+    assets,
+    groups,
+    selectedAssetId,
+    collapsedGroupIds,
+    fetchAssets,
+    fetchGroups,
+    deleteAsset,
+    deleteGroup,
+    refresh,
+  } = useAssetStore();
   const connectingAssetIds = useTerminalStore((s) => s.connectingAssetIds);
   const extensions = useExtensionStore((s) => s.extensions);
   const activeAssetIds = useActiveAssetIds();
@@ -139,6 +242,11 @@ export function AssetTree({
     childGroupCount: number;
   } | null>(null);
   const [deleteAssetConfirm, setDeleteAssetConfirm] = useState<asset_entity.Asset | null>(null);
+  const [groupContextMenu, setGroupContextMenu] = useState<{
+    group: group_entity.Group;
+    position: { x: number; y: number };
+  } | null>(null);
+  const [dragPreviewAsset, setDragPreviewAsset] = useState<asset_entity.Asset | null>(null);
 
   useEffect(() => {
     fetchAssets();
@@ -155,10 +263,12 @@ export function AssetTree({
 
   const typeOptions = useMemo(() => getAssetTypeOptions(extensions), [extensions]);
 
-  const typeFilteredAssets = matchSelectedTypes(assets, selectedTypes, typeOptions);
-  const filteredAssets = filter
-    ? filterAssets(typeFilteredAssets, groups, { query: filter }).map((r) => r.asset)
-    : typeFilteredAssets;
+  const filteredAssets = useMemo(() => {
+    const typeFilteredAssets = matchSelectedTypes(assets, selectedTypes, typeOptions);
+    return filter
+      ? filterAssets(typeFilteredAssets, groups, { query: filter }).map((r) => r.asset)
+      : typeFilteredAssets;
+  }, [assets, selectedTypes, typeOptions, filter, groups]);
 
   // Group assets by GroupID
   const groupedAssets = new Map<number, asset_entity.Asset[]>();
@@ -231,94 +341,139 @@ export function AssetTree({
   // 5px 移动门槛 → 单击/双击不被误识别成拖动
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
-  // 拖动用的扁平 id 列表：DFS 顺序展开所有可见分组与资产
-  const sortableIds = useMemo(() => {
-    const ids: string[] = [];
-    const walk = (parentId: number) => {
-      for (const g of childGroups(parentId)) {
-        ids.push(`group-${g.ID}`);
-        walk(g.ID);
-        for (const a of groupedAssets.get(g.ID) || []) {
-          ids.push(`asset-${a.ID}`);
-        }
-      }
-    };
-    walk(0);
-    if ((groupedAssets.get(0) || []).length > 0) {
-      ids.push("group-0");
-      for (const a of groupedAssets.get(0) || []) {
-        ids.push(`asset-${a.ID}`);
-      }
+  const toggleGroupCollapsed = useAssetStore((s) => s.toggleGroupCollapsed);
+
+  const hoverExpandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverExpandTargetRef = useRef<number | null>(null);
+  const rowsRef = useRef<Row[]>([]);
+  const treeContainerRef = useRef<HTMLDivElement>(null);
+
+  const rows = useMemo(
+    () =>
+      flattenTree({
+        groups,
+        assets: filteredAssets,
+        collapsedGroupIDs: new Set(collapsedGroupIds),
+        shouldHideEmpty: shouldHideEmptyGroups,
+      }),
+    [groups, filteredAssets, collapsedGroupIds, shouldHideEmptyGroups]
+  );
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
+
+  const collectRowRects = useCallback((): Map<string, RowRect> => {
+    const m = new Map<string, RowRect>();
+    const container = treeContainerRef.current ?? document;
+    const nodes = container.querySelectorAll<HTMLElement>("[data-asset-tree-row]");
+    for (const node of nodes) {
+      const key = node.getAttribute("data-asset-tree-row");
+      if (!key) continue;
+      const rect = node.getBoundingClientRect();
+      m.set(key, { top: rect.top, bottom: rect.bottom, height: rect.height });
     }
-    return ids;
-    // childGroups / groupedAssets 每次渲染都是新引用，但底层依赖 groups/assets/hideEmptyGroups
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups, assets, hideEmptyGroups, selectedTypes, filter]);
+    return m;
+  }, []);
+
+  const clearHoverExpand = useCallback(() => {
+    if (hoverExpandTimerRef.current) {
+      clearTimeout(hoverExpandTimerRef.current);
+      hoverExpandTimerRef.current = null;
+    }
+    hoverExpandTargetRef.current = null;
+  }, []);
+
+  const handleDragStart = (e: DragStartEvent) => {
+    const active = parseActive(String(e.active.id));
+    if (active?.kind === "asset") {
+      setDragPreviewAsset(assets.find((asset) => asset.ID === active.id) ?? null);
+    } else {
+      setDragPreviewAsset(null);
+    }
+  };
+
+  const handleDragMove = (e: DragMoveEvent) => {
+    const active = parseActive(String(e.active.id));
+    if (!active) return;
+    const activatorEvent = e.activatorEvent as PointerEvent;
+    const pointerY = activatorEvent.clientY + e.delta.y;
+    const rects = collectRowRects();
+
+    const point = computeInsertionPoint({
+      rows: rowsRef.current,
+      rowRects: rects,
+      pointerY,
+      active,
+      groups,
+    });
+
+    const containerTop = treeContainerRef.current?.getBoundingClientRect().top ?? 0;
+    const isHighlight = point.kind === "into-group-first";
+    if (isHighlight) {
+      useAssetTreeDndStore.getState().setIndicator(point, null, null, point.groupID);
+    } else {
+      const { y, depth } = projectIndicator(point, rowsRef.current, rects);
+      const relY = y === null ? null : y - containerTop;
+      useAssetTreeDndStore.getState().setIndicator(point, relY, depth, null);
+    }
+
+    // 折叠 group hover 500ms 自动展开
+    const hoverGroupID = point.kind === "before-group" || point.kind === "into-group-first" ? point.groupID : null;
+    const hoverRow =
+      hoverGroupID !== null
+        ? rowsRef.current.find((r) => r.kind === "group-header" && r.groupID === hoverGroupID)
+        : null;
+    if (
+      hoverRow &&
+      hoverRow.kind === "group-header" &&
+      hoverRow.collapsed &&
+      hoverExpandTargetRef.current !== hoverGroupID
+    ) {
+      clearHoverExpand();
+      hoverExpandTargetRef.current = hoverGroupID;
+      hoverExpandTimerRef.current = setTimeout(() => {
+        toggleGroupCollapsed(hoverGroupID!);
+        hoverExpandTimerRef.current = null;
+      }, 500);
+    } else if (!hoverRow || hoverRow.kind !== "group-header" || !hoverRow.collapsed) {
+      clearHoverExpand();
+    }
+  };
+
+  const handleDragCancel = (_e: DragCancelEvent) => {
+    setDragPreviewAsset(null);
+    useAssetTreeDndStore.getState().clear();
+    clearHoverExpand();
+  };
 
   const handleDragEnd = async (e: DragEndEvent) => {
-    const { active, over } = e;
-    if (!over || active.id === over.id) return;
-    const activeStr = String(active.id);
-    const overStr = String(over.id);
-    const [activeKind, activeIdStr] = activeStr.split("-");
-    const [overKind, overIdStr] = overStr.split("-");
-    const activeId = Number(activeIdStr);
-    const overId = Number(overIdStr);
-    if (!Number.isFinite(activeId) || !Number.isFinite(overId)) return;
+    setDragPreviewAsset(null);
+    clearHoverExpand();
+    const point = useAssetTreeDndStore.getState().point;
+    useAssetTreeDndStore.getState().clear();
+    if (!point) return;
 
+    const active = parseActive(String(e.active.id));
+    if (!active) return;
+
+    const args = insertionToReorderArgs({ point, active, groups, assets });
+    if (!args) return;
+
+    let appliedOptimistic = false;
     try {
-      if (activeKind === "asset") {
-        if (overKind === "asset") {
-          const overAsset = assets.find((a) => a.ID === overId);
-          const targetGroupID = overAsset?.GroupID ?? 0;
-          const assetGroupById = new Map(assets.map((a) => [a.ID, a.GroupID ?? 0] as const));
-          const beforeID = getAssetTreeMoveBeforeId({
-            sortableIds,
-            activeSortableId: activeStr,
-            overSortableId: overStr,
-            targetKind: "asset",
-            targetContainerId: targetGroupID,
-            getContainerId: (item: AssetTreeSortableItem) =>
-              item.kind === "asset" ? assetGroupById.get(item.id) : undefined,
-          });
-          if (beforeID === null) return;
-          await ReorderAsset(activeId, targetGroupID, beforeID);
-        } else if (overKind === "group") {
-          // 拖到分组（含未分组桶 id=0）→ 追加到该分组末尾
-          await ReorderAsset(activeId, overId, 0);
-        } else {
-          return;
-        }
-      } else if (activeKind === "group") {
-        if (activeId === 0) return; // 未分组桶不可拖
-        if (overKind === "group") {
-          if (overId === 0) {
-            // 拖到未分组桶 → 不支持把分组放进“未分组”里
-            return;
-          }
-          const overGroup = groups.find((g) => g.ID === overId);
-          const targetParentID = overGroup?.ParentID ?? 0;
-          const groupParentById = new Map(groups.map((g) => [g.ID, g.ParentID ?? 0] as const));
-          const beforeID = getAssetTreeMoveBeforeId({
-            sortableIds,
-            activeSortableId: activeStr,
-            overSortableId: overStr,
-            targetKind: "group",
-            targetContainerId: targetParentID,
-            getContainerId: (item: AssetTreeSortableItem) =>
-              item.kind === "group" ? groupParentById.get(item.id) : undefined,
-          });
-          if (beforeID === null) return;
-          await ReorderGroup(activeId, targetParentID, beforeID);
-        } else if (overKind === "asset") {
-          const overAsset = assets.find((a) => a.ID === overId);
-          if (!overAsset || overAsset.GroupID === 0) return;
-          // 拖到资产所在分组下，作为该分组末位子分组
-          await ReorderGroup(activeId, overAsset.GroupID, 0);
-        }
+      if (args.kind === "asset") {
+        await afterDragCleanupFrame();
+        useAssetStore.setState((state) => ({
+          assets: reorderAssetsOptimistically(state.assets, args.id, args.targetGroupID, args.beforeID),
+        }));
+        appliedOptimistic = true;
+        await ReorderAsset(args.id, args.targetGroupID, args.beforeID);
+      } else {
+        await ReorderGroup(args.id, args.targetParentID, args.beforeID);
       }
       await refresh();
     } catch (err) {
+      if (appliedOptimistic) void refresh();
       toast.error(String(err));
     }
   };
@@ -332,6 +487,26 @@ export function AssetTree({
     }
     setDeleteConfirm(null);
   };
+
+  const handleGroupContextMenuClose = useCallback(() => setGroupContextMenu(null), []);
+
+  const handleGroupContextMenu = useCallback((group: group_entity.Group, event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setGroupContextMenu({ group, position: { x: event.clientX, y: event.clientY } });
+  }, []);
+
+  const renderGroupContextMenu = (group: group_entity.Group) => (
+    <GroupContextMenuContent
+      group={group}
+      t={t}
+      onAddAsset={onAddAsset}
+      onEditGroup={onEditGroup}
+      onMoveGroup={handleMoveGroup}
+      onDeleteGroup={handleDeleteGroup}
+      onClose={handleGroupContextMenuClose}
+    />
+  );
 
   if (collapsed) return null;
 
@@ -411,123 +586,132 @@ export function AssetTree({
         </div>
       </div>
       <ScrollArea className="flex-1 min-h-0">
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
-            <ContextMenu>
-              <ContextMenuTrigger className="block min-h-full">
-                <div className="p-2 space-y-0.5">
-                  {visibleRootGroups.map((group) => (
-                    <GroupItem
-                      key={group.ID}
-                      group={group}
-                      assets={groupedAssets.get(group.ID) || []}
-                      allGroupedAssets={groupedAssets}
-                      childGroups={childGroups}
-                      countAssetsInGroup={countAssetsInGroup}
-                      selectedAssetId={selectedAssetId}
-                      activeAssetIds={activeAssetIds}
-                      connectingAssetIds={connectingAssetIds}
-                      onSelectAsset={onSelectAsset}
-                      onAddAsset={onAddAsset}
-                      onEditAsset={onEditAsset}
-                      onCopyAsset={onCopyAsset}
-                      onConnectAsset={onConnectAsset}
-                      onConnectAssetInNewTab={onConnectAssetInNewTab}
-                      onOpenFileManager={onOpenFileManager}
-                      onEditGroup={onEditGroup}
-                      onGroupDetail={onGroupDetail}
-                      onDeleteGroup={handleDeleteGroup}
-                      onDeleteAsset={(asset: asset_entity.Asset) => setDeleteAssetConfirm(asset)}
-                      onMoveAsset={handleMoveAsset}
-                      onMoveGroup={handleMoveGroup}
-                      onOpenInfoTab={onOpenInfoTab}
-                      depth={0}
-                      t={t}
-                    />
-                  ))}
-                  {rootAssets.length > 0 && (
-                    <GroupItem
-                      group={
-                        new group_entity.Group({
-                          ID: 0,
-                          Name: t("asset.ungrouped"),
-                        })
-                      }
-                      assets={rootAssets}
-                      allGroupedAssets={groupedAssets}
-                      childGroups={() => []}
-                      countAssetsInGroup={() => rootAssets.length}
-                      selectedAssetId={selectedAssetId}
-                      activeAssetIds={activeAssetIds}
-                      connectingAssetIds={connectingAssetIds}
-                      onSelectAsset={onSelectAsset}
-                      onAddAsset={onAddAsset}
-                      onEditAsset={onEditAsset}
-                      onCopyAsset={onCopyAsset}
-                      onConnectAsset={onConnectAsset}
-                      onConnectAssetInNewTab={onConnectAssetInNewTab}
-                      onOpenFileManager={onOpenFileManager}
-                      onEditGroup={onEditGroup}
-                      onGroupDetail={onGroupDetail}
-                      onDeleteGroup={handleDeleteGroup}
-                      onDeleteAsset={(asset) => setDeleteAssetConfirm(asset)}
-                      onMoveAsset={handleMoveAsset}
-                      onMoveGroup={handleMoveGroup}
-                      onOpenInfoTab={onOpenInfoTab}
-                      depth={0}
-                      t={t}
-                    />
-                  )}
-                  {treeIsEmpty && (
-                    <div className="flex flex-col items-center gap-2 px-3 py-6 text-center">
-                      <div className="flex h-8 w-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
-                        <Server className="h-4 w-4" />
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        <p className="text-xs font-medium text-sidebar-foreground">
-                          {t(isFilteredEmpty ? "asset.noMatchTitle" : "asset.emptyTitle")}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {t(isFilteredEmpty ? "asset.noMatchDesc" : "asset.emptyDesc")}
-                        </p>
-                      </div>
-                      {isFilteredEmpty ? (
-                        <div className="flex flex-wrap justify-center gap-1">
-                          {hasSearchFilter && (
-                            <Button variant="ghost" size="xs" onClick={() => setFilter("")}>
-                              {t("asset.clearSearch")}
-                            </Button>
-                          )}
-                          {hasTypeFilter && (
-                            <Button variant="ghost" size="xs" onClick={() => setSelectedTypes([])}>
-                              {t("asset.clearTypeFilter")}
-                            </Button>
-                          )}
-                        </div>
-                      ) : (
-                        <Button variant="outline" size="xs" onClick={() => onAddAsset()}>
-                          <Plus className="h-3 w-3" />
-                          {t("asset.addAsset")}
-                        </Button>
-                      )}
-                    </div>
-                  )}
+        <DndContext
+          sensors={sensors}
+          onDragStart={handleDragStart}
+          onDragMove={handleDragMove}
+          onDragCancel={handleDragCancel}
+          onDragEnd={handleDragEnd}
+        >
+          <div ref={treeContainerRef} className="p-2 space-y-0.5 isolate relative">
+            {visibleRootGroups.map((group) => (
+              <GroupItem
+                key={group.ID}
+                group={group}
+                assets={groupedAssets.get(group.ID) || []}
+                allGroupedAssets={groupedAssets}
+                childGroups={childGroups}
+                countAssetsInGroup={countAssetsInGroup}
+                selectedAssetId={selectedAssetId}
+                activeAssetIds={activeAssetIds}
+                connectingAssetIds={connectingAssetIds}
+                onSelectAsset={onSelectAsset}
+                onAddAsset={onAddAsset}
+                onEditAsset={onEditAsset}
+                onCopyAsset={onCopyAsset}
+                onConnectAsset={onConnectAsset}
+                onConnectAssetInNewTab={onConnectAssetInNewTab}
+                onOpenFileManager={onOpenFileManager}
+                onEditGroup={onEditGroup}
+                onGroupDetail={onGroupDetail}
+                onDeleteAsset={(asset: asset_entity.Asset) => setDeleteAssetConfirm(asset)}
+                onMoveAsset={handleMoveAsset}
+                onOpenInfoTab={onOpenInfoTab}
+                onGroupContextMenu={handleGroupContextMenu}
+                depth={0}
+                t={t}
+              />
+            ))}
+            {rootAssets.length > 0 && (
+              <GroupItem
+                group={
+                  new group_entity.Group({
+                    ID: 0,
+                    Name: t("asset.ungrouped"),
+                  })
+                }
+                assets={rootAssets}
+                allGroupedAssets={groupedAssets}
+                childGroups={() => []}
+                countAssetsInGroup={() => rootAssets.length}
+                selectedAssetId={selectedAssetId}
+                activeAssetIds={activeAssetIds}
+                connectingAssetIds={connectingAssetIds}
+                onSelectAsset={onSelectAsset}
+                onAddAsset={onAddAsset}
+                onEditAsset={onEditAsset}
+                onCopyAsset={onCopyAsset}
+                onConnectAsset={onConnectAsset}
+                onConnectAssetInNewTab={onConnectAssetInNewTab}
+                onOpenFileManager={onOpenFileManager}
+                onEditGroup={onEditGroup}
+                onGroupDetail={onGroupDetail}
+                onDeleteAsset={(asset) => setDeleteAssetConfirm(asset)}
+                onMoveAsset={handleMoveAsset}
+                onOpenInfoTab={onOpenInfoTab}
+                onGroupContextMenu={handleGroupContextMenu}
+                depth={0}
+                t={t}
+              />
+            )}
+            {treeIsEmpty && (
+              <div className="flex flex-col items-center gap-2 px-3 py-6 text-center">
+                <div className="flex h-8 w-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                  <Server className="h-4 w-4" />
                 </div>
-              </ContextMenuTrigger>
-              <ContextMenuContent>
-                <ContextMenuItem onClick={() => onAddAsset()}>
-                  <Plus className="h-3.5 w-3.5 mr-1.5" />
-                  {t("asset.addAsset")}
-                </ContextMenuItem>
-                <ContextMenuItem onClick={() => onAddGroup()}>
-                  <FolderPlus className="h-3.5 w-3.5 mr-1.5" />
-                  {t("asset.addGroup")}
-                </ContextMenuItem>
-              </ContextMenuContent>
-            </ContextMenu>
-          </SortableContext>
+                <div className="flex flex-col gap-1">
+                  <p className="text-xs font-medium text-sidebar-foreground">
+                    {t(isFilteredEmpty ? "asset.noMatchTitle" : "asset.emptyTitle")}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {t(isFilteredEmpty ? "asset.noMatchDesc" : "asset.emptyDesc")}
+                  </p>
+                </div>
+                {isFilteredEmpty ? (
+                  <div className="flex flex-wrap justify-center gap-1">
+                    {hasSearchFilter && (
+                      <Button variant="ghost" size="xs" onClick={() => setFilter("")}>
+                        {t("asset.clearSearch")}
+                      </Button>
+                    )}
+                    {hasTypeFilter && (
+                      <Button variant="ghost" size="xs" onClick={() => setSelectedTypes([])}>
+                        {t("asset.clearTypeFilter")}
+                      </Button>
+                    )}
+                  </div>
+                ) : (
+                  <Button variant="outline" size="xs" onClick={() => onAddAsset()}>
+                    <Plus className="h-3 w-3" />
+                    {t("asset.addAsset")}
+                  </Button>
+                )}
+              </div>
+            )}
+            <DropIndicator />
+          </div>
+          <DragOverlay dropAnimation={null}>
+            {dragPreviewAsset ? (
+              <AssetDragPreview asset={dragPreviewAsset} active={activeAssetIds.has(dragPreviewAsset.ID)} />
+            ) : null}
+          </DragOverlay>
         </DndContext>
       </ScrollArea>
+      {groupContextMenu && (
+        <ContextMenu open onOpenChange={(open) => !open && handleGroupContextMenuClose()}>
+          <ContextMenuContent
+            alignToStylePosition
+            style={{
+              position: "fixed",
+              left: groupContextMenu.position.x,
+              top: groupContextMenu.position.y,
+            }}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            {renderGroupContextMenu(groupContextMenu.group)}
+          </ContextMenuContent>
+        </ContextMenu>
+      )}
       <AlertDialog open={!!deleteConfirm} onOpenChange={(open) => !open && setDeleteConfirm(null)}>
         <AlertDialogContent onOverlayClick={() => setDeleteConfirm(null)}>
           <AlertDialogHeader>
@@ -578,8 +762,82 @@ export function AssetTree({
   );
 }
 
+function GroupContextMenuContent({
+  group,
+  t,
+  onAddAsset,
+  onEditGroup,
+  onMoveGroup,
+  onDeleteGroup,
+  onClose,
+}: {
+  group: group_entity.Group;
+  t: (key: string) => string;
+  onAddAsset: (groupId: number) => void;
+  onEditGroup: (group: group_entity.Group) => void;
+  onMoveGroup: (id: number, direction: string) => void;
+  onDeleteGroup: (id: number) => void;
+  onClose: () => void;
+}) {
+  const run = (action: () => void) => {
+    action();
+    onClose();
+  };
+  const isUngrouped = group.ID === 0;
+
+  return (
+    <>
+      <ContextMenuItem onClick={() => run(() => onAddAsset(group.ID))}>
+        <Plus className="h-3.5 w-3.5 mr-1.5" />
+        {t("asset.addAsset")}
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem disabled={isUngrouped} onClick={() => run(() => onEditGroup(group))}>
+        <Settings2 className="h-3.5 w-3.5 mr-1.5" />
+        {t("asset.editGroupSettings")}
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem disabled={isUngrouped} onClick={() => run(() => onMoveGroup(group.ID, "up"))}>
+        <ArrowUp className="h-3.5 w-3.5 mr-1.5" />
+        {t("asset.moveUp")}
+      </ContextMenuItem>
+      <ContextMenuItem disabled={isUngrouped} onClick={() => run(() => onMoveGroup(group.ID, "down"))}>
+        <ArrowDown className="h-3.5 w-3.5 mr-1.5" />
+        {t("asset.moveDown")}
+      </ContextMenuItem>
+      <ContextMenuItem disabled={isUngrouped} onClick={() => run(() => onMoveGroup(group.ID, "top"))}>
+        <ChevronsUp className="h-3.5 w-3.5 mr-1.5" />
+        {t("asset.moveTop")}
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem
+        disabled={isUngrouped}
+        className="text-destructive"
+        onClick={() => run(() => onDeleteGroup(group.ID))}
+      >
+        <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+        {t("action.delete")}
+      </ContextMenuItem>
+    </>
+  );
+}
+
 function DynamicIcon({ icon, className, style }: { icon?: string; className?: string; style?: React.CSSProperties }) {
   return React.createElement(icon ? getIconComponent(icon) : Folder, { className, style });
+}
+
+function AssetDragPreview({ asset, active }: { asset: asset_entity.Asset; active: boolean }) {
+  return (
+    <div className="flex min-w-36 max-w-56 items-center gap-1.5 rounded-md border bg-popover px-2 py-1.5 text-sm shadow-lg">
+      <DynamicIcon
+        icon={asset.Icon || undefined}
+        className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+        style={asset.Icon ? { color: getIconColor(asset.Icon) } : undefined}
+      />
+      {active && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" />}
+      <span className="truncate text-popover-foreground">{asset.Name}</span>
+    </div>
+  );
 }
 
 function GroupItem({
@@ -600,11 +858,10 @@ function GroupItem({
   onOpenFileManager,
   onEditGroup,
   onGroupDetail,
-  onDeleteGroup,
   onDeleteAsset,
   onMoveAsset,
-  onMoveGroup,
   onOpenInfoTab,
+  onGroupContextMenu,
   depth,
   t,
 }: {
@@ -625,16 +882,17 @@ function GroupItem({
   onOpenFileManager?: (asset: asset_entity.Asset) => void;
   onEditGroup: (group: group_entity.Group) => void;
   onGroupDetail: (group: group_entity.Group) => void;
-  onDeleteGroup: (id: number) => void;
   onDeleteAsset: (asset: asset_entity.Asset) => void;
   onMoveAsset: (id: number, direction: string) => void;
-  onMoveGroup: (id: number, direction: string) => void;
   onOpenInfoTab?: (type: "asset" | "group", id: number, name: string, icon?: string) => void;
+  onGroupContextMenu: (group: group_entity.Group, event: React.MouseEvent) => void;
   depth: number;
   t: (key: string) => string;
 }) {
+  /* eslint-disable react-hooks/refs */
   const expanded = useAssetStore((s) => !s.collapsedGroupIds.includes(group.ID));
   const toggleGroupCollapsed = useAssetStore((s) => s.toggleGroupCollapsed);
+  const isDndHighlighted = useAssetTreeDndStore((s) => s.highlightedGroupID === group.ID);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const children = group.ID > 0 ? childGroups(group.ID) : [];
   const totalCount = countAssetsInGroup(group.ID);
@@ -646,23 +904,30 @@ function GroupItem({
   });
   const groupRowStyle: React.CSSProperties = {
     paddingLeft: `${8 + depth * 12}px`,
-    transform: CSS.Transform.toString(sortable.transform),
-    transition: sortable.transition,
     opacity: sortable.isDragging ? 0.5 : undefined,
+    position: "relative",
+    zIndex: sortable.isDragging ? 20 : undefined,
   };
 
-  const groupRow = (
+  const groupActivatorProps = !isUngrouped
+    ? {
+        ...sortable.attributes,
+        ...sortable.listeners,
+      }
+    : {};
+
+  const groupRowContent = (
     <div
-      // dnd-kit's setNodeRef/attributes/listeners are callbacks, not React refs — react-hooks/refs misfires here
-      // eslint-disable-next-line react-hooks/refs
+      // dnd-kit's setNodeRef is a callback, not a React ref.
       ref={sortable.setNodeRef}
-      // eslint-disable-next-line react-hooks/refs
-      {...(!isUngrouped ? sortable.attributes : {})}
-      // eslint-disable-next-line react-hooks/refs
-      {...(!isUngrouped ? sortable.listeners : {})}
-      className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium outline-none hover:bg-sidebar-accent focus-visible:ring-1 focus-visible:ring-sidebar-ring/60 cursor-pointer transition-colors duration-150"
+      data-asset-tree-row={`group-${group.ID}`}
+      className={`flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium outline-none focus-visible:ring-1 focus-visible:ring-sidebar-ring/60 cursor-pointer transition-colors duration-150 ${
+        isDndHighlighted ? "bg-primary/10 ring-1 ring-primary/40" : "hover:bg-sidebar-accent"
+      }`}
       style={groupRowStyle}
       onClick={() => toggleGroupCollapsed(group.ID)}
+      onContextMenu={(e) => onGroupContextMenu(group, e)}
+      {...groupActivatorProps}
     >
       {expanded ? (
         <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -681,52 +946,7 @@ function GroupItem({
 
   return (
     <div>
-      {!isUngrouped ? (
-        <ContextMenu>
-          <ContextMenuTrigger>{groupRow}</ContextMenuTrigger>
-          <ContextMenuContent>
-            <ContextMenuItem onClick={() => onAddAsset(group.ID)}>
-              <Plus className="h-3.5 w-3.5 mr-1.5" />
-              {t("asset.addAsset")}
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={() => onGroupDetail(group)}>
-              <Eye className="h-3.5 w-3.5 mr-1.5" />
-              {t("asset.groupDetail")}
-            </ContextMenuItem>
-            {onOpenInfoTab && (
-              <ContextMenuItem onClick={() => onOpenInfoTab("group", group.ID, group.Name, group.Icon)}>
-                <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
-                {t("action.openInTab")}
-              </ContextMenuItem>
-            )}
-            <ContextMenuItem onClick={() => onEditGroup(group)}>
-              <Pencil className="h-3.5 w-3.5 mr-1.5" />
-              {t("action.edit")}
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={() => onMoveGroup(group.ID, "up")}>
-              <ArrowUp className="h-3.5 w-3.5 mr-1.5" />
-              {t("asset.moveUp")}
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => onMoveGroup(group.ID, "down")}>
-              <ArrowDown className="h-3.5 w-3.5 mr-1.5" />
-              {t("asset.moveDown")}
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => onMoveGroup(group.ID, "top")}>
-              <ChevronsUp className="h-3.5 w-3.5 mr-1.5" />
-              {t("asset.moveTop")}
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem className="text-destructive" onClick={() => onDeleteGroup(group.ID)}>
-              <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-              {t("action.delete")}
-            </ContextMenuItem>
-          </ContextMenuContent>
-        </ContextMenu>
-      ) : (
-        groupRow
-      )}
+      {groupRowContent}
       {expanded && (
         <div className="tree-group-content">
           {children.map((child) => (
@@ -749,11 +969,10 @@ function GroupItem({
               onOpenFileManager={onOpenFileManager}
               onEditGroup={onEditGroup}
               onGroupDetail={onGroupDetail}
-              onDeleteGroup={onDeleteGroup}
               onDeleteAsset={onDeleteAsset}
               onMoveAsset={onMoveAsset}
-              onMoveGroup={onMoveGroup}
               onOpenInfoTab={onOpenInfoTab}
+              onGroupContextMenu={onGroupContextMenu}
               depth={depth + 1}
               t={t}
             />
@@ -781,7 +1000,12 @@ function GroupItem({
           ))}
           {assets.length === 0 && children.length === 0 && (
             <div
-              className="pr-2 py-1 text-xs text-muted-foreground cursor-pointer hover:underline"
+              data-asset-tree-row={`empty-${group.ID}`}
+              className={`pr-2 py-1 text-xs cursor-pointer rounded-md transition-colors duration-150 ${
+                isDndHighlighted
+                  ? "bg-primary/10 ring-1 ring-primary/40 text-foreground"
+                  : "text-muted-foreground hover:underline"
+              }`}
               style={{ paddingLeft: `${20 + (depth + 1) * 12}px` }}
               onClick={() => onAddAsset(group.ID)}
             >
@@ -829,120 +1053,126 @@ function AssetRow({
   onOpenInfoTab?: (type: "asset" | "group", id: number, name: string, icon?: string) => void;
   t: (key: string) => string;
 }) {
+  /* eslint-disable react-hooks/refs */
   const AssetIcon = asset.Icon ? getIconComponent(asset.Icon) : Server;
   const isConnecting = connectingAssetIds.has(asset.ID);
   const sortable = useSortable({ id: `asset-${asset.ID}` });
   const style: React.CSSProperties = {
     paddingLeft: `${20 + (depth + 1) * 12}px`,
-    transform: CSS.Transform.toString(sortable.transform),
-    transition: sortable.transition,
     opacity: sortable.isDragging ? 0.5 : undefined,
+  };
+  const assetActivatorProps = {
+    ...sortable.attributes,
+    ...sortable.listeners,
   };
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger>
-        <div
-          // dnd-kit's setNodeRef/attributes/listeners are callbacks, not React refs — react-hooks/refs misfires here
-          // eslint-disable-next-line react-hooks/refs
-          ref={sortable.setNodeRef}
-          // eslint-disable-next-line react-hooks/refs
-          {...sortable.attributes}
-          // eslint-disable-next-line react-hooks/refs
-          {...sortable.listeners}
-          className={`flex items-center gap-1.5 rounded-md pr-2 py-1.5 text-sm outline-none focus-visible:ring-1 focus-visible:ring-sidebar-ring/60 cursor-pointer select-none transition-colors duration-150 ${
-            selectedAssetId === asset.ID
-              ? "bg-sidebar-accent text-sidebar-accent-foreground"
-              : "hover:bg-sidebar-accent"
-          }`}
-          style={style}
-          onClick={() => {
-            if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
-            clickTimerRef.current = setTimeout(() => {
-              clickTimerRef.current = null;
+    <div
+      ref={sortable.setNodeRef}
+      data-asset-tree-row={`asset-${asset.ID}`}
+      className="relative"
+      style={{
+        zIndex: sortable.isDragging ? 20 : undefined,
+      }}
+    >
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div
+            className={`flex items-center gap-1.5 rounded-md pr-2 py-1.5 text-sm outline-none focus-visible:ring-1 focus-visible:ring-sidebar-ring/60 cursor-pointer select-none transition-colors duration-150 ${
+              selectedAssetId === asset.ID
+                ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                : "hover:bg-sidebar-accent"
+            }`}
+            style={style}
+            {...assetActivatorProps}
+            onClick={() => {
+              if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+              clickTimerRef.current = setTimeout(() => {
+                clickTimerRef.current = null;
+                onSelectAsset(asset);
+              }, 200);
+            }}
+            onDoubleClick={() => {
+              if (clickTimerRef.current) {
+                clearTimeout(clickTimerRef.current);
+                clickTimerRef.current = null;
+              }
               onSelectAsset(asset);
-            }, 200);
-          }}
-          onDoubleClick={() => {
-            if (clickTimerRef.current) {
-              clearTimeout(clickTimerRef.current);
-              clickTimerRef.current = null;
-            }
-            onSelectAsset(asset);
-            const def = getAssetType(asset.Type);
-            if (def?.canConnect && (def.connectAction === "query" || !isConnecting)) {
-              onConnectAsset(asset);
-            }
-          }}
-        >
-          {isConnecting ? (
-            <Loader2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground animate-spin" />
-          ) : (
-            <AssetIcon
-              className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-              style={asset.Icon ? { color: getIconColor(asset.Icon) } : undefined}
-            />
-          )}
-          {activeAssetIds.has(asset.ID) && <span className="h-1.5 w-1.5 rounded-full bg-success shrink-0" />}
-          <span className="truncate text-sidebar-foreground">{asset.Name}</span>
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent>
-        {getAssetType(asset.Type)?.canConnect && (
-          <ContextMenuItem onClick={() => onConnectAsset(asset)} disabled={isConnecting}>
+              const def = getAssetType(asset.Type);
+              if (def?.canConnect && (def.connectAction === "query" || !isConnecting)) {
+                onConnectAsset(asset);
+              }
+            }}
+          >
             {isConnecting ? (
-              <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+              <Loader2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground animate-spin" />
             ) : (
-              <TerminalSquare className="h-3.5 w-3.5 mr-1.5" />
+              <AssetIcon
+                className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                style={asset.Icon ? { color: getIconColor(asset.Icon) } : undefined}
+              />
             )}
-            {t("asset.connect")}
+            {activeAssetIds.has(asset.ID) && <span className="h-1.5 w-1.5 rounded-full bg-success shrink-0" />}
+            <span className="truncate text-sidebar-foreground">{asset.Name}</span>
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          {getAssetType(asset.Type)?.canConnect && (
+            <ContextMenuItem onClick={() => onConnectAsset(asset)} disabled={isConnecting}>
+              {isConnecting ? (
+                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <TerminalSquare className="h-3.5 w-3.5 mr-1.5" />
+              )}
+              {t("asset.connect")}
+            </ContextMenuItem>
+          )}
+          {getAssetType(asset.Type)?.canConnectInNewTab && onConnectAssetInNewTab && (
+            <ContextMenuItem onClick={() => onConnectAssetInNewTab(asset)} disabled={isConnecting}>
+              <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
+              {t("asset.connectInNewTab")}
+            </ContextMenuItem>
+          )}
+          {asset.Type === "ssh" && onOpenFileManager && (
+            <ContextMenuItem onClick={() => onOpenFileManager(asset)}>
+              <FolderOpen className="h-3.5 w-3.5 mr-1.5" />
+              {t("sftp.fileManager")}
+            </ContextMenuItem>
+          )}
+          {onOpenInfoTab && (
+            <ContextMenuItem onClick={() => onOpenInfoTab("asset", asset.ID, asset.Name, asset.Icon)}>
+              <Eye className="h-3.5 w-3.5 mr-1.5" />
+              {t("action.editPermission")}
+            </ContextMenuItem>
+          )}
+          <ContextMenuItem onClick={() => onEditAsset(asset)}>
+            <Pencil className="h-3.5 w-3.5 mr-1.5" />
+            {t("action.edit")}
           </ContextMenuItem>
-        )}
-        {getAssetType(asset.Type)?.canConnectInNewTab && onConnectAssetInNewTab && (
-          <ContextMenuItem onClick={() => onConnectAssetInNewTab(asset)} disabled={isConnecting}>
-            <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
-            {t("asset.connectInNewTab")}
+          <ContextMenuItem onClick={() => onCopyAsset(asset)}>
+            <Copy className="h-3.5 w-3.5 mr-1.5" />
+            {t("action.copy")}
           </ContextMenuItem>
-        )}
-        {asset.Type === "ssh" && onOpenFileManager && (
-          <ContextMenuItem onClick={() => onOpenFileManager(asset)}>
-            <FolderOpen className="h-3.5 w-3.5 mr-1.5" />
-            {t("sftp.fileManager")}
+          <ContextMenuSeparator />
+          <ContextMenuItem onClick={() => onMoveAsset(asset.ID, "up")}>
+            <ArrowUp className="h-3.5 w-3.5 mr-1.5" />
+            {t("asset.moveUp")}
           </ContextMenuItem>
-        )}
-        {onOpenInfoTab && (
-          <ContextMenuItem onClick={() => onOpenInfoTab("asset", asset.ID, asset.Name, asset.Icon)}>
-            <Eye className="h-3.5 w-3.5 mr-1.5" />
-            {t("action.editPermission")}
+          <ContextMenuItem onClick={() => onMoveAsset(asset.ID, "down")}>
+            <ArrowDown className="h-3.5 w-3.5 mr-1.5" />
+            {t("asset.moveDown")}
           </ContextMenuItem>
-        )}
-        <ContextMenuItem onClick={() => onEditAsset(asset)}>
-          <Pencil className="h-3.5 w-3.5 mr-1.5" />
-          {t("action.edit")}
-        </ContextMenuItem>
-        <ContextMenuItem onClick={() => onCopyAsset(asset)}>
-          <Copy className="h-3.5 w-3.5 mr-1.5" />
-          {t("action.copy")}
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={() => onMoveAsset(asset.ID, "up")}>
-          <ArrowUp className="h-3.5 w-3.5 mr-1.5" />
-          {t("asset.moveUp")}
-        </ContextMenuItem>
-        <ContextMenuItem onClick={() => onMoveAsset(asset.ID, "down")}>
-          <ArrowDown className="h-3.5 w-3.5 mr-1.5" />
-          {t("asset.moveDown")}
-        </ContextMenuItem>
-        <ContextMenuItem onClick={() => onMoveAsset(asset.ID, "top")}>
-          <ChevronsUp className="h-3.5 w-3.5 mr-1.5" />
-          {t("asset.moveTop")}
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem className="text-destructive" onClick={() => onDeleteAsset(asset)}>
-          <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-          {t("action.delete")}
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
+          <ContextMenuItem onClick={() => onMoveAsset(asset.ID, "top")}>
+            <ChevronsUp className="h-3.5 w-3.5 mr-1.5" />
+            {t("asset.moveTop")}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem className="text-destructive" onClick={() => onDeleteAsset(asset)}>
+            <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+            {t("action.delete")}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    </div>
   );
 }

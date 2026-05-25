@@ -38,6 +38,9 @@ func (s *resolveGroupRepoStub) UpdateSortOrder(_ context.Context, _ int64, _ int
 func (s *resolveGroupRepoStub) UpdateParentID(_ context.Context, _, _ int64) error {
 	return nil
 }
+func (s *resolveGroupRepoStub) UpdateName(_ context.Context, _ int64, _ string) error {
+	return nil
+}
 
 func TestBuildGroupPathMap(t *testing.T) {
 	Convey("buildGroupPathMap", t, func() {

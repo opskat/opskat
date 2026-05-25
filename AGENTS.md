@@ -87,7 +87,7 @@ Frontend:
 ## Conventions
 
 - CI runs Go lint/tests and frontend lint/tests/build on PRs and pushes to `main`/`develop`.
-- Commit messages use gitmoji, e.g. `✨`, `🐛`, `♻️`, `🎨`, `⚡️`, `🔒`, `🔧`, `✅`, `📄`, `🚀`.
+- Commit messages use gitmoji, e.g. `✨`, `🐛`, `♻️`, `🎨`, `⚡️`, `🔒`, `🔧`, `✅`, `📄`, `🚀`. 关联 issue 时：subject line（第一行）末尾追加 `#<编号>`，body 里另起一行写 `closes #<编号>`（或 `fixes` / `resolves`）触发 GitHub 自动关闭。例如 subject `🐛 修复 xxx #126`，body 末尾 `closes #126`。
 - Go mocks live in `mock_*/` and are generated with `go.uber.org/mock`.
 - Go tests use goconvey and testify.
 - Service tests should mock transaction boundaries. When code uses `dbutil.WithTransaction`, prefer `dbutil.WithTransactionRunner` instead of opening in-memory SQLite.
@@ -104,7 +104,7 @@ Frontend:
 - Prefer option-object APIs over large boolean prop lists.
 - Do not copy-paste parallel implementations. If a fix applies to two near-identical blocks, extract or reuse the canonical path.
 - Do not add silent defaults, empty `catch` blocks, swallowed errors, fake success states, or bypass paths unless they are explicit product behavior.
-- Do not reimplement cross-cutting systems: logging, audit, AI tool registration, approval, credential encryption, connection pools, i18n, terminal panes, query grids, tab system, shortcut handling.
+- Do not reimplement cross-cutting systems: audit, AI tool registration, approval, credential encryption, connection pools, i18n, terminal panes, query grids, tab system, shortcut handling. (Logging rules are covered separately under "Logging Key Flows".)
 
 Reuse these shared frontend primitives when applicable:
 
@@ -112,6 +112,17 @@ Reuse these shared frontend primitives when applicable:
 - Common UI: `ConfirmDialog`, drawer/dialog wrappers, `PasswordSourceField`, `IconPicker`.
 - Asset rendering: use canonical helpers such as `getIconComponent`, `getIconColor`, `getAssetType`; respect entity fields like `Icon`, `Type`, `Color`, and policy group.
 - Data/state: add filters or derivations to shared hooks/stores such as `useAssetStore`, `useAssetTree`, `useGroupTree`, `useShortcutStore`.
+
+## Logging Key Flows
+
+Troubleshooting depends on logs. Every cross-boundary / cross-process / long-lived operation must be logged — not only on error.
+
+- **Entry point (cago logger):** `github.com/cago-frame/cago/pkg/logger`. **Prefer `logger.Ctx(ctx)`** — cago's own source comment on `Default()` reads "尽量不要使用，会丢失上下文信息" (try not to use, loses context). Only fall back to `logger.Default()` when no ctx is available (`main`, `init`, standalone goroutines). To attach fields for downstream consumers, use `logger.WithContextField(ctx, zap.String("k", v))`; downstream `logger.Ctx(ctx)` inherits them. ⚠️ The repo today has ~377 `Default()` and 0 `Ctx` call sites — historical inertia. New code follows the rule above.
+- **Field types:** Pick the zap field that matches the value's natural type: `zap.Error` for errors, `zap.String` for strings, `zap.Int/Int64` for ints, `zap.Bool`, `zap.Duration`, `zap.Stringer`. **Do not use `zap.Any`** (zero intended uses in repo), and **do not wrap values with `fmt.Sprintf(...)` to fit `zap.String`** — pick the right typed field instead of squashing values into strings. Do not use `log.Printf` as a logger in business code. Exceptions: `fmt.Println` in `cmd/opsctl/command/*` is intentional CLI stdout (not logging), and `log.Printf` in `main.go` before logger init is kept.
+- **Must-log key flows:** IPC entry (`internal/app/**`), AI tool dispatch (`internal/ai/`), extension WASM calls (`pkg/extension/`, `internal/app/extension/`), approval/grant (`internal/approval/`, `internal/app/opsctl/`), SSH/DB/Redis pool open/close (`internal/sshpool/`, `internal/connpool/`), credential and key operations, migrations, scheduled jobs, external command execution. Log **start / end / failure** of each operation with correlatable IDs (assetID, sessionID, grantID, toolName, extension).
+- **Log lines do not replace error returns.** After `logger.Ctx(ctx).Error(..., zap.Error(err))`, still `return err`. `recover()` boundaries: use `zap.Stack("stack")` for the trace, e.g. `logger.Ctx(ctx).Error("xxx panic recovered", zap.String("sessionID", id), zap.Stack("stack"))`; standalone goroutines without a ctx may fall back to `logger.Default()`.
+- **Levels:** Error = a failure the caller/user must see; Warn = self-heal or degraded path; Info = important state changes (pool open, task scheduled, extension loaded); Debug = high-frequency detail (terminal keystrokes, SFTP frames, heartbeats) and off by default.
+- **Never log secrets:** passwords, tokens, credential plaintext, SSH private keys, or SQL parameter values must be masked before logging.
 
 ## Generated Files
 

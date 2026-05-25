@@ -15,6 +15,15 @@ export const SCROLLBACK_MIN = 100;
 export const SCROLLBACK_MAX = 1000000;
 export const SCROLLBACK_DEFAULT = 25000;
 
+export type WebglFailureCause = "init-threw" | "context-loss";
+
+export interface WebglFailure {
+  cause: WebglFailureCause;
+  name?: string;
+  message: string;
+  at: number;
+}
+
 interface TerminalThemeState {
   selectedThemeId: string;
   customThemes: TerminalTheme[];
@@ -24,6 +33,9 @@ interface TerminalThemeState {
   fontFamily: string;
   scrollback: number;
   webglEnabled: boolean;
+  // 最近一次 WebGL 自动关闭的原因。setWebglEnabled(true) 会把它清掉，所以只在
+  // GPU 加速被系统自动关掉后到下一次用户主动开启之间存在。
+  webglError: WebglFailure | null;
 
   setSelectedThemeId: (id: string) => void;
   setFontSize: (size: number) => void;
@@ -31,10 +43,25 @@ interface TerminalThemeState {
   setCustomFontFamily: (fontFamily: string) => void;
   setScrollback: (lines: number) => void;
   setWebglEnabled: (enabled: boolean) => void;
+  reportWebglFailure: (failure: WebglFailure) => void;
   addCustomTheme: (theme: TerminalTheme) => void;
   updateCustomTheme: (theme: TerminalTheme) => void;
   removeCustomTheme: (id: string) => void;
   getActiveTheme: () => TerminalTheme;
+}
+
+function deriveFontFamily(fontPresetId: string, customFontFamily: string): string {
+  if (fontPresetId === CUSTOM_TERMINAL_FONT_PRESET_ID) {
+    return resolveTerminalFontFamily(customFontFamily);
+  }
+  if (fontPresetId === DEFAULT_TERMINAL_FONT_PRESET_ID) {
+    return DEFAULT_TERMINAL_FONT_FAMILY;
+  }
+  const preset = findTerminalFontPreset(fontPresetId);
+  if (preset) return preset.fontFamily;
+  // System-font picker stores the family name itself as the preset id.
+  const trimmed = normalizeTerminalFontFamily(fontPresetId);
+  return trimmed ? quoteFamilyName(trimmed) : DEFAULT_TERMINAL_FONT_FAMILY;
 }
 
 export const useTerminalThemeStore = create<TerminalThemeState>()(
@@ -48,9 +75,13 @@ export const useTerminalThemeStore = create<TerminalThemeState>()(
       fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
       scrollback: SCROLLBACK_DEFAULT,
       webglEnabled: true,
+      webglError: null,
 
       setSelectedThemeId: (id) => set({ selectedThemeId: id }),
-      setWebglEnabled: (enabled) => set({ webglEnabled: enabled }),
+      // 用户主动开启 WebGL → 清掉历史错误（不再显示红字提示）；关闭时保留现状
+      // （手动关掉不该写入 webglError，但也不主动清——下次自动关掉的错误能继续展示）。
+      setWebglEnabled: (enabled) => set(enabled ? { webglEnabled: true, webglError: null } : { webglEnabled: false }),
+      reportWebglFailure: (failure) => set({ webglError: failure }),
 
       setFontSize: (size) => set({ fontSize: Math.max(8, Math.min(32, size)) }),
 
@@ -128,6 +159,16 @@ export const useTerminalThemeStore = create<TerminalThemeState>()(
     }),
     {
       name: "terminal_theme",
+      // fontFamily 是从 fontPresetId / customFontFamily 派生的字段,不要让它
+      // 进入 localStorage —— 否则常量 DEFAULT_TERMINAL_FONT_FAMILY 一旦变更,
+      // 老用户重新水合时 fontFamily 还指向旧字符串,withTerminalFontFallback
+      // 短路条件失效,字体链就锁死在升级前的旧值上。
+      partialize: ({ fontFamily: _omit, ...rest }) => rest,
+      merge: (persistedState, currentState) => {
+        const merged = { ...currentState, ...((persistedState as Partial<TerminalThemeState>) ?? {}) };
+        merged.fontFamily = deriveFontFamily(merged.fontPresetId, merged.customFontFamily);
+        return merged;
+      },
     }
   )
 );

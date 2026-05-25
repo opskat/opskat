@@ -18,6 +18,7 @@ type GroupSvc interface {
 	List(ctx context.Context) ([]*group_entity.Group, error)
 	Create(ctx context.Context, group *group_entity.Group) error
 	Update(ctx context.Context, group *group_entity.Group) error
+	Rename(ctx context.Context, id int64, name string) error
 	Delete(ctx context.Context, id int64, deleteAssets bool) error
 	Move(ctx context.Context, id int64, direction string) error
 	Reorder(ctx context.Context, id, targetParentID, beforeID int64) error
@@ -56,6 +57,17 @@ func (s *groupSvc) Update(ctx context.Context, group *group_entity.Group) error 
 	}
 	group.Updatetime = time.Now().Unix()
 	return group_repo.Group().Update(ctx, group)
+}
+
+func (s *groupSvc) Rename(ctx context.Context, id int64, name string) error {
+	if id <= 0 {
+		return fmt.Errorf("分组 ID 无效")
+	}
+	group := &group_entity.Group{Name: name}
+	if err := group.Validate(); err != nil {
+		return err
+	}
+	return group_repo.Group().UpdateName(ctx, id, name)
 }
 
 // Delete 删除分组

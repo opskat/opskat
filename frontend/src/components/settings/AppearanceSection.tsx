@@ -117,6 +117,7 @@ export function TerminalSection() {
     setScrollback,
     webglEnabled,
     setWebglEnabled,
+    webglError,
     customThemes,
     addCustomTheme,
     updateCustomTheme,
@@ -277,12 +278,24 @@ export function TerminalSection() {
           {/* GPU acceleration (WebGL renderer). Auto-flips to off when the
               renderer fails to initialize or its WebGL context is lost — so
               "On" actually reflects "currently working". User can re-enable. */}
-          <div className="flex items-start justify-between gap-4">
-            <div className="grid gap-1">
-              <Label>{t("terminal.gpuAcceleration")}</Label>
-              <p className="text-xs text-muted-foreground">{t("terminal.gpuAccelerationHint")}</p>
+          <div className="grid gap-1">
+            <div className="flex items-start justify-between gap-4">
+              <div className="grid gap-1">
+                <Label>{t("terminal.gpuAcceleration")}</Label>
+                <p className="text-xs text-muted-foreground">{t("terminal.gpuAccelerationHint")}</p>
+              </div>
+              <Switch checked={webglEnabled} onCheckedChange={setWebglEnabled} />
             </div>
-            <Switch checked={webglEnabled} onCheckedChange={setWebglEnabled} />
+            {webglError && (
+              <p className="text-xs text-destructive">
+                {t(
+                  webglError.cause === "context-loss"
+                    ? "terminal.gpuAccelerationErrorContextLoss"
+                    : "terminal.gpuAccelerationErrorInitThrew"
+                )}
+                {webglError.message ? `: ${webglError.message}` : null}
+              </p>
+            )}
           </div>
 
           <Separator />

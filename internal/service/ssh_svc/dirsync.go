@@ -84,6 +84,16 @@ func (s *Session) ChangeDirectory(targetPath string) error {
 	return s.ChangeDirectoryTo(targetPath, targetPath)
 }
 
+// ChangeDirectoryDirect writes a cd command without requiring directory-sync
+// prompt hooks. It is used when the caller already knows the absolute target
+// path and only needs the interactive terminal to move there.
+func (s *Session) ChangeDirectoryDirect(targetPath string) error {
+	if targetPath == "" {
+		return dirsync.Error(dirSyncErrInvalidTarget)
+	}
+	return s.writeInternal([]byte(buildDirectoryChangeCommand(targetPath)))
+}
+
 // ChangeDirectoryTo switches the terminal to targetPath and treats expectedPath
 // as the canonical cwd reported by the remote shell after the change.
 func (s *Session) ChangeDirectoryTo(targetPath, expectedPath string) error {
@@ -207,6 +217,30 @@ func (s *Session) noteObservedCwd(cwd string) {
 	}
 	s.syncState.Cwd = cleaned
 	s.syncState.CwdKnown = true
+	s.syncDirty = !s.syncState.PromptReady || !s.syncState.PromptClean
+	state := s.syncState
+	s.syncMu.Unlock()
+	s.emitSyncState(state)
+}
+
+func (s *Session) noteProbePrompt(cwd string) {
+	cleaned := strings.TrimRight(cwd, "\r\n")
+	if cleaned == "" {
+		return
+	}
+
+	s.syncMu.Lock()
+	if !s.syncState.Supported || s.pendingDirChange != nil {
+		s.syncMu.Unlock()
+		return
+	}
+	s.syncState.Cwd = cleaned
+	s.syncState.CwdKnown = true
+	s.syncState.PromptReady = true
+	s.syncState.PromptClean = true
+	s.syncState.Busy = false
+	s.syncState.Status = directorySyncReady
+	s.syncState.LastError = ""
 	s.syncDirty = false
 	state := s.syncState
 	s.syncMu.Unlock()
@@ -418,6 +452,8 @@ func (s *Session) runSyncProbeLoop() {
 			unusableResults = 0
 			if pending {
 				s.finishPendingDirectoryChangeProbe(pendingNonce, pendingTarget, result.cwd)
+			} else if result.promptReady {
+				s.noteProbePrompt(result.cwd)
 			} else if result.cwd != "" {
 				s.noteObservedCwd(result.cwd)
 			}
@@ -517,7 +553,440 @@ func parseShellProbeOutput(raw []byte) (shellProbeResult, error) {
 	return result, nil
 }
 
+func (s *Session) queueInternalEchoSuppression(command []byte) []byte {
+	pattern := normalizeTerminalEcho(command)
+	if len(pattern) == 0 {
+		return nil
+	}
+
+	s.outputFilterMu.Lock()
+	s.echoSuppressions = append(s.echoSuppressions, pattern)
+	s.outputFilterMu.Unlock()
+	return pattern
+}
+
+func (s *Session) removeQueuedEchoSuppression(pattern []byte) {
+	if len(pattern) == 0 {
+		return
+	}
+
+	s.outputFilterMu.Lock()
+	defer s.outputFilterMu.Unlock()
+	for i, queued := range s.echoSuppressions {
+		if bytes.Equal(queued, pattern) {
+			s.echoSuppressions = append(s.echoSuppressions[:i], s.echoSuppressions[i+1:]...)
+			if len(s.echoSuppressions) == 0 {
+				s.echoSuppressionIdx = 0
+			}
+			return
+		}
+	}
+}
+
+func (s *Session) beginInternalScriptEchoSuppression() {
+	s.outputFilterMu.Lock()
+	s.internalScriptEcho = true
+	s.internalEchoDropLn = false
+	s.outputFilterMu.Unlock()
+}
+
+func (s *Session) endInternalScriptEchoSuppression() {
+	s.outputFilterMu.Lock()
+	s.internalScriptEcho = false
+	s.internalEchoDropLn = false
+	s.outputFilterMu.Unlock()
+}
+
+func normalizeTerminalEcho(data []byte) []byte {
+	if len(data) == 0 {
+		return nil
+	}
+	out := make([]byte, 0, len(data))
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		switch b {
+		case '\r', '\n':
+			continue
+		case 0x1b:
+			i = skipANSIEscape(data, i)
+		default:
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+func skipANSIEscape(data []byte, esc int) int {
+	if esc+1 >= len(data) {
+		return esc
+	}
+	next := data[esc+1]
+	if next == '[' {
+		for i := esc + 2; i < len(data); i++ {
+			if data[i] >= 0x40 && data[i] <= 0x7e {
+				return i
+			}
+		}
+		return len(data) - 1
+	}
+	if next == ']' {
+		for i := esc + 2; i < len(data); i++ {
+			if data[i] == 0x07 {
+				return i
+			}
+			if data[i] == 0x1b && i+1 < len(data) && data[i+1] == '\\' {
+				return i + 1
+			}
+		}
+		return len(data) - 1
+	}
+	return esc + 1
+}
+
+func (s *Session) suppressInternalEcho(data []byte) []byte {
+	if len(data) == 0 || (len(s.echoSuppressions) == 0 && !s.internalScriptEcho && !s.internalEchoDropLn) {
+		return data
+	}
+
+	out := make([]byte, 0, len(data))
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		if s.internalEchoDropLn {
+			if b == '\r' || b == '\n' {
+				s.internalEchoDropLn = false
+			}
+			continue
+		}
+
+		if len(s.echoSuppressions) == 0 && !s.internalScriptEcho {
+			out = append(out, data[i:]...)
+			break
+		}
+
+		var current []byte
+		if len(s.echoSuppressions) > 0 {
+			current = s.echoSuppressions[0]
+			if s.echoSuppressionIdx == 0 {
+				if end, ok := queuedDirectoryChangeEchoLineEnd(current, data, i); ok {
+					s.echoSuppressions = s.echoSuppressions[1:]
+					s.echoSuppressionIdx = 0
+					if end > i {
+						i = end - 1
+					}
+					continue
+				}
+			}
+			if s.echoSuppressionIdx < len(current) && b == current[s.echoSuppressionIdx] {
+				s.echoSuppressionIdx++
+				if s.echoSuppressionIdx == len(current) {
+					s.echoSuppressions = s.echoSuppressions[1:]
+					s.echoSuppressionIdx = 0
+				}
+				continue
+			}
+
+			if s.echoSuppressionIdx > 0 && isTerminalEchoNoise(data, i) {
+				if b == 0x1b {
+					i = skipANSIEscape(data, i)
+				}
+				continue
+			}
+
+			if s.echoSuppressionIdx > 0 {
+				out = append(out, current[:s.echoSuppressionIdx]...)
+				s.echoSuppressionIdx = 0
+			}
+			if len(current) > 0 && b == current[0] {
+				s.echoSuppressionIdx = 1
+				if len(current) == 1 {
+					s.echoSuppressions = s.echoSuppressions[1:]
+					s.echoSuppressionIdx = 0
+				}
+				continue
+			}
+		}
+		if s.internalScriptEcho {
+			if kind := internalScriptEchoLineKindAt(data, i); kind != internalScriptEchoNone {
+				end := nextLineEndIncludingTerminator(data, i)
+				if end >= len(data) {
+					s.internalEchoDropLn = true
+				}
+				if kind == internalScriptEchoEnd {
+					s.internalScriptEcho = false
+					s.internalEchoDropLn = false
+				}
+				if end > i {
+					i = end - 1
+				}
+				continue
+			}
+		} else {
+			if isInternalScriptEchoLine(data, i) {
+				end := nextLineEndIncludingTerminator(data, i)
+				if end > i {
+					i = end - 1
+				}
+				continue
+			}
+			if looksLikeBase64ContinuationLine(data, i) {
+				end := nextLineEndIncludingTerminator(data, i)
+				if end > i {
+					i = end - 1
+				}
+				continue
+			}
+		}
+		if s.internalScriptEcho && looksLikeBase64EchoFragment(data, i) {
+			end := nextLineEndIncludingTerminator(data, i)
+			if end >= len(data) {
+				s.internalEchoDropLn = true
+			}
+			if end > i {
+				i = end - 1
+			}
+			continue
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
+type internalScriptEchoLineKind int
+
+const (
+	internalScriptEchoNone internalScriptEchoLineKind = iota
+	internalScriptEchoBody
+	internalScriptEchoEnd
+)
+
+func internalScriptEchoLineKindAt(data []byte, pos int) internalScriptEchoLineKind {
+	lineStart := pos
+	for lineStart > 0 && data[lineStart-1] != '\r' && data[lineStart-1] != '\n' {
+		lineStart--
+	}
+	if lineStart != pos {
+		return internalScriptEchoNone
+	}
+	lineEnd := nextLineEnd(data, pos)
+	line := string(data[pos:lineEnd])
+	trimmed := strings.TrimSpace(stripANSIEscapeString(line))
+	if trimmed == "" {
+		return internalScriptEchoNone
+	}
+	if strings.HasPrefix(trimmed, "heredoc> ") {
+		return internalScriptEchoBody
+	}
+	if trimmed == "heredoc>" {
+		return internalScriptEchoBody
+	}
+	if strings.Contains(trimmed, "base64 -d > '/tmp/.opskat-sync-") ||
+		strings.Contains(trimmed, "source '/tmp/.opskat-sync-") ||
+		strings.Contains(trimmed, "rm -f '/tmp/.opskat-sync-") ||
+		strings.Contains(trimmed, "stty -echo 2>/dev/null") {
+		return internalScriptEchoBody
+	}
+	if isPromptEchoLine(trimmed) {
+		return internalScriptEchoBody
+	}
+	if strings.Contains(trimmed, "stty echo 2>/dev/null") ||
+		strings.Contains(trimmed, "stty2>/dev/null") {
+		return internalScriptEchoEnd
+	}
+	return internalScriptEchoNone
+}
+
+func isInternalScriptEchoLine(data []byte, pos int) bool {
+	return internalScriptEchoLineKindAt(data, pos) != internalScriptEchoNone
+}
+
+func isPromptEchoLine(line string) bool {
+	for _, marker := range []string{"➜", "$", "#", ">"} {
+		idx := strings.LastIndex(line, marker)
+		if idx < 0 {
+			continue
+		}
+		after := strings.TrimSpace(line[idx+len(marker):])
+		if after == "" || after == "~" || strings.HasPrefix(after, "~/") || strings.HasPrefix(after, "/") {
+			return true
+		}
+	}
+	return false
+}
+
+func queuedDirectoryChangeEchoLineEnd(queued, data []byte, pos int) (int, bool) {
+	quotedTarget, ok := queuedDirectoryChangeQuotedTarget(queued)
+	if !ok || !isLineStart(data, pos) {
+		return 0, false
+	}
+	lineEnd := nextLineEnd(data, pos)
+	line := strings.TrimSpace(stripANSIEscapeString(string(data[pos:lineEnd])))
+	idx := strings.Index(line, "builtin cd")
+	if idx < 0 {
+		return 0, false
+	}
+	if prefix := strings.TrimSpace(line[:idx]); prefix != "" && !isPromptEchoLine(prefix) {
+		return 0, false
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(line[idx:], "builtin cd"))
+	if rest == "--" || strings.HasPrefix(rest, "-- ") {
+		rest = strings.TrimSpace(strings.TrimPrefix(rest, "--"))
+	}
+	if rest != quotedTarget {
+		return 0, false
+	}
+	return nextLineEndIncludingTerminator(data, pos), true
+}
+
+func queuedDirectoryChangeQuotedTarget(queued []byte) (string, bool) {
+	text := strings.TrimSpace(stripANSIEscapeString(string(queued)))
+	if !strings.HasPrefix(text, "builtin cd") {
+		return "", false
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(text, "builtin cd"))
+	if rest == "--" || strings.HasPrefix(rest, "-- ") {
+		rest = strings.TrimSpace(strings.TrimPrefix(rest, "--"))
+	}
+	if !strings.HasPrefix(rest, "'") {
+		return "", false
+	}
+	return rest, true
+}
+
+func isLineStart(data []byte, pos int) bool {
+	return pos == 0 || data[pos-1] == '\r' || data[pos-1] == '\n'
+}
+
+func looksLikeBase64EchoFragment(data []byte, pos int) bool {
+	lineStart := pos
+	for lineStart > 0 && data[lineStart-1] != '\r' && data[lineStart-1] != '\n' {
+		lineStart--
+	}
+	if lineStart != pos {
+		return false
+	}
+	lineEnd := nextLineEnd(data, pos)
+	return looksLikeBase64EchoText(strings.TrimSpace(string(data[pos:lineEnd])))
+}
+
+func looksLikeBase64EchoText(line string) bool {
+	if len(line) == 0 {
+		return false
+	}
+	for _, r := range line {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '+' || r == '/' || r == '=' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func looksLikeBase64ContinuationLine(data []byte, pos int) bool {
+	lineStart := pos
+	for lineStart > 0 && data[lineStart-1] != '\r' && data[lineStart-1] != '\n' {
+		lineStart--
+	}
+	if lineStart != pos {
+		return false
+	}
+	lineEnd := nextLineEnd(data, pos)
+	line := strings.TrimSpace(string(data[pos:lineEnd]))
+	if len(line) < 80 {
+		return false
+	}
+	return looksLikeBase64EchoText(line)
+}
+
+func stripANSIEscapeString(text string) string {
+	data := []byte(text)
+	out := make([]byte, 0, len(data))
+	for i := 0; i < len(data); i++ {
+		if data[i] == 0x1b {
+			i = skipANSIEscape(data, i)
+			continue
+		}
+		out = append(out, data[i])
+	}
+	return string(out)
+}
+
+func isTerminalEchoNoise(data []byte, pos int) bool {
+	b := data[pos]
+	if b == '\r' || b == '\n' {
+		return true
+	}
+	if bytes.HasPrefix(data[pos:], []byte("heredoc> ")) {
+		return true
+	}
+	if pos > 0 && data[pos-1] == 'h' && bytes.HasPrefix(data[pos:], []byte("eredoc> ")) {
+		return true
+	}
+	if b == 0x1b {
+		return true
+	}
+	return isLikelyPromptPrefix(data, pos)
+}
+
+func isLikelyPromptPrefix(data []byte, pos int) bool {
+	start := pos
+	for start > 0 && data[start-1] != '\r' && data[start-1] != '\n' {
+		start--
+	}
+	if start != pos {
+		return false
+	}
+
+	end := pos
+	for end < len(data) && data[end] != '\r' && data[end] != '\n' {
+		if data[end] == 0x1b {
+			end = skipANSIEscape(data, end) + 1
+			continue
+		}
+		end++
+	}
+	line := string(data[pos:end])
+	for _, marker := range []string{"➜", "$", "#", ">"} {
+		idx := strings.LastIndex(line, marker)
+		if idx < 0 {
+			continue
+		}
+		after := strings.TrimSpace(line[idx+len(marker):])
+		if after == "" || after == "~" || strings.HasPrefix(after, "~/") || strings.HasPrefix(after, "/") {
+			return true
+		}
+	}
+	return false
+}
+
+func nextLineEnd(data []byte, start int) int {
+	for i := start; i < len(data); i++ {
+		if data[i] == '\r' || data[i] == '\n' {
+			return i
+		}
+	}
+	return len(data)
+}
+
+func nextLineEndIncludingTerminator(data []byte, start int) int {
+	end := nextLineEnd(data, start)
+	if end < len(data) && data[end] == '\r' {
+		end++
+	}
+	if end < len(data) && data[end] == '\n' {
+		end++
+	}
+	return end
+}
+
 func (s *Session) filterOutput(chunk []byte) []byte {
+	s.outputFilterMu.Lock()
+	defer s.outputFilterMu.Unlock()
+
+	chunk = s.suppressInternalEcho(chunk)
+	if len(chunk) == 0 {
+		return nil
+	}
+
 	data := chunk
 	if len(s.parserRemainder) > 0 {
 		data = append(append([]byte(nil), s.parserRemainder...), chunk...)
@@ -606,6 +1075,10 @@ func (s *Session) handleSyncPayload(payload string) bool {
 		bootstrap := s.syncBootstrapCh
 		s.syncBootstrapCh = nil
 		s.syncMu.Unlock()
+		// internalScriptEcho/internalEchoDropLn 由 outputFilterMu 保护；
+		// 调用方 filterOutput 已持有该锁，这里直接写入即可（sync.Mutex 不可重入，不能再 Lock）。
+		s.internalScriptEcho = false
+		s.internalEchoDropLn = false
 		if bootstrap != nil {
 			close(bootstrap)
 		}
@@ -724,16 +1197,16 @@ func (s *Session) EnableSync() error {
 	bootstrapCh := make(chan struct{})
 	s.syncBootstrapCh = bootstrapCh
 	state := s.syncState
-	cmd := buildEnableSyncCommand(s.shellType, token, promptNonce)
+	cmd := buildEnableSyncScript(s.shellType, token, promptNonce)
 	s.syncMu.Unlock()
 
 	s.emitSyncState(state)
 
 	// cmd == "" is unreachable: shellTypeUnsupported was rejected above
-	// and buildEnableSyncCommand only returns "" for that case. No defensive
+	// and buildEnableSyncScript only returns "" for that case. No defensive
 	// branch needed; if invariants change, the write below will fail visibly.
 
-	if err := s.writeInternal([]byte(cmd)); err != nil {
+	if err := s.writeInternalScript(cmd); err != nil {
 		st := s.rollbackSyncBootstrap(bootstrapCh, err.Error())
 		s.emitSyncState(st)
 		return dirsync.Error(dirsync.CodeSessionClosed)
@@ -777,9 +1250,9 @@ func (s *Session) EnableSync() error {
 	deadline := time.Now().Add(syncFirstCwdGrace)
 	for time.Now().Before(deadline) {
 		s.syncMu.Lock()
-		known := s.syncState.CwdKnown
+		ready := s.syncState.CwdKnown && s.syncState.PromptReady && s.syncState.PromptClean
 		s.syncMu.Unlock()
-		if known {
+		if ready {
 			return nil
 		}
 		time.Sleep(20 * time.Millisecond)

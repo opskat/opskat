@@ -42,6 +42,36 @@ export function getParentPath(currentPath: string): string {
   return currentPath.replace(/\/[^/]+\/?$/, "") || "/";
 }
 
+export function getPathBaseName(path: string): string {
+  const normalized = normalizeRemotePath("/", path);
+  if (normalized === "/") return "";
+  const segments = normalized.split("/").filter(Boolean);
+  return segments.at(-1) ?? "";
+}
+
+export function canMovePathToDirectory(sourcePath: string, targetDirPath: string): boolean {
+  const source = normalizeRemotePath("/", sourcePath);
+  const target = normalizeRemotePath("/", targetDirPath);
+  if (!source || source === "/" || !target) return false;
+  if (source === target) return false;
+  if (getParentPath(source) === target) return false;
+  return !target.startsWith(`${source}/`);
+}
+
+export function splitNameForRename(name: string): { stemLength: number } {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return { stemLength: name.length };
+  return { stemLength: dot };
+}
+
+export function getChildPath(parentPath: string, name: string): string {
+  return parentPath === "/" ? "/" + name : parentPath + "/" + name;
+}
+
+export function joinRemotePath(parentPath: string, name: string): string {
+  return normalizeRemotePath(parentPath, name);
+}
+
 export function sortEntries(entries: sftp_svc.FileEntry[]): sftp_svc.FileEntry[] {
   return [...entries].sort((a, b) => {
     if (a.isDir && !b.isDir) return -1;

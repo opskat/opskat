@@ -15,6 +15,7 @@ type GroupRepo interface {
 	Create(ctx context.Context, group *group_entity.Group) error
 	Update(ctx context.Context, group *group_entity.Group) error
 	Delete(ctx context.Context, id int64) error
+	UpdateName(ctx context.Context, id int64, name string) error
 	ReparentChildren(ctx context.Context, oldParentID, newParentID int64) error
 	UpdateSortOrder(ctx context.Context, id int64, sortOrder int) error
 	UpdateParentID(ctx context.Context, id, parentID int64) error
@@ -66,6 +67,10 @@ func (r *groupRepo) Update(ctx context.Context, group *group_entity.Group) error
 
 func (r *groupRepo) Delete(ctx context.Context, id int64) error {
 	return db.Ctx(ctx).Where("id = ?", id).Delete(&group_entity.Group{}).Error
+}
+
+func (r *groupRepo) UpdateName(ctx context.Context, id int64, name string) error {
+	return db.Ctx(ctx).Model(&group_entity.Group{}).Where("id = ?", id).Update("name", name).Error
 }
 
 func (r *groupRepo) UpdateSortOrder(ctx context.Context, id int64, sortOrder int) error {

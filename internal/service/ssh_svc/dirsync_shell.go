@@ -3,6 +3,7 @@ package ssh_svc
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -60,6 +61,62 @@ func generateSyncToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(buf), nil
+}
+
+func buildEnableSyncScript(shellType, syncToken, promptNonce string) string {
+	switch shellType {
+	case shellTypeBash:
+		return fmt.Sprintf(
+			`opskat_next_prompt_nonce(){ local n r;n=$(date +%%s%%N 2>/dev/null||date +%%s 2>/dev/null||printf 0);r=${RANDOM:-0};printf '%%s-%%s-%%s' "$$" "$r" "$n";}
+`+
+				`opskat_prompt_proof(){ local p c x;c=${OPSKAT_PROMPT_NONCE:-};[ -n "$c" ]||return;x=$(opskat_next_prompt_nonce);p=$(builtin pwd -P 2>/dev/null||builtin pwd 2>/dev/null||printf '');printf '\033]1337;opskat:%s:prompt:%%s:%%s:%%s\007' "$c" "$x" "$p";OPSKAT_PROMPT_NONCE=$x;}
+`+
+				`OPSKAT_PROMPT_NONCE=%s
+`+
+				`PROMPT_COMMAND="opskat_prompt_proof${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+`+
+				`printf '\033]1337;opskat:%s:init:pid:%%s\007' "$$"
+`,
+			syncToken, shellQuote(promptNonce), syncToken)
+	case shellTypeZsh:
+		return fmt.Sprintf(
+			`opskat_next_prompt_nonce(){ local n r;n=$(date +%%s%%N 2>/dev/null||date +%%s 2>/dev/null||printf 0);r=${RANDOM:-0};printf '%%s-%%s-%%s' "$$" "$r" "$n";}
+`+
+				`opskat_prompt_proof(){ local p c x;c=${OPSKAT_PROMPT_NONCE:-};[[ -n "$c" ]]||return;x=$(opskat_next_prompt_nonce);p=$(pwd -P 2>/dev/null||pwd 2>/dev/null||printf '');printf '\033]1337;opskat:%s:prompt:%%s:%%s:%%s\007' "$c" "$x" "$p";OPSKAT_PROMPT_NONCE=$x;}
+`+
+				`OPSKAT_PROMPT_NONCE=%s
+`+
+				`autoload -Uz add-zsh-hook
+`+
+				`add-zsh-hook precmd opskat_prompt_proof
+`+
+				`printf '\033]1337;opskat:%s:init:pid:%%s\007' "$$"
+`,
+			syncToken, shellQuote(promptNonce), syncToken)
+	case shellTypeKsh, shellTypeMksh:
+		return fmt.Sprintf(
+			`opskat_next_prompt_nonce(){ OPSKAT_NOW=$(date +%%s%%N 2>/dev/null||date +%%s 2>/dev/null||printf 0);OPSKAT_RAND=${RANDOM:-0};printf '%%s-%%s-%%s' "$$" "$OPSKAT_RAND" "$OPSKAT_NOW";}
+`+
+				`opskat_prompt_proof(){ OPSKAT_CURRENT=${OPSKAT_PROMPT_NONCE:-};[ -n "$OPSKAT_CURRENT" ]||return;OPSKAT_NEXT=$(opskat_next_prompt_nonce);OPSKAT_PWD=$(pwd -P 2>/dev/null||pwd 2>/dev/null||printf '');printf '\033]1337;opskat:%s:prompt:%%s:%%s:%%s\007' "$OPSKAT_CURRENT" "$OPSKAT_NEXT" "$OPSKAT_PWD";OPSKAT_PROMPT_NONCE=$OPSKAT_NEXT;}
+`+
+				`OPSKAT_PROMPT_NONCE=%s
+`+
+				`OPSKAT_ORIG_PS1=${OPSKAT_ORIG_PS1:-$PS1}
+`+
+				`PS1='$(opskat_prompt_proof)'"$OPSKAT_ORIG_PS1"
+`+
+				`printf '\033]1337;opskat:%s:init:pid:%%s\007' "$$"
+`,
+			syncToken, shellQuote(promptNonce), syncToken)
+	default:
+		return ""
+	}
+}
+
+func buildSourceTempScriptCommand(tempPath, script string) string {
+	quotedPath := shellQuote(tempPath)
+	encoded := base64.StdEncoding.EncodeToString([]byte(script))
+	return fmt.Sprintf("stty -echo 2>/dev/null\rbase64 -d > %s <<'OPSKAT_SCRIPT'\n%s\nOPSKAT_SCRIPT\nsource %s\nrm -f %s\nstty echo 2>/dev/null\r", quotedPath, encoded, quotedPath, quotedPath)
 }
 
 // buildEnableSyncCommand returns a single-line shell statement to be written
