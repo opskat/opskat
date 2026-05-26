@@ -13,7 +13,8 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/go-sql-driver/mysql"
-	_ "github.com/jackc/pgx/v5/stdlib" // PostgreSQL driver
+	_ "github.com/jackc/pgx/v5/stdlib"  // PostgreSQL driver
+	_ "github.com/microsoft/go-mssqldb" // 注册 "sqlserver" driver
 	"go.uber.org/zap"
 )
 
@@ -152,6 +153,29 @@ func buildDSN(cfg *asset_entity.DatabaseConfig, password string) (driverName str
 			dsn += "&" + cfg.Params
 		}
 		return "pgx", dsn
+	case asset_entity.DriverMSSQL:
+		q := url.Values{}
+		if cfg.Database != "" {
+			q.Set("database", cfg.Database)
+		}
+		if cfg.TLS {
+			q.Set("encrypt", "true")
+			q.Set("trustservercertificate", "true")
+		} else {
+			q.Set("encrypt", "disable")
+		}
+		if cfg.Params != "" {
+			for k, v := range parseParams(cfg.Params) {
+				q.Set(k, v)
+			}
+		}
+		u := &url.URL{
+			Scheme:   "sqlserver",
+			User:     url.UserPassword(cfg.Username, password),
+			Host:     fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
+			RawQuery: q.Encode(),
+		}
+		return "sqlserver", u.String()
 	default:
 		return "", ""
 	}
