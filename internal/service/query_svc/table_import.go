@@ -46,6 +46,7 @@ type TableImportBatchRequest struct {
 	Mode                    string   `json:"mode"`
 	ContinueOnError         bool     `json:"continueOnError"`
 	DisableForeignKeyChecks bool     `json:"disableForeignKeyChecks"`
+	Tables                  []string `json:"tables,omitempty"` // 仅 MSSQL 需要,已 Quote 过的表引用
 }
 
 // TableImportBatchError captures a failed statement without leaking connection setup failures into row logs.
@@ -78,24 +79,28 @@ func RunTableImportBatch(
 		return nil, fmt.Errorf("SQL session is nil")
 	}
 
-	disableFK := request.DisableForeignKeyChecks && driver == asset_entity.DriverMySQL
-	if disableFK {
-		if _, execErr := session.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 0"); execErr != nil {
-			return nil, fmt.Errorf("disable foreign key checks: %w", execErr)
+	var restoreFK func() error
+	if request.DisableForeignKeyChecks {
+		var fkErr error
+		restoreFK, fkErr = disableForeignKeyChecks(ctx, session, driver, request)
+		if fkErr != nil {
+			return nil, fmt.Errorf("disable foreign key checks: %w", fkErr)
 		}
-		defer func() {
-			if _, restoreErr := session.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 1"); restoreErr != nil {
-				if err == nil && len(result.Errors) == 0 {
-					err = fmt.Errorf("restore foreign key checks: %w", restoreErr)
-					return
+		if restoreFK != nil {
+			defer func() {
+				if restoreErr := restoreFK(); restoreErr != nil {
+					if err == nil && len(result.Errors) == 0 {
+						err = fmt.Errorf("restore foreign key checks: %w", restoreErr)
+						return
+					}
+					result.Error++
+					result.Errors = append(result.Errors, TableImportBatchError{
+						Index:   -1,
+						Message: fmt.Sprintf("restore foreign key checks: %v", restoreErr),
+					})
 				}
-				result.Error++
-				result.Errors = append(result.Errors, TableImportBatchError{
-					Index:   -1,
-					Message: fmt.Sprintf("restore foreign key checks: %v", restoreErr),
-				})
-			}
-		}()
+			}()
+		}
 	}
 
 	atomic := shouldRunAtomicImport(request)
@@ -166,6 +171,47 @@ func RunTableImportBatch(
 		committed = true
 	}
 	return result, nil
+}
+
+func disableForeignKeyChecks(
+	ctx context.Context,
+	session SQLSession,
+	driver asset_entity.DatabaseDriver,
+	req TableImportBatchRequest,
+) (restore func() error, err error) {
+	switch driver {
+	case asset_entity.DriverMySQL:
+		if _, e := session.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 0"); e != nil {
+			return nil, e
+		}
+		return func() error {
+			_, e := session.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 1")
+			return e
+		}, nil
+	case asset_entity.DriverSQLite:
+		if _, e := session.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); e != nil {
+			return nil, e
+		}
+		return func() error {
+			_, e := session.ExecContext(ctx, "PRAGMA foreign_keys = ON")
+			return e
+		}, nil
+	case asset_entity.DriverMSSQL:
+		for _, t := range req.Tables {
+			if _, e := session.ExecContext(ctx, "ALTER TABLE "+t+" NOCHECK CONSTRAINT ALL"); e != nil {
+				return nil, e
+			}
+		}
+		return func() error {
+			for _, t := range req.Tables {
+				if _, e := session.ExecContext(ctx, "ALTER TABLE "+t+" WITH CHECK CHECK CONSTRAINT ALL"); e != nil {
+					return e
+				}
+			}
+			return nil
+		}, nil
+	}
+	return nil, nil // PG 与未知 driver: 不支持,返回 nil restore
 }
 
 func shouldRunAtomicImport(request TableImportBatchRequest) bool {

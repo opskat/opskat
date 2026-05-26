@@ -125,3 +125,52 @@ func TestRunTableImportBatchContinuesNonAtomicImportAndRestoresForeignKeyChecks(
 		t.Fatalf("unexpected operation order:\n got: %v\nwant: %v", session.operations, wantOps)
 	}
 }
+
+func TestRunTableImportBatchSQLiteForeignKeys(t *testing.T) {
+	session := &fakeSQLSession{}
+	_, err := RunTableImportBatch(context.Background(), session, asset_entity.DriverSQLite, TableImportBatchRequest{
+		Mode:                    "append",
+		ContinueOnError:         true,
+		DisableForeignKeyChecks: true,
+		Statements: []string{
+			`INSERT INTO "users" ("id") VALUES (1);`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTableImportBatch() error = %v", err)
+	}
+	want := []string{
+		"conn:PRAGMA foreign_keys = OFF",
+		`conn:INSERT INTO "users" ("id") VALUES (1);`,
+		"conn:PRAGMA foreign_keys = ON",
+	}
+	if strings.Join(session.operations, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("got: %v\nwant: %v", session.operations, want)
+	}
+}
+
+func TestRunTableImportBatchMSSQLForeignKeys(t *testing.T) {
+	session := &fakeSQLSession{}
+	_, err := RunTableImportBatch(context.Background(), session, asset_entity.DriverMSSQL, TableImportBatchRequest{
+		Mode:                    "append",
+		ContinueOnError:         true,
+		DisableForeignKeyChecks: true,
+		Tables:                  []string{"[appdb].[dbo].[users]", "[appdb].[dbo].[orders]"},
+		Statements: []string{
+			`INSERT INTO [appdb].[dbo].[users] ([id]) VALUES (1);`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTableImportBatch() error = %v", err)
+	}
+	want := []string{
+		"conn:ALTER TABLE [appdb].[dbo].[users] NOCHECK CONSTRAINT ALL",
+		"conn:ALTER TABLE [appdb].[dbo].[orders] NOCHECK CONSTRAINT ALL",
+		`conn:INSERT INTO [appdb].[dbo].[users] ([id]) VALUES (1);`,
+		"conn:ALTER TABLE [appdb].[dbo].[users] WITH CHECK CHECK CONSTRAINT ALL",
+		"conn:ALTER TABLE [appdb].[dbo].[orders] WITH CHECK CHECK CONSTRAINT ALL",
+	}
+	if strings.Join(session.operations, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("got: %v\nwant: %v", session.operations, want)
+	}
+}
