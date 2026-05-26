@@ -9,6 +9,19 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 )
 
+func TestOpenWithTunnelMSSQLRouted(t *testing.T) {
+	Convey("openWithTunnel 把 MSSQL 路由到专用分支", t, func() {
+		cfg := &asset_entity.DatabaseConfig{
+			Driver: asset_entity.DriverMSSQL, Host: "h", Port: 1433,
+			Username: "u", Database: "d",
+		}
+		_, err := openWithTunnel(cfg, "pw", nil) // tunnel=nil 会在分支内部出错,但不应是"不支持"错误
+		if err != nil {
+			So(err.Error(), ShouldNotContainSubstring, "不支持的数据库驱动")
+		}
+	})
+}
+
 func TestBuildDSNMSSQL(t *testing.T) {
 	Convey("MSSQL DSN", t, func() {
 		cfg := &asset_entity.DatabaseConfig{

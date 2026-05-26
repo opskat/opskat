@@ -13,8 +13,9 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/go-sql-driver/mysql"
-	_ "github.com/jackc/pgx/v5/stdlib"  // PostgreSQL driver
-	_ "github.com/microsoft/go-mssqldb" // 注册 "sqlserver" driver
+	_ "github.com/jackc/pgx/v5/stdlib" // PostgreSQL driver
+	mssql "github.com/microsoft/go-mssqldb"
+	"github.com/microsoft/go-mssqldb/msdsn"
 	"go.uber.org/zap"
 )
 
@@ -92,6 +93,8 @@ func openWithTunnel(cfg *asset_entity.DatabaseConfig, password string, tunnel *S
 		return openMySQLWithTunnel(cfg, password, tunnel)
 	case asset_entity.DriverPostgreSQL:
 		return openPgWithTunnel(cfg, password, tunnel)
+	case asset_entity.DriverMSSQL:
+		return openMSSQLWithTunnel(cfg, password, tunnel)
 	default:
 		return nil, fmt.Errorf("不支持的数据库驱动: %s", cfg.Driver)
 	}
@@ -123,6 +126,25 @@ func openPgWithTunnel(cfg *asset_entity.DatabaseConfig, password string, tunnel 
 	// 对于隧道模式，使用 pgx 的 connector API
 	db := sql.OpenDB(newPgTunnelConnector(dsn, tunnel))
 	return db, nil
+}
+
+func openMSSQLWithTunnel(cfg *asset_entity.DatabaseConfig, password string, tunnel *SSHTunnel) (*sql.DB, error) {
+	_, dsn := buildDSN(cfg, password)
+	msdsnCfg, err := msdsn.Parse(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse mssql dsn: %w", err)
+	}
+	connector := mssql.NewConnectorConfig(msdsnCfg)
+	connector.Dialer = mssqlDialerFunc(func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return tunnel.Dial(ctx)
+	})
+	return sql.OpenDB(connector), nil
+}
+
+type mssqlDialerFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
+func (f mssqlDialerFunc) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	return f(ctx, network, addr)
 }
 
 func buildDSN(cfg *asset_entity.DatabaseConfig, password string) (driverName string, dsn string) {
