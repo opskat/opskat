@@ -1,8 +1,9 @@
 import { useTranslation } from "react-i18next";
-import { Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch } from "@opskat/ui";
+import { Button, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch } from "@opskat/ui";
 import { AssetSelect } from "@/components/asset/AssetSelect";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
 import { credential_entity } from "../../../wailsjs/go/models";
+import { SelectSQLiteFile } from "../../../wailsjs/go/system/System";
 
 export interface DatabaseConfigSectionProps {
   host: string;
@@ -24,6 +25,8 @@ export interface DatabaseConfigSectionProps {
   setSshTunnelId: (v: number) => void;
   params: string;
   setParams: (v: string) => void;
+  path: string;
+  setPath: (v: string) => void;
   // Password fields
   password: string;
   setPassword: (v: string) => void;
@@ -56,6 +59,8 @@ export function DatabaseConfigSection({
   setSshTunnelId,
   params,
   setParams,
+  path,
+  setPath,
   password,
   setPassword,
   encryptedPassword,
@@ -70,105 +75,155 @@ export function DatabaseConfigSection({
 
   return (
     <>
-      {/* Connection & Auth (single visual block) */}
-      <div className="grid gap-3 border rounded-lg p-3">
-        {/* Host + Port (each labeled) */}
-        <div className="grid grid-cols-[1fr_120px] gap-3">
-          <div className="grid gap-2">
-            <Label>{t("asset.host")}</Label>
-            <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="example.com" />
+      {driver === "sqlite" ? (
+        <>
+          {/* SQLite path field */}
+          <div className="grid gap-3 border rounded-lg p-3">
+            <div className="grid gap-2">
+              <Label>{t("common.asset.database.sqlite.path.label")}</Label>
+              <div className="flex gap-2">
+                <Input
+                  value={path}
+                  onChange={(e) => setPath(e.target.value)}
+                  placeholder={t("common.asset.database.sqlite.path.placeholder")}
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={async () => {
+                    const selected = await SelectSQLiteFile();
+                    if (selected) setPath(selected);
+                  }}
+                >
+                  {t("common.asset.database.sqlite.path.browse")}
+                </Button>
+              </div>
+            </div>
           </div>
+
+          {/* Params */}
           <div className="grid gap-2">
-            <Label>{t("asset.port")}</Label>
+            <Label>{t("asset.params")}</Label>
             <Input
-              className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-              type="number"
-              value={port || ""}
-              placeholder={driver === "postgresql" ? "5432" : "3306"}
-              onChange={(e) => setPort(Number(e.target.value))}
+              value={params}
+              onChange={(e) => setParams(e.target.value)}
+              placeholder={t("asset.paramsPlaceholder")}
             />
           </div>
-        </div>
 
-        {/* Username */}
-        <div className="grid gap-2">
-          <Label>{t("asset.username")}</Label>
-          <Input value={username} onChange={(e) => setUsername(e.target.value)} />
-        </div>
+          {/* Read Only */}
+          <div className="flex items-center justify-between">
+            <Label>{t("asset.readOnly")}</Label>
+            <Switch checked={readOnly} onCheckedChange={setReadOnly} />
+          </div>
+        </>
+      ) : (
+        <>
+          {/* Connection & Auth (single visual block) */}
+          <div className="grid gap-3 border rounded-lg p-3">
+            {/* Host + Port (each labeled) */}
+            <div className="grid grid-cols-[1fr_120px] gap-3">
+              <div className="grid gap-2">
+                <Label>{t("asset.host")}</Label>
+                <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="example.com" />
+              </div>
+              <div className="grid gap-2">
+                <Label>{t("asset.port")}</Label>
+                <Input
+                  className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  type="number"
+                  value={port || ""}
+                  placeholder={driver === "postgresql" ? "5432" : driver === "mssql" ? "1433" : "3306"}
+                  onChange={(e) => setPort(Number(e.target.value))}
+                />
+              </div>
+            </div>
 
-        {/* Password */}
-        <PasswordSourceField
-          source={passwordSource}
-          onSourceChange={setPasswordSource}
-          password={password}
-          onPasswordChange={setPassword}
-          credentialId={passwordCredentialId}
-          onCredentialIdChange={setPasswordCredentialId}
-          managedPasswords={managedPasswords}
-          hasExistingPassword={!!encryptedPassword}
-          editAssetId={editAssetId}
-          onUsernameChange={setUsername}
-        />
-      </div>
+            {/* Username */}
+            <div className="grid gap-2">
+              <Label>{t("asset.username")}</Label>
+              <Input value={username} onChange={(e) => setUsername(e.target.value)} />
+            </div>
 
-      {/* Database name */}
-      <div className="grid gap-2">
-        <Label>{t("asset.database")}</Label>
-        <Input
-          value={database}
-          onChange={(e) => setDatabase(e.target.value)}
-          placeholder={t("asset.databasePlaceholder")}
-        />
-      </div>
+            {/* Password */}
+            <PasswordSourceField
+              source={passwordSource}
+              onSourceChange={setPasswordSource}
+              password={password}
+              onPasswordChange={setPassword}
+              credentialId={passwordCredentialId}
+              onCredentialIdChange={setPasswordCredentialId}
+              managedPasswords={managedPasswords}
+              hasExistingPassword={!!encryptedPassword}
+              editAssetId={editAssetId}
+              onUsernameChange={setUsername}
+            />
+          </div>
 
-      {/* SSL Mode (PostgreSQL only) */}
-      {driver === "postgresql" && (
-        <div className="grid gap-2">
-          <Label>{t("asset.sslMode")}</Label>
-          <Select value={sslMode} onValueChange={setSslMode}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="disable">disable</SelectItem>
-              <SelectItem value="require">require</SelectItem>
-              <SelectItem value="verify-ca">verify-ca</SelectItem>
-              <SelectItem value="verify-full">verify-full</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+          {/* Database name */}
+          <div className="grid gap-2">
+            <Label>{t("asset.database")}</Label>
+            <Input
+              value={database}
+              onChange={(e) => setDatabase(e.target.value)}
+              placeholder={t("asset.databasePlaceholder")}
+            />
+          </div>
+
+          {/* SSL Mode (PostgreSQL only) */}
+          {driver === "postgresql" && (
+            <div className="grid gap-2">
+              <Label>{t("asset.sslMode")}</Label>
+              <Select value={sslMode} onValueChange={setSslMode}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="disable">disable</SelectItem>
+                  <SelectItem value="require">require</SelectItem>
+                  <SelectItem value="verify-ca">verify-ca</SelectItem>
+                  <SelectItem value="verify-full">verify-full</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {/* TLS (MySQL + MSSQL) */}
+          {(driver === "mysql" || driver === "mssql") && (
+            <div className="flex items-center justify-between">
+              <Label>TLS</Label>
+              <Switch checked={tls} onCheckedChange={setTls} />
+            </div>
+          )}
+
+          {/* Params */}
+          <div className="grid gap-2">
+            <Label>{t("asset.params")}</Label>
+            <Input
+              value={params}
+              onChange={(e) => setParams(e.target.value)}
+              placeholder={t("asset.paramsPlaceholder")}
+            />
+          </div>
+
+          {/* Read Only */}
+          <div className="flex items-center justify-between">
+            <Label>{t("asset.readOnly")}</Label>
+            <Switch checked={readOnly} onCheckedChange={setReadOnly} />
+          </div>
+
+          {/* SSH Tunnel */}
+          <div className="grid gap-2">
+            <Label>{t("asset.sshTunnel")}</Label>
+            <AssetSelect
+              value={sshTunnelId}
+              onValueChange={setSshTunnelId}
+              filterType="ssh"
+              placeholder={t("asset.sshTunnelNone")}
+            />
+          </div>
+        </>
       )}
-
-      {/* TLS (MySQL only) */}
-      {driver === "mysql" && (
-        <div className="flex items-center justify-between">
-          <Label>TLS</Label>
-          <Switch checked={tls} onCheckedChange={setTls} />
-        </div>
-      )}
-
-      {/* Params */}
-      <div className="grid gap-2">
-        <Label>{t("asset.params")}</Label>
-        <Input value={params} onChange={(e) => setParams(e.target.value)} placeholder={t("asset.paramsPlaceholder")} />
-      </div>
-
-      {/* Read Only */}
-      <div className="flex items-center justify-between">
-        <Label>{t("asset.readOnly")}</Label>
-        <Switch checked={readOnly} onCheckedChange={setReadOnly} />
-      </div>
-
-      {/* SSH Tunnel */}
-      <div className="grid gap-2">
-        <Label>{t("asset.sshTunnel")}</Label>
-        <AssetSelect
-          value={sshTunnelId}
-          onValueChange={setSshTunnelId}
-          filterType="ssh"
-          placeholder={t("asset.sshTunnelNone")}
-        />
-      </div>
     </>
   );
 }

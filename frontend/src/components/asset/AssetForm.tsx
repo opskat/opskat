@@ -1698,6 +1698,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                 setSshTunnelId={setSshTunnelId}
                 params={params}
                 setParams={setParams}
+                path=""
+                setPath={() => {}}
                 password={password}
                 setPassword={setPassword}
                 encryptedPassword={encryptedPassword}
