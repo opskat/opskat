@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { ChevronRight, ChevronDown, Folder, FileText } from "lucide-react";
 import { useEtcdStore, type EtcdTreeNode } from "@/stores/etcdStore";
 
@@ -21,9 +22,15 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([ROOT_PREFIX]));
   const [filter, setFilter] = useState("");
 
+  function reportLoadError(e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    toast.error(`${t("etcd.tree.loadFailed")}: ${msg}`);
+  }
+
   // 首次加载根 prefix —— 不需要显式展开根（根永远渲染顶层）
   useEffect(() => {
-    void loadPrefix(assetId, ROOT_PREFIX);
+    loadPrefix(assetId, ROOT_PREFIX).catch(reportLoadError);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assetId, loadPrefix]);
 
   function toggleExpand(prefix: string) {
@@ -35,7 +42,7 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
         next.add(prefix);
         // 懒加载：首次展开拉取（store 内部对已缓存的会直接 return）
         if (!treeCache.has(prefix)) {
-          void loadPrefix(assetId, prefix);
+          loadPrefix(assetId, prefix).catch(reportLoadError);
         }
       }
       return next;
@@ -57,13 +64,15 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
           key={node.prefix}
           type="button"
           className={`flex w-full items-center gap-1 px-2 py-1 text-left text-xs transition-colors hover:bg-accent ${
-            isSelected ? "bg-accent text-accent-foreground" : "text-muted-foreground"
+            isSelected
+              ? "border-l-2 border-primary bg-accent font-semibold text-accent-foreground"
+              : "text-muted-foreground"
           }`}
           style={{ paddingLeft: padding + 8 }}
           onClick={() => onSelectKey?.(node.prefix)}
           title={node.prefix}
         >
-          <FileText className="size-3 shrink-0" />
+          <FileText className={`size-3 shrink-0 ${isSelected ? "text-primary" : "text-muted-foreground/70"}`} />
           <span className="truncate">{node.name}</span>
         </button>
       );
@@ -86,8 +95,8 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
           ) : (
             <ChevronRight className="size-3 shrink-0 text-muted-foreground" />
           )}
-          <Folder className="size-3 shrink-0 text-muted-foreground" />
-          <span className="truncate font-medium">{node.name}</span>
+          <Folder className="size-3 shrink-0 text-amber-500 dark:text-amber-400" />
+          <span className="truncate font-medium text-foreground">{node.name}</span>
         </button>
         {isExpanded && (
           <>

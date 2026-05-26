@@ -154,8 +154,35 @@ func (s *Service) TestConnection(ctx context.Context, assetID int64) error {
 	if err != nil {
 		return err
 	}
+	return s.testDial(ctx, asset, cfg, password)
+}
+
+// TestConfig 用「未保存的配置」即时拨号一次,用于资产表单上的「测试连接」。
+// 与 TestConnection 的区别:不通过 assetID 查找资产,而是接受调用方拼好的 cfg + 已解密的密码。
+func (s *Service) TestConfig(ctx context.Context, cfg *asset_entity.EtcdConfig, password string) error {
+	if cfg == nil {
+		return fmt.Errorf("etcd config 为空")
+	}
+	if len(cfg.Endpoints) == 0 {
+		return fmt.Errorf("至少需要 1 个 endpoint")
+	}
+	return s.testDial(ctx, &asset_entity.Asset{}, cfg, password)
+}
+
+// testDial 共用拨号 + 关闭逻辑。DialEtcd 失败时直接返回错误;成功后关闭 client / tunnel。
+func (s *Service) testDial(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.EtcdConfig, password string) error {
+	logger.Ctx(ctx).Info("etcd test connection start",
+		zap.Int64("assetID", asset.ID),
+		zap.Int("endpoints", len(cfg.Endpoints)),
+		zap.Bool("tls", cfg.TLS),
+		zap.Int64("sshTunnelID", asset.SSHTunnelID),
+	)
 	client, tunnel, err := connpool.DialEtcd(ctx, asset, cfg, password, s.sshPool)
 	if err != nil {
+		logger.Ctx(ctx).Error("etcd test connection failed",
+			zap.Int64("assetID", asset.ID),
+			zap.Error(err),
+		)
 		return err
 	}
 	if cerr := client.Close(); cerr != nil {
@@ -166,6 +193,9 @@ func (s *Service) TestConnection(ctx context.Context, assetID int64) error {
 			logger.Ctx(ctx).Warn("close etcd ssh tunnel after test", zap.Error(cerr))
 		}
 	}
+	logger.Ctx(ctx).Info("etcd test connection ok",
+		zap.Int64("assetID", asset.ID),
+	)
 	return nil
 }
 

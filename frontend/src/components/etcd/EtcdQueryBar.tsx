@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { Input, Button } from "@opskat/ui";
-import { Play } from "lucide-react";
+import { Loader2, Play } from "lucide-react";
 import { useEtcdStore } from "@/stores/etcdStore";
 import type { etcd_svc } from "../../../wailsjs/go/models";
 
@@ -101,7 +102,9 @@ export function EtcdQueryBar({ assetId, onResult, onDestructive }: EtcdQueryBarP
       await exec(req);
       onResult?.();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      toast.error(`${t("etcd.query.execFailed")}: ${msg}`);
     } finally {
       setRunning(false);
     }
@@ -124,7 +127,8 @@ export function EtcdQueryBar({ assetId, onResult, onDestructive }: EtcdQueryBarP
           data-testid="etcd-query-input"
         />
         <Button onClick={() => void run()} disabled={running} size="sm" data-testid="etcd-query-execute">
-          <Play className="size-3" /> {t("etcd.query.execute")}
+          {running ? <Loader2 className="size-3 animate-spin" /> : <Play className="size-3" />}
+          {t("etcd.query.execute")}
         </Button>
       </div>
       <div className="flex flex-wrap gap-1">

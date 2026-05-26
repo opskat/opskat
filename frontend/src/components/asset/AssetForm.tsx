@@ -28,6 +28,7 @@ import { GetAvailableAssetTypes, GetDecryptedExtensionConfig } from "../../../wa
 import { ListCredentialsByType, CancelTest } from "../../../wailsjs/go/system/System";
 import { ListLocalSSHKeys, TestSSHConnection } from "../../../wailsjs/go/ssh/SSH";
 import { TestDatabaseConnection, TestRedisConnection, TestMongoDBConnection } from "../../../wailsjs/go/query/Query";
+import { EtcdTestConfig } from "../../../wailsjs/go/etcd/Etcd";
 import { TestKafkaConnection } from "../../../wailsjs/go/kafka/Kafka";
 import { TestSerialConnection } from "../../../wailsjs/go/serial/Serial";
 import { ssh as ssh_models } from "../../../wailsjs/go/models";
@@ -1067,6 +1068,43 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     }
   };
 
+  const handleTestEtcdConnection = async () => {
+    const endpointsList = etcdEndpoints
+      .split(/[\n,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (endpointsList.length === 0) {
+      toast.error(t("etcd.error.endpointsRequired"));
+      return;
+    }
+    const cfg: EtcdConfig = { endpoints: endpointsList };
+    if (username) cfg.username = username;
+    if (etcdTls) cfg.tls = true;
+    if (etcdTls && etcdTlsInsecure) cfg.tls_insecure = true;
+    if (etcdTls && etcdTlsServerName) cfg.tls_server_name = etcdTlsServerName;
+    if (etcdTls && etcdTlsCAFile) cfg.tls_ca_file = etcdTlsCAFile;
+    if (etcdTls && etcdTlsCertFile) cfg.tls_cert_file = etcdTlsCertFile;
+    if (etcdTls && etcdTlsKeyFile) cfg.tls_key_file = etcdTlsKeyFile;
+    if (etcdDialTimeoutSeconds > 0) cfg.dial_timeout_seconds = etcdDialTimeoutSeconds;
+    if (etcdCommandTimeoutSeconds > 0) cfg.command_timeout_seconds = etcdCommandTimeoutSeconds;
+    if (sshTunnelId > 0) cfg.ssh_asset_id = sshTunnelId;
+    applyTestPasswordSource(cfg);
+    const testId = newTestId();
+    activeTestIdRef.current = testId;
+    setTesting(true);
+    try {
+      await EtcdTestConfig(testId, JSON.stringify(cfg), password);
+      if (activeTestIdRef.current === testId) toast.success(t("asset.testConnectionSuccess"));
+    } catch (e) {
+      if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
+    } finally {
+      if (activeTestIdRef.current === testId) {
+        activeTestIdRef.current = null;
+        setTesting(false);
+      }
+    }
+  };
+
   const handleTestMongoDBConnection = async () => {
     const cfg: MongoDBConfig = {};
     if (mongoConnectionMode === "uri" && connectionURI) {
@@ -1572,7 +1610,14 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     assetType === "redis" ||
     assetType === "mongodb" ||
     assetType === "kafka" ||
-    assetType === "serial";
+    assetType === "serial" ||
+    assetType === "etcd";
+
+  const etcdEndpointsList = () =>
+    etcdEndpoints
+      .split(/[\n,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
 
   const isTestConnectionDisabled =
     testing ||
@@ -1580,17 +1625,13 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       ? kafkaBrokers().length === 0
       : assetType === "serial"
         ? !serialPortPath
-        : assetType !== "mongodb"
-          ? !host
-          : mongoConnectionMode === "uri"
-            ? !connectionURI
-            : !host);
-
-  const etcdEndpointsList = () =>
-    etcdEndpoints
-      .split(/[\n,;]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
+        : assetType === "etcd"
+          ? etcdEndpointsList().length === 0
+          : assetType !== "mongodb"
+            ? !host
+            : mongoConnectionMode === "uri"
+              ? !connectionURI
+              : !host);
 
   const saveDisabledReason = !name.trim()
     ? "asset.formMissingName"
@@ -1622,7 +1663,9 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             ? handleTestKafkaConnection
             : assetType === "serial"
               ? handleTestSerialConnection
-              : handleTestRedisConnection;
+              : assetType === "etcd"
+                ? handleTestEtcdConnection
+                : handleTestRedisConnection;
 
   const testConnectionButton = !isTestableAssetType ? null : testing && activeTestIdRef.current ? (
     <Button type="button" variant="outline" size="sm" onClick={handleCancelTest} className="gap-1 w-fit">

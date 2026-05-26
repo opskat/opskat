@@ -8,16 +8,46 @@ export type EtcdTreeNode = {
   isLeaf: boolean;
 };
 
+export type EtcdExecMeta =
+  | { ok: true; elapsedMs: number; count: number; op: string }
+  | { ok: false; elapsedMs: number; error: string; op: string };
+
+export type EtcdClusterStatus = "loading" | "healthy" | "unhealthy" | "unknown";
+export type EtcdClusterMember = {
+  id: string; // hex 字符串(member.ID)
+  name: string;
+  urls: string[];
+};
+export type EtcdClusterInfo = {
+  status: EtcdClusterStatus;
+  memberCount: number;
+  members: EtcdClusterMember[];
+  error?: string;
+};
+
+// dispatchMemberList 把 value 编码为 "name=X urls=[U1 U2]"。
+function parseMemberValue(value: string): { name: string; urls: string[] } {
+  const nameMatch = value.match(/name=(\S+)/);
+  const urlsMatch = value.match(/urls=\[([^\]]*)\]/);
+  return {
+    name: nameMatch?.[1] ?? "",
+    urls: urlsMatch?.[1].split(/\s+/).filter(Boolean) ?? [],
+  };
+}
+
 interface State {
   treeCache: Map<string, EtcdTreeNode[]>;
   truncatedAt: Map<string, boolean>;
   queryHistory: string[];
   lastResult: etcd_svc.ExecResult | null;
+  lastMeta: EtcdExecMeta | null;
+  clusterInfo: Map<number, EtcdClusterInfo>;
 
   loadPrefix: (assetId: number, prefix: string, opts?: { force?: boolean }) => Promise<void>;
   invalidate: (prefix?: string) => void;
   exec: (req: etcd_svc.ExecRequest) => Promise<etcd_svc.ExecResult>;
   testConnection: (assetId: number) => Promise<void>;
+  loadClusterInfo: (assetId: number, opts?: { force?: boolean }) => Promise<void>;
 }
 
 const HISTORY_KEY = "etcd:queryHistory";
@@ -47,6 +77,8 @@ export const useEtcdStore = create<State>((set, get) => ({
   truncatedAt: new Map(),
   queryHistory: loadHistory(),
   lastResult: null,
+  lastMeta: null,
+  clusterInfo: new Map(),
 
   async loadPrefix(assetId, prefix, opts) {
     if (!opts?.force && get().treeCache.has(prefix)) return;
@@ -83,15 +115,82 @@ export const useEtcdStore = create<State>((set, get) => ({
   },
 
   async exec(req) {
-    const res = await EtcdExec(req);
-    const label = `${req.Op} ${req.Key ?? ""}`.trim();
-    const next = [label, ...get().queryHistory.filter((h) => h !== label)].slice(0, HISTORY_LIMIT);
-    saveHistory(next);
-    set({ queryHistory: next, lastResult: res });
-    return res;
+    const t0 = performance.now();
+    try {
+      const res = await EtcdExec(req);
+      const elapsedMs = Math.round(performance.now() - t0);
+      const label = `${req.Op} ${req.Key ?? ""}`.trim();
+      const next = [label, ...get().queryHistory.filter((h) => h !== label)].slice(0, HISTORY_LIMIT);
+      saveHistory(next);
+      set({
+        queryHistory: next,
+        lastResult: res,
+        lastMeta: { ok: true, elapsedMs, count: Number(res.count ?? 0), op: req.Op },
+      });
+      return res;
+    } catch (e) {
+      const elapsedMs = Math.round(performance.now() - t0);
+      const msg = e instanceof Error ? e.message : String(e);
+      set({
+        lastResult: null,
+        lastMeta: { ok: false, elapsedMs, error: msg, op: req.Op },
+      });
+      throw e;
+    }
   },
 
   async testConnection(assetId) {
     await EtcdTestConnection(assetId);
+  },
+
+  async loadClusterInfo(assetId, opts) {
+    const existing = get().clusterInfo.get(assetId);
+    if (!opts?.force && existing && existing.status !== "loading" && existing.status !== "unknown") return;
+
+    const setStatus = (info: EtcdClusterInfo) => {
+      const next = new Map(get().clusterInfo);
+      next.set(assetId, info);
+      set({ clusterInfo: next });
+    };
+    setStatus({
+      status: "loading",
+      memberCount: existing?.memberCount ?? 0,
+      members: existing?.members ?? [],
+    });
+
+    try {
+      const memberRes = await EtcdExec({
+        AssetID: assetId,
+        Op: "member_list",
+        Key: "",
+        Value: "",
+        Prefix: false,
+        Limit: 0,
+        Revision: 0,
+        LeaseID: 0,
+        Args: {} as Record<string, unknown>,
+        ApprovalID: "",
+        Source: "cluster_info",
+      } as unknown as etcd_svc.ExecRequest);
+      const members: EtcdClusterMember[] = (memberRes.kvs ?? []).map((kv) => {
+        const parsed = parseMemberValue(kv.value ?? "");
+        return { id: kv.key, name: parsed.name, urls: parsed.urls };
+      });
+      const count = members.length || Number(memberRes.count ?? 0);
+
+      setStatus({
+        status: count > 0 ? "healthy" : "unhealthy",
+        memberCount: count,
+        members,
+      });
+    } catch (e) {
+      setStatus({
+        status: "unhealthy",
+        memberCount: 0,
+        members: [],
+        error: e instanceof Error ? e.message : String(e),
+      });
+      throw e;
+    }
   },
 }));

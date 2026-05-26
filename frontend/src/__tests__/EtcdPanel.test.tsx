@@ -114,6 +114,8 @@ describe("EtcdPanel", () => {
     // ConfirmDialog 用 Radix AlertDialog → role="alertdialog"
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "action.cancel" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "action.confirm" })).toBeInTheDocument();
 
     // 此时还没真正调用 EtcdExec —— 后端调用必须在用户确认之后
     expect(EtcdExec).not.toHaveBeenCalled();
@@ -138,13 +140,9 @@ describe("EtcdPanel", () => {
     });
     fireEvent.click(screen.getByTestId("etcd-query-execute"));
 
-    const dialog = await screen.findByRole("alertdialog");
-    // 点击 AlertDialogAction —— 它是 ConfirmDialog 里的 confirm 按钮
-    // AlertDialog 内有两个按钮:Cancel + Action。Action 是渲染顺序的最后一个。
-    const buttons = dialog.querySelectorAll("button");
-    expect(buttons.length).toBeGreaterThanOrEqual(2);
+    await screen.findByRole("alertdialog");
     await act(async () => {
-      fireEvent.click(buttons[buttons.length - 1]);
+      fireEvent.click(screen.getByRole("button", { name: "action.confirm" }));
     });
 
     await waitFor(() => {
