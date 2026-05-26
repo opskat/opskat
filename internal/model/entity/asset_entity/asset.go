@@ -128,7 +128,7 @@ type DatabaseConfig struct {
 	Params       string         `json:"params,omitempty"`        // 额外连接参数
 	ReadOnly     bool           `json:"read_only,omitempty"`     // 连接级只读
 	SSHAssetID   int64          `json:"ssh_asset_id,omitempty"`  // Deprecated: use Asset.SSHTunnelID
-	Path string `json:"path,omitempty"` // SQLite 是本地嵌入式文件库，无 host/port 概念，路径独立字段；其他 driver 永远为空
+	Path         string         `json:"path,omitempty"`          // SQLite 是本地嵌入式文件库，无 host/port 概念，路径独立字段；其他 driver 永远为空
 }
 
 // RedisConfig Redis类型的特定配置
@@ -625,7 +625,7 @@ func (a *Asset) validateDatabase() error {
 	switch cfg.Driver {
 	case DriverMySQL, DriverPostgreSQL, DriverMSSQL:
 		if cfg.Host == "" {
-			return errors.New("数据库 host 不能为空")
+			return errors.New("数据库主机地址不能为空")
 		}
 		if cfg.Port <= 0 {
 			return errors.New("数据库端口无效")

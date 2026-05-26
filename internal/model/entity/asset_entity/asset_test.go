@@ -455,7 +455,25 @@ func TestValidateDatabaseMSSQL(t *testing.T) {
 			a := &Asset{Type: AssetTypeDatabase, Name: "x", GroupID: 1}
 			cfg := &DatabaseConfig{Driver: DriverMSSQL, Port: 1433, Username: "sa"}
 			convey.So(a.SetDatabaseConfig(cfg), convey.ShouldBeNil)
-			convey.So(a.Validate().Error(), convey.ShouldContainSubstring, "host")
+			convey.So(a.Validate().Error(), convey.ShouldContainSubstring, "主机")
+		})
+		convey.Convey("port=0 应报错", func() {
+			a := &Asset{Type: AssetTypeDatabase, Name: "x", GroupID: 1}
+			cfg := &DatabaseConfig{
+				Driver: DriverMSSQL, Host: "localhost",
+				Port: 0, Username: "sa",
+			}
+			convey.So(a.SetDatabaseConfig(cfg), convey.ShouldBeNil)
+			convey.So(a.Validate().Error(), convey.ShouldContainSubstring, "端口")
+		})
+		convey.Convey("缺 username 应报错", func() {
+			a := &Asset{Type: AssetTypeDatabase, Name: "x", GroupID: 1}
+			cfg := &DatabaseConfig{
+				Driver: DriverMSSQL, Host: "localhost",
+				Port: 1433,
+			}
+			convey.So(a.SetDatabaseConfig(cfg), convey.ShouldBeNil)
+			convey.So(a.Validate().Error(), convey.ShouldContainSubstring, "用户名")
 		})
 		convey.Convey("完整字段通过", func() {
 			a := &Asset{Type: AssetTypeDatabase, Name: "x", GroupID: 1}
