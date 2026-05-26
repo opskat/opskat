@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
+
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/app/i18n"
@@ -221,4 +223,20 @@ func (s *System) UpdateGroup(group *group_entity.Group) error {
 // deleteAssets: true 删除分组下的资产，false 移动到未分组
 func (s *System) DeleteGroup(id int64, deleteAssets bool) error {
 	return group_svc.Group().Delete(i18n.Ctx(s.ctx, s.Lang()), id, deleteAssets)
+}
+
+// SelectSQLiteFile 打开原生文件对话框，返回选中的 SQLite 文件绝对路径。
+// 取消选择返回空字符串（不算错误）。前端用于资产创建/编辑时的"浏览…"按钮。
+func (s *System) SelectSQLiteFile() (string, error) {
+	path, err := wailsRuntime.OpenFileDialog(s.ctx, wailsRuntime.OpenDialogOptions{
+		Title: "选择 SQLite 数据库文件",
+		Filters: []wailsRuntime.FileFilter{
+			{DisplayName: "SQLite (*.db, *.sqlite, *.sqlite3)", Pattern: "*.db;*.sqlite;*.sqlite3"},
+			{DisplayName: "All Files", Pattern: "*"},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("打开文件对话框失败: %w", err)
+	}
+	return path, nil
 }
