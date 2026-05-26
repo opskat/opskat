@@ -44,3 +44,32 @@ func TestSQLQuote(t *testing.T) {
 		So(SQLQuote("it's"), ShouldEqual, `'it''s'`)
 	})
 }
+
+func TestQuoteIdentMSSQL(t *testing.T) {
+	Convey("MSSQL 用 [bracket]", t, func() {
+		So(QuoteIdent("user", asset_entity.DriverMSSQL), ShouldEqual, "[user]")
+		So(QuoteIdent("a]b", asset_entity.DriverMSSQL), ShouldEqual, "[a]]b]")
+	})
+}
+
+func TestQuoteIdentSQLite(t *testing.T) {
+	Convey("SQLite 用 \"double\"", t, func() {
+		So(QuoteIdent("user", asset_entity.DriverSQLite), ShouldEqual, `"user"`)
+		So(QuoteIdent(`a"b`, asset_entity.DriverSQLite), ShouldEqual, `"a""b"`)
+	})
+}
+
+func TestQuoteTableRefMSSQL(t *testing.T) {
+	Convey("MSSQL 加 [db] 前缀", t, func() {
+		So(QuoteTableRef("appdb", "users", asset_entity.DriverMSSQL), ShouldEqual, "[appdb].[users]")
+	})
+	Convey("MSSQL 支持 schema.table（输出 [db].[schema].[table]）", t, func() {
+		So(QuoteTableRef("appdb", "dbo.users", asset_entity.DriverMSSQL), ShouldEqual, "[appdb].[dbo].[users]")
+	})
+}
+
+func TestQuoteTableRefSQLite(t *testing.T) {
+	Convey("SQLite 只引用表名（无 database 概念）", t, func() {
+		So(QuoteTableRef("ignored", "users", asset_entity.DriverSQLite), ShouldEqual, `"users"`)
+	})
+}

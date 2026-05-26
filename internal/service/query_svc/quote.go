@@ -7,28 +7,38 @@ import (
 )
 
 // QuoteIdent 对单个 SQL 标识符按 driver 加引号。
-// MySQL 用反引号,反引号转义为两个反引号。
-// PostgreSQL 用双引号,内部双引号转义为两个双引号。
+// MySQL 用反引号（` 转义为 ``）；PostgreSQL / SQLite 用双引号（" 转义为 ""）；
+// MSSQL 用方括号（] 转义为 ]]）。
 //
 // 行为与前端 frontend/src/lib/tableSql.ts:quoteIdent 等价,移到后端是为了
 // OpenTable 等服务端拼装 SQL 时复用,不再依赖前端传 SQL 字符串。
 func QuoteIdent(name string, driver asset_entity.DatabaseDriver) string {
-	if driver == asset_entity.DriverPostgreSQL {
+	switch driver {
+	case asset_entity.DriverPostgreSQL, asset_entity.DriverSQLite:
 		return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+	case asset_entity.DriverMSSQL:
+		return "[" + strings.ReplaceAll(name, "]", "]]") + "]"
+	default: // MySQL
+		return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 	}
-	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
 
 // QuoteTableRef 把 db + table 拼成限定表引用。
-// MySQL: `db`.`table`(database 是 MySQL 的库名)。
-// PostgreSQL: 忽略 database 参数(database 在前端模型里对应 PG 的"数据库连接");
-// table 既可以是裸表名(由 search_path 解析,通常落到 public),也可以是 "schema.table"
-// 形式——quoteQualified 会按点号拆分并分别加引号,行为与前端 quoteTableRef 一致。
+// MySQL: `db`.`table`。
+// PostgreSQL / SQLite: 忽略 database 参数,table 可以是裸表名或 "schema.table"
+// 形式——quoteQualified 按点号拆分并分别加引号,行为与前端 quoteTableRef 一致。
+// SQLite 没有 database 概念,与 PostgreSQL 同处理,忽略 database 参数。
+// MSSQL: [db].[table] 或 [db].[schema].[table]（table 可含 schema. 前缀,
+// quoteQualified 按点拆分后逐段加方括号）。
 func QuoteTableRef(database, table string, driver asset_entity.DatabaseDriver) string {
-	if driver == asset_entity.DriverPostgreSQL {
+	switch driver {
+	case asset_entity.DriverPostgreSQL, asset_entity.DriverSQLite:
 		return quoteQualified(table, driver)
+	case asset_entity.DriverMSSQL:
+		return QuoteIdent(database, driver) + "." + quoteQualified(table, driver)
+	default: // MySQL
+		return QuoteIdent(database, driver) + "." + QuoteIdent(table, driver)
 	}
-	return QuoteIdent(database, driver) + "." + QuoteIdent(table, driver)
 }
 
 // SQLQuote 把字符串包成 SQL 字符串字面量,只做单引号转义('  -> ”)。
