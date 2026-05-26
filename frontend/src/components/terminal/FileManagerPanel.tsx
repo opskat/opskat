@@ -385,7 +385,7 @@ export function FileManagerPanel({
           acceptedResult?.primaryDraftSessionId === result.primaryDraftSessionId ? acceptedResult : null
         );
         return true;
-      } catch (error) {
+      } catch {
         const safeMessage = t(EXTERNAL_EDIT_SAFE_ERROR_KEY);
         setError(safeMessage);
         setMergePrepareErrors((current) => ({ ...current, [session.id]: safeMessage }));
@@ -409,7 +409,7 @@ export function FileManagerPanel({
     async (session: ExternalEditSession) => {
       try {
         await resolveConflict(session.id, "reread");
-      } catch (error) {
+      } catch {
         setError(t(EXTERNAL_EDIT_SAFE_ERROR_KEY));
       }
     },
@@ -420,7 +420,7 @@ export function FileManagerPanel({
     async (session: ExternalEditSession) => {
       try {
         await resolveConflict(session.id, session.state === "remote_missing" ? "recreate" : "overwrite");
-      } catch (error) {
+      } catch {
         setError(t(EXTERNAL_EDIT_SAFE_ERROR_KEY));
       }
     },
@@ -454,7 +454,7 @@ export function FileManagerPanel({
             );
           return latestAttentionItems.length > 0 || hasRuntimeItem;
         });
-      } catch (error) {
+      } catch {
         setError(t(EXTERNAL_EDIT_SAFE_ERROR_KEY));
       }
     },

@@ -327,6 +327,12 @@
     "k8sPolicyHint": "Commands not listed will require user confirmation. Rules support * wildcards; broad patterns such as * may allow high-risk commands or deny many commands, so configure them carefully.",
     "k8sPolicyPlaceholder": "Press Enter to add, comma-separated for batch import",
     "k8sPolicyTestPlaceholder": "Type a kubectl command to test, e.g. kubectl get pods",
+    "etcdPolicy": "etcd Operation Policy",
+    "etcdPolicyAllowList": "Allow List (execute without confirmation)",
+    "etcdPolicyDenyList": "Deny List (always reject)",
+    "etcdPolicyHint": "etcd operations not listed will require user confirmation. Rules support * wildcards; broad patterns such as * may allow high-risk operations or deny many operations, so configure them carefully.",
+    "etcdPolicyPlaceholder": "Add etcd operation rules, e.g. get /app/*",
+    "policyTestEtcdPlaceholder": "Type an etcd operation to test, e.g. get /app/config",
     "k8sKubeconfigProvided": "Kubeconfig provided",
     "k8sNamespace": "Namespace",
     "k8sContext": "Context",
@@ -488,6 +494,18 @@
           "name": "Redis Dangerous Deny",
           "desc": "Deny dangerous Redis commands"
         },
+        "mongo-readonly": {
+          "name": "MongoDB Read-Only",
+          "desc": "Allow MongoDB read-only operations"
+        },
+        "mongo-readwrite": {
+          "name": "MongoDB Read-Write",
+          "desc": "Allow MongoDB CRUD operations"
+        },
+        "mongo-dangerous-deny": {
+          "name": "MongoDB Dangerous Deny",
+          "desc": "Deny dangerous MongoDB operations"
+        },
         "kafka-metadata-readonly": {
           "name": "Kafka Metadata Read-Only",
           "desc": "Allow cluster, broker, topic, and consumer group metadata reads"
@@ -515,6 +533,14 @@
         "kafka-dangerous-deny": {
           "name": "Kafka Dangerous Deny",
           "desc": "Deny destructive and security-sensitive Kafka operations"
+        },
+        "etcd-readonly": {
+          "name": "etcd Read-Only",
+          "desc": "Allow etcd read-only operations"
+        },
+        "etcd-dangerous-deny": {
+          "name": "etcd Dangerous Deny",
+          "desc": "Deny dangerous etcd operations"
         }
       }
     }

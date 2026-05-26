@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { X } from "lucide-react";
 import { Button } from "@opskat/ui";
@@ -11,25 +11,53 @@ interface CompareWorkbenchProps {
   onDismiss: () => void;
 }
 
+interface CompareWorkbenchState {
+  compareResult: ExternalEditCompareResult;
+  activeBlockIndex: number;
+  navigationToken: number;
+  diffTotal: number;
+}
+
+function createCompareWorkbenchState(
+  compareResult: ExternalEditCompareResult,
+  navigationToken = 0
+): CompareWorkbenchState {
+  return {
+    compareResult,
+    activeBlockIndex: 0,
+    navigationToken,
+    diffTotal: 0,
+  };
+}
+
+function getCurrentCompareState(
+  state: CompareWorkbenchState,
+  compareResult: ExternalEditCompareResult
+): CompareWorkbenchState {
+  if (state.compareResult === compareResult) return state;
+  return createCompareWorkbenchState(compareResult, state.navigationToken);
+}
+
 export function ExternalEditCompareWorkbench({ compareResult, onDismiss }: CompareWorkbenchProps) {
   const { t } = useTranslation();
-  const [activeBlockIndex, setActiveBlockIndex] = useState(0);
-  const [navigationToken, setNavigationToken] = useState(0);
-  const [diffTotal, setDiffTotal] = useState(0);
-
-  useEffect(() => {
-    setActiveBlockIndex(0);
-    setNavigationToken((token) => token + 1);
-  }, [compareResult]);
+  const [workbenchState, setWorkbenchState] = useState(() => createCompareWorkbenchState(compareResult));
+  const currentState = getCurrentCompareState(workbenchState, compareResult);
+  const diffTotal = currentState.diffTotal;
+  const activeBlockIndex = Math.min(currentState.activeBlockIndex, Math.max(diffTotal - 1, 0));
+  const navigationToken = currentState.navigationToken;
 
   const navigate = (direction: -1 | 1) => {
     if (diffTotal === 0) return;
-    setActiveBlockIndex((current) => {
-      const next = Math.min(Math.max(current + direction, 0), diffTotal - 1);
-      if (next !== current) {
-        setNavigationToken((token) => token + 1);
-      }
-      return next;
+    setWorkbenchState((current) => {
+      const base = getCurrentCompareState(current, compareResult);
+      if (base.diffTotal === 0) return base;
+      const next = Math.min(Math.max(base.activeBlockIndex + direction, 0), base.diffTotal - 1);
+      if (next === base.activeBlockIndex) return base;
+      return {
+        ...base,
+        activeBlockIndex: next,
+        navigationToken: base.navigationToken + 1,
+      };
     });
   };
 
@@ -99,8 +127,16 @@ export function ExternalEditCompareWorkbench({ compareResult, onDismiss }: Compa
           originalTitle={t("externalEdit.compare.remoteSnapshot")}
           testId="external-edit-compare-diff-editor"
           onDiffStatsChange={({ total }) => {
-            setDiffTotal(total);
-            setActiveBlockIndex((current) => Math.min(current, Math.max(total - 1, 0)));
+            setWorkbenchState((current) => {
+              const base = getCurrentCompareState(current, compareResult);
+              const nextActiveBlockIndex = Math.min(base.activeBlockIndex, Math.max(total - 1, 0));
+              if (base.diffTotal === total && base.activeBlockIndex === nextActiveBlockIndex) return base;
+              return {
+                ...base,
+                activeBlockIndex: nextActiveBlockIndex,
+                diffTotal: total,
+              };
+            });
           }}
         />
       </div>

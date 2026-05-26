@@ -22,15 +22,41 @@ interface MergeWorkbenchProps {
   onError: (error: unknown) => void;
 }
 
+interface MergeWorkbenchState {
+  mergeResult: ExternalEditMergePrepareResult;
+  finalContent: string;
+  dirty: boolean;
+  activeBlockIndex: number;
+  navigationToken: number;
+}
+
+function createMergeWorkbenchState(
+  mergeResult: ExternalEditMergePrepareResult,
+  navigationToken = 0
+): MergeWorkbenchState {
+  return {
+    mergeResult,
+    finalContent: mergeResult.finalContent,
+    dirty: false,
+    activeBlockIndex: 0,
+    navigationToken,
+  };
+}
+
+function getCurrentMergeState(
+  state: MergeWorkbenchState,
+  mergeResult: ExternalEditMergePrepareResult
+): MergeWorkbenchState {
+  if (state.mergeResult === mergeResult) return state;
+  return createMergeWorkbenchState(mergeResult, state.navigationToken);
+}
+
 export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClose, onError }: MergeWorkbenchProps) {
   const { t } = useTranslation();
   const applyMerge = useExternalEditStore((s) => s.applyMerge);
 
-  const [finalContent, setFinalContent] = useState(mergeResult.finalContent);
-  const [dirty, setDirty] = useState(false);
+  const [workbenchState, setWorkbenchState] = useState(() => createMergeWorkbenchState(mergeResult));
   const [confirmClose, setConfirmClose] = useState(false);
-  const [activeBlockIndex, setActiveBlockIndex] = useState(0);
-  const [navigationToken, setNavigationToken] = useState(0);
   const [editorMountVersion, setEditorMountVersion] = useState(0);
 
   const editorRefs = useRef<MergeEditorRefs>({
@@ -47,13 +73,11 @@ export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClo
     [mergeResult.localContent, mergeResult.remoteContent]
   );
   const conflictTotal = conflictBlocks.length;
-
-  useEffect(() => {
-    setFinalContent(mergeResult.finalContent);
-    setDirty(false);
-    setActiveBlockIndex(0);
-    setNavigationToken((token) => token + 1);
-  }, [mergeResult]);
+  const currentState = getCurrentMergeState(workbenchState, mergeResult);
+  const finalContent = currentState.finalContent;
+  const dirty = currentState.dirty;
+  const activeBlockIndex = Math.min(currentState.activeBlockIndex, Math.max(conflictTotal - 1, 0));
+  const navigationToken = currentState.navigationToken;
 
   useEffect(() => {
     (["local", "final", "remote"] as MergePaneRole[]).forEach((pane) => {
@@ -87,10 +111,16 @@ export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClo
 
   const navigate = (direction: -1 | 1) => {
     if (conflictTotal === 0) return;
-    setActiveBlockIndex((current) => {
-      const next = Math.min(Math.max(current + direction, 0), conflictTotal - 1);
-      if (next !== current) setNavigationToken((token) => token + 1);
-      return next;
+    setWorkbenchState((current) => {
+      const base = getCurrentMergeState(current, mergeResult);
+      const baseActiveBlockIndex = Math.min(base.activeBlockIndex, Math.max(conflictTotal - 1, 0));
+      const next = Math.min(Math.max(baseActiveBlockIndex + direction, 0), conflictTotal - 1);
+      if (next === baseActiveBlockIndex) return base;
+      return {
+        ...base,
+        activeBlockIndex: next,
+        navigationToken: base.navigationToken + 1,
+      };
     });
   };
 
@@ -105,7 +135,11 @@ export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClo
   const handleApply = async () => {
     try {
       await applyMerge(mergeResult.primaryDraftSessionId, finalContent, mergeResult.remoteHash);
-      setDirty(false);
+      setWorkbenchState((current) => {
+        const base = getCurrentMergeState(current, mergeResult);
+        if (!base.dirty) return base;
+        return { ...base, dirty: false };
+      });
       onClose();
     } catch (error) {
       onError(error);
@@ -220,8 +254,14 @@ export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClo
               testId="external-edit-merge-final"
               value={finalContent}
               onChange={(value) => {
-                setFinalContent(value);
-                setDirty(true);
+                setWorkbenchState((current) => {
+                  const base = getCurrentMergeState(current, mergeResult);
+                  return {
+                    ...base,
+                    finalContent: value,
+                    dirty: true,
+                  };
+                });
               }}
               onMount={handleEditorMount("final")}
             />
@@ -263,7 +303,11 @@ export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClo
         confirmText={t("externalEdit.merge.closeDirtyConfirm")}
         onConfirm={() => {
           setConfirmClose(false);
-          setDirty(false);
+          setWorkbenchState((current) => {
+            const base = getCurrentMergeState(current, mergeResult);
+            if (!base.dirty) return base;
+            return { ...base, dirty: false };
+          });
           onClose();
         }}
       />

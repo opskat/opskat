@@ -110,7 +110,6 @@ function formatValue(raw: string, fmt: Format): { text: string; lang: CodeEditor
   return { text: raw, lang: "yaml" };
 }
 
-
 function leaseDisplay(lease: unknown, fallback: string): { text: string; muted: boolean } {
   if (lease === undefined || lease === null || lease === 0 || lease === "0") return { text: fallback, muted: true };
   if (typeof lease === "number") return { text: lease.toString(16), muted: false };
@@ -429,9 +428,7 @@ export function EtcdKeyDetail({
         <MetaCol label={t("etcd.detail.metaSize")} value={sizeText} />
         <MetaCol
           label={t("etcd.detail.metaValueType")}
-          value={
-            contentType.key === "empty" ? t("etcd.detail.contentTypeEmpty") : contentType.label
-          }
+          value={contentType.key === "empty" ? t("etcd.detail.contentTypeEmpty") : contentType.label}
           accent={contentType.key === "json" ? "purple" : contentType.key === "text" ? "muted" : "muted"}
           testId="etcd-detail-content-type"
         />
@@ -469,12 +466,7 @@ export function EtcdKeyDetail({
       {/* ── Editor / Viewer (Monaco) ── */}
       <div className="min-h-0 flex-1 overflow-hidden border rounded m-2">
         {editing ? (
-          <CodeEditor
-            value={editValue}
-            onChange={setEditValue}
-            language="plaintext"
-            testId="etcd-detail-edit-editor"
-          />
+          <CodeEditor value={editValue} onChange={setEditValue} language="plaintext" testId="etcd-detail-edit-editor" />
         ) : (
           <CodeEditor
             value={formatted?.text ?? ""}
@@ -563,9 +555,7 @@ export function EtcdKeyDetail({
                               onClick={() => pickHistoryItem(kv)}
                             >
                               <History className="size-3 text-muted-foreground" />
-                              <span className="font-mono">
-                                {t("etcd.detail.historyItem", { rev: mod, ver })}
-                              </span>
+                              <span className="font-mono">{t("etcd.detail.historyItem", { rev: mod, ver })}</span>
                             </button>
                           );
                         })
@@ -617,7 +607,8 @@ function MetaCol({
   accent?: "purple" | "muted";
   testId?: string;
 }) {
-  const valueClass = accent === "purple" ? "text-purple-500 dark:text-purple-300" : muted ? "text-muted-foreground" : "text-foreground";
+  const valueClass =
+    accent === "purple" ? "text-purple-500 dark:text-purple-300" : muted ? "text-muted-foreground" : "text-foreground";
   return (
     <div className="flex flex-col gap-0.5" data-testid={testId}>
       <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>

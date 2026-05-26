@@ -7,7 +7,7 @@ import i18n from "../i18n";
 export function openAssetInfoTab(assetId: number): void {
   const asset = useAssetStore.getState().assets.find((a) => a.ID === assetId);
   if (!asset) {
-    toast.error(i18n.t("common.mentionAssetDeleted"));
+    toast.error(i18n.t("ai.mentionAssetDeleted"));
     return;
   }
   const tabStore = useTabStore.getState();

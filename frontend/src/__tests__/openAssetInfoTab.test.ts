@@ -38,7 +38,7 @@ describe("openAssetInfoTab", () => {
 
   it("资产不存在时 toast 提示不开 tab", () => {
     openAssetInfoTab(999);
-    expect(toast.error).toHaveBeenCalledWith("common.mentionAssetDeleted");
+    expect(toast.error).toHaveBeenCalledWith("ai.mentionAssetDeleted");
     expect(useTabStore.getState().tabs).toHaveLength(0);
   });
 });

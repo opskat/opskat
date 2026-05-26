@@ -35,15 +35,21 @@ describe("AIChatInput", () => {
 
   it("Shift+Enter 插入换行而不是发送", async () => {
     const onSubmit = vi.fn();
-    render(<AIChatInput onSubmit={onSubmit} sendOnEnter={true} />);
+    const editorRef = { current: null as Editor | null };
+    render(<AIChatInput onSubmit={onSubmit} sendOnEnter={true} editorRef={editorRef} />);
+    await waitFor(() => expect(editorRef.current).not.toBeNull());
     const editor = screen.getByRole("textbox");
 
     await userEvent.click(editor);
-    await userEvent.keyboard("hello");
-    await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+    act(() => {
+      editorRef.current!.chain().focus().insertContent("hello").run();
+    });
+    fireEvent.keyDown(editor, { key: "Enter", code: "Enter", keyCode: 13, shiftKey: true });
     expect(onSubmit).not.toHaveBeenCalled();
-    await userEvent.keyboard("world");
-    await userEvent.keyboard("{Enter}");
+    act(() => {
+      editorRef.current!.chain().focus().insertContent("world").run();
+    });
+    fireEvent.keyDown(editor, { key: "Enter", code: "Enter", keyCode: 13 });
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit).toHaveBeenCalledWith("hello\nworld");
@@ -51,15 +57,21 @@ describe("AIChatInput", () => {
 
   it("Enter 发送模式下 Ctrl+Enter 插入换行而不是发送", async () => {
     const onSubmit = vi.fn();
-    render(<AIChatInput onSubmit={onSubmit} sendOnEnter={true} />);
+    const editorRef = { current: null as Editor | null };
+    render(<AIChatInput onSubmit={onSubmit} sendOnEnter={true} editorRef={editorRef} />);
+    await waitFor(() => expect(editorRef.current).not.toBeNull());
     const editor = screen.getByRole("textbox");
 
     await userEvent.click(editor);
-    await userEvent.keyboard("hello");
-    await userEvent.keyboard("{Control>}{Enter}{/Control}");
+    act(() => {
+      editorRef.current!.chain().focus().insertContent("hello").run();
+    });
+    fireEvent.keyDown(editor, { key: "Enter", code: "Enter", keyCode: 13, ctrlKey: true });
     expect(onSubmit).not.toHaveBeenCalled();
-    await userEvent.keyboard("world");
-    await userEvent.keyboard("{Enter}");
+    act(() => {
+      editorRef.current!.chain().focus().insertContent("world").run();
+    });
+    fireEvent.keyDown(editor, { key: "Enter", code: "Enter", keyCode: 13 });
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit).toHaveBeenCalledWith("hello\nworld");
@@ -67,15 +79,21 @@ describe("AIChatInput", () => {
 
   it("Enter 换行模式下 Ctrl+Enter 发送，普通 Enter 换行", async () => {
     const onSubmit = vi.fn();
-    render(<AIChatInput onSubmit={onSubmit} sendOnEnter={false} />);
+    const editorRef = { current: null as Editor | null };
+    render(<AIChatInput onSubmit={onSubmit} sendOnEnter={false} editorRef={editorRef} />);
+    await waitFor(() => expect(editorRef.current).not.toBeNull());
     const editor = screen.getByRole("textbox");
 
     await userEvent.click(editor);
-    await userEvent.keyboard("hello");
-    await userEvent.keyboard("{Enter}");
+    act(() => {
+      editorRef.current!.chain().focus().insertContent("hello").run();
+    });
+    fireEvent.keyDown(editor, { key: "Enter", code: "Enter", keyCode: 13 });
     expect(onSubmit).not.toHaveBeenCalled();
-    await userEvent.keyboard("world");
-    await userEvent.keyboard("{Control>}{Enter}{/Control}");
+    act(() => {
+      editorRef.current!.chain().focus().insertContent("world").run();
+    });
+    fireEvent.keyDown(editor, { key: "Enter", code: "Enter", keyCode: 13, ctrlKey: true });
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit).toHaveBeenCalledWith("hello\nworld");

@@ -219,7 +219,7 @@ func TestDefaultEtcdPolicy(t *testing.T) {
 		})
 
 		Convey("EtcdPolicy 与 RedisPolicy 为同一类型（type alias）", func() {
-			var rp *RedisPolicy = p
+			var rp = p
 			So(rp, ShouldNotBeNil)
 		})
 	})

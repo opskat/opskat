@@ -146,9 +146,9 @@ type RedisConfig struct {
 
 // EtcdConfig etcd类型的特定配置
 type EtcdConfig struct {
-	Endpoints    []string `json:"endpoints"`                 // 至少 1 个 host:port
-	Username     string   `json:"username,omitempty"`        // 留空 = 不启用 RBAC
-	Password     string   `json:"password,omitempty"`        // AES-256-GCM 密文
+	Endpoints    []string `json:"endpoints"`          // 至少 1 个 host:port
+	Username     string   `json:"username,omitempty"` // 留空 = 不启用 RBAC
+	Password     string   `json:"password,omitempty"` // AES-256-GCM 密文
 	CredentialID int64    `json:"credential_id,omitempty"`
 
 	TLS           bool   `json:"tls,omitempty"`

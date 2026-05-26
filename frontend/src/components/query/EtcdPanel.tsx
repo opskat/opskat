@@ -82,9 +82,7 @@ export function EtcdPanel({ tabId }: EtcdPanelProps) {
   }
 
   const dialogTitle =
-    confirmRequest?.action === "saveKey"
-      ? t("etcd.detail.saveConfirmTitle")
-      : t("etcd.query.deleteConfirmTitle");
+    confirmRequest?.action === "saveKey" ? t("etcd.detail.saveConfirmTitle") : t("etcd.query.deleteConfirmTitle");
   const dialogBody =
     confirmRequest?.action === "saveKey"
       ? t("etcd.detail.saveConfirmBody", { key: confirmRequest.payload })

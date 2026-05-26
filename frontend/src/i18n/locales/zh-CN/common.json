@@ -327,6 +327,12 @@
     "k8sPolicyHint": "未列出的命令将请求用户确认后执行；规则支持使用 * 通配，范围过宽（如 *）可能放行高风险命令或误拒大量命令，请谨慎配置。",
     "k8sPolicyPlaceholder": "输入命令规则后按回车，支持逗号分隔批量添加",
     "k8sPolicyTestPlaceholder": "输入 kubectl 命令测试，如: kubectl get pods",
+    "etcdPolicy": "etcd 操作权限",
+    "etcdPolicyAllowList": "允许列表（直接执行，无需确认）",
+    "etcdPolicyDenyList": "拒绝列表（始终拒绝执行）",
+    "etcdPolicyHint": "未列出的 etcd 操作将请求用户确认后执行；规则支持使用 * 通配，范围过宽（如 *）可能放行高风险操作或误拒大量操作，请谨慎配置。",
+    "etcdPolicyPlaceholder": "输入 etcd 操作规则，如: get /app/*",
+    "policyTestEtcdPlaceholder": "输入 etcd 操作测试，如: get /app/config",
     "k8sKubeconfigProvided": "已提供 kubeconfig",
     "k8sNamespace": "命名空间",
     "k8sContext": "Context",
@@ -488,6 +494,18 @@
           "name": "Redis 高危拒绝",
           "desc": "拒绝 Redis 高危命令"
         },
+        "mongo-readonly": {
+          "name": "MongoDB 只读",
+          "desc": "只允许 MongoDB 只读操作"
+        },
+        "mongo-readwrite": {
+          "name": "MongoDB 读写",
+          "desc": "允许 MongoDB 增删改查操作"
+        },
+        "mongo-dangerous-deny": {
+          "name": "MongoDB 高危拒绝",
+          "desc": "拒绝 MongoDB 高危操作"
+        },
         "kafka-metadata-readonly": {
           "name": "Kafka 元数据只读",
           "desc": "允许读取集群、Broker、Topic 和消费组元数据"
@@ -515,6 +533,14 @@
         "kafka-dangerous-deny": {
           "name": "Kafka 高危拒绝",
           "desc": "拒绝删除、截断和安全变更等高危操作"
+        },
+        "etcd-readonly": {
+          "name": "etcd 只读",
+          "desc": "只允许 etcd 只读操作"
+        },
+        "etcd-dangerous-deny": {
+          "name": "etcd 高危拒绝",
+          "desc": "拒绝 etcd 高危操作"
         }
       }
     }
