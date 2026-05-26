@@ -7,6 +7,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestDatabaseDriverDefaultPort(t *testing.T) {
+	convey.Convey("DatabaseDriver.DefaultPort", t, func() {
+		convey.So(DriverMySQL.DefaultPort(), convey.ShouldEqual, 3306)
+		convey.So(DriverPostgreSQL.DefaultPort(), convey.ShouldEqual, 5432)
+		convey.So(DriverMSSQL.DefaultPort(), convey.ShouldEqual, 1433)
+		convey.So(DriverSQLite.DefaultPort(), convey.ShouldEqual, 0)
+	})
+}
+
 func TestAsset_Validate(t *testing.T) {
 	convey.Convey("资产校验", t, func() {
 		convey.Convey("名称为空时应返回错误", func() {

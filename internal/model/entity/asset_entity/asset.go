@@ -28,6 +28,8 @@ type DatabaseDriver string
 const (
 	DriverMySQL      DatabaseDriver = "mysql"
 	DriverPostgreSQL DatabaseDriver = "postgresql"
+	DriverMSSQL      DatabaseDriver = "mssql"
+	DriverSQLite     DatabaseDriver = "sqlite"
 )
 
 // DefaultPort 返回驱动默认端口
@@ -37,6 +39,10 @@ func (d DatabaseDriver) DefaultPort() int {
 		return 3306
 	case DriverPostgreSQL:
 		return 5432
+	case DriverMSSQL:
+		return 1433
+	case DriverSQLite:
+		return 0
 	default:
 		return 0
 	}
@@ -121,6 +127,7 @@ type DatabaseConfig struct {
 	Params       string         `json:"params,omitempty"`        // 额外连接参数
 	ReadOnly     bool           `json:"read_only,omitempty"`     // 连接级只读
 	SSHAssetID   int64          `json:"ssh_asset_id,omitempty"`  // Deprecated: use Asset.SSHTunnelID
+	Path         string         `json:"path,omitempty"`          // SQLite 文件绝对路径，其他 driver 为空
 }
 
 // RedisConfig Redis类型的特定配置
