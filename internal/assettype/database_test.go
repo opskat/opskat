@@ -8,6 +8,38 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 )
 
+func TestDatabaseHandlerApplyCreateArgsSQLite(t *testing.T) {
+	convey.Convey("SQLite ApplyCreateArgs 写入 Path 字段", t, func() {
+		h := &databaseHandler{}
+		a := &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}
+		err := h.ApplyCreateArgs(context.Background(), a, map[string]any{
+			"driver": "sqlite",
+			"path":   "/tmp/x.db",
+		})
+		convey.So(err, convey.ShouldBeNil)
+		cfg, err := a.GetDatabaseConfig()
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cfg.Driver, convey.ShouldEqual, asset_entity.DriverSQLite)
+		convey.So(cfg.Path, convey.ShouldEqual, "/tmp/x.db")
+		convey.So(cfg.Host, convey.ShouldEqual, "")
+	})
+}
+
+func TestDatabaseHandlerSafeViewSQLite(t *testing.T) {
+	convey.Convey("SQLite SafeView 返回 path 不返回 host", t, func() {
+		h := &databaseHandler{}
+		a := &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}
+		_ = a.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+			Driver: asset_entity.DriverSQLite, Path: "/tmp/x.db",
+		})
+		view := h.SafeView(a)
+		convey.So(view["driver"], convey.ShouldEqual, "sqlite")
+		convey.So(view["path"], convey.ShouldEqual, "/tmp/x.db")
+		_, hasHost := view["host"]
+		convey.So(hasHost, convey.ShouldBeFalse)
+	})
+}
+
 func TestDatabaseHandler(t *testing.T) {
 	convey.Convey("Database Handler", t, func() {
 		h := &databaseHandler{}

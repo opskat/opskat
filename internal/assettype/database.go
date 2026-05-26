@@ -25,10 +25,21 @@ func (h *databaseHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	if err != nil || cfg == nil {
 		return nil
 	}
+	if cfg.Driver == asset_entity.DriverSQLite {
+		return map[string]any{
+			"driver":    string(cfg.Driver),
+			"path":      cfg.Path,
+			"database":  cfg.Database,
+			"read_only": cfg.ReadOnly,
+		}
+	}
 	return map[string]any{
-		"host": cfg.Host, "port": cfg.Port,
-		"username": cfg.Username, "driver": string(cfg.Driver),
-		"database": cfg.Database, "read_only": cfg.ReadOnly,
+		"host":      cfg.Host,
+		"port":      cfg.Port,
+		"username":  cfg.Username,
+		"driver":    string(cfg.Driver),
+		"database":  cfg.Database,
+		"read_only": cfg.ReadOnly,
 	}
 }
 
@@ -49,23 +60,27 @@ func (h *databaseHandler) ValidateCreateArgs(args map[string]any) error {
 func (h *databaseHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
 	driver := ArgString(args, "driver")
 	if driver == "" {
-		return fmt.Errorf("database type requires driver parameter (mysql or postgresql)")
+		return fmt.Errorf("database type requires driver parameter (mysql, postgresql, mssql, sqlite)")
 	}
 	cfg := &asset_entity.DatabaseConfig{
-		Driver:     asset_entity.DatabaseDriver(driver),
-		Host:       ArgString(args, "host"),
-		Port:       ArgInt(args, "port"),
-		Username:   ArgString(args, "username"),
-		Database:   ArgString(args, "database"),
-		ReadOnly:   ArgString(args, "read_only") == "true",
-		SSHAssetID: ArgInt64(args, "ssh_asset_id"),
+		Driver:   asset_entity.DatabaseDriver(driver),
+		Database: ArgString(args, "database"),
+		ReadOnly: ArgString(args, "read_only") == "true",
 	}
-	if password := ArgString(args, "password"); password != "" {
-		encrypted, err := credential_svc.Default().Encrypt(password)
-		if err != nil {
-			return fmt.Errorf("encrypt database password: %w", err)
+	if cfg.Driver == asset_entity.DriverSQLite {
+		cfg.Path = ArgString(args, "path")
+	} else {
+		cfg.Host = ArgString(args, "host")
+		cfg.Port = ArgInt(args, "port")
+		cfg.Username = ArgString(args, "username")
+		cfg.SSHAssetID = ArgInt64(args, "ssh_asset_id")
+		if password := ArgString(args, "password"); password != "" {
+			encrypted, err := credential_svc.Default().Encrypt(password)
+			if err != nil {
+				return fmt.Errorf("encrypt database password: %w", err)
+			}
+			cfg.Password = encrypted
 		}
-		cfg.Password = encrypted
 	}
 	return a.SetDatabaseConfig(cfg)
 }
@@ -74,15 +89,6 @@ func (h *databaseHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Ass
 	cfg, err := a.GetDatabaseConfig()
 	if err != nil || cfg == nil {
 		return err
-	}
-	if v := ArgString(args, "host"); v != "" {
-		cfg.Host = v
-	}
-	if v := ArgInt(args, "port"); v > 0 {
-		cfg.Port = v
-	}
-	if v := ArgString(args, "username"); v != "" {
-		cfg.Username = v
 	}
 	if v := ArgString(args, "driver"); v != "" {
 		cfg.Driver = asset_entity.DatabaseDriver(v)
@@ -93,16 +99,35 @@ func (h *databaseHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Ass
 	if v := ArgString(args, "read_only"); v != "" {
 		cfg.ReadOnly = v == "true"
 	}
-	if _, ok := args["ssh_asset_id"]; ok {
-		cfg.SSHAssetID = ArgInt64(args, "ssh_asset_id")
-	}
-	if password := ArgString(args, "password"); password != "" {
-		encrypted, err := credential_svc.Default().Encrypt(password)
-		if err != nil {
-			return fmt.Errorf("encrypt database password: %w", err)
+
+	if cfg.Driver == asset_entity.DriverSQLite {
+		if _, ok := args["path"]; ok {
+			cfg.Path = ArgString(args, "path")
 		}
-		cfg.Password = encrypted
-		cfg.CredentialID = 0
+		// SQLite 永远不允许 SSH 隧道：清空遗留
+		cfg.SSHAssetID = 0
+		// SQLite 没有 host/port/user/pass
+	} else {
+		if v := ArgString(args, "host"); v != "" {
+			cfg.Host = v
+		}
+		if v := ArgInt(args, "port"); v > 0 {
+			cfg.Port = v
+		}
+		if v := ArgString(args, "username"); v != "" {
+			cfg.Username = v
+		}
+		if _, ok := args["ssh_asset_id"]; ok {
+			cfg.SSHAssetID = ArgInt64(args, "ssh_asset_id")
+		}
+		if password := ArgString(args, "password"); password != "" {
+			encrypted, err := credential_svc.Default().Encrypt(password)
+			if err != nil {
+				return fmt.Errorf("encrypt database password: %w", err)
+			}
+			cfg.Password = encrypted
+			cfg.CredentialID = 0
+		}
 	}
 	return a.SetDatabaseConfig(cfg)
 }
