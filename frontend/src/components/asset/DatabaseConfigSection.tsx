@@ -1,5 +1,15 @@
 import { useTranslation } from "react-i18next";
-import { Button, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch } from "@opskat/ui";
+import {
+  Button,
+  Input,
+  Label,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Switch,
+} from "@opskat/ui";
 import { AssetSelect } from "@/components/asset/AssetSelect";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
 import { credential_entity } from "../../../wailsjs/go/models";
@@ -80,12 +90,12 @@ export function DatabaseConfigSection({
           {/* SQLite path field */}
           <div className="grid gap-3 border rounded-lg p-3">
             <div className="grid gap-2">
-              <Label>{t("common.asset.database.sqlite.path.label")}</Label>
+              <Label>{t("asset.sqliteFilePath")}</Label>
               <div className="flex gap-2">
                 <Input
                   value={path}
                   onChange={(e) => setPath(e.target.value)}
-                  placeholder={t("common.asset.database.sqlite.path.placeholder")}
+                  placeholder={t("asset.sqliteFilePathPlaceholder")}
                 />
                 <Button
                   type="button"
@@ -95,7 +105,7 @@ export function DatabaseConfigSection({
                     if (selected) setPath(selected);
                   }}
                 >
-                  {t("common.asset.database.sqlite.path.browse")}
+                  {t("asset.sqliteFilePathBrowse")}
                 </Button>
               </div>
             </div>
