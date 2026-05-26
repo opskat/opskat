@@ -117,6 +117,14 @@ func queryPrimaryKeys(ctx context.Context, conn *sql.Conn, driver asset_entity.D
 			return nil, err
 		}
 		return scanPKRows(rows, "COLUMN_NAME")
+	case asset_entity.DriverSQLite:
+		// pragma_table_info 是表值函数，参数必须内联字符串字面量；SQLQuote 处理单引号转义
+		sqlText := "SELECT name FROM pragma_table_info(" + SQLQuote(table) + ") WHERE pk > 0 ORDER BY pk"
+		rows, err := conn.QueryContext(ctx, sqlText)
+		if err != nil {
+			return nil, err
+		}
+		return scanPKRows(rows, "name")
 	default: // MySQL
 		sqlText := "SHOW KEYS FROM " + QuoteTableRef(database, table, driver) + " WHERE Key_name = 'PRIMARY'"
 		rows, err := conn.QueryContext(ctx, sqlText)
@@ -167,6 +175,8 @@ func queryColumns(ctx context.Context, conn *sql.Conn, driver asset_entity.Datab
 			"WHERE TABLE_CATALOG = @p1 AND TABLE_NAME = @p2 " +
 			"ORDER BY ORDINAL_POSITION"
 		args = []any{sql.Named("p1", database), sql.Named("p2", table)}
+	case asset_entity.DriverSQLite:
+		sqlText = "SELECT name, type, CASE notnull WHEN 0 THEN 'YES' ELSE 'NO' END AS is_nullable, dflt_value FROM pragma_table_info(" + SQLQuote(table) + ")"
 	default: // MySQL
 		sqlText = "SHOW COLUMNS FROM " + QuoteTableRef(database, table, driver)
 	}
@@ -193,7 +203,7 @@ func queryColumns(ctx context.Context, conn *sql.Conn, driver asset_entity.Datab
 			return nil, nil, nil, err
 		}
 		row := zipRow(cols, values)
-		name := pickString(row, "column_name", "Field", "field", "COLUMN_NAME")
+		name := pickString(row, "column_name", "name", "Field", "field", "COLUMN_NAME")
 		if name == "" {
 			continue
 		}
@@ -208,7 +218,10 @@ func queryColumns(ctx context.Context, conn *sql.Conn, driver asset_entity.Datab
 			defaultRaw, hasDefault = row["default"]
 		}
 		if !hasDefault || defaultRaw == nil {
-			defaultRaw = row["COLUMN_DEFAULT"]
+			defaultRaw, hasDefault = row["COLUMN_DEFAULT"]
+		}
+		if !hasDefault || defaultRaw == nil {
+			defaultRaw, hasDefault = row["dflt_value"]
 		}
 		names = append(names, name)
 		if typeStr != "" {

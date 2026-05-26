@@ -170,6 +170,36 @@ func TestOpenTableMSSQL(t *testing.T) {
 	})
 }
 
+func TestOpenTableSQLite(t *testing.T) {
+	Convey("SQLite OpenTable 用 pragma_table_info", t, func() {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		So(err, ShouldBeNil)
+		defer func() { _ = db.Close() }()
+
+		pkSQL := "SELECT name FROM pragma_table_info('users') WHERE pk > 0 ORDER BY pk"
+		mock.ExpectQuery(pkSQL).
+			WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("id"))
+
+		colSQL := "SELECT name, type, CASE notnull WHEN 0 THEN 'YES' ELSE 'NO' END AS is_nullable, dflt_value FROM pragma_table_info('users')"
+		mock.ExpectQuery(colSQL).
+			WillReturnRows(sqlmock.NewRows([]string{"name", "type", "is_nullable", "dflt_value"}).
+				AddRow("id", "INTEGER", "NO", nil).
+				AddRow("name", "TEXT", "YES", nil))
+
+		mock.ExpectQuery(`SELECT COUNT(*) FROM "users"`).
+			WillReturnRows(sqlmock.NewRows([]string{"c"}).AddRow(2))
+
+		mock.ExpectQuery(`SELECT * FROM "users" LIMIT 10 OFFSET 0`).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).
+				AddRow(1, "alice").AddRow(2, "bob"))
+
+		res, err := OpenTable(context.Background(), db, asset_entity.DriverSQLite, "", "users", 10)
+		So(err, ShouldBeNil)
+		So(res.PrimaryKeys, ShouldResemble, []string{"id"})
+		So(res.Columns, ShouldContain, "id")
+	})
+}
+
 func TestOpenTable_PageSizeDefault(t *testing.T) {
 	Convey("pageSize<=0 时回退到 1000", t, func() {
 		db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(false))
