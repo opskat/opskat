@@ -1,10 +1,12 @@
 package connpool
 
 import (
+	"context"
 	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	. "github.com/smartystreets/goconvey/convey"
 )
@@ -53,6 +55,18 @@ func TestBuildDSNMSSQL(t *testing.T) {
 		_, dsn := buildDSN(cfg, "pw")
 		So(strings.Contains(dsn, "encrypt=true"), ShouldBeTrue)
 		So(strings.Contains(dsn, "trustservercertificate=true"), ShouldBeTrue)
+	})
+}
+
+func TestSetReadOnlyMSSQLNoop(t *testing.T) {
+	Convey("MSSQL setReadOnly 是 no-op 不报错", t, func() {
+		db, mock, err := sqlmock.New()
+		So(err, ShouldBeNil)
+		defer func() { _ = db.Close() }()
+
+		err = setReadOnly(context.Background(), db, asset_entity.DriverMSSQL)
+		So(err, ShouldBeNil)
+		So(mock.ExpectationsWereMet(), ShouldBeNil) // 没有 ExpectExec，任何调用都会失败
 	})
 }
 

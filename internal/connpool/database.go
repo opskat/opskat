@@ -244,6 +244,9 @@ func setReadOnly(ctx context.Context, db *sql.DB, driver asset_entity.DatabaseDr
 	case asset_entity.DriverSQLite:
 		_, err := db.ExecContext(ctx, "PRAGMA query_only = 1")
 		return err
+	case asset_entity.DriverMSSQL:
+		logger.Ctx(ctx).Info("MSSQL connection-level read-only not supported, relying on policy")
+		return nil
 	}
 	return nil
 }
