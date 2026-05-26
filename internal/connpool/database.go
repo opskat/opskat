@@ -17,6 +17,7 @@ import (
 	mssql "github.com/microsoft/go-mssqldb"
 	"github.com/microsoft/go-mssqldb/msdsn"
 	"go.uber.org/zap"
+	_ "modernc.org/sqlite" // SQLite driver
 )
 
 // DialDatabase 创建数据库连接（直连或通过 SSH 隧道）
@@ -26,6 +27,29 @@ func DialDatabase(ctx context.Context, asset *asset_entity.Asset, cfg *asset_ent
 	var db *sql.DB
 	var tunnel *SSHTunnel
 	var err error
+
+	if cfg.Driver == asset_entity.DriverSQLite {
+		// SQLite 本地文件,不走隧道
+		db, err = openDirect(cfg, password)
+		if err != nil {
+			return nil, nil, err
+		}
+		if pingErr := db.PingContext(ctx); pingErr != nil {
+			if cerr := db.Close(); cerr != nil {
+				logger.Default().Warn("close db", zap.Error(cerr))
+			}
+			return nil, nil, fmt.Errorf("数据库连接失败: %w", pingErr)
+		}
+		if cfg.ReadOnly {
+			if roErr := setReadOnly(ctx, db, cfg.Driver); roErr != nil {
+				if cerr := db.Close(); cerr != nil {
+					logger.Default().Warn("close db", zap.Error(cerr))
+				}
+				return nil, nil, fmt.Errorf("设置只读模式失败: %w", roErr)
+			}
+		}
+		return db, nil, nil
+	}
 
 	tunnelID := asset.SSHTunnelID
 	if tunnelID == 0 {
@@ -198,6 +222,12 @@ func buildDSN(cfg *asset_entity.DatabaseConfig, password string) (driverName str
 			RawQuery: q.Encode(),
 		}
 		return "sqlserver", u.String()
+	case asset_entity.DriverSQLite:
+		dsn := "file:" + cfg.Path
+		if cfg.Params != "" {
+			dsn += "?" + cfg.Params
+		}
+		return "sqlite", dsn
 	default:
 		return "", ""
 	}
@@ -210,6 +240,9 @@ func setReadOnly(ctx context.Context, db *sql.DB, driver asset_entity.DatabaseDr
 		return err
 	case asset_entity.DriverPostgreSQL:
 		_, err := db.ExecContext(ctx, "SET default_transaction_read_only = on")
+		return err
+	case asset_entity.DriverSQLite:
+		_, err := db.ExecContext(ctx, "PRAGMA query_only = 1")
 		return err
 	}
 	return nil

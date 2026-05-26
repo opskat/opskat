@@ -55,3 +55,24 @@ func TestBuildDSNMSSQL(t *testing.T) {
 		So(strings.Contains(dsn, "trustservercertificate=true"), ShouldBeTrue)
 	})
 }
+
+func TestBuildDSNSQLite(t *testing.T) {
+	Convey("SQLite DSN", t, func() {
+		cfg := &asset_entity.DatabaseConfig{
+			Driver: asset_entity.DriverSQLite,
+			Path:   "/tmp/test.db",
+		}
+		driverName, dsn := buildDSN(cfg, "")
+		So(driverName, ShouldEqual, "sqlite")
+		So(dsn, ShouldEqual, "file:/tmp/test.db")
+	})
+
+	Convey("SQLite DSN with params", t, func() {
+		cfg := &asset_entity.DatabaseConfig{
+			Driver: asset_entity.DriverSQLite, Path: "/tmp/x.db",
+			Params: "_pragma=busy_timeout(5000)",
+		}
+		_, dsn := buildDSN(cfg, "")
+		So(dsn, ShouldEqual, "file:/tmp/x.db?_pragma=busy_timeout(5000)")
+	})
+}
