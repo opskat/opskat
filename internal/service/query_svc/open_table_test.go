@@ -129,6 +129,47 @@ func TestOpenTable_PostgreSQL_SchemaQualified(t *testing.T) {
 	})
 }
 
+func TestOpenTableMSSQL(t *testing.T) {
+	Convey("MSSQL OpenTable 用 information_schema 查 PK / 列", t, func() {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		So(err, ShouldBeNil)
+		defer func() { _ = db.Close() }()
+
+		pkSQL := "SELECT kcu.COLUMN_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc " +
+			"JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu " +
+			"ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME " +
+			"WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY' " +
+			"AND tc.TABLE_CATALOG = @p1 AND tc.TABLE_NAME = @p2 " +
+			"ORDER BY kcu.ORDINAL_POSITION"
+		mock.ExpectQuery(pkSQL).
+			WithArgs("appdb", "users").
+			WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME"}).AddRow("id"))
+
+		colSQL := "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT " +
+			"FROM INFORMATION_SCHEMA.COLUMNS " +
+			"WHERE TABLE_CATALOG = @p1 AND TABLE_NAME = @p2 " +
+			"ORDER BY ORDINAL_POSITION"
+		mock.ExpectQuery(colSQL).
+			WithArgs("appdb", "users").
+			WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "COLUMN_DEFAULT"}).
+				AddRow("id", "int", "NO", nil).
+				AddRow("name", "varchar", "YES", nil))
+
+		mock.ExpectQuery("SELECT COUNT(*) FROM [appdb].[users]").
+			WillReturnRows(sqlmock.NewRows([]string{"c"}).AddRow(2))
+
+		mock.ExpectQuery("SELECT TOP 10 * FROM [appdb].[users]").
+			WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).
+				AddRow(1, "alice").AddRow(2, "bob"))
+
+		res, err := OpenTable(context.Background(), db, asset_entity.DriverMSSQL, "appdb", "users", 10)
+		So(err, ShouldBeNil)
+		So(res.PrimaryKeys, ShouldResemble, []string{"id"})
+		So(res.Columns, ShouldContain, "id")
+		So(res.TotalCount, ShouldEqual, 2)
+	})
+}
+
 func TestOpenTable_PageSizeDefault(t *testing.T) {
 	Convey("pageSize<=0 时回退到 1000", t, func() {
 		db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(false))
