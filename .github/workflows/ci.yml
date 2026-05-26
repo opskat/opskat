@@ -38,7 +38,7 @@ jobs:
           go-version-file: go.mod
       - name: Create devserver static placeholder
         run: mkdir -p cmd/devserver/static/assets && echo "placeholder" > cmd/devserver/static/assets/placeholder.txt
-      - run: go test ./internal/... ./cmd/opsctl/... ./pkg/... ./cmd/devserver/...
+      - run: go test ./...
 
   frontend-lint:
     name: Frontend Lint
