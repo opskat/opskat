@@ -12,12 +12,12 @@ import (
 	"github.com/opskat/opskat/internal/sshpool"
 
 	"github.com/cago-frame/cago/pkg/logger"
+	_ "github.com/glebarez/go-sqlite" // SQLite driver（与 cago bootstrap 同源，避免 sql.Register 重复 panic）
 	"github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib" // PostgreSQL driver
 	mssql "github.com/microsoft/go-mssqldb"
 	"github.com/microsoft/go-mssqldb/msdsn"
 	"go.uber.org/zap"
-	_ "modernc.org/sqlite" // SQLite driver
 )
 
 // DialDatabase 创建数据库连接（直连或通过 SSH 隧道）
