@@ -1083,6 +1083,7 @@ const AssetRowContent = React.memo(function AssetRowContent({
   onOpenInfoTab,
   t,
 }: AssetRowProps) {
+  const AssetIcon = asset.Icon ? getIconComponent(asset.Icon) : Server;
   const isConnecting = connectingAssetIds.has(asset.ID);
   const style: React.CSSProperties = {
     paddingLeft: `${20 + (depth + 1) * 12}px`,
@@ -1110,8 +1111,7 @@ const AssetRowContent = React.memo(function AssetRowContent({
           {isConnecting ? (
             <Loader2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground animate-spin" />
           ) : (
-            <DynamicIcon
-              icon={asset.Icon || undefined}
+            <AssetIcon
               className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
               style={asset.Icon ? { color: getIconColor(asset.Icon) } : undefined}
             />

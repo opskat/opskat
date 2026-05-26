@@ -31,6 +31,12 @@ function inferTransportFromSessionId(sessionId: string): TerminalTransport {
   return sessionId.startsWith("serial-") ? "serial" : "ssh";
 }
 
+function hasConnectingLeaf(node: SplitNode, connectionId: string): boolean {
+  if (node.type === "connecting") return node.connectionId === connectionId;
+  if (node.type === "terminal" || node.type === "pending") return false;
+  return hasConnectingLeaf(node.first, connectionId) || hasConnectingLeaf(node.second, connectionId);
+}
+
 function disconnectSession(sessionId: string, transport: TerminalTransport): void {
   if (transport === "serial") {
     DisconnectSerial(sessionId);
@@ -105,6 +111,7 @@ export type ConnectionStep = "resolve" | "open" | "connect" | "auth" | "shell";
 
 export interface ConnectionState {
   connectionId: string;
+  tabId?: string;
   assetId: number;
   assetName: string;
   transport: "ssh" | "serial";
@@ -128,17 +135,6 @@ export interface ConnectionState {
     isChanged: boolean;
     oldFingerprint?: string;
   };
-}
-
-function isReusableAssetTerminalTab(
-  tabId: string,
-  tabData: Record<string, TerminalTabData>,
-  connections: Record<string, ConnectionState>
-): boolean {
-  const data = tabData[tabId];
-  if (!data) return false;
-  if (Object.keys(data.panes).length > 0) return true;
-  return data.splitTree.type === "connecting" && !!connections[tabId];
 }
 
 // Helper: get all session IDs from a split tree (skips pending/connecting)
@@ -208,9 +204,11 @@ export function getTerminalActiveAssetIds(): Set<number> {
 }
 
 const syncListeners = new Set<string>();
+const reconnectingTabIds = new Set<string>();
 
 export function __resetTerminalSyncListenersForTest() {
   syncListeners.clear();
+  reconnectingTabIds.clear();
 }
 
 function registerSessionSyncListener(sessionId: string) {
@@ -284,7 +282,7 @@ function setupConnectionListener(
     }) => {
       const state = useTerminalStore.getState();
       const conn = state.connections[connectionId];
-      if (!conn) return;
+      if (!conn && event.type !== "connected") return;
 
       switch (event.type) {
         case "progress":
@@ -435,27 +433,15 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
     const tabStore = useTabStore.getState();
 
-    // 已有可复用的健康 tab（已连接或连接中）时直接复用。
-    // 命中的 tab 若状态残缺（例如缺少 tabData/panes），先关闭再新建连接，避免 UI 卡空白。
     if (!forceNew) {
-      const assetTabs = tabStore.tabs.filter((t) => {
+      const existingTab = tabStore.tabs.find((t) => {
         if (t.type !== "terminal") return false;
         const m = t.meta as TerminalTabMeta;
         return m.assetId === assetId;
       });
-      if (assetTabs.length > 0) {
-        const state = get();
-        const reusableTab = assetTabs.find((t) => isReusableAssetTerminalTab(t.id, state.tabData, state.connections));
-        if (reusableTab) {
-          tabStore.activateTab(reusableTab.id);
-          return reusableTab.id;
-        }
-
-        // 命中的 tab 全部是 stale：关闭后继续走新建连接。
-        const staleTabIds = assetTabs.map((t) => t.id);
-        for (const staleTabID of staleTabIds) {
-          tabStore.closeTab(staleTabID);
-        }
+      if (existingTab) {
+        tabStore.activateTab(existingTab.id);
+        return existingTab.id;
       }
     }
 
@@ -513,6 +499,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
           ...state.connections,
           [connectionId]: {
             connectionId,
+            tabId: connectionId,
             assetId,
             assetName: assetPath,
             transport: isSerial ? "serial" : "ssh",
@@ -527,11 +514,16 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       setupConnectionListener(
         connectionId,
         (sessionId) => {
-          // Migrate tabData from connectionId key to sessionId key
+          let accepted = false;
           let pendingInput: string | undefined;
           set((s) => {
             const data = s.tabData[connectionId];
-            if (!data) return s;
+            const newConnections = { ...s.connections };
+            delete newConnections[connectionId];
+            if (!data || !hasConnectingLeaf(data.splitTree, connectionId)) {
+              return { connections: newConnections };
+            }
+            accepted = true;
 
             pendingInput = data.pendingInput;
 
@@ -557,13 +549,13 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
               // pendingInput intentionally not forwarded — write happens below
             };
 
-            const newConnections = { ...s.connections };
-            delete newConnections[connectionId];
-
             return { tabData: newTabData, connections: newConnections };
           });
+          if (!accepted) {
+            disconnectSession(sessionId, isSerial ? "serial" : "ssh");
+            return;
+          }
 
-          // Update tab id in tabStore
           tabStore.replaceTabId(connectionId, sessionId);
           if (!isSerial) {
             registerSessionSyncListener(sessionId);
@@ -601,6 +593,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   },
 
   reconnect: (tabId) => {
+    if (reconnectingTabIds.has(tabId)) return;
+
     const tabStore = useTabStore.getState();
     const tab = tabStore.tabs.find((t) => t.id === tabId);
     if (!tab || tab.type !== "terminal") return;
@@ -612,11 +606,13 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
     const sessionId = data.activePaneId;
     const pane = data.panes[sessionId];
+    if (!pane) return;
     const asset = useAssetStore.getState().assets.find((a) => a.ID === meta.assetId);
     // 优先用 pane.transport（运行时权威），否则按资产类型，再退回 session id 前缀（restore 后的兜底）。
     const transport: TerminalTransport =
       pane?.transport ?? (asset?.Type === "serial" ? "serial" : inferTransportFromSessionId(sessionId));
     const isSerial = transport === "serial";
+    reconnectingTabIds.add(tabId);
 
     unregisterSessionSyncListener(sessionId);
     if (pane?.connected) {
@@ -637,11 +633,21 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
     connectPromise
       .then((connectionId: string) => {
-        // Dispose the old persistent xterm; the slot is replaced by a "connecting" node.
+        const current = get().tabData[tabId];
+        if (!current?.panes[sessionId]) {
+          reconnectingTabIds.delete(tabId);
+          if (isSerial) {
+            DisconnectSerial(connectionId);
+          } else {
+            CancelSSHConnect(connectionId);
+          }
+          return;
+        }
+
         disposeTerminalInstance(sessionId);
         set((s) => {
           const d = s.tabData[tabId];
-          if (!d) return s;
+          if (!d?.panes[sessionId]) return s;
 
           const newTree = replaceNode(d.splitTree, sessionId, {
             type: "connecting",
@@ -660,6 +666,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
               ...s.connections,
               [connectionId]: {
                 connectionId,
+                tabId,
                 assetId: meta.assetId,
                 assetName: meta.assetName,
                 transport: isSerial ? "serial" : "ssh",
@@ -675,17 +682,20 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         setupConnectionListener(
           connectionId,
           (newSessionId) => {
+            let accepted = false;
             set((s) => {
               const d = s.tabData[tabId];
-              if (!d) return s;
+              const newConnections = { ...s.connections };
+              delete newConnections[connectionId];
+              if (!d || !hasConnectingLeaf(d.splitTree, connectionId)) {
+                return { connections: newConnections };
+              }
+              accepted = true;
 
               const newTree = replaceNode(d.splitTree, connectionId, {
                 type: "terminal",
                 sessionId: newSessionId,
               });
-
-              const newConnections = { ...s.connections };
-              delete newConnections[connectionId];
 
               return {
                 tabData: {
@@ -708,15 +718,22 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
                 connections: newConnections,
               };
             });
+            if (!accepted) {
+              disconnectSession(newSessionId, transport);
+              return;
+            }
             if (!isSerial) {
               registerSessionSyncListener(newSessionId);
             }
           },
-          undefined,
+          () => {
+            reconnectingTabIds.delete(tabId);
+          },
           isSerial ? "serial" : "ssh"
         );
       })
       .catch((err: unknown) => {
+        reconnectingTabIds.delete(tabId);
         console.error("Reconnect failed:", err);
       });
   },
@@ -1045,12 +1062,21 @@ registerTabCloseHook((tab) => {
 
   const state = useTerminalStore.getState();
   const data = state.tabData[tab.id];
+  const connectionIds = Object.entries(state.connections)
+    .filter(([connectionId, conn]) => connectionId === tab.id || conn.tabId === tab.id)
+    .map(([connectionId]) => connectionId);
 
-  // Cancel if still connecting
-  const conn = state.connections[tab.id];
-  if (conn) {
-    CancelSSHConnect(tab.id);
-    EventsOff(`${conn.transport}:connect:${tab.id}`);
+  reconnectingTabIds.delete(tab.id);
+
+  for (const connectionId of connectionIds) {
+    const conn = state.connections[connectionId];
+    if (!conn) continue;
+    if (conn.transport === "serial") {
+      DisconnectSerial(connectionId);
+    } else {
+      CancelSSHConnect(connectionId);
+    }
+    EventsOff(`${conn.transport}:connect:${connectionId}`);
   }
 
   // Disconnect all panes and drop their persistent xterm instances.
@@ -1069,9 +1095,12 @@ registerTabCloseHook((tab) => {
     const newTabData = { ...s.tabData };
     delete newTabData[tab.id];
     const newConnections = { ...s.connections };
-    delete newConnections[tab.id];
     const next = new Set(s.connectingAssetIds);
-    if (conn) next.delete(conn.assetId);
+    for (const connectionId of connectionIds) {
+      const conn = s.connections[connectionId];
+      if (conn) next.delete(conn.assetId);
+      delete newConnections[connectionId];
+    }
     return { tabData: newTabData, connections: newConnections, connectingAssetIds: next };
   });
 });

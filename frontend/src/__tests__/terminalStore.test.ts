@@ -174,42 +174,6 @@ describe("terminalStore.connect", () => {
     expect(result).toBe("conn-pending");
   });
 
-  it("should drop stale existing tab and create a new connection", async () => {
-    useTabStore.setState({
-      tabs: [
-        {
-          id: "stale-tab",
-          type: "terminal",
-          label: "Server 3",
-          meta: {
-            type: "terminal",
-            assetId: 3,
-            assetName: "Server 3",
-            assetIcon: "",
-            host: "10.0.0.3",
-            port: 22,
-            username: "root",
-          },
-        },
-      ],
-      activeTabId: "stale-tab",
-    });
-    useTerminalStore.setState({
-      tabData: {},
-      connections: {},
-    });
-
-    vi.mocked(ConnectSSHAsync).mockResolvedValue("conn-3");
-
-    const result = await useTerminalStore.getState().connect(makeSSHAsset(3));
-
-    expect(ConnectSSHAsync).toHaveBeenCalledTimes(1);
-    expect(result).toBe("conn-3");
-    expect(useTabStore.getState().tabs).toHaveLength(1);
-    expect(useTabStore.getState().tabs[0].id).toBe("conn-3");
-    expect(useTabStore.getState().activeTabId).toBe("conn-3");
-  });
-
   it("should allow different assets to open separate tabs", async () => {
     vi.mocked(ConnectSSHAsync).mockResolvedValueOnce("conn-1").mockResolvedValueOnce("conn-2");
 
@@ -345,6 +309,136 @@ describe("terminalStore.connect", () => {
     resolveConnect!("conn-5");
     await promise;
   });
+
+  it("blocks concurrent reconnect for the same tab", async () => {
+    const eventHandlers = new Map<string, (...data: unknown[]) => void>();
+    vi.mocked(EventsOn).mockImplementation((eventName, handler) => {
+      eventHandlers.set(eventName, handler);
+      return vi.fn();
+    });
+    vi.mocked(EventsOff).mockImplementation((eventName) => {
+      eventHandlers.delete(eventName);
+    });
+
+    useTabStore.setState({
+      tabs: [
+        {
+          id: "ssh-1",
+          type: "terminal",
+          label: "Server 1",
+          meta: {
+            type: "terminal",
+            assetId: 1,
+            assetName: "Server 1",
+            assetIcon: "",
+            host: "10.0.0.1",
+            port: 22,
+            username: "root",
+          },
+        },
+      ],
+      activeTabId: "ssh-1",
+    });
+    useTerminalStore.setState({
+      tabData: {
+        "ssh-1": {
+          splitTree: { type: "terminal", sessionId: "ssh-1" },
+          activePaneId: "ssh-1",
+          panes: {
+            "ssh-1": { sessionId: "ssh-1", transport: "ssh", connected: true, connectedAt: Date.now() },
+          },
+          directoryFollowMode: "off",
+        },
+      },
+      connections: {},
+      connectingAssetIds: new Set(),
+      sessionSync: {},
+    });
+    useAssetStore.setState({ assets: [makeSSHAsset(1)] });
+
+    vi.mocked(ConnectSSHAsync).mockResolvedValueOnce("conn-a");
+
+    useTerminalStore.getState().reconnect("ssh-1");
+    await Promise.resolve();
+    const handlerA = eventHandlers.get("ssh:connect:conn-a");
+    expect(handlerA).toEqual(expect.any(Function));
+
+    useTerminalStore.getState().reconnect("ssh-1");
+    await Promise.resolve();
+
+    expect(ConnectSSHAsync).toHaveBeenCalledTimes(1);
+    if (!handlerA) throw new Error("missing reconnect handler");
+
+    handlerA({ type: "connected", sessionId: "ssh-new" });
+    await Promise.resolve();
+    const tab = useTerminalStore.getState().tabData["ssh-1"];
+    expect(tab?.activePaneId).toBe("ssh-new");
+    expect(tab?.panes["ssh-new"]?.connected).toBe(true);
+  });
+
+  it("drops reconnect connected event after tab has been closed", async () => {
+    const eventHandlers = new Map<string, (...data: unknown[]) => void>();
+    vi.mocked(EventsOn).mockImplementation((eventName, handler) => {
+      eventHandlers.set(eventName, handler);
+      return vi.fn();
+    });
+    vi.mocked(EventsOff).mockImplementation((eventName) => {
+      eventHandlers.delete(eventName);
+    });
+    vi.mocked(DisconnectSSH).mockClear();
+
+    useTabStore.setState({
+      tabs: [
+        {
+          id: "ssh-1",
+          type: "terminal",
+          label: "Server 1",
+          meta: {
+            type: "terminal",
+            assetId: 1,
+            assetName: "Server 1",
+            assetIcon: "",
+            host: "10.0.0.1",
+            port: 22,
+            username: "root",
+          },
+        },
+      ],
+      activeTabId: "ssh-1",
+    });
+    useTerminalStore.setState({
+      tabData: {
+        "ssh-1": {
+          splitTree: { type: "terminal", sessionId: "ssh-1" },
+          activePaneId: "ssh-1",
+          panes: {
+            "ssh-1": { sessionId: "ssh-1", transport: "ssh", connected: true, connectedAt: Date.now() },
+          },
+          directoryFollowMode: "off",
+        },
+      },
+      connections: {},
+      connectingAssetIds: new Set(),
+      sessionSync: {},
+    });
+    useAssetStore.setState({ assets: [makeSSHAsset(1)] });
+    vi.mocked(ConnectSSHAsync).mockResolvedValueOnce("conn-a");
+
+    useTerminalStore.getState().reconnect("ssh-1");
+    await Promise.resolve();
+    const handlerA = eventHandlers.get("ssh:connect:conn-a");
+    if (!handlerA) throw new Error("missing reconnect handler");
+
+    useTabStore.getState().closeTab("ssh-1");
+    handlerA({ type: "connected", sessionId: "ssh-late" });
+    await Promise.resolve();
+
+    expect(useTabStore.getState().tabs).toHaveLength(0);
+    expect(useTerminalStore.getState().tabData["ssh-1"]).toBeUndefined();
+    expect(useTerminalStore.getState().connections["conn-a"]).toBeUndefined();
+    expect(DisconnectSSH).toHaveBeenCalledWith("ssh-1");
+    expect(DisconnectSSH).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("terminalStore directory sync", () => {
@@ -395,6 +489,7 @@ describe("terminalStore sync listener lifecycle", () => {
     __resetTerminalSyncListenersForTest();
     eventHandlers.clear();
     vi.clearAllMocks();
+    vi.mocked(ConnectSSHAsync).mockReset();
     vi.mocked(EventsOn).mockImplementation((eventName, handler) => {
       eventHandlers.set(eventName, handler);
       return vi.fn();
