@@ -448,3 +448,55 @@ func TestValidateKafka(t *testing.T) {
 		})
 	})
 }
+
+func TestValidateDatabaseMSSQL(t *testing.T) {
+	convey.Convey("MSSQL driver validation", t, func() {
+		convey.Convey("缺 host 应报错", func() {
+			a := &Asset{Type: AssetTypeDatabase, Name: "x", GroupID: 1}
+			cfg := &DatabaseConfig{Driver: DriverMSSQL, Port: 1433, Username: "sa"}
+			convey.So(a.SetDatabaseConfig(cfg), convey.ShouldBeNil)
+			convey.So(a.Validate().Error(), convey.ShouldContainSubstring, "host")
+		})
+		convey.Convey("完整字段通过", func() {
+			a := &Asset{Type: AssetTypeDatabase, Name: "x", GroupID: 1}
+			cfg := &DatabaseConfig{
+				Driver: DriverMSSQL, Host: "localhost",
+				Port: 1433, Username: "sa",
+			}
+			convey.So(a.SetDatabaseConfig(cfg), convey.ShouldBeNil)
+			convey.So(a.Validate(), convey.ShouldBeNil)
+		})
+	})
+}
+
+func TestValidateDatabaseSQLite(t *testing.T) {
+	convey.Convey("SQLite driver validation", t, func() {
+		convey.Convey("缺 path 应报错", func() {
+			a := &Asset{Type: AssetTypeDatabase, Name: "x", GroupID: 1}
+			cfg := &DatabaseConfig{Driver: DriverSQLite}
+			convey.So(a.SetDatabaseConfig(cfg), convey.ShouldBeNil)
+			convey.So(a.Validate().Error(), convey.ShouldContainSubstring, "path")
+		})
+		convey.Convey("path 非绝对路径应报错", func() {
+			a := &Asset{Type: AssetTypeDatabase, Name: "x", GroupID: 1}
+			cfg := &DatabaseConfig{Driver: DriverSQLite, Path: "relative.db"}
+			convey.So(a.SetDatabaseConfig(cfg), convey.ShouldBeNil)
+			convey.So(a.Validate().Error(), convey.ShouldContainSubstring, "绝对路径")
+		})
+		convey.Convey("SQLite 不允许 SSH 隧道", func() {
+			a := &Asset{
+				Type: AssetTypeDatabase, Name: "x", GroupID: 1,
+				SSHTunnelID: 5,
+			}
+			cfg := &DatabaseConfig{Driver: DriverSQLite, Path: "/tmp/x.db"}
+			convey.So(a.SetDatabaseConfig(cfg), convey.ShouldBeNil)
+			convey.So(a.Validate().Error(), convey.ShouldContainSubstring, "隧道")
+		})
+		convey.Convey("绝对路径 + 无隧道通过", func() {
+			a := &Asset{Type: AssetTypeDatabase, Name: "x", GroupID: 1}
+			cfg := &DatabaseConfig{Driver: DriverSQLite, Path: "/tmp/x.db"}
+			convey.So(a.SetDatabaseConfig(cfg), convey.ShouldBeNil)
+			convey.So(a.Validate(), convey.ShouldBeNil)
+		})
+	})
+}
