@@ -13,7 +13,7 @@ export interface QueryTab {
   assetId: number;
   assetName: string;
   assetIcon: string;
-  assetType: "database" | "redis" | "mongodb" | "kafka" | "k8s";
+  assetType: "database" | "redis" | "mongodb" | "kafka" | "k8s" | "etcd";
   driver?: string; // "mysql" | "postgresql"
   defaultDatabase?: string;
   redisDatabase?: number;
@@ -359,7 +359,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
         assetId: asset.ID,
         assetName: asset.Name,
         assetIcon: asset.Icon || "",
-        assetType: asset.Type as "database" | "redis" | "mongodb" | "kafka" | "k8s",
+        assetType: asset.Type as "database" | "redis" | "mongodb" | "kafka" | "k8s" | "etcd",
         driver,
         defaultDatabase,
         redisDatabase,
