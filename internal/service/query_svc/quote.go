@@ -7,8 +7,8 @@ import (
 )
 
 // QuoteIdent 对单个 SQL 标识符按 driver 加引号。
-// MySQL 用反引号（` 转义为 ``）；PostgreSQL / SQLite 用双引号（" 转义为 ""）；
-// MSSQL 用方括号（] 转义为 ]]）。
+// MySQL 反引号；PostgreSQL/SQLite 双引号；MSSQL 方括号。
+// 标识符里同名转义字符按各方言规则成对转义。
 //
 // 行为与前端 frontend/src/lib/tableSql.ts:quoteIdent 等价,移到后端是为了
 // OpenTable 等服务端拼装 SQL 时复用,不再依赖前端传 SQL 字符串。
