@@ -1,9 +1,9 @@
 <p align="right">
-<a href="./README.md">English</a> | <a href="./README_zh.md">中文</a>
+<a href="../README.md">English</a> | <a href="./README_zh.md">中文</a>
 </p>
 
 <h1 align="center">
-<img src="build/appicon.png" width="128" height="128"/><br/>
+<img src="../build/appicon.png" width="128" height="128"/><br/>
 OpsKat
 </h1>
 
@@ -26,7 +26,7 @@ OpsKat
 </p>
 
 <p align="center">
-  <img src="docs/images/screenshot-main.png" alt="OpsKat 截图">
+  <img src="images/screenshot-main.png" alt="OpsKat 截图">
 </p>
 
 ## 关于
@@ -121,7 +121,7 @@ make build-cli      # 仅构建 opsctl CLI
 
 ## 📄 开源许可
 
-本项目基于 [GPLv3](./LICENSE) 协议开源。
+本项目基于 [GPLv3](../LICENSE) 协议开源。
 
 ## 🔗 友情链接
 

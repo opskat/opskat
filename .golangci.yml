@@ -4,6 +4,7 @@ linters:
     - bodyclose
     - copyloopvar
     - durationcheck
+    - gosec
     - loggercheck
     - makezero
     - misspell
@@ -15,6 +16,19 @@ linters:
     - staticcheck
 
   settings:
+    gosec:
+      excludes:
+        - G106
+        - G115
+        - G117
+        - G301
+        - G302
+        - G306
+        - G401
+        - G402
+        - G404
+        - G501
+        - G505
     misspell:
       locale: US
 
