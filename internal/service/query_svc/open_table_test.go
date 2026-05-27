@@ -111,9 +111,11 @@ func TestOpenTable_PostgreSQL_SchemaQualified(t *testing.T) {
 
 		// information_schema 查询必须按 schema 拆分:table_schema='reporting' 且 table_name='events',
 		// 而不是把 'reporting.events' 整体塞进 table_name。
-		mock.ExpectQuery(`tc\.table_schema = 'reporting'.*tc\.table_name = 'events'`).
+		mock.ExpectQuery(`tc\.table_schema = \$1.*tc\.table_name = \$2`).
+			WithArgs("reporting", "events").
 			WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
-		mock.ExpectQuery(`table_schema = 'reporting'.*table_name = 'events'`).
+		mock.ExpectQuery(`table_schema = \$1.*table_name = \$2`).
+			WithArgs("reporting", "events").
 			WillReturnRows(sqlmock.NewRows([]string{"column_name", "data_type", "udt_name", "is_nullable", "column_default"}).
 				AddRow("id", "integer", "int4", "NO", nil))
 		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM "reporting"."events"`).
@@ -176,12 +178,14 @@ func TestOpenTableSQLite(t *testing.T) {
 		So(err, ShouldBeNil)
 		defer func() { _ = db.Close() }()
 
-		pkSQL := "SELECT name FROM pragma_table_info('users') WHERE pk > 0 ORDER BY pk"
+		pkSQL := "SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk"
 		mock.ExpectQuery(pkSQL).
+			WithArgs("users").
 			WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("id"))
 
-		colSQL := "SELECT name, type, CASE notnull WHEN 0 THEN 'YES' ELSE 'NO' END AS is_nullable, dflt_value FROM pragma_table_info('users')"
+		colSQL := "SELECT name, type, CASE notnull WHEN 0 THEN 'YES' ELSE 'NO' END AS is_nullable, dflt_value FROM pragma_table_info(?)"
 		mock.ExpectQuery(colSQL).
+			WithArgs("users").
 			WillReturnRows(sqlmock.NewRows([]string{"name", "type", "is_nullable", "dflt_value"}).
 				AddRow("id", "INTEGER", "NO", nil).
 				AddRow("name", "TEXT", "YES", nil))

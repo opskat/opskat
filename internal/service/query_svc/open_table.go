@@ -97,10 +97,10 @@ func queryPrimaryKeys(ctx context.Context, conn *sql.Conn, driver asset_entity.D
 		sqlText := "SELECT kcu.column_name FROM information_schema.table_constraints tc " +
 			"JOIN information_schema.key_column_usage kcu " +
 			"ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema " +
-			"WHERE tc.table_schema = " + SQLQuote(schema) +
-			" AND tc.table_name = " + SQLQuote(tbl) +
+			"WHERE tc.table_schema = $1" +
+			" AND tc.table_name = $2" +
 			" AND tc.constraint_type = 'PRIMARY KEY' ORDER BY kcu.ordinal_position"
-		rows, err := conn.QueryContext(ctx, sqlText)
+		rows, err := conn.QueryContext(ctx, sqlText, schema, tbl)
 		if err != nil {
 			return nil, err
 		}
@@ -118,15 +118,14 @@ func queryPrimaryKeys(ctx context.Context, conn *sql.Conn, driver asset_entity.D
 		}
 		return scanPKRows(rows, "COLUMN_NAME")
 	case asset_entity.DriverSQLite:
-		// pragma_table_info 是表值函数，参数必须内联字符串字面量；SQLQuote 处理单引号转义
-		sqlText := "SELECT name FROM pragma_table_info(" + SQLQuote(table) + ") WHERE pk > 0 ORDER BY pk"
-		rows, err := conn.QueryContext(ctx, sqlText)
+		sqlText := "SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk"
+		rows, err := conn.QueryContext(ctx, sqlText, table)
 		if err != nil {
 			return nil, err
 		}
 		return scanPKRows(rows, "name")
 	default: // MySQL
-		sqlText := "SHOW KEYS FROM " + QuoteTableRef(database, table, driver) + " WHERE Key_name = 'PRIMARY'"
+		sqlText := "SHOW KEYS FROM " + QuoteTableRef(database, table, driver) + " WHERE Key_name = 'PRIMARY'" //nolint:gosec // table reference is identifier-quoted by QuoteTableRef.
 		rows, err := conn.QueryContext(ctx, sqlText)
 		if err != nil {
 			return nil, err
@@ -167,8 +166,9 @@ func queryColumns(ctx context.Context, conn *sql.Conn, driver asset_entity.Datab
 	case asset_entity.DriverPostgreSQL:
 		schema, tbl := splitPGSchemaTable(table)
 		sqlText = "SELECT column_name, data_type, udt_name, is_nullable, column_default " +
-			"FROM information_schema.columns WHERE table_schema = " + SQLQuote(schema) +
-			" AND table_name = " + SQLQuote(tbl) + " ORDER BY ordinal_position"
+			"FROM information_schema.columns WHERE table_schema = $1" +
+			" AND table_name = $2 ORDER BY ordinal_position"
+		args = []any{schema, tbl}
 	case asset_entity.DriverMSSQL:
 		sqlText = "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT " +
 			"FROM INFORMATION_SCHEMA.COLUMNS " +
@@ -176,7 +176,8 @@ func queryColumns(ctx context.Context, conn *sql.Conn, driver asset_entity.Datab
 			"ORDER BY ORDINAL_POSITION"
 		args = []any{sql.Named("p1", database), sql.Named("p2", table)}
 	case asset_entity.DriverSQLite:
-		sqlText = "SELECT name, type, CASE notnull WHEN 0 THEN 'YES' ELSE 'NO' END AS is_nullable, dflt_value FROM pragma_table_info(" + SQLQuote(table) + ")"
+		sqlText = "SELECT name, type, CASE notnull WHEN 0 THEN 'YES' ELSE 'NO' END AS is_nullable, dflt_value FROM pragma_table_info(?)"
+		args = []any{table}
 	default: // MySQL
 		sqlText = "SHOW COLUMNS FROM " + QuoteTableRef(database, table, driver)
 	}
@@ -221,7 +222,7 @@ func queryColumns(ctx context.Context, conn *sql.Conn, driver asset_entity.Datab
 			defaultRaw, hasDefault = row["COLUMN_DEFAULT"]
 		}
 		if !hasDefault || defaultRaw == nil {
-			defaultRaw, hasDefault = row["dflt_value"]
+			defaultRaw = row["dflt_value"]
 		}
 		names = append(names, name)
 		if typeStr != "" {
@@ -241,9 +242,9 @@ func queryFirstPage(ctx context.Context, conn *sql.Conn, driver asset_entity.Dat
 	var sqlText string
 	switch driver {
 	case asset_entity.DriverMSSQL:
-		sqlText = fmt.Sprintf("SELECT TOP %d * FROM %s", pageSize, tableRef) //nolint:gosec // tableRef 已 quote
+		sqlText = fmt.Sprintf("SELECT TOP %d * FROM %s", pageSize, tableRef)
 	default:
-		sqlText = fmt.Sprintf("SELECT * FROM %s LIMIT %d OFFSET 0", tableRef, pageSize) //nolint:gosec // tableRef 已 quote
+		sqlText = fmt.Sprintf("SELECT * FROM %s LIMIT %d OFFSET 0", tableRef, pageSize)
 	}
 	rows, err := conn.QueryContext(ctx, sqlText)
 	if err != nil {
