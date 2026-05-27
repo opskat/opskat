@@ -29,6 +29,7 @@
     "kafka": "Kafka",
     "k8s": "K8S 集群",
     "serial": "串口",
+    "etcd": "etcd",
     "sshKeys": "密钥管理",
     "settings": "设置",
     "appearance": "外观",
@@ -251,6 +252,7 @@
     "typeKafka": "Kafka",
     "typeK8s": "K8S 集群",
     "typeSerial": "串口",
+    "typeEtcd": "etcd",
     "driver": "数据库类型",
     "driverMySQL": "MySQL",
     "driverPostgreSQL": "PostgreSQL",
@@ -332,6 +334,12 @@
     "k8sPolicyHint": "未列出的命令将请求用户确认后执行；规则支持使用 * 通配，范围过宽（如 *）可能放行高风险命令或误拒大量命令，请谨慎配置。",
     "k8sPolicyPlaceholder": "输入命令规则后按回车，支持逗号分隔批量添加",
     "k8sPolicyTestPlaceholder": "输入 kubectl 命令测试，如: kubectl get pods",
+    "etcdPolicy": "etcd 操作权限",
+    "etcdPolicyAllowList": "允许列表（直接执行，无需确认）",
+    "etcdPolicyDenyList": "拒绝列表（始终拒绝执行）",
+    "etcdPolicyHint": "未列出的 etcd 操作将请求用户确认后执行；规则支持使用 * 通配，范围过宽（如 *）可能放行高风险操作或误拒大量操作，请谨慎配置。",
+    "etcdPolicyPlaceholder": "输入 etcd 操作规则，如: get /app/*",
+    "policyTestEtcdPlaceholder": "输入 etcd 操作测试，如: get /app/config",
     "k8sKubeconfigProvided": "已提供 kubeconfig",
     "k8sNamespace": "命名空间",
     "k8sContext": "Context",
@@ -493,6 +501,18 @@
           "name": "Redis 高危拒绝",
           "desc": "拒绝 Redis 高危命令"
         },
+        "mongo-readonly": {
+          "name": "MongoDB 只读",
+          "desc": "只允许 MongoDB 只读操作"
+        },
+        "mongo-readwrite": {
+          "name": "MongoDB 读写",
+          "desc": "允许 MongoDB 增删改查操作"
+        },
+        "mongo-dangerous-deny": {
+          "name": "MongoDB 高危拒绝",
+          "desc": "拒绝 MongoDB 高危操作"
+        },
         "kafka-metadata-readonly": {
           "name": "Kafka 元数据只读",
           "desc": "允许读取集群、Broker、Topic 和消费组元数据"
@@ -520,6 +540,14 @@
         "kafka-dangerous-deny": {
           "name": "Kafka 高危拒绝",
           "desc": "拒绝删除、截断和安全变更等高危操作"
+        },
+        "etcd-readonly": {
+          "name": "etcd 只读",
+          "desc": "只允许 etcd 只读操作"
+        },
+        "etcd-dangerous-deny": {
+          "name": "etcd 高危拒绝",
+          "desc": "拒绝 etcd 高危操作"
         }
       }
     }
@@ -2304,6 +2332,102 @@
       "noMatch": "无匹配的片段",
       "empty": "还没有 prompt 片段",
       "openManager": "到代码片段页创建"
+    }
+  },
+  "etcd": {
+    "form": {
+      "endpoints": "Endpoints",
+      "endpointsHint": "至少 1 条 host:port，可多行",
+      "addEndpoint": "添加 endpoint",
+      "tlsSection": "TLS / mTLS",
+      "advancedSection": "高级",
+      "dialTimeout": "Dial 超时（秒）",
+      "commandTimeout": "命令超时（秒）",
+      "test": "测试连接",
+      "tlsServerName": "Server Name",
+      "tlsCAFile": "CA 证书路径",
+      "tlsCertFile": "客户端证书路径",
+      "tlsKeyFile": "客户端私钥路径",
+      "tlsInsecure": "跳过证书校验"
+    },
+    "tree": {
+      "title": "Keyspace",
+      "filterPlaceholder": "过滤 key",
+      "truncated": "+{{count}} 隐藏，limit={{limit}}",
+      "loadFailed": "加载 keyspace 失败"
+    },
+    "query": {
+      "placeholder": "get /config --prefix",
+      "templates": "模板",
+      "execute": "执行",
+      "history": "历史",
+      "deleteConfirmTitle": "确认删除",
+      "deleteConfirmBody": "将删除 key: {{key}}",
+      "deletePrefixWarning": "即将通过 --prefix 批量删除，请确认。",
+      "execConfirmTitle": "确认执行破坏性命令",
+      "execConfirmBody": "即将执行: {{command}}\n请确认命令、键范围与 --prefix 等参数无误。",
+      "execSuccess": "执行成功",
+      "execFailed": "执行失败",
+      "elapsed": "耗时 {{ms}}ms",
+      "noResult": "暂无结果，输入命令并执行"
+    },
+    "detail": {
+      "selectKey": "在左侧选择一个 key 查看详情",
+      "loading": "加载中…",
+      "empty": "无数据",
+      "metaModRev": "MOD REV",
+      "metaCreateRev": "CREATE REV",
+      "metaVersion": "VERSION",
+      "metaLease": "LEASE",
+      "metaSize": "SIZE",
+      "metaValueType": "VALUE TYPE",
+      "metaLeaseNone": "none",
+      "valueLabel": "VALUE",
+      "edit": "编辑",
+      "save": "保存",
+      "cancel": "取消",
+      "saveSuccess": "已保存",
+      "saveFailed": "保存失败",
+      "saveConfirmTitle": "确认写入 key",
+      "saveConfirmBody": "将覆盖 key: {{key}}",
+      "formatRaw": "Raw",
+      "formatJson": "JSON",
+      "formatYaml": "YAML",
+      "notJson": "(非 JSON)",
+      "notYaml": "(无法转 YAML)",
+      "copyKey": "复制 KEY",
+      "copyValue": "复制原始值",
+      "delete": "删除",
+      "copied": "已复制到剪贴板",
+      "copyFailed": "复制失败",
+      "deleteSuccess": "已删除 key: {{key}}",
+      "deleteFailed": "删除失败",
+      "history": "历史版本",
+      "historyAt": "查看 revision {{rev}}",
+      "historyLoading": "正在加载历史版本…",
+      "historyEmpty": "无更早版本（可能已被 compact）",
+      "historyLatest": "当前最新",
+      "historyItem": "rev {{rev}} · ver {{ver}}",
+      "historyFailed": "加载历史版本失败",
+      "historyCleared": "返回当前版本",
+      "contentTypeJson": "application/json",
+      "contentTypeText": "text/plain",
+      "contentTypeEmpty": "(empty)"
+    },
+    "cluster": {
+      "healthy": "健康",
+      "unhealthy": "异常",
+      "unknown": "未知",
+      "endpoints": "{{count}} 个 endpoint",
+      "leader": "leader",
+      "noLeader": "无 leader",
+      "refresh": "刷新集群状态",
+      "loadFailed": "加载集群信息失败"
+    },
+    "error": {
+      "endpointsRequired": "至少需要 1 个 endpoint",
+      "compactionRev": "该版本已被压缩，最早可用版本: {{rev}}",
+      "connFailed": "连接 etcd 失败"
     }
   }
 }

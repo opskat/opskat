@@ -518,3 +518,113 @@ func TestValidateDatabaseSQLite(t *testing.T) {
 		})
 	})
 }
+
+func TestAsset_IsEtcd(t *testing.T) {
+	convey.Convey("IsEtcd", t, func() {
+		a := &Asset{Type: AssetTypeEtcd}
+		assert.True(t, a.IsEtcd())
+		assert.False(t, a.IsRedis())
+	})
+}
+
+func TestAsset_GetSetEtcdConfig(t *testing.T) {
+	convey.Convey("Get/SetEtcdConfig 往返", t, func() {
+		a := &Asset{Type: AssetTypeEtcd}
+		cfg := &EtcdConfig{
+			Endpoints: []string{"10.0.0.1:2379", "10.0.0.2:2379"},
+			Username:  "root",
+			TLS:       true,
+		}
+		assert.NoError(t, a.SetEtcdConfig(cfg))
+		got, err := a.GetEtcdConfig()
+		assert.NoError(t, err)
+		assert.Equal(t, cfg.Endpoints, got.Endpoints)
+		assert.Equal(t, cfg.Username, got.Username)
+		assert.True(t, got.TLS)
+	})
+
+	convey.Convey("GetEtcdConfig 非 etcd 资产返回错误", t, func() {
+		a := &Asset{Type: AssetTypeSSH}
+		_, err := a.GetEtcdConfig()
+		assert.Error(t, err)
+	})
+}
+
+func TestAsset_ValidateEtcd(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     *EtcdConfig
+		wantErr bool
+	}{
+		{"valid single", &EtcdConfig{Endpoints: []string{"127.0.0.1:2379"}}, false},
+		{"valid cluster", &EtcdConfig{Endpoints: []string{"10.0.0.1:2379", "10.0.0.2:2379"}}, false},
+		{"empty endpoints", &EtcdConfig{}, true},
+		{"endpoint missing port", &EtcdConfig{Endpoints: []string{"10.0.0.1"}}, true},
+		{"endpoint invalid port", &EtcdConfig{Endpoints: []string{"10.0.0.1:abc"}}, true},
+		{"endpoint port out of range", &EtcdConfig{Endpoints: []string{"10.0.0.1:70000"}}, true},
+		{"endpoint missing host", &EtcdConfig{Endpoints: []string{":2379"}}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &Asset{Name: "test", Type: AssetTypeEtcd}
+			assert.NoError(t, a.SetEtcdConfig(tc.cfg))
+			err := a.Validate()
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestAsset_CanConnectEtcd(t *testing.T) {
+	convey.Convey("etcd 端点非空且 Status=Active 可连接", t, func() {
+		a := &Asset{Type: AssetTypeEtcd, Status: StatusActive}
+		assert.NoError(t, a.SetEtcdConfig(&EtcdConfig{Endpoints: []string{"127.0.0.1:2379"}}))
+		assert.True(t, a.CanConnect())
+	})
+	convey.Convey("etcd 端点为空不可连接", t, func() {
+		a := &Asset{Type: AssetTypeEtcd, Status: StatusActive}
+		assert.NoError(t, a.SetEtcdConfig(&EtcdConfig{Endpoints: nil}))
+		assert.False(t, a.CanConnect())
+	})
+	convey.Convey("etcd Status 非 Active 不可连接", t, func() {
+		a := &Asset{Type: AssetTypeEtcd, Status: StatusDeleted}
+		assert.NoError(t, a.SetEtcdConfig(&EtcdConfig{Endpoints: []string{"127.0.0.1:2379"}}))
+		assert.False(t, a.CanConnect())
+	})
+}
+
+func TestAsset_GetSetEtcdPolicy(t *testing.T) {
+	convey.Convey("Get/SetEtcdPolicy 往返", t, func() {
+		a := &Asset{Type: AssetTypeEtcd}
+		p := &EtcdPolicy{
+			AllowList: []string{"get *", "put *"},
+			DenyList:  []string{"member remove *"},
+		}
+		assert.NoError(t, a.SetEtcdPolicy(p))
+		got, err := a.GetEtcdPolicy()
+		assert.NoError(t, err)
+		assert.Equal(t, p.AllowList, got.AllowList)
+		assert.Equal(t, p.DenyList, got.DenyList)
+	})
+
+	convey.Convey("SetEtcdPolicy 空策略清空字段", t, func() {
+		a := &Asset{Type: AssetTypeEtcd}
+		assert.NoError(t, a.SetEtcdPolicy(&EtcdPolicy{AllowList: []string{"get *"}}))
+		assert.NotEmpty(t, a.CmdPolicy)
+		assert.NoError(t, a.SetEtcdPolicy(&EtcdPolicy{}))
+		assert.Empty(t, a.CmdPolicy)
+	})
+
+	convey.Convey("CmdPolicy 为空时 GetEtcdPolicy 返回零值", t, func() {
+		a := &Asset{Type: AssetTypeEtcd}
+		got, err := a.GetEtcdPolicy()
+		assert.NoError(t, err)
+		assert.NotNil(t, got)
+		assert.Empty(t, got.AllowList)
+		assert.Empty(t, got.DenyList)
+		assert.Empty(t, got.Groups)
+	})
+}

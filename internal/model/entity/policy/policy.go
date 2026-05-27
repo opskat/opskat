@@ -114,12 +114,23 @@ type Holder interface {
 	GetMongoPolicy() (*MongoPolicy, error)
 	GetKafkaPolicy() (*KafkaPolicy, error)
 	GetK8sPolicy() (*K8sPolicy, error)
+	GetEtcdPolicy() (*EtcdPolicy, error)
 }
 
 // DefaultRedisPolicy 返回默认 Redis 权限策略（引用内置权限组）
 func DefaultRedisPolicy() *RedisPolicy {
 	return &RedisPolicy{
 		Groups: []string{BuiltinRedisReadOnly, BuiltinRedisDangerousDeny},
+	}
+}
+
+// EtcdPolicy etcd 权限策略（复用 RedisPolicy 结构）
+type EtcdPolicy = RedisPolicy
+
+// DefaultEtcdPolicy 返回默认 etcd 权限策略（引用内置权限组）
+func DefaultEtcdPolicy() *EtcdPolicy {
+	return &EtcdPolicy{
+		Groups: []string{BuiltinEtcdReadOnly, BuiltinEtcdDangerousDeny},
 	}
 }
 
@@ -145,6 +156,8 @@ const (
 	BuiltinKafkaOperator         = "builtin:kafka-operator"
 	BuiltinKafkaSecurityAdmin    = "builtin:kafka-security-admin"
 	BuiltinKafkaDangerousDeny    = "builtin:kafka-dangerous-deny"
+	BuiltinEtcdReadOnly          = "builtin:etcd-readonly"
+	BuiltinEtcdDangerousDeny     = "builtin:etcd-dangerous-deny"
 
 	// BuiltinPrefix 内置权限组 ID 前缀
 	BuiltinPrefix = "builtin:"

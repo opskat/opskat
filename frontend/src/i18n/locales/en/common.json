@@ -29,6 +29,7 @@
     "kafka": "Kafka",
     "k8s": "K8S Cluster",
     "serial": "Serial Port",
+    "etcd": "etcd",
     "sshKeys": "Credentials",
     "settings": "Settings",
     "appearance": "Appearance",
@@ -251,6 +252,7 @@
     "typeKafka": "Kafka",
     "typeK8s": "K8S Cluster",
     "typeSerial": "Serial Port",
+    "typeEtcd": "etcd",
     "driver": "Database Driver",
     "driverMySQL": "MySQL",
     "driverPostgreSQL": "PostgreSQL",
@@ -332,6 +334,12 @@
     "k8sPolicyHint": "Commands not listed will require user confirmation. Rules support * wildcards; broad patterns such as * may allow high-risk commands or deny many commands, so configure them carefully.",
     "k8sPolicyPlaceholder": "Press Enter to add, comma-separated for batch import",
     "k8sPolicyTestPlaceholder": "Type a kubectl command to test, e.g. kubectl get pods",
+    "etcdPolicy": "etcd Operation Policy",
+    "etcdPolicyAllowList": "Allow List (execute without confirmation)",
+    "etcdPolicyDenyList": "Deny List (always reject)",
+    "etcdPolicyHint": "etcd operations not listed will require user confirmation. Rules support * wildcards; broad patterns such as * may allow high-risk operations or deny many operations, so configure them carefully.",
+    "etcdPolicyPlaceholder": "Add etcd operation rules, e.g. get /app/*",
+    "policyTestEtcdPlaceholder": "Type an etcd operation to test, e.g. get /app/config",
     "k8sKubeconfigProvided": "Kubeconfig provided",
     "k8sNamespace": "Namespace",
     "k8sContext": "Context",
@@ -493,6 +501,18 @@
           "name": "Redis Dangerous Deny",
           "desc": "Deny dangerous Redis commands"
         },
+        "mongo-readonly": {
+          "name": "MongoDB Read-Only",
+          "desc": "Allow MongoDB read-only operations"
+        },
+        "mongo-readwrite": {
+          "name": "MongoDB Read-Write",
+          "desc": "Allow MongoDB CRUD operations"
+        },
+        "mongo-dangerous-deny": {
+          "name": "MongoDB Dangerous Deny",
+          "desc": "Deny dangerous MongoDB operations"
+        },
         "kafka-metadata-readonly": {
           "name": "Kafka Metadata Read-Only",
           "desc": "Allow cluster, broker, topic, and consumer group metadata reads"
@@ -520,6 +540,14 @@
         "kafka-dangerous-deny": {
           "name": "Kafka Dangerous Deny",
           "desc": "Deny destructive and security-sensitive Kafka operations"
+        },
+        "etcd-readonly": {
+          "name": "etcd Read-Only",
+          "desc": "Allow etcd read-only operations"
+        },
+        "etcd-dangerous-deny": {
+          "name": "etcd Dangerous Deny",
+          "desc": "Deny dangerous etcd operations"
         }
       }
     }
@@ -2304,6 +2332,102 @@
       "noMatch": "No matching snippets",
       "empty": "No prompt snippets yet",
       "openManager": "Create in Snippets page"
+    }
+  },
+  "etcd": {
+    "form": {
+      "endpoints": "Endpoints",
+      "endpointsHint": "At least 1 host:port, one per line",
+      "addEndpoint": "Add endpoint",
+      "tlsSection": "TLS / mTLS",
+      "advancedSection": "Advanced",
+      "dialTimeout": "Dial timeout (s)",
+      "commandTimeout": "Command timeout (s)",
+      "test": "Test connection",
+      "tlsServerName": "Server name",
+      "tlsCAFile": "CA certificate path",
+      "tlsCertFile": "Client certificate path",
+      "tlsKeyFile": "Client private key path",
+      "tlsInsecure": "Skip certificate verification"
+    },
+    "tree": {
+      "title": "Keyspace",
+      "filterPlaceholder": "Filter key",
+      "truncated": "+{{count}} hidden, limit={{limit}}",
+      "loadFailed": "Failed to load keyspace"
+    },
+    "query": {
+      "placeholder": "get /config --prefix",
+      "templates": "Templates",
+      "execute": "Execute",
+      "history": "History",
+      "deleteConfirmTitle": "Confirm delete",
+      "deleteConfirmBody": "Will delete key: {{key}}",
+      "deletePrefixWarning": "Bulk delete via --prefix. Please confirm.",
+      "execConfirmTitle": "Confirm destructive command",
+      "execConfirmBody": "About to run: {{command}}\nVerify the command, key range and --prefix flag before confirming.",
+      "execSuccess": "Success",
+      "execFailed": "Failed",
+      "elapsed": "{{ms}}ms",
+      "noResult": "No results yet. Enter a command and execute."
+    },
+    "detail": {
+      "selectKey": "Select a key on the left to view details",
+      "loading": "Loading…",
+      "empty": "No data",
+      "metaModRev": "MOD REV",
+      "metaCreateRev": "CREATE REV",
+      "metaVersion": "VERSION",
+      "metaLease": "LEASE",
+      "metaSize": "SIZE",
+      "metaValueType": "VALUE TYPE",
+      "metaLeaseNone": "none",
+      "valueLabel": "VALUE",
+      "edit": "Edit",
+      "save": "Save",
+      "cancel": "Cancel",
+      "saveSuccess": "Saved",
+      "saveFailed": "Save failed",
+      "saveConfirmTitle": "Overwrite key",
+      "saveConfirmBody": "Will overwrite key: {{key}}",
+      "formatRaw": "Raw",
+      "formatJson": "JSON",
+      "formatYaml": "YAML",
+      "notJson": "(not JSON)",
+      "notYaml": "(YAML conversion failed)",
+      "copyKey": "Copy KEY",
+      "copyValue": "Copy raw value",
+      "delete": "Delete",
+      "copied": "Copied to clipboard",
+      "copyFailed": "Copy failed",
+      "deleteSuccess": "Deleted key: {{key}}",
+      "deleteFailed": "Delete failed",
+      "history": "History",
+      "historyAt": "Viewing revision {{rev}}",
+      "historyLoading": "Loading history…",
+      "historyEmpty": "No earlier revisions (may be compacted)",
+      "historyLatest": "Latest",
+      "historyItem": "rev {{rev}} · ver {{ver}}",
+      "historyFailed": "Failed to load history",
+      "historyCleared": "Back to current",
+      "contentTypeJson": "application/json",
+      "contentTypeText": "text/plain",
+      "contentTypeEmpty": "(empty)"
+    },
+    "cluster": {
+      "healthy": "Healthy",
+      "unhealthy": "Unhealthy",
+      "unknown": "Unknown",
+      "endpoints": "{{count}} endpoint(s)",
+      "leader": "leader",
+      "noLeader": "no leader",
+      "refresh": "Refresh cluster status",
+      "loadFailed": "Failed to load cluster info"
+    },
+    "error": {
+      "endpointsRequired": "At least one endpoint required",
+      "compactionRev": "Revision compacted; oldest available: {{rev}}",
+      "connFailed": "Failed to connect to etcd"
     }
   }
 }

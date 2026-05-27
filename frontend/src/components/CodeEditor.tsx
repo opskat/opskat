@@ -9,7 +9,7 @@ import {
   type DynamicCompletionGetter,
 } from "@/lib/monaco-completions";
 
-export type CodeEditorLanguage = "sql" | "javascript" | "json" | "plaintext" | "shell" | "markdown";
+export type CodeEditorLanguage = "sql" | "javascript" | "json" | "plaintext" | "shell" | "markdown" | "yaml";
 
 export interface CodeEditorProps {
   /** 受控：父组件拥有文本 state，每次变化通过 onChange 回吐 */

@@ -433,6 +433,71 @@ func TestTestQueryPolicy(t *testing.T) {
 	})
 }
 
+func TestTestEtcdPolicy(t *testing.T) {
+	ctx := context.Background()
+
+	Convey("testEtcdPolicy", t, func() {
+		Convey("引用内置组 — 只读组允许 get", func() {
+			p := &asset_entity.EtcdPolicy{
+				Groups: []string{policy.BuiltinEtcdReadOnly},
+			}
+			out := testEtcdPolicy(ctx, p, nil, "get /config")
+			So(out.Decision, ShouldEqual, aictx.Allow)
+		})
+
+		Convey("引用内置组 — 高危组拒绝 member remove", func() {
+			p := &asset_entity.EtcdPolicy{
+				Groups: []string{policy.BuiltinEtcdDangerousDeny},
+			}
+			out := testEtcdPolicy(ctx, p, nil, "member remove abc")
+			So(out.Decision, ShouldEqual, aictx.Deny)
+		})
+
+		Convey("仅引用只读组时 put 命令需要确认", func() {
+			// 只读组只允许 get/endpoint/lease list 等 → put 不在 allow → aictx.NeedConfirm
+			p := &asset_entity.EtcdPolicy{
+				Groups: []string{policy.BuiltinEtcdReadOnly},
+			}
+			out := testEtcdPolicy(ctx, p, nil, "put /flags/x true")
+			So(out.Decision, ShouldEqual, aictx.NeedConfirm)
+		})
+
+		Convey("资产 deny 覆盖组 allow（当前 deny 优先）", func() {
+			p := &asset_entity.EtcdPolicy{
+				DenyList: []string{"get *"},
+				Groups:   []string{policy.BuiltinEtcdReadOnly}, // 内置只读包含 "get *" 允许
+			}
+			out := testEtcdPolicy(ctx, p, nil, "get /x")
+			So(out.Decision, ShouldEqual, aictx.Deny)
+		})
+
+		Convey("通过 TestPolicy 入口 — case \"etcd\" 路由", func() {
+			out := TestPolicy(ctx, PolicyTestInput{
+				PolicyType:  "etcd",
+				CurrentEtcd: &asset_entity.EtcdPolicy{Groups: []string{policy.BuiltinEtcdReadOnly}},
+			}, "get /config")
+			So(out.Decision, ShouldEqual, aictx.Allow)
+		})
+
+		Convey("通过 TestPolicy 入口 — member remove 被拒", func() {
+			out := TestPolicy(ctx, PolicyTestInput{
+				PolicyType:  "etcd",
+				CurrentEtcd: &asset_entity.EtcdPolicy{Groups: []string{policy.BuiltinEtcdDangerousDeny}},
+			}, "member remove abc")
+			So(out.Decision, ShouldEqual, aictx.Deny)
+		})
+
+		Convey("默认策略正确生效", func() {
+			p := policy.DefaultEtcdPolicy()
+			out := testEtcdPolicy(ctx, p, nil, "get /config")
+			So(out.Decision, ShouldEqual, aictx.Allow)
+
+			out = testEtcdPolicy(ctx, p, nil, "member remove abc")
+			So(out.Decision, ShouldEqual, aictx.Deny)
+		})
+	})
+}
+
 func TestCheckGenericDenyAllow(t *testing.T) {
 	Convey("checkGenericDeny/aictx.Allow", t, func() {
 		Convey("deny 匹配返回结果", func() {

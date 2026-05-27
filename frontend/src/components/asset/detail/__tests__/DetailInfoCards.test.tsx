@@ -7,6 +7,7 @@ import { RedisDetailInfoCard } from "../RedisDetailInfoCard";
 import { MongoDBDetailInfoCard } from "../MongoDBDetailInfoCard";
 import { K8sDetailInfoCard } from "../K8sDetailInfoCard";
 import { SerialDetailInfoCard } from "../SerialDetailInfoCard";
+import { EtcdDetailInfoCard } from "../EtcdDetailInfoCard";
 
 afterEach(() => {
   cleanup();
@@ -266,5 +267,21 @@ describe("K8sDetailInfoCard", () => {
     const asset = makeAssetWithTunnel("k8s", { kubeconfig: "apiVersion: v1" }, 7);
     const { getByText } = render(<K8sDetailInfoCard asset={asset} sshTunnelName={tunnelFn} />);
     expect(getByText("k8s-bastion")).toBeInTheDocument();
+  });
+});
+
+describe("EtcdDetailInfoCard", () => {
+  it("shows SSH tunnel from asset field", () => {
+    const tunnelFn = vi.fn((id?: number) => (id === 9 ? "etcd-bastion" : null));
+    const asset = makeAssetWithTunnel("etcd", { endpoints: ["10.0.0.10:2379"] }, 9);
+    const { getByText } = render(<EtcdDetailInfoCard asset={asset} sshTunnelName={tunnelFn} />);
+    expect(getByText("etcd-bastion")).toBeInTheDocument();
+  });
+
+  it("falls back to config ssh_asset_id", () => {
+    const tunnelFn = vi.fn((id?: number) => (id === 4 ? "legacy-bastion" : null));
+    const asset = makeAsset("etcd", { endpoints: ["10.0.0.10:2379"], ssh_asset_id: 4 });
+    const { getByText } = render(<EtcdDetailInfoCard asset={asset} sshTunnelName={tunnelFn} />);
+    expect(getByText("legacy-bastion")).toBeInTheDocument();
   });
 });

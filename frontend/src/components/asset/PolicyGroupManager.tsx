@@ -21,12 +21,13 @@ interface PolicyGroupManagerProps {
   initialTab?: string;
 }
 
-const builtinTabs: { key: string; label: string }[] = [
+const builtinTabs: { key: string; label: string; labelKey?: string }[] = [
   { key: "command", label: "SSH" },
-  { key: "query", label: "Database" },
+  { key: "query", label: "Database", labelKey: "asset.typeDatabase" },
   { key: "redis", label: "Redis" },
   { key: "mongo", label: "MongoDB" },
   { key: "kafka", label: "Kafka" },
+  { key: "etcd", label: "etcd" },
 ];
 
 const builtinTabKeys = new Set(builtinTabs.map((t) => t.key));
@@ -307,7 +308,7 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
                 setEditState(null);
               }}
             >
-              {tab.label}
+              {tab.labelKey ? t(tab.labelKey) : tab.label}
             </button>
           ))}
         </div>

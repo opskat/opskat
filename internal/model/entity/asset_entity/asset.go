@@ -21,6 +21,7 @@ const (
 	AssetTypeKafka    = "kafka"
 	AssetTypeK8s      = "k8s"
 	AssetTypeSerial   = "serial"
+	AssetTypeEtcd     = "etcd"
 )
 
 // DatabaseDriver 数据库驱动类型
@@ -151,6 +152,25 @@ type RedisConfig struct {
 	SSHAssetID            int64  `json:"ssh_asset_id,omitempty"`            // Deprecated: use Asset.SSHTunnelID
 }
 
+// EtcdConfig etcd类型的特定配置
+type EtcdConfig struct {
+	Endpoints    []string `json:"endpoints"`          // 至少 1 个 host:port
+	Username     string   `json:"username,omitempty"` // 留空 = 不启用 RBAC
+	Password     string   `json:"password,omitempty"` // AES-256-GCM 密文
+	CredentialID int64    `json:"credential_id,omitempty"`
+	SSHAssetID   int64    `json:"ssh_asset_id,omitempty"` // Deprecated: use Asset.SSHTunnelID; kept for form test/backward compat
+
+	TLS           bool   `json:"tls,omitempty"`
+	TLSInsecure   bool   `json:"tls_insecure,omitempty"`
+	TLSServerName string `json:"tls_server_name,omitempty"`
+	TLSCAFile     string `json:"tls_ca_file,omitempty"`
+	TLSCertFile   string `json:"tls_cert_file,omitempty"`
+	TLSKeyFile    string `json:"tls_key_file,omitempty"`
+
+	DialTimeoutSeconds    int `json:"dial_timeout_seconds,omitempty"`
+	CommandTimeoutSeconds int `json:"command_timeout_seconds,omitempty"`
+}
+
 // MongoDBConfig MongoDB类型的特定配置
 type MongoDBConfig struct {
 	ConnectionURI string `json:"connection_uri,omitempty"` // 完整连接 URI（优先于手动配置）
@@ -263,6 +283,10 @@ func (c *DatabaseConfig) GetPassword() string    { return c.Password }
 func (c *RedisConfig) GetCredentialID() int64 { return c.CredentialID }
 func (c *RedisConfig) GetPassword() string    { return c.Password }
 
+// EtcdConfig PasswordSource implementation
+func (c *EtcdConfig) GetCredentialID() int64 { return c.CredentialID }
+func (c *EtcdConfig) GetPassword() string    { return c.Password }
+
 // MongoDBConfig PasswordSource implementation
 func (c *MongoDBConfig) GetCredentialID() int64 { return c.CredentialID }
 func (c *MongoDBConfig) GetPassword() string    { return c.Password }
@@ -309,6 +333,12 @@ type K8sPolicy = policy.K8sPolicy
 // DefaultK8sPolicy 返回默认 K8S 权限策略
 var DefaultK8sPolicy = policy.DefaultK8sPolicy
 
+// EtcdPolicy etcd 权限策略（类型别名，定义在 policy 包）
+type EtcdPolicy = policy.EtcdPolicy
+
+// DefaultEtcdPolicy 返回默认 etcd 权限策略
+var DefaultEtcdPolicy = policy.DefaultEtcdPolicy
+
 // SerialConfig PasswordSource implementation（串口无密码，返回空）
 func (c *SerialConfig) GetCredentialID() int64 { return 0 }
 func (c *SerialConfig) GetPassword() string    { return "" }
@@ -348,6 +378,11 @@ func (a *Asset) IsK8s() bool {
 // IsSerial 判断是否串口类型
 func (a *Asset) IsSerial() bool {
 	return a.Type == AssetTypeSerial
+}
+
+// IsEtcd 判断是否etcd类型
+func (a *Asset) IsEtcd() bool {
+	return a.Type == AssetTypeEtcd
 }
 
 // GetSSHConfig 解析SSH配置
@@ -397,6 +432,24 @@ func (a *Asset) GetRedisConfig() (*RedisConfig, error) {
 // SetRedisConfig 序列化Redis配置到Config字段
 func (a *Asset) SetRedisConfig(cfg *RedisConfig) error {
 	s, err := jsonfield.Marshal(cfg, "Redis配置")
+	if err != nil {
+		return err
+	}
+	a.Config = s
+	return nil
+}
+
+// GetEtcdConfig 解析etcd配置
+func (a *Asset) GetEtcdConfig() (*EtcdConfig, error) {
+	if !a.IsEtcd() {
+		return nil, errors.New("资产不是etcd类型")
+	}
+	return jsonfield.Unmarshal[EtcdConfig](a.Config, "etcd配置")
+}
+
+// SetEtcdConfig 序列化etcd配置到Config字段
+func (a *Asset) SetEtcdConfig(cfg *EtcdConfig) error {
+	s, err := jsonfield.Marshal(cfg, "etcd配置")
 	if err != nil {
 		return err
 	}
@@ -561,6 +614,23 @@ func (a *Asset) SetK8sPolicy(p *K8sPolicy) error {
 	return nil
 }
 
+// GetEtcdPolicy 解析etcd权限策略
+func (a *Asset) GetEtcdPolicy() (*EtcdPolicy, error) {
+	return jsonfield.UnmarshalOrDefault[EtcdPolicy](a.CmdPolicy, "etcd权限策略")
+}
+
+// SetEtcdPolicy 序列化etcd权限策略
+func (a *Asset) SetEtcdPolicy(p *EtcdPolicy) error {
+	s, err := jsonfield.MarshalOrClear(p, func(v *EtcdPolicy) bool {
+		return v.IsEmpty()
+	}, "etcd权限策略")
+	if err != nil {
+		return err
+	}
+	a.CmdPolicy = s
+	return nil
+}
+
 // Validate 校验资产必填字段和类型配置的完整性
 func (a *Asset) Validate() error {
 	if a.Name == "" {
@@ -586,6 +656,8 @@ func (a *Asset) Validate() error {
 		return a.validateK8s()
 	case AssetTypeSerial:
 		return a.validateSerial()
+	case AssetTypeEtcd:
+		return a.validateEtcd()
 	default:
 		// 扩展资产类型由扩展自行校验
 		return nil
@@ -770,6 +842,28 @@ func (a *Asset) validateSerial() error {
 	return nil
 }
 
+// validateEtcd 校验etcd类型特定配置
+func (a *Asset) validateEtcd() error {
+	cfg, err := a.GetEtcdConfig()
+	if err != nil {
+		return fmt.Errorf("etcd配置无效: %w", err)
+	}
+	if len(cfg.Endpoints) == 0 {
+		return errors.New("etcd endpoints不能为空")
+	}
+	for _, ep := range cfg.Endpoints {
+		host, portText, err := net.SplitHostPort(ep)
+		if err != nil || strings.TrimSpace(host) == "" {
+			return fmt.Errorf("etcd endpoint必须为host:port格式: %s", ep)
+		}
+		port, err := strconv.Atoi(portText)
+		if err != nil || port <= 0 || port > 65535 {
+			return fmt.Errorf("etcd endpoint端口无效: %s", ep)
+		}
+	}
+	return nil
+}
+
 func validateKafkaBroker(broker string) error {
 	broker = strings.TrimSpace(broker)
 	if broker == "" {
@@ -845,6 +939,12 @@ func (a *Asset) CanConnect() bool {
 			return false
 		}
 		return cfg.PortPath != ""
+	case AssetTypeEtcd:
+		cfg, err := a.GetEtcdConfig()
+		if err != nil {
+			return false
+		}
+		return len(cfg.Endpoints) > 0
 	}
 	return false
 }

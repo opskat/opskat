@@ -74,6 +74,26 @@ func ResolveRedisGroups(ctx context.Context, groupIDs []string) (allow, deny []s
 	return
 }
 
+// ResolveEtcdGroups 解析引用的 etcd 权限组，返回合并后的 allow/deny 规则
+func ResolveEtcdGroups(ctx context.Context, groupIDs []string) (allow, deny []string) {
+	if len(groupIDs) == 0 {
+		return
+	}
+	for _, pg := range fetchPolicyGroups(ctx, groupIDs) {
+		if pg.PolicyType != policy_group_entity.PolicyTypeEtcd {
+			continue
+		}
+		var p policy.EtcdPolicy
+		if err := json.Unmarshal([]byte(pg.Policy), &p); err != nil {
+			logger.Default().Warn("unmarshal policy group etcd policy", zap.String("id", pg.BuiltinID), zap.Error(err))
+			continue
+		}
+		allow = append(allow, p.AllowList...)
+		deny = append(deny, p.DenyList...)
+	}
+	return
+}
+
 // ResolveMongoGroups 解析引用的 MongoDB 权限组，返回合并后的 allowTypes/denyTypes
 func ResolveMongoGroups(ctx context.Context, groupIDs []string) (allowTypes, denyTypes []string) {
 	if len(groupIDs) == 0 {

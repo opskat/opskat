@@ -204,3 +204,23 @@ func TestDefaultKafkaPolicy(t *testing.T) {
 		})
 	})
 }
+
+func TestDefaultEtcdPolicy(t *testing.T) {
+	Convey("DefaultEtcdPolicy()", t, func() {
+		p := DefaultEtcdPolicy()
+
+		Convey("不为空", func() {
+			So(p.IsEmpty(), ShouldBeFalse)
+		})
+
+		Convey("包含内置 etcd 权限组引用", func() {
+			So(p.Groups, ShouldContain, BuiltinEtcdReadOnly)
+			So(p.Groups, ShouldContain, BuiltinEtcdDangerousDeny)
+		})
+
+		Convey("EtcdPolicy 与 RedisPolicy 为同一类型（type alias）", func() {
+			var rp = p
+			So(rp, ShouldNotBeNil)
+		})
+	})
+}

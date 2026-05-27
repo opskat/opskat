@@ -42,6 +42,7 @@ describe("ExportTableDataDialog", () => {
   it("opens the exported file or its containing folder after a successful export", async () => {
     const user = userEvent.setup();
     vi.mocked(App.SelectTableExportFile).mockResolvedValue("/tmp/opskat/users.csv");
+    vi.mocked(App.ExecuteSQL).mockResolvedValue(JSON.stringify({ rows: baseProps.rows }));
     const writeFile = vi.fn().mockResolvedValue(undefined);
     Object.assign(window, {
       go: {
@@ -56,6 +57,7 @@ describe("ExportTableDataDialog", () => {
     render(<ExportTableDataDialog {...baseProps} />);
 
     await user.click(screen.getByRole("button", { name: /query.exportChooseFile/ }));
+    await screen.findByText("/tmp/opskat/users.csv");
     await user.click(screen.getByRole("button", { name: /query.exportStart/ }));
 
     await waitFor(() => expect(writeFile).toHaveBeenCalled());
@@ -90,6 +92,7 @@ describe("ExportTableDataDialog", () => {
     render(<ExportTableDataDialog {...baseProps} totalRows={1001} />);
 
     await user.click(screen.getByRole("button", { name: /query.exportChooseFile/ }));
+    await screen.findByText("/tmp/opskat/users.csv");
     await user.click(screen.getByRole("button", { name: /query.exportStart/ }));
 
     await waitFor(() => expect(writeFile).toHaveBeenCalledTimes(2));

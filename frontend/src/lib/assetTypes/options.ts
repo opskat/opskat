@@ -2,7 +2,7 @@
 import type { ComponentType } from "react";
 import { Monitor, Database, Cylinder, Leaf, Container, Server, Usb } from "lucide-react";
 import { getIconComponent } from "@/components/asset/IconPicker";
-import { KafkaIcon } from "@/components/asset/brand-icons";
+import { KafkaIcon, EtcdIcon } from "@/components/asset/brand-icons";
 import type { ExtManifest } from "@/extension/types";
 import type { asset_entity } from "../../../wailsjs/go/models";
 
@@ -79,6 +79,14 @@ const BUILTIN_OPTIONS: AssetTypeOption[] = [
     label: "nav.serial",
     labelIsI18nKey: true,
     icon: Usb,
+    group: "builtin",
+  },
+  {
+    value: "etcd",
+    aliases: ["etcd"],
+    label: "nav.etcd",
+    labelIsI18nKey: true,
+    icon: EtcdIcon,
     group: "builtin",
   },
 ];

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/opskat/opskat/internal/app/ai"
+	"github.com/opskat/opskat/internal/app/etcd"
 	"github.com/opskat/opskat/internal/app/extension"
 	"github.com/opskat/opskat/internal/app/external_edit"
 	"github.com/opskat/opskat/internal/app/k8s"
@@ -118,6 +119,7 @@ func main() {
 	sshB := ssh.New(appCtx, sys, sshMgr, sftpSvc, pool)
 	queryB := query.New(appCtx, sys, pool)
 	redisB := redis.New(appCtx, sys, pool)
+	etcdB := etcd.New(appCtx, sys, pool)
 	kafkaB := kafka.New(appCtx, sys, pool)
 	k8sB := k8s.New(appCtx, sys, pool)
 	serialB := serial.New(appCtx, sys, serialMgr)
@@ -132,7 +134,7 @@ func main() {
 	aiB.SetSerialManager(serialMgr)
 	aiB.SetWindowActivator(sys)
 
-	binders := []Lifecycle{sys, sshB, queryB, redisB, kafkaB, k8sB, serialB, aiB, opsctlB, extB, extEditB}
+	binders := []Lifecycle{sys, sshB, queryB, redisB, etcdB, kafkaB, k8sB, serialB, aiB, opsctlB, extB, extEditB}
 
 	err = wails.Run(&options.App{
 		Title:     "OpsKat",
@@ -173,7 +175,7 @@ func main() {
 			pool.Close()
 		},
 		Bind: []interface{}{
-			sys, sshB, queryB, redisB, kafkaB, k8sB, serialB, aiB, opsctlB, extB, extEditB,
+			sys, sshB, queryB, redisB, etcdB, kafkaB, k8sB, serialB, aiB, opsctlB, extB, extEditB,
 		},
 		SingleInstanceLock: &options.SingleInstanceLock{
 			UniqueId: "com.opskat.desktop",

@@ -27,6 +27,7 @@ const PLACEHOLDER_MAP: Record<string, string> = {
   mongodb: "asset.policyTestMongoPlaceholder",
   mongo: "asset.policyTestMongoPlaceholder",
   kafka: "asset.policyTestKafkaPlaceholder",
+  etcd: "asset.policyTestEtcdPlaceholder",
 };
 
 const RESULT_CONFIG = {

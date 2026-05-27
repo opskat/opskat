@@ -31,6 +31,9 @@ export function ConfirmDialog({
   variant = "destructive",
   onConfirm,
 }: ConfirmDialogProps) {
+  const resolvedCancelText = cancelText?.trim() ? cancelText : "Cancel";
+  const resolvedConfirmText = confirmText?.trim() ? confirmText : "Confirm";
+
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent onOverlayClick={() => onOpenChange(false)}>
@@ -39,9 +42,9 @@ export function ConfirmDialog({
           <AlertDialogDescription>{description}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>{cancelText}</AlertDialogCancel>
+          <AlertDialogCancel>{resolvedCancelText}</AlertDialogCancel>
           <AlertDialogAction variant={variant} onClick={onConfirm}>
-            {confirmText}
+            {resolvedConfirmText}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

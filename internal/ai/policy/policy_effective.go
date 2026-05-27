@@ -88,6 +88,36 @@ func EffectiveRedisPolicy(ctx context.Context, custom *asset_entity.RedisPolicy)
 	return out
 }
 
+func expandEtcdPolicy(ctx context.Context, p *asset_entity.EtcdPolicy) *asset_entity.EtcdPolicy {
+	out := &asset_entity.EtcdPolicy{}
+	if p == nil {
+		return out
+	}
+	out.AllowList = append(out.AllowList, p.AllowList...)
+	out.DenyList = append(out.DenyList, p.DenyList...)
+	if len(p.Groups) > 0 {
+		allow, deny := ResolveEtcdGroups(ctx, p.Groups)
+		out.AllowList = append(out.AllowList, allow...)
+		out.DenyList = append(out.DenyList, deny...)
+	}
+	return out
+}
+
+func EffectiveEtcdPolicy(ctx context.Context, custom *asset_entity.EtcdPolicy) *asset_entity.EtcdPolicy {
+	custom = expandEtcdPolicy(ctx, custom)
+	defaults := expandEtcdPolicy(ctx, asset_entity.DefaultEtcdPolicy())
+
+	out := &asset_entity.EtcdPolicy{}
+	if len(custom.AllowList) > 0 {
+		out.AllowList = AppendUnique(out.AllowList, custom.AllowList...)
+	} else {
+		out.AllowList = AppendUnique(out.AllowList, defaults.AllowList...)
+	}
+	out.DenyList = AppendUnique(out.DenyList, custom.DenyList...)
+	out.DenyList = AppendUnique(out.DenyList, defaults.DenyList...)
+	return out
+}
+
 func expandMongoPolicy(ctx context.Context, p *asset_entity.MongoPolicy) *asset_entity.MongoPolicy {
 	out := &asset_entity.MongoPolicy{}
 	if p == nil {

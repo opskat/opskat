@@ -12,7 +12,7 @@ function queryTabId(assetId: number) {
 function openDatabaseMention(attrs: MentionAttrs) {
   const asset = useAssetStore.getState().assets.find((item) => item.ID === attrs.assetId);
   if (!asset) {
-    toast.error(i18n.t("common.mentionAssetDeleted"));
+    toast.error(i18n.t("ai.mentionAssetDeleted"));
     return;
   }
   if (asset.Type !== "database") {
