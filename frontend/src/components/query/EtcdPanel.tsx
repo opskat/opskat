@@ -81,12 +81,27 @@ export function EtcdPanel({ tabId }: EtcdPanelProps) {
     return <div className="p-3 text-xs text-destructive">missing asset id</div>;
   }
 
-  const dialogTitle =
-    confirmRequest?.action === "saveKey" ? t("etcd.detail.saveConfirmTitle") : t("etcd.query.deleteConfirmTitle");
-  const dialogBody =
-    confirmRequest?.action === "saveKey"
-      ? t("etcd.detail.saveConfirmBody", { key: confirmRequest.payload })
-      : t("etcd.query.deleteConfirmBody", { key: confirmRequest?.payload ?? "" });
+  // 三种 action 对应三套文案：
+  //   execCommand → query bar 提交的破坏性命令（put/del/txn），payload 是完整命令串
+  //   deleteKey   → key detail 上的删除按钮，payload 是单个 key
+  //   saveKey     → key detail 上的保存按钮，payload 是单个 key
+  // 不要把 execCommand 折叠进 deleteKey 分支：payload 含 flag/value，套 "将删除 key {key}" 会错位。
+  let dialogTitle = "";
+  let dialogBody = "";
+  switch (confirmRequest?.action) {
+    case "saveKey":
+      dialogTitle = t("etcd.detail.saveConfirmTitle");
+      dialogBody = t("etcd.detail.saveConfirmBody", { key: confirmRequest.payload });
+      break;
+    case "execCommand":
+      dialogTitle = t("etcd.query.execConfirmTitle");
+      dialogBody = t("etcd.query.execConfirmBody", { command: confirmRequest.payload });
+      break;
+    case "deleteKey":
+      dialogTitle = t("etcd.query.deleteConfirmTitle");
+      dialogBody = t("etcd.query.deleteConfirmBody", { key: confirmRequest.payload });
+      break;
+  }
 
   return (
     <div className="flex h-full w-full flex-col" data-testid="etcd-panel">
@@ -135,7 +150,7 @@ export function EtcdPanel({ tabId }: EtcdPanelProps) {
                 onRequestSave={requestSaveKey}
                 onDeleted={(key) => {
                   if (selectedKey === key) setSelectedKey(null);
-                  invalidate();
+                  invalidate(assetId);
                   // 删除后强制重载 root，避免树空白
                   void loadPrefix(assetId, "/", { force: true });
                 }}

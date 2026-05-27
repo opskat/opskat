@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { ChevronRight, ChevronDown, Folder, FileText } from "lucide-react";
-import { useEtcdStore, type EtcdTreeNode } from "@/stores/etcdStore";
+import { useEtcdStore, etcdCacheKey, type EtcdTreeNode } from "@/stores/etcdStore";
 
 export interface EtcdTreePaneProps {
   assetId: number;
@@ -18,6 +18,10 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
   const treeCache = useEtcdStore((s) => s.treeCache);
   const truncatedAt = useEtcdStore((s) => s.truncatedAt);
   const loadPrefix = useEtcdStore((s) => s.loadPrefix);
+
+  // treeCache / truncatedAt 按 `${assetId}:${prefix}` 索引,避免多 asset 同 prefix 互污。
+  const nodesFor = (prefix: string) => treeCache.get(etcdCacheKey(assetId, prefix));
+  const truncatedFor = (prefix: string) => truncatedAt.get(etcdCacheKey(assetId, prefix));
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([ROOT_PREFIX]));
   const [filter, setFilter] = useState("");
@@ -41,7 +45,7 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
       } else {
         next.add(prefix);
         // 懒加载：首次展开拉取（store 内部对已缓存的会直接 return）
-        if (!treeCache.has(prefix)) {
+        if (!nodesFor(prefix)) {
           loadPrefix(assetId, prefix).catch(reportLoadError);
         }
       }
@@ -79,8 +83,8 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
     }
 
     const isExpanded = expanded.has(node.prefix);
-    const children = treeCache.get(node.prefix) ?? [];
-    const truncated = truncatedAt.get(node.prefix);
+    const children = nodesFor(node.prefix) ?? [];
+    const truncated = truncatedFor(node.prefix);
 
     return (
       <div key={node.prefix}>
@@ -116,8 +120,8 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
     );
   }
 
-  const rootNodes = treeCache.get(ROOT_PREFIX) ?? [];
-  const rootTruncated = truncatedAt.get(ROOT_PREFIX);
+  const rootNodes = nodesFor(ROOT_PREFIX) ?? [];
+  const rootTruncated = truncatedFor(ROOT_PREFIX);
 
   return (
     <div className="flex h-full w-full flex-col">

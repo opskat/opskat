@@ -24,13 +24,12 @@ type ExecRequest struct {
 
 // supportedOps 是 ParseCommand 与 Dispatch 共用的合法 op 集合。
 // 复合命令(member list / endpoint status 等)在解析阶段已经被规范化为下划线形式。
+// 新增 op 时必须同步在 Dispatch 中加分支,守护测试 TestSupportedOpsAreDispatchable 会校验。
 var supportedOps = map[string]bool{
-	"get": true, "put": true, "del": true, "txn": true,
-	"lease_grant": true, "lease_revoke": true, "lease_ttl": true, "lease_list": true,
+	"get": true, "put": true, "del": true,
+	"lease_grant": true, "lease_revoke": true, "lease_list": true,
 	"endpoint_status": true, "endpoint_health": true,
 	"member_list": true,
-	"user_list":   true,
-	"role_list":   true,
 }
 
 // ParseCommand 解析查询面板的字符串命令。
@@ -51,7 +50,7 @@ func ParseCommand(s string) (*ExecRequest, error) {
 	// 二词复合命令归一
 	if len(rest) > 0 {
 		switch op {
-		case "member", "endpoint", "user", "role":
+		case "member", "endpoint":
 			combined := op + "_" + strings.ToLower(rest[0])
 			if supportedOps[combined] {
 				op = combined

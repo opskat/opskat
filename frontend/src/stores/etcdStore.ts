@@ -35,6 +35,12 @@ function parseMemberValue(value: string): { name: string; urls: string[] } {
   };
 }
 
+// treeCache / truncatedAt 的 key 形如 "${assetId}:${prefix}",避免多个 etcd 资产
+// 同时打开时 prefix "/" 互相污染(see https://github.com/opskat/opskat PR #129 review)。
+export function etcdCacheKey(assetId: number, prefix: string): string {
+  return `${assetId}:${prefix}`;
+}
+
 interface State {
   treeCache: Map<string, EtcdTreeNode[]>;
   truncatedAt: Map<string, boolean>;
@@ -44,7 +50,13 @@ interface State {
   clusterInfo: Map<number, EtcdClusterInfo>;
 
   loadPrefix: (assetId: number, prefix: string, opts?: { force?: boolean }) => Promise<void>;
-  invalidate: (prefix?: string) => void;
+  /**
+   * invalidate(assetId) 清掉该 asset 的所有 prefix 缓存；
+   * invalidate(assetId, prefix) 只清该 asset 的单条 prefix。
+   */
+  invalidate: (assetId: number, prefix?: string) => void;
+  getTreeNodes: (assetId: number, prefix: string) => EtcdTreeNode[] | undefined;
+  isTruncated: (assetId: number, prefix: string) => boolean | undefined;
   exec: (req: etcd_svc.ExecRequest) => Promise<etcd_svc.ExecResult>;
   testConnection: (assetId: number) => Promise<void>;
   loadClusterInfo: (assetId: number, opts?: { force?: boolean }) => Promise<void>;
@@ -81,7 +93,8 @@ export const useEtcdStore = create<State>((set, get) => ({
   clusterInfo: new Map(),
 
   async loadPrefix(assetId, prefix, opts) {
-    if (!opts?.force && get().treeCache.has(prefix)) return;
+    const key = etcdCacheKey(assetId, prefix);
+    if (!opts?.force && get().treeCache.has(key)) return;
     const res = await EtcdListPrefix({
       AssetID: assetId,
       Prefix: prefix,
@@ -96,22 +109,37 @@ export const useEtcdStore = create<State>((set, get) => ({
       ...leaves.map((kv) => ({ prefix: kv.key, name: kv.key.slice(prefix.length), isLeaf: true })),
     ];
     const cache = new Map(get().treeCache);
-    cache.set(prefix, nodes);
+    cache.set(key, nodes);
     const tr = new Map(get().truncatedAt);
-    tr.set(prefix, !!res.truncated);
+    tr.set(key, !!res.truncated);
     set({ treeCache: cache, truncatedAt: tr });
   },
 
-  invalidate(prefix) {
-    if (!prefix) {
-      set({ treeCache: new Map(), truncatedAt: new Map() });
-      return;
-    }
+  invalidate(assetId, prefix) {
     const cache = new Map(get().treeCache);
-    cache.delete(prefix);
     const tr = new Map(get().truncatedAt);
-    tr.delete(prefix);
+    if (prefix !== undefined) {
+      const key = etcdCacheKey(assetId, prefix);
+      cache.delete(key);
+      tr.delete(key);
+    } else {
+      const assetPrefix = `${assetId}:`;
+      for (const k of cache.keys()) {
+        if (k.startsWith(assetPrefix)) cache.delete(k);
+      }
+      for (const k of tr.keys()) {
+        if (k.startsWith(assetPrefix)) tr.delete(k);
+      }
+    }
     set({ treeCache: cache, truncatedAt: tr });
+  },
+
+  getTreeNodes(assetId, prefix) {
+    return get().treeCache.get(etcdCacheKey(assetId, prefix));
+  },
+
+  isTruncated(assetId, prefix) {
+    return get().truncatedAt.get(etcdCacheKey(assetId, prefix));
   },
 
   async exec(req) {

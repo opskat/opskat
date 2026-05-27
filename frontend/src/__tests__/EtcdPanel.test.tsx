@@ -130,6 +130,22 @@ describe("EtcdPanel", () => {
     expect(EtcdExec).not.toHaveBeenCalled();
   });
 
+  it("shows exec-command confirm copy (not delete copy) for destructive query commands", async () => {
+    render(<EtcdPanel tabId="t1" />);
+
+    fireEvent.click(screen.getAllByRole("tab")[1]);
+    fireEvent.change(screen.getByTestId("etcd-query-input"), {
+      target: { value: "del /locks/ --prefix" },
+    });
+    fireEvent.click(screen.getByTestId("etcd-query-execute"));
+
+    const dialog = await screen.findByRole("alertdialog");
+    // execCommand 分支：标题/正文必须用 execConfirm* key,不能套用 deleteConfirm*
+    expect(dialog).toHaveTextContent("etcd.query.execConfirmTitle");
+    expect(dialog).toHaveTextContent("etcd.query.execConfirmBody");
+    expect(dialog).not.toHaveTextContent("etcd.query.deleteConfirmTitle");
+  });
+
   it("executes put after confirming the destructive dialog", async () => {
     const { EtcdExec } = await import("../../wailsjs/go/etcd/Etcd");
     render(<EtcdPanel tabId="t1" />);

@@ -2357,6 +2357,8 @@
       "deleteConfirmTitle": "确认删除",
       "deleteConfirmBody": "将删除 key: {{key}}",
       "deletePrefixWarning": "即将通过 --prefix 批量删除，请确认。",
+      "execConfirmTitle": "确认执行破坏性命令",
+      "execConfirmBody": "即将执行: {{command}}\n请确认命令、键范围与 --prefix 等参数无误。",
       "execSuccess": "执行成功",
       "execFailed": "执行失败",
       "elapsed": "耗时 {{ms}}ms",

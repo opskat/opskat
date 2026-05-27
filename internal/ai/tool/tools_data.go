@@ -81,14 +81,14 @@ func dataTools() []tool.Tool {
 			NameStr: "exec_etcd",
 			DescStr: "Execute an etcd KV / lease / admin operation on an etcd asset. " +
 				"Use op: 'get', 'put', 'del', 'lease_grant', 'lease_revoke', 'lease_list', " +
-				"'endpoint_status', 'endpoint_health', 'member_list', 'user_list', 'role_list'. " +
+				"'endpoint_status', 'endpoint_health', 'member_list'. " +
 				"Keys MUST start with '/'. For range reads use prefix=true. " +
 				"For historical reads pass revision (subject to compaction). Credentials are resolved automatically.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
 					"asset_id": {Type: "number", Description: "etcd asset ID. Use list_assets with asset_type='etcd' to find it."},
-					"op":       {Type: "string", Description: "Operation: get, put, del, lease_grant, lease_revoke, lease_list, endpoint_status, endpoint_health, member_list, user_list, role_list."},
+					"op":       {Type: "string", Description: "Operation: get, put, del, lease_grant, lease_revoke, lease_list, endpoint_status, endpoint_health, member_list."},
 					"key":      {Type: "string", Description: "Key (or prefix when prefix=true). For endpoint_status pass the endpoint as the key."},
 					"value":    {Type: "string", Description: "Value for put."},
 					"prefix":   {Type: "boolean", Description: "Treat key as prefix for get/del."},

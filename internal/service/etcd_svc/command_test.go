@@ -26,8 +26,10 @@ func TestParseCommand(t *testing.T) {
 		{"endpoint status", "endpoint_status", "", false, 0, "", false},
 		{"endpoint health", "endpoint_health", "", false, 0, "", false},
 		{"lease list", "lease_list", "", false, 0, "", false},
-		{"user list", "user_list", "", false, 0, "", false},
-		{"role list", "role_list", "", false, 0, "", false},
+		{"user list", "", "", false, 0, "", true}, // 未实现 user/role/txn/lease_ttl op
+		{"role list", "", "", false, 0, "", true},
+		{"txn", "", "", false, 0, "", true},
+		{"lease ttl 0xabc", "", "", false, 0, "", true},
 		{"GET /case", "get", "/case", false, 0, "", false},          // 大小写归一
 		{"  get  /spaced  ", "get", "/spaced", false, 0, "", false}, // 空白容忍
 		{"", "", "", false, 0, "", true},

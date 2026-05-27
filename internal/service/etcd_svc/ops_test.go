@@ -208,3 +208,25 @@ func TestDispatchEndpointStatus_MissingKey(t *testing.T) {
 	assert.Nil(t, res)
 	assert.Error(t, err)
 }
+
+// TestSupportedOpsAreDispatchable 守护 ParseCommand 接受的 op 必须能被 Dispatch 路由。
+// 若 supportedOps 新增了 op 但忘了实现 dispatch，这里会失败。
+func TestSupportedOpsAreDispatchable(t *testing.T) {
+	for op := range supportedOps {
+		t.Run(op, func(t *testing.T) {
+			// 用 nil client：路由到具体 dispatch 函数后会因 nil deref / 缺参 panic 或返错，
+			// 唯一不应出现的是 "unsupported op: ..." —— 那意味着 Dispatch switch 缺分支。
+			defer func() {
+				if r := recover(); r != nil {
+					// nil client 触发的 panic 不算路由缺失
+					return
+				}
+			}()
+			_, err := Dispatch(context.Background(), nil, &ExecRequest{Op: op})
+			if err != nil {
+				assert.NotContains(t, err.Error(), "unsupported op",
+					"supportedOps contains %q but Dispatch has no branch for it", op)
+			}
+		})
+	}
+}

@@ -2357,6 +2357,8 @@
       "deleteConfirmTitle": "Confirm delete",
       "deleteConfirmBody": "Will delete key: {{key}}",
       "deletePrefixWarning": "Bulk delete via --prefix. Please confirm.",
+      "execConfirmTitle": "Confirm destructive command",
+      "execConfirmBody": "About to run: {{command}}\nVerify the command, key range and --prefix flag before confirming.",
       "execSuccess": "Success",
       "execFailed": "Failed",
       "elapsed": "{{ms}}ms",

@@ -399,13 +399,10 @@ func BuiltinGroups() []*PolicyGroup {
 			PolicyType:  PolicyTypeEtcd,
 			Policy: mustMarshal(&policy.EtcdPolicy{
 				AllowList: []string{
-					"get *", "range *",
+					"get *",
 					"endpoint *",
 					"member list",
-					"lease list", "lease ttl *",
-					"auth status",
-					"user list", "user get *",
-					"role list", "role get *",
+					"lease list",
 				},
 			}),
 		},
