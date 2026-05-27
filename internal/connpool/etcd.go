@@ -147,6 +147,16 @@ func InvalidateEtcd(assetID int64) {
 	globalEtcdPool.invalidate(assetID)
 }
 
+func etcdTunnelID(asset *asset_entity.Asset, cfg *asset_entity.EtcdConfig) int64 {
+	if asset != nil && asset.SSHTunnelID > 0 {
+		return asset.SSHTunnelID
+	}
+	if cfg != nil {
+		return cfg.SSHAssetID
+	}
+	return 0
+}
+
 // DialEtcd 创建新的 etcd 客户端。可选走 SSH 隧道(仅对第一个 endpoint)。
 // 返回的 tunnel 可为 nil(直连场景)。调用方负责 client.Close() / tunnel.Close()(若非 nil)。
 func DialEtcd(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.EtcdConfig, password string, sshPool *sshpool.Pool) (*clientv3.Client, io.Closer, error) {
@@ -156,7 +166,8 @@ func DialEtcd(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.
 	}
 
 	var tunnel *SSHTunnel
-	if asset.SSHTunnelID > 0 && sshPool != nil && len(cfg.Endpoints) > 0 {
+	tunnelID := etcdTunnelID(asset, cfg)
+	if tunnelID > 0 && sshPool != nil && len(cfg.Endpoints) > 0 {
 		host, portStr, err := net.SplitHostPort(cfg.Endpoints[0])
 		if err != nil {
 			return nil, nil, fmt.Errorf("解析 etcd endpoint 失败: %w", err)
@@ -165,7 +176,7 @@ func DialEtcd(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.
 		if err != nil {
 			return nil, nil, fmt.Errorf("解析 etcd endpoint 端口失败: %w", err)
 		}
-		tunnel = NewSSHTunnel(asset.SSHTunnelID, host, port, sshPool)
+		tunnel = NewSSHTunnel(tunnelID, host, port, sshPool)
 		clientCfg.DialOptions = append(clientCfg.DialOptions,
 			grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 				return tunnel.Dial(ctx)

@@ -150,6 +150,7 @@ type EtcdConfig struct {
 	Username     string   `json:"username,omitempty"` // 留空 = 不启用 RBAC
 	Password     string   `json:"password,omitempty"` // AES-256-GCM 密文
 	CredentialID int64    `json:"credential_id,omitempty"`
+	SSHAssetID   int64    `json:"ssh_asset_id,omitempty"` // Deprecated: use Asset.SSHTunnelID; kept for form test/backward compat
 
 	TLS           bool   `json:"tls,omitempty"`
 	TLSInsecure   bool   `json:"tls_insecure,omitempty"`

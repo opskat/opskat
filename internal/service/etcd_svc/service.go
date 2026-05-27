@@ -166,7 +166,7 @@ func (s *Service) TestConfig(ctx context.Context, cfg *asset_entity.EtcdConfig, 
 	if len(cfg.Endpoints) == 0 {
 		return fmt.Errorf("至少需要 1 个 endpoint")
 	}
-	return s.testDial(ctx, &asset_entity.Asset{}, cfg, password)
+	return s.testDial(ctx, &asset_entity.Asset{Type: asset_entity.AssetTypeEtcd, SSHTunnelID: cfg.SSHAssetID}, cfg, password)
 }
 
 // testDial 共用拨号 + 关闭逻辑。DialEtcd 失败时直接返回错误;成功后关闭 client / tunnel。

@@ -19,7 +19,7 @@ export function EtcdDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProps
 
   const cfg = parseDetailConfig<EtcdConfig>(asset.Config);
   if (!cfg) return null;
-  const tunnelName = sshTunnelName(cfg.ssh_asset_id);
+  const tunnelName = sshTunnelName(asset.sshTunnelId || cfg.ssh_asset_id);
   const endpoints = (cfg.endpoints || []).join(", ");
 
   return (

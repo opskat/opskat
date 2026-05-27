@@ -53,6 +53,18 @@ func TestBuildEtcdClientConfig_CustomDialTimeout(t *testing.T) {
 	assert.Equal(t, 12*time.Second, c.DialTimeout)
 }
 
+func TestEtcdTunnelID(t *testing.T) {
+	assert.Equal(t, int64(7), etcdTunnelID(
+		&asset_entity.Asset{SSHTunnelID: 7},
+		&asset_entity.EtcdConfig{SSHAssetID: 3},
+	))
+	assert.Equal(t, int64(3), etcdTunnelID(
+		&asset_entity.Asset{},
+		&asset_entity.EtcdConfig{SSHAssetID: 3},
+	))
+	assert.Zero(t, etcdTunnelID(&asset_entity.Asset{}, &asset_entity.EtcdConfig{}))
+}
+
 func TestEtcdPool_InvalidateRemovesEntry(t *testing.T) {
 	pool := newEtcdPool()
 	pool.put(1, &etcdEntry{client: nil, lastUsed: time.Now().Unix()})
