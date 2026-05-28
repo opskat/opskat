@@ -8,7 +8,7 @@ export function sqlQuote(value: unknown): string {
 }
 
 export function quoteIdent(name: string, driver?: string): string {
-  if (driver === "postgresql") return `"${name.replace(/"/g, '""')}"`;
+  if (driver === "postgresql" || driver === "sqlite") return `"${name.replace(/"/g, '""')}"`;
   return `\`${name.replace(/`/g, "``")}\``;
 }
 
@@ -22,6 +22,11 @@ export function quoteQualifiedIdent(name: string, driver?: string): string {
 
 export function quoteTableRef(database: string, table: string, driver?: string): string {
   if (driver === "postgresql") return quoteQualifiedIdent(table, driver);
+  if (driver === "sqlite") {
+    return database
+      ? `${quoteIdent(database, driver)}.${quoteIdent(table, driver)}`
+      : quoteQualifiedIdent(table, driver);
+  }
   return `${quoteIdent(database, driver)}.${quoteIdent(table, driver)}`;
 }
 
@@ -89,7 +94,8 @@ function buildColumnDefinition(
   const defaultPart = normalizeDefault(column.defaultValue)
     ? ` DEFAULT ${formatDefaultValue(column.defaultValue)}`
     : "";
-  const includeComment = driver !== "postgresql" && (forceComment || !!normalizeComment(column.comment));
+  const includeComment =
+    driver !== "postgresql" && driver !== "sqlite" && (forceComment || !!normalizeComment(column.comment));
   const commentPart = includeComment ? ` COMMENT ${sqlQuote(column.comment)}` : "";
   return `${quoteIdent(column.name.trim(), driver)} ${column.type.trim()}${nullable}${defaultPart}${commentPart}`;
 }
@@ -124,7 +130,7 @@ export function buildAlterStatements(params: {
   const targetTableRef = quoteTableRef(database, targetTable, driver);
 
   if (hasRenameTable) {
-    if (driver === "postgresql") {
+    if (driver === "postgresql" || driver === "sqlite") {
       statements.push(`ALTER TABLE ${originalTableRef} RENAME TO ${quoteIdent(nextTableName, driver)}`);
     } else {
       statements.push(`RENAME TABLE ${originalTableRef} TO ${quoteTableRef(database, nextTableName, driver)}`);
@@ -163,7 +169,7 @@ export function buildAlterStatements(params: {
     const commentChanged = normalizeComment(original.comment) !== normalizeComment(col.comment);
     const renamed = col.originalName !== name;
 
-    if (driver === "postgresql") {
+    if (driver === "postgresql" || driver === "sqlite") {
       const currentName = renamed ? name : col.originalName;
 
       if (renamed) {
@@ -172,13 +178,13 @@ export function buildAlterStatements(params: {
         );
       }
 
-      if (typeChanged) {
+      if (driver === "postgresql" && typeChanged) {
         modifications.push(
           `ALTER TABLE ${targetTableRef} ALTER COLUMN ${quoteIdent(currentName, driver)} TYPE ${col.type.trim()}`
         );
       }
 
-      if (nullableChanged) {
+      if (driver === "postgresql" && nullableChanged) {
         modifications.push(
           col.nullable
             ? `ALTER TABLE ${targetTableRef} ALTER COLUMN ${quoteIdent(currentName, driver)} DROP NOT NULL`
@@ -186,7 +192,7 @@ export function buildAlterStatements(params: {
         );
       }
 
-      if (defaultChanged) {
+      if (driver === "postgresql" && defaultChanged) {
         modifications.push(
           normalizeDefault(col.defaultValue)
             ? `ALTER TABLE ${targetTableRef} ALTER COLUMN ${quoteIdent(currentName, driver)} SET DEFAULT ${formatDefaultValue(
@@ -195,7 +201,7 @@ export function buildAlterStatements(params: {
             : `ALTER TABLE ${targetTableRef} ALTER COLUMN ${quoteIdent(currentName, driver)} DROP DEFAULT`
         );
       }
-      if (commentChanged) {
+      if (driver === "postgresql" && commentChanged) {
         comments.push(
           `COMMENT ON COLUMN ${targetTableRef}.${quoteIdent(currentName, driver)} IS ${
             normalizeComment(col.comment) ? sqlQuote(col.comment) : "NULL"
@@ -221,7 +227,7 @@ export function buildAlterStatements(params: {
     }
   }
 
-  if (driver === "postgresql") {
+  if (driver === "postgresql" || driver === "sqlite") {
     if (additions.length > 0) {
       for (const definition of additions) {
         statements.push(`ALTER TABLE ${targetTableRef} ADD COLUMN ${definition}`);
@@ -237,7 +243,7 @@ export function buildAlterStatements(params: {
       }
     }
 
-    if (tableCommentChanged) {
+    if (driver === "postgresql" && tableCommentChanged) {
       statements.push(
         `COMMENT ON TABLE ${targetTableRef} IS ${normalizeComment(tableCommentDraft) ? sqlQuote(tableCommentDraft) : "NULL"}`
       );
@@ -363,6 +369,13 @@ export function buildDeleteStatement({
     if (usesPrimaryKey) return { sql: `DELETE FROM ${tableName} WHERE ${whereSQL};`, usesPrimaryKey };
     return {
       sql: `DELETE FROM ${tableName} WHERE ctid = (SELECT ctid FROM ${tableName} WHERE ${whereSQL} LIMIT 1);`,
+      usesPrimaryKey,
+    };
+  }
+  if (driver === "sqlite") {
+    if (usesPrimaryKey) return { sql: `DELETE FROM ${tableName} WHERE ${whereSQL};`, usesPrimaryKey };
+    return {
+      sql: `DELETE FROM ${tableName} WHERE rowid = (SELECT rowid FROM ${tableName} WHERE ${whereSQL} LIMIT 1);`,
       usesPrimaryKey,
     };
   }

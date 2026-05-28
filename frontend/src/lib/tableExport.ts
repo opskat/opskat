@@ -216,7 +216,7 @@ export function toUpdateSql(
     })
     .join(" AND ");
 
-  if (driver === "postgresql") return `UPDATE ${quotedTable} SET ${setSql} WHERE ${whereSql};`;
+  if (driver === "postgresql" || driver === "sqlite") return `UPDATE ${quotedTable} SET ${setSql} WHERE ${whereSql};`;
   return `UPDATE ${quotedTable} SET ${setSql} WHERE ${whereSql} LIMIT 1;`;
 }
 

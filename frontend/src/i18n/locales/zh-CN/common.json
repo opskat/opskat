@@ -2084,6 +2084,8 @@
     "designTableColumnNameRequired": "字段名不能为空",
     "designTableColumnTypeRequired": "字段类型不能为空",
     "designTableDuplicateColumn": "字段名重复：{{name}}",
+    "alterSqliteLimitations": "SQLite 不支持修改已有字段的类型、默认值、可空性和列/表注释；可以重命名字段、新增字段或删除字段。",
+    "alterSqliteUnsupportedTableComment": "SQLite 不支持表注释",
     "alterActionAdd": "新增列",
     "alterActionType": "改类型",
     "alterActionDrop": "删列",

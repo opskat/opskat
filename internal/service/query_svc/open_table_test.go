@@ -2,9 +2,11 @@ package query_svc
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	_ "github.com/glebarez/go-sqlite"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	. "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
@@ -183,7 +185,7 @@ func TestOpenTableSQLite(t *testing.T) {
 			WithArgs("users").
 			WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("id"))
 
-		colSQL := "SELECT name, type, CASE notnull WHEN 0 THEN 'YES' ELSE 'NO' END AS is_nullable, dflt_value FROM pragma_table_info(?)"
+		colSQL := `SELECT name, type, CASE "notnull" WHEN 0 THEN 'YES' ELSE 'NO' END AS is_nullable, dflt_value FROM pragma_table_info(?)`
 		mock.ExpectQuery(colSQL).
 			WithArgs("users").
 			WillReturnRows(sqlmock.NewRows([]string{"name", "type", "is_nullable", "dflt_value"}).
@@ -201,6 +203,29 @@ func TestOpenTableSQLite(t *testing.T) {
 		So(err, ShouldBeNil)
 		So(res.PrimaryKeys, ShouldResemble, []string{"id"})
 		So(res.Columns, ShouldContain, "id")
+	})
+
+	Convey("SQLite OpenTable 在真实 SQLite 连接上可查询列信息", t, func() {
+		db, err := sql.Open("sqlite", ":memory:")
+		So(err, ShouldBeNil)
+		defer func() { _ = db.Close() }()
+		db.SetMaxOpenConns(1)
+
+		_, err = db.ExecContext(
+			context.Background(),
+			`CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL DEFAULT 'anon')`,
+		)
+		So(err, ShouldBeNil)
+		_, err = db.ExecContext(context.Background(), `INSERT INTO users (name) VALUES ('alice')`)
+		So(err, ShouldBeNil)
+
+		res, err := OpenTable(context.Background(), db, asset_entity.DriverSQLite, "main", "users", 10)
+		So(err, ShouldBeNil)
+		So(res.PrimaryKeys, ShouldResemble, []string{"id"})
+		So(res.Columns, ShouldResemble, []string{"id", "name"})
+		So(res.ColumnTypes["name"], ShouldEqual, "TEXT")
+		So(res.TotalCount, ShouldEqual, 1)
+		So(res.FirstPage, ShouldHaveLength, 1)
 	})
 }
 

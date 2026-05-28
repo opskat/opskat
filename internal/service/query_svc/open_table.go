@@ -118,7 +118,7 @@ func queryPrimaryKeys(ctx context.Context, conn *sql.Conn, driver asset_entity.D
 		}
 		return scanPKRows(rows, "COLUMN_NAME")
 	case asset_entity.DriverSQLite:
-		sqlText := "SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk"
+		sqlText := "SELECT name FROM " + sqlitePragmaTableInfo(database) + " WHERE pk > 0 ORDER BY pk"
 		rows, err := conn.QueryContext(ctx, sqlText, table)
 		if err != nil {
 			return nil, err
@@ -176,7 +176,7 @@ func queryColumns(ctx context.Context, conn *sql.Conn, driver asset_entity.Datab
 			"ORDER BY ORDINAL_POSITION"
 		args = []any{sql.Named("p1", database), sql.Named("p2", table)}
 	case asset_entity.DriverSQLite:
-		sqlText = "SELECT name, type, CASE notnull WHEN 0 THEN 'YES' ELSE 'NO' END AS is_nullable, dflt_value FROM pragma_table_info(?)"
+		sqlText = `SELECT name, type, CASE "notnull" WHEN 0 THEN 'YES' ELSE 'NO' END AS is_nullable, dflt_value FROM ` + sqlitePragmaTableInfo(database)
 		args = []any{table}
 	default: // MySQL
 		sqlText = "SHOW COLUMNS FROM " + QuoteTableRef(database, table, driver)
@@ -289,6 +289,13 @@ func zipRow(cols []string, values []any) map[string]any {
 		row[col] = val
 	}
 	return row
+}
+
+func sqlitePragmaTableInfo(database string) string {
+	if database == "" {
+		return "pragma_table_info(?)"
+	}
+	return QuoteIdent(database, asset_entity.DriverSQLite) + ".pragma_table_info(?)"
 }
 
 // splitPGSchemaTable 把可能带 schema 前缀的 PG 表名拆成 (schema, table)。

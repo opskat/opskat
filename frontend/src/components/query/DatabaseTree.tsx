@@ -33,7 +33,7 @@ import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
 import { CreateTableDialog } from "./CreateTableDialog";
 import { AlterTableDialog } from "./AlterTableDialog";
-import { quoteIdent, quoteTableRef } from "@/lib/tableSql";
+import { quoteTableRef } from "@/lib/tableSql";
 
 interface DatabaseTreeProps {
   tabId: string;
@@ -99,11 +99,13 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const handleConfirmAction = async () => {
     if (!confirmAction || !tabMeta?.assetId) return;
     const { type, database, table } = confirmAction;
-    const qualified =
-      driver === "postgresql"
-        ? quoteIdent(table, driver)
-        : `${quoteIdent(database, driver)}.${quoteIdent(table, driver)}`;
-    const sql = type === "drop" ? `DROP TABLE ${qualified}` : `TRUNCATE TABLE ${qualified}`;
+    const qualified = quoteTableRef(database, table, driver);
+    const sql =
+      type === "drop"
+        ? `DROP TABLE ${qualified}`
+        : driver === "sqlite"
+          ? `DELETE FROM ${qualified}`
+          : `TRUNCATE TABLE ${qualified}`;
     setExecutingAction(true);
     try {
       await ExecuteSQL(tabMeta.assetId, sql, database);
@@ -156,16 +158,18 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
           >
             <SquarePen className="h-3.5 w-3.5" />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            onClick={() => setShowCreateDatabase(true)}
-            title={t("query.createDatabase")}
-            aria-label={t("query.createDatabase")}
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </Button>
+          {driver !== "sqlite" && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setShowCreateDatabase(true)}
+              title={t("query.createDatabase")}
+              aria-label={t("query.createDatabase")}
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon"

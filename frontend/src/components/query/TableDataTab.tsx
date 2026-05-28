@@ -440,6 +440,14 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
             `UPDATE ${tableName} SET ${setClauses.join(", ")} WHERE ctid = (SELECT ctid FROM ${tableName} WHERE ${whereSQL} LIMIT 1);`
           );
         }
+      } else if (driver === "sqlite") {
+        if (hasPK) {
+          statements.push(`UPDATE ${tableName} SET ${setClauses.join(", ")} WHERE ${whereSQL};`);
+        } else {
+          statements.push(
+            `UPDATE ${tableName} SET ${setClauses.join(", ")} WHERE rowid = (SELECT rowid FROM ${tableName} WHERE ${whereSQL} LIMIT 1);`
+          );
+        }
       } else {
         statements.push(`UPDATE ${tableName} SET ${setClauses.join(", ")} WHERE ${whereSQL} LIMIT 1;`);
       }
@@ -867,6 +875,18 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
           }
 
           ddl = `CREATE TABLE ${quoteIdent("public", driver)}.${quoteIdent(table, driver)} (\n  ${defs.join(",\n  ")}\n);`;
+        }
+      } else if (driver === "sqlite") {
+        const schema = database ? `${quoteIdent(database, driver)}.` : "";
+        const result = await ExecuteSQL(
+          assetId,
+          `SELECT sql FROM ${schema}sqlite_master WHERE type IN ('table', 'view') AND name = ${sqlQuote(table)} LIMIT 1`,
+          database
+        );
+        const parsed: SQLResult = JSON.parse(result);
+        const row = parsed.rows?.[0];
+        if (row) {
+          ddl = String(row.sql ?? Object.values(row)[0] ?? "");
         }
       } else {
         const quotedTable = quoteIdent(table, driver);

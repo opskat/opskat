@@ -14,7 +14,7 @@ export interface QueryTab {
   assetName: string;
   assetIcon: string;
   assetType: "database" | "redis" | "mongodb" | "kafka" | "k8s" | "etcd";
-  driver?: string; // "mysql" | "postgresql"
+  driver?: string; // "mysql" | "postgresql" | "sqlite"
   defaultDatabase?: string;
   redisDatabase?: number;
   redisScanPageSize?: number;
@@ -304,6 +304,42 @@ function getQueryTabFromTabStore(tabId: string): QueryTab | undefined {
   };
 }
 
+function buildLoadDatabasesSQL(driver?: string): string {
+  if (driver === "postgresql") {
+    return "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname";
+  }
+  if (driver === "sqlite") {
+    return "SELECT name FROM pragma_database_list ORDER BY seq";
+  }
+  return "SHOW DATABASES";
+}
+
+function parseDatabases(driver: string | undefined, rows: Record<string, unknown>[] | undefined): string[] {
+  const databases = (rows || [])
+    .map((r) => {
+      if (driver === "sqlite" && r.name != null) return String(r.name);
+      const vals = Object.values(r);
+      return String(vals[0] || "");
+    })
+    .filter(Boolean);
+  return driver === "sqlite" && databases.length === 0 ? ["main"] : databases;
+}
+
+function buildLoadTablesSQL(driver: string | undefined, database: string): string {
+  if (driver === "postgresql") {
+    return "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename";
+  }
+  if (driver === "sqlite") {
+    const schema = database ? quoteSQLiteIdent(database) : "main";
+    return `SELECT name FROM ${schema}.sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name`;
+  }
+  return `SHOW TABLES FROM \`${database}\``;
+}
+
+function quoteSQLiteIdent(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
 export const useQueryStore = create<QueryState>((set, get) => ({
   dbStates: {},
   redisStates: {},
@@ -408,18 +444,10 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     }));
 
     try {
-      const sql =
-        tab.driver === "postgresql"
-          ? "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname"
-          : "SHOW DATABASES";
+      const sql = buildLoadDatabasesSQL(tab.driver);
       const result = await ExecuteSQL(tab.assetId, sql, "");
       const parsed: SQLResult = JSON.parse(result);
-      const databases = (parsed.rows || [])
-        .map((r) => {
-          const vals = Object.values(r);
-          return String(vals[0] || "");
-        })
-        .filter(Boolean);
+      const databases = parseDatabases(tab.driver, parsed.rows);
 
       set((s) => ({
         dbStates: {
@@ -457,10 +485,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     }));
 
     try {
-      const sql =
-        tab.driver === "postgresql"
-          ? `SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`
-          : `SHOW TABLES FROM \`${database}\``;
+      const sql = buildLoadTablesSQL(tab.driver, database);
       const result = await ExecuteSQL(tab.assetId, sql, database);
       const parsed: SQLResult = JSON.parse(result);
       const tables = (parsed.rows || [])

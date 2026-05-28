@@ -3,6 +3,7 @@ import { useTabStore } from "../stores/tabStore";
 import { useQueryStore } from "../stores/queryStore";
 import { useAssetStore } from "../stores/assetStore";
 import { asset_entity } from "../../wailsjs/go/models";
+import { ExecuteSQL } from "../../wailsjs/go/query/Query";
 import { RedisGetKeyDetail } from "../../wailsjs/go/redis/Redis";
 import { RedisListDatabases, RedisScanKeys } from "../../wailsjs/go/redis/Redis";
 
@@ -16,6 +17,24 @@ function makeDatabaseAsset(id: number, name = `DB ${id}`): asset_entity.Asset {
     Tags: "",
     Description: "",
     Config: JSON.stringify({ driver: "mysql", database: "testdb", host: "10.0.0.1", port: 3306 }),
+    CmdPolicy: "",
+    SortOrder: 0,
+    Status: 1,
+    Createtime: 0,
+    Updatetime: 0,
+  } as asset_entity.Asset;
+}
+
+function makeSQLiteAsset(id: number, name = `SQLite ${id}`): asset_entity.Asset {
+  return {
+    ID: id,
+    Name: name,
+    Type: "database",
+    GroupID: 0,
+    Icon: "",
+    Tags: "",
+    Description: "",
+    Config: JSON.stringify({ driver: "sqlite", path: "/tmp/app.db" }),
     CmdPolicy: "",
     SortOrder: 0,
     Status: 1,
@@ -445,5 +464,45 @@ describe("queryStore redis actions", () => {
         count: 500,
       })
     );
+  });
+});
+
+describe("queryStore database actions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useTabStore.setState({ tabs: [], activeTabId: null });
+    useQueryStore.setState({ dbStates: {}, redisStates: {}, mongoStates: {} });
+    vi.spyOn(useAssetStore.getState(), "getAssetPath").mockReturnValue("Test/SQLite");
+    useQueryStore.getState().openQueryTab(makeSQLiteAsset(30));
+  });
+
+  it("loads SQLite schemas with PRAGMA database_list", async () => {
+    vi.mocked(ExecuteSQL).mockResolvedValueOnce(
+      JSON.stringify({
+        rows: [{ seq: 0, name: "main", file: "/tmp/app.db" }],
+      })
+    );
+
+    await useQueryStore.getState().loadDatabases("query-30");
+
+    expect(ExecuteSQL).toHaveBeenCalledWith(30, "SELECT name FROM pragma_database_list ORDER BY seq", "");
+    expect(useQueryStore.getState().dbStates["query-30"].databases).toEqual(["main"]);
+  });
+
+  it("loads SQLite tables from sqlite_master instead of SHOW TABLES", async () => {
+    vi.mocked(ExecuteSQL).mockResolvedValueOnce(
+      JSON.stringify({
+        rows: [{ name: "users" }, { name: "orders" }],
+      })
+    );
+
+    await useQueryStore.getState().loadTables("query-30", "main");
+
+    expect(ExecuteSQL).toHaveBeenCalledWith(
+      30,
+      `SELECT name FROM "main".sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name`,
+      "main"
+    );
+    expect(useQueryStore.getState().dbStates["query-30"].tables.main).toEqual(["users", "orders"]);
   });
 });

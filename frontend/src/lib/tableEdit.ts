@@ -34,7 +34,7 @@ export function buildInsertStatement({ database, table, driver, values }: BuildI
   const columns = Object.keys(values);
 
   if (columns.length === 0) {
-    return driver === "postgresql"
+    return driver === "postgresql" || driver === "sqlite"
       ? `INSERT INTO ${tableName} DEFAULT VALUES;`
       : `INSERT INTO ${tableName} () VALUES ();`;
   }

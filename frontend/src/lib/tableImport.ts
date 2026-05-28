@@ -616,12 +616,14 @@ export function buildImportInsertSql({
       if (driver === "postgresql") {
         const suffix = ` ON CONFLICT (${keyMapped.map((item) => quoteIdent(item.target, driver)).join(", ")}) DO NOTHING`;
         statements = buildInsertStatements(insertPrefix, suffix);
+      } else if (driver === "sqlite") {
+        statements = buildInsertStatements("INSERT OR IGNORE INTO");
       } else {
         statements = buildInsertStatements("INSERT IGNORE INTO");
       }
     } else {
       const updateSql =
-        driver === "postgresql"
+        driver === "postgresql" || driver === "sqlite"
           ? ` ON CONFLICT (${keyMapped.map((item) => quoteIdent(item.target, driver)).join(", ")}) DO UPDATE SET ${valueMapped
               .map((item) => `${quoteIdent(item.target, driver)} = excluded.${quoteIdent(item.target, driver)}`)
               .join(", ")}`
@@ -634,6 +636,8 @@ export function buildImportInsertSql({
     if (driver === "postgresql") {
       const suffix = ` ON CONFLICT (${keyMapped.map((item) => quoteIdent(item.target, driver)).join(", ")}) DO NOTHING`;
       statements = buildInsertStatements("INSERT INTO", suffix);
+    } else if (driver === "sqlite") {
+      statements = buildInsertStatements("INSERT OR IGNORE INTO");
     } else {
       statements = buildInsertStatements("INSERT IGNORE INTO");
     }

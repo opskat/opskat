@@ -24,4 +24,15 @@ describe("table edit helpers", () => {
       })
     ).toBe("INSERT INTO `appdb`.`users` (`name`, `email`) VALUES ('Alice', 'alice@example.com');");
   });
+
+  it("builds SQLite DEFAULT VALUES inserts for fully default-backed rows", () => {
+    expect(
+      buildInsertStatement({
+        database: "main",
+        table: "users",
+        driver: "sqlite",
+        values: {},
+      })
+    ).toBe('INSERT INTO "main"."users" DEFAULT VALUES;');
+  });
 });

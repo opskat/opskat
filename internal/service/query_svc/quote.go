@@ -25,14 +25,18 @@ func QuoteIdent(name string, driver asset_entity.DatabaseDriver) string {
 
 // QuoteTableRef 把 db + table 拼成限定表引用。
 // MySQL: `db`.`table`。
-// PostgreSQL / SQLite: 忽略 database 参数,table 可以是裸表名或 "schema.table"
-// 形式——quoteQualified 按点号拆分并分别加引号,行为与前端 quoteTableRef 一致。
-// SQLite 没有 database 概念,与 PostgreSQL 同处理,忽略 database 参数。
+// PostgreSQL: 忽略 database 参数,table 可以是裸表名或 "schema.table" 形式。
+// SQLite: database 表示 schema（main/temp/ATTACH 名称）,有值时保留 schema 限定。
 // MSSQL: [db].[table] 或 [db].[schema].[table]（table 可含 schema. 前缀,
 // quoteQualified 按点拆分后逐段加方括号）。
 func QuoteTableRef(database, table string, driver asset_entity.DatabaseDriver) string {
 	switch driver {
-	case asset_entity.DriverPostgreSQL, asset_entity.DriverSQLite:
+	case asset_entity.DriverPostgreSQL:
+		return quoteQualified(table, driver)
+	case asset_entity.DriverSQLite:
+		if database != "" {
+			return QuoteIdent(database, driver) + "." + QuoteIdent(table, driver)
+		}
 		return quoteQualified(table, driver)
 	case asset_entity.DriverMSSQL:
 		return QuoteIdent(database, driver) + "." + quoteQualified(table, driver)

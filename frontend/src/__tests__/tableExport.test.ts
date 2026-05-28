@@ -58,6 +58,9 @@ describe("table export helpers", () => {
     expect(toUpdateSql("appdb.users", ["id", "name"], rows[1], ["id"], "mysql")).toBe(
       "UPDATE `appdb`.`users` SET `id` = '2', `name` = 'O''Reilly' WHERE `id` = '2' LIMIT 1;"
     );
+    expect(toUpdateSql("main.users", ["id", "name"], rows[1], ["id"], "sqlite")).toBe(
+      'UPDATE "main"."users" SET "id" = \'2\', "name" = \'O\'\'Reilly\' WHERE "id" = \'2\';'
+    );
   });
 
   it("can omit column titles for delimited exports", () => {

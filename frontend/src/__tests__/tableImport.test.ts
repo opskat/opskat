@@ -79,6 +79,25 @@ describe("table import helpers", () => {
     ]);
   });
 
+  it("builds SQLite upsert and skip SQL without MySQL-only syntax", () => {
+    const base = {
+      tableName: "main.users",
+      headers: ["id", "name"],
+      rows: [["1", "Alice"]],
+      mapping: { id: "id", name: "name" },
+      nullStrategy: "literal-null" as const,
+      primaryKeys: ["id"],
+      driver: "sqlite",
+    };
+
+    expect(buildImportInsertSql({ ...base, mode: "append-update" })).toEqual([
+      'INSERT INTO "main"."users" ("id", "name") VALUES (\'1\', \'Alice\') ON CONFLICT ("id") DO UPDATE SET "name" = excluded."name";',
+    ]);
+    expect(buildImportInsertSql({ ...base, mode: "append-skip" })).toEqual([
+      'INSERT OR IGNORE INTO "main"."users" ("id", "name") VALUES (\'1\', \'Alice\');',
+    ]);
+  });
+
   it("keeps foreign-key toggling out of generated row statements", () => {
     expect(
       buildImportInsertSql({

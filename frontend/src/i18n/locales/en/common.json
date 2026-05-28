@@ -2084,6 +2084,8 @@
     "designTableColumnNameRequired": "Column name is required",
     "designTableColumnTypeRequired": "Column type is required",
     "designTableDuplicateColumn": "Duplicate column name: {{name}}",
+    "alterSqliteLimitations": "SQLite does not support changing the type, default, nullability or comments of existing columns or tables; you can rename, add, or drop columns.",
+    "alterSqliteUnsupportedTableComment": "SQLite does not support table comments",
     "alterActionAdd": "Add Column",
     "alterActionType": "Change Type",
     "alterActionDrop": "Drop Column",

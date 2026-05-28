@@ -41,6 +41,20 @@ describe("buildCreateTableSql", () => {
     expect(sql).toBe('CREATE TABLE "users" (\n' + '  "id" serial NOT NULL,\n' + '  "email" text\n' + ")");
   });
 
+  it("builds sqlite CREATE TABLE with sqlite identifier quoting", () => {
+    const sql = buildCreateTableSql({
+      driver: "sqlite",
+      database: "main",
+      name: "users",
+      columns: [
+        { name: "id", type: "INTEGER", nullable: false, defaultValue: "" },
+        { name: "name", type: "TEXT", nullable: true, defaultValue: "anon" },
+      ],
+    });
+
+    expect(sql).toBe('CREATE TABLE "main"."users" (\n  "id" INTEGER NOT NULL,\n  "name" TEXT DEFAULT \'anon\'\n)');
+  });
+
   it("escapes embedded delimiter characters in identifiers", () => {
     const mysql = buildCreateTableSql({
       driver: "mysql",

@@ -254,6 +254,7 @@ func isQueryStatement(upper string) bool {
 		strings.HasPrefix(upper, "DESCRIBE") ||
 		strings.HasPrefix(upper, "DESC ") ||
 		strings.HasPrefix(upper, "EXPLAIN") ||
+		strings.HasPrefix(upper, "PRAGMA") ||
 		strings.HasPrefix(upper, "WITH") // CTE
 }
 

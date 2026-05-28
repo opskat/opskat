@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { buildDeleteStatement, buildFilterByCellValueClause, quoteIdent } from "@/lib/tableSql";
+import { buildDeleteStatement, buildFilterByCellValueClause, quoteIdent, quoteTableRef } from "@/lib/tableSql";
 
 describe("table SQL helpers", () => {
   it("escapes embedded quotes in identifiers", () => {
     expect(quoteIdent("name`with`backtick", "mysql")).toBe("`name``with``backtick`");
     expect(quoteIdent('name"with"quote', "postgresql")).toBe('"name""with""quote"');
+    expect(quoteIdent('name"with"quote', "sqlite")).toBe('"name""with""quote"');
     expect(quoteIdent("plain", "mysql")).toBe("`plain`");
     expect(quoteIdent("plain", "postgresql")).toBe('"plain"');
+    expect(quoteTableRef("main", "users", "sqlite")).toBe('"main"."users"');
   });
 
   it("builds filter clauses for NULL and quoted values", () => {
@@ -66,5 +68,31 @@ describe("table SQL helpers", () => {
       "DELETE FROM `appdb`.`users` WHERE `id` = '7' AND `name` = 'O''Reilly' AND `deleted_at` IS NULL LIMIT 1;"
     );
     expect(result.usesPrimaryKey).toBe(false);
+  });
+
+  it("builds SQLite DELETE SQL without unsupported LIMIT syntax", () => {
+    expect(
+      buildDeleteStatement({
+        database: "main",
+        table: "users",
+        columns: ["id", "name"],
+        row: { id: 7, name: "alice" },
+        primaryKeys: ["id"],
+        driver: "sqlite",
+      }).sql
+    ).toBe(`DELETE FROM "main"."users" WHERE "id" = '7';`);
+
+    expect(
+      buildDeleteStatement({
+        database: "main",
+        table: "users",
+        columns: ["id", "name"],
+        row: { id: 7, name: "alice" },
+        primaryKeys: [],
+        driver: "sqlite",
+      }).sql
+    ).toBe(
+      `DELETE FROM "main"."users" WHERE rowid = (SELECT rowid FROM "main"."users" WHERE "id" = '7' AND "name" = 'alice' LIMIT 1);`
+    );
   });
 });

@@ -69,7 +69,10 @@ func TestQuoteTableRefMSSQL(t *testing.T) {
 }
 
 func TestQuoteTableRefSQLite(t *testing.T) {
-	Convey("SQLite 只引用表名（无 database 概念）", t, func() {
-		So(QuoteTableRef("ignored", "users", asset_entity.DriverSQLite), ShouldEqual, `"users"`)
+	Convey("SQLite 有 database 时按 schema.table 引用", t, func() {
+		So(QuoteTableRef("main", "users", asset_entity.DriverSQLite), ShouldEqual, `"main"."users"`)
+	})
+	Convey("SQLite 无 database 时只引用表名", t, func() {
+		So(QuoteTableRef("", "users", asset_entity.DriverSQLite), ShouldEqual, `"users"`)
 	})
 }

@@ -89,4 +89,57 @@ describe("buildAlterStatements", () => {
       'COMMENT ON COLUMN "users_v2"."age" IS \'age in years\'',
     ]);
   });
+
+  it("builds only SQLite-supported ALTER TABLE statements", () => {
+    const result = buildAlterStatements({
+      driver: "sqlite",
+      database: "main",
+      table: "users",
+      tableNameDraft: "users_v2",
+      tableCommentDraft: "ignored",
+      originalTableComment: "",
+      originalColumns: [
+        { name: "id", type: "INTEGER", nullable: false, defaultValue: "", comment: "" },
+        { name: "name", type: "TEXT", nullable: true, defaultValue: "", comment: "" },
+      ],
+      draftColumns: [
+        {
+          id: 1,
+          originalName: "id",
+          name: "id",
+          type: "BIGINT",
+          nullable: false,
+          defaultValue: "",
+          comment: "ignored",
+          isNew: false,
+        },
+        {
+          id: 2,
+          originalName: "name",
+          name: "full_name",
+          type: "TEXT",
+          nullable: true,
+          defaultValue: "",
+          comment: "",
+          isNew: false,
+        },
+        {
+          id: 3,
+          name: "age",
+          type: "INTEGER",
+          nullable: true,
+          defaultValue: "",
+          comment: "",
+          isNew: true,
+        },
+      ],
+    });
+
+    expect(result.nextTableName).toBe("users_v2");
+    expect(result.statements).toEqual([
+      'ALTER TABLE "main"."users" RENAME TO "users_v2"',
+      'ALTER TABLE "main"."users_v2" ADD COLUMN "age" INTEGER',
+      'ALTER TABLE "main"."users_v2" RENAME COLUMN "name" TO "full_name"',
+    ]);
+  });
 });
