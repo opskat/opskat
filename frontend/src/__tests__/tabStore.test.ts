@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useTabStore } from "../stores/tabStore";
+import { applyStartupPreference, useTabStore } from "../stores/tabStore";
 import type { Tab } from "../stores/tabStore";
 
 function makeTerminalTab(id: string, assetId: number): Tab {
@@ -37,6 +37,7 @@ function makeQueryTab(assetId: number): Tab {
 
 describe("tabStore", () => {
   beforeEach(() => {
+    localStorage.clear();
     useTabStore.setState({ tabs: [], activeTabId: null });
   });
 
@@ -189,6 +190,26 @@ describe("tabStore", () => {
 
       const ids = useTabStore.getState().tabs.map((t) => t.id);
       expect(ids).toEqual(["t1", "t2"]);
+    });
+  });
+
+  describe("startup preference", () => {
+    it("keeps restored tabs when startup_tab is not home", () => {
+      const tab = makeTerminalTab("t1", 1);
+
+      expect(applyStartupPreference({ tabs: [tab], activeTabId: "t1" })).toEqual({
+        tabs: [tab],
+        activeTabId: "t1",
+      });
+    });
+
+    it("skips restored tabs when startup_tab is home", () => {
+      localStorage.setItem("startup_tab", "home");
+
+      expect(applyStartupPreference({ tabs: [makeTerminalTab("t1", 1)], activeTabId: "t1" })).toEqual({
+        tabs: [],
+        activeTabId: null,
+      });
     });
   });
 });

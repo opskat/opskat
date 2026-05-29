@@ -266,10 +266,18 @@ export const useTabStore = create<TabStoreState>((set, get) => ({
 // === Persistence ===
 
 const STORAGE_KEY = "tab_store";
+const STARTUP_TAB_KEY = "startup_tab";
 
-interface SavedTabStore {
+export interface SavedTabStore {
   tabs: Tab[];
   activeTabId: string | null;
+}
+
+export function applyStartupPreference(data: SavedTabStore): SavedTabStore {
+  if (localStorage.getItem(STARTUP_TAB_KEY) === "home") {
+    return { tabs: [], activeTabId: null };
+  }
+  return data;
 }
 
 let _persistReady = false;
@@ -494,7 +502,12 @@ function _migrateOldKeys(): SavedTabStore | null {
     try {
       const data: SavedTabStore = JSON.parse(raw);
       if (data.tabs && Array.isArray(data.tabs)) {
-        useTabStore.setState({ tabs: data.tabs, activeTabId: data.activeTabId });
+        const normalized = { tabs: data.tabs, activeTabId: data.activeTabId };
+        const restored = applyStartupPreference(normalized);
+        useTabStore.setState(restored);
+        if (restored !== normalized) {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(restored));
+        }
         _persistReady = true;
         _fireRestoreHooks();
         return;
@@ -507,9 +520,10 @@ function _migrateOldKeys(): SavedTabStore | null {
   // Try migration from old format
   const migrated = _migrateOldKeys();
   if (migrated) {
-    useTabStore.setState(migrated);
+    const restored = applyStartupPreference(migrated);
+    useTabStore.setState(restored);
     // Save in new format immediately
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(restored));
   }
 
   _persistReady = true;
