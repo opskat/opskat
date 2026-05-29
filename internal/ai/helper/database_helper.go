@@ -312,7 +312,7 @@ func isSQLWordBoundary(sqlText string, idx int) bool {
 		return true
 	}
 	ch := sqlText[idx]
-	return !(ch == '_' || ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z')
+	return ch != '_' && (ch < '0' || ch > '9') && (ch < 'A' || ch > 'Z') && (ch < 'a' || ch > 'z')
 }
 
 func isSQLSpace(ch byte) bool {
