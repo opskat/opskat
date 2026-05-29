@@ -33,7 +33,7 @@ import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
 import { CreateTableDialog } from "./CreateTableDialog";
 import { AlterTableDialog } from "./AlterTableDialog";
-import { quoteTableRef } from "@/lib/tableSql";
+import { buildStarterSelectSql, quoteTableRef } from "@/lib/tableSql";
 
 interface DatabaseTreeProps {
   tabId: string;
@@ -319,7 +319,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                                 <ContextMenuItem
                                   onClick={() => {
                                     const tableName = quoteTableRef(db, tbl, driver);
-                                    openSqlTab(tabId, db, `SELECT * FROM ${tableName} LIMIT 100`);
+                                    openSqlTab(tabId, db, buildStarterSelectSql(tableName, driver, 100));
                                   }}
                                 >
                                   <Search className="h-3.5 w-3.5" />

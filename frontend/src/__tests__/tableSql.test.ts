@@ -4,6 +4,7 @@ import {
   buildFilterByCellValueClause,
   buildPagedSelect,
   buildSingleRowUpdate,
+  buildStarterSelectSql,
   quoteIdent,
   quoteTableRef,
 } from "@/lib/tableSql";
@@ -62,6 +63,11 @@ describe("table SQL helpers", () => {
         driver: "mssql",
       })
     ).toBe("SELECT * FROM [dbo].[t] ORDER BY (SELECT NULL) OFFSET 0 ROWS FETCH NEXT 50 ROWS ONLY");
+  });
+
+  it("builds starter SELECT per dialect", () => {
+    expect(buildStarterSelectSql("`appdb`.`users`", "mysql", 100)).toBe("SELECT * FROM `appdb`.`users` LIMIT 100");
+    expect(buildStarterSelectSql("[dbo].[users]", "mssql", 100)).toBe("SELECT TOP 100 * FROM [dbo].[users]");
   });
 
   it("assembles single-row UPDATE per dialect (locks existing behavior + MSSQL TOP)", () => {

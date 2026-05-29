@@ -1,4 +1,4 @@
-import { quoteIdent, quoteQualifiedIdent, quoteTableRef, sqlQuote } from "./tableSql";
+import { buildPagedSelect, quoteIdent, quoteQualifiedIdent, quoteTableRef, sqlQuote } from "./tableSql";
 
 type TableRow = Record<string, unknown>;
 export type TableExportFormat = "csv" | "tsv" | "sql";
@@ -261,6 +261,16 @@ export function buildTableExportSelectSql({
       : orderByClause.trim();
   const wherePart = where ? ` WHERE ${where}` : "";
   const orderByPart = orderBy ? ` ORDER BY ${orderBy}` : "";
+  if (scope === "page" && driver === "mssql") {
+    return buildPagedSelect({
+      tableRef: tableName,
+      wherePart,
+      orderByExpr: orderBy,
+      pageSize,
+      offset: page * pageSize,
+      driver,
+    });
+  }
   const pagePart = scope === "page" ? ` LIMIT ${pageSize} OFFSET ${page * pageSize}` : "";
   return `SELECT * FROM ${tableName}${wherePart}${orderByPart}${pagePart}`;
 }

@@ -50,6 +50,21 @@ func TestExecuteSQLPagedDialect(t *testing.T) {
 		So(mock.ExpectationsWereMet(), ShouldBeNil)
 	})
 
+	Convey("MSSQL 分页保留顶层 ORDER BY 且 count 去掉 ORDER BY", t, func() {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		So(err, ShouldBeNil)
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectQuery("SELECT COUNT(*) FROM (SELECT * FROM users) AS _t").
+			WillReturnRows(sqlmock.NewRows([]string{"c"}).AddRow(2))
+		mock.ExpectQuery("SELECT * FROM users ORDER BY id DESC OFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY").
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(2))
+
+		_, err = ExecuteSQLPaged(context.Background(), db, "SELECT * FROM users ORDER BY id DESC", 2, 10, asset_entity.DriverMSSQL)
+		So(err, ShouldBeNil)
+		So(mock.ExpectationsWereMet(), ShouldBeNil)
+	})
+
 	Convey("MySQL/其他 driver 仍用 LIMIT/OFFSET（不受影响）", t, func() {
 		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 		So(err, ShouldBeNil)
