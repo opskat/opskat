@@ -172,7 +172,7 @@ func stripTrailingSemicolon(s string) string {
 }
 
 // ExecuteSQLPaged 对 SELECT/WITH 语句进行子查询包装分页，其他语句走 ExecuteSQL
-func ExecuteSQLPaged(ctx context.Context, db *sql.DB, sqlText string, page, pageSize int) (string, error) {
+func ExecuteSQLPaged(ctx context.Context, db *sql.DB, sqlText string, page, pageSize int, driver asset_entity.DatabaseDriver) (string, error) {
 	trimmed := strings.TrimSpace(strings.ToUpper(sqlText))
 
 	// 非查询语句或不可分页的查询（SHOW/DESCRIBE/EXPLAIN）走原逻辑
@@ -190,8 +190,8 @@ func ExecuteSQLPaged(ctx context.Context, db *sql.DB, sqlText string, page, page
 		return "", fmt.Errorf("count query failed: %w", err)
 	}
 
-	// 2. 分页查询
-	pagedSQL := fmt.Sprintf("SELECT * FROM (%s) AS _t LIMIT %d OFFSET %d", cleanSQL, pageSize, offset) //nolint:gosec // SQL is user-provided and intentionally executed
+	// 2. 分页查询：MSSQL 无 LIMIT，用 OFFSET/FETCH（需 ORDER BY，用 (SELECT NULL) 占位）
+	pagedSQL := pagedQuerySQL(cleanSQL, offset, pageSize, driver)
 	rows, err := db.QueryContext(ctx, pagedSQL)
 	if err != nil {
 		return "", fmt.Errorf("SQL query failed: %w", err)
@@ -203,6 +203,18 @@ func ExecuteSQLPaged(ctx context.Context, db *sql.DB, sqlText string, page, page
 	}()
 
 	return formatRowsPagedJSON(rows, totalCount)
+}
+
+// pagedQuerySQL 把已去分号的查询包成分页子查询。MSSQL 不支持 LIMIT/OFFSET，
+// 必须用 OFFSET ... ROWS FETCH NEXT ... ROWS ONLY，且该语法要求 ORDER BY，
+// 这里用 ORDER BY (SELECT NULL) 占位（不强加排序键）。其他 driver 保持 LIMIT/OFFSET。
+func pagedQuerySQL(cleanSQL string, offset, pageSize int, driver asset_entity.DatabaseDriver) string {
+	if driver == asset_entity.DriverMSSQL {
+		return fmt.Sprintf(
+			"SELECT * FROM (%s) AS _t ORDER BY (SELECT NULL) OFFSET %d ROWS FETCH NEXT %d ROWS ONLY",
+			cleanSQL, offset, pageSize)
+	}
+	return fmt.Sprintf("SELECT * FROM (%s) AS _t LIMIT %d OFFSET %d", cleanSQL, pageSize, offset)
 }
 
 func formatRowsPagedJSON(rows *sql.Rows, totalCount int) (string, error) {

@@ -217,6 +217,8 @@ export function toUpdateSql(
     .join(" AND ");
 
   if (driver === "postgresql" || driver === "sqlite") return `UPDATE ${quotedTable} SET ${setSql} WHERE ${whereSql};`;
+  // MSSQL 无 LIMIT，用 UPDATE TOP (1) 限制单行更新（对齐 MySQL 的 LIMIT 1 安全语义）。
+  if (driver === "mssql") return `UPDATE TOP (1) ${quotedTable} SET ${setSql} WHERE ${whereSql};`;
   return `UPDATE ${quotedTable} SET ${setSql} WHERE ${whereSql} LIMIT 1;`;
 }
 

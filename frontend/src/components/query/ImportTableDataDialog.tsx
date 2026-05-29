@@ -319,7 +319,8 @@ export function ImportTableDataDialog({
     setMapping(nextAutoMapping(parsed.headers, columns));
   }, [columns, parsed.headers]);
 
-  const tableName = driver === "postgresql" ? table : `${database}.${table}`;
+  // MSSQL 与 PG 一样按 schema.table 引用，不带 database 前缀（避免被当成 schema.object）
+  const tableName = driver === "postgresql" || driver === "mssql" ? table : `${database}.${table}`;
   const primaryKeyColumns = useMemo(
     () => Array.from(primaryKeys).filter((column) => Object.values(mapping).includes(column)),
     [mapping, primaryKeys]

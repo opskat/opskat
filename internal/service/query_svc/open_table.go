@@ -106,19 +106,20 @@ func queryPrimaryKeys(ctx context.Context, conn *sql.Conn, driver asset_entity.D
 		}
 		return scanPKRows(rows, "column_name")
 	case asset_entity.DriverMSSQL:
+		schema, tbl := splitMSSQLSchemaTable(table)
 		sqlText := "SELECT kcu.COLUMN_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc " +
 			"JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu " +
-			"ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME " +
+			"ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA " +
 			"WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY' " +
-			"AND tc.TABLE_CATALOG = @p1 AND tc.TABLE_NAME = @p2 " +
+			"AND tc.TABLE_SCHEMA = @p1 AND tc.TABLE_NAME = @p2 " +
 			"ORDER BY kcu.ORDINAL_POSITION"
-		rows, err := conn.QueryContext(ctx, sqlText, sql.Named("p1", database), sql.Named("p2", table))
+		rows, err := conn.QueryContext(ctx, sqlText, sql.Named("p1", schema), sql.Named("p2", tbl))
 		if err != nil {
 			return nil, err
 		}
 		return scanPKRows(rows, "COLUMN_NAME")
 	case asset_entity.DriverSQLite:
-		sqlText := "SELECT name FROM " + sqlitePragmaTableInfo(database) + " WHERE pk > 0 ORDER BY pk"
+		sqlText := "SELECT name FROM " + sqlitePragmaTableInfo(database) + " WHERE pk > 0 ORDER BY pk" //nolint:gosec // schema is identifier-quoted by sqlitePragmaTableInfo; table name is bound as a parameter.
 		rows, err := conn.QueryContext(ctx, sqlText, table)
 		if err != nil {
 			return nil, err
@@ -170,11 +171,12 @@ func queryColumns(ctx context.Context, conn *sql.Conn, driver asset_entity.Datab
 			" AND table_name = $2 ORDER BY ordinal_position"
 		args = []any{schema, tbl}
 	case asset_entity.DriverMSSQL:
+		schema, tbl := splitMSSQLSchemaTable(table)
 		sqlText = "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT " +
 			"FROM INFORMATION_SCHEMA.COLUMNS " +
-			"WHERE TABLE_CATALOG = @p1 AND TABLE_NAME = @p2 " +
+			"WHERE TABLE_SCHEMA = @p1 AND TABLE_NAME = @p2 " +
 			"ORDER BY ORDINAL_POSITION"
-		args = []any{sql.Named("p1", database), sql.Named("p2", table)}
+		args = []any{sql.Named("p1", schema), sql.Named("p2", tbl)}
 	case asset_entity.DriverSQLite:
 		sqlText = `SELECT name, type, CASE "notnull" WHEN 0 THEN 'YES' ELSE 'NO' END AS is_nullable, dflt_value FROM ` + sqlitePragmaTableInfo(database)
 		args = []any{table}
@@ -318,6 +320,28 @@ func splitPGSchemaTable(table string) (string, string) {
 		return "public", out[0]
 	}
 	return "public", ""
+}
+
+// splitMSSQLSchemaTable 把可能带 schema 前缀的 MSSQL 表名拆成 (schema, table)。
+// 输入 "users" → ("dbo", "users");"dbo.users" → ("dbo", "users");
+// "sales.orders" → ("sales", "orders")。裸表名默认 dbo schema，与
+// QuoteTableRef 的输入空间保持一致——侧边栏列表会以 schema.table 形式下发。
+func splitMSSQLSchemaTable(table string) (string, string) {
+	parts := strings.Split(table, ".")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	if len(out) >= 2 {
+		return out[0], out[len(out)-1]
+	}
+	if len(out) == 1 {
+		return "dbo", out[0]
+	}
+	return "dbo", ""
 }
 
 func pickString(row map[string]any, keys ...string) string {

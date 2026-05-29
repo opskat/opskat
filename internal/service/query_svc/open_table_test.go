@@ -134,43 +134,80 @@ func TestOpenTable_PostgreSQL_SchemaQualified(t *testing.T) {
 }
 
 func TestOpenTableMSSQL(t *testing.T) {
-	Convey("MSSQL OpenTable 用 information_schema 查 PK / 列", t, func() {
+	Convey("MSSQL OpenTable 按 schema.table 查 information_schema 并用 [schema].[table] 取数", t, func() {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		So(err, ShouldBeNil)
+		defer func() { _ = db.Close() }()
+
+		// 表标识来自侧边栏的 schema.table（如 "dbo.users"），按 schema + table
+		// 两段过滤 INFORMATION_SCHEMA，避免同名表跨 schema 时列/主键混淆。
+		pkSQL := "SELECT kcu.COLUMN_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc " +
+			"JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu " +
+			"ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA " +
+			"WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY' " +
+			"AND tc.TABLE_SCHEMA = @p1 AND tc.TABLE_NAME = @p2 " +
+			"ORDER BY kcu.ORDINAL_POSITION"
+		mock.ExpectQuery(pkSQL).
+			WithArgs("dbo", "users").
+			WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME"}).AddRow("id"))
+
+		colSQL := "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT " +
+			"FROM INFORMATION_SCHEMA.COLUMNS " +
+			"WHERE TABLE_SCHEMA = @p1 AND TABLE_NAME = @p2 " +
+			"ORDER BY ORDINAL_POSITION"
+		mock.ExpectQuery(colSQL).
+			WithArgs("dbo", "users").
+			WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "COLUMN_DEFAULT"}).
+				AddRow("id", "int", "NO", nil).
+				AddRow("name", "varchar", "YES", nil))
+
+		mock.ExpectQuery("SELECT COUNT(*) FROM [dbo].[users]").
+			WillReturnRows(sqlmock.NewRows([]string{"c"}).AddRow(2))
+
+		mock.ExpectQuery("SELECT TOP 10 * FROM [dbo].[users]").
+			WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).
+				AddRow(1, "alice").AddRow(2, "bob"))
+
+		res, err := OpenTable(context.Background(), db, asset_entity.DriverMSSQL, "appdb", "dbo.users", 10)
+		So(err, ShouldBeNil)
+		So(res.PrimaryKeys, ShouldResemble, []string{"id"})
+		So(res.Columns, ShouldContain, "id")
+		So(res.TotalCount, ShouldEqual, 2)
+	})
+
+	Convey("MSSQL OpenTable 裸表名默认 dbo schema", t, func() {
 		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 		So(err, ShouldBeNil)
 		defer func() { _ = db.Close() }()
 
 		pkSQL := "SELECT kcu.COLUMN_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc " +
 			"JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu " +
-			"ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME " +
+			"ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA " +
 			"WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY' " +
-			"AND tc.TABLE_CATALOG = @p1 AND tc.TABLE_NAME = @p2 " +
+			"AND tc.TABLE_SCHEMA = @p1 AND tc.TABLE_NAME = @p2 " +
 			"ORDER BY kcu.ORDINAL_POSITION"
 		mock.ExpectQuery(pkSQL).
-			WithArgs("appdb", "users").
+			WithArgs("dbo", "users").
 			WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME"}).AddRow("id"))
 
 		colSQL := "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT " +
 			"FROM INFORMATION_SCHEMA.COLUMNS " +
-			"WHERE TABLE_CATALOG = @p1 AND TABLE_NAME = @p2 " +
+			"WHERE TABLE_SCHEMA = @p1 AND TABLE_NAME = @p2 " +
 			"ORDER BY ORDINAL_POSITION"
 		mock.ExpectQuery(colSQL).
-			WithArgs("appdb", "users").
+			WithArgs("dbo", "users").
 			WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "COLUMN_DEFAULT"}).
-				AddRow("id", "int", "NO", nil).
-				AddRow("name", "varchar", "YES", nil))
+				AddRow("id", "int", "NO", nil))
 
-		mock.ExpectQuery("SELECT COUNT(*) FROM [appdb].[users]").
-			WillReturnRows(sqlmock.NewRows([]string{"c"}).AddRow(2))
+		mock.ExpectQuery("SELECT COUNT(*) FROM [users]").
+			WillReturnRows(sqlmock.NewRows([]string{"c"}).AddRow(0))
 
-		mock.ExpectQuery("SELECT TOP 10 * FROM [appdb].[users]").
-			WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).
-				AddRow(1, "alice").AddRow(2, "bob"))
+		mock.ExpectQuery("SELECT TOP 10 * FROM [users]").
+			WillReturnRows(sqlmock.NewRows([]string{"id"}))
 
 		res, err := OpenTable(context.Background(), db, asset_entity.DriverMSSQL, "appdb", "users", 10)
 		So(err, ShouldBeNil)
 		So(res.PrimaryKeys, ShouldResemble, []string{"id"})
-		So(res.Columns, ShouldContain, "id")
-		So(res.TotalCount, ShouldEqual, 2)
 	})
 }
 

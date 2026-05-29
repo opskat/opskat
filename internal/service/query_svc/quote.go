@@ -27,19 +27,19 @@ func QuoteIdent(name string, driver asset_entity.DatabaseDriver) string {
 // MySQL: `db`.`table`。
 // PostgreSQL: 忽略 database 参数,table 可以是裸表名或 "schema.table" 形式。
 // SQLite: database 表示 schema（main/temp/ATTACH 名称）,有值时保留 schema 限定。
-// MSSQL: [db].[table] 或 [db].[schema].[table]（table 可含 schema. 前缀,
-// quoteQualified 按点拆分后逐段加方括号）。
+// MSSQL: 与 PostgreSQL 一致,忽略 database 参数。连接已通过 DSN 的 database=
+// 限定了 catalog,所以这里按 schema.table 加方括号即可(裸表名 → [table]、
+// "dbo.users" → [dbo].[users])。不能拼成两段式 [db].[table]——T-SQL 会把它
+// 解释为 schema=db、object=table,导致 "Invalid object name"。
 func QuoteTableRef(database, table string, driver asset_entity.DatabaseDriver) string {
 	switch driver {
-	case asset_entity.DriverPostgreSQL:
+	case asset_entity.DriverPostgreSQL, asset_entity.DriverMSSQL:
 		return quoteQualified(table, driver)
 	case asset_entity.DriverSQLite:
 		if database != "" {
 			return QuoteIdent(database, driver) + "." + QuoteIdent(table, driver)
 		}
 		return quoteQualified(table, driver)
-	case asset_entity.DriverMSSQL:
-		return QuoteIdent(database, driver) + "." + quoteQualified(table, driver)
 	default: // MySQL
 		return QuoteIdent(database, driver) + "." + QuoteIdent(table, driver)
 	}

@@ -60,11 +60,14 @@ func TestQuoteIdentSQLite(t *testing.T) {
 }
 
 func TestQuoteTableRefMSSQL(t *testing.T) {
-	Convey("MSSQL 加 [db] 前缀", t, func() {
-		So(QuoteTableRef("appdb", "users", asset_entity.DriverMSSQL), ShouldEqual, "[appdb].[users]")
+	// MSSQL 两段式 [db].[table] 会被解释为 schema.object（schema=db），导致
+	// "Invalid object name"。连接已经通过 DSN database= 限定了 catalog，所以
+	// 这里与 PostgreSQL 一致：忽略 database，只按 schema.table 加方括号。
+	Convey("MSSQL 裸表名只引用表名（不把 db 当 schema）", t, func() {
+		So(QuoteTableRef("appdb", "users", asset_entity.DriverMSSQL), ShouldEqual, "[users]")
 	})
-	Convey("MSSQL 支持 schema.table（输出 [db].[schema].[table]）", t, func() {
-		So(QuoteTableRef("appdb", "dbo.users", asset_entity.DriverMSSQL), ShouldEqual, "[appdb].[dbo].[users]")
+	Convey("MSSQL 支持 schema.table（输出 [schema].[table]）", t, func() {
+		So(QuoteTableRef("appdb", "dbo.users", asset_entity.DriverMSSQL), ShouldEqual, "[dbo].[users]")
 	})
 }
 

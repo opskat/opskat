@@ -184,7 +184,8 @@ export function ExportTableDataDialog({
   }, [database, meta.extension, table]);
   const estimatedRows = scope === "all" ? (totalRows ?? rows.length) : rows.length;
   const canStart = !!assetId && selectedColumns.length > 0 && !!filePath && !exporting;
-  const tableName = driver === "postgresql" ? table : `${database}.${table}`;
+  // MSSQL 与 PG 一样按 schema.table 引用，不带 database 前缀（避免被当成 schema.object）
+  const tableName = driver === "postgresql" || driver === "mssql" ? table : `${database}.${table}`;
 
   const appendLog = useCallback((line: string) => {
     setLogLines((prev) => [...prev, line]);

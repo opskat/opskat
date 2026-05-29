@@ -35,4 +35,24 @@ describe("table edit helpers", () => {
       })
     ).toBe('INSERT INTO "main"."users" DEFAULT VALUES;');
   });
+
+  it("builds MSSQL DEFAULT VALUES inserts and bracket-quoted columns", () => {
+    expect(
+      buildInsertStatement({
+        database: "appdb",
+        table: "dbo.users",
+        driver: "mssql",
+        values: {},
+      })
+    ).toBe("INSERT INTO [dbo].[users] DEFAULT VALUES;");
+
+    expect(
+      buildInsertStatement({
+        database: "appdb",
+        table: "dbo.users",
+        driver: "mssql",
+        values: { name: "Alice" },
+      })
+    ).toBe("INSERT INTO [dbo].[users] ([name]) VALUES ('Alice');");
+  });
 });

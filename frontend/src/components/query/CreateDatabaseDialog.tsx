@@ -52,6 +52,15 @@ function buildCreateDatabaseSql(name: string, charset: string, collation: string
     return parts.join(" ");
   }
 
+  if (driver === "mssql") {
+    // MSSQL 没有 CHARACTER SET，排序规则用 COLLATE；charset 字段不适用，留空用服务器默认。
+    const parts = [`CREATE DATABASE ${databaseRef}`];
+    if (collation.trim()) {
+      parts.push(`COLLATE ${collation.trim()}`);
+    }
+    return parts.join(" ");
+  }
+
   const parts = [`CREATE DATABASE ${databaseRef}`];
   if (charset.trim()) {
     parts.push(`CHARACTER SET ${charset.trim()}`);
@@ -72,8 +81,10 @@ export function CreateDatabaseDialog({
 }: CreateDatabaseDialogProps) {
   const { t } = useTranslation();
   const [databaseName, setDatabaseName] = useState("");
-  const [charset, setCharset] = useState(driver === "postgresql" ? "UTF8" : "utf8mb4");
-  const [collation, setCollation] = useState(driver === "postgresql" ? "en_US.UTF-8" : "utf8mb4_0900_ai_ci");
+  const [charset, setCharset] = useState(driver === "postgresql" ? "UTF8" : driver === "mssql" ? "" : "utf8mb4");
+  const [collation, setCollation] = useState(
+    driver === "postgresql" ? "en_US.UTF-8" : driver === "mssql" ? "" : "utf8mb4_0900_ai_ci"
+  );
   const [submitting, setSubmitting] = useState(false);
   const [showSqlPreview, setShowSqlPreview] = useState(false);
   const [previewStatements, setPreviewStatements] = useState<string[]>([]);
@@ -81,8 +92,8 @@ export function CreateDatabaseDialog({
 
   const resetForm = useCallback(() => {
     setDatabaseName("");
-    setCharset(driver === "postgresql" ? "UTF8" : "utf8mb4");
-    setCollation(driver === "postgresql" ? "en_US.UTF-8" : "utf8mb4_0900_ai_ci");
+    setCharset(driver === "postgresql" ? "UTF8" : driver === "mssql" ? "" : "utf8mb4");
+    setCollation(driver === "postgresql" ? "en_US.UTF-8" : driver === "mssql" ? "" : "utf8mb4_0900_ai_ci");
   }, [driver]);
 
   const handlePreview = useCallback(() => {

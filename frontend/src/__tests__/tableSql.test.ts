@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildDeleteStatement, buildFilterByCellValueClause, quoteIdent, quoteTableRef } from "@/lib/tableSql";
+import {
+  buildDeleteStatement,
+  buildFilterByCellValueClause,
+  buildPagedSelect,
+  buildSingleRowUpdate,
+  quoteIdent,
+  quoteTableRef,
+} from "@/lib/tableSql";
 
 describe("table SQL helpers", () => {
   it("escapes embedded quotes in identifiers", () => {
@@ -9,6 +16,103 @@ describe("table SQL helpers", () => {
     expect(quoteIdent("plain", "mysql")).toBe("`plain`");
     expect(quoteIdent("plain", "postgresql")).toBe('"plain"');
     expect(quoteTableRef("main", "users", "sqlite")).toBe('"main"."users"');
+  });
+
+  it("quotes MSSQL identifiers with brackets and ignores the database in table refs", () => {
+    expect(quoteIdent("plain", "mssql")).toBe("[plain]");
+    expect(quoteIdent("a]b", "mssql")).toBe("[a]]b]");
+    // 不能拼成两段式 [appdb].[users]——MSSQL 会把它当成 schema.object
+    expect(quoteTableRef("appdb", "users", "mssql")).toBe("[users]");
+    expect(quoteTableRef("appdb", "dbo.users", "mssql")).toBe("[dbo].[users]");
+  });
+
+  it("builds paged SELECT per dialect (MSSQL OFFSET/FETCH, others LIMIT)", () => {
+    // 其它 driver 行为不变
+    expect(
+      buildPagedSelect({ tableRef: "`t`", wherePart: "", orderByExpr: "", pageSize: 50, offset: 100, driver: "mysql" })
+    ).toBe("SELECT * FROM `t` LIMIT 50 OFFSET 100");
+    expect(
+      buildPagedSelect({
+        tableRef: '"main"."t"',
+        wherePart: " WHERE \"a\" = '1'",
+        orderByExpr: '"id" ASC',
+        pageSize: 50,
+        offset: 0,
+        driver: "sqlite",
+      })
+    ).toBe('SELECT * FROM "main"."t" WHERE "a" = \'1\' ORDER BY "id" ASC LIMIT 50 OFFSET 0');
+    // MSSQL：OFFSET/FETCH，需要 ORDER BY；无排序键时用 (SELECT NULL) 占位
+    expect(
+      buildPagedSelect({
+        tableRef: "[dbo].[t]",
+        wherePart: " WHERE [a] = '1'",
+        orderByExpr: "[id] ASC",
+        pageSize: 50,
+        offset: 100,
+        driver: "mssql",
+      })
+    ).toBe("SELECT * FROM [dbo].[t] WHERE [a] = '1' ORDER BY [id] ASC OFFSET 100 ROWS FETCH NEXT 50 ROWS ONLY");
+    expect(
+      buildPagedSelect({
+        tableRef: "[dbo].[t]",
+        wherePart: "",
+        orderByExpr: "",
+        pageSize: 50,
+        offset: 0,
+        driver: "mssql",
+      })
+    ).toBe("SELECT * FROM [dbo].[t] ORDER BY (SELECT NULL) OFFSET 0 ROWS FETCH NEXT 50 ROWS ONLY");
+  });
+
+  it("assembles single-row UPDATE per dialect (locks existing behavior + MSSQL TOP)", () => {
+    const args = { tableRef: "[dbo].[users]", setSql: "[name] = 'x'", whereSql: "[id] = '7'" };
+    // MSSQL：无 LIMIT，用 UPDATE TOP (1)
+    expect(buildSingleRowUpdate({ ...args, hasPrimaryKey: true, driver: "mssql" })).toBe(
+      "UPDATE TOP (1) [dbo].[users] SET [name] = 'x' WHERE [id] = '7';"
+    );
+    expect(buildSingleRowUpdate({ ...args, hasPrimaryKey: false, driver: "mssql" })).toBe(
+      "UPDATE TOP (1) [dbo].[users] SET [name] = 'x' WHERE [id] = '7';"
+    );
+    // 其它 driver 行为不变
+    const my = { tableRef: "`db`.`t`", setSql: "`n` = 'x'", whereSql: "`id` = '7'" };
+    expect(buildSingleRowUpdate({ ...my, hasPrimaryKey: true, driver: "mysql" })).toBe(
+      "UPDATE `db`.`t` SET `n` = 'x' WHERE `id` = '7' LIMIT 1;"
+    );
+    const pg = { tableRef: '"t"', setSql: "\"n\" = 'x'", whereSql: "\"id\" = '7'" };
+    expect(buildSingleRowUpdate({ ...pg, hasPrimaryKey: true, driver: "postgresql" })).toBe(
+      'UPDATE "t" SET "n" = \'x\' WHERE "id" = \'7\';'
+    );
+    expect(buildSingleRowUpdate({ ...pg, hasPrimaryKey: false, driver: "postgresql" })).toBe(
+      'UPDATE "t" SET "n" = \'x\' WHERE ctid = (SELECT ctid FROM "t" WHERE "id" = \'7\' LIMIT 1);'
+    );
+    const lite = { tableRef: '"main"."t"', setSql: "\"n\" = 'x'", whereSql: "\"id\" = '7'" };
+    expect(buildSingleRowUpdate({ ...lite, hasPrimaryKey: false, driver: "sqlite" })).toBe(
+      'UPDATE "main"."t" SET "n" = \'x\' WHERE rowid = (SELECT rowid FROM "main"."t" WHERE "id" = \'7\' LIMIT 1);'
+    );
+  });
+
+  it("builds MSSQL DELETE with TOP (1) instead of LIMIT", () => {
+    expect(
+      buildDeleteStatement({
+        database: "appdb",
+        table: "users",
+        columns: ["id", "name"],
+        row: { id: 7, name: "alice" },
+        primaryKeys: ["id"],
+        driver: "mssql",
+      }).sql
+    ).toBe("DELETE TOP (1) FROM [users] WHERE [id] = '7';");
+
+    expect(
+      buildDeleteStatement({
+        database: "appdb",
+        table: "users",
+        columns: ["id", "name"],
+        row: { id: 7, name: "alice" },
+        primaryKeys: [],
+        driver: "mssql",
+      }).sql
+    ).toBe("DELETE TOP (1) FROM [users] WHERE [id] = '7' AND [name] = 'alice';");
   });
 
   it("builds filter clauses for NULL and quoted values", () => {

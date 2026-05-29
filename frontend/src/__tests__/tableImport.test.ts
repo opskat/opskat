@@ -98,6 +98,36 @@ describe("table import helpers", () => {
     ]);
   });
 
+  it("builds MSSQL upsert and skip SQL with MERGE (no MySQL-only syntax)", () => {
+    const base = {
+      tableName: "dbo.users",
+      headers: ["id", "name", "email"],
+      rows: [["1", "Alice", "alice@example.test"]],
+      mapping: { id: "id", name: "name", email: "email" },
+      nullStrategy: "literal-null" as const,
+      primaryKeys: ["id"],
+      driver: "mssql",
+    };
+
+    expect(buildImportInsertSql({ ...base, mode: "append-update" })).toEqual([
+      "MERGE [dbo].[users] AS t USING (SELECT '1' AS [id], 'Alice' AS [name], 'alice@example.test' AS [email]) AS s " +
+        "ON (t.[id] = s.[id]) " +
+        "WHEN MATCHED THEN UPDATE SET t.[name] = s.[name], t.[email] = s.[email] " +
+        "WHEN NOT MATCHED THEN INSERT ([id], [name], [email]) VALUES (s.[id], s.[name], s.[email]);",
+    ]);
+
+    expect(buildImportInsertSql({ ...base, mode: "append-skip" })).toEqual([
+      "MERGE [dbo].[users] AS t USING (SELECT '1' AS [id], 'Alice' AS [name], 'alice@example.test' AS [email]) AS s " +
+        "ON (t.[id] = s.[id]) " +
+        "WHEN NOT MATCHED THEN INSERT ([id], [name], [email]) VALUES (s.[id], s.[name], s.[email]);",
+    ]);
+
+    // update / delete / copy 走通用路径，只验证方括号引用正确
+    expect(buildImportInsertSql({ ...base, mode: "update" })).toEqual([
+      "UPDATE [dbo].[users] SET [name] = 'Alice', [email] = 'alice@example.test' WHERE [id] = '1';",
+    ]);
+  });
+
   it("keeps foreign-key toggling out of generated row statements", () => {
     expect(
       buildImportInsertSql({

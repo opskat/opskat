@@ -601,6 +601,29 @@ export function buildImportInsertSql({
     return rowValuesSql.map((values) => `${insertKeyword} ${quotedTable} (${columnSql}) VALUES ${values}${suffix};`);
   };
 
+  // MSSQL 没有 INSERT IGNORE / ON CONFLICT / ON DUPLICATE KEY，用 MERGE 实现
+  // upsert（includeUpdate=true）与"重复即跳过"（includeUpdate=false，仅 NOT MATCHED 插入）。
+  const buildMssqlMergeStatements = (includeUpdate: boolean): string[] =>
+    rows.map((row) => {
+      const source = mapped
+        .map((item) => `${emit(row[item.index] ?? "", item.target)} AS ${quoteIdent(item.target, driver)}`)
+        .join(", ");
+      const onClause = keyMapped
+        .map((item) => `t.${quoteIdent(item.target, driver)} = s.${quoteIdent(item.target, driver)}`)
+        .join(" AND ");
+      const insertVals = mapped.map((item) => `s.${quoteIdent(item.target, driver)}`).join(", ");
+      const matched =
+        includeUpdate && valueMapped.length > 0
+          ? `WHEN MATCHED THEN UPDATE SET ${valueMapped
+              .map((item) => `t.${quoteIdent(item.target, driver)} = s.${quoteIdent(item.target, driver)}`)
+              .join(", ")} `
+          : "";
+      return (
+        `MERGE ${quotedTable} AS t USING (SELECT ${source}) AS s ON (${onClause}) ` +
+        `${matched}WHEN NOT MATCHED THEN INSERT (${columnSql}) VALUES (${insertVals});`
+      );
+    });
+
   let statements: string[];
   if (mode === "update") {
     if (valueMapped.length === 0) return [];
@@ -618,9 +641,13 @@ export function buildImportInsertSql({
         statements = buildInsertStatements(insertPrefix, suffix);
       } else if (driver === "sqlite") {
         statements = buildInsertStatements("INSERT OR IGNORE INTO");
+      } else if (driver === "mssql") {
+        statements = buildMssqlMergeStatements(false);
       } else {
         statements = buildInsertStatements("INSERT IGNORE INTO");
       }
+    } else if (driver === "mssql") {
+      statements = buildMssqlMergeStatements(true);
     } else {
       const updateSql =
         driver === "postgresql" || driver === "sqlite"
@@ -638,6 +665,8 @@ export function buildImportInsertSql({
       statements = buildInsertStatements("INSERT INTO", suffix);
     } else if (driver === "sqlite") {
       statements = buildInsertStatements("INSERT OR IGNORE INTO");
+    } else if (driver === "mssql") {
+      statements = buildMssqlMergeStatements(false);
     } else {
       statements = buildInsertStatements("INSERT IGNORE INTO");
     }

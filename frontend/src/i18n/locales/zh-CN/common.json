@@ -2086,6 +2086,8 @@
     "designTableDuplicateColumn": "字段名重复：{{name}}",
     "alterSqliteLimitations": "SQLite 不支持修改已有字段的类型、默认值、可空性和列/表注释；可以重命名字段、新增字段或删除字段。",
     "alterSqliteUnsupportedTableComment": "SQLite 不支持表注释",
+    "alterMssqlLimitations": "SQL Server 暂不支持在此修改已有字段的默认值，以及表/列注释；可以重命名、新增、删除字段，并修改字段类型和可空性。",
+    "alterMssqlUnsupportedTableComment": "SQL Server 表注释走扩展属性，暂不支持在此编辑",
     "alterActionAdd": "新增列",
     "alterActionType": "改类型",
     "alterActionDrop": "删列",

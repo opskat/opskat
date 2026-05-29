@@ -43,6 +43,24 @@ function makeSQLiteAsset(id: number, name = `SQLite ${id}`): asset_entity.Asset 
   } as asset_entity.Asset;
 }
 
+function makeMSSQLAsset(id: number, name = `MSSQL ${id}`): asset_entity.Asset {
+  return {
+    ID: id,
+    Name: name,
+    Type: "database",
+    GroupID: 0,
+    Icon: "",
+    Tags: "",
+    Description: "",
+    Config: JSON.stringify({ driver: "mssql", host: "10.0.0.1", port: 1433, username: "sa" }),
+    CmdPolicy: "",
+    SortOrder: 0,
+    Status: 1,
+    Createtime: 0,
+    Updatetime: 0,
+  } as asset_entity.Asset;
+}
+
 function makeRedisAsset(id: number, name = `Redis ${id}`): asset_entity.Asset {
   return {
     ID: id,
@@ -504,5 +522,44 @@ describe("queryStore database actions", () => {
       "main"
     );
     expect(useQueryStore.getState().dbStates["query-30"].tables.main).toEqual(["users", "orders"]);
+  });
+});
+
+describe("queryStore MSSQL database actions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useTabStore.setState({ tabs: [], activeTabId: null });
+    useQueryStore.setState({ dbStates: {}, redisStates: {}, mongoStates: {} });
+    vi.spyOn(useAssetStore.getState(), "getAssetPath").mockReturnValue("Test/MSSQL");
+    useQueryStore.getState().openQueryTab(makeMSSQLAsset(40));
+  });
+
+  it("loads MSSQL databases from sys.databases instead of SHOW DATABASES", async () => {
+    vi.mocked(ExecuteSQL).mockResolvedValueOnce(JSON.stringify({ rows: [{ name: "appdb" }] }));
+
+    await useQueryStore.getState().loadDatabases("query-40");
+
+    expect(ExecuteSQL).toHaveBeenCalledWith(
+      40,
+      "SELECT name FROM sys.databases WHERE database_id > 4 ORDER BY name",
+      ""
+    );
+    expect(useQueryStore.getState().dbStates["query-40"].databases).toEqual(["appdb"]);
+  });
+
+  it("loads MSSQL tables as schema.table from INFORMATION_SCHEMA instead of SHOW TABLES", async () => {
+    vi.mocked(ExecuteSQL).mockResolvedValueOnce(
+      JSON.stringify({ rows: [{ name: "dbo.users" }, { name: "sales.orders" }] })
+    );
+
+    await useQueryStore.getState().loadTables("query-40", "appdb");
+
+    expect(ExecuteSQL).toHaveBeenCalledWith(
+      40,
+      "SELECT TABLE_SCHEMA + '.' + TABLE_NAME AS name FROM INFORMATION_SCHEMA.TABLES " +
+        "WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW') ORDER BY TABLE_SCHEMA, TABLE_NAME",
+      "appdb"
+    );
+    expect(useQueryStore.getState().dbStates["query-40"].tables.appdb).toEqual(["dbo.users", "sales.orders"]);
   });
 });

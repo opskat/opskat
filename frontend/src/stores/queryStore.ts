@@ -14,7 +14,7 @@ export interface QueryTab {
   assetName: string;
   assetIcon: string;
   assetType: "database" | "redis" | "mongodb" | "kafka" | "k8s" | "etcd";
-  driver?: string; // "mysql" | "postgresql" | "sqlite"
+  driver?: string; // "mysql" | "postgresql" | "sqlite" | "mssql"
   defaultDatabase?: string;
   redisDatabase?: number;
   redisScanPageSize?: number;
@@ -311,6 +311,10 @@ function buildLoadDatabasesSQL(driver?: string): string {
   if (driver === "sqlite") {
     return "SELECT name FROM pragma_database_list ORDER BY seq";
   }
+  if (driver === "mssql") {
+    // MSSQL 无 SHOW DATABASES；database_id > 4 跳过 master/tempdb/model/msdb 系统库。
+    return "SELECT name FROM sys.databases WHERE database_id > 4 ORDER BY name";
+  }
   return "SHOW DATABASES";
 }
 
@@ -332,6 +336,13 @@ function buildLoadTablesSQL(driver: string | undefined, database: string): strin
   if (driver === "sqlite") {
     const schema = database ? quoteSQLiteIdent(database) : "main";
     return `SELECT name FROM ${schema}.sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name`;
+  }
+  if (driver === "mssql") {
+    // MSSQL 无 SHOW TABLES；列成 schema.table，与后端 OpenTable 的 schema 拆分对齐。
+    return (
+      "SELECT TABLE_SCHEMA + '.' + TABLE_NAME AS name FROM INFORMATION_SCHEMA.TABLES " +
+      "WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW') ORDER BY TABLE_SCHEMA, TABLE_NAME"
+    );
   }
   return `SHOW TABLES FROM \`${database}\``;
 }

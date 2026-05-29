@@ -2086,6 +2086,8 @@
     "designTableDuplicateColumn": "Duplicate column name: {{name}}",
     "alterSqliteLimitations": "SQLite does not support changing the type, default, nullability or comments of existing columns or tables; you can rename, add, or drop columns.",
     "alterSqliteUnsupportedTableComment": "SQLite does not support table comments",
+    "alterMssqlLimitations": "SQL Server does not support editing the default value of existing columns or table/column comments here; you can rename, add, drop columns and change their type or nullability.",
+    "alterMssqlUnsupportedTableComment": "SQL Server table comments use extended properties and are not editable here",
     "alterActionAdd": "Add Column",
     "alterActionType": "Change Type",
     "alterActionDrop": "Drop Column",

@@ -289,7 +289,7 @@ func (q *Query) ExecuteSQLPaged(assetID int64, sqlText string, database string, 
 		return "", fmt.Errorf("连接数据库失败: %w", err)
 	}
 
-	return helper.ExecuteSQLPaged(ctx, db, sqlText, page, pageSize)
+	return helper.ExecuteSQLPaged(ctx, db, sqlText, page, pageSize, cfg.Driver)
 }
 
 // ExecuteRedis 在指定 Redis 资产上执行命令

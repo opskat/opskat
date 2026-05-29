@@ -61,6 +61,9 @@ describe("table export helpers", () => {
     expect(toUpdateSql("main.users", ["id", "name"], rows[1], ["id"], "sqlite")).toBe(
       'UPDATE "main"."users" SET "id" = \'2\', "name" = \'O\'\'Reilly\' WHERE "id" = \'2\';'
     );
+    expect(toUpdateSql("dbo.users", ["id", "name"], rows[1], ["id"], "mssql")).toBe(
+      "UPDATE TOP (1) [dbo].[users] SET [id] = '2', [name] = 'O''Reilly' WHERE [id] = '2';"
+    );
   });
 
   it("can omit column titles for delimited exports", () => {

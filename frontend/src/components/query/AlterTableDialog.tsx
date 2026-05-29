@@ -76,6 +76,7 @@ export function AlterTableDialog({
 }: AlterTableDialogProps) {
   const { t } = useTranslation();
   const isSqlite = driver === "sqlite";
+  const isMssql = driver === "mssql";
 
   const [columns, setColumns] = useState<AlterDraftColumn[]>([]);
   const [originalColumns, setOriginalColumns] = useState<AlterLoadedColumn[]>([]);
@@ -125,6 +126,17 @@ export function AlterTableDialog({
       } else if (driver === "sqlite") {
         const schema = database ? `${quoteIdent(database, driver)}.` : "";
         columnSql = `SELECT name, type, "notnull", dflt_value, pk FROM ${schema}pragma_table_info(${sqlQuote(table)})`;
+      } else if (driver === "mssql") {
+        // MSSQL 无 SHOW FULL COLUMNS，从 INFORMATION_SCHEMA 取列（table 为 schema.table）。
+        // 列注释走扩展属性，UI 已锁定，这里不查表注释。
+        const dot = table.indexOf(".");
+        const schemaName = dot >= 0 ? table.slice(0, dot) : "dbo";
+        const tableOnly = dot >= 0 ? table.slice(dot + 1) : table;
+        columnSql =
+          `SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT ` +
+          `FROM INFORMATION_SCHEMA.COLUMNS ` +
+          `WHERE TABLE_SCHEMA = '${escapeLiteral(schemaName)}' AND TABLE_NAME = '${escapeLiteral(tableOnly)}' ` +
+          `ORDER BY ORDINAL_POSITION`;
       } else {
         const quotedTable = quoteIdent(table, driver);
         const escapedDb = escapeLiteral(database);
@@ -169,6 +181,17 @@ export function AlterTableDialog({
             const type = String(getByKey(row, ["type"]) ?? "");
             const nullable = Number(getByKey(row, ["notnull"]) ?? 0) !== 1;
             const defaultValue = String(getByKey(row, ["dflt_value"]) ?? "");
+            return { name, type, nullable, defaultValue, comment: "" } as AlterLoadedColumn;
+          }
+          if (driver === "mssql") {
+            const name = String(getByKey(row, ["COLUMN_NAME"]) ?? "");
+            const dataType = String(getByKey(row, ["DATA_TYPE"]) ?? "");
+            const maxLenRaw = getByKey(row, ["CHARACTER_MAXIMUM_LENGTH"]);
+            const maxLen = maxLenRaw == null ? null : Number(maxLenRaw);
+            const type =
+              maxLen === -1 ? `${dataType}(max)` : maxLen && maxLen > 0 ? `${dataType}(${maxLen})` : dataType;
+            const nullable = String(getByKey(row, ["IS_NULLABLE"]) ?? "").toUpperCase() === "YES";
+            const defaultValue = String(getByKey(row, ["COLUMN_DEFAULT"]) ?? "");
             return { name, type, nullable, defaultValue, comment: "" } as AlterLoadedColumn;
           }
 
@@ -363,13 +386,18 @@ export function AlterTableDialog({
                 value={tableCommentDraft}
                 onChange={(e) => setTableCommentDraft(e.target.value)}
                 placeholder={
-                  isSqlite ? t("query.alterSqliteUnsupportedTableComment") : t("query.tableCommentPlaceholder")
+                  isSqlite
+                    ? t("query.alterSqliteUnsupportedTableComment")
+                    : isMssql
+                      ? t("query.alterMssqlUnsupportedTableComment")
+                      : t("query.tableCommentPlaceholder")
                 }
-                disabled={submitting || loadingColumns || isSqlite}
+                disabled={submitting || loadingColumns || isSqlite || isMssql}
               />
             </div>
 
             {isSqlite && <p className="text-[11px] text-muted-foreground">{t("query.alterSqliteLimitations")}</p>}
+            {isMssql && <p className="text-[11px] text-muted-foreground">{t("query.alterMssqlLimitations")}</p>}
 
             <div className="flex items-center justify-between">
               <Label className="text-xs">{t("query.designTableColumns")}</Label>
@@ -409,6 +437,9 @@ export function AlterTableDialog({
 
                   {columns.map((col) => {
                     const sqliteExistingLocked = isSqlite && !col.isNew;
+                    // MSSQL 现有列：类型/可空可改（ALTER COLUMN），但默认值需命名约束、
+                    // 注释走扩展属性，均锁定不生成。
+                    const mssqlExistingDefaultLocked = isMssql && !col.isNew;
                     return (
                       <div key={col.id} className="rounded-md border border-border p-2">
                         <div className="grid grid-cols-20 gap-2 items-center">
@@ -436,7 +467,7 @@ export function AlterTableDialog({
                               value={col.defaultValue}
                               onChange={(e) => updateColumn(col.id, { defaultValue: e.target.value })}
                               placeholder={t("query.defaultValuePlaceholder")}
-                              disabled={submitting || sqliteExistingLocked}
+                              disabled={submitting || sqliteExistingLocked || mssqlExistingDefaultLocked}
                             />
                           </div>
                           <div className="col-span-6">
@@ -445,7 +476,7 @@ export function AlterTableDialog({
                               value={col.comment}
                               onChange={(e) => updateColumn(col.id, { comment: e.target.value })}
                               placeholder={t("query.columnCommentPlaceholder")}
-                              disabled={submitting || isSqlite}
+                              disabled={submitting || isSqlite || isMssql}
                             />
                           </div>
                           <div className="col-span-2 flex items-center justify-center gap-1">

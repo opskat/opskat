@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"strings"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/sshpool"
@@ -29,7 +30,8 @@ func DialDatabase(ctx context.Context, asset *asset_entity.Asset, cfg *asset_ent
 	var err error
 
 	if cfg.Driver == asset_entity.DriverSQLite {
-		// SQLite 本地文件,不走隧道
+		// SQLite 本地文件,不走隧道。只读已在 buildDSN 里通过 _pragma=query_only(1)
+		// 写进 DSN（对每条连接生效），这里无需再单独 setReadOnly。
 		db, err = openDirect(cfg, password)
 		if err != nil {
 			return nil, nil, err
@@ -39,14 +41,6 @@ func DialDatabase(ctx context.Context, asset *asset_entity.Asset, cfg *asset_ent
 				logger.Default().Warn("close db", zap.Error(cerr))
 			}
 			return nil, nil, fmt.Errorf("数据库连接失败: %w", pingErr)
-		}
-		if cfg.ReadOnly {
-			if roErr := setReadOnly(ctx, db, cfg.Driver); roErr != nil {
-				if cerr := db.Close(); cerr != nil {
-					logger.Default().Warn("close db", zap.Error(cerr))
-				}
-				return nil, nil, fmt.Errorf("设置只读模式失败: %w", roErr)
-			}
 		}
 		return db, nil, nil
 	}
@@ -224,8 +218,17 @@ func buildDSN(cfg *asset_entity.DatabaseConfig, password string) (driverName str
 		return "sqlserver", u.String()
 	case asset_entity.DriverSQLite:
 		dsn := "file:" + cfg.Path
+		var query []string
 		if cfg.Params != "" {
-			dsn += "?" + cfg.Params
+			query = append(query, cfg.Params)
+		}
+		// 只读用 _pragma 写进 DSN，保证连接池里"每一条"新建连接都带 query_only，
+		// 而不是只在初次 dial 用过的那一条上设 PRAGMA（那样池里别的连接仍可写）。
+		if cfg.ReadOnly {
+			query = append(query, "_pragma=query_only(1)")
+		}
+		if len(query) > 0 {
+			dsn += "?" + strings.Join(query, "&")
 		}
 		return "sqlite", dsn
 	default:
@@ -240,9 +243,6 @@ func setReadOnly(ctx context.Context, db *sql.DB, driver asset_entity.DatabaseDr
 		return err
 	case asset_entity.DriverPostgreSQL:
 		_, err := db.ExecContext(ctx, "SET default_transaction_read_only = on")
-		return err
-	case asset_entity.DriverSQLite:
-		_, err := db.ExecContext(ctx, "PRAGMA query_only = 1")
 		return err
 	case asset_entity.DriverMSSQL:
 		logger.Ctx(ctx).Info("MSSQL connection-level read-only not supported, relying on policy")
