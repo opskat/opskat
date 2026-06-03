@@ -120,7 +120,7 @@ describe("terminalInputBridge", () => {
     // Remap panel.filter from KeyF to KeyG.
     bridge.setShortcuts({
       ...DEFAULT_SHORTCUTS,
-      "panel.filter": { code: "KeyG", mod: true, shift: false, alt: false },
+      "panel.filter": { code: "KeyG", mod: true, ctrl: false, shift: false, alt: false },
     });
     const isMac = /Macintosh|Mac OS/.test(navigator.userAgent);
     const mod = isMac ? { metaKey: true } : { ctrlKey: true };

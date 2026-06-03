@@ -14,7 +14,7 @@ import {
 
 export function ShortcutSettings() {
   const { t } = useTranslation();
-  const { shortcuts, updateShortcut, resetShortcut, resetAll, setIsRecording } = useShortcutStore();
+  const { shortcuts, updateShortcut, resetShortcut, resetAll, swapCmdCtrl, setIsRecording } = useShortcutStore();
   const [recording, setRecording] = useState<ShortcutAction | null>(null);
 
   const startRecording = (action: ShortcutAction) => {
@@ -45,6 +45,7 @@ export function ShortcutSettings() {
       const binding: ShortcutBinding = {
         code: e.code,
         mod: isMac ? e.metaKey : e.ctrlKey,
+        ctrl: isMac ? e.ctrlKey : false,
         shift: e.shiftKey,
         alt: e.altKey,
       };
@@ -117,9 +118,16 @@ export function ShortcutSettings() {
           </div>
         ))}
       </div>
-      <Button variant="outline" size="sm" onClick={resetAll}>
-        {t("shortcut.resetAll")}
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button variant="outline" size="sm" onClick={resetAll}>
+          {t("shortcut.resetAll")}
+        </Button>
+        {isMac && (
+          <Button variant="outline" size="sm" onClick={swapCmdCtrl} title={t("shortcut.swapCmdCtrlDesc")}>
+            {t("shortcut.swapCmdCtrl")}
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

@@ -35,14 +35,14 @@ describe("shortcutStore", () => {
 
   describe("updateShortcut", () => {
     it("updates a single shortcut binding", () => {
-      const newBinding: ShortcutBinding = { code: "KeyQ", mod: true, shift: false, alt: false };
+      const newBinding: ShortcutBinding = { code: "KeyQ", mod: true, ctrl: false, shift: false, alt: false };
       useShortcutStore.getState().updateShortcut("tab.close", newBinding);
 
       expect(useShortcutStore.getState().shortcuts["tab.close"]).toEqual(newBinding);
     });
 
     it("persists custom shortcuts to localStorage", () => {
-      const newBinding: ShortcutBinding = { code: "KeyQ", mod: true, shift: false, alt: false };
+      const newBinding: ShortcutBinding = { code: "KeyQ", mod: true, ctrl: false, shift: false, alt: false };
       useShortcutStore.getState().updateShortcut("tab.close", newBinding);
 
       const stored = JSON.parse(localStorage.getItem("keyboard_shortcuts")!);
@@ -51,7 +51,7 @@ describe("shortcutStore", () => {
 
     it("does not persist shortcuts that match defaults", () => {
       // Set to non-default, then back to default
-      const custom: ShortcutBinding = { code: "KeyQ", mod: true, shift: false, alt: false };
+      const custom: ShortcutBinding = { code: "KeyQ", mod: true, ctrl: false, shift: false, alt: false };
       useShortcutStore.getState().updateShortcut("tab.close", custom);
       useShortcutStore.getState().updateShortcut("tab.close", DEFAULT_SHORTCUTS["tab.close"]);
 
@@ -61,7 +61,7 @@ describe("shortcutStore", () => {
 
   describe("resetShortcut", () => {
     it("resets a single shortcut to default", () => {
-      const custom: ShortcutBinding = { code: "KeyQ", mod: true, shift: false, alt: false };
+      const custom: ShortcutBinding = { code: "KeyQ", mod: true, ctrl: false, shift: false, alt: false };
       useShortcutStore.getState().updateShortcut("tab.close", custom);
       useShortcutStore.getState().resetShortcut("tab.close");
 
@@ -71,9 +71,11 @@ describe("shortcutStore", () => {
 
   describe("resetAll", () => {
     it("resets all shortcuts to defaults and clears localStorage", () => {
-      const custom: ShortcutBinding = { code: "KeyQ", mod: true, shift: false, alt: false };
+      const custom: ShortcutBinding = { code: "KeyQ", mod: true, ctrl: false, shift: false, alt: false };
       useShortcutStore.getState().updateShortcut("tab.close", custom);
-      useShortcutStore.getState().updateShortcut("tab.1", { code: "KeyA", mod: true, shift: false, alt: false });
+      useShortcutStore
+        .getState()
+        .updateShortcut("tab.1", { code: "KeyA", mod: true, ctrl: false, shift: false, alt: false });
 
       useShortcutStore.getState().resetAll();
 
@@ -81,6 +83,32 @@ describe("shortcutStore", () => {
       expect(shortcuts["tab.close"]).toEqual(DEFAULT_SHORTCUTS["tab.close"]);
       expect(shortcuts["tab.1"]).toEqual(DEFAULT_SHORTCUTS["tab.1"]);
       expect(localStorage.getItem("keyboard_shortcuts")).toBeNull();
+    });
+  });
+
+  describe("swapCmdCtrl", () => {
+    it("swaps mod and ctrl for every binding (Cmd defaults become Ctrl)", () => {
+      useShortcutStore.getState().swapCmdCtrl();
+
+      const { shortcuts } = useShortcutStore.getState();
+      expect(shortcuts["tab.1"]).toEqual({ ...DEFAULT_SHORTCUTS["tab.1"], mod: false, ctrl: true });
+      // shift/alt are untouched by the swap
+      expect(shortcuts["tab.prev"]).toEqual({ ...DEFAULT_SHORTCUTS["tab.prev"], mod: false, ctrl: true });
+    });
+
+    it("is reversible: swapping twice restores defaults and clears localStorage", () => {
+      useShortcutStore.getState().swapCmdCtrl();
+      useShortcutStore.getState().swapCmdCtrl();
+
+      expect(useShortcutStore.getState().shortcuts["tab.1"]).toEqual(DEFAULT_SHORTCUTS["tab.1"]);
+      expect(localStorage.getItem("keyboard_shortcuts")).toBeNull();
+    });
+
+    it("persists the swapped bindings to localStorage", () => {
+      useShortcutStore.getState().swapCmdCtrl();
+
+      const stored = JSON.parse(localStorage.getItem("keyboard_shortcuts")!);
+      expect(stored["tab.1"]).toEqual({ ...DEFAULT_SHORTCUTS["tab.1"], mod: false, ctrl: true });
     });
   });
 

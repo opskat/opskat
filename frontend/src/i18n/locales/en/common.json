@@ -986,6 +986,8 @@
     "recording": "Press shortcut...",
     "reset": "Reset",
     "resetAll": "Reset All",
+    "swapCmdCtrl": "⌘ ⇄ ⌃",
+    "swapCmdCtrlDesc": "Swap ⌘ and ⌃ on every shortcut; click again to swap back",
     "tab.1": "Switch to Tab 1",
     "tab.2": "Switch to Tab 2",
     "tab.3": "Switch to Tab 3",

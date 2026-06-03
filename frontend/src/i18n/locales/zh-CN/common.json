@@ -986,6 +986,8 @@
     "recording": "请按下快捷键...",
     "reset": "恢复默认",
     "resetAll": "全部恢复默认",
+    "swapCmdCtrl": "⌘ ⇄ ⌃",
+    "swapCmdCtrlDesc": "将所有快捷键的 ⌘ 与 ⌃ 互换，再点一次换回",
     "tab.1": "切换到标签 1",
     "tab.2": "切换到标签 2",
     "tab.3": "切换到标签 3",

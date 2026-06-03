@@ -4,7 +4,8 @@ export const isMac = /Macintosh|Mac OS/.test(navigator.userAgent);
 
 export interface ShortcutBinding {
   code: string; // KeyboardEvent.code, e.g. "Digit1", "KeyW", "BracketLeft"
-  mod: boolean; // Cmd (Mac) / Ctrl (Win)
+  mod: boolean; // primary modifier: Cmd (Mac) / Ctrl (Win)
+  ctrl: boolean; // Control key — Mac only (Win has no separate Cmd, so it's ignored there)
   shift: boolean;
   alt: boolean;
 }
@@ -59,28 +60,28 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
 ];
 
 export const DEFAULT_SHORTCUTS: Record<ShortcutAction, ShortcutBinding> = {
-  "tab.1": { code: "Digit1", mod: true, shift: false, alt: false },
-  "tab.2": { code: "Digit2", mod: true, shift: false, alt: false },
-  "tab.3": { code: "Digit3", mod: true, shift: false, alt: false },
-  "tab.4": { code: "Digit4", mod: true, shift: false, alt: false },
-  "tab.5": { code: "Digit5", mod: true, shift: false, alt: false },
-  "tab.6": { code: "Digit6", mod: true, shift: false, alt: false },
-  "tab.7": { code: "Digit7", mod: true, shift: false, alt: false },
-  "tab.8": { code: "Digit8", mod: true, shift: false, alt: false },
-  "tab.9": { code: "Digit9", mod: true, shift: false, alt: false },
-  "tab.close": { code: "KeyW", mod: true, shift: false, alt: false },
-  "tab.prev": { code: "BracketLeft", mod: true, shift: true, alt: false },
-  "tab.next": { code: "BracketRight", mod: true, shift: true, alt: false },
-  "split.vertical": { code: "KeyD", mod: true, shift: false, alt: false },
-  "split.horizontal": { code: "KeyD", mod: true, shift: true, alt: false },
-  "panel.ai": { code: "KeyB", mod: true, shift: false, alt: false },
-  "panel.sidebar": { code: "KeyE", mod: true, shift: false, alt: false },
-  "panel.switch": { code: "KeyE", mod: true, shift: true, alt: false },
-  "panel.filter": { code: "KeyF", mod: true, shift: false, alt: false },
-  "page.home": { code: "KeyH", mod: true, shift: true, alt: false },
-  "page.settings": { code: "Comma", mod: true, shift: false, alt: false },
-  "page.sshkeys": { code: "KeyK", mod: true, shift: true, alt: false },
-  "command.quickopen": { code: "KeyP", mod: true, shift: false, alt: false },
+  "tab.1": { code: "Digit1", mod: true, ctrl: false, shift: false, alt: false },
+  "tab.2": { code: "Digit2", mod: true, ctrl: false, shift: false, alt: false },
+  "tab.3": { code: "Digit3", mod: true, ctrl: false, shift: false, alt: false },
+  "tab.4": { code: "Digit4", mod: true, ctrl: false, shift: false, alt: false },
+  "tab.5": { code: "Digit5", mod: true, ctrl: false, shift: false, alt: false },
+  "tab.6": { code: "Digit6", mod: true, ctrl: false, shift: false, alt: false },
+  "tab.7": { code: "Digit7", mod: true, ctrl: false, shift: false, alt: false },
+  "tab.8": { code: "Digit8", mod: true, ctrl: false, shift: false, alt: false },
+  "tab.9": { code: "Digit9", mod: true, ctrl: false, shift: false, alt: false },
+  "tab.close": { code: "KeyW", mod: true, ctrl: false, shift: false, alt: false },
+  "tab.prev": { code: "BracketLeft", mod: true, ctrl: false, shift: true, alt: false },
+  "tab.next": { code: "BracketRight", mod: true, ctrl: false, shift: true, alt: false },
+  "split.vertical": { code: "KeyD", mod: true, ctrl: false, shift: false, alt: false },
+  "split.horizontal": { code: "KeyD", mod: true, ctrl: false, shift: true, alt: false },
+  "panel.ai": { code: "KeyB", mod: true, ctrl: false, shift: false, alt: false },
+  "panel.sidebar": { code: "KeyE", mod: true, ctrl: false, shift: false, alt: false },
+  "panel.switch": { code: "KeyE", mod: true, ctrl: false, shift: true, alt: false },
+  "panel.filter": { code: "KeyF", mod: true, ctrl: false, shift: false, alt: false },
+  "page.home": { code: "KeyH", mod: true, ctrl: false, shift: true, alt: false },
+  "page.settings": { code: "Comma", mod: true, ctrl: false, shift: false, alt: false },
+  "page.sshkeys": { code: "KeyK", mod: true, ctrl: false, shift: true, alt: false },
+  "command.quickopen": { code: "KeyP", mod: true, ctrl: false, shift: false, alt: false },
 };
 
 const STORAGE_KEY = "keyboard_shortcuts";
@@ -88,7 +89,15 @@ const STORAGE_KEY = "keyboard_shortcuts";
 function loadCustom(): Partial<Record<ShortcutAction, ShortcutBinding>> {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : {};
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Partial<Record<ShortcutAction, ShortcutBinding>>;
+    // Normalize at the boundary: bindings persisted before `ctrl` existed lack the
+    // field, so default it to false here rather than re-defaulting at every consumer.
+    const normalized: Partial<Record<ShortcutAction, ShortcutBinding>> = {};
+    for (const [action, binding] of Object.entries(parsed)) {
+      normalized[action as ShortcutAction] = { ...binding, ctrl: binding.ctrl ?? false };
+    }
+    return normalized;
   } catch {
     return {};
   }
@@ -98,7 +107,14 @@ function saveCustom(shortcuts: Record<ShortcutAction, ShortcutBinding>) {
   const custom: Partial<Record<ShortcutAction, ShortcutBinding>> = {};
   for (const [key, val] of Object.entries(shortcuts)) {
     const def = DEFAULT_SHORTCUTS[key as ShortcutAction];
-    if (def && (val.code !== def.code || val.mod !== def.mod || val.shift !== def.shift || val.alt !== def.alt)) {
+    if (
+      def &&
+      (val.code !== def.code ||
+        val.mod !== def.mod ||
+        val.ctrl !== def.ctrl ||
+        val.shift !== def.shift ||
+        val.alt !== def.alt)
+    ) {
       custom[key as ShortcutAction] = val;
     }
   }
@@ -116,6 +132,7 @@ interface ShortcutState {
   updateShortcut: (action: ShortcutAction, binding: ShortcutBinding) => void;
   resetShortcut: (action: ShortcutAction) => void;
   resetAll: () => void;
+  swapCmdCtrl: () => void;
 }
 
 export const useShortcutStore = create<ShortcutState>((set) => ({
@@ -147,6 +164,21 @@ export const useShortcutStore = create<ShortcutState>((set) => ({
     localStorage.removeItem(STORAGE_KEY);
     set({ shortcuts: { ...DEFAULT_SHORTCUTS } });
   },
+
+  // macOS only: exchange the Cmd (mod) and Ctrl flags on every binding, so the user
+  // can flip the whole table between ⌘- and ⌃-based shortcuts with one click. The swap
+  // is its own inverse, so calling it again restores the previous state. Has no sensible
+  // meaning on Windows (no Cmd key), where the UI hides the trigger.
+  swapCmdCtrl: () => {
+    set((state) => {
+      const shortcuts = {} as Record<ShortcutAction, ShortcutBinding>;
+      for (const [action, binding] of Object.entries(state.shortcuts)) {
+        shortcuts[action as ShortcutAction] = { ...binding, mod: binding.ctrl, ctrl: binding.mod };
+      }
+      saveCustom(shortcuts);
+      return { shortcuts };
+    });
+  },
 }));
 
 // Match a KeyboardEvent against shortcuts
@@ -154,16 +186,16 @@ export function matchShortcut(
   e: KeyboardEvent,
   shortcuts: Record<ShortcutAction, ShortcutBinding>
 ): ShortcutAction | null {
-  const modPressed = isMac ? e.metaKey : e.ctrlKey;
   for (const [action, binding] of Object.entries(shortcuts)) {
-    if (
-      e.code === binding.code &&
-      modPressed === binding.mod &&
-      e.shiftKey === binding.shift &&
-      e.altKey === binding.alt
-    ) {
-      return action as ShortcutAction;
+    if (e.code !== binding.code || e.shiftKey !== binding.shift || e.altKey !== binding.alt) continue;
+    if (isMac) {
+      // Mac distinguishes both modifiers: mod = Cmd (metaKey), ctrl = Control (ctrlKey).
+      if (e.metaKey !== binding.mod || e.ctrlKey !== binding.ctrl) continue;
+    } else {
+      // Windows/Linux have no Cmd: mod = Ctrl (ctrlKey); the ctrl field is unused.
+      if (e.ctrlKey !== binding.mod) continue;
     }
+    return action as ShortcutAction;
   }
   return null;
 }
@@ -211,11 +243,20 @@ function codeToDisplay(code: string): string {
 
 export function formatBinding(binding: ShortcutBinding): string {
   const parts: string[] = [];
-  if (binding.mod) parts.push(isMac ? "⌘" : "Ctrl");
-  if (binding.shift) parts.push(isMac ? "⇧" : "Shift");
-  if (binding.alt) parts.push(isMac ? "⌥" : "Alt");
+  if (isMac) {
+    // Apple convention orders modifiers ⌃⌥⇧⌘ with the key last.
+    if (binding.ctrl) parts.push("⌃");
+    if (binding.alt) parts.push("⌥");
+    if (binding.shift) parts.push("⇧");
+    if (binding.mod) parts.push("⌘");
+    parts.push(codeToDisplay(binding.code));
+    return parts.join("");
+  }
+  if (binding.mod) parts.push("Ctrl");
+  if (binding.shift) parts.push("Shift");
+  if (binding.alt) parts.push("Alt");
   parts.push(codeToDisplay(binding.code));
-  return isMac ? parts.join("") : parts.join("+");
+  return parts.join("+");
 }
 
 // Platform-convention modifier shortcut (Cmd on Mac, Ctrl elsewhere) — for
@@ -223,5 +264,5 @@ export function formatBinding(binding: ShortcutBinding): string {
 // editor shortcuts, etc.). User-configurable shortcuts must use
 // formatBinding(shortcuts[action]) so the UI follows rebindings.
 export function formatModKey(code: string, options: { shift?: boolean; alt?: boolean } = {}): string {
-  return formatBinding({ code, mod: true, shift: options.shift ?? false, alt: options.alt ?? false });
+  return formatBinding({ code, mod: true, ctrl: false, shift: options.shift ?? false, alt: options.alt ?? false });
 }

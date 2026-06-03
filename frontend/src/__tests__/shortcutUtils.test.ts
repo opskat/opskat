@@ -54,7 +54,7 @@ describe("matchShortcut", () => {
   it("works with custom shortcuts", () => {
     const custom = {
       ...DEFAULT_SHORTCUTS,
-      "tab.close": { code: "KeyQ", mod: true, shift: false, alt: false },
+      "tab.close": { code: "KeyQ", mod: true, ctrl: false, shift: false, alt: false },
     };
     const event = makeKeyboardEvent({ code: "KeyQ", ctrlKey: true });
     expect(matchShortcut(event, custom)).toBe("tab.close");
@@ -65,32 +65,32 @@ describe("formatBinding", () => {
   // In happy-dom, isMac = false, so we get Windows-style formatting
 
   it("formats Ctrl+key binding", () => {
-    const binding: ShortcutBinding = { code: "KeyW", mod: true, shift: false, alt: false };
+    const binding: ShortcutBinding = { code: "KeyW", mod: true, ctrl: false, shift: false, alt: false };
     expect(formatBinding(binding)).toBe("Ctrl+W");
   });
 
   it("formats Ctrl+Shift+key binding", () => {
-    const binding: ShortcutBinding = { code: "BracketLeft", mod: true, shift: true, alt: false };
+    const binding: ShortcutBinding = { code: "BracketLeft", mod: true, ctrl: false, shift: true, alt: false };
     expect(formatBinding(binding)).toBe("Ctrl+Shift+[");
   });
 
   it("formats Ctrl+Alt+key binding", () => {
-    const binding: ShortcutBinding = { code: "KeyD", mod: true, shift: false, alt: true };
+    const binding: ShortcutBinding = { code: "KeyD", mod: true, ctrl: false, shift: false, alt: true };
     expect(formatBinding(binding)).toBe("Ctrl+Alt+D");
   });
 
   it("formats digit keys correctly", () => {
-    const binding: ShortcutBinding = { code: "Digit1", mod: true, shift: false, alt: false };
+    const binding: ShortcutBinding = { code: "Digit1", mod: true, ctrl: false, shift: false, alt: false };
     expect(formatBinding(binding)).toBe("Ctrl+1");
   });
 
   it("formats special keys (Comma, Space, etc.)", () => {
-    const binding: ShortcutBinding = { code: "Comma", mod: true, shift: false, alt: false };
+    const binding: ShortcutBinding = { code: "Comma", mod: true, ctrl: false, shift: false, alt: false };
     expect(formatBinding(binding)).toBe("Ctrl+,");
   });
 
   it("formats key without modifiers", () => {
-    const binding: ShortcutBinding = { code: "F5", mod: false, shift: false, alt: false };
+    const binding: ShortcutBinding = { code: "F5", mod: false, ctrl: false, shift: false, alt: false };
     expect(formatBinding(binding)).toBe("F5");
   });
 });
