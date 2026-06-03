@@ -141,3 +141,60 @@ func TestDisconnectClosesProc(t *testing.T) {
 		return proc.closeN == 1
 	}, time.Second, 5*time.Millisecond)
 }
+
+func withShortGracePeriod(t *testing.T, d time.Duration) {
+	orig := callbackSetupGracePeriod
+	callbackSetupGracePeriod = d
+	t.Cleanup(func() { callbackSetupGracePeriod = orig })
+}
+
+func TestGraceTimeoutReapsSessionWithoutCallbacks(t *testing.T) {
+	withShortGracePeriod(t, 50*time.Millisecond)
+	proc := newFakeProc()
+	withFakeStartPTY(t, proc)
+	mgr := NewManager()
+
+	sid, err := mgr.Connect(ConnectConfig{AssetID: 4})
+	require.NoError(t, err)
+	// 不挂 SetCallbacks → 宽限期后看门狗应回收会话。
+
+	require.Eventually(t, func() bool {
+		_, ok := mgr.GetSession(sid)
+		proc.mu.Lock()
+		defer proc.mu.Unlock()
+		return !ok && proc.closeN == 1
+	}, time.Second, 5*time.Millisecond, "宽限期内未挂回调的会话应被回收")
+}
+
+func TestGraceTimeoutDoesNotReapSessionWithCallbacks(t *testing.T) {
+	withShortGracePeriod(t, 50*time.Millisecond)
+	proc := newFakeProc()
+	withFakeStartPTY(t, proc)
+	mgr := NewManager()
+
+	sid, err := mgr.Connect(ConnectConfig{AssetID: 5})
+	require.NoError(t, err)
+
+	got := make(chan []byte, 4)
+	mgr.SetCallbacks(sid, func(b []byte) { got <- b }, nil)
+
+	// 等待远超宽限窗口,确认看门狗不会误杀已挂回调的会话。
+	time.Sleep(150 * time.Millisecond)
+
+	_, ok := mgr.GetSession(sid)
+	require.True(t, ok, "已挂回调的会话不应被看门狗回收")
+
+	proc.mu.Lock()
+	closeN := proc.closeN
+	proc.mu.Unlock()
+	assert.Equal(t, 0, closeN, "已挂回调的会话 PTY 不应被关闭")
+
+	// 数据仍能正常流转。
+	proc.readCh <- []byte("alive")
+	select {
+	case b := <-got:
+		assert.Equal(t, "alive", string(b))
+	case <-time.After(time.Second):
+		t.Fatal("宽限期后会话不再流转数据")
+	}
+}

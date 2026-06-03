@@ -12,7 +12,9 @@ import (
 
 var errSessionClosed = errors.New("session is closed")
 
-const callbackSetupGracePeriod = 5 * time.Second
+// callbackSetupGracePeriod 是会话挂回调前的宽限期,超时未挂则回收 PTY 防泄漏。
+// 用 var 而非 const,与 startPTYFn 同理:测试可缩短它以快速覆盖宽限路径。
+var callbackSetupGracePeriod = 5 * time.Second
 
 // ConnectConfig 本地终端连接配置。
 type ConnectConfig struct {
@@ -188,15 +190,36 @@ func (m *Manager) watchCallbackSetup(sess *Session, timeout time.Duration) {
 		defer timer.Stop()
 		select {
 		case <-readyCh:
+			return
 		case <-closedCh:
+			return
 		case <-timer.C:
-			if _, ok := m.sessions.Load(sessionID); ok {
+			if m.closeSessionWithoutCallbacks(sessionID) {
 				logger.Default().Warn("close local session without callbacks",
 					zap.String("sessionID", sessionID), zap.Duration("timeout", timeout))
-				m.closeSession(sessionID)
 			}
 		}
 	}()
+}
+
+// closeSessionWithoutCallbacks 仅在会话确实从未挂回调时回收它,返回是否真正回收。
+// 在 mu 下复检 closed/readerStarted:若 SetCallbacks 恰好在宽限边界抢先(readyCh 与
+// timer.C 同时就绪、select 随机选中 timer.C),这里会跳过,既不误报 warning 也不误杀
+// 刚启动 reader 的会话。
+func (m *Manager) closeSessionWithoutCallbacks(sessionID string) bool {
+	v, ok := m.sessions.Load(sessionID)
+	if !ok {
+		return false
+	}
+	sess := v.(*Session)
+	sess.mu.Lock()
+	if sess.closed || sess.readerStarted {
+		sess.mu.Unlock()
+		return false
+	}
+	sess.mu.Unlock()
+	m.closeSession(sessionID)
+	return true
 }
 
 // readOutput 持续读 PTY 输出并回调。一次 Read 最多 32KB,天然合并突发输出。
@@ -208,6 +231,7 @@ func (m *Manager) readOutput(sess *Session) {
 
 	buf := make([]byte, 32*1024)
 	for {
+		// proc 在构造后不可变,故读取它无需持 mu(阻塞 Read 也不该在锁内)。
 		n, err := sess.proc.Read(buf)
 		if n > 0 {
 			sess.mu.Lock()
