@@ -1,8 +1,12 @@
 package local
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
+
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/service/asset_svc"
@@ -28,15 +32,20 @@ type LocalConnectEvent struct {
 
 // ConnectLocalAsync 异步启动本地终端，立即返回 connectionId。
 func (l *Local) ConnectLocalAsync(req LocalConnectRequest) (string, error) {
+	logger.Ctx(l.ctx).Info("local terminal connect requested", zap.Int64("assetID", req.AssetID))
+
 	asset, err := asset_svc.Asset().Get(i18n.Ctx(l.ctx, l.lang.Lang()), req.AssetID)
 	if err != nil {
+		logger.Ctx(l.ctx).Warn("local connect: asset not found", zap.Int64("assetID", req.AssetID), zap.Error(err))
 		return "", fmt.Errorf("%s: %w", i18n.Pick(l.lang.Lang(), "资产不存在", "asset not found"), err)
 	}
 	if !asset.IsLocal() {
+		logger.Ctx(l.ctx).Warn("local connect: asset is not local type", zap.Int64("assetID", req.AssetID))
 		return "", fmt.Errorf("%s", i18n.Pick(l.lang.Lang(), "资产不是本地终端类型", "asset is not a local type"))
 	}
 	cfg, err := asset.GetLocalConfig()
 	if err != nil {
+		logger.Ctx(l.ctx).Warn("local connect: parse config failed", zap.Int64("assetID", req.AssetID), zap.Error(err))
 		return "", fmt.Errorf("%s: %w", i18n.Pick(l.lang.Lang(), "解析本地终端配置失败", "parse local config failed"), err)
 	}
 
@@ -44,11 +53,20 @@ func (l *Local) ConnectLocalAsync(req LocalConnectRequest) (string, error) {
 	connectionID := fmt.Sprintf("local-conn-%d", l.connCounter.Add(1))
 	eventName := "local:connect:" + connectionID
 
+	// 从 l.ctx 派生取消上下文：应用退出（Wails ctx 取消）时连接中途终止，
+	// 避免在 CleanAll 之后才生成、逃出关闭范围的孤儿会话。
+	connCtx, cancel := context.WithCancel(l.ctx)
+
 	emitEvent := func(event LocalConnectEvent) {
 		wailsRuntime.EventsEmit(l.ctx, eventName, event)
 	}
 
 	go func() {
+		defer cancel()
+
+		if connCtx.Err() != nil {
+			return
+		}
 		emitEvent(LocalConnectEvent{Type: "progress", Message: i18n.Pick(l.lang.Lang(), "正在启动本地终端...", "Starting local terminal...")})
 
 		sessionID, err := l.manager.Connect(localterm_svc.ConnectConfig{
@@ -60,7 +78,13 @@ func (l *Local) ConnectLocalAsync(req LocalConnectRequest) (string, error) {
 			Rows:    req.Rows,
 		})
 		if err != nil {
+			logger.Ctx(l.ctx).Error("local connect: start session failed",
+				zap.Int64("assetID", req.AssetID), zap.String("connID", connectionID), zap.Error(err))
 			emitEvent(LocalConnectEvent{Type: "error", Error: err.Error()})
+			return
+		}
+		if connCtx.Err() != nil {
+			l.manager.Disconnect(sessionID)
 			return
 		}
 
