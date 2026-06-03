@@ -15,6 +15,7 @@ import (
 	"github.com/opskat/opskat/internal/app/external_edit"
 	"github.com/opskat/opskat/internal/app/k8s"
 	"github.com/opskat/opskat/internal/app/kafka"
+	"github.com/opskat/opskat/internal/app/local"
 	"github.com/opskat/opskat/internal/app/opsctl"
 	"github.com/opskat/opskat/internal/app/query"
 	"github.com/opskat/opskat/internal/app/redis"
@@ -31,6 +32,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/internal/service/external_edit_svc"
+	"github.com/opskat/opskat/internal/service/localterm_svc"
 	"github.com/opskat/opskat/internal/service/serial_svc"
 	"github.com/opskat/opskat/internal/service/sftp_svc"
 	"github.com/opskat/opskat/internal/service/snippet_svc"
@@ -101,6 +103,7 @@ func main() {
 		return external_edit_svc.MaxReadFileSizeBytesForConfig(bootstrap.GetConfig())
 	})
 	serialMgr := serial_svc.NewManager()
+	localMgr := localterm_svc.NewManager()
 	poolDialer := &sshadapt.PoolDialer{}
 	pool := sshpool.NewPool(poolDialer, 5*time.Minute)
 	proxyServer := sshpool.NewServer(pool, authToken)
@@ -123,6 +126,7 @@ func main() {
 	kafkaB := kafka.New(appCtx, sys, pool)
 	k8sB := k8s.New(appCtx, sys, pool)
 	serialB := serial.New(appCtx, sys, serialMgr)
+	localB := local.New(appCtx, sys, localMgr)
 	aiB := ai.New(appCtx, sys, pool)
 	opsctlB := opsctl.New(appCtx, sys, sys, proxyServer)
 	opsctlB.SetAuthToken(authToken)
@@ -134,7 +138,7 @@ func main() {
 	aiB.SetSerialManager(serialMgr)
 	aiB.SetWindowActivator(sys)
 
-	binders := []Lifecycle{sys, sshB, queryB, redisB, etcdB, kafkaB, k8sB, serialB, aiB, opsctlB, extB, extEditB}
+	binders := []Lifecycle{sys, sshB, queryB, redisB, etcdB, kafkaB, k8sB, serialB, localB, aiB, opsctlB, extB, extEditB}
 
 	err = wails.Run(&options.App{
 		Title:     "OpsKat",
@@ -175,7 +179,7 @@ func main() {
 			pool.Close()
 		},
 		Bind: []interface{}{
-			sys, sshB, queryB, redisB, etcdB, kafkaB, k8sB, serialB, aiB, opsctlB, extB, extEditB,
+			sys, sshB, queryB, redisB, etcdB, kafkaB, k8sB, serialB, localB, aiB, opsctlB, extB, extEditB,
 		},
 		SingleInstanceLock: &options.SingleInstanceLock{
 			UniqueId: "com.opskat.desktop",
