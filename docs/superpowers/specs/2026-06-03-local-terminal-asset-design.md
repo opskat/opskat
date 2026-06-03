@@ -34,6 +34,9 @@ issue #70 混了两件诉求:① 原标题「让 AI 执行本机 powershell/命�
 | `internal/service/localterm_svc/pty.go` | 包内接口 `ptyProcess { Read(p []byte)(int,error); Write(p []byte)(int,error); Resize(cols,rows int) error; Close() error }`;函数声明 `startPTY(spec ptySpec) (ptyProcess, error)`;`ptySpec{Shell string; Args []string; Cwd string; Cols,Rows int}`。进程退出由 reader 读到 EOF 感知(creack/pty 与 conpty 一致);僵尸回收放在平台实现的 `Close()` 内(`cmd.Wait()` 带超时,unix)。环境变量由平台实现内部用 `os.Environ()` + `TERM=xterm-256color` 兜底,**不放进 config/spec**(YAGNI)。 |
 | `internal/service/localterm_svc/pty_unix.go` | `//go:build !windows`(覆盖 darwin/linux/bsd)。用 `creack/pty`:`exec.Command(shell, args...)` + `pty.StartWithSize`;`Resize` → `pty.Setsize`;`Close` → 发 SIGHUP 后带超时回收;默认 shell `$SHELL` → `/bin/sh`。 |
 | `internal/service/localterm_svc/pty_windows.go` | `//go:build windows`。用 `UserExistsError/conpty`:`conpty.Start(commandLine)`;`Resize` → `cpty.Resize`;默认 shell `pwsh.exe` → `powershell.exe` → `%COMSPEC%` → `cmd.exe`。ConPTY 需 Win10 1809+,起不来时返回明确错误。 |
+| `internal/service/localterm_svc/shells.go` | 公共:`type ShellInfo struct { Name string; Path string; Args []string }`(`Args` 让 WSL/Git Bash 这类"shell+固定参数"的预设可一键选)。 |
+| `internal/service/localterm_svc/shells_unix.go` | `//go:build !windows`。`DetectShells()`:`$SHELL`(默认优先)+ 读 `/etc/shells`(系统权威清单),去重 + `os.Stat` 确认存在。 |
+| `internal/service/localterm_svc/shells_windows.go` | `//go:build windows`。`DetectShells()`:`LookPath` pwsh/powershell/cmd;探 Git Bash(`C:\Program Files\Git\bin\bash.exe`,带 `--login -i`);`wsl.exe -l -q` 枚举已装发行版,每个一项 `{Name:"WSL: <distro>", Path:wsl.exe, Args:["-d",distro]}`。wsl 输出是 UTF-16LE,v1 用"去 NUL + 去 CR + 按行切"解析(ASCII 名字够用;非 ASCII 发行版名后续再上正规 UTF-16 解码)。 |
 
 `startPTY` 是包内函数 → service 单测可在 Unix 下真起 `/bin/sh` 跑集成用例,Manager 逻辑则通过注入 fake `ptyProcess` 做纯单测(见 §7)。
 
@@ -83,14 +86,14 @@ const TRANSPORTS: Record<TerminalTransport, {
 - `terminalRegistry.ts` L71-73 改为查表(`eventPrefix`/`write`)。
 - `terminalStore.ts`、`Terminal.tsx` 里所有 `isSerial ? A : B` 改为查 `TRANSPORTS[transport]`。能力差异(如 serial 不可分屏)由表里的 `canSplit` 表达,而不是 `=== "serial"`。
 - 新增 wails 绑定调用:`ConnectLocalAsync`、`WriteLocal`、`ResizeLocalTerminal`、`DisconnectLocal`、`ListLocalShells`(`wailsjs/go/local/Local.*` 由 wails 自动生成)。
-- 资产**新建/编辑表单**:加 `local` 类型项 + 图标;配置项 Shell(下拉预设 + 可手填)、Args、Cwd。Shell 预设由 `ListLocalShells()` 探测本机(镜像 `ListSerialPorts()`)。
+- 资产**新建/编辑表单**:加 `local` 类型项 + 图标;配置项 Shell(下拉预设 + 可手填)、Args、Cwd。Shell 预设由 `ListLocalShells()` 探测本机(镜像 `ListSerialPorts()`):下拉项带 `{name, path, args}`,选中时同时回填 `shell=path` 与 `args`(WSL 发行版选中即填 `wsl.exe` + `-d <distro>`)。
 - `reconnectBySession` 走映射表 → local 的"重连" = 重新 spawn 一个 shell。
 
 ## 4. 与 serial 模板的关键差异(即"做得好"的要点)
 
 1. **Resize 真生效**。serial 的 `Session.Resize` 是 no-op;local 调 `ptyProcess.Resize(cols,rows)`(底层 `pty.Setsize` / `conpty.Resize`)。因此 `Connect` 需接收初始 `Cols/Rows`(默认 80×24,前端首次 fit 后再 `ResizeLocalTerminal`)。
 2. **进程退出 = 会话关闭**。serial 靠读错误判断断开;local 同理 —— shell 退出(用户 `exit`、崩溃)时 PTY master 读到 EOF,readOutput 退出 → `Session.Close()` → emit `local:closed:<sid>`。前端现有的"按 Enter 重连"语义对 local 即重新 spawn。
-3. **Shell 可选可配**。`LocalConfig.Shell` 空 → `pty.go` 按 OS 兜底;非空 → 用指定 shell。这样可保存「WSL Ubuntu」「PowerShell」「cmd」多套 profile。`ListLocalShells()` 在当前 OS 上探测常见 shell 路径供下拉。
+3. **Shell 可选可配 + 系统探测**。`LocalConfig.Shell` 空 → `pty.go` 按 OS 兜底;非空 → 用指定 shell。这样可保存「WSL Ubuntu」「PowerShell」「cmd」多套 profile。`ListLocalShells()`(后端 `localterm_svc.DetectShells()`,平台 build-tag 实现)彻底探测:Unix `/etc/shells`+`$SHELL`;Windows pwsh/powershell/cmd/Git Bash + `wsl -l -q` 枚举发行版,供下拉选择。
 4. **日志**(AGENTS.md「关键流程要打日志」)。PTY spawn / exit 是长生命周期跨进程操作,打 开始 / 结束 / 失败 三态,带 `assetID`、`sessionID`、`shell` 强类型字段。有 ctx 用 `logger.Ctx(ctx)`;纯 goroutine(reader)无 ctx 降级 `logger.Default()`。`recover()` 边界用 `zap.Stack("stack")`。不打印进程环境变量(可能含敏感值)。
 
 ## 5. 绑定 & 事件命名(对齐 serial 风格)
@@ -100,7 +103,7 @@ const TRANSPORTS: Record<TerminalTransport, {
 - `WriteLocal(sessionId, dataB64 string) error`
 - `ResizeLocalTerminal(sessionId string, cols, rows int) error`
 - `DisconnectLocal(sessionId string)`
-- `ListLocalShells() ([]LocalShellInfo, error)`
+- `ListLocalShells() ([]localterm_svc.ShellInfo, error)`(直接委托 `localterm_svc.DetectShells()`)
 
 事件(Wails Events,base64 payload 与 serial 一致):
 - `local:connect:<connectionId>` —— `{type: "progress"|"connected"|"error", sessionId?, error?}`

@@ -606,7 +606,7 @@ git commit -m "✨ 注册 local 资产类型 handler #70"
 
 ---
 
-## Phase 4 — localterm_svc Manager / Session
+## Phase 4 — localterm_svc Manager / Session / Shell 探测
 
 ### Task 4: 会话管理器
 
@@ -1044,6 +1044,178 @@ git add internal/service/localterm_svc/localterm.go internal/service/localterm_s
 git commit -m "✨ 本地终端会话管理器 #70"
 ```
 
+### Task 4b: Shell 探测(DetectShells)
+
+**Files:**
+- Create: `internal/service/localterm_svc/shells.go`
+- Create: `internal/service/localterm_svc/shells_unix.go`
+- Create: `internal/service/localterm_svc/shells_windows.go`
+- Test: `internal/service/localterm_svc/shells_unix_test.go`
+
+- [ ] **Step 1: 公共类型 `shells.go`**
+
+```go
+package localterm_svc
+
+// ShellInfo 描述一个可供用户选择的本地 shell 预设。
+// Args 让 "shell+固定参数" 的预设(如 WSL 发行版、Git Bash 登录)可一键选中。
+type ShellInfo struct {
+	Name string   `json:"name"`           // 展示名,如 "zsh" / "WSL: Ubuntu" / "Git Bash"
+	Path string   `json:"path"`           // 可执行文件路径
+	Args []string `json:"args,omitempty"` // 启动参数,如 ["-d","Ubuntu"]
+}
+```
+
+- [ ] **Step 2: Unix 探测 `shells_unix.go`**
+
+```go
+//go:build !windows
+
+package localterm_svc
+
+import (
+	"bufio"
+	"os"
+	"strings"
+)
+
+// DetectShells 探测本机可用 shell:$SHELL(默认优先)+ /etc/shells(系统权威清单)。
+func DetectShells() []ShellInfo {
+	seen := map[string]bool{}
+	var out []ShellInfo
+	add := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" || seen[path] {
+			return
+		}
+		fi, err := os.Stat(path)
+		if err != nil || fi.IsDir() {
+			return
+		}
+		seen[path] = true
+		name := path
+		if i := strings.LastIndex(path, "/"); i >= 0 {
+			name = path[i+1:]
+		}
+		out = append(out, ShellInfo{Name: name, Path: path})
+	}
+
+	add(os.Getenv("SHELL"))
+
+	if f, err := os.Open("/etc/shells"); err == nil {
+		defer f.Close()
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			line := strings.TrimSpace(sc.Text())
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			add(line)
+		}
+	}
+	return out
+}
+```
+
+- [ ] **Step 3: Windows 探测 `shells_windows.go`**
+
+```go
+//go:build windows
+
+package localterm_svc
+
+import (
+	"os"
+	"os/exec"
+	"strings"
+)
+
+// DetectShells 探测本机:pwsh/powershell/cmd + Git Bash + WSL 发行版。
+func DetectShells() []ShellInfo {
+	var out []ShellInfo
+
+	for _, name := range []string{"pwsh.exe", "powershell.exe", "cmd.exe"} {
+		if p, err := exec.LookPath(name); err == nil {
+			out = append(out, ShellInfo{Name: name, Path: p})
+		}
+	}
+
+	for _, p := range []string{
+		`C:\Program Files\Git\bin\bash.exe`,
+		`C:\Program Files (x86)\Git\bin\bash.exe`,
+	} {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			out = append(out, ShellInfo{Name: "Git Bash", Path: p, Args: []string{"--login", "-i"}})
+			break
+		}
+	}
+
+	if wsl, err := exec.LookPath("wsl.exe"); err == nil {
+		for _, distro := range listWSLDistros(wsl) {
+			out = append(out, ShellInfo{Name: "WSL: " + distro, Path: wsl, Args: []string{"-d", distro}})
+		}
+	}
+	return out
+}
+
+// listWSLDistros 跑 `wsl -l -q` 列出已装发行版。wsl 输出是 UTF-16LE,
+// v1 用"去 NUL + 去 CR + 按行切"解析(ASCII 名字够用;非 ASCII 后续再上正规 UTF-16 解码)。
+func listWSLDistros(wslPath string) []string {
+	raw, err := exec.Command(wslPath, "-l", "-q").Output()
+	if err != nil {
+		return nil
+	}
+	cleaned := make([]byte, 0, len(raw))
+	for _, b := range raw {
+		if b != 0x00 && b != '\r' {
+			cleaned = append(cleaned, b)
+		}
+	}
+	var distros []string
+	for _, line := range strings.Split(string(cleaned), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			distros = append(distros, line)
+		}
+	}
+	return distros
+}
+```
+
+- [ ] **Step 4: Unix 探测测试 `shells_unix_test.go`**
+
+```go
+//go:build !windows
+
+package localterm_svc
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestDetectShellsReturnsExistingShells(t *testing.T) {
+	shells := DetectShells()
+	// /bin/sh 几乎一定在 /etc/shells 或作为兜底存在;至少不应 panic 且项的 Path 非空。
+	for _, s := range shells {
+		assert.NotEmpty(t, s.Path)
+		assert.NotEmpty(t, s.Name)
+	}
+}
+```
+
+- [ ] **Step 5: 跑测试**
+
+Run: `go test ./internal/service/localterm_svc/ -run TestDetectShells -v`
+Expected: PASS。
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add internal/service/localterm_svc/shells.go internal/service/localterm_svc/shells_unix.go internal/service/localterm_svc/shells_windows.go internal/service/localterm_svc/shells_unix_test.go
+git commit -m "✨ 本地 shell 探测(/etc/shells + WSL 枚举) #70"
+```
+
 ---
 
 ## Phase 5 — app/local binder
@@ -1105,8 +1277,6 @@ package local
 import (
 	"encoding/base64"
 	"fmt"
-	"os/exec"
-	"runtime"
 
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/service/asset_svc"
@@ -1128,12 +1298,6 @@ type LocalConnectEvent struct {
 	Message   string `json:"message,omitempty"`
 	SessionID string `json:"sessionId,omitempty"`
 	Error     string `json:"error,omitempty"`
-}
-
-// LocalShellInfo 可用 shell 信息。
-type LocalShellInfo struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
 }
 
 // ConnectLocalAsync 异步启动本地终端,立即返回 connectionId。
@@ -1212,21 +1376,9 @@ func (l *Local) DisconnectLocal(sessionID string) {
 	l.manager.Disconnect(sessionID)
 }
 
-// ListLocalShells 探测本机常见 shell,供前端下拉预设。
-func (l *Local) ListLocalShells() ([]LocalShellInfo, error) {
-	var candidates []string
-	if runtime.GOOS == "windows" {
-		candidates = []string{"pwsh.exe", "powershell.exe", "cmd.exe", "wsl.exe", "bash.exe"}
-	} else {
-		candidates = []string{"zsh", "bash", "fish", "sh"}
-	}
-	out := make([]LocalShellInfo, 0, len(candidates))
-	for _, name := range candidates {
-		if p, err := exec.LookPath(name); err == nil {
-			out = append(out, LocalShellInfo{Name: name, Path: p})
-		}
-	}
-	return out, nil
+// ListLocalShells 委托 localterm_svc 探测本机可用 shell(/etc/shells、WSL 发行版等),供前端下拉预设。
+func (l *Local) ListLocalShells() ([]localterm_svc.ShellInfo, error) {
+	return localterm_svc.DetectShells(), nil
 }
 ```
 
@@ -1423,6 +1575,12 @@ import { useTranslation } from "react-i18next";
 import { Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { ListLocalShells } from "../../../wailsjs/go/local/Local";
 
+interface ShellInfo {
+  name: string;
+  path: string;
+  args?: string[];
+}
+
 interface Props {
   shell: string;
   setShell: (v: string) => void;
@@ -1434,27 +1592,43 @@ interface Props {
 
 export function LocalConfigSection({ shell, setShell, args, setArgs, cwd, setCwd }: Props) {
   const { t } = useTranslation();
-  const [shells, setShells] = useState<{ name: string; path: string }[]>([]);
+  const [shells, setShells] = useState<ShellInfo[]>([]);
 
   useEffect(() => {
     ListLocalShells()
-      .then((list) => setShells(list || []))
+      .then((list) => setShells((list as ShellInfo[]) || []))
       .catch(() => setShells([]));
   }, []);
+
+  // 探测下拉是"快速填充"动作:选中即把 shell/args 两个可编辑框一起填好。
+  // value 用索引(WSL 多个发行版共用 wsl.exe 路径,path 不唯一)。
+  const onSelectPreset = (val: string) => {
+    if (val === "__default__") {
+      setShell("");
+      setArgs("");
+      return;
+    }
+    const s = shells[Number(val)];
+    if (s) {
+      setShell(s.path);
+      setArgs((s.args || []).join(" "));
+    }
+  };
 
   return (
     <div className="space-y-4">
       <div className="space-y-2">
         <Label>{t("asset.localShell")}</Label>
-        <Select value={shell || "__default__"} onValueChange={(v) => setShell(v === "__default__" ? "" : v)}>
+        <Select onValueChange={onSelectPreset}>
           <SelectTrigger>
-            <SelectValue placeholder={t("asset.localDefaultShell")} />
+            <SelectValue placeholder={t("asset.localShellPreset")} />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="__default__">{t("asset.localDefaultShell")}</SelectItem>
-            {shells.map((s) => (
-              <SelectItem key={s.path} value={s.path}>
-                {s.name} ({s.path})
+            {shells.map((s, i) => (
+              <SelectItem key={`${s.path}-${i}`} value={String(i)}>
+                {s.name}
+                {s.args && s.args.length ? ` (${s.path} ${s.args.join(" ")})` : ` (${s.path})`}
               </SelectItem>
             ))}
           </SelectContent>
@@ -1473,7 +1647,7 @@ export function LocalConfigSection({ shell, setShell, args, setArgs, cwd, setCwd
   );
 }
 ```
-> 对照 `SerialConfigSection.tsx` 实际使用的 `@opskat/ui` 组件名/导入路径校正。`args` 在表单里用空格分隔字符串,保存时 split 成数组。
+> 对照 `SerialConfigSection.tsx` 实际使用的 `@opskat/ui` 组件名/导入路径校正。下拉是预设快填,选中后 shell/args 仍可手改;`args` 用空格分隔,保存时 split 成数组。`ListLocalShells` 返回的是 wails 生成的 `localterm_svc.ShellInfo`,这里用本地 `ShellInfo` 接口收下即可。
 
 - [ ] **Step 6: AssetForm 接线**(`AssetForm.tsx`)
 
@@ -1540,6 +1714,7 @@ const loadLocalConfig = (asset: asset_entity.Asset) => {
 `asset` 段:
 ```json
 "localShell": "Shell",                         // zh-CN: "Shell"
+"localShellPreset": "Detected shells…",        // zh-CN: "已探测到的 shell…"
 "localShellPlaceholder": "e.g. /bin/zsh, pwsh.exe",  // zh-CN: "如 /bin/zsh、pwsh.exe"
 "localDefaultShell": "System default",         // zh-CN: "系统默认"
 "localArgs": "Arguments",                       // zh-CN: "启动参数"
@@ -1823,7 +1998,7 @@ git commit -m "✅ 本地终端资产集成校验与收尾 #70"
 
 ## Self-Review 记录
 
-- **Spec 覆盖**:PTY 层(Task1)、实体(Task2)、handler(Task3)、service(Task4)、binder(Task5)、wiring(Task6)、前端类型注册(Task7)、transport 重构(Task8)、验证(Task9)——覆盖 spec §3–§8 全部条目。免迁移(§6)已确认无 schema 改动。
+- **Spec 覆盖**:PTY 层(Task1)、实体(Task2)、handler(Task3)、service(Task4)、shell 探测/WSL 枚举(Task4b)、binder(Task5)、wiring(Task6)、前端类型注册+表单预设(Task7)、transport 重构(Task8)、验证(Task9)——覆盖 spec §3–§8 全部条目。免迁移(§6)已确认无 schema 改动。
 - **作用域**:不接 AI(无 `internal/ai` 改动)、local 不支持 split(v1)、`LocalConfig={Shell,Args,Cwd}`——与 spec 一致。
 - **类型一致**:`ptyProcess{Read,Write,Resize,Close}`、`ConnectConfig{AssetID,Shell,Args,Cwd,Cols,Rows}`、`TransportSpec{connectAsync,write,resize,disconnect,eventPrefix,canSplit,hasDirectorySync}` 在各 Task 间一致。
 - **已知需在实现时核对**:① conpty v0.1.4 实际 API(Task1 Step4);② `registerAssetType`/`SerialConfigSection`/`SerialDetailInfoCard` 的真实字段与 props(Task7);③ `AssetForm.tsx` 行号会随改动漂移,按"serial 旁"定位而非死认行号。
