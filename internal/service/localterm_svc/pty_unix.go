@@ -28,7 +28,7 @@ func startPTY(spec ptySpec) (ptyProcess, error) {
 	if shell == "" {
 		shell = defaultShell()
 	}
-	cmd := exec.Command(shell, spec.Args...)
+	cmd := exec.Command(shell, spec.Args...) //nolint:gosec // G204: 启动用户在本地终端资产里选择的 shell 是本功能的核心意图
 	if spec.Cwd != "" {
 		cmd.Dir = spec.Cwd
 	}

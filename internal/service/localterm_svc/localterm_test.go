@@ -17,7 +17,6 @@ type fakeProc struct {
 	closed  bool
 	closeN  int
 	readCh  chan []byte // 推送 fake 输出
-	readErr error
 }
 
 func newFakeProc() *fakeProc { return &fakeProc{readCh: make(chan []byte, 16)} }
@@ -114,7 +113,7 @@ func TestReadEOFTriggersClosedCallback(t *testing.T) {
 	mgr.SetCallbacks(sid, func([]byte) {}, func(s string) { closed <- s })
 
 	// 模拟 shell 退出:关闭 readCh → Read 返回 EOF。
-	proc.Close()
+	_ = proc.Close()
 
 	select {
 	case s := <-closed:

@@ -14,7 +14,7 @@ import (
 func TestStartPTYEchoesInput(t *testing.T) {
 	proc, err := startPTY(ptySpec{Shell: "/bin/sh", Cols: 80, Rows: 24})
 	require.NoError(t, err)
-	defer proc.Close()
+	defer func() { _ = proc.Close() }()
 
 	_, err = proc.Write([]byte("echo hello-pty\n"))
 	require.NoError(t, err)
@@ -54,7 +54,7 @@ func TestStartPTYEchoesInput(t *testing.T) {
 func TestStartPTYResizeNoError(t *testing.T) {
 	proc, err := startPTY(ptySpec{Shell: "/bin/sh"})
 	require.NoError(t, err)
-	defer proc.Close()
+	defer func() { _ = proc.Close() }()
 	require.NoError(t, proc.Resize(120, 40))
 }
 

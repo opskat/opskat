@@ -17,7 +17,7 @@ func DetectShells() []ShellInfo {
 		if path == "" || seen[path] {
 			return
 		}
-		fi, err := os.Stat(path)
+		fi, err := os.Stat(path) //nolint:gosec // G703: path 来自 /etc/shells 与 $SHELL，非不可信输入
 		if err != nil || fi.IsDir() {
 			return
 		}
@@ -32,7 +32,7 @@ func DetectShells() []ShellInfo {
 	add(os.Getenv("SHELL"))
 
 	if f, err := os.Open("/etc/shells"); err == nil {
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		sc := bufio.NewScanner(f)
 		for sc.Scan() {
 			line := strings.TrimSpace(sc.Text())
