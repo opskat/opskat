@@ -65,11 +65,21 @@ export function LocalConfigSection({ shell, setShell, args, setArgs, cwd, setCwd
       </div>
       <div className="grid gap-2">
         <Label>{t("asset.localArgs")}</Label>
-        <Input value={args} onChange={(e) => setArgs(e.target.value)} placeholder="-l" className="font-mono" />
+        <Input
+          value={args}
+          onChange={(e) => setArgs(e.target.value)}
+          placeholder={t("asset.localArgsPlaceholder")}
+          className="font-mono"
+        />
       </div>
       <div className="grid gap-2">
         <Label>{t("asset.localCwd")}</Label>
-        <Input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/home/user" className="font-mono" />
+        <Input
+          value={cwd}
+          onChange={(e) => setCwd(e.target.value)}
+          placeholder={t("asset.localCwdPlaceholder")}
+          className="font-mono"
+        />
       </div>
     </div>
   );

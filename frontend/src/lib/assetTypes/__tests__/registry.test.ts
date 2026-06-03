@@ -62,8 +62,9 @@ describe("AssetType Registry", () => {
     expect(getAssetType("local")!.connectAction).toBe("terminal");
   });
 
-  it("only ssh supports new tab", () => {
+  it("ssh, serial, and local support new tab", () => {
     expect(getAssetType("ssh")!.canConnectInNewTab).toBe(true);
+    expect(getAssetType("serial")!.canConnectInNewTab).toBe(true);
     expect(getAssetType("local")!.canConnectInNewTab).toBe(true);
     expect(getAssetType("database")!.canConnectInNewTab).toBe(false);
     expect(getAssetType("mongodb")!.canConnectInNewTab).toBe(false);
