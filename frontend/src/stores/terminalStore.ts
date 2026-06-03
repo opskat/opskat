@@ -84,7 +84,7 @@ export function transportForAsset(assetType: string): TerminalTransport {
 
 // 仅在恢复（restore）时用到——那时 pane 状态还没有 transport，只能从 session id 前缀
 // 反推；连接/断开/分屏等运行时路径都直接读 pane.transport，不再依赖前缀。
-function inferTransportFromSessionId(sessionId: string): TerminalTransport {
+export function inferTransportFromSessionId(sessionId: string): TerminalTransport {
   if (sessionId.startsWith("serial-")) return "serial";
   if (sessionId.startsWith("local-")) return "local";
   return "ssh";
@@ -953,8 +953,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
                 activePaneId: sessionId,
                 panes: {
                   ...d.panes,
-                  // split 仅适用于 SSH（serial 已在入口阻断），新 pane 始终是 ssh。
-                  [sessionId]: { sessionId, transport: "ssh", connected: true, connectedAt: Date.now() },
+                  // 新 pane 继承 active pane 的 transport（今天只有 ssh 可 split，
+                  // 但不写死，未来某 transport 若 canSplit:true 也能拿到正确的 transport）。
+                  [sessionId]: { sessionId, transport: activeTransport, connected: true, connectedAt: Date.now() },
                 },
               },
             },

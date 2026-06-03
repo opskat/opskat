@@ -89,6 +89,8 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
 
+    // 该 effect 故意只依赖 [sessionId]（见末尾 eslint-disable）。effect 内用到的
+    // spec 来自 TRANSPORTS（模块级常量），引用稳定，不必进依赖数组。
     const inst = getOrCreateTerminal(sessionId, {
       fontSize,
       fontFamily,

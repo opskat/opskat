@@ -128,9 +128,11 @@ vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 vi.mock("@/stores/terminalStore", async (importActual) => {
   const actual = await importActual<typeof import("@/stores/terminalStore")>();
   return {
-    // 复用真实的 TRANSPORTS 表（含 ssh/serial/local 三态及各 spec 字段），
+    // 复用真实的 TRANSPORTS 表与 transport 网关函数（纯函数，无副作用），
     // useTerminalStore 仍替换为最小桩，避免拉起整个 store 的副作用。
     TRANSPORTS: actual.TRANSPORTS,
+    transportForAsset: actual.transportForAsset,
+    inferTransportFromSessionId: actual.inferTransportFromSessionId,
     useTerminalStore: {
       getState: () => ({
         markClosed: vi.fn(),
@@ -160,7 +162,7 @@ vi.mock("@/i18n", () => ({
 }));
 
 import { getOrCreateTerminal, disposeTerminal } from "@/components/terminal/terminalRegistry";
-import { TRANSPORTS } from "@/stores/terminalStore";
+import { TRANSPORTS, transportForAsset, inferTransportFromSessionId } from "@/stores/terminalStore";
 
 describe("TRANSPORTS", () => {
   it("TRANSPORTS 覆盖 ssh/serial/local 且字段齐全", () => {
@@ -176,6 +178,23 @@ describe("TRANSPORTS", () => {
     expect(TRANSPORTS.ssh.canSplit).toBe(true);
     expect(TRANSPORTS.serial.canSplit).toBe(false);
     expect(TRANSPORTS.local.canSplit).toBe(false);
+    // 只有 ssh 同步 cwd / 暴露 SFTP，serial/local 没有目录能力。
+    expect(TRANSPORTS.ssh.hasDirectorySync).toBe(true);
+    expect(TRANSPORTS.serial.hasDirectorySync).toBe(false);
+    expect(TRANSPORTS.local.hasDirectorySync).toBe(false);
+  });
+
+  it("transportForAsset maps asset type → transport", () => {
+    expect(transportForAsset("serial")).toBe("serial");
+    expect(transportForAsset("local")).toBe("local");
+    expect(transportForAsset("ssh")).toBe("ssh");
+    expect(transportForAsset("k8s")).toBe("ssh"); // unknown → ssh default
+  });
+
+  it("inferTransportFromSessionId maps session id prefix → transport", () => {
+    expect(inferTransportFromSessionId("serial-1")).toBe("serial");
+    expect(inferTransportFromSessionId("local-2")).toBe("local");
+    expect(inferTransportFromSessionId("abc-3")).toBe("ssh");
   });
 });
 
