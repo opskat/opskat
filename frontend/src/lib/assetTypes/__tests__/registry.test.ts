@@ -9,6 +9,7 @@ describe("AssetType Registry", () => {
     expect(getAssetType("mongodb")).toBeDefined();
     expect(getAssetType("kafka")).toBeDefined();
     expect(getAssetType("k8s")).toBeDefined();
+    expect(getAssetType("local")).toBeDefined();
   });
 
   it("returns undefined for unknown type", () => {
@@ -32,6 +33,7 @@ describe("AssetType Registry", () => {
       "kafka",
       "k8s",
       "serial",
+      "local",
       "etcd",
     ]);
   });
@@ -56,8 +58,13 @@ describe("AssetType Registry", () => {
     expect(getAssetType("kafka")!.connectAction).toBe("query");
   });
 
+  it("local is terminal type", () => {
+    expect(getAssetType("local")!.connectAction).toBe("terminal");
+  });
+
   it("only ssh supports new tab", () => {
     expect(getAssetType("ssh")!.canConnectInNewTab).toBe(true);
+    expect(getAssetType("local")!.canConnectInNewTab).toBe(true);
     expect(getAssetType("database")!.canConnectInNewTab).toBe(false);
     expect(getAssetType("mongodb")!.canConnectInNewTab).toBe(false);
     expect(getAssetType("kafka")!.canConnectInNewTab).toBe(false);

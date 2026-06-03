@@ -1,6 +1,6 @@
 // frontend/src/lib/assetTypes/options.ts
 import type { ComponentType } from "react";
-import { Monitor, Database, Cylinder, Leaf, Container, Server, Usb } from "lucide-react";
+import { Monitor, Database, Cylinder, Leaf, Container, Server, Usb, SquareTerminal } from "lucide-react";
 import { getIconComponent } from "@/components/asset/IconPicker";
 import { KafkaIcon, EtcdIcon } from "@/components/asset/brand-icons";
 import type { ExtManifest } from "@/extension/types";
@@ -79,6 +79,14 @@ const BUILTIN_OPTIONS: AssetTypeOption[] = [
     label: "nav.serial",
     labelIsI18nKey: true,
     icon: Usb,
+    group: "builtin",
+  },
+  {
+    value: "local",
+    aliases: ["local", "shell", "terminal"],
+    label: "nav.local",
+    labelIsI18nKey: true,
+    icon: SquareTerminal,
     group: "builtin",
   },
   {

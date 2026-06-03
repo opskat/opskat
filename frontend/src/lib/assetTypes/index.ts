@@ -22,6 +22,7 @@ import "./mongodb";
 import "./kafka";
 import "./k8s";
 import "./serial";
+import "./local";
 import "./etcd";
 
 export type { AssetTypeDefinition, DetailInfoCardProps, PolicyDefinition, PolicyFieldDef } from "./types";

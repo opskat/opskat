@@ -46,6 +46,7 @@ import {
 import { K8sConfigSection } from "@/components/asset/K8sConfigSection";
 import { EtcdConfigSection } from "@/components/asset/EtcdConfigSection";
 import { SerialConfigSection } from "@/components/asset/SerialConfigSection";
+import { LocalConfigSection } from "@/components/asset/LocalConfigSection";
 import { useExtensionStore } from "@/extension";
 import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
 
@@ -204,7 +205,17 @@ interface KafkaConnectClusterConfig {
   tls_key_file?: string;
 }
 
-type AssetType = "ssh" | "database" | "redis" | "mongodb" | "kafka" | "k8s" | "serial" | "etcd" | (string & {});
+type AssetType =
+  | "ssh"
+  | "database"
+  | "redis"
+  | "mongodb"
+  | "kafka"
+  | "k8s"
+  | "serial"
+  | "etcd"
+  | "local"
+  | (string & {});
 
 const DEFAULT_PORTS: Record<string, number> = {
   ssh: 22,
@@ -230,6 +241,7 @@ const DEFAULT_ICONS: Record<string, string> = {
   k8s: "kubernetes",
   serial: "usb",
   etcd: "etcd",
+  local: "terminal",
 };
 
 function defaultKafkaCompanionAuth(): KafkaCompanionAuthForm {
@@ -431,6 +443,11 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const [serialParity, setSerialParity] = useState("none");
   const [serialFlowControl, setSerialFlowControl] = useState("none");
 
+  // Local terminal fields
+  const [localShell, setLocalShell] = useState("");
+  const [localArgs, setLocalArgs] = useState("");
+  const [localCwd, setLocalCwd] = useState("");
+
   // Extension config
   const [extConfig, setExtConfig] = useState<Record<string, unknown>>({});
 
@@ -492,6 +509,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           loadK8sConfig(editAsset);
         } else if (editType === "serial") {
           loadSerialConfig(editAsset);
+        } else if (editType === "local") {
+          loadLocalConfig(editAsset);
         } else if (editType === "etcd") {
           loadEtcdConfig(editAsset);
         } else {
@@ -519,6 +538,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         resetKafkaFields();
         resetK8sFields();
         resetSerialFields();
+        resetLocalFields();
         resetEtcdFields();
         setExtConfig({});
       }
@@ -903,6 +923,23 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setSerialFlowControl("none");
   };
 
+  const loadLocalConfig = (asset: asset_entity.Asset) => {
+    try {
+      const cfg = JSON.parse(asset.Config || "{}");
+      setLocalShell(cfg.shell || "");
+      setLocalArgs((cfg.args || []).join(" "));
+      setLocalCwd(cfg.cwd || "");
+    } catch {
+      resetLocalFields();
+    }
+  };
+
+  const resetLocalFields = () => {
+    setLocalShell("");
+    setLocalArgs("");
+    setLocalCwd("");
+  };
+
   const handleTypeChange = (newType: AssetType) => {
     if (newType === assetType) return;
     setAssetType(newType);
@@ -918,6 +955,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setIcon(newType === "database" ? DEFAULT_ICONS[driver] || "mysql" : DEFAULT_ICONS[newType] || "server");
     if (newType === "k8s") setHost("");
     if (newType === "serial") setHost("");
+    if (newType === "local") setHost("");
     if (newType === "etcd") setHost("");
   };
 
@@ -1554,6 +1592,13 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       };
       if (serialFlowControl !== "none") serialConfig.flow_control = serialFlowControl;
       config = JSON.stringify(serialConfig);
+    } else if (assetType === "local") {
+      const localConfig: Record<string, unknown> = {};
+      if (localShell) localConfig.shell = localShell;
+      const argList = localArgs.trim().split(/\s+/).filter(Boolean);
+      if (argList.length) localConfig.args = argList;
+      if (localCwd) localConfig.cwd = localCwd;
+      config = JSON.stringify(localConfig);
     } else {
       // Extension type: encrypt password fields from configSchema before saving
       const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
@@ -1626,12 +1671,14 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                 ? t("asset.typeK8s")
                 : assetType === "serial"
                   ? t("asset.typeSerial")
-                  : assetType === "etcd"
-                    ? t("asset.typeEtcd")
-                    : (() => {
-                        const found = availableTypes.find((at) => at.type === assetType);
-                        return found ? resolveExtDisplayName(found) : assetType;
-                      })();
+                  : assetType === "local"
+                    ? t("asset.typeLocal")
+                    : assetType === "etcd"
+                      ? t("asset.typeEtcd")
+                      : (() => {
+                          const found = availableTypes.find((at) => at.type === assetType);
+                          return found ? resolveExtDisplayName(found) : assetType;
+                        })();
 
   const isTestableAssetType =
     assetType === "ssh" ||
@@ -1759,6 +1806,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                     <SelectItem value="kafka">{t("asset.typeKafka")}</SelectItem>
                     <SelectItem value="k8s">{t("asset.typeK8s")}</SelectItem>
                     <SelectItem value="serial">{t("asset.typeSerial")}</SelectItem>
+                    <SelectItem value="local">{t("asset.typeLocal")}</SelectItem>
                     <SelectItem value="etcd">{t("asset.typeEtcd")}</SelectItem>
                     {availableTypes
                       .filter((at) => !!at.extensionName)
@@ -2105,6 +2153,18 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               />
             )}
 
+            {/* Local terminal config */}
+            {assetType === "local" && (
+              <LocalConfigSection
+                shell={localShell}
+                setShell={setLocalShell}
+                args={localArgs}
+                setArgs={setLocalArgs}
+                cwd={localCwd}
+                setCwd={setLocalCwd}
+              />
+            )}
+
             {/* Extension type config */}
             {assetType !== "ssh" &&
               assetType !== "database" &&
@@ -2113,6 +2173,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               assetType !== "kafka" &&
               assetType !== "k8s" &&
               assetType !== "serial" &&
+              assetType !== "local" &&
               assetType !== "etcd" &&
               (() => {
                 const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
