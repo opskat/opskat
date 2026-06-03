@@ -16,3 +16,10 @@ func TestDetectShellsReturnsExistingShells(t *testing.T) {
 		assert.NotEmpty(t, s.Name)
 	}
 }
+
+func TestDetectShellsSkipsNonExistentShell(t *testing.T) {
+	t.Setenv("SHELL", "/nonexistent/shell")
+	for _, s := range DetectShells() {
+		assert.NotEqual(t, "/nonexistent/shell", s.Path)
+	}
+}
