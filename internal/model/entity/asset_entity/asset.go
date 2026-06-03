@@ -22,6 +22,7 @@ const (
 	AssetTypeK8s      = "k8s"
 	AssetTypeSerial   = "serial"
 	AssetTypeEtcd     = "etcd"
+	AssetTypeLocal    = "local"
 )
 
 // DatabaseDriver 数据库驱动类型
@@ -275,6 +276,13 @@ type SerialConfig struct {
 	FlowControl string `json:"flow_control,omitempty"` // 流控制: "none", "hardware"（"software" / XON-XOFF 暂未支持）
 }
 
+// LocalConfig 本地终端(local)类型的特定配置。无 host/port/凭证。
+type LocalConfig struct {
+	Shell string   `json:"shell,omitempty"` // 为空时运行时按 OS 兜底
+	Args  []string `json:"args,omitempty"`  // shell 参数
+	Cwd   string   `json:"cwd,omitempty"`   // 工作目录
+}
+
 // DatabaseConfig PasswordSource implementation
 func (c *DatabaseConfig) GetCredentialID() int64 { return c.CredentialID }
 func (c *DatabaseConfig) GetPassword() string    { return c.Password }
@@ -343,6 +351,10 @@ var DefaultEtcdPolicy = policy.DefaultEtcdPolicy
 func (c *SerialConfig) GetCredentialID() int64 { return 0 }
 func (c *SerialConfig) GetPassword() string    { return "" }
 
+// LocalConfig PasswordSource implementation（本地终端无密码，返回空）
+func (c *LocalConfig) GetCredentialID() int64 { return 0 }
+func (c *LocalConfig) GetPassword() string    { return "" }
+
 // --- 充血模型方法 ---
 
 // IsSSH 判断是否SSH类型
@@ -383,6 +395,11 @@ func (a *Asset) IsSerial() bool {
 // IsEtcd 判断是否etcd类型
 func (a *Asset) IsEtcd() bool {
 	return a.Type == AssetTypeEtcd
+}
+
+// IsLocal 判断是否本地终端类型
+func (a *Asset) IsLocal() bool {
+	return a.Type == AssetTypeLocal
 }
 
 // GetSSHConfig 解析SSH配置
@@ -529,6 +546,24 @@ func (a *Asset) SetSerialConfig(cfg *SerialConfig) error {
 	return nil
 }
 
+// GetLocalConfig 解析本地终端配置
+func (a *Asset) GetLocalConfig() (*LocalConfig, error) {
+	if !a.IsLocal() {
+		return nil, errors.New("资产不是本地终端类型")
+	}
+	return jsonfield.Unmarshal[LocalConfig](a.Config, "本地终端配置")
+}
+
+// SetLocalConfig 序列化本地终端配置到 Config 字段
+func (a *Asset) SetLocalConfig(cfg *LocalConfig) error {
+	s, err := jsonfield.Marshal(cfg, "本地终端配置")
+	if err != nil {
+		return err
+	}
+	a.Config = s
+	return nil
+}
+
 // GetQueryPolicy 解析SQL权限策略（database类型）
 func (a *Asset) GetQueryPolicy() (*QueryPolicy, error) {
 	return jsonfield.UnmarshalOrDefault[QueryPolicy](a.CmdPolicy, "SQL权限策略")
@@ -656,6 +691,8 @@ func (a *Asset) Validate() error {
 		return a.validateK8s()
 	case AssetTypeSerial:
 		return a.validateSerial()
+	case AssetTypeLocal:
+		return a.validateLocal()
 	case AssetTypeEtcd:
 		return a.validateEtcd()
 	default:
@@ -842,6 +879,14 @@ func (a *Asset) validateSerial() error {
 	return nil
 }
 
+// validateLocal 校验本地终端配置(shell 可空,配置只需能解析)
+func (a *Asset) validateLocal() error {
+	if _, err := a.GetLocalConfig(); err != nil {
+		return fmt.Errorf("本地终端配置无效: %w", err)
+	}
+	return nil
+}
+
 // validateEtcd 校验etcd类型特定配置
 func (a *Asset) validateEtcd() error {
 	cfg, err := a.GetEtcdConfig()
@@ -945,6 +990,8 @@ func (a *Asset) CanConnect() bool {
 			return false
 		}
 		return len(cfg.Endpoints) > 0
+	case AssetTypeLocal:
+		return true
 	}
 	return false
 }
