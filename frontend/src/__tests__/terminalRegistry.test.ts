@@ -46,6 +46,23 @@ vi.mock("../../wailsjs/runtime/runtime", () => ({
 
 vi.mock("../../wailsjs/go/ssh/SSH", () => ({
   WriteSSH: vi.fn().mockResolvedValue(undefined),
+  ResizeSSH: vi.fn().mockResolvedValue(undefined),
+  ConnectSSHAsync: vi.fn().mockResolvedValue("conn-ssh"),
+  DisconnectSSH: vi.fn(),
+}));
+
+vi.mock("../../wailsjs/go/serial/Serial", () => ({
+  WriteSerial: vi.fn().mockResolvedValue(undefined),
+  ResizeSerialTerminal: vi.fn().mockResolvedValue(undefined),
+  ConnectSerialAsync: vi.fn().mockResolvedValue("conn-serial"),
+  DisconnectSerial: vi.fn(),
+}));
+
+vi.mock("../../wailsjs/go/local/Local", () => ({
+  WriteLocal: vi.fn().mockResolvedValue(undefined),
+  ResizeLocalTerminal: vi.fn().mockResolvedValue(undefined),
+  ConnectLocalAsync: vi.fn().mockResolvedValue("conn-local"),
+  DisconnectLocal: vi.fn(),
 }));
 
 vi.mock("@xterm/xterm", () => {
@@ -108,14 +125,20 @@ vi.mock("@xterm/addon-webgl", () => {
 });
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 
-vi.mock("@/stores/terminalStore", () => ({
-  useTerminalStore: {
-    getState: () => ({
-      markClosed: vi.fn(),
-      reconnectBySession: hoisted.reconnectBySessionMock,
-    }),
-  },
-}));
+vi.mock("@/stores/terminalStore", async (importActual) => {
+  const actual = await importActual<typeof import("@/stores/terminalStore")>();
+  return {
+    // 复用真实的 TRANSPORTS 表（含 ssh/serial/local 三态及各 spec 字段），
+    // useTerminalStore 仍替换为最小桩，避免拉起整个 store 的副作用。
+    TRANSPORTS: actual.TRANSPORTS,
+    useTerminalStore: {
+      getState: () => ({
+        markClosed: vi.fn(),
+        reconnectBySession: hoisted.reconnectBySessionMock,
+      }),
+    },
+  };
+});
 
 vi.mock("@/stores/terminalThemeStore", () => ({
   useTerminalThemeStore: {
@@ -137,6 +160,24 @@ vi.mock("@/i18n", () => ({
 }));
 
 import { getOrCreateTerminal, disposeTerminal } from "@/components/terminal/terminalRegistry";
+import { TRANSPORTS } from "@/stores/terminalStore";
+
+describe("TRANSPORTS", () => {
+  it("TRANSPORTS 覆盖 ssh/serial/local 且字段齐全", () => {
+    for (const key of ["ssh", "serial", "local"] as const) {
+      const t = TRANSPORTS[key];
+      expect(t.eventPrefix).toBe(key);
+      expect(typeof t.write).toBe("function");
+      expect(typeof t.resize).toBe("function");
+      expect(typeof t.connectAsync).toBe("function");
+      expect(typeof t.disconnect).toBe("function");
+      expect(typeof t.canSplit).toBe("boolean");
+    }
+    expect(TRANSPORTS.ssh.canSplit).toBe(true);
+    expect(TRANSPORTS.serial.canSplit).toBe(false);
+    expect(TRANSPORTS.local.canSplit).toBe(false);
+  });
+});
 
 describe("terminalRegistry", () => {
   beforeEach(() => {

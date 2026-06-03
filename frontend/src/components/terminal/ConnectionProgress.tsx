@@ -14,19 +14,35 @@ import {
   Unplug,
 } from "lucide-react";
 import { Button, Input } from "@opskat/ui";
-import { useTerminalStore, type ConnectionState, type ConnectionStep } from "@/stores/terminalStore";
+import {
+  useTerminalStore,
+  type ConnectionState,
+  type ConnectionStep,
+  type TerminalTransport,
+} from "@/stores/terminalStore";
 
-const SSH_STEPS: { key: ConnectionStep; icon: typeof Server }[] = [
+type ProgressStep = { key: ConnectionStep; icon: typeof Server };
+
+const SSH_STEPS: ProgressStep[] = [
   { key: "resolve", icon: KeyRound },
   { key: "connect", icon: Server },
   { key: "auth", icon: Shield },
   { key: "shell", icon: TerminalSquare },
 ];
 
-const SERIAL_STEPS: { key: ConnectionStep; icon: typeof Server }[] = [
+const SERIAL_STEPS: ProgressStep[] = [
   { key: "resolve", icon: KeyRound },
   { key: "open", icon: Unplug },
 ];
+
+// 本地终端只发一次 progress（不带 step），直接到 connected，故只展示一个启动步骤。
+const LOCAL_STEPS: ProgressStep[] = [{ key: "resolve", icon: TerminalSquare }];
+
+const STEPS_BY_TRANSPORT: Record<TerminalTransport, ProgressStep[]> = {
+  ssh: SSH_STEPS,
+  serial: SERIAL_STEPS,
+  local: LOCAL_STEPS,
+};
 
 function getStepIndex(step: ConnectionStep, steps: { key: ConnectionStep }[]): number {
   return steps.findIndex((item) => item.key === step);
@@ -55,7 +71,7 @@ export function ConnectionProgress({ connectionId }: ConnectionProgressProps) {
   const isError = connection.status === "error";
   const isChallenge = connection.status === "auth_challenge";
   const isHostKeyVerify = connection.status === "host_key_verify";
-  const steps = connection.transport === "serial" ? SERIAL_STEPS : SSH_STEPS;
+  const steps = STEPS_BY_TRANSPORT[connection.transport];
   const currentIdx = getStepIndex(connection.currentStep, steps);
 
   return (

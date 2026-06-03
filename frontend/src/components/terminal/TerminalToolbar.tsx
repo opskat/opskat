@@ -3,10 +3,8 @@ import { useTranslation } from "react-i18next";
 import { FolderOpen, Folder, FileCode } from "lucide-react";
 import { Button } from "@opskat/ui";
 import { useSFTPStore } from "@/stores/sftpStore";
-import { useTerminalStore } from "@/stores/terminalStore";
+import { useTerminalStore, TRANSPORTS } from "@/stores/terminalStore";
 import { SnippetPopover } from "@/components/snippet/SnippetPopover";
-import { WriteSSH } from "../../../wailsjs/go/ssh/SSH";
-import { WriteSerial } from "../../../wailsjs/go/serial/Serial";
 import { bytesToBase64 } from "@/lib/terminalEncode";
 
 interface TerminalToolbarProps {
@@ -22,16 +20,16 @@ export function TerminalToolbar({ tabId }: TerminalToolbarProps) {
   const activePaneId = tabData?.activePaneId;
   const activePane = activePaneId ? tabData?.panes[activePaneId] : undefined;
   const activePaneConnected = activePane?.connected ?? false;
-  const isSerialActivePane = activePane?.transport === "serial";
+  const activeTransport = activePane?.transport ?? "ssh";
+  const activeSpec = TRANSPORTS[activeTransport];
 
   const handleSnippetInsert = useCallback(
     (content: string, { withEnter }: { withEnter: boolean }) => {
       if (!activePaneId) return;
       const payload = withEnter ? content + "\r" : content;
-      const writeFn = isSerialActivePane ? WriteSerial : WriteSSH;
-      writeFn(activePaneId, bytesToBase64(new TextEncoder().encode(payload))).catch(console.error);
+      activeSpec.write(activePaneId, bytesToBase64(new TextEncoder().encode(payload))).catch(console.error);
     },
-    [activePaneId, isSerialActivePane]
+    [activePaneId, activeSpec]
   );
 
   if (!tabData) return null;
@@ -58,7 +56,7 @@ export function TerminalToolbar({ tabId }: TerminalToolbarProps) {
           </Button>
         }
       />
-      {!isSerialActivePane && (
+      {activeSpec.hasDirectorySync && (
         <Button
           variant={isOpen ? "secondary" : "ghost"}
           size="icon-xs"

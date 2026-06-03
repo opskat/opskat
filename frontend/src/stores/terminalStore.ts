@@ -6,11 +6,18 @@ import {
   RespondHostKeyVerify,
   DisconnectSSH,
   GetSSHSyncState,
+  ResizeSSH,
   SplitSSH,
   UpdateAssetPassword,
   WriteSSH,
 } from "../../wailsjs/go/ssh/SSH";
-import { WriteSerial, ConnectSerialAsync, DisconnectSerial } from "../../wailsjs/go/serial/Serial";
+import {
+  WriteSerial,
+  ConnectSerialAsync,
+  DisconnectSerial,
+  ResizeSerialTerminal,
+} from "../../wailsjs/go/serial/Serial";
+import { WriteLocal, ConnectLocalAsync, DisconnectLocal, ResizeLocalTerminal } from "../../wailsjs/go/local/Local";
 import { ssh as ssh_models, asset_entity } from "../../wailsjs/go/models";
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
 import { bytesToBase64 } from "../lib/terminalEncode";
@@ -23,24 +30,64 @@ function disposeTerminalInstance(sessionId: string): void {
     .catch((error) => console.error(`Failed to dispose terminal instance ${sessionId}:`, error));
 }
 
-export type TerminalTransport = "ssh" | "serial";
+export type TerminalTransport = "ssh" | "serial" | "local";
+
+interface TransportSpec {
+  connectAsync: (assetId: number, opts: { cols: number; rows: number; password: string }) => Promise<string>;
+  write: (sessionId: string, dataB64: string) => Promise<void>;
+  resize: (sessionId: string, cols: number, rows: number) => Promise<void>;
+  disconnect: (sessionId: string) => void;
+  eventPrefix: string;
+  canSplit: boolean;
+  /** 仅 ssh 会同步 cwd / 暴露 SFTP 等目录能力。 */
+  hasDirectorySync: boolean;
+}
+
+// 单一 transport 能力表：连接/读写/尺寸/断开/事件前缀/分屏/目录同步全部按 transport 查表，
+// 取代散落各处的 isSerial 二分支。新增 transport 只需在此登记一行。
+export const TRANSPORTS: Record<TerminalTransport, TransportSpec> = {
+  ssh: {
+    connectAsync: (assetId, { cols, rows, password }) =>
+      ConnectSSHAsync(new ssh_models.SSHConnectRequest({ assetId, password, key: "", cols, rows })),
+    write: WriteSSH,
+    resize: ResizeSSH,
+    disconnect: DisconnectSSH,
+    eventPrefix: "ssh",
+    canSplit: true,
+    hasDirectorySync: true,
+  },
+  serial: {
+    connectAsync: (assetId) => ConnectSerialAsync({ assetId }),
+    write: WriteSerial,
+    resize: ResizeSerialTerminal,
+    disconnect: DisconnectSerial,
+    eventPrefix: "serial",
+    canSplit: false,
+    hasDirectorySync: false,
+  },
+  local: {
+    connectAsync: (assetId, { cols, rows }) => ConnectLocalAsync({ assetId, cols, rows }),
+    write: WriteLocal,
+    resize: ResizeLocalTerminal,
+    disconnect: DisconnectLocal,
+    eventPrefix: "local",
+    canSplit: false,
+    hasDirectorySync: false,
+  },
+};
+
+export function transportForAsset(assetType: string): TerminalTransport {
+  if (assetType === "serial") return "serial";
+  if (assetType === "local") return "local";
+  return "ssh";
+}
 
 // 仅在恢复（restore）时用到——那时 pane 状态还没有 transport，只能从 session id 前缀
 // 反推；连接/断开/分屏等运行时路径都直接读 pane.transport，不再依赖前缀。
 function inferTransportFromSessionId(sessionId: string): TerminalTransport {
-  return sessionId.startsWith("serial-") ? "serial" : "ssh";
-}
-
-function disconnectSession(sessionId: string, transport: TerminalTransport): void {
-  if (transport === "serial") {
-    DisconnectSerial(sessionId);
-  } else {
-    DisconnectSSH(sessionId);
-  }
-}
-
-function writeSessionInput(sessionId: string, transport: TerminalTransport, dataB64: string): Promise<void> {
-  return transport === "serial" ? WriteSerial(sessionId, dataB64) : WriteSSH(sessionId, dataB64);
+  if (sessionId.startsWith("serial-")) return "serial";
+  if (sessionId.startsWith("local-")) return "local";
+  return "ssh";
 }
 
 // Split tree types
@@ -107,7 +154,7 @@ export interface ConnectionState {
   connectionId: string;
   assetId: number;
   assetName: string;
-  transport: "ssh" | "serial";
+  transport: TerminalTransport;
   password: string;
   logs: ConnectionLogEntry[];
   status: "connecting" | "auth_challenge" | "host_key_verify" | "connected" | "error";
@@ -240,15 +287,15 @@ function unregisterSessionSyncListener(sessionId: string) {
  * @param connectionId - The connection ID from ConnectSSHAsync / ConnectSerialAsync
  * @param onConnected - Called when session is established (receives sessionId)
  * @param onFinished - Optional cleanup called on both "connected" and "error"
- * @param transport - "ssh" or "serial" (determines event name prefix)
+ * @param transport - transport 类型，决定事件名前缀（ssh/serial/local）
  */
 function setupConnectionListener(
   connectionId: string,
   onConnected: (sessionId: string) => void,
   onFinished?: () => void,
-  transport: "ssh" | "serial" = "ssh"
+  transport: TerminalTransport = "ssh"
 ) {
-  const eventName = `${transport}:connect:${connectionId}`;
+  const eventName = `${TRANSPORTS[transport].eventPrefix}:connect:${connectionId}`;
   EventsOn(
     eventName,
     (event: {
@@ -442,21 +489,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }));
 
     try {
-      let connectionId: string;
-      const isSerial = asset.Type === "serial";
-
-      if (isSerial) {
-        connectionId = await ConnectSerialAsync({ assetId });
-      } else {
-        const req = new ssh_models.SSHConnectRequest({
-          assetId,
-          password,
-          key: "",
-          cols: 80,
-          rows: 24,
-        });
-        connectionId = await ConnectSSHAsync(req);
-      }
+      const transport = transportForAsset(asset.Type);
+      const spec = TRANSPORTS[transport];
+      const connectionId = await spec.connectAsync(assetId, { cols: 80, rows: 24, password });
 
       // Create tab in tabStore
       tabStore.openTab({
@@ -493,7 +528,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             connectionId,
             assetId,
             assetName: assetPath,
-            transport: isSerial ? "serial" : "ssh",
+            transport,
             password,
             logs: [],
             status: "connecting",
@@ -526,7 +561,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
               panes: {
                 [sessionId]: {
                   sessionId,
-                  transport: isSerial ? "serial" : "ssh",
+                  transport,
                   connected: true,
                   connectedAt: Date.now(),
                 },
@@ -543,17 +578,13 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
           // Update tab id in tabStore
           tabStore.replaceTabId(connectionId, sessionId);
-          if (!isSerial) {
+          if (spec.hasDirectorySync) {
             registerSessionSyncListener(sessionId);
           }
 
           // Write pending snippet input (no trailing \r — user sees content and decides to execute)
           if (pendingInput) {
-            writeSessionInput(
-              sessionId,
-              isSerial ? "serial" : "ssh",
-              bytesToBase64(new TextEncoder().encode(pendingInput))
-            ).catch(console.error);
+            spec.write(sessionId, bytesToBase64(new TextEncoder().encode(pendingInput))).catch(console.error);
           }
         },
         () => {
@@ -564,7 +595,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             return { connectingAssetIds: next };
           });
         },
-        isSerial ? "serial" : "ssh"
+        transport
       );
 
       return connectionId;
@@ -593,27 +624,16 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const asset = useAssetStore.getState().assets.find((a) => a.ID === meta.assetId);
     // 优先用 pane.transport（运行时权威），否则按资产类型，再退回 session id 前缀（restore 后的兜底）。
     const transport: TerminalTransport =
-      pane?.transport ?? (asset?.Type === "serial" ? "serial" : inferTransportFromSessionId(sessionId));
-    const isSerial = transport === "serial";
+      pane?.transport ?? (asset ? transportForAsset(asset.Type) : inferTransportFromSessionId(sessionId));
+    const spec = TRANSPORTS[transport];
 
     unregisterSessionSyncListener(sessionId);
     if (pane?.connected) {
-      disconnectSession(sessionId, transport);
+      spec.disconnect(sessionId);
     }
 
-    const connectPromise = isSerial
-      ? ConnectSerialAsync({ assetId: meta.assetId })
-      : ConnectSSHAsync(
-          new ssh_models.SSHConnectRequest({
-            assetId: meta.assetId,
-            password: "",
-            key: "",
-            cols: 80,
-            rows: 24,
-          })
-        );
-
-    connectPromise
+    spec
+      .connectAsync(meta.assetId, { cols: 80, rows: 24, password: "" })
       .then((connectionId: string) => {
         // Dispose the old persistent xterm; the slot is replaced by a "connecting" node.
         disposeTerminalInstance(sessionId);
@@ -640,7 +660,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
                 connectionId,
                 assetId: meta.assetId,
                 assetName: meta.assetName,
-                transport: isSerial ? "serial" : "ssh",
+                transport,
                 password: "",
                 logs: [],
                 status: "connecting" as const,
@@ -686,12 +706,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
                 connections: newConnections,
               };
             });
-            if (!isSerial) {
+            if (spec.hasDirectorySync) {
               registerSessionSyncListener(newSessionId);
             }
           },
           undefined,
-          isSerial ? "serial" : "ssh"
+          transport
         );
       })
       .catch((err: unknown) => {
@@ -812,7 +832,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       Object.values(get().tabData)
         .map((d) => d.panes[sessionId]?.transport)
         .find((t): t is TerminalTransport => !!t) ?? inferTransportFromSessionId(sessionId);
-    disconnectSession(sessionId, transport);
+    TRANSPORTS[transport].disconnect(sessionId);
     set((state) => {
       const newTabData = { ...state.tabData };
       for (const [tabId, data] of Object.entries(newTabData)) {
@@ -887,9 +907,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   splitPane: (tabId, direction) => {
     const data = get().tabData[tabId];
     if (!data) return;
-    // 串口 session 不支持 split（同一物理端口不能被多 pane 复用），上游菜单也已 disable，
-    // 这里再防一道，避免外部直接调用绕过。
-    if (data.panes[data.activePaneId]?.transport === "serial") return;
+    // 仅 ssh 支持 split（serial 物理端口不可复用、local 复用同一 PTY 也无意义），
+    // 上游菜单已 disable，这里再防一道，避免外部直接调用绕过。
+    const activeTransport = data.panes[data.activePaneId]?.transport ?? "ssh";
+    if (!TRANSPORTS[activeTransport].canSplit) return;
 
     const pendingId = `pending-${Date.now()}`;
 
@@ -964,7 +985,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const pane = data.panes[sessionId];
     unregisterSessionSyncListener(sessionId);
     if (pane?.connected) {
-      disconnectSession(sessionId, pane.transport);
+      TRANSPORTS[pane.transport].disconnect(sessionId);
     }
 
     // If only one pane, close entire tab
@@ -1036,7 +1057,7 @@ registerTabCloseHook((tab) => {
     for (const pane of Object.values(data.panes)) {
       unregisterSessionSyncListener(pane.sessionId);
       if (pane.connected) {
-        disconnectSession(pane.sessionId, pane.transport);
+        TRANSPORTS[pane.transport].disconnect(pane.sessionId);
       }
       disposeTerminalInstance(pane.sessionId);
     }

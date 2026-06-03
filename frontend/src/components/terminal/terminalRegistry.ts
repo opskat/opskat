@@ -3,11 +3,9 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
-import { WriteSSH } from "../../../wailsjs/go/ssh/SSH";
-import { WriteSerial } from "../../../wailsjs/go/serial/Serial";
 import { EventsOn, EventsOff } from "../../../wailsjs/runtime/runtime";
 import { bytesToBase64 } from "@/lib/terminalEncode";
-import { useTerminalStore } from "@/stores/terminalStore";
+import { useTerminalStore, TRANSPORTS, type TerminalTransport } from "@/stores/terminalStore";
 import { useShortcutStore } from "@/stores/shortcutStore";
 import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
 import { withTerminalFontFallback, withTerminalFontIsolation } from "@/data/terminalFonts";
@@ -37,7 +35,7 @@ export function getOrCreateTerminal(
     fontFamily: string;
     theme?: ITheme;
     scrollback: number;
-    transport?: "ssh" | "serial";
+    transport?: TerminalTransport;
     webglEnabled?: boolean;
   }
 ): TerminalInstance {
@@ -68,9 +66,11 @@ export function getOrCreateTerminal(
   term.open(container);
 
   // 优先用调用方传入的 transport；首次挂载若没拿到（罕见），退回 session id 前缀。
-  const isSerial = init.transport ? init.transport === "serial" : sessionId.startsWith("serial-");
-  const writeFn = isSerial ? WriteSerial : WriteSSH;
-  const eventPrefix = isSerial ? "serial" : "ssh";
+  const transport: TerminalTransport =
+    init.transport ?? (sessionId.startsWith("serial-") ? "serial" : sessionId.startsWith("local-") ? "local" : "ssh");
+  const spec = TRANSPORTS[transport];
+  const writeFn = spec.write;
+  const eventPrefix = spec.eventPrefix;
 
   // 单一 keyboard 处理入口：IME 守卫 + shortcut 拦截 + Cmd+C 选区复制。
   // 占位回调由 Terminal.tsx 在挂载时通过 setOnFilter/setOnCopy 注入。
