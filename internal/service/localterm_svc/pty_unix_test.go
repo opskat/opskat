@@ -20,7 +20,9 @@ func TestStartPTYEchoesInput(t *testing.T) {
 	require.NoError(t, err)
 
 	// 读输出直到看到 echo 结果或超时。
-	out := make(chan string, 1)
+	// 缓冲容量 2:超时分支 t.Fatal 后没人再收,读 goroutine 仍可无阻塞地
+	// 投递结果后退出,避免 goroutine 泄漏。
+	out := make(chan string, 2)
 	go func() {
 		r := bufio.NewReader(readerFunc(proc.Read))
 		var sb strings.Builder
