@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
 import { useTranslation } from "react-i18next";
@@ -25,7 +25,7 @@ import { GroupSelect } from "@/components/asset/GroupSelect";
 import { useAssetStore } from "@/stores/assetStore";
 import { asset_entity, credential_entity } from "../../../wailsjs/go/models";
 import { EncryptPassword } from "../../../wailsjs/go/system/System";
-import { GetAvailableAssetTypes, GetDecryptedExtensionConfig } from "../../../wailsjs/go/extension/Extension";
+import { GetDecryptedExtensionConfig } from "../../../wailsjs/go/extension/Extension";
 import { ListCredentialsByType, CancelTest } from "../../../wailsjs/go/system/System";
 import { ListLocalSSHKeys, TestSSHConnection } from "../../../wailsjs/go/ssh/SSH";
 import { TestDatabaseConnection, TestRedisConnection, TestMongoDBConnection } from "../../../wailsjs/go/query/Query";
@@ -50,6 +50,8 @@ import { LocalConfigSection } from "@/components/asset/LocalConfigSection";
 import { formatLocalShellArgs, parseLocalShellArgs } from "@/lib/localShellArgs";
 import { useExtensionStore } from "@/extension";
 import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
+import { AssetTypePicker } from "@/components/asset/AssetTypePicker";
+import { getAssetTypeOptions, getAssetTypeLabel } from "@/lib/assetTypes/options";
 
 interface AssetFormProps {
   open: boolean;
@@ -320,16 +322,11 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const { t } = useTranslation();
   const { createAsset, updateAsset } = useAssetStore();
 
+  const extensions = useExtensionStore((s) => s.extensions);
+  const assetTypeOptions = useMemo(() => getAssetTypeOptions(extensions), [extensions]);
+
   // Asset type
   const [assetType, setAssetType] = useState<AssetType>("ssh");
-  const [availableTypes, setAvailableTypes] = useState<
-    { type: string; extensionName?: string; displayName: string; sshTunnel?: boolean }[]
-  >([]);
-
-  // Extension display name is already translated by the backend
-  const resolveExtDisplayName = useCallback((at: { displayName: string }) => {
-    return at.displayName;
-  }, []);
 
   // Basic fields
   const [name, setName] = useState("");
@@ -480,9 +477,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         .then((keys) => setLocalKeys(keys || []))
         .catch(() => setLocalKeys([]))
         .finally(() => setScanningKeys(false));
-      GetAvailableAssetTypes()
-        .then((types) => setAvailableTypes(types || []))
-        .catch(() => setAvailableTypes([]));
     }
   }, [open]);
 
@@ -1663,29 +1657,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     }
   };
 
-  const typeLabel =
-    assetType === "ssh"
-      ? t("asset.typeSSH")
-      : assetType === "database"
-        ? t("asset.typeDatabase")
-        : assetType === "redis"
-          ? t("asset.typeRedis")
-          : assetType === "mongodb"
-            ? t("asset.typeMongoDB")
-            : assetType === "kafka"
-              ? t("asset.typeKafka")
-              : assetType === "k8s"
-                ? t("asset.typeK8s")
-                : assetType === "serial"
-                  ? t("asset.typeSerial")
-                  : assetType === "local"
-                    ? t("asset.typeLocal")
-                    : assetType === "etcd"
-                      ? t("asset.typeEtcd")
-                      : (() => {
-                          const found = availableTypes.find((at) => at.type === assetType);
-                          return found ? resolveExtDisplayName(found) : assetType;
-                        })();
+  const typeLabel = getAssetTypeLabel(assetType, t, assetTypeOptions);
 
   const isTestableAssetType =
     assetType === "ssh" ||
@@ -1801,29 +1773,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             {!editAsset && (
               <div className="grid gap-2">
                 <Label>{t("asset.type")}</Label>
-                <Select value={assetType} onValueChange={(v) => handleTypeChange(v as AssetType)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ssh">{t("asset.typeSSH")}</SelectItem>
-                    <SelectItem value="database">{t("asset.typeDatabase")}</SelectItem>
-                    <SelectItem value="redis">{t("asset.typeRedis")}</SelectItem>
-                    <SelectItem value="mongodb">{t("asset.typeMongoDB")}</SelectItem>
-                    <SelectItem value="kafka">{t("asset.typeKafka")}</SelectItem>
-                    <SelectItem value="k8s">{t("asset.typeK8s")}</SelectItem>
-                    <SelectItem value="serial">{t("asset.typeSerial")}</SelectItem>
-                    <SelectItem value="local">{t("asset.typeLocal")}</SelectItem>
-                    <SelectItem value="etcd">{t("asset.typeEtcd")}</SelectItem>
-                    {availableTypes
-                      .filter((at) => !!at.extensionName)
-                      .map((at) => (
-                        <SelectItem key={at.type} value={at.type}>
-                          {resolveExtDisplayName(at)}
-                        </SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
+                <AssetTypePicker value={assetType} onChange={(v) => handleTypeChange(v as AssetType)} />
               </div>
             )}
 
