@@ -106,7 +106,14 @@ export function ExportDialog({ open, onOpenChange, mode, onGistExport, onWebDAVE
       for (const key of Object.keys(shortcuts) as (keyof typeof DEFAULT_SHORTCUTS)[]) {
         const val = shortcuts[key];
         const def = DEFAULT_SHORTCUTS[key];
-        if (def && (val.code !== def.code || val.mod !== def.mod || val.shift !== def.shift || val.alt !== def.alt)) {
+        if (
+          def &&
+          (val.code !== def.code ||
+            val.mod !== def.mod ||
+            val.ctrl !== def.ctrl ||
+            val.shift !== def.shift ||
+            val.alt !== def.alt)
+        ) {
           custom[key] = val;
         }
       }
