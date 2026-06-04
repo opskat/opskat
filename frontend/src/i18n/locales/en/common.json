@@ -22,7 +22,7 @@
   },
   "nav": {
     "home": "Home",
-    "database": "Database",
+    "database": "SQL Database",
     "ssh": "SSH",
     "redis": "Redis",
     "mongodb": "MongoDB",
@@ -38,6 +38,16 @@
     "audit": "Audit Log",
     "forward": "Port Forward",
     "snippets": "Snippets"
+  },
+  "assetType": {
+    "searchPlaceholder": "Search type…",
+    "noResults": "No matching type",
+    "group": {
+      "servers": "Servers & Terminals",
+      "databases": "Databases",
+      "middleware": "Middleware & Platforms",
+      "extension": "Extensions"
+    }
   },
   "forward": {
     "create": "New Config",

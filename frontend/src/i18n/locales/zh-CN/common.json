@@ -22,7 +22,7 @@
   },
   "nav": {
     "home": "首页",
-    "database": "数据库",
+    "database": "SQL 数据库",
     "ssh": "SSH",
     "redis": "Redis",
     "mongodb": "MongoDB",
@@ -38,6 +38,16 @@
     "audit": "审计日志",
     "forward": "端口转发",
     "snippets": "代码片段"
+  },
+  "assetType": {
+    "searchPlaceholder": "搜索类型…",
+    "noResults": "无匹配类型",
+    "group": {
+      "servers": "服务器与终端",
+      "databases": "数据库",
+      "middleware": "中间件与平台",
+      "extension": "扩展"
+    }
   },
   "forward": {
     "create": "新建配置",
