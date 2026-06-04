@@ -167,3 +167,11 @@ validateForTest(formState): boolean;                 // 替代 isTestableAssetTy
 - **policyKind 解码的类型安全**:`json.RawMessage` + `Decode` 把编译期类型检查换成运行期;需保证每 kind 的 round-trip 测试。
 - **K8s 双重 policy 关系**(`k8s` kind 与 `command` 内置组)需在阶段 1 明确,避免回归。
 - **wails binding 重生**:阶段 2 改 binding 签名后,前端 `wailsjs/` 是 gitignore 生成物,按 CI 流程 `wails generate`(见 reference:Wails binding/CI flow)。
+
+## 阶段 1a 完成记录(2026-06-04,最终评审 Ready to merge)
+
+落地于 3 个 commit(`policy_kind.go` 注册表 + `TestPolicy` 去 switch + app 边界改 resolver),全量 `go test ./internal/...` + `-race` + `golangci-lint` 全绿,etcd 闸门 bug 已修复且为唯一行为变化。评审给出 3 条**留给后续阶段**的非阻塞备忘:
+
+- **type→kind 知识三处重复,需保持同步**:`assetTypeToKind`(`policy_kind.go`)、`policy_group_entity.PolicyType*`、前端各 `assetTypes/*.ts` 的 `policyType` 字段 + `RegisterDefaultPolicy`。阶段 1c/2 应考虑让 kind 从 `assettype` handler 派生(`PolicyKind()`),而非手维护 map。
+- **阶段 1b 接入 mongo/kafka**:补 `Effective*`/merge 后在 `policy_kind.go` 的 `init()` 注册即可,app 层无需改动;但要**同步更新**断言 mongo/kafka 未注册的负向测试(`policy_kind_test.go`、`policy_dispatch_test.go`)。
+- **未注册 kind 的两种返回不一致**:`DecodeCurrentPolicy` 对未注册 kind 返回 error,而 `TestPolicy` 返回 `NeedConfirm`。当前 app 流程先走 `ResolvePolicyKind` 不会撞上;若将来出现 `TestPolicy` 的非 app 直接调用方,需留意未注册 kind 会静默得到 `NeedConfirm` 而非报错。
