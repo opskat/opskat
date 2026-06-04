@@ -471,18 +471,18 @@ func TestTestEtcdPolicy(t *testing.T) {
 			So(out.Decision, ShouldEqual, aictx.Deny)
 		})
 
-		Convey("通过 TestPolicy 入口 — case \"etcd\" 路由", func() {
+		Convey("通过 TestPolicy 入口 — kind \"etcd\" 路由", func() {
 			out := TestPolicy(ctx, PolicyTestInput{
-				PolicyType:  "etcd",
-				CurrentEtcd: &asset_entity.EtcdPolicy{Groups: []string{policy.BuiltinEtcdReadOnly}},
+				PolicyKind: PolicyKindEtcd,
+				Current:    &asset_entity.EtcdPolicy{Groups: []string{policy.BuiltinEtcdReadOnly}},
 			}, "get /config")
 			So(out.Decision, ShouldEqual, aictx.Allow)
 		})
 
 		Convey("通过 TestPolicy 入口 — member remove 被拒", func() {
 			out := TestPolicy(ctx, PolicyTestInput{
-				PolicyType:  "etcd",
-				CurrentEtcd: &asset_entity.EtcdPolicy{Groups: []string{policy.BuiltinEtcdDangerousDeny}},
+				PolicyKind: PolicyKindEtcd,
+				Current:    &asset_entity.EtcdPolicy{Groups: []string{policy.BuiltinEtcdDangerousDeny}},
 			}, "member remove abc")
 			So(out.Decision, ShouldEqual, aictx.Deny)
 		})

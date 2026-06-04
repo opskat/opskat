@@ -15,16 +15,12 @@ type MatchFunc func(rule, command string) bool
 
 // PolicyTestInput 策略测试入参
 type PolicyTestInput struct {
-	PolicyType string // "ssh" | "database" | "redis" | "k8s" | "etcd"
+	PolicyKind string // 规范 policyKind(command/query/redis/mongo/kafka/k8s/etcd);由 ResolvePolicyKind 得到,取值见 policy_kind.go
 	AssetID    int64  // 资产ID（从资产的 groupID 开始解析组链）
-	GroupID    int64  // 资产组ID（从父组开始解析，当前组策略由 Current* 字段提供）
+	GroupID    int64  // 资产组ID（从父组开始解析,当前组策略由 Current 提供）
 
-	// 当前编辑中的策略（来自前端 UI state，可能未保存）
-	CurrentSSH   *asset_entity.CommandPolicy
-	CurrentQuery *asset_entity.QueryPolicy
-	CurrentRedis *asset_entity.RedisPolicy
-	CurrentK8s   *asset_entity.K8sPolicy
-	CurrentEtcd  *asset_entity.EtcdPolicy
+	// Current 当前编辑中的策略(DecodeCurrentPolicy 的产物,具体类型 *CommandPolicy 等),可为 nil。
+	Current any
 }
 
 // PolicyTestOutput 策略测试结果
@@ -40,23 +36,14 @@ type taggedRule struct {
 	Rule, Source string
 }
 
-// TestPolicy 统一的策略测试入口，解析资产组链并合并策略后检查命令。
+// TestPolicy 统一的策略测试入口,按 policyKind 查表分发,解析资产组链并合并策略后检查命令。
 func TestPolicy(ctx context.Context, input PolicyTestInput, command string) PolicyTestOutput {
-	groups := resolveGroupChainForTest(ctx, input.AssetID, input.GroupID)
-
-	switch input.PolicyType {
-	case "ssh":
-		return testSSHPolicy(ctx, input.CurrentSSH, groups, command)
-	case "database":
-		return testQueryPolicy(ctx, input.CurrentQuery, groups, command)
-	case "redis":
-		return testRedisPolicy(ctx, input.CurrentRedis, groups, command)
-	case "k8s":
-		return testK8sPolicy(ctx, input.CurrentK8s, groups, command)
-	case "etcd":
-		return testEtcdPolicy(ctx, input.CurrentEtcd, groups, command)
+	h, ok := kindRegistry[input.PolicyKind]
+	if !ok {
+		return PolicyTestOutput{Decision: aictx.NeedConfirm}
 	}
-	return PolicyTestOutput{Decision: aictx.NeedConfirm}
+	groups := resolveGroupChainForTest(ctx, input.AssetID, input.GroupID)
+	return h.test(ctx, input.Current, groups, command)
 }
 
 // --- 通用组规则收集 ---
