@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/service/serial_svc"
 )
 
@@ -27,7 +29,9 @@ type Serial struct {
 
 // New 构造 serial binder。
 func New(appCtx context.Context, lang LangProvider, mgr *serial_svc.Manager) *Serial {
-	return &Serial{appCtx: appCtx, lang: lang, manager: mgr}
+	s := &Serial{appCtx: appCtx, lang: lang, manager: mgr}
+	conntest.Register(asset_entity.AssetTypeSerial, s.testConnection)
+	return s
 }
 
 // Startup 保存 Wails ctx。

@@ -4,6 +4,8 @@ package kafka
 import (
 	"context"
 
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/service/kafka_svc"
 	"github.com/opskat/opskat/internal/sshpool"
 )
@@ -24,12 +26,14 @@ type Kafka struct {
 
 // New 构造 kafka binder。
 func New(appCtx context.Context, lang LangProvider, pool *sshpool.Pool) *Kafka {
-	return &Kafka{
+	k := &Kafka{
 		appCtx:  appCtx,
 		lang:    lang,
 		pool:    pool,
 		service: kafka_svc.New(pool),
 	}
+	conntest.Register(asset_entity.AssetTypeKafka, k.testConnection)
+	return k
 }
 
 // Service 返回底层 kafka 服务，供 ai binder 在 chat ctx 中注入。

@@ -26,12 +26,8 @@ import { useAssetStore } from "@/stores/assetStore";
 import { asset_entity, credential_entity } from "../../../wailsjs/go/models";
 import { EncryptPassword } from "../../../wailsjs/go/system/System";
 import { GetDecryptedExtensionConfig } from "../../../wailsjs/go/extension/Extension";
-import { ListCredentialsByType, CancelTest } from "../../../wailsjs/go/system/System";
-import { ListLocalSSHKeys, TestSSHConnection } from "../../../wailsjs/go/ssh/SSH";
-import { TestDatabaseConnection, TestRedisConnection, TestMongoDBConnection } from "../../../wailsjs/go/query/Query";
-import { EtcdTestConfig } from "../../../wailsjs/go/etcd/Etcd";
-import { TestKafkaConnection } from "../../../wailsjs/go/kafka/Kafka";
-import { TestSerialConnection } from "../../../wailsjs/go/serial/Serial";
+import { ListCredentialsByType, CancelTest, TestAssetConnection } from "../../../wailsjs/go/system/System";
+import { ListLocalSSHKeys } from "../../../wailsjs/go/ssh/SSH";
 import { ssh as ssh_models } from "../../../wailsjs/go/models";
 import { SSHConfigSection } from "@/components/asset/SSHConfigSection";
 import { DatabaseConfigSection } from "@/components/asset/DatabaseConfigSection";
@@ -1052,7 +1048,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     activeTestIdRef.current = testId;
     setTesting(true);
     try {
-      await TestSSHConnection(testId, JSON.stringify(sshConfig), password);
+      await TestAssetConnection(testId, "ssh", JSON.stringify(sshConfig), password);
       if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
     } catch (e) {
       if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
@@ -1084,7 +1080,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     activeTestIdRef.current = testId;
     setTesting(true);
     try {
-      await TestDatabaseConnection(testId, JSON.stringify(cfg), password);
+      await TestAssetConnection(testId, "database", JSON.stringify(cfg), password);
       if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
     } catch (e) {
       if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
@@ -1115,7 +1111,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     activeTestIdRef.current = testId;
     setTesting(true);
     try {
-      await TestRedisConnection(testId, JSON.stringify(cfg), password);
+      await TestAssetConnection(testId, "redis", JSON.stringify(cfg), password);
       if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
     } catch (e) {
       if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
@@ -1152,7 +1148,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     activeTestIdRef.current = testId;
     setTesting(true);
     try {
-      await EtcdTestConfig(testId, JSON.stringify(cfg), password);
+      await TestAssetConnection(testId, "etcd", JSON.stringify(cfg), password);
       if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
     } catch (e) {
       if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
@@ -1183,7 +1179,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     activeTestIdRef.current = testId;
     setTesting(true);
     try {
-      await TestMongoDBConnection(testId, JSON.stringify(cfg), password);
+      await TestAssetConnection(testId, "mongodb", JSON.stringify(cfg), password);
       if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
     } catch (e) {
       if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
@@ -1204,7 +1200,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     activeTestIdRef.current = testId;
     setTesting(true);
     try {
-      await TestKafkaConnection(testId, JSON.stringify(cfg), password);
+      await TestAssetConnection(testId, "kafka", JSON.stringify(cfg), password);
       if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
     } catch (e) {
       if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
@@ -1244,7 +1240,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     activeTestIdRef.current = testId;
     setTesting(true);
     try {
-      await TestSerialConnection(testId, JSON.stringify(cfg));
+      await TestAssetConnection(testId, "serial", JSON.stringify(cfg), "");
       if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
     } catch (e) {
       if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);

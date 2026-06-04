@@ -1,9 +1,11 @@
-// Package etcd 实现 etcd binder:KV 浏览、查询面板、TestConnection。
+// Package etcd 实现 etcd binder:KV 浏览、查询面板、连接测试。
 package etcd
 
 import (
 	"context"
 
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/service/etcd_svc"
 	"github.com/opskat/opskat/internal/sshpool"
 )
@@ -24,12 +26,14 @@ type Etcd struct {
 
 // New 构造 etcd binder。
 func New(appCtx context.Context, lang LangProvider, pool *sshpool.Pool) *Etcd {
-	return &Etcd{
+	e := &Etcd{
 		appCtx:  appCtx,
 		lang:    lang,
 		pool:    pool,
 		service: etcd_svc.New(pool),
 	}
+	conntest.Register(asset_entity.AssetTypeEtcd, e.testConnection)
+	return e
 }
 
 // Startup 保存 Wails ctx。

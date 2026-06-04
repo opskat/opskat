@@ -4,26 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/kafka_svc"
-	"github.com/opskat/opskat/internal/service/testreg"
 )
 
-// TestKafkaConnection 测试 Kafka 连接
-// testID: 前端生成的本次测试唯一标识，用于配合 CancelTest 中断
-// configJSON: KafkaConfig JSON，plainPassword: 明文密码
-func (k *Kafka) TestKafkaConnection(testID string, configJSON string, plainPassword string) error {
+// testConnection 测试一份未保存的 Kafka 配置；经 conntest 注册表由
+// System.TestAssetConnection 分发，信封（超时/取消/i18n ctx）由调用方统一施加。
+func (k *Kafka) testConnection(ctx context.Context, configJSON string, plainPassword string) error {
 	var cfg asset_entity.KafkaConfig
 	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 		return fmt.Errorf("配置解析失败: %w", err)
 	}
-	parent, parentCancel := context.WithTimeout(i18n.Ctx(k.ctx, k.lang.Lang()), 10*time.Second)
-	defer parentCancel()
-	ctx, release := testreg.Begin(parent, testID)
-	defer release()
 	return k.service.TestConnection(ctx, &cfg, plainPassword, 0)
 }
 

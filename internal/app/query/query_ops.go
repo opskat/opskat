@@ -15,7 +15,6 @@ import (
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/query_svc"
-	"github.com/opskat/opskat/internal/service/testreg"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/redis/go-redis/v9"
@@ -64,17 +63,13 @@ func (q *Query) getOrDialPanelMongo(ctx context.Context, asset *asset_entity.Ass
 	return wrapped, nil
 }
 
-// TestDatabaseConnection 测试数据库连接
-func (q *Query) TestDatabaseConnection(testID string, configJSON string, plainPassword string) error {
+// testDatabaseConnection 测试一份未保存的数据库配置；经 conntest 注册表由
+// System.TestAssetConnection 分发，信封（超时/取消/i18n ctx）由调用方统一施加。
+func (q *Query) testDatabaseConnection(ctx context.Context, configJSON string, plainPassword string) error {
 	var cfg asset_entity.DatabaseConfig
 	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 		return fmt.Errorf("配置解析失败: %w", err)
 	}
-
-	parent, parentCancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), 10*time.Second)
-	defer parentCancel()
-	ctx, release := testreg.Begin(parent, testID)
-	defer release()
 
 	password := plainPassword
 	if password == "" {
@@ -103,17 +98,13 @@ func (q *Query) TestDatabaseConnection(testID string, configJSON string, plainPa
 	return nil
 }
 
-// TestRedisConnection 测试 Redis 连接
-func (q *Query) TestRedisConnection(testID string, configJSON string, plainPassword string) error {
+// testRedisConnection 测试一份未保存的 Redis 配置；经 conntest 注册表由
+// System.TestAssetConnection 分发，信封（超时/取消/i18n ctx）由调用方统一施加。
+func (q *Query) testRedisConnection(ctx context.Context, configJSON string, plainPassword string) error {
 	var cfg asset_entity.RedisConfig
 	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 		return fmt.Errorf("配置解析失败: %w", err)
 	}
-
-	parent, parentCancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), 10*time.Second)
-	defer parentCancel()
-	ctx, release := testreg.Begin(parent, testID)
-	defer release()
 
 	password := plainPassword
 	if password == "" {
@@ -322,17 +313,13 @@ func (q *Query) ExecuteRedis(assetID int64, command string, db int) (string, err
 	return helper.ExecuteRedis(ctx, client, command)
 }
 
-// TestMongoDBConnection 测试 MongoDB 连接
-func (q *Query) TestMongoDBConnection(testID string, configJSON string, plainPassword string) error {
+// testMongoConnection 测试一份未保存的 MongoDB 配置；经 conntest 注册表由
+// System.TestAssetConnection 分发，信封（超时/取消/i18n ctx）由调用方统一施加。
+func (q *Query) testMongoConnection(ctx context.Context, configJSON string, plainPassword string) error {
 	var cfg asset_entity.MongoDBConfig
 	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 		return fmt.Errorf("配置解析失败: %w", err)
 	}
-
-	parent, parentCancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), 10*time.Second)
-	defer parentCancel()
-	ctx, release := testreg.Begin(parent, testID)
-	defer release()
 
 	password := plainPassword
 	if password == "" {

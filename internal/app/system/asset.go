@@ -1,9 +1,11 @@
 package system
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -15,8 +17,10 @@ import (
 	policyent "github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
 	"github.com/opskat/opskat/internal/service/asset_svc"
+	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/service/group_svc"
 	"github.com/opskat/opskat/internal/service/policy_group_svc"
+	"github.com/opskat/opskat/internal/service/testreg"
 )
 
 // --- 策略测试 ---
@@ -79,6 +83,21 @@ func (s *System) TestPolicyRule(req PolicyTestRequest) (*PolicyTestResult, error
 		MatchedSource:  result.MatchedSource,
 		Message:        result.Message,
 	}, nil
+}
+
+// TestAssetConnection 测试一份未保存的资产配置(资产表单「测试连接」)。
+// testID 配合 CancelTest 中断;assetType 经 conntest 注册表分发到对应 binder 的 tester。
+// 共享信封(i18n ctx + 10s 超时 + testreg 取消)在此统一施加,各 tester 只做解析/解析凭据/拨号。
+func (s *System) TestAssetConnection(testID, assetType, configJSON, plainPassword string) error {
+	fn, ok := conntest.Lookup(assetType)
+	if !ok {
+		return fmt.Errorf("unsupported asset type: %s", assetType)
+	}
+	parent, cancel := context.WithTimeout(i18n.Ctx(s.ctx, s.Lang()), 10*time.Second)
+	defer cancel()
+	ctx, release := testreg.Begin(parent, testID)
+	defer release()
+	return fn(ctx, configJSON, plainPassword)
 }
 
 // GetDefaultPolicy 获取指定资产类型的默认策略 JSON
