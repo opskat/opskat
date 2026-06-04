@@ -91,6 +91,8 @@ function loadCustom(): Partial<Record<ShortcutAction, ShortcutBinding>> {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as Partial<Record<ShortcutAction, ShortcutBinding>>;
+    // Normalize at the boundary: bindings persisted before `ctrl` existed lack the
+    // field, so default it to false here rather than re-defaulting at every consumer.
     const normalized: Partial<Record<ShortcutAction, ShortcutBinding>> = {};
     for (const [action, binding] of Object.entries(parsed)) {
       normalized[action as ShortcutAction] = { ...binding, ctrl: binding.ctrl ?? false };
@@ -163,6 +165,10 @@ export const useShortcutStore = create<ShortcutState>((set) => ({
     set({ shortcuts: { ...DEFAULT_SHORTCUTS } });
   },
 
+  // macOS only: exchange the Cmd (mod) and Ctrl flags on every binding, so the user
+  // can flip the whole table between ⌘- and ⌃-based shortcuts with one click. The swap
+  // is its own inverse, so calling it again restores the previous state. Has no sensible
+  // meaning on Windows (no Cmd key), where the UI hides the trigger.
   swapCmdCtrl: () => {
     set((state) => {
       const shortcuts = {} as Record<ShortcutAction, ShortcutBinding>;
@@ -183,8 +189,10 @@ export function matchShortcut(
   for (const [action, binding] of Object.entries(shortcuts)) {
     if (e.code !== binding.code || e.shiftKey !== binding.shift || e.altKey !== binding.alt) continue;
     if (isMac) {
+      // Mac distinguishes both modifiers: mod = Cmd (metaKey), ctrl = Control (ctrlKey).
       if (e.metaKey !== binding.mod || e.ctrlKey !== binding.ctrl) continue;
     } else {
+      // Windows/Linux have no Cmd: mod = Ctrl (ctrlKey); the ctrl field is unused.
       if (e.ctrlKey !== binding.mod) continue;
     }
     return action as ShortcutAction;
@@ -236,6 +244,7 @@ function codeToDisplay(code: string): string {
 export function formatBinding(binding: ShortcutBinding): string {
   const parts: string[] = [];
   if (isMac) {
+    // Apple convention orders modifiers ⌃⌥⇧⌘ with the key last.
     if (binding.ctrl) parts.push("⌃");
     if (binding.alt) parts.push("⌥");
     if (binding.shift) parts.push("⇧");

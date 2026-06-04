@@ -87,15 +87,16 @@ describe("shortcutStore", () => {
   });
 
   describe("swapCmdCtrl", () => {
-    it("swaps mod and ctrl for every binding", () => {
+    it("swaps mod and ctrl for every binding (Cmd defaults become Ctrl)", () => {
       useShortcutStore.getState().swapCmdCtrl();
 
       const { shortcuts } = useShortcutStore.getState();
       expect(shortcuts["tab.1"]).toEqual({ ...DEFAULT_SHORTCUTS["tab.1"], mod: false, ctrl: true });
+      // shift/alt are untouched by the swap
       expect(shortcuts["tab.prev"]).toEqual({ ...DEFAULT_SHORTCUTS["tab.prev"], mod: false, ctrl: true });
     });
 
-    it("is reversible and clears localStorage after returning to defaults", () => {
+    it("is reversible: swapping twice restores defaults and clears localStorage", () => {
       useShortcutStore.getState().swapCmdCtrl();
       useShortcutStore.getState().swapCmdCtrl();
 

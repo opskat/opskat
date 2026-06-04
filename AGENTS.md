@@ -1,149 +1,48 @@
 # AGENTS.md
 
-Guidance for Codex when working in this repository.
+This file is the single source of guidance for AI coding agents (Claude Code at claude.ai/code, Codex, etc.) working in this repository. `CLAUDE.md` is just a pointer to this file (`@AGENTS.md`) — edit guidance here, not there.
 
-## Project
+> **Before any development, first read [docs/DEVELOP.md](docs/DEVELOP.md).** This file keeps only the cross-cutting **principles** — SOLID / high cohesion, low coupling, Fix policy — TDD, Reuse first, defensive code / error handling. Development details — common commands, the architecture & subsystem map, commit / CI / testing conventions, logging rules for key flows, the generated-files list — all live in [docs/DEVELOP.md](docs/DEVELOP.md); apply them together with the principles here. **Before editing / reviewing any contributor doc (this file, `CLAUDE.md`, `docs/*`)**, first read [docs/DOC-MAINTENANCE.md](docs/DOC-MAINTENANCE.md): doc-set organization rules + fact-check / anti-drift discipline against the current branch.
 
-OpsKat is an AI-first desktop app for managing remote infrastructure: SSH, SFTP, databases, and Redis.
+## Project Overview
 
-- Stack: Wails v2, Go 1.25 backend, React 19 frontend.
-- Module: `github.com/opskat/opskat`.
-- Frontend/backend communicate through Wails IPC. There is no HTTP API for the desktop app.
-- Extension source lives in sibling repo `../extensions/`.
+OpsKat — AI-first desktop app for managing remote infra (SSH, MySQL/PostgreSQL, Redis, MongoDB, Kafka, K8s, etcd). **Wails v2** (Go 1.26 + React 19), IPC only — no HTTP API. Module: `github.com/opskat/opskat`.
 
-## Commands
+Extension source lives in the sibling repo `../extensions/`. For the architecture layering, subsystems, data, and frontend structure, see [docs/DEVELOP.md → Architecture](docs/DEVELOP.md#architecture).
 
-```bash
-# Development
-make install                  # install frontend deps with pnpm
-make dev                      # Wails dev mode with hot reload
-make run                      # run embedded production build
-make clean                    # remove build artifacts/caches
+## High Cohesion, Low Coupling / SOLID
 
-# Build
-make build                    # production app
-make build-embed              # production app with embedded opsctl
-make build-cli                # standalone opsctl
-make install-cli              # install opsctl to GOPATH/bin
+The architecture map (see [docs/DEVELOP.md → Architecture](docs/DEVELOP.md#architecture)) is a set of seams. These rules keep them seams instead of letting logic bleed across them — they are **SOLID applied to *this* codebase** (the principle letter is tagged on each rule), not generic theory to recite. They build on the layering rule (bindings → service → repository) and [Reuse first](#reuse-first--grep-before-writing) — don't restate those, apply them.
 
-# Tests
-make test                     # Go tests for internal, cmd, pkg
-make test-cover               # Go coverage report
-go test ./internal/ai/...     # package scope example
-go test ./internal/ai -run TestName
-cd frontend && pnpm test
-cd frontend && pnpm test:watch
+- **One reason to change per unit (SRP).** Protocol logic lives in its own handler + `*_policy.go`; the frontend keeps one Zustand store per domain (`src/stores/`) and components depend on stores/hooks, not on sibling components' internals. If a single feature edit forces changes across three unrelated packages, the responsibility leaked — move it back behind one seam.
+- **Extend by registration, not by editing a switch (OCP).** New asset type → implement `assettype.AssetTypeHandler` and `Register()` in the file's `init()` (see `ssh.go`/`redis.go`/`k8s.go`); new repo → `RegisterXxx()` + `Xxx()` getter; new AI tool → register in the tool registry; new policy → its own `*_policy.go`. **Never branch on a type string** (`if assetType == "ssh"`, `switch protocol`) in shared code — that's the coupling the registry exists to remove. Cross-type commonality goes in a shared helper the handlers *call* (e.g. `validateRemoteServerArgs`), not in branches inside the dispatcher. Open for extension (register a handler), closed for modification (don't touch the dispatcher).
+- **Depend on the interface, call through the getter (DIP + LSP).** Services consume `asset_repo.Asset()` (the `AssetRepo` interface), never a concrete repo struct or GORM directly — and every implementation must be substitutable behind that interface without callers special-casing a concrete type (LSP); that substitutability is exactly what makes `mock_*/` work in tests. Don't reach past a seam: a service must not import another service's repository or call into `App`; `internal/app/*` must not touch repositories or `db`. If you need another domain's data, go through its service/getter.
+- **Keep the boundary contract narrow (ISP).** The `map[string]any` tool args are parsed *once* through the shared `Arg*` helpers (`ArgString`/`ArgInt`/`ArgInt64`), not re-parsed per handler. Prefer option-object args (e.g. `ListOptions`) over long positional/boolean lists. Each handler declares only the fields it needs in `ValidateCreateArgs`; a package exposes the smallest surface callers actually use.
 
-# Lint/format
-make lint
-make lint-fix
-cd frontend && pnpm lint
-cd frontend && pnpm lint:fix
+## Fix policy — TDD, root cause, in scope
 
-# Extensions / plugin
-make devserver EXT=<name>     # isolated extension dev server; blocked when OPSKAT_ENV=production
-make build-devserver-ui       # rebuild embedded devserver UI
-make install-skill            # register Codex opsctl plugin
-```
+- **Confirm the bug is real, then reproduce it as a failing test** (`go test` / `vitest`) before touching impl. Don't trust the report at face value — prove it reproduces, failing for the right reason (same error/assertion the user reported). If it doesn't reproduce, say so and stop instead of "fixing" a phantom. If a test isn't reasonable, say so explicitly. No exceptions for "obvious" one-liners.
+- **Stay in scope.** A fix touches the producer, its test, and at most an in-scope drift under the cursor (stale docstring, lying AGENTS.md line, obvious one-liner) — fix those *now*, don't TODO. No drive-by refactors / rename sweeps / formatter passes / dead-code cleanup in the same change. Multi-day refactors or hot-subsystem rework → flag and ask.
+- **Fix root causes — refactor over patch.** Don't guard at the call site to mask a bad producer; fix the producer. Don't re-normalize a field at multiple consumers; normalize once at the boundary. A "why this workaround" comment usually means the underlying code should change instead. When the clean fix means restructuring the unit you're already touching, prefer that refactor over bolting on a band-aid — restructuring the producer and its seam is *in*-scope, distinct from the drive-by refactors ruled out above. A patch that leaves the root defect in place is not a fix.
+- **Verify by observing, not asserting.** A desktop GUI can't be clicked by an agent — reproduce/verify through observable side-effects: run it headlessly (`opsctl`) or run the app, then read the structured logs (`logs/opskat.log`) and DB (`opskat.db`, esp. `audit_logs`). How-to in [docs/testing-debugging-guide.md](docs/testing-debugging-guide.md).
 
-## Architecture
+## Defensive Code / Error Handling (No meaningless fallbacks)
 
-Backend layering:
+Defensive code for cases that can't happen, swallowed errors, or shims for retired data become load-bearing noise — future readers can't tell what's real, and the bug stays hidden behind the guard.
 
-```text
-main.go
-  -> internal/app/         Wails binding layer; keep public App methods thin
-     -> internal/service/  business logic
-        -> internal/repository/ data access via interfaces + Register()/getters
-           -> internal/model/ domain entities
-```
+- **Validate at boundaries only.** IPC into `internal/app/*.go` and WASM host calls in `pkg/extension/host.go` are boundaries — check them. Go-to-Go between `service`/`repository`/`internal/ai/` is trusted — no `if x == nil` between them.
+- **Don't double-default user-configurable fields.** `Icon` / `Type` / `Color` already have canonical helpers (`getIconComponent` + `getIconColor`, `getAssetType`). `value || "default"` at the call site overrides the user's intentional empty value and hides bugs in the helper.
+- **Don't swallow errors.** `if err != nil { return nil }` / `catch { return defaultState }` masks failure and propagates corrupt state. Surface it; only catch when there's a concrete recovery for a specific error type.
+- **No runtime shims for retired data.** Migrations in `/migrations/` run once. Don't sprinkle `if legacyField != "" { ... }`, `_renamed` placeholders, or `// removed in v1.x` comments — delete the field from the model.
+- **"Fallback" comments are a smell.** `// just in case` / `// guard against nil` / `// legacy-data compat` — if X can happen, fix the producer; if not, delete the line. `recover()` is only for goroutine boundaries that must not crash the app (extension WASM dispatch, AI tool execution) and must record the panic.
 
-Important backend areas:
+## Reuse first — grep before writing
 
-- `internal/ai/`: provider abstraction, tool registry, policy checks, runner, compression, audit logs.
-- `internal/sshpool/`: SSH connection pool and Unix socket proxy for `opsctl`.
-- `internal/connpool/`: database/Redis tunnel management.
-- `internal/approval/`: desktop <-> `opsctl` approval socket workflow.
-- `internal/bootstrap/`: database, credentials, migrations, auth token initialization.
-- `internal/embedded/`: embedded `opsctl` binary behind `embed_opsctl`.
-- `pkg/extension/`: WASM runtime using wazero; manifest parsing, host bridge, policy evaluation.
-- `cmd/opsctl/`: standalone CLI for AI assistant remote operations.
-- `cmd/devserver/`: single-extension HTTP dev server for extension development only.
+Parallel copies drift within weeks. Before any new component/hook/util/Go helper, grep for the existing one.
 
-Extension tools are exposed to AI through one `exec_tool` tool. Dispatch happens in `internal/ai/tool_handler_ext.go` using `extension` and `tool` args, then enforces policy against asset policy groups before calling `Plugin.CallTool`.
+- **Shared UI primitives** exist: `AssetSelect` / `AssetMultiSelect` / `GroupSelect`, `TreeSelect` / `TreeCheckList`, `ConfirmDialog`, `PasswordSourceField`, `IconPicker`, terminal panes, query result grid, tab system, shortcut store. Don't re-derive expand/collapse, tri-state checkboxes, search/pinyin, shortcuts, approval flows, or icon resolution.
+- **Shared filters/loading** belong in `useAssetStore` / `useAssetTree` / `useGroupTree` / `useShortcutStore`. New filter → hook option, not inline.
+- **Cross-cutting concerns** (audit, AI tool registration, approval, credential encryption, connection pools, i18n) have canonical entry points — don't spin up a second one. Logging rules are in [docs/DEVELOP.md → Logging for key flows](docs/DEVELOP.md#logging-for-key-flows).
+- **Toast notifications** go through `frontend/src/lib/notify.ts`: for success use `notifyCopied` (copy / clipboard — top-center, a 1s flash) / `notifySuccess` (other successful operations — top-center); **don't call `toast.success` directly**. Errors / warnings / info still use `toast.error` / `toast.warning` / `toast.info` and stay at the default bottom-right position. Terminal / AI / query views all refresh bottom-up, so a success toast at the bottom would occlude the output (#135).
 
-Frontend:
-
-- App source: `frontend/`; pnpm workspace.
-- Shared UI package: `frontend/packages/ui` as `@opskat/ui`.
-- Devserver UI: `frontend/packages/devserver-ui`, embedded by `cmd/devserver`.
-- Tech: Vite 6, Tailwind CSS 4, shadcn/ui/Radix, Zustand 5, xterm.js 6.
-- Navigation: no React Router; use custom tab system in `tabStore`.
-- Backend calls: generated Wails bindings in `frontend/wailsjs/`.
-- Events: Wails `EventsOn()`.
-- i18n: `zh-CN` and `en`, keys under the `common` namespace; use `t("key.subkey")`.
-- Tests: Vitest, happy-dom, React Testing Library, Wails mocks in `src/__tests__/setup.ts`.
-
-## Cohesion & Coupling (高内聚低耦合)
-
-The architecture above is a set of seams; these rules keep logic from bleeding across them. They build on the layering rule (bindings -> service -> repository) and the reuse rules under "Development Rules" — apply those, do not restate them.
-
-- Extend by registration, not by editing a switch. New asset type implements `assettype.AssetTypeHandler` and calls `Register()` from the file's `init()` (see `ssh.go`, `redis.go`, `k8s.go`); new repository adds a `RegisterXxx()` setter plus an `Xxx()` getter; new AI tool registers in the tool registry; new policy gets its own `*_policy.go`. Never branch on a type string (`if assetType == "ssh"`, `switch protocol`) in shared code — that is exactly the coupling the registry removes. Shared logic across types goes into a helper the handlers call (for example `validateRemoteServerArgs`), not into branches inside the dispatcher.
-- Depend on the interface, call through the getter. Services consume `asset_repo.Asset()` (the `AssetRepo` interface), never a concrete repo struct or GORM directly; that interface is what makes `mock_*/` substitutable in tests. Do not reach past a seam: a service must not import another service's repository or call into `App`, and `internal/app/*` must not touch repositories or `db`. To read another domain's data, go through its service or getter.
-- Keep the boundary contract narrow. Tool `map[string]any` args are parsed once through the shared `Arg*` helpers (`ArgString`, `ArgInt`, `ArgStringSlice`), not re-parsed per handler. Prefer option-object args (such as `ListOptions`) over long positional/boolean lists. Each handler validates only the fields it needs in `ValidateCreateArgs`; expose the smallest package surface callers actually use.
-- One reason to change per unit. Protocol logic stays in its own handler plus `*_policy.go`; the frontend keeps one Zustand store per domain in `src/stores/`, and components depend on stores/hooks rather than sibling components' internals. If a single feature edit forces changes across three unrelated packages, responsibility has leaked — move it back behind one seam.
-
-## Conventions
-
-- CI runs Go lint/tests and frontend lint/tests/build on PRs and pushes to `main`/`develop`.
-- Commit messages use gitmoji, e.g. `✨`, `🐛`, `♻️`, `🎨`, `⚡️`, `🔒`, `🔧`, `✅`, `📄`, `🚀`. 关联 issue 时：subject line（第一行）末尾追加 `#<编号>`，body 里另起一行写 `closes #<编号>`（或 `fixes` / `resolves`）触发 GitHub 自动关闭。例如 subject `🐛 修复 xxx #126`，body 末尾 `closes #126`。
-- Go mocks live in `mock_*/` and are generated with `go.uber.org/mock`.
-- Go tests use goconvey and testify.
-- Service tests should mock transaction boundaries. When code uses `dbutil.WithTransaction`, prefer `dbutil.WithTransactionRunner` instead of opening in-memory SQLite.
-- Frontend formatting is Prettier with 120-char width and 2-space indent.
-- Soft delete uses `Status` (`StatusActive=1`, `StatusDeleted=2`), not GORM soft delete.
-- Version info is embedded with ldflags.
-- Credentials use Argon2id KDF + AES-256-GCM; the master key is stored in the OS keychain.
-
-## Development Rules
-
-- Search before adding components, hooks, utils, services, or helpers. Reuse existing patterns and shared primitives.
-- Keep `internal/app/*.go` as thin Wails bindings: parse args, call services, return. Put business rules in `internal/service/` and persistence in `internal/repository/`.
-- UI should depend on hooks/stores and shared components, not direct duplicated data loading/filtering.
-- Prefer option-object APIs over large boolean prop lists.
-- Do not copy-paste parallel implementations. If a fix applies to two near-identical blocks, extract or reuse the canonical path.
-- Do not add silent defaults, empty `catch` blocks, swallowed errors, fake success states, or bypass paths unless they are explicit product behavior.
-- Do not reimplement cross-cutting systems: audit, AI tool registration, approval, credential encryption, connection pools, i18n, terminal panes, query grids, tab system, shortcut handling. (Logging rules are covered separately under "Logging Key Flows".)
-
-Reuse these shared frontend primitives when applicable:
-
-- Pickers/tree: `AssetSelect`, `AssetMultiSelect`, `GroupSelect`, `TreeSelect`, `TreeCheckList`.
-- Common UI: `ConfirmDialog`, drawer/dialog wrappers, `PasswordSourceField`, `IconPicker`.
-- Asset rendering: use canonical helpers such as `getIconComponent`, `getIconColor`, `getAssetType`; respect entity fields like `Icon`, `Type`, `Color`, and policy group.
-- Data/state: add filters or derivations to shared hooks/stores such as `useAssetStore`, `useAssetTree`, `useGroupTree`, `useShortcutStore`.
-- Toasts: route success notifications through `frontend/src/lib/notify.ts` — `notifyCopied` (clipboard/copy, top-center + 1s) and `notifySuccess` (other success, top-center). Do not call `toast.success` directly. Errors/warnings/info keep `toast.error` / `toast.warning` / `toast.info` at the default bottom-right (terminal/AI/query streams refresh upward, so bottom success toasts occlude — see #135).
-
-## Logging Key Flows
-
-Troubleshooting depends on logs. Every cross-boundary / cross-process / long-lived operation must be logged — not only on error.
-
-- **Entry point (cago logger):** `github.com/cago-frame/cago/pkg/logger`. **Prefer `logger.Ctx(ctx)`** — cago's own source comment on `Default()` reads "尽量不要使用，会丢失上下文信息" (try not to use, loses context). Only fall back to `logger.Default()` when no ctx is available (`main`, `init`, standalone goroutines). To attach fields for downstream consumers, use `logger.WithContextField(ctx, zap.String("k", v))`; downstream `logger.Ctx(ctx)` inherits them. ⚠️ The repo today has ~377 `Default()` and 0 `Ctx` call sites — historical inertia. New code follows the rule above.
-- **Field types:** Pick the zap field that matches the value's natural type: `zap.Error` for errors, `zap.String` for strings, `zap.Int/Int64` for ints, `zap.Bool`, `zap.Duration`, `zap.Stringer`. **Do not use `zap.Any`** (zero intended uses in repo), and **do not wrap values with `fmt.Sprintf(...)` to fit `zap.String`** — pick the right typed field instead of squashing values into strings. Do not use `log.Printf` as a logger in business code. Exceptions: `fmt.Println` in `cmd/opsctl/command/*` is intentional CLI stdout (not logging), and `log.Printf` in `main.go` before logger init is kept.
-- **Must-log key flows:** IPC entry (`internal/app/**`), AI tool dispatch (`internal/ai/`), extension WASM calls (`pkg/extension/`, `internal/app/extension/`), approval/grant (`internal/approval/`, `internal/app/opsctl/`), SSH/DB/Redis pool open/close (`internal/sshpool/`, `internal/connpool/`), credential and key operations, migrations, scheduled jobs, external command execution. Log **start / end / failure** of each operation with correlatable IDs (assetID, sessionID, grantID, toolName, extension).
-- **Log lines do not replace error returns.** After `logger.Ctx(ctx).Error(..., zap.Error(err))`, still `return err`. `recover()` boundaries: use `zap.Stack("stack")` for the trace, e.g. `logger.Ctx(ctx).Error("xxx panic recovered", zap.String("sessionID", id), zap.Stack("stack"))`; standalone goroutines without a ctx may fall back to `logger.Default()`.
-- **Levels:** Error = a failure the caller/user must see; Warn = self-heal or degraded path; Info = important state changes (pool open, task scheduled, extension loaded); Debug = high-frequency detail (terminal keystrokes, SFTP frames, heartbeats) and off by default.
-- **Never log secrets:** passwords, tokens, credential plaintext, SSH private keys, or SQL parameter values must be masked before logging.
-
-## Generated Files
-
-Do not edit generated or auto-managed files by hand. Change the source and regenerate.
-
-- `frontend/wailsjs/go/app/App.d.ts`, `App.js`, `models.ts`: generated by Wails from exported `App` methods; regenerate with `make dev` or `wails build`.
-- `frontend/wailsjs/runtime/runtime.js`, `runtime.d.ts`: Wails runtime shim.
-- `internal/**/mock_*/`: generated by `mockgen`; regenerate with `go generate ./...`.
-- `internal/embedded/opsctl_bin`: produced by `make build-cli-embed`; regenerate with `make build-embed`.
-- `frontend/packages/devserver-ui/dist/`: Vite build embedded by `cmd/devserver`; regenerate with `make build-devserver-ui`.
-- `go.sum`: package-manager managed; update with Go tooling.
-- `frontend/pnpm-lock.yaml`: package-manager managed; update with pnpm.
-
-Build artifacts and caches are gitignored and safe to remove with `make clean`: `build/bin/`, `frontend/dist/`, coverage files, `tsconfig.tsbuildinfo`, `package.json.md5`, and top-level `opskat`, `opsctl`, `devserver` binaries.
+Heuristics: importing a primitive (`lucide-react`, tree, Radix, `ConfirmDialog`, xterm) **and** an entity store from a new file usually means you're re-implementing a picker/pane/dialog. Copying >10 lines → extract. Same fix in two near-identical blocks → the second is the bug; delete it, call the first.
