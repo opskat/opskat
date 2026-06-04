@@ -45,6 +45,23 @@ func TestPolicyGroup_Validate(t *testing.T) {
 	})
 }
 
+func TestIsBuiltinKind(t *testing.T) {
+	convey.Convey("isBuiltinKind 从注册数据派生合法 kind", t, func() {
+		convey.Convey("已注册的 6 个内置 kind 均为真", func() {
+			for _, k := range []string{
+				PolicyTypeCommand, PolicyTypeQuery, PolicyTypeRedis,
+				PolicyTypeMongo, PolicyTypeKafka, PolicyTypeEtcd,
+			} {
+				assert.True(t, isBuiltinKind(k), "kind %s 应为已注册内置 kind", k)
+			}
+		})
+		convey.Convey("未注册 kind 为假", func() {
+			assert.False(t, isBuiltinKind("unknown"))
+			assert.False(t, isBuiltinKind(""))
+		})
+	})
+}
+
 func TestPolicyGroup_ToItem(t *testing.T) {
 	convey.Convey("ToItem转换", t, func() {
 		convey.Convey("内置组转换后ID为字符串且Builtin为true", func() {

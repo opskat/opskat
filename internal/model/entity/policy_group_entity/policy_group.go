@@ -45,12 +45,8 @@ func (pg *PolicyGroup) Validate() error {
 	if pg.Name == "" {
 		return errors.New("权限组名称不能为空")
 	}
-	switch pg.PolicyType {
-	case PolicyTypeCommand, PolicyTypeQuery, PolicyTypeRedis, PolicyTypeMongo, PolicyTypeKafka, PolicyTypeEtcd:
-	default:
-		if !hasExtensionPolicyType(pg.PolicyType) {
-			return errors.New("无效的策略类型")
-		}
+	if !isBuiltinKind(pg.PolicyType) && !hasExtensionPolicyType(pg.PolicyType) {
+		return errors.New("无效的策略类型")
 	}
 	return nil
 }
@@ -98,11 +94,23 @@ func mustMarshal(v any) string {
 	return string(data)
 }
 
-// BuiltinGroups 返回所有内置权限组
-func BuiltinGroups() []*PolicyGroup {
-	return []*PolicyGroup{
-		// SSH command 类型
-		{
+// builtinKindOrder 决定 BuiltinGroups() 的拼装顺序,保持与历史一致(command→query→redis→mongo→kafka→etcd)。
+var builtinKindOrder = []string{
+	PolicyTypeCommand, PolicyTypeQuery, PolicyTypeRedis,
+	PolicyTypeMongo, PolicyTypeKafka, PolicyTypeEtcd,
+}
+
+// builtinGroupsByKind 每个 policyKind 贡献的内置权限组(纯数据注册表)。
+// 新增策略 kind 时,在此处加一段 registerBuiltinGroups 即可,Validate / BuiltinGroups 自动覆盖。
+var builtinGroupsByKind = map[string][]*PolicyGroup{}
+
+func registerBuiltinGroups(kind string, groups ...*PolicyGroup) {
+	builtinGroupsByKind[kind] = append(builtinGroupsByKind[kind], groups...)
+}
+
+func init() {
+	registerBuiltinGroups(PolicyTypeCommand,
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinLinuxReadOnly,
 			Name:        "Linux Read-Only",
 			Description: "Common Linux read-only commands",
@@ -122,7 +130,7 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		{
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinK8sReadOnly,
 			Name:        "Kubernetes Read-Only",
 			Description: "Kubernetes read-only commands",
@@ -138,7 +146,7 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		{
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinK8sDangerousDeny,
 			Name:        "Kubernetes Dangerous Deny",
 			Description: "Deny dangerous Kubernetes commands",
@@ -153,7 +161,7 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		{
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinDockerReadOnly,
 			Name:        "Docker Read-Only",
 			Description: "Docker read-only commands",
@@ -170,7 +178,7 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		{
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinDangerousDeny,
 			Name:        "Dangerous Command Deny",
 			Description: "Deny dangerous system commands",
@@ -187,8 +195,9 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		// Database query 类型
-		{
+	)
+	registerBuiltinGroups(PolicyTypeQuery,
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinSQLReadOnly,
 			Name:        "SQL Read-Only",
 			Description: "Allow query-only SQL statements",
@@ -199,7 +208,7 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		{
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinSQLDangerousDeny,
 			Name:        "SQL Dangerous Deny",
 			Description: "Deny dangerous SQL operations",
@@ -217,8 +226,9 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		// Redis 类型
-		{
+	)
+	registerBuiltinGroups(PolicyTypeRedis,
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinRedisReadOnly,
 			Name:        "Redis Read-Only",
 			Description: "Allow Redis read-only commands",
@@ -235,7 +245,7 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		{
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinRedisDangerousDeny,
 			Name:        "Redis Dangerous Deny",
 			Description: "Deny dangerous Redis commands",
@@ -251,8 +261,9 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		// MongoDB 类型
-		{
+	)
+	registerBuiltinGroups(PolicyTypeMongo,
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinMongoReadOnly,
 			Name:        "MongoDB Read-Only",
 			Description: "Allow MongoDB read-only operations",
@@ -263,7 +274,7 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		{
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinMongoReadWrite,
 			Name:        "MongoDB Read-Write",
 			Description: "Allow MongoDB CRUD operations",
@@ -277,7 +288,7 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		{
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinMongoDangerousDeny,
 			Name:        "MongoDB Dangerous Deny",
 			Description: "Deny dangerous MongoDB operations",
@@ -288,8 +299,9 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		// Kafka 类型
-		{
+	)
+	registerBuiltinGroups(PolicyTypeKafka,
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinKafkaMetadataReadOnly,
 			Name:        "Kafka Metadata Read-Only",
 			Description: "Allow Kafka cluster, broker, topic, and consumer group metadata reads",
@@ -307,7 +319,7 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		{
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinKafkaMessageRead,
 			Name:        "Kafka Message Read",
 			Description: "Allow bounded Kafka message browsing",
@@ -318,7 +330,7 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		{
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinKafkaSchemaReadOnly,
 			Name:        "Kafka Schema Registry Read-Only",
 			Description: "Allow Schema Registry read operations",
@@ -329,7 +341,7 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		{
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinKafkaConnectReadOnly,
 			Name:        "Kafka Connect Read-Only",
 			Description: "Allow Kafka Connect read operations",
@@ -340,7 +352,7 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		{
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinKafkaOperator,
 			Name:        "Kafka Operator",
 			Description: "Allow Kafka topic, message, and consumer group administration",
@@ -362,7 +374,7 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		{
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinKafkaSecurityAdmin,
 			Name:        "Kafka Security Admin",
 			Description: "Allow Kafka ACL changes",
@@ -374,7 +386,7 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		{
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinKafkaDangerousDeny,
 			Name:        "Kafka Dangerous Deny",
 			Description: "Deny destructive and high-risk Kafka operations",
@@ -391,8 +403,9 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		// etcd 类型
-		{
+	)
+	registerBuiltinGroups(PolicyTypeEtcd,
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinEtcdReadOnly,
 			Name:        "etcd Read-Only",
 			Description: "Allow etcd read-only operations",
@@ -406,7 +419,7 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-		{
+		&PolicyGroup{
 			BuiltinID:   policy.BuiltinEtcdDangerousDeny,
 			Name:        "etcd Dangerous Deny",
 			Description: "Deny dangerous etcd operations",
@@ -425,7 +438,7 @@ func BuiltinGroups() []*PolicyGroup {
 				},
 			}),
 		},
-	}
+	)
 }
 
 // builtinMap 内置组缓存
@@ -436,6 +449,21 @@ func init() {
 	for _, pg := range BuiltinGroups() {
 		builtinMap[pg.BuiltinID] = pg
 	}
+}
+
+// BuiltinGroups 返回所有内置权限组(按 kind 顺序拼装)
+func BuiltinGroups() []*PolicyGroup {
+	groups := make([]*PolicyGroup, 0, len(builtinMap))
+	for _, kind := range builtinKindOrder {
+		groups = append(groups, builtinGroupsByKind[kind]...)
+	}
+	return groups
+}
+
+// isBuiltinKind 判断 policyType 是否为已注册内置 kind(合法 kind 从注册数据派生,替代 Validate 的 switch)。
+func isBuiltinKind(kind string) bool {
+	_, ok := builtinGroupsByKind[kind]
+	return ok
 }
 
 // FindBuiltin 按 ID 查找内置权限组
