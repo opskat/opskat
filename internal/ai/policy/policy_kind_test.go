@@ -9,16 +9,17 @@ import (
 
 func TestPolicyKindRegistry(t *testing.T) {
 	Convey("policyKind 注册表", t, func() {
-		Convey("内置 5 个 kind 已注册", func() {
-			for _, k := range []string{PolicyKindCommand, PolicyKindQuery, PolicyKindRedis, PolicyKindK8s, PolicyKindEtcd} {
+		Convey("内置 7 个 kind 已注册", func() {
+			for _, k := range []string{
+				PolicyKindCommand, PolicyKindQuery, PolicyKindRedis,
+				PolicyKindMongo, PolicyKindKafka, PolicyKindK8s, PolicyKindEtcd,
+			} {
 				_, ok := kindRegistry[k]
 				So(ok, ShouldBeTrue)
 			}
 		})
-		Convey("mongo/kafka 暂未注册(留待阶段 1b)", func() {
-			_, ok := kindRegistry[PolicyKindMongo]
-			So(ok, ShouldBeFalse)
-			_, ok = kindRegistry[PolicyKindKafka]
+		Convey("未知 kind 未注册", func() {
+			_, ok := kindRegistry["bogus"]
 			So(ok, ShouldBeFalse)
 		})
 	})
@@ -33,8 +34,15 @@ func TestDecodeCurrentPolicy(t *testing.T) {
 			So(ok, ShouldBeTrue)
 			So(cp.AllowList, ShouldResemble, []string{"ls *"})
 		})
+		Convey("mongo → *MongoPolicy", func() {
+			v, err := DecodeCurrentPolicy(PolicyKindMongo, []byte(`{"allow_types":["find"]}`))
+			So(err, ShouldBeNil)
+			mp, ok := v.(*asset_entity.MongoPolicy)
+			So(ok, ShouldBeTrue)
+			So(mp.AllowTypes, ShouldResemble, []string{"find"})
+		})
 		Convey("未注册 kind 报错", func() {
-			_, err := DecodeCurrentPolicy(PolicyKindMongo, []byte(`{}`))
+			_, err := DecodeCurrentPolicy("bogus", []byte(`{}`))
 			So(err, ShouldNotBeNil)
 		})
 	})
@@ -49,6 +57,9 @@ func TestResolvePolicyKind(t *testing.T) {
 				"local":      PolicyKindCommand,
 				"database":   PolicyKindQuery,
 				"redis":      PolicyKindRedis,
+				"mongo":      PolicyKindMongo,
+				"mongodb":    PolicyKindMongo,
+				"kafka":      PolicyKindKafka,
 				"k8s":        PolicyKindK8s,
 				"kubernetes": PolicyKindK8s,
 				"etcd":       PolicyKindEtcd,
@@ -63,12 +74,6 @@ func TestResolvePolicyKind(t *testing.T) {
 			k, ok := ResolvePolicyKind(PolicyKindCommand)
 			So(ok, ShouldBeTrue)
 			So(k, ShouldEqual, PolicyKindCommand)
-		})
-		Convey("mongo/kafka 未注册 → false(保持 unsupported 行为)", func() {
-			_, ok := ResolvePolicyKind("mongo")
-			So(ok, ShouldBeFalse)
-			_, ok = ResolvePolicyKind("kafka")
-			So(ok, ShouldBeFalse)
 		})
 		Convey("未知类型 → false", func() {
 			_, ok := ResolvePolicyKind("nope")

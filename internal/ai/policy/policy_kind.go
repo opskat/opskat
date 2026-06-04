@@ -92,6 +92,28 @@ func init() {
 			return testEtcdPolicy(ctx, ep, groups, command)
 		},
 	})
+	registerPolicyKind(PolicyKindMongo, policyKindHandler{
+		decode: func(raw []byte) (any, error) {
+			var p asset_entity.MongoPolicy
+			err := json.Unmarshal(raw, &p)
+			return &p, err
+		},
+		test: func(ctx context.Context, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
+			mp, _ := current.(*asset_entity.MongoPolicy)
+			return testMongoPolicy(ctx, mp, groups, command)
+		},
+	})
+	registerPolicyKind(PolicyKindKafka, policyKindHandler{
+		decode: func(raw []byte) (any, error) {
+			var p asset_entity.KafkaPolicy
+			err := json.Unmarshal(raw, &p)
+			return &p, err
+		},
+		test: func(ctx context.Context, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
+			kp, _ := current.(*asset_entity.KafkaPolicy)
+			return testKafkaPolicy(ctx, kp, groups, command)
+		},
+	})
 }
 
 // assetTypeToKind 把资产类型 / 前端 policyType 字符串映射到规范 policyKind。
@@ -110,7 +132,7 @@ var assetTypeToKind = map[string]string{
 }
 
 // ResolvePolicyKind 把资产类型 / 前端 policyType 解析为已注册的 policyKind。
-// 仅当目标 kind 有注册 handler 时返回 ok=true;未注册(如当前的 mongo/kafka)返回 false,
+// 仅当目标 kind 有注册 handler 时返回 ok=true;未注册的 kind 返回 false,
 // 调用方据此保持 "unsupported policy type" 的既有行为。
 func ResolvePolicyKind(s string) (string, bool) {
 	kind, ok := assetTypeToKind[s]

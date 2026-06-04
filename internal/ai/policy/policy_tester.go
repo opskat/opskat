@@ -323,6 +323,68 @@ func testEtcdPolicy(ctx context.Context, current *asset_entity.EtcdPolicy, group
 	return PolicyTestOutput{Decision: aictx.Allow}
 }
 
+// --- MongoDB ---
+
+func testMongoPolicy(ctx context.Context, current *asset_entity.MongoPolicy, groups []*group_entity.Group, command string) PolicyTestOutput {
+	// 与真实 checkMongoDBPermission 对齐：Mongo 操作是单 token，组通用策略用 MatchCommandRule。
+	groupDeny, groupAllow := collectGroupGenericRules(ctx, groups)
+	if out := checkGenericDeny(groupDeny, command, MatchCommandRule); out != nil {
+		out.Message = PolicyFmt(ctx, "MongoDB operation denied by group policy: %s", "MongoDB 操作被组策略禁止: %s", command)
+		return *out
+	}
+
+	merged := mergeMongoPoliciesForTest(ctx, current, groups)
+	result := checkMongoPolicyRules(ctx, EffectiveMongoPolicy(ctx, merged), command)
+	if result.Decision == aictx.Deny {
+		return PolicyTestOutput{
+			Decision:       aictx.Deny,
+			MatchedPattern: result.MatchedPattern,
+			MatchedSource:  "", // 当前资产策略
+			Message:        result.Message,
+		}
+	}
+
+	// 与 runtime 一致：组通用 allow 只用来把 aictx.NeedConfirm 升为 aictx.Allow。
+	if result.Decision == aictx.NeedConfirm {
+		if out := checkGenericAllow(groupAllow, command, MatchCommandRule); out != nil {
+			return *out
+		}
+		return PolicyTestOutput{Decision: aictx.NeedConfirm}
+	}
+	return PolicyTestOutput{Decision: aictx.Allow}
+}
+
+// --- Kafka ---
+
+func testKafkaPolicy(ctx context.Context, current *asset_entity.KafkaPolicy, groups []*group_entity.Group, command string) PolicyTestOutput {
+	// 与真实 checkKafkaPermission 对齐：组通用策略用 MatchCommandRule
+	// （MatchKafkaRule 仅适用于 "<action> <resource>" 的类型专用规则，不能用于通用 CmdPolicy）。
+	groupDeny, groupAllow := collectGroupGenericRules(ctx, groups)
+	if out := checkGenericDeny(groupDeny, command, MatchCommandRule); out != nil {
+		out.Message = PolicyFmt(ctx, "Kafka operation denied by group policy: %s", "Kafka 操作被组策略禁止: %s", command)
+		return *out
+	}
+
+	merged := mergeKafkaPoliciesForTest(ctx, current, groups)
+	result := checkKafkaPolicyRules(ctx, EffectiveKafkaPolicy(ctx, merged), command)
+	if result.Decision == aictx.Deny {
+		return PolicyTestOutput{
+			Decision:       aictx.Deny,
+			MatchedPattern: result.MatchedPattern,
+			MatchedSource:  "", // 当前资产策略
+			Message:        result.Message,
+		}
+	}
+
+	if result.Decision == aictx.NeedConfirm {
+		if out := checkGenericAllow(groupAllow, command, MatchCommandRule); out != nil {
+			return *out
+		}
+		return PolicyTestOutput{Decision: aictx.NeedConfirm}
+	}
+	return PolicyTestOutput{Decision: aictx.Allow}
+}
+
 // --- K8S ---
 
 func testK8sPolicy(ctx context.Context, current *asset_entity.K8sPolicy, groups []*group_entity.Group, command string) PolicyTestOutput {
@@ -481,6 +543,52 @@ func mergeK8sPoliciesForTest(ctx context.Context, current *asset_entity.K8sPolic
 	merged := &asset_entity.K8sPolicy{}
 	for _, p := range policies {
 		expanded := expandK8sPolicy(ctx, p)
+		if len(merged.AllowList) == 0 && len(expanded.AllowList) > 0 {
+			merged.AllowList = AppendUnique(merged.AllowList, expanded.AllowList...)
+		}
+		merged.DenyList = AppendUnique(merged.DenyList, expanded.DenyList...)
+	}
+	return merged
+}
+
+func mergeMongoPoliciesForTest(ctx context.Context, current *asset_entity.MongoPolicy, groups []*group_entity.Group) *asset_entity.MongoPolicy {
+	var policies []*asset_entity.MongoPolicy
+	if current != nil {
+		policies = append(policies, current)
+	}
+	for _, g := range groups {
+		p, err := g.GetMongoPolicy()
+		if err == nil && p != nil {
+			policies = append(policies, p)
+		}
+	}
+
+	merged := &asset_entity.MongoPolicy{}
+	for _, p := range policies {
+		expanded := expandMongoPolicy(ctx, p)
+		if len(merged.AllowTypes) == 0 && len(expanded.AllowTypes) > 0 {
+			merged.AllowTypes = AppendUnique(merged.AllowTypes, expanded.AllowTypes...)
+		}
+		merged.DenyTypes = AppendUnique(merged.DenyTypes, expanded.DenyTypes...)
+	}
+	return merged
+}
+
+func mergeKafkaPoliciesForTest(ctx context.Context, current *asset_entity.KafkaPolicy, groups []*group_entity.Group) *asset_entity.KafkaPolicy {
+	var policies []*asset_entity.KafkaPolicy
+	if current != nil {
+		policies = append(policies, current)
+	}
+	for _, g := range groups {
+		p, err := g.GetKafkaPolicy()
+		if err == nil && p != nil {
+			policies = append(policies, p)
+		}
+	}
+
+	merged := &asset_entity.KafkaPolicy{}
+	for _, p := range policies {
+		expanded := expandKafkaPolicy(ctx, p)
 		if len(merged.AllowList) == 0 && len(expanded.AllowList) > 0 {
 			merged.AllowList = AppendUnique(merged.AllowList, expanded.AllowList...)
 		}

@@ -54,8 +54,36 @@ func TestPolicyDispatch(t *testing.T) {
 				testK8sPolicy(ctx, cur, nil, cmd),
 			)
 		})
-		Convey("未注册 kind(mongo)返回 NeedConfirm", func() {
-			out := TestPolicy(ctx, PolicyTestInput{PolicyKind: PolicyKindMongo}, "anything")
+		Convey("mongo kind 路由到 testMongoPolicy(deny 命中)", func() {
+			out := TestPolicy(ctx, PolicyTestInput{
+				PolicyKind: PolicyKindMongo,
+				Current:    &asset_entity.MongoPolicy{DenyTypes: []string{"dropDatabase"}},
+			}, "dropDatabase")
+			So(out.Decision, ShouldEqual, aictx.Deny)
+		})
+		Convey("mongo kind 应用 Current allow(find 放行)", func() {
+			out := TestPolicy(ctx, PolicyTestInput{
+				PolicyKind: PolicyKindMongo,
+				Current:    &asset_entity.MongoPolicy{AllowTypes: []string{"find"}},
+			}, "find")
+			So(out.Decision, ShouldEqual, aictx.Allow)
+		})
+		Convey("kafka kind 路由到 testKafkaPolicy(deny 命中)", func() {
+			out := TestPolicy(ctx, PolicyTestInput{
+				PolicyKind: PolicyKindKafka,
+				Current:    &asset_entity.KafkaPolicy{DenyList: []string{"topic.delete *"}},
+			}, "topic.delete orders")
+			So(out.Decision, ShouldEqual, aictx.Deny)
+		})
+		Convey("kafka kind 应用 Current allow(topic.read 放行)", func() {
+			out := TestPolicy(ctx, PolicyTestInput{
+				PolicyKind: PolicyKindKafka,
+				Current:    &asset_entity.KafkaPolicy{AllowList: []string{"topic.read *"}},
+			}, "topic.read orders")
+			So(out.Decision, ShouldEqual, aictx.Allow)
+		})
+		Convey("未注册 kind(bogus)返回 NeedConfirm", func() {
+			out := TestPolicy(ctx, PolicyTestInput{PolicyKind: "bogus"}, "anything")
 			So(out.Decision, ShouldEqual, aictx.NeedConfirm)
 		})
 	})
