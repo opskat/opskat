@@ -16,16 +16,15 @@ package sessionid
 import (
 	"fmt"
 	"math/rand/v2"
-	"sync"
+	"sync/atomic"
 )
 
 // Generator produces unique session IDs of the form "<kind>-<instance>-<n>".
-// It is safe for concurrent use.
+// It is safe for concurrent use. Must be used by pointer (atomic counter).
 type Generator struct {
 	kind     string
 	instance uint64
-	mu       sync.Mutex
-	counter  int64
+	counter  atomic.Int64
 }
 
 // NewGenerator returns a Generator whose IDs are prefixed with kind (e.g.
@@ -37,9 +36,5 @@ func NewGenerator(kind string) *Generator {
 
 // Next returns the next unique session ID.
 func (g *Generator) Next() string {
-	g.mu.Lock()
-	g.counter++
-	n := g.counter
-	g.mu.Unlock()
-	return fmt.Sprintf("%s-%x-%d", g.kind, g.instance, n)
+	return fmt.Sprintf("%s-%x-%d", g.kind, g.instance, g.counter.Add(1))
 }
