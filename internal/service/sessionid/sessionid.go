@@ -1,4 +1,4 @@
-// Package sessionid mints process-unique terminal session IDs.
+// Package sessionid mints terminal session IDs with a random instance segment.
 //
 // Session IDs are persisted by the frontend (they become tab IDs in the tab
 // store), so an ID must stay unique across app restarts — not just within a
@@ -7,9 +7,9 @@
 // persisted, producing two tabs that share one ID (issue #141).
 //
 // Each Generator carries a random per-instance segment, so IDs minted by
-// different processes (or different Managers) never collide regardless of
-// counter value. The ID format is "<kind>-<instance>-<n>"; the kind prefix is
-// preserved because the frontend infers the transport from it
+// different processes (or different Managers) are extremely unlikely to collide
+// even when their counters match. The ID format is "<kind>-<instance>-<n>"; the
+// kind prefix is preserved because the frontend infers the transport from it
 // (inferTransportFromSessionId keys off "ssh-" / "serial-" / "local-").
 package sessionid
 
@@ -28,8 +28,8 @@ type Generator struct {
 }
 
 // NewGenerator returns a Generator whose IDs are prefixed with kind (e.g.
-// "ssh"). The random instance segment is drawn once per Generator, giving every
-// process its own ID namespace.
+// "ssh"). The random instance segment is drawn once per Generator, giving each
+// generator an ID namespace with negligible collision risk.
 func NewGenerator(kind string) *Generator {
 	return &Generator{kind: kind, instance: rand.Uint64()}
 }

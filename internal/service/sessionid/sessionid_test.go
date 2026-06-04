@@ -9,8 +9,9 @@ import (
 // terminal session IDs are persisted into the frontend tab store, but the
 // generating counter lives in process memory and resets on every app restart.
 // Two independently-created generators model "before restart" and "after
-// restart"; their IDs must never overlap, otherwise a freshly minted session ID
-// collides with a stale persisted tab ID and two tabs end up sharing one ID.
+// restart"; their IDs should not overlap unless the random instance segment
+// collides, otherwise a freshly minted session ID collides with a stale
+// persisted tab ID and two tabs end up sharing one ID.
 func TestGenerator_IDsDisjointAcrossInstances(t *testing.T) {
 	prev := NewGenerator("ssh") // previous app run
 	next := NewGenerator("ssh") // after restart — counter is back at 0
