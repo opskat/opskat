@@ -120,8 +120,7 @@ func (s *SSH) ConnectSSHAsync(req SSHConnectRequest) (string, error) {
 		return "", fmt.Errorf("资产不是SSH类型")
 	}
 
-	connID := s.connCounter.Add(1)
-	connectionID := fmt.Sprintf("conn-%d", connID)
+	connectionID := s.nextConnectionID()
 
 	// 创建可取消的 context
 	connCtx, cancel := context.WithCancel(s.ctx)

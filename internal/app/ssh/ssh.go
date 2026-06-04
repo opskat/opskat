@@ -4,8 +4,8 @@ package ssh
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 
+	"github.com/opskat/opskat/internal/service/sessionid"
 	"github.com/opskat/opskat/internal/service/sftp_svc"
 	"github.com/opskat/opskat/internal/service/ssh_svc"
 	"github.com/opskat/opskat/internal/sshpool"
@@ -43,7 +43,7 @@ type SSH struct {
 	pool           *sshpool.Pool
 	forwardManager *ForwardManager
 
-	connCounter atomic.Int64
+	connIDGen *sessionid.Generator
 
 	pendingAuthResponses    sync.Map // map[string]chan []string
 	pendingHostKeyResponses sync.Map // map[string]chan ssh_svc.HostKeyAction
@@ -53,14 +53,21 @@ type SSH struct {
 // New 构造 ssh binder。manager/sftp/pool 由 main.go 创建后注入。
 func New(appCtx context.Context, lang LangProvider, mgr *ssh_svc.Manager, sftp *sftp_svc.Service, pool *sshpool.Pool) *SSH {
 	s := &SSH{
-		appCtx:  appCtx,
-		lang:    lang,
-		manager: mgr,
-		sftp:    sftp,
-		pool:    pool,
+		appCtx:    appCtx,
+		lang:      lang,
+		manager:   mgr,
+		sftp:      sftp,
+		pool:      pool,
+		connIDGen: sessionid.NewGenerator("conn"),
 	}
 	s.forwardManager = NewForwardManager(&poolDialer{})
 	return s
+}
+
+// nextConnectionID 生成跨重启唯一的连接中转 ID(连接中阶段的 tab id),
+// 避免与持久化的旧 connecting tab 撞号(issue #141)。
+func (s *SSH) nextConnectionID() string {
+	return s.connIDGen.Next()
 }
 
 // Startup 保存 Wails ctx，方便 EventsEmit 用。

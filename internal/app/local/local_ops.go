@@ -50,7 +50,7 @@ func (l *Local) ConnectLocalAsync(req LocalConnectRequest) (string, error) {
 	}
 
 	// 生成 connectionId
-	connectionID := fmt.Sprintf("local-conn-%d", l.connCounter.Add(1))
+	connectionID := l.nextConnectionID()
 	eventName := "local:connect:" + connectionID
 
 	// 从 l.ctx 派生取消上下文：应用退出（Wails ctx 取消）时连接中途终止，

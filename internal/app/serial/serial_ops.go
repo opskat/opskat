@@ -51,8 +51,7 @@ func (s *Serial) ConnectSerialAsync(req SerialConnectRequest) (string, error) {
 	}
 
 	// 生成 connectionId
-	connID := s.connCounter.Add(1)
-	connectionID := fmt.Sprintf("conn-%d", connID)
+	connectionID := s.nextConnectionID()
 
 	connCtx, cancel := context.WithCancel(s.ctx)
 	s.pendingConnections.Store(connectionID, cancel)
