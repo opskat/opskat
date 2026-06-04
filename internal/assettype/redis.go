@@ -44,6 +44,7 @@ func (h *redisHandler) ValidateCreateArgs(args map[string]any) error {
 }
 
 func (h *redisHandler) DefaultPolicy() any { return asset_entity.DefaultRedisPolicy() }
+func (h *redisHandler) PolicyKind() string { return policy.PolicyKindRedis }
 
 func (h *redisHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
 	cfg := &asset_entity.RedisConfig{

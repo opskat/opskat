@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	policyent "github.com/opskat/opskat/internal/model/entity/policy"
 	. "github.com/smartystreets/goconvey/convey"
 )
 
@@ -49,26 +50,38 @@ func TestDecodeCurrentPolicy(t *testing.T) {
 }
 
 func TestResolvePolicyKind(t *testing.T) {
+	// resolver 单测:自行 seed 资产类型→kind(真实 handler 接线由 assettype 包测试覆盖)。
+	seed := map[string]string{
+		"ssh": PolicyKindCommand, "serial": PolicyKindCommand, "local": PolicyKindCommand,
+		"database": PolicyKindQuery, "redis": PolicyKindRedis, "mongodb": PolicyKindMongo,
+		"kafka": PolicyKindKafka, "k8s": PolicyKindK8s, "etcd": PolicyKindEtcd,
+	}
+	for typ, kind := range seed {
+		policyent.RegisterAssetKind(typ, kind)
+	}
+	defer func() {
+		for typ := range seed {
+			policyent.UnregisterAssetKind(typ)
+		}
+	}()
+
 	Convey("ResolvePolicyKind", t, func() {
-		Convey("资产类型/前端 policyType → kind", func() {
-			cases := map[string]string{
-				"ssh":        PolicyKindCommand,
-				"serial":     PolicyKindCommand,
-				"local":      PolicyKindCommand,
-				"database":   PolicyKindQuery,
-				"redis":      PolicyKindRedis,
-				"mongo":      PolicyKindMongo,
-				"mongodb":    PolicyKindMongo,
-				"kafka":      PolicyKindKafka,
-				"k8s":        PolicyKindK8s,
-				"kubernetes": PolicyKindK8s,
-				"etcd":       PolicyKindEtcd,
-			}
-			for in, want := range cases {
+		Convey("已注册资产类型 → kind", func() {
+			for in, want := range seed {
 				k, ok := ResolvePolicyKind(in)
 				So(ok, ShouldBeTrue)
 				So(k, ShouldEqual, want)
 			}
+		})
+		Convey("前端别名 mongo(=kind)经 kind 兜底解析", func() {
+			k, ok := ResolvePolicyKind("mongo")
+			So(ok, ShouldBeTrue)
+			So(k, ShouldEqual, PolicyKindMongo)
+		})
+		Convey("kubernetes 别名 → k8s", func() {
+			k, ok := ResolvePolicyKind("kubernetes")
+			So(ok, ShouldBeTrue)
+			So(k, ShouldEqual, PolicyKindK8s)
 		})
 		Convey("直接传已注册 kind 原样返回", func() {
 			k, ok := ResolvePolicyKind(PolicyKindCommand)

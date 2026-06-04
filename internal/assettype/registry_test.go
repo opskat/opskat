@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	policyent "github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/smartystreets/goconvey/convey"
 )
 
@@ -22,6 +23,7 @@ func (s *stubHandler) ResolvePassword(_ context.Context, _ *asset_entity.Asset) 
 	return "", nil
 }
 func (s *stubHandler) DefaultPolicy() any                        { return nil }
+func (s *stubHandler) PolicyKind() string                        { return "" }
 func (s *stubHandler) ValidateCreateArgs(_ map[string]any) error { return nil }
 func (s *stubHandler) ApplyCreateArgs(_ context.Context, _ *asset_entity.Asset, _ map[string]any) error {
 	return nil
@@ -60,5 +62,42 @@ func TestRegistry(t *testing.T) {
 			Register(&stubHandler{typ: "b", port: 2})
 			convey.So(len(All()), convey.ShouldEqual, 2)
 		})
+	})
+}
+
+func TestHandlerPolicyKind(t *testing.T) {
+	convey.Convey("内置 handler 声明 policyKind 并接线到注册表", t, func() {
+		want := map[string]string{
+			asset_entity.AssetTypeSSH:      policyent.PolicyKindCommand,
+			asset_entity.AssetTypeSerial:   policyent.PolicyKindCommand,
+			asset_entity.AssetTypeLocal:    policyent.PolicyKindCommand,
+			asset_entity.AssetTypeDatabase: policyent.PolicyKindQuery,
+			asset_entity.AssetTypeRedis:    policyent.PolicyKindRedis,
+			asset_entity.AssetTypeMongoDB:  policyent.PolicyKindMongo,
+			asset_entity.AssetTypeKafka:    policyent.PolicyKindKafka,
+			asset_entity.AssetTypeK8s:      policyent.PolicyKindK8s,
+			asset_entity.AssetTypeEtcd:     policyent.PolicyKindEtcd,
+		}
+		for typ, kind := range want {
+			h, ok := Get(typ)
+			convey.So(ok, convey.ShouldBeTrue)
+			convey.So(h.PolicyKind(), convey.ShouldEqual, kind)
+			got, ok := policyent.AssetKindOf(typ)
+			convey.So(ok, convey.ShouldBeTrue)
+			convey.So(got, convey.ShouldEqual, kind)
+		}
+	})
+}
+
+func TestRegisterSkipsEmptyKind(t *testing.T) {
+	convey.Convey("PolicyKind 为空的 handler 不污染 asset-kind 注册表", t, func() {
+		Register(&stubHandler{typ: "emptykindstub"})
+		defer func() {
+			mu.Lock()
+			delete(registry, "emptykindstub")
+			mu.Unlock()
+		}()
+		_, ok := policyent.AssetKindOf("emptykindstub")
+		convey.So(ok, convey.ShouldBeFalse)
 	})
 }

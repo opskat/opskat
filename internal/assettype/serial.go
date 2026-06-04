@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/policy"
 )
 
 type serialHandler struct{}
@@ -37,6 +38,7 @@ func (h *serialHandler) ResolvePassword(_ context.Context, _ *asset_entity.Asset
 }
 
 func (h *serialHandler) DefaultPolicy() any { return asset_entity.DefaultCommandPolicy() }
+func (h *serialHandler) PolicyKind() string { return policy.PolicyKindCommand }
 
 func (h *serialHandler) ValidateCreateArgs(args map[string]any) error {
 	if ArgString(args, "port_path") == "" {

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/policy"
 )
 
 type localHandler struct{}
@@ -34,6 +35,7 @@ func (h *localHandler) ResolvePassword(_ context.Context, _ *asset_entity.Asset)
 
 // DefaultPolicy 仅为满足接口；本次不接 AI，策略不参与拦截。
 func (h *localHandler) DefaultPolicy() any { return asset_entity.DefaultCommandPolicy() }
+func (h *localHandler) PolicyKind() string { return policy.PolicyKindCommand }
 
 // ValidateCreateArgs 本地终端无必填字段（shell 可空，运行时按 OS 兜底）。
 func (h *localHandler) ValidateCreateArgs(_ map[string]any) error { return nil }

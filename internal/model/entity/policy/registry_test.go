@@ -79,3 +79,37 @@ func TestDefaultPolicyRegistry(t *testing.T) {
 		})
 	})
 }
+
+func TestPolicyKindConstants(t *testing.T) {
+	Convey("规范 policyKind 词表常量取值", t, func() {
+		So(PolicyKindCommand, ShouldEqual, "command")
+		So(PolicyKindQuery, ShouldEqual, "query")
+		So(PolicyKindRedis, ShouldEqual, "redis")
+		So(PolicyKindMongo, ShouldEqual, "mongo")
+		So(PolicyKindKafka, ShouldEqual, "kafka")
+		So(PolicyKindK8s, ShouldEqual, "k8s")
+		So(PolicyKindEtcd, ShouldEqual, "etcd")
+	})
+}
+
+func TestAssetKindRegistry(t *testing.T) {
+	Convey("AssetKind Registry", t, func() {
+		Convey("注册后可查、注销后消失", func() {
+			RegisterAssetKind("faketype", PolicyKindCommand)
+			defer UnregisterAssetKind("faketype")
+
+			got, ok := AssetKindOf("faketype")
+			So(ok, ShouldBeTrue)
+			So(got, ShouldEqual, PolicyKindCommand)
+
+			UnregisterAssetKind("faketype")
+			_, ok = AssetKindOf("faketype")
+			So(ok, ShouldBeFalse)
+		})
+
+		Convey("未注册类型返回 false", func() {
+			_, ok := AssetKindOf("never-registered")
+			So(ok, ShouldBeFalse)
+		})
+	})
+}

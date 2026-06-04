@@ -184,3 +184,16 @@ validateForTest(formState): boolean;                 // 替代 isTestableAssetTy
 - **阶段 1c(内置组按 kind 拆分)**:`policy_group_entity` 引入 `builtinGroupsByKind` 注册表 + `registerBuiltinGroups` + `builtinKindOrder`;`BuiltinGroups()` 改为按 kind 顺序拼装;`Validate()` 的 `switch` 改为 `isBuiltinKind(派生自注册数据) || hasExtensionPolicyType`。21 条内置组字面量原样移入对应 `registerBuiltinGroups` 调用,**行为完全保持**(既有 `TestBuiltinGroups` 总数 21 + 各 kind 计数、`TestPolicyGroup_Validate` 锁定)。
 - **验证**:`go test ./internal/ai/policy ./internal/app/system ./internal/model/entity/policy_group_entity ./internal/service/policy_group_svc` 全绿,`-race`(policy)干净,`golangci-lint` 0 issues。
 - **仍留给后续阶段**:阶段 1a 备忘的 type→kind 三处重复(`assetTypeToKind` / `PolicyType*` / 前端 `policyType`)未在本轮收敛,留待阶段 2 让 kind 从 `assettype` handler 的 `PolicyKind()` 派生;builtin groups 注册表目前仍在 `policy_group_entity` 内集中声明(layering 要求其留在 entity 层),阶段 2/6 接入新类型时按此 seam 追加。
+
+## 阶段 2a 完成记录(2026-06-04)
+
+计划见 `docs/superpowers/plans/2026-06-04-assettype-policykind-phase2a.md`,与前阶段同分支累加。**阶段 2 拆为 2a(后端纯)+ 2b(跨前端)**,本轮只做 2a。
+
+- **做了什么(2a)**:`AssetTypeHandler` 增补 `PolicyKind() string`,9 个内置 handler 各自声明所用 kind;最底层、无 gorm 的 `entity/policy` 镜像既有 `RegisterDefaultPolicy` 模式,新增规范 `PolicyKind*` 常量 + `RegisterAssetKind/AssetKindOf` 资产→kind 注册表;`assettype.Register(h)` 单点接线 `RegisterAssetKind(Type(), PolicyKind())`(空 kind 跳过,不污染);`ai/policy.ResolvePolicyKind` 改为「别名 → `AssetKindOf` → kind 兜底」,**删除手维护的 11 条 `assetTypeToKind` 字面量**,仅留 1 条真·前端别名(`kubernetes`→k8s);`ai/policy.PolicyKind*` 常量改 alias 到 `entity/policy`。
+- **关闭了哪条备忘**:阶段 1a/1b 留下的「type→kind 三处重复」中,`assetTypeToKind`(ai/policy)与 kind 词表常量已收敛 —— 资产→kind 由 handler 的 `PolicyKind()` 派生(OCP:新增类型只需 handler 实现该方法,`Register` 自动接线,`ResolvePolicyKind` 零改动);ai/policy⟷entity/policy⟷handler 三处 kind 常量统一为 entity/policy 一处定义。
+- **行为保持**:`ResolvePolicyKind` 对全部既有输入(ssh/serial/local/database/redis/mongo/mongodb/kafka/k8s/kubernetes/etcd + 直接传 kind + 未知)结果不变(`mongo` 经 kind 兜底,`kubernetes` 经别名);无 `app/system`/前端/binding 改动,无 `wails generate`。`TestResolvePolicyKind` 改为 seed-fixture 的 resolver 单测(ai/policy 不依赖 assettype),真实 handler→kind 接线由 `assettype` 包新测试 `TestHandlerPolicyKind` 覆盖。
+- **验证**:`go build ./...`、`go test ./internal/...`(全绿)、`go test ./internal/ai/policy -race`(干净)、`golangci-lint`(改动包 0 issues)。
+- **仍留给后续**:
+  - **2b**(本阶段未做):7 个签名各异的连接测试 binding(`TestSSHConnection`/`TestDatabaseConnection`/… + etcd outlier `EtcdTestConfig`)统一为一个 `App.TestAssetConnection`,需 runtime 连接测试注册表(测试函数是各 binder 的实例方法,持有 live manager/pool,无法 `init()` 注册)+ 重写 `AssetForm.tsx` 的 7 个 `handleTest*` 与三元链 + `wails generate`。
+  - **GetConfig/Validate switch 不收口**:核实无 `Asset.GetConfig()` dispatcher;最接近的是 `asset_entity.Validate()` 的 type switch,但 `asset_entity` 在 `assettype` **之下**(导入 `assettype` 会成环),与阶段 1c 内置组留在 entity 层是同一 layering 约束 —— 该 switch **不**经 `assettype` 注册表收口。
+  - `policy_group_entity.PolicyType*` 仍是独立常量集(缺 `PolicyTypeK8s`,且被内置组 + `Validate` 引用),未并入 `entity/policy.PolicyKind*`;三处重复的最后一处留待后续(代价 vs 收益不划算,需单独评估)。

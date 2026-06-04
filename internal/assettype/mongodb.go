@@ -44,6 +44,7 @@ func (h *mongodbHandler) ValidateCreateArgs(args map[string]any) error {
 }
 
 func (h *mongodbHandler) DefaultPolicy() any { return asset_entity.DefaultMongoPolicy() }
+func (h *mongodbHandler) PolicyKind() string { return policy.PolicyKindMongo }
 
 func (h *mongodbHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
 	a.SSHTunnelID = ArgInt64(args, "ssh_asset_id")

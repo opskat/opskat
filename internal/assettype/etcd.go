@@ -61,6 +61,7 @@ func (h *etcdHandler) ValidateCreateArgs(args map[string]any) error {
 }
 
 func (h *etcdHandler) DefaultPolicy() any { return asset_entity.DefaultEtcdPolicy() }
+func (h *etcdHandler) PolicyKind() string { return policy.PolicyKindEtcd }
 
 func (h *etcdHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
 	cfg := &asset_entity.EtcdConfig{
