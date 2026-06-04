@@ -30,14 +30,10 @@ describe("AssetTypePicker", () => {
     // After filtering, "nav.ssh" should not appear in the options list
     // (the trigger still shows the selected label, so we query within the popover content)
     const popover = document.querySelector("[data-radix-popper-content-wrapper]");
-    if (popover) {
-      expect(within(popover as HTMLElement).queryByText("nav.ssh")).toBeNull();
-      expect(within(popover as HTMLElement).getByText("nav.mongodb")).toBeTruthy();
-    } else {
-      // Fallback: nav.ssh only appears in the trigger (1 occurrence), not in options
-      expect(screen.queryAllByText("nav.ssh").length).toBeLessThanOrEqual(1);
-      expect(screen.getByText("nav.mongodb")).toBeTruthy();
-    }
+    expect(popover).toBeTruthy();
+    const inPopover = within(popover as HTMLElement);
+    expect(inPopover.queryByText("nav.ssh")).toBeNull();
+    expect(inPopover.getByText("nav.mongodb")).toBeTruthy();
   });
 
   it("calls onChange with the option value when an item is clicked", async () => {
