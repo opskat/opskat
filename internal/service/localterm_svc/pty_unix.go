@@ -28,10 +28,12 @@ func startPTY(spec ptySpec) (ptyProcess, error) {
 	if shell == "" {
 		shell = defaultShell()
 	}
-	cmd := exec.Command(shell, spec.Args...) //nolint:gosec // G204: 启动用户在本地终端资产里选择的 shell 是本功能的核心意图
-	if spec.Cwd != "" {
-		cmd.Dir = spec.Cwd
+	cwd, err := expandHomeDir(spec.Cwd)
+	if err != nil {
+		return nil, err
 	}
+	cmd := exec.Command(shell, spec.Args...) //nolint:gosec // G204: 启动用户在本地终端资产里选择的 shell 是本功能的核心意图
+	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
 	cols, rows := clampSize(spec.Cols, spec.Rows)

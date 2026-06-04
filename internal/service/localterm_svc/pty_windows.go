@@ -5,7 +5,6 @@ package localterm_svc
 import (
 	"os"
 	"os/exec"
-	"strings"
 
 	"github.com/UserExistsError/conpty"
 )
@@ -35,17 +34,15 @@ func startPTY(spec ptySpec) (ptyProcess, error) {
 	if shell == "" {
 		shell = windowsDefaultShell()
 	}
-	// Windows 命令行是单字符串;v1 用空格拼接(shell 路径/参数一般无空格,含空格场景后续再加引号处理)。
-	cmdline := shell
-	if len(spec.Args) > 0 {
-		cmdline = shell + " " + strings.Join(spec.Args, " ")
+	cmdline := windowsCommandLine(shell, spec.Args)
+	cwd, err := expandHomeDir(spec.Cwd)
+	if err != nil {
+		return nil, err
 	}
 
 	cols, rows := clampSize(spec.Cols, spec.Rows)
 	opts := []conpty.ConPtyOption{conpty.ConPtyDimensions(cols, rows)}
-	if spec.Cwd != "" {
-		opts = append(opts, conpty.ConPtyWorkDir(spec.Cwd))
-	}
+	opts = append(opts, conpty.ConPtyWorkDir(cwd))
 	cpty, err := conpty.Start(cmdline, opts...)
 	if err != nil {
 		return nil, err

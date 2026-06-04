@@ -371,7 +371,7 @@
     "localArgs": "Arguments",
     "localArgsPlaceholder": "e.g. -l --login",
     "localCwd": "Working Directory",
-    "localCwdPlaceholder": "e.g. /home/user",
+    "localCwdPlaceholder": "e.g. ~ or /home/user",
     "typeLocal": "Local Terminal",
     "k8sVersion": "Version",
     "k8sPlatform": "Platform",

@@ -31,9 +31,9 @@ issue #70 混了两件诉求:① 原标题「让 AI 执行本机 powershell/命�
 
 | 文件 | 内容 |
 |------|------|
-| `internal/service/localterm_svc/pty.go` | 包内接口 `ptyProcess { Read(p []byte)(int,error); Write(p []byte)(int,error); Resize(cols,rows int) error; Close() error }`;函数声明 `startPTY(spec ptySpec) (ptyProcess, error)`;`ptySpec{Shell string; Args []string; Cwd string; Cols,Rows int}`。进程退出由 reader 读到 EOF 感知(creack/pty 与 conpty 一致);僵尸回收放在平台实现的 `Close()` 内(`cmd.Wait()` 带超时,unix)。环境变量由平台实现内部用 `os.Environ()` + `TERM=xterm-256color` 兜底,**不放进 config/spec**(YAGNI)。 |
+| `internal/service/localterm_svc/pty.go` | 包内接口 `ptyProcess { Read(p []byte)(int,error); Write(p []byte)(int,error); Resize(cols,rows int) error; Close() error }`;函数声明 `startPTY(spec ptySpec) (ptyProcess, error)`;`ptySpec{Shell string; Args []string; Cwd string; Cols,Rows int}`。进程退出由 reader 读到 EOF 感知(creack/pty 与 conpty 一致);僵尸回收放在平台实现的 `Close()` 内(`cmd.Wait()` 带超时,unix)。公共 helper 负责 `~` 工作目录展开与 Windows argv quoting。环境变量由平台实现内部用 `os.Environ()` + `TERM=xterm-256color` 兜底,**不放进 config/spec**(YAGNI)。 |
 | `internal/service/localterm_svc/pty_unix.go` | `//go:build !windows`(覆盖 darwin/linux/bsd)。用 `creack/pty`:`exec.Command(shell, args...)` + `pty.StartWithSize`;`Resize` → `pty.Setsize`;`Close` → 发 SIGHUP 后带超时回收;默认 shell `$SHELL` → `/bin/sh`。 |
-| `internal/service/localterm_svc/pty_windows.go` | `//go:build windows`。用 `UserExistsError/conpty`:`conpty.Start(commandLine)`;`Resize` → `cpty.Resize`;默认 shell `pwsh.exe` → `powershell.exe` → `%COMSPEC%` → `cmd.exe`。ConPTY 需 Win10 1809+,起不来时返回明确错误。 |
+| `internal/service/localterm_svc/pty_windows.go` | `//go:build windows`。用 `UserExistsError/conpty`:`conpty.Start(commandLine)`;`Resize` → `cpty.Resize`;默认 shell `pwsh.exe` → `powershell.exe` → `%COMSPEC%` → `cmd.exe`。Windows 命令行虽然是单字符串,但启动前按 `CommandLineToArgvW` 兼容规则 quote shell 路径与每个 arg,保留 `Args []string` 语义。ConPTY 需 Win10 1809+,起不来时返回明确错误。 |
 | `internal/service/localterm_svc/shells.go` | 公共:`type ShellInfo struct { Name string; Path string; Args []string }`(`Args` 让 WSL/Git Bash 这类"shell+固定参数"的预设可一键选)。 |
 | `internal/service/localterm_svc/shells_unix.go` | `//go:build !windows`。`DetectShells()`:`$SHELL`(默认优先)+ 读 `/etc/shells`(系统权威清单),去重 + `os.Stat` 确认存在。 |
 | `internal/service/localterm_svc/shells_windows.go` | `//go:build windows`。`DetectShells()`:`LookPath` pwsh/powershell/cmd;探 Git Bash(`C:\Program Files\Git\bin\bash.exe`,带 `--login -i`);`wsl.exe -l -q` 枚举已装发行版,每个一项 `{Name:"WSL: <distro>", Path:wsl.exe, Args:["-d",distro]}`。wsl 输出是 UTF-16LE,v1 用"去 NUL + 去 CR + 按行切"解析(ASCII 名字够用;非 ASCII 发行版名后续再上正规 UTF-16 解码)。 |
@@ -87,6 +87,7 @@ const TRANSPORTS: Record<TerminalTransport, {
 - `terminalStore.ts`、`Terminal.tsx` 里所有 `isSerial ? A : B` 改为查 `TRANSPORTS[transport]`。能力差异(如 serial 不可分屏)由表里的 `canSplit` 表达,而不是 `=== "serial"`。
 - 新增 wails 绑定调用:`ConnectLocalAsync`、`WriteLocal`、`ResizeLocalTerminal`、`DisconnectLocal`、`ListLocalShells`(`wailsjs/go/local/Local.*` 由 wails 自动生成)。
 - 资产**新建/编辑表单**:加 `local` 类型项 + 图标;配置项 Shell(下拉预设 + 可手填)、Args、Cwd。Shell 预设由 `ListLocalShells()` 探测本机(镜像 `ListSerialPorts()`):下拉项带 `{name, path, args}`,选中时同时回填 `shell=path` 与 `args`(WSL 发行版选中即填 `wsl.exe` + `-d <distro>`)。
+- Args 输入框用轻量 tokenizer 转成 `string[]`:空白分隔,支持单/双引号和反斜杠转义;展示/编辑时再格式化回可 round-trip 的文本。因此带空格的 WSL 发行版名与路径参数会作为单个 argv 保存和启动。
 - `reconnectBySession` 走映射表 → local 的"重连" = 重新 spawn 一个 shell。
 
 ## 4. 与 serial 模板的关键差异(即"做得好"的要点)

@@ -47,6 +47,7 @@ import { K8sConfigSection } from "@/components/asset/K8sConfigSection";
 import { EtcdConfigSection } from "@/components/asset/EtcdConfigSection";
 import { SerialConfigSection } from "@/components/asset/SerialConfigSection";
 import { LocalConfigSection } from "@/components/asset/LocalConfigSection";
+import { formatLocalShellArgs, parseLocalShellArgs } from "@/lib/localShellArgs";
 import { useExtensionStore } from "@/extension";
 import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
 
@@ -446,7 +447,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   // Local terminal fields
   const [localShell, setLocalShell] = useState("");
   const [localArgs, setLocalArgs] = useState("");
-  const [localCwd, setLocalCwd] = useState("");
+  const [localCwd, setLocalCwd] = useState("~");
 
   // Extension config
   const [extConfig, setExtConfig] = useState<Record<string, unknown>>({});
@@ -927,8 +928,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     try {
       const cfg = JSON.parse(asset.Config || "{}");
       setLocalShell(cfg.shell || "");
-      setLocalArgs((cfg.args || []).join(" "));
-      setLocalCwd(cfg.cwd || "");
+      setLocalArgs(formatLocalShellArgs(cfg.args || []));
+      setLocalCwd(cfg.cwd || "~");
     } catch {
       resetLocalFields();
     }
@@ -937,7 +938,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const resetLocalFields = () => {
     setLocalShell("");
     setLocalArgs("");
-    setLocalCwd("");
+    setLocalCwd("~");
   };
 
   const handleTypeChange = (newType: AssetType) => {
@@ -1595,7 +1596,13 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     } else if (assetType === "local") {
       const localConfig: Record<string, unknown> = {};
       if (localShell) localConfig.shell = localShell;
-      const argList = localArgs.trim().split(/\s+/).filter(Boolean);
+      let argList: string[];
+      try {
+        argList = parseLocalShellArgs(localArgs);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Invalid shell args");
+        return;
+      }
       if (argList.length) localConfig.args = argList;
       if (localCwd) localConfig.cwd = localCwd;
       config = JSON.stringify(localConfig);

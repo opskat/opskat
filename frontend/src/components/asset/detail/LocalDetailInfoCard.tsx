@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import type { DetailInfoCardProps } from "@/lib/assetTypes/types";
 import { DetailGrid, DetailSection, InfoItem } from "./InfoItem";
 import { parseDetailConfig } from "./utils";
+import { formatLocalShellArgs } from "@/lib/localShellArgs";
 
 interface LocalConfig {
   shell?: string;
@@ -19,8 +20,10 @@ export function LocalDetailInfoCard({ asset }: DetailInfoCardProps) {
     <DetailSection title={t("asset.localTitle")}>
       <DetailGrid>
         <InfoItem label={t("asset.localShell")} value={cfg.shell || t("asset.localDefaultShell")} mono />
-        {cfg.args && cfg.args.length > 0 && <InfoItem label={t("asset.localArgs")} value={cfg.args.join(" ")} mono />}
-        {cfg.cwd && <InfoItem label={t("asset.localCwd")} value={cfg.cwd} mono />}
+        {cfg.args && cfg.args.length > 0 && (
+          <InfoItem label={t("asset.localArgs")} value={formatLocalShellArgs(cfg.args)} mono />
+        )}
+        <InfoItem label={t("asset.localCwd")} value={cfg.cwd || "~"} mono />
       </DetailGrid>
     </DetailSection>
   );

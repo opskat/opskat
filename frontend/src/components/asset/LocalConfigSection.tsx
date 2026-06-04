@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { ListLocalShells } from "../../../wailsjs/go/local/Local";
 import type { localterm_svc } from "../../../wailsjs/go/models";
+import { formatLocalShellArgs } from "@/lib/localShellArgs";
 
 type ShellInfo = localterm_svc.ShellInfo;
 
@@ -34,7 +35,7 @@ export function LocalConfigSection({ shell, setShell, args, setArgs, cwd, setCwd
     const s = shells[Number(val)];
     if (s) {
       setShell(s.path);
-      setArgs((s.args || []).join(" "));
+      setArgs(formatLocalShellArgs(s.args || []));
     }
   };
 
@@ -51,7 +52,7 @@ export function LocalConfigSection({ shell, setShell, args, setArgs, cwd, setCwd
             {shells.map((s, i) => (
               <SelectItem key={`${s.path}-${i}`} value={String(i)}>
                 {s.name}
-                {s.args && s.args.length ? ` (${s.path} ${s.args.join(" ")})` : ` (${s.path})`}
+                {s.args && s.args.length ? ` (${s.path} ${formatLocalShellArgs(s.args)})` : ` (${s.path})`}
               </SelectItem>
             ))}
           </SelectContent>

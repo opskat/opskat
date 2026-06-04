@@ -371,7 +371,7 @@
     "localArgs": "启动参数",
     "localArgsPlaceholder": "如 -l、--login",
     "localCwd": "工作目录",
-    "localCwdPlaceholder": "如 /home/user",
+    "localCwdPlaceholder": "如 ~ 或 /home/user",
     "typeLocal": "本地终端",
     "k8sVersion": "版本",
     "k8sPlatform": "平台",
