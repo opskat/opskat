@@ -1,10 +1,12 @@
 // frontend/src/lib/assetTypes/options.ts
 import type { ComponentType } from "react";
-import { Monitor, Database, Cylinder, Leaf, Container, Server, Usb, SquareTerminal } from "lucide-react";
+import { Monitor, Database, Server, Usb, SquareTerminal } from "lucide-react";
 import { getIconComponent } from "@/components/asset/IconPicker";
-import { KafkaIcon, EtcdIcon } from "@/components/asset/brand-icons";
+import { KafkaIcon, EtcdIcon, RedisIcon, MongodbIcon, KubernetesIcon } from "@/components/asset/brand-icons";
 import type { ExtManifest } from "@/extension/types";
 import type { asset_entity } from "../../../wailsjs/go/models";
+
+export type AssetTypeCategory = "servers" | "databases" | "middleware" | "extension";
 
 export interface AssetTypeOption {
   /** Stable identifier — used as the persisted "selected" value. */
@@ -18,6 +20,8 @@ export interface AssetTypeOption {
   /** Icon component for direct render. */
   icon: ComponentType<{ className?: string; style?: React.CSSProperties }>;
   group: "builtin" | "extension";
+  /** 语义分组（选择器展示用）。 */
+  category: AssetTypeCategory;
 }
 
 interface ExtensionEntryLike {
@@ -32,6 +36,7 @@ const BUILTIN_OPTIONS: AssetTypeOption[] = [
     labelIsI18nKey: true,
     icon: Monitor,
     group: "builtin",
+    category: "servers",
   },
   {
     value: "database",
@@ -40,22 +45,25 @@ const BUILTIN_OPTIONS: AssetTypeOption[] = [
     labelIsI18nKey: true,
     icon: Database,
     group: "builtin",
+    category: "databases",
   },
   {
     value: "redis",
     aliases: ["redis"],
     label: "nav.redis",
     labelIsI18nKey: true,
-    icon: Cylinder,
+    icon: RedisIcon,
     group: "builtin",
+    category: "databases",
   },
   {
     value: "mongodb",
     aliases: ["mongodb", "mongo"],
     label: "nav.mongodb",
     labelIsI18nKey: true,
-    icon: Leaf,
+    icon: MongodbIcon,
     group: "builtin",
+    category: "databases",
   },
   {
     value: "kafka",
@@ -64,14 +72,16 @@ const BUILTIN_OPTIONS: AssetTypeOption[] = [
     labelIsI18nKey: true,
     icon: KafkaIcon,
     group: "builtin",
+    category: "middleware",
   },
   {
     value: "k8s",
     aliases: ["k8s", "kubernetes"],
     label: "nav.k8s",
     labelIsI18nKey: true,
-    icon: Container,
+    icon: KubernetesIcon,
     group: "builtin",
+    category: "middleware",
   },
   {
     value: "serial",
@@ -80,6 +90,7 @@ const BUILTIN_OPTIONS: AssetTypeOption[] = [
     labelIsI18nKey: true,
     icon: Usb,
     group: "builtin",
+    category: "servers",
   },
   {
     value: "local",
@@ -88,6 +99,7 @@ const BUILTIN_OPTIONS: AssetTypeOption[] = [
     labelIsI18nKey: true,
     icon: SquareTerminal,
     group: "builtin",
+    category: "servers",
   },
   {
     value: "etcd",
@@ -96,6 +108,7 @@ const BUILTIN_OPTIONS: AssetTypeOption[] = [
     labelIsI18nKey: true,
     icon: EtcdIcon,
     group: "builtin",
+    category: "databases",
   },
 ];
 
@@ -112,6 +125,7 @@ export function getAssetTypeOptions(extensions: Record<string, ExtensionEntryLik
         labelIsI18nKey: false,
         icon: m.icon ? getIconComponent(m.icon) : Server,
         group: "extension",
+        category: "extension",
       });
     }
   }
@@ -131,4 +145,37 @@ export function matchSelectedTypes(
     else aliasSet.add(value.toLowerCase());
   }
   return assets.filter((a) => aliasSet.has((a.Type || "").trim().toLowerCase()));
+}
+
+export interface AssetTypeGroup {
+  category: AssetTypeCategory;
+  options: AssetTypeOption[];
+}
+
+const CATEGORY_ORDER: AssetTypeCategory[] = ["servers", "databases", "middleware", "extension"];
+
+/** 按固定分类顺序分组，丢弃空组（保持各组内 options 原顺序）。 */
+export function buildAssetTypeGroups(options: AssetTypeOption[]): AssetTypeGroup[] {
+  return CATEGORY_ORDER.map((category) => ({
+    category,
+    options: options.filter((o) => o.category === category),
+  })).filter((g) => g.options.length > 0);
+}
+
+/** 按解析后的显示名或 value 子串过滤（大小写不敏感）；空查询返回全部。 */
+export function filterAssetTypeOptions(
+  options: AssetTypeOption[],
+  query: string,
+  resolveLabel: (o: AssetTypeOption) => string
+): AssetTypeOption[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return options;
+  return options.filter((o) => resolveLabel(o).toLowerCase().includes(q) || o.value.toLowerCase().includes(q));
+}
+
+/** 取某类型的展示标签；未命中返回原始 type（兼容未知/未加载扩展）。 */
+export function getAssetTypeLabel(type: string, t: (key: string) => string, options: AssetTypeOption[]): string {
+  const opt = options.find((o) => o.value === type);
+  if (!opt) return type;
+  return opt.labelIsI18nKey ? t(opt.label) : opt.label;
 }

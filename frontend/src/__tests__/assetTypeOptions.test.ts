@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { getAssetTypeOptions, matchSelectedTypes } from "@/lib/assetTypes/options";
+import {
+  getAssetTypeOptions,
+  matchSelectedTypes,
+  buildAssetTypeGroups,
+  filterAssetTypeOptions,
+  getAssetTypeLabel,
+} from "@/lib/assetTypes/options";
 import { asset_entity } from "../../wailsjs/go/models";
 
 describe("getAssetTypeOptions", () => {
@@ -82,5 +88,77 @@ describe("matchSelectedTypes", () => {
     const assetsMixed = [a(1, "SSH"), a(2, "MySQL")];
     expect(matchSelectedTypes(assetsMixed, ["ssh"], opts).map((x) => x.ID)).toEqual([1]);
     expect(matchSelectedTypes(assetsMixed, ["database"], opts).map((x) => x.ID)).toEqual([2]);
+  });
+});
+
+describe("category classification", () => {
+  it("assigns the expected category to each built-in option", () => {
+    const byValue = Object.fromEntries(getAssetTypeOptions({}).map((o) => [o.value, o.category]));
+    expect(byValue).toEqual({
+      ssh: "servers",
+      local: "servers",
+      serial: "servers",
+      database: "databases",
+      redis: "databases",
+      mongodb: "databases",
+      etcd: "databases",
+      kafka: "middleware",
+      k8s: "middleware",
+    });
+  });
+
+  it("marks extension options as category 'extension'", () => {
+    const opts = getAssetTypeOptions({
+      ext: {
+        manifest: {
+          name: "ext",
+          version: "1",
+          icon: "Server",
+          i18n: { displayName: "Foo", description: "" },
+          assetTypes: [{ type: "foo", i18n: { name: "Foo" } }],
+        },
+      },
+    } as never);
+    expect(opts.find((o) => o.value === "foo")!.category).toBe("extension");
+  });
+});
+
+describe("buildAssetTypeGroups", () => {
+  it("orders groups servers → databases → middleware → extension and drops empty groups", () => {
+    const groups = buildAssetTypeGroups(getAssetTypeOptions({}));
+    expect(groups.map((g) => g.category)).toEqual(["servers", "databases", "middleware"]);
+    expect(groups[0].options.map((o) => o.value)).toEqual(["ssh", "serial", "local"]);
+    expect(groups[1].options.map((o) => o.value)).toEqual(["database", "redis", "mongodb", "etcd"]);
+  });
+});
+
+describe("filterAssetTypeOptions", () => {
+  const opts = getAssetTypeOptions({});
+  const resolve = (o: { value: string }) => o.value; // label==value for test
+
+  it("returns all when query is blank", () => {
+    expect(filterAssetTypeOptions(opts, "  ", resolve).length).toBe(opts.length);
+  });
+
+  it("matches by value substring, case-insensitive", () => {
+    expect(filterAssetTypeOptions(opts, "RED", resolve).map((o) => o.value)).toEqual(["redis"]);
+  });
+
+  it("matches by resolved label", () => {
+    const labelResolve = (o: { value: string }) => (o.value === "k8s" ? "Kubernetes" : o.value);
+    expect(filterAssetTypeOptions(opts, "kuber", labelResolve).map((o) => o.value)).toEqual(["k8s"]);
+  });
+});
+
+describe("getAssetTypeLabel", () => {
+  const opts = getAssetTypeOptions({});
+  const t = (k: string) => `T(${k})`;
+
+  it("resolves i18n-key labels via t", () => {
+    expect(getAssetTypeLabel("ssh", t, opts)).toBe("T(nav.ssh)");
+  });
+
+  it("returns the raw type for unknown values", () => {
+    expect(getAssetTypeLabel("nope", t, opts)).toBe("nope");
   });
 });
