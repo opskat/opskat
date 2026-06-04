@@ -100,7 +100,7 @@ type policyKindHandler struct {
 - `policy_tester.go` 的 `switch`(47-58) → 注册表 B 查表;各 handler 委托现有 `testSSHPolicy`/`testQueryPolicy`/… 保持行为。
 - `PolicyTestInput` 的 `CurrentSSH/Query/Redis/K8s/Etcd` 五个硬字段(23-27) → `PolicyKind string` + `Current any`(由 handler `decode` 在 app 边界产出)。
 - app 层 `TestPolicyRule`(`asset.go:42-101`)的 per-type Unmarshal switch → `ResolvePolicyKind` + `DecodeCurrentPolicy`。**顺带修复 etcd**(已有 `testEtcdPolicy`,注册后非空 JSON 也能测)。
-- mongo/kafka:缺 `Effective*`/merge 机制,**本阶段不补**(见阶段 1b)。未注册 kind 经 `ResolvePolicyKind` 返回 false → app 仍报 `unsupported policy type`,行为不变。
+- mongo/kafka:**本阶段(1a)不注册**(见阶段 1b)。未注册 kind 经 `ResolvePolicyKind` 返回 false → app 仍报 `unsupported policy type`,行为不变。〔1b 实现核实:`EffectiveMongoPolicy`/`EffectiveKafkaPolicy`/`checkMongo|KafkaPolicyRules`/`ResolveMongo|KafkaGroups` 早已存在,1b 实际只需补测试链路 merge + dispatch + 注册,无需新增 `Effective*`。〕
 
 ### 第 2 节 · 后端 assettype handler 收口
 
@@ -145,7 +145,7 @@ validateForTest(formState): boolean;                 // 替代 isTestableAssetTy
 0. **词表统一** — 引入 `policyKind` 词表(`command/query/redis/mongo/kafka/k8s/etcd`)+ asset/frontend→kind resolver。地基,体量小。**与 1a 合并交付**(词表是注册表的前置,二者强耦合)。
 1. **后端 policyKind 注册表**(因 layering 与机制成熟度拆为三个独立子计划):
    - **1a** 测试链路 de-switch(注册表 B):迁移现有 5 个 kind(command/query/redis/k8s/etcd)进注册表,改 `PolicyTestInput`,改 app 边界,顺带修复 etcd。行为保持(仅 etcd 为修复)。**← 本轮先做这个 plan。**
-   - **1b** 补齐 mongo/kafka:先补 `Effective*`/merge 机制,再写 `testMongo/testKafka` 并注册。新增行为,TDD。
+   - **1b** 补齐 mongo/kafka:`Effective*`/merge/check 机制已就绪(5/31 已落地),只需补测试链路 `mergeMongo|KafkaPoliciesForTest` + `testMongo|testKafka` 并在 `policy_kind.go` 注册;注册后 app 层自动放行(修复 mongo/kafka 编辑策略测试闸门,同 1a 修 etcd)。新增行为,TDD。
    - **1c** builtin groups 拆分(注册表 A,entity 层):把大数组按 kind 拆,去掉 `Validate()` switch。独立小清理。
 2. **后端 assettype 收口** — 统一连接测试 binding(`TestAssetConnection`)、`GetConfig` 走注册表、加 `PolicyKind()`。需 `wails generate` 重生 binding。
 3. **前端注册表合并** — `options.ts` 元数据折进 `AssetTypeDefinition`。小且安全。
@@ -173,5 +173,14 @@ validateForTest(formState): boolean;                 // 替代 isTestableAssetTy
 落地于 3 个 commit(`policy_kind.go` 注册表 + `TestPolicy` 去 switch + app 边界改 resolver),全量 `go test ./internal/...` + `-race` + `golangci-lint` 全绿,etcd 闸门 bug 已修复且为唯一行为变化。评审给出 3 条**留给后续阶段**的非阻塞备忘:
 
 - **type→kind 知识三处重复,需保持同步**:`assetTypeToKind`(`policy_kind.go`)、`policy_group_entity.PolicyType*`、前端各 `assetTypes/*.ts` 的 `policyType` 字段 + `RegisterDefaultPolicy`。阶段 1c/2 应考虑让 kind 从 `assettype` handler 派生(`PolicyKind()`),而非手维护 map。
-- **阶段 1b 接入 mongo/kafka**:补 `Effective*`/merge 后在 `policy_kind.go` 的 `init()` 注册即可,app 层无需改动;但要**同步更新**断言 mongo/kafka 未注册的负向测试(`policy_kind_test.go`、`policy_dispatch_test.go`)。
+- **阶段 1b 接入 mongo/kafka**:`Effective*`/merge/check 已存在,只需补测试链路 `mergeMongo|KafkaPoliciesForTest` + `testMongo|testKafka` 并在 `policy_kind.go` 的 `init()` 注册,app 层无需改动;但要**同步更新**断言 mongo/kafka 未注册的负向测试(`policy_kind_test.go`、`policy_dispatch_test.go`)。
 - **未注册 kind 的两种返回不一致**:`DecodeCurrentPolicy` 对未注册 kind 返回 error,而 `TestPolicy` 返回 `NeedConfirm`。当前 app 流程先走 `ResolvePolicyKind` 不会撞上;若将来出现 `TestPolicy` 的非 app 直接调用方,需留意未注册 kind 会静默得到 `NeedConfirm` 而非报错。
+
+## 阶段 1b + 1c 完成记录(2026-06-04)
+
+计划见 `docs/superpowers/plans/2026-06-04-policykind-registry-phase1b-1c.md`,落地于 2 个实现 commit + 1 个文档 commit,与阶段 1a 同分支(`refactor/asset-type-decoupling-130`)累加。
+
+- **阶段 1b(mongo/kafka 接入测试注册表)**:核实发现 spec 原假设有误 —— mongo/kafka 的 `Effective*`/expand/merge/check/resolve 机制(`policy_effective.go`、`mongo_policy.go`、`kafka_policy.go`、`policy_group_resolve.go`)**早已存在**。故 1b 实际范围收窄为:`policy_tester.go` 新增 `testMongoPolicy`/`testKafkaPolicy`(镜像 `testRedisPolicy`,组通用规则用 `MatchCommandRule`,与 runtime `checkMongoDBPermission`/`checkKafkaPermission` 对齐)+ `mergeMongo|KafkaPoliciesForTest`(镜像 `mergeQuery|RedisPoliciesForTest`),并在 `policy_kind.go` 的 `init()` 注册两个 handler。**唯一行为变化**:mongo/kafka 资产编辑非空策略点"测试"不再报 `unsupported policy type`(app 层经 `ResolvePolicyKind`+`DecodeCurrentPolicy` 自动放行,无需改 `asset.go`),与 1a 修 etcd 同性质。负向测试已同步翻正(7 个 kind 全注册、bogus 兜底)。
+- **阶段 1c(内置组按 kind 拆分)**:`policy_group_entity` 引入 `builtinGroupsByKind` 注册表 + `registerBuiltinGroups` + `builtinKindOrder`;`BuiltinGroups()` 改为按 kind 顺序拼装;`Validate()` 的 `switch` 改为 `isBuiltinKind(派生自注册数据) || hasExtensionPolicyType`。21 条内置组字面量原样移入对应 `registerBuiltinGroups` 调用,**行为完全保持**(既有 `TestBuiltinGroups` 总数 21 + 各 kind 计数、`TestPolicyGroup_Validate` 锁定)。
+- **验证**:`go test ./internal/ai/policy ./internal/app/system ./internal/model/entity/policy_group_entity ./internal/service/policy_group_svc` 全绿,`-race`(policy)干净,`golangci-lint` 0 issues。
+- **仍留给后续阶段**:阶段 1a 备忘的 type→kind 三处重复(`assetTypeToKind` / `PolicyType*` / 前端 `policyType`)未在本轮收敛,留待阶段 2 让 kind 从 `assettype` handler 的 `PolicyKind()` 派生;builtin groups 注册表目前仍在 `policy_group_entity` 内集中声明(layering 要求其留在 entity 层),阶段 2/6 接入新类型时按此 seam 追加。
