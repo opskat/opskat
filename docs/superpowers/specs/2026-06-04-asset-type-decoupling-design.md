@@ -28,7 +28,7 @@
    - 后端 tester `PolicyTestInput.PolicyType`:`ssh / database / redis / k8s / etcd`(`internal/ai/policy/policy_tester.go:18,47`)
    - 后端 group `policy_group_entity.PolicyType`:`command / query / redis / mongo / kafka / etcd`(`internal/model/entity/policy_group_entity/policy_group.go:15-20`)
 
-3. **覆盖缺口**:`mongo`/`kafka` 有 builtin policy groups(`policy_group.go:259-393`)却**没进** `TestPolicy` 的 switch(`policy_tester.go:47-58`);`k8s` 有 test 路径却没有自己的 group policyType 常量。注册表化会强制把这些缺口暴露出来(每个注册的 kind 必须给出 test 函数)。
+3. **覆盖缺口 / 潜在 bug**:`mongo`/`kafka` 有 builtin policy groups(`policy_group.go:259-393`)却**没进** `TestPolicy` 的 switch(`policy_tester.go:47-58`);`k8s` 有 test 路径却没有自己的 group policyType 常量。更具体地:app 层 `TestPolicyRule` 的 switch(`internal/app/system/asset.go:55`)只认 `ssh/database/redis/k8s`,对 `etcd/mongo/kafka` 走 `default` 直接报 `unsupported policy type` —— 而前端 `PolicyTestPanel` 对 etcd/mongo/kafka 资产**确实**会发这些 policyType。结果:编辑 etcd/mongo/kafka 策略后点"测试"(PolicyJSON 非空)当前直接报错;etcd 甚至已有可用的 `testEtcdPolicy` 被这道 app 层闸门挡住。注册表化会强制把这些缺口暴露出来(每个注册的 kind 必须给出 test 函数)。
 
 ### 加新类型今天要动的散点(touch-point map)
 
@@ -81,24 +81,26 @@
 
 ### 第 1 节 · 后端 policyKind 注册表(独立轴)
 
-新建注册表(建议 `internal/ai/policy` 内或新包 `internal/policykind`),key = `policyKind`:
+**关键 layering 约束(实现核实)**:`internal/ai/policy → policy_group_entity`(单向,`policy_group_resolve.go` 依赖 `FindBuiltin`)。而 builtin groups 在 `policy_group_entity` 的 `init()` 里被消费(`builtinMap`)。因此 builtin groups **不能**由 ai/policy 层的 handler 反向供给(会成环 / init 顺序错)。结论:**拆成两个注册表,同一 `policyKind` 词表**:
+
+- **注册表 A(entity 层)** — builtin groups per kind。在 `policy_group_entity` 内把 `BuiltinGroups()` 大数组(102-429)按 kind 拆分贡献;合法 kind = 已注册 kind(替代 `Validate()` 的 switch 48-51 与 `hasExtensionPolicyType`)。纯数据,留在 entity 层符合 DIP。
+- **注册表 B(ai/policy 层)** — 测试/解码 handler:
 
 ```go
-type PolicyKindHandler interface {
-    Kind() string
-    Default() any
-    Decode(raw json.RawMessage) (any, error)            // 替代 Current* 硬字段
-    Test(ctx, current any, groups []*group_entity.Group, command string) PolicyTestOutput
-    Merge(current any, groups []*group_entity.Group) any
-    BuiltinGroups() []*policy_group_entity.PolicyGroup   // 自带内置组
+// internal/ai/policy
+type policyKindHandler struct {
+    decode func(raw []byte) (any, error)                                  // 替代 app 层 per-type Unmarshal
+    test   func(ctx, current any, groups []*group_entity.Group, cmd string) PolicyTestOutput
 }
 ```
 
+（merge/Effective 已内联在各 `testXxx` 函数里,无需进 handler 接口。）
+
 改动:
-- `policy_tester.go` 的 `switch`(47-58) → 注册表查表。
-- `PolicyTestInput` 的 `CurrentSSH/Query/Redis/K8s/Etcd` 五个硬字段(23-27) → `PolicyKind string` + `Current json.RawMessage`,由 handler `Decode`。
-- `policy_group.go` 的 `BuiltinGroups()` 大数组(102-429)+ `Validate()` switch(48-51) → 各 kind 注册时贡献;合法 kind = 已注册 kind(扩展走同一入口,替代 `hasExtensionPolicyType`)。
-- 补齐缺口:mongo/kafka 必须提供 Test 函数(否则注册不完整),k8s 拿到自己的 kind 常量。
+- `policy_tester.go` 的 `switch`(47-58) → 注册表 B 查表;各 handler 委托现有 `testSSHPolicy`/`testQueryPolicy`/… 保持行为。
+- `PolicyTestInput` 的 `CurrentSSH/Query/Redis/K8s/Etcd` 五个硬字段(23-27) → `PolicyKind string` + `Current any`(由 handler `decode` 在 app 边界产出)。
+- app 层 `TestPolicyRule`(`asset.go:42-101`)的 per-type Unmarshal switch → `ResolvePolicyKind` + `DecodeCurrentPolicy`。**顺带修复 etcd**(已有 `testEtcdPolicy`,注册后非空 JSON 也能测)。
+- mongo/kafka:缺 `Effective*`/merge 机制,**本阶段不补**(见阶段 1b)。未注册 kind 经 `ResolvePolicyKind` 返回 false → app 仍报 `unsupported policy type`,行为不变。
 
 ### 第 2 节 · 后端 assettype handler 收口
 
@@ -140,8 +142,11 @@ validateForTest(formState): boolean;                 // 替代 isTestableAssetTy
 
 ## 阶段拆分(后端优先,每阶段独立可交付、行为保持,各自 spec→plan→PR)
 
-0. **词表统一** — 引入 `policyKind` 词表,对齐三处命名。地基,体量小。
-1. **后端 policyKind 注册表** — de-switch tester、移走 builtin groups、补齐 mongo/kafka/k8s 缺口。后端,测试覆盖好。
+0. **词表统一** — 引入 `policyKind` 词表(`command/query/redis/mongo/kafka/k8s/etcd`)+ asset/frontend→kind resolver。地基,体量小。**与 1a 合并交付**(词表是注册表的前置,二者强耦合)。
+1. **后端 policyKind 注册表**(因 layering 与机制成熟度拆为三个独立子计划):
+   - **1a** 测试链路 de-switch(注册表 B):迁移现有 5 个 kind(command/query/redis/k8s/etcd)进注册表,改 `PolicyTestInput`,改 app 边界,顺带修复 etcd。行为保持(仅 etcd 为修复)。**← 本轮先做这个 plan。**
+   - **1b** 补齐 mongo/kafka:先补 `Effective*`/merge 机制,再写 `testMongo/testKafka` 并注册。新增行为,TDD。
+   - **1c** builtin groups 拆分(注册表 A,entity 层):把大数组按 kind 拆,去掉 `Validate()` switch。独立小清理。
 2. **后端 assettype 收口** — 统一连接测试 binding(`TestAssetConnection`)、`GetConfig` 走注册表、加 `PolicyKind()`。需 `wails generate` 重生 binding。
 3. **前端注册表合并** — `options.ts` 元数据折进 `AssetTypeDefinition`。小且安全。
 4. **前端 AssetForm 组件注册化** — 表单契约 + 通用壳重写。最大、最险,放在后端契约稳定之后。
