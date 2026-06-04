@@ -7,6 +7,7 @@ import {
   getAssetTypeOptions,
   buildAssetTypeGroups,
   filterAssetTypeOptions,
+  resolveAssetTypeLabel,
   type AssetTypeOption,
 } from "@/lib/assetTypes/options";
 
@@ -23,7 +24,7 @@ export function AssetTypePicker({ value, onChange, disabled }: AssetTypePickerPr
   const [search, setSearch] = useState("");
 
   const options = useMemo(() => getAssetTypeOptions(extensions), [extensions]);
-  const resolveLabel = useCallback((o: AssetTypeOption) => (o.labelIsI18nKey ? t(o.label) : o.label), [t]);
+  const resolveLabel = useCallback((o: AssetTypeOption) => resolveAssetTypeLabel(o, t), [t]);
 
   const selected = options.find((o) => o.value === value);
   const SelectedIcon = selected?.icon;

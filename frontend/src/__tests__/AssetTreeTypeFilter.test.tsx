@@ -7,7 +7,7 @@ import { getAssetTypeOptions } from "@/lib/assetTypes/options";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (k: string, vars?: Record<string, unknown>) => (vars ? `${k}:${JSON.stringify(vars)}` : k),
+    t: (k: string) => k,
   }),
 }));
 

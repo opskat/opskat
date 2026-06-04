@@ -5,6 +5,7 @@ import {
   buildAssetTypeGroups,
   filterAssetTypeOptions,
   getAssetTypeLabel,
+  resolveAssetTypeLabel,
 } from "@/lib/assetTypes/options";
 import { asset_entity } from "../../wailsjs/go/models";
 
@@ -160,5 +161,45 @@ describe("getAssetTypeLabel", () => {
 
   it("returns the raw type for unknown values", () => {
     expect(getAssetTypeLabel("nope", t, opts)).toBe("nope");
+  });
+});
+
+const extManifest = {
+  oss: {
+    manifest: {
+      name: "oss",
+      version: "1",
+      icon: "Server",
+      i18n: { displayName: "OSS", description: "" },
+      assetTypes: [{ type: "oss", i18n: { name: "assetType.oss.name" } }],
+    },
+  },
+};
+
+describe("extension option i18n namespace", () => {
+  it("tags extension options with the ext-<name> namespace and treats label as an i18n key", () => {
+    const ossOpt = getAssetTypeOptions(extManifest as never).find((o) => o.value === "oss")!;
+    expect(ossOpt.labelIsI18nKey).toBe(true);
+    expect(ossOpt.i18nNs).toBe("ext-oss");
+    expect(ossOpt.label).toBe("assetType.oss.name");
+  });
+});
+
+describe("resolveAssetTypeLabel", () => {
+  it("resolves built-in labels in the default namespace (no ns passed)", () => {
+    const ssh = getAssetTypeOptions({}).find((o) => o.value === "ssh")!;
+    const calls: Array<[string, { ns?: string } | undefined]> = [];
+    const t = (k: string, o?: { ns?: string }) => {
+      calls.push([k, o]);
+      return `X(${k})`;
+    };
+    expect(resolveAssetTypeLabel(ssh, t)).toBe("X(nav.ssh)");
+    expect(calls[0]).toEqual(["nav.ssh", undefined]);
+  });
+
+  it("resolves extension labels via the ext-<name> namespace", () => {
+    const ossOpt = getAssetTypeOptions(extManifest as never).find((o) => o.value === "oss")!;
+    const t = (k: string, o?: { ns?: string }) => (o?.ns === "ext-oss" && k === "assetType.oss.name" ? "对象存储" : k);
+    expect(resolveAssetTypeLabel(ossOpt, t)).toBe("对象存储");
   });
 });

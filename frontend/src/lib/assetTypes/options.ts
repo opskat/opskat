@@ -8,15 +8,20 @@ import type { asset_entity } from "../../../wailsjs/go/models";
 
 export type AssetTypeCategory = "servers" | "databases" | "middleware" | "extension";
 
+/** 翻译函数（可带 i18next 命名空间）；兼容 react-i18next 的 t。 */
+export type TranslateFn = (key: string, opts?: { ns?: string }) => string;
+
 export interface AssetTypeOption {
   /** Stable identifier — used as the persisted "selected" value. */
   value: string;
   /** All `asset.Type` values that should match when this option is selected. */
   aliases: string[];
-  /** Either an i18n key (built-in) or a literal display string (extension). */
+  /** i18n key (built-in → default namespace; extension → `i18nNs`) or a literal display string. */
   label: string;
   /** Marks `label` as i18n key vs literal. */
   labelIsI18nKey: boolean;
+  /** i18next namespace for resolving `label` (extensions load under `ext-<name>`); omit for the default namespace. */
+  i18nNs?: string;
   /** Icon component for direct render. */
   icon: ComponentType<{ className?: string; style?: React.CSSProperties }>;
   group: "builtin" | "extension";
@@ -122,7 +127,8 @@ export function getAssetTypeOptions(extensions: Record<string, ExtensionEntryLik
         value: at.type,
         aliases: [at.type],
         label: at.i18n?.name ?? at.type,
-        labelIsI18nKey: false,
+        labelIsI18nKey: true,
+        i18nNs: `ext-${m.name}`,
         icon: m.icon ? getIconComponent(m.icon) : Server,
         group: "extension",
         category: "extension",
@@ -173,9 +179,15 @@ export function filterAssetTypeOptions(
   return options.filter((o) => resolveLabel(o).toLowerCase().includes(q) || o.value.toLowerCase().includes(q));
 }
 
+/** 解析选项展示标签：内置走默认命名空间，扩展走其 `i18nNs`（ext-<name>）命名空间。 */
+export function resolveAssetTypeLabel(option: AssetTypeOption, t: TranslateFn): string {
+  if (!option.labelIsI18nKey) return option.label;
+  return t(option.label, option.i18nNs ? { ns: option.i18nNs } : undefined);
+}
+
 /** 取某类型的展示标签；未命中返回原始 type（兼容未知/未加载扩展）。 */
-export function getAssetTypeLabel(type: string, t: (key: string) => string, options: AssetTypeOption[]): string {
+export function getAssetTypeLabel(type: string, t: TranslateFn, options: AssetTypeOption[]): string {
   const opt = options.find((o) => o.value === type);
   if (!opt) return type;
-  return opt.labelIsI18nKey ? t(opt.label) : opt.label;
+  return resolveAssetTypeLabel(opt, t);
 }

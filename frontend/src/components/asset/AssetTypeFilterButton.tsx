@@ -11,7 +11,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@opskat/ui";
-import type { AssetTypeOption } from "@/lib/assetTypes/options";
+import { resolveAssetTypeLabel, type AssetTypeOption } from "@/lib/assetTypes/options";
 
 interface AssetTypeFilterButtonProps {
   value: string[];
@@ -55,7 +55,7 @@ export function AssetTypeFilterButton({
     return (
       <FilterRow
         key={opt.value}
-        label={opt.labelIsI18nKey ? t(opt.label) : opt.label}
+        label={resolveAssetTypeLabel(opt, t)}
         icon={<Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
         checked={selectedSet.has(opt.value)}
         onClick={() => toggleOne(opt)}
