@@ -746,7 +746,7 @@ func (s *Service) removeSessionLocked(sessionID string) {
 	}
 	delete(s.sessions, sessionID)
 	if timer, ok := s.reconcileTimers[sessionID]; ok {
-		timer.Stop()
+		s.stopTrackedTimer(timer)
 		delete(s.reconcileTimers, sessionID)
 	}
 	if s.workspaceDirInUseLocked(session.WorkspaceDir) {

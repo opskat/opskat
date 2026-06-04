@@ -22,7 +22,7 @@ func (s *Service) startCleanupLoop() {
 	ticker := s.cleanupTicker
 	s.mu.Unlock()
 
-	go func() {
+	s.goTracked(func() {
 		for {
 			select {
 			case <-s.closeCh:
@@ -31,7 +31,7 @@ func (s *Service) startCleanupLoop() {
 				s.runRetentionCleanup()
 			}
 		}
-	}()
+	})
 }
 
 func (s *Service) runRetentionCleanup() {

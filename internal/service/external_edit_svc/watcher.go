@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/fsnotify/fsnotify"
@@ -46,18 +45,21 @@ func (s *Service) scheduleReconcile(changedPath string) {
 		}
 		if isSyncSuppressedRecord(session) {
 			if timer, ok := s.reconcileTimers[id]; ok {
-				timer.Stop()
+				s.stopTrackedTimer(timer)
 				delete(s.reconcileTimers, id)
 			}
 			continue
 		}
 		if timer, ok := s.reconcileTimers[id]; ok {
-			timer.Stop()
+			s.stopTrackedTimer(timer)
+			delete(s.reconcileTimers, id)
 		}
 		sessionID := id
-		s.reconcileTimers[id] = time.AfterFunc(reconcileSettleDelay, func() {
+		if timer := s.trackedAfterFunc(reconcileSettleDelay, func() {
 			s.reconcileLocalCopy(sessionID)
-		})
+		}); timer != nil {
+			s.reconcileTimers[id] = timer
+		}
 	}
 }
 
@@ -143,13 +145,19 @@ func (s *Service) scheduleAutoSave(session *Session) {
 		return
 	}
 	if timer, ok := s.autoSaveTimers[session.DocumentKey]; ok {
-		timer.Stop()
+		s.stopTrackedTimer(timer)
+		delete(s.autoSaveTimers, session.DocumentKey)
 	}
 	documentKey := session.DocumentKey
 	primarySessionID := session.ID
-	s.autoSaveTimers[documentKey] = time.AfterFunc(autoSaveDebounce, func() {
+	timer := s.trackedAfterFunc(autoSaveDebounce, func() {
 		s.runAutoSave(documentKey, primarySessionID, attemptKey)
 	})
+	if timer == nil {
+		s.mu.Unlock()
+		return
+	}
+	s.autoSaveTimers[documentKey] = timer
 	s.mu.Unlock()
 	s.emitAutoSavePhase(documentKey, primarySessionID, autoSavePhasePending, session)
 }
@@ -214,7 +222,7 @@ func (s *Service) pauseAutoSaveForDocument(documentKey string) {
 	defer s.mu.Unlock()
 	s.autoSavePaused[documentKey] = true
 	if timer, ok := s.autoSaveTimers[documentKey]; ok {
-		timer.Stop()
+		s.stopTrackedTimer(timer)
 		delete(s.autoSaveTimers, documentKey)
 	}
 	s.emitAutoSavePhase(documentKey, "", autoSavePhaseIdle, nil)
@@ -239,7 +247,7 @@ func (s *Service) cancelAutoSaveForDocument(documentKey string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if timer, ok := s.autoSaveTimers[documentKey]; ok {
-		timer.Stop()
+		s.stopTrackedTimer(timer)
 		delete(s.autoSaveTimers, documentKey)
 	}
 	if !s.autoSavePaused[documentKey] {

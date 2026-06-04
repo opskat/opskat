@@ -47,6 +47,46 @@ type Service struct {
 	cleanupTicker    *time.Ticker
 	closeCh          chan struct{}
 	closeOnce        sync.Once
+	closed           bool
+	bg               sync.WaitGroup
+}
+
+// goTracked 在后台 goroutine 中执行 fn，并登记到 s.bg，使 Close 能够等待其收尾。
+// 调用方不得持有 s.mu。Close 之后不再派生新的后台 goroutine。
+func (s *Service) goTracked(fn func()) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.bg.Add(1)
+	s.mu.Unlock()
+	go func() {
+		defer s.bg.Done()
+		fn()
+	}()
+}
+
+// trackedAfterFunc 排程一个延时回调并登记到 s.bg，使 Close 能够等待其收尾。
+// 调用方必须持有 s.mu。Close 之后返回 nil，调用方据此放弃排程。
+func (s *Service) trackedAfterFunc(d time.Duration, fn func()) *time.Timer {
+	if s.closed {
+		return nil
+	}
+	s.bg.Add(1)
+	return time.AfterFunc(d, func() {
+		defer s.bg.Done()
+		fn()
+	})
+}
+
+// stopTrackedTimer 停止由 trackedAfterFunc 排程的定时器。
+// 若回调尚未触发（Stop 返回 true），需要相应地补一次 Done 抵消登记。
+// 调用方必须持有 s.mu，且每个定时器至多停止一次。
+func (s *Service) stopTrackedTimer(t *time.Timer) {
+	if t != nil && t.Stop() {
+		s.bg.Done()
+	}
 }
 
 type autoSaveCounter struct {
@@ -122,7 +162,7 @@ func (s *Service) Start(context.Context) error {
 		logger.Default().Warn("load external edit manifest", zap.Error(err))
 	}
 
-	go s.watchLoop()
+	s.goTracked(s.watchLoop)
 	if err := s.restoreSessions(); err != nil {
 		return err
 	}
@@ -133,26 +173,30 @@ func (s *Service) Start(context.Context) error {
 func (s *Service) Close() error {
 	var closeErr error
 	s.closeOnce.Do(func() {
-		close(s.closeCh)
-
 		s.mu.Lock()
+		s.closed = true
+		close(s.closeCh)
 		for _, timer := range s.reconcileTimers {
-			timer.Stop()
+			s.stopTrackedTimer(timer)
 		}
 		s.reconcileTimers = map[string]*time.Timer{}
 		for _, timer := range s.autoSaveTimers {
-			timer.Stop()
+			s.stopTrackedTimer(timer)
 		}
 		s.autoSaveTimers = map[string]*time.Timer{}
 		if s.cleanupTicker != nil {
 			s.cleanupTicker.Stop()
 			s.cleanupTicker = nil
 		}
+		watcher := s.watcher
 		s.mu.Unlock()
 
-		if s.watcher != nil {
-			closeErr = s.watcher.Close()
+		// 先关掉 watcher 让 watchLoop 退出，再等待所有后台 goroutine / 定时器回调收尾，
+		// 确保 Close 返回后不会再有写盘动作（否则会与上层的临时目录清理竞争）。
+		if watcher != nil {
+			closeErr = watcher.Close()
 		}
+		s.bg.Wait()
 	})
 	return closeErr
 }

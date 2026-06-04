@@ -133,7 +133,8 @@ func (s *Service) restoreSessions() error {
 		if session.State != sessionStateDirty && session.State != sessionStateClean {
 			continue
 		}
-		go s.checkRemoteConflictAfterRestore(session.ID)
+		sessionID := session.ID
+		s.goTracked(func() { s.checkRemoteConflictAfterRestore(sessionID) })
 	}
 
 	return nil
