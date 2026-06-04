@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/opskat/opskat/internal/service/sessionid"
+
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 )
@@ -129,12 +131,16 @@ func (s *Session) IsClosed() bool {
 // Manager 管理所有本地终端会话。
 type Manager struct {
 	sessions sync.Map // map[string]*Session
-	counter  int64
-	mu       sync.Mutex
+	idgen    *sessionid.Generator
 }
 
 // NewManager 创建本地终端会话管理器。
-func NewManager() *Manager { return &Manager{} }
+func NewManager() *Manager { return &Manager{idgen: sessionid.NewGenerator("local")} }
+
+// nextSessionID 生成进程内唯一、且跨重启不会与持久化旧会话 ID 冲突的会话 ID（issue #141）。
+func (m *Manager) nextSessionID() string {
+	return m.idgen.Next()
+}
 
 // Connect 启动一个本地 shell,返回 sessionID。调用方随后用 SetCallbacks 挂回调。
 func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
@@ -145,10 +151,7 @@ func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
 		return "", fmt.Errorf("start local pty: %w", err)
 	}
 
-	m.mu.Lock()
-	m.counter++
-	sessionID := fmt.Sprintf("local-%d", m.counter)
-	m.mu.Unlock()
+	sessionID := m.nextSessionID()
 
 	sess := &Session{
 		ID: sessionID, AssetID: cfg.AssetID, proc: proc,

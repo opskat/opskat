@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/opskat/opskat/internal/service/sessionid"
+
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.bug.st/serial"
 	"go.uber.org/zap"
@@ -274,13 +276,17 @@ type SerialPortInfo struct {
 // Manager 管理所有串口会话
 type Manager struct {
 	sessions sync.Map // map[string]*Session
-	counter  int64
-	mu       sync.Mutex
+	idgen    *sessionid.Generator
 }
 
 // NewManager 创建串口会话管理器
 func NewManager() *Manager {
-	return &Manager{}
+	return &Manager{idgen: sessionid.NewGenerator("serial")}
+}
+
+// nextSessionID 生成进程内唯一、且跨重启不会与持久化旧会话 ID 冲突的会话 ID（issue #141）。
+func (m *Manager) nextSessionID() string {
+	return m.idgen.Next()
 }
 
 // ListPorts 列出系统可用串口
@@ -345,10 +351,7 @@ func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
 	}
 
 	// 生成 session ID
-	m.mu.Lock()
-	m.counter++
-	sessionID := fmt.Sprintf("serial-%d", m.counter)
-	m.mu.Unlock()
+	sessionID := m.nextSessionID()
 
 	sess := &Session{
 		ID:      sessionID,

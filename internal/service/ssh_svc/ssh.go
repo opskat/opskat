@@ -14,6 +14,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/dirsync"
 	"github.com/opskat/opskat/internal/pkg/sshkeepalive"
+	"github.com/opskat/opskat/internal/service/sessionid"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -232,13 +233,17 @@ func (s *Session) writeInternalTempScript(tempPath string, script string) error 
 // Manager 管理所有 SSH 会话
 type Manager struct {
 	sessions sync.Map // map[string]*Session
-	counter  int64
-	mu       sync.Mutex
+	idgen    *sessionid.Generator
 }
 
 // NewManager 创建会话管理器
 func NewManager() *Manager {
-	return &Manager{}
+	return &Manager{idgen: sessionid.NewGenerator("ssh")}
+}
+
+// nextSessionID 生成进程内唯一、且跨重启不会与持久化旧会话 ID 冲突的会话 ID（issue #141）。
+func (m *Manager) nextSessionID() string {
+	return m.idgen.Next()
 }
 
 // ConnectConfig SSH 连接配置
@@ -388,10 +393,7 @@ func (m *Manager) createSession(shared *sharedClient, assetID int64, cols, rows 
 		return "", fmt.Errorf("获取stdout失败: %w", err)
 	}
 
-	m.mu.Lock()
-	m.counter++
-	sessionID := fmt.Sprintf("ssh-%d", m.counter)
-	m.mu.Unlock()
+	sessionID := m.nextSessionID()
 
 	sess := &Session{
 		ID:       sessionID,
