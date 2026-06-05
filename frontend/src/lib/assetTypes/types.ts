@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import type { asset_entity } from "../../../wailsjs/go/models";
+import type { ConfigSectionComponent } from "./formContract";
 
 export interface DetailInfoCardProps {
   asset: asset_entity.Asset;
@@ -37,5 +38,9 @@ export interface AssetTypeDefinition {
   canConnectInNewTab: boolean;
   connectAction: "terminal" | "query";
   DetailInfoCard: ComponentType<DetailInfoCardProps>;
+  /** 资产表单的 per-type config 区(注册化表单);缺省 = 走遗留/扩展路径。 */
+  ConfigSection?: ConfigSectionComponent;
+  /** 是否支持"测试连接"(替代 isTestableAssetType 链)。 */
+  testable?: boolean;
   policy?: PolicyDefinition;
 }
