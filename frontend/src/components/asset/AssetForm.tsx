@@ -14,11 +14,6 @@ import {
   Input,
   Label,
   Textarea,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
 } from "@opskat/ui";
 import { IconPicker } from "@/components/asset/IconPicker";
 import { GroupSelect } from "@/components/asset/GroupSelect";
@@ -30,7 +25,6 @@ import { ListCredentialsByType, CancelTest, TestAssetConnection } from "../../..
 import { ListLocalSSHKeys } from "../../../wailsjs/go/ssh/SSH";
 import { ssh as ssh_models } from "../../../wailsjs/go/models";
 import { SSHConfigSection } from "@/components/asset/SSHConfigSection";
-import { DatabaseConfigSection } from "@/components/asset/DatabaseConfigSection";
 import {
   KafkaConfigSection,
   type KafkaCompanionAuthForm,
@@ -79,22 +73,6 @@ interface SSHConfig {
   private_key_passphrase?: string;
   jump_host_id?: number;
   proxy?: ProxyConfig | null;
-}
-
-interface DatabaseConfig {
-  driver: string;
-  host?: string;
-  port?: number;
-  username?: string;
-  password?: string;
-  credential_id?: number;
-  database?: string;
-  ssl_mode?: string;
-  tls?: boolean;
-  params?: string;
-  read_only?: boolean;
-  ssh_asset_id?: number;
-  path?: string;
 }
 
 interface KafkaConfig {
@@ -317,14 +295,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const [proxyPassword, setProxyPassword] = useState("");
   const [encryptedProxyPassword, setEncryptedProxyPassword] = useState("");
 
-  // Database fields
-  const [driver, setDriver] = useState("mysql");
-  const [path, setPath] = useState("");
-  const [database, setDatabase] = useState("");
-  const [sslMode, setSslMode] = useState("disable");
-  const [readOnly, setReadOnly] = useState(false);
-  const [params, setParams] = useState("");
-  // TLS toggle shared by database / kafka
+  // TLS toggle shared by kafka
   const [tls, setTls] = useState(false);
 
   // Kafka fields
@@ -402,8 +373,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           // 已注册化类型:config 回填由 section 经 editAsset prop 完成,壳跳过
         } else if (editType === "ssh") {
           loadSSHConfig(editAsset);
-        } else if (editType === "database") {
-          loadDatabaseConfig(editAsset);
         } else if (editType === "kafka") {
           loadKafkaConfig(editAsset);
         } else if (editType === "k8s") {
@@ -427,7 +396,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         setDescription("");
         resetSharedFields("ssh");
         resetSSHFields();
-        resetDatabaseFields();
         resetKafkaFields();
         resetK8sFields();
         setExtConfig({});
@@ -484,38 +452,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     } catch {
       resetSharedFields("ssh");
       resetSSHFields();
-    }
-  };
-
-  const loadDatabaseConfig = (asset: asset_entity.Asset) => {
-    try {
-      const cfg: DatabaseConfig = JSON.parse(asset.Config || "{}");
-      setHost(cfg.host || "");
-      setPort(cfg.port || 3306);
-      setUsername(cfg.username || "");
-      setDriver(cfg.driver || "mysql");
-      setPath(cfg.path || "");
-      setDatabase(cfg.database || "");
-      setSslMode(cfg.ssl_mode || "disable");
-      setTls(cfg.tls || false);
-      setReadOnly(cfg.read_only || false);
-      setSshTunnelId(asset.sshTunnelId || cfg.ssh_asset_id || 0);
-      setParams(cfg.params || "");
-
-      if (cfg.credential_id) {
-        setPasswordSource("managed");
-        setPasswordCredentialId(cfg.credential_id);
-        setEncryptedPassword("");
-        setPassword("");
-      } else {
-        setPasswordSource("inline");
-        setPasswordCredentialId(0);
-        setEncryptedPassword(cfg.password || "");
-        setPassword("");
-      }
-    } catch {
-      resetSharedFields("database");
-      resetDatabaseFields();
     }
   };
 
@@ -580,9 +516,9 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   };
 
   // Reset shared connection fields with type-appropriate defaults
-  const resetSharedFields = (type: AssetType, dbDriver = "mysql") => {
+  const resetSharedFields = (type: AssetType) => {
     setHost("");
-    setPort(type === "database" ? DEFAULT_PORTS[dbDriver] || 3306 : DEFAULT_PORTS[type] || 22);
+    setPort(DEFAULT_PORTS[type] || 22);
     setUsername(type === "ssh" ? "root" : "");
     setPassword("");
     setEncryptedPassword("");
@@ -610,17 +546,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setConnectionType("direct");
     setSshTunnelId(0);
     resetProxyFields();
-  };
-
-  // Database-exclusive fields only
-  const resetDatabaseFields = () => {
-    setDriver("mysql");
-    setPath("");
-    setDatabase("");
-    setSslMode("disable");
-    setTls(false);
-    setReadOnly(false);
-    setParams("");
   };
 
   const resetKafkaFields = () => {
@@ -655,35 +580,14 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setAssetType(newType);
 
     // Reset port/username/password to type-appropriate defaults (keep host)
-    const defaultDriver = newType === "database" ? driver : undefined;
-    setPort(newType === "database" ? DEFAULT_PORTS[defaultDriver || "mysql"] || 3306 : DEFAULT_PORTS[newType] || 22);
+    setPort(newType === "database" ? 3306 : DEFAULT_PORTS[newType] || 22);
     setUsername(newType === "ssh" ? "root" : "");
     setPassword("");
     setEncryptedPassword("");
     setPasswordSource("inline");
     setPasswordCredentialId(0);
-    setIcon(newType === "database" ? DEFAULT_ICONS[driver] || "mysql" : DEFAULT_ICONS[newType] || "server");
+    setIcon(newType === "database" ? "mysql" : DEFAULT_ICONS[newType] || "server");
     if (newType === "k8s") setHost("");
-  };
-
-  const handleDriverChange = (newDriver: string) => {
-    setDriver(newDriver);
-    if (newDriver === "sqlite") {
-      setHost("");
-      setPort(0);
-      setUsername("");
-      setPassword("");
-      setEncryptedPassword("");
-      setSshTunnelId(0);
-      setIcon(DEFAULT_ICONS["sqlite"]);
-    } else {
-      setPort(DEFAULT_PORTS[newDriver] || 3306);
-      setIcon(DEFAULT_ICONS[newDriver] || "database");
-      setPath("");
-      if (newDriver !== "postgresql") {
-        setSslMode("disable");
-      }
-    }
   };
 
   // 测试连接时把当前表单选中的密码来源（托管 / 内联加密缓存）写入 cfg。
@@ -765,38 +669,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setTesting(true);
     try {
       await TestAssetConnection(testId, "ssh", JSON.stringify(sshConfig), password);
-      if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
-    } catch (e) {
-      if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
-    } finally {
-      if (activeTestIdRef.current === testId) {
-        activeTestIdRef.current = null;
-        setTesting(false);
-      }
-    }
-  };
-
-  const handleTestDatabaseConnection = async () => {
-    const cfg: DatabaseConfig = { driver };
-    if (driver === "sqlite") {
-      cfg.path = path;
-    } else {
-      cfg.host = host;
-      cfg.port = port;
-      cfg.username = username;
-      if (sshTunnelId > 0) cfg.ssh_asset_id = sshTunnelId;
-      applyTestPasswordSource(cfg);
-    }
-    if (database) cfg.database = database;
-    if (driver === "postgresql" && sslMode !== "disable") cfg.ssl_mode = sslMode;
-    if ((driver === "mysql" || driver === "mssql") && tls) cfg.tls = true;
-    if (readOnly) cfg.read_only = true;
-    if (params) cfg.params = params;
-    const testId = newTestId();
-    activeTestIdRef.current = testId;
-    setTesting(true);
-    try {
-      await TestAssetConnection(testId, "database", JSON.stringify(cfg), password);
       if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
     } catch (e) {
       if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
@@ -1092,29 +964,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         };
       }
       config = JSON.stringify(sshConfig);
-    } else if (assetType === "database") {
-      const dbConfig: DatabaseConfig = { driver };
-      if (driver === "sqlite") {
-        dbConfig.path = path;
-      } else {
-        dbConfig.host = host;
-        dbConfig.port = port;
-        dbConfig.username = username;
-        if (passwordSource === "managed" && passwordCredentialId > 0) {
-          dbConfig.credential_id = passwordCredentialId;
-        } else {
-          const encrypted = await encryptPasswordValue();
-          if (encrypted === undefined) return;
-          if (encrypted) dbConfig.password = encrypted;
-        }
-        if (sshTunnelId > 0) dbConfig.ssh_asset_id = sshTunnelId;
-        if (driver === "postgresql" && sslMode !== "disable") dbConfig.ssl_mode = sslMode;
-        if ((driver === "mysql" || driver === "mssql") && tls) dbConfig.tls = true;
-      }
-      if (database) dbConfig.database = database;
-      if (readOnly) dbConfig.read_only = true;
-      if (params) dbConfig.params = params;
-      config = JSON.stringify(dbConfig);
     } else if (assetType === "kafka") {
       if (!validateKafkaCompanions()) return;
       const kafkaConfig = buildKafkaConfig();
@@ -1213,38 +1062,26 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
   const isTestConnectionDisabled =
     testing ||
-    (sectionDef?.ConfigSection
-      ? !validity.canTest
-      : assetType === "kafka"
-        ? kafkaBrokers().length === 0
-        : assetType === "database" && driver === "sqlite"
-          ? !path
-          : !host);
+    (sectionDef?.ConfigSection ? !validity.canTest : assetType === "kafka" ? kafkaBrokers().length === 0 : !host);
 
   const saveDisabledReason = !name.trim()
     ? "asset.formMissingName"
     : sectionDef?.ConfigSection
       ? (validity.saveDisabledReason ?? "")
-      : assetType === "database" && driver === "sqlite" && !path.trim()
-        ? "asset.formMissingPath"
-        : assetType === "ssh" && !host.trim()
-          ? "asset.formMissingHost"
-          : assetType === "database" && driver !== "sqlite" && !host.trim()
-            ? "asset.formMissingHost"
-            : assetType === "kafka" && kafkaBrokers().length === 0
-              ? "asset.formMissingKafkaBrokers"
-              : assetType === "k8s" && !kubeconfig.trim() && !editAsset
-                ? "asset.formMissingKubeconfig"
-                : "";
+      : assetType === "ssh" && !host.trim()
+        ? "asset.formMissingHost"
+        : assetType === "kafka" && kafkaBrokers().length === 0
+          ? "asset.formMissingKafkaBrokers"
+          : assetType === "k8s" && !kubeconfig.trim() && !editAsset
+            ? "asset.formMissingKubeconfig"
+            : "";
   const saveDisabled = saving || !!saveDisabledReason || (!!sectionDef?.ConfigSection && !validity.canSave);
 
   const handleRunTestConnection = sectionDef?.ConfigSection
     ? handleGenericTestConnection
     : assetType === "ssh"
       ? handleTestConnection
-      : assetType === "database"
-        ? handleTestDatabaseConnection
-        : handleTestKafkaConnection;
+      : handleTestKafkaConnection;
 
   const testConnectionButton = !isTestableAssetType ? null : testing && activeTestIdRef.current ? (
     <Button type="button" variant="outline" size="sm" onClick={handleCancelTest} className="gap-1 w-fit">
@@ -1329,24 +1166,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               <GroupSelect value={groupId} onValueChange={setGroupId} />
             </div>
 
-            {/* Database Driver (database only, before host) */}
-            {assetType === "database" && (
-              <div className="grid gap-2">
-                <Label>{t("asset.driver")}</Label>
-                <Select value={driver} onValueChange={handleDriverChange}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="mysql">{t("asset.driverMySQL")}</SelectItem>
-                    <SelectItem value="postgresql">{t("asset.driverPostgreSQL")}</SelectItem>
-                    <SelectItem value="mssql">{t("asset.driverMSSQL")}</SelectItem>
-                    <SelectItem value="sqlite">{t("asset.driverSQLite")}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-
             {/* Type-specific config sections */}
             {assetType === "ssh" && (
               <SSHConfigSection
@@ -1394,41 +1213,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                 proxyPassword={proxyPassword}
                 setProxyPassword={setProxyPassword}
                 encryptedProxyPassword={encryptedProxyPassword}
-                editAssetId={editAsset?.ID}
-              />
-            )}
-
-            {assetType === "database" && (
-              <DatabaseConfigSection
-                host={host}
-                setHost={setHost}
-                port={port}
-                setPort={setPort}
-                username={username}
-                setUsername={setUsername}
-                driver={driver}
-                database={database}
-                setDatabase={setDatabase}
-                sslMode={sslMode}
-                setSslMode={setSslMode}
-                tls={tls}
-                setTls={setTls}
-                readOnly={readOnly}
-                setReadOnly={setReadOnly}
-                sshTunnelId={sshTunnelId}
-                setSshTunnelId={setSshTunnelId}
-                params={params}
-                setParams={setParams}
-                path={path}
-                setPath={setPath}
-                password={password}
-                setPassword={setPassword}
-                encryptedPassword={encryptedPassword}
-                passwordSource={passwordSource}
-                setPasswordSource={setPasswordSource}
-                passwordCredentialId={passwordCredentialId}
-                setPasswordCredentialId={setPasswordCredentialId}
-                managedPasswords={managedPasswords}
                 editAssetId={editAsset?.ID}
               />
             )}
@@ -1506,6 +1290,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                 editAsset={editAsset ?? undefined}
                 ctx={ctx}
                 onValidityChange={setValidity}
+                onIconChange={setIcon}
               />
             )}
 

@@ -1,6 +1,7 @@
 import { Database } from "lucide-react";
 import { registerAssetType } from "./_register";
 import { DatabaseDetailInfoCard } from "@/components/asset/detail/DatabaseDetailInfoCard";
+import { DatabaseConfigSection } from "@/components/asset/DatabaseConfigSection";
 
 registerAssetType({
   type: "database",
@@ -12,6 +13,8 @@ registerAssetType({
   canConnectInNewTab: false,
   connectAction: "query",
   DetailInfoCard: DatabaseDetailInfoCard,
+  ConfigSection: DatabaseConfigSection,
+  testable: true,
   policy: {
     policyType: "database",
     titleKey: "asset.queryPolicy",

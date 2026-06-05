@@ -42,6 +42,8 @@ export interface ConfigSectionProps {
   ctx: AssetFormContext;
   /** state 变化时上报,驱动壳 Test/Save 按钮启用态(反应式)。 */
   onValidityChange: (v: SectionValidity) => void;
+  /** 仅 database 用:driver 变化时驱动壳 icon(其它 section 忽略)。 */
+  onIconChange?: (icon: string) => void;
 }
 
 export type ConfigSectionComponent = ForwardRefExoticComponent<ConfigSectionProps & RefAttributes<AssetFormHandle>>;
