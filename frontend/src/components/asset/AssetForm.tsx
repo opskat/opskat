@@ -1209,7 +1209,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
   const isTestableAssetType = sectionDef?.ConfigSection
     ? !!sectionDef.testable
-    : assetType === "ssh" || assetType === "database" || assetType === "mongodb" || assetType === "kafka";
+    : assetType === "ssh" || assetType === "database" || assetType === "kafka";
 
   const isTestConnectionDisabled =
     testing ||
@@ -1512,7 +1512,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             {/* Extension type config */}
             {assetType !== "ssh" &&
               assetType !== "database" &&
-              assetType !== "mongodb" &&
               assetType !== "kafka" &&
               assetType !== "k8s" &&
               (() => {
