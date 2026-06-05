@@ -10,8 +10,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   Button,
-  ScrollArea,
 } from "@opskat/ui";
+import { CodeEditor } from "@/components/CodeEditor";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { useQueryStore } from "@/stores/queryStore";
 import { isMac, formatModKey } from "@/stores/shortcutStore";
@@ -1107,11 +1107,18 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
             <AlertDialogTitle>{t("query.ddlDialogTitle")}</AlertDialogTitle>
             <AlertDialogDescription>{t("query.ddlDialogDesc", { table })}</AlertDialogDescription>
           </AlertDialogHeader>
-          <ScrollArea className="max-h-[420px]">
-            <pre className="bg-muted rounded-md p-3 text-xs font-mono whitespace-pre-wrap break-all border border-border">
-              {ddlLoading ? t("query.loadingDDL") : ddlSQL}
-            </pre>
-          </ScrollArea>
+          <div className="h-[420px] rounded-md border border-border overflow-hidden bg-muted/30">
+            {ddlLoading ? (
+              <div className="h-full w-full p-3 text-xs font-mono text-muted-foreground">{t("query.loadingDDL")}</div>
+            ) : (
+              <CodeEditor
+                value={ddlSQL}
+                language="sql"
+                readOnly
+                options={{ lineNumbers: "off", folding: false, glyphMargin: false, lineDecorationsWidth: 0 }}
+              />
+            )}
+          </div>
           <AlertDialogFooter>
             <Button
               variant="outline"
