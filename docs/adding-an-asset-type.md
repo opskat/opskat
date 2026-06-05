@@ -37,6 +37,23 @@ Not every new type touches every item below. A minimal type such as `local` has 
 | App binder for runtime panels | No | Wire `main.go` when the type needs its own runtime panel |
 | Query route / terminal transport / AI mention | No | `queryStore.ts`, `terminalStore.ts`, `MainPanel.tsx`, `App.tsx`, and `ai/*` as needed |
 
+## Shared Capability Map
+
+Several asset-type features are shared capabilities rather than type-local inventions. Before adding code for one of them, find the owner module and plug into it.
+
+| Capability | Backend owner | Frontend owner | Notes |
+| --- | --- | --- | --- |
+| Asset-type registration and AI safe views | `internal/assettype/` | `src/lib/assetTypes/` | Backend add/update/get/list dispatch is registration-driven through `assettype.Get(type)`. Frontend selector/filter/detail/config rendering is derived from `registerAssetType`. |
+| Config form contract and serialization | Entity config structs plus type-specific services | `src/lib/assetTypes/formContract.ts` and `<Name>ConfigSection*.ts` | The shell calls `buildConfig` / `buildTestConfig`; type sections own parsing, validation, and exact JSON output. |
+| SSH tunnels and TLS | `internal/connpool/` (`NewSSHTunnel`, `BuildTLSConfig`) | `AssetSelect`, `sshTunnelId`, and type config sections | Networked types resolve the tunnel from top-level `asset.SSHTunnelID` first, then legacy config fields. Save/test serialization differs; see [F3](#f3-configsection-and-pure-configts-serialization). |
+| Password credentials and SSH keys | `credential_svc`, `credential_mgr_svc`, `credential_resolver` | `credentialConfig.ts`, `useAssetCredential.ts`, `PasswordSourceField.tsx`, and SSH key controls | `credential_id` is not globally one thing. In SSH password-auth it refers to a password credential; in SSH key-auth it refers to an `ssh_key` credential. |
+| Connection tests | `internal/service/conntest` plus binder `New()` registration | `testable` and `buildTestConfig` | Do not edit `System.TestAssetConnection`; register a tester and let the common binding dispatch. |
+| Policy and policy groups | `internal/model/entity/policy`, `internal/ai/policy`, policy-group entities | `PolicyDefinition`, `CommandPolicyCard`, `PolicyGroupManager` | Reuse an existing policy kind when semantics match; add a new kind only for genuinely new policy behavior. |
+| Runtime routing and panels | Type-specific app binders and services | `connectAction`, `terminalStore.ts`, `queryStore.ts`, `MainPanel.tsx`, `App.tsx` | Registry covers basic connect action dispatch, but query tab state and panel selection still have shared-code coupling points. |
+| Detail display | Asset config structs | `DetailInfoCardProps`, `parseDetailConfig`, `InfoItem`, `TunnelInfo` | Detail-card selection is registered. Tunnel-capable cards should display top-level `asset.sshTunnelId` first, then legacy config fields. |
+| File manager | SSH/SFTP services | `canOpenFileManager` plus `App.tsx` handler | Menu visibility is registered; the current handler is still SSH-only. |
+| AI tool schema | `internal/ai/tool/tools_asset.go` | Mention/open helpers when needed | Asset add/update handlers are registry-driven, but model-facing schema/descriptions still need shared edits when args change. |
+
 ## Backend Integration
 
 All paths below are relative to the repository root. Use file and symbol names rather than line numbers; line numbers drift, `git grep <symbol>` does not.
@@ -173,6 +190,13 @@ conntest.Register(asset_entity.AssetTypeXxx, b.testConnection)
 - `testreg` cancellation
 
 Do not edit that dispatcher for a new asset type. The tester body should parse config, resolve credentials when needed, dial through the relevant service or `connpool`, and close the connection. A type without a registered tester has no Test button if the frontend definition leaves `testable` unset.
+
+Frontend flow:
+
+1. Set `testable: true` in `AssetTypeDefinition`.
+2. Implement `buildTestConfig` in the `ConfigSection`.
+3. `AssetForm` calls `TestAssetConnection(testID, tc.assetType, tc.configJSON, tc.password)`.
+4. `System.TestAssetConnection` applies cancellation/timeout, then dispatches through the registered tester.
 
 ### B6. App Binder
 
@@ -368,14 +392,20 @@ Files:
 - `src/components/asset/useAssetCredential.ts`
 - `src/components/asset/PasswordSourceField.tsx`
 
-Database-family password/managed-credential types reuse this layer: `database`, `redis`, `mongodb`, `kafka`, and `etcd`.
+Database-family password/managed-credential types reuse this layer: `database`, `redis`, `mongodb`, `kafka`, and `etcd`. SSH password-auth also reuses it.
 
-- `useAssetCredential(editAsset)` owns credential sub-state, loads `ListCredentialsByType("password")`, and initializes from `editAsset.Config`.
+- `useAssetCredential(editAsset, initialCredentialConfig?)` owns credential sub-state, loads `ListCredentialsByType("password")`, and initializes from either the explicit credential fragment or `editAsset.Config`.
 - `credentialConfig.ts` exposes `initCredentialFromConfig`, `resolveTestCredential`, and `resolveSaveCredential(s, encrypt)`.
 - `resolveSaveCredential` emits `credential_id` for managed credentials, encrypts new inline passwords, or reuses the existing encrypted password. Encryption errors propagate; they are not swallowed.
 - UI uses the shared `PasswordSourceField` primitive.
 
-SSH also reuses the password credential helper, but keeps its own authentication-mode and private-key handling. K8s encrypts kubeconfig directly through `ctx.encryptPassword(kubeconfig)`. `local` and `serial` have no credentials.
+SSH keeps its own authentication-mode and private-key handling:
+
+- Password auth passes only password-auth config into `useAssetCredential`; key-auth `credential_id` must not initialize a password credential.
+- Managed key auth loads `ListCredentialsByType("ssh_key")` and stores the selected SSH-key credential ID in `credential_id`.
+- File key auth stores selected private-key paths in `private_keys`; passphrase handling is local to `SSHConfigSection`.
+
+On the backend, credential storage and SSH key management live in `credential_svc`, `credential_mgr_svc`, and `credential_resolver`. Do not add type-local encryption or key-storage code. K8s encrypts kubeconfig directly through `ctx.encryptPassword(kubeconfig)`. `local` and `serial` have no credentials.
 
 ### F5. Detail Card
 
@@ -394,6 +424,14 @@ Reuse:
 - `ENABLED_VALUE`
 
 The detail panel selects the card through `getAssetType(...).DetailInfoCard`, not through type-string branches.
+
+For tunnel-capable types, display the top-level asset tunnel first and keep the legacy config field only as a fallback:
+
+```ts
+const tunnelName = sshTunnelName(asset.sshTunnelId || cfg.ssh_asset_id);
+```
+
+SSH uses the same display rule with `cfg.jump_host_id`.
 
 ### F6. i18n
 
