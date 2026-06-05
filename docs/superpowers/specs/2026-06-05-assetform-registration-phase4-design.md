@@ -196,3 +196,23 @@ const def = getAssetType(assetType);
 **最终 review 的前瞻结论(余 7 类型)**:`SectionValidity` 直接泛化(各类型自报自己的 missing-field i18n key,壳零分支);**SSH 的"测试发明文、保存发密文"已被 `buildConfig`/`buildTestConfig` 分离 + 异步 build 的 try/catch 支持**,壳无需再改;`onValidityChange` 必须始终传壳的 `setValidity`(身份稳定),勿在壳侧包一层非稳定回调(否则 effect 自循环);**每个有密文字段的类型(redis/mongodb/database/kafka/ssh)迁移时,须把旧 `loadXxxConfig` 的解密/掩码逻辑搬进各自的 `parseXxxConfig`,不能像 serial 那样假设明文**。
 
 **仍留给 4c+**:`etcd → redis → mongodb → database → k8s → kafka → ssh` 余 7 类型;末 commit 删遗留 switch + 共享 host/port/username state + `DEFAULT_PORTS`/`DEFAULT_ICONS`(届时只剩壳用按需)。
+
+## 阶段 4c 完成记录(2026-06-05)
+
+计划见 `docs/superpowers/plans/2026-06-05-assetform-registration-phase4c.md`。子 agent 逐 Task 驱动 + spec/质量/最终 review(关键迁移 commit 用 opus)。落地 4 个功能 commit(+ 2 个计划 commit):
+
+- `3edc2940` — **抽 db 族共享凭据纯函数** `credentialConfig.ts`:`CredentialState`/`CredentialFragment`/`initCredentialFromConfig`(锁旧 `load*Config` credential 分支)/`resolveTestCredential`(锁旧 `applyTestPasswordSource`)/`resolveSaveCredential`(锁旧 save + `encryptPasswordValue`)+ golden。
+- `ddf491b4` — `etcd` 配置纯函数 `EtcdConfigSection.config.ts`:`buildEtcdConfig`/`parseEtcdConfig`/`parseEtcdEndpoints`/`ETCD_DEFAULTS` + golden(**键序锁旧 save 分支**:`endpoints→username→credential→tls…→timeouts→ssh_asset_id`;旧 test 分支键序不同但 Go struct 反序列化无关,统一到 save 序)。
+- `c7bd01b0`(原子)— **迁移 etcd + `useAssetCredential` hook**:hook 自持凭据子状态 + 加载 `ListCredentialsByType("password")` + 编辑回填;`EtcdConfigSection` 重写为 `forwardRef`,自持 `EtcdFormState`(非凭据字段)+ 组合凭据 hook,`buildConfig` = `resolveSaveCredential` 后 `buildEtcdConfig`(`sshTunnelId` = `editAsset.sshTunnelId || cfg.ssh_asset_id`),`buildTestConfig` = `resolveTestCredential` + 明文 4th-arg;`etcd.ts` 注册 `ConfigSection + testable`;壳删 etcd 全部配置/load/reset/test/save/render + 有编译依赖的死分支(`etcdEndpointsList` 及其两调用点、`handleRunTestConnection` etcd 三元);删旧 props 测试,加 ref 契约测试。
+- `6ba91895` — 去壳里 etcd 剩余 3 处**无编译依赖**死项(`isTestableAssetType` 的 `|| etcd`、extension guard `!== etcd`、`handleTypeChange` 的 `if(newType==="etcd")setHost("")`)。
+
+**首个 db 族 + 首个凭据/加密/TLS/隧道类型**:确立凭据三段(init/test/save)抽象,后续 redis/mongodb/database 可直接 `useAssetCredential(editAsset)` 复用。Task3/4 拆分按**编译依赖**重定:闭包引用已删 state/函数的死分支(`etcdEndpointsList`、`handleTestEtcdConnection` 引用)必须并入原子迁移 commit,只有纯字符串比较死项可延后。
+
+**行为保持**:save/test/load 三段经 golden 锁定;`sshTunnelId` 优先级、managed-vs-inline 凭据、TLS 子键门控、endpoints 必填(同驱 Save+Test 按钮 + `saveDisabledReason: "etcd.error.endpointsRequired"`)均与旧一致。**唯一刻意微调**:加密失败旧用 `encryptPasswordValue` 返回 `undefined` + 硬编码英文 toast + 静默 abort;新版让 `ctx.encryptPassword` 的 reject 透传到 `handleSubmit` 既有 try/catch toast,语义等价(save 中止 + 错误 toast)且不再吞错。全量 `vitest`(1145)/`tsc`(0)/`eslint`(0)绿;`AssetForm.tsx` 仅剩 `DEFAULT_PORTS.etcd`/`DEFAULT_ICONS.etcd`/`AssetType` union 三处合法 etcd 残留;`grep EtcdConfigSection` 无旧 props API 引用。
+
+**最终 review 的前瞻结论**:
+- redis/mongodb/database 凭据模型与 etcd 同形,`useAssetCredential` + `resolve{Test,Save}Credential` 可直接复用,无 etcd 特化泄漏。
+- **kafka 是最难一档**:有 N 个嵌套凭据子态(主 + schema-registry + 每个 connect cluster)+ `auth_type`/bearer/username-as-token 逻辑(`applyKafkaCompanionAuth`),单次 `useAssetCredential` 覆盖不了;该层**包裹**而非替换共享 resolver。且 kafka 各 companion 会各自重复 `ListCredentialsByType("password")` —— 届时应把 `managedPasswords` 提升为单次拉取传入,或 companions 仍走现有 helper。
+- **凭据数值双默认**(`parseEtcdConfig` 的 `dial_timeout_seconds || 5` 等)是旧 `loadEtcdConfig` 的忠实迁移;因 `buildEtcdConfig` 在 0 时省略该键,0 永不落库,`||` 与 `??` 对往返数据等价 —— 不在 4c 改(保持行为锁定),留作跨类型统一项(若要修,单独一次性改全部类型,勿混入逐型迁移)。
+
+**仍留给 4d+**:`redis → mongodb → database → k8s → kafka → ssh` 余 6 类型;末 commit 删遗留 switch + 共享 host/port/username/password state + `applyTestPasswordSource`/`encryptPasswordValue` + `DEFAULT_PORTS`/`DEFAULT_ICONS` 残留。
