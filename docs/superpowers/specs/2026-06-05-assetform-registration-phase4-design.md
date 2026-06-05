@@ -158,3 +158,24 @@ const def = getAssetType(assetType);
 
 - 行为保持:golden JSON + 全量 vitest/tsc/eslint 每 commit 绿。
 - 观测验证(后端不变,但端到端可经 opsctl/日志):创建/编辑各类型资产、点测试连接、保存,确认 DB 落库 config 与迁移前一致(抽查 `opskat.db` assets.config)。
+
+## 阶段 4a 完成记录(2026-06-05)
+
+计划见 `docs/superpowers/plans/2026-06-05-assetform-registration-phase4a.md`。子 agent 逐 Task 驱动(implementer + spec review + 质量 review),累加到 #144 分支。落地 4 个 commit:
+
+- `9e046f7b` — ref 契约 `formContract.ts`(`AssetFormContext`/`AssetConfigBuildResult`/`AssetTestConfig`/`AssetFormHandle`/`ConfigSectionProps`/`ConfigSectionComponent`)+ `AssetTypeDefinition.{ConfigSection?,testable?}`。
+- `fe73a9f1` — `local` 配置纯函数 `buildLocalConfig`/`parseLocalConfig`/`LOCAL_DEFAULTS` + golden(锁旧 `handleSubmit`/`loadLocalConfig` 字节一致)。
+- `08f06184` — 迁移 `local`:`LocalConfigSection` 重写为 `forwardRef` 自持 state(`useImperativeHandle` 暴露 `buildConfig`/`buildTestConfig:null`,`onValidityChange` 上报);壳加通用路径 `def?.ConfigSection ? 通用 : 遗留 switch` + `persistAsset` 抽取 + 编辑回填 section 自填守卫;删全部 local 遗留(state/load/reset/save 分支/render/imports)。
+- `188c273c` — 纯函数拆到 sibling `LocalConfigSection.config.ts`(消除 `react-refresh/only-export-components` 警告,确立 9 个 section 的统一模式)+ 去掉 extension guard 里的 `assetType !== "local"` 硬编码。
+
+**做了什么(决策落地)**:状态所有权 = **A(section 自持 state via ref)**;迁移 = **增量 vertical-slice**,`local`(最简单:3 字段、不可测、无隧道)打头证明 seam。壳现为双路径,仅 `local` 设 `ConfigSection` 走通用路径,其余 8 类型仍走遗留 `assetType === "x"` switch(过渡双路径只在分支中间 commit,末 commit 删)。
+
+**行为保持**:`local` 保存的 config JSON 与编辑回填经 golden-locked 纯函数,与旧 inline 字节一致;`sshTunnelId` 恒 0(与旧 `else` 分支等价,local 从不设隧道);`persistAsset` 是 create/update 持久化的纯抽取,无语义变化。全量 `vitest`(1116 测试)、`tsc`(0)、`eslint`(0)绿;`AssetForm.tsx` 无 `assetType === "local"` 残留。
+
+**契约对后续 8 类型的结论(最终 review)**:`buildConfig`/`buildTestConfig` 分离正确预判了 SSH「测试发明文、保存发密文」的关键差异;`AssetTestConfig{assetType,configJSON,password}` 与后端 `TestAssetConnection` 1:1;`AssetFormContext{isEdit,encryptPassword}` 可按需扩(托管凭据等 section 内部直接调 wails)。无需现在改契约。
+
+**仍留给 4b+**:
+- **首个可测类型(serial)迁移前**:把 `validity.canTest` 接到 `isTestableAssetType`/测试按钮(本 4a 未接,local 不可测)。
+- **每个类型迁移时同步收缩遗留链**:extension 渲染的负向类型排除列表、`saveDisabledReason`/`isTestableAssetType`/`isTestConnectionDisabled` 三条 per-type 链必须随迁移逐项缩短(防半迁移类型两路径都漏接)——作为每次迁移的 checklist 项。
+- **多个 ConfigSection 类型共存后**:`validity` 在迁移类型间切换时的重置(现 `key={assetType}` remount 自纠,单类型不触发)。
+- 迁移顺序:`serial → etcd → redis → mongodb → database → k8s → kafka → ssh`,末 commit 删遗留 switch + 共享 host/port/username 等残留 state + `DEFAULT_ICONS`/`DEFAULT_PORTS`(届时只剩壳用则按需)。
