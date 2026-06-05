@@ -1,10 +1,13 @@
-import { Database } from "lucide-react";
+import { MongodbIcon } from "@/components/asset/brand-icons";
 import { registerAssetType } from "./_register";
 import { MongoDBDetailInfoCard } from "@/components/asset/detail/MongoDBDetailInfoCard";
 
 registerAssetType({
   type: "mongodb",
-  icon: Database,
+  icon: MongodbIcon,
+  aliases: ["mongodb", "mongo"],
+  label: "nav.mongodb",
+  category: "databases",
   canConnect: true,
   canConnectInNewTab: false,
   connectAction: "query",

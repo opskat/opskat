@@ -5,6 +5,9 @@ import { DatabaseDetailInfoCard } from "@/components/asset/detail/DatabaseDetail
 registerAssetType({
   type: "database",
   icon: Database,
+  aliases: ["database", "mysql", "postgresql"],
+  label: "nav.database",
+  category: "databases",
   canConnect: true,
   canConnectInNewTab: false,
   connectAction: "query",

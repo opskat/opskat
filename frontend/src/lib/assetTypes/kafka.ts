@@ -5,6 +5,9 @@ import { KafkaDetailInfoCard } from "@/components/asset/detail/KafkaDetailInfoCa
 registerAssetType({
   type: "kafka",
   icon: KafkaIcon,
+  aliases: ["kafka"],
+  label: "nav.kafka",
+  category: "middleware",
   canConnect: true,
   canConnectInNewTab: false,
   connectAction: "query",

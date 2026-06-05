@@ -5,6 +5,9 @@ import { SerialDetailInfoCard } from "@/components/asset/detail/SerialDetailInfo
 registerAssetType({
   type: "serial",
   icon: Usb,
+  aliases: ["serial", "com", "tty"],
+  label: "nav.serial",
+  category: "servers",
   canConnect: true,
   canConnectInNewTab: true,
   connectAction: "terminal",

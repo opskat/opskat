@@ -5,6 +5,9 @@ import { LocalDetailInfoCard } from "@/components/asset/detail/LocalDetailInfoCa
 registerAssetType({
   type: "local",
   icon: SquareTerminal,
+  aliases: ["local", "shell", "terminal"],
+  label: "nav.local",
+  category: "servers",
   canConnect: true,
   canConnectInNewTab: true,
   connectAction: "terminal",

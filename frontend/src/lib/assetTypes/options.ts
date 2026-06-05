@@ -1,12 +1,13 @@
 // frontend/src/lib/assetTypes/options.ts
 import type { ComponentType } from "react";
-import { Monitor, Database, Server, Usb, SquareTerminal } from "lucide-react";
+import { Server } from "lucide-react";
 import { getIconComponent } from "@/components/asset/IconPicker";
-import { KafkaIcon, EtcdIcon, RedisIcon, MongodbIcon, KubernetesIcon } from "@/components/asset/brand-icons";
+import { getBuiltinTypes } from "./index";
+import type { AssetTypeCategory } from "./types";
 import type { ExtManifest } from "@/extension/types";
 import type { asset_entity } from "../../../wailsjs/go/models";
 
-export type AssetTypeCategory = "servers" | "databases" | "middleware" | "extension";
+export type { AssetTypeCategory };
 
 /** 翻译函数（可带 i18next 命名空间）；兼容 react-i18next 的 t。 */
 export type TranslateFn = (key: string, opts?: { ns?: string }) => string;
@@ -33,92 +34,21 @@ interface ExtensionEntryLike {
   manifest: ExtManifest;
 }
 
-const BUILTIN_OPTIONS: AssetTypeOption[] = [
-  {
-    value: "ssh",
-    aliases: ["ssh"],
-    label: "nav.ssh",
+/** 内置资产类型选项：从 registry 的 AssetTypeDefinition 派生（单一来源）。 */
+function builtinOptions(): AssetTypeOption[] {
+  return getBuiltinTypes().map((def) => ({
+    value: def.type,
+    aliases: def.aliases,
+    label: def.label,
     labelIsI18nKey: true,
-    icon: Monitor,
+    icon: def.icon,
     group: "builtin",
-    category: "servers",
-  },
-  {
-    value: "database",
-    aliases: ["database", "mysql", "postgresql"],
-    label: "nav.database",
-    labelIsI18nKey: true,
-    icon: Database,
-    group: "builtin",
-    category: "databases",
-  },
-  {
-    value: "redis",
-    aliases: ["redis"],
-    label: "nav.redis",
-    labelIsI18nKey: true,
-    icon: RedisIcon,
-    group: "builtin",
-    category: "databases",
-  },
-  {
-    value: "mongodb",
-    aliases: ["mongodb", "mongo"],
-    label: "nav.mongodb",
-    labelIsI18nKey: true,
-    icon: MongodbIcon,
-    group: "builtin",
-    category: "databases",
-  },
-  {
-    value: "kafka",
-    aliases: ["kafka"],
-    label: "nav.kafka",
-    labelIsI18nKey: true,
-    icon: KafkaIcon,
-    group: "builtin",
-    category: "middleware",
-  },
-  {
-    value: "k8s",
-    aliases: ["k8s", "kubernetes"],
-    label: "nav.k8s",
-    labelIsI18nKey: true,
-    icon: KubernetesIcon,
-    group: "builtin",
-    category: "middleware",
-  },
-  {
-    value: "serial",
-    aliases: ["serial", "com", "tty"],
-    label: "nav.serial",
-    labelIsI18nKey: true,
-    icon: Usb,
-    group: "builtin",
-    category: "servers",
-  },
-  {
-    value: "local",
-    aliases: ["local", "shell", "terminal"],
-    label: "nav.local",
-    labelIsI18nKey: true,
-    icon: SquareTerminal,
-    group: "builtin",
-    category: "servers",
-  },
-  {
-    value: "etcd",
-    aliases: ["etcd"],
-    label: "nav.etcd",
-    labelIsI18nKey: true,
-    icon: EtcdIcon,
-    group: "builtin",
-    category: "databases",
-  },
-];
+    category: def.category,
+  }));
+}
 
 export function getAssetTypeOptions(extensions: Record<string, ExtensionEntryLike>): AssetTypeOption[] {
-  const out: AssetTypeOption[] = [...BUILTIN_OPTIONS];
+  const out: AssetTypeOption[] = builtinOptions();
   for (const entry of Object.values(extensions)) {
     const m = entry.manifest;
     if (!m.assetTypes?.length) continue;

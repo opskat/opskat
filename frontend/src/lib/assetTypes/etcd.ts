@@ -1,10 +1,13 @@
-import { Database } from "lucide-react";
+import { EtcdIcon } from "@/components/asset/brand-icons";
 import { registerAssetType } from "./_register";
 import { EtcdDetailInfoCard } from "@/components/asset/detail/EtcdDetailInfoCard";
 
 registerAssetType({
   type: "etcd",
-  icon: Database,
+  icon: EtcdIcon,
+  aliases: ["etcd"],
+  label: "nav.etcd",
+  category: "databases",
   canConnect: true,
   canConnectInNewTab: false,
   connectAction: "query",

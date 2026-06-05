@@ -1,10 +1,13 @@
-import { Database } from "lucide-react";
+import { RedisIcon } from "@/components/asset/brand-icons";
 import { registerAssetType } from "./_register";
 import { RedisDetailInfoCard } from "@/components/asset/detail/RedisDetailInfoCard";
 
 registerAssetType({
   type: "redis",
-  icon: Database,
+  icon: RedisIcon,
+  aliases: ["redis"],
+  label: "nav.redis",
+  category: "databases",
   canConnect: true,
   canConnectInNewTab: false,
   connectAction: "query",
