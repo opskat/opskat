@@ -31,7 +31,6 @@ import { ListLocalSSHKeys } from "../../../wailsjs/go/ssh/SSH";
 import { ssh as ssh_models } from "../../../wailsjs/go/models";
 import { SSHConfigSection } from "@/components/asset/SSHConfigSection";
 import { DatabaseConfigSection } from "@/components/asset/DatabaseConfigSection";
-import { RedisConfigSection } from "@/components/asset/RedisConfigSection";
 import { MongoDBConfigSection } from "@/components/asset/MongoDBConfigSection";
 import {
   KafkaConfigSection,
@@ -97,25 +96,6 @@ interface DatabaseConfig {
   read_only?: boolean;
   ssh_asset_id?: number;
   path?: string;
-}
-
-interface RedisConfig {
-  host: string;
-  port: number;
-  username?: string;
-  password?: string;
-  credential_id?: number;
-  database?: number;
-  tls?: boolean;
-  tls_insecure?: boolean;
-  tls_server_name?: string;
-  tls_ca_file?: string;
-  tls_cert_file?: string;
-  tls_key_file?: string;
-  command_timeout_seconds?: number;
-  scan_page_size?: number;
-  key_separator?: string;
-  ssh_asset_id?: number;
 }
 
 interface MongoDBConfig {
@@ -359,18 +339,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const [sslMode, setSslMode] = useState("disable");
   const [readOnly, setReadOnly] = useState(false);
   const [params, setParams] = useState("");
-
-  // Redis fields
+  // TLS toggle shared by database / mongodb / kafka
   const [tls, setTls] = useState(false);
-  const [redisDatabase, setRedisDatabase] = useState(0);
-  const [redisCommandTimeoutSeconds, setRedisCommandTimeoutSeconds] = useState(30);
-  const [redisScanPageSize, setRedisScanPageSize] = useState(200);
-  const [redisKeySeparator, setRedisKeySeparator] = useState(":");
-  const [redisTlsInsecure, setRedisTlsInsecure] = useState(false);
-  const [redisTlsServerName, setRedisTlsServerName] = useState("");
-  const [redisTlsCAFile, setRedisTlsCAFile] = useState("");
-  const [redisTlsCertFile, setRedisTlsCertFile] = useState("");
-  const [redisTlsKeyFile, setRedisTlsKeyFile] = useState("");
 
   // MongoDB fields
   const [mongoConnectionMode, setMongoConnectionMode] = useState<"manual" | "uri">("manual");
@@ -455,8 +425,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           loadSSHConfig(editAsset);
         } else if (editType === "database") {
           loadDatabaseConfig(editAsset);
-        } else if (editType === "redis") {
-          loadRedisConfig(editAsset);
         } else if (editType === "mongodb") {
           loadMongoDBConfig(editAsset);
         } else if (editType === "kafka") {
@@ -483,7 +451,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         resetSharedFields("ssh");
         resetSSHFields();
         resetDatabaseFields();
-        resetRedisFields();
         resetMongoDBFields();
         resetKafkaFields();
         resetK8sFields();
@@ -573,41 +540,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     } catch {
       resetSharedFields("database");
       resetDatabaseFields();
-    }
-  };
-
-  const loadRedisConfig = (asset: asset_entity.Asset) => {
-    try {
-      const cfg: RedisConfig = JSON.parse(asset.Config || "{}");
-      setHost(cfg.host || "");
-      setPort(cfg.port || 6379);
-      setUsername(cfg.username || "");
-      setTls(cfg.tls || false);
-      setRedisDatabase(Math.max(0, cfg.database || 0));
-      setRedisCommandTimeoutSeconds(cfg.command_timeout_seconds || 30);
-      setRedisScanPageSize(cfg.scan_page_size || 200);
-      setRedisKeySeparator(cfg.key_separator || ":");
-      setRedisTlsInsecure(cfg.tls_insecure || false);
-      setRedisTlsServerName(cfg.tls_server_name || "");
-      setRedisTlsCAFile(cfg.tls_ca_file || "");
-      setRedisTlsCertFile(cfg.tls_cert_file || "");
-      setRedisTlsKeyFile(cfg.tls_key_file || "");
-      setSshTunnelId(asset.sshTunnelId || cfg.ssh_asset_id || 0);
-
-      if (cfg.credential_id) {
-        setPasswordSource("managed");
-        setPasswordCredentialId(cfg.credential_id);
-        setEncryptedPassword("");
-        setPassword("");
-      } else {
-        setPasswordSource("inline");
-        setPasswordCredentialId(0);
-        setEncryptedPassword(cfg.password || "");
-        setPassword("");
-      }
-    } catch {
-      resetSharedFields("redis");
-      resetRedisFields();
     }
   };
 
@@ -749,20 +681,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setTls(false);
     setReadOnly(false);
     setParams("");
-  };
-
-  // Redis-exclusive fields only
-  const resetRedisFields = () => {
-    setTls(false);
-    setRedisDatabase(0);
-    setRedisCommandTimeoutSeconds(30);
-    setRedisScanPageSize(200);
-    setRedisKeySeparator(":");
-    setRedisTlsInsecure(false);
-    setRedisTlsServerName("");
-    setRedisTlsCAFile("");
-    setRedisTlsCertFile("");
-    setRedisTlsKeyFile("");
   };
 
   // MongoDB-exclusive fields only
@@ -949,37 +867,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setTesting(true);
     try {
       await TestAssetConnection(testId, "database", JSON.stringify(cfg), password);
-      if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
-    } catch (e) {
-      if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
-    } finally {
-      if (activeTestIdRef.current === testId) {
-        activeTestIdRef.current = null;
-        setTesting(false);
-      }
-    }
-  };
-
-  const handleTestRedisConnection = async () => {
-    const cfg: RedisConfig = { host, port };
-    if (username) cfg.username = username;
-    if (redisDatabase > 0) cfg.database = redisDatabase;
-    if (tls) cfg.tls = true;
-    if (tls && redisTlsInsecure) cfg.tls_insecure = true;
-    if (tls && redisTlsServerName) cfg.tls_server_name = redisTlsServerName;
-    if (tls && redisTlsCAFile) cfg.tls_ca_file = redisTlsCAFile;
-    if (tls && redisTlsCertFile) cfg.tls_cert_file = redisTlsCertFile;
-    if (tls && redisTlsKeyFile) cfg.tls_key_file = redisTlsKeyFile;
-    if (redisCommandTimeoutSeconds > 0) cfg.command_timeout_seconds = redisCommandTimeoutSeconds;
-    if (redisScanPageSize > 0) cfg.scan_page_size = redisScanPageSize;
-    if (redisKeySeparator && redisKeySeparator !== ":") cfg.key_separator = redisKeySeparator;
-    if (sshTunnelId > 0) cfg.ssh_asset_id = sshTunnelId;
-    applyTestPasswordSource(cfg);
-    const testId = newTestId();
-    activeTestIdRef.current = testId;
-    setTesting(true);
-    try {
-      await TestAssetConnection(testId, "redis", JSON.stringify(cfg), password);
       if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
     } catch (e) {
       if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
@@ -1329,30 +1216,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       if (readOnly) dbConfig.read_only = true;
       if (params) dbConfig.params = params;
       config = JSON.stringify(dbConfig);
-    } else if (assetType === "redis") {
-      const redisConfig: RedisConfig = {
-        host,
-        port,
-      };
-      if (username) redisConfig.username = username;
-      if (passwordSource === "managed" && passwordCredentialId > 0) {
-        redisConfig.credential_id = passwordCredentialId;
-      } else {
-        const encrypted = await encryptPasswordValue();
-        if (encrypted === undefined) return;
-        if (encrypted) redisConfig.password = encrypted;
-      }
-      if (redisDatabase > 0) redisConfig.database = redisDatabase;
-      if (tls) redisConfig.tls = true;
-      if (tls && redisTlsInsecure) redisConfig.tls_insecure = true;
-      if (tls && redisTlsServerName) redisConfig.tls_server_name = redisTlsServerName;
-      if (tls && redisTlsCAFile) redisConfig.tls_ca_file = redisTlsCAFile;
-      if (tls && redisTlsCertFile) redisConfig.tls_cert_file = redisTlsCertFile;
-      if (tls && redisTlsKeyFile) redisConfig.tls_key_file = redisTlsKeyFile;
-      if (redisCommandTimeoutSeconds > 0) redisConfig.command_timeout_seconds = redisCommandTimeoutSeconds;
-      if (redisScanPageSize > 0) redisConfig.scan_page_size = redisScanPageSize;
-      if (redisKeySeparator && redisKeySeparator !== ":") redisConfig.key_separator = redisKeySeparator;
-      config = JSON.stringify(redisConfig);
     } else if (assetType === "mongodb") {
       const mongoConfig: MongoDBConfig = {};
       if (mongoConnectionMode === "uri" && connectionURI) {
@@ -1517,9 +1380,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         ? handleTestDatabaseConnection
         : assetType === "mongodb"
           ? handleTestMongoDBConnection
-          : assetType === "kafka"
-            ? handleTestKafkaConnection
-            : handleTestRedisConnection;
+          : handleTestKafkaConnection;
 
   const testConnectionButton = !isTestableAssetType ? null : testing && activeTestIdRef.current ? (
     <Button type="button" variant="outline" size="sm" onClick={handleCancelTest} className="gap-1 w-fit">
@@ -1728,48 +1589,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                 setDatabase={setDatabase}
                 tls={tls}
                 setTls={setTls}
-                sshTunnelId={sshTunnelId}
-                setSshTunnelId={setSshTunnelId}
-                password={password}
-                setPassword={setPassword}
-                encryptedPassword={encryptedPassword}
-                passwordSource={passwordSource}
-                setPasswordSource={setPasswordSource}
-                passwordCredentialId={passwordCredentialId}
-                setPasswordCredentialId={setPasswordCredentialId}
-                managedPasswords={managedPasswords}
-                editAssetId={editAsset?.ID}
-              />
-            )}
-
-            {assetType === "redis" && (
-              <RedisConfigSection
-                host={host}
-                setHost={setHost}
-                port={port}
-                setPort={setPort}
-                username={username}
-                setUsername={setUsername}
-                tls={tls}
-                setTls={setTls}
-                tlsInsecure={redisTlsInsecure}
-                setTlsInsecure={setRedisTlsInsecure}
-                tlsServerName={redisTlsServerName}
-                setTlsServerName={setRedisTlsServerName}
-                tlsCAFile={redisTlsCAFile}
-                setTlsCAFile={setRedisTlsCAFile}
-                tlsCertFile={redisTlsCertFile}
-                setTlsCertFile={setRedisTlsCertFile}
-                tlsKeyFile={redisTlsKeyFile}
-                setTlsKeyFile={setRedisTlsKeyFile}
-                database={redisDatabase}
-                setDatabase={setRedisDatabase}
-                commandTimeoutSeconds={redisCommandTimeoutSeconds}
-                setCommandTimeoutSeconds={setRedisCommandTimeoutSeconds}
-                scanPageSize={redisScanPageSize}
-                setScanPageSize={setRedisScanPageSize}
-                keySeparator={redisKeySeparator}
-                setKeySeparator={setRedisKeySeparator}
                 sshTunnelId={sshTunnelId}
                 setSshTunnelId={setSshTunnelId}
                 password={password}

@@ -1,6 +1,7 @@
 import { RedisIcon } from "@/components/asset/brand-icons";
 import { registerAssetType } from "./_register";
 import { RedisDetailInfoCard } from "@/components/asset/detail/RedisDetailInfoCard";
+import { RedisConfigSection } from "@/components/asset/RedisConfigSection";
 
 registerAssetType({
   type: "redis",
@@ -12,6 +13,8 @@ registerAssetType({
   canConnectInNewTab: false,
   connectAction: "query",
   DetailInfoCard: RedisDetailInfoCard,
+  ConfigSection: RedisConfigSection,
+  testable: true,
   policy: {
     policyType: "redis",
     titleKey: "asset.redisPolicy",
