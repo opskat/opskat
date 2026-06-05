@@ -31,7 +31,6 @@ import {
   type KafkaConnectClusterForm,
   type KafkaSchemaRegistryForm,
 } from "@/components/asset/KafkaConfigSection";
-import { K8sConfigSection } from "@/components/asset/K8sConfigSection";
 import { useExtensionStore } from "@/extension";
 import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
 import { AssetTypePicker } from "@/components/asset/AssetTypePicker";
@@ -319,12 +318,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setKafkaSchemaRegistryState((current) => ({ ...current, ...patch }));
   }, []);
 
-  // K8S fields
-  const [kubeconfig, setKubeconfig] = useState("");
-  const [k8sNamespace, setK8sNamespace] = useState("");
-  const [k8sContext, setK8sContext] = useState("");
-  const [showKubeconfig, setShowKubeconfig] = useState(false);
-
   // Extension config
   const [extConfig, setExtConfig] = useState<Record<string, unknown>>({});
 
@@ -375,8 +368,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           loadSSHConfig(editAsset);
         } else if (editType === "kafka") {
           loadKafkaConfig(editAsset);
-        } else if (editType === "k8s") {
-          loadK8sConfig(editAsset);
         } else {
           // Extension type: load decrypted config
           const extInfo = useExtensionStore.getState().getExtensionForAssetType(editType);
@@ -397,7 +388,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         resetSharedFields("ssh");
         resetSSHFields();
         resetKafkaFields();
-        resetK8sFields();
         setExtConfig({});
       }
     }
@@ -495,26 +485,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     }
   };
 
-  const loadK8sConfig = (asset: asset_entity.Asset) => {
-    try {
-      const cfg = JSON.parse(asset.Config || "{}");
-      // kubeconfig 已加密落库，编辑时不预填密文；用户重新输入即视为替换。
-      setKubeconfig("");
-      setK8sNamespace(cfg.namespace || "");
-      setK8sContext(cfg.context || "");
-      setShowKubeconfig(false);
-      setSshTunnelId(asset.sshTunnelId || 0);
-      setHost(""); // K8S uses kubeconfig, not host
-      setPort(6443);
-      setUsername("");
-      setPassword("");
-      setEncryptedPassword("");
-    } catch {
-      resetSharedFields("k8s");
-      resetK8sFields();
-    }
-  };
-
   // Reset shared connection fields with type-appropriate defaults
   const resetSharedFields = (type: AssetType) => {
     setHost("");
@@ -567,14 +537,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setKafkaConnectClusters([]);
   };
 
-  // K8S-exclusive fields only
-  const resetK8sFields = () => {
-    setKubeconfig("");
-    setK8sNamespace("");
-    setK8sContext("");
-    setShowKubeconfig(false);
-  };
-
   const handleTypeChange = (newType: AssetType) => {
     if (newType === assetType) return;
     setAssetType(newType);
@@ -587,7 +549,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setPasswordSource("inline");
     setPasswordCredentialId(0);
     setIcon(newType === "database" ? "mysql" : DEFAULT_ICONS[newType] || "server");
-    if (newType === "k8s") setHost("");
   };
 
   // 测试连接时把当前表单选中的密码来源（托管 / 内联加密缓存）写入 cfg。
@@ -987,28 +948,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         kafkaConfig.connect = connectConfig;
       }
       config = JSON.stringify(kafkaConfig);
-    } else if (assetType === "k8s") {
-      const k8sConfig: Record<string, unknown> = {};
-      if (kubeconfig) {
-        // 用户输入了新的 kubeconfig（明文 YAML），加密后落库。
-        try {
-          k8sConfig.kubeconfig = await EncryptPassword(kubeconfig);
-        } catch {
-          toast.error("Failed to encrypt kubeconfig");
-          return;
-        }
-      } else if (editAsset) {
-        // 编辑模式且未输入新值：保留原 ciphertext。
-        try {
-          const oldCfg = JSON.parse(editAsset.Config || "{}") as { kubeconfig?: string };
-          if (oldCfg.kubeconfig) k8sConfig.kubeconfig = oldCfg.kubeconfig;
-        } catch {
-          // 旧 config 解析失败：让 ciphertext 缺失冒到后端校验
-        }
-      }
-      if (k8sNamespace) k8sConfig.namespace = k8sNamespace;
-      if (k8sContext) k8sConfig.context = k8sContext;
-      config = JSON.stringify(k8sConfig);
     } else {
       // Extension type: encrypt password fields from configSchema before saving
       const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
@@ -1072,9 +1011,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         ? "asset.formMissingHost"
         : assetType === "kafka" && kafkaBrokers().length === 0
           ? "asset.formMissingKafkaBrokers"
-          : assetType === "k8s" && !kubeconfig.trim() && !editAsset
-            ? "asset.formMissingKubeconfig"
-            : "";
+          : "";
   const saveDisabled = saving || !!saveDisabledReason || (!!sectionDef?.ConfigSection && !validity.canSave);
 
   const handleRunTestConnection = sectionDef?.ConfigSection
@@ -1265,23 +1202,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               />
             )}
 
-            {/* K8S config */}
-            {assetType === "k8s" && (
-              <K8sConfigSection
-                kubeconfig={kubeconfig}
-                setKubeconfig={setKubeconfig}
-                showKubeconfig={showKubeconfig}
-                setShowKubeconfig={setShowKubeconfig}
-                namespace={k8sNamespace}
-                setNamespace={setK8sNamespace}
-                contextName={k8sContext}
-                setContextName={setK8sContext}
-                sshTunnelId={sshTunnelId}
-                setSshTunnelId={setSshTunnelId}
-                isEditing={!!editAsset}
-              />
-            )}
-
             {/* 注册化类型:通用 ConfigSection 路径(local 等) */}
             {sectionDef?.ConfigSection && (
               <sectionDef.ConfigSection
@@ -1297,7 +1217,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             {/* Extension type config */}
             {assetType !== "ssh" &&
               assetType !== "kafka" &&
-              assetType !== "k8s" &&
               (() => {
                 const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
                 if (!extInfo) return null;
