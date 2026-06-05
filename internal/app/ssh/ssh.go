@@ -5,6 +5,8 @@ import (
 	"context"
 	"sync"
 
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/service/sessionid"
 	"github.com/opskat/opskat/internal/service/sftp_svc"
 	"github.com/opskat/opskat/internal/service/ssh_svc"
@@ -61,6 +63,7 @@ func New(appCtx context.Context, lang LangProvider, mgr *ssh_svc.Manager, sftp *
 		connIDGen: sessionid.NewGenerator("conn"),
 	}
 	s.forwardManager = NewForwardManager(&poolDialer{})
+	conntest.Register(asset_entity.AssetTypeSSH, s.testConnection)
 	return s
 }
 

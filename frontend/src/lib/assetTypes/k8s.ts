@@ -1,14 +1,19 @@
-import { Container } from "lucide-react";
+import { KubernetesIcon } from "@/components/asset/brand-icons";
 import { registerAssetType } from "./_register";
 import { K8sDetailInfoCard } from "@/components/asset/detail/K8sDetailInfoCard";
+import { K8sConfigSection } from "@/components/asset/K8sConfigSection";
 
 registerAssetType({
   type: "k8s",
-  icon: Container,
+  icon: KubernetesIcon,
+  aliases: ["k8s", "kubernetes"],
+  label: "nav.k8s",
+  category: "middleware",
   canConnect: true,
   canConnectInNewTab: false,
   connectAction: "terminal",
   DetailInfoCard: K8sDetailInfoCard,
+  ConfigSection: K8sConfigSection,
   policy: {
     policyType: "k8s",
     titleKey: "asset.k8sPolicy",

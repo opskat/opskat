@@ -5,13 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/serial_svc"
-	"github.com/opskat/opskat/internal/service/testreg"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -105,18 +103,14 @@ func (s *Serial) ConnectSerialAsync(req SerialConnectRequest) (string, error) {
 	return connectionID, nil
 }
 
-// TestSerialConnection 测试串口连接（打开后立即关闭）
-// testID: 前端生成的本次测试唯一标识，用于配合 CancelTest 中断。
-func (s *Serial) TestSerialConnection(testID string, configJSON string) error {
+// testConnection 测试一份未保存的串口配置（打开后立即关闭）；串口无密码，末参占位以匹配
+// conntest.TestFunc 签名。经 conntest 注册表由 System.TestAssetConnection 分发，
+// 信封（超时/取消/i18n ctx）由调用方统一施加。
+func (s *Serial) testConnection(ctx context.Context, configJSON string, _ string) error {
 	var cfg asset_entity.SerialConfig
 	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 		return fmt.Errorf("%s: %w", i18n.Pick(s.lang.Lang(), "配置解析失败", "parse config failed"), err)
 	}
-
-	parent, parentCancel := context.WithTimeout(i18n.Ctx(s.ctx, s.lang.Lang()), 10*time.Second)
-	defer parentCancel()
-	ctx, release := testreg.Begin(parent, testID)
-	defer release()
 
 	return s.manager.TestConnection(ctx, serial_svc.ConnectConfig{
 		PortPath:    cfg.PortPath,

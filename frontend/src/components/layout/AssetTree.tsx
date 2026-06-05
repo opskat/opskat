@@ -1148,7 +1148,7 @@ const AssetRowContent = React.memo(function AssetRowContent({
             {t("asset.connectInNewTab")}
           </ContextMenuItem>
         )}
-        {asset.Type === "ssh" && onOpenFileManager && (
+        {getAssetType(asset.Type)?.canOpenFileManager && onOpenFileManager && (
           <ContextMenuItem onClick={() => onOpenFileManager(asset)}>
             <FolderOpen className="h-3.5 w-3.5 mr-1.5" />
             {t("sftp.fileManager")}

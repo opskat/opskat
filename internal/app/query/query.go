@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/opskat/opskat/internal/connpool"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/sshpool"
 
 	"github.com/redis/go-redis/v9"
@@ -40,7 +42,11 @@ type Query struct {
 
 // New 构造 query binder。
 func New(appCtx context.Context, lang LangProvider, pool *sshpool.Pool) *Query {
-	return &Query{appCtx: appCtx, lang: lang, pool: pool}
+	q := &Query{appCtx: appCtx, lang: lang, pool: pool}
+	conntest.Register(asset_entity.AssetTypeDatabase, q.testDatabaseConnection)
+	conntest.Register(asset_entity.AssetTypeRedis, q.testRedisConnection)
+	conntest.Register(asset_entity.AssetTypeMongoDB, q.testMongoConnection)
+	return q
 }
 
 // Startup 初始化三个面板连接缓存 + 各自的 evictor 协程。

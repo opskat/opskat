@@ -1,14 +1,20 @@
 import { Database } from "lucide-react";
 import { registerAssetType } from "./_register";
 import { DatabaseDetailInfoCard } from "@/components/asset/detail/DatabaseDetailInfoCard";
+import { DatabaseConfigSection } from "@/components/asset/DatabaseConfigSection";
 
 registerAssetType({
   type: "database",
   icon: Database,
+  aliases: ["database", "mysql", "postgresql"],
+  label: "nav.database",
+  category: "databases",
   canConnect: true,
   canConnectInNewTab: false,
   connectAction: "query",
   DetailInfoCard: DatabaseDetailInfoCard,
+  ConfigSection: DatabaseConfigSection,
+  testable: true,
   policy: {
     policyType: "database",
     titleKey: "asset.queryPolicy",

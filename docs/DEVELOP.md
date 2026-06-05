@@ -52,7 +52,7 @@ main.go → internal/app/ (Wails bindings, IPC boundary)
 
 **Key subsystems:**
 - `internal/ai/` — provider abstraction (Anthropic/OpenAI), tool registry, conversation runner, audit. AI tools live in `internal/ai/tool/`; the conversation runner in `internal/ai/runner/`. Per-protocol policy checkers live in `internal/ai/policy/`: SQL in `query_policy.go`, plus `k8s_policy.go` / `kafka_policy.go` / `mongo_policy.go` / `redis_policy.go`; shell-command rules in `command_rule.go` / `command_shell.go`.
-- `internal/assettype/` — per-asset adapters (ssh/database/redis/mongodb/kafka/k8s/serial/etcd) wired through `registry.go`. New asset types plug in here, not by hardcoding type strings.
+- `internal/assettype/` — per-asset adapters wired through `registry.go` (enumerate the set with `git grep "Register(&" -- internal/assettype/*.go`). New asset types plug in here, not by hardcoding type strings — full end-to-end how-to in [adding-an-asset-type.md](adding-an-asset-type.md).
 - `internal/sshpool/`, `internal/connpool/` — SSH pool (Unix socket proxy for opsctl); DB/Redis tunnels.
 - `internal/approval/` — Unix-socket approval flow between desktop app and opsctl.
 - `internal/bootstrap/` — DB, credentials, migrations, auth tokens, logger.
@@ -75,7 +75,7 @@ main.go → internal/app/ (Wails bindings, IPC boundary)
 
 ### Commit message — gitmoji
 
-**The first character of the subject must be the emoji glyph itself** (e.g. `✨`), not the gitmoji text code (`:sparkles:`), and not a plain-text prefix like `feat:` / `fix:`. Format: `<emoji> <short description> [#issue] [(#PR)]`, e.g. `🎨 Windows 图标填满图块 #134` (commit messages themselves are commonly written in Chinese in this repo — the emoji-first rule is language-agnostic).
+**The first character of the subject must be the emoji glyph itself** (e.g. `✨`), not the gitmoji text code (`:sparkles:`), and not a plain-text prefix like `feat:` / `fix:`. Default format: `<emoji> <short description>`, e.g. `📄 调整 sessionid 碰撞风险说明` (commit messages themselves are commonly written in Chinese in this repo — the emoji-first rule is language-agnostic).
 
 Common emoji (aligned with the changelog categories in [`/release`](../.claude/skills/release/SKILL.md)):
 
@@ -95,7 +95,7 @@ Common emoji (aligned with the changelog categories in [`/release`](../.claude/s
 | 📄 | Docs |
 | 🚀 | Release |
 
-**When linking an issue**: append `#<number>` at the end of the subject line (first line), and on a separate line in the body write `closes #<number>` (or `fixes` / `resolves`) to trigger GitHub's auto-close. E.g. subject `🐛 Fix xxx #126`, body ends with `closes #126`.
+**Only add an issue number when intentionally linking an issue**: append `#<number>` at the end of the subject line (first line), and on a separate line in the body write `closes #<number>` (or `fixes` / `resolves`) only when the commit should trigger GitHub's auto-close. E.g. subject `🐛 Fix xxx #126`, body ends with `closes #126`. Do not add a PR number, review-comment number, or arbitrary `#xxx` suffix by default.
 
 ### Others
 

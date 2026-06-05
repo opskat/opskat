@@ -44,6 +44,7 @@ func (h *k8sHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asset)
 }
 
 func (h *k8sHandler) DefaultPolicy() any { return asset_entity.DefaultK8sPolicy() }
+func (h *k8sHandler) PolicyKind() string { return policy.PolicyKindK8s }
 
 func (h *k8sHandler) ValidateCreateArgs(args map[string]any) error {
 	if ArgString(args, "kubeconfig") == "" {

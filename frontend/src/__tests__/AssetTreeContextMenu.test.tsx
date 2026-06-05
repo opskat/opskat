@@ -16,18 +16,24 @@ function makeGroup(id: number, name: string): group_entity.Group {
   });
 }
 
-function makeAsset(id: number, name: string, groupId: number): asset_entity.Asset {
+function makeAsset(id: number, name: string, groupId: number, type = "ssh"): asset_entity.Asset {
   return new asset_entity.Asset({
     ID: id,
     Name: name,
-    Type: "ssh",
+    Type: type,
     GroupID: groupId,
     Icon: "",
     Status: 1,
   });
 }
 
-function renderTree({ onAddAsset = vi.fn() }: { onAddAsset?: (groupId?: number) => void } = {}) {
+function renderTree({
+  onAddAsset = vi.fn(),
+  onOpenFileManager,
+}: {
+  onAddAsset?: (groupId?: number) => void;
+  onOpenFileManager?: (asset: asset_entity.Asset) => void;
+} = {}) {
   return render(
     <TooltipProvider>
       <AssetTree
@@ -40,6 +46,7 @@ function renderTree({ onAddAsset = vi.fn() }: { onAddAsset?: (groupId?: number) 
         onCopyAsset={vi.fn()}
         onConnectAsset={vi.fn()}
         onSelectAsset={vi.fn()}
+        onOpenFileManager={onOpenFileManager}
       />
     </TooltipProvider>
   );
@@ -141,5 +148,31 @@ describe("AssetTree context menu", () => {
     expect(menu).not.toHaveTextContent("asset.renameGroup");
     expect(menu).not.toHaveTextContent("asset.groupDetail");
     expect(menu).not.toHaveTextContent("action.openInTab");
+  });
+
+  it("shows the file-manager action for ssh assets", async () => {
+    renderTree({ onOpenFileManager: vi.fn() });
+
+    fireEvent.contextMenu(screen.getByText("Asset A"));
+    const menu = await screen.findByRole("menu");
+
+    expect(menu).toHaveTextContent("sftp.fileManager");
+  });
+
+  it("hides the file-manager action for non-ssh assets (registry capability, not type-string)", async () => {
+    useAssetStore.setState({
+      assets: [makeAsset(201, "Redis Asset", 1, "redis")],
+      groups: [makeGroup(1, "Folder A")],
+      selectedAssetId: null,
+      collapsedGroupIds: [],
+      initialized: true,
+      loading: false,
+    });
+    renderTree({ onOpenFileManager: vi.fn() });
+
+    fireEvent.contextMenu(screen.getByText("Redis Asset"));
+    const menu = await screen.findByRole("menu");
+
+    expect(menu).not.toHaveTextContent("sftp.fileManager");
   });
 });

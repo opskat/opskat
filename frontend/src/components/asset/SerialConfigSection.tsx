@@ -1,8 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { RefreshCw } from "lucide-react";
 import { ListSerialPorts } from "../../../wailsjs/go/serial/Serial";
+import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import {
+  buildSerialConfig,
+  parseSerialConfig,
+  SERIAL_DEFAULTS,
+  type SerialFormState,
+} from "./SerialConfigSection.config";
 
 interface SerialPortInfo {
   name: string;
@@ -10,21 +17,6 @@ interface SerialPortInfo {
   productId?: string;
   vendorId?: string;
   serialNumber?: string;
-}
-
-export interface SerialConfigSectionProps {
-  portPath: string;
-  setPortPath: (v: string) => void;
-  baudRate: number;
-  setBaudRate: (v: number) => void;
-  dataBits: number;
-  setDataBits: (v: number) => void;
-  stopBits: string;
-  setStopBits: (v: string) => void;
-  parity: string;
-  setParity: (v: string) => void;
-  flowControl: string;
-  setFlowControl: (v: string) => void;
 }
 
 const CUSTOM_PORT = "__custom__";
@@ -37,24 +29,19 @@ const PARITY_OPTIONS = ["none", "odd", "even", "mark", "space"];
 // 因为 go.bug.st/serial v1.6.4 自身不暴露这条配置，而 nativeOpen 会强制关闭它。
 const FLOW_CONTROL_OPTIONS = ["none", "hardware"];
 
-export function SerialConfigSection({
-  portPath,
-  setPortPath,
-  baudRate,
-  setBaudRate,
-  dataBits,
-  setDataBits,
-  stopBits,
-  setStopBits,
-  parity,
-  setParity,
-  flowControl,
-  setFlowControl,
-}: SerialConfigSectionProps) {
+export const SerialConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function SerialConfigSection(
+  { editAsset, onValidityChange },
+  ref
+) {
   const { t } = useTranslation();
   const [ports, setPorts] = useState<SerialPortInfo[]>([]);
   const [loadingPorts, setLoadingPorts] = useState(false);
   const [customMode, setCustomMode] = useState(false);
+  const [state, setState] = useState<SerialFormState>(() =>
+    editAsset ? parseSerialConfig(editAsset.Config) : { ...SERIAL_DEFAULTS }
+  );
+
+  const patch = (p: Partial<SerialFormState>) => setState((s) => ({ ...s, ...p }));
 
   const fetchPorts = useCallback(async () => {
     setLoadingPorts(true);
@@ -77,21 +64,34 @@ export function SerialConfigSection({
   // 用户主动从下拉里选了某个端口才会通过 handlePortSelect 切回非手动模式。
   // 这样刷新串口列表不会把正在编辑的内容覆盖掉。
   useEffect(() => {
-    if (portPath && !ports.some((p) => p.name === portPath)) {
+    if (state.portPath && !ports.some((p) => p.name === state.portPath)) {
       setCustomMode(true);
     }
-  }, [ports, portPath]);
+  }, [ports, state.portPath]);
 
-  // Determine if current portPath matches a detected port
-  const selectValue = customMode ? CUSTOM_PORT : portPath;
+  // serial 保存与测试都要 port_path;上报反应式校验 + 缺端口提示(onValidityChange 为壳 setState,身份稳定)。
+  useEffect(() => {
+    const ok = !!state.portPath.trim();
+    onValidityChange({ canTest: ok, canSave: ok, saveDisabledReason: ok ? "" : "asset.formMissingSerialPort" });
+  }, [state.portPath, onValidityChange]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      buildConfig: async () => ({ configJSON: buildSerialConfig(state), sshTunnelId: 0 }),
+      buildTestConfig: async () => ({ assetType: "serial", configJSON: buildSerialConfig(state), password: "" }),
+    }),
+    [state]
+  );
+
+  const selectValue = customMode ? CUSTOM_PORT : state.portPath;
 
   const handlePortSelect = (value: string) => {
     if (value === CUSTOM_PORT) {
       setCustomMode(true);
-      // Keep existing portPath so users can edit it; don't clear on mode switch
     } else {
       setCustomMode(false);
-      setPortPath(value);
+      patch({ portPath: value });
     }
   };
 
@@ -133,8 +133,8 @@ export function SerialConfigSection({
         </Select>
         {customMode && (
           <Input
-            value={portPath}
-            onChange={(e) => setPortPath(e.target.value)}
+            value={state.portPath}
+            onChange={(e) => patch({ portPath: e.target.value })}
             placeholder={t("asset.serialPortPathPlaceholder")}
             className="font-mono"
           />
@@ -144,7 +144,7 @@ export function SerialConfigSection({
       <div className="grid grid-cols-2 gap-3">
         <div className="grid gap-2">
           <Label>{t("asset.serialBaudRate")}</Label>
-          <Select value={String(baudRate)} onValueChange={(v) => setBaudRate(Number(v))}>
+          <Select value={String(state.baudRate)} onValueChange={(v) => patch({ baudRate: Number(v) })}>
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
@@ -157,10 +157,9 @@ export function SerialConfigSection({
             </SelectContent>
           </Select>
         </div>
-
         <div className="grid gap-2">
           <Label>{t("asset.serialDataBits")}</Label>
-          <Select value={String(dataBits)} onValueChange={(v) => setDataBits(Number(v))}>
+          <Select value={String(state.dataBits)} onValueChange={(v) => patch({ dataBits: Number(v) })}>
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
@@ -178,7 +177,7 @@ export function SerialConfigSection({
       <div className="grid grid-cols-3 gap-3">
         <div className="grid gap-2">
           <Label>{t("asset.serialStopBits")}</Label>
-          <Select value={stopBits} onValueChange={setStopBits}>
+          <Select value={state.stopBits} onValueChange={(v) => patch({ stopBits: v })}>
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
@@ -191,10 +190,9 @@ export function SerialConfigSection({
             </SelectContent>
           </Select>
         </div>
-
         <div className="grid gap-2">
           <Label>{t("asset.serialParity")}</Label>
-          <Select value={parity} onValueChange={setParity}>
+          <Select value={state.parity} onValueChange={(v) => patch({ parity: v })}>
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
@@ -207,10 +205,9 @@ export function SerialConfigSection({
             </SelectContent>
           </Select>
         </div>
-
         <div className="grid gap-2">
           <Label>{t("asset.serialFlowControl")}</Label>
-          <Select value={flowControl} onValueChange={setFlowControl}>
+          <Select value={state.flowControl} onValueChange={(v) => patch({ flowControl: v })}>
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
@@ -226,4 +223,4 @@ export function SerialConfigSection({
       </div>
     </div>
   );
-}
+});

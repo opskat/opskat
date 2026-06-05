@@ -1,24 +1,23 @@
-import { useEffect, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { ListLocalShells } from "../../../wailsjs/go/local/Local";
 import type { localterm_svc } from "../../../wailsjs/go/models";
 import { formatLocalShellArgs } from "@/lib/localShellArgs";
+import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import { buildLocalConfig, parseLocalConfig, LOCAL_DEFAULTS, type LocalFormState } from "./LocalConfigSection.config";
 
 type ShellInfo = localterm_svc.ShellInfo;
 
-export interface LocalConfigSectionProps {
-  shell: string;
-  setShell: (v: string) => void;
-  args: string;
-  setArgs: (v: string) => void;
-  cwd: string;
-  setCwd: (v: string) => void;
-}
-
-export function LocalConfigSection({ shell, setShell, args, setArgs, cwd, setCwd }: LocalConfigSectionProps) {
+export const LocalConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function LocalConfigSection(
+  { editAsset, onValidityChange },
+  ref
+) {
   const { t } = useTranslation();
   const [shells, setShells] = useState<ShellInfo[]>([]);
+  const [state, setState] = useState<LocalFormState>(() =>
+    editAsset ? parseLocalConfig(editAsset.Config) : { ...LOCAL_DEFAULTS }
+  );
 
   useEffect(() => {
     ListLocalShells()
@@ -26,17 +25,29 @@ export function LocalConfigSection({ shell, setShell, args, setArgs, cwd, setCwd
       .catch(() => setShells([]));
   }, []);
 
+  // local 无必填校验:始终可保存、不可测试(onValidityChange 为壳 setState,身份稳定)。
+  useEffect(() => {
+    onValidityChange({ canTest: false, canSave: true });
+  }, [onValidityChange]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      buildConfig: async () => ({ configJSON: buildLocalConfig(state), sshTunnelId: 0 }),
+      buildTestConfig: null,
+    }),
+    [state]
+  );
+
+  const patch = (p: Partial<LocalFormState>) => setState((s) => ({ ...s, ...p }));
+
   const onSelectPreset = (val: string) => {
     if (val === "__default__") {
-      setShell("");
-      setArgs("");
+      patch({ shell: "", args: "" });
       return;
     }
     const s = shells[Number(val)];
-    if (s) {
-      setShell(s.path);
-      setArgs(formatLocalShellArgs(s.args || []));
-    }
+    if (s) patch({ shell: s.path, args: formatLocalShellArgs(s.args || []) });
   };
 
   return (
@@ -58,8 +69,8 @@ export function LocalConfigSection({ shell, setShell, args, setArgs, cwd, setCwd
           </SelectContent>
         </Select>
         <Input
-          value={shell}
-          onChange={(e) => setShell(e.target.value)}
+          value={state.shell}
+          onChange={(e) => patch({ shell: e.target.value })}
           placeholder={t("asset.localShellPlaceholder")}
           className="font-mono"
         />
@@ -67,8 +78,8 @@ export function LocalConfigSection({ shell, setShell, args, setArgs, cwd, setCwd
       <div className="grid gap-2">
         <Label>{t("asset.localArgs")}</Label>
         <Input
-          value={args}
-          onChange={(e) => setArgs(e.target.value)}
+          value={state.args}
+          onChange={(e) => patch({ args: e.target.value })}
           placeholder={t("asset.localArgsPlaceholder")}
           className="font-mono"
         />
@@ -76,12 +87,12 @@ export function LocalConfigSection({ shell, setShell, args, setArgs, cwd, setCwd
       <div className="grid gap-2">
         <Label>{t("asset.localCwd")}</Label>
         <Input
-          value={cwd}
-          onChange={(e) => setCwd(e.target.value)}
+          value={state.cwd}
+          onChange={(e) => patch({ cwd: e.target.value })}
           placeholder={t("asset.localCwdPlaceholder")}
           className="font-mono"
         />
       </div>
     </div>
   );
-}
+});

@@ -18,7 +18,7 @@ export function RedisDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProp
 
   const cfg = parseDetailConfig<RedisConfig>(asset.Config);
   if (!cfg) return null;
-  const tunnelName = sshTunnelName(cfg.ssh_asset_id);
+  const tunnelName = sshTunnelName(asset.sshTunnelId || cfg.ssh_asset_id);
 
   return (
     <DetailSection title="Redis">

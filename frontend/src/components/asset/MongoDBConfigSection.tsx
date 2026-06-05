@@ -1,81 +1,66 @@
+import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Input, Label, Switch, Tabs, TabsList, TabsTrigger, TabsContent } from "@opskat/ui";
 import { AssetSelect } from "@/components/asset/AssetSelect";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
-import { credential_entity } from "../../../wailsjs/go/models";
+import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import { useAssetCredential } from "./useAssetCredential";
+import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
+import {
+  buildMongoDBConfig,
+  parseMongoDBConfig,
+  MONGODB_DEFAULTS,
+  type MongoDBFormState,
+} from "./MongoDBConfigSection.config";
 
-export interface MongoDBConfigSectionProps {
-  connectionMode: "manual" | "uri";
-  setConnectionMode: (v: "manual" | "uri") => void;
-  host: string;
-  setHost: (v: string) => void;
-  port: number;
-  setPort: (v: number) => void;
-  username: string;
-  setUsername: (v: string) => void;
-  connectionURI: string;
-  setConnectionURI: (v: string) => void;
-  replicaSet: string;
-  setReplicaSet: (v: string) => void;
-  authSource: string;
-  setAuthSource: (v: string) => void;
-  database: string;
-  setDatabase: (v: string) => void;
-  tls: boolean;
-  setTls: (v: boolean) => void;
-  sshTunnelId: number;
-  setSshTunnelId: (v: number) => void;
-  // Password fields
-  password: string;
-  setPassword: (v: string) => void;
-  encryptedPassword: string;
-  passwordSource: "inline" | "managed";
-  setPasswordSource: (v: "inline" | "managed") => void;
-  passwordCredentialId: number;
-  setPasswordCredentialId: (v: number) => void;
-  managedPasswords: credential_entity.Credential[];
-  editAssetId?: number;
-}
-
-export function MongoDBConfigSection({
-  connectionMode,
-  setConnectionMode,
-  host,
-  setHost,
-  port,
-  setPort,
-  username,
-  setUsername,
-  connectionURI,
-  setConnectionURI,
-  replicaSet,
-  setReplicaSet,
-  authSource,
-  setAuthSource,
-  database,
-  setDatabase,
-  tls,
-  setTls,
-  sshTunnelId,
-  setSshTunnelId,
-  password,
-  setPassword,
-  encryptedPassword,
-  passwordSource,
-  setPasswordSource,
-  passwordCredentialId,
-  setPasswordCredentialId,
-  managedPasswords,
-  editAssetId,
-}: MongoDBConfigSectionProps) {
+export const MongoDBConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function MongoDBConfigSection(
+  { editAsset, onValidityChange },
+  ref
+) {
   const { t } = useTranslation();
+  const [state, setState] = useState<MongoDBFormState>(() => {
+    if (!editAsset) return { ...MONGODB_DEFAULTS };
+    const parsed = parseMongoDBConfig(editAsset.Config);
+    // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.ssh_asset_id || 0)。
+    return { ...parsed, sshTunnelId: editAsset.sshTunnelId || parsed.sshTunnelId };
+  });
+  const patch = (p: Partial<MongoDBFormState>) => setState((s) => ({ ...s, ...p }));
+  const cred = useAssetCredential(editAsset);
+
+  // 保存/测试必填:mode 依赖校验;上报反应式校验(onValidityChange 为壳 setState,身份稳定)。
+  useEffect(() => {
+    const ok = state.connectionMode === "uri" ? !!state.connectionURI.trim() : !!state.host.trim();
+    const saveDisabledReason = ok
+      ? ""
+      : state.connectionMode === "uri"
+        ? "asset.formMissingMongoUri"
+        : "asset.formMissingHost";
+    onValidityChange({ canTest: ok, canSave: ok, saveDisabledReason });
+  }, [state.connectionMode, state.connectionURI, state.host, onValidityChange]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      buildConfig: async (ctx) => {
+        const frag = await resolveSaveCredential(cred.value, ctx.encryptPassword);
+        return { configJSON: buildMongoDBConfig(state, frag), sshTunnelId: state.sshTunnelId };
+      },
+      buildTestConfig: async () => ({
+        assetType: "mongodb",
+        // 测试无 asset 行 → 隧道必须塞进 config(includeSshAssetId=true,锁旧 handleTestMongoDBConnection)。
+        configJSON: buildMongoDBConfig(state, resolveTestCredential(cred.value), true),
+        password: cred.value.password,
+      }),
+    }),
+    [state, cred.value]
+  );
 
   return (
     <>
       {/* Connection & Auth (single visual block) */}
       <div className="grid gap-3 border rounded-lg p-3">
         {/* Connection Mode Toggle */}
-        <Tabs value={connectionMode} onValueChange={(v) => setConnectionMode(v as "manual" | "uri")}>
+        <Tabs value={state.connectionMode} onValueChange={(v) => patch({ connectionMode: v as "manual" | "uri" })}>
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="manual">Manual</TabsTrigger>
             <TabsTrigger value="uri">URI</TabsTrigger>
@@ -86,16 +71,16 @@ export function MongoDBConfigSection({
             <div className="grid grid-cols-[1fr_120px] gap-3">
               <div className="grid gap-2">
                 <Label>{t("asset.host")}</Label>
-                <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="example.com" />
+                <Input value={state.host} onChange={(e) => patch({ host: e.target.value })} placeholder="example.com" />
               </div>
               <div className="grid gap-2">
                 <Label>{t("asset.port")}</Label>
                 <Input
                   className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                   type="number"
-                  value={port || ""}
+                  value={state.port || ""}
                   placeholder="27017"
-                  onChange={(e) => setPort(Number(e.target.value))}
+                  onChange={(e) => patch({ port: Number(e.target.value) })}
                 />
               </div>
             </div>
@@ -104,8 +89,8 @@ export function MongoDBConfigSection({
             <div className="grid gap-2">
               <Label>{t("asset.mongoReplicaSet")}</Label>
               <Input
-                value={replicaSet}
-                onChange={(e) => setReplicaSet(e.target.value)}
+                value={state.replicaSet}
+                onChange={(e) => patch({ replicaSet: e.target.value })}
                 placeholder={t("asset.mongoReplicaSetPlaceholder")}
               />
             </div>
@@ -114,8 +99,8 @@ export function MongoDBConfigSection({
             <div className="grid gap-2">
               <Label>{t("asset.mongoAuthSource")}</Label>
               <Input
-                value={authSource}
-                onChange={(e) => setAuthSource(e.target.value)}
+                value={state.authSource}
+                onChange={(e) => patch({ authSource: e.target.value })}
                 placeholder={t("asset.mongoAuthSourcePlaceholder")}
               />
             </div>
@@ -126,8 +111,8 @@ export function MongoDBConfigSection({
             <div className="grid gap-2">
               <Label>{t("asset.mongoUri")}</Label>
               <Input
-                value={connectionURI}
-                onChange={(e) => setConnectionURI(e.target.value)}
+                value={state.connectionURI}
+                onChange={(e) => patch({ connectionURI: e.target.value })}
                 placeholder={t("asset.mongoUriPlaceholder")}
               />
             </div>
@@ -137,21 +122,21 @@ export function MongoDBConfigSection({
         {/* Username */}
         <div className="grid gap-2">
           <Label>{t("asset.username")}</Label>
-          <Input value={username} onChange={(e) => setUsername(e.target.value)} />
+          <Input value={state.username} onChange={(e) => patch({ username: e.target.value })} />
         </div>
 
         {/* Password */}
         <PasswordSourceField
-          source={passwordSource}
-          onSourceChange={setPasswordSource}
-          password={password}
-          onPasswordChange={setPassword}
-          credentialId={passwordCredentialId}
-          onCredentialIdChange={setPasswordCredentialId}
-          managedPasswords={managedPasswords}
-          hasExistingPassword={!!encryptedPassword}
-          editAssetId={editAssetId}
-          onUsernameChange={setUsername}
+          source={cred.value.passwordSource}
+          onSourceChange={cred.setPasswordSource}
+          password={cred.value.password}
+          onPasswordChange={cred.setPassword}
+          credentialId={cred.value.passwordCredentialId}
+          onCredentialIdChange={cred.setPasswordCredentialId}
+          managedPasswords={cred.managedPasswords}
+          hasExistingPassword={!!cred.value.encryptedPassword}
+          editAssetId={editAsset?.ID}
+          onUsernameChange={(v) => patch({ username: v })}
         />
       </div>
 
@@ -159,8 +144,8 @@ export function MongoDBConfigSection({
       <div className="grid gap-2">
         <Label>{t("asset.mongoDefaultDatabase")}</Label>
         <Input
-          value={database}
-          onChange={(e) => setDatabase(e.target.value)}
+          value={state.database}
+          onChange={(e) => patch({ database: e.target.value })}
           placeholder={t("asset.mongoDefaultDatabasePlaceholder")}
         />
       </div>
@@ -168,19 +153,19 @@ export function MongoDBConfigSection({
       {/* TLS */}
       <div className="flex items-center justify-between">
         <Label>{t("asset.tls")}</Label>
-        <Switch checked={tls} onCheckedChange={setTls} />
+        <Switch checked={state.tls} onCheckedChange={(v) => patch({ tls: v })} />
       </div>
 
       {/* SSH Tunnel */}
       <div className="grid gap-2">
         <Label>{t("asset.sshTunnel")}</Label>
         <AssetSelect
-          value={sshTunnelId}
-          onValueChange={setSshTunnelId}
+          value={state.sshTunnelId}
+          onValueChange={(v) => patch({ sshTunnelId: v })}
           filterType="ssh"
           placeholder={t("asset.sshTunnelNone")}
         />
       </div>
     </>
   );
-}
+});

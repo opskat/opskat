@@ -27,7 +27,7 @@ export function SSHDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProps)
   const cfg = parseDetailConfig<SSHConfig>(asset.Config);
   if (!cfg) return null;
 
-  const jumpHostName = sshTunnelName(cfg.jump_host_id);
+  const jumpHostName = sshTunnelName(asset.sshTunnelId || cfg.jump_host_id);
 
   return (
     <>

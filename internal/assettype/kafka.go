@@ -43,6 +43,7 @@ func (h *kafkaHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asse
 }
 
 func (h *kafkaHandler) DefaultPolicy() any { return asset_entity.DefaultKafkaPolicy() }
+func (h *kafkaHandler) PolicyKind() string { return policy.PolicyKindKafka }
 
 func (h *kafkaHandler) ValidateCreateArgs(args map[string]any) error {
 	if len(ArgStringSlice(args, "brokers")) == 0 {

@@ -5,6 +5,8 @@ import (
 	"context"
 	"sync"
 
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/service/serial_svc"
 	"github.com/opskat/opskat/internal/service/sessionid"
 )
@@ -27,7 +29,9 @@ type Serial struct {
 
 // New 构造 serial binder。
 func New(appCtx context.Context, lang LangProvider, mgr *serial_svc.Manager) *Serial {
-	return &Serial{appCtx: appCtx, lang: lang, manager: mgr, connIDGen: sessionid.NewGenerator("conn")}
+	s := &Serial{appCtx: appCtx, lang: lang, manager: mgr, connIDGen: sessionid.NewGenerator("conn")}
+	conntest.Register(asset_entity.AssetTypeSerial, s.testConnection)
+	return s
 }
 
 // nextConnectionID 生成跨重启唯一的连接中转 ID(issue #141)。

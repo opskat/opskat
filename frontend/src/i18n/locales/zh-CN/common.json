@@ -1532,10 +1532,11 @@
       "approximate": "(近似)"
     },
     "sync": {
-      "panelFromTerminal": "让当前目录跟随当前终端目录",
-      "terminalFromPanel": "让当前终端切换到当前目录",
-      "followToggle": "在当前终端标签页内保持终端与当前目录始终同步",
+      "panelFromTerminal": "面板 ← 终端",
+      "terminalFromPanel": "终端 ← 面板",
+      "followToggle": "自动跟随",
       "followShort": "同步",
+      "followActive": "跟随中",
       "markerOverflow": "目录同步标记输出过大",
       "invalidTarget": "请先选择要同步的目录",
       "sessionClosed": "终端会话已关闭",

@@ -15,7 +15,6 @@ import (
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/internal/service/ssh_svc"
-	"github.com/opskat/opskat/internal/service/testreg"
 	"github.com/opskat/opskat/internal/sshpool"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -314,17 +313,13 @@ func (s *SSH) UpdateAssetPassword(assetID int64, password string) error {
 	return asset_svc.Asset().Update(i18n.Ctx(s.ctx, s.lang.Lang()), asset)
 }
 
-// TestSSHConnection 测试 SSH 连接（不创建终端会话）
-func (s *SSH) TestSSHConnection(testID string, configJSON string, plainPassword string) error {
+// testConnection 测试一份未保存的 SSH 配置（不创建终端会话）；经 conntest 注册表由
+// System.TestAssetConnection 分发，信封（超时/取消/i18n ctx）由调用方统一施加。
+func (s *SSH) testConnection(ctx context.Context, configJSON string, plainPassword string) error {
 	var sshCfg asset_entity.SSHConfig
 	if err := json.Unmarshal([]byte(configJSON), &sshCfg); err != nil {
 		return fmt.Errorf("配置解析失败: %w", err)
 	}
-
-	parent, parentCancel := context.WithTimeout(i18n.Ctx(s.ctx, s.lang.Lang()), 10*time.Second)
-	defer parentCancel()
-	ctx, release := testreg.Begin(parent, testID)
-	defer release()
 
 	storedPassword, key, passphrase := s.resolveSSHCredentialsFull(&sshCfg)
 	password := plainPassword

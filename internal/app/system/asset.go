@@ -1,9 +1,11 @@
 package system
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -15,15 +17,17 @@ import (
 	policyent "github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
 	"github.com/opskat/opskat/internal/service/asset_svc"
+	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/service/group_svc"
 	"github.com/opskat/opskat/internal/service/policy_group_svc"
+	"github.com/opskat/opskat/internal/service/testreg"
 )
 
 // --- 策略测试 ---
 
 // PolicyTestRequest 策略测试请求
 type PolicyTestRequest struct {
-	PolicyType string `json:"policyType"` // "ssh" | "database" | "redis" | "k8s"
+	PolicyType string `json:"policyType"` // 前端资产 policyType(ssh/database/redis/k8s/etcd/...);经 ResolvePolicyKind 映射到 policyKind
 	PolicyJSON string `json:"policyJSON"` // JSON 编码的策略结构体（当前编辑状态）
 	Command    string `json:"command"`    // 待测试的命令/SQL/Redis命令
 	AssetID    int64  `json:"assetID"`    // 资产ID（用于解析资产组链）
@@ -38,48 +42,29 @@ type PolicyTestResult struct {
 	Message        string `json:"message"`        // 可读说明
 }
 
-// TestPolicyRule 测试命令/SQL/Redis/K8S 命令是否匹配当前策略（含资产组继承）
+// TestPolicyRule 测试命令/SQL/Redis/K8S/etcd 命令是否匹配当前策略（含资产组继承）
 func (s *System) TestPolicyRule(req PolicyTestRequest) (*PolicyTestResult, error) {
 	command := strings.TrimSpace(req.Command)
 	if command == "" {
 		return nil, fmt.Errorf("command is empty")
 	}
 
-	// 解析当前编辑中的策略 JSON
+	kind, ok := policy.ResolvePolicyKind(req.PolicyType)
+	if !ok {
+		return nil, fmt.Errorf("unsupported policy type: %s", req.PolicyType)
+	}
+
 	input := policy.PolicyTestInput{
-		PolicyType: req.PolicyType,
+		PolicyKind: kind,
 		AssetID:    req.AssetID,
 		GroupID:    req.GroupID,
 	}
 	if req.PolicyJSON != "" {
-		switch req.PolicyType {
-		case "ssh":
-			var p asset_entity.CommandPolicy
-			if err := json.Unmarshal([]byte(req.PolicyJSON), &p); err != nil {
-				return nil, fmt.Errorf("invalid SSH policy JSON: %w", err)
-			}
-			input.CurrentSSH = &p
-		case "database":
-			var p asset_entity.QueryPolicy
-			if err := json.Unmarshal([]byte(req.PolicyJSON), &p); err != nil {
-				return nil, fmt.Errorf("invalid query policy JSON: %w", err)
-			}
-			input.CurrentQuery = &p
-		case "redis":
-			var p asset_entity.RedisPolicy
-			if err := json.Unmarshal([]byte(req.PolicyJSON), &p); err != nil {
-				return nil, fmt.Errorf("invalid Redis policy JSON: %w", err)
-			}
-			input.CurrentRedis = &p
-		case "k8s":
-			var p asset_entity.K8sPolicy
-			if err := json.Unmarshal([]byte(req.PolicyJSON), &p); err != nil {
-				return nil, fmt.Errorf("invalid K8S policy JSON: %w", err)
-			}
-			input.CurrentK8s = &p
-		default:
-			return nil, fmt.Errorf("unsupported policy type: %s", req.PolicyType)
+		current, err := policy.DecodeCurrentPolicy(kind, []byte(req.PolicyJSON))
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s policy JSON: %w", req.PolicyType, err)
 		}
+		input.Current = current
 	}
 
 	result := policy.TestPolicy(i18n.Ctx(s.ctx, s.Lang()), input, command)
@@ -98,6 +83,21 @@ func (s *System) TestPolicyRule(req PolicyTestRequest) (*PolicyTestResult, error
 		MatchedSource:  result.MatchedSource,
 		Message:        result.Message,
 	}, nil
+}
+
+// TestAssetConnection 测试一份未保存的资产配置(资产表单「测试连接」)。
+// testID 配合 CancelTest 中断;assetType 经 conntest 注册表分发到对应 binder 的 tester。
+// 共享信封(i18n ctx + 10s 超时 + testreg 取消)在此统一施加,各 tester 只做解析/解析凭据/拨号。
+func (s *System) TestAssetConnection(testID, assetType, configJSON, plainPassword string) error {
+	fn, ok := conntest.Lookup(assetType)
+	if !ok {
+		return fmt.Errorf("unsupported asset type: %s", assetType)
+	}
+	parent, cancel := context.WithTimeout(i18n.Ctx(s.ctx, s.Lang()), 10*time.Second)
+	defer cancel()
+	ctx, release := testreg.Begin(parent, testID)
+	defer release()
+	return fn(ctx, configJSON, plainPassword)
 }
 
 // GetDefaultPolicy 获取指定资产类型的默认策略 JSON

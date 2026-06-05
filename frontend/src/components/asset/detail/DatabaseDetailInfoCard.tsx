@@ -22,7 +22,7 @@ export function DatabaseDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardP
 
   const cfg = parseDetailConfig<DatabaseConfig>(asset.Config);
   if (!cfg) return null;
-  const tunnelName = sshTunnelName(cfg.ssh_asset_id);
+  const tunnelName = sshTunnelName(asset.sshTunnelId || cfg.ssh_asset_id);
 
   return (
     <DetailSection title={t("asset.typeDatabase")}>

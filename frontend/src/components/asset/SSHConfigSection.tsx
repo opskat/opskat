@@ -1,3 +1,4 @@
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
 import { Trash2, FolderOpen, Loader2, Lock } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -16,110 +17,103 @@ import {
 } from "@opskat/ui";
 import { AssetSelect } from "@/components/asset/AssetSelect";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
-import { SelectSSHKeyFile } from "../../../wailsjs/go/ssh/SSH";
-import { credential_entity } from "../../../wailsjs/go/models";
-import { ssh as ssh_models } from "../../../wailsjs/go/models";
+import { ListCredentialsByType } from "../../../wailsjs/go/system/System";
+import { ListLocalSSHKeys, SelectSSHKeyFile } from "../../../wailsjs/go/ssh/SSH";
+import { credential_entity, ssh as ssh_models } from "../../../wailsjs/go/models";
+import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import { useAssetCredential } from "./useAssetCredential";
+import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
+import {
+  buildSSHConfig,
+  parseSSHConfig,
+  parseSSHPasswordCredentialConfig,
+  SSH_DEFAULTS,
+  type SSHFormState,
+} from "./SSHConfigSection.config";
 
-export interface SSHConfigSectionProps {
-  host: string;
-  setHost: (v: string) => void;
-  port: number;
-  setPort: (v: number) => void;
-  username: string;
-  setUsername: (v: string) => void;
-  authType: string;
-  setAuthType: (v: string) => void;
-  connectionType: "direct" | "jumphost" | "proxy";
-  setConnectionType: (v: "direct" | "jumphost" | "proxy") => void;
-  // Password fields
-  password: string;
-  setPassword: (v: string) => void;
-  encryptedPassword: string;
-  passwordSource: "inline" | "managed";
-  setPasswordSource: (v: "inline" | "managed") => void;
-  passwordCredentialId: number;
-  setPasswordCredentialId: (v: number) => void;
-  managedPasswords: credential_entity.Credential[];
-  // Key fields
-  keySource: "managed" | "file";
-  setKeySource: (v: "managed" | "file") => void;
-  credentialId: number;
-  setCredentialId: (v: number) => void;
-  managedKeys: credential_entity.Credential[];
-  localKeys: ssh_models.LocalSSHKeyInfo[];
-  setLocalKeys: (v: ssh_models.LocalSSHKeyInfo[]) => void;
-  selectedKeyPaths: string[];
-  setSelectedKeyPaths: (v: string[]) => void;
-  privateKeyPassphrase: string;
-  setPrivateKeyPassphrase: (v: string) => void;
-  scanningKeys: boolean;
-  // SSH tunnel (jump host)
-  sshTunnelId: number;
-  setSshTunnelId: (v: number) => void;
-  jumpHostExcludeIds?: number[];
-  // Proxy
-  proxyType: string;
-  setProxyType: (v: string) => void;
-  proxyHost: string;
-  setProxyHost: (v: string) => void;
-  proxyPort: number;
-  setProxyPort: (v: number) => void;
-  proxyUsername: string;
-  setProxyUsername: (v: string) => void;
-  proxyPassword: string;
-  setProxyPassword: (v: string) => void;
-  encryptedProxyPassword: string;
-  editAssetId?: number;
-}
-
-export function SSHConfigSection({
-  host,
-  setHost,
-  port,
-  setPort,
-  username,
-  setUsername,
-  authType,
-  setAuthType,
-  connectionType,
-  setConnectionType,
-  password,
-  setPassword,
-  encryptedPassword,
-  passwordSource,
-  setPasswordSource,
-  passwordCredentialId,
-  setPasswordCredentialId,
-  managedPasswords,
-  keySource,
-  setKeySource,
-  credentialId,
-  setCredentialId,
-  managedKeys,
-  localKeys,
-  setLocalKeys,
-  selectedKeyPaths,
-  setSelectedKeyPaths,
-  privateKeyPassphrase,
-  setPrivateKeyPassphrase,
-  scanningKeys,
-  sshTunnelId,
-  setSshTunnelId,
-  jumpHostExcludeIds,
-  proxyType,
-  setProxyType,
-  proxyHost,
-  setProxyHost,
-  proxyPort,
-  setProxyPort,
-  proxyUsername,
-  setProxyUsername,
-  proxyPassword,
-  setProxyPassword,
-  encryptedProxyPassword,
-  editAssetId,
-}: SSHConfigSectionProps) {
+export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function SSHConfigSection(
+  { editAsset, onValidityChange },
+  ref
+) {
   const { t } = useTranslation();
+  const [state, setState] = useState<SSHFormState>(() => {
+    if (!editAsset) return { ...SSH_DEFAULTS };
+    // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.jump_host_id || 0),
+    // 并参与 connectionType 派生,故传入 parseSSHConfig。
+    return parseSSHConfig(editAsset.Config, editAsset.sshTunnelId || 0);
+  });
+  const patch = (p: Partial<SSHFormState>) => setState((s) => ({ ...s, ...p }));
+  // password-auth 凭据复用 db 族抽象;key-auth ssh_key 凭据 + 本地密钥由本 section 自持。
+  const passwordCredentialConfig = useMemo(
+    () => (editAsset ? parseSSHPasswordCredentialConfig(editAsset.Config) : undefined),
+    [editAsset]
+  );
+  const cred = useAssetCredential(editAsset, passwordCredentialConfig);
+
+  const [managedKeys, setManagedKeys] = useState<credential_entity.Credential[]>([]);
+  const [localKeys, setLocalKeys] = useState<ssh_models.LocalSSHKeyInfo[]>([]);
+  // 挂载即开始扫描,初始 true(避免在 effect 内同步 setState 触发级联渲染)。
+  const [scanningKeys, setScanningKeys] = useState(true);
+
+  // 自加载 ssh_key 凭据列表 + 扫描本地密钥(镜像旧壳 open 时的合并 load)。
+  useEffect(() => {
+    ListCredentialsByType("ssh_key")
+      .then((keys) => setManagedKeys(keys || []))
+      .catch(() => setManagedKeys([]));
+    ListLocalSSHKeys()
+      .then((keys) => setLocalKeys(keys || []))
+      .catch(() => setLocalKeys([]))
+      .finally(() => setScanningKeys(false));
+  }, []);
+
+  // 排除自身,不能把自己选作跳板机 / SSH 隧道。
+  const jumpHostExcludeIds = editAsset?.ID ? [editAsset.ID] : undefined;
+
+  // host 为保存/测试共同必填;上报反应式校验(onValidityChange 为壳 setState,身份稳定)。
+  useEffect(() => {
+    const ok = !!state.host.trim();
+    onValidityChange({ canTest: ok, canSave: ok, saveDisabledReason: ok ? "" : "asset.formMissingHost" });
+  }, [state.host, onValidityChange]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      buildConfig: async (ctx) => {
+        // password-auth 凭据加密;passphrase / proxy 密码:明文优先加密,否则沿用既有密文。
+        const passwordCred = await resolveSaveCredential(cred.value, ctx.encryptPassword);
+        const passphrase = state.privateKeyPassphrase
+          ? await ctx.encryptPassword(state.privateKeyPassphrase)
+          : state.encryptedPrivateKeyPassphrase;
+        const proxyPassword = state.proxyPassword
+          ? await ctx.encryptPassword(state.proxyPassword)
+          : state.encryptedProxyPassword;
+        const configJSON = buildSSHConfig(state, {
+          passwordCred,
+          keyCredentialId: state.credentialId,
+          passphrase,
+          proxyPassword,
+          includeJumpHost: false, // save:隧道写 asset 顶层 sshTunnelId,不入 config.jump_host_id
+        });
+        return {
+          configJSON,
+          sshTunnelId: state.connectionType === "jumphost" && state.sshTunnelId > 0 ? state.sshTunnelId : 0,
+        };
+      },
+      buildTestConfig: async () => {
+        // 测试:passphrase / proxy 密码用明文(无加密),passphrase 缺明文时沿用既有密文;proxy 仅明文。
+        const passwordCred = resolveTestCredential(cred.value);
+        const configJSON = buildSSHConfig(state, {
+          passwordCred,
+          keyCredentialId: state.credentialId,
+          passphrase: state.privateKeyPassphrase || state.encryptedPrivateKeyPassphrase,
+          proxyPassword: state.proxyPassword,
+          includeJumpHost: true, // test:后端从 config.jump_host_id 读隧道
+        });
+        return { assetType: "ssh", configJSON, password: cred.value.password };
+      },
+    }),
+    [state, cred.value]
+  );
 
   return (
     <>
@@ -128,7 +122,10 @@ export function SSHConfigSection({
         {/* Connection type (own label) */}
         <div className="grid gap-2">
           <Label>{t("asset.connectionType")}</Label>
-          <Select value={connectionType} onValueChange={(v) => setConnectionType(v as "direct" | "jumphost" | "proxy")}>
+          <Select
+            value={state.connectionType}
+            onValueChange={(v) => patch({ connectionType: v as "direct" | "jumphost" | "proxy" })}
+          >
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
@@ -141,12 +138,12 @@ export function SSHConfigSection({
         </div>
 
         {/* Jump host selector */}
-        {connectionType === "jumphost" && (
+        {state.connectionType === "jumphost" && (
           <div className="grid gap-2">
             <Label>{t("asset.selectJumpHost")}</Label>
             <AssetSelect
-              value={sshTunnelId}
-              onValueChange={setSshTunnelId}
+              value={state.sshTunnelId}
+              onValueChange={(v) => patch({ sshTunnelId: v })}
               filterType="ssh"
               excludeIds={jumpHostExcludeIds}
               placeholder={t("asset.jumpHostNone")}
@@ -155,12 +152,12 @@ export function SSHConfigSection({
         )}
 
         {/* Proxy config (inline, no nested border since we are already in a block) */}
-        {connectionType === "proxy" && (
+        {state.connectionType === "proxy" && (
           <div className="grid gap-2">
             <div className="grid grid-cols-3 gap-2">
               <div className="grid gap-1">
                 <Label className="text-xs">{t("asset.proxyType")}</Label>
-                <Select value={proxyType} onValueChange={setProxyType}>
+                <Select value={state.proxyType} onValueChange={(v) => patch({ proxyType: v })}>
                   <SelectTrigger className="h-8 text-xs">
                     <SelectValue />
                   </SelectTrigger>
@@ -173,8 +170,8 @@ export function SSHConfigSection({
                 <Label className="text-xs">{t("asset.proxyHost")}</Label>
                 <Input
                   className="h-8 text-xs"
-                  value={proxyHost}
-                  onChange={(e) => setProxyHost(e.target.value)}
+                  value={state.proxyHost}
+                  onChange={(e) => patch({ proxyHost: e.target.value })}
                   placeholder="127.0.0.1"
                 />
               </div>
@@ -183,9 +180,9 @@ export function SSHConfigSection({
                 <Input
                   className="h-8 text-xs [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                   type="number"
-                  value={proxyPort || ""}
+                  value={state.proxyPort || ""}
                   placeholder="1080"
-                  onChange={(e) => setProxyPort(Number(e.target.value))}
+                  onChange={(e) => patch({ proxyPort: Number(e.target.value) })}
                 />
               </div>
             </div>
@@ -194,8 +191,8 @@ export function SSHConfigSection({
                 <Label className="text-xs">{t("asset.proxyUsername")}</Label>
                 <Input
                   className="h-8 text-xs"
-                  value={proxyUsername}
-                  onChange={(e) => setProxyUsername(e.target.value)}
+                  value={state.proxyUsername}
+                  onChange={(e) => patch({ proxyUsername: e.target.value })}
                 />
               </div>
               <div className="grid gap-1">
@@ -203,9 +200,9 @@ export function SSHConfigSection({
                 <Input
                   className="h-8 text-xs"
                   type="password"
-                  value={proxyPassword}
-                  onChange={(e) => setProxyPassword(e.target.value)}
-                  placeholder={encryptedProxyPassword ? t("asset.passwordUnchanged") : ""}
+                  value={state.proxyPassword}
+                  onChange={(e) => patch({ proxyPassword: e.target.value })}
+                  placeholder={state.encryptedProxyPassword ? t("asset.passwordUnchanged") : ""}
                 />
               </div>
             </div>
@@ -216,16 +213,16 @@ export function SSHConfigSection({
         <div className="grid grid-cols-[1fr_120px] gap-3">
           <div className="grid gap-2">
             <Label>{t("asset.host")}</Label>
-            <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="example.com" />
+            <Input value={state.host} onChange={(e) => patch({ host: e.target.value })} placeholder="example.com" />
           </div>
           <div className="grid gap-2">
             <Label>{t("asset.port")}</Label>
             <Input
               className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
               type="number"
-              value={port || ""}
+              value={state.port || ""}
               placeholder="22"
-              onChange={(e) => setPort(Number(e.target.value))}
+              onChange={(e) => patch({ port: Number(e.target.value) })}
             />
           </div>
         </div>
@@ -234,11 +231,11 @@ export function SSHConfigSection({
         <div className="grid grid-cols-2 gap-3">
           <div className="grid gap-2">
             <Label>{t("asset.username")}</Label>
-            <Input value={username} onChange={(e) => setUsername(e.target.value)} />
+            <Input value={state.username} onChange={(e) => patch({ username: e.target.value })} />
           </div>
           <div className="grid gap-2">
             <Label>{t("asset.authType")}</Label>
-            <Select value={authType} onValueChange={setAuthType}>
+            <Select value={state.authType} onValueChange={(v) => patch({ authType: v })}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -251,28 +248,28 @@ export function SSHConfigSection({
         </div>
 
         {/* Password (when auth_type=password) */}
-        {authType === "password" && (
+        {state.authType === "password" && (
           <PasswordSourceField
-            source={passwordSource}
-            onSourceChange={setPasswordSource}
-            password={password}
-            onPasswordChange={setPassword}
-            credentialId={passwordCredentialId}
-            onCredentialIdChange={setPasswordCredentialId}
-            managedPasswords={managedPasswords}
+            source={cred.value.passwordSource}
+            onSourceChange={cred.setPasswordSource}
+            password={cred.value.password}
+            onPasswordChange={cred.setPassword}
+            credentialId={cred.value.passwordCredentialId}
+            onCredentialIdChange={cred.setPasswordCredentialId}
+            managedPasswords={cred.managedPasswords}
             placeholder={t("asset.passwordPlaceholder")}
-            hasExistingPassword={!!encryptedPassword}
-            editAssetId={editAssetId}
-            onUsernameChange={setUsername}
+            hasExistingPassword={!!cred.value.encryptedPassword}
+            editAssetId={editAsset?.ID}
+            onUsernameChange={(v) => patch({ username: v })}
           />
         )}
 
         {/* Key config (inline, no nested border since we are already in a block) */}
-        {authType === "key" && (
+        {state.authType === "key" && (
           <div className="grid gap-3">
             <div className="grid gap-2">
               <Label>{t("asset.keySource")}</Label>
-              <Select value={keySource} onValueChange={(v) => setKeySource(v as "managed" | "file")}>
+              <Select value={state.keySource} onValueChange={(v) => patch({ keySource: v as "managed" | "file" })}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -283,21 +280,22 @@ export function SSHConfigSection({
               </Select>
             </div>
 
-            {keySource === "managed" && (
+            {state.keySource === "managed" && (
               <div className="grid gap-2">
                 <Label>{t("asset.selectKey")}</Label>
                 {managedKeys.length > 0 ? (
                   <Select
-                    value={String(credentialId)}
+                    value={String(state.credentialId)}
                     onValueChange={(v) => {
                       const id = Number(v);
-                      setCredentialId(id);
                       if (id !== 0) {
-                        const cred = managedKeys.find((k) => k.id === id);
-                        if (cred && cred.username) {
-                          setUsername(cred.username);
+                        const credKey = managedKeys.find((k) => k.id === id);
+                        if (credKey && credKey.username) {
+                          patch({ credentialId: id, username: credKey.username });
+                          return;
                         }
                       }
+                      patch({ credentialId: id });
                     }}
                   >
                     <SelectTrigger>
@@ -319,7 +317,7 @@ export function SSHConfigSection({
               </div>
             )}
 
-            {keySource === "file" && (
+            {state.keySource === "file" && (
               <div className="grid gap-2">
                 <Label>{t("asset.discoveredKeys")}</Label>
                 {scanningKeys ? (
@@ -330,7 +328,7 @@ export function SSHConfigSection({
                 ) : localKeys.length > 0 ? (
                   <div className="grid gap-1.5">
                     {localKeys.map((k) => {
-                      const selected = selectedKeyPaths.includes(k.path);
+                      const selected = state.selectedKeyPaths.includes(k.path);
                       return (
                         <label
                           key={k.path}
@@ -341,9 +339,9 @@ export function SSHConfigSection({
                             checked={selected}
                             onChange={() => {
                               if (selected) {
-                                setSelectedKeyPaths(selectedKeyPaths.filter((p) => p !== k.path));
+                                patch({ selectedKeyPaths: state.selectedKeyPaths.filter((p) => p !== k.path) });
                               } else {
-                                setSelectedKeyPaths([...selectedKeyPaths, k.path]);
+                                patch({ selectedKeyPaths: [...state.selectedKeyPaths, k.path] });
                               }
                             }}
                             className="rounded"
@@ -371,7 +369,7 @@ export function SSHConfigSection({
                   <p className="text-xs text-muted-foreground">{t("asset.noLocalKeys")}</p>
                 )}
 
-                {selectedKeyPaths
+                {state.selectedKeyPaths
                   .filter((p) => !localKeys.some((k) => k.path === p))
                   .map((path) => (
                     <div key={path} className="flex items-center gap-2 text-xs px-2 py-1.5 bg-accent rounded">
@@ -381,7 +379,7 @@ export function SSHConfigSection({
                         variant="ghost"
                         size="icon"
                         className="h-5 w-5 shrink-0"
-                        onClick={() => setSelectedKeyPaths(selectedKeyPaths.filter((p2) => p2 !== path))}
+                        onClick={() => patch({ selectedKeyPaths: state.selectedKeyPaths.filter((p2) => p2 !== path) })}
                       >
                         <Trash2 className="h-3 w-3" />
                       </Button>
@@ -396,8 +394,8 @@ export function SSHConfigSection({
                   onClick={async () => {
                     try {
                       const info = await SelectSSHKeyFile();
-                      if (info && !selectedKeyPaths.includes(info.path)) {
-                        setSelectedKeyPaths([...selectedKeyPaths, info.path]);
+                      if (info && !state.selectedKeyPaths.includes(info.path)) {
+                        patch({ selectedKeyPaths: [...state.selectedKeyPaths, info.path] });
                         if (!localKeys.some((k) => k.path === info.path)) {
                           setLocalKeys([...localKeys, info]);
                         }
@@ -412,14 +410,14 @@ export function SSHConfigSection({
                 </Button>
 
                 {/* Passphrase for local key file */}
-                {selectedKeyPaths.length > 0 && (
+                {state.selectedKeyPaths.length > 0 && (
                   <div className="grid gap-1.5 mt-2">
                     <Label className="text-xs">{t("sshKey.passphrase")}</Label>
                     <Input
                       type="password"
                       className="h-8 text-xs"
-                      value={privateKeyPassphrase}
-                      onChange={(e) => setPrivateKeyPassphrase(e.target.value)}
+                      value={state.privateKeyPassphrase}
+                      onChange={(e) => patch({ privateKeyPassphrase: e.target.value })}
                       placeholder={t("sshKey.passphrasePlaceholder")}
                     />
                   </div>
@@ -431,4 +429,4 @@ export function SSHConfigSection({
       </div>
     </>
   );
-}
+});

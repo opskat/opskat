@@ -71,4 +71,16 @@ describe("AssetType Registry", () => {
     expect(getAssetType("kafka")!.canConnectInNewTab).toBe(false);
     expect(getAssetType("k8s")!.canConnectInNewTab).toBe(false);
   });
+
+  it("only ssh exposes the file-manager action (registry-driven, no type-string special-case)", () => {
+    expect(getAssetType("ssh")!.canOpenFileManager).toBe(true);
+    expect(getAssetType("database")!.canOpenFileManager).toBeFalsy();
+    expect(getAssetType("redis")!.canOpenFileManager).toBeFalsy();
+    expect(getAssetType("mongodb")!.canOpenFileManager).toBeFalsy();
+    expect(getAssetType("kafka")!.canOpenFileManager).toBeFalsy();
+    expect(getAssetType("k8s")!.canOpenFileManager).toBeFalsy();
+    expect(getAssetType("serial")!.canOpenFileManager).toBeFalsy();
+    expect(getAssetType("local")!.canOpenFileManager).toBeFalsy();
+    expect(getAssetType("etcd")!.canOpenFileManager).toBeFalsy();
+  });
 });

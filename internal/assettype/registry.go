@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/policy"
 )
 
 // AssetTypeHandler 资产类型处理器接口。
@@ -17,6 +18,9 @@ type AssetTypeHandler interface {
 	SafeView(a *asset_entity.Asset) map[string]any
 	ResolvePassword(ctx context.Context, a *asset_entity.Asset) (string, error)
 	DefaultPolicy() any
+	// PolicyKind 返回该资产类型所用的规范 policyKind(见 entity/policy.PolicyKind*）。
+	// 经 Register 写入 entity/policy 的 asset-kind 注册表,供 ai/policy.ResolvePolicyKind 派生。
+	PolicyKind() string
 	// ValidateCreateArgs 校验 AI 工具创建资产时的必填字段。
 	// 由 handleAddAsset 在 ApplyCreateArgs 之前调用，每种类型自行声明所需字段。
 	ValidateCreateArgs(args map[string]any) error
@@ -39,8 +43,11 @@ var (
 
 func Register(h AssetTypeHandler) {
 	mu.Lock()
-	defer mu.Unlock()
 	registry[h.Type()] = h
+	mu.Unlock()
+	if kind := h.PolicyKind(); kind != "" {
+		policy.RegisterAssetKind(h.Type(), kind)
+	}
 }
 
 func Get(assetType string) (AssetTypeHandler, bool) {

@@ -1,3 +1,4 @@
+import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Button,
@@ -12,80 +13,84 @@ import {
 } from "@opskat/ui";
 import { AssetSelect } from "@/components/asset/AssetSelect";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
-import { credential_entity } from "../../../wailsjs/go/models";
 import { SelectSQLiteFile } from "../../../wailsjs/go/system/System";
+import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import { useAssetCredential } from "./useAssetCredential";
+import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
+import {
+  applyDriverChange,
+  buildDatabaseConfig,
+  driverIcon,
+  parseDatabaseConfig,
+  DATABASE_DEFAULTS,
+  type DatabaseFormState,
+} from "./DatabaseConfigSection.config";
 
-export interface DatabaseConfigSectionProps {
-  host: string;
-  setHost: (v: string) => void;
-  port: number;
-  setPort: (v: number) => void;
-  username: string;
-  setUsername: (v: string) => void;
-  driver: string;
-  database: string;
-  setDatabase: (v: string) => void;
-  sslMode: string;
-  setSslMode: (v: string) => void;
-  tls: boolean;
-  setTls: (v: boolean) => void;
-  readOnly: boolean;
-  setReadOnly: (v: boolean) => void;
-  sshTunnelId: number;
-  setSshTunnelId: (v: number) => void;
-  params: string;
-  setParams: (v: string) => void;
-  path: string;
-  setPath: (v: string) => void;
-  // Password fields
-  password: string;
-  setPassword: (v: string) => void;
-  encryptedPassword: string;
-  passwordSource: "inline" | "managed";
-  setPasswordSource: (v: "inline" | "managed") => void;
-  passwordCredentialId: number;
-  setPasswordCredentialId: (v: number) => void;
-  managedPasswords: credential_entity.Credential[];
-  editAssetId?: number;
-}
-
-export function DatabaseConfigSection({
-  host,
-  setHost,
-  port,
-  setPort,
-  username,
-  setUsername,
-  driver,
-  database,
-  setDatabase,
-  sslMode,
-  setSslMode,
-  tls,
-  setTls,
-  readOnly,
-  setReadOnly,
-  sshTunnelId,
-  setSshTunnelId,
-  params,
-  setParams,
-  path,
-  setPath,
-  password,
-  setPassword,
-  encryptedPassword,
-  passwordSource,
-  setPasswordSource,
-  passwordCredentialId,
-  setPasswordCredentialId,
-  managedPasswords,
-  editAssetId,
-}: DatabaseConfigSectionProps) {
+export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function DatabaseConfigSection(
+  { editAsset, onValidityChange, onIconChange },
+  ref
+) {
   const { t } = useTranslation();
+  const [state, setState] = useState<DatabaseFormState>(() => {
+    if (!editAsset) return { ...DATABASE_DEFAULTS };
+    const parsed = parseDatabaseConfig(editAsset.Config);
+    // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.ssh_asset_id || 0)。
+    return { ...parsed, sshTunnelId: editAsset.sshTunnelId || parsed.sshTunnelId };
+  });
+  const patch = (p: Partial<DatabaseFormState>) => setState((s) => ({ ...s, ...p }));
+  // 凭据子状态:sqlite 无凭据,但 hook 始终持有;build 在 sqlite 分支忽略 cred。
+  const cred = useAssetCredential(editAsset);
+
+  const isSqlite = state.driver === "sqlite";
+
+  // driver 切换:section 自有字段复位(纯函数)+ 壳 icon 副作用(onIconChange)。
+  const handleDriverChange = (newDriver: string) => {
+    setState((s) => applyDriverChange(s, newDriver));
+    onIconChange?.(driverIcon(newDriver));
+  };
+
+  // 保存/测试必填:sqlite→path;非 sqlite→host;上报反应式校验(onValidityChange 为壳 setState,身份稳定)。
+  useEffect(() => {
+    const ok = isSqlite ? !!state.path.trim() : !!state.host.trim();
+    const saveDisabledReason = ok ? "" : isSqlite ? "asset.formMissingPath" : "asset.formMissingHost";
+    onValidityChange({ canTest: ok, canSave: ok, saveDisabledReason });
+  }, [isSqlite, state.path, state.host, onValidityChange]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      buildConfig: async (ctx) => {
+        const frag = await resolveSaveCredential(cred.value, ctx.encryptPassword);
+        return { configJSON: buildDatabaseConfig(state, frag), sshTunnelId: state.sshTunnelId };
+      },
+      buildTestConfig: async () => ({
+        assetType: "database",
+        configJSON: buildDatabaseConfig(state, resolveTestCredential(cred.value)),
+        password: cred.value.password,
+      }),
+    }),
+    [state, cred.value]
+  );
 
   return (
     <>
-      {driver === "sqlite" ? (
+      {/* Database Driver (before host) */}
+      <div className="grid gap-2">
+        <Label>{t("asset.driver")}</Label>
+        <Select value={state.driver} onValueChange={handleDriverChange}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="mysql">{t("asset.driverMySQL")}</SelectItem>
+            <SelectItem value="postgresql">{t("asset.driverPostgreSQL")}</SelectItem>
+            <SelectItem value="mssql">{t("asset.driverMSSQL")}</SelectItem>
+            <SelectItem value="sqlite">{t("asset.driverSQLite")}</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {isSqlite ? (
         <>
           {/* SQLite path field */}
           <div className="grid gap-3 border rounded-lg p-3">
@@ -93,8 +98,8 @@ export function DatabaseConfigSection({
               <Label>{t("asset.sqliteFilePath")}</Label>
               <div className="flex gap-2">
                 <Input
-                  value={path}
-                  onChange={(e) => setPath(e.target.value)}
+                  value={state.path}
+                  onChange={(e) => patch({ path: e.target.value })}
                   placeholder={t("asset.sqliteFilePathPlaceholder")}
                 />
                 <Button
@@ -102,7 +107,7 @@ export function DatabaseConfigSection({
                   variant="secondary"
                   onClick={async () => {
                     const selected = await SelectSQLiteFile();
-                    if (selected) setPath(selected);
+                    if (selected) patch({ path: selected });
                   }}
                 >
                   {t("asset.sqliteFilePathBrowse")}
@@ -115,8 +120,8 @@ export function DatabaseConfigSection({
           <div className="grid gap-2">
             <Label>{t("asset.params")}</Label>
             <Input
-              value={params}
-              onChange={(e) => setParams(e.target.value)}
+              value={state.params}
+              onChange={(e) => patch({ params: e.target.value })}
               placeholder={t("asset.paramsPlaceholder")}
             />
           </div>
@@ -124,7 +129,7 @@ export function DatabaseConfigSection({
           {/* Read Only */}
           <div className="flex items-center justify-between">
             <Label>{t("asset.readOnly")}</Label>
-            <Switch checked={readOnly} onCheckedChange={setReadOnly} />
+            <Switch checked={state.readOnly} onCheckedChange={(v) => patch({ readOnly: v })} />
           </div>
         </>
       ) : (
@@ -135,16 +140,16 @@ export function DatabaseConfigSection({
             <div className="grid grid-cols-[1fr_120px] gap-3">
               <div className="grid gap-2">
                 <Label>{t("asset.host")}</Label>
-                <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="example.com" />
+                <Input value={state.host} onChange={(e) => patch({ host: e.target.value })} placeholder="example.com" />
               </div>
               <div className="grid gap-2">
                 <Label>{t("asset.port")}</Label>
                 <Input
                   className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                   type="number"
-                  value={port || ""}
-                  placeholder={driver === "postgresql" ? "5432" : driver === "mssql" ? "1433" : "3306"}
-                  onChange={(e) => setPort(Number(e.target.value))}
+                  value={state.port || ""}
+                  placeholder={state.driver === "postgresql" ? "5432" : state.driver === "mssql" ? "1433" : "3306"}
+                  onChange={(e) => patch({ port: Number(e.target.value) })}
                 />
               </div>
             </div>
@@ -152,21 +157,21 @@ export function DatabaseConfigSection({
             {/* Username */}
             <div className="grid gap-2">
               <Label>{t("asset.username")}</Label>
-              <Input value={username} onChange={(e) => setUsername(e.target.value)} />
+              <Input value={state.username} onChange={(e) => patch({ username: e.target.value })} />
             </div>
 
             {/* Password */}
             <PasswordSourceField
-              source={passwordSource}
-              onSourceChange={setPasswordSource}
-              password={password}
-              onPasswordChange={setPassword}
-              credentialId={passwordCredentialId}
-              onCredentialIdChange={setPasswordCredentialId}
-              managedPasswords={managedPasswords}
-              hasExistingPassword={!!encryptedPassword}
-              editAssetId={editAssetId}
-              onUsernameChange={setUsername}
+              source={cred.value.passwordSource}
+              onSourceChange={cred.setPasswordSource}
+              password={cred.value.password}
+              onPasswordChange={cred.setPassword}
+              credentialId={cred.value.passwordCredentialId}
+              onCredentialIdChange={cred.setPasswordCredentialId}
+              managedPasswords={cred.managedPasswords}
+              hasExistingPassword={!!cred.value.encryptedPassword}
+              editAssetId={editAsset?.ID}
+              onUsernameChange={(v) => patch({ username: v })}
             />
           </div>
 
@@ -174,17 +179,17 @@ export function DatabaseConfigSection({
           <div className="grid gap-2">
             <Label>{t("asset.database")}</Label>
             <Input
-              value={database}
-              onChange={(e) => setDatabase(e.target.value)}
+              value={state.database}
+              onChange={(e) => patch({ database: e.target.value })}
               placeholder={t("asset.databasePlaceholder")}
             />
           </div>
 
           {/* SSL Mode (PostgreSQL only) */}
-          {driver === "postgresql" && (
+          {state.driver === "postgresql" && (
             <div className="grid gap-2">
               <Label>{t("asset.sslMode")}</Label>
-              <Select value={sslMode} onValueChange={setSslMode}>
+              <Select value={state.sslMode} onValueChange={(v) => patch({ sslMode: v })}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -199,10 +204,10 @@ export function DatabaseConfigSection({
           )}
 
           {/* TLS (MySQL + MSSQL) */}
-          {(driver === "mysql" || driver === "mssql") && (
+          {(state.driver === "mysql" || state.driver === "mssql") && (
             <div className="flex items-center justify-between">
               <Label>TLS</Label>
-              <Switch checked={tls} onCheckedChange={setTls} />
+              <Switch checked={state.tls} onCheckedChange={(v) => patch({ tls: v })} />
             </div>
           )}
 
@@ -210,8 +215,8 @@ export function DatabaseConfigSection({
           <div className="grid gap-2">
             <Label>{t("asset.params")}</Label>
             <Input
-              value={params}
-              onChange={(e) => setParams(e.target.value)}
+              value={state.params}
+              onChange={(e) => patch({ params: e.target.value })}
               placeholder={t("asset.paramsPlaceholder")}
             />
           </div>
@@ -219,15 +224,15 @@ export function DatabaseConfigSection({
           {/* Read Only */}
           <div className="flex items-center justify-between">
             <Label>{t("asset.readOnly")}</Label>
-            <Switch checked={readOnly} onCheckedChange={setReadOnly} />
+            <Switch checked={state.readOnly} onCheckedChange={(v) => patch({ readOnly: v })} />
           </div>
 
           {/* SSH Tunnel */}
           <div className="grid gap-2">
             <Label>{t("asset.sshTunnel")}</Label>
             <AssetSelect
-              value={sshTunnelId}
-              onValueChange={setSshTunnelId}
+              value={state.sshTunnelId}
+              onValueChange={(v) => patch({ sshTunnelId: v })}
               filterType="ssh"
               placeholder={t("asset.sshTunnelNone")}
             />
@@ -236,4 +241,4 @@ export function DatabaseConfigSection({
       )}
     </>
   );
-}
+});
