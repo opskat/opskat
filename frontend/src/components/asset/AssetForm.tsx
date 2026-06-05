@@ -892,7 +892,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setPasswordCredentialId(0);
     setIcon(newType === "database" ? DEFAULT_ICONS[driver] || "mysql" : DEFAULT_ICONS[newType] || "server");
     if (newType === "k8s") setHost("");
-    if (newType === "serial") setHost("");
     if (newType === "etcd") setHost("");
   };
 
@@ -2059,7 +2058,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               assetType !== "mongodb" &&
               assetType !== "kafka" &&
               assetType !== "k8s" &&
-              assetType !== "serial" &&
               assetType !== "etcd" &&
               (() => {
                 const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
