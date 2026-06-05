@@ -13,7 +13,7 @@ Contributor docs describe a living codebase, so two classes of problem recur:
 
 **Rule of thumb: if you can't `git grep` it in committed code on this branch, don't write it.** Verify with git-aware commands (`git grep` / `git ls-files` / `git ls-tree`) — **not** bare `rg` / `ls`, which also match **untracked** files in the working tree, so feature-branch code you have locally but haven't committed to `main` masquerades as "shipped".
 
-> ⚠️ opskat-specific: `docs/DEVELOP.md`, `docs/testing-debugging-guide.md`, and this file (`docs/DOC-MAINTENANCE.md`) are currently still **untracked**. When adding links / writing an index for the doc set, first confirm they have been `git add`ed — otherwise a bare `ls` sees them but `git ls-files` doesn't, and CI / anyone cloning won't get them.
+> ⚠️ When adding a new doc, confirm it has been `git add`ed before linking it into the set — otherwise a bare `ls` sees it but `git ls-files` doesn't, and CI / anyone cloning won't get it.
 
 ## Doc set & responsibilities (don't duplicate — cross-link)
 
@@ -22,6 +22,7 @@ Contributor docs describe a living codebase, so two classes of problem recur:
 | [`../AGENTS.md`](../AGENTS.md) | Single source of truth for engineering **principles** + the architecture quick-map (SOLID, Fix policy — TDD, Reuse first, defensive code). `CLAUDE.md` only `@import`s it. |
 | [`../CLAUDE.md`](../CLAUDE.md) | Just a one-line `@AGENTS.md` pointer — **don't write content here**; change principles in `AGENTS.md`. |
 | [`./DEVELOP.md`](./DEVELOP.md) | The concrete "how to": common commands, architecture / subsystem map, commit / CI / testing conventions, logging rules for key flows, generated-files list. |
+| [`./adding-an-asset-type.md`](./adding-an-asset-type.md) | Step-by-step how-to for adding a new built-in asset type: the backend `AssetTypeHandler` + frontend `registerAssetType` seams, what's register-based vs still requires editing shared code (query/terminal/AI-mention couplings). |
 | [`./testing-debugging-guide.md`](./testing-debugging-guide.md) | Feature verification / debugging: reading logs (`logs/opskat.log`), querying the DB (`audit_logs` in `opskat.db`), headless functional testing with `opsctl` (for agents, in English). |
 | [`./DOC-MAINTENANCE.md`](./DOC-MAINTENANCE.md) | This guide: doc-set organization rules + fact-check / anti-drift discipline. |
 | `./superpowers/{plans,specs}/` | Date-named design / plan **archives**. A snapshot of one piece of work at the time, **not** current truth — don't backfill "current state" from here. |

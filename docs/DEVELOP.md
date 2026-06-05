@@ -52,7 +52,7 @@ main.go → internal/app/ (Wails bindings, IPC boundary)
 
 **Key subsystems:**
 - `internal/ai/` — provider abstraction (Anthropic/OpenAI), tool registry, conversation runner, audit. AI tools live in `internal/ai/tool/`; the conversation runner in `internal/ai/runner/`. Per-protocol policy checkers live in `internal/ai/policy/`: SQL in `query_policy.go`, plus `k8s_policy.go` / `kafka_policy.go` / `mongo_policy.go` / `redis_policy.go`; shell-command rules in `command_rule.go` / `command_shell.go`.
-- `internal/assettype/` — per-asset adapters (ssh/database/redis/mongodb/kafka/k8s/serial/etcd) wired through `registry.go`. New asset types plug in here, not by hardcoding type strings.
+- `internal/assettype/` — per-asset adapters wired through `registry.go` (enumerate the set with `git grep "Register(&" -- internal/assettype/*.go`). New asset types plug in here, not by hardcoding type strings — full end-to-end how-to in [adding-an-asset-type.md](adding-an-asset-type.md).
 - `internal/sshpool/`, `internal/connpool/` — SSH pool (Unix socket proxy for opsctl); DB/Redis tunnels.
 - `internal/approval/` — Unix-socket approval flow between desktop app and opsctl.
 - `internal/bootstrap/` — DB, credentials, migrations, auth tokens, logger.
