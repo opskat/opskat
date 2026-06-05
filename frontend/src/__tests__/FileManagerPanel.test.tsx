@@ -7,7 +7,7 @@ import { useTerminalStore, type TerminalDirectorySyncState } from "../stores/ter
 import { useSFTPStore, type SFTPTransfer } from "../stores/sftpStore";
 import { useExternalEditStore } from "../stores/externalEditStore";
 import { type ExternalEditMergePrepareResult, type ExternalEditSession } from "../lib/externalEditApi";
-import { ChangeSSHDirectory, SFTPListDir, SFTPRename } from "../../wailsjs/go/ssh/SSH";
+import { ChangeSSHDirectory, SFTPListDir, SFTPRename, SFTPUpload, SFTPUploadDir } from "../../wailsjs/go/ssh/SSH";
 import { OpenExternalEdit, PrepareExternalEditMerge } from "../../wailsjs/go/external_edit/ExternalEdit";
 
 const { toastError, toastSuccess } = vi.hoisted(() => ({
@@ -288,10 +288,17 @@ describe("FileManagerPanel", () => {
 
     useTerminalStore.getState().setSessionSyncState("s1", makeSyncState({ cwd: "/srv/releases" }));
 
-    await user.click(screen.getByRole("button", { name: "sftp.sync.panelFromTerminal" }));
+    await user.click(screen.getByRole("button", { name: "sftp.sync.followShort" }));
+    await user.click(await screen.findByRole("menuitemcheckbox", { name: "sftp.sync.panelFromTerminal" }));
 
     await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/releases"));
     expect(useSFTPStore.getState().fileManagerPaths.tab1).toBe("/srv/releases");
+
+    await user.click(screen.getByRole("button", { name: "sftp.sync.followShort" }));
+    expect(await screen.findByRole("menuitemcheckbox", { name: "sftp.sync.panelFromTerminal" })).toHaveAttribute(
+      "aria-checked",
+      "true"
+    );
   });
 
   it("changes the active terminal directory to the current file manager path", async () => {
@@ -301,9 +308,46 @@ describe("FileManagerPanel", () => {
     await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app"));
     vi.clearAllMocks();
 
-    await user.click(screen.getByRole("button", { name: "sftp.sync.terminalFromPanel" }));
+    await user.click(screen.getByRole("button", { name: "sftp.sync.followShort" }));
+    await user.click(await screen.findByRole("menuitemcheckbox", { name: "sftp.sync.terminalFromPanel" }));
 
     expect(ChangeSSHDirectory).toHaveBeenCalledWith("s1", "/srv/app");
+
+    await user.click(screen.getByRole("button", { name: "sftp.sync.followShort" }));
+    expect(await screen.findByRole("menuitemcheckbox", { name: "sftp.sync.terminalFromPanel" })).toHaveAttribute(
+      "aria-checked",
+      "true"
+    );
+  });
+
+  it("starts file and folder uploads from the file manager status bar", async () => {
+    const user = userEvent.setup();
+    vi.mocked(SFTPUpload).mockResolvedValue("upload-file");
+    vi.mocked(SFTPUploadDir).mockResolvedValue("upload-folder");
+
+    render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app"));
+
+    const statusBar = screen.getByTestId("sftp-status-bar");
+    await user.click(within(statusBar).getByRole("button", { name: "sftp.uploadTo" }));
+    await user.click(await screen.findByRole("menuitem", { name: "sftp.upload" }));
+    expect(SFTPUpload).toHaveBeenCalledWith("s1", "/srv/app/");
+
+    await user.click(within(statusBar).getByRole("button", { name: "sftp.uploadTo" }));
+    await user.click(await screen.findByRole("menuitem", { name: "sftp.uploadDir" }));
+    expect(SFTPUploadDir).toHaveBeenCalledWith("s1", "/srv/app/");
+  });
+
+  it("opens the new folder dialog from the file manager status bar", async () => {
+    const user = userEvent.setup();
+    render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app"));
+
+    await user.click(within(screen.getByTestId("sftp-status-bar")).getByRole("button", { name: "sftp.newFolder" }));
+
+    expect(await screen.findByText("sftp.newFolder")).toBeInTheDocument();
   });
 
   it("keeps panel navigation aligned with the terminal when follow mode is enabled", async () => {
@@ -317,6 +361,13 @@ describe("FileManagerPanel", () => {
     render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
 
     await waitFor(() => expect(screen.getByText("logs")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "sftp.sync.followShort" })).toHaveTextContent("sftp.sync.followActive");
+    await user.click(screen.getByRole("button", { name: "sftp.sync.followShort" }));
+    expect(await screen.findByRole("menuitemcheckbox", { name: "sftp.sync.followToggle" })).toHaveAttribute(
+      "aria-checked",
+      "true"
+    );
+    await user.keyboard("{Escape}");
     vi.clearAllMocks();
 
     await user.dblClick(screen.getByText("logs"));
@@ -333,7 +384,8 @@ describe("FileManagerPanel", () => {
 
     render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
 
-    await user.click(screen.getByRole("button", { name: "sftp.sync.followToggle" }));
+    await user.click(screen.getByRole("button", { name: "sftp.sync.followShort" }));
+    await user.click(await screen.findByRole("menuitemcheckbox", { name: "sftp.sync.followToggle" }));
 
     expect(toastError).toHaveBeenCalledWith("sftp.sync.busy");
     expect(useTerminalStore.getState().tabData.tab1.directoryFollowMode).toBe("off");

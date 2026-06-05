@@ -1532,10 +1532,11 @@
       "approximate": "(approx)"
     },
     "sync": {
-      "panelFromTerminal": "Sync file manager to terminal directory",
-      "terminalFromPanel": "Change terminal directory to current file manager directory",
-      "followToggle": "Keep terminal and file manager directories in sync for this tab",
+      "panelFromTerminal": "Panel ← Terminal",
+      "terminalFromPanel": "Terminal ← Panel",
+      "followToggle": "Auto follow",
       "followShort": "Sync",
+      "followActive": "Following",
       "markerOverflow": "Directory sync marker output was too large",
       "invalidTarget": "Choose a directory before syncing",
       "sessionClosed": "The terminal session was closed",

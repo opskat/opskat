@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Upload } from "lucide-react";
+import { AlertTriangle, FolderPlus, FolderUp, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
 import {
@@ -12,6 +12,10 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
 } from "@opskat/ui";
 import { SFTPCreateFile, SFTPDelete, SFTPGetwd, SFTPMkdir, SFTPPaste, SFTPRename } from "../../../wailsjs/go/ssh/SSH";
 import { sftp_svc } from "../../../wailsjs/go/models";
@@ -28,7 +32,7 @@ import { ExternalEditPendingDialog, type ExternalEditPendingItem } from "./exter
 import { FileList } from "./file-manager/FileList";
 import { FloatingMenu } from "./file-manager/FloatingMenu";
 import { NameDialog } from "./file-manager/NameDialog";
-import { PathToolbar } from "./file-manager/PathToolbar";
+import { PathToolbar, type DirectorySyncMenuMode } from "./file-manager/PathToolbar";
 import { PermissionDialog } from "./file-manager/PermissionDialog";
 import { PropertiesDialog } from "./file-manager/PropertiesDialog";
 import { TransferSection } from "./file-manager/TransferSection";
@@ -138,6 +142,7 @@ export function FileManagerPanel({
   const [mergePrepareErrors, setMergePrepareErrors] = useState<Record<string, string>>({});
   const [preparedMergeResult, setPreparedMergeResult] = useState<ExternalEditMergePrepareResult | null>(null);
   const [pendingDialogOpen, setPendingDialogOpen] = useState(false);
+  const [activeSyncMode, setActiveSyncMode] = useState<DirectorySyncMenuMode>(null);
 
   const startUpload = useSFTPStore((s) => s.startUpload);
   const startUploadDir = useSFTPStore((s) => s.startUploadDir);
@@ -349,6 +354,21 @@ export function FileManagerPanel({
       .then((home) => navigateToPath(home || "/"))
       .catch(() => navigateToPath("/"));
   }, [navigateToPath, sessionId]);
+
+  const handleSyncPanelFromTerminal = useCallback(async () => {
+    const synced = await syncPanelFromTerminal();
+    if (synced) setActiveSyncMode("panel-from-terminal");
+  }, [syncPanelFromTerminal]);
+
+  const handleSyncTerminalToCurrentPath = useCallback(async () => {
+    const synced = await syncTerminalToPath(currentPathRef.current);
+    if (synced) setActiveSyncMode("terminal-from-panel");
+  }, [currentPathRef, syncTerminalToPath]);
+
+  const handleFollowToggle = useCallback(async () => {
+    await toggleFollowMode();
+    setActiveSyncMode((current) => (directoryFollowMode === "always" ? null : current));
+  }, [directoryFollowMode, toggleFollowMode]);
 
   const handleDelete = useCallback(async () => {
     if (!deleteTarget) return;
@@ -711,6 +731,7 @@ export function FileManagerPanel({
 
   const totalWidth = width + HANDLE_PX;
   const selectedTotalSize = selectedEntries.reduce((sum, entry) => sum + (entry.isDir ? 0 : entry.size), 0);
+  const uploadTargetDir = currentPath.endsWith("/") ? currentPath : currentPath + "/";
 
   return (
     <>
@@ -741,17 +762,17 @@ export function FileManagerPanel({
               </div>
             )}
             <PathToolbar
+              activeSyncMode={activeSyncMode}
               currentPath={currentPath}
               directoryFollowMode={directoryFollowMode}
-              onFollowToggle={() => void toggleFollowMode()}
+              onFollowToggle={() => void handleFollowToggle()}
               onGoHome={goHome}
               onGoUp={goUp}
               onPathInputChange={setPathInput}
               onPathSubmit={(nextPath) => void navigateToPath(nextPath)}
               onRefresh={() => void loadDir(currentPathRef.current)}
-              onNewFolder={() => setNameDialog("folder")}
-              onSyncPanelFromTerminal={() => void syncPanelFromTerminal()}
-              onSyncTerminalToPath={() => void syncTerminalToPath(currentPath)}
+              onSyncPanelFromTerminal={() => void handleSyncPanelFromTerminal()}
+              onSyncTerminalToPath={() => void handleSyncTerminalToCurrentPath()}
               paneConnected={paneConnected}
               pathInput={pathInput}
             />
@@ -812,14 +833,46 @@ export function FileManagerPanel({
               selected={selected}
               setSelected={setSelected}
             />
-            <div className="border-t px-2 py-1 text-[11px] text-muted-foreground">
-              {selected.length > 1
-                ? t("sftp.selectedItems", { count: selected.length, size: formatBytes(selectedTotalSize) })
-                : clipboard?.items.length
-                  ? clipboard.mode === "cut"
-                    ? t("sftp.clipboardCut", { count: clipboard.items.length })
-                    : t("sftp.clipboardCopy", { count: clipboard.items.length })
-                  : t("sftp.ready")}
+            <div
+              className="flex items-center justify-between gap-2 border-t px-2 py-1 text-[11px] text-muted-foreground"
+              data-testid="sftp-status-bar"
+            >
+              <span className="min-w-0 truncate">
+                {selected.length > 1
+                  ? t("sftp.selectedItems", { count: selected.length, size: formatBytes(selectedTotalSize) })
+                  : clipboard?.items.length
+                    ? clipboard.mode === "cut"
+                      ? t("sftp.clipboardCut", { count: clipboard.items.length })
+                      : t("sftp.clipboardCopy", { count: clipboard.items.length })
+                    : t("sftp.ready")}
+              </span>
+              <span className="flex shrink-0 items-center gap-0.5">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon-xs" title={t("sftp.uploadTo")} aria-label={t("sftp.uploadTo")}>
+                      <Upload className="h-3.5 w-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => void startUpload(transferTarget, uploadTargetDir)}>
+                      <Upload className="h-4 w-4" />
+                      {t("sftp.upload")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => void startUploadDir(transferTarget, uploadTargetDir)}>
+                      <FolderUp className="h-4 w-4" />
+                      {t("sftp.uploadDir")}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={() => setNameDialog("folder")}
+                  title={t("sftp.newFolder")}
+                >
+                  <FolderPlus className="h-3.5 w-3.5" />
+                </Button>
+              </span>
             </div>
             <TransferSection tabId={tabId} transfers={tabTransfers} />
           </div>
