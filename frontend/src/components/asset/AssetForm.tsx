@@ -816,7 +816,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setPasswordCredentialId(0);
     setIcon(newType === "database" ? DEFAULT_ICONS[driver] || "mysql" : DEFAULT_ICONS[newType] || "server");
     if (newType === "k8s") setHost("");
-    if (newType === "etcd") setHost("");
   };
 
   const handleDriverChange = (newDriver: string) => {
@@ -1473,8 +1472,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       assetType === "database" ||
       assetType === "redis" ||
       assetType === "mongodb" ||
-      assetType === "kafka" ||
-      assetType === "etcd";
+      assetType === "kafka";
 
   const isTestConnectionDisabled =
     testing ||
@@ -1869,7 +1867,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               assetType !== "mongodb" &&
               assetType !== "kafka" &&
               assetType !== "k8s" &&
-              assetType !== "etcd" &&
               (() => {
                 const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
                 if (!extInfo) return null;
