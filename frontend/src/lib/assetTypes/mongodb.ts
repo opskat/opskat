@@ -1,6 +1,7 @@
 import { MongodbIcon } from "@/components/asset/brand-icons";
 import { registerAssetType } from "./_register";
 import { MongoDBDetailInfoCard } from "@/components/asset/detail/MongoDBDetailInfoCard";
+import { MongoDBConfigSection } from "@/components/asset/MongoDBConfigSection";
 
 registerAssetType({
   type: "mongodb",
@@ -12,6 +13,8 @@ registerAssetType({
   canConnectInNewTab: false,
   connectAction: "query",
   DetailInfoCard: MongoDBDetailInfoCard,
+  ConfigSection: MongoDBConfigSection,
+  testable: true,
   policy: {
     policyType: "mongo",
     titleKey: "asset.mongoPolicy",

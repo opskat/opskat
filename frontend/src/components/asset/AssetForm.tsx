@@ -31,7 +31,6 @@ import { ListLocalSSHKeys } from "../../../wailsjs/go/ssh/SSH";
 import { ssh as ssh_models } from "../../../wailsjs/go/models";
 import { SSHConfigSection } from "@/components/asset/SSHConfigSection";
 import { DatabaseConfigSection } from "@/components/asset/DatabaseConfigSection";
-import { MongoDBConfigSection } from "@/components/asset/MongoDBConfigSection";
 import {
   KafkaConfigSection,
   type KafkaCompanionAuthForm,
@@ -96,20 +95,6 @@ interface DatabaseConfig {
   read_only?: boolean;
   ssh_asset_id?: number;
   path?: string;
-}
-
-interface MongoDBConfig {
-  connection_uri?: string;
-  host?: string;
-  port?: number;
-  replica_set?: string;
-  username?: string;
-  password?: string;
-  credential_id?: number;
-  database?: string;
-  auth_source?: string;
-  tls?: boolean;
-  ssh_asset_id?: number;
 }
 
 interface KafkaConfig {
@@ -339,14 +324,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const [sslMode, setSslMode] = useState("disable");
   const [readOnly, setReadOnly] = useState(false);
   const [params, setParams] = useState("");
-  // TLS toggle shared by database / mongodb / kafka
+  // TLS toggle shared by database / kafka
   const [tls, setTls] = useState(false);
-
-  // MongoDB fields
-  const [mongoConnectionMode, setMongoConnectionMode] = useState<"manual" | "uri">("manual");
-  const [connectionURI, setConnectionURI] = useState("");
-  const [replicaSet, setReplicaSet] = useState("");
-  const [authSource, setAuthSource] = useState("");
 
   // Kafka fields
   const [kafkaBrokersText, setKafkaBrokersText] = useState("");
@@ -425,8 +404,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           loadSSHConfig(editAsset);
         } else if (editType === "database") {
           loadDatabaseConfig(editAsset);
-        } else if (editType === "mongodb") {
-          loadMongoDBConfig(editAsset);
         } else if (editType === "kafka") {
           loadKafkaConfig(editAsset);
         } else if (editType === "k8s") {
@@ -451,7 +428,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         resetSharedFields("ssh");
         resetSSHFields();
         resetDatabaseFields();
-        resetMongoDBFields();
         resetKafkaFields();
         resetK8sFields();
         setExtConfig({});
@@ -540,42 +516,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     } catch {
       resetSharedFields("database");
       resetDatabaseFields();
-    }
-  };
-
-  const loadMongoDBConfig = (asset: asset_entity.Asset) => {
-    try {
-      const cfg: MongoDBConfig = JSON.parse(asset.Config || "{}");
-      if (cfg.connection_uri) {
-        setMongoConnectionMode("uri");
-        setConnectionURI(cfg.connection_uri);
-      } else {
-        setMongoConnectionMode("manual");
-        setConnectionURI("");
-      }
-      setHost(cfg.host || "");
-      setPort(cfg.port || 27017);
-      setUsername(cfg.username || "");
-      setReplicaSet(cfg.replica_set || "");
-      setAuthSource(cfg.auth_source || "");
-      setDatabase(cfg.database || "");
-      setTls(cfg.tls || false);
-      setSshTunnelId(asset.sshTunnelId || cfg.ssh_asset_id || 0);
-
-      if (cfg.credential_id) {
-        setPasswordSource("managed");
-        setPasswordCredentialId(cfg.credential_id);
-        setEncryptedPassword("");
-        setPassword("");
-      } else {
-        setPasswordSource("inline");
-        setPasswordCredentialId(0);
-        setEncryptedPassword(cfg.password || "");
-        setPassword("");
-      }
-    } catch {
-      resetSharedFields("mongodb");
-      resetMongoDBFields();
     }
   };
 
@@ -681,16 +621,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setTls(false);
     setReadOnly(false);
     setParams("");
-  };
-
-  // MongoDB-exclusive fields only
-  const resetMongoDBFields = () => {
-    setMongoConnectionMode("manual");
-    setConnectionURI("");
-    setReplicaSet("");
-    setAuthSource("");
-    setDatabase("");
-    setTls(false);
   };
 
   const resetKafkaFields = () => {
@@ -867,37 +797,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setTesting(true);
     try {
       await TestAssetConnection(testId, "database", JSON.stringify(cfg), password);
-      if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
-    } catch (e) {
-      if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
-    } finally {
-      if (activeTestIdRef.current === testId) {
-        activeTestIdRef.current = null;
-        setTesting(false);
-      }
-    }
-  };
-
-  const handleTestMongoDBConnection = async () => {
-    const cfg: MongoDBConfig = {};
-    if (mongoConnectionMode === "uri" && connectionURI) {
-      cfg.connection_uri = connectionURI;
-    } else {
-      cfg.host = host;
-      cfg.port = port;
-    }
-    if (username) cfg.username = username;
-    if (replicaSet) cfg.replica_set = replicaSet;
-    if (authSource) cfg.auth_source = authSource;
-    if (database) cfg.database = database;
-    if (tls) cfg.tls = true;
-    if (sshTunnelId > 0) cfg.ssh_asset_id = sshTunnelId;
-    applyTestPasswordSource(cfg);
-    const testId = newTestId();
-    activeTestIdRef.current = testId;
-    setTesting(true);
-    try {
-      await TestAssetConnection(testId, "mongodb", JSON.stringify(cfg), password);
       if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
     } catch (e) {
       if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
@@ -1216,27 +1115,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       if (readOnly) dbConfig.read_only = true;
       if (params) dbConfig.params = params;
       config = JSON.stringify(dbConfig);
-    } else if (assetType === "mongodb") {
-      const mongoConfig: MongoDBConfig = {};
-      if (mongoConnectionMode === "uri" && connectionURI) {
-        mongoConfig.connection_uri = connectionURI;
-      } else {
-        mongoConfig.host = host;
-        mongoConfig.port = port;
-      }
-      if (username) mongoConfig.username = username;
-      if (passwordSource === "managed" && passwordCredentialId > 0) {
-        mongoConfig.credential_id = passwordCredentialId;
-      } else {
-        const encrypted = await encryptPasswordValue();
-        if (encrypted === undefined) return;
-        if (encrypted) mongoConfig.password = encrypted;
-      }
-      if (replicaSet) mongoConfig.replica_set = replicaSet;
-      if (authSource) mongoConfig.auth_source = authSource;
-      if (database) mongoConfig.database = database;
-      if (tls) mongoConfig.tls = true;
-      config = JSON.stringify(mongoConfig);
     } else if (assetType === "kafka") {
       if (!validateKafkaCompanions()) return;
       const kafkaConfig = buildKafkaConfig();
@@ -1341,11 +1219,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         ? kafkaBrokers().length === 0
         : assetType === "database" && driver === "sqlite"
           ? !path
-          : assetType !== "mongodb"
-            ? !host
-            : mongoConnectionMode === "uri"
-              ? !connectionURI
-              : !host);
+          : !host);
 
   const saveDisabledReason = !name.trim()
     ? "asset.formMissingName"
@@ -1357,15 +1231,11 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           ? "asset.formMissingHost"
           : assetType === "database" && driver !== "sqlite" && !host.trim()
             ? "asset.formMissingHost"
-            : assetType === "mongodb" && mongoConnectionMode === "manual" && !host.trim()
-              ? "asset.formMissingHost"
-              : assetType === "mongodb" && mongoConnectionMode === "uri" && !connectionURI.trim()
-                ? "asset.formMissingMongoUri"
-                : assetType === "kafka" && kafkaBrokers().length === 0
-                  ? "asset.formMissingKafkaBrokers"
-                  : assetType === "k8s" && !kubeconfig.trim() && !editAsset
-                    ? "asset.formMissingKubeconfig"
-                    : "";
+            : assetType === "kafka" && kafkaBrokers().length === 0
+              ? "asset.formMissingKafkaBrokers"
+              : assetType === "k8s" && !kubeconfig.trim() && !editAsset
+                ? "asset.formMissingKubeconfig"
+                : "";
   const saveDisabled = saving || !!saveDisabledReason || (!!sectionDef?.ConfigSection && !validity.canSave);
 
   const handleRunTestConnection = sectionDef?.ConfigSection
@@ -1374,9 +1244,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       ? handleTestConnection
       : assetType === "database"
         ? handleTestDatabaseConnection
-        : assetType === "mongodb"
-          ? handleTestMongoDBConnection
-          : handleTestKafkaConnection;
+        : handleTestKafkaConnection;
 
   const testConnectionButton = !isTestableAssetType ? null : testing && activeTestIdRef.current ? (
     <Button type="button" variant="outline" size="sm" onClick={handleCancelTest} className="gap-1 w-fit">
@@ -1553,40 +1421,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                 setParams={setParams}
                 path={path}
                 setPath={setPath}
-                password={password}
-                setPassword={setPassword}
-                encryptedPassword={encryptedPassword}
-                passwordSource={passwordSource}
-                setPasswordSource={setPasswordSource}
-                passwordCredentialId={passwordCredentialId}
-                setPasswordCredentialId={setPasswordCredentialId}
-                managedPasswords={managedPasswords}
-                editAssetId={editAsset?.ID}
-              />
-            )}
-
-            {assetType === "mongodb" && (
-              <MongoDBConfigSection
-                connectionMode={mongoConnectionMode}
-                setConnectionMode={setMongoConnectionMode}
-                host={host}
-                setHost={setHost}
-                port={port}
-                setPort={setPort}
-                username={username}
-                setUsername={setUsername}
-                connectionURI={connectionURI}
-                setConnectionURI={setConnectionURI}
-                replicaSet={replicaSet}
-                setReplicaSet={setReplicaSet}
-                authSource={authSource}
-                setAuthSource={setAuthSource}
-                database={database}
-                setDatabase={setDatabase}
-                tls={tls}
-                setTls={setTls}
-                sshTunnelId={sshTunnelId}
-                setSshTunnelId={setSshTunnelId}
                 password={password}
                 setPassword={setPassword}
                 encryptedPassword={encryptedPassword}
