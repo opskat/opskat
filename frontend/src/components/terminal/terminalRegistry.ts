@@ -3,7 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
-import { EventsOn, EventsOff } from "../../../wailsjs/runtime/runtime";
+import { BrowserOpenURL, EventsOn, EventsOff } from "../../../wailsjs/runtime/runtime";
 import { bytesToBase64 } from "@/lib/terminalEncode";
 import { useTerminalStore, TRANSPORTS, type TerminalTransport } from "@/stores/terminalStore";
 import { useShortcutStore } from "@/stores/shortcutStore";
@@ -12,6 +12,7 @@ import { withTerminalFontFallback, withTerminalFontIsolation } from "@/data/term
 import i18n from "@/i18n";
 import { createTerminalInputBridge, type TerminalInputBridge } from "./terminalInputBridge";
 import { attachXtermRolloverGuard } from "./xtermRolloverGuard";
+import { attachTerminalUrlLinks, type TerminalUrlLinksController } from "./terminalUrlLinks";
 
 export interface TerminalInstance {
   term: XTerminal;
@@ -19,6 +20,7 @@ export interface TerminalInstance {
   searchAddon: SearchAddon;
   container: HTMLDivElement;
   bridge: TerminalInputBridge;
+  urlLinks: TerminalUrlLinksController;
 }
 
 interface InternalInstance extends TerminalInstance {
@@ -64,6 +66,9 @@ export function getOrCreateTerminal(
   term.loadAddon(fitAddon);
   term.loadAddon(searchAddon);
   term.open(container);
+
+  const urlLinkColor = terminalUrlLinkColor(init.theme);
+  const urlLinks = attachTerminalUrlLinks(term, BrowserOpenURL, urlLinkColor);
 
   // 优先用调用方传入的 transport；首次挂载若没拿到（罕见），退回 session id 前缀。
   const transport: TerminalTransport =
@@ -145,12 +150,13 @@ export function getOrCreateTerminal(
 
   const rolloverGuard = attachXtermRolloverGuard(term, writeData);
 
+  const outputDecoder = new TextDecoder();
   const dataEvent = `${eventPrefix}:data:${sessionId}`;
   EventsOn(dataEvent, (dataB64: string) => {
     const binary = atob(dataB64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    term.write(bytes);
+    term.write(urlLinks.colorizeOutput(outputDecoder.decode(bytes, { stream: true })));
   });
 
   const closedEvent = `${eventPrefix}:closed:${sessionId}`;
@@ -166,11 +172,13 @@ export function getOrCreateTerminal(
     searchAddon,
     container,
     bridge,
+    urlLinks,
     isClosed: false,
     dispose: () => {
       // bridge 持有 term.attachCustomKeyEventHandler 槽位的还原逻辑,
       // 必须在 term.dispose 之前调用,避免 dispose 后访问已释放对象。
       bridge.dispose();
+      urlLinks.dispose();
       rolloverGuard.dispose();
       onDataDispose.dispose();
       onKeyDispose.dispose();
@@ -214,4 +222,8 @@ export function disposeTerminal(sessionId: string): void {
 
 export function getTerminalInstance(sessionId: string): TerminalInstance | undefined {
   return registry.get(sessionId);
+}
+
+export function terminalUrlLinkColor(theme: ITheme | undefined): string | undefined {
+  return theme?.brightBlue ?? theme?.blue;
 }

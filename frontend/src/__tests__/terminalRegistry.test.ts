@@ -13,9 +13,25 @@ const hoisted = vi.hoisted(() => {
   const webglClearTextureAtlasSpy = vi.fn();
   const setWebglEnabledSpy = vi.fn();
   const reportWebglFailureSpy = vi.fn();
+  const browserOpenURLSpy = vi.fn();
+  const linkProviderDisposeSpy = vi.fn();
+  const linkDecorationDisposeSpy = vi.fn();
+  const writeParsedDisposeSpy = vi.fn();
+  const scrollDisposeSpy = vi.fn();
+  const resizeDisposeSpy = vi.fn();
   const disposeOrder: string[] = [];
-  const state: { capturedOnKey: ((e: { key: string }) => void) | null } = {
+  const state: {
+    capturedOnKey: ((e: { key: string }) => void) | null;
+    linkProvider: {
+      provideLinks: (bufferLineNumber: number, callback: (links: unknown[] | undefined) => void) => void;
+    } | null;
+    lines: Map<number, string>;
+    decorationOptions: unknown[];
+  } = {
     capturedOnKey: null,
+    linkProvider: null,
+    lines: new Map(),
+    decorationOptions: [],
   };
   return {
     eventHandlers,
@@ -30,6 +46,12 @@ const hoisted = vi.hoisted(() => {
     webglClearTextureAtlasSpy,
     setWebglEnabledSpy,
     reportWebglFailureSpy,
+    browserOpenURLSpy,
+    linkProviderDisposeSpy,
+    linkDecorationDisposeSpy,
+    writeParsedDisposeSpy,
+    scrollDisposeSpy,
+    resizeDisposeSpy,
     disposeOrder,
     state,
   };
@@ -42,6 +64,7 @@ vi.mock("../../wailsjs/runtime/runtime", () => ({
   EventsOff: (event: string) => {
     hoisted.eventHandlers.delete(event);
   },
+  BrowserOpenURL: hoisted.browserOpenURLSpy,
 }));
 
 vi.mock("../../wailsjs/go/ssh/SSH", () => ({
@@ -69,6 +92,19 @@ vi.mock("../../wailsjs/go/local/Local", () => ({
 
 vi.mock("@xterm/xterm", () => {
   class MockTerminal {
+    rows = 24;
+    buffer = {
+      active: {
+        baseY: 0,
+        cursorY: 0,
+        viewportY: 0,
+        length: 24,
+        getLine: (lineNumber: number) => {
+          const line = hoisted.state.lines.get(lineNumber);
+          return line === undefined ? undefined : { translateToString: () => line };
+        },
+      },
+    };
     loadAddon = vi.fn();
     open = vi.fn();
     write = hoisted.writeSpy;
@@ -77,9 +113,20 @@ vi.mock("@xterm/xterm", () => {
       hoisted.state.capturedOnKey = handler;
       return { dispose: vi.fn() };
     });
-    onWriteParsed = vi.fn(() => ({ dispose: vi.fn() }));
+    onWriteParsed = vi.fn(() => ({ dispose: hoisted.writeParsedDisposeSpy }));
+    onScroll = vi.fn(() => ({ dispose: hoisted.scrollDisposeSpy }));
+    onResize = vi.fn(() => ({ dispose: hoisted.resizeDisposeSpy }));
     onRender = vi.fn(() => ({ dispose: vi.fn() }));
     attachCustomKeyEventHandler = vi.fn();
+    registerLinkProvider = vi.fn((provider) => {
+      hoisted.state.linkProvider = provider;
+      return { dispose: hoisted.linkProviderDisposeSpy };
+    });
+    registerMarker = vi.fn(() => ({ dispose: vi.fn() }));
+    registerDecoration = vi.fn((options) => {
+      hoisted.state.decorationOptions.push(options);
+      return { dispose: hoisted.linkDecorationDisposeSpy };
+    });
     dispose = vi.fn(() => {
       hoisted.disposeOrder.push("term");
       hoisted.disposeSpy();
@@ -166,6 +213,12 @@ vi.mock("@/i18n", () => ({
 import { getOrCreateTerminal, disposeTerminal } from "@/components/terminal/terminalRegistry";
 import { TRANSPORTS, transportForAsset, inferTransportFromSessionId } from "@/stores/terminalStore";
 
+interface TestTerminalLink {
+  text: string;
+  range: { start: { x: number; y: number }; end: { x: number; y: number } };
+  activate: (event: MouseEvent | undefined, text: string) => void;
+}
+
 describe("TRANSPORTS", () => {
   it("TRANSPORTS 覆盖 ssh/serial/local 且字段齐全", () => {
     for (const key of ["ssh", "serial", "local"] as const) {
@@ -207,6 +260,9 @@ describe("terminalRegistry", () => {
   beforeEach(() => {
     hoisted.eventHandlers.clear();
     hoisted.state.capturedOnKey = null;
+    hoisted.state.linkProvider = null;
+    hoisted.state.lines.clear();
+    hoisted.state.decorationOptions.length = 0;
     hoisted.writeSpy.mockClear();
     hoisted.disposeSpy.mockClear();
     hoisted.reconnectBySessionMock.mockClear();
@@ -218,6 +274,12 @@ describe("terminalRegistry", () => {
     hoisted.webglClearTextureAtlasSpy.mockClear();
     hoisted.setWebglEnabledSpy.mockClear();
     hoisted.reportWebglFailureSpy.mockClear();
+    hoisted.browserOpenURLSpy.mockClear();
+    hoisted.linkProviderDisposeSpy.mockClear();
+    hoisted.linkDecorationDisposeSpy.mockClear();
+    hoisted.writeParsedDisposeSpy.mockClear();
+    hoisted.scrollDisposeSpy.mockClear();
+    hoisted.resizeDisposeSpy.mockClear();
     hoisted.disposeOrder.length = 0;
   });
 
@@ -268,6 +330,104 @@ describe("terminalRegistry", () => {
     disposeTerminal("sess-4");
   });
 
+  it("registers HTTP URL links and opens them through Wails", () => {
+    hoisted.state.lines.set(0, "Docs: https://help.ubuntu.com, ip 10.2.4.16 load 0.06");
+    getOrCreateTerminal("sess-url", { fontSize: 14, fontFamily: "mono", scrollback: 1000 });
+
+    let links: TestTerminalLink[] | undefined;
+    hoisted.state.linkProvider?.provideLinks(1, (provided) => {
+      links = provided as TestTerminalLink[] | undefined;
+    });
+
+    expect(links).toHaveLength(1);
+    expect(links?.[0].text).toBe("https://help.ubuntu.com");
+    expect(links?.[0].range).toEqual({ start: { x: 7, y: 1 }, end: { x: 29, y: 1 } });
+
+    const link = links?.[0];
+    expect(link).toBeDefined();
+    link?.activate(undefined, link.text);
+    expect(hoisted.browserOpenURLSpy).toHaveBeenCalledWith("https://help.ubuntu.com");
+    disposeTerminal("sess-url");
+  });
+
+  it("does not create links for bare IP addresses or numbers", () => {
+    hoisted.state.lines.set(0, "IPv4 address: 10.2.4.16 load 0.06");
+    getOrCreateTerminal("sess-no-url", { fontSize: 14, fontFamily: "mono", scrollback: 1000 });
+
+    let links: TestTerminalLink[] | undefined;
+    hoisted.state.linkProvider?.provideLinks(1, (provided) => {
+      links = provided as TestTerminalLink[] | undefined;
+    });
+
+    expect(links).toBeUndefined();
+    disposeTerminal("sess-no-url");
+  });
+
+  it("decorates URLs with brightBlue from the terminal theme", () => {
+    hoisted.state.lines.set(0, "Docs: https://help.ubuntu.com");
+    getOrCreateTerminal("sess-url-color", {
+      fontSize: 14,
+      fontFamily: "mono",
+      scrollback: 1000,
+      theme: { brightBlue: "#89b4fa", blue: "#7b93f5" },
+    });
+
+    expect(hoisted.state.decorationOptions).toContainEqual(
+      expect.objectContaining({ x: 6, width: 23, foregroundColor: "#89b4fa" })
+    );
+    disposeTerminal("sess-url-color");
+  });
+
+  it("falls back to theme blue for URL decorations", () => {
+    hoisted.state.lines.set(0, "Docs: https://help.ubuntu.com");
+    getOrCreateTerminal("sess-url-blue", {
+      fontSize: 14,
+      fontFamily: "mono",
+      scrollback: 1000,
+      theme: { blue: "#7b93f5" },
+    });
+
+    expect(hoisted.state.decorationOptions).toContainEqual(
+      expect.objectContaining({ x: 6, width: 23, foregroundColor: "#7b93f5" })
+    );
+    disposeTerminal("sess-url-blue");
+  });
+  it("rebuilds URL decorations when the link color changes", () => {
+    hoisted.state.lines.set(0, "Docs: https://help.ubuntu.com");
+    const inst = getOrCreateTerminal("sess-url-theme-change", {
+      fontSize: 14,
+      fontFamily: "mono",
+      scrollback: 1000,
+      theme: { brightBlue: "#89b4fa" },
+    });
+
+    inst.urlLinks.setForegroundColor("#61afef");
+
+    expect(hoisted.linkDecorationDisposeSpy).toHaveBeenCalled();
+    expect(hoisted.state.decorationOptions).toContainEqual(
+      expect.objectContaining({ x: 6, width: 23, foregroundColor: "#61afef" })
+    );
+    disposeTerminal("sess-url-theme-change");
+  });
+
+  it("disposes URL link subscriptions and decorations", () => {
+    hoisted.state.lines.set(0, "Docs: https://help.ubuntu.com");
+    getOrCreateTerminal("sess-url-dispose", {
+      fontSize: 14,
+      fontFamily: "mono",
+      scrollback: 1000,
+      theme: { brightBlue: "#89b4fa" },
+    });
+
+    disposeTerminal("sess-url-dispose");
+
+    expect(hoisted.linkDecorationDisposeSpy).toHaveBeenCalled();
+    expect(hoisted.resizeDisposeSpy).toHaveBeenCalled();
+    expect(hoisted.scrollDisposeSpy).toHaveBeenCalled();
+    expect(hoisted.writeParsedDisposeSpy).toHaveBeenCalled();
+    expect(hoisted.linkProviderDisposeSpy).toHaveBeenCalled();
+  });
+
   it("disposes the input bridge before the xterm instance", () => {
     getOrCreateTerminal("sess-order", { fontSize: 14, fontFamily: "mono", scrollback: 1000 });
     disposeTerminal("sess-order");
@@ -297,6 +457,25 @@ describe("terminalRegistry", () => {
     expect(hoisted.webglAddonCtor).not.toHaveBeenCalled();
     disposeTerminal("sess-no-webgl");
     expect(hoisted.webglAddonDisposeSpy).not.toHaveBeenCalled();
+  });
+
+  it("colorizes URL output with theme brightBlue ANSI", () => {
+    const encoder = new TextEncoder();
+    getOrCreateTerminal("sess-url-ansi", {
+      fontSize: 14,
+      fontFamily: "mono",
+      scrollback: 1000,
+      theme: { brightBlue: "#89b4fa" },
+    });
+
+    hoisted.eventHandlers.get("ssh:data:sess-url-ansi")?.(
+      btoa(String.fromCharCode(...encoder.encode("Docs: https://help.ubuntu.com, ip 10.2.4.16 load 0.06")))
+    );
+
+    expect(hoisted.writeSpy).toHaveBeenCalledWith(
+      "Docs: \x1b[38;2;137;180;250mhttps://help.ubuntu.com\x1b[39m, ip 10.2.4.16 load 0.06"
+    );
+    disposeTerminal("sess-url-ansi");
   });
 
   it("re-creates a fresh terminal after dispose for the same sessionId", () => {

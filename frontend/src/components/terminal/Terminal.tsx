@@ -22,7 +22,7 @@ import { TerminalSearchBar } from "./TerminalSearchBar";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { useTabStore } from "@/stores/tabStore";
 import { bytesToBase64 } from "@/lib/terminalEncode";
-import { getOrCreateTerminal, getTerminalInstance } from "./terminalRegistry";
+import { getOrCreateTerminal, getTerminalInstance, terminalUrlLinkColor } from "./terminalRegistry";
 
 export interface TerminalHandle {
   toggleSearch: () => void;
@@ -181,6 +181,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     // 时污染其它 session（详见 terminalFonts.ts 的 withTerminalFontIsolation 注释）。
     termRef.current.options.fontFamily = withTerminalFontIsolation(sessionId, withTerminalFontFallback(fontFamily));
     termRef.current.options.scrollback = scrollback;
+    getTerminalInstance(sessionId)?.urlLinks.setForegroundColor(terminalUrlLinkColor(xtermTheme));
     fitAddonRef.current?.fit();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [xtermTheme, fontSize, fontFamily, scrollback]);
