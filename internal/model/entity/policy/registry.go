@@ -3,7 +3,7 @@ package policy
 import "sync"
 
 // PolicyKind* 是 policy 逻辑的规范化种类词表,是资产轴与 policy 轴的唯一映射目标。
-// ai/policy.PolicyKind* alias 到这里;policy_group_entity.PolicyType* 暂未收敛(见阶段备忘)。
+// ai/policy.PolicyKind* 与 policy_group_entity.PolicyType* alias 到这里。
 const (
 	PolicyKindCommand = "command"
 	PolicyKindQuery   = "query"

@@ -12,12 +12,12 @@ import (
 
 // 策略类型常量
 const (
-	PolicyTypeCommand = "command"
-	PolicyTypeQuery   = "query"
-	PolicyTypeRedis   = "redis"
-	PolicyTypeMongo   = "mongo"
-	PolicyTypeKafka   = "kafka"
-	PolicyTypeEtcd    = "etcd"
+	PolicyTypeCommand = policy.PolicyKindCommand
+	PolicyTypeQuery   = policy.PolicyKindQuery
+	PolicyTypeRedis   = policy.PolicyKindRedis
+	PolicyTypeMongo   = policy.PolicyKindMongo
+	PolicyTypeKafka   = policy.PolicyKindKafka
+	PolicyTypeEtcd    = policy.PolicyKindEtcd
 )
 
 // PolicyGroup 权限组实体（数据库）
@@ -94,17 +94,19 @@ func mustMarshal(v any) string {
 	return string(data)
 }
 
-// builtinKindOrder 决定 BuiltinGroups() 的拼装顺序,保持与历史一致(command→query→redis→mongo→kafka→etcd)。
-var builtinKindOrder = []string{
-	PolicyTypeCommand, PolicyTypeQuery, PolicyTypeRedis,
-	PolicyTypeMongo, PolicyTypeKafka, PolicyTypeEtcd,
-}
+// builtinKindOrder 决定 BuiltinGroups() 的拼装顺序,按 registerBuiltinGroups 首次注册的
+// 顺序派生(init 调用顺序即历史顺序 command→query→redis→mongo→kafka→etcd),不再手维护 ——
+// 新增 kind 只需 registerBuiltinGroups 一处,自动入序,避免漏改顺序表导致内置组被静默丢弃。
+var builtinKindOrder []string
 
 // builtinGroupsByKind 每个 policyKind 贡献的内置权限组(纯数据注册表)。
 // 新增策略 kind 时,在此处加一段 registerBuiltinGroups 即可,Validate / BuiltinGroups 自动覆盖。
 var builtinGroupsByKind = map[string][]*PolicyGroup{}
 
 func registerBuiltinGroups(kind string, groups ...*PolicyGroup) {
+	if _, seen := builtinGroupsByKind[kind]; !seen {
+		builtinKindOrder = append(builtinKindOrder, kind)
+	}
 	builtinGroupsByKind[kind] = append(builtinGroupsByKind[kind], groups...)
 }
 
