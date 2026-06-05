@@ -709,7 +709,7 @@ import { EtcdConfigSection } from "@/components/asset/EtcdConfigSection";
   testable: true,
 ```
 
-- [ ] **Step 4: 壳迁移** `AssetForm.tsx` — 删除以下 etcd 专属代码(只删,不动其他类型):
+- [ ] **Step 4: 壳迁移** `AssetForm.tsx` — 删除以下 etcd 专属代码(只删,不动其他类型)。**注册后这些都已死/或对编译有依赖,必须在本原子提交一并删除,否则编译断**:
   - `import { EtcdConfigSection } ...`(壳不再直接用,改由 etcd.ts 引)。
   - `interface EtcdConfig {...}`(122-136)。
   - etcd state 9 个 `useState`(392-401)。
@@ -717,10 +717,14 @@ import { EtcdConfigSection } from "@/components/asset/EtcdConfigSection";
   - `resetEtcdFields()` 调用(520)与函数定义(868-879)。
   - `loadEtcdConfig`(741-771)。
   - `handleTestEtcdConnection`(1071-1106)。
-  - save 分支 `else if (assetType === "etcd") {...}`(1470-1497)。
+  - save 分支 `else if (assetType === "etcd") {...}`(1470-1497)— 引用 etcd state,必须同删。
+  - **`etcdEndpointsList()` 辅助(1620-1624)— 闭包引用已删的 `etcdEndpoints` state,必须同删。** 连同其两处调用:
+    - `isTestConnectionDisabled` 里 `: assetType === "etcd" ? etcdEndpointsList().length === 0` 这层三元(1634-1635),else 上提。
+    - `saveDisabledReason` 里 `: assetType === "etcd" && etcdEndpointsList().length === 0 ? "etcd.error.endpointsRequired"` 这层(1660-1661)。
+  - **`handleRunTestConnection` 里 `: assetType === "etcd" ? handleTestEtcdConnection`(1675-1676)— 引用已删的 `handleTestEtcdConnection`,必须同删。**
   - render 块 `{assetType === "etcd" && (<EtcdConfigSection .../>)}`(1942-1976)。
 
-  注意:`resetSharedFields("etcd")`/`resetEtcdFields()` 在 `loadEtcdConfig` 的 catch 里;整个 `loadEtcdConfig` 删除后该引用一并消失。保留 `DEFAULT_PORTS.etcd` / `DEFAULT_ICONS.etcd`(`handleTypeChange` 仍用)与 `applyTestPasswordSource`/`encryptPasswordValue`(其它 db 类型仍用)。
+  注意:`resetSharedFields("etcd")`/`resetEtcdFields()` 在 `loadEtcdConfig` 的 catch 里;整个 `loadEtcdConfig` 删除后该引用一并消失。保留 `DEFAULT_PORTS.etcd` / `DEFAULT_ICONS.etcd`(`handleTypeChange` 仍用)、`AssetType` union 里的 `| "etcd"`、与 `applyTestPasswordSource`/`encryptPasswordValue`(其它 db 类型仍用)。Task 4 只清剩下 3 个**无编译依赖**的字符串比较死项。
 
 - [ ] **Step 5: 写 ref 契约测试** `__tests__/EtcdConfigSection.test.tsx`
 
@@ -806,21 +810,17 @@ git commit -m "♻️ 迁移 etcd 注册化(forwardRef section + useAssetCredent
 
 ---
 
-## Task 4:壳清理 etcd 遗留负表(死分支)
+## Task 4:壳清理 etcd 剩余死项(无编译依赖的字符串比较)
 
-> etcd 注册后 `sectionDef?.ConfigSection` 为真,以下负表里的 etcd 项已不可达(三元先走 ConfigSection 分支)。纯删死码,与 4b 的 `6d593b4d` 对称。
+> etcd 注册后 `sectionDef?.ConfigSection` 为真,以下 3 处 etcd 字符串比较已不可达(三元先走 ConfigSection 分支)。它们**不引用任何已删的 state/函数**,纯删死码,与 4b 的 `6d593b4d` 对称。(其余有编译依赖的死分支已在 Task 3 一并删除。)
 
 **Files:**
 - Modify: `frontend/src/components/asset/AssetForm.tsx`
 
-- [ ] **Step 1: 删 etcd 死项**
-  - `isTestableAssetType` 负支去掉 `|| assetType === "etcd"`(1618)。
-  - `isTestConnectionDisabled` 去掉 `: assetType === "etcd" ? etcdEndpointsList().length === 0` 这一层三元(1634-1635),把其 else 上提。
-  - `saveDisabledReason` 去掉 `: assetType === "etcd" && etcdEndpointsList().length === 0 ? "etcd.error.endpointsRequired"` 这一层(1660-1661)。
-  - `handleRunTestConnection` 去掉 `: assetType === "etcd" ? handleTestEtcdConnection`(1675-1676)。
-  - 删 `etcdEndpointsList` 辅助函数(1620-1624,两处引用移除后变死码)。
-  - extension guard 去掉 `assetType !== "etcd" &&`(2061)。
-  - `handleTypeChange` 去掉 `if (newType === "etcd") setHost("");`(895,etcd 现自持状态,清共享 host 无意义)。
+- [ ] **Step 1: 删 etcd 死项(3 处)**
+  - `isTestableAssetType` 负支去掉 `|| assetType === "etcd"`。
+  - extension guard 去掉 `assetType !== "etcd" &&`。
+  - `handleTypeChange` 去掉 `if (newType === "etcd") setHost("");`(etcd 现自持状态,清共享 host 无意义)。
 
 - [ ] **Step 2: 全量校验**
 
@@ -828,7 +828,7 @@ Run:
 ```bash
 cd frontend && npx tsc --noEmit && npx vitest run && npx eslint src/components/asset/AssetForm.tsx
 ```
-Expected: tsc 0、vitest 全 PASS、eslint 0。grep 确认 `AssetForm.tsx` 内已无 `etcd`/`Etcd` 残留(应为 0)。
+Expected: tsc 0、vitest 全 PASS、eslint 0。grep `AssetForm.tsx` 内 `etcd`/`Etcd` 残留应**仅剩** 3 处合法引用:`DEFAULT_PORTS.etcd`、`DEFAULT_ICONS.etcd`、`AssetType` union 的 `| "etcd"`(均在最终 stage-4 清共享 state 时移除)。无任何 etcd 配置/校验/测试逻辑残留。
 
 - [ ] **Step 3: commit**
 
