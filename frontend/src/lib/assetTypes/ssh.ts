@@ -12,6 +12,7 @@ registerAssetType({
   canConnect: true,
   canConnectInNewTab: true,
   connectAction: "terminal",
+  canOpenFileManager: true,
   DetailInfoCard: SSHDetailInfoCard,
   ConfigSection: SSHConfigSection,
   testable: true,

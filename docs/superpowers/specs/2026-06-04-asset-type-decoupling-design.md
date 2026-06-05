@@ -219,3 +219,13 @@ validateForTest(formState): boolean;                 // 替代 isTestableAssetTy
 - **行为保持(选项侧)**:`getAssetTypeOptions` 对全部既有输入(选项顺序 ssh→…→etcd、group="builtin"、database aliases、各 category、各 `nav.*` label、扩展追加 + ext-<name> 命名空间)结果不变 —— 由 `assetTypeOptions.test.ts`/`registry.test.ts`/`i18n.test.ts` 既有用例逐条锁定,派生后全绿,证明派生值与原字面量等价。
 - **验证**:`frontend npx vitest run`(110 文件 / 1106 测试 全绿)、`npx tsc --noEmit`(0)、`npx eslint src/lib/assetTypes`(0,无残留 unused icon import)。后端零改动,无需 `go build`/`wails generate`。
 - **仍留给后续**:阶段 4(AssetForm 组件注册化:`parseConfig`/`buildConfig`/`testConnection`/`validateForTest` + 通用壳)、阶段 5(`AssetTree.tsx` ssh 文件管理硬编码 → action 注册)、阶段 6(skill + 文档)。`policy_group_entity.PolicyType*` 收敛见独立未提交工作区改动,不属本阶段。
+
+## 阶段 5 完成记录(2026-06-05)
+
+`AssetTree.tsx` 收尾(无独立计划文档:本阶段仅 5 行生产代码,直接 TDD 内联;设计见本文档第 5 节),与前阶段同分支累加。阶段 4 完成记录见 `2026-06-05-assetform-registration-phase4-design.md`。
+
+- **做了什么**:`AssetTypeDefinition`(`types.ts`)新增可选能力位 `canOpenFileManager?: boolean`(与既有 `canConnect`/`canConnectInNewTab` 同型,缺省=不暴露);ssh def 声明 `canOpenFileManager: true`;`AssetTree.tsx:1151` 的 `asset.Type === "ssh"` 右键文件管理特例改为 `getAssetType(asset.Type)?.canOpenFileManager`。AssetTree 至此**零 `asset.Type === "<字面量>"` 分支**(connect / newTab / 文件管理全经注册表能力位派生)。
+- **设计取舍**:第 5 节给的两选项(能力位 vs 通用 action 注册表)中取**能力位**。文件管理是目前唯一的 per-type 树动作,其 icon(`FolderOpen`)+ label(`sftp.fileManager`)+ handler(`onOpenFileManager` prop)与同处的 connect/newTab 项一样仍在 AssetTree 内、由能力位门控 —— 与既有 seam 完全一致,YAGNI;待出现第二个 per-type 树动作再泛化为 action 列表。
+- **行为保持**:ssh 资产右键仍显文件管理项、点击仍调 `onOpenFileManager(asset)`(`onClick` 未动);非 ssh 类型仍不显。新增 `registry.test.ts`「only ssh exposes the file-manager action」+ `AssetTreeContextMenu.test.tsx`「ssh 显 / 非 ssh(redis)不显」守护测试(registry 测 RED→GREEN 驱动能力位落地)。
+- **验证**:`frontend npx vitest run`(123 文件 / 1312 测试 全绿)、`npx tsc --noEmit`(0)、`npx eslint`(0)。后端零改动,无 `go build` / `wails generate`。
+- **仍留给后续**:阶段 6(skill + 文档收尾)。`policy_group_entity.PolicyType*` 三处重复最后一处的收敛同前记录,代价/收益待单独评估。

@@ -37,6 +37,8 @@ export interface AssetTypeDefinition {
   canConnect: boolean;
   canConnectInNewTab: boolean;
   connectAction: "terminal" | "query";
+  /** 是否在右键菜单暴露 SFTP 文件管理动作(替代 AssetTree 的 `asset.Type === "ssh"` 特例);缺省 = 不暴露。 */
+  canOpenFileManager?: boolean;
   DetailInfoCard: ComponentType<DetailInfoCardProps>;
   /** 资产表单的 per-type config 区(注册化表单);缺省 = 走遗留/扩展路径。 */
   ConfigSection?: ConfigSectionComponent;
