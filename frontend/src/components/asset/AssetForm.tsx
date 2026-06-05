@@ -1331,11 +1331,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
   const isTestableAssetType = sectionDef?.ConfigSection
     ? !!sectionDef.testable
-    : assetType === "ssh" ||
-      assetType === "database" ||
-      assetType === "redis" ||
-      assetType === "mongodb" ||
-      assetType === "kafka";
+    : assetType === "ssh" || assetType === "database" || assetType === "mongodb" || assetType === "kafka";
 
   const isTestConnectionDisabled =
     testing ||
@@ -1357,7 +1353,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       ? (validity.saveDisabledReason ?? "")
       : assetType === "database" && driver === "sqlite" && !path.trim()
         ? "asset.formMissingPath"
-        : ["ssh", "redis"].includes(assetType) && !host.trim()
+        : assetType === "ssh" && !host.trim()
           ? "asset.formMissingHost"
           : assetType === "database" && driver !== "sqlite" && !host.trim()
             ? "asset.formMissingHost"
@@ -1682,7 +1678,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             {/* Extension type config */}
             {assetType !== "ssh" &&
               assetType !== "database" &&
-              assetType !== "redis" &&
               assetType !== "mongodb" &&
               assetType !== "kafka" &&
               assetType !== "k8s" &&
