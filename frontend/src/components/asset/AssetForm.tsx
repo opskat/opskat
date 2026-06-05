@@ -41,13 +41,12 @@ import {
 } from "@/components/asset/KafkaConfigSection";
 import { K8sConfigSection } from "@/components/asset/K8sConfigSection";
 import { EtcdConfigSection } from "@/components/asset/EtcdConfigSection";
-import { SerialConfigSection } from "@/components/asset/SerialConfigSection";
 import { useExtensionStore } from "@/extension";
 import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
 import { AssetTypePicker } from "@/components/asset/AssetTypePicker";
 import { getAssetTypeOptions, getAssetTypeLabel } from "@/lib/assetTypes/options";
 import { getAssetType } from "@/lib/assetTypes";
-import type { AssetFormHandle, AssetFormContext } from "@/lib/assetTypes/formContract";
+import type { AssetFormHandle, AssetFormContext, SectionValidity } from "@/lib/assetTypes/formContract";
 
 interface AssetFormProps {
   open: boolean;
@@ -340,7 +339,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
   // 注册化类型走通用 ConfigSection 路径:section 自持 state,经 ref 暴露 build*。
   const sectionRef = useRef<AssetFormHandle>(null);
-  const [validity, setValidity] = useState({ canTest: false, canSave: false });
+  const [validity, setValidity] = useState<SectionValidity>({ canTest: false, canSave: false });
   const ctx: AssetFormContext = useMemo(() => ({ isEdit: !!editAsset, encryptPassword: EncryptPassword }), [editAsset]);
 
   // Connection type (SSH only)
@@ -434,14 +433,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const [k8sContext, setK8sContext] = useState("");
   const [showKubeconfig, setShowKubeconfig] = useState(false);
 
-  // Serial fields
-  const [serialPortPath, setSerialPortPath] = useState("");
-  const [serialBaudRate, setSerialBaudRate] = useState(115200);
-  const [serialDataBits, setSerialDataBits] = useState(8);
-  const [serialStopBits, setSerialStopBits] = useState("1");
-  const [serialParity, setSerialParity] = useState("none");
-  const [serialFlowControl, setSerialFlowControl] = useState("none");
-
   // Extension config
   const [extConfig, setExtConfig] = useState<Record<string, unknown>>({});
 
@@ -500,8 +491,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           loadKafkaConfig(editAsset);
         } else if (editType === "k8s") {
           loadK8sConfig(editAsset);
-        } else if (editType === "serial") {
-          loadSerialConfig(editAsset);
         } else if (editType === "etcd") {
           loadEtcdConfig(editAsset);
         } else {
@@ -528,7 +517,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         resetMongoDBFields();
         resetKafkaFields();
         resetK8sFields();
-        resetSerialFields();
         resetEtcdFields();
         setExtConfig({});
       }
@@ -890,29 +878,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setEtcdCommandTimeoutSeconds(10);
   };
 
-  const loadSerialConfig = (asset: asset_entity.Asset) => {
-    try {
-      const cfg = JSON.parse(asset.Config || "{}");
-      setSerialPortPath(cfg.port_path || "");
-      setSerialBaudRate(cfg.baud_rate || 115200);
-      setSerialDataBits(cfg.data_bits || 8);
-      setSerialStopBits(cfg.stop_bits || "1");
-      setSerialParity(cfg.parity || "none");
-      setSerialFlowControl(cfg.flow_control || "none");
-    } catch {
-      resetSerialFields();
-    }
-  };
-
-  const resetSerialFields = () => {
-    setSerialPortPath("");
-    setSerialBaudRate(115200);
-    setSerialDataBits(8);
-    setSerialStopBits("1");
-    setSerialParity("none");
-    setSerialFlowControl("none");
-  };
-
   const handleTypeChange = (newType: AssetType) => {
     if (newType === assetType) return;
     setAssetType(newType);
@@ -1208,20 +1173,21 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     toast.info(t("asset.testCancelled"));
   };
 
-  const handleTestSerialConnection = async () => {
-    const cfg: Record<string, unknown> = {
-      port_path: serialPortPath,
-      baud_rate: serialBaudRate,
-      data_bits: serialDataBits,
-      stop_bits: serialStopBits,
-      parity: serialParity,
-    };
-    if (serialFlowControl !== "none") cfg.flow_control = serialFlowControl;
+  const handleGenericTestConnection = async () => {
+    const build = sectionRef.current?.buildTestConfig;
+    if (!build) return;
+    let tc;
+    try {
+      tc = await build(ctx);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+      return;
+    }
     const testId = newTestId();
     activeTestIdRef.current = testId;
     setTesting(true);
     try {
-      await TestAssetConnection(testId, "serial", JSON.stringify(cfg), "");
+      await TestAssetConnection(testId, tc.assetType, tc.configJSON, tc.password);
       if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
     } catch (e) {
       if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
@@ -1596,16 +1562,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       if (k8sNamespace) k8sConfig.namespace = k8sNamespace;
       if (k8sContext) k8sConfig.context = k8sContext;
       config = JSON.stringify(k8sConfig);
-    } else if (assetType === "serial") {
-      const serialConfig: Record<string, unknown> = {
-        port_path: serialPortPath,
-        baud_rate: serialBaudRate,
-        data_bits: serialDataBits,
-        stop_bits: serialStopBits,
-        parity: serialParity,
-      };
-      if (serialFlowControl !== "none") serialConfig.flow_control = serialFlowControl;
-      config = JSON.stringify(serialConfig);
     } else {
       // Extension type: encrypt password fields from configSchema before saving
       const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
@@ -1653,14 +1609,14 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const typeLabel = getAssetTypeLabel(assetType, t, assetTypeOptions);
   const sectionDef = getAssetType(assetType);
 
-  const isTestableAssetType =
-    assetType === "ssh" ||
-    assetType === "database" ||
-    assetType === "redis" ||
-    assetType === "mongodb" ||
-    assetType === "kafka" ||
-    assetType === "serial" ||
-    assetType === "etcd";
+  const isTestableAssetType = sectionDef?.ConfigSection
+    ? !!sectionDef.testable
+    : assetType === "ssh" ||
+      assetType === "database" ||
+      assetType === "redis" ||
+      assetType === "mongodb" ||
+      assetType === "kafka" ||
+      assetType === "etcd";
 
   const etcdEndpointsList = () =>
     etcdEndpoints
@@ -1670,10 +1626,10 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
   const isTestConnectionDisabled =
     testing ||
-    (assetType === "kafka"
-      ? kafkaBrokers().length === 0
-      : assetType === "serial"
-        ? !serialPortPath
+    (sectionDef?.ConfigSection
+      ? !validity.canTest
+      : assetType === "kafka"
+        ? kafkaBrokers().length === 0
         : assetType === "database" && driver === "sqlite"
           ? !path
           : assetType === "etcd"
@@ -1687,7 +1643,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const saveDisabledReason = !name.trim()
     ? "asset.formMissingName"
     : sectionDef?.ConfigSection
-      ? ""
+      ? (validity.saveDisabledReason ?? "")
       : assetType === "database" && driver === "sqlite" && !path.trim()
         ? "asset.formMissingPath"
         : ["ssh", "redis"].includes(assetType) && !host.trim()
@@ -1702,15 +1658,14 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                   ? "asset.formMissingKafkaBrokers"
                   : assetType === "k8s" && !kubeconfig.trim() && !editAsset
                     ? "asset.formMissingKubeconfig"
-                    : assetType === "serial" && !serialPortPath.trim()
-                      ? "asset.formMissingSerialPort"
-                      : assetType === "etcd" && etcdEndpointsList().length === 0
-                        ? "etcd.error.endpointsRequired"
-                        : "";
+                    : assetType === "etcd" && etcdEndpointsList().length === 0
+                      ? "etcd.error.endpointsRequired"
+                      : "";
   const saveDisabled = saving || !!saveDisabledReason || (!!sectionDef?.ConfigSection && !validity.canSave);
 
-  const handleRunTestConnection =
-    assetType === "ssh"
+  const handleRunTestConnection = sectionDef?.ConfigSection
+    ? handleGenericTestConnection
+    : assetType === "ssh"
       ? handleTestConnection
       : assetType === "database"
         ? handleTestDatabaseConnection
@@ -1718,11 +1673,9 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           ? handleTestMongoDBConnection
           : assetType === "kafka"
             ? handleTestKafkaConnection
-            : assetType === "serial"
-              ? handleTestSerialConnection
-              : assetType === "etcd"
-                ? handleTestEtcdConnection
-                : handleTestRedisConnection;
+            : assetType === "etcd"
+              ? handleTestEtcdConnection
+              : handleTestRedisConnection;
 
   const testConnectionButton = !isTestableAssetType ? null : testing && activeTestIdRef.current ? (
     <Button type="button" variant="outline" size="sm" onClick={handleCancelTest} className="gap-1 w-fit">
@@ -2085,24 +2038,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                 sshTunnelId={sshTunnelId}
                 setSshTunnelId={setSshTunnelId}
                 isEditing={!!editAsset}
-              />
-            )}
-
-            {/* Serial config */}
-            {assetType === "serial" && (
-              <SerialConfigSection
-                portPath={serialPortPath}
-                setPortPath={setSerialPortPath}
-                baudRate={serialBaudRate}
-                setBaudRate={setSerialBaudRate}
-                dataBits={serialDataBits}
-                setDataBits={setSerialDataBits}
-                stopBits={serialStopBits}
-                setStopBits={setSerialStopBits}
-                parity={serialParity}
-                setParity={setSerialParity}
-                flowControl={serialFlowControl}
-                setFlowControl={setSerialFlowControl}
               />
             )}
 

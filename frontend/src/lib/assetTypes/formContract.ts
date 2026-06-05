@@ -29,12 +29,19 @@ export interface AssetFormHandle {
   buildTestConfig: ((ctx: AssetFormContext) => Promise<AssetTestConfig>) | null;
 }
 
+export interface SectionValidity {
+  canTest: boolean;
+  canSave: boolean;
+  /** 保存禁用原因的 i18n key;空/缺省 = 可保存(壳据此显示提示)。 */
+  saveDisabledReason?: string;
+}
+
 export interface ConfigSectionProps {
   /** 编辑态回填来源;创建态为 undefined。 */
   editAsset?: asset_entity.Asset;
   ctx: AssetFormContext;
   /** state 变化时上报,驱动壳 Test/Save 按钮启用态(反应式)。 */
-  onValidityChange: (v: { canTest: boolean; canSave: boolean }) => void;
+  onValidityChange: (v: SectionValidity) => void;
 }
 
 export type ConfigSectionComponent = ForwardRefExoticComponent<ConfigSectionProps & RefAttributes<AssetFormHandle>>;
