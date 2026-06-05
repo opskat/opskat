@@ -7,6 +7,7 @@ import {
   getAssetTypeLabel,
   resolveAssetTypeLabel,
 } from "@/lib/assetTypes/options";
+import { getAssetType } from "@/lib/assetTypes";
 import { asset_entity } from "../../wailsjs/go/models";
 
 describe("getAssetTypeOptions", () => {
@@ -55,6 +56,18 @@ describe("getAssetTypeOptions", () => {
     };
     const opts = getAssetTypeOptions(extensions as never);
     expect(opts.filter((o) => o.group === "extension")).toEqual([]);
+  });
+});
+
+describe("built-in options derive from the registry (single source)", () => {
+  it("each built-in option's icon is the same component as its registry definition's icon", () => {
+    const builtins = getAssetTypeOptions({}).filter((o) => o.group === "builtin");
+    expect(builtins.length).toBeGreaterThan(0);
+    for (const opt of builtins) {
+      const def = getAssetType(opt.value);
+      expect(def).toBeDefined();
+      expect(opt.icon).toBe(def!.icon); // 同一个组件引用，而非两处各自声明
+    }
   });
 });
 
