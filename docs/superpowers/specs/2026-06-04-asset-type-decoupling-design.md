@@ -208,3 +208,14 @@ validateForTest(formState): boolean;                 // 替代 isTestableAssetTy
 - **测试**:`conntest` 注册表机制单测;`System.TestAssetConnection` 分发/未知类型/`testreg` 取消信封单测(白盒 fake tester);5 个 binder 各加坏-JSON characterization 单测(白盒 `&Binder{}`,锁定「解析先于拨号」契约 + RED 驱动方法抽取),无触网。
 - **验证**:`wails generate`(System 出现 `TestAssetConnection`、旧 7 binding 消失、`EtcdTestConnection` 保留)、`frontend tsc --noEmit`(0)、`go build ./...`、`go test ./internal/...`(EXIT 0,0 FAIL)、改动包 `-race`(干净)、`golangci-lint ./internal/...`(0 issues)。
 - **仍留给后续**:阶段 3(`options.ts` 的 `BUILTIN_OPTIONS` 元数据折进 `AssetTypeDefinition`)、阶段 4(AssetForm 组件注册化:把各 `handleTest*` 的 per-type config 构建 + `handleRunTestConnection` 三元链 + `isTestableAssetType` 收进 `AssetTypeDefinition` 的 `buildConfig/testConnection/validateForTest`,本阶段刻意未动)、阶段 5(`AssetTree.tsx` ssh 文件管理硬编码)、阶段 6(skill + 文档)。GetConfig/Validate switch 与 `policy_group_entity.PolicyType*` 的 layering 约束同 2a 记录,不变。
+
+## 阶段 3 完成记录(2026-06-05)
+
+计划见 `docs/superpowers/plans/2026-06-05-assettype-options-fold-phase3.md`,与前阶段同分支累加。本阶段是前端注册表合并(纯前端,后端零改动)。
+
+- **做了什么**:`AssetTypeDefinition`(`types.ts`)增 `aliases`/`label`/`category` 三个必填字段(`AssetTypeCategory` 从 `options.ts` 下沉到 `types.ts` 避免 `types↔options` 成环,`options.ts` re-export 保持既有 import 路径);9 个 `assetTypes/*.ts` 各自声明这三项;`options.ts` 删除 `BUILTIN_OPTIONS` 字面量数组,改运行时从 `getBuiltinTypes()` 派生(`value`=type、`labelIsI18nKey`=true、`group`="builtin" 在派生处恒定,不入 def),`getAssetTypeOptions` 的扩展追加逻辑零改动。**内置类型展示元数据一处声明,而非两处。**
+- **关闭了哪条备忘**:阶段 1a 备忘「type→kind 三处重复」的前端侧 —— 各 `assetTypes/*.ts` 的展示元数据(label/aliases/category)与 `options.ts` 不再两处维护;`AssetTypeDefinition.icon` 现同时喂资产详情头与类型选择器,单一来源。
+- **唯一可见行为变化(图标统一)**:折叠前类型选择器(options.ts)与资产详情头(registry)对 5 个类型用了不同 icon。统一到选择器侧的品牌图后,`AssetDetail.tsx:129` 的 ssh(`Server`→`Monitor`)、redis/mongodb/etcd(`Database`→品牌图)、k8s(`Container`→`KubernetesIcon`)改显品牌图 —— 修掉两 registry 的 icon drift;database/kafka/serial/local 本就一致。新增 `assetTypeOptions.test.ts`「single source」守护测试(每个 builtin 选项 icon === registry def icon,RED→GREEN 驱动折叠)。
+- **行为保持(选项侧)**:`getAssetTypeOptions` 对全部既有输入(选项顺序 ssh→…→etcd、group="builtin"、database aliases、各 category、各 `nav.*` label、扩展追加 + ext-<name> 命名空间)结果不变 —— 由 `assetTypeOptions.test.ts`/`registry.test.ts`/`i18n.test.ts` 既有用例逐条锁定,派生后全绿,证明派生值与原字面量等价。
+- **验证**:`frontend npx vitest run`(110 文件 / 1106 测试 全绿)、`npx tsc --noEmit`(0)、`npx eslint src/lib/assetTypes`(0,无残留 unused icon import)。后端零改动,无需 `go build`/`wails generate`。
+- **仍留给后续**:阶段 4(AssetForm 组件注册化:`parseConfig`/`buildConfig`/`testConnection`/`validateForTest` + 通用壳)、阶段 5(`AssetTree.tsx` ssh 文件管理硬编码 → action 注册)、阶段 6(skill + 文档)。`policy_group_entity.PolicyType*` 收敛见独立未提交工作区改动,不属本阶段。
