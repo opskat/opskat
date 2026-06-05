@@ -1,6 +1,7 @@
 import { EtcdIcon } from "@/components/asset/brand-icons";
 import { registerAssetType } from "./_register";
 import { EtcdDetailInfoCard } from "@/components/asset/detail/EtcdDetailInfoCard";
+import { EtcdConfigSection } from "@/components/asset/EtcdConfigSection";
 
 registerAssetType({
   type: "etcd",
@@ -12,6 +13,8 @@ registerAssetType({
   canConnectInNewTab: false,
   connectAction: "query",
   DetailInfoCard: EtcdDetailInfoCard,
+  ConfigSection: EtcdConfigSection,
+  testable: true,
   policy: {
     policyType: "etcd",
     titleKey: "asset.etcdPolicy",

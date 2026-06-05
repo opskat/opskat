@@ -40,7 +40,6 @@ import {
   type KafkaSchemaRegistryForm,
 } from "@/components/asset/KafkaConfigSection";
 import { K8sConfigSection } from "@/components/asset/K8sConfigSection";
-import { EtcdConfigSection } from "@/components/asset/EtcdConfigSection";
 import { useExtensionStore } from "@/extension";
 import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
 import { AssetTypePicker } from "@/components/asset/AssetTypePicker";
@@ -116,22 +115,6 @@ interface RedisConfig {
   command_timeout_seconds?: number;
   scan_page_size?: number;
   key_separator?: string;
-  ssh_asset_id?: number;
-}
-
-interface EtcdConfig {
-  endpoints?: string[];
-  username?: string;
-  password?: string;
-  credential_id?: number;
-  tls?: boolean;
-  tls_insecure?: boolean;
-  tls_server_name?: string;
-  tls_ca_file?: string;
-  tls_cert_file?: string;
-  tls_key_file?: string;
-  dial_timeout_seconds?: number;
-  command_timeout_seconds?: number;
   ssh_asset_id?: number;
 }
 
@@ -389,17 +372,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const [redisTlsCertFile, setRedisTlsCertFile] = useState("");
   const [redisTlsKeyFile, setRedisTlsKeyFile] = useState("");
 
-  // etcd fields
-  const [etcdEndpoints, setEtcdEndpoints] = useState("");
-  const [etcdTls, setEtcdTls] = useState(false);
-  const [etcdTlsInsecure, setEtcdTlsInsecure] = useState(false);
-  const [etcdTlsServerName, setEtcdTlsServerName] = useState("");
-  const [etcdTlsCAFile, setEtcdTlsCAFile] = useState("");
-  const [etcdTlsCertFile, setEtcdTlsCertFile] = useState("");
-  const [etcdTlsKeyFile, setEtcdTlsKeyFile] = useState("");
-  const [etcdDialTimeoutSeconds, setEtcdDialTimeoutSeconds] = useState(5);
-  const [etcdCommandTimeoutSeconds, setEtcdCommandTimeoutSeconds] = useState(10);
-
   // MongoDB fields
   const [mongoConnectionMode, setMongoConnectionMode] = useState<"manual" | "uri">("manual");
   const [connectionURI, setConnectionURI] = useState("");
@@ -491,8 +463,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           loadKafkaConfig(editAsset);
         } else if (editType === "k8s") {
           loadK8sConfig(editAsset);
-        } else if (editType === "etcd") {
-          loadEtcdConfig(editAsset);
         } else {
           // Extension type: load decrypted config
           const extInfo = useExtensionStore.getState().getExtensionForAssetType(editType);
@@ -517,7 +487,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         resetMongoDBFields();
         resetKafkaFields();
         resetK8sFields();
-        resetEtcdFields();
         setExtConfig({});
       }
     }
@@ -738,38 +707,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     }
   };
 
-  const loadEtcdConfig = (asset: asset_entity.Asset) => {
-    try {
-      const cfg: EtcdConfig = JSON.parse(asset.Config || "{}");
-      setEtcdEndpoints((cfg.endpoints || []).join("\n"));
-      setUsername(cfg.username || "");
-      setEtcdTls(cfg.tls || false);
-      setEtcdTlsInsecure(cfg.tls_insecure || false);
-      setEtcdTlsServerName(cfg.tls_server_name || "");
-      setEtcdTlsCAFile(cfg.tls_ca_file || "");
-      setEtcdTlsCertFile(cfg.tls_cert_file || "");
-      setEtcdTlsKeyFile(cfg.tls_key_file || "");
-      setEtcdDialTimeoutSeconds(cfg.dial_timeout_seconds || 5);
-      setEtcdCommandTimeoutSeconds(cfg.command_timeout_seconds || 10);
-      setSshTunnelId(asset.sshTunnelId || cfg.ssh_asset_id || 0);
-
-      if (cfg.credential_id) {
-        setPasswordSource("managed");
-        setPasswordCredentialId(cfg.credential_id);
-        setEncryptedPassword("");
-        setPassword("");
-      } else {
-        setPasswordSource("inline");
-        setPasswordCredentialId(0);
-        setEncryptedPassword(cfg.password || "");
-        setPassword("");
-      }
-    } catch {
-      resetSharedFields("etcd");
-      resetEtcdFields();
-    }
-  };
-
   // Reset shared connection fields with type-appropriate defaults
   const resetSharedFields = (type: AssetType, dbDriver = "mysql") => {
     setHost("");
@@ -863,19 +800,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setK8sNamespace("");
     setK8sContext("");
     setShowKubeconfig(false);
-  };
-
-  // etcd-exclusive fields only
-  const resetEtcdFields = () => {
-    setEtcdEndpoints("");
-    setEtcdTls(false);
-    setEtcdTlsInsecure(false);
-    setEtcdTlsServerName("");
-    setEtcdTlsCAFile("");
-    setEtcdTlsCertFile("");
-    setEtcdTlsKeyFile("");
-    setEtcdDialTimeoutSeconds(5);
-    setEtcdCommandTimeoutSeconds(10);
   };
 
   const handleTypeChange = (newType: AssetType) => {
@@ -1057,43 +981,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setTesting(true);
     try {
       await TestAssetConnection(testId, "redis", JSON.stringify(cfg), password);
-      if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
-    } catch (e) {
-      if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
-    } finally {
-      if (activeTestIdRef.current === testId) {
-        activeTestIdRef.current = null;
-        setTesting(false);
-      }
-    }
-  };
-
-  const handleTestEtcdConnection = async () => {
-    const endpointsList = etcdEndpoints
-      .split(/[\n,;]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (endpointsList.length === 0) {
-      toast.error(t("etcd.error.endpointsRequired"));
-      return;
-    }
-    const cfg: EtcdConfig = { endpoints: endpointsList };
-    if (username) cfg.username = username;
-    if (etcdTls) cfg.tls = true;
-    if (etcdTls && etcdTlsInsecure) cfg.tls_insecure = true;
-    if (etcdTls && etcdTlsServerName) cfg.tls_server_name = etcdTlsServerName;
-    if (etcdTls && etcdTlsCAFile) cfg.tls_ca_file = etcdTlsCAFile;
-    if (etcdTls && etcdTlsCertFile) cfg.tls_cert_file = etcdTlsCertFile;
-    if (etcdTls && etcdTlsKeyFile) cfg.tls_key_file = etcdTlsKeyFile;
-    if (etcdDialTimeoutSeconds > 0) cfg.dial_timeout_seconds = etcdDialTimeoutSeconds;
-    if (etcdCommandTimeoutSeconds > 0) cfg.command_timeout_seconds = etcdCommandTimeoutSeconds;
-    if (sshTunnelId > 0) cfg.ssh_asset_id = sshTunnelId;
-    applyTestPasswordSource(cfg);
-    const testId = newTestId();
-    activeTestIdRef.current = testId;
-    setTesting(true);
-    try {
-      await TestAssetConnection(testId, "etcd", JSON.stringify(cfg), password);
       if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
     } catch (e) {
       if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
@@ -1467,34 +1354,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       if (redisScanPageSize > 0) redisConfig.scan_page_size = redisScanPageSize;
       if (redisKeySeparator && redisKeySeparator !== ":") redisConfig.key_separator = redisKeySeparator;
       config = JSON.stringify(redisConfig);
-    } else if (assetType === "etcd") {
-      const endpointsList = etcdEndpoints
-        .split(/[\n,;]+/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      if (endpointsList.length === 0) {
-        toast.error(t("etcd.error.endpointsRequired"));
-        return;
-      }
-      const etcdConfig: EtcdConfig = { endpoints: endpointsList };
-      if (username) etcdConfig.username = username;
-      if (passwordSource === "managed" && passwordCredentialId > 0) {
-        etcdConfig.credential_id = passwordCredentialId;
-      } else {
-        const encrypted = await encryptPasswordValue();
-        if (encrypted === undefined) return;
-        if (encrypted) etcdConfig.password = encrypted;
-      }
-      if (etcdTls) etcdConfig.tls = true;
-      if (etcdTls && etcdTlsInsecure) etcdConfig.tls_insecure = true;
-      if (etcdTls && etcdTlsServerName) etcdConfig.tls_server_name = etcdTlsServerName;
-      if (etcdTls && etcdTlsCAFile) etcdConfig.tls_ca_file = etcdTlsCAFile;
-      if (etcdTls && etcdTlsCertFile) etcdConfig.tls_cert_file = etcdTlsCertFile;
-      if (etcdTls && etcdTlsKeyFile) etcdConfig.tls_key_file = etcdTlsKeyFile;
-      if (etcdDialTimeoutSeconds > 0) etcdConfig.dial_timeout_seconds = etcdDialTimeoutSeconds;
-      if (etcdCommandTimeoutSeconds > 0) etcdConfig.command_timeout_seconds = etcdCommandTimeoutSeconds;
-      if (sshTunnelId > 0) etcdConfig.ssh_asset_id = sshTunnelId;
-      config = JSON.stringify(etcdConfig);
     } else if (assetType === "mongodb") {
       const mongoConfig: MongoDBConfig = {};
       if (mongoConnectionMode === "uri" && connectionURI) {
@@ -1617,12 +1476,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       assetType === "kafka" ||
       assetType === "etcd";
 
-  const etcdEndpointsList = () =>
-    etcdEndpoints
-      .split(/[\n,;]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-
   const isTestConnectionDisabled =
     testing ||
     (sectionDef?.ConfigSection
@@ -1631,13 +1484,11 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         ? kafkaBrokers().length === 0
         : assetType === "database" && driver === "sqlite"
           ? !path
-          : assetType === "etcd"
-            ? etcdEndpointsList().length === 0
-            : assetType !== "mongodb"
-              ? !host
-              : mongoConnectionMode === "uri"
-                ? !connectionURI
-                : !host);
+          : assetType !== "mongodb"
+            ? !host
+            : mongoConnectionMode === "uri"
+              ? !connectionURI
+              : !host);
 
   const saveDisabledReason = !name.trim()
     ? "asset.formMissingName"
@@ -1657,9 +1508,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                   ? "asset.formMissingKafkaBrokers"
                   : assetType === "k8s" && !kubeconfig.trim() && !editAsset
                     ? "asset.formMissingKubeconfig"
-                    : assetType === "etcd" && etcdEndpointsList().length === 0
-                      ? "etcd.error.endpointsRequired"
-                      : "";
+                    : "";
   const saveDisabled = saving || !!saveDisabledReason || (!!sectionDef?.ConfigSection && !validity.canSave);
 
   const handleRunTestConnection = sectionDef?.ConfigSection
@@ -1672,9 +1521,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           ? handleTestMongoDBConnection
           : assetType === "kafka"
             ? handleTestKafkaConnection
-            : assetType === "etcd"
-              ? handleTestEtcdConnection
-              : handleTestRedisConnection;
+            : handleTestRedisConnection;
 
   const testConnectionButton = !isTestableAssetType ? null : testing && activeTestIdRef.current ? (
     <Button type="button" variant="outline" size="sm" onClick={handleCancelTest} className="gap-1 w-fit">
@@ -1936,42 +1783,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                 setPasswordCredentialId={setPasswordCredentialId}
                 managedPasswords={managedPasswords}
                 editAssetId={editAsset?.ID}
-              />
-            )}
-
-            {assetType === "etcd" && (
-              <EtcdConfigSection
-                endpoints={etcdEndpoints}
-                setEndpoints={setEtcdEndpoints}
-                username={username}
-                setUsername={setUsername}
-                password={password}
-                setPassword={setPassword}
-                encryptedPassword={encryptedPassword}
-                passwordSource={passwordSource}
-                setPasswordSource={setPasswordSource}
-                passwordCredentialId={passwordCredentialId}
-                setPasswordCredentialId={setPasswordCredentialId}
-                managedPasswords={managedPasswords}
-                editAssetId={editAsset?.ID}
-                tls={etcdTls}
-                setTls={setEtcdTls}
-                tlsInsecure={etcdTlsInsecure}
-                setTlsInsecure={setEtcdTlsInsecure}
-                tlsServerName={etcdTlsServerName}
-                setTlsServerName={setEtcdTlsServerName}
-                tlsCAFile={etcdTlsCAFile}
-                setTlsCAFile={setEtcdTlsCAFile}
-                tlsCertFile={etcdTlsCertFile}
-                setTlsCertFile={setEtcdTlsCertFile}
-                tlsKeyFile={etcdTlsKeyFile}
-                setTlsKeyFile={setEtcdTlsKeyFile}
-                dialTimeoutSeconds={etcdDialTimeoutSeconds}
-                setDialTimeoutSeconds={setEtcdDialTimeoutSeconds}
-                commandTimeoutSeconds={etcdCommandTimeoutSeconds}
-                setCommandTimeoutSeconds={setEtcdCommandTimeoutSeconds}
-                sshTunnelId={sshTunnelId}
-                setSshTunnelId={setSshTunnelId}
               />
             )}
 
