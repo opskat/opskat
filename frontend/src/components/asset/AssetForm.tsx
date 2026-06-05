@@ -18,13 +18,10 @@ import {
 import { IconPicker } from "@/components/asset/IconPicker";
 import { GroupSelect } from "@/components/asset/GroupSelect";
 import { useAssetStore } from "@/stores/assetStore";
-import { asset_entity, credential_entity } from "../../../wailsjs/go/models";
+import { asset_entity } from "../../../wailsjs/go/models";
 import { EncryptPassword } from "../../../wailsjs/go/system/System";
 import { GetDecryptedExtensionConfig } from "../../../wailsjs/go/extension/Extension";
-import { ListCredentialsByType, CancelTest, TestAssetConnection } from "../../../wailsjs/go/system/System";
-import { ListLocalSSHKeys } from "../../../wailsjs/go/ssh/SSH";
-import { ssh as ssh_models } from "../../../wailsjs/go/models";
-import { SSHConfigSection } from "@/components/asset/SSHConfigSection";
+import { CancelTest, TestAssetConnection } from "../../../wailsjs/go/system/System";
 import { useExtensionStore } from "@/extension";
 import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
 import { AssetTypePicker } from "@/components/asset/AssetTypePicker";
@@ -47,27 +44,6 @@ function newTestId(): string {
   return `test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-interface ProxyConfig {
-  type: string;
-  host: string;
-  port: number;
-  username?: string;
-  password?: string;
-}
-
-interface SSHConfig {
-  host: string;
-  port: number;
-  username: string;
-  auth_type: string;
-  password?: string;
-  credential_id?: number;
-  private_keys?: string[];
-  private_key_passphrase?: string;
-  jump_host_id?: number;
-  proxy?: ProxyConfig | null;
-}
-
 type AssetType =
   | "ssh"
   | "database"
@@ -79,18 +55,6 @@ type AssetType =
   | "etcd"
   | "local"
   | (string & {});
-
-const DEFAULT_PORTS: Record<string, number> = {
-  ssh: 22,
-  mysql: 3306,
-  postgresql: 5432,
-  mssql: 1433,
-  redis: 6379,
-  mongodb: 27017,
-  kafka: 9092,
-  k8s: 6443,
-  etcd: 2379,
-};
 
 const DEFAULT_ICONS: Record<string, string> = {
   ssh: "server",
@@ -121,10 +85,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const [name, setName] = useState("");
   const [groupId, setGroupId] = useState(0);
   const [description, setDescription] = useState("");
-  const [host, setHost] = useState("");
-  const [port, setPort] = useState(22);
-  const [username, setUsername] = useState("root");
-  const [authType, setAuthType] = useState("password");
   const [icon, setIcon] = useState("server");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -136,38 +96,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const [validity, setValidity] = useState<SectionValidity>({ canTest: false, canSave: false });
   const ctx: AssetFormContext = useMemo(() => ({ isEdit: !!editAsset, encryptPassword: EncryptPassword }), [editAsset]);
 
-  // Connection type (SSH only)
-  const [connectionType, setConnectionType] = useState<"direct" | "jumphost" | "proxy">("direct");
-
-  // Auth fields
-  const [password, setPassword] = useState("");
-  const [encryptedPassword, setEncryptedPassword] = useState("");
-  const [passwordSource, setPasswordSource] = useState<"inline" | "managed">("inline");
-  const [passwordCredentialId, setPasswordCredentialId] = useState(0);
-  const [managedPasswords, setManagedPasswords] = useState<credential_entity.Credential[]>([]);
-  const [keySource, setKeySource] = useState<"managed" | "file">("managed");
-  const [credentialId, setCredentialId] = useState(0);
-  const [managedKeys, setManagedKeys] = useState<credential_entity.Credential[]>([]);
-
-  // SSH fields - local key
-  const [localKeys, setLocalKeys] = useState<ssh_models.LocalSSHKeyInfo[]>([]);
-  const [selectedKeyPaths, setSelectedKeyPaths] = useState<string[]>([]);
-  const [privateKeyPassphrase, setPrivateKeyPassphrase] = useState("");
-  const [encryptedPrivateKeyPassphrase, setEncryptedPrivateKeyPassphrase] = useState("");
-  const [scanningKeys, setScanningKeys] = useState(false);
-  const [sshTunnelId, setSshTunnelId] = useState(0);
-  const [proxyType, setProxyType] = useState("socks5");
-  const [proxyHost, setProxyHost] = useState("");
-  const [proxyPort, setProxyPort] = useState(1080);
-  const [proxyUsername, setProxyUsername] = useState("");
-  const [proxyPassword, setProxyPassword] = useState("");
-  const [encryptedProxyPassword, setEncryptedProxyPassword] = useState("");
-
   // Extension config
   const [extConfig, setExtConfig] = useState<Record<string, unknown>>({});
-
-  // Exclude self from jump host / SSH tunnel selection
-  const jumpHostExcludeIds = editAsset?.ID ? [editAsset.ID] : undefined;
 
   // 复位测试状态：open 切换时一律清掉上一次表单的 testing/testID 残留，
   // 并取消任何还在后台跑的测试（关闭对话框时直接放弃结果）。
@@ -178,23 +108,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     }
     activeTestIdRef.current = null;
     setTesting(false);
-  }, [open]);
-
-  // Load managed keys/passwords and scan local keys when dialog opens
-  useEffect(() => {
-    if (open) {
-      ListCredentialsByType("ssh_key")
-        .then((keys) => setManagedKeys(keys || []))
-        .catch(() => setManagedKeys([]));
-      ListCredentialsByType("password")
-        .then((passwords) => setManagedPasswords(passwords || []))
-        .catch(() => setManagedPasswords([]));
-      setScanningKeys(true);
-      ListLocalSSHKeys()
-        .then((keys) => setLocalKeys(keys || []))
-        .catch(() => setLocalKeys([]))
-        .finally(() => setScanningKeys(false));
-    }
   }, [open]);
 
   useEffect(() => {
@@ -209,8 +122,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
         if (getAssetType(editType)?.ConfigSection) {
           // 已注册化类型:config 回填由 section 经 editAsset prop 完成,壳跳过
-        } else if (editType === "ssh") {
-          loadSSHConfig(editAsset);
         } else {
           // Extension type: load decrypted config
           const extInfo = useExtensionStore.getState().getExtensionForAssetType(editType);
@@ -228,170 +139,16 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         setGroupId(defaultGroupId);
         setIcon("server");
         setDescription("");
-        resetSharedFields("ssh");
-        resetSSHFields();
+        // 注册化类型 section 经 key={assetType} 重挂载自初始化,壳只清扩展 config。
         setExtConfig({});
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editAsset, defaultGroupId]);
-
-  const loadSSHConfig = (asset: asset_entity.Asset) => {
-    try {
-      const cfg: SSHConfig = JSON.parse(asset.Config || "{}");
-      setHost(cfg.host || "");
-      setPort(cfg.port || 22);
-      setUsername(cfg.username || "root");
-      setAuthType(cfg.auth_type || "password");
-
-      setEncryptedPassword(cfg.password || "");
-      setPassword("");
-      if (cfg.auth_type === "password" && cfg.credential_id) {
-        setPasswordSource("managed");
-        setPasswordCredentialId(cfg.credential_id);
-      } else {
-        setPasswordSource("inline");
-        setPasswordCredentialId(0);
-      }
-      setKeySource(cfg.private_keys && cfg.private_keys.length > 0 ? "file" : "managed");
-      setCredentialId(cfg.auth_type === "key" ? cfg.credential_id || 0 : 0);
-      setSelectedKeyPaths(cfg.private_keys || []);
-      setPrivateKeyPassphrase(""); // passphrase 已加密，不回显
-      setEncryptedPrivateKeyPassphrase(cfg.private_key_passphrase || "");
-
-      // Unified SSH tunnel: prefer asset-level field, fall back to config
-      const tunnelId = asset.sshTunnelId || cfg.jump_host_id || 0;
-      setSshTunnelId(tunnelId);
-
-      if (tunnelId) {
-        setConnectionType("jumphost");
-      } else if (cfg.proxy) {
-        setConnectionType("proxy");
-      } else {
-        setConnectionType("direct");
-      }
-
-      if (cfg.proxy) {
-        setProxyType(cfg.proxy.type || "socks5");
-        setProxyHost(cfg.proxy.host || "");
-        setProxyPort(cfg.proxy.port || 1080);
-        setProxyUsername(cfg.proxy.username || "");
-        setEncryptedProxyPassword(cfg.proxy.password || "");
-        setProxyPassword("");
-      } else {
-        resetProxyFields();
-      }
-    } catch {
-      resetSharedFields("ssh");
-      resetSSHFields();
-    }
-  };
-
-  // Reset shared connection fields with type-appropriate defaults
-  const resetSharedFields = (type: AssetType) => {
-    setHost("");
-    setPort(DEFAULT_PORTS[type] || 22);
-    setUsername(type === "ssh" ? "root" : "");
-    setPassword("");
-    setEncryptedPassword("");
-    setPasswordSource("inline");
-    setPasswordCredentialId(0);
-  };
-
-  const resetProxyFields = () => {
-    setProxyType("socks5");
-    setProxyHost("");
-    setProxyPort(1080);
-    setProxyUsername("");
-    setProxyPassword("");
-    setEncryptedProxyPassword("");
-  };
-
-  // SSH-exclusive fields only
-  const resetSSHFields = () => {
-    setAuthType("password");
-    setKeySource("managed");
-    setCredentialId(0);
-    setSelectedKeyPaths([]);
-    setPrivateKeyPassphrase("");
-    setEncryptedPrivateKeyPassphrase("");
-    setConnectionType("direct");
-    setSshTunnelId(0);
-    resetProxyFields();
-  };
 
   const handleTypeChange = (newType: AssetType) => {
     if (newType === assetType) return;
     setAssetType(newType);
-
-    // Reset port/username/password to type-appropriate defaults (keep host)
-    setPort(newType === "database" ? 3306 : DEFAULT_PORTS[newType] || 22);
-    setUsername(newType === "ssh" ? "root" : "");
-    setPassword("");
-    setEncryptedPassword("");
-    setPasswordSource("inline");
-    setPasswordCredentialId(0);
     setIcon(newType === "database" ? "mysql" : DEFAULT_ICONS[newType] || "server");
-  };
-
-  // 测试连接时把当前表单选中的密码来源（托管 / 内联加密缓存）写入 cfg。
-  // 明文 password 仍由调用方作为 TestXxxConnection 的第二参数传入；
-  // 这里只处理"无明文输入"时需要从托管凭据 ID 或已存加密值兜底的字段。
-  const applyTestPasswordSource = <T extends { credential_id?: number; password?: string }>(cfg: T): T => {
-    if (passwordSource === "managed" && passwordCredentialId > 0) {
-      cfg.credential_id = passwordCredentialId;
-    } else if (!password && encryptedPassword) {
-      cfg.password = encryptedPassword;
-    }
-    return cfg;
-  };
-
-  const handleTestConnection = async () => {
-    const sshConfig: SSHConfig = {
-      host,
-      port,
-      username,
-      auth_type: authType,
-    };
-    if (authType === "password") {
-      applyTestPasswordSource(sshConfig);
-    }
-    if (authType === "key") {
-      if (keySource === "managed" && credentialId > 0) sshConfig.credential_id = credentialId;
-      if (keySource === "file" && selectedKeyPaths.length > 0) {
-        sshConfig.private_keys = selectedKeyPaths;
-        // 测试连接时：优先使用用户输入的明文 passphrase，否则使用存储的加密值
-        if (privateKeyPassphrase) {
-          sshConfig.private_key_passphrase = privateKeyPassphrase;
-        } else if (encryptedPrivateKeyPassphrase) {
-          sshConfig.private_key_passphrase = encryptedPrivateKeyPassphrase;
-        }
-      }
-    }
-    if (connectionType === "jumphost" && sshTunnelId > 0) sshConfig.jump_host_id = sshTunnelId;
-    if (connectionType === "proxy" && proxyHost) {
-      sshConfig.proxy = {
-        type: proxyType,
-        host: proxyHost,
-        port: proxyPort,
-        username: proxyUsername || undefined,
-        password: proxyPassword || undefined,
-      };
-    }
-    const testId = newTestId();
-    activeTestIdRef.current = testId;
-    setTesting(true);
-    try {
-      await TestAssetConnection(testId, "ssh", JSON.stringify(sshConfig), password);
-      if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
-    } catch (e) {
-      if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
-    } finally {
-      if (activeTestIdRef.current === testId) {
-        activeTestIdRef.current = null;
-        setTesting(false);
-      }
-    }
   };
 
   // 静默取消正在进行的测试（用于保存/关闭对话框等退出动作）。无 in-flight 测试时是 no-op。
@@ -433,32 +190,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         setTesting(false);
       }
     }
-  };
-
-  const encryptPasswordValue = async (): Promise<string | undefined> => {
-    if (password) {
-      try {
-        return await EncryptPassword(password);
-      } catch {
-        toast.error("Failed to encrypt password");
-        return undefined;
-      }
-    }
-    if (encryptedPassword) return encryptedPassword;
-    return "";
-  };
-
-  const encryptProxyPassword = async (): Promise<string | undefined> => {
-    if (proxyPassword) {
-      try {
-        return await EncryptPassword(proxyPassword);
-      } catch {
-        toast.error("Failed to encrypt proxy password");
-        return undefined;
-      }
-    }
-    if (encryptedProxyPassword) return encryptedProxyPassword;
-    return undefined;
   };
 
   const persistAsset = async (asset: asset_entity.Asset) => {
@@ -506,70 +237,20 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       return;
     }
 
-    let config: string;
-
-    if (assetType === "ssh") {
-      const sshConfig: SSHConfig = {
-        host,
-        port,
-        username,
-        auth_type: authType,
-      };
-
-      if (authType === "password") {
-        if (passwordSource === "managed" && passwordCredentialId > 0) {
-          sshConfig.credential_id = passwordCredentialId;
-        } else {
-          const encrypted = await encryptPasswordValue();
+    // Extension type: encrypt password fields from configSchema before saving
+    const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
+    const schema = extInfo?.manifest.assetTypes?.find((at) => at.type === assetType)?.configSchema as
+      | { properties?: Record<string, { format?: string }> }
+      | undefined;
+    const configCopy = { ...extConfig };
+    if (schema?.properties) {
+      for (const [key, prop] of Object.entries(schema.properties)) {
+        if (prop.format === "password" && configCopy[key]) {
+          const encrypted = await EncryptPassword(String(configCopy[key]));
           if (encrypted === undefined) return;
-          if (encrypted) sshConfig.password = encrypted;
+          configCopy[key] = encrypted;
         }
       }
-
-      if (authType === "key") {
-        if (keySource === "managed" && credentialId > 0) sshConfig.credential_id = credentialId;
-        if (keySource === "file" && selectedKeyPaths.length > 0) {
-          sshConfig.private_keys = selectedKeyPaths;
-          if (privateKeyPassphrase) {
-            // 用户输入了新的 passphrase，加密存储
-            const encrypted = await EncryptPassword(privateKeyPassphrase);
-            if (encrypted === undefined) return;
-            sshConfig.private_key_passphrase = encrypted;
-          } else if (encryptedPrivateKeyPassphrase) {
-            // 用户没有输入新的 passphrase，保留原有的加密值
-            sshConfig.private_key_passphrase = encryptedPrivateKeyPassphrase;
-          }
-        }
-      }
-
-      if (connectionType === "proxy" && proxyHost) {
-        const encProxy = await encryptProxyPassword();
-        sshConfig.proxy = {
-          type: proxyType,
-          host: proxyHost,
-          port: proxyPort,
-          username: proxyUsername || undefined,
-          password: encProxy || undefined,
-        };
-      }
-      config = JSON.stringify(sshConfig);
-    } else {
-      // Extension type: encrypt password fields from configSchema before saving
-      const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
-      const schema = extInfo?.manifest.assetTypes?.find((at) => at.type === assetType)?.configSchema as
-        | { properties?: Record<string, { format?: string }> }
-        | undefined;
-      const configCopy = { ...extConfig };
-      if (schema?.properties) {
-        for (const [key, prop] of Object.entries(schema.properties)) {
-          if (prop.format === "password" && configCopy[key]) {
-            const encrypted = await EncryptPassword(String(configCopy[key]));
-            if (encrypted === undefined) return;
-            configCopy[key] = encrypted;
-          }
-        }
-      }
-      config = JSON.stringify(configCopy);
     }
 
     const asset = new asset_entity.Asset({
@@ -579,19 +260,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       GroupID: groupId,
       Icon: icon,
       Description: description,
-      Config: config,
-      sshTunnelId:
-        assetType === "ssh"
-          ? connectionType === "jumphost" && sshTunnelId > 0
-            ? sshTunnelId
-            : 0
-          : assetType === "k8s"
-            ? sshTunnelId > 0
-              ? sshTunnelId
-              : 0
-            : sshTunnelId > 0
-              ? sshTunnelId
-              : 0,
+      Config: JSON.stringify(configCopy),
+      sshTunnelId: 0, // 扩展类型无隧道
     });
 
     await persistAsset(asset);
@@ -602,18 +272,14 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
   const isTestableAssetType = sectionDef?.ConfigSection ? !!sectionDef.testable : assetType === "ssh";
 
-  const isTestConnectionDisabled = testing || (sectionDef?.ConfigSection ? !validity.canTest : !host);
+  const isTestConnectionDisabled = testing || !validity.canTest;
 
   const saveDisabledReason = !name.trim()
     ? "asset.formMissingName"
     : sectionDef?.ConfigSection
       ? (validity.saveDisabledReason ?? "")
-      : assetType === "ssh" && !host.trim()
-        ? "asset.formMissingHost"
-        : "";
+      : "";
   const saveDisabled = saving || !!saveDisabledReason || (!!sectionDef?.ConfigSection && !validity.canSave);
-
-  const handleRunTestConnection = sectionDef?.ConfigSection ? handleGenericTestConnection : handleTestConnection;
 
   const testConnectionButton = !isTestableAssetType ? null : testing && activeTestIdRef.current ? (
     <Button type="button" variant="outline" size="sm" onClick={handleCancelTest} className="gap-1 w-fit">
@@ -627,7 +293,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       type="button"
       variant="outline"
       size="sm"
-      onClick={handleRunTestConnection}
+      onClick={handleGenericTestConnection}
       disabled={isTestConnectionDisabled}
       className="gap-1 w-fit"
     >
@@ -698,58 +364,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               <GroupSelect value={groupId} onValueChange={setGroupId} />
             </div>
 
-            {/* Type-specific config sections */}
-            {assetType === "ssh" && (
-              <SSHConfigSection
-                host={host}
-                setHost={setHost}
-                port={port}
-                setPort={setPort}
-                username={username}
-                setUsername={setUsername}
-                authType={authType}
-                setAuthType={setAuthType}
-                connectionType={connectionType}
-                setConnectionType={setConnectionType}
-                password={password}
-                setPassword={setPassword}
-                encryptedPassword={encryptedPassword}
-                passwordSource={passwordSource}
-                setPasswordSource={setPasswordSource}
-                passwordCredentialId={passwordCredentialId}
-                setPasswordCredentialId={setPasswordCredentialId}
-                managedPasswords={managedPasswords}
-                keySource={keySource}
-                setKeySource={setKeySource}
-                credentialId={credentialId}
-                setCredentialId={setCredentialId}
-                managedKeys={managedKeys}
-                localKeys={localKeys}
-                setLocalKeys={setLocalKeys}
-                selectedKeyPaths={selectedKeyPaths}
-                setSelectedKeyPaths={setSelectedKeyPaths}
-                privateKeyPassphrase={privateKeyPassphrase}
-                setPrivateKeyPassphrase={setPrivateKeyPassphrase}
-                scanningKeys={scanningKeys}
-                sshTunnelId={sshTunnelId}
-                setSshTunnelId={setSshTunnelId}
-                jumpHostExcludeIds={jumpHostExcludeIds}
-                proxyType={proxyType}
-                setProxyType={setProxyType}
-                proxyHost={proxyHost}
-                setProxyHost={setProxyHost}
-                proxyPort={proxyPort}
-                setProxyPort={setProxyPort}
-                proxyUsername={proxyUsername}
-                setProxyUsername={setProxyUsername}
-                proxyPassword={proxyPassword}
-                setProxyPassword={setProxyPassword}
-                encryptedProxyPassword={encryptedProxyPassword}
-                editAssetId={editAsset?.ID}
-              />
-            )}
-
-            {/* 注册化类型:通用 ConfigSection 路径(local 等) */}
+            {/* 注册化类型:通用 ConfigSection 路径 */}
             {sectionDef?.ConfigSection && (
               <sectionDef.ConfigSection
                 key={assetType}
@@ -763,6 +378,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
             {/* Extension type config */}
             {assetType !== "ssh" &&
+              !sectionDef?.ConfigSection &&
               (() => {
                 const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
                 if (!extInfo) return null;

@@ -1,6 +1,7 @@
 import { Monitor } from "lucide-react";
 import { registerAssetType } from "./_register";
 import { SSHDetailInfoCard } from "@/components/asset/detail/SSHDetailInfoCard";
+import { SSHConfigSection } from "@/components/asset/SSHConfigSection";
 
 registerAssetType({
   type: "ssh",
@@ -12,6 +13,8 @@ registerAssetType({
   canConnectInNewTab: true,
   connectAction: "terminal",
   DetailInfoCard: SSHDetailInfoCard,
+  ConfigSection: SSHConfigSection,
+  testable: true,
   policy: {
     policyType: "ssh",
     titleKey: "asset.cmdPolicy",
