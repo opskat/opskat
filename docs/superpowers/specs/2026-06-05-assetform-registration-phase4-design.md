@@ -179,3 +179,20 @@ const def = getAssetType(assetType);
 - **每个类型迁移时同步收缩遗留链**:extension 渲染的负向类型排除列表、`saveDisabledReason`/`isTestableAssetType`/`isTestConnectionDisabled` 三条 per-type 链必须随迁移逐项缩短(防半迁移类型两路径都漏接)——作为每次迁移的 checklist 项。
 - **多个 ConfigSection 类型共存后**:`validity` 在迁移类型间切换时的重置(现 `key={assetType}` remount 自纠,单类型不触发)。
 - 迁移顺序:`serial → etcd → redis → mongodb → database → k8s → kafka → ssh`,末 commit 删遗留 switch + 共享 host/port/username 等残留 state + `DEFAULT_ICONS`/`DEFAULT_PORTS`(届时只剩壳用则按需)。
+
+## 阶段 4b 完成记录(2026-06-05)
+
+计划见 `docs/superpowers/plans/2026-06-05-assetform-registration-phase4b.md`。子 agent 逐 Task 驱动 + spec/质量/最终 review。落地 4 个 commit:
+
+- `5fb2ef55` — `serial` 配置纯函数 `buildSerialConfig`/`parseSerialConfig`/`SERIAL_DEFAULTS`(sibling `SerialConfigSection.config.ts`)+ golden(锁旧保存/`loadSerialConfig` 字节一致;serial 的测试 config 与保存 config 同形)。
+- `9dbe8472` — 迁移 `serial`(**首个可测类型**)+ 建**通用测试编排**:`SerialConfigSection` 重写为 `forwardRef` 自持 state,暴露 `buildConfig` + `buildTestConfig`(复用 `buildSerialConfig`,password "");`onValidityChange` 契约扩为 `SectionValidity{canTest,canSave,saveDisabledReason?}`;壳新增 `handleGenericTestConnection`(镜像旧 `handleTest*` 的 testId 竞态/取消/toast,只把 config 来源换成 `buildTestConfig`),`isTestableAssetType`/`isTestConnectionDisabled`/`handleRunTestConnection`/`saveDisabledReason` 在 `sectionDef?.ConfigSection` 时切到通用/反应式分支;删 serial 全部遗留。
+- `18f69f15` — prettier 修正 serial 测试文件格式。
+- `6d593b4d` — 去 extension guard 的 `assetType !== "serial"` 硬编码 + `handleTypeChange` 死行(承 serial 迁移,同 4a 处理 local 的先例)。
+
+**关闭了 4a 的两条备忘**:① `validity.canTest` 已接到测试按钮(`isTestConnectionDisabled` 通用分支 `!validity.canTest`)——4a 推迟项落地;② serial 迁移时同步收缩了四条 per-type 遗留链(isTestable/isTestConnectionDisabled/handleRunTestConnection/saveDisabledReason 删 serial 分支)+ extension 负向列表删 serial。
+
+**行为保持**:serial 保存/测试 config 经 golden 锁定;测试竞态/取消/toast = 旧 `handleTestSerialConnection` body;"缺串口"提示经 `SectionValidity.saveDisabledReason` 保留。**唯一刻意微调**:旧测试禁用用 `!serialPortPath`(不 trim)、保存用 `.trim()` —— 一个纯空白端口旧行为是"可测不可存"的隐性不一致;迁移后统一 `!!portPath.trim()`,纯空白端口现一致禁用两者(序列化仍写未 trim 的 port_path,golden 字节不变),最终 review 判为良性改进。全量 `vitest`(1124)/`tsc`/`eslint` 绿,local 测试仍 10 绿(契约扩展未回归 4a)。
+
+**最终 review 的前瞻结论(余 7 类型)**:`SectionValidity` 直接泛化(各类型自报自己的 missing-field i18n key,壳零分支);**SSH 的"测试发明文、保存发密文"已被 `buildConfig`/`buildTestConfig` 分离 + 异步 build 的 try/catch 支持**,壳无需再改;`onValidityChange` 必须始终传壳的 `setValidity`(身份稳定),勿在壳侧包一层非稳定回调(否则 effect 自循环);**每个有密文字段的类型(redis/mongodb/database/kafka/ssh)迁移时,须把旧 `loadXxxConfig` 的解密/掩码逻辑搬进各自的 `parseXxxConfig`,不能像 serial 那样假设明文**。
+
+**仍留给 4c+**:`etcd → redis → mongodb → database → k8s → kafka → ssh` 余 7 类型;末 commit 删遗留 switch + 共享 host/port/username state + `DEFAULT_PORTS`/`DEFAULT_ICONS`(届时只剩壳用按需)。
