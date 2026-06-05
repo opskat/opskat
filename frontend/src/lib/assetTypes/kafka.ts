@@ -1,6 +1,7 @@
 import { KafkaIcon } from "@/components/asset/brand-icons";
 import { registerAssetType } from "./_register";
 import { KafkaDetailInfoCard } from "@/components/asset/detail/KafkaDetailInfoCard";
+import { KafkaConfigSection } from "@/components/asset/KafkaConfigSection";
 
 registerAssetType({
   type: "kafka",
@@ -12,6 +13,8 @@ registerAssetType({
   canConnectInNewTab: false,
   connectAction: "query",
   DetailInfoCard: KafkaDetailInfoCard,
+  ConfigSection: KafkaConfigSection,
+  testable: true,
   policy: {
     policyType: "kafka",
     titleKey: "asset.kafkaPolicy",

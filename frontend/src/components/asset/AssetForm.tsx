@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
 import { useTranslation } from "react-i18next";
@@ -25,12 +25,6 @@ import { ListCredentialsByType, CancelTest, TestAssetConnection } from "../../..
 import { ListLocalSSHKeys } from "../../../wailsjs/go/ssh/SSH";
 import { ssh as ssh_models } from "../../../wailsjs/go/models";
 import { SSHConfigSection } from "@/components/asset/SSHConfigSection";
-import {
-  KafkaConfigSection,
-  type KafkaCompanionAuthForm,
-  type KafkaConnectClusterForm,
-  type KafkaSchemaRegistryForm,
-} from "@/components/asset/KafkaConfigSection";
 import { useExtensionStore } from "@/extension";
 import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
 import { AssetTypePicker } from "@/components/asset/AssetTypePicker";
@@ -74,60 +68,6 @@ interface SSHConfig {
   proxy?: ProxyConfig | null;
 }
 
-interface KafkaConfig {
-  brokers: string[];
-  client_id?: string;
-  sasl_mechanism?: string;
-  username?: string;
-  password?: string;
-  credential_id?: number;
-  tls?: boolean;
-  tls_insecure?: boolean;
-  tls_server_name?: string;
-  tls_ca_file?: string;
-  tls_cert_file?: string;
-  tls_key_file?: string;
-  request_timeout_seconds?: number;
-  message_preview_bytes?: number;
-  message_fetch_limit?: number;
-  ssh_asset_id?: number;
-  schema_registry?: KafkaSchemaRegistryConfig;
-  connect?: KafkaConnectConfig;
-}
-
-interface KafkaSchemaRegistryConfig {
-  enabled?: boolean;
-  url?: string;
-  auth_type?: string;
-  username?: string;
-  password?: string;
-  credential_id?: number;
-  tls_insecure?: boolean;
-  tls_server_name?: string;
-  tls_ca_file?: string;
-  tls_cert_file?: string;
-  tls_key_file?: string;
-}
-
-interface KafkaConnectConfig {
-  enabled?: boolean;
-  clusters?: KafkaConnectClusterConfig[];
-}
-
-interface KafkaConnectClusterConfig {
-  name?: string;
-  url?: string;
-  auth_type?: string;
-  username?: string;
-  password?: string;
-  credential_id?: number;
-  tls_insecure?: boolean;
-  tls_server_name?: string;
-  tls_ca_file?: string;
-  tls_cert_file?: string;
-  tls_key_file?: string;
-}
-
 type AssetType =
   | "ssh"
   | "database"
@@ -166,77 +106,6 @@ const DEFAULT_ICONS: Record<string, string> = {
   etcd: "etcd",
   local: "terminal",
 };
-
-function defaultKafkaCompanionAuth(): KafkaCompanionAuthForm {
-  return {
-    authType: "none",
-    username: "",
-    password: "",
-    encryptedPassword: "",
-    passwordSource: "inline",
-    credentialId: 0,
-    tlsInsecure: false,
-    tlsServerName: "",
-    tlsCAFile: "",
-    tlsCertFile: "",
-    tlsKeyFile: "",
-  };
-}
-
-function defaultKafkaSchemaRegistry(): KafkaSchemaRegistryForm {
-  return {
-    enabled: false,
-    url: "",
-    ...defaultKafkaCompanionAuth(),
-  };
-}
-
-function kafkaSchemaRegistryFromConfig(cfg?: KafkaSchemaRegistryConfig): KafkaSchemaRegistryForm {
-  return {
-    enabled: !!cfg?.enabled,
-    url: cfg?.url || "",
-    authType: cfg?.auth_type || "none",
-    username: kafkaCompanionUsernameFromConfig(cfg),
-    password: kafkaCompanionPlainSecretFromConfig(cfg),
-    encryptedPassword: cfg?.password || "",
-    passwordSource: cfg?.credential_id ? "managed" : "inline",
-    credentialId: cfg?.credential_id || 0,
-    tlsInsecure: !!cfg?.tls_insecure,
-    tlsServerName: cfg?.tls_server_name || "",
-    tlsCAFile: cfg?.tls_ca_file || "",
-    tlsCertFile: cfg?.tls_cert_file || "",
-    tlsKeyFile: cfg?.tls_key_file || "",
-  };
-}
-
-function newKafkaConnectCluster(cfg?: KafkaConnectClusterConfig, index = 0): KafkaConnectClusterForm {
-  return {
-    id: `connect-${Date.now().toString(36)}-${index}-${Math.random().toString(36).slice(2)}`,
-    name: cfg?.name || "",
-    url: cfg?.url || "",
-    authType: cfg?.auth_type || "none",
-    username: kafkaCompanionUsernameFromConfig(cfg),
-    password: kafkaCompanionPlainSecretFromConfig(cfg),
-    encryptedPassword: cfg?.password || "",
-    passwordSource: cfg?.credential_id ? "managed" : "inline",
-    credentialId: cfg?.credential_id || 0,
-    tlsInsecure: !!cfg?.tls_insecure,
-    tlsServerName: cfg?.tls_server_name || "",
-    tlsCAFile: cfg?.tls_ca_file || "",
-    tlsCertFile: cfg?.tls_cert_file || "",
-    tlsKeyFile: cfg?.tls_key_file || "",
-  };
-}
-
-function kafkaCompanionUsernameFromConfig(cfg?: KafkaSchemaRegistryConfig | KafkaConnectClusterConfig): string {
-  if (cfg?.auth_type === "bearer") return "";
-  return cfg?.username || "";
-}
-
-function kafkaCompanionPlainSecretFromConfig(cfg?: KafkaSchemaRegistryConfig | KafkaConnectClusterConfig): string {
-  if (cfg?.auth_type !== "bearer" || cfg.password || cfg.credential_id) return "";
-  return cfg.username || "";
-}
 
 export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }: AssetFormProps) {
   const { t } = useTranslation();
@@ -294,30 +163,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const [proxyPassword, setProxyPassword] = useState("");
   const [encryptedProxyPassword, setEncryptedProxyPassword] = useState("");
 
-  // TLS toggle shared by kafka
-  const [tls, setTls] = useState(false);
-
-  // Kafka fields
-  const [kafkaBrokersText, setKafkaBrokersText] = useState("");
-  const [kafkaClientId, setKafkaClientId] = useState("opskat");
-  const [kafkaSaslMechanism, setKafkaSaslMechanism] = useState("none");
-  const [kafkaTlsInsecure, setKafkaTlsInsecure] = useState(false);
-  const [kafkaTlsServerName, setKafkaTlsServerName] = useState("");
-  const [kafkaTlsCAFile, setKafkaTlsCAFile] = useState("");
-  const [kafkaTlsCertFile, setKafkaTlsCertFile] = useState("");
-  const [kafkaTlsKeyFile, setKafkaTlsKeyFile] = useState("");
-  const [kafkaRequestTimeoutSeconds, setKafkaRequestTimeoutSeconds] = useState(30);
-  const [kafkaMessagePreviewBytes, setKafkaMessagePreviewBytes] = useState(4096);
-  const [kafkaMessageFetchLimit, setKafkaMessageFetchLimit] = useState(50);
-  const [kafkaSchemaRegistry, setKafkaSchemaRegistryState] =
-    useState<KafkaSchemaRegistryForm>(defaultKafkaSchemaRegistry());
-  const [kafkaConnectEnabled, setKafkaConnectEnabled] = useState(false);
-  const [kafkaConnectClusters, setKafkaConnectClusters] = useState<KafkaConnectClusterForm[]>([]);
-
-  const setKafkaSchemaRegistry = useCallback((patch: Partial<KafkaSchemaRegistryForm>) => {
-    setKafkaSchemaRegistryState((current) => ({ ...current, ...patch }));
-  }, []);
-
   // Extension config
   const [extConfig, setExtConfig] = useState<Record<string, unknown>>({});
 
@@ -366,8 +211,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           // 已注册化类型:config 回填由 section 经 editAsset prop 完成,壳跳过
         } else if (editType === "ssh") {
           loadSSHConfig(editAsset);
-        } else if (editType === "kafka") {
-          loadKafkaConfig(editAsset);
         } else {
           // Extension type: load decrypted config
           const extInfo = useExtensionStore.getState().getExtensionForAssetType(editType);
@@ -387,7 +230,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         setDescription("");
         resetSharedFields("ssh");
         resetSSHFields();
-        resetKafkaFields();
         setExtConfig({});
       }
     }
@@ -445,46 +287,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     }
   };
 
-  const loadKafkaConfig = (asset: asset_entity.Asset) => {
-    try {
-      const cfg: KafkaConfig = JSON.parse(asset.Config || "{}");
-      setKafkaBrokersText((cfg.brokers || []).join("\n"));
-      setKafkaClientId(cfg.client_id || "opskat");
-      setKafkaSaslMechanism(cfg.sasl_mechanism || "none");
-      setUsername(cfg.username || "");
-      setTls(cfg.tls || false);
-      setKafkaTlsInsecure(cfg.tls_insecure || false);
-      setKafkaTlsServerName(cfg.tls_server_name || "");
-      setKafkaTlsCAFile(cfg.tls_ca_file || "");
-      setKafkaTlsCertFile(cfg.tls_cert_file || "");
-      setKafkaTlsKeyFile(cfg.tls_key_file || "");
-      setKafkaRequestTimeoutSeconds(cfg.request_timeout_seconds || 30);
-      setKafkaMessagePreviewBytes(cfg.message_preview_bytes || 4096);
-      setKafkaMessageFetchLimit(cfg.message_fetch_limit || 50);
-      setSshTunnelId(asset.sshTunnelId || cfg.ssh_asset_id || 0);
-      setKafkaSchemaRegistryState(kafkaSchemaRegistryFromConfig(cfg.schema_registry));
-      setKafkaConnectEnabled(!!cfg.connect?.enabled);
-      setKafkaConnectClusters(
-        (cfg.connect?.clusters || []).map((cluster, index) => newKafkaConnectCluster(cluster, index))
-      );
-
-      if (cfg.credential_id) {
-        setPasswordSource("managed");
-        setPasswordCredentialId(cfg.credential_id);
-        setEncryptedPassword("");
-        setPassword("");
-      } else {
-        setPasswordSource("inline");
-        setPasswordCredentialId(0);
-        setEncryptedPassword(cfg.password || "");
-        setPassword("");
-      }
-    } catch {
-      resetSharedFields("kafka");
-      resetKafkaFields();
-    }
-  };
-
   // Reset shared connection fields with type-appropriate defaults
   const resetSharedFields = (type: AssetType) => {
     setHost("");
@@ -518,25 +320,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     resetProxyFields();
   };
 
-  const resetKafkaFields = () => {
-    setKafkaBrokersText("");
-    setKafkaClientId("opskat");
-    setKafkaSaslMechanism("none");
-    setTls(false);
-    setKafkaTlsInsecure(false);
-    setKafkaTlsServerName("");
-    setKafkaTlsCAFile("");
-    setKafkaTlsCertFile("");
-    setKafkaTlsKeyFile("");
-    setKafkaRequestTimeoutSeconds(30);
-    setKafkaMessagePreviewBytes(4096);
-    setKafkaMessageFetchLimit(50);
-    setSshTunnelId(0);
-    setKafkaSchemaRegistryState(defaultKafkaSchemaRegistry());
-    setKafkaConnectEnabled(false);
-    setKafkaConnectClusters([]);
-  };
-
   const handleTypeChange = (newType: AssetType) => {
     if (newType === assetType) return;
     setAssetType(newType);
@@ -560,36 +343,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     } else if (!password && encryptedPassword) {
       cfg.password = encryptedPassword;
     }
-    return cfg;
-  };
-
-  const kafkaBrokers = () =>
-    kafkaBrokersText
-      .split(/[\n,]+/)
-      .map((item) => item.trim())
-      .filter(Boolean);
-
-  const buildKafkaConfig = (): KafkaConfig => {
-    const cfg: KafkaConfig = {
-      brokers: kafkaBrokers(),
-    };
-    if (kafkaClientId.trim()) cfg.client_id = kafkaClientId.trim();
-    if (kafkaSaslMechanism && kafkaSaslMechanism !== "none") {
-      cfg.sasl_mechanism = kafkaSaslMechanism;
-      if (username) cfg.username = username;
-    } else {
-      cfg.sasl_mechanism = "none";
-    }
-    if (tls) cfg.tls = true;
-    if (tls && kafkaTlsInsecure) cfg.tls_insecure = true;
-    if (tls && kafkaTlsServerName) cfg.tls_server_name = kafkaTlsServerName;
-    if (tls && kafkaTlsCAFile) cfg.tls_ca_file = kafkaTlsCAFile;
-    if (tls && kafkaTlsCertFile) cfg.tls_cert_file = kafkaTlsCertFile;
-    if (tls && kafkaTlsKeyFile) cfg.tls_key_file = kafkaTlsKeyFile;
-    if (kafkaRequestTimeoutSeconds > 0) cfg.request_timeout_seconds = kafkaRequestTimeoutSeconds;
-    if (kafkaMessagePreviewBytes > 0) cfg.message_preview_bytes = kafkaMessagePreviewBytes;
-    if (kafkaMessageFetchLimit > 0) cfg.message_fetch_limit = kafkaMessageFetchLimit;
-    if (sshTunnelId > 0) cfg.ssh_asset_id = sshTunnelId;
     return cfg;
   };
 
@@ -630,27 +383,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setTesting(true);
     try {
       await TestAssetConnection(testId, "ssh", JSON.stringify(sshConfig), password);
-      if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
-    } catch (e) {
-      if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
-    } finally {
-      if (activeTestIdRef.current === testId) {
-        activeTestIdRef.current = null;
-        setTesting(false);
-      }
-    }
-  };
-
-  const handleTestKafkaConnection = async () => {
-    const cfg = buildKafkaConfig();
-    if (kafkaSaslMechanism !== "none") {
-      applyTestPasswordSource(cfg);
-    }
-    const testId = newTestId();
-    activeTestIdRef.current = testId;
-    setTesting(true);
-    try {
-      await TestAssetConnection(testId, "kafka", JSON.stringify(cfg), password);
       if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
     } catch (e) {
       if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
@@ -714,110 +446,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     }
     if (encryptedPassword) return encryptedPassword;
     return "";
-  };
-
-  const encryptKafkaCompanionPassword = async (
-    plainPassword: string,
-    existingEncryptedPassword: string
-  ): Promise<string | undefined> => {
-    if (plainPassword) {
-      try {
-        return await EncryptPassword(plainPassword);
-      } catch {
-        toast.error("Failed to encrypt password");
-        return undefined;
-      }
-    }
-    if (existingEncryptedPassword) return existingEncryptedPassword;
-    return "";
-  };
-
-  const applyKafkaCompanionAuth = async (
-    cfg: KafkaSchemaRegistryConfig | KafkaConnectClusterConfig,
-    form: KafkaCompanionAuthForm
-  ): Promise<boolean> => {
-    const authType = form.authType || "none";
-    if (authType === "none") return true;
-    cfg.auth_type = authType;
-    if (authType !== "bearer" && form.username.trim()) cfg.username = form.username.trim();
-    if (form.passwordSource === "managed" && form.credentialId > 0) {
-      cfg.credential_id = form.credentialId;
-      return true;
-    }
-    const encrypted = await encryptKafkaCompanionPassword(form.password, form.encryptedPassword);
-    if (encrypted === undefined) return false;
-    if (encrypted) cfg.password = encrypted;
-    return true;
-  };
-
-  const applyKafkaCompanionTLS = (
-    cfg: KafkaSchemaRegistryConfig | KafkaConnectClusterConfig,
-    form: KafkaCompanionAuthForm
-  ) => {
-    if (form.tlsInsecure) cfg.tls_insecure = true;
-    if (form.tlsServerName.trim()) cfg.tls_server_name = form.tlsServerName.trim();
-    if (form.tlsCAFile.trim()) cfg.tls_ca_file = form.tlsCAFile.trim();
-    if (form.tlsCertFile.trim()) cfg.tls_cert_file = form.tlsCertFile.trim();
-    if (form.tlsKeyFile.trim()) cfg.tls_key_file = form.tlsKeyFile.trim();
-  };
-
-  const validateKafkaCompanions = (): boolean => {
-    if (kafkaSchemaRegistry.enabled && !kafkaSchemaRegistry.url.trim()) {
-      toast.error(t("asset.kafkaSchemaRegistryURLRequired"));
-      return false;
-    }
-    if (kafkaSchemaRegistry.enabled && !validateKafkaCompanionAuth(kafkaSchemaRegistry)) return false;
-    if (kafkaConnectEnabled) {
-      const clusters = kafkaConnectClusters.filter((cluster) => cluster.name.trim() || cluster.url.trim());
-      if (clusters.length === 0) {
-        toast.error(t("asset.kafkaConnectClusterRequired"));
-        return false;
-      }
-      if (clusters.some((cluster) => !cluster.name.trim() || !cluster.url.trim())) {
-        toast.error(t("asset.kafkaConnectClusterInvalid"));
-        return false;
-      }
-      if (clusters.some((cluster) => !validateKafkaCompanionAuth(cluster))) return false;
-    }
-    return true;
-  };
-
-  const validateKafkaCompanionAuth = (form: KafkaCompanionAuthForm): boolean => {
-    if (form.authType !== "bearer") return true;
-    const hasToken =
-      form.passwordSource === "managed" ? form.credentialId > 0 : !!form.password.trim() || !!form.encryptedPassword;
-    if (!hasToken) {
-      toast.error(t("asset.kafkaBearerTokenRequired"));
-      return false;
-    }
-    return true;
-  };
-
-  const buildKafkaSchemaRegistryConfig = async (): Promise<KafkaSchemaRegistryConfig | undefined> => {
-    if (!kafkaSchemaRegistry.enabled) return undefined;
-    const cfg: KafkaSchemaRegistryConfig = {
-      enabled: true,
-      url: kafkaSchemaRegistry.url.trim(),
-    };
-    if (!(await applyKafkaCompanionAuth(cfg, kafkaSchemaRegistry))) return undefined;
-    applyKafkaCompanionTLS(cfg, kafkaSchemaRegistry);
-    return cfg;
-  };
-
-  const buildKafkaConnectConfig = async (): Promise<KafkaConnectConfig | undefined> => {
-    if (!kafkaConnectEnabled) return undefined;
-    const cfg: KafkaConnectConfig = { enabled: true, clusters: [] };
-    const clusters = kafkaConnectClusters.filter((cluster) => cluster.name.trim() || cluster.url.trim());
-    for (const cluster of clusters) {
-      const next: KafkaConnectClusterConfig = {
-        name: cluster.name.trim(),
-        url: cluster.url.trim(),
-      };
-      if (!(await applyKafkaCompanionAuth(next, cluster))) return undefined;
-      applyKafkaCompanionTLS(next, cluster);
-      cfg.clusters?.push(next);
-    }
-    return cfg;
   };
 
   const encryptProxyPassword = async (): Promise<string | undefined> => {
@@ -925,29 +553,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         };
       }
       config = JSON.stringify(sshConfig);
-    } else if (assetType === "kafka") {
-      if (!validateKafkaCompanions()) return;
-      const kafkaConfig = buildKafkaConfig();
-      if (kafkaSaslMechanism !== "none") {
-        if (passwordSource === "managed" && passwordCredentialId > 0) {
-          kafkaConfig.credential_id = passwordCredentialId;
-        } else {
-          const encrypted = await encryptPasswordValue();
-          if (encrypted === undefined) return;
-          if (encrypted) kafkaConfig.password = encrypted;
-        }
-      }
-      const schemaRegistryConfig = await buildKafkaSchemaRegistryConfig();
-      if (kafkaSchemaRegistry.enabled) {
-        if (!schemaRegistryConfig) return;
-        kafkaConfig.schema_registry = schemaRegistryConfig;
-      }
-      const connectConfig = await buildKafkaConnectConfig();
-      if (kafkaConnectEnabled) {
-        if (!connectConfig) return;
-        kafkaConfig.connect = connectConfig;
-      }
-      config = JSON.stringify(kafkaConfig);
     } else {
       // Extension type: encrypt password fields from configSchema before saving
       const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
@@ -999,9 +604,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     ? !!sectionDef.testable
     : assetType === "ssh" || assetType === "kafka";
 
-  const isTestConnectionDisabled =
-    testing ||
-    (sectionDef?.ConfigSection ? !validity.canTest : assetType === "kafka" ? kafkaBrokers().length === 0 : !host);
+  const isTestConnectionDisabled = testing || (sectionDef?.ConfigSection ? !validity.canTest : !host);
 
   const saveDisabledReason = !name.trim()
     ? "asset.formMissingName"
@@ -1009,16 +612,10 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       ? (validity.saveDisabledReason ?? "")
       : assetType === "ssh" && !host.trim()
         ? "asset.formMissingHost"
-        : assetType === "kafka" && kafkaBrokers().length === 0
-          ? "asset.formMissingKafkaBrokers"
-          : "";
+        : "";
   const saveDisabled = saving || !!saveDisabledReason || (!!sectionDef?.ConfigSection && !validity.canSave);
 
-  const handleRunTestConnection = sectionDef?.ConfigSection
-    ? handleGenericTestConnection
-    : assetType === "ssh"
-      ? handleTestConnection
-      : handleTestKafkaConnection;
+  const handleRunTestConnection = sectionDef?.ConfigSection ? handleGenericTestConnection : handleTestConnection;
 
   const testConnectionButton = !isTestableAssetType ? null : testing && activeTestIdRef.current ? (
     <Button type="button" variant="outline" size="sm" onClick={handleCancelTest} className="gap-1 w-fit">
@@ -1151,54 +748,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                 setProxyPassword={setProxyPassword}
                 encryptedProxyPassword={encryptedProxyPassword}
                 editAssetId={editAsset?.ID}
-              />
-            )}
-
-            {assetType === "kafka" && (
-              <KafkaConfigSection
-                brokersText={kafkaBrokersText}
-                setBrokersText={setKafkaBrokersText}
-                clientId={kafkaClientId}
-                setClientId={setKafkaClientId}
-                saslMechanism={kafkaSaslMechanism}
-                setSaslMechanism={setKafkaSaslMechanism}
-                username={username}
-                setUsername={setUsername}
-                tls={tls}
-                setTls={setTls}
-                tlsInsecure={kafkaTlsInsecure}
-                setTlsInsecure={setKafkaTlsInsecure}
-                tlsServerName={kafkaTlsServerName}
-                setTlsServerName={setKafkaTlsServerName}
-                tlsCAFile={kafkaTlsCAFile}
-                setTlsCAFile={setKafkaTlsCAFile}
-                tlsCertFile={kafkaTlsCertFile}
-                setTlsCertFile={setKafkaTlsCertFile}
-                tlsKeyFile={kafkaTlsKeyFile}
-                setTlsKeyFile={setKafkaTlsKeyFile}
-                requestTimeoutSeconds={kafkaRequestTimeoutSeconds}
-                setRequestTimeoutSeconds={setKafkaRequestTimeoutSeconds}
-                messagePreviewBytes={kafkaMessagePreviewBytes}
-                setMessagePreviewBytes={setKafkaMessagePreviewBytes}
-                messageFetchLimit={kafkaMessageFetchLimit}
-                setMessageFetchLimit={setKafkaMessageFetchLimit}
-                sshTunnelId={sshTunnelId}
-                setSshTunnelId={setSshTunnelId}
-                password={password}
-                setPassword={setPassword}
-                encryptedPassword={encryptedPassword}
-                passwordSource={passwordSource}
-                setPasswordSource={setPasswordSource}
-                passwordCredentialId={passwordCredentialId}
-                setPasswordCredentialId={setPasswordCredentialId}
-                managedPasswords={managedPasswords}
-                editAssetId={editAsset?.ID}
-                schemaRegistry={kafkaSchemaRegistry}
-                setSchemaRegistry={setKafkaSchemaRegistry}
-                connectEnabled={kafkaConnectEnabled}
-                setConnectEnabled={setKafkaConnectEnabled}
-                connectClusters={kafkaConnectClusters}
-                setConnectClusters={setKafkaConnectClusters}
               />
             )}
 
