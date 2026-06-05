@@ -1,6 +1,7 @@
 import { SquareTerminal } from "lucide-react";
 import { registerAssetType } from "./_register";
 import { LocalDetailInfoCard } from "@/components/asset/detail/LocalDetailInfoCard";
+import { LocalConfigSection } from "@/components/asset/LocalConfigSection";
 
 registerAssetType({
   type: "local",
@@ -12,5 +13,6 @@ registerAssetType({
   canConnectInNewTab: true,
   connectAction: "terminal",
   DetailInfoCard: LocalDetailInfoCard,
+  ConfigSection: LocalConfigSection,
   policy: undefined,
 });

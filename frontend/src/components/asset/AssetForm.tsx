@@ -42,12 +42,12 @@ import {
 import { K8sConfigSection } from "@/components/asset/K8sConfigSection";
 import { EtcdConfigSection } from "@/components/asset/EtcdConfigSection";
 import { SerialConfigSection } from "@/components/asset/SerialConfigSection";
-import { LocalConfigSection } from "@/components/asset/LocalConfigSection";
-import { formatLocalShellArgs, parseLocalShellArgs } from "@/lib/localShellArgs";
 import { useExtensionStore } from "@/extension";
 import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
 import { AssetTypePicker } from "@/components/asset/AssetTypePicker";
 import { getAssetTypeOptions, getAssetTypeLabel } from "@/lib/assetTypes/options";
+import { getAssetType } from "@/lib/assetTypes";
+import type { AssetFormHandle, AssetFormContext } from "@/lib/assetTypes/formContract";
 
 interface AssetFormProps {
   open: boolean;
@@ -338,6 +338,11 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   // 当前 in-flight 测试的 ID；切换/取消时用来 race-discard 晚到的结果。
   const activeTestIdRef = useRef<string | null>(null);
 
+  // 注册化类型走通用 ConfigSection 路径:section 自持 state,经 ref 暴露 build*。
+  const sectionRef = useRef<AssetFormHandle>(null);
+  const [validity, setValidity] = useState({ canTest: false, canSave: false });
+  const ctx: AssetFormContext = useMemo(() => ({ isEdit: !!editAsset, encryptPassword: EncryptPassword }), [editAsset]);
+
   // Connection type (SSH only)
   const [connectionType, setConnectionType] = useState<"direct" | "jumphost" | "proxy">("direct");
 
@@ -437,11 +442,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const [serialParity, setSerialParity] = useState("none");
   const [serialFlowControl, setSerialFlowControl] = useState("none");
 
-  // Local terminal fields
-  const [localShell, setLocalShell] = useState("");
-  const [localArgs, setLocalArgs] = useState("");
-  const [localCwd, setLocalCwd] = useState("~");
-
   // Extension config
   const [extConfig, setExtConfig] = useState<Record<string, unknown>>({});
 
@@ -486,7 +486,9 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         setIcon(editAsset.Icon || DEFAULT_ICONS[editType] || "server");
         setDescription(editAsset.Description);
 
-        if (editType === "ssh") {
+        if (getAssetType(editType)?.ConfigSection) {
+          // 已注册化类型:config 回填由 section 经 editAsset prop 完成,壳跳过
+        } else if (editType === "ssh") {
           loadSSHConfig(editAsset);
         } else if (editType === "database") {
           loadDatabaseConfig(editAsset);
@@ -500,8 +502,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           loadK8sConfig(editAsset);
         } else if (editType === "serial") {
           loadSerialConfig(editAsset);
-        } else if (editType === "local") {
-          loadLocalConfig(editAsset);
         } else if (editType === "etcd") {
           loadEtcdConfig(editAsset);
         } else {
@@ -529,7 +529,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         resetKafkaFields();
         resetK8sFields();
         resetSerialFields();
-        resetLocalFields();
         resetEtcdFields();
         setExtConfig({});
       }
@@ -914,23 +913,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setSerialFlowControl("none");
   };
 
-  const loadLocalConfig = (asset: asset_entity.Asset) => {
-    try {
-      const cfg = JSON.parse(asset.Config || "{}");
-      setLocalShell(cfg.shell || "");
-      setLocalArgs(formatLocalShellArgs(cfg.args || []));
-      setLocalCwd(cfg.cwd || "~");
-    } catch {
-      resetLocalFields();
-    }
-  };
-
-  const resetLocalFields = () => {
-    setLocalShell("");
-    setLocalArgs("");
-    setLocalCwd("~");
-  };
-
   const handleTypeChange = (newType: AssetType) => {
     if (newType === assetType) return;
     setAssetType(newType);
@@ -946,7 +928,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     setIcon(newType === "database" ? DEFAULT_ICONS[driver] || "mysql" : DEFAULT_ICONS[newType] || "server");
     if (newType === "k8s") setHost("");
     if (newType === "serial") setHost("");
-    if (newType === "local") setHost("");
     if (newType === "etcd") setHost("");
   };
 
@@ -1382,9 +1363,51 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     return undefined;
   };
 
+  const persistAsset = async (asset: asset_entity.Asset) => {
+    setSaving(true);
+    try {
+      if (editAsset?.ID) {
+        asset.ID = editAsset.ID;
+        await updateAsset(asset);
+      } else {
+        await createAsset(asset);
+      }
+      onOpenChange(false);
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleSubmit = async () => {
     // 用户决定保存：放弃任何正在进行的测试，避免和保存竞争或弹出过期的 toast。
     cancelActiveTest();
+
+    const def = getAssetType(assetType);
+    if (def?.ConfigSection) {
+      if (!sectionRef.current) return;
+      let built;
+      try {
+        built = await sectionRef.current.buildConfig(ctx);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : String(e));
+        return;
+      }
+      const asset = new asset_entity.Asset({
+        ...(editAsset || {}),
+        Name: name,
+        Type: assetType,
+        GroupID: groupId,
+        Icon: icon,
+        Description: description,
+        Config: built.configJSON,
+        sshTunnelId: built.sshTunnelId,
+      });
+      await persistAsset(asset);
+      return;
+    }
+
     let config: string;
 
     if (assetType === "ssh") {
@@ -1583,19 +1606,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       };
       if (serialFlowControl !== "none") serialConfig.flow_control = serialFlowControl;
       config = JSON.stringify(serialConfig);
-    } else if (assetType === "local") {
-      const localConfig: Record<string, unknown> = {};
-      if (localShell) localConfig.shell = localShell;
-      let argList: string[];
-      try {
-        argList = parseLocalShellArgs(localArgs);
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Invalid shell args");
-        return;
-      }
-      if (argList.length) localConfig.args = argList;
-      if (localCwd) localConfig.cwd = localCwd;
-      config = JSON.stringify(localConfig);
     } else {
       // Extension type: encrypt password fields from configSchema before saving
       const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
@@ -1637,23 +1647,11 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               : 0,
     });
 
-    setSaving(true);
-    try {
-      if (editAsset?.ID) {
-        asset.ID = editAsset.ID;
-        await updateAsset(asset);
-      } else {
-        await createAsset(asset);
-      }
-      onOpenChange(false);
-    } catch (e) {
-      toast.error(String(e));
-    } finally {
-      setSaving(false);
-    }
+    await persistAsset(asset);
   };
 
   const typeLabel = getAssetTypeLabel(assetType, t, assetTypeOptions);
+  const sectionDef = getAssetType(assetType);
 
   const isTestableAssetType =
     assetType === "ssh" ||
@@ -1688,26 +1686,28 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
   const saveDisabledReason = !name.trim()
     ? "asset.formMissingName"
-    : assetType === "database" && driver === "sqlite" && !path.trim()
-      ? "asset.formMissingPath"
-      : ["ssh", "redis"].includes(assetType) && !host.trim()
-        ? "asset.formMissingHost"
-        : assetType === "database" && driver !== "sqlite" && !host.trim()
+    : sectionDef?.ConfigSection
+      ? ""
+      : assetType === "database" && driver === "sqlite" && !path.trim()
+        ? "asset.formMissingPath"
+        : ["ssh", "redis"].includes(assetType) && !host.trim()
           ? "asset.formMissingHost"
-          : assetType === "mongodb" && mongoConnectionMode === "manual" && !host.trim()
+          : assetType === "database" && driver !== "sqlite" && !host.trim()
             ? "asset.formMissingHost"
-            : assetType === "mongodb" && mongoConnectionMode === "uri" && !connectionURI.trim()
-              ? "asset.formMissingMongoUri"
-              : assetType === "kafka" && kafkaBrokers().length === 0
-                ? "asset.formMissingKafkaBrokers"
-                : assetType === "k8s" && !kubeconfig.trim() && !editAsset
-                  ? "asset.formMissingKubeconfig"
-                  : assetType === "serial" && !serialPortPath.trim()
-                    ? "asset.formMissingSerialPort"
-                    : assetType === "etcd" && etcdEndpointsList().length === 0
-                      ? "etcd.error.endpointsRequired"
-                      : "";
-  const saveDisabled = saving || !!saveDisabledReason;
+            : assetType === "mongodb" && mongoConnectionMode === "manual" && !host.trim()
+              ? "asset.formMissingHost"
+              : assetType === "mongodb" && mongoConnectionMode === "uri" && !connectionURI.trim()
+                ? "asset.formMissingMongoUri"
+                : assetType === "kafka" && kafkaBrokers().length === 0
+                  ? "asset.formMissingKafkaBrokers"
+                  : assetType === "k8s" && !kubeconfig.trim() && !editAsset
+                    ? "asset.formMissingKubeconfig"
+                    : assetType === "serial" && !serialPortPath.trim()
+                      ? "asset.formMissingSerialPort"
+                      : assetType === "etcd" && etcdEndpointsList().length === 0
+                        ? "etcd.error.endpointsRequired"
+                        : "";
+  const saveDisabled = saving || !!saveDisabledReason || (!!sectionDef?.ConfigSection && !validity.canSave);
 
   const handleRunTestConnection =
     assetType === "ssh"
@@ -2106,15 +2106,14 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               />
             )}
 
-            {/* Local terminal config */}
-            {assetType === "local" && (
-              <LocalConfigSection
-                shell={localShell}
-                setShell={setLocalShell}
-                args={localArgs}
-                setArgs={setLocalArgs}
-                cwd={localCwd}
-                setCwd={setLocalCwd}
+            {/* 注册化类型:通用 ConfigSection 路径(local 等) */}
+            {sectionDef?.ConfigSection && (
+              <sectionDef.ConfigSection
+                key={assetType}
+                ref={sectionRef}
+                editAsset={editAsset ?? undefined}
+                ctx={ctx}
+                onValidityChange={setValidity}
               />
             )}
 

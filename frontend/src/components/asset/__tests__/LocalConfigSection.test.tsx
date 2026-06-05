@@ -1,5 +1,19 @@
 import { describe, it, expect } from "vitest";
-import { buildLocalConfig, parseLocalConfig, LOCAL_DEFAULTS } from "@/components/asset/LocalConfigSection";
+import { render } from "@testing-library/react";
+import { createRef } from "react";
+import { vi } from "vitest";
+import {
+  buildLocalConfig,
+  parseLocalConfig,
+  LOCAL_DEFAULTS,
+  LocalConfigSection,
+} from "@/components/asset/LocalConfigSection";
+import type { AssetFormHandle, AssetFormContext } from "@/lib/assetTypes/formContract";
+import { asset_entity } from "../../../../wailsjs/go/models";
+
+vi.mock("../../../../wailsjs/go/local/Local", () => ({ ListLocalShells: () => Promise.resolve([]) }));
+
+const fakeCtx: AssetFormContext = { isEdit: false, encryptPassword: async (p) => p };
 
 describe("buildLocalConfig (锁旧 handleSubmit local 分支字节一致)", () => {
   it("shell+args+cwd 全有", () => {
@@ -31,5 +45,35 @@ describe("parseLocalConfig (锁旧 loadLocalConfig)", () => {
   });
   it("非法 JSON 回退默认", () => {
     expect(parseLocalConfig("not json")).toEqual(LOCAL_DEFAULTS);
+  });
+});
+
+describe("LocalConfigSection ref 契约", () => {
+  it("创建态:buildConfig 返回默认 JSON,buildTestConfig 为 null", async () => {
+    const ref = createRef<AssetFormHandle>();
+    render(<LocalConfigSection ref={ref} ctx={fakeCtx} onValidityChange={() => {}} />);
+    expect(ref.current!.buildTestConfig).toBeNull();
+    await expect(ref.current!.buildConfig(fakeCtx)).resolves.toEqual({
+      configJSON: '{"cwd":"~"}',
+      sshTunnelId: 0,
+    });
+  });
+
+  it("编辑态:从 editAsset.Config 回填后 buildConfig round-trip 一致", async () => {
+    const editAsset = new asset_entity.Asset({
+      Type: "local",
+      Config: '{"shell":"/bin/zsh","args":["-l"],"cwd":"/root"}',
+    });
+    const ref = createRef<AssetFormHandle>();
+    render(<LocalConfigSection ref={ref} editAsset={editAsset} ctx={fakeCtx} onValidityChange={() => {}} />);
+    const r = await ref.current!.buildConfig(fakeCtx);
+    expect(r.configJSON).toBe('{"shell":"/bin/zsh","args":["-l"],"cwd":"/root"}');
+  });
+
+  it("上报 canSave=true / canTest=false", () => {
+    const onValidity = vi.fn();
+    const ref = createRef<AssetFormHandle>();
+    render(<LocalConfigSection ref={ref} ctx={fakeCtx} onValidityChange={onValidity} />);
+    expect(onValidity).toHaveBeenCalledWith({ canTest: false, canSave: true });
   });
 });

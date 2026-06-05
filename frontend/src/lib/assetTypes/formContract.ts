@@ -37,6 +37,4 @@ export interface ConfigSectionProps {
   onValidityChange: (v: { canTest: boolean; canSave: boolean }) => void;
 }
 
-export type ConfigSectionComponent = ForwardRefExoticComponent<
-  ConfigSectionProps & RefAttributes<AssetFormHandle>
->;
+export type ConfigSectionComponent = ForwardRefExoticComponent<ConfigSectionProps & RefAttributes<AssetFormHandle>>;
