@@ -2,12 +2,8 @@ import { describe, it, expect } from "vitest";
 import { render } from "@testing-library/react";
 import { createRef } from "react";
 import { vi } from "vitest";
-import {
-  buildLocalConfig,
-  parseLocalConfig,
-  LOCAL_DEFAULTS,
-  LocalConfigSection,
-} from "@/components/asset/LocalConfigSection";
+import { buildLocalConfig, parseLocalConfig, LOCAL_DEFAULTS } from "@/components/asset/LocalConfigSection.config";
+import { LocalConfigSection } from "@/components/asset/LocalConfigSection";
 import type { AssetFormHandle, AssetFormContext } from "@/lib/assetTypes/formContract";
 import { asset_entity } from "../../../../wailsjs/go/models";
 

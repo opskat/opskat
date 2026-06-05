@@ -2125,7 +2125,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               assetType !== "kafka" &&
               assetType !== "k8s" &&
               assetType !== "serial" &&
-              assetType !== "local" &&
               assetType !== "etcd" &&
               (() => {
                 const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
