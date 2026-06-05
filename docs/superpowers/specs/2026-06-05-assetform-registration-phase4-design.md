@@ -216,3 +216,22 @@ const def = getAssetType(assetType);
 - **凭据数值双默认**(`parseEtcdConfig` 的 `dial_timeout_seconds || 5` 等)是旧 `loadEtcdConfig` 的忠实迁移;因 `buildEtcdConfig` 在 0 时省略该键,0 永不落库,`||` 与 `??` 对往返数据等价 —— 不在 4c 改(保持行为锁定),留作跨类型统一项(若要修,单独一次性改全部类型,勿混入逐型迁移)。
 
 **仍留给 4d+**:`redis → mongodb → database → k8s → kafka → ssh` 余 6 类型;末 commit 删遗留 switch + 共享 host/port/username/password state + `applyTestPasswordSource`/`encryptPasswordValue` + `DEFAULT_PORTS`/`DEFAULT_ICONS` 残留。
+
+## 阶段 4d–4i 完成记录:全部 9 类型注册化 + 壳脚手架拆除(2026-06-05)
+
+承 4c 的模板与共享凭据抽象,一次性完成余 6 类型迁移,**stage 4 收官**。子 agent 逐类型驱动(db 族用 sonnet、database/kafka/ssh 用 opus),每类型独立验证(tsc + 全量 vitest + golden + residue grep);etcd/kafka/ssh 加专项 review,ssh 末类型加收官 holistic review。
+
+- **4d redis**(`10d6c5fb`/`c8d59e00`/`2b282088`)— 复用 `useAssetCredential`;host/port 入 `RedisFormState`;validity 要 host。
+- **4e mongodb**(`6c512359`/`33137330`/`e491d364`)— manual/uri 双模;validity 按模式(host vs connectionURI,两种 saveDisabledReason)。
+- **4f database**(`6dad6dae`/`9725084c`/`ad739cc7`)— driver 维(mysql/pg/mssql/sqlite),sqlite 无凭据走 path;**新增可选契约 `onIconChange`**:driver 变化驱动壳 icon(仅 database 用,其余 section 忽略);驱动选择器移入 section;`applyDriverChange` 纯函数。
+- **4g k8s**(`4ebab983`/`80822351`)— 非 db 族、不可测(`buildTestConfig: null`);kubeconfig 经 `ctx.encryptPassword` 加密 + 编辑保留既有密文;SSH 隧道仅在 asset 顶层(config JSON 无 `ssh_asset_id`);validity:kubeconfig 仅新建必填。
+- **4h kafka**(`2df5ebf8`/`6c8dc13a`/`51004a5a`)— 最复杂:主 SASL 凭据复用 `useAssetCredential`,**伴随**(schema_registry + N 个 connect cluster,各带 auth_type/bearer/TLS)逻辑内化进 section(包裹而非替换共享 resolver);校验改 `buildConfig` 内 throw i18n 文案(`handleSubmit` catch 单次 toast);测试 config 不含伴随。顺带删除 kafka-only 的共享 `tls` state(tsc 证实 ssh 无 TLS)。
+- **4i ssh + 脚手架拆除**(`1e28da81`/`128ae526`/`4c964cfd`)— **末类型**:password auth 复用 `useAssetCredential`;key auth 用独立 `ssh_key` 凭据列表 + 本地密钥扫描(section 自加载);三处密文(password/passphrase/proxy);**save/test 关键分歧**:`jump_host_id` 仅 test config(save 走 asset 顶层 `sshTunnelId`),proxy 密码/passphrase test 明文、save 加密。迁移 ssh 后所有共享连接/凭据 state 成孤儿,**同提交拆除**:`host/port/username/password/credential/managedKeys/localKeys/connectionType/proxy*` state + `applyTestPasswordSource`/`encryptPasswordValue`/`encryptProxyPassword`/`resetSharedFields`/`loadSSHConfig`/`handleTestConnection` + `DEFAULT_PORTS`;`handleTypeChange` 简化为 setAssetType+setIcon;load 派发塌缩为 `ConfigSection?跳过:扩展加载`;校验链塌缩(`isTestableAssetType = ConfigSection?testable:false`)。
+
+**收官状态**:9 类型(local/serial/etcd/redis/mongodb/database/k8s/kafka/ssh)全部经注册表 `ConfigSection` 渲染;`AssetForm.tsx` **2114 → 433 行**(纯壳:类型选择 + 名称/分组/图标/描述 + 通用 section 渲染/ref 接线 + 通用保存/测试编排 + 扩展处理 + 对话框);**零 `assetType === "x"` 类型分支**;全量 `vitest` 1295(123 文件)、`tsc` 0、`eslint` 0;每类型保存/测试序列化经 golden 字节锁定。共享凭据抽象(`useAssetCredential` + `credentialConfig`)被 6 个 db 族类型复用。
+
+**统一的等价性变更(全 9 类型一致)**:加密失败由旧「`undefined` 哨兵 + 硬编码 toast + 静默 abort」改为 `ctx.encryptPassword` reject 透传到 `handleSubmit` 既有 try/catch(语义等价 + 不再吞错)。
+
+**已知小项(非回归,留作后续)**:① ssh 托管密钥→用户名自动填充行为代码已保留(`SSHConfigSection.tsx` onValueChange),但原 4 例交互测试随旧组件删除未补回——行为在,专项覆盖缺;② `database`/`redis` 等 name 占位符 ternary 仍在壳里(纯展示,可后续派生自注册表);③ serial/local 无 `.config.test.ts`(早期迁移,密文无关)。
+
+**stage 4 完成,后续**:阶段 5(`AssetTree.tsx` ssh 文件管理硬编码 → action 注册)、阶段 6(skill + 文档收尾)。
