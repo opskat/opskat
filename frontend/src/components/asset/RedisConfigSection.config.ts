@@ -53,8 +53,12 @@ interface RedisConfig {
   ssh_asset_id?: number;
 }
 
-/** 保存/测试共用序列化(键序锁旧 save 分支)。cred 由 resolveSave/TestCredential 预解析。 */
-export function buildRedisConfig(state: RedisFormState, cred: CredentialFragment): string {
+/**
+ * 保存/测试共用序列化(键序锁旧 save 分支)。cred 由 resolveSave/TestCredential 预解析。
+ * 隧道走 asset 顶层列(sshTunnelId);save 不写 ssh_asset_id(锁旧 save 分支)。
+ * 测试无 asset 行,buildTestConfig 传 includeSshAssetId=true 把隧道塞进 config(锁旧 handleTestRedisConnection)。
+ */
+export function buildRedisConfig(state: RedisFormState, cred: CredentialFragment, includeSshAssetId = false): string {
   const cfg: RedisConfig = { host: state.host, port: state.port };
   if (state.username) cfg.username = state.username;
   if (cred.credential_id) cfg.credential_id = cred.credential_id;
@@ -69,7 +73,7 @@ export function buildRedisConfig(state: RedisFormState, cred: CredentialFragment
   if (state.commandTimeoutSeconds > 0) cfg.command_timeout_seconds = state.commandTimeoutSeconds;
   if (state.scanPageSize > 0) cfg.scan_page_size = state.scanPageSize;
   if (state.keySeparator && state.keySeparator !== ":") cfg.key_separator = state.keySeparator;
-  if (state.sshTunnelId > 0) cfg.ssh_asset_id = state.sshTunnelId;
+  if (includeSshAssetId && state.sshTunnelId > 0) cfg.ssh_asset_id = state.sshTunnelId;
   return JSON.stringify(cfg);
 }
 

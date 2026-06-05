@@ -23,14 +23,20 @@ const FULL: RedisFormState = {
   sshTunnelId: 3,
 };
 
-describe("buildRedisConfig (锁旧 save 序:host→port→username→credential→database→tls…→timeouts→scan→separator→ssh_asset_id)", () => {
-  it("全字段 + 既加密 password", () => {
+describe("buildRedisConfig (锁旧 save 序;save 省略 ssh_asset_id 走 asset 顶层列,test 传 includeSshAssetId 才写)", () => {
+  it("全字段 + 既加密 password(save:无 ssh_asset_id)", () => {
     expect(buildRedisConfig(FULL, { password: "ENC" })).toBe(
       '{"host":"redis.example.com","port":6379,"username":"admin","password":"ENC",' +
         '"database":2,"tls":true,"tls_insecure":true,"tls_server_name":"redis.x","tls_ca_file":"/ca.pem",' +
         '"tls_cert_file":"/c.crt","tls_key_file":"/c.key","command_timeout_seconds":30,' +
-        '"scan_page_size":200,"ssh_asset_id":3}'
+        '"scan_page_size":200}'
     );
+  });
+  it("save 路径(默认)省略 ssh_asset_id —— 隧道走 asset 顶层列(锁旧 save)", () => {
+    expect(buildRedisConfig(FULL, {})).not.toContain("ssh_asset_id");
+  });
+  it("test 路径(includeSshAssetId=true)在末尾写 ssh_asset_id(锁旧 handleTestRedisConnection)", () => {
+    expect(buildRedisConfig(FULL, { password: "ENC" }, true)).toContain('"scan_page_size":200,"ssh_asset_id":3}');
   });
   it("managed 凭据 → credential_id 紧跟 username", () => {
     expect(buildRedisConfig(FULL, { credential_id: 7 })).toContain('"username":"admin","credential_id":7,"database":2');

@@ -13,7 +13,7 @@ vi.mock("../../../../wailsjs/go/system/System", () => ({
 const ctx: AssetFormContext = { isEdit: false, encryptPassword: async (p) => `enc(${p})` };
 
 describe("RedisConfigSection ref 契约", () => {
-  it("编辑态(inline 既有密文):buildConfig 沿用密文 + ssh_asset_id;buildTestConfig 同形,password 空", async () => {
+  it("编辑态(inline 既有密文):save 沿用密文且省略 ssh_asset_id(隧道走顶层);test config 含 ssh_asset_id,password 空", async () => {
     const editAsset = new asset_entity.Asset({
       Type: "redis",
       Config:
@@ -22,15 +22,23 @@ describe("RedisConfigSection ref 契约", () => {
     });
     const ref = createRef<AssetFormHandle>();
     render(<RedisConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
+    // save:沿用既有密文,但不写 ssh_asset_id —— 隧道走 asset 顶层列(锁旧 save)。
     const built = await ref.current!.buildConfig(ctx);
     expect(built).toEqual({
       configJSON:
         '{"host":"127.0.0.1","port":6379,"username":"u","password":"OLD","database":2,' +
-        '"tls":true,"tls_insecure":true,"command_timeout_seconds":30,"scan_page_size":200,"ssh_asset_id":9}',
+        '"tls":true,"tls_insecure":true,"command_timeout_seconds":30,"scan_page_size":200}',
       sshTunnelId: 9,
     });
+    // test:无 asset 行 → config 末尾带 ssh_asset_id(锁旧 handleTestRedisConnection)。
     const tc = await ref.current!.buildTestConfig!(ctx);
-    expect(tc).toEqual({ assetType: "redis", configJSON: built.configJSON, password: "" });
+    expect(tc).toEqual({
+      assetType: "redis",
+      configJSON:
+        '{"host":"127.0.0.1","port":6379,"username":"u","password":"OLD","database":2,' +
+        '"tls":true,"tls_insecure":true,"command_timeout_seconds":30,"scan_page_size":200,"ssh_asset_id":9}',
+      password: "",
+    });
   });
 
   it("创建态(无 host):上报 canSave/canTest=false + asset.formMissingHost", () => {

@@ -32,12 +32,18 @@ const FULL_URI: MongoDBFormState = {
   sshTunnelId: 5,
 };
 
-describe("buildMongoDBConfig (键序锁旧 save: manual→host/port; uri→connection_uri; username→credential/password→replica→auth→database→tls→ssh_asset_id)", () => {
-  it("manual 全字段 + inline password", () => {
+describe("buildMongoDBConfig (键序锁旧 save;save 省略 ssh_asset_id 走 asset 顶层列,test 传 includeSshAssetId 才写)", () => {
+  it("manual 全字段 + inline password(save:无 ssh_asset_id)", () => {
     expect(buildMongoDBConfig(FULL_MANUAL, { password: "ENC" })).toBe(
       '{"host":"mongo.example.com","port":27017,"username":"admin","password":"ENC",' +
-        '"replica_set":"rs0","auth_source":"admin","database":"mydb","tls":true,"ssh_asset_id":5}'
+        '"replica_set":"rs0","auth_source":"admin","database":"mydb","tls":true}'
     );
+  });
+  it("save 路径(默认)省略 ssh_asset_id —— 隧道走 asset 顶层列(锁旧 save)", () => {
+    expect(buildMongoDBConfig(FULL_MANUAL, {})).not.toContain("ssh_asset_id");
+  });
+  it("test 路径(includeSshAssetId=true)在末尾写 ssh_asset_id(锁旧 handleTestMongoDBConnection)", () => {
+    expect(buildMongoDBConfig(FULL_MANUAL, { password: "ENC" }, true)).toContain('"tls":true,"ssh_asset_id":5}');
   });
 
   it("manual + managed 凭据 → credential_id 紧跟 username", () => {
@@ -53,10 +59,10 @@ describe("buildMongoDBConfig (键序锁旧 save: manual→host/port; uri→conne
     expect(json).not.toContain('"port":');
   });
 
-  it("uri 模式全字段键序", () => {
+  it("uri 模式全字段键序(save:无 ssh_asset_id)", () => {
     expect(buildMongoDBConfig(FULL_URI, { password: "ENC" })).toBe(
       '{"connection_uri":"mongodb://user:pass@host:27017/db","username":"admin","password":"ENC",' +
-        '"replica_set":"rs0","auth_source":"admin","database":"mydb","tls":true,"ssh_asset_id":5}'
+        '"replica_set":"rs0","auth_source":"admin","database":"mydb","tls":true}'
     );
   });
 
@@ -98,11 +104,6 @@ describe("buildMongoDBConfig (键序锁旧 save: manual→host/port; uri→conne
   it("database 为空时省略", () => {
     const json = buildMongoDBConfig({ ...FULL_MANUAL, database: "" }, {});
     expect(json).not.toContain('"database"');
-  });
-
-  it("sshTunnelId=0 时省略 ssh_asset_id", () => {
-    const json = buildMongoDBConfig({ ...FULL_MANUAL, sshTunnelId: 0 }, {});
-    expect(json).not.toContain("ssh_asset_id");
   });
 });
 
@@ -147,10 +148,10 @@ describe("parseMongoDBConfig (镜像旧 loadMongoDBConfig 非凭据字段)", () 
     expect(parseMongoDBConfig("nope")).toEqual(MONGODB_DEFAULTS);
   });
 
-  it("parse→build 往返(manual 全字段)", () => {
+  it("parse→build 往返(manual 全字段;saved config 无 ssh_asset_id,隧道走 asset 顶层列)", () => {
     const original =
       '{"host":"mongo.example.com","port":27017,"username":"admin",' +
-      '"replica_set":"rs0","auth_source":"admin","database":"mydb","tls":true,"ssh_asset_id":5}';
+      '"replica_set":"rs0","auth_source":"admin","database":"mydb","tls":true}';
     const state = parseMongoDBConfig(original);
     expect(buildMongoDBConfig(state, {})).toBe(original);
   });

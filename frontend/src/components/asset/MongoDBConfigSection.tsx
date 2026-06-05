@@ -47,7 +47,8 @@ export const MongoDBConfigSection = forwardRef<AssetFormHandle, ConfigSectionPro
       },
       buildTestConfig: async () => ({
         assetType: "mongodb",
-        configJSON: buildMongoDBConfig(state, resolveTestCredential(cred.value)),
+        // 测试无 asset 行 → 隧道必须塞进 config(includeSshAssetId=true,锁旧 handleTestMongoDBConnection)。
+        configJSON: buildMongoDBConfig(state, resolveTestCredential(cred.value), true),
         password: cred.value.password,
       }),
     }),

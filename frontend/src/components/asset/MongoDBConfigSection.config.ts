@@ -40,8 +40,16 @@ interface MongoDBConfig {
   ssh_asset_id?: number;
 }
 
-/** 保存/测试共用序列化(键序锁旧 save 分支 + handleTestMongoDBConnection)。cred 由 resolveSave/TestCredential 预解析。 */
-export function buildMongoDBConfig(state: MongoDBFormState, cred: CredentialFragment): string {
+/**
+ * 保存/测试共用序列化(键序锁旧 save 分支)。cred 由 resolveSave/TestCredential 预解析。
+ * 隧道走 asset 顶层列(sshTunnelId);save 不写 ssh_asset_id(锁旧 save 分支)。
+ * 测试无 asset 行,buildTestConfig 传 includeSshAssetId=true 把隧道塞进 config(锁旧 handleTestMongoDBConnection)。
+ */
+export function buildMongoDBConfig(
+  state: MongoDBFormState,
+  cred: CredentialFragment,
+  includeSshAssetId = false
+): string {
   const cfg: MongoDBConfig = {};
   if (state.connectionMode === "uri" && state.connectionURI) {
     cfg.connection_uri = state.connectionURI;
@@ -56,7 +64,7 @@ export function buildMongoDBConfig(state: MongoDBFormState, cred: CredentialFrag
   if (state.authSource) cfg.auth_source = state.authSource;
   if (state.database) cfg.database = state.database;
   if (state.tls) cfg.tls = true;
-  if (state.sshTunnelId > 0) cfg.ssh_asset_id = state.sshTunnelId;
+  if (includeSshAssetId && state.sshTunnelId > 0) cfg.ssh_asset_id = state.sshTunnelId;
   return JSON.stringify(cfg);
 }
 

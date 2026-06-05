@@ -64,7 +64,7 @@ describe("MongoDBConfigSection ref 契约", () => {
     });
   });
 
-  it("编辑态(manual,inline 既有密文):buildConfig 沿用密文 + sshTunnelId;buildTestConfig 同形,password 空", async () => {
+  it("编辑态(manual,inline 既有密文):save 沿用密文且省略 ssh_asset_id(隧道走顶层);test config 含 ssh_asset_id,password 空", async () => {
     const editAsset = new asset_entity.Asset({
       Type: "mongodb",
       Config:
@@ -74,15 +74,23 @@ describe("MongoDBConfigSection ref 契约", () => {
     });
     const ref = createRef<AssetFormHandle>();
     render(<MongoDBConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
+    // save:沿用既有密文,但不写 ssh_asset_id —— 隧道走 asset 顶层列(锁旧 save)。
     const built = await ref.current!.buildConfig(ctx);
     expect(built).toEqual({
       configJSON:
         '{"host":"127.0.0.1","port":27017,"username":"admin","password":"OLD",' +
-        '"replica_set":"rs0","auth_source":"admin","database":"mydb","tls":true,"ssh_asset_id":5}',
+        '"replica_set":"rs0","auth_source":"admin","database":"mydb","tls":true}',
       sshTunnelId: 5,
     });
+    // test:无 asset 行 → config 末尾带 ssh_asset_id(锁旧 handleTestMongoDBConnection)。
     const tc = await ref.current!.buildTestConfig!(ctx);
-    expect(tc).toEqual({ assetType: "mongodb", configJSON: built.configJSON, password: "" });
+    expect(tc).toEqual({
+      assetType: "mongodb",
+      configJSON:
+        '{"host":"127.0.0.1","port":27017,"username":"admin","password":"OLD",' +
+        '"replica_set":"rs0","auth_source":"admin","database":"mydb","tls":true,"ssh_asset_id":5}',
+      password: "",
+    });
   });
 
   it("编辑态(uri 模式):buildConfig 写 connection_uri,不含 host/port", async () => {

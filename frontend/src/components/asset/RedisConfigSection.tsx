@@ -37,7 +37,8 @@ export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
       },
       buildTestConfig: async () => ({
         assetType: "redis",
-        configJSON: buildRedisConfig(state, resolveTestCredential(cred.value)),
+        // 测试无 asset 行 → 隧道必须塞进 config(includeSshAssetId=true,锁旧 handleTestRedisConnection)。
+        configJSON: buildRedisConfig(state, resolveTestCredential(cred.value), true),
         password: cred.value.password,
       }),
     }),
