@@ -150,3 +150,14 @@ export function parseSSHConfig(configJSON: string, assetTunnelId = 0): SSHFormSt
     return { ...SSH_DEFAULTS };
   }
 }
+
+/** SSH 的 credential_id 语义随 auth_type 变化:password-auth 才能初始化 password 凭据子状态。 */
+export function parseSSHPasswordCredentialConfig(configJSON: string): CredentialFragment {
+  try {
+    const cfg: SSHConfig = JSON.parse(configJSON || "{}");
+    if ((cfg.auth_type || "password") !== "password") return {};
+    return { credential_id: cfg.credential_id, password: cfg.password };
+  } catch {
+    return {};
+  }
+}

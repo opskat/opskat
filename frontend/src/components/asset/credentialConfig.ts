@@ -1,4 +1,4 @@
-/** 凭据子状态:5 个 db 族类型(etcd/redis/mongodb/database/kafka)共享;section 经 useAssetCredential 持有。 */
+/** 密码/托管密码凭据子状态:由 useAssetCredential 持有,供 db 族和 SSH password-auth 复用。 */
 export interface CredentialState {
   /** 明文(用户输入或揭示既有密码后解密回填);测试走 4th-arg,保存前加密。 */
   password: string;

@@ -96,6 +96,26 @@ describe("SSHConfigSection ref 契约", () => {
     );
   });
 
+  it("key-auth managed credential 切到 password-auth 时不复用 ssh_key credential_id", async () => {
+    const u = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    const editAsset = new asset_entity.Asset({
+      Type: "ssh",
+      Config: '{"host":"h","port":22,"username":"u","auth_type":"key","credential_id":9}',
+    });
+    const ref = createRef<AssetFormHandle>();
+    render(<SSHConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
+
+    await u.click(screen.getByText("asset.authKey"));
+    await u.click(screen.getByRole("option", { name: "asset.authPassword" }));
+
+    await waitFor(async () => {
+      const built = await ref.current!.buildConfig(ctx);
+      expect(built.configJSON).toBe('{"host":"h","port":22,"username":"u","auth_type":"password"}');
+    });
+    const tc = await ref.current!.buildTestConfig!(ctx);
+    expect(tc.configJSON).toBe('{"host":"h","port":22,"username":"u","auth_type":"password"}');
+  });
+
   it("proxy:buildConfig 加密 proxy 密码(沿用既有密文);buildTestConfig 仅明文(无既有密文回退)", async () => {
     const editAsset = new asset_entity.Asset({
       Type: "ssh",

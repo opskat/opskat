@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
 import { Trash2, FolderOpen, Loader2, Lock } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -23,7 +23,13 @@ import { credential_entity, ssh as ssh_models } from "../../../wailsjs/go/models
 import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
-import { buildSSHConfig, parseSSHConfig, SSH_DEFAULTS, type SSHFormState } from "./SSHConfigSection.config";
+import {
+  buildSSHConfig,
+  parseSSHConfig,
+  parseSSHPasswordCredentialConfig,
+  SSH_DEFAULTS,
+  type SSHFormState,
+} from "./SSHConfigSection.config";
 
 export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function SSHConfigSection(
   { editAsset, onValidityChange },
@@ -38,7 +44,11 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
   });
   const patch = (p: Partial<SSHFormState>) => setState((s) => ({ ...s, ...p }));
   // password-auth 凭据复用 db 族抽象;key-auth ssh_key 凭据 + 本地密钥由本 section 自持。
-  const cred = useAssetCredential(editAsset);
+  const passwordCredentialConfig = useMemo(
+    () => (editAsset ? parseSSHPasswordCredentialConfig(editAsset.Config) : undefined),
+    [editAsset]
+  );
+  const cred = useAssetCredential(editAsset, passwordCredentialConfig);
 
   const [managedKeys, setManagedKeys] = useState<credential_entity.Credential[]>([]);
   const [localKeys, setLocalKeys] = useState<ssh_models.LocalSSHKeyInfo[]>([]);

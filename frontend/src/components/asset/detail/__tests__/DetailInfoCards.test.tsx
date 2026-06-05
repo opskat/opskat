@@ -68,6 +68,22 @@ describe("SSHDetailInfoCard", () => {
     expect(getByText("jump-server")).toBeInTheDocument();
   });
 
+  it("renders jump host from asset field when saved config omits jump_host_id", () => {
+    const tunnelFn = vi.fn((id?: number) => (id === 7 ? "asset-level-jump" : null));
+    const asset = makeAssetWithTunnel(
+      "ssh",
+      {
+        host: "10.0.0.1",
+        port: 22,
+        username: "root",
+        auth_type: "password",
+      },
+      7
+    );
+    const { getByText } = render(<SSHDetailInfoCard asset={asset} sshTunnelName={tunnelFn} />);
+    expect(getByText("asset-level-jump")).toBeInTheDocument();
+  });
+
   it("renders proxy section when present", () => {
     const asset = makeAsset("ssh", {
       host: "10.0.0.1",
@@ -133,6 +149,22 @@ describe("DatabaseDetailInfoCard", () => {
     expect(getByText("bastion")).toBeInTheDocument();
   });
 
+  it("shows SSH tunnel from asset field", () => {
+    const tunnelFn = vi.fn((id?: number) => (id === 8 ? "db-bastion" : null));
+    const asset = makeAssetWithTunnel(
+      "database",
+      {
+        driver: "mysql",
+        host: "db.local",
+        port: 3306,
+        username: "root",
+      },
+      8
+    );
+    const { getByText } = render(<DatabaseDetailInfoCard asset={asset} sshTunnelName={tunnelFn} />);
+    expect(getByText("db-bastion")).toBeInTheDocument();
+  });
+
   it("handles empty config without crashing", () => {
     const asset = makeAsset("database", {});
     const { container } = render(<DatabaseDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
@@ -171,6 +203,13 @@ describe("RedisDetailInfoCard", () => {
     const asset = makeAsset("redis", {});
     const { container } = render(<RedisDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
     expect(container).toBeDefined();
+  });
+
+  it("shows SSH tunnel from asset field when saved config omits ssh_asset_id", () => {
+    const tunnelFn = vi.fn((id?: number) => (id === 9 ? "redis-bastion" : null));
+    const asset = makeAssetWithTunnel("redis", { host: "redis.local", port: 6379 }, 9);
+    const { getByText } = render(<RedisDetailInfoCard asset={asset} sshTunnelName={tunnelFn} />);
+    expect(getByText("redis-bastion")).toBeInTheDocument();
   });
 });
 
@@ -215,6 +254,13 @@ describe("MongoDBDetailInfoCard", () => {
     const asset = makeAsset("mongodb", {});
     const { container } = render(<MongoDBDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
     expect(container).toBeDefined();
+  });
+
+  it("shows SSH tunnel from asset field when saved config omits ssh_asset_id", () => {
+    const tunnelFn = vi.fn((id?: number) => (id === 10 ? "mongo-bastion" : null));
+    const asset = makeAssetWithTunnel("mongodb", { host: "mongo.local", port: 27017 }, 10);
+    const { getByText } = render(<MongoDBDetailInfoCard asset={asset} sshTunnelName={tunnelFn} />);
+    expect(getByText("mongo-bastion")).toBeInTheDocument();
   });
 });
 

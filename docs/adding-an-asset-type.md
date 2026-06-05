@@ -151,7 +151,7 @@ if tunnelID == 0 {
 }
 ```
 
-The frontend no longer writes `ssh_asset_id` into saved config for most registered config sections; it stores the tunnel in top-level `asset.sshTunnelId`. Test config is different because no asset row exists yet; see [F3](#f3-configsection-and-pure-configts-serialization).
+Current frontend sections prefer the asset row's top-level `sshTunnelId` when loading forms. Saved config behavior is mixed for historical built-ins: SSH, Redis, and MongoDB omit their legacy tunnel field on save, while database, etcd, and Kafka still serialize `ssh_asset_id` in saved config. Test config is different because no asset row exists yet; see [F3](#f3-configsection-and-pure-configts-serialization).
 
 Types without a connection pool, such as `serial` and `local`, do not add anything here.
 
@@ -347,12 +347,18 @@ Most non-trivial serialized configs should have golden tests. Current simple typ
 
 Why split pure functions: the JSON key order and default-omission rules are byte-sensitive. Pure functions let tests lock the exact output without rendering React.
 
-SAVE and TEST serialization differ for tunnel IDs:
+For new tunnel-capable types, SAVE and TEST serialization should differ for tunnel IDs:
 
-- SAVE stores the tunnel in the asset's top-level `sshTunnelId` column and omits `ssh_asset_id` from config.
-- TEST has no saved asset row, so it must include `ssh_asset_id` in `configJSON`.
+- SAVE stores the tunnel in the asset's top-level `sshTunnelId` column and omits the legacy tunnel field from config.
+- TEST has no saved asset row, so it must include the tunnel ID in `configJSON`.
 
-Redis and MongoDB implement this with `buildXxxConfig(state, cred, includeSshAssetId = false)`: save uses the default `false`, test passes `true`. SSH uses the same idea with `SSHBuildOptions.includeJumpHost`: save omits `jump_host_id`, test includes it. New tunnel-capable types should follow this split and lock both paths with tests.
+Current built-ins are not all identical:
+
+- Redis and MongoDB implement the split with `buildXxxConfig(state, cred, includeSshAssetId = false)`: save uses the default `false`, test passes `true`.
+- SSH uses the same idea with `SSHBuildOptions.includeJumpHost`: save omits `jump_host_id`, test includes it.
+- Database, etcd, and Kafka still write `ssh_asset_id` in saved config as well as returning top-level `sshTunnelId` from `buildConfig`.
+
+New tunnel-capable types should follow the SAVE/TEST split and lock both paths with tests.
 
 ### F4. Shared Credential Layer
 
