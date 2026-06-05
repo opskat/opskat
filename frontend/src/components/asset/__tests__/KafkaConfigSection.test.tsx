@@ -133,4 +133,156 @@ describe("KafkaConfigSection ref 契约", () => {
     render(<KafkaConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
     await expect(ref.current!.buildConfig(ctx)).rejects.toThrow("asset.kafkaSchemaRegistryURLRequired");
   });
+
+  it("schema_registry managed 凭据:写 credential_id 不写 password", async () => {
+    encrypt.mockClear();
+    const editAsset = new asset_entity.Asset({
+      Type: "kafka",
+      Config: JSON.stringify({
+        brokers: ["b:9092"],
+        schema_registry: {
+          enabled: true,
+          url: "http://sr:8081",
+          auth_type: "basic",
+          username: "sru",
+          credential_id: 9, // managed → passwordSource 回填 "managed",credentialId=9
+        },
+      }),
+    });
+    const ref = createRef<AssetFormHandle>();
+    render(<KafkaConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
+    const built = await ref.current!.buildConfig(ctx);
+    expect(built.configJSON).toContain(
+      '"schema_registry":{"enabled":true,"url":"http://sr:8081","auth_type":"basic","username":"sru","credential_id":9}'
+    );
+    // managed 走 credential_id 早退,不加密、不写 password(整个 config 无 password 键)
+    expect(built.configJSON).not.toContain('"password"');
+    expect(encrypt).not.toHaveBeenCalled();
+  });
+
+  it("connect cluster managed 凭据:写 credential_id 不写 password", async () => {
+    encrypt.mockClear();
+    const editAsset = new asset_entity.Asset({
+      Type: "kafka",
+      Config: JSON.stringify({
+        brokers: ["b:9092"],
+        connect: {
+          enabled: true,
+          clusters: [
+            {
+              name: "primary",
+              url: "http://connect:8083",
+              auth_type: "bearer",
+              credential_id: 12, // managed bearer → credential_id 即 token,不写 password
+            },
+          ],
+        },
+      }),
+    });
+    const ref = createRef<AssetFormHandle>();
+    render(<KafkaConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
+    const built = await ref.current!.buildConfig(ctx);
+    expect(built.configJSON).toContain(
+      '"connect":{"enabled":true,"clusters":[{"name":"primary","url":"http://connect:8083","auth_type":"bearer","credential_id":12}]}'
+    );
+    expect(built.configJSON).not.toContain('"password"');
+    expect(encrypt).not.toHaveBeenCalled();
+  });
+
+  it("schema_registry 字符串 TLS 字段全部 write-through", async () => {
+    const editAsset = new asset_entity.Asset({
+      Type: "kafka",
+      Config: JSON.stringify({
+        brokers: ["b:9092"],
+        schema_registry: {
+          enabled: true,
+          url: "http://sr:8081",
+          tls_insecure: true,
+          tls_server_name: "sr.example.com",
+          tls_ca_file: "/sr/ca.pem",
+          tls_cert_file: "/sr/client.crt",
+          tls_key_file: "/sr/client.key",
+        },
+      }),
+    });
+    const ref = createRef<AssetFormHandle>();
+    render(<KafkaConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
+    const built = await ref.current!.buildConfig(ctx);
+    // applyKafkaCompanionTLS 注入顺序:tls_insecure→tls_server_name→tls_ca_file→tls_cert_file→tls_key_file
+    expect(built.configJSON).toContain(
+      '"schema_registry":{"enabled":true,"url":"http://sr:8081","tls_insecure":true,' +
+        '"tls_server_name":"sr.example.com","tls_ca_file":"/sr/ca.pem",' +
+        '"tls_cert_file":"/sr/client.crt","tls_key_file":"/sr/client.key"}'
+    );
+  });
+
+  it("connect cluster 字符串 TLS 字段全部 write-through", async () => {
+    const editAsset = new asset_entity.Asset({
+      Type: "kafka",
+      Config: JSON.stringify({
+        brokers: ["b:9092"],
+        connect: {
+          enabled: true,
+          clusters: [
+            {
+              name: "primary",
+              url: "http://connect:8083",
+              tls_insecure: true,
+              tls_server_name: "connect.example.com",
+              tls_ca_file: "/cn/ca.pem",
+              tls_cert_file: "/cn/client.crt",
+              tls_key_file: "/cn/client.key",
+            },
+          ],
+        },
+      }),
+    });
+    const ref = createRef<AssetFormHandle>();
+    render(<KafkaConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
+    const built = await ref.current!.buildConfig(ctx);
+    expect(built.configJSON).toContain(
+      '"connect":{"enabled":true,"clusters":[{"name":"primary","url":"http://connect:8083",' +
+        '"tls_insecure":true,"tls_server_name":"connect.example.com","tls_ca_file":"/cn/ca.pem",' +
+        '"tls_cert_file":"/cn/client.crt","tls_key_file":"/cn/client.key"}]}'
+    );
+  });
+
+  it("connect 启用但 0 个有效集群:buildConfig reject kafkaConnectClusterRequired", async () => {
+    const editAsset = new asset_entity.Asset({
+      Type: "kafka",
+      // connect.enabled=true 但 clusters 为空(name/url 都空亦被 filter 掉)→ 0 有效集群
+      Config: JSON.stringify({ brokers: ["b:9092"], connect: { enabled: true, clusters: [] } }),
+    });
+    const ref = createRef<AssetFormHandle>();
+    render(<KafkaConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
+    await expect(ref.current!.buildConfig(ctx)).rejects.toThrow("asset.kafkaConnectClusterRequired");
+  });
+
+  it("connect cluster 缺 url:buildConfig reject kafkaConnectClusterInvalid", async () => {
+    const editAsset = new asset_entity.Asset({
+      Type: "kafka",
+      // 有 name 无 url → 通过 filter(name 非空)但 url 空 → invalid
+      Config: JSON.stringify({
+        brokers: ["b:9092"],
+        connect: { enabled: true, clusters: [{ name: "primary", url: "" }] },
+      }),
+    });
+    const ref = createRef<AssetFormHandle>();
+    render(<KafkaConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
+    await expect(ref.current!.buildConfig(ctx)).rejects.toThrow("asset.kafkaConnectClusterInvalid");
+  });
+
+  it("connect cluster 缺 name:buildConfig reject kafkaConnectClusterInvalid", async () => {
+    const editAsset = new asset_entity.Asset({
+      Type: "kafka",
+      // 有 url 无 name → 通过 filter(url 非空)但 name 空 → invalid
+      Config: JSON.stringify({
+        brokers: ["b:9092"],
+        connect: { enabled: true, clusters: [{ name: "", url: "http://connect:8083" }] },
+      }),
+    });
+    const ref = createRef<AssetFormHandle>();
+    render(<KafkaConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
+    await expect(ref.current!.buildConfig(ctx)).rejects.toThrow("asset.kafkaConnectClusterInvalid");
+  });
 });
