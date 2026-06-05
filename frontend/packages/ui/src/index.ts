@@ -1,5 +1,7 @@
 export { cn } from "./lib/utils";
 export { pinyinMatch } from "./lib/pinyin";
+export { computeContextMenuPosition } from "./lib/context-menu-position";
+export type { ContextMenuPosition, ContextMenuPositionInput } from "./lib/context-menu-position";
 export { useIMEComposing } from "./hooks/useIMEComposing";
 export { useResizeHandle } from "./hooks/useResizeHandle";
 export * from "./components/alert-dialog";

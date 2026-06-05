@@ -2,6 +2,7 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 import { Slot } from "radix-ui";
 
+import { computeContextMenuPosition } from "../lib/context-menu-position";
 import { cn } from "../lib/utils";
 
 // --- Custom ContextMenu with smart positioning ---
@@ -99,29 +100,23 @@ function ContextMenuContent({
     const rect = ref.current.getBoundingClientRect();
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    const GAP = alignToStylePosition ? 0 : 2;
+    const gap = alignToStylePosition ? 0 : 4;
 
     const style = styleProp as React.CSSProperties | undefined;
     const anchorX = alignToStylePosition && typeof style?.left === "number" ? style.left : ctx.position.x;
     const anchorY = alignToStylePosition && typeof style?.top === "number" ? style.top : ctx.position.y;
 
-    let left = anchorX + GAP;
-    let top = anchorY + GAP;
+    const next = computeContextMenuPosition({
+      anchorX,
+      anchorY,
+      width: rect.width,
+      height: rect.height,
+      viewportWidth: vw,
+      viewportHeight: vh,
+      gap,
+    });
 
-    // Flip horizontal if menu overflows right edge
-    if (left + rect.width > vw) {
-      left = anchorX - rect.width - GAP;
-    }
-    // Flip vertical if menu overflows bottom edge (往上弹)
-    if (top + rect.height > vh) {
-      top = anchorY - rect.height - GAP;
-    }
-
-    // Clamp to viewport bounds
-    left = Math.max(4, Math.min(left, vw - rect.width - 4));
-    top = Math.max(4, Math.min(top, vh - rect.height - 4));
-
-    setPos({ top, left });
+    setPos({ top: next.top, left: next.left });
     setVisible(true);
   }, [ctx.open, ctx.position, alignToStylePosition, styleProp]);
 
@@ -172,7 +167,7 @@ function ContextMenuContent({
       data-slot="context-menu-content"
       role="menu"
       className={cn(
-        "z-50 min-w-[8rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md",
+        "z-50 min-w-[8rem] overflow-visible rounded-md border bg-popover p-1 text-popover-foreground shadow-md",
         visible && "animate-in fade-in-0 zoom-in-95",
         className
       )}

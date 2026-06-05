@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowDown,
@@ -26,6 +26,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  computeContextMenuPosition,
 } from "@opskat/ui";
 import { cellValueToText } from "@/lib/cellValue";
 import {
@@ -128,6 +129,7 @@ export function TableFilterBuilder({
   const { t } = useTranslation();
   const [selectedFilterId, setSelectedFilterId] = useState<string | null>(null);
   const [ctxTarget, setCtxTarget] = useState<FilterContextTarget | null>(null);
+  const [ctxMenuPosition, setCtxMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const [copiedFilterItems, setCopiedFilterItems] = useState<TableFilterItem[]>([]);
   const ctxMenuRef = useRef<HTMLDivElement>(null);
 
@@ -162,10 +164,28 @@ export function TableFilterBuilder({
 
   const openContextMenu = useCallback((target: FilterContextTarget) => {
     setSelectedFilterId(target.id);
+    setCtxMenuPosition(null);
     setCtxTarget(target);
   }, []);
 
-  const closeContextMenu = useCallback(() => setCtxTarget(null), []);
+  const closeContextMenu = useCallback(() => {
+    setCtxTarget(null);
+    setCtxMenuPosition(null);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!ctxTarget || !ctxMenuRef.current) return;
+    const rect = ctxMenuRef.current.getBoundingClientRect();
+    const next = computeContextMenuPosition({
+      anchorX: ctxTarget.x,
+      anchorY: ctxTarget.y,
+      width: rect.width,
+      height: rect.height,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    });
+    setCtxMenuPosition({ top: next.top, left: next.left });
+  }, [ctxTarget]);
 
   const handleDeleteFilterItem = useCallback(() => {
     if (!ctxTarget) return;
@@ -323,7 +343,12 @@ export function TableFilterBuilder({
           <div
             ref={ctxMenuRef}
             className="z-50 min-w-56 overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-lg"
-            style={{ position: "fixed", top: ctxTarget.y + 2, left: ctxTarget.x + 2 }}
+            style={{
+              position: "fixed",
+              top: ctxMenuPosition?.top ?? ctxTarget.y,
+              left: ctxMenuPosition?.left ?? ctxTarget.x,
+              visibility: ctxMenuPosition ? "visible" : "hidden",
+            }}
             role="menu"
           >
             <button

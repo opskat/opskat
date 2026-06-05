@@ -464,14 +464,16 @@ describe("QueryResultTable — cell context actions", () => {
     expect(screen.getByText("query.filterOperatorIsNot")).toBeVisible();
   });
 
-  it("makes the long filter submenu scroll vertically", async () => {
+  it("does not force the long filter submenu into an internal scroll area", async () => {
     const user = userEvent.setup();
     openMenu({ onFilterByCellValue: vi.fn(), onClearFilterSort: vi.fn(), onAddColumnFilter: vi.fn() });
 
     await user.hover(screen.getByText("query.filter"));
 
     const submenu = screen.getByText("query.filterOperatorIsNotEmpty").parentElement;
-    expect(submenu).toHaveClass("max-h-80", "overflow-y-auto", "overscroll-contain");
+    expect(submenu).not.toHaveClass("max-h-80");
+    expect(submenu).not.toHaveClass("overflow-y-auto");
+    expect(submenu).not.toHaveClass("overscroll-contain");
     expect(submenu).not.toHaveClass("overflow-hidden");
   });
 

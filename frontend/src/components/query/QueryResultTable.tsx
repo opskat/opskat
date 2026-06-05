@@ -1,4 +1,4 @@
-import { memo, useState, useRef, useEffect, useCallback, useMemo, useTransition } from "react";
+import { memo, useState, useRef, useEffect, useCallback, useMemo, useTransition, useLayoutEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import {
@@ -22,7 +22,7 @@ import {
   Hash,
   ChevronRight,
 } from "lucide-react";
-import { Popover, PopoverContent, PopoverTrigger } from "@opskat/ui";
+import { Popover, PopoverContent, PopoverTrigger, computeContextMenuPosition } from "@opskat/ui";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
@@ -370,8 +370,11 @@ function QueryResultTableImpl({
 
   // Context menu state
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null);
+  const [ctxMenuPosition, setCtxMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const [copyAsSubOpen, setCopyAsSubOpen] = useState(false);
   const [filterSubOpen, setFilterSubOpen] = useState(false);
+  const [copyAsSubSide, setCopyAsSubSide] = useState<"right" | "left">("right");
+  const [filterSubSide, setFilterSubSide] = useState<"right" | "left">("right");
   const [dateEditor, setDateEditor] = useState<{
     rowIdx: number;
     col: string;
@@ -394,6 +397,10 @@ function QueryResultTableImpl({
     return () => document.removeEventListener("mousedown", handler);
   }, [dateEditor]);
   const ctxMenuRef = useRef<HTMLDivElement>(null);
+  const copyAsSubTriggerRef = useRef<HTMLDivElement>(null);
+  const copyAsSubMenuRef = useRef<HTMLDivElement>(null);
+  const filterSubTriggerRef = useRef<HTMLDivElement>(null);
+  const filterSubMenuRef = useRef<HTMLDivElement>(null);
 
   // Reset local sort and column widths when columns change
   useEffect(() => {
@@ -551,6 +558,7 @@ function QueryResultTableImpl({
     if (!ctxMenu) return;
     const close = () => {
       setCtxMenu(null);
+      setCtxMenuPosition(null);
       setCopyAsSubOpen(false);
       setFilterSubOpen(false);
     };
@@ -571,6 +579,38 @@ function QueryResultTableImpl({
       document.removeEventListener("keydown", onKey);
     };
   }, [ctxMenu]);
+
+  useLayoutEffect(() => {
+    if (!ctxMenu || !ctxMenuRef.current) return;
+    const rect = ctxMenuRef.current.getBoundingClientRect();
+    const next = computeContextMenuPosition({
+      anchorX: ctxMenu.x,
+      anchorY: ctxMenu.y,
+      width: rect.width,
+      height: rect.height,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    });
+    setCtxMenuPosition({ top: next.top, left: next.left });
+  }, [ctxMenu]);
+
+  useLayoutEffect(() => {
+    if (!copyAsSubOpen || !copyAsSubTriggerRef.current || !copyAsSubMenuRef.current) return;
+    const triggerRect = copyAsSubTriggerRef.current.getBoundingClientRect();
+    const menuRect = copyAsSubMenuRef.current.getBoundingClientRect();
+    const rightFits = triggerRect.right + menuRect.width <= window.innerWidth - 8;
+    const leftFits = triggerRect.left - menuRect.width >= 8;
+    setCopyAsSubSide(!rightFits && leftFits ? "left" : "right");
+  }, [copyAsSubOpen]);
+
+  useLayoutEffect(() => {
+    if (!filterSubOpen || !filterSubTriggerRef.current || !filterSubMenuRef.current) return;
+    const triggerRect = filterSubTriggerRef.current.getBoundingClientRect();
+    const menuRect = filterSubMenuRef.current.getBoundingClientRect();
+    const rightFits = triggerRect.right + menuRect.width <= window.innerWidth - 8;
+    const leftFits = triggerRect.left - menuRect.width >= 8;
+    setFilterSubSide(!rightFits && leftFits ? "left" : "right");
+  }, [filterSubOpen]);
 
   const commitEdit = useCallback(
     (rowIdx: number, col: string, newValue: string) => {
@@ -971,6 +1011,7 @@ function QueryResultTableImpl({
       } else {
         selectCell(origIdx, col);
       }
+      setCtxMenuPosition(null);
       setCtxMenu({ kind: "cell", x: e.clientX, y: e.clientY, rowIdx: origIdx, col, value });
     },
     [onSelectedCellChange, onSelectedRowsChange, selectCell, selectedRowIdxs, selectedColumns]
@@ -989,6 +1030,7 @@ function QueryResultTableImpl({
         onSelectedRowsChange?.([]);
         containerRef.current?.focus();
       }
+      setCtxMenuPosition(null);
       setCtxMenu({ kind: "column", variant: "context", x: e.clientX, y: e.clientY, col });
     },
     [onSelectedCellChange, onSelectedRowsChange, selectColumn, selectedColumns]
@@ -1000,6 +1042,7 @@ function QueryResultTableImpl({
       e.stopPropagation();
       selectColumn(col);
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      setCtxMenuPosition(null);
       setCtxMenu({ kind: "column", variant: "actions", x: rect.left, y: rect.bottom, col });
     },
     [selectColumn]
@@ -1448,7 +1491,12 @@ function QueryResultTableImpl({
           <div
             ref={ctxMenuRef}
             className="z-50 min-w-[8rem] overflow-visible rounded-md border bg-popover p-1 text-popover-foreground shadow-md animate-in fade-in-0 zoom-in-95"
-            style={{ position: "fixed", top: ctxMenu.y + 2, left: ctxMenu.x + 2 }}
+            style={{
+              position: "fixed",
+              top: ctxMenuPosition?.top ?? ctxMenu.y,
+              left: ctxMenuPosition?.left ?? ctxMenu.x,
+              visibility: ctxMenuPosition ? "visible" : "hidden",
+            }}
             role="menu"
           >
             {ctxMenu.kind === "column" && ctxMenu.variant === "actions" ? (
@@ -1542,6 +1590,7 @@ function QueryResultTableImpl({
                 </button>
                 {onCopyAs && (
                   <div
+                    ref={copyAsSubTriggerRef}
                     className="group/submenu relative"
                     onPointerEnter={() => {
                       setCopyAsSubOpen(true);
@@ -1557,7 +1606,10 @@ function QueryResultTableImpl({
                       <ChevronRight className="h-3.5 w-3.5" />
                     </button>
                     <div
-                      className={`absolute left-full top-0 z-50 min-w-[14rem] rounded-md border bg-popover p-1 text-popover-foreground shadow-md animate-in fade-in-0 zoom-in-95 ${copyAsSubOpen ? "block" : "hidden"}`}
+                      ref={copyAsSubMenuRef}
+                      className={`absolute top-0 z-50 min-w-[14rem] rounded-md border bg-popover p-1 text-popover-foreground shadow-md animate-in fade-in-0 zoom-in-95 ${
+                        copyAsSubSide === "left" ? "right-full mr-1" : "left-full ml-1"
+                      } ${copyAsSubOpen ? "block" : "hidden"}`}
                     >
                       <button
                         type="button"
@@ -1720,6 +1772,7 @@ function QueryResultTableImpl({
                 {ctxMenu.kind === "cell" &&
                   (onFilterByCellValue || onAddColumnFilter || onRemoveColumnFilter || onRemoveAllFilters) && (
                     <div
+                      ref={filterSubTriggerRef}
                       className="group/submenu relative"
                       onPointerEnter={() => {
                         setFilterSubOpen(true);
@@ -1735,7 +1788,10 @@ function QueryResultTableImpl({
                         <ChevronRight className="h-3.5 w-3.5" />
                       </button>
                       <div
-                        className={`absolute left-full top-0 z-50 max-h-80 min-w-[13rem] overflow-x-hidden overflow-y-auto overscroll-contain rounded-md border bg-popover p-1 text-popover-foreground shadow-md animate-in fade-in-0 slide-in-from-top-1 zoom-in-95 ${filterSubOpen ? "block" : "hidden"}`}
+                        ref={filterSubMenuRef}
+                        className={`absolute top-0 z-50 min-w-[13rem] rounded-md border bg-popover p-1 text-popover-foreground shadow-md animate-in fade-in-0 slide-in-from-top-1 zoom-in-95 ${
+                          filterSubSide === "left" ? "right-full mr-1" : "left-full ml-1"
+                        } ${filterSubOpen ? "block" : "hidden"}`}
                       >
                         {onFilterByCellValue &&
                           CELL_FILTER_OPTIONS.map((option) => (
