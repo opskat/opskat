@@ -270,7 +270,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const typeLabel = getAssetTypeLabel(assetType, t, assetTypeOptions);
   const sectionDef = getAssetType(assetType);
 
-  const isTestableAssetType = sectionDef?.ConfigSection ? !!sectionDef.testable : assetType === "ssh";
+  const isTestableAssetType = sectionDef?.ConfigSection ? !!sectionDef.testable : false;
 
   const isTestConnectionDisabled = testing || !validity.canTest;
 
@@ -377,8 +377,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             )}
 
             {/* Extension type config */}
-            {assetType !== "ssh" &&
-              !sectionDef?.ConfigSection &&
+            {!sectionDef?.ConfigSection &&
               (() => {
                 const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
                 if (!extInfo) return null;
