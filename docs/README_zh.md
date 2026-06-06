@@ -16,7 +16,7 @@ OpsKat
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Go-1.25-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go">
+  <img src="https://img.shields.io/badge/Go-1.26-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go">
   &nbsp;
   <img src="https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=white" alt="React">
   &nbsp;
@@ -97,11 +97,11 @@ opsctl ssh web-01
 |---------|------------|
 | 桌面端 | [Wails v2](https://wails.io/) (Go + Web) |
 | 前端 | React 19 + TypeScript + Tailwind CSS |
-| 后端 | Go 1.25、SQLite |
+| 后端 | Go 1.26、SQLite |
 
 ## 🚀 快速开始
 
-**前置依赖：** [Go 1.25+](https://go.dev/)、[Node.js 22+](https://nodejs.org/) + [pnpm](https://pnpm.io/)、[Wails v2 CLI](https://wails.io/docs/gettingstarted/installation)
+**前置依赖：** [Go 1.26+](https://go.dev/)、[Node.js 22+](https://nodejs.org/) + [pnpm](https://pnpm.io/)、[Wails v2 CLI](https://wails.io/docs/gettingstarted/installation)
 
 ```bash
 make install        # 安装前端依赖
