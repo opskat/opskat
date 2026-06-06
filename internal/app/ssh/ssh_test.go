@@ -28,3 +28,14 @@ func TestEnableSSHSyncReturnsSessionNotFoundForUnknownID(t *testing.T) {
 		t.Fatalf("expected SessionNotFound code, got %q", err.Error())
 	}
 }
+
+func TestGetSSHServerStatusReturnsSessionNotFoundForUnknownID(t *testing.T) {
+	s := &SSH{manager: ssh_svc.NewManager()}
+	_, err := s.GetSSHServerStatus("nonexistent")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if err.Error() != "会话不存在: nonexistent" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

@@ -1,10 +1,11 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { FolderOpen, Folder, FileCode } from "lucide-react";
+import { Activity, FolderOpen, Folder, FileCode } from "lucide-react";
 import { Button } from "@opskat/ui";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { useTerminalStore, TRANSPORTS } from "@/stores/terminalStore";
 import { SnippetPopover } from "@/components/snippet/SnippetPopover";
+import { TerminalServerStatusDialog } from "@/components/terminal/TerminalServerStatusDialog";
 import { bytesToBase64 } from "@/lib/terminalEncode";
 
 interface TerminalToolbarProps {
@@ -13,6 +14,7 @@ interface TerminalToolbarProps {
 
 export function TerminalToolbar({ tabId }: TerminalToolbarProps) {
   const { t } = useTranslation();
+  const [statusOpen, setStatusOpen] = useState(false);
   const tabData = useTerminalStore((s) => s.tabData[tabId]);
   const toggleFileManager = useSFTPStore((s) => s.toggleFileManager);
   const isOpen = useSFTPStore((s) => s.fileManagerOpenTabs[tabId]);
@@ -56,6 +58,20 @@ export function TerminalToolbar({ tabId }: TerminalToolbarProps) {
           </Button>
         }
       />
+      {activeTransport === "ssh" && activePaneConnected && activePaneId && (
+        <>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            title={t("terminal.serverStatus.trigger")}
+            aria-label={t("terminal.serverStatus.trigger")}
+            onClick={() => setStatusOpen(true)}
+          >
+            <Activity className="h-3.5 w-3.5" />
+          </Button>
+          <TerminalServerStatusDialog open={statusOpen} onOpenChange={setStatusOpen} sessionId={activePaneId} />
+        </>
+      )}
       {activeSpec.hasDirectorySync && (
         <Button
           variant={isOpen ? "secondary" : "ghost"}
