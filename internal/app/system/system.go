@@ -34,6 +34,20 @@ type System struct {
 	githubAuthCancel context.CancelFunc
 }
 
+type windowRuntimeOps struct {
+	IsMinimised    func(context.Context) bool
+	Unminimise     func(context.Context)
+	Show           func(context.Context)
+	SetAlwaysOnTop func(context.Context, bool)
+}
+
+var windowOps = windowRuntimeOps{
+	IsMinimised:    wailsRuntime.WindowIsMinimised,
+	Unminimise:     wailsRuntime.WindowUnminimise,
+	Show:           wailsRuntime.WindowShow,
+	SetAlwaysOnTop: wailsRuntime.WindowSetAlwaysOnTop,
+}
+
 // New 构造 System binder。appCtx 来自 main.go 的根 context（cancel 后所有 binder 退出）。
 func New(appCtx context.Context, skill SkillContent) *System {
 	return &System{
@@ -77,10 +91,12 @@ func (s *System) ActivateWindow() {
 	if s.ctx == nil {
 		return
 	}
-	wailsRuntime.WindowUnminimise(s.ctx)
-	wailsRuntime.WindowShow(s.ctx)
-	wailsRuntime.WindowSetAlwaysOnTop(s.ctx, true)
-	wailsRuntime.WindowSetAlwaysOnTop(s.ctx, false)
+	if windowOps.IsMinimised(s.ctx) {
+		windowOps.Unminimise(s.ctx)
+	}
+	windowOps.Show(s.ctx)
+	windowOps.SetAlwaysOnTop(s.ctx, true)
+	windowOps.SetAlwaysOnTop(s.ctx, false)
 }
 
 // OnSecondInstanceLaunch 第二个实例启动时激活当前窗口。
