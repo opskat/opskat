@@ -123,7 +123,9 @@ func Collect(ctx context.Context, client *ssh.Client) (*Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create ssh session: %w", err)
 	}
-	defer session.Close()
+	defer func() {
+		_ = session.Close()
+	}()
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

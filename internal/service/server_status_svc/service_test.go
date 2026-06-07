@@ -78,7 +78,9 @@ DISK_TOTAL_BYTES=2048
 DISK_USED_BYTES=1024
 `, "", 0
 	})
-	defer client.Close()
+	defer func() {
+		_ = client.Close()
+	}()
 
 	snapshot, err := Collect(context.Background(), client)
 	if err != nil {
@@ -99,7 +101,9 @@ func TestCollectReturnsRemoteStderr(t *testing.T) {
 	client := newTestSSHClient(t, func(string) (string, string, uint32) {
 		return "", "permission denied", 1
 	})
-	defer client.Close()
+	defer func() {
+		_ = client.Close()
+	}()
 
 	_, err := Collect(context.Background(), client)
 	if err == nil {
@@ -123,18 +127,24 @@ func newTestSSHClient(t *testing.T, onExec func(cmd string) (stdout string, stde
 	}
 
 	go func() {
-		defer listener.Close()
+		defer func() {
+			_ = listener.Close()
+		}()
 		conn, err := listener.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() {
+			_ = conn.Close()
+		}()
 
 		serverConn, chans, reqs, err := ssh.NewServerConn(conn, serverConfig)
 		if err != nil {
 			return
 		}
-		defer serverConn.Close()
+		defer func() {
+			_ = serverConn.Close()
+		}()
 		go ssh.DiscardRequests(reqs)
 
 		for newChannel := range chans {
@@ -166,7 +176,9 @@ func newTestSSHClient(t *testing.T, onExec func(cmd string) (stdout string, stde
 }
 
 func handleTestSession(channel ssh.Channel, requests <-chan *ssh.Request, onExec func(cmd string) (string, string, uint32)) {
-	defer channel.Close()
+	defer func() {
+		_ = channel.Close()
+	}()
 
 	for req := range requests {
 		switch req.Type {
