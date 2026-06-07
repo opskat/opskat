@@ -160,18 +160,11 @@ export function getOrCreateTerminal(
 
   const rolloverGuard = attachXtermRolloverGuard(term, writeData);
 
-  const outputDecoder = new TextDecoder();
   const dataEvent = `${eventPrefix}:data:${sessionId}`;
   EventsOn(dataEvent, (dataB64: string) => {
     const binary = atob(dataB64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const highlightLinks = useTerminalThemeStore.getState().highlightLinks;
-    urlHighlighter.setEnabled(highlightLinks);
-    if (highlightLinks) {
-      term.write(urlHighlighter.colorizeOutput(outputDecoder.decode(bytes, { stream: true })));
-      return;
-    }
     term.write(bytes);
   });
 

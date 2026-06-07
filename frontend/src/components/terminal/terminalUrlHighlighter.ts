@@ -39,7 +39,6 @@ const TRAILING_URL_PUNCTUATION = /[),.;!?\]}]+$/;
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 
 export interface TerminalUrlHighlighterController extends Disposable {
-  colorizeOutput: (text: string) => string;
   setEnabled: (enabled: boolean) => void;
   setForegroundColor: (color: string | undefined) => void;
 }
@@ -97,10 +96,6 @@ export function attachTerminalUrlHighlighter(
   refreshDecorations();
 
   return {
-    colorizeOutput: (text) => {
-      if (!highlightEnabled || !linkColor) return text;
-      return colorizeHttpUrls(text, linkColor);
-    },
     setEnabled: (nextEnabled) => {
       highlightEnabled = nextEnabled;
       refreshDecorations();
@@ -147,24 +142,4 @@ function normalizeHttpUrl(url: string): string | undefined {
 function validDecorationColor(color: string | undefined): string | undefined {
   if (!color) return undefined;
   return HEX_COLOR_PATTERN.test(color) ? color : undefined;
-}
-
-function colorizeHttpUrls(text: string, color: string): string {
-  const rgb = hexToRgb(color);
-  if (!rgb) return text;
-  return text.replace(HTTP_URL_PATTERN, (rawUrl: string) => {
-    const url = trimTrailingUrlPunctuation(rawUrl);
-    if (!normalizeHttpUrl(url)) return rawUrl;
-    const suffix = rawUrl.slice(url.length);
-    return `\x1b[38;2;${rgb.r};${rgb.g};${rgb.b}m${url}\x1b[39m${suffix}`;
-  });
-}
-
-function hexToRgb(color: string): { r: number; g: number; b: number } | undefined {
-  if (!HEX_COLOR_PATTERN.test(color)) return undefined;
-  return {
-    r: Number.parseInt(color.slice(1, 3), 16),
-    g: Number.parseInt(color.slice(3, 5), 16),
-    b: Number.parseInt(color.slice(5, 7), 16),
-  };
 }
