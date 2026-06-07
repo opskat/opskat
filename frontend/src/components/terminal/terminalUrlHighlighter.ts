@@ -26,12 +26,10 @@ interface TerminalUrlHighlightHost {
     x?: number;
     width?: number;
     foregroundColor?: string;
-    layer?: "bottom" | "top";
   }) => Decoration | undefined;
   onWriteParsed: (listener: () => void) => Disposable;
   onScroll: (listener: () => void) => Disposable;
   onResize: (listener: () => void) => Disposable;
-  refresh: (start: number, end: number) => void;
 }
 
 const HTTP_URL_PATTERN = /https?:\/\/[^\s<>"'`]+/gi;
@@ -63,10 +61,7 @@ export function attachTerminalUrlHighlighter(
 
   const refreshDecorations = () => {
     clearDecorations();
-    if (!highlightEnabled || !linkColor) {
-      host.refresh(0, Math.max(0, host.rows - 1));
-      return;
-    }
+    if (!highlightEnabled || !linkColor) return;
 
     const buffer = host.buffer.active;
     const firstLine = buffer.viewportY;
@@ -82,12 +77,10 @@ export function attachTerminalUrlHighlighter(
           x: match.start,
           width: match.end - match.start,
           foregroundColor: linkColor,
-          layer: "top",
         });
         if (decoration) decorations.push({ marker, decoration });
       }
     }
-    host.refresh(0, Math.max(0, host.rows - 1));
   };
 
   const writeDispose = host.onWriteParsed(refreshDecorations);
