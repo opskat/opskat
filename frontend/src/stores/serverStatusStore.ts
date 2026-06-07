@@ -127,9 +127,10 @@ export const useServerStatusStore = create<ServerStatusStore>((set, get) => {
     },
 
     setSessionInterval: (sessionId, intervalMs) => {
-      patch(sessionId, { intervalMs });
       const cur = get().sessions[sessionId];
-      if (cur && !cur.paused) startTimer(sessionId, intervalMs);
+      if (!cur) return;
+      patch(sessionId, { intervalMs });
+      if (!cur.paused) startTimer(sessionId, intervalMs);
     },
 
     refreshNow: async (sessionId) => {

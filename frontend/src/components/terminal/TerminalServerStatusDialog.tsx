@@ -67,7 +67,7 @@ function healthClasses(level: HealthLevel) {
 }
 
 function healthLabelKey(level: HealthLevel) {
-  return `terminal.serverStatus.${level === "unknown" ? "unknown" : level}`;
+  return `terminal.serverStatus.${level}`;
 }
 
 export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: TerminalServerStatusDialogProps) {
@@ -99,6 +99,7 @@ export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: Te
 
   const cpuSeries = buffer.map((s) => (typeof s.cpuPercent === "number" ? s.cpuPercent : 0));
   const memSeries = buffer.map((s) => usagePercent(s.memoryUsedBytes, s.memoryTotalBytes) ?? 0);
+  // 折线仅绘制 1 分钟负载；5/15 分钟以数值展示
   const loadSeries = buffer.map((s) => s.load1 ?? 0);
   const collectedAtText = latest?.collectedAt ? new Date(latest.collectedAt).toLocaleTimeString() : "-";
   const hasTrend = buffer.length >= 2;
