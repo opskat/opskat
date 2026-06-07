@@ -33,6 +33,7 @@ interface TerminalThemeState {
   fontFamily: string;
   scrollback: number;
   webglEnabled: boolean;
+  highlightLinks: boolean;
   // 最近一次 WebGL 自动关闭的原因。setWebglEnabled(true) 会把它清掉，所以只在
   // GPU 加速被系统自动关掉后到下一次用户主动开启之间存在。
   webglError: WebglFailure | null;
@@ -43,6 +44,7 @@ interface TerminalThemeState {
   setCustomFontFamily: (fontFamily: string) => void;
   setScrollback: (lines: number) => void;
   setWebglEnabled: (enabled: boolean) => void;
+  setHighlightLinks: (enabled: boolean) => void;
   reportWebglFailure: (failure: WebglFailure) => void;
   addCustomTheme: (theme: TerminalTheme) => void;
   updateCustomTheme: (theme: TerminalTheme) => void;
@@ -75,12 +77,14 @@ export const useTerminalThemeStore = create<TerminalThemeState>()(
       fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
       scrollback: SCROLLBACK_DEFAULT,
       webglEnabled: true,
+      highlightLinks: false,
       webglError: null,
 
       setSelectedThemeId: (id) => set({ selectedThemeId: id }),
       // 用户主动开启 WebGL → 清掉历史错误（不再显示红字提示）；关闭时保留现状
       // （手动关掉不该写入 webglError，但也不主动清——下次自动关掉的错误能继续展示）。
       setWebglEnabled: (enabled) => set(enabled ? { webglEnabled: true, webglError: null } : { webglEnabled: false }),
+      setHighlightLinks: (enabled) => set({ highlightLinks: enabled }),
       reportWebglFailure: (failure) => set({ webglError: failure }),
 
       setFontSize: (size) => set({ fontSize: Math.max(8, Math.min(32, size)) }),
