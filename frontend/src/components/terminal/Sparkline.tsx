@@ -27,13 +27,7 @@ export function Sparkline({
 
   if (values.length < 2) {
     return (
-      <svg
-        className={className}
-        height={height}
-        viewBox={viewBox}
-        preserveAspectRatio="none"
-        aria-hidden="true"
-      />
+      <svg className={className} height={height} viewBox={viewBox} preserveAspectRatio="none" aria-hidden="true" />
     );
   }
 
@@ -50,13 +44,7 @@ export function Sparkline({
     .join(" ")} L${VIEW_W},${height} Z`;
 
   return (
-    <svg
-      className={className}
-      height={height}
-      viewBox={viewBox}
-      preserveAspectRatio="none"
-      aria-hidden="true"
-    >
+    <svg className={className} height={height} viewBox={viewBox} preserveAspectRatio="none" aria-hidden="true">
       <defs>
         <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
           <stop offset="0%" stopColor={color} stopOpacity={0.3} />

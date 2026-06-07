@@ -101,7 +101,9 @@ describe("TerminalToolbar server status", () => {
         "tab-1": {
           splitTree: { type: "terminal", sessionId: "serial-1" },
           activePaneId: "serial-1",
-          panes: { "serial-1": { sessionId: "serial-1", transport: "serial", connected: true, connectedAt: Date.now() } },
+          panes: {
+            "serial-1": { sessionId: "serial-1", transport: "serial", connected: true, connectedAt: Date.now() },
+          },
           directoryFollowMode: "off",
         },
       },

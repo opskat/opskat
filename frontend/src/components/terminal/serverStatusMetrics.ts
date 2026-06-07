@@ -44,11 +44,7 @@ function levelFor(percent: number | null, th: Threshold): HealthLevel {
   return "healthy";
 }
 
-export function getHealthLevel(
-  cpu: number | null,
-  memory: number | null,
-  disk: number | null
-): HealthLevel {
+export function getHealthLevel(cpu: number | null, memory: number | null, disk: number | null): HealthLevel {
   const levels = [
     levelFor(cpu, THRESHOLDS.cpu),
     levelFor(memory, THRESHOLDS.memory),
