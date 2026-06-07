@@ -212,6 +212,14 @@ export function disposeTerminal(sessionId: string): void {
   if (inst) inst.dispose();
 }
 
+// 右键菜单粘贴统一走 xterm 的 term.paste()，与原生 Cmd/Ctrl+V 同源：它把 CRLF/LF
+// 归一化成单个 \r（replace(/\r?\n/g,"\r")）并按 bracketed paste 包裹，再触发 onData →
+// writeData 发往后端。绕过它直接写剪贴板原文会把 \r\n 原样送进 PTY，ICRNL 让 \r 触发
+// `\` 续行、紧随的裸 \n 立刻执行半截命令，多行命令被逐行拆开（#146）。
+export function pasteIntoTerminal(sessionId: string, text: string): void {
+  registry.get(sessionId)?.term.paste(text);
+}
+
 export function getTerminalInstance(sessionId: string): TerminalInstance | undefined {
   return registry.get(sessionId);
 }
