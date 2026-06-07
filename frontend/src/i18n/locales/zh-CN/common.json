@@ -1090,7 +1090,7 @@
     "serverStatus": {
       "trigger": "服务器状态",
       "title": "服务器状态",
-      "description": "查询当前 SSH 会话对应服务器的运行状态，并用图表展示关键指标。",
+      "description": "实时查看当前 SSH 会话所连服务器的运行指标，含实时折线与完整明细。",
       "refresh": "刷新",
       "autoRefresh": "自动刷新",
       "healthSummary": "健康状态",
@@ -1102,6 +1102,9 @@
       "warning": "警告",
       "critical": "紧张",
       "unknown": "未知",
+      "collecting": "采集中…",
+      "paused": "已暂停",
+      "collectedAt": "采集时间",
       "lastUpdated": "最近刷新",
       "error": "查询失败",
       "notAvailable": "暂无数据",
