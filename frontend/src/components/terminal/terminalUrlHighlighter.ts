@@ -44,6 +44,10 @@ export function attachTerminalUrlHighlighter(
   const sync = () => {
     if (disposed) return;
     const buffer = term.buffer.active;
+    // Known limitation (by design, not a bug): no highlighting in the alternate
+    // buffer. registerDecoration returns undefined there and registerMarker only
+    // attaches to the normal buffer, so full-screen TUIs (less/vim/git pager/htop)
+    // can't be tinted. Clicking via WebLinksAddon is unaffected.
     if (!enabled || !color || buffer.type === "alternate") {
       clearAll();
       return;
