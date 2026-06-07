@@ -1101,6 +1101,8 @@
     "gpuAccelerationHint": "使用 WebGL 渲染终端，初始化失败时会自动关闭",
     "gpuAccelerationErrorInitThrew": "WebGL 渲染器初始化失败，GPU 加速已被自动关闭",
     "gpuAccelerationErrorContextLoss": "WebGL 渲染器上下文丢失，GPU 加速已被自动关闭",
+    "highlightLinks": "高亮链接",
+    "highlightLinksHint": "打开后，终端中的 URL 会以主题蓝色常驻显示；关闭时仅在鼠标悬停时显示下划线",
     "default": "默认",
     "builtinThemes": "预置配色",
     "customThemes": "自定义配色",

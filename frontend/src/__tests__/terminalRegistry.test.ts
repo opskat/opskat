@@ -17,6 +17,11 @@ const hoisted = vi.hoisted(() => {
   const reportWebglFailureSpy = vi.fn();
   const browserOpenURLSpy = vi.fn();
   const linkProviderDisposeSpy = vi.fn();
+  const linkMarkerDisposeSpy = vi.fn();
+  const linkDecorationDisposeSpy = vi.fn();
+  const writeParsedDisposeSpy = vi.fn();
+  const scrollDisposeSpy = vi.fn();
+  const resizeDisposeSpy = vi.fn();
   const disposeOrder: string[] = [];
   const state: {
     capturedOnKey: ((e: { key: string }) => void) | null;
@@ -24,10 +29,12 @@ const hoisted = vi.hoisted(() => {
       provideLinks: (bufferLineNumber: number, callback: (links: unknown[] | undefined) => void) => void;
     } | null;
     lines: Map<number, string>;
+    decorationOptions: unknown[];
   } = {
     capturedOnKey: null,
     linkProvider: null,
     lines: new Map(),
+    decorationOptions: [],
   };
   return {
     eventHandlers,
@@ -46,6 +53,11 @@ const hoisted = vi.hoisted(() => {
     reportWebglFailureSpy,
     browserOpenURLSpy,
     linkProviderDisposeSpy,
+    linkMarkerDisposeSpy,
+    linkDecorationDisposeSpy,
+    writeParsedDisposeSpy,
+    scrollDisposeSpy,
+    resizeDisposeSpy,
     disposeOrder,
     state,
   };
@@ -109,12 +121,19 @@ vi.mock("@xterm/xterm", () => {
       hoisted.state.capturedOnKey = handler;
       return { dispose: vi.fn() };
     });
-    onWriteParsed = vi.fn(() => ({ dispose: vi.fn() }));
+    onWriteParsed = vi.fn(() => ({ dispose: hoisted.writeParsedDisposeSpy }));
+    onScroll = vi.fn(() => ({ dispose: hoisted.scrollDisposeSpy }));
+    onResize = vi.fn(() => ({ dispose: hoisted.resizeDisposeSpy }));
     onRender = vi.fn(() => ({ dispose: vi.fn() }));
     attachCustomKeyEventHandler = vi.fn();
     registerLinkProvider = vi.fn((provider) => {
       hoisted.state.linkProvider = provider;
       return { dispose: hoisted.linkProviderDisposeSpy };
+    });
+    registerMarker = vi.fn(() => ({ dispose: hoisted.linkMarkerDisposeSpy }));
+    registerDecoration = vi.fn((options) => {
+      hoisted.state.decorationOptions.push(options);
+      return { dispose: hoisted.linkDecorationDisposeSpy };
     });
     dispose = vi.fn(() => {
       hoisted.disposeOrder.push("term");
@@ -289,6 +308,7 @@ describe("terminalRegistry", () => {
     hoisted.state.capturedOnKey = null;
     hoisted.state.linkProvider = null;
     hoisted.state.lines.clear();
+    hoisted.state.decorationOptions.length = 0;
     hoisted.writeSpy.mockClear();
     hoisted.disposeSpy.mockClear();
     hoisted.reconnectBySessionMock.mockClear();
@@ -304,6 +324,11 @@ describe("terminalRegistry", () => {
     hoisted.reportWebglFailureSpy.mockClear();
     hoisted.browserOpenURLSpy.mockClear();
     hoisted.linkProviderDisposeSpy.mockClear();
+    hoisted.linkMarkerDisposeSpy.mockClear();
+    hoisted.linkDecorationDisposeSpy.mockClear();
+    hoisted.writeParsedDisposeSpy.mockClear();
+    hoisted.scrollDisposeSpy.mockClear();
+    hoisted.resizeDisposeSpy.mockClear();
     hoisted.disposeOrder.length = 0;
   });
 
@@ -389,6 +414,53 @@ describe("terminalRegistry", () => {
     disposeTerminal("sess-no-url");
   });
 
+  it("does not decorate URLs when URL highlighting is disabled", () => {
+    hoisted.state.lines.set(0, "Docs: https://help.ubuntu.com");
+    getOrCreateTerminal("sess-url-highlight-off", {
+      fontSize: 14,
+      fontFamily: "mono",
+      scrollback: 1000,
+      theme: { brightBlue: "#89b4fa" },
+      highlightLinks: false,
+    });
+
+    expect(hoisted.state.decorationOptions).toHaveLength(0);
+    disposeTerminal("sess-url-highlight-off");
+  });
+
+  it("decorates URLs with brightBlue when URL highlighting is enabled", () => {
+    hoisted.state.lines.set(0, "Docs: https://help.ubuntu.com");
+    getOrCreateTerminal("sess-url-highlight-on", {
+      fontSize: 14,
+      fontFamily: "mono",
+      scrollback: 1000,
+      theme: { brightBlue: "#89b4fa", blue: "#7b93f5" },
+      highlightLinks: true,
+    });
+
+    expect(hoisted.state.decorationOptions).toContainEqual(
+      expect.objectContaining({ x: 6, width: 23, foregroundColor: "#89b4fa" })
+    );
+    disposeTerminal("sess-url-highlight-on");
+  });
+
+  it("clears URL highlight decorations when highlighting is disabled after creation", () => {
+    hoisted.state.lines.set(0, "Docs: https://help.ubuntu.com");
+    const inst = getOrCreateTerminal("sess-url-highlight-toggle", {
+      fontSize: 14,
+      fontFamily: "mono",
+      scrollback: 1000,
+      theme: { brightBlue: "#89b4fa" },
+      highlightLinks: true,
+    });
+
+    inst.urlHighlighter.setEnabled(false);
+
+    expect(hoisted.linkDecorationDisposeSpy).toHaveBeenCalled();
+    expect(hoisted.linkMarkerDisposeSpy).toHaveBeenCalled();
+    disposeTerminal("sess-url-highlight-toggle");
+  });
+
   it("disposes URL link subscriptions", () => {
     hoisted.state.lines.set(0, "Docs: https://help.ubuntu.com");
     getOrCreateTerminal("sess-url-dispose", {
@@ -402,6 +474,9 @@ describe("terminalRegistry", () => {
 
     expect(hoisted.linkProviderDisposeSpy).toHaveBeenCalled();
     expect(hoisted.webLinksAddonDisposeSpy).toHaveBeenCalled();
+    expect(hoisted.writeParsedDisposeSpy).toHaveBeenCalled();
+    expect(hoisted.scrollDisposeSpy).toHaveBeenCalled();
+    expect(hoisted.resizeDisposeSpy).toHaveBeenCalled();
   });
 
   it("disposes the input bridge before the xterm instance", () => {
