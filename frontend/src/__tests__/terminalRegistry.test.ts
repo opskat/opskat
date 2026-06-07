@@ -11,14 +11,12 @@ const hoisted = vi.hoisted(() => {
   const webglAddonDisposeSpy = vi.fn();
   const webglContextLossDisposeSpy = vi.fn();
   const webglClearTextureAtlasSpy = vi.fn();
+  const webLinksAddonCtor = vi.fn();
+  const webLinksAddonDisposeSpy = vi.fn();
   const setWebglEnabledSpy = vi.fn();
   const reportWebglFailureSpy = vi.fn();
   const browserOpenURLSpy = vi.fn();
   const linkProviderDisposeSpy = vi.fn();
-  const linkDecorationDisposeSpy = vi.fn();
-  const writeParsedDisposeSpy = vi.fn();
-  const scrollDisposeSpy = vi.fn();
-  const resizeDisposeSpy = vi.fn();
   const disposeOrder: string[] = [];
   const state: {
     capturedOnKey: ((e: { key: string }) => void) | null;
@@ -26,12 +24,10 @@ const hoisted = vi.hoisted(() => {
       provideLinks: (bufferLineNumber: number, callback: (links: unknown[] | undefined) => void) => void;
     } | null;
     lines: Map<number, string>;
-    decorationOptions: unknown[];
   } = {
     capturedOnKey: null,
     linkProvider: null,
     lines: new Map(),
-    decorationOptions: [],
   };
   return {
     eventHandlers,
@@ -44,14 +40,12 @@ const hoisted = vi.hoisted(() => {
     webglAddonDisposeSpy,
     webglContextLossDisposeSpy,
     webglClearTextureAtlasSpy,
+    webLinksAddonCtor,
+    webLinksAddonDisposeSpy,
     setWebglEnabledSpy,
     reportWebglFailureSpy,
     browserOpenURLSpy,
     linkProviderDisposeSpy,
-    linkDecorationDisposeSpy,
-    writeParsedDisposeSpy,
-    scrollDisposeSpy,
-    resizeDisposeSpy,
     disposeOrder,
     state,
   };
@@ -105,7 +99,9 @@ vi.mock("@xterm/xterm", () => {
         },
       },
     };
-    loadAddon = vi.fn();
+    loadAddon = vi.fn((addon: { activate?: (terminal: MockTerminal) => void }) => {
+      addon.activate?.(this);
+    });
     open = vi.fn();
     write = hoisted.writeSpy;
     onData = vi.fn(() => ({ dispose: vi.fn() }));
@@ -113,19 +109,12 @@ vi.mock("@xterm/xterm", () => {
       hoisted.state.capturedOnKey = handler;
       return { dispose: vi.fn() };
     });
-    onWriteParsed = vi.fn(() => ({ dispose: hoisted.writeParsedDisposeSpy }));
-    onScroll = vi.fn(() => ({ dispose: hoisted.scrollDisposeSpy }));
-    onResize = vi.fn(() => ({ dispose: hoisted.resizeDisposeSpy }));
+    onWriteParsed = vi.fn(() => ({ dispose: vi.fn() }));
     onRender = vi.fn(() => ({ dispose: vi.fn() }));
     attachCustomKeyEventHandler = vi.fn();
     registerLinkProvider = vi.fn((provider) => {
       hoisted.state.linkProvider = provider;
       return { dispose: hoisted.linkProviderDisposeSpy };
-    });
-    registerMarker = vi.fn(() => ({ dispose: vi.fn() }));
-    registerDecoration = vi.fn((options) => {
-      hoisted.state.decorationOptions.push(options);
-      return { dispose: hoisted.linkDecorationDisposeSpy };
     });
     dispose = vi.fn(() => {
       hoisted.disposeOrder.push("term");
@@ -152,6 +141,44 @@ vi.mock("@/components/terminal/terminalInputBridge", () => ({
 
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class {} }));
 vi.mock("@xterm/addon-search", () => ({ SearchAddon: class {} }));
+vi.mock("@xterm/addon-web-links", () => {
+  class MockWebLinksAddon {
+    private linkProviderDispose: { dispose: () => void } | undefined;
+    constructor(private readonly handler: (event: MouseEvent, uri: string) => void) {
+      hoisted.webLinksAddonCtor();
+    }
+    activate = vi.fn((terminal: { registerLinkProvider: (provider: unknown) => { dispose: () => void } }) => {
+      this.linkProviderDispose = terminal.registerLinkProvider({
+        provideLinks: (bufferLineNumber: number, callback: (links: unknown[] | undefined) => void) => {
+          const line = hoisted.state.lines.get(bufferLineNumber - 1);
+          const match = line?.match(/https?:\/\/[^\s<>"'`]+/i);
+          if (!match) {
+            callback(undefined);
+            return;
+          }
+          const rawUrl = match[0];
+          const url = rawUrl.replace(/[),.;!?\]}]+$/, "");
+          callback([
+            {
+              text: url,
+              range: {
+                start: { x: (match.index ?? 0) + 1, y: bufferLineNumber },
+                end: { x: (match.index ?? 0) + url.length, y: bufferLineNumber },
+              },
+              activate: (event: MouseEvent | undefined, text: string) => this.handler(event as MouseEvent, text),
+            },
+          ]);
+        },
+      });
+    });
+    dispose = vi.fn(() => {
+      this.linkProviderDispose?.dispose();
+      hoisted.disposeOrder.push("webLinks");
+      hoisted.webLinksAddonDisposeSpy();
+    });
+  }
+  return { WebLinksAddon: MockWebLinksAddon };
+});
 vi.mock("@xterm/addon-webgl", () => {
   class MockWebglAddon {
     constructor() {
@@ -262,7 +289,6 @@ describe("terminalRegistry", () => {
     hoisted.state.capturedOnKey = null;
     hoisted.state.linkProvider = null;
     hoisted.state.lines.clear();
-    hoisted.state.decorationOptions.length = 0;
     hoisted.writeSpy.mockClear();
     hoisted.disposeSpy.mockClear();
     hoisted.reconnectBySessionMock.mockClear();
@@ -272,14 +298,12 @@ describe("terminalRegistry", () => {
     hoisted.webglAddonDisposeSpy.mockClear();
     hoisted.webglContextLossDisposeSpy.mockClear();
     hoisted.webglClearTextureAtlasSpy.mockClear();
+    hoisted.webLinksAddonCtor.mockClear();
+    hoisted.webLinksAddonDisposeSpy.mockClear();
     hoisted.setWebglEnabledSpy.mockClear();
     hoisted.reportWebglFailureSpy.mockClear();
     hoisted.browserOpenURLSpy.mockClear();
     hoisted.linkProviderDisposeSpy.mockClear();
-    hoisted.linkDecorationDisposeSpy.mockClear();
-    hoisted.writeParsedDisposeSpy.mockClear();
-    hoisted.scrollDisposeSpy.mockClear();
-    hoisted.resizeDisposeSpy.mockClear();
     hoisted.disposeOrder.length = 0;
   });
 
@@ -330,9 +354,11 @@ describe("terminalRegistry", () => {
     disposeTerminal("sess-4");
   });
 
-  it("registers HTTP URL links and opens them through Wails", () => {
+  it("loads the official web links addon and opens HTTP URLs through Wails", () => {
     hoisted.state.lines.set(0, "Docs: https://help.ubuntu.com, ip 10.2.4.16 load 0.06");
     getOrCreateTerminal("sess-url", { fontSize: 14, fontFamily: "mono", scrollback: 1000 });
+
+    expect(hoisted.webLinksAddonCtor).toHaveBeenCalledTimes(1);
 
     let links: TestTerminalLink[] | undefined;
     hoisted.state.linkProvider?.provideLinks(1, (provided) => {
@@ -363,54 +389,7 @@ describe("terminalRegistry", () => {
     disposeTerminal("sess-no-url");
   });
 
-  it("decorates URLs with brightBlue from the terminal theme", () => {
-    hoisted.state.lines.set(0, "Docs: https://help.ubuntu.com");
-    getOrCreateTerminal("sess-url-color", {
-      fontSize: 14,
-      fontFamily: "mono",
-      scrollback: 1000,
-      theme: { brightBlue: "#89b4fa", blue: "#7b93f5" },
-    });
-
-    expect(hoisted.state.decorationOptions).toContainEqual(
-      expect.objectContaining({ x: 6, width: 23, foregroundColor: "#89b4fa" })
-    );
-    disposeTerminal("sess-url-color");
-  });
-
-  it("falls back to theme blue for URL decorations", () => {
-    hoisted.state.lines.set(0, "Docs: https://help.ubuntu.com");
-    getOrCreateTerminal("sess-url-blue", {
-      fontSize: 14,
-      fontFamily: "mono",
-      scrollback: 1000,
-      theme: { blue: "#7b93f5" },
-    });
-
-    expect(hoisted.state.decorationOptions).toContainEqual(
-      expect.objectContaining({ x: 6, width: 23, foregroundColor: "#7b93f5" })
-    );
-    disposeTerminal("sess-url-blue");
-  });
-  it("rebuilds URL decorations when the link color changes", () => {
-    hoisted.state.lines.set(0, "Docs: https://help.ubuntu.com");
-    const inst = getOrCreateTerminal("sess-url-theme-change", {
-      fontSize: 14,
-      fontFamily: "mono",
-      scrollback: 1000,
-      theme: { brightBlue: "#89b4fa" },
-    });
-
-    inst.urlLinks.setForegroundColor("#61afef");
-
-    expect(hoisted.linkDecorationDisposeSpy).toHaveBeenCalled();
-    expect(hoisted.state.decorationOptions).toContainEqual(
-      expect.objectContaining({ x: 6, width: 23, foregroundColor: "#61afef" })
-    );
-    disposeTerminal("sess-url-theme-change");
-  });
-
-  it("disposes URL link subscriptions and decorations", () => {
+  it("disposes URL link subscriptions", () => {
     hoisted.state.lines.set(0, "Docs: https://help.ubuntu.com");
     getOrCreateTerminal("sess-url-dispose", {
       fontSize: 14,
@@ -421,11 +400,8 @@ describe("terminalRegistry", () => {
 
     disposeTerminal("sess-url-dispose");
 
-    expect(hoisted.linkDecorationDisposeSpy).toHaveBeenCalled();
-    expect(hoisted.resizeDisposeSpy).toHaveBeenCalled();
-    expect(hoisted.scrollDisposeSpy).toHaveBeenCalled();
-    expect(hoisted.writeParsedDisposeSpy).toHaveBeenCalled();
     expect(hoisted.linkProviderDisposeSpy).toHaveBeenCalled();
+    expect(hoisted.webLinksAddonDisposeSpy).toHaveBeenCalled();
   });
 
   it("disposes the input bridge before the xterm instance", () => {
@@ -433,7 +409,7 @@ describe("terminalRegistry", () => {
     disposeTerminal("sess-order");
     expect(hoisted.bridgeDisposeSpy).toHaveBeenCalled();
     expect(hoisted.disposeSpy).toHaveBeenCalled();
-    expect(hoisted.disposeOrder).toEqual(["bridge", "webgl", "term"]);
+    expect(hoisted.disposeOrder).toEqual(["bridge", "webgl", "webLinks", "term"]);
   });
 
   // 上游 term.dispose() 虽然会级联释放已加载 addon，但 onContextLoss 返回的
@@ -459,7 +435,7 @@ describe("terminalRegistry", () => {
     expect(hoisted.webglAddonDisposeSpy).not.toHaveBeenCalled();
   });
 
-  it("colorizes URL output with theme brightBlue ANSI", () => {
+  it("writes terminal output bytes unchanged without injecting URL color ANSI", () => {
     const encoder = new TextEncoder();
     getOrCreateTerminal("sess-url-ansi", {
       fontSize: 14,
@@ -469,11 +445,11 @@ describe("terminalRegistry", () => {
     });
 
     hoisted.eventHandlers.get("ssh:data:sess-url-ansi")?.(
-      btoa(String.fromCharCode(...encoder.encode("Docs: https://help.ubuntu.com, ip 10.2.4.16 load 0.06")))
+      btoa(String.fromCharCode(...encoder.encode("\x1b[31mDocs: https://help.ubuntu.com suffix\x1b[0m")))
     );
 
     expect(hoisted.writeSpy).toHaveBeenCalledWith(
-      "Docs: \x1b[38;2;137;180;250mhttps://help.ubuntu.com\x1b[39m, ip 10.2.4.16 load 0.06"
+      encoder.encode("\x1b[31mDocs: https://help.ubuntu.com suffix\x1b[0m")
     );
     disposeTerminal("sess-url-ansi");
   });
