@@ -54,7 +54,7 @@ export const useServerStatusStore = create<ServerStatusStore>((set, get) => {
 
   async function tick(sessionId: string) {
     const cur = get().sessions[sessionId];
-    if (!cur || cur.paused) return;
+    if (!cur) return;
     patch(sessionId, { loading: true });
     try {
       const result = (await GetSSHServerStatus(sessionId)) as ServerStatusSnapshot | null;

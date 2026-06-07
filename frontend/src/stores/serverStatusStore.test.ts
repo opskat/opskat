@@ -86,4 +86,23 @@ describe("serverStatusStore", () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect(useServerStatusStore.getState().sessions.s1).toBeUndefined();
   });
+
+  it("refreshNow fetches one sample even while paused", async () => {
+    useServerStatusStore.getState().activate("s1");
+    await vi.advanceTimersByTimeAsync(0);
+    useServerStatusStore.getState().setPaused("s1", true);
+    const before = vi.mocked(GetSSHServerStatus).mock.calls.length;
+    await useServerStatusStore.getState().refreshNow("s1");
+    expect(vi.mocked(GetSSHServerStatus).mock.calls.length).toBe(before + 1);
+    expect(useServerStatusStore.getState().sessions.s1.buffer.length).toBeGreaterThan(1);
+  });
+
+  it("setSessionInterval restarts sampling at the new cadence", async () => {
+    useServerStatusStore.getState().activate("s1");
+    await vi.advanceTimersByTimeAsync(0);
+    useServerStatusStore.getState().setSessionInterval("s1", 3000);
+    const before = vi.mocked(GetSSHServerStatus).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(vi.mocked(GetSSHServerStatus).mock.calls.length).toBe(before + 1);
+  });
 });
