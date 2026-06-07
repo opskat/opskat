@@ -118,8 +118,6 @@ export function TerminalSection() {
     webglEnabled,
     setWebglEnabled,
     webglError,
-    highlightLinks,
-    setHighlightLinks,
     customThemes,
     addCustomTheme,
     updateCustomTheme,
@@ -298,14 +296,6 @@ export function TerminalSection() {
                 {webglError.message ? `: ${webglError.message}` : null}
               </p>
             )}
-          </div>
-
-          <div className="flex items-start justify-between gap-4">
-            <div className="grid gap-1">
-              <Label>{t("terminal.highlightLinks")}</Label>
-              <p className="text-xs text-muted-foreground">{t("terminal.highlightLinksHint")}</p>
-            </div>
-            <Switch checked={highlightLinks} onCheckedChange={setHighlightLinks} />
           </div>
 
           <Separator />

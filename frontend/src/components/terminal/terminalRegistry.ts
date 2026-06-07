@@ -13,7 +13,6 @@ import { withTerminalFontFallback, withTerminalFontIsolation } from "@/data/term
 import i18n from "@/i18n";
 import { createTerminalInputBridge, type TerminalInputBridge } from "./terminalInputBridge";
 import { attachXtermRolloverGuard } from "./xtermRolloverGuard";
-import { attachTerminalUrlHighlighter, type TerminalUrlHighlighterController } from "./terminalUrlHighlighter";
 
 export interface TerminalInstance {
   term: XTerminal;
@@ -21,7 +20,6 @@ export interface TerminalInstance {
   searchAddon: SearchAddon;
   container: HTMLDivElement;
   bridge: TerminalInputBridge;
-  urlHighlighter: TerminalUrlHighlighterController;
 }
 
 interface InternalInstance extends TerminalInstance {
@@ -40,7 +38,6 @@ export function getOrCreateTerminal(
     scrollback: number;
     transport?: TerminalTransport;
     webglEnabled?: boolean;
-    highlightLinks?: boolean;
   }
 ): TerminalInstance {
   const cached = registry.get(sessionId);
@@ -73,12 +70,6 @@ export function getOrCreateTerminal(
   term.loadAddon(searchAddon);
   term.loadAddon(webLinksAddon);
   term.open(container);
-
-  const urlHighlighter = attachTerminalUrlHighlighter(
-    term,
-    init.highlightLinks === true,
-    terminalUrlHighlightColor(init.theme)
-  );
 
   // 优先用调用方传入的 transport；首次挂载若没拿到（罕见），退回 session id 前缀。
   const transport: TerminalTransport =
@@ -181,13 +172,11 @@ export function getOrCreateTerminal(
     searchAddon,
     container,
     bridge,
-    urlHighlighter,
     isClosed: false,
     dispose: () => {
       // bridge 持有 term.attachCustomKeyEventHandler 槽位的还原逻辑,
       // 必须在 term.dispose 之前调用,避免 dispose 后访问已释放对象。
       bridge.dispose();
-      urlHighlighter.dispose();
       rolloverGuard.dispose();
       onDataDispose.dispose();
       onKeyDispose.dispose();
@@ -232,10 +221,6 @@ export function disposeTerminal(sessionId: string): void {
 
 export function getTerminalInstance(sessionId: string): TerminalInstance | undefined {
   return registry.get(sessionId);
-}
-
-export function terminalUrlHighlightColor(theme: ITheme | undefined): string | undefined {
-  return theme?.brightBlue ?? theme?.blue;
 }
 
 function normalizeHttpUrl(url: string): string | undefined {
