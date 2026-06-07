@@ -1101,6 +1101,8 @@
     "gpuAccelerationHint": "Use WebGL to render the terminal. Auto-disables on init failure.",
     "gpuAccelerationErrorInitThrew": "WebGL renderer was auto-disabled because it failed to initialize.",
     "gpuAccelerationErrorContextLoss": "WebGL renderer was auto-disabled because the GPU context was lost.",
+    "highlightLinks": "Highlight Links",
+    "highlightLinksHint": "Keep terminal URLs tinted with the theme link color. When off, links are only underlined on hover.",
     "default": "Default",
     "builtinThemes": "Built-in Themes",
     "customThemes": "Custom Themes",
