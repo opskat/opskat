@@ -18,6 +18,41 @@ export function formatLoad(value: number | undefined): string {
   return value.toFixed(2);
 }
 
+export function formatUptime(value: string | undefined, language = "en"): string {
+  if (!value) return "-";
+
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (!normalized) return "-";
+
+  const daysMatch = normalized.match(/\b(\d+)\s+days?\b/);
+  const timeAfterDaysMatch = daysMatch ? normalized.slice(daysMatch.index ?? 0).match(/,\s*(\d+):(\d+)\b/) : null;
+  const hoursMinutesMatch = normalized.match(/\bup\s+(\d+):(\d+)\b/);
+  const minutesMatch = normalized.match(/\bup\s+(\d+)\s+mins?\b/);
+
+  const days = daysMatch ? Number(daysMatch[1]) : 0;
+  const hours = timeAfterDaysMatch
+    ? Number(timeAfterDaysMatch[1])
+    : hoursMinutesMatch
+      ? Number(hoursMinutesMatch[1])
+      : 0;
+  const minutes = timeAfterDaysMatch
+    ? Number(timeAfterDaysMatch[2])
+    : hoursMinutesMatch
+      ? Number(hoursMinutesMatch[2])
+      : minutesMatch
+        ? Number(minutesMatch[1])
+        : 0;
+
+  if (!days && !hours && !minutes) return normalized;
+
+  const zh = language.toLowerCase().startsWith("zh");
+  const parts: string[] = [];
+  if (days) parts.push(zh ? `${days}天` : `${days}d`);
+  if (hours) parts.push(zh ? `${hours}小时` : `${hours}h`);
+  if (minutes || parts.length === 0) parts.push(zh ? `${minutes}分` : `${minutes}m`);
+  return parts.join(" ");
+}
+
 export function usagePercent(used: number | undefined, total: number | undefined): number | null {
   if (!used || !total || total <= 0) return null;
   return Math.max(0, Math.min(100, (used / total) * 100));

@@ -32,6 +32,7 @@ import {
   formatBytes,
   formatLoad,
   formatPercent,
+  formatUptime,
   getHealthLevel,
   usagePercent,
   type HealthLevel,
@@ -71,7 +72,7 @@ function healthLabelKey(level: HealthLevel) {
 }
 
 export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: TerminalServerStatusDialogProps) {
-  const { t } = useTranslation();
+  const { i18n, t } = useTranslation();
   const [detailsOpen, setDetailsOpen] = useState(true);
   const session = useServerStatusStore((s) => s.sessions[sessionId]);
   const activate = useServerStatusStore((s) => s.activate);
@@ -102,6 +103,7 @@ export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: Te
   // 折线仅绘制 1 分钟负载；5/15 分钟以数值展示
   const loadSeries = buffer.map((s) => s.load1 ?? 0);
   const collectedAtText = latest?.collectedAt ? new Date(latest.collectedAt).toLocaleTimeString() : "-";
+  const uptimeText = formatUptime(latest?.uptime, i18n.language);
   const hasTrend = buffer.length >= 2;
 
   return (
@@ -140,7 +142,7 @@ export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: Te
                   {latest?.os || t("terminal.serverStatus.notAvailable")}
                 </span>
                 <span className="inline-flex items-center gap-1">
-                  {t("terminal.serverStatus.uptime")}: {latest?.uptime || "-"}
+                  {t("terminal.serverStatus.uptime")}: {uptimeText}
                 </span>
                 <span className="inline-flex items-center gap-1">
                   <span
@@ -195,6 +197,7 @@ export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: Te
                 tint="emerald"
                 label={t("terminal.serverStatus.cpu")}
                 value={formatPercent(cpuPercent)}
+                valueClassName="text-emerald-600 dark:text-emerald-400"
                 caption={t("terminal.serverStatus.cpuDetail")}
               >
                 {hasTrend ? (
@@ -204,6 +207,7 @@ export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: Te
                     max={Math.max(20, Math.max(...cpuSeries) * 1.2)}
                     color={METRIC_COLOR.cpu}
                     height={42}
+                    className="w-full"
                   />
                 ) : (
                   <Collecting label={t("terminal.serverStatus.collecting")} />
@@ -215,10 +219,18 @@ export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: Te
                 tint="amber"
                 label={t("terminal.serverStatus.memory")}
                 value={formatPercent(memoryPercent)}
+                valueClassName="text-amber-600 dark:text-amber-400"
                 caption={`${formatBytes(latest?.memoryUsedBytes)} / ${formatBytes(latest?.memoryTotalBytes)}`}
               >
                 {hasTrend ? (
-                  <Sparkline values={memSeries} min={0} max={100} color={METRIC_COLOR.memory} height={42} />
+                  <Sparkline
+                    values={memSeries}
+                    min={30}
+                    max={70}
+                    color={METRIC_COLOR.memory}
+                    height={42}
+                    className="w-full"
+                  />
                 ) : (
                   <Collecting label={t("terminal.serverStatus.collecting")} />
                 )}
@@ -229,6 +241,7 @@ export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: Te
                 tint="sky"
                 label={`${t("terminal.serverStatus.disk")} ${latest?.diskMount || "/"}`}
                 value={formatPercent(diskPercent)}
+                valueClassName="text-sky-600 dark:text-sky-400"
                 caption={`${formatBytes(latest?.diskUsedBytes)} / ${formatBytes(latest?.diskTotalBytes)}`}
               >
                 <div className="mt-5 h-2 overflow-hidden rounded-full bg-muted">
@@ -316,7 +329,6 @@ export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: Te
                   value={`${formatBytes(latest?.diskUsedBytes)} / ${formatBytes(latest?.diskTotalBytes)}`}
                 />
                 <InfoRow label={t("terminal.serverStatus.diskMount")} value={latest?.diskMount || "/"} mono />
-                <InfoRow label={t("terminal.serverStatus.collectedAt")} value={collectedAtText} mono />
               </dl>
             )}
           </section>
@@ -337,6 +349,7 @@ function MetricCard({
   tint,
   label,
   value,
+  valueClassName,
   caption,
   children,
 }: {
@@ -344,6 +357,7 @@ function MetricCard({
   tint: string;
   label: string;
   value: string;
+  valueClassName?: string;
   caption: string;
   children: ReactNode;
 }) {
@@ -356,7 +370,7 @@ function MetricCard({
           </span>
           <span className="text-sm font-medium">{label}</span>
         </div>
-        <span className="text-xl font-semibold tabular-nums">{value}</span>
+        <span className={`text-xl font-semibold tabular-nums ${valueClassName ?? ""}`}>{value}</span>
       </div>
       {children}
       <div className="mt-1 text-[11px] text-muted-foreground">{caption}</div>

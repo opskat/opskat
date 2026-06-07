@@ -3,6 +3,7 @@ import {
   formatBytes,
   formatLoad,
   formatPercent,
+  formatUptime,
   getHealthLevel,
   usagePercent,
 } from "./serverStatusMetrics";
@@ -32,5 +33,14 @@ describe("serverStatusMetrics", () => {
 
   it("returns unknown when no metric is available", () => {
     expect(getHealthLevel(null, null, null)).toBe("unknown");
+  });
+
+  it("formats raw uptime output for compact display", () => {
+    expect(formatUptime("00:44:57 up 108 days, 23:19, 14 users, load average: 2.33, 1.89, 1.64", "zh-CN")).toBe(
+      "108天 23小时 19分"
+    );
+    expect(formatUptime("up 4:05, 1 user, load average: 0.01, 0.02, 0.03", "zh-CN")).toBe("4小时 5分");
+    expect(formatUptime("up 12 min, 1 user, load average: 0.01, 0.02, 0.03", "zh-CN")).toBe("12分");
+    expect(formatUptime("up 2 days, 1:03, 1 user, load average: 0.01, 0.02, 0.03", "en")).toBe("2d 1h 3m");
   });
 });

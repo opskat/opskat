@@ -95,7 +95,7 @@ Common emoji (aligned with the changelog categories in [`/release`](../.claude/s
 | 📄 | Docs |
 | 🚀 | Release |
 
-**Only add an issue number when intentionally linking an issue**: append `#<number>` at the end of the subject line (first line), and on a separate line in the body write `closes #<number>` (or `fixes` / `resolves`) only when the commit should trigger GitHub's auto-close. E.g. subject `🐛 Fix xxx #126`, body ends with `closes #126`. Do not add a PR number, review-comment number, or arbitrary `#xxx` suffix by default.
+**Only add an issue number for a single commit that intentionally links an issue**: append the issue as `#<number>` at the end of the subject line (first line). Most commits should have no `#xxx` suffix. When working on a PR, reviewing a PR, or making review-comment follow-ups, do not add the PR number or review-comment number to each commit. Use the issue number only when the commit itself should be associated with that issue. On a separate line in the body, write `closes #<number>` (or `fixes` / `resolves`) only when the commit should trigger GitHub's auto-close. E.g. subject `🐛 Fix xxx #126`, body ends with `closes #126`.
 
 ### Others
 
