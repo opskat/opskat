@@ -22,6 +22,7 @@ const hoisted = vi.hoisted(() => {
   const writeParsedDisposeSpy = vi.fn();
   const scrollDisposeSpy = vi.fn();
   const resizeDisposeSpy = vi.fn();
+  const refreshSpy = vi.fn();
   const disposeOrder: string[] = [];
   const state: {
     capturedOnKey: ((e: { key: string }) => void) | null;
@@ -58,6 +59,7 @@ const hoisted = vi.hoisted(() => {
     writeParsedDisposeSpy,
     scrollDisposeSpy,
     resizeDisposeSpy,
+    refreshSpy,
     disposeOrder,
     state,
   };
@@ -115,6 +117,7 @@ vi.mock("@xterm/xterm", () => {
       addon.activate?.(this);
     });
     open = vi.fn();
+    refresh = hoisted.refreshSpy;
     write = hoisted.writeSpy;
     onData = vi.fn(() => ({ dispose: vi.fn() }));
     onKey = vi.fn((handler: (e: { key: string }) => void) => {
@@ -329,6 +332,7 @@ describe("terminalRegistry", () => {
     hoisted.writeParsedDisposeSpy.mockClear();
     hoisted.scrollDisposeSpy.mockClear();
     hoisted.resizeDisposeSpy.mockClear();
+    hoisted.refreshSpy.mockClear();
     hoisted.disposeOrder.length = 0;
   });
 
@@ -439,8 +443,9 @@ describe("terminalRegistry", () => {
     });
 
     expect(hoisted.state.decorationOptions).toContainEqual(
-      expect.objectContaining({ x: 6, width: 23, foregroundColor: "#89b4fa" })
+      expect.objectContaining({ x: 6, width: 23, foregroundColor: "#89b4fa", layer: "top" })
     );
+    expect(hoisted.refreshSpy).toHaveBeenCalled();
     disposeTerminal("sess-url-highlight-on");
   });
 
@@ -458,6 +463,7 @@ describe("terminalRegistry", () => {
 
     expect(hoisted.linkDecorationDisposeSpy).toHaveBeenCalled();
     expect(hoisted.linkMarkerDisposeSpy).toHaveBeenCalled();
+    expect(hoisted.refreshSpy).toHaveBeenCalled();
     disposeTerminal("sess-url-highlight-toggle");
   });
 
