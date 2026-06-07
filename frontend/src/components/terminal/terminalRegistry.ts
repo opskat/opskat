@@ -55,6 +55,9 @@ export function getOrCreateTerminal(
 
   const term = new XTerminal({
     cursorBlink: true,
+    // Required for the URL highlighter: registerDecoration is proposed API and
+    // xterm throws without this, so the link tint would never render (#153).
+    allowProposedApi: true,
     fontSize: init.fontSize,
     // 给每个 session 加独占 sentinel，避免 xterm 全局 CharAtlasCache 在 fontFamily/
     // fontSize/theme 相同的 terminal 之间共享 TextureAtlas（详见 withTerminalFontIsolation

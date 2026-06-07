@@ -124,8 +124,8 @@ vi.mock("@xterm/xterm", () => {
       hoisted.disposeOrder.push("term");
       hoisted.disposeSpy();
     });
-    constructor() {
-      hoisted.terminalCtor();
+    constructor(options?: unknown) {
+      hoisted.terminalCtor(options);
     }
   }
   return { Terminal: MockTerminal };
@@ -480,6 +480,14 @@ describe("terminalRegistry", () => {
 
     disposeTerminal("sess-highlight");
     expect(hoisted.urlHighlighterDisposeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("enables allowProposedApi so the highlighter's registerDecoration calls don't throw", () => {
+    // registerDecoration / registerMarker are proposed API in xterm and throw unless
+    // allowProposedApi is set — without this the link highlight silently never renders (#153).
+    getOrCreateTerminal("sess-proposed", { fontSize: 14, fontFamily: "mono", scrollback: 1000 });
+    expect(hoisted.terminalCtor).toHaveBeenCalledWith(expect.objectContaining({ allowProposedApi: true }));
+    disposeTerminal("sess-proposed");
   });
 
   it("re-creates a fresh terminal after dispose for the same sessionId", () => {
