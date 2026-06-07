@@ -17,6 +17,8 @@ const hoisted = vi.hoisted(() => {
   const reportWebglFailureSpy = vi.fn();
   const browserOpenURLSpy = vi.fn();
   const linkProviderDisposeSpy = vi.fn();
+  const attachUrlHighlighterSpy = vi.fn();
+  const urlHighlighterDisposeSpy = vi.fn();
   const disposeOrder: string[] = [];
   const state: {
     capturedOnKey: ((e: { key: string }) => void) | null;
@@ -46,6 +48,8 @@ const hoisted = vi.hoisted(() => {
     reportWebglFailureSpy,
     browserOpenURLSpy,
     linkProviderDisposeSpy,
+    attachUrlHighlighterSpy,
+    urlHighlighterDisposeSpy,
     disposeOrder,
     state,
   };
@@ -201,6 +205,20 @@ vi.mock("@xterm/addon-webgl", () => {
 });
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 
+vi.mock("@/components/terminal/terminalUrlHighlighter", () => ({
+  attachTerminalUrlHighlighter: (...args: unknown[]) => {
+    hoisted.attachUrlHighlighterSpy(...args);
+    return {
+      setEnabled: vi.fn(),
+      setColor: vi.fn(),
+      dispose: () => {
+        hoisted.disposeOrder.push("urlHighlighter");
+        hoisted.urlHighlighterDisposeSpy();
+      },
+    };
+  },
+}));
+
 vi.mock("@/stores/terminalStore", async (importActual) => {
   const actual = await importActual<typeof import("@/stores/terminalStore")>();
   return {
@@ -304,6 +322,8 @@ describe("terminalRegistry", () => {
     hoisted.reportWebglFailureSpy.mockClear();
     hoisted.browserOpenURLSpy.mockClear();
     hoisted.linkProviderDisposeSpy.mockClear();
+    hoisted.attachUrlHighlighterSpy.mockClear();
+    hoisted.urlHighlighterDisposeSpy.mockClear();
     hoisted.disposeOrder.length = 0;
   });
 
@@ -409,7 +429,7 @@ describe("terminalRegistry", () => {
     disposeTerminal("sess-order");
     expect(hoisted.bridgeDisposeSpy).toHaveBeenCalled();
     expect(hoisted.disposeSpy).toHaveBeenCalled();
-    expect(hoisted.disposeOrder).toEqual(["bridge", "webgl", "webLinks", "term"]);
+    expect(hoisted.disposeOrder).toEqual(["bridge", "urlHighlighter", "webgl", "webLinks", "term"]);
   });
 
   // 上游 term.dispose() 虽然会级联释放已加载 addon，但 onContextLoss 返回的
@@ -452,6 +472,14 @@ describe("terminalRegistry", () => {
       encoder.encode("\x1b[31mDocs: https://help.ubuntu.com suffix\x1b[0m")
     );
     disposeTerminal("sess-url-ansi");
+  });
+
+  it("attaches a url highlighter and disposes it with the terminal", () => {
+    getOrCreateTerminal("sess-highlight", { fontSize: 14, fontFamily: "mono", scrollback: 1000 });
+    expect(hoisted.attachUrlHighlighterSpy).toHaveBeenCalledTimes(1);
+
+    disposeTerminal("sess-highlight");
+    expect(hoisted.urlHighlighterDisposeSpy).toHaveBeenCalledTimes(1);
   });
 
   it("re-creates a fresh terminal after dispose for the same sessionId", () => {
