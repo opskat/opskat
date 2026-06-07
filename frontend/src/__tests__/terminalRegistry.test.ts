@@ -31,11 +31,13 @@ const hoisted = vi.hoisted(() => {
     } | null;
     lines: Map<number, string>;
     decorationOptions: unknown[];
+    highlightLinks: boolean;
   } = {
     capturedOnKey: null,
     linkProvider: null,
     lines: new Map(),
     decorationOptions: [],
+    highlightLinks: false,
   };
   return {
     eventHandlers,
@@ -245,6 +247,7 @@ vi.mock("@/stores/terminalThemeStore", () => ({
     getState: () => ({
       setWebglEnabled: hoisted.setWebglEnabledSpy,
       reportWebglFailure: hoisted.reportWebglFailureSpy,
+      highlightLinks: hoisted.state.highlightLinks,
     }),
   },
 }));
@@ -312,6 +315,7 @@ describe("terminalRegistry", () => {
     hoisted.state.linkProvider = null;
     hoisted.state.lines.clear();
     hoisted.state.decorationOptions.length = 0;
+    hoisted.state.highlightLinks = false;
     hoisted.writeSpy.mockClear();
     hoisted.disposeSpy.mockClear();
     hoisted.reconnectBySessionMock.mockClear();
@@ -518,6 +522,7 @@ describe("terminalRegistry", () => {
 
   it("writes terminal output bytes unchanged without injecting URL color ANSI", () => {
     const encoder = new TextEncoder();
+    hoisted.state.highlightLinks = false;
     getOrCreateTerminal("sess-url-ansi", {
       fontSize: 14,
       fontFamily: "mono",
@@ -533,6 +538,27 @@ describe("terminalRegistry", () => {
       encoder.encode("\x1b[31mDocs: https://help.ubuntu.com suffix\x1b[0m")
     );
     disposeTerminal("sess-url-ansi");
+  });
+
+  it("colorizes new URL output when URL highlighting is enabled", () => {
+    const encoder = new TextEncoder();
+    hoisted.state.highlightLinks = true;
+    getOrCreateTerminal("sess-url-output-highlight", {
+      fontSize: 14,
+      fontFamily: "mono",
+      scrollback: 1000,
+      theme: { brightBlue: "#89b4fa" },
+      highlightLinks: true,
+    });
+
+    hoisted.eventHandlers.get("ssh:data:sess-url-output-highlight")?.(
+      btoa(String.fromCharCode(...encoder.encode("Docs: https://help.ubuntu.com, ip 10.2.4.16")))
+    );
+
+    expect(hoisted.writeSpy).toHaveBeenCalledWith(
+      "Docs: \x1b[38;2;137;180;250mhttps://help.ubuntu.com\x1b[39m, ip 10.2.4.16"
+    );
+    disposeTerminal("sess-url-output-highlight");
   });
 
   it("re-creates a fresh terminal after dispose for the same sessionId", () => {
