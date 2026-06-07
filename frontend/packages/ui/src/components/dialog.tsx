@@ -5,6 +5,16 @@ import { Dialog as DialogPrimitive } from "radix-ui";
 import { cn } from "../lib/utils";
 import { Button } from "./button";
 
+type DialogContentSize = "sm" | "md" | "lg" | "xl" | "full";
+
+const dialogContentSizeClasses: Record<DialogContentSize, string> = {
+  sm: "sm:max-w-lg",
+  md: "sm:max-w-2xl",
+  lg: "sm:max-w-5xl",
+  xl: "sm:max-w-7xl",
+  full: "h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] max-w-[calc(100vw-2rem)]",
+};
+
 function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />;
 }
@@ -38,9 +48,13 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  size = "sm",
+  resizable = false,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean;
+  size?: DialogContentSize;
+  resizable?: boolean;
 }) {
   return (
     <DialogPortal data-slot="dialog-portal">
@@ -48,12 +62,20 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border bg-background p-6 shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
+          "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border bg-background p-6 shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+          dialogContentSizeClasses[size],
+          resizable && "min-h-[320px] min-w-[480px] resize overflow-auto",
           className
         )}
         {...props}
       >
         {children}
+        {resizable && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute bottom-3 right-3 h-3 w-3 border-b-2 border-r-2 border-muted-foreground/45"
+          />
+        )}
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot="dialog-close"
