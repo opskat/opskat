@@ -85,4 +85,12 @@ describe("findUrlRowSpans", () => {
       { line: 1, startCol: 0, width: 10, url: "http://example.com/x" },
     ]);
   });
+
+  it("does not hang when the buffer reports rows that getLine cannot return", () => {
+    // buffer.length claims 3 rows but rows 1-2 are missing (e.g. trimmed concurrently).
+    const present = asciiLine("see http://a.com");
+    const buf = { length: 3, getLine: (y: number) => (y === 0 ? present : undefined) };
+    const spans = findUrlRowSpans(buf, 0, 2, 80);
+    expect(spans).toEqual([{ line: 0, startCol: 4, width: 12, url: "http://a.com" }]);
+  });
 });

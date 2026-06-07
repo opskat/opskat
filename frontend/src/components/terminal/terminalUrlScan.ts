@@ -139,7 +139,10 @@ export function findUrlRowSpans(
       }
     }
 
-    y = yy; // skip past the wrapped continuation rows we already consumed
+    // Always advance, even if getLine(y) returned undefined (yy === y): getLine
+    // can return undefined for an in-range row if the buffer is trimmed
+    // concurrently, and y = yy alone would spin the outer loop forever.
+    y = Math.max(yy, y + 1); // skip past the wrapped continuation rows we already consumed
   }
   return spans;
 }
