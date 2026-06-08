@@ -1,9 +1,16 @@
 package import_svc
 
 import (
+	"context"
 	"testing"
 
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
+	"github.com/opskat/opskat/internal/repository/group_repo"
+	"github.com/opskat/opskat/internal/repository/group_repo/mock_group_repo"
 	. "github.com/smartystreets/goconvey/convey"
+	"go.uber.org/mock/gomock"
 	"gopkg.in/yaml.v3"
 )
 
@@ -220,6 +227,60 @@ groups: []
 			So(err, ShouldBeNil)
 			So(cfg.Profiles, ShouldBeEmpty)
 			So(cfg.Groups, ShouldBeEmpty)
+		})
+	})
+}
+
+func TestImportTabbySelected(t *testing.T) {
+	Convey("ImportTabbySelected", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mockAssetRepo := mock_asset_repo.NewMockAssetRepo(ctrl)
+		mockGroupRepo := mock_group_repo.NewMockGroupRepo(ctrl)
+		asset_repo.RegisterAsset(mockAssetRepo)
+		group_repo.RegisterGroup(mockGroupRepo)
+		t.Cleanup(func() {
+			asset_repo.RegisterAsset(asset_repo.NewAsset())
+			group_repo.RegisterGroup(group_repo.NewGroup())
+		})
+
+		Convey("key 文件认证导入为 SSH key 认证", func() {
+			data := []byte(`
+profiles:
+  - type: ssh
+    name: key-server
+    options:
+      host: 10.0.0.1
+      port: 2222
+      user: admin
+      auth: privateKey
+      privateKey: "file:///C:/Users/me/.ssh/id_rsa"
+`)
+
+			var created *asset_entity.Asset
+			mockAssetRepo.EXPECT().
+				List(gomock.Any(), asset_repo.ListOptions{Type: asset_entity.AssetTypeSSH, GroupID: 0}).
+				Return(nil, nil)
+			mockGroupRepo.EXPECT().List(gomock.Any()).Return(nil, nil)
+			mockAssetRepo.EXPECT().
+				Create(gomock.Any(), gomock.AssignableToTypeOf(&asset_entity.Asset{})).
+				DoAndReturn(func(_ context.Context, asset *asset_entity.Asset) error {
+					created = asset
+					asset.ID = 1
+					return nil
+				})
+
+			result, err := ImportTabbySelected(context.Background(), data, []int{0}, ImportOptions{})
+			So(err, ShouldBeNil)
+			So(result.Success, ShouldEqual, 1)
+			So(created, ShouldNotBeNil)
+
+			sshCfg, err := created.GetSSHConfig()
+			So(err, ShouldBeNil)
+			So(sshCfg.AuthType, ShouldEqual, asset_entity.AuthTypeKey)
+			So(sshCfg.PrivateKeys, ShouldResemble, []string{"C:/Users/me/.ssh/id_rsa"})
+			So(sshCfg.Password, ShouldEqual, "")
 		})
 	})
 }
