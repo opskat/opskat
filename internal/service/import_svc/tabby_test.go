@@ -256,24 +256,24 @@ profiles:
 			data := []byte(`
 profiles:
   - type: ssh
-    name: 测试ssh-key
+    name: tabby-key-profile
     icon: fas fa-desktop
     options:
-      host: 192.168.8.144
+      host: example.internal
       algorithms: {}
       input: {}
       privateKeys:
-        - file:///Users/codfrm/.ssh/id_rsa
+        - file:///home/user/.ssh/id_rsa
       auth: publicKey
     weight: -1
-    id: ssh:custom:ssh-key:dd6e0510-06d2-4f59-9c9c-5f97ed250d8a
+    id: ssh:custom:key-profile:00000000-0000-0000-0000-000000000000
 `)
 
 			sshCfg := importSingleTabbySSHProfile(t, data)
-			So(sshCfg.Host, ShouldEqual, "192.168.8.144")
+			So(sshCfg.Host, ShouldEqual, "example.internal")
 			So(sshCfg.Username, ShouldEqual, "root")
 			So(sshCfg.AuthType, ShouldEqual, asset_entity.AuthTypeKey)
-			So(sshCfg.PrivateKeys, ShouldResemble, []string{"/Users/codfrm/.ssh/id_rsa"})
+			So(sshCfg.PrivateKeys, ShouldResemble, []string{"/home/user/.ssh/id_rsa"})
 			So(sshCfg.Password, ShouldEqual, "")
 		})
 	})
