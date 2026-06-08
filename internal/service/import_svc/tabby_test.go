@@ -233,18 +233,6 @@ groups: []
 
 func TestImportTabbySelected(t *testing.T) {
 	Convey("ImportTabbySelected", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		mockAssetRepo := mock_asset_repo.NewMockAssetRepo(ctrl)
-		mockGroupRepo := mock_group_repo.NewMockGroupRepo(ctrl)
-		asset_repo.RegisterAsset(mockAssetRepo)
-		group_repo.RegisterGroup(mockGroupRepo)
-		t.Cleanup(func() {
-			asset_repo.RegisterAsset(asset_repo.NewAsset())
-			group_repo.RegisterGroup(group_repo.NewGroup())
-		})
-
 		Convey("key 文件认证导入为 SSH key 认证", func() {
 			data := []byte(`
 profiles:
@@ -258,29 +246,73 @@ profiles:
       privateKey: "file:///C:/Users/me/.ssh/id_rsa"
 `)
 
-			var created *asset_entity.Asset
-			mockAssetRepo.EXPECT().
-				List(gomock.Any(), asset_repo.ListOptions{Type: asset_entity.AssetTypeSSH, GroupID: 0}).
-				Return(nil, nil)
-			mockGroupRepo.EXPECT().List(gomock.Any()).Return(nil, nil)
-			mockAssetRepo.EXPECT().
-				Create(gomock.Any(), gomock.AssignableToTypeOf(&asset_entity.Asset{})).
-				DoAndReturn(func(_ context.Context, asset *asset_entity.Asset) error {
-					created = asset
-					asset.ID = 1
-					return nil
-				})
-
-			result, err := ImportTabbySelected(context.Background(), data, []int{0}, ImportOptions{})
-			So(err, ShouldBeNil)
-			So(result.Success, ShouldEqual, 1)
-			So(created, ShouldNotBeNil)
-
-			sshCfg, err := created.GetSSHConfig()
-			So(err, ShouldBeNil)
+			sshCfg := importSingleTabbySSHProfile(t, data)
 			So(sshCfg.AuthType, ShouldEqual, asset_entity.AuthTypeKey)
 			So(sshCfg.PrivateKeys, ShouldResemble, []string{"C:/Users/me/.ssh/id_rsa"})
 			So(sshCfg.Password, ShouldEqual, "")
 		})
+
+		Convey("Tabby publicKey + privateKeys 数组导入为 SSH key 认证", func() {
+			data := []byte(`
+profiles:
+  - type: ssh
+    name: 测试ssh-key
+    icon: fas fa-desktop
+    options:
+      host: 192.168.8.144
+      algorithms: {}
+      input: {}
+      privateKeys:
+        - file:///Users/codfrm/.ssh/id_rsa
+      auth: publicKey
+    weight: -1
+    id: ssh:custom:ssh-key:dd6e0510-06d2-4f59-9c9c-5f97ed250d8a
+`)
+
+			sshCfg := importSingleTabbySSHProfile(t, data)
+			So(sshCfg.Host, ShouldEqual, "192.168.8.144")
+			So(sshCfg.Username, ShouldEqual, "root")
+			So(sshCfg.AuthType, ShouldEqual, asset_entity.AuthTypeKey)
+			So(sshCfg.PrivateKeys, ShouldResemble, []string{"/Users/codfrm/.ssh/id_rsa"})
+			So(sshCfg.Password, ShouldEqual, "")
+		})
 	})
+}
+
+func importSingleTabbySSHProfile(t *testing.T, data []byte) *asset_entity.SSHConfig {
+	t.Helper()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockAssetRepo := mock_asset_repo.NewMockAssetRepo(ctrl)
+	mockGroupRepo := mock_group_repo.NewMockGroupRepo(ctrl)
+	asset_repo.RegisterAsset(mockAssetRepo)
+	group_repo.RegisterGroup(mockGroupRepo)
+	t.Cleanup(func() {
+		asset_repo.RegisterAsset(asset_repo.NewAsset())
+		group_repo.RegisterGroup(group_repo.NewGroup())
+	})
+
+	var created *asset_entity.Asset
+	mockAssetRepo.EXPECT().
+		List(gomock.Any(), asset_repo.ListOptions{Type: asset_entity.AssetTypeSSH, GroupID: 0}).
+		Return(nil, nil)
+	mockGroupRepo.EXPECT().List(gomock.Any()).Return(nil, nil)
+	mockAssetRepo.EXPECT().
+		Create(gomock.Any(), gomock.AssignableToTypeOf(&asset_entity.Asset{})).
+		DoAndReturn(func(_ context.Context, asset *asset_entity.Asset) error {
+			created = asset
+			asset.ID = 1
+			return nil
+		})
+
+	result, err := ImportTabbySelected(context.Background(), data, []int{0}, ImportOptions{})
+	So(err, ShouldBeNil)
+	So(result.Success, ShouldEqual, 1)
+	So(created, ShouldNotBeNil)
+
+	sshCfg, err := created.GetSSHConfig()
+	So(err, ShouldBeNil)
+	return sshCfg
 }
