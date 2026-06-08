@@ -128,6 +128,43 @@ func (s *System) ImportSSHConfigSelected(selectedIndexes []int, overwrite bool) 
 	})
 }
 
+// PreviewWindTermConfig 预览 WindTerm 配置（不写入数据库）
+// 用户自行选择 WindTerm profile 下的 terminal/user.sessions 文件
+func (s *System) PreviewWindTermConfig() (*import_svc.WindTermPreviewResult, error) {
+	data, err := s.readWindTermConfig()
+	if err != nil {
+		return nil, err
+	}
+	if data == nil {
+		return nil, nil
+	}
+
+	preview, err := import_svc.PreviewWindTermConfig(i18n.Ctx(s.ctx, s.Lang()), data)
+	if err != nil {
+		return nil, err
+	}
+	sourceID, err := import_svc.NewWindTermImportSession(data)
+	if err != nil {
+		return nil, err
+	}
+	return &import_svc.WindTermPreviewResult{Preview: preview, SourceID: sourceID}, nil
+}
+
+// ImportWindTermSelected 导入用户选中的 WindTerm 连接
+func (s *System) ImportWindTermSelected(sourceID string, selectedIndexes []int, overwrite bool) (*import_svc.ImportResult, error) {
+	data, ok := import_svc.WindTermImportSessionData(sourceID)
+	if !ok {
+		return nil, fmt.Errorf("请先选择 WindTerm user.sessions 文件并完成预览")
+	}
+	result, err := import_svc.ImportWindTermSelected(i18n.Ctx(s.ctx, s.Lang()), data, selectedIndexes, import_svc.ImportOptions{
+		Overwrite: overwrite,
+	})
+	if err == nil {
+		import_svc.DeleteWindTermImportSession(sourceID)
+	}
+	return result, err
+}
+
 // readSSHConfig 读取 SSH Config 文件
 func (s *System) readSSHConfig() ([]byte, error) {
 	filePath := import_svc.DetectSSHConfigPath()
@@ -147,6 +184,28 @@ func (s *System) readSSHConfig() ([]byte, error) {
 		}
 	}
 	data, err := os.ReadFile(filePath) //nolint:gosec // filePath is from file dialog or known config path
+	if err != nil {
+		return nil, fmt.Errorf("读取文件失败: %w", err)
+	}
+	return data, nil
+}
+
+// readWindTermConfig 读取 WindTerm user.sessions 文件内容
+func (s *System) readWindTermConfig() ([]byte, error) {
+	filePath, err := wailsRuntime.OpenFileDialog(s.ctx, wailsRuntime.OpenDialogOptions{
+		Title: "选择 WindTerm 配置文件：profiles/default.v10/terminal/user.sessions",
+		Filters: []wailsRuntime.FileFilter{
+			{DisplayName: "WindTerm user.sessions", Pattern: "user.sessions"},
+			{DisplayName: "All Files", Pattern: "*"},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("打开文件对话框失败: %w", err)
+	}
+	if filePath == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(filePath) //nolint:gosec // filePath is from file dialog
 	if err != nil {
 		return nil, fmt.Errorf("读取文件失败: %w", err)
 	}

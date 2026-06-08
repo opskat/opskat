@@ -1,11 +1,27 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle } from "@opskat/ui";
-import { PreviewTabbyConfig } from "../../../wailsjs/go/system/System";
-import { ImportTabbySelected, PreviewSSHConfig, ImportSSHConfigSelected } from "../../../wailsjs/go/system/System";
+import {
+  Button,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@opskat/ui";
+import {
+  ImportSSHConfigSelected,
+  ImportTabbySelected,
+  ImportWindTermSelected,
+  PreviewSSHConfig,
+  PreviewTabbyConfig,
+  PreviewWindTermConfig,
+} from "../../../wailsjs/go/system/System";
 import { import_svc } from "../../../wailsjs/go/models";
 import { ImportDialog, ImportCallOptions } from "@/components/settings/ImportDialog";
-import { Import } from "lucide-react";
+import { CircleHelp, Import } from "lucide-react";
 import { toast } from "sonner";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -20,6 +36,7 @@ export function ImportSection() {
     ((indexes: number[], options: ImportCallOptions) => Promise<import_svc.ImportResult>) | null
   >(null);
   const [tabbyLoading, setTabbyLoading] = useState(false);
+  const [windTermLoading, setWindTermLoading] = useState(false);
   const [sshConfigLoading, setSSHConfigLoading] = useState(false);
 
   const handlePreviewTabby = async () => {
@@ -39,6 +56,27 @@ export function ImportSection() {
       toast.error(errMsg(e));
     } finally {
       setTabbyLoading(false);
+    }
+  };
+
+  const handlePreviewWindTerm = async () => {
+    setWindTermLoading(true);
+    try {
+      const result = await PreviewWindTermConfig();
+      const preview = result?.preview;
+      if (preview) {
+        setImportPreview(preview);
+        setImportDialogTitle(t("import.windTerm"));
+        setImportFn(
+          () => (indexes: number[], opts: ImportCallOptions) =>
+            ImportWindTermSelected(result.sourceId, indexes, opts.overwrite)
+        );
+        setImportDialogOpen(true);
+      }
+    } catch (e: unknown) {
+      toast.error(errMsg(e));
+    } finally {
+      setWindTermLoading(false);
     }
   };
 
@@ -72,6 +110,26 @@ export function ImportSection() {
           <Button onClick={handlePreviewTabby} disabled={tabbyLoading} variant="outline" className="gap-1">
             <Import className="h-4 w-4" />
             {tabbyLoading ? t("import.importing") : t("import.tabby")}
+          </Button>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-1.5 text-base">
+            <span>WindTerm</span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <CircleHelp className="h-3.5 w-3.5 cursor-help text-muted-foreground" />
+              </TooltipTrigger>
+              <TooltipContent className="max-w-64 text-xs">{t("import.windTermHint")}</TooltipContent>
+            </Tooltip>
+          </CardTitle>
+          <CardDescription>{t("import.windTermDesc")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button onClick={handlePreviewWindTerm} disabled={windTermLoading} variant="outline" className="gap-1">
+            <Import className="h-4 w-4" />
+            {windTermLoading ? t("import.importing") : t("import.windTerm")}
           </Button>
         </CardContent>
       </Card>

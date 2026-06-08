@@ -112,6 +112,10 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
     setImporting(true);
     try {
       const result = await onImport(Array.from(selected), { passphrase, overwrite });
+      if (!result) {
+        toast.info(t("import.cancelled"));
+        return;
+      }
       notifySuccess(
         t("import.result", {
           total: result.total,
@@ -137,7 +141,7 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent size="md">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
@@ -208,15 +212,17 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
                       <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
                     )}
                     <Folder className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span>{groupName}</span>
-                    <span className="ml-auto text-muted-foreground">{items.length}</span>
+                    <span className="min-w-0 truncate" title={groupName}>
+                      {groupName}
+                    </span>
+                    <span className="ml-auto shrink-0 text-muted-foreground">{items.length}</span>
                   </div>
                   {expanded && (
                     <div>
                       {items.map((item) => (
                         <label
                           key={item.index}
-                          className={`flex items-center gap-1.5 rounded-md pl-9 pr-2 py-1.5 text-sm cursor-pointer hover:bg-muted ${
+                          className={`flex min-w-0 items-center gap-1.5 rounded-md pl-9 pr-2 py-1.5 text-sm cursor-pointer hover:bg-muted ${
                             item.exists && !overwrite ? "opacity-50" : ""
                           }`}
                         >
@@ -227,8 +233,13 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
                             className="rounded"
                           />
                           <Server className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                          <span className="truncate flex-1">{item.name}</span>
-                          <span className="text-xs text-muted-foreground font-mono shrink-0">
+                          <span className="min-w-0 flex-1 truncate" title={item.name}>
+                            {item.name}
+                          </span>
+                          <span
+                            className="max-w-[45%] shrink-0 truncate font-mono text-xs text-muted-foreground"
+                            title={`${item.host}:${item.port}`}
+                          >
                             {item.host}:{item.port}
                           </span>
                           {item.exists && (

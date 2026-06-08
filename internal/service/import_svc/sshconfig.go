@@ -33,17 +33,9 @@ func PreviewSSHConfig(ctx context.Context, data []byte) (*PreviewResult, error) 
 	hosts := parseSSHConfig(string(data))
 
 	// 加载已有资产用于重复检测
-	existingAssets, err := asset_svc.Asset().List(ctx, asset_entity.AssetTypeSSH, 0)
+	existingSet, err := existingSSHAssetSet(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("查询已有资产失败: %w", err)
-	}
-	existingSet := make(map[string]bool, len(existingAssets))
-	for _, a := range existingAssets {
-		sshCfg, err := a.GetSSHConfig()
-		if err != nil {
-			continue
-		}
-		existingSet[fmt.Sprintf("%s:%d:%s", sshCfg.Host, sshCfg.Port, sshCfg.Username)] = true
+		return nil, err
 	}
 
 	var items []PreviewItem
@@ -66,7 +58,7 @@ func PreviewSSHConfig(ctx context.Context, data []byte) (*PreviewResult, error) 
 			authType = asset_entity.AuthTypeKey
 		}
 
-		exists := existingSet[fmt.Sprintf("%s:%d:%s", h.hostName, port, user)]
+		exists := existingSet[sshAssetKey(h.hostName, port, user)]
 
 		items = append(items, PreviewItem{
 			Index:    idx,
@@ -105,18 +97,11 @@ func ImportSSHConfigSelected(ctx context.Context, data []byte, selectedIndexes [
 	}
 
 	// 加载已有资产用于重复检测和覆盖
-	existingAssets, err := asset_svc.Asset().List(ctx, asset_entity.AssetTypeSSH, 0)
+	existingAssets, err := listSSHAssets(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("查询已有资产失败: %w", err)
+		return nil, err
 	}
-	existingMap := make(map[string]*asset_entity.Asset, len(existingAssets))
-	for _, a := range existingAssets {
-		sshCfg, err := a.GetSSHConfig()
-		if err != nil {
-			continue
-		}
-		existingMap[fmt.Sprintf("%s:%d:%s", sshCfg.Host, sshCfg.Port, sshCfg.Username)] = a
-	}
+	existingMap := buildSSHAssetMap(existingAssets)
 
 	existingGroups, err := group_repo.Group().List(ctx)
 	if err != nil {
@@ -146,7 +131,7 @@ func ImportSSHConfigSelected(ctx context.Context, data []byte, selectedIndexes [
 			name = fmt.Sprintf("%s@%s:%d", user, h.hostName, port)
 		}
 
-		dupKey := fmt.Sprintf("%s:%d:%s", h.hostName, port, user)
+		dupKey := sshAssetKey(h.hostName, port, user)
 		existingAsset := existingMap[dupKey]
 
 		if existingAsset != nil && !opts.Overwrite {

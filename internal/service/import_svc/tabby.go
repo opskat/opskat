@@ -132,17 +132,9 @@ func PreviewTabbyConfig(ctx context.Context, data []byte) (*PreviewResult, error
 	}
 
 	// 加载已有资产用于重复检测
-	existingAssets, err := asset_svc.Asset().List(ctx, asset_entity.AssetTypeSSH, 0)
+	existingSet, err := existingSSHAssetSet(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("查询已有资产失败: %w", err)
-	}
-	existingSet := make(map[string]bool, len(existingAssets))
-	for _, a := range existingAssets {
-		sshCfg, err := a.GetSSHConfig()
-		if err != nil {
-			continue
-		}
-		existingSet[fmt.Sprintf("%s:%d:%s", sshCfg.Host, sshCfg.Port, sshCfg.Username)] = true
+		return nil, err
 	}
 
 	var items []PreviewItem
@@ -167,7 +159,7 @@ func PreviewTabbyConfig(ctx context.Context, data []byte) (*PreviewResult, error
 
 		exists := false
 		if host != "" {
-			exists = existingSet[fmt.Sprintf("%s:%d:%s", host, port, username)]
+			exists = existingSet[sshAssetKey(host, port, username)]
 		}
 
 		items = append(items, PreviewItem{
@@ -238,18 +230,11 @@ func ImportTabbySelected(ctx context.Context, data []byte, selectedIndexes []int
 	}
 
 	// 加载已有资产用于重复检测和覆盖
-	existingAssets, err := asset_svc.Asset().List(ctx, asset_entity.AssetTypeSSH, 0)
+	existingAssets, err := listSSHAssets(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("查询已有资产失败: %w", err)
+		return nil, err
 	}
-	existingMap := make(map[string]*asset_entity.Asset, len(existingAssets))
-	for _, a := range existingAssets {
-		sshCfg, err := a.GetSSHConfig()
-		if err != nil {
-			continue
-		}
-		existingMap[fmt.Sprintf("%s:%d:%s", sshCfg.Host, sshCfg.Port, sshCfg.Username)] = a
-	}
+	existingMap := buildSSHAssetMap(existingAssets)
 
 	existingGroups, err := group_repo.Group().List(ctx)
 	if err != nil {
@@ -285,7 +270,7 @@ func ImportTabbySelected(ctx context.Context, data []byte, selectedIndexes []int
 			continue
 		}
 
-		dupKey := fmt.Sprintf("%s:%d:%s", host, port, username)
+		dupKey := sshAssetKey(host, port, username)
 		existingAsset := existingMap[dupKey]
 
 		if existingAsset != nil && !opts.Overwrite {
@@ -482,12 +467,32 @@ func buildGroupCache(groups []*group_entity.Group) map[string]int64 {
 }
 
 func ensureGroupByName(ctx context.Context, name string, cache map[string]int64) (int64, error) {
-	key := groupCacheKey(0, name)
+	return ensureGroupByParent(ctx, 0, name, cache)
+}
+
+func ensureGroupPath(ctx context.Context, path string, cache map[string]int64) (int64, error) {
+	parentID := int64(0)
+	for _, part := range strings.Split(path, ">") {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			continue
+		}
+		id, err := ensureGroupByParent(ctx, parentID, name, cache)
+		if err != nil {
+			return 0, err
+		}
+		parentID = id
+	}
+	return parentID, nil
+}
+
+func ensureGroupByParent(ctx context.Context, parentID int64, name string, cache map[string]int64) (int64, error) {
+	key := groupCacheKey(parentID, name)
 	if id, ok := cache[key]; ok {
 		return id, nil
 	}
 	now := time.Now().Unix()
-	group := &group_entity.Group{Name: name, ParentID: 0, Icon: "folder", Createtime: now, Updatetime: now}
+	group := &group_entity.Group{Name: name, ParentID: parentID, Icon: "folder", Createtime: now, Updatetime: now}
 	if err := group_repo.Group().Create(ctx, group); err != nil {
 		return 0, err
 	}
