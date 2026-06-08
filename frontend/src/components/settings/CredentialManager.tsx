@@ -1,11 +1,29 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef, type CSSProperties, type DragEvent } from "react";
 import { toast } from "sonner";
 import { notifyCopied, notifySuccess } from "@/lib/notify";
 import { useTranslation } from "react-i18next";
-import { Plus, Trash2, Copy, Key, FileKey, Download, Pencil, Lock, KeyRound, Eye, EyeOff, Shuffle } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  Copy,
+  Key,
+  FileKey,
+  Download,
+  Pencil,
+  Lock,
+  KeyRound,
+  Eye,
+  EyeOff,
+  Shuffle,
+  FileText,
+  Upload,
+  CheckCircle2,
+  AlertCircle,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -21,12 +39,19 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  cn,
 } from "@opskat/ui";
+import { OnFileDrop, OnFileDropOff } from "../../../wailsjs/runtime/runtime";
 import { ListCredentials } from "../../../wailsjs/go/system/System";
 import {
   GenerateSSHKey,
-  ImportSSHKeyFile,
+  ImportSSHKeyPath,
   ImportSSHKeyPEM,
+  ExportSSHPrivateKey,
   UpdateCredential,
   DeleteCredential,
   GetCredentialPublicKey,
@@ -35,7 +60,8 @@ import {
   UpdateCredentialPassword,
   UpdateCredentialPassphrase,
 } from "../../../wailsjs/go/system/System";
-import { credential_entity } from "../../../wailsjs/go/models";
+import { SelectSSHKeyFile } from "../../../wailsjs/go/ssh/SSH";
+import { credential_entity, ssh as ssh_models } from "../../../wailsjs/go/models";
 
 function generatePassword(length = 20): string {
   const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
@@ -97,6 +123,15 @@ export function CredentialManager() {
       const pubKey = await GetCredentialPublicKey(id);
       await navigator.clipboard.writeText(pubKey);
       notifyCopied(t("sshKey.copied"));
+    } catch (e) {
+      toast.error(String(e));
+    }
+  };
+
+  const handleExportPrivateKey = async (id: number) => {
+    try {
+      const exported = await ExportSSHPrivateKey(id);
+      if (exported) notifySuccess(t("sshKey.exportSuccess"));
     } catch (e) {
       toast.error(String(e));
     }
@@ -187,6 +222,19 @@ export function CredentialManager() {
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>{t("sshKey.copyPublicKey")}</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => handleExportPrivateKey(cred.id)}
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{t("sshKey.exportPrivateKey")}</TooltipContent>
                     </Tooltip>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -451,12 +499,17 @@ function ImportKeyDialog({
   onSuccess: () => void;
 }) {
   const { t } = useTranslation();
+  const dropZoneRef = useRef<HTMLDivElement | null>(null);
   const [name, setName] = useState("");
   const [comment, setComment] = useState("");
   const [username, setUsername] = useState("");
   const [pemContent, setPemContent] = useState("");
   const [passphrase, setPassphrase] = useState("");
   const [mode, setMode] = useState<"file" | "pem">("file");
+  const [selectedFile, setSelectedFile] = useState<SelectedImportFile | null>(null);
+  const [passphraseVisible, setPassphraseVisible] = useState(false);
+  const [nativeDragOver, setNativeDragOver] = useState(false);
+  const [browserDragOver, setBrowserDragOver] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -467,18 +520,75 @@ function ImportKeyDialog({
       setPemContent("");
       setPassphrase("");
       setMode("file");
+      setSelectedFile(null);
+      setPassphraseVisible(false);
+      setNativeDragOver(false);
+      setBrowserDragOver(false);
     }
   }, [open]);
 
+  const setDefaultNameFromPath = useCallback((path: string) => {
+    setName((current) => current || fileNameFromPath(path));
+  }, []);
+
+  const selectImportFile = useCallback(
+    (file: SelectedImportFile) => {
+      setSelectedFile(file);
+      setDefaultNameFromPath(file.path);
+    },
+    [setDefaultNameFromPath]
+  );
+
+  useEffect(() => {
+    if (!open || mode !== "file") return;
+    const handler = (_x: number, _y: number, paths: string[]) => {
+      setNativeDragOver(false);
+      const path = paths.find(Boolean);
+      if (!path) return;
+      selectImportFile({
+        path,
+        name: fileNameFromPath(path),
+        source: "drop",
+      });
+    };
+    OnFileDrop(handler, true);
+    return () => {
+      OnFileDropOff();
+    };
+  }, [mode, open, selectImportFile]);
+
+  useEffect(() => {
+    const el = dropZoneRef.current;
+    if (!el || !open || mode !== "file") return;
+    const observer = new MutationObserver(() => {
+      setNativeDragOver(el.classList.contains("wails-drop-target-active"));
+    });
+    observer.observe(el, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, [mode, open]);
+
+  const handleSelectFile = async () => {
+    try {
+      const info = await SelectSSHKeyFile();
+      if (!info) return;
+      selectImportFile(importFileFromLocalKey(info, "dialog"));
+    } catch (e) {
+      toast.error(String(e));
+    }
+  };
+
+  const handleClearFile = () => {
+    setSelectedFile(null);
+  };
+
   const handleImportFile = async () => {
+    if (!selectedFile) return;
     setSaving(true);
     try {
-      const result = await ImportSSHKeyFile(name, comment, passphrase, username);
-      if (result) {
-        notifySuccess(t("sshKey.importSuccess"));
-        onOpenChange(false);
-        onSuccess();
-      }
+      await ImportSSHKeyPath(name, comment, selectedFile.path, passphrase, username);
+      notifySuccess(t("sshKey.importSuccess"));
+      onOpenChange(false);
+      onSuccess();
     } catch (e) {
       toast.error(String(e));
     } finally {
@@ -500,79 +610,268 @@ function ImportKeyDialog({
     }
   };
 
+  const handleBrowserDrop = async (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setBrowserDragOver(false);
+    const file = event.dataTransfer.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      setMode("pem");
+      setPemContent(text);
+      setName((current) => current || file.name);
+    } catch (e) {
+      toast.error(String(e));
+    }
+  };
+
+  const pemStatus = getPEMStatus(pemContent);
+  const fileReady = !!selectedFile;
+  const canImport =
+    !saving && !!name.trim() && (mode === "file" ? fileReady : pemContent.trim().length > 0 && pemStatus === "valid");
+  const isDragOver = nativeDragOver || browserDragOver;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="md">
         <DialogHeader>
           <DialogTitle>{t("sshKey.importTitle")}</DialogTitle>
+          <DialogDescription>{t("sshKey.importDescription")}</DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4 py-2">
-          <div className="grid gap-2">
-            <Label>{t("sshKey.name")}</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("sshKey.namePlaceholder")} />
-          </div>
-          <div className="grid gap-2">
-            <Label>{t("sshKey.comment")}</Label>
-            <Input
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
-              placeholder={t("sshKey.commentPlaceholder")}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label>{t("credential.username")}</Label>
-            <Input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder={t("credential.usernamePlaceholder")}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label>{t("sshKey.passphrase")}</Label>
-            <Input
-              type="password"
-              value={passphrase}
-              onChange={(e) => setPassphrase(e.target.value)}
-              placeholder={t("sshKey.passphrasePlaceholder")}
-            />
-          </div>
-          <div className="flex gap-2">
-            <Button variant={mode === "file" ? "default" : "outline"} size="sm" onClick={() => setMode("file")}>
-              {t("sshKey.importFile")}
-            </Button>
-            <Button variant={mode === "pem" ? "default" : "outline"} size="sm" onClick={() => setMode("pem")}>
-              {t("sshKey.importPEM")}
-            </Button>
-          </div>
-          {mode === "pem" && (
-            <div className="grid gap-2">
-              <Textarea
-                value={pemContent}
-                onChange={(e) => setPemContent(e.target.value)}
-                placeholder={t("sshKey.pemPlaceholder")}
-                rows={6}
-                className="font-mono text-xs"
-              />
+        <div className="flex flex-col gap-4 py-2">
+          <Tabs value={mode} onValueChange={(value) => setMode(value as "file" | "pem")}>
+            <div className="flex flex-col gap-2">
+              <Label>{t("sshKey.importSource")}</Label>
+              <TabsList className="grid h-10 w-full grid-cols-2">
+                <TabsTrigger value="file" className="gap-1.5">
+                  <FileKey className="h-3.5 w-3.5" />
+                  {t("sshKey.importFile")}
+                </TabsTrigger>
+                <TabsTrigger value="pem" className="gap-1.5">
+                  <FileText className="h-3.5 w-3.5" />
+                  {t("sshKey.importPEM")}
+                </TabsTrigger>
+              </TabsList>
             </div>
-          )}
+
+            <TabsContent value="file" className="mt-3">
+              <div className="flex flex-col gap-3">
+                <div
+                  ref={dropZoneRef}
+                  className={cn(
+                    "flex min-h-40 flex-col justify-center gap-3 rounded-lg border border-dashed bg-muted/30 p-4 transition-colors",
+                    isDragOver && "border-primary bg-primary/5"
+                  )}
+                  style={{ "--wails-drop-target": "drop" } as CSSProperties}
+                  onDragEnter={(event) => {
+                    event.preventDefault();
+                    setBrowserDragOver(true);
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "copy";
+                    setBrowserDragOver(true);
+                  }}
+                  onDragLeave={() => setBrowserDragOver(false)}
+                  onDrop={handleBrowserDrop}
+                >
+                  {selectedFile ? (
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border bg-background text-primary">
+                        <FileKey className="h-5 w-5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+                          <div className="truncate text-sm font-medium">{selectedFile.name}</div>
+                        </div>
+                        <div className="mt-1 truncate font-mono text-xs text-muted-foreground">{selectedFile.path}</div>
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                          <span className="inline-flex items-center gap-1 rounded-md border bg-background px-2 py-1 text-muted-foreground">
+                            {selectedFile.isEncrypted ? (
+                              <Lock className="h-3 w-3" />
+                            ) : (
+                              <CheckCircle2 className="h-3 w-3" />
+                            )}
+                            {selectedFileLabel(selectedFile, t)}
+                          </span>
+                          {selectedFile.source === "drop" && (
+                            <span className="inline-flex items-center gap-1 rounded-md border bg-background px-2 py-1 text-muted-foreground">
+                              <Upload className="h-3 w-3" />
+                              {t("sshKey.dropped")}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2 sm:justify-end">
+                        <Button type="button" variant="outline" size="sm" onClick={handleSelectFile}>
+                          {t("sshKey.changeFile")}
+                        </Button>
+                        <Button type="button" variant="ghost" size="sm" onClick={handleClearFile}>
+                          {t("sshKey.removeFile")}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center gap-3 text-center">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-lg border bg-background text-primary">
+                        <Upload className="h-5 w-5" />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <div className="text-sm font-medium">
+                          {isDragOver ? t("sshKey.dropActiveTitle") : t("sshKey.dropTitle")}
+                        </div>
+                        <div className="text-xs text-muted-foreground">{t("sshKey.dropDescription")}</div>
+                      </div>
+                      <Button type="button" variant="outline" size="sm" onClick={handleSelectFile}>
+                        {t("sshKey.chooseFile")}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="pem" className="mt-3">
+              <div className="flex flex-col gap-2">
+                <Label>{t("sshKey.privateKeyContent")}</Label>
+                <Textarea
+                  value={pemContent}
+                  onChange={(e) => setPemContent(e.target.value)}
+                  placeholder={t("sshKey.pemPlaceholder")}
+                  rows={8}
+                  className="min-h-44 font-mono text-xs"
+                />
+                {pemStatus !== "empty" && (
+                  <div
+                    className={cn(
+                      "flex items-center gap-1.5 text-xs",
+                      pemStatus === "valid" ? "text-emerald-600" : "text-amber-600"
+                    )}
+                  >
+                    {pemStatus === "valid" ? (
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                    ) : (
+                      <AlertCircle className="h-3.5 w-3.5" />
+                    )}
+                    {t(pemStatus === "valid" ? "sshKey.pemDetected" : "sshKey.pemInvalid")}
+                  </div>
+                )}
+              </div>
+            </TabsContent>
+          </Tabs>
+
+          <div className="flex flex-col gap-3">
+            <div className="text-sm font-medium">{t("sshKey.saveInfo")}</div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="flex flex-col gap-2">
+                <Label>{t("sshKey.name")}</Label>
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder={t("sshKey.namePlaceholder")}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>{t("credential.username")}</Label>
+                <Input
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder={t("credential.usernamePlaceholder")}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>{t("sshKey.passphrase")}</Label>
+                <div className="relative">
+                  <Input
+                    type={passphraseVisible ? "text" : "password"}
+                    value={passphrase}
+                    onChange={(e) => setPassphrase(e.target.value)}
+                    placeholder={t("sshKey.passphrasePlaceholder")}
+                    className="pr-9"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="absolute right-1 top-1 h-7 w-7"
+                    onClick={() => setPassphraseVisible((visible) => !visible)}
+                    aria-label={t(passphraseVisible ? "sshKey.hidePassphrase" : "sshKey.showPassphrase")}
+                  >
+                    {passphraseVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </Button>
+                </div>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>{t("sshKey.comment")}</Label>
+                <Input
+                  value={comment}
+                  onChange={(e) => setComment(e.target.value)}
+                  placeholder={t("sshKey.commentPlaceholder")}
+                />
+              </div>
+            </div>
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t("action.cancel")}
           </Button>
-          {mode === "file" ? (
-            <Button onClick={handleImportFile} disabled={saving || !name}>
-              {saving ? t("sshKey.importing") : t("sshKey.importFile")}
-            </Button>
-          ) : (
-            <Button onClick={handleImportPEM} disabled={saving || !name || !pemContent}>
-              {saving ? t("sshKey.importing") : t("sshKey.import")}
-            </Button>
-          )}
+          <Button onClick={mode === "file" ? handleImportFile : handleImportPEM} disabled={!canImport}>
+            {saving ? t("sshKey.importing") : t("sshKey.import")}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
+}
+
+type ImportModeSource = "dialog" | "drop";
+
+interface SelectedImportFile {
+  path: string;
+  name: string;
+  source: ImportModeSource;
+  keyType?: string;
+  fingerprint?: string;
+  isEncrypted?: boolean;
+}
+
+function importFileFromLocalKey(info: ssh_models.LocalSSHKeyInfo, source: ImportModeSource): SelectedImportFile {
+  return {
+    path: info.path,
+    name: fileNameFromPath(info.path),
+    source,
+    keyType: info.keyType,
+    fingerprint: info.fingerprint,
+    isEncrypted: info.isEncrypted,
+  };
+}
+
+function fileNameFromPath(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts.at(-1) || path || "id_opskat";
+}
+
+function getPEMStatus(content: string): "empty" | "valid" | "invalid" {
+  const trimmed = content.trim();
+  if (!trimmed) return "empty";
+  return /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(trimmed) && /-----END [A-Z ]*PRIVATE KEY-----/.test(trimmed)
+    ? "valid"
+    : "invalid";
+}
+
+function selectedFileLabel(
+  file: SelectedImportFile,
+  t: (key: string, options?: Record<string, unknown>) => string
+): string {
+  if (file.keyType) {
+    return t(file.isEncrypted ? "sshKey.fileMetadataEncrypted" : "sshKey.fileMetadata", {
+      type: file.keyType.toUpperCase(),
+      fingerprint: file.fingerprint || t("sshKey.fingerprintPending"),
+    });
+  }
+  return t(file.source === "drop" ? "sshKey.droppedFilePending" : "sshKey.fingerprintPending");
 }
 
 function CreatePasswordDialog({

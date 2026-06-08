@@ -7,6 +7,8 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -321,6 +323,50 @@ func TestUpdate_PersistsUsername(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, "u2", persisted.Username)
 			assert.Equal(t, "desc", persisted.Description)
+		})
+	})
+}
+
+func TestExportSSHPrivateKey(t *testing.T) {
+	Convey("ExportSSHPrivateKey 导出解密后的 SSH 私钥", t, func() {
+		repo := setupCredentialTestEnv(t)
+		ctx := context.Background()
+		target := filepath.Join(t.TempDir(), "id_ed25519")
+
+		Convey("SSH 密钥写入用户指定文件并设置 0600 权限", func() {
+			cred, err := GenerateSSHKey(ctx, GenerateKeyRequest{
+				Name:    "export-key",
+				KeyType: credential_entity.KeyTypeED25519,
+			})
+			assert.NoError(t, err)
+
+			privateKey, err := GetDecryptedPrivateKey(ctx, cred.ID)
+			assert.NoError(t, err)
+
+			err = ExportSSHPrivateKey(ctx, cred.ID, target)
+			assert.NoError(t, err)
+
+			data, err := os.ReadFile(target) //nolint:gosec // target is created under t.TempDir by this test.
+			assert.NoError(t, err)
+			assert.Equal(t, privateKey, string(data))
+
+			info, err := os.Stat(target)
+			assert.NoError(t, err)
+			assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+		})
+
+		Convey("非 SSH 密钥凭证不能导出", func() {
+			cred, err := CreatePassword(ctx, CreatePasswordRequest{
+				Name:     "password",
+				Password: "secret",
+			})
+			assert.NoError(t, err)
+
+			err = ExportSSHPrivateKey(ctx, cred.ID, target)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "SSH 密钥")
+			assert.NoFileExists(t, target)
+			assert.Len(t, repo.creds, 1)
 		})
 	})
 }
