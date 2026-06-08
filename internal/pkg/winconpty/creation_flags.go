@@ -7,7 +7,7 @@ const (
 )
 
 func processCreationFlags(hasEnv bool) uint32 {
-	flags := extendedStartupInfoPresentFlag | createNoWindowFlag
+	flags := extendedStartupInfoPresentFlag
 	if hasEnv {
 		flags |= createUnicodeEnvironmentFlag
 	}

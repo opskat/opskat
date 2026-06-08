@@ -1,10 +1,9 @@
 //go:build windows
 
-// Package winconpty starts Windows ConPTY processes without flashing a console window.
+// Package winconpty starts Windows ConPTY processes.
 //
 // This file is based on github.com/UserExistsError/conpty v0.1.4 (MIT licensed)
-// and keeps the small API surface OpsKat uses, with CREATE_NO_WINDOW added to
-// the child process creation flags.
+// and keeps the small API surface OpsKat uses.
 //
 // Portions copyright (c) 2020 UserExistsError. See LICENSE in this directory.
 package winconpty
