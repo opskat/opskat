@@ -4,6 +4,7 @@ const hoisted = vi.hoisted(() => {
   const eventHandlers = new Map<string, (...args: unknown[]) => void>();
   const writeSpy = vi.fn();
   const pasteSpy = vi.fn();
+  const clipboardGetTextSpy = vi.fn();
   const disposeSpy = vi.fn();
   const reconnectBySessionMock = vi.fn();
   const terminalCtor = vi.fn();
@@ -22,6 +23,7 @@ const hoisted = vi.hoisted(() => {
     eventHandlers,
     writeSpy,
     pasteSpy,
+    clipboardGetTextSpy,
     disposeSpy,
     reconnectBySessionMock,
     terminalCtor,
@@ -44,6 +46,7 @@ vi.mock("../../wailsjs/runtime/runtime", () => ({
   EventsOff: (event: string) => {
     hoisted.eventHandlers.delete(event);
   },
+  ClipboardGetText: hoisted.clipboardGetTextSpy,
 }));
 
 vi.mock("../../wailsjs/go/ssh/SSH", () => ({
@@ -166,7 +169,12 @@ vi.mock("@/i18n", () => ({
   default: { t: (key: string) => `<<${key}>>` },
 }));
 
-import { getOrCreateTerminal, disposeTerminal, pasteIntoTerminal } from "@/components/terminal/terminalRegistry";
+import {
+  getOrCreateTerminal,
+  disposeTerminal,
+  pasteIntoTerminal,
+  pasteFromClipboard,
+} from "@/components/terminal/terminalRegistry";
 import { TRANSPORTS, transportForAsset, inferTransportFromSessionId } from "@/stores/terminalStore";
 
 describe("TRANSPORTS", () => {
@@ -212,6 +220,7 @@ describe("terminalRegistry", () => {
     hoisted.state.capturedOnKey = null;
     hoisted.writeSpy.mockClear();
     hoisted.pasteSpy.mockClear();
+    hoisted.clipboardGetTextSpy.mockReset();
     hoisted.disposeSpy.mockClear();
     hoisted.reconnectBySessionMock.mockClear();
     hoisted.terminalCtor.mockClear();
@@ -320,6 +329,30 @@ describe("terminalRegistry", () => {
   it("pasteIntoTerminal is a no-op for an unknown session", () => {
     expect(() => pasteIntoTerminal("sess-missing", "x")).not.toThrow();
     expect(hoisted.pasteSpy).not.toHaveBeenCalled();
+  });
+
+  // 右键菜单粘贴必须经 Wails 原生 ClipboardGetText（Go 侧读系统剪贴板），
+  // 不能用 navigator.clipboard.readText()——macOS WKWebView 对 JS 读剪贴板有隐私
+  // 保护，会在光标处弹出系统原生「粘贴」按钮要求二次点击，而不是直接粘贴。
+  // 这里锁死"必须走原生 ClipboardGetText 取文，再喂给 term.paste"。
+  it("pasteFromClipboard reads via native Wails ClipboardGetText and routes through term.paste", async () => {
+    getOrCreateTerminal("sess-clip", { fontSize: 14, fontFamily: "mono", scrollback: 1000 });
+    const clip = "docker run \\\r\n-v x\r\nnginx";
+    hoisted.clipboardGetTextSpy.mockResolvedValue(clip);
+    await pasteFromClipboard("sess-clip");
+    expect(hoisted.clipboardGetTextSpy).toHaveBeenCalledTimes(1);
+    expect(hoisted.pasteSpy).toHaveBeenCalledTimes(1);
+    expect(hoisted.pasteSpy).toHaveBeenCalledWith(clip);
+    disposeTerminal("sess-clip");
+  });
+
+  it("pasteFromClipboard does not paste when the clipboard is empty", async () => {
+    getOrCreateTerminal("sess-clip-empty", { fontSize: 14, fontFamily: "mono", scrollback: 1000 });
+    hoisted.clipboardGetTextSpy.mockResolvedValue("");
+    await pasteFromClipboard("sess-clip-empty");
+    expect(hoisted.clipboardGetTextSpy).toHaveBeenCalledTimes(1);
+    expect(hoisted.pasteSpy).not.toHaveBeenCalled();
+    disposeTerminal("sess-clip-empty");
   });
 
   it("re-creates a fresh terminal after dispose for the same sessionId", () => {

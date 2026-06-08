@@ -21,7 +21,7 @@ import {
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { useTabStore } from "@/stores/tabStore";
-import { getOrCreateTerminal, getTerminalInstance, pasteIntoTerminal } from "./terminalRegistry";
+import { getOrCreateTerminal, getTerminalInstance, pasteFromClipboard } from "./terminalRegistry";
 
 export interface TerminalHandle {
   toggleSearch: () => void;
@@ -73,12 +73,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
   }, [t]);
 
   const handlePaste = useCallback(() => {
-    navigator.clipboard
-      .readText()
-      .then((text) => {
-        if (text) pasteIntoTerminal(sessionId, text);
-      })
-      .catch(console.error);
+    pasteFromClipboard(sessionId).catch(console.error);
   }, [sessionId]);
 
   const handleSelectAll = useCallback(() => {
