@@ -21,7 +21,12 @@ import {
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { useTabStore } from "@/stores/tabStore";
-import { getOrCreateTerminal, getTerminalInstance, pasteFromClipboard } from "./terminalRegistry";
+import {
+  getOrCreateTerminal,
+  getTerminalInstance,
+  pasteFromClipboard,
+  terminalUrlHighlightColor,
+} from "./terminalRegistry";
 
 export interface TerminalHandle {
   toggleSearch: () => void;
@@ -46,6 +51,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
   const fontFamily = useTerminalThemeStore((s) => s.fontFamily);
   const scrollback = useTerminalThemeStore((s) => s.scrollback);
   const webglEnabled = useTerminalThemeStore((s) => s.webglEnabled);
+  const highlightLinks = useTerminalThemeStore((s) => s.highlightLinks);
   const selectedThemeId = useTerminalThemeStore((s) => s.selectedThemeId);
   const customThemes = useTerminalThemeStore((s) => s.customThemes);
   const resolvedTheme = useResolvedTheme();
@@ -93,6 +99,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
       scrollback,
       transport,
       webglEnabled,
+      highlightLinks,
     });
     termRef.current = inst.term;
     fitAddonRef.current = inst.fitAddon;
@@ -176,9 +183,12 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     // 时污染其它 session（详见 terminalFonts.ts 的 withTerminalFontIsolation 注释）。
     termRef.current.options.fontFamily = withTerminalFontIsolation(sessionId, withTerminalFontFallback(fontFamily));
     termRef.current.options.scrollback = scrollback;
+    const inst = getTerminalInstance(sessionId);
+    inst?.urlHighlighter.setEnabled(highlightLinks);
+    inst?.urlHighlighter.setColor(terminalUrlHighlightColor(xtermTheme));
     fitAddonRef.current?.fit();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [xtermTheme, fontSize, fontFamily, scrollback]);
+  }, [xtermTheme, fontSize, fontFamily, scrollback, highlightLinks]);
 
   useEffect(() => {
     const inst = getTerminalInstance(sessionId);

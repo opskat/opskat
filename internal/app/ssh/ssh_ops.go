@@ -9,11 +9,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
+
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/dirsync"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_svc"
+	"github.com/opskat/opskat/internal/service/server_status_svc"
 	"github.com/opskat/opskat/internal/service/ssh_svc"
 	"github.com/opskat/opskat/internal/sshpool"
 
@@ -385,6 +389,39 @@ func (s *SSH) ResizeSSH(sessionID string, cols int, rows int) error {
 		return fmt.Errorf("会话不存在: %s", sessionID)
 	}
 	return sess.Resize(cols, rows)
+}
+
+// GetSSHServerStatus 查询当前 SSH 会话对应服务器的状态快照。
+func (s *SSH) GetSSHServerStatus(sessionID string) (*server_status_svc.Snapshot, error) {
+	sess, ok := s.manager.GetSession(sessionID)
+	if !ok {
+		return nil, fmt.Errorf("会话不存在: %s", sessionID)
+	}
+
+	baseCtx := s.ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	lang := ""
+	if s.lang != nil {
+		lang = s.lang.Lang()
+	}
+	ctx := i18n.Ctx(baseCtx, lang)
+	ctx = logger.WithContextField(ctx, zap.String("sessionID", sessionID), zap.Int64("assetID", sess.AssetID))
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	logger.Ctx(ctx).Info("ssh server status start")
+	snapshot, err := server_status_svc.Collect(ctx, sess.Client())
+	if err != nil {
+		logger.Ctx(ctx).Error("ssh server status failed", zap.Error(err))
+		return nil, err
+	}
+	logger.Ctx(ctx).Info("ssh server status end",
+		zap.String("hostname", snapshot.Hostname),
+		zap.String("os", snapshot.OS),
+	)
+	return snapshot, nil
 }
 
 // GetSSHSyncState 返回会话当前的目录同步状态。
