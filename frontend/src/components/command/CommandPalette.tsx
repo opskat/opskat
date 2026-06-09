@@ -9,7 +9,7 @@ import { openAssetDefault } from "@/lib/openAssetDefault";
 import { useAssetStore } from "@/stores/assetStore";
 import { useRecentAssetStore } from "@/stores/recentAssetStore";
 import { useTabStore, type Tab, type InfoTabMeta, type PageTabMeta } from "@/stores/tabStore";
-import { resolveTabLabel } from "@/components/layout/pageTabMeta";
+import { resolveTabLabel, getBuiltinPageMeta } from "@/components/layout/pageTabMeta";
 import type { asset_entity } from "../../../wailsjs/go/models";
 
 // ──────────────────────────────────────────────
@@ -70,6 +70,8 @@ interface IconMeta {
 
 function resolveTabIcon(tab: Tab): IconMeta {
   if (tab.type === "ai") return { component: MessageSquare, muted: true };
+  const pageMeta = getBuiltinPageMeta(tab);
+  if (pageMeta) return { component: pageMeta.icon };
   if (tab.icon) {
     const component = getIconComponent(tab.icon);
     const color = getIconColor(tab.icon);
