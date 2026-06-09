@@ -6,9 +6,9 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 )
 
-// GetLogsDir 返回日志目录路径（依赖 AppDataDir，无需提前初始化）
+// GetLogsDir 返回日志目录路径（Init 后用其实际数据目录，未初始化时回退默认目录）
 func GetLogsDir() string {
-	return filepath.Join(AppDataDir(), "logs")
+	return filepath.Join(ResolvedDataDir(), "logs")
 }
 
 // InitLogger 根据当前 AppConfig.DebugMode 构建 zap logger 并设为全局实例。
