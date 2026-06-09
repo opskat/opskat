@@ -7,36 +7,43 @@ import (
 	"sync"
 )
 
-var windTermImportSessions = struct {
+// windTermImportSession 缓存最近一次预览所选文件的内容，供后续导入复用。
+// 同时只可能存在一个导入对话框，因此用单槽缓存：新预览会顶掉旧的，
+// 内存恒定为一份文件，无需 TTL/淘汰，天然规避了「预览后取消」的泄漏。
+var windTermImportSession = struct {
 	sync.Mutex
-	data map[string][]byte
-}{data: make(map[string][]byte)}
+	id   string
+	data []byte
+}{}
 
 func NewWindTermImportSession(data []byte) (string, error) {
 	id, err := newImportSessionID()
 	if err != nil {
 		return "", err
 	}
-	windTermImportSessions.Lock()
-	windTermImportSessions.data[id] = append([]byte(nil), data...)
-	windTermImportSessions.Unlock()
+	windTermImportSession.Lock()
+	windTermImportSession.id = id
+	windTermImportSession.data = append([]byte(nil), data...)
+	windTermImportSession.Unlock()
 	return id, nil
 }
 
 func WindTermImportSessionData(id string) ([]byte, bool) {
-	windTermImportSessions.Lock()
-	defer windTermImportSessions.Unlock()
-	data, ok := windTermImportSessions.data[id]
-	if !ok {
+	windTermImportSession.Lock()
+	defer windTermImportSession.Unlock()
+	if id == "" || windTermImportSession.id != id {
 		return nil, false
 	}
-	return append([]byte(nil), data...), true
+	return append([]byte(nil), windTermImportSession.data...), true
 }
 
 func DeleteWindTermImportSession(id string) {
-	windTermImportSessions.Lock()
-	delete(windTermImportSessions.data, id)
-	windTermImportSessions.Unlock()
+	windTermImportSession.Lock()
+	if windTermImportSession.id == id {
+		windTermImportSession.id = ""
+		windTermImportSession.data = nil
+	}
+	windTermImportSession.Unlock()
 }
 
 func newImportSessionID() (string, error) {

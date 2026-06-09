@@ -112,10 +112,6 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
     setImporting(true);
     try {
       const result = await onImport(Array.from(selected), { passphrase, overwrite });
-      if (!result) {
-        toast.info(t("import.cancelled"));
-        return;
-      }
       notifySuccess(
         t("import.result", {
           total: result.total,

@@ -2,6 +2,7 @@ package import_svc
 
 import (
 	"context"
+	"runtime"
 	"testing"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -10,6 +11,29 @@ import (
 	"github.com/opskat/opskat/internal/repository/group_repo"
 	. "github.com/smartystreets/goconvey/convey"
 )
+
+func TestWindTermWindowsKeyPath(t *testing.T) {
+	Convey("WindTerm 密钥路径按当前系统可用性处理", t, func() {
+		Convey("非 Windows 跳过 Windows 绝对密钥路径，回退 password", func() {
+			for _, p := range []string{`C:\Users\foo\.ssh\id_rsa`, `C:/Users/foo/.ssh/id_rsa`, `\\server\share\id_rsa`} {
+				entry := normalizeWindTermSession(windTermSession{Protocol: "SSH", Target: "10.0.0.1", IdentityFileWindows: p})
+				if runtime.GOOS == "windows" {
+					So(entry.AuthType, ShouldEqual, asset_entity.AuthTypeKey)
+					So(len(entry.PrivateKeys), ShouldEqual, 1)
+				} else {
+					So(entry.AuthType, ShouldEqual, asset_entity.AuthTypePassword)
+					So(len(entry.PrivateKeys), ShouldEqual, 0)
+				}
+			}
+		})
+
+		Convey("Unix 风格路径在任何系统都按 key 导入", func() {
+			entry := normalizeWindTermSession(windTermSession{Protocol: "SSH", Target: "10.0.0.1", IdentityFileWindows: "~/.ssh/id_rsa"})
+			So(entry.AuthType, ShouldEqual, asset_entity.AuthTypeKey)
+			So(len(entry.PrivateKeys), ShouldEqual, 1)
+		})
+	})
+}
 
 func TestWindTermConfigParsing(t *testing.T) {
 	Convey("WindTerm 配置解析", t, func() {
@@ -86,6 +110,25 @@ func TestPreviewWindTermConfig(t *testing.T) {
 			{ID: "Dogyun>物理服务器", Name: "物理服务器"},
 		})
 	})
+
+	Convey("分组路径含空格时归一化，item.GroupID 必须能在 Groups 中命中", t, func() {
+		data := []byte(`[{"session.group":"Dogyun > 物理服务器","session.label":"K3S","session.protocol":"SSH","session.target":"127.0.0.1"}]`)
+
+		preview, err := PreviewWindTermConfig(ctx, data)
+		So(err, ShouldBeNil)
+		So(len(preview.Items), ShouldEqual, 1)
+		So(preview.Items[0].GroupID, ShouldEqual, "Dogyun>物理服务器")
+		So(preview.Groups, ShouldResemble, []PreviewGroup{
+			{ID: "Dogyun", Name: "Dogyun"},
+			{ID: "Dogyun>物理服务器", Name: "物理服务器"},
+		})
+		// 前端按 item.GroupID 归类到 Groups，未命中则该行不渲染、无法取消勾选
+		groupIDs := make(map[string]bool)
+		for _, g := range preview.Groups {
+			groupIDs[g.ID] = true
+		}
+		So(groupIDs[preview.Items[0].GroupID], ShouldBeTrue)
+	})
 }
 
 func TestImportWindTermSelected(t *testing.T) {
@@ -158,9 +201,32 @@ func TestImportWindTermSelected(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(cfg.AuthType, ShouldEqual, asset_entity.AuthTypeKey)
 			So(cfg.Password, ShouldEqual, "encrypted-password")
-			So(cfg.CredentialID, ShouldEqual, 99)
+			// 新导入带来了密钥，不再复活旧的统一凭证，否则 CredentialID 会按解析优先级遮蔽导入的密钥
+			So(cfg.CredentialID, ShouldEqual, 0)
 			So(cfg.PrivateKeyPassphrase, ShouldEqual, "encrypted-passphrase")
 			So(len(cfg.PrivateKeys), ShouldEqual, 1)
+		})
+
+		Convey("覆盖内联密钥资产时不丢失密钥认证", func() {
+			asset := newWindTermAsset(1, "Existing", 0, &asset_entity.SSHConfig{
+				Host: "dup.example.com", Port: 22, Username: "root",
+				AuthType: asset_entity.AuthTypeKey, PrivateKeys: []string{"/home/u/.ssh/id_rsa"},
+			})
+			assetRepo := &windTermAssetRepo{assets: []*asset_entity.Asset{asset}, nextID: 2}
+			groupRepo := &windTermGroupRepo{}
+			asset_repo.RegisterAsset(assetRepo)
+			group_repo.RegisterGroup(groupRepo)
+
+			// WindTerm 常态：session 只有 host/port/group，不携带任何密钥
+			data := []byte(`[{"session.label":"Updated","session.protocol":"SSH","session.target":"dup.example.com"}]`)
+			result, err := ImportWindTermSelected(ctx, data, []int{0}, ImportOptions{Overwrite: true})
+			So(err, ShouldBeNil)
+			So(result.Success, ShouldEqual, 1)
+			cfg, err := assetRepo.assets[0].GetSSHConfig()
+			So(err, ShouldBeNil)
+			So(cfg.AuthType, ShouldEqual, asset_entity.AuthTypeKey)
+			So(len(cfg.PrivateKeys), ShouldEqual, 1)
+			So(cfg.PrivateKeys[0], ShouldEqual, "/home/u/.ssh/id_rsa")
 		})
 
 		Convey("覆盖无分组的 session 时保留已有分组", func() {

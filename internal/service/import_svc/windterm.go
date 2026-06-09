@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -19,7 +20,6 @@ type WindTermPreviewResult struct {
 }
 
 type windTermSession struct {
-	AutoLogin           string `json:"-"`
 	Group               string `json:"session.group"`
 	Label               string `json:"session.label"`
 	Port                int    `json:"session.port"`
@@ -139,7 +139,13 @@ func ImportWindTermSelected(ctx context.Context, data []byte, selectedIndexes []
 		}
 
 		if existingAsset != nil && opts.Overwrite {
-			preserveWindTermSensitiveFields(existingAsset, sshCfg)
+			oldCfg, err := existingAsset.GetSSHConfig()
+			if err != nil {
+				result.Failed++
+				result.Errors = append(result.Errors, ImportError{Name: entry.Name, Reason: fmt.Sprintf("读取已有配置失败: %v", err)})
+				continue
+			}
+			preserveSSHSecretsOnOverwrite(oldCfg, sshCfg)
 			existingAsset.Name = entry.Name
 			if groupID != 0 {
 				existingAsset.GroupID = groupID
@@ -215,7 +221,7 @@ func normalizeWindTermSession(session windTermSession) normalizedWindTermSession
 
 	var privateKeys []string
 	identityFile := strings.TrimSpace(session.IdentityFileWindows)
-	if identityFile != "" {
+	if identityFile != "" && windTermKeyPathUsable(identityFile) {
 		privateKeys = append(privateKeys, expandPath(identityFile))
 	}
 
@@ -225,37 +231,61 @@ func normalizeWindTermSession(session windTermSession) normalizedWindTermSession
 	}
 
 	return normalizedWindTermSession{
-		Name:        name,
-		Host:        host,
-		Port:        port,
-		Username:    username,
-		AuthType:    authType,
-		GroupID:     strings.TrimSpace(session.Group),
+		Name:     name,
+		Host:     host,
+		Port:     port,
+		Username: username,
+		AuthType: authType,
+		// 归一化分组路径，保证 item.GroupID 与 windTermGroupPaths/ensureGroupPath 生成的层级 ID 一致
+		GroupID:     strings.Join(windTermGroupSegments(session.Group), ">"),
 		PrivateKeys: privateKeys,
 	}
 }
 
-func windTermGroupPaths(path string) []PreviewGroup {
-	var groups []PreviewGroup
-	var current []string
+// windTermKeyPathUsable 判断 WindTerm 的 Windows 密钥路径在当前系统是否可用。
+// 字段名为 ssh.identityFilePath.windows，只在 Windows 上有意义；非 Windows 上遇到
+// Windows 绝对路径（盘符 C:\ 或 UNC \\）会读不到密钥，跳过它回退为 password 认证，
+// 避免生成永远无法连接的 key 资产。
+func windTermKeyPathUsable(path string) bool {
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	return !isWindowsAbsPath(path)
+}
+
+// isWindowsAbsPath 识别盘符路径（C:\ 或 C:/）与 UNC 路径（\\server\share）
+func isWindowsAbsPath(path string) bool {
+	if strings.HasPrefix(path, `\\`) {
+		return true
+	}
+	if len(path) >= 3 && path[1] == ':' && (path[2] == '\\' || path[2] == '/') {
+		c := path[0]
+		return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+	}
+	return false
+}
+
+// windTermGroupSegments 把 ">" 分隔的分组路径切成去空白、非空的层级名
+func windTermGroupSegments(path string) []string {
+	var segments []string
 	for _, part := range strings.Split(path, ">") {
 		name := strings.TrimSpace(part)
 		if name == "" {
 			continue
 		}
+		segments = append(segments, name)
+	}
+	return segments
+}
+
+func windTermGroupPaths(path string) []PreviewGroup {
+	segments := windTermGroupSegments(path)
+	groups := make([]PreviewGroup, 0, len(segments))
+	current := make([]string, 0, len(segments))
+	for _, name := range segments {
 		current = append(current, name)
 		id := strings.Join(current, ">")
 		groups = append(groups, PreviewGroup{ID: id, Name: name})
 	}
 	return groups
-}
-
-func preserveWindTermSensitiveFields(asset *asset_entity.Asset, sshCfg *asset_entity.SSHConfig) {
-	oldCfg, err := asset.GetSSHConfig()
-	if err != nil {
-		return
-	}
-	sshCfg.Password = oldCfg.Password
-	sshCfg.CredentialID = oldCfg.CredentialID
-	sshCfg.PrivateKeyPassphrase = oldCfg.PrivateKeyPassphrase
 }

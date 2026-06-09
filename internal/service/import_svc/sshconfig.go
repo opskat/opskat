@@ -160,9 +160,9 @@ func ImportSSHConfigSelected(ctx context.Context, data []byte, selectedIndexes [
 		_ = groupCache // 预留分组逻辑
 
 		if existingAsset != nil && opts.Overwrite {
-			// 覆盖模式：保留已有密码
-			if oldCfg, err := existingAsset.GetSSHConfig(); err == nil && oldCfg.Password != "" {
-				sshCfg.Password = oldCfg.Password
+			// 覆盖模式：用旧配置补齐新数据缺失的敏感字段（密码/凭证/密钥/passphrase）
+			if oldCfg, err := existingAsset.GetSSHConfig(); err == nil {
+				preserveSSHSecretsOnOverwrite(oldCfg, sshCfg)
 			}
 			existingAsset.Name = name
 			if err := existingAsset.SetSSHConfig(sshCfg); err != nil {

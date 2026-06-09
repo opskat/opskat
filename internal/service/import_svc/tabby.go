@@ -321,11 +321,9 @@ func ImportTabbySelected(ctx context.Context, data []byte, selectedIndexes []int
 		}
 
 		if existingAsset != nil && opts.Overwrite {
-			// 覆盖模式：保留已有密码（如果新数据没有密码）
-			if sshCfg.Password == "" {
-				if oldCfg, err := existingAsset.GetSSHConfig(); err == nil && oldCfg.Password != "" {
-					sshCfg.Password = oldCfg.Password
-				}
+			// 覆盖模式：用旧配置补齐新数据缺失的敏感字段（密码/凭证/密钥/passphrase）
+			if oldCfg, err := existingAsset.GetSSHConfig(); err == nil {
+				preserveSSHSecretsOnOverwrite(oldCfg, sshCfg)
 			}
 			existingAsset.Name = name
 			if groupID != 0 {
