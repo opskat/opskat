@@ -1,12 +1,23 @@
 import { defineConfig, devices } from "@playwright/test";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// Created once when the config is loaded (before webServer starts). Workers and
-// globalTeardown read OPSKAT_DATA_DIR from the inherited process env.
-const dataDir = mkdtempSync(join(tmpdir(), "opskat-e2e-"));
 const MASTER_KEY = "opskat-e2e-master-key-do-not-use-in-prod";
+// Deterministic data dir so every config re-eval resolves the SAME path:
+// Playwright loads this config in the main runner AND in each worker process,
+// so a random mkdtemp would yield a different dir per process — the db-oracle
+// worker would then read a file the app (launched by the main process) never wrote.
+const dataDir = join(tmpdir(), "opskat-e2e-data");
+
+// Only the main runner (TEST_WORKER_INDEX undefined), not workers, prepares a
+// fresh dir — and it runs before the webServer launches. Workers reuse the same
+// path to read the db the app wrote.
+if (process.env.TEST_WORKER_INDEX === undefined) {
+  rmSync(dataDir, { recursive: true, force: true });
+  mkdirSync(dataDir, { recursive: true });
+}
+
 process.env.OPSKAT_DATA_DIR = dataDir;
 process.env.OPSKAT_MASTER_KEY = MASTER_KEY;
 process.env.OPSKAT_E2E = "1";
@@ -15,6 +26,7 @@ process.env.OPSKAT_EXTENSIONS = "0";
 // Dedicated wails dev server port for e2e (avoids the default 34115).
 const DEVSERVER = "localhost:34216";
 const BASE_URL = `http://${DEVSERVER}`;
+const WEBSERVER_LOG = join(tmpdir(), "opskat-e2e-webserver.log");
 
 export default defineConfig({
   testDir: "./tests",
@@ -33,13 +45,17 @@ export default defineConfig({
   webServer: {
     // `wails dev -devserver` binds the IPC bridge to our dedicated port. The
     // mkdir/touch mirrors `make dev`'s prep for the //go:embed frontend/dist.
-    command: `mkdir -p frontend/dist && touch frontend/dist/.keep && wails dev -devserver ${DEVSERVER}`,
+    // Output is redirected to a file (not Playwright's pipe): wails dev orphans
+    // its vite child on shutdown, and a piped stdout the orphan keeps open would
+    // stop the Node runner from ever exiting (teardown hang). The log file stays
+    // available for debugging; readiness is detected via `url` polling, not stdout.
+    command: `mkdir -p frontend/dist && touch frontend/dist/.keep && wails dev -devserver ${DEVSERVER} > "${WEBSERVER_LOG}" 2>&1`,
     cwd: "..",
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 240_000,
-    stdout: "pipe",
-    stderr: "pipe",
+    stdout: "ignore",
+    stderr: "ignore",
     env: {
       OPSKAT_DATA_DIR: dataDir,
       OPSKAT_MASTER_KEY: MASTER_KEY,
