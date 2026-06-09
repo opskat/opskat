@@ -42,6 +42,7 @@ describe("terminalThemeStore", () => {
       customFontFamily: "",
       fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
       scrollback: SCROLLBACK_DEFAULT,
+      highlightLinks: false,
     });
   });
 
@@ -148,6 +149,18 @@ describe("terminalThemeStore", () => {
     it("falls back to default for non-finite input", () => {
       useTerminalThemeStore.getState().setScrollback(Number.NaN);
       expect(useTerminalThemeStore.getState().scrollback).toBe(SCROLLBACK_DEFAULT);
+    });
+  });
+
+  describe("setHighlightLinks", () => {
+    it("defaults to disabled and toggles URL highlighting", () => {
+      expect(useTerminalThemeStore.getState().highlightLinks).toBe(false);
+
+      useTerminalThemeStore.getState().setHighlightLinks(true);
+      expect(useTerminalThemeStore.getState().highlightLinks).toBe(true);
+
+      useTerminalThemeStore.getState().setHighlightLinks(false);
+      expect(useTerminalThemeStore.getState().highlightLinks).toBe(false);
     });
   });
 

@@ -54,7 +54,7 @@ Verify each one against the code. Common claim types in opskat and how to check 
 | A Make target exists | `git grep -nE '^<target>:' -- Makefile` (every `make x` referenced in the docs must be findable in `Makefile`) |
 | Soft delete via `Status`, not GORM | `git grep -n "StatusActive *=\|StatusDeleted *=" -- internal/model/entity` (`StatusActive=1` / `StatusDeleted=2`, defined in `asset_entity/asset.go`) |
 | Credential encryption | `git grep -niE "argon2\|gcm\|keychain" -- internal/service/credential_svc` (Argon2id + AES-256-GCM, master key in the OS keychain) — the encryption is in `credential_svc`; `internal/bootstrap` only resolves / injects the master key (`ResolveMasterKey`), so don't grep `bootstrap` alone and assume you found it |
-| Commit emoji convention aligns with changelog categories | check against `.claude/skills/release/SKILL.md`; only intentionally issue-linked commits end with `#<number>` (plain commits and PR / review-comment follow-ups do not need a `#xxx` suffix; see [[feedback_commit_issue_ref]]) |
+| Commit emoji convention aligns with changelog categories | check against `.claude/skills/release/SKILL.md`; only a single commit intentionally linked to an issue ends with that issue as `#<number>` (plain commits, PR work, and PR / review-comment follow-ups do not need a `#xxx` suffix; generally use issue numbers, not PR numbers; see [[feedback_commit_issue_ref]]) |
 | Constructor / function signatures | open the file and compare parameter by parameter — no grep shortcut |
 | **Generated files** (wailsjs / mock / opsctl_bin) | see *Same name & generated* item 4 below — **don't** use `git ls-files` to check artifacts |
 
