@@ -12,6 +12,7 @@ import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
 import { withTerminalFontFallback, withTerminalFontIsolation } from "@/data/terminalFonts";
 import i18n from "@/i18n";
 import { createTerminalInputBridge, type TerminalInputBridge } from "./terminalInputBridge";
+import { createZmodemController, type ZmodemController } from "./zmodem/zmodemSession";
 import { attachXtermRolloverGuard } from "./xtermRolloverGuard";
 import { attachTerminalUrlHighlighter, type TerminalUrlHighlighterController } from "./terminalUrlHighlighter";
 import { normalizeHttpUrl } from "./terminalUrlScan";
@@ -155,8 +156,26 @@ export function getOrCreateTerminal(
     }
   }
 
-  const writeData = (data: string) =>
-    writeFn(sessionId, bytesToBase64(new TextEncoder().encode(data))).catch(console.error);
+  // ZMODEM(lrzsz) 仅在 SSH 终端启用：协议跑在前端 Sentry，截获 sz/rz 字节流并驱动
+  // 上传/下载，进度复用 sftpStore 的传输 UI。serial/local 不启用，保持原样直写终端。
+  const zmodem: ZmodemController | null =
+    transport === "ssh"
+      ? createZmodemController({
+          sessionId,
+          write: writeFn,
+          toTerminal: (bytes) => term.write(bytes),
+        })
+      : null;
+
+  const writeData = (data: string): Promise<void> => {
+    // ZMODEM 传输进行中抑制键盘：协议出站字节走 Sentry 的 sender，不经 onData，
+    // 所以抑制 onData 只挡用户、不挡协议。Ctrl-C 翻译成中止传输。
+    if (zmodem?.isActive()) {
+      if (data === "\x03") zmodem.abort();
+      return Promise.resolve();
+    }
+    return writeFn(sessionId, bytesToBase64(new TextEncoder().encode(data))).catch(console.error);
+  };
 
   const onDataDispose = term.onData(writeData);
 
@@ -167,7 +186,14 @@ export function getOrCreateTerminal(
     const binary = atob(dataB64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    term.write(bytes);
+    // SSH 走 ZMODEM Sentry：空闲时它把字节透传到终端（等价 term.write），探测到 sz/rz
+    // 才截获。filterOutput 对 ZMODEM 二进制帧是非破坏性的（仅剥 token 匹配的 OSC，且只在
+    // 提示符渲染时出现），故无需后端改动。详见 internal/service/ssh_svc/dirsync.go:filterOutput。
+    if (zmodem) {
+      zmodem.consume(bytes);
+    } else {
+      term.write(bytes);
+    }
   });
 
   const closedEvent = `${eventPrefix}:closed:${sessionId}`;
@@ -191,6 +217,7 @@ export function getOrCreateTerminal(
       bridge.dispose();
       urlHighlighter.dispose();
       rolloverGuard.dispose();
+      zmodem?.dispose();
       onDataDispose.dispose();
       onKeyDispose.dispose();
       EventsOff(dataEvent);
@@ -217,6 +244,8 @@ export function getOrCreateTerminal(
   });
 
   EventsOn(closedEvent, () => {
+    // 会话中途断开：中止在途 ZMODEM 传输并删除半截下载文件。
+    zmodem?.abort();
     const hint = i18n.t("ssh.session.closedHint");
     term.write(`\r\n\x1b[31m${hint}\x1b[0m\r\n`);
     useTerminalStore.getState().markClosed(sessionId);

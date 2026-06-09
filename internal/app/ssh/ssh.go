@@ -6,11 +6,15 @@ import (
 	"sync"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/transfer"
 	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/service/sessionid"
 	"github.com/opskat/opskat/internal/service/sftp_svc"
 	"github.com/opskat/opskat/internal/service/ssh_svc"
+	"github.com/opskat/opskat/internal/service/zmodem_svc"
 	"github.com/opskat/opskat/internal/sshpool"
+
+	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // LangProvider 由 system binder 实现，提供当前 UI 语言。
@@ -42,6 +46,7 @@ type SSH struct {
 
 	manager        *ssh_svc.Manager
 	sftp           *sftp_svc.Service
+	zmodem         *zmodem_svc.FileBridge
 	pool           *sshpool.Pool
 	forwardManager *ForwardManager
 
@@ -62,6 +67,11 @@ func New(appCtx context.Context, lang LangProvider, mgr *ssh_svc.Manager, sftp *
 		pool:      pool,
 		connIDGen: sessionid.NewGenerator("conn"),
 	}
+	// ZMODEM 文件桥的进度复用 SFTP 同一套 "transfer:progress:<id>" 事件管线。
+	// emit 在调用时才读 s.ctx（Startup 注入），传输总发生在 Startup 之后，故安全。
+	s.zmodem = zmodem_svc.New(func(p transfer.Progress) {
+		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+p.TransferID, p)
+	})
 	s.forwardManager = NewForwardManager(&poolDialer{})
 	conntest.Register(asset_entity.AssetTypeSSH, s.testConnection)
 	return s
