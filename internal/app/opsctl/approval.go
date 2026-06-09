@@ -88,7 +88,7 @@ func (o *Opsctl) startApprovalServer() {
 	}
 
 	srv := approval.NewServer(handler, o.authToken)
-	sockPath := approval.SocketPath(bootstrap.AppDataDir())
+	sockPath := approval.SocketPath(bootstrap.ResolvedDataDir())
 	if err := srv.Start(sockPath); err != nil {
 		log.Printf("Approval server failed to start: %v", err)
 		return
@@ -101,7 +101,7 @@ func (o *Opsctl) startSSHPoolServer() {
 	if o.proxyServer == nil {
 		return
 	}
-	sockPath := sshpool.SocketPath(bootstrap.AppDataDir())
+	sockPath := sshpool.SocketPath(bootstrap.ResolvedDataDir())
 	if err := o.proxyServer.Start(sockPath); err != nil {
 		log.Printf("SSH pool server failed to start: %v", err)
 	}
