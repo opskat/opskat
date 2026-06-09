@@ -4,7 +4,9 @@
   "version": "0.0.0",
   "description": "OpsKat GUI end-to-end tests (Playwright × Wails dev bridge)",
   "scripts": {
-    "test": "playwright test"
+    "setup": "pnpm install && pnpm exec playwright install chromium",
+    "test": "node run-e2e.mjs",
+    "test:scratch": "node run-e2e.mjs -c playwright.scratch.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",

@@ -1,5 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -16,6 +16,12 @@ const dataDir = join(tmpdir(), "opskat-e2e-data");
 if (process.env.TEST_WORKER_INDEX === undefined) {
   rmSync(dataDir, { recursive: true, force: true });
   mkdirSync(dataDir, { recursive: true });
+  // `wails dev` needs frontend/dist to exist for the //go:embed (mirrors `make dev`).
+  // Done here in Node — not via `mkdir -p`/`touch` in the webServer command — so that
+  // command stays shell-agnostic and runs on native Windows (cmd) too.
+  const distDir = join(__dirname, "..", "frontend", "dist");
+  mkdirSync(distDir, { recursive: true });
+  writeFileSync(join(distDir, ".keep"), "");
 }
 
 process.env.OPSKAT_DATA_DIR = dataDir;
@@ -35,7 +41,6 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   reporter: [["list"], ["html", { open: "never" }]],
-  globalTeardown: "./global-teardown.ts",
   use: {
     baseURL: BASE_URL,
     trace: "retain-on-failure",
@@ -43,13 +48,14 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    // `wails dev -devserver` binds the IPC bridge to our dedicated port. The
-    // mkdir/touch mirrors `make dev`'s prep for the //go:embed frontend/dist.
-    // Output is redirected to a file (not Playwright's pipe): wails dev orphans
-    // its vite child on shutdown, and a piped stdout the orphan keeps open would
-    // stop the Node runner from ever exiting (teardown hang). The log file stays
-    // available for debugging; readiness is detected via `url` polling, not stdout.
-    command: `mkdir -p frontend/dist && touch frontend/dist/.keep && wails dev -devserver ${DEVSERVER} > "${WEBSERVER_LOG}" 2>&1`,
+    // `wails dev -devserver` binds the IPC bridge to our dedicated port. frontend/dist
+    // prep happens in Node above (not in this command) so the command is just one
+    // shell-agnostic line. Output is redirected to a file (not Playwright's pipe):
+    // wails dev orphans its vite child on shutdown, and a piped stdout the orphan keeps
+    // open would stop the Node runner from ever exiting (teardown hang). The log file
+    // stays available for debugging; readiness is detected via `url` polling, not stdout.
+    // `> "file" 2>&1` is valid in both POSIX sh and Windows cmd.
+    command: `wails dev -devserver ${DEVSERVER} > "${WEBSERVER_LOG}" 2>&1`,
     cwd: "..",
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,

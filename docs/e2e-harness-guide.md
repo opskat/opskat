@@ -39,7 +39,7 @@ webServer log, confirm it works, then delete the script. See §6.
 ## 2. Architecture
 
 ```
-make test-e2e / test-e2e-scratch
+make test-e2e  →  cd e2e && pnpm test  →  node run-e2e.mjs   (spawns playwright, cleans up after)
   └─ playwright (workers:1)
        ├─ webServer:  wails dev -devserver localhost:34216   (real Go app, native window opens)
        │                 ├─ vite (frontend HMR)
@@ -86,19 +86,26 @@ CI runners are isolated, so each job's run is independent.
 ## 4. Running the committed suite
 
 ```bash
-make test-e2e
+cd e2e && pnpm run setup   # one-time: install deps + Chromium (skip if already done / on CI)
+make test-e2e              # or, equivalently: cd e2e && pnpm test
 ```
 
-Prereqs: `wails` CLI on PATH, `pnpm`, Node (with the built-in `node:sqlite` — Node ≥ 22),
-and a Chromium download (the target runs `playwright install chromium`). Linux CI runs the
-same target under `xvfb-run` with GTK/WebKit dependencies installed. First run builds Go +
-Vite (a few minutes) and **opens a native OpsKat window** — expected; the test drives the
-`:34216` browser instance, not that window. The window closes when the suite ends.
+Prereqs: `wails` CLI on PATH, `pnpm`, Node (with the built-in `node:sqlite` — Node ≥ 22).
+`pnpm run setup` installs the e2e deps and the Chromium build **once**; `make test-e2e`
+itself only runs the suite — no per-run install. First run builds Go + Vite (a few minutes)
+and **opens a native OpsKat window** — expected; the test drives the `:34216` browser
+instance, not that window. The window closes when the suite ends.
+
+**Platforms.** Runs on macOS, Linux, and native Windows. `make test-e2e` is a thin alias for
+`cd e2e && pnpm test`, so on Windows (no `make`) run `cd e2e && pnpm test` directly. *All*
+orchestration and cleanup live in `e2e/run-e2e.mjs` (cross-platform Node) — there are no
+shell-only `pkill`/`mkdir -p`/`touch` steps. CI exercises the Linux path.
 
 The suite (`e2e/tests/`): `boot` (app mounts + `OpsKat` title), `smoke` (layout + sidebar
 nav), `asset-crud` (create an SSH asset via the form → it shows in the tree → verify it
-persisted by a direct `node:sqlite` read of the temp DB). The target reaps the orphan `vite`
-after `pnpm test` exits (see §7). webServer output → `<tmpdir>/opskat-e2e-webserver.log`.
+persisted by a direct `node:sqlite` read of the temp DB). After Playwright exits,
+`run-e2e.mjs` reaps the orphan `vite` and removes the temp dir (see §7). webServer output →
+`<tmpdir>/opskat-e2e-webserver.log`.
 
 **In CI:** the committed suite runs on every PR / push as the `Wails E2E` job (`ubuntu-22.04`)
 in `.github/workflows/ci.yml` — it installs `xvfb` + GTK/WebKit, then runs `xvfb-run -a make
@@ -156,8 +163,8 @@ rule: drive the real app, then read observable side-effects (UI, DB, logs).
 2. **Run it against the real app:**
    ```bash
    make test-e2e-scratch        # runs every e2e/scratch/*.spec.ts via the live harness
-   # or a single file:
-   cd e2e && pnpm exec playwright test -c playwright.scratch.config.ts scratch/<file>.spec.ts
+   # or a single file (still through the runner, so cleanup happens):
+   cd e2e && pnpm run test:scratch scratch/<file>.spec.ts
    ```
    `playwright.scratch.config.ts` reuses the exact same webServer / env / isolation as the
    committed suite — only `testDir` points at `./scratch`.
@@ -193,11 +200,16 @@ These bit us while building the harness; keep them in mind when changing it.
   write end open, so the Node runner's readable stream never ends. *Fix:* `stdout/stderr:
   "ignore"` + redirect the command's own output to a file (`wails dev ... > "$LOG" 2>&1`);
   readiness is detected via `url` polling, not stdout.
-- **All green but `exit 143`.** *Symptom:* tests pass, `pnpm test` reports failure (SIGTERM).
-  *Cause:* killing processes inside `globalTeardown` SIGTERMs Playwright's managed webServer.
-  *Fix:* keep `globalTeardown` to **data-dir cleanup only**; reap the orphan `vite` in the
-  **Make target** *after* `pnpm test` exits (preserving the exit code), scoped to this repo's
-  frontend path so it never touches `agentre`.
+- **All green but `exit 143` / `make: *** Terminated`.** *Symptom:* tests pass, the run still
+  reports failure (SIGTERM). *Cause:* reaping inside `globalTeardown` SIGTERMs Playwright's
+  *still-managed* webServer (it tears down **after** globalTeardown); reaping via a Makefile
+  `pkill` instead self-matches the recipe shell's own command line on Linux (procps reads
+  `/proc/<pid>/cmdline`) and SIGTERMs `make`. *Fix:* do **all** post-run cleanup in
+  `e2e/run-e2e.mjs` — it spawns `playwright test`, and *after* Playwright has torn the
+  webServer down (app gone, db closed, `vite` orphaned) it reaps the orphan `vite` (scoped to
+  this repo's frontend so it never touches `agentre`) and removes the temp dir, then exits
+  with Playwright's code. No `pkill` / `globalTeardown`, so it's cross-platform and a bare
+  `pnpm test` behaves exactly like `make test-e2e`.
 - **Collision with a running opskat.** *Symptom:* `another instance is already listening on
   …/approval.sock`. *Cause:* socket paths built from `AppDataDir()` ignored the override.
   *Fix:* `internal/app/opsctl/approval.go` uses `bootstrap.ResolvedDataDir()` (§8).
@@ -224,14 +236,15 @@ These bit us while building the harness; keep them in mind when changing it.
 
 | Path | Role | Committed? |
 |---|---|---|
-| `e2e/playwright.config.ts` | base harness: temp dir + env, webServer (`wails dev -devserver 34216`), teardown | yes |
+| `e2e/run-e2e.mjs` | cross-platform runner: spawns `playwright test`, then reaps orphan `vite` + removes temp dir after it exits | yes |
+| `e2e/playwright.config.ts` | base harness: temp dir + env + `frontend/dist` prep, webServer (`wails dev -devserver 34216`) | yes |
 | `e2e/playwright.scratch.config.ts` | extends base, `testDir: ./scratch` for throwaway specs | yes |
-| `e2e/global-teardown.ts` | removes the temp data dir | yes |
 | `e2e/fixtures/db.ts` | read-only `node:sqlite` DB oracle (`findAssetByName`, …) | yes |
 | `e2e/tests/*.spec.ts` | committed **core-flow** specs | yes |
 | `e2e/scratch/*.spec.ts` | throwaway functional-verification specs | **no (gitignored)** |
 | `e2e/scratch/README.md` | scratch convention + starter template | yes |
-| `Makefile` → `test-e2e` / `test-e2e-scratch` | run the suite / scratch | yes |
+| `e2e/package.json` → `setup` / `test` / `test:scratch` | one-time install+Chromium / run suite / run scratch | yes |
+| `Makefile` → `test-e2e` / `test-e2e-scratch` | thin aliases for `pnpm test` / `pnpm run test:scratch` | yes |
 
 Backend enablers that make it hermetic: `main.go` (`resolveBootstrap`, conditional
 `SingleInstanceLock`), `internal/bootstrap` (`ResolvedDataDir`, `GetLogsDir`),
