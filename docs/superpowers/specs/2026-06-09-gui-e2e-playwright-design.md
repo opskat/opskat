@@ -32,10 +32,10 @@ OpsKat 现有自动化测试只覆盖到 service/repository 层(Go `go test`)、
 ## 3. 链路总览
 
 ```
-playwright webServer 启动 `wails dev`(注入临时 env)
-        │  Vite:5173(前端 HMR)  +  Wails devserver:34115(IPC websocket 桥)
+playwright webServer 启动 `wails dev -devserver localhost:34216`(注入临时 env)
+        │  Vite(前端 HMR)  +  Wails devserver:34216(专用端口,IPC websocket 桥)
         ▼
-Playwright Chromium → http://localhost:34115 → window.go/runtime 经 ws 桥 → 真实 Go 后端
+Playwright Chromium → http://localhost:34216 → window.go/runtime 经 ws 桥 → 真实 Go 后端
         ▼
 真实 service/repository → 临时 <tmp>/opskat.db
         ▲
@@ -102,6 +102,7 @@ node:sqlite 只读直查 assets 表  ← 独立复核资产落库
 
 - `webServer` 就绪等待 34115 带超时;Playwright 默认对 locator 自动等待,**一律用 `expect(...).toBeVisible()`,不用 sleep**。
 - `OPSKAT_EXTENSIONS=0` 跳过慢的 WASM 初始化;`OPSKAT_E2E=1` 关单实例锁 —— 同时提速与确定性。
+- **专用 devserver 端口(34216)**,不复用默认 34115:开发机/兄弟项目(如 agentre)可能已在 34115 跑 dev,`reuseExistingServer` 复用它会静默测错 App。boot 冒烟同时断言 `<title>` 含 `OpsKat`,外部 App 占端口时直接失败而非假绿。
 - CRUD 用唯一资产名(带时间戳/随机后缀),避免重复跑残留数据串扰;每次 run 用全新临时数据目录,teardown 清理。
 
 ## 6. 验证(本设计自身的验收)

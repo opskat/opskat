@@ -24,7 +24,8 @@
 | `frontend/src/components/asset/AssetForm.tsx` (modify) | `data-testid` on dialog, name input, submit button. |
 | `frontend/src/components/asset/SSHConfigSection.tsx` (modify) | `data-testid="ssh-host-input"` on the host input. |
 | `e2e/package.json` (create) | Standalone (non-workspace) package: `@playwright/test`, `@types/node`. DB oracle uses built-in `node:sqlite` (Node 26). |
-| `e2e/playwright.config.ts` (create) | Creates temp data dir + sets env at module top-level; `webServer` runs `make dev`; chromium project; `globalTeardown`. |
+| `e2e/playwright.config.ts` (create) | Creates temp data dir + sets env at module top-level; `webServer` runs `wails dev` on a **dedicated devserver port (34216)** so it never collides with a default-port (34115) dev server of opskat/agentre; chromium project; `globalTeardown`. |
+| `e2e/tsconfig.json` (create) | Minimal TS config so `@types/node` + `@playwright/test` types resolve in-editor (Playwright itself transpiles without type-checking). |
 | `e2e/global-teardown.ts` (create) | Removes the temp data dir. |
 | `e2e/fixtures/db.ts` (create) | `node:sqlite` read-only helper: `findAssetByName(name)` against `assets`. |
 | `e2e/tests/boot.spec.ts` (create) | Pipeline smoke: app mounts at baseURL. |
@@ -238,7 +239,7 @@ git commit -m "✨ 桌面端支持 OPSKAT_DATA_DIR/MASTER_KEY/E2E 环境覆盖"
 
 - [ ] **Step 2: Create `e2e/playwright.config.ts`**
 
-The temp data dir + env MUST be set at module top-level: Playwright starts `webServer` before `globalSetup`, and the config module is evaluated first.
+The temp data dir + env MUST be set at module top-level: Playwright starts `webServer` before `globalSetup`, and the config module is evaluated first. The webServer launches `wails dev` on a **dedicated devserver port (34216)** — NOT the default 34115 — because a developer (or a sibling project like agentre) may already have a dev server on 34115; reusing that would silently test the wrong app.
 
 ```ts
 import { defineConfig, devices } from "@playwright/test";
@@ -254,6 +255,10 @@ process.env.OPSKAT_MASTER_KEY = "opskat-e2e-master-key-do-not-use-in-prod";
 process.env.OPSKAT_E2E = "1";
 process.env.OPSKAT_EXTENSIONS = "0";
 
+// Dedicated wails dev server port for e2e (avoids the default 34115).
+const DEVSERVER = "localhost:34216";
+const BASE_URL = `http://${DEVSERVER}`;
+
 export default defineConfig({
   testDir: "./tests",
   timeout: 60_000,
@@ -263,15 +268,17 @@ export default defineConfig({
   reporter: [["list"], ["html", { open: "never" }]],
   globalTeardown: "./global-teardown.ts",
   use: {
-    baseURL: "http://localhost:34115",
+    baseURL: BASE_URL,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: "make dev",
+    // `wails dev -devserver` binds the IPC bridge to our dedicated port. The
+    // mkdir/touch mirrors `make dev`'s prep for the //go:embed frontend/dist.
+    command: `mkdir -p frontend/dist && touch frontend/dist/.keep && wails dev -devserver ${DEVSERVER}`,
     cwd: "..",
-    url: "http://localhost:34115",
+    url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 240_000,
     stdout: "pipe",
@@ -284,6 +291,23 @@ export default defineConfig({
     },
   },
 });
+```
+
+Also create `e2e/tsconfig.json`:
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["**/*.ts"]
+}
 ```
 
 - [ ] **Step 3: Create `e2e/global-teardown.ts`**
@@ -301,13 +325,15 @@ export default function globalTeardown() {
 
 - [ ] **Step 4: Create the pipeline smoke `e2e/tests/boot.spec.ts`**
 
-`main.tsx` renders the app into `#root`; asserting `#root` has children proves the full Playwright → wails dev → Go bridge pipeline works, before any app-specific test-ids exist.
+`main.tsx` renders the app into `#root`; asserting `#root` has children proves the full Playwright → wails dev → Go bridge pipeline works, before any app-specific test-ids exist. The title assertion (`/OpsKat/`) guards against a *foreign* app squatting the port — if some other dev server answered, the title would differ and the test fails loudly instead of false-passing.
 
 ```ts
 import { test, expect } from "@playwright/test";
 
 test("app mounts via the wails dev bridge", async ({ page }) => {
   await page.goto("/");
+  // Confirm we reached opskat (not another app on the port).
+  await expect(page).toHaveTitle(/OpsKat/i);
   const root = page.locator("#root");
   await expect(root).toBeAttached();
   // React has rendered something into the root container.
