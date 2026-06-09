@@ -1,4 +1,4 @@
-.PHONY: dev run build build-embed clean install build-cli install-cli lint test test-cover test-fixtures test-e2e test-e2e-gui test-e2e-scratch install-skill devserver build-devserver-ui
+.PHONY: dev run build build-embed clean install build-cli install-cli lint test test-cover test-e2e test-e2e-scratch install-skill devserver build-devserver-ui
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -56,22 +56,14 @@ lint:
 lint-fix:
 	golangci-lint run --timeout 10m --fix
 
-# 构建 e2e 测试用 WASM fixture（依赖本地 ../extensions 仓库）
-test-fixtures:
-	cd pkg/extension/testdata/tcp_e2e_fixture && GOOS=wasip1 GOARCH=wasm go build -o ../tcp_e2e_fixture.wasm .
-
 # 运行测试
 test:
 	go test ./internal/... ./cmd/opsctl/... ./pkg/... ./cmd/devserver/...
 
-# 运行 e2e 测试（需先 make test-fixtures 且 ../extensions 可用）
-test-e2e: test-fixtures
-	go test -tags=e2e ./pkg/extension/...
-
-# GUI e2e（Playwright 驱动真实 wails dev，本地手动跑，不进 CI）
+# E2E：Playwright 驱动真实 wails dev 跑 GUI 端到端（本地手动，不进 CI）。详见 docs/e2e-harness-guide.md。
 # wails dev 把前端 watcher(vite)生在独立进程组，Playwright 的进程组 kill 收不到，
 # 退出后会残留一个 vite；pnpm test 结束后按本仓 frontend 路径精确回收（不误伤 agentre），并保留退出码。
-test-e2e-gui:
+test-e2e:
 	cd e2e && pnpm install && pnpm exec playwright install chromium && \
 		{ pnpm test; rc=$$?; pkill -f "$(CURDIR)/frontend.*vite" 2>/dev/null || true; exit $$rc; }
 

@@ -21,7 +21,7 @@ way a user does.
 | | **Committed core-flow suite** | **Ad-hoc functional verification** |
 |---|---|---|
 | Lives in | `e2e/tests/*.spec.ts` (committed) | `e2e/scratch/*.spec.ts` (**gitignored**) |
-| Run with | `make test-e2e-gui` | `make test-e2e-scratch` |
+| Run with | `make test-e2e` | `make test-e2e-scratch` |
 | Lifetime | permanent regression guard | throwaway — write, run, observe, delete |
 | What goes here | **only core / critical flows** | "I just built X — does it actually work in the real app?" |
 | Audience | everyone, every time the suite runs | you / the AI, right now |
@@ -40,7 +40,7 @@ webServer log, confirm it works, then delete the script. See §6.
 ## 2. Architecture
 
 ```
-make test-e2e-gui / test-e2e-scratch
+make test-e2e / test-e2e-scratch
   └─ playwright (workers:1)
        ├─ webServer:  wails dev -devserver localhost:34216   (real Go app, native window opens)
        │                 ├─ vite (frontend HMR)
@@ -86,7 +86,7 @@ dev` build. Run **one** e2e invocation at a time (the temp data-dir path is fixe
 ## 4. Running the committed suite
 
 ```bash
-make test-e2e-gui
+make test-e2e
 ```
 
 Prereqs: `wails` CLI on PATH, `pnpm`, Node (with the built-in `node:sqlite` — Node ≥ 22),
@@ -225,7 +225,7 @@ These bit us while building the harness; keep them in mind when changing it.
 | `e2e/tests/*.spec.ts` | committed **core-flow** specs | yes |
 | `e2e/scratch/*.spec.ts` | throwaway functional-verification specs | **no (gitignored)** |
 | `e2e/scratch/README.md` | scratch convention + starter template | yes |
-| `Makefile` → `test-e2e-gui` / `test-e2e-scratch` | run the suite / scratch | yes |
+| `Makefile` → `test-e2e` / `test-e2e-scratch` | run the suite / scratch | yes |
 
 Backend enablers that make it hermetic: `main.go` (`resolveBootstrap`, conditional
 `SingleInstanceLock`), `internal/bootstrap` (`ResolvedDataDir`, `GetLogsDir`),

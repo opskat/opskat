@@ -25,8 +25,7 @@ go test ./internal/ai/ -run TestName     # Single Go test
 make test-cover                          # Coverage HTML
 cd frontend && pnpm test                 # Frontend (vitest)
 cd frontend && pnpm test:watch
-make test-fixtures && make test-e2e      # E2E (needs ../extensions sibling)
-make test-e2e-gui                        # GUI e2e: Playwright drives the real Wails app (local/manual, not CI)
+make test-e2e                            # GUI e2e: Playwright drives the real Wails app (local/manual, not CI)
 
 # Lint
 make lint / make lint-fix                # golangci-lint
