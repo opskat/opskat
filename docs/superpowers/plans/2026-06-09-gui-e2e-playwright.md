@@ -250,8 +250,9 @@ import { join } from "node:path";
 // Created once when the config is loaded (before webServer starts). Workers and
 // globalTeardown read OPSKAT_DATA_DIR from the inherited process env.
 const dataDir = mkdtempSync(join(tmpdir(), "opskat-e2e-"));
+const MASTER_KEY = "opskat-e2e-master-key-do-not-use-in-prod";
 process.env.OPSKAT_DATA_DIR = dataDir;
-process.env.OPSKAT_MASTER_KEY = "opskat-e2e-master-key-do-not-use-in-prod";
+process.env.OPSKAT_MASTER_KEY = MASTER_KEY;
 process.env.OPSKAT_E2E = "1";
 process.env.OPSKAT_EXTENSIONS = "0";
 
@@ -285,7 +286,7 @@ export default defineConfig({
     stderr: "pipe",
     env: {
       OPSKAT_DATA_DIR: dataDir,
-      OPSKAT_MASTER_KEY: process.env.OPSKAT_MASTER_KEY,
+      OPSKAT_MASTER_KEY: MASTER_KEY,
       OPSKAT_E2E: "1",
       OPSKAT_EXTENSIONS: "0",
     },
@@ -337,7 +338,7 @@ test("app mounts via the wails dev bridge", async ({ page }) => {
   const root = page.locator("#root");
   await expect(root).toBeAttached();
   // React has rendered something into the root container.
-  await expect.poll(async () => (await root.locator(":scope > *").count())).toBeGreaterThan(0);
+  await expect(root.locator(":scope > *").first()).toBeVisible();
 });
 ```
 
