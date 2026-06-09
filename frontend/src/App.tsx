@@ -380,7 +380,7 @@ function App() {
     <ThemeProvider defaultTheme="system">
       <ErrorBoundary>
         <TooltipProvider>
-          <div className="flex h-screen w-screen flex-col overflow-hidden bg-background">
+          <div className="flex h-screen w-screen flex-col overflow-hidden bg-background" data-testid="app-root">
             {!sidebarHidden && (
               <TopBar
                 commandOpen={commandOpen}

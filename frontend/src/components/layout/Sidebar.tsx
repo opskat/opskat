@@ -81,6 +81,8 @@ export function Sidebar({ activePage, onPageChange, onHideSidebar }: SidebarProp
                     )}
                     onClick={() => onPageChange(item.id)}
                     aria-label={item.label}
+                    data-testid={`nav-${item.id}`}
+                    data-active={activePage === item.id}
                   >
                     {activePage === item.id && (
                       <span className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-[calc(50%+1px)] h-4 w-1 rounded-full bg-primary" />
@@ -138,6 +140,8 @@ export function Sidebar({ activePage, onPageChange, onHideSidebar }: SidebarProp
               )}
               onClick={() => onPageChange("settings")}
               aria-label={t("nav.settings")}
+              data-testid="nav-settings"
+              data-active={activePage === "settings"}
             >
               {activePage === "settings" && (
                 <span className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-[calc(50%+1px)] h-4 w-1 rounded-full bg-primary" />
