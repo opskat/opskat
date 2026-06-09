@@ -39,7 +39,7 @@ Playwright Chromium → http://localhost:34115 → window.go/runtime 经 ws 桥 
         ▼
 真实 service/repository → 临时 <tmp>/opskat.db
         ▲
-better-sqlite3 只读直查 assets 表  ← 独立复核资产落库
+node:sqlite 只读直查 assets 表  ← 独立复核资产落库
 ```
 
 ## 4. 架构与改动清单
@@ -74,13 +74,13 @@ better-sqlite3 只读直查 assets 表  ← 独立复核资产落库
 
 | 文件 | 内容 |
 |------|------|
-| `e2e/package.json` | 独立包,devDep:`@playwright/test`、`better-sqlite3`(直查落库);script `test` → `playwright test`。 |
+| `e2e/package.json` | 独立包,devDep:`@playwright/test`、`@types/node`;script `test` → `playwright test`。落库直查用 Node 内置 `node:sqlite`(Node 26 已稳定,免原生依赖)。 |
 | `e2e/playwright.config.ts` | `baseURL: http://localhost:34115`;chromium 单 project;`webServer` 拉起 `wails dev` 并等 34115 就绪(`reuseExistingServer` 本地开发友好);`globalSetup`/`globalTeardown`。 |
 | `e2e/global-setup.ts` | `mkdtemp` 临时数据目录;设置 `OPSKAT_DATA_DIR` / `OPSKAT_MASTER_KEY`(固定测试 key)/ `OPSKAT_EXTENSIONS=0` / `OPSKAT_E2E=1`;把 tmpdir 路径写到 env 供 teardown / opsctl helper 读。 |
 | `e2e/global-teardown.ts` | 删除临时数据目录。 |
 | `e2e/tests/smoke.spec.ts` | 应用加载 → 主布局 test-id 可见 → 逐个 Sidebar 页签导航,断言对应视图渲染。 |
 | `e2e/tests/asset-crud.spec.ts` | 打开新建资产表单 → 填唯一名 SSH 资产 → 提交 → 断言资产树出现该节点 → 直查 `assets` 表复核落库。 |
-| `e2e/fixtures/db.ts` | 用 `better-sqlite3` 只读(`readonly: true`)打开 `<tmp>/opskat.db`,带 busy timeout;暴露 `findAssetByName(name)` 查 `assets` 表(`id`/`name`/`type`/`status`)。 |
+| `e2e/fixtures/db.ts` | 用 Node 内置 `node:sqlite`(`DatabaseSync`,`readOnly: true`)打开 `<tmp>/opskat.db`,`PRAGMA busy_timeout`;暴露 `findAssetByName(name)` 查 `assets` 表(`id`/`name`/`type`/`status`)。 |
 
 > 备选(已否决):放 `frontend/e2e/` —— 复用 workspace 依赖方便,但 vitest 易误收 `.spec.ts`、与前端构建耦合,故独立顶层包。
 > 备选(已否决):用 opsctl 复核落库 —— 走的是写入资产时同一套 service 层,不是独立 oracle;改为直查 SQLite(用户明确要求)。
@@ -88,7 +88,7 @@ better-sqlite3 只读直查 assets 表  ← 独立复核资产落库
 ### 4.4 落库验证策略
 
 - **主断言**:UI 资产树出现新资产(Playwright locator,自动等待)。
-- **持久化(独立 oracle)**:直查 `<tmp>/opskat.db` 的 `assets` 表 —— `SELECT id, name, type, status FROM assets WHERE name = ?`,断言存在且 `type='ssh'`、`status=1`(活跃)。`better-sqlite3` 只读打开,设 busy timeout 兜并发写。
+- **持久化(独立 oracle)**:直查 `<tmp>/opskat.db` 的 `assets` 表 —— `SELECT id, name, type, status FROM assets WHERE name = ?`,断言存在且 `type='ssh'`、`status=1`(活跃)。`node:sqlite` 只读打开,设 `PRAGMA busy_timeout` 兜并发写。
 - **`audit_logs`**:stretch。实现时确认 GUI 建资产是否写审计(表 `audit_logs` 已存在);写则加一条直查校验,不写则 v1 不强求。
 
 ### 4.5 make 目标 + 文档

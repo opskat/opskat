@@ -23,10 +23,10 @@
 | `frontend/src/components/layout/AssetTree.tsx` (modify) | `data-testid="asset-tree"` on the tree container; `data-testid="add-asset-button"` on the add button. |
 | `frontend/src/components/asset/AssetForm.tsx` (modify) | `data-testid` on dialog, name input, submit button. |
 | `frontend/src/components/asset/SSHConfigSection.tsx` (modify) | `data-testid="ssh-host-input"` on the host input. |
-| `e2e/package.json` (create) | Standalone (non-workspace) package: `@playwright/test`, `better-sqlite3`. |
+| `e2e/package.json` (create) | Standalone (non-workspace) package: `@playwright/test`, `@types/node`. DB oracle uses built-in `node:sqlite` (Node 26). |
 | `e2e/playwright.config.ts` (create) | Creates temp data dir + sets env at module top-level; `webServer` runs `make dev`; chromium project; `globalTeardown`. |
 | `e2e/global-teardown.ts` (create) | Removes the temp data dir. |
-| `e2e/fixtures/db.ts` (create) | `better-sqlite3` read-only helper: `findAssetByName(name)` against `assets`. |
+| `e2e/fixtures/db.ts` (create) | `node:sqlite` read-only helper: `findAssetByName(name)` against `assets`. |
 | `e2e/tests/boot.spec.ts` (create) | Pipeline smoke: app mounts at baseURL. |
 | `e2e/tests/smoke.spec.ts` (create) | Main layout + sidebar navigation. |
 | `e2e/tests/asset-crud.spec.ts` (create) | Create SSH asset via UI → assert tree + DB row. |
@@ -229,10 +229,12 @@ git commit -m "✨ 桌面端支持 OPSKAT_DATA_DIR/MASTER_KEY/E2E 环境覆盖"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
-    "better-sqlite3": "^11.8.0"
+    "@types/node": "^22.0.0"
   }
 }
 ```
+
+> The DB oracle (Task 4) uses Node's built-in `node:sqlite` (stable on Node 26) — no native `better-sqlite3` dependency. `@types/node` is only for editor types; Playwright transpiles `.ts` specs without type-checking, so it never blocks a run.
 
 - [ ] **Step 2: Create `e2e/playwright.config.ts`**
 
@@ -455,7 +457,7 @@ git commit -m "✅ GUI e2e 冒烟:主布局与侧边栏导航"
 - [ ] **Step 1: Write the DB oracle helper `e2e/fixtures/db.ts`**
 
 ```ts
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 
 export interface AssetRow {
@@ -467,20 +469,24 @@ export interface AssetRow {
 
 // Opens the e2e temp opskat.db read-only and looks up an asset by name.
 // Independent of the app's service layer — proves the row really hit disk.
+// Uses Node's built-in node:sqlite (no native dependency).
 export function findAssetByName(name: string): AssetRow | undefined {
   const dataDir = process.env.OPSKAT_DATA_DIR;
   if (!dataDir) throw new Error("OPSKAT_DATA_DIR not set");
-  const db = new Database(join(dataDir, "opskat.db"), { readonly: true, fileMustExist: true });
+  const db = new DatabaseSync(join(dataDir, "opskat.db"), { readOnly: true });
   try {
-    db.pragma("busy_timeout = 5000");
-    return db
+    db.exec("PRAGMA busy_timeout = 5000");
+    const row = db
       .prepare("SELECT id, name, type, status FROM assets WHERE name = ?")
-      .get(name) as AssetRow | undefined;
+      .get(name);
+    return row as AssetRow | undefined;
   } finally {
     db.close();
   }
 }
 ```
+
+> `node:sqlite` is stable on Node 26 and needs no flag. If `DatabaseSync`'s type isn't found by the installed `@types/node`, it's a type-only warning — Playwright runs the spec regardless. (Confirmed working: `node -e "require('node:sqlite')"` succeeds in this environment.)
 
 - [ ] **Step 2: Write the failing CRUD spec `e2e/tests/asset-crud.spec.ts`**
 
