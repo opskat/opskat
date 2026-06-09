@@ -132,7 +132,7 @@ func PreviewTabbyConfig(ctx context.Context, data []byte) (*PreviewResult, error
 	}
 
 	// 加载已有资产用于重复检测
-	existingSet, err := existingSSHAssetSet(ctx)
+	existingMap, err := existingSSHAssetMap(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +159,7 @@ func PreviewTabbyConfig(ctx context.Context, data []byte) (*PreviewResult, error
 
 		exists := false
 		if host != "" {
-			exists = existingSet[sshAssetKey(host, port, username)]
+			exists = existingMap[sshAssetKey(host, port, username)] != nil
 		}
 
 		items = append(items, PreviewItem{

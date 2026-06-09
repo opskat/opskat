@@ -33,7 +33,7 @@ func PreviewSSHConfig(ctx context.Context, data []byte) (*PreviewResult, error) 
 	hosts := parseSSHConfig(string(data))
 
 	// 加载已有资产用于重复检测
-	existingSet, err := existingSSHAssetSet(ctx)
+	existingMap, err := existingSSHAssetMap(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +58,7 @@ func PreviewSSHConfig(ctx context.Context, data []byte) (*PreviewResult, error) 
 			authType = asset_entity.AuthTypeKey
 		}
 
-		exists := existingSet[sshAssetKey(h.hostName, port, user)]
+		exists := existingMap[sshAssetKey(h.hostName, port, user)] != nil
 
 		items = append(items, PreviewItem{
 			Index:    idx,

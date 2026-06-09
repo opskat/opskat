@@ -70,16 +70,3 @@ func preserveSSHSecretsOnOverwrite(oldCfg, newCfg *asset_entity.SSHConfig) {
 		newCfg.AuthType = oldCfg.AuthType
 	}
 }
-
-// existingSSHAssetSet 加载已有 SSH 资产的去重键集合
-func existingSSHAssetSet(ctx context.Context) (map[string]bool, error) {
-	existingMap, err := existingSSHAssetMap(ctx)
-	if err != nil {
-		return nil, err
-	}
-	existingSet := make(map[string]bool, len(existingMap))
-	for key := range existingMap {
-		existingSet[key] = true
-	}
-	return existingSet, nil
-}

@@ -35,7 +35,7 @@ func PreviewWindTermConfig(ctx context.Context, data []byte) (*PreviewResult, er
 		return nil, err
 	}
 
-	existingSet, err := existingSSHAssetSet(ctx)
+	existingMap, err := existingSSHAssetMap(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +64,7 @@ func PreviewWindTermConfig(ctx context.Context, data []byte) (*PreviewResult, er
 			Username: entry.Username,
 			AuthType: entry.AuthType,
 			GroupID:  entry.GroupID,
-			Exists:   existingSet[sshAssetKey(entry.Host, entry.Port, entry.Username)],
+			Exists:   existingMap[sshAssetKey(entry.Host, entry.Port, entry.Username)] != nil,
 		})
 	}
 
