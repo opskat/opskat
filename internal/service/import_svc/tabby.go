@@ -3,6 +3,7 @@ package import_svc
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -95,6 +96,7 @@ type tabbyOptions struct {
 	Port           int                  `yaml:"port"`
 	User           string               `yaml:"user"`
 	Auth           string               `yaml:"auth"`
+	PrivateKey     string               `yaml:"privateKey"`
 	PrivateKeys    []string             `yaml:"privateKeys"`
 	ForwardedPorts []tabbyForwardedPort `yaml:"forwardedPorts"`
 	SocksProxyHost string               `yaml:"socksProxyHost"`
@@ -174,7 +176,7 @@ func PreviewTabbyConfig(ctx context.Context, data []byte) (*PreviewResult, error
 			Host:        host,
 			Port:        port,
 			Username:    username,
-			AuthType:    mapAuthType(p.Options.Auth),
+			AuthType:    tabbyAuthType(p.Options),
 			GroupID:     p.Group,
 			Exists:      exists,
 			HasPassword: hasVault, // vault 存在时所有 profile 可能有密码
@@ -305,14 +307,8 @@ func ImportTabbySelected(ctx context.Context, data []byte, selectedIndexes []int
 			}
 		}
 
-		authType := mapAuthType(profile.Options.Auth)
-		var privateKeys []string
-		for _, pk := range profile.Options.PrivateKeys {
-			pk = strings.TrimPrefix(pk, "file://")
-			if pk != "" {
-				privateKeys = append(privateKeys, pk)
-			}
-		}
+		privateKeys := tabbyPrivateKeys(profile.Options)
+		authType := tabbyAuthType(profile.Options)
 
 		var proxyCfg *asset_entity.ProxyConfig
 		if profile.Options.SocksProxyHost != "" {
@@ -425,14 +421,52 @@ func encryptPassword(password string) (string, error) {
 }
 
 func mapAuthType(tabbyAuth string) string {
-	switch strings.ToLower(tabbyAuth) {
-	case "publickey":
+	switch strings.ToLower(strings.TrimSpace(tabbyAuth)) {
+	case "key", "privatekey", "private_key", "publickey", "public_key":
 		return asset_entity.AuthTypeKey
 	case "password":
 		return asset_entity.AuthTypePassword
 	default:
 		return asset_entity.AuthTypePassword
 	}
+}
+
+func tabbyAuthType(opts tabbyOptions) string {
+	authType := mapAuthType(opts.Auth)
+	if authType == asset_entity.AuthTypePassword && strings.TrimSpace(opts.Auth) == "" && len(tabbyPrivateKeys(opts)) > 0 {
+		return asset_entity.AuthTypeKey
+	}
+	return authType
+}
+
+func tabbyPrivateKeys(opts tabbyOptions) []string {
+	keys := make([]string, 0, 1+len(opts.PrivateKeys))
+	keys = append(keys, opts.PrivateKey)
+	keys = append(keys, opts.PrivateKeys...)
+
+	privateKeys := make([]string, 0, len(keys))
+	for _, pk := range keys {
+		pk = normalizeTabbyPrivateKey(pk)
+		if pk != "" {
+			privateKeys = append(privateKeys, pk)
+		}
+	}
+	return privateKeys
+}
+
+func normalizeTabbyPrivateKey(path string) string {
+	path = strings.TrimPrefix(strings.TrimSpace(path), "file://")
+	if decoded, err := url.PathUnescape(path); err == nil {
+		path = decoded
+	}
+	if len(path) >= 3 && path[0] == '/' && path[2] == ':' && isASCIIAlpha(path[1]) {
+		path = path[1:]
+	}
+	return path
+}
+
+func isASCIIAlpha(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 func groupCacheKey(parentID int64, name string) string {

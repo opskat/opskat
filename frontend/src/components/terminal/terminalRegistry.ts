@@ -4,7 +4,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
-import { BrowserOpenURL, EventsOn, EventsOff } from "../../../wailsjs/runtime/runtime";
+import { BrowserOpenURL, EventsOn, EventsOff, ClipboardGetText } from "../../../wailsjs/runtime/runtime";
 import { bytesToBase64 } from "@/lib/terminalEncode";
 import { useTerminalStore, TRANSPORTS, type TerminalTransport } from "@/stores/terminalStore";
 import { useShortcutStore } from "@/stores/shortcutStore";
@@ -230,6 +230,23 @@ export function getOrCreateTerminal(
 export function disposeTerminal(sessionId: string): void {
   const inst = registry.get(sessionId);
   if (inst) inst.dispose();
+}
+
+// 右键菜单粘贴统一走 xterm 的 term.paste()，与原生 Cmd/Ctrl+V 同源：它把 CRLF/LF
+// 归一化成单个 \r（replace(/\r?\n/g,"\r")）并按 bracketed paste 包裹，再触发 onData →
+// writeData 发往后端。绕过它直接写剪贴板原文会把 \r\n 原样送进 PTY，ICRNL 让 \r 触发
+// `\` 续行、紧随的裸 \n 立刻执行半截命令，多行命令被逐行拆开（#146）。
+export function pasteIntoTerminal(sessionId: string, text: string): void {
+  registry.get(sessionId)?.term.paste(text);
+}
+
+// 右键菜单粘贴：从系统剪贴板取文本再喂给终端。必须走 Wails 原生 ClipboardGetText
+// （Go 侧直接读系统剪贴板），不能用 navigator.clipboard.readText()：macOS 的 WKWebView
+// 对 JS 读剪贴板有隐私保护，会在光标处弹出系统原生「粘贴」按钮要求再点一次，而不是
+// 直接粘贴。取到文本后复用 pasteIntoTerminal，保持 #146 的 CRLF 归一化。
+export async function pasteFromClipboard(sessionId: string): Promise<void> {
+  const text = await ClipboardGetText();
+  if (text) pasteIntoTerminal(sessionId, text);
 }
 
 export function getTerminalInstance(sessionId: string): TerminalInstance | undefined {

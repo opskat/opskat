@@ -2,13 +2,16 @@ package system
 
 import (
 	"fmt"
+	"strings"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/service/credential_mgr_svc"
 	"github.com/opskat/opskat/internal/service/credential_svc"
+	"go.uber.org/zap"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -83,6 +86,19 @@ func (s *System) ImportSSHKeyFile(name, comment, passphrase, username string) (*
 	return credential_mgr_svc.ImportSSHKeyFromFile(i18n.Ctx(s.ctx, s.Lang()), name, comment, filePath, passphrase, username)
 }
 
+// ImportSSHKeyPath imports an SSH private key from a user-selected or dropped local file path.
+func (s *System) ImportSSHKeyPath(name, comment, filePath, passphrase, username string) (*credential_entity.Credential, error) {
+	ctx := i18n.Ctx(s.ctx, s.Lang())
+	logger.Ctx(ctx).Info("import ssh key from path start")
+	cred, err := credential_mgr_svc.ImportSSHKeyFromFile(ctx, name, comment, filePath, passphrase, username)
+	if err != nil {
+		logger.Ctx(ctx).Error("import ssh key from path failed", zap.Error(err))
+		return nil, err
+	}
+	logger.Ctx(ctx).Info("import ssh key from path end", zap.Int64("credentialID", cred.ID))
+	return cred, nil
+}
+
 // ImportSSHKeyPEM 通过粘贴 PEM 内容导入 SSH 密钥
 func (s *System) ImportSSHKeyPEM(name, comment, pemData, passphrase, username string) (*credential_entity.Credential, error) {
 	return credential_mgr_svc.ImportSSHKeyFromPEM(i18n.Ctx(s.ctx, s.Lang()), name, comment, pemData, passphrase, username)
@@ -110,6 +126,33 @@ func (s *System) UpdateCredentialPassphrase(id int64, oldPassphrase, newPassphra
 	return credential_mgr_svc.UpdatePassphrase(i18n.Ctx(s.ctx, s.Lang()), id, oldPassphrase, newPassphrase)
 }
 
+// ExportSSHPrivateKey exports an SSH key credential's decrypted private key to a user-selected file.
+func (s *System) ExportSSHPrivateKey(id int64) (bool, error) {
+	ctx := i18n.Ctx(s.ctx, s.Lang())
+	cred, err := credential_mgr_svc.Get(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	if !cred.IsSSHKey() {
+		return false, fmt.Errorf("凭证类型不是 SSH 密钥")
+	}
+
+	filePath, err := wailsRuntime.SaveFileDialog(s.ctx, wailsRuntime.SaveDialogOptions{
+		Title:           "导出 SSH 私钥",
+		DefaultFilename: privateKeyExportFilename(cred.Name),
+	})
+	if err != nil {
+		return false, fmt.Errorf("保存文件对话框失败: %w", err)
+	}
+	if filePath == "" {
+		return false, nil
+	}
+	if err := credential_mgr_svc.ExportSSHPrivateKey(ctx, id, filePath); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // GetCredentialUsage 获取引用此凭证的资产名称列表
 func (s *System) GetCredentialUsage(id int64) ([]string, error) {
 	assets, err := asset_repo.Asset().FindByCredentialID(i18n.Ctx(s.ctx, s.Lang()), id)
@@ -135,4 +178,13 @@ func (s *System) GetCredentialPublicKey(id int64) (string, error) {
 		return "", err
 	}
 	return cred.PublicKey, nil
+}
+
+func privateKeyExportFilename(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "id_opskat"
+	}
+	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_", "\x00", "_")
+	return replacer.Replace(name)
 }

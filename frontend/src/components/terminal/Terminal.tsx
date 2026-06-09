@@ -21,8 +21,12 @@ import {
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { useTabStore } from "@/stores/tabStore";
-import { bytesToBase64 } from "@/lib/terminalEncode";
-import { getOrCreateTerminal, getTerminalInstance, terminalUrlHighlightColor } from "./terminalRegistry";
+import {
+  getOrCreateTerminal,
+  getTerminalInstance,
+  pasteFromClipboard,
+  terminalUrlHighlightColor,
+} from "./terminalRegistry";
 
 export interface TerminalHandle {
   toggleSearch: () => void;
@@ -75,12 +79,8 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
   }, [t]);
 
   const handlePaste = useCallback(() => {
-    navigator.clipboard.readText().then((text) => {
-      if (text && termRef.current) {
-        TRANSPORTS[transport].write(sessionId, bytesToBase64(new TextEncoder().encode(text))).catch(console.error);
-      }
-    });
-  }, [transport, sessionId]);
+    pasteFromClipboard(sessionId).catch(console.error);
+  }, [sessionId]);
 
   const handleSelectAll = useCallback(() => {
     termRef.current?.selectAll();

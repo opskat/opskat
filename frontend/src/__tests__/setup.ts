@@ -16,6 +16,8 @@ vi.mock("../../wailsjs/runtime/runtime", () => ({
   BrowserOpenURL: vi.fn(),
   Quit: vi.fn(),
   WindowIsFullscreen: vi.fn().mockResolvedValue(false),
+  ClipboardGetText: vi.fn().mockResolvedValue(""),
+  ClipboardSetText: vi.fn().mockResolvedValue(true),
 }));
 
 // Mock Wails backend bindings — one factory per binder package.

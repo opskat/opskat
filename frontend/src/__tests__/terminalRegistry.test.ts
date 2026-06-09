@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const hoisted = vi.hoisted(() => {
   const eventHandlers = new Map<string, (...args: unknown[]) => void>();
   const writeSpy = vi.fn();
+  const pasteSpy = vi.fn();
+  const clipboardGetTextSpy = vi.fn();
   const disposeSpy = vi.fn();
   const reconnectBySessionMock = vi.fn();
   const terminalCtor = vi.fn();
@@ -34,6 +36,8 @@ const hoisted = vi.hoisted(() => {
   return {
     eventHandlers,
     writeSpy,
+    pasteSpy,
+    clipboardGetTextSpy,
     disposeSpy,
     reconnectBySessionMock,
     terminalCtor,
@@ -62,6 +66,7 @@ vi.mock("../../wailsjs/runtime/runtime", () => ({
   EventsOff: (event: string) => {
     hoisted.eventHandlers.delete(event);
   },
+  ClipboardGetText: hoisted.clipboardGetTextSpy,
   BrowserOpenURL: hoisted.browserOpenURLSpy,
 }));
 
@@ -108,6 +113,7 @@ vi.mock("@xterm/xterm", () => {
     });
     open = vi.fn();
     write = hoisted.writeSpy;
+    paste = hoisted.pasteSpy;
     onData = vi.fn(() => ({ dispose: vi.fn() }));
     onKey = vi.fn((handler: (e: { key: string }) => void) => {
       hoisted.state.capturedOnKey = handler;
@@ -255,7 +261,12 @@ vi.mock("@/i18n", () => ({
   default: { t: (key: string) => `<<${key}>>` },
 }));
 
-import { getOrCreateTerminal, disposeTerminal } from "@/components/terminal/terminalRegistry";
+import {
+  getOrCreateTerminal,
+  disposeTerminal,
+  pasteIntoTerminal,
+  pasteFromClipboard,
+} from "@/components/terminal/terminalRegistry";
 import { TRANSPORTS, transportForAsset, inferTransportFromSessionId } from "@/stores/terminalStore";
 
 interface TestTerminalLink {
@@ -308,6 +319,8 @@ describe("terminalRegistry", () => {
     hoisted.state.linkProvider = null;
     hoisted.state.lines.clear();
     hoisted.writeSpy.mockClear();
+    hoisted.pasteSpy.mockClear();
+    hoisted.clipboardGetTextSpy.mockReset();
     hoisted.disposeSpy.mockClear();
     hoisted.reconnectBySessionMock.mockClear();
     hoisted.terminalCtor.mockClear();
@@ -453,6 +466,49 @@ describe("terminalRegistry", () => {
     expect(hoisted.webglAddonCtor).not.toHaveBeenCalled();
     disposeTerminal("sess-no-webgl");
     expect(hoisted.webglAddonDisposeSpy).not.toHaveBeenCalled();
+  });
+
+  // #146: 右键菜单粘贴必须经 xterm 的 term.paste()——它统一做 CRLF/LF → CR 归一化
+  // (replace(/\r?\n/g,"\r")) 并按 bracketed paste 包裹，与原生 Cmd/Ctrl+V 同源。
+  // 旧实现把剪贴板原文(含 \r\n)直接 base64 写给后端：PTY 的 ICRNL 把每个 \r 当换行
+  // 触发 `\` 续行，紧随的裸 \n 又立刻结束空续行并执行半截命令 → 多行命令被逐行拆开
+  // (docker run 单独报 "requires at least 1 argument")。这里锁死"必须走 term.paste"。
+  it("pasteIntoTerminal routes clipboard text through xterm term.paste (not a raw write)", () => {
+    getOrCreateTerminal("sess-paste", { fontSize: 14, fontFamily: "mono", scrollback: 1000 });
+    const crlf = "docker run \\\r\n-v x\r\nnginx";
+    pasteIntoTerminal("sess-paste", crlf);
+    expect(hoisted.pasteSpy).toHaveBeenCalledTimes(1);
+    expect(hoisted.pasteSpy).toHaveBeenCalledWith(crlf);
+    disposeTerminal("sess-paste");
+  });
+
+  it("pasteIntoTerminal is a no-op for an unknown session", () => {
+    expect(() => pasteIntoTerminal("sess-missing", "x")).not.toThrow();
+    expect(hoisted.pasteSpy).not.toHaveBeenCalled();
+  });
+
+  // 右键菜单粘贴必须经 Wails 原生 ClipboardGetText（Go 侧读系统剪贴板），
+  // 不能用 navigator.clipboard.readText()——macOS WKWebView 对 JS 读剪贴板有隐私
+  // 保护，会在光标处弹出系统原生「粘贴」按钮要求二次点击，而不是直接粘贴。
+  // 这里锁死"必须走原生 ClipboardGetText 取文，再喂给 term.paste"。
+  it("pasteFromClipboard reads via native Wails ClipboardGetText and routes through term.paste", async () => {
+    getOrCreateTerminal("sess-clip", { fontSize: 14, fontFamily: "mono", scrollback: 1000 });
+    const clip = "docker run \\\r\n-v x\r\nnginx";
+    hoisted.clipboardGetTextSpy.mockResolvedValue(clip);
+    await pasteFromClipboard("sess-clip");
+    expect(hoisted.clipboardGetTextSpy).toHaveBeenCalledTimes(1);
+    expect(hoisted.pasteSpy).toHaveBeenCalledTimes(1);
+    expect(hoisted.pasteSpy).toHaveBeenCalledWith(clip);
+    disposeTerminal("sess-clip");
+  });
+
+  it("pasteFromClipboard does not paste when the clipboard is empty", async () => {
+    getOrCreateTerminal("sess-clip-empty", { fontSize: 14, fontFamily: "mono", scrollback: 1000 });
+    hoisted.clipboardGetTextSpy.mockResolvedValue("");
+    await pasteFromClipboard("sess-clip-empty");
+    expect(hoisted.clipboardGetTextSpy).toHaveBeenCalledTimes(1);
+    expect(hoisted.pasteSpy).not.toHaveBeenCalled();
+    disposeTerminal("sess-clip-empty");
   });
 
   it("writes terminal output bytes unchanged without injecting URL color ANSI", () => {

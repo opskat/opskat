@@ -14,9 +14,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/repository/credential_repo"
 	"github.com/opskat/opskat/internal/service/credential_svc"
+	"go.uber.org/zap"
 
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -93,6 +95,27 @@ func GetDecryptedPrivateKey(ctx context.Context, id int64) (string, error) {
 		return "", fmt.Errorf("解密私钥失败: %w", err)
 	}
 	return plaintext, nil
+}
+
+// ExportSSHPrivateKey writes the decrypted private key PEM to a user-selected file.
+func ExportSSHPrivateKey(ctx context.Context, id int64, filePath string) error {
+	if filePath == "" {
+		return fmt.Errorf("导出路径不能为空")
+	}
+
+	logger.Ctx(ctx).Info("export ssh private key start", zap.Int64("credentialID", id))
+	privateKey, err := GetDecryptedPrivateKey(ctx, id)
+	if err != nil {
+		logger.Ctx(ctx).Error("export ssh private key failed", zap.Int64("credentialID", id), zap.Error(err))
+		return err
+	}
+
+	if err := writePrivateKeyFile(filePath, privateKey); err != nil {
+		logger.Ctx(ctx).Error("export ssh private key failed", zap.Int64("credentialID", id), zap.Error(err))
+		return fmt.Errorf("写入私钥文件失败: %w", err)
+	}
+	logger.Ctx(ctx).Info("export ssh private key end", zap.Int64("credentialID", id))
+	return nil
 }
 
 // GetDecryptedPassphrase 获取解密后的私钥密码
@@ -513,4 +536,27 @@ func detectKeyTypeAndSize(signer gossh.Signer) (string, int) {
 	default:
 		return pub.Type(), 0
 	}
+}
+
+func writePrivateKeyFile(filePath, privateKey string) error {
+	if _, err := os.Stat(filePath); err == nil {
+		if err := os.Chmod(filePath, 0o600); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // path is selected by the user.
+	if err != nil {
+		return err
+	}
+	if _, err := file.WriteString(privateKey); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Chmod(filePath, 0o600)
 }
