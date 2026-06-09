@@ -60,7 +60,7 @@ lint-fix:
 test:
 	go test ./internal/... ./cmd/opsctl/... ./pkg/... ./cmd/devserver/...
 
-# E2E：Playwright 驱动真实 wails dev 跑 GUI 端到端（本地手动，不进 CI）。详见 docs/e2e-harness-guide.md。
+# E2E：Playwright 驱动真实 wails dev 跑 GUI 端到端。详见 docs/e2e-harness-guide.md。
 # wails dev 把前端 watcher(vite)生在独立进程组，Playwright 的进程组 kill 收不到，
 # 退出后会残留一个 vite；pnpm test 结束后按本仓 frontend 路径精确回收（不误伤 agentre），并保留退出码。
 test-e2e:

@@ -25,7 +25,7 @@ go test ./internal/ai/ -run TestName     # Single Go test
 make test-cover                          # Coverage HTML
 cd frontend && pnpm test                 # Frontend (vitest)
 cd frontend && pnpm test:watch
-make test-e2e                            # GUI e2e: Playwright drives the real Wails app (local/manual, not CI)
+make test-e2e                            # GUI e2e: Playwright drives the real Wails app
 
 # Lint
 make lint / make lint-fix                # golangci-lint
@@ -99,7 +99,7 @@ Common emoji (aligned with the changelog categories in [`/release`](../.claude/s
 
 ### Others
 
-- **CI:** runs Go lint/tests and frontend lint/tests/build on PRs and pushes to `main`/`develop`.
+- **CI:** runs Go lint/tests, the GUI e2e suite (`make test-e2e` under `xvfb` on Linux — see [e2e-harness-guide.md](e2e-harness-guide.md)), and frontend lint/tests on PRs and pushes to `main`/`develop`.
 - **Go:** mocks in `mock_*/` (`go.uber.org/mock`, regen `go generate ./...`); tests use goconvey + testify. Service tests mock transaction boundaries — when code uses `dbutil.WithTransaction`, prefer `dbutil.WithTransactionRunner` over opening in-memory SQLite.
 - **Frontend:** Prettier 120 col, 2-space.
 - **Versioning:** version info is embedded with ldflags.

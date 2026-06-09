@@ -2,8 +2,7 @@
 
 > How to drive the **real running OpsKat app** end-to-end with Playwright — both the
 > committed core-flow suite and **ad-hoc functional verification of a feature you just
-> finished**. Written for agents (Claude / Codex) and developers. Local/manual only —
-> **not** in CI.
+> finished**. Written for agents (Claude / Codex) and developers.
 >
 > This doc **owns** the GUI-e2e harness. For logs / DB / `opsctl` headless verification see
 > [testing-debugging-guide.md](./testing-debugging-guide.md); for the original design rationale
@@ -81,7 +80,8 @@ A run is fully hermetic, and in particular **a running opskat does not interfere
   of false-greening.
 
 The one thing that *does* matter: extra running apps add machine load and slow the `wails
-dev` build. Run **one** e2e invocation at a time (the temp data-dir path is fixed).
+dev` build. **Locally**, run one e2e invocation at a time (the temp data-dir path is fixed);
+CI runners are isolated, so each job's run is independent.
 
 ## 4. Running the committed suite
 
@@ -90,14 +90,20 @@ make test-e2e
 ```
 
 Prereqs: `wails` CLI on PATH, `pnpm`, Node (with the built-in `node:sqlite` — Node ≥ 22),
-and a Chromium download (the target runs `playwright install chromium`). First run builds Go
-+ Vite (a few minutes) and **opens a native OpsKat window** — expected; the test drives the
+and a Chromium download (the target runs `playwright install chromium`). Linux CI runs the
+same target under `xvfb-run` with GTK/WebKit dependencies installed. First run builds Go +
+Vite (a few minutes) and **opens a native OpsKat window** — expected; the test drives the
 `:34216` browser instance, not that window. The window closes when the suite ends.
 
 The suite (`e2e/tests/`): `boot` (app mounts + `OpsKat` title), `smoke` (layout + sidebar
 nav), `asset-crud` (create an SSH asset via the form → it shows in the tree → verify it
 persisted by a direct `node:sqlite` read of the temp DB). The target reaps the orphan `vite`
 after `pnpm test` exits (see §7). webServer output → `<tmpdir>/opskat-e2e-webserver.log`.
+
+**In CI:** the committed suite runs on every PR / push as the `Wails E2E` job (`ubuntu-22.04`)
+in `.github/workflows/ci.yml` — it installs `xvfb` + GTK/WebKit, then runs `xvfb-run -a make
+test-e2e`; on failure it uploads `e2e/playwright-report`, `e2e/test-results`, and the webServer
+log as build artifacts. The ad-hoc scratch mode (`make test-e2e-scratch`) is local-only.
 
 ## 5. Writing a committed core-flow spec
 
