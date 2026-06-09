@@ -512,7 +512,7 @@ export function AssetTree({
   if (collapsed) return null;
 
   return (
-    <div className="flex h-full w-full flex-col border-r border-panel-divider bg-sidebar">
+    <div data-testid="asset-tree" className="flex h-full w-full flex-col border-r border-panel-divider bg-sidebar">
       {/* Drag region for frameless window */}
       <div
         className={`${isFullscreen ? "h-0" : "h-8"} w-full shrink-0`}
@@ -559,6 +559,7 @@ export function AssetTree({
                   className="h-6 w-6"
                   onClick={() => onAddAsset()}
                   aria-label={t("asset.addAsset")}
+                  data-testid="add-asset-button"
                 >
                   <Plus className="h-3.5 w-3.5" />
                 </Button>

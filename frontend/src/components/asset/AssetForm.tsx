@@ -311,6 +311,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       }}
     >
       <DialogContent
+        data-testid="asset-form-dialog"
         className="sm:max-w-2xl max-h-[85vh] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0"
         onInteractOutside={(e) => e.preventDefault()}
       >
@@ -337,6 +338,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                 <IconPicker value={icon} onChange={setIcon} type="asset" compact />
                 <Input
                   className="flex-1"
+                  data-testid="asset-form-name-input"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder={
@@ -421,7 +423,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             >
               {t("action.cancel")}
             </Button>
-            <Button onClick={handleSubmit} disabled={saveDisabled}>
+            <Button data-testid="asset-form-submit" onClick={handleSubmit} disabled={saveDisabled}>
               {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               {saving ? t("action.saving") : t("action.save")}
             </Button>
