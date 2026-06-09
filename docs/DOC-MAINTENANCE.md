@@ -24,6 +24,7 @@ Contributor docs describe a living codebase, so two classes of problem recur:
 | [`./DEVELOP.md`](./DEVELOP.md) | The concrete "how to": common commands, architecture / subsystem map, commit / CI / testing conventions, logging rules for key flows, generated-files list. |
 | [`./adding-an-asset-type.md`](./adding-an-asset-type.md) | Step-by-step how-to for adding a new built-in asset type: the backend `AssetTypeHandler` + frontend `registerAssetType` seams, what's register-based vs still requires editing shared code (query/terminal/AI-mention couplings). |
 | [`./testing-debugging-guide.md`](./testing-debugging-guide.md) | Feature verification / debugging: reading logs (`logs/opskat.log`), querying the DB (`audit_logs` in `opskat.db`), headless functional testing with `opsctl` (for agents, in English). |
+| [`./e2e-harness-guide.md`](./e2e-harness-guide.md) | GUI end-to-end harness (Playwright × the real Wails app): the committed core-flow suite (`make test-e2e-gui`) + ad-hoc functional verification (gitignored `e2e/scratch/`, `make test-e2e-scratch`), isolation guarantees, and harness-engineering gotchas. Owns everything GUI-e2e; `testing-debugging-guide.md` only points here. |
 | [`./DOC-MAINTENANCE.md`](./DOC-MAINTENANCE.md) | This guide: doc-set organization rules + fact-check / anti-drift discipline. |
 | `./superpowers/{plans,specs}/` | Date-named design / plan **archives**. A snapshot of one piece of work at the time, **not** current truth — don't backfill "current state" from here. |
 
@@ -93,7 +94,7 @@ done
 Link integrity — confirm every relative markdown link in the core docs is reachable (`CLAUDE.md`'s `@AGENTS.md` is an import directive, not a relative markdown link, so it's not checked here; separately ensure it remains that single import line):
 
 ```bash
-for doc in AGENTS.md docs/DEVELOP.md docs/testing-debugging-guide.md docs/DOC-MAINTENANCE.md; do
+for doc in AGENTS.md docs/DEVELOP.md docs/testing-debugging-guide.md docs/e2e-harness-guide.md docs/DOC-MAINTENANCE.md; do
   grep -oE '\]\(([^)]+)\)' "$doc" | sed -E 's/^\]\(|\)$//g' | grep -vE '^https?:|^#' | while read -r link; do
     target="$(dirname "$doc")/${link%%#*}"
     [ -e "$target" ] && echo "ok     $doc → $link" || echo "BROKEN $doc → $link"

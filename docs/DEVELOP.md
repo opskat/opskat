@@ -26,6 +26,7 @@ make test-cover                          # Coverage HTML
 cd frontend && pnpm test                 # Frontend (vitest)
 cd frontend && pnpm test:watch
 make test-fixtures && make test-e2e      # E2E (needs ../extensions sibling)
+make test-e2e-gui                        # GUI e2e: Playwright drives the real Wails app (local/manual, not CI)
 
 # Lint
 make lint / make lint-fix                # golangci-lint
@@ -37,7 +38,7 @@ make build-devserver-ui                  # Rebuild embedded devserver UI
 make install-skill                       # Register opsctl plugin marketplace
 ```
 
-> **Feature verification & debugging**: how to run and verify a feature, read the logs (`logs/opskat.log`) and database (`opskat.db`, e.g. `audit_logs`) to aid diagnosis, and run headless functional tests with `opsctl` — see [docs/testing-debugging-guide.md](testing-debugging-guide.md) (written for agents like Claude/Codex, in English).
+> **Feature verification & debugging**: how to run and verify a feature, read the logs (`logs/opskat.log`) and database (`opskat.db`, e.g. `audit_logs`) to aid diagnosis, and run headless functional tests with `opsctl` — see [docs/testing-debugging-guide.md](testing-debugging-guide.md) (written for agents like Claude/Codex, in English). For driving the **real GUI end-to-end** (Playwright × Wails) — both the committed suite and throwaway per-feature verification — see [docs/e2e-harness-guide.md](e2e-harness-guide.md).
 
 ## Architecture
 

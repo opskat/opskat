@@ -345,20 +345,11 @@ Notes:
 
 ### GUI E2E (Playwright × the real Wails app)
 
-Drives the **real running app** through the Wails dev browser bridge (Playwright → Chromium → `wails dev` IPC bridge → real Go backend). Local/manual only — **not in CI**.
-
-```bash
-make test-e2e-gui        # builds + runs the suite, then reaps the orphan vite
-```
-
-Launches `wails dev` on a **dedicated devserver port (34216**, not the default 34115) with a temp data dir + fixed test master key + `OPSKAT_E2E=1` (disables the single-instance lock) + `OPSKAT_EXTENSIONS=0`, opens `http://localhost:34216` in Chromium, and runs `e2e/tests/*.spec.ts`:
-- `boot` — app mounts via the bridge (asserts the `OpsKat` title, so a foreign app on the port can't false-green).
-- `smoke` — main layout + sidebar navigation across all pages.
-- `asset-crud` — create an SSH asset via the form, see it in the tree, then verify persistence with a **direct read-only `node:sqlite` query** on the temp `opskat.db` (an oracle independent of the app's own service layer).
-
-Isolation: a fresh `<tmpdir>/opskat-e2e-data` per run (removed on teardown); the explicit master key means the OS keychain is never read/written; sockets + logs land in the temp dir. So it does **not** collide with a running opskat and the real data dir is untouched. A native OpsKat window opens during the run — expected; the test drives the `:34216` browser instance, not that window.
-
-Prereqs: `wails` CLI on PATH, `pnpm`, Node (with the built-in `node:sqlite`), and a Chromium download (the target runs `playwright install chromium`). Caveats: run only **one** suite at a time (the data dir path is fixed); webServer output goes to `<tmpdir>/opskat-e2e-webserver.log` for debugging.
+There is also a Playwright harness that drives the **real running app** through the Wails dev
+browser bridge — both a committed core-flow suite (`make test-e2e-gui`) and **ad-hoc
+functional verification of a feature you just finished** (`make test-e2e-scratch`, throwaway
+scripts in the gitignored `e2e/scratch/`). It's local/manual, not in CI. Full workflow,
+isolation guarantees, and conventions: **[e2e-harness-guide.md](./e2e-harness-guide.md)**.
 
 ---
 

@@ -1,4 +1,4 @@
-.PHONY: dev run build build-embed clean install build-cli install-cli lint test test-cover test-fixtures test-e2e test-e2e-gui install-skill devserver build-devserver-ui
+.PHONY: dev run build build-embed clean install build-cli install-cli lint test test-cover test-fixtures test-e2e test-e2e-gui test-e2e-scratch install-skill devserver build-devserver-ui
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -74,6 +74,11 @@ test-e2e: test-fixtures
 test-e2e-gui:
 	cd e2e && pnpm install && pnpm exec playwright install chromium && \
 		{ pnpm test; rc=$$?; pkill -f "$(CURDIR)/frontend.*vite" 2>/dev/null || true; exit $$rc; }
+
+# 临时功能验证：跑 e2e/scratch/ 里的一次性 spec（不提交）。约定/用法见 docs/e2e-harness-guide.md。
+test-e2e-scratch:
+	cd e2e && pnpm install && pnpm exec playwright install chromium && \
+		{ pnpm exec playwright test -c playwright.scratch.config.ts; rc=$$?; pkill -f "$(CURDIR)/frontend.*vite" 2>/dev/null || true; exit $$rc; }
 
 # 测试覆盖率（生成 HTML 报告并在浏览器打开）
 test-cover:
