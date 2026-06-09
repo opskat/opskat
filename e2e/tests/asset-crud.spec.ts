@@ -23,6 +23,5 @@ test("create SSH asset via UI persists to db and shows in tree", async ({ page }
   await expect
     .poll(() => findAssetByName(name)?.status, { timeout: 10_000 })
     .toBe(1);
-  const row = findAssetByName(name)!;
-  expect(row.type).toBe("ssh");
+  expect(findAssetByName(name)?.type).toBe("ssh");
 });
