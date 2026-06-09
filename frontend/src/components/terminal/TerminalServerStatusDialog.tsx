@@ -13,7 +13,6 @@ import {
   RefreshCw,
   Server,
 } from "lucide-react";
-import { useDebouncedCallback } from "@/lib/useDebouncedCallback";
 import {
   Button,
   Dialog,
@@ -80,11 +79,6 @@ export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: Te
   const setPaused = useServerStatusStore((s) => s.setPaused);
   const setSessionInterval = useServerStatusStore((s) => s.setSessionInterval);
   const refreshNow = useServerStatusStore((s) => s.refreshNow);
-
-  // 防抖版本的刷新，避免快速连续点击导致并发问题
-  const debouncedRefresh = useDebouncedCallback((sid: string) => {
-    void refreshNow(sid);
-  }, 300);
 
   // D1: 首次打开懒启动采集；之后即使关闭也持续采集
   useEffect(() => {
@@ -176,7 +170,7 @@ export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: Te
                 <SelectItem value="10000">10s</SelectItem>
               </SelectContent>
             </Select>
-            <Button variant="outline" size="sm" onClick={() => debouncedRefresh(sessionId)} disabled={loading}>
+            <Button variant="outline" size="sm" onClick={() => void refreshNow(sessionId)} disabled={loading}>
               {loading ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : <RefreshCw className="mr-1.5 size-4" />}
               {t("terminal.serverStatus.refresh")}
             </Button>

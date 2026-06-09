@@ -97,6 +97,28 @@ describe("serverStatusStore", () => {
     expect(useServerStatusStore.getState().sessions.s1.buffer.length).toBeGreaterThan(1);
   });
 
+  it("does not start a second request while one is already in flight", async () => {
+    // First request hangs unresolved so it stays "in flight"; later calls use the default resolved mock.
+    let resolveFirst!: (value: unknown) => void;
+    vi.mocked(GetSSHServerStatus).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFirst = resolve;
+      }) as never
+    );
+
+    useServerStatusStore.getState().activate("s1"); // tick #1 fires and suspends on the pending request
+    expect(GetSSHServerStatus).toHaveBeenCalledTimes(1);
+
+    // A rapid manual refresh (or interval tick) while #1 is in flight must be ignored, not run concurrently.
+    void useServerStatusStore.getState().refreshNow("s1");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(GetSSHServerStatus).toHaveBeenCalledTimes(1);
+
+    resolveFirst(snap(10));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useServerStatusStore.getState().sessions.s1.loading).toBe(false);
+  });
+
   it("setSessionInterval restarts sampling at the new cadence", async () => {
     useServerStatusStore.getState().activate("s1");
     await vi.advanceTimersByTimeAsync(0);
