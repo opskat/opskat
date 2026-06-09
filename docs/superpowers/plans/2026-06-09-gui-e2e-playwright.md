@@ -618,8 +618,11 @@ In `Makefile`, near the existing `test-e2e` target, add:
 
 ```makefile
 # GUI e2e（Playwright 驱动真实 wails dev，本地手动跑，不进 CI）
+# wails dev 会把前端 watcher(vite)生在独立进程组里，Playwright 的进程组 kill 收不到它，
+# 退出后残留一个 vite。pnpm test 结束后按"本仓 frontend 路径"精确回收(不误伤 agentre)，并保留退出码。
 test-e2e-gui:
-	cd e2e && pnpm install && pnpm exec playwright install chromium && pnpm test
+	cd e2e && pnpm install && pnpm exec playwright install chromium && \
+		{ pnpm test; rc=$$?; pkill -f "$(CURDIR)/frontend.*vite" 2>/dev/null || true; exit $$rc; }
 ```
 
 - [ ] **Step 2: Verify the target runs the full suite**
@@ -686,3 +689,19 @@ git commit -m "📄 新增 make test-e2e-gui 目标与 GUI e2e 文档"
 **Placeholder scan:** No TBD/TODO; every code/edit step shows concrete content. ✔
 
 **Type/name consistency:** test-id strings are identical across producer (frontend edits) and consumer (specs): `app-root`, `nav-<id>`/`nav-settings`, `asset-tree`, `add-asset-button`, `asset-form-dialog`, `asset-form-name-input`, `ssh-host-input`, `asset-form-submit`. `findAssetByName` signature matches its use. `resolveBootstrap` return tuple matches `main()` usage. ✔
+
+---
+
+## Execution notes (deviations discovered while running live)
+
+These were found by actually running the suite against the real app and are reflected in the committed code (the as-designed blocks above are kept for intent):
+
+1. **Worker re-evaluates the config → fixed data dir, not `mkdtemp`.** Playwright loads `playwright.config.ts` in the main runner AND in each worker process. A module-top-level `mkdtempSync` therefore produced a *different* dir per process, so the db-oracle worker opened an `opskat.db` the app never wrote (`Error: unable to open database file`). Fix: a **deterministic** `dataDir = join(tmpdir(), "opskat-e2e-data")`, cleaned/created **only in the main runner** (guard `process.env.TEST_WORKER_INDEX === undefined`, which runs before the webServer launches); workers reuse the same path read-only.
+
+2. **Teardown hang → redirect webServer output to a file, don't pipe it.** With `stdout/stderr: "pipe"`, the Node runner never exits after tests pass: `wails dev` orphans its `vite` child, which keeps the inherited stdout pipe's write end open, so the runner's readable stream never ends. Fix: `stdout/stderr: "ignore"` and redirect the command's own output to `${tmpdir}/opskat-e2e-webserver.log` (`wails dev ... > "$LOG" 2>&1`). Readiness is detected via `url` polling, not stdout, so nothing is lost. **Do not** kill processes inside `globalTeardown` — doing so SIGTERMs Playwright's managed webServer and makes `pnpm test` exit 143 despite all tests passing. Keep `globalTeardown` to data-dir cleanup only.
+
+3. **Orphan vite reaped in the Make target, not globalTeardown.** Playwright's process-group kill reaps `wails dev` + the app but not `vite` (separate group). Reaping it in `globalTeardown` is too early (the still-running watcher respawns it) and risks the 143 above. The `test-e2e-gui` target reaps it **after** `pnpm test` exits, preserving the exit code (see Task 5).
+
+4. **Socket isolation (added fix): `approval.go` uses `ResolvedDataDir()`.** `internal/app/opsctl/approval.go` built `approval.sock`/`sshpool.sock` from `AppDataDir()`, ignoring `OPSKAT_DATA_DIR`. A running opskat then held those sockets in the real data dir and the e2e instance logged `another instance is already listening`. Switched both call sites to `bootstrap.ResolvedDataDir()` (same root-cause class as the Task 1 logger fix) so e2e sockets live in the temp dir — the suite no longer collides with a running opskat, and is fully hermetic.
+
+**Verified:** full suite `4 passed (1.3m)`, `EXIT=0`, self-exits with no orphans, temp dir removed, real `~/Library/Application Support/opskat` untouched, no socket-collision logs.

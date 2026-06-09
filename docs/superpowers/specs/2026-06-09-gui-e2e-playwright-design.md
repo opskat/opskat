@@ -54,6 +54,8 @@ node:sqlite 只读直查 assets 表  ← 独立复核资产落库
 
 > master key 注入语义:e2e 传固定测试 key,`ResolveMasterKey(explicit, ...)` 在 explicit 非空时直接返回(`keychain.go`),既不读也不写 OS Keychain → 不污染钥匙串,完全 hermetic。
 
+> **Socket 隔离(实现期补的同类修复)**:`internal/app/opsctl/approval.go` 原先用 `bootstrap.AppDataDir()` 拼 `approval.sock`/`sshpool.sock`,无视 `OPSKAT_DATA_DIR`。后果:用户开着真实 opskat 时这俩 socket 被占,e2e 实例报 `another instance is already listening`,且 socket 落进真实目录(破坏隔离)。改用 `bootstrap.ResolvedDataDir()`(与日志目录同一类根因)——e2e 的 socket 落临时目录,既不撞运行中的 opskat,也真正 hermetic。这就是"开着 opskat 不影响 e2e"的保证。
+
 ### 4.2 前端测试选择器 seam(小改,只加断言用到的)
 
 沿用现有 `data-testid` 约定(已存在于 SnippetPopover / FileManagerPanel 等),给流程触达的元素补稳定选择器。**最小集**:
@@ -103,6 +105,8 @@ node:sqlite 只读直查 assets 表  ← 独立复核资产落库
 - `webServer` 就绪等待 34115 带超时;Playwright 默认对 locator 自动等待,**一律用 `expect(...).toBeVisible()`,不用 sleep**。
 - `OPSKAT_EXTENSIONS=0` 跳过慢的 WASM 初始化;`OPSKAT_E2E=1` 关单实例锁 —— 同时提速与确定性。
 - **专用 devserver 端口(34216)**,不复用默认 34115:开发机/兄弟项目(如 agentre)可能已在 34115 跑 dev,`reuseExistingServer` 复用它会静默测错 App。boot 冒烟同时断言 `<title>` 含 `OpsKat`,外部 App 占端口时直接失败而非假绿。
+- **确定性临时数据目录**(`<tmp>/opskat-e2e-data`),非 `mkdtemp`:Playwright 会在主进程**和每个 worker**各自重新求值 config,`mkdtemp` 会让每个进程拿到不同目录、直查 worker 读到 App 没写过的库。固定路径 + 仅主进程(`TEST_WORKER_INDEX` 未定义)清理重建,worker 只读复用。
+- **webserver 输出转文件、不走 Playwright 管道**:`wails dev` 关闭时会遗留 vite 子进程,若 stdout 是管道,残留 vite 持有写端导致 Node runner 永不退出(teardown 卡死)。故 `stdout/stderr: "ignore"` + 命令自身 `> 日志文件 2>&1`;就绪检测靠 `url` 轮询。**不**在 `globalTeardown` 里 kill 进程(会 SIGTERM 掉 Playwright 管的 webserver,导致全过却 exit 143);残留 vite 由 `make test-e2e-gui` 在 `pnpm test` 退出后按本仓路径精确回收。
 - CRUD 用唯一资产名(带时间戳/随机后缀),避免重复跑残留数据串扰;每次 run 用全新临时数据目录,teardown 清理。
 
 ## 6. 验证(本设计自身的验收)
