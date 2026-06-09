@@ -38,6 +38,7 @@ export const MAX_POINTS = 120;
 export const DEFAULT_INTERVAL_MS = 5000;
 
 const timers: Record<string, ReturnType<typeof setInterval>> = {};
+const abortControllers: Record<string, AbortController> = {};
 
 function isSessionGone(message: string): boolean {
   return message.includes("会话不存在") || message.includes("session not found");
@@ -55,13 +56,32 @@ export const useServerStatusStore = create<ServerStatusStore>((set, get) => {
   async function tick(sessionId: string) {
     const cur = get().sessions[sessionId];
     if (!cur) return;
+
+    // 取消前一个请求，避免并发导致数据乱序
+    if (abortControllers[sessionId]) {
+      abortControllers[sessionId].abort();
+    }
+    abortControllers[sessionId] = new AbortController();
+
     patch(sessionId, { loading: true });
     try {
       const result = (await GetSSHServerStatus(sessionId)) as ServerStatusSnapshot | null;
       set((st) => {
         const s = st.sessions[sessionId];
         if (!s) return st;
-        const buffer = result ? [...s.buffer, result].slice(-MAX_POINTS) : s.buffer;
+
+        // 时间戳校验：只追加比 buffer 最后一项更新的数据，防止乱序旧数据覆盖新数据
+        let buffer = s.buffer;
+        if (result) {
+          const lastItem = buffer[buffer.length - 1];
+          const lastTimestamp = lastItem?.collectedAt ?? 0;
+          const newTimestamp = result.collectedAt ?? 0;
+          if (newTimestamp >= lastTimestamp) {
+            buffer = [...buffer, result].slice(-MAX_POINTS);
+          }
+          // 否则丢弃乱序的旧数据
+        }
+
         return { sessions: { ...st.sessions, [sessionId]: { ...s, buffer, loading: false, error: null } } };
       });
     } catch (err) {
@@ -71,6 +91,11 @@ export const useServerStatusStore = create<ServerStatusStore>((set, get) => {
         return;
       }
       patch(sessionId, { loading: false, error: message });
+    } finally {
+      // 清理 abort controller
+      if (abortControllers[sessionId]) {
+        delete abortControllers[sessionId];
+      }
     }
   }
 
