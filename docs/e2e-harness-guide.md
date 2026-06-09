@@ -66,8 +66,8 @@ The bridge runs on a **dedicated port 34216** (not Wails' default 34115) so it n
 
 A run is fully hermetic, and in particular **a running opskat does not interfere**:
 
-- **Data** — DB / config / `master.key` live under `<tmp>/opskat-e2e-data`, removed on
-  teardown. Your real `~/Library/Application Support/opskat` is never touched.
+- **Data** — DB / config / `master.key` live under `<tmp>/opskat-e2e-data`, removed by
+  `run-e2e.mjs` after the run. Your real `~/Library/Application Support/opskat` is never touched.
 - **Keychain** — the explicit `OPSKAT_MASTER_KEY` short-circuits keychain access; nothing is
   read from or written to the OS keychain.
 - **Sockets** — `approval.sock` / `sshpool.sock` are built from `bootstrap.ResolvedDataDir()`

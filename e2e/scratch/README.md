@@ -12,8 +12,8 @@ gotchas: **[docs/e2e-harness-guide.md](../../docs/e2e-harness-guide.md)** (§6).
 
 ```bash
 make test-e2e-scratch        # runs every e2e/scratch/*.spec.ts via the live harness
-# or a single file:
-cd e2e && pnpm exec playwright test -c playwright.scratch.config.ts scratch/<file>.spec.ts
+# or a single file (still through the runner, so cleanup happens):
+cd e2e && pnpm run test:scratch scratch/<file>.spec.ts
 ```
 
 Reuses the same harness as the committed suite: launches `wails dev` on port 34216 with a
