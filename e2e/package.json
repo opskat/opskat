@@ -1,0 +1,13 @@
+{
+  "name": "opskat-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "description": "OpsKat GUI end-to-end tests (Playwright × Wails dev bridge)",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^22.0.0"
+  }
+}
