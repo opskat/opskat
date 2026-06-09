@@ -5,9 +5,7 @@
 > finished**. Written for agents (Claude / Codex) and developers.
 >
 > This doc **owns** the GUI-e2e harness. For logs / DB / `opsctl` headless verification see
-> [testing-debugging-guide.md](./testing-debugging-guide.md); for the original design rationale
-> see the archive under [`superpowers/specs`](./superpowers/specs/) /
-> [`superpowers/plans`](./superpowers/plans/) (date-named snapshots, not current truth).
+> [testing-debugging-guide.md](./testing-debugging-guide.md).
 
 OpsKat is an IPC-only Wails desktop app — there is no HTTP API to hit. But `wails dev`
 exposes the app over a browser-accessible IPC bridge, so Playwright (Chromium) can open it
