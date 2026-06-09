@@ -1,4 +1,4 @@
-.PHONY: dev run build build-embed clean install build-cli install-cli lint test test-cover test-fixtures test-e2e install-skill devserver build-devserver-ui
+.PHONY: dev run build build-embed clean install build-cli install-cli lint test test-cover test-fixtures test-e2e test-e2e-gui install-skill devserver build-devserver-ui
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -67,6 +67,13 @@ test:
 # 运行 e2e 测试（需先 make test-fixtures 且 ../extensions 可用）
 test-e2e: test-fixtures
 	go test -tags=e2e ./pkg/extension/...
+
+# GUI e2e（Playwright 驱动真实 wails dev，本地手动跑，不进 CI）
+# wails dev 把前端 watcher(vite)生在独立进程组，Playwright 的进程组 kill 收不到，
+# 退出后会残留一个 vite；pnpm test 结束后按本仓 frontend 路径精确回收（不误伤 agentre），并保留退出码。
+test-e2e-gui:
+	cd e2e && pnpm install && pnpm exec playwright install chromium && \
+		{ pnpm test; rc=$$?; pkill -f "$(CURDIR)/frontend.*vite" 2>/dev/null || true; exit $$rc; }
 
 # 测试覆盖率（生成 HTML 报告并在浏览器打开）
 test-cover:
