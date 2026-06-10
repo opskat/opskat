@@ -41,6 +41,18 @@ type Options struct {
 	MasterKey string // 空则从 Keychain/文件自动获取或生成
 }
 
+// resolvedDataDir 记录 Init 实际使用的数据目录（可被 Options.DataDir / OPSKAT_DATA_DIR 覆盖），
+// 供 GetLogsDir 等复用，避免日志写到默认目录而数据库在覆盖目录。
+var resolvedDataDir string
+
+// ResolvedDataDir 返回 Init 实际使用的数据目录；Init 之前回退到默认平台目录。
+func ResolvedDataDir() string {
+	if resolvedDataDir != "" {
+		return resolvedDataDir
+	}
+	return AppDataDir()
+}
+
 // AppDataDir 返回应用数据目录
 func AppDataDir() string {
 	switch runtime.GOOS {
@@ -66,6 +78,7 @@ func Init(ctx context.Context, opts Options) error {
 	if dataDir == "" {
 		dataDir = AppDataDir()
 	}
+	resolvedDataDir = dataDir
 
 	if err := os.MkdirAll(filepath.Join(dataDir, "logs"), 0755); err != nil {
 		return err

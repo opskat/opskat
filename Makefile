@@ -1,4 +1,4 @@
-.PHONY: dev run build build-embed clean install build-cli install-cli lint test test-cover test-fixtures test-e2e install-skill devserver build-devserver-ui
+.PHONY: dev run build build-embed clean install build-cli install-cli lint test test-cover test-e2e test-e2e-scratch install-skill devserver build-devserver-ui
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -56,17 +56,20 @@ lint:
 lint-fix:
 	golangci-lint run --timeout 10m --fix
 
-# 构建 e2e 测试用 WASM fixture（依赖本地 ../extensions 仓库）
-test-fixtures:
-	cd pkg/extension/testdata/tcp_e2e_fixture && GOOS=wasip1 GOARCH=wasm go build -o ../tcp_e2e_fixture.wasm .
-
 # 运行测试
 test:
 	go test ./internal/... ./cmd/opsctl/... ./pkg/... ./cmd/devserver/...
 
-# 运行 e2e 测试（需先 make test-fixtures 且 ../extensions 可用）
-test-e2e: test-fixtures
-	go test -tags=e2e ./pkg/extension/...
+# E2E：Playwright 驱动真实 wails dev 跑 GUI 端到端。详见 docs/e2e-harness-guide.md。
+# 一次性装依赖 + 浏览器：cd e2e && pnpm run setup（CI 在独立步骤里装，故这里不重复）。
+# 配方只做 shell 无关的 cd && pnpm，跨平台(cmd/sh 皆可)；编排与收尾清理(回收残留
+# vite、删临时目录)都在 e2e/run-e2e.mjs 里用 Node 跨平台完成。
+test-e2e:
+	cd e2e && pnpm test
+
+# 临时功能验证：跑 e2e/scratch/ 里的一次性 spec（不提交）。约定/用法见 docs/e2e-harness-guide.md。
+test-e2e-scratch:
+	cd e2e && pnpm run test:scratch
 
 # 测试覆盖率（生成 HTML 报告并在浏览器打开）
 test-cover:

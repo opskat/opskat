@@ -36,10 +36,15 @@ coverage_new.out
 .superpowers/
 .worktrees/
 
-# e2e WASM fixture 本地产物（源码在 pkg/extension/testdata/tcp_e2e_fixture/ 下，编译物 gitignore）
-/pkg/extension/testdata/tcp_e2e_fixture.wasm
-
 .idea
 
 .github/pr-assets/
 .gocache/
+
+# e2e (Playwright)
+e2e/node_modules/
+e2e/test-results/
+e2e/playwright-report/
+# 一次性功能验证脚本不提交（约定见 docs/e2e-harness-guide.md），仅保留 README
+e2e/scratch/*
+!e2e/scratch/README.md

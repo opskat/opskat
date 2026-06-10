@@ -43,7 +43,7 @@ export function SettingsPage() {
       <div className="px-4 py-3 border-b">
         <h2 className="font-semibold">{t("nav.settings")}</h2>
       </div>
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto p-4 scroll-stable">
         <Tabs
           value={activeTab}
           onValueChange={(v) => setActiveTab(v as SettingsTab)}

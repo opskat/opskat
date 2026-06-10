@@ -1,6 +1,6 @@
 # DEVELOP.md — OpsKat Development Guide
 
-OpsKat's development handbook: common commands, the architecture & subsystem map, code conventions, logging rules for key flows, and which files are generated.
+OpsKat's development handbook: common commands, code conventions, logging rules for key flows, and which files are generated. The architecture & subsystem map lives in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 > **Before any development, read this document in full.** It's the lookup reference for *how to work in this repo*. The cross-cutting **principles** — SOLID / high cohesion, low coupling, Fix policy — TDD, Reuse first, defensive code / error handling — are not here; they live in [AGENTS.md](../AGENTS.md), and apply alongside this guide.
 
@@ -25,7 +25,7 @@ go test ./internal/ai/ -run TestName     # Single Go test
 make test-cover                          # Coverage HTML
 cd frontend && pnpm test                 # Frontend (vitest)
 cd frontend && pnpm test:watch
-make test-fixtures && make test-e2e      # E2E (needs ../extensions sibling)
+make test-e2e                            # GUI e2e: Playwright drives the real Wails app
 
 # Lint
 make lint / make lint-fix                # golangci-lint
@@ -37,39 +37,11 @@ make build-devserver-ui                  # Rebuild embedded devserver UI
 make install-skill                       # Register opsctl plugin marketplace
 ```
 
-> **Feature verification & debugging**: how to run and verify a feature, read the logs (`logs/opskat.log`) and database (`opskat.db`, e.g. `audit_logs`) to aid diagnosis, and run headless functional tests with `opsctl` — see [docs/testing-debugging-guide.md](testing-debugging-guide.md) (written for agents like Claude/Codex, in English).
+> **Feature verification & debugging**: how to run and verify a feature, read the logs (`logs/opskat.log`) and database (`opskat.db`, e.g. `audit_logs`) to aid diagnosis, and run headless functional tests with `opsctl` — see [docs/testing-debugging-guide.md](testing-debugging-guide.md) (written for agents like Claude/Codex, in English). For driving the **real GUI end-to-end** (Playwright × Wails) — both the committed suite and throwaway per-feature verification — see [docs/e2e-harness-guide.md](e2e-harness-guide.md).
 
 ## Architecture
 
-**Backend layers** — bindings stay thin: parse → service → return. Business rules in `service/`, persistence in `repository/`. Logic inside `App` is unreachable from tests and `opsctl`.
-
-```
-main.go → internal/app/ (Wails bindings, IPC boundary)
-            → internal/service/    (*_svc, business logic)
-            → internal/repository/ (interface + impl)
-            → internal/model/      (entities)
-```
-
-**Key subsystems:**
-- `internal/ai/` — provider abstraction (Anthropic/OpenAI), tool registry, conversation runner, audit. AI tools live in `internal/ai/tool/`; the conversation runner in `internal/ai/runner/`. Per-protocol policy checkers live in `internal/ai/policy/`: SQL in `query_policy.go`, plus `k8s_policy.go` / `kafka_policy.go` / `mongo_policy.go` / `redis_policy.go`; shell-command rules in `command_rule.go` / `command_shell.go`.
-- `internal/assettype/` — per-asset adapters wired through `registry.go` (enumerate the set with `git grep "Register(&" -- internal/assettype/*.go`). New asset types plug in here, not by hardcoding type strings — full end-to-end how-to in [adding-an-asset-type.md](adding-an-asset-type.md).
-- `internal/sshpool/`, `internal/connpool/` — SSH pool (Unix socket proxy for opsctl); DB/Redis tunnels.
-- `internal/approval/` — Unix-socket approval flow between desktop app and opsctl.
-- `internal/bootstrap/` — DB, credentials, migrations, auth tokens, logger.
-- `internal/embedded/` — embedded `opsctl` binary behind the `embed_opsctl` build tag.
-- `pkg/extension/` — WASM runtime (wazero); `HostProvider` in `host.go` defines capabilities.
-- `cmd/opsctl/`, `cmd/devserver/` — standalone CLI / single-extension dev server.
-- `plugin/` — Claude Code plugin marketplace; installed via `make install-skill`.
-
-**Data:** GORM + SQLite, gormigrate migrations in `/migrations/`. Soft deletes via `Status` (`StatusActive=1`, `StatusDeleted=2`), **not** GORM soft delete. Credentials: Argon2id + AES-256-GCM, master key in OS keychain.
-
-**Extensions:** WASM modules with `manifest.json`-declared tools. AI invokes them via a **single `exec_tool`** (not one tool per extension). Dispatcher in `internal/ai/tool/tool_handler_ext.go` enforces extension policy type against asset policy groups before `Plugin.CallTool`.
-
-**Frontend** (`frontend/`, pnpm workspace): root app uses `@opskat/ui` (`packages/ui`); `packages/devserver-ui` is embedded by `cmd/devserver`. Vite 6, Tailwind 4, shadcn/ui (Radix), Zustand 5.
-- **No React Router** — custom tabs in `tabStore` (`terminal | ai | query | page | info`). One Zustand store per domain in `src/stores/`.
-- Backend via Wails bindings (`frontend/wailsjs/go/app/App`); events via `EventsOn()`.
-- i18n: i18next, locales in `src/i18n/locales/{zh-CN,en}/common.json`, all keys under `"common"` → `t("key.subkey")`.
-- Tests: Vitest + happy-dom + RTL; Wails runtime mocked in `src/__tests__/setup.ts`.
+The architecture & subsystem map — process topology, backend layering, the request lifecycle, each subsystem, the data model, and the AI / extension / opsctl flows — lives in its own doc: **[ARCHITECTURE.md](ARCHITECTURE.md)**. Read it before working across subsystem boundaries.
 
 ## Conventions
 
@@ -99,11 +71,11 @@ Common emoji (aligned with the changelog categories in [`/release`](../.claude/s
 
 ### Others
 
-- **CI:** runs Go lint/tests and frontend lint/tests/build on PRs and pushes to `main`/`develop`.
+- **CI:** runs Go lint/tests, the GUI e2e suite (`make test-e2e` under `xvfb` on Linux — see [e2e-harness-guide.md](e2e-harness-guide.md)), and frontend lint/tests on PRs and pushes to `main`/`develop`.
 - **Go:** mocks in `mock_*/` (`go.uber.org/mock`, regen `go generate ./...`); tests use goconvey + testify. Service tests mock transaction boundaries — when code uses `dbutil.WithTransaction`, prefer `dbutil.WithTransactionRunner` over opening in-memory SQLite.
 - **Frontend:** Prettier 120 col, 2-space.
 - **Versioning:** version info is embedded with ldflags.
-- **Windows child processes:** commands launched from the GUI must not flash a console window. For `exec.Command` paths, call `internal/pkg/executil.HideWindow` for fully hidden children, or `HideConsoleWindow` when only console-subsystem helpers should be suppressed while GUI programs remain visible. The Windows local terminal path is different: `internal/service/localterm_svc/pty_windows.go` starts shells through `internal/pkg/winconpty`, whose process creation flags must include `CREATE_NO_WINDOW`; this prevents the black console flash when opening a `local` asset. If the flash regresses, fix the ConPTY process creation path first instead of adding frontend or call-site fallbacks.
+- **Windows child processes:** commands launched from the GUI must not flash a console window. For `exec.Command` paths, call `internal/pkg/executil.HideWindow` for fully hidden children, or `HideConsoleWindow` when only console-subsystem helpers should be suppressed while GUI programs remain visible. The Windows local terminal path is different: `internal/service/localterm_svc/pty_windows.go` starts shells through `internal/pkg/winconpty`, whose process creation flags must not use `CREATE_NO_WINDOW`: ConPTY needs only `EXTENDED_STARTUPINFO_PRESENT` (plus `CREATE_UNICODE_ENVIRONMENT` when an env block is supplied), and `CREATE_NO_WINDOW` can leave the child process started but detach its output from the pseudo-console pipes. If the flash regresses, fix the ConPTY process creation path first instead of adding frontend or call-site fallbacks.
 
 ## Logging for key flows
 

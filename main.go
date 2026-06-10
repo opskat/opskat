@@ -66,12 +66,27 @@ type Lifecycle interface {
 	Cleanup()
 }
 
+// resolveBootstrap reads optional env overrides used by the GUI e2e harness
+// (OPSKAT_MASTER_KEY mirrors opsctl's env var; OPSKAT_DATA_DIR mirrors its
+// --data-dir flag) and returns the resolved data dir, bootstrap options, and
+// whether the single-instance lock must be disabled (so an e2e instance does
+// not collide with a running app).
+func resolveBootstrap() (dataDir string, opts bootstrap.Options, disableSingleInstance bool) {
+	dataDir = bootstrap.AppDataDir()
+	if env := os.Getenv("OPSKAT_DATA_DIR"); env != "" {
+		dataDir = env
+	}
+	opts = bootstrap.Options{DataDir: dataDir, MasterKey: os.Getenv("OPSKAT_MASTER_KEY")}
+	disableSingleInstance = os.Getenv("OPSKAT_E2E") == "1"
+	return dataDir, opts, disableSingleInstance
+}
+
 func main() {
 	ctx := context.Background()
 
-	// 初始化数据库、凭证、Repository、迁移
-	dataDir := bootstrap.AppDataDir()
-	if err := bootstrap.Init(ctx, bootstrap.Options{}); err != nil {
+	// 初始化数据库、凭证、Repository、迁移（e2e 可经 env 覆盖数据目录/master key）
+	dataDir, bootstrapOpts, disableSingleInstance := resolveBootstrap()
+	if err := bootstrap.Init(ctx, bootstrapOpts); err != nil {
 		log.Fatalf("初始化失败: %v", err)
 	}
 
@@ -140,7 +155,7 @@ func main() {
 
 	binders := []Lifecycle{sys, sshB, queryB, redisB, etcdB, kafkaB, k8sB, serialB, localB, aiB, opsctlB, extB, extEditB}
 
-	err = wails.Run(&options.App{
+	appOptions := &options.App{
 		Title:     "OpsKat",
 		Width:     windowWidth,
 		Height:    windowHeight,
@@ -149,7 +164,7 @@ func main() {
 		Frameless: runtime.GOOS == "windows",
 		AssetServer: &assetserver.Options{
 			Assets:  assets,
-			Handler: opsctl.NewExtensionAssetHandler(filepath.Join(bootstrap.AppDataDir(), "extensions"), nil),
+			Handler: opsctl.NewExtensionAssetHandler(filepath.Join(dataDir, "extensions"), nil),
 		},
 		OnStartup: func(wctx context.Context) {
 			wailsRuntime.WindowCenter(wctx)
@@ -181,12 +196,6 @@ func main() {
 		Bind: []interface{}{
 			sys, sshB, queryB, redisB, etcdB, kafkaB, k8sB, serialB, localB, aiB, opsctlB, extB, extEditB,
 		},
-		SingleInstanceLock: &options.SingleInstanceLock{
-			UniqueId: "com.opskat.desktop",
-			OnSecondInstanceLaunch: func(secondInstanceData options.SecondInstanceData) {
-				sys.OnSecondInstanceLaunch()
-			},
-		},
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop:     true,
 			DisableWebViewDrop: true,
@@ -195,7 +204,17 @@ func main() {
 			TitleBar:             mac.TitleBarHiddenInset(),
 			WebviewIsTransparent: true,
 		},
-	})
+	}
+	if !disableSingleInstance {
+		appOptions.SingleInstanceLock = &options.SingleInstanceLock{
+			UniqueId: "com.opskat.desktop",
+			OnSecondInstanceLaunch: func(secondInstanceData options.SecondInstanceData) {
+				sys.OnSecondInstanceLaunch()
+			},
+		}
+	}
+
+	err = wails.Run(appOptions)
 	if err != nil {
 		log.Fatalf("Wails启动失败: %v", err)
 	}

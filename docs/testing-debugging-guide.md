@@ -333,8 +333,8 @@ make test-cover                            # coverage HTML
 cd frontend && pnpm test                   # vitest (happy-dom + RTL; Wails mocked)
 cd frontend && pnpm test:watch
 
-# End-to-end (needs the ../extensions sibling repo present)
-make test-fixtures && make test-e2e
+# GUI end-to-end (Playwright × the real Wails app — see below)
+make test-e2e
 ```
 
 Notes:
@@ -342,6 +342,15 @@ Notes:
 - Service tests mock transaction boundaries — when code uses `dbutil.WithTransaction`,
   prefer `dbutil.WithTransactionRunner` over an in-memory SQLite.
 - Frontend tests mock the Wails runtime in `src/__tests__/setup.ts`.
+
+### GUI E2E (Playwright × the real Wails app)
+
+There is also a Playwright harness that drives the **real running app** through the Wails dev
+browser bridge — both a committed core-flow suite (`make test-e2e`) and **ad-hoc
+functional verification of a feature you just finished** (`make test-e2e-scratch`, throwaway
+scripts in the gitignored `e2e/scratch/`). The committed suite also runs in CI (Linux + `xvfb`,
+the `Wails E2E` job); scratch is local-only. Full workflow, isolation guarantees, and
+conventions: **[e2e-harness-guide.md](./e2e-harness-guide.md)**.
 
 ---
 

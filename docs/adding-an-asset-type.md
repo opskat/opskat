@@ -2,7 +2,7 @@
 
 > This guide is the concrete how-to for adding a new built-in asset type to OpsKat: which interfaces to implement, which files to edit, which parts are registration-driven, and which parts still require shared-code edits.
 >
-> Engineering principles such as SOLID, high cohesion/low coupling, Reuse first, and the Fix policy live in [`../AGENTS.md`](../AGENTS.md). The architecture and subsystem map live in [`./DEVELOP.md -> Architecture`](./DEVELOP.md#architecture). This guide only covers the asset-type integration path. Before editing this file, read [`./DOC-MAINTENANCE.md`](./DOC-MAINTENANCE.md).
+> Engineering principles such as SOLID, high cohesion/low coupling, Reuse first, and the Fix policy live in [`../AGENTS.md`](../AGENTS.md). The architecture and subsystem map live in [`./ARCHITECTURE.md`](./ARCHITECTURE.md). This guide only covers the asset-type integration path. Before editing this file, read [`./DOC-MAINTENANCE.md`](./DOC-MAINTENANCE.md).
 
 ## Core Idea: Register, Do Not Switch
 

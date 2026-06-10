@@ -1,0 +1,15 @@
+{
+  "name": "opskat-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "description": "OpsKat GUI end-to-end tests (Playwright × Wails dev bridge)",
+  "scripts": {
+    "setup": "pnpm install && pnpm exec playwright install chromium",
+    "test": "node run-e2e.mjs",
+    "test:scratch": "node run-e2e.mjs -c playwright.scratch.config.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^22.0.0"
+  }
+}

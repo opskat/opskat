@@ -2,11 +2,11 @@ package winconpty
 
 import "testing"
 
-func TestProcessCreationFlagsHideConsoleWindow(t *testing.T) {
+func TestProcessCreationFlagsUseConPtyStartupInfo(t *testing.T) {
 	flags := processCreationFlags(false)
 
-	if flags&createNoWindowFlag == 0 {
-		t.Fatalf("processCreationFlags() = %#x, want CREATE_NO_WINDOW", flags)
+	if flags&createNoWindowFlag != 0 {
+		t.Fatalf("processCreationFlags() = %#x, CREATE_NO_WINDOW breaks ConPTY output", flags)
 	}
 	if flags&extendedStartupInfoPresentFlag == 0 {
 		t.Fatalf("processCreationFlags() = %#x, want EXTENDED_STARTUPINFO_PRESENT", flags)
@@ -19,8 +19,8 @@ func TestProcessCreationFlagsHideConsoleWindow(t *testing.T) {
 func TestProcessCreationFlagsPreserveUnicodeEnvironment(t *testing.T) {
 	flags := processCreationFlags(true)
 
-	if flags&createNoWindowFlag == 0 {
-		t.Fatalf("processCreationFlags(true) = %#x, want CREATE_NO_WINDOW", flags)
+	if flags&createNoWindowFlag != 0 {
+		t.Fatalf("processCreationFlags(true) = %#x, CREATE_NO_WINDOW breaks ConPTY output", flags)
 	}
 	if flags&createUnicodeEnvironmentFlag == 0 {
 		t.Fatalf("processCreationFlags(true) = %#x, want CREATE_UNICODE_ENVIRONMENT", flags)
