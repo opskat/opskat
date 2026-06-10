@@ -61,6 +61,19 @@ function makeAITab(id: string, label: string) {
   };
 }
 
+function makePageTab(id: string, pageId: string) {
+  return {
+    id,
+    type: "page" as const,
+    label: pageId,
+    icon: "",
+    meta: {
+      type: "page" as const,
+      pageId,
+    },
+  };
+}
+
 const onConnectAsset = vi.fn();
 const onClose = vi.fn();
 
@@ -262,5 +275,20 @@ describe("CommandPalette", () => {
     // Enter should still activate the first (and only) tab
     fireEvent.keyDown(input, { key: "Enter" });
     expect(useTabStore.getState().activeTabId).toBe("tab-1");
+  });
+
+  // 9. Built-in page tab: label uses i18n key, icon comes from builtin page meta (not the Server fallback)
+  it("page tab: label uses i18n key and icon comes from builtin page meta", () => {
+    useTabStore.setState({ tabs: [makePageTab("tab-settings", "settings")], activeTabId: null });
+
+    const { container } = renderPalette(true);
+
+    // label resolved via resolveTabLabel → i18n key (mock returns key as-is)
+    expect(screen.getByText("nav.settings")).toBeDefined();
+    // raw internal label is not shown
+    expect(screen.queryByText("settings")).toBeNull();
+    // icon is the builtin Settings icon, not the default Server fallback
+    expect(container.querySelector("svg.lucide-settings")).not.toBeNull();
+    expect(container.querySelector("svg.lucide-server")).toBeNull();
   });
 });

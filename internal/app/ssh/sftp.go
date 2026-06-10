@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opskat/opskat/internal/pkg/transfer"
 	"github.com/opskat/opskat/internal/service/sftp_svc"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -46,18 +47,18 @@ func (s *SSH) SFTPUpload(sessionID, remotePath string) (string, error) {
 
 	transferID := s.sftp.GenerateTransferID()
 	go func() {
-		err := s.sftp.Upload(s.ctx, transferID, sessionID, localPath, remotePath, func(p sftp_svc.TransferProgress) {
-			wailsRuntime.EventsEmit(s.ctx, "sftp:progress:"+transferID, p)
+		err := s.sftp.Upload(s.ctx, transferID, sessionID, localPath, remotePath, func(p transfer.Progress) {
+			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, p)
 		})
 		if err != nil {
-			wailsRuntime.EventsEmit(s.ctx, "sftp:progress:"+transferID, sftp_svc.TransferProgress{
+			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
 				TransferID: transferID,
 				Status:     "error",
 				Error:      err.Error(),
 			})
 			return
 		}
-		wailsRuntime.EventsEmit(s.ctx, "sftp:progress:"+transferID, sftp_svc.TransferProgress{
+		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
 			TransferID: transferID,
 			Status:     "done",
 		})
@@ -85,18 +86,18 @@ func (s *SSH) SFTPUploadDir(sessionID, remotePath string) (string, error) {
 
 	transferID := s.sftp.GenerateTransferID()
 	go func() {
-		err := s.sftp.UploadDir(s.ctx, transferID, sessionID, localDir, remotePath, func(p sftp_svc.TransferProgress) {
-			wailsRuntime.EventsEmit(s.ctx, "sftp:progress:"+transferID, p)
+		err := s.sftp.UploadDir(s.ctx, transferID, sessionID, localDir, remotePath, func(p transfer.Progress) {
+			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, p)
 		})
 		if err != nil {
-			wailsRuntime.EventsEmit(s.ctx, "sftp:progress:"+transferID, sftp_svc.TransferProgress{
+			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
 				TransferID: transferID,
 				Status:     "error",
 				Error:      err.Error(),
 			})
 			return
 		}
-		wailsRuntime.EventsEmit(s.ctx, "sftp:progress:"+transferID, sftp_svc.TransferProgress{
+		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
 			TransferID: transferID,
 			Status:     "done",
 		})
@@ -120,18 +121,18 @@ func (s *SSH) SFTPDownload(sessionID, remotePath string) (string, error) {
 
 	transferID := s.sftp.GenerateTransferID()
 	go func() {
-		err := s.sftp.Download(s.ctx, transferID, sessionID, remotePath, localPath, func(p sftp_svc.TransferProgress) {
-			wailsRuntime.EventsEmit(s.ctx, "sftp:progress:"+transferID, p)
+		err := s.sftp.Download(s.ctx, transferID, sessionID, remotePath, localPath, func(p transfer.Progress) {
+			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, p)
 		})
 		if err != nil {
-			wailsRuntime.EventsEmit(s.ctx, "sftp:progress:"+transferID, sftp_svc.TransferProgress{
+			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
 				TransferID: transferID,
 				Status:     "error",
 				Error:      err.Error(),
 			})
 			return
 		}
-		wailsRuntime.EventsEmit(s.ctx, "sftp:progress:"+transferID, sftp_svc.TransferProgress{
+		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
 			TransferID: transferID,
 			Status:     "done",
 		})
@@ -155,18 +156,18 @@ func (s *SSH) SFTPDownloadDir(sessionID, remotePath string) (string, error) {
 
 	transferID := s.sftp.GenerateTransferID()
 	go func() {
-		err := s.sftp.DownloadDir(s.ctx, transferID, sessionID, remotePath, localDir, func(p sftp_svc.TransferProgress) {
-			wailsRuntime.EventsEmit(s.ctx, "sftp:progress:"+transferID, p)
+		err := s.sftp.DownloadDir(s.ctx, transferID, sessionID, remotePath, localDir, func(p transfer.Progress) {
+			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, p)
 		})
 		if err != nil {
-			wailsRuntime.EventsEmit(s.ctx, "sftp:progress:"+transferID, sftp_svc.TransferProgress{
+			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
 				TransferID: transferID,
 				Status:     "error",
 				Error:      err.Error(),
 			})
 			return
 		}
-		wailsRuntime.EventsEmit(s.ctx, "sftp:progress:"+transferID, sftp_svc.TransferProgress{
+		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
 			TransferID: transferID,
 			Status:     "done",
 		})
@@ -182,15 +183,15 @@ func (s *SSH) SFTPUploadFile(sessionID, localPath, remotePath string) (string, e
 	}
 
 	transferID := s.sftp.GenerateTransferID()
-	emitProgress := func(p sftp_svc.TransferProgress) {
-		wailsRuntime.EventsEmit(s.ctx, "sftp:progress:"+transferID, p)
+	emitProgress := func(p transfer.Progress) {
+		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, p)
 	}
 	emitDone := func(err error) {
 		if err != nil {
-			emitProgress(sftp_svc.TransferProgress{TransferID: transferID, Status: "error", Error: err.Error()})
+			emitProgress(transfer.Progress{TransferID: transferID, Status: "error", Error: err.Error()})
 			return
 		}
-		emitProgress(sftp_svc.TransferProgress{TransferID: transferID, Status: "done"})
+		emitProgress(transfer.Progress{TransferID: transferID, Status: "done"})
 	}
 
 	if info.IsDir() {

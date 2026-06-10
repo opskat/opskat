@@ -13,10 +13,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/opskat/opskat/internal/pkg/dirsync"
+	"github.com/opskat/opskat/internal/pkg/transfer"
 	"github.com/opskat/opskat/internal/service/ssh_svc"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -27,25 +27,11 @@ import (
 // MaxReadFileSize limits full-file reads used by desktop features such as external edit.
 const MaxReadFileSize int64 = 10 * 1024 * 1024
 
-// TransferProgress 传输进度事件
-type TransferProgress struct {
-	TransferID     string `json:"transferId"`
-	Status         string `json:"status"` // "progress" | "done" | "error"
-	CurrentFile    string `json:"currentFile"`
-	FilesCompleted int    `json:"filesCompleted"`
-	FilesTotal     int    `json:"filesTotal"`
-	BytesDone      int64  `json:"bytesDone"`
-	BytesTotal     int64  `json:"bytesTotal"`
-	Speed          int64  `json:"speed"` // bytes/sec
-	Error          string `json:"error,omitempty"`
-}
-
 // Service SFTP 文件传输服务
 type Service struct {
 	sshManager              *ssh_svc.Manager
 	clients                 sync.Map // sessionID -> *sftp.Client
 	cancels                 sync.Map // transferID -> context.CancelFunc
-	counter                 atomic.Int64
 	maxReadFileSizeProvider func() int64
 }
 
@@ -82,7 +68,7 @@ func (s *Service) maxReadFileSize() int64 {
 
 // GenerateTransferID 生成唯一传输 ID
 func (s *Service) GenerateTransferID() string {
-	return fmt.Sprintf("sftp-%d-%d", time.Now().UnixNano(), s.counter.Add(1))
+	return transfer.GenerateID("sftp")
 }
 
 // getSFTPClient 获取或创建 SFTP 客户端（懒加载）
@@ -338,7 +324,7 @@ func (s *Service) WriteFile(sessionID, remotePath string, data []byte) error {
 }
 
 // Upload 上传单个文件
-func (s *Service) Upload(ctx context.Context, transferID, sessionID, localPath, remotePath string, onProgress func(TransferProgress)) error {
+func (s *Service) Upload(ctx context.Context, transferID, sessionID, localPath, remotePath string, onProgress func(transfer.Progress)) error {
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancels.Store(transferID, cancel)
 	defer func() {
@@ -380,7 +366,7 @@ func (s *Service) Upload(ctx context.Context, transferID, sessionID, localPath, 
 }
 
 // Download 下载单个文件
-func (s *Service) Download(ctx context.Context, transferID, sessionID, remotePath, localPath string, onProgress func(TransferProgress)) error {
+func (s *Service) Download(ctx context.Context, transferID, sessionID, remotePath, localPath string, onProgress func(transfer.Progress)) error {
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancels.Store(transferID, cancel)
 	defer func() {
@@ -422,7 +408,7 @@ func (s *Service) Download(ctx context.Context, transferID, sessionID, remotePat
 }
 
 // UploadDir 上传目录
-func (s *Service) UploadDir(ctx context.Context, transferID, sessionID, localDir, remoteDir string, onProgress func(TransferProgress)) error {
+func (s *Service) UploadDir(ctx context.Context, transferID, sessionID, localDir, remoteDir string, onProgress func(transfer.Progress)) error {
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancels.Store(transferID, cancel)
 	defer func() {
@@ -461,8 +447,7 @@ func (s *Service) UploadDir(ctx context.Context, transferID, sessionID, localDir
 	// 传输阶段
 	var filesCompleted int
 	var bytesDone int64
-	startTime := time.Now()
-	lastEmit := time.Now()
+	reporter := transfer.NewReporter(onProgress)
 
 	return filepath.WalkDir(localDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -516,24 +501,15 @@ func (s *Service) UploadDir(ctx context.Context, transferID, sessionID, localDir
 				}
 				bytesDone += int64(n)
 
-				if time.Since(lastEmit) >= 100*time.Millisecond {
-					elapsed := time.Since(startTime).Seconds()
-					speed := int64(0)
-					if elapsed > 0 {
-						speed = int64(float64(bytesDone) / elapsed)
-					}
-					onProgress(TransferProgress{
-						TransferID:     transferID,
-						Status:         "progress",
-						CurrentFile:    relPath,
-						FilesCompleted: filesCompleted,
-						FilesTotal:     filesTotal,
-						BytesDone:      bytesDone,
-						BytesTotal:     bytesTotal,
-						Speed:          speed,
-					})
-					lastEmit = time.Now()
-				}
+				reporter.Report(transfer.Progress{
+					TransferID:     transferID,
+					Status:         "progress",
+					CurrentFile:    relPath,
+					FilesCompleted: filesCompleted,
+					FilesTotal:     filesTotal,
+					BytesDone:      bytesDone,
+					BytesTotal:     bytesTotal,
+				})
 			}
 			if readErr == io.EOF {
 				break
@@ -549,7 +525,7 @@ func (s *Service) UploadDir(ctx context.Context, transferID, sessionID, localDir
 }
 
 // DownloadDir 下载目录
-func (s *Service) DownloadDir(ctx context.Context, transferID, sessionID, remoteDir, localDir string, onProgress func(TransferProgress)) error {
+func (s *Service) DownloadDir(ctx context.Context, transferID, sessionID, remoteDir, localDir string, onProgress func(transfer.Progress)) error {
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancels.Store(transferID, cancel)
 	defer func() {
@@ -608,8 +584,7 @@ func (s *Service) DownloadDir(ctx context.Context, transferID, sessionID, remote
 	// 传输阶段
 	var filesCompleted int
 	var bytesDone int64
-	startTime := time.Now()
-	lastEmit := time.Now()
+	reporter := transfer.NewReporter(onProgress)
 
 	for _, entry := range entries {
 		if ctx.Err() != nil {
@@ -665,24 +640,15 @@ func (s *Service) DownloadDir(ctx context.Context, transferID, sessionID, remote
 				}
 				bytesDone += int64(n)
 
-				if time.Since(lastEmit) >= 100*time.Millisecond {
-					elapsed := time.Since(startTime).Seconds()
-					speed := int64(0)
-					if elapsed > 0 {
-						speed = int64(float64(bytesDone) / elapsed)
-					}
-					onProgress(TransferProgress{
-						TransferID:     transferID,
-						Status:         "progress",
-						CurrentFile:    relPath,
-						FilesCompleted: filesCompleted,
-						FilesTotal:     filesTotal,
-						BytesDone:      bytesDone,
-						BytesTotal:     bytesTotal,
-						Speed:          speed,
-					})
-					lastEmit = time.Now()
-				}
+				reporter.Report(transfer.Progress{
+					TransferID:     transferID,
+					Status:         "progress",
+					CurrentFile:    relPath,
+					FilesCompleted: filesCompleted,
+					FilesTotal:     filesTotal,
+					BytesDone:      bytesDone,
+					BytesTotal:     bytesTotal,
+				})
 			}
 			if readErr == io.EOF {
 				break
@@ -765,11 +731,10 @@ func (s *Service) removeDirRecursive(client *sftp.Client, path string) error {
 }
 
 // copyWithProgress 带进度的文件拷贝
-func (s *Service) copyWithProgress(ctx context.Context, transferID string, dst io.Writer, src io.Reader, totalBytes int64, filesTotal int, currentFile string, onProgress func(TransferProgress)) error {
+func (s *Service) copyWithProgress(ctx context.Context, transferID string, dst io.Writer, src io.Reader, totalBytes int64, filesTotal int, currentFile string, onProgress func(transfer.Progress)) error {
 	buf := make([]byte, 32*1024)
 	var bytesDone int64
-	startTime := time.Now()
-	lastEmit := time.Now()
+	reporter := transfer.NewReporter(onProgress)
 
 	for {
 		if ctx.Err() != nil {
@@ -783,24 +748,14 @@ func (s *Service) copyWithProgress(ctx context.Context, transferID string, dst i
 			}
 			bytesDone += int64(n)
 
-			if time.Since(lastEmit) >= 100*time.Millisecond {
-				elapsed := time.Since(startTime).Seconds()
-				speed := int64(0)
-				if elapsed > 0 {
-					speed = int64(float64(bytesDone) / elapsed)
-				}
-				onProgress(TransferProgress{
-					TransferID:     transferID,
-					Status:         "progress",
-					CurrentFile:    currentFile,
-					FilesCompleted: 0,
-					FilesTotal:     filesTotal,
-					BytesDone:      bytesDone,
-					BytesTotal:     totalBytes,
-					Speed:          speed,
-				})
-				lastEmit = time.Now()
-			}
+			reporter.Report(transfer.Progress{
+				TransferID:  transferID,
+				Status:      "progress",
+				CurrentFile: currentFile,
+				FilesTotal:  filesTotal,
+				BytesDone:   bytesDone,
+				BytesTotal:  totalBytes,
+			})
 		}
 		if readErr == io.EOF {
 			return nil

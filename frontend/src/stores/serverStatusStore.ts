@@ -55,6 +55,9 @@ export const useServerStatusStore = create<ServerStatusStore>((set, get) => {
   async function tick(sessionId: string) {
     const cur = get().sessions[sessionId];
     if (!cur) return;
+    // 单飞：已有请求在途时直接跳过，串行化采集，避免并发响应乱序污染 buffer
+    if (cur.loading) return;
+
     patch(sessionId, { loading: true });
     try {
       const result = (await GetSSHServerStatus(sessionId)) as ServerStatusSnapshot | null;

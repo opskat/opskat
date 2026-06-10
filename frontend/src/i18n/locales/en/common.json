@@ -1487,6 +1487,10 @@
     "sessionOps": "{{count}} ops",
     "sessionPatterns": "Session approved patterns"
   },
+  "zmodem": {
+    "downloadComplete": "Received {{name}}",
+    "uploadComplete": "Sent {{name}}"
+  },
   "sftp": {
     "upload": "Upload File",
     "uploadDir": "Upload Folder",

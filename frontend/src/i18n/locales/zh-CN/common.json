@@ -1487,6 +1487,10 @@
     "sessionOps": "{{count}} 条操作",
     "sessionPatterns": "会话已允许模式"
   },
+  "zmodem": {
+    "downloadComplete": "{{name}} 接收完成",
+    "uploadComplete": "{{name}} 发送完成"
+  },
   "sftp": {
     "upload": "上传文件",
     "uploadDir": "上传文件夹",

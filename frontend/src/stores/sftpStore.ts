@@ -34,6 +34,12 @@ const DEFAULT_FILE_MANAGER_WIDTH = 280;
 const MIN_FILE_MANAGER_WIDTH = 200;
 const MAX_FILE_MANAGER_WIDTH = 600;
 
+// ZMODEM 这类"前端驱动协议、后端只做本地文件 IO"的传输，取消逻辑（中止 zmodem.js 会话
+// + 后端 Abort）和 SFTP 不同，没法走 SFTPCancelTransfer。这里按 transferId 注册各自的取消
+// 回调，cancelTransfer 查表分派、查不到再回落 SFTP 默认取消。extend-by-registration，
+// 避免在共享的 cancelTransfer 里按传输类型字符串分支。
+const cancelHandlers = new Map<string, () => void>();
+
 interface SFTPState {
   transfers: Record<string, SFTPTransfer>;
 
@@ -47,6 +53,13 @@ interface SFTPState {
   startUploadFile: (target: SFTPTransferTarget, localPath: string, remotePath: string) => Promise<string | null>;
   startDownload: (target: SFTPTransferTarget, remotePath: string) => Promise<string | null>;
   startDownloadDir: (target: SFTPTransferTarget, remotePath: string) => Promise<string | null>;
+  /** 登记一个外部驱动（如 ZMODEM）的传输：复用进度订阅 + 注册其专属取消回调。 */
+  subscribeExternalTransfer: (
+    transferId: string,
+    target: SFTPTransferTarget,
+    direction: "upload" | "download",
+    onCancel: () => void
+  ) => void;
   cancelTransfer: (transferId: string) => void;
   clearTransfer: (transferId: string) => void;
   clearCompleted: () => void;
@@ -56,6 +69,8 @@ interface SFTPState {
   getTabTransfers: (tabId: string) => SFTPTransfer[];
 
   toggleFileManager: (tabId: string) => void;
+  /** 幂等打开文件管理面板（ZMODEM 传输开始时用，确保进度 UI 可见）。 */
+  openFileManager: (tabId: string) => void;
   setFileManagerPath: (tabId: string, path: string) => void;
   setFileManagerWidth: (width: number) => void;
 }
@@ -87,7 +102,7 @@ function subscribeProgress(
     },
   }));
 
-  const eventName = "sftp:progress:" + transferId;
+  const eventName = "transfer:progress:" + transferId;
   EventsOn(
     eventName,
     (event: {
@@ -129,6 +144,7 @@ function subscribeProgress(
               [transferId]: { ...existing, status: "done" },
             },
           }));
+          cancelHandlers.delete(transferId);
           EventsOff(eventName);
           // 5 秒后自动清除已完成的传输
           setTimeout(() => {
@@ -141,6 +157,17 @@ function subscribeProgress(
             }
           }, 5000);
           break;
+        case "cancelled":
+          // ZMODEM 取消由后端显式发 "cancelled"（SFTP 则走下面 error 分支按消息推断）。
+          set((state) => ({
+            transfers: {
+              ...state.transfers,
+              [transferId]: { ...existing, status: "cancelled" },
+            },
+          }));
+          cancelHandlers.delete(transferId);
+          EventsOff(eventName);
+          break;
         case "error":
           set((state) => ({
             transfers: {
@@ -152,6 +179,7 @@ function subscribeProgress(
               },
             },
           }));
+          cancelHandlers.delete(transferId);
           EventsOff(eventName);
           break;
       }
@@ -200,11 +228,22 @@ export const useSFTPStore = create<SFTPState>((set, get) => ({
     return transferId;
   },
 
+  subscribeExternalTransfer: (transferId, target, direction, onCancel) => {
+    cancelHandlers.set(transferId, onCancel);
+    subscribeProgress(transferId, target, direction, set, get);
+  },
+
   cancelTransfer: (transferId) => {
+    const handler = cancelHandlers.get(transferId);
+    if (handler) {
+      handler();
+      return;
+    }
     SFTPCancelTransfer(transferId);
   },
 
   clearTransfer: (transferId) => {
+    cancelHandlers.delete(transferId);
     set((state) => {
       const { [transferId]: _, ...rest } = state.transfers;
       return { transfers: rest };
@@ -262,6 +301,15 @@ export const useSFTPStore = create<SFTPState>((set, get) => ({
         [tabId]: !state.fileManagerOpenTabs[tabId],
       },
     }));
+  },
+
+  openFileManager: (tabId) => {
+    set((state) => {
+      if (state.fileManagerOpenTabs[tabId]) return state;
+      return {
+        fileManagerOpenTabs: { ...state.fileManagerOpenTabs, [tabId]: true },
+      };
+    });
   },
 
   setFileManagerPath: (tabId, path) => {

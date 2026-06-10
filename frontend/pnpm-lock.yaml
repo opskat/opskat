@@ -146,6 +146,9 @@ importers:
       tippy.js:
         specifier: ^6.3.7
         version: 6.3.7
+      zmodem.js:
+        specifier: ^0.1.10
+        version: 0.1.10
       zustand:
         specifier: ^5.0.0
         version: 5.0.12(@types/react@19.2.14)(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
@@ -2028,6 +2031,11 @@ packages:
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
 
+  crc-32@1.2.2:
+    resolution: {integrity: sha512-ROmzCKrTnOwybPcJApAA6WBWij23HVfGVNKqqrZpuyZOHqK2CwHSvpGuyt/UNNvaIjEd8X5IFGp4Mh+Ie1IHJQ==}
+    engines: {node: '>=0.8'}
+    hasBin: true
+
   crelt@1.0.6:
     resolution: {integrity: sha512-VQ2MBenTq1fWZUH9DJNGti7kKv6EeAuYr3cLwxUWhIu1baTaXh4Ib5W2CqHVqib4/MqbYGJqiL3Zb8GJZr3l4g==}
 
@@ -3222,6 +3230,9 @@ packages:
   yocto-queue@0.1.0:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
     engines: {node: '>=10'}
+
+  zmodem.js@0.1.10:
+    resolution: {integrity: sha512-Z1DWngunZ/j3BmIzSJpFZVNV73iHkj89rxXX4IciJdU9ga3nZ7rJ5LkfjV/QDsKhc7bazDWTTJCLJ+iRXD82dw==}
 
   zod-validation-error@4.0.2:
     resolution: {integrity: sha512-Q6/nZLe6jxuU80qb/4uJ4t5v2VEZ44lzQjPDhYJNztRQ4wyWc6VF3D3Kb/fAuPetZQnhS3hnajCf9CsWesghLQ==}
@@ -4953,6 +4964,8 @@ snapshots:
 
   convert-source-map@2.0.0: {}
 
+  crc-32@1.2.2: {}
+
   crelt@1.0.6: {}
 
   cross-spawn@7.0.6:
@@ -6412,6 +6425,10 @@ snapshots:
   yallist@3.1.1: {}
 
   yocto-queue@0.1.0: {}
+
+  zmodem.js@0.1.10:
+    dependencies:
+      crc-32: 1.2.2
 
   zod-validation-error@4.0.2(zod@4.3.6):
     dependencies:
