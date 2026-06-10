@@ -2,6 +2,8 @@ package connpool
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/url"
 	"strings"
 	"testing"
@@ -11,16 +13,46 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 )
 
-func TestOpenWithTunnelMSSQLRouted(t *testing.T) {
-	Convey("openWithTunnel 把 MSSQL 路由到专用分支", t, func() {
+func TestOpenWithDialerMSSQLRouted(t *testing.T) {
+	Convey("openWithDialer 把 MSSQL 路由到专用分支", t, func() {
 		cfg := &asset_entity.DatabaseConfig{
 			Driver: asset_entity.DriverMSSQL, Host: "h", Port: 1433,
 			Username: "u", Database: "d",
 		}
-		_, err := openWithTunnel(cfg, "pw", nil) // tunnel=nil 会在分支内部出错,但不应是"不支持"错误
+		_, err := openWithDialer(cfg, "pw", nil) // dial=nil 仅在连接时使用,open 阶段不应是"不支持"错误
 		if err != nil {
 			So(err.Error(), ShouldNotContainSubstring, "不支持的数据库驱动")
 		}
+	})
+}
+
+func TestPgDialConnectorPassesAddr(t *testing.T) {
+	Convey("pgDialConnector 把目标地址透传给 dial", t, func() {
+		cfg := &asset_entity.DatabaseConfig{
+			Driver: asset_entity.DriverPostgreSQL, Host: "pg.internal", Port: 5433,
+			Username: "u", Database: "d",
+		}
+		_, dsn := buildDSN(cfg, "pw")
+		var gotAddr string
+		connector := newPgDialConnector(dsn, func(ctx context.Context, addr string) (net.Conn, error) {
+			gotAddr = addr
+			return nil, errors.New("dial-sentinel")
+		})
+		_, err := connector.Connect(context.Background())
+		So(err, ShouldNotBeNil)
+		So(err.Error(), ShouldContainSubstring, "dial-sentinel")
+		So(gotAddr, ShouldEqual, "pg.internal:5433")
+	})
+}
+
+func TestRegisterMySQLDialerUnique(t *testing.T) {
+	Convey("registerMySQLDialer 每次返回唯一注册名", t, func() {
+		dial := func(ctx context.Context, addr string) (net.Conn, error) {
+			return nil, errors.New("unused")
+		}
+		n1 := registerMySQLDialer(dial)
+		n2 := registerMySQLDialer(dial)
+		So(n1, ShouldNotEqual, n2)
 	})
 }
 

@@ -157,8 +157,8 @@ func etcdTunnelID(asset *asset_entity.Asset, cfg *asset_entity.EtcdConfig) int64
 	return 0
 }
 
-// DialEtcd 创建新的 etcd 客户端。可选走 SSH 隧道(仅对第一个 endpoint)。
-// 返回的 tunnel 可为 nil(直连场景)。调用方负责 client.Close() / tunnel.Close()(若非 nil)。
+// DialEtcd 创建新的 etcd 客户端。可选走 SSH 隧道(仅对第一个 endpoint)或 SOCKS5 代理(隧道优先)。
+// 返回的 tunnel 可为 nil(直连/代理场景)。调用方负责 client.Close() / tunnel.Close()(若非 nil)。
 func DialEtcd(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.EtcdConfig, password string, sshPool *sshpool.Pool) (*clientv3.Client, io.Closer, error) {
 	clientCfg, err := buildEtcdClientConfig(cfg, password)
 	if err != nil {
@@ -183,6 +183,13 @@ func DialEtcd(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.
 			}))
 		// SSH 隧道场景仅对第一个 endpoint 起隧道
 		clientCfg.Endpoints = []string{cfg.Endpoints[0]}
+	} else if cfg.Proxy != nil {
+		// SOCKS5 按目标地址拨号,所有 endpoint 均经代理可达,无需截断
+		dial := proxyDialFunc(cfg.Proxy)
+		clientCfg.DialOptions = append(clientCfg.DialOptions,
+			grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+				return dial(ctx, addr)
+			}))
 	}
 
 	client, err := clientv3.New(clientCfg)
