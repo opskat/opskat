@@ -19,7 +19,6 @@ import { withTerminalFontFallback, withTerminalFontIsolation } from "@/data/term
 import { useResolvedTheme } from "@/components/theme-provider";
 import { useTranslation } from "react-i18next";
 import { notifyCopied } from "@/lib/notify";
-import { OnFileDrop, OnFileDropOff } from "../../../wailsjs/runtime/runtime";
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -38,6 +37,7 @@ import {
   terminalUrlHighlightColor,
   uploadFilesWithRz,
 } from "./terminalRegistry";
+import { registerTerminalFileDropTarget } from "./terminalFileDropCoordinator";
 
 export interface TerminalHandle {
   toggleSearch: () => void;
@@ -78,9 +78,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
   const transport = useTerminalStore((s) => s.tabData[tabId]?.panes[sessionId]?.transport ?? "ssh");
   const spec = TRANSPORTS[transport];
   const paneConnected = useTerminalStore((s) => s.tabData[tabId]?.panes[sessionId]?.connected ?? false);
-  const fileManagerOpen = useSFTPStore((s) => s.fileManagerOpenTabs[tabId] === true);
   const terminalDropEnabled = active && paneConnected && transport === "ssh";
-  const terminalDropHandlerEnabled = terminalDropEnabled && !fileManagerOpen;
 
   useImperativeHandle(ref, () => ({
     toggleSearch: () => setShowSearch((v) => !v),
@@ -221,19 +219,18 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
   }, [active]);
 
   useEffect(() => {
-    if (!terminalDropHandlerEnabled) {
+    if (!terminalDropEnabled) {
       setIsDragOver(false);
       return;
     }
-    const handler = (_x: number, _y: number, paths: string[]) => {
-      setIsDragOver(false);
-      void uploadFilesWithRz(sessionId, paths);
-    };
-    OnFileDrop(handler, true);
-    return () => {
-      OnFileDropOff();
-    };
-  }, [sessionId, terminalDropHandlerEnabled]);
+    return registerTerminalFileDropTarget({
+      getRect: () => wrapperRef.current?.getBoundingClientRect(),
+      uploadFiles: (paths) => {
+        setIsDragOver(false);
+        void uploadFilesWithRz(sessionId, paths);
+      },
+    });
+  }, [sessionId, terminalDropEnabled]);
 
   useEffect(() => {
     const el = wrapperRef.current;
