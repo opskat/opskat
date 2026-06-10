@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef } from "react";
+import {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  forwardRef,
+  type CSSProperties,
+} from "react";
 import type { Terminal as XTerminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { SearchAddon } from "@xterm/addon-search";
@@ -10,6 +19,7 @@ import { withTerminalFontFallback, withTerminalFontIsolation } from "@/data/term
 import { useResolvedTheme } from "@/components/theme-provider";
 import { useTranslation } from "react-i18next";
 import { notifyCopied } from "@/lib/notify";
+import { OnFileDrop, OnFileDropOff } from "../../../wailsjs/runtime/runtime";
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -26,6 +36,7 @@ import {
   getTerminalInstance,
   pasteFromClipboard,
   terminalUrlHighlightColor,
+  uploadFilesWithRz,
 } from "./terminalRegistry";
 
 export interface TerminalHandle {
@@ -46,6 +57,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const [hasSelection, setHasSelection] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
   const shortcuts = useShortcutStore((s) => s.shortcuts);
   const fontSize = useTerminalThemeStore((s) => s.fontSize);
   const fontFamily = useTerminalThemeStore((s) => s.fontFamily);
@@ -65,6 +77,10 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
   }, [selectedThemeId, customThemes, resolvedTheme]);
   const transport = useTerminalStore((s) => s.tabData[tabId]?.panes[sessionId]?.transport ?? "ssh");
   const spec = TRANSPORTS[transport];
+  const paneConnected = useTerminalStore((s) => s.tabData[tabId]?.panes[sessionId]?.connected ?? false);
+  const fileManagerOpen = useSFTPStore((s) => s.fileManagerOpenTabs[tabId] === true);
+  const terminalDropEnabled = active && paneConnected && transport === "ssh";
+  const terminalDropHandlerEnabled = terminalDropEnabled && !fileManagerOpen;
 
   useImperativeHandle(ref, () => ({
     toggleSearch: () => setShowSearch((v) => !v),
@@ -204,7 +220,31 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     }
   }, [active]);
 
-  const paneConnected = useTerminalStore((s) => s.tabData[tabId]?.panes[sessionId]?.connected ?? false);
+  useEffect(() => {
+    if (!terminalDropHandlerEnabled) {
+      setIsDragOver(false);
+      return;
+    }
+    const handler = (_x: number, _y: number, paths: string[]) => {
+      setIsDragOver(false);
+      void uploadFilesWithRz(sessionId, paths);
+    };
+    OnFileDrop(handler, true);
+    return () => {
+      OnFileDropOff();
+    };
+  }, [sessionId, terminalDropHandlerEnabled]);
+
+  useEffect(() => {
+    const el = wrapperRef.current;
+    if (!el || !terminalDropEnabled) return;
+    const observer = new MutationObserver(() => {
+      setIsDragOver(el.classList.contains("wails-drop-target-active"));
+    });
+    observer.observe(el, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, [terminalDropEnabled]);
+
   const splitPane = useTerminalStore((s) => s.splitPane);
   const reconnect = useTerminalStore((s) => s.reconnect);
   const closePane = useTerminalStore((s) => s.closePane);
@@ -229,7 +269,19 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
         }}
       >
         <ContextMenuTrigger className="flex-1 min-h-0">
-          <div ref={wrapperRef} className="h-full w-full" style={{ padding: "4px" }} />
+          <div
+            ref={wrapperRef}
+            className="relative h-full w-full"
+            style={{ padding: "4px", "--wails-drop-target": terminalDropEnabled ? "drop" : undefined } as CSSProperties}
+          >
+            {isDragOver && (
+              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-primary/5 border-2 border-dashed border-primary/30 rounded animate-in fade-in-0 duration-150">
+                <div className="rounded-md bg-background/90 px-3 py-2 text-xs text-primary shadow-sm">
+                  {t("zmodem.dragToUpload")}
+                </div>
+              </div>
+            )}
+          </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
           <ContextMenuItem onClick={handleCopy} disabled={!hasSelection}>

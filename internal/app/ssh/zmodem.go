@@ -3,6 +3,7 @@ package ssh
 import (
 	"encoding/base64"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/opskat/opskat/internal/pkg/transfer"
@@ -86,9 +87,27 @@ func (s *SSH) ZmodemPickUploadFiles(sessionID string) ([]ZmodemUploadFile, error
 	if err != nil {
 		return nil, fmt.Errorf("打开文件对话框失败: %w", err)
 	}
+	return s.openZmodemUploadFiles(sessionID, paths)
+}
 
+// ZmodemOpenUploadFiles 打开前端拖拽传入的本地文件路径，逐个登记上传句柄。
+// 目录会被跳过；用户可使用 SFTP 面板上传目录。
+func (s *SSH) ZmodemOpenUploadFiles(sessionID string, paths []string) ([]ZmodemUploadFile, error) {
+	return s.openZmodemUploadFiles(sessionID, paths)
+}
+
+func (s *SSH) openZmodemUploadFiles(sessionID string, paths []string) ([]ZmodemUploadFile, error) {
 	files := make([]ZmodemUploadFile, 0, len(paths))
 	for _, p := range paths {
+		info, statErr := os.Stat(p)
+		if statErr != nil {
+			logger.Default().Warn("zmodem stat upload file", zap.String("path", p), zap.Error(statErr))
+			continue
+		}
+		if info.IsDir() {
+			logger.Default().Warn("zmodem skip upload directory", zap.String("path", p))
+			continue
+		}
 		transferID := transfer.GenerateID("zmodem")
 		size, mtime, openErr := s.zmodem.OpenUpload(transferID, p)
 		if openErr != nil {

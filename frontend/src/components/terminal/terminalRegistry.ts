@@ -4,6 +4,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
+import { toast } from "sonner";
 import { BrowserOpenURL, EventsOn, EventsOff, ClipboardGetText } from "../../../wailsjs/runtime/runtime";
 import { bytesToBase64 } from "@/lib/terminalEncode";
 import { useTerminalStore, TRANSPORTS, type TerminalTransport } from "@/stores/terminalStore";
@@ -17,6 +18,8 @@ import { attachXtermRolloverGuard } from "./xtermRolloverGuard";
 import { attachTerminalUrlHighlighter, type TerminalUrlHighlighterController } from "./terminalUrlHighlighter";
 import { normalizeHttpUrl } from "./terminalUrlScan";
 
+const PENDING_RZ_UPLOAD_TTL_MS = 10_000;
+
 export interface TerminalInstance {
   term: XTerminal;
   fitAddon: FitAddon;
@@ -28,6 +31,7 @@ export interface TerminalInstance {
 
 interface InternalInstance extends TerminalInstance {
   isClosed: boolean;
+  uploadFilesWithRz: (paths: string[]) => Promise<boolean>;
   dispose: () => void;
 }
 
@@ -181,6 +185,34 @@ export function getOrCreateTerminal(
 
   const rolloverGuard = attachXtermRolloverGuard(term, writeData);
 
+  let pendingRzUploadExpiresAt = 0;
+
+  const uploadFilesWithRz = async (paths: string[]): Promise<boolean> => {
+    if (transport !== "ssh" || !zmodem || instance.isClosed) return false;
+    const uploadPaths = paths.filter(Boolean);
+    if (uploadPaths.length === 0) {
+      toast.warning(i18n.t("zmodem.dragNoFiles"));
+      return false;
+    }
+    if (zmodem.isActive() || pendingRzUploadExpiresAt > Date.now()) {
+      toast.warning(i18n.t("zmodem.dragBusy"));
+      return false;
+    }
+
+    zmodem.queueUploadFiles(uploadPaths);
+    pendingRzUploadExpiresAt = Date.now() + PENDING_RZ_UPLOAD_TTL_MS;
+    try {
+      await writeFn(sessionId, bytesToBase64(new TextEncoder().encode("rz\r")));
+      return true;
+    } catch (e) {
+      zmodem.queueUploadFiles([]);
+      pendingRzUploadExpiresAt = 0;
+      console.error("zmodem drag upload command failed", e);
+      toast.error(i18n.t("zmodem.dragCommandFailed"));
+      return false;
+    }
+  };
+
   const dataEvent = `${eventPrefix}:data:${sessionId}`;
   EventsOn(dataEvent, (dataB64: string) => {
     const binary = atob(dataB64);
@@ -191,6 +223,7 @@ export function getOrCreateTerminal(
     // 提示符渲染时出现），故无需后端改动。详见 internal/service/ssh_svc/dirsync.go:filterOutput。
     if (zmodem) {
       zmodem.consume(bytes);
+      if (zmodem.isActive()) pendingRzUploadExpiresAt = 0;
     } else {
       term.write(bytes);
     }
@@ -211,6 +244,7 @@ export function getOrCreateTerminal(
     bridge,
     urlHighlighter,
     isClosed: false,
+    uploadFilesWithRz,
     dispose: () => {
       // bridge 持有 term.attachCustomKeyEventHandler 槽位的还原逻辑,
       // 必须在 term.dispose 之前调用,避免 dispose 后访问已释放对象。
@@ -245,7 +279,8 @@ export function getOrCreateTerminal(
 
   EventsOn(closedEvent, () => {
     // 会话中途断开：中止在途 ZMODEM 传输并删除半截下载文件。
-    zmodem?.abort();
+    zmodem?.abort(false);
+    pendingRzUploadExpiresAt = 0;
     const hint = i18n.t("ssh.session.closedHint");
     term.write(`\r\n\x1b[31m${hint}\x1b[0m\r\n`);
     useTerminalStore.getState().markClosed(sessionId);
@@ -280,6 +315,10 @@ export async function pasteFromClipboard(sessionId: string): Promise<void> {
 
 export function getTerminalInstance(sessionId: string): TerminalInstance | undefined {
   return registry.get(sessionId);
+}
+
+export function uploadFilesWithRz(sessionId: string, paths: string[]): Promise<boolean> {
+  return registry.get(sessionId)?.uploadFilesWithRz(paths) ?? Promise.resolve(false);
 }
 
 export function terminalUrlHighlightColor(theme: ITheme | undefined): string | undefined {

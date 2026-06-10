@@ -1489,7 +1489,11 @@
   },
   "zmodem": {
     "downloadComplete": "{{name}} 接收完成",
-    "uploadComplete": "{{name}} 发送完成"
+    "uploadComplete": "{{name}} 发送完成",
+    "dragToUpload": "拖放文件，使用 rz 上传到当前目录",
+    "dragBusy": "ZMODEM 传输进行中，请稍后再拖放文件",
+    "dragNoFiles": "没有可上传的文件",
+    "dragCommandFailed": "启动 rz 上传失败"
   },
   "sftp": {
     "upload": "上传文件",

@@ -21,6 +21,11 @@ const hoisted = vi.hoisted(() => {
   const linkProviderDisposeSpy = vi.fn();
   const attachUrlHighlighterSpy = vi.fn();
   const urlHighlighterDisposeSpy = vi.fn();
+  const queueUploadFilesSpy = vi.fn();
+  const zmodemAbortSpy = vi.fn();
+  const zmodemDisposeSpy = vi.fn();
+  const toastWarningSpy = vi.fn();
+  const toastErrorSpy = vi.fn();
   const disposeOrder: string[] = [];
   const state: {
     capturedOnKey: ((e: { key: string }) => void) | null;
@@ -54,7 +59,13 @@ const hoisted = vi.hoisted(() => {
     linkProviderDisposeSpy,
     attachUrlHighlighterSpy,
     urlHighlighterDisposeSpy,
+    queueUploadFilesSpy,
+    zmodemAbortSpy,
+    zmodemDisposeSpy,
+    toastWarningSpy,
+    toastErrorSpy,
     disposeOrder,
+    zmodemActive: false,
     state,
   };
 });
@@ -225,6 +236,23 @@ vi.mock("@/components/terminal/terminalUrlHighlighter", () => ({
   },
 }));
 
+vi.mock("@/components/terminal/zmodem/zmodemSession", () => ({
+  createZmodemController: vi.fn((opts: { toTerminal: (bytes: Uint8Array) => void }) => ({
+    consume: (bytes: Uint8Array) => opts.toTerminal(bytes),
+    isActive: () => hoisted.zmodemActive,
+    abort: hoisted.zmodemAbortSpy,
+    dispose: hoisted.zmodemDisposeSpy,
+    queueUploadFiles: hoisted.queueUploadFilesSpy,
+  })),
+}));
+
+vi.mock("sonner", () => ({
+  toast: {
+    warning: hoisted.toastWarningSpy,
+    error: hoisted.toastErrorSpy,
+  },
+}));
+
 vi.mock("@/stores/terminalStore", async (importActual) => {
   const actual = await importActual<typeof import("@/stores/terminalStore")>();
   return {
@@ -255,7 +283,9 @@ vi.mock("@/data/terminalFonts", () => ({
   withTerminalFontFallback: (s: string) => s,
   withTerminalFontIsolation: (_id: string, s: string) => s,
 }));
-vi.mock("@/lib/terminalEncode", () => ({ bytesToBase64: () => "" }));
+vi.mock("@/lib/terminalEncode", () => ({
+  bytesToBase64: (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)),
+}));
 
 vi.mock("@/i18n", () => ({
   default: { t: (key: string) => `<<${key}>>` },
@@ -266,8 +296,10 @@ import {
   disposeTerminal,
   pasteIntoTerminal,
   pasteFromClipboard,
+  uploadFilesWithRz,
 } from "@/components/terminal/terminalRegistry";
 import { TRANSPORTS, transportForAsset, inferTransportFromSessionId } from "@/stores/terminalStore";
+import { WriteSSH } from "../../wailsjs/go/ssh/SSH";
 
 interface TestTerminalLink {
   text: string;
@@ -337,7 +369,58 @@ describe("terminalRegistry", () => {
     hoisted.linkProviderDisposeSpy.mockClear();
     hoisted.attachUrlHighlighterSpy.mockClear();
     hoisted.urlHighlighterDisposeSpy.mockClear();
+    hoisted.queueUploadFilesSpy.mockClear();
+    hoisted.zmodemAbortSpy.mockClear();
+    hoisted.zmodemDisposeSpy.mockClear();
+    hoisted.toastWarningSpy.mockClear();
+    hoisted.toastErrorSpy.mockClear();
+    hoisted.zmodemActive = false;
+    vi.mocked(WriteSSH).mockClear();
     hoisted.disposeOrder.length = 0;
+  });
+
+  it("queues dropped files and writes rz to an SSH terminal", async () => {
+    getOrCreateTerminal("sess-rz", { fontSize: 14, fontFamily: "mono", scrollback: 1000, transport: "ssh" });
+
+    await expect(uploadFilesWithRz("sess-rz", ["C:/tmp/a.txt"])).resolves.toBe(true);
+
+    expect(hoisted.queueUploadFilesSpy).toHaveBeenCalledWith(["C:/tmp/a.txt"]);
+    expect(WriteSSH).toHaveBeenCalledWith("sess-rz", btoa("rz\r"));
+    disposeTerminal("sess-rz");
+  });
+
+  it("does not start a second rz upload before the first one is detected", async () => {
+    getOrCreateTerminal("sess-rz-pending", { fontSize: 14, fontFamily: "mono", scrollback: 1000, transport: "ssh" });
+
+    await expect(uploadFilesWithRz("sess-rz-pending", ["C:/tmp/a.txt"])).resolves.toBe(true);
+    await expect(uploadFilesWithRz("sess-rz-pending", ["C:/tmp/b.txt"])).resolves.toBe(false);
+
+    expect(hoisted.toastWarningSpy).toHaveBeenCalledWith("<<zmodem.dragBusy>>");
+    expect(hoisted.queueUploadFilesSpy).toHaveBeenCalledTimes(1);
+    expect(WriteSSH).toHaveBeenCalledTimes(1);
+    disposeTerminal("sess-rz-pending");
+  });
+
+  it("does not start rz upload for non-SSH terminals", async () => {
+    getOrCreateTerminal("local-rz", { fontSize: 14, fontFamily: "mono", scrollback: 1000, transport: "local" });
+
+    await expect(uploadFilesWithRz("local-rz", ["C:/tmp/a.txt"])).resolves.toBe(false);
+
+    expect(hoisted.queueUploadFilesSpy).not.toHaveBeenCalled();
+    expect(WriteSSH).not.toHaveBeenCalled();
+    disposeTerminal("local-rz");
+  });
+
+  it("does not start rz upload while ZMODEM is active", async () => {
+    hoisted.zmodemActive = true;
+    getOrCreateTerminal("sess-rz-busy", { fontSize: 14, fontFamily: "mono", scrollback: 1000, transport: "ssh" });
+
+    await expect(uploadFilesWithRz("sess-rz-busy", ["C:/tmp/a.txt"])).resolves.toBe(false);
+
+    expect(hoisted.toastWarningSpy).toHaveBeenCalledWith("<<zmodem.dragBusy>>");
+    expect(hoisted.queueUploadFilesSpy).not.toHaveBeenCalled();
+    expect(WriteSSH).not.toHaveBeenCalled();
+    disposeTerminal("sess-rz-busy");
   });
 
   it("writes the i18n closed hint and marks closed when ssh:closed fires", () => {

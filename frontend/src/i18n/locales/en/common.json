@@ -1489,7 +1489,11 @@
   },
   "zmodem": {
     "downloadComplete": "Received {{name}}",
-    "uploadComplete": "Sent {{name}}"
+    "uploadComplete": "Sent {{name}}",
+    "dragToUpload": "Drop files to upload with rz to the current directory",
+    "dragBusy": "A ZMODEM transfer is in progress. Try again after it finishes.",
+    "dragNoFiles": "No files available to upload",
+    "dragCommandFailed": "Failed to start rz upload"
   },
   "sftp": {
     "upload": "Upload File",

@@ -41,6 +41,7 @@ import { useFileManagerDirectory } from "./file-manager/useFileManagerDirectory"
 import { useNativeFileDrop } from "./file-manager/useNativeFileDrop";
 import { useResizeHandle } from "./file-manager/useResizeHandle";
 import { useTerminalDirectorySync } from "./file-manager/useTerminalDirectorySync";
+import { uploadFilesWithRz } from "./terminalRegistry";
 import {
   canMovePathToDirectory,
   formatBytes,
@@ -223,6 +224,13 @@ export function FileManagerPanel({
     return new Set(clipboard.items.filter((item) => item.sessionId === sessionId).map((item) => item.path));
   }, [clipboard, sessionId]);
 
+  const handleDropOutsidePanel = useCallback(
+    (paths: string[]) => {
+      void uploadFilesWithRz(sessionId, paths);
+    },
+    [sessionId]
+  );
+
   const isDragOver = useNativeFileDrop({
     currentPathRef,
     isActive,
@@ -231,6 +239,7 @@ export function FileManagerPanel({
     sessionId,
     startUploadFile,
     tabId,
+    onDropOutside: handleDropOutsidePanel,
   });
   const { handleResizeStart, isResizing, outerRef } = useResizeHandle({ onWidthChange, panelRef, width });
 

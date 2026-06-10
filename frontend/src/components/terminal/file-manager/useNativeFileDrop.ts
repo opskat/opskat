@@ -13,6 +13,7 @@ interface UseNativeFileDropOptions {
     localPath: string,
     remotePath: string
   ) => Promise<string | null>;
+  onDropOutside?: (paths: string[]) => void;
 }
 
 export function useNativeFileDrop({
@@ -23,13 +24,20 @@ export function useNativeFileDrop({
   tabId,
   sessionId,
   startUploadFile,
+  onDropOutside,
 }: UseNativeFileDropOptions) {
   const [isDragOver, setIsDragOver] = useState(false);
 
   useEffect(() => {
     if (!isOpen || !isActive) return;
-    const handler = (_x: number, _y: number, paths: string[]) => {
+    const handler = (x: number, y: number, paths: string[]) => {
       setIsDragOver(false);
+      const rect = panelRef.current?.getBoundingClientRect();
+      const isPanelDrop = rect && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+      if (!isPanelDrop) {
+        onDropOutside?.(paths);
+        return;
+      }
       for (const path of paths) {
         startUploadFile({ tabId, sessionId }, path, currentPathRef.current + "/");
       }
@@ -38,7 +46,7 @@ export function useNativeFileDrop({
     return () => {
       OnFileDropOff();
     };
-  }, [currentPathRef, isActive, isOpen, sessionId, startUploadFile, tabId]);
+  }, [currentPathRef, isActive, isOpen, onDropOutside, panelRef, sessionId, startUploadFile, tabId]);
 
   useEffect(() => {
     const el = panelRef.current;
