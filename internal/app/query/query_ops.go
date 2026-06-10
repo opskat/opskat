@@ -27,6 +27,7 @@ import (
 func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, password string) (*sql.DB, error) {
 	key := fmt.Sprintf("%d:%s", asset.ID, cfg.Database)
 	db, _, err := q.dbPanelCache.GetOrDial(key, func() (*sql.DB, io.Closer, error) {
+		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 		return connpool.DialDatabase(ctx, asset, cfg, password, q.pool)
 	})
 	if err != nil {
@@ -39,6 +40,7 @@ func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset,
 func (q *Query) getOrDialPanelRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig, password string) (*redis.Client, error) {
 	key := fmt.Sprintf("%d:%d", asset.ID, cfg.Database)
 	client, _, err := q.redisPanelCache.GetOrDial(key, func() (*redis.Client, io.Closer, error) {
+		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 		return connpool.DialRedis(ctx, asset, cfg, password, q.pool)
 	})
 	if err != nil {
@@ -51,6 +53,7 @@ func (q *Query) getOrDialPanelRedis(ctx context.Context, asset *asset_entity.Ass
 func (q *Query) getOrDialPanelMongo(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.MongoDBConfig, password string) (*connpool.MongoClientCloser, error) {
 	key := fmt.Sprintf("%d", asset.ID)
 	wrapped, _, err := q.mongoPanelCache.GetOrDial(key, func() (*connpool.MongoClientCloser, io.Closer, error) {
+		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 		client, closer, derr := connpool.DialMongoDB(ctx, asset, cfg, password, q.pool)
 		if derr != nil {
 			return nil, nil, derr
@@ -81,6 +84,7 @@ func (q *Query) testDatabaseConnection(ctx context.Context, configJSON string, p
 	}
 
 	testAsset := &asset_entity.Asset{}
+	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 	db, tunnel, err := connpool.DialDatabase(ctx, testAsset, &cfg, password, q.pool)
 	if err != nil {
 		return err
@@ -116,6 +120,7 @@ func (q *Query) testRedisConnection(ctx context.Context, configJSON string, plai
 	}
 
 	testAsset := &asset_entity.Asset{}
+	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 	client, tunnel, err := connpool.DialRedis(ctx, testAsset, &cfg, password, q.pool)
 	if err != nil {
 		return err
@@ -331,6 +336,7 @@ func (q *Query) testMongoConnection(ctx context.Context, configJSON string, plai
 	}
 
 	testAsset := &asset_entity.Asset{}
+	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 	client, tunnel, err := connpool.DialMongoDB(ctx, testAsset, &cfg, password, q.pool)
 	if err != nil {
 		return err

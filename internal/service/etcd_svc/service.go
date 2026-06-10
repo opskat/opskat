@@ -166,6 +166,7 @@ func (s *Service) TestConfig(ctx context.Context, cfg *asset_entity.EtcdConfig, 
 	if len(cfg.Endpoints) == 0 {
 		return fmt.Errorf("至少需要 1 个 endpoint")
 	}
+	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 	return s.testDial(ctx, &asset_entity.Asset{Type: asset_entity.AssetTypeEtcd, SSHTunnelID: cfg.SSHAssetID}, cfg, password)
 }
 
@@ -230,6 +231,7 @@ func (s *Service) lookup(ctx context.Context, assetID int64) (*asset_entity.Asse
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("解析 etcd 凭据失败: %w", err)
 	}
+	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 	return asset, cfg, password, nil
 }
 

@@ -109,6 +109,7 @@ func getOrDialRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_e
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to resolve credentials: %w", err)
 		}
+		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 		return connpool.DialRedis(ctx, asset, cfg, password, getSSHPool(ctx))
 	}
 	if cache := getRedisCache(ctx); cache != nil {

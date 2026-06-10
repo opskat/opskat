@@ -126,6 +126,7 @@ func getOrDialDatabase(ctx context.Context, asset *asset_entity.Asset, cfg *asse
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to resolve credentials: %w", err)
 		}
+		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 		return connpool.DialDatabase(ctx, asset, cfg, password, getSSHPool(ctx))
 	}
 	if cache := getDatabaseCache(ctx); cache != nil {

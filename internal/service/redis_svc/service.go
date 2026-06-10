@@ -182,6 +182,7 @@ func (s *Service) withClient(ctx context.Context, assetID int64, db int, fn func
 	if err != nil {
 		return fmt.Errorf("解析 Redis 凭据失败: %w", err)
 	}
+	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 	var opCtx context.Context
 	var cancel context.CancelFunc
 	if cfg.CommandTimeoutSeconds > 0 {

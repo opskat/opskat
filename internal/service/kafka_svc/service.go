@@ -63,6 +63,7 @@ func (s *Service) TestConnection(ctx context.Context, cfg *asset_entity.KafkaCon
 	opCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 	testAsset := &asset_entity.Asset{Type: asset_entity.AssetTypeKafka, SSHTunnelID: tunnelID}
 	client, err := connpool.DialKafka(opCtx, testAsset, cfg, password, s.sshPool)
 	if err != nil {
@@ -128,6 +129,7 @@ func resolveKafkaAsset(ctx context.Context, assetID int64) (*asset_entity.Asset,
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("解析 Kafka 凭据失败: %w", err)
 	}
+	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 	return asset, cfg, password, nil
 }
 
