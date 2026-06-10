@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"sort"
 	"sync"
@@ -13,13 +12,13 @@ import (
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/dirsync"
+	"github.com/opskat/opskat/internal/pkg/socksdial"
 	"github.com/opskat/opskat/internal/pkg/sshkeepalive"
 	"github.com/opskat/opskat/internal/service/sessionid"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/net/proxy"
 )
 
 // sharedClient 封装 SSH 连接，支持引用计数共享
@@ -463,7 +462,7 @@ func (m *Manager) dial(cfg ConnectConfig, sshConfig *ssh.ClientConfig, targetAdd
 	// 情况2: 有代理（无跳板机）
 	if cfg.Proxy != nil {
 		emitProgress(&cfg, "connect", fmt.Sprintf("正在通过代理 %s:%d 连接...", cfg.Proxy.Host, cfg.Proxy.Port))
-		conn, err := dialViaProxy(cfg.Proxy, targetAddr)
+		conn, err := socksdial.Dial(context.Background(), cfg.Proxy, targetAddr)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -514,7 +513,7 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 
 	if cfg.Proxy != nil {
 		emitProgress(&cfg, "connect", fmt.Sprintf("正在通过代理 %s:%d 连接跳板机...", cfg.Proxy.Host, cfg.Proxy.Port))
-		conn, err := dialViaProxy(cfg.Proxy, firstAddr)
+		conn, err := socksdial.Dial(context.Background(), cfg.Proxy, firstAddr)
 		if err != nil {
 			return nil, nil, fmt.Errorf("通过代理连接跳板机失败: %w", err)
 		}
@@ -614,31 +613,6 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 	}
 
 	return ssh.NewClient(c, chans, reqs), closers, nil
-}
-
-// dialViaProxy 通过 SOCKS5 代理建立 TCP 连接
-func dialViaProxy(proxyCfg *asset_entity.ProxyConfig, targetAddr string) (net.Conn, error) {
-	if proxyCfg.Type != "" && proxyCfg.Type != "socks5" {
-		return nil, fmt.Errorf("不支持的代理类型: %s", proxyCfg.Type)
-	}
-
-	proxyAddr := fmt.Sprintf("%s:%d", proxyCfg.Host, proxyCfg.Port)
-	var auth *proxy.Auth
-	if proxyCfg.Username != "" {
-		auth = &proxy.Auth{
-			User:     proxyCfg.Username,
-			Password: proxyCfg.Password,
-		}
-	}
-	dialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, proxy.Direct)
-	if err != nil {
-		return nil, fmt.Errorf("创建SOCKS代理失败: %w", err)
-	}
-	conn, err := dialer.Dial("tcp", targetAddr)
-	if err != nil {
-		return nil, fmt.Errorf("通过SOCKS代理连接失败: %w", err)
-	}
-	return conn, nil
 }
 
 // buildAuthMethods 构建 SSH 认证方式
