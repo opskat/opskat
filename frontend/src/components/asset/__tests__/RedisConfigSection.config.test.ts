@@ -5,8 +5,10 @@ import {
   REDIS_DEFAULTS,
   type RedisFormState,
 } from "@/components/asset/RedisConfigSection.config";
+import { CONNECTION_DEFAULTS } from "@/components/asset/proxyConfig";
 
 const FULL: RedisFormState = {
+  ...CONNECTION_DEFAULTS,
   host: "redis.example.com",
   port: 6379,
   username: "admin",
@@ -20,7 +22,17 @@ const FULL: RedisFormState = {
   tlsCAFile: "/ca.pem",
   tlsCertFile: "/c.crt",
   tlsKeyFile: "/c.key",
+  connectionType: "jumphost",
   sshTunnelId: 3,
+};
+
+const PROXY: RedisFormState = {
+  ...FULL,
+  connectionType: "proxy",
+  sshTunnelId: 0,
+  proxyHost: "p.example.com",
+  proxyPort: 1081,
+  proxyUsername: "pu",
 };
 
 describe("buildRedisConfig (锁旧 save 序;save 省略 ssh_asset_id 走 asset 顶层列,test 传 includeSshAssetId 才写)", () => {
@@ -74,6 +86,28 @@ describe("buildRedisConfig (锁旧 save 序;save 省略 ssh_asset_id 走 asset �
     const json = buildRedisConfig({ ...REDIS_DEFAULTS, host: "h", commandTimeoutSeconds: 0, scanPageSize: 0 }, {});
     expect(json).toBe('{"host":"h","port":6379}');
   });
+
+  it("proxy 模式写 proxy 不写 ssh_asset_id(键序: tls_* 后、尾部公共键前)", () => {
+    expect(buildRedisConfig(PROXY, { password: "ENC" }, true, "PROXYENC")).toBe(
+      '{"host":"redis.example.com","port":6379,"username":"admin","password":"ENC",' +
+        '"database":2,"tls":true,"tls_insecure":true,"tls_server_name":"redis.x","tls_ca_file":"/ca.pem",' +
+        '"tls_cert_file":"/c.crt","tls_key_file":"/c.key",' +
+        '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"},' +
+        '"command_timeout_seconds":30,"scan_page_size":200}'
+    );
+  });
+
+  it("jumphost 模式不写 proxy(互斥,即便 proxy 字段有值)", () => {
+    const json = buildRedisConfig({ ...PROXY, connectionType: "jumphost", sshTunnelId: 3 }, {}, true, "PROXYENC");
+    expect(json).toContain('"ssh_asset_id":3');
+    expect(json).not.toContain('"proxy"');
+  });
+
+  it("direct 模式不写 proxy 也不写 ssh_asset_id(即便 includeSshAssetId=true)", () => {
+    const json = buildRedisConfig({ ...PROXY, connectionType: "direct" }, {}, true, "PROXYENC");
+    expect(json).not.toContain('"proxy"');
+    expect(json).not.toContain("ssh_asset_id");
+  });
 });
 
 describe("parseRedisConfig (锁旧 loadRedisConfig 非凭据字段)", () => {
@@ -85,6 +119,7 @@ describe("parseRedisConfig (锁旧 loadRedisConfig 非凭据字段)", () => {
           '"database":3,"command_timeout_seconds":60,"scan_page_size":100,"key_separator":"/","ssh_asset_id":5}'
       )
     ).toEqual({
+      ...CONNECTION_DEFAULTS,
       host: "redis.example.com",
       port: 6380,
       username: "u",
@@ -98,6 +133,7 @@ describe("parseRedisConfig (锁旧 loadRedisConfig 非凭据字段)", () => {
       commandTimeoutSeconds: 60,
       scanPageSize: 100,
       keySeparator: "/",
+      connectionType: "jumphost",
       sshTunnelId: 5,
     });
   });
@@ -109,5 +145,30 @@ describe("parseRedisConfig (锁旧 loadRedisConfig 非凭据字段)", () => {
   });
   it("key_separator 缺省回填 ':'", () => {
     expect(parseRedisConfig('{"host":"h","port":6379}').keySeparator).toBe(":");
+  });
+  it("带 proxy 回填并派生 connectionType=proxy(密码入 encrypted)", () => {
+    const s = parseRedisConfig(
+      '{"host":"h","port":6379,' +
+        '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}}'
+    );
+    expect(s.connectionType).toBe("proxy");
+    expect(s.proxyHost).toBe("p.example.com");
+    expect(s.proxyPort).toBe(1081);
+    expect(s.proxyUsername).toBe("pu");
+    expect(s.proxyPassword).toBe("");
+    expect(s.encryptedProxyPassword).toBe("PROXYENC");
+  });
+  it("assetTunnelId 入参优先派生 jumphost(镜像 asset.sshTunnelId 优先)", () => {
+    const s = parseRedisConfig('{"host":"h","proxy":{"type":"socks5","host":"p","port":1080}}', 6);
+    expect(s.connectionType).toBe("jumphost");
+    expect(s.sshTunnelId).toBe(6);
+  });
+  it("parse→build 往返(proxy,密文沿用)", () => {
+    const original =
+      '{"host":"redis.example.com","port":6379,"username":"u","password":"OLD",' +
+      '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"},' +
+      '"command_timeout_seconds":30,"scan_page_size":200}';
+    const state = parseRedisConfig(original);
+    expect(buildRedisConfig(state, { password: "OLD" }, false, state.encryptedProxyPassword)).toBe(original);
   });
 });

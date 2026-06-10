@@ -1,8 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Input, Label, Switch, Tabs, TabsList, TabsTrigger, TabsContent } from "@opskat/ui";
-import { AssetSelect } from "@/components/asset/AssetSelect";
+import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
+import { resolveSaveProxyPassword } from "./proxyConfig";
 import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
@@ -20,9 +21,9 @@ export const MongoDBConfigSection = forwardRef<AssetFormHandle, ConfigSectionPro
   const { t } = useTranslation();
   const [state, setState] = useState<MongoDBFormState>(() => {
     if (!editAsset) return { ...MONGODB_DEFAULTS };
-    const parsed = parseMongoDBConfig(editAsset.Config);
-    // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.ssh_asset_id || 0)。
-    return { ...parsed, sshTunnelId: editAsset.sshTunnelId || parsed.sshTunnelId };
+    // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.ssh_asset_id || 0),
+    // 并参与 connectionType 派生,故传入 parseMongoDBConfig。
+    return parseMongoDBConfig(editAsset.Config, editAsset.sshTunnelId || 0);
   });
   const patch = (p: Partial<MongoDBFormState>) => setState((s) => ({ ...s, ...p }));
   const cred = useAssetCredential(editAsset);
@@ -43,12 +44,17 @@ export const MongoDBConfigSection = forwardRef<AssetFormHandle, ConfigSectionPro
     () => ({
       buildConfig: async (ctx) => {
         const frag = await resolveSaveCredential(cred.value, ctx.encryptPassword);
-        return { configJSON: buildMongoDBConfig(state, frag), sshTunnelId: state.sshTunnelId };
+        const proxyPassword = await resolveSaveProxyPassword(state, ctx.encryptPassword);
+        return {
+          configJSON: buildMongoDBConfig(state, frag, false, proxyPassword),
+          sshTunnelId: state.connectionType === "jumphost" ? state.sshTunnelId : 0,
+        };
       },
       buildTestConfig: async () => ({
         assetType: "mongodb",
-        // 测试无 asset 行 → 隧道必须塞进 config(includeSshAssetId=true,锁旧 handleTestMongoDBConnection)。
-        configJSON: buildMongoDBConfig(state, resolveTestCredential(cred.value), true),
+        // 测试无 asset 行 → 隧道必须塞进 config(includeSshAssetId=true,锁旧 handleTestMongoDBConnection);
+        // proxy 密码仅明文(无加密)。
+        configJSON: buildMongoDBConfig(state, resolveTestCredential(cred.value), true, state.proxyPassword),
         password: cred.value.password,
       }),
     }),
@@ -156,16 +162,8 @@ export const MongoDBConfigSection = forwardRef<AssetFormHandle, ConfigSectionPro
         <Switch checked={state.tls} onCheckedChange={(v) => patch({ tls: v })} />
       </div>
 
-      {/* SSH Tunnel */}
-      <div className="grid gap-2">
-        <Label>{t("asset.sshTunnel")}</Label>
-        <AssetSelect
-          value={state.sshTunnelId}
-          onValueChange={(v) => patch({ sshTunnelId: v })}
-          filterType="ssh"
-          placeholder={t("asset.sshTunnelNone")}
-        />
-      </div>
+      {/* Connection method: direct / SSH tunnel / SOCKS5 proxy(URI 模式同样支持) */}
+      <ConnectionMethodFields value={state} onChange={patch} />
     </>
   );
 });

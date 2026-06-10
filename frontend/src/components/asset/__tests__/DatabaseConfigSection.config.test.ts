@@ -7,8 +7,10 @@ import {
   DATABASE_DEFAULTS,
   type DatabaseFormState,
 } from "@/components/asset/DatabaseConfigSection.config";
+import { CONNECTION_DEFAULTS } from "@/components/asset/proxyConfig";
 
 const FULL_MYSQL: DatabaseFormState = {
+  ...CONNECTION_DEFAULTS,
   driver: "mysql",
   host: "db.example.com",
   port: 3306,
@@ -19,10 +21,12 @@ const FULL_MYSQL: DatabaseFormState = {
   readOnly: true,
   params: "charset=utf8mb4",
   path: "",
+  connectionType: "jumphost",
   sshTunnelId: 5,
 };
 
 const FULL_PG: DatabaseFormState = {
+  ...CONNECTION_DEFAULTS,
   driver: "postgresql",
   host: "pg.example.com",
   port: 5432,
@@ -33,10 +37,10 @@ const FULL_PG: DatabaseFormState = {
   readOnly: false,
   params: "",
   path: "",
-  sshTunnelId: 0,
 };
 
 const FULL_MSSQL: DatabaseFormState = {
+  ...CONNECTION_DEFAULTS,
   driver: "mssql",
   host: "mssql.example.com",
   port: 1433,
@@ -47,10 +51,10 @@ const FULL_MSSQL: DatabaseFormState = {
   readOnly: false,
   params: "",
   path: "",
-  sshTunnelId: 0,
 };
 
 const FULL_SQLITE: DatabaseFormState = {
+  ...CONNECTION_DEFAULTS,
   driver: "sqlite",
   host: "ignored.example.com",
   port: 1234,
@@ -61,10 +65,20 @@ const FULL_SQLITE: DatabaseFormState = {
   readOnly: true,
   params: "mode=ro",
   path: "/tmp/data.db",
+  connectionType: "jumphost",
   sshTunnelId: 9,
 };
 
-describe("buildDatabaseConfig (键序锁旧 save: driver→[sqlite:path | host/port/username/credential/ssh/ssl_mode/tls]→database/read_only/params)", () => {
+const PROXY_MYSQL: DatabaseFormState = {
+  ...FULL_MYSQL,
+  connectionType: "proxy",
+  sshTunnelId: 0,
+  proxyHost: "p.example.com",
+  proxyPort: 1081,
+  proxyUsername: "pu",
+};
+
+describe("buildDatabaseConfig (键序锁旧 save: driver→[sqlite:path | host/port/username/credential/ssh/ssl_mode/tls/proxy]→database/read_only/params)", () => {
   it("mysql 全字段 + inline password + tls", () => {
     expect(buildDatabaseConfig(FULL_MYSQL, { password: "ENC" })).toBe(
       '{"driver":"mysql","host":"db.example.com","port":3306,"username":"root","password":"ENC",' +
@@ -112,15 +126,25 @@ describe("buildDatabaseConfig (键序锁旧 save: driver→[sqlite:path | host/p
     expect(json).not.toContain('"tls"');
   });
 
-  it("sqlite 仅 path,忽略凭据/host/port/ssh/ssl/tls", () => {
+  it("sqlite 仅 path,忽略凭据/host/port/ssh/ssl/tls/proxy", () => {
     expect(buildDatabaseConfig(FULL_SQLITE, { credential_id: 7, password: "ENC" })).toBe(
       '{"driver":"sqlite","path":"/tmp/data.db","database":"main","read_only":true,"params":"mode=ro"}'
     );
   });
 
-  it("sqlite 分支不含 host/port/username/credential/ssh/ssl_mode/tls 键", () => {
-    const json = buildDatabaseConfig(FULL_SQLITE, { credential_id: 7 });
-    for (const key of ["host", "port", "username", "credential_id", "password", "ssh_asset_id", "ssl_mode", "tls"]) {
+  it("sqlite 分支不含 host/port/username/credential/ssh/ssl_mode/tls/proxy 键", () => {
+    const json = buildDatabaseConfig({ ...FULL_SQLITE, connectionType: "proxy", proxyHost: "p" }, { credential_id: 7 });
+    for (const key of [
+      "host",
+      "port",
+      "username",
+      "credential_id",
+      "password",
+      "ssh_asset_id",
+      "ssl_mode",
+      "tls",
+      "proxy",
+    ]) {
       expect(json).not.toContain(`"${key}"`);
     }
   });
@@ -162,6 +186,26 @@ describe("buildDatabaseConfig (键序锁旧 save: driver→[sqlite:path | host/p
     expect(json).toContain('"credential_id":7');
     expect(json).not.toContain('"password"');
   });
+
+  it("proxy 模式写 proxy 不写 ssh_asset_id(键序: tls 后 database 前)", () => {
+    expect(buildDatabaseConfig(PROXY_MYSQL, { password: "ENC" }, "PROXYENC")).toBe(
+      '{"driver":"mysql","host":"db.example.com","port":3306,"username":"root","password":"ENC",' +
+        '"tls":true,"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"},' +
+        '"database":"mydb","read_only":true,"params":"charset=utf8mb4"}'
+    );
+  });
+
+  it("jumphost 模式不写 proxy(互斥,即便 proxy 字段有值)", () => {
+    const json = buildDatabaseConfig({ ...PROXY_MYSQL, connectionType: "jumphost", sshTunnelId: 5 }, {}, "PROXYENC");
+    expect(json).toContain('"ssh_asset_id":5');
+    expect(json).not.toContain('"proxy"');
+  });
+
+  it("direct 模式不写 proxy 也不写 ssh_asset_id", () => {
+    const json = buildDatabaseConfig({ ...PROXY_MYSQL, connectionType: "direct" }, {}, "PROXYENC");
+    expect(json).not.toContain('"proxy"');
+    expect(json).not.toContain("ssh_asset_id");
+  });
 });
 
 describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", () => {
@@ -172,6 +216,7 @@ describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", (
           '"ssh_asset_id":5,"tls":true,"database":"mydb","read_only":true,"params":"charset=utf8mb4"}'
       )
     ).toEqual({
+      ...CONNECTION_DEFAULTS,
       driver: "mysql",
       host: "db.example.com",
       port: 3306,
@@ -182,6 +227,7 @@ describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", (
       readOnly: true,
       params: "charset=utf8mb4",
       path: "",
+      connectionType: "jumphost",
       sshTunnelId: 5,
     });
   });
@@ -208,6 +254,25 @@ describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", (
     expect(parseDatabaseConfig("nope")).toEqual(DATABASE_DEFAULTS);
   });
 
+  it("带 proxy 回填并派生 connectionType=proxy(密码入 encrypted)", () => {
+    const s = parseDatabaseConfig(
+      '{"driver":"mysql","host":"h","port":3306,' +
+        '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}}'
+    );
+    expect(s.connectionType).toBe("proxy");
+    expect(s.proxyHost).toBe("p.example.com");
+    expect(s.proxyPort).toBe(1081);
+    expect(s.proxyUsername).toBe("pu");
+    expect(s.proxyPassword).toBe("");
+    expect(s.encryptedProxyPassword).toBe("PROXYENC");
+  });
+
+  it("assetTunnelId 入参优先派生 jumphost(镜像 asset.sshTunnelId 优先)", () => {
+    const s = parseDatabaseConfig('{"driver":"mysql","host":"h","proxy":{"type":"socks5","host":"p","port":1080}}', 6);
+    expect(s.connectionType).toBe("jumphost");
+    expect(s.sshTunnelId).toBe(6);
+  });
+
   it("parse→build 往返(mysql 全字段,inline 密文沿用)", () => {
     const original =
       '{"driver":"mysql","host":"db.example.com","port":3306,"username":"root","password":"OLD",' +
@@ -229,16 +294,32 @@ describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", (
     const state = parseDatabaseConfig(original);
     expect(buildDatabaseConfig(state, {})).toBe(original);
   });
+
+  it("parse→build 往返(mysql proxy,密文沿用)", () => {
+    const original =
+      '{"driver":"mysql","host":"db.example.com","port":3306,"username":"root","password":"OLD",' +
+      '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"},' +
+      '"database":"mydb"}';
+    const state = parseDatabaseConfig(original);
+    expect(buildDatabaseConfig(state, { password: "OLD" }, state.encryptedProxyPassword)).toBe(original);
+  });
 });
 
 describe("applyDriverChange (镜像旧 handleDriverChange section 自有字段)", () => {
-  it("mysql→sqlite 清 host/username/ssh,port=0", () => {
+  it("mysql→sqlite 清 host/username/连接方式,port=0", () => {
     const next = applyDriverChange(FULL_MYSQL, "sqlite");
     expect(next.driver).toBe("sqlite");
     expect(next.host).toBe("");
     expect(next.port).toBe(0);
     expect(next.username).toBe("");
     expect(next.sshTunnelId).toBe(0);
+    expect(next.connectionType).toBe("direct");
+  });
+
+  it("→sqlite 清 proxy 字段", () => {
+    const next = applyDriverChange(PROXY_MYSQL, "sqlite");
+    expect(next.connectionType).toBe("direct");
+    expect(next.proxyHost).toBe("");
   });
 
   it("sqlite→postgresql 设 port=5432,清 path,sslMode 保留", () => {

@@ -1,6 +1,13 @@
 import type { CredentialFragment } from "./credentialConfig";
+import {
+  CONNECTION_DEFAULTS,
+  buildProxyJSON,
+  parseConnectionFields,
+  type ConnectionFormFields,
+  type ProxyConfigJSON,
+} from "./proxyConfig";
 
-export interface EtcdFormState {
+export interface EtcdFormState extends ConnectionFormFields {
   endpoints: string;
   username: string;
   tls: boolean;
@@ -11,7 +18,6 @@ export interface EtcdFormState {
   tlsKeyFile: string;
   dialTimeoutSeconds: number;
   commandTimeoutSeconds: number;
-  sshTunnelId: number;
 }
 
 export const ETCD_DEFAULTS: EtcdFormState = {
@@ -25,7 +31,7 @@ export const ETCD_DEFAULTS: EtcdFormState = {
   tlsKeyFile: "",
   dialTimeoutSeconds: 5,
   commandTimeoutSeconds: 10,
-  sshTunnelId: 0,
+  ...CONNECTION_DEFAULTS,
 };
 
 interface EtcdConfig {
@@ -42,6 +48,7 @@ interface EtcdConfig {
   dial_timeout_seconds?: number;
   command_timeout_seconds?: number;
   ssh_asset_id?: number;
+  proxy?: ProxyConfigJSON;
 }
 
 /** 端点文本→数组(镜像旧 save/test/etcdEndpointsList 三处一致切分)。 */
@@ -52,8 +59,12 @@ export function parseEtcdEndpoints(raw: string): string[] {
     .filter(Boolean);
 }
 
-/** 保存/测试共用序列化(键序锁旧 save 分支)。cred 由 resolveSave/TestCredential 预解析。 */
-export function buildEtcdConfig(state: EtcdFormState, cred: CredentialFragment): string {
+/**
+ * 保存/测试共用序列化(键序锁旧 save 分支,ssh_asset_id / proxy 均为尾键)。
+ * cred 由 resolveSave/TestCredential 预解析;proxyPassword 由 resolveSaveProxyPassword
+ * (save=密文)或 state.proxyPassword(test=明文)预解析。隧道与代理互斥,按 connectionType 二选一。
+ */
+export function buildEtcdConfig(state: EtcdFormState, cred: CredentialFragment, proxyPassword = ""): string {
   const cfg: EtcdConfig = { endpoints: parseEtcdEndpoints(state.endpoints) };
   if (state.username) cfg.username = state.username;
   if (cred.credential_id) cfg.credential_id = cred.credential_id;
@@ -66,12 +77,15 @@ export function buildEtcdConfig(state: EtcdFormState, cred: CredentialFragment):
   if (state.tls && state.tlsKeyFile) cfg.tls_key_file = state.tlsKeyFile;
   if (state.dialTimeoutSeconds > 0) cfg.dial_timeout_seconds = state.dialTimeoutSeconds;
   if (state.commandTimeoutSeconds > 0) cfg.command_timeout_seconds = state.commandTimeoutSeconds;
-  if (state.sshTunnelId > 0) cfg.ssh_asset_id = state.sshTunnelId;
+  if (state.connectionType === "jumphost" && state.sshTunnelId > 0) cfg.ssh_asset_id = state.sshTunnelId;
+  const proxy = buildProxyJSON(state, proxyPassword);
+  if (proxy) cfg.proxy = proxy;
   return JSON.stringify(cfg);
 }
 
-/** 编辑态回填(镜像旧 loadEtcdConfig 非凭据字段;ssh_asset_id 仅取 config,asset.sshTunnelId 由 section 覆盖)。 */
-export function parseEtcdConfig(configJSON: string): EtcdFormState {
+/** 编辑态回填(镜像旧 loadEtcdConfig 非凭据字段;connectionType 派生需要 asset 顶层
+ *  sshTunnelId 优先(镜像旧 `asset.sshTunnelId || cfg.ssh_asset_id || 0`),故由 section 传入)。 */
+export function parseEtcdConfig(configJSON: string, assetTunnelId = 0): EtcdFormState {
   try {
     const cfg: EtcdConfig = JSON.parse(configJSON || "{}");
     return {
@@ -85,7 +99,7 @@ export function parseEtcdConfig(configJSON: string): EtcdFormState {
       tlsKeyFile: cfg.tls_key_file || "",
       dialTimeoutSeconds: cfg.dial_timeout_seconds || 5,
       commandTimeoutSeconds: cfg.command_timeout_seconds || 10,
-      sshTunnelId: cfg.ssh_asset_id || 0,
+      ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0),
     };
   } catch {
     return { ...ETCD_DEFAULTS };

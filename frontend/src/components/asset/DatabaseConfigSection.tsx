@@ -11,8 +11,9 @@ import {
   SelectValue,
   Switch,
 } from "@opskat/ui";
-import { AssetSelect } from "@/components/asset/AssetSelect";
+import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
+import { resolveSaveProxyPassword } from "./proxyConfig";
 import { SelectSQLiteFile } from "../../../wailsjs/go/system/System";
 import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { useAssetCredential } from "./useAssetCredential";
@@ -33,9 +34,9 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
   const { t } = useTranslation();
   const [state, setState] = useState<DatabaseFormState>(() => {
     if (!editAsset) return { ...DATABASE_DEFAULTS };
-    const parsed = parseDatabaseConfig(editAsset.Config);
-    // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.ssh_asset_id || 0)。
-    return { ...parsed, sshTunnelId: editAsset.sshTunnelId || parsed.sshTunnelId };
+    // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.ssh_asset_id || 0),
+    // 并参与 connectionType 派生,故传入 parseDatabaseConfig。
+    return parseDatabaseConfig(editAsset.Config, editAsset.sshTunnelId || 0);
   });
   const patch = (p: Partial<DatabaseFormState>) => setState((s) => ({ ...s, ...p }));
   // 凭据子状态:sqlite 无凭据,但 hook 始终持有;build 在 sqlite 分支忽略 cred。
@@ -61,11 +62,16 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
     () => ({
       buildConfig: async (ctx) => {
         const frag = await resolveSaveCredential(cred.value, ctx.encryptPassword);
-        return { configJSON: buildDatabaseConfig(state, frag), sshTunnelId: state.sshTunnelId };
+        const proxyPassword = await resolveSaveProxyPassword(state, ctx.encryptPassword);
+        return {
+          configJSON: buildDatabaseConfig(state, frag, proxyPassword),
+          sshTunnelId: state.connectionType === "jumphost" ? state.sshTunnelId : 0,
+        };
       },
       buildTestConfig: async () => ({
         assetType: "database",
-        configJSON: buildDatabaseConfig(state, resolveTestCredential(cred.value)),
+        // 测试:proxy 密码仅明文(无加密)
+        configJSON: buildDatabaseConfig(state, resolveTestCredential(cred.value), state.proxyPassword),
         password: cred.value.password,
       }),
     }),
@@ -227,16 +233,8 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
             <Switch checked={state.readOnly} onCheckedChange={(v) => patch({ readOnly: v })} />
           </div>
 
-          {/* SSH Tunnel */}
-          <div className="grid gap-2">
-            <Label>{t("asset.sshTunnel")}</Label>
-            <AssetSelect
-              value={state.sshTunnelId}
-              onValueChange={(v) => patch({ sshTunnelId: v })}
-              filterType="ssh"
-              placeholder={t("asset.sshTunnelNone")}
-            />
-          </div>
+          {/* Connection method: direct / SSH tunnel / SOCKS5 proxy */}
+          <ConnectionMethodFields value={state} onChange={patch} />
         </>
       )}
     </>

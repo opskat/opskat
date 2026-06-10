@@ -5,8 +5,10 @@ import {
   MONGODB_DEFAULTS,
   type MongoDBFormState,
 } from "@/components/asset/MongoDBConfigSection.config";
+import { CONNECTION_DEFAULTS } from "@/components/asset/proxyConfig";
 
 const FULL_MANUAL: MongoDBFormState = {
+  ...CONNECTION_DEFAULTS,
   connectionMode: "manual",
   connectionURI: "",
   host: "mongo.example.com",
@@ -16,10 +18,12 @@ const FULL_MANUAL: MongoDBFormState = {
   authSource: "admin",
   database: "mydb",
   tls: true,
+  connectionType: "jumphost",
   sshTunnelId: 5,
 };
 
 const FULL_URI: MongoDBFormState = {
+  ...CONNECTION_DEFAULTS,
   connectionMode: "uri",
   connectionURI: "mongodb://user:pass@host:27017/db",
   host: "ignored.example.com",
@@ -29,7 +33,17 @@ const FULL_URI: MongoDBFormState = {
   authSource: "admin",
   database: "mydb",
   tls: true,
+  connectionType: "jumphost",
   sshTunnelId: 5,
+};
+
+const PROXY_MANUAL: MongoDBFormState = {
+  ...FULL_MANUAL,
+  connectionType: "proxy",
+  sshTunnelId: 0,
+  proxyHost: "p.example.com",
+  proxyPort: 1081,
+  proxyUsername: "pu",
 };
 
 describe("buildMongoDBConfig (键序锁旧 save;save 省略 ssh_asset_id 走 asset 顶层列,test 传 includeSshAssetId 才写)", () => {
@@ -105,16 +119,69 @@ describe("buildMongoDBConfig (键序锁旧 save;save 省略 ssh_asset_id 走 ass
     const json = buildMongoDBConfig({ ...FULL_MANUAL, database: "" }, {});
     expect(json).not.toContain('"database"');
   });
+
+  it("proxy 模式写 proxy 不写 ssh_asset_id(键序:tls 后,末尾)", () => {
+    expect(buildMongoDBConfig(PROXY_MANUAL, { password: "ENC" }, false, "PROXYENC")).toBe(
+      '{"host":"mongo.example.com","port":27017,"username":"admin","password":"ENC",' +
+        '"replica_set":"rs0","auth_source":"admin","database":"mydb","tls":true,' +
+        '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}}'
+    );
+  });
+
+  it("proxy 模式 test 路径(includeSshAssetId=true)也不写 ssh_asset_id(互斥)", () => {
+    const json = buildMongoDBConfig({ ...PROXY_MANUAL, sshTunnelId: 5 }, {}, true, "PROXYENC");
+    expect(json).toContain('"proxy"');
+    expect(json).not.toContain("ssh_asset_id");
+  });
+
+  it("jumphost 模式不写 proxy(互斥,即便 proxy 字段有值)", () => {
+    const json = buildMongoDBConfig(
+      { ...PROXY_MANUAL, connectionType: "jumphost", sshTunnelId: 5 },
+      {},
+      true,
+      "PROXYENC"
+    );
+    expect(json).toContain('"ssh_asset_id":5');
+    expect(json).not.toContain('"proxy"');
+  });
+
+  it("direct 模式不写 proxy 也不写 ssh_asset_id", () => {
+    const json = buildMongoDBConfig(
+      { ...PROXY_MANUAL, connectionType: "direct", sshTunnelId: 5 },
+      {},
+      true,
+      "PROXYENC"
+    );
+    expect(json).not.toContain('"proxy"');
+    expect(json).not.toContain("ssh_asset_id");
+  });
+
+  it("uri 模式 + proxy 同样写 proxy(URI+SOCKS5 后端 DialMongoDB 已支持)", () => {
+    const s: MongoDBFormState = {
+      ...FULL_URI,
+      connectionType: "proxy",
+      sshTunnelId: 0,
+      proxyHost: "p.example.com",
+      proxyPort: 1081,
+      proxyUsername: "pu",
+    };
+    expect(buildMongoDBConfig(s, { password: "ENC" }, false, "PROXYENC")).toBe(
+      '{"connection_uri":"mongodb://user:pass@host:27017/db","username":"admin","password":"ENC",' +
+        '"replica_set":"rs0","auth_source":"admin","database":"mydb","tls":true,' +
+        '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}}'
+    );
+  });
 });
 
 describe("parseMongoDBConfig (镜像旧 loadMongoDBConfig 非凭据字段)", () => {
-  it("manual 全字段回填", () => {
+  it("manual 全字段回填(ssh_asset_id 派生 connectionType=jumphost)", () => {
     expect(
       parseMongoDBConfig(
         '{"host":"mongo.example.com","port":27017,"username":"admin",' +
           '"replica_set":"rs0","auth_source":"admin","database":"mydb","tls":true,"ssh_asset_id":5}'
       )
     ).toEqual({
+      ...CONNECTION_DEFAULTS,
       connectionMode: "manual",
       connectionURI: "",
       host: "mongo.example.com",
@@ -124,6 +191,7 @@ describe("parseMongoDBConfig (镜像旧 loadMongoDBConfig 非凭据字段)", () 
       authSource: "admin",
       database: "mydb",
       tls: true,
+      connectionType: "jumphost",
       sshTunnelId: 5,
     });
   });
@@ -148,6 +216,34 @@ describe("parseMongoDBConfig (镜像旧 loadMongoDBConfig 非凭据字段)", () 
     expect(parseMongoDBConfig("nope")).toEqual(MONGODB_DEFAULTS);
   });
 
+  it("带 proxy 回填并派生 connectionType=proxy(密码入 encrypted)", () => {
+    const s = parseMongoDBConfig(
+      '{"host":"h","port":27017,' +
+        '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}}'
+    );
+    expect(s.connectionType).toBe("proxy");
+    expect(s.proxyHost).toBe("p.example.com");
+    expect(s.proxyPort).toBe(1081);
+    expect(s.proxyUsername).toBe("pu");
+    expect(s.proxyPassword).toBe("");
+    expect(s.encryptedProxyPassword).toBe("PROXYENC");
+  });
+
+  it("uri 模式带 proxy 回填(connectionMode=uri 且 connectionType=proxy)", () => {
+    const s = parseMongoDBConfig(
+      '{"connection_uri":"mongodb://h/db","proxy":{"type":"socks5","host":"p","port":1080}}'
+    );
+    expect(s.connectionMode).toBe("uri");
+    expect(s.connectionType).toBe("proxy");
+    expect(s.proxyHost).toBe("p");
+  });
+
+  it("assetTunnelId 入参优先派生 jumphost(镜像 asset.sshTunnelId 优先)", () => {
+    const s = parseMongoDBConfig('{"host":"h","proxy":{"type":"socks5","host":"p","port":1080}}', 6);
+    expect(s.connectionType).toBe("jumphost");
+    expect(s.sshTunnelId).toBe(6);
+  });
+
   it("parse→build 往返(manual 全字段;saved config 无 ssh_asset_id,隧道走 asset 顶层列)", () => {
     const original =
       '{"host":"mongo.example.com","port":27017,"username":"admin",' +
@@ -160,5 +256,22 @@ describe("parseMongoDBConfig (镜像旧 loadMongoDBConfig 非凭据字段)", () 
     const original = '{"connection_uri":"mongodb://user:pass@host:27017/db","username":"admin"}';
     const state = parseMongoDBConfig(original);
     expect(buildMongoDBConfig(state, {})).toBe(original);
+  });
+
+  it("parse→build 往返(manual proxy,密文沿用)", () => {
+    const original =
+      '{"host":"mongo.example.com","port":27017,"username":"admin","password":"OLD",' +
+      '"replica_set":"rs0","database":"mydb",' +
+      '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}}';
+    const state = parseMongoDBConfig(original);
+    expect(buildMongoDBConfig(state, { password: "OLD" }, false, state.encryptedProxyPassword)).toBe(original);
+  });
+
+  it("parse→build 往返(uri 模式 + proxy,密文沿用)", () => {
+    const original =
+      '{"connection_uri":"mongodb://user:pass@host:27017/db","username":"admin",' +
+      '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"password":"PROXYENC"}}';
+    const state = parseMongoDBConfig(original);
+    expect(buildMongoDBConfig(state, {}, false, state.encryptedProxyPassword)).toBe(original);
   });
 });

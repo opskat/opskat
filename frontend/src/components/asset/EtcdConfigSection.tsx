@@ -1,11 +1,12 @@
 import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Input, Label, Switch, Textarea } from "@opskat/ui";
-import { AssetSelect } from "@/components/asset/AssetSelect";
+import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
 import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
+import { resolveSaveProxyPassword } from "./proxyConfig";
 import {
   buildEtcdConfig,
   parseEtcdConfig,
@@ -21,9 +22,9 @@ export const EtcdConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>
   const { t } = useTranslation();
   const [state, setState] = useState<EtcdFormState>(() => {
     if (!editAsset) return { ...ETCD_DEFAULTS };
-    const parsed = parseEtcdConfig(editAsset.Config);
-    // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.ssh_asset_id || 0)。
-    return { ...parsed, sshTunnelId: editAsset.sshTunnelId || parsed.sshTunnelId };
+    // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.ssh_asset_id || 0),
+    // 并参与 connectionType 派生,故传入 parseEtcdConfig。
+    return parseEtcdConfig(editAsset.Config, editAsset.sshTunnelId || 0);
   });
   const patch = (p: Partial<EtcdFormState>) => setState((s) => ({ ...s, ...p }));
   const cred = useAssetCredential(editAsset);
@@ -39,11 +40,16 @@ export const EtcdConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>
     () => ({
       buildConfig: async (ctx) => {
         const frag = await resolveSaveCredential(cred.value, ctx.encryptPassword);
-        return { configJSON: buildEtcdConfig(state, frag), sshTunnelId: state.sshTunnelId };
+        const proxyPassword = await resolveSaveProxyPassword(state, ctx.encryptPassword);
+        return {
+          configJSON: buildEtcdConfig(state, frag, proxyPassword),
+          sshTunnelId: state.connectionType === "jumphost" ? state.sshTunnelId : 0,
+        };
       },
       buildTestConfig: async () => ({
         assetType: "etcd",
-        configJSON: buildEtcdConfig(state, resolveTestCredential(cred.value)),
+        // 测试:proxy 密码仅明文(无加密)
+        configJSON: buildEtcdConfig(state, resolveTestCredential(cred.value), state.proxyPassword),
         password: cred.value.password,
       }),
     }),
@@ -159,15 +165,8 @@ export const EtcdConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>
         </div>
       </div>
 
-      <div className="grid gap-2">
-        <Label>{t("asset.sshTunnel")}</Label>
-        <AssetSelect
-          value={state.sshTunnelId}
-          onValueChange={(v) => patch({ sshTunnelId: v })}
-          filterType="ssh"
-          placeholder={t("asset.sshTunnelNone")}
-        />
-      </div>
+      {/* Connection method: direct / SSH tunnel / SOCKS5 proxy */}
+      <ConnectionMethodFields value={state} onChange={patch} />
     </>
   );
 });

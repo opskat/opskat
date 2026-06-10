@@ -1,8 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Input, Label, Switch } from "@opskat/ui";
-import { AssetSelect } from "@/components/asset/AssetSelect";
+import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
+import { resolveSaveProxyPassword } from "./proxyConfig";
 import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
@@ -15,9 +16,9 @@ export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
   const { t } = useTranslation();
   const [state, setState] = useState<RedisFormState>(() => {
     if (!editAsset) return { ...REDIS_DEFAULTS };
-    const parsed = parseRedisConfig(editAsset.Config);
-    // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.ssh_asset_id || 0)。
-    return { ...parsed, sshTunnelId: editAsset.sshTunnelId || parsed.sshTunnelId };
+    // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.ssh_asset_id || 0),
+    // 并参与 connectionType 派生,故传入 parseRedisConfig。
+    return parseRedisConfig(editAsset.Config, editAsset.sshTunnelId || 0);
   });
   const patch = (p: Partial<RedisFormState>) => setState((s) => ({ ...s, ...p }));
   const cred = useAssetCredential(editAsset);
@@ -33,12 +34,17 @@ export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
     () => ({
       buildConfig: async (ctx) => {
         const frag = await resolveSaveCredential(cred.value, ctx.encryptPassword);
-        return { configJSON: buildRedisConfig(state, frag), sshTunnelId: state.sshTunnelId };
+        const proxyPassword = await resolveSaveProxyPassword(state, ctx.encryptPassword);
+        return {
+          configJSON: buildRedisConfig(state, frag, false, proxyPassword),
+          sshTunnelId: state.connectionType === "jumphost" ? state.sshTunnelId : 0,
+        };
       },
       buildTestConfig: async () => ({
         assetType: "redis",
-        // 测试无 asset 行 → 隧道必须塞进 config(includeSshAssetId=true,锁旧 handleTestRedisConnection)。
-        configJSON: buildRedisConfig(state, resolveTestCredential(cred.value), true),
+        // 测试无 asset 行 → 隧道必须塞进 config(includeSshAssetId=true,锁旧 handleTestRedisConnection);
+        // proxy 密码仅明文(无加密)。
+        configJSON: buildRedisConfig(state, resolveTestCredential(cred.value), true, state.proxyPassword),
         password: cred.value.password,
       }),
     }),
@@ -183,16 +189,8 @@ export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
         </div>
       </div>
 
-      {/* SSH Tunnel */}
-      <div className="grid gap-2">
-        <Label>{t("asset.sshTunnel")}</Label>
-        <AssetSelect
-          value={state.sshTunnelId}
-          onValueChange={(v) => patch({ sshTunnelId: v })}
-          filterType="ssh"
-          placeholder={t("asset.sshTunnelNone")}
-        />
-      </div>
+      {/* Connection method: direct / SSH tunnel / SOCKS5 proxy */}
+      <ConnectionMethodFields value={state} onChange={patch} />
     </>
   );
 });

@@ -36,7 +36,10 @@ export const CONNECTION_DEFAULTS: ConnectionFormFields = {
 };
 
 /** 编辑态回填:隧道 > 代理 > 直连(与后端拨号优先级一致)。 */
-export function parseConnectionFields(proxy: ProxyConfigJSON | null | undefined, tunnelId: number): ConnectionFormFields {
+export function parseConnectionFields(
+  proxy: ProxyConfigJSON | null | undefined,
+  tunnelId: number
+): ConnectionFormFields {
   return {
     connectionType: tunnelId ? "jumphost" : proxy ? "proxy" : "direct",
     sshTunnelId: tunnelId,

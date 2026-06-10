@@ -1,4 +1,11 @@
 import type { CredentialFragment } from "./credentialConfig";
+import {
+  CONNECTION_DEFAULTS,
+  buildProxyJSON,
+  parseConnectionFields,
+  type ConnectionFormFields,
+  type ProxyConfigJSON,
+} from "./proxyConfig";
 
 /** 序列化后的 kafka config 形状(键序锁旧 save 分支)。 */
 export interface KafkaConfig {
@@ -18,6 +25,7 @@ export interface KafkaConfig {
   message_preview_bytes?: number;
   message_fetch_limit?: number;
   ssh_asset_id?: number;
+  proxy?: ProxyConfigJSON;
   schema_registry?: KafkaSchemaRegistryConfig;
   connect?: KafkaConnectConfig;
 }
@@ -56,7 +64,7 @@ export interface KafkaConnectClusterConfig {
 }
 
 /** kafka 主连接 + 选项的非凭据/非伴随子状态(伴随由 section 单独持有)。 */
-export interface KafkaFormState {
+export interface KafkaFormState extends ConnectionFormFields {
   brokersText: string;
   clientId: string;
   saslMechanism: string;
@@ -71,7 +79,6 @@ export interface KafkaFormState {
   requestTimeoutSeconds: number;
   messagePreviewBytes: number;
   messageFetchLimit: number;
-  sshTunnelId: number;
 }
 
 export const KAFKA_DEFAULTS: KafkaFormState = {
@@ -88,7 +95,7 @@ export const KAFKA_DEFAULTS: KafkaFormState = {
   requestTimeoutSeconds: 30,
   messagePreviewBytes: 4096,
   messageFetchLimit: 50,
-  sshTunnelId: 0,
+  ...CONNECTION_DEFAULTS,
 };
 
 /** 把 brokers 文本拆为非空 broker 列表(逗号/换行分隔,各自 trim)。 */
@@ -99,8 +106,10 @@ export function kafkaBrokers(brokersText: string): string[] {
     .filter(Boolean);
 }
 
-/** 主连接 base config(无凭据、无伴随;键序锁旧 buildKafkaConfig)。section 据此追加主凭据/伴随后再 stringify。 */
-export function buildKafkaBaseConfig(state: KafkaFormState): KafkaConfig {
+/** 主连接 base config(无凭据、无伴随;键序锁旧 buildKafkaConfig,末尾 ssh_asset_id|proxy 按 connectionType 二选一)。
+ *  section 据此追加主凭据/伴随后再 stringify。proxyPassword 由 resolveSaveProxyPassword(save=密文)
+ *  或 state.proxyPassword(test=明文)预解析。 */
+export function buildKafkaBaseConfig(state: KafkaFormState, proxyPassword = ""): KafkaConfig {
   const cfg: KafkaConfig = {
     brokers: kafkaBrokers(state.brokersText),
   };
@@ -120,7 +129,9 @@ export function buildKafkaBaseConfig(state: KafkaFormState): KafkaConfig {
   if (state.requestTimeoutSeconds > 0) cfg.request_timeout_seconds = state.requestTimeoutSeconds;
   if (state.messagePreviewBytes > 0) cfg.message_preview_bytes = state.messagePreviewBytes;
   if (state.messageFetchLimit > 0) cfg.message_fetch_limit = state.messageFetchLimit;
-  if (state.sshTunnelId > 0) cfg.ssh_asset_id = state.sshTunnelId;
+  if (state.connectionType === "jumphost" && state.sshTunnelId > 0) cfg.ssh_asset_id = state.sshTunnelId;
+  const proxy = buildProxyJSON(state, proxyPassword);
+  if (proxy) cfg.proxy = proxy;
   return cfg;
 }
 
@@ -145,8 +156,9 @@ export function kafkaCompanionPlainSecretFromConfig(
   return cfg.username || "";
 }
 
-/** 编辑态回填非凭据/非伴随字段(镜像旧 loadKafkaConfig;ssh_asset_id 仅取 config,asset.sshTunnelId 由 section 覆盖)。 */
-export function parseKafkaConfig(configJSON: string): KafkaFormState {
+/** 编辑态回填非凭据/非伴随字段(镜像旧 loadKafkaConfig;connectionType 派生需要 asset 顶层
+ *  sshTunnelId 优先(镜像旧 `asset.sshTunnelId || cfg.ssh_asset_id || 0`),故由 section 传入)。 */
+export function parseKafkaConfig(configJSON: string, assetTunnelId = 0): KafkaFormState {
   try {
     const cfg: KafkaConfig = JSON.parse(configJSON || "{}");
     return {
@@ -163,7 +175,7 @@ export function parseKafkaConfig(configJSON: string): KafkaFormState {
       requestTimeoutSeconds: cfg.request_timeout_seconds || 30,
       messagePreviewBytes: cfg.message_preview_bytes || 4096,
       messageFetchLimit: cfg.message_fetch_limit || 50,
-      sshTunnelId: cfg.ssh_asset_id || 0,
+      ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0),
     };
   } catch {
     return { ...KAFKA_DEFAULTS };

@@ -1,6 +1,13 @@
 import type { CredentialFragment } from "./credentialConfig";
+import {
+  CONNECTION_DEFAULTS,
+  buildProxyJSON,
+  parseConnectionFields,
+  type ConnectionFormFields,
+  type ProxyConfigJSON,
+} from "./proxyConfig";
 
-export interface RedisFormState {
+export interface RedisFormState extends ConnectionFormFields {
   host: string;
   port: number;
   username: string;
@@ -14,7 +21,6 @@ export interface RedisFormState {
   tlsCAFile: string;
   tlsCertFile: string;
   tlsKeyFile: string;
-  sshTunnelId: number;
 }
 
 export const REDIS_DEFAULTS: RedisFormState = {
@@ -31,7 +37,7 @@ export const REDIS_DEFAULTS: RedisFormState = {
   tlsCAFile: "",
   tlsCertFile: "",
   tlsKeyFile: "",
-  sshTunnelId: 0,
+  ...CONNECTION_DEFAULTS,
 };
 
 interface RedisConfig {
@@ -51,14 +57,22 @@ interface RedisConfig {
   scan_page_size?: number;
   key_separator?: string;
   ssh_asset_id?: number;
+  proxy?: ProxyConfigJSON;
 }
 
 /**
  * 保存/测试共用序列化(键序锁旧 save 分支)。cred 由 resolveSave/TestCredential 预解析。
  * 隧道走 asset 顶层列(sshTunnelId);save 不写 ssh_asset_id(锁旧 save 分支)。
  * 测试无 asset 行,buildTestConfig 传 includeSshAssetId=true 把隧道塞进 config(锁旧 handleTestRedisConnection)。
+ * proxyPassword 由 resolveSaveProxyPassword(save=密文)或 state.proxyPassword(test=明文)预解析;
+ * 隧道与代理互斥,按 connectionType 二选一。
  */
-export function buildRedisConfig(state: RedisFormState, cred: CredentialFragment, includeSshAssetId = false): string {
+export function buildRedisConfig(
+  state: RedisFormState,
+  cred: CredentialFragment,
+  includeSshAssetId = false,
+  proxyPassword = ""
+): string {
   const cfg: RedisConfig = { host: state.host, port: state.port };
   if (state.username) cfg.username = state.username;
   if (cred.credential_id) cfg.credential_id = cred.credential_id;
@@ -70,15 +84,19 @@ export function buildRedisConfig(state: RedisFormState, cred: CredentialFragment
   if (state.tls && state.tlsCAFile) cfg.tls_ca_file = state.tlsCAFile;
   if (state.tls && state.tlsCertFile) cfg.tls_cert_file = state.tlsCertFile;
   if (state.tls && state.tlsKeyFile) cfg.tls_key_file = state.tlsKeyFile;
+  const proxy = buildProxyJSON(state, proxyPassword);
+  if (proxy) cfg.proxy = proxy;
   if (state.commandTimeoutSeconds > 0) cfg.command_timeout_seconds = state.commandTimeoutSeconds;
   if (state.scanPageSize > 0) cfg.scan_page_size = state.scanPageSize;
   if (state.keySeparator && state.keySeparator !== ":") cfg.key_separator = state.keySeparator;
-  if (includeSshAssetId && state.sshTunnelId > 0) cfg.ssh_asset_id = state.sshTunnelId;
+  if (state.connectionType === "jumphost" && includeSshAssetId && state.sshTunnelId > 0)
+    cfg.ssh_asset_id = state.sshTunnelId;
   return JSON.stringify(cfg);
 }
 
-/** 编辑态回填(镜像旧 loadRedisConfig 非凭据字段;ssh_asset_id 仅取 config,asset.sshTunnelId 由 section 覆盖)。 */
-export function parseRedisConfig(configJSON: string): RedisFormState {
+/** 编辑态回填(镜像旧 loadRedisConfig 非凭据字段;connectionType 派生需要 asset 顶层
+ *  sshTunnelId 优先(镜像旧 `asset.sshTunnelId || cfg.ssh_asset_id || 0`),故由 section 传入)。 */
+export function parseRedisConfig(configJSON: string, assetTunnelId = 0): RedisFormState {
   try {
     const cfg: RedisConfig = JSON.parse(configJSON || "{}");
     return {
@@ -95,7 +113,7 @@ export function parseRedisConfig(configJSON: string): RedisFormState {
       tlsCAFile: cfg.tls_ca_file || "",
       tlsCertFile: cfg.tls_cert_file || "",
       tlsKeyFile: cfg.tls_key_file || "",
-      sshTunnelId: cfg.ssh_asset_id || 0,
+      ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0),
     };
   } catch {
     return { ...REDIS_DEFAULTS };
