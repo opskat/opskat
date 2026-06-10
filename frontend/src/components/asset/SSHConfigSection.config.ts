@@ -1,12 +1,11 @@
 import type { CredentialFragment } from "./credentialConfig";
-
-interface ProxyConfig {
-  type: string;
-  host: string;
-  port: number;
-  username?: string;
-  password?: string;
-}
+import {
+  CONNECTION_DEFAULTS,
+  buildProxyJSON,
+  parseConnectionFields,
+  type ConnectionFormFields,
+  type ProxyConfigJSON,
+} from "./proxyConfig";
 
 interface SSHConfig {
   host: string;
@@ -18,16 +17,15 @@ interface SSHConfig {
   private_keys?: string[];
   private_key_passphrase?: string;
   jump_host_id?: number;
-  proxy?: ProxyConfig | null;
+  proxy?: ProxyConfigJSON | null;
 }
 
 /** ssh 表单子状态(凭据中的 password 走 useAssetCredential,不入此 state)。 */
-export interface SSHFormState {
+export interface SSHFormState extends ConnectionFormFields {
   host: string;
   port: number;
   username: string;
   authType: string;
-  connectionType: "direct" | "jumphost" | "proxy";
   keySource: "managed" | "file";
   /** key-auth managed ssh_key 凭据 id(非 password 凭据)。 */
   credentialId: number;
@@ -36,15 +34,6 @@ export interface SSHFormState {
   privateKeyPassphrase: string;
   /** 编辑态既有 passphrase 密文;passphrase 不回显。 */
   encryptedPrivateKeyPassphrase: string;
-  proxyType: string;
-  proxyHost: string;
-  proxyPort: number;
-  proxyUsername: string;
-  /** 用户新输入的明文 proxy 密码;空表示沿用既有密文。 */
-  proxyPassword: string;
-  /** 编辑态既有 proxy 密码密文。 */
-  encryptedProxyPassword: string;
-  sshTunnelId: number;
 }
 
 export const SSH_DEFAULTS: SSHFormState = {
@@ -52,19 +41,12 @@ export const SSH_DEFAULTS: SSHFormState = {
   port: 22,
   username: "root",
   authType: "password",
-  connectionType: "direct",
   keySource: "managed",
   credentialId: 0,
   selectedKeyPaths: [],
   privateKeyPassphrase: "",
   encryptedPrivateKeyPassphrase: "",
-  proxyType: "socks5",
-  proxyHost: "",
-  proxyPort: 1080,
-  proxyUsername: "",
-  proxyPassword: "",
-  encryptedProxyPassword: "",
-  sshTunnelId: 0,
+  ...CONNECTION_DEFAULTS,
 };
 
 /** buildSSHConfig 的已解析机密入参。save / test 在调用方分别预解析后传入。 */
@@ -107,14 +89,9 @@ export function buildSSHConfig(state: SSHFormState, opts: SSHBuildOptions): stri
     cfg.jump_host_id = state.sshTunnelId;
   }
 
-  if (state.connectionType === "proxy" && state.proxyHost) {
-    cfg.proxy = {
-      type: state.proxyType,
-      host: state.proxyHost,
-      port: state.proxyPort,
-      username: state.proxyUsername || undefined,
-      password: opts.proxyPassword || undefined,
-    };
+  const proxy = buildProxyJSON(state, opts.proxyPassword);
+  if (proxy) {
+    cfg.proxy = proxy;
   }
 
   return JSON.stringify(cfg);
@@ -132,19 +109,12 @@ export function parseSSHConfig(configJSON: string, assetTunnelId = 0): SSHFormSt
       port: cfg.port || 22,
       username: cfg.username || "root",
       authType: cfg.auth_type || "password",
-      connectionType: tunnelId ? "jumphost" : cfg.proxy ? "proxy" : "direct",
       keySource: cfg.private_keys && cfg.private_keys.length > 0 ? "file" : "managed",
       credentialId: cfg.auth_type === "key" ? cfg.credential_id || 0 : 0,
       selectedKeyPaths: cfg.private_keys || [],
       privateKeyPassphrase: "", // passphrase 已加密,不回显
       encryptedPrivateKeyPassphrase: cfg.private_key_passphrase || "",
-      proxyType: cfg.proxy?.type || "socks5",
-      proxyHost: cfg.proxy?.host || "",
-      proxyPort: cfg.proxy?.port || 1080,
-      proxyUsername: cfg.proxy?.username || "",
-      proxyPassword: "",
-      encryptedProxyPassword: cfg.proxy?.password || "",
-      sshTunnelId: tunnelId,
+      ...parseConnectionFields(cfg.proxy, tunnelId),
     };
   } catch {
     return { ...SSH_DEFAULTS };

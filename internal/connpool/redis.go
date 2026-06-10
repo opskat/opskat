@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
-	"net"
 	"time"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -16,25 +15,15 @@ import (
 	"go.uber.org/zap"
 )
 
-// DialRedis 创建 Redis 连接（直连或通过 SSH 隧道）
-// password 为已解析的明文密码，由调用方负责解密
+// DialRedis 创建 Redis 连接（直连、SSH 隧道或 SOCKS5 代理,隧道优先）
+// password 为已解析的明文密码，cfg.Proxy.Password 为明文,均由调用方负责解密
 func DialRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig, password string, sshPool *sshpool.Pool) (*redis.Client, io.Closer, error) {
 	opts, err := buildRedisOptions(cfg, password)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	var tunnel *SSHTunnel
-	tunnelID := asset.SSHTunnelID
-	if tunnelID == 0 {
-		tunnelID = cfg.SSHAssetID // backward compat
-	}
-	if tunnelID > 0 && sshPool != nil {
-		tunnel = NewSSHTunnel(tunnelID, cfg.Host, cfg.Port, sshPool)
-		opts.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return tunnel.Dial(ctx)
-		}
-	}
+	tunnel := configureRedisTransport(opts, asset, cfg, sshPool)
 
 	client := redis.NewClient(opts)
 	if pingErr := client.Ping(ctx).Err(); pingErr != nil {
@@ -55,6 +44,30 @@ func DialRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity
 		return client, nil, nil
 	}
 	return client, tunnel, nil
+}
+
+// configureRedisTransport 按 隧道 > 代理 > 直连 设置 opts.Dialer,返回隧道(可为 nil)。
+// go-redis 设置自定义 Dialer 后默认 dialer 的 TLS 逻辑被绕过,因此把 TLSConfig
+// 移入 dialer 内手动包裹并清空 opts.TLSConfig,避免 TLS 静默失效。
+func configureRedisTransport(opts *redis.Options, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig, sshPool *sshpool.Pool) *SSHTunnel {
+	var tunnel *SSHTunnel
+	var dial dialContextFunc
+	tunnelID := asset.SSHTunnelID
+	if tunnelID == 0 {
+		tunnelID = cfg.SSHAssetID // backward compat
+	}
+	switch {
+	case tunnelID > 0 && sshPool != nil:
+		tunnel = NewSSHTunnel(tunnelID, cfg.Host, cfg.Port, sshPool)
+		dial = tunnelDialFunc(tunnel)
+	case cfg.Proxy != nil:
+		dial = proxyDialFunc(cfg.Proxy)
+	default:
+		return nil
+	}
+	opts.Dialer = tlsWrappedDialFunc(dial, opts.TLSConfig)
+	opts.TLSConfig = nil
+	return tunnel
 }
 
 func buildRedisOptions(cfg *asset_entity.RedisConfig, password string) (*redis.Options, error) {

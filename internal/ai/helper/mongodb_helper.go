@@ -107,6 +107,7 @@ func getOrDialMongoDB(ctx context.Context, asset *asset_entity.Asset) (*mongo.Cl
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to resolve credentials: %w", err)
 		}
+		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 		client, closer, err := connpool.DialMongoDB(ctx, asset, cfg, password, getSSHPool(ctx))
 		if err != nil {
 			return nil, nil, err

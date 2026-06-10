@@ -9,8 +9,10 @@ import {
   parseKafkaConfig,
   type KafkaFormState,
 } from "@/components/asset/KafkaConfigSection.config";
+import { CONNECTION_DEFAULTS } from "@/components/asset/proxyConfig";
 
 const FULL: KafkaFormState = {
+  ...CONNECTION_DEFAULTS,
   brokersText: "b1:9092\nb2:9092",
   clientId: "opskat",
   saslMechanism: "scram-sha-512",
@@ -24,7 +26,17 @@ const FULL: KafkaFormState = {
   requestTimeoutSeconds: 30,
   messagePreviewBytes: 4096,
   messageFetchLimit: 50,
+  connectionType: "jumphost",
   sshTunnelId: 3,
+};
+
+const PROXY: KafkaFormState = {
+  ...FULL,
+  connectionType: "proxy",
+  sshTunnelId: 0,
+  proxyHost: "p.example.com",
+  proxyPort: 1081,
+  proxyUsername: "pu",
 };
 
 describe("kafkaBrokers (逗号/换行分隔 + trim + 去空)", () => {
@@ -36,7 +48,7 @@ describe("kafkaBrokers (逗号/换行分隔 + trim + 去空)", () => {
   });
 });
 
-describe("buildKafkaBaseConfig (锁旧 buildKafkaConfig 键序:brokers→client_id→sasl_mechanism→username→tls…→timeouts→ssh_asset_id;无凭据/伴随)", () => {
+describe("buildKafkaBaseConfig (锁旧 buildKafkaConfig 键序:brokers→client_id→sasl_mechanism→username→tls…→timeouts→ssh_asset_id|proxy;无凭据/伴随)", () => {
   it("全字段 + scram(username 紧跟 sasl_mechanism)", () => {
     expect(JSON.stringify(buildKafkaBaseConfig(FULL))).toBe(
       '{"brokers":["b1:9092","b2:9092"],"client_id":"opskat","sasl_mechanism":"scram-sha-512",' +
@@ -87,6 +99,32 @@ describe("buildKafkaBaseConfig (锁旧 buildKafkaConfig 键序:brokers→client_
     );
     expect(json).toBe('{"brokers":["h:9092"],"sasl_mechanism":"none"}');
   });
+  it("proxy 模式写 proxy 不写 ssh_asset_id(键序:message_fetch_limit 后)", () => {
+    expect(JSON.stringify(buildKafkaBaseConfig(PROXY, "PROXYENC"))).toBe(
+      '{"brokers":["b1:9092","b2:9092"],"client_id":"opskat","sasl_mechanism":"scram-sha-512",' +
+        '"username":"admin","tls":true,"tls_insecure":true,"tls_server_name":"kafka.x","tls_ca_file":"/ca.pem",' +
+        '"tls_cert_file":"/c.crt","tls_key_file":"/c.key","request_timeout_seconds":30,' +
+        '"message_preview_bytes":4096,"message_fetch_limit":50,' +
+        '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}}'
+    );
+  });
+
+  it("jumphost 模式不写 proxy(互斥,即便 proxy 字段有值)", () => {
+    const json = JSON.stringify(
+      buildKafkaBaseConfig({ ...PROXY, connectionType: "jumphost", sshTunnelId: 3 }, "PROXYENC")
+    );
+    expect(json).toContain('"ssh_asset_id":3');
+    expect(json).not.toContain('"proxy"');
+  });
+
+  it("direct 模式不写 proxy 也不写 ssh_asset_id(即便 sshTunnelId>0)", () => {
+    const json = JSON.stringify(
+      buildKafkaBaseConfig({ ...PROXY, connectionType: "direct", sshTunnelId: 3 }, "PROXYENC")
+    );
+    expect(json).not.toContain('"proxy"');
+    expect(json).not.toContain("ssh_asset_id");
+  });
+
   it("base 不含 credential_id/password/schema_registry/connect 键", () => {
     const json = JSON.stringify(buildKafkaBaseConfig(FULL));
     expect(json).not.toContain("credential_id");
@@ -139,6 +177,7 @@ describe("parseKafkaConfig (锁旧 loadKafkaConfig 非凭据/非伴随字段)", 
           '"message_fetch_limit":100,"ssh_asset_id":5}'
       )
     ).toEqual({
+      ...CONNECTION_DEFAULTS,
       brokersText: "b1:9092\nb2:9092",
       clientId: "c",
       saslMechanism: "plain",
@@ -152,6 +191,7 @@ describe("parseKafkaConfig (锁旧 loadKafkaConfig 非凭据/非伴随字段)", 
       requestTimeoutSeconds: 60,
       messagePreviewBytes: 8192,
       messageFetchLimit: 100,
+      connectionType: "jumphost",
       sshTunnelId: 5,
     });
   });
@@ -164,6 +204,7 @@ describe("parseKafkaConfig (锁旧 loadKafkaConfig 非凭据/非伴随字段)", 
   it("round-trip:build→parse 还原非凭据字段", () => {
     const round = parseKafkaConfig(JSON.stringify(buildKafkaBaseConfig(FULL)));
     expect(round).toEqual({
+      ...CONNECTION_DEFAULTS,
       brokersText: "b1:9092\nb2:9092",
       clientId: "opskat",
       saslMechanism: "scram-sha-512",
@@ -177,8 +218,36 @@ describe("parseKafkaConfig (锁旧 loadKafkaConfig 非凭据/非伴随字段)", 
       requestTimeoutSeconds: 30,
       messagePreviewBytes: 4096,
       messageFetchLimit: 50,
+      connectionType: "jumphost",
       sshTunnelId: 3,
     });
+  });
+
+  it("带 proxy 回填并派生 connectionType=proxy(密码入 encrypted)", () => {
+    const s = parseKafkaConfig(
+      '{"brokers":["b:9092"],"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}}'
+    );
+    expect(s.connectionType).toBe("proxy");
+    expect(s.proxyHost).toBe("p.example.com");
+    expect(s.proxyPort).toBe(1081);
+    expect(s.proxyUsername).toBe("pu");
+    expect(s.proxyPassword).toBe("");
+    expect(s.encryptedProxyPassword).toBe("PROXYENC");
+  });
+
+  it("assetTunnelId 入参优先派生 jumphost(镜像 asset.sshTunnelId 优先)", () => {
+    const s = parseKafkaConfig('{"brokers":["b:9092"],"proxy":{"type":"socks5","host":"p","port":1080}}', 6);
+    expect(s.connectionType).toBe("jumphost");
+    expect(s.sshTunnelId).toBe(6);
+  });
+
+  it("parse→build 往返(proxy 密文沿用)", () => {
+    const original =
+      '{"brokers":["b1:9092"],"client_id":"opskat","sasl_mechanism":"none",' +
+      '"request_timeout_seconds":30,"message_preview_bytes":4096,"message_fetch_limit":50,' +
+      '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}}';
+    const state = parseKafkaConfig(original);
+    expect(JSON.stringify(buildKafkaBaseConfig(state, state.encryptedProxyPassword))).toBe(original);
   });
 });
 

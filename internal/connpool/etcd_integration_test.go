@@ -4,13 +4,16 @@ package connpool
 
 import (
 	"context"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/socksdial/socksdialtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/server/v3/embed"
@@ -77,4 +80,41 @@ func TestDialEtcd_E2E_PutGetDel(t *testing.T) {
 	resp2, err := client.Get(ctx, "/test/foo")
 	require.NoError(t, err)
 	assert.Empty(t, resp2.Kvs)
+}
+
+func TestDialEtcd_E2E_ViaProxy(t *testing.T) {
+	endpoint, stop := startEmbedEtcd(t)
+	defer stop()
+
+	proxyAddr := socksdialtest.Start(t, "", "")
+	host, portStr, err := net.SplitHostPort(proxyAddr)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portStr)
+	require.NoError(t, err)
+
+	asset := &asset_entity.Asset{ID: 100}
+	cfg := &asset_entity.EtcdConfig{
+		Endpoints: []string{endpoint},
+		Proxy:     &asset_entity.ProxyConfig{Type: "socks5", Host: host, Port: port},
+	}
+
+	ctx := context.Background()
+	client, tunnel, err := DialEtcd(ctx, asset, cfg, "", nil)
+	require.NoError(t, err)
+	defer client.Close()
+	assert.Nil(t, tunnel, "proxy connection should have nil tunnel")
+
+	// Endpoints 不应被截断(代理按目标地址拨号,所有 endpoint 可达)
+	assert.Equal(t, []string{endpoint}, client.Endpoints())
+
+	_, err = client.Put(ctx, "/test/proxy", "via-socks5")
+	require.NoError(t, err)
+
+	resp, err := client.Get(ctx, "/test/proxy")
+	require.NoError(t, err)
+	require.Len(t, resp.Kvs, 1)
+	assert.Equal(t, "via-socks5", string(resp.Kvs[0].Value))
+
+	_, err = client.Delete(ctx, "/test/proxy")
+	require.NoError(t, err)
 }

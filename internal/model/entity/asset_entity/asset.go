@@ -131,35 +131,38 @@ type DatabaseConfig struct {
 	ReadOnly     bool           `json:"read_only,omitempty"`     // 连接级只读
 	SSHAssetID   int64          `json:"ssh_asset_id,omitempty"`  // Deprecated: use Asset.SSHTunnelID
 	Path         string         `json:"path,omitempty"`          // SQLite 是本地嵌入式文件库，无 host/port 概念，路径独立字段；其他 driver 永远为空
+	Proxy        *ProxyConfig   `json:"proxy,omitempty"`         // SOCKS5 代理（与 SSH 隧道互斥，隧道优先）
 }
 
 // RedisConfig Redis类型的特定配置
 type RedisConfig struct {
-	Host                  string `json:"host"`
-	Port                  int    `json:"port"`
-	Username              string `json:"username,omitempty"`
-	Password              string `json:"password,omitempty"`
-	CredentialID          int64  `json:"credential_id,omitempty"`           // 统一凭证 ID（密码）
-	Database              int    `json:"database,omitempty"`                // DB index
-	TLS                   bool   `json:"tls,omitempty"`                     // 启用 TLS 加密连接
-	TLSInsecure           bool   `json:"tls_insecure,omitempty"`            // 跳过 TLS 证书校验
-	TLSServerName         string `json:"tls_server_name,omitempty"`         // TLS SNI / ServerName
-	TLSCAFile             string `json:"tls_ca_file,omitempty"`             // CA 证书路径
-	TLSCertFile           string `json:"tls_cert_file,omitempty"`           // 客户端证书路径
-	TLSKeyFile            string `json:"tls_key_file,omitempty"`            // 客户端私钥路径
-	CommandTimeoutSeconds int    `json:"command_timeout_seconds,omitempty"` // Redis 命令超时，0 使用默认值
-	ScanPageSize          int    `json:"scan_page_size,omitempty"`          // Key 扫描分页大小，0 使用默认值
-	KeySeparator          string `json:"key_separator,omitempty"`           // 树形视图 key 分隔符，默认 ":"
-	SSHAssetID            int64  `json:"ssh_asset_id,omitempty"`            // Deprecated: use Asset.SSHTunnelID
+	Host                  string       `json:"host"`
+	Port                  int          `json:"port"`
+	Username              string       `json:"username,omitempty"`
+	Password              string       `json:"password,omitempty"`
+	CredentialID          int64        `json:"credential_id,omitempty"`           // 统一凭证 ID（密码）
+	Database              int          `json:"database,omitempty"`                // DB index
+	TLS                   bool         `json:"tls,omitempty"`                     // 启用 TLS 加密连接
+	TLSInsecure           bool         `json:"tls_insecure,omitempty"`            // 跳过 TLS 证书校验
+	TLSServerName         string       `json:"tls_server_name,omitempty"`         // TLS SNI / ServerName
+	TLSCAFile             string       `json:"tls_ca_file,omitempty"`             // CA 证书路径
+	TLSCertFile           string       `json:"tls_cert_file,omitempty"`           // 客户端证书路径
+	TLSKeyFile            string       `json:"tls_key_file,omitempty"`            // 客户端私钥路径
+	CommandTimeoutSeconds int          `json:"command_timeout_seconds,omitempty"` // Redis 命令超时，0 使用默认值
+	ScanPageSize          int          `json:"scan_page_size,omitempty"`          // Key 扫描分页大小，0 使用默认值
+	KeySeparator          string       `json:"key_separator,omitempty"`           // 树形视图 key 分隔符，默认 ":"
+	SSHAssetID            int64        `json:"ssh_asset_id,omitempty"`            // Deprecated: use Asset.SSHTunnelID
+	Proxy                 *ProxyConfig `json:"proxy,omitempty"`                   // SOCKS5 代理（与 SSH 隧道互斥，隧道优先）
 }
 
 // EtcdConfig etcd类型的特定配置
 type EtcdConfig struct {
-	Endpoints    []string `json:"endpoints"`          // 至少 1 个 host:port
-	Username     string   `json:"username,omitempty"` // 留空 = 不启用 RBAC
-	Password     string   `json:"password,omitempty"` // AES-256-GCM 密文
-	CredentialID int64    `json:"credential_id,omitempty"`
-	SSHAssetID   int64    `json:"ssh_asset_id,omitempty"` // Deprecated: use Asset.SSHTunnelID; kept for form test/backward compat
+	Endpoints    []string     `json:"endpoints"`          // 至少 1 个 host:port
+	Username     string       `json:"username,omitempty"` // 留空 = 不启用 RBAC
+	Password     string       `json:"password,omitempty"` // AES-256-GCM 密文
+	CredentialID int64        `json:"credential_id,omitempty"`
+	SSHAssetID   int64        `json:"ssh_asset_id,omitempty"` // Deprecated: use Asset.SSHTunnelID; kept for form test/backward compat
+	Proxy        *ProxyConfig `json:"proxy,omitempty"`        // SOCKS5 代理（与 SSH 隧道互斥，隧道优先）
 
 	TLS           bool   `json:"tls,omitempty"`
 	TLSInsecure   bool   `json:"tls_insecure,omitempty"`
@@ -174,17 +177,18 @@ type EtcdConfig struct {
 
 // MongoDBConfig MongoDB类型的特定配置
 type MongoDBConfig struct {
-	ConnectionURI string `json:"connection_uri,omitempty"` // 完整连接 URI（优先于手动配置）
-	Host          string `json:"host,omitempty"`
-	Port          int    `json:"port,omitempty"`
-	ReplicaSet    string `json:"replica_set,omitempty"`
-	Username      string `json:"username,omitempty"`
-	Password      string `json:"password,omitempty"`
-	CredentialID  int64  `json:"credential_id,omitempty"` // 统一凭证 ID（密码）
-	Database      string `json:"database,omitempty"`      // 默认数据库
-	AuthSource    string `json:"auth_source,omitempty"`   // 认证源数据库
-	TLS           bool   `json:"tls,omitempty"`
-	SSHAssetID    int64  `json:"ssh_asset_id,omitempty"` // Deprecated: use Asset.SSHTunnelID
+	ConnectionURI string       `json:"connection_uri,omitempty"` // 完整连接 URI（优先于手动配置）
+	Host          string       `json:"host,omitempty"`
+	Port          int          `json:"port,omitempty"`
+	ReplicaSet    string       `json:"replica_set,omitempty"`
+	Username      string       `json:"username,omitempty"`
+	Password      string       `json:"password,omitempty"`
+	CredentialID  int64        `json:"credential_id,omitempty"` // 统一凭证 ID（密码）
+	Database      string       `json:"database,omitempty"`      // 默认数据库
+	AuthSource    string       `json:"auth_source,omitempty"`   // 认证源数据库
+	TLS           bool         `json:"tls,omitempty"`
+	SSHAssetID    int64        `json:"ssh_asset_id,omitempty"` // Deprecated: use Asset.SSHTunnelID
+	Proxy         *ProxyConfig `json:"proxy,omitempty"`        // SOCKS5 代理（与 SSH 隧道互斥，隧道优先）
 }
 
 // Kafka SASL 机制常量
@@ -213,6 +217,7 @@ type KafkaConfig struct {
 	MessagePreviewBytes   int                       `json:"message_preview_bytes,omitempty"`
 	MessageFetchLimit     int                       `json:"message_fetch_limit,omitempty"`
 	SSHAssetID            int64                     `json:"ssh_asset_id,omitempty"` // Deprecated: use Asset.SSHTunnelID
+	Proxy                 *ProxyConfig              `json:"proxy,omitempty"`        // SOCKS5 代理（与 SSH 隧道互斥，隧道优先）
 	SchemaRegistry        KafkaSchemaRegistryConfig `json:"schema_registry,omitempty"`
 	Connect               KafkaConnectConfig        `json:"connect,omitempty"`
 }
@@ -751,6 +756,9 @@ func (a *Asset) validateDatabase() error {
 		}
 		if a.SSHTunnelID > 0 {
 			return errors.New("SQLite 不支持 SSH 隧道")
+		}
+		if cfg.Proxy != nil {
+			return errors.New("SQLite 不支持代理")
 		}
 	default:
 		return fmt.Errorf("不支持的数据库驱动: %s", cfg.Driver)

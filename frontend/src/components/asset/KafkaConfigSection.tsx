@@ -13,8 +13,9 @@ import {
   Switch,
   Textarea,
 } from "@opskat/ui";
-import { AssetSelect } from "@/components/asset/AssetSelect";
+import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
+import { resolveSaveProxyPassword } from "./proxyConfig";
 import { credential_entity } from "../../../wailsjs/go/models";
 import type { AssetFormHandle, AssetFormContext, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { useAssetCredential } from "./useAssetCredential";
@@ -237,9 +238,9 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
   const { t } = useTranslation();
   const [state, setState] = useState<KafkaFormState>(() => {
     if (!editAsset) return { ...KAFKA_DEFAULTS };
-    const parsed = parseKafkaConfig(editAsset.Config);
-    // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.ssh_asset_id || 0)。
-    return { ...parsed, sshTunnelId: editAsset.sshTunnelId || parsed.sshTunnelId };
+    // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.ssh_asset_id || 0),
+    // 并参与 connectionType 派生,故传入 parseKafkaConfig。
+    return parseKafkaConfig(editAsset.Config, editAsset.sshTunnelId || 0);
   });
   const patch = (p: Partial<KafkaFormState>) => setState((s) => ({ ...s, ...p }));
   const cred = useAssetCredential(editAsset);
@@ -289,7 +290,8 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
     () => ({
       buildConfig: async (ctx: AssetFormContext) => {
         validateKafkaCompanions(schemaRegistry, connectEnabled, connectClusters, t); // 非法 throw → handleSubmit toast
-        const cfg = buildKafkaBaseConfig(state);
+        const proxyPassword = await resolveSaveProxyPassword(state, ctx.encryptPassword);
+        const cfg = buildKafkaBaseConfig(state, proxyPassword);
         if (saslEnabled) {
           appendKafkaCredential(cfg, await resolveSaveCredential(cred.value, ctx.encryptPassword));
         }
@@ -297,10 +299,14 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
         if (schemaRegistry.enabled && schemaRegistryConfig) cfg.schema_registry = schemaRegistryConfig;
         const connectConfig = await buildConnectConfig(connectEnabled, connectClusters, ctx.encryptPassword);
         if (connectEnabled && connectConfig) cfg.connect = connectConfig;
-        return { configJSON: JSON.stringify(cfg), sshTunnelId: state.sshTunnelId };
+        return {
+          configJSON: JSON.stringify(cfg),
+          sshTunnelId: state.connectionType === "jumphost" ? state.sshTunnelId : 0,
+        };
       },
       buildTestConfig: async () => {
-        const cfg = buildKafkaBaseConfig(state);
+        // 测试:proxy 密码仅明文(无加密)
+        const cfg = buildKafkaBaseConfig(state, state.proxyPassword);
         if (saslEnabled) appendKafkaCredential(cfg, resolveTestCredential(cred.value));
         return { assetType: "kafka", configJSON: JSON.stringify(cfg), password: cred.value.password };
       },
@@ -446,15 +452,8 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
         </div>
       </div>
 
-      <div className="grid gap-2">
-        <Label>{t("asset.sshTunnel")}</Label>
-        <AssetSelect
-          value={state.sshTunnelId}
-          onValueChange={(v) => patch({ sshTunnelId: v })}
-          filterType="ssh"
-          placeholder={t("asset.sshTunnelNone")}
-        />
-      </div>
+      {/* Connection method: direct / SSH tunnel / SOCKS5 proxy */}
+      <ConnectionMethodFields value={state} onChange={patch} />
 
       <div className="grid gap-3 rounded-md border p-3">
         <div className="flex items-center justify-between gap-3">

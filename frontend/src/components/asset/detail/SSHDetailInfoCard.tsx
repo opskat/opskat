@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import type { DetailInfoCardProps } from "@/lib/assetTypes/types";
-import { DetailGrid, DetailSection, InfoItem } from "./InfoItem";
+import type { ProxyConfigJSON } from "../proxyConfig";
+import { DetailGrid, DetailSection, InfoItem, ProxyDetailSection } from "./InfoItem";
 import { parseDetailConfig } from "./utils";
 
 interface SSHConfig {
@@ -12,13 +13,7 @@ interface SSHConfig {
   credential_id?: number;
   private_keys?: string[];
   jump_host_id?: number;
-  proxy?: {
-    type: string;
-    host: string;
-    port: number;
-    username?: string;
-    password?: string;
-  } | null;
+  proxy?: ProxyConfigJSON | null;
 }
 
 export function SSHDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProps) {
@@ -76,15 +71,7 @@ export function SSHDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProps)
       )}
 
       {/* SSH Proxy */}
-      {cfg.proxy && (
-        <DetailSection title={t("asset.proxy")}>
-          <DetailGrid>
-            <InfoItem label={t("asset.proxyType")} value={cfg.proxy.type.toUpperCase()} />
-            <InfoItem label={t("asset.proxyHost")} value={`${cfg.proxy.host}:${cfg.proxy.port}`} mono />
-            {cfg.proxy.username && <InfoItem label={t("asset.proxyUsername")} value={cfg.proxy.username} />}
-          </DetailGrid>
-        </DetailSection>
-      )}
+      <ProxyDetailSection proxy={cfg.proxy} />
     </>
   );
 }

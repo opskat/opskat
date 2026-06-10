@@ -225,33 +225,26 @@ func BuildKafkaOptions(asset *asset_entity.Asset, cfg *asset_entity.KafkaConfig,
 	if tunnelID > 0 && sshPool == nil {
 		return nil, fmt.Errorf("kafka 配置了 SSH 隧道但 sshPool 不可用")
 	}
-	if cfg.TLS && tunnelID == 0 {
-		opts = append(opts, kgo.DialTLSConfig(tlsConfig))
-	}
-	if tunnelID > 0 {
-		opts = append(opts, kgo.Dialer(func(ctx context.Context, network, addr string) (net.Conn, error) {
+	// 底层拨号:隧道 > 代理 > 直连。franz-go 禁止 Dialer 与 DialTLSConfig 共存,
+	// 自定义拨号时 TLS 在 dialer 内手动包裹(tlsWrappedDialFunc)。
+	var dial dialContextFunc
+	switch {
+	case tunnelID > 0:
+		dial = func(ctx context.Context, addr string) (net.Conn, error) {
 			host, port, err := splitKafkaAddr(addr)
 			if err != nil {
 				return nil, err
 			}
-			conn, err := NewSSHTunnel(tunnelID, host, port, sshPool).Dial(ctx)
-			if err != nil {
-				return nil, err
-			}
-			if tlsConfig == nil {
-				return conn, nil
-			}
-			cfgClone := tlsConfig.Clone()
-			if cfgClone.ServerName == "" {
-				cfgClone.ServerName = host
-			}
-			tlsConn := tls.Client(conn, cfgClone)
-			if err := tlsConn.HandshakeContext(ctx); err != nil {
-				_ = conn.Close()
-				return nil, err
-			}
-			return tlsConn, nil
-		}))
+			return NewSSHTunnel(tunnelID, host, port, sshPool).Dial(ctx)
+		}
+	case cfg.Proxy != nil:
+		dial = proxyDialFunc(cfg.Proxy)
+	}
+	switch {
+	case dial != nil:
+		opts = append(opts, kgo.Dialer(tlsWrappedDialFunc(dial, tlsConfig)))
+	case cfg.TLS:
+		opts = append(opts, kgo.DialTLSConfig(tlsConfig))
 	}
 	mech := normalizeKafkaSASLMechanism(cfg.SASLMechanism)
 	switch mech {
@@ -298,6 +291,13 @@ func KafkaConfigFingerprint(asset *asset_entity.Asset, cfg *asset_entity.KafkaCo
 	} else if cfg.Password != "" {
 		passwordRef = "inline:" + hashString(cfg.Password)
 	}
+	proxyRef := ""
+	if cfg.Proxy != nil {
+		proxyRef = strings.Join([]string{
+			cfg.Proxy.Type, cfg.Proxy.Host, strconv.Itoa(cfg.Proxy.Port),
+			cfg.Proxy.Username, hashString(cfg.Proxy.Password),
+		}, "|")
+	}
 	parts := []string{
 		strings.Join(brokers, ","),
 		normalizeKafkaSASLMechanism(cfg.SASLMechanism),
@@ -310,6 +310,7 @@ func KafkaConfigFingerprint(asset *asset_entity.Asset, cfg *asset_entity.KafkaCo
 		cfg.TLSKeyFile,
 		strconv.FormatInt(tunnelID, 10),
 		passwordRef,
+		proxyRef,
 	}
 	return hashString(strings.Join(parts, "\x00"))
 }

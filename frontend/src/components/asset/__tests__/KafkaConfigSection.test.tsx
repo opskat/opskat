@@ -110,6 +110,29 @@ describe("KafkaConfigSection ref 契约", () => {
     expect(tc.configJSON).toContain('"password":"MAINENC"'); // 既有密文走测试 4th-arg 兜底
   });
 
+  it("proxy 模式:save 写 proxy(密文沿用,不加密)不写 ssh_asset_id;test 用明文(空则省略 password)", async () => {
+    encrypt.mockClear();
+    const editAsset = new asset_entity.Asset({
+      Type: "kafka",
+      Config: JSON.stringify({
+        brokers: ["b:9092"],
+        proxy: { type: "socks5", host: "p.example.com", port: 1081, username: "pu", password: "PROXYENC" },
+      }),
+    });
+    const ref = createRef<AssetFormHandle>();
+    render(<KafkaConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
+    const built = await ref.current!.buildConfig(ctx);
+    expect(built.sshTunnelId).toBe(0);
+    expect(built.configJSON).toContain(
+      '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}'
+    );
+    expect(built.configJSON).not.toContain("ssh_asset_id");
+    expect(encrypt).not.toHaveBeenCalled(); // 未输入明文 → 沿用既有密文
+    const tc = await ref.current!.buildTestConfig!(ctx);
+    // test 路径 proxy 密码仅明文;编辑态未重输 → 省略 password 键
+    expect(tc.configJSON).toContain('"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu"}');
+  });
+
   it("sasl=none:buildConfig 不含 credential_id/password(主凭据省略)", async () => {
     const editAsset = new asset_entity.Asset({
       Type: "kafka",

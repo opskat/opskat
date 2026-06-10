@@ -6,8 +6,10 @@ import {
   ETCD_DEFAULTS,
   type EtcdFormState,
 } from "@/components/asset/EtcdConfigSection.config";
+import { CONNECTION_DEFAULTS } from "@/components/asset/proxyConfig";
 
 const FULL: EtcdFormState = {
+  ...CONNECTION_DEFAULTS,
   endpoints: "10.0.0.1:2379\n10.0.0.2:2379",
   username: "admin",
   tls: true,
@@ -18,7 +20,17 @@ const FULL: EtcdFormState = {
   tlsKeyFile: "/c.key",
   dialTimeoutSeconds: 5,
   commandTimeoutSeconds: 10,
+  connectionType: "jumphost",
   sshTunnelId: 3,
+};
+
+const PROXY_FULL: EtcdFormState = {
+  ...FULL,
+  connectionType: "proxy",
+  sshTunnelId: 0,
+  proxyHost: "p.example.com",
+  proxyPort: 1081,
+  proxyUsername: "pu",
 };
 
 describe("parseEtcdEndpoints (锁旧 split(/[\\n,;]+/))", () => {
@@ -66,10 +78,32 @@ describe("buildEtcdConfig (锁旧 save 序:endpoints→username→credential→t
     );
     expect(json).toBe('{"endpoints":["x:2379"]}');
   });
+
+  it("proxy 模式写 proxy 不写 ssh_asset_id(键序:timeouts 后尾部)", () => {
+    expect(buildEtcdConfig(PROXY_FULL, { password: "ENC" }, "PROXYENC")).toBe(
+      '{"endpoints":["10.0.0.1:2379","10.0.0.2:2379"],"username":"admin","password":"ENC",' +
+        '"tls":true,"tls_insecure":true,"tls_server_name":"etcd.x","tls_ca_file":"/ca.pem",' +
+        '"tls_cert_file":"/c.crt","tls_key_file":"/c.key","dial_timeout_seconds":5,' +
+        '"command_timeout_seconds":10,' +
+        '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}}'
+    );
+  });
+
+  it("jumphost 模式不写 proxy(互斥,即便 proxy 字段有值)", () => {
+    const json = buildEtcdConfig({ ...PROXY_FULL, connectionType: "jumphost", sshTunnelId: 3 }, {}, "PROXYENC");
+    expect(json).toContain('"ssh_asset_id":3');
+    expect(json).not.toContain('"proxy"');
+  });
+
+  it("direct 模式不写 proxy 也不写 ssh_asset_id", () => {
+    const json = buildEtcdConfig({ ...PROXY_FULL, connectionType: "direct" }, {}, "PROXYENC");
+    expect(json).not.toContain('"proxy"');
+    expect(json).not.toContain("ssh_asset_id");
+  });
 });
 
 describe("parseEtcdConfig (锁旧 loadEtcdConfig 非凭据字段)", () => {
-  it("全字段回填(ssh_asset_id 仅来自 config)", () => {
+  it("全字段回填(ssh_asset_id 来自 config,派生 connectionType=jumphost)", () => {
     expect(
       parseEtcdConfig(
         '{"endpoints":["a:2379","b:2379"],"username":"u","tls":true,"tls_insecure":true,' +
@@ -77,6 +111,7 @@ describe("parseEtcdConfig (锁旧 loadEtcdConfig 非凭据字段)", () => {
           '"dial_timeout_seconds":8,"command_timeout_seconds":20,"ssh_asset_id":5}'
       )
     ).toEqual({
+      ...CONNECTION_DEFAULTS,
       endpoints: "a:2379\nb:2379",
       username: "u",
       tls: true,
@@ -87,6 +122,7 @@ describe("parseEtcdConfig (锁旧 loadEtcdConfig 非凭据字段)", () => {
       tlsKeyFile: "/ck",
       dialTimeoutSeconds: 8,
       commandTimeoutSeconds: 20,
+      connectionType: "jumphost",
       sshTunnelId: 5,
     });
   });
@@ -95,5 +131,33 @@ describe("parseEtcdConfig (锁旧 loadEtcdConfig 非凭据字段)", () => {
   });
   it("非法 JSON 回退默认", () => {
     expect(parseEtcdConfig("nope")).toEqual(ETCD_DEFAULTS);
+  });
+
+  it("带 proxy 回填并派生 connectionType=proxy(密码入 encrypted)", () => {
+    const s = parseEtcdConfig(
+      '{"endpoints":["a:2379"],' +
+        '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}}'
+    );
+    expect(s.connectionType).toBe("proxy");
+    expect(s.proxyHost).toBe("p.example.com");
+    expect(s.proxyPort).toBe(1081);
+    expect(s.proxyUsername).toBe("pu");
+    expect(s.proxyPassword).toBe("");
+    expect(s.encryptedProxyPassword).toBe("PROXYENC");
+  });
+
+  it("assetTunnelId 入参优先派生 jumphost(镜像 asset.sshTunnelId 优先)", () => {
+    const s = parseEtcdConfig('{"endpoints":["a:2379"],"proxy":{"type":"socks5","host":"p","port":1080}}', 6);
+    expect(s.connectionType).toBe("jumphost");
+    expect(s.sshTunnelId).toBe(6);
+  });
+
+  it("parse→build 往返(proxy,密文沿用)", () => {
+    const original =
+      '{"endpoints":["a:2379"],"username":"u","password":"OLD",' +
+      '"dial_timeout_seconds":5,"command_timeout_seconds":10,' +
+      '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}}';
+    const state = parseEtcdConfig(original);
+    expect(buildEtcdConfig(state, { password: "OLD" }, state.encryptedProxyPassword)).toBe(original);
   });
 });

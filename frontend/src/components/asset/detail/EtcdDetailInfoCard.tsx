@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import type { DetailInfoCardProps } from "@/lib/assetTypes/types";
-import { DetailGrid, DetailSection, InfoItem, TunnelInfo } from "./InfoItem";
+import type { ProxyConfigJSON } from "../proxyConfig";
+import { DetailGrid, DetailSection, InfoItem, ProxyDetailSection, TunnelInfo } from "./InfoItem";
 import { ENABLED_VALUE, MASKED_SECRET, parseDetailConfig } from "./utils";
 
 interface EtcdConfig {
@@ -12,6 +13,7 @@ interface EtcdConfig {
   dial_timeout_seconds?: number;
   command_timeout_seconds?: number;
   ssh_asset_id?: number;
+  proxy?: ProxyConfigJSON | null;
 }
 
 export function EtcdDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProps) {
@@ -23,20 +25,23 @@ export function EtcdDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProps
   const endpoints = (cfg.endpoints || []).join(", ");
 
   return (
-    <DetailSection title="etcd">
-      <DetailGrid>
-        <InfoItem label={t("etcd.form.endpoints")} value={endpoints} mono />
-        {cfg.username && <InfoItem label={t("asset.username")} value={cfg.username} mono />}
-        {cfg.password && <InfoItem label={t("asset.password")} value={MASKED_SECRET} />}
-        {cfg.tls && <InfoItem label={t("asset.tls")} value={ENABLED_VALUE} />}
-        {cfg.dial_timeout_seconds !== undefined && (
-          <InfoItem label={t("etcd.form.dialTimeout")} value={String(cfg.dial_timeout_seconds)} mono />
-        )}
-        {cfg.command_timeout_seconds !== undefined && (
-          <InfoItem label={t("etcd.form.commandTimeout")} value={String(cfg.command_timeout_seconds)} mono />
-        )}
-      </DetailGrid>
-      {tunnelName && <TunnelInfo label={t("asset.sshTunnel")} name={tunnelName} />}
-    </DetailSection>
+    <>
+      <DetailSection title="etcd">
+        <DetailGrid>
+          <InfoItem label={t("etcd.form.endpoints")} value={endpoints} mono />
+          {cfg.username && <InfoItem label={t("asset.username")} value={cfg.username} mono />}
+          {cfg.password && <InfoItem label={t("asset.password")} value={MASKED_SECRET} />}
+          {cfg.tls && <InfoItem label={t("asset.tls")} value={ENABLED_VALUE} />}
+          {cfg.dial_timeout_seconds !== undefined && (
+            <InfoItem label={t("etcd.form.dialTimeout")} value={String(cfg.dial_timeout_seconds)} mono />
+          )}
+          {cfg.command_timeout_seconds !== undefined && (
+            <InfoItem label={t("etcd.form.commandTimeout")} value={String(cfg.command_timeout_seconds)} mono />
+          )}
+        </DetailGrid>
+        {tunnelName && <TunnelInfo label={t("asset.sshTunnel")} name={tunnelName} />}
+      </DetailSection>
+      <ProxyDetailSection proxy={cfg.proxy} />
+    </>
   );
 }

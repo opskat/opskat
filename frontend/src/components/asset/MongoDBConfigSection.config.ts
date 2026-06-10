@@ -1,6 +1,13 @@
 import type { CredentialFragment } from "./credentialConfig";
+import {
+  CONNECTION_DEFAULTS,
+  buildProxyJSON,
+  parseConnectionFields,
+  type ConnectionFormFields,
+  type ProxyConfigJSON,
+} from "./proxyConfig";
 
-export interface MongoDBFormState {
+export interface MongoDBFormState extends ConnectionFormFields {
   connectionMode: "manual" | "uri";
   connectionURI: string;
   host: string;
@@ -10,7 +17,6 @@ export interface MongoDBFormState {
   authSource: string;
   database: string;
   tls: boolean;
-  sshTunnelId: number;
 }
 
 export const MONGODB_DEFAULTS: MongoDBFormState = {
@@ -23,7 +29,7 @@ export const MONGODB_DEFAULTS: MongoDBFormState = {
   authSource: "",
   database: "",
   tls: false,
-  sshTunnelId: 0,
+  ...CONNECTION_DEFAULTS,
 };
 
 interface MongoDBConfig {
@@ -38,17 +44,21 @@ interface MongoDBConfig {
   auth_source?: string;
   tls?: boolean;
   ssh_asset_id?: number;
+  proxy?: ProxyConfigJSON;
 }
 
 /**
  * 保存/测试共用序列化(键序锁旧 save 分支)。cred 由 resolveSave/TestCredential 预解析。
  * 隧道走 asset 顶层列(sshTunnelId);save 不写 ssh_asset_id(锁旧 save 分支)。
  * 测试无 asset 行,buildTestConfig 传 includeSshAssetId=true 把隧道塞进 config(锁旧 handleTestMongoDBConnection)。
+ * proxyPassword 由 resolveSaveProxyPassword(save=密文)或 state.proxyPassword(test=明文)预解析;
+ * 隧道与代理互斥,按 connectionType 二选一;URI 模式同样写 proxy(后端 DialMongoDB URI+proxy 已支持)。
  */
 export function buildMongoDBConfig(
   state: MongoDBFormState,
   cred: CredentialFragment,
-  includeSshAssetId = false
+  includeSshAssetId = false,
+  proxyPassword = ""
 ): string {
   const cfg: MongoDBConfig = {};
   if (state.connectionMode === "uri" && state.connectionURI) {
@@ -64,12 +74,16 @@ export function buildMongoDBConfig(
   if (state.authSource) cfg.auth_source = state.authSource;
   if (state.database) cfg.database = state.database;
   if (state.tls) cfg.tls = true;
-  if (includeSshAssetId && state.sshTunnelId > 0) cfg.ssh_asset_id = state.sshTunnelId;
+  if (state.connectionType === "jumphost" && includeSshAssetId && state.sshTunnelId > 0)
+    cfg.ssh_asset_id = state.sshTunnelId;
+  const proxy = buildProxyJSON(state, proxyPassword);
+  if (proxy) cfg.proxy = proxy;
   return JSON.stringify(cfg);
 }
 
-/** 编辑态回填(镜像旧 loadMongoDBConfig 非凭据字段;ssh_asset_id 仅取 config,asset.sshTunnelId 由 section 覆盖)。 */
-export function parseMongoDBConfig(configJSON: string): MongoDBFormState {
+/** 编辑态回填(镜像旧 loadMongoDBConfig 非凭据字段;connectionType 派生需要 asset 顶层
+ *  sshTunnelId 优先(镜像旧 `asset.sshTunnelId || cfg.ssh_asset_id || 0`),故由 section 传入)。 */
+export function parseMongoDBConfig(configJSON: string, assetTunnelId = 0): MongoDBFormState {
   try {
     const cfg: MongoDBConfig = JSON.parse(configJSON || "{}");
     return {
@@ -82,7 +96,7 @@ export function parseMongoDBConfig(configJSON: string): MongoDBFormState {
       authSource: cfg.auth_source || "",
       database: cfg.database || "",
       tls: cfg.tls || false,
-      sshTunnelId: cfg.ssh_asset_id || 0,
+      ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0),
     };
   } catch {
     return { ...MONGODB_DEFAULTS };

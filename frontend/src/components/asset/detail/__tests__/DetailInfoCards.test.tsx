@@ -8,6 +8,7 @@ import { MongoDBDetailInfoCard } from "../MongoDBDetailInfoCard";
 import { K8sDetailInfoCard } from "../K8sDetailInfoCard";
 import { SerialDetailInfoCard } from "../SerialDetailInfoCard";
 import { EtcdDetailInfoCard } from "../EtcdDetailInfoCard";
+import { KafkaDetailInfoCard } from "../KafkaDetailInfoCard";
 
 afterEach(() => {
   cleanup();
@@ -329,5 +330,47 @@ describe("EtcdDetailInfoCard", () => {
     const asset = makeAsset("etcd", { endpoints: ["10.0.0.10:2379"], ssh_asset_id: 4 });
     const { getByText } = render(<EtcdDetailInfoCard asset={asset} sshTunnelName={tunnelFn} />);
     expect(getByText("legacy-bastion")).toBeInTheDocument();
+  });
+});
+
+describe("数据库族详情卡 proxy 展示", () => {
+  const PROXY = { type: "socks5", host: "proxy.example.com", port: 1080, username: "proxyuser" };
+
+  it("DatabaseDetailInfoCard 渲染 proxy", () => {
+    const asset = makeAsset("database", { driver: "mysql", host: "db", port: 3306, username: "root", proxy: PROXY });
+    const { getByText } = render(<DatabaseDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
+    expect(getByText("SOCKS5")).toBeInTheDocument();
+    expect(getByText("proxy.example.com:1080")).toBeInTheDocument();
+    expect(getByText("proxyuser")).toBeInTheDocument();
+  });
+
+  it("RedisDetailInfoCard 渲染 proxy", () => {
+    const asset = makeAsset("redis", { host: "r", port: 6379, proxy: PROXY });
+    const { getByText } = render(<RedisDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
+    expect(getByText("proxy.example.com:1080")).toBeInTheDocument();
+  });
+
+  it("MongoDBDetailInfoCard 渲染 proxy", () => {
+    const asset = makeAsset("mongodb", { host: "m", port: 27017, proxy: PROXY });
+    const { getByText } = render(<MongoDBDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
+    expect(getByText("proxy.example.com:1080")).toBeInTheDocument();
+  });
+
+  it("EtcdDetailInfoCard 渲染 proxy", () => {
+    const asset = makeAsset("etcd", { endpoints: ["10.0.0.10:2379"], proxy: PROXY });
+    const { getByText } = render(<EtcdDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
+    expect(getByText("proxy.example.com:1080")).toBeInTheDocument();
+  });
+
+  it("KafkaDetailInfoCard 渲染 proxy", () => {
+    const asset = makeAsset("kafka", { brokers: ["b1:9092"], proxy: PROXY });
+    const { getByText } = render(<KafkaDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
+    expect(getByText("proxy.example.com:1080")).toBeInTheDocument();
+  });
+
+  it("无 proxy 不渲染代理段", () => {
+    const asset = makeAsset("redis", { host: "r", port: 6379 });
+    const { queryByText } = render(<RedisDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
+    expect(queryByText("proxy.example.com:1080")).not.toBeInTheDocument();
   });
 });

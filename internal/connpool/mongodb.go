@@ -12,6 +12,7 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/socksdial"
 	"github.com/opskat/opskat/internal/sshpool"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -29,6 +30,7 @@ func (m *MongoClientCloser) Close() error {
 }
 
 // mongoTunnelDialer implements options.ContextDialer for SSH tunnel routing.
+// 隧道在创建时已固定目标,忽略 address 参数。
 type mongoTunnelDialer struct {
 	tunnel *SSHTunnel
 }
@@ -37,8 +39,50 @@ func (d *mongoTunnelDialer) DialContext(ctx context.Context, network, address st
 	return d.tunnel.Dial(ctx)
 }
 
-// DialMongoDB 创建 MongoDB 连接（直连或通过 SSH 隧道）
-// password 为已解析的明文密码，由调用方负责解密
+// mongoProxyDialer implements options.ContextDialer for SOCKS5 proxy routing.
+// 与隧道相反,代理按驱动传入的 address 拨号,副本集发现可正常工作。
+type mongoProxyDialer struct {
+	proxy *asset_entity.ProxyConfig
+}
+
+func (d *mongoProxyDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	return socksdial.Dial(ctx, d.proxy, address)
+}
+
+// configureMongoTransport 按 隧道 > 代理 > 直连 设置 clientOpts 的 dialer,返回隧道(可为 nil)。
+// 仅隧道场景强制 SetDirect:隧道只通向单一节点;代理按目标地址远端解析,不能禁用副本集发现。
+func configureMongoTransport(clientOpts *options.ClientOptions, asset *asset_entity.Asset, cfg *asset_entity.MongoDBConfig, sshPool *sshpool.Pool) (*SSHTunnel, error) {
+	tunnelID := asset.SSHTunnelID
+	if tunnelID == 0 {
+		tunnelID = cfg.SSHAssetID // backward compat
+	}
+	if tunnelID > 0 && sshPool != nil {
+		var host string
+		var port int
+		var err error
+		if cfg.ConnectionURI != "" {
+			host, port, err = parseHostFromURI(cfg.ConnectionURI)
+			if err != nil {
+				return nil, fmt.Errorf("解析 MongoDB URI 失败: %w", err)
+			}
+		} else {
+			host = cfg.Host
+			port = cfg.Port
+		}
+		tunnel := NewSSHTunnel(tunnelID, host, port, sshPool)
+		clientOpts.SetDialer(&mongoTunnelDialer{tunnel: tunnel})
+		// 禁止副本集发现，强制直连，避免驱动尝试连接副本集其他节点
+		clientOpts.SetDirect(true)
+		return tunnel, nil
+	}
+	if cfg.Proxy != nil {
+		clientOpts.SetDialer(&mongoProxyDialer{proxy: cfg.Proxy})
+	}
+	return nil, nil
+}
+
+// DialMongoDB 创建 MongoDB 连接（直连、SSH 隧道或 SOCKS5 代理,隧道优先）
+// password 为已解析的明文密码，cfg.Proxy.Password 为明文,均由调用方负责解密
 func DialMongoDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.MongoDBConfig, password string, sshPool *sshpool.Pool) (*mongo.Client, io.Closer, error) {
 	var uri string
 	if cfg.ConnectionURI != "" {
@@ -53,28 +97,9 @@ func DialMongoDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_enti
 		clientOpts.SetTLSConfig(&tls.Config{})
 	}
 
-	var tunnel *SSHTunnel
-	tunnelID := asset.SSHTunnelID
-	if tunnelID == 0 {
-		tunnelID = cfg.SSHAssetID // backward compat
-	}
-	if tunnelID > 0 && sshPool != nil {
-		var host string
-		var port int
-		var err error
-		if cfg.ConnectionURI != "" {
-			host, port, err = parseHostFromURI(cfg.ConnectionURI)
-			if err != nil {
-				return nil, nil, fmt.Errorf("解析 MongoDB URI 失败: %w", err)
-			}
-		} else {
-			host = cfg.Host
-			port = cfg.Port
-		}
-		tunnel = NewSSHTunnel(tunnelID, host, port, sshPool)
-		clientOpts.SetDialer(&mongoTunnelDialer{tunnel: tunnel})
-		// 禁止副本集发现，强制直连，避免驱动尝试连接副本集其他节点
-		clientOpts.SetDirect(true)
+	tunnel, err := configureMongoTransport(clientOpts, asset, cfg, sshPool)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	client, err := mongo.Connect(clientOpts)
