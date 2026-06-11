@@ -843,6 +843,7 @@ func (s *System) InstallOpsctl(targetDir string) (string, error) {
 
 // SkillTarget AI Skill 安装目标
 type SkillTarget struct {
+	Key       string `json:"key"`
 	Name      string `json:"name"`
 	Installed bool   `json:"installed"`
 	Path      string `json:"path"`
@@ -858,14 +859,17 @@ const (
 )
 
 // skillTargetDefs 支持的 Skill 安装目标，添加新 CLI 只需在此追加
-var skillTargetDefs = []struct {
+type skillTargetDef struct {
+	Key      string                   // 稳定标识，供前端逐项卸载调用
 	Name     string                   // 显示名称
 	Type     skillInstallType         // 安装格式
 	SkillFn  func(home string) string // 返回安装目录
 	DetectFn func(path string) bool   // 检测是否已安装
-}{
+}
+
+var skillTargetDefs = []skillTargetDef{
 	{
-		"Claude Code", installClaude,
+		"claude-code", "Claude Code", installClaude,
 		func(home string) string { return claudePluginDir(home) },
 		func(path string) bool {
 			_, err := os.Stat(filepath.Join(path, ".claude-plugin", "plugin.json"))
@@ -873,7 +877,7 @@ var skillTargetDefs = []struct {
 		},
 	},
 	{
-		"Codex", installSkill,
+		"codex", "Codex", installSkill,
 		func(home string) string { return filepath.Join(home, ".codex", "skills", "opsctl") },
 		func(path string) bool {
 			_, err := os.Stat(filepath.Join(path, "SKILL.md"))
@@ -881,7 +885,7 @@ var skillTargetDefs = []struct {
 		},
 	},
 	{
-		"OpenCode", installSkill,
+		"opencode", "OpenCode", installSkill,
 		func(home string) string { return filepath.Join(home, ".config", "opencode", "skills", "opsctl") },
 		func(path string) bool {
 			_, err := os.Stat(filepath.Join(path, "SKILL.md"))
@@ -889,7 +893,7 @@ var skillTargetDefs = []struct {
 		},
 	},
 	{
-		"Gemini CLI", installGemini,
+		"gemini-cli", "Gemini CLI", installGemini,
 		func(home string) string { return filepath.Join(home, ".gemini", "extensions", "opsctl") },
 		func(path string) bool {
 			_, err := os.Stat(filepath.Join(path, "gemini-extension.json"))
@@ -939,6 +943,7 @@ func (s *System) DetectSkills() []SkillTarget {
 	for _, def := range skillTargetDefs {
 		path := def.SkillFn(home)
 		targets = append(targets, SkillTarget{
+			Key:       def.Key,
 			Name:      def.Name,
 			Installed: def.DetectFn(path),
 			Path:      path,
@@ -1178,12 +1183,7 @@ func (s *System) installGeminiExtension(extDir string) error {
 }
 
 // installTarget 根据安装类型分发到对应安装方法
-func (s *System) installTarget(def struct {
-	Name     string
-	Type     skillInstallType
-	SkillFn  func(home string) string
-	DetectFn func(path string) bool
-}, home string) error {
+func (s *System) installTarget(def skillTargetDef, home string) error {
 	path := def.SkillFn(home)
 	switch def.Type {
 	case installClaude:
@@ -1215,6 +1215,163 @@ func (s *System) InstallSkills() error {
 		logger.Default().Warn("write plugin reference failed", zap.Error(err))
 	}
 
+	return nil
+}
+
+// UninstallSkill 卸载指定 AI 工具中的 opsctl Skill/插件。
+func (s *System) UninstallSkill(key string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("get home directory failed: %w", err)
+	}
+
+	for _, def := range skillTargetDefs {
+		if def.Key != key {
+			continue
+		}
+		if err := s.uninstallTarget(def, home); err != nil {
+			return fmt.Errorf("uninstall %s failed: %w", def.Name, err)
+		}
+		return nil
+	}
+	return fmt.Errorf("unknown skill target: %s", key)
+}
+
+func (s *System) uninstallTarget(def skillTargetDef, home string) error {
+	path := def.SkillFn(home)
+	if def.Type == installClaude {
+		if err := removeOwnedDir(claudeMarketplaceDir(home), home, pluginRegistryName); err != nil {
+			return err
+		}
+		return s.unregisterClaudePlugin(home)
+	}
+	if err := removeOwnedDir(path, home, pluginName); err != nil {
+		return err
+	}
+	return nil
+}
+
+func removeOwnedDir(path, home, expectedBase string) error {
+	cleanPath := filepath.Clean(path)
+	cleanHome := filepath.Clean(home)
+	if filepath.Base(cleanPath) != expectedBase {
+		return fmt.Errorf("refuse to remove non-%s path: %s", expectedBase, cleanPath)
+	}
+	rel, err := filepath.Rel(cleanHome, cleanPath)
+	if err != nil {
+		return fmt.Errorf("check target path: %w", err)
+	}
+	if rel == "." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." || filepath.IsAbs(rel) {
+		return fmt.Errorf("refuse to remove path outside home: %s", cleanPath)
+	}
+	if pathTraversesSymlink(cleanPath) {
+		// 开发模式下目录可能被软链到源码树（与安装侧一致），跳过删除而非删穿软链接。
+		logger.Default().Info("skip skill uninstall: target traverses symlink (dev mode)", zap.String("path", cleanPath))
+		return nil
+	}
+	if err := os.RemoveAll(cleanPath); err != nil {
+		return fmt.Errorf("remove %s failed: %w", cleanPath, err)
+	}
+	return nil
+}
+
+func (s *System) unregisterClaudePlugin(home string) error {
+	pluginsDir := filepath.Join(home, ".claude", "plugins")
+	key := pluginName + "@" + pluginRegistryName
+
+	if err := removeClaudeInstalledPlugin(filepath.Join(pluginsDir, "installed_plugins.json"), key); err != nil {
+		return err
+	}
+	if err := removeJSONTopLevelKey(filepath.Join(pluginsDir, "known_marketplaces.json"), pluginRegistryName); err != nil {
+		return err
+	}
+	if err := removeClaudeSettingsPlugin(filepath.Join(home, ".claude", "settings.json"), key); err != nil {
+		return err
+	}
+	return nil
+}
+
+func removeClaudeInstalledPlugin(path, key string) error {
+	type pluginEntry struct {
+		Scope       string `json:"scope"`
+		InstallPath string `json:"installPath"`
+		Version     string `json:"version"`
+		InstalledAt string `json:"installedAt"`
+		LastUpdated string `json:"lastUpdated"`
+	}
+	type pluginsConfig struct {
+		Version int                      `json:"version"`
+		Plugins map[string][]pluginEntry `json:"plugins"`
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // path is under user home config
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read installed_plugins.json: %w", err)
+	}
+	cfg := pluginsConfig{Version: 2, Plugins: make(map[string][]pluginEntry)}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("parse installed_plugins.json: %w", err)
+	}
+	entries := cfg.Plugins[key]
+	kept := entries[:0]
+	for _, entry := range entries {
+		if entry.Scope != "user" {
+			kept = append(kept, entry)
+		}
+	}
+	if len(kept) == 0 {
+		delete(cfg.Plugins, key)
+	} else {
+		cfg.Plugins[key] = kept
+	}
+	if err := writeJSON(path, cfg); err != nil {
+		return fmt.Errorf("write installed_plugins.json: %w", err)
+	}
+	return nil
+}
+
+func removeJSONTopLevelKey(path, key string) error {
+	data, err := os.ReadFile(path) //nolint:gosec // path is under user home config
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read %s: %w", filepath.Base(path), err)
+	}
+	value := make(map[string]any)
+	if err := json.Unmarshal(data, &value); err != nil {
+		return fmt.Errorf("parse %s: %w", filepath.Base(path), err)
+	}
+	delete(value, key)
+	if err := writeJSON(path, value); err != nil {
+		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
+	}
+	return nil
+}
+
+func removeClaudeSettingsPlugin(path, key string) error {
+	data, err := os.ReadFile(path) //nolint:gosec // path is under user home config
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read settings.json: %w", err)
+	}
+	settings := make(map[string]any)
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return fmt.Errorf("parse settings.json: %w", err)
+	}
+	if enabled, ok := settings["enabledPlugins"].(map[string]any); ok {
+		delete(enabled, key)
+	}
+	if marketplaces, ok := settings["extraKnownMarketplaces"].(map[string]any); ok {
+		delete(marketplaces, pluginRegistryName)
+	}
+	if err := writeJSON(path, settings); err != nil {
+		return fmt.Errorf("write settings.json: %w", err)
+	}
 	return nil
 }
 
