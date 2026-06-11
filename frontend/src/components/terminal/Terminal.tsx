@@ -131,9 +131,13 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     openSearch(selection);
   }, [openSearch]);
 
-  const handlePaste = useCallback(() => {
-    pasteFromClipboard(sessionId, { suppressNativePaste: true }).catch(console.error);
-  }, [sessionId]);
+  const handlePaste = useCallback(
+    (opts?: { suppressNativePaste?: boolean }) => {
+      const paste = opts ? pasteFromClipboard(sessionId, opts) : pasteFromClipboard(sessionId);
+      paste.catch(console.error);
+    },
+    [sessionId]
+  );
 
   const handleSelectAll = useCallback(() => {
     termRef.current?.selectAll();
@@ -178,7 +182,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     inst.bridge.setOnCopy(() => {
       return copySelection();
     });
-    inst.bridge.setOnPaste(() => handlePaste());
+    inst.bridge.setOnPaste(() => handlePaste({ suppressNativePaste: true }));
     inst.bridge.setOnSelectAll(() => handleSelectAll());
     inst.bridge.setOnFind(() => openSearch());
 
@@ -427,7 +431,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
             {t("ssh.contextMenu.copy")}
             <ContextMenuShortcut>{formatBinding(shortcuts["terminal.copy"])}</ContextMenuShortcut>
           </ContextMenuItem>
-          <ContextMenuItem onClick={handlePaste}>
+          <ContextMenuItem onClick={() => handlePaste()}>
             {t("ssh.contextMenu.paste")}
             <ContextMenuShortcut>{formatBinding(shortcuts["terminal.paste"])}</ContextMenuShortcut>
           </ContextMenuItem>
