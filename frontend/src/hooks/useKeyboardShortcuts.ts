@@ -20,6 +20,7 @@ export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar, onToggl
       // 必须早于"输入框内忽略"分支处理。
       const action = matchShortcut(e, shortcuts);
       if (!action) return;
+      if (action.startsWith("terminal.")) return;
 
       // command.quickopen 早期处理：在输入框内也应该能触发
       if (action === "command.quickopen") {

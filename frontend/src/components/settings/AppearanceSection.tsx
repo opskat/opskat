@@ -120,6 +120,8 @@ export function TerminalSection() {
     webglError,
     highlightLinks,
     setHighlightLinks,
+    copyBehavior,
+    setCopyBehavior,
     customThemes,
     addCustomTheme,
     updateCustomTheme,
@@ -306,6 +308,23 @@ export function TerminalSection() {
               <p className="text-xs text-muted-foreground">{t("terminal.highlightLinksHint")}</p>
             </div>
             <Switch checked={highlightLinks} onCheckedChange={setHighlightLinks} />
+          </div>
+
+          <div className="grid gap-2">
+            <Label>{t("terminal.copyBehavior")}</Label>
+            <Select value={copyBehavior} onValueChange={setCopyBehavior as (value: string) => void}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="popover-menu">{t("terminal.copyBehaviorPopoverMenu")}</SelectItem>
+                <SelectItem value="smart-right-click">{t("terminal.copyBehaviorSmartRightClick")}</SelectItem>
+                <SelectItem value="select-copy-right-paste">
+                  {t("terminal.copyBehaviorSelectCopyRightPaste")}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">{t("terminal.copyBehaviorHint")}</p>
           </div>
 
           <Separator />

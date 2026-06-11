@@ -17,9 +17,17 @@ interface TerminalSearchBarProps {
   visible: boolean;
   onClose: () => void;
   searchAddon: SearchAddon | null;
+  initialQuery?: string | null;
+  initialQueryToken?: number;
 }
 
-export function TerminalSearchBar({ visible, onClose, searchAddon }: TerminalSearchBarProps) {
+export function TerminalSearchBar({
+  visible,
+  onClose,
+  searchAddon,
+  initialQuery,
+  initialQueryToken,
+}: TerminalSearchBarProps) {
   const { t } = useTranslation();
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
@@ -34,6 +42,20 @@ export function TerminalSearchBar({ visible, onClose, searchAddon }: TerminalSea
       searchAddon?.clearDecorations();
     }
   }, [visible, searchAddon]);
+
+  useEffect(() => {
+    if (!visible || initialQuery == null) return;
+    setQuery(initialQuery);
+    if (!searchAddon) return;
+    if (!initialQuery) {
+      searchAddon.clearDecorations();
+      return;
+    }
+    searchAddon.findNext(initialQuery, { caseSensitive, wholeWord, regex, decorations: SEARCH_DECORATIONS });
+    // Only a new search request should seed the input. Option changes are handled
+    // by the existing option effect below, without resetting user-edited text.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, initialQuery, initialQueryToken, searchAddon]);
 
   const doSearch = useCallback(
     (direction: "next" | "previous", term?: string) => {

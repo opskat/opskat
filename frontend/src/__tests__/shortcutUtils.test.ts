@@ -33,6 +33,12 @@ describe("matchShortcut", () => {
     expect(result).toBe("tab.close");
   });
 
+  it("matches terminal copy by default", () => {
+    const event = makeKeyboardEvent({ code: "KeyC", ctrlKey: true });
+    const result = matchShortcut(event, DEFAULT_SHORTCUTS);
+    expect(result).toBe("terminal.copy");
+  });
+
   it("matches Ctrl+Shift+[ to tab.prev", () => {
     const event = makeKeyboardEvent({ code: "BracketLeft", ctrlKey: true, shiftKey: true });
     const result = matchShortcut(event, DEFAULT_SHORTCUTS);

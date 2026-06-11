@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useShortcutStore, DEFAULT_SHORTCUTS, type ShortcutBinding } from "../stores/shortcutStore";
+import {
+  useShortcutStore,
+  DEFAULT_SHORTCUTS,
+  findShortcutConflict,
+  type ShortcutBinding,
+} from "../stores/shortcutStore";
 
 describe("shortcutStore", () => {
   beforeEach(() => {
@@ -28,6 +33,14 @@ describe("shortcutStore", () => {
       expect(shortcuts["panel.filter"]).toEqual(DEFAULT_SHORTCUTS["panel.filter"]);
     });
 
+    it("has terminal shortcut defaults", () => {
+      const { shortcuts } = useShortcutStore.getState();
+      expect(shortcuts["terminal.copy"]).toEqual(DEFAULT_SHORTCUTS["terminal.copy"]);
+      expect(shortcuts["terminal.paste"]).toEqual(DEFAULT_SHORTCUTS["terminal.paste"]);
+      expect(shortcuts["terminal.selectAll"]).toEqual(DEFAULT_SHORTCUTS["terminal.selectAll"]);
+      expect(shortcuts["terminal.find"]).toEqual(DEFAULT_SHORTCUTS["terminal.find"]);
+    });
+
     it("isRecording is false", () => {
       expect(useShortcutStore.getState().isRecording).toBe(false);
     });
@@ -39,6 +52,18 @@ describe("shortcutStore", () => {
       useShortcutStore.getState().updateShortcut("tab.close", newBinding);
 
       expect(useShortcutStore.getState().shortcuts["tab.close"]).toEqual(newBinding);
+    });
+
+    it("updating terminal.copy does not change any other shortcut", () => {
+      const newBinding: ShortcutBinding = { code: "KeyY", mod: true, ctrl: false, shift: false, alt: false };
+      useShortcutStore.getState().updateShortcut("terminal.copy", newBinding);
+
+      const { shortcuts } = useShortcutStore.getState();
+      expect(shortcuts["terminal.copy"]).toEqual(newBinding);
+      for (const [action, binding] of Object.entries(DEFAULT_SHORTCUTS)) {
+        if (action === "terminal.copy") continue;
+        expect(shortcuts[action as keyof typeof DEFAULT_SHORTCUTS]).toEqual(binding);
+      }
     });
 
     it("persists custom shortcuts to localStorage", () => {
@@ -119,6 +144,18 @@ describe("shortcutStore", () => {
 
       useShortcutStore.getState().setIsRecording(false);
       expect(useShortcutStore.getState().isRecording).toBe(false);
+    });
+  });
+
+  describe("findShortcutConflict", () => {
+    it("reports conflicts with existing bindings", () => {
+      expect(findShortcutConflict("terminal.copy", DEFAULT_SHORTCUTS["tab.close"], DEFAULT_SHORTCUTS)).toBe(
+        "tab.close"
+      );
+    });
+
+    it("allows terminal.find and panel.filter to share the same default binding", () => {
+      expect(findShortcutConflict("terminal.find", DEFAULT_SHORTCUTS["panel.filter"], DEFAULT_SHORTCUTS)).toBeNull();
     });
   });
 });

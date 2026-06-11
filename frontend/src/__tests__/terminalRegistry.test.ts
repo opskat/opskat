@@ -33,10 +33,12 @@ const hoisted = vi.hoisted(() => {
       provideLinks: (bufferLineNumber: number, callback: (links: unknown[] | undefined) => void) => void;
     } | null;
     lines: Map<number, string>;
+    textarea: HTMLTextAreaElement | null;
   } = {
     capturedOnKey: null,
     linkProvider: null,
     lines: new Map(),
+    textarea: null,
   };
   return {
     eventHandlers,
@@ -133,6 +135,7 @@ vi.mock("@xterm/xterm", () => {
     onWriteParsed = vi.fn(() => ({ dispose: vi.fn() }));
     onRender = vi.fn(() => ({ dispose: vi.fn() }));
     attachCustomKeyEventHandler = vi.fn();
+    textarea = document.createElement("textarea");
     registerLinkProvider = vi.fn((provider) => {
       hoisted.state.linkProvider = provider;
       return { dispose: hoisted.linkProviderDisposeSpy };
@@ -142,6 +145,7 @@ vi.mock("@xterm/xterm", () => {
       hoisted.disposeSpy();
     });
     constructor(options?: unknown) {
+      hoisted.state.textarea = this.textarea;
       hoisted.terminalCtor(options);
     }
   }
@@ -151,8 +155,10 @@ vi.mock("@xterm/xterm", () => {
 vi.mock("@/components/terminal/terminalInputBridge", () => ({
   createTerminalInputBridge: vi.fn(() => ({
     setShortcuts: vi.fn(),
-    setOnFilter: vi.fn(),
     setOnCopy: vi.fn(),
+    setOnPaste: vi.fn(),
+    setOnSelectAll: vi.fn(),
+    setOnFind: vi.fn(),
     dispose: vi.fn(() => {
       hoisted.disposeOrder.push("bridge");
       hoisted.bridgeDisposeSpy();
@@ -375,6 +381,7 @@ describe("terminalRegistry", () => {
     hoisted.toastWarningSpy.mockClear();
     hoisted.toastErrorSpy.mockClear();
     hoisted.zmodemActive = false;
+    hoisted.state.textarea = null;
     vi.mocked(WriteSSH).mockClear();
     hoisted.disposeOrder.length = 0;
   });
@@ -583,6 +590,23 @@ describe("terminalRegistry", () => {
     expect(hoisted.pasteSpy).toHaveBeenCalledTimes(1);
     expect(hoisted.pasteSpy).toHaveBeenCalledWith(clip);
     disposeTerminal("sess-clip");
+  });
+
+  it("pasteFromClipboard can suppress the following native paste event to prevent duplicate paste", async () => {
+    getOrCreateTerminal("sess-clip-suppress", { fontSize: 14, fontFamily: "mono", scrollback: 1000 });
+    const textarea = hoisted.state.textarea;
+    expect(textarea).not.toBeNull();
+
+    hoisted.clipboardGetTextSpy.mockResolvedValue("echo once\n");
+    const pastePromise = pasteFromClipboard("sess-clip-suppress", { suppressNativePaste: true });
+    const nativePasteAllowed = textarea!.dispatchEvent(new ClipboardEvent("paste", { cancelable: true }));
+    await pastePromise;
+
+    expect(nativePasteAllowed).toBe(false);
+    expect(hoisted.clipboardGetTextSpy).toHaveBeenCalledTimes(1);
+    expect(hoisted.pasteSpy).toHaveBeenCalledTimes(1);
+    expect(hoisted.pasteSpy).toHaveBeenCalledWith("echo once\n");
+    disposeTerminal("sess-clip-suppress");
   });
 
   it("pasteFromClipboard does not paste when the clipboard is empty", async () => {

@@ -31,6 +31,7 @@ export interface TerminalInstance {
 
 interface InternalInstance extends TerminalInstance {
   isClosed: boolean;
+  suppressNextNativePaste: () => void;
   uploadFilesWithRz: (paths: string[]) => Promise<boolean>;
   dispose: () => void;
 }
@@ -94,13 +95,15 @@ export function getOrCreateTerminal(
   const writeFn = spec.write;
   const eventPrefix = spec.eventPrefix;
 
-  // 单一 keyboard 处理入口：IME 守卫 + shortcut 拦截 + Cmd+C 选区复制。
-  // 占位回调由 Terminal.tsx 在挂载时通过 setOnFilter/setOnCopy 注入。
+  // 单一 keyboard 处理入口：IME 守卫 + 终端内快捷键拦截。
+  // 占位回调由 Terminal.tsx 在挂载时注入。
   const bridge = createTerminalInputBridge({
     term,
     shortcuts: useShortcutStore.getState().shortcuts,
-    onFilter: () => {},
     onCopy: () => false,
+    onPaste: () => {},
+    onSelectAll: () => {},
+    onFind: () => {},
   });
 
   // GPU renderer: required so customGlyphs (powerline U+E0A0–U+E0D7, box drawing)
@@ -184,6 +187,17 @@ export function getOrCreateTerminal(
   const onDataDispose = term.onData(writeData);
 
   const rolloverGuard = attachXtermRolloverGuard(term, writeData);
+  let suppressNativePasteUntil = 0;
+  const suppressNextNativePaste = () => {
+    suppressNativePasteUntil = Date.now() + 750;
+  };
+  const onNativePasteCapture = (event: ClipboardEvent) => {
+    if (Date.now() > suppressNativePasteUntil) return;
+    suppressNativePasteUntil = 0;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+  term.textarea?.addEventListener("paste", onNativePasteCapture, true);
 
   let pendingRzUploadExpiresAt = 0;
 
@@ -244,6 +258,7 @@ export function getOrCreateTerminal(
     bridge,
     urlHighlighter,
     isClosed: false,
+    suppressNextNativePaste,
     uploadFilesWithRz,
     dispose: () => {
       // bridge 持有 term.attachCustomKeyEventHandler 槽位的还原逻辑,
@@ -254,6 +269,7 @@ export function getOrCreateTerminal(
       zmodem?.dispose();
       onDataDispose.dispose();
       onKeyDispose.dispose();
+      term.textarea?.removeEventListener("paste", onNativePasteCapture, true);
       EventsOff(dataEvent);
       EventsOff(closedEvent);
       webglContextLossSub?.dispose();
@@ -308,7 +324,8 @@ export function pasteIntoTerminal(sessionId: string, text: string): void {
 // （Go 侧直接读系统剪贴板），不能用 navigator.clipboard.readText()：macOS 的 WKWebView
 // 对 JS 读剪贴板有隐私保护，会在光标处弹出系统原生「粘贴」按钮要求再点一次，而不是
 // 直接粘贴。取到文本后复用 pasteIntoTerminal，保持 #146 的 CRLF 归一化。
-export async function pasteFromClipboard(sessionId: string): Promise<void> {
+export async function pasteFromClipboard(sessionId: string, opts?: { suppressNativePaste?: boolean }): Promise<void> {
+  if (opts?.suppressNativePaste) registry.get(sessionId)?.suppressNextNativePaste();
   const text = await ClipboardGetText();
   if (text) pasteIntoTerminal(sessionId, text);
 }

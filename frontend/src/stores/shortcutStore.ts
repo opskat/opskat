@@ -29,6 +29,10 @@ export type ShortcutAction =
   | "panel.sidebar"
   | "panel.switch"
   | "panel.filter"
+  | "terminal.copy"
+  | "terminal.paste"
+  | "terminal.selectAll"
+  | "terminal.find"
   | "page.home"
   | "page.settings"
   | "page.sshkeys"
@@ -53,6 +57,10 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   "panel.sidebar",
   "panel.switch",
   "panel.filter",
+  "terminal.copy",
+  "terminal.paste",
+  "terminal.selectAll",
+  "terminal.find",
   "page.home",
   "page.settings",
   "page.sshkeys",
@@ -78,6 +86,10 @@ export const DEFAULT_SHORTCUTS: Record<ShortcutAction, ShortcutBinding> = {
   "panel.sidebar": { code: "KeyE", mod: true, ctrl: false, shift: false, alt: false },
   "panel.switch": { code: "KeyE", mod: true, ctrl: false, shift: true, alt: false },
   "panel.filter": { code: "KeyF", mod: true, ctrl: false, shift: false, alt: false },
+  "terminal.copy": { code: "KeyC", mod: true, ctrl: false, shift: false, alt: false },
+  "terminal.paste": { code: "KeyV", mod: true, ctrl: false, shift: false, alt: false },
+  "terminal.selectAll": { code: "KeyA", mod: true, ctrl: false, shift: false, alt: false },
+  "terminal.find": { code: "KeyF", mod: true, ctrl: false, shift: false, alt: false },
   "page.home": { code: "KeyH", mod: true, ctrl: false, shift: true, alt: false },
   "page.settings": { code: "Comma", mod: true, ctrl: false, shift: false, alt: false },
   "page.sshkeys": { code: "KeyK", mod: true, ctrl: false, shift: true, alt: false },
@@ -123,6 +135,34 @@ function saveCustom(shortcuts: Record<ShortcutAction, ShortcutBinding>) {
   } else {
     localStorage.removeItem(STORAGE_KEY);
   }
+}
+
+export function bindingsEqual(a: ShortcutBinding, b: ShortcutBinding): boolean {
+  return a.code === b.code && a.mod === b.mod && a.ctrl === b.ctrl && a.shift === b.shift && a.alt === b.alt;
+}
+
+export function findShortcutConflict(
+  action: ShortcutAction,
+  binding: ShortcutBinding,
+  shortcuts: Record<ShortcutAction, ShortcutBinding>
+): ShortcutAction | null {
+  for (const [candidateAction, candidateBinding] of Object.entries(shortcuts)) {
+    if (candidateAction === action) continue;
+    if (
+      (action === "terminal.find" && candidateAction === "panel.filter") ||
+      (action === "panel.filter" && candidateAction === "terminal.find")
+    ) {
+      continue;
+    }
+    if (bindingsEqual(binding, candidateBinding)) return candidateAction as ShortcutAction;
+  }
+  return null;
+}
+
+export function eventMatchesBinding(e: KeyboardEvent, binding: ShortcutBinding): boolean {
+  if (e.code !== binding.code || e.shiftKey !== binding.shift || e.altKey !== binding.alt) return false;
+  if (isMac) return e.metaKey === binding.mod && e.ctrlKey === binding.ctrl;
+  return e.ctrlKey === binding.mod;
 }
 
 interface ShortcutState {
@@ -187,14 +227,7 @@ export function matchShortcut(
   shortcuts: Record<ShortcutAction, ShortcutBinding>
 ): ShortcutAction | null {
   for (const [action, binding] of Object.entries(shortcuts)) {
-    if (e.code !== binding.code || e.shiftKey !== binding.shift || e.altKey !== binding.alt) continue;
-    if (isMac) {
-      // Mac distinguishes both modifiers: mod = Cmd (metaKey), ctrl = Control (ctrlKey).
-      if (e.metaKey !== binding.mod || e.ctrlKey !== binding.ctrl) continue;
-    } else {
-      // Windows/Linux have no Cmd: mod = Ctrl (ctrlKey); the ctrl field is unused.
-      if (e.ctrlKey !== binding.mod) continue;
-    }
+    if (!eventMatchesBinding(e, binding)) continue;
     return action as ShortcutAction;
   }
   return null;

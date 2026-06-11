@@ -7,6 +7,7 @@ import {
   SHORTCUT_ACTIONS,
   DEFAULT_SHORTCUTS,
   formatBinding,
+  findShortcutConflict,
   isMac,
   type ShortcutAction,
   type ShortcutBinding,
@@ -16,8 +17,10 @@ export function ShortcutSettings() {
   const { t } = useTranslation();
   const { shortcuts, updateShortcut, resetShortcut, resetAll, swapCmdCtrl, setIsRecording } = useShortcutStore();
   const [recording, setRecording] = useState<ShortcutAction | null>(null);
+  const [conflict, setConflict] = useState<{ action: ShortcutAction; conflictAction: ShortcutAction } | null>(null);
 
   const startRecording = (action: ShortcutAction) => {
+    setConflict(null);
     setRecording(action);
     setIsRecording(true);
   };
@@ -50,6 +53,14 @@ export function ShortcutSettings() {
         alt: e.altKey,
       };
 
+      const conflictAction = findShortcutConflict(recording, binding, useShortcutStore.getState().shortcuts);
+      if (conflictAction) {
+        setConflict({ action: recording, conflictAction });
+        stopRecording();
+        return;
+      }
+
+      setConflict(null);
       updateShortcut(recording, binding);
       stopRecording();
     },
@@ -93,7 +104,14 @@ export function ShortcutSettings() {
       <div className="space-y-0.5">
         {SHORTCUT_ACTIONS.map((action) => (
           <div key={action} className="flex items-center justify-between py-2 px-2 rounded hover:bg-muted/50">
-            <span className="text-sm">{t(`shortcut.${action}`)}</span>
+            <div className="grid gap-0.5">
+              <span className="text-sm">{t(`shortcut.${action}`)}</span>
+              {conflict?.action === action && (
+                <span className="text-xs text-destructive">
+                  {t("shortcut.conflict", { action: t(`shortcut.${conflict.conflictAction}`) })}
+                </span>
+              )}
+            </div>
             <div className="flex items-center gap-1">
               <button
                 className={cn(
@@ -114,7 +132,10 @@ export function ShortcutSettings() {
                   variant="ghost"
                   size="icon"
                   className="h-6 w-6"
-                  onClick={() => resetShortcut(action)}
+                  onClick={() => {
+                    setConflict(null);
+                    resetShortcut(action);
+                  }}
                   title={t("shortcut.reset")}
                 >
                   <RotateCcw className="h-3 w-3" />
@@ -125,11 +146,26 @@ export function ShortcutSettings() {
         ))}
       </div>
       <div className="flex items-center gap-2">
-        <Button variant="outline" size="sm" onClick={resetAll}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            setConflict(null);
+            resetAll();
+          }}
+        >
           {t("shortcut.resetAll")}
         </Button>
         {isMac && (
-          <Button variant="outline" size="sm" onClick={swapCmdCtrl} title={t("shortcut.swapCmdCtrlDesc")}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setConflict(null);
+              swapCmdCtrl();
+            }}
+            title={t("shortcut.swapCmdCtrlDesc")}
+          >
             {t("shortcut.swapCmdCtrl")}
           </Button>
         )}
