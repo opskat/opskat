@@ -301,6 +301,49 @@ describe("FileManagerPanel", () => {
     );
   });
 
+  it("keeps panel-from-terminal mode aligned when switching the active split pane", async () => {
+    const user = userEvent.setup();
+    useTerminalStore.setState({
+      tabData: {
+        tab1: {
+          splitTree: {
+            type: "split",
+            direction: "vertical",
+            ratio: 0.5,
+            first: { type: "terminal", sessionId: "s1" },
+            second: { type: "terminal", sessionId: "s2" },
+          },
+          activePaneId: "s1",
+          panes: {
+            s1: { sessionId: "s1", transport: "ssh", connected: true, connectedAt: Date.now() },
+            s2: { sessionId: "s2", transport: "ssh", connected: true, connectedAt: Date.now() },
+          },
+          directoryFollowMode: "off",
+        },
+      },
+    } as never);
+
+    const { rerender } = render(
+      <FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />
+    );
+
+    await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app"));
+    vi.clearAllMocks();
+
+    await user.click(screen.getByRole("button", { name: "sftp.sync.followShort" }));
+    await user.click(await screen.findByRole("menuitemcheckbox", { name: "sftp.sync.panelFromTerminal" }));
+
+    await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app"));
+    vi.clearAllMocks();
+
+    useTerminalStore.getState().setActivePaneId("tab1", "s2");
+    rerender(<FileManagerPanel tabId="tab1" sessionId="s2" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s2", "/srv/www"));
+    expect(SFTPListDir).not.toHaveBeenCalledWith("s2", "/srv/app");
+    expect(useSFTPStore.getState().fileManagerPaths.tab1).toBe("/srv/www");
+  });
+
   it("changes the active terminal directory to the current file manager path", async () => {
     const user = userEvent.setup();
     render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);

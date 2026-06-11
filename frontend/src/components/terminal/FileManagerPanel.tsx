@@ -242,8 +242,8 @@ export function FileManagerPanel({
     }
     if (!isOpen || loadedRef.current) return;
     loadedRef.current = true;
-    if (directoryFollowMode === "always" && sessionSync?.cwdKnown && sessionSync.cwd) {
-      void loadDir(sessionSync.cwd);
+    if (directoryFollowMode === "always" || activeSyncMode === "panel-from-terminal") {
+      void syncPanelFromTerminal();
       return;
     }
     if (storedPath) {
@@ -253,7 +253,7 @@ export function FileManagerPanel({
     SFTPGetwd(sessionId)
       .then((home) => loadDir(home || "/"))
       .catch(() => loadDir("/"));
-  }, [sessionId, isOpen, directoryFollowMode, sessionSync?.cwdKnown, sessionSync?.cwd, storedPath, loadDir]);
+  }, [sessionId, isOpen, directoryFollowMode, activeSyncMode, storedPath, loadDir, syncPanelFromTerminal]);
 
   useEffect(() => {
     if (!isOpen || directoryFollowMode !== "always") return;
