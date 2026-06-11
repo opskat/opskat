@@ -72,6 +72,18 @@ describe("matchShortcut on macOS", () => {
     };
     expect(matchShortcut(key({ code: "KeyW", ctrlKey: true }), shortcuts)).toBeNull();
   });
+
+  it("keeps terminal copy on Cmd+C by default", async () => {
+    const { matchShortcut, DEFAULT_SHORTCUTS } = await importMac();
+    expect(matchShortcut(key({ code: "KeyC", metaKey: true }), DEFAULT_SHORTCUTS)).toBe("terminal.copy");
+    expect(matchShortcut(key({ code: "KeyC", metaKey: true, shiftKey: true }), DEFAULT_SHORTCUTS)).toBeNull();
+  });
+
+  it("keeps terminal paste on Cmd+V by default", async () => {
+    const { matchShortcut, DEFAULT_SHORTCUTS } = await importMac();
+    expect(matchShortcut(key({ code: "KeyV", metaKey: true }), DEFAULT_SHORTCUTS)).toBe("terminal.paste");
+    expect(matchShortcut(key({ code: "KeyV", metaKey: true, shiftKey: true }), DEFAULT_SHORTCUTS)).toBeNull();
+  });
 });
 
 describe("formatBinding on macOS", () => {

@@ -103,20 +103,28 @@ describe("terminalInputBridge", () => {
     expect(onFind).toHaveBeenCalledTimes(1);
   });
 
-  it("Cmd/Ctrl+C with selection: returns false (eats the event)", () => {
+  it("Ctrl+Shift+C with selection: returns false (eats the event)", () => {
     const { fire, onCopy, modKey } = makeBridge();
     onCopy.mockImplementation(() => true);
-    const result = fire({ type: "keydown", code: "KeyC", key: "c", ...modKey });
+    const result = fire({ type: "keydown", code: "KeyC", key: "c", ...modKey, shiftKey: true });
     expect(result).toBe(false);
     expect(onCopy).toHaveBeenCalledTimes(1);
   });
 
-  it("Cmd/Ctrl+C without selection: returns true so xterm sends SIGINT", () => {
+  it("Ctrl+Shift+C without selection: returns true so xterm handles the key", () => {
     const { fire, onCopy, modKey } = makeBridge();
     onCopy.mockImplementation(() => false);
-    const result = fire({ type: "keydown", code: "KeyC", key: "c", ...modKey });
+    const result = fire({ type: "keydown", code: "KeyC", key: "c", ...modKey, shiftKey: true });
     expect(result).toBe(true);
     expect(onCopy).toHaveBeenCalledTimes(1);
+  });
+
+  it("plain Ctrl+C returns true so xterm sends SIGINT", () => {
+    const { fire, onCopy, modKey } = makeBridge();
+    onCopy.mockImplementation(() => true);
+    const result = fire({ type: "keydown", code: "KeyC", key: "c", ...modKey });
+    expect(result).toBe(true);
+    expect(onCopy).not.toHaveBeenCalled();
   });
 
   it("setShortcuts hot-updates the binding used by the handler", () => {
@@ -138,7 +146,7 @@ describe("terminalInputBridge", () => {
     expect(onFind).toHaveBeenCalledTimes(1);
   });
 
-  it("remapping terminal.copy makes the old Cmd/Ctrl+C pass through", () => {
+  it("remapping terminal.copy makes the old Ctrl+Shift+C default pass through", () => {
     const { bridge, fire, onCopy, modKey } = makeBridge();
     onCopy.mockImplementation(() => true);
     bridge.setShortcuts({
@@ -146,7 +154,7 @@ describe("terminalInputBridge", () => {
       "terminal.copy": { code: "KeyY", mod: true, ctrl: false, shift: false, alt: false },
     });
 
-    expect(fire({ type: "keydown", code: "KeyC", key: "c", ...modKey })).toBe(true);
+    expect(fire({ type: "keydown", code: "KeyC", key: "c", ...modKey, shiftKey: true })).toBe(true);
     expect(onCopy).not.toHaveBeenCalled();
 
     expect(fire({ type: "keydown", code: "KeyY", key: "y", ...modKey })).toBe(false);
@@ -161,7 +169,7 @@ describe("terminalInputBridge", () => {
       "terminal.copy": { code: "KeyY", mod: true, ctrl: false, shift: false, alt: false },
     });
 
-    expect(fire({ type: "keydown", code: "KeyV", key: "v", ...modKey })).toBe(false);
+    expect(fire({ type: "keydown", code: "KeyV", key: "v", ...modKey, shiftKey: true })).toBe(false);
     expect(onPaste).toHaveBeenCalledTimes(1);
 
     expect(fire({ type: "keydown", code: "KeyA", key: "a", ...modKey })).toBe(false);
@@ -172,11 +180,18 @@ describe("terminalInputBridge", () => {
     expect(onCopy).not.toHaveBeenCalled();
   });
 
-  it("triggers terminal paste callback for the default Cmd/Ctrl+V binding", () => {
+  it("triggers terminal paste callback for the default Ctrl+Shift+V binding", () => {
     const { fire, onPaste, modKey } = makeBridge();
 
-    expect(fire({ type: "keydown", code: "KeyV", key: "v", ...modKey })).toBe(false);
+    expect(fire({ type: "keydown", code: "KeyV", key: "v", ...modKey, shiftKey: true })).toBe(false);
     expect(onPaste).toHaveBeenCalledTimes(1);
+  });
+
+  it("plain Ctrl+V returns true so xterm handles the key", () => {
+    const { fire, onPaste, modKey } = makeBridge();
+
+    expect(fire({ type: "keydown", code: "KeyV", key: "v", ...modKey })).toBe(true);
+    expect(onPaste).not.toHaveBeenCalled();
   });
 
   it("triggers terminal paste callback for a remapped non-native paste binding", () => {
