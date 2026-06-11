@@ -30,6 +30,7 @@ import {
   InstallOpsctl,
   DetectSkills,
   InstallSkills,
+  UninstallSkill,
   GetSkillPreview,
   GetDataDir,
   GetAppVersion,
@@ -65,6 +66,8 @@ import { useAIStore } from "@/stores/aiStore";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+type SkillTarget = { key: string; name: string; installed: boolean; path: string };
+
 function IntegrationSection() {
   const { t } = useTranslation();
   const [opsctlInfo, setOpsctlInfo] = useState<{
@@ -73,10 +76,12 @@ function IntegrationSection() {
     version: string;
     embedded: boolean;
   }>({ installed: false, path: "", version: "", embedded: false });
-  const [skillTargets, setSkillTargets] = useState<{ name: string; installed: boolean; path: string }[]>([]);
+  const [skillTargets, setSkillTargets] = useState<SkillTarget[]>([]);
   const [installDir, setInstallDir] = useState("");
   const [installing, setInstalling] = useState(false);
   const [skillInstalling, setSkillInstalling] = useState(false);
+  const [uninstallTarget, setUninstallTarget] = useState<SkillTarget | null>(null);
+  const [uninstallingKey, setUninstallingKey] = useState("");
   const [skillPreview, setSkillPreview] = useState("");
   const [showPreview, setShowPreview] = useState(false);
   const [dataDir, setDataDir] = useState("");
@@ -129,6 +134,21 @@ function IntegrationSection() {
       toast.error(errMsg(e));
     } finally {
       setSkillInstalling(false);
+    }
+  };
+
+  const handleUninstallSkill = async () => {
+    if (!uninstallTarget) return;
+    setUninstallingKey(uninstallTarget.key);
+    try {
+      await UninstallSkill(uninstallTarget.key);
+      notifySuccess(t("integration.skillUninstallSuccess"));
+      setUninstallTarget(null);
+      await detect();
+    } catch (e: unknown) {
+      toast.error(errMsg(e));
+    } finally {
+      setUninstallingKey("");
     }
   };
 
@@ -310,6 +330,23 @@ function IntegrationSection() {
                       >
                         <FolderOpen className="h-3.5 w-3.5" />
                       </button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-destructive hover:text-destructive"
+                        disabled={uninstallingKey === s.key}
+                        onClick={() => setUninstallTarget(s)}
+                      >
+                        {uninstallingKey === s.key ? (
+                          <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3.5 w-3.5 mr-1" />
+                        )}
+                        {uninstallingKey === s.key
+                          ? t("integration.skillUninstalling")
+                          : t("integration.skillUninstall")}
+                      </Button>
                     </div>
                   </div>
                 ))}
@@ -353,6 +390,28 @@ function IntegrationSection() {
           )}
         </CardContent>
       </Card>
+
+      <AlertDialog
+        open={!!uninstallTarget}
+        onOpenChange={(open) => {
+          if (!open) setUninstallTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("integration.skillUninstallConfirmTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("integration.skillUninstallConfirmDesc", { name: uninstallTarget?.name ?? "" })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("action.cancel")}</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={handleUninstallSkill}>
+              {t("integration.skillUninstall")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
