@@ -247,7 +247,7 @@ func writeJSONFile(t *testing.T, path string, value any) {
 
 func readJSONMap(t *testing.T, path string) map[string]any {
 	t.Helper()
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // test helper reads temp files created by the test
 	if err != nil {
 		t.Fatalf("ReadFile %s: %v", path, err)
 	}
