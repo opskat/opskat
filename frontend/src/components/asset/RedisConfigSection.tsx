@@ -59,11 +59,17 @@ export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
         <div className="grid grid-cols-[1fr_120px] gap-3">
           <div className="grid gap-2">
             <Label>{t("asset.host")}</Label>
-            <Input value={state.host} onChange={(e) => patch({ host: e.target.value })} placeholder="example.com" />
+            <Input
+              data-testid="redis-host-input"
+              value={state.host}
+              onChange={(e) => patch({ host: e.target.value })}
+              placeholder="example.com"
+            />
           </div>
           <div className="grid gap-2">
             <Label>{t("asset.port")}</Label>
             <Input
+              data-testid="redis-port-input"
               className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
               type="number"
               value={state.port || ""}

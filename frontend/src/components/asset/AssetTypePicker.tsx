@@ -52,6 +52,7 @@ export function AssetTypePicker({ value, onChange, disabled }: AssetTypePickerPr
           variant="outline"
           role="combobox"
           disabled={disabled}
+          data-testid="asset-type-picker"
           className="w-full justify-between font-normal h-9"
         >
           <div className="flex items-center gap-2">
@@ -90,6 +91,7 @@ export function AssetTypePicker({ value, onChange, disabled }: AssetTypePickerPr
                     <button
                       key={o.value}
                       type="button"
+                      data-testid={`asset-type-option-${o.value}`}
                       onClick={() => handleSelect(o.value)}
                       className={cn(
                         "flex flex-col items-center gap-1.5 rounded-md p-2 transition-colors",

@@ -19,6 +19,8 @@ interface ConfirmDialogProps {
   confirmText?: string;
   variant?: "default" | "destructive";
   onConfirm: () => void;
+  /** Optional test hook placed on the confirm button (e2e). */
+  confirmTestId?: string;
 }
 
 export function ConfirmDialog({
@@ -30,6 +32,7 @@ export function ConfirmDialog({
   confirmText,
   variant = "destructive",
   onConfirm,
+  confirmTestId,
 }: ConfirmDialogProps) {
   const resolvedCancelText = cancelText?.trim() ? cancelText : "Cancel";
   const resolvedConfirmText = confirmText?.trim() ? confirmText : "Confirm";
@@ -43,7 +46,7 @@ export function ConfirmDialog({
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>{resolvedCancelText}</AlertDialogCancel>
-          <AlertDialogAction variant={variant} onClick={onConfirm}>
+          <AlertDialogAction variant={variant} data-testid={confirmTestId} onClick={onConfirm}>
             {resolvedConfirmText}
           </AlertDialogAction>
         </AlertDialogFooter>

@@ -26,7 +26,7 @@ jobs:
         run: mkdir -p cmd/devserver/static/assets && echo "placeholder" > cmd/devserver/static/assets/placeholder.txt
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.12.2
 
   test:
     name: Go Test
@@ -62,10 +62,20 @@ jobs:
             e2e/pnpm-lock.yaml
       - name: Install Linux dependencies
         run: sudo apt-get update && sudo apt-get install -y xvfb libgtk-3-dev libwebkit2gtk-4.0-dev
+      - name: Cache Wails CLI
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/wails
+          key: wails-cli-${{ runner.os }}-v2.12.0
       - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+        run: command -v wails || go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
       - name: Install frontend dependencies
         run: cd frontend && pnpm install --frozen-lockfile
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('e2e/pnpm-lock.yaml') }}
       - name: Install e2e dependencies
         run: cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright install --with-deps chromium
       - name: Test
@@ -115,8 +125,13 @@ jobs:
           node-version: "22"
           cache: "pnpm"
           cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Cache Wails CLI
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/wails
+          key: wails-cli-${{ runner.os }}-v2.12.0
       - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+        run: command -v wails || go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
       - name: Create frontend dist placeholder
         run: mkdir -p frontend/dist && touch frontend/dist/.gitkeep
       - name: Generate Wails bindings

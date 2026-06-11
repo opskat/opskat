@@ -293,6 +293,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       type="button"
       variant="outline"
       size="sm"
+      data-testid="asset-test-connection"
       onClick={handleGenericTestConnection}
       disabled={isTestConnectionDisabled}
       className="gap-1 w-fit"

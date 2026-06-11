@@ -753,6 +753,7 @@ export function AssetTree({
         description={t("asset.deleteAssetDesc", { name: deleteAssetConfirm?.Name })}
         cancelText={t("action.cancel")}
         confirmText={t("action.delete")}
+        confirmTestId="confirm-delete-asset"
         onConfirm={() => {
           if (deleteAssetConfirm) {
             deleteAsset(deleteAssetConfirm.ID);
@@ -1161,7 +1162,7 @@ const AssetRowContent = React.memo(function AssetRowContent({
             {t("action.editPermission")}
           </ContextMenuItem>
         )}
-        <ContextMenuItem onClick={() => onEditAsset(asset)}>
+        <ContextMenuItem data-testid="asset-context-edit" onClick={() => onEditAsset(asset)}>
           <Pencil className="h-3.5 w-3.5 mr-1.5" />
           {t("action.edit")}
         </ContextMenuItem>
@@ -1183,7 +1184,11 @@ const AssetRowContent = React.memo(function AssetRowContent({
           {t("asset.moveTop")}
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem className="text-destructive" onClick={() => onDeleteAsset(asset)}>
+        <ContextMenuItem
+          data-testid="asset-context-delete"
+          className="text-destructive"
+          onClick={() => onDeleteAsset(asset)}
+        >
           <Trash2 className="h-3.5 w-3.5 mr-1.5" />
           {t("action.delete")}
         </ContextMenuItem>

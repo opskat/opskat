@@ -100,10 +100,26 @@ orchestration and cleanup live in `e2e/run-e2e.mjs` (cross-platform Node) — th
 shell-only `pkill`/`mkdir -p`/`touch` steps. CI exercises the Linux path.
 
 The suite (`e2e/tests/`): `boot` (app mounts + `OpsKat` title), `smoke` (layout + sidebar
-nav), `asset-crud` (create an SSH asset via the form → it shows in the tree → verify it
-persisted by a direct `node:sqlite` read of the temp DB). After Playwright exits,
-`run-e2e.mjs` reaps the orphan `vite` and removes the temp dir (see §7). webServer output →
+nav), `asset-crud` (create an SSH asset via the form → tree → `node:sqlite` read of the temp
+DB), `asset-lifecycle` (edit-renames + delete-soft-deletes an asset via the right-click
+context menu, each verified in the tree **and** on disk), `redis-connect` (create a
+*Redis* asset, drive its **Test Connection** against an in-harness mock Redis so the app
+actually dials and `PING`s, then persist), and `ssh-connect` (create an *SSH* asset and drive
+**Test Connection** against an in-harness mock SSH server — the app completes a real SSH
+handshake — then persist). After Playwright exits, `run-e2e.mjs` reaps the
+orphan `vite` and removes the temp dir (see §7). webServer output →
 `<tmpdir>/opskat-e2e-webserver.log`.
+
+The mock Redis (`e2e/fixtures/redis-mock.mjs`, pure Node, no deps) is started as a **second
+Playwright `webServer`** on a dedicated port (`34216` is the app; `34217` the mock); the spec
+reads the port from `process.env.MOCK_REDIS_PORT`. It answers only what go-redis v9's connect
+handshake needs — `HELLO` → a `-ERR` reply (triggers the RESP2 fallback), `PING` → `+PONG`,
+everything else → `+OK` — which is why no real Redis is needed. This is the reusable shape for
+**any "the asset really connects" spec**: stand up a tiny protocol mock as a second
+`webServer` (TCP `port` readiness) and point the asset at `127.0.0.1:<port>`. `ssh-connect`
+uses the same shape with a Go mock — `e2e/fixtures/ssh-mock/main.go`, a tiny `x/crypto/ssh`
+server (`NoClientAuth`, so the connect "none" probe succeeds; random host key auto-trusted on
+first connect) on `34218`, `go run` as a third `webServer`.
 
 **In CI:** the committed suite runs on every PR / push as the `Wails E2E` job (`ubuntu-22.04`)
 in `.github/workflows/ci.yml` — it installs `xvfb` + GTK/WebKit, then runs `xvfb-run -a make
@@ -117,8 +133,12 @@ Only when the flow is genuinely core (§1). Conventions:
 - **Locators: `data-testid`.** Add a stable `data-testid` to the element you assert on
   (additive only — never change markup/behavior to test it). Existing ids: `app-root`,
   `nav-<page>` / `nav-settings` (+ `data-active`), `asset-tree`, `add-asset-button`,
-  `asset-form-dialog`, `asset-form-name-input`, `asset-form-submit`, `ssh-host-input`. Reuse
-  these; add new ones in the same style.
+  `asset-form-dialog`, `asset-form-name-input`, `asset-form-submit`, `ssh-host-input`,
+  `asset-type-picker` / `asset-type-option-<type>`, `redis-host-input` / `redis-port-input`,
+  `asset-test-connection`, the asset right-click items `asset-context-edit` /
+  `asset-context-delete`, and the delete confirm button `confirm-delete-asset` (a
+  `confirmTestId` prop threaded through the shared `ConfirmDialog`). Reuse these; add new ones
+  in the same style.
 - **No `sleep`.** Use Playwright's auto-waiting assertions (`await expect(locator).toBeVisible()`,
   `.toBeHidden()`, `expect.poll(...)`). Sleeps are the #1 source of flake.
 - **Verify side effects independently.** Asserting the UI updated is necessary but not
@@ -229,15 +249,25 @@ These bit us while building the harness; keep them in mind when changing it.
   needs them.)
 - **A new UI assertion target** → add a `data-testid` (additive) in the same style as §5.
 - **A new persistence oracle** → add a read-only `node:sqlite` helper to `e2e/fixtures/db.ts`.
+- **A spec where the app must really connect somewhere** → stand up a minimal protocol mock
+  as an extra `webServer` entry (TCP `port` readiness, not `url`), point the asset at
+  `127.0.0.1:<port>`, and assert via the form's **Test Connection** (`asset-test-connection`):
+  its sonner toast carries `data-type="success"` / `"error"`, a locale-independent signal.
+  Templates: `e2e/fixtures/redis-mock.mjs` for a line-protocol client (keep the mock to the few
+  bytes the client's handshake needs, no full protocol); `e2e/fixtures/ssh-mock/main.go` when
+  the client needs a real crypto handshake — reuse `x/crypto/ssh` with `NoClientAuth` rather
+  than faking bytes.
 
 ## 9. File map
 
 | Path | Role | Committed? |
 |---|---|---|
 | `e2e/run-e2e.mjs` | cross-platform runner: spawns `playwright test`, then reaps orphan `vite` + removes temp dir after it exits | yes |
-| `e2e/playwright.config.ts` | base harness: temp dir + env + `frontend/dist` prep, webServer (`wails dev -devserver 34216`) | yes |
+| `e2e/playwright.config.ts` | base harness: temp dir + env + `frontend/dist` prep, three `webServer`s (mock Redis on `34217`, mock SSH on `34218`, + `wails dev -devserver 34216`) | yes |
 | `e2e/playwright.scratch.config.ts` | extends base, `testDir: ./scratch` for throwaway specs | yes |
 | `e2e/fixtures/db.ts` | read-only `node:sqlite` DB oracle (`findAssetByName`, …) | yes |
+| `e2e/fixtures/redis-mock.mjs` | minimal pure-Node RESP mock (HELLO→`-ERR` / PING→`+PONG`), started as a 2nd webServer for the `redis-connect` spec | yes |
+| `e2e/fixtures/ssh-mock/main.go` | minimal Go `x/crypto/ssh` server (`NoClientAuth`), `go run` as a webServer for the `ssh-connect` spec | yes |
 | `e2e/tests/*.spec.ts` | committed **core-flow** specs | yes |
 | `e2e/scratch/*.spec.ts` | throwaway functional-verification specs | **no (gitignored)** |
 | `e2e/scratch/README.md` | scratch convention + starter template | yes |

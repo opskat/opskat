@@ -141,6 +141,7 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
           <div className="grid gap-2">
             <Label>{t("asset.port")}</Label>
             <Input
+              data-testid="ssh-port-input"
               className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
               type="number"
               value={state.port || ""}
