@@ -5,8 +5,29 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
+
+	"github.com/opskat/opskat/internal/bootstrap"
+	"github.com/opskat/opskat/internal/service/backup_svc"
+	"github.com/opskat/opskat/internal/service/credential_svc"
 )
+
+var initBootstrapForSystemTestOnce sync.Once
+
+func initBootstrapForSystemTest(t *testing.T) {
+	t.Helper()
+	initBootstrapForSystemTestOnce.Do(func() {
+		dataDir, err := os.MkdirTemp("", "opskat-system-test-*")
+		if err != nil {
+			t.Fatalf("MkdirTemp: %v", err)
+		}
+		if _, err := bootstrap.LoadConfig(dataDir); err != nil {
+			t.Fatalf("bootstrap.LoadConfig: %v", err)
+		}
+		credential_svc.SetDefault(credential_svc.New("system-test", []byte("1234567890abcdef")))
+	})
+}
 
 func TestPathTraversesSymlink(t *testing.T) {
 	t.Parallel()
@@ -97,6 +118,88 @@ func TestUninstallSkillHandlesUnknownAndMissingTargets(t *testing.T) {
 	}
 	if err := s.UninstallSkill("codex"); err != nil {
 		t.Fatalf("missing target should be treated as success: %v", err)
+	}
+}
+
+func TestWebDAVExportDefaultsRoundTripEncryptedPassword(t *testing.T) {
+	initBootstrapForSystemTest(t)
+	cfg := &bootstrap.AppConfig{
+		WebDAVURL:      "https://example.com/dav/",
+		WebDAVAuthType: string(backup_svc.WebDAVAuthNone),
+	}
+	if err := bootstrap.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	s := New(t.Context(), SkillContent{})
+	// include 标志按原值持久化，与是否真的有 payload 可序列化无关。让标志与 payload 在
+	// 两个方向上都不一致，以此锁定该独立性：快捷键标志为开但无 payload；主题标志为关但带 payload。
+	opts := backup_svc.ExportOptions{
+		IncludeCredentials:  true,
+		IncludeForwards:     false,
+		IncludePolicyGroups: true,
+		IncludeShortcuts:    true,
+		IncludeThemes:       false,
+		CustomThemes:        `[{"name":"solarized"}]`,
+	}
+
+	if err := s.saveWebDAVExportDefaults("backup-password", opts); err != nil {
+		t.Fatalf("saveWebDAVExportDefaults: %v", err)
+	}
+	if cfg.WebDAVExportPassword == "backup-password" {
+		t.Fatalf("backup password should be encrypted at rest")
+	}
+
+	stored, err := s.GetWebDAVConfig()
+	if err != nil {
+		t.Fatalf("GetWebDAVConfig: %v", err)
+	}
+	if !stored.ExportDefaultsConfigured {
+		t.Fatalf("export defaults should be marked configured")
+	}
+	if stored.ExportPassword != "backup-password" {
+		t.Fatalf("export password = %q", stored.ExportPassword)
+	}
+	if !stored.ExportIncludeCredentials {
+		t.Fatalf("include credentials should round-trip true")
+	}
+	if stored.ExportIncludeForwards {
+		t.Fatalf("include forwards should round-trip false")
+	}
+	if !stored.ExportIncludePolicyGroups {
+		t.Fatalf("include policy groups should round-trip true")
+	}
+	if !stored.ExportIncludeShortcuts {
+		t.Fatalf("include shortcuts flag should round-trip true even with an empty shortcuts payload")
+	}
+	if stored.ExportIncludeThemes {
+		t.Fatalf("include themes flag should round-trip false even when a custom themes payload is present")
+	}
+}
+
+func TestClearWebDAVConfigClearsExportDefaults(t *testing.T) {
+	initBootstrapForSystemTest(t)
+	cfg := &bootstrap.AppConfig{
+		WebDAVURL:                       "https://example.com/dav/",
+		WebDAVAuthType:                  string(backup_svc.WebDAVAuthNone),
+		WebDAVExportDefaultsConfigured:  true,
+		WebDAVExportPassword:            "encrypted",
+		WebDAVExportIncludeCredentials:  true,
+		WebDAVExportIncludeForwards:     true,
+		WebDAVExportIncludePolicyGroups: true,
+		WebDAVExportIncludeShortcuts:    true,
+		WebDAVExportIncludeThemes:       true,
+	}
+	if err := bootstrap.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	s := New(t.Context(), SkillContent{})
+	if err := s.ClearWebDAVConfig(); err != nil {
+		t.Fatalf("ClearWebDAVConfig: %v", err)
+	}
+	if cfg.WebDAVExportDefaultsConfigured || cfg.WebDAVExportPassword != "" || cfg.WebDAVExportIncludeCredentials || cfg.WebDAVExportIncludeForwards || cfg.WebDAVExportIncludePolicyGroups || cfg.WebDAVExportIncludeShortcuts || cfg.WebDAVExportIncludeThemes {
+		t.Fatalf("WebDAV export defaults should be cleared: %#v", cfg)
 	}
 }
 

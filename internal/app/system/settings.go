@@ -462,12 +462,19 @@ func (s *System) GetGitHubUser(token string) (*backup_svc.GitHubUser, error) {
 // WebDAVStoredConfig 是前端可读取的 WebDAV 配置；password / token 解密后明文回填，
 // 便于设置页编辑时直接显示已有值（数据未离开本地进程，加密存储已在落盘层做）。
 type WebDAVStoredConfig struct {
-	URL        string `json:"url"`
-	AuthType   string `json:"authType"`
-	Username   string `json:"username,omitempty"`
-	Password   string `json:"password,omitempty"`
-	Token      string `json:"token,omitempty"`
-	Configured bool   `json:"configured"`
+	URL                       string `json:"url"`
+	AuthType                  string `json:"authType"`
+	Username                  string `json:"username,omitempty"`
+	Password                  string `json:"password,omitempty"`
+	Token                     string `json:"token,omitempty"`
+	Configured                bool   `json:"configured"`
+	ExportDefaultsConfigured  bool   `json:"exportDefaultsConfigured"`
+	ExportPassword            string `json:"exportPassword,omitempty"`
+	ExportIncludeCredentials  bool   `json:"exportIncludeCredentials"`
+	ExportIncludeForwards     bool   `json:"exportIncludeForwards"`
+	ExportIncludePolicyGroups bool   `json:"exportIncludePolicyGroups"`
+	ExportIncludeShortcuts    bool   `json:"exportIncludeShortcuts"`
+	ExportIncludeThemes       bool   `json:"exportIncludeThemes"`
 }
 
 // WebDAVSaveInput 是 SaveWebDAVConfig / TestWebDAVConfig 的入参，把鉴权方式与凭据收成一个 struct。
@@ -618,10 +625,16 @@ func (s *System) GetWebDAVConfig() (*WebDAVStoredConfig, error) {
 	}
 
 	out := &WebDAVStoredConfig{
-		URL:        cfg.WebDAVURL,
-		AuthType:   authType,
-		Username:   cfg.WebDAVUsername,
-		Configured: strings.TrimSpace(cfg.WebDAVURL) != "",
+		URL:                       cfg.WebDAVURL,
+		AuthType:                  authType,
+		Username:                  cfg.WebDAVUsername,
+		Configured:                strings.TrimSpace(cfg.WebDAVURL) != "",
+		ExportDefaultsConfigured:  cfg.WebDAVExportDefaultsConfigured,
+		ExportIncludeCredentials:  cfg.WebDAVExportIncludeCredentials,
+		ExportIncludeForwards:     cfg.WebDAVExportIncludeForwards,
+		ExportIncludePolicyGroups: cfg.WebDAVExportIncludePolicyGroups,
+		ExportIncludeShortcuts:    cfg.WebDAVExportIncludeShortcuts,
+		ExportIncludeThemes:       cfg.WebDAVExportIncludeThemes,
 	}
 	if cfg.WebDAVPassword != "" {
 		decrypted, err := credential_svc.Default().Decrypt(cfg.WebDAVPassword)
@@ -637,6 +650,13 @@ func (s *System) GetWebDAVConfig() (*WebDAVStoredConfig, error) {
 		}
 		out.Token = decrypted
 	}
+	if cfg.WebDAVExportPassword != "" {
+		decrypted, err := credential_svc.Default().Decrypt(cfg.WebDAVExportPassword)
+		if err != nil {
+			return nil, fmt.Errorf("解密 WebDAV 备份密码失败: %w", err)
+		}
+		out.ExportPassword = decrypted
+	}
 	return out, nil
 }
 
@@ -651,6 +671,7 @@ func (s *System) ClearWebDAVConfig() error {
 	cfg.WebDAVUsername = ""
 	cfg.WebDAVPassword = ""
 	cfg.WebDAVToken = ""
+	clearWebDAVExportDefaults(cfg)
 	return bootstrap.SaveConfig(cfg)
 }
 
@@ -702,7 +723,45 @@ func (s *System) ExportToWebDAV(password string, opts backup_svc.ExportOptions) 
 		return nil, err
 	}
 
-	return backup_svc.CreateOrUpdateWebDAVBackup(cfg, encrypted)
+	info, err := backup_svc.CreateOrUpdateWebDAVBackup(cfg, encrypted)
+	if err != nil {
+		return nil, err
+	}
+	// 备份已上传成功；记住导出默认项只是次要诉求。即便写 config.json 失败也不能
+	// 把"上传成功"误报为失败，否则前端既弹出错误、又不会刷新到刚上传的备份。
+	if err := s.saveWebDAVExportDefaults(password, opts); err != nil {
+		logger.Default().Warn("save WebDAV export defaults failed", zap.Error(err))
+	}
+	return info, nil
+}
+
+func (s *System) saveWebDAVExportDefaults(password string, opts backup_svc.ExportOptions) error {
+	cfg := bootstrap.GetConfig()
+	if cfg == nil {
+		return fmt.Errorf("config not loaded")
+	}
+	encrypted, err := credential_svc.Default().Encrypt(password)
+	if err != nil {
+		return fmt.Errorf("加密 WebDAV 备份密码失败: %w", err)
+	}
+	cfg.WebDAVExportDefaultsConfigured = true
+	cfg.WebDAVExportPassword = encrypted
+	cfg.WebDAVExportIncludeCredentials = opts.IncludeCredentials
+	cfg.WebDAVExportIncludeForwards = opts.IncludeForwards
+	cfg.WebDAVExportIncludePolicyGroups = opts.IncludePolicyGroups
+	cfg.WebDAVExportIncludeShortcuts = opts.IncludeShortcuts
+	cfg.WebDAVExportIncludeThemes = opts.IncludeThemes
+	return bootstrap.SaveConfig(cfg)
+}
+
+func clearWebDAVExportDefaults(cfg *bootstrap.AppConfig) {
+	cfg.WebDAVExportDefaultsConfigured = false
+	cfg.WebDAVExportPassword = ""
+	cfg.WebDAVExportIncludeCredentials = false
+	cfg.WebDAVExportIncludeForwards = false
+	cfg.WebDAVExportIncludePolicyGroups = false
+	cfg.WebDAVExportIncludeShortcuts = false
+	cfg.WebDAVExportIncludeThemes = false
 }
 
 // ImportFromWebDAV 从 WebDAV 导入备份。

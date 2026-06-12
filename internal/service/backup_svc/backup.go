@@ -80,6 +80,8 @@ type ExportOptions struct {
 	IncludeCredentials  bool    `json:"include_credentials"`   // 包含凭据（强制加密）
 	IncludeForwards     bool    `json:"include_forwards"`      // 包含端口转发
 	IncludePolicyGroups bool    `json:"include_policy_groups"` // 包含策略组
+	IncludeShortcuts    bool    `json:"include_shortcuts"`     // 包含快捷键
+	IncludeThemes       bool    `json:"include_themes"`        // 包含终端主题
 	Shortcuts           string  `json:"shortcuts,omitempty"`   // JSON 字符串
 	CustomThemes        string  `json:"custom_themes,omitempty"`
 }

@@ -39,9 +39,20 @@ interface ExportDialogProps {
   mode: "file" | "gist" | "webdav";
   onGistExport?: (password: string, opts: backup_svc.ExportOptions) => Promise<void>;
   onWebDAVExport?: (password: string, opts: backup_svc.ExportOptions) => Promise<void>;
+  webDAVDefaults?: WebDAVExportDefaults;
 }
 
 type AssetSelectionMode = "all" | "specific";
+
+export interface WebDAVExportDefaults {
+  configured: boolean;
+  password: string;
+  includeCredentials: boolean;
+  includeForwards: boolean;
+  includePolicyGroups: boolean;
+  includeShortcuts: boolean;
+  includeThemes: boolean;
+}
 
 function generatePassword(length = 20): string {
   const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
@@ -50,7 +61,7 @@ function generatePassword(length = 20): string {
   return Array.from(arr, (b) => chars[b % chars.length]).join("");
 }
 
-export function ExportDialog({ open, onOpenChange, mode, onGistExport, onWebDAVExport }: ExportDialogProps) {
+export function ExportDialog({ open, onOpenChange, mode, onGistExport, onWebDAVExport, webDAVDefaults }: ExportDialogProps) {
   const { t } = useTranslation();
   const { assets } = useAssetStore();
   const { shortcuts } = useShortcutStore();
@@ -75,14 +86,23 @@ export function ExportDialog({ open, onOpenChange, mode, onGistExport, onWebDAVE
     if (!open) return;
     setSelectionMode("all");
     setSelectedIds([]);
-    setIncludeCredentials(false);
-    setIncludeForwards(true);
-    setIncludePolicyGroups(true);
-    setIncludeShortcuts(false);
-    setIncludeThemes(false);
-    setPassword("");
+    if (mode === "webdav" && webDAVDefaults?.configured) {
+      setIncludeCredentials(webDAVDefaults.includeCredentials);
+      setIncludeForwards(webDAVDefaults.includeForwards);
+      setIncludePolicyGroups(webDAVDefaults.includePolicyGroups);
+      setIncludeShortcuts(webDAVDefaults.includeShortcuts);
+      setIncludeThemes(webDAVDefaults.includeThemes);
+      setPassword(webDAVDefaults.password);
+    } else {
+      setIncludeCredentials(false);
+      setIncludeForwards(true);
+      setIncludePolicyGroups(true);
+      setIncludeShortcuts(false);
+      setIncludeThemes(false);
+      setPassword("");
+    }
     setShowPassword(false);
-  }, [open]);
+  }, [mode, open, webDAVDefaults]);
 
   const selectAll = () => setSelectedIds(assets.map((a) => a.ID));
   const selectNone = () => setSelectedIds([]);
@@ -99,6 +119,8 @@ export function ExportDialog({ open, onOpenChange, mode, onGistExport, onWebDAVE
     opts.include_credentials = includeCredentials;
     opts.include_forwards = includeForwards;
     opts.include_policy_groups = includePolicyGroups;
+    opts.include_shortcuts = includeShortcuts;
+    opts.include_themes = includeThemes;
 
     if (includeShortcuts) {
       // Export only custom (non-default) bindings

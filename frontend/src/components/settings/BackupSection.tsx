@@ -45,7 +45,7 @@ import {
   ImportFromWebDAV,
 } from "../../../wailsjs/go/system/System";
 import { backup_svc } from "../../../wailsjs/go/models";
-import { ExportDialog } from "@/components/settings/ExportDialog";
+import { ExportDialog, type WebDAVExportDefaults } from "@/components/settings/ExportDialog";
 import { BackupImportDialog } from "@/components/settings/BackupImportDialog";
 import {
   Download,
@@ -70,6 +70,16 @@ import { useShortcutStore } from "@/stores/shortcutStore";
 import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+const emptyWebDAVExportDefaults: WebDAVExportDefaults = {
+  configured: false,
+  password: "",
+  includeCredentials: false,
+  includeForwards: true,
+  includePolicyGroups: true,
+  includeShortcuts: false,
+  includeThemes: false,
+};
 
 function PasswordInput({
   showGenerate,
@@ -156,6 +166,7 @@ export function BackupSection() {
   const [webdavPulling, setWebDAVPulling] = useState(false);
   const [webdavPullPasswordOpen, setWebDAVPullPasswordOpen] = useState(false);
   const [webdavPullPassword, setWebDAVPullPassword] = useState("");
+  const [webDAVExportDefaults, setWebDAVExportDefaults] = useState<WebDAVExportDefaults>(emptyWebDAVExportDefaults);
 
   // Load GitHub token on mount
   useEffect(() => {
@@ -212,6 +223,15 @@ export function BackupSection() {
         setWebDAVPassword(cfg.password || "");
         setWebDAVToken(cfg.token || "");
         setWebDAVConfigured(!!cfg.configured);
+        setWebDAVExportDefaults({
+          configured: !!cfg.exportDefaultsConfigured,
+          password: cfg.exportPassword || "",
+          includeCredentials: !!cfg.exportIncludeCredentials,
+          includeForwards: cfg.exportDefaultsConfigured ? !!cfg.exportIncludeForwards : true,
+          includePolicyGroups: cfg.exportDefaultsConfigured ? !!cfg.exportIncludePolicyGroups : true,
+          includeShortcuts: !!cfg.exportIncludeShortcuts,
+          includeThemes: !!cfg.exportIncludeThemes,
+        });
       } catch {
         /* not configured */
       }
@@ -442,6 +462,7 @@ export function BackupSection() {
       setWebDAVToken("");
       setWebDAVBackups([]);
       setSelectedWebDAVBackup("");
+      setWebDAVExportDefaults(emptyWebDAVExportDefaults);
       notifySuccess(t("backup.webdavCleared"));
     } catch (e: unknown) {
       toast.error(errMsg(e));
@@ -468,6 +489,15 @@ export function BackupSection() {
       if (result?.name) {
         setSelectedWebDAVBackup(result.name);
       }
+      setWebDAVExportDefaults({
+        configured: true,
+        password,
+        includeCredentials: opts.include_credentials,
+        includeForwards: opts.include_forwards,
+        includePolicyGroups: opts.include_policy_groups,
+        includeShortcuts: opts.include_shortcuts,
+        includeThemes: opts.include_themes,
+      });
     } finally {
       setWebDAVPushing(false);
     }
@@ -716,6 +746,7 @@ export function BackupSection() {
         mode={exportDialogMode}
         onGistExport={handleGistExport}
         onWebDAVExport={handleWebDAVExport}
+        webDAVDefaults={webDAVExportDefaults}
       />
 
       {/* Backup import dialog */}
