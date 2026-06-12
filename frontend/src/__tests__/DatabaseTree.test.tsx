@@ -150,6 +150,60 @@ describe("DatabaseTree", () => {
     expect(screen.queryByText("users")).not.toBeInTheDocument();
   });
 
+  it("does not invent a default schema for unqualified schema-aware table names", () => {
+    makeDatabaseTab("query-1", "postgresql");
+    useQueryStore.setState({
+      dbStates: {
+        "query-1": {
+          databases: ["appdb"],
+          tables: { appdb: ["users"] },
+          loadingTables: {},
+          expandedDbs: ["appdb"],
+          expandedSchemas: {},
+          loadingDbs: false,
+          innerTabs: [],
+          activeInnerTabId: null,
+          error: null,
+        },
+      },
+      redisStates: {},
+      mongoStates: {},
+    });
+
+    render(<DatabaseTree tabId="query-1" />);
+
+    expect(screen.getByText("users")).toBeInTheDocument();
+    expect(screen.queryByText("public")).not.toBeInTheDocument();
+  });
+
+  it("does not show a loading spinner for filtered unloaded databases", () => {
+    useQueryStore.setState({
+      dbStates: {
+        "query-1": {
+          databases: ["appdb"],
+          tables: {},
+          loadingTables: {},
+          expandedDbs: [],
+          expandedSchemas: {},
+          loadingDbs: false,
+          innerTabs: [],
+          activeInnerTabId: null,
+          error: null,
+        },
+      },
+      redisStates: {},
+      mongoStates: {},
+    });
+
+    render(<DatabaseTree tabId="query-1" />);
+
+    fireEvent.click(screen.getByTitle("query.filterTables"));
+    fireEvent.change(screen.getByPlaceholderText("query.filterTables"), { target: { value: "app" } });
+
+    expect(screen.getByText("appdb")).toBeInTheDocument();
+    expect(screen.getByText("query.noTables")).toBeInTheDocument();
+  });
+
   it("opens create database dialog from toolbar", async () => {
     render(<DatabaseTree tabId="query-1" />);
 

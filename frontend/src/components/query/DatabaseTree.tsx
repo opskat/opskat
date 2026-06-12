@@ -63,23 +63,17 @@ function isSchemaAwareDriver(driver: string | undefined): boolean {
   return driver === "postgresql" || driver === "mssql";
 }
 
-function defaultSchema(driver: string | undefined): string {
-  return driver === "mssql" ? "dbo" : "public";
-}
-
-function splitSchemaTable(
-  table: string,
-  driver: string | undefined
-): { schema: string; name: string; qualifiedName: string } {
+function splitSchemaTable(table: string): { schema: string; name: string; qualifiedName: string } | null {
   const dot = table.indexOf(".");
-  if (dot <= 0) return { schema: defaultSchema(driver), name: table, qualifiedName: table };
+  if (dot <= 0) return null;
   return { schema: table.slice(0, dot), name: table.slice(dot + 1), qualifiedName: table };
 }
 
-function buildSchemaGroups(tables: string[], driver: string | undefined, filterLower: string, dbMatch: boolean) {
+function buildSchemaGroups(tables: string[], filterLower: string, dbMatch: boolean) {
   const groups = new Map<string, { schemaMatch: boolean; tables: TableNode[] }>();
   for (const table of tables) {
-    const parsed = splitSchemaTable(table, driver);
+    const parsed = splitSchemaTable(table);
+    if (!parsed) continue;
     const qualifiedLower = parsed.qualifiedName.toLowerCase();
     const nameLower = parsed.name.toLowerCase();
     const schemaLower = parsed.schema.toLowerCase();
@@ -98,6 +92,13 @@ function buildSchemaGroups(tables: string[], driver: string | undefined, filterL
     schemaMatch: group.schemaMatch,
     tables: group.tables,
   }));
+}
+
+function buildUngroupedTables(tables: string[], filterLower: string, dbMatch: boolean): string[] {
+  return tables.filter((table) => {
+    if (splitSchemaTable(table)) return false;
+    return !filterLower || dbMatch || table.toLowerCase().includes(filterLower);
+  });
 }
 
 export function DatabaseTree({ tabId }: DatabaseTreeProps) {
@@ -146,7 +147,12 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
       return dbState.databases.map((db) => {
         const loaded = dbState.tables[db];
         return schemaAware && loaded
-          ? { db, dbMatch: false, tables: loaded, schemas: buildSchemaGroups(loaded, driver, "", false) }
+          ? {
+              db,
+              dbMatch: false,
+              tables: buildUngroupedTables(loaded, "", false),
+              schemas: buildSchemaGroups(loaded, "", false),
+            }
           : { db, dbMatch: false, tables: loaded };
       });
     }
@@ -154,14 +160,14 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
     for (const db of dbState.databases) {
       const dbMatch = db.toLowerCase().includes(filterLower);
       const loaded = dbState.tables[db];
-      const schemaGroups = schemaAware && loaded ? buildSchemaGroups(loaded, driver, filterLower, dbMatch) : undefined;
+      const schemaGroups = schemaAware && loaded ? buildSchemaGroups(loaded, filterLower, dbMatch) : undefined;
       const matchedTables = schemaAware
-        ? undefined
+        ? loaded && buildUngroupedTables(loaded, filterLower, dbMatch)
         : loaded?.filter((t) => dbMatch || t.toLowerCase().includes(filterLower));
       if (dbMatch) {
-        out.push({ db, dbMatch: true, tables: loaded, schemas: schemaGroups });
+        out.push({ db, dbMatch: true, tables: matchedTables, schemas: schemaGroups });
       } else if (schemaGroups && schemaGroups.length > 0) {
-        out.push({ db, dbMatch: false, tables: loaded, schemas: schemaGroups });
+        out.push({ db, dbMatch: false, tables: matchedTables, schemas: schemaGroups });
       } else if (matchedTables && matchedTables.length > 0) {
         out.push({ db, dbMatch: false, tables: matchedTables });
       }
@@ -198,6 +204,68 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   if (!dbState) return null;
 
   const { expandedDbs, loadingDbs, error } = dbState;
+  const renderTableItem = (db: string, tbl: string, label = tbl) => {
+    const isSelected = selected?.db === db && selected?.table === tbl;
+    return (
+      <ContextMenu key={tbl}>
+        <ContextMenuTrigger className="block w-full">
+          <div
+            className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer transition-colors duration-150 ${
+              isSelected ? "bg-accent text-accent-foreground" : "hover:bg-accent"
+            }`}
+            onClick={() => setSelected({ db, table: tbl })}
+            onDoubleClick={() => {
+              setSelected({ db, table: tbl });
+              openTableTab(tabId, db, tbl);
+            }}
+          >
+            <Table2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{label}</span>
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem onClick={() => openTableTab(tabId, db, tbl)}>
+            <Table2 className="h-3.5 w-3.5" />
+            {t("query.openTable")}
+          </ContextMenuItem>
+          <ContextMenuItem
+            onClick={() => {
+              setAlterDatabase(db);
+              setAlterTableName(tbl);
+              setShowAlterTable(true);
+            }}
+          >
+            <Wrench className="h-3.5 w-3.5" />
+            {t("query.alterTable")}
+          </ContextMenuItem>
+          <ContextMenuItem
+            onClick={() => {
+              const tableName = quoteTableRef(db, tbl, driver);
+              openSqlTab(tabId, db, buildStarterSelectSql(tableName, driver, 100));
+            }}
+          >
+            <Search className="h-3.5 w-3.5" />
+            {t("query.newSql")}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            variant="destructive"
+            onClick={() => setConfirmAction({ type: "truncate", database: db, table: tbl })}
+          >
+            <Eraser className="h-3.5 w-3.5" />
+            {t("query.truncateTable")}
+          </ContextMenuItem>
+          <ContextMenuItem
+            variant="destructive"
+            onClick={() => setConfirmAction({ type: "drop", database: db, table: tbl })}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {t("query.dropTable")}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -300,6 +368,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
             visibleDbs.map(({ db, dbMatch, tables: dbTables, schemas }) => {
               const isExpanded = filterLower ? true : expandedDbs.includes(db);
               const schemaAware = isSchemaAwareDriver(driver);
+              const isLoadingTables = dbState.loadingTables[db] === true;
 
               return (
                 <div key={db}>
@@ -347,175 +416,48 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                   {/* Tables */}
                   {isExpanded && (
                     <div className="ml-3">
-                      {dbState.loadingTables[db] || !dbTables ? (
+                      {isLoadingTables ? (
                         <div className="flex items-center gap-1.5 px-2 py-1">
                           <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
                         </div>
-                      ) : dbTables.length === 0 || (schemaAware && schemas?.length === 0) ? (
+                      ) : !dbTables || (dbTables.length === 0 && (!schemas || schemas.length === 0)) ? (
                         <div className="px-2 py-1 text-xs text-muted-foreground italic">
                           {filterLower && !dbMatch ? t("query.noMatch") : t("query.noTables")}
                         </div>
                       ) : schemaAware && schemas ? (
-                        schemas.map((group) => {
-                          const expandedSchemas = dbState.expandedSchemas[db] || [];
-                          const isSchemaExpanded = filterLower ? true : expandedSchemas.includes(group.schema);
-                          return (
-                            <div key={group.schema}>
-                              <div
-                                className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
-                                onClick={() => {
-                                  if (filterLower) return;
-                                  toggleSchemaExpand(tabId, db, group.schema);
-                                }}
-                              >
-                                {isSchemaExpanded ? (
-                                  <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                ) : (
-                                  <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                )}
-                                <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                                <span className="truncate">{group.schema}</span>
-                              </div>
-                              {isSchemaExpanded && (
-                                <div className="ml-3">
-                                  {group.tables.map((tbl) => {
-                                    const isSelected = selected?.db === db && selected?.table === tbl.qualifiedName;
-                                    return (
-                                      <ContextMenu key={tbl.qualifiedName}>
-                                        <ContextMenuTrigger className="block w-full">
-                                          <div
-                                            className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer transition-colors duration-150 ${
-                                              isSelected ? "bg-accent text-accent-foreground" : "hover:bg-accent"
-                                            }`}
-                                            onClick={() => setSelected({ db, table: tbl.qualifiedName })}
-                                            onDoubleClick={() => {
-                                              setSelected({ db, table: tbl.qualifiedName });
-                                              openTableTab(tabId, db, tbl.qualifiedName);
-                                            }}
-                                          >
-                                            <Table2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                                            <span className="truncate">{tbl.name}</span>
-                                          </div>
-                                        </ContextMenuTrigger>
-                                        <ContextMenuContent>
-                                          <ContextMenuItem onClick={() => openTableTab(tabId, db, tbl.qualifiedName)}>
-                                            <Table2 className="h-3.5 w-3.5" />
-                                            {t("query.openTable")}
-                                          </ContextMenuItem>
-                                          <ContextMenuItem
-                                            onClick={() => {
-                                              setAlterDatabase(db);
-                                              setAlterTableName(tbl.qualifiedName);
-                                              setShowAlterTable(true);
-                                            }}
-                                          >
-                                            <Wrench className="h-3.5 w-3.5" />
-                                            {t("query.alterTable")}
-                                          </ContextMenuItem>
-                                          <ContextMenuItem
-                                            onClick={() => {
-                                              const tableName = quoteTableRef(db, tbl.qualifiedName, driver);
-                                              openSqlTab(tabId, db, buildStarterSelectSql(tableName, driver, 100));
-                                            }}
-                                          >
-                                            <Search className="h-3.5 w-3.5" />
-                                            {t("query.newSql")}
-                                          </ContextMenuItem>
-                                          <ContextMenuSeparator />
-                                          <ContextMenuItem
-                                            variant="destructive"
-                                            onClick={() =>
-                                              setConfirmAction({
-                                                type: "truncate",
-                                                database: db,
-                                                table: tbl.qualifiedName,
-                                              })
-                                            }
-                                          >
-                                            <Eraser className="h-3.5 w-3.5" />
-                                            {t("query.truncateTable")}
-                                          </ContextMenuItem>
-                                          <ContextMenuItem
-                                            variant="destructive"
-                                            onClick={() =>
-                                              setConfirmAction({ type: "drop", database: db, table: tbl.qualifiedName })
-                                            }
-                                          >
-                                            <Trash2 className="h-3.5 w-3.5" />
-                                            {t("query.dropTable")}
-                                          </ContextMenuItem>
-                                        </ContextMenuContent>
-                                      </ContextMenu>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })
-                      ) : (
-                        dbTables.map((tbl) => {
-                          const isSelected = selected?.db === db && selected?.table === tbl;
-                          return (
-                            <ContextMenu key={tbl}>
-                              <ContextMenuTrigger className="block w-full">
+                        <>
+                          {dbTables.map((tbl) => renderTableItem(db, tbl))}
+                          {schemas.map((group) => {
+                            const expandedSchemas = dbState.expandedSchemas[db] || [];
+                            const isSchemaExpanded = filterLower ? true : expandedSchemas.includes(group.schema);
+                            return (
+                              <div key={group.schema}>
                                 <div
-                                  className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer transition-colors duration-150 ${
-                                    isSelected ? "bg-accent text-accent-foreground" : "hover:bg-accent"
-                                  }`}
-                                  onClick={() => setSelected({ db, table: tbl })}
-                                  onDoubleClick={() => {
-                                    setSelected({ db, table: tbl });
-                                    openTableTab(tabId, db, tbl);
+                                  className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
+                                  onClick={() => {
+                                    if (filterLower) return;
+                                    toggleSchemaExpand(tabId, db, group.schema);
                                   }}
                                 >
-                                  <Table2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                                  <span className="truncate">{tbl}</span>
+                                  {isSchemaExpanded ? (
+                                    <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                  ) : (
+                                    <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                  )}
+                                  <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                  <span className="truncate">{group.schema}</span>
                                 </div>
-                              </ContextMenuTrigger>
-                              <ContextMenuContent>
-                                <ContextMenuItem onClick={() => openTableTab(tabId, db, tbl)}>
-                                  <Table2 className="h-3.5 w-3.5" />
-                                  {t("query.openTable")}
-                                </ContextMenuItem>
-                                <ContextMenuItem
-                                  onClick={() => {
-                                    setAlterDatabase(db);
-                                    setAlterTableName(tbl);
-                                    setShowAlterTable(true);
-                                  }}
-                                >
-                                  <Wrench className="h-3.5 w-3.5" />
-                                  {t("query.alterTable")}
-                                </ContextMenuItem>
-                                <ContextMenuItem
-                                  onClick={() => {
-                                    const tableName = quoteTableRef(db, tbl, driver);
-                                    openSqlTab(tabId, db, buildStarterSelectSql(tableName, driver, 100));
-                                  }}
-                                >
-                                  <Search className="h-3.5 w-3.5" />
-                                  {t("query.newSql")}
-                                </ContextMenuItem>
-                                <ContextMenuSeparator />
-                                <ContextMenuItem
-                                  variant="destructive"
-                                  onClick={() => setConfirmAction({ type: "truncate", database: db, table: tbl })}
-                                >
-                                  <Eraser className="h-3.5 w-3.5" />
-                                  {t("query.truncateTable")}
-                                </ContextMenuItem>
-                                <ContextMenuItem
-                                  variant="destructive"
-                                  onClick={() => setConfirmAction({ type: "drop", database: db, table: tbl })}
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                  {t("query.dropTable")}
-                                </ContextMenuItem>
-                              </ContextMenuContent>
-                            </ContextMenu>
-                          );
-                        })
+                                {isSchemaExpanded && (
+                                  <div className="ml-3">
+                                    {group.tables.map((tbl) => renderTableItem(db, tbl.qualifiedName, tbl.name))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </>
+                      ) : (
+                        dbTables.map((tbl) => renderTableItem(db, tbl))
                       )}
                     </div>
                   )}
