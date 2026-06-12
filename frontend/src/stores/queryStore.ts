@@ -38,6 +38,7 @@ export interface DatabaseTabState {
   tables: Record<string, string[]>; // db -> table[]
   loadingTables: Record<string, boolean>; // db -> isLoading
   expandedDbs: string[];
+  expandedSchemas: Record<string, string[]>; // db -> schema[]
   loadingDbs: boolean;
   innerTabs: InnerTab[];
   activeInnerTabId: string | null;
@@ -112,6 +113,7 @@ interface QueryState {
   loadTables: (tabId: string, database: string) => Promise<void>;
   refreshTables: (tabId: string, database: string) => Promise<void>;
   toggleDbExpand: (tabId: string, database: string) => void;
+  toggleSchemaExpand: (tabId: string, database: string, schema: string) => void;
   openTableTab: (tabId: string, database: string, table: string) => void;
   openSqlTab: (tabId: string, database?: string, sql?: string) => void;
   closeInnerTab: (tabId: string, innerTabId: string) => void;
@@ -157,6 +159,7 @@ function defaultDbState(): DatabaseTabState {
     tables: {},
     loadingTables: {},
     expandedDbs: [],
+    expandedSchemas: {},
     loadingDbs: false,
     innerTabs: [],
     activeInnerTabId: null,
@@ -331,7 +334,11 @@ function parseDatabases(driver: string | undefined, rows: Record<string, unknown
 
 function buildLoadTablesSQL(driver: string | undefined, database: string): string {
   if (driver === "postgresql") {
-    return "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename";
+    return (
+      "SELECT table_schema || '.' || table_name AS name FROM information_schema.tables " +
+      "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') " +
+      "AND table_type IN ('BASE TABLE', 'VIEW') ORDER BY table_schema, table_name"
+    );
   }
   if (driver === "sqlite") {
     const schema = database ? quoteSQLiteIdent(database) : "main";
@@ -349,6 +356,31 @@ function buildLoadTablesSQL(driver: string | undefined, database: string): strin
 
 function quoteSQLiteIdent(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
+}
+
+function isSchemaAwareDriver(driver: string | undefined): boolean {
+  return driver === "postgresql" || driver === "mssql";
+}
+
+function schemaNamesFromTables(tables: string[]): string[] {
+  const seen = new Set<string>();
+  for (const table of tables) {
+    const dot = table.indexOf(".");
+    if (dot <= 0) continue;
+    seen.add(table.slice(0, dot));
+  }
+  return Array.from(seen);
+}
+
+function reconcileExpandedSchemas(
+  existing: string[] | undefined,
+  nextSchemas: string[],
+  shouldGroupBySchema: boolean
+): string[] | undefined {
+  if (!shouldGroupBySchema) return undefined;
+  if (!existing) return nextSchemas;
+  const available = new Set(nextSchemas);
+  return existing.filter((schema) => available.has(schema));
 }
 
 export const useQueryStore = create<QueryState>((set, get) => ({
@@ -509,11 +541,24 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       set((s) => ({
         dbStates: {
           ...s.dbStates,
-          [tabId]: {
-            ...s.dbStates[tabId],
-            tables: { ...s.dbStates[tabId].tables, [database]: tables },
-            loadingTables: { ...s.dbStates[tabId].loadingTables, [database]: false },
-          },
+          [tabId]: (() => {
+            const state = s.dbStates[tabId];
+            const schemas = schemaNamesFromTables(tables);
+            const nextExpanded = reconcileExpandedSchemas(
+              state.expandedSchemas[database],
+              schemas,
+              isSchemaAwareDriver(tab.driver)
+            );
+            return {
+              ...state,
+              tables: { ...state.tables, [database]: tables },
+              loadingTables: { ...state.loadingTables, [database]: false },
+              expandedSchemas:
+                nextExpanded === undefined
+                  ? state.expandedSchemas
+                  : { ...state.expandedSchemas, [database]: nextExpanded },
+            };
+          })(),
         },
       }));
     } catch (err) {
@@ -552,6 +597,23 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       dbStates: {
         ...s.dbStates,
         [tabId]: { ...s.dbStates[tabId], expandedDbs: expanded },
+      },
+    }));
+  },
+
+  toggleSchemaExpand: (tabId, database, schema) => {
+    const state = get().dbStates[tabId];
+    if (!state) return;
+    const current = state.expandedSchemas[database] || [];
+    const isExpanded = current.includes(schema);
+    const expanded = isExpanded ? current.filter((s) => s !== schema) : [...current, schema];
+    set((s) => ({
+      dbStates: {
+        ...s.dbStates,
+        [tabId]: {
+          ...s.dbStates[tabId],
+          expandedSchemas: { ...s.dbStates[tabId].expandedSchemas, [database]: expanded },
+        },
       },
     }));
   },
@@ -1269,6 +1331,7 @@ interface PersistedDbState {
   databases: string[];
   tables: Record<string, string[]>;
   expandedDbs: string[];
+  expandedSchemas?: Record<string, string[]>;
   innerTabs: InnerTab[];
   activeInnerTabId: string | null;
 }
@@ -1291,6 +1354,7 @@ function stripDbState(s: DatabaseTabState): PersistedDbState {
     databases: s.databases,
     tables: s.tables,
     expandedDbs: s.expandedDbs,
+    expandedSchemas: s.expandedSchemas,
     innerTabs: s.innerTabs,
     activeInnerTabId: s.activeInnerTabId,
   };
@@ -1389,6 +1453,7 @@ registerTabRestoreHook("query", (tabs) => {
           databases: saved.databases || [],
           tables: saved.tables || {},
           expandedDbs: saved.expandedDbs || [],
+          expandedSchemas: saved.expandedSchemas || {},
           innerTabs: (saved.innerTabs || []).map((it) => (it.type === "table" ? { ...it, pendingLoad: true } : it)),
           activeInnerTabId: saved.activeInnerTabId ?? null,
         };

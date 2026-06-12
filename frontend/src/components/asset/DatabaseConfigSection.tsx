@@ -84,14 +84,22 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
       <div className="grid gap-2">
         <Label>{t("asset.driver")}</Label>
         <Select value={state.driver} onValueChange={handleDriverChange}>
-          <SelectTrigger>
+          <SelectTrigger data-testid="database-driver-select">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="mysql">{t("asset.driverMySQL")}</SelectItem>
-            <SelectItem value="postgresql">{t("asset.driverPostgreSQL")}</SelectItem>
-            <SelectItem value="mssql">{t("asset.driverMSSQL")}</SelectItem>
-            <SelectItem value="sqlite">{t("asset.driverSQLite")}</SelectItem>
+            <SelectItem value="mysql" data-testid="database-driver-option-mysql">
+              {t("asset.driverMySQL")}
+            </SelectItem>
+            <SelectItem value="postgresql" data-testid="database-driver-option-postgresql">
+              {t("asset.driverPostgreSQL")}
+            </SelectItem>
+            <SelectItem value="mssql" data-testid="database-driver-option-mssql">
+              {t("asset.driverMSSQL")}
+            </SelectItem>
+            <SelectItem value="sqlite" data-testid="database-driver-option-sqlite">
+              {t("asset.driverSQLite")}
+            </SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -146,11 +154,17 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
             <div className="grid grid-cols-[1fr_120px] gap-3">
               <div className="grid gap-2">
                 <Label>{t("asset.host")}</Label>
-                <Input value={state.host} onChange={(e) => patch({ host: e.target.value })} placeholder="example.com" />
+                <Input
+                  data-testid="database-host-input"
+                  value={state.host}
+                  onChange={(e) => patch({ host: e.target.value })}
+                  placeholder="example.com"
+                />
               </div>
               <div className="grid gap-2">
                 <Label>{t("asset.port")}</Label>
                 <Input
+                  data-testid="database-port-input"
                   className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                   type="number"
                   value={state.port || ""}
@@ -163,7 +177,11 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
             {/* Username */}
             <div className="grid gap-2">
               <Label>{t("asset.username")}</Label>
-              <Input value={state.username} onChange={(e) => patch({ username: e.target.value })} />
+              <Input
+                data-testid="database-username-input"
+                value={state.username}
+                onChange={(e) => patch({ username: e.target.value })}
+              />
             </div>
 
             {/* Password */}
@@ -185,6 +203,7 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
           <div className="grid gap-2">
             <Label>{t("asset.database")}</Label>
             <Input
+              data-testid="database-name-input"
               value={state.database}
               onChange={(e) => patch({ database: e.target.value })}
               placeholder={t("asset.databasePlaceholder")}

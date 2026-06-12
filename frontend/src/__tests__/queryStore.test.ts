@@ -43,6 +43,24 @@ function makeSQLiteAsset(id: number, name = `SQLite ${id}`): asset_entity.Asset 
   } as asset_entity.Asset;
 }
 
+function makePostgreSQLAsset(id: number, name = `PostgreSQL ${id}`): asset_entity.Asset {
+  return {
+    ID: id,
+    Name: name,
+    Type: "database",
+    GroupID: 0,
+    Icon: "",
+    Tags: "",
+    Description: "",
+    Config: JSON.stringify({ driver: "postgresql", database: "admdb", host: "127.0.0.1", port: 5432 }),
+    CmdPolicy: "",
+    SortOrder: 0,
+    Status: 1,
+    Createtime: 0,
+    Updatetime: 0,
+  } as asset_entity.Asset;
+}
+
 function makeMSSQLAsset(id: number, name = `MSSQL ${id}`): asset_entity.Asset {
   return {
     ID: id,
@@ -525,6 +543,72 @@ describe("queryStore database actions", () => {
   });
 });
 
+describe("queryStore PostgreSQL database actions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useTabStore.setState({ tabs: [], activeTabId: null });
+    useQueryStore.setState({ dbStates: {}, redisStates: {}, mongoStates: {} });
+    vi.spyOn(useAssetStore.getState(), "getAssetPath").mockReturnValue("Test/PostgreSQL");
+    useQueryStore.getState().openQueryTab(makePostgreSQLAsset(35));
+  });
+
+  it("loads PostgreSQL tables from non-system schemas as schema.table", async () => {
+    vi.mocked(ExecuteSQL).mockResolvedValueOnce(
+      JSON.stringify({ rows: [{ name: "adm.ads_audit" }, { name: "public.users" }] })
+    );
+
+    await useQueryStore.getState().loadTables("query-35", "admdb");
+
+    expect(ExecuteSQL).toHaveBeenCalledWith(
+      35,
+      "SELECT table_schema || '.' || table_name AS name FROM information_schema.tables " +
+        "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') " +
+        "AND table_type IN ('BASE TABLE', 'VIEW') ORDER BY table_schema, table_name",
+      "admdb"
+    );
+    expect(useQueryStore.getState().dbStates["query-35"].tables.admdb).toEqual(["adm.ads_audit", "public.users"]);
+    expect(useQueryStore.getState().dbStates["query-35"].expandedSchemas.admdb).toEqual(["adm", "public"]);
+  });
+
+  it("preserves still-existing PostgreSQL schema expansion state on refresh", async () => {
+    useQueryStore.setState((s) => ({
+      dbStates: {
+        ...s.dbStates,
+        "query-35": {
+          ...s.dbStates["query-35"],
+          expandedSchemas: { admdb: ["adm"] },
+        },
+      },
+    }));
+    vi.mocked(ExecuteSQL).mockResolvedValueOnce(
+      JSON.stringify({ rows: [{ name: "adm.ads_audit" }, { name: "reporting.events" }] })
+    );
+
+    await useQueryStore.getState().loadTables("query-35", "admdb");
+
+    expect(useQueryStore.getState().dbStates["query-35"].tables.admdb).toEqual(["adm.ads_audit", "reporting.events"]);
+    expect(useQueryStore.getState().dbStates["query-35"].expandedSchemas.admdb).toEqual(["adm"]);
+  });
+
+  it("toggles PostgreSQL schema expansion", () => {
+    useQueryStore.setState((s) => ({
+      dbStates: {
+        ...s.dbStates,
+        "query-35": {
+          ...s.dbStates["query-35"],
+          expandedSchemas: { admdb: ["adm"] },
+        },
+      },
+    }));
+
+    useQueryStore.getState().toggleSchemaExpand("query-35", "admdb", "public");
+    expect(useQueryStore.getState().dbStates["query-35"].expandedSchemas.admdb).toEqual(["adm", "public"]);
+
+    useQueryStore.getState().toggleSchemaExpand("query-35", "admdb", "adm");
+    expect(useQueryStore.getState().dbStates["query-35"].expandedSchemas.admdb).toEqual(["public"]);
+  });
+});
+
 describe("queryStore MSSQL database actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -561,5 +645,6 @@ describe("queryStore MSSQL database actions", () => {
       "appdb"
     );
     expect(useQueryStore.getState().dbStates["query-40"].tables.appdb).toEqual(["dbo.users", "sales.orders"]);
+    expect(useQueryStore.getState().dbStates["query-40"].expandedSchemas.appdb).toEqual(["dbo", "sales"]);
   });
 });

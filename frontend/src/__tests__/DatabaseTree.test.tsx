@@ -9,7 +9,7 @@ vi.mock("@/components/CodeEditor", () => ({
   CodeEditor: ({ value }: { value: string }) => <pre data-testid="code-editor">{value}</pre>,
 }));
 
-function makeDatabaseTab(id = "query-1"): void {
+function makeDatabaseTab(id = "query-1", driver = "mysql"): void {
   useTabStore.setState({
     tabs: [
       {
@@ -22,7 +22,7 @@ function makeDatabaseTab(id = "query-1"): void {
           assetName: "test-db",
           assetIcon: "",
           assetType: "database",
-          driver: "mysql",
+          driver,
           defaultDatabase: "appdb",
         },
       },
@@ -40,6 +40,7 @@ describe("DatabaseTree", () => {
           tables: {},
           loadingTables: {},
           expandedDbs: [],
+          expandedSchemas: {},
           loadingDbs: false,
           innerTabs: [],
           activeInnerTabId: null,
@@ -51,6 +52,102 @@ describe("DatabaseTree", () => {
     });
     makeDatabaseTab();
     vi.mocked(ExecuteSQL).mockResolvedValue(JSON.stringify({ rows: [] }));
+  });
+
+  it("renders PostgreSQL tables grouped by schema and opens qualified table names", () => {
+    makeDatabaseTab("query-1", "postgresql");
+    useQueryStore.setState({
+      dbStates: {
+        "query-1": {
+          databases: ["appdb"],
+          tables: { appdb: ["adm.ads_audit", "public.users"] },
+          loadingTables: {},
+          expandedDbs: ["appdb"],
+          expandedSchemas: { appdb: ["adm", "public"] },
+          loadingDbs: false,
+          innerTabs: [],
+          activeInnerTabId: null,
+          error: null,
+        },
+      },
+      redisStates: {},
+      mongoStates: {},
+    });
+
+    render(<DatabaseTree tabId="query-1" />);
+
+    expect(screen.getByText("adm")).toBeInTheDocument();
+    expect(screen.getByText("ads_audit")).toBeInTheDocument();
+    expect(screen.getByText("public")).toBeInTheDocument();
+    expect(screen.getByText("users")).toBeInTheDocument();
+    expect(screen.queryByText("adm.ads_audit")).not.toBeInTheDocument();
+
+    fireEvent.doubleClick(screen.getByText("ads_audit"));
+
+    expect(useQueryStore.getState().dbStates["query-1"].innerTabs).toEqual([
+      { id: "table:appdb.adm.ads_audit", type: "table", database: "appdb", table: "adm.ads_audit" },
+    ]);
+  });
+
+  it("renders MSSQL tables grouped by schema", () => {
+    makeDatabaseTab("query-1", "mssql");
+    useQueryStore.setState({
+      dbStates: {
+        "query-1": {
+          databases: ["appdb"],
+          tables: { appdb: ["dbo.users", "sales.orders"] },
+          loadingTables: {},
+          expandedDbs: ["appdb"],
+          expandedSchemas: { appdb: ["dbo", "sales"] },
+          loadingDbs: false,
+          innerTabs: [],
+          activeInnerTabId: null,
+          error: null,
+        },
+      },
+      redisStates: {},
+      mongoStates: {},
+    });
+
+    render(<DatabaseTree tabId="query-1" />);
+
+    expect(screen.getByText("dbo")).toBeInTheDocument();
+    expect(screen.getByText("users")).toBeInTheDocument();
+    expect(screen.getByText("sales")).toBeInTheDocument();
+    expect(screen.getByText("orders")).toBeInTheDocument();
+    expect(screen.queryByText("dbo.users")).not.toBeInTheDocument();
+  });
+
+  it("filters PostgreSQL schema groups by qualified table names", () => {
+    makeDatabaseTab("query-1", "postgresql");
+    useQueryStore.setState({
+      dbStates: {
+        "query-1": {
+          databases: ["appdb"],
+          tables: { appdb: ["adm.ads_audit", "public.users"] },
+          loadingTables: {},
+          expandedDbs: [],
+          expandedSchemas: {},
+          loadingDbs: false,
+          innerTabs: [],
+          activeInnerTabId: null,
+          error: null,
+        },
+      },
+      redisStates: {},
+      mongoStates: {},
+    });
+
+    render(<DatabaseTree tabId="query-1" />);
+
+    fireEvent.click(screen.getByTitle("query.filterTables"));
+    fireEvent.change(screen.getByPlaceholderText("query.filterTables"), { target: { value: "adm.ads" } });
+
+    expect(screen.getByText("appdb")).toBeInTheDocument();
+    expect(screen.getByText("adm")).toBeInTheDocument();
+    expect(screen.getByText("ads_audit")).toBeInTheDocument();
+    expect(screen.queryByText("public")).not.toBeInTheDocument();
+    expect(screen.queryByText("users")).not.toBeInTheDocument();
   });
 
   it("opens create database dialog from toolbar", async () => {
