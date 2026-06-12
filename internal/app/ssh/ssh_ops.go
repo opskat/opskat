@@ -16,6 +16,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/dirsync"
 	"github.com/opskat/opskat/internal/service/asset_svc"
+	"github.com/opskat/opskat/internal/service/auto_backup_svc"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/internal/service/server_status_svc"
 	"github.com/opskat/opskat/internal/service/ssh_svc"
@@ -314,7 +315,11 @@ func (s *SSH) UpdateAssetPassword(assetID int64, password string) error {
 	if err := asset.SetSSHConfig(sshCfg); err != nil {
 		return err
 	}
-	return asset_svc.Asset().Update(i18n.Ctx(s.ctx, s.lang.Lang()), asset)
+	if err := asset_svc.Asset().Update(i18n.Ctx(s.ctx, s.lang.Lang()), asset); err != nil {
+		return err
+	}
+	auto_backup_svc.Schedule()
+	return nil
 }
 
 // testConnection 测试一份未保存的 SSH 配置（不创建终端会话）；经 conntest 注册表由
