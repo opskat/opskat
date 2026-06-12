@@ -50,6 +50,16 @@ func TestWebDAVBackups(t *testing.T) {
     </d:propstat>
   </d:response>
   <d:response>
+    <d:href>/dav/opskat/opskat-backup-auto.encrypted.json</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:getcontentlength>21</d:getcontentlength>
+        <d:getlastmodified>Sat, 25 Apr 2026 10:05:00 GMT</d:getlastmodified>
+      </d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+  <d:response>
     <d:href>/dav/opskat/opskat-backup-20260425.json</d:href>
     <d:propstat>
       <d:prop><d:getcontentlength>7</d:getcontentlength></d:prop>
@@ -101,11 +111,20 @@ func TestWebDAVBackups(t *testing.T) {
 			So(putPass, ShouldEqual, "dav-pass")
 		})
 
+		Convey("uploads the automatic encrypted backup file", func() {
+			info, err := CreateOrUpdateWebDAVAutoBackup(cfg, []byte("auto-backup-bytes"))
+			So(err, ShouldBeNil)
+			So(info.Name, ShouldEqual, "opskat-backup-auto.encrypted.json")
+			So(info.Size, ShouldEqual, len("auto-backup-bytes"))
+			So(putPath, ShouldEqual, "/dav/opskat/opskat-backup-auto.encrypted.json")
+			So(string(putBody), ShouldEqual, "auto-backup-bytes")
+		})
+
 		Convey("lists only encrypted OpsKat backup files", func() {
 			backups, err := ListWebDAVBackups(cfg)
 			So(err, ShouldBeNil)
 			// 仅匹配 .encrypted.json，明文的 opskat-backup-20260425.json 与 notes.txt 都被过滤掉。
-			So(backups, ShouldHaveLength, 1)
+			So(backups, ShouldHaveLength, 2)
 			So(propfindAuthOK, ShouldBeTrue)
 			So(propfindUser, ShouldEqual, "dav-user")
 			So(propfindPass, ShouldEqual, "dav-pass")
@@ -113,6 +132,8 @@ func TestWebDAVBackups(t *testing.T) {
 			So(backups[0].Name, ShouldEqual, "opskat-backup.encrypted.json")
 			So(backups[0].Size, ShouldEqual, int64(12))
 			So(backups[0].UpdatedAt, ShouldEqual, "Sat, 25 Apr 2026 10:00:00 GMT")
+			So(backups[1].Name, ShouldEqual, "opskat-backup-auto.encrypted.json")
+			So(backups[1].Size, ShouldEqual, int64(21))
 		})
 
 		Convey("uses opskat as the default storage directory", func() {
@@ -229,6 +250,9 @@ func TestIsOpsKatBackupName(t *testing.T) {
 	Convey("isOpsKatBackupName", t, func() {
 		Convey("matches the canonical encrypted backup filename", func() {
 			So(isOpsKatBackupName("opskat-backup.encrypted.json"), ShouldBeTrue)
+		})
+		Convey("matches the automatic encrypted backup filename", func() {
+			So(isOpsKatBackupName("opskat-backup-auto.encrypted.json"), ShouldBeTrue)
 		})
 		Convey("matches dated encrypted backups", func() {
 			So(isOpsKatBackupName("opskat-backup-20260425.encrypted.json"), ShouldBeTrue)

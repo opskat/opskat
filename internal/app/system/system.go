@@ -8,6 +8,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/opskat/opskat/internal/service/auto_backup_svc"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -60,12 +61,15 @@ func New(appCtx context.Context, skill SkillContent) *System {
 // Startup Wails 启动回调：保存 Wails ctx 后续 EventsEmit 用，并触发自动更新检查、emit 系统状态。
 func (s *System) Startup(ctx context.Context) {
 	s.ctx = ctx
+	auto_backup_svc.Start(s.appCtx)
 	s.startAutoUpdateCheck()
 	s.emitSystemStatusImpl()
 }
 
-// Cleanup 关闭时调用：当前没有持有的资源。
-func (s *System) Cleanup() {}
+// Cleanup 关闭时调用：停止后台自动备份调度器。
+func (s *System) Cleanup() {
+	auto_backup_svc.Stop()
+}
 
 // Lang 返回当前语言（LangProvider 接口）。
 func (s *System) Lang() string {

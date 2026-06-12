@@ -17,6 +17,7 @@ import (
 	policyent "github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
 	"github.com/opskat/opskat/internal/service/asset_svc"
+	"github.com/opskat/opskat/internal/service/auto_backup_svc"
 	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/service/group_svc"
 	"github.com/opskat/opskat/internal/service/policy_group_svc"
@@ -125,22 +126,36 @@ func (s *System) CreatePolicyGroup(pg policy_group_entity.PolicyGroup) (*policy_
 	if err := policy_group_svc.PolicyGroup().Create(i18n.Ctx(s.ctx, s.Lang()), &pg); err != nil {
 		return nil, err
 	}
+	auto_backup_svc.Schedule()
 	return &pg, nil
 }
 
 // UpdatePolicyGroup 更新自定义权限组
 func (s *System) UpdatePolicyGroup(pg policy_group_entity.PolicyGroup) error {
-	return policy_group_svc.PolicyGroup().Update(i18n.Ctx(s.ctx, s.Lang()), &pg)
+	if err := policy_group_svc.PolicyGroup().Update(i18n.Ctx(s.ctx, s.Lang()), &pg); err != nil {
+		return err
+	}
+	auto_backup_svc.Schedule()
+	return nil
 }
 
 // DeletePolicyGroup 删除自定义权限组
 func (s *System) DeletePolicyGroup(id string) error {
-	return policy_group_svc.PolicyGroup().Delete(i18n.Ctx(s.ctx, s.Lang()), id)
+	if err := policy_group_svc.PolicyGroup().Delete(i18n.Ctx(s.ctx, s.Lang()), id); err != nil {
+		return err
+	}
+	auto_backup_svc.Schedule()
+	return nil
 }
 
 // CopyPolicyGroup 复制权限组（内置或自定义）
 func (s *System) CopyPolicyGroup(id string, name string) (*policy_group_entity.PolicyGroup, error) {
-	return policy_group_svc.PolicyGroup().Copy(i18n.Ctx(s.ctx, s.Lang()), id, name)
+	pg, err := policy_group_svc.PolicyGroup().Copy(i18n.Ctx(s.ctx, s.Lang()), id, name)
+	if err != nil {
+		return nil, err
+	}
+	auto_backup_svc.Schedule()
+	return pg, nil
 }
 
 // --- 资产操作 ---
@@ -157,39 +172,67 @@ func (s *System) ListAssets(assetType string, groupID int64) ([]*asset_entity.As
 
 // CreateAsset 创建资产
 func (s *System) CreateAsset(asset *asset_entity.Asset) error {
-	return asset_svc.Asset().Create(i18n.Ctx(s.ctx, s.Lang()), asset)
+	if err := asset_svc.Asset().Create(i18n.Ctx(s.ctx, s.Lang()), asset); err != nil {
+		return err
+	}
+	auto_backup_svc.Schedule()
+	return nil
 }
 
 // UpdateAsset 更新资产
 func (s *System) UpdateAsset(asset *asset_entity.Asset) error {
-	return asset_svc.Asset().Update(i18n.Ctx(s.ctx, s.Lang()), asset)
+	if err := asset_svc.Asset().Update(i18n.Ctx(s.ctx, s.Lang()), asset); err != nil {
+		return err
+	}
+	auto_backup_svc.Schedule()
+	return nil
 }
 
 // DeleteAsset 删除资产
 func (s *System) DeleteAsset(id int64) error {
-	return asset_svc.Asset().Delete(i18n.Ctx(s.ctx, s.Lang()), id)
+	if err := asset_svc.Asset().Delete(i18n.Ctx(s.ctx, s.Lang()), id); err != nil {
+		return err
+	}
+	auto_backup_svc.Schedule()
+	return nil
 }
 
 // MoveAsset 移动资产排序（up/down/top）
 func (s *System) MoveAsset(id int64, direction string) error {
-	return asset_svc.Asset().Move(i18n.Ctx(s.ctx, s.Lang()), id, direction)
+	if err := asset_svc.Asset().Move(i18n.Ctx(s.ctx, s.Lang()), id, direction); err != nil {
+		return err
+	}
+	auto_backup_svc.Schedule()
+	return nil
 }
 
 // MoveGroup 移动分组排序（up/down/top）
 func (s *System) MoveGroup(id int64, direction string) error {
-	return group_svc.Group().Move(i18n.Ctx(s.ctx, s.Lang()), id, direction)
+	if err := group_svc.Group().Move(i18n.Ctx(s.ctx, s.Lang()), id, direction); err != nil {
+		return err
+	}
+	auto_backup_svc.Schedule()
+	return nil
 }
 
 // ReorderAsset 把资产拖到 targetGroupID 内 beforeID 之前；beforeID==0 表示追加末尾。
 // 跨分组时同步 GroupID。
 func (s *System) ReorderAsset(id, targetGroupID, beforeID int64) error {
-	return asset_svc.Asset().Reorder(i18n.Ctx(s.ctx, s.Lang()), id, targetGroupID, beforeID)
+	if err := asset_svc.Asset().Reorder(i18n.Ctx(s.ctx, s.Lang()), id, targetGroupID, beforeID); err != nil {
+		return err
+	}
+	auto_backup_svc.Schedule()
+	return nil
 }
 
 // ReorderGroup 把分组拖到 targetParentID 下 beforeID 之前；beforeID==0 表示追加末尾。
 // 跨父级时同步 ParentID。禁止拖到自身或自己的子孙下。
 func (s *System) ReorderGroup(id, targetParentID, beforeID int64) error {
-	return group_svc.Group().Reorder(i18n.Ctx(s.ctx, s.Lang()), id, targetParentID, beforeID)
+	if err := group_svc.Group().Reorder(i18n.Ctx(s.ctx, s.Lang()), id, targetParentID, beforeID); err != nil {
+		return err
+	}
+	auto_backup_svc.Schedule()
+	return nil
 }
 
 // --- 分组操作 ---
@@ -206,23 +249,39 @@ func (s *System) GetGroup(id int64) (*group_entity.Group, error) {
 
 // CreateGroup 创建分组
 func (s *System) CreateGroup(group *group_entity.Group) error {
-	return group_svc.Group().Create(i18n.Ctx(s.ctx, s.Lang()), group)
+	if err := group_svc.Group().Create(i18n.Ctx(s.ctx, s.Lang()), group); err != nil {
+		return err
+	}
+	auto_backup_svc.Schedule()
+	return nil
 }
 
 // RenameGroup 重命名分组
 func (s *System) RenameGroup(id int64, name string) error {
-	return group_svc.Group().Rename(i18n.Ctx(s.ctx, s.Lang()), id, name)
+	if err := group_svc.Group().Rename(i18n.Ctx(s.ctx, s.Lang()), id, name); err != nil {
+		return err
+	}
+	auto_backup_svc.Schedule()
+	return nil
 }
 
 // UpdateGroup 更新分组
 func (s *System) UpdateGroup(group *group_entity.Group) error {
-	return group_svc.Group().Update(i18n.Ctx(s.ctx, s.Lang()), group)
+	if err := group_svc.Group().Update(i18n.Ctx(s.ctx, s.Lang()), group); err != nil {
+		return err
+	}
+	auto_backup_svc.Schedule()
+	return nil
 }
 
 // DeleteGroup 删除分组
 // deleteAssets: true 删除分组下的资产，false 移动到未分组
 func (s *System) DeleteGroup(id int64, deleteAssets bool) error {
-	return group_svc.Group().Delete(i18n.Ctx(s.ctx, s.Lang()), id, deleteAssets)
+	if err := group_svc.Group().Delete(i18n.Ctx(s.ctx, s.Lang()), id, deleteAssets); err != nil {
+		return err
+	}
+	auto_backup_svc.Schedule()
+	return nil
 }
 
 // SelectSQLiteFile 打开原生文件对话框，返回选中的 SQLite 文件绝对路径。

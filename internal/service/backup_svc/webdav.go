@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	webDAVBackupFilename   = gistBackupFilename
-	webDAVDefaultDirectory = "opskat"
+	webDAVBackupFilename     = gistBackupFilename
+	WebDAVAutoBackupFilename = "opskat-backup-auto.encrypted.json"
+	webDAVDefaultDirectory   = "opskat"
 )
 
 // WebDAVAuthType 描述 WebDAV 服务器接受的鉴权方式。
@@ -89,6 +90,15 @@ type WebDAVBackupInfo struct {
 
 // CreateOrUpdateWebDAVBackup uploads the canonical encrypted backup file to WebDAV.
 func CreateOrUpdateWebDAVBackup(cfg WebDAVConfig, content []byte) (*WebDAVBackupInfo, error) {
+	return createOrUpdateWebDAVBackupNamed(cfg, webDAVBackupFilename, content)
+}
+
+// CreateOrUpdateWebDAVAutoBackup uploads the encrypted automatic backup file to WebDAV.
+func CreateOrUpdateWebDAVAutoBackup(cfg WebDAVConfig, content []byte) (*WebDAVBackupInfo, error) {
+	return createOrUpdateWebDAVBackupNamed(cfg, WebDAVAutoBackupFilename, content)
+}
+
+func createOrUpdateWebDAVBackupNamed(cfg WebDAVConfig, name string, content []byte) (*WebDAVBackupInfo, error) {
 	dirURL, err := webDAVDirectoryURL(cfg.URL)
 	if err != nil {
 		return nil, err
@@ -97,7 +107,7 @@ func CreateOrUpdateWebDAVBackup(cfg WebDAVConfig, content []byte) (*WebDAVBackup
 		return nil, err
 	}
 
-	fileURL, err := webDAVFileURL(cfg.URL, webDAVBackupFilename)
+	fileURL, err := webDAVFileURL(cfg.URL, name)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +119,7 @@ func CreateOrUpdateWebDAVBackup(cfg WebDAVConfig, content []byte) (*WebDAVBackup
 		return nil, fmt.Errorf("WebDAV upload failed: HTTP %d: %s", status, string(body))
 	}
 	return &WebDAVBackupInfo{
-		Name:      webDAVBackupFilename,
+		Name:      name,
 		Path:      fileURL,
 		UpdatedAt: time.Now().Format(time.RFC3339),
 		Size:      int64(len(content)),
@@ -414,5 +424,6 @@ func isOpsKatBackupName(name string) bool {
 		return false
 	}
 	return name == webDAVBackupFilename ||
+		name == WebDAVAutoBackupFilename ||
 		(strings.HasPrefix(name, "opskat-backup-") && strings.HasSuffix(name, ".encrypted.json"))
 }
