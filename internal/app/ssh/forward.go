@@ -7,6 +7,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/forward_entity"
 	"github.com/opskat/opskat/internal/repository/forward_repo"
 	"github.com/opskat/opskat/internal/service/asset_svc"
+	"github.com/opskat/opskat/internal/service/auto_backup_svc"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -34,6 +35,7 @@ func (s *SSH) CreateForwardConfig(name string, assetID int64, rules []forward_en
 	if err := forward_repo.Forward().ReplaceRules(ctx, config.ID, rulesPtrs); err != nil {
 		return nil, err
 	}
+	auto_backup_svc.Schedule()
 	return config, nil
 }
 
@@ -73,6 +75,7 @@ func (s *SSH) UpdateForwardConfig(id int64, name string, assetID int64, rules []
 		}
 	}
 
+	auto_backup_svc.Schedule()
 	return config, nil
 }
 
@@ -83,7 +86,11 @@ func (s *SSH) DeleteForwardConfig(id int64) error {
 	if err := forward_repo.Forward().DeleteRulesByConfigID(ctx, id); err != nil {
 		return err
 	}
-	return forward_repo.Forward().DeleteConfig(ctx, id)
+	if err := forward_repo.Forward().DeleteConfig(ctx, id); err != nil {
+		return err
+	}
+	auto_backup_svc.Schedule()
+	return nil
 }
 
 // ListForwardConfigs 列出所有转发配置（含规则和运行状态）

@@ -9,6 +9,7 @@ import (
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/service/auto_backup_svc"
 	"github.com/opskat/opskat/internal/service/credential_mgr_svc"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"go.uber.org/zap"
@@ -52,17 +53,22 @@ func (s *System) ListCredentialsByType(credType string) ([]*credential_entity.Cr
 
 // CreatePasswordCredential 创建密码凭证
 func (s *System) CreatePasswordCredential(name, username, password, description string) (*credential_entity.Credential, error) {
-	return credential_mgr_svc.CreatePassword(i18n.Ctx(s.ctx, s.Lang()), credential_mgr_svc.CreatePasswordRequest{
+	cred, err := credential_mgr_svc.CreatePassword(i18n.Ctx(s.ctx, s.Lang()), credential_mgr_svc.CreatePasswordRequest{
 		Name:        name,
 		Username:    username,
 		Password:    password,
 		Description: description,
 	})
+	if err != nil {
+		return nil, err
+	}
+	auto_backup_svc.Schedule()
+	return cred, nil
 }
 
 // GenerateSSHKey 生成新的 SSH 密钥对
 func (s *System) GenerateSSHKey(name, comment, keyType string, keySize int, passphrase, username string) (*credential_entity.Credential, error) {
-	return credential_mgr_svc.GenerateSSHKey(i18n.Ctx(s.ctx, s.Lang()), credential_mgr_svc.GenerateKeyRequest{
+	cred, err := credential_mgr_svc.GenerateSSHKey(i18n.Ctx(s.ctx, s.Lang()), credential_mgr_svc.GenerateKeyRequest{
 		Name:       name,
 		Comment:    comment,
 		Username:   username,
@@ -70,6 +76,11 @@ func (s *System) GenerateSSHKey(name, comment, keyType string, keySize int, pass
 		KeySize:    keySize,
 		Passphrase: passphrase,
 	})
+	if err != nil {
+		return nil, err
+	}
+	auto_backup_svc.Schedule()
+	return cred, nil
 }
 
 // ImportSSHKeyFile 通过文件选择框导入 SSH 密钥
@@ -83,7 +94,12 @@ func (s *System) ImportSSHKeyFile(name, comment, passphrase, username string) (*
 	if filePath == "" {
 		return nil, nil
 	}
-	return credential_mgr_svc.ImportSSHKeyFromFile(i18n.Ctx(s.ctx, s.Lang()), name, comment, filePath, passphrase, username)
+	cred, err := credential_mgr_svc.ImportSSHKeyFromFile(i18n.Ctx(s.ctx, s.Lang()), name, comment, filePath, passphrase, username)
+	if err != nil {
+		return nil, err
+	}
+	auto_backup_svc.Schedule()
+	return cred, nil
 }
 
 // ImportSSHKeyPath imports an SSH private key from a user-selected or dropped local file path.
@@ -96,34 +112,53 @@ func (s *System) ImportSSHKeyPath(name, comment, filePath, passphrase, username 
 		return nil, err
 	}
 	logger.Ctx(ctx).Info("import ssh key from path end", zap.Int64("credentialID", cred.ID))
+	auto_backup_svc.Schedule()
 	return cred, nil
 }
 
 // ImportSSHKeyPEM 通过粘贴 PEM 内容导入 SSH 密钥
 func (s *System) ImportSSHKeyPEM(name, comment, pemData, passphrase, username string) (*credential_entity.Credential, error) {
-	return credential_mgr_svc.ImportSSHKeyFromPEM(i18n.Ctx(s.ctx, s.Lang()), name, comment, pemData, passphrase, username)
+	cred, err := credential_mgr_svc.ImportSSHKeyFromPEM(i18n.Ctx(s.ctx, s.Lang()), name, comment, pemData, passphrase, username)
+	if err != nil {
+		return nil, err
+	}
+	auto_backup_svc.Schedule()
+	return cred, nil
 }
 
 // UpdateCredential 更新凭证
 func (s *System) UpdateCredential(id int64, name, comment, description, username string) (*credential_entity.Credential, error) {
-	return credential_mgr_svc.Update(i18n.Ctx(s.ctx, s.Lang()), credential_mgr_svc.UpdateRequest{
+	cred, err := credential_mgr_svc.Update(i18n.Ctx(s.ctx, s.Lang()), credential_mgr_svc.UpdateRequest{
 		ID:          id,
 		Name:        name,
 		Comment:     comment,
 		Description: description,
 		Username:    username,
 	})
+	if err != nil {
+		return nil, err
+	}
+	auto_backup_svc.Schedule()
+	return cred, nil
 }
 
 // UpdateCredentialPassword 更新密码凭证的密码
 func (s *System) UpdateCredentialPassword(id int64, password string) error {
-	return credential_mgr_svc.UpdatePassword(i18n.Ctx(s.ctx, s.Lang()), id, password)
+	if err := credential_mgr_svc.UpdatePassword(i18n.Ctx(s.ctx, s.Lang()), id, password); err != nil {
+		return err
+	}
+	auto_backup_svc.Schedule()
+	return nil
 }
 
 // UpdateCredentialPassphrase 更新 SSH 密钥的 passphrase
 // 需要提供旧的 passphrase 用于解密 PEM
 func (s *System) UpdateCredentialPassphrase(id int64, oldPassphrase, newPassphrase string) error {
-	return credential_mgr_svc.UpdatePassphrase(i18n.Ctx(s.ctx, s.Lang()), id, oldPassphrase, newPassphrase)
+	if err := credential_mgr_svc.UpdatePassphrase(i18n.Ctx(s.ctx, s.Lang()), id, oldPassphrase, newPassphrase); err != nil {
+		return err
+	}
+	auto_backup_svc.Schedule()
+	return nil
 }
 
 // ExportSSHPrivateKey exports an SSH key credential's decrypted private key to a user-selected file.
@@ -168,7 +203,11 @@ func (s *System) GetCredentialUsage(id int64) ([]string, error) {
 
 // DeleteCredential 删除凭证
 func (s *System) DeleteCredential(id int64) error {
-	return credential_mgr_svc.Delete(i18n.Ctx(s.ctx, s.Lang()), id)
+	if err := credential_mgr_svc.Delete(i18n.Ctx(s.ctx, s.Lang()), id); err != nil {
+		return err
+	}
+	auto_backup_svc.Schedule()
+	return nil
 }
 
 // GetCredentialPublicKey 获取 SSH 密钥凭证的公钥（用于复制）
