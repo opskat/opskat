@@ -494,9 +494,9 @@ type WebDAVStoredConfig struct {
 	ExportIncludeShortcuts    bool   `json:"exportIncludeShortcuts"`
 	ExportIncludeThemes       bool   `json:"exportIncludeThemes"`
 	AutoBackupEnabled         bool   `json:"autoBackupEnabled"`
-    AutoBackupPasswordSet     bool   `json:"autoBackupPasswordSet"`
-    LastAutoBackupAt          int64  `json:"lastAutoBackupAt,omitempty"`
-    LastAutoBackupError       string `json:"lastAutoBackupError,omitempty"`
+	AutoBackupPasswordSet     bool   `json:"autoBackupPasswordSet"`
+	LastAutoBackupAt          int64  `json:"lastAutoBackupAt,omitempty"`
+	LastAutoBackupError       string `json:"lastAutoBackupError,omitempty"`
 }
 
 // WebDAVSaveInput 是 SaveWebDAVConfig / TestWebDAVConfig 的入参，把鉴权方式与凭据收成一个 struct。
@@ -704,11 +704,11 @@ func (s *System) GetWebDAVConfig() (*WebDAVStoredConfig, error) {
 		ExportIncludePolicyGroups: cfg.WebDAVExportIncludePolicyGroups,
 		ExportIncludeShortcuts:    cfg.WebDAVExportIncludeShortcuts,
 		ExportIncludeThemes:       cfg.WebDAVExportIncludeThemes,
-        AutoBackupEnabled:     cfg.WebDAVAutoBackupEnabled,
-        AutoBackupPasswordSet: cfg.WebDAVAutoBackupPassword != "",
-        LastAutoBackupAt:      cfg.WebDAVAutoBackupLastAt,
-        LastAutoBackupError:   cfg.WebDAVAutoBackupLastError,
-    }
+		AutoBackupEnabled:         cfg.WebDAVAutoBackupEnabled,
+		AutoBackupPasswordSet:     cfg.WebDAVAutoBackupPassword != "",
+		LastAutoBackupAt:          cfg.WebDAVAutoBackupLastAt,
+		LastAutoBackupError:       cfg.WebDAVAutoBackupLastError,
+	}
 	if cfg.WebDAVPassword != "" {
 		decrypted, err := credential_svc.Default().Decrypt(cfg.WebDAVPassword)
 		if err != nil {

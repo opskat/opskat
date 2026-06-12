@@ -32,13 +32,13 @@ type AppConfig struct {
 	WebDAVExportIncludeShortcuts    bool   `json:"webdav_export_include_shortcuts,omitempty"`
 	WebDAVExportIncludeThemes       bool   `json:"webdav_export_include_themes,omitempty"`
 	WebDAVAutoBackupEnabled         bool   `json:"webdav_auto_backup_enabled,omitempty"`    // WebDAV 自动备份开关
-    WebDAVAutoBackupPassword        string `json:"webdav_auto_backup_password,omitempty"`   // 加密后的自动备份密码
-    WebDAVAutoBackupLastAt          int64  `json:"webdav_auto_backup_last_at,omitempty"`    // 最近一次自动备份成功时间
-    WebDAVAutoBackupLastError       string `json:"webdav_auto_backup_last_error,omitempty"` // 最近一次自动备份错误摘要
-	LastUpdateCheck                 int64  `json:"last_update_check,omitempty"` // 上次自动检查更新的 Unix 时间戳
-	DebugMode                       bool   `json:"debug_mode,omitempty"`        // 开启后日志级别降为 debug
-	WindowWidth                     int    `json:"window_width,omitempty"`      // 上次正常窗口宽度
-	WindowHeight                    int    `json:"window_height,omitempty"`     // 上次正常窗口高度
+	WebDAVAutoBackupPassword        string `json:"webdav_auto_backup_password,omitempty"`   // 加密后的自动备份密码
+	WebDAVAutoBackupLastAt          int64  `json:"webdav_auto_backup_last_at,omitempty"`    // 最近一次自动备份成功时间
+	WebDAVAutoBackupLastError       string `json:"webdav_auto_backup_last_error,omitempty"` // 最近一次自动备份错误摘要
+	LastUpdateCheck                 int64  `json:"last_update_check,omitempty"`             // 上次自动检查更新的 Unix 时间戳
+	DebugMode                       bool   `json:"debug_mode,omitempty"`                    // 开启后日志级别降为 debug
+	WindowWidth                     int    `json:"window_width,omitempty"`                  // 上次正常窗口宽度
+	WindowHeight                    int    `json:"window_height,omitempty"`                 // 上次正常窗口高度
 
 	// 外部编辑配置。仅持久化用户自定义编辑器；内置候选由运行时探测生成。
 	ExternalEditDefaultEditorID      string                 `json:"external_edit_default_editor_id,omitempty"`
