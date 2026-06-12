@@ -61,7 +61,14 @@ function generatePassword(length = 20): string {
   return Array.from(arr, (b) => chars[b % chars.length]).join("");
 }
 
-export function ExportDialog({ open, onOpenChange, mode, onGistExport, onWebDAVExport, webDAVDefaults }: ExportDialogProps) {
+export function ExportDialog({
+  open,
+  onOpenChange,
+  mode,
+  onGistExport,
+  onWebDAVExport,
+  webDAVDefaults,
+}: ExportDialogProps) {
   const { t } = useTranslation();
   const { assets } = useAssetStore();
   const { shortcuts } = useShortcutStore();
