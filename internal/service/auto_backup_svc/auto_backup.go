@@ -258,9 +258,9 @@ func recordResult(successAt int64, err error) {
 }
 
 func truncateError(msg string) string {
-	const max = 500
-	if len(msg) <= max {
+	const maxErrorMessageLength = 500
+	if len(msg) <= maxErrorMessageLength {
 		return msg
 	}
-	return msg[:max]
+	return msg[:maxErrorMessageLength]
 }
