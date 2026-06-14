@@ -499,6 +499,21 @@ describe("terminalRegistry", () => {
     disposeTerminal("sess-url");
   });
 
+  it("does not open terminal links on right click", () => {
+    hoisted.state.lines.set(0, "Docs: https://help.ubuntu.com");
+    getOrCreateTerminal("sess-url-right-click", { fontSize: 14, fontFamily: "mono", scrollback: 1000 });
+
+    let links: TestTerminalLink[] | undefined;
+    hoisted.state.linkProvider?.provideLinks(1, (provided) => {
+      links = provided as TestTerminalLink[] | undefined;
+    });
+
+    const rightClick = new MouseEvent("mouseup", { button: 2 });
+    links?.[0].activate(rightClick, links[0].text);
+    expect(hoisted.browserOpenURLSpy).not.toHaveBeenCalled();
+    disposeTerminal("sess-url-right-click");
+  });
+
   it("does not create links for bare IP addresses or numbers", () => {
     hoisted.state.lines.set(0, "IPv4 address: 10.2.4.16 load 0.06");
     getOrCreateTerminal("sess-no-url", { fontSize: 14, fontFamily: "mono", scrollback: 1000 });

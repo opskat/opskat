@@ -75,7 +75,8 @@ export function getOrCreateTerminal(
 
   const fitAddon = new FitAddon();
   const searchAddon = new SearchAddon();
-  const webLinksAddon = new WebLinksAddon((_event, uri) => {
+  const webLinksAddon = new WebLinksAddon((event, uri) => {
+    if (event && event.button !== 0) return;
     const url = normalizeHttpUrl(uri);
     if (url) BrowserOpenURL(url);
   });
