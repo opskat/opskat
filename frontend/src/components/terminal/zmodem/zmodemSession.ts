@@ -11,6 +11,7 @@ import {
   ZmodemAbortUpload,
 } from "../../../../wailsjs/go/ssh/SSH";
 import { bytesToBase64 } from "@/lib/terminalEncode";
+import { createOrderedQueue } from "@/lib/orderedQueue";
 import { useSFTPStore, type SFTPTransferTarget } from "@/stores/sftpStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { notifySuccess } from "@/lib/notify";
@@ -61,10 +62,14 @@ export function createZmodemController(opts: ZmodemControllerOptions): ZmodemCon
   let queuedUploadPaths: string[] = [];
   let queuedUploadExpiresAt = 0;
 
+  // 下载分块按序写入本地文件。出站 PTY 字节流的保序由注入的 write
+  // (transport 层 orderedBySession)负责，这里只管下载这条独立的本地写流。
+  const appendQueue = createOrderedQueue();
+
   const sentry: ZmodemSentry = new Zmodem.Sentry({
     to_terminal: (octets) => toTerminal(toUint8(octets)),
     sender: (octets) => {
-      write(sessionId, bytesToBase64(toUint8(octets))).catch(console.error);
+      write(sessionId, bytesToBase64(toUint8(octets))).catch((e) => console.error("zmodem write error", e));
     },
     on_retract: () => {
       // 握手被收回（探测到的 ZMODEM 其实不是）：无在途状态可清，留待下次。
@@ -176,11 +181,17 @@ export function createZmodemController(opts: ZmodemControllerOptions): ZmodemCon
     };
 
     offer.on("input", (payload) => {
-      ZmodemAppendChunk(transferId, bytesToBase64(toUint8(payload))).catch(console.error);
+      appendQueue.push(() =>
+        ZmodemAppendChunk(transferId, bytesToBase64(toUint8(payload))).catch((e) =>
+          console.error("zmodem append error", e)
+        )
+      );
     });
 
     try {
       await offer.accept();
+      // accept() resolve 时分块多半仍在队列在途；先排空再收尾，避免文件被提前关闭而截断。
+      await appendQueue.drain();
       await ZmodemFinishDownload(transferId);
       notifySuccess(i18n.t("zmodem.downloadComplete", { name }));
     } catch (e) {

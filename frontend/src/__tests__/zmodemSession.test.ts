@@ -129,6 +129,7 @@ describe("zmodemSession controller", () => {
     expect(useSFTPStore.getState().transfers["z-1"].direction).toBe("download");
 
     offer.pushInput([10, 20, 30]);
+    await flush();
     expect(ZmodemAppendChunk).toHaveBeenCalledWith("z-1", bytesToBase64(new Uint8Array([10, 20, 30])));
 
     offer.finishAccept();
@@ -231,6 +232,46 @@ describe("zmodemSession controller", () => {
 
     await vi.waitFor(() => expect(ZmodemPickUploadFiles).toHaveBeenCalledWith("s1"));
     expect(ZmodemOpenUploadFiles).not.toHaveBeenCalled();
+  });
+
+  it("sender forwards each protocol byte batch to write as base64 (ordering enforced by the transport)", () => {
+    // 出站字节的保序在 transport 层(orderedBySession)统一处理，见 orderedQueue.test.ts；
+    // 这里只验 sender 把 zmodem.js 产出的字节正确编码并转交注入的 write。
+    const write = vi.fn().mockResolvedValue(undefined);
+    createZmodemController({ sessionId: "s1", write, toTerminal: vi.fn() });
+
+    hoisted.sentryOpts.sender([1]);
+    hoisted.sentryOpts.sender([2, 3]);
+
+    expect(write).toHaveBeenNthCalledWith(1, "s1", bytesToBase64(new Uint8Array([1])));
+    expect(write).toHaveBeenNthCalledWith(2, "s1", bytesToBase64(new Uint8Array([2, 3])));
+  });
+
+  it("download serializes AppendChunk so the local file keeps received order", async () => {
+    vi.mocked(ZmodemBeginDownload).mockResolvedValue("z-ord");
+    let resolveAppend!: () => void;
+    vi.mocked(ZmodemAppendChunk)
+      .mockImplementationOnce(() => new Promise<void>((res) => (resolveAppend = res)))
+      .mockResolvedValue(undefined as never);
+    makeController();
+    const session = makeReceiveSession();
+    hoisted.sentryOpts.on_detect({ confirm: () => session, deny: vi.fn() });
+    const offer = makeOffer({ name: "a.bin", size: 6 });
+    session.fire("offer", offer);
+    await flush();
+
+    offer.pushInput([10, 20]);
+    offer.pushInput([30, 40]);
+    await flush();
+
+    // 第二块在第一块 AppendChunk resolve 前不得发起。
+    expect(ZmodemAppendChunk).toHaveBeenCalledTimes(1);
+    expect(ZmodemAppendChunk).toHaveBeenNthCalledWith(1, "z-ord", bytesToBase64(new Uint8Array([10, 20])));
+
+    resolveAppend();
+    await flush();
+    expect(ZmodemAppendChunk).toHaveBeenCalledTimes(2);
+    expect(ZmodemAppendChunk).toHaveBeenNthCalledWith(2, "z-ord", bytesToBase64(new Uint8Array([30, 40])));
   });
 
   it("upload cancel interrupts the remote rz process", async () => {

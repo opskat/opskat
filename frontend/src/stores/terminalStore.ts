@@ -27,6 +27,7 @@ import {
 import { ssh as ssh_models, asset_entity } from "../../wailsjs/go/models";
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
 import { bytesToBase64 } from "../lib/terminalEncode";
+import { createOrderedQueue, type OrderedQueue } from "../lib/orderedQueue";
 import { useTabStore, registerTabCloseHook, registerTabRestoreHook, type TerminalTabMeta } from "./tabStore";
 import { useAssetStore } from "./assetStore";
 
@@ -51,13 +52,38 @@ interface TransportSpec {
   hasDirectorySync: boolean;
 }
 
+// 把「写入某会话」的后端调用按 sessionId 串行化：所有出站写(终端输入/粘贴、ZMODEM 出站
+// 字节、rz 触发)都经 spec.write，统一在此保序，互不串扰。否则 Wails 的并发 IPC 派发会让
+// 突发写乱序抵达后端，损坏 ZMODEM 传输与大段粘贴(详见 lib/orderedQueue.ts)。
+export function orderedBySession(
+  raw: (sessionId: string, dataB64: string) => Promise<void>
+): (sessionId: string, dataB64: string) => Promise<void> {
+  const queues = new Map<string, OrderedQueue>();
+  return (sessionId, dataB64) => {
+    let q = queues.get(sessionId);
+    if (!q) {
+      q = createOrderedQueue();
+      queues.set(sessionId, q);
+    }
+    const result = q.push(() => raw(sessionId, dataB64));
+    // 会话写空闲即回收 map 条目，避免随开过的会话无限增长。
+    void result
+      .catch(() => undefined)
+      .then(() => {
+        const cur = queues.get(sessionId);
+        if (cur && cur.idle) queues.delete(sessionId);
+      });
+    return result;
+  };
+}
+
 // 单一 transport 能力表：连接/读写/尺寸/断开/事件前缀/分屏/目录同步全部按 transport 查表，
 // 取代散落各处的 isSerial 二分支。新增 transport 只需在此登记一行。
 export const TRANSPORTS: Record<TerminalTransport, TransportSpec> = {
   ssh: {
     connectAsync: (assetId, { cols, rows, password }) =>
       ConnectSSHAsync(new ssh_models.SSHConnectRequest({ assetId, password, key: "", cols, rows })),
-    write: WriteSSH,
+    write: orderedBySession(WriteSSH),
     resize: ResizeSSH,
     disconnect: DisconnectSSH,
     eventPrefix: "ssh",
@@ -67,7 +93,7 @@ export const TRANSPORTS: Record<TerminalTransport, TransportSpec> = {
   },
   serial: {
     connectAsync: (assetId) => ConnectSerialAsync({ assetId }),
-    write: WriteSerial,
+    write: orderedBySession(WriteSerial),
     resize: ResizeSerialTerminal,
     disconnect: DisconnectSerial,
     eventPrefix: "serial",
@@ -76,7 +102,7 @@ export const TRANSPORTS: Record<TerminalTransport, TransportSpec> = {
   },
   local: {
     connectAsync: (assetId, { cols, rows }) => ConnectLocalAsync({ assetId, cols, rows }),
-    write: WriteLocal,
+    write: orderedBySession(WriteLocal),
     resize: ResizeLocalTerminal,
     disconnect: DisconnectLocal,
     eventPrefix: "local",
