@@ -112,6 +112,20 @@ func TestToAgentMessages(t *testing.T) {
 			So(inner.Text, ShouldEqual, "ok-result")
 		})
 
+		Convey("tool 消息允许空结果文本", func() {
+			out := ToAgentMessages([]Message{
+				{Role: RoleTool, ToolCallID: "tu_empty", Content: ""},
+			})
+			So(out, ShouldHaveLength, 1)
+			So(out[0].Role, ShouldEqual, agent.RoleTool)
+			tr, ok := out[0].Content[0].(agent.ToolResultBlock)
+			So(ok, ShouldBeTrue)
+			So(tr.ToolUseID, ShouldEqual, "tu_empty")
+			inner, ok := tr.Content[0].(agent.TextBlock)
+			So(ok, ShouldBeTrue)
+			So(inner.Text, ShouldEqual, "")
+		})
+
 		Convey("system 消息被跳过（cago 不放进 Conversation）", func() {
 			out := ToAgentMessages([]Message{
 				{Role: RoleSystem, Content: "you are concise"},
