@@ -64,6 +64,8 @@ func TestOpenRemoteSQLiteReadOnly(t *testing.T) {
 		_, err = roDB.Exec("INSERT INTO t VALUES (1)")
 		So(err, ShouldNotBeNil)
 		So(err.Error(), ShouldContainSubstring, "readonly")
+		_, err = os.Stat(filepath.Join(remote.root, "data", "app.db.opskat.lock"))
+		So(errors.Is(err, os.ErrNotExist), ShouldBeTrue)
 	})
 }
 
@@ -91,6 +93,20 @@ func TestOpenRemoteSQLiteRejectsWALWithoutExclusive(t *testing.T) {
 		So(err, ShouldNotBeNil)
 		So(closer, ShouldBeNil)
 		So(err.Error(), ShouldContainSubstring, "WAL")
+	})
+}
+
+func TestOpenRemoteSQLiteCleansLockOnOpenError(t *testing.T) {
+	Convey("open failure after acquiring the remote lock removes the lock file", t, func() {
+		remote := localRemote{root: t.TempDir()}
+
+		db, closer, err := Open(context.Background(), remote, "/data/app.db", Options{JournalMode: "not_a_journal_mode"})
+		So(err, ShouldNotBeNil)
+		So(db, ShouldBeNil)
+		So(closer, ShouldBeNil)
+
+		_, statErr := os.Stat(filepath.Join(remote.root, "data", "app.db.opskat.lock"))
+		So(errors.Is(statErr, os.ErrNotExist), ShouldBeTrue)
 	})
 }
 
