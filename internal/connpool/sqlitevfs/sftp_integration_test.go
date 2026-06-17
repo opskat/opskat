@@ -26,7 +26,11 @@ func TestSFTPRemoteSQLiteIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sftp: %v", err)
 	}
-	defer sftpSession.Close()
+	defer func() {
+		if err := sftpSession.Close(); err != nil {
+			t.Errorf("close sftp session: %v", err)
+		}
+	}()
 	sftpClient := sftpSession.client
 
 	remoteDir := "/tmp/opskat-sqlitevfs-it-" + strconv.FormatInt(time.Now().UnixNano(), 10)
@@ -67,8 +71,16 @@ func TestSFTPRemoteSQLiteIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen readonly: %v", err)
 	}
-	defer roCloser.Close()
-	defer roDB.Close()
+	defer func() {
+		if err := roCloser.Close(); err != nil {
+			t.Errorf("close readonly vfs: %v", err)
+		}
+	}()
+	defer func() {
+		if err := roDB.Close(); err != nil {
+			t.Errorf("close readonly db: %v", err)
+		}
+	}()
 
 	if err := roDB.QueryRowContext(ctx, "SELECT v FROM kv WHERE k = 'beta'").Scan(&got); err != nil {
 		t.Fatalf("query readonly row: %v", err)
@@ -104,6 +116,7 @@ type testSFTPSession struct {
 }
 
 func openTestSFTP(ctx context.Context, target string) (*testSFTPSession, error) {
+	//nolint:gosec // Integration test target is supplied explicitly by the test environment.
 	cmd := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", target, "-s", "sftp")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

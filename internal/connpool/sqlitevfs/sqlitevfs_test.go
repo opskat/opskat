@@ -108,7 +108,7 @@ func (r localRemote) OpenFile(name string, flag int) (RemoteFile, error) {
 			return nil, err
 		}
 	}
-	return os.OpenFile(full, flag, 0o600)
+	return os.OpenFile(full, flag, 0o600) //nolint:gosec // Test helper constrains all requested paths under t.TempDir.
 }
 
 func (r localRemote) Remove(name string) error {

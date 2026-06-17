@@ -33,15 +33,17 @@ const child = spawn(
 );
 
 child.on("exit", (code) => {
-  cleanup();
+  cleanup({ preserveWebserverLog: code !== 0 });
   // Mirror the child's outcome; a signal-killed run (code === null) counts as failure.
   process.exit(code ?? 1);
 });
 
-function cleanup() {
+function cleanup({ preserveWebserverLog }) {
   reapOrphanVite();
   rmSync(dataDir, { recursive: true, force: true });
-  rmSync(webserverLog, { force: true });
+  if (!preserveWebserverLog) {
+    rmSync(webserverLog, { force: true });
+  }
 }
 
 // `wails dev` orphans its vite child on shutdown (a separate process group on Unix),

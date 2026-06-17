@@ -96,7 +96,7 @@ export default defineConfig({
       cwd: "..",
       url: BASE_URL,
       reuseExistingServer: !process.env.CI,
-      timeout: 240_000,
+      timeout: 600_000,
       stdout: "ignore",
       stderr: "ignore",
       env: {
