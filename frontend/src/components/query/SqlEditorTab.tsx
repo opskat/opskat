@@ -317,6 +317,7 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
           <Button
             variant="default"
             size="sm"
+            data-testid="sql-execute-button"
             className="h-7 text-xs gap-1"
             onClick={execute}
             disabled={loading || isEmpty}
@@ -381,6 +382,7 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
         {/* Monaco editor; automaticLayout lets it reflow when the splitter changes height */}
         <div className="flex-1 min-h-0 w-full overflow-hidden bg-background">
           <CodeEditor
+            testId="sql-editor"
             defaultValue={persistedSql || ""}
             language="sql"
             placeholder={t("query.sqlPlaceholder")}

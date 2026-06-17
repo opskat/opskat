@@ -27,6 +27,8 @@ interface TreeSelectProps {
   searchPlaceholder?: string;
   /** Custom className for the trigger button */
   className?: string;
+  /** Stable test id for the trigger button */
+  testId?: string;
 }
 
 /** Filter tree nodes by search query (with pinyin support), preserving ancestor paths */
@@ -131,6 +133,7 @@ export function TreeSelect({
   searchable = false,
   searchPlaceholder,
   className,
+  testId,
 }: TreeSelectProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -167,6 +170,7 @@ export function TreeSelect({
       <Button
         type="button"
         variant="outline"
+        data-testid={testId}
         className={cn("w-full justify-between font-normal", className)}
         onClick={() => setDropdownOpen(!open)}
       >

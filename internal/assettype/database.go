@@ -27,10 +27,11 @@ func (h *databaseHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	}
 	if cfg.Driver == asset_entity.DriverSQLite {
 		return map[string]any{
-			"driver":    string(cfg.Driver),
-			"path":      cfg.Path,
-			"database":  cfg.Database,
-			"read_only": cfg.ReadOnly,
+			"driver":        string(cfg.Driver),
+			"sqlite_source": cfg.SQLiteSource,
+			"path":          cfg.Path,
+			"database":      cfg.Database,
+			"read_only":     cfg.ReadOnly,
 		}
 	}
 	return map[string]any{
@@ -70,6 +71,10 @@ func (h *databaseHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Ass
 	}
 	if cfg.Driver == asset_entity.DriverSQLite {
 		cfg.Path = ArgString(args, "path")
+		if source := ArgString(args, "sqlite_source"); source != "" {
+			cfg.SQLiteSource = asset_entity.SQLiteSource(source)
+		}
+		cfg.SSHAssetID = ArgInt64(args, "ssh_asset_id")
 	} else {
 		cfg.Host = ArgString(args, "host")
 		cfg.Port = ArgInt(args, "port")
@@ -105,8 +110,15 @@ func (h *databaseHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Ass
 		if _, ok := args["path"]; ok {
 			cfg.Path = ArgString(args, "path")
 		}
-		// SQLite 永远不允许 SSH 隧道：清空遗留
-		cfg.SSHAssetID = 0
+		if _, ok := args["sqlite_source"]; ok {
+			cfg.SQLiteSource = asset_entity.SQLiteSource(ArgString(args, "sqlite_source"))
+		}
+		if _, ok := args["ssh_asset_id"]; ok {
+			cfg.SSHAssetID = ArgInt64(args, "ssh_asset_id")
+		}
+		if cfg.SQLiteSource != asset_entity.SQLiteSourceRemoteSSHVFS {
+			cfg.SSHAssetID = 0
+		}
 		// SQLite 没有 host/port/user/pass
 	} else {
 		if v := ArgString(args, "host"); v != "" {

@@ -88,4 +88,20 @@ func TestDialDatabaseSQLite(t *testing.T) {
 		So(execErr, ShouldNotBeNil)
 		So(execErr.Error(), ShouldContainSubstring, "read")
 	})
+
+	Convey("远端 SQLite VFS 没有 SSH 连接池时失败", t, func() {
+		asset := &asset_entity.Asset{
+			ID: 1, Type: asset_entity.AssetTypeDatabase, SSHTunnelID: 9,
+		}
+		cfg := &asset_entity.DatabaseConfig{
+			Driver: asset_entity.DriverSQLite, SQLiteSource: asset_entity.SQLiteSourceRemoteSSHVFS,
+			Path: "/tmp/remote.db",
+		}
+
+		db, closer, err := DialDatabase(context.Background(), asset, cfg, "", nil)
+		So(db, ShouldBeNil)
+		So(closer, ShouldBeNil)
+		So(err, ShouldNotBeNil)
+		So(err.Error(), ShouldContainSubstring, "SSH")
+	})
 }

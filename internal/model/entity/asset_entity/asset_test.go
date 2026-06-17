@@ -510,6 +510,21 @@ func TestValidateDatabaseSQLite(t *testing.T) {
 			convey.So(a.SetDatabaseConfig(cfg), convey.ShouldBeNil)
 			convey.So(a.Validate().Error(), convey.ShouldContainSubstring, "隧道")
 		})
+		convey.Convey("远端 SQLite VFS 必须指定 SSH 资产", func() {
+			a := &Asset{Type: AssetTypeDatabase, Name: "x", GroupID: 1}
+			cfg := &DatabaseConfig{Driver: DriverSQLite, SQLiteSource: SQLiteSourceRemoteSSHVFS, Path: "/tmp/x.db"}
+			convey.So(a.SetDatabaseConfig(cfg), convey.ShouldBeNil)
+			convey.So(a.Validate().Error(), convey.ShouldContainSubstring, "SSH")
+		})
+		convey.Convey("远端 SQLite VFS 允许 SSH 资产", func() {
+			a := &Asset{
+				Type: AssetTypeDatabase, Name: "x", GroupID: 1,
+				SSHTunnelID: 5,
+			}
+			cfg := &DatabaseConfig{Driver: DriverSQLite, SQLiteSource: SQLiteSourceRemoteSSHVFS, Path: "/tmp/x.db"}
+			convey.So(a.SetDatabaseConfig(cfg), convey.ShouldBeNil)
+			convey.So(a.Validate(), convey.ShouldBeNil)
+		})
 		convey.Convey("绝对路径 + 无隧道通过", func() {
 			a := &Asset{Type: AssetTypeDatabase, Name: "x", GroupID: 1}
 			cfg := &DatabaseConfig{Driver: DriverSQLite, Path: "/tmp/x.db"}

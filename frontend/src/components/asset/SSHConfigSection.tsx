@@ -155,17 +155,25 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
         <div className="grid grid-cols-2 gap-3">
           <div className="grid gap-2">
             <Label>{t("asset.username")}</Label>
-            <Input value={state.username} onChange={(e) => patch({ username: e.target.value })} />
+            <Input
+              data-testid="ssh-username-input"
+              value={state.username}
+              onChange={(e) => patch({ username: e.target.value })}
+            />
           </div>
           <div className="grid gap-2">
             <Label>{t("asset.authType")}</Label>
             <Select value={state.authType} onValueChange={(v) => patch({ authType: v })}>
-              <SelectTrigger>
+              <SelectTrigger data-testid="ssh-auth-type-select">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="password">{t("asset.authPassword")}</SelectItem>
-                <SelectItem value="key">{t("asset.authKey")}</SelectItem>
+                <SelectItem value="password" data-testid="ssh-auth-type-option-password">
+                  {t("asset.authPassword")}
+                </SelectItem>
+                <SelectItem value="key" data-testid="ssh-auth-type-option-key">
+                  {t("asset.authKey")}
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -194,12 +202,16 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
             <div className="grid gap-2">
               <Label>{t("asset.keySource")}</Label>
               <Select value={state.keySource} onValueChange={(v) => patch({ keySource: v as "managed" | "file" })}>
-                <SelectTrigger>
+                <SelectTrigger data-testid="ssh-key-source-select">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="managed">{t("asset.keySourceManaged")}</SelectItem>
-                  <SelectItem value="file">{t("asset.keySourceFile")}</SelectItem>
+                  <SelectItem value="managed" data-testid="ssh-key-source-option-managed">
+                    {t("asset.keySourceManaged")}
+                  </SelectItem>
+                  <SelectItem value="file" data-testid="ssh-key-source-option-file">
+                    {t("asset.keySourceFile")}
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -256,6 +268,7 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
                       return (
                         <label
                           key={k.path}
+                          data-testid={`ssh-local-key-${k.path.split("/").pop() || "key"}`}
                           className="flex items-center gap-2 text-xs cursor-pointer hover:bg-accent rounded px-2 py-1.5"
                         >
                           <input

@@ -7,9 +7,11 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"sync/atomic"
 
+	"github.com/opskat/opskat/internal/connpool/sqlitevfs"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/sshpool"
 
@@ -19,6 +21,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // PostgreSQL driver
 	mssql "github.com/microsoft/go-mssqldb"
 	"github.com/microsoft/go-mssqldb/msdsn"
+	"github.com/pkg/sftp"
 	"go.uber.org/zap"
 )
 
@@ -31,6 +34,9 @@ func DialDatabase(ctx context.Context, asset *asset_entity.Asset, cfg *asset_ent
 	var err error
 
 	if cfg.Driver == asset_entity.DriverSQLite {
+		if cfg.SQLiteSource == asset_entity.SQLiteSourceRemoteSSHVFS {
+			return openRemoteSQLite(ctx, asset, cfg, sshPool)
+		}
 		// SQLite 本地文件,不走隧道。只读已在 buildDSN 里通过 _pragma=query_only(1)
 		// 写进 DSN（对每条连接生效），这里无需再单独 setReadOnly。
 		db, err = openDirect(cfg, password)
@@ -102,6 +108,114 @@ func DialDatabase(ctx context.Context, asset *asset_entity.Asset, cfg *asset_ent
 		return db, nil, nil
 	}
 	return db, tunnel, nil
+}
+
+func openRemoteSQLite(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, sshPool *sshpool.Pool) (*sql.DB, io.Closer, error) {
+	tunnelID := asset.SSHTunnelID
+	if tunnelID == 0 {
+		tunnelID = cfg.SSHAssetID
+	}
+	logger.Ctx(ctx).Info("open remote SQLite start",
+		zap.Int64("assetID", asset.ID),
+		zap.Int64("sshAssetID", tunnelID),
+		zap.String("path", cfg.Path),
+		zap.Bool("readOnly", cfg.ReadOnly),
+	)
+	if tunnelID == 0 {
+		err := fmt.Errorf("远端 SQLite 必须指定 SSH 资产")
+		logger.Ctx(ctx).Error("open remote SQLite failed", zap.Int64("assetID", asset.ID), zap.Error(err))
+		return nil, nil, err
+	}
+	if sshPool == nil {
+		err := fmt.Errorf("远端 SQLite 需要 SSH 连接池")
+		logger.Ctx(ctx).Error("open remote SQLite failed", zap.Int64("assetID", asset.ID), zap.Int64("sshAssetID", tunnelID), zap.Error(err))
+		return nil, nil, err
+	}
+
+	client, err := sshPool.Get(ctx, tunnelID)
+	if err != nil {
+		err = fmt.Errorf("get ssh connection for remote SQLite: %w", err)
+		logger.Ctx(ctx).Error("open remote SQLite failed", zap.Int64("assetID", asset.ID), zap.Int64("sshAssetID", tunnelID), zap.Error(err))
+		return nil, nil, err
+	}
+	releasePool := true
+	defer func() {
+		if releasePool {
+			sshPool.Release(tunnelID)
+		}
+	}()
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		err = fmt.Errorf("create SFTP client for remote SQLite: %w", err)
+		logger.Ctx(ctx).Error("open remote SQLite failed", zap.Int64("assetID", asset.ID), zap.Int64("sshAssetID", tunnelID), zap.Error(err))
+		return nil, nil, err
+	}
+
+	db, sqliteCloser, err := sqlitevfs.Open(ctx, sftpRemoteFS{client: sftpClient}, cfg.Path, sqlitevfs.Options{
+		ReadOnly: cfg.ReadOnly,
+	})
+	if err != nil {
+		if closeErr := sftpClient.Close(); closeErr != nil {
+			logger.Ctx(ctx).Warn("close remote SQLite SFTP client", zap.Error(closeErr))
+		}
+		logger.Ctx(ctx).Error("open remote SQLite failed", zap.Int64("assetID", asset.ID), zap.Int64("sshAssetID", tunnelID), zap.Error(err))
+		return nil, nil, err
+	}
+	releasePool = false
+	logger.Ctx(ctx).Info("open remote SQLite done",
+		zap.Int64("assetID", asset.ID),
+		zap.Int64("sshAssetID", tunnelID),
+		zap.Bool("readOnly", cfg.ReadOnly),
+	)
+	return db, &remoteSQLiteCloser{
+		sqlite:   sqliteCloser,
+		sftp:     sftpClient,
+		pool:     sshPool,
+		assetID:  tunnelID,
+		released: false,
+	}, nil
+}
+
+type sftpRemoteFS struct {
+	client *sftp.Client
+}
+
+func (fs sftpRemoteFS) OpenFile(name string, flag int) (sqlitevfs.RemoteFile, error) {
+	return fs.client.OpenFile(name, flag)
+}
+
+func (fs sftpRemoteFS) Remove(name string) error {
+	return fs.client.Remove(name)
+}
+
+func (fs sftpRemoteFS) Stat(name string) (os.FileInfo, error) {
+	return fs.client.Stat(name)
+}
+
+type remoteSQLiteCloser struct {
+	sqlite   io.Closer
+	sftp     io.Closer
+	pool     *sshpool.Pool
+	assetID  int64
+	released bool
+}
+
+func (c *remoteSQLiteCloser) Close() error {
+	var err error
+	if c.sqlite != nil {
+		err = c.sqlite.Close()
+	}
+	if c.sftp != nil {
+		if sftpErr := c.sftp.Close(); err == nil {
+			err = sftpErr
+		}
+	}
+	if !c.released {
+		c.pool.Release(c.assetID)
+		c.released = true
+	}
+	return err
 }
 
 func openDirect(cfg *asset_entity.DatabaseConfig, password string) (*sql.DB, error) {

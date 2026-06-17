@@ -30,7 +30,7 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
   const { innerTabs, activeInnerTabId } = dbState;
 
   return (
-    <div className="flex h-full w-full">
+    <div className="flex h-full w-full" data-testid="database-query-panel">
       {/* Left sidebar: Database tree */}
       <div
         ref={sidebarRef}

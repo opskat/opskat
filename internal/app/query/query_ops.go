@@ -25,7 +25,7 @@ import (
 
 // getOrDialPanelDB 从面板缓存取 *sql.DB,key 按 (assetID, cfg.Database)。
 func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, password string) (*sql.DB, error) {
-	key := fmt.Sprintf("%d:%s", asset.ID, cfg.Database)
+	key := panelDBCacheKey(asset.ID, cfg)
 	db, _, err := q.dbPanelCache.GetOrDial(key, func() (*sql.DB, io.Closer, error) {
 		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 		return connpool.DialDatabase(ctx, asset, cfg, password, q.pool)
@@ -34,6 +34,13 @@ func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset,
 		return nil, err
 	}
 	return db, nil
+}
+
+func panelDBCacheKey(assetID int64, cfg *asset_entity.DatabaseConfig) string {
+	if cfg.Driver == asset_entity.DriverSQLite {
+		return fmt.Sprintf("%d", assetID)
+	}
+	return fmt.Sprintf("%d:%s", assetID, cfg.Database)
 }
 
 // getOrDialPanelRedis 从面板缓存取 *redis.Client。

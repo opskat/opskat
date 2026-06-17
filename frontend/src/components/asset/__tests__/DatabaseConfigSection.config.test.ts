@@ -12,6 +12,7 @@ import { CONNECTION_DEFAULTS } from "@/components/asset/proxyConfig";
 const FULL_MYSQL: DatabaseFormState = {
   ...CONNECTION_DEFAULTS,
   driver: "mysql",
+  sqliteSource: "local",
   host: "db.example.com",
   port: 3306,
   username: "root",
@@ -28,6 +29,7 @@ const FULL_MYSQL: DatabaseFormState = {
 const FULL_PG: DatabaseFormState = {
   ...CONNECTION_DEFAULTS,
   driver: "postgresql",
+  sqliteSource: "local",
   host: "pg.example.com",
   port: 5432,
   username: "postgres",
@@ -42,6 +44,7 @@ const FULL_PG: DatabaseFormState = {
 const FULL_MSSQL: DatabaseFormState = {
   ...CONNECTION_DEFAULTS,
   driver: "mssql",
+  sqliteSource: "local",
   host: "mssql.example.com",
   port: 1433,
   username: "sa",
@@ -56,6 +59,7 @@ const FULL_MSSQL: DatabaseFormState = {
 const FULL_SQLITE: DatabaseFormState = {
   ...CONNECTION_DEFAULTS,
   driver: "sqlite",
+  sqliteSource: "local",
   host: "ignored.example.com",
   port: 1234,
   username: "ignored",
@@ -129,6 +133,15 @@ describe("buildDatabaseConfig (键序锁旧 save: driver→[sqlite:path | host/p
   it("sqlite 仅 path,忽略凭据/host/port/ssh/ssl/tls/proxy", () => {
     expect(buildDatabaseConfig(FULL_SQLITE, { credential_id: 7, password: "ENC" })).toBe(
       '{"driver":"sqlite","path":"/tmp/data.db","database":"main","read_only":true,"params":"mode=ro"}'
+    );
+  });
+
+  it("sqlite remote_ssh_vfs 写 sqlite_source + ssh_asset_id", () => {
+    expect(
+      buildDatabaseConfig({ ...FULL_SQLITE, sqliteSource: "remote_ssh_vfs", connectionType: "jumphost" }, {})
+    ).toBe(
+      '{"driver":"sqlite","sqlite_source":"remote_ssh_vfs","ssh_asset_id":9,"path":"/tmp/data.db",' +
+        '"database":"main","read_only":true,"params":"mode=ro"}'
     );
   });
 
@@ -218,6 +231,7 @@ describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", (
     ).toEqual({
       ...CONNECTION_DEFAULTS,
       driver: "mysql",
+      sqliteSource: "local",
       host: "db.example.com",
       port: 3306,
       username: "root",
@@ -241,9 +255,21 @@ describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", (
   it("sqlite path 回填,port 默认 3306", () => {
     const s = parseDatabaseConfig('{"driver":"sqlite","path":"/tmp/x.db"}');
     expect(s.driver).toBe("sqlite");
+    expect(s.sqliteSource).toBe("local");
     expect(s.path).toBe("/tmp/x.db");
     expect(s.port).toBe(3306);
     expect(s.host).toBe("");
+  });
+
+  it("sqlite remote_ssh_vfs 回填 source 和 SSH 资产", () => {
+    const s = parseDatabaseConfig(
+      '{"driver":"sqlite","sqlite_source":"remote_ssh_vfs","ssh_asset_id":8,"path":"/tmp/x.db"}'
+    );
+    expect(s.driver).toBe("sqlite");
+    expect(s.sqliteSource).toBe("remote_ssh_vfs");
+    expect(s.connectionType).toBe("jumphost");
+    expect(s.sshTunnelId).toBe(8);
+    expect(s.path).toBe("/tmp/x.db");
   });
 
   it("缺字段用默认", () => {
@@ -309,6 +335,7 @@ describe("applyDriverChange (镜像旧 handleDriverChange section 自有字段)"
   it("mysql→sqlite 清 host/username/连接方式,port=0", () => {
     const next = applyDriverChange(FULL_MYSQL, "sqlite");
     expect(next.driver).toBe("sqlite");
+    expect(next.sqliteSource).toBe("local");
     expect(next.host).toBe("");
     expect(next.port).toBe(0);
     expect(next.username).toBe("");

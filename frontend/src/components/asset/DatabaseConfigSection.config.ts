@@ -9,6 +9,7 @@ import {
 
 export interface DatabaseFormState extends ConnectionFormFields {
   driver: string;
+  sqliteSource: "local" | "remote_ssh_vfs";
   host: string;
   port: number;
   username: string;
@@ -22,6 +23,7 @@ export interface DatabaseFormState extends ConnectionFormFields {
 
 export const DATABASE_DEFAULTS: DatabaseFormState = {
   driver: "mysql",
+  sqliteSource: "local",
   host: "",
   port: 3306,
   username: "",
@@ -47,6 +49,7 @@ interface DatabaseConfig {
   params?: string;
   read_only?: boolean;
   ssh_asset_id?: number;
+  sqlite_source?: "local" | "remote_ssh_vfs";
   path?: string;
   proxy?: ProxyConfigJSON;
 }
@@ -71,11 +74,16 @@ export function driverIcon(driver: string): string {
  * 非 sqlite→host/port/username/[credential|password]/[ssh_asset_id]/[ssl_mode]/[tls]/[proxy];
  * 末尾共有 database/read_only/params)。cred 由 resolveSave/TestCredential 预解析;
  * proxyPassword 由 resolveSaveProxyPassword(save=密文)或 state.proxyPassword(test=明文)预解析;
- * sqlite 分支忽略 cred / host / port / ssh / proxy。隧道与代理互斥,按 connectionType 二选一。
+ * sqlite local 分支忽略 cred / host / port / ssh / proxy;remote_ssh_vfs 写 sqlite_source + ssh_asset_id。
+ * 隧道与代理互斥,按 connectionType 二选一。
  */
 export function buildDatabaseConfig(state: DatabaseFormState, cred: CredentialFragment, proxyPassword = ""): string {
   const cfg: DatabaseConfig = { driver: state.driver };
   if (state.driver === "sqlite") {
+    if (state.sqliteSource === "remote_ssh_vfs") {
+      cfg.sqlite_source = "remote_ssh_vfs";
+      if (state.sshTunnelId > 0) cfg.ssh_asset_id = state.sshTunnelId;
+    }
     cfg.path = state.path;
   } else {
     cfg.host = state.host;
@@ -102,6 +110,7 @@ export function parseDatabaseConfig(configJSON: string, assetTunnelId = 0): Data
     const cfg: DatabaseConfig = JSON.parse(configJSON || "{}");
     return {
       driver: cfg.driver || "mysql",
+      sqliteSource: cfg.sqlite_source || "local",
       host: cfg.host || "",
       port: cfg.port || 3306,
       username: cfg.username || "",
@@ -120,16 +129,25 @@ export function parseDatabaseConfig(configJSON: string, assetTunnelId = 0): Data
 
 /**
  * driver 切换的 section 自有字段复位(镜像旧 handleDriverChange,壳 icon 副作用留在组件)。
- * sqlite → 清 host/username/连接方式(隧道/代理),port=0,path 保留;
+ * sqlite → 清 host/username,port=0,path 保留,本地源清连接方式;
  * 非 sqlite → port=DEFAULT_PORTS[driver]||3306,清 path,非 postgresql 复位 sslMode。
  */
 export function applyDriverChange(state: DatabaseFormState, newDriver: string): DatabaseFormState {
   if (newDriver === "sqlite") {
-    return { ...state, driver: newDriver, host: "", port: 0, username: "", ...CONNECTION_DEFAULTS };
+    return {
+      ...state,
+      driver: newDriver,
+      sqliteSource: "local",
+      host: "",
+      port: 0,
+      username: "",
+      ...CONNECTION_DEFAULTS,
+    };
   }
   return {
     ...state,
     driver: newDriver,
+    sqliteSource: "local",
     port: DRIVER_PORTS[newDriver] || 3306,
     path: "",
     sslMode: newDriver === "postgresql" ? state.sslMode : "disable",

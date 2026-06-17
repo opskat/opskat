@@ -12,6 +12,7 @@ interface AssetSelectProps {
   placeholder?: string;
   /** Custom className for the trigger button */
   className?: string;
+  testId?: string;
 }
 
 /**
@@ -26,6 +27,7 @@ export function AssetSelect({
   excludeIds,
   placeholder,
   className,
+  testId,
 }: AssetSelectProps) {
   const { t } = useTranslation();
   const tree = useAssetTree({ filterType, excludeIds });
@@ -40,6 +42,7 @@ export function AssetSelect({
       searchable
       searchPlaceholder={t("asset.search")}
       className={className}
+      testId={testId}
     />
   );
 }

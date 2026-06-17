@@ -293,6 +293,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
             variant="ghost"
             size="icon"
             className="h-6 w-6"
+            data-testid="database-new-sql-button"
             onClick={() => openSqlTab(tabId)}
             title={t("query.newSql")}
             aria-label={t("query.newSql")}

@@ -12,6 +12,7 @@ import {
   Switch,
 } from "@opskat/ui";
 import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
+import { AssetSelect } from "@/components/asset/AssetSelect";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
 import { resolveSaveProxyPassword } from "./proxyConfig";
 import { SelectSQLiteFile } from "../../../wailsjs/go/system/System";
@@ -43,6 +44,7 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
   const cred = useAssetCredential(editAsset);
 
   const isSqlite = state.driver === "sqlite";
+  const isRemoteSqlite = isSqlite && state.sqliteSource === "remote_ssh_vfs";
 
   // driver 切换:section 自有字段复位(纯函数)+ 壳 icon 副作用(onIconChange)。
   const handleDriverChange = (newDriver: string) => {
@@ -52,10 +54,16 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
 
   // 保存/测试必填:sqlite→path;非 sqlite→host;上报反应式校验(onValidityChange 为壳 setState,身份稳定)。
   useEffect(() => {
-    const ok = isSqlite ? !!state.path.trim() : !!state.host.trim();
-    const saveDisabledReason = ok ? "" : isSqlite ? "asset.formMissingPath" : "asset.formMissingHost";
+    const ok = isSqlite ? !!state.path.trim() && (!isRemoteSqlite || state.sshTunnelId > 0) : !!state.host.trim();
+    const saveDisabledReason = ok
+      ? ""
+      : isRemoteSqlite && state.path.trim() && state.sshTunnelId <= 0
+        ? "asset.formMissingSQLiteSSH"
+        : isSqlite
+          ? "asset.formMissingPath"
+          : "asset.formMissingHost";
     onValidityChange({ canTest: ok, canSave: ok, saveDisabledReason });
-  }, [isSqlite, state.path, state.host, onValidityChange]);
+  }, [isSqlite, isRemoteSqlite, state.path, state.host, state.sshTunnelId, onValidityChange]);
 
   useImperativeHandle(
     ref,
@@ -109,25 +117,65 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
           {/* SQLite path field */}
           <div className="grid gap-3 border rounded-lg p-3">
             <div className="grid gap-2">
+              <Label>{t("asset.sqliteSource")}</Label>
+              <Select
+                value={state.sqliteSource}
+                onValueChange={(v) => {
+                  if (v === "remote_ssh_vfs") {
+                    patch({ sqliteSource: "remote_ssh_vfs", connectionType: "jumphost" });
+                  } else {
+                    patch({ sqliteSource: "local", sshTunnelId: 0, connectionType: "direct" });
+                  }
+                }}
+              >
+                <SelectTrigger data-testid="database-sqlite-source-select">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="local" data-testid="database-sqlite-source-option-local">
+                    {t("asset.sqliteSourceLocal")}
+                  </SelectItem>
+                  <SelectItem value="remote_ssh_vfs" data-testid="database-sqlite-source-option-remote">
+                    {t("asset.sqliteSourceRemoteSSH")}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
               <Label>{t("asset.sqliteFilePath")}</Label>
               <div className="flex gap-2">
                 <Input
+                  data-testid="database-sqlite-path-input"
                   value={state.path}
                   onChange={(e) => patch({ path: e.target.value })}
-                  placeholder={t("asset.sqliteFilePathPlaceholder")}
+                  placeholder={isRemoteSqlite ? "/var/lib/app/app.db" : t("asset.sqliteFilePathPlaceholder")}
                 />
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={async () => {
-                    const selected = await SelectSQLiteFile();
-                    if (selected) patch({ path: selected });
-                  }}
-                >
-                  {t("asset.sqliteFilePathBrowse")}
-                </Button>
+                {!isRemoteSqlite && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={async () => {
+                      const selected = await SelectSQLiteFile();
+                      if (selected) patch({ path: selected });
+                    }}
+                  >
+                    {t("asset.sqliteFilePathBrowse")}
+                  </Button>
+                )}
               </div>
             </div>
+            {isRemoteSqlite && (
+              <div className="grid gap-2">
+                <Label>{t("asset.sqliteRemoteSSH")}</Label>
+                <AssetSelect
+                  value={state.sshTunnelId}
+                  onValueChange={(v) => patch({ sshTunnelId: v, connectionType: "jumphost" })}
+                  filterType="ssh"
+                  placeholder={t("asset.jumpHostNone")}
+                  testId="database-sqlite-ssh-select"
+                />
+              </div>
+            )}
           </div>
 
           {/* Params */}

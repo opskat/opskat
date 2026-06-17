@@ -23,6 +23,23 @@ func TestDatabaseHandlerApplyCreateArgsSQLite(t *testing.T) {
 		convey.So(cfg.Path, convey.ShouldEqual, "/tmp/x.db")
 		convey.So(cfg.Host, convey.ShouldEqual, "")
 	})
+
+	convey.Convey("SQLite ApplyCreateArgs 写入远端 VFS 字段", t, func() {
+		h := &databaseHandler{}
+		a := &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}
+		err := h.ApplyCreateArgs(context.Background(), a, map[string]any{
+			"driver":        "sqlite",
+			"path":          "/tmp/x.db",
+			"sqlite_source": "remote_ssh_vfs",
+			"ssh_asset_id":  float64(9),
+		})
+		convey.So(err, convey.ShouldBeNil)
+		cfg, err := a.GetDatabaseConfig()
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cfg.Driver, convey.ShouldEqual, asset_entity.DriverSQLite)
+		convey.So(cfg.SQLiteSource, convey.ShouldEqual, asset_entity.SQLiteSourceRemoteSSHVFS)
+		convey.So(cfg.SSHAssetID, convey.ShouldEqual, 9)
+	})
 }
 
 func TestDatabaseHandlerSafeViewSQLite(t *testing.T) {

@@ -70,6 +70,38 @@ describe("DatabaseConfigSection ref 契约", () => {
     expect(onValidity).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "" });
   });
 
+  it("编辑态(remote sqlite 有 path 但无 SSH 资产):上报缺 SSH 资产", () => {
+    const editAsset = new asset_entity.Asset({
+      Type: "database",
+      Config: '{"driver":"sqlite","sqlite_source":"remote_ssh_vfs","path":"/tmp/x.db"}',
+    });
+    const onValidity = vi.fn();
+    const ref = createRef<AssetFormHandle>();
+    render(<DatabaseConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={onValidity} />);
+    expect(onValidity).toHaveBeenLastCalledWith({
+      canTest: false,
+      canSave: false,
+      saveDisabledReason: "asset.formMissingSQLiteSSH",
+    });
+  });
+
+  it("编辑态(remote sqlite 有 SSH 资产):buildConfig 写 remote source 和顶层 sshTunnelId", async () => {
+    const editAsset = new asset_entity.Asset({
+      Type: "database",
+      Config: '{"driver":"sqlite","sqlite_source":"remote_ssh_vfs","ssh_asset_id":8,"path":"/tmp/x.db"}',
+    });
+    const onValidity = vi.fn();
+    const ref = createRef<AssetFormHandle>();
+    render(<DatabaseConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={onValidity} />);
+    expect(onValidity).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "" });
+
+    const built = await ref.current!.buildConfig(ctx);
+    expect(built).toEqual({
+      configJSON: '{"driver":"sqlite","sqlite_source":"remote_ssh_vfs","ssh_asset_id":8,"path":"/tmp/x.db"}',
+      sshTunnelId: 8,
+    });
+  });
+
   it("编辑态(postgresql + ssl_mode,inline 既有密文):buildConfig 沿用密文 + ssh_asset_id;buildTestConfig 同形,password 空", async () => {
     const editAsset = new asset_entity.Asset({
       Type: "database",
