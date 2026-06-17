@@ -24,16 +24,40 @@ import (
 // --- panel 连接缓存助手 ---
 
 // getOrDialPanelDB 从面板缓存取 *sql.DB,key 按 (assetID, cfg.Database)。
-func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, password string) (*sql.DB, error) {
+// 远端 SQLite VFS 不缓存：写连接会持有 .opskat.lock,每次操作后必须释放。
+func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, password string) (*sql.DB, func(), error) {
+	if !shouldCachePanelDB(cfg) {
+		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
+		db, closer, err := connpool.DialDatabase(ctx, asset, cfg, password, q.pool)
+		if err != nil {
+			return nil, nil, err
+		}
+		cleanup := func() {
+			if err := db.Close(); err != nil && !isExpectedPanelCloseErr(err) {
+				logger.Default().Warn("close remote sqlite db", zap.Error(err))
+			}
+			if closer != nil {
+				if err := closer.Close(); err != nil && !isExpectedPanelCloseErr(err) {
+					logger.Default().Warn("close remote sqlite vfs", zap.Error(err))
+				}
+			}
+		}
+		return db, cleanup, nil
+	}
+
 	key := panelDBCacheKey(asset.ID, cfg)
 	db, _, err := q.dbPanelCache.GetOrDial(key, func() (*sql.DB, io.Closer, error) {
 		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 		return connpool.DialDatabase(ctx, asset, cfg, password, q.pool)
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return db, nil
+	return db, func() {}, nil
+}
+
+func shouldCachePanelDB(cfg *asset_entity.DatabaseConfig) bool {
+	return cfg.Driver != asset_entity.DriverSQLite || cfg.SQLiteSource != asset_entity.SQLiteSourceRemoteSSHVFS
 }
 
 func panelDBCacheKey(assetID int64, cfg *asset_entity.DatabaseConfig) string {
@@ -169,10 +193,11 @@ func (q *Query) ExecuteSQL(assetID int64, sqlText string, database string) (stri
 	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), 30*time.Second)
 	defer cancel()
 
-	db, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
+	db, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
 	if err != nil {
 		return "", fmt.Errorf("连接数据库失败: %w", err)
 	}
+	defer cleanup()
 
 	return helper.ExecuteSQL(ctx, db, sqlText)
 }
@@ -205,10 +230,11 @@ func (q *Query) ExecuteTableImport(
 	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), 30*time.Minute)
 	defer cancel()
 
-	db, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
+	db, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
 	if err != nil {
 		return nil, fmt.Errorf("连接数据库失败: %w", err)
 	}
+	defer cleanup()
 
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -247,10 +273,11 @@ func (q *Query) OpenTable(assetID int64, database, table string, pageSize int) (
 	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), 30*time.Second)
 	defer cancel()
 
-	db, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
+	db, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
 	if err != nil {
 		return "", fmt.Errorf("连接数据库失败: %w", err)
 	}
+	defer cleanup()
 
 	result, err := query_svc.OpenTable(ctx, db, cfg.Driver, cfg.Database, table, pageSize)
 	if err != nil {
@@ -287,10 +314,11 @@ func (q *Query) ExecuteSQLPaged(assetID int64, sqlText string, database string, 
 	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), 30*time.Second)
 	defer cancel()
 
-	db, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
+	db, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
 	if err != nil {
 		return "", fmt.Errorf("连接数据库失败: %w", err)
 	}
+	defer cleanup()
 
 	return helper.ExecuteSQLPaged(ctx, db, sqlText, page, pageSize, cfg.Driver)
 }

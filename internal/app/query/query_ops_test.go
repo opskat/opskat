@@ -25,3 +25,24 @@ func TestPanelDBCacheKey(t *testing.T) {
 		}
 	})
 }
+
+func TestShouldCachePanelDB(t *testing.T) {
+	t.Run("remote SQLite VFS is one-shot so the lock file is released after each operation", func(t *testing.T) {
+		cfg := &asset_entity.DatabaseConfig{
+			Driver:       asset_entity.DriverSQLite,
+			SQLiteSource: asset_entity.SQLiteSourceRemoteSSHVFS,
+		}
+		if shouldCachePanelDB(cfg) {
+			t.Fatal("remote SQLite VFS connection should not be cached")
+		}
+	})
+
+	t.Run("local SQLite and network databases keep the existing panel cache behavior", func(t *testing.T) {
+		if !shouldCachePanelDB(&asset_entity.DatabaseConfig{Driver: asset_entity.DriverSQLite}) {
+			t.Fatal("local SQLite connection should be cached")
+		}
+		if !shouldCachePanelDB(&asset_entity.DatabaseConfig{Driver: asset_entity.DriverMySQL}) {
+			t.Fatal("network database connection should be cached")
+		}
+	})
+}
