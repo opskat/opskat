@@ -16,6 +16,7 @@ describe("K8sConfigSection ref 契約", () => {
       canTest: false,
       canSave: false,
       saveDisabledReason: "asset.formMissingKubeconfig",
+      invalidGroupKey: "connection",
     });
   });
 

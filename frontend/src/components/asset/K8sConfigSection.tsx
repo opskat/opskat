@@ -1,16 +1,18 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Eye, EyeOff } from "lucide-react";
 import { Button, Input, Label, Textarea } from "@opskat/ui";
 import { AssetSelect } from "@/components/asset/AssetSelect";
 import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { buildK8sConfig, parseK8sConfig, K8S_DEFAULTS, type K8sFormState } from "./K8sConfigSection.config";
+import { ConfigTabs, type ConfigGroup, type ConfigTabsHandle } from "@/components/asset/ConfigTabs";
 
 export const K8sConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function K8sConfigSection(
   { editAsset, onValidityChange },
   ref
 ) {
   const { t } = useTranslation();
+  const tabsRef = useRef<ConfigTabsHandle>(null);
   const [state, setState] = useState<K8sFormState>(() => {
     if (!editAsset) return { ...K8S_DEFAULTS };
     const { namespace, context } = parseK8sConfig(editAsset.Config ?? "");
@@ -31,6 +33,7 @@ export const K8sConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
       canTest: false,
       canSave,
       saveDisabledReason: canSave ? "" : "asset.formMissingKubeconfig",
+      invalidGroupKey: canSave ? undefined : "connection",
     });
   }, [state.kubeconfig, editAsset, onValidityChange]);
 
@@ -38,6 +41,7 @@ export const K8sConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
     ref,
     () => ({
       buildTestConfig: null,
+      focusGroup: (key) => tabsRef.current?.setActive(key),
       buildConfig: async (ctx) => {
         let ciphertext = "";
         if (state.kubeconfig) {
@@ -65,57 +69,73 @@ export const K8sConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
   const isEditing = !!editAsset;
   const placeholder = isEditing ? t("asset.k8sKubeconfigEditPlaceholder") : t("asset.k8sKubeconfigPlaceholder");
 
-  return (
-    <div className="grid gap-3 border rounded-lg p-4">
-      <div className="grid gap-2">
-        <Label>{t("asset.k8sKubeconfig")}</Label>
-        {state.showKubeconfig ? (
-          <div className="relative min-w-0 overflow-hidden">
-            <Textarea
-              value={state.kubeconfig}
-              onChange={(e) => patch({ kubeconfig: e.target.value })}
-              placeholder={placeholder}
-              rows={4}
-              className="font-mono text-xs pr-9 whitespace-pre-wrap break-all"
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="absolute right-1 top-2 h-7 w-7"
-              onClick={() => patch({ showKubeconfig: false })}
-            >
-              <EyeOff className="h-3.5 w-3.5" />
-            </Button>
+  const groups: ConfigGroup[] = [
+    {
+      key: "connection",
+      label: "asset.tabConnection",
+      invalid: !editAsset && !state.kubeconfig.trim(),
+      render: () => (
+        <div className="grid gap-3">
+          <div className="grid gap-2">
+            <Label>{t("asset.k8sKubeconfig")}</Label>
+            {state.showKubeconfig ? (
+              <div className="relative min-w-0 overflow-hidden">
+                <Textarea
+                  value={state.kubeconfig}
+                  onChange={(e) => patch({ kubeconfig: e.target.value })}
+                  placeholder={placeholder}
+                  rows={4}
+                  className="font-mono text-xs pr-9 whitespace-pre-wrap break-all"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-1 top-2 h-7 w-7"
+                  onClick={() => patch({ showKubeconfig: false })}
+                >
+                  <EyeOff className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : (
+              <Button type="button" variant="outline" className="w-full" onClick={() => patch({ showKubeconfig: true })}>
+                <Eye className="h-3.5 w-3.5 mr-1" />
+                {isEditing ? t("asset.k8sRevealKubeconfig") : t("asset.k8sEnterKubeconfig")}
+              </Button>
+            )}
           </div>
-        ) : (
-          <Button type="button" variant="outline" className="w-full" onClick={() => patch({ showKubeconfig: true })}>
-            <Eye className="h-3.5 w-3.5 mr-1" />
-            {isEditing ? t("asset.k8sRevealKubeconfig") : t("asset.k8sEnterKubeconfig")}
-          </Button>
-        )}
-      </div>
-      <div className="grid gap-2">
-        <Label>{t("asset.k8sNamespace")}</Label>
-        <Input value={state.namespace} onChange={(e) => patch({ namespace: e.target.value })} placeholder="default" />
-      </div>
-      <div className="grid gap-2">
-        <Label>{t("asset.k8sContext")}</Label>
-        <Input
-          value={state.context}
-          onChange={(e) => patch({ context: e.target.value })}
-          placeholder="current context"
-        />
-      </div>
-      <div className="grid gap-2">
-        <Label>{t("asset.sshTunnel")}</Label>
-        <AssetSelect
-          value={state.sshTunnelId}
-          onValueChange={(v) => patch({ sshTunnelId: v })}
-          filterType="ssh"
-          placeholder={t("asset.sshTunnelNone")}
-        />
-      </div>
-    </div>
-  );
+          <div className="grid gap-2">
+            <Label>{t("asset.k8sNamespace")}</Label>
+            <Input value={state.namespace} onChange={(e) => patch({ namespace: e.target.value })} placeholder="default" />
+          </div>
+          <div className="grid gap-2">
+            <Label>{t("asset.k8sContext")}</Label>
+            <Input
+              value={state.context}
+              onChange={(e) => patch({ context: e.target.value })}
+              placeholder="current context"
+            />
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "tunnel",
+      label: "asset.tabTunnel",
+      optional: true,
+      render: () => (
+        <div className="grid gap-2">
+          <Label>{t("asset.sshTunnel")}</Label>
+          <AssetSelect
+            value={state.sshTunnelId}
+            onValueChange={(v) => patch({ sshTunnelId: v })}
+            filterType="ssh"
+            placeholder={t("asset.sshTunnelNone")}
+          />
+        </div>
+      ),
+    },
+  ];
+
+  return <ConfigTabs ref={tabsRef} groups={groups} />;
 });
