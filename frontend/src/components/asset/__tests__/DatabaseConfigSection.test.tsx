@@ -30,6 +30,7 @@ describe("DatabaseConfigSection ref 契约", () => {
       canTest: false,
       canSave: false,
       saveDisabledReason: "asset.formMissingHost",
+      invalidGroupKey: "connection",
     });
   });
 
@@ -56,6 +57,7 @@ describe("DatabaseConfigSection ref 契约", () => {
       canTest: false,
       canSave: false,
       saveDisabledReason: "asset.formMissingPath",
+      invalidGroupKey: "connection",
     });
   });
 
@@ -82,6 +84,7 @@ describe("DatabaseConfigSection ref 契约", () => {
       canTest: false,
       canSave: false,
       saveDisabledReason: "asset.formMissingSQLiteSSH",
+      invalidGroupKey: "connection",
     });
   });
 
@@ -164,6 +167,7 @@ describe("DatabaseConfigSection ref 契约", () => {
       canTest: false,
       canSave: false,
       saveDisabledReason: "asset.formMissingPath",
+      invalidGroupKey: "connection",
     });
   });
 });
