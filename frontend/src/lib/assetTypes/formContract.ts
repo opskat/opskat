@@ -27,6 +27,8 @@ export interface AssetFormHandle {
   buildConfig: (ctx: AssetFormContext) => Promise<AssetConfigBuildResult>;
   /** 仅可测类型实现;不可测类型为 null。 */
   buildTestConfig: ((ctx: AssetFormContext) => Promise<AssetTestConfig>) | null;
+  /** 切到指定分组标签(配合 SectionValidity.invalidGroupKey 的"前往"跳转);单面板类型可不实现。 */
+  focusGroup?: (key: string) => void;
 }
 
 export interface SectionValidity {
@@ -34,6 +36,8 @@ export interface SectionValidity {
   canSave: boolean;
   /** 保存禁用原因的 i18n key;空/缺省 = 可保存(壳据此显示提示)。 */
   saveDisabledReason?: string;
+  /** 保存被禁用时应跳转到的分组 key(壳 footer 渲染"前往")。 */
+  invalidGroupKey?: string;
 }
 
 export interface ConfigSectionProps {
