@@ -93,7 +93,7 @@ export interface ConfigGroup {
 - **连接标签必填驱动 Test/Save**:与现状一致(SSH `host`、Kafka `brokers`、etcd `endpoints` 等)。因为这些必填都在**默认显示的第一个标签**,常规路径下其它标签永不冒红点 —— 这把 B 方案"必填藏起来"的缺点基本消掉。
 - **可选标签的条件必填**:仅当用户主动启用某功能(如开了 Schema Registry 没填 URL、加了 Connect 集群没填名/URL),该标签 `invalid=true` 并阻断保存。
 - **底部点名 + 跳转**:`saveDisabledReason` 文案点名分组(如「认证 缺少 SASL 密码」);若 `invalidGroupKey` 存在,footer 渲染「前往 ›」调用 `sectionRef.focusGroup(key)` 切到该标签。测试失败仍走现有 toast。
-- **连接齐备提示**:连接标签必填齐全、无 `invalid` 时,footer 显示「✓ 连接项已齐,可保存」。
+- **连接齐备提示(已延后,未实现)**:原设想连接标签必填齐全、无 `invalid` 时 footer 显示「✓ 连接项已齐,可保存」。本次实现**未做**此正向提示(footer 仅在不可保存时显示禁用原因+「前往」;可保存时直接启用保存按钮已足够);`asset.connectReady` 文案也未加。作为可选增强保留待后续。
 
 ## 6. shell(AssetForm.tsx)改动
 
@@ -133,7 +133,7 @@ export interface ConfigGroup {
 ## 10. i18n 新增键(`frontend` 默认命名空间)
 
 - 标签:`asset.tabConnection`(连接)、`asset.tabTunnel`(SSH 隧道/代理)、`asset.tabTls`(TLS/证书)、`asset.tabAdvanced`(高级)、`asset.tabSchemaRegistry`、`asset.tabConnect`。
-- 标记:`asset.optional`(可选)、`asset.connectReady`(连接项已齐,可保存)、`asset.goToTab`(前往)、`asset.addDescription`(添加备注)。
+- 标记:`asset.optional`(可选)、`asset.goToTab`(前往)、`asset.addDescription`(添加备注)。(`asset.connectReady` 随"连接齐备提示"一并延后,未加。)
 - 中英双语都补(项目 i18n 现状)。
 
 ## 11. 风险 / 待确认
