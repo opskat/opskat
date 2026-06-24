@@ -22,6 +22,7 @@ describe("KafkaConfigSection ref 契约", () => {
       canTest: false,
       canSave: false,
       saveDisabledReason: "asset.formMissingKafkaBrokers",
+      invalidGroupKey: "connection",
     });
   });
 
@@ -30,7 +31,7 @@ describe("KafkaConfigSection ref 契约", () => {
     const onValidity = vi.fn();
     const ref = createRef<AssetFormHandle>();
     render(<KafkaConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={onValidity} />);
-    expect(onValidity).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "" });
+    expect(onValidity).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "", invalidGroupKey: undefined });
   });
 
   it("编辑态 buildConfig:base→主凭据→schema_registry→connect 键序 + 伴随加密应用", async () => {
