@@ -41,4 +41,14 @@ describe("ConfigTabs", () => {
     act(() => ref.current?.setActive("advanced"));
     expect(screen.getByText("adv-pane")).toBeInTheDocument();
   });
+
+  it("does not render a badge when badge is 0", () => {
+    render(<ConfigTabs groups={[twoGroups[0], { ...twoGroups[1], badge: 0 }]} />);
+    expect(screen.queryByText("0")).not.toBeInTheDocument();
+  });
+
+  it("renders the optional label on a group with optional:true", () => {
+    render(<ConfigTabs groups={twoGroups} />);
+    expect(screen.getByText("asset.optional")).toBeInTheDocument();
+  });
 });

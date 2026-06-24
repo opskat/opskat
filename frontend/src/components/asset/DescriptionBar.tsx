@@ -38,6 +38,7 @@ export function DescriptionBar({ value, onChange }: DescriptionBarProps) {
         data-testid="description-textarea"
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onFocus={() => setExpanded(true)}
         rows={2}
       />
     </div>
