@@ -35,6 +35,14 @@ type AppConfig struct {
 	WindowWidth                     int    `json:"window_width,omitempty"`      // 上次正常窗口宽度
 	WindowHeight                    int    `json:"window_height,omitempty"`     // 上次正常窗口高度
 
+	// SSH/TCP 连接调优。作用于所有出站 SSH 连接（终端会话 + 连接池）。
+	// 布尔项用 *bool 表示三态：nil = 采用内置默认（开启）。
+	// 秒数项 <=0 = 采用内置默认。
+	SSHTCPNoDelay               *bool `json:"ssh_tcp_no_delay,omitempty"`               // 禁用 Nagle (TCP_NODELAY)，默认开启
+	SSHTCPKeepAlive             *bool `json:"ssh_tcp_keepalive,omitempty"`              // 启用 SO_KEEPALIVE，默认开启
+	SSHKeepAliveIntervalSeconds int   `json:"ssh_keepalive_interval_seconds,omitempty"` // SSH 保活心跳间隔秒，默认 30
+	SSHConnectTimeoutSeconds    int   `json:"ssh_connect_timeout_seconds,omitempty"`    // 最大连接超时秒，默认 30
+
 	// 外部编辑配置。仅持久化用户自定义编辑器；内置候选由运行时探测生成。
 	ExternalEditDefaultEditorID      string                 `json:"external_edit_default_editor_id,omitempty"`
 	ExternalEditWorkspaceRoot        string                 `json:"external_edit_workspace_root,omitempty"`

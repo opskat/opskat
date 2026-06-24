@@ -80,4 +80,16 @@ func TestStart(t *testing.T) {
 		// scheduled ticks before the error is observed.
 		So(fp.calls(), ShouldBeLessThanOrEqualTo, 2)
 	})
+
+	Convey("non-positive interval disables the heartbeat", t, func() {
+		for _, interval := range []time.Duration{0, -1 * time.Second} {
+			fp := &fakePinger{}
+			stop := Start(fp, interval)
+
+			time.Sleep(30 * time.Millisecond)
+			So(fp.calls(), ShouldEqual, 0)
+			stop() // returned stop must be safe and idempotent
+			stop()
+		}
+	})
 }

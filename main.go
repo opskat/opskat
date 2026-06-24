@@ -96,6 +96,9 @@ func main() {
 	}
 	windowWidth, windowHeight := initialWindowSize(bootstrap.GetConfig())
 
+	// 把持久化的 SSH/TCP 连接调优注入全局，使首个连接即采用用户配置。
+	system.ApplySSHTuning(bootstrap.GetConfig())
+
 	// 初始化日志（读取 DebugMode 配置决定 level；桌面应用需要文件日志）
 	if err := bootstrap.InitLogger(); err != nil {
 		log.Fatalf("初始化日志失败: %v", err)

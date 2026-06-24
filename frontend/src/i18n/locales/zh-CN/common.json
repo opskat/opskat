@@ -1390,6 +1390,21 @@
     "reinstall": "覆盖安装",
     "versionMismatch": "opsctl 版本 ({{cliVersion}}) 与应用版本 ({{appVersion}}) 不一致，建议覆盖安装以保持同步"
   },
+  "connection": {
+    "title": "连接",
+    "desc": "SSH/TCP 连接调优，作用于所有出站 SSH 连接（终端与连接池）。修改仅影响之后建立的连接。",
+    "saved": "连接设置已保存",
+    "secondsUnit": "秒",
+    "rangeError": "请输入 {{min}}-{{max}} 之间的整数",
+    "tcpNoDelay": "禁用 Nagle 算法 (TCP_NODELAY)",
+    "tcpNoDelayHint": "立即发送小数据包，降低交互延迟；关闭则启用 Nagle 合并写入。",
+    "tcpKeepAlive": "启用 TCP Keepalive (SO_KEEPALIVE)",
+    "tcpKeepAliveHint": "由操作系统在连接空闲时发送探测包，及时发现断开的连接。",
+    "keepAliveInterval": "保活心跳间隔",
+    "keepAliveIntervalHint": "每隔 N 秒发送一个 SSH 空包以保持会话活动，避免被 NAT/防火墙的空闲超时回收。",
+    "connectTimeout": "最大连接超时",
+    "connectTimeoutHint": "建立连接（TCP 拨号）的最长等待时间，超过则判定连接失败。"
+  },
   "appUpdate": {
     "title": "关于",
     "desc": "版本信息与更新",

@@ -6,6 +6,7 @@ export type SettingsTab =
   | "backup"
   | "shortcuts"
   | "terminal"
+  | "connection"
   | "external-edit"
   | "appearance"
   | "status"

@@ -21,12 +21,14 @@ import {
   Activity,
   Puzzle,
   PencilLine,
+  Network,
 } from "lucide-react";
 import { ShortcutSettings } from "@/components/settings/ShortcutSettings";
 import { AISettingsSection } from "@/components/settings/AISettingsSection";
 import { ImportSection } from "@/components/settings/ImportSection";
 import { BackupSection } from "@/components/settings/BackupSection";
 import { AppearanceSection, TerminalSection } from "@/components/settings/AppearanceSection";
+import { ConnectionSection } from "@/components/settings/ConnectionSection";
 import { UpdateSection } from "@/components/settings/UpdateSection";
 import { SystemStatusSection } from "@/components/settings/SystemStatusSection";
 import { ExtensionSection } from "@/components/settings/ExtensionSection";
@@ -69,6 +71,10 @@ export function SettingsPage() {
             <TabsTrigger value="terminal" className="gap-1">
               <MonitorDot className="h-3.5 w-3.5" />
               {t("terminal.title")}
+            </TabsTrigger>
+            <TabsTrigger value="connection" className="gap-1">
+              <Network className="h-3.5 w-3.5" />
+              {t("connection.title")}
             </TabsTrigger>
             <TabsTrigger value="external-edit" className="gap-1">
               <PencilLine className="h-3.5 w-3.5" />
@@ -123,6 +129,11 @@ export function SettingsPage() {
           {/* Terminal */}
           <TabsContent value="terminal" className="space-y-4">
             <TerminalSection />
+          </TabsContent>
+
+          {/* Connection */}
+          <TabsContent value="connection" className="space-y-4">
+            <ConnectionSection />
           </TabsContent>
 
           <TabsContent value="external-edit" className="space-y-4">

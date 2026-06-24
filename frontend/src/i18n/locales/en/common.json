@@ -1390,6 +1390,21 @@
     "reinstall": "Reinstall",
     "versionMismatch": "opsctl version ({{cliVersion}}) differs from app version ({{appVersion}}), consider reinstalling to keep in sync"
   },
+  "connection": {
+    "title": "Connection",
+    "desc": "SSH/TCP connection tuning applied to every outbound SSH connection (terminals and the connection pool). Changes only affect connections opened afterwards.",
+    "saved": "Connection settings saved",
+    "secondsUnit": "seconds",
+    "rangeError": "Enter a whole number between {{min}} and {{max}}",
+    "tcpNoDelay": "Disable Nagle's algorithm (TCP_NODELAY)",
+    "tcpNoDelayHint": "Send small packets immediately for lower interactive latency; turning this off enables Nagle write coalescing.",
+    "tcpKeepAlive": "Enable TCP keepalive (SO_KEEPALIVE)",
+    "tcpKeepAliveHint": "Let the OS send probe packets while the connection is idle to detect dropped links promptly.",
+    "keepAliveInterval": "Keepalive heartbeat interval",
+    "keepAliveIntervalHint": "Send an empty SSH packet every N seconds to keep the session alive and avoid NAT/firewall idle timeouts.",
+    "connectTimeout": "Max connection timeout",
+    "connectTimeoutHint": "Maximum time to wait while establishing a connection (TCP dial) before it is treated as failed."
+  },
   "appUpdate": {
     "title": "About",
     "desc": "Version info & updates",

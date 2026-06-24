@@ -12,6 +12,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/opskat/opskat/internal/pkg/sshkeepalive"
+	"github.com/opskat/opskat/internal/pkg/sshtuning"
 )
 
 // PoolDialer 创建 SSH 连接的接口，由调用方实现以解耦凭据解析和跳板机逻辑
@@ -146,7 +147,7 @@ func (p *Pool) Get(ctx context.Context, assetID int64) (*ssh.Client, error) {
 		assetID:       assetID,
 		lastUsed:      time.Now(),
 		refCount:      1,
-		stopKeepalive: sshkeepalive.Start(client, sshkeepalive.Interval),
+		stopKeepalive: sshkeepalive.Start(client, sshtuning.Get().KeepAliveInterval),
 	}
 
 	p.mu.Lock()

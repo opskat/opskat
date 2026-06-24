@@ -8,9 +8,6 @@ import (
 	"time"
 )
 
-// Interval is the global SSH keepalive heartbeat interval.
-const Interval = 60 * time.Second
-
 // Pinger is the subset of *ssh.Client used to send keepalive global requests.
 // Defining it as an interface keeps this package decoupled from net/ssh and
 // makes it trivial to test with a fake.
@@ -22,10 +19,18 @@ type Pinger interface {
 // global request on p every interval. It returns a stop function the caller
 // MUST invoke when shutting down. stop is idempotent.
 //
+// An interval <= 0 disables the heartbeat: no goroutine is started and the
+// returned stop is a no-op. This lets callers honour a "keepalive off" setting
+// without special-casing it.
+//
 // If SendRequest returns an error, the goroutine exits silently. Start does
 // NOT close the underlying connection — the read loop on the client will
 // detect EOF and surface it through the existing close path.
 func Start(p Pinger, interval time.Duration) (stop func()) {
+	if interval <= 0 {
+		return func() {}
+	}
+
 	done := make(chan struct{})
 	var once sync.Once
 	stopFn := func() { once.Do(func() { close(done) }) }
