@@ -319,7 +319,9 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
                           variant="ghost"
                           size="icon"
                           className="h-5 w-5 shrink-0"
-                          onClick={() => patch({ selectedKeyPaths: state.selectedKeyPaths.filter((p2) => p2 !== path) })}
+                          onClick={() =>
+                            patch({ selectedKeyPaths: state.selectedKeyPaths.filter((p2) => p2 !== path) })
+                          }
                         >
                           <Trash2 className="h-3 w-3" />
                         </Button>

@@ -222,7 +222,11 @@ export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
           </div>
           <div className="grid gap-2">
             <Label>{t("asset.redisKeySeparator")}</Label>
-            <Input value={state.keySeparator} onChange={(e) => patch({ keySeparator: e.target.value })} placeholder=":" />
+            <Input
+              value={state.keySeparator}
+              onChange={(e) => patch({ keySeparator: e.target.value })}
+              placeholder=":"
+            />
           </div>
         </div>
       ),

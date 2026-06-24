@@ -83,7 +83,11 @@ export const MongoDBConfigSection = forwardRef<AssetFormHandle, ConfigSectionPro
               <div className="grid grid-cols-[1fr_120px] gap-3">
                 <div className="grid gap-2">
                   <Label>{t("asset.host")}</Label>
-                  <Input value={state.host} onChange={(e) => patch({ host: e.target.value })} placeholder="example.com" />
+                  <Input
+                    value={state.host}
+                    onChange={(e) => patch({ host: e.target.value })}
+                    placeholder="example.com"
+                  />
                 </div>
                 <div className="grid gap-2">
                   <Label>{t("asset.port")}</Label>

@@ -12,9 +12,7 @@ const twoGroups: ConfigGroup[] = [
 
 describe("ConfigTabs", () => {
   it("single group renders without a tablist", () => {
-    render(
-      <ConfigTabs groups={[{ key: "only", label: "asset.tabConnection", render: () => <div>only-pane</div> }]} />
-    );
+    render(<ConfigTabs groups={[{ key: "only", label: "asset.tabConnection", render: () => <div>only-pane</div> }]} />);
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     expect(screen.getByText("only-pane")).toBeInTheDocument();
   });

@@ -64,7 +64,12 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
         : isSqlite
           ? "asset.formMissingPath"
           : "asset.formMissingHost";
-    onValidityChange({ canTest: canSave, canSave, saveDisabledReason, invalidGroupKey: canSave ? undefined : "connection" });
+    onValidityChange({
+      canTest: canSave,
+      canSave,
+      saveDisabledReason,
+      invalidGroupKey: canSave ? undefined : "connection",
+    });
   }, [isSqlite, isRemoteSqlite, state.path, state.host, state.sshTunnelId, onValidityChange]);
 
   useImperativeHandle(
@@ -93,9 +98,7 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
     {
       key: "connection",
       label: "asset.tabConnection",
-      invalid: isSqlite
-        ? !state.path.trim() || (isRemoteSqlite && state.sshTunnelId <= 0)
-        : !state.host.trim(),
+      invalid: isSqlite ? !state.path.trim() || (isRemoteSqlite && state.sshTunnelId <= 0) : !state.host.trim(),
       render: () => (
         <div className="grid gap-3">
           {/* Database Driver */}
@@ -255,9 +258,7 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
       key: "tunnel",
       label: "asset.tabTunnel",
       optional: true,
-      render: () => (
-        <ConnectionMethodFields value={state} onChange={patch} />
-      ),
+      render: () => <ConnectionMethodFields value={state} onChange={patch} />,
     },
     {
       key: "tls",

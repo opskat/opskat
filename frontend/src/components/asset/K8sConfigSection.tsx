@@ -98,7 +98,12 @@ export const K8sConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
                 </Button>
               </div>
             ) : (
-              <Button type="button" variant="outline" className="w-full" onClick={() => patch({ showKubeconfig: true })}>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => patch({ showKubeconfig: true })}
+              >
                 <Eye className="h-3.5 w-3.5 mr-1" />
                 {isEditing ? t("asset.k8sRevealKubeconfig") : t("asset.k8sEnterKubeconfig")}
               </Button>
@@ -106,7 +111,11 @@ export const K8sConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
           </div>
           <div className="grid gap-2">
             <Label>{t("asset.k8sNamespace")}</Label>
-            <Input value={state.namespace} onChange={(e) => patch({ namespace: e.target.value })} placeholder="default" />
+            <Input
+              value={state.namespace}
+              onChange={(e) => patch({ namespace: e.target.value })}
+              placeholder="default"
+            />
           </div>
           <div className="grid gap-2">
             <Label>{t("asset.k8sContext")}</Label>
