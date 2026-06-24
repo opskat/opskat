@@ -13,8 +13,8 @@ import {
   Button,
   Input,
   Label,
-  Textarea,
 } from "@opskat/ui";
+import { DescriptionBar } from "@/components/asset/DescriptionBar";
 import { IconPicker } from "@/components/asset/IconPicker";
 import { GroupSelect } from "@/components/asset/GroupSelect";
 import { useAssetStore } from "@/stores/assetStore";
@@ -397,11 +397,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                 );
               })()}
 
-            {/* Description */}
-            <div className="grid gap-2">
-              <Label>{t("asset.description")}</Label>
-              <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} />
-            </div>
+            {/* Description(折叠成一行,贴近 footer) */}
+            <DescriptionBar value={description} onChange={setDescription} />
           </div>
         </div>
         <DialogFooter className="border-t bg-background px-6 py-3 sm:items-center sm:justify-between">
@@ -411,6 +408,16 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               <p className="flex items-center gap-1 text-xs text-muted-foreground">
                 <AlertCircle className="h-3.5 w-3.5 shrink-0" />
                 {t(saveDisabledReason)}
+                {name.trim() && validity.invalidGroupKey && (
+                  <button
+                    type="button"
+                    data-testid="goto-invalid-tab"
+                    className="underline underline-offset-2"
+                    onClick={() => sectionRef.current?.focusGroup?.(validity.invalidGroupKey!)}
+                  >
+                    {t("asset.goToTab")}
+                  </button>
+                )}
               </p>
             )}
           </div>
