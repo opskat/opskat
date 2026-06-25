@@ -21,6 +21,9 @@ export interface UseConfigSectionOptions<S> {
   buildTest?: (state: S, ctx: AssetFormContext) => Promise<AssetTestConfig>;
   /** build/buildTest 闭包捕获的额外身份(如 cred.value),驱动 imperative handle 重建。 */
   deps?: unknown[];
+  /** validate 闭包捕获的、在 hook state 之外的额外身份(如 Kafka 的伴随子状态),驱动校验重算/上报。
+   *  省略时校验仅依赖 state(与原行为一致)。 */
+  validityDeps?: unknown[];
 }
 
 export interface UseConfigSectionResult<S> {
@@ -41,7 +44,7 @@ function sameValidity(a: SectionValidity | null, b: SectionValidity): boolean {
 /** 收编各 ConfigSection 雷同的 state/patch/校验上报/imperative handle 样板。
  *  凭据留在 section 外(K8s 不用、Kafka 有伴随凭据),由调用方经 deps 喂入。 */
 export function useConfigSection<S>(opts: UseConfigSectionOptions<S>): UseConfigSectionResult<S> {
-  const { ref, editAsset, onValidityChange, init, validate, build, buildTest, deps = [] } = opts;
+  const { ref, editAsset, onValidityChange, init, validate, build, buildTest, deps = [], validityDeps = [] } = opts;
 
   const [state, setState] = useState<S>(() => init(editAsset));
   const patch = (p: Partial<S>) => setState((s) => ({ ...s, ...p }));
@@ -54,9 +57,10 @@ export function useConfigSection<S>(opts: UseConfigSectionOptions<S>): UseConfig
       lastValidity.current = v;
       onValidityChange(v);
     }
-    // validate/onValidityChange 身份稳定假设(纯函数 + 壳 setState);校验仅依赖 state。
+    // validate/onValidityChange 身份稳定假设(纯函数 + 壳 setState)。校验默认仅依赖 state;
+    // 若 validate 闭包捕获了 hook state 之外的身份(如伴随子状态),由调用方经 validityDeps 喂入。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state]);
+  }, [state, ...validityDeps]);
 
   useImperativeHandle(
     ref,

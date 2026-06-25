@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
-import { createRef, type Ref } from "react";
+import { createRef, useState, type Ref } from "react";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import type { AssetFormHandle, AssetFormContext, SectionValidity } from "@/lib/assetTypes/formContract";
 
@@ -76,5 +76,38 @@ describe("useConfigSection", () => {
     render(<Harness refOut={ref} onValidityChange={() => {}} withTest />);
     const tc = await ref.current!.buildTestConfig!(ctx);
     expect(tc).toEqual({ assetType: "x", configJSON: JSON.stringify({ host: "", port: 6379 }), password: "" });
+  });
+});
+
+describe("useConfigSection validityDeps", () => {
+  it("validityDeps 变化(state 不变)时按需重新上报校验", () => {
+    const onValidity = vi.fn();
+
+    function Harness() {
+      const ref = createRef<AssetFormHandle>();
+      const [blocked, setBlocked] = useState(true);
+      useConfigSection<{ x: number }>({
+        ref,
+        onValidityChange: onValidity,
+        init: () => ({ x: 0 }),
+        // validate 读外部 blocked(经闭包),不改 state。
+        validate: () => ({ canTest: !blocked, canSave: !blocked, saveDisabledReason: blocked ? "blocked" : "" }),
+        build: async () => ({ configJSON: "{}", sshTunnelId: 0 }),
+        validityDeps: [blocked],
+      });
+      return (
+        <button data-testid="unblock" onClick={() => setBlocked(false)}>
+          unblock
+        </button>
+      );
+    }
+
+    const { getByTestId } = render(<Harness />);
+    // 挂载即上报一次(blocked)。
+    expect(onValidity).toHaveBeenLastCalledWith({ canTest: false, canSave: false, saveDisabledReason: "blocked" });
+
+    // blocked 翻转(state 未变)→ validityDeps 变化 → 重新上报。
+    fireEvent.click(getByTestId("unblock"));
+    expect(onValidity).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "" });
   });
 });
