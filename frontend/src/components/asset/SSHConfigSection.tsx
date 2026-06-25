@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
+import { forwardRef, useEffect, useMemo, useState } from "react";
 import { Trash2, FolderOpen, Loader2, Lock } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -15,13 +15,12 @@ import {
   TooltipTrigger,
 } from "@opskat/ui";
 import { Field, Segmented } from "@/components/asset/fields";
-import { ConfigTabs, type ConfigGroup } from "@/components/asset/ConfigTabs";
-import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
-import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
+import { ConfigTabs } from "@/components/asset/ConfigTabs";
+import { useConfigSection } from "@/components/asset/useConfigSection";
+import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { ListCredentialsByType } from "../../../wailsjs/go/system/System";
 import { ListLocalSSHKeys, SelectSSHKeyFile } from "../../../wailsjs/go/ssh/SSH";
 import { credential_entity, ssh as ssh_models } from "../../../wailsjs/go/models";
-import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
 import {
@@ -31,19 +30,13 @@ import {
   SSH_DEFAULTS,
   type SSHFormState,
 } from "./SSHConfigSection.config";
+import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 
 export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function SSHConfigSection(
   { editAsset, onValidityChange },
   ref
 ) {
   const { t } = useTranslation();
-  const [state, setState] = useState<SSHFormState>(() => {
-    if (!editAsset) return { ...SSH_DEFAULTS };
-    // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.jump_host_id || 0),
-    // 并参与 connectionType 派生,故传入 parseSSHConfig。
-    return parseSSHConfig(editAsset.Config, editAsset.sshTunnelId || 0);
-  });
-  const patch = (p: Partial<SSHFormState>) => setState((s) => ({ ...s, ...p }));
   // password-auth 凭据复用 db 族抽象;key-auth ssh_key 凭据 + 本地密钥由本 section 自持。
   const passwordCredentialConfig = useMemo(
     () => (editAsset ? parseSSHPasswordCredentialConfig(editAsset.Config) : undefined),
@@ -51,9 +44,51 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
   );
   const cred = useAssetCredential(editAsset, passwordCredentialConfig);
 
+  const { state, patch } = useConfigSection<SSHFormState>({
+    ref,
+    editAsset,
+    onValidityChange,
+    init: (a) => (a ? parseSSHConfig(a.Config, a.sshTunnelId || 0) : { ...SSH_DEFAULTS }),
+    validate: (s) => {
+      const ok = !!s.host.trim();
+      return { canTest: ok, canSave: ok, saveDisabledReason: ok ? "" : "asset.formMissingHost" };
+    },
+    build: async (s, ctx) => {
+      // password-auth 凭据加密;passphrase / proxy 密码:明文优先加密,否则沿用既有密文。
+      const passwordCred = await resolveSaveCredential(cred.value, ctx.encryptPassword);
+      const passphrase = s.privateKeyPassphrase
+        ? await ctx.encryptPassword(s.privateKeyPassphrase)
+        : s.encryptedPrivateKeyPassphrase;
+      const proxyPassword = s.proxyPassword ? await ctx.encryptPassword(s.proxyPassword) : s.encryptedProxyPassword;
+      return {
+        configJSON: buildSSHConfig(s, {
+          passwordCred,
+          keyCredentialId: s.credentialId,
+          passphrase,
+          proxyPassword,
+          includeJumpHost: false, // save:隧道写 asset 顶层 sshTunnelId,不入 config.jump_host_id
+        }),
+        sshTunnelId: s.connectionType === "jumphost" && s.sshTunnelId > 0 ? s.sshTunnelId : 0,
+      };
+    },
+    buildTest: async (s) => ({
+      assetType: "ssh",
+      // 测试:passphrase / proxy 用明文(passphrase 缺明文时沿用既有密文;proxy 仅明文),后端从 config.jump_host_id 读隧道。
+      configJSON: buildSSHConfig(s, {
+        passwordCred: resolveTestCredential(cred.value),
+        keyCredentialId: s.credentialId,
+        passphrase: s.privateKeyPassphrase || s.encryptedPrivateKeyPassphrase,
+        proxyPassword: s.proxyPassword,
+        includeJumpHost: true,
+      }),
+      password: cred.value.password,
+    }),
+    deps: [cred.value],
+  });
+
   const [managedKeys, setManagedKeys] = useState<credential_entity.Credential[]>([]);
   const [localKeys, setLocalKeys] = useState<ssh_models.LocalSSHKeyInfo[]>([]);
-  // 挂载即开始扫描,初始 true(避免在 effect 内同步 setState 触发级联渲染)。
+  // 挂载即扫描,初始 true(避免在 effect 内同步 setState 触发级联渲染)。
   const [scanningKeys, setScanningKeys] = useState(true);
 
   // 自加载 ssh_key 凭据列表 + 扫描本地密钥(镜像旧壳 open 时的合并 load)。
@@ -70,125 +105,57 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
   // 排除自身,不能把自己选作跳板机 / SSH 隧道。
   const jumpHostExcludeIds = editAsset?.ID ? [editAsset.ID] : undefined;
 
-  // host 为保存/测试共同必填;上报反应式校验(onValidityChange 为壳 setState,身份稳定)。
-  useEffect(() => {
-    const ok = !!state.host.trim();
-    onValidityChange({
-      canTest: ok,
-      canSave: ok,
-      saveDisabledReason: ok ? "" : "asset.formMissingHost",
-    });
-  }, [state.host, onValidityChange]);
-
-  useImperativeHandle(
-    ref,
-    () => ({
-      buildConfig: async (ctx) => {
-        // password-auth 凭据加密;passphrase / proxy 密码:明文优先加密,否则沿用既有密文。
-        const passwordCred = await resolveSaveCredential(cred.value, ctx.encryptPassword);
-        const passphrase = state.privateKeyPassphrase
-          ? await ctx.encryptPassword(state.privateKeyPassphrase)
-          : state.encryptedPrivateKeyPassphrase;
-        const proxyPassword = state.proxyPassword
-          ? await ctx.encryptPassword(state.proxyPassword)
-          : state.encryptedProxyPassword;
-        const configJSON = buildSSHConfig(state, {
-          passwordCred,
-          keyCredentialId: state.credentialId,
-          passphrase,
-          proxyPassword,
-          includeJumpHost: false, // save:隧道写 asset 顶层 sshTunnelId,不入 config.jump_host_id
-        });
-        return {
-          configJSON,
-          sshTunnelId: state.connectionType === "jumphost" && state.sshTunnelId > 0 ? state.sshTunnelId : 0,
-        };
-      },
-      buildTestConfig: async () => {
-        // 测试:passphrase / proxy 密码用明文(无加密),passphrase 缺明文时沿用既有密文;proxy 仅明文。
-        const passwordCred = resolveTestCredential(cred.value);
-        const configJSON = buildSSHConfig(state, {
-          passwordCred,
-          keyCredentialId: state.credentialId,
-          passphrase: state.privateKeyPassphrase || state.encryptedPrivateKeyPassphrase,
-          proxyPassword: state.proxyPassword,
-          includeJumpHost: true, // test:后端从 config.jump_host_id 读隧道
-        });
-        return { assetType: "ssh", configJSON, password: cred.value.password };
-      },
-    }),
-    [state, cred.value]
-  );
-
-  const groups: ConfigGroup[] = [
+  const groups: ConfigGroupSchema<SSHFormState>[] = [
     {
       key: "connection",
       label: "asset.tabConnection",
-      render: () => (
-        <div className="flex flex-col gap-4">
-          {/* Host + Port (each labeled) */}
-          <div className="flex items-end gap-3">
-            <Field label={t("asset.host")} required className="flex-1">
-              <Input
-                data-testid="ssh-host-input"
-                value={state.host}
-                onChange={(e) => patch({ host: e.target.value })}
-                placeholder="example.com"
-              />
-            </Field>
-            <Field label={t("asset.port")} className="w-[110px] shrink-0">
-              <Input
-                data-testid="ssh-port-input"
-                className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                type="number"
-                value={state.port || ""}
-                placeholder="22"
-                onChange={(e) => patch({ port: Number(e.target.value) })}
-              />
-            </Field>
-          </div>
-
-          {/* Username + Auth type */}
-          <div className="flex items-end gap-3">
-            <Field label={t("asset.username")} className="flex-1">
-              <Input
-                data-testid="ssh-username-input"
-                value={state.username}
-                onChange={(e) => patch({ username: e.target.value })}
-              />
-            </Field>
-            <Field label={t("asset.authType")} className="w-[190px] shrink-0">
-              <Segmented
-                value={state.authType}
-                onChange={(v) => patch({ authType: v })}
-                aria-label={t("asset.authType")}
-                options={[
-                  { value: "password", label: t("asset.authPassword"), testid: "ssh-auth-type-option-password" },
-                  { value: "key", label: t("asset.authKey"), testid: "ssh-auth-type-option-key" },
-                ]}
-              />
-            </Field>
-          </div>
-
-          {/* Password (when auth_type=password) */}
-          {state.authType === "password" && (
-            <PasswordSourceField
-              source={cred.value.passwordSource}
-              onSourceChange={cred.setPasswordSource}
-              password={cred.value.password}
-              onPasswordChange={cred.setPassword}
-              credentialId={cred.value.passwordCredentialId}
-              onCredentialIdChange={cred.setPasswordCredentialId}
-              managedPasswords={cred.managedPasswords}
-              placeholder={t("asset.passwordPlaceholder")}
-              hasExistingPassword={!!cred.value.encryptedPassword}
-              editAssetId={editAsset?.ID}
-              onUsernameChange={(v) => patch({ username: v })}
-            />
-          )}
-
-          {/* Key config (inline, no nested border since we are already in a block) */}
-          {state.authType === "key" && (
+      fields: [
+        {
+          kind: "row",
+          fields: [
+            {
+              kind: "text",
+              key: "host",
+              label: "asset.host",
+              required: true,
+              placeholder: "example.com",
+              width: "flex-1",
+              testid: "ssh-host-input",
+            },
+            {
+              kind: "number",
+              key: "port",
+              label: "asset.port",
+              width: "w-[110px] shrink-0",
+              blankWhenZero: true,
+              placeholder: "22",
+              testid: "ssh-port-input",
+            },
+          ],
+        },
+        {
+          kind: "row",
+          fields: [
+            { kind: "text", key: "username", label: "asset.username", width: "flex-1", testid: "ssh-username-input" },
+            {
+              kind: "segmented",
+              key: "authType",
+              label: "asset.authType",
+              width: "w-[190px] shrink-0",
+              options: [
+                { value: "password", label: "asset.authPassword", testid: "ssh-auth-type-option-password" },
+                { value: "key", label: "asset.authKey", testid: "ssh-auth-type-option-key" },
+              ],
+            },
+          ],
+        },
+        { kind: "password", placeholder: "asset.passwordPlaceholder", visibleWhen: (s) => s.authType === "password" },
+        {
+          kind: "custom",
+          visibleWhen: (s) => s.authType === "key",
+          render: () => (
+            /* ↓↓↓ 逐字搬入:当前 SSHConfigSection.tsx 中 {state.authType === "key" && ( ... )} 内的整个
+                   <div className="flex flex-col gap-4"> ... </div>,原样不改 ↓↓↓ */
             <div className="flex flex-col gap-4">
               <Field label={t("asset.keySource")}>
                 <Segmented
@@ -346,24 +313,23 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
                 </Field>
               )}
             </div>
-          )}
-        </div>
-      ),
+          ),
+        },
+      ],
     },
     {
       key: "tunnel",
       label: "asset.tabTunnel",
-      render: () => (
-        <ConnectionMethodFields
-          value={state}
-          onChange={patch}
-          excludeIds={jumpHostExcludeIds}
-          tunnelOptionLabelKey="asset.connectionJumpHost"
-          tunnelSelectLabelKey="asset.selectJumpHost"
-        />
-      ),
+      fields: [
+        {
+          kind: "tunnel",
+          tunnelOptionLabelKey: "asset.connectionJumpHost",
+          tunnelSelectLabelKey: "asset.selectJumpHost",
+          excludeIds: jumpHostExcludeIds,
+        },
+      ],
     },
   ];
 
-  return <ConfigTabs groups={groups} />;
+  return <ConfigTabs groups={buildConfigGroups(groups, { state, patch, ctx: { cred, editAsset } })} />;
 });
