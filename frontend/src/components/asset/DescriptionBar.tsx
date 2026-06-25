@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
-import { Label, Textarea } from "@opskat/ui";
+import { Textarea } from "@opskat/ui";
+import { Field } from "@/components/asset/fields";
 
 interface DescriptionBarProps {
   value: string;
@@ -22,7 +23,7 @@ export function DescriptionBar({ value, onChange }: DescriptionBarProps) {
         type="button"
         data-testid="description-add"
         onClick={() => setExpanded(true)}
-        className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+        className="flex w-fit items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground"
       >
         <Plus className="h-3.5 w-3.5" />
         {t("asset.addDescription")}
@@ -31,8 +32,7 @@ export function DescriptionBar({ value, onChange }: DescriptionBarProps) {
   }
 
   return (
-    <div className="grid gap-2">
-      <Label>{t("asset.description")}</Label>
+    <Field label={t("asset.description")}>
       <Textarea
         autoFocus
         data-testid="description-textarea"
@@ -41,6 +41,6 @@ export function DescriptionBar({ value, onChange }: DescriptionBarProps) {
         onFocus={() => setExpanded(true)}
         rows={2}
       />
-    </div>
+    </Field>
   );
 }

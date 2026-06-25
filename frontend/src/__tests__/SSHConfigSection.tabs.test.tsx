@@ -16,7 +16,7 @@ describe("SSHConfigSection tabs", () => {
     const onValidity = vi.fn();
     render(<SSHConfigSection ctx={ctx} onValidityChange={onValidity} />);
     expect(onValidity).toHaveBeenLastCalledWith(
-      expect.objectContaining({ canSave: false, invalidGroupKey: "connection" })
+      expect.objectContaining({ canSave: false, saveDisabledReason: "asset.formMissingHost" })
     );
     await userEvent.type(screen.getByTestId("ssh-host-input"), "example.com");
     expect(onValidity).toHaveBeenLastCalledWith(expect.objectContaining({ canSave: true }));

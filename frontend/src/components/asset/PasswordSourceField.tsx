@@ -1,7 +1,8 @@
 import { useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { Eye, EyeOff, Loader2 } from "lucide-react";
-import { Button, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
+import { Eye, EyeOff, Loader2, Pencil, Shield } from "lucide-react";
+import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
+import { Field, Segmented } from "@/components/asset/fields";
 import { credential_entity } from "../../../wailsjs/go/models";
 import { GetAssetPassword } from "../../../wailsjs/go/system/System";
 
@@ -67,22 +68,25 @@ export function PasswordSourceField({
   }, [showPassword, hasExistingPassword, password, editAssetId, decryptedOnce, onPasswordChange]);
 
   return (
-    <div className="grid gap-3 border rounded-lg p-3">
-      <div className="grid gap-2">
-        <Label>{t("asset.passwordSource")}</Label>
-        <Select value={source} onValueChange={(v) => onSourceChange(v as "inline" | "managed")}>
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="inline">{t("asset.passwordSourceInline")}</SelectItem>
-            <SelectItem value="managed">{t("asset.passwordSourceManaged")}</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
+    <div className="flex flex-col gap-3">
+      <Field label={t("asset.passwordSource")}>
+        <Segmented
+          value={source}
+          onChange={onSourceChange}
+          aria-label={t("asset.passwordSource")}
+          options={[
+            { value: "inline", label: t("asset.passwordSourceInline"), icon: Pencil, testid: "password-source-inline" },
+            {
+              value: "managed",
+              label: t("asset.passwordSourceManaged"),
+              icon: Shield,
+              testid: "password-source-managed",
+            },
+          ]}
+        />
+      </Field>
       {source === "inline" ? (
-        <div className="grid gap-2">
-          <Label>{secretLabel || t("asset.password")}</Label>
+        <Field label={secretLabel || t("asset.password")}>
           <div className="relative">
             <Input
               type={showPassword ? "text" : "password"}
@@ -95,7 +99,7 @@ export function PasswordSourceField({
               type="button"
               variant="ghost"
               size="icon"
-              className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+              className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8"
               onClick={handleTogglePassword}
               disabled={decrypting}
             >
@@ -108,10 +112,9 @@ export function PasswordSourceField({
               )}
             </Button>
           </div>
-        </div>
+        </Field>
       ) : (
-        <div className="grid gap-2">
-          <Label>{selectSecretLabel || t("asset.selectPassword")}</Label>
+        <Field label={selectSecretLabel || t("asset.selectPassword")}>
           {managedPasswords.length > 0 ? (
             <Select
               value={String(credentialId)}
@@ -126,7 +129,7 @@ export function PasswordSourceField({
                 }
               }}
             >
-              <SelectTrigger>
+              <SelectTrigger className="w-full">
                 <SelectValue placeholder={t("asset.selectPasswordPlaceholder")} />
               </SelectTrigger>
               <SelectContent>
@@ -142,7 +145,7 @@ export function PasswordSourceField({
           ) : (
             <p className="text-xs text-muted-foreground">{t("asset.noManagedPasswords")}</p>
           )}
-        </div>
+        </Field>
       )}
     </div>
   );

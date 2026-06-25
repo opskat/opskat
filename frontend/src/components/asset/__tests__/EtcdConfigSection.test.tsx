@@ -41,7 +41,6 @@ describe("EtcdConfigSection ref 契约", () => {
       canTest: false,
       canSave: false,
       saveDisabledReason: "etcd.error.endpointsRequired",
-      invalidGroupKey: "connection",
     });
   });
 

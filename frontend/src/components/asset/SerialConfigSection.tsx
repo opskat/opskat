@@ -1,7 +1,8 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Button, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
+import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { RefreshCw } from "lucide-react";
+import { Field } from "@/components/asset/fields";
 import { ListSerialPorts } from "../../../wailsjs/go/serial/Serial";
 import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import {
@@ -96,24 +97,28 @@ export const SerialConfigSection = forwardRef<AssetFormHandle, ConfigSectionProp
   };
 
   return (
-    <div className="grid gap-3 border rounded-lg p-4">
-      <div className="grid gap-2">
-        <div className="flex items-center justify-between">
-          <Label>{t("asset.serialPortPath")}</Label>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-6 px-2 text-xs"
-            onClick={fetchPorts}
-            disabled={loadingPorts}
-          >
-            <RefreshCw className={`h-3 w-3 mr-1 ${loadingPorts ? "animate-spin" : ""}`} />
-            {t("asset.serialRefreshPorts")}
-          </Button>
-        </div>
+    <div className="flex flex-col gap-4">
+      <Field
+        label={
+          <span className="flex w-full items-center justify-between">
+            {t("asset.serialPortPath")}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="-my-1 h-6 px-2 text-xs"
+              onClick={fetchPorts}
+              disabled={loadingPorts}
+            >
+              <RefreshCw className={`h-3 w-3 mr-1 ${loadingPorts ? "animate-spin" : ""}`} />
+              {t("asset.serialRefreshPorts")}
+            </Button>
+          </span>
+        }
+        required
+      >
         <Select value={selectValue} onValueChange={handlePortSelect}>
-          <SelectTrigger>
+          <SelectTrigger className="w-full">
             <SelectValue placeholder={t("asset.serialPortPathPlaceholder")} />
           </SelectTrigger>
           <SelectContent>
@@ -136,16 +141,15 @@ export const SerialConfigSection = forwardRef<AssetFormHandle, ConfigSectionProp
             value={state.portPath}
             onChange={(e) => patch({ portPath: e.target.value })}
             placeholder={t("asset.serialPortPathPlaceholder")}
-            className="font-mono"
+            className="mt-2 font-mono"
           />
         )}
-      </div>
+      </Field>
 
-      <div className="grid grid-cols-2 gap-3">
-        <div className="grid gap-2">
-          <Label>{t("asset.serialBaudRate")}</Label>
+      <div className="flex items-end gap-3">
+        <Field label={t("asset.serialBaudRate")} className="flex-1">
           <Select value={String(state.baudRate)} onValueChange={(v) => patch({ baudRate: Number(v) })}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -156,11 +160,10 @@ export const SerialConfigSection = forwardRef<AssetFormHandle, ConfigSectionProp
               ))}
             </SelectContent>
           </Select>
-        </div>
-        <div className="grid gap-2">
-          <Label>{t("asset.serialDataBits")}</Label>
+        </Field>
+        <Field label={t("asset.serialDataBits")} className="flex-1">
           <Select value={String(state.dataBits)} onValueChange={(v) => patch({ dataBits: Number(v) })}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -171,14 +174,13 @@ export const SerialConfigSection = forwardRef<AssetFormHandle, ConfigSectionProp
               ))}
             </SelectContent>
           </Select>
-        </div>
+        </Field>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
-        <div className="grid gap-2">
-          <Label>{t("asset.serialStopBits")}</Label>
+      <div className="flex items-end gap-3">
+        <Field label={t("asset.serialStopBits")} className="flex-1">
           <Select value={state.stopBits} onValueChange={(v) => patch({ stopBits: v })}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -189,11 +191,10 @@ export const SerialConfigSection = forwardRef<AssetFormHandle, ConfigSectionProp
               ))}
             </SelectContent>
           </Select>
-        </div>
-        <div className="grid gap-2">
-          <Label>{t("asset.serialParity")}</Label>
+        </Field>
+        <Field label={t("asset.serialParity")} className="flex-1">
           <Select value={state.parity} onValueChange={(v) => patch({ parity: v })}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -204,11 +205,10 @@ export const SerialConfigSection = forwardRef<AssetFormHandle, ConfigSectionProp
               ))}
             </SelectContent>
           </Select>
-        </div>
-        <div className="grid gap-2">
-          <Label>{t("asset.serialFlowControl")}</Label>
+        </Field>
+        <Field label={t("asset.serialFlowControl")} className="flex-1">
           <Select value={state.flowControl} onValueChange={(v) => patch({ flowControl: v })}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -219,7 +219,7 @@ export const SerialConfigSection = forwardRef<AssetFormHandle, ConfigSectionProp
               ))}
             </SelectContent>
           </Select>
-        </div>
+        </Field>
       </div>
     </div>
   );

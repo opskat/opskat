@@ -1,11 +1,10 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
 import { Trash2, FolderOpen, Loader2, Lock } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
   Button,
   Input,
-  Label,
   Select,
   SelectContent,
   SelectItem,
@@ -15,7 +14,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@opskat/ui";
-import { ConfigTabs, type ConfigGroup, type ConfigTabsHandle } from "@/components/asset/ConfigTabs";
+import { Field, Segmented } from "@/components/asset/fields";
+import { ConfigTabs, type ConfigGroup } from "@/components/asset/ConfigTabs";
 import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
 import { ListCredentialsByType } from "../../../wailsjs/go/system/System";
@@ -69,7 +69,6 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
 
   // 排除自身,不能把自己选作跳板机 / SSH 隧道。
   const jumpHostExcludeIds = editAsset?.ID ? [editAsset.ID] : undefined;
-  const tabsRef = useRef<ConfigTabsHandle>(null);
 
   // host 为保存/测试共同必填;上报反应式校验(onValidityChange 为壳 setState,身份稳定)。
   useEffect(() => {
@@ -78,7 +77,6 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
       canTest: ok,
       canSave: ok,
       saveDisabledReason: ok ? "" : "asset.formMissingHost",
-      invalidGroupKey: ok ? undefined : "connection",
     });
   }, [state.host, onValidityChange]);
 
@@ -118,7 +116,6 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
         });
         return { assetType: "ssh", configJSON, password: cred.value.password };
       },
-      focusGroup: (key) => tabsRef.current?.setActive(key),
     }),
     [state, cred.value]
   );
@@ -127,22 +124,19 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
     {
       key: "connection",
       label: "asset.tabConnection",
-      invalid: !state.host.trim(),
       render: () => (
-        <div className="grid gap-3">
+        <div className="flex flex-col gap-4">
           {/* Host + Port (each labeled) */}
-          <div className="grid grid-cols-[1fr_120px] gap-3">
-            <div className="grid gap-2">
-              <Label>{t("asset.host")}</Label>
+          <div className="flex items-end gap-3">
+            <Field label={t("asset.host")} required className="flex-1">
               <Input
                 data-testid="ssh-host-input"
                 value={state.host}
                 onChange={(e) => patch({ host: e.target.value })}
                 placeholder="example.com"
               />
-            </div>
-            <div className="grid gap-2">
-              <Label>{t("asset.port")}</Label>
+            </Field>
+            <Field label={t("asset.port")} className="w-[110px] shrink-0">
               <Input
                 data-testid="ssh-port-input"
                 className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
@@ -151,35 +145,29 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
                 placeholder="22"
                 onChange={(e) => patch({ port: Number(e.target.value) })}
               />
-            </div>
+            </Field>
           </div>
 
           {/* Username + Auth type */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="grid gap-2">
-              <Label>{t("asset.username")}</Label>
+          <div className="flex items-end gap-3">
+            <Field label={t("asset.username")} className="flex-1">
               <Input
                 data-testid="ssh-username-input"
                 value={state.username}
                 onChange={(e) => patch({ username: e.target.value })}
               />
-            </div>
-            <div className="grid gap-2">
-              <Label>{t("asset.authType")}</Label>
-              <Select value={state.authType} onValueChange={(v) => patch({ authType: v })}>
-                <SelectTrigger data-testid="ssh-auth-type-select">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="password" data-testid="ssh-auth-type-option-password">
-                    {t("asset.authPassword")}
-                  </SelectItem>
-                  <SelectItem value="key" data-testid="ssh-auth-type-option-key">
-                    {t("asset.authKey")}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            </Field>
+            <Field label={t("asset.authType")} className="w-[190px] shrink-0">
+              <Segmented
+                value={state.authType}
+                onChange={(v) => patch({ authType: v })}
+                aria-label={t("asset.authType")}
+                options={[
+                  { value: "password", label: t("asset.authPassword"), testid: "ssh-auth-type-option-password" },
+                  { value: "key", label: t("asset.authKey"), testid: "ssh-auth-type-option-key" },
+                ]}
+              />
+            </Field>
           </div>
 
           {/* Password (when auth_type=password) */}
@@ -201,27 +189,21 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
 
           {/* Key config (inline, no nested border since we are already in a block) */}
           {state.authType === "key" && (
-            <div className="grid gap-3">
-              <div className="grid gap-2">
-                <Label>{t("asset.keySource")}</Label>
-                <Select value={state.keySource} onValueChange={(v) => patch({ keySource: v as "managed" | "file" })}>
-                  <SelectTrigger data-testid="ssh-key-source-select">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="managed" data-testid="ssh-key-source-option-managed">
-                      {t("asset.keySourceManaged")}
-                    </SelectItem>
-                    <SelectItem value="file" data-testid="ssh-key-source-option-file">
-                      {t("asset.keySourceFile")}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="flex flex-col gap-4">
+              <Field label={t("asset.keySource")}>
+                <Segmented
+                  value={state.keySource}
+                  onChange={(v) => patch({ keySource: v as "managed" | "file" })}
+                  aria-label={t("asset.keySource")}
+                  options={[
+                    { value: "managed", label: t("asset.keySourceManaged"), testid: "ssh-key-source-option-managed" },
+                    { value: "file", label: t("asset.keySourceFile"), testid: "ssh-key-source-option-file" },
+                  ]}
+                />
+              </Field>
 
               {state.keySource === "managed" && (
-                <div className="grid gap-2">
-                  <Label>{t("asset.selectKey")}</Label>
+                <Field label={t("asset.selectKey")}>
                   {managedKeys.length > 0 ? (
                     <Select
                       value={String(state.credentialId)}
@@ -237,7 +219,7 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
                         patch({ credentialId: id });
                       }}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger className="w-full">
                         <SelectValue placeholder={t("asset.selectKeyPlaceholder")} />
                       </SelectTrigger>
                       <SelectContent>
@@ -253,12 +235,11 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
                   ) : (
                     <p className="text-xs text-muted-foreground">{t("asset.noManagedKeys")}</p>
                   )}
-                </div>
+                </Field>
               )}
 
               {state.keySource === "file" && (
-                <div className="grid gap-2">
-                  <Label>{t("asset.discoveredKeys")}</Label>
+                <Field label={t("asset.discoveredKeys")}>
                   {scanningKeys ? (
                     <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
                       <Loader2 className="h-3 w-3 animate-spin" />
@@ -353,18 +334,16 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
 
                   {/* Passphrase for local key file */}
                   {state.selectedKeyPaths.length > 0 && (
-                    <div className="grid gap-1.5 mt-2">
-                      <Label className="text-xs">{t("sshKey.passphrase")}</Label>
+                    <Field label={t("sshKey.passphrase")} className="mt-1">
                       <Input
                         type="password"
-                        className="h-8 text-xs"
                         value={state.privateKeyPassphrase}
                         onChange={(e) => patch({ privateKeyPassphrase: e.target.value })}
                         placeholder={t("sshKey.passphrasePlaceholder")}
                       />
-                    </div>
+                    </Field>
                   )}
-                </div>
+                </Field>
               )}
             </div>
           )}
@@ -374,7 +353,6 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
     {
       key: "tunnel",
       label: "asset.tabTunnel",
-      optional: true,
       render: () => (
         <ConnectionMethodFields
           value={state}
@@ -387,5 +365,5 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
     },
   ];
 
-  return <ConfigTabs ref={tabsRef} groups={groups} />;
+  return <ConfigTabs groups={groups} />;
 });

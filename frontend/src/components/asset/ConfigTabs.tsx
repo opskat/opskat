@@ -1,67 +1,68 @@
-import { forwardRef, useImperativeHandle, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@opskat/ui";
+import { cn } from "@opskat/ui";
 
 export interface ConfigGroup {
-  /** 稳定标识,用于 focusGroup 跳转。 */
+  /** 稳定标识,用于激活态匹配与 data-testid。 */
   key: string;
   /** i18n key。 */
   label: string;
-  /** true → 标签显示"可选"标(第一个「连接」默认 false)。 */
-  optional?: boolean;
   /** 数量徽标(如 Connect 集群数);<=0 或 undefined 不显示。 */
   badge?: number;
-  /** 红点:该分组"已启用但必填没填全"。 */
-  invalid?: boolean;
   render: () => ReactNode;
-}
-
-export interface ConfigTabsHandle {
-  setActive: (key: string) => void;
 }
 
 interface ConfigTabsProps {
   groups: ConfigGroup[];
 }
 
-/** 资产表单类型配置的标签容器:多分组出顶部标签,单分组退化为无标签单面板。 */
-export const ConfigTabs = forwardRef<ConfigTabsHandle, ConfigTabsProps>(function ConfigTabs({ groups }, ref) {
+/** 资产表单类型配置的标签容器:多分组出"下划线坐于发丝线上"的标签,单分组退化为无标签单面板。 */
+export function ConfigTabs({ groups }: ConfigTabsProps) {
   const { t } = useTranslation();
   const [active, setActive] = useState(groups[0]?.key ?? "");
-
-  useImperativeHandle(ref, () => ({ setActive }), []);
 
   // 单分组:无标签,直接出内容。
   if (groups.length <= 1) {
     return <>{groups[0]?.render()}</>;
   }
 
+  const activeGroup = groups.find((g) => g.key === active) ?? groups[0];
+
   return (
-    <Tabs value={active} onValueChange={setActive} className="w-full">
-      <TabsList className="flex w-full justify-start overflow-x-auto">
-        {groups.map((g) => (
-          <TabsTrigger key={g.key} value={g.key} data-testid={`config-tab-${g.key}`} className="gap-1.5">
-            {t(g.label)}
-            {g.badge !== undefined && g.badge > 0 && (
-              <span className="rounded-full bg-primary/10 px-1.5 text-[10px] font-semibold text-primary">
-                {g.badge}
-              </span>
-            )}
-            {g.optional && <span className="text-[10px] text-muted-foreground">{t("asset.optional")}</span>}
-            {g.invalid && (
+    <div className="w-full">
+      <div role="tablist" className="flex items-end gap-6 border-b border-border">
+        {groups.map((g) => {
+          const isActive = g.key === activeGroup.key;
+          return (
+            <button
+              key={g.key}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              data-testid={`config-tab-${g.key}`}
+              onClick={() => setActive(g.key)}
+              className={cn(
+                "relative flex items-center gap-1.5 pb-[9px] text-[13.5px] whitespace-nowrap transition-colors outline-none focus-visible:text-foreground",
+                isActive ? "font-semibold text-primary" : "font-medium text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {t(g.label)}
+              {g.badge !== undefined && g.badge > 0 && (
+                <span className="rounded-full bg-primary/10 px-1.5 text-[10px] font-semibold text-primary">
+                  {g.badge}
+                </span>
+              )}
               <span
-                data-testid={`config-tab-dot-${g.key}`}
-                className="h-1.5 w-1.5 rounded-full bg-destructive ring-2 ring-destructive/20"
+                className={cn(
+                  "absolute inset-x-0 bottom-[-1px] h-0.5 rounded-full",
+                  isActive ? "bg-primary" : "bg-transparent"
+                )}
               />
-            )}
-          </TabsTrigger>
-        ))}
-      </TabsList>
-      {groups.map((g) => (
-        <TabsContent key={g.key} value={g.key} className="mt-3 space-y-3">
-          {g.render()}
-        </TabsContent>
-      ))}
-    </Tabs>
+            </button>
+          );
+        })}
+      </div>
+      <div className="mt-5">{activeGroup.render()}</div>
+    </div>
   );
-});
+}

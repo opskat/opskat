@@ -1,16 +1,7 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  Button,
-  Input,
-  Label,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-  Switch,
-} from "@opskat/ui";
+import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch } from "@opskat/ui";
+import { Field, FieldLabel, Segmented } from "@/components/asset/fields";
 import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
 import { AssetSelect } from "@/components/asset/AssetSelect";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
@@ -27,14 +18,13 @@ import {
   DATABASE_DEFAULTS,
   type DatabaseFormState,
 } from "./DatabaseConfigSection.config";
-import { ConfigTabs, type ConfigGroup, type ConfigTabsHandle } from "@/components/asset/ConfigTabs";
+import { ConfigTabs, type ConfigGroup } from "@/components/asset/ConfigTabs";
 
 export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function DatabaseConfigSection(
   { editAsset, onValidityChange, onIconChange },
   ref
 ) {
   const { t } = useTranslation();
-  const tabsRef = useRef<ConfigTabsHandle>(null);
   const [state, setState] = useState<DatabaseFormState>(() => {
     if (!editAsset) return { ...DATABASE_DEFAULTS };
     // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.ssh_asset_id || 0),
@@ -68,7 +58,6 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
       canTest: canSave,
       canSave,
       saveDisabledReason,
-      invalidGroupKey: canSave ? undefined : "connection",
     });
   }, [isSqlite, isRemoteSqlite, state.path, state.host, state.sshTunnelId, onValidityChange]);
 
@@ -89,7 +78,6 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
         configJSON: buildDatabaseConfig(state, resolveTestCredential(cred.value), state.proxyPassword),
         password: cred.value.password,
       }),
-      focusGroup: (key: string) => tabsRef.current?.setActive(key),
     }),
     [state, cred.value]
   );
@@ -98,14 +86,12 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
     {
       key: "connection",
       label: "asset.tabConnection",
-      invalid: isSqlite ? !state.path.trim() || (isRemoteSqlite && state.sshTunnelId <= 0) : !state.host.trim(),
       render: () => (
-        <div className="grid gap-3">
+        <div className="flex flex-col gap-4">
           {/* Database Driver */}
-          <div className="grid gap-2">
-            <Label>{t("asset.driver")}</Label>
+          <Field label={t("asset.driver")}>
             <Select value={state.driver} onValueChange={handleDriverChange}>
-              <SelectTrigger data-testid="database-driver-select">
+              <SelectTrigger data-testid="database-driver-select" className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -123,38 +109,37 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
                 </SelectItem>
               </SelectContent>
             </Select>
-          </div>
+          </Field>
 
           {isSqlite ? (
             <>
               {/* SQLite path field */}
-              <div className="grid gap-2">
-                <Label>{t("asset.sqliteSource")}</Label>
-                <Select
+              <Field label={t("asset.sqliteSource")}>
+                <Segmented
                   value={state.sqliteSource}
-                  onValueChange={(v) => {
+                  onChange={(v) => {
                     if (v === "remote_ssh_vfs") {
                       patch({ sqliteSource: "remote_ssh_vfs", connectionType: "jumphost" });
                     } else {
                       patch({ sqliteSource: "local", sshTunnelId: 0, connectionType: "direct" });
                     }
                   }}
-                >
-                  <SelectTrigger data-testid="database-sqlite-source-select">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="local" data-testid="database-sqlite-source-option-local">
-                      {t("asset.sqliteSourceLocal")}
-                    </SelectItem>
-                    <SelectItem value="remote_ssh_vfs" data-testid="database-sqlite-source-option-remote">
-                      {t("asset.sqliteSourceRemoteSSH")}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2">
-                <Label>{t("asset.sqliteFilePath")}</Label>
+                  aria-label={t("asset.sqliteSource")}
+                  options={[
+                    {
+                      value: "local",
+                      label: t("asset.sqliteSourceLocal"),
+                      testid: "database-sqlite-source-option-local",
+                    },
+                    {
+                      value: "remote_ssh_vfs",
+                      label: t("asset.sqliteSourceRemoteSSH"),
+                      testid: "database-sqlite-source-option-remote",
+                    },
+                  ]}
+                />
+              </Field>
+              <Field label={t("asset.sqliteFilePath")}>
                 <div className="flex gap-2">
                   <Input
                     data-testid="database-sqlite-path-input"
@@ -175,10 +160,9 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
                     </Button>
                   )}
                 </div>
-              </div>
+              </Field>
               {isRemoteSqlite && (
-                <div className="grid gap-2">
-                  <Label>{t("asset.sqliteRemoteSSH")}</Label>
+                <Field label={t("asset.sqliteRemoteSSH")}>
                   <AssetSelect
                     value={state.sshTunnelId}
                     onValueChange={(v) => patch({ sshTunnelId: v, connectionType: "jumphost" })}
@@ -186,24 +170,22 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
                     placeholder={t("asset.jumpHostNone")}
                     testId="database-sqlite-ssh-select"
                   />
-                </div>
+                </Field>
               )}
             </>
           ) : (
             <>
               {/* Host + Port (each labeled) */}
-              <div className="grid grid-cols-[1fr_120px] gap-3">
-                <div className="grid gap-2">
-                  <Label>{t("asset.host")}</Label>
+              <div className="flex items-end gap-3">
+                <Field label={t("asset.host")} required className="flex-1">
                   <Input
                     data-testid="database-host-input"
                     value={state.host}
                     onChange={(e) => patch({ host: e.target.value })}
                     placeholder="example.com"
                   />
-                </div>
-                <div className="grid gap-2">
-                  <Label>{t("asset.port")}</Label>
+                </Field>
+                <Field label={t("asset.port")} className="w-[110px] shrink-0">
                   <Input
                     data-testid="database-port-input"
                     className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
@@ -212,18 +194,17 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
                     placeholder={state.driver === "postgresql" ? "5432" : state.driver === "mssql" ? "1433" : "3306"}
                     onChange={(e) => patch({ port: Number(e.target.value) })}
                   />
-                </div>
+                </Field>
               </div>
 
               {/* Username */}
-              <div className="grid gap-2">
-                <Label>{t("asset.username")}</Label>
+              <Field label={t("asset.username")}>
                 <Input
                   data-testid="database-username-input"
                   value={state.username}
                   onChange={(e) => patch({ username: e.target.value })}
                 />
-              </div>
+              </Field>
 
               {/* Password */}
               <PasswordSourceField
@@ -240,15 +221,14 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
               />
 
               {/* Database name */}
-              <div className="grid gap-2">
-                <Label>{t("asset.database")}</Label>
+              <Field label={t("asset.database")}>
                 <Input
                   data-testid="database-name-input"
                   value={state.database}
                   onChange={(e) => patch({ database: e.target.value })}
                   placeholder={t("asset.databasePlaceholder")}
                 />
-              </div>
+              </Field>
             </>
           )}
         </div>
@@ -257,21 +237,18 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
     {
       key: "tunnel",
       label: "asset.tabTunnel",
-      optional: true,
       render: () => <ConnectionMethodFields value={state} onChange={patch} />,
     },
     {
       key: "tls",
       label: "asset.tabTls",
-      optional: true,
       render: () => (
-        <div className="grid gap-3">
+        <div className="flex flex-col gap-4">
           {/* SSL Mode (PostgreSQL only) */}
           {state.driver === "postgresql" && (
-            <div className="grid gap-2">
-              <Label>{t("asset.sslMode")}</Label>
+            <Field label={t("asset.sslMode")}>
               <Select value={state.sslMode} onValueChange={(v) => patch({ sslMode: v })}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -281,13 +258,13 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
                   <SelectItem value="verify-full">verify-full</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
+            </Field>
           )}
 
           {/* TLS (MySQL + MSSQL) */}
           {(state.driver === "mysql" || state.driver === "mssql") && (
             <div className="flex items-center justify-between">
-              <Label>TLS</Label>
+              <FieldLabel>TLS</FieldLabel>
               <Switch checked={state.tls} onCheckedChange={(v) => patch({ tls: v })} />
             </div>
           )}
@@ -297,22 +274,20 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
     {
       key: "advanced",
       label: "asset.tabAdvanced",
-      optional: true,
       render: () => (
-        <div className="grid gap-3">
+        <div className="flex flex-col gap-4">
           {/* Params */}
-          <div className="grid gap-2">
-            <Label>{t("asset.params")}</Label>
+          <Field label={t("asset.params")}>
             <Input
               value={state.params}
               onChange={(e) => patch({ params: e.target.value })}
               placeholder={t("asset.paramsPlaceholder")}
             />
-          </div>
+          </Field>
 
           {/* Read Only */}
           <div className="flex items-center justify-between">
-            <Label>{t("asset.readOnly")}</Label>
+            <FieldLabel>{t("asset.readOnly")}</FieldLabel>
             <Switch checked={state.readOnly} onCheckedChange={(v) => patch({ readOnly: v })} />
           </div>
         </div>
@@ -320,5 +295,5 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
     },
   ];
 
-  return <ConfigTabs ref={tabsRef} groups={groups} />;
+  return <ConfigTabs groups={groups} />;
 });

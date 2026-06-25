@@ -12,8 +12,8 @@ import {
   DialogFooter,
   Button,
   Input,
-  Label,
 } from "@opskat/ui";
+import { Field } from "@/components/asset/fields";
 import { DescriptionBar } from "@/components/asset/DescriptionBar";
 import { IconPicker } from "@/components/asset/IconPicker";
 import { GroupSelect } from "@/components/asset/GroupSelect";
@@ -282,21 +282,27 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const saveDisabled = saving || !!saveDisabledReason || (!!sectionDef?.ConfigSection && !validity.canSave);
 
   const testConnectionButton = !isTestableAssetType ? null : testing && activeTestIdRef.current ? (
-    <Button type="button" variant="outline" size="sm" onClick={handleCancelTest} className="gap-1 w-fit">
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      onClick={handleCancelTest}
+      className="-ml-2 w-fit gap-1.5 px-2 text-primary hover:bg-primary/10 hover:text-primary"
+    >
       <Loader2 className="h-3.5 w-3.5 animate-spin" />
       {t("asset.testing")}
-      <XCircle className="h-3.5 w-3.5 ml-1" />
+      <XCircle className="ml-1 h-3.5 w-3.5" />
       {t("asset.cancelTest")}
     </Button>
   ) : (
     <Button
       type="button"
-      variant="outline"
+      variant="ghost"
       size="sm"
       data-testid="asset-test-connection"
       onClick={handleGenericTestConnection}
       disabled={isTestConnectionDisabled}
-      className="gap-1 w-fit"
+      className="-ml-2 w-fit gap-1.5 px-2 text-primary hover:bg-primary/10 hover:text-primary disabled:text-muted-foreground"
     >
       {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlugZap className="h-3.5 w-3.5" />}
       {testing ? t("asset.testing") : t("asset.testConnection")}
@@ -313,32 +319,31 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     >
       <DialogContent
         data-testid="asset-form-dialog"
-        className="sm:max-w-2xl max-h-[85vh] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0"
+        className="sm:max-w-[600px] max-h-[85vh] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0"
         onInteractOutside={(e) => e.preventDefault()}
       >
-        <DialogHeader className="border-b px-6 pt-6 pb-3">
-          <DialogTitle>
+        <DialogHeader className="border-b px-6 pt-[22px] pb-[18px] text-left">
+          <DialogTitle className="text-[17px]">
             {editAsset ? t("action.edit") : t("action.add")} {typeLabel}
           </DialogTitle>
-          <DialogDescription>{t("asset.formDescription")}</DialogDescription>
+          <DialogDescription className="text-[12.5px]">{t("asset.formDescription")}</DialogDescription>
         </DialogHeader>
-        <div className="min-h-0 overflow-y-auto px-6 py-4">
-          <div className="grid gap-4">
+        <div className="min-h-0 overflow-y-auto px-6 py-5">
+          <div className="flex flex-col gap-[22px]">
             {/* Asset Type */}
             {!editAsset && (
-              <div className="grid gap-2">
-                <Label>{t("asset.type")}</Label>
+              <Field label={t("asset.type")}>
                 <AssetTypePicker value={assetType} onChange={(v) => handleTypeChange(v as AssetType)} />
-              </div>
+              </Field>
             )}
 
-            {/* Icon + Name (same row, icon-first compact picker) */}
-            <div className="grid gap-2">
-              <Label>{t("asset.name")}</Label>
-              <div className="flex gap-2">
+            {/* Icon + Name + Group (single row) */}
+            <div className="flex items-end gap-[14px]">
+              <Field label={t("asset.icon")} className="w-14 shrink-0">
                 <IconPicker value={icon} onChange={setIcon} type="asset" compact />
+              </Field>
+              <Field label={t("asset.name")} className="min-w-0 flex-1">
                 <Input
-                  className="flex-1"
                   data-testid="asset-form-name-input"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
@@ -358,13 +363,10 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                                 : `prod-${assetType}-01`
                   }
                 />
-              </div>
-            </div>
-
-            {/* Group */}
-            <div className="grid gap-2">
-              <Label>{t("asset.group")}</Label>
-              <GroupSelect value={groupId} onValueChange={setGroupId} />
+              </Field>
+              <Field label={t("asset.group")} className="w-[168px] shrink-0">
+                <GroupSelect value={groupId} onValueChange={setGroupId} />
+              </Field>
             </div>
 
             {/* 注册化类型:通用 ConfigSection 路径 */}
@@ -401,29 +403,19 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             <DescriptionBar value={description} onChange={setDescription} />
           </div>
         </div>
-        <DialogFooter className="border-t bg-background px-6 py-3 sm:items-center sm:justify-between">
+        <DialogFooter className="border-t bg-background px-6 py-4 sm:items-center sm:justify-between">
           <div className="flex min-w-0 flex-1 flex-col gap-1">
             {testConnectionButton}
             {saveDisabledReason && (
               <p className="flex items-center gap-1 text-xs text-muted-foreground">
                 <AlertCircle className="h-3.5 w-3.5 shrink-0" />
                 {t(saveDisabledReason)}
-                {name.trim() && validity.invalidGroupKey && (
-                  <button
-                    type="button"
-                    data-testid="goto-invalid-tab"
-                    className="underline underline-offset-2"
-                    onClick={() => sectionRef.current?.focusGroup?.(validity.invalidGroupKey!)}
-                  >
-                    {t("asset.goToTab")}
-                  </button>
-                )}
               </p>
             )}
           </div>
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <Button
-              variant="outline"
+              variant="ghost"
               onClick={() => {
                 cancelActiveTest();
                 onOpenChange(false);

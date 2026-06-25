@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Trash2 } from "lucide-react";
 import {
@@ -13,7 +13,8 @@ import {
   Switch,
   Textarea,
 } from "@opskat/ui";
-import { ConfigTabs, type ConfigGroup, type ConfigTabsHandle } from "@/components/asset/ConfigTabs";
+import { Field, Segmented } from "@/components/asset/fields";
+import { ConfigTabs, type ConfigGroup } from "@/components/asset/ConfigTabs";
 import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
 import { resolveSaveProxyPassword } from "./proxyConfig";
@@ -279,7 +280,6 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
   });
 
   const saslEnabled = state.saslMechanism !== "none";
-  const tabsRef = useRef<ConfigTabsHandle>(null);
 
   const brokersOk = kafkaBrokers(state.brokersText).length > 0;
   const schemaRegistryInvalid = schemaRegistry.enabled && !schemaRegistry.url.trim();
@@ -292,23 +292,18 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
     })();
 
   useEffect(() => {
-    let invalidGroupKey: string | undefined;
     let saveDisabledReason = "";
     if (!brokersOk) {
-      invalidGroupKey = "connection";
       saveDisabledReason = "asset.formMissingKafkaBrokers";
     } else if (schemaRegistryInvalid) {
-      invalidGroupKey = "schema_registry";
       saveDisabledReason = "asset.kafkaSchemaRegistryURLRequired";
     } else if (connectInvalid) {
-      invalidGroupKey = "connect";
       saveDisabledReason = "asset.kafkaConnectClusterInvalid";
     }
     onValidityChange({
       canTest: brokersOk,
       canSave: brokersOk && !schemaRegistryInvalid && !connectInvalid,
       saveDisabledReason,
-      invalidGroupKey,
     });
   }, [brokersOk, schemaRegistryInvalid, connectInvalid, onValidityChange]);
 
@@ -337,7 +332,6 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
         if (saslEnabled) appendKafkaCredential(cfg, resolveTestCredential(cred.value));
         return { assetType: "kafka", configJSON: JSON.stringify(cfg), password: cred.value.password };
       },
-      focusGroup: (key) => tabsRef.current?.setActive(key),
     }),
     [state, cred.value, saslEnabled, schemaRegistry, connectEnabled, connectClusters, t]
   );
@@ -346,11 +340,9 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
     {
       key: "connection",
       label: "asset.tabConnection",
-      invalid: !brokersOk,
       render: () => (
-        <div className="grid gap-3">
-          <div className="grid gap-2">
-            <Label>{t("asset.kafkaBrokers")}</Label>
+        <div className="flex flex-col gap-4">
+          <Field label={t("asset.kafkaBrokers")} required>
             <Textarea
               value={state.brokersText}
               onChange={(e) => patch({ brokersText: e.target.value })}
@@ -358,12 +350,11 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
               className="font-mono text-sm"
               placeholder="192.168.100.50:9092"
             />
-          </div>
+          </Field>
 
-          <div className="grid gap-2">
-            <Label>{t("asset.kafkaSaslMechanism")}</Label>
+          <Field label={t("asset.kafkaSaslMechanism")}>
             <Select value={state.saslMechanism} onValueChange={(v) => patch({ saslMechanism: v })}>
-              <SelectTrigger>
+              <SelectTrigger className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -373,14 +364,13 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
                 <SelectItem value="scram-sha-512">SCRAM-SHA-512</SelectItem>
               </SelectContent>
             </Select>
-          </div>
+          </Field>
 
           {saslEnabled && (
             <>
-              <div className="grid gap-2">
-                <Label>{t("asset.username")}</Label>
+              <Field label={t("asset.username")}>
                 <Input value={state.username} onChange={(e) => patch({ username: e.target.value })} />
-              </div>
+              </Field>
               <PasswordSourceField
                 source={cred.value.passwordSource}
                 onSourceChange={cred.setPasswordSource}
@@ -401,15 +391,13 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
     {
       key: "tunnel",
       label: "asset.tabTunnel",
-      optional: true,
       render: () => <ConnectionMethodFields value={state} onChange={patch} />,
     },
     {
       key: "tls",
       label: "asset.tabTls",
-      optional: true,
       render: () => (
-        <div className="grid gap-3">
+        <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between">
             <Label>{t("asset.tls")}</Label>
             <Switch checked={state.tls} onCheckedChange={(v) => patch({ tls: v })} />
@@ -421,38 +409,34 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
                 <Label>{t("asset.kafkaTlsInsecure")}</Label>
                 <Switch checked={state.tlsInsecure} onCheckedChange={(v) => patch({ tlsInsecure: v })} />
               </div>
-              <div className="grid gap-2">
-                <Label>{t("asset.kafkaTlsServerName")}</Label>
+              <Field label={t("asset.kafkaTlsServerName")}>
                 <Input
                   value={state.tlsServerName}
                   onChange={(e) => patch({ tlsServerName: e.target.value })}
                   placeholder="kafka.example.com"
                 />
-              </div>
-              <div className="grid gap-2">
-                <Label>{t("asset.kafkaTlsCAFile")}</Label>
+              </Field>
+              <Field label={t("asset.kafkaTlsCAFile")}>
                 <Input
                   value={state.tlsCAFile}
                   onChange={(e) => patch({ tlsCAFile: e.target.value })}
                   placeholder="/path/to/ca.pem"
                 />
-              </div>
-              <div className="grid gap-2">
-                <Label>{t("asset.kafkaTlsCertFile")}</Label>
+              </Field>
+              <Field label={t("asset.kafkaTlsCertFile")}>
                 <Input
                   value={state.tlsCertFile}
                   onChange={(e) => patch({ tlsCertFile: e.target.value })}
                   placeholder="/path/to/client.crt"
                 />
-              </div>
-              <div className="grid gap-2">
-                <Label>{t("asset.kafkaTlsKeyFile")}</Label>
+              </Field>
+              <Field label={t("asset.kafkaTlsKeyFile")}>
                 <Input
                   value={state.tlsKeyFile}
                   onChange={(e) => patch({ tlsKeyFile: e.target.value })}
                   placeholder="/path/to/client.key"
                 />
-              </div>
+              </Field>
             </>
           )}
         </div>
@@ -461,10 +445,8 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
     {
       key: "schema_registry",
       label: "asset.tabSchemaRegistry",
-      optional: true,
-      invalid: schemaRegistryInvalid,
       render: () => (
-        <div className="grid gap-3">
+        <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between gap-3">
             <Label>{t("asset.kafkaSchemaRegistry")}</Label>
             <Switch
@@ -475,14 +457,13 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
           </div>
           {schemaRegistry.enabled && (
             <>
-              <div className="grid gap-2">
-                <Label>{t("asset.kafkaSchemaRegistryURL")}</Label>
+              <Field label={t("asset.kafkaSchemaRegistryURL")} required>
                 <Input
                   value={schemaRegistry.url}
                   onChange={(e) => setSchemaRegistry({ url: e.target.value })}
                   placeholder="http://schema-registry.example.com:8081"
                 />
-              </div>
+              </Field>
               <KafkaCompanionAuthFields
                 value={schemaRegistry}
                 onChange={setSchemaRegistry}
@@ -496,11 +477,9 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
     {
       key: "connect",
       label: "asset.tabConnect",
-      optional: true,
       badge: connectEnabled ? connectClusters.length : undefined,
-      invalid: connectInvalid,
       render: () => (
-        <div className="grid gap-3">
+        <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between gap-3">
             <Label>{t("asset.kafkaConnect")}</Label>
             <Switch
@@ -514,7 +493,7 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
             />
           </div>
           {connectEnabled && (
-            <div className="grid gap-3">
+            <div className="flex flex-col gap-4">
               {connectClusters.map((cluster, index) => (
                 <KafkaConnectClusterEditor
                   key={cluster.id}
@@ -547,16 +526,13 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
     {
       key: "advanced",
       label: "asset.tabAdvanced",
-      optional: true,
       render: () => (
-        <div className="grid gap-3">
-          <div className="grid gap-2">
-            <Label>{t("asset.kafkaClientId")}</Label>
+        <div className="flex flex-col gap-4">
+          <Field label={t("asset.kafkaClientId")}>
             <Input value={state.clientId} onChange={(e) => patch({ clientId: e.target.value })} placeholder="opskat" />
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            <div className="grid gap-2">
-              <Label>{t("asset.kafkaRequestTimeout")}</Label>
+          </Field>
+          <div className="flex items-end gap-3">
+            <Field label={t("asset.kafkaRequestTimeout")} className="flex-1">
               <Input
                 className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 type="number"
@@ -565,9 +541,8 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
                 value={state.requestTimeoutSeconds}
                 onChange={(e) => patch({ requestTimeoutSeconds: normalizedNumber(e.target.value, 30) })}
               />
-            </div>
-            <div className="grid gap-2">
-              <Label>{t("asset.kafkaMessagePreviewBytes")}</Label>
+            </Field>
+            <Field label={t("asset.kafkaMessagePreviewBytes")} className="flex-1">
               <Input
                 className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 type="number"
@@ -575,9 +550,8 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
                 value={state.messagePreviewBytes}
                 onChange={(e) => patch({ messagePreviewBytes: normalizedNumber(e.target.value, 4096) })}
               />
-            </div>
-            <div className="grid gap-2">
-              <Label>{t("asset.kafkaMessageFetchLimit")}</Label>
+            </Field>
+            <Field label={t("asset.kafkaMessageFetchLimit")} className="flex-1">
               <Input
                 className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 type="number"
@@ -586,14 +560,14 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
                 value={state.messageFetchLimit}
                 onChange={(e) => patch({ messageFetchLimit: normalizedNumber(e.target.value, 50) })}
               />
-            </div>
+            </Field>
           </div>
         </div>
       ),
     },
   ];
 
-  return <ConfigTabs ref={tabsRef} groups={groups} />;
+  return <ConfigTabs groups={groups} />;
 });
 
 function KafkaCompanionAuthFields({
@@ -609,30 +583,25 @@ function KafkaCompanionAuthFields({
   const authEnabled = value.authType !== "none";
 
   return (
-    <div className="grid gap-3">
-      <div className="grid gap-2">
-        <Label>{t("asset.kafkaCompanionAuthType")}</Label>
-        <Select
+    <div className="flex flex-col gap-4">
+      <Field label={t("asset.kafkaCompanionAuthType")}>
+        <Segmented
           value={value.authType}
-          onValueChange={(authType) => onChange(kafkaCompanionAuthTypePatch(value, authType))}
-        >
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">{t("asset.kafkaSaslNone")}</SelectItem>
-            <SelectItem value="basic">Basic</SelectItem>
-            <SelectItem value="bearer">Bearer</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
+          onChange={(authType) => onChange(kafkaCompanionAuthTypePatch(value, authType))}
+          aria-label={t("asset.kafkaCompanionAuthType")}
+          options={[
+            { value: "none", label: t("asset.kafkaSaslNone") },
+            { value: "basic", label: "Basic" },
+            { value: "bearer", label: "Bearer" },
+          ]}
+        />
+      </Field>
       {authEnabled && (
         <>
           {value.authType !== "bearer" && (
-            <div className="grid gap-2">
-              <Label>{t("asset.username")}</Label>
+            <Field label={t("asset.username")}>
               <Input value={value.username} onChange={(e) => onChange({ username: e.target.value })} />
-            </div>
+            </Field>
           )}
           <PasswordSourceField
             source={value.passwordSource}
@@ -653,23 +622,19 @@ function KafkaCompanionAuthFields({
         <Label>{t("asset.kafkaTlsInsecure")}</Label>
         <Switch checked={value.tlsInsecure} onCheckedChange={(tlsInsecure) => onChange({ tlsInsecure })} />
       </div>
-      <div className="grid gap-2">
-        <Label>{t("asset.kafkaTlsServerName")}</Label>
+      <Field label={t("asset.kafkaTlsServerName")}>
         <Input value={value.tlsServerName} onChange={(e) => onChange({ tlsServerName: e.target.value })} />
-      </div>
-      <div className="grid gap-2">
-        <Label>{t("asset.kafkaTlsCAFile")}</Label>
+      </Field>
+      <Field label={t("asset.kafkaTlsCAFile")}>
         <Input value={value.tlsCAFile} onChange={(e) => onChange({ tlsCAFile: e.target.value })} />
-      </div>
-      <div className="grid gap-2 md:grid-cols-2">
-        <div className="grid gap-2">
-          <Label>{t("asset.kafkaTlsCertFile")}</Label>
+      </Field>
+      <div className="flex items-end gap-3">
+        <Field label={t("asset.kafkaTlsCertFile")} className="flex-1">
           <Input value={value.tlsCertFile} onChange={(e) => onChange({ tlsCertFile: e.target.value })} />
-        </div>
-        <div className="grid gap-2">
-          <Label>{t("asset.kafkaTlsKeyFile")}</Label>
+        </Field>
+        <Field label={t("asset.kafkaTlsKeyFile")} className="flex-1">
           <Input value={value.tlsKeyFile} onChange={(e) => onChange({ tlsKeyFile: e.target.value })} />
-        </div>
+        </Field>
       </div>
     </div>
   );
@@ -702,26 +667,24 @@ function KafkaConnectClusterEditor({
   const { t } = useTranslation();
 
   return (
-    <div className="grid gap-3 rounded-md border bg-muted/20 p-3">
+    <div className="flex flex-col gap-4 rounded-md border bg-muted/20 p-3">
       <div className="flex items-center justify-between gap-2">
         <Label>{t("asset.kafkaConnectClusterNumber", { index: index + 1 })}</Label>
         <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={onRemove}>
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
-      <div className="grid gap-2 md:grid-cols-2">
-        <div className="grid gap-2">
-          <Label>{t("asset.kafkaConnectClusterName")}</Label>
+      <div className="flex items-end gap-3">
+        <Field label={t("asset.kafkaConnectClusterName")} required className="flex-1">
           <Input value={value.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="primary" />
-        </div>
-        <div className="grid gap-2">
-          <Label>{t("asset.kafkaConnectClusterURL")}</Label>
+        </Field>
+        <Field label={t("asset.kafkaConnectClusterURL")} required className="flex-1">
           <Input
             value={value.url}
             onChange={(e) => onChange({ url: e.target.value })}
             placeholder="http://connect.example.com:8083"
           />
-        </div>
+        </Field>
       </div>
       <KafkaCompanionAuthFields value={value} onChange={onChange} managedPasswords={managedPasswords} />
     </div>

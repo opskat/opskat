@@ -1,6 +1,7 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Input, Label, Switch, Tabs, TabsList, TabsTrigger, TabsContent } from "@opskat/ui";
+import { Input, Label, Switch } from "@opskat/ui";
+import { Field, Segmented } from "@/components/asset/fields";
 import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
 import { resolveSaveProxyPassword } from "./proxyConfig";
@@ -13,7 +14,7 @@ import {
   MONGODB_DEFAULTS,
   type MongoDBFormState,
 } from "./MongoDBConfigSection.config";
-import { ConfigTabs, type ConfigGroup, type ConfigTabsHandle } from "@/components/asset/ConfigTabs";
+import { ConfigTabs, type ConfigGroup } from "@/components/asset/ConfigTabs";
 
 export const MongoDBConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function MongoDBConfigSection(
   { editAsset, onValidityChange },
@@ -28,7 +29,6 @@ export const MongoDBConfigSection = forwardRef<AssetFormHandle, ConfigSectionPro
   });
   const patch = (p: Partial<MongoDBFormState>) => setState((s) => ({ ...s, ...p }));
   const cred = useAssetCredential(editAsset);
-  const tabsRef = useRef<ConfigTabsHandle>(null);
 
   // 保存/测试必填:mode 依赖校验;上报反应式校验(onValidityChange 为壳 setState,身份稳定)。
   useEffect(() => {
@@ -38,7 +38,7 @@ export const MongoDBConfigSection = forwardRef<AssetFormHandle, ConfigSectionPro
       : state.connectionMode === "uri"
         ? "asset.formMissingMongoUri"
         : "asset.formMissingHost";
-    onValidityChange({ canTest: ok, canSave: ok, saveDisabledReason, invalidGroupKey: ok ? undefined : "connection" });
+    onValidityChange({ canTest: ok, canSave: ok, saveDisabledReason });
   }, [state.connectionMode, state.connectionURI, state.host, onValidityChange]);
 
   useImperativeHandle(
@@ -59,7 +59,6 @@ export const MongoDBConfigSection = forwardRef<AssetFormHandle, ConfigSectionPro
         configJSON: buildMongoDBConfig(state, resolveTestCredential(cred.value), true, state.proxyPassword),
         password: cred.value.password,
       }),
-      focusGroup: (key) => tabsRef.current?.setActive(key),
     }),
     [state, cred.value]
   );
@@ -68,58 +67,52 @@ export const MongoDBConfigSection = forwardRef<AssetFormHandle, ConfigSectionPro
     {
       key: "connection",
       label: "asset.tabConnection",
-      invalid: !(state.connectionMode === "uri" ? state.connectionURI.trim() : state.host.trim()),
       render: () => (
-        <div className="grid gap-3">
-          {/* Connection Mode Toggle (inner manual/URI sub-switch — kept verbatim) */}
-          <Tabs value={state.connectionMode} onValueChange={(v) => patch({ connectionMode: v as "manual" | "uri" })}>
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="manual">Manual</TabsTrigger>
-              <TabsTrigger value="uri">URI</TabsTrigger>
-            </TabsList>
+        <div className="flex flex-col gap-4">
+          {/* Connection Mode Toggle (manual fields vs connection URI) */}
+          <Segmented
+            value={state.connectionMode}
+            onChange={(v) => patch({ connectionMode: v })}
+            aria-label={t("asset.mongoUri")}
+            options={[
+              { value: "manual", label: "Manual" },
+              { value: "uri", label: "URI" },
+            ]}
+          />
 
-            <TabsContent value="manual" className="space-y-3 mt-3">
-              {/* Host + Port (each labeled) */}
-              <div className="grid grid-cols-[1fr_120px] gap-3">
-                <div className="grid gap-2">
-                  <Label>{t("asset.host")}</Label>
-                  <Input
-                    value={state.host}
-                    onChange={(e) => patch({ host: e.target.value })}
-                    placeholder="example.com"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label>{t("asset.port")}</Label>
-                  <Input
-                    className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                    type="number"
-                    value={state.port || ""}
-                    placeholder="27017"
-                    onChange={(e) => patch({ port: Number(e.target.value) })}
-                  />
-                </div>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="uri" className="space-y-3 mt-3">
-              {/* Connection URI */}
-              <div className="grid gap-2">
-                <Label>{t("asset.mongoUri")}</Label>
+          {state.connectionMode === "manual" && (
+            /* Host + Port (each labeled) */
+            <div className="flex items-end gap-3">
+              <Field label={t("asset.host")} className="flex-1">
+                <Input value={state.host} onChange={(e) => patch({ host: e.target.value })} placeholder="example.com" />
+              </Field>
+              <Field label={t("asset.port")} className="w-[110px] shrink-0">
                 <Input
-                  value={state.connectionURI}
-                  onChange={(e) => patch({ connectionURI: e.target.value })}
-                  placeholder={t("asset.mongoUriPlaceholder")}
+                  className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  type="number"
+                  value={state.port || ""}
+                  placeholder="27017"
+                  onChange={(e) => patch({ port: Number(e.target.value) })}
                 />
-              </div>
-            </TabsContent>
-          </Tabs>
+              </Field>
+            </div>
+          )}
+
+          {state.connectionMode === "uri" && (
+            /* Connection URI */
+            <Field label={t("asset.mongoUri")}>
+              <Input
+                value={state.connectionURI}
+                onChange={(e) => patch({ connectionURI: e.target.value })}
+                placeholder={t("asset.mongoUriPlaceholder")}
+              />
+            </Field>
+          )}
 
           {/* Username */}
-          <div className="grid gap-2">
-            <Label>{t("asset.username")}</Label>
+          <Field label={t("asset.username")}>
             <Input value={state.username} onChange={(e) => patch({ username: e.target.value })} />
-          </div>
+          </Field>
 
           {/* Password */}
           <PasswordSourceField
@@ -136,29 +129,26 @@ export const MongoDBConfigSection = forwardRef<AssetFormHandle, ConfigSectionPro
           />
 
           {/* Default Database */}
-          <div className="grid gap-2">
-            <Label>{t("asset.mongoDefaultDatabase")}</Label>
+          <Field label={t("asset.mongoDefaultDatabase")}>
             <Input
               value={state.database}
               onChange={(e) => patch({ database: e.target.value })}
               placeholder={t("asset.mongoDefaultDatabasePlaceholder")}
             />
-          </div>
+          </Field>
         </div>
       ),
     },
     {
       key: "tunnel",
       label: "asset.tabTunnel",
-      optional: true,
       render: () => <ConnectionMethodFields value={state} onChange={patch} />,
     },
     {
       key: "tls",
       label: "asset.tabTls",
-      optional: true,
       render: () => (
-        <div className="grid gap-3">
+        <div className="flex flex-col gap-4">
           {/* TLS toggle (MongoDB: toggle only, no cert files) */}
           <div className="flex items-center justify-between">
             <Label>{t("asset.tls")}</Label>
@@ -170,32 +160,29 @@ export const MongoDBConfigSection = forwardRef<AssetFormHandle, ConfigSectionPro
     {
       key: "advanced",
       label: "asset.tabAdvanced",
-      optional: true,
       render: () => (
-        <div className="grid gap-3">
+        <div className="flex flex-col gap-4">
           {/* Replica Set */}
-          <div className="grid gap-2">
-            <Label>{t("asset.mongoReplicaSet")}</Label>
+          <Field label={t("asset.mongoReplicaSet")}>
             <Input
               value={state.replicaSet}
               onChange={(e) => patch({ replicaSet: e.target.value })}
               placeholder={t("asset.mongoReplicaSetPlaceholder")}
             />
-          </div>
+          </Field>
 
           {/* Auth Source */}
-          <div className="grid gap-2">
-            <Label>{t("asset.mongoAuthSource")}</Label>
+          <Field label={t("asset.mongoAuthSource")}>
             <Input
               value={state.authSource}
               onChange={(e) => patch({ authSource: e.target.value })}
               placeholder={t("asset.mongoAuthSourcePlaceholder")}
             />
-          </div>
+          </Field>
         </div>
       ),
     },
   ];
 
-  return <ConfigTabs ref={tabsRef} groups={groups} />;
+  return <ConfigTabs groups={groups} />;
 });

@@ -22,7 +22,6 @@ describe("KafkaConfigSection ref 契约", () => {
       canTest: false,
       canSave: false,
       saveDisabledReason: "asset.formMissingKafkaBrokers",
-      invalidGroupKey: "connection",
     });
   });
 
@@ -35,7 +34,6 @@ describe("KafkaConfigSection ref 契约", () => {
       canTest: true,
       canSave: true,
       saveDisabledReason: "",
-      invalidGroupKey: undefined,
     });
   });
 

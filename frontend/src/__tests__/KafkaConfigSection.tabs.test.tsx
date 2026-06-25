@@ -25,8 +25,7 @@ describe("KafkaConfigSection tabs", () => {
     await userEvent.click(screen.getByTestId("config-tab-schema_registry"));
     await userEvent.click(screen.getByTestId("kafka-sr-enabled"));
     expect(onValidity).toHaveBeenLastCalledWith(
-      expect.objectContaining({ canSave: false, invalidGroupKey: "schema_registry" })
+      expect.objectContaining({ canSave: false, saveDisabledReason: "asset.kafkaSchemaRegistryURLRequired" })
     );
-    expect(screen.getByTestId("config-tab-dot-schema_registry")).toBeInTheDocument();
   });
 });

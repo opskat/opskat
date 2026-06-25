@@ -1,6 +1,7 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Input, Label, Switch } from "@opskat/ui";
+import { Input, Switch } from "@opskat/ui";
+import { Field, FieldLabel } from "@/components/asset/fields";
 import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
 import { resolveSaveProxyPassword } from "./proxyConfig";
@@ -8,7 +9,7 @@ import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formC
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
 import { buildRedisConfig, parseRedisConfig, REDIS_DEFAULTS, type RedisFormState } from "./RedisConfigSection.config";
-import { ConfigTabs, type ConfigGroup, type ConfigTabsHandle } from "@/components/asset/ConfigTabs";
+import { ConfigTabs, type ConfigGroup } from "@/components/asset/ConfigTabs";
 
 export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function RedisConfigSection(
   { editAsset, onValidityChange },
@@ -23,7 +24,6 @@ export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
   });
   const patch = (p: Partial<RedisFormState>) => setState((s) => ({ ...s, ...p }));
   const cred = useAssetCredential(editAsset);
-  const tabsRef = useRef<ConfigTabsHandle>(null);
 
   // host 为保存/测试共同必填;上报反应式校验(onValidityChange 为壳 setState,身份稳定)。
   useEffect(() => {
@@ -32,7 +32,6 @@ export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
       canTest: ok,
       canSave: ok,
       saveDisabledReason: ok ? "" : "asset.formMissingHost",
-      invalidGroupKey: ok ? undefined : "connection",
     });
   }, [state.host, onValidityChange]);
 
@@ -54,7 +53,6 @@ export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
         configJSON: buildRedisConfig(state, resolveTestCredential(cred.value), true, state.proxyPassword),
         password: cred.value.password,
       }),
-      focusGroup: (key) => tabsRef.current?.setActive(key),
     }),
     [state, cred.value]
   );
@@ -63,22 +61,19 @@ export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
     {
       key: "connection",
       label: "asset.tabConnection",
-      invalid: !state.host.trim(),
       render: () => (
-        <div className="grid gap-3">
+        <div className="flex flex-col gap-4">
           {/* Host + Port (each labeled) */}
-          <div className="grid grid-cols-[1fr_120px] gap-3">
-            <div className="grid gap-2">
-              <Label>{t("asset.host")}</Label>
+          <div className="flex items-end gap-3">
+            <Field label={t("asset.host")} required className="flex-1">
               <Input
                 data-testid="redis-host-input"
                 value={state.host}
                 onChange={(e) => patch({ host: e.target.value })}
                 placeholder="example.com"
               />
-            </div>
-            <div className="grid gap-2">
-              <Label>{t("asset.port")}</Label>
+            </Field>
+            <Field label={t("asset.port")} className="w-[110px] shrink-0">
               <Input
                 data-testid="redis-port-input"
                 className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
@@ -87,18 +82,17 @@ export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
                 placeholder="6379"
                 onChange={(e) => patch({ port: Number(e.target.value) })}
               />
-            </div>
+            </Field>
           </div>
 
           {/* Username */}
-          <div className="grid gap-2">
-            <Label>{t("asset.username")}</Label>
+          <Field label={t("asset.username")}>
             <Input
               value={state.username}
               onChange={(e) => patch({ username: e.target.value })}
               placeholder={t("asset.username") + " (" + t("asset.databasePlaceholder").split("（")[0] + ")"}
             />
-          </div>
+          </Field>
 
           {/* Password */}
           <PasswordSourceField
@@ -115,8 +109,7 @@ export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
           />
 
           {/* DB Number */}
-          <div className="grid gap-2">
-            <Label>{t("asset.redisDatabase")}</Label>
+          <Field label={t("asset.redisDatabase")}>
             <Input
               className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
               type="number"
@@ -124,69 +117,63 @@ export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
               value={state.database}
               onChange={(e) => patch({ database: Math.max(0, Number(e.target.value) || 0) })}
             />
-          </div>
+          </Field>
         </div>
       ),
     },
     {
       key: "tunnel",
       label: "asset.tabTunnel",
-      optional: true,
       render: () => <ConnectionMethodFields value={state} onChange={patch} />,
     },
     {
       key: "tls",
       label: "asset.tabTls",
-      optional: true,
       render: () => (
-        <div className="grid gap-3">
+        <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between">
-            <Label>{t("asset.tls")}</Label>
+            <FieldLabel>{t("asset.tls")}</FieldLabel>
             <Switch checked={state.tls} onCheckedChange={(v) => patch({ tls: v })} />
           </div>
 
           {state.tls && (
             <>
               <div className="flex items-center justify-between">
-                <Label>{t("asset.redisTlsInsecure")}</Label>
+                <FieldLabel>{t("asset.redisTlsInsecure")}</FieldLabel>
                 <Switch checked={state.tlsInsecure} onCheckedChange={(v) => patch({ tlsInsecure: v })} />
               </div>
 
-              <div className="grid gap-2">
-                <Label>{t("asset.redisTlsServerName")}</Label>
+              <Field label={t("asset.redisTlsServerName")}>
                 <Input
                   value={state.tlsServerName}
                   onChange={(e) => patch({ tlsServerName: e.target.value })}
                   placeholder="redis.example.com"
                 />
-              </div>
+              </Field>
 
-              <div className="grid gap-2">
-                <Label>{t("asset.redisTlsCAFile")}</Label>
+              <Field label={t("asset.redisTlsCAFile")}>
                 <Input
                   value={state.tlsCAFile}
                   onChange={(e) => patch({ tlsCAFile: e.target.value })}
                   placeholder="/path/to/ca.pem"
                 />
-              </div>
+              </Field>
 
-              <div className="grid gap-2">
-                <Label>{t("asset.redisTlsCertFile")}</Label>
+              <Field label={t("asset.redisTlsCertFile")}>
                 <Input
                   value={state.tlsCertFile}
                   onChange={(e) => patch({ tlsCertFile: e.target.value })}
                   placeholder="/path/to/client.crt"
                 />
-              </div>
+              </Field>
 
-              <div className="grid gap-2">
-                <Label>{t("asset.redisTlsKeyFile")}</Label>
+              <Field label={t("asset.redisTlsKeyFile")}>
                 <Input
                   value={state.tlsKeyFile}
                   onChange={(e) => patch({ tlsKeyFile: e.target.value })}
                   placeholder="/path/to/client.key"
                 />
-              </div>
+              </Field>
             </>
           )}
         </div>
@@ -195,12 +182,10 @@ export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
     {
       key: "advanced",
       label: "asset.tabAdvanced",
-      optional: true,
       render: () => (
-        <div className="grid gap-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="grid gap-2">
-              <Label>{t("asset.redisCommandTimeout")}</Label>
+        <div className="flex flex-col gap-4">
+          <div className="flex items-end gap-3">
+            <Field label={t("asset.redisCommandTimeout")} className="flex-1">
               <Input
                 className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 type="number"
@@ -208,9 +193,8 @@ export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
                 value={state.commandTimeoutSeconds}
                 onChange={(e) => patch({ commandTimeoutSeconds: Math.max(0, Number(e.target.value) || 0) })}
               />
-            </div>
-            <div className="grid gap-2">
-              <Label>{t("asset.redisScanPageSize")}</Label>
+            </Field>
+            <Field label={t("asset.redisScanPageSize")} className="flex-1">
               <Input
                 className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 type="number"
@@ -218,20 +202,19 @@ export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
                 value={state.scanPageSize}
                 onChange={(e) => patch({ scanPageSize: Math.max(0, Number(e.target.value) || 0) })}
               />
-            </div>
+            </Field>
           </div>
-          <div className="grid gap-2">
-            <Label>{t("asset.redisKeySeparator")}</Label>
+          <Field label={t("asset.redisKeySeparator")}>
             <Input
               value={state.keySeparator}
               onChange={(e) => patch({ keySeparator: e.target.value })}
               placeholder=":"
             />
-          </div>
+          </Field>
         </div>
       ),
     },
   ];
 
-  return <ConfigTabs ref={tabsRef} groups={groups} />;
+  return <ConfigTabs groups={groups} />;
 });

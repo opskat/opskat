@@ -21,7 +21,6 @@ describe("MongoDBConfigSection ref 契约", () => {
       canTest: false,
       canSave: false,
       saveDisabledReason: "asset.formMissingHost",
-      invalidGroupKey: "connection",
     });
   });
 
@@ -62,7 +61,6 @@ describe("MongoDBConfigSection ref 契约", () => {
       canTest: false,
       canSave: false,
       saveDisabledReason: "asset.formMissingHost",
-      invalidGroupKey: "connection",
     });
   });
 

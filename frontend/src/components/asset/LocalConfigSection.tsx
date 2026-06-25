@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
+import { Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
+import { Field } from "@/components/asset/fields";
 import { ListLocalShells } from "../../../wailsjs/go/local/Local";
 import type { localterm_svc } from "../../../wailsjs/go/models";
 import { formatLocalShellArgs } from "@/lib/localShellArgs";
@@ -51,11 +52,10 @@ export const LocalConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
   };
 
   return (
-    <div className="grid gap-3 border rounded-lg p-4">
-      <div className="grid gap-2">
-        <Label>{t("asset.localShell")}</Label>
+    <div className="flex flex-col gap-4">
+      <Field label={t("asset.localShell")}>
         <Select onValueChange={onSelectPreset}>
-          <SelectTrigger>
+          <SelectTrigger className="w-full">
             <SelectValue placeholder={t("asset.localShellPreset")} />
           </SelectTrigger>
           <SelectContent>
@@ -74,25 +74,23 @@ export const LocalConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
           placeholder={t("asset.localShellPlaceholder")}
           className="font-mono"
         />
-      </div>
-      <div className="grid gap-2">
-        <Label>{t("asset.localArgs")}</Label>
+      </Field>
+      <Field label={t("asset.localArgs")}>
         <Input
           value={state.args}
           onChange={(e) => patch({ args: e.target.value })}
           placeholder={t("asset.localArgsPlaceholder")}
           className="font-mono"
         />
-      </div>
-      <div className="grid gap-2">
-        <Label>{t("asset.localCwd")}</Label>
+      </Field>
+      <Field label={t("asset.localCwd")}>
         <Input
           value={state.cwd}
           onChange={(e) => patch({ cwd: e.target.value })}
           placeholder={t("asset.localCwdPlaceholder")}
           className="font-mono"
         />
-      </div>
+      </Field>
     </div>
   );
 });
