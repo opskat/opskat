@@ -146,6 +146,51 @@ describe("Fields 渲染器 · composite kind", () => {
   });
 });
 
+describe("Fields 渲染器 · Phase 2 扩展", () => {
+  it("textarea: required 渲染必填星号, mono 加等宽类", () => {
+    const { getByRole, container } = render(
+      <Harness fields={[{ kind: "textarea", key: "note", label: "asset.endpoints", required: true, mono: true }]} />
+    );
+    const ta = getByRole("textbox") as HTMLTextAreaElement;
+    expect(ta.className).toContain("font-mono");
+    expect(container.textContent).toContain("*"); // FieldLabel 在必填时渲染 " *"
+  });
+
+  it("textarea: 无 mono 时不加等宽类", () => {
+    const { getByRole } = render(<Harness fields={[{ kind: "textarea", key: "note", label: "asset.endpoints" }]} />);
+    expect((getByRole("textbox") as HTMLTextAreaElement).className).not.toContain("font-mono");
+  });
+
+  it("segmented: ariaLabel 提供时 radiogroup 有 aria-label(无可见 label 也生效)", () => {
+    const { getByRole } = render(
+      <Harness
+        fields={[
+          {
+            kind: "segmented",
+            key: "mode",
+            ariaLabel: "asset.mongoUri",
+            options: [
+              { value: "manual", label: "Manual" },
+              { value: "uri", label: "URI" },
+            ],
+          },
+        ]}
+      />
+    );
+    // label 未给 → aria-label 唯一来源是 ariaLabel;断言其非空(不依赖 i18n 是否翻译该键)
+    expect(getByRole("radiogroup").getAttribute("aria-label")).toBeTruthy();
+  });
+
+  it("text: 字面量 placeholder 经 t() 后原样透出(Phase 1 行为不变)", () => {
+    const { getByTestId } = render(
+      <Harness
+        fields={[{ kind: "text", key: "host", label: "asset.host", placeholder: "example.com", testid: "f-host" }]}
+      />
+    );
+    expect((getByTestId("f-host") as HTMLInputElement).placeholder).toBe("example.com");
+  });
+});
+
 describe("buildConfigGroups", () => {
   it("声明式组包成 Fields;render 逃逸口透传;badge 透传", () => {
     const schema: ConfigGroupSchema<S>[] = [

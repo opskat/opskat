@@ -40,8 +40,23 @@ export type FieldDesc<S> = WithVisibility<S> &
       }
     | { kind: "switch"; key: keyof S; label: string }
     | { kind: "select"; key: keyof S; label: string; options: { value: string; label: string }[]; testid?: string }
-    | { kind: "segmented"; key: keyof S; label?: string; options: { value: string; label: string; testid?: string }[] }
-    | { kind: "textarea"; key: keyof S; label: string; rows?: number; hint?: string; placeholder?: string }
+    | {
+        kind: "segmented";
+        key: keyof S;
+        label?: string;
+        ariaLabel?: string;
+        options: { value: string; label: string; testid?: string }[];
+      }
+    | {
+        kind: "textarea";
+        key: keyof S;
+        label: string;
+        rows?: number;
+        hint?: string;
+        placeholder?: string;
+        required?: boolean;
+        mono?: boolean;
+      }
     | { kind: "row"; fields: FieldDesc<S>[] }
     // ↓ composite kind 在 Task 2b 补实现;此处声明以锁定类型。
     | { kind: "password"; placeholder?: string; secretLabel?: string; selectSecretLabel?: string }
@@ -88,7 +103,7 @@ function FieldNode<S>({
           <Input
             data-testid={field.testid}
             value={String(state[field.key] ?? "")}
-            placeholder={field.placeholder}
+            placeholder={field.placeholder ? t(field.placeholder) : undefined}
             onChange={(e) => patch({ [field.key]: e.target.value } as Partial<S>)}
           />
         </Field>
@@ -105,7 +120,7 @@ function FieldNode<S>({
             type="number"
             min={field.min}
             value={display}
-            placeholder={field.placeholder}
+            placeholder={field.placeholder ? t(field.placeholder) : undefined}
             onChange={(e) => {
               const n = Number(e.target.value);
               const next = field.min !== undefined ? Math.max(field.min, n || 0) : n;
@@ -148,7 +163,7 @@ function FieldNode<S>({
           <Segmented
             value={String(state[field.key] ?? "")}
             onChange={(v) => patch({ [field.key]: v } as Partial<S>)}
-            aria-label={field.label ? t(field.label) : undefined}
+            aria-label={field.ariaLabel ? t(field.ariaLabel) : field.label ? t(field.label) : undefined}
             options={field.options.map((o) => ({ value: o.value, label: t(o.label), testid: o.testid }))}
           />
         </Field>
@@ -156,11 +171,12 @@ function FieldNode<S>({
 
     case "textarea":
       return (
-        <Field label={t(field.label)}>
+        <Field label={t(field.label)} required={field.required}>
           <Textarea
             value={String(state[field.key] ?? "")}
             rows={field.rows}
-            placeholder={field.placeholder}
+            placeholder={field.placeholder ? t(field.placeholder) : undefined}
+            className={field.mono ? "font-mono text-sm" : undefined}
             onChange={(e) => patch({ [field.key]: e.target.value } as Partial<S>)}
           />
           {field.hint && <p className="text-xs text-muted-foreground">{t(field.hint)}</p>}
