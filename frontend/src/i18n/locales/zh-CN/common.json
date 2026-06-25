@@ -1920,6 +1920,7 @@
     "structName": "名称",
     "structType": "类型",
     "structNullable": "可空",
+    "objTables": "表",
     "objViews": "视图",
     "objProcedures": "存储过程",
     "objFunctions": "函数",

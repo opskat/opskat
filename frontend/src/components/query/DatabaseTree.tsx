@@ -131,6 +131,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const [filter, setFilter] = useState("");
   const [showFilter, setShowFilter] = useState(false);
   const [selected, setSelected] = useState<{ db: string; table: string } | null>(null);
+  const [openTables, setOpenTables] = useState<Record<string, boolean>>({});
 
   // Auto-load only when there's nothing cached. Restored tabs come in with
   // databases/tables already populated from localStorage, so we skip the
@@ -378,6 +379,9 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
               const isExpanded = filterLower ? true : expandedDbs.includes(db);
               const schemaAware = isSchemaAwareDriver(driver);
               const isLoadingTables = dbState.loadingTables[db] === true;
+              const isTablesOpen = filterLower ? true : (openTables[db] ?? false);
+              const hasTables = !!dbTables && (dbTables.length > 0 || (!!schemas && schemas.length > 0));
+              const tableCount = (dbTables?.length ?? 0) + (schemas?.reduce((n, g) => n + g.tables.length, 0) ?? 0);
 
               return (
                 <div key={db}>
@@ -429,48 +433,78 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                         <div className="flex items-center gap-1.5 px-2 py-1">
                           <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
                         </div>
-                      ) : !dbTables || (dbTables.length === 0 && (!schemas || schemas.length === 0)) ? (
-                        <div className="px-2 py-1 text-xs text-muted-foreground italic">
-                          {filterLower && !dbMatch ? t("query.noMatch") : t("query.noTables")}
-                        </div>
-                      ) : schemaAware && schemas ? (
-                        <>
-                          {dbTables.map((tbl) => renderTableItem(db, tbl))}
-                          {schemas.map((group) => {
-                            const expandedSchemas = dbState.expandedSchemas[db] || [];
-                            const isSchemaExpanded = filterLower ? true : expandedSchemas.includes(group.schema);
-                            return (
-                              <div key={group.schema}>
-                                <div
-                                  className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
-                                  onClick={() => {
-                                    if (filterLower) return;
-                                    toggleSchemaExpand(tabId, db, group.schema);
-                                  }}
-                                >
-                                  {isSchemaExpanded ? (
-                                    <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                  ) : (
-                                    <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                  )}
-                                  <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                                  <span className="truncate">{group.schema}</span>
-                                </div>
-                                {isSchemaExpanded && (
-                                  <div className="ml-3">
-                                    {group.tables.map((tbl) => renderTableItem(db, tbl.qualifiedName, tbl.name))}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </>
                       ) : (
-                        dbTables.map((tbl) => renderTableItem(db, tbl))
+                        <>
+                          {/* Tables group node */}
+                          <div
+                            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
+                            onClick={() => {
+                              if (filterLower) return;
+                              setOpenTables((prev) => ({ ...prev, [db]: !(prev[db] ?? false) }));
+                            }}
+                          >
+                            {isTablesOpen ? (
+                              <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                            ) : (
+                              <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                            )}
+                            <Table2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                            <span className="truncate text-muted-foreground">
+                              {t("query.objTables")} ({tableCount})
+                            </span>
+                          </div>
+                          {isTablesOpen && (
+                            <div className="ml-3">
+                              {!hasTables ? (
+                                <div className="px-2 py-1 text-xs text-muted-foreground italic">
+                                  {filterLower && !dbMatch ? t("query.noMatch") : t("query.noTables")}
+                                </div>
+                              ) : schemaAware && schemas ? (
+                                <>
+                                  {dbTables.map((tbl) => renderTableItem(db, tbl))}
+                                  {schemas.map((group) => {
+                                    const expandedSchemas = dbState.expandedSchemas[db] || [];
+                                    const isSchemaExpanded = filterLower
+                                      ? true
+                                      : expandedSchemas.includes(group.schema);
+                                    return (
+                                      <div key={group.schema}>
+                                        <div
+                                          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
+                                          onClick={() => {
+                                            if (filterLower) return;
+                                            toggleSchemaExpand(tabId, db, group.schema);
+                                          }}
+                                        >
+                                          {isSchemaExpanded ? (
+                                            <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                          ) : (
+                                            <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                          )}
+                                          <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                          <span className="truncate">{group.schema}</span>
+                                        </div>
+                                        {isSchemaExpanded && (
+                                          <div className="ml-3">
+                                            {group.tables.map((tbl) =>
+                                              renderTableItem(db, tbl.qualifiedName, tbl.name)
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </>
+                              ) : (
+                                dbTables.map((tbl) => renderTableItem(db, tbl))
+                              )}
+                            </div>
+                          )}
+                          {!filterLower && tabMeta?.assetId ? (
+                            <ObjectBrowserSection tabId={tabId} assetId={tabMeta.assetId} database={db} />
+                          ) : null}
+                        </>
                       )}
-                      {!filterLower && tabMeta?.assetId ? (
-                        <ObjectBrowserSection tabId={tabId} assetId={tabMeta.assetId} database={db} />
-                      ) : null}
                     </div>
                   )}
                 </div>

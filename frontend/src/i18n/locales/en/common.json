@@ -1920,6 +1920,7 @@
     "structName": "Name",
     "structType": "Type",
     "structNullable": "Nullable",
+    "objTables": "Tables",
     "objViews": "Views",
     "objProcedures": "Procedures",
     "objFunctions": "Functions",
