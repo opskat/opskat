@@ -19,8 +19,25 @@ type WithVisibility<S> = { visibleWhen?: (s: S) => boolean };
 
 export type FieldDesc<S> = WithVisibility<S> &
   (
-    | { kind: "text"; key: keyof S; label: string; placeholder?: string; required?: boolean; width?: string; testid?: string }
-    | { kind: "number"; key: keyof S; label: string; placeholder?: string; min?: number; blankWhenZero?: boolean; width?: string; testid?: string }
+    | {
+        kind: "text";
+        key: keyof S;
+        label: string;
+        placeholder?: string;
+        required?: boolean;
+        width?: string;
+        testid?: string;
+      }
+    | {
+        kind: "number";
+        key: keyof S;
+        label: string;
+        placeholder?: string;
+        min?: number;
+        blankWhenZero?: boolean;
+        width?: string;
+        testid?: string;
+      }
     | { kind: "switch"; key: keyof S; label: string }
     | { kind: "select"; key: keyof S; label: string; options: { value: string; label: string }[]; testid?: string }
     | { kind: "segmented"; key: keyof S; label?: string; options: { value: string; label: string; testid?: string }[] }
@@ -103,20 +120,14 @@ function FieldNode<S>({
       return (
         <div className="flex items-center justify-between">
           <FieldLabel>{t(field.label)}</FieldLabel>
-          <Switch
-            checked={!!state[field.key]}
-            onCheckedChange={(v) => patch({ [field.key]: v } as Partial<S>)}
-          />
+          <Switch checked={!!state[field.key]} onCheckedChange={(v) => patch({ [field.key]: v } as Partial<S>)} />
         </div>
       );
 
     case "select":
       return (
         <Field label={t(field.label)}>
-          <Select
-            value={String(state[field.key] ?? "")}
-            onValueChange={(v) => patch({ [field.key]: v } as Partial<S>)}
-          >
+          <Select value={String(state[field.key] ?? "")} onValueChange={(v) => patch({ [field.key]: v } as Partial<S>)}>
             <SelectTrigger data-testid={field.testid} className="w-full">
               <SelectValue />
             </SelectTrigger>
@@ -209,6 +220,7 @@ export type ConfigGroupSchema<S> =
 
 /** 把组级 schema 转成 <ConfigTabs> 吃的 ConfigGroup[]:声明式组包成 <Fields>,逃逸口组透传 render。
  *  纯函数(不调 hook);render 闭包在 ConfigTabs 渲染期被调用。 */
+// eslint-disable-next-line react-refresh/only-export-components -- group-assembler intentionally co-located with its <Fields> renderer
 export function buildConfigGroups<S>(
   schema: ConfigGroupSchema<S>[],
   args: { state: S; patch: (p: Partial<S>) => void; ctx?: FieldRenderCtx }
