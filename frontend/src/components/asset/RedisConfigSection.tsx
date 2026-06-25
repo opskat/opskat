@@ -1,220 +1,130 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
-import { useTranslation } from "react-i18next";
-import { Input, Switch } from "@opskat/ui";
-import { Field, FieldLabel } from "@/components/asset/fields";
-import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
-import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
-import { resolveSaveProxyPassword } from "./proxyConfig";
-import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import { forwardRef } from "react";
+import { ConfigTabs } from "@/components/asset/ConfigTabs";
+import { useConfigSection } from "@/components/asset/useConfigSection";
+import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
+import { resolveSaveProxyPassword } from "./proxyConfig";
 import { buildRedisConfig, parseRedisConfig, REDIS_DEFAULTS, type RedisFormState } from "./RedisConfigSection.config";
-import { ConfigTabs, type ConfigGroup } from "@/components/asset/ConfigTabs";
+import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+
+const REDIS_GROUPS: ConfigGroupSchema<RedisFormState>[] = [
+  {
+    key: "connection",
+    label: "asset.tabConnection",
+    fields: [
+      {
+        kind: "row",
+        fields: [
+          {
+            kind: "text",
+            key: "host",
+            label: "asset.host",
+            required: true,
+            placeholder: "example.com",
+            width: "flex-1",
+            testid: "redis-host-input",
+          },
+          {
+            kind: "number",
+            key: "port",
+            label: "asset.port",
+            placeholder: "6379",
+            width: "w-[110px] shrink-0",
+            blankWhenZero: true,
+            testid: "redis-port-input",
+          },
+        ],
+      },
+      { kind: "text", key: "username", label: "asset.username" },
+      { kind: "password" },
+      { kind: "number", key: "database", label: "asset.redisDatabase", min: 0 },
+    ],
+  },
+  { key: "tunnel", label: "asset.tabTunnel", fields: [{ kind: "tunnel" }] },
+  {
+    key: "tls",
+    label: "asset.tabTls",
+    fields: [
+      { kind: "switch", key: "tls", label: "asset.tls" },
+      { kind: "switch", key: "tlsInsecure", label: "asset.redisTlsInsecure", visibleWhen: (s) => s.tls },
+      {
+        kind: "text",
+        key: "tlsServerName",
+        label: "asset.redisTlsServerName",
+        placeholder: "redis.example.com",
+        visibleWhen: (s) => s.tls,
+      },
+      {
+        kind: "text",
+        key: "tlsCAFile",
+        label: "asset.redisTlsCAFile",
+        placeholder: "/path/to/ca.pem",
+        visibleWhen: (s) => s.tls,
+      },
+      {
+        kind: "text",
+        key: "tlsCertFile",
+        label: "asset.redisTlsCertFile",
+        placeholder: "/path/to/client.crt",
+        visibleWhen: (s) => s.tls,
+      },
+      {
+        kind: "text",
+        key: "tlsKeyFile",
+        label: "asset.redisTlsKeyFile",
+        placeholder: "/path/to/client.key",
+        visibleWhen: (s) => s.tls,
+      },
+    ],
+  },
+  {
+    key: "advanced",
+    label: "asset.tabAdvanced",
+    fields: [
+      {
+        kind: "row",
+        fields: [
+          { kind: "number", key: "commandTimeoutSeconds", label: "asset.redisCommandTimeout", min: 0, width: "flex-1" },
+          { kind: "number", key: "scanPageSize", label: "asset.redisScanPageSize", min: 0, width: "flex-1" },
+        ],
+      },
+      { kind: "text", key: "keySeparator", label: "asset.redisKeySeparator", placeholder: ":" },
+    ],
+  },
+];
 
 export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function RedisConfigSection(
   { editAsset, onValidityChange },
   ref
 ) {
-  const { t } = useTranslation();
-  const [state, setState] = useState<RedisFormState>(() => {
-    if (!editAsset) return { ...REDIS_DEFAULTS };
-    // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.ssh_asset_id || 0),
-    // 并参与 connectionType 派生,故传入 parseRedisConfig。
-    return parseRedisConfig(editAsset.Config, editAsset.sshTunnelId || 0);
-  });
-  const patch = (p: Partial<RedisFormState>) => setState((s) => ({ ...s, ...p }));
   const cred = useAssetCredential(editAsset);
-
-  // host 为保存/测试共同必填;上报反应式校验(onValidityChange 为壳 setState,身份稳定)。
-  useEffect(() => {
-    const ok = !!state.host.trim();
-    onValidityChange({
-      canTest: ok,
-      canSave: ok,
-      saveDisabledReason: ok ? "" : "asset.formMissingHost",
-    });
-  }, [state.host, onValidityChange]);
-
-  useImperativeHandle(
+  const { state, patch } = useConfigSection<RedisFormState>({
     ref,
-    () => ({
-      buildConfig: async (ctx) => {
-        const frag = await resolveSaveCredential(cred.value, ctx.encryptPassword);
-        const proxyPassword = await resolveSaveProxyPassword(state, ctx.encryptPassword);
-        return {
-          configJSON: buildRedisConfig(state, frag, false, proxyPassword),
-          sshTunnelId: state.connectionType === "jumphost" ? state.sshTunnelId : 0,
-        };
-      },
-      buildTestConfig: async () => ({
-        assetType: "redis",
-        // 测试无 asset 行 → 隧道必须塞进 config(includeSshAssetId=true,锁旧 handleTestRedisConnection);
-        // proxy 密码仅明文(无加密)。
-        configJSON: buildRedisConfig(state, resolveTestCredential(cred.value), true, state.proxyPassword),
-        password: cred.value.password,
-      }),
+    editAsset,
+    onValidityChange,
+    init: (a) => (a ? parseRedisConfig(a.Config, a.sshTunnelId || 0) : { ...REDIS_DEFAULTS }),
+    validate: (s) => {
+      const ok = !!s.host.trim();
+      return { canTest: ok, canSave: ok, saveDisabledReason: ok ? "" : "asset.formMissingHost" };
+    },
+    build: async (s, ctx) => ({
+      configJSON: buildRedisConfig(
+        s,
+        await resolveSaveCredential(cred.value, ctx.encryptPassword),
+        false,
+        await resolveSaveProxyPassword(s, ctx.encryptPassword)
+      ),
+      sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
     }),
-    [state, cred.value]
-  );
+    buildTest: async (s) => ({
+      assetType: "redis",
+      configJSON: buildRedisConfig(s, resolveTestCredential(cred.value), true, s.proxyPassword),
+      password: cred.value.password,
+    }),
+    deps: [cred.value],
+  });
 
-  const groups: ConfigGroup[] = [
-    {
-      key: "connection",
-      label: "asset.tabConnection",
-      render: () => (
-        <div className="flex flex-col gap-4">
-          {/* Host + Port (each labeled) */}
-          <div className="flex items-end gap-3">
-            <Field label={t("asset.host")} required className="flex-1">
-              <Input
-                data-testid="redis-host-input"
-                value={state.host}
-                onChange={(e) => patch({ host: e.target.value })}
-                placeholder="example.com"
-              />
-            </Field>
-            <Field label={t("asset.port")} className="w-[110px] shrink-0">
-              <Input
-                data-testid="redis-port-input"
-                className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                type="number"
-                value={state.port || ""}
-                placeholder="6379"
-                onChange={(e) => patch({ port: Number(e.target.value) })}
-              />
-            </Field>
-          </div>
-
-          {/* Username */}
-          <Field label={t("asset.username")}>
-            <Input
-              value={state.username}
-              onChange={(e) => patch({ username: e.target.value })}
-              placeholder={t("asset.username") + " (" + t("asset.databasePlaceholder").split("（")[0] + ")"}
-            />
-          </Field>
-
-          {/* Password */}
-          <PasswordSourceField
-            source={cred.value.passwordSource}
-            onSourceChange={cred.setPasswordSource}
-            password={cred.value.password}
-            onPasswordChange={cred.setPassword}
-            credentialId={cred.value.passwordCredentialId}
-            onCredentialIdChange={cred.setPasswordCredentialId}
-            managedPasswords={cred.managedPasswords}
-            hasExistingPassword={!!cred.value.encryptedPassword}
-            editAssetId={editAsset?.ID}
-            onUsernameChange={(v) => patch({ username: v })}
-          />
-
-          {/* DB Number */}
-          <Field label={t("asset.redisDatabase")}>
-            <Input
-              className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-              type="number"
-              min={0}
-              value={state.database}
-              onChange={(e) => patch({ database: Math.max(0, Number(e.target.value) || 0) })}
-            />
-          </Field>
-        </div>
-      ),
-    },
-    {
-      key: "tunnel",
-      label: "asset.tabTunnel",
-      render: () => <ConnectionMethodFields value={state} onChange={patch} />,
-    },
-    {
-      key: "tls",
-      label: "asset.tabTls",
-      render: () => (
-        <div className="flex flex-col gap-4">
-          <div className="flex items-center justify-between">
-            <FieldLabel>{t("asset.tls")}</FieldLabel>
-            <Switch checked={state.tls} onCheckedChange={(v) => patch({ tls: v })} />
-          </div>
-
-          {state.tls && (
-            <>
-              <div className="flex items-center justify-between">
-                <FieldLabel>{t("asset.redisTlsInsecure")}</FieldLabel>
-                <Switch checked={state.tlsInsecure} onCheckedChange={(v) => patch({ tlsInsecure: v })} />
-              </div>
-
-              <Field label={t("asset.redisTlsServerName")}>
-                <Input
-                  value={state.tlsServerName}
-                  onChange={(e) => patch({ tlsServerName: e.target.value })}
-                  placeholder="redis.example.com"
-                />
-              </Field>
-
-              <Field label={t("asset.redisTlsCAFile")}>
-                <Input
-                  value={state.tlsCAFile}
-                  onChange={(e) => patch({ tlsCAFile: e.target.value })}
-                  placeholder="/path/to/ca.pem"
-                />
-              </Field>
-
-              <Field label={t("asset.redisTlsCertFile")}>
-                <Input
-                  value={state.tlsCertFile}
-                  onChange={(e) => patch({ tlsCertFile: e.target.value })}
-                  placeholder="/path/to/client.crt"
-                />
-              </Field>
-
-              <Field label={t("asset.redisTlsKeyFile")}>
-                <Input
-                  value={state.tlsKeyFile}
-                  onChange={(e) => patch({ tlsKeyFile: e.target.value })}
-                  placeholder="/path/to/client.key"
-                />
-              </Field>
-            </>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: "advanced",
-      label: "asset.tabAdvanced",
-      render: () => (
-        <div className="flex flex-col gap-4">
-          <div className="flex items-end gap-3">
-            <Field label={t("asset.redisCommandTimeout")} className="flex-1">
-              <Input
-                className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                type="number"
-                min={0}
-                value={state.commandTimeoutSeconds}
-                onChange={(e) => patch({ commandTimeoutSeconds: Math.max(0, Number(e.target.value) || 0) })}
-              />
-            </Field>
-            <Field label={t("asset.redisScanPageSize")} className="flex-1">
-              <Input
-                className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                type="number"
-                min={0}
-                value={state.scanPageSize}
-                onChange={(e) => patch({ scanPageSize: Math.max(0, Number(e.target.value) || 0) })}
-              />
-            </Field>
-          </div>
-          <Field label={t("asset.redisKeySeparator")}>
-            <Input
-              value={state.keySeparator}
-              onChange={(e) => patch({ keySeparator: e.target.value })}
-              placeholder=":"
-            />
-          </Field>
-        </div>
-      ),
-    },
-  ];
-
+  const groups = buildConfigGroups(REDIS_GROUPS, { state, patch, ctx: { cred, editAsset } });
   return <ConfigTabs groups={groups} />;
 });
