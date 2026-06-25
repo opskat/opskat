@@ -17,6 +17,7 @@ import {
   Wrench,
   Trash2,
   Eraser,
+  Columns3,
 } from "lucide-react";
 import {
   Button,
@@ -35,6 +36,8 @@ import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
 import { CreateTableDialog } from "./CreateTableDialog";
 import { AlterTableDialog } from "./AlterTableDialog";
+import { TableStructureDialog } from "./TableStructureDialog";
+import { ObjectBrowserSection } from "./ObjectBrowserSection";
 import { buildStarterSelectSql, quoteTableRef } from "@/lib/tableSql";
 
 interface DatabaseTreeProps {
@@ -111,6 +114,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const [showAlterTable, setShowAlterTable] = useState(false);
   const [alterDatabase, setAlterDatabase] = useState("");
   const [alterTableName, setAlterTableName] = useState("");
+  const [structureTarget, setStructureTarget] = useState<{ db: string; table: string } | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
     type: "drop" | "truncate";
     database: string;
@@ -227,6 +231,10 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
           <ContextMenuItem onClick={() => openTableTab(tabId, db, tbl)}>
             <Table2 className="h-3.5 w-3.5" />
             {t("query.openTable")}
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => setStructureTarget({ db, table: tbl })}>
+            <Columns3 className="h-3.5 w-3.5" />
+            {t("query.viewStructure")}
           </ContextMenuItem>
           <ContextMenuItem
             onClick={() => {
@@ -460,6 +468,9 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                       ) : (
                         dbTables.map((tbl) => renderTableItem(db, tbl))
                       )}
+                      {!filterLower && tabMeta?.assetId ? (
+                        <ObjectBrowserSection tabId={tabId} assetId={tabMeta.assetId} database={db} />
+                      ) : null}
                     </div>
                   )}
                 </div>
@@ -522,6 +533,16 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
           setAlterDatabase("");
           setAlterTableName("");
         }}
+      />
+
+      <TableStructureDialog
+        open={structureTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setStructureTarget(null);
+        }}
+        tabId={tabId}
+        database={structureTarget?.db ?? ""}
+        table={structureTarget?.table ?? ""}
       />
 
       <ConfirmDialog
