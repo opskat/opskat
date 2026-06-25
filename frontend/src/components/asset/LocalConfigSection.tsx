@@ -1,7 +1,8 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
+import { forwardRef, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { Field } from "@/components/asset/fields";
+import { useConfigSection } from "@/components/asset/useConfigSection";
 import { ListLocalShells } from "../../../wailsjs/go/local/Local";
 import type { localterm_svc } from "../../../wailsjs/go/models";
 import { formatLocalShellArgs } from "@/lib/localShellArgs";
@@ -16,31 +17,22 @@ export const LocalConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
 ) {
   const { t } = useTranslation();
   const [shells, setShells] = useState<ShellInfo[]>([]);
-  const [state, setState] = useState<LocalFormState>(() =>
-    editAsset ? parseLocalConfig(editAsset.Config) : { ...LOCAL_DEFAULTS }
-  );
+  const { state, patch } = useConfigSection<LocalFormState>({
+    ref,
+    editAsset,
+    onValidityChange,
+    init: (a) => (a ? parseLocalConfig(a.Config) : { ...LOCAL_DEFAULTS }),
+    // local 无必填校验:始终可保存、不可测试。
+    validate: () => ({ canTest: false, canSave: true }),
+    build: async (s) => ({ configJSON: buildLocalConfig(s), sshTunnelId: 0 }),
+    // buildTest 省略 → buildTestConfig 为 null。
+  });
 
   useEffect(() => {
     ListLocalShells()
       .then((list) => setShells(list || []))
       .catch(() => setShells([]));
   }, []);
-
-  // local 无必填校验:始终可保存、不可测试(onValidityChange 为壳 setState,身份稳定)。
-  useEffect(() => {
-    onValidityChange({ canTest: false, canSave: true });
-  }, [onValidityChange]);
-
-  useImperativeHandle(
-    ref,
-    () => ({
-      buildConfig: async () => ({ configJSON: buildLocalConfig(state), sshTunnelId: 0 }),
-      buildTestConfig: null,
-    }),
-    [state]
-  );
-
-  const patch = (p: Partial<LocalFormState>) => setState((s) => ({ ...s, ...p }));
 
   const onSelectPreset = (val: string) => {
     if (val === "__default__") {
