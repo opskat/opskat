@@ -15,14 +15,7 @@ export const K8sConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
   const { t } = useTranslation();
   const [state, setState] = useState<K8sFormState>(() => {
     if (!editAsset) return { ...K8S_DEFAULTS };
-    const { namespace, context } = parseK8sConfig(editAsset.Config ?? "");
-    return {
-      kubeconfig: "",
-      showKubeconfig: false,
-      namespace,
-      context,
-      sshTunnelId: editAsset.sshTunnelId || 0,
-    };
+    return parseK8sConfig(editAsset.Config ?? "", editAsset.sshTunnelId || 0);
   });
   const patch = (p: Partial<K8sFormState>) => setState((s) => ({ ...s, ...p }));
 
