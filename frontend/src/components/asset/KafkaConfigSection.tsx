@@ -1,25 +1,15 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
+import { forwardRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Trash2 } from "lucide-react";
-import {
-  Button,
-  Input,
-  Label,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-  Switch,
-  Textarea,
-} from "@opskat/ui";
+import { Button, Input, Label, Switch } from "@opskat/ui";
 import { Field, Segmented } from "@/components/asset/fields";
-import { ConfigTabs, type ConfigGroup } from "@/components/asset/ConfigTabs";
-import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
+import { ConfigTabs } from "@/components/asset/ConfigTabs";
+import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
+import { useConfigSection } from "@/components/asset/useConfigSection";
 import { resolveSaveProxyPassword } from "./proxyConfig";
 import { credential_entity } from "../../../wailsjs/go/models";
-import type { AssetFormHandle, AssetFormContext, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
 import {
@@ -238,13 +228,6 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
   ref
 ) {
   const { t } = useTranslation();
-  const [state, setState] = useState<KafkaFormState>(() => {
-    if (!editAsset) return { ...KAFKA_DEFAULTS };
-    // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.ssh_asset_id || 0),
-    // 并参与 connectionType 派生,故传入 parseKafkaConfig。
-    return parseKafkaConfig(editAsset.Config, editAsset.sshTunnelId || 0);
-  });
-  const patch = (p: Partial<KafkaFormState>) => setState((s) => ({ ...s, ...p }));
   const cred = useAssetCredential(editAsset);
 
   // 伴随子状态:section 自持(各自带 encryptedPassword/credentialId/passwordSource,不走 useAssetCredential)。
@@ -279,9 +262,6 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
     }
   });
 
-  const saslEnabled = state.saslMechanism !== "none";
-
-  const brokersOk = kafkaBrokers(state.brokersText).length > 0;
   const schemaRegistryInvalid = schemaRegistry.enabled && !schemaRegistry.url.trim();
   const connectInvalid =
     connectEnabled &&
@@ -291,156 +271,135 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
       return clusters.some((c) => !c.name.trim() || !c.url.trim());
     })();
 
-  useEffect(() => {
-    let saveDisabledReason = "";
-    if (!brokersOk) {
-      saveDisabledReason = "asset.formMissingKafkaBrokers";
-    } else if (schemaRegistryInvalid) {
-      saveDisabledReason = "asset.kafkaSchemaRegistryURLRequired";
-    } else if (connectInvalid) {
-      saveDisabledReason = "asset.kafkaConnectClusterInvalid";
-    }
-    onValidityChange({
-      canTest: brokersOk,
-      canSave: brokersOk && !schemaRegistryInvalid && !connectInvalid,
-      saveDisabledReason,
-    });
-  }, [brokersOk, schemaRegistryInvalid, connectInvalid, onValidityChange]);
-
-  useImperativeHandle(
+  const { state, patch } = useConfigSection<KafkaFormState>({
     ref,
-    () => ({
-      buildConfig: async (ctx: AssetFormContext) => {
-        validateKafkaCompanions(schemaRegistry, connectEnabled, connectClusters, t); // 非法 throw → handleSubmit toast
-        const proxyPassword = await resolveSaveProxyPassword(state, ctx.encryptPassword);
-        const cfg = buildKafkaBaseConfig(state, proxyPassword);
-        if (saslEnabled) {
-          appendKafkaCredential(cfg, await resolveSaveCredential(cred.value, ctx.encryptPassword));
-        }
-        const schemaRegistryConfig = await buildSchemaRegistryConfig(schemaRegistry, ctx.encryptPassword);
-        if (schemaRegistry.enabled && schemaRegistryConfig) cfg.schema_registry = schemaRegistryConfig;
-        const connectConfig = await buildConnectConfig(connectEnabled, connectClusters, ctx.encryptPassword);
-        if (connectEnabled && connectConfig) cfg.connect = connectConfig;
-        return {
-          configJSON: JSON.stringify(cfg),
-          sshTunnelId: state.connectionType === "jumphost" ? state.sshTunnelId : 0,
-        };
-      },
-      buildTestConfig: async () => {
-        // 测试:proxy 密码仅明文(无加密)
-        const cfg = buildKafkaBaseConfig(state, state.proxyPassword);
-        if (saslEnabled) appendKafkaCredential(cfg, resolveTestCredential(cred.value));
-        return { assetType: "kafka", configJSON: JSON.stringify(cfg), password: cred.value.password };
-      },
-    }),
-    [state, cred.value, saslEnabled, schemaRegistry, connectEnabled, connectClusters, t]
-  );
+    editAsset,
+    onValidityChange,
+    init: (a) => (a ? parseKafkaConfig(a.Config, a.sshTunnelId || 0) : { ...KAFKA_DEFAULTS }),
+    validate: (s) => {
+      const brokersOk = kafkaBrokers(s.brokersText).length > 0;
+      let saveDisabledReason = "";
+      if (!brokersOk) {
+        saveDisabledReason = "asset.formMissingKafkaBrokers";
+      } else if (schemaRegistryInvalid) {
+        saveDisabledReason = "asset.kafkaSchemaRegistryURLRequired";
+      } else if (connectInvalid) {
+        saveDisabledReason = "asset.kafkaConnectClusterInvalid";
+      }
+      return {
+        canTest: brokersOk,
+        canSave: brokersOk && !schemaRegistryInvalid && !connectInvalid,
+        saveDisabledReason,
+      };
+    },
+    validityDeps: [schemaRegistryInvalid, connectInvalid],
+    build: async (s, ctx) => {
+      validateKafkaCompanions(schemaRegistry, connectEnabled, connectClusters, t); // 非法 throw → handleSubmit toast
+      const proxyPassword = await resolveSaveProxyPassword(s, ctx.encryptPassword);
+      const cfg = buildKafkaBaseConfig(s, proxyPassword);
+      if (s.saslMechanism !== "none") {
+        appendKafkaCredential(cfg, await resolveSaveCredential(cred.value, ctx.encryptPassword));
+      }
+      const schemaRegistryConfig = await buildSchemaRegistryConfig(schemaRegistry, ctx.encryptPassword);
+      if (schemaRegistry.enabled && schemaRegistryConfig) cfg.schema_registry = schemaRegistryConfig;
+      const connectConfig = await buildConnectConfig(connectEnabled, connectClusters, ctx.encryptPassword);
+      if (connectEnabled && connectConfig) cfg.connect = connectConfig;
+      return {
+        configJSON: JSON.stringify(cfg),
+        sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
+      };
+    },
+    buildTest: async (s) => {
+      // 测试:proxy 密码仅明文(无加密)
+      const cfg = buildKafkaBaseConfig(s, s.proxyPassword);
+      if (s.saslMechanism !== "none") appendKafkaCredential(cfg, resolveTestCredential(cred.value));
+      return { assetType: "kafka", configJSON: JSON.stringify(cfg), password: cred.value.password };
+    },
+    deps: [cred.value, schemaRegistry, connectEnabled, connectClusters, t],
+  });
 
-  const groups: ConfigGroup[] = [
+  const KAFKA_GROUPS: ConfigGroupSchema<KafkaFormState>[] = [
     {
       key: "connection",
       label: "asset.tabConnection",
-      render: () => (
-        <div className="flex flex-col gap-4">
-          <Field label={t("asset.kafkaBrokers")} required>
-            <Textarea
-              value={state.brokersText}
-              onChange={(e) => patch({ brokersText: e.target.value })}
-              rows={3}
-              className="font-mono text-sm"
-              placeholder="192.168.100.50:9092"
-            />
-          </Field>
-
-          <Field label={t("asset.kafkaSaslMechanism")}>
-            <Select value={state.saslMechanism} onValueChange={(v) => patch({ saslMechanism: v })}>
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">{t("asset.kafkaSaslNone")}</SelectItem>
-                <SelectItem value="plain">PLAIN</SelectItem>
-                <SelectItem value="scram-sha-256">SCRAM-SHA-256</SelectItem>
-                <SelectItem value="scram-sha-512">SCRAM-SHA-512</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
-
-          {saslEnabled && (
-            <>
-              <Field label={t("asset.username")}>
-                <Input value={state.username} onChange={(e) => patch({ username: e.target.value })} />
-              </Field>
-              <PasswordSourceField
-                source={cred.value.passwordSource}
-                onSourceChange={cred.setPasswordSource}
-                password={cred.value.password}
-                onPasswordChange={cred.setPassword}
-                credentialId={cred.value.passwordCredentialId}
-                onCredentialIdChange={cred.setPasswordCredentialId}
-                managedPasswords={cred.managedPasswords}
-                hasExistingPassword={!!cred.value.encryptedPassword}
-                editAssetId={editAsset?.ID}
-                onUsernameChange={(v) => patch({ username: v })}
-              />
-            </>
-          )}
-        </div>
-      ),
+      fields: [
+        {
+          kind: "textarea",
+          key: "brokersText",
+          label: "asset.kafkaBrokers",
+          required: true,
+          mono: true,
+          rows: 3,
+          placeholder: "192.168.100.50:9092",
+        },
+        {
+          kind: "select",
+          key: "saslMechanism",
+          label: "asset.kafkaSaslMechanism",
+          options: [
+            { value: "none", label: "asset.kafkaSaslNone" },
+            { value: "plain", label: "PLAIN" },
+            { value: "scram-sha-256", label: "SCRAM-SHA-256" },
+            { value: "scram-sha-512", label: "SCRAM-SHA-512" },
+          ],
+        },
+        { kind: "text", key: "username", label: "asset.username", visibleWhen: (s) => s.saslMechanism !== "none" },
+        { kind: "password", visibleWhen: (s) => s.saslMechanism !== "none" },
+      ],
     },
-    {
-      key: "tunnel",
-      label: "asset.tabTunnel",
-      render: () => <ConnectionMethodFields value={state} onChange={patch} />,
-    },
+    { key: "tunnel", label: "asset.tabTunnel", fields: [{ kind: "tunnel" }] },
     {
       key: "tls",
       label: "asset.tabTls",
-      render: () => (
-        <div className="flex flex-col gap-4">
-          <div className="flex items-center justify-between">
-            <Label>{t("asset.tls")}</Label>
-            <Switch checked={state.tls} onCheckedChange={(v) => patch({ tls: v })} />
-          </div>
-
-          {state.tls && (
-            <>
-              <div className="flex items-center justify-between">
-                <Label>{t("asset.kafkaTlsInsecure")}</Label>
-                <Switch checked={state.tlsInsecure} onCheckedChange={(v) => patch({ tlsInsecure: v })} />
-              </div>
-              <Field label={t("asset.kafkaTlsServerName")}>
-                <Input
-                  value={state.tlsServerName}
-                  onChange={(e) => patch({ tlsServerName: e.target.value })}
-                  placeholder="kafka.example.com"
-                />
-              </Field>
-              <Field label={t("asset.kafkaTlsCAFile")}>
-                <Input
-                  value={state.tlsCAFile}
-                  onChange={(e) => patch({ tlsCAFile: e.target.value })}
-                  placeholder="/path/to/ca.pem"
-                />
-              </Field>
-              <Field label={t("asset.kafkaTlsCertFile")}>
-                <Input
-                  value={state.tlsCertFile}
-                  onChange={(e) => patch({ tlsCertFile: e.target.value })}
-                  placeholder="/path/to/client.crt"
-                />
-              </Field>
-              <Field label={t("asset.kafkaTlsKeyFile")}>
-                <Input
-                  value={state.tlsKeyFile}
-                  onChange={(e) => patch({ tlsKeyFile: e.target.value })}
-                  placeholder="/path/to/client.key"
-                />
-              </Field>
-            </>
-          )}
-        </div>
-      ),
+      fields: [
+        {
+          kind: "custom",
+          render: (s, p) => (
+            <div className="flex items-center justify-between">
+              <Label>{t("asset.tls")}</Label>
+              <Switch checked={s.tls} onCheckedChange={(v) => p({ tls: v })} />
+            </div>
+          ),
+        },
+        {
+          kind: "custom",
+          visibleWhen: (s) => s.tls,
+          render: (s, p) => (
+            <div className="flex items-center justify-between">
+              <Label>{t("asset.kafkaTlsInsecure")}</Label>
+              <Switch checked={s.tlsInsecure} onCheckedChange={(v) => p({ tlsInsecure: v })} />
+            </div>
+          ),
+        },
+        {
+          kind: "text",
+          key: "tlsServerName",
+          label: "asset.kafkaTlsServerName",
+          placeholder: "kafka.example.com",
+          visibleWhen: (s) => s.tls,
+        },
+        {
+          kind: "text",
+          key: "tlsCAFile",
+          label: "asset.kafkaTlsCAFile",
+          placeholder: "/path/to/ca.pem",
+          visibleWhen: (s) => s.tls,
+        },
+        {
+          kind: "text",
+          key: "tlsCertFile",
+          label: "asset.kafkaTlsCertFile",
+          placeholder: "/path/to/client.crt",
+          visibleWhen: (s) => s.tls,
+        },
+        {
+          kind: "text",
+          key: "tlsKeyFile",
+          label: "asset.kafkaTlsKeyFile",
+          placeholder: "/path/to/client.key",
+          visibleWhen: (s) => s.tls,
+        },
+      ],
     },
     {
       key: "schema_registry",
@@ -526,48 +485,49 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
     {
       key: "advanced",
       label: "asset.tabAdvanced",
-      render: () => (
-        <div className="flex flex-col gap-4">
-          <Field label={t("asset.kafkaClientId")}>
-            <Input value={state.clientId} onChange={(e) => patch({ clientId: e.target.value })} placeholder="opskat" />
-          </Field>
-          <div className="flex items-end gap-3">
-            <Field label={t("asset.kafkaRequestTimeout")} className="flex-1">
-              <Input
-                className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                type="number"
-                min={0}
-                max={300}
-                value={state.requestTimeoutSeconds}
-                onChange={(e) => patch({ requestTimeoutSeconds: normalizedNumber(e.target.value, 30) })}
-              />
-            </Field>
-            <Field label={t("asset.kafkaMessagePreviewBytes")} className="flex-1">
-              <Input
-                className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                type="number"
-                min={0}
-                value={state.messagePreviewBytes}
-                onChange={(e) => patch({ messagePreviewBytes: normalizedNumber(e.target.value, 4096) })}
-              />
-            </Field>
-            <Field label={t("asset.kafkaMessageFetchLimit")} className="flex-1">
-              <Input
-                className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                type="number"
-                min={0}
-                max={1000}
-                value={state.messageFetchLimit}
-                onChange={(e) => patch({ messageFetchLimit: normalizedNumber(e.target.value, 50) })}
-              />
-            </Field>
-          </div>
-        </div>
-      ),
+      fields: [
+        { kind: "text", key: "clientId", label: "asset.kafkaClientId", placeholder: "opskat" },
+        {
+          kind: "custom",
+          render: (s, p) => (
+            <div className="flex items-end gap-3">
+              <Field label={t("asset.kafkaRequestTimeout")} className="flex-1">
+                <Input
+                  className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  type="number"
+                  min={0}
+                  max={300}
+                  value={s.requestTimeoutSeconds}
+                  onChange={(e) => p({ requestTimeoutSeconds: normalizedNumber(e.target.value, 30) })}
+                />
+              </Field>
+              <Field label={t("asset.kafkaMessagePreviewBytes")} className="flex-1">
+                <Input
+                  className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  type="number"
+                  min={0}
+                  value={s.messagePreviewBytes}
+                  onChange={(e) => p({ messagePreviewBytes: normalizedNumber(e.target.value, 4096) })}
+                />
+              </Field>
+              <Field label={t("asset.kafkaMessageFetchLimit")} className="flex-1">
+                <Input
+                  className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  type="number"
+                  min={0}
+                  max={1000}
+                  value={s.messageFetchLimit}
+                  onChange={(e) => p({ messageFetchLimit: normalizedNumber(e.target.value, 50) })}
+                />
+              </Field>
+            </div>
+          ),
+        },
+      ],
     },
   ];
 
-  return <ConfigTabs groups={groups} />;
+  return <ConfigTabs groups={buildConfigGroups(KAFKA_GROUPS, { state, patch, ctx: { cred, editAsset } })} />;
 });
 
 function KafkaCompanionAuthFields({
