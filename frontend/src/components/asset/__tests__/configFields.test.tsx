@@ -1,10 +1,24 @@
-import { describe, it, expect, vi, beforeAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
+import * as reactI18next from "react-i18next";
 import { Fields, type FieldDesc } from "@/components/asset/configFields";
 import { buildConfigGroups, type ConfigGroupSchema, type FieldRenderCtx } from "@/components/asset/configFields";
 import type { UseAssetCredential } from "@/components/asset/useAssetCredential";
+
+/**
+ * Simulates i18next default nsSeparator:":" splitting behavior.
+ * When a key contains ":", i18next treats the part before ":" as namespace and
+ * the part after as the actual key, returning only the key portion when the
+ * namespace is not found.
+ */
+function tWithNsSplit(key: string, opts?: { defaultValue?: string }): string {
+  if (opts?.defaultValue !== undefined) return opts.defaultValue;
+  const colonIdx = key.indexOf(":");
+  if (colonIdx !== -1) return key.slice(colonIdx + 1);
+  return key;
+}
 
 interface S {
   host: string;
@@ -155,6 +169,8 @@ describe("Fields 渲染器 · composite kind", () => {
 });
 
 describe("Fields 渲染器 · Phase 2 扩展", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("textarea: required 渲染必填星号, mono 加等宽类", () => {
     const { getByRole, container } = render(
       <Harness fields={[{ kind: "textarea", key: "note", label: "asset.endpoints", required: true, mono: true }]} />
@@ -196,6 +212,51 @@ describe("Fields 渲染器 · Phase 2 扩展", () => {
       />
     );
     expect((getByTestId("f-host") as HTMLInputElement).placeholder).toBe("example.com");
+  });
+
+  it("text: 含冒号的字面量 placeholder 原样透出(nsSeparator 不截断)", () => {
+    // Use a t() that simulates real i18next nsSeparator:":" splitting —
+    // without defaultValue the colon splits off the namespace prefix.
+    vi.spyOn(reactI18next, "useTranslation").mockReturnValue(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { t: tWithNsSplit, i18n: { language: "en", changeLanguage: vi.fn() }, ready: true } as any
+    );
+
+    const { getByTestId } = render(
+      <Harness
+        fields={[
+          {
+            kind: "text",
+            key: "host",
+            label: "asset.host",
+            placeholder: "192.168.100.50:9092",
+            testid: "f-host",
+          },
+        ]}
+      />
+    );
+    expect((getByTestId("f-host") as HTMLInputElement).placeholder).toBe("192.168.100.50:9092");
+  });
+
+  it("textarea: 含冒号的字面量 placeholder 原样透出(nsSeparator 不截断)", () => {
+    vi.spyOn(reactI18next, "useTranslation").mockReturnValue(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { t: tWithNsSplit, i18n: { language: "en", changeLanguage: vi.fn() }, ready: true } as any
+    );
+
+    const { getByRole } = render(
+      <Harness
+        fields={[
+          {
+            kind: "textarea",
+            key: "note",
+            label: "asset.endpoints",
+            placeholder: "192.168.100.50:9092",
+          },
+        ]}
+      />
+    );
+    expect((getByRole("textbox") as HTMLTextAreaElement).placeholder).toBe("192.168.100.50:9092");
   });
 });
 

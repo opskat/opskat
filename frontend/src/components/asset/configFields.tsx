@@ -104,7 +104,7 @@ function FieldNode<S>({
           <Input
             data-testid={field.testid}
             value={String(state[field.key] ?? "")}
-            placeholder={field.placeholder ? t(field.placeholder) : undefined}
+            placeholder={field.placeholder ? t(field.placeholder, { defaultValue: field.placeholder }) : undefined}
             onChange={(e) => patch({ [field.key]: e.target.value } as Partial<S>)}
           />
         </Field>
@@ -121,7 +121,7 @@ function FieldNode<S>({
             type="number"
             min={field.min}
             value={display}
-            placeholder={field.placeholder ? t(field.placeholder) : undefined}
+            placeholder={field.placeholder ? t(field.placeholder, { defaultValue: field.placeholder }) : undefined}
             onChange={(e) => {
               const n = Number(e.target.value);
               const next = field.min !== undefined ? Math.max(field.min, n || 0) : n;
@@ -176,7 +176,7 @@ function FieldNode<S>({
           <Textarea
             value={String(state[field.key] ?? "")}
             rows={field.rows}
-            placeholder={field.placeholder ? t(field.placeholder) : undefined}
+            placeholder={field.placeholder ? t(field.placeholder, { defaultValue: field.placeholder }) : undefined}
             className={field.mono ? "font-mono text-sm" : undefined}
             onChange={(e) => patch({ [field.key]: e.target.value } as Partial<S>)}
           />
