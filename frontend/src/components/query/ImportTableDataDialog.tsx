@@ -28,7 +28,7 @@ import {
 import { FilePlus2, Link, Loader2, Play, Table2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
-import { ExecuteSQL } from "../../../wailsjs/go/query/Query";
+import { ExecuteSQL, ParseXlsx } from "../../../wailsjs/go/query/Query";
 import {
   buildImportInsertSql,
   detectDelimiter,
@@ -63,7 +63,7 @@ interface ImportTableDataDialogProps {
 }
 
 type WizardStep = "type" | "source" | "delimiter" | "options" | "mapping" | "mode" | "summary";
-type SourceItem = { id: string; name: string; kind: "file" | "url"; text: string };
+type SourceItem = { id: string; name: string; kind: "file" | "url"; text: string; parsed?: ParsedDelimitedTable };
 type ImportProgress = {
   processed: number;
   added: number;
@@ -117,6 +117,10 @@ const importFileRules: Record<ImportDataFormat, { extensions: string[]; mimes: s
     extensions: [".xml"],
     mimes: ["application/xml", "text/xml"],
   },
+  xlsx: {
+    extensions: [".xlsx", ".xls"],
+    mimes: ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel"],
+  },
 };
 
 function formatAccept(format: ImportDataFormat): string {
@@ -130,6 +134,18 @@ function isAcceptedFileForFormat(file: File, format: ImportDataFormat): boolean 
   const matchesExtension = rule.extensions.some((extension) => lowerName.endsWith(extension));
   const matchesMime = file.type !== "" && rule.mimes.includes(file.type);
   return matchesExtension || matchesMime;
+}
+
+// arrayBufferToBase64 encodes binary file bytes for the ParseXlsx IPC call,
+// chunking to stay clear of String.fromCharCode argument limits on large files.
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
 }
 
 function mergeParsedTables(tables: ParsedDelimitedTable[]): ParsedDelimitedTable {
@@ -288,18 +304,21 @@ export function ImportTableDataDialog({
     const delimiter = customDelimiter ? (customDelimiter[0] as ImportFieldDelimiter) : fieldDelimiter;
     return mergeParsedTables(
       sources.map((source) =>
-        parseImportSourceText({
-          text: source.text,
-          format,
-          fieldDelimiter: delimiter,
-          recordDelimiter,
-          textQualifier,
-          fixedWidth: importShape === "fixed",
-          fieldNameRowEnabled,
-          fieldNameRow,
-          dataStartRow,
-          dataEndRow: dataEndRow ? Number(dataEndRow) : undefined,
-        })
+        // XLSX sources are pre-parsed on the Go side; use them as-is.
+        source.parsed
+          ? source.parsed
+          : parseImportSourceText({
+              text: source.text,
+              format,
+              fieldDelimiter: delimiter,
+              recordDelimiter,
+              textQualifier,
+              fixedWidth: importShape === "fixed",
+              fieldNameRowEnabled,
+              fieldNameRow,
+              dataStartRow,
+              dataEndRow: dataEndRow ? Number(dataEndRow) : undefined,
+            })
       )
     );
   }, [
@@ -406,6 +425,20 @@ export function ImportTableDataDialog({
       for (const file of Array.from(files)) {
         if (!isAcceptedFileForFormat(file, format)) {
           rejected += 1;
+          continue;
+        }
+        if (format === "xlsx") {
+          // XLSX is binary — parse it on the Go side (excelize) and carry the
+          // resulting table on the source; no delimiter parsing is applied.
+          const base64 = arrayBufferToBase64(await file.arrayBuffer());
+          const table = await ParseXlsx(base64, "");
+          nextSources.push({
+            id: `${file.name}-${file.size}-${Date.now()}`,
+            name: file.name,
+            kind: "file",
+            text: "",
+            parsed: { headers: table.headers ?? [], rows: table.rows ?? [] },
+          });
           continue;
         }
         const text = await file.text();
@@ -590,7 +623,7 @@ export function ImportTableDataDialog({
           <p className="text-sm font-medium">{t("query.importWizardTypeIntro")}</p>
           <div className="space-y-3">
             <Label className="text-sm">{t("query.importWizardTypeLabel")}</Label>
-            {(["text", "csv", "json", "xml"] as ImportDataFormat[]).map((item) => (
+            {(["text", "csv", "json", "xml", "xlsx"] as ImportDataFormat[]).map((item) => (
               <label key={item} className="flex w-fit cursor-pointer items-center gap-2 text-sm">
                 <input type="radio" name="import-type" checked={format === item} onChange={() => setFormat(item)} />
                 {t(`query.importType${item[0].toUpperCase()}${item.slice(1)}`)}

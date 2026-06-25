@@ -146,6 +146,9 @@ export function TableEditorToolbar({
           <SelectItem value="sql" className="text-xs">
             SQL
           </SelectItem>
+          <SelectItem value="xlsx" className="text-xs">
+            Excel
+          </SelectItem>
         </SelectContent>
       </Select>
       <Button variant="ghost" size="icon-xs" title={t("query.exportData")} onClick={onExport} disabled={!canExport}>

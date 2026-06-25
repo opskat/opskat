@@ -1,7 +1,7 @@
 import { buildPagedSelect, quoteIdent, quoteQualifiedIdent, quoteTableRef, sqlQuote } from "./tableSql";
 
 type TableRow = Record<string, unknown>;
-export type TableExportFormat = "csv" | "tsv" | "sql";
+export type TableExportFormat = "csv" | "tsv" | "sql" | "xlsx";
 export type TableExportScope = "page" | "all";
 export type TableExportSortDir = "asc" | "desc" | null;
 export type TableExportRecordDelimiter = "lf" | "crlf";
@@ -38,6 +38,7 @@ interface BuildTableExportSelectSqlInput {
   sortDir: TableExportSortDir;
   page: number;
   pageSize: number;
+  columns?: string[]; // 投影列；省略则 SELECT *
 }
 
 interface BuildTableExportContentInput {
@@ -252,8 +253,10 @@ export function buildTableExportSelectSql({
   sortDir,
   page,
   pageSize,
+  columns,
 }: BuildTableExportSelectSqlInput): string {
   const tableName = quoteTableRef(database, table, driver);
+  const selectExpr = columns && columns.length ? columns.map((col) => quoteIdent(col, driver)).join(", ") : "*";
   const where = whereClause.trim();
   const orderBy =
     sortColumn && sortDir
@@ -269,8 +272,9 @@ export function buildTableExportSelectSql({
       pageSize,
       offset: page * pageSize,
       driver,
+      selectExpr,
     });
   }
   const pagePart = scope === "page" ? ` LIMIT ${pageSize} OFFSET ${page * pageSize}` : "";
-  return `SELECT * FROM ${tableName}${wherePart}${orderByPart}${pagePart}`;
+  return `SELECT ${selectExpr} FROM ${tableName}${wherePart}${orderByPart}${pagePart}`;
 }

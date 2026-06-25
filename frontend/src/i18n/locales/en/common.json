@@ -1987,6 +1987,7 @@
     "importTypeCsv": "CSV file (*.csv)",
     "importTypeJson": "JSON file (*.json)",
     "importTypeXml": "XML file (*.xml)",
+    "importTypeXlsx": "Excel file (*.xlsx)",
     "importTypeExcel": "Excel file (*.xls; *.xlsx)",
     "importTypeAccess": "MS Access database (*.mdb; *.accdb)",
     "importTypeOdbc": "ODBC",

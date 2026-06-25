@@ -1987,6 +1987,7 @@
     "importTypeCsv": "CSV 文件 (*.csv)",
     "importTypeJson": "JSON 文件 (*.json)",
     "importTypeXml": "XML 文件 (*.xml)",
+    "importTypeXlsx": "Excel 文件 (*.xlsx)",
     "importTypeExcel": "Excel 文件 (*.xls; *.xlsx)",
     "importTypeAccess": "MS Access 数据库 (*.mdb; *.accdb)",
     "importTypeOdbc": "ODBC",

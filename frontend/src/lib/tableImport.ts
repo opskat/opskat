@@ -2,7 +2,7 @@ import { quoteIdent, quoteQualifiedIdent, sqlQuote } from "./tableSql";
 
 export type Delimiter = "," | "\t";
 export type ImportNullStrategy = "empty-is-empty-string" | "empty-is-null" | "literal-null";
-export type ImportDataFormat = "text" | "csv" | "json" | "xml";
+export type ImportDataFormat = "text" | "csv" | "json" | "xml" | "xlsx";
 export type ImportFieldDelimiter = "," | "\t" | ";" | "|" | " ";
 export type ImportMode = "append" | "update" | "append-update" | "append-skip" | "delete" | "copy";
 export type ImportRecordDelimiter = "auto" | "lf" | "cr" | "crlf";

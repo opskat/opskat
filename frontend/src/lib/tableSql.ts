@@ -374,6 +374,7 @@ export interface BuildPagedSelectArgs {
   pageSize: number;
   offset: number;
   driver?: string;
+  selectExpr?: string; // 投影列（已 quote），默认 "*"
 }
 
 // buildPagedSelect 按方言拼分页查询。MSSQL 无 LIMIT，用 OFFSET ... ROWS FETCH
@@ -386,8 +387,9 @@ export function buildPagedSelect({
   pageSize,
   offset,
   driver,
+  selectExpr = "*",
 }: BuildPagedSelectArgs): string {
-  const base = `SELECT * FROM ${tableRef}${wherePart}`;
+  const base = `SELECT ${selectExpr} FROM ${tableRef}${wherePart}`;
   if (driver === "mssql") {
     const order = orderByExpr.trim() ? orderByExpr.trim() : "(SELECT NULL)";
     return `${base} ORDER BY ${order} OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY`;
