@@ -52,6 +52,14 @@ func TestProxyConfigRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, cfg.Proxy, got.Proxy)
 	})
+	t.Run("k8s", func(t *testing.T) {
+		a := &Asset{Type: AssetTypeK8s}
+		cfg := &K8sConfig{Kubeconfig: "enc-kubeconfig", Namespace: "prod", Proxy: sampleProxy()}
+		require.NoError(t, a.SetK8sConfig(cfg))
+		got, err := a.GetK8sConfig()
+		require.NoError(t, err)
+		assert.Equal(t, cfg.Proxy, got.Proxy)
+	})
 }
 
 func TestValidateDatabaseSQLiteRejectsProxy(t *testing.T) {

@@ -269,9 +269,10 @@ type KafkaConnectClusterConfig struct {
 
 // K8sConfig K8S集群类型的特定配置
 type K8sConfig struct {
-	Kubeconfig string `json:"kubeconfig,omitempty"` // kubeconfig YAML 内容
-	Namespace  string `json:"namespace,omitempty"`  // 默认命名空间
-	Context    string `json:"context,omitempty"`    // kubeconfig context 名称
+	Kubeconfig string       `json:"kubeconfig,omitempty"` // kubeconfig YAML 内容
+	Namespace  string       `json:"namespace,omitempty"`  // 默认命名空间
+	Context    string       `json:"context,omitempty"`    // kubeconfig context 名称
+	Proxy      *ProxyConfig `json:"proxy,omitempty"`      // SOCKS5 代理（与 SSH 隧道互斥，隧道优先）
 }
 
 // K8sConfig PasswordSource implementation.
