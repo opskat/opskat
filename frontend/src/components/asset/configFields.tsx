@@ -45,6 +45,7 @@ export type FieldDesc<S> = WithVisibility<S> &
         key: keyof S;
         label?: string;
         ariaLabel?: string;
+        width?: string;
         options: { value: string; label: string; testid?: string }[];
       }
     | {
@@ -159,7 +160,7 @@ function FieldNode<S>({
 
     case "segmented":
       return (
-        <Field label={field.label ? t(field.label) : undefined}>
+        <Field label={field.label ? t(field.label) : undefined} className={field.width}>
           <Segmented
             value={String(state[field.key] ?? "")}
             onChange={(v) => patch({ [field.key]: v } as Partial<S>)}

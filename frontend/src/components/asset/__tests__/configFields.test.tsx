@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeAll } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { Fields, type FieldDesc } from "@/components/asset/configFields";
 import { buildConfigGroups, type ConfigGroupSchema, type FieldRenderCtx } from "@/components/asset/configFields";
@@ -33,6 +34,13 @@ function Harness({ fields }: { fields: FieldDesc<S>[] }) {
   );
 }
 const stateOf = (el: HTMLElement): S => JSON.parse(el.textContent || "{}");
+
+// Radix Select 在 happy-dom 无 layout/pointer-capture,补齐 userEvent 驱动所需最小桩。
+beforeAll(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+  Element.prototype.hasPointerCapture = vi.fn().mockReturnValue(false);
+  Element.prototype.releasePointerCapture = vi.fn();
+});
 
 describe("Fields 渲染器 · 基础 kind", () => {
   it("text:输入回写", () => {
@@ -208,5 +216,49 @@ describe("buildConfigGroups", () => {
     );
     expect(getByTestId("g-host")).toBeTruthy();
     expect(getByTestId("g-custom")).toBeTruthy();
+  });
+});
+
+describe("Fields 渲染器 · Phase 3 扩展", () => {
+  it("segmented: width 作为 Field 的 className", () => {
+    const { container } = render(
+      <Harness
+        fields={[
+          {
+            kind: "segmented",
+            key: "mode",
+            width: "w-[190px] shrink-0",
+            options: [
+              { value: "manual", label: "Manual" },
+              { value: "uri", label: "URI" },
+            ],
+          },
+        ]}
+      />
+    );
+    expect(container.innerHTML).toContain("w-[190px]");
+  });
+
+  it("select: 点击选项写回 state", async () => {
+    const user = userEvent.setup();
+    const { getByTestId, findByRole } = render(
+      <Harness
+        fields={[
+          {
+            kind: "select",
+            key: "driver",
+            label: "asset.driver",
+            testid: "f-driver",
+            options: [
+              { value: "mysql", label: "MySQL" },
+              { value: "postgresql", label: "PostgreSQL" },
+            ],
+          },
+        ]}
+      />
+    );
+    await user.click(getByTestId("f-driver"));
+    await user.click(await findByRole("option", { name: "PostgreSQL" }));
+    expect(stateOf(getByTestId("state")).driver).toBe("postgresql");
   });
 });
