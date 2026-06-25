@@ -4,6 +4,10 @@ import { Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, S
 import { Field, FieldLabel, Segmented } from "@/components/asset/fields";
 import type { UseAssetCredential } from "@/components/asset/useAssetCredential";
 import type { asset_entity } from "../../../wailsjs/go/models";
+import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
+import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
+import type { ConnectionFormFields } from "@/components/asset/proxyConfig";
+import type { ConfigGroup } from "@/components/asset/ConfigTabs";
 
 /** password/tunnel kind 渲染所需的横切依赖(Task 2b 使用)。 */
 export interface FieldRenderCtx {
@@ -161,10 +165,61 @@ function FieldNode<S>({
         </div>
       );
 
-    // composite kind 在 Task 2b 实现;占位以保证 switch 穷尽。
-    case "password":
+    case "password": {
+      const cred = ctx?.cred;
+      if (!cred) return null; // password 字段要求调用方提供 ctx.cred
+      return (
+        <PasswordSourceField
+          source={cred.value.passwordSource}
+          onSourceChange={cred.setPasswordSource}
+          password={cred.value.password}
+          onPasswordChange={cred.setPassword}
+          credentialId={cred.value.passwordCredentialId}
+          onCredentialIdChange={cred.setPasswordCredentialId}
+          managedPasswords={cred.managedPasswords}
+          hasExistingPassword={!!cred.value.encryptedPassword}
+          editAssetId={ctx?.editAsset?.ID}
+          onUsernameChange={(v) => patch({ username: v } as unknown as Partial<S>)}
+          placeholder={field.placeholder}
+          secretLabel={field.secretLabel}
+          selectSecretLabel={field.selectSecretLabel}
+        />
+      );
+    }
+
     case "tunnel":
+      return (
+        <ConnectionMethodFields
+          value={state as unknown as ConnectionFormFields}
+          onChange={patch as unknown as (p: Partial<ConnectionFormFields>) => void}
+          excludeIds={field.excludeIds}
+          tunnelOptionLabelKey={field.tunnelOptionLabelKey}
+          tunnelSelectLabelKey={field.tunnelSelectLabelKey}
+        />
+      );
+
     case "custom":
-      return null;
+      return <>{field.render(state, patch)}</>;
   }
+}
+
+export type ConfigGroupSchema<S> =
+  | { key: string; label: string; badge?: number; fields: FieldDesc<S>[] }
+  | { key: string; label: string; badge?: number; render: () => ReactNode };
+
+/** 把组级 schema 转成 <ConfigTabs> 吃的 ConfigGroup[]:声明式组包成 <Fields>,逃逸口组透传 render。
+ *  纯函数(不调 hook);render 闭包在 ConfigTabs 渲染期被调用。 */
+export function buildConfigGroups<S>(
+  schema: ConfigGroupSchema<S>[],
+  args: { state: S; patch: (p: Partial<S>) => void; ctx?: FieldRenderCtx }
+): ConfigGroup[] {
+  return schema.map((g) => ({
+    key: g.key,
+    label: g.label,
+    badge: g.badge,
+    render:
+      "render" in g
+        ? g.render
+        : () => <Fields fields={g.fields} state={args.state} patch={args.patch} ctx={args.ctx} />,
+  }));
 }

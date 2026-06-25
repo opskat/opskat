@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import { useState } from "react";
 import { Fields, type FieldDesc } from "@/components/asset/configFields";
+import { buildConfigGroups, type ConfigGroupSchema, type FieldRenderCtx } from "@/components/asset/configFields";
+import type { UseAssetCredential } from "@/components/asset/useAssetCredential";
 
 interface S {
   host: string;
@@ -13,6 +15,12 @@ interface S {
   note: string;
 }
 const INIT: S = { host: "", port: 6379, database: 0, tls: false, mode: "a", driver: "mysql", note: "" };
+
+function FieldsWithCtx({ fields, ctx }: { fields: FieldDesc<S>[]; ctx: FieldRenderCtx }) {
+  const [state, setState] = useState<S>(INIT);
+  const patch = (p: Partial<S>) => setState((s) => ({ ...s, ...p }));
+  return <Fields fields={fields} state={state} patch={patch} ctx={ctx} />;
+}
 
 function Harness({ fields }: { fields: FieldDesc<S>[] }) {
   const [state, setState] = useState<S>(INIT);
@@ -72,5 +80,55 @@ describe("Fields 渲染器 · 基础 kind", () => {
     );
     expect(getByTestId("f-host")).toBeTruthy();
     expect(getByTestId("f-port")).toBeTruthy();
+  });
+});
+
+function fakeCred(): UseAssetCredential {
+  return {
+    value: { password: "", encryptedPassword: "", passwordSource: "inline", passwordCredentialId: 0 },
+    managedPasswords: [],
+    setPassword: () => {},
+    setPasswordSource: () => {},
+    setPasswordCredentialId: () => {},
+  };
+}
+
+describe("Fields 渲染器 · composite kind", () => {
+  it("password:从 ctx.cred 渲染 PasswordSourceField(出现来源切换段控件)", () => {
+    const ctx: FieldRenderCtx = { cred: fakeCred() };
+    const { getByTestId } = render(
+      <FieldsWithCtx fields={[{ kind: "password" }]} ctx={ctx} />
+    );
+    expect(getByTestId("password-source-inline")).toBeTruthy();
+  });
+
+  it("tunnel:渲染 ConnectionMethodFields(出现连接方式 radiogroup)", () => {
+    const { getAllByRole } = render(<FieldsWithCtx fields={[{ kind: "tunnel" }]} ctx={{}} />);
+    expect(getAllByRole("radiogroup").length).toBeGreaterThan(0);
+  });
+
+  it("custom:调用 render 并把 state/patch 传入", () => {
+    const { getByTestId } = render(
+      <FieldsWithCtx
+        fields={[{ kind: "custom", render: (s) => <span data-testid="c">{s.driver}</span> }]}
+        ctx={{}}
+      />
+    );
+    expect(getByTestId("c").textContent).toBe("mysql");
+  });
+});
+
+describe("buildConfigGroups", () => {
+  it("声明式组包成 Fields;render 逃逸口透传;badge 透传", () => {
+    const schema: ConfigGroupSchema<S>[] = [
+      { key: "a", label: "tab.a", fields: [{ kind: "text", key: "host", label: "asset.host", testid: "g-host" }] },
+      { key: "b", label: "tab.b", badge: 3, render: () => <span data-testid="g-custom">x</span> },
+    ];
+    const groups = buildConfigGroups(schema, { state: INIT, patch: () => {} });
+    expect(groups.map((g) => g.key)).toEqual(["a", "b"]);
+    expect(groups[1].badge).toBe(3);
+    const { getByTestId } = render(<>{groups[0].render()}{groups[1].render()}</>);
+    expect(getByTestId("g-host")).toBeTruthy();
+    expect(getByTestId("g-custom")).toBeTruthy();
   });
 });
