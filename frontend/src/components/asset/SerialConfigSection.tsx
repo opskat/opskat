@@ -1,8 +1,9 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from "react";
+import { forwardRef, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { RefreshCw } from "lucide-react";
 import { Field } from "@/components/asset/fields";
+import { useConfigSection } from "@/components/asset/useConfigSection";
 import { ListSerialPorts } from "../../../wailsjs/go/serial/Serial";
 import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import {
@@ -38,11 +39,18 @@ export const SerialConfigSection = forwardRef<AssetFormHandle, ConfigSectionProp
   const [ports, setPorts] = useState<SerialPortInfo[]>([]);
   const [loadingPorts, setLoadingPorts] = useState(false);
   const [customMode, setCustomMode] = useState(false);
-  const [state, setState] = useState<SerialFormState>(() =>
-    editAsset ? parseSerialConfig(editAsset.Config) : { ...SERIAL_DEFAULTS }
-  );
-
-  const patch = (p: Partial<SerialFormState>) => setState((s) => ({ ...s, ...p }));
+  const { state, patch } = useConfigSection<SerialFormState>({
+    ref,
+    editAsset,
+    onValidityChange,
+    init: (a) => (a ? parseSerialConfig(a.Config) : { ...SERIAL_DEFAULTS }),
+    validate: (s) => {
+      const ok = !!s.portPath.trim();
+      return { canTest: ok, canSave: ok, saveDisabledReason: ok ? "" : "asset.formMissingSerialPort" };
+    },
+    build: async (s) => ({ configJSON: buildSerialConfig(s), sshTunnelId: 0 }),
+    buildTest: async (s) => ({ assetType: "serial", configJSON: buildSerialConfig(s), password: "" }),
+  });
 
   const fetchPorts = useCallback(async () => {
     setLoadingPorts(true);
@@ -69,21 +77,6 @@ export const SerialConfigSection = forwardRef<AssetFormHandle, ConfigSectionProp
       setCustomMode(true);
     }
   }, [ports, state.portPath]);
-
-  // serial 保存与测试都要 port_path;上报反应式校验 + 缺端口提示(onValidityChange 为壳 setState,身份稳定)。
-  useEffect(() => {
-    const ok = !!state.portPath.trim();
-    onValidityChange({ canTest: ok, canSave: ok, saveDisabledReason: ok ? "" : "asset.formMissingSerialPort" });
-  }, [state.portPath, onValidityChange]);
-
-  useImperativeHandle(
-    ref,
-    () => ({
-      buildConfig: async () => ({ configJSON: buildSerialConfig(state), sshTunnelId: 0 }),
-      buildTestConfig: async () => ({ assetType: "serial", configJSON: buildSerialConfig(state), password: "" }),
-    }),
-    [state]
-  );
 
   const selectValue = customMode ? CUSTOM_PORT : state.portPath;
 
