@@ -16,10 +16,10 @@ interface SideAssistantTabBarProps {
 }
 
 const statusDotColor: Record<Exclude<SidebarTabStatus, null>, string> = {
-  waiting_approval: "bg-amber-500",
-  running: "bg-sky-500",
-  done: "bg-emerald-500",
-  error: "bg-rose-500",
+  waiting_approval: "bg-warning",
+  running: "bg-info",
+  done: "bg-success",
+  error: "bg-destructive",
 };
 
 export function SideAssistantTabBar({
@@ -183,7 +183,7 @@ export function SideAssistantTabBar({
                     {status === "running" ? (
                       <LoaderCircle
                         aria-hidden="true"
-                        className="absolute -bottom-1 -right-1 h-3 w-3 animate-spin text-sky-500"
+                        className="absolute -bottom-1 -right-1 h-3 w-3 animate-spin text-info"
                       />
                     ) : status ? (
                       <span

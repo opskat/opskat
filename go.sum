@@ -40,8 +40,6 @@ github.com/bytedance/sonic v1.12.5/go.mod h1:B8Gt/XvtZ3Fqj+iSKMypzymZxw/FVwgIGKz
 github.com/bytedance/sonic/loader v0.1.1/go.mod h1:ncP89zfokxS5LZrJxl5z0UJcsk4M4yY2JpfqGeCtNLU=
 github.com/bytedance/sonic/loader v0.2.1 h1:1GgorWTqf12TA8mma4DDSbaQigE2wOgQo7iCjjJv3+E=
 github.com/bytedance/sonic/loader v0.2.1/go.mod h1:ncP89zfokxS5LZrJxl5z0UJcsk4M4yY2JpfqGeCtNLU=
-github.com/cago-frame/agents v0.0.0-20260610020000-640785b2d7a3 h1:N5wKkBE1wMo8KeJYx93seRP6BRW9XBydDZgQbGu7ouM=
-github.com/cago-frame/agents v0.0.0-20260610020000-640785b2d7a3/go.mod h1:s72XmeaSoa3ysdqSTc4qliGqLHH6iBBGW6b8bFi0QRk=
 github.com/cago-frame/agents v0.0.0-20260617072949-d58533f30ab1 h1:BN/vCxcxLnaU+Er1+yQgHm0f4GrubCE0K9rKkuXvhvY=
 github.com/cago-frame/agents v0.0.0-20260617072949-d58533f30ab1/go.mod h1:s72XmeaSoa3ysdqSTc4qliGqLHH6iBBGW6b8bFi0QRk=
 github.com/cago-frame/cago v0.0.0-20260609091633-ba2f550b2729 h1:HtiDxeq5rPdJaRQI7XzJbly1WPCeLKaEa9txs2SKnFM=

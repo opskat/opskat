@@ -197,9 +197,9 @@ export function PortForwardPage() {
   const statusIcon = (status: string) => {
     switch (status) {
       case "running":
-        return <CircleCheck className="h-4 w-4 text-green-500" />;
+        return <CircleCheck className="h-4 w-4 text-success" />;
       case "partial":
-        return <CircleDot className="h-4 w-4 text-yellow-500" />;
+        return <CircleDot className="h-4 w-4 text-warning" />;
       case "error":
         return <CircleAlert className="h-4 w-4 text-destructive" />;
       default:
@@ -317,7 +317,7 @@ export function PortForwardPage() {
                     return (
                       <div key={rule.id} className="flex items-center gap-2 text-xs font-mono text-muted-foreground">
                         {rule.status === "running" ? (
-                          <CircleCheck className="h-3 w-3 text-green-500 shrink-0" />
+                          <CircleCheck className="h-3 w-3 text-success shrink-0" />
                         ) : rule.status === "error" ? (
                           <span title={rule.error} className="cursor-help shrink-0">
                             <CircleAlert className="h-3 w-3 text-destructive" />

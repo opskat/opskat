@@ -34,17 +34,17 @@ const RESULT_CONFIG = {
   allow: {
     icon: ShieldCheck,
     label: "asset.policyTestAllow",
-    className: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20",
+    className: "bg-success/10 text-success border-success/25",
   },
   deny: {
     icon: ShieldX,
     label: "asset.policyTestDeny",
-    className: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20",
+    className: "bg-destructive/10 text-destructive border-destructive/25",
   },
   need_confirm: {
     icon: ShieldAlert,
     label: "asset.policyTestConfirm",
-    className: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20",
+    className: "bg-warning/10 text-warning border-warning/25",
   },
 };
 

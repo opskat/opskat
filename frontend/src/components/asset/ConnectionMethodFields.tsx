@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
-import { Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
+import { Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { AssetSelect } from "@/components/asset/AssetSelect";
+import { Field, Segmented } from "@/components/asset/fields";
 import type { ConnectionFormFields, ConnectionType } from "./proxyConfig";
 
 interface ConnectionMethodFieldsProps {
@@ -24,26 +25,24 @@ export function ConnectionMethodFields({
 }: ConnectionMethodFieldsProps) {
   const { t } = useTranslation();
   return (
-    <>
+    <div className="flex flex-col gap-4">
       {/* Connection type (own label) */}
-      <div className="grid gap-2">
-        <Label>{t("asset.connectionType")}</Label>
-        <Select value={value.connectionType} onValueChange={(v) => onChange({ connectionType: v as ConnectionType })}>
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="direct">{t("asset.connectionDirect")}</SelectItem>
-            <SelectItem value="jumphost">{t(tunnelOptionLabelKey)}</SelectItem>
-            <SelectItem value="proxy">{t("asset.connectionProxy")}</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
+      <Field label={t("asset.connectionType")}>
+        <Segmented
+          value={value.connectionType}
+          onChange={(v) => onChange({ connectionType: v as ConnectionType })}
+          aria-label={t("asset.connectionType")}
+          options={[
+            { value: "direct", label: t("asset.connectionDirect") },
+            { value: "jumphost", label: t(tunnelOptionLabelKey) },
+            { value: "proxy", label: t("asset.connectionProxy") },
+          ]}
+        />
+      </Field>
 
       {/* Jump host / SSH tunnel selector */}
       {value.connectionType === "jumphost" && (
-        <div className="grid gap-2">
-          <Label>{t(tunnelSelectLabelKey)}</Label>
+        <Field label={t(tunnelSelectLabelKey)}>
           <AssetSelect
             value={value.sshTunnelId}
             onValueChange={(v) => onChange({ sshTunnelId: v })}
@@ -51,66 +50,55 @@ export function ConnectionMethodFields({
             excludeIds={excludeIds}
             placeholder={t("asset.jumpHostNone")}
           />
-        </div>
+        </Field>
       )}
 
       {/* Proxy config (inline, no nested border since we are already in a block) */}
       {value.connectionType === "proxy" && (
-        <div className="grid gap-2">
-          <div className="grid grid-cols-3 gap-2">
-            <div className="grid gap-1">
-              <Label className="text-xs">{t("asset.proxyType")}</Label>
+        <div className="flex flex-col gap-4">
+          <div className="flex items-end gap-3">
+            <Field label={t("asset.proxyType")} className="w-[120px] shrink-0">
               <Select value={value.proxyType} onValueChange={(v) => onChange({ proxyType: v })}>
-                <SelectTrigger className="h-8 text-xs">
+                <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="socks5">SOCKS5</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
-            <div className="grid gap-1">
-              <Label className="text-xs">{t("asset.proxyHost")}</Label>
+            </Field>
+            <Field label={t("asset.proxyHost")} className="flex-1">
               <Input
-                className="h-8 text-xs"
                 value={value.proxyHost}
                 onChange={(e) => onChange({ proxyHost: e.target.value })}
                 placeholder="127.0.0.1"
               />
-            </div>
-            <div className="grid gap-1">
-              <Label className="text-xs">{t("asset.proxyPort")}</Label>
+            </Field>
+            <Field label={t("asset.proxyPort")} className="w-[110px] shrink-0">
               <Input
-                className="h-8 text-xs [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 type="number"
                 value={value.proxyPort || ""}
                 placeholder="1080"
                 onChange={(e) => onChange({ proxyPort: Number(e.target.value) })}
               />
-            </div>
+            </Field>
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div className="grid gap-1">
-              <Label className="text-xs">{t("asset.proxyUsername")}</Label>
+          <div className="flex items-end gap-3">
+            <Field label={t("asset.proxyUsername")} className="flex-1">
+              <Input value={value.proxyUsername} onChange={(e) => onChange({ proxyUsername: e.target.value })} />
+            </Field>
+            <Field label={t("asset.proxyPassword")} className="flex-1">
               <Input
-                className="h-8 text-xs"
-                value={value.proxyUsername}
-                onChange={(e) => onChange({ proxyUsername: e.target.value })}
-              />
-            </div>
-            <div className="grid gap-1">
-              <Label className="text-xs">{t("asset.proxyPassword")}</Label>
-              <Input
-                className="h-8 text-xs"
                 type="password"
                 value={value.proxyPassword}
                 onChange={(e) => onChange({ proxyPassword: e.target.value })}
                 placeholder={value.encryptedProxyPassword ? t("asset.passwordUnchanged") : ""}
               />
-            </div>
+            </Field>
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }

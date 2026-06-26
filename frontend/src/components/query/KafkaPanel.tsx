@@ -1047,7 +1047,7 @@ function MessageBrowser({ tabId, state }: { tabId: string; state: KafkaTabState 
         </Select>
       </div>
       {browser.response?.errors?.length ? (
-        <div className="border-b bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+        <div className="border-b bg-warning/10 px-3 py-2 text-xs text-warning">
           {browser.response.errors.join("; ")}
         </div>
       ) : null}
@@ -1938,9 +1938,7 @@ function RegisterSchemaDialog({
           {compatibility && (
             <div
               className={`rounded-md border px-3 py-2 text-sm ${
-                compatibility.compatible
-                  ? "border-emerald-500/30 bg-emerald-500/10"
-                  : "border-destructive/30 bg-destructive/10"
+                compatibility.compatible ? "border-success/30 bg-success/10" : "border-destructive/30 bg-destructive/10"
               }`}
             >
               {compatibility.compatible ? t("query.kafkaSchemaCompatible") : t("query.kafkaSchemaIncompatible")}
@@ -2660,7 +2658,7 @@ function ConsumerGroupDetailPanel({ tabId, state }: { tabId: string; state: Kafk
         <Metric label={t("query.kafkaCoordinator")} value={detail.coordinator?.nodeId ?? "-"} />
       </div>
       {detail.lagError && (
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-xs">{detail.lagError}</div>
+        <div className="rounded-md border border-warning/30 bg-warning/10 p-2 text-xs">{detail.lagError}</div>
       )}
       <LagTable detail={detail} />
       <ResetConsumerGroupOffsetDialog tabId={tabId} group={detail.group} open={resetOpen} onOpenChange={setResetOpen} />

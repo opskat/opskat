@@ -577,7 +577,14 @@
           "desc": "拒绝 etcd 高危操作"
         }
       }
-    }
+    },
+    "tabConnection": "连接",
+    "tabTunnel": "隧道/代理",
+    "tabTls": "TLS/证书",
+    "tabAdvanced": "高级",
+    "tabSchemaRegistry": "Schema Registry",
+    "tabConnect": "Connect",
+    "addDescription": "添加备注"
   },
   "sshKey": {
     "title": "SSH 密钥",

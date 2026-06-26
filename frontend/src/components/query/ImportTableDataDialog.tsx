@@ -960,7 +960,7 @@ export function ImportTableDataDialog({
             <div
               className={`rounded-md border px-3 py-2 text-xs ${
                 hasMappedColumns
-                  ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                  ? "border-warning/30 bg-warning/10 text-warning"
                   : "border-destructive/40 bg-destructive/10 text-destructive"
               }`}
             >

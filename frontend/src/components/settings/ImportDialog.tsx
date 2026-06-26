@@ -239,7 +239,7 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
                             {item.host}:{item.port}
                           </span>
                           {item.exists && (
-                            <span className={`text-xs shrink-0 ${overwrite ? "text-blue-500" : "text-yellow-500"}`}>
+                            <span className={`text-xs shrink-0 ${overwrite ? "text-info" : "text-warning"}`}>
                               {overwrite ? t("import.overwrite") : t("import.exists")}
                             </span>
                           )}

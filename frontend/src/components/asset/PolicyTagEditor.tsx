@@ -16,28 +16,28 @@ const VARIANT_CONFIG: Record<
   }
 > = {
   allow: {
-    tagBg: "bg-emerald-500/8",
-    tagBorder: "border-emerald-500/20",
-    tagText: "text-emerald-700 dark:text-emerald-400",
-    removeBtnHover: "hover:bg-emerald-500/20 hover:text-emerald-800 dark:hover:text-emerald-300",
+    tagBg: "bg-success/10",
+    tagBorder: "border-success/25",
+    tagText: "text-success",
+    removeBtnHover: "hover:bg-success/20 hover:text-success",
     icon: ShieldCheck,
-    accentBorder: "border-l-emerald-500",
+    accentBorder: "border-l-success",
   },
   deny: {
-    tagBg: "bg-red-500/8",
-    tagBorder: "border-red-500/20",
-    tagText: "text-red-700 dark:text-red-400",
-    removeBtnHover: "hover:bg-red-500/20 hover:text-red-800 dark:hover:text-red-300",
+    tagBg: "bg-destructive/10",
+    tagBorder: "border-destructive/25",
+    tagText: "text-destructive",
+    removeBtnHover: "hover:bg-destructive/20 hover:text-destructive",
     icon: ShieldX,
-    accentBorder: "border-l-red-500",
+    accentBorder: "border-l-destructive",
   },
   warn: {
-    tagBg: "bg-amber-500/8",
-    tagBorder: "border-amber-500/20",
-    tagText: "text-amber-700 dark:text-amber-400",
-    removeBtnHover: "hover:bg-amber-500/20 hover:text-amber-800 dark:hover:text-amber-300",
+    tagBg: "bg-warning/10",
+    tagBorder: "border-warning/25",
+    tagText: "text-warning",
+    removeBtnHover: "hover:bg-warning/20 hover:text-warning",
     icon: ShieldAlert,
-    accentBorder: "border-l-amber-500",
+    accentBorder: "border-l-warning",
   },
 };
 

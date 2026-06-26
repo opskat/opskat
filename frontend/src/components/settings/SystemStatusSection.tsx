@@ -13,9 +13,9 @@ interface StatusEntry {
 }
 
 const levelConfig = {
-  info: { icon: Info, color: "text-blue-500", bg: "bg-blue-50 dark:bg-blue-950/30" },
-  warn: { icon: TriangleAlert, color: "text-yellow-500", bg: "bg-yellow-50 dark:bg-yellow-950/30" },
-  error: { icon: OctagonX, color: "text-red-500", bg: "bg-red-50 dark:bg-red-950/30" },
+  info: { icon: Info, color: "text-info", bg: "bg-info/15" },
+  warn: { icon: TriangleAlert, color: "text-warning", bg: "bg-warning/15" },
+  error: { icon: OctagonX, color: "text-destructive", bg: "bg-destructive/15" },
 };
 
 function StatusEntryItem({ entry }: { entry: StatusEntry }) {
@@ -64,7 +64,7 @@ export function SystemStatusSection() {
       <CardContent>
         {!hasProblems ? (
           <div className="flex flex-col items-center justify-center py-8 text-center">
-            <CircleCheck className="h-12 w-12 text-green-500 mb-3" />
+            <CircleCheck className="h-12 w-12 text-success mb-3" />
             <p className="font-medium">{t("systemStatus.allGood")}</p>
             <p className="text-sm text-muted-foreground mt-1">{t("systemStatus.allGoodDesc")}</p>
           </div>

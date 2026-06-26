@@ -1,24 +1,15 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
+import { forwardRef } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  Button,
-  Input,
-  Label,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-  Switch,
-} from "@opskat/ui";
-import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
+import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
+import { Field, Segmented } from "@/components/asset/fields";
 import { AssetSelect } from "@/components/asset/AssetSelect";
-import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
-import { resolveSaveProxyPassword } from "./proxyConfig";
-import { SelectSQLiteFile } from "../../../wailsjs/go/system/System";
-import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import { ConfigTabs } from "@/components/asset/ConfigTabs";
+import { useConfigSection } from "@/components/asset/useConfigSection";
+import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
+import { resolveSaveProxyPassword } from "./proxyConfig";
+import { SelectSQLiteFile } from "../../../wailsjs/go/system/System";
 import {
   applyDriverChange,
   buildDatabaseConfig,
@@ -27,24 +18,47 @@ import {
   DATABASE_DEFAULTS,
   type DatabaseFormState,
 } from "./DatabaseConfigSection.config";
+import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 
 export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function DatabaseConfigSection(
   { editAsset, onValidityChange, onIconChange },
   ref
 ) {
   const { t } = useTranslation();
-  const [state, setState] = useState<DatabaseFormState>(() => {
-    if (!editAsset) return { ...DATABASE_DEFAULTS };
-    // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.ssh_asset_id || 0),
-    // 并参与 connectionType 派生,故传入 parseDatabaseConfig。
-    return parseDatabaseConfig(editAsset.Config, editAsset.sshTunnelId || 0);
-  });
-  const patch = (p: Partial<DatabaseFormState>) => setState((s) => ({ ...s, ...p }));
-  // 凭据子状态:sqlite 无凭据,但 hook 始终持有;build 在 sqlite 分支忽略 cred。
   const cred = useAssetCredential(editAsset);
-
-  const isSqlite = state.driver === "sqlite";
-  const isRemoteSqlite = isSqlite && state.sqliteSource === "remote_ssh_vfs";
+  const { state, setState, patch } = useConfigSection<DatabaseFormState>({
+    ref,
+    editAsset,
+    onValidityChange,
+    init: (a) => (a ? parseDatabaseConfig(a.Config, a.sshTunnelId || 0) : { ...DATABASE_DEFAULTS }),
+    validate: (s) => {
+      const isSqlite = s.driver === "sqlite";
+      const isRemoteSqlite = isSqlite && s.sqliteSource === "remote_ssh_vfs";
+      const canSave = isSqlite ? !!s.path.trim() && (!isRemoteSqlite || s.sshTunnelId > 0) : !!s.host.trim();
+      const saveDisabledReason = canSave
+        ? ""
+        : isRemoteSqlite && s.path.trim() && s.sshTunnelId <= 0
+          ? "asset.formMissingSQLiteSSH"
+          : isSqlite
+            ? "asset.formMissingPath"
+            : "asset.formMissingHost";
+      return { canTest: canSave, canSave, saveDisabledReason };
+    },
+    build: async (s, ctx) => ({
+      configJSON: buildDatabaseConfig(
+        s,
+        await resolveSaveCredential(cred.value, ctx.encryptPassword),
+        await resolveSaveProxyPassword(s, ctx.encryptPassword)
+      ),
+      sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
+    }),
+    buildTest: async (s) => ({
+      assetType: "database",
+      configJSON: buildDatabaseConfig(s, resolveTestCredential(cred.value), s.proxyPassword),
+      password: cred.value.password,
+    }),
+    deps: [cred.value],
+  });
 
   // driver 切换:section 自有字段复位(纯函数)+ 壳 icon 副作用(onIconChange)。
   const handleDriverChange = (newDriver: string) => {
@@ -52,258 +66,184 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
     onIconChange?.(driverIcon(newDriver));
   };
 
-  // 保存/测试必填:sqlite→path;非 sqlite→host;上报反应式校验(onValidityChange 为壳 setState,身份稳定)。
-  useEffect(() => {
-    const ok = isSqlite ? !!state.path.trim() && (!isRemoteSqlite || state.sshTunnelId > 0) : !!state.host.trim();
-    const saveDisabledReason = ok
-      ? ""
-      : isRemoteSqlite && state.path.trim() && state.sshTunnelId <= 0
-        ? "asset.formMissingSQLiteSSH"
-        : isSqlite
-          ? "asset.formMissingPath"
-          : "asset.formMissingHost";
-    onValidityChange({ canTest: ok, canSave: ok, saveDisabledReason });
-  }, [isSqlite, isRemoteSqlite, state.path, state.host, state.sshTunnelId, onValidityChange]);
-
-  useImperativeHandle(
-    ref,
-    () => ({
-      buildConfig: async (ctx) => {
-        const frag = await resolveSaveCredential(cred.value, ctx.encryptPassword);
-        const proxyPassword = await resolveSaveProxyPassword(state, ctx.encryptPassword);
-        return {
-          configJSON: buildDatabaseConfig(state, frag, proxyPassword),
-          sshTunnelId: state.connectionType === "jumphost" ? state.sshTunnelId : 0,
-        };
-      },
-      buildTestConfig: async () => ({
-        assetType: "database",
-        // 测试:proxy 密码仅明文(无加密)
-        configJSON: buildDatabaseConfig(state, resolveTestCredential(cred.value), state.proxyPassword),
-        password: cred.value.password,
-      }),
-    }),
-    [state, cred.value]
-  );
-
-  return (
-    <>
-      {/* Database Driver (before host) */}
-      <div className="grid gap-2">
-        <Label>{t("asset.driver")}</Label>
-        <Select value={state.driver} onValueChange={handleDriverChange}>
-          <SelectTrigger data-testid="database-driver-select">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="mysql" data-testid="database-driver-option-mysql">
-              {t("asset.driverMySQL")}
-            </SelectItem>
-            <SelectItem value="postgresql" data-testid="database-driver-option-postgresql">
-              {t("asset.driverPostgreSQL")}
-            </SelectItem>
-            <SelectItem value="mssql" data-testid="database-driver-option-mssql">
-              {t("asset.driverMSSQL")}
-            </SelectItem>
-            <SelectItem value="sqlite" data-testid="database-driver-option-sqlite">
-              {t("asset.driverSQLite")}
-            </SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-
-      {isSqlite ? (
-        <>
-          {/* SQLite path field */}
-          <div className="grid gap-3 border rounded-lg p-3">
-            <div className="grid gap-2">
-              <Label>{t("asset.sqliteSource")}</Label>
-              <Select
+  const groups: ConfigGroupSchema<DatabaseFormState>[] = [
+    {
+      key: "connection",
+      label: "asset.tabConnection",
+      fields: [
+        {
+          kind: "custom",
+          render: () => (
+            <Field label={t("asset.driver")}>
+              <Select value={state.driver} onValueChange={handleDriverChange}>
+                <SelectTrigger data-testid="database-driver-select" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="mysql" data-testid="database-driver-option-mysql">
+                    {t("asset.driverMySQL")}
+                  </SelectItem>
+                  <SelectItem value="postgresql" data-testid="database-driver-option-postgresql">
+                    {t("asset.driverPostgreSQL")}
+                  </SelectItem>
+                  <SelectItem value="mssql" data-testid="database-driver-option-mssql">
+                    {t("asset.driverMSSQL")}
+                  </SelectItem>
+                  <SelectItem value="sqlite" data-testid="database-driver-option-sqlite">
+                    {t("asset.driverSQLite")}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+          ),
+        },
+        {
+          kind: "custom",
+          visibleWhen: (s) => s.driver === "sqlite",
+          render: () => (
+            <Field label={t("asset.sqliteSource")}>
+              <Segmented
                 value={state.sqliteSource}
-                onValueChange={(v) => {
+                onChange={(v) => {
                   if (v === "remote_ssh_vfs") {
                     patch({ sqliteSource: "remote_ssh_vfs", connectionType: "jumphost" });
                   } else {
                     patch({ sqliteSource: "local", sshTunnelId: 0, connectionType: "direct" });
                   }
                 }}
-              >
-                <SelectTrigger data-testid="database-sqlite-source-select">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="local" data-testid="database-sqlite-source-option-local">
-                    {t("asset.sqliteSourceLocal")}
-                  </SelectItem>
-                  <SelectItem value="remote_ssh_vfs" data-testid="database-sqlite-source-option-remote">
-                    {t("asset.sqliteSourceRemoteSSH")}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid gap-2">
-              <Label>{t("asset.sqliteFilePath")}</Label>
-              <div className="flex gap-2">
-                <Input
-                  data-testid="database-sqlite-path-input"
-                  value={state.path}
-                  onChange={(e) => patch({ path: e.target.value })}
-                  placeholder={isRemoteSqlite ? "/var/lib/app/app.db" : t("asset.sqliteFilePathPlaceholder")}
-                />
-                {!isRemoteSqlite && (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={async () => {
-                      const selected = await SelectSQLiteFile();
-                      if (selected) patch({ path: selected });
-                    }}
-                  >
-                    {t("asset.sqliteFilePathBrowse")}
-                  </Button>
-                )}
-              </div>
-            </div>
-            {isRemoteSqlite && (
-              <div className="grid gap-2">
-                <Label>{t("asset.sqliteRemoteSSH")}</Label>
-                <AssetSelect
-                  value={state.sshTunnelId}
-                  onValueChange={(v) => patch({ sshTunnelId: v, connectionType: "jumphost" })}
-                  filterType="ssh"
-                  placeholder={t("asset.jumpHostNone")}
-                  testId="database-sqlite-ssh-select"
-                />
-              </div>
-            )}
-          </div>
-
-          {/* Params */}
-          <div className="grid gap-2">
-            <Label>{t("asset.params")}</Label>
-            <Input
-              value={state.params}
-              onChange={(e) => patch({ params: e.target.value })}
-              placeholder={t("asset.paramsPlaceholder")}
-            />
-          </div>
-
-          {/* Read Only */}
-          <div className="flex items-center justify-between">
-            <Label>{t("asset.readOnly")}</Label>
-            <Switch checked={state.readOnly} onCheckedChange={(v) => patch({ readOnly: v })} />
-          </div>
-        </>
-      ) : (
-        <>
-          {/* Connection & Auth (single visual block) */}
-          <div className="grid gap-3 border rounded-lg p-3">
-            {/* Host + Port (each labeled) */}
-            <div className="grid grid-cols-[1fr_120px] gap-3">
-              <div className="grid gap-2">
-                <Label>{t("asset.host")}</Label>
-                <Input
-                  data-testid="database-host-input"
-                  value={state.host}
-                  onChange={(e) => patch({ host: e.target.value })}
-                  placeholder="example.com"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label>{t("asset.port")}</Label>
-                <Input
-                  data-testid="database-port-input"
-                  className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                  type="number"
-                  value={state.port || ""}
-                  placeholder={state.driver === "postgresql" ? "5432" : state.driver === "mssql" ? "1433" : "3306"}
-                  onChange={(e) => patch({ port: Number(e.target.value) })}
-                />
-              </div>
-            </div>
-
-            {/* Username */}
-            <div className="grid gap-2">
-              <Label>{t("asset.username")}</Label>
-              <Input
-                data-testid="database-username-input"
-                value={state.username}
-                onChange={(e) => patch({ username: e.target.value })}
+                aria-label={t("asset.sqliteSource")}
+                options={[
+                  {
+                    value: "local",
+                    label: t("asset.sqliteSourceLocal"),
+                    testid: "database-sqlite-source-option-local",
+                  },
+                  {
+                    value: "remote_ssh_vfs",
+                    label: t("asset.sqliteSourceRemoteSSH"),
+                    testid: "database-sqlite-source-option-remote",
+                  },
+                ]}
               />
-            </div>
+            </Field>
+          ),
+        },
+        {
+          kind: "custom",
+          visibleWhen: (s) => s.driver === "sqlite",
+          render: () => {
+            const isRemoteSqlite = state.sqliteSource === "remote_ssh_vfs";
+            return (
+              <Field label={t("asset.sqliteFilePath")}>
+                <div className="flex gap-2">
+                  <Input
+                    data-testid="database-sqlite-path-input"
+                    value={state.path}
+                    onChange={(e) => patch({ path: e.target.value })}
+                    placeholder={isRemoteSqlite ? "/var/lib/app/app.db" : t("asset.sqliteFilePathPlaceholder")}
+                  />
+                  {!isRemoteSqlite && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={async () => {
+                        const selected = await SelectSQLiteFile();
+                        if (selected) patch({ path: selected });
+                      }}
+                    >
+                      {t("asset.sqliteFilePathBrowse")}
+                    </Button>
+                  )}
+                </div>
+              </Field>
+            );
+          },
+        },
+        {
+          kind: "custom",
+          visibleWhen: (s) => s.driver === "sqlite" && s.sqliteSource === "remote_ssh_vfs",
+          render: () => (
+            <Field label={t("asset.sqliteRemoteSSH")}>
+              <AssetSelect
+                value={state.sshTunnelId}
+                onValueChange={(v) => patch({ sshTunnelId: v, connectionType: "jumphost" })}
+                filterType="ssh"
+                placeholder={t("asset.jumpHostNone")}
+                testId="database-sqlite-ssh-select"
+              />
+            </Field>
+          ),
+        },
+        {
+          kind: "row",
+          visibleWhen: (s) => s.driver !== "sqlite",
+          fields: [
+            {
+              kind: "text",
+              key: "host",
+              label: "asset.host",
+              required: true,
+              placeholder: "example.com",
+              width: "flex-1",
+              testid: "database-host-input",
+            },
+            {
+              kind: "number",
+              key: "port",
+              label: "asset.port",
+              width: "w-[110px] shrink-0",
+              blankWhenZero: true,
+              testid: "database-port-input",
+            },
+          ],
+        },
+        {
+          kind: "text",
+          key: "username",
+          label: "asset.username",
+          testid: "database-username-input",
+          visibleWhen: (s) => s.driver !== "sqlite",
+        },
+        { kind: "password", visibleWhen: (s) => s.driver !== "sqlite" },
+        {
+          kind: "text",
+          key: "database",
+          label: "asset.database",
+          placeholder: "asset.databasePlaceholder",
+          testid: "database-name-input",
+          visibleWhen: (s) => s.driver !== "sqlite",
+        },
+      ],
+    },
+    { key: "tunnel", label: "asset.tabTunnel", fields: [{ kind: "tunnel" }] },
+    {
+      key: "tls",
+      label: "asset.tabTls",
+      fields: [
+        {
+          kind: "select",
+          key: "sslMode",
+          label: "asset.sslMode",
+          visibleWhen: (s) => s.driver === "postgresql",
+          options: [
+            { value: "disable", label: "disable" },
+            { value: "require", label: "require" },
+            { value: "verify-ca", label: "verify-ca" },
+            { value: "verify-full", label: "verify-full" },
+          ],
+        },
+        { kind: "switch", key: "tls", label: "TLS", visibleWhen: (s) => s.driver === "mysql" || s.driver === "mssql" },
+      ],
+    },
+    {
+      key: "advanced",
+      label: "asset.tabAdvanced",
+      fields: [
+        { kind: "text", key: "params", label: "asset.params", placeholder: "asset.paramsPlaceholder" },
+        { kind: "switch", key: "readOnly", label: "asset.readOnly" },
+      ],
+    },
+  ];
 
-            {/* Password */}
-            <PasswordSourceField
-              source={cred.value.passwordSource}
-              onSourceChange={cred.setPasswordSource}
-              password={cred.value.password}
-              onPasswordChange={cred.setPassword}
-              credentialId={cred.value.passwordCredentialId}
-              onCredentialIdChange={cred.setPasswordCredentialId}
-              managedPasswords={cred.managedPasswords}
-              hasExistingPassword={!!cred.value.encryptedPassword}
-              editAssetId={editAsset?.ID}
-              onUsernameChange={(v) => patch({ username: v })}
-            />
-          </div>
-
-          {/* Database name */}
-          <div className="grid gap-2">
-            <Label>{t("asset.database")}</Label>
-            <Input
-              data-testid="database-name-input"
-              value={state.database}
-              onChange={(e) => patch({ database: e.target.value })}
-              placeholder={t("asset.databasePlaceholder")}
-            />
-          </div>
-
-          {/* SSL Mode (PostgreSQL only) */}
-          {state.driver === "postgresql" && (
-            <div className="grid gap-2">
-              <Label>{t("asset.sslMode")}</Label>
-              <Select value={state.sslMode} onValueChange={(v) => patch({ sslMode: v })}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="disable">disable</SelectItem>
-                  <SelectItem value="require">require</SelectItem>
-                  <SelectItem value="verify-ca">verify-ca</SelectItem>
-                  <SelectItem value="verify-full">verify-full</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-
-          {/* TLS (MySQL + MSSQL) */}
-          {(state.driver === "mysql" || state.driver === "mssql") && (
-            <div className="flex items-center justify-between">
-              <Label>TLS</Label>
-              <Switch checked={state.tls} onCheckedChange={(v) => patch({ tls: v })} />
-            </div>
-          )}
-
-          {/* Params */}
-          <div className="grid gap-2">
-            <Label>{t("asset.params")}</Label>
-            <Input
-              value={state.params}
-              onChange={(e) => patch({ params: e.target.value })}
-              placeholder={t("asset.paramsPlaceholder")}
-            />
-          </div>
-
-          {/* Read Only */}
-          <div className="flex items-center justify-between">
-            <Label>{t("asset.readOnly")}</Label>
-            <Switch checked={state.readOnly} onCheckedChange={(v) => patch({ readOnly: v })} />
-          </div>
-
-          {/* Connection method: direct / SSH tunnel / SOCKS5 proxy */}
-          <ConnectionMethodFields value={state} onChange={patch} />
-        </>
-      )}
-    </>
-  );
+  return <ConfigTabs groups={buildConfigGroups(groups, { state, patch, ctx: { cred, editAsset } })} />;
 });

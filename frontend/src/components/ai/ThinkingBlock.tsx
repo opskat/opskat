@@ -80,9 +80,9 @@ export const ThinkingBlock = memo(function ThinkingBlock({ block }: ThinkingBloc
   const summary = isRunning ? t("ai.thinking") : `${t("ai.thinkingProcess")} · ${charCount} ${t("ai.chars")}`;
 
   return (
-    <div className="my-1.5 rounded-lg border border-purple-500/20 bg-purple-500/5 text-xs overflow-hidden">
+    <div className="my-1.5 rounded-lg border border-primary/20 bg-primary/5 text-xs overflow-hidden">
       <button
-        className="flex items-center gap-2 w-full min-w-0 px-3 py-2 h-[34px] text-left hover:bg-purple-500/10 transition-colors"
+        className="flex items-center gap-2 w-full min-w-0 px-3 py-2 h-[34px] text-left hover:bg-primary/10 transition-colors"
         onClick={() =>
           setExpansion((current) => ({
             status: block.status,
@@ -91,14 +91,14 @@ export const ThinkingBlock = memo(function ThinkingBlock({ block }: ThinkingBloc
         }
       >
         <ChevronRight
-          className={`h-3 w-3 shrink-0 text-purple-500/60 transition-transform duration-150 ${
+          className={`h-3 w-3 shrink-0 text-primary/60 transition-transform duration-150 ${
             expanded ? "rotate-90" : ""
           }`}
         />
         {isRunning ? (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 text-purple-500 animate-spin" />
+          <Loader2 className="h-3.5 w-3.5 shrink-0 text-primary animate-spin" />
         ) : (
-          <Brain className="h-3.5 w-3.5 shrink-0 text-purple-500" />
+          <Brain className="h-3.5 w-3.5 shrink-0 text-primary" />
         )}
         <span className="text-muted-foreground italic truncate">{summary}</span>
       </button>
@@ -107,7 +107,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({ block }: ThinkingBloc
         <div
           ref={contentRef}
           data-thinking-scroll
-          className="border-t border-purple-500/15 px-3 py-2 max-h-64 overflow-auto"
+          className="border-t border-primary/15 px-3 py-2 max-h-64 overflow-auto"
           onScroll={handleContentScroll}
         >
           <pre className="whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground/80 leading-relaxed italic">

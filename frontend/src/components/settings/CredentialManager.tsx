@@ -682,7 +682,7 @@ function ImportKeyDialog({
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+                          <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
                           <div className="truncate text-sm font-medium">{selectedFile.name}</div>
                         </div>
                         <div className="mt-1 truncate font-mono text-xs text-muted-foreground">{selectedFile.path}</div>
@@ -746,7 +746,7 @@ function ImportKeyDialog({
                   <div
                     className={cn(
                       "flex items-center gap-1.5 text-xs",
-                      pemStatus === "valid" ? "text-emerald-600" : "text-amber-600"
+                      pemStatus === "valid" ? "text-success" : "text-warning"
                     )}
                   >
                     {pemStatus === "valid" ? (

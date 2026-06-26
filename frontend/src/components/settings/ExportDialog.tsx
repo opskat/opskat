@@ -303,7 +303,7 @@ export function ExportDialog({
           {requiresPassword && (
             <div className="space-y-2">
               {includeCredentials && (
-                <div className="flex items-center gap-2 rounded-md bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                <div className="flex items-center gap-2 rounded-md bg-warning/15 border border-warning/30 px-3 py-2 text-xs text-warning">
                   <AlertTriangle className="h-4 w-4 shrink-0" />
                   <span>{t("backup.credentialWarning")}</span>
                 </div>

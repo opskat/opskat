@@ -376,11 +376,11 @@ describe("applyDriverChange (镜像旧 handleDriverChange section 自有字段)"
   });
 });
 
-describe("driverIcon (镜像旧 DEFAULT_ICONS)", () => {
+describe("driverIcon", () => {
   it("各 driver 映射", () => {
     expect(driverIcon("mysql")).toBe("mysql");
     expect(driverIcon("postgresql")).toBe("postgresql");
-    expect(driverIcon("mssql")).toBe("database");
+    expect(driverIcon("mssql")).toBe("sqlserver");
     expect(driverIcon("sqlite")).toBe("sqlite");
   });
 });

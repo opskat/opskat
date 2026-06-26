@@ -7,7 +7,10 @@
 OpsKat
 </h1>
 
-<p align="center">An open-source, AI-first desktop application for managing remote infrastructure. Describe what you need — the AI agent handles the rest, with policy enforcement and full audit logging.</p>
+<p align="center">
+<b>Your one-stop server operations workbench</b><br/>
+SSH, databases, Redis, Kafka, Kubernetes… everything ops has to touch, unified in a single cross-platform desktop app. And you can let AI execute it for you in natural language — every step guarded by policy and audit.
+</p>
 
 <p align="center">
 <a href="https://opskat.dev/">Website</a> ·
@@ -22,7 +25,13 @@ OpsKat
   &nbsp;
   <img src="https://img.shields.io/badge/Wails-v2-EB4034?style=for-the-badge&logo=wails&logoColor=white" alt="Wails">
   &nbsp;
-  <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=for-the-badge&logo=windows&logoColor=white" alt="Platform">
+  <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=for-the-badge&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0yMCAxNlY3YTIgMiAwIDAgMC0yLTJINmEyIDIgMCAwIDAtMiAydjltMTYgMEg0bTE2IDAgMS4yOCAyLjU1YTEgMSAwIDAgMS0uOSAxLjQ1SDMuNjJhMSAxIDAgMCAxLS45LTEuNDVMNCAxNiIvPjwvc3ZnPg%3D%3D" alt="Platform">
+</p>
+
+<p align="center">
+  <a href="https://t.me/opskat"><img src="https://img.shields.io/badge/Telegram-OpsKat-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram"></a>
+  &nbsp;
+  <a href="https://qm.qq.com/q/sERnNKEzeg"><img src="https://img.shields.io/badge/QQ_Group-Join-12B7F5?style=for-the-badge&logo=qq&logoColor=white" alt="QQ Group"></a>
 </p>
 
 <p align="center">
@@ -31,42 +40,40 @@ OpsKat
 
 ## 🧭 About
 
-Managing servers often means juggling multiple tools — SSH clients, database GUIs, Redis managers, and Kafka consoles — constantly switching between them. OpsKat brings everything together in one place. With its AI agent, you can describe what you need in natural language, and it handles the rest. Even without the AI features, all common asset operations are unified in a single interface.
+Managing servers usually means juggling a pile of tools — SSH clients, database GUIs, Redis managers, Kafka consoles — and constantly switching between them. OpsKat brings all of those everyday asset operations into a single interface, so one app is enough. On its own, that's already a full ops workbench.
 
-Currently supports SSH servers, MySQL/PostgreSQL databases, Redis, MongoDB, and Kafka, with more asset types planned via a plugin system.
+On top of it sits a layer of AI: just say what you need in natural language, and the AI agent connects and runs it for you — pulling logs, running SQL, checking cluster status, and more. Every step is backed by policy enforcement and full audit logging, so handing work to the AI stays safe.
 
 **If you find it useful, please give us a Star ⭐ — it means a lot!**
 
-## 🎬 Intro Video
+## ⬇️ Install
 
-https://github.com/user-attachments/assets/2af6e52e-637c-4398-9c8b-8b39b4238b12
+### Download
 
-## 🎥 Demo
+Grab the latest build for your platform — **macOS, Windows, or Linux** — from the [Releases page](https://github.com/opskat/opskat/releases). No Go/Node toolchain required: download and run. Step-by-step notes are in the [installation docs](https://opskat.dev/docs/getting-started/installation).
 
-https://github.com/user-attachments/assets/035fc0df-230c-456b-87bd-8a4a125feaec
+### First run
 
-## ✨ Use Cases
+1. **Add an asset** — an SSH host, database, Redis, and so on — or import from your SSH config / Tabby.
+2. **Connect** — open a terminal, run a query, or browse keys and collections.
+3. *(Optional)* **Configure an AI provider**, then just tell the agent what you need.
 
-- **"Show me the recent nginx error logs on web-01"** → AI automatically SSHs in, runs the command, and returns the results
-- **"Count users by status in the db-prod users table"** → AI connects to the database via SSH tunnel and executes the SQL query
-- **"List lagging Kafka consumer groups in kafka-prod"** → AI checks Kafka metadata and group lag under policy control
-- **"Check the health of the k3s cluster"** → AI runs kubectl commands and summarizes node and pod status
+## 📦 Supported Assets
 
-## 🛡️ Security & Audit
+| Category | Assets |
+| :-- | :-- |
+| **Servers** | <img src="https://img.shields.io/badge/SSH-4D4D4D?style=flat-square&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxyZWN0IHdpZHRoPSIyMCIgaGVpZ2h0PSIxNCIgeD0iMiIgeT0iMyIgcng9IjIiLz48bGluZSB4MT0iOCIgeDI9IjE2IiB5MT0iMjEiIHkyPSIyMSIvPjxsaW5lIHgxPSIxMiIgeDI9IjEyIiB5MT0iMTciIHkyPSIyMSIvPjwvc3ZnPg%3D%3D" alt="SSH"> <img src="https://img.shields.io/badge/Serial-5A6B7B?style=flat-square&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxjaXJjbGUgY3g9IjEwIiBjeT0iNyIgcj0iMSIvPjxjaXJjbGUgY3g9IjQiIGN5PSIyMCIgcj0iMSIvPjxwYXRoIGQ9Ik00LjcgMTkuMyAxOSA1Ii8%2BPHBhdGggZD0ibTIxIDMtMyAxIDIgMloiLz48cGF0aCBkPSJNOS4yNiA3LjY4IDUgMTJsMiA1Ii8%2BPHBhdGggZD0ibTEwIDE0IDUgMiAzLjUtMy41Ii8%2BPHBhdGggZD0ibTE4IDEyIDEtMSAxIDEtMSAxWiIvPjwvc3ZnPg%3D%3D" alt="Serial"> |
+| **Databases** | <img src="https://img.shields.io/badge/MySQL-4479A1?style=flat-square&logo=mysql&logoColor=white" alt="MySQL"> <img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL"> <img src="https://img.shields.io/badge/SQL_Server-CC2927?style=flat-square" alt="SQL Server"> <img src="https://img.shields.io/badge/SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite"> <img src="https://img.shields.io/badge/Redis-FF4438?style=flat-square&logo=redis&logoColor=white" alt="Redis"> <img src="https://img.shields.io/badge/MongoDB-47A248?style=flat-square&logo=mongodb&logoColor=white" alt="MongoDB"> <img src="https://img.shields.io/badge/etcd-419EDA?style=flat-square&logo=etcd&logoColor=white" alt="etcd"> |
+| **Middleware** | <img src="https://img.shields.io/badge/Apache_Kafka-231F20?style=flat-square&logo=apachekafka&logoColor=white" alt="Kafka"> <img src="https://img.shields.io/badge/Kubernetes-326CE5?style=flat-square&logo=kubernetes&logoColor=white" alt="Kubernetes"> |
 
-Giving AI permission to operate on your servers — how do you keep it safe?
+_More asset types are on the way via the plugin system._
 
-- **Operation policies** — SSH commands, SQL statements, Redis operations, MongoDB operations, and Kafka actions all support allow/deny lists. SQL is analyzed by a parser that automatically blocks dangerous operations like DELETE/UPDATE without WHERE clauses
-- **Policy groups** — Built-in templates (Linux read-only, dangerous command deny, etc.) plus custom user-defined groups
-- **Pre-approved permissions** — AI or opsctl can request a batch of command patterns upfront. Once approved, matching commands execute automatically without per-command confirmation
-- **Audit logs** — Every operation is automatically recorded: who, when, which server, what command, and the full decision trail
+## 🖥️ A Complete Ops Workbench
 
-## 🖥️ Also a Full-Featured Terminal & Asset Manager
+Even before you turn on the AI, OpsKat is a full-featured terminal and asset manager:
 
-Beyond the AI, OpsKat is a complete terminal and asset management tool:
-
-- Tree-structured grouping for SSH servers, databases, Redis, MongoDB, and Kafka
-- Split pane terminal with customizable themes
+- Tree-structured grouping for every supported asset type
+- Split-pane terminal with customizable themes
 - SFTP file browser
 - Jump host chain connections
 - SQL query editor (MySQL/PostgreSQL via SSH tunnel)
@@ -77,7 +84,40 @@ Beyond the AI, OpsKat is a complete terminal and asset management tool:
 - Encrypted credential storage
 - Import from SSH config / Tabby
 
-## ⌨️ opsctl CLI + AI Coding Tool Integration
+## 🤖 Let AI Operate for You
+
+Configure an AI provider and you can describe what you need in plain language — the agent connects and does it for you:
+
+- **"Show me the recent nginx error logs on web-01"** → AI automatically SSHs in, runs the command, and returns the results
+- **"Count users by status in the db-prod users table"** → AI connects to the database via SSH tunnel and executes the SQL query
+- **"List lagging Kafka consumer groups in kafka-prod"** → AI checks Kafka metadata and group lag under policy control
+- **"Check the health of the k3s cluster"** → AI runs kubectl commands and summarizes node and pod status
+
+### How the AI works
+
+- **Bring your own key** — configure any **OpenAI- or Anthropic-compatible** provider; your API key is encrypted and stored locally.
+- **Use almost any model** — OpenAI, Anthropic (Claude), DeepSeek, Gemini, Qwen, GLM, Kimi, MiniMax… or a self-hosted/local endpoint (e.g. an OpenAI-compatible Ollama).
+- **Direct connection** — OpsKat talks to the model you configure directly; nothing is relayed through our servers, and you are not locked into any vendor.
+- **You stay in control** — the AI only proposes actions; every command runs from your machine against your servers, under the policy and audit controls below.
+
+## 🛡️ Security & Audit
+
+Giving AI permission to operate on your servers — how do you keep it safe?
+
+- **Operation policies** — SSH/serial commands, SQL statements, Redis, MongoDB, Kafka, Kubernetes, and etcd operations all support allow/deny lists. SQL is analyzed by a parser that automatically blocks dangerous operations like DELETE/UPDATE without WHERE clauses
+- **Policy groups** — Built-in templates (Linux read-only, dangerous command deny, etc.) plus custom user-defined groups
+- **Pre-approved permissions** — AI or opsctl can request a batch of command patterns upfront. Once approved, matching commands execute automatically without per-command confirmation
+- **Audit logs** — Every operation is automatically recorded: who, when, which server, what command, and the full decision trail
+
+## 🎥 Demo
+
+https://github.com/user-attachments/assets/2af6e52e-637c-4398-9c8b-8b39b4238b12
+
+https://github.com/user-attachments/assets/035fc0df-230c-456b-87bd-8a4a125feaec
+
+## ⌨️ opsctl — CLI & AI Coding Tool Integration
+
+> For CLI users and AI coding assistants. If you only use the desktop app, you can skip this.
 
 OpsKat ships a standalone CLI tool (`opsctl`), primarily designed for AI coding assistants like **Claude Code**, **Codex**, and **Gemini CLI**. One-click skill installation from the desktop app teaches these AI assistants to use `opsctl` — so they can directly manage servers, check logs, query databases, and troubleshoot production issues.
 
@@ -99,7 +139,9 @@ opsctl ssh web-01
 | Frontend | React 19 + TypeScript + Tailwind CSS |
 | Backend | Go 1.26, SQLite |
 
-## 🚀 Getting Started
+## 🔧 Build from Source
+
+> For contributors. If you just want to use OpsKat, see **Install** above.
 
 **Prerequisites:** [Go 1.26+](https://go.dev/), [Node.js 22+](https://nodejs.org/) with [pnpm](https://pnpm.io/), [Wails v2 CLI](https://wails.io/docs/gettingstarted/installation)
 
@@ -111,14 +153,17 @@ make build-embed    # Production build with embedded opsctl
 make build-cli      # Build opsctl CLI only
 ```
 
----
+## ❓ FAQ
 
-## 💬 Community
+**Is it free?** Yes — OpsKat is open source under [GPLv3](./LICENSE).
 
-Join our community to communicate with other users and developers:
+**Which AI models does it support, and do I need an API key?** You bring your own key for any OpenAI- or Anthropic-compatible provider (OpenAI, Claude, DeepSeek, Gemini, Qwen, GLM, Kimi, and more). See [How the AI works](#how-the-ai-works).
 
-- [Telegram](https://t.me/opskat)
-- [QQ Group](https://qm.qq.com/q/sERnNKEzeg)
+**Does my data pass through your servers?** No. OpsKat connects directly to the model endpoint you configure and to your own servers — nothing is relayed through us, and credentials are encrypted locally.
+
+**Can I use it without the AI?** Absolutely. It is a complete terminal and asset manager on its own.
+
+**Does it work on an intranet or offline?** Asset connections are direct, so they work on private networks. For AI features, point it at an internal or self-hosted model endpoint.
 
 ---
 

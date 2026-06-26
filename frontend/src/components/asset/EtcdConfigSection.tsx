@@ -1,9 +1,7 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
-import { useTranslation } from "react-i18next";
-import { Input, Label, Switch, Textarea } from "@opskat/ui";
-import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
-import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
-import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import { forwardRef } from "react";
+import { ConfigTabs } from "@/components/asset/ConfigTabs";
+import { useConfigSection } from "@/components/asset/useConfigSection";
+import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
 import { resolveSaveProxyPassword } from "./proxyConfig";
@@ -14,159 +12,108 @@ import {
   ETCD_DEFAULTS,
   type EtcdFormState,
 } from "./EtcdConfigSection.config";
+import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+
+const ETCD_GROUPS: ConfigGroupSchema<EtcdFormState>[] = [
+  {
+    key: "connection",
+    label: "asset.tabConnection",
+    fields: [
+      {
+        kind: "textarea",
+        key: "endpoints",
+        label: "etcd.form.endpoints",
+        required: true,
+        mono: true,
+        rows: 3,
+        placeholder: "10.0.0.1:2379\n10.0.0.2:2379",
+        hint: "etcd.form.endpointsHint",
+      },
+      { kind: "text", key: "username", label: "asset.username" },
+      { kind: "password" },
+      {
+        kind: "row",
+        fields: [
+          { kind: "number", key: "dialTimeoutSeconds", label: "etcd.form.dialTimeout", min: 0, width: "flex-1" },
+          { kind: "number", key: "commandTimeoutSeconds", label: "etcd.form.commandTimeout", min: 0, width: "flex-1" },
+        ],
+      },
+    ],
+  },
+  { key: "tunnel", label: "asset.tabTunnel", fields: [{ kind: "tunnel" }] },
+  {
+    key: "tls",
+    label: "asset.tabTls",
+    fields: [
+      { kind: "switch", key: "tls", label: "asset.tls" },
+      {
+        kind: "switch",
+        key: "tlsInsecure",
+        label: "etcd.form.tlsInsecure",
+        visibleWhen: (s) => s.tls,
+      },
+      {
+        kind: "text",
+        key: "tlsServerName",
+        label: "etcd.form.tlsServerName",
+        placeholder: "etcd.example.com",
+        visibleWhen: (s) => s.tls,
+      },
+      {
+        kind: "text",
+        key: "tlsCAFile",
+        label: "etcd.form.tlsCAFile",
+        placeholder: "/path/to/ca.pem",
+        visibleWhen: (s) => s.tls,
+      },
+      {
+        kind: "text",
+        key: "tlsCertFile",
+        label: "etcd.form.tlsCertFile",
+        placeholder: "/path/to/client.crt",
+        visibleWhen: (s) => s.tls,
+      },
+      {
+        kind: "text",
+        key: "tlsKeyFile",
+        label: "etcd.form.tlsKeyFile",
+        placeholder: "/path/to/client.key",
+        visibleWhen: (s) => s.tls,
+      },
+    ],
+  },
+];
 
 export const EtcdConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function EtcdConfigSection(
   { editAsset, onValidityChange },
   ref
 ) {
-  const { t } = useTranslation();
-  const [state, setState] = useState<EtcdFormState>(() => {
-    if (!editAsset) return { ...ETCD_DEFAULTS };
-    // sshTunnelId 优先 asset 顶层字段(镜像旧 asset.sshTunnelId || cfg.ssh_asset_id || 0),
-    // 并参与 connectionType 派生,故传入 parseEtcdConfig。
-    return parseEtcdConfig(editAsset.Config, editAsset.sshTunnelId || 0);
-  });
-  const patch = (p: Partial<EtcdFormState>) => setState((s) => ({ ...s, ...p }));
   const cred = useAssetCredential(editAsset);
-
-  // 端点为保存/测试共同必填;上报反应式校验(onValidityChange 为壳 setState,身份稳定)。
-  useEffect(() => {
-    const ok = parseEtcdEndpoints(state.endpoints).length > 0;
-    onValidityChange({ canTest: ok, canSave: ok, saveDisabledReason: ok ? "" : "etcd.error.endpointsRequired" });
-  }, [state.endpoints, onValidityChange]);
-
-  useImperativeHandle(
+  const { state, patch } = useConfigSection<EtcdFormState>({
     ref,
-    () => ({
-      buildConfig: async (ctx) => {
-        const frag = await resolveSaveCredential(cred.value, ctx.encryptPassword);
-        const proxyPassword = await resolveSaveProxyPassword(state, ctx.encryptPassword);
-        return {
-          configJSON: buildEtcdConfig(state, frag, proxyPassword),
-          sshTunnelId: state.connectionType === "jumphost" ? state.sshTunnelId : 0,
-        };
-      },
-      buildTestConfig: async () => ({
-        assetType: "etcd",
-        // 测试:proxy 密码仅明文(无加密)
-        configJSON: buildEtcdConfig(state, resolveTestCredential(cred.value), state.proxyPassword),
-        password: cred.value.password,
-      }),
+    editAsset,
+    onValidityChange,
+    init: (a) => (a ? parseEtcdConfig(a.Config, a.sshTunnelId || 0) : { ...ETCD_DEFAULTS }),
+    validate: (s) => {
+      const ok = parseEtcdEndpoints(s.endpoints).length > 0;
+      return { canTest: ok, canSave: ok, saveDisabledReason: ok ? "" : "etcd.error.endpointsRequired" };
+    },
+    build: async (s, ctx) => ({
+      configJSON: buildEtcdConfig(
+        s,
+        await resolveSaveCredential(cred.value, ctx.encryptPassword),
+        await resolveSaveProxyPassword(s, ctx.encryptPassword)
+      ),
+      sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
     }),
-    [state, cred.value]
-  );
+    buildTest: async (s) => ({
+      assetType: "etcd",
+      configJSON: buildEtcdConfig(s, resolveTestCredential(cred.value), s.proxyPassword),
+      password: cred.value.password,
+    }),
+    deps: [cred.value],
+  });
 
-  return (
-    <>
-      {/* Connection & Auth(单视觉块) */}
-      <div className="grid gap-3 border rounded-lg p-3">
-        <div className="grid gap-2">
-          <Label>{t("etcd.form.endpoints")}</Label>
-          <Textarea
-            value={state.endpoints}
-            onChange={(e) => patch({ endpoints: e.target.value })}
-            rows={3}
-            className="font-mono text-sm"
-            placeholder={"10.0.0.1:2379\n10.0.0.2:2379"}
-          />
-          <p className="text-xs text-muted-foreground">{t("etcd.form.endpointsHint")}</p>
-        </div>
-
-        <div className="grid gap-2">
-          <Label>{t("asset.username")}</Label>
-          <Input value={state.username} onChange={(e) => patch({ username: e.target.value })} />
-        </div>
-
-        <PasswordSourceField
-          source={cred.value.passwordSource}
-          onSourceChange={cred.setPasswordSource}
-          password={cred.value.password}
-          onPasswordChange={cred.setPassword}
-          credentialId={cred.value.passwordCredentialId}
-          onCredentialIdChange={cred.setPasswordCredentialId}
-          managedPasswords={cred.managedPasswords}
-          hasExistingPassword={!!cred.value.encryptedPassword}
-          editAssetId={editAsset?.ID}
-          onUsernameChange={(v) => patch({ username: v })}
-        />
-      </div>
-
-      {/* TLS */}
-      <div className="flex items-center justify-between">
-        <Label>{t("asset.tls")}</Label>
-        <Switch checked={state.tls} onCheckedChange={(v) => patch({ tls: v })} />
-      </div>
-
-      {state.tls && (
-        <>
-          <div className="flex items-center justify-between">
-            <Label>{t("etcd.form.tlsInsecure")}</Label>
-            <Switch checked={state.tlsInsecure} onCheckedChange={(v) => patch({ tlsInsecure: v })} />
-          </div>
-
-          <div className="grid gap-2">
-            <Label>{t("etcd.form.tlsServerName")}</Label>
-            <Input
-              value={state.tlsServerName}
-              onChange={(e) => patch({ tlsServerName: e.target.value })}
-              placeholder="etcd.example.com"
-            />
-          </div>
-
-          <div className="grid gap-2">
-            <Label>{t("etcd.form.tlsCAFile")}</Label>
-            <Input
-              value={state.tlsCAFile}
-              onChange={(e) => patch({ tlsCAFile: e.target.value })}
-              placeholder="/path/to/ca.pem"
-            />
-          </div>
-
-          <div className="grid gap-2">
-            <Label>{t("etcd.form.tlsCertFile")}</Label>
-            <Input
-              value={state.tlsCertFile}
-              onChange={(e) => patch({ tlsCertFile: e.target.value })}
-              placeholder="/path/to/client.crt"
-            />
-          </div>
-
-          <div className="grid gap-2">
-            <Label>{t("etcd.form.tlsKeyFile")}</Label>
-            <Input
-              value={state.tlsKeyFile}
-              onChange={(e) => patch({ tlsKeyFile: e.target.value })}
-              placeholder="/path/to/client.key"
-            />
-          </div>
-        </>
-      )}
-
-      <div className="grid grid-cols-2 gap-3">
-        <div className="grid gap-2">
-          <Label>{t("etcd.form.dialTimeout")}</Label>
-          <Input
-            className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-            type="number"
-            min={0}
-            value={state.dialTimeoutSeconds}
-            onChange={(e) => patch({ dialTimeoutSeconds: Math.max(0, Number(e.target.value) || 0) })}
-          />
-        </div>
-        <div className="grid gap-2">
-          <Label>{t("etcd.form.commandTimeout")}</Label>
-          <Input
-            className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-            type="number"
-            min={0}
-            value={state.commandTimeoutSeconds}
-            onChange={(e) => patch({ commandTimeoutSeconds: Math.max(0, Number(e.target.value) || 0) })}
-          />
-        </div>
-      </div>
-
-      {/* Connection method: direct / SSH tunnel / SOCKS5 proxy */}
-      <ConnectionMethodFields value={state} onChange={patch} />
-    </>
-  );
+  const groups = buildConfigGroups(ETCD_GROUPS, { state, patch, ctx: { cred, editAsset } });
+  return <ConfigTabs groups={groups} />;
 });

@@ -81,7 +81,7 @@ export const ToolBlock = memo(function ToolBlock({ block }: ToolBlockProps) {
           {isError && <XCircle className="h-3.5 w-3.5 text-destructive/70" />}
           {isCancelled && <XCircle className="h-3.5 w-3.5 text-muted-foreground/50" />}
           {!isRunning && !isError && !isCancelled && hasOutput && (
-            <CheckCircle2 className="h-3.5 w-3.5 text-green-500/70" />
+            <CheckCircle2 className="h-3.5 w-3.5 text-success/70" />
           )}
         </span>
       </button>

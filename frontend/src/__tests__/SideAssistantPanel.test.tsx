@@ -99,7 +99,7 @@ describe("SideAssistantPanel", () => {
     const tablist = screen.getByRole("tablist");
     expect(tablist).toHaveAttribute("aria-orientation", "vertical");
     expect(tablist.closest('[data-ai-session-rail="right"]')).not.toBeNull();
-    expect(document.querySelector(".bg-sky-500")).toBeTruthy();
+    expect(document.querySelector(".bg-info")).toBeTruthy();
   });
 
   it("history selection binds the active blank tab instead of opening a duplicate", async () => {

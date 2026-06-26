@@ -56,8 +56,8 @@ describe("SideAssistantTabBar (collapsed)", () => {
         getStatus={(id) => (id === "t1" ? "running" : id === "t2" ? "error" : null)}
       />
     );
-    expect(container.querySelector(".bg-sky-500")).toBeTruthy();
-    expect(container.querySelector(".bg-rose-500")).toBeTruthy();
+    expect(container.querySelector(".bg-info")).toBeTruthy();
+    expect(container.querySelector(".bg-destructive")).toBeTruthy();
   });
 
   it("calls onClose on middle-button click (auxClick)", () => {

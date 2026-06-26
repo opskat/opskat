@@ -105,8 +105,7 @@ describe("SSHConfigSection ref 契约", () => {
     const ref = createRef<AssetFormHandle>();
     render(<SSHConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
 
-    await u.click(screen.getByText("asset.authKey"));
-    await u.click(screen.getByRole("option", { name: "asset.authPassword" }));
+    await u.click(screen.getByTestId("ssh-auth-type-option-password"));
 
     await waitFor(async () => {
       const built = await ref.current!.buildConfig(ctx);
@@ -177,8 +176,7 @@ describe("SSHConfigSection 托管凭据→用户名自动填充", () => {
     render(<SSHConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
 
     // 切到 managed 来源(初始 inline),等托管选项异步加载出现后再选。
-    await u.click(screen.getByText("asset.passwordSourceInline"));
-    await u.click(screen.getByRole("option", { name: "asset.passwordSourceManaged" }));
+    await u.click(screen.getByTestId("password-source-managed"));
     await u.click(await screen.findByText("asset.selectPasswordPlaceholder"));
     await u.click(await screen.findByRole("option", { name: "cred-1 (alice)" }));
 
@@ -195,8 +193,7 @@ describe("SSHConfigSection 托管凭据→用户名自动填充", () => {
     });
     render(<SSHConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
 
-    await u.click(screen.getByText("asset.passwordSourceInline"));
-    await u.click(screen.getByRole("option", { name: "asset.passwordSourceManaged" }));
+    await u.click(screen.getByTestId("password-source-managed"));
     await u.click(await screen.findByText("asset.selectPasswordPlaceholder"));
     await u.click(await screen.findByRole("option", { name: "cred-2" }));
 

@@ -386,11 +386,7 @@ export function EtcdKeyDetail({
               {i > 0 && <span className="text-muted-foreground/40">{seg.sep}</span>}
               <span
                 className={
-                  seg.isLast
-                    ? "font-semibold text-foreground"
-                    : i === 0
-                      ? "text-amber-500 dark:text-amber-400"
-                      : "text-muted-foreground"
+                  seg.isLast ? "font-semibold text-foreground" : i === 0 ? "text-warning" : "text-muted-foreground"
                 }
               >
                 {seg.name}
@@ -400,7 +396,7 @@ export function EtcdKeyDetail({
         </div>
         {revision > 0 && (
           <span
-            className="flex shrink-0 items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-700 dark:text-amber-300"
+            className="flex shrink-0 items-center gap-1 rounded bg-warning/10 px-1.5 py-0.5 font-mono text-[10px] text-warning"
             data-testid="etcd-detail-history-banner"
           >
             <History className="size-3" /> {t("etcd.detail.historyAt", { rev: revision })}
@@ -608,8 +604,7 @@ function MetaCol({
   accent?: "purple" | "muted";
   testId?: string;
 }) {
-  const valueClass =
-    accent === "purple" ? "text-purple-500 dark:text-purple-300" : muted ? "text-muted-foreground" : "text-foreground";
+  const valueClass = accent === "purple" ? "text-syntax-number" : muted ? "text-muted-foreground" : "text-foreground";
   return (
     <div className="flex flex-col gap-0.5" data-testid={testId}>
       <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>

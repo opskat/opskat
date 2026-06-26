@@ -577,7 +577,14 @@
           "desc": "Deny dangerous etcd operations"
         }
       }
-    }
+    },
+    "tabConnection": "Connection",
+    "tabTunnel": "Tunnel / Proxy",
+    "tabTls": "TLS / Certificates",
+    "tabAdvanced": "Advanced",
+    "tabSchemaRegistry": "Schema Registry",
+    "tabConnect": "Connect",
+    "addDescription": "Add description"
   },
   "sshKey": {
     "title": "SSH Keys",

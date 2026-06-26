@@ -19,8 +19,8 @@ export function EtcdResultTable() {
       <div className="flex flex-wrap items-center gap-2 border-b px-3 py-1.5 text-[11px]">
         {meta.ok ? (
           <>
-            <CircleCheck className="size-3 text-emerald-500" />
-            <span className="font-medium text-emerald-600 dark:text-emerald-400">{t("etcd.query.execSuccess")}</span>
+            <CircleCheck className="size-3 text-success" />
+            <span className="font-medium text-success">{t("etcd.query.execSuccess")}</span>
             <span className="text-muted-foreground">·</span>
             <span>{meta.count} keys</span>
             <span className="text-muted-foreground">·</span>

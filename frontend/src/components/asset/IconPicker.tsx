@@ -486,9 +486,10 @@ export function IconPicker({ value, onChange, type = "asset", compact = false }:
             variant="outline"
             role="combobox"
             aria-label={displayName}
-            className="h-9 w-9 shrink-0 p-0 flex items-center justify-center"
+            className="flex h-9 w-full items-center justify-center gap-1 px-0"
           >
             <SelectedIcon className="h-4 w-4" style={resolvedColor ? { color: resolvedColor } : undefined} />
+            <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
           </Button>
         ) : (
           <Button variant="outline" role="combobox" className="w-full justify-between font-normal h-9">

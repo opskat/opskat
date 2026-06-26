@@ -1265,7 +1265,7 @@ function QueryResultTableImpl({
                             ) : null)}
                         </div>
                         {showFieldTypes && typeText && (
-                          <div className="mt-1 flex min-w-0 items-center gap-1 text-xs font-normal text-blue-700/80 dark:text-blue-300/80">
+                          <div className="mt-1 flex min-w-0 items-center gap-1 text-xs font-normal text-info/80">
                             <TypeIcon className="h-3.5 w-3.5 shrink-0" />
                             <span className="truncate">{typeText}</span>
                           </div>
@@ -1386,9 +1386,7 @@ function QueryResultTableImpl({
                       editable && isSelected && !isEditing && !!dateModeForCell && !!setCellValueHandler;
 
                     const focusPositionClass = isFrozen ? "z-20" : "relative z-10";
-                    const editedBgClass = isFrozen
-                      ? "query-table-frozen-cell-edited"
-                      : "bg-yellow-100 dark:bg-yellow-900/30";
+                    const editedBgClass = isFrozen ? "query-table-frozen-cell-edited" : "bg-warning/15";
                     const selectedBgClass = isFrozen ? "query-table-frozen-cell-selected" : "bg-primary/15";
                     const editingBgClass = isFrozen ? "query-table-frozen-cell-focus" : "bg-primary/5";
                     const focusClass = isEditing

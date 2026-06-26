@@ -168,7 +168,7 @@ function SnippetFormDialogContent({
             onChange={(e) => setName(e.target.value)}
             onBlur={() => setNameTouched(true)}
           />
-          {duplicateHint && <p className="text-amber-500 text-xs">{t("snippet.form.duplicateNameHint")}</p>}
+          {duplicateHint && <p className="text-warning text-xs">{t("snippet.form.duplicateNameHint")}</p>}
         </div>
 
         {/* Description */}

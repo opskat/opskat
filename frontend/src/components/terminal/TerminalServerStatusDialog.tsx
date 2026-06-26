@@ -46,21 +46,21 @@ interface TerminalServerStatusDialogProps {
 }
 
 const METRIC_COLOR = {
-  cpu: "#34d399",
-  memory: "#fbbf24",
+  cpu: "var(--success)",
+  memory: "var(--warning)",
   load: "var(--primary)",
 };
 
 function healthClasses(level: HealthLevel) {
   switch (level) {
     case "critical":
-      return { badge: "border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-400", dot: "bg-red-500" };
+      return { badge: "border-destructive/30 bg-destructive/15 text-destructive", dot: "bg-destructive" };
     case "warning":
-      return { badge: "border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400", dot: "bg-amber-500" };
+      return { badge: "border-warning/30 bg-warning/15 text-warning", dot: "bg-warning" };
     case "healthy":
       return {
-        badge: "border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-        dot: "bg-emerald-500",
+        badge: "border-success/30 bg-success/15 text-success",
+        dot: "bg-success",
       };
     default:
       return { badge: "border-border bg-muted/50 text-muted-foreground", dot: "bg-muted-foreground/60" };
@@ -146,7 +146,7 @@ export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: Te
                 </span>
                 <span className="inline-flex items-center gap-1">
                   <span
-                    className={`size-1.5 rounded-full ${autoRefresh ? "animate-pulse bg-emerald-500" : "bg-muted-foreground/60"}`}
+                    className={`size-1.5 rounded-full ${autoRefresh ? "animate-pulse bg-success" : "bg-muted-foreground/60"}`}
                   />
                   {autoRefresh
                     ? `${t("terminal.serverStatus.lastUpdated")}: ${collectedAtText}`
@@ -197,7 +197,7 @@ export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: Te
                 tint="emerald"
                 label={t("terminal.serverStatus.cpu")}
                 value={formatPercent(cpuPercent)}
-                valueClassName="text-emerald-600 dark:text-emerald-400"
+                valueClassName="text-success"
                 caption={t("terminal.serverStatus.cpuDetail")}
               >
                 {hasTrend ? (
@@ -219,7 +219,7 @@ export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: Te
                 tint="amber"
                 label={t("terminal.serverStatus.memory")}
                 value={formatPercent(memoryPercent)}
-                valueClassName="text-amber-600 dark:text-amber-400"
+                valueClassName="text-warning"
                 caption={`${formatBytes(latest?.memoryUsedBytes)} / ${formatBytes(latest?.memoryTotalBytes)}`}
               >
                 {hasTrend ? (
@@ -241,12 +241,12 @@ export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: Te
                 tint="sky"
                 label={`${t("terminal.serverStatus.disk")} ${latest?.diskMount || "/"}`}
                 value={formatPercent(diskPercent)}
-                valueClassName="text-sky-600 dark:text-sky-400"
+                valueClassName="text-info"
                 caption={`${formatBytes(latest?.diskUsedBytes)} / ${formatBytes(latest?.diskTotalBytes)}`}
               >
                 <div className="mt-5 h-2 overflow-hidden rounded-full bg-muted">
                   <div
-                    className="h-full rounded-full bg-sky-500 transition-all"
+                    className="h-full rounded-full bg-info transition-all"
                     style={{ width: `${Math.max(0, Math.min(100, diskPercent ?? 0))}%` }}
                   />
                 </div>
@@ -339,9 +339,9 @@ export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: Te
 }
 
 const TINT: Record<string, string> = {
-  emerald: "bg-emerald-500/12 text-emerald-600 dark:text-emerald-400",
-  amber: "bg-amber-500/12 text-amber-600 dark:text-amber-400",
-  sky: "bg-sky-500/12 text-sky-600 dark:text-sky-400",
+  emerald: "bg-success/15 text-success",
+  amber: "bg-warning/15 text-warning",
+  sky: "bg-info/15 text-info",
 };
 
 function MetricCard({

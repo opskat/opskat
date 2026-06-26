@@ -61,11 +61,12 @@ const DRIVER_PORTS: Record<string, number> = {
   mssql: 1433,
 };
 
-/** driver→壳 icon(镜像旧 DEFAULT_ICONS;mssql 落回 "database")。 */
+/** driver→壳 icon。 */
 export function driverIcon(driver: string): string {
   if (driver === "sqlite") return "sqlite";
   if (driver === "mysql") return "mysql";
   if (driver === "postgresql") return "postgresql";
+  if (driver === "mssql") return "sqlserver";
   return "database";
 }
 
