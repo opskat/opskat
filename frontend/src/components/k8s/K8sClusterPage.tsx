@@ -1367,7 +1367,7 @@ export function K8sClusterPage({ asset }: Props) {
               >
                 <span
                   className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                    node.status === "True" ? "bg-green-500" : "bg-red-500"
+                    node.status === "True" ? "bg-success" : "bg-destructive"
                   }`}
                 />
                 <span className="truncate">{node.name}</span>
@@ -1512,7 +1512,7 @@ export function K8sClusterPage({ asset }: Props) {
                                                 ) : (
                                                   <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
                                                 )}
-                                                <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                                                <span className="w-1.5 h-1.5 rounded-full bg-info shrink-0" />
                                                 <span className="truncate">{deployment.name}</span>
                                                 <span className="ml-auto text-[10px] text-muted-foreground">
                                                   {deployment.ready}
@@ -1584,10 +1584,10 @@ export function K8sClusterPage({ asset }: Props) {
                                                       <span
                                                         className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                                                           pod.status === "Running"
-                                                            ? "bg-green-500"
+                                                            ? "bg-success"
                                                             : pod.status === "Pending"
-                                                              ? "bg-yellow-500"
-                                                              : "bg-red-500"
+                                                              ? "bg-warning"
+                                                              : "bg-destructive"
                                                         }`}
                                                       />
                                                       <span className="truncate">{pod.name}</span>
@@ -1692,10 +1692,10 @@ export function K8sClusterPage({ asset }: Props) {
                                             <span
                                               className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                                                 pod.status === "Running"
-                                                  ? "bg-green-500"
+                                                  ? "bg-success"
                                                   : pod.status === "Pending"
-                                                    ? "bg-yellow-500"
-                                                    : "bg-red-500"
+                                                    ? "bg-warning"
+                                                    : "bg-destructive"
                                               }`}
                                             />
                                             <span className="truncate">{pod.name}</span>
@@ -2367,7 +2367,7 @@ export function K8sClusterPage({ asset }: Props) {
                           </span>
                         </td>
                         <td className="py-2 pr-4">
-                          <span className={c.ready ? "text-green-600" : "text-red-600"}>
+                          <span className={c.ready ? "text-success" : "text-destructive"}>
                             {c.ready ? "\u2713" : "\u2717"}
                           </span>
                         </td>

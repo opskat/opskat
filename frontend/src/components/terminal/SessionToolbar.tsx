@@ -85,7 +85,7 @@ export function SessionToolbar({ tabId }: SessionToolbarProps) {
     <div className="flex items-center gap-1.5 px-2 py-1 border-b bg-background shrink-0 text-xs">
       {/* 连接状态指示器 */}
       <span
-        className={`h-2 w-2 rounded-full shrink-0 ${anyConnected ? "bg-green-500" : "bg-destructive"}`}
+        className={`h-2 w-2 rounded-full shrink-0 ${anyConnected ? "bg-success" : "bg-destructive"}`}
         title={anyConnected ? t("ssh.session.connected") : t("ssh.session.disconnected")}
       />
 

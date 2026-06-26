@@ -101,7 +101,7 @@ export function ConnectionProgress({ connectionId }: ConnectionProgressProps) {
                       isFailed
                         ? "border-destructive bg-destructive/10"
                         : isWaiting
-                          ? "border-yellow-500 bg-yellow-500/10"
+                          ? "border-warning bg-warning/10"
                           : isDone
                             ? "border-primary bg-primary text-primary-foreground"
                             : isCurrent
@@ -120,7 +120,7 @@ export function ConnectionProgress({ connectionId }: ConnectionProgressProps) {
                         isFailed
                           ? "text-destructive"
                           : isWaiting
-                            ? "text-yellow-500"
+                            ? "text-warning"
                             : isCurrent
                               ? "text-primary"
                               : "text-muted-foreground/50"
@@ -173,9 +173,9 @@ export function ConnectionProgress({ connectionId }: ConnectionProgressProps) {
             <p className="text-sm text-muted-foreground">{connection.logs[connection.logs.length - 1].message}</p>
           )}
           {isError && <p className="text-sm text-destructive">{connection.error}</p>}
-          {isChallenge && <p className="text-sm text-yellow-500">{t("ssh.connectProgress.authChallenge")}</p>}
+          {isChallenge && <p className="text-sm text-warning">{t("ssh.connectProgress.authChallenge")}</p>}
           {isHostKeyVerify && (
-            <p className={`text-sm ${connection.hostKeyVerify?.isChanged ? "text-destructive" : "text-yellow-500"}`}>
+            <p className={`text-sm ${connection.hostKeyVerify?.isChanged ? "text-destructive" : "text-warning"}`}>
               {connection.hostKeyVerify?.isChanged
                 ? t("ssh.connectProgress.hostKeyChanged")
                 : t("ssh.connectProgress.hostKeyVerify")}

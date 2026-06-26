@@ -47,7 +47,7 @@ export const RetryBanner = memo(function RetryBanner({ status }: { status: ChatM
     <div
       role="status"
       aria-live="polite"
-      className="flex flex-col gap-0.5 rounded-md border border-amber-400/40 bg-amber-50 dark:bg-amber-950/40 px-2.5 py-1 text-xs text-amber-700 dark:text-amber-300"
+      className="flex flex-col gap-0.5 rounded-md border border-warning/30 bg-warning/15 px-2.5 py-1 text-xs text-warning"
     >
       <div className="flex items-center gap-1.5">
         <RotateCcw className="h-3 w-3 animate-spin-slow" aria-hidden="true" />

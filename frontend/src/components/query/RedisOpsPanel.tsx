@@ -122,7 +122,7 @@ function InfoPanel({
         {rows.map((row) => (
           <div key={row.label} className="min-w-0 rounded-md border bg-muted/30 px-3 py-2 text-xs">
             <span className="text-muted-foreground">{row.label}:</span>
-            <span className="ml-1 break-all font-mono text-emerald-600 dark:text-emerald-400">{row.value}</span>
+            <span className="ml-1 break-all font-mono text-success">{row.value}</span>
           </div>
         ))}
       </div>

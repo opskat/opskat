@@ -237,7 +237,7 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
                             {k.isEncrypted && (
                               <Tooltip>
                                 <TooltipTrigger asChild>
-                                  <Lock className="h-3 w-3 text-amber-500" />
+                                  <Lock className="h-3 w-3 text-warning" />
                                 </TooltipTrigger>
                                 <TooltipContent>{t("asset.keyEncrypted")}</TooltipContent>
                               </Tooltip>

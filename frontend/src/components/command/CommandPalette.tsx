@@ -348,7 +348,7 @@ export function CommandPalette({ open, onClose, onConnectAsset }: CommandPalette
                           onClick={() => activateRow(row)}
                           onMouseEnter={() => setActiveIndex(idx)}
                         >
-                          <span className="h-1.5 w-1.5 rounded-full bg-green-500 shrink-0" />
+                          <span className="h-1.5 w-1.5 rounded-full bg-success shrink-0" />
                           {renderIcon(resolveTabIcon(tab))}
                           <span className="flex-1 truncate text-sm">
                             <HighlightedText segments={segments} />

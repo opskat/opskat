@@ -60,12 +60,12 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
   };
 
   return (
-    <div className="my-2 rounded-[10px] border border-[#F59E0B40] bg-[#2D2410] p-4 space-y-3 text-xs overflow-hidden">
+    <div className="my-2 rounded-[10px] border border-warning/30 bg-warning/10 p-4 space-y-3 text-xs overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <ShieldAlert className="h-4 w-4 shrink-0 text-amber-500" />
-          <span className="font-semibold text-[13px] text-amber-500">
+          <ShieldAlert className="h-4 w-4 shrink-0 text-warning" />
+          <span className="font-semibold text-[13px] text-warning">
             {kind === "grant"
               ? t("ai.approvalGrantTitle")
               : kind === "batch"
@@ -78,7 +78,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
             <span className="text-[10px] text-muted-foreground bg-muted rounded px-1 py-0.5">{block.agentRole}</span>
           )}
         </div>
-        <span className="inline-flex items-center rounded-full bg-[#F59E0B20] h-5 px-2 text-[10px] font-semibold text-amber-500">
+        <span className="inline-flex items-center rounded-full bg-warning/15 h-5 px-2 text-[10px] font-semibold text-warning">
           {t("ai.approvalPending")}
         </span>
       </div>
@@ -87,26 +87,26 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
       <div className="space-y-2">
         {items.map((item, i) =>
           kind === "batch" ? (
-            <div key={i} className="rounded-lg bg-[#1E1A0E] p-2.5 space-y-1.5">
+            <div key={i} className="rounded-lg bg-warning/5 p-2.5 space-y-1.5">
               <div className="flex items-center gap-1.5">
                 <TypeBadge type={item.type} compact />
-                {item.asset_name && <span className="text-[11px] text-[#D4A94E]">{item.asset_name}</span>}
+                {item.asset_name && <span className="text-[11px] text-warning">{item.asset_name}</span>}
               </div>
-              <div className="rounded bg-[#16120B] px-2 py-[5px]">
+              <div className="rounded bg-warning/5 px-2 py-[5px]">
                 <code className="block font-mono text-[10px] text-muted-foreground whitespace-pre-wrap break-all">
                   {item.command}
                 </code>
               </div>
             </div>
           ) : (
-            <div key={i} className="rounded-lg bg-[#1E1A0E] p-3 space-y-2">
+            <div key={i} className="rounded-lg bg-warning/5 p-3 space-y-2">
               <div className="flex items-center gap-2">
                 {kind === "grant" ? (
                   <ScopeBadge item={item} />
                 ) : (
                   <>
                     <TypeBadge type={item.type} />
-                    {item.asset_name && <span className="text-xs text-[#D4A94E]">{item.asset_name}</span>}
+                    {item.asset_name && <span className="text-xs text-warning">{item.asset_name}</span>}
                   </>
                 )}
               </div>
@@ -118,7 +118,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                   rows={Math.max(1, (editedCommands[i] || "").split("\n").length)}
                 />
               ) : (
-                <div className="rounded-md bg-[#16120B] px-2.5 py-2">
+                <div className="rounded-md bg-warning/5 px-2.5 py-2">
                   <code className="block font-mono text-[11px] text-muted-foreground whitespace-pre-wrap break-all">
                     {item.command}
                   </code>
@@ -131,7 +131,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                       ? t("ai.approvalLocalToolContentPreview")
                       : t("ai.approvalLocalToolEditPreview")}
                   </summary>
-                  <pre className="mt-1.5 max-h-48 overflow-auto rounded bg-[#16120B] px-2 py-1.5 font-mono whitespace-pre-wrap break-all">
+                  <pre className="mt-1.5 max-h-48 overflow-auto rounded bg-warning/5 px-2 py-1.5 font-mono whitespace-pre-wrap break-all">
                     {item.detail}
                   </pre>
                 </details>
@@ -144,7 +144,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
       {/* Reason (grant only, before buttons) */}
       {kind === "grant" && block.approvalDescription && (
         <div className="flex gap-1.5">
-          <span className="text-[11px] font-medium text-[#D4A94E] shrink-0">{t("ai.approvalReasonLabel")}</span>
+          <span className="text-[11px] font-medium text-warning shrink-0">{t("ai.approvalReasonLabel")}</span>
           <span className="text-[11px] text-muted-foreground">{block.approvalDescription}</span>
         </div>
       )}
@@ -186,14 +186,14 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
             <Button
               size="sm"
               variant="outline"
-              className="h-8 rounded-md px-4 text-xs border-[#F59E0B40] text-[#D4A94E] hover:bg-[#F59E0B10] hover:text-[#D4A94E]"
+              className="h-8 rounded-md px-4 text-xs border-warning/30 text-warning hover:bg-warning/10 hover:text-warning"
               onClick={() => respond("deny")}
             >
               {t("ai.approvalDenyAll")}
             </Button>
             <Button
               size="sm"
-              className="h-8 rounded-md px-4 text-xs bg-amber-500 hover:bg-amber-600 text-[#1A1400] font-semibold"
+              className="h-8 rounded-md px-4 text-xs bg-warning hover:bg-warning/90 text-warning-foreground font-semibold"
               onClick={() => respond("allow")}
             >
               {t("ai.approvalAllowAll")}
@@ -204,14 +204,14 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
             <Button
               size="sm"
               variant="outline"
-              className="h-8 rounded-md px-4 text-xs border-[#F59E0B40] text-[#D4A94E] hover:bg-[#F59E0B10] hover:text-[#D4A94E]"
+              className="h-8 rounded-md px-4 text-xs border-warning/30 text-warning hover:bg-warning/10 hover:text-warning"
               onClick={() => respond("deny")}
             >
               {t("ai.approvalDeny")}
             </Button>
             <Button
               size="sm"
-              className="h-8 rounded-md px-4 text-xs bg-amber-500 hover:bg-amber-600 text-[#1A1400] font-semibold"
+              className="h-8 rounded-md px-4 text-xs bg-warning hover:bg-warning/90 text-warning-foreground font-semibold"
               onClick={() => respond("allow")}
             >
               {t("ai.approvalApprove")}
@@ -223,7 +223,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
             <Button
               size="sm"
               variant="outline"
-              className="h-8 rounded-md px-4 text-xs border-[#F59E0B40] text-[#D4A94E] hover:bg-[#F59E0B10] hover:text-[#D4A94E]"
+              className="h-8 rounded-md px-4 text-xs border-warning/30 text-warning hover:bg-warning/10 hover:text-warning"
               onClick={() => respond("deny")}
             >
               {t("ai.approvalDeny")}
@@ -231,7 +231,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
             {rememberMode ? (
               <Button
                 size="sm"
-                className="h-8 rounded-md px-4 text-xs bg-[#3D3520] text-[#D4A94E] hover:bg-[#4D4530]"
+                className="h-8 rounded-md px-4 text-xs bg-warning/20 text-warning hover:bg-warning/30"
                 onClick={() => respond("allowAll")}
               >
                 {t("ai.approvalRememberAndAllow")}
@@ -239,7 +239,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
             ) : (
               <Button
                 size="sm"
-                className="h-8 rounded-md px-4 text-xs bg-[#3D3520] text-[#D4A94E] hover:bg-[#4D4530]"
+                className="h-8 rounded-md px-4 text-xs bg-warning/20 text-warning hover:bg-warning/30"
                 onClick={() => {
                   setRememberMode(true);
                 }}
@@ -249,7 +249,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
             )}
             <Button
               size="sm"
-              className="h-8 rounded-md px-4 text-xs bg-amber-500 hover:bg-amber-600 text-[#1A1400] font-semibold"
+              className="h-8 rounded-md px-4 text-xs bg-warning hover:bg-warning/90 text-warning-foreground font-semibold"
               onClick={() => respond("allow")}
             >
               {rememberMode ? t("ai.approvalOnlyOnce") : t("ai.approvalAllow")}
@@ -277,14 +277,14 @@ function TypeBadge({ type, compact }: { type: string; compact?: boolean }) {
   const Icon = icons[type] || Terminal;
   if (compact) {
     return (
-      <span className="inline-flex items-center gap-[3px] rounded-[3px] border border-[#F59E0B30] h-[18px] px-[5px] text-[8px] font-bold text-[#D4A94E] bg-background">
+      <span className="inline-flex items-center gap-[3px] rounded-[3px] border border-warning/30 h-[18px] px-[5px] text-[8px] font-bold text-warning bg-background">
         <Icon className="h-[11px] w-[11px]" />
         {type.toUpperCase()}
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 rounded border border-[#F59E0B30] h-5 px-1.5 text-[9px] font-bold text-[#D4A94E] bg-background">
+    <span className="inline-flex items-center gap-1 rounded border border-warning/30 h-5 px-1.5 text-[9px] font-bold text-warning bg-background">
       <Icon className="h-3 w-3" />
       {type.toUpperCase()}
     </span>
@@ -298,7 +298,7 @@ function ScopeBadge({
 }) {
   const { t } = useTranslation();
   const cls =
-    "inline-flex items-center gap-[3px] rounded-[3px] border border-[#F59E0B30] h-[18px] px-[5px] text-[8px] font-semibold text-[#D4A94E] bg-background";
+    "inline-flex items-center gap-[3px] rounded-[3px] border border-warning/30 h-[18px] px-[5px] text-[8px] font-semibold text-warning bg-background";
   if (item.asset_id > 0) {
     return (
       <span className={cls}>

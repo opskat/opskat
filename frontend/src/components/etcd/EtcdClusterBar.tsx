@@ -36,9 +36,9 @@ export function EtcdClusterBar({ assetId }: EtcdClusterBarProps) {
   const status = clusterInfo?.status ?? "unknown";
   const dotColor =
     status === "healthy"
-      ? "bg-emerald-500"
+      ? "bg-success"
       : status === "loading"
-        ? "bg-slate-400 animate-pulse"
+        ? "bg-muted-foreground animate-pulse"
         : status === "unhealthy"
           ? "bg-destructive"
           : "bg-muted-foreground/50";

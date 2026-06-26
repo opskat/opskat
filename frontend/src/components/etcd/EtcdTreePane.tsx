@@ -99,7 +99,7 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
           ) : (
             <ChevronRight className="size-3 shrink-0 text-muted-foreground" />
           )}
-          <Folder className="size-3 shrink-0 text-amber-500 dark:text-amber-400" />
+          <Folder className="size-3 shrink-0 text-warning" />
           <span className="truncate font-medium text-foreground">{node.name}</span>
         </button>
         {isExpanded && (

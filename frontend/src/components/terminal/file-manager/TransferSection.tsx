@@ -19,7 +19,7 @@ function TransferRow({ transfer }: { transfer: SFTPTransfer }) {
     <div className="flex items-center gap-1.5 text-[11px]">
       <div className="shrink-0">
         {transfer.status === "active" && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
-        {transfer.status === "done" && <CheckCircle2 className="h-3 w-3 text-green-500" />}
+        {transfer.status === "done" && <CheckCircle2 className="h-3 w-3 text-success" />}
         {(transfer.status === "error" || transfer.status === "cancelled") && (
           <XCircle className="h-3 w-3 text-destructive" />
         )}

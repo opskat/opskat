@@ -63,7 +63,7 @@ export function AISetupWizard() {
         </div>
 
         {/* opsctl Plugin Banner */}
-        <div className="rounded-xl border border-border/60 bg-gradient-to-r from-primary/5 to-purple-500/5 p-5 flex items-center gap-4">
+        <div className="rounded-xl border border-border/60 bg-gradient-to-r from-primary/5 to-primary/5 p-5 flex items-center gap-4">
           <div className="flex-1 space-y-2">
             <div className="flex items-center gap-2">
               <SquareTerminal className="h-4 w-4 text-primary" />
@@ -116,8 +116,8 @@ export function AISetupWizard() {
               }`}
             >
               <div className="flex items-center gap-2.5 mb-2">
-                <div className="flex items-center justify-center h-9 w-9 rounded-lg bg-amber-500/10">
-                  <Sparkles className="h-4.5 w-4.5 text-amber-500" />
+                <div className="flex items-center justify-center h-9 w-9 rounded-lg bg-warning/10">
+                  <Sparkles className="h-4.5 w-4.5 text-warning" />
                 </div>
                 <div>
                   <div className="font-medium text-sm">{t("settings.anthropic")}</div>
