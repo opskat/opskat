@@ -478,9 +478,7 @@ export function AuditLogPage() {
                   <td className="px-4 py-2">
                     <span
                       className={`inline-block px-1.5 py-0.5 text-xs rounded font-mono ${
-                        entry.ref_count > 0
-                          ? "bg-success/15 text-success"
-                          : "bg-muted"
+                        entry.ref_count > 0 ? "bg-success/15 text-success" : "bg-muted"
                       }`}
                     >
                       {entry.ref_count}

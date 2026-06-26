@@ -155,6 +155,23 @@ describe("Fields 渲染器 · composite kind", () => {
     expect(getByTestId("password-source-inline")).toBeTruthy();
   });
 
+  it("password: placeholder 为 i18n key 时经 t() 翻译后透出(不原样显示 key)", () => {
+    vi.spyOn(reactI18next, "useTranslation").mockReturnValue({
+      t: (k: string, o?: { defaultValue?: string }) =>
+        k === "asset.passwordPlaceholder" ? "请输入密码" : (o?.defaultValue ?? k),
+      i18n: { language: "zh-CN", changeLanguage: vi.fn() },
+      ready: true,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    const ctx: FieldRenderCtx = { cred: fakeCred() };
+    const { container } = render(
+      <FieldsWithCtx fields={[{ kind: "password", placeholder: "asset.passwordPlaceholder" }]} ctx={ctx} />
+    );
+    const pwInput = container.querySelector('input[type="password"]') as HTMLInputElement;
+    expect(pwInput.placeholder).toBe("请输入密码");
+    vi.restoreAllMocks();
+  });
+
   it("tunnel:渲染 ConnectionMethodFields(出现连接方式 radiogroup)", () => {
     const { getAllByRole } = render(<FieldsWithCtx fields={[{ kind: "tunnel" }]} ctx={{}} />);
     expect(getAllByRole("radiogroup").length).toBeGreaterThan(0);

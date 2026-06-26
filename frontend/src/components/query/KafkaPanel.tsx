@@ -1938,9 +1938,7 @@ function RegisterSchemaDialog({
           {compatibility && (
             <div
               className={`rounded-md border px-3 py-2 text-sm ${
-                compatibility.compatible
-                  ? "border-success/30 bg-success/10"
-                  : "border-destructive/30 bg-destructive/10"
+                compatibility.compatible ? "border-success/30 bg-success/10" : "border-destructive/30 bg-destructive/10"
               }`}
             >
               {compatibility.compatible ? t("query.kafkaSchemaCompatible") : t("query.kafkaSchemaIncompatible")}

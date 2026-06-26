@@ -301,10 +301,7 @@ function IntegrationSection() {
               {skillTargets
                 .filter((s) => s.installed)
                 .map((s) => (
-                  <span
-                    key={s.name}
-                    className="inline-flex items-center gap-1 text-xs font-medium text-success"
-                  >
+                  <span key={s.name} className="inline-flex items-center gap-1 text-xs font-medium text-success">
                     <Check className="h-3.5 w-3.5" />
                     {s.name}
                   </span>

@@ -208,9 +208,11 @@ function FieldNode<S>({
           hasExistingPassword={!!cred.value.encryptedPassword}
           editAssetId={ctx?.editAsset?.ID}
           onUsernameChange={(v) => patch({ username: v } as unknown as Partial<S>)}
-          placeholder={field.placeholder}
-          secretLabel={field.secretLabel}
-          selectSecretLabel={field.selectSecretLabel}
+          placeholder={field.placeholder ? t(field.placeholder, { defaultValue: field.placeholder }) : undefined}
+          secretLabel={field.secretLabel ? t(field.secretLabel, { defaultValue: field.secretLabel }) : undefined}
+          selectSecretLabel={
+            field.selectSecretLabel ? t(field.selectSecretLabel, { defaultValue: field.selectSecretLabel }) : undefined
+          }
         />
       );
     }

@@ -386,11 +386,7 @@ export function EtcdKeyDetail({
               {i > 0 && <span className="text-muted-foreground/40">{seg.sep}</span>}
               <span
                 className={
-                  seg.isLast
-                    ? "font-semibold text-foreground"
-                    : i === 0
-                      ? "text-warning"
-                      : "text-muted-foreground"
+                  seg.isLast ? "font-semibold text-foreground" : i === 0 ? "text-warning" : "text-muted-foreground"
                 }
               >
                 {seg.name}
@@ -608,8 +604,7 @@ function MetaCol({
   accent?: "purple" | "muted";
   testId?: string;
 }) {
-  const valueClass =
-    accent === "purple" ? "text-syntax-number" : muted ? "text-muted-foreground" : "text-foreground";
+  const valueClass = accent === "purple" ? "text-syntax-number" : muted ? "text-muted-foreground" : "text-foreground";
   return (
     <div className="flex flex-col gap-0.5" data-testid={testId}>
       <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>

@@ -88,10 +88,7 @@ export function PolicyGroupSelector({ policyType, selectedIds, onChange, refresh
           >
             {g.extensionName ? <Puzzle className="h-2.5 w-2.5" /> : g.builtin && <Lock className="h-2.5 w-2.5" />}
             {displayName(g)}
-            <button
-              onClick={() => handleRemove(g.id)}
-              className="ml-0.5 rounded-sm hover:bg-info/20"
-            >
+            <button onClick={() => handleRemove(g.id)} className="ml-0.5 rounded-sm hover:bg-info/20">
               <X className="h-2.5 w-2.5" />
             </button>
           </span>

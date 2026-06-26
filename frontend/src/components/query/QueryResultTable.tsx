@@ -1386,9 +1386,7 @@ function QueryResultTableImpl({
                       editable && isSelected && !isEditing && !!dateModeForCell && !!setCellValueHandler;
 
                     const focusPositionClass = isFrozen ? "z-20" : "relative z-10";
-                    const editedBgClass = isFrozen
-                      ? "query-table-frozen-cell-edited"
-                      : "bg-warning/15";
+                    const editedBgClass = isFrozen ? "query-table-frozen-cell-edited" : "bg-warning/15";
                     const selectedBgClass = isFrozen ? "query-table-frozen-cell-selected" : "bg-primary/15";
                     const editingBgClass = isFrozen ? "query-table-frozen-cell-focus" : "bg-primary/5";
                     const focusClass = isEditing

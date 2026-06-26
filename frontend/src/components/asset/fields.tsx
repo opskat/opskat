@@ -87,9 +87,9 @@ export function Segmented<T extends string>({
             data-state={active ? "active" : "inactive"}
             onClick={() => onChange(opt.value)}
             className={cn(
-              "flex h-full flex-1 items-center justify-center gap-1.5 rounded-md text-[13px] transition-colors outline-none focus-visible:ring-1 focus-visible:ring-ring/45 disabled:pointer-events-none disabled:opacity-50",
+              "flex h-full flex-1 items-center justify-center gap-1.5 rounded-md border border-transparent text-[13px] transition-colors outline-none focus-visible:ring-1 focus-visible:ring-ring/45 disabled:pointer-events-none disabled:opacity-50",
               active
-                ? "bg-background font-semibold text-foreground shadow-sm dark:bg-input/30"
+                ? "bg-background font-semibold text-foreground shadow-sm dark:border-foreground/10 dark:bg-foreground/15 dark:shadow-none"
                 : "font-medium text-muted-foreground hover:text-foreground"
             )}
           >
