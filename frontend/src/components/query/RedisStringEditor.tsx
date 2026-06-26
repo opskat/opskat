@@ -28,12 +28,14 @@ function tokenizeJson(value: string): JsonToken[] {
       const rest = value.slice(index + token.length);
       tokens.push({
         value: token,
-        className: /^\s*:/.test(rest) ? "text-sky-700 dark:text-sky-300" : "text-emerald-700 dark:text-emerald-300",
+        className: /^\s*:/.test(rest) ? "text-syntax-string" : "text-syntax-string",
       });
     } else if (/^-?\d/.test(token)) {
-      tokens.push({ value: token, className: "text-purple-700 dark:text-purple-300" });
-    } else if (token === "true" || token === "false" || token === "null") {
-      tokens.push({ value: token, className: "text-amber-700 dark:text-amber-300" });
+      tokens.push({ value: token, className: "text-syntax-number" });
+    } else if (token === "true" || token === "false") {
+      tokens.push({ value: token, className: "text-syntax-boolean" });
+    } else if (token === "null") {
+      tokens.push({ value: token, className: "text-syntax-null" });
     } else {
       tokens.push({ value: token, className: "text-muted-foreground" });
     }

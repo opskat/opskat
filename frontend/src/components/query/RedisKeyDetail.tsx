@@ -40,12 +40,12 @@ function formatTtl(seconds: number): string {
 }
 
 const TYPE_COLORS: Record<string, string> = {
-  string: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
-  hash: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
-  list: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400",
-  set: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400",
-  zset: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
-  stream: "bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-400",
+  string: "bg-chart-2/15 text-chart-2",
+  hash: "bg-chart-1/15 text-chart-1",
+  list: "bg-chart-5/15 text-chart-5",
+  set: "bg-chart-4/15 text-chart-4",
+  zset: "bg-chart-3/15 text-chart-3",
+  stream: "bg-info/15 text-info",
 };
 
 function formatResult(parsed: RedisResult): string {

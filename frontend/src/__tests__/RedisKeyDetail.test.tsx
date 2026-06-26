@@ -102,9 +102,9 @@ describe("RedisKeyDetail", () => {
     const valueBox = screen.getByTestId("redis-string-value");
     expect(valueBox).toHaveClass("overflow-auto", "whitespace-pre");
     expect(valueBox).not.toHaveClass("break-all");
-    expect(within(valueBox).getByText('"a"')).toHaveClass("text-sky-700");
-    expect(within(valueBox).getByText("1")).toHaveClass("text-purple-700");
-    expect(within(valueBox).getByText("true")).toHaveClass("text-amber-700");
+    expect(within(valueBox).getByText('"a"')).toHaveClass("text-syntax-string");
+    expect(within(valueBox).getByText("1")).toHaveClass("text-syntax-number");
+    expect(within(valueBox).getByText("true")).toHaveClass("text-syntax-boolean");
   });
 
   it("executes command input with quoted arguments preserved", async () => {

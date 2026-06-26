@@ -90,7 +90,7 @@ function EditableCell({
           disabled={saving}
         />
         <Button variant="ghost" size="icon-xs" onClick={save} disabled={saving}>
-          <Check className="size-3 text-green-600" />
+          <Check className="size-3 text-success" />
         </Button>
         <Button variant="ghost" size="icon-xs" onClick={cancel} disabled={saving}>
           <X className="size-3" />
