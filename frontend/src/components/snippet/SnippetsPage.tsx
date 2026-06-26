@@ -30,11 +30,11 @@ function isRunnable(cat: string, cats: { id: string; assetType: string }[]): boo
 // Stable per-category badge styling. Order must be deterministic so a given
 // category always renders with the same hue across reloads.
 const CATEGORY_BADGE_COLORS = [
-  "bg-blue-500/15 text-blue-700 dark:text-blue-300 ring-1 ring-inset ring-blue-500/20",
-  "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-1 ring-inset ring-emerald-500/20",
-  "bg-rose-500/15 text-rose-700 dark:text-rose-300 ring-1 ring-inset ring-rose-500/20",
-  "bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-1 ring-inset ring-amber-500/20",
-  "bg-violet-500/15 text-violet-700 dark:text-violet-300 ring-1 ring-inset ring-violet-500/20",
+  "bg-chart-1/15 text-chart-1 ring-1 ring-inset ring-chart-1/25",
+  "bg-chart-2/15 text-chart-2 ring-1 ring-inset ring-chart-2/25",
+  "bg-chart-3/15 text-chart-3 ring-1 ring-inset ring-chart-3/25",
+  "bg-chart-4/15 text-chart-4 ring-1 ring-inset ring-chart-4/25",
+  "bg-chart-5/15 text-chart-5 ring-1 ring-inset ring-chart-5/25",
 ];
 
 function categoryBadgeClass(categoryId: string, orderedIds: string[]): string {
