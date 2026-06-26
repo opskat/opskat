@@ -77,14 +77,14 @@ export function ExternalEditCompareWorkbench({ compareResult, onDismiss }: Compa
           <Button
             variant="outline"
             size="xs"
-            className="border-slate-600 bg-transparent text-slate-200 hover:bg-slate-700 hover:text-white"
+            className="border-border bg-transparent text-foreground hover:bg-accent hover:text-accent-foreground"
             disabled={diffTotal === 0 || activeBlockIndex === 0}
             onClick={() => navigate(-1)}
           >
             {t("externalEdit.compare.previous")}
           </Button>
           <div
-            className="min-w-14 rounded border border-slate-600 bg-slate-800 px-2 py-1 text-center text-xs text-slate-200"
+            className="min-w-14 rounded border border-border bg-muted px-2 py-1 text-center text-xs text-foreground"
             data-testid="external-edit-compare-diff-count"
           >
             {diffTotal === 0 ? "0 / 0" : `${activeBlockIndex + 1} / ${diffTotal}`}
@@ -92,7 +92,7 @@ export function ExternalEditCompareWorkbench({ compareResult, onDismiss }: Compa
           <Button
             variant="outline"
             size="xs"
-            className="border-slate-600 bg-transparent text-slate-200 hover:bg-slate-700 hover:text-white"
+            className="border-border bg-transparent text-foreground hover:bg-accent hover:text-accent-foreground"
             disabled={diffTotal === 0 || activeBlockIndex >= diffTotal - 1}
             onClick={() => navigate(1)}
           >
@@ -101,7 +101,7 @@ export function ExternalEditCompareWorkbench({ compareResult, onDismiss }: Compa
           <Button
             size="icon"
             variant="ghost"
-            className="text-slate-300 hover:bg-slate-700 hover:text-white"
+            className="text-muted-foreground hover:bg-accent hover:text-accent-foreground"
             onClick={onDismiss}
           >
             <X className="h-4 w-4" />
@@ -110,14 +110,14 @@ export function ExternalEditCompareWorkbench({ compareResult, onDismiss }: Compa
       }
     >
       <div
-        className="min-h-0 flex-1 bg-[#1f2329] p-2"
+        className="min-h-0 flex-1 bg-card p-2"
         data-idea-layout="read-only-diff"
         data-testid="external-edit-compare-idea-layout"
       >
         <CodeDiffViewer
           activeBlockIndex={activeBlockIndex}
           badge={t("externalEdit.compare.readOnly")}
-          className="border-slate-700 bg-[#f8fafc] text-slate-950 dark:bg-[#1f2329] dark:text-slate-100"
+          className="border-border bg-card text-card-foreground"
           height="100%"
           language="plaintext"
           modified={compareResult.localContent || ""}

@@ -71,12 +71,12 @@ export function ExternalEditPendingDialog({
               const isError = item.type === "error";
               const isRemoteMissing = item.type === "remote_missing" || session.state === "remote_missing";
               const cardTone = isConflictDecision
-                ? "border-amber-400/30 bg-amber-500/5"
+                ? "border-warning/30 bg-warning/5"
                 : isPendingDecision
-                  ? "border-sky-400/30 bg-sky-500/5"
+                  ? "border-info/30 bg-info/5"
                   : isError
-                    ? "border-rose-400/30 bg-rose-500/5"
-                    : "border-amber-400/30 bg-amber-500/5";
+                    ? "border-destructive/30 bg-destructive/5"
+                    : "border-warning/30 bg-warning/5";
               return (
                 <div
                   key={item.id}
@@ -93,7 +93,7 @@ export function ExternalEditPendingDialog({
                           {fileName}
                         </span>
                         {autoSavePhases?.[session.documentKey] && (
-                          <span className="shrink-0 rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-medium text-sky-400">
+                          <span className="shrink-0 rounded bg-info/15 px-1.5 py-0.5 text-[10px] font-medium text-info">
                             {t("externalEdit.saving")}
                           </span>
                         )}

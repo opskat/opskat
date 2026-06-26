@@ -169,14 +169,14 @@ export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClo
             <Button
               variant="outline"
               size="xs"
-              className="border-slate-600 bg-transparent text-slate-200 hover:bg-slate-700 hover:text-white"
+              className="border-border bg-transparent text-foreground hover:bg-accent hover:text-accent-foreground"
               disabled={conflictTotal === 0 || activeBlockIndex === 0}
               onClick={() => navigate(-1)}
             >
               {t("externalEdit.merge.previous")}
             </Button>
             <div
-              className="min-w-14 rounded border border-slate-600 bg-slate-800 px-2 py-1 text-center text-xs text-slate-200"
+              className="min-w-14 rounded border border-border bg-muted px-2 py-1 text-center text-xs text-foreground"
               data-testid="external-edit-merge-conflict-count"
             >
               {conflictTotal === 0 ? "0 / 0" : `${activeBlockIndex + 1} / ${conflictTotal}`}
@@ -184,7 +184,7 @@ export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClo
             <Button
               variant="outline"
               size="xs"
-              className="border-slate-600 bg-transparent text-slate-200 hover:bg-slate-700 hover:text-white"
+              className="border-border bg-transparent text-foreground hover:bg-accent hover:text-accent-foreground"
               disabled={conflictTotal === 0 || activeBlockIndex >= conflictTotal - 1}
               onClick={() => navigate(1)}
             >
@@ -192,7 +192,7 @@ export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClo
             </Button>
             <Button
               variant="outline"
-              className="border-slate-600 bg-transparent text-slate-200 hover:bg-slate-700 hover:text-white"
+              className="border-border bg-transparent text-foreground hover:bg-accent hover:text-accent-foreground"
               onClick={() => handleOpenChange(false)}
             >
               {t("action.cancel")}
@@ -206,7 +206,7 @@ export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClo
         }
       >
         <div
-          className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,1fr)] gap-px bg-slate-700"
+          className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,1fr)] gap-px bg-border"
           data-idea-layout="three-way-merge"
           data-testid="external-edit-merge-idea-layout"
         >
