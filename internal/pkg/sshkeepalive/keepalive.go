@@ -20,7 +20,7 @@ type Pinger interface {
 // MUST invoke when shutting down. stop is idempotent.
 //
 // An interval <= 0 disables the heartbeat: no goroutine is started and the
-// returned stop is a no-op. This lets callers honour a "keepalive off" setting
+// returned stop is a no-op. This lets callers honor a "keepalive off" setting
 // without special-casing it.
 //
 // If SendRequest returns an error, the goroutine exits silently. Start does

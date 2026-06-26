@@ -80,7 +80,7 @@ func Set(s Settings) {
 	current = s
 }
 
-// Dialer builds a net.Dialer honouring the timeout and SO_KEEPALIVE settings.
+// Dialer builds a net.Dialer honoring the timeout and SO_KEEPALIVE settings.
 // TCP_NODELAY is NOT a Dialer field — apply it on the resulting *net.TCPConn
 // (see ApplyTCPOptions).
 func (s Settings) Dialer() *net.Dialer {
