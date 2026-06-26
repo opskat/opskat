@@ -103,14 +103,20 @@ The "why" behind the constraints — apply these when shaping a surface.
 
 ### 3.5 Status colors
 
+Four semantic states. **Every status token has a light *and* dark value plus a `-foreground` pair**, so it reads correctly both as an icon/dot **and** as a text-bearing badge in either theme.
+
 | Token / class | Light | Dark | Use |
 | --- | --- | --- | --- |
-| `destructive` | `oklch(0.55 0.24 27)` | `oklch(0.70 0.19 22)` | Dangerous / delete / error actions |
-| `destructive-foreground` | `oklch(0.985 0 0)` | `oklch(0.985 0 0)` | Text on destructive |
-| `success` | `oklch(0.55 0.19 155)` | *(same — no dark override)* | Connected / enabled / safe — icons, status dots |
-| `warning` | `oklch(0.70 0.17 85)` | *(same — no dark override)* | Caution / sensitive — icons, status dots |
+| `destructive` | `oklch(0.55 0.24 27)` | `oklch(0.70 0.19 22)` | Dangerous / delete / error |
+| `destructive-foreground` | `oklch(0.985 0 0)` | `oklch(0.985 0 0)` | Text on solid `destructive` |
+| `success` | `oklch(0.55 0.19 155)` | `oklch(0.70 0.17 155)` | Connected / enabled / safe |
+| `success-foreground` | `oklch(0.985 0 0)` | `oklch(0.985 0 0)` | Text on solid `success` |
+| `warning` | `oklch(0.70 0.17 85)` | `oklch(0.78 0.15 85)` | Caution / sensitive / pending |
+| `warning-foreground` | `oklch(0.22 0.03 85)` | `oklch(0.22 0.03 85)` | Text on solid `warning` (dark — `warning` is light) |
+| `info` | `oklch(0.55 0.17 245)` | `oklch(0.68 0.15 245)` | Running / in-progress / informational / neutral link |
+| `info-foreground` | `oklch(0.985 0.003 245)` | `oklch(0.985 0.003 245)` | Text on solid `info` |
 
-> **`success` / `warning` are single-value tokens.** They have **no `.dark` override and no `-foreground` pair** — they render the same in both themes and are meant for *icons / dots / thin accents*, not as a text-bearing badge fill. If you need a readable status badge (soft bg + deep fg) or a dark-tuned status, that's a genuinely new concept: add the `*-foreground` / dark values to `globals.css` and document them here rather than hand-tuning per component.
+> **The soft-chip recipe.** For a tinted status chip use **`bg-<status>/15 text-<status>`** (e.g. `bg-success/15 text-success`) — the token's `.dark` value keeps the text legible in both themes, so you **don't** add `dark:` color variants. For a *solid* status fill, pair it with its `-foreground` (`bg-warning text-warning-foreground`). For an icon or dot, plain `text-<status>` / `bg-<status>`. There is still **no `Badge` primitive** (§6.1) — chips are composed inline, but always from these tokens, never a raw `bg-amber-500`. `info` is the slot for blue/sky "running / in-progress" states (don't reuse `primary` for status).
 
 ### 3.6 Sidebar
 
@@ -154,6 +160,45 @@ Two feature areas need cell/line decorations that go beyond utility classes, so 
 > Non-frozen cells use plain utilities for the same states — `bg-primary/15` (selected), `bg-primary/5` (focus). The frozen variants exist only because a sticky/frozen cell needs an opaque base under the tint.
 
 **External-edit diff / merge** — line + gutter decorations for the Monaco-based file compare/merge workbench (§8). Three families: `.external-edit-diff-*` and `.external-edit-compare-*` (insert = green, delete = red, modify/current = amber) and `.external-edit-merge-*` (local = green, remote = blue, combined = split gradient, current = dark). Applied as Monaco decoration classes from [`CodeDiffViewer.tsx`](../frontend/src/components/CodeDiffViewer.tsx); driven by [`externalEditStore`](../frontend/src/stores/externalEditStore.ts). These carry their own raw oklch values (a deliberate exception — Monaco decorations sit outside the token system); keep new diff/merge tints here, next to their siblings, not scattered in components.
+
+> **Decoration values are raw; the React chrome is not.** Only the Monaco *decoration colors* are exempt — the `.external-edit-*` classes here plus the inline color strings in [`CodeDiffViewer.tsx`](../frontend/src/components/CodeDiffViewer.tsx) and [`merge-decorations.ts`](../frontend/src/components/terminal/external-edit/merge-decorations.ts). The **React chrome** around the editors (workbench toolbars, badges, status text, gutters-as-divs in `IdeaFrame` / `CompareWorkbench` / `MergeWorkbench` / `PendingDialog`) uses the ordinary **status tokens**: insert → `success`, delete → `destructive`, modify → `warning`, remote → `info` (§3.5).
+
+### 3.9 Syntax tokens (value-type coloring)
+
+For coloring a rendered value **by its JSON type** (Redis / etcd / query value cells), use the syntax family — not status colors. One token per type, with a light + dark value, so the color reads on both themes without a `dark:` variant.
+
+| Token / class | Light | Dark | Use |
+| --- | --- | --- | --- |
+| `syntax-string` | `oklch(0.52 0.13 230)` | `oklch(0.72 0.12 230)` | String values |
+| `syntax-number` | `oklch(0.50 0.20 300)` | `oklch(0.74 0.16 300)` | Numbers (int / float) |
+| `syntax-boolean` | `oklch(0.56 0.16 65)` | `oklch(0.78 0.14 75)` | Booleans (`true` / `false`) |
+| `syntax-null` | `oklch(0.55 0.02 250)` | `oklch(0.62 0.02 250)` | `null` / nil / undefined |
+
+Use `text-syntax-string` etc. These are for **in-DOM** value rendering only; the Monaco editors carry their own theme (§8).
+
+### 3.10 Chart tokens (categorical palette)
+
+For an **arbitrary set of N distinct categories** that carry no inherent meaning (snippet categories, user tag colors) — never a status, never a value type — use the 5-step categorical palette. Assign by position; cycle if you have more than five.
+
+| Token / class | Light | Dark |
+| --- | --- | --- |
+| `chart-1` | `oklch(0.55 0.17 250)` | `oklch(0.68 0.15 250)` |
+| `chart-2` | `oklch(0.55 0.15 160)` | `oklch(0.70 0.14 160)` |
+| `chart-3` | `oklch(0.58 0.19 15)` | `oklch(0.70 0.16 15)` |
+| `chart-4` | `oklch(0.64 0.16 70)` | `oklch(0.76 0.14 70)` |
+| `chart-5` | `oklch(0.54 0.18 300)` | `oklch(0.68 0.16 300)` |
+
+Typical chip: `bg-chart-1/15 text-chart-1 ring-1 ring-inset ring-chart-1/25`. Don't reach for `chart-*` when the meaning is really status (→ §3.5) or a value type (→ §3.9) — those carry meaning and must stay semantic.
+
+### 3.11 Where raw colors are allowed (the only exceptions)
+
+Everything else uses tokens. These few places legitimately carry raw color values because they live **outside** the CSS-variable / Tailwind system, or are user-authored / brand palettes:
+
+- **Terminal color schemes** — [`data/terminalThemes.ts`](../frontend/src/data/terminalThemes.ts), the editor defaults in [`TerminalThemeEditor.tsx`](../frontend/src/components/settings/TerminalThemeEditor.tsx), and the xterm search-highlight colors in [`TerminalSearchBar.tsx`](../frontend/src/components/terminal/TerminalSearchBar.tsx) — xterm renders to a canvas with its own palette.
+- **Monaco editor** — the theme in [`monaco-setup.ts`](../frontend/src/lib/monaco-setup.ts) and the diff/merge decoration *values* in [`CodeDiffViewer.tsx`](../frontend/src/components/CodeDiffViewer.tsx) / [`merge-decorations.ts`](../frontend/src/components/terminal/external-edit/merge-decorations.ts) plus the `.external-edit-*` classes (§3.8).
+- **Brand & user palettes** — the brand-icon colors and the user-facing color-picker swatches in [`IconPicker.tsx`](../frontend/src/components/asset/IconPicker.tsx) / [`brand-icons.tsx`](../frontend/src/components/asset/brand-icons.tsx), and the deterministic session-avatar palette in [`ai/sessionIconColor.ts`](../frontend/src/components/ai/sessionIconColor.ts) (already authored in oklch).
+
+If you're not in one of these, use a token. A `text-blue-500` / `bg-[#…]` anywhere else is a bug — see Constraint 1.
 
 ---
 
@@ -260,7 +305,7 @@ UI primitives live in the **`@opskat/ui`** workspace package ([`frontend/package
 | `tree-check-list.tsx` | **`TreeCheckList`** — generic tri-state checkbox tree |
 | `sonner.tsx` | Global `Toaster` (theme-aware, `richColors`) |
 
-> **There is no `badge.tsx`.** Status is shown with `success` / `warning` / `destructive`-tinted icons, dots, or small `text-*`/`bg-*/<opacity>` chips composed inline — there is no `Badge` primitive to reach for. If badges become common, add one primitive (with the `*-foreground` status pairs from §3.5) rather than re-deriving chips per view. There is also **no shared `Skeleton` / `EmptyState` / `LoadingState` / `StateScreen`** — see §10.
+> **There is no `badge.tsx`.** Status is shown with `success` / `warning` / `destructive` / `info`-tinted icons, dots, or small soft chips (`bg-<status>/15 text-<status>`, §3.5) composed inline — there is no `Badge` primitive to reach for. The `*-foreground` pairs now exist (§3.5), so if badges become common, add one primitive over them rather than re-deriving chips per view. There is also **no shared `Skeleton` / `EmptyState` / `LoadingState` / `StateScreen`** — see §10.
 
 ### 6.2 Button variants / sizes
 
