@@ -35,7 +35,20 @@
   --sidebar-ring: oklch(0.55 0.22 260);
   --panel-divider: oklch(0 0 0 / 8%);
   --success: oklch(0.55 0.19 155);
+  --success-foreground: oklch(0.985 0 0);
   --warning: oklch(0.70 0.17 85);
+  --warning-foreground: oklch(0.22 0.03 85);
+  --info: oklch(0.55 0.17 245);
+  --info-foreground: oklch(0.985 0.003 245);
+  --syntax-string: oklch(0.52 0.13 230);
+  --syntax-number: oklch(0.50 0.20 300);
+  --syntax-boolean: oklch(0.56 0.16 65);
+  --syntax-null: oklch(0.55 0.02 250);
+  --chart-1: oklch(0.55 0.17 250);
+  --chart-2: oklch(0.55 0.15 160);
+  --chart-3: oklch(0.58 0.19 15);
+  --chart-4: oklch(0.64 0.16 70);
+  --chart-5: oklch(0.54 0.18 300);
   --font-sans: system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace;
 }
@@ -69,6 +82,18 @@
   --sidebar-border: oklch(0.30 0.025 250);
   --sidebar-ring: oklch(0.63 0.20 260);
   --panel-divider: oklch(1 0 0 / 6%);
+  --success: oklch(0.70 0.17 155);
+  --warning: oklch(0.78 0.15 85);
+  --info: oklch(0.68 0.15 245);
+  --syntax-string: oklch(0.72 0.12 230);
+  --syntax-number: oklch(0.74 0.16 300);
+  --syntax-boolean: oklch(0.78 0.14 75);
+  --syntax-null: oklch(0.62 0.02 250);
+  --chart-1: oklch(0.68 0.15 250);
+  --chart-2: oklch(0.70 0.14 160);
+  --chart-3: oklch(0.70 0.16 15);
+  --chart-4: oklch(0.76 0.14 70);
+  --chart-5: oklch(0.68 0.16 300);
 }
 
 @theme inline {
@@ -101,7 +126,20 @@
   --color-sidebar-ring: var(--sidebar-ring);
   --color-panel-divider: var(--panel-divider);
   --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-syntax-string: var(--syntax-string);
+  --color-syntax-number: var(--syntax-number);
+  --color-syntax-boolean: var(--syntax-boolean);
+  --color-syntax-null: var(--syntax-null);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
   --font-family-sans: var(--font-sans);
   --font-family-mono: var(--font-mono);
   --radius-sm: calc(var(--radius) * 0.6);
