@@ -456,6 +456,166 @@ export function K8sClusterPage({ asset }: Props) {
       );
     }
 
+    for (const ns of Object.keys(namespacePodList)) {
+      setLoadingPods((prev) => new Set(prev).add(ns));
+      promises.push(
+        GetK8sNamespacePods(asset.ID, ns)
+          .then((result: string) => {
+            const data = JSON.parse(result) as PodListItem[];
+            setNamespacePodList((prev) => ({ ...prev, [ns]: data }));
+            setPodErrors((prev) => {
+              const next = { ...prev };
+              delete next[ns];
+              return next;
+            });
+          })
+          .catch((e: unknown) => {
+            setPodErrors((prev) => ({ ...prev, [ns]: String(e) }));
+          })
+          .finally(() => {
+            setLoadingPods((prev) => {
+              const next = new Set(prev);
+              next.delete(ns);
+              return next;
+            });
+          })
+      );
+    }
+
+    for (const ns of Object.keys(namespaceDeploymentList)) {
+      setLoadingDeployments((prev) => new Set(prev).add(ns));
+      promises.push(
+        GetK8sNamespaceDeployments(asset.ID, ns)
+          .then((result: string) => {
+            const data = JSON.parse(result) as DeploymentListItem[];
+            setNamespaceDeploymentList((prev) => ({ ...prev, [ns]: data }));
+            setDeploymentErrors((prev) => {
+              const next = { ...prev };
+              delete next[ns];
+              return next;
+            });
+          })
+          .catch((e: unknown) => {
+            setDeploymentErrors((prev) => ({ ...prev, [ns]: String(e) }));
+          })
+          .finally(() => {
+            setLoadingDeployments((prev) => {
+              const next = new Set(prev);
+              next.delete(ns);
+              return next;
+            });
+          })
+      );
+    }
+
+    for (const ns of Object.keys(namespaceServiceList)) {
+      setLoadingServices((prev) => new Set(prev).add(ns));
+      promises.push(
+        GetK8sNamespaceServices(asset.ID, ns)
+          .then((result: string) => {
+            const data = JSON.parse(result) as ServiceListItem[];
+            setNamespaceServiceList((prev) => ({ ...prev, [ns]: data }));
+            setServiceErrors((prev) => {
+              const next = { ...prev };
+              delete next[ns];
+              return next;
+            });
+          })
+          .catch((e: unknown) => {
+            setServiceErrors((prev) => ({ ...prev, [ns]: String(e) }));
+          })
+          .finally(() => {
+            setLoadingServices((prev) => {
+              const next = new Set(prev);
+              next.delete(ns);
+              return next;
+            });
+          })
+      );
+    }
+
+    for (const ns of Object.keys(namespaceConfigMapList)) {
+      setLoadingConfigMaps((prev) => new Set(prev).add(ns));
+      promises.push(
+        GetK8sNamespaceConfigMaps(asset.ID, ns)
+          .then((result: string) => {
+            const data = JSON.parse(result) as ConfigMapListItem[];
+            setNamespaceConfigMapList((prev) => ({ ...prev, [ns]: data }));
+            setConfigMapErrors((prev) => {
+              const next = { ...prev };
+              delete next[ns];
+              return next;
+            });
+          })
+          .catch((e: unknown) => {
+            setConfigMapErrors((prev) => ({ ...prev, [ns]: String(e) }));
+          })
+          .finally(() => {
+            setLoadingConfigMaps((prev) => {
+              const next = new Set(prev);
+              next.delete(ns);
+              return next;
+            });
+          })
+      );
+    }
+
+    for (const ns of Object.keys(namespaceSecretList)) {
+      setLoadingSecrets((prev) => new Set(prev).add(ns));
+      promises.push(
+        GetK8sNamespaceSecrets(asset.ID, ns)
+          .then((result: string) => {
+            const data = JSON.parse(result) as SecretListItem[];
+            setNamespaceSecretList((prev) => ({ ...prev, [ns]: data }));
+            setSecretErrors((prev) => {
+              const next = { ...prev };
+              delete next[ns];
+              return next;
+            });
+          })
+          .catch((e: unknown) => {
+            setSecretErrors((prev) => ({ ...prev, [ns]: String(e) }));
+          })
+          .finally(() => {
+            setLoadingSecrets((prev) => {
+              const next = new Set(prev);
+              next.delete(ns);
+              return next;
+            });
+          })
+      );
+    }
+
+    for (const key of Object.keys(podDetails)) {
+      const slashIdx = key.indexOf("/");
+      if (slashIdx === -1) continue;
+      const ns = key.slice(0, slashIdx);
+      const podName = key.slice(slashIdx + 1);
+      setLoadingPodDetails((prev) => new Set(prev).add(key));
+      promises.push(
+        GetK8sPodDetail(asset.ID, ns, podName)
+          .then((result: string) => {
+            const data = JSON.parse(result) as PodDetail;
+            setPodDetails((prev) => ({ ...prev, [key]: data }));
+            setPodDetailErrors((prev) => {
+              const next = { ...prev };
+              delete next[key];
+              return next;
+            });
+          })
+          .catch((e: unknown) => {
+            setPodDetailErrors((prev) => ({ ...prev, [key]: String(e) }));
+          })
+          .finally(() => {
+            setLoadingPodDetails((prev) => {
+              const next = new Set(prev);
+              next.delete(key);
+              return next;
+            });
+          })
+      );
+    }
+
     Promise.all(promises).finally(() => {
       setRefreshing(false);
     });
