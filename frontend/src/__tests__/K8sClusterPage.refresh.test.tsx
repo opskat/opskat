@@ -2,11 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { K8sClusterPage } from "@/components/k8s/K8sClusterPage";
-import {
-  GetK8sClusterInfo,
-  GetK8sNamespacePods,
-  GetK8sNamespaceResources,
-} from "../../wailsjs/go/k8s/K8s";
+import { GetK8sClusterInfo, GetK8sNamespacePods, GetK8sNamespaceResources } from "../../wailsjs/go/k8s/K8s";
 import type { asset_entity } from "../../wailsjs/go/models";
 
 const clusterInfo = {
