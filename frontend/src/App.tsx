@@ -10,6 +10,7 @@ import { SideAssistantPanel } from "@/components/ai/SideAssistantPanel";
 import { WindowControls } from "@/components/layout/WindowControls";
 import { TopBar } from "@/components/layout/TopBar";
 import { CommandPaletteDialog } from "@/components/command/CommandPaletteDialog";
+import { SnippetAssetDrawer } from "@/components/snippet/SnippetAssetDrawer";
 import { EdgeRevealStrip } from "@/components/layout/EdgeRevealStrip";
 import { useLayoutStore } from "@/stores/layoutStore";
 import { LeftPanel } from "@/components/layout/LeftPanel";
@@ -28,6 +29,7 @@ import { useQueryStore } from "@/stores/queryStore";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { getAssetType } from "@/lib/assetTypes";
 import { useTabStore } from "@/stores/tabStore";
+import { useSnippetStore } from "@/stores/snippetStore";
 import { useExtensionStore } from "@/extension";
 import { bootstrapExtensions } from "@/extension/init";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
@@ -136,6 +138,9 @@ function App() {
   );
   const [aiPanelCollapsed, setAiPanelCollapsed] = useState(() => localStorage.getItem("ai_panel_collapsed") === "true");
   const [commandOpen, setCommandOpen] = useState(false);
+  // Snippet chosen in the command palette that needs a host picked before it runs.
+  const snippetRunTarget = useSnippetStore((s) => s.runTarget);
+  const clearSnippetHostPick = useSnippetStore((s) => s.clearHostPick);
   const [assetTreeWidth, setAssetTreeWidth] = useState(() => {
     const saved = localStorage.getItem("asset_tree_width");
     return saved ? Math.max(160, Math.min(480, Number(saved))) : 224;
@@ -522,6 +527,7 @@ function App() {
           </Suspense>
           <PermissionDialog />
           <OpsctlApprovalDialog />
+          {snippetRunTarget && <SnippetAssetDrawer snippet={snippetRunTarget} onClose={clearSnippetHostPick} />}
           <Toaster richColors />
         </TooltipProvider>
       </ErrorBoundary>

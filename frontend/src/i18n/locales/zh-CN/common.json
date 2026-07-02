@@ -1080,11 +1080,12 @@
     "command.quickopen": "快速打开"
   },
   "commandPalette": {
-    "placeholder": "搜索资产或已打开的标签...",
+    "placeholder": "搜索资产、标签或代码片段...",
     "section": {
       "opened": "已打开",
       "recent": "最近",
-      "assets": "资产"
+      "assets": "资产",
+      "snippets": "代码片段"
     },
     "empty": {
       "noContent": "暂无内容，先在左侧添加资产",

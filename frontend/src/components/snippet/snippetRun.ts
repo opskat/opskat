@@ -6,6 +6,23 @@ import { WriteSSH } from "../../../wailsjs/go/ssh/SSH";
 import { bytesToBase64 } from "@/lib/terminalEncode";
 
 /**
+ * Asset types a snippet can actually be "run" on today — i.e. the types
+ * runSnippetOnAsset knows how to land content into. Categories bound to any
+ * other asset type (redis / k8s) or none (prompt) are not runnable.
+ */
+export const RUNNABLE_ASSET_TYPES = new Set(["ssh", "database", "mongodb"]);
+
+/**
+ * Whether a snippet category can be run, given the current category registry.
+ * A category is runnable when its bound asset type is one runSnippetOnAsset
+ * supports.
+ */
+export function isRunnableCategoryId(categoryId: string, categories: { id: string; assetType: string }[]): boolean {
+  const c = categories.find((x) => x.id === categoryId);
+  return !!c && RUNNABLE_ASSET_TYPES.has(c.assetType);
+}
+
+/**
  * Open the right tab for an asset and land the snippet content in its editor.
  * Never auto-executes.
  */

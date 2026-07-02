@@ -20,6 +20,10 @@ type Category = snippet_svc.Category;
 // must not clobber the UI with stale data.
 let loadListReqId = 0;
 
+// Separate monotonic counter for loadAll (the command-palette source), so a
+// slow palette fetch never clobbers a newer one on rapid re-opens.
+let loadAllReqId = 0;
+
 export type SnippetFilter = {
   categories: string[]; // empty = all
   keyword: string;
@@ -32,9 +36,16 @@ interface SnippetState {
   listLoading: boolean;
   filter: SnippetFilter;
 
+  // Command-palette state, independent of the page list/filter above.
+  all: Snippet[];
+  runTarget: Snippet | null;
+
   loadCategories: () => Promise<void>;
   loadList: () => Promise<void>;
+  loadAll: () => Promise<void>;
   setFilter: (patch: Partial<SnippetFilter>) => void;
+  requestHostPick: (snippet: Snippet) => void;
+  clearHostPick: () => void;
 
   create: (req: snippet_svc.CreateReq) => Promise<Snippet>;
   update: (req: snippet_svc.UpdateReq) => Promise<Snippet>;
@@ -50,6 +61,8 @@ export const useSnippetStore = create<SnippetState>()((set, get) => ({
   categoriesLoading: false,
   list: [],
   listLoading: false,
+  all: [],
+  runTarget: null,
   filter: { categories: [], keyword: "" },
 
   loadCategories: async () => {
@@ -86,6 +99,24 @@ export const useSnippetStore = create<SnippetState>()((set, get) => ({
       throw e;
     }
   },
+
+  loadAll: async () => {
+    const myId = ++loadAllReqId;
+    const req: snippet_svc.ListReq = {
+      categories: [],
+      keyword: "",
+      limit: 0,
+      offset: 0,
+      orderBy: "",
+    } as unknown as snippet_svc.ListReq;
+    const items = await ListSnippets(req);
+    if (myId !== loadAllReqId) return; // a newer palette fetch owns the state
+    set({ all: items ?? [] });
+  },
+
+  requestHostPick: (snippet) => set({ runTarget: snippet }),
+
+  clearHostPick: () => set({ runTarget: null }),
 
   setFilter: (patch) => {
     const cur = get().filter;

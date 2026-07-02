@@ -1080,11 +1080,12 @@
     "command.quickopen": "Quick Open"
   },
   "commandPalette": {
-    "placeholder": "Search assets or open tabs...",
+    "placeholder": "Search assets, tabs, or snippets...",
     "section": {
       "opened": "Open",
       "recent": "Recent",
-      "assets": "Assets"
+      "assets": "Assets",
+      "snippets": "Snippets"
     },
     "empty": {
       "noContent": "No items. Add an asset first.",
