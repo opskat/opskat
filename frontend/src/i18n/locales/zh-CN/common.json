@@ -1042,6 +1042,8 @@
   "shortcut": {
     "title": "快捷键",
     "desc": "点击快捷键可修改绑定，按 Esc 取消",
+    "disableInTerminalTitle": "终端内禁用快捷键",
+    "disableInTerminalDesc": "开启后，终端聚焦时按键直接送往终端，不再触发应用快捷键（命令面板除外）",
     "recording": "请按下快捷键...",
     "conflict": "已被“{{action}}”占用",
     "reset": "恢复默认",

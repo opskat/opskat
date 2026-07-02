@@ -13,7 +13,7 @@ interface ShortcutHandlers {
 export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar, onToggleCommandPalette }: ShortcutHandlers) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      const { shortcuts, isRecording } = useShortcutStore.getState();
+      const { shortcuts, isRecording, disableShortcutsInTerminal } = useShortcutStore.getState();
       if (isRecording) return;
 
       // 先计算 action：command.quickopen 需要在输入框内也能触发，
@@ -33,6 +33,11 @@ export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar, onToggl
       // 普通快捷键：输入框内（除 xterm）忽略
       // 注意 panel.filter 也走这一段，让出 Cmd+F 给浏览器/原生 find-in-page。
       const target = e.target as HTMLElement;
+
+      // 「在终端内禁用快捷键」开启时：终端聚焦，把 app 快捷键透传给终端，
+      // 让按键送达远端 shell。command.quickopen 已在上方提前处理，不受影响。
+      if (disableShortcutsInTerminal && target.closest(".xterm")) return;
+
       if (
         (target.tagName === "INPUT" ||
           target.tagName === "TEXTAREA" ||

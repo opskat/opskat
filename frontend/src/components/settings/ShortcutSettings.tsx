@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { cn, Button } from "@opskat/ui";
+import { cn, Button, Switch, Label } from "@opskat/ui";
 import { RotateCcw } from "lucide-react";
 import {
   useShortcutStore,
@@ -15,7 +15,16 @@ import {
 
 export function ShortcutSettings() {
   const { t } = useTranslation();
-  const { shortcuts, updateShortcut, resetShortcut, resetAll, swapCmdCtrl, setIsRecording } = useShortcutStore();
+  const {
+    shortcuts,
+    disableShortcutsInTerminal,
+    setDisableShortcutsInTerminal,
+    updateShortcut,
+    resetShortcut,
+    resetAll,
+    swapCmdCtrl,
+    setIsRecording,
+  } = useShortcutStore();
   const [recording, setRecording] = useState<ShortcutAction | null>(null);
   const [conflict, setConflict] = useState<{ action: ShortcutAction; conflictAction: ShortcutAction } | null>(null);
 
@@ -101,6 +110,19 @@ export function ShortcutSettings() {
 
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between py-3 px-2 rounded border bg-muted/30">
+        <div className="space-y-0.5">
+          <Label htmlFor="disable-shortcuts-in-terminal" className="text-sm font-medium">
+            {t("shortcut.disableInTerminalTitle")}
+          </Label>
+          <p className="text-xs text-muted-foreground">{t("shortcut.disableInTerminalDesc")}</p>
+        </div>
+        <Switch
+          id="disable-shortcuts-in-terminal"
+          checked={disableShortcutsInTerminal}
+          onCheckedChange={setDisableShortcutsInTerminal}
+        />
+      </div>
       <div className="space-y-0.5">
         {SHORTCUT_ACTIONS.map((action) => (
           <div key={action} className="flex items-center justify-between py-2 px-2 rounded hover:bg-muted/50">

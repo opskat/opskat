@@ -97,6 +97,19 @@ export const DEFAULT_SHORTCUTS: Record<ShortcutAction, ShortcutBinding> = {
 };
 
 const STORAGE_KEY = "keyboard_shortcuts";
+const DISABLE_IN_TERMINAL_KEY = "disable_shortcuts_in_terminal";
+
+function loadDisableInTerminal(): boolean {
+  try {
+    return localStorage.getItem(DISABLE_IN_TERMINAL_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function saveDisableInTerminal(v: boolean) {
+  localStorage.setItem(DISABLE_IN_TERMINAL_KEY, String(v));
+}
 
 function loadCustom(): Partial<Record<ShortcutAction, ShortcutBinding>> {
   try {
@@ -167,7 +180,12 @@ export function eventMatchesBinding(e: KeyboardEvent, binding: ShortcutBinding):
 
 interface ShortcutState {
   shortcuts: Record<ShortcutAction, ShortcutBinding>;
+  // When true, app shortcuts pass through to a focused terminal pane instead of
+  // being handled here — so keystrokes reach the remote shell. Scoped to the
+  // terminal only; shortcuts keep working everywhere else. Persisted, default off.
+  disableShortcutsInTerminal: boolean;
   isRecording: boolean;
+  setDisableShortcutsInTerminal: (v: boolean) => void;
   setIsRecording: (v: boolean) => void;
   updateShortcut: (action: ShortcutAction, binding: ShortcutBinding) => void;
   resetShortcut: (action: ShortcutAction) => void;
@@ -177,7 +195,13 @@ interface ShortcutState {
 
 export const useShortcutStore = create<ShortcutState>((set) => ({
   shortcuts: { ...DEFAULT_SHORTCUTS, ...loadCustom() },
+  disableShortcutsInTerminal: loadDisableInTerminal(),
   isRecording: false,
+
+  setDisableShortcutsInTerminal: (v) => {
+    saveDisableInTerminal(v);
+    set({ disableShortcutsInTerminal: v });
+  },
 
   setIsRecording: (v) => set({ isRecording: v }),
 

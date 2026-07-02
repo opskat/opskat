@@ -12,6 +12,7 @@ describe("shortcutStore", () => {
     useShortcutStore.setState({
       shortcuts: { ...DEFAULT_SHORTCUTS },
       isRecording: false,
+      disableShortcutsInTerminal: false,
     });
   });
 
@@ -144,6 +145,27 @@ describe("shortcutStore", () => {
 
       useShortcutStore.getState().setIsRecording(false);
       expect(useShortcutStore.getState().isRecording).toBe(false);
+    });
+  });
+
+  describe("disableShortcutsInTerminal", () => {
+    it("defaults to false", () => {
+      expect(useShortcutStore.getState().disableShortcutsInTerminal).toBe(false);
+    });
+
+    it("setDisableShortcutsInTerminal updates state and persists when enabled", () => {
+      useShortcutStore.getState().setDisableShortcutsInTerminal(true);
+
+      expect(useShortcutStore.getState().disableShortcutsInTerminal).toBe(true);
+      expect(localStorage.getItem("disable_shortcuts_in_terminal")).toBe("true");
+    });
+
+    it("persists false when turned back off", () => {
+      useShortcutStore.getState().setDisableShortcutsInTerminal(true);
+      useShortcutStore.getState().setDisableShortcutsInTerminal(false);
+
+      expect(useShortcutStore.getState().disableShortcutsInTerminal).toBe(false);
+      expect(localStorage.getItem("disable_shortcuts_in_terminal")).toBe("false");
     });
   });
 

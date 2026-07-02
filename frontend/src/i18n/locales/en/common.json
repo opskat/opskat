@@ -1042,6 +1042,8 @@
   "shortcut": {
     "title": "Shortcuts",
     "desc": "Click a shortcut to rebind, press Esc to cancel",
+    "disableInTerminalTitle": "Disable shortcuts in terminal",
+    "disableInTerminalDesc": "When on, keystrokes go straight to a focused terminal instead of triggering app shortcuts (the command palette still works)",
     "recording": "Press shortcut...",
     "conflict": "Already used by “{{action}}”",
     "reset": "Reset",
