@@ -118,8 +118,10 @@ const importFileRules: Record<ImportDataFormat, { extensions: string[]; mimes: s
     mimes: ["application/xml", "text/xml"],
   },
   xlsx: {
-    extensions: [".xlsx", ".xls"],
-    mimes: ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel"],
+    // excelize's OpenReader only parses the OOXML (.xlsx) container, not the
+    // legacy binary .xls — so accept only what the Go side can actually read.
+    extensions: [".xlsx"],
+    mimes: ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
   },
 };
 
