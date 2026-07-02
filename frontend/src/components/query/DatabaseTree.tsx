@@ -379,7 +379,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
               const isExpanded = filterLower ? true : expandedDbs.includes(db);
               const schemaAware = isSchemaAwareDriver(driver);
               const isLoadingTables = dbState.loadingTables[db] === true;
-              const isTablesOpen = filterLower ? true : (openTables[db] ?? false);
+              const isTablesOpen = filterLower ? true : (openTables[db] ?? true);
               const hasTables = !!dbTables && (dbTables.length > 0 || (!!schemas && schemas.length > 0));
               const tableCount = (dbTables?.length ?? 0) + (schemas?.reduce((n, g) => n + g.tables.length, 0) ?? 0);
 
