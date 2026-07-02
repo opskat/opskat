@@ -94,6 +94,17 @@ func (s *Session) ChangeDirectoryDirect(targetPath string) error {
 	return s.writeInternal([]byte(buildDirectoryChangeCommand(targetPath)))
 }
 
+// RestoreWorkingDirectory moves the freshly-started shell into dir when dir is
+// non-empty. Used on reconnect to land the user back where they were. An empty
+// dir (cwd was never known — unsupported shell / sync not yet populated) is a
+// no-op, not an error, so the reconnect just opens at the shell's home.
+func (s *Session) RestoreWorkingDirectory(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	return s.ChangeDirectoryDirect(dir)
+}
+
 // ChangeDirectoryTo switches the terminal to targetPath and treats expectedPath
 // as the canonical cwd reported by the remote shell after the change.
 func (s *Session) ChangeDirectoryTo(targetPath, expectedPath string) error {

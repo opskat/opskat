@@ -19,6 +19,7 @@ interface SSHConfig {
   jump_host_id?: number;
   proxy?: ProxyConfigJSON | null;
   keepalive_interval_seconds?: number;
+  restore_cwd_on_reconnect?: boolean;
 }
 
 /** ssh 表单子状态(凭据中的 password 走 useAssetCredential,不入此 state)。 */
@@ -37,6 +38,8 @@ export interface SSHFormState extends ConnectionFormFields {
   encryptedPrivateKeyPassphrase: string;
   /** 覆盖该资产的 SSH 空闲保活间隔(秒)。0 = 跟随全局默认。 */
   keepAliveIntervalSeconds: number;
+  /** 开启后断线手动重连时自动 cd 回上次目录(连接时自动启用目录同步追踪 cwd)。 */
+  restoreCwdOnReconnect: boolean;
 }
 
 export const SSH_DEFAULTS: SSHFormState = {
@@ -50,6 +53,7 @@ export const SSH_DEFAULTS: SSHFormState = {
   privateKeyPassphrase: "",
   encryptedPrivateKeyPassphrase: "",
   keepAliveIntervalSeconds: 0,
+  restoreCwdOnReconnect: false,
   ...CONNECTION_DEFAULTS,
 };
 
@@ -103,6 +107,11 @@ export function buildSSHConfig(state: SSHFormState, opts: SSHBuildOptions): stri
     cfg.keepalive_interval_seconds = state.keepAliveIntervalSeconds;
   }
 
+  // false = 关闭，不写入 config(omitempty 语义)。
+  if (state.restoreCwdOnReconnect) {
+    cfg.restore_cwd_on_reconnect = true;
+  }
+
   return JSON.stringify(cfg);
 }
 
@@ -124,6 +133,7 @@ export function parseSSHConfig(configJSON: string, assetTunnelId = 0): SSHFormSt
       privateKeyPassphrase: "", // passphrase 已加密,不回显
       encryptedPrivateKeyPassphrase: cfg.private_key_passphrase || "",
       keepAliveIntervalSeconds: cfg.keepalive_interval_seconds || 0,
+      restoreCwdOnReconnect: cfg.restore_cwd_on_reconnect || false,
       ...parseConnectionFields(cfg.proxy, tunnelId),
     };
   } catch {

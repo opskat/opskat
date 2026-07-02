@@ -31,6 +31,9 @@ type SSHConnectRequest struct {
 	Key      string `json:"key"`
 	Cols     int    `json:"cols"`
 	Rows     int    `json:"rows"`
+	// InitialWorkdir 仅重连时由前端携带上次已知 cwd，请求新会话 cd 回该目录；
+	// 首次连接为空。是否真正恢复由资产的 RestoreCwdOnReconnect 开关决定。
+	InitialWorkdir string `json:"initialWorkdir"`
 }
 
 // ConnectSSH 连接 SSH 服务器，返回会话 ID
@@ -72,6 +75,8 @@ func (s *SSH) ConnectSSH(req SSHConnectRequest) (string, error) {
 		Proxy:                    s.decryptProxyPassword(sshCfg.Proxy),
 		HostKeyVerifyFunc:        ssh_svc.AutoTrustFirstRejectChangeVerifyFunc(),
 		KeepAliveIntervalSeconds: sshCfg.KeepAliveIntervalSeconds,
+		RestoreCwdOnReconnect:    sshCfg.RestoreCwdOnReconnect,
+		InitialWorkdir:           req.InitialWorkdir,
 		OnData: func(sid string, data []byte) {
 			wailsRuntime.EventsEmit(s.ctx, "ssh:data:"+sid, base64.StdEncoding.EncodeToString(data))
 		},
@@ -177,6 +182,8 @@ func (s *SSH) ConnectSSHAsync(req SSHConnectRequest) (string, error) {
 			Rows:                     req.Rows,
 			Proxy:                    s.decryptProxyPassword(sshCfg.Proxy),
 			KeepAliveIntervalSeconds: sshCfg.KeepAliveIntervalSeconds,
+			RestoreCwdOnReconnect:    sshCfg.RestoreCwdOnReconnect,
+			InitialWorkdir:           req.InitialWorkdir,
 			OnData: func(sid string, data []byte) {
 				wailsRuntime.EventsEmit(s.ctx, "ssh:data:"+sid, base64.StdEncoding.EncodeToString(data))
 			},

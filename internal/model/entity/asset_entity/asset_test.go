@@ -76,10 +76,11 @@ func TestAsset_SSHConfig(t *testing.T) {
 		convey.Convey("SetSSHConfig后GetSSHConfig应返回相同内容", func() {
 			a := &Asset{Name: "test", Type: AssetTypeSSH}
 			cfg := &SSHConfig{
-				Host:     "10.0.0.1",
-				Port:     2222,
-				Username: "admin",
-				AuthType: AuthTypeKey,
+				Host:                  "10.0.0.1",
+				Port:                  2222,
+				Username:              "admin",
+				AuthType:              AuthTypeKey,
+				RestoreCwdOnReconnect: true,
 			}
 			err := a.SetSSHConfig(cfg)
 			assert.NoError(t, err)
@@ -90,6 +91,7 @@ func TestAsset_SSHConfig(t *testing.T) {
 			assert.Equal(t, cfg.Port, got.Port)
 			assert.Equal(t, cfg.Username, got.Username)
 			assert.Equal(t, cfg.AuthType, got.AuthType)
+			assert.Equal(t, cfg.RestoreCwdOnReconnect, got.RestoreCwdOnReconnect)
 		})
 
 		convey.Convey("非SSH类型调用GetSSHConfig应返回错误", func() {

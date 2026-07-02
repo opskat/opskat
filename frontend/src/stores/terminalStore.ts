@@ -40,7 +40,10 @@ function disposeTerminalInstance(sessionId: string): void {
 export type TerminalTransport = "ssh" | "serial" | "local";
 
 interface TransportSpec {
-  connectAsync: (assetId: number, opts: { cols: number; rows: number; password: string }) => Promise<string>;
+  connectAsync: (
+    assetId: number,
+    opts: { cols: number; rows: number; password: string; initialWorkdir?: string }
+  ) => Promise<string>;
   write: (sessionId: string, dataB64: string) => Promise<void>;
   resize: (sessionId: string, cols: number, rows: number) => Promise<void>;
   disconnect: (sessionId: string) => void;
@@ -81,8 +84,17 @@ export function orderedBySession(
 // 取代散落各处的 isSerial 二分支。新增 transport 只需在此登记一行。
 export const TRANSPORTS: Record<TerminalTransport, TransportSpec> = {
   ssh: {
-    connectAsync: (assetId, { cols, rows, password }) =>
-      ConnectSSHAsync(new ssh_models.SSHConnectRequest({ assetId, password, key: "", cols, rows })),
+    connectAsync: (assetId, { cols, rows, password, initialWorkdir }) =>
+      ConnectSSHAsync(
+        new ssh_models.SSHConnectRequest({
+          assetId,
+          password,
+          key: "",
+          cols,
+          rows,
+          initialWorkdir: initialWorkdir ?? "",
+        })
+      ),
     write: orderedBySession(WriteSSH),
     resize: ResizeSSH,
     disconnect: DisconnectSSH,
@@ -145,6 +157,8 @@ export interface TerminalPane {
   transport: TerminalTransport;
   connected: boolean;
   connectedAt: number;
+  /** 断开时对最后已知 cwd 的快照。sessionSync 随监听注销被清空,pane 长存,故用于重连恢复目录。 */
+  lastCwd?: string;
 }
 
 export interface TerminalDirectorySyncState {
@@ -664,13 +678,18 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       pane?.transport ?? (asset ? transportForAsset(asset.Type) : inferTransportFromSessionId(sessionId));
     const spec = TRANSPORTS[transport];
 
+    // 断线重连恢复上次目录:优先取掉线时 markClosed/disconnect 快照在 pane 上的 cwd
+    // (那时 sessionSync 已随监听注销被清空);仍连接时(手动重连活会话)回退读 sessionSync。
+    // 传给新会话;是否真正 cd 由后端按资产的 RestoreCwdOnReconnect 开关权威决定,cwd 未知即空串。
+    const lastCwd = pane?.lastCwd ?? get().sessionSync[sessionId]?.cwd ?? "";
+
     unregisterSessionSyncListener(sessionId);
     if (pane?.connected) {
       spec.disconnect(sessionId);
     }
 
     spec
-      .connectAsync(meta.assetId, { cols: 80, rows: 24, password: "" })
+      .connectAsync(meta.assetId, { cols: 80, rows: 24, password: "", initialWorkdir: lastCwd })
       .then((connectionId: string) => {
         // Dispose the old persistent xterm; the slot is replaced by a "connecting" node.
         disposeTerminalInstance(sessionId);
@@ -864,6 +883,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   },
 
   disconnect: (sessionId) => {
+    // 与 markClosed 一致:清空 sessionSync 前先把 cwd 快照到 pane,供后续重连恢复目录。
+    const lastCwd = get().sessionSync[sessionId]?.cwd;
     unregisterSessionSyncListener(sessionId);
     const transport =
       Object.values(get().tabData)
@@ -878,7 +899,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             ...data,
             panes: {
               ...data.panes,
-              [sessionId]: { ...data.panes[sessionId], connected: false },
+              [sessionId]: { ...data.panes[sessionId], connected: false, ...(lastCwd ? { lastCwd } : {}) },
             },
           };
         }
@@ -888,6 +909,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   },
 
   markClosed: (sessionId) => {
+    // 快照 cwd 到 pane:必须在 unregisterSessionSyncListener 清空 sessionSync 之前取。
+    const lastCwd = get().sessionSync[sessionId]?.cwd;
     unregisterSessionSyncListener(sessionId);
     set((state) => {
       const newTabData = { ...state.tabData };
@@ -897,7 +920,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             ...data,
             panes: {
               ...data.panes,
-              [sessionId]: { ...data.panes[sessionId], connected: false },
+              [sessionId]: { ...data.panes[sessionId], connected: false, ...(lastCwd ? { lastCwd } : {}) },
             },
           };
         }

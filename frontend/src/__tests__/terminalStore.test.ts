@@ -292,6 +292,86 @@ describe("terminalStore.connect", () => {
   });
 });
 
+describe("terminalStore.reconnect", () => {
+  beforeEach(() => {
+    __resetTerminalSyncListenersForTest();
+    vi.clearAllMocks();
+    vi.mocked(EventsOn).mockReturnValue(vi.fn());
+    useTabStore.setState({ tabs: [], activeTabId: null });
+    useTerminalStore.setState({ tabData: {}, sessionSync: {}, connections: {}, connectingAssetIds: new Set() });
+  });
+
+  function seedReconnectTab() {
+    useTabStore.setState({
+      tabs: [
+        {
+          id: "tab-1",
+          type: "terminal",
+          label: "Server 1",
+          meta: {
+            type: "terminal",
+            assetId: 1,
+            assetName: "Server 1",
+            assetIcon: "",
+            host: "10.0.0.1",
+            port: 22,
+            username: "root",
+          },
+        },
+      ],
+      activeTabId: "tab-1",
+    });
+    useTerminalStore.setState({
+      tabData: {
+        "tab-1": {
+          splitTree: { type: "terminal", sessionId: "s1" },
+          activePaneId: "s1",
+          panes: { s1: { sessionId: "s1", transport: "ssh", connected: true, connectedAt: 1 } },
+          directoryFollowMode: "off",
+        },
+      },
+    });
+  }
+
+  it("恢复上次 cwd:把 sessionSync 的 cwd 作为 initialWorkdir 传给 connectAsync", async () => {
+    seedReconnectTab();
+    useTerminalStore.getState().setSessionSyncState("s1", makeSyncState({ sessionId: "s1", cwd: "/srv/app" }));
+    vi.mocked(ConnectSSHAsync).mockResolvedValue("conn-new");
+
+    useTerminalStore.getState().reconnect("tab-1");
+    await Promise.resolve();
+
+    expect(ConnectSSHAsync).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(ConnectSSHAsync).mock.calls[0][0].initialWorkdir).toBe("/srv/app");
+  });
+
+  it("cwd 未知时 initialWorkdir 传空串", async () => {
+    seedReconnectTab();
+    vi.mocked(ConnectSSHAsync).mockResolvedValue("conn-new");
+
+    useTerminalStore.getState().reconnect("tab-1");
+    await Promise.resolve();
+
+    expect(vi.mocked(ConnectSSHAsync).mock.calls[0][0].initialWorkdir).toBe("");
+  });
+
+  it("掉线后重连仍能恢复:markClosed 把 cwd 快照到 pane,即使 sessionSync 已被清除", async () => {
+    seedReconnectTab();
+    useTerminalStore.getState().setSessionSyncState("s1", makeSyncState({ sessionId: "s1", cwd: "/srv/app" }));
+    vi.mocked(ConnectSSHAsync).mockResolvedValue("conn-new");
+
+    // 服务端掉线:markClosed 应把 cwd 快照到 pane;真实环境里紧接着监听注销会清空
+    // sessionSync(本单测未注册监听,故显式清空模拟),cwd 只能靠 pane 快照留存。
+    useTerminalStore.getState().markClosed("s1");
+    useTerminalStore.setState({ sessionSync: {} });
+
+    useTerminalStore.getState().reconnect("tab-1");
+    await Promise.resolve();
+
+    expect(vi.mocked(ConnectSSHAsync).mock.calls[0][0].initialWorkdir).toBe("/srv/app");
+  });
+});
+
 describe("terminalStore.splitPane", () => {
   const flush = () => new Promise((r) => setTimeout(r, 0));
 
