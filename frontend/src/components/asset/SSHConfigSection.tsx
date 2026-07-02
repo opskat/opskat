@@ -88,8 +88,10 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
 
   const [managedKeys, setManagedKeys] = useState<credential_entity.Credential[]>([]);
   const [localKeys, setLocalKeys] = useState<ssh_models.LocalSSHKeyInfo[]>([]);
-  // 全局保活默认值，仅用于「高级」里的 placeholder 提示（留空=跟随此值）。
+  // 全局保活默认值：新建时预填此值(仅显示)，也作为「高级」留空态的 placeholder。
   const [globalKeepAlive, setGlobalKeepAlive] = useState(30);
+  // 用户是否手动清空过保活输入：清空后回落跟随全局(显示 placeholder)，不再预填全局数字。
+  const [keepAliveCleared, setKeepAliveCleared] = useState(false);
   // 挂载即扫描,初始 true(避免在 effect 内同步 setState 触发级联渲染)。
   const [scanningKeys, setScanningKeys] = useState(true);
 
@@ -340,34 +342,40 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
       fields: [
         {
           kind: "custom",
-          render: (s, patchState) => (
-            <Field label={t("asset.sshKeepAliveInterval")}>
-              <div className="flex items-center gap-2">
-                <Input
-                  type="number"
-                  min={5}
-                  max={3600}
-                  className="w-32 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                  data-testid="ssh-keepalive-input"
-                  // 空 = 0 = 跟随全局默认。
-                  value={s.keepAliveIntervalSeconds || ""}
-                  placeholder={t("asset.sshKeepAliveIntervalPlaceholder", { seconds: globalKeepAlive })}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    patchState({ keepAliveIntervalSeconds: v === "" ? 0 : Math.trunc(Number(v)) || 0 });
-                  }}
-                  onBlur={() => {
-                    // 离焦时把非零值钳到合法区间，保证存进 config 的值有效（0 除外）。
-                    const n = s.keepAliveIntervalSeconds;
-                    if (n > 0 && n < 5) patchState({ keepAliveIntervalSeconds: 5 });
-                    else if (n > 3600) patchState({ keepAliveIntervalSeconds: 3600 });
-                  }}
-                />
-                <span className="text-sm text-muted-foreground">{t("connection.secondsUnit")}</span>
-              </div>
-              <p className="mt-1.5 text-xs text-muted-foreground">{t("asset.sshKeepAliveIntervalHint")}</p>
-            </Field>
-          ),
+          render: (s, patchState) => {
+            // 新建时预填全局默认值(仅显示)：未改动即保存仍存 0＝跟随全局(config 不写)；改成别的值＝
+            // 固定覆盖；清空＝回落跟随全局(出 placeholder)。编辑态不预填，直读已存值(0＝跟随)。
+            const prefillGlobal = !editAsset && s.keepAliveIntervalSeconds === 0 && !keepAliveCleared;
+            const shownValue =
+              s.keepAliveIntervalSeconds > 0 ? s.keepAliveIntervalSeconds : prefillGlobal ? globalKeepAlive : "";
+            return (
+              <Field label={t("asset.sshKeepAliveInterval")}>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min={5}
+                    max={3600}
+                    className="w-32 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                    data-testid="ssh-keepalive-input"
+                    value={shownValue}
+                    placeholder={t("asset.sshKeepAliveIntervalPlaceholder", { seconds: globalKeepAlive })}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setKeepAliveCleared(v === "");
+                      patchState({ keepAliveIntervalSeconds: v === "" ? 0 : Math.trunc(Number(v)) || 0 });
+                    }}
+                    onBlur={() => {
+                      // 离焦时把非零值钳到合法区间，保证存进 config 的值有效（0 除外）。
+                      const n = s.keepAliveIntervalSeconds;
+                      if (n > 0 && n < 5) patchState({ keepAliveIntervalSeconds: 5 });
+                      else if (n > 3600) patchState({ keepAliveIntervalSeconds: 3600 });
+                    }}
+                  />
+                  <span className="text-sm text-muted-foreground">{t("connection.secondsUnit")}</span>
+                </div>
+              </Field>
+            );
+          },
         },
       ],
     },

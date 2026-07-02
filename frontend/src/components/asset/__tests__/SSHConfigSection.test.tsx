@@ -236,3 +236,76 @@ describe("SSHConfigSection 托管凭据→用户名自动填充", () => {
     await waitFor(() => expect(screen.queryByRole("option")).toBeNull());
   });
 });
+
+describe("SSHConfigSection 保活预填(新建跟随全局)", () => {
+  // GetSSHConnectionSettings mock 返回全局默认 30;保活输入在「高级」标签,需先切换。
+  const openAdvanced = async (u: ReturnType<typeof userEvent.setup>) =>
+    u.click(await screen.findByTestId("config-tab-advanced"));
+
+  it("新建:保活输入预填全局默认(30),未改动 → buildConfig 不写 keepalive(仍跟随全局)", async () => {
+    const u = userEvent.setup();
+    const ref = createRef<AssetFormHandle>();
+    render(<SSHConfigSection ref={ref} ctx={ctx} onValidityChange={() => {}} />);
+    await openAdvanced(u);
+    const input = await screen.findByTestId("ssh-keepalive-input");
+    await waitFor(() => expect(input).toHaveValue(30));
+    const built = await ref.current!.buildConfig(ctx);
+    expect(built.configJSON).not.toContain("keepalive_interval_seconds");
+  });
+
+  it("新建:改保活为 45 → buildConfig 写 keepalive_interval_seconds:45(固定覆盖)", async () => {
+    const u = userEvent.setup();
+    const ref = createRef<AssetFormHandle>();
+    render(<SSHConfigSection ref={ref} ctx={ctx} onValidityChange={() => {}} />);
+    await openAdvanced(u);
+    const input = await screen.findByTestId("ssh-keepalive-input");
+    await waitFor(() => expect(input).toHaveValue(30));
+    await u.clear(input);
+    await u.type(input, "45");
+    await u.tab();
+    const built = await ref.current!.buildConfig(ctx);
+    expect((JSON.parse(built.configJSON) as { keepalive_interval_seconds?: number }).keepalive_interval_seconds).toBe(
+      45
+    );
+  });
+
+  it("新建:清空预填 → 回落跟随全局(输入框空 + buildConfig 不写 keepalive)", async () => {
+    const u = userEvent.setup();
+    const ref = createRef<AssetFormHandle>();
+    render(<SSHConfigSection ref={ref} ctx={ctx} onValidityChange={() => {}} />);
+    await openAdvanced(u);
+    const input = await screen.findByTestId("ssh-keepalive-input");
+    await waitFor(() => expect(input).toHaveValue(30));
+    await u.clear(input);
+    await u.tab();
+    expect(input).toHaveValue(null);
+    const built = await ref.current!.buildConfig(ctx);
+    expect(built.configJSON).not.toContain("keepalive_interval_seconds");
+  });
+
+  it("编辑态:已存保活 45 → 输入框显示 45(不受新建预填影响)", async () => {
+    const u = userEvent.setup();
+    const editAsset = new asset_entity.Asset({
+      Type: "ssh",
+      Config: '{"host":"h","port":22,"username":"u","auth_type":"password","keepalive_interval_seconds":45}',
+    });
+    const ref = createRef<AssetFormHandle>();
+    render(<SSHConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
+    await openAdvanced(u);
+    const input = await screen.findByTestId("ssh-keepalive-input");
+    await waitFor(() => expect(input).toHaveValue(45));
+  });
+
+  it("编辑态:未设保活(0) → 输入框留空(不预填全局)", async () => {
+    const u = userEvent.setup();
+    const editAsset = new asset_entity.Asset({
+      Type: "ssh",
+      Config: '{"host":"h","port":22,"username":"u","auth_type":"password"}',
+    });
+    const ref = createRef<AssetFormHandle>();
+    render(<SSHConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
+    await openAdvanced(u);
+    const input = await screen.findByTestId("ssh-keepalive-input");
+    expect(input).toHaveValue(null);
+  });
+});

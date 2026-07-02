@@ -1,6 +1,18 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label } from "@opskat/ui";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Input,
+  Label,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@opskat/ui";
+import { Info } from "lucide-react";
 import { GetSSHConnectionSettings, SetSSHConnectionSettings } from "../../../wailsjs/go/system/System";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
@@ -65,7 +77,15 @@ export function ConnectionSection() {
       </CardHeader>
       <CardContent>
         <div className="grid gap-2">
-          <Label>{t("connection.keepAliveInterval")}</Label>
+          <div className="flex items-center gap-1.5">
+            <Label>{t("connection.keepAliveInterval")}</Label>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="h-3.5 w-3.5 cursor-help text-muted-foreground" />
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">{t("connection.keepAliveIntervalTooltip")}</TooltipContent>
+            </Tooltip>
+          </div>
           <div className="flex items-center gap-2">
             <Input
               type="number"
@@ -78,7 +98,6 @@ export function ConnectionSection() {
             />
             <span className="text-sm text-muted-foreground">{t("connection.secondsUnit")}</span>
           </div>
-          <p className="text-xs text-muted-foreground">{t("connection.keepAliveIntervalHint")}</p>
         </div>
       </CardContent>
     </Card>

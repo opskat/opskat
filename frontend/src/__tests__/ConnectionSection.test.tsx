@@ -1,8 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { TooltipProvider } from "@opskat/ui";
 import { ConnectionSection } from "@/components/settings/ConnectionSection";
 import { GetSSHConnectionSettings, SetSSHConnectionSettings } from "../../wailsjs/go/system/System";
+
+// App 全局包了 TooltipProvider(App.tsx);独立渲染 section 时需自备,否则 keepalive 标签旁的 ⓘ Tooltip 抛错。
+const renderSection = () =>
+  render(
+    <TooltipProvider>
+      <ConnectionSection />
+    </TooltipProvider>
+  );
 
 describe("ConnectionSection", () => {
   beforeEach(() => {
@@ -12,13 +21,13 @@ describe("ConnectionSection", () => {
   });
 
   it("loads and displays the current keepalive interval", async () => {
-    render(<ConnectionSection />);
+    renderSection();
     expect(await screen.findByDisplayValue("60")).toBeInTheDocument();
     expect(GetSSHConnectionSettings).toHaveBeenCalledTimes(1);
   });
 
   it("persists an edited keepalive interval on blur", async () => {
-    render(<ConnectionSection />);
+    renderSection();
     const intervalInput = await screen.findByDisplayValue("60");
 
     await userEvent.clear(intervalInput);
@@ -29,7 +38,7 @@ describe("ConnectionSection", () => {
   });
 
   it("rejects an out-of-range value without calling the backend", async () => {
-    render(<ConnectionSection />);
+    renderSection();
     const intervalInput = await screen.findByDisplayValue("60");
 
     await userEvent.clear(intervalInput);
