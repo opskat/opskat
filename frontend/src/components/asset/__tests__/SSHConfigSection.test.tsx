@@ -15,6 +15,7 @@ vi.mock("../../../../wailsjs/go/system/System", () => ({
   ListCredentialsByType: (type: string) =>
     Promise.resolve(type === "ssh_key" ? keyCreds : type === "password" ? pwCreds : []),
   GetAssetPassword: () => Promise.resolve(""),
+  GetSSHConnectionSettings: () => Promise.resolve({ keepAliveIntervalSeconds: 30 }),
 }));
 
 vi.mock("../../../../wailsjs/go/ssh/SSH", () => ({

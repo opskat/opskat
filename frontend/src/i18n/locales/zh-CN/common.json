@@ -582,6 +582,9 @@
     "tabTunnel": "隧道/代理",
     "tabTls": "TLS/证书",
     "tabAdvanced": "高级",
+    "sshKeepAliveInterval": "空闲保活间隔",
+    "sshKeepAliveIntervalPlaceholder": "跟随全局默认（{{seconds}} 秒）",
+    "sshKeepAliveIntervalHint": "每隔 N 秒发送 SSH 空包保持连接，避免空闲时被 NAT/防火墙/代理回收。留空则跟随全局默认；仅在此资产经常空闲断连时才需单独设置（5-3600 秒）。",
     "tabSchemaRegistry": "Schema Registry",
     "tabConnect": "Connect",
     "addDescription": "添加备注"
@@ -1400,6 +1403,15 @@
     "update": "更新",
     "reinstall": "覆盖安装",
     "versionMismatch": "opsctl 版本 ({{cliVersion}}) 与应用版本 ({{appVersion}}) 不一致，建议覆盖安装以保持同步"
+  },
+  "connection": {
+    "title": "空闲保活",
+    "desc": "挂机一段时间后 SSH 会话被 NAT、防火墙或代理链的空闲超时回收而断开时，调低此间隔。作为全局默认作用于所有出站 SSH 连接（终端与连接池），仅影响之后建立的连接。",
+    "saved": "保活设置已保存",
+    "secondsUnit": "秒",
+    "rangeError": "请输入 {{min}}-{{max}} 之间的整数",
+    "keepAliveInterval": "保活心跳间隔",
+    "keepAliveIntervalHint": "每隔 N 秒发送一个 SSH 空包以保持会话活动，避免被 NAT/防火墙的空闲超时回收。单个资产可在其「高级」设置里覆盖此默认值。"
   },
   "appUpdate": {
     "title": "关于",

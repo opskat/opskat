@@ -6,10 +6,11 @@ import { SSHConfigSection } from "@/components/asset/SSHConfigSection";
 const ctx = { isEdit: false, encryptPassword: vi.fn() };
 
 describe("SSHConfigSection tabs", () => {
-  it("splits into connection + tunnel tabs", () => {
+  it("splits into connection + tunnel + advanced tabs", () => {
     render(<SSHConfigSection ctx={ctx} onValidityChange={vi.fn()} />);
     expect(screen.getByTestId("config-tab-connection")).toBeInTheDocument();
     expect(screen.getByTestId("config-tab-tunnel")).toBeInTheDocument();
+    expect(screen.getByTestId("config-tab-advanced")).toBeInTheDocument();
   });
 
   it("reports connection group invalid until host filled", async () => {

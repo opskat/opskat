@@ -582,6 +582,9 @@
     "tabTunnel": "Tunnel / Proxy",
     "tabTls": "TLS / Certificates",
     "tabAdvanced": "Advanced",
+    "sshKeepAliveInterval": "Idle keep-alive interval",
+    "sshKeepAliveIntervalPlaceholder": "Follow global default ({{seconds}}s)",
+    "sshKeepAliveIntervalHint": "Send an empty SSH packet every N seconds to keep the connection alive and avoid it being reaped by NAT/firewall/proxy when idle. Leave empty to follow the global default; set it only when this specific asset keeps dropping while idle (5-3600s).",
     "tabSchemaRegistry": "Schema Registry",
     "tabConnect": "Connect",
     "addDescription": "Add description"
@@ -1400,6 +1403,15 @@
     "update": "Update",
     "reinstall": "Reinstall",
     "versionMismatch": "opsctl version ({{cliVersion}}) differs from app version ({{appVersion}}), consider reinstalling to keep in sync"
+  },
+  "connection": {
+    "title": "Idle keep-alive",
+    "desc": "Lower this interval when SSH sessions drop after idling because a NAT, firewall or proxy chain reaps the idle connection. Acts as the global default for every outbound SSH connection (terminals and the connection pool); only affects connections opened afterwards.",
+    "saved": "Keep-alive settings saved",
+    "secondsUnit": "seconds",
+    "rangeError": "Enter a whole number between {{min}} and {{max}}",
+    "keepAliveInterval": "Keepalive heartbeat interval",
+    "keepAliveIntervalHint": "Send an empty SSH packet every N seconds to keep the session alive and avoid NAT/firewall idle timeouts. An individual asset can override this default in its Advanced settings."
   },
   "appUpdate": {
     "title": "About",

@@ -271,18 +271,19 @@ func (r *Resolver) DialAssetSSH(ctx context.Context, assetID int64) (*ssh.Client
 		return nil, nil, err
 	}
 	cfg := ssh_svc.ConnectConfig{
-		Host:              sshCfg.Host,
-		Port:              sshCfg.Port,
-		Username:          sshCfg.Username,
-		AuthType:          sshCfg.AuthType,
-		Password:          password,
-		Key:               key,
-		KeyPassphrase:     passphrase,
-		PrivateKeys:       sshCfg.PrivateKeys,
-		AssetID:           assetID,
-		Proxy:             r.DecryptProxyPassword(sshCfg.Proxy),
-		JumpHosts:         jumpHosts,
-		HostKeyVerifyFunc: ssh_svc.AutoTrustFirstRejectChangeVerifyFunc(),
+		Host:                     sshCfg.Host,
+		Port:                     sshCfg.Port,
+		Username:                 sshCfg.Username,
+		AuthType:                 sshCfg.AuthType,
+		Password:                 password,
+		Key:                      key,
+		KeyPassphrase:            passphrase,
+		PrivateKeys:              sshCfg.PrivateKeys,
+		AssetID:                  assetID,
+		Proxy:                    r.DecryptProxyPassword(sshCfg.Proxy),
+		JumpHosts:                jumpHosts,
+		HostKeyVerifyFunc:        ssh_svc.AutoTrustFirstRejectChangeVerifyFunc(),
+		KeepAliveIntervalSeconds: sshCfg.KeepAliveIntervalSeconds,
 	}
 	return ssh_svc.NewManager().Dial(cfg)
 }

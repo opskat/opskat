@@ -1,6 +1,7 @@
 build/bin
 node_modules
 frontend/dist
+frontend/packages/devserver-ui/dist/
 
 # Node
 frontend/wailsjs/

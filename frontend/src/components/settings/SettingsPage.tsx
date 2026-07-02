@@ -27,6 +27,7 @@ import { AISettingsSection } from "@/components/settings/AISettingsSection";
 import { ImportSection } from "@/components/settings/ImportSection";
 import { BackupSection } from "@/components/settings/BackupSection";
 import { AppearanceSection, TerminalSection } from "@/components/settings/AppearanceSection";
+import { ConnectionSection } from "@/components/settings/ConnectionSection";
 import { UpdateSection } from "@/components/settings/UpdateSection";
 import { SystemStatusSection } from "@/components/settings/SystemStatusSection";
 import { ExtensionSection } from "@/components/settings/ExtensionSection";
@@ -123,6 +124,7 @@ export function SettingsPage() {
           {/* Terminal */}
           <TabsContent value="terminal" className="space-y-4">
             <TerminalSection />
+            <ConnectionSection />
           </TabsContent>
 
           <TabsContent value="external-edit" className="space-y-4">

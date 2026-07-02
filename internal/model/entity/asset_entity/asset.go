@@ -113,6 +113,9 @@ type SSHConfig struct {
 	PrivateKeyPassphrase string       `json:"private_key_passphrase,omitempty"` // 本地密钥密码（加密存储）
 	JumpHostID           int64        `json:"jump_host_id,omitempty"`           // Deprecated: use Asset.SSHTunnelID
 	Proxy                *ProxyConfig `json:"proxy,omitempty"`
+	// KeepAliveIntervalSeconds 覆盖该资产的 SSH 空闲保活心跳间隔（秒）。
+	// 0/缺省 = 跟随全局默认（System 设置里的保活间隔）。
+	KeepAliveIntervalSeconds int `json:"keepalive_interval_seconds,omitempty"`
 }
 
 // ProxyConfig 代理配置

@@ -328,7 +328,7 @@ import { Plus } from "lucide-react";
 
 ### 6.3 Shared composites (reuse before hand-rolling)
 
-These project blocks already solve picker/credential/icon problems — `AGENTS.md` calls them out by name. Reuse them; don't re-derive expand/collapse, tri-state checkboxes, pinyin search, or credential decryption.
+These project blocks already solve picker / credential / icon / form-field problems — most are called out by name in `AGENTS.md`. Reuse them; don't re-derive expand/collapse, tri-state checkboxes, pinyin search, credential decryption, segmented toggles, or label+input form fields.
 
 | Component | File | Use |
 | --- | --- | --- |
@@ -339,6 +339,8 @@ These project blocks already solve picker/credential/icon problems — `AGENTS.m
 | `ConfirmDialog` | [`packages/ui/.../confirm-dialog.tsx`](../frontend/packages/ui/src/components/confirm-dialog.tsx) | Confirm modal; `variant` `default` / `destructive` (default destructive), `confirmTestId` |
 | `PasswordSourceField` | [`components/asset/PasswordSourceField.tsx`](../frontend/src/components/asset/PasswordSourceField.tsx) | Inline-password vs managed-credential selector; lazy-decrypts an existing secret via backend |
 | `IconPicker` | [`components/asset/IconPicker.tsx`](../frontend/src/components/asset/IconPicker.tsx) | Icon + custom color picker; value is `"name"` or `"name#hexcolor"`; also exports `getIconComponent` / `getIconColor` (§8) |
+| `Segmented` | [`components/asset/fields.tsx`](../frontend/src/components/asset/fields.tsx) | Pill segmented control (radiogroup, floating active pill) — prefer it over a `Select` for a 2–4 option toggle (auth type, key source, connection method) |
+| Asset config-form fields | [`fields.tsx`](../frontend/src/components/asset/fields.tsx) · [`configFields.tsx`](../frontend/src/components/asset/configFields.tsx) · [`ConfigTabs.tsx`](../frontend/src/components/asset/ConfigTabs.tsx) | `Field` / `FieldLabel` label+control primitives plus the schema-driven field/tab renderer (`ConfigGroupSchema` → underline-tab groups) the asset form is built from; the wiring hook is in [`adding-an-asset-type.md` §F3](./adding-an-asset-type.md#f3-configsection-and-pure-configts-serialization) |
 
 ### 6.4 Toast (`notify` + sonner)
 

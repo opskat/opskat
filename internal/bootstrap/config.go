@@ -35,6 +35,10 @@ type AppConfig struct {
 	WindowWidth                     int    `json:"window_width,omitempty"`      // 上次正常窗口宽度
 	WindowHeight                    int    `json:"window_height,omitempty"`     // 上次正常窗口高度
 
+	// SSH 空闲保活心跳的全局默认间隔（秒），作用于所有出站 SSH 连接（终端会话 +
+	// 连接池）。<=0 = 采用内置默认（30s）。单个资产可在其 SSH 配置里覆盖此值。
+	SSHKeepAliveIntervalSeconds int `json:"ssh_keepalive_interval_seconds,omitempty"`
+
 	// 外部编辑配置。仅持久化用户自定义编辑器；内置候选由运行时探测生成。
 	ExternalEditDefaultEditorID      string                 `json:"external_edit_default_editor_id,omitempty"`
 	ExternalEditWorkspaceRoot        string                 `json:"external_edit_workspace_root,omitempty"`

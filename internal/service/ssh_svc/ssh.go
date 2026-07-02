@@ -3,8 +3,10 @@ package ssh_svc
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"sort"
 	"sync"
@@ -14,6 +16,7 @@ import (
 	"github.com/opskat/opskat/internal/pkg/dirsync"
 	"github.com/opskat/opskat/internal/pkg/socksdial"
 	"github.com/opskat/opskat/internal/pkg/sshkeepalive"
+	"github.com/opskat/opskat/internal/pkg/sshtuning"
 	"github.com/opskat/opskat/internal/service/sessionid"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -31,13 +34,13 @@ type sharedClient struct {
 	stopKeepalive func()
 }
 
-func newSharedClient(client *ssh.Client, closers []io.Closer) *sharedClient {
+func newSharedClient(client *ssh.Client, closers []io.Closer, keepAliveSeconds int) *sharedClient {
 	sc := &sharedClient{
 		client:   client,
 		refCount: 1,
 		closers:  closers,
 	}
-	sc.stopKeepalive = sshkeepalive.Start(client, sshkeepalive.Interval)
+	sc.stopKeepalive = sshkeepalive.Start(client, sshtuning.ResolveKeepAlive(keepAliveSeconds))
 	return sc
 }
 
@@ -274,6 +277,10 @@ type ConnectConfig struct {
 
 	// 主机密钥校验回调（nil 则跳过校验）
 	HostKeyVerifyFunc HostKeyVerifyFunc
+
+	// KeepAliveIntervalSeconds 覆盖此连接的 SSH 空闲保活心跳间隔（秒）。
+	// 0 = 跟随全局默认（sshtuning）。
+	KeepAliveIntervalSeconds int
 }
 
 // JumpHostEntry 跳板机连接信息
@@ -305,11 +312,27 @@ func (m *Manager) Dial(cfg ConnectConfig) (*ssh.Client, []io.Closer, error) {
 		User:            cfg.Username,
 		Auth:            authMethods,
 		HostKeyCallback: MakeHostKeyCallback(cfg.Host, cfg.Port, cfg.HostKeyVerifyFunc),
-		Timeout:         30 * time.Second,
+		Timeout:         sshtuning.Get().DialTimeoutOrDefault(),
 	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
-	return m.dial(cfg, sshConfig, addr)
+	client, closers, err := m.dial(cfg, sshConfig, addr)
+	if err != nil {
+		return nil, nil, err
+	}
+	// 非终端连接（连接池 / 端口转发 / AI）的 keepalive 由本函数负责：把 stop 作为
+	// 首个 closer 交回调用方，调用方关闭 closers 时即停止心跳，无需各池自管。
+	stop := sshkeepalive.Start(client, sshtuning.ResolveKeepAlive(cfg.KeepAliveIntervalSeconds))
+	closers = append([]io.Closer{closerFunc(stop)}, closers...)
+	return client, closers, nil
+}
+
+// closerFunc 把一个无返回值的停止函数适配成 io.Closer，便于随 closers 统一关闭。
+type closerFunc func()
+
+func (f closerFunc) Close() error {
+	f()
+	return nil
 }
 
 // Connect 建立 SSH 连接并启动 PTY 会话
@@ -324,7 +347,7 @@ func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
 		User:            cfg.Username,
 		Auth:            authMethods,
 		HostKeyCallback: MakeHostKeyCallback(cfg.Host, cfg.Port, cfg.HostKeyVerifyFunc),
-		Timeout:         30 * time.Second,
+		Timeout:         sshtuning.Get().DialTimeoutOrDefault(),
 	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
@@ -337,7 +360,7 @@ func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
 		return "", err
 	}
 
-	shared := newSharedClient(client, extraClosers)
+	shared := newSharedClient(client, extraClosers, cfg.KeepAliveIntervalSeconds)
 
 	emitProgress(&cfg, "shell", "正在启动终端...")
 
@@ -481,11 +504,34 @@ func (m *Manager) dial(cfg ConnectConfig, sshConfig *ssh.ClientConfig, targetAdd
 
 	// 情况3: 直连
 	emitProgress(&cfg, "auth", "正在认证...")
-	client, err := ssh.Dial("tcp", targetAddr, sshConfig)
+	conn, err := dialTCP(context.Background(), targetAddr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("SSH连接失败: %w", err)
 	}
-	return client, nil, nil
+	c, chans, reqs, err := ssh.NewClientConn(conn, targetAddr, sshConfig)
+	if err != nil {
+		if closeErr := conn.Close(); closeErr != nil {
+			logger.Default().Warn("close connection after handshake failure", zap.Error(closeErr))
+		}
+		return nil, nil, fmt.Errorf("SSH连接失败: %w", err)
+	}
+	return ssh.NewClient(c, chans, reqs), nil, nil
+}
+
+// dialTCP 建立到 addr 的底层 TCP 连接，并按 sshtuning 配置施加 TCP_NODELAY /
+// SO_KEEPALIVE / 连接超时。仅对真正的 TCP 套接字生效；经 SOCKS5 代理或跳板机
+// 通道的连接不是 *net.TCPConn，TCP 选项无法触达（保活/超时仍通过 SSH 层与
+// ClientConfig.Timeout 兜底）。
+func dialTCP(ctx context.Context, addr string) (net.Conn, error) {
+	s := sshtuning.Get()
+	conn, err := s.Dialer().DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ApplyTCPOptions(conn); err != nil {
+		logger.Default().Warn("apply TCP options", zap.String("addr", addr), zap.Error(err))
+	}
+	return conn, nil
 }
 
 // dialViaJumpHosts 通过跳板机链连接目标
@@ -506,7 +552,7 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 		User:            firstJump.Username,
 		Auth:            firstAuth,
 		HostKeyCallback: MakeHostKeyCallback(firstJump.Host, firstJump.Port, cfg.HostKeyVerifyFunc),
-		Timeout:         30 * time.Second,
+		Timeout:         sshtuning.Get().DialTimeoutOrDefault(),
 	}
 
 	var currentClient *ssh.Client
@@ -528,10 +574,18 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 		}
 		currentClient = ssh.NewClient(c, chans, reqs)
 	} else {
-		currentClient, err = ssh.Dial("tcp", firstAddr, firstConfig)
+		conn, err := dialTCP(context.Background(), firstAddr)
 		if err != nil {
 			return nil, nil, fmt.Errorf("连接跳板机失败: %w", err)
 		}
+		c, chans, reqs, err := ssh.NewClientConn(conn, firstAddr, firstConfig)
+		if err != nil {
+			if closeErr := conn.Close(); closeErr != nil {
+				logger.Default().Warn("close jump host connection after handshake failure", zap.Error(closeErr))
+			}
+			return nil, nil, fmt.Errorf("连接跳板机失败: %w", err)
+		}
+		currentClient = ssh.NewClient(c, chans, reqs)
 	}
 	closers = append(closers, currentClient)
 
@@ -555,7 +609,7 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 			User:            jump.Username,
 			Auth:            jumpAuth,
 			HostKeyCallback: MakeHostKeyCallback(jump.Host, jump.Port, cfg.HostKeyVerifyFunc),
-			Timeout:         30 * time.Second,
+			Timeout:         sshtuning.Get().DialTimeoutOrDefault(),
 		}
 
 		conn, err := currentClient.Dial("tcp", jumpAddr)
@@ -756,6 +810,19 @@ func (m *Manager) readOutput(sess *Session) {
 					sess.parserRemainder = nil
 				}
 				flush()
+				// Log the disconnect reason. io.EOF is the remote closing the
+				// channel cleanly (user `exit`, or a server-side idle logout
+				// such as sshd ClientAlive*/shell TMOUT, which client keepalive
+				// cannot prevent). Anything else (reset/timeout) is an abnormal
+				// transport drop. This is the one place that knows *why* a
+				// session ended — without it diagnosis is blind.
+				if errors.Is(r.err, io.EOF) {
+					logger.Default().Info("ssh session ended: remote closed channel",
+						zap.String("sessionID", sess.ID), zap.Int64("assetID", sess.AssetID))
+				} else {
+					logger.Default().Warn("ssh session dropped: transport read error",
+						zap.String("sessionID", sess.ID), zap.Int64("assetID", sess.AssetID), zap.Error(r.err))
+				}
 				return
 			}
 			filtered := sess.filterOutput(r.data)
@@ -841,7 +908,7 @@ func (m *Manager) TestConnection(ctx context.Context, cfg ConnectConfig) error {
 		User:            cfg.Username,
 		Auth:            authMethods,
 		HostKeyCallback: MakeHostKeyCallback(cfg.Host, cfg.Port, cfg.HostKeyVerifyFunc),
-		Timeout:         10 * time.Second,
+		Timeout:         sshtuning.Get().DialTimeoutOrDefault(),
 	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)

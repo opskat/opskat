@@ -10,8 +10,6 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/ssh"
-
-	"github.com/opskat/opskat/internal/pkg/sshkeepalive"
 )
 
 // PoolDialer 创建 SSH 连接的接口，由调用方实现以解耦凭据解析和跳板机逻辑
@@ -21,14 +19,13 @@ type PoolDialer interface {
 
 // poolEntry 连接池条目
 type poolEntry struct {
-	client        *ssh.Client
-	closers       []io.Closer // 跳板机等中间连接
-	assetID       int64
-	lastUsed      time.Time
-	refCount      int
-	mu            sync.Mutex
-	closed        bool
-	stopKeepalive func()
+	client   *ssh.Client
+	closers  []io.Closer // 跳板机等中间连接
+	assetID  int64
+	lastUsed time.Time
+	refCount int
+	mu       sync.Mutex
+	closed   bool
 }
 
 // acquire 增加引用计数
@@ -74,12 +71,10 @@ func (e *poolEntry) close() {
 		return
 	}
 	e.closed = true
-	if e.stopKeepalive != nil {
-		e.stopKeepalive()
-	}
 	if err := e.client.Close(); err != nil {
 		logger.Default().Warn("close ssh client", zap.Int64("assetID", e.assetID), zap.Error(err))
 	}
+	// closers 里含 keepalive 的 stop（由 ssh_svc.Dial 挂入），一并关闭即停心跳。
 	for _, c := range e.closers {
 		if err := c.Close(); err != nil {
 			logger.Default().Warn("close intermediate connection", zap.Int64("assetID", e.assetID), zap.Error(err))
@@ -141,20 +136,18 @@ func (p *Pool) Get(ctx context.Context, assetID int64) (*ssh.Client, error) {
 	}
 
 	entry = &poolEntry{
-		client:        client,
-		closers:       closers,
-		assetID:       assetID,
-		lastUsed:      time.Now(),
-		refCount:      1,
-		stopKeepalive: sshkeepalive.Start(client, sshkeepalive.Interval),
+		client:   client,
+		closers:  closers,
+		assetID:  assetID,
+		lastUsed: time.Now(),
+		refCount: 1,
 	}
 
 	p.mu.Lock()
 	// 可能在拨号期间有其他 goroutine 已创建了连接
 	if existing, ok := p.entries[assetID]; ok {
 		p.mu.Unlock()
-		// 关闭我们刚创建的，使用已存在的
-		entry.stopKeepalive()
+		// 关闭我们刚创建的，使用已存在的（closers 含 keepalive stop，一并关闭）
 		if err := client.Close(); err != nil {
 			logger.Default().Warn("close duplicate ssh client", zap.Int64("assetID", assetID), zap.Error(err))
 		}
