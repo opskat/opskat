@@ -3,6 +3,8 @@ package query_svc
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	_ "github.com/glebarez/go-sqlite"
@@ -57,6 +59,35 @@ func TestGetTableMetadata_SQLite(t *testing.T) {
 	})
 }
 
+func TestGetTableMetadata_SQLite_NoForeignKeys(t *testing.T) {
+	Convey("无外键的表，foreignKeys 序列化为 [] 而非 null", t, func() {
+		db, err := sql.Open("sqlite", ":memory:")
+		So(err, ShouldBeNil)
+		defer func() { _ = db.Close() }()
+		db.SetMaxOpenConns(1)
+
+		ctx := context.Background()
+		_, err = db.ExecContext(ctx, `CREATE TABLE plain (id INTEGER PRIMARY KEY, name TEXT)`)
+		So(err, ShouldBeNil)
+
+		conn, err := db.Conn(ctx)
+		So(err, ShouldBeNil)
+		defer func() { _ = conn.Close() }()
+
+		meta, err := GetTableMetadata(ctx, conn, asset_entity.DriverSQLite, "main", "plain")
+		So(err, ShouldBeNil)
+
+		// A nil slice marshals to JSON null, which crashes the frontend's
+		// meta.foreignKeys.length. The contract is an array, always.
+		So(meta.ForeignKeys, ShouldNotBeNil)
+		So(len(meta.ForeignKeys), ShouldEqual, 0)
+		raw, err := json.Marshal(meta)
+		So(err, ShouldBeNil)
+		So(strings.Contains(string(raw), `"foreignKeys":[]`), ShouldBeTrue)
+		So(strings.Contains(string(raw), `"foreignKeys":null`), ShouldBeFalse)
+	})
+}
+
 func TestListDatabaseObjects_SQLite(t *testing.T) {
 	Convey("ListDatabaseObjects 返回 SQLite 的视图与触发器", t, func() {
 		db, err := sql.Open("sqlite", ":memory:")
@@ -84,7 +115,7 @@ func TestListDatabaseObjects_SQLite(t *testing.T) {
 		So(objs.Triggers[0].Name, ShouldEqual, "trg_t")
 		So(len(objs.Procedures), ShouldEqual, 0)
 
-		src, err := GetObjectSource(ctx, conn, asset_entity.DriverSQLite, "main", "view", "v_t")
+		src, err := GetObjectSource(ctx, conn, asset_entity.DriverSQLite, "main", "view", "v_t", "")
 		So(err, ShouldBeNil)
 		So(src, ShouldContainSubstring, "CREATE VIEW")
 	})

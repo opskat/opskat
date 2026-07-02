@@ -39,10 +39,13 @@ type TableMetadata struct {
 	ForeignKeys []ForeignKeyMeta `json:"foreignKeys"`
 }
 
-// ObjectMeta names a schema object (view / routine / trigger).
+// ObjectMeta names a schema object (view / routine / trigger). Table is set
+// only for PostgreSQL triggers, whose names are unique per table (not per
+// schema), so the source lookup needs the owning table to resolve them.
 type ObjectMeta struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Table string `json:"table,omitempty"`
 }
 
 // DatabaseObjects groups non-table schema objects for the object browser.
@@ -206,15 +209,18 @@ func mysqlIndexes(ctx context.Context, conn *sql.Conn, _, table string) ([]Index
 
 func pgIndexes(ctx context.Context, conn *sql.Conn, table string) ([]IndexMeta, error) {
 	schema, tbl := splitPGSchemaTable(table)
+	// Order columns by their position in the index key (pos), not by the table
+	// attribute number, and resolve each position via pg_get_indexdef so that
+	// multi-column ordering is correct and expression indexes are not dropped.
 	rows, err := conn.QueryContext(ctx,
-		"SELECT i.relname, ix.indisunique, a.attname "+
+		"SELECT i.relname, ix.indisunique, pg_get_indexdef(ix.indexrelid, s.pos::int, true) "+
 			"FROM pg_class t "+
 			"JOIN pg_namespace n ON n.oid = t.relnamespace "+
 			"JOIN pg_index ix ON ix.indrelid = t.oid "+
 			"JOIN pg_class i ON i.oid = ix.indexrelid "+
-			"JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey) "+
+			"CROSS JOIN LATERAL generate_series(1, ix.indnatts) AS s(pos) "+
 			"WHERE n.nspname = $1 AND t.relname = $2 "+
-			"ORDER BY i.relname, a.attnum", schema, tbl)
+			"ORDER BY i.relname, s.pos", schema, tbl)
 	if err != nil {
 		return nil, err
 	}
@@ -315,7 +321,7 @@ func sqliteForeignKeys(ctx context.Context, conn *sql.Conn, database, table stri
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []ForeignKeyMeta
+	out := make([]ForeignKeyMeta, 0)
 	for rows.Next() {
 		var refTable, from, to string
 		if err := rows.Scan(&refTable, &from, &to); err != nil {
@@ -374,7 +380,7 @@ func mssqlForeignKeys(ctx context.Context, conn *sql.Conn, table string) ([]Fore
 
 func scanForeignKeyRows(rows *sql.Rows) ([]ForeignKeyMeta, error) {
 	defer func() { _ = rows.Close() }()
-	var out []ForeignKeyMeta
+	out := make([]ForeignKeyMeta, 0)
 	for rows.Next() {
 		var name, col, refTable, refCol sql.NullString
 		if err := rows.Scan(&name, &col, &refTable, &refCol); err != nil {
@@ -474,9 +480,25 @@ func pgObjects(ctx context.Context, conn *sql.Conn) (*DatabaseObjects, error) {
 		"function", &out.Functions); err != nil {
 		return nil, err
 	}
-	if err := collectObjects(ctx, conn,
-		"SELECT DISTINCT trigger_schema || '.' || trigger_name FROM information_schema.triggers WHERE trigger_schema NOT IN ('pg_catalog','information_schema') ORDER BY 1",
-		"trigger", &out.Triggers); err != nil {
+	// Triggers also carry their table: a PostgreSQL trigger name is unique per
+	// table (not per schema), so the source lookup needs the owning table.
+	trigRows, err := conn.QueryContext(ctx,
+		"SELECT DISTINCT trigger_schema, trigger_name, event_object_table "+
+			"FROM information_schema.triggers "+
+			"WHERE trigger_schema NOT IN ('pg_catalog','information_schema') "+
+			"ORDER BY trigger_schema, trigger_name")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = trigRows.Close() }()
+	for trigRows.Next() {
+		var schema, name, tbl string
+		if err := trigRows.Scan(&schema, &name, &tbl); err != nil {
+			return nil, err
+		}
+		out.Triggers = append(out.Triggers, ObjectMeta{Name: schema + "." + name, Type: "trigger", Table: tbl})
+	}
+	if err := trigRows.Err(); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -499,8 +521,15 @@ func mssqlObjects(ctx context.Context, conn *sql.Conn) (*DatabaseObjects, error)
 		"function", &out.Functions); err != nil {
 		return nil, err
 	}
+	// Schema-qualify DML triggers via their parent object so GetObjectSource's
+	// OBJECT_ID(name) resolves the right one; database/DDL triggers have no
+	// schema (parent_id 0) and fall back to their bare name.
 	if err := collectObjects(ctx, conn,
-		"SELECT tr.name FROM sys.triggers tr WHERE tr.is_ms_shipped = 0 ORDER BY tr.name",
+		"SELECT CASE WHEN s.name IS NULL THEN tr.name ELSE s.name + '.' + tr.name END "+
+			"FROM sys.triggers tr "+
+			"LEFT JOIN sys.objects o ON o.object_id = tr.parent_id "+
+			"LEFT JOIN sys.schemas s ON s.schema_id = o.schema_id "+
+			"WHERE tr.is_ms_shipped = 0 ORDER BY 1",
 		"trigger", &out.Triggers); err != nil {
 		return nil, err
 	}
@@ -526,7 +555,9 @@ func collectObjects(ctx context.Context, conn *sql.Conn, sqlText, typ string, ds
 // GetObjectSource returns the source / definition of a view / routine / trigger
 // for read-only display. SQLite reads sqlite_master.sql; the others use their
 // catalog definition function.
-func GetObjectSource(ctx context.Context, conn *sql.Conn, driver asset_entity.DatabaseDriver, database, objType, name string) (string, error) {
+// table is only consulted for PostgreSQL triggers (see ObjectMeta.Table); other
+// drivers and object types ignore it.
+func GetObjectSource(ctx context.Context, conn *sql.Conn, driver asset_entity.DatabaseDriver, database, objType, name, table string) (string, error) {
 	switch driver {
 	case asset_entity.DriverSQLite:
 		master := "sqlite_master"
@@ -542,7 +573,7 @@ func GetObjectSource(ctx context.Context, conn *sql.Conn, driver asset_entity.Da
 	case asset_entity.DriverMySQL:
 		return mysqlObjectSource(ctx, conn, objType, name)
 	case asset_entity.DriverPostgreSQL:
-		return pgObjectSource(ctx, conn, objType, name)
+		return pgObjectSource(ctx, conn, objType, name, table)
 	case asset_entity.DriverMSSQL:
 		var src sql.NullString
 		err := conn.QueryRowContext(ctx, "SELECT OBJECT_DEFINITION(OBJECT_ID(@p1))", sql.Named("p1", name)).Scan(&src)
@@ -603,12 +634,27 @@ func mysqlObjectSource(ctx context.Context, conn *sql.Conn, objType, name string
 	return pickString(row, cols[len(cols)-1]), nil
 }
 
-func pgObjectSource(ctx context.Context, conn *sql.Conn, objType, name string) (string, error) {
+func pgObjectSource(ctx context.Context, conn *sql.Conn, objType, name, table string) (string, error) {
 	schema, obj := splitPGSchemaTable(name)
 	var src sql.NullString
 	switch strings.ToLower(objType) {
 	case "view":
-		err := conn.QueryRowContext(ctx, "SELECT pg_get_viewdef(($1 || '.' || $2)::regclass, true)", schema, obj).Scan(&src)
+		// format('%I.%I', ...) quotes the identifiers so mixed-case / special
+		// characters in the view name resolve to the right regclass.
+		err := conn.QueryRowContext(ctx, "SELECT pg_get_viewdef(format('%I.%I', $1, $2)::regclass, true)", schema, obj).Scan(&src)
+		if err != nil {
+			return "", err
+		}
+	case "trigger":
+		// Triggers live in pg_trigger, not pg_proc, and are identified by
+		// (schema, table, name); obj holds the trigger name, table its owner.
+		err := conn.QueryRowContext(ctx,
+			"SELECT pg_get_triggerdef(tg.oid, true) "+
+				"FROM pg_trigger tg "+
+				"JOIN pg_class c ON c.oid = tg.tgrelid "+
+				"JOIN pg_namespace n ON n.oid = c.relnamespace "+
+				"WHERE n.nspname = $1 AND c.relname = $2 AND tg.tgname = $3 AND NOT tg.tgisinternal "+
+				"LIMIT 1", schema, table, obj).Scan(&src)
 		if err != nil {
 			return "", err
 		}

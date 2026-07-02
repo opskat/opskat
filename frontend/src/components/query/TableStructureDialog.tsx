@@ -54,7 +54,9 @@ export function TableStructureDialog({ open, onOpenChange, tabId, database, tabl
                           </span>
                         </td>
                         <td className="py-1 pr-3 font-mono text-muted-foreground">{col.type}</td>
-                        <td className="py-1 pr-3 text-muted-foreground">{col.nullable ? "YES" : "NO"}</td>
+                        <td className="py-1 pr-3 text-muted-foreground">
+                          {col.nullable ? t("query.structYes") : t("query.structNo")}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

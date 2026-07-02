@@ -96,10 +96,11 @@ func (q *Query) ListDatabaseObjects(assetID int64, database string) (*query_svc.
 }
 
 // GetObjectSource returns the read-only definition of a view / routine / trigger.
-func (q *Query) GetObjectSource(assetID int64, database, objType, name string) (string, error) {
+// table is only used for PostgreSQL triggers (see query_svc.ObjectMeta.Table).
+func (q *Query) GetObjectSource(assetID int64, database, objType, name, table string) (string, error) {
 	var result string
 	err := q.withObjectConn(assetID, database, 15*time.Second, func(ctx context.Context, oc objectConn) error {
-		src, err := query_svc.GetObjectSource(ctx, oc.conn, oc.driverType(), oc.database, objType, name)
+		src, err := query_svc.GetObjectSource(ctx, oc.conn, oc.driverType(), oc.database, objType, name, table)
 		if err != nil {
 			return err
 		}

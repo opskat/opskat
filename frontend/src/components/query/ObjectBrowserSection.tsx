@@ -37,9 +37,9 @@ export function ObjectBrowserSection({ tabId, assetId, database }: ObjectBrowser
     if (!objects) void loadObjects(tabId, database);
   }, [objects, tabId, database, loadObjects]);
 
-  const handleOpenSource = async (type: string, name: string) => {
+  const handleOpenSource = async (type: string, name: string, table?: string) => {
     try {
-      const src = await GetObjectSource(assetId, database, type, name);
+      const src = await GetObjectSource(assetId, database, type, name, table ?? "");
       openSqlTab(tabId, database, src);
     } catch (e) {
       toast.error(String(e));
@@ -78,10 +78,10 @@ export function ObjectBrowserSection({ tabId, assetId, database }: ObjectBrowser
               <div className="ml-5">
                 {group.items.map((item) => (
                   <div
-                    key={item.name}
+                    key={item.table ? `${item.name}@${item.table}` : item.name}
                     className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent"
-                    title={t("query.objViewSource")}
-                    onClick={() => handleOpenSource(group.type, item.name)}
+                    title={item.table ? t("query.objViewSourceOn", { table: item.table }) : t("query.objViewSource")}
+                    onClick={() => handleOpenSource(group.type, item.name, item.table)}
                   >
                     <span className="truncate font-mono">{item.name}</span>
                   </div>
