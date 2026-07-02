@@ -80,6 +80,18 @@ func Set(s Settings) {
 	current = s
 }
 
+// ResolveKeepAlive returns the effective SSH keepalive heartbeat interval for a
+// single connection: a positive per-asset override (in seconds) wins, otherwise
+// the process-wide default is used. This is the one place the "override else
+// default" precedence lives, so callers pass the raw per-asset seconds (0 =
+// inherit) and don't re-implement the fallback.
+func ResolveKeepAlive(overrideSeconds int) time.Duration {
+	if overrideSeconds > 0 {
+		return time.Duration(overrideSeconds) * time.Second
+	}
+	return Get().KeepAliveInterval
+}
+
 // Dialer builds a net.Dialer honoring the timeout and SO_KEEPALIVE settings.
 // TCP_NODELAY is NOT a Dialer field — apply it on the resulting *net.TCPConn
 // (see ApplyTCPOptions).

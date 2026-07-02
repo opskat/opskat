@@ -16,10 +16,7 @@ func TestGetSSHConnectionSettingsReturnsDefaultsWhenUnset(t *testing.T) {
 	s := New(t.Context(), SkillContent{})
 	got := s.GetSSHConnectionSettings()
 	want := SSHConnectionSettings{
-		TCPNoDelay:               true,
-		TCPKeepAlive:             true,
 		KeepAliveIntervalSeconds: int(sshtuning.DefaultKeepAliveInterval.Seconds()),
-		ConnectTimeoutSeconds:    int(sshtuning.DefaultDialTimeout.Seconds()),
 	}
 	if got != want {
 		t.Fatalf("defaults = %+v, want %+v", got, want)
@@ -34,29 +31,27 @@ func TestSetSSHConnectionSettingsRoundTripsAndApplies(t *testing.T) {
 	t.Cleanup(func() { sshtuning.Set(sshtuning.Default()) })
 
 	s := New(t.Context(), SkillContent{})
-	in := SSHConnectionSettings{
-		TCPNoDelay:               false,
-		TCPKeepAlive:             false,
-		KeepAliveIntervalSeconds: 90,
-		ConnectTimeoutSeconds:    15,
-	}
+	in := SSHConnectionSettings{KeepAliveIntervalSeconds: 90}
 	if err := s.SetSSHConnectionSettings(in); err != nil {
 		t.Fatalf("SetSSHConnectionSettings: %v", err)
 	}
 
-	// Round-trips through config — an explicit false must survive (tri-state),
-	// not collapse back to the default true.
+	// Round-trips through config.
 	if got := s.GetSSHConnectionSettings(); got != in {
 		t.Fatalf("round-trip = %+v, want %+v", got, in)
 	}
 
-	// Applied to the live global tuning so the next connection uses it.
+	// Applied to the live global tuning so the next connection uses it. The
+	// non-configurable knobs stay at their built-in defaults.
 	live := sshtuning.Get()
-	if live.TCPNoDelay || live.TCPKeepAlive {
-		t.Fatalf("live tuning bools not applied: %+v", live)
+	if !live.TCPNoDelay || !live.TCPKeepAlive {
+		t.Fatalf("non-configurable tuning should stay at defaults: %+v", live)
 	}
-	if live.KeepAliveInterval.Seconds() != 90 || live.DialTimeout.Seconds() != 15 {
-		t.Fatalf("live tuning durations not applied: %+v", live)
+	if live.KeepAliveInterval.Seconds() != 90 {
+		t.Fatalf("live keepalive not applied: %+v", live)
+	}
+	if live.DialTimeout != sshtuning.DefaultDialTimeout {
+		t.Fatalf("dial timeout should stay default: %+v", live)
 	}
 }
 
@@ -68,10 +63,9 @@ func TestSetSSHConnectionSettingsRejectsOutOfRange(t *testing.T) {
 	s := New(t.Context(), SkillContent{})
 
 	cases := []SSHConnectionSettings{
-		{KeepAliveIntervalSeconds: 1, ConnectTimeoutSeconds: 30},      // interval too small
-		{KeepAliveIntervalSeconds: 99999, ConnectTimeoutSeconds: 30},  // interval too large
-		{KeepAliveIntervalSeconds: 60, ConnectTimeoutSeconds: 0},      // timeout too small
-		{KeepAliveIntervalSeconds: 60, ConnectTimeoutSeconds: 100000}, // timeout too large
+		{KeepAliveIntervalSeconds: 1},     // interval too small
+		{KeepAliveIntervalSeconds: 99999}, // interval too large
+		{KeepAliveIntervalSeconds: 0},     // unset / too small
 	}
 	for i, in := range cases {
 		if err := s.SetSSHConnectionSettings(in); err == nil {

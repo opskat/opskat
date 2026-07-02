@@ -18,7 +18,7 @@ import { Field, Segmented } from "@/components/asset/fields";
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
-import { ListCredentialsByType } from "../../../wailsjs/go/system/System";
+import { GetSSHConnectionSettings, ListCredentialsByType } from "../../../wailsjs/go/system/System";
 import { ListLocalSSHKeys, SelectSSHKeyFile } from "../../../wailsjs/go/ssh/SSH";
 import { credential_entity, ssh as ssh_models } from "../../../wailsjs/go/models";
 import { useAssetCredential } from "./useAssetCredential";
@@ -88,6 +88,8 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
 
   const [managedKeys, setManagedKeys] = useState<credential_entity.Credential[]>([]);
   const [localKeys, setLocalKeys] = useState<ssh_models.LocalSSHKeyInfo[]>([]);
+  // 全局保活默认值，仅用于「高级」里的 placeholder 提示（留空=跟随此值）。
+  const [globalKeepAlive, setGlobalKeepAlive] = useState(30);
   // 挂载即扫描,初始 true(避免在 effect 内同步 setState 触发级联渲染)。
   const [scanningKeys, setScanningKeys] = useState(true);
 
@@ -100,6 +102,9 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
       .then((keys) => setLocalKeys(keys || []))
       .catch(() => setLocalKeys([]))
       .finally(() => setScanningKeys(false));
+    GetSSHConnectionSettings()
+      .then((s) => s && setGlobalKeepAlive(s.keepAliveIntervalSeconds))
+      .catch(() => {});
   }, []);
 
   // 排除自身,不能把自己选作跳板机 / SSH 隧道。
@@ -326,6 +331,43 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
           tunnelOptionLabelKey: "asset.connectionJumpHost",
           tunnelSelectLabelKey: "asset.selectJumpHost",
           excludeIds: jumpHostExcludeIds,
+        },
+      ],
+    },
+    {
+      key: "advanced",
+      label: "asset.tabAdvanced",
+      fields: [
+        {
+          kind: "custom",
+          render: (s, patchState) => (
+            <Field label={t("asset.sshKeepAliveInterval")}>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min={5}
+                  max={3600}
+                  className="w-32 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  data-testid="ssh-keepalive-input"
+                  // 空 = 0 = 跟随全局默认。
+                  value={s.keepAliveIntervalSeconds || ""}
+                  placeholder={t("asset.sshKeepAliveIntervalPlaceholder", { seconds: globalKeepAlive })}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    patchState({ keepAliveIntervalSeconds: v === "" ? 0 : Math.trunc(Number(v)) || 0 });
+                  }}
+                  onBlur={() => {
+                    // 离焦时把非零值钳到合法区间，保证存进 config 的值有效（0 除外）。
+                    const n = s.keepAliveIntervalSeconds;
+                    if (n > 0 && n < 5) patchState({ keepAliveIntervalSeconds: 5 });
+                    else if (n > 3600) patchState({ keepAliveIntervalSeconds: 3600 });
+                  }}
+                />
+                <span className="text-sm text-muted-foreground">{t("connection.secondsUnit")}</span>
+              </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">{t("asset.sshKeepAliveIntervalHint")}</p>
+            </Field>
+          ),
         },
       ],
     },

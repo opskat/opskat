@@ -34,13 +34,13 @@ type sharedClient struct {
 	stopKeepalive func()
 }
 
-func newSharedClient(client *ssh.Client, closers []io.Closer) *sharedClient {
+func newSharedClient(client *ssh.Client, closers []io.Closer, keepAliveSeconds int) *sharedClient {
 	sc := &sharedClient{
 		client:   client,
 		refCount: 1,
 		closers:  closers,
 	}
-	sc.stopKeepalive = sshkeepalive.Start(client, sshtuning.Get().KeepAliveInterval)
+	sc.stopKeepalive = sshkeepalive.Start(client, sshtuning.ResolveKeepAlive(keepAliveSeconds))
 	return sc
 }
 
@@ -277,6 +277,10 @@ type ConnectConfig struct {
 
 	// 主机密钥校验回调（nil 则跳过校验）
 	HostKeyVerifyFunc HostKeyVerifyFunc
+
+	// KeepAliveIntervalSeconds 覆盖此连接的 SSH 空闲保活心跳间隔（秒）。
+	// 0 = 跟随全局默认（sshtuning）。
+	KeepAliveIntervalSeconds int
 }
 
 // JumpHostEntry 跳板机连接信息
@@ -312,7 +316,23 @@ func (m *Manager) Dial(cfg ConnectConfig) (*ssh.Client, []io.Closer, error) {
 	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
-	return m.dial(cfg, sshConfig, addr)
+	client, closers, err := m.dial(cfg, sshConfig, addr)
+	if err != nil {
+		return nil, nil, err
+	}
+	// 非终端连接（连接池 / 端口转发 / AI）的 keepalive 由本函数负责：把 stop 作为
+	// 首个 closer 交回调用方，调用方关闭 closers 时即停止心跳，无需各池自管。
+	stop := sshkeepalive.Start(client, sshtuning.ResolveKeepAlive(cfg.KeepAliveIntervalSeconds))
+	closers = append([]io.Closer{closerFunc(stop)}, closers...)
+	return client, closers, nil
+}
+
+// closerFunc 把一个无返回值的停止函数适配成 io.Closer，便于随 closers 统一关闭。
+type closerFunc func()
+
+func (f closerFunc) Close() error {
+	f()
+	return nil
 }
 
 // Connect 建立 SSH 连接并启动 PTY 会话
@@ -340,7 +360,7 @@ func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
 		return "", err
 	}
 
-	shared := newSharedClient(client, extraClosers)
+	shared := newSharedClient(client, extraClosers, cfg.KeepAliveIntervalSeconds)
 
 	emitProgress(&cfg, "shell", "正在启动终端...")
 

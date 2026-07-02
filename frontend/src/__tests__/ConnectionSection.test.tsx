@@ -7,32 +7,14 @@ import { GetSSHConnectionSettings, SetSSHConnectionSettings } from "../../wailsj
 describe("ConnectionSection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(GetSSHConnectionSettings).mockResolvedValue({
-      tcpNoDelay: true,
-      tcpKeepAlive: true,
-      keepAliveIntervalSeconds: 60,
-      connectTimeoutSeconds: 30,
-    });
+    vi.mocked(GetSSHConnectionSettings).mockResolvedValue({ keepAliveIntervalSeconds: 60 });
     vi.mocked(SetSSHConnectionSettings).mockResolvedValue();
   });
 
-  it("loads and displays the current settings", async () => {
+  it("loads and displays the current keepalive interval", async () => {
     render(<ConnectionSection />);
     expect(await screen.findByDisplayValue("60")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("30")).toBeInTheDocument();
     expect(GetSSHConnectionSettings).toHaveBeenCalledTimes(1);
-  });
-
-  it("persists a toggled TCP_NODELAY switch", async () => {
-    render(<ConnectionSection />);
-    await screen.findByDisplayValue("60");
-
-    const switches = screen.getAllByRole("switch");
-    await userEvent.click(switches[0]);
-
-    expect(SetSSHConnectionSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ tcpNoDelay: false, tcpKeepAlive: true })
-    );
   });
 
   it("persists an edited keepalive interval on blur", async () => {
@@ -43,7 +25,7 @@ describe("ConnectionSection", () => {
     await userEvent.type(intervalInput, "120");
     await userEvent.tab();
 
-    expect(SetSSHConnectionSettings).toHaveBeenCalledWith(expect.objectContaining({ keepAliveIntervalSeconds: 120 }));
+    expect(SetSSHConnectionSettings).toHaveBeenCalledWith({ keepAliveIntervalSeconds: 120 });
   });
 
   it("rejects an out-of-range value without calling the backend", async () => {

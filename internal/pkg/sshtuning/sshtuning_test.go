@@ -51,6 +51,29 @@ func TestDialTimeoutOrDefault(t *testing.T) {
 	}
 }
 
+func TestResolveKeepAlive(t *testing.T) {
+	// Restore the global default after the test.
+	orig := Get()
+	t.Cleanup(func() { Set(orig) })
+	Set(Settings{KeepAliveInterval: 30 * time.Second})
+
+	t.Run("positive override wins", func(t *testing.T) {
+		if got := ResolveKeepAlive(45); got != 45*time.Second {
+			t.Errorf("ResolveKeepAlive(45) = %v, want 45s", got)
+		}
+	})
+	t.Run("zero falls back to global default", func(t *testing.T) {
+		if got := ResolveKeepAlive(0); got != 30*time.Second {
+			t.Errorf("ResolveKeepAlive(0) = %v, want global default 30s", got)
+		}
+	})
+	t.Run("negative falls back to global default", func(t *testing.T) {
+		if got := ResolveKeepAlive(-5); got != 30*time.Second {
+			t.Errorf("ResolveKeepAlive(-5) = %v, want global default 30s", got)
+		}
+	})
+}
+
 func TestDialer(t *testing.T) {
 	t.Run("keepalive enabled", func(t *testing.T) {
 		d := Settings{TCPKeepAlive: true, DialTimeout: 8 * time.Second}.Dialer()
