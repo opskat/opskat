@@ -40,8 +40,6 @@ github.com/bytedance/sonic v1.12.5/go.mod h1:B8Gt/XvtZ3Fqj+iSKMypzymZxw/FVwgIGKz
 github.com/bytedance/sonic/loader v0.1.1/go.mod h1:ncP89zfokxS5LZrJxl5z0UJcsk4M4yY2JpfqGeCtNLU=
 github.com/bytedance/sonic/loader v0.2.1 h1:1GgorWTqf12TA8mma4DDSbaQigE2wOgQo7iCjjJv3+E=
 github.com/bytedance/sonic/loader v0.2.1/go.mod h1:ncP89zfokxS5LZrJxl5z0UJcsk4M4yY2JpfqGeCtNLU=
-github.com/cago-frame/agents v0.0.0-20260610020000-640785b2d7a3 h1:N5wKkBE1wMo8KeJYx93seRP6BRW9XBydDZgQbGu7ouM=
-github.com/cago-frame/agents v0.0.0-20260610020000-640785b2d7a3/go.mod h1:s72XmeaSoa3ysdqSTc4qliGqLHH6iBBGW6b8bFi0QRk=
 github.com/cago-frame/agents v0.0.0-20260617072949-d58533f30ab1 h1:BN/vCxcxLnaU+Er1+yQgHm0f4GrubCE0K9rKkuXvhvY=
 github.com/cago-frame/agents v0.0.0-20260617072949-d58533f30ab1/go.mod h1:s72XmeaSoa3ysdqSTc4qliGqLHH6iBBGW6b8bFi0QRk=
 github.com/cago-frame/cago v0.0.0-20260609091633-ba2f550b2729 h1:HtiDxeq5rPdJaRQI7XzJbly1WPCeLKaEa9txs2SKnFM=
@@ -500,6 +498,8 @@ golang.org/x/crypto v0.0.0-20210921155107-089bfa567519/go.mod h1:GvvjBRRGRdwPK5y
 golang.org/x/crypto v0.53.0 h1:QZ4Muo8THX6CizN2vPPd5fBGHyogrdK9fG4wLPFUsto=
 golang.org/x/crypto v0.53.0/go.mod h1:DNLU434OwVakk9PzuwV8w62mAJpRJL3vsgcfp4Qnsio=
 golang.org/x/exp v0.0.0-20190121172915-509febef88a4/go.mod h1:CJ0aWSM057203Lf6IL+f9T1iT9GByDxfZKAQTCR3kQA=
+golang.org/x/image v0.25.0 h1:Y6uW6rH1y5y/LK1J8BPWZtr6yZ7hrsy6hFrXjgsc2fQ=
+golang.org/x/image v0.25.0/go.mod h1:tCAmOEGthTtkalusGp1g3xa2gke8J6c2N565dTyl9Rs=
 golang.org/x/lint v0.0.0-20181026193005-c67002cb31c3/go.mod h1:UVdnD1Gm6xHRNCYTkRU2/jEulfH38KcIWyp/GAMgvoE=
 golang.org/x/lint v0.0.0-20190227174305-5b3e6a55c961/go.mod h1:wehouNa3lNwaWXcvxsM5YxQ5yQlVC4a0KAMCusXpPoU=
 golang.org/x/lint v0.0.0-20190313153728-d0100b6bd8b3/go.mod h1:6SW0HCj/g11FgYtHlgUYUwCkIfeOF89ocIRzGO/8vkc=
