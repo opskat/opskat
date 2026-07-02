@@ -23,6 +23,7 @@ import { QueryResultTable } from "./QueryResultTable";
 import { CodeEditor } from "@/components/CodeEditor";
 import { SnippetPopover } from "@/components/snippet/SnippetPopover";
 import type { DynamicCompletionGetter } from "@/lib/monaco-completions";
+import { buildSqlCompletions, resolveScopeTables, type SqlColumn } from "@/lib/sql-context";
 
 interface SqlEditorTabProps {
   tabId: string;
@@ -47,6 +48,7 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
   const dbState = useQueryStore((s) => s.dbStates[tabId]);
   const updateInnerTab = useQueryStore((s) => s.updateInnerTab);
   const addSqlHistory = useQueryStore((s) => s.addSqlHistory);
+  const loadTableMeta = useQueryStore((s) => s.loadTableMeta);
   const tab = useTabStore((s) => s.tabs.find((t) => t.id === tabId));
   const queryMeta = tab?.meta as QueryTabMeta | undefined;
   const editorRef = useRef<MonacoNS.editor.IStandaloneCodeEditor | null>(null);
@@ -230,6 +232,10 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
     executeRef.current = execute;
   }, [execute]);
 
+  // 字段补全的按需预取：用 ref 桥接，供 onMount 时注册的内容变化回调调用最新实现。
+  const prefetchColumnsRef = useRef<(sql: string) => void>(() => {});
+  const inflightMetaRef = useRef<Set<string>>(new Set());
+
   const handleEditorMount = useCallback((editor: MonacoNS.editor.IStandaloneCodeEditor, monaco: typeof MonacoNS) => {
     editorRef.current = editor;
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
@@ -253,6 +259,7 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
         timer = setTimeout(() => {
           timer = null;
           commitSqlRef.current();
+          prefetchColumnsRef.current(sqlRef.current);
         }, 300);
       });
     }
@@ -279,20 +286,67 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
     editor.focus();
   }, []);
 
-  // 把当前选中库的表名注入到 monaco 补全（在 . 触发或主动唤起时一并出现）
+  // 当前选中库下的表 + 已加载表结构，一并注入 monaco 补全（表名 & 字段）。
   const tables = useMemo(() => dbState?.tables?.[selectedDb] ?? [], [dbState?.tables, selectedDb]);
-  const tableCompletions = useCallback<DynamicCompletionGetter>(
-    ({ monaco, range }) =>
-      tables.map((tableName) => ({
-        label: tableName,
-        kind: monaco.languages.CompletionItemKind.Class,
-        insertText: tableName,
-        detail: selectedDb ? `table · ${selectedDb}` : "table",
+  const loadedMeta = dbState?.tableMeta;
+
+  // 规范表名 -> 列，供 buildSqlCompletions 组装字段项（key 与 tables 中的条目一致）。
+  const columnsByTable = useMemo(() => {
+    const map: Record<string, SqlColumn[]> = {};
+    if (loadedMeta) {
+      for (const tname of tables) {
+        const cols = loadedMeta[`${selectedDb}.${tname}`]?.columns;
+        if (cols) map[tname] = cols;
+      }
+    }
+    return map;
+  }, [loadedMeta, tables, selectedDb]);
+
+  const sqlCompletions = useCallback<DynamicCompletionGetter>(
+    ({ monaco, range, model, position }) => {
+      const line = model.getLineContent(position.lineNumber);
+      const textBeforeCursor = line.slice(0, position.column - 1);
+      return buildSqlCompletions({
+        textBeforeCursor,
+        fullSql: model.getValue(),
+        tables,
+        db: selectedDb,
+        columnsByTable,
+      }).map((it) => ({
+        label: it.label,
+        kind:
+          it.kind === "column" ? monaco.languages.CompletionItemKind.Field : monaco.languages.CompletionItemKind.Class,
+        insertText: it.insertText,
+        detail: it.detail,
         range,
-        sortText: "0_" + tableName, // 表名排在关键字之前
-      })),
-    [tables, selectedDb]
+        sortText: it.sortText,
+      }));
+    },
+    [tables, selectedDb, columnsByTable]
   );
+
+  // 预取当前 SQL 中 FROM/JOIN 涉及的表结构（去重 + 跳过在途/已缓存）。字段补全同步读取缓存。
+  const prefetchColumns = useCallback(
+    (sql: string) => {
+      if (!selectedDb) return;
+      for (const tname of resolveScopeTables(sql, tables)) {
+        const key = `${selectedDb}.${tname}`;
+        if (loadedMeta?.[key] || inflightMetaRef.current.has(key)) continue;
+        inflightMetaRef.current.add(key);
+        void Promise.resolve(loadTableMeta(tabId, selectedDb, tname)).finally(() =>
+          inflightMetaRef.current.delete(key)
+        );
+      }
+    },
+    [selectedDb, tables, loadedMeta, loadTableMeta, tabId]
+  );
+  useEffect(() => {
+    prefetchColumnsRef.current = prefetchColumns;
+  }, [prefetchColumns]);
+  // 初次加载 / 切库 / 表列表就绪后，预取一次已有 SQL 涉及的表结构。
+  useEffect(() => {
+    prefetchColumnsRef.current(sqlRef.current);
+  }, [selectedDb, tables]);
 
   const handlePageInputConfirm = useCallback(() => {
     const num = parseInt(pageInput, 10);
@@ -387,7 +441,7 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
             language="sql"
             placeholder={t("query.sqlPlaceholder")}
             onMount={handleEditorMount}
-            dynamicCompletions={tableCompletions}
+            dynamicCompletions={sqlCompletions}
           />
         </div>
       </div>
