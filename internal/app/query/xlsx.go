@@ -85,7 +85,7 @@ func (q *Query) ExportTableToXlsx(assetID int64, database, selectSQL, filePath s
 // ParsedDelimitedTable so it flows straight into the import preview pipeline.
 func (q *Query) ParseXlsx(base64Content, sheet string) (*query_svc.ParsedXlsxTable, error) {
 	if base64Content == "" {
-		return nil, fmt.Errorf("Excel 文件内容为空")
+		return nil, fmt.Errorf("导入的 Excel 内容为空")
 	}
 	data, err := base64.StdEncoding.DecodeString(base64Content)
 	if err != nil {
