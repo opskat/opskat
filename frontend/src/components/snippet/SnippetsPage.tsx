@@ -19,13 +19,7 @@ import { useSnippetStore } from "@/stores/snippetStore";
 import { snippet_entity } from "../../../wailsjs/go/models";
 import { SnippetFormDialog } from "./SnippetFormDialog";
 import { SnippetAssetDrawer } from "./SnippetAssetDrawer";
-
-const RUNNABLE_ASSET_TYPES = new Set(["ssh", "database", "mongodb"]);
-
-function isRunnable(cat: string, cats: { id: string; assetType: string }[]): boolean {
-  const c = cats.find((x) => x.id === cat);
-  return !!c && RUNNABLE_ASSET_TYPES.has(c.assetType);
-}
+import { isRunnableCategoryId } from "./snippetRun";
 
 // Stable per-category badge styling. Order must be deterministic so a given
 // category always renders with the same hue across reloads.
@@ -354,7 +348,7 @@ export function SnippetsPage() {
                   <td className="px-4 py-2 text-xs font-mono text-muted-foreground">{s.Source || "user"}</td>
                   <td className="px-4 py-2">
                     <div className="flex items-center justify-end gap-1">
-                      {isRunnable(s.Category, categories) && (
+                      {isRunnableCategoryId(s.Category, categories) && (
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button

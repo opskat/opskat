@@ -1,11 +1,20 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { asset_entity } from "../../wailsjs/go/models";
+import { asset_entity, snippet_entity, snippet_svc } from "../../wailsjs/go/models";
 import { useTabStore } from "../stores/tabStore";
 import { useAssetStore } from "../stores/assetStore";
 import { useRecentAssetStore } from "../stores/recentAssetStore";
+import { useSnippetStore } from "../stores/snippetStore";
 import { CommandPalette } from "../components/command/CommandPalette";
 import * as openAssetDefaultModule from "../lib/openAssetDefault";
+import { ListSnippets, ListSnippetCategories } from "../../wailsjs/go/extension/Extension";
+import { runSnippetOnAsset } from "../components/snippet/snippetRun";
+
+// Keep the real runnable helpers; stub only the side-effecting runner.
+vi.mock("../components/snippet/snippetRun", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../components/snippet/snippetRun")>();
+  return { ...actual, runSnippetOnAsset: vi.fn() };
+});
 
 // ──────────────────────────────────────────────
 // Helpers
@@ -61,6 +70,21 @@ function makeAITab(id: string, label: string) {
   };
 }
 
+function makeSnippet(id: number, name: string, category: string, description = ""): snippet_entity.Snippet {
+  return new snippet_entity.Snippet({
+    ID: id,
+    Name: name,
+    Category: category,
+    Content: `run ${name}`,
+    Description: description,
+    Source: "user",
+  });
+}
+
+function makeCategory(id: string, assetType: string): snippet_svc.Category {
+  return { id, assetType, label: id.toUpperCase(), source: "builtin" } as snippet_svc.Category;
+}
+
 function makePageTab(id: string, pageId: string) {
   return {
     id,
@@ -91,6 +115,10 @@ describe("CommandPalette", () => {
     useTabStore.setState({ tabs: [], activeTabId: null });
     useAssetStore.setState({ assets: [], groups: [] });
     useRecentAssetStore.setState({ recentIds: [] });
+    useSnippetStore.setState({ all: [], categories: [], runTarget: null });
+    vi.mocked(ListSnippets).mockResolvedValue([]);
+    vi.mocked(ListSnippetCategories).mockResolvedValue([]);
+    vi.mocked(runSnippetOnAsset).mockResolvedValue(undefined);
   });
 
   // 1. Closed dialog renders nothing observable
@@ -290,5 +318,74 @@ describe("CommandPalette", () => {
     // icon is the builtin Settings icon, not the default Server fallback
     expect(container.querySelector("svg.lucide-settings")).not.toBeNull();
     expect(container.querySelector("svg.lucide-server")).toBeNull();
+  });
+
+  // ── Snippets section ─────────────────────────────
+
+  // Seed snippet-store state AND make loadAll (fired on open) resolve the SAME
+  // array ref, so useSyncExternalStore bails out (no re-render outside act).
+  function seedSnippets(all: snippet_entity.Snippet[], categories: snippet_svc.Category[]) {
+    useSnippetStore.setState({ all, categories });
+    vi.mocked(ListSnippets).mockResolvedValue(all);
+  }
+
+  it("snippets: empty query lists only runnable snippets", () => {
+    seedSnippets(
+      [makeSnippet(1, "deploy-app", "shell"), makeSnippet(2, "flush-cache", "redis")],
+      [makeCategory("shell", "ssh"), makeCategory("redis", "redis")]
+    );
+
+    renderPalette(true);
+
+    expect(screen.getByText("commandPalette.section.snippets")).toBeDefined();
+    // runnable (ssh) snippet shown
+    expect(screen.getByText("deploy-app")).toBeDefined();
+    // non-runnable (redis) snippet excluded
+    expect(screen.queryByText("flush-cache")).toBeNull();
+  });
+
+  it("snippets: typed query filters snippets by name", () => {
+    seedSnippets(
+      [makeSnippet(1, "deploy-web", "shell"), makeSnippet(2, "restart-db", "shell")],
+      [makeCategory("shell", "ssh")]
+    );
+
+    renderPalette(true);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "deploy" } });
+
+    // The matched name is highlighted (split into <mark> + text nodes), so assert
+    // on the aggregated text content rather than a single text node.
+    const allText = document.body.textContent ?? "";
+    expect(allText).toContain("deploy-web");
+    expect(allText).not.toContain("restart-db");
+  });
+
+  it("snippets: enter on a snippet matching the active terminal tab runs on that asset (no host pick)", () => {
+    const asset = makeAsset(7, "myhost", "ssh");
+    useAssetStore.setState({ assets: [asset], groups: [] });
+    useTabStore.setState({ tabs: [makeTerminalTab("tab-1", "myhost", 7)], activeTabId: "tab-1" });
+    seedSnippets([makeSnippet(10, "deploy-app", "shell")], [makeCategory("shell", "ssh")]);
+
+    renderPalette(true);
+    // Query so only the snippet row remains (the terminal tab label "myhost" won't match).
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "deploy" } });
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+
+    expect(runSnippetOnAsset).toHaveBeenCalledWith(asset, "run deploy-app");
+    expect(useSnippetStore.getState().runTarget).toBeNull(); // did not fall back to host picker
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("snippets: enter on a snippet with no matching active tab requests a host pick", () => {
+    useTabStore.setState({ tabs: [], activeTabId: null });
+    seedSnippets([makeSnippet(11, "deploy-app", "shell")], [makeCategory("shell", "ssh")]);
+
+    renderPalette(true);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "deploy" } });
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+
+    expect(runSnippetOnAsset).not.toHaveBeenCalled();
+    expect(useSnippetStore.getState().runTarget?.ID).toBe(11);
+    expect(onClose).toHaveBeenCalled();
   });
 });

@@ -21,6 +21,8 @@ describe("snippetStore", () => {
       categoriesLoading: false,
       list: [],
       listLoading: false,
+      all: [],
+      runTarget: null,
       filter: { categories: [], keyword: "" },
     });
     vi.mocked(ListSnippetCategories).mockResolvedValue([]);
@@ -197,6 +199,67 @@ describe("snippetStore", () => {
       useSnippetStore.getState().recordUse(7);
       await new Promise((r) => setTimeout(r, 0));
       expect(RecordSnippetUse).toHaveBeenCalledWith(7);
+    });
+  });
+
+  describe("loadAll (palette source)", () => {
+    it("fetches all snippets with an empty filter and stores them in `all`", async () => {
+      vi.mocked(ListSnippets).mockResolvedValue([
+        { ID: 1, Name: "a", Category: "shell", Source: "user" } as any,
+        { ID: 2, Name: "b", Category: "sql", Source: "user" } as any,
+      ]);
+      await useSnippetStore.getState().loadAll();
+      expect(ListSnippets).toHaveBeenCalledTimes(1);
+      const arg = vi.mocked(ListSnippets).mock.calls[0][0] as any;
+      expect(arg.categories).toEqual([]);
+      expect(arg.keyword).toBe("");
+      expect(useSnippetStore.getState().all.map((s) => s.ID)).toEqual([1, 2]);
+    });
+
+    it("does not touch the page `list`/`filter`", async () => {
+      useSnippetStore.setState({
+        list: [{ ID: 99, Name: "page-item" } as any],
+        filter: { categories: ["shell"], keyword: "kept" },
+      });
+      vi.mocked(ListSnippets).mockResolvedValue([{ ID: 1, Name: "a" } as any]);
+      await useSnippetStore.getState().loadAll();
+      expect(useSnippetStore.getState().list.map((s) => s.ID)).toEqual([99]);
+      expect(useSnippetStore.getState().filter).toEqual({ categories: ["shell"], keyword: "kept" });
+    });
+
+    it("handles null response as empty array", async () => {
+      vi.mocked(ListSnippets).mockResolvedValue(null as any);
+      await useSnippetStore.getState().loadAll();
+      expect(useSnippetStore.getState().all).toEqual([]);
+    });
+
+    it("discards a stale loadAll response when a newer request is in flight", async () => {
+      let releaseFirst!: (v: any[]) => void;
+      const firstPromise = new Promise<any[]>((r) => {
+        releaseFirst = r;
+      });
+      vi.mocked(ListSnippets)
+        .mockImplementationOnce(() => firstPromise as any)
+        .mockResolvedValueOnce([{ ID: 2, Name: "B" } as any]);
+
+      const store = useSnippetStore.getState();
+      const first = store.loadAll();
+      const second = store.loadAll();
+      await second; // all = [B]
+      releaseFirst([{ ID: 1, Name: "A" } as any]); // stale — must be discarded
+      await first;
+
+      expect(useSnippetStore.getState().all.map((s) => s.ID)).toEqual([2]);
+    });
+  });
+
+  describe("host-pick target (palette → drawer)", () => {
+    it("requestHostPick sets runTarget and clearHostPick resets it", () => {
+      const snip = { ID: 5, Name: "deploy", Category: "shell" } as any;
+      useSnippetStore.getState().requestHostPick(snip);
+      expect(useSnippetStore.getState().runTarget).toBe(snip);
+      useSnippetStore.getState().clearHostPick();
+      expect(useSnippetStore.getState().runTarget).toBeNull();
     });
   });
 
