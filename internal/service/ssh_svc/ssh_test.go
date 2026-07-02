@@ -561,6 +561,28 @@ func TestSession_DirectDirectoryChangeWritesOnlyCdCommand(t *testing.T) {
 	assert.NotEmpty(t, sess.echoSuppressions)
 }
 
+func TestSession_RestoreWorkingDirectory(t *testing.T) {
+	t.Run("empty dir writes nothing", func(t *testing.T) {
+		stdin := &recordingWriteCloser{}
+		sess := &Session{stdin: stdin}
+
+		err := sess.RestoreWorkingDirectory("")
+
+		assert.NoError(t, err)
+		assert.Equal(t, 0, stdin.writeCount())
+	})
+
+	t.Run("non-empty dir cd's into it", func(t *testing.T) {
+		stdin := &recordingWriteCloser{}
+		sess := &Session{stdin: stdin}
+
+		err := sess.RestoreWorkingDirectory("/srv/app")
+
+		assert.NoError(t, err)
+		assert.Equal(t, "builtin cd -- '/srv/app'\r", string(stdin.lastWrite()))
+	})
+}
+
 func TestSession_EnableSyncDoesNotWriteUserVisibleHookSource(t *testing.T) {
 	stdin := &recordingWriteCloser{}
 	sess := &Session{

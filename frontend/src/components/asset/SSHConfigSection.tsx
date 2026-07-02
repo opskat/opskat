@@ -10,6 +10,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -376,6 +377,21 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
               </Field>
             );
           },
+        },
+        {
+          kind: "custom",
+          render: (s, patchState) => (
+            <Field label={t("asset.sshRestoreCwdOnReconnect")}>
+              <div className="space-y-1.5">
+                <Switch
+                  checked={s.restoreCwdOnReconnect}
+                  onCheckedChange={(v) => patchState({ restoreCwdOnReconnect: v })}
+                  data-testid="ssh-restore-cwd-switch"
+                />
+                <p className="text-xs text-muted-foreground">{t("asset.sshRestoreCwdOnReconnectHint")}</p>
+              </div>
+            </Field>
+          ),
         },
       ],
     },

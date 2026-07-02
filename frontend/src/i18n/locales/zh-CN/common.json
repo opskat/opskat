@@ -584,6 +584,8 @@
     "tabAdvanced": "高级",
     "sshKeepAliveInterval": "空闲保活间隔",
     "sshKeepAliveIntervalPlaceholder": "跟随全局默认（{{seconds}} 秒）",
+    "sshRestoreCwdOnReconnect": "重连恢复上次目录",
+    "sshRestoreCwdOnReconnectHint": "断线手动重连时自动回到上次所在目录，省去重新 cd。仅支持 bash/zsh/ksh/mksh，开启后连接即启用目录同步来追踪路径。",
     "tabSchemaRegistry": "Schema Registry",
     "tabConnect": "Connect",
     "addDescription": "添加备注"

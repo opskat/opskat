@@ -281,6 +281,13 @@ type ConnectConfig struct {
 	// KeepAliveIntervalSeconds 覆盖此连接的 SSH 空闲保活心跳间隔（秒）。
 	// 0 = 跟随全局默认（sshtuning）。
 	KeepAliveIntervalSeconds int
+
+	// RestoreCwdOnReconnect 为该资产开启「重连恢复上次目录」时为真：连接建立后
+	// 自动启用目录同步以持续追踪 cwd，并在 InitialWorkdir 非空时 cd 回上次目录。
+	RestoreCwdOnReconnect bool
+	// InitialWorkdir 仅在重连路径由前端携带上次已知 cwd；首次连接为空。
+	// 实际是否恢复由 RestoreCwdOnReconnect 权威闸门决定。
+	InitialWorkdir string
 }
 
 // JumpHostEntry 跳板机连接信息
@@ -370,7 +377,37 @@ func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
 		return "", err
 	}
 
+	if cfg.RestoreCwdOnReconnect {
+		if sess, ok := m.GetSession(sessionID); ok {
+			// 恢复：重连时 cd 回上次目录（首次连接 InitialWorkdir 为空 → no-op）。
+			if err := sess.RestoreWorkingDirectory(cfg.InitialWorkdir); err != nil {
+				logger.Default().Warn("restore cwd on reconnect failed",
+					zap.String("sessionID", sessionID), zap.String("cwd", cfg.InitialWorkdir), zap.Error(err))
+			}
+			// 捕获：延迟后自动启用目录同步，持续追踪 cwd 供下次重连。
+			go m.autoEnableDirectorySync(sess)
+		}
+	}
+
 	return sessionID, nil
+}
+
+// autoSyncSettleDelay 是自动启用目录同步前的等待，让 sshd 的 motd/首个 prompt 先落地，
+// 避免注入的 hook 脚本与其交错。设为变量便于测试缩短。
+var autoSyncSettleDelay = 1 * time.Second
+
+// autoEnableDirectorySync 在会话稳定后自动启用目录同步（用于「重连恢复上次目录」的 cwd 捕获）。
+// best-effort：不支持的 shell / 超时只记 Warn，不影响会话本身。
+func (m *Manager) autoEnableDirectorySync(sess *Session) {
+	time.Sleep(autoSyncSettleDelay)
+	if sess.IsClosed() {
+		return
+	}
+	logger.Default().Info("auto-enable directory sync for cwd restore", zap.String("sessionID", sess.ID))
+	if err := sess.EnableSync(); err != nil {
+		logger.Default().Warn("auto-enable directory sync failed",
+			zap.String("sessionID", sess.ID), zap.Error(err))
+	}
 }
 
 // createSession 在 sharedClient 上创建新的 SSH 会话（PTY + shell）

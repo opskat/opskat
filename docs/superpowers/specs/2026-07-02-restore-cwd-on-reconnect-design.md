@@ -74,9 +74,10 @@ SSH 终端常因服务端 `sshd ClientAlive*` / shell `TMOUT` 空闲登出而掉
 
 ### 恢复：重连时 cd 回上次目录
 
-- **前端 `reconnect()`**（`frontend/src/stores/terminalStore.ts`）：在 `unregisterSessionSyncListener(sessionId)` 清空前，先读旧 cwd：
+- **掉线即快照 cwd 到 pane**（关键修正）：服务端掉线时 `ssh:closed` → `markClosed(sessionId)` → `unregisterSessionSyncListener` 会**立即清空 `sessionSync[sessionId]`**，而用户按 Enter 重连发生在其后——若重连时才读 `sessionSync`，cwd 已丢。故在 `markClosed`（以及对称的 `disconnect`）里，于 `unregisterSessionSyncListener` **之前**把 `sessionSync[sessionId]?.cwd` 快照到 `TerminalPane.lastCwd`（pane 长存，不随监听注销消失）。
+- **前端 `reconnect()`**（`frontend/src/stores/terminalStore.ts`）：优先读 pane 快照，仍连接的活会话回退读 sessionSync：
   ```ts
-  const lastCwd = get().sessionSync[sessionId]?.cwd ?? "";
+  const lastCwd = pane?.lastCwd ?? get().sessionSync[sessionId]?.cwd ?? "";
   ...
   spec.connectAsync(meta.assetId, { cols: 80, rows: 24, password: "", initialWorkdir: lastCwd })
   ```
@@ -100,7 +101,7 @@ shell 启动 → 立即写 `builtin cd -- '<lastCwd>'`（回显抑制，恢复�
 
 - **前端 vitest**
   - `SSHConfigSection.config.test.ts`：`restoreCwdOnReconnect` 的 build（true 写 / false 不写）与 parse 往返。
-  - `terminalStore.test.ts`：`reconnect` 从 `sessionSync` 读 cwd 并把 `initialWorkdir` 传给 `connectAsync`；普通 `connect` 不传；空 cwd 传空串。
+  - `terminalStore.test.ts`：`reconnect` 把 `initialWorkdir` 传给 `connectAsync`；普通 `connect` 不传；cwd 未知传空串；**掉线（`markClosed` 清空 sessionSync）后重连仍能从 pane 快照恢复**。
 - **Go**
   - `asset_entity/asset_test.go` 的 `TestAsset_SSHConfig` 往返块补 `RestoreCwdOnReconnect: true`。
   - `ssh_svc/ssh_test.go`：`TestSession_RestoreWorkingDirectory` —— 空 dir 不写；非空 dir 写 `builtin cd -- '<dir>'\r`（复用 `recordingWriteCloser`）。

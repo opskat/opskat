@@ -116,6 +116,9 @@ type SSHConfig struct {
 	// KeepAliveIntervalSeconds 覆盖该资产的 SSH 空闲保活心跳间隔（秒）。
 	// 0/缺省 = 跟随全局默认（System 设置里的保活间隔）。
 	KeepAliveIntervalSeconds int `json:"keepalive_interval_seconds,omitempty"`
+	// RestoreCwdOnReconnect 开启后，该资产 SSH 终端断线手动重连时自动 cd 回上次目录，
+	// 并在连接时自动启用目录同步以持续追踪 cwd（仅 bash/zsh/ksh/mksh）。
+	RestoreCwdOnReconnect bool `json:"restore_cwd_on_reconnect,omitempty"`
 }
 
 // ProxyConfig 代理配置
