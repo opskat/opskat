@@ -16,6 +16,7 @@ export function DescriptionBar({ value, onChange }: DescriptionBarProps) {
   // (AssetForm 编辑态经 effect 异步回填 description)时仍停留在折叠态、把已有备注藏在按钮后面。
   const [expanded, setExpanded] = useState(false);
   const showTextarea = expanded || !!value;
+  const shouldAutoFocus = expanded && !value;
 
   if (!showTextarea) {
     return (
@@ -34,7 +35,7 @@ export function DescriptionBar({ value, onChange }: DescriptionBarProps) {
   return (
     <Field label={t("asset.description")}>
       <Textarea
-        autoFocus
+        autoFocus={shouldAutoFocus}
         data-testid="description-textarea"
         value={value}
         onChange={(e) => onChange(e.target.value)}

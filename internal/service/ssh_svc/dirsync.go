@@ -67,6 +67,11 @@ var (
 // tests can shorten it.
 var syncEnableTimeout = 3 * time.Second
 
+// syncInjectReadGap is the pause between writing the injection wrapper and the
+// base64 payload its `read` consumes, so the wrapper reaches `read` first.
+// Variable so tests can shorten it.
+var syncInjectReadGap = 200 * time.Millisecond
+
 // syncFirstCwdGrace bounds the additional wait, after init:pid arrives, for
 // the first prompt nonce / probe to populate cwd. Without this, the first
 // F→T click after lazy enable can race the not-yet-arrived prompt nonce and
@@ -594,20 +599,6 @@ func (s *Session) removeQueuedEchoSuppression(pattern []byte) {
 	}
 }
 
-func (s *Session) beginInternalScriptEchoSuppression() {
-	s.outputFilterMu.Lock()
-	s.internalScriptEcho = true
-	s.internalEchoDropLn = false
-	s.outputFilterMu.Unlock()
-}
-
-func (s *Session) endInternalScriptEchoSuppression() {
-	s.outputFilterMu.Lock()
-	s.internalScriptEcho = false
-	s.internalEchoDropLn = false
-	s.outputFilterMu.Unlock()
-}
-
 func normalizeTerminalEcho(data []byte) []byte {
 	if len(data) == 0 {
 		return nil
@@ -654,160 +645,90 @@ func skipANSIEscape(data []byte, esc int) int {
 	return esc + 1
 }
 
+// suppressInternalEcho removes the terminal echo of commands opskat writes to
+// the interactive shell itself (directory-sync enable, `builtin cd`). Each such
+// write queues its normalized command bytes via queueInternalEchoSuppression;
+// this matches them against the incoming echo byte-by-byte, tolerating terminal
+// noise (ANSI, redrawn prompts) between pattern bytes, and drops the match. The
+// matcher carries echoSuppressionIdx across chunks, so a command echo split over
+// several network reads is still suppressed.
 func (s *Session) suppressInternalEcho(data []byte) []byte {
-	if len(data) == 0 || (len(s.echoSuppressions) == 0 && !s.internalScriptEcho && !s.internalEchoDropLn) {
+	if len(data) == 0 || len(s.echoSuppressions) == 0 {
 		return data
 	}
 
 	out := make([]byte, 0, len(data))
 	for i := 0; i < len(data); i++ {
+		if len(s.echoSuppressions) == 0 {
+			out = append(out, data[i:]...)
+			break
+		}
 		b := data[i]
-		if s.internalEchoDropLn {
-			if b == '\r' || b == '\n' {
-				s.internalEchoDropLn = false
+		current := s.echoSuppressions[0]
+		// A terminal-autowrap CR at the end of the previous chunk re-emits the
+		// wrapped char at the start of this one; skip that duplicate so the match
+		// survives a wrap split across reads.
+		if s.echoWrapPending {
+			s.echoWrapPending = false
+			if s.echoSuppressionIdx > 0 && b == current[s.echoSuppressionIdx-1] {
+				continue
+			}
+		}
+		if s.echoSuppressionIdx == 0 {
+			if end, ok := queuedDirectoryChangeEchoLineEnd(current, data, i); ok {
+				s.echoSuppressions = s.echoSuppressions[1:]
+				s.echoSuppressionIdx = 0
+				if end > i {
+					i = end - 1
+				}
+				continue
+			}
+		}
+		if s.echoSuppressionIdx < len(current) && b == current[s.echoSuppressionIdx] {
+			s.echoSuppressionIdx++
+			if s.echoSuppressionIdx == len(current) {
+				s.echoSuppressions = s.echoSuppressions[1:]
+				s.echoSuppressionIdx = 0
 			}
 			continue
 		}
 
-		if len(s.echoSuppressions) == 0 && !s.internalScriptEcho {
-			out = append(out, data[i:]...)
-			break
-		}
-
-		var current []byte
-		if len(s.echoSuppressions) > 0 {
-			current = s.echoSuppressions[0]
-			if s.echoSuppressionIdx == 0 {
-				if end, ok := queuedDirectoryChangeEchoLineEnd(current, data, i); ok {
-					s.echoSuppressions = s.echoSuppressions[1:]
-					s.echoSuppressionIdx = 0
-					if end > i {
-						i = end - 1
+		if s.echoSuppressionIdx > 0 && isTerminalEchoNoise(data, i) {
+			switch b {
+			case 0x1b:
+				i = skipANSIEscape(data, i)
+			case '\r':
+				// Terminal autowrap at the right margin re-emits the wrapped char
+				// after a bare CR (<char>\r<char>). Skip the CR and the duplicate
+				// so a wrapped command echo still matches; if the duplicate is in
+				// the next chunk, remember to skip it there.
+				dup := current[s.echoSuppressionIdx-1]
+				if i+1 < len(data) {
+					if data[i+1] == dup {
+						i++
 					}
-					continue
+				} else {
+					s.echoWrapPending = true
 				}
 			}
-			if s.echoSuppressionIdx < len(current) && b == current[s.echoSuppressionIdx] {
-				s.echoSuppressionIdx++
-				if s.echoSuppressionIdx == len(current) {
-					s.echoSuppressions = s.echoSuppressions[1:]
-					s.echoSuppressionIdx = 0
-				}
-				continue
-			}
+			continue
+		}
 
-			if s.echoSuppressionIdx > 0 && isTerminalEchoNoise(data, i) {
-				if b == 0x1b {
-					i = skipANSIEscape(data, i)
-				}
-				continue
-			}
-
-			if s.echoSuppressionIdx > 0 {
-				out = append(out, current[:s.echoSuppressionIdx]...)
+		if s.echoSuppressionIdx > 0 {
+			out = append(out, current[:s.echoSuppressionIdx]...)
+			s.echoSuppressionIdx = 0
+		}
+		if len(current) > 0 && b == current[0] {
+			s.echoSuppressionIdx = 1
+			if len(current) == 1 {
+				s.echoSuppressions = s.echoSuppressions[1:]
 				s.echoSuppressionIdx = 0
-			}
-			if len(current) > 0 && b == current[0] {
-				s.echoSuppressionIdx = 1
-				if len(current) == 1 {
-					s.echoSuppressions = s.echoSuppressions[1:]
-					s.echoSuppressionIdx = 0
-				}
-				continue
-			}
-		}
-		if s.internalScriptEcho {
-			if kind := internalScriptEchoLineKindAt(data, i); kind != internalScriptEchoNone {
-				end := nextLineEndIncludingTerminator(data, i)
-				if end >= len(data) {
-					s.internalEchoDropLn = true
-				}
-				if kind == internalScriptEchoEnd {
-					s.internalScriptEcho = false
-					s.internalEchoDropLn = false
-				}
-				if end > i {
-					i = end - 1
-				}
-				continue
-			}
-		} else {
-			if isInternalScriptEchoLine(data, i) {
-				end := nextLineEndIncludingTerminator(data, i)
-				if end > i {
-					i = end - 1
-				}
-				continue
-			}
-			if looksLikeBase64ContinuationLine(data, i) {
-				end := nextLineEndIncludingTerminator(data, i)
-				if end > i {
-					i = end - 1
-				}
-				continue
-			}
-		}
-		if s.internalScriptEcho && looksLikeBase64EchoFragment(data, i) {
-			end := nextLineEndIncludingTerminator(data, i)
-			if end >= len(data) {
-				s.internalEchoDropLn = true
-			}
-			if end > i {
-				i = end - 1
 			}
 			continue
 		}
 		out = append(out, b)
 	}
 	return out
-}
-
-type internalScriptEchoLineKind int
-
-const (
-	internalScriptEchoNone internalScriptEchoLineKind = iota
-	internalScriptEchoBody
-	internalScriptEchoEnd
-)
-
-func internalScriptEchoLineKindAt(data []byte, pos int) internalScriptEchoLineKind {
-	lineStart := pos
-	for lineStart > 0 && data[lineStart-1] != '\r' && data[lineStart-1] != '\n' {
-		lineStart--
-	}
-	if lineStart != pos {
-		return internalScriptEchoNone
-	}
-	lineEnd := nextLineEnd(data, pos)
-	line := string(data[pos:lineEnd])
-	trimmed := strings.TrimSpace(stripANSIEscapeString(line))
-	if trimmed == "" {
-		return internalScriptEchoNone
-	}
-	if strings.HasPrefix(trimmed, "heredoc> ") {
-		return internalScriptEchoBody
-	}
-	if trimmed == "heredoc>" {
-		return internalScriptEchoBody
-	}
-	if strings.Contains(trimmed, "base64 -d > '/tmp/.opskat-sync-") ||
-		strings.Contains(trimmed, "source '/tmp/.opskat-sync-") ||
-		strings.Contains(trimmed, "rm -f '/tmp/.opskat-sync-") ||
-		strings.Contains(trimmed, "stty -echo 2>/dev/null") {
-		return internalScriptEchoBody
-	}
-	if isPromptEchoLine(trimmed) {
-		return internalScriptEchoBody
-	}
-	if strings.Contains(trimmed, "stty echo 2>/dev/null") ||
-		strings.Contains(trimmed, "stty2>/dev/null") {
-		return internalScriptEchoEnd
-	}
-	return internalScriptEchoNone
-}
-
-func isInternalScriptEchoLine(data []byte, pos int) bool {
-	return internalScriptEchoLineKindAt(data, pos) != internalScriptEchoNone
 }
 
 func isPromptEchoLine(line string) bool {
@@ -865,47 +786,6 @@ func queuedDirectoryChangeQuotedTarget(queued []byte) (string, bool) {
 
 func isLineStart(data []byte, pos int) bool {
 	return pos == 0 || data[pos-1] == '\r' || data[pos-1] == '\n'
-}
-
-func looksLikeBase64EchoFragment(data []byte, pos int) bool {
-	lineStart := pos
-	for lineStart > 0 && data[lineStart-1] != '\r' && data[lineStart-1] != '\n' {
-		lineStart--
-	}
-	if lineStart != pos {
-		return false
-	}
-	lineEnd := nextLineEnd(data, pos)
-	return looksLikeBase64EchoText(strings.TrimSpace(string(data[pos:lineEnd])))
-}
-
-func looksLikeBase64EchoText(line string) bool {
-	if len(line) == 0 {
-		return false
-	}
-	for _, r := range line {
-		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '+' || r == '/' || r == '=' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func looksLikeBase64ContinuationLine(data []byte, pos int) bool {
-	lineStart := pos
-	for lineStart > 0 && data[lineStart-1] != '\r' && data[lineStart-1] != '\n' {
-		lineStart--
-	}
-	if lineStart != pos {
-		return false
-	}
-	lineEnd := nextLineEnd(data, pos)
-	line := strings.TrimSpace(string(data[pos:lineEnd]))
-	if len(line) < 80 {
-		return false
-	}
-	return looksLikeBase64EchoText(line)
 }
 
 func stripANSIEscapeString(text string) string {
@@ -1086,10 +966,6 @@ func (s *Session) handleSyncPayload(payload string) bool {
 		bootstrap := s.syncBootstrapCh
 		s.syncBootstrapCh = nil
 		s.syncMu.Unlock()
-		// internalScriptEcho/internalEchoDropLn 由 outputFilterMu 保护；
-		// 调用方 filterOutput 已持有该锁，这里直接写入即可（sync.Mutex 不可重入，不能再 Lock）。
-		s.internalScriptEcho = false
-		s.internalEchoDropLn = false
 		if bootstrap != nil {
 			close(bootstrap)
 		}
@@ -1152,7 +1028,7 @@ func (s *Session) handleSyncPayload(payload string) bool {
 // On timeout (no marker within syncEnableTimeout), state is rolled back to
 // Supported=false and a CodeTimeout error is returned. Callers should map
 // that to a "please exit foreground program and retry" hint in the UI.
-func (s *Session) EnableSync() error {
+func (s *Session) EnableSync() (err error) {
 	s.syncEnableMu.Lock()
 	defer s.syncEnableMu.Unlock()
 
@@ -1182,13 +1058,13 @@ func (s *Session) EnableSync() error {
 		}
 	}
 
-	token, err := generateSyncToken()
-	if err != nil {
+	token, tokErr := generateSyncToken()
+	if tokErr != nil {
 		s.syncMu.Unlock()
 		return dirsync.Error(dirSyncErrNonceFailed)
 	}
-	promptNonce, err := generateSyncToken()
-	if err != nil {
+	promptNonce, nonceErr := generateSyncToken()
+	if nonceErr != nil {
 		s.syncMu.Unlock()
 		return dirsync.Error(dirSyncErrNonceFailed)
 	}
@@ -1208,38 +1084,68 @@ func (s *Session) EnableSync() error {
 	bootstrapCh := make(chan struct{})
 	s.syncBootstrapCh = bootstrapCh
 	state := s.syncState
-	cmd := buildEnableSyncScript(s.shellType, token, promptNonce)
+	wrapper, payload := buildEnableSyncInjection(s.shellType, token, promptNonce)
 	s.syncMu.Unlock()
 
 	s.emitSyncState(state)
 
-	// cmd == "" is unreachable: shellTypeUnsupported was rejected above
-	// and buildEnableSyncScript only returns "" for that case. No defensive
-	// branch needed; if invariants change, the write below will fail visibly.
+	// wrapper == "" is unreachable: shellTypeUnsupported was rejected above and
+	// buildEnableSyncInjection only returns "" for that case. No defensive branch
+	// needed; if invariants change, the write below will fail visibly.
 
-	if err := s.writeInternalScript(cmd); err != nil {
-		st := s.rollbackSyncBootstrap(bootstrapCh, err.Error())
+	// Only the short wrapper line echoes (the base64 payload is read with echo
+	// off, so it never appears). Queue byte-level suppression for the wrapper and
+	// keep the pattern so we can drop it if the enable fails — a stale pattern
+	// would otherwise linger and swallow later terminal output.
+	echoPattern := s.queueInternalEchoSuppression([]byte(wrapper))
+	if writeErr := s.writeStdin([]byte(wrapper)); writeErr != nil {
+		s.removeQueuedEchoSuppression(echoPattern)
+		st := s.rollbackSyncBootstrap(bootstrapCh, writeErr.Error())
 		s.emitSyncState(st)
 		return dirsync.Error(dirsync.CodeSessionClosed)
 	}
 
-	if err := waitForSyncBootstrap(bootstrapCh); err != nil {
+	// On every failure path from here on (timeout / racing DisableSync) drop the
+	// queued echo-suppression pattern; otherwise the byte matcher keeps trying to
+	// suppress output that begins like the wrapper and can swallow the user's
+	// input — the terminal looks dead (#216 file-manager sync; reconnect
+	// restore-cwd report). On success the matcher consumes the wrapper echo and
+	// clears the pattern itself.
+	defer func() {
+		if err != nil {
+			s.removeQueuedEchoSuppression(echoPattern)
+		}
+	}()
+
+	// Let the wrapper reach its `read` before sending the payload it consumes.
+	// Without this gap the shell's line reader can greedily buffer the payload
+	// line before `read` runs, and `read` then blocks forever. The delay is
+	// relative on the wire (same latency applies to both writes), so it holds on
+	// slow links too. Variable so tests can shorten it.
+	time.Sleep(syncInjectReadGap)
+	if writeErr := s.writeStdin([]byte(payload)); writeErr != nil {
+		st := s.rollbackSyncBootstrap(bootstrapCh, writeErr.Error())
+		s.emitSyncState(st)
+		return dirsync.Error(dirsync.CodeSessionClosed)
+	}
+
+	if waitErr := waitForSyncBootstrap(bootstrapCh); waitErr != nil {
 		s.syncMu.Lock()
 		// Only roll back if we still own this bootstrap; init:pid handler may
 		// have raced and already promoted the state to ready.
 		if s.syncBootstrapCh == bootstrapCh {
-			s.rollbackSyncBootstrapLocked(err.Error())
+			s.rollbackSyncBootstrapLocked(waitErr.Error())
 			st := s.syncState
 			s.syncMu.Unlock()
 			s.emitSyncState(st)
-			return err
+			return waitErr
 		}
 		ok := s.syncState.Supported && s.shellPID > 0
 		st := s.syncState
 		s.syncMu.Unlock()
 		s.emitSyncState(st)
 		if !ok {
-			return err
+			return waitErr
 		}
 	}
 

@@ -585,7 +585,6 @@
     "sshKeepAliveInterval": "Idle keep-alive interval",
     "sshKeepAliveIntervalPlaceholder": "Follow global default ({{seconds}}s)",
     "sshRestoreCwdOnReconnect": "Restore last directory on reconnect",
-    "sshRestoreCwdOnReconnectHint": "After a manual reconnect, drop back into the directory you were in instead of cd-ing there again. Works with bash/zsh/ksh/mksh; turns on directory sync when connecting to track the path.",
     "tabSchemaRegistry": "Schema Registry",
     "tabConnect": "Connect",
     "addDescription": "Add description"

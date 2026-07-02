@@ -242,7 +242,7 @@ describe("SSHConfigSection 保活预填(新建跟随全局)", () => {
   const openAdvanced = async (u: ReturnType<typeof userEvent.setup>) =>
     u.click(await screen.findByTestId("config-tab-advanced"));
 
-  it("新建:保活输入预填全局默认(30),未改动 → buildConfig 不写 keepalive(仍跟随全局)", async () => {
+  it("新建:保活输入预填全局默认(30),未改动 → buildConfig 写 keepalive_interval_seconds:30", async () => {
     const u = userEvent.setup();
     const ref = createRef<AssetFormHandle>();
     render(<SSHConfigSection ref={ref} ctx={ctx} onValidityChange={() => {}} />);
@@ -250,7 +250,9 @@ describe("SSHConfigSection 保活预填(新建跟随全局)", () => {
     const input = await screen.findByTestId("ssh-keepalive-input");
     await waitFor(() => expect(input).toHaveValue(30));
     const built = await ref.current!.buildConfig(ctx);
-    expect(built.configJSON).not.toContain("keepalive_interval_seconds");
+    expect((JSON.parse(built.configJSON) as { keepalive_interval_seconds?: number }).keepalive_interval_seconds).toBe(
+      30
+    );
   });
 
   it("新建:改保活为 45 → buildConfig 写 keepalive_interval_seconds:45(固定覆盖)", async () => {

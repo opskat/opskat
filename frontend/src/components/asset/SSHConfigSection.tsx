@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useMemo, useState } from "react";
+import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
 import { Trash2, FolderOpen, Loader2, Lock } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -33,6 +33,8 @@ import {
 } from "./SSHConfigSection.config";
 import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 
+const DEFAULT_GLOBAL_KEEPALIVE_SECONDS = 30;
+
 export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function SSHConfigSection(
   { editAsset, onValidityChange },
   ref
@@ -45,11 +47,14 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
   );
   const cred = useAssetCredential(editAsset, passwordCredentialConfig);
 
-  const { state, patch } = useConfigSection<SSHFormState>({
+  const { state, setState, patch } = useConfigSection<SSHFormState>({
     ref,
     editAsset,
     onValidityChange,
-    init: (a) => (a ? parseSSHConfig(a.Config, a.sshTunnelId || 0) : { ...SSH_DEFAULTS }),
+    init: (a) =>
+      a
+        ? parseSSHConfig(a.Config, a.sshTunnelId || 0)
+        : { ...SSH_DEFAULTS, keepAliveIntervalSeconds: DEFAULT_GLOBAL_KEEPALIVE_SECONDS },
     validate: (s) => {
       const ok = !!s.host.trim();
       return { canTest: ok, canSave: ok, saveDisabledReason: ok ? "" : "asset.formMissingHost" };
@@ -89,10 +94,10 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
 
   const [managedKeys, setManagedKeys] = useState<credential_entity.Credential[]>([]);
   const [localKeys, setLocalKeys] = useState<ssh_models.LocalSSHKeyInfo[]>([]);
-  // 全局保活默认值：新建时预填此值(仅显示)，也作为「高级」留空态的 placeholder。
-  const [globalKeepAlive, setGlobalKeepAlive] = useState(30);
-  // 用户是否手动清空过保活输入：清空后回落跟随全局(显示 placeholder)，不再预填全局数字。
-  const [keepAliveCleared, setKeepAliveCleared] = useState(false);
+  // 全局保活默认值：新建时写入此值；留空态的 placeholder 也显示它。
+  const [globalKeepAlive, setGlobalKeepAlive] = useState(DEFAULT_GLOBAL_KEEPALIVE_SECONDS);
+  // 用户是否手动清空过保活输入：清空后回落跟随全局，不再被异步加载的全局值覆盖。
+  const keepAliveClearedRef = useRef(false);
   // 挂载即扫描,初始 true(避免在 effect 内同步 setState 触发级联渲染)。
   const [scanningKeys, setScanningKeys] = useState(true);
 
@@ -106,9 +111,19 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
       .catch(() => setLocalKeys([]))
       .finally(() => setScanningKeys(false));
     GetSSHConnectionSettings()
-      .then((s) => s && setGlobalKeepAlive(s.keepAliveIntervalSeconds))
+      .then((s) => {
+        const seconds = s?.keepAliveIntervalSeconds;
+        if (!seconds || seconds <= 0) return;
+        setGlobalKeepAlive(seconds);
+        if (editAsset) return;
+        setState((prev) =>
+          prev.keepAliveIntervalSeconds === DEFAULT_GLOBAL_KEEPALIVE_SECONDS && !keepAliveClearedRef.current
+            ? { ...prev, keepAliveIntervalSeconds: seconds }
+            : prev
+        );
+      })
       .catch(() => {});
-  }, []);
+  }, [editAsset, setState]);
 
   // 排除自身,不能把自己选作跳板机 / SSH 隧道。
   const jumpHostExcludeIds = editAsset?.ID ? [editAsset.ID] : undefined;
@@ -344,11 +359,8 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
         {
           kind: "custom",
           render: (s, patchState) => {
-            // 新建时预填全局默认值(仅显示)：未改动即保存仍存 0＝跟随全局(config 不写)；改成别的值＝
-            // 固定覆盖；清空＝回落跟随全局(出 placeholder)。编辑态不预填，直读已存值(0＝跟随)。
-            const prefillGlobal = !editAsset && s.keepAliveIntervalSeconds === 0 && !keepAliveCleared;
-            const shownValue =
-              s.keepAliveIntervalSeconds > 0 ? s.keepAliveIntervalSeconds : prefillGlobal ? globalKeepAlive : "";
+            // 创建态默认写入全局值；清空则回落为 0＝跟随全局(config 不写)。编辑态直读已存值。
+            const shownValue = s.keepAliveIntervalSeconds > 0 ? s.keepAliveIntervalSeconds : "";
             return (
               <Field label={t("asset.sshKeepAliveInterval")}>
                 <div className="flex items-center gap-2">
@@ -362,7 +374,7 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
                     placeholder={t("asset.sshKeepAliveIntervalPlaceholder", { seconds: globalKeepAlive })}
                     onChange={(e) => {
                       const v = e.target.value;
-                      setKeepAliveCleared(v === "");
+                      keepAliveClearedRef.current = v === "";
                       patchState({ keepAliveIntervalSeconds: v === "" ? 0 : Math.trunc(Number(v)) || 0 });
                     }}
                     onBlur={() => {
@@ -382,14 +394,11 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
           kind: "custom",
           render: (s, patchState) => (
             <Field label={t("asset.sshRestoreCwdOnReconnect")}>
-              <div className="space-y-1.5">
-                <Switch
-                  checked={s.restoreCwdOnReconnect}
-                  onCheckedChange={(v) => patchState({ restoreCwdOnReconnect: v })}
-                  data-testid="ssh-restore-cwd-switch"
-                />
-                <p className="text-xs text-muted-foreground">{t("asset.sshRestoreCwdOnReconnectHint")}</p>
-              </div>
+              <Switch
+                checked={s.restoreCwdOnReconnect}
+                onCheckedChange={(v) => patchState({ restoreCwdOnReconnect: v })}
+                data-testid="ssh-restore-cwd-switch"
+              />
             </Field>
           ),
         },

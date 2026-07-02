@@ -11,11 +11,17 @@ describe("DescriptionBar", () => {
     expect(screen.queryByTestId("description-textarea")).not.toBeInTheDocument();
     await userEvent.click(screen.getByTestId("description-add"));
     expect(screen.getByTestId("description-textarea")).toBeInTheDocument();
+    expect(screen.getByTestId("description-textarea")).toHaveFocus();
   });
 
   it("starts expanded when value present", () => {
     render(<DescriptionBar value="hello" onChange={vi.fn()} />);
     expect(screen.getByTestId("description-textarea")).toHaveValue("hello");
+  });
+
+  it("does not autofocus the textarea when value present", () => {
+    render(<DescriptionBar value="hello" onChange={vi.fn()} />);
+    expect(screen.getByTestId("description-textarea")).not.toHaveFocus();
   });
 
   it("forwards edits via onChange", async () => {

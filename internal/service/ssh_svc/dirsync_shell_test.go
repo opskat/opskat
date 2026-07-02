@@ -1,64 +1,78 @@
 package ssh_svc
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 )
 
-func TestBuildEnableSyncCommandBash(t *testing.T) {
-	cmd := buildEnableSyncCommand(shellTypeBash, "TOK", "NONCE")
-	if !strings.Contains(cmd, "opskat_prompt_proof") {
-		t.Fatalf("missing function name: %s", cmd)
+func assertInjection(t *testing.T, wrapper, payload string) {
+	t.Helper()
+	if strings.ContainsAny(wrapper, "\n") {
+		t.Fatalf("wrapper must be single-line (no newline -> no PS2): %q", wrapper)
 	}
-	if !strings.Contains(cmd, "OPSKAT_PROMPT_NONCE='NONCE'") {
-		t.Fatalf("missing nonce assignment (shellQuote'd): %s", cmd)
+	if !strings.HasSuffix(wrapper, "\r") {
+		t.Fatalf("wrapper must end with a carriage return: %q", wrapper)
 	}
-	if !strings.Contains(cmd, `PROMPT_COMMAND="opskat_prompt_proof`) {
-		t.Fatalf("missing PROMPT_COMMAND wiring: %s", cmd)
+	// The readable hook source must never appear in the wrapper; it rides in the
+	// base64 payload (which the shell reads with echo off). Regression: "sftp
+	// open terminal echo noise".
+	if strings.Contains(wrapper, "opskat_prompt_proof") {
+		t.Fatalf("hook source leaked into visible wrapper: %q", wrapper)
 	}
-	if !strings.Contains(cmd, `1337;opskat:TOK:init:pid:`) {
-		t.Fatalf("missing init marker: %s", cmd)
+	if !strings.Contains(wrapper, "read -r OPSKAT_SYNC_B") || !strings.Contains(wrapper, "stty -echo") {
+		t.Fatalf("expected read-with-echo-off injection wrapper: %q", wrapper)
 	}
-	if strings.ContainsAny(cmd, "\n") {
-		t.Fatalf("command must be single-line, got newline: %q", cmd)
-	}
-	if !strings.HasSuffix(cmd, "\r") {
-		t.Fatalf("command must end with carriage return: %q", cmd)
-	}
-}
-
-func TestBuildEnableSyncCommandZsh(t *testing.T) {
-	cmd := buildEnableSyncCommand(shellTypeZsh, "TOK", "NONCE")
-	if !strings.Contains(cmd, "add-zsh-hook precmd opskat_prompt_proof") {
-		t.Fatalf("missing add-zsh-hook: %s", cmd)
-	}
-	if !strings.Contains(cmd, "1337;opskat:TOK:init:pid:") {
-		t.Fatalf("missing init marker: %s", cmd)
-	}
-	if strings.ContainsAny(cmd, "\n") {
-		t.Fatalf("must be single line: %q", cmd)
-	}
-	if !strings.HasSuffix(cmd, "\r") {
-		t.Fatalf("must end with \\r: %q", cmd)
+	if !strings.HasSuffix(payload, "\r") {
+		t.Fatalf("payload must end with a carriage return: %q", payload)
 	}
 }
 
-func TestBuildEnableSyncCommandKsh(t *testing.T) {
-	cmd := buildEnableSyncCommand(shellTypeKsh, "TOK", "NONCE")
-	if !strings.Contains(cmd, `PS1='$(opskat_prompt_proof)'`) {
-		t.Fatalf("missing PS1 wiring: %s", cmd)
+func decodeInjectionHook(t *testing.T, payload string) string {
+	t.Helper()
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSuffix(payload, "\r"))
+	if err != nil {
+		t.Fatalf("payload is not valid base64: %v", err)
 	}
-	if strings.ContainsAny(cmd, "\n") {
-		t.Fatalf("must be single line: %q", cmd)
+	return string(decoded)
+}
+
+func TestBuildEnableSyncInjectionBash(t *testing.T) {
+	wrapper, payload := buildEnableSyncInjection(shellTypeBash, "TOK", "NONCE")
+	assertInjection(t, wrapper, payload)
+	hook := decodeInjectionHook(t, payload)
+	if !strings.Contains(hook, `PROMPT_COMMAND="opskat_prompt_proof`) {
+		t.Fatalf("missing PROMPT_COMMAND wiring in hook: %s", hook)
 	}
-	if !strings.HasSuffix(cmd, "\r") {
-		t.Fatalf("must end with \\r: %q", cmd)
+	if !strings.Contains(hook, "OPSKAT_PROMPT_NONCE='NONCE'") {
+		t.Fatalf("missing nonce assignment (shellQuote'd) in hook: %s", hook)
+	}
+	if !strings.Contains(hook, `1337;opskat:TOK:init:pid:`) {
+		t.Fatalf("missing init marker in hook: %s", hook)
 	}
 }
 
-func TestBuildEnableSyncCommandUnsupported(t *testing.T) {
-	if got := buildEnableSyncCommand(shellTypeUnsupported, "T", "N"); got != "" {
-		t.Fatalf("unsupported shell must return empty, got: %q", got)
+func TestBuildEnableSyncInjectionZsh(t *testing.T) {
+	wrapper, payload := buildEnableSyncInjection(shellTypeZsh, "TOK", "NONCE")
+	assertInjection(t, wrapper, payload)
+	hook := decodeInjectionHook(t, payload)
+	if !strings.Contains(hook, "add-zsh-hook precmd opskat_prompt_proof") {
+		t.Fatalf("missing add-zsh-hook in hook: %s", hook)
+	}
+}
+
+func TestBuildEnableSyncInjectionKsh(t *testing.T) {
+	wrapper, payload := buildEnableSyncInjection(shellTypeKsh, "TOK", "NONCE")
+	assertInjection(t, wrapper, payload)
+	hook := decodeInjectionHook(t, payload)
+	if !strings.Contains(hook, `PS1='$(opskat_prompt_proof)'`) {
+		t.Fatalf("missing PS1 wiring in hook: %s", hook)
+	}
+}
+
+func TestBuildEnableSyncInjectionUnsupported(t *testing.T) {
+	if w, p := buildEnableSyncInjection(shellTypeUnsupported, "T", "N"); w != "" || p != "" {
+		t.Fatalf("unsupported shell must return empty, got: %q %q", w, p)
 	}
 }
 

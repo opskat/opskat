@@ -72,6 +72,20 @@ func (w *recordingWriteCloser) lastWrite() []byte {
 	return append([]byte(nil), w.writes[len(w.writes)-1]...)
 }
 
+func (w *recordingWriteCloser) allWrites() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var b strings.Builder
+	for _, wr := range w.writes {
+		b.Write(wr)
+	}
+	return b.String()
+}
+
+// extractInitTokenFromEnableCommand pulls the sync token out of an injection
+// write. EnableSync makes two writes: the wrapper (no token) and the base64
+// payload. The payload base64-decodes to the hook, which carries the
+// 1337;opskat:<token>:init:pid: marker. Returns "" for the wrapper write.
 func extractInitTokenFromEnableCommand(t *testing.T, cmd []byte) string {
 	t.Helper()
 	text := string(cmd)
@@ -83,22 +97,13 @@ func extractInitTokenFromEnableCommand(t *testing.T, cmd []byte) string {
 			return token
 		}
 	}
-
-	const start = "<<'OPSKAT_SCRIPT'\n"
-	startIdx := strings.Index(text, start)
-	if startIdx < 0 {
-		t.Fatalf("enable command missing script heredoc: %q", text)
+	// The payload write is pure base64 (+ trailing CR); decode and recurse.
+	if decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(text)); err == nil {
+		if strings.Contains(string(decoded), "1337;opskat:") {
+			return extractInitTokenFromEnableCommand(t, decoded)
+		}
 	}
-	encodedStart := startIdx + len(start)
-	encodedEnd := strings.Index(text[encodedStart:], "\nOPSKAT_SCRIPT")
-	if encodedEnd < 0 {
-		t.Fatalf("enable command missing script terminator: %q", text)
-	}
-	decoded, err := base64.StdEncoding.DecodeString(text[encodedStart : encodedStart+encodedEnd])
-	if err != nil {
-		t.Fatalf("enable command script is not valid base64: %v", err)
-	}
-	return extractInitTokenFromEnableCommand(t, decoded)
+	return ""
 }
 
 func TestManager_Basic(t *testing.T) {
@@ -464,74 +469,6 @@ func TestSession_InternalWriteEchoSkipsAnsiRedrawInsideCommand(t *testing.T) {
 	assert.Equal(t, "\x1b[32m➜\x1b[0m  ~ \r\n", string(filtered))
 }
 
-func TestSession_InternalWriteEchoSkipsRealZshEnableScriptAndCdEcho(t *testing.T) {
-	sess := newTestSyncSession()
-	script := buildEnableSyncScript(shellTypeZsh, "1478836e13850c0c0d9306a8d4d87297", "e19c0654c4fbe85db213985d80308e48")
-	sess.beginInternalScriptEchoSuppression()
-
-	encoded := base64.StdEncoding.EncodeToString([]byte(script))
-	filtered := sess.filterOutput([]byte("➜  ~ stty -echo 2>/dev/null\r\n➜  ~ base64 -d > '/tmp/.opskat-sync-1779413970435411000-1.sh' <<'OPSKAT_SCRIPT'\r\nheredoc> " + encoded[:120] + "\r\n" + encoded[120:] + "\r\nheredoc> OPSKAT_SCRIPT\r\n➜  ~ source '/tmp/.opskat-sync-1779413970435411000-1.sh'\r\n➜  ~ rm -f '/tmp/.opskat-sync-1779413970435411000-1.sh'\r\n➜  ~ stty echo 2>/dev/null\r\n"))
-
-	assert.Empty(t, string(filtered))
-}
-
-func TestSession_InternalTempScriptEchoFilterSurvivesPromptSuffixAndSuppressesNextCommand(t *testing.T) {
-	sess := newTestSyncSession()
-	script := buildEnableSyncScript(shellTypeZsh, "a0d4fc6672c8100d5e50ecb56465cd4f", "d55259fc1a2c8cd50e9724580602febb")
-	tempPath := "/tmp/.opskat-sync-1779415450104142000-1.sh"
-	sess.beginInternalScriptEchoSuppression()
-
-	encoded := base64.StdEncoding.EncodeToString([]byte(script))
-	chunks := []string{
-		"➜  ~ stty -echo 2>/dev/null#\r\n",
-		"➜  ~ base64 -d > '" + tempPath + "' <<'OPSKAT_SCRIPT'\r\n",
-		"heredoc> " + encoded[:72],
-		encoded[72:144] + "\r\n",
-		encoded[144:216],
-		encoded[216:] + "\r\n",
-		"heredoc> OPSKAT_SCRIPT\r\n",
-		"➜  ~ source '" + tempPath + "'\r\n",
-		"➜  ~ rm -f '" + tempPath + "'\r\n",
-		"➜  ~ stty2>/dev/nullv/null\r\n",
-	}
-	var out strings.Builder
-	for _, chunk := range chunks {
-		out.Write(sess.filterOutput([]byte(chunk)))
-	}
-
-	sess.queueInternalEchoSuppression([]byte("builtin cd -- '/root/你好好好'\r"))
-	out.Write(sess.filterOutput([]byte("➜  ~ builtin cd -- '/root/你好好好'\r\n➜  ~ ")))
-	filtered := out.String()
-
-	assert.NotContains(t, filtered, "stty")
-	assert.NotContains(t, filtered, "base64")
-	assert.NotContains(t, filtered, "heredoc")
-	assert.NotContains(t, filtered, "opskat_prompt_proof")
-	assert.NotContains(t, filtered, "builtin cd")
-}
-
-func TestSession_InternalTempScriptEchoFilterDropsBlankHeredocPrompt(t *testing.T) {
-	sess := newTestSyncSession()
-	sess.beginInternalScriptEchoSuppression()
-
-	filtered := sess.filterOutput([]byte("heredoc> \r\n➜  ~ \r\n➜  ~ rm -f '/tmp/.opskat-sync-1779418826108658000-1.sh'\r\n➜  ~ stty echo 2>/dev/null\r\n"))
-	text := string(filtered)
-
-	assert.NotContains(t, text, "heredoc")
-	assert.NotContains(t, text, "➜  ~")
-	assert.NotContains(t, text, "rm -f")
-	assert.NotContains(t, text, "stty echo")
-}
-
-func TestSession_InternalTempScriptEchoFilterDropsHiddenLineTerminators(t *testing.T) {
-	sess := newTestSyncSession()
-	sess.beginInternalScriptEchoSuppression()
-
-	filtered := sess.filterOutput([]byte("➜  ~ \r\n➜  ~ rm -f '/tmp/.opskat-sync-1779423605356277000-1.sh'\r\n➜  ~ stty echo 2>/dev/null\r\n"))
-
-	assert.Empty(t, string(filtered))
-}
-
 func TestSession_InternalDirectoryChangeEchoFilterSuppressesShellMangledCd(t *testing.T) {
 	sess := newTestSyncSession()
 	sess.queueInternalEchoSuppression([]byte(buildDirectoryChangeCommand("/root/你好好好")))
@@ -596,12 +533,16 @@ func TestSession_EnableSyncDoesNotWriteUserVisibleHookSource(t *testing.T) {
 	defer func() { syncEnableTimeout = oldTimeout }()
 
 	_ = sess.EnableSync()
-	written := string(stdin.lastWrite())
+	written := stdin.allWrites() // wrapper + base64 payload
 
+	// Neither write contains readable hook source — it rides base64-encoded in
+	// the payload, which the shell reads with echo off.
 	assert.NotContains(t, written, "opskat_next_prompt_nonce(){")
 	assert.NotContains(t, written, "opskat_prompt_proof(){")
 	assert.NotContains(t, written, "add-zsh-hook")
-	assert.Contains(t, written, "source")
+	// The visible wrapper reads the payload with echo off and eval's it.
+	assert.Contains(t, written, "read -r OPSKAT_SYNC_B")
+	assert.Contains(t, written, "stty -echo")
 }
 
 func TestSession_InternalWriteEchoFilterPreservesPartialMismatch(t *testing.T) {
@@ -847,8 +788,11 @@ func TestEnableSyncSerializesConcurrentFirstEnable(t *testing.T) {
 	}
 	sess.initSyncState(sess.shellPath, sess.shellType, false)
 	stdin.onWrite = func(data []byte) {
-		token := extractInitTokenFromEnableCommand(t, data)
-		_ = sess.filterOutput(buildTestSyncSequence(token, "init:pid:4242"))
+		// Two writes per enable (wrapper, then payload). Only the payload carries
+		// the token; the wrapper write returns "" and is skipped.
+		if token := extractInitTokenFromEnableCommand(t, data); token != "" {
+			_ = sess.filterOutput(buildTestSyncSequence(token, "init:pid:4242"))
+		}
 	}
 
 	prevGrace := syncFirstCwdGrace
@@ -873,7 +817,9 @@ func TestEnableSyncSerializesConcurrentFirstEnable(t *testing.T) {
 	for err := range errCh {
 		assert.NoError(t, err)
 	}
-	assert.Equal(t, 1, stdin.writeCount(), "concurrent first enable should write one bootstrap command")
+	// One enable wins and writes twice (wrapper + payload); the other is
+	// serialized and idempotent, writing nothing.
+	assert.Equal(t, 2, stdin.writeCount(), "only one concurrent enable should inject (wrapper + payload)")
 	state := sess.GetSyncState()
 	assert.True(t, state.Supported)
 	assert.Equal(t, 4242, sess.shellPID)
