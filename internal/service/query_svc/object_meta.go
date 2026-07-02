@@ -116,7 +116,7 @@ func queryIndexes(ctx context.Context, conn *sql.Conn, driver asset_entity.Datab
 func sqliteIndexes(ctx context.Context, conn *sql.Conn, database, table string) ([]IndexMeta, error) {
 	listSQL := "SELECT name, \"unique\" FROM pragma_index_list(?)"
 	if database != "" {
-		listSQL = "SELECT name, \"unique\" FROM " + QuoteIdent(database, asset_entity.DriverSQLite) + ".pragma_index_list(?)" //nolint:gosec // schema identifier-quoted
+		listSQL = "SELECT name, \"unique\" FROM " + QuoteIdent(database, asset_entity.DriverSQLite) + ".pragma_index_list(?)"
 	}
 	rows, err := conn.QueryContext(ctx, listSQL, table)
 	if err != nil {
@@ -158,6 +158,10 @@ func sqliteIndexes(ctx context.Context, conn *sql.Conn, database, table string) 
 			if c.Valid {
 				cols = append(cols, c.String)
 			}
+		}
+		if err := colRows.Err(); err != nil {
+			_ = colRows.Close()
+			return nil, err
 		}
 		_ = colRows.Close()
 		out = append(out, IndexMeta{Name: it.name, Columns: cols, Unique: it.unique})
@@ -303,7 +307,7 @@ func queryForeignKeys(ctx context.Context, conn *sql.Conn, driver asset_entity.D
 func sqliteForeignKeys(ctx context.Context, conn *sql.Conn, database, table string) ([]ForeignKeyMeta, error) {
 	listSQL := "SELECT \"table\", \"from\", \"to\" FROM pragma_foreign_key_list(?)"
 	if database != "" {
-		listSQL = "SELECT \"table\", \"from\", \"to\" FROM " + QuoteIdent(database, asset_entity.DriverSQLite) + ".pragma_foreign_key_list(?)" //nolint:gosec // schema identifier-quoted
+		listSQL = "SELECT \"table\", \"from\", \"to\" FROM " + QuoteIdent(database, asset_entity.DriverSQLite) + ".pragma_foreign_key_list(?)"
 	}
 	rows, err := conn.QueryContext(ctx, listSQL, table)
 	if err != nil {
@@ -408,7 +412,7 @@ func sqliteObjects(ctx context.Context, conn *sql.Conn, database string) (*Datab
 	if database != "" {
 		master = QuoteIdent(database, asset_entity.DriverSQLite) + ".sqlite_master"
 	}
-	rows, err := conn.QueryContext(ctx, "SELECT type, name FROM "+master+" WHERE type IN ('view','trigger') ORDER BY name") //nolint:gosec // schema identifier-quoted
+	rows, err := conn.QueryContext(ctx, "SELECT type, name FROM "+master+" WHERE type IN ('view','trigger') ORDER BY name")
 	if err != nil {
 		return nil, err
 	}
@@ -530,7 +534,7 @@ func GetObjectSource(ctx context.Context, conn *sql.Conn, driver asset_entity.Da
 			master = QuoteIdent(database, asset_entity.DriverSQLite) + ".sqlite_master"
 		}
 		var src sql.NullString
-		err := conn.QueryRowContext(ctx, "SELECT sql FROM "+master+" WHERE name = ?", name).Scan(&src) //nolint:gosec // schema identifier-quoted
+		err := conn.QueryRowContext(ctx, "SELECT sql FROM "+master+" WHERE name = ?", name).Scan(&src)
 		if err != nil {
 			return "", err
 		}
@@ -565,7 +569,7 @@ func mysqlObjectSource(ctx context.Context, conn *sql.Conn, objType, name string
 	default:
 		return "", fmt.Errorf("unsupported object type: %s", objType)
 	}
-	rows, err := conn.QueryContext(ctx, stmt) //nolint:gosec // identifier-quoted
+	rows, err := conn.QueryContext(ctx, stmt)
 	if err != nil {
 		return "", err
 	}
@@ -575,6 +579,9 @@ func mysqlObjectSource(ctx context.Context, conn *sql.Conn, objType, name string
 		return "", err
 	}
 	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return "", err
+		}
 		return "", fmt.Errorf("object not found: %s", name)
 	}
 	values := make([]any, len(cols))
