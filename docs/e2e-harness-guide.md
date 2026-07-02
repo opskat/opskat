@@ -197,6 +197,12 @@ rule: drive the real app, then read observable side-effects (UI, DB, logs).
    committed). If the flow turns out to be core and worth guarding forever, *promote* it: move
    it into `e2e/tests/`, harden it, and commit (§5).
 
+**Keeping durable artifacts for review.** If a verification produces screenshots / reports you
+want to hand off or look at later (not just observe-then-delete), save them under
+`docs/verification/<topic>/` — that path is **gitignored** (like `e2e/scratch/`), so the
+artifacts live locally without polluting the PR. The scratch spec that produced them stays
+throwaway; only genuinely core flows get promoted and committed (§5).
+
 See [`e2e/scratch/README.md`](../e2e/scratch/README.md) for a copy-paste starter.
 
 ## 7. Harness engineering — hard-won lessons (symptom → root cause → fix)
