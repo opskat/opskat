@@ -734,6 +734,8 @@
       "disconnect": "断开连接",
       "splitH": "水平分割",
       "splitV": "垂直分割",
+      "pinToolbar": "固定工具栏",
+      "autoHideToolbar": "自动隐藏工具栏",
       "connected": "已连接",
       "disconnected": "已断开",
       "closedHint": "[连接已断开 — 按回车重连]"

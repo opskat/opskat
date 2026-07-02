@@ -16,9 +16,6 @@ import { useLayoutStore } from "@/stores/layoutStore";
 const AssetDetail = lazy(() => import("@/components/asset/AssetDetail").then((m) => ({ default: m.AssetDetail })));
 const GroupDetail = lazy(() => import("@/components/asset/GroupDetail").then((m) => ({ default: m.GroupDetail })));
 const SplitPane = lazy(() => import("@/components/terminal/SplitPane").then((m) => ({ default: m.SplitPane })));
-const SessionToolbar = lazy(() =>
-  import("@/components/terminal/SessionToolbar").then((m) => ({ default: m.SessionToolbar }))
-);
 const TerminalToolbar = lazy(() =>
   import("@/components/terminal/TerminalToolbar").then((m) => ({ default: m.TerminalToolbar }))
 );
@@ -233,7 +230,6 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
               }}
             >
               <LazySurface>
-                <SessionToolbar tabId={tab.id} />
                 <div className="flex-1 min-h-0 overflow-hidden flex">
                   <div className="flex-1 min-w-0 overflow-hidden">
                     {data && (

@@ -2,7 +2,9 @@ import { useRef, useCallback, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Terminal } from "./Terminal";
 import { ConnectionProgress } from "./ConnectionProgress";
+import { SessionToolbar } from "./SessionToolbar";
 import { useTerminalStore, type SplitNode } from "@/stores/terminalStore";
+import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
 
 interface SplitPaneProps {
   node: SplitNode;
@@ -15,21 +17,14 @@ interface SplitPaneProps {
 
 export function SplitPane({ node, tabId, isTabActive, activePaneId, showFocusRing, path }: SplitPaneProps) {
   if (node.type === "terminal") {
-    const isFocused = activePaneId === node.sessionId;
     return (
-      <div
-        className="h-full w-full relative"
-        onMouseDown={() => {
-          if (!isFocused) {
-            useTerminalStore.getState().setActivePaneId(tabId, node.sessionId);
-          }
-        }}
-      >
-        {showFocusRing && isFocused && (
-          <div className="absolute inset-0 ring-1 ring-primary/40 rounded-sm pointer-events-none z-10" />
-        )}
-        <Terminal sessionId={node.sessionId} active={isTabActive} tabId={tabId} />
-      </div>
+      <TerminalPaneView
+        tabId={tabId}
+        sessionId={node.sessionId}
+        isTabActive={isTabActive}
+        isFocused={activePaneId === node.sessionId}
+        showFocusRing={showFocusRing}
+      />
     );
   }
 
@@ -54,6 +49,60 @@ export function SplitPane({ node, tabId, isTabActive, activePaneId, showFocusRin
       showFocusRing={showFocusRing}
       path={path}
     />
+  );
+}
+
+interface TerminalPaneViewProps {
+  tabId: string;
+  sessionId: string;
+  isTabActive: boolean;
+  isFocused: boolean;
+  showFocusRing: boolean;
+}
+
+// 单个终端窗格：顶部挂本窗格的工具条。固定态常驻；隐藏态默认收起、
+// 鼠标移到窗格顶部时向下滑出并浮在终端内容之上（不挤压内容）。
+function TerminalPaneView({ tabId, sessionId, isTabActive, isFocused, showFocusRing }: TerminalPaneViewProps) {
+  const toolbarPinned = useTerminalThemeStore((s) => s.toolbarPinned);
+
+  const terminal = (
+    <div className="flex-1 min-h-0">
+      <Terminal sessionId={sessionId} active={isTabActive} tabId={tabId} />
+    </div>
+  );
+
+  return (
+    <div
+      className="h-full w-full relative flex flex-col"
+      onMouseDown={() => {
+        if (!isFocused) {
+          useTerminalStore.getState().setActivePaneId(tabId, sessionId);
+        }
+      }}
+    >
+      {showFocusRing && isFocused && (
+        <div className="absolute inset-0 ring-1 ring-primary/40 rounded-sm pointer-events-none z-30" />
+      )}
+      {toolbarPinned ? (
+        <>
+          <SessionToolbar tabId={tabId} sessionId={sessionId} />
+          {terminal}
+        </>
+      ) : (
+        <>
+          {terminal}
+          {/* 隐藏态：透明悬停触发条 + 向下滑出的浮层工具条（被外层 overflow-hidden 裁掉上移部分）。 */}
+          <div className="absolute inset-x-0 top-0 z-20">
+            <div className="peer h-2 w-full" />
+            {/* 未悬停时的极简提示手柄，悬停后淡出 */}
+            <div className="pointer-events-none absolute left-1/2 top-1 h-1 w-8 -translate-x-1/2 rounded-full bg-foreground/15 transition-opacity duration-150 peer-hover:opacity-0" />
+            <div className="-translate-y-full shadow-md transition-transform duration-200 ease-out peer-hover:translate-y-0 hover:translate-y-0">
+              <SessionToolbar tabId={tabId} sessionId={sessionId} />
+            </div>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

@@ -734,6 +734,8 @@
       "disconnect": "Disconnect",
       "splitH": "Split Horizontal",
       "splitV": "Split Vertical",
+      "pinToolbar": "Pin toolbar",
+      "autoHideToolbar": "Auto-hide toolbar",
       "connected": "Connected",
       "disconnected": "Disconnected",
       "closedHint": "[Connection closed — press Enter to reconnect]"

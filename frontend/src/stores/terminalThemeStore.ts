@@ -36,6 +36,8 @@ interface TerminalThemeState {
   webglEnabled: boolean;
   highlightLinks: boolean;
   copyBehavior: TerminalCopyBehavior;
+  // 分屏窗格顶部工具条：true = 固定常驻；false = 隐藏，鼠标移到窗格顶部时向下滑出。
+  toolbarPinned: boolean;
   // 最近一次 WebGL 自动关闭的原因。setWebglEnabled(true) 会把它清掉，所以只在
   // GPU 加速被系统自动关掉后到下一次用户主动开启之间存在。
   webglError: WebglFailure | null;
@@ -48,6 +50,7 @@ interface TerminalThemeState {
   setWebglEnabled: (enabled: boolean) => void;
   setHighlightLinks: (enabled: boolean) => void;
   setCopyBehavior: (behavior: TerminalCopyBehavior) => void;
+  setToolbarPinned: (pinned: boolean) => void;
   reportWebglFailure: (failure: WebglFailure) => void;
   addCustomTheme: (theme: TerminalTheme) => void;
   updateCustomTheme: (theme: TerminalTheme) => void;
@@ -82,6 +85,7 @@ export const useTerminalThemeStore = create<TerminalThemeState>()(
       webglEnabled: true,
       highlightLinks: false,
       copyBehavior: "popover-menu",
+      toolbarPinned: true,
       webglError: null,
 
       setSelectedThemeId: (id) => set({ selectedThemeId: id }),
@@ -90,6 +94,7 @@ export const useTerminalThemeStore = create<TerminalThemeState>()(
       setWebglEnabled: (enabled) => set(enabled ? { webglEnabled: true, webglError: null } : { webglEnabled: false }),
       setHighlightLinks: (enabled) => set({ highlightLinks: enabled }),
       setCopyBehavior: (behavior) => set({ copyBehavior: behavior }),
+      setToolbarPinned: (pinned) => set({ toolbarPinned: pinned }),
       reportWebglFailure: (failure) => set({ webglError: failure }),
 
       setFontSize: (size) => set({ fontSize: Math.max(8, Math.min(32, size)) }),
