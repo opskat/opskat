@@ -3,7 +3,7 @@ import { useTabStore } from "../stores/tabStore";
 import { useQueryStore } from "../stores/queryStore";
 import { useAssetStore } from "../stores/assetStore";
 import { asset_entity } from "../../wailsjs/go/models";
-import { ExecuteSQL } from "../../wailsjs/go/query/Query";
+import { ExecuteSQL, ListDatabaseObjects } from "../../wailsjs/go/query/Query";
 import { RedisGetKeyDetail } from "../../wailsjs/go/redis/Redis";
 import { RedisListDatabases, RedisScanKeys } from "../../wailsjs/go/redis/Redis";
 
@@ -540,6 +540,30 @@ describe("queryStore database actions", () => {
       "main"
     );
     expect(useQueryStore.getState().dbStates["query-30"].tables.main).toEqual(["users", "orders"]);
+  });
+
+  it("refreshes SQLite object browser data with the table list", async () => {
+    vi.mocked(ExecuteSQL).mockResolvedValueOnce(
+      JSON.stringify({
+        rows: [{ name: "users" }, { name: "orders" }],
+      })
+    );
+    vi.mocked(ListDatabaseObjects).mockResolvedValueOnce({
+      views: [{ name: "v_orders", type: "view" }],
+      procedures: [],
+      functions: [],
+      triggers: [{ name: "trg_orders_ai", type: "trigger" }],
+    });
+
+    await useQueryStore.getState().refreshTables("query-30", "main");
+
+    expect(ListDatabaseObjects).toHaveBeenCalledWith(30, "main");
+    expect(useQueryStore.getState().dbStates["query-30"].objects?.main).toEqual({
+      views: [{ name: "v_orders", type: "view" }],
+      procedures: [],
+      functions: [],
+      triggers: [{ name: "trg_orders_ai", type: "trigger" }],
+    });
   });
 });
 

@@ -508,7 +508,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       // Also refresh tables for already-expanded databases that still exist,
       // otherwise the top-level refresh button leaves stale table lists.
       const expanded = get().dbStates[tabId]?.expandedDbs ?? [];
-      await Promise.all(expanded.filter((db) => databases.includes(db)).map((db) => get().loadTables(tabId, db)));
+      await Promise.all(expanded.filter((db) => databases.includes(db)).map((db) => get().refreshTables(tabId, db)));
     } catch (err) {
       set((s) => ({
         dbStates: {
@@ -588,6 +588,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     const state = get().dbStates[tabId];
     if (!state) return;
     await get().loadTables(tabId, database);
+    await get().loadObjects(tabId, database);
   },
 
   toggleDbExpand: (tabId, database) => {

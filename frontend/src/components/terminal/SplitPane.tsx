@@ -96,7 +96,9 @@ function TerminalPaneView({ tabId, sessionId, isTabActive, isFocused, showFocusR
             <div className="peer h-2 w-full" />
             {/* 未悬停时的极简提示手柄，悬停后淡出 */}
             <div className="pointer-events-none absolute left-1/2 top-1 h-1 w-8 -translate-x-1/2 rounded-full bg-foreground/15 transition-opacity duration-150 peer-hover:opacity-0" />
-            <div className="-translate-y-full shadow-md transition-transform duration-200 ease-out peer-hover:translate-y-0 hover:translate-y-0">
+            {/* 工具条绝对定位到窗格顶端(而非跟在触发条之后)，这样 -translate-y-full 能完全收起、
+                translate-y-0 能贴顶铺开——否则会因触发条高度的偏移，收起时露出一条、展开时顶部留缝。 */}
+            <div className="absolute inset-x-0 top-0 -translate-y-full shadow-md transition-transform duration-200 ease-out peer-hover:translate-y-0 hover:translate-y-0">
               <SessionToolbar tabId={tabId} sessionId={sessionId} />
             </div>
           </div>

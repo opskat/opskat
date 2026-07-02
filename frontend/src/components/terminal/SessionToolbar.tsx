@@ -93,8 +93,10 @@ export function SessionToolbar({ tabId, sessionId }: SessionToolbarProps) {
     <div
       className={cn(
         "flex items-center gap-1.5 px-2 py-1 border-b shrink-0 text-xs",
-        // 分屏时非活动窗格的工具条淡化，帮助区分当前活动窗格；单窗格不淡化。
-        isSplit && !isActivePane ? "bg-muted/40" : "bg-background"
+        // 分屏时非活动窗格的工具条用较淡的底色区分当前活动窗格；单窗格不淡化。
+        // 必须用不透明底色（不能带 /alpha）：自动隐藏浮层态下工具条飘在终端内容上，
+        // 半透明会透出后面的终端文字。
+        isSplit && !isActivePane ? "bg-muted" : "bg-background"
       )}
     >
       {/* 连接状态指示器 */}
