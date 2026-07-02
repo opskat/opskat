@@ -95,7 +95,7 @@ Binders implement a small `Lifecycle` (`Startup(ctx)` / `Cleanup()`) that `main.
 | `tool` | The tool registry. `AllToolDefs()` is the name→handler table opsctl shares; `Tools()` exposes the same business tools to the AI as cago `tool.Tool`s (asset / exec / data / kafka / extension groups). Extensions are reached through the **single** `exec_tool` dispatcher (`tool_handler_ext.go`), not one AI tool per extension. |
 | `policy` | Per-protocol rule checkers — `query_policy.go` (SQL, parsed with the TiDB parser), `redis_policy.go`, `mongo_policy.go`, `k8s_policy.go`, `kafka_policy.go`, plus shell-command rules in `command_rule.go` / `command_shell.go` (shell AST via `mvdan.cc/sh`). |
 | `permission` | Dispatches an asset type to its policy checker, merges asset + group-chain effective policy, and returns Allow / Deny / NeedConfirm. Owns the grant flow (matching previously-approved DB grants, submitting new ones for approval). |
-| `helper` | Protocol clients (SSH, SQL, Redis, Mongo, Kafka, etcd, K8s) that each run the permission check before executing and record the decision. |
+| `helper` | Protocol clients (SSH, SQL, Redis, Mongo, Kafka, etcd, Serial) that each run the permission check before executing and record the decision. (K8s tool execution lives in `tool/tool_handler_k8s.go`, not `helper`.) |
 | `audit` | Writes a tool-call audit log after execution, with per-tool command-summary extractors. |
 | `aictx` | Shared context keys and the decision primitives (Allow / Deny / NeedConfirm, the `CheckResult` slot) used across the packages above. |
 

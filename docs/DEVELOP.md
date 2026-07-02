@@ -49,7 +49,7 @@ The architecture & subsystem map — process topology, backend layering, the req
 
 **The first character of the subject must be the emoji glyph itself** (e.g. `✨`), not the gitmoji text code (`:sparkles:`), and not a plain-text prefix like `feat:` / `fix:`. Default format: `<emoji> <short description>`, e.g. `📄 调整 sessionid 碰撞风险说明` (commit messages themselves are commonly written in Chinese in this repo — the emoji-first rule is language-agnostic).
 
-Common emoji (aligned with the changelog categories in [`/release`](../.claude/skills/release/SKILL.md)):
+Common emoji (each also maps to a changelog category at release time):
 
 | Emoji | Use |
 |---|---|
@@ -93,7 +93,7 @@ Diagnosing production issues relies on logs. Log every cross-boundary / cross-pr
 
 | Path | Producer | Regenerate |
 |------|----------|------------|
-| `frontend/wailsjs/go/app/App.{d.ts,js}`, `models.ts` | Wails (from `internal/app/*.go` + Go structs) | `make dev` / `wails build` |
+| `frontend/wailsjs/go/app/App.{d.ts,js}`, `models.ts` | Wails (from `internal/app/**` + Go structs) | `make dev` / `wails build` |
 | `frontend/wailsjs/runtime/*` | Wails runtime shim | ships with Wails CLI |
 | `internal/**/mock_*/` | `mockgen` | `go generate ./...` |
 | `internal/embedded/opsctl_bin` | `make build-cli-embed` | `make build-embed` |

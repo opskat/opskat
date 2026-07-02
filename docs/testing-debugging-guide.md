@@ -195,7 +195,7 @@ transient `opskat.db-journal` appears mid-write. Read it **without ever writing 
 | `groups` | Asset groups (tree) | `name`, `parent_id` |
 | `policy_groups` | Command/operation policies | — |
 | `grant_sessions` / `grant_items` | Approval sessions and granted items | session id, expiry, granted patterns |
-| `conversations` / `messages` | AI chat history | conversation id, role, content |
+| `conversations` / `conversation_messages` | AI chat history | conversation id, role, content |
 | `ai_providers` | Configured AI providers | — |
 | `extension_state` / `extension_data` | Installed extension state + per-extension KV | — |
 | `host_keys` | Known SSH host keys | — |
@@ -224,7 +224,7 @@ sqlite3 -readonly "$DB" \
 # One AI tool's operations (tool_name lives here, not in the logs)
 sqlite3 -readonly "$DB" \
   "SELECT datetime(createtime,'unixepoch','localtime'), source, asset_name, success
-   FROM audit_logs WHERE tool_name='exec_tool' ORDER BY id DESC LIMIT 20;"
+   FROM audit_logs WHERE tool_name='exec' ORDER BY id DESC LIMIT 20;"
 
 # Trace one approval session end-to-end
 sqlite3 -readonly "$DB" \
