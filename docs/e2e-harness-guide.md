@@ -255,6 +255,30 @@ These bit us while building the harness; keep them in mind when changing it.
   needs them.)
 - **A new UI assertion target** → add a `data-testid` (additive) in the same style as §5.
 - **A new persistence oracle** → add a read-only `node:sqlite` helper to `e2e/fixtures/db.ts`.
+- **A spec that needs a pre-existing asset** (e.g. a database asset pointing at a local SQLite
+  fixture, so you can drive the query panel / object browser without going through the
+  create-asset form) → **seed the row directly** into the temp DB with a *writable* `node:sqlite`
+  handle in `beforeAll`, before `page.goto`. The app reads assets from the DB on each fetch, so it
+  shows up on mount — no restart. A SQLite asset needs no credential (nothing to encrypt), so this
+  needs no real server. Sketch:
+  ```ts
+  import { DatabaseSync } from "node:sqlite";
+  // 1. build the fixture DB itself with node:sqlite (tables / views / triggers / indexes)
+  new DatabaseSync("/abs/fixture.db").exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL); ...`);
+  // 2. seed an asset that points at it (db.ts opens read-only; seeding is the writable counterpart)
+  const db = new DatabaseSync(`${process.env.OPSKAT_DATA_DIR}/opskat.db`);
+  const cfg = JSON.stringify({ driver: "sqlite", path: "/abs/fixture.db" }); // asset_entity.DatabaseConfig json tags
+  db.prepare("INSERT INTO assets (name, type, group_id, config, status, ssh_tunnel_id, extension_name) VALUES (?,?,?,?,?,?,?)")
+    .run("e2e-db", "database", 0, cfg, 1, 0, "");                            // group_id 0 → renders at the tree root
+  db.close();
+  ```
+  Then locate the asset by name and **double-click** the row to open its query tab. (Seeding a
+  non-SQLite asset also needs its credential row, which is encrypted with the harness's
+  `OPSKAT_MASTER_KEY` — driving the create-asset form is simpler there.)
+- **A spec that asserts localized text** → force the language before load with
+  `page.addInitScript(() => localStorage.setItem("language", "zh-CN"))` (i18n init reads
+  `localStorage.language`); otherwise the app follows the auto-detected default and your `是/否`
+  vs `YES/NO` assertion is environment-dependent.
 - **A spec where the app must really connect somewhere** → stand up a minimal protocol mock
   as an extra `webServer` entry (TCP `port` readiness, not `url`), point the asset at
   `127.0.0.1:<port>`, and assert via the form's **Test Connection** (`asset-test-connection`):
