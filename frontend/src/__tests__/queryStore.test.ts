@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useTabStore } from "../stores/tabStore";
 import { useQueryStore } from "../stores/queryStore";
 import { useAssetStore } from "../stores/assetStore";
-import { asset_entity } from "../../wailsjs/go/models";
+import { asset_entity, query_svc } from "../../wailsjs/go/models";
 import { ExecuteSQL, ListDatabaseObjects } from "../../wailsjs/go/query/Query";
 import { RedisGetKeyDetail } from "../../wailsjs/go/redis/Redis";
 import { RedisListDatabases, RedisScanKeys } from "../../wailsjs/go/redis/Redis";
@@ -553,7 +553,7 @@ describe("queryStore database actions", () => {
       procedures: [],
       functions: [],
       triggers: [{ name: "trg_orders_ai", type: "trigger" }],
-    });
+    } as unknown as query_svc.DatabaseObjects);
 
     await useQueryStore.getState().refreshTables("query-30", "main");
 
