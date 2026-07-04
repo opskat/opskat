@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
 import Markdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
+import { markdownComponents } from "@/components/MarkdownLink";
 import remarkGfm from "remark-gfm";
 import {
   Button,
@@ -68,7 +69,7 @@ const mdRehypePlugins = [rehypeSanitize];
 const MarkdownContent = memo(function MarkdownContent({ content }: { content: string }) {
   const deferred = useDeferredValue(content);
   return (
-    <Markdown remarkPlugins={mdRemarkPlugins} rehypePlugins={mdRehypePlugins}>
+    <Markdown remarkPlugins={mdRemarkPlugins} rehypePlugins={mdRehypePlugins} components={markdownComponents}>
       {deferred}
     </Markdown>
   );
