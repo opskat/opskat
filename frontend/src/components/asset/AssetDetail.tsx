@@ -4,6 +4,7 @@ import { Server, Pencil, Trash2, TerminalSquare, Loader2 } from "lucide-react";
 import Markdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
+import { markdownComponents } from "@/components/MarkdownLink";
 import { Button, Separator, ConfirmDialog, Tooltip, TooltipContent, TooltipTrigger } from "@opskat/ui";
 import { toast } from "sonner";
 import { useAssetStore } from "@/stores/assetStore";
@@ -346,7 +347,11 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
             <div className="text-sm">
               <span className="text-muted-foreground">{t("asset.description")}</span>
               <div className="mt-1 prose prose-sm dark:prose-invert prose-p:my-1 prose-pre:my-1 prose-pre:overflow-x-auto max-w-none">
-                <Markdown remarkPlugins={[remarkBreaks]} rehypePlugins={[rehypeSanitize]}>
+                <Markdown
+                  remarkPlugins={[remarkBreaks]}
+                  rehypePlugins={[rehypeSanitize]}
+                  components={markdownComponents}
+                >
                   {asset.Description}
                 </Markdown>
               </div>
