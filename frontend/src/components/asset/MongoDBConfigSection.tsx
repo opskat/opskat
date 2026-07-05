@@ -4,7 +4,7 @@ import { useConfigSection } from "@/components/asset/useConfigSection";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
-import { resolveSaveProxyPassword } from "./proxyConfig";
+import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
 import {
   buildMongoDBConfig,
   parseMongoDBConfig,
@@ -93,25 +93,36 @@ export const MongoDBConfigSection = forwardRef<AssetFormHandle, ConfigSectionPro
     init: (a) => (a ? parseMongoDBConfig(a.Config, a.sshTunnelId || 0) : { ...MONGODB_DEFAULTS }),
     validate: (s) => {
       const ok = s.connectionMode === "uri" ? !!s.connectionURI.trim() : !!s.host.trim();
-      const saveDisabledReason = ok
-        ? ""
-        : s.connectionMode === "uri"
-          ? "asset.formMissingMongoUri"
-          : "asset.formMissingHost";
-      return { canTest: ok, canSave: ok, saveDisabledReason };
+      const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
+      const canUse = ok && !proxyChainError;
+      let saveDisabledReason = "";
+      if (!canUse) {
+        saveDisabledReason =
+          proxyChainError || (s.connectionMode === "uri" ? "asset.formMissingMongoUri" : "asset.formMissingHost");
+      }
+      return { canTest: canUse, canSave: canUse, saveDisabledReason };
     },
     build: async (s, ctx) => ({
       configJSON: buildMongoDBConfig(
         s,
         await resolveSaveCredential(cred.value, ctx.encryptPassword),
         false,
-        await resolveSaveProxyPassword(s, ctx.encryptPassword)
+        await resolveSaveProxyPassword(s, ctx.encryptPassword),
+        await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword)
       ),
       sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
     }),
     buildTest: async (s) => ({
       assetType: "mongodb",
-      configJSON: buildMongoDBConfig(s, resolveTestCredential(cred.value), true, s.proxyPassword),
+      configJSON: buildMongoDBConfig(
+        s,
+        resolveTestCredential(cred.value),
+        true,
+        s.proxyPassword,
+        Object.fromEntries(
+          s.proxyChainLayers.map((layer) => [layer.id, { password: layer.password, token: layer.token }])
+        )
+      ),
       password: cred.value.password,
     }),
     deps: [cred.value],

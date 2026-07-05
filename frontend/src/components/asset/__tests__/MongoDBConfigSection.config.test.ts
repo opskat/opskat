@@ -5,7 +5,7 @@ import {
   MONGODB_DEFAULTS,
   type MongoDBFormState,
 } from "@/components/asset/MongoDBConfigSection.config";
-import { CONNECTION_DEFAULTS } from "@/components/asset/proxyConfig";
+import { CONNECTION_DEFAULTS, socks5ProxyLayer, sshProxyLayer } from "@/components/asset/proxyConfig";
 
 const FULL_MANUAL: MongoDBFormState = {
   ...CONNECTION_DEFAULTS,
@@ -193,6 +193,7 @@ describe("parseMongoDBConfig (镜像旧 loadMongoDBConfig 非凭据字段)", () 
       tls: true,
       connectionType: "jumphost",
       sshTunnelId: 5,
+      proxyChainLayers: [sshProxyLayer(5, "SSH Tunnel", "legacy-ssh-5")],
     });
   });
 
@@ -227,6 +228,15 @@ describe("parseMongoDBConfig (镜像旧 loadMongoDBConfig 非凭据字段)", () 
     expect(s.proxyUsername).toBe("pu");
     expect(s.proxyPassword).toBe("");
     expect(s.encryptedProxyPassword).toBe("PROXYENC");
+    expect(s.proxyChainLayers).toEqual([
+      socks5ProxyLayer({
+        type: "socks5",
+        host: "p.example.com",
+        port: 1081,
+        username: "pu",
+        password: "PROXYENC",
+      }),
+    ]);
   });
 
   it("uri 模式带 proxy 回填(connectionMode=uri 且 connectionType=proxy)", () => {
@@ -263,15 +273,24 @@ describe("parseMongoDBConfig (镜像旧 loadMongoDBConfig 非凭据字段)", () 
       '{"host":"mongo.example.com","port":27017,"username":"admin","password":"OLD",' +
       '"replica_set":"rs0","database":"mydb",' +
       '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}}';
+    const expected =
+      '{"host":"mongo.example.com","port":27017,"username":"admin","password":"OLD",' +
+      '"replica_set":"rs0","database":"mydb",' +
+      '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"},' +
+      '"proxy_chain":{"layers":[{"id":"legacy-socks5-proxy","name":"SOCKS5 Proxy","enabled":true,"type":"socks5","order":1,"host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}]}}';
     const state = parseMongoDBConfig(original);
-    expect(buildMongoDBConfig(state, { password: "OLD" }, false, state.encryptedProxyPassword)).toBe(original);
+    expect(buildMongoDBConfig(state, { password: "OLD" }, false, state.encryptedProxyPassword)).toBe(expected);
   });
 
   it("parse→build 往返(uri 模式 + proxy,密文沿用)", () => {
     const original =
       '{"connection_uri":"mongodb://user:pass@host:27017/db","username":"admin",' +
       '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"password":"PROXYENC"}}';
+    const expected =
+      '{"connection_uri":"mongodb://user:pass@host:27017/db","username":"admin",' +
+      '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"password":"PROXYENC"},' +
+      '"proxy_chain":{"layers":[{"id":"legacy-socks5-proxy","name":"SOCKS5 Proxy","enabled":true,"type":"socks5","order":1,"host":"p.example.com","port":1081,"password":"PROXYENC"}]}}';
     const state = parseMongoDBConfig(original);
-    expect(buildMongoDBConfig(state, {}, false, state.encryptedProxyPassword)).toBe(original);
+    expect(buildMongoDBConfig(state, {}, false, state.encryptedProxyPassword)).toBe(expected);
   });
 });

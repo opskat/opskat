@@ -5,7 +5,7 @@ import {
   REDIS_DEFAULTS,
   type RedisFormState,
 } from "@/components/asset/RedisConfigSection.config";
-import { CONNECTION_DEFAULTS } from "@/components/asset/proxyConfig";
+import { CONNECTION_DEFAULTS, socks5ProxyLayer, sshProxyLayer } from "@/components/asset/proxyConfig";
 
 const FULL: RedisFormState = {
   ...CONNECTION_DEFAULTS,
@@ -135,6 +135,7 @@ describe("parseRedisConfig (锁旧 loadRedisConfig 非凭据字段)", () => {
       keySeparator: "/",
       connectionType: "jumphost",
       sshTunnelId: 5,
+      proxyChainLayers: [sshProxyLayer(5, "SSH Tunnel", "legacy-ssh-5")],
     });
   });
   it("缺字段用默认", () => {
@@ -157,6 +158,15 @@ describe("parseRedisConfig (锁旧 loadRedisConfig 非凭据字段)", () => {
     expect(s.proxyUsername).toBe("pu");
     expect(s.proxyPassword).toBe("");
     expect(s.encryptedProxyPassword).toBe("PROXYENC");
+    expect(s.proxyChainLayers).toEqual([
+      socks5ProxyLayer({
+        type: "socks5",
+        host: "p.example.com",
+        port: 1081,
+        username: "pu",
+        password: "PROXYENC",
+      }),
+    ]);
   });
   it("assetTunnelId 入参优先派生 jumphost(镜像 asset.sshTunnelId 优先)", () => {
     const s = parseRedisConfig('{"host":"h","proxy":{"type":"socks5","host":"p","port":1080}}', 6);
@@ -168,7 +178,12 @@ describe("parseRedisConfig (锁旧 loadRedisConfig 非凭据字段)", () => {
       '{"host":"redis.example.com","port":6379,"username":"u","password":"OLD",' +
       '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"},' +
       '"command_timeout_seconds":30,"scan_page_size":200}';
+    const expected =
+      '{"host":"redis.example.com","port":6379,"username":"u","password":"OLD",' +
+      '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"},' +
+      '"proxy_chain":{"layers":[{"id":"legacy-socks5-proxy","name":"SOCKS5 Proxy","enabled":true,"type":"socks5","order":1,"host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}]},' +
+      '"command_timeout_seconds":30,"scan_page_size":200}';
     const state = parseRedisConfig(original);
-    expect(buildRedisConfig(state, { password: "OLD" }, false, state.encryptedProxyPassword)).toBe(original);
+    expect(buildRedisConfig(state, { password: "OLD" }, false, state.encryptedProxyPassword)).toBe(expected);
   });
 });

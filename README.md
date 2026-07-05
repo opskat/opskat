@@ -84,6 +84,16 @@ Even before you turn on the AI, OpsKat is a full-featured terminal and asset man
 - Encrypted credential storage
 - Import from SSH config / Tabby
 
+### Proxy Chains
+
+SSH and remote data assets can use an ordered proxy chain when direct access is not enough. A chain may combine:
+
+- **SSH tunnel** layers that reuse an existing SSH asset as the next hop
+- **SOCKS5 proxy** layers with optional username/password authentication
+- **HTTP script tunnel** layers compatible with DBX-style tunnel scripts (`URL + token + timeout`)
+
+The same chain model is shared by SSH, SQL databases, Redis, MongoDB, Kafka, etcd, and Kubernetes connections. Existing single SSH tunnel (`sshTunnelId` / `ssh_asset_id`) and SOCKS5 `proxy` settings are still read and are mapped to a one-layer chain when an asset is edited; once a new chain is saved, `proxy_chain` takes precedence.
+
 ## 🤖 Let AI Operate for You
 
 Configure an AI provider and you can describe what you need in plain language — the agent connects and does it for you:

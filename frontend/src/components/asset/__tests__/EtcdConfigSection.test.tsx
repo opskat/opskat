@@ -26,7 +26,8 @@ describe("EtcdConfigSection ref 契约", () => {
     expect(built).toEqual({
       configJSON:
         '{"endpoints":["a:2379","b:2379"],"username":"u","password":"OLD","tls":true,' +
-        '"tls_insecure":true,"dial_timeout_seconds":5,"command_timeout_seconds":10,"ssh_asset_id":9}',
+        '"tls_insecure":true,"dial_timeout_seconds":5,"command_timeout_seconds":10,"ssh_asset_id":9,' +
+        '"proxy_chain":{"layers":[{"id":"legacy-ssh-9","name":"SSH Tunnel","enabled":true,"type":"ssh","order":1,"ssh_asset_id":9}]}}',
       sshTunnelId: 9,
     });
     const tc = await ref.current!.buildTestConfig!(ctx);

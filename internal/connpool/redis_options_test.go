@@ -53,7 +53,8 @@ func TestConfigureRedisTransport(t *testing.T) {
 		opts, err := buildRedisOptions(cfg, "")
 		require.NoError(t, err)
 
-		tunnel := configureRedisTransport(opts, &asset_entity.Asset{}, cfg, nil)
+		tunnel, err := configureRedisTransport(opts, &asset_entity.Asset{}, cfg, nil)
+		require.NoError(t, err)
 		assert.Nil(t, tunnel)
 		assert.Nil(t, opts.Dialer)
 		assert.NotNil(t, opts.TLSConfig)
@@ -67,7 +68,8 @@ func TestConfigureRedisTransport(t *testing.T) {
 		opts, err := buildRedisOptions(cfg, "")
 		require.NoError(t, err)
 
-		tunnel := configureRedisTransport(opts, &asset_entity.Asset{}, cfg, nil)
+		tunnel, err := configureRedisTransport(opts, &asset_entity.Asset{}, cfg, nil)
+		require.NoError(t, err)
 		assert.Nil(t, tunnel)
 		assert.NotNil(t, opts.Dialer)
 		assert.Nil(t, opts.TLSConfig)
@@ -84,7 +86,8 @@ func TestConfigureRedisTransport(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, opts.TLSConfig)
 
-		tunnel := configureRedisTransport(opts, &asset_entity.Asset{}, cfg, nil)
+		tunnel, err := configureRedisTransport(opts, &asset_entity.Asset{}, cfg, nil)
+		require.NoError(t, err)
 		assert.Nil(t, tunnel)
 		assert.NotNil(t, opts.Dialer)
 		assert.Nil(t, opts.TLSConfig)
@@ -99,7 +102,8 @@ func TestConfigureRedisTransport(t *testing.T) {
 		require.NoError(t, err)
 
 		pool := sshpool.NewPool(nil, time.Minute)
-		tunnel := configureRedisTransport(opts, &asset_entity.Asset{SSHTunnelID: 5}, cfg, pool)
+		tunnel, err := configureRedisTransport(opts, &asset_entity.Asset{SSHTunnelID: 5}, cfg, pool)
+		require.NoError(t, err)
 		assert.NotNil(t, tunnel)
 		assert.NotNil(t, opts.Dialer)
 		assert.Nil(t, opts.TLSConfig)

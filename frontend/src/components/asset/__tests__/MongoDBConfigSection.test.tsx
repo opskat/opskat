@@ -79,7 +79,8 @@ describe("MongoDBConfigSection ref 契约", () => {
     expect(built).toEqual({
       configJSON:
         '{"host":"127.0.0.1","port":27017,"username":"admin","password":"OLD",' +
-        '"replica_set":"rs0","auth_source":"admin","database":"mydb","tls":true}',
+        '"replica_set":"rs0","auth_source":"admin","database":"mydb","tls":true,' +
+        '"proxy_chain":{"layers":[{"id":"legacy-ssh-5","name":"SSH Tunnel","enabled":true,"type":"ssh","order":1,"ssh_asset_id":5}]}}',
       sshTunnelId: 5,
     });
     // test:无 asset 行 → config 末尾带 ssh_asset_id(锁旧 handleTestMongoDBConnection)。
@@ -88,7 +89,8 @@ describe("MongoDBConfigSection ref 契约", () => {
       assetType: "mongodb",
       configJSON:
         '{"host":"127.0.0.1","port":27017,"username":"admin","password":"OLD",' +
-        '"replica_set":"rs0","auth_source":"admin","database":"mydb","tls":true,"ssh_asset_id":5}',
+        '"replica_set":"rs0","auth_source":"admin","database":"mydb","tls":true,"ssh_asset_id":5,' +
+        '"proxy_chain":{"layers":[{"id":"legacy-ssh-5","name":"SSH Tunnel","enabled":true,"type":"ssh","order":1,"ssh_asset_id":5}]}}',
       password: "",
     });
   });

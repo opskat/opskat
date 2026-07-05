@@ -4,7 +4,7 @@ import { useConfigSection } from "@/components/asset/useConfigSection";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
-import { resolveSaveProxyPassword } from "./proxyConfig";
+import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
 import {
   buildEtcdConfig,
   parseEtcdConfig,
@@ -96,19 +96,33 @@ export const EtcdConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>
     init: (a) => (a ? parseEtcdConfig(a.Config, a.sshTunnelId || 0) : { ...ETCD_DEFAULTS }),
     validate: (s) => {
       const ok = parseEtcdEndpoints(s.endpoints).length > 0;
-      return { canTest: ok, canSave: ok, saveDisabledReason: ok ? "" : "etcd.error.endpointsRequired" };
+      const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
+      const canUse = ok && !proxyChainError;
+      return {
+        canTest: canUse,
+        canSave: canUse,
+        saveDisabledReason: ok ? proxyChainError : "etcd.error.endpointsRequired",
+      };
     },
     build: async (s, ctx) => ({
       configJSON: buildEtcdConfig(
         s,
         await resolveSaveCredential(cred.value, ctx.encryptPassword),
-        await resolveSaveProxyPassword(s, ctx.encryptPassword)
+        await resolveSaveProxyPassword(s, ctx.encryptPassword),
+        await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword)
       ),
       sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
     }),
     buildTest: async (s) => ({
       assetType: "etcd",
-      configJSON: buildEtcdConfig(s, resolveTestCredential(cred.value), s.proxyPassword),
+      configJSON: buildEtcdConfig(
+        s,
+        resolveTestCredential(cred.value),
+        s.proxyPassword,
+        Object.fromEntries(
+          s.proxyChainLayers.map((layer) => [layer.id, { password: layer.password, token: layer.token }])
+        )
+      ),
       password: cred.value.password,
     }),
     deps: [cred.value],

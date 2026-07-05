@@ -167,7 +167,16 @@ func DialEtcd(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.
 
 	var tunnel *SSHTunnel
 	tunnelID := etcdTunnelID(asset, cfg)
-	if tunnelID > 0 && sshPool != nil && len(cfg.Endpoints) > 0 {
+	if cfg.ProxyChain != nil {
+		dial, err := chainDialFunc(cfg.ProxyChain)
+		if err != nil {
+			return nil, nil, err
+		}
+		clientCfg.DialOptions = append(clientCfg.DialOptions,
+			grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+				return dial(ctx, addr)
+			}))
+	} else if tunnelID > 0 && sshPool != nil && len(cfg.Endpoints) > 0 {
 		host, portStr, err := net.SplitHostPort(cfg.Endpoints[0])
 		if err != nil {
 			return nil, nil, fmt.Errorf("解析 etcd endpoint 失败: %w", err)

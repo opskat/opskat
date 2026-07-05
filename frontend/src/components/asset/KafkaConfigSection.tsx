@@ -7,7 +7,7 @@ import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
 import { useConfigSection } from "@/components/asset/useConfigSection";
-import { resolveSaveProxyPassword } from "./proxyConfig";
+import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
 import { credential_entity } from "../../../wailsjs/go/models";
 import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { useAssetCredential } from "./useAssetCredential";
@@ -278,25 +278,31 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
     init: (a) => (a ? parseKafkaConfig(a.Config, a.sshTunnelId || 0) : { ...KAFKA_DEFAULTS }),
     validate: (s) => {
       const brokersOk = kafkaBrokers(s.brokersText).length > 0;
+      const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
       let saveDisabledReason = "";
       if (!brokersOk) {
         saveDisabledReason = "asset.formMissingKafkaBrokers";
+      } else if (proxyChainError) {
+        saveDisabledReason = proxyChainError;
       } else if (schemaRegistryInvalid) {
         saveDisabledReason = "asset.kafkaSchemaRegistryURLRequired";
       } else if (connectInvalid) {
         saveDisabledReason = "asset.kafkaConnectClusterInvalid";
       }
       return {
-        canTest: brokersOk,
-        canSave: brokersOk && !schemaRegistryInvalid && !connectInvalid,
+        canTest: brokersOk && !proxyChainError,
+        canSave: brokersOk && !proxyChainError && !schemaRegistryInvalid && !connectInvalid,
         saveDisabledReason,
       };
     },
     validityDeps: [schemaRegistryInvalid, connectInvalid],
     build: async (s, ctx) => {
       validateKafkaCompanions(schemaRegistry, connectEnabled, connectClusters, t); // 非法 throw → handleSubmit toast
-      const proxyPassword = await resolveSaveProxyPassword(s, ctx.encryptPassword);
-      const cfg = buildKafkaBaseConfig(s, proxyPassword);
+      const [proxyPassword, proxyChainSecrets] = await Promise.all([
+        resolveSaveProxyPassword(s, ctx.encryptPassword),
+        resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword),
+      ]);
+      const cfg = buildKafkaBaseConfig(s, proxyPassword, proxyChainSecrets);
       if (s.saslMechanism !== "none") {
         appendKafkaCredential(cfg, await resolveSaveCredential(cred.value, ctx.encryptPassword));
       }
@@ -311,7 +317,13 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
     },
     buildTest: async (s) => {
       // 测试:proxy 密码仅明文(无加密)
-      const cfg = buildKafkaBaseConfig(s, s.proxyPassword);
+      const cfg = buildKafkaBaseConfig(
+        s,
+        s.proxyPassword,
+        Object.fromEntries(
+          s.proxyChainLayers.map((layer) => [layer.id, { password: layer.password, token: layer.token }])
+        )
+      );
       if (s.saslMechanism !== "none") appendKafkaCredential(cfg, resolveTestCredential(cred.value));
       return { assetType: "kafka", configJSON: JSON.stringify(cfg), password: cred.value.password };
     },

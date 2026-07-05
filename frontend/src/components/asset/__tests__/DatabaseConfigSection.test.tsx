@@ -116,7 +116,9 @@ describe("DatabaseConfigSection ref 契约", () => {
     expect(built).toEqual({
       configJSON:
         '{"driver":"postgresql","host":"pg.example.com","port":5432,"username":"postgres","password":"OLD",' +
-        '"ssh_asset_id":5,"ssl_mode":"require","database":"mydb"}',
+        '"ssh_asset_id":5,"ssl_mode":"require",' +
+        '"proxy_chain":{"layers":[{"id":"legacy-ssh-5","name":"SSH Tunnel","enabled":true,"type":"ssh","order":1,"ssh_asset_id":5}]},' +
+        '"database":"mydb"}',
       sshTunnelId: 5,
     });
     const tc = await ref.current!.buildTestConfig!(ctx);

@@ -81,7 +81,9 @@ describe("KafkaConfigSection ref 契约", () => {
     expect(built.configJSON).toBe(
       '{"brokers":["b1:9092","b2:9092"],"client_id":"opskat","sasl_mechanism":"plain","username":"admin",' +
         '"tls":true,"tls_insecure":true,"request_timeout_seconds":30,"message_preview_bytes":4096,' +
-        '"message_fetch_limit":50,"ssh_asset_id":4,"password":"MAINENC",' +
+        '"message_fetch_limit":50,"ssh_asset_id":4,' +
+        '"proxy_chain":{"layers":[{"id":"legacy-ssh-4","name":"SSH Tunnel","enabled":true,"type":"ssh","order":1,"ssh_asset_id":4}]},' +
+        '"password":"MAINENC",' +
         '"schema_registry":{"enabled":true,"url":"http://sr:8081","auth_type":"basic","username":"sru",' +
         '"password":"SRENC","tls_insecure":true},' +
         '"connect":{"enabled":true,"clusters":[{"name":"primary","url":"http://connect:8083",' +

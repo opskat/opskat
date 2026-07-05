@@ -7,7 +7,7 @@ import {
   DATABASE_DEFAULTS,
   type DatabaseFormState,
 } from "@/components/asset/DatabaseConfigSection.config";
-import { CONNECTION_DEFAULTS } from "@/components/asset/proxyConfig";
+import { CONNECTION_DEFAULTS, socks5ProxyLayer, sshProxyLayer } from "@/components/asset/proxyConfig";
 
 const FULL_MYSQL: DatabaseFormState = {
   ...CONNECTION_DEFAULTS,
@@ -243,6 +243,7 @@ describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", (
       path: "",
       connectionType: "jumphost",
       sshTunnelId: 5,
+      proxyChainLayers: [sshProxyLayer(5, "SSH Tunnel", "legacy-ssh-5")],
     });
   });
 
@@ -291,6 +292,15 @@ describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", (
     expect(s.proxyUsername).toBe("pu");
     expect(s.proxyPassword).toBe("");
     expect(s.encryptedProxyPassword).toBe("PROXYENC");
+    expect(s.proxyChainLayers).toEqual([
+      socks5ProxyLayer({
+        type: "socks5",
+        host: "p.example.com",
+        port: 1081,
+        username: "pu",
+        password: "PROXYENC",
+      }),
+    ]);
   });
 
   it("assetTunnelId 入参优先派生 jumphost(镜像 asset.sshTunnelId 优先)", () => {
@@ -303,8 +313,13 @@ describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", (
     const original =
       '{"driver":"mysql","host":"db.example.com","port":3306,"username":"root","password":"OLD",' +
       '"ssh_asset_id":5,"tls":true,"database":"mydb","read_only":true,"params":"charset=utf8mb4"}';
+    const expected =
+      '{"driver":"mysql","host":"db.example.com","port":3306,"username":"root","password":"OLD",' +
+      '"ssh_asset_id":5,"tls":true,' +
+      '"proxy_chain":{"layers":[{"id":"legacy-ssh-5","name":"SSH Tunnel","enabled":true,"type":"ssh","order":1,"ssh_asset_id":5}]},' +
+      '"database":"mydb","read_only":true,"params":"charset=utf8mb4"}';
     const state = parseDatabaseConfig(original);
-    expect(buildDatabaseConfig(state, { password: "OLD" })).toBe(original);
+    expect(buildDatabaseConfig(state, { password: "OLD" })).toBe(expected);
   });
 
   it("parse→build 往返(postgresql ssl_mode)", () => {
@@ -326,8 +341,13 @@ describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", (
       '{"driver":"mysql","host":"db.example.com","port":3306,"username":"root","password":"OLD",' +
       '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"},' +
       '"database":"mydb"}';
+    const expected =
+      '{"driver":"mysql","host":"db.example.com","port":3306,"username":"root","password":"OLD",' +
+      '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"},' +
+      '"proxy_chain":{"layers":[{"id":"legacy-socks5-proxy","name":"SOCKS5 Proxy","enabled":true,"type":"socks5","order":1,"host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}]},' +
+      '"database":"mydb"}';
     const state = parseDatabaseConfig(original);
-    expect(buildDatabaseConfig(state, { password: "OLD" }, state.encryptedProxyPassword)).toBe(original);
+    expect(buildDatabaseConfig(state, { password: "OLD" }, state.encryptedProxyPassword)).toBe(expected);
   });
 });
 

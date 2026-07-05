@@ -49,12 +49,28 @@ func (d *mongoProxyDialer) DialContext(ctx context.Context, network, address str
 	return socksdial.Dial(ctx, d.proxy, address)
 }
 
+type mongoChainDialer struct {
+	dial dialContextFunc
+}
+
+func (d *mongoChainDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	return d.dial(ctx, address)
+}
+
 // configureMongoTransport 按 隧道 > 代理 > 直连 设置 clientOpts 的 dialer,返回隧道(可为 nil)。
 // 仅隧道场景强制 SetDirect:隧道只通向单一节点;代理按目标地址远端解析,不能禁用副本集发现。
 func configureMongoTransport(clientOpts *options.ClientOptions, asset *asset_entity.Asset, cfg *asset_entity.MongoDBConfig, sshPool *sshpool.Pool) (*SSHTunnel, error) {
 	tunnelID := asset.SSHTunnelID
 	if tunnelID == 0 {
 		tunnelID = cfg.SSHAssetID // backward compat
+	}
+	if cfg.ProxyChain != nil {
+		dial, err := chainDialFunc(cfg.ProxyChain)
+		if err != nil {
+			return nil, err
+		}
+		clientOpts.SetDialer(&mongoChainDialer{dial: dial})
+		return nil, nil
 	}
 	if tunnelID > 0 && sshPool != nil {
 		var host string

@@ -6,7 +6,7 @@ import { Field } from "@/components/asset/fields";
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
-import { resolveSaveProxyPassword } from "./proxyConfig";
+import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
 import { buildK8sConfig, parseK8sConfig, K8S_DEFAULTS, type K8sFormState } from "./K8sConfigSection.config";
 import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 
@@ -27,8 +27,10 @@ export const K8sConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
     init: (a) => (a ? parseK8sConfig(a.Config ?? "", a.sshTunnelId || 0) : { ...K8S_DEFAULTS }),
     validate: (s) => {
       // kubeconfig 新建必填;编辑态空也可保存(保全旧 saveDisabledReason 逻辑)。
-      const canSave = isEditing || !!s.kubeconfig.trim();
-      return { canTest: false, canSave, saveDisabledReason: canSave ? "" : "asset.formMissingKubeconfig" };
+      const baseOk = isEditing || !!s.kubeconfig.trim();
+      const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
+      const canSave = baseOk && !proxyChainError;
+      return { canTest: false, canSave, saveDisabledReason: baseOk ? proxyChainError : "asset.formMissingKubeconfig" };
     },
     build: async (s, ctx) => {
       let ciphertext = "";
@@ -45,7 +47,12 @@ export const K8sConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
         }
       }
       return {
-        configJSON: buildK8sConfig(s, ciphertext, await resolveSaveProxyPassword(s, ctx.encryptPassword)),
+        configJSON: buildK8sConfig(
+          s,
+          ciphertext,
+          await resolveSaveProxyPassword(s, ctx.encryptPassword),
+          await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword)
+        ),
         sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
       };
     },

@@ -9,7 +9,7 @@ import {
   parseKafkaConfig,
   type KafkaFormState,
 } from "@/components/asset/KafkaConfigSection.config";
-import { CONNECTION_DEFAULTS } from "@/components/asset/proxyConfig";
+import { CONNECTION_DEFAULTS, socks5ProxyLayer, sshProxyLayer } from "@/components/asset/proxyConfig";
 
 const FULL: KafkaFormState = {
   ...CONNECTION_DEFAULTS,
@@ -193,6 +193,7 @@ describe("parseKafkaConfig (锁旧 loadKafkaConfig 非凭据/非伴随字段)", 
       messageFetchLimit: 100,
       connectionType: "jumphost",
       sshTunnelId: 5,
+      proxyChainLayers: [sshProxyLayer(5, "SSH Tunnel", "legacy-ssh-5")],
     });
   });
   it("缺字段用默认", () => {
@@ -220,6 +221,7 @@ describe("parseKafkaConfig (锁旧 loadKafkaConfig 非凭据/非伴随字段)", 
       messageFetchLimit: 50,
       connectionType: "jumphost",
       sshTunnelId: 3,
+      proxyChainLayers: [sshProxyLayer(3, "SSH Tunnel", "legacy-ssh-3")],
     });
   });
 
@@ -233,6 +235,15 @@ describe("parseKafkaConfig (锁旧 loadKafkaConfig 非凭据/非伴随字段)", 
     expect(s.proxyUsername).toBe("pu");
     expect(s.proxyPassword).toBe("");
     expect(s.encryptedProxyPassword).toBe("PROXYENC");
+    expect(s.proxyChainLayers).toEqual([
+      socks5ProxyLayer({
+        type: "socks5",
+        host: "p.example.com",
+        port: 1081,
+        username: "pu",
+        password: "PROXYENC",
+      }),
+    ]);
   });
 
   it("assetTunnelId 入参优先派生 jumphost(镜像 asset.sshTunnelId 优先)", () => {
@@ -246,8 +257,13 @@ describe("parseKafkaConfig (锁旧 loadKafkaConfig 非凭据/非伴随字段)", 
       '{"brokers":["b1:9092"],"client_id":"opskat","sasl_mechanism":"none",' +
       '"request_timeout_seconds":30,"message_preview_bytes":4096,"message_fetch_limit":50,' +
       '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}}';
+    const expected =
+      '{"brokers":["b1:9092"],"client_id":"opskat","sasl_mechanism":"none",' +
+      '"request_timeout_seconds":30,"message_preview_bytes":4096,"message_fetch_limit":50,' +
+      '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"},' +
+      '"proxy_chain":{"layers":[{"id":"legacy-socks5-proxy","name":"SOCKS5 Proxy","enabled":true,"type":"socks5","order":1,"host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}]}}';
     const state = parseKafkaConfig(original);
-    expect(JSON.stringify(buildKafkaBaseConfig(state, state.encryptedProxyPassword))).toBe(original);
+    expect(JSON.stringify(buildKafkaBaseConfig(state, state.encryptedProxyPassword))).toBe(expected);
   });
 });
 

@@ -129,12 +129,14 @@ describe("SSHConfigSection ref 契约", () => {
     const built = await ref.current!.buildConfig(ctx);
     expect(built.configJSON).toBe(
       '{"host":"h","port":22,"username":"u","auth_type":"password",' +
-        '"proxy":{"type":"socks5","host":"px","port":1080,"username":"pu","password":"PXENC"}}'
+        '"proxy":{"type":"socks5","host":"px","port":1080,"username":"pu","password":"PXENC"},' +
+        '"proxy_chain":{"layers":[{"id":"legacy-socks5-proxy","name":"SOCKS5 Proxy","enabled":true,"type":"socks5","order":1,"host":"px","port":1080,"username":"pu","password":"PXENC"}]}}'
     );
     const tc = await ref.current!.buildTestConfig!(ctx);
     expect(tc.configJSON).toBe(
       '{"host":"h","port":22,"username":"u","auth_type":"password",' +
-        '"proxy":{"type":"socks5","host":"px","port":1080,"username":"pu"}}'
+        '"proxy":{"type":"socks5","host":"px","port":1080,"username":"pu"},' +
+        '"proxy_chain":{"layers":[{"id":"legacy-socks5-proxy","name":"SOCKS5 Proxy","enabled":true,"type":"socks5","order":1,"host":"px","port":1080,"username":"pu","password":"PXENC"}]}}'
     );
   });
 
@@ -148,10 +150,16 @@ describe("SSHConfigSection ref 契约", () => {
     render(<SSHConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
     const built = await ref.current!.buildConfig(ctx);
     expect(built.sshTunnelId).toBe(42);
-    expect(built.configJSON).toBe('{"host":"h","port":22,"username":"u","auth_type":"password"}');
+    expect(built.configJSON).toBe(
+      '{"host":"h","port":22,"username":"u","auth_type":"password",' +
+        '"proxy_chain":{"layers":[{"id":"legacy-ssh-42","name":"SSH Tunnel","enabled":true,"type":"ssh","order":1,"ssh_asset_id":42}]}}'
+    );
     expect(built.configJSON).not.toContain("jump_host_id");
     const tc = await ref.current!.buildTestConfig!(ctx);
-    expect(tc.configJSON).toBe('{"host":"h","port":22,"username":"u","auth_type":"password","jump_host_id":42}');
+    expect(tc.configJSON).toBe(
+      '{"host":"h","port":22,"username":"u","auth_type":"password","jump_host_id":42,' +
+        '"proxy_chain":{"layers":[{"id":"legacy-ssh-42","name":"SSH Tunnel","enabled":true,"type":"ssh","order":1,"ssh_asset_id":42}]}}'
+    );
   });
 });
 

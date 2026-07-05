@@ -222,13 +222,19 @@ func BuildKafkaOptions(asset *asset_entity.Asset, cfg *asset_entity.KafkaConfig,
 			return nil, err
 		}
 	}
-	if tunnelID > 0 && sshPool == nil {
+	if cfg.ProxyChain == nil && tunnelID > 0 && sshPool == nil {
 		return nil, fmt.Errorf("kafka 配置了 SSH 隧道但 sshPool 不可用")
 	}
 	// 底层拨号:隧道 > 代理 > 直连。franz-go 禁止 Dialer 与 DialTLSConfig 共存,
 	// 自定义拨号时 TLS 在 dialer 内手动包裹(tlsWrappedDialFunc)。
 	var dial dialContextFunc
 	switch {
+	case cfg.ProxyChain != nil:
+		var err error
+		dial, err = chainDialFunc(cfg.ProxyChain)
+		if err != nil {
+			return nil, err
+		}
 	case tunnelID > 0:
 		dial = func(ctx context.Context, addr string) (net.Conn, error) {
 			host, port, err := splitKafkaAddr(addr)
@@ -292,7 +298,19 @@ func KafkaConfigFingerprint(asset *asset_entity.Asset, cfg *asset_entity.KafkaCo
 		passwordRef = "inline:" + hashString(cfg.Password)
 	}
 	proxyRef := ""
-	if cfg.Proxy != nil {
+	if cfg.ProxyChain != nil && len(cfg.ProxyChain.Layers) > 0 {
+		var layerRefs []string
+		if normalized := asset_entity.NormalizeProxyChain(cfg.ProxyChain); normalized != nil {
+			for _, layer := range normalized.Layers {
+				layerRefs = append(layerRefs, strings.Join([]string{
+					layer.Type, layer.Host, strconv.Itoa(layer.Port), strconv.FormatInt(layer.SSHAssetID, 10),
+					layer.Username, hashString(layer.Password), hashString(layer.URL), hashString(layer.Token),
+					strconv.Itoa(layer.TimeoutSeconds),
+				}, "|"))
+			}
+		}
+		proxyRef = strings.Join(layerRefs, "||")
+	} else if cfg.Proxy != nil {
 		proxyRef = strings.Join([]string{
 			cfg.Proxy.Type, cfg.Proxy.Host, strconv.Itoa(cfg.Proxy.Port),
 			cfg.Proxy.Username, hashString(cfg.Proxy.Password),

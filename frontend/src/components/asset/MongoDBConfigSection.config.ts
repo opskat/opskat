@@ -1,9 +1,11 @@
 import type { CredentialFragment } from "./credentialConfig";
 import {
   CONNECTION_DEFAULTS,
+  buildProxyChainJSON,
   buildProxyJSON,
   parseConnectionFields,
   type ConnectionFormFields,
+  type ProxyChainJSON,
   type ProxyConfigJSON,
 } from "./proxyConfig";
 
@@ -45,6 +47,7 @@ interface MongoDBConfig {
   tls?: boolean;
   ssh_asset_id?: number;
   proxy?: ProxyConfigJSON;
+  proxy_chain?: ProxyChainJSON;
 }
 
 /**
@@ -58,7 +61,8 @@ export function buildMongoDBConfig(
   state: MongoDBFormState,
   cred: CredentialFragment,
   includeSshAssetId = false,
-  proxyPassword = ""
+  proxyPassword = "",
+  proxyChainSecrets?: Record<string, { password?: string; token?: string }>
 ): string {
   const cfg: MongoDBConfig = {};
   if (state.connectionMode === "uri" && state.connectionURI) {
@@ -78,6 +82,8 @@ export function buildMongoDBConfig(
     cfg.ssh_asset_id = state.sshTunnelId;
   const proxy = buildProxyJSON(state, proxyPassword);
   if (proxy) cfg.proxy = proxy;
+  const proxyChain = buildProxyChainJSON(state.proxyChainLayers, proxyChainSecrets);
+  if (proxyChain) cfg.proxy_chain = proxyChain;
   return JSON.stringify(cfg);
 }
 
@@ -96,7 +102,7 @@ export function parseMongoDBConfig(configJSON: string, assetTunnelId = 0): Mongo
       authSource: cfg.auth_source || "",
       database: cfg.database || "",
       tls: cfg.tls || false,
-      ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0),
+      ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0, cfg.proxy_chain),
     };
   } catch {
     return { ...MONGODB_DEFAULTS };

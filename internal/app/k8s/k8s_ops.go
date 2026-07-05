@@ -13,6 +13,7 @@ import (
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	k8spkg "github.com/opskat/opskat/internal/pkg/k8s"
+	"github.com/opskat/opskat/internal/pkg/proxychain"
 	"github.com/opskat/opskat/internal/pkg/socksdial"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
@@ -187,6 +188,13 @@ func (k *K8s) k8sClientOptions(asset *asset_entity.Asset, cfg *asset_entity.K8sC
 	opts := make([]k8spkg.ClientOption, 0, 2)
 	if cfg.Context != "" {
 		opts = append(opts, k8spkg.WithContext(cfg.Context))
+	}
+	effectiveChain := asset_entity.EffectiveProxyChain(cfg.ProxyChain, asset.SSHTunnelID, cfg.Proxy)
+	if layers, err := credential_resolver.Default().ResolveProxyChain(context.Background(), effectiveChain, 5); err == nil && len(layers) > 0 {
+		opts = append(opts, k8spkg.WithDial(func(ctx context.Context, _, address string) (net.Conn, error) {
+			return proxychain.Chain{Layers: layers}.Dial(ctx, address)
+		}))
+		return opts
 	}
 
 	switch selectDialSource(asset, cfg, k.pool != nil) {
