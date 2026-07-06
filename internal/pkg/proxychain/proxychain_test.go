@@ -23,8 +23,12 @@ func (c deadlineErrorConn) SetWriteDeadline(time.Time) error {
 
 func TestDeadlineIgnoredConn(t *testing.T) {
 	left, right := net.Pipe()
-	defer left.Close()
-	defer right.Close()
+	defer func() {
+		_ = left.Close()
+	}()
+	defer func() {
+		_ = right.Close()
+	}()
 
 	conn := deadlineIgnoredConn{Conn: deadlineErrorConn{Conn: left}}
 	if err := conn.SetDeadline(time.Now()); err != nil {

@@ -206,7 +206,8 @@ func socks5Connect(conn net.Conn, targetAddr, username, password string) error {
 		if len(username) > 255 || len(password) > 255 {
 			return fmt.Errorf("SOCKS5 用户名或密码过长")
 		}
-		auth := []byte{0x01, byte(len(username))}
+		auth := make([]byte, 0, 2+len(username)+1+len(password))
+		auth = append(auth, 0x01, byte(len(username)))
 		auth = append(auth, username...)
 		auth = append(auth, byte(len(password)))
 		auth = append(auth, password...)
@@ -418,7 +419,9 @@ func (c *httpTunnelConn) doStatus(ctx context.Context, q map[string]string, body
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode == http.StatusNoContent {
 		return resp.StatusCode, nil
 	}

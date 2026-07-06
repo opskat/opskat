@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, Copy, GripVertical, Plus, Trash2 } from "lucide-react";
 import { Button, Checkbox, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { AssetSelect } from "@/components/asset/AssetSelect";
@@ -26,16 +26,12 @@ interface ConnectionMethodFieldsProps {
 /** 连接方式与代理链配置,SSH 与数据库族共用。 */
 export function ConnectionMethodFields({ value, onChange, excludeIds }: ConnectionMethodFieldsProps) {
   const { t } = useTranslation();
-  const layers = value.proxyChainLayers || [];
+  const layers = useMemo(() => value.proxyChainLayers || [], [value.proxyChainLayers]);
   const isChainMode = value.connectionType !== "direct";
-  const [selectedLayerId, setSelectedLayerId] = useState(layers[0]?.id || "");
-  useEffect(() => {
-    if (layers.length === 0) {
-      setSelectedLayerId("");
-      return;
-    }
-    if (!layers.some((layer) => layer.id === selectedLayerId)) setSelectedLayerId(layers[0].id);
-  }, [layers, selectedLayerId]);
+  const [selectedLayerIdValue, setSelectedLayerId] = useState("");
+  const selectedLayerId = layers.some((layer) => layer.id === selectedLayerIdValue)
+    ? selectedLayerIdValue
+    : layers[0]?.id || "";
   const updateLayers = (next: ProxyChainLayerForm[]) => onChange({ proxyChainLayers: next });
   const patchLayer = (id: string, patch: Partial<ProxyChainLayerForm>) =>
     updateLayers(layers.map((layer) => (layer.id === id ? { ...layer, ...patch } : layer)));
@@ -47,9 +43,16 @@ export function ConnectionMethodFields({ value, onChange, excludeIds }: Connecti
     updateLayers(next);
   };
   const duplicateLayer = (layer: ProxyChainLayerForm) => {
+    const existingIds = new Set(layers.map((item) => item.id));
+    let copyIndex = layers.length + 1;
+    let nextId = `${layer.type}-copy-${copyIndex}`;
+    while (existingIds.has(nextId)) {
+      copyIndex += 1;
+      nextId = `${layer.type}-copy-${copyIndex}`;
+    }
     const nextLayer = {
       ...layer,
-      id: `${layer.type}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: nextId,
       name: `${layer.name || t("asset.proxyChainLayer")} Copy`,
       password: "",
       token: "",
