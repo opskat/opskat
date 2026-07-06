@@ -97,13 +97,13 @@ export function ConnectionMethodFields({ value, onChange, excludeIds }: Connecti
 
       {isChainMode && (
         <div className="flex flex-col gap-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0 text-xs text-muted-foreground">
+          <div className="flex flex-col gap-2">
+            <div className="min-w-0 break-words text-xs leading-5 text-muted-foreground">
               {layers.length > 0
                 ? layers.map((layer) => layer.name || t("asset.proxyChainLayer")).join(" > ")
                 : t("asset.proxyChainDirect")}
             </div>
-            <div className="flex shrink-0 gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
                 variant="outline"
