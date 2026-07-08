@@ -31,6 +31,7 @@
     "serial": "Serial Port",
     "local": "Local Terminal",
     "etcd": "etcd",
+    "oss": "Object Storage",
     "sshKeys": "Credentials",
     "settings": "Settings",
     "appearance": "Appearance",
@@ -266,6 +267,7 @@
     "typeK8s": "K8S Cluster",
     "typeSerial": "Serial Port",
     "typeEtcd": "etcd",
+    "typeOSS": "Object Storage",
     "driver": "Database Driver",
     "driverMySQL": "MySQL",
     "driverPostgreSQL": "PostgreSQL",
@@ -2497,6 +2499,28 @@
       "noMatch": "No matching snippets",
       "empty": "No prompt snippets yet",
       "openManager": "Create in Snippets page"
+    }
+  },
+  "oss": {
+    "form": {
+      "provider": "Provider",
+      "providerS3": "Amazon S3",
+      "providerAliyunOSS": "Alibaba Cloud OSS",
+      "providerTencentCOS": "Tencent Cloud COS",
+      "providerMinio": "MinIO",
+      "providerS3Compat": "S3-Compatible",
+      "endpoint": "Endpoint",
+      "endpointPlaceholder": "host or scheme://host:port",
+      "region": "Region",
+      "regionPlaceholder": "e.g. us-east-1",
+      "accessKeyId": "Access Key ID",
+      "secretAccessKey": "Secret Access Key",
+      "usePathStyle": "Path-style addressing",
+      "useSSL": "Use HTTPS",
+      "connectTimeout": "Connect timeout (s)"
+    },
+    "error": {
+      "required": "Endpoint and Access Key ID are required"
     }
   },
   "etcd": {

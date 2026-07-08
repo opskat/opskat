@@ -31,6 +31,7 @@
     "serial": "串口",
     "local": "本地终端",
     "etcd": "etcd",
+    "oss": "对象存储",
     "sshKeys": "密钥管理",
     "settings": "设置",
     "appearance": "外观",
@@ -266,6 +267,7 @@
     "typeK8s": "K8S 集群",
     "typeSerial": "串口",
     "typeEtcd": "etcd",
+    "typeOSS": "对象存储",
     "driver": "数据库类型",
     "driverMySQL": "MySQL",
     "driverPostgreSQL": "PostgreSQL",
@@ -2497,6 +2499,28 @@
       "noMatch": "无匹配的片段",
       "empty": "还没有 prompt 片段",
       "openManager": "到代码片段页创建"
+    }
+  },
+  "oss": {
+    "form": {
+      "provider": "厂商",
+      "providerS3": "Amazon S3",
+      "providerAliyunOSS": "阿里云 OSS",
+      "providerTencentCOS": "腾讯云 COS",
+      "providerMinio": "MinIO",
+      "providerS3Compat": "S3 兼容",
+      "endpoint": "Endpoint",
+      "endpointPlaceholder": "host 或 scheme://host:port",
+      "region": "地域(Region)",
+      "regionPlaceholder": "如 us-east-1",
+      "accessKeyId": "Access Key ID",
+      "secretAccessKey": "Secret Access Key",
+      "usePathStyle": "路径寻址(Path-style)",
+      "useSSL": "使用 HTTPS",
+      "connectTimeout": "连接超时(秒)"
+    },
+    "error": {
+      "required": "Endpoint 和 Access Key ID 必填"
     }
   },
   "etcd": {
