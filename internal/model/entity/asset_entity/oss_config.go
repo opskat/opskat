@@ -8,8 +8,8 @@ import (
 
 // OSSConfig 是对象存储(OSS)资产的每资产配置,序列化到 Asset.Config。
 type OSSConfig struct {
-	Provider        string `json:"provider"`        // s3 | aliyun-oss | tencent-cos | minio | s3-compat
-	Endpoint        string `json:"endpoint"`        // host 或 scheme://host[:port]
+	Provider        string `json:"provider"` // s3 | aliyun-oss | tencent-cos | minio | s3-compat
+	Endpoint        string `json:"endpoint"` // host 或 scheme://host[:port]
 	Region          string `json:"region"`
 	AccessKeyID     string `json:"access_key_id"`
 	SecretAccessKey string `json:"secret_access_key"` // 内联时为 AES-256-GCM 密文;托管时为空
