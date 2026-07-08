@@ -9,11 +9,10 @@ registerAssetType({
   aliases: ["oss"],
   label: "nav.oss",
   category: "databases",
-  // 本期只做「新建/编辑/测试连接」。对象浏览器工作区是 P3:当前无连接目标,
-  // canConnect:false 直接抑制 AssetTree 的双击连接与右键「连接」菜单。
-  // connectAction 是必填(仅 terminal|query),填占位 "query"(canConnect:false 下不可达);
-  // P3 落地浏览器后翻为 true 并在 App.tsx handleConnectAsset 加 oss 分支。
-  canConnect: false,
+  // P3b-1 对象浏览器已落地：canConnect 开启双击/右键「连接」→ 通用 query 路径(App.tsx :287)。
+  // canConnectInNewTab 保持 false —— 与其它 query 资产一致；新标签路径 handleConnectAssetInNewTab
+  // 仅走 terminal connect(),对 query 资产会误路由(见 plan T8 决策,需要新标签需先改造该 handler)。
+  canConnect: true,
   canConnectInNewTab: false,
   connectAction: "query",
   DetailInfoCard: OSSDetailInfoCard,

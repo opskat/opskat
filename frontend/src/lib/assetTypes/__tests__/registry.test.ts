@@ -87,8 +87,8 @@ describe("AssetType Registry", () => {
     expect(getAssetType("oss")!.canOpenFileManager).toBeFalsy();
   });
 
-  it("oss 本期仅新建/编辑/测试(对象浏览器落地前不开连接)", () => {
-    expect(getAssetType("oss")!.canConnect).toBe(false);
+  it("oss 支持连接（对象浏览器已落地），单例 query tab 不支持新标签", () => {
+    expect(getAssetType("oss")!.canConnect).toBe(true);
     expect(getAssetType("oss")!.canConnectInNewTab).toBe(false);
     expect(getAssetType("oss")!.testable).toBe(true);
   });
