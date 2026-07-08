@@ -9,6 +9,7 @@ import { K8sDetailInfoCard } from "../K8sDetailInfoCard";
 import { SerialDetailInfoCard } from "../SerialDetailInfoCard";
 import { EtcdDetailInfoCard } from "../EtcdDetailInfoCard";
 import { KafkaDetailInfoCard } from "../KafkaDetailInfoCard";
+import { OSSDetailInfoCard } from "../OSSDetailInfoCard";
 
 afterEach(() => {
   cleanup();
@@ -372,5 +373,46 @@ describe("数据库族详情卡 proxy 展示", () => {
     const asset = makeAsset("redis", { host: "r", port: 6379 });
     const { queryByText } = render(<RedisDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
     expect(queryByText("proxy.example.com:1080")).not.toBeInTheDocument();
+  });
+});
+
+describe("OSSDetailInfoCard", () => {
+  it("渲染非机密字段,secret 打码,provider 展示为本地化标签", () => {
+    const asset = makeAsset("oss", {
+      provider: "aliyun-oss",
+      endpoint: "oss-cn-hangzhou.aliyuncs.com",
+      region: "cn-hangzhou",
+      access_key_id: "AKIA",
+      secret_access_key: "ENC",
+      use_path_style: false,
+      use_ssl: true,
+    });
+    const { getByText, queryByText } = render(<OSSDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
+    expect(getByText("oss-cn-hangzhou.aliyuncs.com")).toBeInTheDocument();
+    expect(getByText("cn-hangzhou")).toBeInTheDocument();
+    expect(getByText("AKIA")).toBeInTheDocument();
+    expect(getByText("●●●●●●")).toBeInTheDocument(); // MASKED_SECRET
+    expect(getByText("oss.form.providerAliyunOSS")).toBeInTheDocument(); // t mock 原样返回 key
+    expect(queryByText("ENC")).not.toBeInTheDocument(); // 绝不渲染明文密文
+  });
+
+  it("托管凭证态(无 secret)不渲染 credential_id,也不渲染打码行", () => {
+    const asset = makeAsset("oss", {
+      provider: "minio",
+      endpoint: "http://localhost:9000",
+      access_key_id: "AKIA",
+      credential_id: 42,
+      use_path_style: true,
+      use_ssl: false,
+    });
+    const { queryByText } = render(<OSSDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
+    expect(queryByText("42")).not.toBeInTheDocument(); // credential_id 绝不渲染
+    expect(queryByText("●●●●●●")).not.toBeInTheDocument();
+  });
+
+  it("handles empty config without crashing", () => {
+    const asset = makeAsset("oss", {});
+    const { container } = render(<OSSDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
+    expect(container).toBeDefined();
   });
 });
