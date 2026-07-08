@@ -60,7 +60,13 @@ export type FieldDesc<S> = WithVisibility<S> &
       }
     | { kind: "row"; fields: FieldDesc<S>[] }
     // ↓ composite kind 在 Task 2b 补实现;此处声明以锁定类型。
-    | { kind: "password"; placeholder?: string; secretLabel?: string; selectSecretLabel?: string }
+    | {
+        kind: "password";
+        placeholder?: string;
+        secretLabel?: string;
+        selectSecretLabel?: string;
+        usernameKey?: keyof S;
+      }
     | { kind: "tunnel"; tunnelOptionLabelKey?: string; tunnelSelectLabelKey?: string; excludeIds?: number[] }
     | { kind: "custom"; render: (s: S, patch: (p: Partial<S>) => void) => ReactNode }
   );
@@ -207,7 +213,7 @@ function FieldNode<S>({
           managedPasswords={cred.managedPasswords}
           hasExistingPassword={!!cred.value.encryptedPassword}
           editAssetId={ctx?.editAsset?.ID}
-          onUsernameChange={(v) => patch({ username: v } as unknown as Partial<S>)}
+          onUsernameChange={(v) => patch({ [field.usernameKey ?? "username"]: v } as unknown as Partial<S>)}
           placeholder={field.placeholder ? t(field.placeholder, { defaultValue: field.placeholder }) : undefined}
           secretLabel={field.secretLabel ? t(field.secretLabel, { defaultValue: field.secretLabel }) : undefined}
           selectSecretLabel={
