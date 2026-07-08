@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"mime"
 	"os"
+	"path"
 	"path/filepath"
 
 	"github.com/opskat/opskat/internal/pkg/transfer"
@@ -117,4 +118,75 @@ func (o *OSS) uploadObject(transferID string, assetID int64, bucket, key, localP
 	})
 	err = o.service.PutObject(ctx, assetID, bucket, key, pr, info.Size(), contentTypeFor(localPath))
 	o.emitTerminal(transferID, err)
+}
+
+// OSSDownloadObject 弹原生保存对话框(默认名 = key 末段),流式下载并报进度,返回 transferID。
+// 用户取消对话框 → 返回空串。
+func (o *OSS) OSSDownloadObject(assetID int64, bucket, key string) (string, error) {
+	if assetID <= 0 || bucket == "" || key == "" {
+		return "", fmt.Errorf("invalid request: assetID, bucket and key are required")
+	}
+	localPath, err := wailsRuntime.SaveFileDialog(o.ctx, wailsRuntime.SaveDialogOptions{
+		DefaultFilename: path.Base(key),
+		Title:           "保存到本地",
+	})
+	if err != nil {
+		return "", fmt.Errorf("保存文件对话框失败: %w", err)
+	}
+	if localPath == "" {
+		return "", nil // 用户取消
+	}
+	transferID := transfer.GenerateID("oss")
+	go o.downloadObject(transferID, assetID, bucket, key, localPath)
+	return transferID, nil
+}
+
+// downloadObject 单对象流式下载:注册取消 → GetObject 拿流 → 建本地文件 → transfer.Copy → emit 终态。
+// 运行在独立 goroutine 中,recover 语义同 uploadObject:边界防线,记录日志并把这路传输标记为 error 终态。
+func (o *OSS) downloadObject(transferID string, assetID int64, bucket, key, localPath string) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Default().Error("oss download panic recovered",
+				zap.String("transferId", transferID), zap.Any("panic", r))
+			o.emitTerminal(transferID, fmt.Errorf("下载发生意外错误: %v", r))
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(o.ctx)
+	o.cancels.Store(transferID, cancel)
+	defer func() {
+		o.cancels.Delete(transferID)
+		cancel()
+	}()
+
+	rc, size, err := o.service.GetObject(ctx, assetID, bucket, key)
+	if err != nil {
+		o.emitTerminal(transferID, err)
+		return
+	}
+	defer func() { _ = rc.Close() }()
+
+	f, err := os.Create(localPath) //nolint:gosec // path 来自保存对话框
+	if err != nil {
+		o.emitTerminal(transferID, fmt.Errorf("创建本地文件失败: %w", err))
+		return
+	}
+	defer func() { _ = f.Close() }()
+
+	err = transfer.Copy(ctx, transferID, f, rc, size, path.Base(key), func(p transfer.Progress) {
+		o.emitProgress(transferID, p)
+	})
+	o.emitTerminal(transferID, err)
+}
+
+// OSSCancelTransfer 经注册表取消在途上传/下载(命中即调用其 CancelFunc,ctx 取消触发取消终态);
+// 未命中(已终结或从未存在的 transferID)视为幂等 no-op,不报错。
+func (o *OSS) OSSCancelTransfer(transferID string) error {
+	if transferID == "" {
+		return fmt.Errorf("invalid transferID")
+	}
+	if v, ok := o.cancels.Load(transferID); ok {
+		v.(context.CancelFunc)()
+	}
+	return nil
 }

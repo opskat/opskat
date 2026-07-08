@@ -94,3 +94,25 @@ func TestProgressReaderAbortsOnCancelledContext(t *testing.T) {
 	_, err := pr.Read(make([]byte, 4))
 	assert.ErrorIs(t, err, context.Canceled)
 }
+
+func TestCopyStreamsAllBytesAndReports(t *testing.T) {
+	src := bytes.NewReader(bytes.Repeat([]byte("y"), 70*1024)) // >2 个 32KB 分片
+	var dst bytes.Buffer
+	var got []Progress
+	err := Copy(context.Background(), "oss-2", &dst, src, int64(70*1024), "big.bin", func(p Progress) {
+		got = append(got, p)
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 70*1024, dst.Len())
+	require.NotEmpty(t, got)
+	last := got[len(got)-1]
+	assert.Equal(t, StatusProgress, last.Status)
+	assert.Equal(t, int64(70*1024), last.BytesTotal)
+}
+
+func TestCopyAbortsOnCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := Copy(ctx, "oss-2", &bytes.Buffer{}, bytes.NewReader([]byte("data")), 4, "x", func(Progress) {})
+	assert.ErrorIs(t, err, context.Canceled)
+}

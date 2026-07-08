@@ -132,3 +132,37 @@ func (p *ProgressReader) Read(b []byte) (int, error) {
 	}
 	return n, err
 }
+
+// Copy 以 32KiB 分片把 src 流式写入 dst,经独立 Reporter(100ms 节流)上报进度,
+// ctx 取消即中断。镜像 sftp_svc.copyWithProgress,让每种传输源共用一套节流拷贝循环。
+func Copy(ctx context.Context, transferID string, dst io.Writer, src io.Reader, totalBytes int64, currentFile string, onProgress func(Progress)) error {
+	buf := make([]byte, 32*1024)
+	var bytesDone int64
+	reporter := NewReporter(onProgress)
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		n, readErr := src.Read(buf)
+		if n > 0 {
+			if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
+				return writeErr
+			}
+			bytesDone += int64(n)
+			reporter.Report(Progress{
+				TransferID:  transferID,
+				Status:      StatusProgress,
+				CurrentFile: currentFile,
+				FilesTotal:  1,
+				BytesDone:   bytesDone,
+				BytesTotal:  totalBytes,
+			})
+		}
+		if readErr == io.EOF {
+			return nil
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+}

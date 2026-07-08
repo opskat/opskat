@@ -126,6 +126,15 @@ func (s *Service) PutObject(ctx context.Context, assetID int64, bucket, key stri
 	return c.PutObject(ctx, bucket, key, r, size, contentType)
 }
 
+// GetObject 是给 app 层流式下载用的原语:connect 后返回对象流 + 总大小。
+func (s *Service) GetObject(ctx context.Context, assetID int64, bucket, key string) (io.ReadCloser, int64, error) {
+	c, err := s.connect(ctx, assetID)
+	if err != nil {
+		return nil, 0, err
+	}
+	return c.GetObject(ctx, bucket, key)
+}
+
 func (s *Service) PresignGet(ctx context.Context, req *PresignRequest) (string, error) {
 	c, err := s.connect(ctx, req.AssetID)
 	if err != nil {

@@ -99,6 +99,19 @@ func (a *minioAdapter) PutObject(ctx context.Context, bucket, key string, r io.R
 	return err
 }
 
+func (a *minioAdapter) GetObject(ctx context.Context, bucket, key string) (io.ReadCloser, int64, error) {
+	obj, err := a.mc.GetObject(ctx, bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, 0, err
+	}
+	info, err := obj.Stat()
+	if err != nil {
+		_ = obj.Close()
+		return nil, 0, err
+	}
+	return obj, info.Size, nil
+}
+
 func (a *minioAdapter) PresignGet(ctx context.Context, bucket, key string, expiry time.Duration) (string, error) {
 	u, err := a.mc.PresignedGetObject(ctx, bucket, key, expiry, nil)
 	if err != nil {

@@ -32,6 +32,7 @@ type Client interface {
 	CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) error
 	RemoveObjects(ctx context.Context, bucket string, keys []string) error
 	PutObject(ctx context.Context, bucket, key string, r io.Reader, size int64, contentType string) error
+	GetObject(ctx context.Context, bucket, key string) (io.ReadCloser, int64, error)
 	PresignGet(ctx context.Context, bucket, key string, expiry time.Duration) (string, error)
 	PresignPut(ctx context.Context, bucket, key string, expiry time.Duration) (string, error)
 	BucketExists(ctx context.Context, bucket string) (bool, error)
