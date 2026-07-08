@@ -14,6 +14,7 @@ import elasticsearchIcon from "@iconify-icons/logos/elasticsearch";
 import mariadbIcon from "@iconify-icons/logos/mariadb-icon";
 import rabbitmqIcon from "@iconify-icons/logos/rabbitmq-icon";
 import etcdIcon from "@iconify-icons/logos/etcd";
+import awsS3Icon from "@iconify-icons/logos/aws-s3";
 import dockerIcon from "@iconify-icons/logos/docker-icon";
 import kubernetesIcon from "@iconify-icons/logos/kubernetes";
 import windowsIcon from "@iconify-icons/logos/microsoft-windows-icon";
@@ -120,6 +121,9 @@ export const MinioIcon = brandIcon(minioIcon);
 export const NatsIcon = brandIcon(natsIcon);
 export const PulsarIcon = brandIcon(pulsarIcon);
 export const MemcachedIcon = brandIcon(memcachedIcon);
+
+// ===== Object Storage =====
+export const S3Icon = brandIcon(awsS3Icon);
 
 // ===== System / OS =====
 export const DockerIcon = brandIcon(dockerIcon);
