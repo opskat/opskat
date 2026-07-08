@@ -2,6 +2,8 @@ package oss_svc
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -63,6 +65,32 @@ func (a *minioAdapter) CopyObject(ctx context.Context, srcBucket, srcKey, dstBuc
 		minio.CopySrcOptions{Bucket: srcBucket, Object: srcKey},
 	)
 	return err
+}
+
+func (a *minioAdapter) RemoveObjects(ctx context.Context, bucket string, keys []string) error {
+	objCh := make(chan minio.ObjectInfo, len(keys))
+	for _, k := range keys {
+		objCh <- minio.ObjectInfo{Key: k}
+	}
+	close(objCh)
+	var errs []minio.RemoveObjectError
+	for rerr := range a.mc.RemoveObjects(ctx, bucket, objCh, minio.RemoveObjectsOptions{}) {
+		errs = append(errs, rerr)
+	}
+	return aggregateRemoveErrors(errs)
+}
+
+// aggregateRemoveErrors 把 minio 批量删除通道里的逐项错误聚合成一个显式报告;
+// 空则 nil。绝不静默丢弃部分失败。
+func aggregateRemoveErrors(errs []minio.RemoveObjectError) error {
+	if len(errs) == 0 {
+		return nil
+	}
+	parts := make([]string, 0, len(errs))
+	for _, e := range errs {
+		parts = append(parts, fmt.Sprintf("%s: %v", e.ObjectName, e.Err))
+	}
+	return fmt.Errorf("批量删除部分失败(%d): %s", len(errs), strings.Join(parts, "; "))
 }
 
 func (a *minioAdapter) PresignGet(ctx context.Context, bucket, key string, expiry time.Duration) (string, error) {

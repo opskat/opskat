@@ -4,8 +4,9 @@ package oss_svc
 // 规避 white-box 测试导入 mock_ossclient(其 import oss_svc)造成的 import cycle。
 var ListObjectsWith = listObjectsWith
 
-// CopyObjectWith / MoveObjectWith 导出供外部测试包(oss_svc_test)做 gomock 单测。
+// CopyObjectWith / MoveObjectWith / RemoveObjectsWith 导出供外部测试包(oss_svc_test)做 gomock 单测。
 var (
-	CopyObjectWith = copyObjectWith
-	MoveObjectWith = moveObjectWith
+	CopyObjectWith    = copyObjectWith
+	MoveObjectWith    = moveObjectWith
+	RemoveObjectsWith = removeObjectsWith
 )

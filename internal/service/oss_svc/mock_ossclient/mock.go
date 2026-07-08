@@ -145,6 +145,20 @@ func (mr *MockClientMockRecorder) RemoveObject(ctx, bucket, key any) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveObject", reflect.TypeOf((*MockClient)(nil).RemoveObject), ctx, bucket, key)
 }
 
+// RemoveObjects mocks base method.
+func (m *MockClient) RemoveObjects(ctx context.Context, bucket string, keys []string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RemoveObjects", ctx, bucket, keys)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// RemoveObjects indicates an expected call of RemoveObjects.
+func (mr *MockClientMockRecorder) RemoveObjects(ctx, bucket, keys any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveObjects", reflect.TypeOf((*MockClient)(nil).RemoveObjects), ctx, bucket, keys)
+}
+
 // StatObject mocks base method.
 func (m *MockClient) StatObject(ctx context.Context, bucket, key string) (oss_svc.ObjectItem, error) {
 	m.ctrl.T.Helper()

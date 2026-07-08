@@ -96,3 +96,19 @@ func (o *OSS) OSSMoveObject(req oss_svc.CopyRequest) error {
 		zap.String("dstBucket", req.DstBucket), zap.String("dstKey", req.DstKey))
 	return nil
 }
+
+// OSSRemoveObjects 批量删除对象(一次调用一条关键流日志)。
+func (o *OSS) OSSRemoveObjects(req oss_svc.RemoveObjectsRequest) error {
+	if req.AssetID <= 0 || req.Bucket == "" || len(req.Keys) == 0 {
+		return fmt.Errorf("invalid request: assetID, bucket and non-empty keys are required")
+	}
+	ctx := o.i18nCtx()
+	if err := o.service.RemoveObjects(ctx, &req); err != nil {
+		return err
+	}
+	logger.Ctx(ctx).Info("oss remove objects",
+		zap.Int64("assetId", req.AssetID),
+		zap.String("bucket", req.Bucket),
+		zap.Int("count", len(req.Keys)))
+	return nil
+}

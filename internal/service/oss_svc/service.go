@@ -100,6 +100,14 @@ func (s *Service) MoveObject(ctx context.Context, req *CopyRequest) error {
 	return moveObjectWith(ctx, c, req.SrcBucket, req.SrcKey, req.DstBucket, req.DstKey)
 }
 
+func (s *Service) RemoveObjects(ctx context.Context, req *RemoveObjectsRequest) error {
+	c, err := s.connect(ctx, req.AssetID)
+	if err != nil {
+		return err
+	}
+	return removeObjectsWith(ctx, c, req.Bucket, req.Keys)
+}
+
 func (s *Service) PresignGet(ctx context.Context, req *PresignRequest) (string, error) {
 	c, err := s.connect(ctx, req.AssetID)
 	if err != nil {

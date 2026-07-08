@@ -41,3 +41,7 @@ func moveObjectWith(ctx context.Context, c Client, srcBucket, srcKey, dstBucket,
 	}
 	return c.RemoveObject(ctx, srcBucket, srcKey)
 }
+
+func removeObjectsWith(ctx context.Context, c Client, bucket string, keys []string) error {
+	return c.RemoveObjects(ctx, bucket, keys)
+}

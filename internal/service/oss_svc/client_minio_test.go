@@ -1,11 +1,13 @@
 package oss_svc
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestToObjectItemDetectsFolderPrefix(t *testing.T) {
@@ -30,4 +32,20 @@ func TestPresignExpiryDefaultsToOneHourWhenNonPositive(t *testing.T) {
 
 func TestPresignExpiryUsesGivenSeconds(t *testing.T) {
 	assert.Equal(t, 120*time.Second, presignExpiry(120))
+}
+
+func TestAggregateRemoveErrorsNilWhenEmpty(t *testing.T) {
+	assert.NoError(t, aggregateRemoveErrors(nil))
+	assert.NoError(t, aggregateRemoveErrors([]minio.RemoveObjectError{}))
+}
+
+func TestAggregateRemoveErrorsReportsEachFailure(t *testing.T) {
+	err := aggregateRemoveErrors([]minio.RemoveObjectError{
+		{ObjectName: "logs/a.txt", Err: errors.New("AccessDenied")},
+		{ObjectName: "logs/b.txt", Err: errors.New("NoSuchKey")},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "logs/a.txt")
+	assert.Contains(t, err.Error(), "AccessDenied")
+	assert.Contains(t, err.Error(), "logs/b.txt")
 }

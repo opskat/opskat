@@ -29,6 +29,7 @@ type Client interface {
 	StatObject(ctx context.Context, bucket, key string) (ObjectItem, error)
 	RemoveObject(ctx context.Context, bucket, key string) error
 	CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) error
+	RemoveObjects(ctx context.Context, bucket string, keys []string) error
 	PresignGet(ctx context.Context, bucket, key string, expiry time.Duration) (string, error)
 	PresignPut(ctx context.Context, bucket, key string, expiry time.Duration) (string, error)
 	BucketExists(ctx context.Context, bucket string) (bool, error)
@@ -64,4 +65,9 @@ type CopyRequest struct { // OSSCopyObject / OSSMoveObject 共用
 	SrcKey    string `json:"srcKey"`
 	DstBucket string `json:"dstBucket"`
 	DstKey    string `json:"dstKey"`
+}
+type RemoveObjectsRequest struct {
+	AssetID int64    `json:"assetId"`
+	Bucket  string   `json:"bucket"`
+	Keys    []string `json:"keys"`
 }
