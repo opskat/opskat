@@ -71,6 +71,7 @@ func (h *ossHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, a
 			return fmt.Errorf("encrypt oss secret: %w", err)
 		}
 		cfg.SecretAccessKey = encrypted
+		cfg.CredentialID = 0
 	}
 	return a.SetOSSConfig(cfg)
 }
@@ -110,6 +111,7 @@ func (h *ossHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, a
 			return fmt.Errorf("encrypt oss secret: %w", err)
 		}
 		cfg.SecretAccessKey = encrypted
+		cfg.CredentialID = 0
 	}
 	if err := a.SetOSSConfig(cfg); err != nil {
 		return err

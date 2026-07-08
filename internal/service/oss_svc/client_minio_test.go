@@ -22,3 +22,12 @@ func TestToObjectItemMapsObject(t *testing.T) {
 	assert.Equal(t, int64(1751811127), got.LastModified)
 	assert.Equal(t, "9b2c", got.ETag)
 }
+
+func TestPresignExpiryDefaultsToOneHourWhenNonPositive(t *testing.T) {
+	assert.Equal(t, time.Hour, presignExpiry(0))
+	assert.Equal(t, time.Hour, presignExpiry(-5))
+}
+
+func TestPresignExpiryUsesGivenSeconds(t *testing.T) {
+	assert.Equal(t, 120*time.Second, presignExpiry(120))
+}

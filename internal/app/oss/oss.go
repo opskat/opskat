@@ -3,11 +3,13 @@ package oss
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/jsonfield"
 	"github.com/opskat/opskat/internal/service/conntest"
+	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/oss_svc"
 )
 
@@ -38,10 +40,22 @@ func (o *OSS) Cleanup() {}
 func (o *OSS) i18nCtx() context.Context { return i18n.Ctx(o.ctx, o.lang.Lang()) }
 
 // testConnection 是通用表单"测试连接"经 conntest 分派的钩子。
+//
+//	plainSecret 走 inline 路径时直接使用; 空时通过 ResolvePasswordGeneric 兜底
+//	(支持 managed 凭证 / 已存在密文)。
 func (o *OSS) testConnection(ctx context.Context, configJSON, plainSecret string) error {
 	cfg, err := jsonfield.Unmarshal[asset_entity.OSSConfig](configJSON, "OSS配置")
 	if err != nil {
 		return err
 	}
-	return o.service.TestConfig(ctx, cfg, plainSecret)
+
+	secret := plainSecret
+	if secret == "" {
+		secret, err = credential_resolver.Default().ResolvePasswordGeneric(ctx, cfg)
+		if err != nil {
+			return fmt.Errorf("连接失败: %w", err)
+		}
+	}
+
+	return o.service.TestConfig(ctx, cfg, secret)
 }

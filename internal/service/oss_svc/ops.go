@@ -8,7 +8,7 @@ func listObjectsWith(ctx context.Context, c Client, bucket, prefix string) (*Lis
 	if err != nil {
 		return nil, err
 	}
-	res := &ListObjectsResult{}
+	res := &ListObjectsResult{Prefixes: []string{}, Objects: []ObjectItem{}}
 	for _, it := range items {
 		if it.IsPrefix {
 			res.Prefixes = append(res.Prefixes, it.Key)

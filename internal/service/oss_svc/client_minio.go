@@ -25,7 +25,7 @@ func (a *minioAdapter) ListBuckets(ctx context.Context) ([]BucketItem, error) {
 }
 
 func (a *minioAdapter) ListObjects(ctx context.Context, bucket, prefix string) ([]ObjectItem, error) {
-	var out []ObjectItem
+	out := make([]ObjectItem, 0)
 	for obj := range a.mc.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: false}) {
 		if obj.Err != nil {
 			return nil, obj.Err
