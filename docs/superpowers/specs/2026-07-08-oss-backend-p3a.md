@@ -113,7 +113,7 @@ minio-go 的 `ListObjects` 通道内部会自动翻页,当前 service 把整层�
 
 - **边界校验**只在 app 层(IPC 入口);service↔repository↔connpool 之间 Go-to-Go 互信,不重复判空。
 - **机密**:SK 恒经 `credential_resolver` 解析,绝不出现在 DTO / 日志;`SafeView` 不受本期影响。
-- **审计**:所有变更类操作(copy/move/remove/removeObjects/createFolder/upload)经既有审计 canonical 入口各记一条(遵循 `docs/DEVELOP.md` 关键流日志规则)。
+- **审计 / 日志**:事实核查 —— 既有 OSS/etcd/redis 的直连 Wails 绑定**不写 `audit_logs` 表**(该表仅由 `external_edit_svc` / `ai/audit` / `app/system/settings` 写);故本期**镜像既有直连绑定行为**,对每个变更类操作(copy/move/remove/removeObjects/createFolder/upload)记**结构化日志**(`logger.Ctx` + zap 字段,遵循 `docs/DEVELOP.md` 关键流日志规则),**不**新引入 `audit_logs` 写入(否则 OSS 会成为唯一写审计表的直连绑定,前后不一致且超范围)。若日后要统一直连绑定入审计表,单独立项。
 - **错误不吞**:copy 失败绝不接着 delete(move 保证「先成后删」);批量删除聚合部分失败为显式错误,不静默丢弃。
 - **无 policy**:OSS `PolicyKind()==""` 不变;变更操作不做审批门控(本期决策)。
 - **P1 遗留(非本期缺陷,可顺带修):** `assettype/oss.go` `SafeView()` 漏 `connect_timeout` —— 若计划阶段顺手补齐则加一条断言,否则不动。
