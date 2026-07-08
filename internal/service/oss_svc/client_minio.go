@@ -24,13 +24,23 @@ func (a *minioAdapter) ListBuckets(ctx context.Context) ([]BucketItem, error) {
 	return out, nil
 }
 
-func (a *minioAdapter) ListObjects(ctx context.Context, bucket, prefix string) ([]ObjectItem, error) {
-	out := make([]ObjectItem, 0)
-	for obj := range a.mc.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: false}) {
+func (a *minioAdapter) ListObjects(ctx context.Context, bucket, prefix string, maxKeys int, startAfter string) ([]ObjectItem, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	out := make([]ObjectItem, 0, maxKeys+1)
+	for obj := range a.mc.ListObjects(ctx, bucket, minio.ListObjectsOptions{
+		Prefix:     prefix,
+		Recursive:  false,
+		StartAfter: startAfter,
+		MaxKeys:    maxKeys + 1,
+	}) {
 		if obj.Err != nil {
 			return nil, obj.Err
 		}
 		out = append(out, toObjectItem(obj))
+		if len(out) > maxKeys {
+			break // 已读到 maxKeys+1,足以判断"还有下一页";cancel 停止后续
+		}
 	}
 	return out, nil
 }

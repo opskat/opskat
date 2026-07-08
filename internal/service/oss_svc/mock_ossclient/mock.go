@@ -73,18 +73,18 @@ func (mr *MockClientMockRecorder) ListBuckets(ctx any) *gomock.Call {
 }
 
 // ListObjects mocks base method.
-func (m *MockClient) ListObjects(ctx context.Context, bucket, prefix string) ([]oss_svc.ObjectItem, error) {
+func (m *MockClient) ListObjects(ctx context.Context, bucket, prefix string, maxKeys int, startAfter string) ([]oss_svc.ObjectItem, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListObjects", ctx, bucket, prefix)
+	ret := m.ctrl.Call(m, "ListObjects", ctx, bucket, prefix, maxKeys, startAfter)
 	ret0, _ := ret[0].([]oss_svc.ObjectItem)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListObjects indicates an expected call of ListObjects.
-func (mr *MockClientMockRecorder) ListObjects(ctx, bucket, prefix any) *gomock.Call {
+func (mr *MockClientMockRecorder) ListObjects(ctx, bucket, prefix, maxKeys, startAfter any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListObjects", reflect.TypeOf((*MockClient)(nil).ListObjects), ctx, bucket, prefix)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListObjects", reflect.TypeOf((*MockClient)(nil).ListObjects), ctx, bucket, prefix, maxKeys, startAfter)
 }
 
 // PresignGet mocks base method.

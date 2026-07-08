@@ -25,7 +25,7 @@ type ObjectItem struct {
 // Client 是服务依赖的窄对象存储接口(可 mock)。
 type Client interface {
 	ListBuckets(ctx context.Context) ([]BucketItem, error)
-	ListObjects(ctx context.Context, bucket, prefix string) ([]ObjectItem, error)
+	ListObjects(ctx context.Context, bucket, prefix string, maxKeys int, startAfter string) ([]ObjectItem, error)
 	StatObject(ctx context.Context, bucket, key string) (ObjectItem, error)
 	RemoveObject(ctx context.Context, bucket, key string) error
 	PresignGet(ctx context.Context, bucket, key string, expiry time.Duration) (string, error)
@@ -34,13 +34,17 @@ type Client interface {
 }
 
 type ListObjectsRequest struct {
-	AssetID int64  `json:"assetId"`
-	Bucket  string `json:"bucket"`
-	Prefix  string `json:"prefix"`
+	AssetID           int64  `json:"assetId"`
+	Bucket            string `json:"bucket"`
+	Prefix            string `json:"prefix"`
+	MaxKeys           int    `json:"maxKeys"`
+	ContinuationToken string `json:"continuationToken"`
 }
 type ListObjectsResult struct {
-	Prefixes []string     `json:"prefixes"`
-	Objects  []ObjectItem `json:"objects"`
+	Prefixes              []string     `json:"prefixes"`
+	Objects               []ObjectItem `json:"objects"`
+	NextContinuationToken string       `json:"nextContinuationToken"`
+	IsTruncated           bool         `json:"isTruncated"`
 }
 type ObjectRequest struct {
 	AssetID int64  `json:"assetId"`
