@@ -24,7 +24,7 @@ P3(对象浏览器)= **P3a 后端绑定(已实现)→ P3b 前端工作区**。P3
 
 ## 3. Tab 接线(小而确定的改动集)
 
-- `frontend/src/lib/assetTypes/oss.ts`:`canConnect` 翻 `true`、`canConnectInNewTab` 翻 `true`(其余注册不变;`connectAction:"query"` 已就位)。更新 `registry.test.ts` 里 oss 的 `canConnect`/`canConnectInNewTab` 断言(P2 曾断言为 false)。
+- `frontend/src/lib/assetTypes/oss.ts`:仅 `canConnect` 翻 `true`;**`canConnectInNewTab` 保持 `false`** —— 事实核查:所有 query 类兄弟(etcd/database/redis/mongodb/kafka/k8s)均为 `false`,且 `App.tsx handleConnectAssetInNewTab` 只判 `canConnectInNewTab` 就走**终端路径** `connect(asset,"",true)`(非 `connectAction` 感知),翻 `true` 会把「新标签打开」错误路由到终端而破坏。`connectAction:"query"` 已就位。更新 `registry.test.ts` 里 oss 的 `canConnect:true` 断言(P2 曾断言 false;`canConnectInNewTab` 仍断言 false)。
 - `frontend/src/stores/tabStore.ts`:`QueryTabMeta.assetType` 联合追加 `"oss"`(约 `:29`)。
 - `frontend/src/stores/queryStore.ts`:`assetType` 联合追加 `"oss"`;`openQueryTab` 对 `oss` 生成 tab(无需解析 redis/db 专属 config —— OSS 浏览态在独立 store,tab meta 只带 `assetId`)。
 - `frontend/src/components/layout/MainPanel.tsx`:query 分支 `switch(meta.assetType)` 追加 `case "oss": return <OSSBrowserPanel tabId={...} />`(懒 import,与 etcd/redis 同款)。
@@ -101,7 +101,7 @@ Zustand,按 `tabId` 分片(多个 OSS tab 互不干扰)。每 tab:
 
 - **纯逻辑(vitest)**:`ossPrefixTree` 节点 populate/expand;面包屑 `bucket/prefix/` → 分段;翻页追加(不覆盖);selection 增删。
 - **Store(vitest,mock oss binder via `src/__tests__/setup.ts`)**:`loadBuckets`/`selectBucket`/`navigateToPrefix`/`loadNextPage`(游标续读 + 追加)/`deleteSelected`(单/多、成功/失败)/`refresh` 的状态迁移。
-- **组件(@testing-library/react)**:`OSSBreadcrumb` 渲染 + 点击导航;`OSSObjectList` 行渲染 + 文件夹双击导航 + 多选;空态;`registry.test.ts` 断言 `canConnect:true`/`canConnectInNewTab:true`;`MainPanel` 渲染出 oss 分支。
+- **组件(@testing-library/react)**:`OSSBreadcrumb` 渲染 + 点击导航;`OSSObjectList` 行渲染 + 文件夹双击导航 + 多选;空态;`registry.test.ts` 断言 `canConnect:true`(`canConnectInNewTab` 仍 false);`MainPanel` 渲染出 oss 分支。
 - **i18n 锁步**:en/zh 同键脚本校验(沿用 P2 校验方式)。
 - **观察式验证**(AGENTS.md「观察而非断言」):跑应用 → 双击 OSS 资产连接 → 用本地 MinIO 浏览 Bucket/前缀、翻页、删除,读 `logs/opskat.log` 与 `audit_logs`(结构化日志)确认副作用。
 
