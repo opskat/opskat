@@ -2538,8 +2538,8 @@
       "selectedCount": "已选 {{count}} 项",
       "deleteSelected": "删除",
       "deleteConfirmTitle": "确认删除",
-      "deleteConfirmOne": "删除对象 {{key}}?",
-      "deleteConfirmMany": "删除 {{count}} 个对象?",
+      "deleteConfirmOne": "删除对象 {{key}}？",
+      "deleteConfirmMany": "删除 {{count}} 个对象？",
       "deleteSuccess": "已删除",
       "deleteFailed": "删除失败"
     }
