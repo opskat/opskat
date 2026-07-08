@@ -3,6 +3,7 @@ package oss_svc
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -91,6 +92,11 @@ func aggregateRemoveErrors(errs []minio.RemoveObjectError) error {
 		parts = append(parts, fmt.Sprintf("%s: %v", e.ObjectName, e.Err))
 	}
 	return fmt.Errorf("批量删除部分失败(%d): %s", len(errs), strings.Join(parts, "; "))
+}
+
+func (a *minioAdapter) PutObject(ctx context.Context, bucket, key string, r io.Reader, size int64, contentType string) error {
+	_, err := a.mc.PutObject(ctx, bucket, key, r, size, minio.PutObjectOptions{ContentType: contentType})
+	return err
 }
 
 func (a *minioAdapter) PresignGet(ctx context.Context, bucket, key string, expiry time.Duration) (string, error) {

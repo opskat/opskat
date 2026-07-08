@@ -112,3 +112,19 @@ func (o *OSS) OSSRemoveObjects(req oss_svc.RemoveObjectsRequest) error {
 		zap.Int("count", len(req.Keys)))
 	return nil
 }
+
+// OSSCreateFolder 在指定前缀下新建"文件夹"(零字节占位对象)。
+func (o *OSS) OSSCreateFolder(req oss_svc.CreateFolderRequest) error {
+	if req.AssetID <= 0 || req.Bucket == "" || req.Prefix == "" {
+		return fmt.Errorf("invalid request: assetID, bucket and prefix are required")
+	}
+	ctx := o.i18nCtx()
+	if err := o.service.CreateFolder(ctx, &req); err != nil {
+		return err
+	}
+	logger.Ctx(ctx).Info("oss create folder",
+		zap.Int64("assetId", req.AssetID),
+		zap.String("bucket", req.Bucket),
+		zap.String("prefix", req.Prefix))
+	return nil
+}

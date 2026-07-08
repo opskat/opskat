@@ -49,3 +49,24 @@ func TestAggregateRemoveErrorsReportsEachFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "AccessDenied")
 	assert.Contains(t, err.Error(), "logs/b.txt")
 }
+
+func TestNormalizeFolderPrefixAppendsSlash(t *testing.T) {
+	got, err := normalizeFolderPrefix("docs/2026")
+	require.NoError(t, err)
+	assert.Equal(t, "docs/2026/", got)
+}
+
+func TestNormalizeFolderPrefixKeepsTrailingSlash(t *testing.T) {
+	got, err := normalizeFolderPrefix("docs/2026/")
+	require.NoError(t, err)
+	assert.Equal(t, "docs/2026/", got)
+}
+
+func TestNormalizeFolderPrefixTrimsAndRejectsEmpty(t *testing.T) {
+	got, err := normalizeFolderPrefix("  reports  ")
+	require.NoError(t, err)
+	assert.Equal(t, "reports/", got)
+
+	_, err = normalizeFolderPrefix("   ")
+	require.Error(t, err)
+}

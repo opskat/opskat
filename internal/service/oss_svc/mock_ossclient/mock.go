@@ -11,6 +11,7 @@ package mock_ossclient
 
 import (
 	context "context"
+	io "io"
 	reflect "reflect"
 	time "time"
 
@@ -129,6 +130,20 @@ func (m *MockClient) PresignPut(ctx context.Context, bucket, key string, expiry 
 func (mr *MockClientMockRecorder) PresignPut(ctx, bucket, key, expiry any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PresignPut", reflect.TypeOf((*MockClient)(nil).PresignPut), ctx, bucket, key, expiry)
+}
+
+// PutObject mocks base method.
+func (m *MockClient) PutObject(ctx context.Context, bucket, key string, r io.Reader, size int64, contentType string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PutObject", ctx, bucket, key, r, size, contentType)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// PutObject indicates an expected call of PutObject.
+func (mr *MockClientMockRecorder) PutObject(ctx, bucket, key, r, size, contentType any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PutObject", reflect.TypeOf((*MockClient)(nil).PutObject), ctx, bucket, key, r, size, contentType)
 }
 
 // RemoveObject mocks base method.

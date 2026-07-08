@@ -108,6 +108,14 @@ func (s *Service) RemoveObjects(ctx context.Context, req *RemoveObjectsRequest) 
 	return removeObjectsWith(ctx, c, req.Bucket, req.Keys)
 }
 
+func (s *Service) CreateFolder(ctx context.Context, req *CreateFolderRequest) error {
+	c, err := s.connect(ctx, req.AssetID)
+	if err != nil {
+		return err
+	}
+	return createFolderWith(ctx, c, req.Bucket, req.Prefix)
+}
+
 func (s *Service) PresignGet(ctx context.Context, req *PresignRequest) (string, error) {
 	c, err := s.connect(ctx, req.AssetID)
 	if err != nil {

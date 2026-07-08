@@ -2,6 +2,7 @@ package oss_svc
 
 import (
 	"context"
+	"io"
 	"time"
 )
 
@@ -30,6 +31,7 @@ type Client interface {
 	RemoveObject(ctx context.Context, bucket, key string) error
 	CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) error
 	RemoveObjects(ctx context.Context, bucket string, keys []string) error
+	PutObject(ctx context.Context, bucket, key string, r io.Reader, size int64, contentType string) error
 	PresignGet(ctx context.Context, bucket, key string, expiry time.Duration) (string, error)
 	PresignPut(ctx context.Context, bucket, key string, expiry time.Duration) (string, error)
 	BucketExists(ctx context.Context, bucket string) (bool, error)
@@ -70,4 +72,9 @@ type RemoveObjectsRequest struct {
 	AssetID int64    `json:"assetId"`
 	Bucket  string   `json:"bucket"`
 	Keys    []string `json:"keys"`
+}
+type CreateFolderRequest struct {
+	AssetID int64  `json:"assetId"`
+	Bucket  string `json:"bucket"`
+	Prefix  string `json:"prefix"` // 服务端规范化为以 "/" 结尾
 }

@@ -1,6 +1,10 @@
 package oss_svc
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"strings"
+)
 
 const defaultListMaxKeys = 200
 
@@ -44,4 +48,25 @@ func moveObjectWith(ctx context.Context, c Client, srcBucket, srcKey, dstBucket,
 
 func removeObjectsWith(ctx context.Context, c Client, bucket string, keys []string) error {
 	return c.RemoveObjects(ctx, bucket, keys)
+}
+
+// normalizeFolderPrefix 校验并规范化文件夹前缀为以 "/" 结尾;空则报错。
+func normalizeFolderPrefix(prefix string) (string, error) {
+	p := strings.TrimSpace(prefix)
+	if p == "" {
+		return "", fmt.Errorf("文件夹前缀不能为空")
+	}
+	if !strings.HasSuffix(p, "/") {
+		p += "/"
+	}
+	return p, nil
+}
+
+// createFolderWith 对 <prefix>/ 做零字节 PUT(S3 文件夹占位符约定)。
+func createFolderWith(ctx context.Context, c Client, bucket, prefix string) error {
+	normalized, err := normalizeFolderPrefix(prefix)
+	if err != nil {
+		return err
+	}
+	return c.PutObject(ctx, bucket, normalized, strings.NewReader(""), 0, "application/x-directory")
 }
