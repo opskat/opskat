@@ -2521,6 +2521,27 @@
     },
     "error": {
       "required": "Endpoint 和 Access Key ID 必填"
+    },
+    "browser": {
+      "refresh": "刷新",
+      "loading": "加载中…",
+      "loadingMore": "加载更多…",
+      "emptyDir": "此目录为空",
+      "noBuckets": "暂无存储桶",
+      "selectBucket": "选择一个存储桶开始浏览",
+      "colName": "名称",
+      "colSize": "大小",
+      "colStorageClass": "存储类型",
+      "colModified": "修改时间",
+      "missingAsset": "缺少资产",
+      "loadFailed": "加载失败",
+      "selectedCount": "已选 {{count}} 项",
+      "deleteSelected": "删除",
+      "deleteConfirmTitle": "确认删除",
+      "deleteConfirmOne": "删除对象 {{key}}?",
+      "deleteConfirmMany": "删除 {{count}} 个对象?",
+      "deleteSuccess": "已删除",
+      "deleteFailed": "删除失败"
     }
   },
   "etcd": {

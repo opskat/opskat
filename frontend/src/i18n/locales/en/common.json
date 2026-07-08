@@ -2521,6 +2521,27 @@
     },
     "error": {
       "required": "Endpoint and Access Key ID are required"
+    },
+    "browser": {
+      "refresh": "Refresh",
+      "loading": "Loading…",
+      "loadingMore": "Loading more…",
+      "emptyDir": "This folder is empty",
+      "noBuckets": "No buckets",
+      "selectBucket": "Select a bucket to start browsing",
+      "colName": "Name",
+      "colSize": "Size",
+      "colStorageClass": "Storage class",
+      "colModified": "Modified",
+      "missingAsset": "Missing asset",
+      "loadFailed": "Load failed",
+      "selectedCount": "{{count}} selected",
+      "deleteSelected": "Delete",
+      "deleteConfirmTitle": "Confirm delete",
+      "deleteConfirmOne": "Delete object {{key}}?",
+      "deleteConfirmMany": "Delete {{count}} objects?",
+      "deleteSuccess": "Deleted",
+      "deleteFailed": "Delete failed"
     }
   },
   "etcd": {
