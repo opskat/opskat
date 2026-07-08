@@ -57,6 +57,20 @@ func (mr *MockClientMockRecorder) BucketExists(ctx, bucket any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BucketExists", reflect.TypeOf((*MockClient)(nil).BucketExists), ctx, bucket)
 }
 
+// CopyObject mocks base method.
+func (m *MockClient) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CopyObject", ctx, srcBucket, srcKey, dstBucket, dstKey)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CopyObject indicates an expected call of CopyObject.
+func (mr *MockClientMockRecorder) CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CopyObject", reflect.TypeOf((*MockClient)(nil).CopyObject), ctx, srcBucket, srcKey, dstBucket, dstKey)
+}
+
 // ListBuckets mocks base method.
 func (m *MockClient) ListBuckets(ctx context.Context) ([]oss_svc.BucketItem, error) {
 	m.ctrl.T.Helper()

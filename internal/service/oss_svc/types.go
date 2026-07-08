@@ -28,6 +28,7 @@ type Client interface {
 	ListObjects(ctx context.Context, bucket, prefix string, maxKeys int, startAfter string) ([]ObjectItem, error)
 	StatObject(ctx context.Context, bucket, key string) (ObjectItem, error)
 	RemoveObject(ctx context.Context, bucket, key string) error
+	CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) error
 	PresignGet(ctx context.Context, bucket, key string, expiry time.Duration) (string, error)
 	PresignPut(ctx context.Context, bucket, key string, expiry time.Duration) (string, error)
 	BucketExists(ctx context.Context, bucket string) (bool, error)
@@ -56,4 +57,11 @@ type PresignRequest struct {
 	Bucket     string `json:"bucket"`
 	Key        string `json:"key"`
 	ExpirySecs int    `json:"expirySecs"`
+}
+type CopyRequest struct { // OSSCopyObject / OSSMoveObject 共用
+	AssetID   int64  `json:"assetId"`
+	SrcBucket string `json:"srcBucket"`
+	SrcKey    string `json:"srcKey"`
+	DstBucket string `json:"dstBucket"`
+	DstKey    string `json:"dstKey"`
 }

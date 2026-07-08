@@ -3,6 +3,9 @@ package oss
 import (
 	"fmt"
 
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
+
 	"github.com/opskat/opskat/internal/service/oss_svc"
 )
 
@@ -60,4 +63,36 @@ func (o *OSS) OSSPresignPut(req oss_svc.PresignRequest) (string, error) {
 		return "", fmt.Errorf("invalid request: assetID, bucket and key are required")
 	}
 	return o.service.PresignPut(o.i18nCtx(), &req)
+}
+
+// OSSCopyObject 服务端复制单个对象(同/跨 Bucket 与前缀)。
+func (o *OSS) OSSCopyObject(req oss_svc.CopyRequest) error {
+	if req.AssetID <= 0 || req.SrcBucket == "" || req.SrcKey == "" || req.DstBucket == "" || req.DstKey == "" {
+		return fmt.Errorf("invalid request: assetID, src/dst bucket and key are required")
+	}
+	ctx := o.i18nCtx()
+	if err := o.service.CopyObject(ctx, &req); err != nil {
+		return err
+	}
+	logger.Ctx(ctx).Info("oss copy object",
+		zap.Int64("assetId", req.AssetID),
+		zap.String("srcBucket", req.SrcBucket), zap.String("srcKey", req.SrcKey),
+		zap.String("dstBucket", req.DstBucket), zap.String("dstKey", req.DstKey))
+	return nil
+}
+
+// OSSMoveObject 复制成功后删除源,覆盖重命名与移动。
+func (o *OSS) OSSMoveObject(req oss_svc.CopyRequest) error {
+	if req.AssetID <= 0 || req.SrcBucket == "" || req.SrcKey == "" || req.DstBucket == "" || req.DstKey == "" {
+		return fmt.Errorf("invalid request: assetID, src/dst bucket and key are required")
+	}
+	ctx := o.i18nCtx()
+	if err := o.service.MoveObject(ctx, &req); err != nil {
+		return err
+	}
+	logger.Ctx(ctx).Info("oss move object",
+		zap.Int64("assetId", req.AssetID),
+		zap.String("srcBucket", req.SrcBucket), zap.String("srcKey", req.SrcKey),
+		zap.String("dstBucket", req.DstBucket), zap.String("dstKey", req.DstKey))
+	return nil
 }

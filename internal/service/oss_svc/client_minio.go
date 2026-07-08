@@ -57,6 +57,14 @@ func (a *minioAdapter) RemoveObject(ctx context.Context, bucket, key string) err
 	return a.mc.RemoveObject(ctx, bucket, key, minio.RemoveObjectOptions{})
 }
 
+func (a *minioAdapter) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) error {
+	_, err := a.mc.CopyObject(ctx,
+		minio.CopyDestOptions{Bucket: dstBucket, Object: dstKey},
+		minio.CopySrcOptions{Bucket: srcBucket, Object: srcKey},
+	)
+	return err
+}
+
 func (a *minioAdapter) PresignGet(ctx context.Context, bucket, key string, expiry time.Duration) (string, error) {
 	u, err := a.mc.PresignedGetObject(ctx, bucket, key, expiry, nil)
 	if err != nil {

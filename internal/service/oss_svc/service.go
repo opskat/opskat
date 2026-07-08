@@ -84,6 +84,22 @@ func (s *Service) RemoveObject(ctx context.Context, req *ObjectRequest) error {
 	return c.RemoveObject(ctx, req.Bucket, req.Key)
 }
 
+func (s *Service) CopyObject(ctx context.Context, req *CopyRequest) error {
+	c, err := s.connect(ctx, req.AssetID)
+	if err != nil {
+		return err
+	}
+	return copyObjectWith(ctx, c, req.SrcBucket, req.SrcKey, req.DstBucket, req.DstKey)
+}
+
+func (s *Service) MoveObject(ctx context.Context, req *CopyRequest) error {
+	c, err := s.connect(ctx, req.AssetID)
+	if err != nil {
+		return err
+	}
+	return moveObjectWith(ctx, c, req.SrcBucket, req.SrcKey, req.DstBucket, req.DstKey)
+}
+
 func (s *Service) PresignGet(ctx context.Context, req *PresignRequest) (string, error) {
 	c, err := s.connect(ctx, req.AssetID)
 	if err != nil {

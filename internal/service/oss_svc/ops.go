@@ -29,3 +29,15 @@ func listObjectsWith(ctx context.Context, c Client, bucket, prefix string, maxKe
 	}
 	return res, nil
 }
+
+func copyObjectWith(ctx context.Context, c Client, srcBucket, srcKey, dstBucket, dstKey string) error {
+	return c.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey)
+}
+
+// moveObjectWith 先 copy 成功再删源;copy 失败原样返回,绝不删除源对象。
+func moveObjectWith(ctx context.Context, c Client, srcBucket, srcKey, dstBucket, dstKey string) error {
+	if err := c.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey); err != nil {
+		return err
+	}
+	return c.RemoveObject(ctx, srcBucket, srcKey)
+}
