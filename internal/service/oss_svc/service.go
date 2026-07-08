@@ -3,6 +3,7 @@ package oss_svc
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/opskat/opskat/internal/connpool"
@@ -114,6 +115,15 @@ func (s *Service) CreateFolder(ctx context.Context, req *CreateFolderRequest) er
 		return err
 	}
 	return createFolderWith(ctx, c, req.Bucket, req.Prefix)
+}
+
+// PutObject 是给 app 层流式上传用的原语：connect 后把（通常已包进度）reader 写入对象。
+func (s *Service) PutObject(ctx context.Context, assetID int64, bucket, key string, r io.Reader, size int64, contentType string) error {
+	c, err := s.connect(ctx, assetID)
+	if err != nil {
+		return err
+	}
+	return c.PutObject(ctx, bucket, key, r, size, contentType)
 }
 
 func (s *Service) PresignGet(ctx context.Context, req *PresignRequest) (string, error) {

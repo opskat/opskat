@@ -4,6 +4,7 @@ package oss
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -22,6 +23,7 @@ type OSS struct {
 	ctx     context.Context
 	lang    LangProvider
 	service *oss_svc.Service
+	cancels sync.Map // transferID -> context.CancelFunc(在途传输取消注册表,仿 sftp_svc)
 }
 
 // New 构造 OSS binder。
