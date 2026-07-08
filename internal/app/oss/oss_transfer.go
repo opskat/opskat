@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/opskat/opskat/internal/pkg/transfer"
 
@@ -16,9 +17,17 @@ import (
 	"go.uber.org/zap"
 )
 
-// deriveUploadKey 目标 key = keyPrefix + 本地文件名。
+// deriveUploadKey 目标 key = keyPrefix + 本地文件名;非空且不以 "/" 结尾的前缀会补一个 "/",
+// 已以 "/" 结尾或为空的前缀保持不变(空前缀 → key 就是文件名本身,上传到 bucket 根)。
 func deriveUploadKey(keyPrefix, localPath string) string {
-	return keyPrefix + filepath.Base(localPath)
+	base := filepath.Base(localPath)
+	if keyPrefix == "" {
+		return base
+	}
+	if !strings.HasSuffix(keyPrefix, "/") {
+		keyPrefix += "/"
+	}
+	return keyPrefix + base
 }
 
 // contentTypeFor 按扩展名猜测 Content-Type，猜不出时回退为通用二进制流。

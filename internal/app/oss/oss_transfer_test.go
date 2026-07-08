@@ -10,8 +10,9 @@ import (
 )
 
 func TestDeriveUploadKeyJoinsPrefixAndBase(t *testing.T) {
-	assert.Equal(t, "images/hero.jpg", deriveUploadKey("images/", "/Users/me/pics/hero.jpg"))
-	assert.Equal(t, "hero.jpg", deriveUploadKey("", "/Users/me/pics/hero.jpg"))
+	assert.Equal(t, "images/hero.jpg", deriveUploadKey("images", "/Users/me/pics/hero.jpg"), "non-slash prefix should be normalized with a single separator")
+	assert.Equal(t, "images/hero.jpg", deriveUploadKey("images/", "/Users/me/pics/hero.jpg"), "already-slash prefix should not gain a double slash")
+	assert.Equal(t, "hero.jpg", deriveUploadKey("", "/Users/me/pics/hero.jpg"), "empty prefix should upload to bucket root as bare filename")
 }
 
 // TestOSSCancelTransferInvokesRegisteredCancelFunc 验证注册表命中语义:不起真实传输,

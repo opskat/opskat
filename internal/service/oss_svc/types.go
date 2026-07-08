@@ -26,6 +26,10 @@ type ObjectItem struct {
 // Client 是服务依赖的窄对象存储接口(可 mock)。
 type Client interface {
 	ListBuckets(ctx context.Context) ([]BucketItem, error)
+	// ListObjects 分页契约:maxKeys<=0 表示"使用服务端默认值";当超出 maxKeys 还有更多对象时,
+	// 实现必须多返回 1 条(即最多返回 maxKeys+1 条),调用方(listObjectsWith)靠这多出的一条
+	// 判断 IsTruncated 并截断结果——若实现只按字面返回恰好 maxKeys 条,截断检测会永远为 false,
+	// 分页将在"假的最后一页"上卡死。
 	ListObjects(ctx context.Context, bucket, prefix string, maxKeys int, startAfter string) ([]ObjectItem, error)
 	StatObject(ctx context.Context, bucket, key string) (ObjectItem, error)
 	RemoveObject(ctx context.Context, bucket, key string) error
