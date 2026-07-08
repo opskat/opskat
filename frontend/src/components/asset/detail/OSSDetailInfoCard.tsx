@@ -4,7 +4,7 @@ import { OSS_PROVIDER_LABEL_KEYS } from "../OSSConfigSection.config";
 import { DetailGrid, DetailSection, InfoItem } from "./InfoItem";
 import { DISABLED_VALUE, ENABLED_VALUE, MASKED_SECRET, parseDetailConfig } from "./utils";
 
-/** 只读 SafeView 白名单(见 internal/assettype/oss.go 的 SafeView);secret/credential_id 故意不在。 */
+/** 详情卡从原始 asset.Config 读取的只读字段;secret_access_key 渲染时打码,credential_id 故意不含(绝不展示)。 */
 interface OSSConfig {
   provider?: string;
   endpoint?: string;
