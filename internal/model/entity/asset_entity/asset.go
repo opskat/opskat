@@ -24,6 +24,7 @@ const (
 	AssetTypeSerial   = "serial"
 	AssetTypeEtcd     = "etcd"
 	AssetTypeLocal    = "local"
+	AssetTypeOSS      = "oss"
 )
 
 // DatabaseDriver 数据库驱动类型
