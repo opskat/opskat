@@ -8,7 +8,9 @@ import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { useOssBrowserStore } from "@/stores/ossBrowserStore";
 import { useOssTransferStore } from "@/stores/ossTransferStore";
 import { flattenPrefixTree } from "@/lib/ossPrefixTree";
-import { notifySuccess } from "@/lib/notify";
+import { formatBytes } from "@/lib/formatBytes";
+import { notifySuccess, notifyCopied } from "@/lib/notify";
+import { OSSPresignGet } from "../../../wailsjs/go/oss/OSS";
 import { OSSBucketTree } from "@/components/oss/OSSBucketTree";
 import { OSSBreadcrumb } from "@/components/oss/OSSBreadcrumb";
 import { OSSObjectList } from "@/components/oss/OSSObjectList";
@@ -99,6 +101,15 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
       toast.error(t("oss.transfer.downloadFailed"))
     );
   }, [assetId, state, startDownload, tabId, t]);
+
+  // 复制 URL 快捷动作:预签一个 1 小时的 GET URL 直接复制(分享对话框仍可自选方法/有效期)。
+  const onDetailCopyUrl = useCallback(() => {
+    if (!assetId || !state?.currentBucket || !state.focusedKey) return;
+    void OSSPresignGet({ assetId, bucket: state.currentBucket, key: state.focusedKey, expirySecs: 3600 }).then(
+      (u) => void navigator.clipboard?.writeText(u).then(() => notifyCopied(t("oss.share.copied"))),
+      () => toast.error(t("oss.share.generateFailed"))
+    );
+  }, [assetId, state, t]);
 
   const confirmDetailDelete = async () => {
     setDetailDeleteOpen(false);
@@ -251,6 +262,20 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
                   onClearCompleted={() => clearCompleted(tabId)}
                 />
               )}
+              {state.listing && (
+                <div
+                  className="flex items-center justify-between border-t px-3 py-1 text-[11px] text-muted-foreground"
+                  data-testid="oss-list-footer"
+                >
+                  <span>
+                    {t("oss.browser.footFolders", { count: state.listing.prefixes.length })} ·{" "}
+                    {t("oss.browser.footObjects", { count: state.listing.objects.length })} ·{" "}
+                    {formatBytes(state.listing.objects.reduce((a, o) => a + o.size, 0))}
+                    {state.listing.truncated ? " · …" : ""}
+                  </span>
+                  {selectionCount > 0 && <span>{t("oss.browser.selectedCount", { count: selectionCount })}</span>}
+                </div>
+              )}
             </>
           ) : (
             <div
@@ -283,6 +308,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
                 onEnsureThumbnail={() => void ensureThumbnail(tabId, focusedObject.key)}
                 onShare={() => setShareOpen(true)}
                 onDownload={onDetailDownload}
+                onCopyUrl={onDetailCopyUrl}
                 onDelete={() => setDetailDeleteOpen(true)}
                 onClose={() => focusObject(tabId, null)}
               />
@@ -308,6 +334,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
           assetId={assetId}
           bucket={state?.currentBucket ?? ""}
           objectKey={focusedObject.key}
+          contentType={focusedObject.contentType}
         />
       )}
       <ConfirmDialog

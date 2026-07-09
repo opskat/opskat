@@ -26,3 +26,17 @@ export function typeIcon(contentType: string, key: string): LucideIcon {
     return FileText;
   return FileIcon;
 }
+
+/** Family → tailwind text-color class, matching the design's per-type row icons. */
+export function typeIconColor(contentType: string, key: string): string {
+  if (isImage(contentType, key)) return "text-emerald-400";
+  if (contentType.startsWith("video/") || ["mp4", "mov", "webm", "mkv", "avi"].includes(ext(key)))
+    return "text-purple-400";
+  if (contentType.startsWith("audio/") || ["mp3", "wav", "flac", "ogg", "m4a"].includes(ext(key)))
+    return "text-pink-400";
+  if (contentType.includes("json") || ext(key) === "json") return "text-amber-400";
+  if (["zip", "gz", "tar", "rar", "7z"].includes(ext(key))) return "text-orange-400";
+  if (contentType.startsWith("text/") || ["txt", "md", "log", "csv", "yaml", "yml", "xml"].includes(ext(key)))
+    return "text-sky-400";
+  return "text-muted-foreground";
+}

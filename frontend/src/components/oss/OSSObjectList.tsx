@@ -1,10 +1,11 @@
-import type React from "react";
+import { createElement, type UIEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Checkbox } from "@opskat/ui";
-import { Folder, FileText, Download } from "lucide-react";
+import { Folder, Download } from "lucide-react";
 import type { oss_svc } from "../../../wailsjs/go/models";
 import { prefixLeafName } from "@/lib/ossPrefixTree";
 import { formatBytes } from "@/lib/formatBytes";
+import { typeIcon, typeIconColor } from "@/lib/objectContentType";
 
 export { formatBytes } from "@/lib/formatBytes";
 
@@ -52,7 +53,7 @@ export function OSSObjectList({
 }: OSSObjectListProps) {
   const { t } = useTranslation();
 
-  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+  const handleScroll = (e: UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
     if (shouldLoadNextPage(el.scrollTop, el.clientHeight, el.scrollHeight, truncated, loadingPage)) {
       onScrollNearBottom();
@@ -124,12 +125,22 @@ export function OSSObjectList({
               </td>
               <td className="px-2 py-1">
                 <span className="flex items-center gap-1">
-                  <FileText className="size-3 text-muted-foreground" />
-                  {prefixLeafName(o.key)}
+                  {createElement(typeIcon(o.contentType, o.key), {
+                    className: `size-3 shrink-0 ${typeIconColor(o.contentType, o.key)}`,
+                  })}
+                  <span className="truncate">{prefixLeafName(o.key)}</span>
                 </span>
               </td>
               <td className="px-2 py-1 text-muted-foreground">{formatBytes(o.size)}</td>
-              <td className="px-2 py-1 text-muted-foreground">{o.storageClass || "—"}</td>
+              <td className="px-2 py-1">
+                {o.storageClass ? (
+                  <span className="inline-flex items-center rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                    {o.storageClass}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </td>
               <td className="px-2 py-1 text-muted-foreground">
                 {o.lastModified ? new Date(o.lastModified * 1000).toLocaleString() : "—"}
               </td>

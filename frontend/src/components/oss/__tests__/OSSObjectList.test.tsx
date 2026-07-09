@@ -52,7 +52,8 @@ describe("OSSObjectList", () => {
     expect(screen.getByText("sub")).toBeInTheDocument();
     expect(screen.getByText("readme.txt")).toBeInTheDocument();
     expect(screen.getByText("1.5 KB")).toBeInTheDocument();
-    expect(screen.getByText("STANDARD")).toBeInTheDocument();
+    // storage class renders as a chip, not bare text
+    expect(screen.getByText("STANDARD").className).toContain("bg-muted");
   });
 
   it("double-clicking a folder navigates into it", () => {
