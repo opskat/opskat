@@ -1039,6 +1039,16 @@
         "running": "Running",
         "done": "Done",
         "error": "Error"
+      },
+      "contextSection": "Linked assets",
+      "contextExpand": "Show linked assets",
+      "contextCollapse": "Hide linked assets",
+      "linkedAsset": {
+        "bind": "Link an asset",
+        "change": "Change",
+        "clear": "Clear",
+        "unbound": "Not linked",
+        "pickPlaceholder": "Choose an asset"
       }
     }
   },
