@@ -114,6 +114,20 @@ describe("_sendForConversation includes linked asset in context", () => {
     const aiContext = call?.[2] as { openTabs: Array<{ assetId: number }> };
     expect(aiContext.openTabs.map((t) => t.assetId)).toEqual([99, 1, 2]);
   });
+
+  it("marks the prepended bound asset active and others inactive", async () => {
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
+    useTabStore.setState({
+      tabs: [{ id: "t1", type: "terminal", label: "web", meta: { assetId: 1, assetName: "web", assetType: "ssh" } } as any],
+      activeTabId: "t1",
+    });
+    await useAIStore.getState().sendFromSidebarTab("s1", "hi");
+    const call = vi.mocked(SendAIMessage).mock.calls.at(-1);
+    const aiContext = call?.[2] as { openTabs: Array<{ assetId: number; active?: boolean }> };
+    expect(aiContext.openTabs[0].assetId).toBe(99);
+    expect(aiContext.openTabs[0].active).toBe(true);
+    expect(aiContext.openTabs.slice(1).every((t) => !t.active)).toBe(true);
+  });
 });
 
 describe("sendFromSidebarTab auto-binds first mention when unbound", () => {

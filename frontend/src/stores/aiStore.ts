@@ -1606,6 +1606,7 @@ async function _sendForConversation(convId: number, content: string) {
         type: boundTab.linkedAssetType || "",
         assetId: boundTab.linkedAssetId,
         assetName: boundTab.linkedAssetName || "",
+        active: true,
       }),
       ...rest
     );
