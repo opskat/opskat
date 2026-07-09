@@ -171,3 +171,36 @@ describe("linkedTabId migrates on tab id replace (reconnect)", () => {
     expect(tab?.linkedTabId).toBe("new-session");
   });
 });
+
+describe("sync⇒live-tab invariant (final review fix)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useTabStore.setState({
+      tabs: [{ id: "t1", type: "terminal", label: "web", meta: { assetId: 5, assetName: "web" } } as any],
+      activeTabId: "t1",
+    });
+  });
+
+  it("re-binding a synced conversation to a tabless asset disables sync", () => {
+    useAIStore.setState({
+      sidebarTabs: [mkTab({ id: "s1", linkedTabId: "t1", linkedAssetId: 5, syncTab: true }) as any],
+      activeSidebarTabId: "s1",
+    });
+    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: null, assetId: 9, assetName: "db", assetType: "database" });
+    const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
+    expect(tab?.linkedTabId).toBeNull();
+    expect(tab?.syncTab).toBe(false);
+  });
+
+  it("direction A does not activate a synced conversation whose linkedTabId is null when the active tab clears", () => {
+    useAIStore.setState({
+      sidebarTabs: [
+        mkTab({ id: "s1", linkedTabId: "t1", linkedAssetId: 5, syncTab: true }) as any,
+        mkTab({ id: "s2", linkedTabId: null, linkedAssetId: 9, syncTab: true }) as any,
+      ],
+      activeSidebarTabId: "s1",
+    });
+    useTabStore.setState({ activeTabId: null }); // all workspace tabs closed
+    expect(useAIStore.getState().activeSidebarTabId).toBe("s1"); // s2 must NOT be activated
+  });
+});

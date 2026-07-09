@@ -1969,6 +1969,8 @@ export const useAIStore = create<AIState>((set, get) => {
               linkedAssetId: binding.assetId,
               linkedAssetName: binding.assetName,
               linkedAssetType: binding.assetType,
+              // 无活 tab 链不可联动：绑到无打开 tab 的资产时强制关联动，维持 syncTab ⇒ linkedTabId 不变量。
+              syncTab: binding.workspaceTabId == null ? false : tab.syncTab,
             };
           }
           return tab;
@@ -2484,7 +2486,9 @@ useTabStore.subscribe((state) => {
   __lastActiveTabId = state.activeTabId;
   if (syncingTabBinding) return;
   const store = useAIStore.getState();
-  const target = store.sidebarTabs.find((t) => t.syncTab === true && t.linkedTabId === state.activeTabId);
+  const target = store.sidebarTabs.find(
+    (t) => t.syncTab === true && t.linkedTabId != null && t.linkedTabId === state.activeTabId
+  );
   if (!target || target.id === store.activeSidebarTabId) return;
   syncingTabBinding = true;
   try {
