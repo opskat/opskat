@@ -4,18 +4,9 @@ import { Checkbox } from "@opskat/ui";
 import { Folder, FileText } from "lucide-react";
 import type { oss_svc } from "../../../wailsjs/go/models";
 import { prefixLeafName } from "@/lib/ossPrefixTree";
+import { formatBytes } from "@/lib/formatBytes";
 
-export function formatBytes(size: number): string {
-  if (size < 1024) return `${size} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let val = size / 1024;
-  let i = 0;
-  while (val >= 1024 && i < units.length - 1) {
-    val /= 1024;
-    i++;
-  }
-  return `${val.toFixed(1)} ${units[i]}`;
-}
+export { formatBytes } from "@/lib/formatBytes";
 
 /** 抽出滚动到底判定，happy-dom 无布局无法驱动真实 scroll —— 单测这个纯函数，滚动绑定人工验证。 */
 export function shouldLoadNextPage(
