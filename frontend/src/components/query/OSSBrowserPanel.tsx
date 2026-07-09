@@ -12,6 +12,9 @@ import { notifySuccess } from "@/lib/notify";
 import { OSSBucketTree } from "@/components/oss/OSSBucketTree";
 import { OSSBreadcrumb } from "@/components/oss/OSSBreadcrumb";
 import { OSSObjectList } from "@/components/oss/OSSObjectList";
+import { OSSObjectGrid } from "@/components/oss/OSSObjectGrid";
+import { OSSObjectDetail } from "@/components/oss/OSSObjectDetail";
+import { OSSPresignDialog } from "@/components/oss/OSSPresignDialog";
 import { OSSTransferDock } from "@/components/oss/OSSTransferDock";
 import { useOssFileDrop } from "@/components/oss/useOssFileDrop";
 
@@ -34,6 +37,10 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
   const toggleSelect = useOssBrowserStore((s) => s.toggleSelect);
   const deleteSelected = useOssBrowserStore((s) => s.deleteSelected);
   const refresh = useOssBrowserStore((s) => s.refresh);
+  const setViewMode = useOssBrowserStore((s) => s.setViewMode);
+  const focusObject = useOssBrowserStore((s) => s.focusObject);
+  const ensureThumbnail = useOssBrowserStore((s) => s.ensureThumbnail);
+  const deleteObject = useOssBrowserStore((s) => s.deleteObject);
 
   const transferTab = useOssTransferStore((s) => s.tabs[tabId]);
   const startUpload = useOssTransferStore((s) => s.startUpload);
@@ -44,6 +51,8 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
   const transfers = useMemo(() => Object.values(transferTab?.transfers ?? {}), [transferTab]);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [detailDeleteOpen, setDetailDeleteOpen] = useState(false);
 
   const fail = useCallback((e: unknown) => toast.error(`${t("oss.browser.loadFailed")}: ${String(e)}`), [t]);
 
@@ -53,12 +62,22 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
 
   const rows = useMemo(() => (state ? flattenPrefixTree(state.tree, state.expanded, "") : []), [state]);
 
+  const focusedObject = useMemo(() => state?.listing?.objects.find((o) => o.key === state.focusedKey) ?? null, [state]);
+
   const sidebarRef = useRef<HTMLDivElement>(null);
   const { size: sidebarWidth, handleMouseDown } = useResizeHandle({
     defaultSize: 260,
     minSize: 180,
     maxSize: 480,
     targetRef: sidebarRef,
+  });
+  const detailRef = useRef<HTMLDivElement>(null);
+  const { size: detailWidth, handleMouseDown: handleDetailResize } = useResizeHandle({
+    defaultSize: 320,
+    minSize: 260,
+    maxSize: 520,
+    reverse: true,
+    targetRef: detailRef,
   });
 
   const onNavigate = useCallback(
@@ -73,6 +92,24 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
     (bucket: string) => void selectBucket(tabId, bucket).catch(fail),
     [selectBucket, tabId, fail]
   );
+
+  const onDetailDownload = useCallback(() => {
+    if (!assetId || !state?.currentBucket || !state.focusedKey) return;
+    void startDownload(tabId, assetId, state.currentBucket, state.focusedKey).catch(() =>
+      toast.error(t("oss.transfer.downloadFailed"))
+    );
+  }, [assetId, state, startDownload, tabId, t]);
+
+  const confirmDetailDelete = async () => {
+    setDetailDeleteOpen(false);
+    if (!state?.focusedKey) return;
+    try {
+      await deleteObject(tabId, state.focusedKey);
+      notifySuccess(t("oss.browser.deleteSuccess"));
+    } catch (e) {
+      toast.error(`${t("oss.browser.deleteFailed")}: ${String(e)}`);
+    }
+  };
 
   const contentRef = useRef<HTMLDivElement>(null);
   const isDragOver = useOssFileDrop({
@@ -157,6 +194,8 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
                 onNavigate={onNavigate}
                 onRefresh={() => void refresh(tabId).catch(fail)}
                 onUpload={onUpload}
+                viewMode={state.viewMode}
+                onViewModeChange={(m) => setViewMode(tabId, m)}
               />
               {selectionCount > 0 && (
                 <div
@@ -174,18 +213,36 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
                   </Button>
                 </div>
               )}
-              <OSSObjectList
-                prefixes={state.listing?.prefixes ?? []}
-                objects={state.listing?.objects ?? []}
-                selection={state.selection}
-                loading={state.loading.listing}
-                loadingPage={state.loading.page}
-                truncated={state.listing?.truncated ?? false}
-                onNavigatePrefix={onNavigate}
-                onToggleSelect={(key) => toggleSelect(tabId, key)}
-                onScrollNearBottom={() => void loadNextPage(tabId).catch(fail)}
-                onDownload={onDownload}
-              />
+              {state.viewMode === "grid" ? (
+                <OSSObjectGrid
+                  prefixes={state.listing?.prefixes ?? []}
+                  objects={state.listing?.objects ?? []}
+                  focusedKey={state.focusedKey}
+                  loading={state.loading.listing}
+                  loadingPage={state.loading.page}
+                  truncated={state.listing?.truncated ?? false}
+                  thumbnails={state.thumbnails}
+                  onNavigatePrefix={onNavigate}
+                  onFocusObject={(key) => focusObject(tabId, key)}
+                  onEnsureThumbnail={(key) => void ensureThumbnail(tabId, key)}
+                  onScrollNearBottom={() => void loadNextPage(tabId).catch(fail)}
+                />
+              ) : (
+                <OSSObjectList
+                  prefixes={state.listing?.prefixes ?? []}
+                  objects={state.listing?.objects ?? []}
+                  selection={state.selection}
+                  loading={state.loading.listing}
+                  loadingPage={state.loading.page}
+                  truncated={state.listing?.truncated ?? false}
+                  focusedKey={state.focusedKey}
+                  onNavigatePrefix={onNavigate}
+                  onToggleSelect={(key) => toggleSelect(tabId, key)}
+                  onFocusObject={(key) => focusObject(tabId, key)}
+                  onScrollNearBottom={() => void loadNextPage(tabId).catch(fail)}
+                  onDownload={onDownload}
+                />
+              )}
               {transfers.length > 0 && (
                 <OSSTransferDock
                   transfers={transfers}
@@ -212,6 +269,26 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
             </div>
           )}
         </div>
+
+        {focusedObject && (
+          <>
+            <div
+              className="w-1 shrink-0 cursor-col-resize hover:bg-accent active:bg-accent"
+              onMouseDown={handleDetailResize}
+            />
+            <div ref={detailRef} className="shrink-0 border-l" style={{ width: detailWidth }}>
+              <OSSObjectDetail
+                object={focusedObject}
+                thumbnailUrl={state?.thumbnails[focusedObject.key]}
+                onEnsureThumbnail={() => void ensureThumbnail(tabId, focusedObject.key)}
+                onShare={() => setShareOpen(true)}
+                onDownload={onDetailDownload}
+                onDelete={() => setDetailDeleteOpen(true)}
+                onClose={() => focusObject(tabId, null)}
+              />
+            </div>
+          </>
+        )}
       </div>
 
       <ConfirmDialog
@@ -222,6 +299,25 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
         cancelText={t("action.cancel")}
         confirmText={t("action.confirm")}
         onConfirm={() => void confirmDelete()}
+      />
+
+      {focusedObject && (
+        <OSSPresignDialog
+          open={shareOpen}
+          onOpenChange={setShareOpen}
+          assetId={assetId}
+          bucket={state?.currentBucket ?? ""}
+          objectKey={focusedObject.key}
+        />
+      )}
+      <ConfirmDialog
+        open={detailDeleteOpen}
+        onOpenChange={setDetailDeleteOpen}
+        title={t("oss.browser.deleteConfirmTitle")}
+        description={t("oss.browser.deleteConfirmOne", { key: state?.focusedKey ?? "" })}
+        cancelText={t("action.cancel")}
+        confirmText={t("action.confirm")}
+        onConfirm={() => void confirmDetailDelete()}
       />
     </div>
   );

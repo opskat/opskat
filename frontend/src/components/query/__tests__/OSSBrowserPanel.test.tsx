@@ -21,6 +21,18 @@ beforeEach(() => {
     ],
     activeTabId: TAB,
   });
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      observe = vi.fn();
+      disconnect = vi.fn();
+      unobserve = vi.fn();
+      takeRecords = vi.fn();
+      root = null;
+      rootMargin = "";
+      thresholds = [];
+    } as never
+  );
 });
 
 describe("OSSBrowserPanel", () => {
@@ -60,5 +72,46 @@ describe("OSSBrowserPanel", () => {
     );
     fireEvent.click(await screen.findByTestId("oss-upload"));
     await waitFor(() => expect(OSSUploadObject).toHaveBeenCalledWith(7, "b1", "docs/"));
+  });
+
+  it("toggles to grid view and opens the detail pane on single-click", async () => {
+    vi.mocked(OSSListBuckets).mockResolvedValue([{ name: "b1", creationDate: 0 }] as never);
+    render(<OSSBrowserPanel tabId={TAB} />);
+    await screen.findByTestId("oss-bucket-b1");
+    useOssBrowserStore.setState(
+      (s) =>
+        ({
+          tabs: {
+            ...s.tabs,
+            [TAB]: {
+              ...s.tabs[TAB],
+              currentBucket: "b1",
+              currentPrefix: "docs/",
+              listing: {
+                objects: [
+                  {
+                    key: "docs/a.txt",
+                    size: 1,
+                    lastModified: 0,
+                    etag: "",
+                    storageClass: "",
+                    contentType: "",
+                    isPrefix: false,
+                  },
+                ],
+                prefixes: [],
+                truncated: false,
+                cursor: "",
+              },
+            },
+          },
+        }) as never
+    );
+    // switch to grid
+    fireEvent.click(await screen.findByTestId("oss-view-grid"));
+    expect(await screen.findByTestId("oss-object-grid")).toBeInTheDocument();
+    // focus the object → detail pane opens
+    fireEvent.click(screen.getByTestId("oss-grid-object-docs/a.txt"));
+    expect(await screen.findByTestId("oss-object-detail")).toBeInTheDocument();
   });
 });
