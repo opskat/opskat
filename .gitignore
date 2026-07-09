@@ -51,3 +51,5 @@ e2e/scratch/*
 !e2e/scratch/README.md
 # 本地功能验证产物（截图 / 报告）不提交，仅供本地留档查看，见 docs/e2e-harness-guide.md §6
 docs/verification/
+# 本地真机验证目标（真实 host / 密钥路径）不提交，仅保留 .env.example 模板，见 docs/e2e-harness-guide.md §6
+.env
