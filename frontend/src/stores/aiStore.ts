@@ -20,6 +20,7 @@ import i18n from "../i18n";
 import {
   useTabStore,
   registerTabCloseHook,
+  registerTabReplaceHook,
   registerTabRestoreHook,
   type AITabMeta,
   type QueryTabMeta,
@@ -2490,6 +2491,20 @@ useTabStore.subscribe((state) => {
   } finally {
     syncingTabBinding = false;
   }
+});
+
+// 终端重连换 id（connectionId→sessionId）时迁移绑定，使 linkedTabId 跨重连/重启存活。
+registerTabReplaceHook((oldId, newId) => {
+  const store = useAIStore.getState();
+  let changed = false;
+  const next = store.sidebarTabs.map((tab) => {
+    if (tab.linkedTabId === oldId) {
+      changed = true;
+      return { ...tab, linkedTabId: newId };
+    }
+    return tab;
+  });
+  if (changed) useAIStore.setState({ sidebarTabs: next });
 });
 
 if (typeof window !== "undefined") {

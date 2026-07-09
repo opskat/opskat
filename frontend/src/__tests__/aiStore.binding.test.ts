@@ -147,3 +147,17 @@ describe("bidirectional tab↔conversation sync", () => {
     expect(useTabStore.getState().activeTabId).toBe("t2");
   });
 });
+
+describe("linkedTabId migrates on tab id replace (reconnect)", () => {
+  it("moves linkedTabId when a bound tab's id is replaced", () => {
+    localStorage.clear();
+    useAIStore.setState({
+      sidebarTabs: [mkTab({ id: "s1", linkedTabId: "old-conn", linkedAssetId: 5, syncTab: true }) as any],
+      activeSidebarTabId: "s1",
+    });
+    // aiStore 模块加载时已 registerTabReplaceHook；直接触发一次 replace 语义：
+    useTabStore.getState().replaceTabId?.("old-conn", "new-session");
+    const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
+    expect(tab?.linkedTabId).toBe("new-session");
+  });
+});
