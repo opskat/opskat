@@ -1,3 +1,4 @@
+import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -5,11 +6,14 @@ import { Trash2 } from "lucide-react";
 import { useResizeHandle, ConfirmDialog, Button } from "@opskat/ui";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { useOssBrowserStore } from "@/stores/ossBrowserStore";
+import { useOssTransferStore } from "@/stores/ossTransferStore";
 import { flattenPrefixTree } from "@/lib/ossPrefixTree";
 import { notifySuccess } from "@/lib/notify";
 import { OSSBucketTree } from "@/components/oss/OSSBucketTree";
 import { OSSBreadcrumb } from "@/components/oss/OSSBreadcrumb";
 import { OSSObjectList } from "@/components/oss/OSSObjectList";
+import { OSSTransferDock } from "@/components/oss/OSSTransferDock";
+import { useOssFileDrop } from "@/components/oss/useOssFileDrop";
 
 export interface OSSBrowserPanelProps {
   tabId: string;
@@ -30,6 +34,14 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
   const toggleSelect = useOssBrowserStore((s) => s.toggleSelect);
   const deleteSelected = useOssBrowserStore((s) => s.deleteSelected);
   const refresh = useOssBrowserStore((s) => s.refresh);
+
+  const transferTab = useOssTransferStore((s) => s.tabs[tabId]);
+  const startUpload = useOssTransferStore((s) => s.startUpload);
+  const startDownload = useOssTransferStore((s) => s.startDownload);
+  const cancelTransfer = useOssTransferStore((s) => s.cancel);
+  const clearTransfer = useOssTransferStore((s) => s.clear);
+  const clearCompleted = useOssTransferStore((s) => s.clearCompleted);
+  const transfers = useMemo(() => Object.values(transferTab?.transfers ?? {}), [transferTab]);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -60,6 +72,33 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
   const onSelectBucket = useCallback(
     (bucket: string) => void selectBucket(tabId, bucket).catch(fail),
     [selectBucket, tabId, fail]
+  );
+
+  const contentRef = useRef<HTMLDivElement>(null);
+  const isDragOver = useOssFileDrop({
+    dropRef: contentRef,
+    tabId,
+    assetId: assetId ?? 0,
+    bucket: state?.currentBucket ?? "",
+    prefix: state?.currentPrefix ?? "",
+    active: !!assetId && !!state?.currentBucket,
+  });
+
+  const onUpload = useCallback(() => {
+    if (!assetId || !state?.currentBucket) return;
+    void startUpload(tabId, assetId, state.currentBucket, state.currentPrefix).catch(() =>
+      toast.error(t("oss.transfer.uploadFailed"))
+    );
+  }, [assetId, state, startUpload, tabId, t]);
+
+  const onDownload = useCallback(
+    (key: string) => {
+      if (!assetId || !state?.currentBucket) return;
+      void startDownload(tabId, assetId, state.currentBucket, key).catch(() =>
+        toast.error(t("oss.transfer.downloadFailed"))
+      );
+    },
+    [assetId, state, startDownload, tabId, t]
   );
 
   const confirmDelete = async () => {
@@ -105,7 +144,11 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
         />
 
         {/* Right: breadcrumb + (selection bar) + object list */}
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div
+          ref={contentRef}
+          className="relative flex min-w-0 flex-1 flex-col"
+          style={{ "--wails-drop-target": state?.currentBucket ? "drop" : undefined } as React.CSSProperties}
+        >
           {state?.currentBucket ? (
             <>
               <OSSBreadcrumb
@@ -113,6 +156,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
                 prefix={state.currentPrefix}
                 onNavigate={onNavigate}
                 onRefresh={() => void refresh(tabId).catch(fail)}
+                onUpload={onUpload}
               />
               {selectionCount > 0 && (
                 <div
@@ -140,7 +184,16 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
                 onNavigatePrefix={onNavigate}
                 onToggleSelect={(key) => toggleSelect(tabId, key)}
                 onScrollNearBottom={() => void loadNextPage(tabId).catch(fail)}
+                onDownload={onDownload}
               />
+              {transfers.length > 0 && (
+                <OSSTransferDock
+                  transfers={transfers}
+                  onCancel={cancelTransfer}
+                  onClear={(id) => clearTransfer(tabId, id)}
+                  onClearCompleted={() => clearCompleted(tabId)}
+                />
+              )}
             </>
           ) : (
             <div
@@ -148,6 +201,14 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
               data-testid="oss-no-bucket"
             >
               {t("oss.browser.selectBucket")}
+            </div>
+          )}
+          {isDragOver && (
+            <div
+              className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-primary/10 text-sm text-primary"
+              data-testid="oss-drop-hint"
+            >
+              {t("oss.transfer.dropHint")}
             </div>
           )}
         </div>
