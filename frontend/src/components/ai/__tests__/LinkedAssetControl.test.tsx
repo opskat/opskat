@@ -60,7 +60,7 @@ describe("LinkedAssetControl", () => {
   });
 
   it("shows the bound chip and clears on 清除绑定", () => {
-    useAIStore.getState().setSidebarTabAsset("s1", { assetId: 42, assetName: "prod-web-01", assetType: "ssh" });
+    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: null, assetId: 42, assetName: "prod-web-01", assetType: "ssh" });
     render(<LinkedAssetControl sidebarTabId="s1" />);
     expect(screen.getByText("prod-web-01")).toBeInTheDocument();
     openMenu();

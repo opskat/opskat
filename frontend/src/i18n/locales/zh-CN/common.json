@@ -1048,11 +1048,11 @@
         "openTerminals": "已打开的终端 / 会话",
         "pickFromLibrary": "从资产库选择…",
         "clearBinding": "清除绑定",
-        "followHint": "默认关闭 · 顶部只显示绑定 chip"
+        "syncHint": "开启后：切到此 tab 自动切到本会话，切到本会话自动切到此 tab",
+        "tabClosed": "绑定的 tab 已关闭 · 可重新绑定"
       },
-      "followSwitched": "已跟随切换到 {{name}}",
-      "follow": "跟随此终端",
-      "following": "跟随中",
+      "sync": "联动此 tab",
+      "syncing": "联动中",
       "referencedThisSession": "本次引用"
     }
   },

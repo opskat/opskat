@@ -1048,11 +1048,11 @@
         "openTerminals": "Open terminals / sessions",
         "pickFromLibrary": "Choose from asset library…",
         "clearBinding": "Clear binding",
-        "followHint": "Off by default · only the bound chip shows up top"
+        "syncHint": "When on: this tab activates this chat, and this chat activates the tab",
+        "tabClosed": "The bound tab is closed · rebind to relink"
       },
-      "followSwitched": "Following → {{name}}",
-      "follow": "Follow this terminal",
-      "following": "Following",
+      "sync": "Link to this tab",
+      "syncing": "Linked",
       "referencedThisSession": "Referenced"
     }
   },
