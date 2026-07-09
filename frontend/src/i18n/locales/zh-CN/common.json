@@ -2542,6 +2542,18 @@
       "deleteConfirmMany": "删除 {{count}} 个对象？",
       "deleteSuccess": "已删除",
       "deleteFailed": "删除失败"
+    },
+    "transfer": {
+      "upload": "上传",
+      "download": "下载",
+      "transfers": "传输",
+      "clearCompleted": "清除已完成",
+      "cancel": "取消",
+      "clear": "清除",
+      "dropHint": "拖入文件以上传",
+      "uploadFailed": "上传失败",
+      "downloadFailed": "下载失败",
+      "refreshAfterUploadFailed": "已上传，但刷新列表失败"
     }
   },
   "etcd": {

@@ -2542,6 +2542,18 @@
       "deleteConfirmMany": "Delete {{count}} objects?",
       "deleteSuccess": "Deleted",
       "deleteFailed": "Delete failed"
+    },
+    "transfer": {
+      "upload": "Upload",
+      "download": "Download",
+      "transfers": "Transfers",
+      "clearCompleted": "Clear completed",
+      "cancel": "Cancel",
+      "clear": "Clear",
+      "dropHint": "Drop files to upload",
+      "uploadFailed": "Upload failed",
+      "downloadFailed": "Download failed",
+      "refreshAfterUploadFailed": "Uploaded, but refreshing the list failed"
     }
   },
   "etcd": {
