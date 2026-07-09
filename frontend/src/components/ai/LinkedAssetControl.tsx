@@ -32,7 +32,7 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
   const [picking, setPicking] = useState(false);
 
   // 已打开的工作区 tab → 资产引用,按资产去重(同一资产多开只列第一个 tab)。
-  const openTerminals = useMemo(() => {
+  const openAssets = useMemo(() => {
     const seen = new Set<number>();
     const out: OpenTerminal[] = [];
     for (const wt of tabs) {
@@ -64,7 +64,7 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
   const handleLibraryPick = (assetId: number) => {
     const asset = assets.find((a) => a.ID === assetId);
     if (asset) {
-      const open = openTerminals.find((o) => o.assetId === assetId);
+      const open = openAssets.find((o) => o.assetId === assetId);
       bindTab(sidebarTabId, {
         workspaceTabId: open?.tabId ?? null,
         assetId,
@@ -114,12 +114,12 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-[220px]" onCloseAutoFocus={(e) => e.preventDefault()}>
-          {openTerminals.length > 0 && (
+          {openAssets.length > 0 && (
             <>
               <DropdownMenuLabel className="px-2 py-1 text-[11px] font-semibold text-muted-foreground/70">
-                {t("ai.sidebar.linkedAsset.openTerminals")}
+                {t("ai.sidebar.linkedAsset.openAssets")}
               </DropdownMenuLabel>
-              {openTerminals.map((term) => {
+              {openAssets.map((term) => {
                 const { Icon, color } = resolveAssetIcon(assets, term.assetId, term.assetType);
                 const isBound = term.tabId === tab?.linkedTabId;
                 return (

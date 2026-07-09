@@ -1045,7 +1045,7 @@
       "contextCollapse": "Hide linked assets",
       "linkedAsset": {
         "pickPlaceholder": "Choose an asset to bind",
-        "openTerminals": "Open terminals / sessions",
+        "openAssets": "Open assets",
         "pickFromLibrary": "Choose from asset library…",
         "clearBinding": "Clear binding",
         "syncHint": "When on: this tab activates this chat, and this chat activates the tab",

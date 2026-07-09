@@ -1045,7 +1045,7 @@
       "contextCollapse": "收起关联资产",
       "linkedAsset": {
         "pickPlaceholder": "选择要绑定的资产",
-        "openTerminals": "已打开的终端 / 会话",
+        "openAssets": "已打开的资产",
         "pickFromLibrary": "从资产库选择…",
         "clearBinding": "清除绑定",
         "syncHint": "开启后：切到此 tab 自动切到本会话，切到本会话自动切到此 tab",
