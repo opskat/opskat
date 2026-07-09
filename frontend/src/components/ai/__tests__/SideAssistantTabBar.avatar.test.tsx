@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { SideAssistantTabBar } from "../SideAssistantTabBar";
+import { useAssetStore } from "@/stores/assetStore";
 
 const baseTab = { id: "s1", conversationId: 1, title: "prod-web-01", createdAt: 1, uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null } };
 
@@ -20,9 +21,19 @@ function renderBar(tabExtra: object) {
 }
 
 describe("SideAssistantTabBar avatar", () => {
-  it("renders the asset-type icon when the tab is bound", () => {
+  beforeEach(() => {
+    useAssetStore.setState({ assets: [{ ID: 42, Name: "prod-web-01", Type: "ssh", Icon: "server#22c55e" } as any] });
+  });
+
+  it("renders the bound asset icon when the tab is bound", () => {
     renderBar({ linkedAssetId: 42, linkedAssetType: "ssh", linkedAssetName: "prod-web-01" });
     expect(screen.getByTestId("session-asset-icon-s1")).toBeInTheDocument();
+  });
+
+  it("colors the bound avatar icon with the asset's own color", () => {
+    renderBar({ linkedAssetId: 42, linkedAssetType: "ssh", linkedAssetName: "prod-web-01" });
+    const svg = screen.getByTestId("session-asset-icon-s1").querySelector("svg");
+    expect(svg?.getAttribute("style") ?? "").toContain("color");
   });
 
   it("falls back to the title letter when unbound", () => {

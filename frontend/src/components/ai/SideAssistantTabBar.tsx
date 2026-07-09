@@ -2,7 +2,8 @@ import { LoaderCircle, X, ChevronsRight, ChevronsLeft, Plus } from "lucide-react
 import { cn, Button, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@opskat/ui";
 import { useTranslation } from "react-i18next";
 import type { SidebarAITab, SidebarTabStatus } from "@/stores/aiStore";
-import { getAssetType, type AssetTypeDefinition } from "@/lib/assetTypes";
+import { useAssetStore } from "@/stores/assetStore";
+import { resolveAssetIcon, type ResolvedAssetIcon } from "@/lib/aiAssetIcon";
 import { getSessionIconColor, getSessionIconLetter } from "./sessionIconColor";
 
 interface SideAssistantTabBarProps {
@@ -23,12 +24,13 @@ const statusDotColor: Record<Exclude<SidebarTabStatus, null>, string> = {
   error: "bg-destructive",
 };
 
-/** 头像内容：绑定资产且类型可识别 → 渲染资产图标；否则回退标题首字。两处渲染（折叠/展开）复用。 */
-function renderAvatarContent(tabId: string, AssetIcon: AssetTypeDefinition["icon"] | undefined, letter: string) {
-  if (AssetIcon) {
+/** 头像内容：绑定资产 → 渲染资产图标（真实图标 + 颜色）；否则回退标题首字。折叠/展开两处复用。 */
+function renderAvatarContent(tabId: string, resolved: ResolvedAssetIcon | null, letter: string) {
+  if (resolved) {
+    const { Icon } = resolved;
     return (
       <span data-testid={`session-asset-icon-${tabId}`}>
-        <AssetIcon className="h-3.5 w-3.5" />
+        <Icon className="h-3.5 w-3.5" style={resolved.color ? { color: resolved.color } : undefined} />
       </span>
     );
   }
@@ -46,6 +48,7 @@ export function SideAssistantTabBar({
   onToggleCollapsed,
 }: SideAssistantTabBarProps) {
   const { t } = useTranslation();
+  const assets = useAssetStore((s) => s.assets);
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -99,8 +102,9 @@ export function SideAssistantTabBar({
             const titleText = tab.title || t("ai.newConversation");
             const isBlank = tab.conversationId == null;
             const letter = isBlank ? "?" : getSessionIconLetter(titleText);
-            const color = isBlank ? null : getSessionIconColor(titleText);
-            const AssetIcon = tab.linkedAssetType ? getAssetType(tab.linkedAssetType)?.icon : undefined;
+            const bound = tab.linkedAssetId != null;
+            const color = isBlank || bound ? null : getSessionIconColor(titleText);
+            const resolved = bound ? resolveAssetIcon(assets, tab.linkedAssetId, tab.linkedAssetType) : null;
             const statusSuffix = status ? ` · ${t(`ai.sidebar.statusSuffix.${status}`)}` : "";
 
             const handleAuxClick = (e: React.MouseEvent) => {
@@ -125,11 +129,12 @@ export function SideAssistantTabBar({
                         className={cn(
                           "relative flex h-7 w-7 items-center justify-center rounded-md text-xs font-bold transition-transform hover:scale-105",
                           isActive && "ring-2 ring-primary ring-offset-1 ring-offset-sidebar",
+                          bound && "bg-muted/70 text-foreground",
                           isBlank && "border border-dashed border-muted-foreground/40 text-muted-foreground/70"
                         )}
                         style={color ? { background: color.bg, color: color.fg } : undefined}
                       >
-                        {renderAvatarContent(tab.id, AssetIcon, letter)}
+                        {renderAvatarContent(tab.id, resolved, letter)}
                         {status && (
                           <span
                             className={cn(
@@ -189,11 +194,12 @@ export function SideAssistantTabBar({
                   <span
                     className={cn(
                       "relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-bold",
+                      bound && "bg-muted/70 text-foreground",
                       isBlank && "border border-dashed border-muted-foreground/40 text-muted-foreground/70"
                     )}
                     style={color ? { background: color.bg, color: color.fg } : undefined}
                   >
-                    {renderAvatarContent(tab.id, AssetIcon, letter)}
+                    {renderAvatarContent(tab.id, resolved, letter)}
                     {status === "running" ? (
                       <LoaderCircle
                         aria-hidden="true"
