@@ -1051,7 +1051,8 @@
       },
       "followSwitched": "Following → {{name}}",
       "follow": "Follow this terminal",
-      "following": "Following"
+      "following": "Following",
+      "referencedThisSession": "Referenced"
     }
   },
   "shortcut": {

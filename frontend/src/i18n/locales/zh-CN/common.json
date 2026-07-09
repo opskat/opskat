@@ -1051,7 +1051,8 @@
       },
       "followSwitched": "已跟随切换到 {{name}}",
       "follow": "跟随此终端",
-      "following": "跟随中"
+      "following": "跟随中",
+      "referencedThisSession": "本次引用"
     }
   },
   "shortcut": {

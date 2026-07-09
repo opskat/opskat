@@ -4,6 +4,7 @@ import { Check, ChevronDown, ChevronUp, Pencil, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAIStore } from "@/stores/aiStore";
 import { LinkedAssetControl } from "./LinkedAssetControl";
+import { ReferencesRow } from "./ReferencesRow";
 
 interface SideAssistantContextBarProps {
   conversationId: number | null;
@@ -23,6 +24,7 @@ export function SideAssistantContextBar({ conversationId, sidebarTabId }: SideAs
   const conversations = useAIStore((s) => s.conversations);
   const renameConversation = useAIStore((s) => s.renameConversation);
   const conv = conversationId != null ? conversations.find((c) => c.ID === conversationId) : null;
+  const linkedAssetId = useAIStore((s) => s.sidebarTabs.find((tb) => tb.id === sidebarTabId)?.linkedAssetId ?? null);
   const conversationTitle = conv?.Title || "";
   const initialRenameState: RenameState = {
     conversationId,
@@ -178,6 +180,7 @@ export function SideAssistantContextBar({ conversationId, sidebarTabId }: SideAs
       {contextExpanded && (
         <div id="ai-linked-asset-section" data-testid="linked-asset-section" className="px-3 pb-2">
           <LinkedAssetControl sidebarTabId={sidebarTabId} />
+          <ReferencesRow conversationId={conversationId} boundAssetId={linkedAssetId} />
         </div>
       )}
     </div>
