@@ -280,7 +280,8 @@ export function sanitizeSidebarTab(raw: unknown): SidebarAITab | null {
     createdAt: typeof tab.createdAt === "number" && Number.isFinite(tab.createdAt) ? tab.createdAt : undefined,
     uiState: sanitizeSidebarUiStateForPersistence(tab.uiState),
     linkedTabId: typeof tab.linkedTabId === "string" ? tab.linkedTabId : undefined,
-    linkedAssetId: typeof tab.linkedAssetId === "number" && Number.isFinite(tab.linkedAssetId) ? tab.linkedAssetId : undefined,
+    linkedAssetId:
+      typeof tab.linkedAssetId === "number" && Number.isFinite(tab.linkedAssetId) ? tab.linkedAssetId : undefined,
     linkedAssetName: typeof tab.linkedAssetName === "string" ? tab.linkedAssetName : undefined,
     linkedAssetType: typeof tab.linkedAssetType === "string" ? tab.linkedAssetType : undefined,
     syncTab: typeof tab.syncTab === "boolean" ? tab.syncTab : undefined,
@@ -1994,7 +1995,7 @@ export const useAIStore = create<AIState>((set, get) => {
       set((state) => ({
         sidebarTabs: state.sidebarTabs.map((tab) =>
           tab.id === sidebarTabId
-            ? { ...tab, syncTab: on && tab.linkedTabId != null }  // 无 tab 链不可联动
+            ? { ...tab, syncTab: on && tab.linkedTabId != null } // 无 tab 链不可联动
             : tab
         ),
       }));

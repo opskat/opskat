@@ -3,7 +3,13 @@ import { render, screen } from "@testing-library/react";
 import { SideAssistantTabBar } from "../SideAssistantTabBar";
 import { useAssetStore } from "@/stores/assetStore";
 
-const baseTab = { id: "s1", conversationId: 1, title: "prod-web-01", createdAt: 1, uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null } };
+const baseTab = {
+  id: "s1",
+  conversationId: 1,
+  title: "prod-web-01",
+  createdAt: 1,
+  uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null },
+};
 
 function renderBar(tabExtra: object) {
   return render(

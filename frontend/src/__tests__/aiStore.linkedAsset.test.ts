@@ -47,7 +47,9 @@ describe("bindSidebarTab / unbindSidebarTab", () => {
   });
 
   it("binds an asset to the tab and persists it", () => {
-    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: null, assetId: 42, assetName: "prod-web-01", assetType: "ssh" });
+    useAIStore
+      .getState()
+      .bindSidebarTab("s1", { workspaceTabId: null, assetId: 42, assetName: "prod-web-01", assetType: "ssh" });
     const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
     expect(tab?.linkedAssetId).toBe(42);
     expect(tab?.linkedAssetName).toBe("prod-web-01");
@@ -73,7 +75,18 @@ describe("_sendForConversation includes linked asset in context", () => {
       modelName: "gpt-4",
       conversationMessages: { 1: [] },
       conversationStreaming: { 1: { sending: false, pendingQueue: [] } },
-      sidebarTabs: [{ id: "s1", conversationId: 1, title: "t", createdAt: 1, uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null }, linkedAssetId: 99, linkedAssetName: "cache", linkedAssetType: "redis" }],
+      sidebarTabs: [
+        {
+          id: "s1",
+          conversationId: 1,
+          title: "t",
+          createdAt: 1,
+          uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null },
+          linkedAssetId: 99,
+          linkedAssetName: "cache",
+          linkedAssetType: "redis",
+        },
+      ],
       activeSidebarTabId: "s1",
     });
   });
@@ -91,7 +104,14 @@ describe("_sendForConversation includes linked asset in context", () => {
   it("does not duplicate when the bound asset tab is already open", async () => {
     vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
     useTabStore.setState({
-      tabs: [{ id: "q1", type: "query", label: "cache", meta: { assetId: 99, assetName: "cache", assetType: "redis" } } as any],
+      tabs: [
+        {
+          id: "q1",
+          type: "query",
+          label: "cache",
+          meta: { assetId: 99, assetName: "cache", assetType: "redis" },
+        } as any,
+      ],
       activeTabId: "q1",
     });
     await useAIStore.getState().sendFromSidebarTab("s1", "hello");
@@ -118,7 +138,9 @@ describe("_sendForConversation includes linked asset in context", () => {
   it("marks the prepended bound asset active and others inactive", async () => {
     vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
     useTabStore.setState({
-      tabs: [{ id: "t1", type: "terminal", label: "web", meta: { assetId: 1, assetName: "web", assetType: "ssh" } } as any],
+      tabs: [
+        { id: "t1", type: "terminal", label: "web", meta: { assetId: 1, assetName: "web", assetType: "ssh" } } as any,
+      ],
       activeTabId: "t1",
     });
     await useAIStore.getState().sendFromSidebarTab("s1", "hi");
@@ -136,10 +158,19 @@ describe("sendFromSidebarTab auto-binds first mention when unbound", () => {
     localStorage.clear();
     useTabStore.setState({ tabs: [], activeTabId: null });
     useAIStore.setState({
-      configured: true, modelName: "gpt-4",
+      configured: true,
+      modelName: "gpt-4",
       conversationMessages: { 1: [] },
       conversationStreaming: { 1: { sending: false, pendingQueue: [] } },
-      sidebarTabs: [{ id: "s1", conversationId: 1, title: "t", createdAt: 1, uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null } }],
+      sidebarTabs: [
+        {
+          id: "s1",
+          conversationId: 1,
+          title: "t",
+          createdAt: 1,
+          uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null },
+        },
+      ],
       activeSidebarTabId: "s1",
     });
     vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
@@ -153,7 +184,9 @@ describe("sendFromSidebarTab auto-binds first mention when unbound", () => {
   });
 
   it("does not override an existing binding", async () => {
-    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: null, assetId: 99, assetName: "cache", assetType: "redis" });
+    useAIStore
+      .getState()
+      .bindSidebarTab("s1", { workspaceTabId: null, assetId: 99, assetName: "cache", assetType: "redis" });
     const content = `${buildMentionXml({ assetId: 7, name: "prod-web-01", type: "ssh" })} x`;
     await useAIStore.getState().sendFromSidebarTab("s1", content);
     const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");

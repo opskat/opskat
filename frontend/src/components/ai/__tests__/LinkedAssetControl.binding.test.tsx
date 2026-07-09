@@ -29,7 +29,9 @@ const boundTab = {
 describe("LinkedAssetControl binding + sync menu", () => {
   beforeEach(() => {
     useTabStore.setState({
-      tabs: [{ id: "t1", type: "terminal", label: "prod-web-01", meta: { assetId: 42, assetName: "prod-web-01" } } as any],
+      tabs: [
+        { id: "t1", type: "terminal", label: "prod-web-01", meta: { assetId: 42, assetName: "prod-web-01" } } as any,
+      ],
       activeTabId: "t1",
     });
     useAssetStore.setState({ assets: [{ ID: 42, Name: "prod-web-01", Type: "ssh", Icon: "server" } as any] });
@@ -38,7 +40,15 @@ describe("LinkedAssetControl binding + sync menu", () => {
 
   it("binds a workspace tab from the open-terminals list", () => {
     useAIStore.setState({
-      sidebarTabs: [{ id: "s1", conversationId: 1, title: "t", createdAt: 1, uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null } } as any],
+      sidebarTabs: [
+        {
+          id: "s1",
+          conversationId: 1,
+          title: "t",
+          createdAt: 1,
+          uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null },
+        } as any,
+      ],
       activeSidebarTabId: "s1",
     });
     render(<LinkedAssetControl sidebarTabId="s1" />);

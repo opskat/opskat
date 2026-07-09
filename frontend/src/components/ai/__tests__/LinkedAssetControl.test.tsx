@@ -7,7 +7,9 @@ import { useTabStore } from "@/stores/tabStore";
 
 vi.mock("@/components/asset/AssetSelect", () => ({
   AssetSelect: ({ onValueChange }: { onValueChange: (id: number) => void }) => (
-    <button data-testid="asset-pick" onClick={() => onValueChange(42)}>pick</button>
+    <button data-testid="asset-pick" onClick={() => onValueChange(42)}>
+      pick
+    </button>
   ),
 }));
 
@@ -21,7 +23,15 @@ describe("LinkedAssetControl", () => {
     useTabStore.setState({ tabs: [], activeTabId: null });
     useAssetStore.setState({ assets: [{ ID: 42, Name: "prod-web-01", Type: "ssh", Icon: "server" } as any] });
     useAIStore.setState({
-      sidebarTabs: [{ id: "s1", conversationId: 1, title: "t", createdAt: 1, uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null } }],
+      sidebarTabs: [
+        {
+          id: "s1",
+          conversationId: 1,
+          title: "t",
+          createdAt: 1,
+          uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null },
+        },
+      ],
       activeSidebarTabId: "s1",
     });
   });
@@ -47,7 +57,14 @@ describe("LinkedAssetControl", () => {
 
   it("lists open terminals and binds the one clicked", () => {
     useTabStore.setState({
-      tabs: [{ id: "t7", type: "terminal", label: "web", meta: { type: "terminal", assetId: 7, assetName: "web-07" } as any }],
+      tabs: [
+        {
+          id: "t7",
+          type: "terminal",
+          label: "web",
+          meta: { type: "terminal", assetId: 7, assetName: "web-07" } as any,
+        },
+      ],
       activeTabId: "t7",
     });
     render(<LinkedAssetControl sidebarTabId="s1" />);
@@ -60,7 +77,9 @@ describe("LinkedAssetControl", () => {
   });
 
   it("shows the bound chip and clears on 清除绑定", () => {
-    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: null, assetId: 42, assetName: "prod-web-01", assetType: "ssh" });
+    useAIStore
+      .getState()
+      .bindSidebarTab("s1", { workspaceTabId: null, assetId: 42, assetName: "prod-web-01", assetType: "ssh" });
     render(<LinkedAssetControl sidebarTabId="s1" />);
     expect(screen.getByText("prod-web-01")).toBeInTheDocument();
     openMenu();

@@ -53,14 +53,24 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
   const { Icon: BoundIcon, color: boundColor } = resolveAssetIcon(assets, tab?.linkedAssetId, tab?.linkedAssetType);
 
   const bindToTerminal = (term: OpenTerminal) =>
-    bindTab(sidebarTabId, { workspaceTabId: term.tabId, assetId: term.assetId, assetName: term.assetName, assetType: term.assetType });
+    bindTab(sidebarTabId, {
+      workspaceTabId: term.tabId,
+      assetId: term.assetId,
+      assetName: term.assetName,
+      assetType: term.assetType,
+    });
 
   // 资产库选择器只回传 id;名称/类型从 assetStore 补全。若该资产恰有打开的 tab 则一并绑 tab,否则仅绑资产(linkedTabId=null)。
   const handleLibraryPick = (assetId: number) => {
     const asset = assets.find((a) => a.ID === assetId);
     if (asset) {
       const open = openTerminals.find((o) => o.assetId === assetId);
-      bindTab(sidebarTabId, { workspaceTabId: open?.tabId ?? null, assetId, assetName: asset.Name, assetType: asset.Type });
+      bindTab(sidebarTabId, {
+        workspaceTabId: open?.tabId ?? null,
+        assetId,
+        assetName: asset.Name,
+        assetType: asset.Type,
+      });
     }
     setPicking(false);
   };
