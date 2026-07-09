@@ -29,7 +29,7 @@ describe("sanitizeSidebarTab linked asset", () => {
   });
 });
 
-describe("setSidebarTabAsset / clearSidebarTabAsset", () => {
+describe("bindSidebarTab / unbindSidebarTab", () => {
   beforeEach(() => {
     localStorage.clear();
     useAIStore.setState({
@@ -47,7 +47,7 @@ describe("setSidebarTabAsset / clearSidebarTabAsset", () => {
   });
 
   it("binds an asset to the tab and persists it", () => {
-    useAIStore.getState().setSidebarTabAsset("s1", { assetId: 42, assetName: "prod-web-01", assetType: "ssh" });
+    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: null, assetId: 42, assetName: "prod-web-01", assetType: "ssh" });
     const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
     expect(tab?.linkedAssetId).toBe(42);
     expect(tab?.linkedAssetName).toBe("prod-web-01");
@@ -56,8 +56,8 @@ describe("setSidebarTabAsset / clearSidebarTabAsset", () => {
   });
 
   it("clears the binding", () => {
-    useAIStore.getState().setSidebarTabAsset("s1", { assetId: 42, assetName: "p", assetType: "ssh" });
-    useAIStore.getState().clearSidebarTabAsset("s1");
+    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: null, assetId: 42, assetName: "p", assetType: "ssh" });
+    useAIStore.getState().unbindSidebarTab("s1");
     const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
     expect(tab?.linkedAssetId).toBeUndefined();
   });
@@ -153,7 +153,7 @@ describe("sendFromSidebarTab auto-binds first mention when unbound", () => {
   });
 
   it("does not override an existing binding", async () => {
-    useAIStore.getState().setSidebarTabAsset("s1", { assetId: 99, assetName: "cache", assetType: "redis" });
+    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: null, assetId: 99, assetName: "cache", assetType: "redis" });
     const content = `${buildMentionXml({ assetId: 7, name: "prod-web-01", type: "ssh" })} x`;
     await useAIStore.getState().sendFromSidebarTab("s1", content);
     const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");

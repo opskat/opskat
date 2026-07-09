@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { create } from "zustand";
-import { toast } from "sonner";
 import { SendAIMessage } from "../../wailsjs/go/ai/AI";
 import {
   StopAIGeneration,
@@ -29,7 +28,6 @@ import {
 import { stripMentionTags, extractMentions } from "@/lib/mentionXml";
 import { linkedAssetFromMention } from "@/lib/aiLinkedAsset";
 import { classifyError, type ErrorKind } from "@/lib/aiError";
-import { tabToAssetRef } from "@/lib/tabAsset";
 
 // 内容块：文本、工具调用、Sub Agent、审批、错误（持久化字段）。
 // "error" 块由 EventError 推入，或在 retry 中途退出落盘时由 retryStatus 物化而来。
@@ -1716,6 +1714,9 @@ interface AIState {
   getStreamingByConversationId: (convId: number) => { sending: boolean; pendingQueue: PendingQueueItem[] };
 }
 
+// 联动方向 A/B 共享的重入 guard —— 防止 tab↔会话互相激活形成回环。
+let syncingTabBinding = false;
+
 export const useAIStore = create<AIState>((set, get) => {
   const initialSidebarState = loadInitialSidebarState();
 
@@ -1938,6 +1939,18 @@ export const useAIStore = create<AIState>((set, get) => {
     activateSidebarTab: (tabId: string) => {
       if (!get().sidebarTabs.some((tab) => tab.id === tabId)) return;
       set({ activeSidebarTabId: tabId });
+      // 联动方向 B：激活开了联动的会话 → 激活其绑定的工作区 tab（tab 已关则不动）。
+      if (syncingTabBinding) return;
+      const tab = get().sidebarTabs.find((t) => t.id === tabId);
+      if (!tab?.syncTab || !tab.linkedTabId) return;
+      const ts = useTabStore.getState();
+      if (ts.activeTabId === tab.linkedTabId || !ts.tabs.some((t) => t.id === tab.linkedTabId)) return;
+      syncingTabBinding = true;
+      try {
+        ts.activateTab(tab.linkedTabId);
+      } finally {
+        syncingTabBinding = false;
+      }
     },
 
     bindSidebarTab: (sidebarTabId, binding) => {
@@ -2251,7 +2264,7 @@ export const useAIStore = create<AIState>((set, get) => {
       if (sidebarTab.linkedAssetId == null && content.trim()) {
         const mentions = extractMentions(content);
         if (mentions.length > 0) {
-          get().setSidebarTabAsset(tabId, linkedAssetFromMention(mentions[0]));
+          get().bindSidebarTab(tabId, { workspaceTabId: null, ...linkedAssetFromMention(mentions[0]) });
         }
       }
 
@@ -2462,20 +2475,20 @@ useAIStore.subscribe((state, prevState) => {
   }
 });
 
-// 跟随开关：激活终端变化时，重绑所有开启跟随的会话到新激活资产。
+// 联动方向 A：激活工作区 tab 变化 → 激活绑定它且开了联动的会话。
 let __lastActiveTabId: string | null = useTabStore.getState().activeTabId;
 useTabStore.subscribe((state) => {
   if (state.activeTabId === __lastActiveTabId) return;
   __lastActiveTabId = state.activeTabId;
-  const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
-  const ref = activeTab ? tabToAssetRef(activeTab) : null;
-  if (!ref) return;
+  if (syncingTabBinding) return;
   const store = useAIStore.getState();
-  for (const tab of store.sidebarTabs) {
-    if (tab.followActiveTerminal === true && tab.linkedAssetId !== ref.assetId) {
-      store.setSidebarTabAsset(tab.id, ref);
-      toast.info(i18n.t("ai.sidebar.followSwitched", { name: ref.assetName }));
-    }
+  const target = store.sidebarTabs.find((t) => t.syncTab === true && t.linkedTabId === state.activeTabId);
+  if (!target || target.id === store.activeSidebarTabId) return;
+  syncingTabBinding = true;
+  try {
+    store.activateSidebarTab(target.id);
+  } finally {
+    syncingTabBinding = false;
   }
 });
 
