@@ -1044,7 +1044,6 @@
       "contextExpand": "展开关联资产",
       "contextCollapse": "收起关联资产",
       "linkedAsset": {
-        "bind": "绑定资产",
         "change": "换绑",
         "clear": "清除",
         "unbound": "未绑定",

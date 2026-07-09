@@ -1044,7 +1044,6 @@
       "contextExpand": "Show linked assets",
       "contextCollapse": "Hide linked assets",
       "linkedAsset": {
-        "bind": "Link an asset",
         "change": "Change",
         "clear": "Clear",
         "unbound": "Not linked",

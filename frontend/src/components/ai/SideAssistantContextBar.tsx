@@ -162,8 +162,8 @@ export function SideAssistantContextBar({ conversationId, sidebarTabId }: SideAs
         </Button>
         <Button
           variant="ghost"
-          size="icon"
-          className="h-6 w-6 shrink-0"
+          size="sm"
+          className="h-6 shrink-0 gap-1 px-1.5 text-xs text-muted-foreground"
           onClick={toggleContext}
           data-testid="context-disclosure"
           title={contextExpanded ? t("ai.sidebar.contextCollapse") : t("ai.sidebar.contextExpand")}
@@ -171,6 +171,7 @@ export function SideAssistantContextBar({ conversationId, sidebarTabId }: SideAs
           aria-expanded={contextExpanded}
           aria-controls="ai-linked-asset-section"
         >
+          <span>{t("ai.sidebar.contextSection")}</span>
           {contextExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
         </Button>
       </div>
