@@ -6,9 +6,16 @@ vi.mock("../../wailsjs/go/oss/OSS", () => ({
   OSSListObjects: vi.fn(),
   OSSRemoveObject: vi.fn(),
   OSSRemoveObjects: vi.fn(),
+  OSSPresignGet: vi.fn(),
 }));
 
-import { OSSListBuckets, OSSListObjects, OSSRemoveObject, OSSRemoveObjects } from "../../wailsjs/go/oss/OSS";
+import {
+  OSSListBuckets,
+  OSSListObjects,
+  OSSRemoveObject,
+  OSSRemoveObjects,
+  OSSPresignGet,
+} from "../../wailsjs/go/oss/OSS";
 import { useOssBrowserStore } from "./ossBrowserStore";
 import { useTabStore } from "./tabStore";
 
@@ -40,6 +47,7 @@ beforeEach(() => {
   vi.mocked(OSSListObjects).mockReset();
   vi.mocked(OSSRemoveObject).mockReset();
   vi.mocked(OSSRemoveObjects).mockReset();
+  vi.mocked(OSSPresignGet).mockReset();
   useOssBrowserStore.setState({ tabs: {} });
   useTabStore.setState({ tabs: [], activeTabId: null });
 });
@@ -227,5 +235,99 @@ describe("tab close hook", () => {
     });
     useTabStore.getState().closeTab(TAB);
     expect(useOssBrowserStore.getState().tabs[TAB]).toBeUndefined();
+  });
+});
+
+describe("ossBrowserStore P3b-3 additions", () => {
+  const TAB = "query-detail";
+  function seed(over: Partial<import("./ossBrowserStore").OssBrowserTabState> = {}) {
+    useOssBrowserStore.setState({
+      tabs: {
+        [TAB]: {
+          assetId: 7,
+          buckets: [],
+          currentBucket: "b",
+          currentPrefix: "docs/",
+          tree: {},
+          expanded: new Set(),
+          listing: {
+            objects: [
+              {
+                key: "docs/a.txt",
+                size: 1,
+                lastModified: 0,
+                etag: "",
+                storageClass: "",
+                contentType: "",
+                isPrefix: false,
+              },
+            ] as never,
+            prefixes: [],
+            cursor: "",
+            truncated: false,
+          },
+          selection: new Set(),
+          loading: { buckets: false, listing: false, page: false },
+          error: null,
+          viewMode: "list",
+          focusedKey: null,
+          thumbnails: {},
+          ...over,
+        } as never,
+      },
+    } as never);
+  }
+
+  it("setViewMode flips the tab's view mode", () => {
+    seed();
+    useOssBrowserStore.getState().setViewMode(TAB, "grid");
+    expect(useOssBrowserStore.getState().tabs[TAB].viewMode).toBe("grid");
+  });
+
+  it("focusObject sets and clears the focused key", () => {
+    seed();
+    useOssBrowserStore.getState().focusObject(TAB, "docs/a.txt");
+    expect(useOssBrowserStore.getState().tabs[TAB].focusedKey).toBe("docs/a.txt");
+    useOssBrowserStore.getState().focusObject(TAB, null);
+    expect(useOssBrowserStore.getState().tabs[TAB].focusedKey).toBeNull();
+  });
+
+  it("ensureThumbnail presigns once and caches the URL", async () => {
+    seed();
+    vi.mocked(OSSPresignGet).mockResolvedValue("https://signed/a" as never);
+    await useOssBrowserStore.getState().ensureThumbnail(TAB, "docs/a.txt");
+    expect(useOssBrowserStore.getState().tabs[TAB].thumbnails["docs/a.txt"]).toBe("https://signed/a");
+    await useOssBrowserStore.getState().ensureThumbnail(TAB, "docs/a.txt"); // cached → no second call
+    expect(OSSPresignGet).toHaveBeenCalledTimes(1);
+  });
+
+  it("ensureThumbnail leaves no cache entry on presign failure (silent)", async () => {
+    seed();
+    vi.mocked(OSSPresignGet).mockRejectedValue(new Error("boom") as never);
+    await useOssBrowserStore.getState().ensureThumbnail(TAB, "docs/a.txt");
+    expect(useOssBrowserStore.getState().tabs[TAB].thumbnails["docs/a.txt"]).toBeUndefined();
+  });
+
+  it("deleteObject removes one object, refreshes, and clears focus", async () => {
+    seed({ focusedKey: "docs/a.txt" });
+    vi.mocked(OSSRemoveObject).mockResolvedValue(undefined as never);
+    const refresh = vi.spyOn(useOssBrowserStore.getState(), "refresh").mockResolvedValue(undefined);
+    await useOssBrowserStore.getState().deleteObject(TAB, "docs/a.txt");
+    expect(OSSRemoveObject).toHaveBeenCalledWith({ assetId: 7, bucket: "b", key: "docs/a.txt" });
+    expect(refresh).toHaveBeenCalledWith(TAB);
+    expect(useOssBrowserStore.getState().tabs[TAB].focusedKey).toBeNull();
+    refresh.mockRestore();
+  });
+
+  it("navigateToPrefix clears focusedKey", async () => {
+    seed({ focusedKey: "docs/a.txt" });
+    vi.mocked(OSSListObjects).mockResolvedValue({
+      objects: [],
+      prefixes: [],
+      nextContinuationToken: "",
+      isTruncated: false,
+    } as never);
+    await useOssBrowserStore.getState().navigateToPrefix(TAB, "other/");
+    expect(useOssBrowserStore.getState().tabs[TAB].focusedKey).toBeNull();
   });
 });

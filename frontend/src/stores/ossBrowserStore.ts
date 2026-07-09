@@ -1,5 +1,11 @@
 import { create } from "zustand";
-import { OSSListBuckets, OSSListObjects, OSSRemoveObject, OSSRemoveObjects } from "../../wailsjs/go/oss/OSS";
+import {
+  OSSListBuckets,
+  OSSListObjects,
+  OSSRemoveObject,
+  OSSRemoveObjects,
+  OSSPresignGet,
+} from "../../wailsjs/go/oss/OSS";
 import { oss_svc } from "../../wailsjs/go/models";
 import { registerTabCloseHook, type QueryTabMeta } from "./tabStore";
 import type { OssPrefixNode } from "@/lib/ossPrefixTree";
@@ -24,6 +30,9 @@ export interface OssBrowserTabState {
   selection: Set<string>;
   loading: { buckets: boolean; listing: boolean; page: boolean };
   error: string | null;
+  viewMode: "list" | "grid";
+  focusedKey: string | null;
+  thumbnails: Record<string, string>;
 }
 
 interface OssBrowserState {
@@ -37,6 +46,10 @@ interface OssBrowserState {
   clearSelection: (tabId: string) => void;
   deleteSelected: (tabId: string) => Promise<void>;
   refresh: (tabId: string) => Promise<void>;
+  setViewMode: (tabId: string, mode: "list" | "grid") => void;
+  focusObject: (tabId: string, key: string | null) => void;
+  ensureThumbnail: (tabId: string, key: string) => Promise<void>;
+  deleteObject: (tabId: string, key: string) => Promise<void>;
 }
 
 function emptyTabState(assetId: number): OssBrowserTabState {
@@ -51,8 +64,14 @@ function emptyTabState(assetId: number): OssBrowserTabState {
     selection: new Set(),
     loading: { buckets: false, listing: false, page: false },
     error: null,
+    viewMode: "list",
+    focusedKey: null,
+    thumbnails: {},
   };
 }
+
+// 并发 ensureThumbnail 去重守卫；非 store 字段，避免为预览状态触发全量重渲染。
+const thumbInFlight = new Set<string>(); // `${tabId}:${key}`
 
 export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
   // 只在同一 tab 存在时打补丁；不存在则整体不变（避免为已关闭 tab 重建 slice）。
@@ -103,6 +122,7 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
         expanded: new Set(),
         listing: null,
         selection: new Set(),
+        focusedKey: null,
       }));
       await get().navigateToPrefix(tabId, "");
     },
@@ -113,6 +133,7 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
         ...t,
         currentPrefix: prefix,
         selection: new Set(),
+        focusedKey: null,
         loading: { ...t.loading, listing: true },
         error: null,
       }));
@@ -238,6 +259,39 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
         return { ...t, tree };
       });
       await get().navigateToPrefix(tabId, get().tabs[tabId]!.currentPrefix);
+    },
+
+    setViewMode: (tabId, mode) => patch(tabId, (t) => ({ ...t, viewMode: mode })),
+
+    focusObject: (tabId, key) => patch(tabId, (t) => ({ ...t, focusedKey: key })),
+
+    ensureThumbnail: async (tabId, key) => {
+      const t0 = get().tabs[tabId];
+      if (!t0 || t0.thumbnails[key]) return; // 已缓存
+      const flightKey = `${tabId}:${key}`;
+      if (thumbInFlight.has(flightKey)) return; // 生成中
+      thumbInFlight.add(flightKey);
+      try {
+        const url = await OSSPresignGet({ assetId: t0.assetId, bucket: t0.currentBucket, key, expirySecs: 0 });
+        if (url) patch(tabId, (t) => ({ ...t, thumbnails: { ...t.thumbnails, [key]: url } }));
+      } catch {
+        // 缩略图为尽力而为的预览，presign 失败静默回退到类型图标（唯一豁免的吞错点，见 spec §2.9）
+      } finally {
+        thumbInFlight.delete(flightKey);
+      }
+    },
+
+    deleteObject: async (tabId, key) => {
+      const t0 = get().tabs[tabId];
+      if (!t0) return;
+      try {
+        await OSSRemoveObject({ assetId: t0.assetId, bucket: t0.currentBucket, key });
+      } catch (err) {
+        patch(tabId, (t) => ({ ...t, error: String(err) }));
+        throw err;
+      }
+      patch(tabId, (t) => (t.focusedKey === key ? { ...t, focusedKey: null } : t));
+      await get().refresh(tabId);
     },
   };
 });
