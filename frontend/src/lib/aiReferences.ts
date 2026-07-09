@@ -3,6 +3,9 @@ import { extractMentions } from "./mentionXml";
 import { useTabStore } from "@/stores/tabStore";
 import { useAssetStore } from "@/stores/assetStore";
 import { openAssetConnection } from "./openAsset";
+import { tabToAssetRef } from "./tabAsset";
+import { toast } from "sonner";
+import i18n from "../i18n";
 
 /** 从会话消息里汇总被 @mention 的资产（去重保序，可排除已绑定主资产）。 */
 export function deriveReferences(
@@ -25,19 +28,22 @@ export function deriveReferences(
 
 /** 该资产是否已有打开的工作区 tab（决定 ↗ 复用 / + 新开）。 */
 export function isAssetTabOpen(assetId: number): boolean {
-  return useTabStore.getState().tabs.some((t) => {
-    const meta = t.meta as { assetId?: number };
-    return meta != null && meta.assetId === assetId;
-  });
+  const assets = useAssetStore.getState().assets;
+  return useTabStore.getState().tabs.some((tab) => tabToAssetRef(tab, assets)?.assetId === assetId);
 }
 
 /** 跳转到资产：已开 tab 则聚焦；否则打开新连接。 */
 export async function jumpToAsset(assetId: number): Promise<void> {
-  const open = useTabStore.getState().tabs.find((t) => (t.meta as { assetId?: number })?.assetId === assetId);
+  const assets = useAssetStore.getState().assets;
+  const open = useTabStore.getState().tabs.find((tab) => tabToAssetRef(tab, assets)?.assetId === assetId);
   if (open) {
     useTabStore.getState().activateTab(open.id);
     return;
   }
   const asset = useAssetStore.getState().assets.find((a) => a.ID === assetId);
-  if (asset) await openAssetConnection(asset);
+  if (!asset) {
+    toast.error(i18n.t("ai.mentionAssetDeleted"));
+    return;
+  }
+  await openAssetConnection(asset);
 }

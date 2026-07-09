@@ -33,12 +33,12 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
   const openTabs = useMemo(() => {
     const out: OpenTab[] = [];
     for (const wt of tabs) {
-      const ref = tabToAssetRef(wt);
+      const ref = tabToAssetRef(wt, assets);
       if (!ref) continue;
       out.push({ tabId: wt.id, label: wt.label, ...ref });
     }
     return out;
-  }, [tabs]);
+  }, [assets, tabs]);
 
   if (!sidebarTabId) return null;
 
@@ -47,13 +47,7 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
   const syncing = !!tab?.syncTab;
   const syncTitle = syncing ? t("ai.sidebar.syncing") : undefined;
 
-  const bindToTab = (item: OpenTab) =>
-    bindTab(sidebarTabId, {
-      workspaceTabId: item.tabId,
-      assetId: item.assetId,
-      assetName: item.assetName,
-      assetType: item.assetType,
-    });
+  const bindToTab = (item: OpenTab) => bindTab(sidebarTabId, { workspaceTabId: item.tabId });
 
   const triggerLabel = bound
     ? syncTitle

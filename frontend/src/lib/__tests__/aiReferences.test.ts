@@ -5,9 +5,10 @@ import { buildMentionXml } from "../mentionXml";
 // top-level statements — a plain `const openAssetConnection = vi.fn()` referenced
 // directly (not behind a nested closure) hits a TDZ ReferenceError. vi.hoisted
 // lifts the fn creation alongside the mock registration to avoid that.
-const { activateTab, openAssetConnection } = vi.hoisted(() => ({
+const { activateTab, openAssetConnection, toastError } = vi.hoisted(() => ({
   activateTab: vi.fn(),
   openAssetConnection: vi.fn().mockResolvedValue(undefined),
+  toastError: vi.fn(),
 }));
 vi.mock("@/stores/tabStore", () => ({
   useTabStore: {
@@ -18,6 +19,8 @@ vi.mock("@/stores/assetStore", () => ({
   useAssetStore: { getState: () => ({ assets: [{ ID: 9, Name: "cache", Type: "redis" }] }) },
 }));
 vi.mock("../openAsset", () => ({ openAssetConnection }));
+vi.mock("sonner", () => ({ toast: { error: toastError } }));
+vi.mock("../../i18n", () => ({ default: { t: (key: string) => key } }));
 
 import { deriveReferences, jumpToAsset, isAssetTabOpen } from "../aiReferences";
 
@@ -48,5 +51,10 @@ describe("jumpToAsset", () => {
     expect(isAssetTabOpen(9)).toBe(false);
     await jumpToAsset(9);
     expect(openAssetConnection).toHaveBeenCalledTimes(1);
+  });
+  it("notifies when the referenced asset no longer exists", async () => {
+    await jumpToAsset(404);
+    expect(openAssetConnection).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith("ai.mentionAssetDeleted");
   });
 });

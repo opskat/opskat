@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 vi.mock("../i18n", () => ({ default: { t: (k: string, f?: string) => f || k } }));
 
 import { useAIStore } from "../stores/aiStore";
+import { useAssetStore } from "../stores/assetStore";
 import { useTabStore, type Tab } from "../stores/tabStore";
 import type { SidebarAITab } from "../stores/aiStore";
 
@@ -37,13 +38,13 @@ const terminalTab = (id: string, assetId: number, assetName: string): Tab => ({
 describe("bindSidebarTab", () => {
   beforeEach(() => {
     localStorage.clear();
+    useAssetStore.setState({ assets: [] });
+    useTabStore.setState({ tabs: [terminalTab("t1", 5, "web")], activeTabId: "t1" });
     useAIStore.setState({ sidebarTabs: [mkTab({ id: "s1" })], activeSidebarTabId: "s1" });
   });
 
   it("binds a workspace tab + derived asset to the conversation", () => {
-    useAIStore
-      .getState()
-      .bindSidebarTab("s1", { workspaceTabId: "t1", assetId: 5, assetName: "web", assetType: "ssh" });
+    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: "t1" });
     const tab = useAIStore.getState().sidebarTabs.find((x) => x.id === "s1");
     expect(tab?.linkedTabId).toBe("t1");
     expect(tab?.linkedAssetId).toBe(5);
@@ -51,9 +52,7 @@ describe("bindSidebarTab", () => {
   });
 
   it("does not auto-enable sync on bind", () => {
-    useAIStore
-      .getState()
-      .bindSidebarTab("s1", { workspaceTabId: "t1", assetId: 5, assetName: "web", assetType: "ssh" });
+    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: "t1" });
     expect(useAIStore.getState().sidebarTabs.find((x) => x.id === "s1")?.syncTab).toBeFalsy();
   });
 
@@ -61,9 +60,7 @@ describe("bindSidebarTab", () => {
     useAIStore.setState({
       sidebarTabs: [mkTab({ id: "s1", linkedTabId: "t1", linkedAssetId: 5, syncTab: true }), mkTab({ id: "s2" })],
     });
-    useAIStore
-      .getState()
-      .bindSidebarTab("s2", { workspaceTabId: "t1", assetId: 5, assetName: "web", assetType: "ssh" });
+    useAIStore.getState().bindSidebarTab("s2", { workspaceTabId: "t1" });
     const s1 = useAIStore.getState().sidebarTabs.find((x) => x.id === "s1");
     const s2 = useAIStore.getState().sidebarTabs.find((x) => x.id === "s2");
     expect(s1?.linkedTabId).toBeNull(); // stolen
@@ -72,13 +69,11 @@ describe("bindSidebarTab", () => {
     expect(s2?.linkedTabId).toBe("t1");
   });
 
-  it("library binding (no open tab) sets asset only, leaves linkedTabId null", () => {
-    useAIStore
-      .getState()
-      .bindSidebarTab("s1", { workspaceTabId: null, assetId: 7, assetName: "db", assetType: "mysql" });
+  it("ignores binding to a non-asset or missing workspace tab", () => {
+    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: "missing" });
     const tab = useAIStore.getState().sidebarTabs.find((x) => x.id === "s1");
-    expect(tab?.linkedTabId).toBeNull();
-    expect(tab?.linkedAssetId).toBe(7);
+    expect(tab?.linkedTabId).toBeUndefined();
+    expect(tab?.linkedAssetId).toBeUndefined();
   });
 });
 
@@ -180,7 +175,7 @@ describe("linkedTabId migrates on tab id replace (reconnect)", () => {
   });
 });
 
-describe("sync⇒live-tab invariant (final review fix)", () => {
+describe("sync live-tab invariant", () => {
   beforeEach(() => {
     localStorage.clear();
     useTabStore.setState({
@@ -189,17 +184,15 @@ describe("sync⇒live-tab invariant (final review fix)", () => {
     });
   });
 
-  it("re-binding a synced conversation to a tabless asset disables sync", () => {
+  it("binding to a missing tab leaves an existing synced binding unchanged", () => {
     useAIStore.setState({
       sidebarTabs: [mkTab({ id: "s1", linkedTabId: "t1", linkedAssetId: 5, syncTab: true })],
       activeSidebarTabId: "s1",
     });
-    useAIStore
-      .getState()
-      .bindSidebarTab("s1", { workspaceTabId: null, assetId: 9, assetName: "db", assetType: "database" });
+    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: "missing" });
     const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
-    expect(tab?.linkedTabId).toBeNull();
-    expect(tab?.syncTab).toBe(false);
+    expect(tab?.linkedTabId).toBe("t1");
+    expect(tab?.syncTab).toBe(true);
   });
 
   it("direction A does not activate a synced conversation whose linkedTabId is null when the active tab clears", () => {

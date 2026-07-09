@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../i18n", () => ({ default: { t: (k: string, f?: string) => f || k } }));
 
-import { sanitizeSidebarTab, useAIStore } from "../stores/aiStore";
+import { useAIStore } from "../stores/aiStore";
+import { useAssetStore } from "../stores/assetStore";
 import { useTabStore, type Tab } from "../stores/tabStore";
 import { SendAIMessage } from "../../wailsjs/go/ai/AI";
 import { buildMentionXml } from "../lib/mentionXml";
@@ -40,31 +41,17 @@ const queryTab = (
   },
 });
 
-describe("sanitizeSidebarTab linked asset", () => {
-  it("round-trips valid linked asset fields", () => {
-    const tab = sanitizeSidebarTab({
-      id: "sidebar-1",
-      conversationId: 7,
-      title: "t",
-      createdAt: 1,
-      linkedAssetId: 42,
-      linkedAssetName: "prod-web-01",
-      linkedAssetType: "ssh",
-    });
-    expect(tab?.linkedAssetId).toBe(42);
-    expect(tab?.linkedAssetName).toBe("prod-web-01");
-    expect(tab?.linkedAssetType).toBe("ssh");
-  });
-
-  it("drops non-number linkedAssetId to undefined", () => {
-    const tab = sanitizeSidebarTab({ id: "s2", linkedAssetId: "nope" });
-    expect(tab?.linkedAssetId).toBeUndefined();
-  });
+const pageAssetTab = (id: string, assetId: number, label: string): Tab => ({
+  id,
+  type: "page",
+  label,
+  meta: { type: "page", pageId: "k8s-cluster", assetId },
 });
 
 describe("bindSidebarTab / unbindSidebarTab", () => {
   beforeEach(() => {
     localStorage.clear();
+    useTabStore.setState({ tabs: [terminalTab("t1", 42, "prod-web-01")], activeTabId: "t1" });
     useAIStore.setState({
       sidebarTabs: [
         {
@@ -80,9 +67,7 @@ describe("bindSidebarTab / unbindSidebarTab", () => {
   });
 
   it("binds an asset to the tab and persists it", () => {
-    useAIStore
-      .getState()
-      .bindSidebarTab("s1", { workspaceTabId: null, assetId: 42, assetName: "prod-web-01", assetType: "ssh" });
+    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: "t1" });
     const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
     expect(tab?.linkedAssetId).toBe(42);
     expect(tab?.linkedAssetName).toBe("prod-web-01");
@@ -91,7 +76,7 @@ describe("bindSidebarTab / unbindSidebarTab", () => {
   });
 
   it("clears the binding", () => {
-    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: null, assetId: 42, assetName: "p", assetType: "ssh" });
+    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: "t1" });
     useAIStore.getState().unbindSidebarTab("s1");
     const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
     expect(tab?.linkedAssetId).toBeUndefined();
@@ -103,6 +88,7 @@ describe("_sendForConversation includes linked asset in context", () => {
     vi.clearAllMocks();
     localStorage.clear();
     useTabStore.setState({ tabs: [], activeTabId: null });
+    useAssetStore.setState({ assets: [] });
     useAIStore.setState({
       configured: true,
       modelName: "gpt-4",
@@ -158,6 +144,19 @@ describe("_sendForConversation includes linked asset in context", () => {
     expect(aiContext.openTabs.map((t) => t.assetId)).toEqual([99, 1, 2]);
   });
 
+  it("includes open asset page tabs in the sent AI context", async () => {
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined);
+    useAssetStore.setState({ assets: [{ ID: 3, Name: "prod-k8s", Type: "k8s" } as any] });
+    useTabStore.setState({
+      tabs: [pageAssetTab("k8s-3", 3, "prod-k8s")],
+      activeTabId: "k8s-3",
+    });
+    await useAIStore.getState().sendFromSidebarTab("s1", "hello");
+    const call = vi.mocked(SendAIMessage).mock.calls.at(-1);
+    const aiContext = call?.[2] as { openTabs: Array<{ assetId: number; assetName: string; type: string }> };
+    expect(aiContext.openTabs.map((t) => [t.assetId, t.assetName, t.type])).toContainEqual([3, "prod-k8s", "k8s"]);
+  });
+
   it("does not send an active marker for the prepended bound asset", async () => {
     vi.mocked(SendAIMessage).mockResolvedValue(undefined);
     useTabStore.setState({
@@ -196,17 +195,38 @@ describe("sendFromSidebarTab auto-binds first mention when unbound", () => {
     vi.mocked(SendAIMessage).mockResolvedValue(undefined);
   });
 
-  it("sets linkedAssetId from the first mention", async () => {
+  it("sets linkedAssetId from the first mention when that asset has an open tab", async () => {
+    useTabStore.setState({ tabs: [terminalTab("t7", 7, "prod-web-01")], activeTabId: "t7" });
     const content = `${buildMentionXml({ assetId: 7, name: "prod-web-01", type: "ssh" })} 帮我看下`;
     await useAIStore.getState().sendFromSidebarTab("s1", content);
     const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
     expect(tab?.linkedAssetId).toBe(7);
+    expect(tab?.linkedTabId).toBe("t7");
+  });
+
+  it("does not auto-bind a mention without an open asset tab", async () => {
+    const content = `${buildMentionXml({ assetId: 7, name: "prod-web-01", type: "ssh" })} 帮我看下`;
+    await useAIStore.getState().sendFromSidebarTab("s1", content);
+    const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
+    expect(tab?.linkedAssetId).toBeUndefined();
   });
 
   it("does not override an existing binding", async () => {
-    useAIStore
-      .getState()
-      .bindSidebarTab("s1", { workspaceTabId: null, assetId: 99, assetName: "cache", assetType: "redis" });
+    useAIStore.setState({
+      sidebarTabs: [
+        {
+          id: "s1",
+          conversationId: 1,
+          title: "t",
+          createdAt: 1,
+          uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null },
+          linkedAssetId: 99,
+          linkedAssetName: "cache",
+          linkedAssetType: "redis",
+        },
+      ],
+      activeSidebarTabId: "s1",
+    });
     const content = `${buildMentionXml({ assetId: 7, name: "prod-web-01", type: "ssh" })} x`;
     await useAIStore.getState().sendFromSidebarTab("s1", content);
     const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
@@ -214,6 +234,7 @@ describe("sendFromSidebarTab auto-binds first mention when unbound", () => {
   });
 
   it("includes the auto-bound asset in the sent AI context (first message)", async () => {
+    useTabStore.setState({ tabs: [terminalTab("t7", 7, "prod-web-01")], activeTabId: "t7" });
     const content = `${buildMentionXml({ assetId: 7, name: "prod-web-01", type: "ssh" })} 看下`;
     await useAIStore.getState().sendFromSidebarTab("s1", content);
     const call = vi.mocked(SendAIMessage).mock.calls.at(-1);

@@ -23,11 +23,11 @@ import {
   registerTabReplaceHook,
   registerTabRestoreHook,
   type AITabMeta,
-  type QueryTabMeta,
   type Tab,
 } from "./tabStore";
+import { useAssetStore } from "./assetStore";
 import { stripMentionTags, extractMentions } from "@/lib/mentionXml";
-import { linkedAssetFromMention } from "@/lib/aiLinkedAsset";
+import { tabToAssetRef } from "@/lib/tabAsset";
 import { classifyError, type ErrorKind } from "@/lib/aiError";
 
 // 内容块：文本、工具调用、Sub Agent、审批、错误（持久化字段）。
@@ -267,7 +267,7 @@ function sanitizeSidebarUiStateForPersistence(
   });
 }
 
-export function sanitizeSidebarTab(raw: unknown): SidebarAITab | null {
+function sanitizeSidebarTab(raw: unknown): SidebarAITab | null {
   if (!raw || typeof raw !== "object") return null;
   const tab = raw as Partial<SidebarAITab>;
   if (typeof tab.id !== "string" || tab.id.length === 0) return null;
@@ -1589,20 +1589,19 @@ async function _sendForConversation(convId: number, content: string) {
     : newMessages.map((m) => new runner.Message({ role: m.role, content: m.content }));
 
   // 收集当前 Tab 上下文
-  const allTabs = useTabStore.getState().tabs;
-  const openTabs = allTabs
-    .filter(
-      (t): t is Tab & { meta: { assetId: number; assetName?: string } } =>
-        t.type !== "ai" && t.type !== "page" && t.meta != null && "assetId" in t.meta
-    )
-    .map((t) => {
-      const type = t.type === "query" ? (t.meta as QueryTabMeta).assetType : t.type === "terminal" ? "ssh" : t.type;
-      return new runner.TabInfo({
-        type,
-        assetId: t.meta.assetId || 0,
-        assetName: t.meta.assetName || t.label || "",
-      });
-    });
+  const assets = useAssetStore.getState().assets;
+  const openTabs = useTabStore
+    .getState()
+    .tabs.map((tab) => tabToAssetRef(tab, assets))
+    .filter((ref): ref is NonNullable<typeof ref> => ref != null)
+    .map(
+      (ref) =>
+        new runner.TabInfo({
+          type: ref.assetType,
+          assetId: ref.assetId,
+          assetName: ref.assetName,
+        })
+    );
 
   // 会话若绑定了资产，保证它在上下文里且置顶（即使对应 tab 未打开）。
   const boundTab = useAIStore.getState().sidebarTabs.find((tab) => tab.conversationId === convId);
@@ -1700,10 +1699,7 @@ interface AIState {
     } | null
   ) => void;
   stopSidebarTab: (tabId: string) => Promise<void>;
-  bindSidebarTab: (
-    sidebarTabId: string,
-    binding: { workspaceTabId: string | null; assetId: number; assetName: string; assetType: string }
-  ) => void;
+  bindSidebarTab: (sidebarTabId: string, binding: { workspaceTabId: string }) => void;
   unbindSidebarTab: (sidebarTabId: string) => void;
   setSidebarTabSync: (sidebarTabId: string, on: boolean) => void;
 
@@ -1955,21 +1951,22 @@ export const useAIStore = create<AIState>((set, get) => {
     },
 
     bindSidebarTab: (sidebarTabId, binding) => {
+      const workspaceTab = useTabStore.getState().tabs.find((tab) => tab.id === binding.workspaceTabId);
+      const ref = workspaceTab ? tabToAssetRef(workspaceTab, useAssetStore.getState().assets) : null;
+      if (!ref) return;
       set((state) => ({
         sidebarTabs: state.sidebarTabs.map((tab) => {
           // 1:1 独占：其它绑到同一 workspace tab 的会话让位（保留其资产上下文，仅断 tab 链 + 关联动）。
-          if (binding.workspaceTabId != null && tab.id !== sidebarTabId && tab.linkedTabId === binding.workspaceTabId) {
+          if (tab.id !== sidebarTabId && tab.linkedTabId === binding.workspaceTabId) {
             return { ...tab, linkedTabId: null, syncTab: false };
           }
           if (tab.id === sidebarTabId) {
             return {
               ...tab,
               linkedTabId: binding.workspaceTabId,
-              linkedAssetId: binding.assetId,
-              linkedAssetName: binding.assetName,
-              linkedAssetType: binding.assetType,
-              // 无活 tab 链不可联动：绑到无打开 tab 的资产时强制关联动，维持 syncTab ⇒ linkedTabId 不变量。
-              syncTab: binding.workspaceTabId == null ? false : tab.syncTab,
+              linkedAssetId: ref.assetId,
+              linkedAssetName: ref.assetName,
+              linkedAssetType: ref.assetType,
             };
           }
           return tab;
@@ -2263,11 +2260,16 @@ export const useAIStore = create<AIState>((set, get) => {
       const existingMessages = convId != null ? get().conversationMessages[convId] || [] : [];
       if (!content.trim() && existingMessages.length === 0) return;
 
-      // 未绑定会话首次 @资产 → 自动设为主资产（不覆盖已有绑定）。
+      // 未绑定会话首次 @已打开资产 → 自动绑定其工作区 tab（不覆盖已有绑定）。
       if (sidebarTab.linkedAssetId == null && content.trim()) {
         const mentions = extractMentions(content);
-        if (mentions.length > 0) {
-          get().bindSidebarTab(tabId, { workspaceTabId: null, ...linkedAssetFromMention(mentions[0]) });
+        const assets = useAssetStore.getState().assets;
+        const openMentionTab = useTabStore.getState().tabs.find((tab) => {
+          const ref = tabToAssetRef(tab, assets);
+          return ref != null && mentions.some((mention) => mention.assetId === ref.assetId);
+        });
+        if (openMentionTab) {
+          get().bindSidebarTab(tabId, { workspaceTabId: openMentionTab.id });
         }
       }
 

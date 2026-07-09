@@ -29,6 +29,13 @@ const terminalTab = (id: string, label: string, assetId: number, assetName: stri
   },
 });
 
+const pageAssetTab = (id: string, label: string, assetId: number): Tab => ({
+  id,
+  type: "page",
+  label,
+  meta: { type: "page", pageId: "k8s-cluster", assetId },
+});
+
 describe("LinkedAssetControl", () => {
   beforeEach(() => {
     useTabStore.setState({ tabs: [], activeTabId: null });
@@ -77,6 +84,21 @@ describe("LinkedAssetControl", () => {
     expect(tab?.linkedAssetType).toBe("ssh");
   });
 
+  it("lists asset-backed page tabs and binds them with the asset type", () => {
+    useAssetStore.setState({ assets: [asset(8, "prod-k8s", "k8s", "kubernetes")] });
+    useTabStore.setState({
+      tabs: [pageAssetTab("k8s-8", "prod-k8s", 8)],
+      activeTabId: "k8s-8",
+    });
+    render(<LinkedAssetControl sidebarTabId="s1" />);
+    openMenu();
+    fireEvent.click(screen.getByTestId("menu-tab-k8s-8"));
+    const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
+    expect(tab?.linkedTabId).toBe("k8s-8");
+    expect(tab?.linkedAssetId).toBe(8);
+    expect(tab?.linkedAssetType).toBe("k8s");
+  });
+
   it("lists two tabs of the SAME asset as two separate items (no dedup by asset)", () => {
     useTabStore.setState({
       tabs: [terminalTab("t1", "prod-web-01", 7, "prod-web-01"), terminalTab("t2", "prod-web-01", 7, "prod-web-01")],
@@ -89,9 +111,11 @@ describe("LinkedAssetControl", () => {
   });
 
   it("shows the bound chip and clears on 清除绑定", () => {
-    useAIStore
-      .getState()
-      .bindSidebarTab("s1", { workspaceTabId: null, assetId: 42, assetName: "prod-web-01", assetType: "ssh" });
+    useTabStore.setState({
+      tabs: [terminalTab("t42", "prod-web-01", 42, "prod-web-01")],
+      activeTabId: "t42",
+    });
+    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: "t42" });
     render(<LinkedAssetControl sidebarTabId="s1" />);
     expect(screen.getByText("prod-web-01")).toBeInTheDocument();
     openMenu();
