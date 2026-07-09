@@ -15,6 +15,7 @@ interface FileManagerDropTarget {
 
 const terminalTargets = new Map<symbol, TerminalDropTarget>();
 const fileManagerTargets = new Map<symbol, FileManagerDropTarget>();
+const genericTargets = new Map<symbol, { getRect: RectProvider; onDrop: (paths: string[]) => void }>();
 
 let listening = false;
 
@@ -23,7 +24,7 @@ function contains(rect: DOMRect | null | undefined, x: number, y: number): boole
 }
 
 function targetCount(): number {
-  return terminalTargets.size + fileManagerTargets.size;
+  return terminalTargets.size + fileManagerTargets.size + genericTargets.size;
 }
 
 function firstHit<T extends { getRect: RectProvider }>(targets: Iterable<T>, x: number, y: number): T | undefined {
@@ -43,7 +44,13 @@ function handleFileDrop(x: number, y: number, paths: string[]) {
   }
 
   const terminalTarget = firstHit(terminalTargets.values(), x, y);
-  terminalTarget?.uploadFiles(paths);
+  if (terminalTarget) {
+    terminalTarget.uploadFiles(paths);
+    return;
+  }
+
+  const genericTarget = firstHit(genericTargets.values(), x, y);
+  genericTarget?.onDrop(paths);
 }
 
 function syncWailsFileDropListener() {
@@ -78,9 +85,23 @@ export function registerFileManagerDropTarget(target: FileManagerDropTarget): ()
   };
 }
 
+export function registerFileDropTarget(target: {
+  getRect: RectProvider;
+  onDrop: (paths: string[]) => void;
+}): () => void {
+  const id = Symbol("generic-file-drop-target");
+  genericTargets.set(id, target);
+  syncWailsFileDropListener();
+  return () => {
+    genericTargets.delete(id);
+    syncWailsFileDropListener();
+  };
+}
+
 export function resetTerminalFileDropCoordinatorForTest() {
   terminalTargets.clear();
   fileManagerTargets.clear();
+  genericTargets.clear();
   if (listening) {
     OnFileDropOff();
     listening = false;
