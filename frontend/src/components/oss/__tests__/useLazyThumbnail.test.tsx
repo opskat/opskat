@@ -51,4 +51,14 @@ describe("useLazyThumbnail", () => {
     render(<Harness enabled={false} onEnter={vi.fn()} />);
     expect(observe).not.toHaveBeenCalled();
   });
+
+  it("does not rebuild the observer on re-render with a fresh onEnter closure", () => {
+    // Callers (e.g. the object grid) pass a brand-new arrow function every render.
+    // The observer effect must not depend on onEnter's identity, otherwise it tears
+    // down and recreates the IntersectionObserver on every re-render — re-firing
+    // onEnter while the element is still in view (e.g. re-presigning a failed thumbnail).
+    const { rerender } = render(<Harness enabled onEnter={() => {}} />);
+    rerender(<Harness enabled onEnter={() => {}} />);
+    expect(observe).toHaveBeenCalledTimes(1);
+  });
 });

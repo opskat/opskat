@@ -114,4 +114,49 @@ describe("OSSBrowserPanel", () => {
     fireEvent.click(screen.getByTestId("oss-grid-object-docs/a.txt"));
     expect(await screen.findByTestId("oss-object-detail")).toBeInTheDocument();
   });
+
+  it("hides the selection bar in grid mode but keeps the selection itself", async () => {
+    vi.mocked(OSSListBuckets).mockResolvedValue([{ name: "b1", creationDate: 0 }] as never);
+    render(<OSSBrowserPanel tabId={TAB} />);
+    await screen.findByTestId("oss-bucket-b1");
+    useOssBrowserStore.setState(
+      (s) =>
+        ({
+          tabs: {
+            ...s.tabs,
+            [TAB]: {
+              ...s.tabs[TAB],
+              currentBucket: "b1",
+              currentPrefix: "docs/",
+              viewMode: "list",
+              selection: new Set(["docs/a.txt"]),
+              listing: {
+                objects: [
+                  {
+                    key: "docs/a.txt",
+                    size: 1,
+                    lastModified: 0,
+                    etag: "",
+                    storageClass: "",
+                    contentType: "",
+                    isPrefix: false,
+                  },
+                ],
+                prefixes: [],
+                truncated: false,
+                cursor: "",
+              },
+            },
+          },
+        }) as never
+    );
+    // list mode: selection bar is visible
+    expect(await screen.findByTestId("oss-selection-bar")).toBeInTheDocument();
+
+    // switch to grid: selection bar hides, but selection state is untouched
+    fireEvent.click(screen.getByTestId("oss-view-grid"));
+    await screen.findByTestId("oss-object-grid");
+    expect(screen.queryByTestId("oss-selection-bar")).not.toBeInTheDocument();
+    expect(useOssBrowserStore.getState().tabs[TAB]?.selection).toEqual(new Set(["docs/a.txt"]));
+  });
 });

@@ -2565,8 +2565,6 @@
       "download": "Download",
       "delete": "Delete",
       "close": "Close",
-      "noPreview": "No preview",
-      "keyLabel": "Key",
       "size": "Size",
       "type": "Type",
       "etag": "ETag",

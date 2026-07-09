@@ -197,7 +197,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
                 viewMode={state.viewMode}
                 onViewModeChange={(m) => setViewMode(tabId, m)}
               />
-              {selectionCount > 0 && (
+              {selectionCount > 0 && state.viewMode === "list" && (
                 <div
                   className="flex items-center gap-2 border-b bg-muted/20 px-3 py-1 text-xs"
                   data-testid="oss-selection-bar"
