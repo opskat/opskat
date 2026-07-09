@@ -3,7 +3,13 @@ import { registry } from "./_register";
 export { registerAssetType } from "./_register";
 
 export function getAssetType(type: string): AssetTypeDefinition | undefined {
-  return registry.get(type);
+  // Try direct lookup first
+  let def = registry.get(type);
+  // If not found, try alias resolution
+  if (!def) {
+    def = getBuiltinTypes().find((d) => d.aliases.includes(type));
+  }
+  return def;
 }
 
 export function isBuiltinType(type: string): boolean {
