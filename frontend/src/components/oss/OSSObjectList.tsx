@@ -32,6 +32,8 @@ export interface OSSObjectListProps {
   onToggleSelect: (key: string) => void;
   onScrollNearBottom: () => void;
   onDownload?: (key: string) => void;
+  focusedKey?: string | null;
+  onFocusObject?: (key: string) => void;
 }
 
 export function OSSObjectList({
@@ -45,6 +47,8 @@ export function OSSObjectList({
   onToggleSelect,
   onScrollNearBottom,
   onDownload,
+  focusedKey,
+  onFocusObject,
 }: OSSObjectListProps) {
   const { t } = useTranslation();
 
@@ -105,8 +109,13 @@ export function OSSObjectList({
             </tr>
           ))}
           {objects.map((o) => (
-            <tr key={o.key} className="group hover:bg-accent/50" data-testid={`oss-object-${o.key}`}>
-              <td className="px-2 py-1">
+            <tr
+              key={o.key}
+              className={`group cursor-pointer hover:bg-accent/50 ${o.key === focusedKey ? "bg-accent" : ""}`}
+              onClick={() => onFocusObject?.(o.key)}
+              data-testid={`oss-object-${o.key}`}
+            >
+              <td className="px-2 py-1" onClick={(e) => e.stopPropagation()}>
                 <Checkbox
                   checked={selection.has(o.key)}
                   onCheckedChange={() => onToggleSelect(o.key)}
@@ -129,7 +138,10 @@ export function OSSObjectList({
                   <button
                     type="button"
                     className="opacity-0 group-hover:opacity-100"
-                    onClick={() => onDownload(o.key)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDownload(o.key);
+                    }}
                     title={t("oss.transfer.download")}
                     data-testid={`oss-download-${o.key}`}
                   >

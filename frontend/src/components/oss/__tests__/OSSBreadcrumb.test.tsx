@@ -38,4 +38,20 @@ describe("OSSBreadcrumb", () => {
     fireEvent.click(screen.getByTestId("oss-upload"));
     expect(onUpload).toHaveBeenCalledTimes(1);
   });
+
+  it("renders a view toggle that fires onViewModeChange", () => {
+    const onViewModeChange = vi.fn();
+    render(
+      <OSSBreadcrumb
+        bucket="mb"
+        prefix=""
+        onNavigate={vi.fn()}
+        onRefresh={vi.fn()}
+        viewMode="list"
+        onViewModeChange={onViewModeChange}
+      />
+    );
+    fireEvent.click(screen.getByTestId("oss-view-grid"));
+    expect(onViewModeChange).toHaveBeenCalledWith("grid");
+  });
 });

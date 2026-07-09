@@ -84,4 +84,42 @@ describe("OSSObjectList", () => {
     // folders get no download button
     expect(screen.queryByTestId("oss-download-docs/sub/")).toBeNull();
   });
+
+  it("single-click an object row focuses it; the focused row is marked; clicking the checkbox does NOT focus", () => {
+    const onFocusObject = vi.fn();
+    const onToggleSelect = vi.fn();
+    render(
+      <OSSObjectList
+        {...base}
+        onToggleSelect={onToggleSelect}
+        onFocusObject={onFocusObject}
+        focusedKey="docs/a.txt"
+        prefixes={[]}
+        objects={[obj("docs/a.txt", 1)]}
+      />
+    );
+    const row = screen.getByTestId("oss-object-docs/a.txt");
+    expect(row.className.split(/\s+/)).toContain("bg-accent");
+    fireEvent.click(row);
+    expect(onFocusObject).toHaveBeenCalledWith("docs/a.txt");
+    onFocusObject.mockClear();
+    fireEvent.click(screen.getByTestId("oss-select-docs/a.txt")); // checkbox → select, NOT focus
+    expect(onToggleSelect).toHaveBeenCalledWith("docs/a.txt");
+    expect(onFocusObject).not.toHaveBeenCalled();
+  });
+
+  it("does not highlight a row whose key is not the focusedKey", () => {
+    render(
+      <OSSObjectList
+        {...base}
+        focusedKey="docs/a.txt"
+        prefixes={[]}
+        objects={[obj("docs/a.txt", 1), obj("docs/b.txt", 2)]}
+      />
+    );
+    const focusedRow = screen.getByTestId("oss-object-docs/a.txt");
+    const otherRow = screen.getByTestId("oss-object-docs/b.txt");
+    expect(focusedRow.className.split(/\s+/)).toContain("bg-accent");
+    expect(otherRow.className.split(/\s+/)).not.toContain("bg-accent");
+  });
 });
