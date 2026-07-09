@@ -11,7 +11,6 @@ type TabInfo struct {
 	Type      string `json:"type"` // "ssh" | "database" | "redis" | "sftp"
 	AssetID   int64  `json:"assetId"`
 	AssetName string `json:"assetName"`
-	Active    bool   `json:"active"` // true = 会话绑定的主资产，AI 优先落到此终端
 }
 
 // AIContext 前端传入的上下文信息
@@ -118,9 +117,6 @@ func (b *PromptBuilder) buildTabContext() string {
 			typeName = "SFTP"
 		}
 		line := fmt.Sprintf("- %s: \"%s\" (ID: %d)", typeName, tab.AssetName, tab.AssetID)
-		if tab.Active {
-			line += " — PRIMARY: this is the asset this conversation is bound to; prefer it when the target is ambiguous"
-		}
 		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")

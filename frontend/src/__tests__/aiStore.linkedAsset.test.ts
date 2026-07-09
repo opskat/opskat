@@ -135,7 +135,7 @@ describe("_sendForConversation includes linked asset in context", () => {
     expect(aiContext.openTabs.map((t) => t.assetId)).toEqual([99, 1, 2]);
   });
 
-  it("marks the prepended bound asset active and others inactive", async () => {
+  it("does not send an active marker for the prepended bound asset", async () => {
     vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
     useTabStore.setState({
       tabs: [
@@ -147,8 +147,7 @@ describe("_sendForConversation includes linked asset in context", () => {
     const call = vi.mocked(SendAIMessage).mock.calls.at(-1);
     const aiContext = call?.[2] as { openTabs: Array<{ assetId: number; active?: boolean }> };
     expect(aiContext.openTabs[0].assetId).toBe(99);
-    expect(aiContext.openTabs[0].active).toBe(true);
-    expect(aiContext.openTabs.slice(1).every((t) => !t.active)).toBe(true);
+    expect(aiContext.openTabs.every((t) => !("active" in t))).toBe(true);
   });
 });
 
