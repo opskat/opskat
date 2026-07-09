@@ -1029,7 +1029,6 @@
       "collapseRail": "Collapse session rail",
       "emptyGuide": "Click + to start a new chat, or pick one from <history/> History",
       "noConversation": "No conversation selected",
-      "attachedAssets": "Attached assets",
       "status": {
         "waiting_approval": "Waiting approval",
         "running": "Running",
@@ -1041,7 +1040,20 @@
         "running": "Running",
         "done": "Done",
         "error": "Error"
-      }
+      },
+      "contextExpand": "Show linked tabs",
+      "contextCollapse": "Hide linked tabs",
+      "linkedAsset": {
+        "pickPlaceholder": "Choose a tab to bind",
+        "openTabs": "Open tabs",
+        "noOpenTabs": "No open tabs",
+        "clearBinding": "Clear binding",
+        "syncHint": "When on: this tab activates this chat, and this chat activates the tab",
+        "tabClosed": "The bound tab is closed · rebind to relink"
+      },
+      "sync": "Link to this tab",
+      "syncing": "Linked",
+      "referencedThisSession": "Referenced"
     }
   },
   "shortcut": {
@@ -2600,7 +2612,7 @@
   "etcd": {
     "form": {
       "endpoints": "Endpoints",
-      "endpointsHint": "At least 1 host:port, one per line",
+      "endpointsHint": "Separate endpoints by newline, comma, or semicolon",
       "addEndpoint": "Add endpoint",
       "tlsSection": "TLS / mTLS",
       "advancedSection": "Advanced",
@@ -2614,10 +2626,13 @@
       "tlsInsecure": "Skip certificate verification"
     },
     "tree": {
-      "title": "Keyspace",
       "filterPlaceholder": "Filter key",
       "truncated": "+{{count}} hidden, limit={{limit}}",
-      "loadFailed": "Failed to load keyspace"
+      "loadFailed": "Failed to load keyspace",
+      "refresh": "Refresh keyspace"
+    },
+    "view": {
+      "kv": "KV Browse"
     },
     "query": {
       "placeholder": "get /config --prefix",
@@ -2658,9 +2673,9 @@
       "formatYaml": "YAML",
       "notJson": "(not JSON)",
       "notYaml": "(YAML conversion failed)",
-      "copyKey": "Copy KEY",
+      "copyKey": "Copy key",
       "copyValue": "Copy raw value",
-      "delete": "Delete",
+      "delete": "Delete key",
       "copied": "Copied to clipboard",
       "copyFailed": "Copy failed",
       "deleteSuccess": "Deleted key: {{key}}",
@@ -2676,16 +2691,6 @@
       "contentTypeJson": "application/json",
       "contentTypeText": "text/plain",
       "contentTypeEmpty": "(empty)"
-    },
-    "cluster": {
-      "healthy": "Healthy",
-      "unhealthy": "Unhealthy",
-      "unknown": "Unknown",
-      "endpoints": "{{count}} endpoint(s)",
-      "leader": "leader",
-      "noLeader": "no leader",
-      "refresh": "Refresh cluster status",
-      "loadFailed": "Failed to load cluster info"
     },
     "error": {
       "endpointsRequired": "At least one endpoint required",

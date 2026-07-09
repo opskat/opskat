@@ -7,7 +7,7 @@ import { DetailGrid, DetailSection, InfoItem } from "@/components/asset/detail/I
 import { group_entity } from "../../../wailsjs/go/models";
 import { UpdateGroup } from "../../../wailsjs/go/system/System";
 import { toast } from "sonner";
-import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
+import { EntityIcon } from "@/components/asset/AssetIcon";
 
 interface GroupDetailProps {
   group: group_entity.Group;
@@ -35,7 +35,6 @@ export function GroupDetail({ group }: GroupDetailProps) {
     }
   }, [group.ID, group.CmdPolicy]);
 
-  const GroupIcon = group.Icon ? getIconComponent(group.Icon) : Folder;
   const parentGroup = groups.find((g) => g.ID === group.ParentID);
   const assetCount = assets.filter((a) => a.GroupID === group.ID).length;
 
@@ -67,10 +66,7 @@ export function GroupDetail({ group }: GroupDetailProps) {
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 px-4 py-3 border-b">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-          <GroupIcon
-            className="h-4 w-4 text-primary"
-            style={group.Icon ? { color: getIconColor(group.Icon) } : undefined}
-          />
+          <EntityIcon icon={group.Icon} fallback={Folder} className="h-4 w-4 text-primary" />
         </div>
         <div>
           <h2 className="font-semibold leading-tight">{group.Name}</h2>

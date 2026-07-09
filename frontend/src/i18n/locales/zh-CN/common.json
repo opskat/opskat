@@ -1029,7 +1029,6 @@
       "collapseRail": "收起会话栏",
       "emptyGuide": "点击 + 新建对话，或从 <history/> 历史中继续",
       "noConversation": "未选择对话",
-      "attachedAssets": "关联资产",
       "status": {
         "waiting_approval": "待审批",
         "running": "运行中",
@@ -1041,7 +1040,20 @@
         "running": "运行中",
         "done": "已完成",
         "error": "出错"
-      }
+      },
+      "contextExpand": "展开关联标签页",
+      "contextCollapse": "收起关联标签页",
+      "linkedAsset": {
+        "pickPlaceholder": "选择要绑定的标签页",
+        "openTabs": "已打开的标签页",
+        "noOpenTabs": "暂无打开的标签页",
+        "clearBinding": "清除绑定",
+        "syncHint": "开启后：切到此 tab 自动切到本会话，切到本会话自动切到此 tab",
+        "tabClosed": "绑定的 tab 已关闭 · 可重新绑定"
+      },
+      "sync": "联动此 tab",
+      "syncing": "联动中",
+      "referencedThisSession": "本次引用"
     }
   },
   "shortcut": {
@@ -2600,11 +2612,11 @@
   "etcd": {
     "form": {
       "endpoints": "Endpoints",
-      "endpointsHint": "至少 1 条 host:port，可多行",
+      "endpointsHint": "每行、逗号或分号分隔多个 endpoint",
       "addEndpoint": "添加 endpoint",
       "tlsSection": "TLS / mTLS",
       "advancedSection": "高级",
-      "dialTimeout": "Dial 超时（秒）",
+      "dialTimeout": "拨号超时（秒）",
       "commandTimeout": "命令超时（秒）",
       "test": "测试连接",
       "tlsServerName": "Server Name",
@@ -2614,10 +2626,13 @@
       "tlsInsecure": "跳过证书校验"
     },
     "tree": {
-      "title": "Keyspace",
       "filterPlaceholder": "过滤 key",
       "truncated": "+{{count}} 隐藏，limit={{limit}}",
-      "loadFailed": "加载 keyspace 失败"
+      "loadFailed": "加载 keyspace 失败",
+      "refresh": "刷新 keyspace"
+    },
+    "view": {
+      "kv": "KV 浏览"
     },
     "query": {
       "placeholder": "get /config --prefix",
@@ -2658,14 +2673,14 @@
       "formatYaml": "YAML",
       "notJson": "(非 JSON)",
       "notYaml": "(无法转 YAML)",
-      "copyKey": "复制 KEY",
+      "copyKey": "复制 key",
       "copyValue": "复制原始值",
-      "delete": "删除",
+      "delete": "删除 key",
       "copied": "已复制到剪贴板",
       "copyFailed": "复制失败",
       "deleteSuccess": "已删除 key: {{key}}",
       "deleteFailed": "删除失败",
-      "history": "历史版本",
+      "history": "历史",
       "historyAt": "查看 revision {{rev}}",
       "historyLoading": "正在加载历史版本…",
       "historyEmpty": "无更早版本（可能已被 compact）",
@@ -2676,16 +2691,6 @@
       "contentTypeJson": "application/json",
       "contentTypeText": "text/plain",
       "contentTypeEmpty": "(empty)"
-    },
-    "cluster": {
-      "healthy": "健康",
-      "unhealthy": "异常",
-      "unknown": "未知",
-      "endpoints": "{{count}} 个 endpoint",
-      "leader": "leader",
-      "noLeader": "无 leader",
-      "refresh": "刷新集群状态",
-      "loadFailed": "加载集群信息失败"
     },
     "error": {
       "endpointsRequired": "至少需要 1 个 endpoint",
