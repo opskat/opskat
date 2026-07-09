@@ -1049,7 +1049,9 @@
         "unbound": "Not linked",
         "pickPlaceholder": "Choose an asset"
       },
-      "followSwitched": "Following → {{name}}"
+      "followSwitched": "Following → {{name}}",
+      "follow": "Follow this terminal",
+      "following": "Following"
     }
   },
   "shortcut": {

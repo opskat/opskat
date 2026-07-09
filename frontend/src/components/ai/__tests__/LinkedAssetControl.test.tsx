@@ -32,7 +32,9 @@ describe("LinkedAssetControl", () => {
     useAIStore.getState().setSidebarTabAsset("s1", { assetId: 42, assetName: "prod-web-01", assetType: "ssh" });
     render(<LinkedAssetControl sidebarTabId="s1" />);
     expect(screen.getByText("prod-web-01")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("linked-asset-clear"));
+    // Radix DropdownMenuTrigger listens on pointerdown (button=0) to open the menu (see TabPanelMenu.test.tsx).
+    fireEvent.pointerDown(screen.getByTestId("linked-asset-menu-trigger"), { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByTestId("menu-clear"));
     const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
     expect(tab?.linkedAssetId).toBeUndefined();
   });

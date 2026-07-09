@@ -1,7 +1,14 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Button } from "@opskat/ui";
-import { X } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuCheckboxItem,
+} from "@opskat/ui";
+import { ChevronDown, Link2 } from "lucide-react";
 import { AssetSelect } from "@/components/asset/AssetSelect";
 import { useAIStore } from "@/stores/aiStore";
 import { useAssetStore } from "@/stores/assetStore";
@@ -11,6 +18,7 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
   const tab = useAIStore((s) => s.sidebarTabs.find((x) => x.id === sidebarTabId));
   const setAsset = useAIStore((s) => s.setSidebarTabAsset);
   const clearAsset = useAIStore((s) => s.clearSidebarTabAsset);
+  const setFollow = useAIStore((s) => s.setSidebarTabFollow);
   const assets = useAssetStore((s) => s.assets);
   const [picking, setPicking] = useState(false);
 
@@ -26,24 +34,39 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
   if (tab?.linkedAssetId != null) {
     return (
       <div className="flex items-center gap-2" data-testid="linked-asset-chip">
-        <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-secondary px-2 py-0.5 text-xs">
-          <span className="h-1.5 w-1.5 rounded-full bg-success" />
-          {tab.linkedAssetName}
-        </span>
-        <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setPicking(true)}>
-          {t("ai.sidebar.linkedAsset.change")}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6"
-          data-testid="linked-asset-clear"
-          onClick={() => clearAsset(sidebarTabId)}
-          title={t("ai.sidebar.linkedAsset.clear")}
-          aria-label={t("ai.sidebar.linkedAsset.clear")}
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              data-testid="linked-asset-menu-trigger"
+              className="inline-flex items-center gap-1.5 rounded-md border border-border bg-secondary px-2 py-0.5 text-xs"
+            >
+              {tab.followActiveTerminal ? (
+                <Link2 className="h-3 w-3 text-primary" />
+              ) : (
+                <span className="h-1.5 w-1.5 rounded-full bg-success" />
+              )}
+              <span className="max-w-[140px] truncate">{tab.linkedAssetName}</span>
+              <ChevronDown className="h-3 w-3 opacity-60" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-[180px]" onCloseAutoFocus={(e) => e.preventDefault()}>
+            <DropdownMenuItem data-testid="menu-change" onSelect={() => setPicking(true)}>
+              {t("ai.sidebar.linkedAsset.change")}
+            </DropdownMenuItem>
+            <DropdownMenuItem data-testid="menu-clear" onSelect={() => clearAsset(sidebarTabId)}>
+              {t("ai.sidebar.linkedAsset.clear")}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem
+              data-testid="menu-follow"
+              checked={!!tab.followActiveTerminal}
+              onCheckedChange={(v) => setFollow(sidebarTabId, !!v)}
+            >
+              {t("ai.sidebar.follow")}
+            </DropdownMenuCheckboxItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         {picking && (
           <AssetSelect
             value={tab.linkedAssetId}
