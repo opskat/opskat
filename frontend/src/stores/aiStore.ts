@@ -160,6 +160,9 @@ export interface SidebarAITab {
   title: string;
   createdAt: number;
   uiState: SidebarTabUIState;
+  linkedAssetId?: number | null;
+  linkedAssetName?: string;
+  linkedAssetType?: string;
 }
 
 export type SidebarTabStatus = "waiting_approval" | "error" | "running" | "done" | null;
@@ -229,6 +232,9 @@ function createSidebarTab(overrides?: Partial<SidebarAITab>): SidebarAITab {
     title: overrides?.title ?? getDefaultSidebarTitle(),
     createdAt: overrides?.createdAt ?? Date.now(),
     uiState: createDefaultSidebarUiState(overrides?.uiState),
+    linkedAssetId: typeof overrides?.linkedAssetId === "number" ? overrides.linkedAssetId : undefined,
+    linkedAssetName: overrides?.linkedAssetName,
+    linkedAssetType: overrides?.linkedAssetType,
   };
 }
 
@@ -255,7 +261,7 @@ function sanitizeSidebarUiStateForPersistence(
   });
 }
 
-function sanitizeSidebarTab(raw: unknown): SidebarAITab | null {
+export function sanitizeSidebarTab(raw: unknown): SidebarAITab | null {
   if (!raw || typeof raw !== "object") return null;
   const tab = raw as Partial<SidebarAITab>;
   if (typeof tab.id !== "string" || tab.id.length === 0) return null;
@@ -267,6 +273,9 @@ function sanitizeSidebarTab(raw: unknown): SidebarAITab | null {
     title: typeof tab.title === "string" && tab.title.length > 0 ? tab.title : undefined,
     createdAt: typeof tab.createdAt === "number" && Number.isFinite(tab.createdAt) ? tab.createdAt : undefined,
     uiState: sanitizeSidebarUiStateForPersistence(tab.uiState),
+    linkedAssetId: typeof tab.linkedAssetId === "number" && Number.isFinite(tab.linkedAssetId) ? tab.linkedAssetId : undefined,
+    linkedAssetName: typeof tab.linkedAssetName === "string" ? tab.linkedAssetName : undefined,
+    linkedAssetType: typeof tab.linkedAssetType === "string" ? tab.linkedAssetType : undefined,
   });
 }
 
