@@ -289,12 +289,15 @@ git commit -m "♻️ 会话绑定改为 tab 实例:linkedTabId + syncTab + bind
 用 `syncTab` 闸控:切工作区 tab → 激活绑定会话(方向 A);激活会话 → 激活绑定 tab(方向 B)。共享 `syncingTabBinding` guard 防回环。移除旧的「随激活 tab 改绑资产」订阅与 `followSwitched` toast。
 
 **Files:**
-- Modify: `frontend/src/stores/aiStore.ts`(顶部加 guard 变量;`activateSidebarTab` `1932-1935`;订阅块 `2450-2465`)
+- Modify: `frontend/src/stores/aiStore.ts`(顶部加 guard 变量;`activateSidebarTab` `1932-1935`;订阅块 `2450-2465`;**@mention 自动绑定 `~2254`**)
 - Modify: `frontend/src/__tests__/aiStore.binding.test.ts`(追加 describe)
+- Modify: `frontend/src/__tests__/aiStore.linkedAsset.test.ts`(迁移被删动作的调用点)
+
+> **范围补充(执行期发现的计划缺口)**:Task 1 删除了 `setSidebarTabAsset`,但 `aiStore.ts:2254` 的「未绑定会话首次 @资产 → 自动绑定」仍调用它;且 `aiStore.linkedAsset.test.ts` 覆盖该路径 + 旧动作。二者是移除旧动作的必然迁移,并入本任务。`linkedAssetFromMention(m)` 返回 `{ assetId, assetName, assetType }`(`lib/aiLinkedAsset.ts:3`)。
 
 **Interfaces:**
 - Consumes: Task 1 的 `SidebarAITab.syncTab`/`linkedTabId`、`bindSidebarTab`。
-- Produces: `activateSidebarTab` 现在附带方向 B(激活 synced 会话→激活其 `linkedTabId` tab);模块级订阅实现方向 A。
+- Produces: `activateSidebarTab` 现在附带方向 B(激活 synced 会话→激活其 `linkedTabId` tab);模块级订阅实现方向 A;`@mention` 自动绑定改用 `bindSidebarTab`(资产级,`workspaceTabId: null`)。
 
 - [ ] **Step 1: 追加失败测试**
 
@@ -429,17 +432,62 @@ useTabStore.subscribe((state) => {
 
 > `toast` / `i18n` 若因此变为未使用,按 lint 提示删除对应 import(见 Step 4 的 `pnpm lint`)。`followSwitched` i18n key 在 Task 5 一并删除。
 
+- [ ] **Step 3d: 迁移 @mention 自动绑定（`aiStore.ts:2254`）**
+
+替换:
+```ts
+          get().setSidebarTabAsset(tabId, linkedAssetFromMention(mentions[0]));
+```
+为:
+```ts
+          get().bindSidebarTab(tabId, { workspaceTabId: null, ...linkedAssetFromMention(mentions[0]) });
+```
+
+- [ ] **Step 3e: 迁移 `aiStore.linkedAsset.test.ts` 里被删动作的调用点**
+
+三处调用改为新 API(断言不变):
+
+`aiStore.linkedAsset.test.ts:50`(describe 标题可一并改为 `bindSidebarTab / unbindSidebarTab`):
+```ts
+    useAIStore.getState().setSidebarTabAsset("s1", { assetId: 42, assetName: "prod-web-01", assetType: "ssh" });
+```
+→
+```ts
+    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: null, assetId: 42, assetName: "prod-web-01", assetType: "ssh" });
+```
+
+`aiStore.linkedAsset.test.ts:59-60`:
+```ts
+    useAIStore.getState().setSidebarTabAsset("s1", { assetId: 42, assetName: "p", assetType: "ssh" });
+    useAIStore.getState().clearSidebarTabAsset("s1");
+```
+→
+```ts
+    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: null, assetId: 42, assetName: "p", assetType: "ssh" });
+    useAIStore.getState().unbindSidebarTab("s1");
+```
+
+`aiStore.linkedAsset.test.ts:156`:
+```ts
+    useAIStore.getState().setSidebarTabAsset("s1", { assetId: 99, assetName: "cache", assetType: "redis" });
+```
+→
+```ts
+    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: null, assetId: 99, assetName: "cache", assetType: "redis" });
+```
+> 其余 describe(`sanitizeSidebarTab linked asset`、`_sendForConversation ...`、`sendFromSidebarTab auto-binds ...` 的另两条)不含被删动作,行为不变,不改。
+
 - [ ] **Step 4: 运行确认通过 + lint**
 
-Run: `pnpm test src/__tests__/aiStore.binding.test.ts`
-Expected: PASS(13 通过)。
-Run: `pnpm lint`(仅确认 aiStore.ts 无未使用 import 报错;`LinkedAssetControl.tsx` 的旧引用报错留待 Task 5)。
+Run: `pnpm test src/__tests__/aiStore.binding.test.ts src/__tests__/aiStore.linkedAsset.test.ts`
+Expected: PASS(binding 14 通过 + linkedAsset 全绿)。
+Run: `pnpm lint`(确认 aiStore.ts 无未使用 import 报错;`LinkedAssetControl.tsx` / 其它组件测试的旧引用报错留待 Task 5)。
 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add frontend/src/stores/aiStore.ts frontend/src/__tests__/aiStore.binding.test.ts
-git commit -m "✨ AI 会话↔tab 双向联动:syncTab 闸控 + 防回环 guard"
+git add frontend/src/stores/aiStore.ts frontend/src/__tests__/aiStore.binding.test.ts frontend/src/__tests__/aiStore.linkedAsset.test.ts
+git commit -m "✨ AI 会话↔tab 双向联动:syncTab 闸控 + 防回环 guard;@mention 自动绑定迁移"
 ```
 
 ---
@@ -635,8 +683,11 @@ git commit -m "✨ resolveAssetIcon:AI 侧统一资产图标/颜色解析(复用
 **Files:**
 - Modify（整文件替换）: `frontend/src/components/ai/LinkedAssetControl.tsx`
 - Modify: `frontend/src/i18n/locales/zh-CN/common.json:1046-1056`、`frontend/src/i18n/locales/en/common.json:1046-1056`
+- Modify: `frontend/src/components/ai/__tests__/LinkedAssetControl.test.tsx`(迁移 `setSidebarTabAsset` 调用点)
 - Create: `frontend/src/components/ai/__tests__/LinkedAssetControl.binding.test.tsx`
 - Delete: `frontend/src/components/ai/__tests__/LinkedAssetControl.follow.test.tsx`
+
+> **范围补充(执行期发现)**:既有基础组件测试 `LinkedAssetControl.test.tsx:63` 调用被删的 `setSidebarTabAsset`,须一并迁移。该文件其余用例(未绑定占位、资产库选择、已打开终端绑定)行为不变,不改。
 
 **Interfaces:**
 - Consumes: Task 1 `bindSidebarTab`/`unbindSidebarTab`/`setSidebarTabSync`、Task 4 `resolveAssetIcon`、`tabToAssetRef`。
@@ -964,10 +1015,22 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
       "referencedThisSession": "Referenced"
 ```
 
+- [ ] **Step 4b: 迁移 `LinkedAssetControl.test.tsx:63` 调用点**
+
+替换:
+```ts
+    useAIStore.getState().setSidebarTabAsset("s1", { assetId: 42, assetName: "prod-web-01", assetType: "ssh" });
+```
+为:
+```ts
+    useAIStore.getState().bindSidebarTab("s1", { workspaceTabId: null, assetId: 42, assetName: "prod-web-01", assetType: "ssh" });
+```
+> 其余用例行为不变;若「已打开终端绑定」用例想更严,可加断言 `expect(tab?.linkedTabId).toBe("t7")`(可选,非必需)。
+
 - [ ] **Step 5: 运行确认通过**
 
-Run: `pnpm test src/components/ai/__tests__/LinkedAssetControl.binding.test.tsx`
-Expected: PASS(4 通过)。
+Run: `pnpm test src/components/ai/__tests__/LinkedAssetControl.binding.test.tsx src/components/ai/__tests__/LinkedAssetControl.test.tsx`
+Expected: PASS(binding 4 通过 + 基础组件测试全绿)。
 
 - [ ] **Step 6: 删旧测试并提交**
 
@@ -976,6 +1039,7 @@ git rm frontend/src/components/ai/__tests__/LinkedAssetControl.follow.test.tsx
 git add frontend/src/components/ai/LinkedAssetControl.tsx \
         frontend/src/i18n/locales/zh-CN/common.json \
         frontend/src/i18n/locales/en/common.json \
+        frontend/src/components/ai/__tests__/LinkedAssetControl.test.tsx \
         frontend/src/components/ai/__tests__/LinkedAssetControl.binding.test.tsx
 git commit -m "✨ LinkedAssetControl 绑 tab 实例 + 联动开关 + 图标复用;文案改联动"
 ```
