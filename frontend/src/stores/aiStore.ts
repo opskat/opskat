@@ -163,10 +163,11 @@ export interface SidebarAITab {
   title: string;
   createdAt: number;
   uiState: SidebarTabUIState;
+  linkedTabId?: string | null;
   linkedAssetId?: number | null;
   linkedAssetName?: string;
   linkedAssetType?: string;
-  followActiveTerminal?: boolean;
+  syncTab?: boolean;
 }
 
 export type SidebarTabStatus = "waiting_approval" | "error" | "running" | "done" | null;
@@ -236,10 +237,11 @@ function createSidebarTab(overrides?: Partial<SidebarAITab>): SidebarAITab {
     title: overrides?.title ?? getDefaultSidebarTitle(),
     createdAt: overrides?.createdAt ?? Date.now(),
     uiState: createDefaultSidebarUiState(overrides?.uiState),
+    linkedTabId: typeof overrides?.linkedTabId === "string" ? overrides.linkedTabId : undefined,
     linkedAssetId: typeof overrides?.linkedAssetId === "number" ? overrides.linkedAssetId : undefined,
     linkedAssetName: overrides?.linkedAssetName,
     linkedAssetType: overrides?.linkedAssetType,
-    followActiveTerminal: overrides?.followActiveTerminal,
+    syncTab: overrides?.syncTab,
   };
 }
 
@@ -278,10 +280,11 @@ export function sanitizeSidebarTab(raw: unknown): SidebarAITab | null {
     title: typeof tab.title === "string" && tab.title.length > 0 ? tab.title : undefined,
     createdAt: typeof tab.createdAt === "number" && Number.isFinite(tab.createdAt) ? tab.createdAt : undefined,
     uiState: sanitizeSidebarUiStateForPersistence(tab.uiState),
+    linkedTabId: typeof tab.linkedTabId === "string" ? tab.linkedTabId : undefined,
     linkedAssetId: typeof tab.linkedAssetId === "number" && Number.isFinite(tab.linkedAssetId) ? tab.linkedAssetId : undefined,
     linkedAssetName: typeof tab.linkedAssetName === "string" ? tab.linkedAssetName : undefined,
     linkedAssetType: typeof tab.linkedAssetType === "string" ? tab.linkedAssetType : undefined,
-    followActiveTerminal: typeof tab.followActiveTerminal === "boolean" ? tab.followActiveTerminal : undefined,
+    syncTab: typeof tab.syncTab === "boolean" ? tab.syncTab : undefined,
   });
 }
 
@@ -1698,9 +1701,12 @@ interface AIState {
     } | null
   ) => void;
   stopSidebarTab: (tabId: string) => Promise<void>;
-  setSidebarTabAsset: (tabId: string, asset: { assetId: number; assetName: string; assetType: string }) => void;
-  clearSidebarTabAsset: (tabId: string) => void;
-  setSidebarTabFollow: (tabId: string, on: boolean) => void;
+  bindSidebarTab: (
+    sidebarTabId: string,
+    binding: { workspaceTabId: string | null; assetId: number; assetName: string; assetType: string }
+  ) => void;
+  unbindSidebarTab: (sidebarTabId: string) => void;
+  setSidebarTabSync: (sidebarTabId: string, on: boolean) => void;
 
   // 查询
   isAnySending: () => boolean;
@@ -1934,42 +1940,50 @@ export const useAIStore = create<AIState>((set, get) => {
       set({ activeSidebarTabId: tabId });
     },
 
-    setSidebarTabAsset: (tabId, asset) => {
+    bindSidebarTab: (sidebarTabId, binding) => {
+      set((state) => ({
+        sidebarTabs: state.sidebarTabs.map((tab) => {
+          // 1:1 独占：其它绑到同一 workspace tab 的会话让位（保留其资产上下文，仅断 tab 链 + 关联动）。
+          if (binding.workspaceTabId != null && tab.id !== sidebarTabId && tab.linkedTabId === binding.workspaceTabId) {
+            return { ...tab, linkedTabId: null, syncTab: false };
+          }
+          if (tab.id === sidebarTabId) {
+            return {
+              ...tab,
+              linkedTabId: binding.workspaceTabId,
+              linkedAssetId: binding.assetId,
+              linkedAssetName: binding.assetName,
+              linkedAssetType: binding.assetType,
+            };
+          }
+          return tab;
+        }),
+      }));
+    },
+    unbindSidebarTab: (sidebarTabId) => {
       set((state) => ({
         sidebarTabs: state.sidebarTabs.map((tab) =>
-          tab.id === tabId
+          tab.id === sidebarTabId
             ? {
                 ...tab,
-                linkedAssetId: asset.assetId,
-                linkedAssetName: asset.assetName,
-                linkedAssetType: asset.assetType,
+                linkedTabId: null,
+                linkedAssetId: undefined,
+                linkedAssetName: undefined,
+                linkedAssetType: undefined,
+                syncTab: false,
               }
             : tab
         ),
       }));
     },
-    clearSidebarTabAsset: (tabId) => {
+    setSidebarTabSync: (sidebarTabId, on) => {
       set((state) => ({
         sidebarTabs: state.sidebarTabs.map((tab) =>
-          tab.id === tabId
-            ? { ...tab, linkedAssetId: undefined, linkedAssetName: undefined, linkedAssetType: undefined }
+          tab.id === sidebarTabId
+            ? { ...tab, syncTab: on && tab.linkedTabId != null }  // 无 tab 链不可联动
             : tab
         ),
       }));
-    },
-    setSidebarTabFollow: (tabId, on) => {
-      set((state) => ({
-        sidebarTabs: state.sidebarTabs.map((tab) =>
-          tab.id === tabId ? { ...tab, followActiveTerminal: on } : tab
-        ),
-      }));
-      if (on) {
-        // 开启跟随即绑定到当前激活终端（若有资产）
-        const active = useTabStore.getState();
-        const activeTab = active.tabs.find((t) => t.id === active.activeTabId);
-        const ref = activeTab ? tabToAssetRef(activeTab) : null;
-        if (ref) get().setSidebarTabAsset(tabId, ref);
-      }
     },
 
     closeSidebarTab: (tabId: string) => {
@@ -2422,7 +2436,8 @@ function didSidebarStructureChange(next: SidebarAITab[], prev: SidebarAITab[]) {
       a.conversationId !== b.conversationId ||
       a.title !== b.title ||
       a.linkedAssetId !== b.linkedAssetId ||
-      a.followActiveTerminal !== b.followActiveTerminal
+      a.linkedTabId !== b.linkedTabId ||
+      a.syncTab !== b.syncTab
     )
       return true;
   }
