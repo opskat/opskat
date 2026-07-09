@@ -1676,6 +1676,8 @@ interface AIState {
     } | null
   ) => void;
   stopSidebarTab: (tabId: string) => Promise<void>;
+  setSidebarTabAsset: (tabId: string, asset: { assetId: number; assetName: string; assetType: string }) => void;
+  clearSidebarTabAsset: (tabId: string) => void;
 
   // 查询
   isAnySending: () => boolean;
@@ -1907,6 +1909,30 @@ export const useAIStore = create<AIState>((set, get) => {
     activateSidebarTab: (tabId: string) => {
       if (!get().sidebarTabs.some((tab) => tab.id === tabId)) return;
       set({ activeSidebarTabId: tabId });
+    },
+
+    setSidebarTabAsset: (tabId, asset) => {
+      set((state) => ({
+        sidebarTabs: state.sidebarTabs.map((tab) =>
+          tab.id === tabId
+            ? {
+                ...tab,
+                linkedAssetId: asset.assetId,
+                linkedAssetName: asset.assetName,
+                linkedAssetType: asset.assetType,
+              }
+            : tab
+        ),
+      }));
+    },
+    clearSidebarTabAsset: (tabId) => {
+      set((state) => ({
+        sidebarTabs: state.sidebarTabs.map((tab) =>
+          tab.id === tabId
+            ? { ...tab, linkedAssetId: undefined, linkedAssetName: undefined, linkedAssetType: undefined }
+            : tab
+        ),
+      }));
     },
 
     closeSidebarTab: (tabId: string) => {
@@ -2346,7 +2372,13 @@ function didSidebarStructureChange(next: SidebarAITab[], prev: SidebarAITab[]) {
   for (let i = 0; i < next.length; i += 1) {
     const a = next[i];
     const b = prev[i];
-    if (a.id !== b.id || a.conversationId !== b.conversationId || a.title !== b.title) return true;
+    if (
+      a.id !== b.id ||
+      a.conversationId !== b.conversationId ||
+      a.title !== b.title ||
+      a.linkedAssetId !== b.linkedAssetId
+    )
+      return true;
   }
   return false;
 }
