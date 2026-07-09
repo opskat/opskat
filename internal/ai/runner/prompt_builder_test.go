@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"strings"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
@@ -25,6 +26,23 @@ func TestPromptBuilderBuild(t *testing.T) {
 			So(got, ShouldContainSubstring, "prod-db")
 			So(got, ShouldContainSubstring, "Database Query")
 			So(got, ShouldContainSubstring, "metrics")
+		})
+
+		Convey("primary/active tab is marked in tab context", func() {
+			ctx := AIContext{OpenTabs: []TabInfo{
+				{Type: "ssh", AssetID: 1, AssetName: "prod-web-01", Active: true},
+				{Type: "ssh", AssetID: 2, AssetName: "other", Active: false},
+			}}
+			out := NewPromptBuilder("en", ctx).Build()
+			So(out, ShouldContainSubstring, "prod-web-01")
+			// active 行带 PRIMARY 提示；非 active 行不带
+			So(out, ShouldContainSubstring, "PRIMARY")
+			primaryLineIdx := strings.Index(out, "prod-web-01")
+			otherLineIdx := strings.Index(out, "\"other\"")
+			So(primaryLineIdx, ShouldBeGreaterThanOrEqualTo, 0)
+			So(otherLineIdx, ShouldBeGreaterThanOrEqualTo, 0)
+			// PRIMARY 只应出现在 active 行附近，不在 other 行
+			So(out[otherLineIdx:], ShouldNotContainSubstring, "PRIMARY")
 		})
 
 		Convey("输出内联 mention 语义提示", func() {
