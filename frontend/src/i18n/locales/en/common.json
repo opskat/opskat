@@ -280,6 +280,9 @@
     "rdpConnected": "Connected",
     "rdpError": "RDP connection failed",
     "rdpResize": "Resize",
+    "rdpViewMode": "RDP view mode",
+    "rdpFit": "Fit",
+    "rdpActual": "1:1",
     "rdpStatus": {
       "connecting": "Connecting",
       "connected": "Connected",

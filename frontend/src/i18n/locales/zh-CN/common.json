@@ -280,6 +280,9 @@
     "rdpConnected": "已连接",
     "rdpError": "RDP 连接失败",
     "rdpResize": "调整分辨率",
+    "rdpViewMode": "RDP 显示模式",
+    "rdpFit": "适应",
+    "rdpActual": "1:1",
     "rdpStatus": {
       "connecting": "连接中",
       "connected": "已连接",

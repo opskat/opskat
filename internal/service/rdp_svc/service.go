@@ -130,6 +130,22 @@ func (s *Service) Connect(ctx context.Context, req ConnectRequest) (string, erro
 			s.emit(Event{Type: "error", SessionID: id, Error: err.Error()})
 		}
 	})
+	client.OnReconnecting(func() {
+		if s.emit != nil {
+			s.emit(Event{Type: "connecting", SessionID: id, Message: "Resizing RDP session"})
+		}
+	})
+	client.OnReconnected(func() {
+		if s.emit != nil {
+			s.emit(Event{Type: "connected", SessionID: id})
+		}
+	})
+	client.OnResize(func(w, h int) {
+		sess.resizeFrame(w, h)
+		if s.emit != nil {
+			s.emit(Event{Type: "connected", SessionID: id, Width: w, Height: h})
+		}
+	})
 	client.OnStridedBitmap(func(x, y, w, h int, data []byte, stride int) {
 		sess.writeStridedRect(x, y, w, h, data, stride)
 	})
@@ -154,11 +170,11 @@ func (s *Service) Connect(ctx context.Context, req ConnectRequest) (string, erro
 	go s.frameLoop(sess)
 	go func() {
 		<-client.Done()
-		close(sess.done)
-		s.remove(id)
-		if s.emit != nil {
-			s.emit(Event{Type: "closed", SessionID: id})
+		time.Sleep(2 * time.Second)
+		if client.State() == rdp.StateConnected {
+			return
 		}
+		s.closeSession(sess)
 	}()
 	return id, nil
 }
@@ -274,6 +290,18 @@ func (sess *session) writeBitmapUpdate(update *rdp.BitmapUpdate) {
 	sess.writeRect(update.X, update.Y, update.Width, update.Height, rgba, update.Width*4)
 }
 
+func (sess *session) resizeFrame(width, height int) {
+	if width <= 0 || height <= 0 {
+		return
+	}
+	sess.frameMu.Lock()
+	defer sess.frameMu.Unlock()
+	sess.width = width
+	sess.height = height
+	sess.frame = make([]byte, width*height*4)
+	sess.hasFrame = false
+}
+
 func (sess *session) writeStridedRect(x, y, w, h int, data []byte, stride int) {
 	if w <= 0 || h <= 0 || stride <= 0 || len(data) < stride*h {
 		return
@@ -369,6 +397,18 @@ func (s *Service) Close(sessionID string) error {
 		return nil
 	}
 	return sess.client.Close()
+}
+
+func (s *Service) closeSession(sess *session) {
+	s.remove(sess.id)
+	select {
+	case <-sess.done:
+	default:
+		close(sess.done)
+	}
+	if s.emit != nil {
+		s.emit(Event{Type: "closed", SessionID: sess.id})
+	}
 }
 
 func (s *Service) CloseAll() {

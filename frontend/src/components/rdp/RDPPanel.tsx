@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Monitor, PlugZap } from "lucide-react";
 import { Button } from "@opskat/ui";
 import { useTranslation } from "react-i18next";
+import { Segmented } from "@/components/asset/fields";
 import { EventsOn } from "../../../wailsjs/runtime/runtime";
 import { CloseRDP, ConnectRDP, ResizeRDP, SendRDPInput, SetRDPClipboard } from "../../../wailsjs/go/rdp/RDP";
 import type { asset_entity } from "../../../wailsjs/go/models";
@@ -35,6 +36,8 @@ const CONTROL_SCANCODES: Record<string, number> = {
   Space: 0x39,
 };
 
+type ViewMode = "fit" | "actual";
+
 function parseConfig(asset: asset_entity.Asset): RDPConfig {
   try {
     return JSON.parse(asset.Config || "{}");
@@ -59,9 +62,12 @@ function buttonFlag(button: number): number {
 export function RDPPanel({ asset }: { asset: asset_entity.Asset }) {
   const { t } = useTranslation();
   const cfg = useMemo(() => parseConfig(asset), [asset]);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sessionIdRef = useRef("");
   const frameSizeRef = useRef({ width: cfg.width || 1280, height: cfg.height || 720 });
+  const [frameSize, setFrameSize] = useState(frameSizeRef.current);
+  const [viewMode, setViewMode] = useState<ViewMode>("fit");
   const [status, setStatus] = useState<"connecting" | "connected" | "error" | "closed">("connecting");
   const [error, setError] = useState("");
 
@@ -81,9 +87,13 @@ export function RDPPanel({ asset }: { asset: asset_entity.Asset }) {
         sessionIdRef.current = sessionId;
         setStatus("connected");
         unsubscribe = EventsOn(`rdp:event:${sessionId}`, (event: RDPEvent) => {
+          if (event.type === "connecting") {
+            setStatus("connecting");
+            return;
+          }
           if (event.type === "connected") {
             setStatus("connected");
-            if (event.width && event.height) frameSizeRef.current = { width: event.width, height: event.height };
+            if (event.width && event.height) updateFrameSize(event.width, event.height);
             return;
           }
           if (event.type === "error") {
@@ -122,12 +132,18 @@ export function RDPPanel({ asset }: { asset: asset_entity.Asset }) {
     if (!canvas) return;
     if (canvas.width !== width) canvas.width = width;
     if (canvas.height !== height) canvas.height = height;
-    frameSizeRef.current = { width, height };
+    updateFrameSize(width, height);
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const bytes = base64ToBytes(data);
     if (bytes.length !== width * height * 4) return;
     ctx.putImageData(new ImageData(bytes, width, height), 0, 0);
+  }
+
+  function updateFrameSize(width: number, height: number) {
+    const next = { width, height };
+    frameSizeRef.current = next;
+    setFrameSize((current) => (current.width === width && current.height === height ? current : next));
   }
 
   function remotePoint(e: React.MouseEvent<HTMLCanvasElement>) {
@@ -175,13 +191,19 @@ export function RDPPanel({ asset }: { asset: asset_entity.Asset }) {
 
   async function resizeToCanvas() {
     const sessionId = sessionIdRef.current;
-    const canvas = canvasRef.current;
-    if (!sessionId || !canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const width = Math.max(640, Math.round(rect.width * window.devicePixelRatio));
-    const height = Math.max(480, Math.round(rect.height * window.devicePixelRatio));
+    const viewport = viewportRef.current;
+    if (!sessionId || !viewport) return;
+    const rect = viewport.getBoundingClientRect();
+    const width = Math.max(1024, Math.round(rect.width));
+    const height = Math.max(720, Math.round(rect.height));
+    setStatus("connecting");
     await ResizeRDP(sessionId, width, height);
   }
+
+  const canvasStyle =
+    viewMode === "fit"
+      ? ({ width: "100%", height: "100%", objectFit: "contain" } as const)
+      : ({ width: `${frameSize.width}px`, height: `${frameSize.height}px` } as const);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background" data-testid="rdp-panel">
@@ -191,12 +213,25 @@ export function RDPPanel({ asset }: { asset: asset_entity.Asset }) {
         <span data-testid="rdp-status">
           {status === "connected" ? t("asset.rdpConnected") : t(`asset.rdpStatus.${status}`)}
         </span>
-        <Button type="button" variant="ghost" size="sm" className="ml-auto h-7 px-2" onClick={resizeToCanvas}>
+        <Segmented<ViewMode>
+          value={viewMode}
+          onChange={setViewMode}
+          aria-label={t("asset.rdpViewMode")}
+          className="ml-auto h-7 w-[138px] rounded-md p-0.5"
+          options={[
+            { value: "fit", label: t("asset.rdpFit"), testid: "rdp-view-fit" },
+            { value: "actual", label: t("asset.rdpActual"), testid: "rdp-view-actual" },
+          ]}
+        />
+        <Button type="button" variant="ghost" size="sm" className="h-7 px-2" onClick={resizeToCanvas}>
           <PlugZap className="mr-1 h-3.5 w-3.5" />
           {t("asset.rdpResize")}
         </Button>
       </div>
-      <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
+      <div
+        ref={viewportRef}
+        className={`relative min-h-0 flex-1 bg-black ${viewMode === "actual" ? "overflow-auto" : "overflow-hidden"}`}
+      >
         {status === "connecting" && (
           <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-background text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -213,8 +248,8 @@ export function RDPPanel({ asset }: { asset: asset_entity.Asset }) {
           ref={canvasRef}
           data-testid="rdp-canvas"
           tabIndex={0}
-          className="h-full w-full outline-none"
-          style={{ imageRendering: "auto" }}
+          className={`outline-none ${viewMode === "actual" ? "block max-w-none" : "h-full w-full"}`}
+          style={{ ...canvasStyle, imageRendering: "auto" }}
           onContextMenu={(e) => e.preventDefault()}
           onMouseMove={(e) => sendMouse(e, PTR_MOVE)}
           onMouseDown={(e) => {
