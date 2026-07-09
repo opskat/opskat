@@ -6,7 +6,7 @@ import { useAssetStore } from "@/stores/assetStore";
 import { useQueryStore, type DatabaseTabState } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta, type Tab } from "@/stores/tabStore";
 import { filterAssets } from "@/lib/assetSearch";
-import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
+import { EntityIcon } from "@/components/asset/AssetIcon";
 import { pinyinMatch } from "@/lib/pinyin";
 
 export interface MentionItem {
@@ -268,14 +268,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(function
       className="bg-popover text-popover-foreground rounded-md border shadow-md overflow-hidden min-w-[240px] max-w-[360px]"
     >
       {items.map((item, idx) => {
-        const Icon =
-          item.kind === "database"
-            ? Database
-            : item.kind === "table"
-              ? Table2
-              : item.icon
-                ? getIconComponent(item.icon)
-                : Server;
+        const Icon = item.kind === "database" ? Database : item.kind === "table" ? Table2 : Server;
         return (
           <button
             role="option"
@@ -287,10 +280,11 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(function
               (idx === selectedIndex ? "bg-accent" : "hover:bg-accent/60")
             }
           >
-            <Icon
-              className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-              style={item.kind === "asset" && item.icon ? { color: getIconColor(item.icon) } : undefined}
-            />
+            {item.kind === "asset" ? (
+              <EntityIcon icon={item.icon} fallback={Server} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            ) : (
+              <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            )}
             <span className="flex-1 min-w-0 truncate">
               {item.groupPath && <span className="text-muted-foreground">{item.groupPath}/</span>}
               <span className="text-foreground">{item.label}</span>

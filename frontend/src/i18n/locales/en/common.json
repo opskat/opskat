@@ -1027,7 +1027,6 @@
       "collapseRail": "Collapse session rail",
       "emptyGuide": "Click + to start a new chat, or pick one from <history/> History",
       "noConversation": "No conversation selected",
-      "attachedAssets": "Attached assets",
       "status": {
         "waiting_approval": "Waiting approval",
         "running": "Running",
@@ -1039,7 +1038,20 @@
         "running": "Running",
         "done": "Done",
         "error": "Error"
-      }
+      },
+      "contextExpand": "Show linked tabs",
+      "contextCollapse": "Hide linked tabs",
+      "linkedAsset": {
+        "pickPlaceholder": "Choose a tab to bind",
+        "openTabs": "Open tabs",
+        "noOpenTabs": "No open tabs",
+        "clearBinding": "Clear binding",
+        "syncHint": "When on: this tab activates this chat, and this chat activates the tab",
+        "tabClosed": "The bound tab is closed · rebind to relink"
+      },
+      "sync": "Link to this tab",
+      "syncing": "Linked",
+      "referencedThisSession": "Referenced"
     }
   },
   "shortcut": {

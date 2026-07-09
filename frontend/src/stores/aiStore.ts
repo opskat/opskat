@@ -20,12 +20,14 @@ import i18n from "../i18n";
 import {
   useTabStore,
   registerTabCloseHook,
+  registerTabReplaceHook,
   registerTabRestoreHook,
   type AITabMeta,
-  type QueryTabMeta,
   type Tab,
 } from "./tabStore";
-import { stripMentionTags } from "@/lib/mentionXml";
+import { useAssetStore } from "./assetStore";
+import { stripMentionTags, extractMentions } from "@/lib/mentionXml";
+import { tabToAssetRef } from "@/lib/tabAsset";
 import { classifyError, type ErrorKind } from "@/lib/aiError";
 
 // 内容块：文本、工具调用、Sub Agent、审批、错误（持久化字段）。
@@ -160,6 +162,11 @@ export interface SidebarAITab {
   title: string;
   createdAt: number;
   uiState: SidebarTabUIState;
+  linkedTabId?: string | null;
+  linkedAssetId?: number | null;
+  linkedAssetName?: string;
+  linkedAssetType?: string;
+  syncTab?: boolean;
 }
 
 export type SidebarTabStatus = "waiting_approval" | "error" | "running" | "done" | null;
@@ -229,6 +236,11 @@ function createSidebarTab(overrides?: Partial<SidebarAITab>): SidebarAITab {
     title: overrides?.title ?? getDefaultSidebarTitle(),
     createdAt: overrides?.createdAt ?? Date.now(),
     uiState: createDefaultSidebarUiState(overrides?.uiState),
+    linkedTabId: typeof overrides?.linkedTabId === "string" ? overrides.linkedTabId : undefined,
+    linkedAssetId: typeof overrides?.linkedAssetId === "number" ? overrides.linkedAssetId : undefined,
+    linkedAssetName: overrides?.linkedAssetName,
+    linkedAssetType: overrides?.linkedAssetType,
+    syncTab: overrides?.syncTab,
   };
 }
 
@@ -267,6 +279,12 @@ function sanitizeSidebarTab(raw: unknown): SidebarAITab | null {
     title: typeof tab.title === "string" && tab.title.length > 0 ? tab.title : undefined,
     createdAt: typeof tab.createdAt === "number" && Number.isFinite(tab.createdAt) ? tab.createdAt : undefined,
     uiState: sanitizeSidebarUiStateForPersistence(tab.uiState),
+    linkedTabId: typeof tab.linkedTabId === "string" ? tab.linkedTabId : undefined,
+    linkedAssetId:
+      typeof tab.linkedAssetId === "number" && Number.isFinite(tab.linkedAssetId) ? tab.linkedAssetId : undefined,
+    linkedAssetName: typeof tab.linkedAssetName === "string" ? tab.linkedAssetName : undefined,
+    linkedAssetType: typeof tab.linkedAssetType === "string" ? tab.linkedAssetType : undefined,
+    syncTab: typeof tab.syncTab === "boolean" ? tab.syncTab : undefined,
   });
 }
 
@@ -1571,20 +1589,34 @@ async function _sendForConversation(convId: number, content: string) {
     : newMessages.map((m) => new runner.Message({ role: m.role, content: m.content }));
 
   // 收集当前 Tab 上下文
-  const allTabs = useTabStore.getState().tabs;
-  const openTabs = allTabs
-    .filter(
-      (t): t is Tab & { meta: { assetId: number; assetName?: string } } =>
-        t.type !== "ai" && t.type !== "page" && t.meta != null && "assetId" in t.meta
-    )
-    .map((t) => {
-      const type = t.type === "query" ? (t.meta as QueryTabMeta).assetType : t.type === "terminal" ? "ssh" : t.type;
-      return new runner.TabInfo({
-        type,
-        assetId: t.meta.assetId || 0,
-        assetName: t.meta.assetName || t.label || "",
-      });
-    });
+  const assets = useAssetStore.getState().assets;
+  const openTabs = useTabStore
+    .getState()
+    .tabs.map((tab) => tabToAssetRef(tab, assets))
+    .filter((ref): ref is NonNullable<typeof ref> => ref != null)
+    .map(
+      (ref) =>
+        new runner.TabInfo({
+          type: ref.assetType,
+          assetId: ref.assetId,
+          assetName: ref.assetName,
+        })
+    );
+
+  // 会话若绑定了资产，保证它在上下文里且置顶（即使对应 tab 未打开）。
+  const boundTab = useAIStore.getState().sidebarTabs.find((tab) => tab.conversationId === convId);
+  if (boundTab?.linkedAssetId != null) {
+    const rest = openTabs.filter((t) => t.assetId !== boundTab.linkedAssetId);
+    openTabs.length = 0;
+    openTabs.push(
+      new runner.TabInfo({
+        type: boundTab.linkedAssetType || "",
+        assetId: boundTab.linkedAssetId,
+        assetName: boundTab.linkedAssetName || "",
+      }),
+      ...rest
+    );
+  }
 
   const aiContext = new runner.AIContext({ openTabs });
 
@@ -1667,6 +1699,9 @@ interface AIState {
     } | null
   ) => void;
   stopSidebarTab: (tabId: string) => Promise<void>;
+  bindSidebarTab: (sidebarTabId: string, binding: { workspaceTabId: string }) => void;
+  unbindSidebarTab: (sidebarTabId: string) => void;
+  setSidebarTabSync: (sidebarTabId: string, on: boolean) => void;
 
   // 查询
   isAnySending: () => boolean;
@@ -1675,6 +1710,9 @@ interface AIState {
   getMessagesByConversationId: (convId: number) => ChatMessage[];
   getStreamingByConversationId: (convId: number) => { sending: boolean; pendingQueue: PendingQueueItem[] };
 }
+
+// 联动方向 A/B 共享的重入 guard —— 防止 tab↔会话互相激活形成回环。
+let syncingTabBinding = false;
 
 export const useAIStore = create<AIState>((set, get) => {
   const initialSidebarState = loadInitialSidebarState();
@@ -1898,6 +1936,67 @@ export const useAIStore = create<AIState>((set, get) => {
     activateSidebarTab: (tabId: string) => {
       if (!get().sidebarTabs.some((tab) => tab.id === tabId)) return;
       set({ activeSidebarTabId: tabId });
+      // 联动方向 B：激活开了联动的会话 → 激活其绑定的工作区 tab（tab 已关则不动）。
+      if (syncingTabBinding) return;
+      const tab = get().sidebarTabs.find((t) => t.id === tabId);
+      if (!tab?.syncTab || !tab.linkedTabId) return;
+      const ts = useTabStore.getState();
+      if (ts.activeTabId === tab.linkedTabId || !ts.tabs.some((t) => t.id === tab.linkedTabId)) return;
+      syncingTabBinding = true;
+      try {
+        ts.activateTab(tab.linkedTabId);
+      } finally {
+        syncingTabBinding = false;
+      }
+    },
+
+    bindSidebarTab: (sidebarTabId, binding) => {
+      const workspaceTab = useTabStore.getState().tabs.find((tab) => tab.id === binding.workspaceTabId);
+      const ref = workspaceTab ? tabToAssetRef(workspaceTab, useAssetStore.getState().assets) : null;
+      if (!ref) return;
+      set((state) => ({
+        sidebarTabs: state.sidebarTabs.map((tab) => {
+          // 1:1 独占：其它绑到同一 workspace tab 的会话让位（保留其资产上下文，仅断 tab 链 + 关联动）。
+          if (tab.id !== sidebarTabId && tab.linkedTabId === binding.workspaceTabId) {
+            return { ...tab, linkedTabId: null, syncTab: false };
+          }
+          if (tab.id === sidebarTabId) {
+            return {
+              ...tab,
+              linkedTabId: binding.workspaceTabId,
+              linkedAssetId: ref.assetId,
+              linkedAssetName: ref.assetName,
+              linkedAssetType: ref.assetType,
+            };
+          }
+          return tab;
+        }),
+      }));
+    },
+    unbindSidebarTab: (sidebarTabId) => {
+      set((state) => ({
+        sidebarTabs: state.sidebarTabs.map((tab) =>
+          tab.id === sidebarTabId
+            ? {
+                ...tab,
+                linkedTabId: null,
+                linkedAssetId: undefined,
+                linkedAssetName: undefined,
+                linkedAssetType: undefined,
+                syncTab: false,
+              }
+            : tab
+        ),
+      }));
+    },
+    setSidebarTabSync: (sidebarTabId, on) => {
+      set((state) => ({
+        sidebarTabs: state.sidebarTabs.map((tab) =>
+          tab.id === sidebarTabId
+            ? { ...tab, syncTab: on && tab.linkedTabId != null } // 无 tab 链不可联动
+            : tab
+        ),
+      }));
     },
 
     closeSidebarTab: (tabId: string) => {
@@ -2161,6 +2260,19 @@ export const useAIStore = create<AIState>((set, get) => {
       const existingMessages = convId != null ? get().conversationMessages[convId] || [] : [];
       if (!content.trim() && existingMessages.length === 0) return;
 
+      // 未绑定会话首次 @已打开资产 → 自动绑定其工作区 tab（不覆盖已有绑定）。
+      if (sidebarTab.linkedAssetId == null && content.trim()) {
+        const mentions = extractMentions(content);
+        const assets = useAssetStore.getState().assets;
+        const openMentionTab = useTabStore.getState().tabs.find((tab) => {
+          const ref = tabToAssetRef(tab, assets);
+          return ref != null && mentions.some((mention) => mention.assetId === ref.assetId);
+        });
+        if (openMentionTab) {
+          get().bindSidebarTab(tabId, { workspaceTabId: openMentionTab.id });
+        }
+      }
+
       if (convId == null) {
         const newId = await createConversationForEmptyHost((conv) => {
           set((state) => ({
@@ -2337,7 +2449,15 @@ function didSidebarStructureChange(next: SidebarAITab[], prev: SidebarAITab[]) {
   for (let i = 0; i < next.length; i += 1) {
     const a = next[i];
     const b = prev[i];
-    if (a.id !== b.id || a.conversationId !== b.conversationId || a.title !== b.title) return true;
+    if (
+      a.id !== b.id ||
+      a.conversationId !== b.conversationId ||
+      a.title !== b.title ||
+      a.linkedAssetId !== b.linkedAssetId ||
+      a.linkedTabId !== b.linkedTabId ||
+      a.syncTab !== b.syncTab
+    )
+      return true;
   }
   return false;
 }
@@ -2358,6 +2478,39 @@ useAIStore.subscribe((state, prevState) => {
   } else {
     scheduleSidebarPersist(state.sidebarTabs, state.activeSidebarTabId);
   }
+});
+
+// 联动方向 A：激活工作区 tab 变化 → 激活绑定它且开了联动的会话。
+let __lastActiveTabId: string | null = useTabStore.getState().activeTabId;
+useTabStore.subscribe((state) => {
+  if (state.activeTabId === __lastActiveTabId) return;
+  __lastActiveTabId = state.activeTabId;
+  if (syncingTabBinding) return;
+  const store = useAIStore.getState();
+  const target = store.sidebarTabs.find(
+    (t) => t.syncTab === true && t.linkedTabId != null && t.linkedTabId === state.activeTabId
+  );
+  if (!target || target.id === store.activeSidebarTabId) return;
+  syncingTabBinding = true;
+  try {
+    store.activateSidebarTab(target.id);
+  } finally {
+    syncingTabBinding = false;
+  }
+});
+
+// 终端重连换 id（connectionId→sessionId）时迁移绑定，使 linkedTabId 跨重连/重启存活。
+registerTabReplaceHook((oldId, newId) => {
+  const store = useAIStore.getState();
+  let changed = false;
+  const next = store.sidebarTabs.map((tab) => {
+    if (tab.linkedTabId === oldId) {
+      changed = true;
+      return { ...tab, linkedTabId: newId };
+    }
+    return tab;
+  });
+  if (changed) useAIStore.setState({ sidebarTabs: next });
 });
 
 if (typeof window !== "undefined") {

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { Server, Pencil, Trash2, TerminalSquare, Loader2 } from "lucide-react";
+import { Pencil, Trash2, TerminalSquare, Loader2 } from "lucide-react";
 import Markdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { useAssetStore } from "@/stores/assetStore";
 import { useExtensionStore } from "@/extension";
 import { getAssetType, isBuiltinType } from "@/lib/assetTypes";
+import { AssetIcon } from "@/components/asset/AssetIcon";
 import { CommandPolicyCard } from "@/components/asset/CommandPolicyCard";
 import { DetailGrid, DetailSection, InfoItem } from "@/components/asset/detail/InfoItem";
 import { DISABLED_VALUE, ENABLED_VALUE, MASKED_SECRET, parseDetailConfig } from "@/components/asset/detail/utils";
@@ -127,14 +128,12 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
     return assets.find((a) => a.ID === id)?.Name || `ID:${id}`;
   };
 
-  const HeaderIcon = getAssetType(asset.Type)?.icon ?? Server;
-
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-4 py-3 border-b">
         <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-            <HeaderIcon className="h-4 w-4 text-primary" />
+            <AssetIcon assets={[asset]} assetId={asset.ID} fallbackType={asset.Type} className="h-4 w-4 text-primary" />
           </div>
           <div>
             <h2 className="font-semibold leading-tight">{asset.Name}</h2>
