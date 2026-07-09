@@ -1044,10 +1044,11 @@
       "contextExpand": "Show linked assets",
       "contextCollapse": "Hide linked assets",
       "linkedAsset": {
-        "change": "Change",
-        "clear": "Clear",
-        "unbound": "Not linked",
-        "pickPlaceholder": "Choose an asset"
+        "pickPlaceholder": "Choose an asset to bind",
+        "openTerminals": "Open terminals / sessions",
+        "pickFromLibrary": "Choose from asset library…",
+        "clearBinding": "Clear binding",
+        "followHint": "Off by default · only the bound chip shows up top"
       },
       "followSwitched": "Following → {{name}}",
       "follow": "Follow this terminal",

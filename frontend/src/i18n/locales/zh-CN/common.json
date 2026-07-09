@@ -1044,10 +1044,11 @@
       "contextExpand": "展开关联资产",
       "contextCollapse": "收起关联资产",
       "linkedAsset": {
-        "change": "换绑",
-        "clear": "清除",
-        "unbound": "未绑定",
-        "pickPlaceholder": "选择要绑定的资产"
+        "pickPlaceholder": "选择要绑定的资产",
+        "openTerminals": "已打开的终端 / 会话",
+        "pickFromLibrary": "从资产库选择…",
+        "clearBinding": "清除绑定",
+        "followHint": "默认关闭 · 顶部只显示绑定 chip"
       },
       "followSwitched": "已跟随切换到 {{name}}",
       "follow": "跟随此终端",
