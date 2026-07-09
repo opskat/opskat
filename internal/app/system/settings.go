@@ -18,6 +18,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
 	"github.com/opskat/opskat/internal/pkg/executil"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
+	"github.com/opskat/opskat/internal/service/auto_backup_svc"
 	"github.com/opskat/opskat/internal/service/backup_svc"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/internal/service/import_svc"
@@ -33,19 +34,20 @@ import (
 
 // SaveGitHubToken 加密保存 GitHub token
 func (s *System) SaveGitHubToken(token, user string) error {
-	cfg := bootstrap.GetConfig()
 	if token == "" {
-		cfg.GitHubToken = ""
-		cfg.GitHubUser = ""
-	} else {
-		encrypted, err := credential_svc.Default().Encrypt(token)
-		if err != nil {
-			return fmt.Errorf("加密 GitHub Token 失败: %w", err)
-		}
+		return bootstrap.UpdateConfig(func(cfg *bootstrap.AppConfig) {
+			cfg.GitHubToken = ""
+			cfg.GitHubUser = ""
+		})
+	}
+	encrypted, err := credential_svc.Default().Encrypt(token)
+	if err != nil {
+		return fmt.Errorf("加密 GitHub Token 失败: %w", err)
+	}
+	return bootstrap.UpdateConfig(func(cfg *bootstrap.AppConfig) {
 		cfg.GitHubToken = encrypted
 		cfg.GitHubUser = user
-	}
-	return bootstrap.SaveConfig(cfg)
+	})
 }
 
 // GetGitHubToken 获取解密后的 GitHub token
@@ -95,10 +97,15 @@ func (s *System) ImportTabbySelected(selectedIndexes []int, passphrase string, o
 	if data == nil {
 		return nil, nil
 	}
-	return import_svc.ImportTabbySelected(i18n.Ctx(s.ctx, s.Lang()), data, selectedIndexes, import_svc.ImportOptions{
+	result, err := import_svc.ImportTabbySelected(i18n.Ctx(s.ctx, s.Lang()), data, selectedIndexes, import_svc.ImportOptions{
 		Passphrase: passphrase,
 		Overwrite:  overwrite,
 	})
+	if err != nil {
+		return nil, err
+	}
+	auto_backup_svc.Schedule()
+	return result, nil
 }
 
 // PreviewSSHConfig 预览 SSH Config 文件（不写入数据库）
@@ -123,9 +130,14 @@ func (s *System) ImportSSHConfigSelected(selectedIndexes []int, overwrite bool) 
 	if data == nil {
 		return nil, nil
 	}
-	return import_svc.ImportSSHConfigSelected(i18n.Ctx(s.ctx, s.Lang()), data, selectedIndexes, import_svc.ImportOptions{
+	result, err := import_svc.ImportSSHConfigSelected(i18n.Ctx(s.ctx, s.Lang()), data, selectedIndexes, import_svc.ImportOptions{
 		Overwrite: overwrite,
 	})
+	if err != nil {
+		return nil, err
+	}
+	auto_backup_svc.Schedule()
+	return result, nil
 }
 
 // PreviewWindTermConfig 预览 WindTerm 配置（不写入数据库）
@@ -161,6 +173,7 @@ func (s *System) ImportWindTermSelected(sourceID string, selectedIndexes []int, 
 	})
 	if err == nil {
 		import_svc.DeleteWindTermImportSession(sourceID)
+		auto_backup_svc.Schedule()
 	}
 	return result, err
 }
@@ -426,7 +439,12 @@ func (s *System) ExecuteImportFile(filePath, password string, opts backup_svc.Im
 		return nil, fmt.Errorf("解析备份数据失败: %w", err)
 	}
 
-	return backup_svc.Import(i18n.Ctx(s.ctx, s.Lang()), &data, &opts, credential_svc.Default())
+	result, err := backup_svc.Import(i18n.Ctx(s.ctx, s.Lang()), &data, &opts, credential_svc.Default())
+	if err != nil {
+		return nil, err
+	}
+	auto_backup_svc.Schedule()
+	return result, nil
 }
 
 // --- GitHub 认证 ---
@@ -475,15 +493,21 @@ type WebDAVStoredConfig struct {
 	ExportIncludePolicyGroups bool   `json:"exportIncludePolicyGroups"`
 	ExportIncludeShortcuts    bool   `json:"exportIncludeShortcuts"`
 	ExportIncludeThemes       bool   `json:"exportIncludeThemes"`
+	AutoBackupEnabled         bool   `json:"autoBackupEnabled"`
+	AutoBackupPasswordSet     bool   `json:"autoBackupPasswordSet"`
+	LastAutoBackupAt          int64  `json:"lastAutoBackupAt,omitempty"`
+	LastAutoBackupError       string `json:"lastAutoBackupError,omitempty"`
 }
 
 // WebDAVSaveInput 是 SaveWebDAVConfig / TestWebDAVConfig 的入参，把鉴权方式与凭据收成一个 struct。
 type WebDAVSaveInput struct {
-	URL      string `json:"url"`
-	AuthType string `json:"authType"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-	Token    string `json:"token"`
+	URL                string `json:"url"`
+	AuthType           string `json:"authType"`
+	Username           string `json:"username"`
+	Password           string `json:"password"`
+	Token              string `json:"token"`
+	AutoBackupEnabled  bool   `json:"autoBackupEnabled"`
+	AutoBackupPassword string `json:"autoBackupPassword"`
 }
 
 // toServiceConfig 将入参转换为 backup_svc.WebDAVConfig，并在 AuthType 为空时兜底为 WebDAVAuthNone。
@@ -570,46 +594,91 @@ func (s *System) ImportFromGist(gistID, password, token string, opts backup_svc.
 		return nil, fmt.Errorf("解析备份数据失败: %w", err)
 	}
 
-	return backup_svc.Import(i18n.Ctx(s.ctx, s.Lang()), &data, &opts, credential_svc.Default())
+	result, err := backup_svc.Import(i18n.Ctx(s.ctx, s.Lang()), &data, &opts, credential_svc.Default())
+	if err != nil {
+		return nil, err
+	}
+	auto_backup_svc.Schedule()
+	return result, nil
 }
 
 // --- WebDAV 备份 ---
 
 // SaveWebDAVConfig 保存 WebDAV 备份配置。按 AuthType 持久化对应字段，并清空其他类型字段以避免历史秘密残留。
 func (s *System) SaveWebDAVConfig(in WebDAVSaveInput) error {
-	cfg := bootstrap.GetConfig()
-	if cfg == nil {
-		return fmt.Errorf("config not loaded")
-	}
 	svcCfg := in.toServiceConfig()
 	if err := backup_svc.ValidateWebDAVConfig(svcCfg); err != nil {
 		return err
 	}
+	snapshot := bootstrap.GetConfig()
+	if snapshot == nil {
+		return fmt.Errorf("config not loaded")
+	}
+	if in.AutoBackupEnabled && in.AutoBackupPassword == "" && snapshot.WebDAVAutoBackupPassword == "" {
+		return fmt.Errorf("WebDAV 自动备份必须设置备份密码")
+	}
 
-	cfg.WebDAVURL = svcCfg.URL
-	cfg.WebDAVAuthType = string(svcCfg.AuthType)
-
-	// 清空所有 type 字段，再按当前 type 写回。避免切换鉴权方式后旧凭据仍留在 config.json。
-	cfg.WebDAVUsername = ""
-	cfg.WebDAVPassword = ""
-	cfg.WebDAVToken = ""
-
+	// 加密在锁外完成，UpdateConfig 闭包内只做字段赋值，保证读-改-存原子化。
+	var webdavPassword, webdavToken, autoBackupPassword string
 	switch svcCfg.AuthType {
 	case backup_svc.WebDAVAuthBasic:
-		cfg.WebDAVUsername = svcCfg.Username
 		encrypted, err := credential_svc.Default().Encrypt(svcCfg.Password)
 		if err != nil {
 			return fmt.Errorf("加密 WebDAV 密码失败: %w", err)
 		}
-		cfg.WebDAVPassword = encrypted
+		webdavPassword = encrypted
 	case backup_svc.WebDAVAuthBearer:
 		encrypted, err := credential_svc.Default().Encrypt(svcCfg.Token)
 		if err != nil {
 			return fmt.Errorf("加密 WebDAV token 失败: %w", err)
 		}
-		cfg.WebDAVToken = encrypted
+		webdavToken = encrypted
 	}
-	return bootstrap.SaveConfig(cfg)
+	if in.AutoBackupEnabled && in.AutoBackupPassword != "" {
+		encrypted, err := credential_svc.Default().Encrypt(in.AutoBackupPassword)
+		if err != nil {
+			return fmt.Errorf("加密 WebDAV 自动备份密码失败: %w", err)
+		}
+		autoBackupPassword = encrypted
+	}
+
+	if err := bootstrap.UpdateConfig(func(cfg *bootstrap.AppConfig) {
+		cfg.WebDAVURL = svcCfg.URL
+		cfg.WebDAVAuthType = string(svcCfg.AuthType)
+		// 清空所有 type 字段，再按当前 type 写回。避免切换鉴权方式后旧凭据仍留在 config.json。
+		cfg.WebDAVUsername = ""
+		cfg.WebDAVPassword = ""
+		cfg.WebDAVToken = ""
+		switch svcCfg.AuthType {
+		case backup_svc.WebDAVAuthBasic:
+			cfg.WebDAVUsername = svcCfg.Username
+			cfg.WebDAVPassword = webdavPassword
+		case backup_svc.WebDAVAuthBearer:
+			cfg.WebDAVToken = webdavToken
+		}
+		if in.AutoBackupEnabled {
+			cfg.WebDAVAutoBackupEnabled = true
+			if autoBackupPassword != "" {
+				cfg.WebDAVAutoBackupPassword = autoBackupPassword
+			}
+		} else {
+			cfg.WebDAVAutoBackupEnabled = false
+			cfg.WebDAVAutoBackupPassword = ""
+			cfg.WebDAVAutoBackupLastAt = 0
+			cfg.WebDAVAutoBackupLastError = ""
+		}
+	}); err != nil {
+		return err
+	}
+	if in.AutoBackupEnabled {
+		auto_backup_svc.Schedule()
+	} else {
+		auto_backup_svc.Stop()
+		if s.appCtx != nil {
+			auto_backup_svc.Start(s.appCtx)
+		}
+	}
+	return nil
 }
 
 // GetWebDAVConfig 读取已保存的 WebDAV 配置，password / token 解密后明文回填。
@@ -635,6 +704,10 @@ func (s *System) GetWebDAVConfig() (*WebDAVStoredConfig, error) {
 		ExportIncludePolicyGroups: cfg.WebDAVExportIncludePolicyGroups,
 		ExportIncludeShortcuts:    cfg.WebDAVExportIncludeShortcuts,
 		ExportIncludeThemes:       cfg.WebDAVExportIncludeThemes,
+		AutoBackupEnabled:         cfg.WebDAVAutoBackupEnabled,
+		AutoBackupPasswordSet:     cfg.WebDAVAutoBackupPassword != "",
+		LastAutoBackupAt:          cfg.WebDAVAutoBackupLastAt,
+		LastAutoBackupError:       cfg.WebDAVAutoBackupLastError,
 	}
 	if cfg.WebDAVPassword != "" {
 		decrypted, err := credential_svc.Default().Decrypt(cfg.WebDAVPassword)
@@ -662,17 +735,30 @@ func (s *System) GetWebDAVConfig() (*WebDAVStoredConfig, error) {
 
 // ClearWebDAVConfig 清除 WebDAV 备份配置。
 func (s *System) ClearWebDAVConfig() error {
-	cfg := bootstrap.GetConfig()
-	if cfg == nil {
-		return fmt.Errorf("config not loaded")
+	if err := bootstrap.UpdateConfig(func(cfg *bootstrap.AppConfig) {
+		cfg.WebDAVURL = ""
+		cfg.WebDAVAuthType = ""
+		cfg.WebDAVUsername = ""
+		cfg.WebDAVPassword = ""
+		cfg.WebDAVToken = ""
+		cfg.WebDAVAutoBackupEnabled = false
+		cfg.WebDAVAutoBackupPassword = ""
+		cfg.WebDAVAutoBackupLastAt = 0
+		cfg.WebDAVAutoBackupLastError = ""
+		clearWebDAVExportDefaults(cfg)
+	}); err != nil {
+		return err
 	}
-	cfg.WebDAVURL = ""
-	cfg.WebDAVAuthType = ""
-	cfg.WebDAVUsername = ""
-	cfg.WebDAVPassword = ""
-	cfg.WebDAVToken = ""
-	clearWebDAVExportDefaults(cfg)
-	return bootstrap.SaveConfig(cfg)
+	auto_backup_svc.Stop()
+	if s.appCtx != nil {
+		auto_backup_svc.Start(s.appCtx)
+	}
+	return nil
+}
+
+// SetWebDAVAutoBackupClientSnapshot stores frontend-local backup data for the next automatic WebDAV backup.
+func (s *System) SetWebDAVAutoBackupClientSnapshot(shortcuts, customThemes string) error {
+	return auto_backup_svc.SetClientSnapshot(shortcuts, customThemes)
 }
 
 // TestWebDAVConfig 用入参里的字段测试 WebDAV 目录连通性与写权限。
@@ -785,7 +871,12 @@ func (s *System) ImportFromWebDAV(name, password string, opts backup_svc.ImportO
 		return nil, fmt.Errorf("解析备份数据失败: %w", err)
 	}
 
-	return backup_svc.Import(i18n.Ctx(s.ctx, s.Lang()), &data, &opts, credential_svc.Default())
+	result, err := backup_svc.Import(i18n.Ctx(s.ctx, s.Lang()), &data, &opts, credential_svc.Default())
+	if err != nil {
+		return nil, err
+	}
+	auto_backup_svc.Schedule()
+	return result, nil
 }
 
 func (s *System) webDAVConfigFromStorage() (backup_svc.WebDAVConfig, error) {
@@ -1554,8 +1645,9 @@ func (s *System) startAutoUpdateCheck() {
 			return
 		}
 
-		cfg.LastUpdateCheck = now
-		if err := bootstrap.SaveConfig(cfg); err != nil {
+		if err := bootstrap.UpdateConfig(func(c *bootstrap.AppConfig) {
+			c.LastUpdateCheck = now
+		}); err != nil {
 			logger.Default().Warn("save last update check time", zap.Error(err))
 		}
 
@@ -1594,12 +1686,9 @@ func (s *System) GetDebugMode() bool {
 
 // SetDebugMode 开启/关闭 debug 日志，写入配置并重建全局 logger
 func (s *System) SetDebugMode(enabled bool) error {
-	cfg := bootstrap.GetConfig()
-	if cfg == nil {
-		return fmt.Errorf("config not loaded")
-	}
-	cfg.DebugMode = enabled
-	if err := bootstrap.SaveConfig(cfg); err != nil {
+	if err := bootstrap.UpdateConfig(func(cfg *bootstrap.AppConfig) {
+		cfg.DebugMode = enabled
+	}); err != nil {
 		return err
 	}
 	return bootstrap.InitLogger()
@@ -1704,9 +1793,9 @@ func (s *System) GetUpdateChannel() string {
 
 // SetUpdateChannel 设置更新通道
 func (s *System) SetUpdateChannel(channel string) error {
-	cfg := bootstrap.GetConfig()
-	cfg.UpdateChannel = channel
-	return bootstrap.SaveConfig(cfg)
+	return bootstrap.UpdateConfig(func(cfg *bootstrap.AppConfig) {
+		cfg.UpdateChannel = channel
+	})
 }
 
 // GetDownloadMirror 获取当前下载镜像 URL 前缀
@@ -1721,9 +1810,9 @@ func (s *System) GetDownloadMirror() string {
 // SetDownloadMirror 设置下载镜像
 // mirror 为镜像 URL 前缀（如 "https://ghfast.top/"），空字符串表示直连 GitHub
 func (s *System) SetDownloadMirror(mirror string) error {
-	cfg := bootstrap.GetConfig()
-	cfg.DownloadMirror = mirror
-	return bootstrap.SaveConfig(cfg)
+	return bootstrap.UpdateConfig(func(cfg *bootstrap.AppConfig) {
+		cfg.DownloadMirror = mirror
+	})
 }
 
 // GetAvailableMirrors 返回可用的下载镜像列表

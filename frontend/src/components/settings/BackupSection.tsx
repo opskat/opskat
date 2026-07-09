@@ -21,6 +21,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  Switch,
 } from "@opskat/ui";
 import { useAssetStore } from "@/stores/assetStore";
 import { SelectImportFile } from "../../../wailsjs/go/system/System";
@@ -158,6 +159,11 @@ export function BackupSection() {
   const [webdavUsername, setWebDAVUsername] = useState("");
   const [webdavPassword, setWebDAVPassword] = useState("");
   const [webdavToken, setWebDAVToken] = useState("");
+  const [webdavAutoBackupEnabled, setWebDAVAutoBackupEnabled] = useState(false);
+  const [webdavAutoBackupPassword, setWebDAVAutoBackupPassword] = useState("");
+  const [webdavAutoBackupPasswordSet, setWebDAVAutoBackupPasswordSet] = useState(false);
+  const [webdavLastAutoBackupAt, setWebDAVLastAutoBackupAt] = useState(0);
+  const [webdavLastAutoBackupError, setWebDAVLastAutoBackupError] = useState("");
   const [webdavBackups, setWebDAVBackups] = useState<backup_svc.WebDAVBackupInfo[]>([]);
   const [selectedWebDAVBackup, setSelectedWebDAVBackup] = useState("");
   const [webdavSaving, setWebDAVSaving] = useState(false);
@@ -223,6 +229,10 @@ export function BackupSection() {
         setWebDAVPassword(cfg.password || "");
         setWebDAVToken(cfg.token || "");
         setWebDAVConfigured(!!cfg.configured);
+        setWebDAVAutoBackupEnabled(!!cfg.autoBackupEnabled);
+        setWebDAVAutoBackupPasswordSet(!!cfg.autoBackupPasswordSet);
+        setWebDAVLastAutoBackupAt(cfg.lastAutoBackupAt || 0);
+        setWebDAVLastAutoBackupError(cfg.lastAutoBackupError || "");
         setWebDAVExportDefaults({
           configured: !!cfg.exportDefaultsConfigured,
           password: cfg.exportPassword || "",
@@ -416,6 +426,8 @@ export function BackupSection() {
     username: webdavUsername.trim(),
     password: webdavPassword,
     token: webdavToken.trim(),
+    autoBackupEnabled: webdavAutoBackupEnabled,
+    autoBackupPassword: webdavAutoBackupPassword,
   });
 
   const handleWebDAVSave = async () => {
@@ -423,10 +435,18 @@ export function BackupSection() {
       toast.error(t("backup.webdavURLRequired"));
       return;
     }
+    if (webdavAutoBackupEnabled && !webdavAutoBackupPasswordSet && !webdavAutoBackupPassword) {
+      toast.error(t("backup.webdavAutoBackupPasswordRequired"));
+      return;
+    }
     setWebDAVSaving(true);
     try {
       await SaveWebDAVConfig(buildWebDAVInput());
       setWebDAVConfigured(true);
+      if (webdavAutoBackupEnabled && webdavAutoBackupPassword) {
+        setWebDAVAutoBackupPasswordSet(true);
+        setWebDAVAutoBackupPassword("");
+      }
       notifySuccess(t("backup.webdavSaved"));
     } catch (e: unknown) {
       toast.error(errMsg(e));
@@ -460,6 +480,11 @@ export function BackupSection() {
       setWebDAVUsername("");
       setWebDAVPassword("");
       setWebDAVToken("");
+      setWebDAVAutoBackupEnabled(false);
+      setWebDAVAutoBackupPassword("");
+      setWebDAVAutoBackupPasswordSet(false);
+      setWebDAVLastAutoBackupAt(0);
+      setWebDAVLastAutoBackupError("");
       setWebDAVBackups([]);
       setSelectedWebDAVBackup("");
       setWebDAVExportDefaults(emptyWebDAVExportDefaults);
@@ -674,6 +699,44 @@ export function BackupSection() {
                 <PasswordInput value={webdavToken} onChange={(e) => setWebDAVToken(e.target.value)} />
               </div>
             )}
+            <div className="rounded-md border p-3 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <Label>{t("backup.webdavAutoBackup")}</Label>
+                  <p className="text-xs text-muted-foreground">{t("backup.webdavAutoBackupDesc")}</p>
+                </div>
+                <Switch checked={webdavAutoBackupEnabled} onCheckedChange={setWebDAVAutoBackupEnabled} />
+              </div>
+              {webdavAutoBackupEnabled && (
+                <div className="grid gap-1.5">
+                  <Label>{t("backup.webdavAutoBackupPassword")}</Label>
+                  <PasswordInput
+                    value={webdavAutoBackupPassword}
+                    onChange={(e) => setWebDAVAutoBackupPassword(e.target.value)}
+                    placeholder={
+                      webdavAutoBackupPasswordSet
+                        ? t("backup.webdavAutoBackupPasswordUnchanged")
+                        : t("backup.passwordPlaceholder")
+                    }
+                    showGenerate
+                    onGenerate={setWebDAVAutoBackupPassword}
+                  />
+                  <p className="text-xs text-muted-foreground">{t("backup.webdavAutoBackupPasswordHint")}</p>
+                </div>
+              )}
+              {webdavLastAutoBackupAt > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  {t("backup.webdavAutoBackupLastSuccess", {
+                    time: new Date(webdavLastAutoBackupAt * 1000).toLocaleString(),
+                  })}
+                </p>
+              )}
+              {webdavLastAutoBackupError && (
+                <p className="text-xs text-destructive">
+                  {t("backup.webdavAutoBackupLastError", { error: webdavLastAutoBackupError })}
+                </p>
+              )}
+            </div>
             <div className="flex flex-wrap gap-2">
               <Button onClick={handleWebDAVSave} disabled={webdavSaving} variant="outline" className="gap-1">
                 {webdavSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}

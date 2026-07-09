@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -30,10 +31,14 @@ type AppConfig struct {
 	WebDAVExportIncludePolicyGroups bool   `json:"webdav_export_include_policy_groups,omitempty"`
 	WebDAVExportIncludeShortcuts    bool   `json:"webdav_export_include_shortcuts,omitempty"`
 	WebDAVExportIncludeThemes       bool   `json:"webdav_export_include_themes,omitempty"`
-	LastUpdateCheck                 int64  `json:"last_update_check,omitempty"` // 上次自动检查更新的 Unix 时间戳
-	DebugMode                       bool   `json:"debug_mode,omitempty"`        // 开启后日志级别降为 debug
-	WindowWidth                     int    `json:"window_width,omitempty"`      // 上次正常窗口宽度
-	WindowHeight                    int    `json:"window_height,omitempty"`     // 上次正常窗口高度
+	WebDAVAutoBackupEnabled         bool   `json:"webdav_auto_backup_enabled,omitempty"`    // WebDAV 自动备份开关
+	WebDAVAutoBackupPassword        string `json:"webdav_auto_backup_password,omitempty"`   // 加密后的自动备份密码
+	WebDAVAutoBackupLastAt          int64  `json:"webdav_auto_backup_last_at,omitempty"`    // 最近一次自动备份成功时间
+	WebDAVAutoBackupLastError       string `json:"webdav_auto_backup_last_error,omitempty"` // 最近一次自动备份错误摘要
+	LastUpdateCheck                 int64  `json:"last_update_check,omitempty"`             // 上次自动检查更新的 Unix 时间戳
+	DebugMode                       bool   `json:"debug_mode,omitempty"`                    // 开启后日志级别降为 debug
+	WindowWidth                     int    `json:"window_width,omitempty"`                  // 上次正常窗口宽度
+	WindowHeight                    int    `json:"window_height,omitempty"`                 // 上次正常窗口高度
 
 	// SSH 空闲保活心跳的全局默认间隔（秒），作用于所有出站 SSH 连接（终端会话 +
 	// 连接池）。<=0 = 采用内置默认（30s）。单个资产可在其 SSH 配置里覆盖此值。
@@ -59,6 +64,10 @@ var (
 	appConfig     *AppConfig
 	appConfigOnce sync.Once
 	configPath    string
+	// configMu 串行化对 appConfig 的运行时读写。GetConfig 返回隔离副本、
+	// SaveConfig/UpdateConfig 在锁内改写并落盘，避免后台 goroutine（自动备份、
+	// 自动更新检查）与前端 IPC 写入并发改同一结构体导致数据竞争或 config.json 写坏。
+	configMu sync.Mutex
 )
 
 // LoadConfig 加载应用配置，首次调用时自动生成默认值
@@ -90,14 +99,41 @@ func LoadConfig(dataDir string) (*AppConfig, error) {
 	return appConfig, loadErr
 }
 
-// GetConfig 获取当前配置（LoadConfig 之后调用）
+// GetConfig 返回当前配置的隔离副本（须在 LoadConfig 之后调用；未加载时返回 nil）。
+//
+// 返回副本而非共享指针：调用方可安全读取、临时修改返回值，既不会与后台 goroutine
+// 的写入发生数据竞争，也不会意外改动全局状态。要持久化修改，请用 UpdateConfig
+// （读-改-存原子化）或 SaveConfig（整体替换）。
 func GetConfig() *AppConfig {
-	return appConfig
+	configMu.Lock()
+	defer configMu.Unlock()
+	if appConfig == nil {
+		return nil
+	}
+	return cloneConfig(appConfig)
 }
 
-// SaveConfig 保存配置到文件
+// SaveConfig 用传入配置整体替换全局配置并持久化。
+//
+// 适用于在单一来源构造完整配置的场景（如启动初始化）。并发的“读字段-改字段-存”
+// 必须改用 UpdateConfig，否则会覆盖其他写入方的并发更新。入参会被深拷贝，调用方
+// 之后对其的修改不会影响已保存配置。
 func SaveConfig(cfg *AppConfig) error {
-	appConfig = cfg
+	configMu.Lock()
+	defer configMu.Unlock()
+	appConfig = cloneConfig(cfg)
+	return saveConfigFile()
+}
+
+// UpdateConfig 在锁内对全局配置应用 mutate 并立即落盘，保证并发的读-改-存不丢更新、
+// 也不与 GetConfig 的读取竞争。mutate 只应修改传入的 *AppConfig 字段，不要保存其指针。
+func UpdateConfig(mutate func(*AppConfig)) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+	if appConfig == nil {
+		return errors.New("config not loaded")
+	}
+	mutate(appConfig)
 	return saveConfigFile()
 }
 
@@ -107,4 +143,21 @@ func saveConfigFile() error {
 		return err
 	}
 	return os.WriteFile(configPath, data, 0600)
+}
+
+// cloneConfig 返回 AppConfig 的隔离副本，深拷贝其中的切片字段，
+// 使副本与全局配置不共享任何可变底层数组。
+func cloneConfig(c *AppConfig) *AppConfig {
+	clone := *c
+	if c.ExternalEditCustomEditors != nil {
+		editors := make([]ExternalEditorConfig, len(c.ExternalEditCustomEditors))
+		copy(editors, c.ExternalEditCustomEditors)
+		for i := range editors {
+			if src := c.ExternalEditCustomEditors[i].Args; src != nil {
+				editors[i].Args = append([]string(nil), src...)
+			}
+		}
+		clone.ExternalEditCustomEditors = editors
+	}
+	return &clone
 }

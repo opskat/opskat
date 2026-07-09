@@ -198,6 +198,7 @@ func TestClearWebDAVConfigClearsExportDefaults(t *testing.T) {
 	if err := s.ClearWebDAVConfig(); err != nil {
 		t.Fatalf("ClearWebDAVConfig: %v", err)
 	}
+	cfg = bootstrap.GetConfig()
 	if cfg.WebDAVExportDefaultsConfigured || cfg.WebDAVExportPassword != "" || cfg.WebDAVExportIncludeCredentials || cfg.WebDAVExportIncludeForwards || cfg.WebDAVExportIncludePolicyGroups || cfg.WebDAVExportIncludeShortcuts || cfg.WebDAVExportIncludeThemes {
 		t.Fatalf("WebDAV export defaults should be cleared: %#v", cfg)
 	}

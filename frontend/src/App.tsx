@@ -33,6 +33,7 @@ import { bootstrapExtensions } from "@/extension/init";
 import { openAssetConnection } from "@/lib/openAsset";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useExternalEditStore } from "@/stores/externalEditStore";
+import { installWebDAVAutoBackupSnapshotSync } from "@/lib/webdavAutoBackupSnapshot";
 import { asset_entity, group_entity } from "../wailsjs/go/models";
 import { EventsOn, WindowToggleMaximise } from "../wailsjs/runtime/runtime";
 
@@ -41,6 +42,7 @@ function App() {
 
   // 异步加载数据，不阻塞首屏渲染
   useEffect(() => {
+    const uninstallWebDAVAutoBackupSnapshotSync = installWebDAVAutoBackupSnapshotSync();
     bootstrapExtensions().catch((err) => console.error("Extension bootstrap failed:", err));
     useAssetStore
       .getState()
@@ -54,6 +56,7 @@ function App() {
       .getState()
       .fetchSessions()
       .catch((err) => console.error("Fetch external edit sessions failed:", err));
+    return uninstallWebDAVAutoBackupSnapshotSync;
   }, []);
 
   // 监听外部数据变更（opsctl 等），自动刷新 UI
