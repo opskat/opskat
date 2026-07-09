@@ -38,6 +38,8 @@ describe("LinkedAssetControl follow menu", () => {
     openMenu(screen.getByTestId("linked-asset-menu-trigger"));
     fireEvent.click(screen.getByTestId("menu-follow"));
     expect(useAIStore.getState().sidebarTabs.find((t) => t.id === "s1")?.followActiveTerminal).toBe(true);
+    // react-i18next is mocked to return the key itself (see src/__tests__/setup.ts).
+    expect(screen.getByTestId("linked-asset-menu-trigger")).toHaveAttribute("title", "ai.sidebar.following");
   });
 
   it("clears the binding from the menu", () => {

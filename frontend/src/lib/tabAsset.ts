@@ -5,6 +5,6 @@ export function tabToAssetRef(tab: Tab): { assetId: number; assetName: string; a
   if (tab.type === "ai" || tab.type === "page" || tab.type === "info") return null;
   const meta = tab.meta as { assetId?: number; assetName?: string };
   if (meta == null || typeof meta.assetId !== "number") return null;
-  const assetType = tab.type === "query" ? (tab.meta as QueryTabMeta).assetType : tab.type === "terminal" ? "ssh" : tab.type;
+  const assetType = tab.type === "query" ? (tab.meta as QueryTabMeta).assetType : "ssh";
   return { assetId: meta.assetId, assetName: meta.assetName || tab.label || "", assetType };
 }

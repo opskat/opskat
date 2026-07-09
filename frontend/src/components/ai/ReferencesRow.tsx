@@ -18,6 +18,7 @@ export function ReferencesRow({ conversationId, boundAssetId }: { conversationId
         return (
           <button
             key={r.assetId}
+            type="button"
             onClick={() => jumpToAsset(r.assetId)}
             className="inline-flex items-center gap-1 rounded border border-border bg-secondary px-1.5 py-0.5 hover:bg-secondary/70"
           >

@@ -32,6 +32,8 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
   };
 
   if (tab?.linkedAssetId != null) {
+    const followTitle = tab.followActiveTerminal ? t("ai.sidebar.following") : undefined;
+    const triggerLabel = followTitle ? `${tab.linkedAssetName} · ${followTitle}` : tab.linkedAssetName || undefined;
     return (
       <div className="flex items-center gap-2" data-testid="linked-asset-chip">
         <DropdownMenu modal={false}>
@@ -39,6 +41,8 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
             <button
               type="button"
               data-testid="linked-asset-menu-trigger"
+              title={followTitle}
+              aria-label={triggerLabel}
               className="inline-flex items-center gap-1.5 rounded-md border border-border bg-secondary px-2 py-0.5 text-xs"
             >
               {tab.followActiveTerminal ? (
