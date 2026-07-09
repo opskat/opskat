@@ -505,10 +505,8 @@ git commit -m "✨ AI 会话↔tab 双向联动:syncTab 闸控 + 防回环 guard
 
 - [ ] **Step 1: 追加失败测试**
 
-在 `aiStore.binding.test.ts` 末尾追加:
+在 `aiStore.binding.test.ts` 末尾追加(无需新 import——`useTabStore`/`useAIStore`/`mkTab` 均已在文件内;hook 在 aiStore 模块加载时自注册,测试只需触发 `replaceTabId`):
 ```ts
-import { registerTabReplaceHook } from "../stores/tabStore";
-
 describe("linkedTabId migrates on tab id replace (reconnect)", () => {
   it("moves linkedTabId when a bound tab's id is replaced", () => {
     localStorage.clear();
