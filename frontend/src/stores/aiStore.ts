@@ -28,6 +28,7 @@ import {
 import { stripMentionTags, extractMentions } from "@/lib/mentionXml";
 import { linkedAssetFromMention } from "@/lib/aiLinkedAsset";
 import { classifyError, type ErrorKind } from "@/lib/aiError";
+import { tabToAssetRef } from "@/lib/tabAsset";
 
 // 内容块：文本、工具调用、Sub Agent、审批、错误（持久化字段）。
 // "error" 块由 EventError 推入，或在 retry 中途退出落盘时由 retryStatus 物化而来。
@@ -164,6 +165,7 @@ export interface SidebarAITab {
   linkedAssetId?: number | null;
   linkedAssetName?: string;
   linkedAssetType?: string;
+  followActiveTerminal?: boolean;
 }
 
 export type SidebarTabStatus = "waiting_approval" | "error" | "running" | "done" | null;
@@ -236,6 +238,7 @@ function createSidebarTab(overrides?: Partial<SidebarAITab>): SidebarAITab {
     linkedAssetId: typeof overrides?.linkedAssetId === "number" ? overrides.linkedAssetId : undefined,
     linkedAssetName: overrides?.linkedAssetName,
     linkedAssetType: overrides?.linkedAssetType,
+    followActiveTerminal: overrides?.followActiveTerminal,
   };
 }
 
@@ -277,6 +280,7 @@ export function sanitizeSidebarTab(raw: unknown): SidebarAITab | null {
     linkedAssetId: typeof tab.linkedAssetId === "number" && Number.isFinite(tab.linkedAssetId) ? tab.linkedAssetId : undefined,
     linkedAssetName: typeof tab.linkedAssetName === "string" ? tab.linkedAssetName : undefined,
     linkedAssetType: typeof tab.linkedAssetType === "string" ? tab.linkedAssetType : undefined,
+    followActiveTerminal: typeof tab.followActiveTerminal === "boolean" ? tab.followActiveTerminal : undefined,
   });
 }
 
@@ -1695,6 +1699,7 @@ interface AIState {
   stopSidebarTab: (tabId: string) => Promise<void>;
   setSidebarTabAsset: (tabId: string, asset: { assetId: number; assetName: string; assetType: string }) => void;
   clearSidebarTabAsset: (tabId: string) => void;
+  setSidebarTabFollow: (tabId: string, on: boolean) => void;
 
   // 查询
   isAnySending: () => boolean;
@@ -1950,6 +1955,20 @@ export const useAIStore = create<AIState>((set, get) => {
             : tab
         ),
       }));
+    },
+    setSidebarTabFollow: (tabId, on) => {
+      set((state) => ({
+        sidebarTabs: state.sidebarTabs.map((tab) =>
+          tab.id === tabId ? { ...tab, followActiveTerminal: on } : tab
+        ),
+      }));
+      if (on) {
+        // 开启跟随即绑定到当前激活终端（若有资产）
+        const active = useTabStore.getState();
+        const activeTab = active.tabs.find((t) => t.id === active.activeTabId);
+        const ref = activeTab ? tabToAssetRef(activeTab) : null;
+        if (ref) get().setSidebarTabAsset(tabId, ref);
+      }
     },
 
     closeSidebarTab: (tabId: string) => {
@@ -2401,7 +2420,8 @@ function didSidebarStructureChange(next: SidebarAITab[], prev: SidebarAITab[]) {
       a.id !== b.id ||
       a.conversationId !== b.conversationId ||
       a.title !== b.title ||
-      a.linkedAssetId !== b.linkedAssetId
+      a.linkedAssetId !== b.linkedAssetId ||
+      a.followActiveTerminal !== b.followActiveTerminal
     )
       return true;
   }
