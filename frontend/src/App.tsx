@@ -266,6 +266,24 @@ function App() {
   };
 
   const handleConnectAsset = async (asset: asset_entity.Asset) => {
+    const def = getAssetType(asset.Type);
+    if (def?.connectAction === "page" && def.pageId) {
+      const pageId = `${def.pageId}-${asset.ID}`;
+      const tabStore = useTabStore.getState();
+      const existing = tabStore.tabs.find((t) => t.id === pageId);
+      if (existing) {
+        tabStore.activateTab(pageId);
+      } else {
+        tabStore.openTab({
+          id: pageId,
+          type: "page",
+          label: asset.Name,
+          icon: asset.Icon || def.pageIcon,
+          meta: { type: "page", pageId: def.pageId, assetId: asset.ID },
+        });
+      }
+      return;
+    }
     if (asset.Type === "k8s") {
       const pageId = `k8s-${asset.ID}`;
       const tabStore = useTabStore.getState();
@@ -283,7 +301,6 @@ function App() {
       }
       return;
     }
-    const def = getAssetType(asset.Type);
     if (def?.connectAction === "query") {
       useQueryStore.getState().openQueryTab(asset);
       return;

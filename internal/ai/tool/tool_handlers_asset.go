@@ -30,10 +30,14 @@ type safeAssetView struct {
 	Createtime  int64  `json:"createtime"`
 	Updatetime  int64  `json:"updatetime"`
 	// 连接信息（不含密码/密钥）
-	Host     string `json:"host,omitempty"`
-	Port     int    `json:"port,omitempty"`
-	Username string `json:"username,omitempty"`
-	AuthType string `json:"auth_type,omitempty"`
+	Host      string `json:"host,omitempty"`
+	Port      int    `json:"port,omitempty"`
+	Username  string `json:"username,omitempty"`
+	AuthType  string `json:"auth_type,omitempty"`
+	Domain    string `json:"domain,omitempty"`
+	Width     int    `json:"width,omitempty"`
+	Height    int    `json:"height,omitempty"`
+	Clipboard bool   `json:"clipboard,omitempty"`
 	// Database 专属
 	Driver   string `json:"driver,omitempty"`
 	Database string `json:"database,omitempty"`
@@ -104,6 +108,18 @@ func toSafeView(a *asset_entity.Asset) safeAssetView {
 			}
 			if val, ok := fields["auth_type"].(string); ok {
 				v.AuthType = val
+			}
+			if val, ok := fields["domain"].(string); ok {
+				v.Domain = val
+			}
+			if val, ok := fields["width"].(int); ok {
+				v.Width = val
+			}
+			if val, ok := fields["height"].(int); ok {
+				v.Height = val
+			}
+			if val, ok := fields["clipboard"].(bool); ok {
+				v.Clipboard = val
 			}
 			if val, ok := fields["namespace"].(string); ok {
 				v.Namespace = val

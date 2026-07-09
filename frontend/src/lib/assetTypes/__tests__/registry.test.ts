@@ -10,6 +10,7 @@ describe("AssetType Registry", () => {
     expect(getAssetType("kafka")).toBeDefined();
     expect(getAssetType("k8s")).toBeDefined();
     expect(getAssetType("local")).toBeDefined();
+    expect(getAssetType("rdp")).toBeDefined();
   });
 
   it("returns undefined for unknown type", () => {
@@ -35,6 +36,7 @@ describe("AssetType Registry", () => {
       "serial",
       "local",
       "etcd",
+      "rdp",
     ]);
   });
 
@@ -44,7 +46,7 @@ describe("AssetType Registry", () => {
       expect(def.icon).toBeDefined();
       expect(typeof def.canConnect).toBe("boolean");
       expect(typeof def.canConnectInNewTab).toBe("boolean");
-      expect(["terminal", "query"]).toContain(def.connectAction);
+      expect(["terminal", "query", "page"]).toContain(def.connectAction);
       expect(def.DetailInfoCard).toBeDefined();
     }
   });
@@ -56,6 +58,7 @@ describe("AssetType Registry", () => {
     expect(getAssetType("redis")!.connectAction).toBe("query");
     expect(getAssetType("mongodb")!.connectAction).toBe("query");
     expect(getAssetType("kafka")!.connectAction).toBe("query");
+    expect(getAssetType("rdp")!.connectAction).toBe("page");
   });
 
   it("local is terminal type", () => {
@@ -70,6 +73,7 @@ describe("AssetType Registry", () => {
     expect(getAssetType("mongodb")!.canConnectInNewTab).toBe(false);
     expect(getAssetType("kafka")!.canConnectInNewTab).toBe(false);
     expect(getAssetType("k8s")!.canConnectInNewTab).toBe(false);
+    expect(getAssetType("rdp")!.canConnectInNewTab).toBe(false);
   });
 
   it("only ssh exposes the file-manager action (registry-driven, no type-string special-case)", () => {
@@ -82,5 +86,6 @@ describe("AssetType Registry", () => {
     expect(getAssetType("serial")!.canOpenFileManager).toBeFalsy();
     expect(getAssetType("local")!.canOpenFileManager).toBeFalsy();
     expect(getAssetType("etcd")!.canOpenFileManager).toBeFalsy();
+    expect(getAssetType("rdp")!.canOpenFileManager).toBeFalsy();
   });
 });
