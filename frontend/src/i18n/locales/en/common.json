@@ -2554,6 +2554,41 @@
       "uploadFailed": "Upload failed",
       "downloadFailed": "Download failed",
       "refreshAfterUploadFailed": "Uploaded, but refreshing the list failed"
+    },
+    "view": {
+      "list": "List",
+      "grid": "Grid"
+    },
+    "detail": {
+      "copyKey": "Copy key",
+      "share": "Share link",
+      "download": "Download",
+      "delete": "Delete",
+      "close": "Close",
+      "noPreview": "No preview",
+      "keyLabel": "Key",
+      "size": "Size",
+      "type": "Type",
+      "etag": "ETag",
+      "storageClass": "Storage class",
+      "lastModified": "Last modified"
+    },
+    "share": {
+      "title": "Generate presigned URL",
+      "methodGet": "GET · download",
+      "methodPut": "PUT · upload",
+      "expiry15m": "15 min",
+      "expiry1h": "1 hour",
+      "expiry24h": "24 hours",
+      "expiry7d": "7 days",
+      "urlLabel": "Presigned URL",
+      "generate": "Generate",
+      "regenerate": "Regenerate",
+      "close": "Close",
+      "copyAndClose": "Copy & close",
+      "warning": "Anyone with this link can access the object until it expires.",
+      "generateFailed": "Failed to generate URL",
+      "copied": "Link copied"
     }
   },
   "etcd": {

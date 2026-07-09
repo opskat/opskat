@@ -2554,6 +2554,41 @@
       "uploadFailed": "上传失败",
       "downloadFailed": "下载失败",
       "refreshAfterUploadFailed": "已上传，但刷新列表失败"
+    },
+    "view": {
+      "list": "列表",
+      "grid": "网格"
+    },
+    "detail": {
+      "copyKey": "复制键名",
+      "share": "分享链接",
+      "download": "下载",
+      "delete": "删除",
+      "close": "关闭",
+      "noPreview": "无预览",
+      "keyLabel": "键名",
+      "size": "大小",
+      "type": "类型",
+      "etag": "ETag",
+      "storageClass": "存储类型",
+      "lastModified": "最后修改"
+    },
+    "share": {
+      "title": "生成预签名 URL",
+      "methodGet": "GET · 下载",
+      "methodPut": "PUT · 上传",
+      "expiry15m": "15 分钟",
+      "expiry1h": "1 小时",
+      "expiry24h": "24 小时",
+      "expiry7d": "7 天",
+      "urlLabel": "预签名 URL",
+      "generate": "生成",
+      "regenerate": "重新生成",
+      "close": "关闭",
+      "copyAndClose": "复制并关闭",
+      "warning": "在过期前，任何持有此链接的人都能访问该对象。",
+      "generateFailed": "生成 URL 失败",
+      "copied": "链接已复制"
     }
   },
   "etcd": {
