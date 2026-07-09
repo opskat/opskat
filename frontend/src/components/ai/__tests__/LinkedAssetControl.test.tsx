@@ -1,19 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { LinkedAssetControl } from "../LinkedAssetControl";
 import { useAIStore } from "@/stores/aiStore";
 import { useAssetStore } from "@/stores/assetStore";
 import { useTabStore } from "@/stores/tabStore";
 
-vi.mock("@/components/asset/AssetSelect", () => ({
-  AssetSelect: ({ onValueChange }: { onValueChange: (id: number) => void }) => (
-    <button data-testid="asset-pick" onClick={() => onValueChange(42)}>
-      pick
-    </button>
-  ),
-}));
-
-/** Radix DropdownMenuTrigger opens on pointerdown (button=0) under happy-dom (see TabPanelMenu.test.tsx). */
+/** Radix DropdownMenuTrigger opens on pointerdown (button=0) under happy-dom. */
 function openMenu() {
   fireEvent.pointerDown(screen.getByTestId("linked-asset-menu-trigger"), { button: 0, ctrlKey: false });
 }
@@ -36,32 +28,27 @@ describe("LinkedAssetControl", () => {
     });
   });
 
-  it("unbound: chip shows the pick placeholder and opens the menu", () => {
+  it("unbound: chip shows the pick placeholder; no asset-library entry", () => {
     render(<LinkedAssetControl sidebarTabId="s1" />);
-    // The unbound trigger is a single pill button, not a separate label + inline select.
     expect(screen.getByTestId("linked-asset-menu-trigger")).toHaveTextContent("ai.sidebar.linkedAsset.pickPlaceholder");
     openMenu();
-    expect(screen.getByTestId("menu-pick-library")).toBeInTheDocument();
+    expect(screen.queryByTestId("menu-pick-library")).not.toBeInTheDocument();
   });
 
-  it("binds the asset picked from the library (从资产库选择…)", () => {
+  it("empty state: no open tabs → shows the noOpenTabs row and no tab items", () => {
     render(<LinkedAssetControl sidebarTabId="s1" />);
     openMenu();
-    fireEvent.click(screen.getByTestId("menu-pick-library"));
-    fireEvent.click(screen.getByTestId("asset-pick"));
-    const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
-    expect(tab?.linkedAssetId).toBe(42);
-    expect(tab?.linkedAssetName).toBe("prod-web-01");
-    expect(tab?.linkedAssetType).toBe("ssh");
+    expect(screen.getByTestId("menu-no-open-tabs")).toHaveTextContent("ai.sidebar.linkedAsset.noOpenTabs");
+    expect(screen.queryByTestId(/^menu-tab-/)).not.toBeInTheDocument();
   });
 
-  it("lists open terminals and binds the one clicked", () => {
+  it("lists open tabs and binds the one clicked (keyed by tab id, shows tab label)", () => {
     useTabStore.setState({
       tabs: [
         {
           id: "t7",
           type: "terminal",
-          label: "web",
+          label: "web · shell",
           meta: { type: "terminal", assetId: 7, assetName: "web-07" } as any,
         },
       ],
@@ -69,11 +56,37 @@ describe("LinkedAssetControl", () => {
     });
     render(<LinkedAssetControl sidebarTabId="s1" />);
     openMenu();
-    fireEvent.click(screen.getByTestId("menu-terminal-7"));
+    expect(screen.getByTestId("menu-tab-t7")).toHaveTextContent("web · shell");
+    fireEvent.click(screen.getByTestId("menu-tab-t7"));
     const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
+    expect(tab?.linkedTabId).toBe("t7");
     expect(tab?.linkedAssetId).toBe(7);
     expect(tab?.linkedAssetName).toBe("web-07");
     expect(tab?.linkedAssetType).toBe("ssh");
+  });
+
+  it("lists two tabs of the SAME asset as two separate items (no dedup by asset)", () => {
+    useTabStore.setState({
+      tabs: [
+        {
+          id: "t1",
+          type: "terminal",
+          label: "prod-web-01",
+          meta: { type: "terminal", assetId: 7, assetName: "prod-web-01" } as any,
+        },
+        {
+          id: "t2",
+          type: "terminal",
+          label: "prod-web-01",
+          meta: { type: "terminal", assetId: 7, assetName: "prod-web-01" } as any,
+        },
+      ],
+      activeTabId: "t1",
+    });
+    render(<LinkedAssetControl sidebarTabId="s1" />);
+    openMenu();
+    expect(screen.getByTestId("menu-tab-t1")).toBeInTheDocument();
+    expect(screen.getByTestId("menu-tab-t2")).toBeInTheDocument();
   });
 
   it("shows the bound chip and clears on 清除绑定", () => {

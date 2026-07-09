@@ -1027,7 +1027,6 @@
       "collapseRail": "收起会话栏",
       "emptyGuide": "点击 + 新建对话，或从 <history/> 历史中继续",
       "noConversation": "未选择对话",
-      "attachedAssets": "关联资产",
       "status": {
         "waiting_approval": "待审批",
         "running": "运行中",
@@ -1040,13 +1039,13 @@
         "done": "已完成",
         "error": "出错"
       },
-      "contextSection": "关联资产",
-      "contextExpand": "展开关联资产",
-      "contextCollapse": "收起关联资产",
+      "contextSection": "关联标签页",
+      "contextExpand": "展开关联标签页",
+      "contextCollapse": "收起关联标签页",
       "linkedAsset": {
-        "pickPlaceholder": "选择要绑定的资产",
-        "openAssets": "已打开的资产",
-        "pickFromLibrary": "从资产库选择…",
+        "pickPlaceholder": "选择要绑定的标签页",
+        "openTabs": "已打开的标签页",
+        "noOpenTabs": "暂无打开的标签页",
         "clearBinding": "清除绑定",
         "syncHint": "开启后：切到此 tab 自动切到本会话，切到本会话自动切到此 tab",
         "tabClosed": "绑定的 tab 已关闭 · 可重新绑定"

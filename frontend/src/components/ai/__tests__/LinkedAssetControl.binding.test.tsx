@@ -1,13 +1,9 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { LinkedAssetControl } from "../LinkedAssetControl";
 import { useAIStore } from "@/stores/aiStore";
 import { useAssetStore } from "@/stores/assetStore";
 import { useTabStore } from "@/stores/tabStore";
-
-vi.mock("@/components/asset/AssetSelect", () => ({
-  AssetSelect: () => <div data-testid="asset-select" />,
-}));
 
 /** Radix DropdownMenuTrigger opens on pointerdown(button=0). */
 function openMenu(trigger: HTMLElement) {
@@ -38,7 +34,7 @@ describe("LinkedAssetControl binding + sync menu", () => {
     useAIStore.setState({ sidebarTabs: [boundTab as any], activeSidebarTabId: "s1" });
   });
 
-  it("binds a workspace tab from the open-terminals list", () => {
+  it("binds a workspace tab from the open-tabs list", () => {
     useAIStore.setState({
       sidebarTabs: [
         {
@@ -53,7 +49,7 @@ describe("LinkedAssetControl binding + sync menu", () => {
     });
     render(<LinkedAssetControl sidebarTabId="s1" />);
     openMenu(screen.getByTestId("linked-asset-menu-trigger"));
-    fireEvent.click(screen.getByTestId("menu-terminal-42"));
+    fireEvent.click(screen.getByTestId("menu-tab-t1"));
     const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
     expect(tab?.linkedTabId).toBe("t1");
     expect(tab?.linkedAssetId).toBe(42);
@@ -80,7 +76,6 @@ describe("LinkedAssetControl binding + sync menu", () => {
     openMenu(screen.getByTestId("linked-asset-menu-trigger"));
     fireEvent.click(screen.getByTestId("menu-sync"));
     expect(useAIStore.getState().sidebarTabs.find((t) => t.id === "s1")?.syncTab).toBeFalsy();
-    // 资产仍在(上下文保留)
     expect(useAIStore.getState().sidebarTabs.find((t) => t.id === "s1")?.linkedAssetId).toBe(42);
   });
 });

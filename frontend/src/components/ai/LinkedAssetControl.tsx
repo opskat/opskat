@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import {
   cn,
@@ -10,17 +10,16 @@ import {
   DropdownMenuSeparator,
   Switch,
 } from "@opskat/ui";
-import { Check, ChevronDown, CircleDashed, Link2, Plus, X } from "lucide-react";
-import { AssetSelect } from "@/components/asset/AssetSelect";
+import { Check, ChevronDown, CircleDashed, Link2, X } from "lucide-react";
 import { useAIStore } from "@/stores/aiStore";
 import { useAssetStore } from "@/stores/assetStore";
 import { useTabStore } from "@/stores/tabStore";
 import { tabToAssetRef } from "@/lib/tabAsset";
 import { resolveAssetIcon } from "@/lib/aiAssetIcon";
 
-type OpenTerminal = { tabId: string; assetId: number; assetName: string; assetType: string };
+type OpenTab = { tabId: string; label: string; assetId: number; assetName: string; assetType: string };
 
-/** 绑定控件:chip 触发的下拉(已打开终端 + 资产库 + 清除 + 联动开关)。绑定到 tab 实例,联动开关闸控双向导航同步。 */
+/** 绑定控件:chip 触发的下拉(已打开的标签页列表 + 清除 + 联动开关)。绑定到 tab 实例,联动开关闸控双向导航同步。 */
 export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | null }) {
   const { t } = useTranslation();
   const tab = useAIStore((s) => s.sidebarTabs.find((x) => x.id === sidebarTabId));
@@ -29,17 +28,14 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
   const setSync = useAIStore((s) => s.setSidebarTabSync);
   const assets = useAssetStore((s) => s.assets);
   const tabs = useTabStore((s) => s.tabs);
-  const [picking, setPicking] = useState(false);
 
-  // 已打开的工作区 tab → 资产引用,按资产去重(同一资产多开只列第一个 tab)。
-  const openAssets = useMemo(() => {
-    const seen = new Set<number>();
-    const out: OpenTerminal[] = [];
+  // 已打开的工作区 tab → 资产引用,按 tab 逐个列出(同一资产多开各列一项,靠 tab 标题区分)。
+  const openTabs = useMemo(() => {
+    const out: OpenTab[] = [];
     for (const wt of tabs) {
       const ref = tabToAssetRef(wt);
-      if (!ref || seen.has(ref.assetId)) continue;
-      seen.add(ref.assetId);
-      out.push({ tabId: wt.id, ...ref });
+      if (!ref) continue;
+      out.push({ tabId: wt.id, label: wt.label, ...ref });
     }
     return out;
   }, [tabs]);
@@ -52,28 +48,13 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
   const syncTitle = syncing ? t("ai.sidebar.syncing") : undefined;
   const { Icon: BoundIcon, color: boundColor } = resolveAssetIcon(assets, tab?.linkedAssetId, tab?.linkedAssetType);
 
-  const bindToTerminal = (term: OpenTerminal) =>
+  const bindToTab = (item: OpenTab) =>
     bindTab(sidebarTabId, {
-      workspaceTabId: term.tabId,
-      assetId: term.assetId,
-      assetName: term.assetName,
-      assetType: term.assetType,
+      workspaceTabId: item.tabId,
+      assetId: item.assetId,
+      assetName: item.assetName,
+      assetType: item.assetType,
     });
-
-  // 资产库选择器只回传 id;名称/类型从 assetStore 补全。若该资产恰有打开的 tab 则一并绑 tab,否则仅绑资产(linkedTabId=null)。
-  const handleLibraryPick = (assetId: number) => {
-    const asset = assets.find((a) => a.ID === assetId);
-    if (asset) {
-      const open = openAssets.find((o) => o.assetId === assetId);
-      bindTab(sidebarTabId, {
-        workspaceTabId: open?.tabId ?? null,
-        assetId,
-        assetName: asset.Name,
-        assetType: asset.Type,
-      });
-    }
-    setPicking(false);
-  };
 
   const triggerLabel = bound
     ? syncTitle
@@ -114,35 +95,32 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-[220px]" onCloseAutoFocus={(e) => e.preventDefault()}>
-          {openAssets.length > 0 && (
-            <>
-              <DropdownMenuLabel className="px-2 py-1 text-[11px] font-semibold text-muted-foreground/70">
-                {t("ai.sidebar.linkedAsset.openAssets")}
-              </DropdownMenuLabel>
-              {openAssets.map((term) => {
-                const { Icon, color } = resolveAssetIcon(assets, term.assetId, term.assetType);
-                const isBound = term.tabId === tab?.linkedTabId;
-                return (
-                  <DropdownMenuItem
-                    key={term.tabId}
-                    data-testid={`menu-terminal-${term.assetId}`}
-                    onSelect={() => bindToTerminal(term)}
-                    className={cn("gap-2", isBound && "bg-primary/10")}
-                  >
-                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" />
-                    <Icon className="h-3.5 w-3.5" style={color ? { color } : undefined} />
-                    <span className="flex-1 truncate">{term.assetName}</span>
-                    {isBound && <Check className="h-3.5 w-3.5 text-primary" />}
-                  </DropdownMenuItem>
-                );
-              })}
-              <DropdownMenuSeparator />
-            </>
+          <DropdownMenuLabel className="px-2 py-1 text-[11px] font-semibold text-muted-foreground/70">
+            {t("ai.sidebar.linkedAsset.openTabs")}
+          </DropdownMenuLabel>
+          {openTabs.length === 0 ? (
+            <div data-testid="menu-no-open-tabs" className="px-2 py-1.5 text-xs text-muted-foreground/60">
+              {t("ai.sidebar.linkedAsset.noOpenTabs")}
+            </div>
+          ) : (
+            openTabs.map((item) => {
+              const { Icon, color } = resolveAssetIcon(assets, item.assetId, item.assetType);
+              const isBound = item.tabId === tab?.linkedTabId;
+              return (
+                <DropdownMenuItem
+                  key={item.tabId}
+                  data-testid={`menu-tab-${item.tabId}`}
+                  onSelect={() => bindToTab(item)}
+                  className={cn("gap-2", isBound && "bg-primary/10")}
+                >
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" />
+                  <Icon className="h-3.5 w-3.5" style={color ? { color } : undefined} />
+                  <span className="flex-1 truncate">{item.label}</span>
+                  {isBound && <Check className="h-3.5 w-3.5 text-primary" />}
+                </DropdownMenuItem>
+              );
+            })
           )}
-          <DropdownMenuItem data-testid="menu-pick-library" onSelect={() => setPicking(true)}>
-            <Plus className="h-3.5 w-3.5" />
-            {t("ai.sidebar.linkedAsset.pickFromLibrary")}
-          </DropdownMenuItem>
           {bound && (
             <DropdownMenuItem data-testid="menu-clear" onSelect={() => unbindTab(sidebarTabId)}>
               <X className="h-3.5 w-3.5" />
@@ -168,14 +146,6 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
           </div>
         </DropdownMenuContent>
       </DropdownMenu>
-      {picking && (
-        <AssetSelect
-          value={tab?.linkedAssetId ?? 0}
-          onValueChange={handleLibraryPick}
-          placeholder={t("ai.sidebar.linkedAsset.pickPlaceholder")}
-          testId="linked-asset-picker"
-        />
-      )}
     </div>
   );
 }
