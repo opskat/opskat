@@ -1,7 +1,7 @@
 import type React from "react";
 import { useTranslation } from "react-i18next";
 import { Checkbox } from "@opskat/ui";
-import { Folder, FileText } from "lucide-react";
+import { Folder, FileText, Download } from "lucide-react";
 import type { oss_svc } from "../../../wailsjs/go/models";
 import { prefixLeafName } from "@/lib/ossPrefixTree";
 import { formatBytes } from "@/lib/formatBytes";
@@ -31,6 +31,7 @@ export interface OSSObjectListProps {
   onNavigatePrefix: (prefix: string) => void;
   onToggleSelect: (key: string) => void;
   onScrollNearBottom: () => void;
+  onDownload?: (key: string) => void;
 }
 
 export function OSSObjectList({
@@ -43,6 +44,7 @@ export function OSSObjectList({
   onNavigatePrefix,
   onToggleSelect,
   onScrollNearBottom,
+  onDownload,
 }: OSSObjectListProps) {
   const { t } = useTranslation();
 
@@ -78,6 +80,7 @@ export function OSSObjectList({
             <th className="px-2 py-1">{t("oss.browser.colSize")}</th>
             <th className="px-2 py-1">{t("oss.browser.colStorageClass")}</th>
             <th className="px-2 py-1">{t("oss.browser.colModified")}</th>
+            <th className="w-8 px-2 py-1" />
           </tr>
         </thead>
         <tbody>
@@ -98,10 +101,11 @@ export function OSSObjectList({
               <td className="px-2 py-1 text-muted-foreground">—</td>
               <td className="px-2 py-1 text-muted-foreground">—</td>
               <td className="px-2 py-1 text-muted-foreground">—</td>
+              <td className="px-2 py-1" />
             </tr>
           ))}
           {objects.map((o) => (
-            <tr key={o.key} className="hover:bg-accent/50" data-testid={`oss-object-${o.key}`}>
+            <tr key={o.key} className="group hover:bg-accent/50" data-testid={`oss-object-${o.key}`}>
               <td className="px-2 py-1">
                 <Checkbox
                   checked={selection.has(o.key)}
@@ -119,6 +123,19 @@ export function OSSObjectList({
               <td className="px-2 py-1 text-muted-foreground">{o.storageClass || "—"}</td>
               <td className="px-2 py-1 text-muted-foreground">
                 {o.lastModified ? new Date(o.lastModified * 1000).toLocaleString() : "—"}
+              </td>
+              <td className="px-2 py-1 text-right">
+                {onDownload && (
+                  <button
+                    type="button"
+                    className="opacity-0 group-hover:opacity-100"
+                    onClick={() => onDownload(o.key)}
+                    title={t("oss.transfer.download")}
+                    data-testid={`oss-download-${o.key}`}
+                  >
+                    <Download className="size-3" />
+                  </button>
+                )}
               </td>
             </tr>
           ))}

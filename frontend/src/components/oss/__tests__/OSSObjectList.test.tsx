@@ -73,4 +73,15 @@ describe("OSSObjectList", () => {
     render(<OSSObjectList {...base} prefixes={[]} objects={[]} />);
     expect(screen.getByTestId("oss-list-empty")).toHaveTextContent("oss.browser.emptyDir");
   });
+
+  it("shows a download button on object rows that fires onDownload", () => {
+    const onDownload = vi.fn();
+    render(
+      <OSSObjectList {...base} onDownload={onDownload} prefixes={["docs/sub/"]} objects={[obj("docs/a.txt", 1)]} />
+    );
+    fireEvent.click(screen.getByTestId("oss-download-docs/a.txt"));
+    expect(onDownload).toHaveBeenCalledWith("docs/a.txt");
+    // folders get no download button
+    expect(screen.queryByTestId("oss-download-docs/sub/")).toBeNull();
+  });
 });

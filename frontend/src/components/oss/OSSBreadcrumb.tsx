@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Button } from "@opskat/ui";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Upload } from "lucide-react";
 
 export interface OssCrumb {
   label: string;
@@ -25,9 +25,10 @@ export interface OSSBreadcrumbProps {
   prefix: string;
   onNavigate: (prefix: string) => void;
   onRefresh: () => void;
+  onUpload?: () => void;
 }
 
-export function OSSBreadcrumb({ bucket, prefix, onNavigate, onRefresh }: OSSBreadcrumbProps) {
+export function OSSBreadcrumb({ bucket, prefix, onNavigate, onRefresh, onUpload }: OSSBreadcrumbProps) {
   const { t } = useTranslation();
   const crumbs = crumbSegments(bucket, prefix);
   return (
@@ -47,6 +48,11 @@ export function OSSBreadcrumb({ bucket, prefix, onNavigate, onRefresh }: OSSBrea
           </span>
         ))}
       </div>
+      {onUpload && (
+        <Button size="sm" variant="outline" className="shrink-0" onClick={onUpload} data-testid="oss-upload">
+          <Upload className="size-3" /> {t("oss.transfer.upload")}
+        </Button>
+      )}
       <Button size="sm" variant="outline" className="shrink-0" onClick={onRefresh} data-testid="oss-refresh">
         <RefreshCw className="size-3" /> {t("oss.browser.refresh")}
       </Button>

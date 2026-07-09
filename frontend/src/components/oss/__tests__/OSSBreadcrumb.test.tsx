@@ -31,4 +31,11 @@ describe("OSSBreadcrumb", () => {
     fireEvent.click(screen.getByTestId("oss-refresh"));
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
+
+  it("renders an upload button that fires onUpload when provided", () => {
+    const onUpload = vi.fn();
+    render(<OSSBreadcrumb bucket="mb" prefix="" onNavigate={vi.fn()} onRefresh={vi.fn()} onUpload={onUpload} />);
+    fireEvent.click(screen.getByTestId("oss-upload"));
+    expect(onUpload).toHaveBeenCalledTimes(1);
+  });
 });
