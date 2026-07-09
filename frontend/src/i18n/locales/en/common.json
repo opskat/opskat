@@ -2502,7 +2502,7 @@
   "etcd": {
     "form": {
       "endpoints": "Endpoints",
-      "endpointsHint": "At least 1 host:port, one per line",
+      "endpointsHint": "Separate endpoints by newline, comma, or semicolon",
       "addEndpoint": "Add endpoint",
       "tlsSection": "TLS / mTLS",
       "advancedSection": "Advanced",
@@ -2516,10 +2516,13 @@
       "tlsInsecure": "Skip certificate verification"
     },
     "tree": {
-      "title": "Keyspace",
       "filterPlaceholder": "Filter key",
       "truncated": "+{{count}} hidden, limit={{limit}}",
-      "loadFailed": "Failed to load keyspace"
+      "loadFailed": "Failed to load keyspace",
+      "refresh": "Refresh keyspace"
+    },
+    "view": {
+      "kv": "KV Browse"
     },
     "query": {
       "placeholder": "get /config --prefix",
@@ -2560,9 +2563,9 @@
       "formatYaml": "YAML",
       "notJson": "(not JSON)",
       "notYaml": "(YAML conversion failed)",
-      "copyKey": "Copy KEY",
+      "copyKey": "Copy key",
       "copyValue": "Copy raw value",
-      "delete": "Delete",
+      "delete": "Delete key",
       "copied": "Copied to clipboard",
       "copyFailed": "Copy failed",
       "deleteSuccess": "Deleted key: {{key}}",
@@ -2578,16 +2581,6 @@
       "contentTypeJson": "application/json",
       "contentTypeText": "text/plain",
       "contentTypeEmpty": "(empty)"
-    },
-    "cluster": {
-      "healthy": "Healthy",
-      "unhealthy": "Unhealthy",
-      "unknown": "Unknown",
-      "endpoints": "{{count}} endpoint(s)",
-      "leader": "leader",
-      "noLeader": "no leader",
-      "refresh": "Refresh cluster status",
-      "loadFailed": "Failed to load cluster info"
     },
     "error": {
       "endpointsRequired": "At least one endpoint required",

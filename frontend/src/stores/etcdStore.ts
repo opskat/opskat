@@ -12,29 +12,6 @@ export type EtcdExecMeta =
   | { ok: true; elapsedMs: number; count: number; op: string }
   | { ok: false; elapsedMs: number; error: string; op: string };
 
-export type EtcdClusterStatus = "loading" | "healthy" | "unhealthy" | "unknown";
-export type EtcdClusterMember = {
-  id: string; // hex 字符串(member.ID)
-  name: string;
-  urls: string[];
-};
-export type EtcdClusterInfo = {
-  status: EtcdClusterStatus;
-  memberCount: number;
-  members: EtcdClusterMember[];
-  error?: string;
-};
-
-// dispatchMemberList 把 value 编码为 "name=X urls=[U1 U2]"。
-function parseMemberValue(value: string): { name: string; urls: string[] } {
-  const nameMatch = value.match(/name=(\S+)/);
-  const urlsMatch = value.match(/urls=\[([^\]]*)\]/);
-  return {
-    name: nameMatch?.[1] ?? "",
-    urls: urlsMatch?.[1].split(/\s+/).filter(Boolean) ?? [],
-  };
-}
-
 // treeCache / truncatedAt 的 key 形如 "${assetId}:${prefix}",避免多个 etcd 资产
 // 同时打开时 prefix "/" 互相污染(see https://github.com/opskat/opskat PR #129 review)。
 export function etcdCacheKey(assetId: number, prefix: string): string {
@@ -47,7 +24,6 @@ interface State {
   queryHistory: string[];
   lastResult: etcd_svc.ExecResult | null;
   lastMeta: EtcdExecMeta | null;
-  clusterInfo: Map<number, EtcdClusterInfo>;
 
   loadPrefix: (assetId: number, prefix: string, opts?: { force?: boolean }) => Promise<void>;
   /**
@@ -59,7 +35,6 @@ interface State {
   isTruncated: (assetId: number, prefix: string) => boolean | undefined;
   exec: (req: etcd_svc.ExecRequest) => Promise<etcd_svc.ExecResult>;
   testConnection: (assetId: number) => Promise<void>;
-  loadClusterInfo: (assetId: number, opts?: { force?: boolean }) => Promise<void>;
 }
 
 const HISTORY_KEY = "etcd:queryHistory";
@@ -90,7 +65,6 @@ export const useEtcdStore = create<State>((set, get) => ({
   queryHistory: loadHistory(),
   lastResult: null,
   lastMeta: null,
-  clusterInfo: new Map(),
 
   async loadPrefix(assetId, prefix, opts) {
     const key = etcdCacheKey(assetId, prefix);
@@ -169,56 +143,5 @@ export const useEtcdStore = create<State>((set, get) => ({
 
   async testConnection(assetId) {
     await EtcdTestConnection(assetId);
-  },
-
-  async loadClusterInfo(assetId, opts) {
-    const existing = get().clusterInfo.get(assetId);
-    if (!opts?.force && existing && existing.status !== "loading" && existing.status !== "unknown") return;
-
-    const setStatus = (info: EtcdClusterInfo) => {
-      const next = new Map(get().clusterInfo);
-      next.set(assetId, info);
-      set({ clusterInfo: next });
-    };
-    setStatus({
-      status: "loading",
-      memberCount: existing?.memberCount ?? 0,
-      members: existing?.members ?? [],
-    });
-
-    try {
-      const memberRes = await EtcdExec({
-        AssetID: assetId,
-        Op: "member_list",
-        Key: "",
-        Value: "",
-        Prefix: false,
-        Limit: 0,
-        Revision: 0,
-        LeaseID: 0,
-        Args: {} as Record<string, unknown>,
-        ApprovalID: "",
-        Source: "cluster_info",
-      } as unknown as etcd_svc.ExecRequest);
-      const members: EtcdClusterMember[] = (memberRes.kvs ?? []).map((kv) => {
-        const parsed = parseMemberValue(kv.value ?? "");
-        return { id: kv.key, name: parsed.name, urls: parsed.urls };
-      });
-      const count = members.length || Number(memberRes.count ?? 0);
-
-      setStatus({
-        status: count > 0 ? "healthy" : "unhealthy",
-        memberCount: count,
-        members,
-      });
-    } catch (e) {
-      setStatus({
-        status: "unhealthy",
-        memberCount: 0,
-        members: [],
-        error: e instanceof Error ? e.message : String(e),
-      });
-      throw e;
-    }
   },
 }));
