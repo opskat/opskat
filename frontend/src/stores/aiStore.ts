@@ -1599,8 +1599,7 @@ async function _sendForConversation(convId: number, content: string) {
   // 会话若绑定了主资产，保证它在上下文里且置顶（即使对应 tab 未打开）。
   const boundTab = useAIStore.getState().sidebarTabs.find((tab) => tab.conversationId === convId);
   if (boundTab?.linkedAssetId != null) {
-    const already = openTabs.some((t) => t.assetId === boundTab.linkedAssetId);
-    const rest = already ? openTabs.filter((t) => t.assetId !== boundTab.linkedAssetId) : openTabs;
+    const rest = openTabs.filter((t) => t.assetId !== boundTab.linkedAssetId);
     openTabs.length = 0;
     openTabs.push(
       new runner.TabInfo({

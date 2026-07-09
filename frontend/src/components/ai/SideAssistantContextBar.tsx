@@ -39,11 +39,9 @@ export function SideAssistantContextBar({ conversationId, sidebarTabId }: SideAs
     () => localStorage.getItem("ai_context_collapsed") === "false"
   );
   const toggleContext = () => {
-    setContextExpanded((prev) => {
-      const next = !prev;
-      localStorage.setItem("ai_context_collapsed", String(!next));
-      return next;
-    });
+    const next = !contextExpanded;
+    setContextExpanded(next);
+    localStorage.setItem("ai_context_collapsed", String(!next));
   };
 
   const updateRenameState = (patch: Partial<Omit<RenameState, "conversationId">>) => {
@@ -171,12 +169,13 @@ export function SideAssistantContextBar({ conversationId, sidebarTabId }: SideAs
           title={contextExpanded ? t("ai.sidebar.contextCollapse") : t("ai.sidebar.contextExpand")}
           aria-label={contextExpanded ? t("ai.sidebar.contextCollapse") : t("ai.sidebar.contextExpand")}
           aria-expanded={contextExpanded}
+          aria-controls="ai-linked-asset-section"
         >
           {contextExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
         </Button>
       </div>
       {contextExpanded && (
-        <div data-testid="linked-asset-section" className="px-3 pb-2">
+        <div id="ai-linked-asset-section" data-testid="linked-asset-section" className="px-3 pb-2">
           <LinkedAssetControl sidebarTabId={sidebarTabId} />
         </div>
       )}

@@ -99,6 +99,21 @@ describe("_sendForConversation includes linked asset in context", () => {
     const aiContext = call?.[2] as { openTabs: Array<{ assetId: number }> };
     expect(aiContext.openTabs.filter((t) => t.assetId === 99)).toHaveLength(1);
   });
+
+  it("keeps other open tabs after the prepended bound asset", async () => {
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
+    useTabStore.setState({
+      tabs: [
+        { id: "t1", type: "terminal", label: "web", meta: { assetId: 1, assetName: "web", assetType: "ssh" } } as any,
+        { id: "q2", type: "query", label: "db", meta: { assetId: 2, assetName: "db", assetType: "mysql" } } as any,
+      ],
+      activeTabId: "t1",
+    });
+    await useAIStore.getState().sendFromSidebarTab("s1", "hello");
+    const call = vi.mocked(SendAIMessage).mock.calls.at(-1);
+    const aiContext = call?.[2] as { openTabs: Array<{ assetId: number }> };
+    expect(aiContext.openTabs.map((t) => t.assetId)).toEqual([99, 1, 2]);
+  });
 });
 
 describe("sendFromSidebarTab auto-binds first mention when unbound", () => {
@@ -129,5 +144,13 @@ describe("sendFromSidebarTab auto-binds first mention when unbound", () => {
     await useAIStore.getState().sendFromSidebarTab("s1", content);
     const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
     expect(tab?.linkedAssetId).toBe(99);
+  });
+
+  it("includes the auto-bound asset in the sent AI context (first message)", async () => {
+    const content = `${buildMentionXml({ assetId: 7, name: "prod-web-01", type: "ssh" })} 看下`;
+    await useAIStore.getState().sendFromSidebarTab("s1", content);
+    const call = vi.mocked(SendAIMessage).mock.calls.at(-1);
+    const aiContext = call?.[2] as { openTabs: Array<{ assetId: number }> };
+    expect(aiContext.openTabs.some((t) => t.assetId === 7)).toBe(true);
   });
 });
