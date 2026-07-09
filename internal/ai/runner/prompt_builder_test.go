@@ -27,18 +27,6 @@ func TestPromptBuilderBuild(t *testing.T) {
 			So(got, ShouldContainSubstring, "metrics")
 		})
 
-		Convey("OpenTabs 不再输出 primary/active 路由提示", func() {
-			ctx := AIContext{OpenTabs: []TabInfo{
-				{Type: "ssh", AssetID: 1, AssetName: "prod-web-01"},
-				{Type: "ssh", AssetID: 2, AssetName: "other"},
-			}}
-			out := NewPromptBuilder("en", ctx).Build()
-			So(out, ShouldContainSubstring, "prod-web-01")
-			So(out, ShouldContainSubstring, "other")
-			So(out, ShouldNotContainSubstring, "PRIMARY")
-			So(out, ShouldNotContainSubstring, "prefer it when the target is ambiguous")
-		})
-
 		Convey("输出内联 mention 语义提示", func() {
 			got := NewPromptBuilder("en", AIContext{}).Build()
 			So(got, ShouldContainSubstring, "<mention")

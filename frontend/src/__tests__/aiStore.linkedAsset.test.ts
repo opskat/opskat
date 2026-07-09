@@ -3,9 +3,42 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("../i18n", () => ({ default: { t: (k: string, f?: string) => f || k } }));
 
 import { sanitizeSidebarTab, useAIStore } from "../stores/aiStore";
-import { useTabStore } from "../stores/tabStore";
+import { useTabStore, type Tab } from "../stores/tabStore";
 import { SendAIMessage } from "../../wailsjs/go/ai/AI";
 import { buildMentionXml } from "../lib/mentionXml";
+
+const terminalTab = (id: string, assetId: number, assetName: string): Tab => ({
+  id,
+  type: "terminal",
+  label: assetName,
+  meta: {
+    type: "terminal",
+    assetId,
+    assetName,
+    assetIcon: "server",
+    host: "127.0.0.1",
+    port: 22,
+    username: "root",
+  },
+});
+
+const queryTab = (
+  id: string,
+  assetId: number,
+  assetName: string,
+  assetType: "database" | "redis" | "mongodb" | "kafka" | "k8s" | "etcd"
+): Tab => ({
+  id,
+  type: "query",
+  label: assetName,
+  meta: {
+    type: "query",
+    assetId,
+    assetName,
+    assetIcon: "database",
+    assetType,
+  },
+});
 
 describe("sanitizeSidebarTab linked asset", () => {
   it("round-trips valid linked asset fields", () => {
@@ -92,7 +125,7 @@ describe("_sendForConversation includes linked asset in context", () => {
   });
 
   it("prepends the bound asset even when its tab is not open", async () => {
-    vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined);
     await useAIStore.getState().sendFromSidebarTab("s1", "hello");
     const call = vi.mocked(SendAIMessage).mock.calls.at(-1);
     const aiContext = call?.[2] as { openTabs: Array<{ assetId: number; assetName: string; type: string }> };
@@ -102,16 +135,9 @@ describe("_sendForConversation includes linked asset in context", () => {
   });
 
   it("does not duplicate when the bound asset tab is already open", async () => {
-    vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined);
     useTabStore.setState({
-      tabs: [
-        {
-          id: "q1",
-          type: "query",
-          label: "cache",
-          meta: { assetId: 99, assetName: "cache", assetType: "redis" },
-        } as any,
-      ],
+      tabs: [queryTab("q1", 99, "cache", "redis")],
       activeTabId: "q1",
     });
     await useAIStore.getState().sendFromSidebarTab("s1", "hello");
@@ -121,12 +147,9 @@ describe("_sendForConversation includes linked asset in context", () => {
   });
 
   it("keeps other open tabs after the prepended bound asset", async () => {
-    vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined);
     useTabStore.setState({
-      tabs: [
-        { id: "t1", type: "terminal", label: "web", meta: { assetId: 1, assetName: "web", assetType: "ssh" } } as any,
-        { id: "q2", type: "query", label: "db", meta: { assetId: 2, assetName: "db", assetType: "mysql" } } as any,
-      ],
+      tabs: [terminalTab("t1", 1, "web"), queryTab("q2", 2, "db", "database")],
       activeTabId: "t1",
     });
     await useAIStore.getState().sendFromSidebarTab("s1", "hello");
@@ -136,11 +159,9 @@ describe("_sendForConversation includes linked asset in context", () => {
   });
 
   it("does not send an active marker for the prepended bound asset", async () => {
-    vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined);
     useTabStore.setState({
-      tabs: [
-        { id: "t1", type: "terminal", label: "web", meta: { assetId: 1, assetName: "web", assetType: "ssh" } } as any,
-      ],
+      tabs: [terminalTab("t1", 1, "web")],
       activeTabId: "t1",
     });
     await useAIStore.getState().sendFromSidebarTab("s1", "hi");
@@ -172,7 +193,7 @@ describe("sendFromSidebarTab auto-binds first mention when unbound", () => {
       ],
       activeSidebarTabId: "s1",
     });
-    vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined);
   });
 
   it("sets linkedAssetId from the first mention", async () => {

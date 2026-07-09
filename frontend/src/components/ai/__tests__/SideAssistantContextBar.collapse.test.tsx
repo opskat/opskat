@@ -2,13 +2,23 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { SideAssistantContextBar } from "../SideAssistantContextBar";
 import { useAIStore } from "@/stores/aiStore";
+import type { SidebarAITab } from "@/stores/aiStore";
+import { conversation_entity } from "../../../../wailsjs/go/models";
+
+const sidebarTab: SidebarAITab = {
+  id: "s1",
+  conversationId: 1,
+  title: "会话",
+  createdAt: 1,
+  uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null },
+};
 
 describe("SideAssistantContextBar collapse", () => {
   beforeEach(() => {
     localStorage.clear();
     useAIStore.setState({
-      conversations: [{ ID: 1, Title: "会话" } as any],
-      sidebarTabs: [{ id: "s1", conversationId: 1, title: "会话", createdAt: 1, uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null } }],
+      conversations: [new conversation_entity.Conversation({ ID: 1, Title: "会话" })],
+      sidebarTabs: [sidebarTab],
       activeSidebarTabId: "s1",
     });
   });

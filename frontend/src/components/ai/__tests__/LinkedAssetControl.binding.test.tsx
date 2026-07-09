@@ -3,7 +3,9 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { LinkedAssetControl } from "../LinkedAssetControl";
 import { useAIStore } from "@/stores/aiStore";
 import { useAssetStore } from "@/stores/assetStore";
-import { useTabStore } from "@/stores/tabStore";
+import { useTabStore, type Tab } from "@/stores/tabStore";
+import type { SidebarAITab } from "@/stores/aiStore";
+import { asset_entity } from "../../../../wailsjs/go/models";
 
 /** Radix DropdownMenuTrigger opens on pointerdown(button=0). */
 function openMenu(trigger: HTMLElement) {
@@ -20,18 +22,33 @@ const boundTab = {
   linkedAssetId: 42,
   linkedAssetName: "prod-web-01",
   linkedAssetType: "ssh",
-};
+} satisfies SidebarAITab;
+
+const terminalTab = (id: string, assetId: number, assetName: string): Tab => ({
+  id,
+  type: "terminal",
+  label: assetName,
+  meta: {
+    type: "terminal",
+    assetId,
+    assetName,
+    assetIcon: "server",
+    host: "127.0.0.1",
+    port: 22,
+    username: "root",
+  },
+});
 
 describe("LinkedAssetControl binding + sync menu", () => {
   beforeEach(() => {
     useTabStore.setState({
-      tabs: [
-        { id: "t1", type: "terminal", label: "prod-web-01", meta: { assetId: 42, assetName: "prod-web-01" } } as any,
-      ],
+      tabs: [terminalTab("t1", 42, "prod-web-01")],
       activeTabId: "t1",
     });
-    useAssetStore.setState({ assets: [{ ID: 42, Name: "prod-web-01", Type: "ssh", Icon: "server" } as any] });
-    useAIStore.setState({ sidebarTabs: [boundTab as any], activeSidebarTabId: "s1" });
+    useAssetStore.setState({
+      assets: [new asset_entity.Asset({ ID: 42, Name: "prod-web-01", Type: "ssh", Icon: "server" })],
+    });
+    useAIStore.setState({ sidebarTabs: [boundTab], activeSidebarTabId: "s1" });
   });
 
   it("binds a workspace tab from the open-tabs list", () => {
@@ -43,7 +60,7 @@ describe("LinkedAssetControl binding + sync menu", () => {
           title: "t",
           createdAt: 1,
           uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null },
-        } as any,
+        },
       ],
       activeSidebarTabId: "s1",
     });

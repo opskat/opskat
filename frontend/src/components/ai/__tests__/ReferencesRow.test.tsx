@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { buildMentionXml } from "@/lib/mentionXml";
 import { ReferencesRow } from "../ReferencesRow";
 import { useAIStore } from "@/stores/aiStore";
+import { ai } from "../../../../wailsjs/go/models";
 
 const { jumpToAsset } = vi.hoisted(() => ({ jumpToAsset: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@/lib/aiReferences", async (orig) => {
@@ -16,7 +17,15 @@ describe("ReferencesRow", () => {
     useAIStore.setState({
       conversationMessages: {
         1: [
-          { role: "user", content: `${buildMentionXml({ assetId: 5, name: "web", type: "ssh" })} ${buildMentionXml({ assetId: 9, name: "cache", type: "redis" })}`, blocks: [] } as any,
+          new ai.ConversationDisplayMessage({
+            role: "user",
+            content: `${buildMentionXml({ assetId: 5, name: "web", type: "ssh" })} ${buildMentionXml({
+              assetId: 9,
+              name: "cache",
+              type: "redis",
+            })}`,
+            blocks: [],
+          }),
         ],
       },
     });

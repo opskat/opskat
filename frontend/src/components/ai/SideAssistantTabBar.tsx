@@ -3,7 +3,7 @@ import { cn, Button, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } 
 import { useTranslation } from "react-i18next";
 import type { SidebarAITab, SidebarTabStatus } from "@/stores/aiStore";
 import { useAssetStore } from "@/stores/assetStore";
-import { resolveAssetIcon, type ResolvedAssetIcon } from "@/lib/aiAssetIcon";
+import { AssetIcon, type AssetIconProps } from "@/components/asset/AssetIcon";
 import { getSessionIconColor, getSessionIconLetter } from "./sessionIconColor";
 
 interface SideAssistantTabBarProps {
@@ -25,12 +25,17 @@ const statusDotColor: Record<Exclude<SidebarTabStatus, null>, string> = {
 };
 
 /** 头像内容：绑定资产 → 渲染资产图标（真实图标 + 颜色）；否则回退标题首字。折叠/展开两处复用。 */
-function renderAvatarContent(tabId: string, resolved: ResolvedAssetIcon | null, letter: string) {
-  if (resolved) {
-    const { Icon } = resolved;
+function renderAvatarContent(
+  tabId: string,
+  assets: AssetIconProps["assets"],
+  assetId: number | null | undefined,
+  fallbackType: string | undefined,
+  letter: string
+) {
+  if (assetId != null) {
     return (
       <span data-testid={`session-asset-icon-${tabId}`}>
-        <Icon className="h-3.5 w-3.5" style={resolved.color ? { color: resolved.color } : undefined} />
+        <AssetIcon assets={assets} assetId={assetId} fallbackType={fallbackType} className="h-3.5 w-3.5" />
       </span>
     );
   }
@@ -104,7 +109,6 @@ export function SideAssistantTabBar({
             const letter = isBlank ? "?" : getSessionIconLetter(titleText);
             const bound = tab.linkedAssetId != null;
             const color = isBlank || bound ? null : getSessionIconColor(titleText);
-            const resolved = bound ? resolveAssetIcon(assets, tab.linkedAssetId, tab.linkedAssetType) : null;
             const statusSuffix = status ? ` · ${t(`ai.sidebar.statusSuffix.${status}`)}` : "";
 
             const handleAuxClick = (e: React.MouseEvent) => {
@@ -134,7 +138,7 @@ export function SideAssistantTabBar({
                         )}
                         style={color ? { background: color.bg, color: color.fg } : undefined}
                       >
-                        {renderAvatarContent(tab.id, resolved, letter)}
+                        {renderAvatarContent(tab.id, assets, tab.linkedAssetId, tab.linkedAssetType, letter)}
                         {status && (
                           <span
                             className={cn(
@@ -199,7 +203,7 @@ export function SideAssistantTabBar({
                     )}
                     style={color ? { background: color.bg, color: color.fg } : undefined}
                   >
-                    {renderAvatarContent(tab.id, resolved, letter)}
+                    {renderAvatarContent(tab.id, assets, tab.linkedAssetId, tab.linkedAssetType, letter)}
                     {status === "running" ? (
                       <LoaderCircle
                         aria-hidden="true"

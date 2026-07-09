@@ -116,8 +116,7 @@ func (b *PromptBuilder) buildTabContext() string {
 		case "sftp":
 			typeName = "SFTP"
 		}
-		line := fmt.Sprintf("- %s: \"%s\" (ID: %d)", typeName, tab.AssetName, tab.AssetID)
-		lines = append(lines, line)
+		lines = append(lines, fmt.Sprintf("- %s: \"%s\" (ID: %d)", typeName, tab.AssetName, tab.AssetID))
 	}
 	return strings.Join(lines, "\n")
 }

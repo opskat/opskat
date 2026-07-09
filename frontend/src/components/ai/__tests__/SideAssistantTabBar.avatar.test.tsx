@@ -2,8 +2,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { SideAssistantTabBar } from "../SideAssistantTabBar";
 import { useAssetStore } from "@/stores/assetStore";
+import type { SidebarAITab, SidebarTabStatus } from "@/stores/aiStore";
+import { asset_entity } from "../../../../wailsjs/go/models";
 
-const baseTab = {
+const baseTab: SidebarAITab = {
   id: "s1",
   conversationId: 1,
   title: "prod-web-01",
@@ -11,12 +13,12 @@ const baseTab = {
   uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null },
 };
 
-function renderBar(tabExtra: object) {
+function renderBar(tabExtra: Partial<SidebarAITab>) {
   return render(
     <SideAssistantTabBar
-      tabs={[{ ...baseTab, ...tabExtra } as any]}
+      tabs={[{ ...baseTab, ...tabExtra }]}
       activeTabId="s1"
-      getStatus={() => "done" as any}
+      getStatus={(): SidebarTabStatus => "done"}
       collapsed={false}
       onActivate={vi.fn()}
       onClose={vi.fn()}
@@ -28,7 +30,9 @@ function renderBar(tabExtra: object) {
 
 describe("SideAssistantTabBar avatar", () => {
   beforeEach(() => {
-    useAssetStore.setState({ assets: [{ ID: 42, Name: "prod-web-01", Type: "ssh", Icon: "server#22c55e" } as any] });
+    useAssetStore.setState({
+      assets: [new asset_entity.Asset({ ID: 42, Name: "prod-web-01", Type: "ssh", Icon: "server#22c55e" })],
+    });
   });
 
   it("renders the bound asset icon when the tab is bound", () => {

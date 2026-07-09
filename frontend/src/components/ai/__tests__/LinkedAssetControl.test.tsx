@@ -3,17 +3,36 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { LinkedAssetControl } from "../LinkedAssetControl";
 import { useAIStore } from "@/stores/aiStore";
 import { useAssetStore } from "@/stores/assetStore";
-import { useTabStore } from "@/stores/tabStore";
+import { useTabStore, type Tab } from "@/stores/tabStore";
+import { asset_entity } from "../../../../wailsjs/go/models";
 
 /** Radix DropdownMenuTrigger opens on pointerdown (button=0) under happy-dom. */
 function openMenu() {
   fireEvent.pointerDown(screen.getByTestId("linked-asset-menu-trigger"), { button: 0, ctrlKey: false });
 }
 
+const asset = (id: number, name: string, type: string, icon = "server") =>
+  new asset_entity.Asset({ ID: id, Name: name, Type: type, Icon: icon });
+
+const terminalTab = (id: string, label: string, assetId: number, assetName: string): Tab => ({
+  id,
+  type: "terminal",
+  label,
+  meta: {
+    type: "terminal",
+    assetId,
+    assetName,
+    assetIcon: "server",
+    host: "127.0.0.1",
+    port: 22,
+    username: "root",
+  },
+});
+
 describe("LinkedAssetControl", () => {
   beforeEach(() => {
     useTabStore.setState({ tabs: [], activeTabId: null });
-    useAssetStore.setState({ assets: [{ ID: 42, Name: "prod-web-01", Type: "ssh", Icon: "server" } as any] });
+    useAssetStore.setState({ assets: [asset(42, "prod-web-01", "ssh")] });
     useAIStore.setState({
       sidebarTabs: [
         {
@@ -44,14 +63,7 @@ describe("LinkedAssetControl", () => {
 
   it("lists open tabs and binds the one clicked (keyed by tab id, shows tab label)", () => {
     useTabStore.setState({
-      tabs: [
-        {
-          id: "t7",
-          type: "terminal",
-          label: "web · shell",
-          meta: { type: "terminal", assetId: 7, assetName: "web-07" } as any,
-        },
-      ],
+      tabs: [terminalTab("t7", "web · shell", 7, "web-07")],
       activeTabId: "t7",
     });
     render(<LinkedAssetControl sidebarTabId="s1" />);
@@ -67,20 +79,7 @@ describe("LinkedAssetControl", () => {
 
   it("lists two tabs of the SAME asset as two separate items (no dedup by asset)", () => {
     useTabStore.setState({
-      tabs: [
-        {
-          id: "t1",
-          type: "terminal",
-          label: "prod-web-01",
-          meta: { type: "terminal", assetId: 7, assetName: "prod-web-01" } as any,
-        },
-        {
-          id: "t2",
-          type: "terminal",
-          label: "prod-web-01",
-          meta: { type: "terminal", assetId: 7, assetName: "prod-web-01" } as any,
-        },
-      ],
+      tabs: [terminalTab("t1", "prod-web-01", 7, "prod-web-01"), terminalTab("t2", "prod-web-01", 7, "prod-web-01")],
       activeTabId: "t1",
     });
     render(<LinkedAssetControl sidebarTabId="s1" />);

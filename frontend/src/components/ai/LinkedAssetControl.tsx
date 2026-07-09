@@ -15,7 +15,7 @@ import { useAIStore } from "@/stores/aiStore";
 import { useAssetStore } from "@/stores/assetStore";
 import { useTabStore } from "@/stores/tabStore";
 import { tabToAssetRef } from "@/lib/tabAsset";
-import { resolveAssetIcon } from "@/lib/aiAssetIcon";
+import { AssetIcon } from "@/components/asset/AssetIcon";
 
 type OpenTab = { tabId: string; label: string; assetId: number; assetName: string; assetType: string };
 
@@ -46,7 +46,6 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
   const tabLive = tab?.linkedTabId != null && tabs.some((wt) => wt.id === tab.linkedTabId);
   const syncing = !!tab?.syncTab;
   const syncTitle = syncing ? t("ai.sidebar.syncing") : undefined;
-  const { Icon: BoundIcon, color: boundColor } = resolveAssetIcon(assets, tab?.linkedAssetId, tab?.linkedAssetType);
 
   const bindToTab = (item: OpenTab) =>
     bindTab(sidebarTabId, {
@@ -82,7 +81,12 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
               <>
                 {syncing && <Link2 className="h-3 w-3 text-primary" />}
                 <span className={cn("h-1.5 w-1.5 rounded-full", tabLive ? "bg-success" : "bg-muted-foreground/50")} />
-                <BoundIcon className="h-3.5 w-3.5" style={boundColor ? { color: boundColor } : undefined} />
+                <AssetIcon
+                  assets={assets}
+                  assetId={tab?.linkedAssetId}
+                  fallbackType={tab?.linkedAssetType}
+                  className="h-3.5 w-3.5"
+                />
                 <span className="max-w-[140px] truncate">{tab?.linkedAssetName}</span>
               </>
             ) : (
@@ -104,7 +108,6 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
             </div>
           ) : (
             openTabs.map((item) => {
-              const { Icon, color } = resolveAssetIcon(assets, item.assetId, item.assetType);
               const isBound = item.tabId === tab?.linkedTabId;
               return (
                 <DropdownMenuItem
@@ -114,7 +117,12 @@ export function LinkedAssetControl({ sidebarTabId }: { sidebarTabId: string | nu
                   className={cn("gap-2", isBound && "bg-primary/10")}
                 >
                   <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" />
-                  <Icon className="h-3.5 w-3.5" style={color ? { color } : undefined} />
+                  <AssetIcon
+                    assets={assets}
+                    assetId={item.assetId}
+                    fallbackType={item.assetType}
+                    className="h-3.5 w-3.5"
+                  />
                   <span className="flex-1 truncate">{item.label}</span>
                   {isBound && <Check className="h-3.5 w-3.5 text-primary" />}
                 </DropdownMenuItem>

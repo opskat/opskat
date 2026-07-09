@@ -3,7 +3,13 @@ import { ArrowUpRight, Plus } from "lucide-react";
 import { useAIStore } from "@/stores/aiStore";
 import { deriveReferences, jumpToAsset, isAssetTabOpen } from "@/lib/aiReferences";
 
-export function ReferencesRow({ conversationId, boundAssetId }: { conversationId: number | null; boundAssetId?: number | null }) {
+export function ReferencesRow({
+  conversationId,
+  boundAssetId,
+}: {
+  conversationId: number | null;
+  boundAssetId?: number | null;
+}) {
   const { t } = useTranslation();
   const messages = useAIStore((s) => (conversationId != null ? s.conversationMessages[conversationId] : undefined));
   if (conversationId == null) return null;
@@ -11,7 +17,10 @@ export function ReferencesRow({ conversationId, boundAssetId }: { conversationId
   if (refs.length === 0) return null;
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 pt-1 text-xs text-muted-foreground" data-testid="references-row">
+    <div
+      className="flex flex-wrap items-center gap-1.5 pt-1 text-xs text-muted-foreground"
+      data-testid="references-row"
+    >
       <span className="shrink-0">{t("ai.sidebar.referencedThisSession")}:</span>
       {refs.map((r) => {
         const open = isAssetTabOpen(r.assetId);
