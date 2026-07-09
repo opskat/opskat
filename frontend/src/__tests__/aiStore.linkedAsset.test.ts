@@ -5,6 +5,7 @@ vi.mock("../i18n", () => ({ default: { t: (k: string, f?: string) => f || k } })
 import { sanitizeSidebarTab, useAIStore } from "../stores/aiStore";
 import { useTabStore } from "../stores/tabStore";
 import { SendAIMessage } from "../../wailsjs/go/ai/AI";
+import { buildMentionXml } from "../lib/mentionXml";
 
 describe("sanitizeSidebarTab linked asset", () => {
   it("round-trips valid linked asset fields", () => {
@@ -97,5 +98,36 @@ describe("_sendForConversation includes linked asset in context", () => {
     const call = vi.mocked(SendAIMessage).mock.calls.at(-1);
     const aiContext = call?.[2] as { openTabs: Array<{ assetId: number }> };
     expect(aiContext.openTabs.filter((t) => t.assetId === 99)).toHaveLength(1);
+  });
+});
+
+describe("sendFromSidebarTab auto-binds first mention when unbound", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    useTabStore.setState({ tabs: [], activeTabId: null });
+    useAIStore.setState({
+      configured: true, modelName: "gpt-4",
+      conversationMessages: { 1: [] },
+      conversationStreaming: { 1: { sending: false, pendingQueue: [] } },
+      sidebarTabs: [{ id: "s1", conversationId: 1, title: "t", createdAt: 1, uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null } }],
+      activeSidebarTabId: "s1",
+    });
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
+  });
+
+  it("sets linkedAssetId from the first mention", async () => {
+    const content = `${buildMentionXml({ assetId: 7, name: "prod-web-01", type: "ssh" })} 帮我看下`;
+    await useAIStore.getState().sendFromSidebarTab("s1", content);
+    const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
+    expect(tab?.linkedAssetId).toBe(7);
+  });
+
+  it("does not override an existing binding", async () => {
+    useAIStore.getState().setSidebarTabAsset("s1", { assetId: 99, assetName: "cache", assetType: "redis" });
+    const content = `${buildMentionXml({ assetId: 7, name: "prod-web-01", type: "ssh" })} x`;
+    await useAIStore.getState().sendFromSidebarTab("s1", content);
+    const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
+    expect(tab?.linkedAssetId).toBe(99);
   });
 });

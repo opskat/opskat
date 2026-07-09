@@ -25,7 +25,8 @@ import {
   type QueryTabMeta,
   type Tab,
 } from "./tabStore";
-import { stripMentionTags } from "@/lib/mentionXml";
+import { stripMentionTags, extractMentions } from "@/lib/mentionXml";
+import { linkedAssetFromMention } from "@/lib/aiLinkedAsset";
 import { classifyError, type ErrorKind } from "@/lib/aiError";
 
 // 内容块：文本、工具调用、Sub Agent、审批、错误（持久化字段）。
@@ -2211,6 +2212,14 @@ export const useAIStore = create<AIState>((set, get) => {
       let convId = sidebarTab.conversationId;
       const existingMessages = convId != null ? get().conversationMessages[convId] || [] : [];
       if (!content.trim() && existingMessages.length === 0) return;
+
+      // 未绑定会话首次 @资产 → 自动设为主资产（不覆盖已有绑定）。
+      if (sidebarTab.linkedAssetId == null && content.trim()) {
+        const mentions = extractMentions(content);
+        if (mentions.length > 0) {
+          get().setSidebarTabAsset(tabId, linkedAssetFromMention(mentions[0]));
+        }
+      }
 
       if (convId == null) {
         const newId = await createConversationForEmptyHost((conv) => {
