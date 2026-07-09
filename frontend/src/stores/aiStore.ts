@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { create } from "zustand";
+import { toast } from "sonner";
 import { SendAIMessage } from "../../wailsjs/go/ai/AI";
 import {
   StopAIGeneration,
@@ -2443,6 +2444,23 @@ useAIStore.subscribe((state, prevState) => {
     persistSidebarTabs(state.sidebarTabs, state.activeSidebarTabId);
   } else {
     scheduleSidebarPersist(state.sidebarTabs, state.activeSidebarTabId);
+  }
+});
+
+// 跟随开关：激活终端变化时，重绑所有开启跟随的会话到新激活资产。
+let __lastActiveTabId: string | null = useTabStore.getState().activeTabId;
+useTabStore.subscribe((state) => {
+  if (state.activeTabId === __lastActiveTabId) return;
+  __lastActiveTabId = state.activeTabId;
+  const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
+  const ref = activeTab ? tabToAssetRef(activeTab) : null;
+  if (!ref) return;
+  const store = useAIStore.getState();
+  for (const tab of store.sidebarTabs) {
+    if (tab.followActiveTerminal === true && tab.linkedAssetId !== ref.assetId) {
+      store.setSidebarTabAsset(tab.id, ref);
+      toast.info(i18n.t("ai.sidebar.followSwitched", { name: ref.assetName }));
+    }
   }
 });
 

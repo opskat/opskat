@@ -41,3 +41,41 @@ describe("setSidebarTabFollow", () => {
     expect(tab?.linkedAssetId).toBe(5);
   });
 });
+
+describe("follow re-binds on active terminal switch", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useTabStore.setState({
+      tabs: [
+        { id: "t1", type: "terminal", label: "web", meta: { assetId: 5, assetName: "web" } } as any,
+        { id: "t2", type: "terminal", label: "cache", meta: { assetId: 9, assetName: "cache" } } as any,
+      ],
+      activeTabId: "t1",
+    });
+    useAIStore.setState({
+      sidebarTabs: [mkTab({ id: "s1", followActiveTerminal: true, linkedAssetId: 5 }) as any],
+      activeSidebarTabId: "s1",
+    });
+  });
+
+  it("rebinds a follow-on conversation when the active tab changes", () => {
+    useTabStore.setState({ activeTabId: "t2" }); // 触发订阅
+    const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
+    expect(tab?.linkedAssetId).toBe(9);
+    expect(tab?.linkedAssetName).toBe("cache");
+  });
+
+  it("does not rebind a conversation without follow", () => {
+    useAIStore.setState({ sidebarTabs: [mkTab({ id: "s1", followActiveTerminal: false, linkedAssetId: 5 }) as any] });
+    useTabStore.setState({ activeTabId: "t2" });
+    const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
+    expect(tab?.linkedAssetId).toBe(5);
+  });
+
+  it("ignores switches to a tab without an asset", () => {
+    useTabStore.setState({ tabs: [...useTabStore.getState().tabs, { id: "p1", type: "page", label: "P", meta: { type: "page" } } as any] });
+    useTabStore.setState({ activeTabId: "p1" });
+    const tab = useAIStore.getState().sidebarTabs.find((t) => t.id === "s1");
+    expect(tab?.linkedAssetId).toBe(5); // 保留上次
+  });
+});

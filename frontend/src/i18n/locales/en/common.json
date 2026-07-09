@@ -1048,7 +1048,8 @@
         "clear": "Clear",
         "unbound": "Not linked",
         "pickPlaceholder": "Choose an asset"
-      }
+      },
+      "followSwitched": "Following → {{name}}"
     }
   },
   "shortcut": {

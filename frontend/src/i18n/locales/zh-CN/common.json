@@ -1048,7 +1048,8 @@
         "clear": "清除",
         "unbound": "未绑定",
         "pickPlaceholder": "选择要绑定的资产"
-      }
+      },
+      "followSwitched": "已跟随切换到 {{name}}"
     }
   },
   "shortcut": {
