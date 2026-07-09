@@ -2,6 +2,7 @@ import { LoaderCircle, X, ChevronsRight, ChevronsLeft, Plus } from "lucide-react
 import { cn, Button, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@opskat/ui";
 import { useTranslation } from "react-i18next";
 import type { SidebarAITab, SidebarTabStatus } from "@/stores/aiStore";
+import { getAssetType, type AssetTypeDefinition } from "@/lib/assetTypes";
 import { getSessionIconColor, getSessionIconLetter } from "./sessionIconColor";
 
 interface SideAssistantTabBarProps {
@@ -21,6 +22,18 @@ const statusDotColor: Record<Exclude<SidebarTabStatus, null>, string> = {
   done: "bg-success",
   error: "bg-destructive",
 };
+
+/** 头像内容：绑定资产且类型可识别 → 渲染资产图标；否则回退标题首字。两处渲染（折叠/展开）复用。 */
+function renderAvatarContent(tabId: string, AssetIcon: AssetTypeDefinition["icon"] | undefined, letter: string) {
+  if (AssetIcon) {
+    return (
+      <span data-testid={`session-asset-icon-${tabId}`}>
+        <AssetIcon className="h-3.5 w-3.5" />
+      </span>
+    );
+  }
+  return letter;
+}
 
 export function SideAssistantTabBar({
   tabs,
@@ -87,6 +100,7 @@ export function SideAssistantTabBar({
             const isBlank = tab.conversationId == null;
             const letter = isBlank ? "?" : getSessionIconLetter(titleText);
             const color = isBlank ? null : getSessionIconColor(titleText);
+            const AssetIcon = tab.linkedAssetType ? getAssetType(tab.linkedAssetType)?.icon : undefined;
             const statusSuffix = status ? ` · ${t(`ai.sidebar.statusSuffix.${status}`)}` : "";
 
             const handleAuxClick = (e: React.MouseEvent) => {
@@ -115,7 +129,7 @@ export function SideAssistantTabBar({
                         )}
                         style={color ? { background: color.bg, color: color.fg } : undefined}
                       >
-                        {letter}
+                        {renderAvatarContent(tab.id, AssetIcon, letter)}
                         {status && (
                           <span
                             className={cn(
@@ -179,7 +193,7 @@ export function SideAssistantTabBar({
                     )}
                     style={color ? { background: color.bg, color: color.fg } : undefined}
                   >
-                    {letter}
+                    {renderAvatarContent(tab.id, AssetIcon, letter)}
                     {status === "running" ? (
                       <LoaderCircle
                         aria-hidden="true"
