@@ -22,12 +22,29 @@ import (
 	"github.com/opskat/opskat/internal/pkg/proxychain"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
+	rdpclient "github.com/x90skysn3k/grdp/client"
 	"go.uber.org/zap"
 )
 
+type rdpAuthenticator interface {
+	Authenticate(ctx context.Context, address, username, password string) error
+}
+
+type grdpAuthenticator struct{}
+
+func (grdpAuthenticator) Authenticate(ctx context.Context, address, username, password string) error {
+	client := &rdpclient.RdpClient{}
+	defer client.Close()
+	if err := client.LoginAuthOnly(ctx, address, username, password); err != nil {
+		return fmt.Errorf("RDP 凭据认证失败: %w", err)
+	}
+	return nil
+}
+
 type Manager struct {
-	assetRepo asset_repo.AssetRepo
-	resolver  *credential_resolver.Resolver
+	assetRepo        asset_repo.AssetRepo
+	resolver         *credential_resolver.Resolver
+	rdpAuthenticator rdpAuthenticator
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -62,10 +79,26 @@ func NewManager(repo asset_repo.AssetRepo) *Manager {
 		repo = asset_repo.Asset()
 	}
 	return &Manager{
-		assetRepo: repo,
-		resolver:  credential_resolver.Default(),
-		sessions:  make(map[string]*Session),
+		assetRepo:        repo,
+		resolver:         credential_resolver.Default(),
+		rdpAuthenticator: grdpAuthenticator{},
+		sessions:         make(map[string]*Session),
 	}
+}
+
+func (m *Manager) TestRDPAuthentication(
+	ctx context.Context,
+	target string,
+	layers []proxychain.Layer,
+	username string,
+	password string,
+) error {
+	forward, err := startTCPForward(ctx, target, layers)
+	if err != nil {
+		return fmt.Errorf("启动 RDP 测试代理转发失败: %w", err)
+	}
+	defer forward.Close()
+	return m.rdpAuthenticator.Authenticate(ctx, forward.Addr(), username, password)
 }
 
 func (m *Manager) Connect(ctx context.Context, assetID int64, opts ConnectOptions) (*Session, error) {

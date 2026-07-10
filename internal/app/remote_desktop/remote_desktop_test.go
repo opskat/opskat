@@ -82,6 +82,50 @@ func TestVerifyVNCAuthNegotiatesRealVNC5AsRFB38(t *testing.T) {
 	}
 }
 
+func TestVerifyVNCAuthRejectsConfiguredPasswordWhenServerOffersNoAuthentication(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = server.Close() }()
+	errCh := make(chan error, 1)
+	go func() {
+		defer func() { _ = server.Close() }()
+		if _, err := server.Write([]byte("RFB 003.008\n")); err != nil {
+			errCh <- err
+			return
+		}
+		clientVersion := make([]byte, 12)
+		if _, err := io.ReadFull(server, clientVersion); err != nil {
+			errCh <- err
+			return
+		}
+		if _, err := server.Write([]byte{1, 1}); err != nil {
+			errCh <- err
+			return
+		}
+		selected := make([]byte, 1)
+		if _, err := io.ReadFull(server, selected); err != nil {
+			errCh <- nil
+			return
+		}
+		if _, err := server.Write(make([]byte, 4)); err != nil {
+			errCh <- err
+			return
+		}
+		clientInit := make([]byte, 1)
+		_, err := io.ReadFull(server, clientInit)
+		errCh <- err
+	}()
+
+	err := verifyVNCAuth(client, "wrong-password")
+	_ = client.Close()
+	if err == nil {
+		t.Fatal("expected password validation error when server does not offer VNC password authentication")
+	}
+	if serverErr := <-errCh; serverErr != nil {
+		t.Fatalf("server failed: %v", serverErr)
+	}
+}
+
 func TestVNCConnectionStopsWhenContextExpiresDuringHandshake(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

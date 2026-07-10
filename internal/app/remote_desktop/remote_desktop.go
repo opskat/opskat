@@ -75,26 +75,43 @@ func (r *RemoteDesktop) TestRemoteDesktopConnection(assetType, configJSON string
 	return r.testRDPConnection(r.ctx, configJSON, "")
 }
 
-func (r *RemoteDesktop) testRDPConnection(ctx context.Context, configJSON, _ string) error {
-	var raw map[string]any
-	if err := json.Unmarshal([]byte(configJSON), &raw); err != nil {
+func (r *RemoteDesktop) testRDPConnection(ctx context.Context, configJSON, plainPassword string) error {
+	var cfg asset_entity.RDPConfig
+	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 		return fmt.Errorf("远程桌面配置无效: %w", err)
 	}
-	host, _ := raw["host"].(string)
-	if strings.TrimSpace(host) == "" {
+	if strings.TrimSpace(cfg.Host) == "" {
 		return fmt.Errorf("主机地址不能为空")
 	}
-	port := intFromAny(raw["port"])
-	if port <= 0 || port > 65535 {
+	if cfg.Port <= 0 || cfg.Port > 65535 {
 		return fmt.Errorf("端口无效")
 	}
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, fmt.Sprintf("%d", port)))
+	if strings.TrimSpace(cfg.Username) == "" {
+		return fmt.Errorf("用户名不能为空")
+	}
+	password := plainPassword
+	if password == "" {
+		resolved, err := credential_resolver.Default().ResolvePasswordGeneric(ctx, &cfg)
+		if err != nil {
+			return err
+		}
+		password = resolved
+	}
+	layers, err := credential_resolver.Default().ResolveProxyChain(ctx, cfg.ProxyChain, 5)
 	if err != nil {
 		return err
 	}
-	_ = conn.Close()
-	return nil
+	username := cfg.Username
+	if cfg.Domain != "" {
+		username = cfg.Domain + "\\" + cfg.Username
+	}
+	return r.manager.TestRDPAuthentication(
+		ctx,
+		net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port)),
+		layers,
+		username,
+		password,
+	)
 }
 
 func (r *RemoteDesktop) testVNCConnection(ctx context.Context, configJSON, plainPassword string) error {
@@ -185,6 +202,9 @@ func verifyVNCAuth33(conn net.Conn, password string) error {
 	case 0:
 		return readVNCSecurityFailure(conn)
 	case 1:
+		if password != "" {
+			return fmt.Errorf("VNC 服务端未启用密码认证，无法验证当前密码")
+		}
 		return sendVNCClientInit(conn)
 	case 2:
 		return verifyVNCPasswordAuth(conn, password)
@@ -206,14 +226,25 @@ func verifyVNCAuth38(conn net.Conn, password string) error {
 		return fmt.Errorf("读取 VNC 安全类型列表失败: %w", err)
 	}
 	selected := byte(0)
+	hasNone := false
+	hasPassword := false
 	for _, typ := range types {
 		if typ == 2 {
-			selected = 2
-			break
+			hasPassword = true
 		}
-		if typ == 1 && selected == 0 {
-			selected = 1
+		if typ == 1 {
+			hasNone = true
 		}
+	}
+	if password != "" {
+		if !hasPassword {
+			return fmt.Errorf("VNC 服务端未启用密码认证，无法验证当前密码")
+		}
+		selected = 2
+	} else if hasNone {
+		selected = 1
+	} else if hasPassword {
+		selected = 2
 	}
 	if selected == 0 {
 		return fmt.Errorf("不支持的 VNC 安全类型: %v", types)
@@ -318,17 +349,4 @@ func reverseBits(b byte) byte {
 	b = (b&0xf0)>>4 | (b&0x0f)<<4
 	b = (b&0xcc)>>2 | (b&0x33)<<2
 	return (b&0xaa)>>1 | (b&0x55)<<1
-}
-
-func intFromAny(v any) int {
-	switch x := v.(type) {
-	case float64:
-		return int(x)
-	case int:
-		return x
-	case int64:
-		return int(x)
-	default:
-		return 0
-	}
 }
