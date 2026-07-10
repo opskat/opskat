@@ -1,5 +1,6 @@
 import { type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { Info } from "lucide-react";
 import { Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch, Textarea } from "@opskat/ui";
 import { Field, FieldLabel, Segmented } from "@/components/asset/fields";
 import type { UseAssetCredential } from "@/components/asset/useAssetCredential";
@@ -38,7 +39,8 @@ export type FieldDesc<S> = WithVisibility<S> &
         width?: string;
         testid?: string;
       }
-    | { kind: "switch"; key: keyof S; label: string }
+    | { kind: "switch"; key: keyof S; label: string; description?: string }
+    | { kind: "note"; text: string }
     | { kind: "select"; key: keyof S; label: string; options: { value: string; label: string }[]; testid?: string }
     | {
         kind: "segmented";
@@ -134,9 +136,22 @@ function FieldNode<S>({
 
     case "switch":
       return (
-        <div className="flex items-center justify-between">
-          <FieldLabel>{t(field.label)}</FieldLabel>
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <FieldLabel>{t(field.label)}</FieldLabel>
+            {field.description && (
+              <span className="text-[11px] leading-snug text-muted-foreground/70">{t(field.description)}</span>
+            )}
+          </div>
           <Switch checked={!!state[field.key]} onCheckedChange={(v) => patch({ [field.key]: v } as Partial<S>)} />
+        </div>
+      );
+
+    case "note":
+      return (
+        <div className="flex items-center gap-1.5 text-[11px] leading-snug text-muted-foreground/70">
+          <Info className="h-3 w-3 shrink-0" />
+          <span>{t(field.text)}</span>
         </div>
       );
 

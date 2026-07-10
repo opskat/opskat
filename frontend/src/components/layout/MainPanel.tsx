@@ -160,7 +160,7 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
           case "rdp": {
             const rdpAsset = meta.assetId ? assets.find((a) => a.ID === meta.assetId) : null;
             if (!rdpAsset) return null;
-            return <RDPPanel asset={rdpAsset} />;
+            return <RDPPanel asset={rdpAsset} onEdit={() => onEditAsset(rdpAsset)} />;
           }
           default:
             if (meta.extensionName) {

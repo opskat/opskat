@@ -106,7 +106,8 @@ export const RDPConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
             { kind: "number", key: "height", label: "asset.rdpHeight", min: 480, width: "flex-1", testid: "rdp-height-input" },
           ],
         },
-        { kind: "switch", key: "clipboard", label: "asset.rdpClipboard" },
+        { kind: "note", text: "asset.rdpResolutionHint" },
+        { kind: "switch", key: "clipboard", label: "asset.rdpClipboardSync", description: "asset.rdpClipboardHint" },
       ],
     },
   ];
