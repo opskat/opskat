@@ -36,11 +36,11 @@ func clipboardFilesFromPaths(paths []string) ([]rdp.ClipboardFile, error) {
 			Size:    info.Size(),
 			ModTime: info.ModTime(),
 			ReadRange: func(offset int64, length int) ([]byte, error) {
-				file, err := os.Open(localPath)
+				file, err := os.Open(localPath) //nolint:gosec // path from the local clipboard file list
 				if err != nil {
 					return nil, err
 				}
-				defer file.Close()
+				defer func() { _ = file.Close() }()
 				data := make([]byte, length)
 				_, err = file.ReadAt(data, offset)
 				return data, err
@@ -120,11 +120,11 @@ func (s *Service) receiveClipboardFiles(log *zap.Logger, sess *session, descript
 }
 
 func receiveClipboardFile(sess *session, listIndex uint32, descriptor rdp.ClipboardFileDescriptor, path string) error {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // path is filepath.Base sanitized and joined to a private temp dir
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	const chunkSize = uint32(1024 * 1024)
 	streamID := listIndex + 1
 	for offset := int64(0); offset < descriptor.Size; {

@@ -1,24 +1,7 @@
 import { useTranslation } from "react-i18next";
+import { crumbSegments } from "@/lib/ossPrefixTree";
 import { Button } from "@opskat/ui";
 import { RefreshCw, Upload, List, LayoutGrid, FolderPlus } from "lucide-react";
-
-export interface OssCrumb {
-  label: string;
-  prefix: string;
-  isCurrent: boolean;
-}
-
-/** bucket + "a/b/" -> [bucket(""), a("a/"), b("a/b/")]，最后一段为当前。 */
-export function crumbSegments(bucket: string, prefix: string): OssCrumb[] {
-  const parts = prefix.split("/").filter(Boolean);
-  const crumbs: OssCrumb[] = [{ label: bucket, prefix: "", isCurrent: parts.length === 0 }];
-  let acc = "";
-  parts.forEach((part, i) => {
-    acc += `${part}/`;
-    crumbs.push({ label: part, prefix: acc, isCurrent: i === parts.length - 1 });
-  });
-  return crumbs;
-}
 
 export interface OSSBreadcrumbProps {
   bucket: string;

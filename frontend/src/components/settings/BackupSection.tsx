@@ -205,7 +205,10 @@ export function BackupSection() {
   }, [ghToken]);
 
   useEffect(() => {
-    loadGists();
+    // 加载体的 setState 均在 await 之后,经 async 边界调用避免 effect 内同步 setState
+    void (async () => {
+      await loadGists();
+    })();
   }, [loadGists]);
 
   useEffect(() => {
@@ -254,7 +257,10 @@ export function BackupSection() {
   }, [webdavConfigured]);
 
   useEffect(() => {
-    loadWebDAVBackups();
+    // 同上:经 async 边界调用
+    void (async () => {
+      await loadWebDAVBackups();
+    })();
   }, [loadWebDAVBackups]);
 
   const applyImportResult = useCallback(

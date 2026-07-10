@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
@@ -29,8 +29,10 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
   const [passphrase, setPassphrase] = useState("");
   const [overwrite, setOverwrite] = useState(false);
 
-  // 当 preview 变化时重置选择（默认选中所有不存在的）
-  useMemo(() => {
+  // 当 preview 变化时重置选择（默认选中所有不存在的）：渲染期对比上次值，等价于原 [preview] effect
+  const [prevPreview, setPrevPreview] = useState<import_svc.PreviewResult | null>(null);
+  if (preview !== prevPreview) {
+    setPrevPreview(preview);
     if (preview) {
       const defaultSelected = new Set<number>();
       for (const item of preview.items || []) {
@@ -45,7 +47,7 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
       const groups = new Set(["__ungrouped__", ...(preview.groups || []).map((g) => g.id)]);
       setExpandedGroups(groups);
     }
-  }, [preview]);
+  }
 
   if (!preview) return null;
 

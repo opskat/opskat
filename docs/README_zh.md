@@ -9,7 +9,7 @@ OpsKat
 
 <p align="center">
 <b>一站式服务器运维工作台</b><br/>
-SSH、数据库、Redis、Kafka、Kubernetes…… 运维要碰的一切，统一在一个跨平台桌面应用里。还能让 AI 用自然语言替你执行，每一步都有策略与审计护航。
+SSH 与 RDP、数据库、对象存储、Redis、Kafka、Kubernetes…… 运维要碰的一切，统一在一个跨平台桌面应用里。支持的操作还能让 AI 用自然语言替你执行，并按各条路径应用相应的策略、审批与审计控制。
 </p>
 
 <p align="center">
@@ -42,7 +42,7 @@ SSH、数据库、Redis、Kafka、Kubernetes…… 运维要碰的一切，统�
 
 管服务器平时要在一堆工具之间来回切：SSH 客户端、数据库 GUI、Redis 管理器、Kafka 控制台…… OpsKat 把这些常用的资产操作收进同一个界面，一个应用就够了——光是这样，它就已经是个完整的运维工作台。
 
-在这之上再加一层 AI：直接用自然语言说需求，AI Agent 就替你连上去执行，查日志、跑 SQL、看集群状态都能交给它。每一步都有策略管控和完整审计日志兜底，放权给 AI 也安心。
+在这之上再加一层 AI：直接用自然语言说需求，AI Agent 可通过已注册工具查日志、跑 SQL、看集群状态等。适用的操作会经过各自的策略与审批路径，工具调用则记录审计轨迹和可用的决策上下文。
 
 **如果觉得有用，求个 Star ⭐ 这是对我们最大的支持！**
 
@@ -54,17 +54,18 @@ SSH、数据库、Redis、Kafka、Kubernetes…… 运维要碰的一切，统�
 
 ### 首次使用
 
-1. **添加资产** —— SSH 主机、数据库、Redis 等，也可以从 SSH config / Tabby 导入。
-2. **连接** —— 打开终端、跑查询，或浏览 Key 与集合。
+1. **添加资产** —— SSH/RDP 主机、数据库、对象存储、Redis 等，也可以从 SSH config / Tabby / WindTerm 导入。
+2. **连接** —— 打开终端或远程桌面、跑查询，或浏览 Key、集合、Bucket 与对象。
 3. *（可选）* **配置 AI 服务商**，然后直接跟 AI 说你想做什么。
 
 ## 📦 支持的资产
 
 | 分类 | 资产 |
 | :-- | :-- |
-| **服务器** | <img src="https://img.shields.io/badge/SSH-4D4D4D?style=flat-square&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxyZWN0IHdpZHRoPSIyMCIgaGVpZ2h0PSIxNCIgeD0iMiIgeT0iMyIgcng9IjIiLz48bGluZSB4MT0iOCIgeDI9IjE2IiB5MT0iMjEiIHkyPSIyMSIvPjxsaW5lIHgxPSIxMiIgeDI9IjEyIiB5MT0iMTciIHkyPSIyMSIvPjwvc3ZnPg%3D%3D" alt="SSH"> <img src="https://img.shields.io/badge/Serial-5A6B7B?style=flat-square&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxjaXJjbGUgY3g9IjEwIiBjeT0iNyIgcj0iMSIvPjxjaXJjbGUgY3g9IjQiIGN5PSIyMCIgcj0iMSIvPjxwYXRoIGQ9Ik00LjcgMTkuMyAxOSA1Ii8%2BPHBhdGggZD0ibTIxIDMtMyAxIDIgMloiLz48cGF0aCBkPSJNOS4yNiA3LjY4IDUgMTJsMiA1Ii8%2BPHBhdGggZD0ibTEwIDE0IDUgMiAzLjUtMy41Ii8%2BPHBhdGggZD0ibTE4IDEyIDEtMSAxIDEtMSAxWiIvPjwvc3ZnPg%3D%3D" alt="Serial"> |
+| **服务器 & 终端** | <img src="https://img.shields.io/badge/SSH-4D4D4D?style=flat-square" alt="SSH"> <img src="https://img.shields.io/badge/RDP-0078D4?style=flat-square" alt="RDP"> <img src="https://img.shields.io/badge/本地终端-5A6B7B?style=flat-square" alt="本地终端"> <img src="https://img.shields.io/badge/串口-5A6B7B?style=flat-square" alt="串口"> |
 | **数据库** | <img src="https://img.shields.io/badge/MySQL-4479A1?style=flat-square&logo=mysql&logoColor=white" alt="MySQL"> <img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL"> <img src="https://img.shields.io/badge/SQL_Server-CC2927?style=flat-square" alt="SQL Server"> <img src="https://img.shields.io/badge/SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite"> <img src="https://img.shields.io/badge/Redis-FF4438?style=flat-square&logo=redis&logoColor=white" alt="Redis"> <img src="https://img.shields.io/badge/MongoDB-47A248?style=flat-square&logo=mongodb&logoColor=white" alt="MongoDB"> <img src="https://img.shields.io/badge/etcd-419EDA?style=flat-square&logo=etcd&logoColor=white" alt="etcd"> |
 | **中间件** | <img src="https://img.shields.io/badge/Apache_Kafka-231F20?style=flat-square&logo=apachekafka&logoColor=white" alt="Kafka"> <img src="https://img.shields.io/badge/Kubernetes-326CE5?style=flat-square&logo=kubernetes&logoColor=white" alt="Kubernetes"> |
+| **对象存储** | <img src="https://img.shields.io/badge/S3_兼容对象存储-569A31?style=flat-square" alt="S3 兼容对象存储"> <img src="https://img.shields.io/badge/云厂商对象存储-2775CA?style=flat-square" alt="云厂商对象存储"> <img src="https://img.shields.io/badge/私有化_自托管-5A6B7B?style=flat-square" alt="私有化或自托管对象存储"> |
 
 _更多资产类型将通过插件模式持续扩展。_
 
@@ -74,15 +75,17 @@ _更多资产类型将通过插件模式持续扩展。_
 
 - 树形分组管理所有支持的资产类型
 - 分屏终端，自定义主题
+- 内置 RDP 远程桌面，支持适应/实际尺寸、全屏、特殊按键与文本/文件剪贴板同步
 - SFTP 文件浏览器
 - 跳板机链式连接
-- 数据库查询编辑器（MySQL/PostgreSQL，支持 SSH 隧道）
+- MySQL、PostgreSQL、SQL Server 与 SQLite 查询编辑器和数据浏览器
 - Redis 命令执行与 Key 浏览器
 - MongoDB 集合浏览与查询执行
 - Kafka 集群、Topic、消息、消费组、ACL、Schema Registry 和 Kafka Connect 管理
+- 对象存储浏览器，支持 Bucket/目录/对象浏览、上传下载、复制移动、删除、预览与预签名 URL
 - 端口转发、SOCKS 代理
 - 凭据加密存储
-- 从 SSH config / Tabby 导入
+- 从 SSH config / Tabby / WindTerm 导入
 
 ## 🤖 让 AI 替你操作
 

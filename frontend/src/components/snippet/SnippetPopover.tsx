@@ -101,13 +101,14 @@ export function SnippetPopover({
   }, [open, cacheKey, categoriesLoaded, loadCategories, fetchList]);
 
   // Invalidate cache if the cache-key changes while open (rare: same popover instance
-  // migrating between assets) — triggers re-fetch on next open or immediately if open.
+  // migrating between assets). The load-on-open effect above runs in the same commit
+  // and re-fetches immediately when open, or on next open otherwise — no second
+  // fetchList() call needed here (it would only start a duplicate, superseded request).
   useEffect(() => {
     if (cachedKeyRef.current && cachedKeyRef.current !== cacheKey) {
       cachedKeyRef.current = null;
-      if (open) void fetchList();
     }
-  }, [cacheKey, open, fetchList]);
+  }, [cacheKey]);
 
   const filtered = useMemo(() => items.filter((s) => matchesKeyword(s, keyword.trim())), [items, keyword]);
 

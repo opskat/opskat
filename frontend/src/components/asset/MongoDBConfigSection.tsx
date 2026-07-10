@@ -1,4 +1,3 @@
-import { forwardRef } from "react";
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
@@ -11,7 +10,7 @@ import {
   MONGODB_DEFAULTS,
   type MongoDBFormState,
 } from "./MongoDBConfigSection.config";
-import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 
 const MONGODB_GROUPS: ConfigGroupSchema<MongoDBFormState>[] = [
   {
@@ -81,10 +80,7 @@ const MONGODB_GROUPS: ConfigGroupSchema<MongoDBFormState>[] = [
   },
 ];
 
-export const MongoDBConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function MongoDBConfigSection(
-  { editAsset, onValidityChange },
-  ref
-) {
+export function MongoDBConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
   const cred = useAssetCredential(editAsset);
   const { state, patch } = useConfigSection<MongoDBFormState>({
     ref,
@@ -119,4 +115,4 @@ export const MongoDBConfigSection = forwardRef<AssetFormHandle, ConfigSectionPro
 
   const groups = buildConfigGroups(MONGODB_GROUPS, { state, patch, ctx: { cred, editAsset } });
   return <ConfigTabs groups={groups} />;
-});
+}

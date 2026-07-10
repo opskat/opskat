@@ -9,7 +9,7 @@
 Contributor docs describe a living codebase, so two classes of problem recur:
 
 - **Stale facts** — a package / file is renamed, a directory moves, a count changes, and the doc still shows the old value. Real example (**fixed alongside this guide**): `docs/DEVELOP.md` once placed the AI policy checkers as `command_policy.go` under `internal/ai/`; they actually live in **`internal/ai/policy/`**, and the SQL one is `query_policy.go` (there is no `command_policy.go` file; shell-command rules are in `command_rule.go` / `command_shell.go`).
-- **Branch / repo leakage** — something that only exists on a feature branch or in a sibling repo gets written as if already shipped on `main`. opskat sits next to two **independent** sibling repos, `../extensions` and `../agentre` (see memory [[reference_extensions_repo]] / [[reference_agentre_repo]]); uncommitted code in your checkout, or a sibling repo's design, is easy to mistake for something this repo already has. agentre is a downstream renamed fork of opskat — **don't port its code / design into opskat docs** (see [[feedback_no_agentre_port_into_opskat]]).
+- **Branch / repo leakage** — something that only exists on a feature branch or in a sibling repo gets written as if already shipped on `main`. opskat may sit next to independent sibling repositories such as `../extensions` or a downstream fork; uncommitted code in your checkout, or a sibling repo's design, is easy to mistake for something this repo already has. Do not port a sibling or downstream fork's code/design into opskat docs.
 
 **Rule of thumb: if you can't `git grep` it in committed code on this branch, don't write it.** Verify with git-aware commands (`git grep` / `git ls-files` / `git ls-tree`) — **not** bare `rg` / `ls`, which also match **untracked** files in the working tree, so feature-branch code you have locally but haven't committed to `main` masquerades as "shipped".
 
@@ -49,16 +49,16 @@ Verify each one against the code. Common claim types in opskat and how to check 
 | Claim in the docs | How to check |
 | --- | --- |
 | Backend layer / subsystem directory exists | `git ls-tree --name-only -d HEAD internal/` (then `git ls-files internal/<name>/` to confirm a subsystem, e.g. `sshpool` / `connpool` / `approval`) |
-| **Asset-type list** (N adapters) | `git grep -hn "Register(&" -- internal/assettype/*.go \| grep -v _test` — enumerate them one by one (ssh / database / redis / mongodb / kafka / k8s / etcd / serial), **don't hardcode a number**. Registration-based extension, no `switch assetType` |
+| **Asset-type list** (N adapters) | `git grep -hn "Register(&" -- internal/assettype/*.go \| grep -v _test` — enumerate the registered handlers (including interactive-only types such as RDP and OSS), **don't hardcode a number**. Registration-based extension, no `switch assetType` |
 | A file / package path exists **by exact name** | `git ls-files 'internal/ai/policy/*_policy.go'` — renamed / moved files are the **#1 drift source** (the `command_policy.go` trap above) |
-| AI dispatches extensions via a **single `exec_tool`** | `git grep -n "tool_handler_ext" -- internal/ai` (one `exec_tool` dispatcher, not one AI tool per extension; see [[feedback_ext_exec_single_tool]]) |
+| AI dispatches extensions via a **single `exec_tool`** | `git grep -n "tool_handler_ext" -- internal/ai` (one `exec_tool` dispatcher, not one AI tool per extension) |
 | Migration directory / count | `git ls-files 'migrations/*.go' \| grep -v _test \| wc -l` (enumerate; new migrations are **appended**, old files unchanged) |
 | Frontend stores (one per domain) | `git ls-files 'frontend/src/stores/*.ts' \| grep -v '\.test\.'` |
 | Locales (which / namespace) | `git ls-files 'frontend/src/i18n/locales/*/common.json'` — two, `zh-CN` / `en`; the i18next namespace is `common` |
 | A Make target exists | `git grep -nE '^<target>:' -- Makefile` (every `make x` referenced in the docs must be findable in `Makefile`) |
 | Soft delete via `Status`, not GORM | `git grep -n "StatusActive *=\|StatusDeleted *=" -- internal/model/entity` (`StatusActive=1` / `StatusDeleted=2`, defined in `asset_entity/asset.go`) |
 | Credential encryption | `git grep -niE "argon2\|gcm\|keychain" -- internal/service/credential_svc` (Argon2id + AES-256-GCM, master key in the OS keychain) — the encryption is in `credential_svc`; `internal/bootstrap` only resolves / injects the master key (`ResolveMasterKey`), so don't grep `bootstrap` alone and assume you found it |
-| Commit emoji convention | the emoji table in [`DEVELOP.md`](./DEVELOP.md#commit-message--gitmoji) is the canonical, self-standing list (don't tie it to any local skill); only a single commit intentionally linked to an issue ends with that issue as `#<number>` (plain commits, PR work, and PR / review-comment follow-ups do not need a `#xxx` suffix; generally use issue numbers, not PR numbers; see [[feedback_commit_issue_ref]]) |
+| Commit emoji convention | the emoji table in [`DEVELOP.md`](./DEVELOP.md#commit-message--gitmoji) is the canonical, self-standing list (don't tie it to any local skill); only a single commit intentionally linked to an issue ends with that issue as `#<number>` (plain commits, PR work, and PR / review-comment follow-ups do not need a `#xxx` suffix; generally use issue numbers, not PR numbers) |
 | Constructor / function signatures | open the file and compare parameter by parameter — no grep shortcut |
 | **Generated files** (wailsjs / mock / opsctl_bin) | see *Same name & generated* item 4 below — **don't** use `git ls-files` to check artifacts |
 

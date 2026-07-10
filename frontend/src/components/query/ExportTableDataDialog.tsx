@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Button,
@@ -164,22 +164,30 @@ export function ExportTableDataDialog({
   const [completed, setCompleted] = useState(false);
   const [logLines, setLogLines] = useState<string[]>([]);
 
-  useEffect(() => {
-    if (!open) return;
-    setFormat(initialFormat);
-    setSelectedColumns((prev) => {
-      const retained = prev.filter((column) => columns.includes(column));
-      return retained.length > 0 ? retained : columns;
-    });
-    setEncoding("utf-8");
-    setExportOptions({
-      ...defaultExportOptions,
-      fieldDelimiter: initialFormat === "tsv" ? "tab" : "comma",
-    });
-    setFilePath("");
-    setCompleted(false);
-    setLogLines([]);
-  }, [columns, initialFormat, open]);
+  // 打开(或 columns/initialFormat 变化)时回填导出选项:渲染期对比上次值,替代 effect 里的级联 setState。
+  const [prevSync, setPrevSync] = useState<{
+    open: boolean;
+    columns?: string[];
+    initialFormat?: TableExportFormat;
+  }>({ open: false });
+  if (open !== prevSync.open || columns !== prevSync.columns || initialFormat !== prevSync.initialFormat) {
+    setPrevSync({ open, columns, initialFormat });
+    if (open) {
+      setFormat(initialFormat);
+      setSelectedColumns((prev) => {
+        const retained = prev.filter((column) => columns.includes(column));
+        return retained.length > 0 ? retained : columns;
+      });
+      setEncoding("utf-8");
+      setExportOptions({
+        ...defaultExportOptions,
+        fieldDelimiter: initialFormat === "tsv" ? "tab" : "comma",
+      });
+      setFilePath("");
+      setCompleted(false);
+      setLogLines([]);
+    }
+  }
 
   const meta = exportMeta[format];
   const defaultFilename = useMemo(() => {

@@ -1,4 +1,4 @@
-import type { ForwardRefExoticComponent, RefAttributes } from "react";
+import type { ComponentType, Ref } from "react";
 import type { asset_entity } from "../../../wailsjs/go/models";
 
 /** 父壳交给每个 section 的共享横切助手；按类型需要逐步扩充(YAGNI)。 */
@@ -37,6 +37,8 @@ export interface SectionValidity {
 }
 
 export interface ConfigSectionProps {
+  /** 壳经此拿 AssetFormHandle(React 19:ref 即普通 prop)。 */
+  ref?: Ref<AssetFormHandle>;
   /** 编辑态回填来源;创建态为 undefined。 */
   editAsset?: asset_entity.Asset;
   ctx: AssetFormContext;
@@ -46,4 +48,4 @@ export interface ConfigSectionProps {
   onIconChange?: (icon: string) => void;
 }
 
-export type ConfigSectionComponent = ForwardRefExoticComponent<ConfigSectionProps & RefAttributes<AssetFormHandle>>;
+export type ConfigSectionComponent = ComponentType<ConfigSectionProps>;

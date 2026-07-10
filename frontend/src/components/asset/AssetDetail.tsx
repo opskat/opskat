@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pencil, Trash2, TerminalSquare, Loader2 } from "lucide-react";
 import Markdown from "react-markdown";
@@ -34,7 +34,10 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
   const [policyFields, setPolicyFields] = useState<Record<string, string[]>>({});
   const [policyGroups, setPolicyGroups] = useState<string[]>([]);
 
-  useEffect(() => {
+  // 资产切换 / 策略变化时回填本地编辑态：渲染期对比上次值，替代 effect 里的级联 setState。
+  const [prevSync, setPrevSync] = useState<{ id?: number; cmdPolicy?: string; type?: string }>({});
+  if (asset.ID !== prevSync.id || asset.CmdPolicy !== prevSync.cmdPolicy || asset.Type !== prevSync.type) {
+    setPrevSync({ id: asset.ID, cmdPolicy: asset.CmdPolicy, type: asset.Type });
     try {
       const parsed = JSON.parse(asset.CmdPolicy || "{}");
       setPolicyGroups(parsed.groups || []);
@@ -56,7 +59,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
       setPolicyFields({});
       setPolicyGroups([]);
     }
-  }, [asset.ID, asset.CmdPolicy, asset.Type]);
+  }
 
   const savePolicy = async (policyObj: Record<string, unknown>, groups?: string[]) => {
     // Remove empty arrays (except groups which is managed separately)

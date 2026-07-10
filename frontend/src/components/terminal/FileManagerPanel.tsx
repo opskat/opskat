@@ -262,11 +262,14 @@ export function FileManagerPanel({
     void loadDir(sessionSync.cwd);
   }, [currentPath, directoryFollowMode, isOpen, loadDir, sessionSync?.cwd, sessionSync?.cwdKnown]);
 
-  useEffect(() => {
+  // safePendingConflict 变化(含首次挂载)时弹出 pending 对话框:渲染期对比上次值,替代 effect 里的同步 setState
+  const [prevPendingConflict, setPrevPendingConflict] = useState<typeof safePendingConflict | undefined>(undefined);
+  if (safePendingConflict !== prevPendingConflict) {
+    setPrevPendingConflict(safePendingConflict);
     if (safePendingConflict) {
       setPendingDialogOpen(true);
     }
-  }, [safePendingConflict]);
+  }
 
   const doneUploadCount = tabTransfers.filter(
     (transfer) => transfer.status === "done" && transfer.direction === "upload"

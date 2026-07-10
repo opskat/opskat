@@ -254,7 +254,9 @@ export interface AssetTypeDefinition {
   category: AssetTypeCategory; // "servers" | "databases" | "middleware" | "extension"
   canConnect: boolean;
   canConnectInNewTab: boolean;
-  connectAction: "terminal" | "query";
+  connectAction: "terminal" | "query" | "page";
+  pageId?: string;
+  pageIcon?: string;
   canOpenFileManager?: boolean;
   DetailInfoCard: ComponentType<DetailInfoCardProps>;
   ConfigSection?: ConfigSectionComponent;
@@ -296,8 +298,9 @@ Useful patterns:
 - `ssh.ts`: `connectAction: "terminal"`, `canConnectInNewTab: true`, `canOpenFileManager: true`.
 - `serial.ts`: terminal transport type, `testable: true`, command-policy UI through `policyType: "ssh"`.
 - `local.ts`: no exposed policy and no Test button.
-- `k8s.ts`: aliases `["k8s", "kubernetes"]`, no Test button, opens a bespoke page through `App.tsx`.
+- `k8s.ts`: aliases `["k8s", "kubernetes"]`, no Test button, opens a bespoke page through `openAsset.ts`.
 - `database.ts`: aliases `["database", "mysql", "postgresql"]`; driver differences fold into the single `database` type.
+- `rdp.ts`: `connectAction: "page"` plus `pageId: "rdp"`; the generic open-asset path creates an asset-scoped page tab.
 
 The unavoidable shared edit is the side-effect import. `registerAssetType` only runs when the module is imported, so add this line to `src/lib/assetTypes/index.ts`:
 
@@ -500,9 +503,9 @@ The following surfaces still branch on type strings. A new type only needs these
 | --- | --- | --- | --- |
 | `internal/model/entity/asset_entity/asset.go` (`Validate`, `CanConnect`) | Built-in `AssetType*` cases | Entity validation and active/connectable checks | Every new built-in type with config validation or connectability |
 | `src/stores/terminalStore.ts` (`transportForAsset`) | `serial`, `local`, else `ssh` | Terminal transport kind | New terminal type whose transport is not SSH |
-| `src/stores/queryStore.ts` (`openQueryTab`, persistence rehydrate, `QueryTabMeta.assetType` union) | `database`, `redis`, `mongodb`, `kafka`, `k8s`, `etcd` (the full `QueryTabMeta.assetType` union) | Query tab metadata, config parsing, initial state, persisted restore | `connectAction: "query"` types that need query-store state |
-| `src/components/layout/MainPanel.tsx` | `database`, `redis`, `kafka`, `etcd`, else MongoDB | Which query panel renders | Types that need their own query panel |
-| `src/App.tsx` (`handleConnectAsset`) | `k8s` | Bespoke page tab (`k8s-cluster`) instead of generic connection | Types that need a bespoke page |
+| `src/stores/queryStore.ts` (`openQueryTab`, persistence rehydrate, `QueryTabMeta.assetType` union) | `database`, `redis`, `mongodb`, `kafka`, `k8s`, `etcd`, `oss` (the full `QueryTabMeta.assetType` union) | Query tab metadata, config parsing, initial state, persisted restore | `connectAction: "query"` types that need query-store state |
+| `src/components/layout/MainPanel.tsx` | `database`, `redis`, `kafka`, `etcd`, `oss`, else MongoDB | Which query panel renders | Types that need their own query panel |
+| `src/lib/openAsset.ts` | `k8s`; generic handling for registered `page` actions | Bespoke page tab (`k8s-cluster`) and registered asset-scoped pages such as RDP | Edit only when a page cannot use the generic `connectAction: "page"` + `pageId` path |
 | `src/App.tsx` (`handleOpenFileManager`) | `asset.Type !== "ssh"` early return | File-manager opening behavior; menu visibility is registered, but the handler is still SSH-only | Types that need SFTP/file-manager opening |
 | `src/components/asset/CommandPolicyCard.tsx` and `PolicyGroupManager.tsx` | `ssh`, `k8s`, `database`, `redis`, `mongodb`, and built-in tab keys | Policy editor tab mapping and labels | Types whose policy UI needs custom tab mapping or labels |
 | `src/components/ai/MentionList.tsx`, `ai/input/content.ts`, `lib/mentionXml.ts`, `lib/openMentionTarget.ts` | `database` | AI mention databases/tables | Types that need mention autocomplete/open behavior |

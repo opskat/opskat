@@ -6,7 +6,7 @@ This file is the single source of guidance for AI coding agents (Claude Code at 
 
 ## Project Overview
 
-OpsKat — AI-first desktop app for managing remote infra (SSH, MySQL/PostgreSQL, Redis, MongoDB, Kafka, K8s, etcd). **Wails v2** (Go 1.26 + React 19), IPC only — no HTTP API. Module: `github.com/opskat/opskat`.
+OpsKat — AI-first desktop app for managing remote infrastructure: terminals and remote desktops, databases, object storage, Redis, MongoDB, Kafka, Kubernetes, etcd, and more. **Wails v2** (Go 1.26 + React 19), IPC only — no HTTP API. Module: `github.com/opskat/opskat`.
 
 Extension source lives in the sibling repo `../extensions/`. For the architecture layering, subsystems, data, and frontend structure, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
+import { useEffect, useImperativeHandle, useState, type Ref } from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -16,16 +16,15 @@ const mockInputSpies = vi.hoisted(() => ({
 }));
 
 vi.mock("@/components/ai/AIChatInput", () => ({
-  AIChatInput: forwardRef(function MockAIChatInput(
-    {
-      onSubmit,
-      onEmptyChange,
-    }: {
-      onSubmit: (content: string) => void;
-      onEmptyChange?: (empty: boolean) => void;
-    },
-    ref
-  ) {
+  AIChatInput: function MockAIChatInput({
+    onSubmit,
+    onEmptyChange,
+    ref,
+  }: {
+    onSubmit: (content: string) => void;
+    onEmptyChange?: (empty: boolean) => void;
+    ref?: Ref<unknown>;
+  }) {
     const [value, setValue] = useState("");
 
     useEffect(() => {
@@ -62,7 +61,7 @@ vi.mock("@/components/ai/AIChatInput", () => ({
         </button>
       </div>
     );
-  }),
+  },
 }));
 
 const editButtonName = /ai\.editMessage|编辑消息|Edit message/i;

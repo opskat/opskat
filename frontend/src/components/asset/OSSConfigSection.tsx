@@ -1,4 +1,3 @@
-import { forwardRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { Field } from "@/components/asset/fields";
@@ -17,7 +16,7 @@ import {
   OSS_PROVIDER_LABEL_KEYS,
   type OSSFormState,
 } from "./OSSConfigSection.config";
-import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 
 /** 厂商下拉:选中即触发智能预填(endpoint/region/path-style)。逻辑走 providerPrefillPatch 纯函数,
  *  不在共享 configFields 里按厂商字符串分支(满足 OCP:扩展靠注册/纯函数,不改分发器)。 */
@@ -72,10 +71,7 @@ const OSS_GROUPS: ConfigGroupSchema<OSSFormState>[] = [
   },
 ];
 
-export const OSSConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function OSSConfigSection(
-  { editAsset, onValidityChange },
-  ref
-) {
+export function OSSConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
   // OSS 机密键是 secret_access_key(非通用 password),编辑态须显式映射,否则 inline 密文回填/保存会丢。
   const cred = useAssetCredential(editAsset, editAsset ? ossCredentialFragment(editAsset.Config) : undefined);
   const { state, patch } = useConfigSection<OSSFormState>({
@@ -101,4 +97,4 @@ export const OSSConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
 
   const groups = buildConfigGroups(OSS_GROUPS, { state, patch, ctx: { cred, editAsset } });
   return <ConfigTabs groups={groups} />;
-});
+}

@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
+import { useEffect, useImperativeHandle, useMemo, useRef, type Ref } from "react";
 import { Terminal as XTerminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -11,7 +11,7 @@ export interface K8sLogTerminalHandle {
   clear: () => void;
 }
 
-export const K8sLogTerminal = forwardRef<K8sLogTerminalHandle>(function K8sLogTerminal(_, ref) {
+export function K8sLogTerminal({ ref }: { ref?: Ref<K8sLogTerminalHandle> }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -81,4 +81,4 @@ export const K8sLogTerminal = forwardRef<K8sLogTerminalHandle>(function K8sLogTe
   }, [xtermTheme, fontSize, scrollback]);
 
   return <div ref={wrapperRef} className="flex-1 w-full rounded-lg overflow-hidden min-h-0" />;
-});
+}

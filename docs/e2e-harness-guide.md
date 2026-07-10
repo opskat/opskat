@@ -212,9 +212,9 @@ Everything above is **hermetic** — specs point assets at the in-harness mocks 
 only a **real** server can answer: a real SSH handshake and interactive shell, real
 SFTP/filesystem behavior, a protocol quirk the mock doesn't fake. For those, keep a
 gitignored **`.env`** at the repo root listing real verification targets, with
-**`.env.example`** as the committed template (one `# --- <type> ---` block per asset type —
-SSH / MySQL / PostgreSQL / Redis / MongoDB / etcd, plus OSS (`feature/oss-asset-type`) and RDP
-(`feature/rdp-gopher-poc`, PoC) for their branches).
+**`.env.example`** as the committed template (one `# --- <type> ---` block per real target
+currently covered by the template: SSH / MySQL / PostgreSQL / Redis / MongoDB / etcd / OSS /
+RDP).
 
 `.env` is **read by no app code** — the app never loads it. The e2e harness
 (`playwright.config.ts`) loads it into `process.env` when present, so a spec / your tooling reads

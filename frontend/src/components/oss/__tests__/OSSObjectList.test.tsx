@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
-import { OSSObjectList, formatBytes, shouldLoadNextPage } from "../OSSObjectList";
+import { OSSObjectList } from "../OSSObjectList";
+import { formatBytes } from "@/lib/formatBytes";
+import { shouldLoadNextPage } from "@/lib/ossListScroll";
 import type { oss_svc } from "../../../../wailsjs/go/models";
 
 function obj(key: string, size: number): oss_svc.ObjectItem {

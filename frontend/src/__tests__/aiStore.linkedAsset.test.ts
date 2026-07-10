@@ -6,6 +6,7 @@ import { useAIStore } from "../stores/aiStore";
 import { useAssetStore } from "../stores/assetStore";
 import { useTabStore, type Tab } from "../stores/tabStore";
 import { SendAIMessage } from "../../wailsjs/go/ai/AI";
+import { asset_entity } from "../../wailsjs/go/models";
 import { buildMentionXml } from "../lib/mentionXml";
 
 const terminalTab = (id: string, assetId: number, assetName: string): Tab => ({
@@ -146,7 +147,7 @@ describe("_sendForConversation includes linked asset in context", () => {
 
   it("includes open asset page tabs in the sent AI context", async () => {
     vi.mocked(SendAIMessage).mockResolvedValue(undefined);
-    useAssetStore.setState({ assets: [{ ID: 3, Name: "prod-k8s", Type: "k8s" } as any] });
+    useAssetStore.setState({ assets: [new asset_entity.Asset({ ID: 3, Name: "prod-k8s", Type: "k8s" })] });
     useTabStore.setState({
       tabs: [pageAssetTab("k8s-3", 3, "prod-k8s")],
       activeTabId: "k8s-3",

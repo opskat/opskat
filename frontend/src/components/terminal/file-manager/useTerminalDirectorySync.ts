@@ -1,4 +1,4 @@
-import { useCallback, type MutableRefObject } from "react";
+import { useCallback, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { ChangeSSHDirectory } from "../../../../wailsjs/go/ssh/SSH";
@@ -8,7 +8,7 @@ import { useTerminalStore, type TerminalDirectorySyncState } from "@/stores/term
 import { normalizeRemotePath } from "./utils";
 
 interface UseTerminalDirectorySyncOptions {
-  currentPathRef: MutableRefObject<string>;
+  currentPathRef: RefObject<string>;
   loadDir: (dirPath: string) => Promise<boolean>;
   sessionId: string;
   tabId: string;

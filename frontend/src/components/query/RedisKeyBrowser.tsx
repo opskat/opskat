@@ -272,6 +272,8 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
   }, [keyTree, treeExpanded, keySeparator]);
 
   const rowCount = viewMode === "tree" ? flatRows.length : visibleKeys.length;
+  // react-virtual 在渲染期返回可变实例,与 React Compiler 语义不兼容(上游库问题);启用 Compiler 前无代码级修复。
+  // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scrollRef.current,

@@ -72,7 +72,8 @@ function generatePassword(length = 20): string {
 export function CredentialManager() {
   const { t } = useTranslation();
   const [credentials, setCredentials] = useState<credential_entity.Credential[]>([]);
-  const [loading, setLoading] = useState(false);
+  // 挂载即拉取,loading 初值为 true;同步 setLoading(true) 只保留在事件路径(fetchCredentials)
+  const [loading, setLoading] = useState(true);
   const [generateOpen, setGenerateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [createPasswordOpen, setCreatePasswordOpen] = useState(false);
@@ -82,8 +83,7 @@ export function CredentialManager() {
   const [changePasswordCred, setChangePasswordCred] = useState<credential_entity.Credential | null>(null);
   const [changePassphraseCred, setChangePassphraseCred] = useState<credential_entity.Credential | null>(null);
 
-  const fetchCredentials = useCallback(async () => {
-    setLoading(true);
+  const loadCredentials = useCallback(async () => {
     try {
       const result = await ListCredentials();
       setCredentials(result || []);
@@ -92,9 +92,14 @@ export function CredentialManager() {
     }
   }, []);
 
+  const fetchCredentials = useCallback(() => {
+    setLoading(true);
+    void loadCredentials();
+  }, [loadCredentials]);
+
   useEffect(() => {
-    fetchCredentials();
-  }, [fetchCredentials]);
+    void loadCredentials();
+  }, [loadCredentials]);
 
   const handleDeleteClick = async (cred: credential_entity.Credential) => {
     try {
@@ -366,8 +371,9 @@ function GenerateKeyDialog({
   const [passphrase, setPassphrase] = useState("");
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    if (open) {
+  // 关闭时重置为默认值;所有关闭路径都经 handleOpenChange,下次打开即是干净状态
+  const handleOpenChange = (next: boolean) => {
+    if (!next) {
       setName("");
       setComment("");
       setUsername("");
@@ -375,14 +381,15 @@ function GenerateKeyDialog({
       setKeySize(4096);
       setPassphrase("");
     }
-  }, [open]);
+    onOpenChange(next);
+  };
 
   const handleGenerate = async () => {
     setSaving(true);
     try {
       await GenerateSSHKey(name, comment, keyType, keySize, passphrase, username);
       notifySuccess(t("sshKey.generateSuccess"));
-      onOpenChange(false);
+      handleOpenChange(false);
       onSuccess();
     } catch (e) {
       toast.error(String(e));
@@ -410,7 +417,7 @@ function GenerateKeyDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{t("sshKey.generateTitle")}</DialogTitle>
@@ -477,7 +484,7 @@ function GenerateKeyDialog({
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => handleOpenChange(false)}>
             {t("action.cancel")}
           </Button>
           <Button onClick={handleGenerate} disabled={saving || !name}>
@@ -512,8 +519,9 @@ function ImportKeyDialog({
   const [browserDragOver, setBrowserDragOver] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    if (open) {
+  // 关闭时重置为默认值;所有关闭路径都经 handleOpenChange,下次打开即是干净状态
+  const handleOpenChange = (next: boolean) => {
+    if (!next) {
       setName("");
       setComment("");
       setUsername("");
@@ -525,7 +533,8 @@ function ImportKeyDialog({
       setNativeDragOver(false);
       setBrowserDragOver(false);
     }
-  }, [open]);
+    onOpenChange(next);
+  };
 
   const setDefaultNameFromPath = useCallback((path: string) => {
     setName((current) => current || fileNameFromPath(path));
@@ -587,7 +596,7 @@ function ImportKeyDialog({
     try {
       await ImportSSHKeyPath(name, comment, selectedFile.path, passphrase, username);
       notifySuccess(t("sshKey.importSuccess"));
-      onOpenChange(false);
+      handleOpenChange(false);
       onSuccess();
     } catch (e) {
       toast.error(String(e));
@@ -601,7 +610,7 @@ function ImportKeyDialog({
     try {
       await ImportSSHKeyPEM(name, comment, pemContent, passphrase, username);
       notifySuccess(t("sshKey.importSuccess"));
-      onOpenChange(false);
+      handleOpenChange(false);
       onSuccess();
     } catch (e) {
       toast.error(String(e));
@@ -632,7 +641,7 @@ function ImportKeyDialog({
   const isDragOver = nativeDragOver || browserDragOver;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent size="md">
         <DialogHeader>
           <DialogTitle>{t("sshKey.importTitle")}</DialogTitle>
@@ -814,7 +823,7 @@ function ImportKeyDialog({
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => handleOpenChange(false)}>
             {t("action.cancel")}
           </Button>
           <Button onClick={mode === "file" ? handleImportFile : handleImportPEM} disabled={!canImport}>
@@ -891,22 +900,24 @@ function CreatePasswordDialog({
   const [saving, setSaving] = useState(false);
   const [visible, setVisible] = useState(false);
 
-  useEffect(() => {
-    if (open) {
+  // 关闭时重置为默认值;所有关闭路径都经 handleOpenChange,下次打开即是干净状态
+  const handleOpenChange = (next: boolean) => {
+    if (!next) {
       setName("");
       setUsername("");
       setPassword("");
       setDescription("");
       setVisible(false);
     }
-  }, [open]);
+    onOpenChange(next);
+  };
 
   const handleCreate = async () => {
     setSaving(true);
     try {
       await CreatePasswordCredential(name, username, password, description);
       notifySuccess(t("credential.createSuccess"));
-      onOpenChange(false);
+      handleOpenChange(false);
       onSuccess();
     } catch (e) {
       toast.error(String(e));
@@ -916,7 +927,7 @@ function CreatePasswordDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{t("credential.createPasswordTitle")}</DialogTitle>
@@ -984,7 +995,7 @@ function CreatePasswordDialog({
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => handleOpenChange(false)}>
             {t("action.cancel")}
           </Button>
           <Button onClick={handleCreate} disabled={saving || !name || !password}>
@@ -1014,14 +1025,19 @@ function EditCredentialDialog({
   const [username, setUsername] = useState("");
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
+  // 打开时从 credential 回填:渲染期对比上次值,等价于原 [open, credential] effect
+  const [prevSync, setPrevSync] = useState<{ open: boolean; credential?: credential_entity.Credential | null }>({
+    open: false,
+  });
+  if (open !== prevSync.open || credential !== prevSync.credential) {
+    setPrevSync({ open, credential });
     if (open && credential) {
       setName(credential.name);
       setComment(credential.comment || "");
       setDescription(credential.description || "");
       setUsername(credential.username || "");
     }
-  }, [open, credential]);
+  }
 
   const handleSave = async () => {
     if (!credential) return;
@@ -1124,12 +1140,14 @@ function ChangePasswordDialog({
   const [saving, setSaving] = useState(false);
   const [visible, setVisible] = useState(false);
 
-  useEffect(() => {
-    if (open) {
+  // 关闭时重置为默认值;所有关闭路径都经 handleOpenChange,下次打开即是干净状态
+  const handleOpenChange = (next: boolean) => {
+    if (!next) {
       setPassword("");
       setVisible(false);
     }
-  }, [open]);
+    onOpenChange(next);
+  };
 
   const handleSave = async () => {
     if (!credential) return;
@@ -1137,7 +1155,7 @@ function ChangePasswordDialog({
     try {
       await UpdateCredentialPassword(credential.id, password);
       notifySuccess(t("credential.passwordChanged"));
-      onOpenChange(false);
+      handleOpenChange(false);
       onSuccess();
     } catch (e) {
       toast.error(String(e));
@@ -1147,7 +1165,7 @@ function ChangePasswordDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{t("credential.changePasswordTitle")}</DialogTitle>
@@ -1191,7 +1209,7 @@ function ChangePasswordDialog({
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => handleOpenChange(false)}>
             {t("action.cancel")}
           </Button>
           <Button onClick={handleSave} disabled={saving || !password}>
@@ -1223,8 +1241,9 @@ function ChangePassphraseDialog({
   const [visibleNew, setVisibleNew] = useState(false);
   const [visibleConfirm, setVisibleConfirm] = useState(false);
 
-  useEffect(() => {
-    if (open) {
+  // 关闭时重置为默认值;所有关闭路径都经 handleOpenChange,下次打开即是干净状态
+  const handleOpenChange = (next: boolean) => {
+    if (!next) {
       setOldPassphrase("");
       setNewPassphrase("");
       setConfirmPassphrase("");
@@ -1232,7 +1251,8 @@ function ChangePassphraseDialog({
       setVisibleNew(false);
       setVisibleConfirm(false);
     }
-  }, [open]);
+    onOpenChange(next);
+  };
 
   const handleSave = async () => {
     if (!credential) return;
@@ -1244,7 +1264,7 @@ function ChangePassphraseDialog({
     try {
       await UpdateCredentialPassphrase(credential.id, oldPassphrase, newPassphrase);
       notifySuccess(t("sshKey.passphraseChanged"));
-      onOpenChange(false);
+      handleOpenChange(false);
       onSuccess();
     } catch (e) {
       toast.error(String(e));
@@ -1254,7 +1274,7 @@ function ChangePassphraseDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{t("sshKey.changePassphraseTitle")}</DialogTitle>
@@ -1326,7 +1346,7 @@ function ChangePassphraseDialog({
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => handleOpenChange(false)}>
             {t("action.cancel")}
           </Button>
           <Button onClick={handleSave} disabled={saving}>

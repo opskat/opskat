@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import {
@@ -32,21 +32,17 @@ export function GroupDialog({ open, onOpenChange, editGroup }: GroupDialogProps)
   const [icon, setIcon] = useState("folder");
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
+  // 打开(或换编辑对象)时回填表单:渲染期对比上次 open/editGroup,替代 effect 里的级联 setState。
+  const [prevSync, setPrevSync] = useState<{ open: boolean; editGroup?: group_entity.Group | null }>({ open: false });
+  if (open !== prevSync.open || editGroup !== prevSync.editGroup) {
+    setPrevSync({ open, editGroup });
     if (open) {
-      if (editGroup) {
-        setName(editGroup.Name);
-        setDescription(editGroup.Description || "");
-        setParentId(editGroup.ParentID || 0);
-        setIcon(editGroup.Icon || "folder");
-      } else {
-        setName("");
-        setDescription("");
-        setParentId(0);
-        setIcon("folder");
-      }
+      setName(editGroup?.Name ?? "");
+      setDescription(editGroup?.Description || "");
+      setParentId(editGroup?.ParentID || 0);
+      setIcon(editGroup?.Icon || "folder");
     }
-  }, [open, editGroup]);
+  }
 
   const handleSubmit = async () => {
     if (!name.trim()) return;

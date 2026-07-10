@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useMemo, useState } from "react";
+import { useImperativeHandle, useMemo, useState, type Ref } from "react";
 import { flushSync } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { Database, Server, Table2 } from "lucide-react";
@@ -24,6 +24,7 @@ export interface MentionItem {
 export interface MentionListProps {
   query: string;
   command: (item: MentionItem) => void;
+  ref?: Ref<MentionListRef>;
 }
 
 export interface MentionListRef {
@@ -160,7 +161,7 @@ function buildDatabaseMentionItems(activeTab: ActiveDatabaseTab | null, dbState:
   return out;
 }
 
-export const MentionList = forwardRef<MentionListRef, MentionListProps>(function MentionList({ query, command }, ref) {
+export function MentionList({ query, command, ref }: MentionListProps) {
   const { t } = useTranslation();
   const { assets, groups } = useAssetStore();
   const tabs = useTabStore((s) => s.tabs);
@@ -294,4 +295,4 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(function
       })}
     </div>
   );
-});
+}

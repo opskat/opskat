@@ -1,8 +1,8 @@
-import { forwardRef, useMemo } from "react";
+import { useMemo } from "react";
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
-import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
 import { resolveSaveProxyPassword } from "./proxyConfig";
@@ -14,10 +14,7 @@ import {
   type RDPFormState,
 } from "./RDPConfigSection.config";
 
-export const RDPConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function RDPConfigSection(
-  { editAsset, onValidityChange },
-  ref
-) {
+export function RDPConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
   const passwordCredentialConfig = useMemo(
     () => (editAsset ? parseRDPCredentialConfig(editAsset.Config) : undefined),
     [editAsset]
@@ -112,4 +109,4 @@ export const RDPConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
   ];
 
   return <ConfigTabs groups={buildConfigGroups(groups, { state, patch, ctx: { cred, editAsset } })} />;
-});
+}

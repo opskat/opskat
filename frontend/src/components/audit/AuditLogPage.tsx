@@ -115,45 +115,70 @@ export function AuditLogPage() {
     return 0;
   }, [timeRange, customEnd]);
 
-  const fetchLogs = useCallback(async () => {
-    setLoading(true);
-    try {
-      const startTime = computeStartTime();
-      const endTime = computeEndTime();
-      const result = await ListAuditLogs("", 0, startTime, endTime, page * PAGE_SIZE, PAGE_SIZE, sessionFilter);
-      setLogs(result?.items || []);
-      setTotal(result?.total || 0);
-    } finally {
-      setLoading(false);
-    }
+  // 查询并写入日志:setState 全部在 promise 回调中,effect 直接调用不会同步 setState
+  const loadLogs = useCallback(() => {
+    const startTime = computeStartTime();
+    const endTime = computeEndTime();
+    return ListAuditLogs("", 0, startTime, endTime, page * PAGE_SIZE, PAGE_SIZE, sessionFilter)
+      .then((result) => {
+        setLogs(result?.items || []);
+        setTotal(result?.total || 0);
+      })
+      .finally(() => {
+        setLoading(false);
+      });
   }, [sessionFilter, computeStartTime, computeEndTime, page]);
 
-  useEffect(() => {
-    fetchLogs();
-  }, [fetchLogs]);
+  // 手动刷新(事件路径):同步置 loading 后拉取
+  const fetchLogs = useCallback(() => {
+    setLoading(true);
+    return loadLogs();
+  }, [loadLogs]);
 
-  // 加载会话列表
-  const fetchSessions = useCallback(async () => {
-    try {
-      const startTime = computeStartTime();
-      const result = await ListAuditSessions(startTime);
-      setSessions(result || []);
-    } catch {
-      setSessions([]);
-    }
+  // 查询条件变化(含首次挂载)时在渲染期置 loading,对比键覆盖 loadLogs 的全部输入
+  const [prevQuery, setPrevQuery] = useState<{
+    sessionFilter: string;
+    timeRange: string;
+    customStart: string;
+    customEnd: string;
+    page: number;
+  } | null>(null);
+  if (
+    prevQuery === null ||
+    prevQuery.sessionFilter !== sessionFilter ||
+    prevQuery.timeRange !== timeRange ||
+    prevQuery.customStart !== customStart ||
+    prevQuery.customEnd !== customEnd ||
+    prevQuery.page !== page
+  ) {
+    setPrevQuery({ sessionFilter, timeRange, customStart, customEnd, page });
+    setLoading(true);
+  }
+
+  useEffect(() => {
+    void loadLogs();
+  }, [loadLogs]);
+
+  // 加载会话列表:async 体定义在 effect 内,setState 都发生在 await 之后
+  useEffect(() => {
+    const fetchSessions = async () => {
+      try {
+        const startTime = computeStartTime();
+        const result = await ListAuditSessions(startTime);
+        setSessions(result || []);
+      } catch {
+        setSessions([]);
+      }
+    };
+    void fetchSessions();
   }, [computeStartTime]);
 
-  useEffect(() => {
-    fetchSessions();
-  }, [fetchSessions]);
-
-  const fetchPool = useCallback(async () => {
-    try {
-      const entries = await GetSSHPoolConnections();
-      setPoolEntries(entries || []);
-    } catch {
-      setPoolEntries([]);
-    }
+  // 拉取连接池:setState 在 promise 回调中,effect 与刷新按钮共用
+  const fetchPool = useCallback(() => {
+    return GetSSHPoolConnections().then(
+      (entries) => setPoolEntries(entries || []),
+      () => setPoolEntries([])
+    );
   }, []);
 
   useEffect(() => {

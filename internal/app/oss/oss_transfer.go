@@ -49,7 +49,7 @@ func (o *OSS) emitTerminal(transferID string, err error) {
 		logger.Ctx(o.ctx).Info("oss transfer end", zap.String("transferId", transferID))
 		o.emitProgress(transferID, transfer.Progress{TransferID: transferID, Status: transfer.StatusDone})
 	case errors.Is(err, context.Canceled):
-		logger.Ctx(o.ctx).Info("oss transfer cancelled", zap.String("transferId", transferID))
+		logger.Ctx(o.ctx).Info("oss transfer canceled", zap.String("transferId", transferID))
 		o.emitProgress(transferID, transfer.Progress{TransferID: transferID, Status: transfer.StatusCancelled})
 	default:
 		logger.Ctx(o.ctx).Error("oss transfer fail", zap.String("transferId", transferID), zap.Error(err))

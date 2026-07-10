@@ -1,8 +1,8 @@
-import { useEffect, useState, type MutableRefObject, type RefObject } from "react";
+import { useEffect, useState, type RefObject } from "react";
 import { registerFileManagerDropTarget } from "../terminalFileDropCoordinator";
 
 interface UseNativeFileDropOptions {
-  currentPathRef: MutableRefObject<string>;
+  currentPathRef: RefObject<string>;
   isActive: boolean;
   isOpen: boolean;
   panelRef: RefObject<HTMLDivElement | null>;

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { tabToAssetRef } from "../tabAsset";
+import { asset_entity } from "../../../wailsjs/go/models";
 import type { Tab } from "@/stores/tabStore";
 
 const terminalTab: Tab = {
@@ -67,7 +68,7 @@ describe("tabToAssetRef", () => {
     });
   });
   it("maps an asset page tab using the matching asset", () => {
-    expect(tabToAssetRef(k8sPageTab, [{ ID: 3, Name: "prod-k8s", Type: "k8s" } as any])).toEqual({
+    expect(tabToAssetRef(k8sPageTab, [new asset_entity.Asset({ ID: 3, Name: "prod-k8s", Type: "k8s" })])).toEqual({
       assetId: 3,
       assetName: "prod-k8s",
       assetType: "k8s",

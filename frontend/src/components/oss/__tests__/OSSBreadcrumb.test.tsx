@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { OSSBreadcrumb, crumbSegments } from "../OSSBreadcrumb";
+import { OSSBreadcrumb } from "../OSSBreadcrumb";
+import { crumbSegments } from "@/lib/ossPrefixTree";
 
 describe("crumbSegments", () => {
   it("returns only the bucket crumb at the root", () => {

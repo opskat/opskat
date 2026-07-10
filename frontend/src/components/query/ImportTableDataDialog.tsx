@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   AlertDialog,
@@ -267,39 +267,46 @@ export function ImportTableDataDialog({
     seconds: 0,
   });
 
-  useEffect(() => {
-    if (!open) return;
-    setStepIndex(0);
-    setSources([]);
-    setUrlDraft("");
-    setLogLines([]);
-    setProgress({ processed: 0, added: 0, updated: 0, deleted: 0, error: 0, seconds: 0 });
-    setPrimaryKeys(new Set(tablePrimaryKeys ?? []));
-    setImportMode("append");
-    setAdvancedOpen(false);
-    setExtendedInsert(true);
-    setMaxStatementSizeKb(1024);
-    setEmptyStringAsNull(false);
-    setIgnoreForeignKeyConstraint(false);
-    setContinueOnError(true);
-    setRecordDelimiter("auto");
-    setTextQualifier('"');
-    setDateOrder("dmy");
-    setDateTimeOrder("date-time");
-    setDateDelimiter("/");
-    setYearDelimiterEnabled(false);
-    setYearDelimiter("/");
-    setTimeDelimiter(":");
-    setDecimalSymbol(".");
-    setBinaryEncoding("base64");
-  }, [open, tablePrimaryKeys]);
+  // 打开(或表主键变化)时重置向导并回填主键:渲染期对比上次值,替代 effect 里的级联 setState。
+  const [prevOpenSync, setPrevOpenSync] = useState<{ open: boolean; tablePrimaryKeys?: string[] }>({ open: false });
+  if (open !== prevOpenSync.open || tablePrimaryKeys !== prevOpenSync.tablePrimaryKeys) {
+    setPrevOpenSync({ open, tablePrimaryKeys });
+    if (open) {
+      setStepIndex(0);
+      setSources([]);
+      setUrlDraft("");
+      setLogLines([]);
+      setProgress({ processed: 0, added: 0, updated: 0, deleted: 0, error: 0, seconds: 0 });
+      setPrimaryKeys(new Set(tablePrimaryKeys ?? []));
+      setImportMode("append");
+      setAdvancedOpen(false);
+      setExtendedInsert(true);
+      setMaxStatementSizeKb(1024);
+      setEmptyStringAsNull(false);
+      setIgnoreForeignKeyConstraint(false);
+      setContinueOnError(true);
+      setRecordDelimiter("auto");
+      setTextQualifier('"');
+      setDateOrder("dmy");
+      setDateTimeOrder("date-time");
+      setDateDelimiter("/");
+      setYearDelimiterEnabled(false);
+      setYearDelimiter("/");
+      setTimeDelimiter(":");
+      setDecimalSymbol(".");
+      setBinaryEncoding("base64");
+    }
+  }
 
-  useEffect(() => {
+  // format 变化(含首次渲染,对齐原 effect 挂载即跑)时清空来源并重置分隔符:渲染期对比上次值。
+  const [prevFormat, setPrevFormat] = useState<ImportDataFormat | undefined>(undefined);
+  if (format !== prevFormat) {
+    setPrevFormat(format);
     setSources([]);
     setStepIndex(0);
     setLogLines([]);
     setFieldDelimiter(format === "csv" ? "," : "\t");
-  }, [format]);
+  }
 
   const parsed = useMemo(() => {
     if (sources.length === 0) return { headers: [], rows: [] };
@@ -337,9 +344,12 @@ export function ImportTableDataDialog({
     textQualifier,
   ]);
 
-  useEffect(() => {
+  // 表头/目标列变化(含首次渲染,对齐原 effect 挂载即跑)时自动映射:渲染期对比上次值。
+  const [prevMappingKey, setPrevMappingKey] = useState<{ columns?: string[]; headers?: string[] }>({});
+  if (columns !== prevMappingKey.columns || parsed.headers !== prevMappingKey.headers) {
+    setPrevMappingKey({ columns, headers: parsed.headers });
     setMapping(nextAutoMapping(parsed.headers, columns));
-  }, [columns, parsed.headers]);
+  }
 
   // MSSQL 与 PG 一样按 schema.table 引用，不带 database 前缀（避免被当成 schema.object）
   const tableName = driver === "postgresql" || driver === "mssql" ? table : `${database}.${table}`;

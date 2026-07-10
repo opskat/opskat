@@ -4,7 +4,7 @@ import { Folder } from "lucide-react";
 import type { oss_svc } from "../../../wailsjs/go/models";
 import { prefixLeafName } from "@/lib/ossPrefixTree";
 import { formatBytes } from "@/lib/formatBytes";
-import { shouldLoadNextPage } from "./OSSObjectList";
+import { shouldLoadNextPage } from "@/lib/ossListScroll";
 import { OSSThumbnail } from "./OSSThumbnail";
 
 export interface OSSObjectGridProps {

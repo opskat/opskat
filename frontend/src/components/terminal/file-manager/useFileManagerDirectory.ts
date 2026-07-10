@@ -15,7 +15,6 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
   const [selected, setSelectedState] = useState<string[]>([]);
   const loadRequestRef = useRef(0);
   const currentPathRef = useRef(currentPath);
-  currentPathRef.current = currentPath;
 
   const loadDir = useCallback(
     async (dirPath: string) => {
@@ -48,8 +47,15 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
     setSelectedState(next);
   }, []);
 
-  useEffect(() => {
+  // currentPath 变化时重置路径输入框:渲染期对比上次值,替代 effect 里的同步 setState
+  const [prevPath, setPrevPath] = useState(currentPath);
+  if (currentPath !== prevPath) {
+    setPrevPath(currentPath);
     setPathInput(currentPath);
+  }
+
+  useEffect(() => {
+    currentPathRef.current = currentPath;
   }, [currentPath]);
 
   return {

@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { Field } from "@/components/asset/fields";
@@ -6,15 +6,12 @@ import { useConfigSection } from "@/components/asset/useConfigSection";
 import { ListLocalShells } from "../../../wailsjs/go/local/Local";
 import type { localterm_svc } from "../../../wailsjs/go/models";
 import { formatLocalShellArgs } from "@/lib/localShellArgs";
-import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { buildLocalConfig, parseLocalConfig, LOCAL_DEFAULTS, type LocalFormState } from "./LocalConfigSection.config";
 
 type ShellInfo = localterm_svc.ShellInfo;
 
-export const LocalConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function LocalConfigSection(
-  { editAsset, onValidityChange },
-  ref
-) {
+export function LocalConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
   const { t } = useTranslation();
   const [shells, setShells] = useState<ShellInfo[]>([]);
   const { state, patch } = useConfigSection<LocalFormState>({
@@ -85,4 +82,4 @@ export const LocalConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
       </Field>
     </div>
   );
-});
+}

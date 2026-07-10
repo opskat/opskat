@@ -18,7 +18,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Button,
@@ -257,9 +257,12 @@ export function TableDataStatusBar({
   const hasPendingEdits = pendingEditCount > 0;
   const [pageSizeDraft, setPageSizeDraft] = useState(String(pageSize));
 
-  useEffect(() => {
+  // 外部改页大小时同步草稿输入框:渲染期对比上次值,替代 effect 里的同步 setState。
+  const [prevPageSize, setPrevPageSize] = useState(pageSize);
+  if (pageSize !== prevPageSize) {
+    setPrevPageSize(pageSize);
     setPageSizeDraft(String(pageSize));
-  }, [pageSize]);
+  }
 
   const commitPageSize = () => {
     const next = Math.max(1, Math.min(100000, Math.floor(Number(pageSizeDraft))));

@@ -33,23 +33,22 @@ export function PolicyGroupSelector({ policyType, selectedIds, onChange, refresh
   const [groups, setGroups] = useState<policy_group_entity.PolicyGroupItem[]>([]);
   const [open, setOpen] = useState(false);
 
-  const fetchGroups = async () => {
-    try {
-      const items = await ListPolicyGroups(policyTypeMap[policyType] || policyType);
-      // 先加载扩展 i18n，再 setGroups 触发渲染，避免首次显示 i18n key
-      const extNames = new Set((items || []).filter((g) => g.extensionName).map((g) => g.extensionName!));
-      for (const name of extNames) {
-        await loadExtensionLocales(name);
-      }
-      setGroups(items || []);
-    } catch {
-      setGroups([]);
-    }
-  };
-
+  // policyType / refreshKey（外部触发刷新）变化时重新拉取
   useEffect(() => {
-    fetchGroups();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const fetchGroups = async () => {
+      try {
+        const items = await ListPolicyGroups(policyTypeMap[policyType] || policyType);
+        // 先加载扩展 i18n，再 setGroups 触发渲染，避免首次显示 i18n key
+        const extNames = new Set((items || []).filter((g) => g.extensionName).map((g) => g.extensionName!));
+        for (const name of extNames) {
+          await loadExtensionLocales(name);
+        }
+        setGroups(items || []);
+      } catch {
+        setGroups([]);
+      }
+    };
+    void fetchGroups();
   }, [policyType, refreshKey]);
 
   const displayName = (g: policy_group_entity.PolicyGroupItem) => {

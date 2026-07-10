@@ -1,4 +1,4 @@
-import { createElement, useCallback, useEffect, useRef, useState } from "react";
+import { createElement, useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Link, Copy, RefreshCw, Hourglass } from "lucide-react";
@@ -63,15 +63,18 @@ export function OSSPresignDialog({
     );
   }, [assetId, bucket, objectKey, method, expirySecs, t]);
 
-  // 打开时重置为默认(GET / 1 小时),换对象亦然。
-  useEffect(() => {
-    if (open) {
+  // 关闭事件里重置为默认(GET / 1 小时)并作废在途请求,下次打开(含换对象)即是干净状态;
+  // 所有关闭路径都经 onOpenChange,不需要 effect 盯 open。
+  const handleOpenChange = (next: boolean) => {
+    if (!next) {
+      reqIdRef.current += 1;
       setMethod("get");
       setExpirySecs(3600);
       setUrl("");
-      reqIdRef.current += 1;
+      setLoading(false);
     }
-  }, [open, objectKey]);
+    onOpenChange(next);
+  };
 
   const changeMethod = (next: "get" | "put") => {
     setMethod(next);
@@ -100,7 +103,7 @@ export function OSSPresignDialog({
   const segGroup = "flex gap-0.5 rounded-md border bg-muted/40 p-0.5";
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent size="sm">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
@@ -208,7 +211,7 @@ export function OSSPresignDialog({
             <RefreshCw className="size-3" /> {url ? t("oss.share.regenerate") : t("oss.share.generate")}
           </Button>
           <div className="flex gap-2">
-            <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
+            <Button size="sm" variant="ghost" onClick={() => handleOpenChange(false)}>
               {t("oss.share.close")}
             </Button>
             <Button size="sm" onClick={copy} disabled={!url} data-testid="oss-share-copy">

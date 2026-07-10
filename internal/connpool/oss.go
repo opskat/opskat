@@ -48,7 +48,8 @@ func buildMinioOptions(cfg *asset_entity.OSSConfig, secret string) (string, *min
 		transport.TLSHandshakeTimeout = timeout
 	}
 	if cfg.SkipTLSVerify {
-		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // explicit user setting for private S3-compatible endpoints
+		// explicit user setting for private S3-compatible endpoints (gosec G402 is excluded project-wide)
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 	return endpoint, &minio.Options{
 		Creds:        credentials.NewStaticV4(cfg.AccessKeyID, secret, ""),
