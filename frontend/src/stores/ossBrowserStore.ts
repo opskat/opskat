@@ -70,6 +70,11 @@ function emptyTabState(assetId: number): OssBrowserTabState {
   };
 }
 
+function prefixesThrough(prefix: string): string[] {
+  const segments = prefix.split("/").filter(Boolean);
+  return segments.map((_, index) => `${segments.slice(0, index + 1).join("/")}/`);
+}
+
 // 并发 ensureThumbnail 去重守卫；非 store 字段，避免为预览状态触发全量重渲染。
 const thumbInFlight = new Set<string>(); // `${tabId}:${key}`
 
@@ -132,6 +137,7 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
       patch(tabId, (t) => ({
         ...t,
         currentPrefix: prefix,
+        expanded: new Set([...t.expanded, ...prefixesThrough(prefix)]),
         selection: new Set(),
         focusedKey: null,
         loading: { ...t.loading, listing: true },

@@ -29,9 +29,17 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-function Harness({ enabled, onEnter }: { enabled: boolean; onEnter: () => void }) {
+function Harness({
+  enabled,
+  resourceKey = "a",
+  onEnter,
+}: {
+  enabled: boolean;
+  resourceKey?: string;
+  onEnter: () => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
-  useLazyThumbnail(ref, enabled, onEnter);
+  useLazyThumbnail(ref, enabled, resourceKey, onEnter);
   return <div ref={ref} />;
 }
 
@@ -60,5 +68,11 @@ describe("useLazyThumbnail", () => {
     const { rerender } = render(<Harness enabled onEnter={() => {}} />);
     rerender(<Harness enabled onEnter={() => {}} />);
     expect(observe).toHaveBeenCalledTimes(1);
+  });
+
+  it("rebuilds the observer when the resource changes", () => {
+    const { rerender } = render(<Harness enabled resourceKey="a" onEnter={() => {}} />);
+    rerender(<Harness enabled resourceKey="b" onEnter={() => {}} />);
+    expect(observe).toHaveBeenCalledTimes(2);
   });
 });

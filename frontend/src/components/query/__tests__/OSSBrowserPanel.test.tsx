@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { OSSListBuckets, OSSUploadObject } from "../../../../wailsjs/go/oss/OSS";
+import { OSSListBuckets, OSSListObjects, OSSUploadObject } from "../../../../wailsjs/go/oss/OSS";
 import { OSSBrowserPanel } from "../OSSBrowserPanel";
 import { useTabStore } from "@/stores/tabStore";
 import { useOssBrowserStore } from "@/stores/ossBrowserStore";
@@ -72,6 +72,29 @@ describe("OSSBrowserPanel", () => {
     );
     fireEvent.click(await screen.findByTestId("oss-upload"));
     await waitFor(() => expect(OSSUploadObject).toHaveBeenCalledWith(7, "b1", "docs/"));
+  });
+
+  it("expands the left tree when entering a directory from the right list", async () => {
+    vi.mocked(OSSListBuckets).mockResolvedValue([{ name: "b1", creationDate: 0 }] as never);
+    vi.mocked(OSSListObjects)
+      .mockResolvedValueOnce({
+        prefixes: ["docs/"],
+        objects: [],
+        nextContinuationToken: "",
+        isTruncated: false,
+      } as never)
+      .mockResolvedValueOnce({
+        prefixes: ["docs/sub/"],
+        objects: [],
+        nextContinuationToken: "",
+        isTruncated: false,
+      } as never);
+
+    render(<OSSBrowserPanel tabId={TAB} />);
+    fireEvent.click(await screen.findByTestId("oss-bucket-b1"));
+    fireEvent.doubleClick(await screen.findByTestId("oss-folder-docs/"));
+
+    expect(await screen.findByTestId("oss-tree-row-docs/sub/")).toBeInTheDocument();
   });
 
   it("toggles to grid view and opens the detail pane on single-click", async () => {

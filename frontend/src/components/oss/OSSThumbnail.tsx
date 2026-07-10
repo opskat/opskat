@@ -1,4 +1,4 @@
-import { createElement, useEffect, useRef, useState } from "react";
+import { createElement, useRef, useState } from "react";
 import { isImage, typeIcon } from "@/lib/objectContentType";
 import { useLazyThumbnail } from "./useLazyThumbnail";
 
@@ -13,9 +13,10 @@ export interface OSSThumbnailProps {
 export function OSSThumbnail({ objectKey, contentType, url, onEnsure, className }: OSSThumbnailProps) {
   const ref = useRef<HTMLDivElement>(null);
   const image = isImage(contentType, objectKey);
-  const [errored, setErrored] = useState(false);
-  useEffect(() => setErrored(false), [url]);
-  useLazyThumbnail(ref, image && !errored, onEnsure);
+  const resourceKey = `${objectKey}\0${url ?? ""}`;
+  const [failedResourceKey, setFailedResourceKey] = useState<string | null>(null);
+  const errored = failedResourceKey === resourceKey;
+  useLazyThumbnail(ref, image && !errored, objectKey, onEnsure);
 
   const showImg = image && !errored && !!url;
 
@@ -27,7 +28,7 @@ export function OSSThumbnail({ objectKey, contentType, url, onEnsure, className 
           alt=""
           className="size-full object-cover"
           data-testid="oss-thumb-img"
-          onError={() => setErrored(true)}
+          onError={() => setFailedResourceKey(resourceKey)}
         />
       ) : (
         <div className="flex size-full items-center justify-center text-muted-foreground" data-testid="oss-thumb-icon">

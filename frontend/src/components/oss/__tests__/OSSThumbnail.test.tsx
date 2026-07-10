@@ -34,6 +34,20 @@ describe("OSSThumbnail", () => {
     expect(screen.getByTestId("oss-thumb-img")).toHaveAttribute("src", "https://x/a");
   });
 
+  it("starts lazy loading again when the rendered image object changes", () => {
+    const ensureA = vi.fn();
+    const ensureB = vi.fn();
+    const { rerender } = render(<OSSThumbnail objectKey="a.png" contentType="image/png" onEnsure={ensureA} />);
+
+    observeCb!([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+    expect(ensureA).toHaveBeenCalledTimes(1);
+
+    rerender(<OSSThumbnail objectKey="b.png" contentType="image/png" onEnsure={ensureB} />);
+    observeCb!([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+
+    expect(ensureB).toHaveBeenCalledTimes(1);
+  });
+
   it("renders a type icon (no img, no ensure) for a non-image", () => {
     const onEnsure = vi.fn();
     render(<OSSThumbnail objectKey="a.json" contentType="application/json" onEnsure={onEnsure} />);
@@ -46,5 +60,16 @@ describe("OSSThumbnail", () => {
     render(<OSSThumbnail objectKey="a.png" contentType="image/png" url="https://x/broken" onEnsure={vi.fn()} />);
     fireEvent.error(screen.getByTestId("oss-thumb-img"));
     expect(screen.getByTestId("oss-thumb-icon")).toBeInTheDocument();
+  });
+
+  it("does not carry an image error into the next object", () => {
+    const { rerender } = render(
+      <OSSThumbnail objectKey="a.png" contentType="image/png" url="https://x/a" onEnsure={vi.fn()} />
+    );
+    fireEvent.error(screen.getByTestId("oss-thumb-img"));
+
+    rerender(<OSSThumbnail objectKey="b.png" contentType="image/png" url="https://x/b" onEnsure={vi.fn()} />);
+
+    expect(screen.getByTestId("oss-thumb-img")).toHaveAttribute("src", "https://x/b");
   });
 });
