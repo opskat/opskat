@@ -32,6 +32,7 @@
     "serial": "Serial Port",
     "local": "Local Terminal",
     "etcd": "etcd",
+    "oss": "Object Storage",
     "sshKeys": "Credentials",
     "settings": "Settings",
     "appearance": "Appearance",
@@ -298,6 +299,7 @@
       "error": "Error",
       "closed": "Closed"
     },
+    "typeOSS": "Object Storage",
     "driver": "Database Driver",
     "driverMySQL": "MySQL",
     "driverPostgreSQL": "PostgreSQL",
@@ -1059,7 +1061,6 @@
       "collapseRail": "Collapse session rail",
       "emptyGuide": "Click + to start a new chat, or pick one from <history/> History",
       "noConversation": "No conversation selected",
-      "attachedAssets": "Attached assets",
       "status": {
         "waiting_approval": "Waiting approval",
         "running": "Running",
@@ -1071,7 +1072,20 @@
         "running": "Running",
         "done": "Done",
         "error": "Error"
-      }
+      },
+      "contextExpand": "Show linked tabs",
+      "contextCollapse": "Hide linked tabs",
+      "linkedAsset": {
+        "pickPlaceholder": "Choose a tab to bind",
+        "openTabs": "Open tabs",
+        "noOpenTabs": "No open tabs",
+        "clearBinding": "Clear binding",
+        "syncHint": "When on: this tab activates this chat, and this chat activates the tab",
+        "tabClosed": "The bound tab is closed · rebind to relink"
+      },
+      "sync": "Link to this tab",
+      "syncing": "Linked",
+      "referencedThisSession": "Referenced"
     }
   },
   "shortcut": {
@@ -2531,10 +2545,128 @@
       "openManager": "Create in Snippets page"
     }
   },
+  "oss": {
+    "form": {
+      "provider": "Provider",
+      "providerS3": "Amazon S3",
+      "providerAliyunOSS": "Alibaba Cloud OSS",
+      "providerTencentCOS": "Tencent Cloud COS",
+      "providerHuaweiOBS": "Huawei Cloud OBS",
+      "providerVolcengineTOS": "Volcengine TOS",
+      "providerQiniuKodo": "Qiniu Kodo",
+      "providerCloudflareR2": "Cloudflare R2",
+      "providerBackblazeB2": "Backblaze B2",
+      "providerDigitalOceanSpaces": "DigitalOcean Spaces",
+      "providerWasabi": "Wasabi",
+      "providerMinio": "MinIO",
+      "providerS3Compat": "S3-Compatible",
+      "endpoint": "Endpoint",
+      "endpointPlaceholder": "host or scheme://host:port",
+      "region": "Region",
+      "regionPlaceholder": "e.g. us-east-1",
+      "accessKeyId": "Access Key ID",
+      "secretAccessKey": "Secret Access Key",
+      "usePathStyle": "Path-style addressing",
+      "useSSL": "Use HTTPS",
+      "skipTLSVerify": "Skip TLS certificate verification",
+      "connectTimeout": "Connect timeout (s)",
+      "partSizeMB": "Multipart size (MB)"
+    },
+    "error": {
+      "required": "Endpoint and Access Key ID are required"
+    },
+    "browser": {
+      "refresh": "Refresh",
+      "loading": "Loading…",
+      "loadingMore": "Loading more…",
+      "emptyDir": "This folder is empty",
+      "noBuckets": "No buckets",
+      "selectBucket": "Select a bucket to start browsing",
+      "colName": "Name",
+      "colSize": "Size",
+      "colStorageClass": "Storage class",
+      "colModified": "Modified",
+      "missingAsset": "Missing asset",
+      "loadFailed": "Load failed",
+      "selectedCount": "{{count}} selected",
+      "footFolders": "{{count}} folders",
+      "footObjects": "{{count}} objects",
+      "deleteSelected": "Delete",
+      "deleteConfirmTitle": "Confirm delete",
+      "deleteConfirmOne": "Delete object {{key}}?",
+      "deleteConfirmMany": "Delete {{count}} objects?",
+      "deleteSuccess": "Deleted",
+      "deleteFailed": "Delete failed",
+      "newFolder": "New folder",
+      "newFolderPrompt": "Folder name",
+      "newFolderSuccess": "Folder created",
+      "deleteFolderConfirm": "Delete folder {{name}} and all objects below it?"
+    },
+    "transfer": {
+      "upload": "Upload",
+      "download": "Download",
+      "transfers": "Transfers",
+      "clearCompleted": "Clear completed",
+      "cancel": "Cancel",
+      "clear": "Clear",
+      "dropHint": "Drop files to upload",
+      "uploadFailed": "Upload failed",
+      "downloadFailed": "Download failed",
+      "refreshAfterUploadFailed": "Uploaded, but refreshing the list failed"
+    },
+    "view": {
+      "list": "List",
+      "grid": "Grid"
+    },
+    "detail": {
+      "copyKey": "Copy key",
+      "metadataSection": "Metadata",
+      "share": "Generate presigned URL",
+      "copyUrl": "Copy URL",
+      "download": "Download",
+      "rename": "Rename",
+      "copy": "Copy",
+      "move": "Move",
+      "renamePrompt": "New object key",
+      "copyPrompt": "Destination object key",
+      "movePrompt": "Destination object key",
+      "renameSuccess": "Object renamed",
+      "copySuccess": "Object copied",
+      "moveSuccess": "Object moved",
+      "delete": "Delete object",
+      "close": "Close",
+      "size": "Size",
+      "type": "Type",
+      "etag": "ETag",
+      "storageClass": "Storage class",
+      "lastModified": "Last modified"
+    },
+    "share": {
+      "title": "Generate presigned URL",
+      "methodLabel": "Request method",
+      "methodGet": "GET · download",
+      "methodPut": "PUT · upload",
+      "expiryLabel": "Expiry",
+      "expiry15m": "15 min",
+      "expiry1h": "1 hour",
+      "expiry24h": "24 hours",
+      "expiry7d": "7 days",
+      "urlLabel": "Presigned URL",
+      "urlEmpty": "Not generated yet",
+      "generating": "Generating…",
+      "generate": "Generate",
+      "regenerate": "Regenerate",
+      "close": "Close",
+      "copyLink": "Copy link",
+      "warning": "This link expires in {{duration}} · anyone with it can access the object",
+      "generateFailed": "Failed to generate URL",
+      "copied": "Link copied"
+    }
+  },
   "etcd": {
     "form": {
       "endpoints": "Endpoints",
-      "endpointsHint": "At least 1 host:port, one per line",
+      "endpointsHint": "Separate endpoints by newline, comma, or semicolon",
       "addEndpoint": "Add endpoint",
       "tlsSection": "TLS / mTLS",
       "advancedSection": "Advanced",
@@ -2548,10 +2680,13 @@
       "tlsInsecure": "Skip certificate verification"
     },
     "tree": {
-      "title": "Keyspace",
       "filterPlaceholder": "Filter key",
       "truncated": "+{{count}} hidden, limit={{limit}}",
-      "loadFailed": "Failed to load keyspace"
+      "loadFailed": "Failed to load keyspace",
+      "refresh": "Refresh keyspace"
+    },
+    "view": {
+      "kv": "KV Browse"
     },
     "query": {
       "placeholder": "get /config --prefix",
@@ -2592,9 +2727,9 @@
       "formatYaml": "YAML",
       "notJson": "(not JSON)",
       "notYaml": "(YAML conversion failed)",
-      "copyKey": "Copy KEY",
+      "copyKey": "Copy key",
       "copyValue": "Copy raw value",
-      "delete": "Delete",
+      "delete": "Delete key",
       "copied": "Copied to clipboard",
       "copyFailed": "Copy failed",
       "deleteSuccess": "Deleted key: {{key}}",
@@ -2610,16 +2745,6 @@
       "contentTypeJson": "application/json",
       "contentTypeText": "text/plain",
       "contentTypeEmpty": "(empty)"
-    },
-    "cluster": {
-      "healthy": "Healthy",
-      "unhealthy": "Unhealthy",
-      "unknown": "Unknown",
-      "endpoints": "{{count}} endpoint(s)",
-      "leader": "leader",
-      "noLeader": "no leader",
-      "refresh": "Refresh cluster status",
-      "loadFailed": "Failed to load cluster info"
     },
     "error": {
       "endpointsRequired": "At least one endpoint required",

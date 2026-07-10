@@ -25,6 +25,7 @@ const (
 	AssetTypeEtcd     = "etcd"
 	AssetTypeLocal    = "local"
 	AssetTypeRDP      = "rdp"
+	AssetTypeOSS      = "oss"
 )
 
 // DatabaseDriver 数据库驱动类型

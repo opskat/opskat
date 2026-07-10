@@ -25,5 +25,6 @@ import "./serial";
 import "./local";
 import "./etcd";
 import "./rdp";
+import "./oss";
 
 export type { AssetTypeDefinition, DetailInfoCardProps, PolicyDefinition, PolicyFieldDef } from "./types";

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OnFileDrop, OnFileDropOff } from "../../wailsjs/runtime/runtime";
 import {
   registerFileManagerDropTarget,
+  registerFileDropTarget,
   registerTerminalFileDropTarget,
   resetTerminalFileDropCoordinatorForTest,
 } from "../components/terminal/terminalFileDropCoordinator";
@@ -80,5 +81,31 @@ describe("terminalFileDropCoordinator", () => {
     expect(fileUpload).toHaveBeenCalledWith("/tmp/in-panel.txt", "/srv/app/");
     expect(terminalUpload).toHaveBeenCalledWith(["/tmp/in-terminal.txt"]);
     expect(terminalUpload).not.toHaveBeenCalledWith(["/tmp/in-panel.txt"]);
+  });
+});
+
+describe("registerFileDropTarget (generic)", () => {
+  beforeEach(() => {
+    resetTerminalFileDropCoordinatorForTest();
+    vi.mocked(OnFileDrop).mockClear();
+    vi.mocked(OnFileDropOff).mockClear();
+  });
+
+  afterEach(() => {
+    resetTerminalFileDropCoordinatorForTest();
+  });
+
+  it("routes a drop within the target's rect to onDrop, and toggles OnFileDrop on/off", () => {
+    const onDrop = vi.fn();
+    const rect = { left: 0, top: 0, right: 100, bottom: 100 } as DOMRect;
+    const unregister = registerFileDropTarget({ getRect: () => rect, onDrop });
+    expect(OnFileDrop).toHaveBeenCalledTimes(1);
+    const handler = vi.mocked(OnFileDrop).mock.calls[0][0];
+    handler(50, 50, ["/a/b.txt", "/c/d.txt"]);
+    expect(onDrop).toHaveBeenCalledWith(["/a/b.txt", "/c/d.txt"]);
+    handler(500, 500, ["/x.txt"]); // outside the rect
+    expect(onDrop).toHaveBeenCalledTimes(1);
+    unregister();
+    expect(OnFileDropOff).toHaveBeenCalled();
   });
 });

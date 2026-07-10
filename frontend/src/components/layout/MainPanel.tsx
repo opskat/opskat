@@ -41,6 +41,9 @@ const RedisPanel = lazy(() => import("@/components/query/RedisPanel").then((m) =
 const MongoDBPanel = lazy(() => import("@/components/query/MongoDBPanel").then((m) => ({ default: m.MongoDBPanel })));
 const KafkaPanel = lazy(() => import("@/components/query/KafkaPanel").then((m) => ({ default: m.KafkaPanel })));
 const EtcdPanel = lazy(() => import("@/components/query/EtcdPanel").then((m) => ({ default: m.EtcdPanel })));
+const OSSBrowserPanel = lazy(() =>
+  import("@/components/query/OSSBrowserPanel").then((m) => ({ default: m.OSSBrowserPanel }))
+);
 const K8sClusterPage = lazy(() =>
   import("@/components/k8s/K8sClusterPage").then((m) => ({ default: m.K8sClusterPage }))
 );
@@ -312,6 +315,8 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
                   <KafkaPanel tabId={tab.id} />
                 ) : meta.assetType === "etcd" ? (
                   <EtcdPanel tabId={tab.id} />
+                ) : meta.assetType === "oss" ? (
+                  <OSSBrowserPanel tabId={tab.id} />
                 ) : (
                   <MongoDBPanel tabId={tab.id} />
                 )}

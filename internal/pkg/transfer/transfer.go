@@ -4,7 +4,9 @@
 package transfer
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"sync/atomic"
 	"time"
 )
@@ -85,4 +87,82 @@ func (r *Reporter) Report(p Progress) {
 		p.Speed = int64(float64(p.BytesDone) / elapsed)
 	}
 	r.emit(p)
+}
+
+// ProgressReader 包裹一个 io.Reader：在 sink 拥有读循环（如 minio PutObject）的流式上传里，
+// 于源 reader 侧观测进度并经 Reporter 节流上报；ctx 取消即中断读取。同一传输的 Read 串行，
+// 内部无需加锁（与 Reporter 约定一致）。
+type ProgressReader struct {
+	ctx         context.Context
+	r           io.Reader
+	reporter    *Reporter
+	transferID  string
+	currentFile string
+	total       int64
+	done        int64
+}
+
+// NewProgressReader 构造进度 reader，内部持有独立 Reporter（100ms 节流）。
+func NewProgressReader(ctx context.Context, transferID, currentFile string, r io.Reader, total int64, onProgress func(Progress)) *ProgressReader {
+	return &ProgressReader{
+		ctx:         ctx,
+		r:           r,
+		reporter:    NewReporter(onProgress),
+		transferID:  transferID,
+		currentFile: currentFile,
+		total:       total,
+	}
+}
+
+func (p *ProgressReader) Read(b []byte) (int, error) {
+	if err := p.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.done += int64(n)
+		p.reporter.Report(Progress{
+			TransferID:  p.transferID,
+			Status:      StatusProgress,
+			CurrentFile: p.currentFile,
+			FilesTotal:  1,
+			BytesDone:   p.done,
+			BytesTotal:  p.total,
+		})
+	}
+	return n, err
+}
+
+// Copy 以 32KiB 分片把 src 流式写入 dst,经独立 Reporter(100ms 节流)上报进度,
+// ctx 取消即中断。镜像 sftp_svc.copyWithProgress,让每种传输源共用一套节流拷贝循环。
+func Copy(ctx context.Context, transferID string, dst io.Writer, src io.Reader, totalBytes int64, currentFile string, onProgress func(Progress)) error {
+	buf := make([]byte, 32*1024)
+	var bytesDone int64
+	reporter := NewReporter(onProgress)
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		n, readErr := src.Read(buf)
+		if n > 0 {
+			if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
+				return writeErr
+			}
+			bytesDone += int64(n)
+			reporter.Report(Progress{
+				TransferID:  transferID,
+				Status:      StatusProgress,
+				CurrentFile: currentFile,
+				FilesTotal:  1,
+				BytesDone:   bytesDone,
+				BytesTotal:  totalBytes,
+			})
+		}
+		if readErr == io.EOF {
+			return nil
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
 }

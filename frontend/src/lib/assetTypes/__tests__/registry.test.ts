@@ -37,6 +37,7 @@ describe("AssetType Registry", () => {
       "local",
       "etcd",
       "rdp",
+      "oss",
     ]);
   });
 
@@ -59,6 +60,7 @@ describe("AssetType Registry", () => {
     expect(getAssetType("mongodb")!.connectAction).toBe("query");
     expect(getAssetType("kafka")!.connectAction).toBe("query");
     expect(getAssetType("rdp")!.connectAction).toBe("page");
+    expect(getAssetType("oss")!.connectAction).toBe("query");
   });
 
   it("local is terminal type", () => {
@@ -87,5 +89,12 @@ describe("AssetType Registry", () => {
     expect(getAssetType("local")!.canOpenFileManager).toBeFalsy();
     expect(getAssetType("etcd")!.canOpenFileManager).toBeFalsy();
     expect(getAssetType("rdp")!.canOpenFileManager).toBeFalsy();
+    expect(getAssetType("oss")!.canOpenFileManager).toBeFalsy();
+  });
+
+  it("oss 支持连接（对象浏览器已落地），单例 query tab 不支持新标签", () => {
+    expect(getAssetType("oss")!.canConnect).toBe(true);
+    expect(getAssetType("oss")!.canConnectInNewTab).toBe(false);
+    expect(getAssetType("oss")!.testable).toBe(true);
   });
 });
