@@ -37,7 +37,9 @@
     "ai": "AI Assistant",
     "audit": "Audit Log",
     "forward": "Port Forward",
-    "snippets": "Snippets"
+    "snippets": "Snippets",
+    "vnc": "VNC",
+    "rdp": "RDP"
   },
   "assetType": {
     "searchPlaceholder": "Search type…",
@@ -603,7 +605,9 @@
     "sshRestoreCwdOnReconnect": "Restore last directory on reconnect",
     "tabSchemaRegistry": "Schema Registry",
     "tabConnect": "Connect",
-    "addDescription": "Add description"
+    "addDescription": "Add description",
+    "domain": "Domain",
+    "formMissingHostOrUsername": "Host and username are required"
   },
   "sshKey": {
     "title": "SSH Keys",
@@ -2610,5 +2614,30 @@
       "compactionRev": "Revision compacted; oldest available: {{rev}}",
       "connFailed": "Failed to connect to etcd"
     }
+  },
+  "remoteDesktop": {
+    "files": "Files",
+    "fileSshAsset": "SSH/SFTP file channel",
+    "fileSshAssetPlaceholder": "Select an SSH asset for file upload/download",
+    "width": "Width",
+    "height": "Height",
+    "colorDepth": "Color depth",
+    "ignoreCert": "Ignore RDP certificate validation",
+    "securityType": "Security type",
+    "connecting": "Connecting remote desktop...",
+    "streamError": "Remote desktop stream error",
+    "scaleOn": "Scale",
+    "scaleOff": "Original",
+    "pasteText": "Paste text",
+    "vncSecurityFailed": "VNC authentication failed or the security type is incompatible. Check the password, VNC security type, and proxy chain configuration.",
+    "vncCredentialsRequired": "VNC requires a password. Configure a password or credential on the asset.",
+    "vncDisconnected": "VNC disconnected. Check the host, port, password, and proxy chain configuration.",
+    "verifyServerTitle": "Verify VNC server identity",
+    "verifyServerDesc": "The server uses encrypted authentication. Verify the RSA SHA-256 fingerprint before continuing:",
+    "approveServer": "Verify and connect",
+    "vncServerVerificationFailed": "The VNC server identity is invalid, so the connection cannot continue.",
+    "vncServerVerificationCancelled": "VNC server identity verification was cancelled.",
+    "rdpExternalTitle": "RDP opened in the system client",
+    "rdpExternalDesc": "Windows RDP uses the system Remote Desktop client. The file panel remains available through the bound SSH/SFTP channel."
   }
 }

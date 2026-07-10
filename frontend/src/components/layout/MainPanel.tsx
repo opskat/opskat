@@ -44,6 +44,9 @@ const EtcdPanel = lazy(() => import("@/components/query/EtcdPanel").then((m) => 
 const K8sClusterPage = lazy(() =>
   import("@/components/k8s/K8sClusterPage").then((m) => ({ default: m.K8sClusterPage }))
 );
+const RemoteDesktopPanel = lazy(() =>
+  import("@/components/remote-desktop/RemoteDesktopPanel").then((m) => ({ default: m.RemoteDesktopPanel }))
+);
 
 interface MainPanelProps {
   onEditAsset: (asset: asset_entity.Asset) => void;
@@ -155,6 +158,11 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
             const k8sAsset = meta.assetId ? assets.find((a) => a.ID === meta.assetId) : null;
             if (!k8sAsset) return null;
             return <K8sClusterPage asset={k8sAsset} />;
+          }
+          case "remote-desktop": {
+            const rdAsset = meta.assetId ? assets.find((a) => a.ID === meta.assetId) : null;
+            if (!rdAsset || !activeTab) return null;
+            return <RemoteDesktopPanel tabId={activeTab.id} asset={rdAsset} />;
           }
           default:
             if (meta.extensionName) {

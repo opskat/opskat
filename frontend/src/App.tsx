@@ -288,6 +288,17 @@ function App() {
       useQueryStore.getState().openQueryTab(asset);
       return;
     }
+    if (def?.connectAction === "remoteDesktop") {
+      const tabId = `remote-desktop-${asset.ID}`;
+      useTabStore.getState().openTab({
+        id: tabId,
+        type: "page",
+        label: asset.Name,
+        icon: asset.Icon || asset.Type,
+        meta: { type: "page", pageId: "remote-desktop", assetId: asset.ID },
+      });
+      return;
+    }
 
     // Check if this is an extension asset type
     const ext = useExtensionStore.getState().getExtensionForAssetType(asset.Type);
@@ -320,6 +331,17 @@ function App() {
 
   const handleConnectAssetInNewTab = async (asset: asset_entity.Asset) => {
     if (!getAssetType(asset.Type)?.canConnectInNewTab) return;
+    if (getAssetType(asset.Type)?.connectAction === "remoteDesktop") {
+      const tabId = `remote-desktop-${asset.ID}-${Date.now()}`;
+      useTabStore.getState().openTab({
+        id: tabId,
+        type: "page",
+        label: asset.Name,
+        icon: asset.Icon || asset.Type,
+        meta: { type: "page", pageId: "remote-desktop", assetId: asset.ID },
+      });
+      return;
+    }
     try {
       await connect(asset, "", true);
     } catch (e) {

@@ -62,7 +62,7 @@ Grab the latest build for your platform — **macOS, Windows, or Linux** — fro
 
 | Category | Assets |
 | :-- | :-- |
-| **Servers** | <img src="https://img.shields.io/badge/SSH-4D4D4D?style=flat-square&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxyZWN0IHdpZHRoPSIyMCIgaGVpZ2h0PSIxNCIgeD0iMiIgeT0iMyIgcng9IjIiLz48bGluZSB4MT0iOCIgeDI9IjE2IiB5MT0iMjEiIHkyPSIyMSIvPjxsaW5lIHgxPSIxMiIgeDI9IjEyIiB5MT0iMTciIHkyPSIyMSIvPjwvc3ZnPg%3D%3D" alt="SSH"> <img src="https://img.shields.io/badge/Serial-5A6B7B?style=flat-square&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxjaXJjbGUgY3g9IjEwIiBjeT0iNyIgcj0iMSIvPjxjaXJjbGUgY3g9IjQiIGN5PSIyMCIgcj0iMSIvPjxwYXRoIGQ9Ik00LjcgMTkuMyAxOSA1Ii8%2BPHBhdGggZD0ibTIxIDMtMyAxIDIgMloiLz48cGF0aCBkPSJNOS4yNiA3LjY4IDUgMTJsMiA1Ii8%2BPHBhdGggZD0ibTEwIDE0IDUgMiAzLjUtMy41Ii8%2BPHBhdGggZD0ibTE4IDEyIDEtMSAxIDEtMSAxWiIvPjwvc3ZnPg%3D%3D" alt="Serial"> |
+| **Servers** | <img src="https://img.shields.io/badge/SSH-4D4D4D?style=flat-square&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxyZWN0IHdpZHRoPSIyMCIgaGVpZ2h0PSIxNCIgeD0iMiIgeT0iMyIgcng9IjIiLz48bGluZSB4MT0iOCIgeDI9IjE2IiB5MT0iMjEiIHkyPSIyMSIvPjxsaW5lIHgxPSIxMiIgeDI9IjEyIiB5MT0iMTciIHkyPSIyMSIvPjwvc3ZnPg%3D%3D" alt="SSH"> <img src="https://img.shields.io/badge/Serial-5A6B7B?style=flat-square&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxjaXJjbGUgY3g9IjEwIiBjeT0iNyIgcj0iMSIvPjxjaXJjbGUgY3g9IjQiIGN5PSIyMCIgcj0iMSIvPjxwYXRoIGQ9Ik00LjcgMTkuMyAxOSA1Ii8%2BPHBhdGggZD0ibTIxIDMtMyAxIDIgMloiLz48cGF0aCBkPSJNOS4yNiA3LjY4IDUgMTJsMiA1Ii8%2BPHBhdGggZD0ibTEwIDE0IDUgMiAzLjUtMy41Ii8%2BPHBhdGggZD0ibTE4IDEyIDEtMSAxIDEtMSAxWiIvPjwvc3ZnPg%3D%3D" alt="Serial"> <img src="https://img.shields.io/badge/VNC-3366CC?style=flat-square" alt="VNC"> <img src="https://img.shields.io/badge/RDP-0078D4?style=flat-square" alt="RDP"> |
 | **Databases** | <img src="https://img.shields.io/badge/MySQL-4479A1?style=flat-square&logo=mysql&logoColor=white" alt="MySQL"> <img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL"> <img src="https://img.shields.io/badge/SQL_Server-CC2927?style=flat-square" alt="SQL Server"> <img src="https://img.shields.io/badge/SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite"> <img src="https://img.shields.io/badge/Redis-FF4438?style=flat-square&logo=redis&logoColor=white" alt="Redis"> <img src="https://img.shields.io/badge/MongoDB-47A248?style=flat-square&logo=mongodb&logoColor=white" alt="MongoDB"> <img src="https://img.shields.io/badge/etcd-419EDA?style=flat-square&logo=etcd&logoColor=white" alt="etcd"> |
 | **Middleware** | <img src="https://img.shields.io/badge/Apache_Kafka-231F20?style=flat-square&logo=apachekafka&logoColor=white" alt="Kafka"> <img src="https://img.shields.io/badge/Kubernetes-326CE5?style=flat-square&logo=kubernetes&logoColor=white" alt="Kubernetes"> |
 
@@ -75,6 +75,7 @@ Even before you turn on the AI, OpsKat is a full-featured terminal and asset man
 - Tree-structured grouping for every supported asset type
 - Split-pane terminal with customizable themes
 - SFTP file browser
+- VNC remote desktop tabs backed by noVNC and the built-in WebSocket-to-TCP bridge; RDP opens through the Windows Remote Desktop client
 - Jump host chain connections
 - SQL query editor (MySQL/PostgreSQL via SSH tunnel)
 - Redis command execution with key browser
@@ -93,6 +94,14 @@ SSH and remote data assets can use an ordered proxy chain when direct access is 
 - **HTTP script tunnel** layers compatible with DBX-style tunnel scripts (`URL + token + timeout`)
 
 The same chain model is shared by SSH, SQL databases, Redis, MongoDB, Kafka, etcd, and Kubernetes connections. Existing single SSH tunnel (`sshTunnelId` / `ssh_asset_id`) and SOCKS5 `proxy` settings are still read and are mapped to a one-layer chain when an asset is edited; once a new chain is saved, `proxy_chain` takes precedence.
+
+### Remote Desktop
+
+VNC and RDP assets use local desktop capabilities without a separate bridge service. VNC is rendered inside OpsKat through noVNC and a built-in WebSocket-to-TCP bridge. RDP uses the Windows Remote Desktop client (`mstsc.exe`) and is currently Windows-only.
+
+- Configure the VNC/RDP target host, credentials, optional proxy chain, and for RDP the screen size, color depth, domain, and certificate ignore option.
+- To enable file upload/download or drag-to-upload in the remote desktop tab, bind a separate SSH asset as the file channel. If no SSH asset is bound, the remote desktop can still connect but the file panel is disabled with a reason.
+- File copy/paste is implemented as upload/download through SFTP. It does not use SMB, RDP drive redirection, or operating-system file-list clipboard synchronization.
 
 ## 🤖 Let AI Operate for You
 

@@ -62,7 +62,7 @@ SSH、数据库、Redis、Kafka、Kubernetes…… 运维要碰的一切，统�
 
 | 分类 | 资产 |
 | :-- | :-- |
-| **服务器** | <img src="https://img.shields.io/badge/SSH-4D4D4D?style=flat-square&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxyZWN0IHdpZHRoPSIyMCIgaGVpZ2h0PSIxNCIgeD0iMiIgeT0iMyIgcng9IjIiLz48bGluZSB4MT0iOCIgeDI9IjE2IiB5MT0iMjEiIHkyPSIyMSIvPjxsaW5lIHgxPSIxMiIgeDI9IjEyIiB5MT0iMTciIHkyPSIyMSIvPjwvc3ZnPg%3D%3D" alt="SSH"> <img src="https://img.shields.io/badge/Serial-5A6B7B?style=flat-square&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxjaXJjbGUgY3g9IjEwIiBjeT0iNyIgcj0iMSIvPjxjaXJjbGUgY3g9IjQiIGN5PSIyMCIgcj0iMSIvPjxwYXRoIGQ9Ik00LjcgMTkuMyAxOSA1Ii8%2BPHBhdGggZD0ibTIxIDMtMyAxIDIgMloiLz48cGF0aCBkPSJNOS4yNiA3LjY4IDUgMTJsMiA1Ii8%2BPHBhdGggZD0ibTEwIDE0IDUgMiAzLjUtMy41Ii8%2BPHBhdGggZD0ibTE4IDEyIDEtMSAxIDEtMSAxWiIvPjwvc3ZnPg%3D%3D" alt="Serial"> |
+| **服务器** | <img src="https://img.shields.io/badge/SSH-4D4D4D?style=flat-square&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxyZWN0IHdpZHRoPSIyMCIgaGVpZ2h0PSIxNCIgeD0iMiIgeT0iMyIgcng9IjIiLz48bGluZSB4MT0iOCIgeDI9IjE2IiB5MT0iMjEiIHkyPSIyMSIvPjxsaW5lIHgxPSIxMiIgeDI9IjEyIiB5MT0iMTciIHkyPSIyMSIvPjwvc3ZnPg%3D%3D" alt="SSH"> <img src="https://img.shields.io/badge/Serial-5A6B7B?style=flat-square&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxjaXJjbGUgY3g9IjEwIiBjeT0iNyIgcj0iMSIvPjxjaXJjbGUgY3g9IjQiIGN5PSIyMCIgcj0iMSIvPjxwYXRoIGQ9Ik00LjcgMTkuMyAxOSA1Ii8%2BPHBhdGggZD0ibTIxIDMtMyAxIDIgMloiLz48cGF0aCBkPSJNOS4yNiA3LjY4IDUgMTJsMiA1Ii8%2BPHBhdGggZD0ibTEwIDE0IDUgMiAzLjUtMy41Ii8%2BPHBhdGggZD0ibTE4IDEyIDEtMSAxIDEtMSAxWiIvPjwvc3ZnPg%3D%3D" alt="Serial"> <img src="https://img.shields.io/badge/VNC-3366CC?style=flat-square" alt="VNC"> <img src="https://img.shields.io/badge/RDP-0078D4?style=flat-square" alt="RDP"> |
 | **数据库** | <img src="https://img.shields.io/badge/MySQL-4479A1?style=flat-square&logo=mysql&logoColor=white" alt="MySQL"> <img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL"> <img src="https://img.shields.io/badge/SQL_Server-CC2927?style=flat-square" alt="SQL Server"> <img src="https://img.shields.io/badge/SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite"> <img src="https://img.shields.io/badge/Redis-FF4438?style=flat-square&logo=redis&logoColor=white" alt="Redis"> <img src="https://img.shields.io/badge/MongoDB-47A248?style=flat-square&logo=mongodb&logoColor=white" alt="MongoDB"> <img src="https://img.shields.io/badge/etcd-419EDA?style=flat-square&logo=etcd&logoColor=white" alt="etcd"> |
 | **中间件** | <img src="https://img.shields.io/badge/Apache_Kafka-231F20?style=flat-square&logo=apachekafka&logoColor=white" alt="Kafka"> <img src="https://img.shields.io/badge/Kubernetes-326CE5?style=flat-square&logo=kubernetes&logoColor=white" alt="Kubernetes"> |
 
@@ -75,6 +75,7 @@ _更多资产类型将通过插件模式持续扩展。_
 - 树形分组管理所有支持的资产类型
 - 分屏终端，自定义主题
 - SFTP 文件浏览器
+- 基于 noVNC 和内置 WebSocket↔TCP 桥接的 VNC 远程桌面；RDP 通过 Windows 远程桌面客户端打开
 - 跳板机链式连接
 - 数据库查询编辑器（MySQL/PostgreSQL，支持 SSH 隧道）
 - Redis 命令执行与 Key 浏览器
@@ -83,6 +84,14 @@ _更多资产类型将通过插件模式持续扩展。_
 - 端口转发、SOCKS 代理
 - 凭据加密存储
 - 从 SSH config / Tabby 导入
+
+### 远程桌面
+
+VNC 和 RDP 资产不再依赖单独的桥接服务。VNC 通过 noVNC 和内置 WebSocket↔TCP 桥接在 OpsKat 内显示；RDP 通过 Windows 系统远程桌面客户端（`mstsc.exe`）打开，当前仅支持 Windows。
+
+- VNC/RDP 可配置目标地址、凭据和代理链；RDP 额外支持屏幕尺寸、色深、域和忽略证书校验选项。
+- 如需在远程桌面标签页上传/下载文件或拖拽上传，需要绑定一个 SSH 资产作为文件通道。未绑定时远程桌面仍可连接，但文件面板会禁用并显示原因。
+- 文件复制/粘贴首版按 SFTP 上传/下载实现，不做 SMB、RDP 磁盘重定向，也不做系统资源管理器级文件列表剪贴板同步。
 
 ## 🤖 让 AI 替你操作
 

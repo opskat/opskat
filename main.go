@@ -19,6 +19,7 @@ import (
 	"github.com/opskat/opskat/internal/app/opsctl"
 	"github.com/opskat/opskat/internal/app/query"
 	"github.com/opskat/opskat/internal/app/redis"
+	"github.com/opskat/opskat/internal/app/remote_desktop"
 	"github.com/opskat/opskat/internal/app/serial"
 	"github.com/opskat/opskat/internal/app/ssh"
 	"github.com/opskat/opskat/internal/app/sshadapt"
@@ -33,6 +34,7 @@ import (
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/internal/service/external_edit_svc"
 	"github.com/opskat/opskat/internal/service/localterm_svc"
+	"github.com/opskat/opskat/internal/service/remote_desktop_svc"
 	"github.com/opskat/opskat/internal/service/serial_svc"
 	"github.com/opskat/opskat/internal/service/sftp_svc"
 	"github.com/opskat/opskat/internal/service/snippet_svc"
@@ -122,6 +124,7 @@ func main() {
 	})
 	serialMgr := serial_svc.NewManager()
 	localMgr := localterm_svc.NewManager()
+	remoteDesktopMgr := remote_desktop_svc.NewManager(asset_repo.Asset())
 	poolDialer := &sshadapt.PoolDialer{}
 	pool := sshpool.NewPool(poolDialer, 5*time.Minute)
 	proxyServer := sshpool.NewServer(pool, authToken)
@@ -145,6 +148,7 @@ func main() {
 	k8sB := k8s.New(appCtx, sys, pool)
 	serialB := serial.New(appCtx, sys, serialMgr)
 	localB := local.New(appCtx, sys, localMgr)
+	remoteDesktopB := remote_desktop.New(appCtx, sys, remoteDesktopMgr)
 	aiB := ai.New(appCtx, sys, pool)
 	opsctlB := opsctl.New(appCtx, sys, sys, proxyServer)
 	opsctlB.SetAuthToken(authToken)
@@ -156,7 +160,7 @@ func main() {
 	aiB.SetSerialManager(serialMgr)
 	aiB.SetWindowActivator(sys)
 
-	binders := []Lifecycle{sys, sshB, queryB, redisB, etcdB, kafkaB, k8sB, serialB, localB, aiB, opsctlB, extB, extEditB}
+	binders := []Lifecycle{sys, sshB, queryB, redisB, etcdB, kafkaB, k8sB, serialB, localB, remoteDesktopB, aiB, opsctlB, extB, extEditB}
 
 	appOptions := &options.App{
 		Title:     "OpsKat",
@@ -197,7 +201,7 @@ func main() {
 			pool.Close()
 		},
 		Bind: []interface{}{
-			sys, sshB, queryB, redisB, etcdB, kafkaB, k8sB, serialB, localB, aiB, opsctlB, extB, extEditB,
+			sys, sshB, queryB, redisB, etcdB, kafkaB, k8sB, serialB, localB, remoteDesktopB, aiB, opsctlB, extB, extEditB,
 		},
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop:     true,

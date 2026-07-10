@@ -24,6 +24,8 @@ const (
 	AssetTypeSerial   = "serial"
 	AssetTypeEtcd     = "etcd"
 	AssetTypeLocal    = "local"
+	AssetTypeVNC      = "vnc"
+	AssetTypeRDP      = "rdp"
 )
 
 // DatabaseDriver 数据库驱动类型
@@ -337,6 +339,34 @@ type LocalConfig struct {
 	Cwd   string   `json:"cwd,omitempty"`   // 工作目录
 }
 
+// VNCConfig VNC 远程桌面类型的特定配置。
+type VNCConfig struct {
+	Host           string            `json:"host"`
+	Port           int               `json:"port"`
+	Username       string            `json:"username,omitempty"`
+	Password       string            `json:"password,omitempty"`
+	CredentialID   int64             `json:"credential_id,omitempty"`
+	SecurityType   string            `json:"security_type,omitempty"`
+	FileSSHAssetID int64             `json:"file_ssh_asset_id,omitempty"`
+	ProxyChain     *ProxyChainConfig `json:"proxy_chain,omitempty"`
+}
+
+// RDPConfig RDP 远程桌面类型的特定配置。
+type RDPConfig struct {
+	Host           string            `json:"host"`
+	Port           int               `json:"port"`
+	Username       string            `json:"username"`
+	Password       string            `json:"password,omitempty"`
+	CredentialID   int64             `json:"credential_id,omitempty"`
+	Domain         string            `json:"domain,omitempty"`
+	ScreenWidth    int               `json:"screen_width,omitempty"`
+	ScreenHeight   int               `json:"screen_height,omitempty"`
+	ColorDepth     int               `json:"color_depth,omitempty"`
+	IgnoreCert     bool              `json:"ignore_cert,omitempty"`
+	FileSSHAssetID int64             `json:"file_ssh_asset_id,omitempty"`
+	ProxyChain     *ProxyChainConfig `json:"proxy_chain,omitempty"`
+}
+
 // DatabaseConfig PasswordSource implementation
 func (c *DatabaseConfig) GetCredentialID() int64 { return c.CredentialID }
 func (c *DatabaseConfig) GetPassword() string    { return c.Password }
@@ -409,6 +439,14 @@ func (c *SerialConfig) GetPassword() string    { return "" }
 func (c *LocalConfig) GetCredentialID() int64 { return 0 }
 func (c *LocalConfig) GetPassword() string    { return "" }
 
+// VNCConfig PasswordSource implementation
+func (c *VNCConfig) GetCredentialID() int64 { return c.CredentialID }
+func (c *VNCConfig) GetPassword() string    { return c.Password }
+
+// RDPConfig PasswordSource implementation
+func (c *RDPConfig) GetCredentialID() int64 { return c.CredentialID }
+func (c *RDPConfig) GetPassword() string    { return c.Password }
+
 // --- 充血模型方法 ---
 
 // IsSSH 判断是否SSH类型
@@ -454,6 +492,16 @@ func (a *Asset) IsEtcd() bool {
 // IsLocal 判断是否本地终端类型
 func (a *Asset) IsLocal() bool {
 	return a.Type == AssetTypeLocal
+}
+
+// IsVNC 判断是否 VNC 类型
+func (a *Asset) IsVNC() bool {
+	return a.Type == AssetTypeVNC
+}
+
+// IsRDP 判断是否 RDP 类型
+func (a *Asset) IsRDP() bool {
+	return a.Type == AssetTypeRDP
 }
 
 // GetSSHConfig 解析SSH配置
@@ -618,6 +666,65 @@ func (a *Asset) SetLocalConfig(cfg *LocalConfig) error {
 	return nil
 }
 
+// GetVNCConfig 解析 VNC 配置
+func (a *Asset) GetVNCConfig() (*VNCConfig, error) {
+	if !a.IsVNC() {
+		return nil, errors.New("资产不是VNC类型")
+	}
+	cfg, err := jsonfield.Unmarshal[VNCConfig](a.Config, "VNC配置")
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Port == 0 {
+		cfg.Port = 5900
+	}
+	return cfg, nil
+}
+
+// SetVNCConfig 序列化 VNC 配置到 Config 字段
+func (a *Asset) SetVNCConfig(cfg *VNCConfig) error {
+	s, err := jsonfield.Marshal(cfg, "VNC配置")
+	if err != nil {
+		return err
+	}
+	a.Config = s
+	return nil
+}
+
+// GetRDPConfig 解析 RDP 配置
+func (a *Asset) GetRDPConfig() (*RDPConfig, error) {
+	if !a.IsRDP() {
+		return nil, errors.New("资产不是RDP类型")
+	}
+	cfg, err := jsonfield.Unmarshal[RDPConfig](a.Config, "RDP配置")
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Port == 0 {
+		cfg.Port = 3389
+	}
+	if cfg.ScreenWidth == 0 {
+		cfg.ScreenWidth = 1280
+	}
+	if cfg.ScreenHeight == 0 {
+		cfg.ScreenHeight = 720
+	}
+	if cfg.ColorDepth == 0 {
+		cfg.ColorDepth = 24
+	}
+	return cfg, nil
+}
+
+// SetRDPConfig 序列化 RDP 配置到 Config 字段
+func (a *Asset) SetRDPConfig(cfg *RDPConfig) error {
+	s, err := jsonfield.Marshal(cfg, "RDP配置")
+	if err != nil {
+		return err
+	}
+	a.Config = s
+	return nil
+}
+
 // GetQueryPolicy 解析SQL权限策略（database类型）
 func (a *Asset) GetQueryPolicy() (*QueryPolicy, error) {
 	return jsonfield.UnmarshalOrDefault[QueryPolicy](a.CmdPolicy, "SQL权限策略")
@@ -749,6 +856,10 @@ func (a *Asset) Validate() error {
 		return a.validateLocal()
 	case AssetTypeEtcd:
 		return a.validateEtcd()
+	case AssetTypeVNC:
+		return a.validateVNC()
+	case AssetTypeRDP:
+		return a.validateRDP()
 	default:
 		// 扩展资产类型由扩展自行校验
 		return nil
@@ -963,6 +1074,47 @@ func (a *Asset) validateLocal() error {
 	return nil
 }
 
+// validateVNC 校验 VNC 类型特定配置
+func (a *Asset) validateVNC() error {
+	cfg, err := a.GetVNCConfig()
+	if err != nil {
+		return fmt.Errorf("VNC配置无效: %w", err)
+	}
+	if strings.TrimSpace(cfg.Host) == "" {
+		return errors.New("VNC主机地址不能为空")
+	}
+	if cfg.Port <= 0 || cfg.Port > 65535 {
+		return errors.New("VNC端口无效")
+	}
+	return ValidateProxyChain(cfg.ProxyChain)
+}
+
+// validateRDP 校验 RDP 类型特定配置
+func (a *Asset) validateRDP() error {
+	cfg, err := a.GetRDPConfig()
+	if err != nil {
+		return fmt.Errorf("RDP配置无效: %w", err)
+	}
+	if strings.TrimSpace(cfg.Host) == "" {
+		return errors.New("RDP主机地址不能为空")
+	}
+	if cfg.Port <= 0 || cfg.Port > 65535 {
+		return errors.New("RDP端口无效")
+	}
+	if strings.TrimSpace(cfg.Username) == "" {
+		return errors.New("RDP用户名不能为空")
+	}
+	if cfg.ScreenWidth < 0 || cfg.ScreenHeight < 0 {
+		return errors.New("RDP屏幕尺寸无效")
+	}
+	switch cfg.ColorDepth {
+	case 0, 8, 16, 24, 32:
+	default:
+		return errors.New("RDP色深无效")
+	}
+	return ValidateProxyChain(cfg.ProxyChain)
+}
+
 // validateEtcd 校验etcd类型特定配置
 func (a *Asset) validateEtcd() error {
 	cfg, err := a.GetEtcdConfig()
@@ -1077,6 +1229,18 @@ func (a *Asset) CanConnect() bool {
 		return len(cfg.Endpoints) > 0
 	case AssetTypeLocal:
 		return true
+	case AssetTypeVNC:
+		cfg, err := a.GetVNCConfig()
+		if err != nil {
+			return false
+		}
+		return cfg.Host != "" && cfg.Port > 0
+	case AssetTypeRDP:
+		cfg, err := a.GetRDPConfig()
+		if err != nil {
+			return false
+		}
+		return cfg.Host != "" && cfg.Port > 0 && cfg.Username != ""
 	}
 	return false
 }

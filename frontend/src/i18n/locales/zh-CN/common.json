@@ -37,7 +37,9 @@
     "ai": "AI 助手",
     "audit": "审计日志",
     "forward": "端口转发",
-    "snippets": "代码片段"
+    "snippets": "代码片段",
+    "vnc": "VNC",
+    "rdp": "RDP"
   },
   "assetType": {
     "searchPlaceholder": "搜索类型…",
@@ -603,7 +605,9 @@
     "sshRestoreCwdOnReconnect": "重连恢复上次目录",
     "tabSchemaRegistry": "Schema Registry",
     "tabConnect": "Connect",
-    "addDescription": "添加备注"
+    "addDescription": "添加备注",
+    "domain": "域",
+    "formMissingHostOrUsername": "请填写主机地址和用户名"
   },
   "sshKey": {
     "title": "SSH 密钥",
@@ -2610,5 +2614,30 @@
       "compactionRev": "该版本已被压缩，最早可用版本: {{rev}}",
       "connFailed": "连接 etcd 失败"
     }
+  },
+  "remoteDesktop": {
+    "files": "文件",
+    "fileSshAsset": "SSH/SFTP 文件通道",
+    "fileSshAssetPlaceholder": "选择用于文件上传下载的 SSH 资产",
+    "width": "宽度",
+    "height": "高度",
+    "colorDepth": "色深",
+    "ignoreCert": "忽略 RDP 证书校验",
+    "securityType": "安全类型",
+    "connecting": "正在连接远程桌面...",
+    "streamError": "远程桌面画面流异常",
+    "scaleOn": "缩放",
+    "scaleOff": "原始",
+    "pasteText": "粘贴文本",
+    "vncSecurityFailed": "VNC 认证失败或安全类型不兼容，请检查密码、VNC 安全类型和代理链配置。",
+    "vncCredentialsRequired": "VNC 需要密码，请在资产中配置密码或凭据",
+    "vncDisconnected": "VNC 连接已断开，请检查地址、端口、密码和代理链配置。",
+    "verifyServerTitle": "确认 VNC 服务器身份",
+    "verifyServerDesc": "服务器使用加密认证，请核对 RSA SHA-256 指纹后继续：",
+    "approveServer": "确认并连接",
+    "vncServerVerificationFailed": "VNC 服务器身份信息无效，无法继续连接。",
+    "vncServerVerificationCancelled": "已取消 VNC 服务器身份确认。",
+    "rdpExternalTitle": "RDP 已通过系统客户端打开",
+    "rdpExternalDesc": "Windows RDP 使用系统远程桌面客户端连接；文件面板仍可通过绑定的 SSH/SFTP 通道使用。"
   }
 }

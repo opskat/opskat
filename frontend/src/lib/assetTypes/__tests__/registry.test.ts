@@ -10,6 +10,8 @@ describe("AssetType Registry", () => {
     expect(getAssetType("kafka")).toBeDefined();
     expect(getAssetType("k8s")).toBeDefined();
     expect(getAssetType("local")).toBeDefined();
+    expect(getAssetType("vnc")).toBeDefined();
+    expect(getAssetType("rdp")).toBeDefined();
   });
 
   it("returns undefined for unknown type", () => {
@@ -34,6 +36,8 @@ describe("AssetType Registry", () => {
       "k8s",
       "serial",
       "local",
+      "vnc",
+      "rdp",
       "etcd",
     ]);
   });
@@ -44,7 +48,7 @@ describe("AssetType Registry", () => {
       expect(def.icon).toBeDefined();
       expect(typeof def.canConnect).toBe("boolean");
       expect(typeof def.canConnectInNewTab).toBe("boolean");
-      expect(["terminal", "query"]).toContain(def.connectAction);
+      expect(["terminal", "query", "remoteDesktop"]).toContain(def.connectAction);
       expect(def.DetailInfoCard).toBeDefined();
     }
   });
@@ -60,6 +64,11 @@ describe("AssetType Registry", () => {
 
   it("local is terminal type", () => {
     expect(getAssetType("local")!.connectAction).toBe("terminal");
+  });
+
+  it("vnc and rdp are remote desktop types", () => {
+    expect(getAssetType("vnc")!.connectAction).toBe("remoteDesktop");
+    expect(getAssetType("rdp")!.connectAction).toBe("remoteDesktop");
   });
 
   it("ssh, serial, and local support new tab", () => {
