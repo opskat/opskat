@@ -90,7 +90,6 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
   const port = cfg.port || 3389;
   const configuredClipboardEnabled = cfg.clipboard !== false;
 
-  const rootRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sessionIdRef = useRef("");
@@ -351,6 +350,12 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
     setReconnectNonce((n) => n + 1);
   }
 
+  function changeViewMode(mode: RDPViewMode) {
+    viewModeRef.current = mode;
+    setViewMode(mode);
+    if (mode === "fit") syncViewportSize();
+  }
+
   function disconnect() {
     const sessionId = sessionIdRef.current;
     sessionIdRef.current = "";
@@ -571,7 +576,6 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
 
   return (
     <div
-      ref={rootRef}
       className={cn(
         "flex h-full min-h-0 flex-col bg-background",
         isFullscreen && "fixed inset-0 z-[100] h-screen w-screen"
@@ -587,7 +591,7 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
         viewMode={viewMode}
         isFullscreen={isFullscreen}
         clipboardEnabled={clipboardEnabled}
-        onViewModeChange={setViewMode}
+        onViewModeChange={changeViewMode}
         onSendChord={(scancodes) => void sendChord(scancodes)}
         onToggleFullscreen={toggleFullscreen}
         onToggleClipboard={() => void toggleClipboard()}

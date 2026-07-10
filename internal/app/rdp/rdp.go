@@ -1,4 +1,4 @@
-// Package rdp implements the experimental RDP binder.
+// Package rdp implements the RDP binder.
 package rdp
 
 import (
@@ -20,14 +20,13 @@ type LangProvider interface {
 }
 
 type RDP struct {
-	appCtx  context.Context
 	ctx     context.Context
 	lang    LangProvider
 	service *rdp_svc.Service
 }
 
-func New(appCtx context.Context, lang LangProvider, pool *sshpool.Pool) *RDP {
-	r := &RDP{appCtx: appCtx, lang: lang}
+func New(lang LangProvider, pool *sshpool.Pool) *RDP {
+	r := &RDP{lang: lang}
 	r.service = rdp_svc.New(func(event rdp_svc.Event) {
 		if r.ctx == nil {
 			return

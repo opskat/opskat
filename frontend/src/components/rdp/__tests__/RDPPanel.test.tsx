@@ -185,6 +185,40 @@ describe("RDPPanel", () => {
     rectSpy.mockRestore();
   });
 
+  it("syncs the current viewport when switching from 1:1 back to Fit", async () => {
+    let resizeCallback: ResizeObserverCallback | undefined;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          resizeCallback = callback;
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+    await renderConnected();
+    vi.mocked(ResizeRDP).mockClear();
+    const rect = {
+      ...document.body.getBoundingClientRect(),
+      right: 1000,
+      bottom: 700,
+      width: 1000,
+      height: 700,
+    } as DOMRect;
+    const rectSpy = vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue(rect);
+
+    await userEvent.click(screen.getByTestId("rdp-view-actual"));
+    act(() => resizeCallback?.([], {} as ResizeObserver));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(ResizeRDP).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId("rdp-view-fit"));
+
+    await waitFor(() => expect(ResizeRDP).toHaveBeenCalledWith("sess-1", 1000, 700));
+    rectSpy.mockRestore();
+  });
+
   it("sends the Ctrl+Alt+Del chord in press-then-release order", async () => {
     await renderConnected();
     await userEvent.click(await screen.findByTestId("rdp-special-keys"));

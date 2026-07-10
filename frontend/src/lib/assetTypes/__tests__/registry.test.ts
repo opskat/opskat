@@ -97,4 +97,8 @@ describe("AssetType Registry", () => {
     expect(getAssetType("oss")!.canConnectInNewTab).toBe(false);
     expect(getAssetType("oss")!.testable).toBe(true);
   });
+
+  it("rdp does not expose command policies or policy groups", () => {
+    expect(getAssetType("rdp")!.policy).toBeUndefined();
+  });
 });

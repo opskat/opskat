@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useTerminalStore, getTerminalActiveAssetIds } from "../stores/terminalStore";
 import { useTabStore } from "../stores/tabStore";
 import { getQueryActiveAssetIds } from "../stores/queryStore";
-import { getRDPActiveAssetIds, useRDPStore } from "../stores/rdpStore";
+import { useRDPStore } from "../stores/rdpStore";
 
 /**
  * Returns the set of asset IDs that are currently "active" across all tab types.
@@ -19,8 +19,7 @@ export function useActiveAssetIds(): Set<number> {
   return useMemo(() => {
     const terminalIds = getTerminalActiveAssetIds();
     const queryIds = getQueryActiveAssetIds();
-    const rdpIds = getRDPActiveAssetIds();
-    return new Set([...terminalIds, ...queryIds, ...rdpIds]);
+    return new Set([...terminalIds, ...queryIds, ...rdpActiveAssetIds]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabData, tabs, rdpActiveAssetIds]);
 }

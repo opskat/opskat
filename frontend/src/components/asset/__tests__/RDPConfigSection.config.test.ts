@@ -90,7 +90,10 @@ describe("RDPConfigSection.config", () => {
 
   it("prefers the asset tunnel column over proxy when deriving connection type", () => {
     expect(
-      parseRDPConfig('{"host":"h","port":3389,"username":"u","clipboard":true,"proxy":{"type":"socks5","host":"p","port":1080}}', 5)
+      parseRDPConfig(
+        '{"host":"h","port":3389,"username":"u","clipboard":true,"proxy":{"type":"socks5","host":"p","port":1080}}',
+        5
+      )
     ).toMatchObject({ connectionType: "jumphost", sshTunnelId: 5 });
   });
 

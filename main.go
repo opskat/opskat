@@ -142,7 +142,7 @@ func main() {
 	sshB := ssh.New(appCtx, sys, sshMgr, sftpSvc, pool)
 	queryB := query.New(appCtx, sys, pool)
 	redisB := redis.New(appCtx, sys, pool)
-	rdpB := rdp.New(appCtx, sys, pool)
+	rdpB := rdp.New(sys, pool)
 	etcdB := etcd.New(appCtx, sys, pool)
 	ossB := oss.New(appCtx, sys)
 	kafkaB := kafka.New(appCtx, sys, pool)

@@ -340,8 +340,6 @@ func testClientOptions(cfg *asset_entity.RDPConfig, password string, width, heig
 	opts := clientOptions(cfg, password, width, height)
 	opts.Clipboard = false
 	opts.GFX = false
-	opts.NoAVC = true
-	opts.HeartbeatTimeout = 0
 	return opts
 }
 

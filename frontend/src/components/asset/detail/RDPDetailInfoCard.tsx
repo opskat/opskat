@@ -9,8 +9,6 @@ interface RDPConfig {
   port?: number;
   username?: string;
   domain?: string;
-  width?: number;
-  height?: number;
   clipboard?: boolean;
   ssh_asset_id?: number;
   proxy?: ProxyConfigJSON | null;

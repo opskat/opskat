@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 )
@@ -14,7 +13,6 @@ type rdpHandler struct{}
 
 func init() {
 	Register(&rdpHandler{})
-	policy.RegisterDefaultPolicy("rdp", func() any { return asset_entity.DefaultCommandPolicy() })
 }
 
 func (h *rdpHandler) Type() string     { return asset_entity.AssetTypeRDP }
@@ -41,8 +39,8 @@ func (h *rdpHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asset)
 	return credential_resolver.Default().ResolvePasswordGeneric(ctx, cfg)
 }
 
-func (h *rdpHandler) DefaultPolicy() any { return asset_entity.DefaultCommandPolicy() }
-func (h *rdpHandler) PolicyKind() string { return policy.PolicyKindCommand }
+func (h *rdpHandler) DefaultPolicy() any { return nil }
+func (h *rdpHandler) PolicyKind() string { return "" }
 
 func (h *rdpHandler) ValidateCreateArgs(args map[string]any) error {
 	if ArgString(args, "host") == "" || ArgString(args, "username") == "" {

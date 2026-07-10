@@ -25,7 +25,7 @@ OpsKat is a **Wails v2** desktop app (Go 1.26 backend + React 19 frontend). The 
 │        │                                                            │
 │        │   WASM (wazero)  ◄── pkg/extension ── internal/ai (tools)  │
 │        │                                                            │
-│   sshpool / connpool  (live SSH conns + DB/Redis tunnels)          │
+│   sshpool / connpool  (live SSH conns + protocol tunnels/proxies)  │
 └───────┬──────────────────────────────┬────────────────────────────┘
         │ approval.sock                 │ sshpool.sock
         │ (approve / grant)             │ (reuse pooled SSH conns)
@@ -120,7 +120,7 @@ For the exact logging obligations on this path, see [DEVELOP.md → Logging for 
 - **`approval.sock`** (`internal/approval`, server started from `internal/app/opsctl`) — line-delimited JSON request/response. When a command needs confirmation, opsctl sends an `ApprovalRequest` (exec / cp / create / update / grant / batch / ext_tool); the app emits a Wails event, the UI shows the dialog, and the decision (plus any user-edited grant patterns) is returned. Approved **grants** are persisted via `grant_repo` so later matching commands are auto-approved.
 - **`sshpool.sock`** (`internal/sshpool`) — a framed binary proxy. opsctl asks the app to run exec / upload / download / copy over an **already-open** pooled SSH connection instead of dialing (and re-authenticating) itself.
 
-`internal/sshpool` pools live SSH clients (ref-counted, idle-reaped); `internal/connpool` builds short-lived TCP **tunnels** through those SSH connections for DB/Redis/etc. protocols, or dials through a per-asset **SOCKS5 proxy** (`internal/pkg/socksdial`, shared with SSH) when the config carries a `proxy` block — tunnel wins if both are present. When the app isn't running, opsctl falls back to `pkg/client` (direct SSH with TOFU known-hosts) and a local policy/grant check for the operations that allow offline use.
+`internal/sshpool` pools live SSH clients (ref-counted, idle-reaped); `internal/connpool` builds TCP **tunnels** through those SSH connections for network protocols including database, Redis, and RDP, or dials through a per-asset **SOCKS5 proxy** (`internal/pkg/socksdial`, shared with SSH) when the config carries a `proxy` block — tunnel wins if both are present. When the app isn't running, opsctl falls back to `pkg/client` (direct SSH with TOFU known-hosts) and a local policy/grant check for the operations that allow offline use.
 
 End to end — `opsctl exec <asset> -- <cmd>`: resolve asset → local policy check → if NeedConfirm, request approval over `approval.sock` (UI prompt) → on approval, execute over `sshpool.sock` against the pooled connection (falling back to a direct dial if the socket is unavailable) → stream stdout/stderr/exit, write the audit log.
 
@@ -129,7 +129,7 @@ End to end — `opsctl exec <asset> -- <cmd>`: resolve asset → local policy ch
 `frontend/` is a **pnpm workspace** (Vite 6, Tailwind 4, shadcn/ui over Radix, Zustand 5). The root app lives in `frontend/src/`; `frontend/packages/ui` is the shared `@opskat/ui` component library (consumed by both the app and `devserver-ui`); `frontend/packages/devserver-ui` is the separate UI embedded by `cmd/devserver`.
 
 - **No React Router.** Navigation is a custom tab system in `tabStore`; tab kinds are the `TabType` union `"terminal" | "ai" | "query" | "page" | "info"`, each with its own metadata. Tab state persists to localStorage for session restore.
-- **One Zustand store per domain** in `frontend/src/stores/` (enumerate with `git ls-files 'frontend/src/stores/*.ts'`). Components depend on stores/hooks, not on sibling components' internals; backend calls and connection/transport logic live in the stores, not scattered across components.
+- **One Zustand store per domain** in `frontend/src/stores/` (enumerate with `git ls-files 'frontend/src/stores/*.ts'`). Components depend on stores/hooks, not on sibling components' internals; shared domain state and selectors live in stores. A stateful pane may own its view-local IPC/event lifecycle when that lifecycle is not shared, as `RDPPanel` does for one mounted remote-desktop session.
 - **Backend bridge:** the generated, gitignored `frontend/wailsjs/go/<domain>/*` bindings call into the matching `internal/app/<domain>` binder; backend→frontend push uses `EventsOn` / `EventsOff` against events the app emits.
 - **i18n:** i18next with locales `frontend/src/i18n/locales/{zh-CN,en}/common.json`, single namespace `common`, keys via `t("key.subkey")`.
 - **Tests:** Vitest + happy-dom + React Testing Library; the Wails runtime and bindings are mocked in `frontend/src/__tests__/setup.ts`.
