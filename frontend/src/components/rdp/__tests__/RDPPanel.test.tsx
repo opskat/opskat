@@ -55,6 +55,9 @@ interface RDPEvent {
   data?: string;
   error?: string;
   text?: string;
+  pointerType?: string;
+  hotspotX?: number;
+  hotspotY?: number;
 }
 
 let emit: ((e: RDPEvent) => void) | null;
@@ -276,18 +279,38 @@ describe("RDPPanel", () => {
     ]);
   });
 
-  it("types a plain character as a Unicode key event", async () => {
+  it("types a plain letter as a scancode press and release so the remote IME can compose", async () => {
     await renderConnected();
     const canvas = screen.getByTestId("rdp-canvas");
     canvas.focus();
 
     fireEvent.keyDown(canvas, { key: "a", code: "KeyA" });
+    fireEvent.keyUp(canvas, { key: "a", code: "KeyA" });
+
+    const keyCalls = () =>
+      vi
+        .mocked(SendRDPInput)
+        .mock.calls.map((c) => c[0])
+        .filter((e) => e.kind === "key");
+    await waitFor(() => expect(keyCalls()).toHaveLength(2));
+    expect(keyCalls()).toEqual([
+      { sessionId: "sess-1", kind: "key", scancode: 0x1e, pressed: true },
+      { sessionId: "sess-1", kind: "key", scancode: 0x1e, pressed: false },
+    ]);
+  });
+
+  it("falls back to a Unicode key event for a printable key with no scancode mapping", async () => {
+    await renderConnected();
+    const canvas = screen.getByTestId("rdp-canvas");
+    canvas.focus();
+
+    fireEvent.keyDown(canvas, { key: "5", code: "Numpad5" });
 
     await waitFor(() =>
       expect(SendRDPInput).toHaveBeenCalledWith({
         sessionId: "sess-1",
         kind: "unicode",
-        codepoint: 97,
+        codepoint: 53,
         pressed: true,
       })
     );
@@ -489,6 +512,21 @@ describe("RDPPanel", () => {
     // No second flush without new movement.
     await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
     expect(SendRDPInput).toHaveBeenCalledTimes(1);
+  });
+
+  it("follows remote pointer updates by swapping the canvas cursor", async () => {
+    await renderConnected();
+    const canvas = screen.getByTestId("rdp-canvas");
+
+    await act(async () => {
+      emit!({ type: "pointer", sessionId: "sess-1", pointerType: "hidden" });
+    });
+    expect(canvas.style.cursor).toBe("none");
+
+    await act(async () => {
+      emit!({ type: "pointer", sessionId: "sess-1", pointerType: "default" });
+    });
+    expect(canvas.style.cursor).toBe("default");
   });
 
   describe("frame rendering", () => {

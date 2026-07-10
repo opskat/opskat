@@ -35,6 +35,11 @@ type Event struct {
 	Data       string `json:"data,omitempty"` // top-down RGBA of the dirty region, base64
 	Text       string `json:"text,omitempty"`
 	Count      int    `json:"count,omitempty"`
+	// Pointer events: PointerType is "shape" (Data carries the top-down RGBA
+	// cursor image sized Width×Height), "default", or "hidden".
+	PointerType string `json:"pointerType,omitempty"`
+	HotspotX    int    `json:"hotspotX,omitempty"`
+	HotspotY    int    `json:"hotspotY,omitempty"`
 }
 
 type ConnectRequest struct {
@@ -175,6 +180,13 @@ func (s *Service) Connect(ctx context.Context, req ConnectRequest) (string, erro
 	})
 	client.OnStridedBitmap(func(x, y, w, h int, _ []byte, _ int) {
 		sess.streamer.markDirty(x, y, w, h)
+	})
+	// Cursor shapes arrive as pointer PDUs (never drawn into the framebuffer);
+	// forward them so the frontend can render the remote cursor locally.
+	client.OnPointer(func(u *rdp.PointerUpdate) {
+		if s.emit != nil {
+			s.emit(pointerEvent(id, u))
+		}
 	})
 	client.OnResize(func(w, h int) {
 		// Repaint everything at the new size: the canvas is cleared on resize,

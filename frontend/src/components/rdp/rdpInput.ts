@@ -125,12 +125,13 @@ export function scancodeFor(code: string): { scancode: number; extended?: boolea
   return undefined;
 }
 
-/** Keys that go to the remote as scancodes even with no modifier held: they are
- * control / whitespace / navigation / function keys, not typed text. Modifiers
- * are here so the remote sees Ctrl/Alt/Shift held while composing a shortcut;
- * Meta (Win/Cmd) is deliberately excluded — it is reserved for the host's own
- * shortcuts (e.g. Cmd+V local-clipboard paste). */
-const SCANCODE_ONLY_CODES = new Set([
+/** Control / whitespace / navigation / function keys — not typed text. They
+ * keep going to the remote as scancodes even while Meta (Cmd/Win) is held:
+ * Meta chords over *text* keys are reserved for the host's own shortcuts
+ * (e.g. Cmd+V local-clipboard paste), but navigation must stay usable.
+ * Modifiers are here so the remote sees Ctrl/Alt/Shift held while composing
+ * a shortcut. */
+const NON_TYPING_CODES = new Set([
   "ControlLeft",
   "ControlRight",
   "ShiftLeft",
@@ -172,13 +173,16 @@ export type KeyPlan =
   | { kind: "unicode"; codepoint: number }
   | { kind: "none" };
 
-/** Decide how a keydown should reach the remote. Chords (Ctrl/Alt held) and
- * control/navigation/function keys go as scancodes — RDP Unicode events cannot
- * carry modifier state, so a shortcut only works as scancodes. Plain printable
- * characters go as Unicode, which is layout- and IME-robust. */
+/** Decide how a keydown should reach the remote. Every key with a scancode
+ * mapping goes as a real keystroke (what mstsc sends) so the remote IME can
+ * intercept and compose — RDP Unicode events are injected past the remote IME
+ * (VK_PACKET) and would put raw latin letters on screen. Meta (Cmd/Win) combos
+ * over text keys stay on the host. Printable keys with no mapping (e.g. numpad
+ * digits) fall back to Unicode, which cannot carry modifier or IME state but
+ * still delivers the character. */
 export function planKeyDown(code: string, key: string, mods: { ctrl: boolean; alt: boolean; meta: boolean }): KeyPlan {
   const sc = scancodeFor(code);
-  if (sc !== undefined && (mods.ctrl || mods.alt || SCANCODE_ONLY_CODES.has(code))) {
+  if (sc !== undefined && (mods.ctrl || mods.alt || NON_TYPING_CODES.has(code) || !mods.meta)) {
     return { kind: "scancode", scancode: sc.scancode, extended: sc.extended };
   }
   if (key.length === 1 && !mods.ctrl && !mods.alt && !mods.meta) {

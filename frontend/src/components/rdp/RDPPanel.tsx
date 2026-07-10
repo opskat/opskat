@@ -40,6 +40,7 @@ import {
   scancodeFor,
 } from "./rdpInput";
 import { decodeFrameBytes } from "./rdpFrame";
+import { pointerCursorStyle } from "./rdpCursor";
 
 interface RDPConfig {
   host?: string;
@@ -52,12 +53,22 @@ interface RDPConfig {
 }
 
 interface RDPEvent {
-  type: "connecting" | "connected" | "frame" | "clipboard" | "clipboard-files" | "clipboard-error" | "error" | "closed";
+  type:
+    | "connecting"
+    | "connected"
+    | "frame"
+    | "pointer"
+    | "clipboard"
+    | "clipboard-files"
+    | "clipboard-error"
+    | "error"
+    | "closed";
   sessionId: string;
   message?: string;
   error?: string;
   // Full framebuffer dimensions; a frame event carries the dirty sub-region
-  // at (x, y) sized rectWidth×rectHeight.
+  // at (x, y) sized rectWidth×rectHeight. A pointer event reuses width/height
+  // and data for the cursor image, anchored at (hotspotX, hotspotY).
   width?: number;
   height?: number;
   x?: number;
@@ -67,6 +78,9 @@ interface RDPEvent {
   data?: string;
   text?: string;
   count?: number;
+  pointerType?: string;
+  hotspotX?: number;
+  hotspotY?: number;
 }
 
 const PTR_MOVE = 0x0800;
@@ -137,6 +151,7 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [clipboardEnabled, setClipboardEnabled] = useState(configuredClipboardEnabled);
   const [connectedAt, setConnectedAt] = useState<number | null>(null);
+  const [cursorStyle, setCursorStyle] = useState("default");
   const [elapsed, setElapsed] = useState(0);
   const [reconnectNonce, setReconnectNonce] = useState(0);
 
@@ -255,6 +270,10 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
           }
           if (event.type === "clipboard-error") {
             toast.error(`${t("asset.rdpClipboardReceiveFailed")}: ${event.error || t("asset.rdpError")}`);
+            return;
+          }
+          if (event.type === "pointer") {
+            setCursorStyle(pointerCursorStyle(event));
             return;
           }
           if (event.type === "frame" && event.data && event.width && event.height) {
@@ -711,7 +730,7 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
           data-testid="rdp-canvas"
           tabIndex={0}
           className={`outline-none ${viewMode === "actual" ? "block max-w-none" : "h-full w-full"}`}
-          style={{ ...canvasStyle, imageRendering: "auto" }}
+          style={{ ...canvasStyle, imageRendering: "auto", cursor: cursorStyle }}
           onContextMenu={handleContextMenu}
           onMouseMove={queueMouseMove}
           onMouseDown={(e) => {

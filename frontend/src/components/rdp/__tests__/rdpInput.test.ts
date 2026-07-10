@@ -115,10 +115,23 @@ describe("planKeyDown", () => {
     expect(planKeyDown("F5", "F5", NO_MODS)).toEqual({ kind: "scancode", scancode: KEY_SCANCODES.F5 });
   });
 
-  it("types a plain printable character as Unicode (layout/IME robust)", () => {
-    expect(planKeyDown("KeyA", "a", NO_MODS)).toEqual({ kind: "unicode", codepoint: 97 });
-    // Shift-for-capitalization is already reflected in e.key, so Unicode still applies.
-    expect(planKeyDown("KeyA", "A", NO_MODS)).toEqual({ kind: "unicode", codepoint: 65 });
+  it("types a plain letter as its physical scancode so the remote IME can compose", () => {
+    // Unicode events are injected past the remote IME (VK_PACKET), so pinyin
+    // could never compose remotely; real keystrokes (like mstsc sends) can.
+    expect(planKeyDown("KeyA", "a", NO_MODS)).toEqual({ kind: "scancode", scancode: KEY_SCANCODES.KeyA });
+    // Shift is forwarded separately as its own scancode, so a shifted letter
+    // still goes as the same position scancode.
+    expect(planKeyDown("KeyA", "A", NO_MODS)).toEqual({ kind: "scancode", scancode: KEY_SCANCODES.KeyA });
+  });
+
+  it("types plain digits and punctuation as scancodes", () => {
+    expect(planKeyDown("Digit1", "1", NO_MODS)).toEqual({ kind: "scancode", scancode: KEY_SCANCODES.Digit1 });
+    expect(planKeyDown("Comma", ",", NO_MODS)).toEqual({ kind: "scancode", scancode: KEY_SCANCODES.Comma });
+  });
+
+  it("falls back to Unicode for a printable key with no scancode mapping", () => {
+    // Numpad digits have no mapping; their typed character must still arrive.
+    expect(planKeyDown("Numpad5", "5", NO_MODS)).toEqual({ kind: "unicode", codepoint: 53 });
   });
 
   it("ignores a Meta (Cmd/Win) combo that is neither a chord nor printable text", () => {
