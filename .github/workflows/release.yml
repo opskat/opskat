@@ -243,5 +243,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api repos/opskat/opskat/releases/tags/${{ github.ref_name }} > release-info.json
+          gh api repos/${{ github.repository }}/releases/tags/${{ github.ref_name }} > release-info.json
           gh release upload ${{ github.ref_name }} release-info.json --clobber
