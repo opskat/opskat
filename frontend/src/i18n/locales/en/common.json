@@ -2519,6 +2519,13 @@
       "providerS3": "Amazon S3",
       "providerAliyunOSS": "Alibaba Cloud OSS",
       "providerTencentCOS": "Tencent Cloud COS",
+      "providerHuaweiOBS": "Huawei Cloud OBS",
+      "providerVolcengineTOS": "Volcengine TOS",
+      "providerQiniuKodo": "Qiniu Kodo",
+      "providerCloudflareR2": "Cloudflare R2",
+      "providerBackblazeB2": "Backblaze B2",
+      "providerDigitalOceanSpaces": "DigitalOcean Spaces",
+      "providerWasabi": "Wasabi",
       "providerMinio": "MinIO",
       "providerS3Compat": "S3-Compatible",
       "endpoint": "Endpoint",
@@ -2529,7 +2536,9 @@
       "secretAccessKey": "Secret Access Key",
       "usePathStyle": "Path-style addressing",
       "useSSL": "Use HTTPS",
-      "connectTimeout": "Connect timeout (s)"
+      "skipTLSVerify": "Skip TLS certificate verification",
+      "connectTimeout": "Connect timeout (s)",
+      "partSizeMB": "Multipart size (MB)"
     },
     "error": {
       "required": "Endpoint and Access Key ID are required"
@@ -2555,7 +2564,11 @@
       "deleteConfirmOne": "Delete object {{key}}?",
       "deleteConfirmMany": "Delete {{count}} objects?",
       "deleteSuccess": "Deleted",
-      "deleteFailed": "Delete failed"
+      "deleteFailed": "Delete failed",
+      "newFolder": "New folder",
+      "newFolderPrompt": "Folder name",
+      "newFolderSuccess": "Folder created",
+      "deleteFolderConfirm": "Delete folder {{name}} and all objects below it?"
     },
     "transfer": {
       "upload": "Upload",
@@ -2579,6 +2592,15 @@
       "share": "Generate presigned URL",
       "copyUrl": "Copy URL",
       "download": "Download",
+      "rename": "Rename",
+      "copy": "Copy",
+      "move": "Move",
+      "renamePrompt": "New object key",
+      "copyPrompt": "Destination object key",
+      "movePrompt": "Destination object key",
+      "renameSuccess": "Object renamed",
+      "copySuccess": "Object copied",
+      "moveSuccess": "Object moved",
       "delete": "Delete object",
       "close": "Close",
       "size": "Size",

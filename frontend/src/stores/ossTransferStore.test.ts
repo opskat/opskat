@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
-import { OSSUploadObject, OSSDownloadObject, OSSCancelTransfer } from "../../wailsjs/go/oss/OSS";
+import { OSSUploadObject, OSSDownloadObject, OSSStartTransfer, OSSCancelTransfer } from "../../wailsjs/go/oss/OSS";
 import { useOssTransferStore } from "./ossTransferStore";
 import { useOssBrowserStore } from "./ossBrowserStore";
 
@@ -19,6 +19,7 @@ beforeEach(() => {
   vi.mocked(EventsOff).mockClear();
   vi.mocked(OSSUploadObject).mockReset();
   vi.mocked(OSSDownloadObject).mockReset();
+  vi.mocked(OSSStartTransfer).mockReset().mockResolvedValue(undefined);
   vi.mocked(OSSCancelTransfer).mockReset().mockResolvedValue(undefined);
   useOssTransferStore.setState({ tabs: {} });
   useOssBrowserStore.setState({ tabs: {} });
@@ -38,6 +39,8 @@ describe("ossTransferStore", () => {
     expect(rows["oss-1"].direction).toBe("upload");
     expect(rows["oss-1"].targetPrefix).toBe("docs/");
     expect(EventsOn).toHaveBeenCalledWith("transfer:progress:oss-1", expect.any(Function));
+    expect(EventsOn).toHaveBeenCalledBefore(vi.mocked(OSSStartTransfer));
+    expect(OSSStartTransfer).toHaveBeenCalledWith("oss-1");
   });
 
   it("startUpload with an empty array (dialog cancel) adds no rows", async () => {

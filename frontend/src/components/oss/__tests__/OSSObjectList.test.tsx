@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import { OSSObjectList, formatBytes, shouldLoadNextPage } from "../OSSObjectList";
 import type { oss_svc } from "../../../../wailsjs/go/models";
 
@@ -61,6 +61,11 @@ describe("OSSObjectList", () => {
     render(<OSSObjectList {...base} onNavigatePrefix={onNavigatePrefix} prefixes={["docs/sub/"]} objects={[]} />);
     fireEvent.doubleClick(screen.getByTestId("oss-folder-docs/sub/"));
     expect(onNavigatePrefix).toHaveBeenCalledWith("docs/sub/");
+  });
+
+  it("does not show a delete action on folder rows", () => {
+    render(<OSSObjectList {...base} prefixes={["docs/sub/"]} objects={[]} />);
+    expect(within(screen.getByTestId("oss-folder-docs/sub/")).queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("clicking an object checkbox toggles its selection", () => {

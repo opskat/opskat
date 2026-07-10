@@ -1,7 +1,13 @@
 import { create } from "zustand";
 import { toast } from "sonner";
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
-import { OSSUploadObject, OSSUploadObjectPath, OSSDownloadObject, OSSCancelTransfer } from "../../wailsjs/go/oss/OSS";
+import {
+  OSSUploadObject,
+  OSSUploadObjectPath,
+  OSSDownloadObject,
+  OSSStartTransfer,
+  OSSCancelTransfer,
+} from "../../wailsjs/go/oss/OSS";
 import { registerTabCloseHook, type QueryTabMeta } from "./tabStore";
 import { useOssBrowserStore } from "./ossBrowserStore";
 import i18n from "../i18n";
@@ -147,6 +153,7 @@ export const useOssTransferStore = create<OssTransferState>((set, get) => {
           status: "active",
         });
         subscribeProgress(tabId, id);
+        await OSSStartTransfer(id);
       }
     },
 
@@ -166,6 +173,7 @@ export const useOssTransferStore = create<OssTransferState>((set, get) => {
         status: "active",
       });
       subscribeProgress(tabId, id);
+      await OSSStartTransfer(id);
     },
 
     startDownload: async (tabId, assetId, bucket, key) => {
@@ -182,6 +190,7 @@ export const useOssTransferStore = create<OssTransferState>((set, get) => {
         status: "active",
       });
       subscribeProgress(tabId, id);
+      await OSSStartTransfer(id);
     },
 
     cancel: (transferId) => {

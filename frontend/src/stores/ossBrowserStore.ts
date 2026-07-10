@@ -5,6 +5,9 @@ import {
   OSSRemoveObject,
   OSSRemoveObjects,
   OSSPresignGet,
+  OSSCopyObject,
+  OSSMoveObject,
+  OSSCreateFolder,
 } from "../../wailsjs/go/oss/OSS";
 import { oss_svc } from "../../wailsjs/go/models";
 import { registerTabCloseHook, type QueryTabMeta } from "./tabStore";
@@ -50,6 +53,10 @@ interface OssBrowserState {
   focusObject: (tabId: string, key: string | null) => void;
   ensureThumbnail: (tabId: string, key: string) => Promise<void>;
   deleteObject: (tabId: string, key: string) => Promise<void>;
+  createFolder: (tabId: string, name: string) => Promise<void>;
+  copyObject: (tabId: string, key: string, destinationKey: string, destinationBucket?: string) => Promise<void>;
+  moveObject: (tabId: string, key: string, destinationKey: string, destinationBucket?: string) => Promise<void>;
+  deletePrefix: (tabId: string, prefix: string) => Promise<void>;
 }
 
 function emptyTabState(assetId: number): OssBrowserTabState {
@@ -297,6 +304,67 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
         throw err;
       }
       patch(tabId, (t) => (t.focusedKey === key ? { ...t, focusedKey: null } : t));
+      await get().refresh(tabId);
+    },
+
+    createFolder: async (tabId, name) => {
+      const t = get().tabs[tabId];
+      if (!t) return;
+      const leaf = name.trim().replace(/^\/+|\/+$/g, "");
+      if (!leaf) throw new Error("folder name is required");
+      await OSSCreateFolder({ assetId: t.assetId, bucket: t.currentBucket, prefix: `${t.currentPrefix}${leaf}/` });
+      await get().refresh(tabId);
+    },
+
+    copyObject: async (tabId, key, destinationKey, destinationBucket) => {
+      const t = get().tabs[tabId];
+      if (!t) return;
+      await OSSCopyObject({
+        assetId: t.assetId,
+        srcBucket: t.currentBucket,
+        srcKey: key,
+        dstBucket: destinationBucket || t.currentBucket,
+        dstKey: destinationKey,
+      });
+      await get().refresh(tabId);
+    },
+
+    moveObject: async (tabId, key, destinationKey, destinationBucket) => {
+      const t = get().tabs[tabId];
+      if (!t) return;
+      await OSSMoveObject({
+        assetId: t.assetId,
+        srcBucket: t.currentBucket,
+        srcKey: key,
+        dstBucket: destinationBucket || t.currentBucket,
+        dstKey: destinationKey,
+      });
+      patch(tabId, (current) => (current.focusedKey === key ? { ...current, focusedKey: null } : current));
+      await get().refresh(tabId);
+    },
+
+    deletePrefix: async (tabId, prefix) => {
+      const t = get().tabs[tabId];
+      if (!t) return;
+      const keys: string[] = [];
+      const visit = async (currentPrefix: string): Promise<void> => {
+        let cursor = "";
+        do {
+          const result = await OSSListObjects({
+            assetId: t.assetId,
+            bucket: t.currentBucket,
+            prefix: currentPrefix,
+            maxKeys: OSS_PAGE_SIZE,
+            continuationToken: cursor,
+          });
+          keys.push(...(result.objects ?? []).map((object) => object.key));
+          for (const child of result.prefixes ?? []) await visit(child);
+          cursor = result.isTruncated ? (result.nextContinuationToken ?? "") : "";
+        } while (cursor);
+      };
+      await visit(prefix);
+      if (!keys.includes(prefix)) keys.push(prefix);
+      await OSSRemoveObjects({ assetId: t.assetId, bucket: t.currentBucket, keys });
       await get().refresh(tabId);
     },
   };

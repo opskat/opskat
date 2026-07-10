@@ -24,6 +24,7 @@ type OSS struct {
 	lang    LangProvider
 	service *oss_svc.Service
 	cancels sync.Map // transferID -> context.CancelFunc(在途传输取消注册表,仿 sftp_svc)
+	pending sync.Map // transferID -> func(); 前端订阅进度事件后显式启动，避免终态事件丢失
 }
 
 // New 构造 OSS binder。

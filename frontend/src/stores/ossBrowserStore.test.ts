@@ -7,6 +7,9 @@ vi.mock("../../wailsjs/go/oss/OSS", () => ({
   OSSRemoveObject: vi.fn(),
   OSSRemoveObjects: vi.fn(),
   OSSPresignGet: vi.fn(),
+  OSSCopyObject: vi.fn(),
+  OSSMoveObject: vi.fn(),
+  OSSCreateFolder: vi.fn(),
 }));
 
 import {
@@ -15,6 +18,9 @@ import {
   OSSRemoveObject,
   OSSRemoveObjects,
   OSSPresignGet,
+  OSSCopyObject,
+  OSSMoveObject,
+  OSSCreateFolder,
 } from "../../wailsjs/go/oss/OSS";
 import { useOssBrowserStore } from "./ossBrowserStore";
 import { useTabStore } from "./tabStore";
@@ -48,6 +54,9 @@ beforeEach(() => {
   vi.mocked(OSSRemoveObject).mockReset();
   vi.mocked(OSSRemoveObjects).mockReset();
   vi.mocked(OSSPresignGet).mockReset();
+  vi.mocked(OSSCopyObject).mockReset();
+  vi.mocked(OSSMoveObject).mockReset();
+  vi.mocked(OSSCreateFolder).mockReset();
   useOssBrowserStore.setState({ tabs: {} });
   useTabStore.setState({ tabs: [], activeTabId: null });
 });
@@ -329,5 +338,37 @@ describe("ossBrowserStore P3b-3 additions", () => {
     } as never);
     await useOssBrowserStore.getState().navigateToPrefix(TAB, "other/");
     expect(useOssBrowserStore.getState().tabs[TAB].focusedKey).toBeNull();
+  });
+
+  it("creates a folder below the current prefix", async () => {
+    seed({ currentPrefix: "docs/" });
+    vi.mocked(OSSCreateFolder).mockResolvedValue(undefined as never);
+    const refresh = vi.spyOn(useOssBrowserStore.getState(), "refresh").mockResolvedValue(undefined);
+    await useOssBrowserStore.getState().createFolder(TAB, "images");
+    expect(OSSCreateFolder).toHaveBeenCalledWith({ assetId: 7, bucket: "b", prefix: "docs/images/" });
+    refresh.mockRestore();
+  });
+
+  it("copies and moves an object through the backend bindings", async () => {
+    seed({ focusedKey: "docs/a.txt" });
+    const refresh = vi.spyOn(useOssBrowserStore.getState(), "refresh").mockResolvedValue(undefined);
+    await useOssBrowserStore.getState().copyObject(TAB, "docs/a.txt", "archive/a.txt");
+    expect(OSSCopyObject).toHaveBeenCalledWith({
+      assetId: 7,
+      srcBucket: "b",
+      srcKey: "docs/a.txt",
+      dstBucket: "b",
+      dstKey: "archive/a.txt",
+    });
+    await useOssBrowserStore.getState().moveObject(TAB, "docs/a.txt", "docs/b.txt");
+    expect(OSSMoveObject).toHaveBeenCalledWith({
+      assetId: 7,
+      srcBucket: "b",
+      srcKey: "docs/a.txt",
+      dstBucket: "b",
+      dstKey: "docs/b.txt",
+    });
+    expect(useOssBrowserStore.getState().tabs[TAB].focusedKey).toBeNull();
+    refresh.mockRestore();
   });
 });

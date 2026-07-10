@@ -9,8 +9,7 @@ import { useOssBrowserStore } from "@/stores/ossBrowserStore";
 import { useOssTransferStore } from "@/stores/ossTransferStore";
 import { flattenPrefixTree } from "@/lib/ossPrefixTree";
 import { formatBytes } from "@/lib/formatBytes";
-import { notifySuccess, notifyCopied } from "@/lib/notify";
-import { OSSPresignGet } from "../../../wailsjs/go/oss/OSS";
+import { notifySuccess } from "@/lib/notify";
 import { OSSBucketTree } from "@/components/oss/OSSBucketTree";
 import { OSSBreadcrumb } from "@/components/oss/OSSBreadcrumb";
 import { OSSObjectList } from "@/components/oss/OSSObjectList";
@@ -43,6 +42,9 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
   const focusObject = useOssBrowserStore((s) => s.focusObject);
   const ensureThumbnail = useOssBrowserStore((s) => s.ensureThumbnail);
   const deleteObject = useOssBrowserStore((s) => s.deleteObject);
+  const createFolder = useOssBrowserStore((s) => s.createFolder);
+  const copyObject = useOssBrowserStore((s) => s.copyObject);
+  const moveObject = useOssBrowserStore((s) => s.moveObject);
 
   const transferTab = useOssTransferStore((s) => s.tabs[tabId]);
   const startUpload = useOssTransferStore((s) => s.startUpload);
@@ -102,14 +104,23 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
     );
   }, [assetId, state, startDownload, tabId, t]);
 
-  // 复制 URL 快捷动作:预签一个 1 小时的 GET URL 直接复制(分享对话框仍可自选方法/有效期)。
-  const onDetailCopyUrl = useCallback(() => {
-    if (!assetId || !state?.currentBucket || !state.focusedKey) return;
-    void OSSPresignGet({ assetId, bucket: state.currentBucket, key: state.focusedKey, expirySecs: 3600 }).then(
-      (u) => void navigator.clipboard?.writeText(u).then(() => notifyCopied(t("oss.share.copied"))),
-      () => toast.error(t("oss.share.generateFailed"))
-    );
-  }, [assetId, state, t]);
+  const promptDestination = useCallback(
+    async (mode: "copy" | "move" | "rename") => {
+      if (!state?.focusedKey) return;
+      const source = state.focusedKey;
+      const defaultKey = mode === "rename" ? `${state.currentPrefix}${source.split("/").pop() ?? ""}` : source;
+      const destination = window.prompt(t(`oss.detail.${mode}Prompt`), defaultKey)?.trim();
+      if (!destination || destination === source) return;
+      try {
+        if (mode === "copy") await copyObject(tabId, source, destination);
+        else await moveObject(tabId, source, destination);
+        notifySuccess(t(`oss.detail.${mode}Success`));
+      } catch (error) {
+        toast.error(String(error));
+      }
+    },
+    [copyObject, moveObject, state, tabId, t]
+  );
 
   const confirmDetailDelete = async () => {
     setDetailDeleteOpen(false);
@@ -205,6 +216,14 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
                 onNavigate={onNavigate}
                 onRefresh={() => void refresh(tabId).catch(fail)}
                 onUpload={onUpload}
+                onNewFolder={() => {
+                  const name = window.prompt(t("oss.browser.newFolderPrompt"))?.trim();
+                  if (name) {
+                    void createFolder(tabId, name)
+                      .then(() => notifySuccess(t("oss.browser.newFolderSuccess")))
+                      .catch(fail);
+                  }
+                }}
                 viewMode={state.viewMode}
                 onViewModeChange={(m) => setViewMode(tabId, m)}
               />
@@ -308,7 +327,9 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
                 onEnsureThumbnail={() => void ensureThumbnail(tabId, focusedObject.key)}
                 onShare={() => setShareOpen(true)}
                 onDownload={onDetailDownload}
-                onCopyUrl={onDetailCopyUrl}
+                onRename={() => void promptDestination("rename")}
+                onCopy={() => void promptDestination("copy")}
+                onMove={() => void promptDestination("move")}
                 onDelete={() => setDetailDeleteOpen(true)}
                 onClose={() => focusObject(tabId, null)}
               />

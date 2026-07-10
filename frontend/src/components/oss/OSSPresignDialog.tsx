@@ -68,13 +68,24 @@ export function OSSPresignDialog({
     if (open) {
       setMethod("get");
       setExpirySecs(3600);
+      setUrl("");
+      reqIdRef.current += 1;
     }
   }, [open, objectKey]);
 
-  // 打开即自动生成;方法/有效期变化通过 runGenerate 身份变化触发重生成(仅在 open 时)。
-  useEffect(() => {
-    if (open) runGenerate();
-  }, [open, runGenerate]);
+  const changeMethod = (next: "get" | "put") => {
+    setMethod(next);
+    setUrl("");
+    setLoading(false);
+    reqIdRef.current += 1;
+  };
+
+  const changeExpiry = (next: number) => {
+    setExpirySecs(next);
+    setUrl("");
+    setLoading(false);
+    reqIdRef.current += 1;
+  };
 
   const copy = () => void navigator.clipboard?.writeText(url).then(() => notifyCopied(t("oss.share.copied")));
 
@@ -120,7 +131,7 @@ export function OSSPresignDialog({
               <button
                 type="button"
                 className={seg(method === "get")}
-                onClick={() => setMethod("get")}
+                onClick={() => changeMethod("get")}
                 data-testid="oss-share-method-get"
               >
                 {t("oss.share.methodGet")}
@@ -128,7 +139,7 @@ export function OSSPresignDialog({
               <button
                 type="button"
                 className={seg(method === "put")}
-                onClick={() => setMethod("put")}
+                onClick={() => changeMethod("put")}
                 data-testid="oss-share-method-put"
               >
                 {t("oss.share.methodPut")}
@@ -145,7 +156,7 @@ export function OSSPresignDialog({
                   key={e.secs}
                   type="button"
                   className={seg(expirySecs === e.secs)}
-                  onClick={() => setExpirySecs(e.secs)}
+                  onClick={() => changeExpiry(e.secs)}
                   data-testid={`oss-share-expiry-${e.secs}`}
                 >
                   {t(e.key)}
@@ -164,7 +175,7 @@ export function OSSPresignDialog({
                 <>
                   <span
                     data-testid="oss-share-url"
-                    className="min-w-0 break-all font-mono text-[11px] leading-relaxed text-sky-300"
+                    className="min-w-0 break-all font-mono text-[11px] leading-relaxed text-info"
                   >
                     {url}
                   </span>

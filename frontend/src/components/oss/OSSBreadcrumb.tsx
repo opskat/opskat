@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Button } from "@opskat/ui";
-import { RefreshCw, Upload, List, LayoutGrid } from "lucide-react";
+import { RefreshCw, Upload, List, LayoutGrid, FolderPlus } from "lucide-react";
 
 export interface OssCrumb {
   label: string;
@@ -26,6 +26,7 @@ export interface OSSBreadcrumbProps {
   onNavigate: (prefix: string) => void;
   onRefresh: () => void;
   onUpload?: () => void;
+  onNewFolder?: () => void;
   viewMode?: "list" | "grid";
   onViewModeChange?: (m: "list" | "grid") => void;
 }
@@ -36,6 +37,7 @@ export function OSSBreadcrumb({
   onNavigate,
   onRefresh,
   onUpload,
+  onNewFolder,
   viewMode,
   onViewModeChange,
 }: OSSBreadcrumbProps) {
@@ -83,6 +85,11 @@ export function OSSBreadcrumb({
       {onUpload && (
         <Button size="sm" variant="outline" className="shrink-0" onClick={onUpload} data-testid="oss-upload">
           <Upload className="size-3" /> {t("oss.transfer.upload")}
+        </Button>
+      )}
+      {onNewFolder && (
+        <Button size="sm" variant="outline" className="shrink-0" onClick={onNewFolder} data-testid="oss-new-folder">
+          <FolderPlus className="size-3" /> {t("oss.browser.newFolder")}
         </Button>
       )}
       <Button size="sm" variant="outline" className="shrink-0" onClick={onRefresh} data-testid="oss-refresh">

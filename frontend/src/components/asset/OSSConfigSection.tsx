@@ -65,7 +65,9 @@ const OSS_GROUPS: ConfigGroupSchema<OSSFormState>[] = [
     fields: [
       { kind: "switch", key: "usePathStyle", label: "oss.form.usePathStyle" },
       { kind: "switch", key: "useSSL", label: "oss.form.useSSL" },
+      { kind: "switch", key: "skipTLSVerify", label: "oss.form.skipTLSVerify" },
       { kind: "number", key: "connectTimeout", label: "oss.form.connectTimeout", min: 0, blankWhenZero: true },
+      { kind: "number", key: "partSizeMB", label: "oss.form.partSizeMB", min: 0, blankWhenZero: true },
     ],
   },
 ];

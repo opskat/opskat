@@ -5,8 +5,12 @@ import { OSSPresignDialog } from "../OSSPresignDialog";
 import { OSSPresignGet, OSSPresignPut } from "../../../../wailsjs/go/oss/OSS";
 
 beforeEach(() => {
-  vi.mocked(OSSPresignGet).mockReset().mockResolvedValue("https://signed/get" as never);
-  vi.mocked(OSSPresignPut).mockReset().mockResolvedValue("https://signed/put" as never);
+  vi.mocked(OSSPresignGet)
+    .mockReset()
+    .mockResolvedValue("https://signed/get" as never);
+  vi.mocked(OSSPresignPut)
+    .mockReset()
+    .mockResolvedValue("https://signed/put" as never);
 });
 
 function open() {
@@ -14,18 +18,23 @@ function open() {
 }
 
 describe("OSSPresignDialog", () => {
-  it("auto-generates a GET url on open with the default 1h expiry", async () => {
+  it("does not generate until the user explicitly requests a URL", async () => {
     open();
+    expect(OSSPresignGet).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("oss-share-generate"));
     await waitFor(() =>
       expect(OSSPresignGet).toHaveBeenCalledWith({ assetId: 7, bucket: "b", key: "docs/a.txt", expirySecs: 3600 })
     );
     expect((await screen.findByTestId("oss-share-url")).textContent).toBe("https://signed/get");
   });
 
-  it("regenerates with the selected expiry", async () => {
+  it("clears a stale URL when expiry changes and waits for explicit generation", async () => {
     open();
+    fireEvent.click(screen.getByTestId("oss-share-generate"));
     await screen.findByTestId("oss-share-url");
     fireEvent.click(screen.getByTestId("oss-share-expiry-86400"));
+    expect(screen.queryByTestId("oss-share-url")).toBeNull();
+    fireEvent.click(screen.getByTestId("oss-share-generate"));
     await waitFor(() =>
       expect(OSSPresignGet).toHaveBeenLastCalledWith({ assetId: 7, bucket: "b", key: "docs/a.txt", expirySecs: 86400 })
     );
@@ -33,8 +42,10 @@ describe("OSSPresignDialog", () => {
 
   it("uses OSSPresignPut when the PUT method is selected", async () => {
     open();
-    await screen.findByTestId("oss-share-url");
-    fireEvent.click(screen.getByTestId("oss-share-method-put"));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("oss-share-method-put"));
+    });
+    fireEvent.click(screen.getByTestId("oss-share-generate"));
     await waitFor(() =>
       expect(OSSPresignPut).toHaveBeenCalledWith({ assetId: 7, bucket: "b", key: "docs/a.txt", expirySecs: 3600 })
     );
@@ -50,11 +61,17 @@ describe("OSSPresignDialog", () => {
           resolveGet = r;
         }) as never
       );
-    vi.mocked(OSSPresignPut).mockReset().mockResolvedValue("https://signed/put" as never);
+    vi.mocked(OSSPresignPut)
+      .mockReset()
+      .mockResolvedValue("https://signed/put" as never);
 
-    open(); // fires GET (pending)
+    open();
+    fireEvent.click(screen.getByTestId("oss-share-generate")); // GET pending
     await waitFor(() => expect(OSSPresignGet).toHaveBeenCalled());
-    fireEvent.click(screen.getByTestId("oss-share-method-put")); // fires PUT → resolves
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("oss-share-method-put"));
+    });
+    fireEvent.click(screen.getByTestId("oss-share-generate")); // PUT resolves
     await screen.findByText("https://signed/put");
 
     await act(async () => {
@@ -68,6 +85,7 @@ describe("OSSPresignDialog", () => {
     const errorSpy = vi.spyOn(toast, "error").mockImplementation(() => "" as never);
 
     open();
+    fireEvent.click(screen.getByTestId("oss-share-generate"));
     await waitFor(() => expect(errorSpy).toHaveBeenCalled());
     expect(screen.queryByTestId("oss-share-url")).toBeNull();
 
@@ -79,6 +97,7 @@ describe("OSSPresignDialog", () => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
 
     open();
+    fireEvent.click(screen.getByTestId("oss-share-generate"));
     await screen.findByTestId("oss-share-url");
     fireEvent.click(screen.getByTestId("oss-share-copy"));
     expect(writeText).toHaveBeenCalledWith("https://signed/get");

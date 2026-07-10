@@ -10,7 +10,9 @@ interface OSSConfigJSON {
   credential_id?: number;
   use_path_style?: boolean;
   use_ssl?: boolean;
+  skip_tls_verify?: boolean;
   connect_timeout?: number;
+  part_size_mb?: number;
 }
 
 /** 表单态:非机密字段;机密(secret/托管凭证)留在 useAssetCredential,不在此。 */
@@ -21,7 +23,9 @@ export interface OSSFormState {
   accessKeyId: string;
   usePathStyle: boolean;
   useSSL: boolean;
+  skipTLSVerify: boolean;
   connectTimeout: number;
+  partSizeMB: number;
 }
 
 export const OSS_DEFAULTS: OSSFormState = {
@@ -31,28 +35,84 @@ export const OSS_DEFAULTS: OSSFormState = {
   accessKeyId: "",
   usePathStyle: false,
   useSSL: true,
+  skipTLSVerify: false,
   connectTimeout: 0,
+  partSizeMB: 0,
 };
 
-/** 厂商枚举(与后端 OSSConfig.Provider 注释一致)。 */
-export const OSS_PROVIDER_VALUES = ["s3", "aliyun-oss", "tencent-cos", "minio", "s3-compat"] as const;
+interface OSSProviderDefinition {
+  value: string;
+  labelKey: string;
+  prefill?: Pick<OSSFormState, "endpoint" | "region" | "usePathStyle">;
+}
 
-/** 厂商值 → 展示标签 i18n key(表单下拉 + 详情卡共用,单一出处)。 */
-export const OSS_PROVIDER_LABEL_KEYS: Record<string, string> = {
-  s3: "oss.form.providerS3",
-  "aliyun-oss": "oss.form.providerAliyunOSS",
-  "tencent-cos": "oss.form.providerTencentCOS",
-  minio: "oss.form.providerMinio",
-  "s3-compat": "oss.form.providerS3Compat",
-};
+/** 厂商列表、标签和连接预设的单一出处。所有厂商都使用 S3 兼容 API。 */
+const OSS_PROVIDER_DEFINITIONS: readonly OSSProviderDefinition[] = [
+  {
+    value: "s3",
+    labelKey: "oss.form.providerS3",
+    prefill: { endpoint: "s3.us-east-1.amazonaws.com", region: "us-east-1", usePathStyle: false },
+  },
+  {
+    value: "aliyun-oss",
+    labelKey: "oss.form.providerAliyunOSS",
+    prefill: { endpoint: "oss-cn-hangzhou.aliyuncs.com", region: "cn-hangzhou", usePathStyle: false },
+  },
+  {
+    value: "tencent-cos",
+    labelKey: "oss.form.providerTencentCOS",
+    prefill: { endpoint: "cos.ap-guangzhou.myqcloud.com", region: "ap-guangzhou", usePathStyle: false },
+  },
+  {
+    value: "huawei-obs",
+    labelKey: "oss.form.providerHuaweiOBS",
+    prefill: { endpoint: "obs.cn-north-4.myhuaweicloud.com", region: "cn-north-4", usePathStyle: false },
+  },
+  {
+    value: "volcengine-tos",
+    labelKey: "oss.form.providerVolcengineTOS",
+    prefill: { endpoint: "tos-s3-cn-beijing.volces.com", region: "cn-beijing", usePathStyle: false },
+  },
+  {
+    value: "qiniu-kodo",
+    labelKey: "oss.form.providerQiniuKodo",
+    prefill: { endpoint: "s3-cn-east-1.qiniucs.com", region: "cn-east-1", usePathStyle: false },
+  },
+  {
+    value: "cloudflare-r2",
+    labelKey: "oss.form.providerCloudflareR2",
+    prefill: { endpoint: "<account-id>.r2.cloudflarestorage.com", region: "auto", usePathStyle: true },
+  },
+  {
+    value: "backblaze-b2",
+    labelKey: "oss.form.providerBackblazeB2",
+    prefill: { endpoint: "s3.us-west-004.backblazeb2.com", region: "us-west-004", usePathStyle: false },
+  },
+  {
+    value: "digitalocean-spaces",
+    labelKey: "oss.form.providerDigitalOceanSpaces",
+    prefill: { endpoint: "nyc3.digitaloceanspaces.com", region: "nyc3", usePathStyle: false },
+  },
+  {
+    value: "wasabi",
+    labelKey: "oss.form.providerWasabi",
+    prefill: { endpoint: "s3.us-east-1.wasabisys.com", region: "us-east-1", usePathStyle: false },
+  },
+  {
+    value: "minio",
+    labelKey: "oss.form.providerMinio",
+    prefill: { endpoint: "http://localhost:9000", region: "us-east-1", usePathStyle: true },
+  },
+  { value: "s3-compat", labelKey: "oss.form.providerS3Compat" },
+];
 
-/** 厂商智能预填:endpoint 模板 + region 默认 + path-style 默认。s3-compat 不预填。 */
-const PROVIDER_PREFILL: Record<string, { endpoint: string; region: string; usePathStyle: boolean }> = {
-  s3: { endpoint: "s3.us-east-1.amazonaws.com", region: "us-east-1", usePathStyle: false },
-  "aliyun-oss": { endpoint: "oss-cn-hangzhou.aliyuncs.com", region: "cn-hangzhou", usePathStyle: false },
-  "tencent-cos": { endpoint: "cos.ap-guangzhou.myqcloud.com", region: "ap-guangzhou", usePathStyle: false },
-  minio: { endpoint: "http://localhost:9000", region: "us-east-1", usePathStyle: true },
-};
+export const OSS_PROVIDER_VALUES = OSS_PROVIDER_DEFINITIONS.map(({ value }) => value);
+export const OSS_PROVIDER_LABEL_KEYS: Record<string, string> = Object.fromEntries(
+  OSS_PROVIDER_DEFINITIONS.map(({ value, labelKey }) => [value, labelKey])
+);
+const PROVIDER_PREFILL: Record<string, OSSProviderDefinition["prefill"]> = Object.fromEntries(
+  OSS_PROVIDER_DEFINITIONS.map(({ value, prefill }) => [value, prefill])
+);
 
 /** 纯函数:切换厂商时的 patch。已知厂商 → 覆写 endpoint/region/usePathStyle;s3-compat/未知 → 仅切 provider,保留用户已填。 */
 export function providerPrefillPatch(provider: string): Partial<OSSFormState> {
@@ -84,7 +144,9 @@ export function buildOSSConfig(state: OSSFormState, cred: CredentialFragment): s
   else if (cred.password) cfg.secret_access_key = cred.password;
   if (state.usePathStyle) cfg.use_path_style = true;
   cfg.use_ssl = state.useSSL;
+  if (state.skipTLSVerify) cfg.skip_tls_verify = true;
   if (state.connectTimeout > 0) cfg.connect_timeout = state.connectTimeout;
+  if (state.partSizeMB > 0) cfg.part_size_mb = state.partSizeMB;
   return JSON.stringify(cfg);
 }
 
@@ -99,7 +161,9 @@ export function parseOSSConfig(configJSON: string): OSSFormState {
       accessKeyId: cfg.access_key_id || "",
       usePathStyle: cfg.use_path_style || false,
       useSSL: cfg.use_ssl ?? true,
+      skipTLSVerify: cfg.skip_tls_verify || false,
       connectTimeout: cfg.connect_timeout || 0,
+      partSizeMB: cfg.part_size_mb || 0,
     };
   } catch {
     return { ...OSS_DEFAULTS };

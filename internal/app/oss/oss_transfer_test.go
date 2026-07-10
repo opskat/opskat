@@ -3,11 +3,16 @@ package oss
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/opskat/opskat/internal/service/oss_svc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type testLangProvider struct{}
+
+func (testLangProvider) Lang() string { return "zh-CN" }
 
 func TestDeriveUploadKeyJoinsPrefixAndBase(t *testing.T) {
 	assert.Equal(t, "images/hero.jpg", deriveUploadKey("images", "/Users/me/pics/hero.jpg"), "non-slash prefix should be normalized with a single separator")
@@ -41,6 +46,19 @@ func TestOSSCancelTransferValidatesEmptyID(t *testing.T) {
 	o := &OSS{}
 	err := o.OSSCancelTransfer("")
 	assert.Error(t, err)
+}
+
+func TestOSSStartTransferRunsPendingWorkExactlyOnce(t *testing.T) {
+	o := &OSS{ctx: context.Background(), lang: testLangProvider{}}
+	started := make(chan struct{}, 1)
+	o.pending.Store("oss-1", func() { started <- struct{}{} })
+	require.NoError(t, o.OSSStartTransfer("oss-1"))
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("pending transfer was not started")
+	}
+	require.Error(t, o.OSSStartTransfer("oss-1"))
 }
 
 func TestOSSDownloadObjectValidatesInput(t *testing.T) {

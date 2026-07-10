@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@opskat/ui";
-import { Copy, Link, Download, Trash2, X } from "lucide-react";
+import { Copy, Link, Download, Trash2, X, Pencil, MoveRight } from "lucide-react";
 import type { oss_svc } from "../../../wailsjs/go/models";
 import { formatBytes } from "@/lib/formatBytes";
 import { notifyCopied } from "@/lib/notify";
@@ -15,7 +15,9 @@ export interface OSSObjectDetailProps {
   onEnsureThumbnail: () => void;
   onShare: () => void;
   onDownload: () => void;
-  onCopyUrl?: () => void;
+  onCopy?: () => void;
+  onMove?: () => void;
+  onRename?: () => void;
   onDelete: () => void;
   onClose: () => void;
 }
@@ -26,7 +28,9 @@ export function OSSObjectDetail({
   onEnsureThumbnail,
   onShare,
   onDownload,
-  onCopyUrl,
+  onCopy,
+  onMove,
+  onRename,
   onDelete,
   onClose,
 }: OSSObjectDetailProps) {
@@ -98,18 +102,20 @@ export function OSSObjectDetail({
           <Button size="sm" variant="outline" className="flex-1" onClick={onDownload} data-testid="oss-detail-download">
             <Download className="size-3" /> {t("oss.detail.download")}
           </Button>
-          {onCopyUrl && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="flex-1"
-              onClick={onCopyUrl}
-              data-testid="oss-detail-copy-url"
-            >
-              <Copy className="size-3" /> {t("oss.detail.copyUrl")}
-            </Button>
-          )}
         </div>
+        {onRename && onCopy && onMove && (
+          <div className="grid grid-cols-3 gap-1.5">
+            <Button size="sm" variant="outline" onClick={onRename} data-testid="oss-detail-rename">
+              <Pencil className="size-3" /> {t("oss.detail.rename")}
+            </Button>
+            <Button size="sm" variant="outline" onClick={onCopy} data-testid="oss-detail-copy">
+              <Copy className="size-3" /> {t("oss.detail.copy")}
+            </Button>
+            <Button size="sm" variant="outline" onClick={onMove} data-testid="oss-detail-move">
+              <MoveRight className="size-3" /> {t("oss.detail.move")}
+            </Button>
+          </div>
+        )}
         <Button size="sm" variant="destructive" onClick={onDelete} data-testid="oss-detail-delete">
           <Trash2 className="size-3" /> {t("oss.detail.delete")}
         </Button>

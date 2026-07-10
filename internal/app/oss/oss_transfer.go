@@ -46,10 +46,13 @@ func (o *OSS) emitProgress(transferID string, p transfer.Progress) {
 func (o *OSS) emitTerminal(transferID string, err error) {
 	switch {
 	case err == nil:
+		logger.Ctx(o.ctx).Info("oss transfer end", zap.String("transferId", transferID))
 		o.emitProgress(transferID, transfer.Progress{TransferID: transferID, Status: transfer.StatusDone})
 	case errors.Is(err, context.Canceled):
+		logger.Ctx(o.ctx).Info("oss transfer cancelled", zap.String("transferId", transferID))
 		o.emitProgress(transferID, transfer.Progress{TransferID: transferID, Status: transfer.StatusCancelled})
 	default:
+		logger.Ctx(o.ctx).Error("oss transfer fail", zap.String("transferId", transferID), zap.Error(err))
 		o.emitProgress(transferID, transfer.Progress{TransferID: transferID, Status: transfer.StatusError, Error: err.Error()})
 	}
 }
@@ -57,8 +60,12 @@ func (o *OSS) emitTerminal(transferID string, err error) {
 // OSSUploadObject 弹原生多选对话框,对每个选中文件起一路流式上传,返回各 transferID。
 // 用户取消对话框 → 返回空切片。
 func (o *OSS) OSSUploadObject(assetID int64, bucket, keyPrefix string) ([]string, error) {
+	ctx := o.i18nCtx()
+	logger.Ctx(ctx).Info("oss upload selection start", zap.Int64("assetId", assetID), zap.String("bucket", bucket))
 	if assetID <= 0 || bucket == "" {
-		return nil, fmt.Errorf("invalid request: assetID and bucket are required")
+		err := fmt.Errorf("invalid request: assetID and bucket are required")
+		logger.Ctx(ctx).Error("oss upload selection fail", zap.Int64("assetId", assetID), zap.Error(err))
+		return nil, err
 	}
 	localPaths, err := wailsRuntime.OpenMultipleFilesDialog(o.ctx, wailsRuntime.OpenDialogOptions{
 		Title: "选择上传文件",
@@ -74,9 +81,10 @@ func (o *OSS) OSSUploadObject(assetID int64, bucket, keyPrefix string) ([]string
 	for _, localPath := range localPaths {
 		transferID := transfer.GenerateID("oss")
 		key := deriveUploadKey(keyPrefix, localPath)
-		go o.uploadObject(transferID, assetID, bucket, key, localPath)
+		o.pending.Store(transferID, func() { o.uploadObject(transferID, assetID, bucket, key, localPath) })
 		ids = append(ids, transferID)
 	}
+	logger.Ctx(ctx).Info("oss upload selection end", zap.Int64("assetId", assetID), zap.Int("count", len(ids)))
 	return ids, nil
 }
 
@@ -86,8 +94,22 @@ func (o *OSS) OSSUploadObjectPath(assetID int64, bucket, key, localPath string) 
 		return "", fmt.Errorf("invalid request: assetID, bucket, key and localPath are required")
 	}
 	transferID := transfer.GenerateID("oss")
-	go o.uploadObject(transferID, assetID, bucket, key, localPath)
+	o.pending.Store(transferID, func() { o.uploadObject(transferID, assetID, bucket, key, localPath) })
 	return transferID, nil
+}
+
+// OSSStartTransfer 在前端创建进度行并完成 EventsOn 订阅后启动已准备的传输。
+func (o *OSS) OSSStartTransfer(transferID string) error {
+	if transferID == "" {
+		return fmt.Errorf("invalid transferID")
+	}
+	v, ok := o.pending.LoadAndDelete(transferID)
+	if !ok {
+		return fmt.Errorf("transfer not found: %s", transferID)
+	}
+	logger.Ctx(o.i18nCtx()).Info("oss transfer start", zap.String("transferId", transferID))
+	go v.(func())()
+	return nil
 }
 
 // uploadObject 单文件流式上传:注册取消 → 打开文件 → 包进度 reader → service.PutObject → emit 终态。
@@ -96,8 +118,8 @@ func (o *OSS) OSSUploadObjectPath(assetID int64, bucket, key, localPath string) 
 func (o *OSS) uploadObject(transferID string, assetID int64, bucket, key, localPath string) {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Default().Error("oss upload panic recovered",
-				zap.String("transferId", transferID), zap.Any("panic", r))
+			logger.Ctx(o.ctx).Error("oss upload panic recovered",
+				zap.String("transferId", transferID), zap.Any("panic", r), zap.Stack("stack"))
 			o.emitTerminal(transferID, fmt.Errorf("上传发生意外错误: %v", r))
 		}
 	}()
@@ -146,7 +168,7 @@ func (o *OSS) OSSDownloadObject(assetID int64, bucket, key string) (string, erro
 		return "", nil // 用户取消
 	}
 	transferID := transfer.GenerateID("oss")
-	go o.downloadObject(transferID, assetID, bucket, key, localPath)
+	o.pending.Store(transferID, func() { o.downloadObject(transferID, assetID, bucket, key, localPath) })
 	return transferID, nil
 }
 
@@ -155,8 +177,8 @@ func (o *OSS) OSSDownloadObject(assetID int64, bucket, key string) (string, erro
 func (o *OSS) downloadObject(transferID string, assetID int64, bucket, key, localPath string) {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Default().Error("oss download panic recovered",
-				zap.String("transferId", transferID), zap.Any("panic", r))
+			logger.Ctx(o.ctx).Error("oss download panic recovered",
+				zap.String("transferId", transferID), zap.Any("panic", r), zap.Stack("stack"))
 			o.emitTerminal(transferID, fmt.Errorf("下载发生意外错误: %v", r))
 		}
 	}()
@@ -196,6 +218,8 @@ func (o *OSS) OSSCancelTransfer(transferID string) error {
 	}
 	if v, ok := o.cancels.Load(transferID); ok {
 		v.(context.CancelFunc)()
+	} else if _, ok := o.pending.LoadAndDelete(transferID); ok {
+		o.emitTerminal(transferID, context.Canceled)
 	}
 	return nil
 }

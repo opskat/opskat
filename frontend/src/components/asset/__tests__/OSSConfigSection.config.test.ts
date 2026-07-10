@@ -15,14 +15,16 @@ const FULL: OSSFormState = {
   accessKeyId: "AKIA",
   usePathStyle: true,
   useSSL: false,
+  skipTLSVerify: true,
   connectTimeout: 30,
+  partSizeMB: 16,
 };
 
 describe("buildOSSConfig(锁字段序 provider→endpoint→region→access_key_id→cred→use_path_style→use_ssl→connect_timeout)", () => {
   it("全字段 + inline 密文", () => {
     expect(buildOSSConfig(FULL, { password: "ENC" })).toBe(
       '{"provider":"minio","endpoint":"http://localhost:9000","region":"us-east-1",' +
-        '"access_key_id":"AKIA","secret_access_key":"ENC","use_path_style":true,"use_ssl":false,"connect_timeout":30}'
+        '"access_key_id":"AKIA","secret_access_key":"ENC","use_path_style":true,"use_ssl":false,"skip_tls_verify":true,"connect_timeout":30,"part_size_mb":16}'
     );
   });
   it("托管凭据 → credential_id 紧跟 access_key_id,不写 secret_access_key", () => {
@@ -53,7 +55,7 @@ describe("parseOSSConfig(镜像 build 字段集;secret 不入表单态)", () => 
     expect(
       parseOSSConfig(
         '{"provider":"minio","endpoint":"http://localhost:9000","region":"us-east-1",' +
-          '"access_key_id":"AKIA","secret_access_key":"ENC","use_path_style":true,"use_ssl":false,"connect_timeout":30}'
+          '"access_key_id":"AKIA","secret_access_key":"ENC","use_path_style":true,"use_ssl":false,"skip_tls_verify":true,"connect_timeout":30,"part_size_mb":16}'
       )
     ).toEqual(FULL);
   });
@@ -69,7 +71,7 @@ describe("parseOSSConfig(镜像 build 字段集;secret 不入表单态)", () => 
   it("parse→build 往返(密文经 cred 片段回注)", () => {
     const original =
       '{"provider":"minio","endpoint":"http://localhost:9000","region":"us-east-1",' +
-      '"access_key_id":"AKIA","secret_access_key":"ENC","use_path_style":true,"use_ssl":false,"connect_timeout":30}';
+      '"access_key_id":"AKIA","secret_access_key":"ENC","use_path_style":true,"use_ssl":false,"skip_tls_verify":true,"connect_timeout":30,"part_size_mb":16}';
     expect(buildOSSConfig(parseOSSConfig(original), { password: "ENC" })).toBe(original);
   });
 });
@@ -77,23 +79,46 @@ describe("parseOSSConfig(镜像 build 字段集;secret 不入表单态)", () => 
 describe("providerPrefillPatch(纯函数,厂商→endpoint/region/path-style 预填)", () => {
   it("s3:virtual-hosted(path-style 关)", () => {
     expect(providerPrefillPatch("s3")).toEqual({
-      provider: "s3", endpoint: "s3.us-east-1.amazonaws.com", region: "us-east-1", usePathStyle: false,
+      provider: "s3",
+      endpoint: "s3.us-east-1.amazonaws.com",
+      region: "us-east-1",
+      usePathStyle: false,
     });
   });
   it("aliyun-oss", () => {
     expect(providerPrefillPatch("aliyun-oss")).toEqual({
-      provider: "aliyun-oss", endpoint: "oss-cn-hangzhou.aliyuncs.com", region: "cn-hangzhou", usePathStyle: false,
+      provider: "aliyun-oss",
+      endpoint: "oss-cn-hangzhou.aliyuncs.com",
+      region: "cn-hangzhou",
+      usePathStyle: false,
     });
   });
   it("tencent-cos", () => {
     expect(providerPrefillPatch("tencent-cos")).toEqual({
-      provider: "tencent-cos", endpoint: "cos.ap-guangzhou.myqcloud.com", region: "ap-guangzhou", usePathStyle: false,
+      provider: "tencent-cos",
+      endpoint: "cos.ap-guangzhou.myqcloud.com",
+      region: "ap-guangzhou",
+      usePathStyle: false,
     });
   });
   it("minio:path-style 开", () => {
     expect(providerPrefillPatch("minio")).toEqual({
-      provider: "minio", endpoint: "http://localhost:9000", region: "us-east-1", usePathStyle: true,
+      provider: "minio",
+      endpoint: "http://localhost:9000",
+      region: "us-east-1",
+      usePathStyle: true,
     });
+  });
+  it.each([
+    ["huawei-obs", "obs.cn-north-4.myhuaweicloud.com", "cn-north-4", false],
+    ["volcengine-tos", "tos-s3-cn-beijing.volces.com", "cn-beijing", false],
+    ["qiniu-kodo", "s3-cn-east-1.qiniucs.com", "cn-east-1", false],
+    ["cloudflare-r2", "<account-id>.r2.cloudflarestorage.com", "auto", true],
+    ["backblaze-b2", "s3.us-west-004.backblazeb2.com", "us-west-004", false],
+    ["digitalocean-spaces", "nyc3.digitaloceanspaces.com", "nyc3", false],
+    ["wasabi", "s3.us-east-1.wasabisys.com", "us-east-1", false],
+  ])("%s 预填官方 S3 endpoint", (provider, endpoint, region, usePathStyle) => {
+    expect(providerPrefillPatch(provider)).toEqual({ provider, endpoint, region, usePathStyle });
   });
   it("s3-compat:仅切 provider,不预填(保留用户已填)", () => {
     expect(providerPrefillPatch("s3-compat")).toEqual({ provider: "s3-compat" });

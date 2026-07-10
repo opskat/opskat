@@ -17,7 +17,17 @@ func TestBuildMinioOptionsPlainHostSSL(t *testing.T) {
 	assert.Equal(t, "s3.us-east-1.amazonaws.com", ep)
 	assert.True(t, opts.Secure)
 	assert.Equal(t, "us-east-1", opts.Region)
-	assert.Equal(t, minio.BucketLookupAuto, opts.BucketLookup)
+	assert.Equal(t, minio.BucketLookupDNS, opts.BucketLookup)
+}
+
+func TestBuildMinioOptionsTencentCOSUsesVirtualHostedStyle(t *testing.T) {
+	ep, opts, err := buildMinioOptions(&asset_entity.OSSConfig{
+		Provider: "tencent-cos", Endpoint: "cos.ap-guangzhou.myqcloud.com", Region: "ap-guangzhou",
+		UseSSL: true, AccessKeyID: "AKID",
+	}, "sk")
+	require.NoError(t, err)
+	assert.Equal(t, "cos.ap-guangzhou.myqcloud.com", ep)
+	assert.Equal(t, minio.BucketLookupDNS, opts.BucketLookup)
 }
 
 func TestBuildMinioOptionsSchemeStrippedPathStyle(t *testing.T) {

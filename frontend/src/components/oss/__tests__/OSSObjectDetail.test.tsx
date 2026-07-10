@@ -36,7 +36,9 @@ describe("OSSObjectDetail", () => {
   it("renders metadata from the object and fires action callbacks", () => {
     const onShare = vi.fn(),
       onDownload = vi.fn(),
-      onCopyUrl = vi.fn(),
+      onCopy = vi.fn(),
+      onMove = vi.fn(),
+      onRename = vi.fn(),
       onDelete = vi.fn(),
       onClose = vi.fn();
     render(
@@ -45,7 +47,9 @@ describe("OSSObjectDetail", () => {
         onEnsureThumbnail={vi.fn()}
         onShare={onShare}
         onDownload={onDownload}
-        onCopyUrl={onCopyUrl}
+        onCopy={onCopy}
+        onMove={onMove}
+        onRename={onRename}
         onDelete={onDelete}
         onClose={onClose}
       />
@@ -55,17 +59,21 @@ describe("OSSObjectDetail", () => {
     expect(screen.getByText("STANDARD")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("oss-detail-share"));
     fireEvent.click(screen.getByTestId("oss-detail-download"));
-    fireEvent.click(screen.getByTestId("oss-detail-copy-url"));
+    fireEvent.click(screen.getByTestId("oss-detail-copy"));
+    fireEvent.click(screen.getByTestId("oss-detail-move"));
+    fireEvent.click(screen.getByTestId("oss-detail-rename"));
     fireEvent.click(screen.getByTestId("oss-detail-delete"));
     fireEvent.click(screen.getByTestId("oss-detail-close"));
     expect(onShare).toHaveBeenCalledTimes(1);
     expect(onDownload).toHaveBeenCalledTimes(1);
-    expect(onCopyUrl).toHaveBeenCalledTimes(1);
+    expect(onCopy).toHaveBeenCalledTimes(1);
+    expect(onMove).toHaveBeenCalledTimes(1);
+    expect(onRename).toHaveBeenCalledTimes(1);
     expect(onDelete).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("omits the copy-url action when no onCopyUrl handler is given", () => {
+  it("never exposes a direct copy-presigned-url action", () => {
     render(
       <OSSObjectDetail
         object={obj()}

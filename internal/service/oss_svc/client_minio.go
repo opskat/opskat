@@ -11,9 +11,18 @@ import (
 )
 
 // minioAdapter 把 *minio.Client 适配成窄接口 Client。
-type minioAdapter struct{ mc *minio.Client }
+type minioAdapter struct {
+	mc         *minio.Client
+	partSizeMB int
+}
 
-func newMinioAdapter(mc *minio.Client) Client { return &minioAdapter{mc: mc} }
+func newMinioAdapter(mc *minio.Client, partSizeMB ...int) Client {
+	a := &minioAdapter{mc: mc}
+	if len(partSizeMB) > 0 {
+		a.partSizeMB = partSizeMB[0]
+	}
+	return a
+}
 
 func (a *minioAdapter) ListBuckets(ctx context.Context) ([]BucketItem, error) {
 	bs, err := a.mc.ListBuckets(ctx)
@@ -95,7 +104,11 @@ func aggregateRemoveErrors(errs []minio.RemoveObjectError) error {
 }
 
 func (a *minioAdapter) PutObject(ctx context.Context, bucket, key string, r io.Reader, size int64, contentType string) error {
-	_, err := a.mc.PutObject(ctx, bucket, key, r, size, minio.PutObjectOptions{ContentType: contentType})
+	opts := minio.PutObjectOptions{ContentType: contentType}
+	if a.partSizeMB > 0 {
+		opts.PartSize = uint64(a.partSizeMB) * 1024 * 1024
+	}
+	_, err := a.mc.PutObject(ctx, bucket, key, r, size, opts)
 	return err
 }
 

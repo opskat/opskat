@@ -46,7 +46,7 @@ func (s *Service) connect(ctx context.Context, assetID int64) (Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newMinioAdapter(mc), nil
+	return newMinioAdapter(mc, cfg.PartSizeMB), nil
 }
 
 func (s *Service) ListBuckets(ctx context.Context, assetID int64) ([]BucketItem, error) {
