@@ -37,6 +37,7 @@ vi.mock("../../wailsjs/go/query/Query", () => mockBinderModule("../../wailsjs/go
 vi.mock("../../wailsjs/go/redis/Redis", () => mockBinderModule("../../wailsjs/go/redis/Redis"));
 vi.mock("../../wailsjs/go/kafka/Kafka", () => mockBinderModule("../../wailsjs/go/kafka/Kafka"));
 vi.mock("../../wailsjs/go/etcd/Etcd", () => mockBinderModule("../../wailsjs/go/etcd/Etcd"));
+vi.mock("../../wailsjs/go/oss/OSS", () => mockBinderModule("../../wailsjs/go/oss/OSS"));
 vi.mock("../../wailsjs/go/k8s/K8s", () => mockBinderModule("../../wailsjs/go/k8s/K8s"));
 vi.mock("../../wailsjs/go/serial/Serial", () => mockBinderModule("../../wailsjs/go/serial/Serial"));
 vi.mock("../../wailsjs/go/local/Local", () => mockBinderModule("../../wailsjs/go/local/Local"));
@@ -48,14 +49,18 @@ vi.mock("../../wailsjs/go/external_edit/ExternalEdit", () =>
 );
 
 // Mock react-i18next
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t: (key: string) => key,
-    i18n: { language: "en", changeLanguage: vi.fn() },
-  }),
-  Trans: ({ i18nKey, children }: { i18nKey?: string; children?: React.ReactNode }) => i18nKey ?? children,
-  initReactI18next: { type: "3rdParty", init: vi.fn() },
-}));
+// `t` / `i18n` 必须是稳定引用（真实 react-i18next 在渲染间也保持 t 稳定）：
+// 若每次渲染都返回新的 t，任何把 t 派生值（如 useCallback(..., [t]) 的错误处理器）
+// 放进 useEffect 依赖的组件都会陷入 挂载 effect→setState→重渲染→effect 无限循环。
+vi.mock("react-i18next", () => {
+  const t = (key: string) => key;
+  const i18n = { language: "en", changeLanguage: vi.fn() };
+  return {
+    useTranslation: () => ({ t, i18n }),
+    Trans: ({ i18nKey, children }: { i18nKey?: string; children?: React.ReactNode }) => i18nKey ?? children,
+    initReactI18next: { type: "3rdParty", init: vi.fn() },
+  };
+});
 
 // happy-dom 不做 layout —— Element.getBoundingClientRect() 一律 0 ×,IntersectionObserver
 // / ResizeObserver 也不上报真实尺寸。@tanstack/react-virtual 用这两条决定渲染哪些行,

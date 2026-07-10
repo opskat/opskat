@@ -24,5 +24,6 @@ import "./k8s";
 import "./serial";
 import "./local";
 import "./etcd";
+import "./oss";
 
 export type { AssetTypeDefinition, DetailInfoCardProps, PolicyDefinition, PolicyFieldDef } from "./types";

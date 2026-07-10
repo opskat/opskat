@@ -1,9 +1,14 @@
 package transfer
 
 import (
+	"bytes"
+	"context"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGenerateIDUniqueAndPrefixed(t *testing.T) {
@@ -59,4 +64,55 @@ func TestReporterEmitsTerminalImmediately(t *testing.T) {
 	if len(statuses) != 2 || statuses[0] != "progress" || statuses[1] != "done" {
 		t.Fatalf("want [progress done], got %v", statuses)
 	}
+}
+
+func TestProgressReaderReportsCumulativeBytes(t *testing.T) {
+	var got []Progress
+	src := bytes.NewReader(bytes.Repeat([]byte("x"), 100))
+	pr := NewProgressReader(context.Background(), "oss-1", "hero.jpg", src, 100, func(p Progress) {
+		got = append(got, p)
+	})
+
+	buf := make([]byte, 40)
+	n, err := pr.Read(buf) // 首条 progress 立即放行（lastEmit 零值）
+	require.NoError(t, err)
+	require.Equal(t, 40, n)
+	require.NotEmpty(t, got)
+	last := got[len(got)-1]
+	assert.Equal(t, "oss-1", last.TransferID)
+	assert.Equal(t, StatusProgress, last.Status)
+	assert.Equal(t, "hero.jpg", last.CurrentFile)
+	assert.Equal(t, int64(40), last.BytesDone)
+	assert.Equal(t, int64(100), last.BytesTotal)
+}
+
+func TestProgressReaderAbortsOnCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	pr := NewProgressReader(ctx, "oss-1", "hero.jpg", bytes.NewReader([]byte("data")), 4, func(Progress) {})
+
+	_, err := pr.Read(make([]byte, 4))
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestCopyStreamsAllBytesAndReports(t *testing.T) {
+	src := bytes.NewReader(bytes.Repeat([]byte("y"), 70*1024)) // >2 个 32KB 分片
+	var dst bytes.Buffer
+	var got []Progress
+	err := Copy(context.Background(), "oss-2", &dst, src, int64(70*1024), "big.bin", func(p Progress) {
+		got = append(got, p)
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 70*1024, dst.Len())
+	require.NotEmpty(t, got)
+	last := got[len(got)-1]
+	assert.Equal(t, StatusProgress, last.Status)
+	assert.Equal(t, int64(70*1024), last.BytesTotal)
+}
+
+func TestCopyAbortsOnCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := Copy(ctx, "oss-2", &bytes.Buffer{}, bytes.NewReader([]byte("data")), 4, "x", func(Progress) {})
+	assert.ErrorIs(t, err, context.Canceled)
 }
