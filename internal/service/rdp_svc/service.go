@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,9 +44,10 @@ type Event struct {
 }
 
 type ConnectRequest struct {
-	AssetID int64 `json:"assetId"`
-	Width   int   `json:"width"`
-	Height  int   `json:"height"`
+	SessionID string `json:"sessionId"`
+	AssetID   int64  `json:"assetId"`
+	Width     int    `json:"width"`
+	Height    int    `json:"height"`
 }
 
 type InputEvent struct {
@@ -99,27 +101,42 @@ func New(emit func(Event), pool *sshpool.Pool) *Service {
 }
 
 func (s *Service) Connect(ctx context.Context, req ConnectRequest) (string, error) {
+	id, err := resolveSessionID(req.SessionID)
+	log := logger.Ctx(ctx)
+	log.Info("rdp connect start",
+		zap.String("sessionID", id),
+		zap.Int64("assetID", req.AssetID),
+		zap.Int("requestedWidth", req.Width),
+		zap.Int("requestedHeight", req.Height),
+	)
+	if err != nil {
+		log.Error("rdp connect failed", zap.String("sessionID", req.SessionID), zap.Int64("assetID", req.AssetID), zap.Error(err))
+		return "", err
+	}
 	asset, err := asset_svc.Asset().Get(ctx, req.AssetID)
 	if err != nil {
+		log.Error("rdp connect failed", zap.String("sessionID", id), zap.Int64("assetID", req.AssetID), zap.Error(err))
 		return "", fmt.Errorf("get RDP asset: %w", err)
 	}
 	if !asset.IsRDP() {
-		return "", fmt.Errorf("asset is not RDP")
+		err = fmt.Errorf("asset is not RDP")
+		log.Error("rdp connect failed", zap.String("sessionID", id), zap.Int64("assetID", req.AssetID), zap.Error(err))
+		return "", err
 	}
 	cfg, err := asset.GetRDPConfig()
 	if err != nil {
+		log.Error("rdp connect failed", zap.String("sessionID", id), zap.Int64("assetID", req.AssetID), zap.Error(err))
 		return "", fmt.Errorf("parse RDP config: %w", err)
 	}
 	password, err := credential_resolver.Default().ResolvePasswordGeneric(ctx, cfg)
 	if err != nil {
+		log.Error("rdp connect failed", zap.String("sessionID", id), zap.Int64("assetID", req.AssetID), zap.Error(err))
 		return "", fmt.Errorf("resolve RDP password: %w", err)
 	}
 	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 
 	width, height := resolveSize(cfg, req.Width, req.Height)
-	id := "rdp-" + uuid.NewString()
-	log := logger.Ctx(ctx)
-	log.Info("rdp connect start",
+	log.Debug("rdp connect target resolved",
 		zap.String("sessionID", id),
 		zap.Int64("assetID", req.AssetID),
 		zap.String("host", cfg.Host),
@@ -254,6 +271,19 @@ func (s *Service) Connect(ctx context.Context, req ConnectRequest) (string, erro
 		s.closeSession(sess)
 	}()
 	return id, nil
+}
+
+func resolveSessionID(requested string) (string, error) {
+	if requested == "" {
+		return "rdp-" + uuid.NewString(), nil
+	}
+	if !strings.HasPrefix(requested, "rdp-") {
+		return "", fmt.Errorf("invalid RDP session ID")
+	}
+	if _, err := uuid.Parse(strings.TrimPrefix(requested, "rdp-")); err != nil {
+		return "", fmt.Errorf("invalid RDP session ID: %w", err)
+	}
+	return requested, nil
 }
 
 func (s *Service) TestConfig(ctx context.Context, cfg *asset_entity.RDPConfig, password string) error {

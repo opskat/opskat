@@ -106,6 +106,13 @@ function ActiveAssetProbe({ assetId }: { assetId: number }) {
 }
 
 describe("RDPPanel", () => {
+  it("shows malformed persisted RDP configuration instead of connecting with defaults", async () => {
+    render(<RDPPanel asset={{ ...asset(), Config: "{" } as asset_entity.Asset} />);
+
+    expect(await screen.findByTestId("rdp-reconnect")).toBeInTheDocument();
+    expect(ConnectRDP).not.toHaveBeenCalled();
+  });
+
   it("reports the RDP asset as active while its session is connected", async () => {
     render(
       <>
@@ -132,6 +139,50 @@ describe("RDPPanel", () => {
     await waitFor(() => expect(ConnectRDP).toHaveBeenCalled());
     const arg = vi.mocked(ConnectRDP).mock.calls[0][0] as { width: number; height: number };
     expect(arg.width).toBe(1200); // viewport width from the test getBoundingClientRect stub
+  });
+
+  it("subscribes to the session event channel before starting the RDP connection", async () => {
+    render(<RDPPanel asset={asset()} />);
+
+    await waitFor(() => expect(ConnectRDP).toHaveBeenCalledTimes(1));
+
+    expect(EventsOn).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(EventsOn).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(ConnectRDP).mock.invocationCallOrder[0]
+    );
+  });
+
+  it("retries the same viewport resize after a failed resize request", async () => {
+    let resizeCallback: ResizeObserverCallback | undefined;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          resizeCallback = callback;
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+    await renderConnected();
+    vi.mocked(ResizeRDP).mockRejectedValueOnce(new Error("resize failed")).mockResolvedValue(undefined);
+    const rect = {
+      ...document.body.getBoundingClientRect(),
+      right: 1000,
+      bottom: 700,
+      width: 1000,
+      height: 700,
+    } as DOMRect;
+    const rectSpy = vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue(rect);
+
+    act(() => resizeCallback?.([], {} as ResizeObserver));
+    await waitFor(() => expect(ResizeRDP).toHaveBeenCalledTimes(1));
+
+    act(() => resizeCallback?.([], {} as ResizeObserver));
+    await waitFor(() => expect(ResizeRDP).toHaveBeenCalledTimes(2));
+    expect(ResizeRDP).toHaveBeenLastCalledWith("sess-1", 1000, 700);
+    rectSpy.mockRestore();
   });
 
   it("sends the Ctrl+Alt+Del chord in press-then-release order", async () => {
@@ -173,6 +224,17 @@ describe("RDPPanel", () => {
       resolvers[i - 1]();
       await waitFor(() => expect(keyCalls()).toHaveLength(i + 1));
     }
+  });
+
+  it("surfaces RDP input failures in the session error overlay", async () => {
+    await renderConnected();
+    vi.mocked(SendRDPInput).mockRejectedValueOnce(new Error("input transport closed"));
+
+    await userEvent.click(await screen.findByTestId("rdp-special-keys"));
+    await userEvent.click(await screen.findByTestId("rdp-key-cad"));
+
+    expect(await screen.findByText(/input transport closed/)).toBeInTheDocument();
+    expect(screen.getByTestId("rdp-reconnect")).toBeInTheDocument();
   });
 
   it("serializes a right-click press and release so the remote cannot receive them out of order", async () => {

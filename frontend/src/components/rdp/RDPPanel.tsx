@@ -1,22 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  AlertTriangle,
-  Clipboard,
-  ClipboardCheck,
-  Keyboard,
-  Loader2,
-  Maximize2,
-  Minimize2,
-  Monitor,
-  Power,
-  RefreshCw,
-  Scaling,
-  Settings2,
-} from "lucide-react";
-import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, cn } from "@opskat/ui";
+import { cn } from "@opskat/ui";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { Segmented } from "@/components/asset/fields";
 import { notifySuccess } from "@/lib/notify";
 import { useRDPStore } from "@/stores/rdpStore";
 import { ClipboardGetText, ClipboardSetText, EventsOn } from "../../../wailsjs/runtime/runtime";
@@ -30,17 +15,10 @@ import {
   SetRDPClipboardFilesFromLocal,
 } from "../../../wailsjs/go/rdp/RDP";
 import type { asset_entity } from "../../../wailsjs/go/models";
-import {
-  SCANCODE,
-  chordSequence,
-  clampRemoteSize,
-  formatDuration,
-  planKeyDown,
-  remotePoint,
-  scancodeFor,
-} from "./rdpInput";
+import { SCANCODE, chordSequence, clampRemoteSize, planKeyDown, remotePoint, scancodeFor } from "./rdpInput";
 import { decodeFrameBytes } from "./rdpFrame";
 import { pointerCursorStyle } from "./rdpCursor";
+import { RDPSessionOverlay, RDPStatusBar, RDPToolbar, type RDPStatus, type RDPViewMode } from "./RDPChrome";
 
 interface RDPConfig {
   host?: string;
@@ -89,21 +67,11 @@ const PTR_BUTTON1 = 0x1000;
 const PTR_BUTTON2 = 0x2000;
 const PTR_BUTTON3 = 0x4000;
 
-type ViewMode = "fit" | "actual";
-type Status = "connecting" | "connected" | "error" | "closed";
-
-const STATUS_PILL: Record<Status, string> = {
-  connecting: "border-amber-500/25 bg-amber-500/10 text-amber-400",
-  connected: "border-emerald-500/25 bg-emerald-500/10 text-emerald-400",
-  error: "border-red-500/25 bg-red-500/10 text-red-400",
-  closed: "border-border bg-muted text-muted-foreground",
-};
-
-function parseConfig(asset: asset_entity.Asset): RDPConfig {
+function parseConfig(asset: asset_entity.Asset): { config: RDPConfig; error: string } {
   try {
-    return JSON.parse(asset.Config || "{}");
-  } catch {
-    return {};
+    return { config: JSON.parse(asset.Config || "{}"), error: "" };
+  } catch (e) {
+    return { config: {}, error: String(e) };
   }
 }
 
@@ -115,7 +83,9 @@ function buttonFlag(button: number): number {
 
 export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?: () => void }) {
   const { t } = useTranslation();
-  const cfg = useMemo(() => parseConfig(asset), [asset]);
+  const parsedConfig = useMemo(() => parseConfig(asset), [asset]);
+  const cfg = parsedConfig.config;
+  const configError = parsedConfig.error;
   const host = cfg.host || "";
   const port = cfg.port || 3389;
   const configuredClipboardEnabled = cfg.clipboard !== false;
@@ -124,7 +94,7 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sessionIdRef = useRef("");
-  const viewModeRef = useRef<ViewMode>("fit");
+  const viewModeRef = useRef<RDPViewMode>("fit");
   const requestedSizeRef = useRef(clampRemoteSize(cfg.width || 1280, cfg.height || 720));
   const frameSizeRef = useRef({ width: cfg.width || 1280, height: cfg.height || 720 });
   // Physical keys we've forwarded a scancode press for, so every key is released
@@ -145,8 +115,8 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
   const pendingMoveRef = useRef<{ x: number; y: number } | null>(null);
   const moveRafRef = useRef(0);
   const [frameSize, setFrameSize] = useState({ width: cfg.width || 1280, height: cfg.height || 720 });
-  const [viewMode, setViewMode] = useState<ViewMode>("fit");
-  const [status, setStatus] = useState<Status>("connecting");
+  const [viewMode, setViewMode] = useState<RDPViewMode>("fit");
+  const [status, setStatus] = useState<RDPStatus>("connecting");
   const [error, setError] = useState("");
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [clipboardEnabled, setClipboardEnabled] = useState(configuredClipboardEnabled);
@@ -154,6 +124,22 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
   const [cursorStyle, setCursorStyle] = useState("default");
   const [elapsed, setElapsed] = useState(0);
   const [reconnectNonce, setReconnectNonce] = useState(0);
+
+  const handleInputFailure = useCallback(
+    (operationError: unknown) => {
+      const message = `${t("asset.rdpInputFailed")}: ${String(operationError)}`;
+      setStatus("error");
+      setError(message);
+      useRDPStore.getState().setAssetConnected(asset.ID, false);
+      toast.error(message);
+    },
+    [asset.ID, t]
+  );
+
+  const reportDisconnectFailure = useCallback(
+    (operationError: unknown) => toast.error(`${t("asset.rdpDisconnectFailed")}: ${String(operationError)}`),
+    [t]
+  );
 
   useEffect(() => {
     viewModeRef.current = viewMode;
@@ -174,9 +160,12 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
     const rect = viewport.getBoundingClientRect();
     const desired = clampRemoteSize(rect.width, rect.height);
     if (desired.width === requestedSizeRef.current.width && desired.height === requestedSizeRef.current.height) return;
-    requestedSizeRef.current = desired;
-    void ResizeRDP(sessionId, desired.width, desired.height).catch(() => undefined);
-  }, []);
+    void ResizeRDP(sessionId, desired.width, desired.height)
+      .then(() => {
+        requestedSizeRef.current = desired;
+      })
+      .catch((e) => toast.error(`${t("asset.rdpResizeFailed")}: ${String(e)}`));
+  }, [t]);
 
   // Frame events carry only the dirty sub-region of the framebuffer, so each
   // putImageData touches just the changed pixels; a full frame is the special
@@ -212,6 +201,12 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
     let unsubscribe: (() => void) | null = null;
 
     async function connect() {
+      if (configError) {
+        setStatus("error");
+        setError(`${t("asset.rdpInvalidConfig")}: ${configError}`);
+        useRDPStore.getState().setAssetConnected(asset.ID, false);
+        return;
+      }
       setStatus("connecting");
       setError("");
       // Connect at the current viewport size so the session starts already fitted —
@@ -223,71 +218,78 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
           ? clampRemoteSize(rect.width, rect.height)
           : clampRemoteSize(cfg.width || 1280, cfg.height || 720);
       requestedSizeRef.current = initial;
+      const requestedSessionId = `rdp-${crypto.randomUUID()}`;
+      unsubscribe = EventsOn(`rdp:event:${requestedSessionId}`, (event: RDPEvent) => {
+        if (event.type === "connecting") {
+          setStatus("connecting");
+          return;
+        }
+        if (event.type === "connected") {
+          setStatus("connected");
+          useRDPStore.getState().setAssetConnected(asset.ID, true);
+          if (event.width && event.height) updateFrameSize(event.width, event.height);
+          return;
+        }
+        if (event.type === "error") {
+          setStatus("error");
+          setError(event.error || t("asset.rdpError"));
+          useRDPStore.getState().setAssetConnected(asset.ID, false);
+          return;
+        }
+        if (event.type === "closed") {
+          setStatus((current) => (current === "error" ? current : "closed"));
+          useRDPStore.getState().setAssetConnected(asset.ID, false);
+          return;
+        }
+        if (event.type === "clipboard" && event.text !== undefined) {
+          void ClipboardSetText(event.text)
+            .then((written) => {
+              if (!written) throw new Error(t("asset.rdpClipboardWriteFailed"));
+              notifySuccess(t("asset.rdpClipboardReceived"));
+            })
+            .catch((e) => toast.error(`${t("asset.rdpClipboardWriteFailed")}: ${String(e)}`));
+          return;
+        }
+        if (event.type === "clipboard-files") {
+          notifySuccess(t("asset.rdpClipboardFilesReceived", { count: event.count || 0 }));
+          return;
+        }
+        if (event.type === "clipboard-error") {
+          toast.error(`${t("asset.rdpClipboardReceiveFailed")}: ${event.error || t("asset.rdpError")}`);
+          return;
+        }
+        if (event.type === "pointer") {
+          setCursorStyle(pointerCursorStyle(event));
+          return;
+        }
+        if (event.type === "frame" && event.data && event.width && event.height) {
+          drawFrame({
+            width: event.width,
+            height: event.height,
+            x: event.x,
+            y: event.y,
+            rectWidth: event.rectWidth,
+            rectHeight: event.rectHeight,
+            data: event.data,
+          });
+        }
+      });
       try {
-        const sessionId = await ConnectRDP({ assetId: asset.ID, width: initial.width, height: initial.height });
+        const request = {
+          sessionId: requestedSessionId,
+          assetId: asset.ID,
+          width: initial.width,
+          height: initial.height,
+        };
+        const sessionId = await ConnectRDP(request);
         if (cancelled) {
-          await CloseRDP(sessionId).catch(() => undefined);
+          await CloseRDP(sessionId).catch(reportDisconnectFailure);
           return;
         }
         sessionIdRef.current = sessionId;
         setStatus("connected");
         setConnectedAt(Date.now());
         useRDPStore.getState().setAssetConnected(asset.ID, true);
-        unsubscribe = EventsOn(`rdp:event:${sessionId}`, (event: RDPEvent) => {
-          if (event.type === "connecting") {
-            setStatus("connecting");
-            return;
-          }
-          if (event.type === "connected") {
-            setStatus("connected");
-            useRDPStore.getState().setAssetConnected(asset.ID, true);
-            if (event.width && event.height) updateFrameSize(event.width, event.height);
-            return;
-          }
-          if (event.type === "error") {
-            setStatus("error");
-            setError(event.error || t("asset.rdpError"));
-            useRDPStore.getState().setAssetConnected(asset.ID, false);
-            return;
-          }
-          if (event.type === "closed") {
-            setStatus((current) => (current === "error" ? current : "closed"));
-            useRDPStore.getState().setAssetConnected(asset.ID, false);
-            return;
-          }
-          if (event.type === "clipboard" && event.text !== undefined) {
-            void ClipboardSetText(event.text)
-              .then((written) => {
-                if (!written) throw new Error(t("asset.rdpClipboardWriteFailed"));
-                notifySuccess(t("asset.rdpClipboardReceived"));
-              })
-              .catch((e) => toast.error(`${t("asset.rdpClipboardWriteFailed")}: ${String(e)}`));
-            return;
-          }
-          if (event.type === "clipboard-files") {
-            notifySuccess(t("asset.rdpClipboardFilesReceived", { count: event.count || 0 }));
-            return;
-          }
-          if (event.type === "clipboard-error") {
-            toast.error(`${t("asset.rdpClipboardReceiveFailed")}: ${event.error || t("asset.rdpError")}`);
-            return;
-          }
-          if (event.type === "pointer") {
-            setCursorStyle(pointerCursorStyle(event));
-            return;
-          }
-          if (event.type === "frame" && event.data && event.width && event.height) {
-            drawFrame({
-              width: event.width,
-              height: event.height,
-              x: event.x,
-              y: event.y,
-              rectWidth: event.rectWidth,
-              rectHeight: event.rectHeight,
-              data: event.data,
-            });
-          }
-        });
       } catch (e) {
         if (!cancelled) {
           setStatus("error");
@@ -304,12 +306,12 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
       const sessionId = sessionIdRef.current;
       sessionIdRef.current = "";
       useRDPStore.getState().setAssetConnected(asset.ID, false);
-      if (sessionId) void CloseRDP(sessionId).catch(() => undefined);
+      if (sessionId) void CloseRDP(sessionId).catch(reportDisconnectFailure);
     };
     // Reconnect only when the target/resolution changes or reconnect() is invoked;
     // drawFrame/syncViewportSize/updateFrameSize are stable and t must not retrigger a reconnect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [asset.ID, cfg.width, cfg.height, reconnectNonce]);
+  }, [asset.ID, cfg.width, cfg.height, configError, reconnectNonce]);
 
   // Follow later viewport size changes (window resize / pane drag), debounced.
   useEffect(() => {
@@ -345,29 +347,6 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
     return () => window.removeEventListener("keydown", handler);
   }, [isFullscreen]);
 
-  useEffect(() => {
-    const releaseButtonOutsideCanvas = (event: MouseEvent) => {
-      if (!pressedMouseButtonsRef.current.delete(event.button)) return;
-      const canvas = canvasRef.current;
-      const point = canvas
-        ? remotePoint(event, canvas.getBoundingClientRect(), frameSizeRef.current, viewModeRef.current)
-        : lastMousePointRef.current;
-      queueMouseInput(point, buttonFlag(event.button));
-    };
-    const releaseAllButtons = () => {
-      const point = lastMousePointRef.current;
-      for (const button of pressedMouseButtonsRef.current) queueMouseInput(point, buttonFlag(button));
-      pressedMouseButtonsRef.current.clear();
-    };
-    window.addEventListener("mouseup", releaseButtonOutsideCanvas);
-    window.addEventListener("blur", releaseAllButtons);
-    return () => {
-      window.removeEventListener("mouseup", releaseButtonOutsideCanvas);
-      window.removeEventListener("blur", releaseAllButtons);
-      cancelAnimationFrame(moveRafRef.current);
-    };
-  }, []);
-
   function reconnect() {
     setReconnectNonce((n) => n + 1);
   }
@@ -375,7 +354,7 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
   function disconnect() {
     const sessionId = sessionIdRef.current;
     sessionIdRef.current = "";
-    if (sessionId) void CloseRDP(sessionId).catch(() => undefined);
+    if (sessionId) void CloseRDP(sessionId).catch(reportDisconnectFailure);
     setStatus("closed");
     setConnectedAt(null);
     useRDPStore.getState().setAssetConnected(asset.ID, false);
@@ -408,7 +387,8 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
     for (const step of chordSequence(scancodes)) {
       try {
         await SendRDPInput({ sessionId, kind: "key", scancode: step.scancode, pressed: step.pressed });
-      } catch {
+      } catch (e) {
+        handleInputFailure(e);
         return;
       }
     }
@@ -419,14 +399,39 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
     return remotePoint(e, rect, frameSizeRef.current, viewModeRef.current);
   }
 
-  function queueMouseInput(point: { x: number; y: number }, buttons: number) {
-    const sessionId = sessionIdRef.current;
-    if (!sessionId) return;
-    mouseButtonQueueRef.current = mouseButtonQueueRef.current
-      .catch(() => undefined)
-      .then(() => SendRDPInput({ sessionId, kind: "mouse", x: point.x, y: point.y, buttons }));
-    void mouseButtonQueueRef.current.catch(() => undefined);
-  }
+  const queueMouseInput = useCallback(
+    (point: { x: number; y: number }, buttons: number) => {
+      const sessionId = sessionIdRef.current;
+      if (!sessionId) return;
+      mouseButtonQueueRef.current = mouseButtonQueueRef.current
+        .then(() => SendRDPInput({ sessionId, kind: "mouse", x: point.x, y: point.y, buttons }))
+        .catch(handleInputFailure);
+    },
+    [handleInputFailure]
+  );
+
+  useEffect(() => {
+    const releaseButtonOutsideCanvas = (event: MouseEvent) => {
+      if (!pressedMouseButtonsRef.current.delete(event.button)) return;
+      const canvas = canvasRef.current;
+      const point = canvas
+        ? remotePoint(event, canvas.getBoundingClientRect(), frameSizeRef.current, viewModeRef.current)
+        : lastMousePointRef.current;
+      queueMouseInput(point, buttonFlag(event.button));
+    };
+    const releaseAllButtons = () => {
+      const point = lastMousePointRef.current;
+      for (const button of pressedMouseButtonsRef.current) queueMouseInput(point, buttonFlag(button));
+      pressedMouseButtonsRef.current.clear();
+    };
+    window.addEventListener("mouseup", releaseButtonOutsideCanvas);
+    window.addEventListener("blur", releaseAllButtons);
+    return () => {
+      window.removeEventListener("mouseup", releaseButtonOutsideCanvas);
+      window.removeEventListener("blur", releaseAllButtons);
+      cancelAnimationFrame(moveRafRef.current);
+    };
+  }, [queueMouseInput]);
 
   // Button presses/releases go through the serialized queue with their own
   // coordinates, so any move still pending for this frame is stale — drop it.
@@ -449,7 +454,7 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
       const sessionId = sessionIdRef.current;
       if (!pending || !sessionId) return;
       void SendRDPInput({ sessionId, kind: "mouse", x: pending.x, y: pending.y, buttons: PTR_MOVE }).catch(
-        () => undefined
+        handleInputFailure
       );
     });
   }
@@ -510,9 +515,8 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
     const sessionId = sessionIdRef.current;
     if (!sessionId) return;
     keyQueueRef.current = keyQueueRef.current
-      .catch(() => undefined)
-      .then(() => SendRDPInput({ sessionId, ...event, pressed }));
-    void keyQueueRef.current.catch(() => undefined);
+      .then(() => SendRDPInput({ sessionId, ...event, pressed }))
+      .catch(handleInputFailure);
   }
 
   // Release every physical key we're still holding — called on blur so a modifier
@@ -565,12 +569,6 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
       ? ({ width: "100%", height: "100%", objectFit: "contain" } as const)
       : ({ width: `${frameSize.width}px`, height: `${frameSize.height}px` } as const);
 
-  const specialKeys: { testid: string; label: string; scancodes: number[] }[] = [
-    { testid: "rdp-key-cad", label: "Ctrl + Alt + Del", scancodes: [SCANCODE.ctrl, SCANCODE.alt, SCANCODE.del] },
-    { testid: "rdp-key-alt-tab", label: "Alt + Tab", scancodes: [SCANCODE.alt, SCANCODE.tab] },
-    { testid: "rdp-key-esc", label: "Esc", scancodes: [SCANCODE.esc] },
-  ];
-
   return (
     <div
       ref={rootRef}
@@ -581,150 +579,33 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
       data-testid="rdp-panel"
       data-fullscreen={isFullscreen}
     >
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b bg-muted/30 px-3 text-xs">
-        <Monitor className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 truncate font-medium text-foreground">{asset.Name}</span>
-        {host && (
-          <span className="shrink-0 whitespace-nowrap rounded border bg-background/50 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-            {host}:{port}
-          </span>
-        )}
-        <span
-          data-testid="rdp-status"
-          className={cn(
-            "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-0.5 font-medium",
-            STATUS_PILL[status]
-          )}
-        >
-          <span className="h-1.5 w-1.5 rounded-full bg-current" />
-          {status === "connected" ? t("asset.rdpConnected") : t(`asset.rdpStatus.${status}`)}
-        </span>
-
-        <div className="ml-auto flex shrink-0 items-center gap-2">
-          <Segmented<ViewMode>
-            value={viewMode}
-            onChange={setViewMode}
-            aria-label={t("asset.rdpViewMode")}
-            className="h-7 w-[116px] rounded-md p-0.5"
-            options={[
-              { value: "fit", label: t("asset.rdpFit"), testid: "rdp-view-fit" },
-              { value: "actual", label: t("asset.rdpActual"), testid: "rdp-view-actual" },
-            ]}
-          />
-
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1.5 px-2"
-                data-testid="rdp-special-keys"
-                disabled={!connected}
-              >
-                <Keyboard className="h-3.5 w-3.5" />
-                Ctrl+Alt+Del
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {specialKeys.map((k) => (
-                <DropdownMenuItem key={k.testid} data-testid={k.testid} onSelect={() => void sendChord(k.scancodes)}>
-                  {k.label}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="h-7 w-7"
-            data-testid="rdp-fullscreen"
-            title={isFullscreen ? t("asset.rdpExitFullscreen") : t("asset.rdpFullscreen")}
-            onClick={toggleFullscreen}
-          >
-            {isFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-          </Button>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            data-testid="rdp-clipboard"
-            data-state={clipboardEnabled ? "on" : "off"}
-            title={clipboardEnabled ? t("asset.rdpClipboardOn") : t("asset.rdpClipboardOff")}
-            className={cn("h-7 w-7", clipboardEnabled ? "text-emerald-400" : "text-muted-foreground/60")}
-            disabled={!connected}
-            onClick={() => void toggleClipboard()}
-          >
-            {clipboardEnabled ? <ClipboardCheck className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}
-          </Button>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="h-7 w-7 text-red-400 hover:text-red-400"
-            data-testid="rdp-disconnect"
-            title={t("asset.rdpDisconnect")}
-            disabled={!connected}
-            onClick={disconnect}
-          >
-            <Power className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      </div>
+      <RDPToolbar
+        assetName={asset.Name}
+        host={host}
+        port={port}
+        status={status}
+        viewMode={viewMode}
+        isFullscreen={isFullscreen}
+        clipboardEnabled={clipboardEnabled}
+        onViewModeChange={setViewMode}
+        onSendChord={(scancodes) => void sendChord(scancodes)}
+        onToggleFullscreen={toggleFullscreen}
+        onToggleClipboard={() => void toggleClipboard()}
+        onDisconnect={disconnect}
+      />
 
       <div
         ref={viewportRef}
-        className={`relative min-h-0 flex-1 bg-black ${viewMode === "actual" ? "overflow-auto" : "overflow-hidden"}`}
+        className={`relative min-h-0 flex-1 bg-background ${viewMode === "actual" ? "overflow-auto" : "overflow-hidden"}`}
       >
-        {status === "connecting" && (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-background text-sm text-muted-foreground">
-            <Loader2 className="h-6 w-6 animate-spin text-primary" />
-            <div className="font-medium text-foreground">{t("asset.rdpConnecting")}</div>
-            {host && (
-              <div className="font-mono text-xs">
-                {host}:{port}
-              </div>
-            )}
-          </div>
-        )}
-        {(status === "error" || status === "closed") && (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-background px-6 text-center">
-            {status === "error" ? (
-              <AlertTriangle className="h-8 w-8 text-destructive" />
-            ) : (
-              <Power className="h-8 w-8 text-muted-foreground" />
-            )}
-            <div className="text-base font-semibold text-foreground">
-              {status === "error" ? t("asset.rdpError") : t("asset.rdpDisconnected")}
-            </div>
-            {status === "error" && error && (
-              <div className="max-w-xl break-words text-sm text-muted-foreground">{error}</div>
-            )}
-            <div className="mt-1 flex items-center gap-2.5">
-              <Button type="button" size="sm" className="gap-1.5" data-testid="rdp-reconnect" onClick={reconnect}>
-                <RefreshCw className="h-3.5 w-3.5" />
-                {t("asset.rdpReconnect")}
-              </Button>
-              {onEdit && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="gap-1.5"
-                  data-testid="rdp-edit"
-                  onClick={onEdit}
-                >
-                  <Settings2 className="h-3.5 w-3.5" />
-                  {t("asset.rdpEditConnection")}
-                </Button>
-              )}
-            </div>
-          </div>
-        )}
+        <RDPSessionOverlay
+          status={status}
+          error={error}
+          host={host}
+          port={port}
+          onReconnect={reconnect}
+          onEdit={onEdit}
+        />
         <canvas
           ref={canvasRef}
           data-testid="rdp-canvas"
@@ -753,7 +634,7 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
               x: p.x,
               y: p.y,
               delta: e.deltaY < 0 ? 1 : -1,
-            }).catch(() => undefined);
+            }).catch(handleInputFailure);
           }}
           onKeyDown={(e) => handleKey(e, true)}
           onKeyUp={(e) => handleKey(e, false)}
@@ -762,16 +643,13 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
         />
       </div>
 
-      <div className="flex h-6 shrink-0 items-center gap-3 border-t bg-muted/30 px-3 text-[11px] text-muted-foreground">
-        <span className="flex items-center gap-1.5 font-mono">
-          <Scaling className="h-3 w-3" />
-          {frameSize.width} × {frameSize.height}
-        </span>
-        {viewMode === "fit" && (
-          <span className="rounded border px-1.5 py-px text-[11px] text-sky-300/90">{t("asset.rdpAutoFit")}</span>
-        )}
-        {connected && <span className="ml-auto font-mono tabular-nums">{formatDuration(elapsed)}</span>}
-      </div>
+      <RDPStatusBar
+        width={frameSize.width}
+        height={frameSize.height}
+        viewMode={viewMode}
+        connected={connected}
+        elapsed={elapsed}
+      />
     </div>
   );
 }
