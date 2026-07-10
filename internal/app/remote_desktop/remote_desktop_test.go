@@ -28,8 +28,8 @@ func TestVerifyVNCAuthPassword(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client, server := net.Pipe()
-			defer client.Close()
-			defer server.Close()
+			defer func() { _ = client.Close() }()
+			defer func() { _ = server.Close() }()
 			errCh := make(chan error, 1)
 			go func() {
 				errCh <- serveVNCAuth38(server, "secret", challenge)
@@ -66,11 +66,11 @@ func TestEncodeVNCClipboardTextUsesWindowsChineseCodePage(t *testing.T) {
 
 func TestVerifyVNCAuthNegotiatesRealVNC5AsRFB38(t *testing.T) {
 	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = server.Close() }()
 	errCh := make(chan error, 1)
 	go func() {
-		defer server.Close()
+		defer func() { _ = server.Close() }()
 		errCh <- serveVNCAuth(server, "RFB 005.000\n", "RFB 003.008\n", "secret", []byte("1234567890abcdef"))
 	}()
 
@@ -87,7 +87,7 @@ func TestVNCConnectionStopsWhenContextExpiresDuringHandshake(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	serverDone := make(chan struct{})
 	go func() {
@@ -96,7 +96,7 @@ func TestVNCConnectionStopsWhenContextExpiresDuringHandshake(t *testing.T) {
 		if acceptErr != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_, _ = conn.Write([]byte("RFB 003.008\n"))
 		time.Sleep(500 * time.Millisecond)
 	}()
@@ -135,11 +135,11 @@ func TestLiveVNCAuthAndServerInit(t *testing.T) {
 		t.Skip("set OPSKAT_TEST_VNC_ADDR and OPSKAT_TEST_VNC_PASSWORD to run")
 	}
 
-	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	conn, err := net.DialTimeout("tcp", addr, 5*time.Second) //nolint:gosec // This opt-in integration test connects to the caller-provided VNC fixture.
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -207,8 +207,8 @@ func serveVNCAuth(conn net.Conn, serverVersion, expectedClientVersion, password 
 			return err
 		}
 		reason := []byte("authentication failed")
-		lenBuf := make([]byte, 4)
-		binary.BigEndian.PutUint32(lenBuf, uint32(len(reason)))
+		lenBuf := make([]byte, 0, 4)
+		lenBuf = binary.BigEndian.AppendUint32(lenBuf, uint32(len(reason)))
 		if _, err := conn.Write(append(lenBuf, reason...)); err != nil {
 			return err
 		}

@@ -2,7 +2,7 @@ package remote_desktop
 
 import (
 	"context"
-	"crypto/des"
+	"crypto/des" //nolint:gosec // VNC RFB authentication requires the protocol-mandated DES primitive.
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -124,7 +124,7 @@ func (r *RemoteDesktop) testVNCConnection(ctx context.Context, configJSON, plain
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	return verifyVNCAuthContext(ctx, conn, password)
 }
 
@@ -303,7 +303,7 @@ func vncPasswordResponse(password string, challenge []byte) ([]byte, error) {
 	for i := range key {
 		key[i] = reverseBits(key[i])
 	}
-	block, err := des.NewCipher(key)
+	block, err := des.NewCipher(key) //nolint:gosec // VNC authentication requires DES for RFB compatibility.
 	if err != nil {
 		return nil, fmt.Errorf("初始化 VNC 认证失败: %w", err)
 	}

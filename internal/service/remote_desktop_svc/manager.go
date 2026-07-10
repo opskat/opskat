@@ -155,7 +155,7 @@ func (m *Manager) connectRDP(ctx context.Context, asset *asset_entity.Asset) (*S
 		forward.Close()
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, "mstsc.exe", rdpFile)
+	cmd := exec.CommandContext(ctx, "mstsc.exe", rdpFile) //nolint:gosec // The executable is fixed and the RDP file is created in the application temp directory.
 	executil.HideConsoleWindow(cmd)
 	if err := cmd.Start(); err != nil {
 		forward.Close()
@@ -277,13 +277,13 @@ func (p *tcpWebSocketProxy) handleWebSocket(ctx context.Context, w http.Response
 	if err != nil {
 		return
 	}
-	defer ws.Close(websocket.StatusNormalClosure, "")
+	defer func() { _ = ws.Close(websocket.StatusNormalClosure, "") }()
 	tcp, err := (proxychain.Chain{Layers: p.layers}).Dial(ctx, p.target)
 	if err != nil {
 		zap.L().Warn("remote desktop tcp target dial failed", zap.String("target", p.target), zap.Error(err))
 		return
 	}
-	defer tcp.Close()
+	defer func() { _ = tcp.Close() }()
 	errCh := make(chan error, 2)
 	go func() {
 		for {
@@ -374,13 +374,13 @@ func (f *tcpForward) acceptLoop(ctx context.Context) {
 }
 
 func (f *tcpForward) handle(ctx context.Context, inbound net.Conn) {
-	defer inbound.Close()
+	defer func() { _ = inbound.Close() }()
 	outbound, err := (proxychain.Chain{Layers: f.layers}).Dial(ctx, f.target)
 	if err != nil {
 		zap.L().Warn("remote desktop target dial failed", zap.String("target", f.target), zap.Error(err))
 		return
 	}
-	defer outbound.Close()
+	defer func() { _ = outbound.Close() }()
 	errCh := make(chan error, 2)
 	go func() { _, err := io.Copy(outbound, inbound); errCh <- err }()
 	go func() { _, err := io.Copy(inbound, outbound); errCh <- err }()
@@ -391,7 +391,7 @@ func storeRDPCredentials(ctx context.Context, host, username, password string) e
 	if strings.TrimSpace(password) == "" {
 		return nil
 	}
-	cmd := exec.CommandContext(ctx, "cmdkey.exe", "/generic:TERMSRV/"+host, "/user:"+username, "/pass:"+password)
+	cmd := exec.CommandContext(ctx, "cmdkey.exe", "/generic:TERMSRV/"+host, "/user:"+username, "/pass:"+password) //nolint:gosec // cmdkey.exe is fixed and receives validated RDP credentials.
 	executil.HideWindow(cmd)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("保存 RDP 凭据失败: %w: %s", err, strings.TrimSpace(string(out)))
