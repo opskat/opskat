@@ -24,6 +24,7 @@ const (
 	AssetTypeSerial   = "serial"
 	AssetTypeEtcd     = "etcd"
 	AssetTypeLocal    = "local"
+	AssetTypeRDP      = "rdp"
 	AssetTypeOSS      = "oss"
 )
 
@@ -120,6 +121,21 @@ type SSHConfig struct {
 	// RestoreCwdOnReconnect 开启后，该资产 SSH 终端断线手动重连时自动 cd 回上次目录，
 	// 并在连接时自动启用目录同步以持续追踪 cwd（仅 bash/zsh/ksh/mksh）。
 	RestoreCwdOnReconnect bool `json:"restore_cwd_on_reconnect,omitempty"`
+}
+
+// RDPConfig RDP 类型的特定配置。PoC 阶段只覆盖基础连接、分辨率和剪贴板。
+type RDPConfig struct {
+	Host         string       `json:"host"`
+	Port         int          `json:"port"`
+	Username     string       `json:"username"`
+	Password     string       `json:"password,omitempty"`      // credential_svc 加密（内联，向后兼容）
+	CredentialID int64        `json:"credential_id,omitempty"` // 统一凭证 ID（密码）
+	Domain       string       `json:"domain,omitempty"`
+	Width        int          `json:"width,omitempty"`
+	Height       int          `json:"height,omitempty"`
+	Clipboard    bool         `json:"clipboard"`
+	SSHAssetID   int64        `json:"ssh_asset_id,omitempty"` // 仅未保存配置的连接测试使用；已保存资产走 Asset.SSHTunnelID
+	Proxy        *ProxyConfig `json:"proxy,omitempty"`        // SOCKS5 代理；与 SSH 隧道互斥，隧道优先
 }
 
 // ProxyConfig 代理配置
@@ -377,6 +393,10 @@ func (c *SerialConfig) GetPassword() string    { return "" }
 func (c *LocalConfig) GetCredentialID() int64 { return 0 }
 func (c *LocalConfig) GetPassword() string    { return "" }
 
+// RDPConfig PasswordSource implementation。
+func (c *RDPConfig) GetCredentialID() int64 { return c.CredentialID }
+func (c *RDPConfig) GetPassword() string    { return c.Password }
+
 // --- 充血模型方法 ---
 
 // IsSSH 判断是否SSH类型
@@ -422,6 +442,11 @@ func (a *Asset) IsEtcd() bool {
 // IsLocal 判断是否本地终端类型
 func (a *Asset) IsLocal() bool {
 	return a.Type == AssetTypeLocal
+}
+
+// IsRDP 判断是否 RDP 类型
+func (a *Asset) IsRDP() bool {
+	return a.Type == AssetTypeRDP
 }
 
 // GetSSHConfig 解析SSH配置
@@ -586,6 +611,24 @@ func (a *Asset) SetLocalConfig(cfg *LocalConfig) error {
 	return nil
 }
 
+// GetRDPConfig 解析 RDP 配置
+func (a *Asset) GetRDPConfig() (*RDPConfig, error) {
+	if !a.IsRDP() {
+		return nil, errors.New("资产不是RDP类型")
+	}
+	return jsonfield.Unmarshal[RDPConfig](a.Config, "RDP配置")
+}
+
+// SetRDPConfig 序列化 RDP 配置到 Config 字段
+func (a *Asset) SetRDPConfig(cfg *RDPConfig) error {
+	s, err := jsonfield.Marshal(cfg, "RDP配置")
+	if err != nil {
+		return err
+	}
+	a.Config = s
+	return nil
+}
+
 // GetQueryPolicy 解析SQL权限策略（database类型）
 func (a *Asset) GetQueryPolicy() (*QueryPolicy, error) {
 	return jsonfield.UnmarshalOrDefault[QueryPolicy](a.CmdPolicy, "SQL权限策略")
@@ -717,6 +760,8 @@ func (a *Asset) Validate() error {
 		return a.validateLocal()
 	case AssetTypeEtcd:
 		return a.validateEtcd()
+	case AssetTypeRDP:
+		return a.validateRDP()
 	default:
 		// 扩展资产类型由扩展自行校验
 		return nil
@@ -950,6 +995,27 @@ func (a *Asset) validateEtcd() error {
 	return nil
 }
 
+// validateRDP 校验 RDP 类型特定配置
+func (a *Asset) validateRDP() error {
+	cfg, err := a.GetRDPConfig()
+	if err != nil {
+		return fmt.Errorf("RDP配置无效: %w", err)
+	}
+	if strings.TrimSpace(cfg.Host) == "" {
+		return errors.New("RDP主机地址不能为空")
+	}
+	if cfg.Port <= 0 || cfg.Port > 65535 {
+		return errors.New("RDP端口无效")
+	}
+	if strings.TrimSpace(cfg.Username) == "" {
+		return errors.New("RDP用户名不能为空")
+	}
+	if cfg.Width < 0 || cfg.Height < 0 {
+		return errors.New("RDP分辨率无效")
+	}
+	return nil
+}
+
 func validateKafkaBroker(broker string) error {
 	broker = strings.TrimSpace(broker)
 	if broker == "" {
@@ -1033,6 +1099,12 @@ func (a *Asset) CanConnect() bool {
 		return len(cfg.Endpoints) > 0
 	case AssetTypeLocal:
 		return true
+	case AssetTypeRDP:
+		cfg, err := a.GetRDPConfig()
+		if err != nil {
+			return false
+		}
+		return cfg.Host != "" && cfg.Port > 0 && cfg.Username != ""
 	}
 	return false
 }

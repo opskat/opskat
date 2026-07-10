@@ -17,7 +17,7 @@ The built-in set must be enumerated from committed code, not hardcoded by count:
 git grep -n "Register(&" -- internal/assettype/*.go | grep -v '_test.go'
 ```
 
-Current built-ins on this branch are `ssh`, `database`, `redis`, `mongodb`, `kafka`, `k8s`, `serial`, `local`, and `etcd`. Frontend registration is the side-effect import list in `frontend/src/lib/assetTypes/index.ts`.
+Frontend registration is enumerated from the side-effect imports in `frontend/src/lib/assetTypes/index.ts`; do not copy either registry into a prose list that will drift.
 
 ## Integration Surface Depends on Capabilities
 

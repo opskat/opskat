@@ -8,6 +8,24 @@ import { getAssetType } from "@/lib/assetTypes";
 
 /** 按资产类型打开/聚焦连接 tab（k8s/扩展→page；query→查询 tab；terminal→连接）。与资产列表双击行为一致。 */
 export async function openAssetConnection(asset: asset_entity.Asset): Promise<void> {
+  const def = getAssetType(asset.Type);
+  if (def?.connectAction === "page" && def.pageId) {
+    const pageId = `${def.pageId}-${asset.ID}`;
+    const tabStore = useTabStore.getState();
+    const existing = tabStore.tabs.find((tab) => tab.id === pageId);
+    if (existing) {
+      tabStore.activateTab(pageId);
+    } else {
+      tabStore.openTab({
+        id: pageId,
+        type: "page",
+        label: asset.Name,
+        icon: asset.Icon || def.pageIcon,
+        meta: { type: "page", pageId: def.pageId, assetId: asset.ID },
+      });
+    }
+    return;
+  }
   if (asset.Type === "k8s") {
     const pageId = `k8s-${asset.ID}`;
     const tabStore = useTabStore.getState();
@@ -25,7 +43,6 @@ export async function openAssetConnection(asset: asset_entity.Asset): Promise<vo
     }
     return;
   }
-  const def = getAssetType(asset.Type);
   if (def?.connectAction === "query") {
     useQueryStore.getState().openQueryTab(asset);
     return;

@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/bouncyball-git/gopher-rdp v1.0.8
 	github.com/cago-frame/agents v0.0.0-20260617072949-d58533f30ab1
 	github.com/cago-frame/cago v0.0.0-20260609091633-ba2f550b2729
 	github.com/coder/websocket v1.8.14
@@ -240,3 +241,5 @@ require (
 // last release that has both legacy interceptors AND the NewServerHandler
 // API cago uses. Safe across non-test code paths.
 replace go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc => go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.60.0
+
+replace github.com/bouncyball-git/gopher-rdp => github.com/opskat/gopher-rdp v0.0.0-20260710092759-2386d5f6a37e

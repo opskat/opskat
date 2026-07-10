@@ -14,7 +14,19 @@ describe("getAssetTypeOptions", () => {
   it("returns built-in options when extensions registry is empty", () => {
     const opts = getAssetTypeOptions({});
     const values = opts.map((o) => o.value);
-    expect(values).toEqual(["ssh", "database", "redis", "mongodb", "kafka", "k8s", "serial", "local", "etcd", "oss"]);
+    expect(values).toEqual([
+      "ssh",
+      "database",
+      "redis",
+      "mongodb",
+      "kafka",
+      "k8s",
+      "serial",
+      "local",
+      "etcd",
+      "rdp",
+      "oss",
+    ]);
     expect(opts.every((o) => o.group === "builtin")).toBe(true);
   });
 
@@ -112,6 +124,7 @@ describe("category classification", () => {
       ssh: "servers",
       local: "servers",
       serial: "servers",
+      rdp: "servers",
       database: "databases",
       redis: "databases",
       mongodb: "databases",
@@ -142,7 +155,7 @@ describe("buildAssetTypeGroups", () => {
   it("orders groups servers → databases → middleware → extension and drops empty groups", () => {
     const groups = buildAssetTypeGroups(getAssetTypeOptions({}));
     expect(groups.map((g) => g.category)).toEqual(["servers", "databases", "middleware"]);
-    expect(groups[0].options.map((o) => o.value)).toEqual(["ssh", "serial", "local"]);
+    expect(groups[0].options.map((o) => o.value)).toEqual(["ssh", "serial", "local", "rdp"]);
     expect(groups[1].options.map((o) => o.value)).toEqual(["database", "redis", "mongodb", "etcd", "oss"]);
   });
 });

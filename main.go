@@ -19,6 +19,7 @@ import (
 	"github.com/opskat/opskat/internal/app/opsctl"
 	"github.com/opskat/opskat/internal/app/oss"
 	"github.com/opskat/opskat/internal/app/query"
+	"github.com/opskat/opskat/internal/app/rdp"
 	"github.com/opskat/opskat/internal/app/redis"
 	"github.com/opskat/opskat/internal/app/serial"
 	"github.com/opskat/opskat/internal/app/ssh"
@@ -141,6 +142,7 @@ func main() {
 	sshB := ssh.New(appCtx, sys, sshMgr, sftpSvc, pool)
 	queryB := query.New(appCtx, sys, pool)
 	redisB := redis.New(appCtx, sys, pool)
+	rdpB := rdp.New(sys, pool)
 	etcdB := etcd.New(appCtx, sys, pool)
 	ossB := oss.New(appCtx, sys)
 	kafkaB := kafka.New(appCtx, sys, pool)
@@ -158,7 +160,7 @@ func main() {
 	aiB.SetSerialManager(serialMgr)
 	aiB.SetWindowActivator(sys)
 
-	binders := []Lifecycle{sys, sshB, queryB, redisB, etcdB, kafkaB, k8sB, serialB, localB, aiB, opsctlB, extB, extEditB, ossB}
+	binders := []Lifecycle{sys, sshB, queryB, redisB, rdpB, etcdB, kafkaB, k8sB, serialB, localB, aiB, opsctlB, extB, extEditB, ossB}
 
 	appOptions := &options.App{
 		Title:     "OpsKat",
@@ -199,7 +201,7 @@ func main() {
 			pool.Close()
 		},
 		Bind: []interface{}{
-			sys, sshB, queryB, redisB, etcdB, kafkaB, k8sB, serialB, localB, aiB, opsctlB, extB, extEditB, ossB,
+			sys, sshB, queryB, redisB, rdpB, etcdB, kafkaB, k8sB, serialB, localB, aiB, opsctlB, extB, extEditB, ossB,
 		},
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop:     true,

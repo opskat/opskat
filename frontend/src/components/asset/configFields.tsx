@@ -38,7 +38,7 @@ export type FieldDesc<S> = WithVisibility<S> &
         width?: string;
         testid?: string;
       }
-    | { kind: "switch"; key: keyof S; label: string }
+    | { kind: "switch"; key: keyof S; label: string; description?: string }
     | { kind: "select"; key: keyof S; label: string; options: { value: string; label: string }[]; testid?: string }
     | {
         kind: "segmented";
@@ -140,8 +140,13 @@ function FieldNode<S>({
 
     case "switch":
       return (
-        <div className="flex items-center justify-between">
-          <FieldLabel>{t(field.label)}</FieldLabel>
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <FieldLabel>{t(field.label)}</FieldLabel>
+            {field.description && (
+              <span className="text-[11px] leading-snug text-muted-foreground/70">{t(field.description)}</span>
+            )}
+          </div>
           <Switch checked={!!state[field.key]} onCheckedChange={(v) => patch({ [field.key]: v } as Partial<S>)} />
         </div>
       );

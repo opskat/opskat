@@ -46,4 +46,17 @@ describe("openAssetConnection", () => {
     await openAssetConnection(makeAsset(2, "web", "ssh"));
     expect(connect).toHaveBeenCalledTimes(1);
   });
+
+  it("opens a page tab for an rdp asset", async () => {
+    await openAssetConnection(makeAsset(3, "desktop", "rdp"));
+
+    expect(openTab).toHaveBeenCalledWith({
+      id: "rdp-3",
+      type: "page",
+      label: "desktop",
+      icon: "monitor",
+      meta: { type: "page", pageId: "rdp", assetId: 3 },
+    });
+    expect(connect).not.toHaveBeenCalled();
+  });
 });
