@@ -65,12 +65,11 @@ describe("RDPPanel", () => {
     expect(await screen.findByText("192.168.1.10:3389")).toBeInTheDocument();
   });
 
-  it("resizes the remote desktop to fit the viewport after connecting", async () => {
-    await renderConnected();
-    await waitFor(() => expect(ResizeRDP).toHaveBeenCalled());
-    const lastCall = vi.mocked(ResizeRDP).mock.calls.at(-1)!;
-    expect(lastCall[0]).toBe("sess-1");
-    expect(lastCall[1]).toBe(1200); // viewport width from the test getBoundingClientRect stub
+  it("connects at the viewport size so the session starts fitted", async () => {
+    render(<RDPPanel asset={asset()} />);
+    await waitFor(() => expect(ConnectRDP).toHaveBeenCalled());
+    const arg = vi.mocked(ConnectRDP).mock.calls[0][0] as { width: number; height: number };
+    expect(arg.width).toBe(1200); // viewport width from the test getBoundingClientRect stub
   });
 
   it("sends the Ctrl+Alt+Del chord in press-then-release order", async () => {

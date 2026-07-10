@@ -162,7 +162,14 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
     async function connect() {
       setStatus("connecting");
       setError("");
-      const initial = clampRemoteSize(cfg.width || 1280, cfg.height || 720);
+      // Connect at the current viewport size so the session starts already fitted —
+      // avoids an immediate resize/reconnect on connect (that path is fragile and can
+      // drop the first framebuffer). Later window changes are handled by the observer.
+      const rect = viewportRef.current?.getBoundingClientRect();
+      const initial =
+        rect && rect.width > 1 && rect.height > 1
+          ? clampRemoteSize(rect.width, rect.height)
+          : clampRemoteSize(cfg.width || 1280, cfg.height || 720);
       requestedSizeRef.current = initial;
       try {
         const sessionId = await ConnectRDP({ assetId: asset.ID, width: initial.width, height: initial.height });
@@ -173,7 +180,6 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
         sessionIdRef.current = sessionId;
         setStatus("connected");
         setConnectedAt(Date.now());
-        syncViewportSize();
         unsubscribe = EventsOn(`rdp:event:${sessionId}`, (event: RDPEvent) => {
           if (event.type === "connecting") {
             setStatus("connecting");
@@ -182,7 +188,6 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
           if (event.type === "connected") {
             setStatus("connected");
             if (event.width && event.height) updateFrameSize(event.width, event.height);
-            syncViewportSize();
             return;
           }
           if (event.type === "error") {
