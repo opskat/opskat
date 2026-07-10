@@ -2,19 +2,20 @@ package rdp_svc
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
 	rdp "github.com/bouncyball-git/gopher-rdp"
-	"github.com/bouncyball-git/gopher-rdp/display"
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/google/uuid"
+	"github.com/opskat/opskat/internal/connpool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
+	"github.com/opskat/opskat/internal/sshpool"
 	"go.uber.org/zap"
 )
 
@@ -23,9 +24,17 @@ type Event struct {
 	SessionID string `json:"sessionId"`
 	Message   string `json:"message,omitempty"`
 	Error     string `json:"error,omitempty"`
-	Width     int    `json:"width,omitempty"`
-	Height    int    `json:"height,omitempty"`
-	Data      string `json:"data,omitempty"` // full-frame top-down RGBA, base64
+	// Width/Height are the full framebuffer dimensions; a frame event carries
+	// the dirty sub-region at (X, Y) sized RectWidth×RectHeight.
+	Width      int    `json:"width,omitempty"`
+	Height     int    `json:"height,omitempty"`
+	X          int    `json:"x,omitempty"`
+	Y          int    `json:"y,omitempty"`
+	RectWidth  int    `json:"rectWidth,omitempty"`
+	RectHeight int    `json:"rectHeight,omitempty"`
+	Data       string `json:"data,omitempty"` // top-down RGBA of the dirty region, base64
+	Text       string `json:"text,omitempty"`
+	Count      int    `json:"count,omitempty"`
 }
 
 type ConnectRequest struct {
@@ -44,30 +53,43 @@ type InputEvent struct {
 	Scancode  uint16 `json:"scancode,omitempty"`
 	Codepoint uint16 `json:"codepoint,omitempty"`
 	Pressed   bool   `json:"pressed,omitempty"`
+	Extended  bool   `json:"extended,omitempty"` // E0-prefixed scancode (arrows, nav cluster, right modifiers)
 }
 
 type Service struct {
 	mu       sync.Mutex
 	sessions map[string]*session
 	emit     func(Event)
+	pool     *sshpool.Pool
 }
 
 type session struct {
-	id       string
-	assetID  int64
-	client   *rdp.Client
-	done     chan struct{}
-	frameMu  sync.RWMutex
-	frame    []byte
-	width    int
-	height   int
-	hasFrame bool
+	id                  string
+	assetID             int64
+	client              *rdp.Client
+	streamer            *frameStreamer
+	done                chan struct{}
+	clipboardDownloadMu sync.Mutex
+	fileContents        chan fileContentsResponse
+	clipboardTempDir    string
 }
 
-func New(emit func(Event)) *Service {
+type fileContentsResponse struct {
+	streamID uint32
+	data     []byte
+	err      error
+}
+
+type framebufferSource interface {
+	FramebufferDims() (int, int)
+	FramebufferWriteTopDown(dst []byte) (int, int)
+}
+
+func New(emit func(Event), pool *sshpool.Pool) *Service {
 	return &Service{
 		sessions: make(map[string]*session),
 		emit:     emit,
+		pool:     pool,
 	}
 }
 
@@ -87,6 +109,7 @@ func (s *Service) Connect(ctx context.Context, req ConnectRequest) (string, erro
 	if err != nil {
 		return "", fmt.Errorf("resolve RDP password: %w", err)
 	}
+	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 
 	width, height := resolveSize(cfg, req.Width, req.Height)
 	id := "rdp-" + uuid.NewString()
@@ -98,9 +121,12 @@ func (s *Service) Connect(ctx context.Context, req ConnectRequest) (string, erro
 		zap.Int("port", cfg.Port),
 		zap.Int("width", width),
 		zap.Int("height", height),
+		zap.Int64("sshTunnelID", asset.SSHTunnelID),
+		zap.Bool("proxy", cfg.Proxy != nil),
 	)
 
 	opts := clientOptions(cfg, password, width, height)
+	opts.DialContext = connpool.RDPDialContext(asset.SSHTunnelID, cfg, s.pool)
 
 	client, err := rdp.NewClient(opts)
 	if err != nil {
@@ -109,13 +135,12 @@ func (s *Service) Connect(ctx context.Context, req ConnectRequest) (string, erro
 	}
 
 	sess := &session{
-		id:      id,
-		assetID: req.AssetID,
-		client:  client,
-		done:    make(chan struct{}),
-		width:   width,
-		height:  height,
-		frame:   make([]byte, width*height*4),
+		id:           id,
+		assetID:      req.AssetID,
+		client:       client,
+		streamer:     newFrameStreamer(),
+		done:         make(chan struct{}),
+		fileContents: make(chan fileContentsResponse, 1),
 	}
 	s.mu.Lock()
 	s.sessions[id] = sess
@@ -140,17 +165,56 @@ func (s *Service) Connect(ctx context.Context, req ConnectRequest) (string, erro
 			s.emit(Event{Type: "connected", SessionID: id})
 		}
 	})
+	// Dirty-region tracking: both callbacks fire after the update has been
+	// written into the framebuffer, so marking the rect is enough — the flush
+	// loop reads the region back from the framebuffer. OnStridedBitmap covers
+	// the EGFX pipeline, OnBitmap everything else; both must be registered
+	// before Connect so the EGFX channel wires them up.
+	client.OnBitmap(func(u *rdp.BitmapUpdate) {
+		sess.streamer.markDirty(u.X, u.Y, u.Width, u.Height)
+	})
+	client.OnStridedBitmap(func(x, y, w, h int, _ []byte, _ int) {
+		sess.streamer.markDirty(x, y, w, h)
+	})
 	client.OnResize(func(w, h int) {
-		sess.resizeFrame(w, h)
+		// Repaint everything at the new size: the canvas is cleared on resize,
+		// so the first flush afterwards must be a full frame.
+		sess.streamer.markDirty(0, 0, w, h)
+		if err := client.RefreshRect(0, 0, w, h); err != nil {
+			log.Error("rdp refresh after resize failed",
+				zap.String("sessionID", id),
+				zap.Int64("assetID", req.AssetID),
+				zap.Int("width", w),
+				zap.Int("height", h),
+				zap.Error(err),
+			)
+		}
 		if s.emit != nil {
 			s.emit(Event{Type: "connected", SessionID: id, Width: w, Height: h})
 		}
 	})
-	client.OnStridedBitmap(func(x, y, w, h int, data []byte, stride int) {
-		sess.writeStridedRect(x, y, w, h, data, stride)
+	client.OnClipboardUpdate(func(hasText, _ bool) {
+		if hasText {
+			if err := client.RequestClipboard(); err != nil {
+				log.Error("rdp clipboard request failed", zap.String("sessionID", id), zap.Error(err))
+			}
+		}
 	})
-	client.OnBitmap(func(update *rdp.BitmapUpdate) {
-		sess.writeBitmapUpdate(update)
+	client.OnClipboardText(func(text string) {
+		if s.emit != nil {
+			s.emit(Event{Type: "clipboard", SessionID: id, Text: text})
+		}
+	})
+	client.OnClipboardFilesAvailable(func() {
+		if err := client.RequestClipboardFiles(); err != nil {
+			log.Error("rdp clipboard file descriptor request failed", zap.String("sessionID", id), zap.Error(err))
+		}
+	})
+	client.OnClipboardFileDescriptors(func(files []rdp.ClipboardFileDescriptor) {
+		go s.receiveClipboardFiles(log, sess, files)
+	})
+	client.OnClipboardFileContents(func(streamID uint32, data []byte, err error) {
+		sess.fileContents <- fileContentsResponse{streamID: streamID, data: data, err: err}
 	})
 
 	if err := client.Connect(); err != nil {
@@ -161,6 +225,7 @@ func (s *Service) Connect(ctx context.Context, req ConnectRequest) (string, erro
 		}
 		return "", err
 	}
+	client.SetClipboardEnabled(cfg.Clipboard)
 
 	log.Info("rdp connect end", zap.String("sessionID", id), zap.Int64("assetID", req.AssetID))
 	_ = client.RefreshRect(0, 0, width, height)
@@ -180,6 +245,7 @@ func (s *Service) Connect(ctx context.Context, req ConnectRequest) (string, erro
 }
 
 func (s *Service) TestConfig(ctx context.Context, cfg *asset_entity.RDPConfig, password string) error {
+	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 	width, height := resolveSize(cfg, 0, 0)
 	log := logger.Ctx(ctx)
 	log.Info("rdp test connection start",
@@ -187,9 +253,13 @@ func (s *Service) TestConfig(ctx context.Context, cfg *asset_entity.RDPConfig, p
 		zap.Int("port", cfg.Port),
 		zap.Int("width", width),
 		zap.Int("height", height),
+		zap.Int64("sshTunnelID", cfg.SSHAssetID),
+		zap.Bool("proxy", cfg.Proxy != nil),
 	)
 
-	client, err := rdp.NewClient(testClientOptions(cfg, password, width, height))
+	opts := testClientOptions(cfg, password, width, height)
+	opts.DialContext = connpool.RDPDialContext(cfg.SSHAssetID, cfg, s.pool)
+	client, err := rdp.NewClient(opts)
 	if err != nil {
 		return fmt.Errorf("create RDP client: %w", err)
 	}
@@ -213,9 +283,12 @@ func clientOptions(cfg *asset_entity.RDPConfig, password string, width, height i
 	opts.Width = uint16(width)
 	opts.Height = uint16(height)
 	opts.Depth = 32
-	opts.Clipboard = cfg.Clipboard
+	// Always negotiate the clipboard channel so users can toggle synchronization
+	// for an active session. The configured initial state is applied after connect.
+	opts.Clipboard = true
 	opts.GFX = true
 	opts.NoAVC = true
+	opts.Wallpaper = true
 	opts.HeartbeatTimeout = 0
 	opts.Logger = slog.New(slog.DiscardHandler)
 	return opts
@@ -248,112 +321,46 @@ func resolveSize(cfg *asset_entity.RDPConfig, reqW, reqH int) (int, int) {
 }
 
 func (s *Service) frameLoop(sess *session) {
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(frameTickInterval)
 	defer ticker.Stop()
+	var nextAllowed time.Time
+	// Nudge the server to repaint if nothing arrived shortly after connect —
+	// some servers drop the initial RefreshRect issued during Connect.
+	emitted := false
+	refreshes := 0
+	lastRefresh := time.Now()
 	for {
 		select {
 		case <-sess.done:
 			return
-		case <-ticker.C:
-			pix, w, h := sess.snapshotFrame()
-			if len(pix) == 0 {
-				_ = sess.client.RefreshRect(0, 0, sess.width, sess.height)
+		case now := <-ticker.C:
+			if !emitted && refreshes < 5 && now.Sub(lastRefresh) > time.Second {
+				w, h := sess.client.FramebufferDims()
+				_ = sess.client.RefreshRect(0, 0, w, h)
+				refreshes++
+				lastRefresh = now
+			}
+			if now.Before(nextAllowed) {
+				continue
+			}
+			rect, ok := sess.streamer.takeDirty()
+			if !ok {
+				continue
+			}
+			ev, ok := sess.streamer.buildFrameEvent(sess.client, rect, sess.id)
+			if !ok {
+				// Framebuffer unavailable (e.g. mid-reconnect): put the rect
+				// back so the region is retried once frames flow again.
+				sess.streamer.markDirty(rect.x, rect.y, rect.w, rect.h)
 				continue
 			}
 			if s.emit != nil {
-				s.emit(Event{
-					Type:      "frame",
-					SessionID: sess.id,
-					Width:     w,
-					Height:    h,
-					Data:      base64.StdEncoding.EncodeToString(pix),
-				})
+				s.emit(ev)
 			}
+			emitted = true
+			nextAllowed = now.Add(flushInterval(dirtyRect{x: ev.X, y: ev.Y, w: ev.RectWidth, h: ev.RectHeight}, ev.Width, ev.Height))
 		}
 	}
-}
-
-func (sess *session) writeBitmapUpdate(update *rdp.BitmapUpdate) {
-	if update == nil || update.Width <= 0 || update.Height <= 0 {
-		return
-	}
-	needed := update.Width * update.Height * 4
-	if needed <= 0 {
-		return
-	}
-	rgba := make([]byte, needed)
-	if update.BitsPerPixel == 32 && update.TopDown && len(update.Data) >= needed {
-		copy(rgba, update.Data[:needed])
-	} else {
-		display.ConvertToRGBA(rgba, update.Data, update.Width, update.Height, update.BitsPerPixel, update.TopDown)
-	}
-	sess.writeRect(update.X, update.Y, update.Width, update.Height, rgba, update.Width*4)
-}
-
-func (sess *session) resizeFrame(width, height int) {
-	if width <= 0 || height <= 0 {
-		return
-	}
-	sess.frameMu.Lock()
-	defer sess.frameMu.Unlock()
-	sess.width = width
-	sess.height = height
-	sess.frame = make([]byte, width*height*4)
-	sess.hasFrame = false
-}
-
-func (sess *session) writeStridedRect(x, y, w, h int, data []byte, stride int) {
-	if w <= 0 || h <= 0 || stride <= 0 || len(data) < stride*h {
-		return
-	}
-	sess.writeRect(x, y, w, h, data, stride)
-}
-
-func (sess *session) writeRect(x, y, w, h int, data []byte, stride int) {
-	sess.frameMu.Lock()
-	defer sess.frameMu.Unlock()
-	if sess.width <= 0 || sess.height <= 0 || len(sess.frame) < sess.width*sess.height*4 {
-		return
-	}
-	if x < 0 {
-		w += x
-		x = 0
-	}
-	if y < 0 {
-		h += y
-		y = 0
-	}
-	if x+w > sess.width {
-		w = sess.width - x
-	}
-	if y+h > sess.height {
-		h = sess.height - y
-	}
-	if w <= 0 || h <= 0 {
-		return
-	}
-	rowBytes := w * 4
-	if len(data) < stride*(h-1)+rowBytes {
-		return
-	}
-	dstStride := sess.width * 4
-	for row := 0; row < h; row++ {
-		srcOff := row * stride
-		dstOff := (y+row)*dstStride + x*4
-		copy(sess.frame[dstOff:dstOff+rowBytes], data[srcOff:srcOff+rowBytes])
-	}
-	sess.hasFrame = true
-}
-
-func (sess *session) snapshotFrame() ([]byte, int, int) {
-	sess.frameMu.RLock()
-	defer sess.frameMu.RUnlock()
-	if !sess.hasFrame || sess.width <= 0 || sess.height <= 0 || len(sess.frame) == 0 {
-		return nil, 0, 0
-	}
-	pix := make([]byte, len(sess.frame))
-	copy(pix, sess.frame)
-	return pix, sess.width, sess.height
 }
 
 func (s *Service) SendInput(event InputEvent) error {
@@ -367,7 +374,7 @@ func (s *Service) SendInput(event InputEvent) error {
 	case "wheel":
 		return sess.client.SendMouseWheel(event.X, event.Y, event.Delta, false)
 	case "key":
-		return sess.client.SendKeyboard(event.Scancode, event.Pressed)
+		return sess.client.SendKeyboardExtended(event.Scancode, event.Pressed, event.Extended)
 	case "unicode":
 		return sess.client.SendUnicode(event.Codepoint, event.Pressed)
 	default:
@@ -391,6 +398,37 @@ func (s *Service) SetClipboard(sessionID, text string) error {
 	return sess.client.SetClipboard(text)
 }
 
+func (s *Service) SetClipboardEnabled(sessionID string, enabled bool) error {
+	sess, ok := s.get(sessionID)
+	if !ok {
+		return fmt.Errorf("RDP session not found: %s", sessionID)
+	}
+	sess.client.SetClipboardEnabled(enabled)
+	return nil
+}
+
+func (s *Service) SetClipboardFilesFromLocal(sessionID string) (int, error) {
+	sess, ok := s.get(sessionID)
+	if !ok {
+		return 0, fmt.Errorf("RDP session not found: %s", sessionID)
+	}
+	paths, err := readLocalClipboardFilePaths()
+	if err != nil {
+		return 0, err
+	}
+	if len(paths) == 0 {
+		return 0, nil
+	}
+	files, err := clipboardFilesFromPaths(paths)
+	if err != nil {
+		return 0, err
+	}
+	if err := sess.client.SetClipboardFiles(files); err != nil {
+		return 0, err
+	}
+	return len(files), nil
+}
+
 func (s *Service) Close(sessionID string) error {
 	sess, ok := s.get(sessionID)
 	if !ok {
@@ -408,6 +446,9 @@ func (s *Service) closeSession(sess *session) {
 	}
 	if s.emit != nil {
 		s.emit(Event{Type: "closed", SessionID: sess.id})
+	}
+	if sess.clipboardTempDir != "" {
+		_ = os.RemoveAll(sess.clipboardTempDir)
 	}
 }
 

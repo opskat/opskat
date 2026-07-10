@@ -1,4 +1,11 @@
 import type { CredentialFragment } from "./credentialConfig";
+import {
+  buildProxyJSON,
+  CONNECTION_DEFAULTS,
+  parseConnectionFields,
+  type ConnectionFormFields,
+  type ProxyConfigJSON,
+} from "./proxyConfig";
 
 interface RDPConfig {
   host: string;
@@ -7,18 +14,16 @@ interface RDPConfig {
   password?: string;
   credential_id?: number;
   domain?: string;
-  width?: number;
-  height?: number;
   clipboard: boolean;
+  proxy?: ProxyConfigJSON;
+  ssh_asset_id?: number;
 }
 
-export interface RDPFormState {
+export interface RDPFormState extends ConnectionFormFields {
   host: string;
   port: number;
   username: string;
   domain: string;
-  width: number;
-  height: number;
   clipboard: boolean;
 }
 
@@ -27,12 +32,23 @@ export const RDP_DEFAULTS: RDPFormState = {
   port: 3389,
   username: "Administrator",
   domain: "",
-  width: 1280,
-  height: 720,
   clipboard: true,
+  ...CONNECTION_DEFAULTS,
 };
 
-export function buildRDPConfig(state: RDPFormState, cred: CredentialFragment): string {
+/**
+ * 保存/测试共用序列化。cred 由 resolveSave/TestCredential 预解析。
+ * 隧道走 asset 顶层列(sshTunnelId);save 不写 ssh_asset_id;
+ * 测试无 asset 行,buildTest 传 includeSshAssetId=true 把隧道塞进 config(镜像 Redis)。
+ * proxyPassword 由 resolveSaveProxyPassword(save=密文)或 state.proxyPassword(test=明文)预解析;
+ * 隧道与代理互斥,按 connectionType 二选一。
+ */
+export function buildRDPConfig(
+  state: RDPFormState,
+  cred: CredentialFragment,
+  includeSshAssetId = false,
+  proxyPassword = ""
+): string {
   const cfg: RDPConfig = {
     host: state.host,
     port: state.port || 3389,
@@ -40,14 +56,16 @@ export function buildRDPConfig(state: RDPFormState, cred: CredentialFragment): s
     clipboard: state.clipboard,
   };
   if (state.domain.trim()) cfg.domain = state.domain.trim();
-  if (state.width > 0) cfg.width = state.width;
-  if (state.height > 0) cfg.height = state.height;
   if (cred.credential_id) cfg.credential_id = cred.credential_id;
   else if (cred.password) cfg.password = cred.password;
+  const proxy = buildProxyJSON(state, proxyPassword);
+  if (proxy) cfg.proxy = proxy;
+  if (state.connectionType === "jumphost" && includeSshAssetId && state.sshTunnelId > 0)
+    cfg.ssh_asset_id = state.sshTunnelId;
   return JSON.stringify(cfg);
 }
 
-export function parseRDPConfig(configJSON: string): RDPFormState {
+export function parseRDPConfig(configJSON: string, assetTunnelId = 0): RDPFormState {
   try {
     const cfg: RDPConfig = JSON.parse(configJSON || "{}");
     return {
@@ -55,9 +73,8 @@ export function parseRDPConfig(configJSON: string): RDPFormState {
       port: cfg.port || 3389,
       username: cfg.username || "Administrator",
       domain: cfg.domain || "",
-      width: cfg.width || 1280,
-      height: cfg.height || 720,
       clipboard: cfg.clipboard !== false,
+      ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0),
     };
   } catch {
     return { ...RDP_DEFAULTS };

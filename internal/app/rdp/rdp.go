@@ -8,6 +8,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/service/rdp_svc"
+	"github.com/opskat/opskat/internal/sshpool"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -23,14 +24,14 @@ type RDP struct {
 	service *rdp_svc.Service
 }
 
-func New(appCtx context.Context, lang LangProvider) *RDP {
+func New(appCtx context.Context, lang LangProvider, pool *sshpool.Pool) *RDP {
 	r := &RDP{appCtx: appCtx, lang: lang}
 	r.service = rdp_svc.New(func(event rdp_svc.Event) {
 		if r.ctx == nil {
 			return
 		}
 		wailsRuntime.EventsEmit(r.ctx, "rdp:event:"+event.SessionID, event)
-	})
+	}, pool)
 	conntest.Register(asset_entity.AssetTypeRDP, r.testConnection)
 	return r
 }
@@ -57,6 +58,14 @@ func (r *RDP) ResizeRDP(sessionID string, width, height int) error {
 
 func (r *RDP) SetRDPClipboard(sessionID, text string) error {
 	return r.service.SetClipboard(sessionID, text)
+}
+
+func (r *RDP) SetRDPClipboardEnabled(sessionID string, enabled bool) error {
+	return r.service.SetClipboardEnabled(sessionID, enabled)
+}
+
+func (r *RDP) SetRDPClipboardFilesFromLocal(sessionID string) (int, error) {
+	return r.service.SetClipboardFilesFromLocal(sessionID)
 }
 
 func (r *RDP) CloseRDP(sessionID string) error {

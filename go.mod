@@ -241,3 +241,5 @@ require (
 // last release that has both legacy interceptors AND the NewServerHandler
 // API cago uses. Safe across non-test code paths.
 replace go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc => go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.60.0
+
+replace github.com/bouncyball-git/gopher-rdp => github.com/opskat/gopher-rdp v0.0.0-20260710092759-2386d5f6a37e

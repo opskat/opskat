@@ -5,6 +5,7 @@ import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/co
 import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
+import { resolveSaveProxyPassword } from "./proxyConfig";
 import {
   buildRDPConfig,
   parseRDPConfig,
@@ -27,18 +28,23 @@ export const RDPConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
     ref,
     editAsset,
     onValidityChange,
-    init: (a) => (a ? parseRDPConfig(a.Config) : { ...RDP_DEFAULTS }),
+    init: (a) => (a ? parseRDPConfig(a.Config, a.sshTunnelId || 0) : { ...RDP_DEFAULTS }),
     validate: (s) => {
       const ok = !!s.host.trim() && !!s.username.trim() && s.port > 0;
       return { canTest: ok, canSave: ok, saveDisabledReason: ok ? "" : "asset.formMissingHost" };
     },
     build: async (s, ctx) => ({
-      configJSON: buildRDPConfig(s, await resolveSaveCredential(cred.value, ctx.encryptPassword)),
-      sshTunnelId: 0,
+      configJSON: buildRDPConfig(
+        s,
+        await resolveSaveCredential(cred.value, ctx.encryptPassword),
+        false,
+        await resolveSaveProxyPassword(s, ctx.encryptPassword)
+      ),
+      sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
     }),
     buildTest: async (s) => ({
       assetType: "rdp",
-      configJSON: buildRDPConfig(s, resolveTestCredential(cred.value)),
+      configJSON: buildRDPConfig(s, resolveTestCredential(cred.value), true, s.proxyPassword),
       password: cred.value.password,
     }),
     deps: [cred.value],
@@ -95,24 +101,15 @@ export const RDPConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
         { kind: "password", placeholder: "asset.passwordPlaceholder" },
       ],
     },
+    { key: "tunnel", label: "asset.tabTunnel", fields: [{ kind: "tunnel" }] },
     {
-      key: "display",
-      label: "asset.rdpDisplay",
+      key: "advanced",
+      label: "asset.tabAdvanced",
       fields: [
-        {
-          kind: "row",
-          fields: [
-            { kind: "number", key: "width", label: "asset.rdpWidth", min: 640, width: "flex-1", testid: "rdp-width-input" },
-            { kind: "number", key: "height", label: "asset.rdpHeight", min: 480, width: "flex-1", testid: "rdp-height-input" },
-          ],
-        },
-        { kind: "note", text: "asset.rdpResolutionHint" },
         { kind: "switch", key: "clipboard", label: "asset.rdpClipboardSync", description: "asset.rdpClipboardHint" },
       ],
     },
   ];
 
-  return (
-    <ConfigTabs groups={buildConfigGroups(groups, { state, patch, ctx: { cred, editAsset } })} />
-  );
+  return <ConfigTabs groups={buildConfigGroups(groups, { state, patch, ctx: { cred, editAsset } })} />;
 });
