@@ -59,7 +59,7 @@ const emptyRule = (): EditRule => ({
 export function PortForwardPage() {
   const { t } = useTranslation();
   const [configs, setConfigs] = useState<ssh_models.ForwardConfigWithStatus[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [pendingIds, setPendingIds] = useState<Set<number>>(new Set());
 
   const withPending = useCallback(async (id: number, fn: () => Promise<void>) => {
@@ -86,19 +86,22 @@ export function PortForwardPage() {
   const [editAssetId, setEditAssetId] = useState(0);
   const [editRules, setEditRules] = useState<EditRule[]>([emptyRule()]);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      const list = await ListForwardConfigs();
-      setConfigs(list || []);
-    } finally {
-      setLoading(false);
-    }
+  // 加载配置列表:setState 全在 promise 回调中,effect 可直接调用(loading 初值即为 true)
+  const loadConfigs = useCallback(() => {
+    return ListForwardConfigs()
+      .then((list) => setConfigs(list || []))
+      .finally(() => setLoading(false));
   }, []);
 
+  // 手动/操作后刷新(事件路径):同步置 loading 后拉取
+  const refresh = useCallback(() => {
+    setLoading(true);
+    return loadConfigs();
+  }, [loadConfigs]);
+
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    void loadConfigs();
+  }, [loadConfigs]);
 
   const openCreate = () => {
     setEditId(null);

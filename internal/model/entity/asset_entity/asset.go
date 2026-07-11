@@ -26,6 +26,7 @@ const (
 	AssetTypeLocal    = "local"
 	AssetTypeVNC      = "vnc"
 	AssetTypeRDP      = "rdp"
+	AssetTypeOSS      = "oss"
 )
 
 // DatabaseDriver 数据库驱动类型
@@ -122,6 +123,21 @@ type SSHConfig struct {
 	// RestoreCwdOnReconnect 开启后，该资产 SSH 终端断线手动重连时自动 cd 回上次目录，
 	// 并在连接时自动启用目录同步以持续追踪 cwd（仅 bash/zsh/ksh/mksh）。
 	RestoreCwdOnReconnect bool `json:"restore_cwd_on_reconnect,omitempty"`
+}
+
+// RDPConfig RDP 类型的特定配置。PoC 阶段只覆盖基础连接、分辨率和剪贴板。
+type RDPConfig struct {
+	Host         string       `json:"host"`
+	Port         int          `json:"port"`
+	Username     string       `json:"username"`
+	Password     string       `json:"password,omitempty"`      // credential_svc 加密（内联，向后兼容）
+	CredentialID int64        `json:"credential_id,omitempty"` // 统一凭证 ID（密码）
+	Domain       string       `json:"domain,omitempty"`
+	Width        int          `json:"width,omitempty"`
+	Height       int          `json:"height,omitempty"`
+	Clipboard    bool         `json:"clipboard"`
+	SSHAssetID   int64        `json:"ssh_asset_id,omitempty"` // 仅未保存配置的连接测试使用；已保存资产走 Asset.SSHTunnelID
+	Proxy        *ProxyConfig `json:"proxy,omitempty"`        // SOCKS5 代理；与 SSH 隧道互斥，隧道优先
 }
 
 // ProxyConfig 代理配置
@@ -347,22 +363,6 @@ type VNCConfig struct {
 	Password       string            `json:"password,omitempty"`
 	CredentialID   int64             `json:"credential_id,omitempty"`
 	SecurityType   string            `json:"security_type,omitempty"`
-	FileSSHAssetID int64             `json:"file_ssh_asset_id,omitempty"`
-	ProxyChain     *ProxyChainConfig `json:"proxy_chain,omitempty"`
-}
-
-// RDPConfig RDP 远程桌面类型的特定配置。
-type RDPConfig struct {
-	Host           string            `json:"host"`
-	Port           int               `json:"port"`
-	Username       string            `json:"username"`
-	Password       string            `json:"password,omitempty"`
-	CredentialID   int64             `json:"credential_id,omitempty"`
-	Domain         string            `json:"domain,omitempty"`
-	ScreenWidth    int               `json:"screen_width,omitempty"`
-	ScreenHeight   int               `json:"screen_height,omitempty"`
-	ColorDepth     int               `json:"color_depth,omitempty"`
-	IgnoreCert     bool              `json:"ignore_cert,omitempty"`
 	FileSSHAssetID int64             `json:"file_ssh_asset_id,omitempty"`
 	ProxyChain     *ProxyChainConfig `json:"proxy_chain,omitempty"`
 }
@@ -696,23 +696,7 @@ func (a *Asset) GetRDPConfig() (*RDPConfig, error) {
 	if !a.IsRDP() {
 		return nil, errors.New("资产不是RDP类型")
 	}
-	cfg, err := jsonfield.Unmarshal[RDPConfig](a.Config, "RDP配置")
-	if err != nil {
-		return nil, err
-	}
-	if cfg.Port == 0 {
-		cfg.Port = 3389
-	}
-	if cfg.ScreenWidth == 0 {
-		cfg.ScreenWidth = 1280
-	}
-	if cfg.ScreenHeight == 0 {
-		cfg.ScreenHeight = 720
-	}
-	if cfg.ColorDepth == 0 {
-		cfg.ColorDepth = 24
-	}
-	return cfg, nil
+	return jsonfield.Unmarshal[RDPConfig](a.Config, "RDP配置")
 }
 
 // SetRDPConfig 序列化 RDP 配置到 Config 字段
@@ -1089,32 +1073,6 @@ func (a *Asset) validateVNC() error {
 	return ValidateProxyChain(cfg.ProxyChain)
 }
 
-// validateRDP 校验 RDP 类型特定配置
-func (a *Asset) validateRDP() error {
-	cfg, err := a.GetRDPConfig()
-	if err != nil {
-		return fmt.Errorf("RDP配置无效: %w", err)
-	}
-	if strings.TrimSpace(cfg.Host) == "" {
-		return errors.New("RDP主机地址不能为空")
-	}
-	if cfg.Port <= 0 || cfg.Port > 65535 {
-		return errors.New("RDP端口无效")
-	}
-	if strings.TrimSpace(cfg.Username) == "" {
-		return errors.New("RDP用户名不能为空")
-	}
-	if cfg.ScreenWidth < 0 || cfg.ScreenHeight < 0 {
-		return errors.New("RDP屏幕尺寸无效")
-	}
-	switch cfg.ColorDepth {
-	case 0, 8, 16, 24, 32:
-	default:
-		return errors.New("RDP色深无效")
-	}
-	return ValidateProxyChain(cfg.ProxyChain)
-}
-
 // validateEtcd 校验etcd类型特定配置
 func (a *Asset) validateEtcd() error {
 	cfg, err := a.GetEtcdConfig()
@@ -1144,6 +1102,27 @@ func firstNonZero(values ...int64) int64 {
 		}
 	}
 	return 0
+}
+
+// validateRDP 校验 RDP 类型特定配置
+func (a *Asset) validateRDP() error {
+	cfg, err := a.GetRDPConfig()
+	if err != nil {
+		return fmt.Errorf("RDP配置无效: %w", err)
+	}
+	if strings.TrimSpace(cfg.Host) == "" {
+		return errors.New("RDP主机地址不能为空")
+	}
+	if cfg.Port <= 0 || cfg.Port > 65535 {
+		return errors.New("RDP端口无效")
+	}
+	if strings.TrimSpace(cfg.Username) == "" {
+		return errors.New("RDP用户名不能为空")
+	}
+	if cfg.Width < 0 || cfg.Height < 0 {
+		return errors.New("RDP分辨率无效")
+	}
+	return nil
 }
 
 func validateKafkaBroker(broker string) error {

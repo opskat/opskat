@@ -105,7 +105,6 @@ export function AlterTableDialog({
 
   const loadColumns = useCallback(async () => {
     if (!assetId || !open) return;
-    setLoadingColumns(true);
 
     try {
       let columnSql = "";
@@ -233,9 +232,32 @@ export function AlterTableDialog({
     }
   }, [assetId, open, driver, table, database]);
 
+  // 打开(或资产/驱动/库/表变化)时同步进入加载态:渲染期对比上次值,替代 effect 里的同步 setState;
+  // 异步拉取仍留在下面的 effect(loadColumns 内已无同步 setState)。
+  const [prevLoadKey, setPrevLoadKey] = useState<{
+    open: boolean;
+    assetId?: number;
+    driver?: string;
+    table?: string;
+    database?: string;
+  }>({ open: false });
+  if (
+    open !== prevLoadKey.open ||
+    assetId !== prevLoadKey.assetId ||
+    driver !== prevLoadKey.driver ||
+    table !== prevLoadKey.table ||
+    database !== prevLoadKey.database
+  ) {
+    setPrevLoadKey({ open, assetId, driver, table, database });
+    if (open && assetId) setLoadingColumns(true);
+  }
+
   useEffect(() => {
     if (open) {
-      loadColumns();
+      // loadColumns 的 setState 全部在 await 之后(异步续体),用 async 包装让规则识别。
+      void (async () => {
+        await loadColumns();
+      })();
     }
   }, [open, loadColumns]);
 

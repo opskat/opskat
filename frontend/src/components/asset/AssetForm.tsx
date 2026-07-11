@@ -103,18 +103,31 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   // Extension config
   const [extConfig, setExtConfig] = useState<Record<string, unknown>>({});
 
-  // 复位测试状态：open 切换时一律清掉上一次表单的 testing/testID 残留，
-  // 并取消任何还在后台跑的测试（关闭对话框时直接放弃结果）。
+  // 复位测试状态：open 切换时一律清掉上一次表单的 testing 残留（渲染期对比），
+  // testID 残留的清理与后台测试的取消（外部系统同步）留在下方 effect。
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
+    setTesting(false);
+  }
+
+  // open 切换时取消任何还在后台跑的测试（关闭对话框时直接放弃结果）。
   useEffect(() => {
     const lastId = activeTestIdRef.current;
     if (lastId) {
       void CancelTest(lastId);
     }
     activeTestIdRef.current = null;
-    setTesting(false);
   }, [open]);
 
-  useEffect(() => {
+  // 打开(或换编辑对象)时回填表单:渲染期对比上次 open/editAsset/defaultGroupId,替代 effect 里的级联 setState。
+  const [prevSync, setPrevSync] = useState<{
+    open: boolean;
+    editAsset?: asset_entity.Asset | null;
+    defaultGroupId?: number;
+  }>({ open: false });
+  if (open !== prevSync.open || editAsset !== prevSync.editAsset || defaultGroupId !== prevSync.defaultGroupId) {
+    setPrevSync({ open, editAsset, defaultGroupId });
     if (open) {
       if (editAsset) {
         const editType = (editAsset.Type || "ssh") as AssetType;
@@ -147,7 +160,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         setExtConfig({});
       }
     }
-  }, [open, editAsset, defaultGroupId]);
+  }
 
   const handleTypeChange = (newType: AssetType) => {
     if (newType === assetType) return;
@@ -285,7 +298,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       : "";
   const saveDisabled = saving || !!saveDisabledReason || (!!sectionDef?.ConfigSection && !validity.canSave);
 
-  const testConnectionButton = !isTestableAssetType ? null : testing && activeTestIdRef.current ? (
+  const testConnectionButton = !isTestableAssetType ? null : testing ? (
     <Button
       type="button"
       variant="ghost"

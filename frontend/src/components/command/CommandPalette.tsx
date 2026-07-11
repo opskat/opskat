@@ -176,10 +176,13 @@ export function CommandPalette({ open, onClose, onConnectAsset }: CommandPalette
     prevOpen.current = open;
   }, [open]);
 
-  // Reset activeIndex when query changes
-  useEffect(() => {
+  // Reset activeIndex when query changes — compare against the previous
+  // render's query instead of a setState-in-effect cascade.
+  const [prevQuery, setPrevQuery] = useState(query);
+  if (query !== prevQuery) {
+    setPrevQuery(query);
     setActiveIndex(0);
-  }, [query]);
+  }
 
   // ────────────────────────────────────────────
   // Sections computation

@@ -1,5 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,6 +28,24 @@ process.env.OPSKAT_DATA_DIR = dataDir;
 process.env.OPSKAT_MASTER_KEY = MASTER_KEY;
 process.env.OPSKAT_E2E = "1";
 process.env.OPSKAT_EXTENSIONS = "0";
+
+// Load the repo-root .env (gitignored) into process.env so specs can read real
+// verification targets (E2E_SSH_*, …) the same way they read OPSKAT_DATA_DIR —
+// this config is re-evaluated in every worker, so the vars reach the test process.
+// Optional by design: .env is absent on CI / a fresh clone, so we skip when it's
+// not there; an explicit env var already set always wins over the file.
+// Convention & usage: docs/e2e-harness-guide.md §6.
+const envFile = join(__dirname, "..", ".env");
+if (existsSync(envFile)) {
+  for (const line of readFileSync(envFile, "utf8").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq < 1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    if (process.env[key] === undefined) process.env[key] = trimmed.slice(eq + 1).trim();
+  }
+}
 
 // Dedicated wails dev server port for e2e (avoids the default 34115).
 const DEVSERVER = "localhost:34216";

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Folder } from "lucide-react";
 import { useAssetStore } from "@/stores/assetStore";
@@ -7,7 +7,7 @@ import { DetailGrid, DetailSection, InfoItem } from "@/components/asset/detail/I
 import { group_entity } from "../../../wailsjs/go/models";
 import { UpdateGroup } from "../../../wailsjs/go/system/System";
 import { toast } from "sonner";
-import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
+import { EntityIcon } from "@/components/asset/AssetIcon";
 
 interface GroupDetailProps {
   group: group_entity.Group;
@@ -22,7 +22,10 @@ export function GroupDetail({ group }: GroupDetailProps) {
   const [policyGroups, setPolicyGroups] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
+  // 分组切换 / 策略变化时回填本地编辑态：渲染期对比上次值，替代 effect 里的级联 setState。
+  const [prevSync, setPrevSync] = useState<{ id?: number; cmdPolicy?: string }>({});
+  if (group.ID !== prevSync.id || group.CmdPolicy !== prevSync.cmdPolicy) {
+    setPrevSync({ id: group.ID, cmdPolicy: group.CmdPolicy });
     try {
       const policy = JSON.parse(group.CmdPolicy || "{}");
       setAllowList(policy.allow_list || []);
@@ -33,9 +36,8 @@ export function GroupDetail({ group }: GroupDetailProps) {
       setDenyList([]);
       setPolicyGroups([]);
     }
-  }, [group.ID, group.CmdPolicy]);
+  }
 
-  const GroupIcon = group.Icon ? getIconComponent(group.Icon) : Folder;
   const parentGroup = groups.find((g) => g.ID === group.ParentID);
   const assetCount = assets.filter((a) => a.GroupID === group.ID).length;
 
@@ -67,10 +69,7 @@ export function GroupDetail({ group }: GroupDetailProps) {
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 px-4 py-3 border-b">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-          <GroupIcon
-            className="h-4 w-4 text-primary"
-            style={group.Icon ? { color: getIconColor(group.Icon) } : undefined}
-          />
+          <EntityIcon icon={group.Icon} fallback={Folder} className="h-4 w-4 text-primary" />
         </div>
         <div>
           <h2 className="font-semibold leading-tight">{group.Name}</h2>

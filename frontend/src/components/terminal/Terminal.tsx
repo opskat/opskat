@@ -5,13 +5,12 @@ import {
   useMemo,
   useRef,
   useState,
-  forwardRef,
   type CSSProperties,
+  type Ref,
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import type { Terminal as XTerminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
-import type { SearchAddon } from "@xterm/addon-search";
 import { ClipboardSetText } from "../../../wailsjs/runtime/runtime";
 import { useShortcutStore, formatBinding } from "@/stores/shortcutStore";
 import { useTerminalStore, TRANSPORTS } from "@/stores/terminalStore";
@@ -52,14 +51,14 @@ interface TerminalProps {
   sessionId: string;
   active: boolean;
   tabId: string;
+  ref?: Ref<TerminalHandle>;
 }
 
-export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal({ sessionId, active, tabId }, ref) {
+export function Terminal({ sessionId, active, tabId, ref }: TerminalProps) {
   const { t } = useTranslation();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
-  const searchAddonRef = useRef<SearchAddon | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const [searchRequest, setSearchRequest] = useState<{ query: string | null; token: number }>({
     query: null,
@@ -160,7 +159,6 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     });
     termRef.current = inst.term;
     fitAddonRef.current = inst.fitAddon;
-    searchAddonRef.current = inst.searchAddon;
 
     // Attach the persistent host into the React-managed wrapper. Xterm content
     // survives because both the host element and the XTerminal live in the
@@ -230,7 +228,6 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
       }
       termRef.current = null;
       fitAddonRef.current = null;
-      searchAddonRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
@@ -264,11 +261,13 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     }
   }, [active]);
 
+  // drop 不可用时清掉拖拽高亮:渲染期自终止守卫,替代 effect 里的同步 setState
+  if (!terminalDropEnabled && isDragOver) {
+    setIsDragOver(false);
+  }
+
   useEffect(() => {
-    if (!terminalDropEnabled) {
-      setIsDragOver(false);
-      return;
-    }
+    if (!terminalDropEnabled) return;
     return registerTerminalFileDropTarget({
       getRect: () => wrapperRef.current?.getBoundingClientRect(),
       uploadFiles: (paths) => {
@@ -349,7 +348,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
           setShowSearch(false);
           termRef.current?.focus();
         }}
-        searchAddon={searchAddonRef.current}
+        searchAddon={getTerminalInstance(sessionId)?.searchAddon ?? null}
         initialQuery={searchRequest.query}
         initialQueryToken={searchRequest.token}
       />
@@ -470,4 +469,4 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
       </ContextMenu>
     </div>
   );
-});
+}

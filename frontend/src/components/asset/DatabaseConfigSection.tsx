@@ -1,4 +1,3 @@
-import { forwardRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { Field, Segmented } from "@/components/asset/fields";
@@ -18,12 +17,9 @@ import {
   DATABASE_DEFAULTS,
   type DatabaseFormState,
 } from "./DatabaseConfigSection.config";
-import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 
-export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function DatabaseConfigSection(
-  { editAsset, onValidityChange, onIconChange },
-  ref
-) {
+export function DatabaseConfigSection({ editAsset, onValidityChange, onIconChange, ref }: ConfigSectionProps) {
   const { t } = useTranslation();
   const cred = useAssetCredential(editAsset);
   const { state, setState, patch } = useConfigSection<DatabaseFormState>({
@@ -260,4 +256,4 @@ export const DatabaseConfigSection = forwardRef<AssetFormHandle, ConfigSectionPr
   ];
 
   return <ConfigTabs groups={buildConfigGroups(groups, { state, patch, ctx: { cred, editAsset } })} />;
-});
+}

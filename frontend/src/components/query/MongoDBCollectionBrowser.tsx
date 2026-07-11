@@ -28,10 +28,16 @@ export function MongoDBCollectionBrowser({ tabId, assetId }: MongoDBCollectionBr
   const [selected, setSelected] = useState<{ db: string; collection: string } | null>(null);
 
   // Auto-load only when nothing cached; restored tabs already have databases.
+  // 进入加载态在渲染期对比 tabId/assetId 同步设置(与下方 effect 同触发、同守卫),避免 effect 内同步 setState。
+  const [prevLoadKey, setPrevLoadKey] = useState<{ tabId?: string; assetId?: number }>({});
+  if (tabId !== prevLoadKey.tabId || assetId !== prevLoadKey.assetId) {
+    setPrevLoadKey({ tabId, assetId });
+    if (mongoState && mongoState.databases.length === 0) setLoadingDbs(true);
+  }
+
   useEffect(() => {
     if (!mongoState) return;
     if (mongoState.databases.length > 0) return;
-    setLoadingDbs(true);
     loadMongoDatabases(tabId).finally(() => setLoadingDbs(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabId, assetId]);

@@ -1,4 +1,4 @@
-import { forwardRef, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Trash2 } from "lucide-react";
 import { Button, Input, Label, Switch } from "@opskat/ui";
@@ -9,7 +9,7 @@ import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
 import { credential_entity } from "../../../wailsjs/go/models";
-import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
 import {
@@ -223,10 +223,7 @@ async function buildConnectConfig(
   return cfg;
 }
 
-export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function KafkaConfigSection(
-  { editAsset, onValidityChange },
-  ref
-) {
+export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
   const { t } = useTranslation();
   const cred = useAssetCredential(editAsset);
 
@@ -540,7 +537,7 @@ export const KafkaConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
   ];
 
   return <ConfigTabs groups={buildConfigGroups(KAFKA_GROUPS, { state, patch, ctx: { cred, editAsset } })} />;
-});
+}
 
 function KafkaCompanionAuthFields({
   value,

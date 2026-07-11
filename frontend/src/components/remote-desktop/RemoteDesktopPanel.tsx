@@ -95,7 +95,8 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
   }, [asset.ID]);
 
   useEffect(() => {
-    void connect();
+    const timer = window.setTimeout(() => void connect(), 0);
+    return () => window.clearTimeout(timer);
   }, [connect]);
 
   useEffect(() => {

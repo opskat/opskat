@@ -131,7 +131,7 @@ export function SideTabList() {
         />
       )}
 
-      <SideTabDragContext.Provider value={dragContextValue}>
+      <SideTabDragContext value={dragContextValue}>
         <div className="flex-1 overflow-y-auto py-1 px-1">
           {matchedWithLabel.length === 0 ? (
             <p className="px-3 py-2 text-xs text-muted-foreground text-center">
@@ -159,7 +159,7 @@ export function SideTabList() {
             })
           )}
         </div>
-      </SideTabDragContext.Provider>
+      </SideTabDragContext>
     </div>
   );
 }

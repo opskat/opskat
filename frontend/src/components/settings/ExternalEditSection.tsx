@@ -132,14 +132,13 @@ export function ExternalEditSection() {
     [settings?.editors, customEditors, defaultEditorId]
   );
 
-  useEffect(() => {
-    if (!settings) return;
-    if (editorOptions.some((editor) => editor.id === defaultEditorId)) return;
+  // 默认编辑器被删/失效时回退到可用项:渲染期自终止守卫(set 后条件即不成立),替代 effect 里的级联 setState。
+  if (settings && !editorOptions.some((editor) => editor.id === defaultEditorId)) {
     const fallback = pickFallbackDefaultEditorId(settings.editors || [], customEditors);
     if (fallback !== defaultEditorId) {
       setDefaultEditorId(fallback);
     }
-  }, [customEditors, defaultEditorId, editorOptions, settings]);
+  }
 
   const removeCustomEditor = (index: number) => {
     const removed = customEditors[index];

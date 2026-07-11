@@ -26,5 +26,6 @@ import "./local";
 import "./vnc";
 import "./rdp";
 import "./etcd";
+import "./oss";
 
 export type { AssetTypeDefinition, DetailInfoCardProps, PolicyDefinition, PolicyFieldDef } from "./types";

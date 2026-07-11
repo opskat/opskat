@@ -26,6 +26,7 @@ describe("getAssetTypeOptions", () => {
       "vnc",
       "rdp",
       "etcd",
+      "oss",
     ]);
     expect(opts.every((o) => o.group === "builtin")).toBe(true);
   });
@@ -130,6 +131,7 @@ describe("category classification", () => {
       redis: "databases",
       mongodb: "databases",
       etcd: "databases",
+      oss: "databases",
       kafka: "middleware",
       k8s: "middleware",
     });
@@ -156,7 +158,7 @@ describe("buildAssetTypeGroups", () => {
     const groups = buildAssetTypeGroups(getAssetTypeOptions({}));
     expect(groups.map((g) => g.category)).toEqual(["servers", "databases", "middleware"]);
     expect(groups[0].options.map((o) => o.value)).toEqual(["ssh", "serial", "local", "vnc", "rdp"]);
-    expect(groups[1].options.map((o) => o.value)).toEqual(["database", "redis", "mongodb", "etcd"]);
+    expect(groups[1].options.map((o) => o.value)).toEqual(["database", "redis", "mongodb", "etcd", "oss"]);
   });
 });
 
@@ -192,23 +194,23 @@ describe("getAssetTypeLabel", () => {
 });
 
 const extManifest = {
-  oss: {
+  filestore: {
     manifest: {
-      name: "oss",
+      name: "filestore",
       version: "1",
       icon: "Server",
-      i18n: { displayName: "OSS", description: "" },
-      assetTypes: [{ type: "oss", i18n: { name: "assetType.oss.name" } }],
+      i18n: { displayName: "FileStore", description: "" },
+      assetTypes: [{ type: "filestore", i18n: { name: "assetType.filestore.name" } }],
     },
   },
 };
 
 describe("extension option i18n namespace", () => {
   it("tags extension options with the ext-<name> namespace and treats label as an i18n key", () => {
-    const ossOpt = getAssetTypeOptions(extManifest as never).find((o) => o.value === "oss")!;
-    expect(ossOpt.labelIsI18nKey).toBe(true);
-    expect(ossOpt.i18nNs).toBe("ext-oss");
-    expect(ossOpt.label).toBe("assetType.oss.name");
+    const extOpt = getAssetTypeOptions(extManifest as never).find((o) => o.value === "filestore")!;
+    expect(extOpt.labelIsI18nKey).toBe(true);
+    expect(extOpt.i18nNs).toBe("ext-filestore");
+    expect(extOpt.label).toBe("assetType.filestore.name");
   });
 });
 
@@ -225,8 +227,9 @@ describe("resolveAssetTypeLabel", () => {
   });
 
   it("resolves extension labels via the ext-<name> namespace", () => {
-    const ossOpt = getAssetTypeOptions(extManifest as never).find((o) => o.value === "oss")!;
-    const t = (k: string, o?: { ns?: string }) => (o?.ns === "ext-oss" && k === "assetType.oss.name" ? "对象存储" : k);
-    expect(resolveAssetTypeLabel(ossOpt, t)).toBe("对象存储");
+    const extOpt = getAssetTypeOptions(extManifest as never).find((o) => o.value === "filestore")!;
+    const t = (k: string, o?: { ns?: string }) =>
+      o?.ns === "ext-filestore" && k === "assetType.filestore.name" ? "对象存储" : k;
+    expect(resolveAssetTypeLabel(extOpt, t)).toBe("对象存储");
   });
 });

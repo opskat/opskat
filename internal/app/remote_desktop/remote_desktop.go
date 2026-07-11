@@ -34,7 +34,6 @@ func New(appCtx context.Context, lang LangProvider, manager *remote_desktop_svc.
 	}
 	r := &RemoteDesktop{ctx: appCtx, lang: lang, manager: manager}
 	conntest.Register("vnc", r.testVNCConnection)
-	conntest.Register("rdp", r.testRDPConnection)
 	return r
 }
 
@@ -45,7 +44,6 @@ func (r *RemoteDesktop) Startup(ctx context.Context) {
 func (r *RemoteDesktop) Cleanup() {
 	r.manager.Cleanup()
 	conntest.Unregister("vnc")
-	conntest.Unregister("rdp")
 }
 
 func (r *RemoteDesktop) ConnectRemoteDesktop(assetID int64) (*remote_desktop_svc.Session, error) {
@@ -69,49 +67,10 @@ func (r *RemoteDesktop) EncodeVNCClipboardText(text string) ([]int, error) {
 }
 
 func (r *RemoteDesktop) TestRemoteDesktopConnection(assetType, configJSON string) error {
-	if assetType == "vnc" {
-		return r.testVNCConnection(r.ctx, configJSON, "")
+	if assetType != "vnc" {
+		return fmt.Errorf("不支持的远程桌面类型: %s", assetType)
 	}
-	return r.testRDPConnection(r.ctx, configJSON, "")
-}
-
-func (r *RemoteDesktop) testRDPConnection(ctx context.Context, configJSON, plainPassword string) error {
-	var cfg asset_entity.RDPConfig
-	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
-		return fmt.Errorf("远程桌面配置无效: %w", err)
-	}
-	if strings.TrimSpace(cfg.Host) == "" {
-		return fmt.Errorf("主机地址不能为空")
-	}
-	if cfg.Port <= 0 || cfg.Port > 65535 {
-		return fmt.Errorf("端口无效")
-	}
-	if strings.TrimSpace(cfg.Username) == "" {
-		return fmt.Errorf("用户名不能为空")
-	}
-	password := plainPassword
-	if password == "" {
-		resolved, err := credential_resolver.Default().ResolvePasswordGeneric(ctx, &cfg)
-		if err != nil {
-			return err
-		}
-		password = resolved
-	}
-	layers, err := credential_resolver.Default().ResolveProxyChain(ctx, cfg.ProxyChain, 5)
-	if err != nil {
-		return err
-	}
-	username := cfg.Username
-	if cfg.Domain != "" {
-		username = cfg.Domain + "\\" + cfg.Username
-	}
-	return r.manager.TestRDPAuthentication(
-		ctx,
-		net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port)),
-		layers,
-		username,
-		password,
-	)
+	return r.testVNCConnection(r.ctx, configJSON, "")
 }
 
 func (r *RemoteDesktop) testVNCConnection(ctx context.Context, configJSON, plainPassword string) error {

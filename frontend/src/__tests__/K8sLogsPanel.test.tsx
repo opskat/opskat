@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useState } from "react";
+import { useImperativeHandle, useState, type Ref } from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -14,13 +14,13 @@ const terminalSpies = vi.hoisted(() => ({
 }));
 
 vi.mock("@/components/k8s/K8sLogTerminal", () => ({
-  K8sLogTerminal: forwardRef(function MockK8sLogTerminal(_, ref) {
+  K8sLogTerminal: function MockK8sLogTerminal({ ref }: { ref?: Ref<unknown> }) {
     useImperativeHandle(ref, () => ({
       clear: terminalSpies.clear,
       write: terminalSpies.write,
     }));
     return <div data-testid="k8s-log-terminal" />;
-  }),
+  },
 }));
 
 function decodeTerminalWrite(data: string | Uint8Array) {

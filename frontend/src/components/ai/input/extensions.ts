@@ -1,4 +1,4 @@
-import type { MutableRefObject } from "react";
+import type { RefObject } from "react";
 import { Extension } from "@tiptap/core";
 import Mention from "@tiptap/extension-mention";
 import { ReactRenderer } from "@tiptap/react";
@@ -91,7 +91,7 @@ function createSuggestionPopup<TItem>(props: SuggestionProps<TItem>, content: El
   });
 }
 
-export function createMentionExtension(activeRef: MutableRefObject<boolean>) {
+export function createMentionExtension(activeRef: RefObject<boolean>) {
   return ContextMention.configure({
     HTMLAttributes: {
       class: "ai-mention inline-flex items-center rounded bg-primary/10 text-primary px-1 py-0.5 text-xs font-medium",
@@ -150,7 +150,7 @@ export function createMentionExtension(activeRef: MutableRefObject<boolean>) {
   });
 }
 
-export function createSnippetSuggestionExtension(activeRef: MutableRefObject<boolean>) {
+export function createSnippetSuggestionExtension(activeRef: RefObject<boolean>) {
   return Extension.create({
     name: "snippetSuggestion",
     addProseMirrorPlugins() {

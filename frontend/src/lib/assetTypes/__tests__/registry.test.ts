@@ -39,6 +39,7 @@ describe("AssetType Registry", () => {
       "vnc",
       "rdp",
       "etcd",
+      "oss",
     ]);
   });
 
@@ -48,7 +49,7 @@ describe("AssetType Registry", () => {
       expect(def.icon).toBeDefined();
       expect(typeof def.canConnect).toBe("boolean");
       expect(typeof def.canConnectInNewTab).toBe("boolean");
-      expect(["terminal", "query", "remoteDesktop"]).toContain(def.connectAction);
+      expect(["terminal", "query", "page"]).toContain(def.connectAction);
       expect(def.DetailInfoCard).toBeDefined();
     }
   });
@@ -60,15 +61,19 @@ describe("AssetType Registry", () => {
     expect(getAssetType("redis")!.connectAction).toBe("query");
     expect(getAssetType("mongodb")!.connectAction).toBe("query");
     expect(getAssetType("kafka")!.connectAction).toBe("query");
+    expect(getAssetType("rdp")!.connectAction).toBe("page");
+    expect(getAssetType("oss")!.connectAction).toBe("query");
   });
 
   it("local is terminal type", () => {
     expect(getAssetType("local")!.connectAction).toBe("terminal");
   });
 
-  it("vnc and rdp are remote desktop types", () => {
-    expect(getAssetType("vnc")!.connectAction).toBe("remoteDesktop");
-    expect(getAssetType("rdp")!.connectAction).toBe("remoteDesktop");
+  it("vnc and rdp open their registered pages", () => {
+    expect(getAssetType("vnc")!.connectAction).toBe("page");
+    expect(getAssetType("vnc")!.pageId).toBe("remote-desktop");
+    expect(getAssetType("rdp")!.connectAction).toBe("page");
+    expect(getAssetType("rdp")!.pageId).toBe("rdp");
   });
 
   it("ssh, serial, and local support new tab", () => {
@@ -79,6 +84,7 @@ describe("AssetType Registry", () => {
     expect(getAssetType("mongodb")!.canConnectInNewTab).toBe(false);
     expect(getAssetType("kafka")!.canConnectInNewTab).toBe(false);
     expect(getAssetType("k8s")!.canConnectInNewTab).toBe(false);
+    expect(getAssetType("rdp")!.canConnectInNewTab).toBe(false);
   });
 
   it("only ssh exposes the file-manager action (registry-driven, no type-string special-case)", () => {
@@ -91,5 +97,17 @@ describe("AssetType Registry", () => {
     expect(getAssetType("serial")!.canOpenFileManager).toBeFalsy();
     expect(getAssetType("local")!.canOpenFileManager).toBeFalsy();
     expect(getAssetType("etcd")!.canOpenFileManager).toBeFalsy();
+    expect(getAssetType("rdp")!.canOpenFileManager).toBeFalsy();
+    expect(getAssetType("oss")!.canOpenFileManager).toBeFalsy();
+  });
+
+  it("oss 支持连接（对象浏览器已落地），单例 query tab 不支持新标签", () => {
+    expect(getAssetType("oss")!.canConnect).toBe(true);
+    expect(getAssetType("oss")!.canConnectInNewTab).toBe(false);
+    expect(getAssetType("oss")!.testable).toBe(true);
+  });
+
+  it("rdp does not expose command policies or policy groups", () => {
+    expect(getAssetType("rdp")!.policy).toBeUndefined();
   });
 });

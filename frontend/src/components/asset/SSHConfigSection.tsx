@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Trash2, FolderOpen, Loader2, Lock } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -32,14 +32,11 @@ import {
   type SSHFormState,
 } from "./SSHConfigSection.config";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets } from "./proxyConfig";
-import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 
 const DEFAULT_GLOBAL_KEEPALIVE_SECONDS = 30;
 
-export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function SSHConfigSection(
-  { editAsset, onValidityChange },
-  ref
-) {
+export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
   const { t } = useTranslation();
   // password-auth 凭据复用 db 族抽象;key-auth ssh_key 凭据 + 本地密钥由本 section 自持。
   const passwordCredentialConfig = useMemo(
@@ -415,4 +412,4 @@ export const SSHConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
   ];
 
   return <ConfigTabs groups={buildConfigGroups(groups, { state, patch, ctx: { cred, editAsset } })} />;
-});
+}

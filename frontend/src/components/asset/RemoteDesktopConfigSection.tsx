@@ -1,4 +1,4 @@
-import { forwardRef, useMemo } from "react";
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { AssetSelect } from "@/components/asset/AssetSelect";
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
@@ -16,13 +16,10 @@ import {
   VNC_DEFAULTS,
   type RemoteDesktopFormState,
 } from "./RemoteDesktopConfigSection.config";
-import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 
 function createRemoteDesktopSection(type: "vnc" | "rdp") {
-  return forwardRef<AssetFormHandle, ConfigSectionProps>(function RemoteDesktopConfigSection(
-    { editAsset, onValidityChange },
-    ref
-  ) {
+  function RemoteDesktopConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
     const { t } = useTranslation();
     const passwordCredentialConfig = useMemo(
       () => (editAsset ? parseRemoteDesktopPasswordCredentialConfig(editAsset.Config) : undefined),
@@ -161,7 +158,9 @@ function createRemoteDesktopSection(type: "vnc" | "rdp") {
     ];
 
     return <ConfigTabs groups={buildConfigGroups(groups, { state, patch, ctx: { cred, editAsset } })} />;
-  });
+  }
+
+  return RemoteDesktopConfigSection;
 }
 
 export const VNCConfigSection = createRemoteDesktopSection("vnc");

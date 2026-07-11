@@ -38,7 +38,7 @@ export type FieldDesc<S> = WithVisibility<S> &
         width?: string;
         testid?: string;
       }
-    | { kind: "switch"; key: keyof S; label: string }
+    | { kind: "switch"; key: keyof S; label: string; description?: string }
     | { kind: "select"; key: keyof S; label: string; options: { value: string; label: string }[]; testid?: string }
     | {
         kind: "segmented";
@@ -60,7 +60,13 @@ export type FieldDesc<S> = WithVisibility<S> &
       }
     | { kind: "row"; fields: FieldDesc<S>[] }
     // ↓ composite kind 在 Task 2b 补实现;此处声明以锁定类型。
-    | { kind: "password"; placeholder?: string; secretLabel?: string; selectSecretLabel?: string }
+    | {
+        kind: "password";
+        placeholder?: string;
+        secretLabel?: string;
+        selectSecretLabel?: string;
+        usernameKey?: keyof S;
+      }
     | { kind: "tunnel"; tunnelOptionLabelKey?: string; tunnelSelectLabelKey?: string; excludeIds?: number[] }
     | { kind: "custom"; render: (s: S, patch: (p: Partial<S>) => void) => ReactNode }
   );
@@ -134,8 +140,13 @@ function FieldNode<S>({
 
     case "switch":
       return (
-        <div className="flex items-center justify-between">
-          <FieldLabel>{t(field.label)}</FieldLabel>
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <FieldLabel>{t(field.label)}</FieldLabel>
+            {field.description && (
+              <span className="text-[11px] leading-snug text-muted-foreground/70">{t(field.description)}</span>
+            )}
+          </div>
           <Switch checked={!!state[field.key]} onCheckedChange={(v) => patch({ [field.key]: v } as Partial<S>)} />
         </div>
       );
@@ -207,7 +218,7 @@ function FieldNode<S>({
           managedPasswords={cred.managedPasswords}
           hasExistingPassword={!!cred.value.encryptedPassword}
           editAssetId={ctx?.editAsset?.ID}
-          onUsernameChange={(v) => patch({ username: v } as unknown as Partial<S>)}
+          onUsernameChange={(v) => patch({ [field.usernameKey ?? "username"]: v } as unknown as Partial<S>)}
           placeholder={field.placeholder ? t(field.placeholder, { defaultValue: field.placeholder }) : undefined}
           secretLabel={field.secretLabel ? t(field.secretLabel, { defaultValue: field.secretLabel }) : undefined}
           selectSecretLabel={

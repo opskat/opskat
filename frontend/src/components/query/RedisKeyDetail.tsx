@@ -156,21 +156,21 @@ export function RedisKeyDetail({ tabId }: RedisKeyDetailProps) {
     if (state?.selectedKey) {
       selectKey(tabId, state.selectedKey);
     }
-  }, [state?.selectedKey, tabId, selectKey]);
+  }, [state, tabId, selectKey]);
 
   const handleCopyKeyName = useCallback(() => {
     if (state?.selectedKey) {
       navigator.clipboard.writeText(state.selectedKey);
       notifyCopied(t("query.copied"));
     }
-  }, [state?.selectedKey, t]);
+  }, [state, t]);
 
   const startTtlEdit = useCallback(() => {
     if (!state?.keyInfo) return;
     setTtlInput(state.keyInfo.ttl > 0 ? String(state.keyInfo.ttl) : "");
     setEditingTtl(true);
     setTimeout(() => ttlInputRef.current?.focus(), 0);
-  }, [state?.keyInfo]);
+  }, [state]);
 
   const saveTtl = useCallback(async () => {
     if (!tabMeta || !state?.selectedKey) return;

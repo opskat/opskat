@@ -141,10 +141,9 @@ export function RedisOpsPanel({ tabId }: RedisOpsPanelProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  // 无同步 setState 的加载体:effect 直接用它;事件路径(按钮/定时器)经 refresh 先同步进入加载态。
+  const fetchInfo = useCallback(async () => {
     if (!tabMeta) return;
-    setLoading(true);
-    setError(null);
     try {
       const infoResult = await ExecuteRedis(tabMeta.assetId, "INFO", currentDb);
       setInfo(parseRedisInfoResult(infoResult || ""));
@@ -155,9 +154,30 @@ export function RedisOpsPanel({ tabId }: RedisOpsPanelProps) {
     }
   }, [currentDb, tabMeta]);
 
+  const refresh = useCallback(() => {
+    if (!tabMeta) return;
+    setLoading(true);
+    setError(null);
+    return fetchInfo();
+  }, [tabMeta, fetchInfo]);
+
+  // 挂载及 tabMeta/currentDb 变化触发自动拉取时,同步进入加载态并清空错误:
+  // 渲染期对比上次值,替代 effect 里的同步 setState。
+  const [prevRefreshKey, setPrevRefreshKey] = useState<{ tabMeta?: QueryTabMeta; currentDb: number } | null>(null);
+  if (prevRefreshKey === null || tabMeta !== prevRefreshKey.tabMeta || currentDb !== prevRefreshKey.currentDb) {
+    setPrevRefreshKey({ tabMeta, currentDb });
+    if (tabMeta) {
+      setLoading(true);
+      setError(null);
+    }
+  }
+
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    // fetchInfo 的 setState 全部在 await 之后(异步续体),用 async 包装让规则识别。
+    void (async () => {
+      await fetchInfo();
+    })();
+  }, [fetchInfo]);
 
   useEffect(() => {
     if (!autoRefresh) return;

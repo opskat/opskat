@@ -207,9 +207,9 @@ function MongoCollectionContentBody({ tabId, innerTabId, assetId, database, coll
   const [appliedFilter, setAppliedFilter] = useState("");
   const [appliedSort, setAppliedSort] = useState("");
 
-  const loadData = useCallback(
+  // 无同步 setState 的加载体:effect 直接用它;事件路径经 loadData 先同步进入加载态。
+  const fetchData = useCallback(
     async (newSkip: number, newLimit: number, filterJSON: string, sortJSON: string) => {
-      setLoading(true);
       try {
         const query: Record<string, unknown> = { skip: newSkip, limit: newLimit };
         if (filterJSON.trim()) query.filter = JSON.parse(filterJSON);
@@ -226,12 +226,31 @@ function MongoCollectionContentBody({ tabId, innerTabId, assetId, database, coll
     [assetId, database, collection]
   );
 
+  const loadData = useCallback(
+    (newSkip: number, newLimit: number, filterJSON: string, sortJSON: string) => {
+      setLoading(true);
+      return fetchData(newSkip, newLimit, filterJSON, sortJSON);
+    },
+    [fetchData]
+  );
+
+  // 资产/库/集合变化触发重新拉取时同步回到加载态(挂载时 loading 初值已是 true):
+  // 渲染期对比上次值,替代 effect 里的同步 setState。
+  const [prevLoadKey, setPrevLoadKey] = useState({ assetId, database, collection });
+  if (assetId !== prevLoadKey.assetId || database !== prevLoadKey.database || collection !== prevLoadKey.collection) {
+    setPrevLoadKey({ assetId, database, collection });
+    setLoading(true);
+  }
+
   useEffect(() => {
-    loadData(0, limit, "", "");
-    // Intentionally only depends on loadData — limit / filter / sort changes are
+    // fetchData 的 setState 全部在 await 之后(异步续体),用 async 包装让规则识别。
+    void (async () => {
+      await fetchData(0, limit, "", "");
+    })();
+    // Intentionally only depends on fetchData — limit / filter / sort changes are
     // driven by their own handlers which call loadData directly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadData]);
+  }, [fetchData]);
 
   const handleApply = () => {
     if (filterInput.trim()) {

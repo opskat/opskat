@@ -24,15 +24,10 @@ func (h *rdpHandler) SafeView(a *asset_entity.Asset) map[string]any {
 		return nil
 	}
 	return map[string]any{
-		"host":              cfg.Host,
-		"port":              cfg.Port,
-		"username":          cfg.Username,
-		"domain":            cfg.Domain,
-		"screen_width":      cfg.ScreenWidth,
-		"screen_height":     cfg.ScreenHeight,
-		"color_depth":       cfg.ColorDepth,
-		"ignore_cert":       cfg.IgnoreCert,
-		"file_ssh_asset_id": cfg.FileSSHAssetID,
+		"host": cfg.Host, "port": cfg.Port,
+		"username": cfg.Username, "domain": cfg.Domain,
+		"width": cfg.Width, "height": cfg.Height,
+		"clipboard": cfg.Clipboard,
 	}
 }
 
@@ -48,32 +43,33 @@ func (h *rdpHandler) DefaultPolicy() any { return nil }
 func (h *rdpHandler) PolicyKind() string { return "" }
 
 func (h *rdpHandler) ValidateCreateArgs(args map[string]any) error {
-	return validateRemoteServerArgs(args)
+	if ArgString(args, "host") == "" || ArgString(args, "username") == "" {
+		return fmt.Errorf("missing required parameters: host, username")
+	}
+	return nil
 }
 
 func (h *rdpHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
 	cfg := &asset_entity.RDPConfig{
-		Host:           ArgString(args, "host"),
-		Port:           ArgInt(args, "port"),
-		Username:       ArgString(args, "username"),
-		Domain:         ArgString(args, "domain"),
-		ScreenWidth:    ArgInt(args, "screen_width"),
-		ScreenHeight:   ArgInt(args, "screen_height"),
-		ColorDepth:     ArgInt(args, "color_depth"),
-		IgnoreCert:     ArgBool(args, "ignore_cert"),
-		FileSSHAssetID: ArgInt64(args, "file_ssh_asset_id"),
+		Host:      ArgString(args, "host"),
+		Port:      ArgInt(args, "port"),
+		Username:  ArgString(args, "username"),
+		Domain:    ArgString(args, "domain"),
+		Width:     ArgInt(args, "width"),
+		Height:    ArgInt(args, "height"),
+		Clipboard: ArgBool(args, "clipboard"),
 	}
 	if cfg.Port == 0 {
 		cfg.Port = h.DefaultPort()
 	}
-	if cfg.ScreenWidth == 0 {
-		cfg.ScreenWidth = 1280
+	if _, ok := args["clipboard"]; !ok {
+		cfg.Clipboard = true
 	}
-	if cfg.ScreenHeight == 0 {
-		cfg.ScreenHeight = 720
+	if cfg.Width == 0 {
+		cfg.Width = 1280
 	}
-	if cfg.ColorDepth == 0 {
-		cfg.ColorDepth = 24
+	if cfg.Height == 0 {
+		cfg.Height = 720
 	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)
@@ -87,8 +83,11 @@ func (h *rdpHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, a
 
 func (h *rdpHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
 	cfg, err := a.GetRDPConfig()
-	if err != nil || cfg == nil {
+	if err != nil {
 		return err
+	}
+	if cfg == nil {
+		cfg = &asset_entity.RDPConfig{}
 	}
 	if v := ArgString(args, "host"); v != "" {
 		cfg.Host = v
@@ -102,20 +101,14 @@ func (h *rdpHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, a
 	if _, ok := args["domain"]; ok {
 		cfg.Domain = ArgString(args, "domain")
 	}
-	if v := ArgInt(args, "screen_width"); v > 0 {
-		cfg.ScreenWidth = v
+	if v := ArgInt(args, "width"); v > 0 {
+		cfg.Width = v
 	}
-	if v := ArgInt(args, "screen_height"); v > 0 {
-		cfg.ScreenHeight = v
+	if v := ArgInt(args, "height"); v > 0 {
+		cfg.Height = v
 	}
-	if v := ArgInt(args, "color_depth"); v > 0 {
-		cfg.ColorDepth = v
-	}
-	if _, ok := args["ignore_cert"]; ok {
-		cfg.IgnoreCert = ArgBool(args, "ignore_cert")
-	}
-	if _, ok := args["file_ssh_asset_id"]; ok {
-		cfg.FileSSHAssetID = ArgInt64(args, "file_ssh_asset_id")
+	if _, ok := args["clipboard"]; ok {
+		cfg.Clipboard = ArgBool(args, "clipboard")
 	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)

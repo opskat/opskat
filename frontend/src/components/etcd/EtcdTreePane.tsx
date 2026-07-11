@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { ChevronRight, ChevronDown, Folder, FileText } from "lucide-react";
+import { ChevronRight, ChevronDown, Folder, FileText, RefreshCw, Loader2 } from "lucide-react";
 import { useEtcdStore, etcdCacheKey, type EtcdTreeNode } from "@/stores/etcdStore";
 
 export interface EtcdTreePaneProps {
@@ -18,6 +18,7 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
   const treeCache = useEtcdStore((s) => s.treeCache);
   const truncatedAt = useEtcdStore((s) => s.truncatedAt);
   const loadPrefix = useEtcdStore((s) => s.loadPrefix);
+  const invalidate = useEtcdStore((s) => s.invalidate);
 
   // treeCache / truncatedAt 按 `${assetId}:${prefix}` 索引,避免多 asset 同 prefix 互污。
   const nodesFor = (prefix: string) => treeCache.get(etcdCacheKey(assetId, prefix));
@@ -25,10 +26,24 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([ROOT_PREFIX]));
   const [filter, setFilter] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
 
   function reportLoadError(e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     toast.error(`${t("etcd.tree.loadFailed")}: ${msg}`);
+  }
+
+  // 刷新 keyspace：清缓存后重拉根 + 当前所有已展开层级，保持展开状态不塌。
+  async function refreshTree() {
+    if (refreshing) return;
+    setRefreshing(true);
+    invalidate(assetId);
+    const prefixes = new Set<string>([ROOT_PREFIX, ...expanded]);
+    try {
+      await Promise.all([...prefixes].map((p) => loadPrefix(assetId, p, { force: true }).catch(reportLoadError)));
+    } finally {
+      setRefreshing(false);
+    }
   }
 
   // 首次加载根 prefix —— 不需要显式展开根（根永远渲染顶层）
@@ -125,22 +140,26 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
 
   return (
     <div className="flex h-full w-full flex-col">
-      <div className="border-b p-2">
+      <div className="flex items-center gap-1.5 border-b p-2">
         <input
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder={t("etcd.tree.filterPlaceholder")}
-          className="h-7 w-full rounded border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
+          className="h-7 min-w-0 flex-1 rounded border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
         />
-      </div>
-      <div className="flex-1 overflow-auto">
-        <div
-          className="py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
-          style={{ paddingLeft: 8 }}
+        <button
+          type="button"
+          className="flex size-7 shrink-0 items-center justify-center rounded border text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+          onClick={() => void refreshTree()}
+          disabled={refreshing}
+          title={t("etcd.tree.refresh")}
+          data-testid="etcd-tree-refresh"
         >
-          {t("etcd.tree.title")}
-        </div>
+          {refreshing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+        </button>
+      </div>
+      <div className="flex-1 overflow-auto py-1">
         {rootNodes.length === 0 && <div className="px-3 py-2 text-xs text-muted-foreground">…</div>}
         {rootNodes.map((n) => renderNode(n, 0))}
         {rootTruncated && (

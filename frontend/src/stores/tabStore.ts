@@ -26,7 +26,7 @@ export interface QueryTabMeta {
   assetId: number;
   assetName: string;
   assetIcon: string;
-  assetType: "database" | "redis" | "mongodb" | "kafka" | "k8s" | "etcd";
+  assetType: "database" | "redis" | "mongodb" | "kafka" | "k8s" | "etcd" | "oss";
   driver?: string;
   defaultDatabase?: string;
   redisDatabase?: number;

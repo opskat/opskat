@@ -1,4 +1,3 @@
-import { forwardRef } from "react";
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
@@ -6,7 +5,7 @@ import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
 import { buildRedisConfig, parseRedisConfig, REDIS_DEFAULTS, type RedisFormState } from "./RedisConfigSection.config";
-import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 
 const REDIS_GROUPS: ConfigGroupSchema<RedisFormState>[] = [
   {
@@ -94,10 +93,7 @@ const REDIS_GROUPS: ConfigGroupSchema<RedisFormState>[] = [
   },
 ];
 
-export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function RedisConfigSection(
-  { editAsset, onValidityChange },
-  ref
-) {
+export function RedisConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
   const cred = useAssetCredential(editAsset);
   const { state, patch } = useConfigSection<RedisFormState>({
     ref,
@@ -138,4 +134,4 @@ export const RedisConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps
 
   const groups = buildConfigGroups(REDIS_GROUPS, { state, patch, ctx: { cred, editAsset } });
   return <ConfigTabs groups={groups} />;
-});
+}

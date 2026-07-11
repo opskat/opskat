@@ -9,7 +9,7 @@ OpsKat
 
 <p align="center">
 <b>Your one-stop server operations workbench</b><br/>
-SSH, databases, Redis, Kafka, Kubernetes… everything ops has to touch, unified in a single cross-platform desktop app. And you can let AI execute it for you in natural language — every step guarded by policy and audit.
+SSH and RDP, databases, object storage, Redis, Kafka, Kubernetes… everything ops has to touch, unified in a single cross-platform desktop app. And you can let AI execute supported operations in natural language, with the applicable policy, approval, and audit controls for each path.
 </p>
 
 <p align="center">
@@ -42,7 +42,7 @@ SSH, databases, Redis, Kafka, Kubernetes… everything ops has to touch, unified
 
 Managing servers usually means juggling a pile of tools — SSH clients, database GUIs, Redis managers, Kafka consoles — and constantly switching between them. OpsKat brings all of those everyday asset operations into a single interface, so one app is enough. On its own, that's already a full ops workbench.
 
-On top of it sits a layer of AI: just say what you need in natural language, and the AI agent connects and runs it for you — pulling logs, running SQL, checking cluster status, and more. Every step is backed by policy enforcement and full audit logging, so handing work to the AI stays safe.
+On top of it sits a layer of AI: just say what you need in natural language, and the AI agent can use its registered tools to pull logs, run SQL, check cluster status, and more. Applicable operations use their policy and approval paths, while tool calls carry an audit trail and decision context where available.
 
 **If you find it useful, please give us a Star ⭐ — it means a lot!**
 
@@ -54,17 +54,18 @@ Grab the latest build for your platform — **macOS, Windows, or Linux** — fro
 
 ### First run
 
-1. **Add an asset** — an SSH host, database, Redis, and so on — or import from your SSH config / Tabby.
-2. **Connect** — open a terminal, run a query, or browse keys and collections.
+1. **Add an asset** — an SSH/RDP host, database, object-storage account, Redis, and so on — or import from your SSH config / Tabby / WindTerm.
+2. **Connect** — open a terminal or remote desktop, run a query, or browse keys, collections, buckets, and objects.
 3. *(Optional)* **Configure an AI provider**, then just tell the agent what you need.
 
 ## 📦 Supported Assets
 
 | Category | Assets |
 | :-- | :-- |
-| **Servers** | <img src="https://img.shields.io/badge/SSH-4D4D4D?style=flat-square&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxyZWN0IHdpZHRoPSIyMCIgaGVpZ2h0PSIxNCIgeD0iMiIgeT0iMyIgcng9IjIiLz48bGluZSB4MT0iOCIgeDI9IjE2IiB5MT0iMjEiIHkyPSIyMSIvPjxsaW5lIHgxPSIxMiIgeDI9IjEyIiB5MT0iMTciIHkyPSIyMSIvPjwvc3ZnPg%3D%3D" alt="SSH"> <img src="https://img.shields.io/badge/Serial-5A6B7B?style=flat-square&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxjaXJjbGUgY3g9IjEwIiBjeT0iNyIgcj0iMSIvPjxjaXJjbGUgY3g9IjQiIGN5PSIyMCIgcj0iMSIvPjxwYXRoIGQ9Ik00LjcgMTkuMyAxOSA1Ii8%2BPHBhdGggZD0ibTIxIDMtMyAxIDIgMloiLz48cGF0aCBkPSJNOS4yNiA3LjY4IDUgMTJsMiA1Ii8%2BPHBhdGggZD0ibTEwIDE0IDUgMiAzLjUtMy41Ii8%2BPHBhdGggZD0ibTE4IDEyIDEtMSAxIDEtMSAxWiIvPjwvc3ZnPg%3D%3D" alt="Serial"> <img src="https://img.shields.io/badge/VNC-3366CC?style=flat-square" alt="VNC"> <img src="https://img.shields.io/badge/RDP-0078D4?style=flat-square" alt="RDP"> |
+| **Servers & terminals** | <img src="https://img.shields.io/badge/SSH-4D4D4D?style=flat-square" alt="SSH"> <img src="https://img.shields.io/badge/VNC-3366CC?style=flat-square" alt="VNC"> <img src="https://img.shields.io/badge/RDP-0078D4?style=flat-square" alt="RDP"> <img src="https://img.shields.io/badge/Local_Terminal-5A6B7B?style=flat-square" alt="Local Terminal"> <img src="https://img.shields.io/badge/Serial-5A6B7B?style=flat-square" alt="Serial"> |
 | **Databases** | <img src="https://img.shields.io/badge/MySQL-4479A1?style=flat-square&logo=mysql&logoColor=white" alt="MySQL"> <img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL"> <img src="https://img.shields.io/badge/SQL_Server-CC2927?style=flat-square" alt="SQL Server"> <img src="https://img.shields.io/badge/SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite"> <img src="https://img.shields.io/badge/Redis-FF4438?style=flat-square&logo=redis&logoColor=white" alt="Redis"> <img src="https://img.shields.io/badge/MongoDB-47A248?style=flat-square&logo=mongodb&logoColor=white" alt="MongoDB"> <img src="https://img.shields.io/badge/etcd-419EDA?style=flat-square&logo=etcd&logoColor=white" alt="etcd"> |
 | **Middleware** | <img src="https://img.shields.io/badge/Apache_Kafka-231F20?style=flat-square&logo=apachekafka&logoColor=white" alt="Kafka"> <img src="https://img.shields.io/badge/Kubernetes-326CE5?style=flat-square&logo=kubernetes&logoColor=white" alt="Kubernetes"> |
+| **Object storage** | <img src="https://img.shields.io/badge/S3--compatible_Object_Storage-569A31?style=flat-square" alt="S3-compatible Object Storage"> <img src="https://img.shields.io/badge/Cloud_Providers-2775CA?style=flat-square" alt="Cloud Providers"> <img src="https://img.shields.io/badge/Self--hosted-5A6B7B?style=flat-square" alt="Self-hosted Object Storage"> |
 
 _More asset types are on the way via the plugin system._
 
@@ -74,16 +75,18 @@ Even before you turn on the AI, OpsKat is a full-featured terminal and asset man
 
 - Tree-structured grouping for every supported asset type
 - Split-pane terminal with customizable themes
+- Built-in RDP remote desktop with fit/actual-size views, fullscreen, special-key shortcuts, and text/file clipboard sync
 - SFTP file browser
-- VNC remote desktop tabs backed by noVNC and the built-in WebSocket-to-TCP bridge; RDP opens through the Windows Remote Desktop client
+- VNC remote desktop tabs backed by noVNC and the built-in WebSocket-to-TCP bridge
 - Jump host chain connections
-- SQL query editor (MySQL/PostgreSQL via SSH tunnel)
+- SQL query editor and data browser for MySQL, PostgreSQL, SQL Server, and SQLite
 - Redis command execution with key browser
 - MongoDB collection browsing and query execution
 - Kafka cluster, topic, message, consumer group, ACL, Schema Registry, and Kafka Connect management
+- Object-storage browser for buckets, folders, objects, uploads/downloads, copy/move/delete, previews, and presigned URLs
 - Port forwarding and SOCKS proxy
 - Encrypted credential storage
-- Import from SSH config / Tabby
+- Import from SSH config / Tabby / WindTerm
 
 ### Proxy Chains
 
@@ -97,11 +100,10 @@ The same chain model is shared by SSH, SQL databases, Redis, MongoDB, Kafka, etc
 
 ### Remote Desktop
 
-VNC and RDP assets use local desktop capabilities without a separate bridge service. VNC is rendered inside OpsKat through noVNC and a built-in WebSocket-to-TCP bridge. RDP uses the Windows Remote Desktop client (`mstsc.exe`) and is currently Windows-only.
+VNC and RDP assets use built-in remote desktop capabilities without a separate bridge service. VNC is rendered through noVNC and a built-in WebSocket-to-TCP bridge. RDP uses OpsKat's embedded RDP client and is rendered directly in an application tab.
 
-- Configure the VNC/RDP target host, credentials, optional proxy chain, and for RDP the screen size, color depth, domain, and certificate ignore option.
-- To enable file upload/download or drag-to-upload in the remote desktop tab, bind a separate SSH asset as the file channel. If no SSH asset is bound, the remote desktop can still connect but the file panel is disabled with a reason.
-- File copy/paste is implemented as upload/download through SFTP. It does not use SMB, RDP drive redirection, or operating-system file-list clipboard synchronization.
+- VNC supports target credentials, proxy chains, text clipboard synchronization, and an optional SSH/SFTP file channel.
+- RDP supports resolution, domain, text clipboard synchronization, and direct file clipboard transfer through the embedded RDP implementation.
 
 ## 🤖 Let AI Operate for You
 

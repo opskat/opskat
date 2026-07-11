@@ -107,7 +107,10 @@ function IntegrationSection() {
   }, []);
 
   useEffect(() => {
-    detect();
+    // 挂载时探测:detect 的 setState 均在 await 之后,经 async 边界调用避免 effect 内同步 setState
+    void (async () => {
+      await detect();
+    })();
   }, [detect]);
 
   const handleInstallCLI = async () => {
@@ -432,7 +435,10 @@ export function AISettingsSection() {
   }, []);
 
   useEffect(() => {
-    loadProviders();
+    // 同 IntegrationSection:加载体的 setState 均在 await 之后,经 async 边界调用
+    void (async () => {
+      await loadProviders();
+    })();
   }, [loadProviders]);
 
   const openAddDialog = () => {

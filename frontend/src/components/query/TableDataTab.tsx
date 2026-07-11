@@ -196,6 +196,32 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   }, []);
   const isCancelled = useCallback((requestId: number) => cancelledRequests.current.has(requestId), []);
 
+  // 切换表(或资产/库)时同步清空数据并进入加载态:渲染期对比上次值(含首次渲染,
+  // 对齐原 effect 挂载即跑),替代 effect 里的同步 setState;requestId/openedRef 的
+  // ref 记账与异步拉取仍留在下面的 effect。
+  const [prevTableKey, setPrevTableKey] = useState<{ assetId?: number; database?: string; table?: string } | null>(
+    null
+  );
+  if (
+    prevTableKey === null ||
+    assetId !== prevTableKey.assetId ||
+    database !== prevTableKey.database ||
+    table !== prevTableKey.table
+  ) {
+    setPrevTableKey({ assetId, database, table });
+    if (assetId) {
+      setPrimaryKeys([]);
+      setColumnTypes({});
+      setColumnRules([]);
+      setColumns([]);
+      setRows([]);
+      setTotalRows(null);
+      setPkLoaded(false);
+      setLoading(true);
+      setError(null);
+    }
+  }
+
   // 打开表时一次性拉取主键 / 列类型 / 总行数 / 首页数据,替代原来 4 次独立的
   // ExecuteSQL。后续 fetchCount/fetchData 仍按需触发(filter apply / 翻页 / 排序),
   // openedRef 作为初次挂载时的门闩,避免和 OpenTable 重复请求。
@@ -206,15 +232,6 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     latestDataRequest.current = requestId;
     latestCountRequest.current = requestId;
     openedRef.current = false;
-    setPrimaryKeys([]);
-    setColumnTypes({});
-    setColumnRules([]);
-    setColumns([]);
-    setRows([]);
-    setTotalRows(null);
-    setPkLoaded(false);
-    setLoading(true);
-    setError(null);
     (async () => {
       try {
         const raw = await OpenTable(assetId, database, table, pageSize);
@@ -333,22 +350,31 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   }, [fetchData, page, applyVersion]);
 
   // Sync page input
-  useEffect(() => {
+  // 翻页时同步页码输入框:渲染期对比上次值(含首次渲染,对齐原 effect 挂载即跑)。
+  const [prevPage, setPrevPage] = useState<number | null>(null);
+  if (page !== prevPage) {
+    setPrevPage(page);
     setPageInput(String(page + 1));
-  }, [page]);
+  }
 
   // Clear edits when page changes
-  useEffect(() => {
+  // 翻页/改页大小时清空未提交编辑:渲染期对比上次值(含首次渲染,对齐原 effect 挂载即跑)。
+  const [prevEditsKey, setPrevEditsKey] = useState<{ page: number; pageSize: number } | null>(null);
+  if (prevEditsKey === null || page !== prevEditsKey.page || pageSize !== prevEditsKey.pageSize) {
+    setPrevEditsKey({ page, pageSize });
     setEdits(new Map());
     setNewRows([]);
-  }, [page, pageSize]);
+  }
 
-  useEffect(() => {
+  // 列集合变化时收敛可见列:渲染期对比上次值(含首次渲染,对齐原 effect 挂载即跑)。
+  const [prevColumnsKey, setPrevColumnsKey] = useState<string[] | null>(null);
+  if (columns !== prevColumnsKey) {
+    setPrevColumnsKey(columns);
     setVisibleColumns((prev) => {
       const retained = prev.filter((col) => columns.includes(col));
       return retained.length > 0 ? retained : columns;
     });
-  }, [columns]);
+  }
 
   const handleCellEdit = useCallback((edit: CellEdit) => {
     setEdits((prev) => {

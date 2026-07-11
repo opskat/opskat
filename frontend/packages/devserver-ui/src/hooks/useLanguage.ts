@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback } from "react";
+import { createContext, use, useState, useCallback } from "react";
 
 type LanguageContextValue = {
   language: string;
@@ -11,7 +11,7 @@ export const LanguageContext = createContext<LanguageContextValue>({
 });
 
 export function useLanguage() {
-  return useContext(LanguageContext);
+  return use(LanguageContext);
 }
 
 export function useLanguageState() {

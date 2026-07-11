@@ -461,6 +461,8 @@ function QueryResultTableImpl({
   // 事件把 virtualizer 的 scrollOffset 同步成 0。切回来视觉就是"表格回到顶部"。
   // 这里把每行最近一次的非 0 高度缓存到 WeakMap;size=0 时回退到这个值让 delta=0,resizeItem 短路。
   const lastNonZeroSizesRef = useRef<WeakMap<Element, number>>(new WeakMap());
+  // react-virtual 在渲染期返回可变实例,与 React Compiler 语义不兼容(上游库问题);启用 Compiler 前无代码级修复。
+  // eslint-disable-next-line react-hooks/incompatible-library
   const rowVirtualizer = useVirtualizer({
     count: sortedIndices.length,
     getScrollElement: () => containerRef.current,
@@ -2023,12 +2025,14 @@ function ColumnValuePanel({ col, entries, selected, onChange }: ColumnValuePanel
   //
   // 父级的 setColumnFilterForCol 包了 startTransition,父 state 更新会被延迟
   // (避免大表 reconcile 阻塞点击反馈),所以这里用本地 `localSelected` 做乐观更新
-  // 让复选框的勾选状态在主线程上立即可见。父 prop 通过 useEffect 重新同步,
+  // 让复选框的勾选状态在主线程上立即可见。父 prop 在渲染期对比上次值重新同步,
   // 当 transition commit 时两者归一。
   const [localSelected, setLocalSelected] = useState<Set<string> | null>(() => selected);
-  useEffect(() => {
+  const [prevSelected, setPrevSelected] = useState<Set<string> | null>(selected);
+  if (selected !== prevSelected) {
+    setPrevSelected(selected);
     setLocalSelected(selected);
-  }, [selected]);
+  }
   const selectedSet = useMemo(() => localSelected ?? new Set<string>(), [localSelected]);
   const allKeys = useMemo(() => entries.map((e) => e.key), [entries]);
   const allChecked = allKeys.length > 0 && selectedSet.size === allKeys.length;
