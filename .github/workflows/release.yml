@@ -1,38 +1,18 @@
 name: Release
-run-name: Release ${{ inputs.version || github.ref_name }}
 
 on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Release version (for example v0.1.0 or v0.1.0-rc.1)"
-        required: true
-        type: string
 
 env:
-  VERSION: ${{ inputs.version || github.ref_name }}
+  VERSION: ${{ github.ref_name }}
   COMMIT_ID: ${{ github.sha }}
   NODE_OPTIONS: --max-old-space-size=4096
 
 jobs:
-  validate:
-    name: Validate release version
-    runs-on: ubuntu-latest
-    steps:
-      - name: Validate version
-        shell: bash
-        run: |
-          if [[ ! "${VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::Version must look like v0.1.0, v0.1.0-beta.1, or v0.1.0-rc.1"
-            exit 1
-          fi
-
   build-desktop:
     name: Desktop (${{ matrix.platform }})
-    needs: [validate]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -244,7 +224,7 @@ jobs:
       - name: Determine prerelease
         id: prerelease
         run: |
-          if [[ "${VERSION}" == *-beta* ]] || [[ "${VERSION}" == *-rc* ]]; then
+          if [[ "${{ github.ref_name }}" == *-beta* ]] || [[ "${{ github.ref_name }}" == *-rc* ]]; then
             echo "flag=--prerelease" >> $GITHUB_OUTPUT
           fi
 
@@ -252,10 +232,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete "${VERSION}" -y 2>/dev/null || true
-          gh release create "${VERSION}" \
-            --target "${COMMIT_ID}" \
-            --title "${VERSION}" \
+          gh release delete ${{ github.ref_name }} -y 2>/dev/null || true
+          gh release create ${{ github.ref_name }} \
+            --title "${{ github.ref_name }}" \
             --generate-notes \
             ${{ steps.prerelease.outputs.flag }} \
             artifacts/*
@@ -264,5 +243,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api repos/${{ github.repository }}/releases/tags/${VERSION} > release-info.json
-          gh release upload "${VERSION}" release-info.json --clobber
+          gh api repos/opskat/opskat/releases/tags/${{ github.ref_name }} > release-info.json
+          gh release upload ${{ github.ref_name }} release-info.json --clobber
