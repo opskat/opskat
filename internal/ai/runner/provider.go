@@ -24,12 +24,16 @@ type Message struct {
 
 // ToolCall AI 发起的工具调用
 type ToolCall struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"` // "function"
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"` // JSON string
-	} `json:"function"`
+	ID       string       `json:"id"`
+	Type     string       `json:"type"` // "function"
+	Function ToolFunction `json:"function"`
+}
+
+// ToolFunction describes the function selected by an AI tool call.
+// Keep this named so Wails can generate a typed frontend binding for it.
+type ToolFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"` // JSON string
 }
 
 // Usage 本轮 LLM 调用的 token 使用情况
