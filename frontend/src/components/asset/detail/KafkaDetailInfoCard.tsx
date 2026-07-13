@@ -1,7 +1,14 @@
 import { useTranslation } from "react-i18next";
 import type { DetailInfoCardProps } from "@/lib/assetTypes/types";
-import type { ProxyConfigJSON } from "../proxyConfig";
-import { DetailGrid, DetailSection, InfoItem, ProxyDetailSection, TunnelInfo } from "./InfoItem";
+import type { ProxyConfigJSON, ProxyChainJSON } from "../proxyConfig";
+import {
+  DetailGrid,
+  DetailSection,
+  InfoItem,
+  ProxyChainDetailSection,
+  ProxyDetailSection,
+  TunnelInfo,
+} from "./InfoItem";
 import { ENABLED_VALUE, MASKED_SECRET, parseDetailConfig } from "./utils";
 
 interface KafkaConfig {
@@ -17,6 +24,7 @@ interface KafkaConfig {
   message_preview_bytes?: number;
   message_fetch_limit?: number;
   proxy?: ProxyConfigJSON | null;
+  proxy_chain?: ProxyChainJSON | null;
 }
 
 export function KafkaDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProps) {
@@ -51,6 +59,7 @@ export function KafkaDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProp
         {tunnelName && <TunnelInfo label={t("asset.sshTunnel")} name={tunnelName} />}
       </DetailSection>
       <ProxyDetailSection proxy={cfg.proxy} />
+      <ProxyChainDetailSection chain={cfg.proxy_chain} resolveSshName={sshTunnelName} />
     </>
   );
 }
