@@ -1,9 +1,11 @@
 import type { CredentialFragment } from "./credentialConfig";
 import {
   CONNECTION_DEFAULTS,
+  buildProxyChainJSON,
   buildProxyJSON,
   parseConnectionFields,
   type ConnectionFormFields,
+  type ProxyChainJSON,
   type ProxyConfigJSON,
 } from "./proxyConfig";
 
@@ -26,6 +28,7 @@ export interface KafkaConfig {
   message_fetch_limit?: number;
   ssh_asset_id?: number;
   proxy?: ProxyConfigJSON;
+  proxy_chain?: ProxyChainJSON;
   schema_registry?: KafkaSchemaRegistryConfig;
   connect?: KafkaConnectConfig;
 }
@@ -107,9 +110,12 @@ export function kafkaBrokers(brokersText: string): string[] {
 }
 
 /** 主连接 base config(无凭据、无伴随;键序锁旧 buildKafkaConfig,末尾 ssh_asset_id|proxy 按 connectionType 二选一)。
- *  section 据此追加主凭据/伴随后再 stringify。proxyPassword 由 resolveSaveProxyPassword(save=密文)
- *  或 state.proxyPassword(test=明文)预解析。 */
-export function buildKafkaBaseConfig(state: KafkaFormState, proxyPassword = ""): KafkaConfig {
+ *  section 据此追加主凭据/伴随后再 stringify。proxyPassword / proxyChainSecrets 由调用方预解析。 */
+export function buildKafkaBaseConfig(
+  state: KafkaFormState,
+  proxyPassword = "",
+  proxyChainSecrets?: Record<string, { password?: string; token?: string }>
+): KafkaConfig {
   const cfg: KafkaConfig = {
     brokers: kafkaBrokers(state.brokersText),
   };
@@ -132,6 +138,8 @@ export function buildKafkaBaseConfig(state: KafkaFormState, proxyPassword = ""):
   if (state.connectionType === "jumphost" && state.sshTunnelId > 0) cfg.ssh_asset_id = state.sshTunnelId;
   const proxy = buildProxyJSON(state, proxyPassword);
   if (proxy) cfg.proxy = proxy;
+  const proxyChain = buildProxyChainJSON(state.proxyChainLayers, proxyChainSecrets);
+  if (proxyChain) cfg.proxy_chain = proxyChain;
   return cfg;
 }
 
@@ -175,7 +183,7 @@ export function parseKafkaConfig(configJSON: string, assetTunnelId = 0): KafkaFo
       requestTimeoutSeconds: cfg.request_timeout_seconds || 30,
       messagePreviewBytes: cfg.message_preview_bytes || 4096,
       messageFetchLimit: cfg.message_fetch_limit || 50,
-      ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0),
+      ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0, cfg.proxy_chain),
     };
   } catch {
     return { ...KAFKA_DEFAULTS };

@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 
 	"golang.org/x/crypto/ssh"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
+	"github.com/opskat/opskat/internal/pkg/proxychain"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_mgr_svc"
 	"github.com/opskat/opskat/internal/service/credential_svc"
@@ -24,6 +26,75 @@ var defaultResolver = &Resolver{}
 // Default 获取默认 Resolver 实例
 func Default() *Resolver {
 	return defaultResolver
+}
+
+func (r *Resolver) ResolveProxyChain(ctx context.Context, chain *asset_entity.ProxyChainConfig, maxDepth int) ([]proxychain.Layer, error) {
+	if maxDepth <= 0 {
+		return nil, fmt.Errorf("代理链过深，可能存在循环引用")
+	}
+	chain = asset_entity.NormalizeProxyChain(chain)
+	if chain == nil {
+		return nil, nil
+	}
+	if err := asset_entity.ValidateProxyChain(chain); err != nil {
+		return nil, err
+	}
+	layers := append([]asset_entity.ProxyChainLayer(nil), chain.Layers...)
+	sort.SliceStable(layers, func(i, j int) bool {
+		if layers[i].Order == layers[j].Order {
+			return i < j
+		}
+		return layers[i].Order < layers[j].Order
+	})
+	resolved := make([]proxychain.Layer, 0, len(layers))
+	for _, layer := range layers {
+		switch layer.Type {
+		case asset_entity.ProxyChainLayerSSH:
+			asset, err := asset_svc.Asset().Get(ctx, layer.SSHAssetID)
+			if err != nil {
+				return nil, fmt.Errorf("代理链 SSH 资产不存在(ID=%d): %w", layer.SSHAssetID, err)
+			}
+			cfg, err := asset.GetSSHConfig()
+			if err != nil {
+				return nil, err
+			}
+			password, key, passphrase, err := r.ResolveSSHCredentials(ctx, cfg)
+			if err != nil {
+				return nil, fmt.Errorf("解析代理链 SSH 凭据失败: %w", err)
+			}
+			auth, err := ssh_svc.BuildAuthMethodsForProxyChain(cfg.AuthType, password, key, passphrase, cfg.PrivateKeys)
+			if err != nil {
+				return nil, err
+			}
+			resolved = append(resolved, proxychain.Layer{
+				Type:     proxychain.LayerSSH,
+				Name:     layer.Name,
+				Host:     cfg.Host,
+				Port:     cfg.Port,
+				Username: cfg.Username,
+				SSHConfig: &ssh.ClientConfig{
+					User:            cfg.Username,
+					Auth:            auth,
+					HostKeyCallback: ssh_svc.MakeHostKeyCallback(cfg.Host, cfg.Port, ssh_svc.AutoTrustFirstRejectChangeVerifyFunc()),
+				},
+			})
+		case asset_entity.ProxyChainLayerSOCKS5:
+			cp := asset_entity.ProxyConfig{
+				Type: "socks5", Host: layer.Host, Port: layer.Port, Username: layer.Username, Password: layer.Password,
+			}
+			proxy := r.DecryptProxyPassword(&cp)
+			resolved = append(resolved, proxychain.Layer{
+				Type: proxychain.LayerSOCKS5, Name: layer.Name, Host: proxy.Host, Port: proxy.Port,
+				Username: proxy.Username, Password: proxy.Password,
+			})
+		case asset_entity.ProxyChainLayerHTTPTunnel:
+			resolved = append(resolved, proxychain.Layer{
+				Type: proxychain.LayerHTTPTunnel, Name: layer.Name, URL: layer.URL,
+				Token: r.decryptInlineSecret(layer.Token), TimeoutSeconds: layer.TimeoutSeconds,
+			})
+		}
+	}
+	return resolved, nil
 }
 
 // ResolveSSHCredentials 从 SSHConfig 解析明文密码/密钥/passphrase
@@ -228,23 +299,34 @@ func (r *Resolver) DecryptProxyPassword(proxy *asset_entity.ProxyConfig) *asset_
 	return &cp
 }
 
+func (r *Resolver) decryptInlineSecret(value string) string {
+	if value == "" {
+		return ""
+	}
+	decrypted, err := credential_svc.Default().Decrypt(value)
+	if err != nil {
+		return value
+	}
+	return decrypted
+}
+
 // ResolveSSHConnectConfig 从资产 ID 解析完整的 SSH 连接信息
 // 返回 SSHConfig、明文密码、明文密钥、passphrase、跳板机链
-func (r *Resolver) ResolveSSHConnectConfig(ctx context.Context, assetID int64) (*asset_entity.SSHConfig, string, string, string, []ssh_svc.JumpHostEntry, error) {
+func (r *Resolver) ResolveSSHConnectConfig(ctx context.Context, assetID int64) (*asset_entity.SSHConfig, string, string, string, []ssh_svc.JumpHostEntry, []proxychain.Layer, error) {
 	asset, err := asset_svc.Asset().Get(ctx, assetID)
 	if err != nil {
-		return nil, "", "", "", nil, fmt.Errorf("资产不存在: %w", err)
+		return nil, "", "", "", nil, nil, fmt.Errorf("资产不存在: %w", err)
 	}
 	if !asset.IsSSH() {
-		return nil, "", "", "", nil, fmt.Errorf("资产不是SSH类型")
+		return nil, "", "", "", nil, nil, fmt.Errorf("资产不是SSH类型")
 	}
 	sshCfg, err := asset.GetSSHConfig()
 	if err != nil {
-		return nil, "", "", "", nil, fmt.Errorf("获取SSH配置失败: %w", err)
+		return nil, "", "", "", nil, nil, fmt.Errorf("获取SSH配置失败: %w", err)
 	}
 	password, key, passphrase, err := r.ResolveSSHCredentials(ctx, sshCfg)
 	if err != nil {
-		return nil, "", "", "", nil, fmt.Errorf("解析凭据失败: %w", err)
+		return nil, "", "", "", nil, nil, fmt.Errorf("解析凭据失败: %w", err)
 	}
 
 	var jumpHosts []ssh_svc.JumpHostEntry
@@ -252,21 +334,26 @@ func (r *Resolver) ResolveSSHConnectConfig(ctx context.Context, assetID int64) (
 	if jumpHostID == 0 {
 		jumpHostID = sshCfg.JumpHostID // backward compat
 	}
-	if jumpHostID > 0 {
+	effectiveChain := asset_entity.EffectiveProxyChain(sshCfg.ProxyChain, jumpHostID, sshCfg.Proxy)
+	proxyChain, err := r.ResolveProxyChain(ctx, effectiveChain, 5)
+	if err != nil {
+		return nil, "", "", "", nil, nil, fmt.Errorf("解析代理链失败: %w", err)
+	}
+	if len(proxyChain) == 0 && jumpHostID > 0 {
 		jumpHosts, err = r.ResolveJumpHosts(ctx, jumpHostID, 5)
 		if err != nil {
-			return nil, "", "", "", nil, fmt.Errorf("解析跳板机失败: %w", err)
+			return nil, "", "", "", nil, nil, fmt.Errorf("解析跳板机失败: %w", err)
 		}
 	}
 
-	return sshCfg, password, key, passphrase, jumpHosts, nil
+	return sshCfg, password, key, passphrase, jumpHosts, proxyChain, nil
 }
 
 // DialAssetSSH 一站式解析资产并建立 SSH 连接，自动处理代理密码解密、跳板机链。
 // 除返回的 *ssh.Client 外，调用方还须负责关闭返回的所有额外 closer（跳板机链的
 // 中间连接等）；否则会泄漏连接。失败时返回的 closer 列表为 nil。
 func (r *Resolver) DialAssetSSH(ctx context.Context, assetID int64) (*ssh.Client, []io.Closer, error) {
-	sshCfg, password, key, passphrase, jumpHosts, err := r.ResolveSSHConnectConfig(ctx, assetID)
+	sshCfg, password, key, passphrase, jumpHosts, proxyChain, err := r.ResolveSSHConnectConfig(ctx, assetID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -282,6 +369,7 @@ func (r *Resolver) DialAssetSSH(ctx context.Context, assetID int64) (*ssh.Client
 		AssetID:                  assetID,
 		Proxy:                    r.DecryptProxyPassword(sshCfg.Proxy),
 		JumpHosts:                jumpHosts,
+		ProxyChain:               proxyChain,
 		HostKeyVerifyFunc:        ssh_svc.AutoTrustFirstRejectChangeVerifyFunc(),
 		KeepAliveIntervalSeconds: sshCfg.KeepAliveIntervalSeconds,
 	}

@@ -1,10 +1,12 @@
 package k8s
 
 import (
+	"context"
 	"testing"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSelectDialSource(t *testing.T) {
@@ -31,4 +33,13 @@ func TestSelectDialSource(t *testing.T) {
 			assert.Equal(t, c.want, selectDialSource(a, c.cfg, c.poolAvailable))
 		})
 	}
+}
+
+func TestK8sClientOptionsRejectsInvalidProxyChain(t *testing.T) {
+	k := &K8s{}
+	enabled := true
+	_, err := k.k8sClientOptions(context.Background(), &asset_entity.Asset{}, &asset_entity.K8sConfig{
+		ProxyChain: &asset_entity.ProxyChainConfig{Layers: []asset_entity.ProxyChainLayer{{Type: asset_entity.ProxyChainLayerSOCKS5, Enabled: &enabled, Port: 1080}}},
+	})
+	require.ErrorContains(t, err, "SOCKS5")
 }

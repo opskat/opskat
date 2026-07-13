@@ -6,6 +6,7 @@ import { useConfigSection } from "@/components/asset/useConfigSection";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
+import { proxyChainValidationKey, resolveSaveProxyChainSecrets } from "./proxyConfig";
 import {
   buildOSSConfig,
   parseOSSConfig,
@@ -58,6 +59,7 @@ const OSS_GROUPS: ConfigGroupSchema<OSSFormState>[] = [
       { kind: "password", usernameKey: "accessKeyId", secretLabel: "oss.form.secretAccessKey" },
     ],
   },
+  { key: "tunnel", label: "asset.tabTunnel", fields: [{ kind: "tunnel" }] },
   {
     key: "advanced",
     label: "asset.tabAdvanced",
@@ -81,15 +83,27 @@ export function OSSConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
     init: (a) => (a ? parseOSSConfig(a.Config) : { ...OSS_DEFAULTS }),
     validate: (s) => {
       const ok = s.endpoint.trim() !== "" && s.accessKeyId.trim() !== "";
-      return { canTest: ok, canSave: ok, saveDisabledReason: ok ? "" : "oss.error.required" };
+      const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
+      const canUse = ok && !proxyChainError;
+      return { canTest: canUse, canSave: canUse, saveDisabledReason: ok ? proxyChainError : "oss.error.required" };
     },
     build: async (s, ctx) => ({
-      configJSON: buildOSSConfig(s, await resolveSaveCredential(cred.value, ctx.encryptPassword)),
+      configJSON: buildOSSConfig(
+        s,
+        await resolveSaveCredential(cred.value, ctx.encryptPassword),
+        await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword)
+      ),
       sshTunnelId: 0,
     }),
     buildTest: async (s) => ({
       assetType: "oss",
-      configJSON: buildOSSConfig(s, resolveTestCredential(cred.value)),
+      configJSON: buildOSSConfig(
+        s,
+        resolveTestCredential(cred.value),
+        Object.fromEntries(
+          s.proxyChainLayers.map((layer) => [layer.id, { password: layer.password, token: layer.token }])
+        )
+      ),
       password: cred.value.password,
     }),
     deps: [cred.value],

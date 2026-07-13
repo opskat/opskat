@@ -1,8 +1,10 @@
 import type { CredentialFragment } from "./credentialConfig";
 import {
   CONNECTION_DEFAULTS,
+  buildProxyChainJSON,
   buildProxyJSON,
   parseConnectionFields,
+  type ProxyChainJSON,
   type ConnectionFormFields,
   type ProxyConfigJSON,
 } from "./proxyConfig";
@@ -18,6 +20,7 @@ interface SSHConfig {
   private_key_passphrase?: string;
   jump_host_id?: number;
   proxy?: ProxyConfigJSON | null;
+  proxy_chain?: ProxyChainJSON | null;
   keepalive_interval_seconds?: number;
   restore_cwd_on_reconnect?: boolean;
 }
@@ -67,6 +70,7 @@ export interface SSHBuildOptions {
   passphrase: string;
   /** proxy 密码(save=密文 / test=明文,已由调用方解析)。 */
   proxyPassword: string;
+  proxyChainSecrets?: Record<string, { password?: string; token?: string }>;
   /** jumphost 隧道是否写入 config.jump_host_id:save 为 false(走 asset 顶层),test 为 true。 */
   includeJumpHost: boolean;
 }
@@ -101,6 +105,8 @@ export function buildSSHConfig(state: SSHFormState, opts: SSHBuildOptions): stri
   if (proxy) {
     cfg.proxy = proxy;
   }
+  const proxyChain = buildProxyChainJSON(state.proxyChainLayers, opts.proxyChainSecrets);
+  if (proxyChain) cfg.proxy_chain = proxyChain;
 
   // 0 = 跟随全局默认，不写入 config(omitempty 语义)。
   if (state.keepAliveIntervalSeconds > 0) {
@@ -134,7 +140,7 @@ export function parseSSHConfig(configJSON: string, assetTunnelId = 0): SSHFormSt
       encryptedPrivateKeyPassphrase: cfg.private_key_passphrase || "",
       keepAliveIntervalSeconds: cfg.keepalive_interval_seconds || 0,
       restoreCwdOnReconnect: cfg.restore_cwd_on_reconnect || false,
-      ...parseConnectionFields(cfg.proxy, tunnelId),
+      ...parseConnectionFields(cfg.proxy, tunnelId, cfg.proxy_chain),
     };
   } catch {
     return { ...SSH_DEFAULTS };

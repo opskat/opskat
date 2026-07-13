@@ -1,9 +1,11 @@
 import type { CredentialFragment } from "./credentialConfig";
 import {
   CONNECTION_DEFAULTS,
+  buildProxyChainJSON,
   buildProxyJSON,
   parseConnectionFields,
   type ConnectionFormFields,
+  type ProxyChainJSON,
   type ProxyConfigJSON,
 } from "./proxyConfig";
 
@@ -58,6 +60,7 @@ interface RedisConfig {
   key_separator?: string;
   ssh_asset_id?: number;
   proxy?: ProxyConfigJSON;
+  proxy_chain?: ProxyChainJSON;
 }
 
 /**
@@ -71,7 +74,8 @@ export function buildRedisConfig(
   state: RedisFormState,
   cred: CredentialFragment,
   includeSshAssetId = false,
-  proxyPassword = ""
+  proxyPassword = "",
+  proxyChainSecrets?: Record<string, { password?: string; token?: string }>
 ): string {
   const cfg: RedisConfig = { host: state.host, port: state.port };
   if (state.username) cfg.username = state.username;
@@ -86,6 +90,8 @@ export function buildRedisConfig(
   if (state.tls && state.tlsKeyFile) cfg.tls_key_file = state.tlsKeyFile;
   const proxy = buildProxyJSON(state, proxyPassword);
   if (proxy) cfg.proxy = proxy;
+  const proxyChain = buildProxyChainJSON(state.proxyChainLayers, proxyChainSecrets);
+  if (proxyChain) cfg.proxy_chain = proxyChain;
   if (state.commandTimeoutSeconds > 0) cfg.command_timeout_seconds = state.commandTimeoutSeconds;
   if (state.scanPageSize > 0) cfg.scan_page_size = state.scanPageSize;
   if (state.keySeparator && state.keySeparator !== ":") cfg.key_separator = state.keySeparator;
@@ -113,7 +119,7 @@ export function parseRedisConfig(configJSON: string, assetTunnelId = 0): RedisFo
       tlsCAFile: cfg.tls_ca_file || "",
       tlsCertFile: cfg.tls_cert_file || "",
       tlsKeyFile: cfg.tls_key_file || "",
-      ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0),
+      ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0, cfg.proxy_chain),
     };
   } catch {
     return { ...REDIS_DEFAULTS };

@@ -1,8 +1,10 @@
 import type { CredentialFragment } from "./credentialConfig";
 import {
   CONNECTION_DEFAULTS,
+  buildProxyChainJSON,
   buildProxyJSON,
   parseConnectionFields,
+  type ProxyChainJSON,
   type ConnectionFormFields,
   type ProxyConfigJSON,
 } from "./proxyConfig";
@@ -52,6 +54,7 @@ interface DatabaseConfig {
   sqlite_source?: "local" | "remote_ssh_vfs";
   path?: string;
   proxy?: ProxyConfigJSON;
+  proxy_chain?: ProxyChainJSON;
 }
 
 /** driver→默认端口(镜像旧 DEFAULT_PORTS;sqlite 无端口)。 */
@@ -78,7 +81,12 @@ export function driverIcon(driver: string): string {
  * sqlite local 分支忽略 cred / host / port / ssh / proxy;remote_ssh_vfs 写 sqlite_source + ssh_asset_id。
  * 隧道与代理互斥,按 connectionType 二选一。
  */
-export function buildDatabaseConfig(state: DatabaseFormState, cred: CredentialFragment, proxyPassword = ""): string {
+export function buildDatabaseConfig(
+  state: DatabaseFormState,
+  cred: CredentialFragment,
+  proxyPassword = "",
+  proxyChainSecrets?: Record<string, { password?: string; token?: string }>
+): string {
   const cfg: DatabaseConfig = { driver: state.driver };
   if (state.driver === "sqlite") {
     if (state.sqliteSource === "remote_ssh_vfs") {
@@ -97,6 +105,8 @@ export function buildDatabaseConfig(state: DatabaseFormState, cred: CredentialFr
     if ((state.driver === "mysql" || state.driver === "mssql") && state.tls) cfg.tls = true;
     const proxy = buildProxyJSON(state, proxyPassword);
     if (proxy) cfg.proxy = proxy;
+    const proxyChain = buildProxyChainJSON(state.proxyChainLayers, proxyChainSecrets);
+    if (proxyChain) cfg.proxy_chain = proxyChain;
   }
   if (state.database) cfg.database = state.database;
   if (state.readOnly) cfg.read_only = true;
@@ -121,7 +131,7 @@ export function parseDatabaseConfig(configJSON: string, assetTunnelId = 0): Data
       readOnly: cfg.read_only || false,
       params: cfg.params || "",
       path: cfg.path || "",
-      ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0),
+      ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0, cfg.proxy_chain),
     };
   } catch {
     return { ...DATABASE_DEFAULTS };

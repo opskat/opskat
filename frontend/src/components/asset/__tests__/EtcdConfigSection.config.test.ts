@@ -6,7 +6,7 @@ import {
   ETCD_DEFAULTS,
   type EtcdFormState,
 } from "@/components/asset/EtcdConfigSection.config";
-import { CONNECTION_DEFAULTS } from "@/components/asset/proxyConfig";
+import { CONNECTION_DEFAULTS, socks5ProxyLayer, sshProxyLayer } from "@/components/asset/proxyConfig";
 
 const FULL: EtcdFormState = {
   ...CONNECTION_DEFAULTS,
@@ -124,6 +124,7 @@ describe("parseEtcdConfig (锁旧 loadEtcdConfig 非凭据字段)", () => {
       commandTimeoutSeconds: 20,
       connectionType: "jumphost",
       sshTunnelId: 5,
+      proxyChainLayers: [sshProxyLayer(5, "SSH Tunnel", "legacy-ssh-5")],
     });
   });
   it("缺字段用默认", () => {
@@ -144,6 +145,15 @@ describe("parseEtcdConfig (锁旧 loadEtcdConfig 非凭据字段)", () => {
     expect(s.proxyUsername).toBe("pu");
     expect(s.proxyPassword).toBe("");
     expect(s.encryptedProxyPassword).toBe("PROXYENC");
+    expect(s.proxyChainLayers).toEqual([
+      socks5ProxyLayer({
+        type: "socks5",
+        host: "p.example.com",
+        port: 1081,
+        username: "pu",
+        password: "PROXYENC",
+      }),
+    ]);
   });
 
   it("assetTunnelId 入参优先派生 jumphost(镜像 asset.sshTunnelId 优先)", () => {
@@ -157,7 +167,12 @@ describe("parseEtcdConfig (锁旧 loadEtcdConfig 非凭据字段)", () => {
       '{"endpoints":["a:2379"],"username":"u","password":"OLD",' +
       '"dial_timeout_seconds":5,"command_timeout_seconds":10,' +
       '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}}';
+    const expected =
+      '{"endpoints":["a:2379"],"username":"u","password":"OLD",' +
+      '"dial_timeout_seconds":5,"command_timeout_seconds":10,' +
+      '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"},' +
+      '"proxy_chain":{"layers":[{"id":"legacy-socks5-proxy","name":"SOCKS5 Proxy","enabled":true,"type":"socks5","order":1,"host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}]}}';
     const state = parseEtcdConfig(original);
-    expect(buildEtcdConfig(state, { password: "OLD" }, state.encryptedProxyPassword)).toBe(original);
+    expect(buildEtcdConfig(state, { password: "OLD" }, state.encryptedProxyPassword)).toBe(expected);
   });
 });

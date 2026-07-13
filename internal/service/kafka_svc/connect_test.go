@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -220,4 +221,12 @@ func TestKafkaConnectHelpers(t *testing.T) {
 	}, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "请指定 cluster 名称")
+}
+
+func TestKafkaConnectHTTPClientUsesAssetProxyChain(t *testing.T) {
+	enabled := true
+	_, err := kafkaConnectHTTPClient(&asset_entity.KafkaConnectClusterConfig{}, time.Second, &asset_entity.ProxyChainConfig{Layers: []asset_entity.ProxyChainLayer{{
+		Type: asset_entity.ProxyChainLayerSOCKS5, Enabled: &enabled, Port: 1080,
+	}}})
+	require.ErrorContains(t, err, "SOCKS5")
 }

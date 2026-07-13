@@ -7,7 +7,7 @@ import { useConfigSection } from "@/components/asset/useConfigSection";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
-import { resolveSaveProxyPassword } from "./proxyConfig";
+import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
 import { SelectSQLiteFile } from "../../../wailsjs/go/system/System";
 import {
   applyDriverChange,
@@ -30,27 +30,41 @@ export function DatabaseConfigSection({ editAsset, onValidityChange, onIconChang
     validate: (s) => {
       const isSqlite = s.driver === "sqlite";
       const isRemoteSqlite = isSqlite && s.sqliteSource === "remote_ssh_vfs";
-      const canSave = isSqlite ? !!s.path.trim() && (!isRemoteSqlite || s.sshTunnelId > 0) : !!s.host.trim();
-      const saveDisabledReason = canSave
-        ? ""
-        : isRemoteSqlite && s.path.trim() && s.sshTunnelId <= 0
-          ? "asset.formMissingSQLiteSSH"
-          : isSqlite
-            ? "asset.formMissingPath"
-            : "asset.formMissingHost";
+      const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
+      const baseOk = isSqlite ? !!s.path.trim() && (!isRemoteSqlite || s.sshTunnelId > 0) : !!s.host.trim();
+      const canSave = baseOk && !proxyChainError;
+      let saveDisabledReason = "";
+      if (!canSave) {
+        if (proxyChainError) saveDisabledReason = proxyChainError;
+        else if (isRemoteSqlite && s.path.trim() && s.sshTunnelId <= 0) {
+          saveDisabledReason = "asset.formMissingSQLiteSSH";
+        } else if (isSqlite) {
+          saveDisabledReason = "asset.formMissingPath";
+        } else {
+          saveDisabledReason = "asset.formMissingHost";
+        }
+      }
       return { canTest: canSave, canSave, saveDisabledReason };
     },
     build: async (s, ctx) => ({
       configJSON: buildDatabaseConfig(
         s,
         await resolveSaveCredential(cred.value, ctx.encryptPassword),
-        await resolveSaveProxyPassword(s, ctx.encryptPassword)
+        await resolveSaveProxyPassword(s, ctx.encryptPassword),
+        await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword)
       ),
       sshTunnelId: s.connectionType === "jumphost" ? s.sshTunnelId : 0,
     }),
     buildTest: async (s) => ({
       assetType: "database",
-      configJSON: buildDatabaseConfig(s, resolveTestCredential(cred.value), s.proxyPassword),
+      configJSON: buildDatabaseConfig(
+        s,
+        resolveTestCredential(cred.value),
+        s.proxyPassword,
+        Object.fromEntries(
+          s.proxyChainLayers.map((layer) => [layer.id, { password: layer.password, token: layer.token }])
+        )
+      ),
       password: cred.value.password,
     }),
     deps: [cred.value],

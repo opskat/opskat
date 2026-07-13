@@ -5,11 +5,11 @@ import { OSSConfigSection } from "@/components/asset/OSSConfigSection";
 const ctx = { isEdit: false, encryptPassword: vi.fn() };
 
 describe("OSSConfigSection tabs", () => {
-  it("renders connection / advanced tabs (no tunnel/tls)", () => {
+  it("renders connection / tunnel / advanced tabs (no tls)", () => {
     render(<OSSConfigSection ctx={ctx} onValidityChange={vi.fn()} />);
     expect(screen.getByTestId("config-tab-connection")).toBeInTheDocument();
     expect(screen.getByTestId("config-tab-advanced")).toBeInTheDocument();
-    expect(screen.queryByTestId("config-tab-tunnel")).not.toBeInTheDocument();
+    expect(screen.getByTestId("config-tab-tunnel")).toBeInTheDocument();
     expect(screen.queryByTestId("config-tab-tls")).not.toBeInTheDocument();
   });
 });

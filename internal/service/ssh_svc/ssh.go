@@ -14,6 +14,7 @@ import (
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/dirsync"
+	"github.com/opskat/opskat/internal/pkg/proxychain"
 	"github.com/opskat/opskat/internal/pkg/socksdial"
 	"github.com/opskat/opskat/internal/pkg/sshkeepalive"
 	"github.com/opskat/opskat/internal/pkg/sshtuning"
@@ -236,6 +237,8 @@ type ConnectConfig struct {
 	JumpHosts []JumpHostEntry
 	// 代理
 	Proxy *asset_entity.ProxyConfig
+	// 代理链：非空时优先于旧 JumpHosts/Proxy。
+	ProxyChain []proxychain.Layer
 
 	// 主机密钥校验回调（nil 则跳过校验）
 	HostKeyVerifyFunc HostKeyVerifyFunc
@@ -475,6 +478,27 @@ func (m *Manager) NewSessionFrom(existingSessionID string, cols, rows int,
 // dial 建立到目标的网络连接，支持代理和跳板机链
 func (m *Manager) dial(cfg ConnectConfig, sshConfig *ssh.ClientConfig, targetAddr string) (*ssh.Client, []io.Closer, error) {
 	var closers []io.Closer
+
+	if len(cfg.ProxyChain) > 0 {
+		emitProgress(&cfg, "connect", "正在通过代理链连接...")
+		conn, err := proxychain.Chain{
+			Layers: cfg.ProxyChain,
+			Direct: dialTCP,
+		}.Dial(context.Background(), targetAddr)
+		if err != nil {
+			return nil, nil, err
+		}
+		closers = append(closers, conn)
+		emitProgress(&cfg, "auth", "正在认证...")
+		c, chans, reqs, err := ssh.NewClientConn(conn, targetAddr, sshConfig)
+		if err != nil {
+			if closeErr := conn.Close(); closeErr != nil {
+				logger.Default().Warn("close proxy chain connection after handshake failure", zap.Error(closeErr))
+			}
+			return nil, nil, fmt.Errorf("SSH握手失败: %w", err)
+		}
+		return ssh.NewClient(c, chans, reqs), closers, nil
+	}
 
 	// 情况1: 有跳板机链
 	if len(cfg.JumpHosts) > 0 {
@@ -732,6 +756,10 @@ func buildAuthMethods(authType, password, key, keyPassphrase string, privateKeyP
 	}
 
 	return methods, nil
+}
+
+func BuildAuthMethodsForProxyChain(authType, password, key, keyPassphrase string, privateKeyPaths []string) ([]ssh.AuthMethod, error) {
+	return buildAuthMethods(authType, password, key, keyPassphrase, privateKeyPaths, nil)
 }
 
 // parsePrivateKey 解析私钥，支持 passphrase

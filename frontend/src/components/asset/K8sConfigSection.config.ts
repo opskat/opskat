@@ -1,8 +1,10 @@
 import {
   CONNECTION_DEFAULTS,
+  buildProxyChainJSON,
   buildProxyJSON,
   parseConnectionFields,
   type ConnectionFormFields,
+  type ProxyChainJSON,
   type ProxyConfigJSON,
 } from "./proxyConfig";
 
@@ -28,13 +30,20 @@ export const K8S_DEFAULTS: K8sFormState = {
  * 纯函数 — 无副作用,可直接做 golden 测试。
  * **不含 ssh_asset_id** — SSH 隧道走 Asset 顶层字段;隧道与代理互斥,按 connectionType 二选一。
  */
-export function buildK8sConfig(state: K8sFormState, kubeconfigCiphertext: string, proxyPassword = ""): string {
+export function buildK8sConfig(
+  state: K8sFormState,
+  kubeconfigCiphertext: string,
+  proxyPassword = "",
+  proxyChainSecrets?: Record<string, { password?: string; token?: string }>
+): string {
   const cfg: Record<string, unknown> = {};
   if (kubeconfigCiphertext) cfg.kubeconfig = kubeconfigCiphertext;
   if (state.namespace) cfg.namespace = state.namespace;
   if (state.context) cfg.context = state.context;
   const proxy = buildProxyJSON(state, proxyPassword);
   if (proxy) cfg.proxy = proxy;
+  const proxyChain = buildProxyChainJSON(state.proxyChainLayers, proxyChainSecrets);
+  if (proxyChain) cfg.proxy_chain = proxyChain;
   return JSON.stringify(cfg);
 }
 
@@ -48,13 +57,14 @@ export function parseK8sConfig(configJSON: string, assetTunnelId = 0): K8sFormSt
       namespace?: string;
       context?: string;
       proxy?: ProxyConfigJSON;
+      proxy_chain?: ProxyChainJSON;
     };
     return {
       kubeconfig: "",
       showKubeconfig: false,
       namespace: cfg.namespace || "",
       context: cfg.context || "",
-      ...parseConnectionFields(cfg.proxy, assetTunnelId),
+      ...parseConnectionFields(cfg.proxy, assetTunnelId, cfg.proxy_chain),
     };
   } catch {
     return { ...K8S_DEFAULTS };

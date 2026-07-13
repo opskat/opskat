@@ -57,6 +57,12 @@ func DialDatabase(ctx context.Context, asset *asset_entity.Asset, cfg *asset_ent
 		tunnelID = cfg.SSHAssetID // backward compat
 	}
 	switch {
+	case cfg.ProxyChain != nil:
+		dial, dialErr := chainDialFunc(ctx, cfg.ProxyChain)
+		if dialErr != nil {
+			return nil, nil, dialErr
+		}
+		db, err = openWithDialer(cfg, password, dial)
 	case tunnelID > 0 && sshPool != nil:
 		tunnel = NewSSHTunnel(tunnelID, cfg.Host, cfg.Port, sshPool)
 		db, err = openWithDialer(cfg, password, tunnelDialFunc(tunnel))

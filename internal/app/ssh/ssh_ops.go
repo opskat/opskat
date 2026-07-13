@@ -16,6 +16,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/dirsync"
 	"github.com/opskat/opskat/internal/service/asset_svc"
+	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/internal/service/server_status_svc"
 	"github.com/opskat/opskat/internal/service/ssh_svc"
@@ -88,12 +89,17 @@ func (s *SSH) ConnectSSH(req SSHConnectRequest) (string, error) {
 		},
 	}
 
-	// 解析跳板机链（递归，最大深度 5）
 	jumpHostID := asset.SSHTunnelID
 	if jumpHostID == 0 {
 		jumpHostID = sshCfg.JumpHostID // backward compat
 	}
-	if jumpHostID > 0 {
+	effectiveChain := asset_entity.EffectiveProxyChain(sshCfg.ProxyChain, jumpHostID, sshCfg.Proxy)
+	proxyChain, err := credential_resolver.Default().ResolveProxyChain(i18n.Ctx(s.ctx, s.lang.Lang()), effectiveChain, 5)
+	if err != nil {
+		return "", err
+	}
+	connectCfg.ProxyChain = proxyChain
+	if len(proxyChain) == 0 && jumpHostID > 0 {
 		jumpHosts, err := s.resolveJumpHosts(jumpHostID, 5)
 		if err != nil {
 			return "", fmt.Errorf("解析跳板机失败: %w", err)
@@ -239,12 +245,18 @@ func (s *SSH) ConnectSSHAsync(req SSHConnectRequest) (string, error) {
 			},
 		}
 
-		// 解析跳板机链
 		jumpHostID := asset.SSHTunnelID
 		if jumpHostID == 0 {
 			jumpHostID = sshCfg.JumpHostID // backward compat
 		}
-		if jumpHostID > 0 {
+		effectiveChain := asset_entity.EffectiveProxyChain(sshCfg.ProxyChain, jumpHostID, sshCfg.Proxy)
+		proxyChain, err := credential_resolver.Default().ResolveProxyChain(i18n.Ctx(s.ctx, s.lang.Lang()), effectiveChain, 5)
+		if err != nil {
+			emitEvent(SSHConnectEvent{Type: "error", Error: fmt.Sprintf("解析代理链失败: %s", err.Error())})
+			return
+		}
+		connectCfg.ProxyChain = proxyChain
+		if len(proxyChain) == 0 && jumpHostID > 0 {
 			emitEvent(SSHConnectEvent{Type: "progress", Step: "resolve", Message: "正在解析跳板机链..."})
 			jumpHosts, err := s.resolveJumpHosts(jumpHostID, 5)
 			if err != nil {
@@ -366,8 +378,13 @@ func (s *SSH) testConnection(ctx context.Context, configJSON string, plainPasswo
 		HostKeyVerifyFunc: ssh_svc.AutoTrustFirstRejectChangeVerifyFunc(),
 	}
 
-	// 解析跳板机
-	if sshCfg.JumpHostID > 0 {
+	effectiveChain := asset_entity.EffectiveProxyChain(sshCfg.ProxyChain, sshCfg.JumpHostID, sshCfg.Proxy)
+	proxyChain, err := credential_resolver.Default().ResolveProxyChain(ctx, effectiveChain, 5)
+	if err != nil {
+		return fmt.Errorf("解析代理链失败: %w", err)
+	}
+	connectCfg.ProxyChain = proxyChain
+	if len(proxyChain) == 0 && sshCfg.JumpHostID > 0 {
 		jumpHosts, err := s.resolveJumpHosts(sshCfg.JumpHostID, 5)
 		if err != nil {
 			return fmt.Errorf("解析跳板机失败: %w", err)

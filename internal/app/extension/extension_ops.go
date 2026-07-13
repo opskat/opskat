@@ -18,6 +18,7 @@ type AssetTypeInfo struct {
 	ExtensionName string `json:"extensionName,omitempty"`
 	DisplayName   string `json:"displayName"`
 	SSHTunnel     bool   `json:"sshTunnel"`
+	ProxyChain    bool   `json:"proxyChain"`
 }
 
 // ListInstalledExtensions returns all loaded extensions.
@@ -63,7 +64,8 @@ func (e *Extension) GetAvailableAssetTypes() []AssetTypeInfo {
 				Type:          at.Type,
 				ExtensionName: at.ExtensionName,
 				DisplayName:   displayName,
-				SSHTunnel:     true,
+				SSHTunnel:     at.ProxyChain,
+				ProxyChain:    at.ProxyChain,
 			})
 		}
 	}

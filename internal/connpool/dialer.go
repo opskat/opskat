@@ -6,7 +6,9 @@ import (
 	"net"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/proxychain"
 	"github.com/opskat/opskat/internal/pkg/socksdial"
+	"github.com/opskat/opskat/internal/service/credential_resolver"
 )
 
 // dialContextFunc 按目标地址建立底层 TCP 连接。
@@ -26,6 +28,32 @@ func proxyDialFunc(p *asset_entity.ProxyConfig) dialContextFunc {
 	return func(ctx context.Context, addr string) (net.Conn, error) {
 		return socksdial.Dial(ctx, p, addr)
 	}
+}
+
+func chainDialFunc(ctx context.Context, chain *asset_entity.ProxyChainConfig) (dialContextFunc, error) {
+	layers, err := credential_resolver.Default().ResolveProxyChain(ctx, chain, 5)
+	if err != nil {
+		return nil, err
+	}
+	if len(layers) == 0 {
+		return nil, nil
+	}
+	return func(ctx context.Context, addr string) (net.Conn, error) {
+		return proxychain.Chain{Layers: layers}.Dial(ctx, addr)
+	}, nil
+}
+
+// ProxyChainDialContext resolves an asset proxy chain into a standard DialContext.
+// A nil function means direct connection. Resolution failures must be returned to
+// the caller instead of being downgraded to a direct connection.
+func ProxyChainDialContext(ctx context.Context, chain *asset_entity.ProxyChainConfig) (func(context.Context, string, string) (net.Conn, error), error) {
+	dial, err := chainDialFunc(ctx, chain)
+	if err != nil || dial == nil {
+		return nil, err
+	}
+	return func(ctx context.Context, _ string, addr string) (net.Conn, error) {
+		return dial(ctx, addr)
+	}, nil
 }
 
 // wrapTLSClient 在自定义底层连接上手动完成 TLS 握手。

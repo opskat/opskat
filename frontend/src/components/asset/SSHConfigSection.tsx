@@ -31,6 +31,7 @@ import {
   SSH_DEFAULTS,
   type SSHFormState,
 } from "./SSHConfigSection.config";
+import { proxyChainValidationKey, resolveSaveProxyChainSecrets } from "./proxyConfig";
 import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 
 const DEFAULT_GLOBAL_KEEPALIVE_SECONDS = 30;
@@ -54,7 +55,9 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
         : { ...SSH_DEFAULTS, keepAliveIntervalSeconds: DEFAULT_GLOBAL_KEEPALIVE_SECONDS },
     validate: (s) => {
       const ok = !!s.host.trim();
-      return { canTest: ok, canSave: ok, saveDisabledReason: ok ? "" : "asset.formMissingHost" };
+      const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
+      const canUse = ok && !proxyChainError;
+      return { canTest: canUse, canSave: canUse, saveDisabledReason: ok ? proxyChainError : "asset.formMissingHost" };
     },
     build: async (s, ctx) => {
       // password-auth 凭据加密;passphrase / proxy 密码:明文优先加密,否则沿用既有密文。
@@ -63,12 +66,14 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
         ? await ctx.encryptPassword(s.privateKeyPassphrase)
         : s.encryptedPrivateKeyPassphrase;
       const proxyPassword = s.proxyPassword ? await ctx.encryptPassword(s.proxyPassword) : s.encryptedProxyPassword;
+      const proxyChainSecrets = await resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword);
       return {
         configJSON: buildSSHConfig(s, {
           passwordCred,
           keyCredentialId: s.credentialId,
           passphrase,
           proxyPassword,
+          proxyChainSecrets,
           includeJumpHost: false, // save:隧道写 asset 顶层 sshTunnelId,不入 config.jump_host_id
         }),
         sshTunnelId: s.connectionType === "jumphost" && s.sshTunnelId > 0 ? s.sshTunnelId : 0,
@@ -82,6 +87,9 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
         keyCredentialId: s.credentialId,
         passphrase: s.privateKeyPassphrase || s.encryptedPrivateKeyPassphrase,
         proxyPassword: s.proxyPassword,
+        proxyChainSecrets: Object.fromEntries(
+          s.proxyChainLayers.map((layer) => [layer.id, { password: layer.password, token: layer.token }])
+        ),
         includeJumpHost: true,
       }),
       password: cred.value.password,

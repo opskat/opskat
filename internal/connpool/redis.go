@@ -23,7 +23,10 @@ func DialRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity
 		return nil, nil, err
 	}
 
-	tunnel := configureRedisTransport(opts, asset, cfg, sshPool)
+	tunnel, err := configureRedisTransport(opts, asset, cfg, sshPool)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	client := redis.NewClient(opts)
 	if pingErr := client.Ping(ctx).Err(); pingErr != nil {
@@ -49,7 +52,7 @@ func DialRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity
 // configureRedisTransport 按 隧道 > 代理 > 直连 设置 opts.Dialer,返回隧道(可为 nil)。
 // go-redis 设置自定义 Dialer 后默认 dialer 的 TLS 逻辑被绕过,因此把 TLSConfig
 // 移入 dialer 内手动包裹并清空 opts.TLSConfig,避免 TLS 静默失效。
-func configureRedisTransport(opts *redis.Options, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig, sshPool *sshpool.Pool) *SSHTunnel {
+func configureRedisTransport(opts *redis.Options, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig, sshPool *sshpool.Pool) (*SSHTunnel, error) {
 	var tunnel *SSHTunnel
 	var dial dialContextFunc
 	tunnelID := asset.SSHTunnelID
@@ -57,17 +60,23 @@ func configureRedisTransport(opts *redis.Options, asset *asset_entity.Asset, cfg
 		tunnelID = cfg.SSHAssetID // backward compat
 	}
 	switch {
+	case cfg.ProxyChain != nil:
+		var err error
+		dial, err = chainDialFunc(context.Background(), cfg.ProxyChain)
+		if err != nil {
+			return nil, err
+		}
 	case tunnelID > 0 && sshPool != nil:
 		tunnel = NewSSHTunnel(tunnelID, cfg.Host, cfg.Port, sshPool)
 		dial = tunnelDialFunc(tunnel)
 	case cfg.Proxy != nil:
 		dial = proxyDialFunc(cfg.Proxy)
 	default:
-		return nil
+		return nil, nil
 	}
 	opts.Dialer = tlsWrappedDialFunc(dial, opts.TLSConfig)
 	opts.TLSConfig = nil
-	return tunnel
+	return tunnel, nil
 }
 
 func buildRedisOptions(cfg *asset_entity.RedisConfig, password string) (*redis.Options, error) {

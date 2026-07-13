@@ -27,7 +27,9 @@ describe("RedisConfigSection ref 契约", () => {
     expect(built).toEqual({
       configJSON:
         '{"host":"127.0.0.1","port":6379,"username":"u","password":"OLD","database":2,' +
-        '"tls":true,"tls_insecure":true,"command_timeout_seconds":30,"scan_page_size":200}',
+        '"tls":true,"tls_insecure":true,' +
+        '"proxy_chain":{"layers":[{"id":"legacy-ssh-9","name":"SSH Tunnel","enabled":true,"type":"ssh","order":1,"ssh_asset_id":9}]},' +
+        '"command_timeout_seconds":30,"scan_page_size":200}',
       sshTunnelId: 9,
     });
     // test:无 asset 行 → config 末尾带 ssh_asset_id(锁旧 handleTestRedisConnection)。
@@ -36,7 +38,9 @@ describe("RedisConfigSection ref 契约", () => {
       assetType: "redis",
       configJSON:
         '{"host":"127.0.0.1","port":6379,"username":"u","password":"OLD","database":2,' +
-        '"tls":true,"tls_insecure":true,"command_timeout_seconds":30,"scan_page_size":200,"ssh_asset_id":9}',
+        '"tls":true,"tls_insecure":true,' +
+        '"proxy_chain":{"layers":[{"id":"legacy-ssh-9","name":"SSH Tunnel","enabled":true,"type":"ssh","order":1,"ssh_asset_id":9}]},' +
+        '"command_timeout_seconds":30,"scan_page_size":200,"ssh_asset_id":9}',
       password: "",
     });
   });

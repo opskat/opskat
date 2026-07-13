@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opskat/opskat/internal/connpool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 )
@@ -266,7 +267,7 @@ func (s *Service) withKafkaConnect(ctx context.Context, assetID int64, clusterNa
 	if err != nil {
 		return fmt.Errorf("解析 Kafka Connect 凭据失败: %w", err)
 	}
-	client, err := newKafkaConnectClient(&cluster, resolvedName, password, kafkaTimeout(cfg, defaultKafkaOperationTimeout))
+	client, err := newKafkaConnectClient(&cluster, resolvedName, password, kafkaTimeout(cfg, defaultKafkaOperationTimeout), cfg.ProxyChain)
 	if err != nil {
 		return err
 	}
@@ -299,8 +300,8 @@ func selectKafkaConnectCluster(cfg *asset_entity.KafkaConfig, name string) (asse
 	return asset_entity.KafkaConnectClusterConfig{}, "", fmt.Errorf("kafka connect cluster 不存在: %s", name)
 }
 
-func newKafkaConnectClient(cfg *asset_entity.KafkaConnectClusterConfig, cluster string, password string, timeout time.Duration) (*kafkaConnectClient, error) {
-	httpClient, err := kafkaConnectHTTPClient(cfg, timeout)
+func newKafkaConnectClient(cfg *asset_entity.KafkaConnectClusterConfig, cluster string, password string, timeout time.Duration, chains ...*asset_entity.ProxyChainConfig) (*kafkaConnectClient, error) {
+	httpClient, err := kafkaConnectHTTPClient(cfg, timeout, chains...)
 	if err != nil {
 		return nil, err
 	}
@@ -314,8 +315,15 @@ func newKafkaConnectClient(cfg *asset_entity.KafkaConnectClusterConfig, cluster 
 	}, nil
 }
 
-func kafkaConnectHTTPClient(cfg *asset_entity.KafkaConnectClusterConfig, timeout time.Duration) (*http.Client, error) {
+func kafkaConnectHTTPClient(cfg *asset_entity.KafkaConnectClusterConfig, timeout time.Duration, chains ...*asset_entity.ProxyChainConfig) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if len(chains) > 0 && chains[0] != nil {
+		dial, err := connpool.ProxyChainDialContext(context.Background(), chains[0])
+		if err != nil {
+			return nil, fmt.Errorf("解析 Kafka 代理链失败: %w", err)
+		}
+		transport.DialContext = dial
+	}
 	tlsConfig, err := kafkaConnectTLSConfig(cfg)
 	if err != nil {
 		return nil, err

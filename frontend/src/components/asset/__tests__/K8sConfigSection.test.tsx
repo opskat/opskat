@@ -60,7 +60,9 @@ describe("K8sConfigSection ref 契約", () => {
     render(<K8sConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
     const result = await ref.current!.buildConfig(ctx);
     expect(result).toEqual({
-      configJSON: '{"kubeconfig":"OLD_CIPHER","namespace":"ns","context":"ctx"}',
+      configJSON:
+        '{"kubeconfig":"OLD_CIPHER","namespace":"ns","context":"ctx",' +
+        '"proxy_chain":{"layers":[{"id":"legacy-ssh-7","name":"SSH Tunnel","enabled":true,"type":"ssh","order":1,"ssh_asset_id":7}]}}',
       sshTunnelId: 7,
     });
   });

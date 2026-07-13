@@ -1,7 +1,14 @@
 import { useTranslation } from "react-i18next";
 import type { DetailInfoCardProps } from "@/lib/assetTypes/types";
-import type { ProxyConfigJSON } from "../proxyConfig";
-import { DetailGrid, DetailSection, InfoItem, ProxyDetailSection, TunnelInfo } from "./InfoItem";
+import type { ProxyConfigJSON, ProxyChainJSON } from "../proxyConfig";
+import {
+  DetailGrid,
+  DetailSection,
+  InfoItem,
+  ProxyChainDetailSection,
+  ProxyDetailSection,
+  TunnelInfo,
+} from "./InfoItem";
 import { ENABLED_VALUE, MASKED_SECRET, parseDetailConfig } from "./utils";
 
 interface RedisConfig {
@@ -13,6 +20,7 @@ interface RedisConfig {
   tls?: boolean;
   ssh_asset_id?: number;
   proxy?: ProxyConfigJSON | null;
+  proxy_chain?: ProxyChainJSON | null;
 }
 
 export function RedisDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProps) {
@@ -35,6 +43,7 @@ export function RedisDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProp
         {tunnelName && <TunnelInfo label={t("asset.sshTunnel")} name={tunnelName} />}
       </DetailSection>
       <ProxyDetailSection proxy={cfg.proxy} />
+      <ProxyChainDetailSection chain={cfg.proxy_chain} resolveSshName={sshTunnelName} />
     </>
   );
 }

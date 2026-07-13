@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opskat/opskat/internal/connpool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 )
@@ -184,15 +185,15 @@ func (s *Service) withSchemaRegistry(ctx context.Context, assetID int64, fn func
 	if err != nil {
 		return fmt.Errorf("解析 Schema Registry 凭据失败: %w", err)
 	}
-	client, err := newSchemaRegistryClient(&schemaCfg, password, kafkaTimeout(cfg, defaultKafkaOperationTimeout))
+	client, err := newSchemaRegistryClient(&schemaCfg, password, kafkaTimeout(cfg, defaultKafkaOperationTimeout), cfg.ProxyChain)
 	if err != nil {
 		return err
 	}
 	return fn(ctx, client, asset, cfg)
 }
 
-func newSchemaRegistryClient(cfg *asset_entity.KafkaSchemaRegistryConfig, password string, timeout time.Duration) (*schemaRegistryClient, error) {
-	httpClient, err := schemaRegistryHTTPClient(cfg, timeout)
+func newSchemaRegistryClient(cfg *asset_entity.KafkaSchemaRegistryConfig, password string, timeout time.Duration, chains ...*asset_entity.ProxyChainConfig) (*schemaRegistryClient, error) {
+	httpClient, err := schemaRegistryHTTPClient(cfg, timeout, chains...)
 	if err != nil {
 		return nil, err
 	}
@@ -205,8 +206,15 @@ func newSchemaRegistryClient(cfg *asset_entity.KafkaSchemaRegistryConfig, passwo
 	}, nil
 }
 
-func schemaRegistryHTTPClient(cfg *asset_entity.KafkaSchemaRegistryConfig, timeout time.Duration) (*http.Client, error) {
+func schemaRegistryHTTPClient(cfg *asset_entity.KafkaSchemaRegistryConfig, timeout time.Duration, chains ...*asset_entity.ProxyChainConfig) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if len(chains) > 0 && chains[0] != nil {
+		dial, err := connpool.ProxyChainDialContext(context.Background(), chains[0])
+		if err != nil {
+			return nil, fmt.Errorf("解析 Kafka 代理链失败: %w", err)
+		}
+		transport.DialContext = dial
+	}
 	tlsConfig, err := schemaRegistryTLSConfig(cfg)
 	if err != nil {
 		return nil, err

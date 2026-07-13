@@ -1,9 +1,11 @@
 import type { CredentialFragment } from "./credentialConfig";
 import {
   CONNECTION_DEFAULTS,
+  buildProxyChainJSON,
   buildProxyJSON,
   parseConnectionFields,
   type ConnectionFormFields,
+  type ProxyChainJSON,
   type ProxyConfigJSON,
 } from "./proxyConfig";
 
@@ -49,6 +51,7 @@ interface EtcdConfig {
   command_timeout_seconds?: number;
   ssh_asset_id?: number;
   proxy?: ProxyConfigJSON;
+  proxy_chain?: ProxyChainJSON;
 }
 
 /** 端点文本→数组(镜像旧 save/test/etcdEndpointsList 三处一致切分)。 */
@@ -64,7 +67,12 @@ export function parseEtcdEndpoints(raw: string): string[] {
  * cred 由 resolveSave/TestCredential 预解析;proxyPassword 由 resolveSaveProxyPassword
  * (save=密文)或 state.proxyPassword(test=明文)预解析。隧道与代理互斥,按 connectionType 二选一。
  */
-export function buildEtcdConfig(state: EtcdFormState, cred: CredentialFragment, proxyPassword = ""): string {
+export function buildEtcdConfig(
+  state: EtcdFormState,
+  cred: CredentialFragment,
+  proxyPassword = "",
+  proxyChainSecrets?: Record<string, { password?: string; token?: string }>
+): string {
   const cfg: EtcdConfig = { endpoints: parseEtcdEndpoints(state.endpoints) };
   if (state.username) cfg.username = state.username;
   if (cred.credential_id) cfg.credential_id = cred.credential_id;
@@ -80,6 +88,8 @@ export function buildEtcdConfig(state: EtcdFormState, cred: CredentialFragment, 
   if (state.connectionType === "jumphost" && state.sshTunnelId > 0) cfg.ssh_asset_id = state.sshTunnelId;
   const proxy = buildProxyJSON(state, proxyPassword);
   if (proxy) cfg.proxy = proxy;
+  const proxyChain = buildProxyChainJSON(state.proxyChainLayers, proxyChainSecrets);
+  if (proxyChain) cfg.proxy_chain = proxyChain;
   return JSON.stringify(cfg);
 }
 
@@ -99,7 +109,7 @@ export function parseEtcdConfig(configJSON: string, assetTunnelId = 0): EtcdForm
       tlsKeyFile: cfg.tls_key_file || "",
       dialTimeoutSeconds: cfg.dial_timeout_seconds || 5,
       commandTimeoutSeconds: cfg.command_timeout_seconds || 10,
-      ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0),
+      ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0, cfg.proxy_chain),
     };
   } catch {
     return { ...ETCD_DEFAULTS };
