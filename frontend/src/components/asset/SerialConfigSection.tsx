@@ -1,11 +1,11 @@
-import { forwardRef, useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { RefreshCw } from "lucide-react";
 import { Field } from "@/components/asset/fields";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { ListSerialPorts } from "../../../wailsjs/go/serial/Serial";
-import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import {
   buildSerialConfig,
   parseSerialConfig,
@@ -31,13 +31,13 @@ const PARITY_OPTIONS = ["none", "odd", "even", "mark", "space"];
 // 因为 go.bug.st/serial v1.6.4 自身不暴露这条配置，而 nativeOpen 会强制关闭它。
 const FLOW_CONTROL_OPTIONS = ["none", "hardware"];
 
-export const SerialConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function SerialConfigSection(
-  { editAsset, onValidityChange },
-  ref
-) {
+export function SerialConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
   const { t } = useTranslation();
   const [ports, setPorts] = useState<SerialPortInfo[]>([]);
-  const [loadingPorts, setLoadingPorts] = useState(false);
+  // 挂载即拉取端口列表,loading 初值直接为 true
+  const [loadingPorts, setLoadingPorts] = useState(true);
+  // 刷新计数:刷新按钮 bump 触发下方 effect 重新拉取
+  const [portsFetchToken, setPortsFetchToken] = useState(0);
   const [customMode, setCustomMode] = useState(false);
   const { state, patch } = useConfigSection<SerialFormState>({
     ref,
@@ -52,31 +52,33 @@ export const SerialConfigSection = forwardRef<AssetFormHandle, ConfigSectionProp
     buildTest: async (s) => ({ assetType: "serial", configJSON: buildSerialConfig(s), password: "" }),
   });
 
-  const fetchPorts = useCallback(async () => {
-    setLoadingPorts(true);
-    try {
-      const list = await ListSerialPorts();
-      setPorts(list || []);
-    } catch {
-      setPorts([]);
-    } finally {
-      setLoadingPorts(false);
-    }
-  }, []);
-
   useEffect(() => {
-    fetchPorts();
-  }, [fetchPorts]);
+    const fetchPorts = async () => {
+      try {
+        const list = await ListSerialPorts();
+        setPorts(list || []);
+      } catch {
+        setPorts([]);
+      } finally {
+        setLoadingPorts(false);
+      }
+    };
+    void fetchPorts();
+  }, [portsFetchToken]);
+
+  // 刷新按钮：事件路径先置 loading，再 bump token 让上面的 effect 重新拉取
+  const refreshPorts = () => {
+    setLoadingPorts(true);
+    setPortsFetchToken((n) => n + 1);
+  };
 
   // 已保存的端口在当前列表里没出现时（设备拔走、跨平台路径等），自动切到手动输入模式，
   // 让用户能看到原值。注意：这里只单向"开"不"关"——一旦进入手动模式就保留，
   // 用户主动从下拉里选了某个端口才会通过 handlePortSelect 切回非手动模式。
-  // 这样刷新串口列表不会把正在编辑的内容覆盖掉。
-  useEffect(() => {
-    if (state.portPath && !ports.some((p) => p.name === state.portPath)) {
-      setCustomMode(true);
-    }
-  }, [ports, state.portPath]);
+  // 这样刷新串口列表不会把正在编辑的内容覆盖掉。（渲染期单向 latch，自终止）
+  if (!customMode && state.portPath && !ports.some((p) => p.name === state.portPath)) {
+    setCustomMode(true);
+  }
 
   const selectValue = customMode ? CUSTOM_PORT : state.portPath;
 
@@ -100,7 +102,7 @@ export const SerialConfigSection = forwardRef<AssetFormHandle, ConfigSectionProp
               variant="ghost"
               size="sm"
               className="-my-1 h-6 px-2 text-xs"
-              onClick={fetchPorts}
+              onClick={refreshPorts}
               disabled={loadingPorts}
             >
               <RefreshCw className={`h-3 w-3 mr-1 ${loadingPorts ? "animate-spin" : ""}`} />
@@ -216,4 +218,4 @@ export const SerialConfigSection = forwardRef<AssetFormHandle, ConfigSectionProp
       </div>
     </div>
   );
-});
+}

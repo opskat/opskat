@@ -9,7 +9,7 @@ import type {
 } from "@/lib/assetTypes/formContract";
 
 export interface UseConfigSectionOptions<S> {
-  ref: Ref<AssetFormHandle>;
+  ref: Ref<AssetFormHandle> | undefined;
   editAsset?: asset_entity.Asset;
   onValidityChange: (v: SectionValidity) => void;
   /** parse(editAsset) 或 {...DEFAULTS}。 */

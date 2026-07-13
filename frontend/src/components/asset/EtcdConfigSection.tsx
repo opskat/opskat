@@ -1,4 +1,3 @@
-import { forwardRef } from "react";
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
@@ -12,7 +11,7 @@ import {
   ETCD_DEFAULTS,
   type EtcdFormState,
 } from "./EtcdConfigSection.config";
-import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 
 const ETCD_GROUPS: ConfigGroupSchema<EtcdFormState>[] = [
   {
@@ -84,10 +83,7 @@ const ETCD_GROUPS: ConfigGroupSchema<EtcdFormState>[] = [
   },
 ];
 
-export const EtcdConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function EtcdConfigSection(
-  { editAsset, onValidityChange },
-  ref
-) {
+export function EtcdConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
   const cred = useAssetCredential(editAsset);
   const { state, patch } = useConfigSection<EtcdFormState>({
     ref,
@@ -130,4 +126,4 @@ export const EtcdConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>
 
   const groups = buildConfigGroups(ETCD_GROUPS, { state, patch, ctx: { cred, editAsset } });
   return <ConfigTabs groups={groups} />;
-});
+}

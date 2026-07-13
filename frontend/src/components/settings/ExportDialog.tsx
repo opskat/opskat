@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
@@ -88,28 +88,35 @@ export function ExportDialog({
   const [exporting, setExporting] = useState(false);
   const requiresPassword = mode !== "file" || includeCredentials;
 
-  // Reset state when dialog opens
-  useEffect(() => {
-    if (!open) return;
-    setSelectionMode("all");
-    setSelectedIds([]);
-    if (mode === "webdav" && webDAVDefaults?.configured) {
-      setIncludeCredentials(webDAVDefaults.includeCredentials);
-      setIncludeForwards(webDAVDefaults.includeForwards);
-      setIncludePolicyGroups(webDAVDefaults.includePolicyGroups);
-      setIncludeShortcuts(webDAVDefaults.includeShortcuts);
-      setIncludeThemes(webDAVDefaults.includeThemes);
-      setPassword(webDAVDefaults.password);
-    } else {
-      setIncludeCredentials(false);
-      setIncludeForwards(true);
-      setIncludePolicyGroups(true);
-      setIncludeShortcuts(false);
-      setIncludeThemes(false);
-      setPassword("");
+  // Reset state when dialog opens:渲染期对比上次值,等价于原 [mode, open, webDAVDefaults] effect
+  const [prevSync, setPrevSync] = useState<{
+    open: boolean;
+    mode?: "file" | "gist" | "webdav";
+    webDAVDefaults?: WebDAVExportDefaults;
+  }>({ open: false });
+  if (open !== prevSync.open || mode !== prevSync.mode || webDAVDefaults !== prevSync.webDAVDefaults) {
+    setPrevSync({ open, mode, webDAVDefaults });
+    if (open) {
+      setSelectionMode("all");
+      setSelectedIds([]);
+      if (mode === "webdav" && webDAVDefaults?.configured) {
+        setIncludeCredentials(webDAVDefaults.includeCredentials);
+        setIncludeForwards(webDAVDefaults.includeForwards);
+        setIncludePolicyGroups(webDAVDefaults.includePolicyGroups);
+        setIncludeShortcuts(webDAVDefaults.includeShortcuts);
+        setIncludeThemes(webDAVDefaults.includeThemes);
+        setPassword(webDAVDefaults.password);
+      } else {
+        setIncludeCredentials(false);
+        setIncludeForwards(true);
+        setIncludePolicyGroups(true);
+        setIncludeShortcuts(false);
+        setIncludeThemes(false);
+        setPassword("");
+      }
+      setShowPassword(false);
     }
-    setShowPassword(false);
-  }, [mode, open, webDAVDefaults]);
+  }
 
   const selectAll = () => setSelectedIds(assets.map((a) => a.ID));
   const selectNone = () => setSelectedIds([]);

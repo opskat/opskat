@@ -43,9 +43,29 @@ export function TerminalSearchBar({
     }
   }, [visible, searchAddon]);
 
+  // 新搜索请求时回填输入框:渲染期对比上次值(键覆盖下方 effect 的全部依赖),
+  // 替代 effect 里的同步 setState;SearchAddon 副作用仍留在下面的 effect。
+  const [prevSeed, setPrevSeed] = useState<{
+    visible: boolean;
+    initialQuery: string | null | undefined;
+    initialQueryToken: number | undefined;
+    searchAddon: SearchAddon | null;
+  } | null>(null);
+  if (
+    prevSeed === null ||
+    prevSeed.visible !== visible ||
+    prevSeed.initialQuery !== initialQuery ||
+    prevSeed.initialQueryToken !== initialQueryToken ||
+    prevSeed.searchAddon !== searchAddon
+  ) {
+    setPrevSeed({ visible, initialQuery, initialQueryToken, searchAddon });
+    if (visible && initialQuery != null) {
+      setQuery(initialQuery);
+    }
+  }
+
   useEffect(() => {
     if (!visible || initialQuery == null) return;
-    setQuery(initialQuery);
     if (!searchAddon) return;
     if (!initialQuery) {
       searchAddon.clearDecorations();
@@ -101,8 +121,14 @@ export function TerminalSearchBar({
     [doSearch, onClose]
   );
 
-  // 切换搜索选项时重新搜索
+  // 切换搜索选项时重新搜索。挂载时跳过:原实现靠"query 在挂载 commit 时还是空串"来跳过
+  // 首次执行,现在 query 在渲染期回填,须显式对比上次选项,仅在选项真正变化后重搜。
+  const prevOptionsRef = useRef<{ caseSensitive: boolean; wholeWord: boolean; regex: boolean } | null>(null);
   useEffect(() => {
+    const prev = prevOptionsRef.current;
+    prevOptionsRef.current = { caseSensitive, wholeWord, regex };
+    if (prev === null) return;
+    if (prev.caseSensitive === caseSensitive && prev.wholeWord === wholeWord && prev.regex === regex) return;
     if (visible && query) {
       doSearch("next");
     }

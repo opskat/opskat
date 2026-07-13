@@ -504,7 +504,7 @@ export function AIChatContent({
   }
 
   return (
-    <CompactContext.Provider value={compact}>
+    <CompactContext value={compact}>
       <div className="flex h-full flex-col" data-compact={compact}>
         {/* Messages */}
         <ScrollArea ref={scrollAreaRef} className="flex-1 min-h-0 overflow-hidden">
@@ -651,7 +651,7 @@ export function AIChatContent({
           </AlertDialogContent>
         </AlertDialog>
       </div>
-    </CompactContext.Provider>
+    </CompactContext>
   );
 }
 

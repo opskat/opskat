@@ -1,4 +1,4 @@
-import { memo, useEffect, useImperativeHandle, useMemo, useRef, forwardRef, type MutableRefObject } from "react";
+import { memo, useEffect, useImperativeHandle, useMemo, useRef, type Ref, type RefObject } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import Document from "@tiptap/extension-document";
 import HardBreak from "@tiptap/extension-hard-break";
@@ -28,13 +28,21 @@ export interface AIChatInputProps {
   placeholder?: string;
   disabled?: boolean;
   /** 仅用于测试：暴露 TipTap editor 以便测试代码直接操作富文本。 */
-  editorRef?: MutableRefObject<Editor | null>;
+  editorRef?: RefObject<Editor | null>;
+  ref?: Ref<AIChatInputHandle>;
 }
 
-const AIChatInputComponent = forwardRef<AIChatInputHandle, AIChatInputProps>(function AIChatInput(
-  { onSubmit, onEmptyChange, onDraftChange, sendOnEnter, userMessageHistory = [], placeholder, disabled, editorRef },
-  ref
-) {
+function AIChatInputComponent({
+  onSubmit,
+  onEmptyChange,
+  onDraftChange,
+  sendOnEnter,
+  userMessageHistory = [],
+  placeholder,
+  disabled,
+  editorRef,
+  ref,
+}: AIChatInputProps) {
   const submitRef = useRef(onSubmit);
   const sendOnEnterRef = useRef(sendOnEnter);
   const onEmptyChangeRef = useRef(onEmptyChange);
@@ -204,6 +212,6 @@ const AIChatInputComponent = forwardRef<AIChatInputHandle, AIChatInputProps>(fun
   );
 
   return <EditorContent editor={editor} />;
-});
+}
 
 export const AIChatInput = memo(AIChatInputComponent) as typeof AIChatInputComponent;

@@ -1,4 +1,4 @@
-import { useContext } from "react";
+import { use } from "react";
 import { useTranslation } from "react-i18next";
 import { X } from "lucide-react";
 import {
@@ -43,7 +43,7 @@ export function SideTabItem({
   onClose,
 }: SideTabItemProps) {
   const { t } = useTranslation();
-  const ctx = useContext(SideTabDragContext);
+  const ctx = use(SideTabDragContext);
   if (!ctx) throw new Error("SideTabItem must be inside SideTabDragContext");
   const dragProps = useTabDragAndDrop(tab.id, ctx);
   const globalIndex = ctx.tabs.findIndex((x) => x.id === tab.id);

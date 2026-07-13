@@ -89,7 +89,6 @@ export function CodeEditor({
 
   useEffect(() => {
     let cancelled = false;
-    setMonacoLoadError(null);
     import("@/lib/monaco-setup")
       .then(({ setupMonaco }) => {
         setupMonaco();
@@ -103,7 +102,9 @@ export function CodeEditor({
     };
   }, [loadAttempt]);
 
+  // 重试是唯一会带着旧错误重跑加载的路径：在事件里先清错误，再 bump loadAttempt 触发重新 import
   const handleRetryLoad = useCallback(() => {
+    setMonacoLoadError(null);
     setLoadAttempt((n) => n + 1);
   }, []);
 

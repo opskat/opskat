@@ -178,8 +178,9 @@ transient `opskat.db-journal` appears mid-write. Read it **without ever writing 
 >   may see `database is locked` — just retry, or query a copy / a stopped app.
 > - **Never** open it read-write, run a second writer, or hand-edit rows. Schema is
 >   owned by the migrations in `/migrations/`; manual edits drift it.
-> - **Credentials are encrypted** (Argon2id + AES-256-GCM, master key in the OS
->   keychain). The `credentials` table holds ciphertext — do not expect plaintext, and
+> - **Credentials are encrypted** (Argon2id + AES-256-GCM; the master key is resolved
+>   from explicit configuration, the OS keychain, or the protected data-dir key file).
+>   The `credentials` table holds ciphertext — do not expect plaintext, and
 >   do not try to decrypt it for debugging.
 > - To inspect a *quiet, stopped* app you can query `opskat.db` directly, or copy it
 >   first (`cp "$DB" /tmp/`) and query the copy — in `delete` mode the single file is the
@@ -189,8 +190,8 @@ transient `opskat.db-journal` appears mid-write. Read it **without ever writing 
 
 | Table | What it records | Notable columns |
 |-------|-----------------|-----------------|
-| `audit_logs` | **Every operation** (AI / opsctl / desktop). Primary verification surface. | `source`, `tool_name`, `asset_id`/`asset_name`, `command`, `request`, `result`, `error`, `success` (1/0), `decision`, `decision_source`, `session_id`, `grant_session_id`, `conversation_id`, `createtime` |
-| `assets` | Connection assets (ssh/database/redis/mongodb/kafka/k8s/serial/etcd) | `name`, `type`, `group_id`, `config` (JSON), `command_policy`, `status` (1=active, 2=deleted) |
+| `audit_logs` | Operations explicitly wired into the audit pipeline: AI/opsctl tool calls and specific audited desktop flows such as external edit. It does **not** represent every UI interaction (for example, interactive RDP and object-browser activity is not automatically a row per action). | `source`, `tool_name`, `asset_id`/`asset_name`, `command`, `request`, `result`, `error`, `success` (1/0), `decision`, `decision_source`, `session_id`, `grant_session_id`, `conversation_id`, `createtime` |
+| `assets` | Built-in and extension assets. Enumerate built-ins from `internal/assettype/*.go`; the current registry spans terminal, remote-desktop, database, middleware, and object-storage types. | `name`, `type`, `group_id`, `config` (JSON), `command_policy`, `status` (1=active, 2=deleted) |
 | `credentials` | Encrypted secrets (ciphertext only) | — |
 | `groups` | Asset groups (tree) | `name`, `parent_id` |
 | `policy_groups` | Command/operation policies | — |
@@ -266,10 +267,12 @@ Environment toggles for the desktop app:
 
 ## 6. Headless functional testing with `opsctl`
 
-`opsctl` is the standalone CLI that drives the **same service layer** as the desktop
-app for asset operations. It is the realistic way for an agent to exercise SSH / SQL /
-Redis / Mongo / file / extension features without a GUI, then verify via logs and
-`audit_logs`.
+`opsctl` is the standalone CLI for headless asset operations. It shares the app's asset,
+credential, policy, audit, connection-pool, and approval infrastructure where the command
+supports it. It is the realistic way for an agent to exercise SSH / SQL / Redis / Mongo /
+file / extension features without a GUI, then verify via logs and `audit_logs`. Interactive
+RDP sessions and the built-in OSS browser do not currently have dedicated opsctl operation
+commands.
 
 ```bash
 make install-cli         # install opsctl to GOPATH/bin

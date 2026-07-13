@@ -36,7 +36,9 @@ export interface AssetTypeDefinition {
   category: AssetTypeCategory;
   canConnect: boolean;
   canConnectInNewTab: boolean;
-  connectAction: "terminal" | "query";
+  connectAction: "terminal" | "query" | "page";
+  pageId?: string;
+  pageIcon?: string;
   /** 是否在右键菜单暴露 SFTP 文件管理动作(替代 AssetTree 的 `asset.Type === "ssh"` 特例);缺省 = 不暴露。 */
   canOpenFileManager?: boolean;
   DetailInfoCard: ComponentType<DetailInfoCardProps>;

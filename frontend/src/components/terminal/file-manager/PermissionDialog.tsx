@@ -72,9 +72,20 @@ export function PermissionDialog({ sessionId, target, onClose, onSaved }: Permis
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 打开/切换目标时清空错误:渲染期对比上次 sessionId/target,替代 effect 里的同步 setState
+  const [prevFetchKey, setPrevFetchKey] = useState<{ sessionId: string; target: PermissionTarget | null }>({
+    sessionId,
+    target: null,
+  });
+  if (sessionId !== prevFetchKey.sessionId || target !== prevFetchKey.target) {
+    setPrevFetchKey({ sessionId, target });
+    if (target) {
+      setError(null);
+    }
+  }
+
   useEffect(() => {
     if (!target) return;
-    setError(null);
     SFTPProperties(sessionId, target.path)
       .then((next) => {
         setProps(next);

@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
+import { useEffect, useImperativeHandle, useState, type Ref } from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -89,18 +89,17 @@ function dispatchScroll(viewport: HTMLElement) {
 }
 
 vi.mock("@/components/ai/AIChatInput", () => ({
-  AIChatInput: forwardRef(function MockAIChatInput(
-    {
-      onSubmit,
-      onEmptyChange,
-      onDraftChange,
-    }: {
-      onSubmit: (content: string) => void;
-      onEmptyChange?: (empty: boolean) => void;
-      onDraftChange?: (draft: { content: string }) => void;
-    },
-    ref
-  ) {
+  AIChatInput: function MockAIChatInput({
+    onSubmit,
+    onEmptyChange,
+    onDraftChange,
+    ref,
+  }: {
+    onSubmit: (content: string) => void;
+    onEmptyChange?: (empty: boolean) => void;
+    onDraftChange?: (draft: { content: string }) => void;
+    ref?: Ref<unknown>;
+  }) {
     const [value, setValue] = useState("");
 
     useEffect(() => {
@@ -138,7 +137,7 @@ vi.mock("@/components/ai/AIChatInput", () => ({
         </button>
       </div>
     );
-  }),
+  },
 }));
 
 describe("AIChatContent", () => {

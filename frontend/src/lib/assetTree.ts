@@ -1,7 +1,7 @@
 import { createElement, useMemo, type ReactNode } from "react";
 import { Folder, Server } from "lucide-react";
 import type { TreeNode } from "@opskat/ui";
-import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
+import { EntityIcon } from "@/components/asset/AssetIcon";
 import { useAssetStore } from "@/stores/assetStore";
 import type { asset_entity, group_entity } from "../../wailsjs/go/models";
 
@@ -9,9 +9,7 @@ const ICON_CLASS = "h-3.5 w-3.5 shrink-0 text-muted-foreground";
 
 /** Render the icon node for an entity that carries an optional `Icon` field (e.g. asset or group). */
 function renderEntityIcon(icon: string | undefined, fallback: typeof Server): ReactNode {
-  const Component = icon ? getIconComponent(icon) : fallback;
-  const style = icon ? { color: getIconColor(icon) } : undefined;
-  return createElement(Component, { className: ICON_CLASS, style });
+  return createElement(EntityIcon, { icon, fallback, className: ICON_CLASS });
 }
 
 /** Default placeholder icon shown in the AssetSelect trigger when no asset is selected. */
@@ -23,8 +21,7 @@ export const defaultGroupIcon: ReactNode = createElement(Folder, { className: IC
  * Build a TreeNode[] from assets + groups. Groups become non-selectable containers
  * (with negated IDs to avoid colliding with asset IDs); ungrouped assets are root-level.
  * Empty groups (no matching descendant assets) are pruned. Each node's icon is derived
- * from its entity's `Icon` field (via getIconComponent/getIconColor) with a fallback
- * to Server / Folder when no icon is configured.
+ * from its entity's `Icon` field (via EntityIcon) with a fallback to Server / Folder.
  */
 export function buildAssetTree(
   assets: asset_entity.Asset[],

@@ -19,7 +19,7 @@ interface ContextMenuContextValue {
 const ContextMenuCtx = React.createContext<ContextMenuContextValue | null>(null);
 
 function useCtx() {
-  const ctx = React.useContext(ContextMenuCtx);
+  const ctx = React.use(ContextMenuCtx);
   if (!ctx) throw new Error("ContextMenu components must be used within ContextMenu");
   return ctx;
 }
@@ -50,7 +50,7 @@ function ContextMenu({
     [open, position, handleOpenChange]
   );
 
-  return <ContextMenuCtx.Provider value={ctx}>{children}</ContextMenuCtx.Provider>;
+  return <ContextMenuCtx value={ctx}>{children}</ContextMenuCtx>;
 }
 
 function ContextMenuTrigger({
@@ -120,14 +120,17 @@ function ContextMenuContent({
     setVisible(true);
   }, [ctx.open, ctx.position, alignToStylePosition, styleProp]);
 
+  // Reset visibility/interactivity when closed — render-phase self-terminating
+  // guard (both states are only ever set true while open, so this settles in one pass).
+  if (!ctx.open && (visible || interactive)) {
+    setVisible(false);
+    setInteractive(false);
+  }
+
   // Enable pointer events after delay to prevent right-click release from
   // accidentally triggering menu items
   React.useEffect(() => {
-    if (!ctx.open) {
-      setVisible(false);
-      setInteractive(false);
-      return;
-    }
+    if (!ctx.open) return;
     const timer = setTimeout(() => setInteractive(true), 150);
     return () => clearTimeout(timer);
   }, [ctx.open]);

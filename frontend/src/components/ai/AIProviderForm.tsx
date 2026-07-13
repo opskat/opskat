@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Button,
@@ -105,15 +105,16 @@ export function AIProviderForm({
   // OpenAI 的 hint 区分模型是否支持 reasoning；Anthropic 不做模型校验，由 API 自行裁定。
   const currentModelSupportsReasoning = supportsOpenAIReasoningModel(formModel);
 
-  // 切到非 Anthropic 时，max 档不再可见，降级到 high 避免 Select 显示空值。
-  useEffect(() => {
-    if (formType !== "anthropic" && formReasoningEffort === "max") {
-      setFormReasoningEffort("high");
-    }
-  }, [formType, formReasoningEffort]);
+  // 切到非 Anthropic 时，max 档不再可见，降级到 high 避免 Select 显示空值。（渲染期修正，自终止）
+  if (formType !== "anthropic" && formReasoningEffort === "max") {
+    setFormReasoningEffort("high");
+  }
 
   // When external providerType prop changes (wizard card click), reset relevant fields
-  useEffect(() => {
+  // 渲染期对比上次 externalType/t，替代 effect 里的级联 setState。
+  const [prevReset, setPrevReset] = useState<{ externalType?: "openai" | "anthropic"; t?: typeof t }>({});
+  if (externalType !== prevReset.externalType || t !== prevReset.t) {
+    setPrevReset({ externalType, t });
     if (externalType) {
       setFormType(externalType);
       setFormName(externalType === "anthropic" ? "Anthropic" : t("setup.openAICompatible"));
@@ -125,7 +126,7 @@ export function AIProviderForm({
       setFormReasoningEffort("none");
       setModelOptions([]);
     }
-  }, [externalType, t]);
+  }
 
   const filteredModels = modelOptions.filter((m) => m.id.toLowerCase().includes(modelSearch.toLowerCase()));
 

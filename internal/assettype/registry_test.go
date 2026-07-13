@@ -101,3 +101,17 @@ func TestRegisterSkipsEmptyKind(t *testing.T) {
 		convey.So(ok, convey.ShouldBeFalse)
 	})
 }
+
+func TestRDPHasNoPolicy(t *testing.T) {
+	convey.Convey("RDP 只建立远程桌面会话，不声明命令策略或权限组", t, func() {
+		h, ok := Get(asset_entity.AssetTypeRDP)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(h.DefaultPolicy(), convey.ShouldBeNil)
+		convey.So(h.PolicyKind(), convey.ShouldBeEmpty)
+
+		_, ok = policyent.AssetKindOf(asset_entity.AssetTypeRDP)
+		convey.So(ok, convey.ShouldBeFalse)
+		_, ok = policyent.GetDefaultPolicyOf(asset_entity.AssetTypeRDP)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+}

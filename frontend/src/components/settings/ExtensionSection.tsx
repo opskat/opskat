@@ -81,7 +81,10 @@ export function ExtensionSection() {
   };
 
   useEffect(() => {
-    loadExtensions();
+    // 挂载时拉取:加载体的 setState 均在 await 之后,经 async 边界调用避免 effect 内同步 setState
+    void (async () => {
+      await loadExtensions();
+    })();
   }, []);
 
   const handleReload = async () => {

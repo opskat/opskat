@@ -24,7 +24,7 @@ export default function App() {
   ];
 
   return (
-    <LanguageContext.Provider value={languageState}>
+    <LanguageContext value={languageState}>
       <div className="h-screen flex flex-col bg-background text-foreground">
         <header className="border-b px-4 py-2 flex items-center gap-4">
           <h1 className="text-lg font-semibold">OpsKat DevServer</h1>
@@ -62,6 +62,6 @@ export default function App() {
           {activeTab === "extension" && <ExtensionPanel />}
         </main>
       </div>
-    </LanguageContext.Provider>
+    </LanguageContext>
   );
 }

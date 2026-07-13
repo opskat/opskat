@@ -6,7 +6,6 @@ import { EtcdTreePane } from "@/components/etcd/EtcdTreePane";
 import { EtcdQueryBar } from "@/components/etcd/EtcdQueryBar";
 import { EtcdResultTable } from "@/components/etcd/EtcdResultTable";
 import { EtcdKeyDetail } from "@/components/etcd/EtcdKeyDetail";
-import { EtcdClusterBar } from "@/components/etcd/EtcdClusterBar";
 import { useEtcdStore } from "@/stores/etcdStore";
 
 export interface EtcdPanelProps {
@@ -105,8 +104,6 @@ export function EtcdPanel({ tabId }: EtcdPanelProps) {
 
   return (
     <div className="flex h-full w-full flex-col" data-testid="etcd-panel">
-      <EtcdClusterBar assetId={assetId} />
-
       <div className="flex min-h-0 flex-1">
         {/* Left: KV tree */}
         <div ref={sidebarRef} className="shrink-0 border-r" style={{ width: sidebarWidth }}>
@@ -128,7 +125,7 @@ export function EtcdPanel({ tabId }: EtcdPanelProps) {
               className={`px-3 ${view === "tree" ? "bg-background" : "text-muted-foreground hover:bg-background/50"}`}
               onClick={() => setView("tree")}
             >
-              {t("etcd.tree.title")}
+              {t("etcd.view.kv")}
             </button>
             <button
               role="tab"

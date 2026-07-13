@@ -1,4 +1,3 @@
-import { forwardRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Eye, EyeOff } from "lucide-react";
 import { Button, Textarea } from "@opskat/ui";
@@ -8,12 +7,9 @@ import { useConfigSection } from "@/components/asset/useConfigSection";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
 import { buildK8sConfig, parseK8sConfig, K8S_DEFAULTS, type K8sFormState } from "./K8sConfigSection.config";
-import type { AssetFormHandle, ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 
-export const K8sConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(function K8sConfigSection(
-  { editAsset, onValidityChange },
-  ref
-) {
+export function K8sConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
   const { t } = useTranslation();
   const isEditing = !!editAsset;
   const kubeconfigPlaceholder = isEditing
@@ -105,4 +101,4 @@ export const K8sConfigSection = forwardRef<AssetFormHandle, ConfigSectionProps>(
 
   const groups = buildConfigGroups(K8S_GROUPS, { state, patch, ctx: { editAsset } });
   return <ConfigTabs groups={groups} />;
-});
+}

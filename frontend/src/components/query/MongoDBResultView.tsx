@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight, ChevronsLeft, RefreshCw, Loader2 } from "lucide-react";
 import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
@@ -75,9 +75,12 @@ export function MongoDBResultView({
 
   const currentPage = Math.floor(skip / limit) + 1;
   const [pageInput, setPageInput] = useState(String(currentPage));
-  useEffect(() => {
+  // 外部翻页(skip/limit 变化)时同步页码输入框:渲染期对比上次值,替代 effect 里的同步 setState。
+  const [prevPage, setPrevPage] = useState(currentPage);
+  if (currentPage !== prevPage) {
+    setPrevPage(currentPage);
     setPageInput(String(currentPage));
-  }, [currentPage]);
+  }
 
   const hasPrev = skip > 0;
   // Total is unknown for MongoDB find — treat a short page as "no next".

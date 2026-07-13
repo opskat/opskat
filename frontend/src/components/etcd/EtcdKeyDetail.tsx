@@ -191,12 +191,33 @@ export function EtcdKeyDetail({
   const [historyItems, setHistoryItems] = useState<etcd_svc.EtcdKV[]>([]);
   const historyContainerRef = useRef<HTMLDivElement | null>(null);
 
+  // 拉取参数变化(含首次挂载)时在渲染期复位 loading/err/detail,对比键覆盖拉取 effect 的全部依赖
+  const [prevFetch, setPrevFetch] = useState<{
+    assetId: number;
+    selectedKey: string | null;
+    exec: typeof exec;
+    t: typeof t;
+    revision: number;
+  } | null>(null);
+  if (
+    prevFetch === null ||
+    prevFetch.assetId !== assetId ||
+    prevFetch.selectedKey !== selectedKey ||
+    prevFetch.exec !== exec ||
+    prevFetch.t !== t ||
+    prevFetch.revision !== revision
+  ) {
+    setPrevFetch({ assetId, selectedKey, exec, t, revision });
+    if (selectedKey) {
+      setLoading(true);
+      setErr("");
+      setDetail(null);
+    }
+  }
+
   useEffect(() => {
     if (!selectedKey) return;
     let cancelled = false;
-    setLoading(true);
-    setErr("");
-    setDetail(null);
     exec(buildGetRequest(assetId, selectedKey, revision))
       .then((res) => {
         if (cancelled) return;
@@ -218,14 +239,16 @@ export function EtcdKeyDetail({
     };
   }, [assetId, selectedKey, exec, t, revision]);
 
-  // 切换 key 时复位状态
-  useEffect(() => {
+  // 切换 key 时复位状态:渲染期对比上次 selectedKey,替代 effect 里的同步 setState
+  const [prevSelectedKey, setPrevSelectedKey] = useState(selectedKey);
+  if (selectedKey !== prevSelectedKey) {
+    setPrevSelectedKey(selectedKey);
     setRevision(0);
     setHistoryOpen(false);
     setHistoryItems([]);
     setEditing(false);
     setEditValue("");
-  }, [selectedKey]);
+  }
 
   // outside-click 关 history dropdown
   useEffect(() => {

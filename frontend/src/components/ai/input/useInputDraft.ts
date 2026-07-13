@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, type MutableRefObject } from "react";
+import { useCallback, useEffect, useRef, type RefObject } from "react";
 import type { Editor } from "@tiptap/react";
 import { extractContentXml } from "./content";
 import type { AIChatInputDraft, ProseMirrorLikeNode } from "./types";
 
 const DRAFT_CHANGE_THROTTLE_MS = 120;
 
-export function useInputDraftSync(onDraftChangeRef: MutableRefObject<((draft: AIChatInputDraft) => void) | undefined>) {
+export function useInputDraftSync(onDraftChangeRef: RefObject<((draft: AIChatInputDraft) => void) | undefined>) {
   const pendingEditorRef = useRef<Editor | null>(null);
   const draftPendingRef = useRef(false);
   const draftFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);

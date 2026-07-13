@@ -1,4 +1,4 @@
-import { createContext, useContext, useRef } from "react";
+import { createContext, use, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { X, MessageSquare, Server, Folder } from "lucide-react";
 import { useTabDragAndDrop } from "@/hooks/useTabDragAndDrop";
@@ -58,7 +58,7 @@ function TabItem({
   indicatorColor,
 }: TabItemProps) {
   const { t } = useTranslation();
-  const { tabs, dragKeyRef, reorder, moveTo } = useContext(TabBarContext);
+  const { tabs, dragKeyRef, reorder, moveTo } = use(TabBarContext);
   const dragProps = useTabDragAndDrop(tabKey, { dragKeyRef, reorder });
   const noTabStyle = { "--wails-draggable": "no-drag" } as React.CSSProperties;
   const globalIndex = tabs.findIndex((tab) => tab.id === tabKey);
@@ -278,7 +278,7 @@ export function TopTabBar() {
   }
 
   return (
-    <TabBarContext.Provider value={tabBarCtx}>
+    <TabBarContext value={tabBarCtx}>
       <div
         data-top-tabbar
         className="flex items-center border-b overflow-hidden bg-background"
@@ -294,6 +294,6 @@ export function TopTabBar() {
           </div>
         </TabFilterPopover>
       </div>
-    </TabBarContext.Provider>
+    </TabBarContext>
   );
 }

@@ -17,7 +17,7 @@ func assetTools() []tool.Tool {
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
-					"asset_type": {Type: "string", Description: `Filter by asset type. Supported: "ssh", "serial", "database", "redis", "mongodb", "kafka", "k8s". Omit to return all types.`},
+					"asset_type": {Type: "string", Description: `Filter by asset type. Supported: "ssh", "serial", "rdp", "database", "redis", "mongodb", "kafka", "k8s", "etcd". Omit to return all types.`},
 					"group_id":   {Type: "number", Description: "Filter by group ID. Omit or set to 0 to list all groups."},
 				},
 			},
@@ -31,7 +31,7 @@ func assetTools() []tool.Tool {
 		},
 		&tool.RawTool{
 			NameStr: "get_asset",
-			DescStr: "Get detailed information about a specific asset, including SSH connection fields and asset-type-specific metadata. For k8s assets, inspect namespace, context, and ssh_tunnel_id to decide whether kubectl should run through an SSH jump host.",
+			DescStr: "Get detailed information about a specific asset, including connection fields and asset-type-specific metadata. For k8s assets, inspect namespace, context, and ssh_tunnel_id to decide whether kubectl should run through an SSH jump host. For rdp assets, inspect host, port, username, domain, width, height, and clipboard.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
@@ -49,16 +49,16 @@ func assetTools() []tool.Tool {
 		},
 		&tool.RawTool{
 			NameStr: "add_asset",
-			DescStr: `Add a new asset to the inventory. Supports types: "ssh", "serial", "database", "redis", "mongodb", "kafka", "k8s". For database, specify driver ("mysql" or "postgresql"). For k8s, specify kubeconfig. For kafka, specify brokers (comma-separated) plus optional sasl_mechanism / tls. For serial (COM/TTY console), specify port_path + baud_rate (no host/port/username/credentials). Credentials (password / private_key) are stored encrypted; never echo them back to the user.`,
+			DescStr: `Add a new asset to the inventory. Supports types: "ssh", "serial", "rdp", "database", "redis", "mongodb", "kafka", "k8s", "etcd". For RDP, specify host + username plus optional port/domain/width/height/clipboard. For database, specify driver ("mysql" or "postgresql"). For k8s, specify kubeconfig. For kafka, specify brokers (comma-separated) plus optional sasl_mechanism / tls. For serial (COM/TTY console), specify port_path + baud_rate (no host/port/username/credentials). Credentials (password / private_key) are stored encrypted; never echo them back to the user.`,
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
 					"name":           {Type: "string", Description: "Display name for the asset."},
-					"type":           {Type: "string", Description: `Asset type: "ssh" (default), "serial", "database", "redis", "mongodb", "kafka", or "k8s".`},
+					"type":           {Type: "string", Description: `Asset type: "ssh" (default), "serial", "rdp", "database", "redis", "mongodb", "kafka", "k8s", or "etcd".`},
 					"host":           {Type: "string", Description: "Hostname or IP address. Required except for serial / k8s / kafka (kafka uses brokers, but host+port falls back to a single broker)."},
-					"port":           {Type: "number", Description: "Port number (default: 22 for SSH, 3306 for MySQL, 5432 for PostgreSQL, 6379 for Redis, 27017 for MongoDB, 9092 for Kafka). Not used for serial / k8s; for kafka used only when brokers is omitted."},
-					"username":       {Type: "string", Description: "Login username. Required for ssh/database/redis/mongodb; optional for kafka (only when SASL is configured); not used for serial."},
-					"password":       {Type: "string", Description: "Plaintext password. Stored encrypted by the app. For SSH password auth, database/redis/mongodb, or kafka SASL auth."},
+					"port":           {Type: "number", Description: "Port number (default: 22 for SSH, 3389 for RDP, 3306 for MySQL, 5432 for PostgreSQL, 6379 for Redis, 27017 for MongoDB, 9092 for Kafka, 2379 for etcd). Not used for serial / k8s; for kafka used only when brokers is omitted."},
+					"username":       {Type: "string", Description: "Login username. Required for ssh/rdp/database/redis/mongodb; optional for kafka (only when SASL is configured); not used for serial."},
+					"password":       {Type: "string", Description: "Plaintext password. Stored encrypted by the app. For SSH/RDP password auth, database/redis/mongodb, or kafka SASL auth."},
 					"auth_type":      {Type: "string", Description: `SSH auth method: "password" (default if password supplied) or "key" (default if private_key supplied). Only for SSH type.`},
 					"private_key":    {Type: "string", Description: "SSH private key in PEM format. Imported into the credential store and linked to the asset. SSH only."},
 					"passphrase":     {Type: "string", Description: "Passphrase for the SSH private key, if encrypted. SSH only."},
@@ -81,6 +81,10 @@ func assetTools() []tool.Tool {
 					"stop_bits":      {Type: "string", Description: `Serial stop bits: "1" (default), "1.5", or "2". Serial only.`},
 					"parity":         {Type: "string", Description: `Serial parity: "none" (default), "odd", "even", "mark", or "space". Serial only.`},
 					"flow_control":   {Type: "string", Description: `Serial flow control: "none" (default) or "hardware" (RTS/CTS). Serial only.`},
+					"domain":         {Type: "string", Description: "Windows domain for RDP logon. RDP only; omit for local accounts."},
+					"width":          {Type: "number", Description: "Initial RDP desktop width in pixels. RDP only; defaults to 1280."},
+					"height":         {Type: "number", Description: "Initial RDP desktop height in pixels. RDP only; defaults to 720."},
+					"clipboard":      {Type: "string", Description: `Set to "true"/"false" to enable RDP clipboard redirection. RDP only; defaults to true.`},
 					"group_id":       {Type: "number", Description: "Group ID to assign this asset to."},
 					"description":    {Type: "string", Description: "Optional description or notes."},
 				},
@@ -125,6 +129,10 @@ func assetTools() []tool.Tool {
 					"stop_bits":      {Type: "string", Description: `New serial stop bits ("1" / "1.5" / "2"). Serial only.`},
 					"parity":         {Type: "string", Description: `New serial parity ("none" / "odd" / "even" / "mark" / "space"). Serial only.`},
 					"flow_control":   {Type: "string", Description: `New serial flow control ("none" / "hardware"). Serial only.`},
+					"domain":         {Type: "string", Description: "New Windows domain. RDP only; pass empty string to clear."},
+					"width":          {Type: "number", Description: "New initial RDP desktop width. RDP only."},
+					"height":         {Type: "number", Description: "New initial RDP desktop height. RDP only."},
+					"clipboard":      {Type: "string", Description: `Set to "true"/"false" to toggle RDP clipboard redirection. RDP only.`},
 					"description":    {Type: "string", Description: "New description. Pass empty string to clear."},
 					"group_id":       {Type: "number", Description: "New group ID (must be a positive integer from list_groups). Omit to keep current group; values <= 0 are ignored. To remove an asset from its group, ask the user to do it in the UI."},
 					"icon":           {Type: "string", Description: "New icon name."},
