@@ -141,6 +141,7 @@ export function TreeSelect({
   const containerRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<{ top?: number; bottom?: number; left: number; width: number } | null>(null);
 
   const displayLabel = value === 0 ? placeholder : findLabel(nodes, value) || placeholder;
@@ -185,6 +186,22 @@ export function TreeSelect({
       window.removeEventListener("resize", updatePosition);
     };
   }, [open, updatePosition]);
+
+  // The dropdown is portaled to <body>, i.e. outside a modal dialog's content. Radix Dialog's
+  // react-remove-scroll preventDefaults native wheel outside its lock, which would otherwise
+  // leave this list unscrollable. Drive the scroll manually (and preventDefault to avoid a
+  // double-scroll when no such lock exists). Attached non-passively so preventDefault applies.
+  useEffect(() => {
+    const el = listRef.current;
+    if (!open || !el) return;
+    const onWheel = (e: WheelEvent) => {
+      el.scrollTop += e.deltaY * (e.deltaMode === 1 ? 16 : 1);
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [open]);
 
   // Close dropdown when clicking outside the trigger or the portaled dropdown.
   useEffect(() => {
@@ -243,7 +260,7 @@ export function TreeSelect({
                 />
               </div>
             )}
-            <div className="max-h-[200px] overflow-y-auto">
+            <div ref={listRef} data-slot="tree-select-list" className="max-h-[200px] overflow-y-auto">
               {/* Zero-value / placeholder option */}
               {placeholder && !search && (
                 <div

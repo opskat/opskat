@@ -24,6 +24,19 @@ describe("TreeSelect", () => {
     expect(document.body.contains(searchInput)).toBe(true);
   });
 
+  it("drives its own wheel scrolling so the list scrolls even under a dialog scroll-lock", () => {
+    const nodes = Array.from({ length: 40 }, (_, i) => ({ id: i + 1, label: `Node ${i + 1}` }));
+    const { getByRole } = render(<TreeSelect value={0} onValueChange={() => {}} nodes={nodes} placeholder="none" />);
+    fireEvent.click(getByRole("button"));
+    const list = document.querySelector('[data-slot="tree-select-list"]') as HTMLElement | null;
+    expect(list).not.toBeNull();
+    // A wheel over the list must be handled (defaultPrevented) so react-remove-scroll's
+    // native-scroll block does not leave the portaled dropdown unscrollable.
+    const ev = new WheelEvent("wheel", { deltaY: 60, bubbles: true, cancelable: true });
+    list!.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
   it("keeps the dropdown open when interacting inside it, and selects an item", () => {
     let picked = -1;
     const { getByRole, getByText } = render(
