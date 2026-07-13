@@ -243,6 +243,10 @@ export function TreeSelect({
               left: position.left,
               width: position.width,
               minWidth: "200px",
+              // Radix modal dialogs set body { pointer-events: none } while open; as a body
+              // child this dropdown would inherit it and turn hit-test transparent (wheel and
+              // clicks falling through to the dialog behind). Re-enable explicitly.
+              pointerEvents: "auto",
             }}
             onWheel={(e) => e.stopPropagation()}
           >

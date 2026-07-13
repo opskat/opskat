@@ -37,6 +37,25 @@ describe("TreeSelect", () => {
     expect(ev.defaultPrevented).toBe(true);
   });
 
+  it("re-enables pointer events on the dropdown so it stays interactive under a modal dialog", () => {
+    // Radix modal dialogs set body { pointer-events: none } while open. The dropdown is a
+    // direct child of <body>, so without an explicit pointer-events of its own it inherits
+    // none and turns hit-test transparent: wheel/click land on the dialog form behind it.
+    document.body.style.pointerEvents = "none";
+    try {
+      const { getByRole } = render(
+        <TreeSelect value={0} onValueChange={() => {}} nodes={[{ id: 1, label: "Node A" }]} placeholder="none" />
+      );
+      fireEvent.click(getByRole("button"));
+      const list = document.querySelector('[data-slot="tree-select-list"]') as HTMLElement;
+      const dropdown = list.parentElement as HTMLElement;
+      expect(dropdown.parentElement).toBe(document.body);
+      expect(getComputedStyle(dropdown).pointerEvents).toBe("auto");
+    } finally {
+      document.body.style.pointerEvents = "";
+    }
+  });
+
   it("keeps the dropdown open when interacting inside it, and selects an item", () => {
     let picked = -1;
     const { getByRole, getByText } = render(
