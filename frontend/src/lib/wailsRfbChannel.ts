@@ -56,7 +56,7 @@ export class WailsRfbChannel {
   }
 
   send(data: ArrayBuffer | ArrayBufferView): void {
-    void WriteRemoteDesktop(this.sessionId, toBase64(data));
+    WriteRemoteDesktop(this.sessionId, toBase64(data)).catch(console.error);
   }
 
   // 由面板在 new RFB() 之后调用一次:置 open 并触发 onopen。attach 已同步跑完并以
