@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -130,4 +131,12 @@ func TestSchemaRegistryClientHelpers(t *testing.T) {
 	client := &schemaRegistryClient{authType: "bearer", username: "token"}
 	require.NoError(t, client.applyAuth(req))
 	assert.Equal(t, "Bearer token", req.Header.Get("Authorization"))
+}
+
+func TestSchemaRegistryHTTPClientUsesAssetProxyChain(t *testing.T) {
+	enabled := true
+	_, err := schemaRegistryHTTPClient(&asset_entity.KafkaSchemaRegistryConfig{}, time.Second, &asset_entity.ProxyChainConfig{Layers: []asset_entity.ProxyChainLayer{{
+		Type: asset_entity.ProxyChainLayerSOCKS5, Enabled: &enabled, Port: 1080,
+	}}})
+	require.ErrorContains(t, err, "SOCKS5")
 }

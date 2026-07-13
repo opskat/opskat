@@ -26,7 +26,7 @@ func newIntegrationAdapter(t *testing.T) (Client, string) {
 		AccessKeyID:  os.Getenv("MINIO_ACCESS_KEY"),
 		UsePathStyle: true,
 	}
-	mc, err := connpool.DialOSS(cfg, os.Getenv("MINIO_SECRET_KEY"))
+	mc, err := connpool.DialOSS(context.Background(), cfg, os.Getenv("MINIO_SECRET_KEY"))
 	require.NoError(t, err)
 	return newMinioAdapter(mc), os.Getenv("MINIO_BUCKET")
 }

@@ -168,7 +168,7 @@ func DialEtcd(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.
 	var tunnel *SSHTunnel
 	tunnelID := etcdTunnelID(asset, cfg)
 	if cfg.ProxyChain != nil {
-		dial, err := chainDialFunc(cfg.ProxyChain)
+		dial, err := chainDialFunc(ctx, cfg.ProxyChain)
 		if err != nil {
 			return nil, nil, err
 		}

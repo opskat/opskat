@@ -14,6 +14,7 @@ type ExtAssetType struct {
 	ExtensionName string
 	ConfigSchema  map[string]any
 	I18n          I18nName
+	ProxyChain    bool
 }
 
 // ExtPolicyGroup represents an extension-provided policy group.
@@ -64,6 +65,7 @@ func (b *Bridge) Register(ext *Extension) {
 			ExtensionName: ext.Name,
 			ConfigSchema:  at.ConfigSchema,
 			I18n:          at.I18n,
+			ProxyChain:    at.ProxyChain,
 		})
 		if ext.SkillMD != "" {
 			if existing, ok := b.skillMDs[at.Type]; ok && existing.ExtensionName != ext.Name {

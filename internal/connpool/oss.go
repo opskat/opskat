@@ -20,7 +20,7 @@ import (
 )
 
 // buildMinioOptions 从 OSS 配置 + 解密后的密钥推导 minio 端点与选项(纯函数,单测)。
-func buildMinioOptions(cfg *asset_entity.OSSConfig, secret string) (string, *minio.Options, error) {
+func buildMinioOptions(ctx context.Context, cfg *asset_entity.OSSConfig, secret string) (string, *minio.Options, error) {
 	endpoint := strings.TrimSpace(cfg.Endpoint)
 	if endpoint == "" {
 		return "", nil, fmt.Errorf("oss endpoint is empty")
@@ -47,6 +47,13 @@ func buildMinioOptions(cfg *asset_entity.OSSConfig, secret string) (string, *min
 		transport.DialContext = (&net.Dialer{Timeout: timeout}).DialContext
 		transport.TLSHandshakeTimeout = timeout
 	}
+	if cfg.ProxyChain != nil {
+		dial, err := ProxyChainDialContext(ctx, cfg.ProxyChain)
+		if err != nil {
+			return "", nil, fmt.Errorf("resolve oss proxy chain: %w", err)
+		}
+		transport.DialContext = dial
+	}
 	if cfg.SkipTLSVerify {
 		// explicit user setting for private S3-compatible endpoints (gosec G402 is excluded project-wide)
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
@@ -61,8 +68,8 @@ func buildMinioOptions(cfg *asset_entity.OSSConfig, secret string) (string, *min
 }
 
 // DialOSS 新建一个 minio 客户端(HTTP 客户端,无需显式 Close)。
-func DialOSS(cfg *asset_entity.OSSConfig, secret string) (*minio.Client, error) {
-	endpoint, opts, err := buildMinioOptions(cfg, secret)
+func DialOSS(ctx context.Context, cfg *asset_entity.OSSConfig, secret string) (*minio.Client, error) {
+	endpoint, opts, err := buildMinioOptions(ctx, cfg, secret)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +96,7 @@ func GetOrDialOSS(ctx context.Context, assetID int64, cfg *asset_entity.OSSConfi
 		logger.Ctx(ctx).Info("oss connection open end", zap.Int64("assetId", assetID), zap.Bool("cached", true))
 		return c, nil
 	}
-	c, err := DialOSS(cfg, secret)
+	c, err := DialOSS(ctx, cfg, secret)
 	if err != nil {
 		logger.Ctx(ctx).Error("oss connection open fail", zap.Int64("assetId", assetID), zap.Error(err))
 		return nil, err

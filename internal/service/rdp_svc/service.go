@@ -148,7 +148,10 @@ func (s *Service) Connect(ctx context.Context, req ConnectRequest) (string, erro
 	)
 
 	opts := clientOptions(cfg, password, width, height)
-	opts.DialContext = connpool.RDPDialContext(asset.SSHTunnelID, cfg, s.pool)
+	opts.DialContext, err = connpool.RDPDialContext(ctx, asset.SSHTunnelID, cfg, s.pool)
+	if err != nil {
+		return "", fmt.Errorf("resolve RDP proxy chain: %w", err)
+	}
 
 	client, err := rdp.NewClient(opts)
 	if err != nil {
@@ -300,7 +303,11 @@ func (s *Service) TestConfig(ctx context.Context, cfg *asset_entity.RDPConfig, p
 	)
 
 	opts := testClientOptions(cfg, password, width, height)
-	opts.DialContext = connpool.RDPDialContext(cfg.SSHAssetID, cfg, s.pool)
+	var err error
+	opts.DialContext, err = connpool.RDPDialContext(ctx, cfg.SSHAssetID, cfg, s.pool)
+	if err != nil {
+		return fmt.Errorf("resolve RDP proxy chain: %w", err)
+	}
 	client, err := rdp.NewClient(opts)
 	if err != nil {
 		return fmt.Errorf("create RDP client: %w", err)

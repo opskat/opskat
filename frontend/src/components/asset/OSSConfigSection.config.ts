@@ -1,4 +1,11 @@
 import type { CredentialFragment } from "./credentialConfig";
+import {
+  buildProxyChainJSON,
+  CONNECTION_DEFAULTS,
+  parseConnectionFields,
+  type ConnectionFormFields,
+  type ProxyChainJSON,
+} from "./proxyConfig";
 
 /** 与后端 asset_entity.OSSConfig 一一对应的 JSON 形状(snake_case)。secret_access_key/credential_id 由凭据层写入。 */
 interface OSSConfigJSON {
@@ -13,10 +20,11 @@ interface OSSConfigJSON {
   skip_tls_verify?: boolean;
   connect_timeout?: number;
   part_size_mb?: number;
+  proxy_chain?: ProxyChainJSON;
 }
 
 /** 表单态:非机密字段;机密(secret/托管凭证)留在 useAssetCredential,不在此。 */
-export interface OSSFormState {
+export interface OSSFormState extends ConnectionFormFields {
   provider: string;
   endpoint: string;
   region: string;
@@ -38,6 +46,7 @@ export const OSS_DEFAULTS: OSSFormState = {
   skipTLSVerify: false,
   connectTimeout: 0,
   partSizeMB: 0,
+  ...CONNECTION_DEFAULTS,
 };
 
 interface OSSProviderDefinition {
@@ -134,7 +143,11 @@ export function ossCredentialFragment(configJSON: string): CredentialFragment {
 }
 
 /** 序列化:按后端结构体字段序写键;空/false/0 一律省略,use_ssl 例外(默认开,始终写显式布尔)。 */
-export function buildOSSConfig(state: OSSFormState, cred: CredentialFragment): string {
+export function buildOSSConfig(
+  state: OSSFormState,
+  cred: CredentialFragment,
+  proxyChainSecrets: Record<string, { password?: string; token?: string }> = {}
+): string {
   const cfg: OSSConfigJSON = {};
   if (state.provider) cfg.provider = state.provider;
   if (state.endpoint) cfg.endpoint = state.endpoint;
@@ -147,6 +160,8 @@ export function buildOSSConfig(state: OSSFormState, cred: CredentialFragment): s
   if (state.skipTLSVerify) cfg.skip_tls_verify = true;
   if (state.connectTimeout > 0) cfg.connect_timeout = state.connectTimeout;
   if (state.partSizeMB > 0) cfg.part_size_mb = state.partSizeMB;
+  const proxyChain = buildProxyChainJSON(state.proxyChainLayers || [], proxyChainSecrets);
+  if (proxyChain) cfg.proxy_chain = proxyChain;
   return JSON.stringify(cfg);
 }
 
@@ -164,6 +179,7 @@ export function parseOSSConfig(configJSON: string): OSSFormState {
       skipTLSVerify: cfg.skip_tls_verify || false,
       connectTimeout: cfg.connect_timeout || 0,
       partSizeMB: cfg.part_size_mb || 0,
+      ...parseConnectionFields(undefined, 0, cfg.proxy_chain),
     };
   } catch {
     return { ...OSS_DEFAULTS };

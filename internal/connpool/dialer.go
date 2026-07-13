@@ -30,8 +30,8 @@ func proxyDialFunc(p *asset_entity.ProxyConfig) dialContextFunc {
 	}
 }
 
-func chainDialFunc(chain *asset_entity.ProxyChainConfig) (dialContextFunc, error) {
-	layers, err := credential_resolver.Default().ResolveProxyChain(context.Background(), chain, 5)
+func chainDialFunc(ctx context.Context, chain *asset_entity.ProxyChainConfig) (dialContextFunc, error) {
+	layers, err := credential_resolver.Default().ResolveProxyChain(ctx, chain, 5)
 	if err != nil {
 		return nil, err
 	}
@@ -40,6 +40,19 @@ func chainDialFunc(chain *asset_entity.ProxyChainConfig) (dialContextFunc, error
 	}
 	return func(ctx context.Context, addr string) (net.Conn, error) {
 		return proxychain.Chain{Layers: layers}.Dial(ctx, addr)
+	}, nil
+}
+
+// ProxyChainDialContext resolves an asset proxy chain into a standard DialContext.
+// A nil function means direct connection. Resolution failures must be returned to
+// the caller instead of being downgraded to a direct connection.
+func ProxyChainDialContext(ctx context.Context, chain *asset_entity.ProxyChainConfig) (func(context.Context, string, string) (net.Conn, error), error) {
+	dial, err := chainDialFunc(ctx, chain)
+	if err != nil || dial == nil {
+		return nil, err
+	}
+	return func(ctx context.Context, _ string, addr string) (net.Conn, error) {
+		return dial(ctx, addr)
 	}, nil
 }
 

@@ -9,6 +9,7 @@ import {
 } from "@/components/asset/OSSConfigSection.config";
 
 const FULL: OSSFormState = {
+  ...OSS_DEFAULTS,
   provider: "minio",
   endpoint: "http://localhost:9000",
   region: "us-east-1",

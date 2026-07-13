@@ -55,9 +55,13 @@ func (k *K8s) loadK8sCall(ctx context.Context, assetID int64) (*k8sCallContext, 
 	if err != nil {
 		return nil, fmt.Errorf("decrypt kubeconfig: %w", err)
 	}
+	opts, err := k.k8sClientOptions(ctx, asset, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("resolve K8S proxy chain: %w", err)
+	}
 	return &k8sCallContext{
 		kubeconfig: kubeconfig,
-		opts:       k.k8sClientOptions(asset, cfg),
+		opts:       opts,
 	}, nil
 }
 
@@ -184,17 +188,21 @@ func (k *K8s) StopK8sPodLogs(streamID string) {
 	}
 }
 
-func (k *K8s) k8sClientOptions(asset *asset_entity.Asset, cfg *asset_entity.K8sConfig) []k8spkg.ClientOption {
+func (k *K8s) k8sClientOptions(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.K8sConfig) ([]k8spkg.ClientOption, error) {
 	opts := make([]k8spkg.ClientOption, 0, 2)
 	if cfg.Context != "" {
 		opts = append(opts, k8spkg.WithContext(cfg.Context))
 	}
 	effectiveChain := asset_entity.EffectiveProxyChain(cfg.ProxyChain, asset.SSHTunnelID, cfg.Proxy)
-	if layers, err := credential_resolver.Default().ResolveProxyChain(context.Background(), effectiveChain, 5); err == nil && len(layers) > 0 {
+	layers, err := credential_resolver.Default().ResolveProxyChain(ctx, effectiveChain, 5)
+	if err != nil {
+		return nil, err
+	}
+	if len(layers) > 0 {
 		opts = append(opts, k8spkg.WithDial(func(ctx context.Context, _, address string) (net.Conn, error) {
 			return proxychain.Chain{Layers: layers}.Dial(ctx, address)
 		}))
-		return opts
+		return opts, nil
 	}
 
 	switch selectDialSource(asset, cfg, k.pool != nil) {
@@ -219,7 +227,7 @@ func (k *K8s) k8sClientOptions(asset *asset_entity.Asset, cfg *asset_entity.K8sC
 			return socksdial.Dial(ctx, proxy, address)
 		}))
 	}
-	return opts
+	return opts, nil
 }
 
 // dialSource 决定 K8S client 的底层拨号方式。

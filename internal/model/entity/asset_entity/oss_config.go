@@ -8,17 +8,18 @@ import (
 
 // OSSConfig 是对象存储(OSS)资产的每资产配置,序列化到 Asset.Config。
 type OSSConfig struct {
-	Provider        string `json:"provider"` // UI provider preset; connection behavior is determined by endpoint/region/addressing fields
-	Endpoint        string `json:"endpoint"` // host 或 scheme://host[:port]
-	Region          string `json:"region"`
-	AccessKeyID     string `json:"access_key_id"`
-	SecretAccessKey string `json:"secret_access_key"` // 内联时为 AES-256-GCM 密文;托管时为空
-	CredentialID    int64  `json:"credential_id"`     // >0 表示引用托管密码凭证
-	UsePathStyle    bool   `json:"use_path_style"`
-	UseSSL          bool   `json:"use_ssl"`
-	SkipTLSVerify   bool   `json:"skip_tls_verify"`
-	ConnectTimeout  int    `json:"connect_timeout"` // 秒;0 表示默认
-	PartSizeMB      int    `json:"part_size_mb"`    // 0 表示由 SDK 自动选择
+	Provider        string            `json:"provider"` // UI provider preset; connection behavior is determined by endpoint/region/addressing fields
+	Endpoint        string            `json:"endpoint"` // host 或 scheme://host[:port]
+	Region          string            `json:"region"`
+	AccessKeyID     string            `json:"access_key_id"`
+	SecretAccessKey string            `json:"secret_access_key"` // 内联时为 AES-256-GCM 密文;托管时为空
+	CredentialID    int64             `json:"credential_id"`     // >0 表示引用托管密码凭证
+	UsePathStyle    bool              `json:"use_path_style"`
+	UseSSL          bool              `json:"use_ssl"`
+	SkipTLSVerify   bool              `json:"skip_tls_verify"`
+	ConnectTimeout  int               `json:"connect_timeout"` // 秒;0 表示默认
+	PartSizeMB      int               `json:"part_size_mb"`    // 0 表示由 SDK 自动选择
+	ProxyChain      *ProxyChainConfig `json:"proxy_chain,omitempty"`
 }
 
 // GetCredentialID 实现 credential_resolver.PasswordSource。

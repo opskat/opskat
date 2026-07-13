@@ -163,7 +163,7 @@ func (s *Service) TestConnection(ctx context.Context, assetID int64) error {
 
 // TestConfig 验证一份未保存的配置(表单"测试连接")。
 func (s *Service) TestConfig(ctx context.Context, cfg *asset_entity.OSSConfig, secret string) error {
-	mc, err := connpool.DialOSS(cfg, secret)
+	mc, err := connpool.DialOSS(ctx, cfg, secret)
 	if err != nil {
 		return err
 	}
