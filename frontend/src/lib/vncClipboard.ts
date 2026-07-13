@@ -37,20 +37,27 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+/**
+ * Places `text` on the remote clipboard, or types it directly when no clipboard
+ * encoding works. Returns `true` when the text landed on the remote clipboard
+ * (the caller should follow up with Ctrl+V to paste it) and `false` when the
+ * text was typed directly via keysyms (no Ctrl+V, or it would paste stale
+ * clipboard contents on top).
+ */
 export async function pasteVNCClipboardText(
   client: VNCClipboardClient,
   text: string,
   encodeLegacy?: LegacyClipboardEncoder
-): Promise<void> {
+): Promise<boolean> {
   if (supportsExtendedTextClipboard(client) || Array.from(text).every((char) => char.codePointAt(0)! <= 0xff)) {
     client.clipboardPasteFrom(text);
-    return;
+    return true;
   }
 
   if (encodeLegacy) {
     try {
       client.clipboardPasteFrom(bytesToBinaryString(await encodeLegacy(text)));
-      return;
+      return true;
     } catch {
       // Characters outside GBK fall back to Unicode keysyms below.
     }
@@ -60,6 +67,7 @@ export async function pasteVNCClipboardText(
     client.sendKey(unicodeToKeysym(char.codePointAt(0)!), "");
     await delay(8);
   }
+  return false;
 }
 
 export function decodeVNCClipboardText(text: string): string {

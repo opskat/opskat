@@ -7,16 +7,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  AlertTriangle,
-  FolderOpen,
-  Loader2,
-  Maximize2,
-  MonitorUp,
-  PlugZap,
-  RefreshCw,
-  ScreenShare,
-} from "lucide-react";
+import { AlertTriangle, FolderOpen, Loader2, Maximize2, RefreshCw, ScreenShare } from "lucide-react";
 import { Button, ConfirmDialog } from "@opskat/ui";
 import { toast } from "sonner";
 import { asset_entity } from "../../../wailsjs/go/models";
@@ -48,7 +39,6 @@ interface RemoteDesktopSession {
   fileEnabled: boolean;
   fileStatus: string;
   status: string;
-  message?: string;
 }
 
 export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
@@ -85,7 +75,7 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
     try {
       const next = (await ConnectRemoteDesktop(asset.ID)) as RemoteDesktopSession;
       setSession(next);
-      setStatus(next.assetType === "rdp" ? "external" : "connecting");
+      setStatus("connecting");
     } catch (e) {
       const message = String(e);
       errorRef.current = message;
@@ -100,7 +90,7 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
   }, [connect]);
 
   useEffect(() => {
-    if (!session || session.assetType !== "vnc" || !session.webSocketUrl || !vncContainerRef.current) return;
+    if (!session || !session.webSocketUrl || !vncContainerRef.current) return;
     let disposed = false;
     let connectionStatePoll: number | undefined;
     const container = vncContainerRef.current;
@@ -216,9 +206,14 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
   useEffect(() => {
     return () => {
       if (session?.id) DisconnectRemoteDesktop(session.id);
+    };
+  }, [session?.id]);
+
+  useEffect(() => {
+    return () => {
       if (fileSessionId) DisconnectSSH(fileSessionId);
     };
-  }, [session?.id, fileSessionId]);
+  }, [fileSessionId]);
 
   const openFiles = async () => {
     if (!session?.fileEnabled || !session.fileSshAssetId) return;
@@ -235,8 +230,10 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
   const pasteTextToVNC = async (text: string) => {
     const rfb = rfbRef.current;
     if (!rfb || !text) return;
-    await pasteVNCClipboardText(rfb, text, EncodeVNCClipboardText);
-    if (rfbRef.current !== rfb) return;
+    const clipboardSet = await pasteVNCClipboardText(rfb, text, EncodeVNCClipboardText);
+    // When the text couldn't be placed on the remote clipboard it was typed
+    // directly via keysyms; a follow-up Ctrl+V would paste stale clipboard data.
+    if (rfbRef.current !== rfb || !clipboardSet) return;
     rfb.sendKey(0xffe3, "ControlLeft", true);
     rfb.sendKey(0x76, "KeyV", true);
     rfb.sendKey(0x76, "KeyV", false);
@@ -289,9 +286,6 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
     rfbRef.current?.disconnect();
   };
 
-  const isVNC = asset.Type === "vnc";
-  const isRDP = asset.Type === "rdp";
-
   return (
     <div className="flex h-full min-h-0 bg-background">
       <ConfirmDialog
@@ -320,25 +314,17 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
           <div className="flex min-w-0 items-center gap-2">
-            {isVNC ? (
-              <ScreenShare className="h-4 w-4 text-muted-foreground" />
-            ) : (
-              <MonitorUp className="h-4 w-4 text-muted-foreground" />
-            )}
+            <ScreenShare className="h-4 w-4 text-muted-foreground" />
             <span className="truncate text-sm font-medium">{asset.Name}</span>
             <span className="text-xs uppercase text-muted-foreground">{asset.Type}</span>
           </div>
           <div className="flex items-center gap-1.5">
-            {isVNC && (
-              <>
-                <Button variant="outline" size="sm" className="h-8" onClick={() => setScaleViewport((v) => !v)}>
-                  {scaleViewport ? t("remoteDesktop.scaleOn") : t("remoteDesktop.scaleOff")}
-                </Button>
-                <Button variant="outline" size="sm" className="h-8" onClick={pasteToVNC}>
-                  {t("remoteDesktop.pasteText")}
-                </Button>
-              </>
-            )}
+            <Button variant="outline" size="sm" className="h-8" onClick={() => setScaleViewport((v) => !v)}>
+              {scaleViewport ? t("remoteDesktop.scaleOn") : t("remoteDesktop.scaleOff")}
+            </Button>
+            <Button variant="outline" size="sm" className="h-8" onClick={pasteToVNC}>
+              {t("remoteDesktop.pasteText")}
+            </Button>
             <Button
               variant="ghost"
               size="icon"
@@ -375,24 +361,13 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
               <span>{error}</span>
             </div>
           )}
-          {isVNC && (
-            <div
-              ref={vncContainerRef}
-              tabIndex={0}
-              className="h-full w-full outline-none"
-              onKeyDownCapture={handleVNCKeyDownCapture}
-              onPaste={handleVNCPaste}
-            />
-          )}
-          {isRDP && (
-            <div className="flex h-full items-center justify-center p-6 text-center text-sm text-white/75">
-              <div className="max-w-lg rounded-md border border-white/10 bg-white/5 p-5">
-                <PlugZap className="mx-auto mb-3 h-8 w-8" />
-                <div className="font-medium text-white">{t("remoteDesktop.rdpExternalTitle")}</div>
-                <p className="mt-2 leading-6">{session?.message || t("remoteDesktop.rdpExternalDesc")}</p>
-              </div>
-            </div>
-          )}
+          <div
+            ref={vncContainerRef}
+            tabIndex={0}
+            className="h-full w-full outline-none"
+            onKeyDownCapture={handleVNCKeyDownCapture}
+            onPaste={handleVNCPaste}
+          />
         </div>
         {session && !session.fileEnabled && (
           <div className="border-t px-3 py-2 text-xs text-muted-foreground">{session.fileStatus}</div>

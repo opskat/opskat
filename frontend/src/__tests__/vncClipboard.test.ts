@@ -46,6 +46,33 @@ describe("VNC clipboard encoding", () => {
     expect(sendKey).toHaveBeenCalledTimes(6);
   });
 
+  it("reports whether the text was placed on the clipboard so the caller can gate Ctrl+V", async () => {
+    const setViaGbk = await pasteVNCClipboardText(
+      { clipboardPasteFrom: vi.fn(), sendKey: vi.fn() },
+      "中文",
+      vi.fn().mockResolvedValue([0xd6, 0xd0, 0xce, 0xc4])
+    );
+    expect(setViaGbk).toBe(true);
+
+    const setViaExtended = await pasteVNCClipboardText(
+      {
+        clipboardPasteFrom: vi.fn(),
+        sendKey: vi.fn(),
+        _clipboardServerCapabilitiesFormats: { 1: true },
+        _clipboardServerCapabilitiesActions: { [1 << 27]: true },
+      },
+      "中文"
+    );
+    expect(setViaExtended).toBe(true);
+
+    const typedDirectly = await pasteVNCClipboardText(
+      { clipboardPasteFrom: vi.fn(), sendKey: vi.fn() },
+      "😀",
+      vi.fn().mockRejectedValue(new Error("not representable in GBK"))
+    );
+    expect(typedDirectly).toBe(false);
+  });
+
   it("decodes UTF-8 bytes received through the legacy clipboard path", () => {
     const wireText = String.fromCharCode(0xe4, 0xb8, 0xad, 0xe6, 0x96, 0x87, 0x61, 0x62, 0x63);
 

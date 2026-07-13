@@ -1,7 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { asset_entity } from "../../wailsjs/go/models";
-import { ConnectRemoteDesktop, EncodeVNCClipboardText } from "../../wailsjs/go/remote_desktop/RemoteDesktop";
+import {
+  ConnectRemoteDesktop,
+  DisconnectRemoteDesktop,
+  EncodeVNCClipboardText,
+} from "../../wailsjs/go/remote_desktop/RemoteDesktop";
+import { DisconnectSSH, OpenSFTPSession } from "../../wailsjs/go/ssh/SSH";
 import { ClipboardGetText, ClipboardSetText } from "../../wailsjs/runtime";
 import { RemoteDesktopPanel } from "@/components/remote-desktop/RemoteDesktopPanel";
 
@@ -36,11 +41,26 @@ vi.mock("../../wailsjs/go/remote_desktop/RemoteDesktop", () => ({
   EncodeVNCClipboardText: vi.fn(),
 }));
 
+vi.mock("../../wailsjs/go/ssh/SSH", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../wailsjs/go/ssh/SSH")>()),
+  DisconnectSSH: vi.fn(),
+  OpenSFTPSession: vi.fn(),
+}));
+
+// The file-channel panel is exercised by its own tests; stub it here so the
+// remote-desktop session-lifecycle tests don't depend on its internals.
+vi.mock("@/components/terminal/FileManagerPanel", () => ({
+  FileManagerPanel: () => <div data-testid="file-manager" />,
+}));
+
 describe("RemoteDesktopPanel", () => {
   beforeEach(() => {
     approveServer.mockClear();
     FakeRFB.latest = undefined;
     FakeRFB.lastCredentials = undefined;
+    vi.mocked(DisconnectRemoteDesktop).mockReset();
+    vi.mocked(DisconnectSSH).mockReset();
+    vi.mocked(OpenSFTPSession).mockReset().mockResolvedValue("sftp-session");
     vi.mocked(ClipboardGetText).mockReset().mockResolvedValue("");
     vi.mocked(ClipboardSetText).mockReset().mockResolvedValue(true);
     vi.mocked(EncodeVNCClipboardText)
@@ -148,5 +168,50 @@ describe("RemoteDesktopPanel", () => {
 
     await waitFor(() => expect(FakeRFB.latest!.clipboardPasteFrom).toHaveBeenCalledTimes(1));
     expect(FakeRFB.latest!.sendKey).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not forward Ctrl+V when the text was typed directly via keysym fallback", async () => {
+    vi.mocked(ClipboardGetText).mockResolvedValue("😀");
+    vi.mocked(EncodeVNCClipboardText).mockRejectedValue(new Error("not representable in GBK"));
+    const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
+    render(<RemoteDesktopPanel tabId="remote-1" asset={asset} />);
+
+    await waitFor(() => expect(FakeRFB.latest).toBeDefined());
+    fireEvent.click(screen.getByText("remoteDesktop.pasteText"));
+
+    // The emoji is typed directly as one keysym; the extra Ctrl+V paste must never fire.
+    await waitFor(() => expect(FakeRFB.latest!.sendKey).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const pressedKeysyms = FakeRFB.latest!.sendKey.mock.calls.map((call) => call[0]);
+    expect(pressedKeysyms).not.toContain(0xffe3);
+    expect(FakeRFB.latest!.clipboardPasteFrom).not.toHaveBeenCalled();
+  });
+
+  it("keeps the live remote desktop session connected when the file panel opens", async () => {
+    vi.mocked(ConnectRemoteDesktop).mockResolvedValue({
+      id: "vnc-session",
+      assetId: 1,
+      assetType: "vnc",
+      assetName: "test-vnc",
+      webSocketUrl: "ws://127.0.0.1:12345",
+      username: "vnc-user",
+      password: "secret",
+      fileSshAssetId: 2,
+      fileEnabled: true,
+      fileStatus: "enabled",
+      status: "connecting",
+    } as never);
+    const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
+    render(<RemoteDesktopPanel tabId="remote-1" asset={asset} />);
+
+    await waitFor(() => expect(FakeRFB.latest).toBeDefined());
+    fireEvent.click(screen.getByText("remoteDesktop.files"));
+
+    // Wait until the file session has been established and committed (the panel
+    // only renders once fileSessionId is set), so the disconnect effects have run.
+    await screen.findByTestId("file-manager");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(OpenSFTPSession).toHaveBeenCalledWith(2);
+    expect(DisconnectRemoteDesktop).not.toHaveBeenCalled();
   });
 });
