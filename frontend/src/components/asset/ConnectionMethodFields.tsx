@@ -154,7 +154,7 @@ export function ConnectionMethodFields({ value, onChange, excludeIds }: Connecti
                   />
                   <button
                     type="button"
-                    className="min-w-0 flex-1 truncate text-left text-sm"
+                    className="min-w-0 flex-1 cursor-pointer truncate text-left text-sm"
                     onClick={() => setSelectedLayerId(layer.id)}
                   >
                     {layer.name || t("asset.proxyChainLayer")}
