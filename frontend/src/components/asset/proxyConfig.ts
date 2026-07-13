@@ -282,11 +282,7 @@ export function proxyChainValidationKey(layers: ProxyChainLayerForm[]): string {
 }
 
 /** 把 activeId 移动到 overId 的位置;无变化时返回原数组引用。 */
-export function reorderLayers(
-  layers: ProxyChainLayerForm[],
-  activeId: string,
-  overId: string
-): ProxyChainLayerForm[] {
+export function reorderLayers(layers: ProxyChainLayerForm[], activeId: string, overId: string): ProxyChainLayerForm[] {
   const from = layers.findIndex((l) => l.id === activeId);
   const to = layers.findIndex((l) => l.id === overId);
   if (from < 0 || to < 0 || from === to) return layers;
