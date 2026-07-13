@@ -13,6 +13,17 @@ import { RemoteDesktopPanel } from "@/components/remote-desktop/RemoteDesktopPan
 
 const approveServer = vi.fn();
 
+// Local override of the global react-i18next mock (setup.ts): that mock keeps
+// `t` a stable reference on purpose, but this file needs to flip `t`'s
+// identity between renders to reproduce a `languageChanged` event. Every
+// other test in this file still sees a `t` that just echoes its key.
+let currentT: (key: string) => string = (key: string) => key;
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({ t: currentT, i18n: { language: "en", changeLanguage: vi.fn() } }),
+  Trans: ({ i18nKey, children }: { i18nKey?: string; children?: React.ReactNode }) => i18nKey ?? children,
+  initReactI18next: { type: "3rdParty", init: vi.fn() },
+}));
+
 class FakeRFB extends EventTarget {
   static lastCredentials: Record<string, string> | undefined;
   static latest: FakeRFB | undefined;
@@ -58,6 +69,7 @@ vi.mock("@/components/terminal/FileManagerPanel", () => ({
 
 describe("RemoteDesktopPanel", () => {
   beforeEach(() => {
+    currentT = (key: string) => key;
     approveServer.mockClear();
     FakeRFB.latest = undefined;
     FakeRFB.lastCredentials = undefined;
@@ -218,5 +230,28 @@ describe("RemoteDesktopPanel", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(OpenSFTPSession).toHaveBeenCalledWith(2);
     expect(DisconnectRemoteDesktop).not.toHaveBeenCalled();
+  });
+
+  it("keeps the live VNC transport connected across a UI language change", async () => {
+    const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
+    const { rerender } = render(<RemoteDesktopPanel tabId="remote-1" asset={asset} />);
+
+    await waitFor(() => expect(FakeRFB.latest).toBeDefined());
+    const rfbBeforeLanguageChange = FakeRFB.latest;
+    expect(StartRemoteDesktopStream).toHaveBeenCalledTimes(1);
+
+    // Simulate react-i18next firing `languageChanged`: every consumer of
+    // useTranslation() re-renders with a brand-new `t` reference.
+    currentT = (key: string) => key;
+    rerender(<RemoteDesktopPanel tabId="remote-1" asset={asset} />);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The transport effect must not have torn down and rebuilt: same noVNC
+    // instance, no disconnect(), and StartRemoteDesktopStream not re-invoked
+    // (the backend pump is startOnce-guarded, so a second call would desync
+    // the fresh noVNC instance mid-stream).
+    expect(FakeRFB.latest).toBe(rfbBeforeLanguageChange);
+    expect(rfbBeforeLanguageChange!.disconnect).not.toHaveBeenCalled();
+    expect(StartRemoteDesktopStream).toHaveBeenCalledTimes(1);
   });
 });

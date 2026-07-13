@@ -50,6 +50,7 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
   const serverApprovalRef = useRef(false);
   const scaleViewportRef = useRef(true);
   const keyboardPasteRef = useRef(false);
+  const tRef = useRef(t);
   const [session, setSession] = useState<RemoteDesktopSession | null>(null);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
@@ -91,6 +92,10 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
   }, [connect]);
 
   useEffect(() => {
+    tRef.current = t;
+  }, [t]);
+
+  useEffect(() => {
     if (!session || !vncContainerRef.current) return;
     let disposed = false;
     let connectionStatePoll: number | undefined;
@@ -126,7 +131,7 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
             if (!disposed) setStatus("closed");
             return;
           }
-          const message = errorRef.current || t("remoteDesktop.vncDisconnected");
+          const message = errorRef.current || tRef.current("remoteDesktop.vncDisconnected");
           errorRef.current = message;
           setError(message);
           setStatus("error");
@@ -136,13 +141,13 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
           if (e.detail?.reason) {
             console.warn("VNC security failure", { status: e.detail?.status, reason: e.detail.reason });
           }
-          const message = t("remoteDesktop.vncSecurityFailed");
+          const message = tRef.current("remoteDesktop.vncSecurityFailed");
           errorRef.current = message;
           setError(message);
           setStatus("error");
         });
         rfb.addEventListener("credentialsrequired", () => {
-          const message = t("remoteDesktop.vncCredentialsRequired");
+          const message = tRef.current("remoteDesktop.vncCredentialsRequired");
           errorRef.current = message;
           setError(message);
           setStatus("error");
@@ -151,7 +156,7 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
           const e = event as CustomEvent<{ publickey?: Uint8Array }>;
           const publicKey = e.detail?.publickey;
           if (!publicKey) {
-            const message = t("remoteDesktop.vncServerVerificationFailed");
+            const message = tRef.current("remoteDesktop.vncServerVerificationFailed");
             errorRef.current = message;
             setError(message);
             setStatus("error");
@@ -210,7 +215,7 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
       if (connectionStatePoll) window.clearInterval(connectionStatePoll);
       container.innerHTML = "";
     };
-  }, [session, t]);
+  }, [session]);
 
   useEffect(() => {
     scaleViewportRef.current = scaleViewport;
