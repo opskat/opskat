@@ -2,6 +2,7 @@ package remote_desktop
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/remote_desktop_svc"
+	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
@@ -41,11 +43,34 @@ func (r *RemoteDesktop) Cleanup() {
 }
 
 func (r *RemoteDesktop) ConnectRemoteDesktop(assetID int64) (*remote_desktop_svc.Session, error) {
-	return r.manager.Connect(r.ctx, assetID, remote_desktop_svc.ConnectOptions{})
+	return r.manager.Connect(r.ctx, assetID)
 }
 
 func (r *RemoteDesktop) DisconnectRemoteDesktop(sessionID string) {
 	r.manager.Disconnect(sessionID)
+}
+
+// StartRemoteDesktopStream 挂上 IPC 回调并启动读 pump。前端必须在 EventsOn 订阅
+// remote_desktop:data/closed 之后再调,保证不丢 RFB 握手首包。
+func (r *RemoteDesktop) StartRemoteDesktopStream(sessionID string) error {
+	return r.manager.SetCallbacks(
+		sessionID,
+		func(data []byte) {
+			wailsRuntime.EventsEmit(r.ctx, "remote_desktop:data:"+sessionID, base64.StdEncoding.EncodeToString(data))
+		},
+		func() {
+			wailsRuntime.EventsEmit(r.ctx, "remote_desktop:closed:"+sessionID, nil)
+		},
+	)
+}
+
+// WriteRemoteDesktop 把前端(noVNC)发来的 base64 字节写入目标连接。
+func (r *RemoteDesktop) WriteRemoteDesktop(sessionID, dataB64 string) error {
+	data, err := base64.StdEncoding.DecodeString(dataB64)
+	if err != nil {
+		return fmt.Errorf("解码远程桌面数据失败: %w", err)
+	}
+	return r.manager.Write(sessionID, data)
 }
 
 func (r *RemoteDesktop) EncodeVNCClipboardText(text string) ([]int, error) {
