@@ -1,5 +1,2 @@
 packages:
   - 'packages/*'
-
-overrides:
-  dompurify: ^3.4.1
