@@ -4,6 +4,13 @@ import {
   parseConnectionFields,
   buildProxyJSON,
   resolveSaveProxyPassword,
+  layerTypeShortLabel,
+  proxyChainLayerErrors,
+  proxyChainValidationKey,
+  reorderLayers,
+  sshProxyLayer,
+  socks5ProxyLayer,
+  httpTunnelProxyLayer,
   type ConnectionFormFields,
 } from "../proxyConfig";
 
@@ -77,5 +84,41 @@ describe("resolveSaveProxyPassword", () => {
   it("无明文沿用既有密文", async () => {
     const f = { ...CONNECTION_DEFAULTS, encryptedProxyPassword: "old" };
     expect(await resolveSaveProxyPassword(f, encrypt)).toBe("old");
+  });
+});
+
+describe("proxyChain helpers", () => {
+  it("layerTypeShortLabel maps each type", () => {
+    expect(layerTypeShortLabel("ssh")).toBe("SSH");
+    expect(layerTypeShortLabel("socks5")).toBe("SOCKS5");
+    expect(layerTypeShortLabel("http_tunnel")).toBe("HTTP");
+  });
+
+  it("proxyChainLayerErrors flags missing required fields on enabled layers only", () => {
+    const ssh = sshProxyLayer(0, "b", "ssh-1"); // sshAssetId=0 -> invalid
+    const socks = { ...socks5ProxyLayer(), id: "s-1", host: "", enabled: true };
+    const disabled = { ...socks5ProxyLayer(), id: "s-2", host: "", enabled: false };
+    const errs = proxyChainLayerErrors([ssh, socks, disabled]);
+    expect(errs).toEqual([
+      { id: "ssh-1", field: "sshAssetId", messageKey: "asset.proxyChainSSHRequired" },
+      { id: "s-1", field: "host", messageKey: "asset.proxyChainProxyHostRequired" },
+    ]);
+  });
+
+  it("proxyChainValidationKey returns first error key or empty", () => {
+    expect(proxyChainValidationKey([])).toBe("");
+    const bad = httpTunnelProxyLayer();
+    bad.id = "h-1";
+    expect(proxyChainValidationKey([bad])).toBe("asset.proxyChainHTTPURLRequired");
+  });
+
+  it("reorderLayers moves a layer and is a no-op for equal/unknown ids", () => {
+    const a = { ...socks5ProxyLayer(), id: "a" };
+    const b = { ...socks5ProxyLayer(), id: "b" };
+    const c = { ...socks5ProxyLayer(), id: "c" };
+    expect(reorderLayers([a, b, c], "a", "c").map((l) => l.id)).toEqual(["b", "c", "a"]);
+    const same = [a, b, c];
+    expect(reorderLayers(same, "b", "b")).toBe(same);
+    expect(reorderLayers(same, "x", "c")).toBe(same);
   });
 });

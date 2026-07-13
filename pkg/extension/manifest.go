@@ -143,6 +143,7 @@ type AssetTypeDef struct {
 	Type         string         `json:"type"`
 	I18n         I18nName       `json:"i18n"`
 	ConfigSchema map[string]any `json:"configSchema"`
+	ProxyChain   bool           `json:"proxyChain,omitempty"` // opt in; false keeps the asset direct
 }
 
 type I18nName struct {

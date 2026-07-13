@@ -65,7 +65,7 @@ func configureMongoTransport(clientOpts *options.ClientOptions, asset *asset_ent
 		tunnelID = cfg.SSHAssetID // backward compat
 	}
 	if cfg.ProxyChain != nil {
-		dial, err := chainDialFunc(cfg.ProxyChain)
+		dial, err := chainDialFunc(context.Background(), cfg.ProxyChain)
 		if err != nil {
 			return nil, err
 		}

@@ -1,6 +1,7 @@
 package connpool
 
 import (
+	"context"
 	"testing"
 
 	"github.com/minio/minio-go/v7"
@@ -10,7 +11,7 @@ import (
 )
 
 func TestBuildMinioOptionsPlainHostSSL(t *testing.T) {
-	ep, opts, err := buildMinioOptions(&asset_entity.OSSConfig{
+	ep, opts, err := buildMinioOptions(context.Background(), &asset_entity.OSSConfig{
 		Endpoint: "s3.us-east-1.amazonaws.com", Region: "us-east-1", UseSSL: true, AccessKeyID: "AKIA",
 	}, "sk")
 	require.NoError(t, err)
@@ -21,7 +22,7 @@ func TestBuildMinioOptionsPlainHostSSL(t *testing.T) {
 }
 
 func TestBuildMinioOptionsTencentCOSUsesVirtualHostedStyle(t *testing.T) {
-	ep, opts, err := buildMinioOptions(&asset_entity.OSSConfig{
+	ep, opts, err := buildMinioOptions(context.Background(), &asset_entity.OSSConfig{
 		Provider: "tencent-cos", Endpoint: "cos.ap-guangzhou.myqcloud.com", Region: "ap-guangzhou",
 		UseSSL: true, AccessKeyID: "AKID",
 	}, "sk")
@@ -31,7 +32,7 @@ func TestBuildMinioOptionsTencentCOSUsesVirtualHostedStyle(t *testing.T) {
 }
 
 func TestBuildMinioOptionsSchemeStrippedPathStyle(t *testing.T) {
-	ep, opts, err := buildMinioOptions(&asset_entity.OSSConfig{
+	ep, opts, err := buildMinioOptions(context.Background(), &asset_entity.OSSConfig{
 		Endpoint: "http://127.0.0.1:9000", UsePathStyle: true,
 	}, "sk")
 	require.NoError(t, err)
@@ -41,6 +42,6 @@ func TestBuildMinioOptionsSchemeStrippedPathStyle(t *testing.T) {
 }
 
 func TestBuildMinioOptionsEmptyEndpoint(t *testing.T) {
-	_, _, err := buildMinioOptions(&asset_entity.OSSConfig{}, "sk")
+	_, _, err := buildMinioOptions(context.Background(), &asset_entity.OSSConfig{}, "sk")
 	require.Error(t, err)
 }

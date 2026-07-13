@@ -1,10 +1,12 @@
 import type { CredentialFragment } from "./credentialConfig";
 import {
   buildProxyJSON,
+  buildProxyChainJSON,
   CONNECTION_DEFAULTS,
   parseConnectionFields,
   type ConnectionFormFields,
   type ProxyConfigJSON,
+  type ProxyChainJSON,
 } from "./proxyConfig";
 
 interface RDPConfig {
@@ -17,6 +19,7 @@ interface RDPConfig {
   clipboard: boolean;
   proxy?: ProxyConfigJSON;
   ssh_asset_id?: number;
+  proxy_chain?: ProxyChainJSON;
 }
 
 export interface RDPFormState extends ConnectionFormFields {
@@ -47,7 +50,8 @@ export function buildRDPConfig(
   state: RDPFormState,
   cred: CredentialFragment,
   includeSshAssetId = false,
-  proxyPassword = ""
+  proxyPassword = "",
+  proxyChainSecrets: Record<string, { password?: string; token?: string }> = {}
 ): string {
   const cfg: RDPConfig = {
     host: state.host,
@@ -60,6 +64,8 @@ export function buildRDPConfig(
   else if (cred.password) cfg.password = cred.password;
   const proxy = buildProxyJSON(state, proxyPassword);
   if (proxy) cfg.proxy = proxy;
+  const proxyChain = buildProxyChainJSON(state.proxyChainLayers, proxyChainSecrets);
+  if (proxyChain) cfg.proxy_chain = proxyChain;
   if (state.connectionType === "jumphost" && includeSshAssetId && state.sshTunnelId > 0)
     cfg.ssh_asset_id = state.sshTunnelId;
   return JSON.stringify(cfg);
@@ -74,7 +80,7 @@ export function parseRDPConfig(configJSON: string, assetTunnelId = 0): RDPFormSt
       username: cfg.username || "Administrator",
       domain: cfg.domain || "",
       clipboard: cfg.clipboard !== false,
-      ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0),
+      ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0, cfg.proxy_chain),
     };
   } catch {
     return { ...RDP_DEFAULTS };

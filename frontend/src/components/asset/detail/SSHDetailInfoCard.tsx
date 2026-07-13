@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import type { DetailInfoCardProps } from "@/lib/assetTypes/types";
-import type { ProxyConfigJSON } from "../proxyConfig";
-import { DetailGrid, DetailSection, InfoItem, ProxyDetailSection } from "./InfoItem";
+import type { ProxyConfigJSON, ProxyChainJSON } from "../proxyConfig";
+import { DetailGrid, DetailSection, InfoItem, ProxyChainDetailSection, ProxyDetailSection } from "./InfoItem";
 import { parseDetailConfig } from "./utils";
 
 interface SSHConfig {
@@ -14,6 +14,7 @@ interface SSHConfig {
   private_keys?: string[];
   jump_host_id?: number;
   proxy?: ProxyConfigJSON | null;
+  proxy_chain?: ProxyChainJSON | null;
 }
 
 export function SSHDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProps) {
@@ -72,6 +73,7 @@ export function SSHDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProps)
 
       {/* SSH Proxy */}
       <ProxyDetailSection proxy={cfg.proxy} />
+      <ProxyChainDetailSection chain={cfg.proxy_chain} resolveSshName={sshTunnelName} />
     </>
   );
 }

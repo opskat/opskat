@@ -62,7 +62,7 @@ func configureRedisTransport(opts *redis.Options, asset *asset_entity.Asset, cfg
 	switch {
 	case cfg.ProxyChain != nil:
 		var err error
-		dial, err = chainDialFunc(cfg.ProxyChain)
+		dial, err = chainDialFunc(context.Background(), cfg.ProxyChain)
 		if err != nil {
 			return nil, err
 		}

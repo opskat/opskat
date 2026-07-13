@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, type ReactNode } from "react";
+import { useState, useRef, useEffect, useCallback, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, ChevronRight, Check, Search } from "lucide-react";
 import { Button } from "./button";
 import { cn } from "../lib/utils";
@@ -139,27 +140,77 @@ export function TreeSelect({
   const [search, setSearch] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<{ top?: number; bottom?: number; left: number; width: number } | null>(null);
 
   const displayLabel = value === 0 ? placeholder : findLabel(nodes, value) || placeholder;
   const displayIcon = value === 0 ? placeholderIcon : findIcon(nodes, value) || placeholderIcon;
 
   const filteredNodes = searchable ? filterTree(nodes, search) : nodes;
 
+  // Portaling the dropdown to <body> keeps it out of overflow-clipping / stacking-context
+  // ancestors (e.g. a dialog's scroll body + footer) that would otherwise clip or cover it;
+  // in exchange we anchor it to the trigger manually and re-anchor on scroll/resize.
+  const updatePosition = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const openUp = spaceBelow < 260 && rect.top > spaceBelow;
+    setPosition({
+      top: openUp ? undefined : rect.bottom + 4,
+      bottom: openUp ? window.innerHeight - rect.top + 4 : undefined,
+      left: rect.left,
+      width: rect.width,
+    });
+  }, []);
+
   const setDropdownOpen = (nextOpen: boolean) => {
     if (nextOpen) {
       setSearch("");
+      updatePosition();
       setTimeout(() => searchRef.current?.focus(), 0);
+    } else {
+      setPosition(null);
     }
     setOpen(nextOpen);
   };
 
-  // Close dropdown when clicking outside
+  useEffect(() => {
+    if (!open) return;
+    window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("resize", updatePosition);
+    return () => {
+      window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [open, updatePosition]);
+
+  // The dropdown is portaled to <body>, i.e. outside a modal dialog's content. Radix Dialog's
+  // react-remove-scroll preventDefaults native wheel outside its lock, which would otherwise
+  // leave this list unscrollable. Drive the scroll manually (and preventDefault to avoid a
+  // double-scroll when no such lock exists). Attached non-passively so preventDefault applies.
+  useEffect(() => {
+    const el = listRef.current;
+    if (!open || !el) return;
+    const onWheel = (e: WheelEvent) => {
+      el.scrollTop += e.deltaY * (e.deltaMode === 1 ? 16 : 1);
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [open]);
+
+  // Close dropdown when clicking outside the trigger or the portaled dropdown.
   useEffect(() => {
     if (!open) return;
     const handleClick = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      if (containerRef.current?.contains(target)) return;
+      if (dropdownRef.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
@@ -180,59 +231,73 @@ export function TreeSelect({
         </div>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-50" />
       </Button>
-      {open && (
-        <div
-          className="absolute z-50 mt-1 w-full rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
-          style={{ minWidth: "200px" }}
-          onWheel={(e) => e.stopPropagation()}
-        >
-          {searchable && (
-            <div className="flex items-center gap-1.5 px-2 py-1 border-b mb-1">
-              <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <input
-                ref={searchRef}
-                type="text"
-                className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/55"
-                placeholder={searchPlaceholder}
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                onClick={(e) => e.stopPropagation()}
-              />
-            </div>
-          )}
-          <div className="max-h-[200px] overflow-y-auto">
-            {/* Zero-value / placeholder option */}
-            {placeholder && !search && (
-              <div
-                className="flex items-center gap-1 px-2 py-1.5 rounded cursor-pointer hover:bg-accent text-sm"
-                onClick={() => {
-                  onValueChange(0);
-                  setOpen(false);
-                }}
-              >
-                <span className="w-4 shrink-0" />
-                {placeholderIcon && <span className="shrink-0">{placeholderIcon}</span>}
-                <span className="truncate flex-1">{placeholder}</span>
-                {value === 0 && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
+      {open &&
+        position &&
+        createPortal(
+          <div
+            ref={dropdownRef}
+            className="fixed z-50 rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+            style={{
+              top: position.top,
+              bottom: position.bottom,
+              left: position.left,
+              width: position.width,
+              minWidth: "200px",
+              // Radix modal dialogs set body { pointer-events: none } while open; as a body
+              // child this dropdown would inherit it and turn hit-test transparent (wheel and
+              // clicks falling through to the dialog behind). Re-enable explicitly.
+              pointerEvents: "auto",
+            }}
+            onWheel={(e) => e.stopPropagation()}
+          >
+            {searchable && (
+              <div className="flex items-center gap-1.5 px-2 py-1 border-b mb-1">
+                <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <input
+                  ref={searchRef}
+                  type="text"
+                  className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/55"
+                  placeholder={searchPlaceholder}
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                />
               </div>
             )}
-            {filteredNodes.map((node) => (
-              <TreeItem
-                key={node.id}
-                node={node}
-                selectedId={value}
-                onSelect={(id) => {
-                  onValueChange(id);
-                  setOpen(false);
-                }}
-              />
-            ))}
-            {searchable && search && filteredNodes.length === 0 && (
-              <div className="px-2 py-3 text-center text-sm text-muted-foreground">--</div>
-            )}
-          </div>
-        </div>
-      )}
+            <div ref={listRef} data-slot="tree-select-list" className="max-h-[200px] overflow-y-auto">
+              {/* Zero-value / placeholder option */}
+              {placeholder && !search && (
+                <div
+                  className="flex items-center gap-1 px-2 py-1.5 rounded cursor-pointer hover:bg-accent text-sm"
+                  onClick={() => {
+                    onValueChange(0);
+                    setOpen(false);
+                  }}
+                >
+                  <span className="w-4 shrink-0" />
+                  {placeholderIcon && <span className="shrink-0">{placeholderIcon}</span>}
+                  <span className="truncate flex-1">{placeholder}</span>
+                  {value === 0 && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
+                </div>
+              )}
+              {filteredNodes.map((node) => (
+                <TreeItem
+                  key={node.id}
+                  node={node}
+                  selectedId={value}
+                  onSelect={(id) => {
+                    onValueChange(id);
+                    setOpen(false);
+                  }}
+                />
+              ))}
+              {searchable && search && filteredNodes.length === 0 && (
+                <div className="px-2 py-3 text-center text-sm text-muted-foreground">--</div>
+              )}
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }

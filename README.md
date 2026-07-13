@@ -96,7 +96,7 @@ SSH and remote data assets can use an ordered proxy chain when direct access is 
 - **SOCKS5 proxy** layers with optional username/password authentication
 - **HTTP script tunnel** layers compatible with DBX-style tunnel scripts (`URL + token + timeout`)
 
-The same chain model is shared by SSH, SQL databases, Redis, MongoDB, Kafka, etcd, and Kubernetes connections. Existing single SSH tunnel (`sshTunnelId` / `ssh_asset_id`) and SOCKS5 `proxy` settings are still read and are mapped to a one-layer chain when an asset is edited; once a new chain is saved, `proxy_chain` takes precedence.
+The same chain model is shared by SSH, SQL databases, Redis, MongoDB, Kafka, etcd, Kubernetes, VNC, RDP, and S3-compatible object-storage connections. A Kafka asset applies its chain to brokers, Schema Registry, and every Kafka Connect cluster. Local SQLite stays local; remote SQLite VFS reaches its file through the selected SSH asset, which can have its own proxy chain. Existing single SSH tunnel (`sshTunnelId` / `ssh_asset_id`) and SOCKS5 `proxy` settings are still read and are mapped to a one-layer chain when an asset is edited; once a new chain is saved, `proxy_chain` takes precedence.
 
 ### Remote Desktop
 

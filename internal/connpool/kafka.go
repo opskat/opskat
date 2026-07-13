@@ -231,7 +231,7 @@ func BuildKafkaOptions(asset *asset_entity.Asset, cfg *asset_entity.KafkaConfig,
 	switch {
 	case cfg.ProxyChain != nil:
 		var err error
-		dial, err = chainDialFunc(cfg.ProxyChain)
+		dial, err = chainDialFunc(context.Background(), cfg.ProxyChain)
 		if err != nil {
 			return nil, err
 		}

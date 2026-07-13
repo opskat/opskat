@@ -241,18 +241,55 @@ export function buildProxyChainJSON(
   };
 }
 
-export function proxyChainValidationKey(layers: ProxyChainLayerForm[]): string {
+export function layerTypeShortLabel(type: ProxyChainLayerType): string {
+  if (type === "ssh") return "SSH";
+  if (type === "http_tunnel") return "HTTP";
+  return "SOCKS5";
+}
+
+export interface ProxyChainLayerError {
+  id: string;
+  field: "sshAssetId" | "host" | "port" | "url" | "token";
+  messageKey: string;
+}
+
+/** 每个启用层的必填/取值校验;按层序返回,同一字段至多一条。 */
+export function proxyChainLayerErrors(layers: ProxyChainLayerForm[]): ProxyChainLayerError[] {
+  const errors: ProxyChainLayerError[] = [];
   for (const layer of layers) {
     if (!layer.enabled) continue;
-    if (layer.type === "ssh" && layer.sshAssetId <= 0) return "asset.proxyChainSSHRequired";
-    if (layer.type === "socks5" && !layer.host.trim()) return "asset.proxyChainProxyHostRequired";
-    if (layer.type === "socks5" && (layer.port <= 0 || layer.port > 65535)) return "asset.proxyChainProxyPortInvalid";
-    if (layer.type === "http_tunnel" && !layer.url.trim()) return "asset.proxyChainHTTPURLRequired";
+    if (layer.type === "ssh" && layer.sshAssetId <= 0) {
+      errors.push({ id: layer.id, field: "sshAssetId", messageKey: "asset.proxyChainSSHRequired" });
+    }
+    if (layer.type === "socks5" && !layer.host.trim()) {
+      errors.push({ id: layer.id, field: "host", messageKey: "asset.proxyChainProxyHostRequired" });
+    }
+    if (layer.type === "socks5" && (layer.port <= 0 || layer.port > 65535)) {
+      errors.push({ id: layer.id, field: "port", messageKey: "asset.proxyChainProxyPortInvalid" });
+    }
+    if (layer.type === "http_tunnel" && !layer.url.trim()) {
+      errors.push({ id: layer.id, field: "url", messageKey: "asset.proxyChainHTTPURLRequired" });
+    }
     if (layer.type === "http_tunnel" && !layer.token.trim() && !layer.encryptedToken) {
-      return "asset.proxyChainHTTPTokenRequired";
+      errors.push({ id: layer.id, field: "token", messageKey: "asset.proxyChainHTTPTokenRequired" });
     }
   }
-  return "";
+  return errors;
+}
+
+export function proxyChainValidationKey(layers: ProxyChainLayerForm[]): string {
+  return proxyChainLayerErrors(layers)[0]?.messageKey ?? "";
+}
+
+/** 把 activeId 移动到 overId 的位置;无变化时返回原数组引用。 */
+export function reorderLayers(layers: ProxyChainLayerForm[], activeId: string, overId: string): ProxyChainLayerForm[] {
+  const from = layers.findIndex((l) => l.id === activeId);
+  const to = layers.findIndex((l) => l.id === overId);
+  if (from < 0 || to < 0 || from === to) return layers;
+  const next = [...layers];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
 }
 
 export async function resolveSaveProxyChainSecrets(

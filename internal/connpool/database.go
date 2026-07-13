@@ -58,7 +58,7 @@ func DialDatabase(ctx context.Context, asset *asset_entity.Asset, cfg *asset_ent
 	}
 	switch {
 	case cfg.ProxyChain != nil:
-		dial, dialErr := chainDialFunc(cfg.ProxyChain)
+		dial, dialErr := chainDialFunc(ctx, cfg.ProxyChain)
 		if dialErr != nil {
 			return nil, nil, dialErr
 		}

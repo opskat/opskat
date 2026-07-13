@@ -127,17 +127,18 @@ type SSHConfig struct {
 
 // RDPConfig RDP 类型的特定配置。PoC 阶段只覆盖基础连接、分辨率和剪贴板。
 type RDPConfig struct {
-	Host         string       `json:"host"`
-	Port         int          `json:"port"`
-	Username     string       `json:"username"`
-	Password     string       `json:"password,omitempty"`      // credential_svc 加密（内联，向后兼容）
-	CredentialID int64        `json:"credential_id,omitempty"` // 统一凭证 ID（密码）
-	Domain       string       `json:"domain,omitempty"`
-	Width        int          `json:"width,omitempty"`
-	Height       int          `json:"height,omitempty"`
-	Clipboard    bool         `json:"clipboard"`
-	SSHAssetID   int64        `json:"ssh_asset_id,omitempty"` // 仅未保存配置的连接测试使用；已保存资产走 Asset.SSHTunnelID
-	Proxy        *ProxyConfig `json:"proxy,omitempty"`        // SOCKS5 代理；与 SSH 隧道互斥，隧道优先
+	Host         string            `json:"host"`
+	Port         int               `json:"port"`
+	Username     string            `json:"username"`
+	Password     string            `json:"password,omitempty"`      // credential_svc 加密（内联，向后兼容）
+	CredentialID int64             `json:"credential_id,omitempty"` // 统一凭证 ID（密码）
+	Domain       string            `json:"domain,omitempty"`
+	Width        int               `json:"width,omitempty"`
+	Height       int               `json:"height,omitempty"`
+	Clipboard    bool              `json:"clipboard"`
+	SSHAssetID   int64             `json:"ssh_asset_id,omitempty"` // 仅未保存配置的连接测试使用；已保存资产走 Asset.SSHTunnelID
+	Proxy        *ProxyConfig      `json:"proxy,omitempty"`        // Deprecated: use ProxyChain
+	ProxyChain   *ProxyChainConfig `json:"proxy_chain,omitempty"`
 }
 
 // ProxyConfig 代理配置
@@ -1122,7 +1123,7 @@ func (a *Asset) validateRDP() error {
 	if cfg.Width < 0 || cfg.Height < 0 {
 		return errors.New("RDP分辨率无效")
 	}
-	return nil
+	return ValidateProxyChain(EffectiveProxyChain(cfg.ProxyChain, a.SSHTunnelID, cfg.Proxy))
 }
 
 func validateKafkaBroker(broker string) error {
