@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -38,7 +39,6 @@ type Session struct {
 	FileEnabled    bool   `json:"fileEnabled"`
 	FileStatus     string `json:"fileStatus"`
 	Status         string `json:"status"`
-	Message        string `json:"message,omitempty"`
 
 	done  chan struct{}
 	proxy *tcpWebSocketProxy
@@ -59,7 +59,19 @@ func NewManager(repo asset_repo.AssetRepo) *Manager {
 	}
 }
 
-func (m *Manager) Connect(ctx context.Context, assetID int64, opts ConnectOptions) (*Session, error) {
+func (m *Manager) Connect(ctx context.Context, assetID int64, _ ConnectOptions) (*Session, error) {
+	logger.Ctx(ctx).Info("remote desktop connect start", zap.Int64("assetID", assetID))
+	session, err := m.connect(ctx, assetID)
+	if err != nil {
+		logger.Ctx(ctx).Error("remote desktop connect failed", zap.Int64("assetID", assetID), zap.Error(err))
+		return nil, err
+	}
+	logger.Ctx(ctx).Info("remote desktop connected",
+		zap.Int64("assetID", assetID), zap.String("sessionID", session.ID))
+	return session, nil
+}
+
+func (m *Manager) connect(ctx context.Context, assetID int64) (*Session, error) {
 	asset, err := m.assetRepo.Find(ctx, assetID)
 	if err != nil {
 		return nil, fmt.Errorf("读取远程桌面资产失败: %w", err)
@@ -120,6 +132,9 @@ func (m *Manager) Disconnect(sessionID string) {
 	m.mu.Unlock()
 	if session != nil {
 		session.close()
+		// Disconnect is invoked from the Wails binding without a ctx, so fall
+		// back to the default logger for the session-close event.
+		logger.Default().Info("remote desktop session closed", zap.String("sessionID", sessionID))
 	}
 }
 
@@ -178,7 +193,7 @@ func (p *tcpWebSocketProxy) Start(ctx context.Context) (string, error) {
 	p.server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		if err := p.server.Serve(ln); err != nil && err != http.ErrServerClosed {
-			zap.L().Warn("remote desktop websocket tcp proxy failed", zap.Error(err))
+			logger.Ctx(ctx).Warn("remote desktop websocket tcp proxy failed", zap.Error(err))
 		}
 	}()
 	return "ws://" + ln.Addr().String(), nil
@@ -195,7 +210,7 @@ func (p *tcpWebSocketProxy) handleWebSocket(ctx context.Context, w http.Response
 	defer func() { _ = ws.Close(websocket.StatusNormalClosure, "") }()
 	tcp, err := (proxychain.Chain{Layers: p.layers}).Dial(ctx, p.target)
 	if err != nil {
-		zap.L().Warn("remote desktop tcp target dial failed", zap.String("target", p.target), zap.Error(err))
+		logger.Ctx(ctx).Warn("remote desktop tcp target dial failed", zap.String("target", p.target), zap.Error(err))
 		return
 	}
 	defer func() { _ = tcp.Close() }()
