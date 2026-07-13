@@ -4,13 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"net/http"
 	"strconv"
 	"sync"
-	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
-	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/proxychain"
@@ -32,7 +29,6 @@ type Session struct {
 	AssetID        int64  `json:"assetId"`
 	AssetType      string `json:"assetType"`
 	AssetName      string `json:"assetName"`
-	WebSocketURL   string `json:"webSocketUrl"`
 	Username       string `json:"username,omitempty"`
 	Password       string `json:"password,omitempty"`
 	FileSSHAssetID int64  `json:"fileSshAssetId"`
@@ -40,12 +36,11 @@ type Session struct {
 	FileStatus     string `json:"fileStatus"`
 	Status         string `json:"status"`
 
-	done  chan struct{}
-	proxy *tcpWebSocketProxy
-}
-
-type ConnectOptions struct {
-	WebSocketBaseURL string
+	conn      net.Conn
+	onData    func([]byte)
+	onClose   func()
+	startOnce sync.Once
+	closeOnce sync.Once
 }
 
 func NewManager(repo asset_repo.AssetRepo) *Manager {
@@ -59,7 +54,7 @@ func NewManager(repo asset_repo.AssetRepo) *Manager {
 	}
 }
 
-func (m *Manager) Connect(ctx context.Context, assetID int64, _ ConnectOptions) (*Session, error) {
+func (m *Manager) Connect(ctx context.Context, assetID int64) (*Session, error) {
 	logger.Ctx(ctx).Info("remote desktop connect start", zap.Int64("assetID", assetID))
 	session, err := m.connect(ctx, assetID)
 	if err != nil {
@@ -95,25 +90,23 @@ func (m *Manager) connectVNC(ctx context.Context, asset *asset_entity.Asset) (*S
 	if err != nil {
 		return nil, err
 	}
-	proxy := newTCPWebSocketProxy(net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)), layers)
-	wsURL, err := proxy.Start(ctx)
+	target := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
+	conn, err := (proxychain.Chain{Layers: layers}).Dial(ctx, target)
 	if err != nil {
-		return nil, fmt.Errorf("启动 VNC 代理失败: %w", err)
+		return nil, fmt.Errorf("连接 VNC 目标失败: %w", err)
 	}
 	session := &Session{
 		ID:             uuid.NewString(),
 		AssetID:        asset.ID,
 		AssetType:      asset.Type,
 		AssetName:      asset.Name,
-		WebSocketURL:   wsURL,
 		Username:       cfg.Username,
 		Password:       password,
 		FileSSHAssetID: cfg.FileSSHAssetID,
 		FileEnabled:    cfg.FileSSHAssetID > 0,
 		FileStatus:     fileStatus(cfg.FileSSHAssetID),
 		Status:         "connecting",
-		done:           make(chan struct{}),
-		proxy:          proxy,
+		conn:           conn,
 	}
 	m.store(session)
 	return session, nil
@@ -125,6 +118,29 @@ func (m *Manager) store(session *Session) {
 	m.mu.Unlock()
 }
 
+// SetCallbacks 挂上 Go→FE 的数据/关闭回调,并启动读 pump(幂等)。sessionID 不存在返回错误。
+func (m *Manager) SetCallbacks(sessionID string, onData func([]byte), onClose func()) error {
+	m.mu.Lock()
+	session := m.sessions[sessionID]
+	m.mu.Unlock()
+	if session == nil {
+		return fmt.Errorf("远程桌面会话不存在: %s", sessionID)
+	}
+	session.start(onData, onClose)
+	return nil
+}
+
+// Write 把前端(noVNC)发来的字节写入目标连接。
+func (m *Manager) Write(sessionID string, data []byte) error {
+	m.mu.Lock()
+	session := m.sessions[sessionID]
+	m.mu.Unlock()
+	if session == nil {
+		return fmt.Errorf("远程桌面会话不存在: %s", sessionID)
+	}
+	return session.write(data)
+}
+
 func (m *Manager) Disconnect(sessionID string) {
 	m.mu.Lock()
 	session := m.sessions[sessionID]
@@ -132,8 +148,7 @@ func (m *Manager) Disconnect(sessionID string) {
 	m.mu.Unlock()
 	if session != nil {
 		session.close()
-		// Disconnect is invoked from the Wails binding without a ctx, so fall
-		// back to the default logger for the session-close event.
+		// Disconnect 从 Wails 绑定调用,无 ctx,用默认 logger 记录会话关闭。
 		logger.Default().Info("remote desktop session closed", zap.String("sessionID", sessionID))
 	}
 }
@@ -150,16 +165,47 @@ func (m *Manager) Cleanup() {
 	}
 }
 
+func (s *Session) start(onData func([]byte), onClose func()) {
+	s.startOnce.Do(func() {
+		s.onData = onData
+		s.onClose = onClose
+		go s.readPump()
+	})
+}
+
+func (s *Session) readPump() {
+	buf := make([]byte, 32768)
+	for {
+		n, err := s.conn.Read(buf)
+		if n > 0 && s.onData != nil {
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			s.onData(chunk)
+		}
+		if err != nil {
+			break
+		}
+	}
+	if s.onClose != nil {
+		s.onClose()
+	}
+	s.close()
+}
+
+func (s *Session) write(data []byte) error {
+	if s.conn == nil {
+		return fmt.Errorf("远程桌面会话未建立连接")
+	}
+	_, err := s.conn.Write(data)
+	return err
+}
+
 func (s *Session) close() {
-	select {
-	case <-s.done:
-		return
-	default:
-		close(s.done)
-	}
-	if s.proxy != nil {
-		s.proxy.Close()
-	}
+	s.closeOnce.Do(func() {
+		if s.conn != nil {
+			_ = s.conn.Close()
+		}
+	})
 }
 
 func fileStatus(id int64) string {
@@ -167,96 +213,4 @@ func fileStatus(id int64) string {
 		return "已启用 SSH/SFTP 文件通道"
 	}
 	return "未配置 SSH/SFTP 文件通道，文件上传下载不可用"
-}
-
-type tcpWebSocketProxy struct {
-	target string
-	layers []proxychain.Layer
-	server *http.Server
-	done   chan struct{}
-	once   sync.Once
-}
-
-func newTCPWebSocketProxy(target string, layers []proxychain.Layer) *tcpWebSocketProxy {
-	return &tcpWebSocketProxy{target: target, layers: layers, done: make(chan struct{})}
-}
-
-func (p *tcpWebSocketProxy) Start(ctx context.Context) (string, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		p.handleWebSocket(ctx, w, r)
-	})
-	p.server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	go func() {
-		if err := p.server.Serve(ln); err != nil && err != http.ErrServerClosed {
-			logger.Ctx(ctx).Warn("remote desktop websocket tcp proxy failed", zap.Error(err))
-		}
-	}()
-	return "ws://" + ln.Addr().String(), nil
-}
-
-func (p *tcpWebSocketProxy) handleWebSocket(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		OriginPatterns: []string{"*"},
-		Subprotocols:   []string{"binary"},
-	})
-	if err != nil {
-		return
-	}
-	defer func() { _ = ws.Close(websocket.StatusNormalClosure, "") }()
-	tcp, err := (proxychain.Chain{Layers: p.layers}).Dial(ctx, p.target)
-	if err != nil {
-		logger.Ctx(ctx).Warn("remote desktop tcp target dial failed", zap.String("target", p.target), zap.Error(err))
-		return
-	}
-	defer func() { _ = tcp.Close() }()
-	errCh := make(chan error, 2)
-	go func() {
-		for {
-			typ, data, err := ws.Read(r.Context())
-			if err != nil {
-				errCh <- err
-				return
-			}
-			if typ == websocket.MessageBinary {
-				_, err = tcp.Write(data)
-				if err != nil {
-					errCh <- err
-					return
-				}
-			}
-		}
-	}()
-	go func() {
-		buf := make([]byte, 32768)
-		for {
-			n, err := tcp.Read(buf)
-			if err != nil {
-				errCh <- err
-				return
-			}
-			if err := ws.Write(r.Context(), websocket.MessageBinary, buf[:n]); err != nil {
-				errCh <- err
-				return
-			}
-		}
-	}()
-	<-errCh
-}
-
-func (p *tcpWebSocketProxy) Close() {
-	p.once.Do(func() {
-		if p.done != nil {
-			close(p.done)
-		}
-		if p.server != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			_ = p.server.Shutdown(ctx)
-			cancel()
-		}
-	})
 }
