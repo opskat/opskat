@@ -269,15 +269,15 @@ function App() {
   };
 
   const handleConnectAssetInNewTab = async (asset: asset_entity.Asset) => {
-    if (!getAssetType(asset.Type)?.canConnectInNewTab) return;
-    if (asset.Type === "vnc") {
-      const tabId = `remote-desktop-${asset.ID}-${Date.now()}`;
+    const def = getAssetType(asset.Type);
+    if (!def?.canConnectInNewTab) return;
+    if (def.connectAction === "page" && def.pageId) {
       useTabStore.getState().openTab({
-        id: tabId,
+        id: `${def.pageId}-${asset.ID}-${Date.now()}`,
         type: "page",
         label: asset.Name,
-        icon: asset.Icon || asset.Type,
-        meta: { type: "page", pageId: "remote-desktop", assetId: asset.ID },
+        icon: asset.Icon || def.pageIcon,
+        meta: { type: "page", pageId: def.pageId, assetId: asset.ID },
       });
       return;
     }

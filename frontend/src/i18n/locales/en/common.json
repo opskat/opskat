@@ -40,8 +40,7 @@
     "audit": "Audit Log",
     "forward": "Port Forward",
     "snippets": "Snippets",
-    "vnc": "VNC",
-    "rdp": "RDP"
+    "vnc": "VNC"
   },
   "assetType": {
     "searchPlaceholder": "Search type…",
@@ -670,9 +669,7 @@
     "sshRestoreCwdOnReconnect": "Restore last directory on reconnect",
     "tabSchemaRegistry": "Schema Registry",
     "tabConnect": "Connect",
-    "addDescription": "Add description",
-    "domain": "Domain",
-    "formMissingHostOrUsername": "Host and username are required"
+    "addDescription": "Add description"
   },
   "sshKey": {
     "title": "SSH Keys",
@@ -2807,10 +2804,6 @@
     "files": "Files",
     "fileSshAsset": "SSH/SFTP file channel",
     "fileSshAssetPlaceholder": "Select an SSH asset for file upload/download",
-    "width": "Width",
-    "height": "Height",
-    "colorDepth": "Color depth",
-    "ignoreCert": "Ignore RDP certificate validation",
     "securityType": "Security type",
     "connecting": "Connecting remote desktop...",
     "streamError": "Remote desktop stream error",
@@ -2824,8 +2817,6 @@
     "verifyServerDesc": "The server uses encrypted authentication. Verify the RSA SHA-256 fingerprint before continuing:",
     "approveServer": "Verify and connect",
     "vncServerVerificationFailed": "The VNC server identity is invalid, so the connection cannot continue.",
-    "vncServerVerificationCancelled": "VNC server identity verification was cancelled.",
-    "rdpExternalTitle": "RDP opened in the system client",
-    "rdpExternalDesc": "Windows RDP uses the system Remote Desktop client. The file panel remains available through the bound SSH/SFTP channel."
+    "vncServerVerificationCancelled": "VNC server identity verification was cancelled."
   }
 }
