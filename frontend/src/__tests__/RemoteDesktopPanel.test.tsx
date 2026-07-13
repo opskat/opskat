@@ -5,6 +5,7 @@ import {
   ConnectRemoteDesktop,
   DisconnectRemoteDesktop,
   EncodeVNCClipboardText,
+  StartRemoteDesktopStream,
 } from "../../wailsjs/go/remote_desktop/RemoteDesktop";
 import { DisconnectSSH, OpenSFTPSession } from "../../wailsjs/go/ssh/SSH";
 import { ClipboardGetText, ClipboardSetText } from "../../wailsjs/runtime";
@@ -39,6 +40,8 @@ vi.mock("../../wailsjs/go/remote_desktop/RemoteDesktop", () => ({
   ConnectRemoteDesktop: vi.fn(),
   DisconnectRemoteDesktop: vi.fn(),
   EncodeVNCClipboardText: vi.fn(),
+  StartRemoteDesktopStream: vi.fn(),
+  WriteRemoteDesktop: vi.fn(),
 }));
 
 vi.mock("../../wailsjs/go/ssh/SSH", async (importOriginal) => ({
@@ -59,6 +62,9 @@ describe("RemoteDesktopPanel", () => {
     FakeRFB.latest = undefined;
     FakeRFB.lastCredentials = undefined;
     vi.mocked(DisconnectRemoteDesktop).mockReset();
+    vi.mocked(StartRemoteDesktopStream)
+      .mockReset()
+      .mockResolvedValue(undefined as never);
     vi.mocked(DisconnectSSH).mockReset();
     vi.mocked(OpenSFTPSession).mockReset().mockResolvedValue("sftp-session");
     vi.mocked(ClipboardGetText).mockReset().mockResolvedValue("");
@@ -73,7 +79,6 @@ describe("RemoteDesktopPanel", () => {
       assetId: 1,
       assetType: "vnc",
       assetName: "test-vnc",
-      webSocketUrl: "ws://127.0.0.1:12345",
       username: "vnc-user",
       password: "secret",
       fileSshAssetId: 0,
@@ -88,6 +93,7 @@ describe("RemoteDesktopPanel", () => {
     render(<RemoteDesktopPanel tabId="remote-1" asset={asset} />);
 
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
+    expect(StartRemoteDesktopStream).toHaveBeenCalledWith("vnc-session");
     expect(FakeRFB.lastCredentials).toEqual({ username: "vnc-user", password: "secret" });
 
     FakeRFB.latest!.dispatchEvent(
@@ -193,7 +199,6 @@ describe("RemoteDesktopPanel", () => {
       assetId: 1,
       assetType: "vnc",
       assetName: "test-vnc",
-      webSocketUrl: "ws://127.0.0.1:12345",
       username: "vnc-user",
       password: "secret",
       fileSshAssetId: 2,

@@ -15,10 +15,12 @@ import {
   ConnectRemoteDesktop,
   DisconnectRemoteDesktop,
   EncodeVNCClipboardText,
+  StartRemoteDesktopStream,
 } from "../../../wailsjs/go/remote_desktop/RemoteDesktop";
 import { DisconnectSSH, OpenSFTPSession } from "../../../wailsjs/go/ssh/SSH";
 import { ClipboardGetText, ClipboardSetText } from "../../../wailsjs/runtime";
 import { FileManagerPanel } from "@/components/terminal/FileManagerPanel";
+import { WailsRfbChannel } from "@/lib/wailsRfbChannel";
 import { decodeVNCClipboardText, pasteVNCClipboardText } from "@/lib/vncClipboard";
 import type RFB from "@novnc/novnc/lib/rfb";
 
@@ -32,7 +34,6 @@ interface RemoteDesktopSession {
   assetId: number;
   assetType: string;
   assetName: string;
-  webSocketUrl: string;
   username?: string;
   password?: string;
   fileSshAssetId: number;
@@ -90,12 +91,13 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
   }, [connect]);
 
   useEffect(() => {
-    if (!session || !session.webSocketUrl || !vncContainerRef.current) return;
+    if (!session || !vncContainerRef.current) return;
     let disposed = false;
     let connectionStatePoll: number | undefined;
     const container = vncContainerRef.current;
     container.innerHTML = "";
     setStatus("connecting");
+    const channel = new WailsRfbChannel(session.id);
     const markVNCConnected = () => {
       if (disposed) return;
       errorRef.current = "";
@@ -104,8 +106,11 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
     };
     import("@novnc/novnc/lib/rfb")
       .then(({ default: RFBClient }) => {
-        if (disposed || !container) return;
-        const rfb = new RFBClient(container, session.webSocketUrl, {
+        if (disposed || !container) {
+          channel.close();
+          return;
+        }
+        const rfb = new RFBClient(container, channel, {
           credentials: { username: session.username || "", password: session.password || "" },
         });
         rfb.scaleViewport = scaleViewportRef.current;
@@ -165,6 +170,16 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
           ClipboardSetText(decodeVNCClipboardText(e.detail?.text || "")).catch(() => {});
         });
         rfbRef.current = rfb;
+        // 两阶段:先 markOpen(触发 onopen → noVNC 就绪),再启动后端读 pump,
+        // 保证前端已订阅事件、noVNC 已就绪之后字节才开始流动,不丢 RFB 握手首包。
+        channel.markOpen();
+        void StartRemoteDesktopStream(session.id).catch((e) => {
+          if (disposed) return;
+          const message = String(e);
+          errorRef.current = message;
+          setError(message);
+          setStatus("error");
+        });
         connectionStatePoll = window.setInterval(() => {
           if (!disposed && rfb._rfbConnectionState === "connected") {
             markVNCConnected();
@@ -183,6 +198,7 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
       });
     return () => {
       disposed = true;
+      channel.close();
       if (rfbRef.current) {
         try {
           rfbRef.current.disconnect();

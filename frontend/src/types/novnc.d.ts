@@ -7,8 +7,21 @@ declare module "@novnc/novnc/lib/rfb" {
     };
   }
 
+  export interface RfbRawChannel {
+    binaryType: string;
+    protocol: string;
+    readyState: string;
+    bufferedAmount?: number;
+    onopen: (() => void) | null;
+    onmessage: ((event: { data: ArrayBuffer }) => void) | null;
+    onclose: (() => void) | null;
+    onerror: ((event: unknown) => void) | null;
+    send(data: ArrayBuffer | ArrayBufferView): void;
+    close(): void;
+  }
+
   export default class RFB extends EventTarget {
-    constructor(target: HTMLElement, url: string, options?: RFBOptions);
+    constructor(target: HTMLElement, source: string | RfbRawChannel, options?: RFBOptions);
 
     scaleViewport: boolean;
     clipViewport: boolean;
