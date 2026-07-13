@@ -38,4 +38,28 @@ describe("ConnectionMethodFields", () => {
     });
     expect(getByText("asset.proxyChainProblems")).toBeInTheDocument();
   });
+
+  it("preserves the chain when toggling to direct and back", () => {
+    const onChange = vi.fn();
+    const layer = { ...socks5ProxyLayer(), id: "s1", name: "Proxy A", host: "1.2.3.4" };
+    const { getByRole, rerender } = render(
+      <ConnectionMethodFields
+        value={{ ...CONNECTION_DEFAULTS, connectionType: "jumphost", proxyChainLayers: [layer] }}
+        onChange={onChange}
+      />
+    );
+    // toggle to direct -> layers cleared from the persisted value
+    fireEvent.click(getByRole("radio", { name: "asset.connectionDirect" }));
+    expect(onChange.mock.calls.at(-1)![0]).toMatchObject({ connectionType: "direct", proxyChainLayers: [] });
+    // parent applies the direct state
+    rerender(
+      <ConnectionMethodFields
+        value={{ ...CONNECTION_DEFAULTS, connectionType: "direct", proxyChainLayers: [] }}
+        onChange={onChange}
+      />
+    );
+    // toggle back to chain -> previous layers restored
+    fireEvent.click(getByRole("radio", { name: "asset.connectionTunnelProxy" }));
+    expect(onChange.mock.calls.at(-1)![0].proxyChainLayers).toEqual([layer]);
+  });
 });

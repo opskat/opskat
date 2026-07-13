@@ -1,4 +1,4 @@
-import { useMemo, useState, type ComponentType } from "react";
+import { useMemo, useRef, useState, type ComponentType } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ChevronUp,
@@ -139,8 +139,12 @@ export function ConnectionMethodFields({ value, onChange, excludeIds }: Connecti
     updateLayers([...layers, layer]);
     setSelectedLayerId(layer.id);
   };
+  // 记住切到「直连」前的链路,切回时恢复;避免误触直连丢失已配置的代理节点。
+  // 「直连」仍会清空持久化的 proxyChainLayers(build 语义不变),恢复只发生在本次会话的来回切换。
+  const stashedLayers = useRef<ProxyChainLayerForm[]>([]);
   const setMode = (mode: "direct" | "chain") => {
     if (mode === "direct") {
+      if (layers.length) stashedLayers.current = layers;
       onChange({
         connectionType: "direct",
         sshTunnelId: 0,
@@ -151,7 +155,11 @@ export function ConnectionMethodFields({ value, onChange, excludeIds }: Connecti
       });
       return;
     }
-    onChange({ connectionType: value.connectionType === "direct" ? "jumphost" : value.connectionType });
+    const restore = layers.length === 0 && stashedLayers.current.length > 0 ? stashedLayers.current : undefined;
+    onChange({
+      connectionType: value.connectionType === "direct" ? "jumphost" : value.connectionType,
+      ...(restore ? { proxyChainLayers: restore } : {}),
+    });
   };
   const onDragEnd = (e: DragEndEvent) => {
     if (e.over && e.active.id !== e.over.id) {
