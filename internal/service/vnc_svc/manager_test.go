@@ -3,6 +3,7 @@ package vnc_svc
 import (
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -16,7 +17,7 @@ func TestSessionPumpForwardsAndWrites(t *testing.T) {
 	s := &Session{ID: "t1", conn: client}
 	got := make(chan []byte, 1)
 	closed := make(chan struct{})
-	s.start(func(b []byte) { got <- b }, func() { close(closed) })
+	s.start(func(b []byte) { got <- b }, func() { close(closed) }, nil)
 
 	// server → client(session):onData 应收到相同字节
 	go func() { _, _ = server.Write([]byte("RFB 003.008\n")) }()
@@ -56,5 +57,29 @@ func TestManagerWriteUnknownSession(t *testing.T) {
 	m := &Manager{sessions: map[string]*Session{}}
 	if err := m.Write("nope", []byte("x")); err == nil {
 		t.Fatal("expected error for unknown session")
+	}
+}
+
+func TestManagerRetiresSessionWhenRemoteCloses(t *testing.T) {
+	client, server := net.Pipe()
+	m := &Manager{sessions: map[string]*Session{
+		"remote-close": {ID: "remote-close", conn: client},
+	}}
+	closed := make(chan struct{})
+	if err := m.SetCallbacks("remote-close", func([]byte) {}, func() { close(closed) }); err != nil {
+		t.Fatalf("SetCallbacks: %v", err)
+	}
+
+	if err := server.Close(); err != nil {
+		t.Fatalf("close remote: %v", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for remote close callback")
+	}
+
+	if err := m.Write("remote-close", []byte("x")); err == nil || !strings.Contains(err.Error(), "会话不存在") {
+		t.Fatalf("Write after remote close = %v, want session-not-found error", err)
 	}
 }

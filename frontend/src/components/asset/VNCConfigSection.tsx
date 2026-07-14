@@ -90,13 +90,6 @@ export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
         },
         { kind: "text", key: "username", label: "asset.username", testid: "vnc-username-input" },
         { kind: "password", placeholder: "asset.passwordPlaceholder" },
-        {
-          kind: "text",
-          key: "securityType",
-          label: "vnc.securityType",
-          placeholder: "any",
-          testid: "vnc-security-type-input",
-        },
       ],
     },
     {

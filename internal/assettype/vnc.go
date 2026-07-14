@@ -27,7 +27,6 @@ func (h *vncHandler) SafeView(a *asset_entity.Asset) map[string]any {
 		"host":              cfg.Host,
 		"port":              cfg.Port,
 		"username":          cfg.Username,
-		"security_type":     cfg.SecurityType,
 		"file_ssh_asset_id": cfg.FileSSHAssetID,
 	}
 }
@@ -55,7 +54,6 @@ func (h *vncHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, a
 		Host:           ArgString(args, "host"),
 		Port:           ArgInt(args, "port"),
 		Username:       ArgString(args, "username"),
-		SecurityType:   ArgString(args, "security_type"),
 		FileSSHAssetID: ArgInt64(args, "file_ssh_asset_id"),
 	}
 	if cfg.Port == 0 {
@@ -84,9 +82,6 @@ func (h *vncHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, a
 	}
 	if _, ok := args["username"]; ok {
 		cfg.Username = ArgString(args, "username")
-	}
-	if _, ok := args["security_type"]; ok {
-		cfg.SecurityType = ArgString(args, "security_type")
 	}
 	if _, ok := args["file_ssh_asset_id"]; ok {
 		cfg.FileSSHAssetID = ArgInt64(args, "file_ssh_asset_id")

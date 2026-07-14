@@ -161,7 +161,7 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
         });
         rfb.addEventListener("clipboard", (event) => {
           const e = event as CustomEvent<{ text?: string }>;
-          ClipboardSetText(decodeVNCClipboardText(e.detail?.text || "")).catch(() => {});
+          ClipboardSetText(decodeVNCClipboardText(e.detail?.text || "")).catch((error) => toast.error(String(error)));
         });
         rfbRef.current = rfb;
         // 两阶段:先 markOpen(触发 onopen → noVNC 就绪),再启动后端读 pump,
@@ -324,7 +324,7 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
           <div className="flex min-w-0 items-center gap-2">
-            <ScreenShare className="h-4 w-4 text-muted-foreground" />
+            <ScreenShare aria-hidden className="h-4 w-4 text-muted-foreground" />
             <span className="truncate text-sm font-medium">{asset.Name}</span>
             <span className="text-xs uppercase text-muted-foreground">{asset.Type}</span>
           </div>
@@ -338,13 +338,14 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
             <Button
               variant="ghost"
               size="icon"
+              aria-label={t("vnc.fullscreen")}
               className="h-8 w-8"
               onClick={() => vncContainerRef.current?.requestFullscreen()}
             >
-              <Maximize2 className="h-4 w-4" />
+              <Maximize2 aria-hidden className="h-4 w-4" />
             </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={connect}>
-              <RefreshCw className="h-4 w-4" />
+            <Button variant="ghost" size="icon" aria-label={t("vnc.reconnect")} className="h-8 w-8" onClick={connect}>
+              <RefreshCw aria-hidden className="h-4 w-4" />
             </Button>
             <Button
               variant="outline"
@@ -353,7 +354,7 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
               onClick={openFiles}
               disabled={!session?.fileSshAssetId}
             >
-              <FolderOpen className="h-4 w-4" />
+              <FolderOpen aria-hidden className="h-4 w-4" />
               {t("vnc.files")}
             </Button>
           </div>
@@ -361,13 +362,13 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
         <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
           {status === "connecting" && (
             <div className="absolute inset-0 z-10 flex items-center justify-center text-sm text-white/70">
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <Loader2 aria-hidden className="mr-2 h-4 w-4 animate-spin" />
               {t("vnc.connecting")}
             </div>
           )}
           {error && (
             <div className="absolute left-3 top-3 z-20 flex max-w-xl items-start gap-2 rounded border border-destructive/30 bg-background p-3 text-sm text-destructive shadow">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <AlertTriangle aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{error}</span>
             </div>
           )}

@@ -20,9 +20,6 @@ type VNC struct {
 }
 
 func New(appCtx context.Context, manager *vnc_svc.Manager) *VNC {
-	if manager == nil {
-		manager = vnc_svc.NewManager(nil)
-	}
 	r := &VNC{ctx: appCtx, manager: manager}
 	conntest.Register("vnc", r.testVNCConnection)
 	return r

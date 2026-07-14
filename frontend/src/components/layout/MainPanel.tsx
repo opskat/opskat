@@ -111,6 +111,7 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
   const terminalTabs = tabs.filter((tab) => tab.type === "terminal");
   const aiTabs = tabs.filter((tab) => tab.type === "ai");
   const queryTabs = tabs.filter((tab) => tab.type === "query");
+  const vncTabs = tabs.filter((tab) => tab.type === "page" && (tab.meta as PageTabMeta).pageId === "vnc");
 
   function renderActiveContent() {
     if (!activeTab) return null;
@@ -160,11 +161,6 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
             const k8sAsset = meta.assetId ? assets.find((a) => a.ID === meta.assetId) : null;
             if (!k8sAsset) return null;
             return <K8sClusterPage asset={k8sAsset} />;
-          }
-          case "vnc": {
-            const vncAsset = meta.assetId ? assets.find((a) => a.ID === meta.assetId) : null;
-            if (!vncAsset || !activeTab) return null;
-            return <VNCPanel tabId={activeTab.id} asset={vncAsset} />;
           }
           case "rdp": {
             const rdpAsset = meta.assetId ? assets.find((a) => a.ID === meta.assetId) : null;
@@ -295,7 +291,25 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
           );
         })}
 
-        {activeTab && activeTab.type === "page" && (
+        {vncTabs.map((tab) => {
+          const meta = tab.meta as PageTabMeta;
+          const asset = meta.assetId ? assets.find((item) => item.ID === meta.assetId) : null;
+          if (!asset) return null;
+          const isActive = activeTabId === tab.id;
+          return (
+            <div
+              key={tab.id}
+              className="absolute inset-0 bg-background"
+              style={{ visibility: isActive ? "visible" : "hidden", pointerEvents: isActive ? "auto" : "none" }}
+            >
+              <LazySurface>
+                <VNCPanel tabId={tab.id} asset={asset} />
+              </LazySurface>
+            </div>
+          );
+        })}
+
+        {activeTab && activeTab.type === "page" && (activeTab.meta as PageTabMeta).pageId !== "vnc" && (
           <div className="absolute inset-0 bg-background">
             <LazySurface>{renderActiveContent()}</LazySurface>
           </div>

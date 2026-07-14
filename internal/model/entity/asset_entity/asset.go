@@ -363,7 +363,6 @@ type VNCConfig struct {
 	Username       string            `json:"username,omitempty"`
 	Password       string            `json:"password,omitempty"`
 	CredentialID   int64             `json:"credential_id,omitempty"`
-	SecurityType   string            `json:"security_type,omitempty"`
 	FileSSHAssetID int64             `json:"file_ssh_asset_id,omitempty"`
 	ProxyChain     *ProxyChainConfig `json:"proxy_chain,omitempty"`
 }

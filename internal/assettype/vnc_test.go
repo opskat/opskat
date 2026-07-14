@@ -29,7 +29,6 @@ func TestVNCApplyCreateArgsDefaultsAndSafeView(t *testing.T) {
 	require.NoError(t, h.ApplyCreateArgs(context.Background(), a, map[string]any{
 		"host":              "vnc.example.com",
 		"username":          "operator",
-		"security_type":     "vncauth",
 		"file_ssh_asset_id": float64(7),
 	}))
 
@@ -38,7 +37,6 @@ func TestVNCApplyCreateArgsDefaultsAndSafeView(t *testing.T) {
 	assert.Equal(t, "vnc.example.com", cfg.Host)
 	assert.Equal(t, 5900, cfg.Port, "port should default to 5900 when omitted")
 	assert.Equal(t, "operator", cfg.Username)
-	assert.Equal(t, "vncauth", cfg.SecurityType)
 	assert.Equal(t, int64(7), cfg.FileSSHAssetID)
 
 	sv := h.SafeView(a)

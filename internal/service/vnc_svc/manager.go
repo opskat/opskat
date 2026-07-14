@@ -33,14 +33,12 @@ type Session struct {
 	conn      net.Conn
 	onData    func([]byte)
 	onClose   func()
+	onEnd     func()
 	startOnce sync.Once
 	closeOnce sync.Once
 }
 
 func NewManager(repo asset_repo.AssetRepo) *Manager {
-	if repo == nil {
-		repo = asset_repo.Asset()
-	}
 	return &Manager{
 		assetRepo: repo,
 		resolver:  credential_resolver.Default(),
@@ -114,7 +112,7 @@ func (m *Manager) SetCallbacks(sessionID string, onData func([]byte), onClose fu
 	if session == nil {
 		return fmt.Errorf("VNC 会话不存在: %s", sessionID)
 	}
-	session.start(onData, onClose)
+	session.start(onData, onClose, func() { m.retire(sessionID, session) })
 	return nil
 }
 
@@ -141,6 +139,14 @@ func (m *Manager) Disconnect(sessionID string) {
 	}
 }
 
+func (m *Manager) retire(sessionID string, session *Session) {
+	m.mu.Lock()
+	if m.sessions[sessionID] == session {
+		delete(m.sessions, sessionID)
+	}
+	m.mu.Unlock()
+}
+
 func (m *Manager) Cleanup() {
 	m.mu.Lock()
 	ids := make([]string, 0, len(m.sessions))
@@ -153,10 +159,11 @@ func (m *Manager) Cleanup() {
 	}
 }
 
-func (s *Session) start(onData func([]byte), onClose func()) {
+func (s *Session) start(onData func([]byte), onClose func(), onEnd func()) {
 	s.startOnce.Do(func() {
 		s.onData = onData
 		s.onClose = onClose
+		s.onEnd = onEnd
 		go s.readPump()
 	})
 }
@@ -174,10 +181,13 @@ func (s *Session) readPump() {
 			break
 		}
 	}
+	s.close()
+	if s.onEnd != nil {
+		s.onEnd()
+	}
 	if s.onClose != nil {
 		s.onClose()
 	}
-	s.close()
 }
 
 func (s *Session) write(data []byte) error {

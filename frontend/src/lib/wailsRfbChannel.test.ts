@@ -60,6 +60,19 @@ describe("WailsRfbChannel", () => {
     expect(WriteVNC).toHaveBeenCalledWith("sess-1", btoa(String.fromCharCode(0x80, 0xff)));
   });
 
+  it("reports WriteVNC failures through the channel error callback", async () => {
+    captureHandlers();
+    const failure = new Error("write failed");
+    vi.mocked(WriteVNC).mockRejectedValue(failure);
+    const channel = new WailsRfbChannel("sess-1");
+    const onerror = vi.fn();
+    channel.onerror = onerror;
+
+    channel.send(new Uint8Array([1]));
+
+    await vi.waitFor(() => expect(onerror).toHaveBeenCalledWith(failure));
+  });
+
   it("marks open exactly once and fires onopen", () => {
     captureHandlers();
     const channel = new WailsRfbChannel("sess-1");

@@ -53,7 +53,6 @@ func (e *Extension) GetAvailableAssetTypes() []AssetTypeInfo {
 		{Type: asset_entity.AssetTypeSerial, DisplayName: "Serial"},
 		{Type: asset_entity.AssetTypeVNC, DisplayName: "VNC", SSHTunnel: true},
 		{Type: asset_entity.AssetTypeRDP, DisplayName: "RDP", SSHTunnel: true},
-		{Type: asset_entity.AssetTypeEtcd, DisplayName: "Etcd", SSHTunnel: true},
 	}
 	if e.service != nil {
 		bridge := e.service.Bridge()

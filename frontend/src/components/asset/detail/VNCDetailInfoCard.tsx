@@ -8,7 +8,6 @@ interface VNCDetailConfig {
   username?: string;
   password?: string;
   credential_id?: number;
-  security_type?: string;
   file_ssh_asset_id?: number;
 }
 
@@ -21,7 +20,6 @@ export function VNCDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProps)
         <InfoItem label="Port" value={String(cfg.port || 5900)} mono />
         {cfg.username && <InfoItem label="Username" value={cfg.username} mono />}
         {(cfg.password || cfg.credential_id) && <InfoItem label="Password" value={MASKED_SECRET} />}
-        {cfg.security_type && <InfoItem label="Security" value={cfg.security_type} />}
         <InfoItem
           label="File Channel"
           value={cfg.file_ssh_asset_id ? sshTunnelName(cfg.file_ssh_asset_id) || "-" : DISABLED_VALUE}

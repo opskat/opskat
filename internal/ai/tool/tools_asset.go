@@ -49,7 +49,7 @@ func assetTools() []tool.Tool {
 		},
 		&tool.RawTool{
 			NameStr: "add_asset",
-			DescStr: `Add a new asset to the inventory. Supports types: "ssh", "serial", "rdp", "vnc", "database", "redis", "mongodb", "kafka", "k8s", "etcd". For RDP, specify host + username plus optional port/domain/width/height/clipboard. For VNC, specify host plus optional port/username/password/security_type/file_ssh_asset_id. For database, specify driver ("mysql" or "postgresql"). For k8s, specify kubeconfig. For kafka, specify brokers (comma-separated) plus optional sasl_mechanism / tls. For serial (COM/TTY console), specify port_path + baud_rate (no host/port/username/credentials). Credentials (password / private_key) are stored encrypted; never echo them back to the user.`,
+			DescStr: `Add a new asset to the inventory. Supports types: "ssh", "serial", "rdp", "vnc", "database", "redis", "mongodb", "kafka", "k8s", "etcd". For RDP, specify host + username plus optional port/domain/width/height/clipboard. For VNC, specify host plus optional port/username/password/file_ssh_asset_id. For database, specify driver ("mysql" or "postgresql"). For k8s, specify kubeconfig. For kafka, specify brokers (comma-separated) plus optional sasl_mechanism / tls. For serial (COM/TTY console), specify port_path + baud_rate (no host/port/username/credentials). Credentials (password / private_key) are stored encrypted; never echo them back to the user.`,
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
@@ -85,7 +85,6 @@ func assetTools() []tool.Tool {
 					"width":             {Type: "number", Description: "Initial RDP desktop width in pixels. RDP only; defaults to 1280."},
 					"height":            {Type: "number", Description: "Initial RDP desktop height in pixels. RDP only; defaults to 720."},
 					"clipboard":         {Type: "string", Description: `Set to "true"/"false" to enable RDP clipboard redirection. RDP only; defaults to true.`},
-					"security_type":     {Type: "string", Description: `VNC RFB security type to force (e.g. "vncauth"). VNC only; omit to auto-negotiate.`},
 					"file_ssh_asset_id": {Type: "number", Description: "SSH asset ID that backs the SSH/SFTP file channel. VNC only; omit to disable file transfer."},
 					"group_id":          {Type: "number", Description: "Group ID to assign this asset to."},
 					"description":       {Type: "string", Description: "Optional description or notes."},
@@ -135,7 +134,6 @@ func assetTools() []tool.Tool {
 					"width":             {Type: "number", Description: "New initial RDP desktop width. RDP only."},
 					"height":            {Type: "number", Description: "New initial RDP desktop height. RDP only."},
 					"clipboard":         {Type: "string", Description: `Set to "true"/"false" to toggle RDP clipboard redirection. RDP only.`},
-					"security_type":     {Type: "string", Description: `New VNC RFB security type. VNC only; pass empty string to auto-negotiate.`},
 					"file_ssh_asset_id": {Type: "number", Description: "New SSH asset ID for the VNC SSH/SFTP file channel. VNC only; pass 0 to disable."},
 					"description":       {Type: "string", Description: "New description. Pass empty string to clear."},
 					"group_id":          {Type: "number", Description: "New group ID (must be a positive integer from list_groups). Omit to keep current group; values <= 0 are ignored. To remove an asset from its group, ask the user to do it in the UI."},

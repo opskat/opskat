@@ -5,6 +5,7 @@ import { ConnectVNC, DisconnectVNC, EncodeVNCClipboardText, StartVNCStream } fro
 import { DisconnectSSH, OpenSFTPSession } from "../../wailsjs/go/ssh/SSH";
 import { ClipboardGetText, ClipboardSetText } from "../../wailsjs/runtime";
 import { VNCPanel } from "@/components/vnc/VNCPanel";
+import { toast } from "sonner";
 
 const approveServer = vi.fn();
 
@@ -41,6 +42,7 @@ class FakeRFB extends EventTarget {
 }
 
 vi.mock("@novnc/novnc/lib/rfb", () => ({ default: FakeRFB }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 vi.mock("../../wailsjs/go/vnc/VNC", () => ({
   ConnectVNC: vi.fn(),
@@ -76,6 +78,7 @@ describe("VNCPanel", () => {
     vi.mocked(OpenSFTPSession).mockReset().mockResolvedValue("sftp-session");
     vi.mocked(ClipboardGetText).mockReset().mockResolvedValue("");
     vi.mocked(ClipboardSetText).mockReset().mockResolvedValue(true);
+    vi.mocked(toast.error).mockReset();
     vi.mocked(EncodeVNCClipboardText)
       .mockReset()
       .mockImplementation(async (text) =>
@@ -128,6 +131,17 @@ describe("VNCPanel", () => {
     FakeRFB.latest!.dispatchEvent(new CustomEvent("clipboard", { detail: { text: wireText } }));
 
     await waitFor(() => expect(ClipboardSetText).toHaveBeenCalledWith("中文"));
+  });
+
+  it("surfaces local clipboard write failures", async () => {
+    vi.mocked(ClipboardSetText).mockRejectedValue(new Error("clipboard unavailable"));
+    const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
+    render(<VNCPanel tabId="vnc-1" asset={asset} />);
+
+    await waitFor(() => expect(FakeRFB.latest).toBeDefined());
+    FakeRFB.latest!.dispatchEvent(new CustomEvent("clipboard", { detail: { text: "hello" } }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Error: clipboard unavailable"));
   });
 
   it("sends mixed Chinese and English through one GBK clipboard message", async () => {
