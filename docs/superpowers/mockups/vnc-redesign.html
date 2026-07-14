@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>VNC 面板重设计 · Mockup</title>
+<style>
+  /* ===== OpsKat design tokens (verbatim from src/styles/globals.css) ===== */
+  :root {
+    --radius: 0.5rem;
+    --background: oklch(0.96 0.01 250);
+    --foreground: oklch(0.20 0.025 250);
+    --card: oklch(0.99 0.003 250);
+    --popover: oklch(0.99 0.003 250);
+    --popover-foreground: oklch(0.20 0.025 250);
+    --primary: oklch(0.55 0.22 260);
+    --primary-foreground: oklch(0.985 0.003 260);
+    --secondary: oklch(0.935 0.012 250);
+    --muted: oklch(0.935 0.012 250);
+    --muted-foreground: oklch(0.48 0.015 250);
+    --accent: oklch(0.91 0.012 250);
+    --destructive: oklch(0.55 0.24 27);
+    --border: oklch(0.87 0.012 250);
+    --success: oklch(0.55 0.19 155);
+    --warning: oklch(0.70 0.17 85);
+    --info: oklch(0.55 0.17 245);
+    --font-sans: system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace;
+  }
+  .dark {
+    --background: oklch(0.18 0.025 250);
+    --foreground: oklch(0.94 0.008 250);
+    --card: oklch(0.22 0.025 250);
+    --popover: oklch(0.22 0.025 250);
+    --popover-foreground: oklch(0.94 0.008 250);
+    --primary: oklch(0.63 0.20 260);
+    --primary-foreground: oklch(0.985 0.003 260);
+    --secondary: oklch(0.26 0.025 250);
+    --muted: oklch(0.26 0.025 250);
+    --muted-foreground: oklch(0.62 0.015 250);
+    --accent: oklch(0.30 0.025 250);
+    --destructive: oklch(0.70 0.19 22);
+    --border: oklch(0.30 0.025 250);
+    --success: oklch(0.70 0.17 155);
+    --warning: oklch(0.78 0.15 85);
+    --info: oklch(0.68 0.15 245);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+  }
+  .mono { font-family: var(--font-mono); }
+
+  /* ===== page chrome (outside the mock app) ===== */
+  .page-head {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 16px 24px; border-bottom: 1px solid var(--border);
+  }
+  .page-head h1 { font-size: 15px; font-weight: 600; margin: 0; }
+  .page-head .sub { color: var(--muted-foreground); font-size: 12px; }
+  .spacer { flex: 1; }
+  .seg { display: inline-flex; background: var(--muted); border-radius: 8px; padding: 3px; gap: 2px; }
+  .seg button {
+    border: 0; background: transparent; color: var(--muted-foreground);
+    font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 6px; cursor: pointer;
+  }
+  .seg button.on { background: var(--card); color: var(--foreground); box-shadow: 0 1px 2px oklch(0 0 0 / 0.10); }
+  .toggle {
+    border: 1px solid var(--border); background: var(--card); color: var(--foreground);
+    font: inherit; font-size: 12px; padding: 6px 12px; border-radius: 8px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+
+  .stage { flex: 1; display: flex; align-items: center; justify-content: center; padding: 28px; }
+
+  /* ===== the mock VNC panel ===== */
+  .panel {
+    width: min(1180px, 100%); height: min(680px, 100%);
+    display: flex; flex-direction: column;
+    background: var(--background);
+    border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+    box-shadow: 0 12px 40px oklch(0 0 0 / 0.18);
+  }
+
+  /* --- toolbar (h-10 ~ 40px) --- */
+  .toolbar {
+    height: 40px; flex: none; display: flex; align-items: center; gap: 8px;
+    padding: 0 12px; border-bottom: 1px solid var(--border);
+    background: color-mix(in oklch, var(--muted) 30%, transparent);
+    font-size: 12px;
+  }
+  .tb-icon { color: var(--muted-foreground); flex: none; }
+  .tb-name { font-weight: 500; color: var(--foreground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+  .host-chip {
+    flex: none; white-space: nowrap; border: 1px solid var(--border);
+    background: color-mix(in oklch, var(--background) 50%, transparent);
+    padding: 2px 6px; border-radius: 6px; font-size: 11px; color: var(--muted-foreground);
+    font-family: var(--font-mono);
+  }
+  .status-pill {
+    flex: none; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+    border: 1px solid; padding: 2px 8px; border-radius: 8px; font-weight: 500; font-size: 11px;
+  }
+  .status-pill .dot { height: 6px; width: 6px; border-radius: 50%; background: currentColor; }
+  .pill-connecting { border-color: color-mix(in oklch, var(--warning) 25%, transparent); background: color-mix(in oklch, var(--warning) 15%, transparent); color: var(--warning); }
+  .pill-connected  { border-color: color-mix(in oklch, var(--success) 25%, transparent); background: color-mix(in oklch, var(--success) 15%, transparent); color: var(--success); }
+  .pill-error      { border-color: color-mix(in oklch, var(--destructive) 25%, transparent); background: color-mix(in oklch, var(--destructive) 15%, transparent); color: var(--destructive); }
+  .pill-closed     { border-color: var(--border); background: var(--muted); color: var(--muted-foreground); }
+
+  .tb-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
+
+  /* segmented Fit/Original inside toolbar */
+  .tb-seg { display: inline-flex; height: 28px; background: var(--muted); border-radius: 6px; padding: 2px; }
+  .tb-seg button {
+    border: 0; background: transparent; color: var(--muted-foreground); font: inherit; font-size: 11px;
+    padding: 0 12px; border-radius: 5px; cursor: pointer; min-width: 54px;
+  }
+  .tb-seg button.on { background: var(--card); color: var(--foreground); box-shadow: 0 1px 2px oklch(0 0 0 / 0.10); }
+
+  .btn {
+    height: 28px; border: 1px solid var(--border); background: var(--card); color: var(--foreground);
+    border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+    font: inherit; font-size: 11px; padding: 0 8px;
+  }
+  .btn:hover { background: var(--accent); }
+  .btn.icon { width: 28px; padding: 0; justify-content: center; }
+  .btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+  .btn.active { color: var(--primary); border-color: color-mix(in oklch, var(--primary) 40%, var(--border)); background: color-mix(in oklch, var(--primary) 12%, var(--card)); }
+  .btn.clip-on { color: var(--success); }
+  .btn.clip-off { color: color-mix(in oklch, var(--muted-foreground) 60%, transparent); }
+  .btn.danger { color: var(--destructive); }
+  .btn.danger:hover { background: color-mix(in oklch, var(--destructive) 12%, var(--card)); }
+
+  .dd { position: relative; }
+  .dd-menu {
+    position: absolute; top: 34px; right: 0; z-index: 40; min-width: 168px;
+    background: var(--popover); color: var(--popover-foreground);
+    border: 1px solid var(--border); border-radius: 8px; padding: 4px;
+    box-shadow: 0 12px 32px oklch(0 0 0 / 0.25); display: none;
+  }
+  .dd.open .dd-menu { display: block; }
+  .dd-menu button {
+    display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px;
+    border: 0; background: transparent; color: inherit; font: inherit; font-size: 12px;
+    padding: 7px 8px; border-radius: 5px; cursor: pointer; text-align: left;
+  }
+  .dd-menu button:hover { background: var(--accent); }
+  .dd-menu kbd {
+    font-family: var(--font-mono); font-size: 10px; color: var(--muted-foreground);
+    border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; background: var(--muted);
+  }
+
+  /* --- viewport row (canvas + optional file dock) --- */
+  .body { flex: 1; min-height: 0; display: flex; }
+  .viewport { position: relative; flex: 1; min-width: 0; overflow: hidden; background: #000; }
+
+  /* fake remote desktop so the screen reads as real */
+  .desktop { position: absolute; inset: 0; background:
+      radial-gradient(120% 90% at 75% 15%, oklch(0.55 0.12 250) 0%, oklch(0.32 0.09 265) 45%, oklch(0.18 0.05 270) 100%);
+      overflow: hidden; }
+  .desktop.viewonly { filter: saturate(0.85) brightness(0.96); }
+  .dt-window {
+    position: absolute; left: 12%; top: 16%; width: 62%; height: 58%;
+    background: oklch(0.98 0.004 250); border-radius: 8px; overflow: hidden;
+    box-shadow: 0 20px 60px oklch(0 0 0 / 0.45); color: oklch(0.2 0.02 250);
+  }
+  .dt-titlebar { height: 30px; background: oklch(0.90 0.01 250); display: flex; align-items: center; gap: 7px; padding: 0 12px; font-size: 12px; color: oklch(0.35 0.02 250); }
+  .dt-dot { height: 11px; width: 11px; border-radius: 50%; }
+  .dt-body { padding: 14px 16px; font-size: 12px; line-height: 1.7; font-family: var(--font-mono); color: oklch(0.35 0.02 250); }
+  .dt-body .prompt { color: oklch(0.5 0.18 155); }
+  .dt-taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: 34px; background: oklch(0.16 0.03 265 / 0.72); backdrop-filter: blur(6px); display: flex; align-items: center; gap: 10px; padding: 0 12px; }
+  .dt-start { height: 20px; width: 20px; border-radius: 5px; background: oklch(0.63 0.20 260); }
+  .dt-tasky { height: 18px; width: 42px; border-radius: 4px; background: oklch(1 0 0 / 0.16); }
+  .dt-clock { margin-left: auto; color: oklch(1 0 0 / 0.85); font-size: 11px; font-family: var(--font-mono); }
+
+  /* view-only banner */
+  .vo-banner {
+    position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 15;
+    display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
+    background: color-mix(in oklch, var(--warning) 22%, oklch(0.2 0.02 250 / 0.8));
+    color: var(--warning); border: 1px solid color-mix(in oklch, var(--warning) 40%, transparent);
+    padding: 4px 10px; border-radius: 999px;
+  }
+
+  /* --- overlay (connecting / verify / error / closed) --- */
+  .overlay {
+    position: absolute; inset: 0; z-index: 20; display: none;
+    flex-direction: column; align-items: center; justify-content: center;
+    gap: 12px; text-align: center; padding: 24px;
+    background: var(--background);
+  }
+  .overlay.show { display: flex; }
+  .overlay .big { font-size: 16px; font-weight: 600; color: var(--foreground); }
+  .overlay .muted { color: var(--muted-foreground); font-size: 13px; }
+  .overlay .err { color: var(--muted-foreground); font-size: 13px; max-width: 520px; word-break: break-word; }
+  .verify-card {
+    width: min(460px, 90%); border: 1px solid var(--border); border-radius: 10px;
+    background: color-mix(in oklch, var(--muted) 30%, transparent); padding: 14px 16px; text-align: left;
+  }
+  .verify-card .row { display: flex; align-items: center; gap: 8px; color: var(--muted-foreground); font-size: 12px; margin-bottom: 8px; }
+  .verify-card .fp { font-family: var(--font-mono); font-size: 12px; word-break: break-all; color: var(--foreground); line-height: 1.6; }
+  .ov-actions { display: flex; gap: 10px; margin-top: 4px; }
+  .ov-btn { height: 34px; border-radius: 7px; border: 1px solid var(--border); background: var(--card); color: var(--foreground); font: inherit; font-size: 13px; padding: 0 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+  .ov-btn.primary { background: var(--primary); color: var(--primary-foreground); border-color: transparent; }
+  .ov-btn:hover { filter: brightness(1.04); }
+  .spin { animation: spin 0.9s linear infinite; color: var(--primary); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* --- file dock (SFTP) --- */
+  .filedock { flex: none; width: 300px; border-left: 1px solid var(--border); background: var(--card); display: none; flex-direction: column; }
+  .filedock.show { display: flex; }
+  .fd-head { height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 500; }
+  .fd-path { padding: 8px 12px; border-bottom: 1px solid var(--border); font-family: var(--font-mono); font-size: 11px; color: var(--muted-foreground); }
+  .fd-list { flex: 1; overflow: auto; padding: 4px; }
+  .fd-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; font-size: 12px; }
+  .fd-item:hover { background: var(--accent); }
+  .fd-item .sz { margin-left: auto; color: var(--muted-foreground); font-size: 11px; font-family: var(--font-mono); }
+
+  /* --- status bar (h-6 ~ 24px) --- */
+  .statusbar {
+    height: 24px; flex: none; display: flex; align-items: center; gap: 12px;
+    padding: 0 12px; border-top: 1px solid var(--border);
+    background: color-mix(in oklch, var(--muted) 30%, transparent);
+    font-size: 11px; color: var(--muted-foreground);
+  }
+  .statusbar .grp { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); }
+  .fit-badge { border: 1px solid color-mix(in oklch, var(--info) 25%, transparent); background: color-mix(in oklch, var(--info) 15%, transparent); color: var(--info); border-radius: 5px; padding: 0 6px; font-family: var(--font-sans); }
+  .sb-clip { display: inline-flex; align-items: center; gap: 5px; }
+  .uptime { margin-left: auto; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+  .note { padding: 12px 24px 28px; color: var(--muted-foreground); font-size: 12px; line-height: 1.7; }
+  .note b { color: var(--foreground); font-weight: 600; }
+  .note code { font-family: var(--font-mono); background: var(--muted); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+  svg { display: block; }
+</style>
+</head>
+<body>
+  <div class="page-head">
+    <h1>VNC 面板重设计</h1>
+    <span class="sub">与 RDP chrome 对齐 · slim 顶栏 + 状态栏</span>
+    <div class="spacer"></div>
+    <div class="seg" id="stateSeg">
+      <button data-state="connected" class="on">已连接</button>
+      <button data-state="connecting">连接中</button>
+      <button data-state="verify">指纹校验</button>
+      <button data-state="error">错误</button>
+      <button data-state="files">文件面板</button>
+      <button data-state="viewonly">只读</button>
+    </div>
+    <button class="toggle" id="themeBtn">🌙 深色</button>
+  </div>
+
+  <div class="stage">
+    <div class="panel">
+      <!-- ===== toolbar ===== -->
+      <div class="toolbar">
+        <!-- screen icon -->
+        <svg class="tb-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        <span class="tb-name">生产环境-桌面-01</span>
+        <span class="host-chip">10.0.12.34:5901</span>
+        <span class="status-pill pill-connected" id="statusPill"><span class="dot"></span><span id="statusText">已连接</span></span>
+
+        <div class="tb-actions">
+          <!-- Fit / Original -->
+          <div class="tb-seg">
+            <button class="on">适应</button>
+            <button>原始</button>
+          </div>
+          <!-- special keys -->
+          <div class="dd" id="keysDd">
+            <button class="btn" id="keysBtn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M8 16h8"/></svg>
+              Ctrl+Alt+Del
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div class="dd-menu">
+              <button><span>Ctrl + Alt + Del</span><kbd>⌃⌥⌦</kbd></button>
+              <button><span>Alt + Tab</span><kbd>⌥⇥</kbd></button>
+              <button><span>Super（Win）</span><kbd>⊞</kbd></button>
+              <button><span>Esc</span><kbd>⎋</kbd></button>
+            </div>
+          </div>
+          <!-- clipboard toggle -->
+          <button class="btn icon clip-on" id="clipBtn" title="剪贴板同步：开">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M9 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-3"/><path d="m9 14 2 2 4-4"/></svg>
+          </button>
+          <!-- files toggle -->
+          <button class="btn icon" id="filesBtn" title="文件（SFTP）">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 14 2.7 5.4A1 1 0 0 1 3.6 4h11.8a2 2 0 0 1 1.9 1.4L20 14"/><path d="M2 14h20a1 1 0 0 1 1 1.2l-1 5A2 2 0 0 1 20 22H4a2 2 0 0 1-2-1.8l-1-5A1 1 0 0 1 2 14"/></svg>
+          </button>
+          <!-- fullscreen -->
+          <button class="btn icon" title="全屏">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+          </button>
+          <!-- disconnect -->
+          <button class="btn icon danger" title="断开">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- ===== body ===== -->
+      <div class="body">
+        <div class="viewport">
+          <!-- fake remote desktop -->
+          <div class="desktop" id="desktop">
+            <div class="vo-banner" id="voBanner" style="display:none">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12"/><circle cx="12" cy="12" r="3"/><path d="m2 2 20 20"/></svg>
+              只读模式 · 不会向远端发送鼠标 / 键盘
+            </div>
+            <div class="dt-window">
+              <div class="dt-titlebar">
+                <span class="dt-dot" style="background:#ff5f57"></span>
+                <span class="dt-dot" style="background:#febc2e"></span>
+                <span class="dt-dot" style="background:#28c840"></span>
+                <span style="margin-left:6px">terminal — ops@desktop-01</span>
+              </div>
+              <div class="dt-body">
+                <div><span class="prompt">ops@desktop-01</span>:~$ systemctl status nginx</div>
+                <div>● nginx.service — A high performance web server</div>
+                <div>&nbsp;&nbsp;&nbsp;Active: <span style="color:oklch(0.5 0.18 155)">active (running)</span></div>
+                <div><span class="prompt">ops@desktop-01</span>:~$ █</div>
+              </div>
+            </div>
+            <div class="dt-taskbar">
+              <span class="dt-start"></span>
+              <span class="dt-tasky"></span>
+              <span class="dt-tasky"></span>
+              <span class="dt-clock">14:32</span>
+            </div>
+          </div>
+
+          <!-- overlay -->
+          <div class="overlay" id="overlay">
+            <div id="ovInner"></div>
+          </div>
+        </div>
+
+        <!-- file dock -->
+        <div class="filedock" id="filedock">
+          <div class="fd-head">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 14 2.7 5.4A1 1 0 0 1 3.6 4h11.8a2 2 0 0 1 1.9 1.4L20 14"/><path d="M2 14h20a1 1 0 0 1 1 1.2l-1 5A2 2 0 0 1 20 22H4a2 2 0 0 1-2-1.8l-1-5A1 1 0 0 1 2 14"/></svg>
+            文件 · SFTP
+          </div>
+          <div class="fd-path">/home/ops</div>
+          <div class="fd-list">
+            <div class="fd-item">📁 .config <span class="sz">—</span></div>
+            <div class="fd-item">📁 projects <span class="sz">—</span></div>
+            <div class="fd-item">📄 deploy.sh <span class="sz">2.1 KB</span></div>
+            <div class="fd-item">📄 notes.md <span class="sz">840 B</span></div>
+            <div class="fd-item">📄 backup.tar.gz <span class="sz">18 MB</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== status bar ===== -->
+      <div class="statusbar">
+        <span class="grp">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m11 0h.01"/></svg>
+          <span id="resText">1920 × 1080</span>
+        </span>
+        <span class="fit-badge" id="fitBadge">自动适应</span>
+        <span class="sb-clip" id="sbClip">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M9 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-3"/></svg>
+          剪贴板已同步
+        </span>
+        <span class="uptime" id="uptime">02:14:37</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="note" id="note"></div>
+
+<script>
+  const overlay = document.getElementById('overlay');
+  const ovInner = document.getElementById('ovInner');
+  const pill = document.getElementById('statusPill');
+  const statusText = document.getElementById('statusText');
+  const filedock = document.getElementById('filedock');
+  const filesBtn = document.getElementById('filesBtn');
+  const desktop = document.getElementById('desktop');
+  const voBanner = document.getElementById('voBanner');
+  const note = document.getElementById('note');
+  const clipBtn = document.getElementById('clipBtn');
+
+  const spinnerSVG = '<svg class="spin" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>';
+  const alertSVG = '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="var(--destructive)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/></svg>';
+  const fpSVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4M14 13.12c0 2.38 0 6.38-1 8.88M17.29 21.02c.12-.6.43-2.3.5-3.02M2 12a10 10 0 0 1 18-6M2 16h.01M21.8 16c.2-2 .131-5.354 0-6M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2M8.65 22c.21-.66.45-1.32.57-2M9 6.8a6 6 0 0 1 9 5.2v2"/></svg>';
+
+  const STATES = {
+    connected: {
+      pill: ['pill-connected','已连接'], overlay: null, files: false, viewonly: false,
+      note: '<b>已连接（默认视图）。</b> 顶栏：图标 · 名称 · <code>host:port</code> chip · 状态胶囊；右侧动作组 <code>适应/原始</code> · 特殊按键 · 剪贴板 · 文件 · 全屏 · 断开。底部状态栏显示分辨率 · 自动适应 · 剪贴板 · 运行时长。'
+    },
+    connecting: {
+      pill: ['pill-connecting','连接中'], files: false, viewonly: false,
+      overlay: spinnerSVG + '<div class="big">正在连接 VNC…</div><div class="muted mono">10.0.12.34:5901</div>',
+      note: '<b>连接中。</b> 全面板 overlay（对齐 RDP 的 <code>RDPSessionOverlay</code>）：spinner + 文案 + <code>host:port</code>，取代当前那个漂在黑屏上的小 spinner。'
+    },
+    verify: {
+      pill: ['pill-connecting','待校验'], files: false, viewonly: false,
+      overlay: fpSVG.replace('width="14" height="14"','width="30" height="30"') +
+        '<div class="big">校验 VNC 服务器身份</div>' +
+        '<div class="muted">服务器使用加密认证，请先核对 RSA SHA-256 指纹：</div>' +
+        '<div class="verify-card"><div class="row">' + fpSVG + '<span>RSA SHA-256</span></div>' +
+        '<div class="fp">A1:B2:C3:D4:E5:F6:07:18:29:3A:4B:5C:6D:7E:8F:90:<br>0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9</div></div>' +
+        '<div class="ov-actions"><button class="ov-btn">取消</button><button class="ov-btn primary">校验并连接</button></div>',
+      note: '<b>指纹校验（VNC 专属改进）。</b> 从弹窗 <code>ConfirmDialog</code> 挪进 overlay，和 SSH host-key 校验一致 —— 指纹不再盖在黑屏上，读起来更清楚。'
+    },
+    error: {
+      pill: ['pill-error','连接失败'], files: false, viewonly: false,
+      overlay: alertSVG + '<div class="big">连接失败</div>' +
+        '<div class="err">VNC 认证失败或安全类型不兼容。请检查密码、VNC 安全类型与代理链配置。</div>' +
+        '<div class="ov-actions"><button class="ov-btn primary"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>重新连接</button><button class="ov-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg>编辑连接</button></div>',
+      note: '<b>错误态。</b> overlay：AlertTriangle + 错误信息 + <code>重新连接</code> / <code>编辑连接</code>（对齐 RDP）。重连从顶栏移到 overlay，只在断开 / 出错时出现。'
+    },
+    files: {
+      pill: ['pill-connected','已连接'], files: true, viewonly: false,
+      note: '<b>文件面板展开。</b> SFTP 面板在 viewport 右侧内嵌 —— 顶栏 / 状态栏横跨整个面板（含文件区）。无文件通道时「文件」按钮置灰 + tooltip，删掉当前那条常驻的「未配置文件通道」提示条。'
+    },
+    viewonly: {
+      pill: ['pill-connected','已连接 · 只读'], files: false, viewonly: true,
+      note: '<b>只读模式。</b>（备选能力）屏幕中上方一条 pill 提示「只读」，状态胶囊追加 · 只读。你之前选了「特殊按键 + 剪贴板」，只读是可选项 —— 想要就留，不要我在实现时去掉。'
+    }
+  };
+
+  function apply(state) {
+    const s = STATES[state];
+    pill.className = 'status-pill ' + s.pill[0];
+    statusText.textContent = s.pill[1];
+    if (s.overlay) { overlay.classList.add('show'); ovInner.innerHTML = s.overlay; }
+    else { overlay.classList.remove('show'); ovInner.innerHTML = ''; }
+    const showFiles = s.files;
+    filedock.classList.toggle('show', showFiles);
+    filesBtn.classList.toggle('active', showFiles);
+    desktop.classList.toggle('viewonly', s.viewonly);
+    voBanner.style.display = s.viewonly ? 'inline-flex' : 'none';
+    note.innerHTML = s.note;
+  }
+
+  document.getElementById('stateSeg').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    document.querySelectorAll('#stateSeg button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    apply(b.dataset.state);
+  });
+
+  // toolbar dropdown
+  const keysDd = document.getElementById('keysDd');
+  document.getElementById('keysBtn').addEventListener('click', (e) => { e.stopPropagation(); keysDd.classList.toggle('open'); });
+  document.addEventListener('click', () => keysDd.classList.remove('open'));
+
+  // files button also toggles dock for play
+  filesBtn.addEventListener('click', () => {
+    const on = !filedock.classList.contains('show');
+    filedock.classList.toggle('show', on); filesBtn.classList.toggle('active', on);
+  });
+  // clipboard toggle for play
+  let clipOn = true;
+  clipBtn.addEventListener('click', () => {
+    clipOn = !clipOn;
+    clipBtn.classList.toggle('clip-on', clipOn);
+    clipBtn.classList.toggle('clip-off', !clipOn);
+    clipBtn.title = clipOn ? '剪贴板同步：开' : '剪贴板同步：关';
+    document.getElementById('sbClip').style.opacity = clipOn ? '1' : '0.4';
+  });
+
+  // theme
+  const themeBtn = document.getElementById('themeBtn');
+  themeBtn.addEventListener('click', () => {
+    const dark = document.body.classList.toggle('dark');
+    themeBtn.textContent = dark ? '☀️ 浅色' : '🌙 深色';
+  });
+  document.body.classList.add('dark'); themeBtn.textContent = '☀️ 浅色';
+
+  apply('connected');
+</script>
+</body>
+</html>
