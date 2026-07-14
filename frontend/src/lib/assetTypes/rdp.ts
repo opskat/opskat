@@ -6,7 +6,7 @@ import { RDPConfigSection } from "@/components/asset/RDPConfigSection";
 registerAssetType({
   type: "rdp",
   icon: Monitor,
-  aliases: ["rdp", "remote-desktop"],
+  aliases: ["rdp"],
   label: "nav.rdp",
   category: "servers",
   canConnect: true,

@@ -191,7 +191,7 @@ transient `opskat.db-journal` appears mid-write. Read it **without ever writing 
 | Table | What it records | Notable columns |
 |-------|-----------------|-----------------|
 | `audit_logs` | Operations explicitly wired into the audit pipeline: AI/opsctl tool calls and specific audited desktop flows such as external edit. It does **not** represent every UI interaction (for example, interactive RDP and object-browser activity is not automatically a row per action). | `source`, `tool_name`, `asset_id`/`asset_name`, `command`, `request`, `result`, `error`, `success` (1/0), `decision`, `decision_source`, `session_id`, `grant_session_id`, `conversation_id`, `createtime` |
-| `assets` | Built-in and extension assets. Enumerate built-ins from `internal/assettype/*.go`; the current registry spans terminal, remote-desktop, database, middleware, and object-storage types. | `name`, `type`, `group_id`, `config` (JSON), `command_policy`, `status` (1=active, 2=deleted) |
+| `assets` | Built-in and extension assets. Enumerate built-ins from `internal/assettype/*.go`; the current registry spans terminal, VNC/RDP, database, middleware, and object-storage types. | `name`, `type`, `group_id`, `config` (JSON), `command_policy`, `status` (1=active, 2=deleted) |
 | `credentials` | Encrypted secrets (ciphertext only) | — |
 | `groups` | Asset groups (tree) | `name`, `parent_id` |
 | `policy_groups` | Command/operation policies | — |
