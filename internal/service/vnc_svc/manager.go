@@ -26,15 +26,9 @@ type Manager struct {
 
 type Session struct {
 	ID             string `json:"id"`
-	AssetID        int64  `json:"assetId"`
-	AssetType      string `json:"assetType"`
-	AssetName      string `json:"assetName"`
 	Username       string `json:"username,omitempty"`
 	Password       string `json:"password,omitempty"`
 	FileSSHAssetID int64  `json:"fileSshAssetId"`
-	FileEnabled    bool   `json:"fileEnabled"`
-	FileStatus     string `json:"fileStatus"`
-	Status         string `json:"status"`
 
 	conn      net.Conn
 	onData    func([]byte)
@@ -97,15 +91,9 @@ func (m *Manager) connectVNC(ctx context.Context, asset *asset_entity.Asset) (*S
 	}
 	session := &Session{
 		ID:             uuid.NewString(),
-		AssetID:        asset.ID,
-		AssetType:      asset.Type,
-		AssetName:      asset.Name,
 		Username:       cfg.Username,
 		Password:       password,
 		FileSSHAssetID: cfg.FileSSHAssetID,
-		FileEnabled:    cfg.FileSSHAssetID > 0,
-		FileStatus:     fileStatus(cfg.FileSSHAssetID),
-		Status:         "connecting",
 		conn:           conn,
 	}
 	m.store(session)
@@ -206,11 +194,4 @@ func (s *Session) close() {
 			_ = s.conn.Close()
 		}
 	})
-}
-
-func fileStatus(id int64) string {
-	if id > 0 {
-		return "已启用 SSH/SFTP 文件通道"
-	}
-	return "未配置 SSH/SFTP 文件通道，文件上传下载不可用"
 }

@@ -2800,23 +2800,23 @@
       "connFailed": "连接 etcd 失败"
     }
   },
-  "remoteDesktop": {
+  "vnc": {
     "files": "文件",
     "fileSshAsset": "SSH/SFTP 文件通道",
     "fileSshAssetPlaceholder": "选择用于文件上传下载的 SSH 资产",
     "securityType": "安全类型",
-    "connecting": "正在连接远程桌面...",
-    "streamError": "远程桌面画面流异常",
+    "connecting": "正在连接 VNC...",
+    "fileChannelDisabled": "未配置 SSH/SFTP 文件通道，文件上传下载不可用",
     "scaleOn": "缩放",
     "scaleOff": "原始",
     "pasteText": "粘贴文本",
-    "vncSecurityFailed": "VNC 认证失败或安全类型不兼容，请检查密码、VNC 安全类型和代理链配置。",
-    "vncCredentialsRequired": "VNC 需要密码，请在资产中配置密码或凭据",
-    "vncDisconnected": "VNC 连接已断开，请检查地址、端口、密码和代理链配置。",
+    "securityFailed": "VNC 认证失败或安全类型不兼容，请检查密码、VNC 安全类型和代理链配置。",
+    "credentialsRequired": "VNC 需要密码，请在资产中配置密码或凭据",
+    "disconnected": "VNC 连接已断开，请检查地址、端口、密码和代理链配置。",
     "verifyServerTitle": "确认 VNC 服务器身份",
     "verifyServerDesc": "服务器使用加密认证，请核对 RSA SHA-256 指纹后继续：",
     "approveServer": "确认并连接",
-    "vncServerVerificationFailed": "VNC 服务器身份信息无效，无法继续连接。",
-    "vncServerVerificationCancelled": "已取消 VNC 服务器身份确认。"
+    "serverVerificationFailed": "VNC 服务器身份信息无效，无法继续连接。",
+    "serverVerificationCancelled": "已取消 VNC 服务器身份确认。"
   }
 }

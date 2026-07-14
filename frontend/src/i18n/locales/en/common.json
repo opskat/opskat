@@ -2800,23 +2800,23 @@
       "connFailed": "Failed to connect to etcd"
     }
   },
-  "remoteDesktop": {
+  "vnc": {
     "files": "Files",
     "fileSshAsset": "SSH/SFTP file channel",
     "fileSshAssetPlaceholder": "Select an SSH asset for file upload/download",
     "securityType": "Security type",
-    "connecting": "Connecting remote desktop...",
-    "streamError": "Remote desktop stream error",
+    "connecting": "Connecting VNC...",
+    "fileChannelDisabled": "No SSH/SFTP file channel is configured; file upload and download are unavailable.",
     "scaleOn": "Scale",
     "scaleOff": "Original",
     "pasteText": "Paste text",
-    "vncSecurityFailed": "VNC authentication failed or the security type is incompatible. Check the password, VNC security type, and proxy chain configuration.",
-    "vncCredentialsRequired": "VNC requires a password. Configure a password or credential on the asset.",
-    "vncDisconnected": "VNC disconnected. Check the host, port, password, and proxy chain configuration.",
+    "securityFailed": "VNC authentication failed or the security type is incompatible. Check the password, VNC security type, and proxy chain configuration.",
+    "credentialsRequired": "VNC requires a password. Configure a password or credential on the asset.",
+    "disconnected": "VNC disconnected. Check the host, port, password, and proxy chain configuration.",
     "verifyServerTitle": "Verify VNC server identity",
     "verifyServerDesc": "The server uses encrypted authentication. Verify the RSA SHA-256 fingerprint before continuing:",
     "approveServer": "Verify and connect",
-    "vncServerVerificationFailed": "The VNC server identity is invalid, so the connection cannot continue.",
-    "vncServerVerificationCancelled": "VNC server identity verification was cancelled."
+    "serverVerificationFailed": "The VNC server identity is invalid, so the connection cannot continue.",
+    "serverVerificationCancelled": "VNC server identity verification was cancelled."
   }
 }

@@ -93,7 +93,7 @@ export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
         {
           kind: "text",
           key: "securityType",
-          label: "remoteDesktop.securityType",
+          label: "vnc.securityType",
           placeholder: "any",
           testid: "vnc-security-type-input",
         },
@@ -106,17 +106,17 @@ export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
     },
     {
       key: "files",
-      label: "remoteDesktop.files",
+      label: "vnc.files",
       fields: [
         {
           kind: "custom",
           render: () => (
-            <Field label={t("remoteDesktop.fileSshAsset")}>
+            <Field label={t("vnc.fileSshAsset")}>
               <AssetSelect
                 value={state.fileSshAssetId}
                 onValueChange={(fileSshAssetId) => patch({ fileSshAssetId })}
                 filterType="ssh"
-                placeholder={t("remoteDesktop.fileSshAssetPlaceholder")}
+                placeholder={t("vnc.fileSshAssetPlaceholder")}
                 testId="vnc-file-ssh-select"
               />
             </Field>

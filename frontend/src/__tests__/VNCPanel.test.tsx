@@ -83,15 +83,9 @@ describe("VNCPanel", () => {
       );
     vi.mocked(ConnectVNC).mockResolvedValue({
       id: "vnc-session",
-      assetId: 1,
-      assetType: "vnc",
-      assetName: "test-vnc",
       username: "vnc-user",
       password: "secret",
       fileSshAssetId: 0,
-      fileEnabled: false,
-      fileStatus: "disabled",
-      status: "connecting",
     } as never);
   });
 
@@ -109,7 +103,7 @@ describe("VNCPanel", () => {
       })
     );
 
-    expect(await screen.findByText("remoteDesktop.verifyServerTitle")).toBeInTheDocument();
+    expect(await screen.findByText("vnc.verifyServerTitle")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("confirm-vnc-server"));
     expect(approveServer).toHaveBeenCalledTimes(1);
   });
@@ -142,7 +136,7 @@ describe("VNCPanel", () => {
     render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
-    fireEvent.click(screen.getByText("remoteDesktop.pasteText"));
+    fireEvent.click(screen.getByText("vnc.pasteText"));
 
     await waitFor(() => expect(FakeRFB.latest!.clipboardPasteFrom).toHaveBeenCalledTimes(1));
     const sent = FakeRFB.latest!.clipboardPasteFrom.mock.calls[0][0] as string;
@@ -190,7 +184,7 @@ describe("VNCPanel", () => {
     render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
-    fireEvent.click(screen.getByText("remoteDesktop.pasteText"));
+    fireEvent.click(screen.getByText("vnc.pasteText"));
 
     // The emoji is typed directly as one keysym; the extra Ctrl+V paste must never fire.
     await waitFor(() => expect(FakeRFB.latest!.sendKey).toHaveBeenCalled());
@@ -203,21 +197,15 @@ describe("VNCPanel", () => {
   it("keeps the live remote desktop session connected when the file panel opens", async () => {
     vi.mocked(ConnectVNC).mockResolvedValue({
       id: "vnc-session",
-      assetId: 1,
-      assetType: "vnc",
-      assetName: "test-vnc",
       username: "vnc-user",
       password: "secret",
       fileSshAssetId: 2,
-      fileEnabled: true,
-      fileStatus: "enabled",
-      status: "connecting",
     } as never);
     const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
     render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
-    fireEvent.click(screen.getByText("remoteDesktop.files"));
+    fireEvent.click(screen.getByText("vnc.files"));
 
     // Wait until the file session has been established and committed (the panel
     // only renders once fileSessionId is set), so the disconnect effects have run.

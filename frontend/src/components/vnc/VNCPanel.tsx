@@ -26,15 +26,9 @@ interface VNCPanelProps {
 
 interface VNCSession {
   id: string;
-  assetId: number;
-  assetType: string;
-  assetName: string;
   username?: string;
   password?: string;
   fileSshAssetId: number;
-  fileEnabled: boolean;
-  fileStatus: string;
-  status: string;
 }
 
 export function VNCPanel({ tabId, asset }: VNCPanelProps) {
@@ -126,7 +120,7 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
             if (!disposed) setStatus("closed");
             return;
           }
-          const message = errorRef.current || tRef.current("remoteDesktop.vncDisconnected");
+          const message = errorRef.current || tRef.current("vnc.disconnected");
           errorRef.current = message;
           setError(message);
           setStatus("error");
@@ -136,13 +130,13 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
           if (e.detail?.reason) {
             console.warn("VNC security failure", { status: e.detail?.status, reason: e.detail.reason });
           }
-          const message = tRef.current("remoteDesktop.vncSecurityFailed");
+          const message = tRef.current("vnc.securityFailed");
           errorRef.current = message;
           setError(message);
           setStatus("error");
         });
         rfb.addEventListener("credentialsrequired", () => {
-          const message = tRef.current("remoteDesktop.vncCredentialsRequired");
+          const message = tRef.current("vnc.credentialsRequired");
           errorRef.current = message;
           setError(message);
           setStatus("error");
@@ -151,7 +145,7 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
           const e = event as CustomEvent<{ publickey?: Uint8Array }>;
           const publicKey = e.detail?.publickey;
           if (!publicKey) {
-            const message = tRef.current("remoteDesktop.vncServerVerificationFailed");
+            const message = tRef.current("vnc.serverVerificationFailed");
             errorRef.current = message;
             setError(message);
             setStatus("error");
@@ -232,7 +226,7 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
   }, [fileSessionId]);
 
   const openFiles = async () => {
-    if (!session?.fileEnabled || !session.fileSshAssetId) return;
+    if (!session?.fileSshAssetId) return;
     setFileOpen((v) => !v);
     if (!fileSessionId) {
       try {
@@ -295,7 +289,7 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
 
   const cancelVNCServerVerification = () => {
     setServerFingerprint("");
-    const message = t("remoteDesktop.vncServerVerificationCancelled");
+    const message = t("vnc.serverVerificationCancelled");
     errorRef.current = message;
     setError(message);
     setStatus("error");
@@ -314,15 +308,15 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
           }
           cancelVNCServerVerification();
         }}
-        title={t("remoteDesktop.verifyServerTitle")}
+        title={t("vnc.verifyServerTitle")}
         description={
           <span className="block space-y-2">
-            <span className="block">{t("remoteDesktop.verifyServerDesc")}</span>
+            <span className="block">{t("vnc.verifyServerDesc")}</span>
             <code className="block break-all font-mono text-xs text-foreground">{serverFingerprint}</code>
           </span>
         }
         cancelText={t("action.cancel")}
-        confirmText={t("remoteDesktop.approveServer")}
+        confirmText={t("vnc.approveServer")}
         confirmTestId="confirm-vnc-server"
         variant="default"
         onConfirm={approveVNCServer}
@@ -336,10 +330,10 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
           </div>
           <div className="flex items-center gap-1.5">
             <Button variant="outline" size="sm" className="h-8" onClick={() => setScaleViewport((v) => !v)}>
-              {scaleViewport ? t("remoteDesktop.scaleOn") : t("remoteDesktop.scaleOff")}
+              {scaleViewport ? t("vnc.scaleOn") : t("vnc.scaleOff")}
             </Button>
             <Button variant="outline" size="sm" className="h-8" onClick={pasteToVNC}>
-              {t("remoteDesktop.pasteText")}
+              {t("vnc.pasteText")}
             </Button>
             <Button
               variant="ghost"
@@ -357,10 +351,10 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
               size="sm"
               className="h-8 gap-1.5"
               onClick={openFiles}
-              disabled={!session?.fileEnabled}
+              disabled={!session?.fileSshAssetId}
             >
               <FolderOpen className="h-4 w-4" />
-              {t("remoteDesktop.files")}
+              {t("vnc.files")}
             </Button>
           </div>
         </div>
@@ -368,7 +362,7 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
           {status === "connecting" && (
             <div className="absolute inset-0 z-10 flex items-center justify-center text-sm text-white/70">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              {t("remoteDesktop.connecting")}
+              {t("vnc.connecting")}
             </div>
           )}
           {error && (
@@ -385,8 +379,8 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
             onPaste={handleVNCPaste}
           />
         </div>
-        {session && !session.fileEnabled && (
-          <div className="border-t px-3 py-2 text-xs text-muted-foreground">{session.fileStatus}</div>
+        {session && !session.fileSshAssetId && (
+          <div className="border-t px-3 py-2 text-xs text-muted-foreground">{t("vnc.fileChannelDisabled")}</div>
         )}
       </div>
       {fileOpen && fileSessionId && (
