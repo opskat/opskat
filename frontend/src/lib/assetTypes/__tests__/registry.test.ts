@@ -71,7 +71,7 @@ describe("AssetType Registry", () => {
 
   it("vnc and rdp open their registered pages", () => {
     expect(getAssetType("vnc")!.connectAction).toBe("page");
-    expect(getAssetType("vnc")!.pageId).toBe("remote-desktop");
+    expect(getAssetType("vnc")!.pageId).toBe("vnc");
     expect(getAssetType("rdp")!.connectAction).toBe("page");
     expect(getAssetType("rdp")!.pageId).toBe("rdp");
   });

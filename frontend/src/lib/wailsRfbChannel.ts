@@ -1,5 +1,5 @@
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
-import { WriteRemoteDesktop } from "../../wailsjs/go/remote_desktop/RemoteDesktop";
+import { WriteVNC } from "../../wailsjs/go/vnc/VNC";
 
 type ReadyState = "connecting" | "open" | "closing" | "closed";
 
@@ -20,7 +20,7 @@ function toBase64(data: ArrayBuffer | ArrayBufferView): string {
 
 /**
  * WebSocket 形状的假 channel,交给 noVNC 的 RFB 构造第二参(经 Websock.attach 接入)。
- * Go→FE 的 remote_desktop:data 事件喂给 onmessage;noVNC 的 send 转成 WriteRemoteDesktop。
+ * Go→FE 的 vnc:data 事件喂给 onmessage;noVNC 的 send 转成 WriteVNC。
  * 不做背压:与 local:data / k8s:log 一致,RFB 又是客户端拉取模型,天然自限速。
  */
 export class WailsRfbChannel {
@@ -37,8 +37,8 @@ export class WailsRfbChannel {
   private opened = false;
 
   constructor(private readonly sessionId: string) {
-    this.dataEvent = `remote_desktop:data:${sessionId}`;
-    this.closedEvent = `remote_desktop:closed:${sessionId}`;
+    this.dataEvent = `vnc:data:${sessionId}`;
+    this.closedEvent = `vnc:closed:${sessionId}`;
     EventsOn(this.dataEvent, (b64: string) => {
       if (this.readyState === "closed") return;
       this.onmessage?.({ data: base64ToArrayBuffer(b64) });
@@ -56,7 +56,7 @@ export class WailsRfbChannel {
   }
 
   send(data: ArrayBuffer | ArrayBufferView): void {
-    WriteRemoteDesktop(this.sessionId, toBase64(data)).catch(console.error);
+    WriteVNC(this.sessionId, toBase64(data)).catch(console.error);
   }
 
   // 由面板在 new RFB() 之后调用一次:置 open 并触发 onopen。attach 已同步跑完并以

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
-import { WriteRemoteDesktop } from "../../wailsjs/go/remote_desktop/RemoteDesktop";
+import { WriteVNC } from "../../wailsjs/go/vnc/VNC";
 import { WailsRfbChannel } from "@/lib/wailsRfbChannel";
 
 // 捕获 EventsOn 注册的处理器,供测试主动触发。
@@ -17,7 +17,7 @@ describe("WailsRfbChannel", () => {
   beforeEach(() => {
     vi.mocked(EventsOn).mockReset();
     vi.mocked(EventsOff).mockReset();
-    vi.mocked(WriteRemoteDesktop)
+    vi.mocked(WriteVNC)
       .mockReset()
       .mockResolvedValue(undefined as never);
   });
@@ -28,17 +28,17 @@ describe("WailsRfbChannel", () => {
     const received: ArrayBuffer[] = [];
     channel.onmessage = (e) => received.push(e.data);
 
-    handlers["remote_desktop:data:sess-1"]!(btoa(String.fromCharCode(1, 2, 3)));
+    handlers["vnc:data:sess-1"]!(btoa(String.fromCharCode(1, 2, 3)));
 
     expect(received).toHaveLength(1);
     expect(Array.from(new Uint8Array(received[0]))).toEqual([1, 2, 3]);
   });
 
-  it("encodes send() bytes to base64 for WriteRemoteDesktop", () => {
+  it("encodes send() bytes to base64 for WriteVNC", () => {
     captureHandlers();
     const channel = new WailsRfbChannel("sess-1");
     channel.send(new Uint8Array([104, 105])); // "hi"
-    expect(WriteRemoteDesktop).toHaveBeenCalledWith("sess-1", btoa("hi"));
+    expect(WriteVNC).toHaveBeenCalledWith("sess-1", btoa("hi"));
   });
 
   it("delivers high-byte (>= 0x80) data events to onmessage without corruption", () => {
@@ -47,7 +47,7 @@ describe("WailsRfbChannel", () => {
     const received: ArrayBuffer[] = [];
     channel.onmessage = (e) => received.push(e.data);
 
-    handlers["remote_desktop:data:sess-1"]!(btoa(String.fromCharCode(0x00, 0x7f, 0x80, 0xff)));
+    handlers["vnc:data:sess-1"]!(btoa(String.fromCharCode(0x00, 0x7f, 0x80, 0xff)));
 
     expect(received).toHaveLength(1);
     expect(Array.from(new Uint8Array(received[0]))).toEqual([0x00, 0x7f, 0x80, 0xff]);
@@ -57,7 +57,7 @@ describe("WailsRfbChannel", () => {
     captureHandlers();
     const channel = new WailsRfbChannel("sess-1");
     channel.send(new Uint8Array([0x80, 0xff]));
-    expect(WriteRemoteDesktop).toHaveBeenCalledWith("sess-1", btoa(String.fromCharCode(0x80, 0xff)));
+    expect(WriteVNC).toHaveBeenCalledWith("sess-1", btoa(String.fromCharCode(0x80, 0xff)));
   });
 
   it("marks open exactly once and fires onopen", () => {
@@ -76,7 +76,7 @@ describe("WailsRfbChannel", () => {
     const channel = new WailsRfbChannel("sess-1");
     const onclose = vi.fn();
     channel.onclose = onclose;
-    handlers["remote_desktop:closed:sess-1"]!();
+    handlers["vnc:closed:sess-1"]!();
     expect(onclose).toHaveBeenCalledTimes(1);
     expect(channel.readyState).toBe("closed");
   });
@@ -85,8 +85,8 @@ describe("WailsRfbChannel", () => {
     captureHandlers();
     const channel = new WailsRfbChannel("sess-1");
     channel.close();
-    expect(EventsOff).toHaveBeenCalledWith("remote_desktop:data:sess-1");
-    expect(EventsOff).toHaveBeenCalledWith("remote_desktop:closed:sess-1");
+    expect(EventsOff).toHaveBeenCalledWith("vnc:data:sess-1");
+    expect(EventsOff).toHaveBeenCalledWith("vnc:closed:sess-1");
     expect(channel.readyState).toBe("closed");
   });
 });

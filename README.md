@@ -77,7 +77,7 @@ Even before you turn on the AI, OpsKat is a full-featured terminal and asset man
 - Split-pane terminal with customizable themes
 - Built-in RDP remote desktop with fit/actual-size views, fullscreen, special-key shortcuts, and text/file clipboard sync
 - SFTP file browser
-- VNC remote desktop tabs backed by noVNC and the built-in WebSocket-to-TCP bridge
+- VNC remote desktop tabs backed by noVNC with session bytes carried over Wails IPC
 - Jump host chain connections
 - SQL query editor and data browser for MySQL, PostgreSQL, SQL Server, and SQLite
 - Redis command execution with key browser
@@ -100,7 +100,7 @@ The same chain model is shared by SSH, SQL databases, Redis, MongoDB, Kafka, etc
 
 ### Remote Desktop
 
-VNC and RDP assets use built-in remote desktop capabilities without a separate bridge service. VNC is rendered through noVNC and a built-in WebSocket-to-TCP bridge. RDP uses OpsKat's embedded RDP client and is rendered directly in an application tab.
+VNC and RDP assets use built-in remote desktop capabilities without a separate bridge service. VNC is rendered through noVNC with session bytes carried over Wails IPC. RDP uses OpsKat's embedded RDP client and is rendered directly in an application tab.
 
 - VNC supports target credentials, proxy chains, text clipboard synchronization, and an optional SSH/SFTP file channel.
 - RDP supports resolution, domain, text clipboard synchronization, and direct file clipboard transfer through the embedded RDP implementation.

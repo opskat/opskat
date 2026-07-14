@@ -1,15 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { asset_entity } from "../../wailsjs/go/models";
-import {
-  ConnectRemoteDesktop,
-  DisconnectRemoteDesktop,
-  EncodeVNCClipboardText,
-  StartRemoteDesktopStream,
-} from "../../wailsjs/go/remote_desktop/RemoteDesktop";
+import { ConnectVNC, DisconnectVNC, EncodeVNCClipboardText, StartVNCStream } from "../../wailsjs/go/vnc/VNC";
 import { DisconnectSSH, OpenSFTPSession } from "../../wailsjs/go/ssh/SSH";
 import { ClipboardGetText, ClipboardSetText } from "../../wailsjs/runtime";
-import { RemoteDesktopPanel } from "@/components/remote-desktop/RemoteDesktopPanel";
+import { VNCPanel } from "@/components/vnc/VNCPanel";
 
 const approveServer = vi.fn();
 
@@ -47,12 +42,12 @@ class FakeRFB extends EventTarget {
 
 vi.mock("@novnc/novnc/lib/rfb", () => ({ default: FakeRFB }));
 
-vi.mock("../../wailsjs/go/remote_desktop/RemoteDesktop", () => ({
-  ConnectRemoteDesktop: vi.fn(),
-  DisconnectRemoteDesktop: vi.fn(),
+vi.mock("../../wailsjs/go/vnc/VNC", () => ({
+  ConnectVNC: vi.fn(),
+  DisconnectVNC: vi.fn(),
   EncodeVNCClipboardText: vi.fn(),
-  StartRemoteDesktopStream: vi.fn(),
-  WriteRemoteDesktop: vi.fn(),
+  StartVNCStream: vi.fn(),
+  WriteVNC: vi.fn(),
 }));
 
 vi.mock("../../wailsjs/go/ssh/SSH", async (importOriginal) => ({
@@ -62,19 +57,19 @@ vi.mock("../../wailsjs/go/ssh/SSH", async (importOriginal) => ({
 }));
 
 // The file-channel panel is exercised by its own tests; stub it here so the
-// remote-desktop session-lifecycle tests don't depend on its internals.
+// VNC session-lifecycle tests don't depend on its internals.
 vi.mock("@/components/terminal/FileManagerPanel", () => ({
   FileManagerPanel: () => <div data-testid="file-manager" />,
 }));
 
-describe("RemoteDesktopPanel", () => {
+describe("VNCPanel", () => {
   beforeEach(() => {
     currentT = (key: string) => key;
     approveServer.mockClear();
     FakeRFB.latest = undefined;
     FakeRFB.lastCredentials = undefined;
-    vi.mocked(DisconnectRemoteDesktop).mockReset();
-    vi.mocked(StartRemoteDesktopStream)
+    vi.mocked(DisconnectVNC).mockReset();
+    vi.mocked(StartVNCStream)
       .mockReset()
       .mockResolvedValue(undefined as never);
     vi.mocked(DisconnectSSH).mockReset();
@@ -86,7 +81,7 @@ describe("RemoteDesktopPanel", () => {
       .mockImplementation(async (text) =>
         text === "中文" ? [0xd6, 0xd0, 0xce, 0xc4] : [0x61, 0x62, 0x63, 0xd6, 0xd0, 0xce, 0xc4, 0x58, 0x59, 0x5a]
       );
-    vi.mocked(ConnectRemoteDesktop).mockResolvedValue({
+    vi.mocked(ConnectVNC).mockResolvedValue({
       id: "vnc-session",
       assetId: 1,
       assetType: "vnc",
@@ -102,10 +97,10 @@ describe("RemoteDesktopPanel", () => {
 
   it("shows the RA2 server identity prompt and continues after approval", async () => {
     const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
-    render(<RemoteDesktopPanel tabId="remote-1" asset={asset} />);
+    render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
-    expect(StartRemoteDesktopStream).toHaveBeenCalledWith("vnc-session");
+    expect(StartVNCStream).toHaveBeenCalledWith("vnc-session");
     expect(FakeRFB.lastCredentials).toEqual({ username: "vnc-user", password: "secret" });
 
     FakeRFB.latest!.dispatchEvent(
@@ -121,7 +116,7 @@ describe("RemoteDesktopPanel", () => {
 
   it("decodes UTF-8 clipboard text received from a legacy VNC server", async () => {
     const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
-    render(<RemoteDesktopPanel tabId="remote-1" asset={asset} />);
+    render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
     const wireText = String.fromCharCode(0xe4, 0xb8, 0xad, 0xe6, 0x96, 0x87);
@@ -132,7 +127,7 @@ describe("RemoteDesktopPanel", () => {
 
   it("decodes GBK clipboard text received from Chinese Windows VNC", async () => {
     const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
-    render(<RemoteDesktopPanel tabId="remote-1" asset={asset} />);
+    render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
     const wireText = String.fromCharCode(0xd6, 0xd0, 0xce, 0xc4);
@@ -144,7 +139,7 @@ describe("RemoteDesktopPanel", () => {
   it("sends mixed Chinese and English through one GBK clipboard message", async () => {
     vi.mocked(ClipboardGetText).mockResolvedValue("abc中文XYZ");
     const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
-    render(<RemoteDesktopPanel tabId="remote-1" asset={asset} />);
+    render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
     fireEvent.click(screen.getByText("remoteDesktop.pasteText"));
@@ -164,7 +159,7 @@ describe("RemoteDesktopPanel", () => {
 
   it("routes the native paste event through Unicode VNC paste", async () => {
     const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
-    const { container } = render(<RemoteDesktopPanel tabId="remote-1" asset={asset} />);
+    const { container } = render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
     const vncContainer = container.querySelector('[tabindex="0"]');
@@ -178,7 +173,7 @@ describe("RemoteDesktopPanel", () => {
   it("waits for clipboard encoding before forwarding Ctrl+V to VNC", async () => {
     vi.mocked(ClipboardGetText).mockResolvedValue("abc中文XYZ");
     const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
-    const { container } = render(<RemoteDesktopPanel tabId="remote-1" asset={asset} />);
+    const { container } = render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
     const vncContainer = container.querySelector('[tabindex="0"]');
@@ -192,7 +187,7 @@ describe("RemoteDesktopPanel", () => {
     vi.mocked(ClipboardGetText).mockResolvedValue("😀");
     vi.mocked(EncodeVNCClipboardText).mockRejectedValue(new Error("not representable in GBK"));
     const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
-    render(<RemoteDesktopPanel tabId="remote-1" asset={asset} />);
+    render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
     fireEvent.click(screen.getByText("remoteDesktop.pasteText"));
@@ -206,7 +201,7 @@ describe("RemoteDesktopPanel", () => {
   });
 
   it("keeps the live remote desktop session connected when the file panel opens", async () => {
-    vi.mocked(ConnectRemoteDesktop).mockResolvedValue({
+    vi.mocked(ConnectVNC).mockResolvedValue({
       id: "vnc-session",
       assetId: 1,
       assetType: "vnc",
@@ -219,7 +214,7 @@ describe("RemoteDesktopPanel", () => {
       status: "connecting",
     } as never);
     const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
-    render(<RemoteDesktopPanel tabId="remote-1" asset={asset} />);
+    render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
     fireEvent.click(screen.getByText("remoteDesktop.files"));
@@ -229,29 +224,29 @@ describe("RemoteDesktopPanel", () => {
     await screen.findByTestId("file-manager");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(OpenSFTPSession).toHaveBeenCalledWith(2);
-    expect(DisconnectRemoteDesktop).not.toHaveBeenCalled();
+    expect(DisconnectVNC).not.toHaveBeenCalled();
   });
 
   it("keeps the live VNC transport connected across a UI language change", async () => {
     const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
-    const { rerender } = render(<RemoteDesktopPanel tabId="remote-1" asset={asset} />);
+    const { rerender } = render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
     const rfbBeforeLanguageChange = FakeRFB.latest;
-    expect(StartRemoteDesktopStream).toHaveBeenCalledTimes(1);
+    expect(StartVNCStream).toHaveBeenCalledTimes(1);
 
     // Simulate react-i18next firing `languageChanged`: every consumer of
     // useTranslation() re-renders with a brand-new `t` reference.
     currentT = (key: string) => key;
-    rerender(<RemoteDesktopPanel tabId="remote-1" asset={asset} />);
+    rerender(<VNCPanel tabId="vnc-1" asset={asset} />);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     // The transport effect must not have torn down and rebuilt: same noVNC
-    // instance, no disconnect(), and StartRemoteDesktopStream not re-invoked
+    // instance, no disconnect(), and StartVNCStream not re-invoked
     // (the backend pump is startOnce-guarded, so a second call would desync
     // the fresh noVNC instance mid-stream).
     expect(FakeRFB.latest).toBe(rfbBeforeLanguageChange);
     expect(rfbBeforeLanguageChange!.disconnect).not.toHaveBeenCalled();
-    expect(StartRemoteDesktopStream).toHaveBeenCalledTimes(1);
+    expect(StartVNCStream).toHaveBeenCalledTimes(1);
   });
 });

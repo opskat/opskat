@@ -7,7 +7,7 @@ import {
   type ProxyChainJSON,
 } from "./proxyConfig";
 
-export interface RemoteDesktopFormState extends ConnectionFormFields {
+export interface VNCFormState extends ConnectionFormFields {
   host: string;
   port: number;
   username: string;
@@ -18,7 +18,7 @@ export interface RemoteDesktopFormState extends ConnectionFormFields {
   fileSshAssetId: number;
 }
 
-interface RemoteDesktopConfigJSON {
+interface VNCConfigJSON {
   host: string;
   port: number;
   username?: string;
@@ -29,7 +29,7 @@ interface RemoteDesktopConfigJSON {
   proxy_chain?: ProxyChainJSON | null;
 }
 
-export const VNC_DEFAULTS: RemoteDesktopFormState = {
+export const VNC_DEFAULTS: VNCFormState = {
   host: "",
   port: 5900,
   username: "",
@@ -41,9 +41,9 @@ export const VNC_DEFAULTS: RemoteDesktopFormState = {
   ...parseConnectionFields(undefined, 0, undefined),
 };
 
-export function parseRemoteDesktopConfig(configJSON: string): RemoteDesktopFormState {
+export function parseVNCConfig(configJSON: string): VNCFormState {
   try {
-    const cfg: RemoteDesktopConfigJSON = JSON.parse(configJSON || "{}");
+    const cfg: VNCConfigJSON = JSON.parse(configJSON || "{}");
     return {
       ...VNC_DEFAULTS,
       host: cfg.host || "",
@@ -61,12 +61,12 @@ export function parseRemoteDesktopConfig(configJSON: string): RemoteDesktopFormS
   }
 }
 
-export async function buildRemoteDesktopConfig(
-  state: RemoteDesktopFormState,
+export async function buildVNCConfig(
+  state: VNCFormState,
   credential: CredentialFragment,
   encryptPassword: (plain: string) => Promise<string>
 ): Promise<string> {
-  const cfg: RemoteDesktopConfigJSON = {
+  const cfg: VNCConfigJSON = {
     host: state.host,
     port: state.port,
   };
@@ -84,9 +84,9 @@ export async function buildRemoteDesktopConfig(
   return JSON.stringify(cfg);
 }
 
-export function parseRemoteDesktopPasswordCredentialConfig(configJSON: string): CredentialFragment {
+export function parseVNCPasswordCredentialConfig(configJSON: string): CredentialFragment {
   try {
-    const cfg: RemoteDesktopConfigJSON = JSON.parse(configJSON || "{}");
+    const cfg: VNCConfigJSON = JSON.parse(configJSON || "{}");
     return { credential_id: cfg.credential_id, password: cfg.password };
   } catch {
     return {};

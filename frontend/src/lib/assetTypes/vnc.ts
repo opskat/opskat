@@ -1,7 +1,7 @@
 import { ScreenShare } from "lucide-react";
 import { registerAssetType } from "./_register";
-import { RemoteDesktopDetailInfoCard } from "@/components/asset/detail/RemoteDesktopDetailInfoCard";
-import { VNCConfigSection } from "@/components/asset/RemoteDesktopConfigSection";
+import { VNCDetailInfoCard } from "@/components/asset/detail/VNCDetailInfoCard";
+import { VNCConfigSection } from "@/components/asset/VNCConfigSection";
 
 registerAssetType({
   type: "vnc",
@@ -12,9 +12,9 @@ registerAssetType({
   canConnect: true,
   canConnectInNewTab: true,
   connectAction: "page",
-  pageId: "remote-desktop",
+  pageId: "vnc",
   pageIcon: "screen-share",
-  DetailInfoCard: RemoteDesktopDetailInfoCard,
+  DetailInfoCard: VNCDetailInfoCard,
   ConfigSection: VNCConfigSection,
   testable: true,
 });

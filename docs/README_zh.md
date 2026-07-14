@@ -77,7 +77,7 @@ _更多资产类型将通过插件模式持续扩展。_
 - 分屏终端，自定义主题
 - 内置 RDP 远程桌面，支持适应/实际尺寸、全屏、特殊按键与文本/文件剪贴板同步
 - SFTP 文件浏览器
-- 基于 noVNC 和内置 WebSocket↔TCP 桥接的 VNC 远程桌面
+- 基于 noVNC、通过 Wails IPC 传输会话字节的 VNC 远程桌面
 - 跳板机链式连接
 - MySQL、PostgreSQL、SQL Server 与 SQLite 查询编辑器和数据浏览器
 - Redis 命令执行与 Key 浏览器
@@ -94,7 +94,7 @@ SSH、数据库、Redis、MongoDB、Kafka、etcd、Kubernetes、RDP 和 S3 兼�
 
 ### 远程桌面
 
-VNC 和 RDP 资产不再依赖单独的桥接服务。VNC 通过 noVNC 和内置 WebSocket↔TCP 桥接在 OpsKat 内显示；RDP 使用 OpsKat 内置的 RDP 客户端，直接在应用标签页中渲染。
+VNC 和 RDP 资产不再依赖单独的桥接服务。VNC 通过 noVNC 在 OpsKat 内显示，会话字节经 Wails IPC 传输；RDP 使用 OpsKat 内置的 RDP 客户端，直接在应用标签页中渲染。
 
 - VNC 支持目标凭据、代理链、文本剪贴板同步，以及可选的 SSH/SFTP 文件通道。
 - RDP 支持分辨率、域、文本剪贴板同步，并通过内置 RDP 实现直接传输剪贴板文件。

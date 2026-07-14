@@ -47,9 +47,7 @@ const OSSBrowserPanel = lazy(() =>
 const K8sClusterPage = lazy(() =>
   import("@/components/k8s/K8sClusterPage").then((m) => ({ default: m.K8sClusterPage }))
 );
-const RemoteDesktopPanel = lazy(() =>
-  import("@/components/remote-desktop/RemoteDesktopPanel").then((m) => ({ default: m.RemoteDesktopPanel }))
-);
+const VNCPanel = lazy(() => import("@/components/vnc/VNCPanel").then((m) => ({ default: m.VNCPanel })));
 const RDPPanel = lazy(() => import("@/components/rdp/RDPPanel").then((m) => ({ default: m.RDPPanel })));
 
 interface MainPanelProps {
@@ -163,10 +161,10 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
             if (!k8sAsset) return null;
             return <K8sClusterPage asset={k8sAsset} />;
           }
-          case "remote-desktop": {
-            const rdAsset = meta.assetId ? assets.find((a) => a.ID === meta.assetId) : null;
-            if (!rdAsset || !activeTab) return null;
-            return <RemoteDesktopPanel tabId={activeTab.id} asset={rdAsset} />;
+          case "vnc": {
+            const vncAsset = meta.assetId ? assets.find((a) => a.ID === meta.assetId) : null;
+            if (!vncAsset || !activeTab) return null;
+            return <VNCPanel tabId={activeTab.id} asset={vncAsset} />;
           }
           case "rdp": {
             const rdpAsset = meta.assetId ? assets.find((a) => a.ID === meta.assetId) : null;

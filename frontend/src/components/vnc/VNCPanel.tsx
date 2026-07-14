@@ -11,12 +11,7 @@ import { AlertTriangle, FolderOpen, Loader2, Maximize2, RefreshCw, ScreenShare }
 import { Button, ConfirmDialog } from "@opskat/ui";
 import { toast } from "sonner";
 import { asset_entity } from "../../../wailsjs/go/models";
-import {
-  ConnectRemoteDesktop,
-  DisconnectRemoteDesktop,
-  EncodeVNCClipboardText,
-  StartRemoteDesktopStream,
-} from "../../../wailsjs/go/remote_desktop/RemoteDesktop";
+import { ConnectVNC, DisconnectVNC, EncodeVNCClipboardText, StartVNCStream } from "../../../wailsjs/go/vnc/VNC";
 import { DisconnectSSH, OpenSFTPSession } from "../../../wailsjs/go/ssh/SSH";
 import { ClipboardGetText, ClipboardSetText } from "../../../wailsjs/runtime";
 import { FileManagerPanel } from "@/components/terminal/FileManagerPanel";
@@ -24,12 +19,12 @@ import { WailsRfbChannel } from "@/lib/wailsRfbChannel";
 import { decodeVNCClipboardText, pasteVNCClipboardText } from "@/lib/vncClipboard";
 import type RFB from "@novnc/novnc/lib/rfb";
 
-interface RemoteDesktopPanelProps {
+interface VNCPanelProps {
   tabId: string;
   asset: asset_entity.Asset;
 }
 
-interface RemoteDesktopSession {
+interface VNCSession {
   id: string;
   assetId: number;
   assetType: string;
@@ -42,7 +37,7 @@ interface RemoteDesktopSession {
   status: string;
 }
 
-export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
+export function VNCPanel({ tabId, asset }: VNCPanelProps) {
   const { t } = useTranslation();
   const vncContainerRef = useRef<HTMLDivElement | null>(null);
   const rfbRef = useRef<RFB | null>(null);
@@ -51,7 +46,7 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
   const scaleViewportRef = useRef(true);
   const keyboardPasteRef = useRef(false);
   const tRef = useRef(t);
-  const [session, setSession] = useState<RemoteDesktopSession | null>(null);
+  const [session, setSession] = useState<VNCSession | null>(null);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
   const [scaleViewport, setScaleViewport] = useState(true);
@@ -75,7 +70,7 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
       rfbRef.current = null;
     }
     try {
-      const next = (await ConnectRemoteDesktop(asset.ID)) as RemoteDesktopSession;
+      const next = (await ConnectVNC(asset.ID)) as VNCSession;
       setSession(next);
       setStatus("connecting");
     } catch (e) {
@@ -178,7 +173,7 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
         // 两阶段:先 markOpen(触发 onopen → noVNC 就绪),再启动后端读 pump,
         // 保证前端已订阅事件、noVNC 已就绪之后字节才开始流动,不丢 RFB 握手首包。
         channel.markOpen();
-        void StartRemoteDesktopStream(session.id).catch((e) => {
+        void StartVNCStream(session.id).catch((e) => {
           if (disposed) return;
           const message = String(e);
           errorRef.current = message;
@@ -226,7 +221,7 @@ export function RemoteDesktopPanel({ tabId, asset }: RemoteDesktopPanelProps) {
 
   useEffect(() => {
     return () => {
-      if (session?.id) DisconnectRemoteDesktop(session.id);
+      if (session?.id) DisconnectVNC(session.id);
     };
   }, [session?.id]);
 

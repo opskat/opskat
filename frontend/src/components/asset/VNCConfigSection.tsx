@@ -9,27 +9,27 @@ import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig
 import { proxyChainValidationKey } from "./proxyConfig";
 import { useAssetCredential } from "./useAssetCredential";
 import {
-  buildRemoteDesktopConfig,
-  parseRemoteDesktopConfig,
-  parseRemoteDesktopPasswordCredentialConfig,
+  buildVNCConfig,
+  parseVNCConfig,
+  parseVNCPasswordCredentialConfig,
   VNC_DEFAULTS,
-  type RemoteDesktopFormState,
-} from "./RemoteDesktopConfigSection.config";
+  type VNCFormState,
+} from "./VNCConfigSection.config";
 import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 
 export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
   const { t } = useTranslation();
   const passwordCredentialConfig = useMemo(
-    () => (editAsset ? parseRemoteDesktopPasswordCredentialConfig(editAsset.Config) : undefined),
+    () => (editAsset ? parseVNCPasswordCredentialConfig(editAsset.Config) : undefined),
     [editAsset]
   );
   const cred = useAssetCredential(editAsset, passwordCredentialConfig);
 
-  const { state, patch } = useConfigSection<RemoteDesktopFormState>({
+  const { state, patch } = useConfigSection<VNCFormState>({
     ref,
     editAsset,
     onValidityChange,
-    init: (a) => (a ? parseRemoteDesktopConfig(a.Config) : { ...VNC_DEFAULTS }),
+    init: (a) => (a ? parseVNCConfig(a.Config) : { ...VNC_DEFAULTS }),
     validate: (s) => {
       const baseOk = !!s.host.trim() && s.port > 0 && s.port <= 65535;
       const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
@@ -41,7 +41,7 @@ export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
       };
     },
     build: async (s, ctx) => ({
-      configJSON: await buildRemoteDesktopConfig(
+      configJSON: await buildVNCConfig(
         s,
         await resolveSaveCredential(cred.value, ctx.encryptPassword),
         ctx.encryptPassword
@@ -50,9 +50,7 @@ export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
     }),
     buildTest: async (s) => {
       const plainPassword = cred.value.password || s.password;
-      const cfg = JSON.parse(
-        await buildRemoteDesktopConfig(s, resolveTestCredential(cred.value), async (plain) => plain)
-      );
+      const cfg = JSON.parse(await buildVNCConfig(s, resolveTestCredential(cred.value), async (plain) => plain));
       if (plainPassword) cfg.password = plainPassword;
       return {
         assetType: "vnc",
@@ -63,7 +61,7 @@ export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
     deps: [cred.value],
   });
 
-  const groups: ConfigGroupSchema<RemoteDesktopFormState>[] = [
+  const groups: ConfigGroupSchema<VNCFormState>[] = [
     {
       key: "connection",
       label: "asset.tabConnection",

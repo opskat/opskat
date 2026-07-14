@@ -1,4 +1,4 @@
-package remote_desktop
+package vnc
 
 import (
 	"testing"
@@ -6,11 +6,11 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
-	"github.com/opskat/opskat/internal/service/remote_desktop_svc"
+	"github.com/opskat/opskat/internal/service/vnc_svc"
 )
 
 func TestEncodeVNCClipboardTextUsesWindowsChineseCodePage(t *testing.T) {
-	got, err := (&RemoteDesktop{}).EncodeVNCClipboardText("abc中文XYZ")
+	got, err := (&VNC{}).EncodeVNCClipboardText("abc中文XYZ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,22 +25,22 @@ func TestEncodeVNCClipboardTextUsesWindowsChineseCodePage(t *testing.T) {
 	}
 }
 
-func newTestRemoteDesktop(t *testing.T) *RemoteDesktop {
+func newTestVNC(t *testing.T) *VNC {
 	ctrl := gomock.NewController(t)
-	mgr := remote_desktop_svc.NewManager(mock_asset_repo.NewMockAssetRepo(ctrl))
-	return &RemoteDesktop{manager: mgr}
+	mgr := vnc_svc.NewManager(mock_asset_repo.NewMockAssetRepo(ctrl))
+	return &VNC{manager: mgr}
 }
 
-func TestWriteRemoteDesktopRejectsInvalidBase64(t *testing.T) {
-	rd := newTestRemoteDesktop(t)
-	if err := rd.WriteRemoteDesktop("s", "not@@base64"); err == nil {
+func TestWriteVNCRejectsInvalidBase64(t *testing.T) {
+	v := newTestVNC(t)
+	if err := v.WriteVNC("s", "not@@base64"); err == nil {
 		t.Fatal("expected base64 decode error")
 	}
 }
 
-func TestWriteRemoteDesktopUnknownSession(t *testing.T) {
-	rd := newTestRemoteDesktop(t)
-	if err := rd.WriteRemoteDesktop("missing", "aGVsbG8="); err == nil {
+func TestWriteVNCUnknownSession(t *testing.T) {
+	v := newTestVNC(t)
+	if err := v.WriteVNC("missing", "aGVsbG8="); err == nil {
 		t.Fatal("expected unknown-session error")
 	}
 }

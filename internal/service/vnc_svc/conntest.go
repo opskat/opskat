@@ -1,4 +1,4 @@
-package remote_desktop_svc
+package vnc_svc
 
 import (
 	"context"

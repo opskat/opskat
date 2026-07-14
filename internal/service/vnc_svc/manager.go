@@ -1,4 +1,4 @@
-package remote_desktop_svc
+package vnc_svc
 
 import (
 	"context"
@@ -55,13 +55,13 @@ func NewManager(repo asset_repo.AssetRepo) *Manager {
 }
 
 func (m *Manager) Connect(ctx context.Context, assetID int64) (*Session, error) {
-	logger.Ctx(ctx).Info("remote desktop connect start", zap.Int64("assetID", assetID))
+	logger.Ctx(ctx).Info("VNC connect start", zap.Int64("assetID", assetID))
 	session, err := m.connect(ctx, assetID)
 	if err != nil {
-		logger.Ctx(ctx).Error("remote desktop connect failed", zap.Int64("assetID", assetID), zap.Error(err))
+		logger.Ctx(ctx).Error("VNC connect failed", zap.Int64("assetID", assetID), zap.Error(err))
 		return nil, err
 	}
-	logger.Ctx(ctx).Info("remote desktop connected",
+	logger.Ctx(ctx).Info("VNC connected",
 		zap.Int64("assetID", assetID), zap.String("sessionID", session.ID))
 	return session, nil
 }
@@ -69,10 +69,10 @@ func (m *Manager) Connect(ctx context.Context, assetID int64) (*Session, error) 
 func (m *Manager) connect(ctx context.Context, assetID int64) (*Session, error) {
 	asset, err := m.assetRepo.Find(ctx, assetID)
 	if err != nil {
-		return nil, fmt.Errorf("读取远程桌面资产失败: %w", err)
+		return nil, fmt.Errorf("读取 VNC 资产失败: %w", err)
 	}
 	if asset.Type != asset_entity.AssetTypeVNC {
-		return nil, fmt.Errorf("资产不是远程桌面类型: %s", asset.Type)
+		return nil, fmt.Errorf("资产不是 VNC 类型: %s", asset.Type)
 	}
 	return m.connectVNC(ctx, asset)
 }
@@ -124,7 +124,7 @@ func (m *Manager) SetCallbacks(sessionID string, onData func([]byte), onClose fu
 	session := m.sessions[sessionID]
 	m.mu.Unlock()
 	if session == nil {
-		return fmt.Errorf("远程桌面会话不存在: %s", sessionID)
+		return fmt.Errorf("VNC 会话不存在: %s", sessionID)
 	}
 	session.start(onData, onClose)
 	return nil
@@ -136,7 +136,7 @@ func (m *Manager) Write(sessionID string, data []byte) error {
 	session := m.sessions[sessionID]
 	m.mu.Unlock()
 	if session == nil {
-		return fmt.Errorf("远程桌面会话不存在: %s", sessionID)
+		return fmt.Errorf("VNC 会话不存在: %s", sessionID)
 	}
 	return session.write(data)
 }
@@ -149,7 +149,7 @@ func (m *Manager) Disconnect(sessionID string) {
 	if session != nil {
 		session.close()
 		// Disconnect 从 Wails 绑定调用,无 ctx,用默认 logger 记录会话关闭。
-		logger.Default().Info("remote desktop session closed", zap.String("sessionID", sessionID))
+		logger.Default().Info("VNC session closed", zap.String("sessionID", sessionID))
 	}
 }
 
@@ -194,7 +194,7 @@ func (s *Session) readPump() {
 
 func (s *Session) write(data []byte) error {
 	if s.conn == nil {
-		return fmt.Errorf("远程桌面会话未建立连接")
+		return fmt.Errorf("VNC 会话未建立连接")
 	}
 	_, err := s.conn.Write(data)
 	return err
