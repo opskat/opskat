@@ -54,7 +54,14 @@ export function RemoteConnectionOverlay({
           {labels.reconnect}
         </Button>
         {onEdit && labels.edit && (
-          <Button type="button" variant="outline" size="sm" className="gap-1.5" data-testid={editTestId} onClick={onEdit}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            data-testid={editTestId}
+            onClick={onEdit}
+          >
             <Settings2 className="h-3.5 w-3.5" />
             {labels.edit}
           </Button>
