@@ -51,6 +51,8 @@ func (e *Extension) GetAvailableAssetTypes() []AssetTypeInfo {
 		{Type: asset_entity.AssetTypeKafka, DisplayName: "Kafka", SSHTunnel: true},
 		{Type: asset_entity.AssetTypeK8s, DisplayName: "K8S"},
 		{Type: asset_entity.AssetTypeSerial, DisplayName: "Serial"},
+		{Type: asset_entity.AssetTypeVNC, DisplayName: "VNC", SSHTunnel: true},
+		{Type: asset_entity.AssetTypeRDP, DisplayName: "RDP", SSHTunnel: true},
 	}
 	if e.service != nil {
 		bridge := e.service.Bridge()

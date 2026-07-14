@@ -117,6 +117,36 @@ func (s *SSH) ConnectSSH(req SSHConnectRequest) (string, error) {
 	return sessionID, nil
 }
 
+// OpenSFTPSession 建立一个无终端 PTY 的 SSH 会话，用于文件管理器。
+func (s *SSH) OpenSFTPSession(assetID int64) (string, error) {
+	sshCfg, password, key, passphrase, jumpHosts, proxyChain, err := credential_resolver.Default().ResolveSSHConnectConfig(
+		i18n.Ctx(s.ctx, s.lang.Lang()), assetID,
+	)
+	if err != nil {
+		return "", err
+	}
+	connectCfg := ssh_svc.ConnectConfig{
+		Host:                     sshCfg.Host,
+		Port:                     sshCfg.Port,
+		Username:                 sshCfg.Username,
+		AuthType:                 sshCfg.AuthType,
+		Password:                 password,
+		Key:                      key,
+		KeyPassphrase:            passphrase,
+		PrivateKeys:              sshCfg.PrivateKeys,
+		AssetID:                  assetID,
+		JumpHosts:                jumpHosts,
+		ProxyChain:               proxyChain,
+		Proxy:                    s.decryptProxyPassword(sshCfg.Proxy),
+		HostKeyVerifyFunc:        ssh_svc.AutoTrustFirstRejectChangeVerifyFunc(),
+		KeepAliveIntervalSeconds: sshCfg.KeepAliveIntervalSeconds,
+		OnClosed: func(sid string) {
+			wailsRuntime.EventsEmit(s.ctx, "ssh:closed:"+sid, nil)
+		},
+	}
+	return s.manager.ConnectClient(connectCfg)
+}
+
 // isSSHAuthError 判断是否为 SSH 认证失败错误
 func isSSHAuthError(err error) bool {
 	msg := err.Error()

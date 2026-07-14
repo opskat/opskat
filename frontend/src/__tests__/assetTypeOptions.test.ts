@@ -23,8 +23,9 @@ describe("getAssetTypeOptions", () => {
       "k8s",
       "serial",
       "local",
-      "etcd",
+      "vnc",
       "rdp",
+      "etcd",
       "oss",
     ]);
     expect(opts.every((o) => o.group === "builtin")).toBe(true);
@@ -124,6 +125,7 @@ describe("category classification", () => {
       ssh: "servers",
       local: "servers",
       serial: "servers",
+      vnc: "servers",
       rdp: "servers",
       database: "databases",
       redis: "databases",
@@ -155,7 +157,7 @@ describe("buildAssetTypeGroups", () => {
   it("orders groups servers → databases → middleware → extension and drops empty groups", () => {
     const groups = buildAssetTypeGroups(getAssetTypeOptions({}));
     expect(groups.map((g) => g.category)).toEqual(["servers", "databases", "middleware"]);
-    expect(groups[0].options.map((o) => o.value)).toEqual(["ssh", "serial", "local", "rdp"]);
+    expect(groups[0].options.map((o) => o.value)).toEqual(["ssh", "serial", "local", "vnc", "rdp"]);
     expect(groups[1].options.map((o) => o.value)).toEqual(["database", "redis", "mongodb", "etcd", "oss"]);
   });
 });

@@ -2,9 +2,9 @@
   "$schema": "https://wails.io/schemas/config.v2.json",
   "name": "OpsKat",
   "outputfilename": "opskat",
-  "frontend:install": "corepack pnpm@9.15.9 install",
-  "frontend:build": "corepack pnpm@9.15.9 run build",
-  "frontend:dev:watcher": "corepack pnpm@9.15.9 run dev",
+  "frontend:install": "corepack pnpm@10.11.0 install",
+  "frontend:build": "corepack pnpm@10.11.0 run build",
+  "frontend:dev:watcher": "corepack pnpm@10.11.0 run dev",
   "frontend:dev:serverUrl": "auto",
   "author": {
     "name": "王一之",

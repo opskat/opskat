@@ -269,7 +269,18 @@ function App() {
   };
 
   const handleConnectAssetInNewTab = async (asset: asset_entity.Asset) => {
-    if (!getAssetType(asset.Type)?.canConnectInNewTab) return;
+    const def = getAssetType(asset.Type);
+    if (!def?.canConnectInNewTab) return;
+    if (def.connectAction === "page" && def.pageId) {
+      useTabStore.getState().openTab({
+        id: `${def.pageId}-${asset.ID}-${Date.now()}`,
+        type: "page",
+        label: asset.Name,
+        icon: asset.Icon || def.pageIcon,
+        meta: { type: "page", pageId: def.pageId, assetId: asset.ID },
+      });
+      return;
+    }
     try {
       await connect(asset, "", true);
     } catch (e) {

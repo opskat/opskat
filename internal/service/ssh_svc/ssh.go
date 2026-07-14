@@ -149,8 +149,10 @@ func (s *Session) Close() {
 		return
 	}
 	s.closed = true
-	if err := s.session.Close(); err != nil {
-		logger.Default().Warn("close session", zap.String("sessionID", s.ID), zap.Error(err))
+	if s.session != nil {
+		if err := s.session.Close(); err != nil {
+			logger.Default().Warn("close session", zap.String("sessionID", s.ID), zap.Error(err))
+		}
 	}
 	s.shared.release()
 	if s.onClosed != nil {
@@ -354,6 +356,35 @@ func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
 		}
 	}
 
+	return sessionID, nil
+}
+
+// ConnectClient 建立仅用于 SFTP/端口转发等非终端用途的 SSH 会话 ID。
+// 它不创建 PTY 和 shell，但会注册到 Manager sessions，供 SFTP 服务按 sessionID 复用。
+func (m *Manager) ConnectClient(cfg ConnectConfig) (string, error) {
+	authMethods, err := buildAuthMethods(cfg.AuthType, cfg.Password, cfg.Key, cfg.KeyPassphrase, cfg.PrivateKeys, cfg.OnAuthChallenge)
+	if err != nil {
+		return "", err
+	}
+	sshConfig := &ssh.ClientConfig{
+		User:            cfg.Username,
+		Auth:            authMethods,
+		HostKeyCallback: MakeHostKeyCallback(cfg.Host, cfg.Port, cfg.HostKeyVerifyFunc),
+		Timeout:         sshtuning.Get().DialTimeoutOrDefault(),
+	}
+	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+	client, extraClosers, err := m.dial(cfg, sshConfig, addr)
+	if err != nil {
+		return "", err
+	}
+	shared := newSharedClient(client, extraClosers, cfg.KeepAliveIntervalSeconds)
+	sessionID := m.nextSessionID()
+	m.sessions.Store(sessionID, &Session{
+		ID:       sessionID,
+		AssetID:  cfg.AssetID,
+		shared:   shared,
+		onClosed: cfg.OnClosed,
+	})
 	return sessionID, nil
 }
 

@@ -62,7 +62,7 @@ SSH 与 RDP、数据库、对象存储、Redis、Kafka、Kubernetes…… 运维
 
 | 分类 | 资产 |
 | :-- | :-- |
-| **服务器 & 终端** | <img src="https://img.shields.io/badge/SSH-4D4D4D?style=flat-square" alt="SSH"> <img src="https://img.shields.io/badge/RDP-0078D4?style=flat-square" alt="RDP"> <img src="https://img.shields.io/badge/本地终端-5A6B7B?style=flat-square" alt="本地终端"> <img src="https://img.shields.io/badge/串口-5A6B7B?style=flat-square" alt="串口"> |
+| **服务器 & 终端** | <img src="https://img.shields.io/badge/SSH-4D4D4D?style=flat-square" alt="SSH"> <img src="https://img.shields.io/badge/VNC-3366CC?style=flat-square" alt="VNC"> <img src="https://img.shields.io/badge/RDP-0078D4?style=flat-square" alt="RDP"> <img src="https://img.shields.io/badge/本地终端-5A6B7B?style=flat-square" alt="本地终端"> <img src="https://img.shields.io/badge/串口-5A6B7B?style=flat-square" alt="串口"> |
 | **数据库** | <img src="https://img.shields.io/badge/MySQL-4479A1?style=flat-square&logo=mysql&logoColor=white" alt="MySQL"> <img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL"> <img src="https://img.shields.io/badge/SQL_Server-CC2927?style=flat-square" alt="SQL Server"> <img src="https://img.shields.io/badge/SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite"> <img src="https://img.shields.io/badge/Redis-FF4438?style=flat-square&logo=redis&logoColor=white" alt="Redis"> <img src="https://img.shields.io/badge/MongoDB-47A248?style=flat-square&logo=mongodb&logoColor=white" alt="MongoDB"> <img src="https://img.shields.io/badge/etcd-419EDA?style=flat-square&logo=etcd&logoColor=white" alt="etcd"> |
 | **中间件** | <img src="https://img.shields.io/badge/Apache_Kafka-231F20?style=flat-square&logo=apachekafka&logoColor=white" alt="Kafka"> <img src="https://img.shields.io/badge/Kubernetes-326CE5?style=flat-square&logo=kubernetes&logoColor=white" alt="Kubernetes"> |
 | **对象存储** | <img src="https://img.shields.io/badge/S3_兼容对象存储-569A31?style=flat-square" alt="S3 兼容对象存储"> <img src="https://img.shields.io/badge/云厂商对象存储-2775CA?style=flat-square" alt="云厂商对象存储"> <img src="https://img.shields.io/badge/私有化_自托管-5A6B7B?style=flat-square" alt="私有化或自托管对象存储"> |
@@ -77,6 +77,7 @@ _更多资产类型将通过插件模式持续扩展。_
 - 分屏终端，自定义主题
 - 内置 RDP 远程桌面，支持适应/实际尺寸、全屏、特殊按键与文本/文件剪贴板同步
 - SFTP 文件浏览器
+- 基于 noVNC、通过 Wails IPC 传输会话字节的 VNC 远程桌面
 - 跳板机链式连接
 - MySQL、PostgreSQL、SQL Server 与 SQLite 查询编辑器和数据浏览器
 - Redis 命令执行与 Key 浏览器
@@ -90,6 +91,13 @@ _更多资产类型将通过插件模式持续扩展。_
 SSH、数据库、Redis、MongoDB、Kafka、etcd、Kubernetes、RDP 和 S3 兼容对象存储均可配置有序代理链，链中可以组合 SSH、SOCKS5 和 HTTP 脚本隧道层。Kafka 的 Broker、Schema Registry 和所有 Kafka Connect 集群共享资产级代理链。本地 SQLite 不使用代理链；远程 SQLite VFS 通过所选 SSH 资产访问文件，并继承该 SSH 资产自己的代理链。
 - 凭据加密存储
 - 从 SSH config / Tabby / WindTerm 导入
+
+### 远程桌面
+
+VNC 和 RDP 资产不再依赖单独的桥接服务。VNC 通过 noVNC 在 OpsKat 内显示，会话字节经 Wails IPC 传输；RDP 使用 OpsKat 内置的 RDP 客户端，直接在应用标签页中渲染。
+
+- VNC 支持目标凭据、代理链、文本剪贴板同步，以及可选的 SSH/SFTP 文件通道。
+- RDP 支持分辨率、域、文本剪贴板同步，并通过内置 RDP 实现直接传输剪贴板文件。
 
 ## 🤖 让 AI 替你操作
 

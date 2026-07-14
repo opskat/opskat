@@ -25,6 +25,7 @@ import (
 	"github.com/opskat/opskat/internal/app/ssh"
 	"github.com/opskat/opskat/internal/app/sshadapt"
 	"github.com/opskat/opskat/internal/app/system"
+	"github.com/opskat/opskat/internal/app/vnc"
 
 	aitool "github.com/opskat/opskat/internal/ai/tool"
 	_ "github.com/opskat/opskat/internal/assettype"
@@ -39,6 +40,7 @@ import (
 	"github.com/opskat/opskat/internal/service/sftp_svc"
 	"github.com/opskat/opskat/internal/service/snippet_svc"
 	"github.com/opskat/opskat/internal/service/ssh_svc"
+	"github.com/opskat/opskat/internal/service/vnc_svc"
 	"github.com/opskat/opskat/internal/sshpool"
 	extpkg "github.com/opskat/opskat/pkg/extension"
 	skillplugin "github.com/opskat/opskat/plugin"
@@ -124,6 +126,7 @@ func main() {
 	})
 	serialMgr := serial_svc.NewManager()
 	localMgr := localterm_svc.NewManager()
+	vncMgr := vnc_svc.NewManager(asset_repo.Asset())
 	poolDialer := &sshadapt.PoolDialer{}
 	pool := sshpool.NewPool(poolDialer, 5*time.Minute)
 	proxyServer := sshpool.NewServer(pool, authToken)
@@ -149,6 +152,7 @@ func main() {
 	k8sB := k8s.New(appCtx, sys, pool)
 	serialB := serial.New(appCtx, sys, serialMgr)
 	localB := local.New(appCtx, sys, localMgr)
+	vncB := vnc.New(appCtx, vncMgr)
 	aiB := ai.New(appCtx, sys, pool)
 	opsctlB := opsctl.New(appCtx, sys, sys, proxyServer)
 	opsctlB.SetAuthToken(authToken)
@@ -160,7 +164,7 @@ func main() {
 	aiB.SetSerialManager(serialMgr)
 	aiB.SetWindowActivator(sys)
 
-	binders := []Lifecycle{sys, sshB, queryB, redisB, rdpB, etcdB, kafkaB, k8sB, serialB, localB, aiB, opsctlB, extB, extEditB, ossB}
+	binders := []Lifecycle{sys, sshB, queryB, redisB, rdpB, etcdB, kafkaB, k8sB, serialB, localB, vncB, aiB, opsctlB, extB, extEditB, ossB}
 
 	appOptions := &options.App{
 		Title:     "OpsKat",
@@ -201,7 +205,7 @@ func main() {
 			pool.Close()
 		},
 		Bind: []interface{}{
-			sys, sshB, queryB, redisB, rdpB, etcdB, kafkaB, k8sB, serialB, localB, aiB, opsctlB, extB, extEditB, ossB,
+			sys, sshB, queryB, redisB, rdpB, etcdB, kafkaB, k8sB, serialB, localB, vncB, aiB, opsctlB, extB, extEditB, ossB,
 		},
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop:     true,

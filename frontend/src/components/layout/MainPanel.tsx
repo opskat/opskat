@@ -47,6 +47,7 @@ const OSSBrowserPanel = lazy(() =>
 const K8sClusterPage = lazy(() =>
   import("@/components/k8s/K8sClusterPage").then((m) => ({ default: m.K8sClusterPage }))
 );
+const VNCPanel = lazy(() => import("@/components/vnc/VNCPanel").then((m) => ({ default: m.VNCPanel })));
 const RDPPanel = lazy(() => import("@/components/rdp/RDPPanel").then((m) => ({ default: m.RDPPanel })));
 
 interface MainPanelProps {
@@ -110,6 +111,7 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
   const terminalTabs = tabs.filter((tab) => tab.type === "terminal");
   const aiTabs = tabs.filter((tab) => tab.type === "ai");
   const queryTabs = tabs.filter((tab) => tab.type === "query");
+  const vncTabs = tabs.filter((tab) => tab.type === "page" && (tab.meta as PageTabMeta).pageId === "vnc");
 
   function renderActiveContent() {
     if (!activeTab) return null;
@@ -289,7 +291,25 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
           );
         })}
 
-        {activeTab && activeTab.type === "page" && (
+        {vncTabs.map((tab) => {
+          const meta = tab.meta as PageTabMeta;
+          const asset = meta.assetId ? assets.find((item) => item.ID === meta.assetId) : null;
+          if (!asset) return null;
+          const isActive = activeTabId === tab.id;
+          return (
+            <div
+              key={tab.id}
+              className="absolute inset-0 bg-background"
+              style={{ visibility: isActive ? "visible" : "hidden", pointerEvents: isActive ? "auto" : "none" }}
+            >
+              <LazySurface>
+                <VNCPanel tabId={tab.id} asset={asset} onEdit={() => onEditAsset(asset)} />
+              </LazySurface>
+            </div>
+          );
+        })}
+
+        {activeTab && activeTab.type === "page" && (activeTab.meta as PageTabMeta).pageId !== "vnc" && (
           <div className="absolute inset-0 bg-background">
             <LazySurface>{renderActiveContent()}</LazySurface>
           </div>

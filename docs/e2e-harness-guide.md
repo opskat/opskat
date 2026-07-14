@@ -214,7 +214,7 @@ SFTP/filesystem behavior, a protocol quirk the mock doesn't fake. For those, kee
 gitignored **`.env`** at the repo root listing real verification targets, with
 **`.env.example`** as the committed template (one `# --- <type> ---` block per real target
 currently covered by the template: SSH / MySQL / PostgreSQL / Redis / MongoDB / etcd / OSS /
-RDP).
+RDP / VNC).
 
 `.env` is **read by no app code** — the app never loads it. The e2e harness
 (`playwright.config.ts`) loads it into `process.env` when present, so a spec / your tooling reads

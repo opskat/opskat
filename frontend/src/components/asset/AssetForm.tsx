@@ -54,6 +54,8 @@ type AssetType =
   | "serial"
   | "etcd"
   | "local"
+  | "vnc"
+  | "rdp"
   | (string & {});
 
 const DEFAULT_ICONS: Record<string, string> = {
@@ -69,6 +71,8 @@ const DEFAULT_ICONS: Record<string, string> = {
   serial: "usb",
   etcd: "etcd",
   local: "terminal",
+  vnc: "screen-share",
+  rdp: "monitor-up",
 };
 
 export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }: AssetFormProps) {

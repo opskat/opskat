@@ -62,7 +62,7 @@ Grab the latest build for your platform — **macOS, Windows, or Linux** — fro
 
 | Category | Assets |
 | :-- | :-- |
-| **Servers & terminals** | <img src="https://img.shields.io/badge/SSH-4D4D4D?style=flat-square" alt="SSH"> <img src="https://img.shields.io/badge/RDP-0078D4?style=flat-square" alt="RDP"> <img src="https://img.shields.io/badge/Local_Terminal-5A6B7B?style=flat-square" alt="Local Terminal"> <img src="https://img.shields.io/badge/Serial-5A6B7B?style=flat-square" alt="Serial"> |
+| **Servers & terminals** | <img src="https://img.shields.io/badge/SSH-4D4D4D?style=flat-square" alt="SSH"> <img src="https://img.shields.io/badge/VNC-3366CC?style=flat-square" alt="VNC"> <img src="https://img.shields.io/badge/RDP-0078D4?style=flat-square" alt="RDP"> <img src="https://img.shields.io/badge/Local_Terminal-5A6B7B?style=flat-square" alt="Local Terminal"> <img src="https://img.shields.io/badge/Serial-5A6B7B?style=flat-square" alt="Serial"> |
 | **Databases** | <img src="https://img.shields.io/badge/MySQL-4479A1?style=flat-square&logo=mysql&logoColor=white" alt="MySQL"> <img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL"> <img src="https://img.shields.io/badge/SQL_Server-CC2927?style=flat-square" alt="SQL Server"> <img src="https://img.shields.io/badge/SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite"> <img src="https://img.shields.io/badge/Redis-FF4438?style=flat-square&logo=redis&logoColor=white" alt="Redis"> <img src="https://img.shields.io/badge/MongoDB-47A248?style=flat-square&logo=mongodb&logoColor=white" alt="MongoDB"> <img src="https://img.shields.io/badge/etcd-419EDA?style=flat-square&logo=etcd&logoColor=white" alt="etcd"> |
 | **Middleware** | <img src="https://img.shields.io/badge/Apache_Kafka-231F20?style=flat-square&logo=apachekafka&logoColor=white" alt="Kafka"> <img src="https://img.shields.io/badge/Kubernetes-326CE5?style=flat-square&logo=kubernetes&logoColor=white" alt="Kubernetes"> |
 | **Object storage** | <img src="https://img.shields.io/badge/S3--compatible_Object_Storage-569A31?style=flat-square" alt="S3-compatible Object Storage"> <img src="https://img.shields.io/badge/Cloud_Providers-2775CA?style=flat-square" alt="Cloud Providers"> <img src="https://img.shields.io/badge/Self--hosted-5A6B7B?style=flat-square" alt="Self-hosted Object Storage"> |
@@ -77,6 +77,7 @@ Even before you turn on the AI, OpsKat is a full-featured terminal and asset man
 - Split-pane terminal with customizable themes
 - Built-in RDP remote desktop with fit/actual-size views, fullscreen, special-key shortcuts, and text/file clipboard sync
 - SFTP file browser
+- VNC remote desktop tabs backed by noVNC with session bytes carried over Wails IPC
 - Jump host chain connections
 - SQL query editor and data browser for MySQL, PostgreSQL, SQL Server, and SQLite
 - Redis command execution with key browser
@@ -95,7 +96,14 @@ SSH and remote data assets can use an ordered proxy chain when direct access is 
 - **SOCKS5 proxy** layers with optional username/password authentication
 - **HTTP script tunnel** layers compatible with DBX-style tunnel scripts (`URL + token + timeout`)
 
-The same chain model is shared by SSH, SQL databases, Redis, MongoDB, Kafka, etcd, Kubernetes, RDP, and S3-compatible object-storage connections. A Kafka asset applies its chain to brokers, Schema Registry, and every Kafka Connect cluster. Local SQLite stays local; remote SQLite VFS reaches its file through the selected SSH asset, which can have its own proxy chain. Existing single SSH tunnel (`sshTunnelId` / `ssh_asset_id`) and SOCKS5 `proxy` settings are still read and are mapped to a one-layer chain when an asset is edited; once a new chain is saved, `proxy_chain` takes precedence.
+The same chain model is shared by SSH, SQL databases, Redis, MongoDB, Kafka, etcd, Kubernetes, VNC, RDP, and S3-compatible object-storage connections. A Kafka asset applies its chain to brokers, Schema Registry, and every Kafka Connect cluster. Local SQLite stays local; remote SQLite VFS reaches its file through the selected SSH asset, which can have its own proxy chain. Existing single SSH tunnel (`sshTunnelId` / `ssh_asset_id`) and SOCKS5 `proxy` settings are still read and are mapped to a one-layer chain when an asset is edited; once a new chain is saved, `proxy_chain` takes precedence.
+
+### Remote Desktop
+
+VNC and RDP assets use built-in remote desktop capabilities without a separate bridge service. VNC is rendered through noVNC with session bytes carried over Wails IPC. RDP uses OpsKat's embedded RDP client and is rendered directly in an application tab.
+
+- VNC supports target credentials, proxy chains, text clipboard synchronization, and an optional SSH/SFTP file channel.
+- RDP supports resolution, domain, text clipboard synchronization, and direct file clipboard transfer through the embedded RDP implementation.
 
 ## 🤖 Let AI Operate for You
 

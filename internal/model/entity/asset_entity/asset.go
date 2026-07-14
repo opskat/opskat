@@ -24,6 +24,7 @@ const (
 	AssetTypeSerial   = "serial"
 	AssetTypeEtcd     = "etcd"
 	AssetTypeLocal    = "local"
+	AssetTypeVNC      = "vnc"
 	AssetTypeRDP      = "rdp"
 	AssetTypeOSS      = "oss"
 )
@@ -355,6 +356,17 @@ type LocalConfig struct {
 	Cwd   string   `json:"cwd,omitempty"`   // 工作目录
 }
 
+// VNCConfig VNC 远程桌面类型的特定配置。
+type VNCConfig struct {
+	Host           string            `json:"host"`
+	Port           int               `json:"port"`
+	Username       string            `json:"username,omitempty"`
+	Password       string            `json:"password,omitempty"`
+	CredentialID   int64             `json:"credential_id,omitempty"`
+	FileSSHAssetID int64             `json:"file_ssh_asset_id,omitempty"`
+	ProxyChain     *ProxyChainConfig `json:"proxy_chain,omitempty"`
+}
+
 // DatabaseConfig PasswordSource implementation
 func (c *DatabaseConfig) GetCredentialID() int64 { return c.CredentialID }
 func (c *DatabaseConfig) GetPassword() string    { return c.Password }
@@ -427,7 +439,11 @@ func (c *SerialConfig) GetPassword() string    { return "" }
 func (c *LocalConfig) GetCredentialID() int64 { return 0 }
 func (c *LocalConfig) GetPassword() string    { return "" }
 
-// RDPConfig PasswordSource implementation。
+// VNCConfig PasswordSource implementation
+func (c *VNCConfig) GetCredentialID() int64 { return c.CredentialID }
+func (c *VNCConfig) GetPassword() string    { return c.Password }
+
+// RDPConfig PasswordSource implementation
 func (c *RDPConfig) GetCredentialID() int64 { return c.CredentialID }
 func (c *RDPConfig) GetPassword() string    { return c.Password }
 
@@ -476,6 +492,11 @@ func (a *Asset) IsEtcd() bool {
 // IsLocal 判断是否本地终端类型
 func (a *Asset) IsLocal() bool {
 	return a.Type == AssetTypeLocal
+}
+
+// IsVNC 判断是否 VNC 类型
+func (a *Asset) IsVNC() bool {
+	return a.Type == AssetTypeVNC
 }
 
 // IsRDP 判断是否 RDP 类型
@@ -645,6 +666,31 @@ func (a *Asset) SetLocalConfig(cfg *LocalConfig) error {
 	return nil
 }
 
+// GetVNCConfig 解析 VNC 配置
+func (a *Asset) GetVNCConfig() (*VNCConfig, error) {
+	if !a.IsVNC() {
+		return nil, errors.New("资产不是VNC类型")
+	}
+	cfg, err := jsonfield.Unmarshal[VNCConfig](a.Config, "VNC配置")
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Port == 0 {
+		cfg.Port = 5900
+	}
+	return cfg, nil
+}
+
+// SetVNCConfig 序列化 VNC 配置到 Config 字段
+func (a *Asset) SetVNCConfig(cfg *VNCConfig) error {
+	s, err := jsonfield.Marshal(cfg, "VNC配置")
+	if err != nil {
+		return err
+	}
+	a.Config = s
+	return nil
+}
+
 // GetRDPConfig 解析 RDP 配置
 func (a *Asset) GetRDPConfig() (*RDPConfig, error) {
 	if !a.IsRDP() {
@@ -794,6 +840,8 @@ func (a *Asset) Validate() error {
 		return a.validateLocal()
 	case AssetTypeEtcd:
 		return a.validateEtcd()
+	case AssetTypeVNC:
+		return a.validateVNC()
 	case AssetTypeRDP:
 		return a.validateRDP()
 	default:
@@ -1010,6 +1058,21 @@ func (a *Asset) validateLocal() error {
 	return nil
 }
 
+// validateVNC 校验 VNC 类型特定配置
+func (a *Asset) validateVNC() error {
+	cfg, err := a.GetVNCConfig()
+	if err != nil {
+		return fmt.Errorf("VNC配置无效: %w", err)
+	}
+	if strings.TrimSpace(cfg.Host) == "" {
+		return errors.New("VNC主机地址不能为空")
+	}
+	if cfg.Port <= 0 || cfg.Port > 65535 {
+		return errors.New("VNC端口无效")
+	}
+	return ValidateProxyChain(cfg.ProxyChain)
+}
+
 // validateEtcd 校验etcd类型特定配置
 func (a *Asset) validateEtcd() error {
 	cfg, err := a.GetEtcdConfig()
@@ -1145,6 +1208,12 @@ func (a *Asset) CanConnect() bool {
 		return len(cfg.Endpoints) > 0
 	case AssetTypeLocal:
 		return true
+	case AssetTypeVNC:
+		cfg, err := a.GetVNCConfig()
+		if err != nil {
+			return false
+		}
+		return cfg.Host != "" && cfg.Port > 0
 	case AssetTypeRDP:
 		cfg, err := a.GetRDPConfig()
 		if err != nil {

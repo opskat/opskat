@@ -1,31 +1,14 @@
-import {
-  AlertTriangle,
-  Clipboard,
-  ClipboardCheck,
-  Keyboard,
-  Loader2,
-  Maximize2,
-  Minimize2,
-  Monitor,
-  Power,
-  RefreshCw,
-  Scaling,
-  Settings2,
-} from "lucide-react";
+import { Clipboard, ClipboardCheck, Keyboard, Maximize2, Minimize2, Monitor, Power } from "lucide-react";
 import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, cn } from "@opskat/ui";
 import { useTranslation } from "react-i18next";
 import { Segmented } from "@/components/asset/fields";
-import { formatDuration, SCANCODE } from "./rdpInput";
+import { SCANCODE } from "./rdpInput";
+import { RemoteStatusPill } from "@/components/remote/RemoteStatusPill";
+import { RemoteStatusBar } from "@/components/remote/RemoteStatusBar";
+import { RemoteConnectionOverlay } from "@/components/remote/RemoteConnectionOverlay";
 
 export type RDPViewMode = "fit" | "actual";
 export type RDPStatus = "connecting" | "connected" | "error" | "closed";
-
-const STATUS_PILL: Record<RDPStatus, string> = {
-  connecting: "border-warning/25 bg-warning/15 text-warning",
-  connected: "border-success/25 bg-success/15 text-success",
-  error: "border-destructive/25 bg-destructive/15 text-destructive",
-  closed: "border-border bg-muted text-muted-foreground",
-};
 
 const SPECIAL_KEYS = [
   { testid: "rdp-key-cad", label: "Ctrl + Alt + Del", scancodes: [SCANCODE.ctrl, SCANCODE.alt, SCANCODE.del] },
@@ -72,16 +55,11 @@ export function RDPToolbar({
           {host}:{port}
         </span>
       )}
-      <span
-        data-testid="rdp-status"
-        className={cn(
-          "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-0.5 font-medium",
-          STATUS_PILL[status]
-        )}
-      >
-        <span className="h-1.5 w-1.5 rounded-full bg-current" />
-        {status === "connected" ? t("asset.rdpConnected") : t(`asset.rdpStatus.${status}`)}
-      </span>
+      <RemoteStatusPill
+        status={status}
+        label={status === "connected" ? t("asset.rdpConnected") : t(`asset.rdpStatus.${status}`)}
+        testid="rdp-status"
+      />
 
       <div className="ml-auto flex shrink-0 items-center gap-2">
         <Segmented<RDPViewMode>
@@ -177,46 +155,24 @@ export function RDPSessionOverlay({
   onEdit?: () => void;
 }) {
   const { t } = useTranslation();
-  if (status === "connected") return null;
-
-  if (status === "connecting") {
-    return (
-      <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-background text-sm text-muted-foreground">
-        <Loader2 className="h-6 w-6 animate-spin text-primary" />
-        <div className="font-medium text-foreground">{t("asset.rdpConnecting")}</div>
-        {host && (
-          <div className="font-mono text-xs">
-            {host}:{port}
-          </div>
-        )}
-      </div>
-    );
-  }
-
   return (
-    <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-background px-6 text-center">
-      {status === "error" ? (
-        <AlertTriangle className="h-8 w-8 text-destructive" />
-      ) : (
-        <Power className="h-8 w-8 text-muted-foreground" />
-      )}
-      <div className="text-base font-semibold text-foreground">
-        {status === "error" ? t("asset.rdpError") : t("asset.rdpDisconnected")}
-      </div>
-      {status === "error" && error && <div className="max-w-xl break-words text-sm text-muted-foreground">{error}</div>}
-      <div className="mt-1 flex items-center gap-2.5">
-        <Button type="button" size="sm" className="gap-1.5" data-testid="rdp-reconnect" onClick={onReconnect}>
-          <RefreshCw className="h-3.5 w-3.5" />
-          {t("asset.rdpReconnect")}
-        </Button>
-        {onEdit && (
-          <Button type="button" variant="outline" size="sm" className="gap-1.5" data-testid="rdp-edit" onClick={onEdit}>
-            <Settings2 className="h-3.5 w-3.5" />
-            {t("asset.rdpEditConnection")}
-          </Button>
-        )}
-      </div>
-    </div>
+    <RemoteConnectionOverlay
+      status={status}
+      error={error}
+      host={host}
+      port={port}
+      labels={{
+        connecting: t("asset.rdpConnecting"),
+        error: t("asset.rdpError"),
+        closed: t("asset.rdpDisconnected"),
+        reconnect: t("asset.rdpReconnect"),
+        edit: t("asset.rdpEditConnection"),
+      }}
+      onReconnect={onReconnect}
+      onEdit={onEdit}
+      reconnectTestId="rdp-reconnect"
+      editTestId="rdp-edit"
+    />
   );
 }
 
@@ -235,17 +191,13 @@ export function RDPStatusBar({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="flex h-6 shrink-0 items-center gap-3 border-t bg-muted/30 px-3 text-[11px] text-muted-foreground">
-      <span className="flex items-center gap-1.5 font-mono">
-        <Scaling className="h-3 w-3" />
-        {width} × {height}
-      </span>
-      {viewMode === "fit" && (
-        <span className="rounded border border-info/25 bg-info/15 px-1.5 py-px text-[11px] text-info">
-          {t("asset.rdpAutoFit")}
-        </span>
-      )}
-      {connected && <span className="ml-auto font-mono tabular-nums">{formatDuration(elapsed)}</span>}
-    </div>
+    <RemoteStatusBar
+      width={width}
+      height={height}
+      showFit={viewMode === "fit"}
+      fitLabel={t("asset.rdpAutoFit")}
+      connected={connected}
+      elapsed={elapsed}
+    />
   );
 }
