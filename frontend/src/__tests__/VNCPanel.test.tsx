@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { asset_entity } from "../../wailsjs/go/models";
 import { ConnectVNC, DisconnectVNC, EncodeVNCClipboardText, StartVNCStream } from "../../wailsjs/go/vnc/VNC";
 import { DisconnectSSH, OpenSFTPSession } from "../../wailsjs/go/ssh/SSH";
@@ -39,10 +40,18 @@ class FakeRFB extends EventTarget {
   disconnect = vi.fn();
   clipboardPasteFrom = vi.fn();
   sendKey = vi.fn();
+  sendCtrlAltDel = vi.fn();
 }
 
 vi.mock("@novnc/novnc/lib/rfb", () => ({ default: FakeRFB }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+
+// Radix menus need these DOM APIs happy-dom doesn't implement (see RDPPanel.test.tsx).
+beforeAll(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+  Element.prototype.hasPointerCapture = vi.fn(() => false);
+  Element.prototype.releasePointerCapture = vi.fn();
+});
 
 vi.mock("../../wailsjs/go/vnc/VNC", () => ({
   ConnectVNC: vi.fn(),
@@ -107,7 +116,7 @@ describe("VNCPanel", () => {
     );
 
     expect(await screen.findByText("vnc.verifyServerTitle")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("confirm-vnc-server"));
+    fireEvent.click(screen.getByTestId("vnc-verify-approve"));
     expect(approveServer).toHaveBeenCalledTimes(1);
   });
 
@@ -150,7 +159,8 @@ describe("VNCPanel", () => {
     render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
-    fireEvent.click(screen.getByText("vnc.pasteText"));
+    const vncContainer = document.querySelector('[tabindex="0"]')!;
+    fireEvent.keyDown(vncContainer, { key: "v", code: "KeyV", ctrlKey: true });
 
     await waitFor(() => expect(FakeRFB.latest!.clipboardPasteFrom).toHaveBeenCalledTimes(1));
     const sent = FakeRFB.latest!.clipboardPasteFrom.mock.calls[0][0] as string;
@@ -198,7 +208,8 @@ describe("VNCPanel", () => {
     render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
-    fireEvent.click(screen.getByText("vnc.pasteText"));
+    const vncContainer = document.querySelector('[tabindex="0"]')!;
+    fireEvent.keyDown(vncContainer, { key: "v", code: "KeyV", ctrlKey: true });
 
     // The emoji is typed directly as one keysym; the extra Ctrl+V paste must never fire.
     await waitFor(() => expect(FakeRFB.latest!.sendKey).toHaveBeenCalled());
@@ -219,7 +230,7 @@ describe("VNCPanel", () => {
     render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
-    fireEvent.click(screen.getByText("vnc.files"));
+    fireEvent.click(screen.getByTestId("vnc-files"));
 
     // Wait until the file session has been established and committed (the panel
     // only renders once fileSessionId is set), so the disconnect effects have run.
@@ -250,5 +261,37 @@ describe("VNCPanel", () => {
     expect(FakeRFB.latest).toBe(rfbBeforeLanguageChange);
     expect(rfbBeforeLanguageChange!.disconnect).not.toHaveBeenCalled();
     expect(StartVNCStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends Ctrl+Alt+Del through noVNC's built-in helper", async () => {
+    const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
+    render(<VNCPanel tabId="vnc-1" asset={asset} />);
+    await waitFor(() => expect(FakeRFB.latest).toBeDefined());
+    FakeRFB.latest!._rfbConnectionState = "connected";
+    FakeRFB.latest!.dispatchEvent(new CustomEvent("connect"));
+    // The special-keys trigger is a Radix DropdownMenu: fireEvent.click doesn't open it
+    // in happy-dom, so drive it with userEvent (same as VNCToolbar/RDPPanel tests). Wait
+    // for the trigger to become enabled once the connect event flips status to connected.
+    const trigger = await screen.findByTestId("vnc-special-keys");
+    await waitFor(() => expect(trigger).toBeEnabled());
+    await userEvent.click(trigger);
+    await userEvent.click(await screen.findByTestId("vnc-key-cad"));
+    expect(FakeRFB.latest!.sendCtrlAltDel).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops mirroring the remote clipboard when sync is turned off", async () => {
+    const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
+    render(<VNCPanel tabId="vnc-1" asset={asset} />);
+    await waitFor(() => expect(FakeRFB.latest).toBeDefined());
+    FakeRFB.latest!._rfbConnectionState = "connected";
+    FakeRFB.latest!.dispatchEvent(new CustomEvent("connect"));
+    // The clipboard toggle is a plain button (not a Radix menu), so fireEvent.click is fine;
+    // wait for it to become enabled once the session is connected.
+    const clipboard = await screen.findByTestId("vnc-clipboard");
+    await waitFor(() => expect(clipboard).toBeEnabled());
+    fireEvent.click(clipboard); // turn off
+    FakeRFB.latest!.dispatchEvent(new CustomEvent("clipboard", { detail: { text: "hello" } }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(ClipboardSetText).not.toHaveBeenCalled();
   });
 });

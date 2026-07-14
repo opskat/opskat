@@ -32,6 +32,7 @@ declare module "@novnc/novnc/lib/rfb" {
     approveServer(): void;
     clipboardPasteFrom(text: string): void;
     sendKey(keysym: number, code: string, down?: boolean): void;
+    sendCtrlAltDel(): void;
     disconnect(): void;
   }
 }

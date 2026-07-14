@@ -303,7 +303,7 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
               style={{ visibility: isActive ? "visible" : "hidden", pointerEvents: isActive ? "auto" : "none" }}
             >
               <LazySurface>
-                <VNCPanel tabId={tab.id} asset={asset} />
+                <VNCPanel tabId={tab.id} asset={asset} onEdit={() => onEditAsset(asset)} />
               </LazySurface>
             </div>
           );

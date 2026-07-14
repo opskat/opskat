@@ -7,9 +7,10 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, FolderOpen, Loader2, Maximize2, RefreshCw, ScreenShare } from "lucide-react";
-import { Button, ConfirmDialog } from "@opskat/ui";
+import { Fingerprint } from "lucide-react";
+import { Button } from "@opskat/ui";
 import { toast } from "sonner";
+import { notifySuccess } from "@/lib/notify";
 import { asset_entity } from "../../../wailsjs/go/models";
 import { ConnectVNC, DisconnectVNC, EncodeVNCClipboardText, StartVNCStream } from "../../../wailsjs/go/vnc/VNC";
 import { DisconnectSSH, OpenSFTPSession } from "../../../wailsjs/go/ssh/SSH";
@@ -17,11 +18,16 @@ import { ClipboardGetText, ClipboardSetText } from "../../../wailsjs/runtime";
 import { FileManagerPanel } from "@/components/terminal/FileManagerPanel";
 import { WailsRfbChannel } from "@/lib/wailsRfbChannel";
 import { decodeVNCClipboardText, pasteVNCClipboardText } from "@/lib/vncClipboard";
+import { RemoteConnectionOverlay } from "@/components/remote/RemoteConnectionOverlay";
+import { RemoteStatusBar } from "@/components/remote/RemoteStatusBar";
+import type { RemoteStatus } from "@/components/remote/remoteChrome";
+import { VNCToolbar, type VNCSpecialKey, type VNCViewMode } from "./VNCToolbar";
 import type RFB from "@novnc/novnc/lib/rfb";
 
 interface VNCPanelProps {
   tabId: string;
   asset: asset_entity.Asset;
+  onEdit?: () => void;
 }
 
 interface VNCSession {
@@ -31,30 +37,52 @@ interface VNCSession {
   fileSshAssetId: number;
 }
 
-export function VNCPanel({ tabId, asset }: VNCPanelProps) {
+interface VNCConnectionConfig {
+  host?: string;
+  port?: number;
+}
+
+function parseVNCEndpoint(configJSON: string): { host: string; port: number } {
+  try {
+    const cfg: VNCConnectionConfig = JSON.parse(configJSON || "{}");
+    return { host: cfg.host || "", port: cfg.port || 5900 };
+  } catch {
+    return { host: "", port: 5900 };
+  }
+}
+
+export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
   const { t } = useTranslation();
+  const { host, port } = parseVNCEndpoint(asset.Config);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const vncContainerRef = useRef<HTMLDivElement | null>(null);
   const rfbRef = useRef<RFB | null>(null);
   const errorRef = useRef("");
-  const serverApprovalRef = useRef(false);
   const scaleViewportRef = useRef(true);
   const keyboardPasteRef = useRef(false);
+  const clipboardEnabledRef = useRef(true);
   const tRef = useRef(t);
   const [session, setSession] = useState<VNCSession | null>(null);
-  const [status, setStatus] = useState("idle");
+  const [status, setStatus] = useState<RemoteStatus>("connecting");
   const [error, setError] = useState("");
-  const [scaleViewport, setScaleViewport] = useState(true);
+  const [viewMode, setViewMode] = useState<VNCViewMode>("fit");
+  const [clipboardEnabled, setClipboardEnabled] = useState(true);
   const [fileOpen, setFileOpen] = useState(false);
   const [fileWidth, setFileWidth] = useState(320);
   const [fileSessionId, setFileSessionId] = useState("");
   const [serverFingerprint, setServerFingerprint] = useState("");
+  const [connectedAt, setConnectedAt] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const [resolution, setResolution] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const connect = useCallback(async () => {
     setStatus("connecting");
     setError("");
     errorRef.current = "";
-    serverApprovalRef.current = false;
     setServerFingerprint("");
+    setConnectedAt(null);
+    setResolution({ width: 0, height: 0 });
     if (rfbRef.current) {
       try {
         rfbRef.current.disconnect();
@@ -92,11 +120,20 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
     container.innerHTML = "";
     setStatus("connecting");
     const channel = new WailsRfbChannel(session.id);
+    const readResolution = () => {
+      const canvas = container.querySelector("canvas");
+      if (canvas && canvas.width > 0) setResolution({ width: canvas.width, height: canvas.height });
+    };
     const markVNCConnected = () => {
       if (disposed) return;
       errorRef.current = "";
       setError("");
       setStatus("connected");
+      setConnectedAt((prev) => prev ?? Date.now());
+      readResolution();
+      window.requestAnimationFrame(() => {
+        if (!disposed) readResolution();
+      });
     };
     import("@novnc/novnc/lib/rfb")
       .then(({ default: RFBClient }) => {
@@ -160,6 +197,7 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
           });
         });
         rfb.addEventListener("clipboard", (event) => {
+          if (!clipboardEnabledRef.current) return;
           const e = event as CustomEvent<{ text?: string }>;
           ClipboardSetText(decodeVNCClipboardText(e.detail?.text || "")).catch((error) => toast.error(String(error)));
         });
@@ -207,11 +245,24 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
   }, [session]);
 
   useEffect(() => {
-    scaleViewportRef.current = scaleViewport;
-    if (rfbRef.current) {
-      rfbRef.current.scaleViewport = scaleViewport;
-    }
-  }, [scaleViewport]);
+    const fit = viewMode === "fit";
+    scaleViewportRef.current = fit;
+    if (rfbRef.current) rfbRef.current.scaleViewport = fit;
+  }, [viewMode]);
+
+  useEffect(() => {
+    if (status !== "connected" || connectedAt === null) return;
+    const tick = () => setElapsed(Math.floor((Date.now() - connectedAt) / 1000));
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [status, connectedAt]);
+
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -239,7 +290,7 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
 
   const pasteTextToVNC = async (text: string) => {
     const rfb = rfbRef.current;
-    if (!rfb || !text) return;
+    if (!rfb || !text || !clipboardEnabledRef.current) return;
     const clipboardSet = await pasteVNCClipboardText(rfb, text, EncodeVNCClipboardText);
     // When the text couldn't be placed on the remote clipboard it was typed
     // directly via keysyms; a follow-up Ctrl+V would paste stale clipboard data.
@@ -260,7 +311,7 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
   };
 
   const handleVNCPaste = (event: ReactClipboardEvent<HTMLDivElement>) => {
-    if (!rfbRef.current) return;
+    if (!rfbRef.current || !clipboardEnabledRef.current) return;
     if (keyboardPasteRef.current) {
       event.preventDefault();
       return;
@@ -273,6 +324,7 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
 
   const handleVNCKeyDownCapture = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "v") return;
+    if (!clipboardEnabledRef.current) return;
     event.preventDefault();
     event.stopPropagation();
     keyboardPasteRef.current = true;
@@ -281,8 +333,54 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
     });
   };
 
+  const sendSpecialKey = (key: VNCSpecialKey) => {
+    const rfb = rfbRef.current;
+    if (!rfb) return;
+    if (key === "ctrl-alt-del") {
+      rfb.sendCtrlAltDel();
+      return;
+    }
+    if (key === "alt-tab") {
+      rfb.sendKey(0xffe9, "AltLeft", true);
+      rfb.sendKey(0xff09, "Tab", true);
+      rfb.sendKey(0xff09, "Tab", false);
+      rfb.sendKey(0xffe9, "AltLeft", false);
+      return;
+    }
+    rfb.sendKey(0xff1b, "Escape", true);
+    rfb.sendKey(0xff1b, "Escape", false);
+  };
+
+  const toggleClipboard = () => {
+    const next = !clipboardEnabledRef.current;
+    clipboardEnabledRef.current = next;
+    setClipboardEnabled(next);
+    notifySuccess(t(next ? "vnc.clipboardEnabled" : "vnc.clipboardDisabled"));
+  };
+
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    } else {
+      void panelRef.current?.requestFullscreen();
+    }
+  };
+
+  const disconnectSession = () => {
+    const rfb = rfbRef.current;
+    if (rfb) {
+      try {
+        rfb.disconnect();
+      } catch {
+        // ignore stale noVNC instance cleanup
+      }
+    }
+    if (session?.id) DisconnectVNC(session.id);
+    setStatus("closed");
+    setConnectedAt(null);
+  };
+
   const approveVNCServer = () => {
-    serverApprovalRef.current = true;
     setServerFingerprint("");
     rfbRef.current?.approveServer();
   };
@@ -296,82 +394,78 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
     rfbRef.current?.disconnect();
   };
 
+  const connected = status === "connected";
+  const filesEnabled = !!session?.fileSshAssetId;
+
   return (
-    <div className="flex h-full min-h-0 bg-background">
-      <ConfirmDialog
-        open={!!serverFingerprint}
-        onOpenChange={(open) => {
-          if (open) return;
-          if (serverApprovalRef.current) {
-            serverApprovalRef.current = false;
-            return;
-          }
-          cancelVNCServerVerification();
-        }}
-        title={t("vnc.verifyServerTitle")}
-        description={
-          <span className="block space-y-2">
-            <span className="block">{t("vnc.verifyServerDesc")}</span>
-            <code className="block break-all font-mono text-xs text-foreground">{serverFingerprint}</code>
-          </span>
-        }
-        cancelText={t("action.cancel")}
-        confirmText={t("vnc.approveServer")}
-        confirmTestId="confirm-vnc-server"
-        variant="default"
-        onConfirm={approveVNCServer}
+    <div ref={panelRef} className="flex h-full min-h-0 flex-col bg-background">
+      <VNCToolbar
+        assetName={asset.Name}
+        host={host}
+        port={port}
+        status={status}
+        statusLabel={t(`vnc.status.${status}`)}
+        viewMode={viewMode}
+        clipboardEnabled={clipboardEnabled}
+        filesEnabled={filesEnabled}
+        filesOpen={fileOpen && !!fileSessionId}
+        isFullscreen={isFullscreen}
+        onViewModeChange={setViewMode}
+        onSendSpecialKey={sendSpecialKey}
+        onToggleClipboard={toggleClipboard}
+        onToggleFiles={() => void openFiles()}
+        onToggleFullscreen={toggleFullscreen}
+        onDisconnect={disconnectSession}
       />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <ScreenShare aria-hidden className="h-4 w-4 text-muted-foreground" />
-            <span className="truncate text-sm font-medium">{asset.Name}</span>
-            <span className="text-xs uppercase text-muted-foreground">{asset.Type}</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Button variant="outline" size="sm" className="h-8" onClick={() => setScaleViewport((v) => !v)}>
-              {scaleViewport ? t("vnc.scaleOn") : t("vnc.scaleOff")}
-            </Button>
-            <Button variant="outline" size="sm" className="h-8" onClick={pasteToVNC}>
-              {t("vnc.pasteText")}
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={t("vnc.fullscreen")}
-              className="h-8 w-8"
-              onClick={() => vncContainerRef.current?.requestFullscreen()}
-            >
-              <Maximize2 aria-hidden className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="icon" aria-label={t("vnc.reconnect")} className="h-8 w-8" onClick={connect}>
-              <RefreshCw aria-hidden className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 gap-1.5"
-              onClick={openFiles}
-              disabled={!session?.fileSshAssetId}
-            >
-              <FolderOpen aria-hidden className="h-4 w-4" />
-              {t("vnc.files")}
-            </Button>
-          </div>
-        </div>
-        <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
-          {status === "connecting" && (
-            <div className="absolute inset-0 z-10 flex items-center justify-center text-sm text-white/70">
-              <Loader2 aria-hidden className="mr-2 h-4 w-4 animate-spin" />
-              {t("vnc.connecting")}
+
+      <div className="flex min-h-0 flex-1">
+        <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-black">
+          <RemoteConnectionOverlay
+            status={serverFingerprint ? "connecting" : status}
+            error={error}
+            host={host}
+            port={port}
+            labels={{
+              connecting: t("vnc.connecting"),
+              error: t("vnc.errorTitle"),
+              closed: t("vnc.disconnectedTitle"),
+              reconnect: t("vnc.reconnect"),
+              edit: onEdit ? t("vnc.editConnection") : undefined,
+            }}
+            onReconnect={() => void connect()}
+            onEdit={onEdit}
+            reconnectTestId="vnc-reconnect"
+            editTestId="vnc-edit"
+          />
+
+          {serverFingerprint && (
+            <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-background px-6 text-center">
+              <Fingerprint className="h-8 w-8 text-primary" />
+              <div className="text-base font-semibold text-foreground">{t("vnc.verifyServerTitle")}</div>
+              <div className="max-w-md text-sm text-muted-foreground">{t("vnc.verifyServerDesc")}</div>
+              <div className="w-full max-w-md rounded-lg border bg-muted/30 p-3 text-left">
+                <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+                  <Fingerprint className="h-3.5 w-3.5" />
+                  RSA SHA-256
+                </div>
+                <code className="block break-all font-mono text-xs text-foreground">{serverFingerprint}</code>
+              </div>
+              <div className="mt-1 flex items-center gap-2.5">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  data-testid="vnc-verify-cancel"
+                  onClick={cancelVNCServerVerification}
+                >
+                  {t("action.cancel")}
+                </Button>
+                <Button size="sm" data-testid="vnc-verify-approve" onClick={approveVNCServer}>
+                  {t("vnc.approveServer")}
+                </Button>
+              </div>
             </div>
           )}
-          {error && (
-            <div className="absolute left-3 top-3 z-20 flex max-w-xl items-start gap-2 rounded border border-destructive/30 bg-background p-3 text-sm text-destructive shadow">
-              <AlertTriangle aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{error}</span>
-            </div>
-          )}
+
           <div
             ref={vncContainerRef}
             tabIndex={0}
@@ -380,21 +474,31 @@ export function VNCPanel({ tabId, asset }: VNCPanelProps) {
             onPaste={handleVNCPaste}
           />
         </div>
-        {session && !session.fileSshAssetId && (
-          <div className="border-t px-3 py-2 text-xs text-muted-foreground">{t("vnc.fileChannelDisabled")}</div>
+
+        {fileOpen && fileSessionId && (
+          <FileManagerPanel
+            assetId={session?.fileSshAssetId}
+            tabId={tabId}
+            sessionId={fileSessionId}
+            isActive
+            isOpen
+            width={fileWidth}
+            onWidthChange={setFileWidth}
+          />
         )}
       </div>
-      {fileOpen && fileSessionId && (
-        <FileManagerPanel
-          assetId={session?.fileSshAssetId}
-          tabId={tabId}
-          sessionId={fileSessionId}
-          isActive
-          isOpen
-          width={fileWidth}
-          onWidthChange={setFileWidth}
-        />
-      )}
+
+      <RemoteStatusBar
+        width={resolution.width}
+        height={resolution.height}
+        showFit={viewMode === "fit"}
+        fitLabel={t("vnc.autoFit")}
+        connected={connected}
+        elapsed={elapsed}
+        extra={
+          connected && clipboardEnabled ? <span className="text-info">{t("vnc.clipboardSynced")}</span> : undefined
+        }
+      />
     </div>
   );
 }
