@@ -279,6 +279,41 @@ describe("VNCPanel", () => {
     expect(FakeRFB.latest!.sendCtrlAltDel).toHaveBeenCalledTimes(1);
   });
 
+  it("sends Alt+Tab as an ordered keysym press/release sequence", async () => {
+    const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
+    render(<VNCPanel tabId="vnc-1" asset={asset} />);
+    await waitFor(() => expect(FakeRFB.latest).toBeDefined());
+    FakeRFB.latest!._rfbConnectionState = "connected";
+    FakeRFB.latest!.dispatchEvent(new CustomEvent("connect"));
+    const trigger = await screen.findByTestId("vnc-special-keys");
+    await waitFor(() => expect(trigger).toBeEnabled());
+    await userEvent.click(trigger);
+    await userEvent.click(await screen.findByTestId("vnc-key-alt-tab"));
+    // Alt_L down, Tab down, Tab up, Alt_L up — order matters so Alt never sticks down remotely.
+    expect(FakeRFB.latest!.sendKey.mock.calls).toEqual([
+      [0xffe9, "AltLeft", true],
+      [0xff09, "Tab", true],
+      [0xff09, "Tab", false],
+      [0xffe9, "AltLeft", false],
+    ]);
+  });
+
+  it("sends Esc as a single keysym press then release", async () => {
+    const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
+    render(<VNCPanel tabId="vnc-1" asset={asset} />);
+    await waitFor(() => expect(FakeRFB.latest).toBeDefined());
+    FakeRFB.latest!._rfbConnectionState = "connected";
+    FakeRFB.latest!.dispatchEvent(new CustomEvent("connect"));
+    const trigger = await screen.findByTestId("vnc-special-keys");
+    await waitFor(() => expect(trigger).toBeEnabled());
+    await userEvent.click(trigger);
+    await userEvent.click(await screen.findByTestId("vnc-key-esc"));
+    expect(FakeRFB.latest!.sendKey.mock.calls).toEqual([
+      [0xff1b, "Escape", true],
+      [0xff1b, "Escape", false],
+    ]);
+  });
+
   it("stops mirroring the remote clipboard when sync is turned off", async () => {
     const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
     render(<VNCPanel tabId="vnc-1" asset={asset} />);
