@@ -84,8 +84,8 @@ components/vnc/
 1. **Segmented 适应 | 原始**（替换现有 `Scale`/`Original` 文字 toggle）→ `rfb.scaleViewport` true/false。
 2. **特殊按键 ▾**（`DropdownMenu`，触发器 `⌨ Ctrl+Alt+Del`）：
    - `Ctrl + Alt + Del` → `rfb.sendCtrlAltDel()`
-   - `Alt + Tab` / `Super（Win）` / `Esc` → `rfb.sendKey(keysym, code, down)` 序列
-   - 未连接时禁用。
+   - `Alt + Tab` / `Esc` → `rfb.sendKey(keysym, code, down)` 序列
+   - 与 RDP 特殊键集完全一致（三项）；未连接时禁用。
 3. **剪贴板** toggle（图标）：前端 gate；开=success 色 + 状态栏"已同步"，关=灰。
 4. **文件** toggle（`FolderOpen`）：切换右侧 `FileManagerPanel`；`!session.fileSshAssetId` 时禁用 + tooltip（**删除**当前底部常驻的"未配置文件通道"提示条）。
 5. **全屏**（`Maximize2`/`Minimize2`）。
