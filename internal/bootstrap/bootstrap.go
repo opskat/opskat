@@ -127,7 +127,7 @@ func Init(ctx context.Context, opts Options) error {
 
 	registerRepositories()
 
-	if err := migrations.RunMigrations(db.Default()); err != nil {
+	if err := migrations.RunMigrations(db.Default(), dataDir); err != nil {
 		return err
 	}
 
