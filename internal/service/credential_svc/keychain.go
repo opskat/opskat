@@ -82,6 +82,7 @@ func ResolveMasterKey(opts MasterKeyOptions) (string, error) {
 		if writeErr := os.WriteFile(filePath, []byte(key), 0600); writeErr != nil {
 			return "", fmt.Errorf("存储 master key 失败（Keychain: %v, 文件: %w）", err, writeErr)
 		}
+		logger.Default().Warn("store master key in keychain, fell back to file", zap.Error(err))
 	}
 
 	return key, nil
