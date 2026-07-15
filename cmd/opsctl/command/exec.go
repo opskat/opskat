@@ -73,7 +73,7 @@ func cmdExec(ctx context.Context, args []string, session string) int {
 	stdoutW := io.MultiWriter(os.Stdout, outBuf)
 	stderrW := io.MultiWriter(os.Stderr, errBuf)
 
-	// 尝试通过 proxy 执行（复用 ops-cat 连接池）
+	// 尝试通过 proxy 执行（复用 opskat 连接池）
 	if proxy := getSSHProxyClient(); proxy != nil {
 		exitCode, execErr := proxy.Exec(sshpool.ProxyRequest{
 			AssetID: assetID,

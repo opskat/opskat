@@ -142,7 +142,7 @@ func Execute() int {
 }
 
 func printUsage() {
-	fmt.Fprint(os.Stderr, `opsctl - CLI for managing ops-cat remote server assets
+	fmt.Fprint(os.Stderr, `opsctl - CLI for managing opskat remote server assets
 
 Usage:
   opsctl [global-flags] <command> [arguments]
@@ -172,13 +172,13 @@ Note:
 
 Approval & Sessions:
   Write operations require approval from the running desktop app. On first
-  write, a session is auto-created in .opscat/sessions/. When the user
+  write, a session is auto-created in .opskat/sessions/. When the user
   approves with "Allow Session", all subsequent operations in the same
   session are auto-approved. Sessions expire after 24 hours.
 
 Global Flags:
   --data-dir <path>     Override the application data directory
-                        (default: platform-specific, e.g. ~/Library/Application Support/ops-cat)
+                        (default: platform-specific, e.g. ~/Library/Application Support/opskat)
   --master-key <key>    Override the master encryption key for credential decryption
                         (env: OPSKAT_MASTER_KEY)
   --session <id>        Session ID for approval (env: OPSKAT_SESSION_ID)

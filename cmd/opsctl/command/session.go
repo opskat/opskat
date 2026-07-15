@@ -15,7 +15,7 @@ import (
 
 const sessionMaxAge = 24 * time.Hour
 
-const opscatDir = ".opskat"
+const opskatDir = ".opskat"
 
 // sessionScope returns a short hash identifying the current terminal/session context.
 // Uses terminal session env vars to differentiate concurrent sessions in the same directory.
@@ -39,20 +39,20 @@ func sessionScope() string {
 }
 
 // sessionFilePath returns the path to the session file for the current scope.
-// e.g. .opscat/sessions/a1b2c3d4e5f6
-func sessionFilePath(opscatPath string) string {
-	return filepath.Join(opscatPath, "sessions", sessionScope())
+// e.g. .opskat/sessions/a1b2c3d4e5f6
+func sessionFilePath(opskatPath string) string {
+	return filepath.Join(opskatPath, "sessions", sessionScope())
 }
 
-// findOpscatDir walks up from CWD looking for .opscat/ directory.
+// findOpskatDir walks up from CWD looking for .opskat/ directory.
 // Returns empty string if not found.
-func findOpscatDir() string {
+func findOpskatDir() string {
 	dir, err := os.Getwd()
 	if err != nil {
 		return ""
 	}
 	for {
-		path := filepath.Join(dir, opscatDir)
+		path := filepath.Join(dir, opskatDir)
 		if info, err := os.Stat(path); err == nil && info.IsDir() {
 			return path
 		}
@@ -68,7 +68,7 @@ func findOpscatDir() string {
 // readActiveSession reads the session ID for the current scope.
 // Returns empty string if file doesn't exist, is invalid, or has expired (24h).
 func readActiveSession() string {
-	dir := findOpscatDir()
+	dir := findOpskatDir()
 	if dir == "" {
 		return ""
 	}
@@ -85,7 +85,7 @@ func readActiveSession() string {
 		cleanupSessionsDir(dir)
 		return ""
 	}
-	data, err := os.ReadFile(path) //nolint:gosec // path is constructed from known .opscat dir
+	data, err := os.ReadFile(path) //nolint:gosec // path is constructed from known .opskat dir
 	if err != nil {
 		return ""
 	}
@@ -98,7 +98,7 @@ func readActiveSession() string {
 
 // writeActiveSession writes the session ID for the current scope in CWD.
 func writeActiveSession(id string) error {
-	sessDir := filepath.Join(opscatDir, "sessions")
+	sessDir := filepath.Join(opskatDir, "sessions")
 	if err := os.MkdirAll(sessDir, 0755); err != nil {
 		return err
 	}
@@ -150,7 +150,7 @@ func cmdSessionStart() int {
 }
 
 func cmdSessionEnd() int {
-	dir := findOpscatDir()
+	dir := findOpskatDir()
 	if dir == "" {
 		fmt.Fprintln(os.Stderr, "No active session.")
 		return 0
@@ -166,8 +166,8 @@ func cmdSessionEnd() int {
 }
 
 // cleanupSessionsDir removes sessions/ if empty.
-func cleanupSessionsDir(opscatPath string) {
-	if err := os.Remove(filepath.Join(opscatPath, "sessions")); err != nil {
+func cleanupSessionsDir(opskatPath string) {
+	if err := os.Remove(filepath.Join(opskatPath, "sessions")); err != nil {
 		logger.Default().Warn("remove sessions directory", zap.Error(err))
 	}
 }
@@ -199,7 +199,7 @@ Note: Sessions are auto-created on the first write operation if none exists.
 You only need 'session start' if you want to explicitly manage the lifecycle.
 
 Storage:
-  Session files are stored in .opscat/sessions/<scope> in the current directory.
+  Session files are stored in .opskat/sessions/<scope> in the current directory.
   The <scope> is derived from terminal env vars (TERM_SESSION_ID, ITERM_SESSION_ID,
   WT_SESSION, WINDOWID) so that different terminal windows in the same directory
   get separate sessions. Sessions expire after 24 hours.
@@ -207,12 +207,12 @@ Storage:
 Session ID resolution priority:
   1. --session <id> global flag (explicit)
   2. OPSKAT_SESSION_ID environment variable (desktop app injects this)
-  3. .opscat/sessions/<scope> file (auto-created, walks up directory tree)
+  3. .opskat/sessions/<scope> file (auto-created, walks up directory tree)
 
 Examples:
   # Explicit session management
   opsctl session start
-  opsctl exec web-01 -- uptime       # reads session from .opscat/sessions/
+  opsctl exec web-01 -- uptime       # reads session from .opskat/sessions/
   opsctl exec web-02 -- df -h        # same session, auto-approved after first allow
   opsctl session end
 

@@ -49,9 +49,6 @@ The app data directory is platform-specific (`bootstrap.AppDataDir()`):
 | Windows | `%LOCALAPPDATA%\opskat` (fallback `%USERPROFILE%\AppData\Local\opskat`) |
 | Linux | `~/.config/opskat` |
 
-> The `opsctl` help text still shows the legacy name `ops-cat` / `.opscat` in a few
-> places — that is stale. The real directory is `opskat`, as above.
-
 Inside the data directory:
 
 | Path | What it is |
