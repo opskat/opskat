@@ -85,7 +85,10 @@ func Init(ctx context.Context, opts Options) error {
 	}
 
 	// 获取 master key：CLI 参数 > Keychain > 文件 > 自动生成
-	masterKey, err := credential_svc.ResolveMasterKey(opts.MasterKey, dataDir)
+	masterKey, err := credential_svc.ResolveMasterKey(credential_svc.MasterKeyOptions{
+		Explicit: opts.MasterKey,
+		DataDir:  dataDir,
+	})
 	if err != nil {
 		return fmt.Errorf("获取 master key 失败: %w", err)
 	}
