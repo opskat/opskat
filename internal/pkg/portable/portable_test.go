@@ -44,3 +44,53 @@ func TestDirFor(t *testing.T) {
 		}
 	})
 }
+
+func TestSameDir(t *testing.T) {
+	base := t.TempDir()
+	dataDir := filepath.Join(base, "data")
+	if err := os.Mkdir(dataDir, 0o755); err != nil {
+		t.Fatalf("准备 data 目录失败: %v", err)
+	}
+
+	t.Run("相对路径与绝对路径指向同一目录", func(t *testing.T) {
+		cwd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("读取工作目录失败: %v", err)
+		}
+		relative, err := filepath.Rel(cwd, dataDir)
+		if err != nil {
+			t.Fatalf("构造相对路径失败: %v", err)
+		}
+
+		if !SameDir(relative, dataDir) {
+			t.Fatal("相对路径与绝对路径应识别为同一目录")
+		}
+	})
+
+	t.Run("包含父目录跳转的路径指向同一目录", func(t *testing.T) {
+		pathWithParent := filepath.Join(dataDir, "child", "..")
+		if !SameDir(pathWithParent, dataDir) {
+			t.Fatal("包含 .. 的等价路径应识别为同一目录")
+		}
+	})
+
+	t.Run("符号链接指向同一目录", func(t *testing.T) {
+		link := filepath.Join(base, "data-link")
+		if err := os.Symlink(dataDir, link); err != nil {
+			t.Skipf("当前平台无法创建符号链接: %v", err)
+		}
+		if !SameDir(link, dataDir) {
+			t.Fatal("符号链接与目标应识别为同一目录")
+		}
+	})
+
+	t.Run("不同目录不相等", func(t *testing.T) {
+		other := filepath.Join(base, "other")
+		if err := os.Mkdir(other, 0o755); err != nil {
+			t.Fatalf("准备其他目录失败: %v", err)
+		}
+		if SameDir(other, dataDir) {
+			t.Fatal("不同目录不应识别为同一目录")
+		}
+	})
+}

@@ -91,7 +91,7 @@ func masterKeyOpts(opts Options, dataDir string) credential_svc.MasterKeyOptions
 		// 只有真正在用便携目录时才跳过凭据管理器。若按"可执行文件是否便携"
 		// 来判断，便携的 opsctl 指向已安装数据目录时会跳过凭据管理器里的
 		// 真 key，转而生成新 key 写进已安装目录，库内凭据从此解不开。
-		NoKeychain: dataDir == portableDir(),
+		NoKeychain: portable.SameDir(dataDir, portableDir()),
 	}
 }
 

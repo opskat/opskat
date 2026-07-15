@@ -1,6 +1,10 @@
 package bootstrap
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // TestMasterKeyOpts 覆盖 NoKeychain 的四种组合：便携与否 × 是否用
 // --data-dir / OPSKAT_DATA_DIR 覆盖数据目录。NoKeychain 必须跟随
@@ -8,7 +12,14 @@ import "testing"
 // 便携的 opsctl 指向已安装数据目录时若跳过凭据管理器，会读不到 key 而重新
 // 生成一个，把错误的 master.key 写进已安装目录。
 func TestMasterKeyOpts(t *testing.T) {
-	const portable = "/opt/opskat/data"
+	portable := filepath.Join(t.TempDir(), "data")
+	if err := os.Mkdir(portable, 0o755); err != nil {
+		t.Fatalf("准备便携目录失败: %v", err)
+	}
+	child := filepath.Join(portable, "child")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatalf("准备便携子目录失败: %v", err)
+	}
 
 	tests := []struct {
 		name           string
@@ -26,6 +37,12 @@ func TestMasterKeyOpts(t *testing.T) {
 			name:           "便携且未覆盖：数据目录即便携目录，跳过凭据管理器",
 			portableDir:    portable,
 			dataDir:        portable,
+			wantNoKeychain: true,
+		},
+		{
+			name:           "便携目录的等价路径写法：仍跳过凭据管理器",
+			portableDir:    portable,
+			dataDir:        filepath.Join(portable, "child") + string(os.PathSeparator) + "..",
 			wantNoKeychain: true,
 		},
 		{

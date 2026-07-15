@@ -28,6 +28,25 @@ func dirFor(exePath string) string {
 	return ""
 }
 
+// SameDir 判断两个路径是否指向同一个目录。
+//
+// 通过 os.SameFile 比较文件系统身份，处理相对路径、. / ..、符号链接以及
+// Windows 大小写不敏感等文件系统语义。
+func SameDir(first, second string) bool {
+	if first == "" || second == "" {
+		return false
+	}
+	firstInfo, err := os.Stat(first)
+	if err != nil || !firstInfo.IsDir() {
+		return false
+	}
+	secondInfo, err := os.Stat(second)
+	if err != nil || !secondInfo.IsDir() {
+		return false
+	}
+	return os.SameFile(firstInfo, secondInfo)
+}
+
 // Dir 返回便携数据目录，非便携模式返回 ""。
 //
 // 结果在进程生命周期内只解析一次：便携与否是安装形态的属性，不会在

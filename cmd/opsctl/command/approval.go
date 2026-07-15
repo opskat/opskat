@@ -74,7 +74,7 @@ func requireApproval(ctx context.Context, req approval.ApprovalRequest) (Approva
 	}
 
 	// Stage 3: Connect to desktop app via Unix socket
-	dataDir := bootstrap.AppDataDir()
+	dataDir := bootstrap.ResolvedDataDir()
 	sockPath := approval.SocketPath(dataDir)
 
 	authToken, err := bootstrap.ReadAuthToken(dataDir)
