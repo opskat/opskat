@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/opskat/opskat/internal/pkg/portable"
 	"github.com/opskat/opskat/internal/repository/ai_provider_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
@@ -53,8 +54,17 @@ func ResolvedDataDir() string {
 	return AppDataDir()
 }
 
-// AppDataDir 返回应用数据目录
+// portableDir 解析便携数据目录，便携模式外返回 ""。变量而非直接调用，
+// 是为了让 AppDataDir 的两个分支可测（os.Executable() 在测试中指向
+// 临时测试二进制，无法构造 data 目录）。
+var portableDir = portable.Dir
+
+// AppDataDir 返回应用数据目录。
+// 便携模式（可执行文件同级存在 data 目录）优先，否则用平台默认目录。
 func AppDataDir() string {
+	if dir := portableDir(); dir != "" {
+		return dir
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		home, _ := os.UserHomeDir()
@@ -86,8 +96,9 @@ func Init(ctx context.Context, opts Options) error {
 
 	// 获取 master key：CLI 参数 > Keychain > 文件 > 自动生成
 	masterKey, err := credential_svc.ResolveMasterKey(credential_svc.MasterKeyOptions{
-		Explicit: opts.MasterKey,
-		DataDir:  dataDir,
+		Explicit:   opts.MasterKey,
+		DataDir:    dataDir,
+		NoKeychain: portableDir() != "",
 	})
 	if err != nil {
 		return fmt.Errorf("获取 master key 失败: %w", err)
