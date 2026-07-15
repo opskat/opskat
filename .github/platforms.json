@@ -1,0 +1,41 @@
+[
+  {
+    "os": "macos-latest",
+    "goos": "darwin",
+    "goarch": "arm64",
+    "platform": "darwin-arm64"
+  },
+  {
+    "os": "macos-latest",
+    "goos": "darwin",
+    "goarch": "amd64",
+    "platform": "darwin-amd64"
+  },
+  {
+    "os": "ubuntu-22.04",
+    "goos": "linux",
+    "goarch": "amd64",
+    "platform": "linux-amd64",
+    "webkit_pkg": "libwebkit2gtk-4.0-dev"
+  },
+  {
+    "os": "ubuntu-24.04-arm",
+    "goos": "linux",
+    "goarch": "arm64",
+    "platform": "linux-arm64",
+    "webkit_pkg": "libwebkit2gtk-4.1-dev",
+    "extra_tags": ",webkit2_41"
+  },
+  {
+    "os": "windows-latest",
+    "goos": "windows",
+    "goarch": "amd64",
+    "platform": "windows-amd64"
+  },
+  {
+    "os": "windows-latest",
+    "goos": "windows",
+    "goarch": "arm64",
+    "platform": "windows-arm64"
+  }
+]
