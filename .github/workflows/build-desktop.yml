@@ -247,8 +247,22 @@ jobs:
           Copy-Item build/windows/portable-data-readme.txt "$stage/data/README.txt"
           Compress-Archive -Path $stage -DestinationPath "opskat-$($env:VERSION)-${{ matrix.platform }}-portable.zip"
 
+      # 便携 zip 单独上传（下方），故这里排除它：否则两者挤在同一个 artifact 里，
+      # 想单独下载安装包也得连便携版一起拖。下游 release/nightly/manual 的
+      # pattern（release-* / nightly-* / manual-opskat-*）都能捞到两个 artifact，
+      # Release 资产因此不变。
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.artifact-prefix }}-opskat-${{ matrix.platform }}
-          path: opskat-${{ inputs.version }}-${{ matrix.platform }}*
+          path: |
+            opskat-${{ inputs.version }}-${{ matrix.platform }}*
+            !opskat-${{ inputs.version }}-${{ matrix.platform }}-portable.zip
+          if-no-files-found: ${{ inputs.if-no-files-found }}
+
+      - name: Upload portable artifact
+        if: matrix.goos == 'windows' && matrix.goarch == 'amd64'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-prefix }}-opskat-${{ matrix.platform }}-portable
+          path: opskat-${{ inputs.version }}-${{ matrix.platform }}-portable.zip
           if-no-files-found: ${{ inputs.if-no-files-found }}
