@@ -39,6 +39,8 @@ jobs:
       matrix: ${{ steps.resolve.outputs.matrix }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Resolve platform matrix
         id: resolve
@@ -232,6 +234,12 @@ jobs:
         if: matrix.goos == 'windows' && matrix.goarch == 'amd64'
         shell: pwsh
         run: |
+          # 两处细节是刻意的，改动会破坏产物（且只在打 tag 后才暴露）：
+          # 1. 暂存目录放在 portable/ 前缀下，使其不被根目录的上传 glob
+          #    opskat-<version>-<platform>* 匹配到（否则未压缩的暂存目录会跟着上传），
+          #    而压缩好的 zip 仍在根目录、仍会被匹配。
+          # 2. Compress-Archive -Path $stage 不带 \*，zip 里才有顶层目录，
+          #    用户解压后得到一个完整的应用文件夹而不是散落一地的文件。
           $stage = "portable/opskat-$($env:VERSION)-${{ matrix.platform }}"
           New-Item -ItemType Directory -Force -Path "$stage/data" | Out-Null
           Copy-Item build/bin/opskat.exe "$stage/opskat.exe"
