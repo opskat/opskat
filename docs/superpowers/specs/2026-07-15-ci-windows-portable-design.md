@@ -37,9 +37,9 @@
 
 ## 4. 代码设计
 
-### 4.1 新增叶子包 `internal/portable`
+### 4.1 新增叶子包 `internal/pkg/portable`
 
-由导入方向决定，非风格偏好：`bootstrap`、`credential_svc`、`embedded` 三处都需判断便携态，而 `bootstrap` 已导入 `credential_svc`，后者反向导入会成环。叶子包（仅依赖标准库）三方可用。
+由导入方向决定，非风格偏好：`bootstrap`、`credential_svc`、`embedded` 三处都需判断便携态，而 `bootstrap` 已导入 `credential_svc`，后者反向导入会成环。叶子包（仅依赖标准库）三方可用。落点取 `internal/pkg/`——本仓叶子工具包的既有位置（`code` / `dbutil` / `executil` / `proxychain` / `secure` 等均在此）。
 
 ```go
 package portable
@@ -311,7 +311,7 @@ rm -rf ./build/bin/data && ./build/bin/opsctl list
 
 ## 8. 实施顺序
 
-1. `internal/portable` + 测试
+1. `internal/pkg/portable` + 测试
 2. `credential_svc` `MasterKeyOptions` + 测试
 3. `bootstrap` 接入 + 测试
 4. `embedded` `DefaultInstallDir` / `InstallOpsctl` + 测试
