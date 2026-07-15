@@ -71,7 +71,7 @@ Backend-initiated updates flow the other way as **events**: the app emits a Wail
 
 ## 4. Process wiring (`main.go`)
 
-`main.go` is the composition root. In order, it: resolves the data dir / master key (env overrides `OPSKAT_DATA_DIR`, `OPSKAT_MASTER_KEY`; `OPSKAT_E2E` relaxes the single-instance lock for the e2e harness); runs `bootstrap.Init` (DB open, master-key resolve, repository registration, migrations); initializes the logger and config; builds the shared infrastructure (SSH pool, SFTP service); constructs the per-domain **binders** and hands them to `wails.Run` via `Bind`.
+`main.go` is the composition root. In order, it: resolves the data dir / master key (`OPSKAT_DATA_DIR` / `OPSKAT_MASTER_KEY` override; otherwise `bootstrap.AppDataDir()` returns the **portable** dir — `data/` next to the executable, see `internal/pkg/portable` — and falls back to the per-platform dir. In portable mode the master key stays in `<dataDir>/master.key` instead of the OS keychain, so the folder can be moved between machines; `OPSKAT_E2E` relaxes the single-instance lock for the e2e harness); runs `bootstrap.Init` (DB open, master-key resolve, repository registration, migrations); initializes the logger and config; builds the shared infrastructure (SSH pool, SFTP service); constructs the per-domain **binders** and hands them to `wails.Run` via `Bind`.
 
 Binders implement a small `Lifecycle` (`Startup(ctx)` / `Cleanup()`) that `main.go` drives explicitly from Wails' `OnStartup` / `OnShutdown` hooks (Wails does not auto-call lifecycle methods on bound structs). The extension subsystem is initialized **asynchronously after startup** so WASM compilation never blocks the UI coming up.
 
