@@ -111,7 +111,9 @@ describe("OSSPresignDialog", () => {
   });
 
   it("shows a spinner while generating a URL", async () => {
-    vi.mocked(OSSPresignGet).mockReset().mockReturnValue(new Promise(() => {}) as never);
+    vi.mocked(OSSPresignGet)
+      .mockReset()
+      .mockReturnValue(new Promise(() => {}) as never);
     open();
     fireEvent.click(screen.getByTestId("oss-share-generate"));
     expect(await screen.findByTestId("oss-share-generating-spinner")).toHaveClass("animate-spin");
