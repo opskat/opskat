@@ -372,7 +372,7 @@ func requireBatchApproval(items []approval.BatchItem, session string) (ApprovalR
 		session = id
 	}
 
-	dataDir := bootstrap.AppDataDir()
+	dataDir := bootstrap.ResolvedDataDir()
 	sockPath := approval.SocketPath(dataDir)
 
 	authToken, err := bootstrap.ReadAuthToken(dataDir)

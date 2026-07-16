@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/opskat/opskat/internal/pkg/portable"
 	"github.com/opskat/opskat/internal/repository/ai_provider_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
@@ -53,8 +54,17 @@ func ResolvedDataDir() string {
 	return AppDataDir()
 }
 
-// AppDataDir 返回应用数据目录
+// portableDir 解析便携数据目录，便携模式外返回 ""。变量而非直接调用，
+// 是为了让 AppDataDir 的两个分支可测（os.Executable() 在测试中指向
+// 临时测试二进制，无法构造 data 目录）。
+var portableDir = portable.Dir
+
+// AppDataDir 返回应用数据目录。
+// 便携模式（可执行文件同级存在 data 目录）优先，否则用平台默认目录。
 func AppDataDir() string {
+	if dir := portableDir(); dir != "" {
+		return dir
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		home, _ := os.UserHomeDir()
@@ -72,6 +82,19 @@ func AppDataDir() string {
 	}
 }
 
+// masterKeyOpts 由实际使用的数据目录（dataDir，可能被 --data-dir /
+// OPSKAT_DATA_DIR 覆盖）决定 master key 的解析方式。
+func masterKeyOpts(opts Options, dataDir string) credential_svc.MasterKeyOptions {
+	return credential_svc.MasterKeyOptions{
+		Explicit: opts.MasterKey,
+		DataDir:  dataDir,
+		// 只有真正在用便携目录时才跳过凭据管理器。若按"可执行文件是否便携"
+		// 来判断，便携的 opsctl 指向已安装数据目录时会跳过凭据管理器里的
+		// 真 key，转而生成新 key 写进已安装目录，库内凭据从此解不开。
+		NoKeychain: portable.SameDir(dataDir, portableDir()),
+	}
+}
+
 // Init 初始化数据库、凭证服务、注册 Repository、运行迁移
 func Init(ctx context.Context, opts Options) error {
 	dataDir := opts.DataDir
@@ -85,7 +108,7 @@ func Init(ctx context.Context, opts Options) error {
 	}
 
 	// 获取 master key：CLI 参数 > Keychain > 文件 > 自动生成
-	masterKey, err := credential_svc.ResolveMasterKey(opts.MasterKey, dataDir)
+	masterKey, err := credential_svc.ResolveMasterKey(masterKeyOpts(opts, dataDir))
 	if err != nil {
 		return fmt.Errorf("获取 master key 失败: %w", err)
 	}
@@ -113,7 +136,7 @@ func Init(ctx context.Context, opts Options) error {
 
 	registerRepositories()
 
-	if err := migrations.RunMigrations(db.Default()); err != nil {
+	if err := migrations.RunMigrations(db.Default(), dataDir); err != nil {
 		return err
 	}
 

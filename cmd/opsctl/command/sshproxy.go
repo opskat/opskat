@@ -10,7 +10,7 @@ import (
 
 // getSSHProxyClient 检测 sshpool.sock 是否可用，返回 client 或 nil（fallback 直连）
 func getSSHProxyClient() *sshpool.Client {
-	dataDir := bootstrap.AppDataDir()
+	dataDir := bootstrap.ResolvedDataDir()
 	sockPath := sshpool.SocketPath(dataDir)
 	token, err := bootstrap.ReadAuthToken(dataDir)
 	if err != nil {

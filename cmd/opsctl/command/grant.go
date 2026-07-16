@@ -206,7 +206,7 @@ func cmdGrantSubmit(ctx context.Context, args []string, session string) int {
 	}
 
 	// 通过 socket 发送 grant 请求
-	dataDir := bootstrap.AppDataDir()
+	dataDir := bootstrap.ResolvedDataDir()
 	sockPath := approval.SocketPath(dataDir)
 	authToken, err := bootstrap.ReadAuthToken(dataDir)
 	if err != nil {

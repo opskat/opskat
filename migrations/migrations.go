@@ -5,11 +5,13 @@ import (
 	"gorm.io/gorm"
 )
 
-// RunMigrations 执行数据库迁移
-func RunMigrations(db *gorm.DB) error {
+// RunMigrations 执行数据库迁移。
+// dataDir 是应用实际使用的数据目录（可能被 --data-dir 覆盖或为便携目录），
+// 供需要读取磁盘旧配置的迁移使用。
+func RunMigrations(db *gorm.DB, dataDir string) error {
 	m := gormigrate.New(db, gormigrate.DefaultOptions, []*gormigrate.Migration{
 		migration202603220001(),
-		migration202603260001(),
+		migration202603260001(dataDir),
 		migration202603270001(),
 		migration202603290001(),
 		migration202603300001(),
