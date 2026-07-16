@@ -185,6 +185,37 @@ describe("RDPPanel", () => {
     rectSpy.mockRestore();
   });
 
+  it("does not resize the remote desktop while its tab is display-none", async () => {
+    let resizeCallback: ResizeObserverCallback | undefined;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          resizeCallback = callback;
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+    await renderConnected();
+    vi.mocked(ResizeRDP).mockClear();
+    const hiddenRect = {
+      ...document.body.getBoundingClientRect(),
+      right: 0,
+      bottom: 0,
+      width: 0,
+      height: 0,
+    } as DOMRect;
+    const rectSpy = vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue(hiddenRect);
+
+    act(() => resizeCallback?.([], {} as ResizeObserver));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(ResizeRDP).not.toHaveBeenCalled();
+    rectSpy.mockRestore();
+  });
+
   it("syncs the current viewport when switching from 1:1 back to Fit", async () => {
     let resizeCallback: ResizeObserverCallback | undefined;
     vi.stubGlobal(
