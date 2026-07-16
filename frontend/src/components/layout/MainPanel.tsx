@@ -58,6 +58,7 @@ interface MainPanelProps {
   onEditAsset: (asset: asset_entity.Asset) => void;
   onDeleteAsset: (id: number) => void;
   onConnectAsset: (asset: asset_entity.Asset) => void;
+  topBarHidden?: boolean;
 }
 
 function PanelFallback() {
@@ -72,7 +73,7 @@ function LazySurface({ children }: { children: ReactNode }) {
   return <Suspense fallback={<PanelFallback />}>{children}</Suspense>;
 }
 
-export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPanelProps) {
+export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset, topBarHidden = false }: MainPanelProps) {
   const { t } = useTranslation();
 
   const tabs = useTabStore((s) => s.tabs);
@@ -224,7 +225,7 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset }: MainPa
   return (
     <div className="flex flex-1 flex-col min-w-0">
       {/* Tab bar with integrated drag region (top layout only) */}
-      {hasTabs && tabBarLayout === "top" && <TopTabBar />}
+      {hasTabs && tabBarLayout === "top" && <TopTabBar topmost={topBarHidden} />}
 
       {/* Content area */}
       <div className="flex-1 relative min-h-0 overflow-hidden">

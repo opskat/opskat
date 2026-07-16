@@ -17,6 +17,7 @@ import { TabPanelMenu } from "./TabPanelMenu";
 import { TabFilterPopover } from "./TabFilterPopover";
 import { useLayoutStore } from "@/stores/layoutStore";
 import { getBuiltinPageMeta } from "./pageTabMeta";
+import { usePlatform } from "@/hooks/usePlatform";
 
 interface TabBarContextValue {
   tabs: Tab[];
@@ -137,7 +138,12 @@ function TabItem({
   );
 }
 
-export function TopTabBar() {
+interface TopTabBarProps {
+  topmost?: boolean;
+}
+
+export function TopTabBar({ topmost = false }: TopTabBarProps) {
+  const platform = usePlatform();
   const { t } = useTranslation();
 
   const tabs = useTabStore((s) => s.tabs);
@@ -281,7 +287,10 @@ export function TopTabBar() {
     <TabBarContext value={tabBarCtx}>
       <div
         data-top-tabbar
-        className="flex items-center border-b overflow-hidden bg-background"
+        className={cn(
+          "flex items-center border-b overflow-hidden bg-background",
+          topmost && platform === "windows" && "pr-[140px]"
+        )}
         style={{ "--wails-draggable": "drag" } as React.CSSProperties}
       >
         <div className="flex items-center min-w-0 flex-1">{tabs.map((tab) => renderTabItem(tab))}</div>
