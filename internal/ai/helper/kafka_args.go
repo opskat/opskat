@@ -191,7 +191,7 @@ func KafkaDeleteSchemaRequestFromArgs(assetID int64, args map[string]any) kafka_
 		AssetID:   assetID,
 		Subject:   aictx.ArgString(args, "subject"),
 		Version:   aictx.ArgString(args, "version"),
-		Permanent: argBool(args, "permanent"),
+		Permanent: aictx.ArgBool(args, "permanent"),
 	}
 }
 
@@ -230,8 +230,8 @@ func KafkaRestartConnectorRequestFromArgs(assetID int64, args map[string]any) ka
 		AssetID:      assetID,
 		Cluster:      aictx.ArgString(args, "cluster"),
 		Name:         aictx.ArgString(args, "connector"),
-		IncludeTasks: argBool(args, "include_tasks"),
-		OnlyFailed:   argBool(args, "only_failed"),
+		IncludeTasks: aictx.ArgBool(args, "include_tasks"),
+		OnlyFailed:   aictx.ArgBool(args, "only_failed"),
 	}
 }
 
@@ -373,16 +373,4 @@ func ArgOptionalPartition(args map[string]any) (*int32, error) {
 	}
 	out := int32(n)
 	return &out, nil
-}
-
-func argBool(args map[string]any, key string) bool {
-	if v, ok := args[key]; ok {
-		switch b := v.(type) {
-		case bool:
-			return b
-		case string:
-			return strings.EqualFold(strings.TrimSpace(b), "true")
-		}
-	}
-	return false
 }

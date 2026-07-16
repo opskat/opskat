@@ -95,7 +95,7 @@ export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
     {
       key: "tunnel",
       label: "asset.tabTunnel",
-      fields: [{ kind: "tunnel", tunnelOptionLabelKey: "asset.connectionTunnelProxy" }],
+      fields: [{ kind: "tunnel" }],
     },
     {
       key: "files",

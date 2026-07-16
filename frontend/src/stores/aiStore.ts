@@ -1652,7 +1652,6 @@ interface AIState {
   checkConfigured: () => Promise<void>;
 
   // 发送
-  send: (content: string) => Promise<void>;
   sendToTab: (tabId: string, content: string) => Promise<void>;
   sendFromSidebarTab: (tabId: string, content: string) => Promise<void>;
   editAndResendConversation: (convId: number, messageIndex: number, content: string) => Promise<void>;
@@ -1666,7 +1665,6 @@ interface AIState {
   // Tab 管理 (delegates to tabStore)
   openConversationTab: (conversationId: number) => Promise<string>;
   openNewConversationTab: () => string;
-  clear: () => void;
 
   // 会话管理
   fetchConversations: () => Promise<void>;
@@ -2177,27 +2175,6 @@ export const useAIStore = create<AIState>((set, get) => {
       }));
 
       return tabId;
-    },
-
-    // === 向后兼容 ===
-
-    send: async (content: string) => {
-      const tabStore = useTabStore.getState();
-      const activeTab = tabStore.tabs.find((t) => t.id === tabStore.activeTabId && t.type === "ai");
-      if (!activeTab) {
-        const newTabId = get().openNewConversationTab();
-        await get().sendToTab(newTabId, content);
-        return;
-      }
-      await get().sendToTab(activeTab.id, content);
-    },
-
-    clear: () => {
-      const tabStore = useTabStore.getState();
-      const activeTab = tabStore.tabs.find((t) => t.id === tabStore.activeTabId && t.type === "ai");
-      if (activeTab) {
-        tabStore.closeTab(activeTab.id);
-      }
     },
 
     // === 核心发送 ===

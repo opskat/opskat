@@ -1,17 +1,17 @@
 import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Search, Server, Folder, MessageSquare } from "lucide-react";
+import { Search } from "lucide-react";
 import { cn } from "@opskat/ui";
-import { useTabStore, type Tab, type InfoTabMeta } from "@/stores/tabStore";
+import { useTabStore } from "@/stores/tabStore";
 import { useTerminalStore } from "@/stores/terminalStore";
-import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
 import { filterMatches, highlightMatch } from "@/lib/highlightMatch";
 import { useLayoutStore, isCollapsed } from "@/stores/layoutStore";
 import { SideTabItem } from "./SideTabItem";
 import { SideTabDragContext } from "./SideTabDragContext";
 import { TabFilterInput } from "./TabFilterInput";
 import { TabPanelMenu } from "./TabPanelMenu";
-import { getBuiltinPageMeta, resolveTabLabel } from "./pageTabMeta";
+import { resolveTabLabel } from "./pageTabMeta";
+import { resolveTabVisual } from "./tabVisual";
 
 export function SideTabList() {
   const { t } = useTranslation();
@@ -47,47 +47,6 @@ export function SideTabList() {
     () => ({ dragKeyRef, reorder: reorderTab, moveTo: moveTabTo, tabs }),
     [reorderTab, moveTabTo, tabs]
   );
-
-  const resolveMeta = (
-    tab: Tab
-  ): {
-    Icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
-    iconStyle?: React.CSSProperties;
-    indicatorColor?: string;
-    extra?: React.ReactNode;
-  } => {
-    if (tab.type === "terminal") {
-      const data = tabData[tab.id];
-      const paneValues = data ? Object.values(data.panes) : [];
-      const allDisconnected = paneValues.length > 0 && paneValues.every((p) => !p.connected);
-      const Icon = tab.icon ? getIconComponent(tab.icon) : Server;
-      const color = tab.icon ? getIconColor(tab.icon) : undefined;
-      return {
-        Icon,
-        iconStyle: color ? { color } : undefined,
-        indicatorColor: color,
-        extra: allDisconnected ? <span className="h-1.5 w-1.5 rounded-full bg-destructive shrink-0" /> : undefined,
-      };
-    }
-    if (tab.type === "ai") {
-      return { Icon: MessageSquare };
-    }
-    if (tab.type === "query" || tab.type === "info") {
-      const Icon = tab.icon
-        ? getIconComponent(tab.icon)
-        : tab.type === "info" && (tab.meta as InfoTabMeta).targetType === "group"
-          ? Folder
-          : Server;
-      const color = tab.icon ? getIconColor(tab.icon) : undefined;
-      return { Icon, iconStyle: color ? { color } : undefined, indicatorColor: color };
-    }
-    // page
-    const pm = getBuiltinPageMeta(tab);
-    if (pm) return { Icon: pm.icon };
-    const Icon = tab.icon ? getIconComponent(tab.icon) : Server;
-    const color = tab.icon ? getIconColor(tab.icon) : undefined;
-    return { Icon, iconStyle: color ? { color } : undefined, indicatorColor: color };
-  };
 
   return (
     <div data-tab-panel className="flex flex-col h-full bg-sidebar">
@@ -140,7 +99,10 @@ export function SideTabList() {
           ) : (
             matchedWithLabel.map(({ tab, displayLabel }) => {
               const segments = highlightMatch(displayLabel, query);
-              const meta = resolveMeta(tab);
+              const visual = resolveTabVisual(tab);
+              const data = tab.type === "terminal" ? tabData[tab.id] : undefined;
+              const paneValues = data ? Object.values(data.panes) : [];
+              const allDisconnected = paneValues.length > 0 && paneValues.every((pane) => !pane.connected);
               return (
                 <SideTabItem
                   key={tab.id}
@@ -148,10 +110,12 @@ export function SideTabList() {
                   isActive={tab.id === activeTabId}
                   collapsed={collapsed}
                   labelSegments={segments}
-                  icon={meta.Icon}
-                  iconStyle={meta.iconStyle}
-                  indicatorColor={meta.indicatorColor}
-                  extra={meta.extra}
+                  icon={visual.Icon}
+                  iconStyle={visual.iconStyle}
+                  indicatorColor={visual.indicatorColor}
+                  extra={
+                    allDisconnected ? <span className="h-1.5 w-1.5 rounded-full bg-destructive shrink-0" /> : undefined
+                  }
                   onActivate={() => activateTab(tab.id)}
                   onClose={() => closeTab(tab.id)}
                 />

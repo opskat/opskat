@@ -7,14 +7,12 @@ import {
   Layers,
   RefreshCw,
   Circle,
-  Grid3X3,
   Container,
   FileText,
   Key,
   AlertCircle,
   ChevronRight,
   ChevronDown,
-  Search,
   ScrollText,
 } from "lucide-react";
 import type { asset_entity } from "../../../wailsjs/go/models";
@@ -29,7 +27,6 @@ import {
   GetK8sPodDetail,
 } from "../../../wailsjs/go/k8s/K8s";
 import {
-  Input,
   useResizeHandle,
   ContextMenu,
   ContextMenuTrigger,
@@ -48,168 +45,21 @@ import { K8sCodeBlock } from "./K8sCodeBlock";
 import { K8sLogsPanel } from "./K8sLogsPanel";
 import type { LogTabState, LogTabStateUpdate } from "./k8sLogState";
 import { getK8sStatusColor, getContainerStateColor, statusVariantToClass } from "./utils";
-
-interface NodeInfo {
-  name: string;
-  status: string;
-  roles: string[];
-  version: string;
-  cpu: string;
-  memory: string;
-  os: string;
-  arch: string;
-}
-
-interface NamespaceInfo {
-  name: string;
-  status: string;
-}
-
-interface NamespaceResourcesData {
-  namespace: string;
-  pods: number;
-  deployments: number;
-  services: number;
-  config_maps: number;
-  secrets: number;
-  pvcs: number;
-  service_accounts: number;
-}
-
-interface ClusterInfo {
-  version: string;
-  platform: string;
-  nodes: NodeInfo[];
-  namespaces: NamespaceInfo[];
-}
-
-type InnerTabId =
-  | "overview"
-  | `node:${string}`
-  | `ns:${string}`
-  | `ns-res:${string}:${string}`
-  | `pod:${string}:${string}`
-  | `svc:${string}:${string}`
-  | `cm:${string}:${string}`
-  | `secret:${string}:${string}`
-  | `log:${string}:${string}`
-  | `log-deploy:${string}:${string}`;
-
-interface InnerTab {
-  id: InnerTabId;
-  label: string;
-}
-
-interface ResourceTypeDef {
-  key: keyof NamespaceResourcesData;
-  labelKey: string;
-  icon: React.FC<{ className?: string; style?: React.CSSProperties }>;
-}
-
-interface PodListItem {
-  name: string;
-  namespace: string;
-  status: string;
-  node_name: string;
-  pod_ip: string;
-  age: string;
-  ready: string;
-  restart_count: number;
-}
-
-interface DeploymentListItem {
-  name: string;
-  namespace: string;
-  ready: string;
-  up_to_date: number;
-  available: number;
-  age: string;
-  pods: PodListItem[];
-}
-
-interface ServicePortItem {
-  name: string;
-  port: number;
-  target_port: string;
-  node_port: number;
-  protocol: string;
-}
-
-interface ServiceListItem {
-  name: string;
-  namespace: string;
-  type: string;
-  cluster_ip: string;
-  ports: ServicePortItem[];
-  age: string;
-}
-
-interface ConfigMapListItem {
-  name: string;
-  namespace: string;
-  data: Record<string, string>;
-  age: string;
-}
-
-interface SecretListItem {
-  name: string;
-  namespace: string;
-  type: string;
-  data: Record<string, string>;
-  age: string;
-}
-
-interface ContainerDetail {
-  name: string;
-  image: string;
-  state: string;
-  ready: boolean;
-  restart_count: number;
-}
-
-interface ConditionDetail {
-  type: string;
-  status: string;
-  reason: string;
-  message: string;
-}
-
-interface EventDetail {
-  type: string;
-  reason: string;
-  message: string;
-  first_time: string;
-  last_time: string;
-  count: number;
-}
-
-interface PodDetail {
-  name: string;
-  namespace: string;
-  status: string;
-  node_name: string;
-  pod_ip: string;
-  host_ip: string;
-  creation_time: string;
-  age: string;
-  ready: string;
-  restart_count: number;
-  qos_class: string;
-  containers: ContainerDetail[];
-  conditions: ConditionDetail[];
-  events: EventDetail[];
-  labels: Record<string, string>;
-  annotations: Record<string, string>;
-  yaml: string;
-}
-
-const RESOURCE_TYPES: ResourceTypeDef[] = [
-  { key: "pods", labelKey: "asset.k8sPods", icon: Circle },
-  { key: "deployments", labelKey: "asset.k8sDeployments", icon: Grid3X3 },
-  { key: "services", labelKey: "asset.k8sServices", icon: Container },
-  { key: "config_maps", labelKey: "asset.k8sConfigMaps", icon: FileText },
-  { key: "secrets", labelKey: "asset.k8sSecrets", icon: Key },
-];
+import { ResourceSearchInput } from "./cluster/ResourceSearchInput";
+import { RESOURCE_TYPES } from "./cluster/resourceTypes";
+import type {
+  ClusterInfo,
+  ConfigMapListItem,
+  DeploymentListItem,
+  InnerTab,
+  InnerTabId,
+  NamespaceResourcesData,
+  PodDetail,
+  PodListItem,
+  SecretListItem,
+  ServiceListItem,
+} from "./cluster/types";
+import { ConfigMapDetailView, SecretDetailView, ServiceDetailView } from "./cluster/ResourceDetailViews";
 
 interface Props {
   asset: asset_entity.Asset;
@@ -237,26 +87,6 @@ interface K8sPageSnapshot {
   podDetails: Record<string, PodDetail>;
   logTabStates: Record<string, LogTabState>;
   autoRefreshingItems: string[];
-}
-
-interface ResourceSearchInputProps {
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-}
-
-function ResourceSearchInput({ value, onChange, placeholder }: ResourceSearchInputProps) {
-  return (
-    <div className="relative my-1 ml-9 mr-2">
-      <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-      <Input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="h-6 w-full pl-7 text-xs"
-      />
-    </div>
-  );
 }
 
 const k8sPageStateCache = new Map<number, K8sPageSnapshot>();
@@ -2630,55 +2460,7 @@ export function K8sClusterPage({ asset }: Props) {
               const ns = parts[1];
               const svcName = parts.slice(2).join(":");
               const svc = namespaceServiceList[ns]?.find((s) => s.name === svcName);
-
-              if (!svc) {
-                return (
-                  <div className="flex items-center justify-center h-full">
-                    <span className="text-sm text-muted-foreground">{t("asset.k8sNoServices")}</span>
-                  </div>
-                );
-              }
-
-              return (
-                <div className="max-w-5xl mx-auto p-4 space-y-4">
-                  <K8sSectionCard>
-                    <K8sResourceHeader
-                      name={svc.name}
-                      subtitle={svc.namespace}
-                      status={{ text: svc.type, variant: "info" }}
-                    />
-                    <K8sMetadataGrid
-                      items={[
-                        { label: t("asset.k8sServiceType"), value: svc.type, mono: true },
-                        { label: t("asset.k8sServiceClusterIP"), value: svc.cluster_ip || "-", mono: true },
-                        { label: t("asset.k8sPodAge"), value: svc.age, mono: true },
-                      ]}
-                    />
-                  </K8sSectionCard>
-
-                  <K8sTableSection
-                    title={t("asset.k8sServicePorts")}
-                    columns={[
-                      { key: "name", label: t("asset.k8sPodName") },
-                      { key: "port", label: t("asset.k8sServicePort") },
-                      { key: "target_port", label: t("asset.k8sServiceTargetPort") },
-                      { key: "protocol", label: t("asset.k8sServiceProtocol") },
-                      { key: "node_port", label: "NodePort" },
-                    ]}
-                    data={svc.ports}
-                    emptyText={t("asset.k8sNoEvents")}
-                    renderRow={(p, i) => (
-                      <tr key={i} className="border-b last:border-0">
-                        <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">{p.name || "-"}</td>
-                        <td className="py-2 pr-4 font-mono text-sm">{p.port}</td>
-                        <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">{p.target_port || "-"}</td>
-                        <td className="py-2 pr-4 text-xs">{p.protocol}</td>
-                        <td className="py-2 font-mono text-xs text-muted-foreground">{p.node_port || "-"}</td>
-                      </tr>
-                    )}
-                  />
-                </div>
-              );
+              return <ServiceDetailView service={svc} />;
             })()}
 
           {activeTabId.startsWith("cm:") &&
@@ -2687,47 +2469,7 @@ export function K8sClusterPage({ asset }: Props) {
               const ns = parts[1];
               const cmName = parts.slice(2).join(":");
               const cm = namespaceConfigMapList[ns]?.find((c) => c.name === cmName);
-
-              if (!cm) {
-                return (
-                  <div className="flex items-center justify-center h-full">
-                    <span className="text-sm text-muted-foreground">{t("asset.k8sNoConfigMaps")}</span>
-                  </div>
-                );
-              }
-
-              const dataEntries = Object.entries(cm.data || {});
-
-              return (
-                <div className="max-w-5xl mx-auto p-4 space-y-4">
-                  <K8sSectionCard>
-                    <K8sResourceHeader
-                      name={cm.name}
-                      subtitle={cm.namespace}
-                      status={{
-                        text: `${dataEntries.length} key${dataEntries.length !== 1 ? "s" : ""}`,
-                        variant: "neutral",
-                      }}
-                    />
-                    <K8sMetadataGrid items={[{ label: t("asset.k8sPodAge"), value: cm.age, mono: true }]} />
-                  </K8sSectionCard>
-
-                  <K8sSectionCard title="Data">
-                    {dataEntries.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">{t("asset.k8sNoEvents")}</p>
-                    ) : (
-                      <div className="space-y-3">
-                        {dataEntries.map(([key, value]) => (
-                          <div key={key}>
-                            <div className="text-xs text-muted-foreground font-medium mb-1">{key}</div>
-                            <K8sCodeBlock code={value} maxHeight="max-h-64" />
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </K8sSectionCard>
-                </div>
-              );
+              return <ConfigMapDetailView configMap={cm} />;
             })()}
 
           {activeTabId.startsWith("secret:") &&
@@ -2736,62 +2478,7 @@ export function K8sClusterPage({ asset }: Props) {
               const ns = parts[1];
               const secretName = parts.slice(2).join(":");
               const secret = namespaceSecretList[ns]?.find((s) => s.name === secretName);
-
-              if (!secret) {
-                return (
-                  <div className="flex items-center justify-center h-full">
-                    <span className="text-sm text-muted-foreground">{t("asset.k8sNoSecrets")}</span>
-                  </div>
-                );
-              }
-
-              const dataEntries = Object.entries(secret.data || {});
-              const decodeValue = (encoded: string) => {
-                try {
-                  return atob(encoded);
-                } catch {
-                  return encoded;
-                }
-              };
-
-              return (
-                <div className="max-w-5xl mx-auto p-4 space-y-4">
-                  <K8sSectionCard>
-                    <K8sResourceHeader
-                      name={secret.name}
-                      subtitle={secret.namespace}
-                      status={{ text: secret.type, variant: "neutral" }}
-                    />
-                    <K8sMetadataGrid
-                      items={[
-                        { label: t("asset.k8sSecretType"), value: secret.type, mono: true },
-                        { label: t("asset.k8sPodAge"), value: secret.age, mono: true },
-                      ]}
-                    />
-                  </K8sSectionCard>
-
-                  <K8sSectionCard title={t("asset.k8sSecretData")}>
-                    {dataEntries.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">{t("asset.k8sNoEvents")}</p>
-                    ) : (
-                      <div className="space-y-3">
-                        {dataEntries.map(([key, value]) => {
-                          const decoded = decodeValue(value);
-                          return (
-                            <div key={key}>
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="text-xs text-muted-foreground font-medium">{key}</span>
-                                <span className="text-[10px] text-muted-foreground">{decoded.length}B</span>
-                              </div>
-                              <K8sCodeBlock code={decoded} maxHeight="max-h-32" />
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </K8sSectionCard>
-                </div>
-              );
+              return <SecretDetailView secret={secret} />;
             })()}
         </div>
       </div>

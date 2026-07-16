@@ -9,7 +9,7 @@ import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodField
 import type { ConnectionFormFields } from "@/components/asset/proxyConfig";
 import type { ConfigGroup } from "@/components/asset/ConfigTabs";
 
-/** password/tunnel kind 渲染所需的横切依赖(Task 2b 使用)。 */
+/** password/tunnel 字段渲染所需的共享上下文。 */
 export interface FieldRenderCtx {
   cred?: UseAssetCredential;
   editAsset?: asset_entity.Asset;
@@ -59,7 +59,6 @@ export type FieldDesc<S> = WithVisibility<S> &
         mono?: boolean;
       }
     | { kind: "row"; fields: FieldDesc<S>[] }
-    // ↓ composite kind 在 Task 2b 补实现;此处声明以锁定类型。
     | {
         kind: "password";
         placeholder?: string;
@@ -67,7 +66,7 @@ export type FieldDesc<S> = WithVisibility<S> &
         selectSecretLabel?: string;
         usernameKey?: keyof S;
       }
-    | { kind: "tunnel"; tunnelOptionLabelKey?: string; tunnelSelectLabelKey?: string; excludeIds?: number[] }
+    | { kind: "tunnel"; excludeIds?: number[] }
     | { kind: "custom"; render: (s: S, patch: (p: Partial<S>) => void) => ReactNode }
   );
 
@@ -234,8 +233,6 @@ function FieldNode<S>({
           value={state as unknown as ConnectionFormFields}
           onChange={patch as unknown as (p: Partial<ConnectionFormFields>) => void}
           excludeIds={field.excludeIds}
-          tunnelOptionLabelKey={field.tunnelOptionLabelKey}
-          tunnelSelectLabelKey={field.tunnelSelectLabelKey}
         />
       );
 

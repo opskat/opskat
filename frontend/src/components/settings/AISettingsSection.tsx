@@ -15,14 +15,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
+  ConfirmDialog,
 } from "@opskat/ui";
 import { DetectOpsctl } from "../../../wailsjs/go/system/System";
 import {
@@ -391,27 +384,17 @@ function IntegrationSection() {
         </CardContent>
       </Card>
 
-      <AlertDialog
+      <ConfirmDialog
         open={!!uninstallTarget}
         onOpenChange={(open) => {
           if (!open) setUninstallTarget(null);
         }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("integration.skillUninstallConfirmTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("integration.skillUninstallConfirmDesc", { name: uninstallTarget?.name ?? "" })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("action.cancel")}</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={handleUninstallSkill}>
-              {t("integration.skillUninstall")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        title={t("integration.skillUninstallConfirmTitle")}
+        description={t("integration.skillUninstallConfirmDesc", { name: uninstallTarget?.name ?? "" })}
+        cancelText={t("action.cancel")}
+        confirmText={t("integration.skillUninstall")}
+        onConfirm={handleUninstallSkill}
+      />
     </>
   );
 }
@@ -610,26 +593,17 @@ export function AISettingsSection() {
         </DialogContent>
       </Dialog>
 
-      {/* Delete Confirmation */}
-      <AlertDialog
+      <ConfirmDialog
         open={!!deleteTarget}
         onOpenChange={(open) => {
           if (!open) setDeleteTarget(null);
         }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("settings.deleteProvider")}</AlertDialogTitle>
-            <AlertDialogDescription>{t("settings.deleteProviderConfirm")}</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("action.cancel")}</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={handleDelete}>
-              {t("action.delete")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        title={t("settings.deleteProvider")}
+        description={t("settings.deleteProviderConfirm")}
+        cancelText={t("action.cancel")}
+        confirmText={t("action.delete")}
+        onConfirm={handleDelete}
+      />
 
       {/* CLI Integration */}
       <IntegrationSection />

@@ -37,8 +37,8 @@ export function resolveTestCredential(s: CredentialState): CredentialFragment {
   return {};
 }
 
-/** 保存片段:镜像旧 save 分支 + encryptPasswordValue(managed→credential_id;否则明文加密 / 沿用既有密文)。
- *  加密失败由 encrypt 的 reject 透传给调用方(buildConfig→handleSubmit 统一 toast),不在此吞错。 */
+/** 构建保存用凭据片段:托管凭据写 credential_id,否则加密明文或沿用既有密文。
+ *  加密失败由 encrypt 的 reject 透传给调用方,不在此吞错。 */
 export async function resolveSaveCredential(
   s: CredentialState,
   encrypt: (plain: string) => Promise<string>

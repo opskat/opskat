@@ -75,10 +75,10 @@ func mustJSON(v any) string {
 	return string(b)
 }
 
-// --- CheckPolicyOnly HintRules ---
+// --- SSH CheckPermission HintRules ---
 
-func TestCheckPolicyOnlyHintRules(t *testing.T) {
-	Convey("CheckPolicyOnly returns HintRules on aictx.NeedConfirm", t, func() {
+func TestSSHCheckPermissionHintRules(t *testing.T) {
+	Convey("SSH CheckPermission returns HintRules on aictx.NeedConfirm", t, func() {
 		ctx, mockRepo, _ := setupPolicyTest(t)
 
 		Convey("aictx.NeedConfirm with allow rules returns only similar hints", func() {
@@ -91,7 +91,7 @@ func TestCheckPolicyOnlyHintRules(t *testing.T) {
 			}
 			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil)
 
-			result := CheckPolicyOnly(ctx, 1, "systemctl restart nginx")
+			result := CheckPermission(ctx, asset_entity.AssetTypeSSH, 1, "systemctl restart nginx")
 			So(result.Decision, ShouldEqual, aictx.NeedConfirm)
 			// 只返回与命令程序名匹配的提示（systemctl），不返回 ls/cat
 			So(result.HintRules, ShouldContain, "systemctl status *")
@@ -109,7 +109,7 @@ func TestCheckPolicyOnlyHintRules(t *testing.T) {
 			}
 			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil)
 
-			result := CheckPolicyOnly(ctx, 1, "ls -la")
+			result := CheckPermission(ctx, asset_entity.AssetTypeSSH, 1, "ls -la")
 			So(result.Decision, ShouldEqual, aictx.Allow)
 			So(result.HintRules, ShouldBeEmpty)
 		})
@@ -121,17 +121,17 @@ func TestCheckPolicyOnlyHintRules(t *testing.T) {
 			}
 			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil)
 
-			result := CheckPolicyOnly(ctx, 1, "ls -la")
+			result := CheckPermission(ctx, asset_entity.AssetTypeSSH, 1, "ls -la")
 			So(result.Decision, ShouldEqual, aictx.NeedConfirm)
 			So(result.HintRules, ShouldBeEmpty)
 		})
 	})
 }
 
-// --- CheckSQLPolicyForOpsctl ---
+// --- Database CheckPermission ---
 
-func TestCheckSQLPolicyForOpsctl(t *testing.T) {
-	Convey("CheckSQLPolicyForOpsctl", t, func() {
+func TestDatabaseCheckPermission(t *testing.T) {
+	Convey("database CheckPermission", t, func() {
 		ctx, mockRepo, stubGrp := setupPolicyTest(t)
 
 		Convey("allow list match returns aictx.Allow", func() {
@@ -145,7 +145,7 @@ func TestCheckSQLPolicyForOpsctl(t *testing.T) {
 			// policy.CheckGroupGenericPolicy + resolveAssetForPolicy both call Find
 			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
 
-			result := CheckSQLPolicyForOpsctl(ctx, 1, "SELECT * FROM users")
+			result := CheckPermission(ctx, asset_entity.AssetTypeDatabase, 1, "SELECT * FROM users")
 			So(result.Decision, ShouldEqual, aictx.Allow)
 			So(result.DecisionSource, ShouldEqual, aictx.SourcePolicyAllow)
 		})
@@ -160,7 +160,7 @@ func TestCheckSQLPolicyForOpsctl(t *testing.T) {
 			}
 			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
 
-			result := CheckSQLPolicyForOpsctl(ctx, 1, "DROP TABLE users")
+			result := CheckPermission(ctx, asset_entity.AssetTypeDatabase, 1, "DROP TABLE users")
 			So(result.Decision, ShouldEqual, aictx.Deny)
 			So(result.DecisionSource, ShouldEqual, aictx.SourcePolicyDeny)
 		})
@@ -175,7 +175,7 @@ func TestCheckSQLPolicyForOpsctl(t *testing.T) {
 			}
 			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
 
-			result := CheckSQLPolicyForOpsctl(ctx, 1, "INSERT INTO users VALUES (1, 'a')")
+			result := CheckPermission(ctx, asset_entity.AssetTypeDatabase, 1, "INSERT INTO users VALUES (1, 'a')")
 			So(result.Decision, ShouldEqual, aictx.NeedConfirm)
 			So(result.HintRules, ShouldContain, "SELECT")
 			So(result.HintRules, ShouldContain, "SHOW")
@@ -200,7 +200,7 @@ func TestCheckSQLPolicyForOpsctl(t *testing.T) {
 			}
 			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
 
-			result := CheckSQLPolicyForOpsctl(ctx, 1, "INSERT INTO users VALUES (1, 'a')")
+			result := CheckPermission(ctx, asset_entity.AssetTypeDatabase, 1, "INSERT INTO users VALUES (1, 'a')")
 			So(result.Decision, ShouldEqual, aictx.Deny)
 		})
 
@@ -222,7 +222,7 @@ func TestCheckSQLPolicyForOpsctl(t *testing.T) {
 			}
 			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
 
-			result := CheckSQLPolicyForOpsctl(ctx, 1, "INSERT INTO users VALUES (1, 'a')")
+			result := CheckPermission(ctx, asset_entity.AssetTypeDatabase, 1, "INSERT INTO users VALUES (1, 'a')")
 			So(result.Decision, ShouldEqual, aictx.Allow)
 		})
 
@@ -233,17 +233,17 @@ func TestCheckSQLPolicyForOpsctl(t *testing.T) {
 			}
 			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
 
-			result := CheckSQLPolicyForOpsctl(ctx, 1, "NOT VALID SQL !!!")
+			result := CheckPermission(ctx, asset_entity.AssetTypeDatabase, 1, "NOT VALID SQL !!!")
 			So(result.Decision, ShouldEqual, aictx.Deny)
 			assert.Contains(t, result.Message, "SQL")
 		})
 	})
 }
 
-// --- CheckRedisPolicyForOpsctl ---
+// --- Redis CheckPermission ---
 
-func TestCheckRedisPolicyForOpsctl(t *testing.T) {
-	Convey("CheckRedisPolicyForOpsctl", t, func() {
+func TestRedisCheckPermission(t *testing.T) {
+	Convey("Redis CheckPermission", t, func() {
 		ctx, mockRepo, stubGrp := setupPolicyTest(t)
 
 		Convey("allow list match returns aictx.Allow", func() {
@@ -256,7 +256,7 @@ func TestCheckRedisPolicyForOpsctl(t *testing.T) {
 			}
 			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
 
-			result := CheckRedisPolicyForOpsctl(ctx, 1, "GET user:1")
+			result := CheckPermission(ctx, asset_entity.AssetTypeRedis, 1, "GET user:1")
 			So(result.Decision, ShouldEqual, aictx.Allow)
 			So(result.DecisionSource, ShouldEqual, aictx.SourcePolicyAllow)
 		})
@@ -271,7 +271,7 @@ func TestCheckRedisPolicyForOpsctl(t *testing.T) {
 			}
 			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
 
-			result := CheckRedisPolicyForOpsctl(ctx, 1, "FLUSHDB")
+			result := CheckPermission(ctx, asset_entity.AssetTypeRedis, 1, "FLUSHDB")
 			So(result.Decision, ShouldEqual, aictx.Deny)
 			So(result.DecisionSource, ShouldEqual, aictx.SourcePolicyDeny)
 		})
@@ -286,7 +286,7 @@ func TestCheckRedisPolicyForOpsctl(t *testing.T) {
 			}
 			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
 
-			result := CheckRedisPolicyForOpsctl(ctx, 1, "SET user:1 val")
+			result := CheckPermission(ctx, asset_entity.AssetTypeRedis, 1, "SET user:1 val")
 			So(result.Decision, ShouldEqual, aictx.NeedConfirm)
 			So(result.HintRules, ShouldContain, "GET *")
 			So(result.HintRules, ShouldContain, "HGETALL *")
@@ -311,7 +311,7 @@ func TestCheckRedisPolicyForOpsctl(t *testing.T) {
 			}
 			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
 
-			result := CheckRedisPolicyForOpsctl(ctx, 1, "SET user:1 val")
+			result := CheckPermission(ctx, asset_entity.AssetTypeRedis, 1, "SET user:1 val")
 			So(result.Decision, ShouldEqual, aictx.Deny)
 		})
 
@@ -333,7 +333,7 @@ func TestCheckRedisPolicyForOpsctl(t *testing.T) {
 			}
 			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
 
-			result := CheckRedisPolicyForOpsctl(ctx, 1, "DEL user:1")
+			result := CheckPermission(ctx, asset_entity.AssetTypeRedis, 1, "DEL user:1")
 			So(result.Decision, ShouldEqual, aictx.Allow)
 		})
 
@@ -344,13 +344,13 @@ func TestCheckRedisPolicyForOpsctl(t *testing.T) {
 			}
 			mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
 
-			result := CheckRedisPolicyForOpsctl(ctx, 1, "GET user:1")
+			result := CheckPermission(ctx, asset_entity.AssetTypeRedis, 1, "GET user:1")
 			So(result.Decision, ShouldEqual, aictx.Allow)
 
-			result = CheckRedisPolicyForOpsctl(ctx, 1, "SET user:1 val")
+			result = CheckPermission(ctx, asset_entity.AssetTypeRedis, 1, "SET user:1 val")
 			So(result.Decision, ShouldEqual, aictx.NeedConfirm)
 
-			result = CheckRedisPolicyForOpsctl(ctx, 1, "DEBUG STATS")
+			result = CheckPermission(ctx, asset_entity.AssetTypeRedis, 1, "DEBUG STATS")
 			So(result.Decision, ShouldEqual, aictx.Deny)
 			So(result.DecisionSource, ShouldEqual, aictx.SourcePolicyDeny)
 		})

@@ -1,14 +1,13 @@
-import { useRef, useState, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { Loader2, Plus, Trash2, X } from "lucide-react";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { Button, Input, ScrollArea } from "@opskat/ui";
 import { useQueryStore, RedisKeyInfo, RedisStreamEntry } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { RedisStreamAdd } from "../../../wailsjs/go/redis/Redis";
 import { RedisStreamDelete } from "../../../wailsjs/go/redis/Redis";
-
-const VALUE_ROW_HEIGHT = 30;
+import { RedisLoadMoreFooter, RedisValueCount } from "./RedisValueList";
+import { useRedisValueVirtualizer } from "./useRedisValueVirtualizer";
 
 function formatFields(fields: Record<string, string>): string {
   const entries = Object.entries(fields);
@@ -30,7 +29,6 @@ export function RedisStreamViewer({
   const state = redisStates[tabId];
   const tab = useTabStore((s) => s.tabs.find((tb) => tb.id === tabId));
   const tabMeta = tab?.meta as QueryTabMeta | undefined;
-  const scrollRef = useRef<HTMLDivElement>(null);
   const entries = (info.value as RedisStreamEntry[]) || [];
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const [entryId, setEntryId] = useState("*");
@@ -39,17 +37,7 @@ export function RedisStreamViewer({
   const [adding, setAdding] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // react-virtual 在渲染期返回可变实例,与 React Compiler 语义不兼容(上游库问题);启用 Compiler 前无代码级修复。
-  // eslint-disable-next-line react-hooks/incompatible-library
-  const virtualizer = useVirtualizer({
-    count: entries.length,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => VALUE_ROW_HEIGHT,
-    overscan: 20,
-  });
-
-  const totalLabel =
-    info.total >= 0 ? t("query.loadedOfTotal", { loaded: entries.length, total: info.total }) : `${entries.length}`;
+  const { scrollRef, virtualizer } = useRedisValueVirtualizer(entries.length);
 
   const selectedEntry = entries.find((e) => e.id === selectedEntryId) || null;
 
@@ -101,7 +89,7 @@ export function RedisStreamViewer({
       <div className="flex items-center border-b text-xs">
         <div className="w-48 shrink-0 px-2 py-1.5 font-medium text-muted-foreground">{t("query.id")}</div>
         <div className="flex-1 px-2 py-1.5 font-medium text-muted-foreground">{t("query.fields")}</div>
-        <div className="shrink-0 px-2 py-1.5 text-xs text-muted-foreground">{totalLabel}</div>
+        <RedisValueCount loaded={entries.length} total={info.total} t={t} />
       </div>
 
       {/* Virtualized rows */}
@@ -157,18 +145,7 @@ export function RedisStreamViewer({
 
       {/* Load more values */}
       {info.hasMoreValues && (
-        <div className="border-t px-2 py-1.5">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-full text-xs"
-            onClick={() => loadMoreValues(tabId)}
-            disabled={info.loadingMore}
-          >
-            {info.loadingMore ? <Loader2 className="mr-1 size-3 animate-spin" /> : null}
-            {t("query.loadMore")}
-          </Button>
-        </div>
+        <RedisLoadMoreFooter loading={info.loadingMore} onLoadMore={() => loadMoreValues(tabId)} t={t} />
       )}
 
       <div className="flex items-center gap-1 border-t px-2 py-1.5">

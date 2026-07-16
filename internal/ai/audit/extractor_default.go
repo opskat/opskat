@@ -30,7 +30,7 @@ func init() {
 		if v := aictx.ArgString(a, "value"); v != "" {
 			parts = append(parts, v)
 		}
-		if argBool(a, "prefix") {
+		if aictx.ArgBool(a, "prefix") {
 			parts = append(parts, "--prefix")
 		}
 		return strings.Join(parts, " ")
@@ -45,20 +45,4 @@ func init() {
 	RegisterExtractor("exec_tool", func(a map[string]any) string {
 		return aictx.ArgString(a, "extension") + "." + aictx.ArgString(a, "tool")
 	})
-}
-
-// argBool 提取布尔参数,兼容 LLM 传入的 bool 与 "true" 字符串两种形态。
-// 与 internal/ai/helper.argEtcdBool 保持一致(audit 不便反向引 helper 包)。
-func argBool(args map[string]any, key string) bool {
-	v, ok := args[key]
-	if !ok {
-		return false
-	}
-	switch b := v.(type) {
-	case bool:
-		return b
-	case string:
-		return strings.EqualFold(strings.TrimSpace(b), "true")
-	}
-	return false
 }

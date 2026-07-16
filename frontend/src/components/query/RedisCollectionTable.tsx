@@ -1,6 +1,5 @@
 import { useState, useRef } from "react";
 import { Loader2, Trash2, Pencil, Check, X, Plus } from "lucide-react";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { Button, Input, ConfirmDialog } from "@opskat/ui";
 import { useQueryStore, RedisKeyInfo } from "@/stores/queryStore";
@@ -16,8 +15,8 @@ import {
   RedisZSetAdd,
   RedisZSetRemove,
 } from "../../../wailsjs/go/redis/Redis";
-
-const VALUE_ROW_HEIGHT = 30;
+import { RedisLoadMoreFooter, RedisValueCount } from "./RedisValueList";
+import { useRedisValueVirtualizer } from "./useRedisValueVirtualizer";
 
 function getItemCount(info: RedisKeyInfo): number {
   switch (info.type) {
@@ -220,22 +219,12 @@ export function RedisCollectionTable({
   const state = redisStates[tabId];
   const tab = useTabStore((s) => s.tabs.find((tb) => tb.id === tabId));
   const tabMeta = tab?.meta as QueryTabMeta | undefined;
-  const scrollRef = useRef<HTMLDivElement>(null);
   const itemCount = getItemCount(info);
   const selectedKey = state?.selectedKey;
   const db = state?.currentDb ?? 0;
   const [deleteTarget, setDeleteTarget] = useState<{ label: string; action: () => void } | null>(null);
 
-  // eslint-disable-next-line react-hooks/incompatible-library
-  const virtualizer = useVirtualizer({
-    count: itemCount,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => VALUE_ROW_HEIGHT,
-    overscan: 20,
-  });
-
-  const totalLabel =
-    info.total >= 0 ? t("query.loadedOfTotal", { loaded: itemCount, total: info.total }) : `${itemCount}`;
+  const { scrollRef, virtualizer } = useRedisValueVirtualizer(itemCount);
 
   const handleEditHash = async (field: string, newVal: string) => {
     if (!tabMeta || !selectedKey) return;
@@ -318,7 +307,7 @@ export function RedisCollectionTable({
             <div className="flex-1 px-2 py-1.5 font-medium text-muted-foreground">{t("query.member")}</div>
           </>
         )}
-        <div className="shrink-0 px-2 py-1.5 text-xs text-muted-foreground">{totalLabel}</div>
+        <RedisValueCount loaded={itemCount} total={info.total} t={t} />
       </div>
 
       {/* Virtualized rows */}
@@ -410,18 +399,7 @@ export function RedisCollectionTable({
 
       {/* Load more values */}
       {info.hasMoreValues && (
-        <div className="border-t px-2 py-1.5">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-full text-xs"
-            onClick={() => loadMoreValues(tabId)}
-            disabled={info.loadingMore}
-          >
-            {info.loadingMore ? <Loader2 className="mr-1 size-3 animate-spin" /> : null}
-            {t("query.loadMore")}
-          </Button>
-        </div>
+        <RedisLoadMoreFooter loading={info.loadingMore} onLoadMore={() => loadMoreValues(tabId)} t={t} />
       )}
 
       {/* Add row */}

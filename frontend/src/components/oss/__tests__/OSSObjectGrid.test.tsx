@@ -98,4 +98,27 @@ describe("OSSObjectGrid", () => {
     rerender(<OSSObjectGrid {...base} prefixes={[]} objects={[obj("docs/a.txt")]} loadingPage />);
     expect(screen.getByTestId("oss-grid-page-spinner-icon")).toHaveClass("animate-spin");
   });
+
+  it("loads the next page only when a truncated grid scrolls near the bottom", () => {
+    const onScrollNearBottom = vi.fn();
+    render(
+      <OSSObjectGrid
+        {...base}
+        prefixes={[]}
+        objects={[obj("docs/a.txt")]}
+        truncated
+        onScrollNearBottom={onScrollNearBottom}
+      />
+    );
+    const grid = screen.getByTestId("oss-object-grid");
+    Object.defineProperties(grid, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 1000 },
+    });
+
+    fireEvent.scroll(grid, { target: { scrollTop: 100 } });
+    expect(onScrollNearBottom).not.toHaveBeenCalled();
+    fireEvent.scroll(grid, { target: { scrollTop: 900 } });
+    expect(onScrollNearBottom).toHaveBeenCalledOnce();
+  });
 });

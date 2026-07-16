@@ -2,6 +2,7 @@ package aictx
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -15,6 +16,19 @@ func ArgString(args map[string]any, key string) string {
 		}
 	}
 	return ""
+}
+
+// ArgBool 从 tool 参数 map 中提取 bool，兼容 LLM 传入的原生 bool 与字符串 "true"。
+func ArgBool(args map[string]any, key string) bool {
+	if v, ok := args[key]; ok {
+		switch b := v.(type) {
+		case bool:
+			return b
+		case string:
+			return strings.EqualFold(strings.TrimSpace(b), "true")
+		}
+	}
+	return false
 }
 
 // ArgInt64 从 tool 参数 map 中提取 int64,兼容 JSON 反序列化后的 float64 / json.Number。

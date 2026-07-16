@@ -6,9 +6,9 @@ The canonical map of how OpsKat is put together: the processes it runs, the back
 >
 > **Keep it true for the current branch.** Every claim here must be verifiable in committed code. Counts (asset types, migrations, stores) are deliberately written as "enumerate from `<source>`" rather than hardcoded — they drift silently. Before editing, read [DOC-MAINTENANCE.md](DOC-MAINTENANCE.md).
 
-## 1. Topology — three processes, no HTTP API
+## 1. Topology — desktop app and opsctl, no app HTTP API
 
-OpsKat is a **Wails v2** desktop app (Go 1.26 backend + React 19 frontend). The frontend and backend communicate over **Wails IPC only** — there is no REST/HTTP server for the app's own UI. Two other process kinds talk to the running app over **Unix-domain sockets**, and extensions run as sandboxed **WASM** modules inside the backend.
+OpsKat is a **Wails v2** desktop app (Go 1.26 backend + React 19 frontend). The frontend and backend communicate over **Wails IPC only** — there is no REST/HTTP server for the app's own UI. `opsctl` talks to the running app over two **Unix-domain sockets**, and extensions run as sandboxed **WASM** modules inside the backend.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐

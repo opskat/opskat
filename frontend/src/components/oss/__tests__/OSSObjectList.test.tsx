@@ -164,4 +164,27 @@ describe("OSSObjectList", () => {
     rerender(<OSSObjectList {...base} prefixes={[]} objects={[obj("docs/a.txt", 1)]} loadingPage />);
     expect(screen.getByTestId("oss-list-page-spinner-icon")).toHaveClass("animate-spin");
   });
+
+  it("loads the next page only when a truncated list scrolls near the bottom", () => {
+    const onScrollNearBottom = vi.fn();
+    render(
+      <OSSObjectList
+        {...base}
+        prefixes={[]}
+        objects={[obj("docs/a.txt", 1)]}
+        truncated
+        onScrollNearBottom={onScrollNearBottom}
+      />
+    );
+    const list = screen.getByTestId("oss-object-list");
+    Object.defineProperties(list, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 1000 },
+    });
+
+    fireEvent.scroll(list, { target: { scrollTop: 100 } });
+    expect(onScrollNearBottom).not.toHaveBeenCalled();
+    fireEvent.scroll(list, { target: { scrollTop: 900 } });
+    expect(onScrollNearBottom).toHaveBeenCalledOnce();
+  });
 });

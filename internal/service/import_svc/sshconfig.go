@@ -14,7 +14,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/repository/group_repo"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 )
 
@@ -103,12 +102,6 @@ func ImportSSHConfigSelected(ctx context.Context, data []byte, selectedIndexes [
 	}
 	existingMap := buildSSHAssetMap(existingAssets)
 
-	existingGroups, err := group_repo.Group().List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("查询已有分组失败: %w", err)
-	}
-	groupCache := buildGroupCache(existingGroups)
-
 	// 第一轮：创建或更新资产，记录 alias → assetID
 	aliasToID := make(map[string]int64)
 	type jumpPending struct {
@@ -155,10 +148,6 @@ func ImportSSHConfigSelected(ctx context.Context, data []byte, selectedIndexes [
 			AuthType:    authType,
 			PrivateKeys: privateKeys,
 		}
-		// 使用 SSH Config 的 Host alias 作为分组依据时不分组，直接放根目录
-		groupID := int64(0)
-		_ = groupCache // 预留分组逻辑
-
 		if existingAsset != nil && opts.Overwrite {
 			// 覆盖模式：用旧配置补齐新数据缺失的敏感字段（密码/凭证/密钥/passphrase）
 			if oldCfg, err := existingAsset.GetSSHConfig(); err == nil {
@@ -181,7 +170,7 @@ func ImportSSHConfigSelected(ctx context.Context, data []byte, selectedIndexes [
 			asset := &asset_entity.Asset{
 				Name:    name,
 				Type:    asset_entity.AssetTypeSSH,
-				GroupID: groupID,
+				GroupID: 0,
 				Icon:    "server",
 			}
 			if err := asset.SetSSHConfig(sshCfg); err != nil {

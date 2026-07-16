@@ -34,6 +34,7 @@ import (
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/pkg/portable"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/service/extension_svc"
@@ -183,7 +184,21 @@ func main() {
 	opsctlB := opsctl.New(appCtx, sys, sys, proxyServer)
 	opsctlB.SetAuthToken(authToken)
 	extB := extension.New(appCtx, sys, pool)
-	extEditB := external_edit.New(appCtx, sys, sftpSvc, sshMgr)
+	externalEditEmitter := external_edit.NewEventEmitter()
+	externalEditSvc, err := external_edit_svc.NewService(external_edit_svc.Options{
+		DataDir:        bootstrap.AppDataDir(),
+		ConfigProvider: bootstrap.GetConfig,
+		ConfigSaver:    bootstrap.SaveConfig,
+		Remote:         sftpSvc,
+		FindSessions:   sshMgr.ListActiveSessionIDsByAsset,
+		Assets:         asset_repo.Asset(),
+		Audit:          audit_repo.Audit(),
+		Emit:           externalEditEmitter.Emit,
+	})
+	if err != nil {
+		zap.L().Warn("init external edit service", zap.Error(err))
+	}
+	extEditB := external_edit.New(sys, externalEditSvc, externalEditEmitter)
 
 	// 3. 注入跨 binder 依赖
 	aiB.SetKafkaService(kafkaB.Service())

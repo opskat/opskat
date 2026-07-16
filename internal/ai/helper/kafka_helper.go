@@ -112,7 +112,7 @@ func HandleKafkaTopic(ctx context.Context, args map[string]any) (string, error) 
 	case "list":
 		req := kafka_svc.ListTopicsRequest{
 			AssetID:         assetID,
-			IncludeInternal: argBool(args, "include_internal"),
+			IncludeInternal: aictx.ArgBool(args, "include_internal"),
 			Search:          strings.TrimSpace(aictx.ArgString(args, "search")),
 			Page:            int(aictx.ArgInt64(args, "page")),
 			PageSize:        int(aictx.ArgInt64(args, "page_size")),

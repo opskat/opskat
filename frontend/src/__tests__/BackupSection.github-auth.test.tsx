@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { BackupSection } from "@/components/settings/BackupSection";
+import { system } from "../../wailsjs/go/models";
 import {
   ClearGitHubToken,
   GetGitHubToken,
@@ -15,7 +16,7 @@ describe("BackupSection GitHub auth restore", () => {
     vi.clearAllMocks();
     vi.mocked(GetGitHubToken).mockResolvedValue("stored-token");
     vi.mocked(GetStoredGitHubUser).mockResolvedValue("stored-user");
-    vi.mocked(GetWebDAVConfig).mockResolvedValue(undefined);
+    vi.mocked(GetWebDAVConfig).mockResolvedValue(new system.WebDAVStoredConfig());
     vi.mocked(ListBackupGists).mockResolvedValue([]);
   });
 

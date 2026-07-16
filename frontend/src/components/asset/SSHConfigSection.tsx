@@ -351,8 +351,6 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
       fields: [
         {
           kind: "tunnel",
-          tunnelOptionLabelKey: "asset.connectionJumpHost",
-          tunnelSelectLabelKey: "asset.selectJumpHost",
           excludeIds: jumpHostExcludeIds,
         },
       ],

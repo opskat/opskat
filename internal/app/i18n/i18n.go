@@ -1,7 +1,4 @@
-// Package i18n 提供 binder 共用的语言上下文工具。
-//
-// 取代了旧 *App.langCtx() 和 *App.pickMsg()，让任何 binder 持有 lang 字段后
-// 都能复用同一套规范，把 cago i18n + ai PolicyLang 一次注入到 context。
+// Package i18n 提供 binder 共用的语言上下文和本地化消息工具。
 package i18n
 
 import (

@@ -6,9 +6,8 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/app/i18n"
-	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
-	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/service/asset_credential_svc"
 	"github.com/opskat/opskat/internal/service/credential_mgr_svc"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"go.uber.org/zap"
@@ -25,17 +24,7 @@ func (s *System) EncryptPassword(plaintext string) (string, error) {
 
 // GetAssetPassword 获取指定资产的解密密码（用于编辑时回看密码）
 func (s *System) GetAssetPassword(assetID int64) (string, error) {
-	ctx := i18n.Ctx(s.ctx, s.Lang())
-	asset, err := asset_repo.Asset().Find(ctx, assetID)
-	if err != nil {
-		return "", fmt.Errorf("asset not found: %w", err)
-	}
-
-	h, ok := assettype.Get(asset.Type)
-	if !ok {
-		return "", fmt.Errorf("unsupported asset type: %s", asset.Type)
-	}
-	return h.ResolvePassword(ctx, asset)
+	return asset_credential_svc.Default().ResolvePassword(i18n.Ctx(s.ctx, s.Lang()), assetID)
 }
 
 // --- 密钥管理 ---
@@ -155,15 +144,7 @@ func (s *System) ExportSSHPrivateKey(id int64) (bool, error) {
 
 // GetCredentialUsage 获取引用此凭证的资产名称列表
 func (s *System) GetCredentialUsage(id int64) ([]string, error) {
-	assets, err := asset_repo.Asset().FindByCredentialID(i18n.Ctx(s.ctx, s.Lang()), id)
-	if err != nil {
-		return nil, err
-	}
-	names := make([]string, len(assets))
-	for i, asset := range assets {
-		names[i] = asset.Name
-	}
-	return names, nil
+	return asset_credential_svc.Default().UsageAssetNames(i18n.Ctx(s.ctx, s.Lang()), id)
 }
 
 // DeleteCredential 删除凭证

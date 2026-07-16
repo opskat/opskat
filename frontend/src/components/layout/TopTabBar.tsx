@@ -1,8 +1,8 @@
 import { createContext, use, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { X, MessageSquare, Server, Folder } from "lucide-react";
+import { X } from "lucide-react";
 import { useTabDragAndDrop } from "@/hooks/useTabDragAndDrop";
-import { useTabStore, type Tab, type InfoTabMeta } from "@/stores/tabStore";
+import { useTabStore, type Tab } from "@/stores/tabStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import {
   cn,
@@ -12,12 +12,12 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@opskat/ui";
-import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
 import { TabPanelMenu } from "./TabPanelMenu";
 import { TabFilterPopover } from "./TabFilterPopover";
 import { useLayoutStore } from "@/stores/layoutStore";
 import { getBuiltinPageMeta } from "./pageTabMeta";
 import { usePlatform } from "@/hooks/usePlatform";
+import { resolveTabVisual } from "./tabVisual";
 
 interface TabBarContextValue {
   tabs: Tab[];
@@ -170,112 +170,50 @@ export function TopTabBar({ topmost = false }: TopTabBarProps) {
 
   function renderTabItem(tab: Tab) {
     const isActive = tab.id === activeTabId;
+    const visual = resolveTabVisual(tab);
+    const commonProps = {
+      key: tab.id,
+      tabKey: tab.id,
+      icon: visual.Icon,
+      iconStyle: visual.iconStyle,
+      isActive,
+      onClick: () => activateTab(tab.id),
+      onClose: () => closeTab(tab.id),
+      indicatorColor: visual.indicatorColor,
+    };
 
     switch (tab.type) {
       case "terminal": {
         const data = tabData[tab.id];
         const paneValues = data ? Object.values(data.panes) : [];
         const allDisconnected = paneValues.length > 0 && paneValues.every((p) => !p.connected);
-        const TabIcon = tab.icon ? getIconComponent(tab.icon) : Server;
-        const iconStyle = tab.icon ? { color: getIconColor(tab.icon) } : undefined;
         return (
           <TabItem
-            key={tab.id}
-            tabKey={tab.id}
-            icon={TabIcon}
-            iconStyle={iconStyle}
+            {...commonProps}
             label={tab.label}
-            isActive={isActive}
-            onClick={() => activateTab(tab.id)}
-            onClose={() => closeTab(tab.id)}
             extra={allDisconnected ? <span className="h-1.5 w-1.5 rounded-full bg-destructive shrink-0" /> : undefined}
-            indicatorColor={iconStyle?.color}
           />
         );
       }
 
       case "ai": {
-        return (
-          <TabItem
-            key={tab.id}
-            tabKey={tab.id}
-            icon={MessageSquare}
-            label={tab.label}
-            isActive={isActive}
-            onClick={() => activateTab(tab.id)}
-            onClose={() => closeTab(tab.id)}
-          />
-        );
+        return <TabItem {...commonProps} label={tab.label} />;
       }
 
       case "query": {
-        const TabIcon = tab.icon ? getIconComponent(tab.icon) : Server;
-        const iconStyle = tab.icon ? { color: getIconColor(tab.icon) } : undefined;
-        return (
-          <TabItem
-            key={tab.id}
-            tabKey={tab.id}
-            icon={TabIcon}
-            iconStyle={iconStyle}
-            label={tab.label}
-            isActive={isActive}
-            onClick={() => activateTab(tab.id)}
-            onClose={() => closeTab(tab.id)}
-            indicatorColor={iconStyle?.color}
-          />
-        );
+        return <TabItem {...commonProps} label={tab.label} />;
       }
 
       case "page": {
         const pageMeta = getBuiltinPageMeta(tab);
         if (pageMeta) {
-          return (
-            <TabItem
-              key={tab.id}
-              tabKey={tab.id}
-              icon={pageMeta.icon}
-              label={t(pageMeta.labelKey)}
-              isActive={isActive}
-              onClick={() => activateTab(tab.id)}
-              onClose={() => closeTab(tab.id)}
-            />
-          );
+          return <TabItem {...commonProps} label={t(pageMeta.labelKey)} />;
         }
-        // Extension page tab — use tab.icon and tab.label directly
-        const TabIcon = tab.icon ? getIconComponent(tab.icon) : Server;
-        const iconStyle = tab.icon ? { color: getIconColor(tab.icon) } : undefined;
-        return (
-          <TabItem
-            key={tab.id}
-            tabKey={tab.id}
-            icon={TabIcon}
-            iconStyle={iconStyle}
-            label={tab.label}
-            isActive={isActive}
-            onClick={() => activateTab(tab.id)}
-            onClose={() => closeTab(tab.id)}
-            indicatorColor={iconStyle?.color}
-          />
-        );
+        return <TabItem {...commonProps} label={tab.label} />;
       }
 
       case "info": {
-        const meta = tab.meta as InfoTabMeta;
-        const TabIcon = tab.icon ? getIconComponent(tab.icon) : meta.targetType === "group" ? Folder : Server;
-        const iconStyle = tab.icon ? { color: getIconColor(tab.icon) } : undefined;
-        return (
-          <TabItem
-            key={tab.id}
-            tabKey={tab.id}
-            icon={TabIcon}
-            iconStyle={iconStyle}
-            label={tab.label}
-            isActive={isActive}
-            onClick={() => activateTab(tab.id)}
-            onClose={() => closeTab(tab.id)}
-            indicatorColor={iconStyle?.color}
-          />
-        );
+        return <TabItem {...commonProps} label={tab.label} />;
       }
 
       default:

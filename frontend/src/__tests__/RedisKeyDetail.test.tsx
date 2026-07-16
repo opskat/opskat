@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { RedisKeyDetail } from "../components/query/RedisKeyDetail";
 import { RedisStreamViewer } from "../components/query/RedisStreamViewer";
+import { RedisCollectionTable } from "../components/query/RedisCollectionTable";
 import { useQueryStore } from "../stores/queryStore";
 import { useTabStore } from "../stores/tabStore";
 import { ExecuteRedisArgs } from "../../wailsjs/go/query/Query";
@@ -195,5 +196,114 @@ describe("RedisStreamViewer", () => {
     await waitFor(() => {
       expect(RedisStreamAdd).toHaveBeenCalledWith(10, 1, "events", "*", [{ field: "name", value: "Ada" }]);
     });
+  });
+
+  it("shows loaded count and delegates loading more values to the query store", () => {
+    const loadMoreValues = vi.fn();
+    useQueryStore.setState({ loadMoreValues });
+
+    render(
+      <RedisStreamViewer
+        tabId="query-10"
+        t={(key, opts) => (key === "query.loadedOfTotal" ? `${opts?.loaded}/${opts?.total}` : key)}
+        info={{
+          type: "stream",
+          ttl: -1,
+          size: 0,
+          total: 4,
+          value: [{ id: "1-0", fields: { name: "Ada" } }],
+          valueCursor: "1-0",
+          valueOffset: 1,
+          hasMoreValues: true,
+          loadingMore: false,
+        }}
+      />
+    );
+
+    expect(screen.getByText("1/4")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "query.loadMore" }));
+    expect(loadMoreValues).toHaveBeenCalledWith("query-10");
+  });
+
+  it("disables the load more action while more stream values are loading", () => {
+    render(
+      <RedisStreamViewer
+        tabId="query-10"
+        t={(key) => key}
+        info={{
+          type: "stream",
+          ttl: -1,
+          size: 0,
+          total: -1,
+          value: [],
+          valueCursor: "",
+          valueOffset: 0,
+          hasMoreValues: true,
+          loadingMore: true,
+        }}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "query.loadMore" })).toBeDisabled();
+  });
+});
+
+describe("RedisCollectionTable", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useTabStore.setState({
+      activeTabId: "query-10",
+      tabs: [
+        {
+          id: "query-10",
+          type: "query",
+          label: "Redis",
+          meta: { type: "query", assetId: 10, assetName: "Redis", assetIcon: "", assetType: "redis" },
+        },
+      ],
+    });
+    useQueryStore.setState({
+      redisStates: {
+        "query-10": {
+          currentDb: 1,
+          keys: ["members"],
+          loadingKeys: false,
+          keyFilter: "*",
+          scanCursor: "0",
+          hasMore: false,
+          selectedKey: "members",
+          keyInfo: null,
+          dbKeyCounts: {},
+          error: null,
+        },
+      },
+    });
+  });
+
+  it("shows loaded count and delegates loading more collection values to the query store", () => {
+    const loadMoreValues = vi.fn();
+    useQueryStore.setState({ loadMoreValues });
+
+    render(
+      <RedisCollectionTable
+        tabId="query-10"
+        t={(key, opts) => (key === "query.loadedOfTotal" ? `${opts?.loaded}/${opts?.total}` : key)}
+        info={{
+          type: "set",
+          ttl: -1,
+          size: 0,
+          total: 5,
+          value: ["one", "two"],
+          valueCursor: "2",
+          valueOffset: 2,
+          hasMoreValues: true,
+          loadingMore: false,
+        }}
+      />
+    );
+
+    expect(screen.getByText("2/5")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "query.loadMore" }));
+    expect(loadMoreValues).toHaveBeenCalledWith("query-10");
   });
 });

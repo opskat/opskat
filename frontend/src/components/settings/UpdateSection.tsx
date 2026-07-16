@@ -12,14 +12,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
+  ConfirmDialog,
   Input,
   Switch,
 } from "@opskat/ui";
@@ -389,25 +382,23 @@ export function UpdateSection() {
             )}
           </div>
         )}
-        <AlertDialog open={showChecksumDialog} onOpenChange={setShowChecksumDialog}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>{t("appUpdate.checksumSkipTitle")}</AlertDialogTitle>
-              <AlertDialogDescription>
-                {t("appUpdate.checksumFetchFailed")}
-                <br />
-                <br />
-                {t("appUpdate.checksumSkipConfirm")}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>{t("appUpdate.checksumSkipCancel")}</AlertDialogCancel>
-              <AlertDialogAction onClick={() => handleUpdate(true)}>
-                {t("appUpdate.checksumSkipAction")}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        <ConfirmDialog
+          open={showChecksumDialog}
+          onOpenChange={setShowChecksumDialog}
+          title={t("appUpdate.checksumSkipTitle")}
+          description={
+            <>
+              {t("appUpdate.checksumFetchFailed")}
+              <br />
+              <br />
+              {t("appUpdate.checksumSkipConfirm")}
+            </>
+          }
+          cancelText={t("appUpdate.checksumSkipCancel")}
+          confirmText={t("appUpdate.checksumSkipAction")}
+          variant="default"
+          onConfirm={() => handleUpdate(true)}
+        />
       </CardContent>
     </Card>
   );

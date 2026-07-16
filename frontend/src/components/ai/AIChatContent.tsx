@@ -22,14 +22,7 @@ import remarkGfm from "remark-gfm";
 import {
   Button,
   ScrollArea,
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
+  ConfirmDialog,
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -637,19 +630,16 @@ export function AIChatContent({
           </div>
         </div>
 
-        {/* Regenerate confirmation dialog */}
-        <AlertDialog open={regenerateTarget !== null} onOpenChange={(open) => !open && setRegenerateTarget(null)}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>{t("ai.regenerateTitle")}</AlertDialogTitle>
-              <AlertDialogDescription>{t("ai.regenerateConfirm")}</AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>{t("action.cancel")}</AlertDialogCancel>
-              <AlertDialogAction onClick={confirmRegenerate}>{t("action.confirm")}</AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        <ConfirmDialog
+          open={regenerateTarget !== null}
+          onOpenChange={(open) => !open && setRegenerateTarget(null)}
+          title={t("ai.regenerateTitle")}
+          description={t("ai.regenerateConfirm")}
+          cancelText={t("action.cancel")}
+          confirmText={t("action.confirm")}
+          variant="default"
+          onConfirm={confirmRegenerate}
+        />
       </div>
     </CompactContext>
   );
