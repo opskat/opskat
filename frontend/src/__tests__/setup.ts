@@ -16,6 +16,7 @@ vi.mock("../../wailsjs/runtime/runtime", () => ({
   BrowserOpenURL: vi.fn(),
   Quit: vi.fn(),
   WindowIsFullscreen: vi.fn().mockResolvedValue(false),
+  Environment: vi.fn().mockResolvedValue({ platform: "other", buildType: "test", arch: "amd64" }),
   ClipboardGetText: vi.fn().mockResolvedValue(""),
   ClipboardSetText: vi.fn().mockResolvedValue(true),
 }));

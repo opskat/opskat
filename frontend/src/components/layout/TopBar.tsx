@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React from "react";
 import { useTranslation } from "react-i18next";
 import { Search } from "lucide-react";
 import {
@@ -10,7 +10,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger, Tooltip, TooltipContent, TooltipTrigger, cn } from "@opskat/ui";
 import { CommandPalette } from "@/components/command/CommandPalette";
 import { useFullscreen } from "@/hooks/useFullscreen";
-import { Environment } from "../../../wailsjs/runtime/runtime";
+import { usePlatform } from "@/hooks/usePlatform";
 import type { asset_entity } from "../../../wailsjs/go/models";
 
 interface TopBarProps {
@@ -35,16 +35,7 @@ export function TopBar({
   const { t } = useTranslation();
   const isFullscreen = useFullscreen();
 
-  const [platform, setPlatform] = useState<"darwin" | "windows" | "other">("other");
-  useEffect(() => {
-    Environment()
-      .then((env) => {
-        if (env.platform === "darwin") setPlatform("darwin");
-        else if (env.platform === "windows") setPlatform("windows");
-        else setPlatform("other");
-      })
-      .catch(() => {});
-  }, []);
+  const platform = usePlatform();
 
   // macOS 红绿灯位（非全屏时预留 80px）；Windows 把 WindowControls 区域让出来
   const leftReserve = platform === "darwin" && !isFullscreen ? "pl-20" : "pl-2";

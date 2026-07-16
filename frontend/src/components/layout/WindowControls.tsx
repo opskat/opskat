@@ -1,22 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { Minus, Square, Copy, X } from "lucide-react";
-import {
-  WindowMinimise,
-  WindowToggleMaximise,
-  WindowIsMaximised,
-  Quit,
-  Environment,
-} from "../../../wailsjs/runtime/runtime";
+import { WindowMinimise, WindowToggleMaximise, WindowIsMaximised, Quit } from "../../../wailsjs/runtime/runtime";
+import { usePlatform } from "@/hooks/usePlatform";
 
 export function WindowControls() {
-  const [isWindows, setIsWindows] = useState(false);
+  const platform = usePlatform();
   const [maximised, setMaximised] = useState(false);
-
-  useEffect(() => {
-    Environment().then((env) => {
-      setIsWindows(env.platform === "windows");
-    });
-  }, []);
+  const isWindows = platform === "windows";
 
   useEffect(() => {
     if (!isWindows) return;
