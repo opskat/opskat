@@ -44,6 +44,19 @@ func TestListObjectsWithOmitsCurrentPrefixFolderMarker(t *testing.T) {
 	assert.Equal(t, "docs/readme.pdf", res.Objects[0].Key)
 }
 
+func TestListObjectsWithEmptyFolderMarkerReturnsEmptyListing(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	c := mock_ossclient.NewMockClient(ctrl)
+	c.EXPECT().ListObjects(gomock.Any(), "assets-prod", "empty/", 200, "").Return([]oss_svc.ObjectItem{
+		{Key: "empty/", IsPrefix: true},
+	}, nil)
+
+	res, err := oss_svc.ListObjectsWith(context.Background(), c, "assets-prod", "empty/", 0, "")
+	require.NoError(t, err)
+	assert.Equal(t, []string{}, res.Prefixes)
+	assert.Equal(t, []oss_svc.ObjectItem{}, res.Objects)
+}
+
 // 空 bucket/前缀应序列化为 JSON "[]" 而非 "null"。
 func TestListObjectsWithEmptyBucketReturnsEmptySlicesNotNil(t *testing.T) {
 	ctrl := gomock.NewController(t)
