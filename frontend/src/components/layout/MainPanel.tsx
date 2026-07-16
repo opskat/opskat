@@ -51,7 +51,8 @@ const VNCPanel = lazy(() => import("@/components/vnc/VNCPanel").then((m) => ({ d
 const RDPPanel = lazy(() => import("@/components/rdp/RDPPanel").then((m) => ({ default: m.RDPPanel })));
 
 // Remote-desktop panes own a live backend session that their unmount cleanup closes,
-// so they render for every open tab and only toggle visibility — never active-only.
+// so they stay mounted for every open tab. Inactive panes use display:none because
+// canvas/WebView compositing can leak pixels through an ancestor's visibility:hidden.
 const REMOTE_PANE_PAGE_IDS = new Set(["vnc", "rdp"]);
 
 interface MainPanelProps {
@@ -302,7 +303,7 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset, topBarHi
             <div
               key={tab.id}
               className="absolute inset-0 bg-background"
-              style={{ visibility: isActive ? "visible" : "hidden", pointerEvents: isActive ? "auto" : "none" }}
+              style={{ display: isActive ? "block" : "none" }}
             >
               <LazySurface>
                 {meta.pageId === "vnc" ? (

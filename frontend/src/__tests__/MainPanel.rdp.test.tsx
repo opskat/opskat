@@ -39,14 +39,16 @@ describe("MainPanel RDP lifecycle", () => {
     });
   });
 
-  it("keeps an RDP pane mounted while another tab is active", async () => {
+  it("keeps an RDP pane mounted but removes it from display while another tab is active", async () => {
     render(<MainPanel onEditAsset={vi.fn()} onDeleteAsset={vi.fn()} onConnectAsset={vi.fn()} />);
-    expect(await screen.findByTestId("rdp-panel-1")).toBeVisible();
+    const rdpPanel = await screen.findByTestId("rdp-panel-1");
+    expect(rdpPanel).toBeVisible();
+    expect(rdpPanel.parentElement).toHaveStyle({ display: "block" });
 
     useTabStore.getState().activateTab("settings");
 
     expect(await screen.findByTestId("settings-page")).toBeVisible();
-    await waitFor(() => expect(screen.getByTestId("rdp-panel-1")).not.toBeVisible());
+    await waitFor(() => expect(rdpPanel.parentElement).toHaveStyle({ display: "none" }));
     expect(unmounted).not.toHaveBeenCalled();
   });
 });
