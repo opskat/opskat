@@ -1,7 +1,7 @@
 import { createElement, type UIEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Checkbox } from "@opskat/ui";
-import { Folder, Download } from "lucide-react";
+import { Folder, Download, Loader2 } from "lucide-react";
 import type { oss_svc } from "../../../wailsjs/go/models";
 import { prefixLeafName } from "@/lib/ossPrefixTree";
 import { shouldLoadNextPage } from "@/lib/ossListScroll";
@@ -48,7 +48,8 @@ export function OSSObjectList({
 
   if (loading) {
     return (
-      <div className="p-3 text-xs text-muted-foreground" data-testid="oss-list-loading">
+      <div className="flex items-center gap-1.5 p-3 text-xs text-muted-foreground" data-testid="oss-list-loading">
+        <Loader2 className="size-3.5 animate-spin text-primary" data-testid="oss-list-loading-spinner" />
         {t("oss.browser.loading")}
       </div>
     );
@@ -78,8 +79,13 @@ export function OSSObjectList({
           {prefixes.map((p) => (
             <tr
               key={p}
-              className="cursor-pointer hover:bg-accent/50"
+              className="cursor-pointer outline-none hover:bg-accent/50 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring/45"
+              role="button"
+              tabIndex={0}
               onDoubleClick={() => onNavigatePrefix(p)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onNavigatePrefix(p);
+              }}
               data-testid={`oss-folder-${p}`}
             >
               <td className="px-2 py-1" />
@@ -98,8 +104,15 @@ export function OSSObjectList({
           {objects.map((o) => (
             <tr
               key={o.key}
-              className={`group cursor-pointer hover:bg-accent/50 ${o.key === focusedKey ? "bg-accent" : ""}`}
+              className={`group cursor-pointer outline-none hover:bg-accent/50 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring/45 ${
+                o.key === focusedKey ? "bg-accent" : ""
+              }`}
+              role="button"
+              tabIndex={0}
               onClick={() => onFocusObject?.(o.key)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onFocusObject?.(o.key);
+              }}
               data-testid={`oss-object-${o.key}`}
             >
               <td className="px-2 py-1" onClick={(e) => e.stopPropagation()}>
@@ -134,7 +147,7 @@ export function OSSObjectList({
                 {onDownload && (
                   <button
                     type="button"
-                    className="opacity-0 group-hover:opacity-100"
+                    className="cursor-pointer rounded-sm p-0.5 opacity-0 outline-none group-hover:opacity-100 focus:opacity-100 focus-visible:ring-1 focus-visible:ring-ring/45"
                     onClick={(e) => {
                       e.stopPropagation();
                       onDownload(o.key);
@@ -151,7 +164,11 @@ export function OSSObjectList({
         </tbody>
       </table>
       {loadingPage && (
-        <div className="p-2 text-center text-xs text-muted-foreground" data-testid="oss-list-page-spinner">
+        <div
+          className="flex items-center justify-center gap-1.5 p-2 text-xs text-muted-foreground"
+          data-testid="oss-list-page-spinner"
+        >
+          <Loader2 className="size-3 animate-spin text-primary" data-testid="oss-list-page-spinner-icon" />
           {t("oss.browser.loadingMore")}
         </div>
       )}

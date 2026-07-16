@@ -102,4 +102,20 @@ describe("OSSPresignDialog", () => {
     fireEvent.click(screen.getByTestId("oss-share-copy"));
     expect(writeText).toHaveBeenCalledWith("https://signed/get");
   });
+
+  it("exposes selected method and expiry states", () => {
+    open();
+    expect(screen.getByTestId("oss-share-method-get")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("oss-share-method-put")).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByTestId("oss-share-expiry-3600")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("shows a spinner while generating a URL", async () => {
+    vi.mocked(OSSPresignGet)
+      .mockReset()
+      .mockReturnValue(new Promise(() => {}) as never);
+    open();
+    fireEvent.click(screen.getByTestId("oss-share-generate"));
+    expect(await screen.findByTestId("oss-share-generating-spinner")).toHaveClass("animate-spin");
+  });
 });

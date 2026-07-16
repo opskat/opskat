@@ -15,6 +15,7 @@ make clean                               # Remove build artifacts / caches
 
 # Build
 make build / make build-embed            # Production (embed = bundled opsctl)
+make install-app                         # Build + install macOS app to ~/Applications
 make build-cli                           # Standalone opsctl
 make install-cli                         # Install opsctl to GOPATH/bin
 

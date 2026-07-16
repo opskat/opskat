@@ -44,6 +44,8 @@ export function OSSObjectDetail({
   ];
   const copyKey = () =>
     void navigator.clipboard?.writeText(object.key).then(() => notifyCopied(t("oss.detail.copyKey")));
+  const iconButtonClass =
+    "cursor-pointer rounded-sm p-0.5 outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring/45";
 
   return (
     <div className="flex h-full flex-col text-xs" data-testid="oss-object-detail">
@@ -54,7 +56,14 @@ export function OSSObjectDetail({
         <span className="min-w-0 flex-1 truncate font-medium" title={object.key}>
           {prefixLeafName(object.key)}
         </span>
-        <button type="button" onClick={onClose} title={t("oss.detail.close")} data-testid="oss-detail-close">
+        <button
+          type="button"
+          className={iconButtonClass}
+          onClick={onClose}
+          title={t("oss.detail.close")}
+          aria-label={t("oss.detail.close")}
+          data-testid="oss-detail-close"
+        >
           <X className="size-3.5 text-muted-foreground" />
         </button>
       </div>
@@ -72,7 +81,14 @@ export function OSSObjectDetail({
       <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
         <div className="flex items-center gap-1">
           <span className="min-w-0 flex-1 break-all font-mono text-muted-foreground">{object.key}</span>
-          <button type="button" onClick={copyKey} title={t("oss.detail.copyKey")} data-testid="oss-detail-copy-key">
+          <button
+            type="button"
+            className={iconButtonClass}
+            onClick={copyKey}
+            title={t("oss.detail.copyKey")}
+            aria-label={t("oss.detail.copyKey")}
+            data-testid="oss-detail-copy-key"
+          >
             <Copy className="size-3 text-muted-foreground" />
           </button>
         </div>

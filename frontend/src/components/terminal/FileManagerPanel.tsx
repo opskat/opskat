@@ -31,7 +31,7 @@ import { ExternalEditMergeWorkbench } from "./external-edit/MergeWorkbench";
 import { ExternalEditPendingDialog, type ExternalEditPendingItem } from "./external-edit/PendingDialog";
 import { FileList } from "./file-manager/FileList";
 import { FloatingMenu } from "./file-manager/FloatingMenu";
-import { NameDialog } from "./file-manager/NameDialog";
+import { NameDialog } from "@/components/common/NameDialog";
 import { PathToolbar, type DirectorySyncMenuMode } from "./file-manager/PathToolbar";
 import { PermissionDialog } from "./file-manager/PermissionDialog";
 import { PropertiesDialog } from "./file-manager/PropertiesDialog";

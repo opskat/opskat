@@ -130,4 +130,38 @@ describe("OSSObjectList", () => {
     expect(focusedRow.className.split(/\s+/)).toContain("bg-accent");
     expect(otherRow.className.split(/\s+/)).not.toContain("bg-accent");
   });
+
+  it("supports keyboard navigation and focus for interactive rows", () => {
+    const onNavigatePrefix = vi.fn();
+    const onFocusObject = vi.fn();
+    render(
+      <OSSObjectList
+        {...base}
+        onNavigatePrefix={onNavigatePrefix}
+        onFocusObject={onFocusObject}
+        prefixes={["docs/sub/"]}
+        objects={[obj("docs/a.txt", 1)]}
+      />
+    );
+    const folder = screen.getByTestId("oss-folder-docs/sub/");
+    const object = screen.getByTestId("oss-object-docs/a.txt");
+    expect(folder).toHaveAttribute("tabindex", "0");
+    expect(object).toHaveAttribute("tabindex", "0");
+    fireEvent.keyDown(folder, { key: "Enter" });
+    fireEvent.keyDown(object, { key: "Enter" });
+    expect(onNavigatePrefix).toHaveBeenCalledWith("docs/sub/");
+    expect(onFocusObject).toHaveBeenCalledWith("docs/a.txt");
+  });
+
+  it("marks the row download action as clearly interactive", () => {
+    render(<OSSObjectList {...base} onDownload={vi.fn()} prefixes={[]} objects={[obj("docs/a.txt", 1)]} />);
+    expect(screen.getByTestId("oss-download-docs/a.txt")).toHaveClass("cursor-pointer", "focus-visible:ring-1");
+  });
+
+  it("shows a visible spinner while the initial list or next page is loading", () => {
+    const { rerender } = render(<OSSObjectList {...base} prefixes={[]} objects={[]} loading />);
+    expect(screen.getByTestId("oss-list-loading-spinner")).toHaveClass("animate-spin");
+    rerender(<OSSObjectList {...base} prefixes={[]} objects={[obj("docs/a.txt", 1)]} loadingPage />);
+    expect(screen.getByTestId("oss-list-page-spinner-icon")).toHaveClass("animate-spin");
+  });
 });
