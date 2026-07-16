@@ -366,13 +366,23 @@ func TestGetGitHubUser(t *testing.T) {
 			})
 		})
 
-		Convey("非 200 返回错误", func() {
+		Convey("401 明确标记 token 已失效", func() {
 			withTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusUnauthorized)
 			}), func() {
 				_, err := GetGitHubUser("bad-token")
 				So(err, ShouldNotBeNil)
-				So(err.Error(), ShouldContainSubstring, "401")
+				So(err.Error(), ShouldContainSubstring, githubTokenInvalidMarker)
+			})
+		})
+
+		Convey("5xx 不标记 token 失效", func() {
+			withTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}), func() {
+				_, err := GetGitHubUser("still-valid-token")
+				So(err, ShouldNotBeNil)
+				So(err.Error(), ShouldNotContainSubstring, githubTokenInvalidMarker)
 			})
 		})
 	})

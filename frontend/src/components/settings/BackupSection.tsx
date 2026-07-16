@@ -70,6 +70,7 @@ import { useShortcutStore } from "@/stores/shortcutStore";
 import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const githubTokenInvalidMarker = "[GITHUB_TOKEN_INVALID]";
 
 const emptyWebDAVExportDefaults: WebDAVExportDefaults = {
   configured: false,
@@ -182,10 +183,12 @@ export function BackupSection() {
               setGhUser(u.login);
               SaveGitHubToken(token, u.login).catch(() => {});
             })
-            .catch(() => {
-              setGhToken("");
-              setGhUser("");
-              ClearGitHubToken().catch(() => {});
+            .catch((e: unknown) => {
+              if (errMsg(e).includes(githubTokenInvalidMarker)) {
+                setGhToken("");
+                setGhUser("");
+                ClearGitHubToken().catch(() => {});
+              }
             });
         }
       } catch {
