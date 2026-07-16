@@ -1,6 +1,6 @@
 import type React from "react";
 import { useTranslation } from "react-i18next";
-import { Folder } from "lucide-react";
+import { Folder, Loader2 } from "lucide-react";
 import type { oss_svc } from "../../../wailsjs/go/models";
 import { prefixLeafName } from "@/lib/ossPrefixTree";
 import { formatBytes } from "@/lib/formatBytes";
@@ -45,7 +45,8 @@ export function OSSObjectGrid({
 
   if (loading) {
     return (
-      <div className="p-3 text-xs text-muted-foreground" data-testid="oss-grid-loading">
+      <div className="flex items-center gap-1.5 p-3 text-xs text-muted-foreground" data-testid="oss-grid-loading">
+        <Loader2 className="size-3.5 animate-spin text-primary" data-testid="oss-grid-loading-spinner" />
         {t("oss.browser.loading")}
       </div>
     );
@@ -58,16 +59,21 @@ export function OSSObjectGrid({
     );
   }
 
-  const tile = "flex w-[150px] cursor-pointer flex-col gap-1 rounded border p-1.5 hover:bg-accent/50";
+  const tile =
+    "flex w-[150px] cursor-pointer flex-col gap-1 rounded border p-1.5 text-left outline-none hover:bg-accent/50 focus-visible:ring-1 focus-visible:ring-ring/45";
 
   return (
     <div className="min-h-0 flex-1 overflow-auto p-3" onScroll={handleScroll} data-testid="oss-object-grid">
       <div className="flex flex-wrap gap-3">
         {prefixes.map((p) => (
-          <div
+          <button
+            type="button"
             key={p}
             className={`${tile} items-center justify-center`}
             onDoubleClick={() => onNavigatePrefix(p)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onNavigatePrefix(p);
+            }}
             data-testid={`oss-grid-folder-${p}`}
           >
             <div className="flex aspect-square w-full items-center justify-center">
@@ -76,10 +82,11 @@ export function OSSObjectGrid({
             <span className="w-full truncate text-center text-xs" title={p}>
               {prefixLeafName(p)}
             </span>
-          </div>
+          </button>
         ))}
         {objects.map((o) => (
-          <div
+          <button
+            type="button"
             key={o.key}
             className={`${tile} ${o.key === focusedKey ? "ring-2 ring-primary" : ""}`}
             onClick={() => onFocusObject(o.key)}
@@ -98,11 +105,15 @@ export function OSSObjectGrid({
               {prefixLeafName(o.key)}
             </span>
             <span className="text-[10px] text-muted-foreground">{formatBytes(o.size)}</span>
-          </div>
+          </button>
         ))}
       </div>
       {loadingPage && (
-        <div className="p-2 text-center text-xs text-muted-foreground" data-testid="oss-grid-page-spinner">
+        <div
+          className="flex items-center justify-center gap-1.5 p-2 text-xs text-muted-foreground"
+          data-testid="oss-grid-page-spinner"
+        >
+          <Loader2 className="size-3 animate-spin text-primary" data-testid="oss-grid-page-spinner-icon" />
           {t("oss.browser.loadingMore")}
         </div>
       )}

@@ -1,4 +1,4 @@
-.PHONY: dev run build build-embed clean install build-cli install-cli lint test test-cover test-e2e test-e2e-scratch install-skill devserver build-devserver-ui
+.PHONY: dev run build build-embed install-app clean install build-cli install-cli lint test test-cover test-e2e test-e2e-scratch install-skill devserver build-devserver-ui
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -10,6 +10,7 @@ else
 endif
 
 VERSION ?= 1.0.0
+APP_INSTALL_DIR ?= $(HOME)/Applications
 COMMIT_ID := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 VERSION_PKG := github.com/cago-frame/cago/configs
 BUILDINFO_PKG := github.com/opskat/opskat/internal/buildinfo
@@ -31,6 +32,19 @@ build:
 # 构建生产版本（内嵌 opsctl CLI）
 build-embed: build-cli-embed
 	wails build -ldflags="$(LDFLAGS)" -tags embed_opsctl
+
+# 构建并安装 macOS 桌面应用（默认安装到当前用户的 ~/Applications）
+ifeq ($(UNAME_S),Darwin)
+install-app: build-embed
+	@mkdir -p "$(APP_INSTALL_DIR)"
+	@rm -rf "$(APP_INSTALL_DIR)/opskat.app"
+	@ditto "./build/bin/opskat.app" "$(APP_INSTALL_DIR)/opskat.app"
+	@echo "OpsKat installed to $(APP_INSTALL_DIR)/opskat.app"
+else
+install-app:
+	@echo "install-app currently supports macOS only" >&2
+	@exit 1
+endif
 
 # 构建 opsctl 用于嵌入桌面端
 build-cli-embed:

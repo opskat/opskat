@@ -55,4 +55,35 @@ describe("OSSBreadcrumb", () => {
     fireEvent.click(screen.getByTestId("oss-view-grid"));
     expect(onViewModeChange).toHaveBeenCalledWith("grid");
   });
+
+  it("marks path crumbs and view toggles as clearly interactive", () => {
+    render(
+      <OSSBreadcrumb
+        bucket="mb"
+        prefix="a/"
+        onNavigate={vi.fn()}
+        onRefresh={vi.fn()}
+        viewMode="list"
+        onViewModeChange={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId("oss-crumb-0")).toHaveClass("cursor-pointer", "focus-visible:ring-1");
+    expect(screen.getByTestId("oss-view-grid")).toHaveClass("cursor-pointer", "focus-visible:ring-1");
+  });
+
+  it("exposes the active view and icon-button names", () => {
+    render(
+      <OSSBreadcrumb
+        bucket="mb"
+        prefix=""
+        onNavigate={vi.fn()}
+        onRefresh={vi.fn()}
+        viewMode="list"
+        onViewModeChange={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId("oss-view-list")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("oss-view-grid")).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByTestId("oss-view-grid")).toHaveAttribute("aria-label", "oss.view.grid");
+  });
 });

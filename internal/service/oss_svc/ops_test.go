@@ -28,6 +28,22 @@ func TestListObjectsWithSplitsPrefixesAndObjects(t *testing.T) {
 	assert.Empty(t, res.NextContinuationToken)
 }
 
+func TestListObjectsWithOmitsCurrentPrefixFolderMarker(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	c := mock_ossclient.NewMockClient(ctrl)
+	c.EXPECT().ListObjects(gomock.Any(), "assets-prod", "docs/", 200, "").Return([]oss_svc.ObjectItem{
+		{Key: "docs/", IsPrefix: true},
+		{Key: "docs/archive/", IsPrefix: true},
+		{Key: "docs/readme.pdf", Size: 1024},
+	}, nil)
+
+	res, err := oss_svc.ListObjectsWith(context.Background(), c, "assets-prod", "docs/", 0, "")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"docs/archive/"}, res.Prefixes)
+	require.Len(t, res.Objects, 1)
+	assert.Equal(t, "docs/readme.pdf", res.Objects[0].Key)
+}
+
 // 空 bucket/前缀应序列化为 JSON "[]" 而非 "null"。
 func TestListObjectsWithEmptyBucketReturnsEmptySlicesNotNil(t *testing.T) {
 	ctrl := gomock.NewController(t)

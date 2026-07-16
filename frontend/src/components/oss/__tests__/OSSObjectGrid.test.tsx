@@ -68,4 +68,34 @@ describe("OSSObjectGrid", () => {
     rerender(<OSSObjectGrid {...base} prefixes={[]} objects={[]} />);
     expect(screen.getByTestId("oss-grid-empty")).toBeInTheDocument();
   });
+
+  it("uses keyboard-operable tiles with visible focus feedback", () => {
+    const onFocusObject = vi.fn();
+    const onNavigatePrefix = vi.fn();
+    render(
+      <OSSObjectGrid
+        {...base}
+        prefixes={["docs/sub/"]}
+        objects={[obj("docs/a.txt")]}
+        onFocusObject={onFocusObject}
+        onNavigatePrefix={onNavigatePrefix}
+      />
+    );
+    const folder = screen.getByTestId("oss-grid-folder-docs/sub/");
+    const object = screen.getByTestId("oss-grid-object-docs/a.txt");
+    expect(folder.tagName).toBe("BUTTON");
+    expect(object.tagName).toBe("BUTTON");
+    expect(folder).toHaveClass("cursor-pointer", "focus-visible:ring-1");
+    fireEvent.keyDown(folder, { key: "Enter" });
+    fireEvent.click(object);
+    expect(onNavigatePrefix).toHaveBeenCalledWith("docs/sub/");
+    expect(onFocusObject).toHaveBeenCalledWith("docs/a.txt");
+  });
+
+  it("shows a visible spinner while the initial grid or next page is loading", () => {
+    const { rerender } = render(<OSSObjectGrid {...base} prefixes={[]} objects={[]} loading />);
+    expect(screen.getByTestId("oss-grid-loading-spinner")).toHaveClass("animate-spin");
+    rerender(<OSSObjectGrid {...base} prefixes={[]} objects={[obj("docs/a.txt")]} loadingPage />);
+    expect(screen.getByTestId("oss-grid-page-spinner-icon")).toHaveClass("animate-spin");
+  });
 });

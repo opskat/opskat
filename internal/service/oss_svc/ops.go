@@ -26,6 +26,9 @@ func listObjectsWith(ctx context.Context, c Client, bucket, prefix string, maxKe
 	}
 	for _, it := range items {
 		if it.IsPrefix {
+			if it.Key == prefix {
+				continue
+			}
 			res.Prefixes = append(res.Prefixes, it.Key)
 		} else {
 			res.Objects = append(res.Objects, it)

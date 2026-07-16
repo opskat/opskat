@@ -40,4 +40,15 @@ describe("flattenPrefixTree", () => {
     const rows = flattenPrefixTree(partial, new Set(["a/"]), "");
     expect(rows).toEqual([{ depth: 0, name: "a", prefix: "a/", isExpanded: true, loaded: false }]);
   });
+
+  it("does not recurse forever when a loaded prefix contains itself", () => {
+    const cyclic: Record<string, OssPrefixNode> = {
+      "": { childPrefixes: ["docs/"], loaded: true, cursor: "", truncated: false },
+      "docs/": { childPrefixes: ["docs/", "docs/archive/"], loaded: true, cursor: "", truncated: false },
+    };
+
+    const rows = flattenPrefixTree(cyclic, new Set(["docs/"]), "");
+
+    expect(rows.map((row) => `${row.depth}:${row.prefix}`)).toEqual(["0:docs/", "1:docs/archive/"]);
+  });
 });

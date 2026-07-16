@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { OSSListBuckets, OSSListObjects, OSSUploadObject } from "../../../../wailsjs/go/oss/OSS";
+import { OSSCreateFolder, OSSListBuckets, OSSListObjects, OSSUploadObject } from "../../../../wailsjs/go/oss/OSS";
 import { OSSBrowserPanel } from "../OSSBrowserPanel";
 import { useTabStore } from "@/stores/tabStore";
 import { useOssBrowserStore } from "@/stores/ossBrowserStore";
@@ -72,6 +72,37 @@ describe("OSSBrowserPanel", () => {
     );
     fireEvent.click(await screen.findByTestId("oss-upload"));
     await waitFor(() => expect(OSSUploadObject).toHaveBeenCalledWith(7, "b1", "docs/"));
+  });
+
+  it("opens an in-app dialog and creates a folder", async () => {
+    vi.mocked(OSSListBuckets).mockResolvedValue([{ name: "b1", creationDate: 0 }] as never);
+    vi.mocked(OSSCreateFolder).mockResolvedValue(undefined as never);
+    render(<OSSBrowserPanel tabId={TAB} />);
+    await screen.findByTestId("oss-bucket-b1");
+    useOssBrowserStore.setState(
+      (s) =>
+        ({
+          tabs: {
+            ...s.tabs,
+            [TAB]: {
+              ...s.tabs[TAB],
+              currentBucket: "b1",
+              currentPrefix: "docs/",
+              listing: { objects: [], prefixes: [], truncated: false, cursor: "" },
+            },
+          },
+        }) as never
+    );
+
+    fireEvent.click(await screen.findByTestId("oss-new-folder"));
+    fireEvent.change(await screen.findByPlaceholderText("oss.browser.newFolderPrompt"), {
+      target: { value: "images" },
+    });
+    fireEvent.click(screen.getByText("action.ok"));
+
+    await waitFor(() =>
+      expect(OSSCreateFolder).toHaveBeenCalledWith({ assetId: 7, bucket: "b1", prefix: "docs/images/" })
+    );
   });
 
   it("expands the left tree when entering a directory from the right list", async () => {

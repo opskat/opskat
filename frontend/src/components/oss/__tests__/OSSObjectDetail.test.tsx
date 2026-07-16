@@ -112,4 +112,19 @@ describe("OSSObjectDetail", () => {
     );
     expect(screen.getByTestId("oss-thumb-img")).toHaveAttribute("src", "https://x/a");
   });
+
+  it("shows pointer and keyboard-focus feedback on the custom copy and close controls", () => {
+    render(
+      <OSSObjectDetail
+        object={obj()}
+        onEnsureThumbnail={vi.fn()}
+        onShare={vi.fn()}
+        onDownload={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId("oss-detail-copy-key")).toHaveClass("cursor-pointer", "focus-visible:ring-1");
+    expect(screen.getByTestId("oss-detail-close")).toHaveClass("cursor-pointer", "focus-visible:ring-1");
+  });
 });
