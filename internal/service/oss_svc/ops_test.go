@@ -57,6 +57,20 @@ func TestListObjectsWithEmptyFolderMarkerReturnsEmptyListing(t *testing.T) {
 	assert.Equal(t, []oss_svc.ObjectItem{}, res.Objects)
 }
 
+func TestListObjectsWithOnlyOmitsExactCurrentPrefix(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	c := mock_ossclient.NewMockClient(ctrl)
+	c.EXPECT().ListObjects(gomock.Any(), "assets-prod", "parent/", 200, "").Return([]oss_svc.ObjectItem{
+		{Key: "parent/", IsPrefix: true},
+		{Key: "parent-empty/", IsPrefix: true},
+		{Key: "parent/empty/", IsPrefix: true},
+	}, nil)
+
+	res, err := oss_svc.ListObjectsWith(context.Background(), c, "assets-prod", "parent/", 0, "")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"parent-empty/", "parent/empty/"}, res.Prefixes)
+}
+
 // 空 bucket/前缀应序列化为 JSON "[]" 而非 "null"。
 func TestListObjectsWithEmptyBucketReturnsEmptySlicesNotNil(t *testing.T) {
 	ctrl := gomock.NewController(t)

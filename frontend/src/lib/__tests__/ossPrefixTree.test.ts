@@ -51,4 +51,16 @@ describe("flattenPrefixTree", () => {
 
     expect(rows.map((row) => `${row.depth}:${row.prefix}`)).toEqual(["0:docs/", "1:docs/archive/"]);
   });
+
+  it("stops a multi-node cycle without hiding non-cyclic siblings", () => {
+    const cyclic: Record<string, OssPrefixNode> = {
+      "": { childPrefixes: ["a/"], loaded: true, cursor: "", truncated: false },
+      "a/": { childPrefixes: ["a/b/"], loaded: true, cursor: "", truncated: false },
+      "a/b/": { childPrefixes: ["a/", "a/b/safe/"], loaded: true, cursor: "", truncated: false },
+    };
+
+    const rows = flattenPrefixTree(cyclic, new Set(["a/", "a/b/"]), "");
+
+    expect(rows.map((row) => `${row.depth}:${row.prefix}`)).toEqual(["0:a/", "1:a/b/", "2:a/b/safe/"]);
+  });
 });
