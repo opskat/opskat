@@ -19,7 +19,7 @@ const (
 	gistBackupFilename = "opskat-backup.encrypted.json"
 	// githubTokenInvalidMarker 跨 Wails IPC 传递明确的凭据失效状态。
 	// 只有 GitHub API 返回 401 时才能使用；网络错误、5xx 和限流都不代表 token 失效。
-	githubTokenInvalidMarker = "[GITHUB_TOKEN_INVALID]"
+	githubTokenInvalidMarker = "[GITHUB_TOKEN_INVALID]" //nolint:gosec // IPC status marker, not a credential.
 )
 
 // 可在测试中覆盖的 base URL

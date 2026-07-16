@@ -11,6 +11,8 @@ import (
 
 type langStub struct{}
 
+type testContextKey struct{}
+
 func (langStub) Lang() string { return "en" }
 
 func TestNewReceivesConstructedService(t *testing.T) {
@@ -31,7 +33,7 @@ func TestEventEmitterDropsEventsUntilStartupContextIsAvailable(t *testing.T) {
 		emitter.Emit(external_edit_svc.Event{})
 	})
 
-	ctx := context.WithValue(context.Background(), struct{}{}, "wails")
+	ctx := context.WithValue(context.Background(), testContextKey{}, "wails")
 	emitter.Startup(ctx)
 	assert.Same(t, ctx, emitter.ctx)
 }
