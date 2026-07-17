@@ -219,13 +219,19 @@ func (s *Service) ListDir(sessionID, dirPath string) ([]FileEntry, error) {
 	// 排序：目录在前，文件在后，各自按名称排序
 	var dirs, files []FileEntry
 	for _, info := range infos {
+		isDir := info.IsDir()
+		if info.Mode()&os.ModeSymlink != 0 {
+			if targetInfo, statErr := sftpClient.Stat(path.Join(dirPath, info.Name())); statErr == nil {
+				isDir = targetInfo.IsDir()
+			}
+		}
 		entry := FileEntry{
 			Name:    info.Name(),
 			Size:    info.Size(),
-			IsDir:   info.IsDir(),
+			IsDir:   isDir,
 			ModTime: info.ModTime().Unix(),
 		}
-		if info.IsDir() {
+		if isDir {
 			dirs = append(dirs, entry)
 		} else {
 			files = append(files, entry)
