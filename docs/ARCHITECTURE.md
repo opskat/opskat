@@ -2,7 +2,7 @@
 
 The canonical map of how OpsKat is put together: the processes it runs, the backend layering, the request lifecycle, each subsystem, the data model, and the AI / extension / opsctl flows.
 
-> This doc owns **structure** (what the pieces are and how they fit). It does *not* repeat the cross-cutting **principles** (SOLID seams, Fix policy, Reuse first, defensive code) — those live in [AGENTS.md](../AGENTS.md) — nor the **how-to** (commands, conventions, logging rules, generated files) — those live in [DEVELOP.md](DEVELOP.md). The step-by-step path for adding a built-in asset type is in [adding-an-asset-type.md](adding-an-asset-type.md).
+> This doc owns **structure** (what the pieces are and how they fit). It does *not* repeat the cross-cutting **principles** (SOLID seams, Fix policy, Reuse first, defensive code) — those live in [AGENTS.md](../AGENTS.md) — nor the **how-to** (commands, conventions, logging rules, generated files) — those live in [DEVELOP.md](DEVELOP.md). The step-by-step path for adding a built-in asset type is in [adding-an-asset-type.md](references/adding-an-asset-type.md).
 >
 > **Keep it true for the current branch.** Every claim here must be verifiable in committed code. Counts (asset types, migrations, stores) are deliberately written as "enumerate from `<source>`" rather than hardcoded — they drift silently. Before editing, read [DOC-MAINTENANCE.md](DOC-MAINTENANCE.md).
 
@@ -142,6 +142,6 @@ End to end — `opsctl exec <asset> -- <cmd>`: resolve asset → local policy ch
 | --- | --- | --- |
 | Engineering principles, SOLID seams | [AGENTS.md](../AGENTS.md) | [§2](#2-backend-layering) |
 | Commands, conventions, logging rules, generated files | [DEVELOP.md](DEVELOP.md) | [§3](#3-request-lifecycle), [§6](#6-ai-subsystem) |
-| Adding a built-in asset type (handler + frontend registration, remaining couplings) | [adding-an-asset-type.md](adding-an-asset-type.md) | [§5](#5-data--persistence) |
-| Verifying / debugging a feature (logs, DB, headless opsctl) | [testing-debugging-guide.md](testing-debugging-guide.md) | [§8](#8-opsctl--the-multi-process-flow) |
-| GUI end-to-end harness (Playwright × Wails) | [e2e-harness-guide.md](e2e-harness-guide.md) | [§9](#9-frontend) |
+| Adding a built-in asset type (handler + frontend registration, remaining couplings) | [adding-an-asset-type.md](references/adding-an-asset-type.md) | [§5](#5-data--persistence) |
+| Verifying / debugging a feature (logs, DB, headless opsctl) | [testing-debugging-guide.md](references/testing-debugging-guide.md) | [§8](#8-opsctl--the-multi-process-flow) |
+| GUI end-to-end harness (Playwright × Wails) | [e2e-harness-guide.md](references/e2e-harness-guide.md) | [§9](#9-frontend) |

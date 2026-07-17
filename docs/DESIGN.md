@@ -1,6 +1,6 @@
 # OpsKat Design System
 
-> **A reuse-oriented design reference.** It consolidates the visual language that lives in [`frontend/src/styles/globals.css`](../frontend/src/styles/globals.css) and the `@opskat/ui` component layer into one place you can copy from: **color tokens (full light/dark oklch values), the theming mechanism, the component palette, the desktop pane shell, domain surfaces, motion, state patterns, accessibility, and an end-to-end new-surface recipe.** Read this before building any new tab, pane, dialog, or block so it stays visually and behaviorally consistent with the rest of the app.
+> **A reuse-oriented design reference.** It consolidates the visual language that lives in [`frontend/src/styles/globals.css`](../frontend/src/styles/globals.css) and the `@opskat/ui` component layer into one place you can copy from: **color tokens (semantics here; full light/dark oklch value tables in [`references/design-tokens.md`](./references/design-tokens.md)), the theming mechanism, the component palette, the desktop pane shell, domain surfaces, motion, state patterns, accessibility, and an end-to-end new-surface recipe.** Read this before building any new tab, pane, dialog, or block so it stays visually and behaviorally consistent with the rest of the app.
 
 > **Stack in one line:** Wails v2 desktop · React 19 + shadcn/ui (Radix primitives, `new-york` style) + Tailwind CSS v4 + Zustand. Colors, fonts, and radius are defined as **oklch** tokens in the `:root` / `.dark` / `@theme inline` blocks of [`frontend/src/styles/globals.css`](../frontend/src/styles/globals.css). **There is no `tailwind.config.js`** (Tailwind v4); the Vite `@tailwindcss/vite` plugin compiles it; **class names have no prefix** (`bg-background`, not `tw-bg-background`). UI primitives live in the **`@opskat/ui` workspace package** ([`frontend/packages/ui/`](../frontend/packages/ui/)), not in app `src/`.
 
@@ -10,9 +10,9 @@
 
 | Owned here | Owned elsewhere |
 | --- | --- |
-| Color-token values (oklch), semantics, usage | The hard rules that mandate them (no hard-coded colors, hover via pseudo-classes, `cn()` / CVA / `lucide`, `notify` over `toast.success`) → [`DEVELOP.md`](./DEVELOP.md), [`AGENTS.md` → Reuse first](../AGENTS.md) |
+| Color-token semantics & usage (full oklch value tables → [`references/design-tokens.md`](./references/design-tokens.md)) | The hard rules that mandate them (no hard-coded colors, hover via pseudo-classes, `cn()` / CVA / `lucide`, `notify` over `toast.success`) → [`DEVELOP.md`](./DEVELOP.md), [`AGENTS.md` → Reuse first](../AGENTS.md) |
 | Theming mechanism, `dark:` usage | Commands, structure, coding style, testing, i18n, commit/PR → [`DEVELOP.md`](./DEVELOP.md) |
-| Component palette, variants, shared composites, selection guidance | Process model, IPC, services, repositories, asset-type backend → [`ARCHITECTURE.md`](./ARCHITECTURE.md); end-to-end new asset type → [`adding-an-asset-type.md`](./adding-an-asset-type.md) |
+| Component palette, variants, shared composites, selection guidance | Process model, IPC, services, repositories, asset-type backend → [`ARCHITECTURE.md`](./ARCHITECTURE.md); end-to-end new asset type → [`adding-an-asset-type.md`](./references/adding-an-asset-type.md) |
 | The desktop pane shell, domain surfaces (terminal / query / editor), **elevation (shadows)**, **layering (z-index)**, motion, state patterns, **accessibility**, surface recipe | — |
 
 This doc restates the cross-cutting rules only where needed, then links back — it does not duplicate them. When editing it, follow [`DOC-MAINTENANCE.md`](./DOC-MAINTENANCE.md): token values, component names, and variant names track the current branch's `frontend/` code — **if you can't `git grep` it, don't claim it.**
@@ -23,7 +23,7 @@ This doc restates the cross-cutting rules only where needed, then links back —
 
 Every UI change must satisfy all of these. They are the bar for "friendly, consistent UI/UX" in this codebase.
 
-- **Use tokens, not literal colors — one value, one place.** Never write an `oklch(...)`, a hex, or a palette class (`text-blue-500`) in a component. Always use a semantic token — `bg-background`, `text-foreground`, `border-border`, `text-primary`, `bg-primary`, `text-muted-foreground`, … (§3). All color values live in exactly one place — the token definitions in [`globals.css`](../frontend/src/styles/globals.css) — so the palette stays unified and a single edit re-skins everything. One semantic concept maps to **one** token: before adding a color, check §3 for an existing token and reuse it. Only add a new token when the concept is genuinely new — with both a `:root` and a `.dark` value — and document it in §3.
+- **Use tokens, not literal colors — one value, one place.** Never write an `oklch(...)`, a hex, or a palette class (`text-blue-500`) in a component. Always use a semantic token — `bg-background`, `text-foreground`, `border-border`, `text-primary`, `bg-primary`, `text-muted-foreground`, … (§3). All color values live in exactly one place — the token definitions in [`globals.css`](../frontend/src/styles/globals.css) — so the palette stays unified and a single edit re-skins everything. One semantic concept maps to **one** token: before adding a color, check the §3 family index / [`references/design-tokens.md`](./references/design-tokens.md) for an existing token and reuse it. Only add a new token when the concept is genuinely new — with both a `:root` and a `.dark` value — and document it in `references/design-tokens.md`. *The palette-class slice (`text-blue-500`-style classes in `src/` + `packages/ui/`) is enforced since 2026-07-18 by `no-restricted-syntax` in `frontend/eslint.config.js` (guard test: `frontend/src/__tests__/eslint-harness.test.ts`; `packages/devserver-ui` is outside the token system and exempt).*
 - **Both themes, always.** Light and dark are first-class. Because every color comes from a token that has a `:root` and a `.dark` value, using tokens makes a component theme-correct for free. Verify on real light *and* dark before considering anything done (§4).
 - **This is a desktop app, not a responsive web page.** OpsKat runs in a fixed Wails window — there is **no mobile shell and no breakpoint system**. Design for a resizable multi-pane desktop layout (sidebar rail → tab area → main pane → side assistant), not for a phone. The window chrome is native-feeling: `html, body` are `overflow-hidden` and `user-select: none` by default — only inputs, textareas, `[contenteditable]`, and `.select-text` opt back into text selection (§7). Don't add viewport media queries to "support mobile."
 - **No inline `style={{}}` for what Tailwind can express.** Compose utility classes via `cn()` (`clsx` + `tailwind-merge`, from [`@opskat/ui`](../frontend/packages/ui/src/lib/utils.ts)); build variants with `class-variance-authority` (CVA). Inline styles only for genuinely dynamic values (e.g. a computed pane `flex` ratio, an xterm-measured size).
@@ -31,7 +31,7 @@ Every UI change must satisfy all of these. They are the bar for "friendly, consi
 - **Reuse components before building new ones.** Default to the `@opskat/ui` primitives (§6) and the shared composites (`AssetSelect` / `GroupSelect` / `TreeSelect` / `ConfirmDialog` / `PasswordSourceField` / `IconPicker` …) before hand-rolling; icons come from `lucide-react` (plus the in-repo brand icons) only. When the same block appears in two or more places, extract one shared component instead of copy-pasting — keep one implementation per concept so a fix lands everywhere at once. (See [`AGENTS.md` → Reuse first](../AGENTS.md).)
 - **No silent operations.** Every async flow surfaces loading / empty / error / success (and progress for long-running work — terminal connects, query runs, file transfers). The user must always know whether their action worked (§10).
 - **Success toasts go through `notify`.** Use `notifyCopied` / `notifySuccess` (top-center) for success — never `toast.success` directly; errors/warnings stay on `toast.error` / `toast.warning` (bottom-right). The rationale (terminal / AI / query views refresh bottom-up, so a bottom toast occludes output) is baked into [`notify.ts`](../frontend/src/lib/notify.ts) (§6.4, #135).
-- **Don't introduce new colors or fonts ad hoc.** New color → add a token in `globals.css` (with both light and dark values) and document it here. New font family → add a `--font-*` token; don't reference an unconfigured family.
+- **Don't introduce new colors or fonts ad hoc.** New color → add a token in `globals.css` (with both light and dark values) and document it in [`references/design-tokens.md`](./references/design-tokens.md). New font family → add a `--font-*` token; don't reference an unconfigured family.
 
 ---
 
@@ -48,154 +48,36 @@ The "why" behind the constraints — apply these when shaping a surface.
 
 ---
 
-## 3. Color Tokens (full light / dark oklch values)
+## 3. Color Tokens
 
 **Single source:** [`frontend/src/styles/globals.css`](../frontend/src/styles/globals.css). `:root` defines light, `.dark` overrides for dark, and `@theme inline` exposes every `--token` as a Tailwind color (`--color-*`), so `bg-<token>` / `text-<token>` / `border-<token>` all work **and switch with the theme automatically**.
-
-**Why oklch.** The whole palette is authored in `oklch(L C H)` — perceptually-uniform lightness, so the light and dark ladders stay legible and the neutrals share a single cool hue (`H≈250`) with the brand at `H≈260`. Don't reintroduce hex/`rgb()` — keep new tokens in oklch so they sit on the same ladder.
 
 **Usage:**
 - Background `bg-<token>`, text `text-<token>`, border `border-<token>`, focus ring `ring-ring`.
 - Opacity modifiers compose directly: `hover:bg-primary/90`, `bg-primary/15` (query-cell selection), `ring-ring/45`, `bg-input/30`.
 - **Never hard-code a color value** — see Constraint 1. For a dark-only tweak use the `dark:` variant.
 
-### 3.1 Base surfaces & text
+**Full value tables** — every family with its exact light/dark oklch values, per-token usage, and the oklch authoring rationale — live in [`references/design-tokens.md`](./references/design-tokens.md); open it when choosing an exact token, adding one, or verifying a value. The families at a glance (§ = section there):
 
-| Token / class | Light | Dark | Use |
-| --- | --- | --- | --- |
-| `background` | `oklch(0.96 0.01 250)` | `oklch(0.18 0.025 250)` | Window / page background |
-| `foreground` | `oklch(0.20 0.025 250)` | `oklch(0.94 0.008 250)` | Primary text |
-| `card` | `oklch(0.99 0.003 250)` | `oklch(0.22 0.025 250)` | Card / panel surface (one step above `background`) |
-| `card-foreground` | `oklch(0.20 0.025 250)` | `oklch(0.94 0.008 250)` | Text on cards |
-| `popover` | `oklch(0.99 0.003 250)` | `oklch(0.22 0.025 250)` | Floating layers (dropdown / tooltip / toast / select) surface |
-| `popover-foreground` | `oklch(0.20 0.025 250)` | `oklch(0.94 0.008 250)` | Text in floating layers |
-
-### 3.2 Brand primary (blue-violet)
-
-| Token / class | Light | Dark | Use |
-| --- | --- | --- | --- |
-| `primary` | `oklch(0.55 0.22 260)` | `oklch(0.63 0.20 260)` | Brand fill **and** accent — solid button fill (`bg-primary text-primary-foreground`), active/selected state, links, indicators. Unlike some shadcn setups there is **no separate `primary-background`**; `bg-primary` *is* the solid control fill |
-| `primary-foreground` | `oklch(0.985 0.003 260)` | `oklch(0.985 0.003 260)` | Text/icons on `primary` |
-
-> Selection accents reuse `primary` at low opacity — e.g. query cells use `bg-primary/15` (selected) / `bg-primary/5` (focus), and the pane resize handle hovers to `bg-primary/50`. Keep selection emphasis as `primary/<opacity>` rather than inventing a new token.
-
-### 3.3 Secondary / muted / accent
-
-> Per the shadcn convention, `secondary` and `muted` share the **same value** (different semantics, one fill); `accent` is a touch darker for hover/selection.
-
-| Token / class | Light | Dark | Use |
-| --- | --- | --- | --- |
-| `secondary` | `oklch(0.935 0.012 250)` | `oklch(0.26 0.025 250)` | Secondary buttons / fills |
-| `secondary-foreground` | `oklch(0.22 0.02 250)` | `oklch(0.94 0.008 250)` | Text on secondary |
-| `muted` | `oklch(0.935 0.012 250)` | `oklch(0.26 0.025 250)` | Muted background (group fills, sticky table headers, placeholders) |
-| `muted-foreground` | `oklch(0.48 0.015 250)` | `oklch(0.62 0.015 250)` | De-emphasized / descriptive text — reserve for secondary/large text, not dense body copy (§11 contrast) |
-| `accent` | `oklch(0.91 0.012 250)` | `oklch(0.30 0.025 250)` | Hover / selected background (menu items, list rows) |
-| `accent-foreground` | `oklch(0.22 0.02 250)` | `oklch(0.94 0.008 250)` | Text on accent |
-
-### 3.4 Borders, inputs, ring, dividers
-
-| Token / class | Light | Dark | Use |
-| --- | --- | --- | --- |
-| `border` | `oklch(0.87 0.012 250)` | `oklch(0.30 0.025 250)` | Global borders (the `@layer base` reset gives every element `border-border`) |
-| `input` | `oklch(0.87 0.012 250)` | `oklch(0.30 0.025 250)` | Form control borders |
-| `ring` | `oklch(0.55 0.22 260)` | `oklch(0.63 0.20 260)` | Focus ring (`focus-visible:ring-ring/45`) — equal to `primary` |
-| `panel-divider` | `oklch(0 0 0 / 8%)` | `oklch(1 0 0 / 6%)` | Thin pane/section divider — a translucent line that reads on any surface (use `border-panel-divider` for split-pane gutters and inner separators) |
-
-### 3.5 Status colors
-
-Four semantic states. **Every status token has a light *and* dark value plus a `-foreground` pair**, so it reads correctly both as an icon/dot **and** as a text-bearing badge in either theme.
-
-| Token / class | Light | Dark | Use |
-| --- | --- | --- | --- |
-| `destructive` | `oklch(0.55 0.24 27)` | `oklch(0.70 0.19 22)` | Dangerous / delete / error |
-| `destructive-foreground` | `oklch(0.985 0 0)` | `oklch(0.985 0 0)` | Text on solid `destructive` |
-| `success` | `oklch(0.55 0.19 155)` | `oklch(0.70 0.17 155)` | Connected / enabled / safe |
-| `success-foreground` | `oklch(0.985 0 0)` | `oklch(0.985 0 0)` | Text on solid `success` |
-| `warning` | `oklch(0.70 0.17 85)` | `oklch(0.78 0.15 85)` | Caution / sensitive / pending |
-| `warning-foreground` | `oklch(0.22 0.03 85)` | `oklch(0.22 0.03 85)` | Text on solid `warning` (dark — `warning` is light) |
-| `info` | `oklch(0.55 0.17 245)` | `oklch(0.68 0.15 245)` | Running / in-progress / informational / neutral link |
-| `info-foreground` | `oklch(0.985 0.003 245)` | `oklch(0.985 0.003 245)` | Text on solid `info` |
-
-> **The soft-chip recipe.** For a tinted status chip use **`bg-<status>/15 text-<status>`** (e.g. `bg-success/15 text-success`) — the token's `.dark` value keeps the text legible in both themes, so you **don't** add `dark:` color variants. For a *solid* status fill, pair it with its `-foreground` (`bg-warning text-warning-foreground`). For an icon or dot, plain `text-<status>` / `bg-<status>`. There is still **no `Badge` primitive** (§6.1) — chips are composed inline, but always from these tokens, never a raw `bg-amber-500`. `info` is the slot for blue/sky "running / in-progress" states (don't reuse `primary` for status).
-
-### 3.6 Sidebar
-
-The icon rail and any sidebar surface use their own token family so the rail can sit a step darker/cooler than the main content without re-theming every child.
-
-| Token / class | Light | Dark | Use |
-| --- | --- | --- | --- |
-| `sidebar` | `oklch(0.93 0.013 250)` | `oklch(0.15 0.025 250)` | Sidebar / rail background |
-| `sidebar-foreground` | `oklch(0.20 0.025 250)` | `oklch(0.94 0.008 250)` | Sidebar text |
-| `sidebar-primary` | `oklch(0.55 0.22 260)` | `oklch(0.63 0.20 260)` | Sidebar emphasis (= `primary`) |
-| `sidebar-primary-foreground` | `oklch(0.985 0.003 260)` | `oklch(0.94 0.008 250)` | Text on sidebar emphasis |
-| `sidebar-accent` | `oklch(0.89 0.013 250)` | `oklch(0.22 0.025 250)` | Sidebar hover / selected background |
-| `sidebar-accent-foreground` | `oklch(0.22 0.02 250)` | `oklch(0.94 0.008 250)` | Text on sidebar accent |
-| `sidebar-border` | `oklch(0.87 0.012 250)` | `oklch(0.30 0.025 250)` | Sidebar border |
-| `sidebar-ring` | `oklch(0.55 0.22 260)` | `oklch(0.63 0.20 260)` | Sidebar focus ring |
-
-### 3.7 Scrollbars & selection (global, in `@layer base`)
-
-There are **no scrollbar tokens** — the colors are inlined in [`globals.css`](../frontend/src/styles/globals.css) `@layer base`. A custom WebKit scrollbar applies app-wide: `6px` thin, transparent track, translucent rounded thumb (`oklch(0.5 0.01 250 / 22%)` → `38%` hover; dark `oklch(0.7 0.01 250 / 18%)` → `32%`). Text selection is tinted with the brand: `::selection { background: oklch(0.63 0.20 260 / 30%) }`.
-
-Two helper classes ride on top of the global scrollbar:
-
-| Class | Effect | Where |
+| Family | Tokens | Reach for it when |
 | --- | --- | --- |
-| `.scroll-stable` | `scrollbar-gutter: stable` — reserves the scrollbar gutter so toggling scrollability (e.g. switching settings tabs of differing height) doesn't shift centered content horizontally (#167) | Settings page |
-| `.query-table-scroll` | A faintly-tinted scrollbar track (`oklch(0.5 0.01 250 / 6%)`) so the always-present query-grid scrollbar reads during frequent scrolling | Query result grid |
+| Base surfaces & text (§1) | `background` / `foreground`, `card(-foreground)`, `popover(-foreground)` | window, panel, and floating-layer surfaces & their text |
+| Brand primary (§2) | `primary(-foreground)` | interactive / active / selected accents; selection tints via `primary/<opacity>` |
+| Secondary / muted / accent (§3) | `secondary(-foreground)`, `muted(-foreground)`, `accent(-foreground)` | secondary fills, de-emphasized text, hover/selected rows |
+| Borders & focus (§4) | `border`, `input`, `ring`, `panel-divider` | borders, form controls, focus ring, pane dividers |
+| Status (§5) | `destructive` / `success` / `warning` / `info` (+ `-foreground`) | semantic state; soft chip = `bg-<status>/15 text-<status>` |
+| Sidebar (§6) | `sidebar-*` | the icon rail & sidebar surfaces |
+| Scrollbars & selection (§7) | no tokens (`@layer base`) + `.scroll-stable` / `.query-table-scroll` | scrollable panes |
+| Domain CSS (§8) | `.query-table-frozen-*`, `.external-edit-*` | query-grid & diff/merge decorations only |
+| Syntax (§9) | `syntax-string/number/boolean/null` | coloring a rendered value by JSON type |
+| Chart (§10) | `chart-1`…`chart-5` | meaning-free categorical sets |
 
-### 3.8 Domain CSS (query grid & external-edit diff/merge)
-
-Two feature areas need cell/line decorations that go beyond utility classes, so they own named classes in `globals.css` `@layer components`. These are **not general-purpose** — use them only in their feature; don't repurpose them as a generic highlight.
-
-**Query result grid — frozen cell states** (composed over `--muted` / `--primary` / `--background` with `color-mix`):
-
-| Class | Meaning |
-| --- | --- |
-| `.query-table-frozen-header-selected` | Selected column in a frozen header |
-| `.query-table-frozen-cell-selected` | Selected frozen cell |
-| `.query-table-frozen-cell-focus` | Focused/active frozen cell |
-| `.query-table-frozen-cell-edited` | Frozen cell with an unsaved edit (amber wash; dark-tuned) |
-
-> Non-frozen cells use plain utilities for the same states — `bg-primary/15` (selected), `bg-primary/5` (focus). The frozen variants exist only because a sticky/frozen cell needs an opaque base under the tint.
-
-**External-edit diff / merge** — line + gutter decorations for the Monaco-based file compare/merge workbench (§8). Three families: `.external-edit-diff-*` and `.external-edit-compare-*` (insert = green, delete = red, modify/current = amber) and `.external-edit-merge-*` (local = green, remote = blue, combined = split gradient, current = dark). Applied as Monaco decoration classes from [`CodeDiffViewer.tsx`](../frontend/src/components/CodeDiffViewer.tsx); driven by [`externalEditStore`](../frontend/src/stores/externalEditStore.ts). These carry their own raw oklch values (a deliberate exception — Monaco decorations sit outside the token system); keep new diff/merge tints here, next to their siblings, not scattered in components.
-
-> **Decoration values are raw; the React chrome is not.** Only the Monaco *decoration colors* are exempt — the `.external-edit-*` classes here plus the inline color strings in [`CodeDiffViewer.tsx`](../frontend/src/components/CodeDiffViewer.tsx) and [`merge-decorations.ts`](../frontend/src/components/terminal/external-edit/merge-decorations.ts). The **React chrome** around the editors (workbench toolbars, badges, status text, gutters-as-divs in `IdeaFrame` / `CompareWorkbench` / `MergeWorkbench` / `PendingDialog`) uses the ordinary **status tokens**: insert → `success`, delete → `destructive`, modify → `warning`, remote → `info` (§3.5).
-
-### 3.9 Syntax tokens (value-type coloring)
-
-For coloring a rendered value **by its JSON type** (Redis / etcd / query value cells), use the syntax family — not status colors. One token per type, with a light + dark value, so the color reads on both themes without a `dark:` variant.
-
-| Token / class | Light | Dark | Use |
-| --- | --- | --- | --- |
-| `syntax-string` | `oklch(0.52 0.13 230)` | `oklch(0.72 0.12 230)` | String values |
-| `syntax-number` | `oklch(0.50 0.20 300)` | `oklch(0.74 0.16 300)` | Numbers (int / float) |
-| `syntax-boolean` | `oklch(0.56 0.16 65)` | `oklch(0.78 0.14 75)` | Booleans (`true` / `false`) |
-| `syntax-null` | `oklch(0.55 0.02 250)` | `oklch(0.62 0.02 250)` | `null` / nil / undefined |
-
-Use `text-syntax-string` etc. These are for **in-DOM** value rendering only; the Monaco editors carry their own theme (§8).
-
-### 3.10 Chart tokens (categorical palette)
-
-For an **arbitrary set of N distinct categories** that carry no inherent meaning (snippet categories, user tag colors) — never a status, never a value type — use the 5-step categorical palette. Assign by position; cycle if you have more than five.
-
-| Token / class | Light | Dark |
-| --- | --- | --- |
-| `chart-1` | `oklch(0.55 0.17 250)` | `oklch(0.68 0.15 250)` |
-| `chart-2` | `oklch(0.55 0.15 160)` | `oklch(0.70 0.14 160)` |
-| `chart-3` | `oklch(0.58 0.19 15)` | `oklch(0.70 0.16 15)` |
-| `chart-4` | `oklch(0.64 0.16 70)` | `oklch(0.76 0.14 70)` |
-| `chart-5` | `oklch(0.54 0.18 300)` | `oklch(0.68 0.16 300)` |
-
-Typical chip: `bg-chart-1/15 text-chart-1 ring-1 ring-inset ring-chart-1/25`. Don't reach for `chart-*` when the meaning is really status (→ §3.5) or a value type (→ §3.9) — those carry meaning and must stay semantic.
-
-### 3.11 Where raw colors are allowed (the only exceptions)
+### 3.1 Where raw colors are allowed (the only exceptions)
 
 Everything else uses tokens. These few places legitimately carry raw color values because they live **outside** the CSS-variable / Tailwind system, or are user-authored / brand palettes:
 
 - **Terminal color schemes** — [`data/terminalThemes.ts`](../frontend/src/data/terminalThemes.ts), the editor defaults in [`TerminalThemeEditor.tsx`](../frontend/src/components/settings/TerminalThemeEditor.tsx), and the xterm search-highlight colors in [`TerminalSearchBar.tsx`](../frontend/src/components/terminal/TerminalSearchBar.tsx) — xterm renders to a canvas with its own palette.
-- **Monaco editor** — the theme in [`monaco-setup.ts`](../frontend/src/lib/monaco-setup.ts) and the diff/merge decoration *values* in [`CodeDiffViewer.tsx`](../frontend/src/components/CodeDiffViewer.tsx) / [`merge-decorations.ts`](../frontend/src/components/terminal/external-edit/merge-decorations.ts) plus the `.external-edit-*` classes (§3.8).
+- **Monaco editor** — the theme in [`monaco-setup.ts`](../frontend/src/lib/monaco-setup.ts) and the diff/merge decoration *values* in [`CodeDiffViewer.tsx`](../frontend/src/components/CodeDiffViewer.tsx) / [`merge-decorations.ts`](../frontend/src/components/terminal/external-edit/merge-decorations.ts) plus the `.external-edit-*` classes ([design-tokens.md](./references/design-tokens.md) §8).
 - **Brand & user palettes** — the brand-icon colors and the user-facing color-picker swatches in [`IconPicker.tsx`](../frontend/src/components/asset/IconPicker.tsx) / [`brand-icons.tsx`](../frontend/src/components/asset/brand-icons.tsx), and the deterministic session-avatar palette in [`ai/sessionIconColor.ts`](../frontend/src/components/ai/sessionIconColor.ts) (already authored in oklch).
 
 If you're not in one of these, use a token. A `text-blue-500` / `bg-[#…]` anywhere else is a bug — see Constraint 1.
@@ -305,7 +187,7 @@ UI primitives live in the **`@opskat/ui`** workspace package ([`frontend/package
 | `tree-check-list.tsx` | **`TreeCheckList`** — generic tri-state checkbox tree |
 | `sonner.tsx` | Global `Toaster` (theme-aware, `richColors`) |
 
-> **There is no `badge.tsx`.** Status is shown with `success` / `warning` / `destructive` / `info`-tinted icons, dots, or small soft chips (`bg-<status>/15 text-<status>`, §3.5) composed inline — there is no `Badge` primitive to reach for. The `*-foreground` pairs now exist (§3.5), so if badges become common, add one primitive over them rather than re-deriving chips per view. There is also **no shared `Skeleton` / `EmptyState` / `LoadingState` / `StateScreen`** — see §10.
+> **There is no `badge.tsx`.** Status is shown with `success` / `warning` / `destructive` / `info`-tinted icons, dots, or small soft chips (`bg-<status>/15 text-<status>`, [design-tokens.md](./references/design-tokens.md) §5) composed inline — there is no `Badge` primitive to reach for. The `*-foreground` pairs now exist (design-tokens.md §5), so if badges become common, add one primitive over them rather than re-deriving chips per view. There is also **no shared `Skeleton` / `EmptyState` / `LoadingState` / `StateScreen`** — see §10.
 
 ### 6.2 Button variants / sizes
 
@@ -340,7 +222,7 @@ These project blocks already solve picker / credential / icon / form-field probl
 | `PasswordSourceField` | [`components/asset/PasswordSourceField.tsx`](../frontend/src/components/asset/PasswordSourceField.tsx) | Inline-password vs managed-credential selector; lazy-decrypts an existing secret via backend |
 | `IconPicker` | [`components/asset/IconPicker.tsx`](../frontend/src/components/asset/IconPicker.tsx) | Icon + custom color picker; value is `"name"` or `"name#hexcolor"`; also exports `getIconComponent` / `getIconColor` (§8) |
 | `Segmented` | [`components/asset/fields.tsx`](../frontend/src/components/asset/fields.tsx) | Pill segmented control (radiogroup, floating active pill) — prefer it over a `Select` for a 2–4 option toggle (auth type, key source, connection method) |
-| Asset config-form fields | [`fields.tsx`](../frontend/src/components/asset/fields.tsx) · [`configFields.tsx`](../frontend/src/components/asset/configFields.tsx) · [`ConfigTabs.tsx`](../frontend/src/components/asset/ConfigTabs.tsx) | `Field` / `FieldLabel` label+control primitives plus the schema-driven field/tab renderer (`ConfigGroupSchema` → underline-tab groups) the asset form is built from; the wiring hook is in [`adding-an-asset-type.md` §F3](./adding-an-asset-type.md#f3-configsection-and-pure-configts-serialization) |
+| Asset config-form fields | [`fields.tsx`](../frontend/src/components/asset/fields.tsx) · [`configFields.tsx`](../frontend/src/components/asset/configFields.tsx) · [`ConfigTabs.tsx`](../frontend/src/components/asset/ConfigTabs.tsx) | `Field` / `FieldLabel` label+control primitives plus the schema-driven field/tab renderer (`ConfigGroupSchema` → underline-tab groups) the asset form is built from; the wiring hook is in [`adding-an-asset-type.md` §F3](./references/adding-an-asset-type.md#f3-configsection-and-pure-configts-serialization) |
 
 ### 6.4 Toast (`notify` + sonner)
 
@@ -445,15 +327,15 @@ OpsKat's real screens are the domain panes. They share the shell (§7) and token
 
 ### Query editor + result grid
 
-[`query/`](../frontend/src/components/query/) composes a `DatabasePanel` (left DB/table tree, resizable) with inner tabs for table data vs SQL editor, over a custom **virtualized** result grid ([`QueryResultTable.tsx`](../frontend/src/components/query/QueryResultTable.tsx), `@tanstack/react-virtual`). The grid is a plain `<table>` with a `bg-muted sticky` frozen header and the `.query-table-frozen-*` cell states (§3.8); selection/focus/edited cells tint with `primary`/amber. There is **no grid library** — extend this renderer rather than introducing one. Query state lives in [`queryStore`](../frontend/src/stores/queryStore.ts). Destructive previews (UPDATE/DELETE) keep their confirm step (§6.5).
+[`query/`](../frontend/src/components/query/) composes a `DatabasePanel` (left DB/table tree, resizable) with inner tabs for table data vs SQL editor, over a custom **virtualized** result grid ([`QueryResultTable.tsx`](../frontend/src/components/query/QueryResultTable.tsx), `@tanstack/react-virtual`). The grid is a plain `<table>` with a `bg-muted sticky` frozen header and the `.query-table-frozen-*` cell states ([design-tokens.md](./references/design-tokens.md) §8); selection/focus/edited cells tint with `primary`/amber. There is **no grid library** — extend this renderer rather than introducing one. Query state lives in [`queryStore`](../frontend/src/stores/queryStore.ts). Destructive previews (UPDATE/DELETE) keep their confirm step (§6.5).
 
 ### Code editor, diff & merge
 
-[`CodeEditor.tsx`](../frontend/src/components/CodeEditor.tsx) and [`CodeDiffViewer.tsx`](../frontend/src/components/CodeDiffViewer.tsx) wrap **Monaco** (`@monaco-editor/react`) for snippet/SQL/script editing and side-by-side diff. The external-file edit flow (editing a remote file in your local editor, then reconciling) layers the `.external-edit-diff-*` / `.external-edit-merge-*` / `.external-edit-compare-*` decorations (§3.8) over Monaco, driven by [`externalEditStore`](../frontend/src/stores/externalEditStore.ts). Use Monaco for any code surface; don't add a second editor.
+[`CodeEditor.tsx`](../frontend/src/components/CodeEditor.tsx) and [`CodeDiffViewer.tsx`](../frontend/src/components/CodeDiffViewer.tsx) wrap **Monaco** (`@monaco-editor/react`) for snippet/SQL/script editing and side-by-side diff. The external-file edit flow (editing a remote file in your local editor, then reconciling) layers the `.external-edit-diff-*` / `.external-edit-merge-*` / `.external-edit-compare-*` decorations ([design-tokens.md](./references/design-tokens.md) §8) over Monaco, driven by [`externalEditStore`](../frontend/src/stores/externalEditStore.ts). Use Monaco for any code surface; don't add a second editor.
 
 ### Icons & asset-type identity
 
-An asset's icon is a string — `"name"` or `"name#hexcolor"` — resolved by `getIconComponent` / `getIconColor` in [`IconPicker.tsx`](../frontend/src/components/asset/IconPicker.tsx), backed by `lucide-react` plus the in-repo [`brand-icons.tsx`](../frontend/src/components/asset/brand-icons.tsx) (AWS, MySQL, Redis, Kubernetes, …) and the `ICON_COLORS` brand-color map in `IconPicker.tsx`. **Asset *types*** are a registry, not a switch: each [`lib/assetTypes/*.ts`](../frontend/src/lib/assetTypes/) calls `registerAssetType(...)` (default icon, label, aliases, category, connect capabilities) and [`index.ts`](../frontend/src/lib/assetTypes/index.ts) exposes `getAssetType(type)`. **Enumerate the live set from `lib/assetTypes/*.ts`** — don't hardcode the list here (it drifts; new types register themselves). Never branch on a type string in shared UI; ask the registry. (Backend side → [`adding-an-asset-type.md`](./adding-an-asset-type.md).)
+An asset's icon is a string — `"name"` or `"name#hexcolor"` — resolved by `getIconComponent` / `getIconColor` in [`IconPicker.tsx`](../frontend/src/components/asset/IconPicker.tsx), backed by `lucide-react` plus the in-repo [`brand-icons.tsx`](../frontend/src/components/asset/brand-icons.tsx) (AWS, MySQL, Redis, Kubernetes, …) and the `ICON_COLORS` brand-color map in `IconPicker.tsx`. **Asset *types*** are a registry, not a switch: each [`lib/assetTypes/*.ts`](../frontend/src/lib/assetTypes/) calls `registerAssetType(...)` (default icon, label, aliases, category, connect capabilities) and [`index.ts`](../frontend/src/lib/assetTypes/index.ts) exposes `getAssetType(type)`. **Enumerate the live set from `lib/assetTypes/*.ts`** — don't hardcode the list here (it drifts; new types register themselves). Never branch on a type string in shared UI; ask the registry. (Backend side → [`adding-an-asset-type.md`](./references/adding-an-asset-type.md).)
 
 ### Stores (one per domain)
 

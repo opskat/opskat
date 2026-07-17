@@ -74,14 +74,14 @@ lint-fix:
 test:
 	go test ./internal/... ./cmd/opsctl/... ./pkg/... ./cmd/devserver/...
 
-# E2E：Playwright 驱动真实 wails dev 跑 GUI 端到端。详见 docs/e2e-harness-guide.md。
+# E2E：Playwright 驱动真实 wails dev 跑 GUI 端到端。详见 docs/references/e2e-harness-guide.md。
 # 一次性装依赖 + 浏览器：cd e2e && pnpm run setup（CI 在独立步骤里装，故这里不重复）。
 # 配方只做 shell 无关的 cd && pnpm，跨平台(cmd/sh 皆可)；编排与收尾清理(回收残留
 # vite、删临时目录)都在 e2e/run-e2e.mjs 里用 Node 跨平台完成。
 test-e2e:
 	cd e2e && pnpm test
 
-# 临时功能验证：跑 e2e/scratch/ 里的一次性 spec（不提交）。约定/用法见 docs/e2e-harness-guide.md。
+# 临时功能验证：跑 e2e/scratch/ 里的一次性 spec（不提交）。约定/用法见 docs/references/e2e-harness-guide.md。
 test-e2e-scratch:
 	cd e2e && pnpm run test:scratch
 

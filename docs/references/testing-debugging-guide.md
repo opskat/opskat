@@ -15,15 +15,9 @@ automated tests).**
 
 OpsKat = Go backend + React frontend, wired over Wails IPC (no HTTP API). A running
 desktop window is hard for an agent to drive, so reach for the *observable* and
-*headless* surfaces instead.
-
-**Three ways to exercise functionality** (prefer the top of the list):
-
-| Way | When to use | Cost |
-|-----|-------------|------|
-| **Automated tests** (`go test`, `vitest`, e2e harness) | Logic in `service/`/`repository/`/`internal/ai/`, frontend stores/components | Fast, deterministic — always try first |
-| **`opsctl` (headless CLI)** | Asset operations (SSH/SQL/Redis/Mongo/file/extension) that run through the *real* service layer | Medium — needs a real or fixture asset |
-| **Run the app + observe** | The IPC/GUI path itself, or behavior only reachable from the desktop app | Slow — only when the above can't cover it |
+*headless* surfaces instead. **Which surface to exercise, in what order** (cheap
+signals → `opsctl` → the real app) is owned by [VERIFICATION.md](../VERIFICATION.md);
+this guide owns the observation mechanics.
 
 **Two ways to confirm what happened** after exercising a path:
 

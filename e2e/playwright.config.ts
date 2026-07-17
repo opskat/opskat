@@ -34,7 +34,7 @@ process.env.OPSKAT_EXTENSIONS = "0";
 // this config is re-evaluated in every worker, so the vars reach the test process.
 // Optional by design: .env is absent on CI / a fresh clone, so we skip when it's
 // not there; an explicit env var already set always wins over the file.
-// Convention & usage: docs/e2e-harness-guide.md §6.
+// Convention & usage: docs/references/e2e-harness-guide.md §6.
 const envFile = join(__dirname, "..", ".env");
 if (existsSync(envFile)) {
   for (const line of readFileSync(envFile, "utf8").split("\n")) {

@@ -47,7 +47,7 @@ CI 还会额外运行 GUI 端到端套件（`make test-e2e`，Playwright 驱动�
 - **修 Bug 先写失败的测试。** 先用 `go test` / `vitest` 复现 Bug，再改实现，并且修根因而不是打补丁 —— 见 [AGENTS.md](../AGENTS.md) 的 Fix policy。
 - **复用优先。** 新增组件 / hook / 工具函数前，先 grep 是否已有现成实现 —— 平行副本很快就会各自漂移。
 - 前端代码风格由 Prettier 强制（120 列、2 空格缩进）。
-- 通过观察日志 / 数据库 / 无头 `opsctl` 验证功能，见 [docs/testing-debugging-guide.md](./testing-debugging-guide.md)（面向 AI 助手，英文）；GUI 端到端细节见 [docs/e2e-harness-guide.md](./e2e-harness-guide.md)。
+- 验证流程（先跑什么、按什么顺序）：[docs/VERIFICATION.md](./VERIFICATION.md)。通过观察日志 / 数据库 / 无头 `opsctl` 验证功能，见 [docs/references/testing-debugging-guide.md](./references/testing-debugging-guide.md)（面向 AI 助手，英文）；GUI 端到端细节见 [docs/references/e2e-harness-guide.md](./references/e2e-harness-guide.md)。
 
 ## Commit 信息 — gitmoji
 
