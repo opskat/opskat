@@ -49,7 +49,7 @@ export function TableStructureDialog({ open, onOpenChange, tabId, database, tabl
                       <tr key={col.name} className="border-b border-border/50">
                         <td className="py-1 pr-3 font-mono">
                           <span className="inline-flex items-center gap-1">
-                            {col.primaryKey && <KeyRound className="h-3 w-3 text-amber-500" />}
+                            {col.primaryKey && <KeyRound className="h-3 w-3 text-warning" />}
                             {col.name}
                           </span>
                         </td>

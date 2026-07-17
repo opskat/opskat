@@ -3,7 +3,6 @@ package opsctl
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -90,7 +89,7 @@ func (o *Opsctl) startApprovalServer() {
 	srv := approval.NewServer(handler, o.authToken)
 	sockPath := approval.SocketPath(bootstrap.ResolvedDataDir())
 	if err := srv.Start(sockPath); err != nil {
-		log.Printf("Approval server failed to start: %v", err)
+		logger.Ctx(o.ctx).Error("approval server failed to start", zap.String("socket", sockPath), zap.Error(err))
 		return
 	}
 	o.approvalServer = srv
@@ -103,7 +102,7 @@ func (o *Opsctl) startSSHPoolServer() {
 	}
 	sockPath := sshpool.SocketPath(bootstrap.ResolvedDataDir())
 	if err := o.proxyServer.Start(sockPath); err != nil {
-		log.Printf("SSH pool server failed to start: %v", err)
+		logger.Ctx(o.ctx).Error("ssh pool server failed to start", zap.String("socket", sockPath), zap.Error(err))
 	}
 }
 
