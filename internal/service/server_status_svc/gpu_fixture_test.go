@@ -8,7 +8,8 @@ import (
 
 func readGPUFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", name))
+	// Fixture names are package-owned test constants, not external input.
+	data, err := os.ReadFile(filepath.Join("testdata", name)) //nolint:gosec
 	if err != nil {
 		t.Fatalf("read fixture %s: %v", name, err)
 	}

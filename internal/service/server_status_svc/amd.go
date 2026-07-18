@@ -285,8 +285,8 @@ func parseROCMSMIJSON(coreJSON, processJSON []byte) (*gpuCollectorResult, error)
 func mergeAMDDevice(devices map[int]*GPU, source GPU) {
 	target := devices[source.Index]
 	if target == nil {
-		copy := source
-		devices[source.Index] = &copy
+		deviceCopy := source
+		devices[source.Index] = &deviceCopy
 		return
 	}
 	mergeGPUFields(target, source)
