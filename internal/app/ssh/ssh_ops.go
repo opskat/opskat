@@ -476,6 +476,7 @@ func (s *SSH) GetSSHServerStatus(sessionID string) (*server_status_svc.Snapshot,
 	logger.Ctx(ctx).Info("ssh server status end",
 		zap.String("hostname", snapshot.Hostname),
 		zap.String("os", snapshot.OS),
+		zap.Int("gpuCount", len(snapshot.GPUs)),
 	)
 	return snapshot, nil
 }

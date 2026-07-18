@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalToolbar } from "../components/terminal/TerminalToolbar";
 import { useTerminalStore } from "../stores/terminalStore";
@@ -23,6 +23,20 @@ const snapshot = {
   diskUsedBytes: 6442450944,
   diskTotalBytes: 21474836480,
   collectedAt: Date.now(),
+};
+
+const nvidiaGPU = {
+  index: 0,
+  vendor: "NVIDIA",
+  name: "NVIDIA RTX 4090",
+  utilizationPercent: 94,
+  memoryUsedBytes: 23050 * 1024 * 1024,
+  memoryTotalBytes: 24564 * 1024 * 1024,
+  temperatureC: 67,
+  powerDrawWatts: 387,
+  powerLimitWatts: 450,
+  fanPercent: 58,
+  computeProcessCount: 3,
 };
 
 function seedStores() {
@@ -75,6 +89,71 @@ describe("TerminalToolbar server status", () => {
     expect(screen.getByText("terminal.serverStatus.title")).toBeInTheDocument();
     expect(screen.getAllByText("prod-web-01").length).toBeGreaterThan(0);
     expect(screen.getByText("terminal.serverStatus.loadAverage")).toBeInTheDocument();
+  });
+
+  it("does not render a GPU section when the snapshot has no GPUs", async () => {
+    vi.mocked(GetSSHServerStatus).mockResolvedValue({ ...snapshot, gpus: [] } as never);
+    render(<TerminalToolbar tabId="tab-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "terminal.serverStatus.trigger" }));
+
+    await waitFor(() => expect(GetSSHServerStatus).toHaveBeenCalledWith("ssh-1"));
+    expect(screen.queryByText("terminal.serverStatus.gpuAccelerators")).not.toBeInTheDocument();
+  });
+
+  it("renders one NVIDIA GPU with utilization, VRAM, metadata, and secondary metrics", async () => {
+    vi.mocked(GetSSHServerStatus).mockResolvedValue({
+      ...snapshot,
+      gpuDriverVersion: "550.54",
+      cudaVersion: "12.4",
+      gpus: [nvidiaGPU],
+    } as never);
+    render(<TerminalToolbar tabId="tab-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "terminal.serverStatus.trigger" }));
+
+    expect(await screen.findByText("terminal.serverStatus.gpuAccelerators")).toBeInTheDocument();
+    expect(screen.getByText("GPU 0 · NVIDIA RTX 4090")).toBeInTheDocument();
+    expect(screen.getByText("94.0%")).toHaveClass("text-primary");
+    expect(screen.getByText("94.0%")).not.toHaveClass("text-warning", "text-destructive");
+    expect(screen.getByText("22.5 GB / 24.0 GB")).toHaveClass("text-info");
+    expect(screen.getByText("550.54")).toBeInTheDocument();
+    expect(screen.getByText("12.4")).toBeInTheDocument();
+    expect(screen.getByText("67°C")).toBeInTheDocument();
+    expect(screen.getByText("387 W / 450 W")).toBeInTheDocument();
+    expect(screen.getByText("58.0%")).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
+  });
+
+  it("renders unavailable individual GPU metrics as dashes", async () => {
+    vi.mocked(GetSSHServerStatus).mockResolvedValue({
+      ...snapshot,
+      gpus: [{ index: 0, vendor: "NVIDIA", name: "NVIDIA Tesla T4" }],
+    } as never);
+    render(<TerminalToolbar tabId="tab-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "terminal.serverStatus.trigger" }));
+
+    const title = await screen.findByText("GPU 0 · NVIDIA Tesla T4");
+    const card = title.closest("article");
+    expect(card).not.toBeNull();
+    expect(within(card as HTMLElement).getAllByText("-").length).toBeGreaterThanOrEqual(4);
+    expect(within(card as HTMLElement).getAllByText("- / -")).toHaveLength(2);
+  });
+
+  it("renders multiple GPUs in a capped internal scroll region when more than two are present", async () => {
+    vi.mocked(GetSSHServerStatus).mockResolvedValue({
+      ...snapshot,
+      gpus: [
+        nvidiaGPU,
+        { ...nvidiaGPU, index: 1, name: "NVIDIA A100" },
+        { ...nvidiaGPU, index: 2, name: "NVIDIA L40S" },
+      ],
+    } as never);
+    render(<TerminalToolbar tabId="tab-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "terminal.serverStatus.trigger" }));
+
+    expect(await screen.findByText("GPU 0 · NVIDIA RTX 4090")).toBeInTheDocument();
+    expect(screen.getByText("GPU 1 · NVIDIA A100")).toBeInTheDocument();
+    expect(screen.getByText("GPU 2 · NVIDIA L40S")).toBeInTheDocument();
+    expect(screen.getByTestId("server-status-gpu-list")).toHaveClass("max-h-[360px]", "overflow-y-auto");
   });
 
   it("toggling auto-refresh off pauses the session collector", async () => {

@@ -38,6 +38,7 @@ import {
   type HealthLevel,
 } from "@/components/terminal/serverStatusMetrics";
 import { Sparkline } from "@/components/terminal/Sparkline";
+import { ServerStatusGPUSection } from "@/components/terminal/ServerStatusGPUSection";
 
 interface TerminalServerStatusDialogProps {
   open: boolean;
@@ -253,6 +254,14 @@ export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: Te
               </MetricCard>
             </div>
           </section>
+
+          {latest?.gpus && latest.gpus.length > 0 && (
+            <ServerStatusGPUSection
+              gpus={latest.gpus}
+              driverVersion={latest.gpuDriverVersion}
+              cudaVersion={latest.cudaVersion}
+            />
+          )}
 
           {/* ② 系统负载 */}
           <section className="rounded-xl border bg-background/40 p-4">
