@@ -15,6 +15,8 @@ export function ServerStatusGPUSection({ gpus, driverVersion, cudaVersion }: Ser
 
   if (gpus.length === 0) return null;
 
+  const hasPerDeviceMetadata = gpus.some((gpu) => gpu.driverVersion || gpu.runtime || gpu.runtimeVersion);
+
   return (
     <section className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -27,7 +29,7 @@ export function ServerStatusGPUSection({ gpus, driverVersion, cudaVersion }: Ser
             })}
           </span>
         </div>
-        {(driverVersion || cudaVersion) && (
+        {!hasPerDeviceMetadata && (driverVersion || cudaVersion) && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
             {driverVersion && (
               <span className="inline-flex items-center gap-1">
@@ -49,21 +51,30 @@ export function ServerStatusGPUSection({ gpus, driverVersion, cudaVersion }: Ser
         data-testid="server-status-gpu-list"
         className={cn("space-y-3", gpus.length > 2 && "max-h-[360px] overflow-y-auto pr-1")}
       >
-        {gpus.map((gpu) => (
-          <GPUCard key={`${gpu.vendor ?? "gpu"}-${gpu.index}`} gpu={gpu} />
-        ))}
+        {gpus.map((gpu) => {
+          const key = serverStatusGPUKey(gpu);
+          return <GPUCard key={key} gpu={gpu} gpuKey={key} />;
+        })}
       </div>
     </section>
   );
 }
 
-function GPUCard({ gpu }: { gpu: ServerStatusGPU }) {
+function serverStatusGPUKey(gpu: ServerStatusGPU): string {
+  const vendor = gpu.vendor || "GPU";
+  if (gpu.id) return `${vendor}:id:${gpu.id}`;
+  if (gpu.pciBusId) return `${vendor}:pci:${gpu.pciBusId}`;
+  return `${vendor}:index:${gpu.index}:name:${gpu.name || "unknown"}`;
+}
+
+function GPUCard({ gpu, gpuKey }: { gpu: ServerStatusGPU; gpuKey: string }) {
   const { t } = useTranslation();
   const memoryPercent = usagePercent(gpu.memoryUsedBytes, gpu.memoryTotalBytes);
   const displayName = gpu.name || gpu.vendor || "-";
+  const runtime = [gpu.runtime, gpu.runtimeVersion].filter(Boolean).join(" ");
 
   return (
-    <article className="rounded-xl border bg-background/40 p-4">
+    <article data-gpu-key={gpuKey} className="rounded-xl border bg-background/40 p-4">
       <div className="flex min-w-0 items-center gap-3">
         <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary">
           <CircuitBoard className="size-[18px]" aria-hidden />
@@ -72,7 +83,26 @@ function GPUCard({ gpu }: { gpu: ServerStatusGPU }) {
           <h3 className="truncate text-sm font-semibold">
             GPU {gpu.index} · {displayName}
           </h3>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">{gpu.vendor || "-"}</p>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+            <span>{gpu.vendor || "-"}</span>
+            {gpu.pciBusId && <span>PCI {gpu.pciBusId}</span>}
+          </div>
+          {(gpu.driverVersion || runtime) && (
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
+              {gpu.driverVersion && (
+                <span className="inline-flex items-center gap-1">
+                  {t("terminal.serverStatus.driverVersion")}
+                  <b className="font-mono font-medium text-foreground">{gpu.driverVersion}</b>
+                </span>
+              )}
+              {runtime && (
+                <span className="inline-flex items-center gap-1">
+                  {t("terminal.serverStatus.runtime")}
+                  <b className="font-mono font-medium text-foreground">{runtime}</b>
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

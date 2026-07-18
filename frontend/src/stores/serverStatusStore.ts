@@ -3,8 +3,13 @@ import { GetSSHServerStatus } from "../../wailsjs/go/ssh/SSH";
 
 export interface ServerStatusGPU {
   index: number;
+  id?: string;
+  pciBusId?: string;
   vendor?: string;
   name?: string;
+  driverVersion?: string;
+  runtime?: string;
+  runtimeVersion?: string;
   utilizationPercent?: number;
   memoryUsedBytes?: number;
   memoryTotalBytes?: number;

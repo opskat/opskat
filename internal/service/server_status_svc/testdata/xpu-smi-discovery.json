@@ -1,0 +1,14 @@
+{
+  "device_list": [
+    {
+      "device_id": 0,
+      "device_name": "Intel(R) Data Center GPU Max 1550",
+      "device_type": "GPU",
+      "uuid": "00000000-0000-0000-0000-00000000abcd",
+      "device_vendor": "Intel Corporation",
+      "pci_bdf_address": "0000:bd:00.0",
+      "driver_version": "1.3.30872",
+      "memory_physical_size_byte": 51539607552
+    }
+  ]
+}

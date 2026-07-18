@@ -29,8 +29,8 @@ DISK_USED_BYTES=1024
 `
 
 const nvidiaSnapshotOutput = `__OPSKAT_NVIDIA_GPU_BEGIN__
-0, GPU-aaaa, NVIDIA RTX 4090, 94, 23050, 24564, 67, 387.25, 450.00, 58, 550.54
-1, GPU-bbbb, NVIDIA RTX 4090, 2, 800, 24564, 35, 21.00, 450.00, N/A, 550.54
+0, GPU-aaaa, NVIDIA RTX 4090, 94, 23050, 24564, 67, 387.25, 450.00, 58, 550.54, 00000000:01:00.0
+1, GPU-bbbb, NVIDIA RTX 4090, 2, 800, 24564, 35, 21.00, 450.00, N/A, 550.54, 00000000:02:00.0
 __OPSKAT_NVIDIA_GPU_END__
 __OPSKAT_NVIDIA_CUDA_VERSION__=12.4
 __OPSKAT_NVIDIA_PROCESS_BEGIN__
@@ -107,6 +107,12 @@ func TestParseNVIDIAOutput(t *testing.T) {
 	if first.Index != 0 || first.Vendor != "NVIDIA" || first.Name != "NVIDIA RTX 4090" {
 		t.Fatalf("unexpected first GPU identity: %+v", first)
 	}
+	if first.DeviceID != "GPU-aaaa" || first.PCIBusID != "00000000:01:00.0" {
+		t.Fatalf("unexpected first GPU stable identity: %+v", first)
+	}
+	if first.DriverVersion != "550.54" || first.Runtime != "CUDA" || first.RuntimeVersion != "12.4" {
+		t.Fatalf("unexpected first GPU metadata: %+v", first)
+	}
 	if first.UtilizationPercent == nil || *first.UtilizationPercent != 94 {
 		t.Fatalf("first UtilizationPercent = %v, want 94", first.UtilizationPercent)
 	}
@@ -178,14 +184,17 @@ __OPSKAT_NVIDIA_PROCESS_END__
 	}
 }
 
-func TestCollectRunsSnapshotAndGPUCommands(t *testing.T) {
+func TestCollectKeepsBaseStatusWhenNoSupportedGPUToolIsAvailable(t *testing.T) {
 	var commands []string
+	var commandsMu sync.Mutex
 	snapshot, err := collectWithRunner(context.Background(), func(_ context.Context, cmd, _ string) (string, error) {
+		commandsMu.Lock()
 		commands = append(commands, cmd)
+		commandsMu.Unlock()
 		switch cmd {
 		case snapshotCommand:
 			return baseSnapshotOutput, nil
-		case nvidiaSMICommand:
+		case nvidiaSMICommand, amdSMICommand, rocmSMICommand, xpuSMICommand:
 			return "", nil
 		default:
 			return "", errors.New("unexpected command")
@@ -194,9 +203,9 @@ func TestCollectRunsSnapshotAndGPUCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("collectWithRunner returned error: %v", err)
 	}
-	if len(commands) != 2 || commands[0] != snapshotCommand || commands[1] != nvidiaSMICommand {
-		t.Fatalf("commands = %#v, want base snapshot followed by NVIDIA status", commands)
-	}
+	commandsMu.Lock()
+	assertGPUCommandSet(t, commands)
+	commandsMu.Unlock()
 	if snapshot.Hostname != "test-host" {
 		t.Fatalf("Hostname = %q, want test-host", snapshot.Hostname)
 	}
@@ -205,6 +214,9 @@ func TestCollectRunsSnapshotAndGPUCommands(t *testing.T) {
 	}
 	if snapshot.CollectedAt == 0 {
 		t.Fatal("CollectedAt was not set")
+	}
+	if len(snapshot.GPUs) != 0 {
+		t.Fatalf("len(GPUs) = %d, want 0", len(snapshot.GPUs))
 	}
 }
 
@@ -218,7 +230,7 @@ func TestCollectRunsCommandsOverSSH(t *testing.T) {
 		switch cmd {
 		case snapshotCommand:
 			return baseSnapshotOutput, "", 0
-		case nvidiaSMICommand:
+		case nvidiaSMICommand, amdSMICommand, rocmSMICommand, xpuSMICommand:
 			return "", "", 0
 		default:
 			return "", "unexpected command", 1
@@ -233,9 +245,7 @@ func TestCollectRunsCommandsOverSSH(t *testing.T) {
 	}
 	commandsMu.Lock()
 	defer commandsMu.Unlock()
-	if len(commands) != 2 || commands[0] != snapshotCommand || commands[1] != nvidiaSMICommand {
-		t.Fatalf("commands = %#v, want base snapshot followed by NVIDIA status", commands)
-	}
+	assertGPUCommandSet(t, commands)
 }
 
 func TestCollectAddsNVIDIAGPUs(t *testing.T) {
@@ -245,6 +255,8 @@ func TestCollectAddsNVIDIAGPUs(t *testing.T) {
 			return baseSnapshotOutput, nil
 		case nvidiaSMICommand:
 			return nvidiaSnapshotOutput, nil
+		case amdSMICommand, rocmSMICommand, xpuSMICommand:
+			return "", nil
 		default:
 			return "", errors.New("unexpected command")
 		}
@@ -257,6 +269,67 @@ func TestCollectAddsNVIDIAGPUs(t *testing.T) {
 	}
 	if snapshot.GPUDriverVersion != "550.54" || snapshot.CUDAVersion != "12.4" {
 		t.Fatalf("unexpected GPU metadata: driver=%q cuda=%q", snapshot.GPUDriverVersion, snapshot.CUDAVersion)
+	}
+}
+
+func TestCollectCombinesNVIDIAAMDAndIntelGPUs(t *testing.T) {
+	amdOutput := amdSMIFixtureOutput(t)
+	intelOutput := xpuSMIFixtureOutput(t)
+
+	snapshot, err := collectWithRunner(context.Background(), func(_ context.Context, cmd, _ string) (string, error) {
+		switch cmd {
+		case snapshotCommand:
+			return baseSnapshotOutput, nil
+		case nvidiaSMICommand:
+			return nvidiaSnapshotOutput, nil
+		case amdSMICommand:
+			return amdOutput, nil
+		case xpuSMICommand:
+			return intelOutput, nil
+		case rocmSMICommand:
+			return "", errors.New("rocm-smi fallback must not run when amd-smi is usable")
+		default:
+			return "", errors.New("unexpected command")
+		}
+	})
+	if err != nil {
+		t.Fatalf("collectWithRunner returned error: %v", err)
+	}
+	if len(snapshot.GPUs) != 4 {
+		t.Fatalf("len(GPUs) = %d, want 4", len(snapshot.GPUs))
+	}
+	wantVendors := []string{"NVIDIA", "NVIDIA", "AMD", "Intel"}
+	for i, want := range wantVendors {
+		if snapshot.GPUs[i].Vendor != want {
+			t.Fatalf("GPU vendors = %+v, want %#v", snapshot.GPUs, wantVendors)
+		}
+	}
+}
+
+func TestCollectPreservesAMDAndIntelWhenNVIDIAOutputIsMalformed(t *testing.T) {
+	amdOutput := amdSMIFixtureOutput(t)
+	intelOutput := xpuSMIFixtureOutput(t)
+	snapshot, err := collectWithRunner(context.Background(), func(_ context.Context, cmd, _ string) (string, error) {
+		switch cmd {
+		case snapshotCommand:
+			return baseSnapshotOutput, nil
+		case nvidiaSMICommand:
+			return nvidiaGPUBegin + "\nmalformed\n" + nvidiaGPUEnd + "\n", nil
+		case amdSMICommand:
+			return amdOutput, nil
+		case xpuSMICommand:
+			return intelOutput, nil
+		case rocmSMICommand:
+			return "", errors.New("unexpected AMD fallback")
+		default:
+			return "", errors.New("unexpected command")
+		}
+	})
+	if err != nil {
+		t.Fatalf("collectWithRunner returned error: %v", err)
+	}
+	if len(snapshot.GPUs) != 2 || snapshot.GPUs[0].Vendor != "AMD" || snapshot.GPUs[1].Vendor != "Intel" {
+		t.Fatalf("successful vendor results were not preserved: %+v", snapshot.GPUs)
 	}
 }
 
@@ -286,6 +359,8 @@ __OPSKAT_NVIDIA_GPU_END__
 				case nvidiaSMICommand:
 					gpuCalls++
 					return tt.stdout, tt.err
+				case amdSMICommand, rocmSMICommand, xpuSMICommand:
+					return "", nil
 				default:
 					return "", errors.New("unexpected command")
 				}
@@ -303,6 +378,22 @@ __OPSKAT_NVIDIA_GPU_END__
 				t.Fatalf("len(GPUs) = %d, want 0", len(snapshot.GPUs))
 			}
 		})
+	}
+}
+
+func assertGPUCommandSet(t *testing.T, commands []string) {
+	t.Helper()
+	if len(commands) != 5 || commands[0] != snapshotCommand {
+		t.Fatalf("commands = %#v, want base snapshot plus four optional GPU probes", commands)
+	}
+	seen := make(map[string]int)
+	for _, command := range commands[1:] {
+		seen[command]++
+	}
+	for _, command := range []string{nvidiaSMICommand, amdSMICommand, rocmSMICommand, xpuSMICommand} {
+		if seen[command] != 1 {
+			t.Fatalf("GPU command count for %q = %d, want 1; commands = %#v", command, seen[command], commands)
+		}
 	}
 }
 

@@ -1265,6 +1265,7 @@
       "gpuCountMany": "{{count}} 张卡",
       "driverVersion": "驱动",
       "cudaVersion": "CUDA",
+      "runtime": "运行时",
       "gpuUtilization": "GPU 利用率",
       "vramUsage": "显存占用",
       "temperature": "温度",

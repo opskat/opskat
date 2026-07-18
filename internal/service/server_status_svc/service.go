@@ -8,16 +8,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cago-frame/cago/pkg/logger"
-	"go.uber.org/zap"
 	"golang.org/x/crypto/ssh"
 )
 
 // GPU 表示服务器中的一个图形/计算加速器。可选指标使用指针区分“真实为 0”和“不可用”。
 type GPU struct {
 	Index               int      `json:"index"`
+	DeviceID            string   `json:"id,omitempty"`
+	PCIBusID            string   `json:"pciBusId,omitempty"`
 	Vendor              string   `json:"vendor,omitempty"`
 	Name                string   `json:"name,omitempty"`
+	DriverVersion       string   `json:"driverVersion,omitempty"`
+	Runtime             string   `json:"runtime,omitempty"`
+	RuntimeVersion      string   `json:"runtimeVersion,omitempty"`
 	UtilizationPercent  *float64 `json:"utilizationPercent,omitempty"`
 	MemoryUsedBytes     *int64   `json:"memoryUsedBytes,omitempty"`
 	MemoryTotalBytes    *int64   `json:"memoryTotalBytes,omitempty"`
@@ -43,9 +46,11 @@ type Snapshot struct {
 	DiskUsedBytes    int64   `json:"diskUsedBytes,omitempty"`
 	DiskTotalBytes   int64   `json:"diskTotalBytes,omitempty"`
 	GPUs             []GPU   `json:"gpus,omitempty"`
-	GPUDriverVersion string  `json:"gpuDriverVersion,omitempty"`
-	CUDAVersion      string  `json:"cudaVersion,omitempty"`
-	CollectedAt      int64   `json:"collectedAt,omitempty"`
+	// GPUDriverVersion and CUDAVersion are retained for NVIDIA snapshot compatibility.
+	// New collectors attach driver/runtime metadata to each GPU.
+	GPUDriverVersion string `json:"gpuDriverVersion,omitempty"`
+	CUDAVersion      string `json:"cudaVersion,omitempty"`
+	CollectedAt      int64  `json:"collectedAt,omitempty"`
 }
 
 const snapshotCommand = `sh <<'OPSKAT_STATUS'
@@ -156,16 +161,12 @@ func collectWithRunner(ctx context.Context, run statusCommandRunner) (*Snapshot,
 		return nil, err
 	}
 
-	gpuCtx, cancelGPU := context.WithTimeout(ctx, 2*time.Second)
+	gpuCtx, cancelGPU := context.WithTimeout(ctx, gpuOptionalBudget)
 	defer cancelGPU()
-	gpuResult, err := collectNVIDIA(gpuCtx, run)
-	if err != nil {
-		logger.Ctx(ctx).Debug("NVIDIA GPU status unavailable", zap.Error(err))
-	} else {
-		snapshot.GPUs = gpuResult.GPUs
-		snapshot.GPUDriverVersion = gpuResult.DriverVersion
-		snapshot.CUDAVersion = gpuResult.CUDAVersion
-	}
+	gpuResult := collectGPUStatus(gpuCtx, run)
+	snapshot.GPUs = gpuResult.GPUs
+	snapshot.GPUDriverVersion = gpuResult.GPUDriverVersion
+	snapshot.CUDAVersion = gpuResult.CUDAVersion
 
 	snapshot.CollectedAt = time.Now().UnixMilli()
 	return snapshot, nil

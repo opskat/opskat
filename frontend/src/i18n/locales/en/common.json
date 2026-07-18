@@ -1265,6 +1265,7 @@
       "gpuCountMany": "{{count}} GPUs",
       "driverVersion": "Driver",
       "cudaVersion": "CUDA",
+      "runtime": "Runtime",
       "gpuUtilization": "GPU utilization",
       "vramUsage": "VRAM usage",
       "temperature": "Temperature",

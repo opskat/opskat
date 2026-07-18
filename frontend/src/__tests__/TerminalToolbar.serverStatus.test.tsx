@@ -156,6 +156,52 @@ describe("TerminalToolbar server status", () => {
     expect(screen.getByTestId("server-status-gpu-list")).toHaveClass("max-h-[360px]", "overflow-y-auto");
   });
 
+  it("renders mixed vendors with stable device keys and per-device metadata", async () => {
+    vi.mocked(GetSSHServerStatus).mockResolvedValue({
+      ...snapshot,
+      gpus: [
+        {
+          ...nvidiaGPU,
+          id: "GPU-aaaa",
+          pciBusId: "0000:01:00.0",
+          driverVersion: "550.54",
+          runtime: "CUDA",
+          runtimeVersion: "12.4",
+        },
+        {
+          index: 0,
+          id: "amd-uuid",
+          pciBusId: "0000:41:00.0",
+          vendor: "AMD",
+          name: "AMD Instinct MI250X",
+          driverVersion: "6.8.5",
+          runtime: "ROCm",
+          runtimeVersion: "6.4.1",
+        },
+        {
+          index: 0,
+          id: "intel-uuid",
+          pciBusId: "0000:bd:00.0",
+          vendor: "Intel",
+          name: "Intel Data Center GPU Max 1550",
+          driverVersion: "1.3.30872",
+        },
+      ],
+    } as never);
+    render(<TerminalToolbar tabId="tab-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "terminal.serverStatus.trigger" }));
+
+    const nvidia = await screen.findByText("GPU 0 · NVIDIA RTX 4090");
+    const amd = screen.getByText("GPU 0 · AMD Instinct MI250X");
+    const intel = screen.getByText("GPU 0 · Intel Data Center GPU Max 1550");
+    expect(nvidia.closest("article")).toHaveAttribute("data-gpu-key", "NVIDIA:id:GPU-aaaa");
+    expect(amd.closest("article")).toHaveAttribute("data-gpu-key", "AMD:id:amd-uuid");
+    expect(intel.closest("article")).toHaveAttribute("data-gpu-key", "Intel:id:intel-uuid");
+    expect(screen.getByText("ROCm 6.4.1")).toBeInTheDocument();
+    expect(screen.getByText("1.3.30872")).toBeInTheDocument();
+    expect(screen.getByText("PCI 0000:bd:00.0")).toBeInTheDocument();
+  });
+
   it("toggling auto-refresh off pauses the session collector", async () => {
     render(<TerminalToolbar tabId="tab-1" />);
     fireEvent.click(screen.getByRole("button", { name: "terminal.serverStatus.trigger" }));

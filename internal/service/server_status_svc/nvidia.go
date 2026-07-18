@@ -23,7 +23,7 @@ if ! command -v nvidia-smi >/dev/null 2>&1; then
   exit 0
 fi
 
-GPU_OUTPUT=$(LC_ALL=C nvidia-smi --query-gpu=index,uuid,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit,fan.speed,driver_version --format=csv,noheader,nounits 2>/dev/null) || exit 1
+GPU_OUTPUT=$(LC_ALL=C nvidia-smi --query-gpu=index,uuid,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit,fan.speed,driver_version,pci.bus_id --format=csv,noheader,nounits 2>/dev/null) || exit 1
 printf '__OPSKAT_NVIDIA_GPU_BEGIN__\n'
 if [ -n "$GPU_OUTPUT" ]; then
   printf '%s\n' "$GPU_OUTPUT"
@@ -56,6 +56,26 @@ type nvidiaGPURecord struct {
 	gpu    GPU
 	uuid   string
 	driver string
+}
+
+type nvidiaCollector struct{}
+
+func init() {
+	registerGPUCollector(nvidiaCollector{})
+}
+
+func (nvidiaCollector) Name() string  { return "nvidia-smi" }
+func (nvidiaCollector) Priority() int { return 100 }
+func (nvidiaCollector) Collect(ctx context.Context, run statusCommandRunner) (*gpuCollectorResult, error) {
+	result, err := collectNVIDIA(ctx, run)
+	if err != nil {
+		return nil, err
+	}
+	return &gpuCollectorResult{
+		GPUs:             result.GPUs,
+		GPUDriverVersion: result.DriverVersion,
+		CUDAVersion:      result.CUDAVersion,
+	}, nil
 }
 
 func collectNVIDIA(ctx context.Context, run statusCommandRunner) (*nvidiaResult, error) {
@@ -159,6 +179,10 @@ func parseNVIDIAOutput(raw string) (*nvidiaResult, error) {
 			count := processCounts[record.uuid]
 			record.gpu.ComputeProcessCount = &count
 		}
+		if cudaVersion != "" {
+			record.gpu.Runtime = "CUDA"
+			record.gpu.RuntimeVersion = cudaVersion
+		}
 		result.GPUs = append(result.GPUs, record.gpu)
 	}
 	return result, nil
@@ -169,8 +193,8 @@ func parseNVIDIAGPURecord(line string) (nvidiaGPURecord, error) {
 	if err != nil {
 		return nvidiaGPURecord{}, err
 	}
-	if len(fields) != 11 {
-		return nvidiaGPURecord{}, fmt.Errorf("got %d fields, want 11", len(fields))
+	if len(fields) != 11 && len(fields) != 12 {
+		return nvidiaGPURecord{}, fmt.Errorf("got %d fields, want 11 or 12", len(fields))
 	}
 
 	index, err := strconv.Atoi(fields[0])
@@ -206,11 +230,13 @@ func parseNVIDIAGPURecord(line string) (nvidiaGPURecord, error) {
 		return nvidiaGPURecord{}, fmt.Errorf("parse fan utilization %q: %w", fields[9], err)
 	}
 
-	return nvidiaGPURecord{
+	record := nvidiaGPURecord{
 		gpu: GPU{
 			Index:              index,
+			DeviceID:           optionalString(fields[1]),
 			Vendor:             "NVIDIA",
 			Name:               fields[2],
+			DriverVersion:      optionalString(fields[10]),
 			UtilizationPercent: utilization,
 			MemoryUsedBytes:    memoryUsed,
 			MemoryTotalBytes:   memoryTotal,
@@ -221,7 +247,11 @@ func parseNVIDIAGPURecord(line string) (nvidiaGPURecord, error) {
 		},
 		uuid:   fields[1],
 		driver: optionalString(fields[10]),
-	}, nil
+	}
+	if len(fields) == 12 {
+		record.gpu.PCIBusID = optionalString(fields[11])
+	}
+	return record, nil
 }
 
 func parseNVIDIAProcessCounts(lines []string) (map[string]int, error) {
