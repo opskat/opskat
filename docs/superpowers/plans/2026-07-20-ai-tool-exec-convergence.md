@@ -628,14 +628,15 @@ import 块加 `"github.com/opskat/opskat/internal/ai/cmdline"`（`strings` / `st
 			return nil, errors.New("put requires key and value")
 		}
 		req.Key = positional[0]
-		// Value 用 cmdline.Words 切过词，引号内的空格已保留在单个 token 里；
-		// 这里不再 Join，否则 `put /k 'a b'` 与 `put /k a b` 会还原成同一个值。
-		if len(positional) > 2 {
-			return nil, errors.New("put takes exactly one value; quote it if it contains spaces")
-		}
-		req.Value = positional[1]
+		// 保留 Join：`put /msg hello world` 仍还原为 "hello world"，
+		// 既有的 TestParseCommand_PutMultiWordValue（command_test.go:58）锁着这条契约。
+		// round-trip 不受影响——FormatCommand 对含空格的值总是加引号，
+		// 引号内的空格经 cmdline.Words 已收进单个 token，Join 一个元素是恒等。
+		req.Value = strings.Join(positional[1:], " ")
 	}
 ```
+
+**不要**在这里加"多个 positional 就报错"的校验：它会打破上述既有测试，而 round-trip 并不需要它。
 
 - [ ] **Step 5: 让 helper.FormatEtcdCommand 委托给它**
 
@@ -1771,11 +1772,10 @@ func ExecKafkaOnAsset(ctx context.Context, asset *asset_entity.Asset, command, _
 // 数值一律以 string 进 map：aictx.ArgInt / ArgInt64 有 string 分支，能正确解析；
 // 在这里提前转 int 反而会绕开它们的既有校验。
 //
-// 注意：Handle* 自己**不做**权限检查（检查在 handleExec 里，见
-// internal/ai/tool/tool_handlers_unified.go），但今天的 Handle* 内部**有**一次
-// checkKafkaToolPermission 调用。Task 10 删除 7 个工具时同步把那次调用摘掉——
-// 在那之前，走 exec 的 kafka 命令会被检查两次（第二次必然命中第一次批下的 grant，
-// 行为正确但会多一次 audit 记录）。这是有意的过渡期代价，Task 10 收尾。
+// 前置条件：本任务 Step 3b 已摘掉 7 个 HandleKafka* 内部的 checkKafkaToolPermission
+// 调用。权限检查由 handleExec 统一做（internal/ai/tool/tool_handlers_unified.go），
+// 留着内部那次会让走 exec 的 kafka 命令被检查两次——用户若选的是一次性"允许"
+// 而非"全部允许"，第二次检查会为同一条命令**再弹一次审批对话框**。
 func kafkaFlagsToArgs(c *KafkaCommand, assetID int64) map[string]any {
 	args := make(map[string]any, len(c.Flags)+3)
 	args["asset_id"] = assetID
@@ -1822,17 +1822,25 @@ func CanonicalizeKafkaCommand(_ *asset_entity.Asset, command string) (string, er
 
 import 块补 `"strings"`。
 
+- [ ] **Step 3b: 摘掉 HandleKafka* 内部的权限检查**
+
+修改 `internal/ai/helper/kafka_helper.go`：删除 7 处 `checkKafkaToolPermission` 调用（`:56` `:104` `:189` `:240` `:281` `:348` `:435`），随后 `checkKafkaToolPermission`（`:478-488`）成为死代码，一并删除。
+
+**这一步不能推迟到 Task 10。** `ExecKafkaOnAsset` 从本任务起就走 `HandleKafka*`，而权限检查已由 `handleExec` 统一做（`internal/ai/tool/tool_handlers_unified.go`）。留着内部那次 = 同一条命令被检查两次；用户若选的是一次性"允许"而非"全部允许"，第二次检查**会再弹一次审批对话框**，并多写一条审计行。这与 Plan A spec §5「被批准的 == 被执行的」是同一类不变式。
+
+删除后，7 个 `kafka_*` 旧工具在 Task 10 删除之前会**暂时无权限检查**（它们直连 `HandleKafka*`）。这是可接受的：旧工具在本分支上只存活到 Task 10，且 Task 8 起模型面已改用 `exec`（prompt 在 Task 11 才更新，但 `exec` 的描述已覆盖 kafka）。若评审认为这个窗口不可接受，替代方案是把 Task 10 的工具删除提前到本任务——代价是 Task 8 的端到端测试要跟着重排。
+
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `go test ./internal/ai/helper/ -run Kafka -v`
-Expected: PASS。
+Run: `go test ./internal/ai/helper/ ./internal/ai/ -run Kafka -v`
+Expected: PASS。`internal/ai/kafka_helper_test.go` 若有测试断言 `HandleKafka*` 在无权限时返回拒绝消息，它们会失败——那些断言随检查一起删除，并在提交信息里点名。
 
 - [ ] **Step 5: lint + 提交**
 
 ```bash
 go test ./internal/... && golangci-lint run
-git add internal/ai/helper/kafka_exec.go internal/ai/helper/kafka_exec_test.go
-git commit -m "✨ kafka 执行器：DSL 分派到既有 Handle*"
+git add internal/ai/helper/
+git commit -m "✨ kafka 执行器：DSL 分派到既有 Handle*，权限检查上移至 handleExec"
 ```
 
 ---
@@ -2248,7 +2256,7 @@ Expected: FAIL — 旧工具仍注册着，实际集合大于 expected。（`Sho
 - `internal/ai/tool/tool_handlers_exec.go`：删除 `handleRunCommand`（`:71-91`）。
 - `internal/ai/tool/tool_handler_k8s.go`：删除 `handleExecK8s`（`:16-`）。文件若只剩它则整个删除。
 - `internal/ai/helper/`：删除 `HandleExecSQL`（`database_helper.go:65`）、`HandleExecRedis`（`redis_helper.go:50`）、`HandleExecMongo`（`mongodb_helper.go:49`）、`HandleExecEtcd`（`etcd_helper.go:22`）、`HandleRunSerialCommand`（`serial_helper.go:29`）。对应的 `Exec*OnAsset` **保留**——它们才是现在的唯一执行路径。
-- `internal/ai/helper/kafka_helper.go`：7 个 `HandleKafka*` **保留**（`ExecKafkaOnAsset` 在调用它们），但摘掉每个函数里的 `checkKafkaToolPermission` 调用（`:52` `:100` `:185` `:236` `:277` `:344` `:431` 附近）——权限检查已由 `handleExec` 统一做，留着会重复检查并多写一条审计。随后 `checkKafkaToolPermission`（`:478-488`）成为死代码，一并删除。
+- `internal/ai/helper/kafka_helper.go`：7 个 `HandleKafka*` **保留**（`ExecKafkaOnAsset` 在调用它们）。它们内部的 `checkKafkaToolPermission` 调用**已在 Task 7 Step 3b 删除**，本任务无需再动——若发现它们还在，说明 Task 7 没做完，先回去补。
 - `internal/ai/audit/extractor_default.go`：删除 `run_command` `:11`、`exec_sql` `:18`、`exec_redis` `:19`、`exec_mongo` `:20`、`exec_etcd` `:21-36`（含手抄的 etcd format 副本）。**保留** Task 9 新增的 `exec` 注册。
 - `internal/ai/tool/audit_extractor_k8s.go`、`audit_extractor_kafka.go`：整个删除。
 - `internal/ai/audit/audit.go:3-4` 的 doc 注释：删掉列举旧工具名的那句。
