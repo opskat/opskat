@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -69,14 +70,30 @@ func HandleExecRedis(ctx context.Context, args map[string]any) (string, error) {
 	if !asset.IsRedis() {
 		return "", fmt.Errorf("asset is not Redis type")
 	}
+
+	// 覆盖默认数据库
+	scope := ""
+	if _, ok := args["db"]; ok {
+		scope = strconv.FormatInt(aictx.ArgInt64(args, "db"), 10)
+	}
+
+	return ExecRedisOnAsset(ctx, asset, command, scope)
+}
+
+// ExecRedisOnAsset 是不含权限检查的纯执行入口，供统一 exec 使用。
+// HandleExecRedis 保留“检查 + 调用本函数”的形态，两条路径共用同一执行体。
+// scope 非空时按 redis db 序号（0-15）覆盖资产默认库。
+func ExecRedisOnAsset(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
 	cfg, err := asset.GetRedisConfig()
 	if err != nil {
 		return "", fmt.Errorf("failed to get Redis config: %w", err)
 	}
-
-	// 覆盖默认数据库
-	if _, ok := args["db"]; ok {
-		cfg.Database = int(aictx.ArgInt64(args, "db"))
+	if scope != "" {
+		dbIndex, err := strconv.Atoi(scope)
+		if err != nil {
+			return "", fmt.Errorf("scope must be a redis db number (0-15), got %q", scope)
+		}
+		cfg.Database = dbIndex
 	}
 
 	client, closer, err := getOrDialRedis(ctx, asset, cfg)
