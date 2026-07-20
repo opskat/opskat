@@ -830,7 +830,8 @@ package tool
 import "sync"
 
 // DocGate 记录"某会话内，某资产类型的用法文档已经到过模型面前"。
-// 满足条件有两条：模型显式调用过 help，或该类型文档已被注入本次 Send 的 system prompt。
+// 满足条件只有一条：模型显式调用过 help。（原计划的第二条"文档已注入本次 Send 的
+// system prompt"在实施期被移除，见 Task 7 的修正说明。）
 // 生命周期与会话一致，与 LocalToolGate 的 allow-list 相同。
 type DocGate struct {
 	mu   sync.RWMutex
@@ -1226,12 +1227,17 @@ git commit -m "✨ 新增统一 exec 与 help 工具"
 
 ---
 
-### Task 7: 门禁装配与自动注入（门禁的第二个满足条件）
+### Task 7: 门禁装配与技能清单注入
 
 Task 4 只建了 `DocGate` 的状态机，**没有人构造它**；Task 6 的 handler 引用的 `docGate` 还悬空。
-同时 spec §4.2 规定门禁有**两个**满足条件，Task 6 只实现了第一个（显式调 `help`）。
-本任务补齐第二个：某类型文档已注入本次 Send 的 system prompt 时，同样视为已知用法——
-否则打开了 redis tab 的用户仍会被要求先调 `help`，白白多一次往返。
+本任务负责装配它，并在 system prompt 中注入内置类型的一行技能清单。
+
+> **实施期修正（2026-07-20）**：本任务原先的标题是"门禁的第二个满足条件"，内容是让
+> "某类型文档已注入本次 Send 的 system prompt"同样视为已知用法。该第二条件在收尾评审中
+> 被**移除**——`help` 成为门禁的唯一满足条件，理由见 spec §4.2 的同名修正说明（注入的只是
+> 一行描述而非命令语法；且标记永久有效而注入每次 Send 重建，会造成"开过一次 Tab 就永久
+> 免检"）。因此本任务实际落地的范围是：装配 `DocGate` + 注入**纯发现用**的类型清单，
+> `chat.go` **不**调用 `MarkDocumented`，清单也改为无条件全量列出、不再按 Tab 过滤。
 
 **Files:**
 - Modify: `internal/ai/runner/prompt_builder.go`（新增内置类型技能清单段）

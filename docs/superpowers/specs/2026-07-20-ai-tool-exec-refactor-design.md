@@ -194,10 +194,22 @@ exec(asset: string, command: string, scope?: string)
 
 `help(asset)` 返回该资产类型的用法文档。
 
-门禁：当 **(1)** 模型已对该类型调用过 `help`，**或 (2)** 该类型的文档已在本次 Send 注入
-system prompt 时，`(conversationID, assetType)` 标记为"已知用法"。
+门禁：当模型已对该类型调用过 `help` 时，`(conversationID, assetType)` 标记为"已知用法"。
 对未标记类型调用 `exec` 返回**引导性工具结果，而非 Go error**——模型据此自我纠正，
 不会中断整轮。状态按会话保存在内存中，生命周期与 `LocalToolGate` 的 allow-list 一致。
+
+> **实施期修正（2026-07-20，分支 `feature/ai-tool-exec-foundation`）**：本节原先规定门禁有
+> **两个**满足条件，第二个是"该类型的文档已在本次 Send 注入 system prompt"。该条件在实施
+> 收尾评审中被移除，`help` 成为**唯一**满足条件，原因有二：
+>
+> 1. prompt 里注入的只是 `skills.Description()` 的**一行描述**，不是命令语法正文。把它当成
+>    "模型已看过文档"，等于让 `exec` 在模型从未见过语法的前提下执行——门禁想防的正是这个。
+> 2. 标记在整个会话内**永久**有效，而 prompt 注入是**每次 Send 重建**的。第 1 次 Send 恰好
+>    开着某个 Tab，就会让该类型在此后整个会话里永远不过门禁，哪怕 Tab 早已关闭。
+>
+> prompt 中的按类型清单**保留**，但仅作**发现**入口（让模型知道 `help` 存在、`exec` 覆盖了
+> 哪些类型），且改为无条件全量列出、不再随 Tab 变化。见 `internal/ai/tool/exec_gate.go`
+> 与 `internal/app/ai/chat.go` 的 `allBuiltinAssetTypeSkills`。
 
 ### 4.3 `put_asset` / `put_group`
 

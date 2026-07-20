@@ -8,7 +8,12 @@ import (
 
 // TabInfo 当前打开的 Tab 信息
 type TabInfo struct {
-	Type      string `json:"type"` // "ssh" | "database" | "redis" | "sftp"
+	// Type 是该 Tab 所指资产的**真实资产类型**（asset_entity.AssetType* 的取值，
+	// 如 ssh / serial / database / redis / k8s / mongodb / oss ...），不是 Tab 的
+	// 界面种类：前端传的是 ref.assetType（frontend/src/stores/aiStore.ts 收集
+	// openTabs 处），会话绑定资产时传 linkedAssetType。所以这里不是一个封闭的短枚举，
+	// 新增资产类型会直接出现在这里，不需要改本文件。
+	Type      string `json:"type"`
 	AssetID   int64  `json:"assetId"`
 	AssetName string `json:"assetName"`
 }
@@ -37,6 +42,13 @@ func (b *PromptBuilder) SetExtensionSkillMDs(mds map[string]string) {
 // one-line skills.Description() — never the full SKILL.md body. The full body is loaded
 // on demand via the help(asset) tool; inlining it here would defeat the whole point of
 // having a separate help tool (token savings from collapsing 14 tools into exec/help).
+//
+// This listing is purely a DISCOVERY aid: it tells the model that help exists and which
+// types it covers. It does NOT satisfy the exec doc gate — only an actual help(asset)
+// call does. A one-line description is not command syntax, so treating its presence as
+// "the model has seen the docs" would let exec run against a type whose syntax never
+// reached the model. Callers must therefore pass every built-in type unconditionally
+// (it's one line each), not just the types with an open tab.
 func (b *PromptBuilder) SetAssetTypeSkills(descriptions map[string]string) {
 	b.assetTypeSkills = descriptions
 }
@@ -81,10 +93,9 @@ func (b *PromptBuilder) Build() string {
 	// 8. 用户拒绝操作引导
 	parts = append(parts, b.buildUserDenialGuidance())
 
-	// 9. 内置资产类型技能清单（只列一行描述，正文由 help 按需加载）
-	if assetTypeSkills := b.buildAssetTypeSkills(); assetTypeSkills != "" {
-		parts = append(parts, assetTypeSkills)
-	}
+	// 9. exec/help 用法说明 + 内置资产类型技能清单（只列一行描述，正文由 help 按需加载）。
+	// 无条件渲染：exec/help 是资产操作的主路径，不能只在"恰好开着某个 Tab"时才告诉模型。
+	parts = append(parts, b.buildAssetTypeSkills())
 
 	// 10. Extension tools guide
 	if len(b.extensionSkillMDs) > 0 {
@@ -145,15 +156,15 @@ Use asset-id for tool calls. When target="database", scope SQL work to the datab
 func (b *PromptBuilder) buildKnowledgeGuidance() string {
 	return `Discover before acting: call list_assets / get_asset first, then operate. The asset Description often contains prior findings (OS, services, DB version) — read it to avoid redundant exploration. When you learn new non-secret facts about an asset during work, append them to the asset Description via update_asset.
 
-Pick the dedicated tool for each asset type: exec_sql for databases, exec_redis for Redis, exec_mongo for MongoDB, exec_k8s for kubectl (do not invoke kubectl through run_command), kafka_* for Kafka. Use run_command only for plain SSH shell commands.
+Running commands on an asset: prefer exec(asset, command), preceded by help(asset) the first time you touch a given asset type. exec dispatches on the asset's real type, so it is the primary path for SSH, serial, database, Redis, and K8s assets. The older per-type tools (run_command, exec_sql, exec_redis, exec_k8s) still work and behave identically — they are kept for compatibility, so prefer exec for new work. Some capabilities have no exec equivalent yet and still require their own tool: exec_mongo for MongoDB, exec_etcd for etcd, kafka_* for Kafka, upload_file / download_file for SFTP transfer, and batch_command for the same operation across several assets.
 
-Local vs remote — VERY IMPORTANT: every tool whose name starts with ` + "`local_`" + ` (local_bash / local_write / local_edit / local_read / local_grep / local_find / local_ls) operates ONLY on the USER'S OWN MACHINE — they do NOT touch any remote asset. When the scenario targets a specific server / database / Redis / Kafka / K8s asset (an SSH / Database / Redis / SFTP tab is open for it, the user names the asset, or the request is clearly about that asset), you MUST use that asset's dedicated remote tool: run_command for SSH (use ` + "`cat`/`ls`/`grep`" + ` inside it for file inspection), exec_sql / exec_redis / exec_mongo / exec_k8s / kafka_*, and upload_file / download_file for SFTP transfer. Never fall back to a local_* tool even when the command looks identical — running ` + "`local_ls /etc/nginx`" + ` lists YOUR machine's filesystem, not the server the user asked about. local_* tools are only correct when the user explicitly asks about their local machine, or when there is no remote asset in scope.
+Local vs remote — VERY IMPORTANT: every tool whose name starts with ` + "`local_`" + ` (local_bash / local_write / local_edit / local_read / local_grep / local_find / local_ls) operates ONLY on the USER'S OWN MACHINE — they do NOT touch any remote asset. When the scenario targets a specific server / database / Redis / Kafka / K8s asset (an SSH / Database / Redis / SFTP tab is open for it, the user names the asset, or the request is clearly about that asset), you MUST reach it through a remote tool: exec(asset, command) for SSH / serial / database / Redis / K8s assets (use ` + "`cat`/`ls`/`grep`" + ` inside an SSH exec for file inspection), exec_mongo / exec_etcd / kafka_* for the types exec does not cover, and upload_file / download_file for SFTP transfer. Never fall back to a local_* tool even when the command looks identical — running ` + "`local_ls /etc/nginx`" + ` lists YOUR machine's filesystem, not the server the user asked about. local_* tools are only correct when the user explicitly asks about their local machine, or when there is no remote asset in scope.
 
 Within the local_* family: prefer local_grep / local_find / local_ls / local_read over local_bash for file exploration on the user's machine (they are faster, .gitignore-aware, and don't require shell escaping). Use local_bash only when you need shell features (pipes, env vars, scripts).`
 }
 
 func (b *PromptBuilder) buildMultiAssetGuidance() string {
-	return `When the same operation targets 2 or more assets, prefer batch_command over a loop of run_command / exec_sql / exec_redis — it parallelizes execution and batches approval prompts. When you expect to issue several command patterns that will trigger approval, call request_permission upfront so the user grants them in a single review instead of one popup per call.`
+	return `When the same operation targets 2 or more assets, prefer batch_command over a loop of exec calls — it parallelizes execution and batches approval prompts. When you expect to issue several command patterns that will trigger approval, call request_permission upfront so the user grants them in a single review instead of one popup per call.`
 }
 
 func (b *PromptBuilder) buildSecretsGuidance() string {
@@ -164,23 +175,29 @@ func (b *PromptBuilder) buildErrorRecoveryGuidance() string {
 	return `When a tool execution fails, analyze the error and try a different approach. If repeated attempts fail, explain the issue to the user and suggest alternatives. Do not give up after a single failure.`
 }
 
-// buildAssetTypeSkills 渲染内置资产类型的一行技能清单（只列描述，不内联 SKILL.md 正文）。
+// buildAssetTypeSkills 渲染 exec/help 的用法说明，以及内置资产类型的一行技能清单
+// （只列描述，不内联 SKILL.md 正文）。
+//
+// 说明段无条件渲染，清单段只在调用方给了描述时追加：exec/help 是资产操作的主路径，
+// 若只在"有匹配的 Tab 打开"时才出现，模型在没开 Tab 的会话里就看不到这条路径，
+// 只能退回按类型的旧工具——那正是本分支要收敛掉的用法。
 func (b *PromptBuilder) buildAssetTypeSkills() string {
-	if len(b.assetTypeSkills) == 0 {
-		return ""
-	}
-	types := make([]string, 0, len(b.assetTypeSkills))
-	for t := range b.assetTypeSkills {
-		types = append(types, t)
-	}
-	sort.Strings(types)
-
 	lines := []string{
-		"Asset command syntax is documented per asset type. Call help(<asset>) to load the syntax for an asset before running exec against it.",
+		"Operating on an asset — exec / help: exec(asset, command) runs a command against an asset and dispatches on the asset's REAL type, read from the asset record. You do not need to know the type in advance and you cannot mis-route: passing a Redis asset to exec runs it as Redis. Pass the asset's id or name as `asset`; use `scope` for the connection-level target that is not part of the command itself (database name for database assets, db index for Redis).",
 		"",
+		"Command syntax differs per asset type and is documented per type. The FIRST time you use exec against a given asset type in a conversation, call help(asset) to load that type's syntax — exec will tell you to if you skip it, and that round trip is wasted. Once you have called help for a type, it stays loaded for the rest of the conversation.",
 	}
-	for _, t := range types {
-		lines = append(lines, fmt.Sprintf("- %s: %s", t, b.assetTypeSkills[t]))
+	if len(b.assetTypeSkills) > 0 {
+		types := make([]string, 0, len(b.assetTypeSkills))
+		for t := range b.assetTypeSkills {
+			types = append(types, t)
+		}
+		sort.Strings(types)
+
+		lines = append(lines, "", "Asset types exec currently covers:", "")
+		for _, t := range types {
+			lines = append(lines, fmt.Sprintf("- %s: %s", t, b.assetTypeSkills[t]))
+		}
 	}
 	return strings.Join(lines, "\n")
 }

@@ -60,3 +60,34 @@ func TestBuild_ListsBuiltinAssetTypeSkills(t *testing.T) {
 		t.Fatal("prompt must not inline the full SKILL.md body")
 	}
 }
+
+// TestBuild_ExplainsExecAndHelpUnconditionally locks the requirement that exec/help is
+// documented as the primary path for asset operations even when no per-type listing was
+// supplied. Gating this section on "a matching tab is open" (which is what feeding the
+// listing used to depend on) left the model with only the legacy per-type tools in every
+// session that happened to have no relevant tab.
+func TestBuild_ExplainsExecAndHelpUnconditionally(t *testing.T) {
+	b := NewPromptBuilder("en", AIContext{})
+	got := b.Build()
+	for _, want := range []string{"exec(asset, command)", "help(asset)"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prompt should explain %q with no skills set, got:\n%s", want, got)
+		}
+	}
+}
+
+// TestBuild_PrefersExecOverPerTypeTools locks the FIX-4 decision: the old guidance told
+// the model to "pick the dedicated tool for each asset type" and escalated that to a
+// "you MUST use that asset's dedicated remote tool", which contradicts a branch whose
+// whole point is that exec dispatches on the asset's real type.
+func TestBuild_PrefersExecOverPerTypeTools(t *testing.T) {
+	got := NewPromptBuilder("en", AIContext{}).Build()
+	if strings.Contains(got, "Pick the dedicated tool for each asset type") {
+		t.Fatalf("prompt still routes per asset type to a dedicated tool, got:\n%s", got)
+	}
+	// The local-vs-remote distinction must survive the rewrite — it is orthogonal to
+	// which remote tool is preferred, and still correct.
+	if !strings.Contains(got, "operates ONLY on the USER'S OWN MACHINE") {
+		t.Fatalf("prompt must keep the local_* vs remote warning, got:\n%s", got)
+	}
+}

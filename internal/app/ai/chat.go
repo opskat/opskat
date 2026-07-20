@@ -48,19 +48,22 @@ func maskAPIKey(key string) string {
 	return key[:4] + "****" + key[len(key)-4:]
 }
 
-// builtinAssetTypeSkillsForTabs 收集 openTabs 中每个内置资产类型（ssh/serial/database/
-// redis/k8s）去重后的一行技能描述（skills.Description），用于 PromptBuilder 的技能清单，
-// 同时也是 DocGate 第二个满足条件的依据——同一批类型会在调用方被标记为"已文档化"。
-// 未内置文档的类型（如 extension 承载的 mongodb）被忽略，走的是另一条 extension SKILL.md
-// 注入路径，不属于这里。
-func builtinAssetTypeSkillsForTabs(tabs []runner.TabInfo) map[string]string {
+// allBuiltinAssetTypeSkills 返回全部已内嵌用法文档的资产类型（skills.Types()，目前是
+// ssh/serial/database/redis/k8s）的一行技能描述（skills.Description），用于 PromptBuilder
+// 的技能清单。
+//
+// 无条件全量返回，不看 openTabs：这份清单是**发现**用的，让模型知道 help 存在、以及
+// exec 覆盖了哪些类型。按 Tab 过滤会让没开对应 Tab 的会话完全看不到这条路径。一行一
+// 类型，成本可以忽略。
+//
+// 它**不**满足 exec 的门禁——门禁只认模型显式调用过 help（见 tool.DocGate 的注释）。
+// 未内嵌文档的类型（如 extension 承载的 mongodb）不在这里，走的是另一条 extension
+// SKILL.md 注入路径。
+func allBuiltinAssetTypeSkills() map[string]string {
 	out := make(map[string]string)
-	for _, tab := range tabs {
-		if _, ok := out[tab.Type]; ok {
-			continue
-		}
-		if desc, ok := skills.Description(tab.Type); ok {
-			out[tab.Type] = desc
+	for _, assetType := range skills.Types() {
+		if desc, ok := skills.Description(assetType); ok {
+			out[assetType] = desc
 		}
 	}
 	return out
@@ -382,17 +385,12 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 		}
 	}
 
-	// Inject the compact per-type skill listing for built-in asset types, and satisfy the
-	// exec doc gate's second condition: a type whose description is already in this Send's
-	// prompt doesn't need a help() round trip before exec — only the first, explicit-help
-	// condition is handled inside handleHelp (internal/ai/tool/tool_handlers_unified.go).
-	builtinSkills := builtinAssetTypeSkillsForTabs(aiCtx.OpenTabs)
-	if len(builtinSkills) > 0 {
-		builder.SetAssetTypeSkills(builtinSkills)
-	}
-	for assetType := range builtinSkills {
-		a.docGate.MarkDocumented(convID, assetType)
-	}
+	// Inject the compact per-type skill listing for built-in asset types. This is
+	// discovery only — it tells the model that help(asset) exists and which types exec
+	// covers. It deliberately does NOT mark anything documented on the doc gate: the only
+	// thing that satisfies the gate is an explicit help(asset) call, handled inside
+	// handleHelp (internal/ai/tool/tool_handlers_unified.go).
+	builder.SetAssetTypeSkills(allBuiltinAssetTypeSkills())
 
 	systemPrompt := builder.Build()
 

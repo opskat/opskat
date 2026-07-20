@@ -6,7 +6,16 @@ import (
 )
 
 // DocGate 记录"某会话内，某资产类型的用法文档已经到过模型面前"。
-// 满足条件有两条：模型显式调用过 help，或该类型文档已被注入本次 Send 的 system prompt。
+//
+// 满足条件只有一条：模型显式调用过 help(asset)。曾经还有第二条——该类型已出现在本次
+// Send 注入的 system prompt 里——已移除，原因有二：prompt 里注入的只是
+// skills.Description() 的一行描述，不是命令语法正文，把它当成"看过文档"等于让 exec
+// 在模型从没见过语法的情况下执行；而且标记是整个会话永久有效的，注入却是每次 Send
+// 重建的，第 1 次 Send 恰好开着某个 Tab 就会让该类型此后永远不过门禁。
+//
+// prompt 里的类型清单保留，但只作为**发现**入口（让模型知道 help 存在、覆盖了哪些
+// 类型），不再满足门禁——见 internal/app/ai/chat.go 的 allBuiltinAssetTypeSkills。
+//
 // 生命周期与会话一致，与 LocalToolGate 的 allow-list 相同。
 type DocGate struct {
 	mu   sync.RWMutex
