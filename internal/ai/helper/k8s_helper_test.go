@@ -1,4 +1,4 @@
-package tool
+package helper
 
 import (
 	"context"
@@ -14,9 +14,9 @@ import (
 )
 
 func TestBuildK8sCommandPlan(t *testing.T) {
-	Convey("buildK8sCommandPlan", t, func() {
+	Convey("BuildK8sCommandPlan", t, func() {
 		Convey("injects default context and namespace", func() {
-			plan, err := buildK8sCommandPlan("get pods", &asset_entity.K8sConfig{
+			plan, err := BuildK8sCommandPlan("get pods", &asset_entity.K8sConfig{
 				Context:   "prod",
 				Namespace: "app",
 			})
@@ -25,7 +25,7 @@ func TestBuildK8sCommandPlan(t *testing.T) {
 		})
 
 		Convey("keeps explicit namespace", func() {
-			plan, err := buildK8sCommandPlan("kubectl get pods -n kube-system", &asset_entity.K8sConfig{
+			plan, err := BuildK8sCommandPlan("kubectl get pods -n kube-system", &asset_entity.K8sConfig{
 				Namespace: "app",
 			})
 			So(err, ShouldBeNil)
@@ -33,12 +33,12 @@ func TestBuildK8sCommandPlan(t *testing.T) {
 		})
 
 		Convey("rejects shell composition", func() {
-			_, err := buildK8sCommandPlan("kubectl get pods && kubectl delete pod api-0", nil)
+			_, err := BuildK8sCommandPlan("kubectl get pods && kubectl delete pod api-0", nil)
 			So(err, ShouldNotBeNil)
 		})
 
 		Convey("rejects explicit kubeconfig override", func() {
-			_, err := buildK8sCommandPlan("kubectl --kubeconfig /tmp/demo get pods", nil)
+			_, err := BuildK8sCommandPlan("kubectl --kubeconfig /tmp/demo get pods", nil)
 			So(err, ShouldNotBeNil)
 		})
 	})
@@ -63,7 +63,7 @@ func TestExecuteK8sCommandLocalFindsHomebrewKubectlWhenPathIsMinimal(t *testing.
 		t.Fatalf("test PATH unexpectedly contains kubectl dir %s", kubectlDir)
 	}
 
-	out, err := executeK8sCommandLocal(context.Background(), "apiVersion: v1\nkind: Config\n", []string{"version", "--client=true", "--output=yaml"})
+	out, err := ExecuteK8sCommandLocal(context.Background(), "apiVersion: v1\nkind: Config\n", []string{"version", "--client=true", "--output=yaml"})
 
 	if err != nil {
 		t.Fatalf("execute k8s command locally: %v", err)
