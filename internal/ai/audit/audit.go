@@ -27,6 +27,26 @@ type ToolCallInfo struct {
 	Result   string
 	Error    error
 	Decision *aictx.CheckResult // 可选，权限检查结果
+
+	// AssetID / AssetName 允许调用方预先解析好资产归属，优先于下面
+	// args["asset_id"]/args["id"] 的默认解析。exec/help 等新工具的资产标识是
+	// args["asset"]（数字 id 或名称字符串），aictx.ArgInt64 解析不了，必须走
+	// assetref.Resolve；而且要在工具执行前解析完成——asset_repo 按
+	// status=Active 过滤，执行后再查（如未来的 delete_asset）会因为资产已经
+	// 被改状态而查不到，名称就丢了。package audit 不能直接依赖
+	// assetref/permission（permission 已经依赖 audit 做权限检查审计，直接依赖
+	// 会成环），所以解析放在同时依赖两者、且能拿到 ctx 的 runner.auditMiddleware
+	// 里，在 c.Next() 之前完成，结果通过这两个字段传进来。零值表示调用方没有
+	// 预先解析，走原来的 args 解析路径（opsctl 与另外 14 个既有工具都是这条路径）。
+	AssetID   int64
+	AssetName string
+
+	// Command 允许调用方预先算好命令摘要，覆盖 ExtractCommandForAudit 的默认解析。
+	// 目前只有 auditMiddleware 给 exec 工具填：资产类型注册了 CanonicalizeFunc 时
+	// （目前只有 k8s，注入 --context/--namespace），这里存规范化后、真正过了权限
+	// 检查/审批弹窗展示的命令，而不是模型传入的原始字符串——否则 k8s 的审计会跟
+	// 审批弹窗对不上。空字符串表示未提供，回退到 ExtractCommandForAudit。
+	Command string
 }
 
 // AuditWriter 审计日志写入接口
@@ -49,19 +69,26 @@ func (w *DefaultAuditWriter) WriteToolCall(ctx context.Context, info ToolCallInf
 		logger.Default().Warn("unmarshal audit args", zap.Error(err))
 	}
 
-	assetID := aictx.ArgInt64(args, "asset_id")
+	assetID := info.AssetID
+	assetName := info.AssetName
 	if assetID == 0 {
-		assetID = aictx.ArgInt64(args, "id")
-	}
+		assetID = aictx.ArgInt64(args, "asset_id")
+		if assetID == 0 {
+			assetID = aictx.ArgInt64(args, "id")
+		}
 
-	assetName := ""
-	if assetID > 0 && asset_repo.Asset() != nil {
-		if a, err := asset_repo.Asset().Find(context.Background(), assetID); err == nil {
-			assetName = a.Name
+		assetName = ""
+		if assetID > 0 && asset_repo.Asset() != nil {
+			if a, err := asset_repo.Asset().Find(context.Background(), assetID); err == nil {
+				assetName = a.Name
+			}
 		}
 	}
 
-	command := ExtractCommandForAudit(info.ToolName, args)
+	command := info.Command
+	if command == "" {
+		command = ExtractCommandForAudit(info.ToolName, args)
+	}
 
 	success := 1
 	errMsg := ""

@@ -11,7 +11,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/assetref"
 	"github.com/opskat/opskat/internal/ai/audit"
+	"github.com/opskat/opskat/internal/ai/permission"
 )
 
 // auditMiddleware 是 cago tool dispatch 的"around"中间件，负责审计落库。
@@ -28,6 +30,8 @@ func auditMiddleware(c *agent.ToolContext) {
 	slot := &aictx.CheckResult{}
 	c.WithContext(aictx.WithCheckResultSlot(c.Context(), slot))
 
+	assetID, assetName, command := resolveAssetForAudit(c.Context(), c.Input)
+
 	c.Next()
 
 	argsJSON, err := json.Marshal(c.Input)
@@ -38,14 +42,63 @@ func auditMiddleware(c *agent.ToolContext) {
 	result, errVal := extractAuditResult(c.Output)
 
 	info := audit.ToolCallInfo{
-		ToolName: c.ToolName,
-		ArgsJSON: string(argsJSON),
-		Result:   result,
-		Error:    errVal,
-		Decision: slot,
+		ToolName:  c.ToolName,
+		ArgsJSON:  string(argsJSON),
+		Result:    result,
+		Error:     errVal,
+		Decision:  slot,
+		AssetID:   assetID,
+		AssetName: assetName,
+		Command:   command,
 	}
 	auditCtx := detachAuditContext(c.Context())
 	go auditWriter.WriteToolCall(auditCtx, info)
+}
+
+// resolveAssetForAudit resolves the tool's args["asset"] identifier (numeric id or
+// name string — the convention shared by exec/help, and any future single-asset
+// tool) before c.Next() runs the tool, so the audit row keeps correct attribution
+// even if the tool itself changes the asset's status: asset_repo filters by
+// status=Active, so resolving afterward would silently lose the name for e.g. a
+// future delete_asset tool — exactly the operation where the name matters most.
+//
+// It lives here rather than in package audit: audit can't import assetref/permission
+// without an import cycle (permission already imports audit, to audit its own policy
+// checks), but runner already depends on both, so it resolves once here and threads
+// the result through audit.ToolCallInfo instead.
+//
+// It also computes the command's canonical form for asset types that register a
+// permission.CanonicalizeFunc (currently only k8s, which injects
+// --context/--namespace) — matching what the permission check and approval dialog
+// already saw, so the audit row doesn't show the model's raw string while the
+// approval showed the effective one.
+//
+// Best-effort throughout: any resolution failure (missing/ambiguous/unknown asset,
+// no canonicalize hook, canonicalize error) just leaves the corresponding return
+// value at its zero value / the raw command, and the caller falls back to its
+// existing args["asset_id"]/ExtractCommandForAudit path — which also covers every
+// tool that doesn't use the asset-string convention at all (the pre-existing 14).
+func resolveAssetForAudit(ctx context.Context, input map[string]any) (assetID int64, assetName, command string) {
+	ref := aictx.ArgString(input, "asset")
+	if ref == "" {
+		return 0, "", ""
+	}
+	asset, err := assetref.Resolve(ctx, ref)
+	if err != nil {
+		return 0, "", ""
+	}
+
+	raw := aictx.ArgString(input, "command")
+	if raw == "" {
+		return asset.ID, asset.Name, ""
+	}
+	command = raw
+	if canonicalize, ok := permission.CanonicalizeFor(asset.Type); ok {
+		if canonical, cerr := canonicalize(asset, raw); cerr == nil {
+			command = canonical
+		}
+	}
+	return asset.ID, asset.Name, command
 }
 
 // extractAuditResult 把 cago 的 *ToolResultBlock 拆成审计需要的 (result, error)。
