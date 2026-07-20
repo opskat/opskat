@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/opskat/opskat/internal/ai/helper"
-	"golang.org/x/crypto/ssh"
 )
 
 // opsctl CLI 直接以 (ctx, args)→(string, error) 的形式调用 handler，
@@ -60,25 +59,19 @@ func AllToolDefs() []ToolDef {
 }
 
 // --- SSH 客户端缓存（cago 工具 handler 在同一次 Send 中复用连接）---
-
-type sshCacheKeyType struct{}
+//
+// 实现已移入 helper（execimpl 需要在不依赖 tool 包的前提下复用同一执行体），
+// 这里保留同名导出符号作为薄别名，避免影响 internal/app/ai 等外部调用方。
 
 // SSHClientCache 在同一次 AI Send 中复用 SSH 连接。
-type SSHClientCache = helper.ConnCache[*ssh.Client]
+type SSHClientCache = helper.SSHClientCache
 
 // NewSSHClientCache 创建 SSH 客户端缓存。
 func NewSSHClientCache() *SSHClientCache {
-	return helper.NewConnCache[*ssh.Client]("SSH")
+	return helper.NewSSHClientCache()
 }
 
 // WithSSHCache 将 SSH 缓存注入 context。
 func WithSSHCache(ctx context.Context, cache *SSHClientCache) context.Context {
-	return context.WithValue(ctx, sshCacheKeyType{}, cache)
-}
-
-func getSSHCache(ctx context.Context) *SSHClientCache {
-	if cache, ok := ctx.Value(sshCacheKeyType{}).(*SSHClientCache); ok {
-		return cache
-	}
-	return nil
+	return helper.WithSSHCache(ctx, cache)
 }

@@ -14,10 +14,9 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
-	"github.com/opskat/opskat/internal/service/credential_resolver"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 
 	"github.com/pkg/sftp"
-	"golang.org/x/crypto/ssh"
 )
 
 func handleRequestGrant(ctx context.Context, args map[string]any) (string, error) {
@@ -88,49 +87,7 @@ func handleRunCommand(ctx context.Context, args map[string]any) (string, error) 
 		}
 	}
 
-	// 如果 context 注入了 SSH 缓存，复用同一资产的连接
-	if cache := getSSHCache(ctx); cache != nil {
-		return runCommandWithCache(ctx, cache, assetID, command)
-	}
-
-	// 无缓存，创建一次性连接
-	return helper.ExecuteSSHCommand(ctx, assetID, command)
-}
-
-func runCommandWithCache(ctx context.Context, cache *SSHClientCache, assetID int64, command string) (string, error) {
-	dial := func() (*ssh.Client, io.Closer, error) {
-		client, extras, err := credential_resolver.Default().DialAssetSSH(ctx, assetID)
-		if err != nil {
-			return nil, nil, err
-		}
-		return client, helper.ClosersAsOne(extras), nil
-	}
-
-	client, _, err := cache.GetOrDial(assetID, dial)
-	if err != nil {
-		return "", err
-	}
-	output, err := helper.RunSSHCommand(ctx, client, command)
-	if err != nil {
-		// 当前会话已经取消时，helper.RunSSHCommand 已主动关闭 client 以打断阻塞；
-		// 这里只需把条目从缓存中摘除（避免下次复用半失效连接），不能再次 Close。
-		if ctx.Err() != nil {
-			cache.Forget(assetID)
-			return "", ctx.Err()
-		}
-		// 非取消错误优先按连接失效处理，删除缓存后只重试一次，避免重复执行
-		cache.Remove(assetID)
-		client, _, err = cache.GetOrDial(assetID, dial)
-		if err != nil {
-			return "", err
-		}
-		output, err = helper.RunSSHCommand(ctx, client, command)
-		if err != nil {
-			cache.Remove(assetID)
-			return "", err
-		}
-	}
-	return output, nil
+	return helper.ExecCommandOnAsset(ctx, &asset_entity.Asset{ID: assetID}, command, "")
 }
 
 func handleUploadFile(ctx context.Context, args map[string]any) (string, error) {
