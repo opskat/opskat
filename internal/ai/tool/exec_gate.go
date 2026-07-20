@@ -43,10 +43,10 @@ func (g *DocGate) Reset(convID int64) {
 
 // --- context 注入 ---
 //
-// 真正按会话分片的 DocGate 尚未接入 runner（下一个任务的工作）：在那之前，未注入
-// ctx 的调用方拿到的是 nil，等同于"放行"——DocGate 只是引导机制，不是安全边界，
-// 真正的边界是权限检查。下一个任务接入 runner 后，各会话会通过 WithDocGate 注入
-// 各自的实例。
+// 按会话分片的 DocGate 由 internal/app/ai 在每次 Send 时通过 WithDocGate 注入
+// （实例挂在 AI 结构体上，内部按 convID 分片，DeleteConversation 时 Reset）。
+// 未注入 ctx 的调用方拿到的是 nil，必须等同于"放行"——DocGate 只是引导机制，
+// 不是安全边界，真正的边界是权限检查。
 //
 // 这里刻意不提供进程级默认实例回退：曾经有过一个，但它被进程内所有调用方共享，
 // 会话之间互相"学会"同一类型只是坏味道，真正的问题是它让测试行为依赖执行

@@ -51,9 +51,9 @@ func TestDocGate_Reset(t *testing.T) {
 // first: two tests using bare context.Background() would silently read and write the
 // same gate, so `go test -shuffle=on` failed 5 of 6 runs depending on ordering. Callers
 // must treat nil as "allow" — DocGate is a guidance mechanism, not the security
-// boundary; the permission check is. The real per-conversation wiring (injecting one via
-// WithDocGate on each Send) is a later task; until then, callers with no injected gate
-// get no gating at all, which is safe because it's not the boundary.
+// boundary; the permission check is. Production injects a per-conversation gate via
+// WithDocGate on each Send (internal/app/ai); callers without one — opsctl, tests — get
+// no gating at all, which is safe precisely because it is not the boundary.
 func TestGetDocGate_NoInjectionReturnsNil(t *testing.T) {
 	if got := GetDocGate(context.Background()); got != nil {
 		t.Fatalf("GetDocGate must return nil when ctx has no injected gate, got %v", got)
