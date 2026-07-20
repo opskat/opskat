@@ -1173,6 +1173,35 @@ Expected: 编译失败，`undefined: handleExec`
 > （或根本不支持）的类型调 `exec` 时，用户会先被弹一次审批，批准之后命令却因门禁被拦下
 > 根本不执行。先做无副作用的判断（解析、门禁、执行器查找），再做有副作用的审批。
 
+#### 第 4 步必须先做"按类型规范化"（Task 5 评审发现，必做）
+
+k8s 的两条路径今天校验的**不是同一个字符串**：`handleExecK8s`（`tool_handler_k8s.go:48`）
+校验的是 `plan.EffectiveCommand`——即已注入 `--context` / `--namespace` 之后的完整命令，
+也正是审批弹窗与审计日志今天呈现给用户的形式。而统一 `exec` 在派发前只拿得到原始
+`command`（`get pods`）。若直接拿原始命令去校验，**用户按 effective 形式写的既有策略与
+grant 会静默失配**。
+
+按 spec §5「被批准的 == 被执行的」，effective 形式才是更应被校验的那个（它就是真正执行的东西）。
+
+因此给注册表加一个**可选**的规范化钩子，在 Task 2 的 `permission` 注册表上扩展：
+
+```go
+// CanonicalizeFunc 把模型给的原始命令规范化为"真正会被执行、也应被策略匹配"的形式。
+// 仅当某类型执行前会改写命令时才需要注册（目前只有 k8s 注入 --context/--namespace）。
+type CanonicalizeFunc func(asset *asset_entity.Asset, command string) (string, error)
+
+// RegisterExecutor 增加一个可选参数；未注册规范化的类型按原样校验。
+func CanonicalizeFor(assetType string) (CanonicalizeFunc, bool)
+```
+
+`exec` 第 4 步改为：先取 `CanonicalizeFor(asset.Type)`，有则先规范化，再把**规范化后的命令**
+交给 `CheckForAsset`，并把同一个字符串交给执行器执行。k8s 的规范化实现直接复用
+`helper.BuildK8sCommandPlan(command, cfg)` 并返回 `plan.EffectiveCommand`。
+其余四个类型不注册，行为不变。
+
+**必须有一个测试**断言 k8s 走 `exec` 时 `CheckForAsset` 收到的是含 `--context` / `--namespace`
+的 effective 命令，与 `handleExecK8s` today 收到的一致——这正是防止既有策略失配的回归锁。
+
 `handleHelp` 解析资产 → `permission.HelpFor(asset.Type)` → `docGate.MarkDocumented` → 返回 `"Asset \"<name>\" is type=<type>.\n\n" + doc`。
 
 - [ ] **Step 4: 写工具定义并接入 `Tools()`**
