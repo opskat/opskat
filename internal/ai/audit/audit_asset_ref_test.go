@@ -38,11 +38,12 @@ func setupAuditRepo(t *testing.T) *memAuditRepo {
 	m := &memAuditRepo{}
 	orig := audit_repo.Audit()
 	audit_repo.RegisterAudit(m)
-	t.Cleanup(func() {
-		if orig != nil {
-			audit_repo.RegisterAudit(orig)
-		}
-	})
+	// Restore unconditionally, including back to nil: an `if orig != nil` guard would
+	// silently leave this test's exhausted mock as the process-wide default once the
+	// test finished, for any later test relying on the original (or nil) registration
+	// -- see setupExecAssetRepo in runner/audit_exec_asset_test.go, whose sibling guard
+	// this mirrors.
+	t.Cleanup(func() { audit_repo.RegisterAudit(orig) })
 	return m
 }
 

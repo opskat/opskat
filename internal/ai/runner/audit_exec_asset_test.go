@@ -4,13 +4,17 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/cago-frame/agents/agent"
 	"go.uber.org/mock/gomock"
 
 	. "github.com/smartystreets/goconvey/convey"
 
+	"github.com/opskat/opskat/internal/ai/permission"
+	aitool "github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/audit_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
@@ -48,6 +52,38 @@ func okResult() (*agent.ToolResultBlock, error) {
 	return &agent.ToolResultBlock{Content: []agent.ContentBlock{agent.TextBlock{Text: "ok"}}}, nil
 }
 
+// waitForAuditEntry waits for and returns the audit entry matching toolName and
+// assetID, reading mockRepo.logs under its mutex throughout (unlike a bare
+// mockRepo.logs[0], which races Create()'s concurrent append).
+//
+// auditMiddleware writes via a fire-and-forget goroutine (`go
+// auditWriter.WriteToolCall(...)`) into audit_repo's process-global registry. A
+// goroutine spawned by an earlier test can still be in flight when this test
+// registers its own mock, and land in it after this test's own write completes --
+// producing a stray entry (observed in the wild as a bogus `"subagent-":""` row).
+// waitForAudit(want:1) + logs[0] would then grab that stray row instead of this
+// test's own. Selecting by (ToolName, AssetID) picks this test's own entry
+// regardless of what else lands in the shared slice. This does not fix the
+// underlying global-registry/fire-and-forget flake -- it only makes each test
+// immune to picking up a neighbor's entry.
+func waitForAuditEntry(t *testing.T, m *mockAuditRepo, toolName string, assetID int64) *audit_entity.AuditLog {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		m.mu.Lock()
+		for _, e := range m.logs {
+			if e.ToolName == toolName && e.AssetID == assetID {
+				m.mu.Unlock()
+				return e
+			}
+		}
+		m.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("audit entry for tool=%q assetID=%d not found within 2s", toolName, assetID)
+	return nil
+}
+
 // TestAuditMiddleware_ExecToolResolvesAssetByID and ...ByName lock in the fix for
 // exec/help's asset attribution: their asset identifier is args["asset"] (numeric id
 // or name string), not args["asset_id"]/args["id"], so it needs assetref.Resolve, not
@@ -63,8 +99,7 @@ func TestAuditMiddleware_ExecToolResolvesAssetByID(t *testing.T) {
 		runAuditChain(t, context.Background(), "exec", "tu_asset_id",
 			map[string]any{"asset": "7", "command": "uptime"}, nil, okResult)
 
-		waitForAudit(t, mockRepo, 1)
-		entry := mockRepo.logs[0]
+		entry := waitForAuditEntry(t, mockRepo, "exec", 7)
 		So(entry.AssetID, ShouldEqual, int64(7))
 		So(entry.AssetName, ShouldEqual, "web-1")
 		So(entry.Command, ShouldEqual, "uptime")
@@ -82,8 +117,7 @@ func TestAuditMiddleware_ExecToolResolvesAssetByName(t *testing.T) {
 		runAuditChain(t, context.Background(), "exec", "tu_asset_name",
 			map[string]any{"asset": "web-1", "command": "uptime"}, nil, okResult)
 
-		waitForAudit(t, mockRepo, 1)
-		entry := mockRepo.logs[0]
+		entry := waitForAuditEntry(t, mockRepo, "exec", 8)
 		So(entry.AssetID, ShouldEqual, int64(8))
 		So(entry.AssetName, ShouldEqual, "web-1")
 	})
@@ -102,11 +136,52 @@ func TestAuditMiddleware_HelpToolResolvesAssetAttribution(t *testing.T) {
 				return &agent.ToolResultBlock{Content: []agent.ContentBlock{agent.TextBlock{Text: "docs"}}}, nil
 			})
 
-		waitForAudit(t, mockRepo, 1)
-		entry := mockRepo.logs[0]
+		entry := waitForAuditEntry(t, mockRepo, "help", 9)
 		So(entry.AssetID, ShouldEqual, int64(9))
 		So(entry.AssetName, ShouldEqual, "cache-1")
 	})
+}
+
+// staticAssetRepo resolves a single fixed asset for both id- and name-based
+// lookups, standing in for assetref.Resolve's FindByName-then-Find fallback.
+// TestAuditMiddleware_ExecToolCanonicalizesK8sCommand drives the real "exec" tool
+// (aitool.Tools()) through the real auditMiddleware AND a real
+// permission.CommandPolicyChecker, which between them resolve/look up the asset
+// several times over (assetref.Resolve in the middleware, assetref.Resolve again
+// in handleExec, asset_svc.Asset().Get in the policy checker's group/grant/confirm
+// steps) -- a strict gomock.EXPECT() call-count per lookup would be brittle and
+// say nothing the test cares about. A plain stub sidesteps that.
+type staticAssetRepo struct {
+	asset_repo.AssetRepo
+	asset *asset_entity.Asset
+}
+
+func (r *staticAssetRepo) Find(_ context.Context, id int64) (*asset_entity.Asset, error) {
+	if id == r.asset.ID {
+		return r.asset, nil
+	}
+	return nil, errors.New("asset not found")
+}
+
+func (r *staticAssetRepo) FindByName(_ context.Context, name string) ([]*asset_entity.Asset, error) {
+	if name == r.asset.Name {
+		return []*asset_entity.Asset{r.asset}, nil
+	}
+	return nil, nil
+}
+
+// findExecTool locates a tool by name among aitool.Tools() (the same registry
+// production wires into the real agent), so tests can drive the actual handler
+// instead of a stub.
+func findExecTool(t *testing.T, name string) agent.Tool {
+	t.Helper()
+	for _, tl := range aitool.Tools() {
+		if tl.Name() == name {
+			return tl
+		}
+	}
+	t.Fatalf("tool %q not found in aitool.Tools()", name)
+	return nil
 }
 
 // TestAuditMiddleware_ExecToolCanonicalizesK8sCommand is the regression lock for
@@ -115,10 +190,21 @@ func TestAuditMiddleware_HelpToolResolvesAssetAttribution(t *testing.T) {
 // but wrong for k8s, where handleExec canonicalizes the command (injects
 // --context/--namespace) before the permission check / approval dialog sees it.
 // Approved-but-not-what's-audited is the exact bug class this locks against.
+//
+// It drives the real "exec" tool (aitool.Tools(), not a stub) through a real
+// *permission.CommandPolicyChecker so the test observes both sides of the
+// invariant it protects, instead of asserting a hardcoded literal computed only
+// from resolveAssetForAudit in isolation: "captured" is the command
+// handleExec's own canonicalization handed to CheckForAsset (what the real
+// approval dialog would show, via the confirm callback's ApprovalItem.Command);
+// entry.Command is what auditMiddleware's independent canonicalization recorded.
+// A literal-only assertion would keep passing if handleExec's canonicalization
+// inputs changed and resolveAssetForAudit's copy silently fell out of step with
+// it; asserting the two live values against each other (not just against the
+// same string) is what actually catches that divergence.
 func TestAuditMiddleware_ExecToolCanonicalizesK8sCommand(t *testing.T) {
-	Convey("k8s 资产的 exec 审计记录规范化后的命令，与审批弹窗一致", t, func() {
+	Convey("k8s 资产的 exec 审计记录规范化后的命令，与审批弹窗看到的一致", t, func() {
 		mockRepo := registerMockAuditRepo(t)
-		m := setupExecAssetRepo(t)
 
 		asset := &asset_entity.Asset{ID: 42, Name: "k8s-1", Type: asset_entity.AssetTypeK8s}
 		if err := asset.SetK8sConfig(&asset_entity.K8sConfig{
@@ -128,17 +214,40 @@ func TestAuditMiddleware_ExecToolCanonicalizesK8sCommand(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("set k8s config: %v", err)
 		}
-		m.EXPECT().FindByName(gomock.Any(), "42").Return(nil, nil)
-		m.EXPECT().Find(gomock.Any(), int64(42)).Return(asset, nil)
+		origAsset := asset_repo.Asset()
+		asset_repo.RegisterAsset(&staticAssetRepo{asset: asset})
+		t.Cleanup(func() { asset_repo.RegisterAsset(origAsset) })
 
-		runAuditChain(t, context.Background(), "exec", "tu_k8s",
-			map[string]any{"asset": "42", "command": "apply -f deploy.yaml"}, nil, okResult)
+		// Fake confirm callback: captures the command the real policy checker's
+		// CheckForAsset handed down to confirmation -- i.e. what the approval
+		// dialog would render -- and denies, so the (unrelated to this test) real
+		// k8s executor never actually runs.
+		var captured string
+		checker := permission.NewCommandPolicyChecker(
+			func(_ context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
+				if len(items) > 0 {
+					captured = items[0].Command
+				}
+				return permission.ApprovalResponse{Decision: "deny"}
+			})
+		ctx := permission.WithPolicyChecker(context.Background(), checker)
 
-		waitForAudit(t, mockRepo, 1)
-		entry := mockRepo.logs[0]
+		execTool := findExecTool(t, "exec")
+		td := &agent.ToolDispatcher{
+			Tools:      []agent.Tool{execTool},
+			Middleware: []agent.ToolHookEntry[agent.ToolMiddleware]{{Matcher: ".*", Fn: auditMiddleware}},
+		}
+		td.Run(ctx, agent.DispatchInput{
+			ToolName:  "exec",
+			ToolUseID: "tu_k8s_sync",
+			Input:     map[string]any{"asset": "42", "command": "apply -f deploy.yaml"},
+		})
+
+		entry := waitForAuditEntry(t, mockRepo, "exec", 42)
 		want := "kubectl --context prod-ctx --namespace prod-ns apply -f deploy.yaml"
+		So(captured, ShouldEqual, want)
 		So(entry.Command, ShouldEqual, want)
-		So(entry.AssetID, ShouldEqual, int64(42))
+		So(entry.Command, ShouldEqual, captured)
 	})
 }
 
@@ -188,8 +297,7 @@ func TestAuditMiddleware_ExecToolResolvesAssetBeforeToolRuns(t *testing.T) {
 				return okResult()
 			})
 
-		waitForAudit(t, mockRepo, 1)
-		entry := mockRepo.logs[0]
+		entry := waitForAuditEntry(t, mockRepo, "exec", 5)
 		So(entry.AssetID, ShouldEqual, int64(5))
 		So(entry.AssetName, ShouldEqual, "web-5")
 	})
