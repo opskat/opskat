@@ -261,6 +261,16 @@ func (r *windTermAssetRepo) Find(_ context.Context, id int64) (*asset_entity.Ass
 	return nil, nil
 }
 
+func (r *windTermAssetRepo) FindByName(_ context.Context, name string) ([]*asset_entity.Asset, error) {
+	var assets []*asset_entity.Asset
+	for _, asset := range r.assets {
+		if asset.Name == name {
+			assets = append(assets, asset)
+		}
+	}
+	return assets, nil
+}
+
 func (r *windTermAssetRepo) List(_ context.Context, opts asset_repo.ListOptions) ([]*asset_entity.Asset, error) {
 	var assets []*asset_entity.Asset
 	for _, asset := range r.assets {

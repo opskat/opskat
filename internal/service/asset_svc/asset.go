@@ -18,6 +18,7 @@ import (
 // AssetSvc 资产业务接口
 type AssetSvc interface {
 	Get(ctx context.Context, id int64) (*asset_entity.Asset, error)
+	FindByName(ctx context.Context, name string) ([]*asset_entity.Asset, error)
 	List(ctx context.Context, assetType string, groupID int64) ([]*asset_entity.Asset, error)
 	Create(ctx context.Context, asset *asset_entity.Asset) error
 	Update(ctx context.Context, asset *asset_entity.Asset) error
@@ -37,6 +38,10 @@ func Asset() AssetSvc {
 
 func (s *assetSvc) Get(ctx context.Context, id int64) (*asset_entity.Asset, error) {
 	return asset_repo.Asset().Find(ctx, id)
+}
+
+func (s *assetSvc) FindByName(ctx context.Context, name string) ([]*asset_entity.Asset, error) {
+	return asset_repo.Asset().FindByName(ctx, name)
 }
 
 func (s *assetSvc) List(ctx context.Context, assetType string, groupID int64) ([]*asset_entity.Asset, error) {

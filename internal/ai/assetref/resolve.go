@@ -29,43 +29,45 @@ func (e *ErrAmbiguous) Error() string {
 		e.Ref, strings.Join(parts, ", "))
 }
 
-// Resolve 解析资产标识。纯数字按 id 查，否则按名称精确匹配。
+// Resolve 解析资产标识。纯数字既按 id 查，也按名称查——资产名称允许纯数字
+// （Validate 只拒绝空名称，name 列也没有唯一索引），如果两者命中不同的资产，
+// 说明引用有歧义，必须报错而不是默默选一个，否则可能对着错误的机器执行命令。
 func Resolve(ctx context.Context, ref string) (*asset_entity.Asset, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return nil, fmt.Errorf("missing required parameter: asset")
 	}
 
-	if id, err := strconv.ParseInt(ref, 10, 64); err == nil {
-		asset, err := asset_svc.Asset().Get(ctx, id)
-		if err != nil {
-			return nil, fmt.Errorf("asset not found: %s", ref)
-		}
-		return asset, nil
-	}
-
-	assets, err := asset_svc.Asset().List(ctx, "", 0)
+	nameMatches, err := asset_svc.Asset().FindByName(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
 
-	var matched []*asset_entity.Asset
-	for _, a := range assets {
-		if a.Name == ref {
-			matched = append(matched, a)
+	// 按 id 去重合并候选：同一个资产既匹配 id 又匹配名称时不算歧义。
+	candidates := make(map[int64]*asset_entity.Asset, len(nameMatches)+1)
+	order := make([]int64, 0, len(nameMatches)+1)
+	add := func(a *asset_entity.Asset) {
+		if _, exists := candidates[a.ID]; !exists {
+			order = append(order, a.ID)
 		}
+		candidates[a.ID] = a
 	}
 
-	switch len(matched) {
+	if id, err := strconv.ParseInt(ref, 10, 64); err == nil {
+		if idAsset, err := asset_svc.Asset().Get(ctx, id); err == nil {
+			add(idAsset)
+		}
+	}
+	for _, a := range nameMatches {
+		add(a)
+	}
+
+	switch len(order) {
 	case 0:
 		return nil, fmt.Errorf("asset not found: %s", ref)
 	case 1:
-		return matched[0], nil
+		return candidates[order[0]], nil
 	default:
-		ids := make([]int64, 0, len(matched))
-		for _, a := range matched {
-			ids = append(ids, a.ID)
-		}
-		return nil, &ErrAmbiguous{Ref: ref, IDs: ids}
+		return nil, &ErrAmbiguous{Ref: ref, IDs: order}
 	}
 }

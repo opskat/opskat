@@ -11,6 +11,7 @@ import (
 // AssetRepo 资产数据访问接口
 type AssetRepo interface {
 	Find(ctx context.Context, id int64) (*asset_entity.Asset, error)
+	FindByName(ctx context.Context, name string) ([]*asset_entity.Asset, error)
 	List(ctx context.Context, opts ListOptions) ([]*asset_entity.Asset, error)
 	Create(ctx context.Context, asset *asset_entity.Asset) error
 	Update(ctx context.Context, asset *asset_entity.Asset) error
@@ -56,6 +57,14 @@ func (r *assetRepo) Find(ctx context.Context, id int64) (*asset_entity.Asset, er
 		return nil, err
 	}
 	return &asset, nil
+}
+
+func (r *assetRepo) FindByName(ctx context.Context, name string) ([]*asset_entity.Asset, error) {
+	var assets []*asset_entity.Asset
+	if err := db.Ctx(ctx).Where("name = ? AND status = ?", name, asset_entity.StatusActive).Find(&assets).Error; err != nil {
+		return nil, err
+	}
+	return assets, nil
 }
 
 func (r *assetRepo) List(ctx context.Context, opts ListOptions) ([]*asset_entity.Asset, error) {
