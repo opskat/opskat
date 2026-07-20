@@ -8,17 +8,19 @@ package cmdline
 import (
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// Words 把命令串切成词，保留引号内的空格，并剥掉引号本身。
+// Words 把命令串切成词，保留引号内的空格，并剥掉引号本身；显式的空词（单引号或
+// 双引号包裹的空串，例如 `""`）会原样保留为一个空字符串元素，不做静默丢弃。
 //
-// 拒绝一切 shell 控制结构（管道、重定向、变量赋值、多语句）：这些串最终会被送去
-// 执行 typed service 调用，不经过 shell，语义上没有"管道"这回事；容忍它们只会让
-// 模型写出看似成功、实则参数被吃掉的命令。
+// 拒绝一切 shell 控制结构（管道、重定向、变量赋值、多语句、后台运行 `&`、取反 `!`）：
+// 这些串最终会被送去执行 typed service 调用，不经过 shell，语义上没有"管道"这回事；
+// 容忍它们只会让模型写出看似成功、实则参数被吃掉（或在真 shell 里被后台/取反）的命令。
 func Words(s string) ([]string, error) {
 	parser := syntax.NewParser()
 	file, err := parser.Parse(strings.NewReader(s), "")
@@ -36,6 +38,12 @@ func Words(s string) ([]string, error) {
 	if len(stmt.Redirs) > 0 {
 		return nil, fmt.Errorf("shell redirection is not supported")
 	}
+	if stmt.Background {
+		return nil, fmt.Errorf("shell backgrounding (&) is not supported")
+	}
+	if stmt.Negated {
+		return nil, fmt.Errorf("shell negation (!) is not supported")
+	}
 	call, ok := stmt.Cmd.(*syntax.CallExpr)
 	if !ok {
 		return nil, fmt.Errorf("only a simple command is supported")
@@ -50,9 +58,7 @@ func Words(s string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		if lit != "" {
-			words = append(words, lit)
-		}
+		words = append(words, lit)
 	}
 	if len(words) == 0 {
 		return nil, fmt.Errorf("empty command")
@@ -167,8 +173,9 @@ func Parse(s string) (*Command, error) {
 	return c, nil
 }
 
-// Render 把 Command 还原为命令串。Flags 按名称排序输出，保证同一个 Command
-// 渲染结果稳定——Go map 迭代顺序随机，不排序的话 Render 不是函数。
+// Render 把 Command 还原为命令串。Flags 按名称排序输出——审批弹窗与审计日志
+// 需要同一个 Command 每次都渲染出完全相同的字符串，Go map 迭代顺序本身是随机的，
+// 不排序就没法保证这一点。
 func (c *Command) Render() string {
 	parts := make([]string, 0, 1+len(c.Args)+len(c.Flags))
 	parts = append(parts, c.Verb)
@@ -185,13 +192,20 @@ func (c *Command) Render() string {
 	return strings.Join(parts, " ")
 }
 
-// QuoteIfNeeded 在值含空格或引号时加单引号；值本身含单引号时退化为双引号包裹。
-// 与 Words 的剥引号逻辑互逆——两者必须一起改。
+// safeUnquotedWord 匹配可以不加引号原样输出、且被 Words 解析回同一个词的字符集：
+// 字母数字与一组在 shell 里没有特殊含义的标点。任何不满足这个集合的字符——无论是否
+// 在当前已知的元字符清单里——都会被引号包裹，这是"允许表"而非"排除表"的安全性所在。
+var safeUnquotedWord = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
+
+// QuoteIfNeeded 决定一个值要不要加引号，以及加哪种引号，使其与 Words 的剥引号逻辑
+// 互逆（两者必须一起改）：只有匹配 safeUnquotedWord 的值才原样输出；其余一律加引号
+// ——默认单引号，值本身含单引号时退化为转义后的双引号包裹。这是 shlex.quote 的标准
+// 做法：用"哪些字符绝对安全"的允许表，而不是"哪些字符已知有害"的排除表，
+// 后者漏一个 shell 元字符（`#` `&` `;` `|` `<` `>` `(` `)` 等）就是一次静默的
+// 命令截断或参数吞没。空字符串不匹配 safeUnquotedWord（该模式要求至少一个字符），
+// 自然落入单引号分支，被两个单引号包裹成空词，不需要单独的空串特判。
 func QuoteIfNeeded(s string) string {
-	if s == "" {
-		return "''"
-	}
-	if !strings.ContainsAny(s, " \t\n\"'\\$`") {
+	if safeUnquotedWord.MatchString(s) {
 		return s
 	}
 	if !strings.Contains(s, "'") {
