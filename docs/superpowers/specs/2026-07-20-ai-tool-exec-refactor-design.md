@@ -63,7 +63,7 @@ mongo 暴露了这个代价：用户批准的是 `find`，实际执行的是"对
 ### 非目标（本次不做，另开 issue 跟踪）
 
 - **修复既有审批漏洞**：`upload_file`/`download_file` 无审批检查
-  （`tool_handlers_exec.go:136,174`）、10 处 `if checker != nil` fail-open、
+  （`tool_handlers_exec.go:93,131`）、10 处 `if checker != nil` fail-open、
   `exec_tool` 在 `ext.Manifest.Policies.Type == ""` 时整段跳过检查
   （`tool_handler_ext.go:53`）。
 - **补齐无 tool 的资产类型**：`local`（有 `PolicyKind`、有默认策略，却无 permission 注册也无工具，
@@ -361,11 +361,17 @@ mongo/etcd/kafka 的策略字符串形状改变：mongo 当前匹配裸 `"find"`
 
 实现时应开出：
 
-1. `upload_file`/`download_file` 无审批检查（安全）。
-2. 审批 fail-open：10 处 `if checker != nil` 应改为 fail-closed，
-   参照唯一正确的 `tool_handlers_exec.go:62-65`，以及已中心化且 fail-closed 的
+1. ✅ [#248](https://github.com/opskat/opskat/issues/248) `upload_file`/`download_file` 无审批检查（安全）。
+2. ✅ [#249](https://github.com/opskat/opskat/issues/249) 审批 fail-open：10 处 `if checker != nil` 应改为 fail-closed，
+   参照唯一正确的 `tool_handlers_exec.go:61-64`，以及已中心化且 fail-closed 的
    `LocalToolGate.Middleware()`（`local_tool_gate.go:78-81`）。
-3. `local` / `oss` 的 AI 工具支持（豁免清单清零）。
+   *开 issue 时核实的结论：这条当前**不可达**——`policyChecker` 与 `systemCfg` 都只在
+   `activateProvider` 成功路径赋值且前者在先，而 `SendAIMessage` 守卫 `systemCfg == nil`，
+   传递性地保证了 checker 非 nil。属结构性隐患（不变式由赋值顺序承载，无类型/测试锁定），
+   不是活的漏洞——定优先级时别按后者算。*
+3. ✅ [#250](https://github.com/opskat/opskat/issues/250) `local` / `oss` 的 AI 工具支持（豁免清单清零）。
 4. `group_svc.Delete` 事务化。
 5. 删除资产时断开在用连接。
 6. 桌面 UI 路径的资产 CRUD 未写审计（`Source: "desktop"` 有定义但无写入方）。
+
+1–3 已于 2026-07-20 随 Plan A 收尾开出；4–6 未开。
