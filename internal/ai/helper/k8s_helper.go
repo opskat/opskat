@@ -14,8 +14,8 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/ssh"
-	"mvdan.cc/sh/v3/syntax"
 
+	"github.com/opskat/opskat/internal/ai/cmdline"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/executil"
 	"github.com/opskat/opskat/internal/service/credential_svc"
@@ -87,43 +87,9 @@ func ExecK8sOnAsset(ctx context.Context, asset *asset_entity.Asset, command, _ s
 }
 
 func parseK8sCommandArgs(command string) ([]string, error) {
-	parser := syntax.NewParser()
-	file, err := parser.Parse(strings.NewReader(command), "")
+	args, err := cmdline.Words(command)
 	if err != nil {
 		return nil, fmt.Errorf("invalid kubectl command: %w", err)
-	}
-	if len(file.Stmts) != 1 {
-		return nil, fmt.Errorf("kubectl tool only supports a single command")
-	}
-
-	stmt := file.Stmts[0]
-	if len(stmt.Redirs) > 0 {
-		return nil, fmt.Errorf("kubectl tool does not allow shell redirection")
-	}
-
-	call, ok := stmt.Cmd.(*syntax.CallExpr)
-	if !ok {
-		return nil, fmt.Errorf("kubectl tool only supports a simple command")
-	}
-	if len(call.Assigns) > 0 {
-		return nil, fmt.Errorf("kubectl tool does not allow shell variable assignments")
-	}
-	if len(call.Args) == 0 {
-		return nil, fmt.Errorf("missing kubectl command")
-	}
-
-	args := make([]string, 0, len(call.Args))
-	for _, word := range call.Args {
-		arg, err := shellWordLiteral(word)
-		if err != nil {
-			return nil, err
-		}
-		if arg != "" {
-			args = append(args, arg)
-		}
-	}
-	if len(args) == 0 {
-		return nil, fmt.Errorf("missing kubectl command")
 	}
 
 	if isKubectlProgram(args[0]) {
@@ -137,43 +103,13 @@ func parseK8sCommandArgs(command string) ([]string, error) {
 		arg := args[i]
 		switch {
 		case arg == "--kubeconfig":
-			return nil, fmt.Errorf("do not pass --kubeconfig to exec_k8s; the asset kubeconfig is used automatically")
+			return nil, fmt.Errorf("do not pass --kubeconfig to exec; the asset kubeconfig is used automatically")
 		case strings.HasPrefix(arg, "--kubeconfig="):
-			return nil, fmt.Errorf("do not pass --kubeconfig to exec_k8s; the asset kubeconfig is used automatically")
+			return nil, fmt.Errorf("do not pass --kubeconfig to exec; the asset kubeconfig is used automatically")
 		}
 	}
 
 	return args, nil
-}
-
-func shellWordLiteral(word *syntax.Word) (string, error) {
-	var b strings.Builder
-	for _, part := range word.Parts {
-		if err := appendShellWordPart(&b, part); err != nil {
-			return "", err
-		}
-	}
-	return b.String(), nil
-}
-
-func appendShellWordPart(b *strings.Builder, part syntax.WordPart) error {
-	switch x := part.(type) {
-	case *syntax.Lit:
-		b.WriteString(x.Value)
-		return nil
-	case *syntax.SglQuoted:
-		b.WriteString(x.Value)
-		return nil
-	case *syntax.DblQuoted:
-		for _, inner := range x.Parts {
-			if err := appendShellWordPart(b, inner); err != nil {
-				return err
-			}
-		}
-		return nil
-	default:
-		return fmt.Errorf("kubectl tool does not allow shell expansions or command substitution")
-	}
 }
 
 func isKubectlProgram(program string) bool {
