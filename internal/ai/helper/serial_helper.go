@@ -40,9 +40,7 @@ func HandleRunSerialCommand(ctx context.Context, args map[string]any) (string, e
 	if mgr == nil {
 		return "", fmt.Errorf("serial manager not available")
 	}
-
-	sess, ok := mgr.GetSessionByAssetID(assetID)
-	if !ok {
+	if _, ok := mgr.GetSessionByAssetID(assetID); !ok {
 		return "", fmt.Errorf("no active serial session for asset %d — please connect the serial port first", assetID)
 	}
 
@@ -53,6 +51,23 @@ func HandleRunSerialCommand(ctx context.Context, args map[string]any) (string, e
 		if result.Decision != aictx.Allow {
 			return result.Message, nil
 		}
+	}
+
+	return ExecSerialOnAsset(ctx, &asset_entity.Asset{ID: assetID}, command, "")
+}
+
+// ExecSerialOnAsset 是不含权限检查的纯执行入口，供统一 exec 使用。
+// HandleRunSerialCommand 保留“检查 + 调用本函数”的形态，两条路径共用同一执行体。
+// scope 对串口无意义，忽略。
+func ExecSerialOnAsset(ctx context.Context, asset *asset_entity.Asset, command, _ string) (string, error) {
+	mgr := getSerialManager(ctx)
+	if mgr == nil {
+		return "", fmt.Errorf("serial manager not available")
+	}
+
+	sess, ok := mgr.GetSessionByAssetID(asset.ID)
+	if !ok {
+		return "", fmt.Errorf("no active serial session for asset %d — please connect the serial port first", asset.ID)
 	}
 
 	output, err := sess.ExecCommand(command, 2*time.Second, 15*time.Second)
