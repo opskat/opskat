@@ -9,8 +9,13 @@ import (
 
 // exemptFromExec 是尚未接入统一 exec 的资产类型。
 //
-// 这个清单**只可缩短，不可增长**——与 internal/archtest 的 legacy 豁免清单同一惯例。
-// 新增资产类型时不要往这里加，而应实现执行器。
+// 这个清单**只可缩短，不可增长**。新增资产类型时不要往这里加，而应实现执行器。
+//
+// 与 internal/archtest 的 legacy 豁免清单出发点相同，但注意二者的强制方式不同：
+// archtest 完全靠注释与评审纪律约束，没有任何机械检查；本文件下方多了一个
+// TestExemptionListDoesNotGrow。别高估它——同一次改动里把 map 加一条、再把
+// maxExemptions 加一，两个测试仍会绿。它拦不住**有意**扩张，只拦得住**顺手忘了**
+// 扩张，作用是逼出一处显眼的常量 diff 供评审注意。真正的约束仍是评审。
 //
 //   - local：spec §2 明确列为非目标，另开 issue 跟踪
 //   - mongodb / etcd / kafka：Plan B 补齐
@@ -40,7 +45,8 @@ func TestEveryPolicyKindTypeHasExecutor(t *testing.T) {
 	}
 }
 
-// 豁免清单只可缩短：数量增长即失败，逼迫增改者正视。
+// 豁免清单只可缩短：条目数超出常量即失败。见上方说明——这只拦得住忘记同步常量的
+// 情形，拦不住有意的同步扩张。
 func TestExemptionListDoesNotGrow(t *testing.T) {
 	const maxExemptions = 4
 	if len(exemptFromExec) > maxExemptions {
