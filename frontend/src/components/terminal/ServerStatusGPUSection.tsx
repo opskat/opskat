@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { CircuitBoard, Fan, Thermometer, TriangleAlert, Zap } from "lucide-react";
+import { CircuitBoard, Fan, Info, Thermometer, TriangleAlert, Zap } from "lucide-react";
 import { cn } from "@opskat/ui";
 import { formatBytes, formatPercent, usagePercent } from "@/components/terminal/serverStatusMetrics";
 import type { ServerStatusGPU } from "@/stores/serverStatusStore";
@@ -72,6 +72,7 @@ function GPUCard({ gpu, gpuKey }: { gpu: ServerStatusGPU; gpuKey: string }) {
   const memoryPercent = usagePercent(gpu.memoryUsedBytes, gpu.memoryTotalBytes);
   const displayName = gpu.name || gpu.vendor || "-";
   const runtime = [gpu.runtime, gpu.runtimeVersion].filter(Boolean).join(" ");
+  const hasTelemetry = hasPerformanceTelemetry(gpu);
 
   return (
     <article data-gpu-key={gpuKey} className="rounded-xl border bg-background/40 p-4">
@@ -87,8 +88,14 @@ function GPUCard({ gpu, gpuKey }: { gpu: ServerStatusGPU; gpuKey: string }) {
             <span>{gpu.vendor || "-"}</span>
             {gpu.pciBusId && <span>PCI {gpu.pciBusId}</span>}
           </div>
-          {(gpu.driverVersion || runtime) && (
+          {(gpu.driver || gpu.driverVersion || runtime) && (
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
+              {gpu.driver && (
+                <span className="inline-flex items-center gap-1">
+                  {t("terminal.serverStatus.driver")}
+                  <b className="font-mono font-medium text-foreground">{gpu.driver}</b>
+                </span>
+              )}
               {gpu.driverVersion && (
                 <span className="inline-flex items-center gap-1">
                   {t("terminal.serverStatus.driverVersion")}
@@ -105,6 +112,13 @@ function GPUCard({ gpu, gpuKey }: { gpu: ServerStatusGPU; gpuKey: string }) {
           )}
         </div>
       </div>
+
+      {!hasTelemetry && (
+        <div className="mt-3 flex items-start gap-2 rounded-lg bg-warning/15 px-3 py-2 text-[11px] text-warning">
+          <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+          <span>{t("terminal.serverStatus.telemetryUnavailable")}</span>
+        </div>
+      )}
 
       <div className="mt-4 grid grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] gap-4">
         <GPUProgress
@@ -142,6 +156,19 @@ function GPUCard({ gpu, gpuKey }: { gpu: ServerStatusGPU; gpuKey: string }) {
       </div>
     </article>
   );
+}
+
+function hasPerformanceTelemetry(gpu: ServerStatusGPU): boolean {
+  return [
+    gpu.utilizationPercent,
+    gpu.memoryUsedBytes,
+    gpu.memoryTotalBytes,
+    gpu.temperatureC,
+    gpu.powerDrawWatts,
+    gpu.powerLimitWatts,
+    gpu.fanPercent,
+    gpu.computeProcessCount,
+  ].some((value) => typeof value === "number" && Number.isFinite(value));
 }
 
 function GPUProgress({

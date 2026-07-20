@@ -194,7 +194,7 @@ func TestCollectKeepsBaseStatusWhenNoSupportedGPUToolIsAvailable(t *testing.T) {
 		switch cmd {
 		case snapshotCommand:
 			return baseSnapshotOutput, nil
-		case nvidiaSMICommand, amdSMICommand, rocmSMICommand, xpuSMICommand:
+		case nvidiaSMICommand, amdSMICommand, rocmSMICommand, xpuSMICommand, linuxDRMInventoryCommand:
 			return "", nil
 		default:
 			return "", errors.New("unexpected command")
@@ -230,7 +230,7 @@ func TestCollectRunsCommandsOverSSH(t *testing.T) {
 		switch cmd {
 		case snapshotCommand:
 			return baseSnapshotOutput, "", 0
-		case nvidiaSMICommand, amdSMICommand, rocmSMICommand, xpuSMICommand:
+		case nvidiaSMICommand, amdSMICommand, rocmSMICommand, xpuSMICommand, linuxDRMInventoryCommand:
 			return "", "", 0
 		default:
 			return "", "unexpected command", 1
@@ -255,7 +255,7 @@ func TestCollectAddsNVIDIAGPUs(t *testing.T) {
 			return baseSnapshotOutput, nil
 		case nvidiaSMICommand:
 			return nvidiaSnapshotOutput, nil
-		case amdSMICommand, rocmSMICommand, xpuSMICommand:
+		case amdSMICommand, rocmSMICommand, xpuSMICommand, linuxDRMInventoryCommand:
 			return "", nil
 		default:
 			return "", errors.New("unexpected command")
@@ -359,7 +359,7 @@ __OPSKAT_NVIDIA_GPU_END__
 				case nvidiaSMICommand:
 					gpuCalls++
 					return tt.stdout, tt.err
-				case amdSMICommand, rocmSMICommand, xpuSMICommand:
+				case amdSMICommand, rocmSMICommand, xpuSMICommand, linuxDRMInventoryCommand:
 					return "", nil
 				default:
 					return "", errors.New("unexpected command")
@@ -383,14 +383,14 @@ __OPSKAT_NVIDIA_GPU_END__
 
 func assertGPUCommandSet(t *testing.T, commands []string) {
 	t.Helper()
-	if len(commands) != 5 || commands[0] != snapshotCommand {
-		t.Fatalf("commands = %#v, want base snapshot plus four optional GPU probes", commands)
+	if len(commands) != 6 || commands[0] != snapshotCommand {
+		t.Fatalf("commands = %#v, want base snapshot plus five optional GPU probes", commands)
 	}
 	seen := make(map[string]int)
 	for _, command := range commands[1:] {
 		seen[command]++
 	}
-	for _, command := range []string{nvidiaSMICommand, amdSMICommand, rocmSMICommand, xpuSMICommand} {
+	for _, command := range []string{nvidiaSMICommand, amdSMICommand, rocmSMICommand, xpuSMICommand, linuxDRMInventoryCommand} {
 		if seen[command] != 1 {
 			t.Fatalf("GPU command count for %q = %d, want 1; commands = %#v", command, seen[command], commands)
 		}

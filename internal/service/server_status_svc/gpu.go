@@ -99,7 +99,7 @@ func collectGPUStatusWithCollectors(
 	}
 
 	combined := gpuCollectorResult{}
-	seen := make(map[string]struct{})
+	seen := make(map[string]int)
 	for _, result := range ordered {
 		if result == nil {
 			continue
@@ -112,10 +112,11 @@ func collectGPUStatusWithCollectors(
 		}
 		for _, gpu := range result.GPUs {
 			key := gpuIdentityKey(gpu)
-			if _, exists := seen[key]; exists {
+			if existingIndex, exists := seen[key]; exists {
+				mergeGPUFields(&combined.GPUs[existingIndex], gpu)
 				continue
 			}
-			seen[key] = struct{}{}
+			seen[key] = len(combined.GPUs)
 			combined.GPUs = append(combined.GPUs, gpu)
 		}
 	}
@@ -133,17 +134,23 @@ func sortGPUCollectors(collectors []gpuCollector) {
 
 func gpuIdentityKey(gpu GPU) string {
 	vendor := strings.ToLower(strings.TrimSpace(gpu.Vendor))
-	if id := strings.ToLower(strings.TrimSpace(gpu.DeviceID)); id != "" {
-		return vendor + "|id|" + id
-	}
 	if pci := normalizePCIBusID(gpu.PCIBusID); pci != "" {
 		return vendor + "|pci|" + pci
+	}
+	if id := strings.ToLower(strings.TrimSpace(gpu.DeviceID)); id != "" {
+		return vendor + "|id|" + id
 	}
 	return fmt.Sprintf("%s|index|%d|name|%s", vendor, gpu.Index, strings.ToLower(strings.TrimSpace(gpu.Name)))
 }
 
 func normalizePCIBusID(value string) string {
-	return strings.ToLower(strings.TrimSpace(value))
+	value = strings.ToLower(strings.TrimSpace(value))
+	parts := strings.Split(value, ":")
+	if len(parts) == 3 && len(parts[0]) > 4 {
+		parts[0] = parts[0][len(parts[0])-4:]
+		return strings.Join(parts, ":")
+	}
+	return value
 }
 
 func extractMarkedOutput(raw, begin, end string) ([]byte, error) {

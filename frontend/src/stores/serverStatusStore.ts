@@ -7,6 +7,7 @@ export interface ServerStatusGPU {
   pciBusId?: string;
   vendor?: string;
   name?: string;
+  driver?: string;
   driverVersion?: string;
   runtime?: string;
   runtimeVersion?: string;

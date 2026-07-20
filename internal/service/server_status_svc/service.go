@@ -18,6 +18,7 @@ type GPU struct {
 	PCIBusID            string   `json:"pciBusId,omitempty"`
 	Vendor              string   `json:"vendor,omitempty"`
 	Name                string   `json:"name,omitempty"`
+	Driver              string   `json:"driver,omitempty"`
 	DriverVersion       string   `json:"driverVersion,omitempty"`
 	Runtime             string   `json:"runtime,omitempty"`
 	RuntimeVersion      string   `json:"runtimeVersion,omitempty"`

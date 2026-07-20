@@ -136,6 +136,7 @@ describe("TerminalToolbar server status", () => {
     expect(card).not.toBeNull();
     expect(within(card as HTMLElement).getAllByText("-").length).toBeGreaterThanOrEqual(4);
     expect(within(card as HTMLElement).getAllByText("- / -")).toHaveLength(2);
+    expect(within(card as HTMLElement).getByText("terminal.serverStatus.telemetryUnavailable")).toBeInTheDocument();
   });
 
   it("renders multiple GPUs in a capped internal scroll region when more than two are present", async () => {

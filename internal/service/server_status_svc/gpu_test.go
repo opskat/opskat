@@ -105,6 +105,50 @@ func TestCollectGPUStatusDeduplicatesStableDeviceIdentity(t *testing.T) {
 	}
 }
 
+func TestCollectGPUStatusMergesDRMInventoryIntoVendorTelemetryByPCIAddress(t *testing.T) {
+	utilization := 42.0
+	collectors := []gpuCollector{
+		stubGPUCollector("nvidia", 100, GPU{
+			Index: 0, Vendor: "NVIDIA", PCIBusID: "00000000:01:00.0", UtilizationPercent: &utilization,
+		}),
+		stubGPUCollector("linux-drm", 1000, GPU{
+			Index: 0, Vendor: "NVIDIA", PCIBusID: "0000:01:00.0", Name: "NVIDIA RTX 4090", Driver: "nvidia",
+		}),
+	}
+
+	result := collectGPUStatusWithCollectors(context.Background(), nil, collectors)
+	if len(result.GPUs) != 1 {
+		t.Fatalf("len(GPUs) = %d, want 1", len(result.GPUs))
+	}
+	gpu := result.GPUs[0]
+	if gpu.Name != "NVIDIA RTX 4090" || gpu.Driver != "nvidia" || gpu.UtilizationPercent == nil || *gpu.UtilizationPercent != 42 {
+		t.Fatalf("vendor telemetry and DRM inventory were not merged: %+v", gpu)
+	}
+}
+
+func TestParseLinuxDRMInventoryReturnsBasicGPUWithoutTelemetry(t *testing.T) {
+	result, err := parseLinuxDRMInventory(`__OPSKAT_DRM_GPU_BEGIN__
+0	0x8086	0x4680	0000:06:10.0	i915	Intel Corporation AlderLake-S GT1 [8086:4680] (rev 0c)
+__OPSKAT_DRM_GPU_END__
+`)
+	if err != nil {
+		t.Fatalf("parseLinuxDRMInventory returned error: %v", err)
+	}
+	if len(result.GPUs) != 1 {
+		t.Fatalf("len(GPUs) = %d, want 1", len(result.GPUs))
+	}
+	gpu := result.GPUs[0]
+	if gpu.Index != 0 || gpu.Vendor != "Intel" || gpu.Name != "Intel Corporation AlderLake-S GT1 [8086:4680] (rev 0c)" {
+		t.Fatalf("unexpected GPU identity: %+v", gpu)
+	}
+	if gpu.DeviceID != "8086:4680" || gpu.PCIBusID != "0000:06:10.0" || gpu.Driver != "i915" {
+		t.Fatalf("unexpected GPU metadata: %+v", gpu)
+	}
+	if gpu.UtilizationPercent != nil || gpu.MemoryUsedBytes != nil || gpu.TemperatureC != nil {
+		t.Fatalf("inventory GPU must not fabricate telemetry: %+v", gpu)
+	}
+}
+
 func stubGPUCollector(name string, priority int, gpu GPU) gpuCollector {
 	return testGPUCollector{
 		name:     name,

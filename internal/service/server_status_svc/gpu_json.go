@@ -369,6 +369,9 @@ func mergeGPUFields(target *GPU, source GPU) {
 	if target.Name == "" {
 		target.Name = source.Name
 	}
+	if target.Driver == "" {
+		target.Driver = source.Driver
+	}
 	if target.DriverVersion == "" {
 		target.DriverVersion = source.DriverVersion
 	}
