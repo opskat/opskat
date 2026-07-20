@@ -24,6 +24,27 @@ func (noSessionSerialManager) GetSessionByAssetID(_ int64) (serial_svc.CommandSe
 	return nil, false
 }
 
+// newRecordingChecker builds a real *permission.CommandPolicyChecker whose confirm
+// callback flips the returned flag. It is how these tests observe "CheckForAsset was
+// invoked" without a mockable seam: CommandPolicyChecker is a concrete struct, and its
+// confirm callback is the only injection point — which is also exactly the side effect
+// the ordering invariant exists to prevent (the callback IS the approval dialog; on
+// "allow all" it persists a standing grant via SaveGrantPattern).
+//
+// For an asset type that has no CmdPolicy configured — every type used by the ordering
+// tests below — CheckPermission falls through to aictx.NeedConfirm, which routes into
+// HandleConfirm and calls this callback. So "callback never fired" is a faithful stand-in
+// for "CheckForAsset never ran", and hoisting the permission check above the branch under
+// test makes it fire (verified by mutation for each of the three tests).
+func newRecordingChecker() (*permission.CommandPolicyChecker, *bool) {
+	called := false
+	confirm := func(_ context.Context, _ string, _ []permission.ApprovalItem) permission.ApprovalResponse {
+		called = true
+		return permission.ApprovalResponse{Decision: "allow"}
+	}
+	return permission.NewCommandPolicyChecker(confirm), &called
+}
+
 func setupUnified(t *testing.T) *mock_asset_repo.MockAssetRepo {
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)
@@ -54,14 +75,27 @@ func setupUnified(t *testing.T) *mock_asset_repo.MockAssetRepo {
 // a real, freshly-constructed gate to observe the guidance path at all.
 func TestHandleExec_UndocumentedTypeReturnsGuidance(t *testing.T) {
 	m := setupUnified(t)
-	m.EXPECT().FindByName(gomock.Any(), "7").Return(nil, nil)
+	// AnyTimes: the point of *checkCalled below is to catch a permission check hoisted
+	// above the gate. With exact-arity mocks the hoisted CheckForAsset would blow up on
+	// "unexpected call to Find" (its policy path re-reads the asset) before reaching the
+	// assertion — the test would still fail, but for the wrong reason, and would keep
+	// failing if the assertion were deleted. AnyTimes lets the assertion be the thing
+	// that catches the regression.
+	m.EXPECT().FindByName(gomock.Any(), "7").Return(nil, nil).AnyTimes()
 	m.EXPECT().Find(gomock.Any(), int64(7)).Return(
-		&asset_entity.Asset{ID: 7, Name: "cache-1", Type: asset_entity.AssetTypeRedis}, nil)
+		&asset_entity.Asset{ID: 7, Name: "cache-1", Type: asset_entity.AssetTypeRedis}, nil).AnyTimes()
 
+	checker, checkCalled := newRecordingChecker()
 	ctx := WithDocGate(context.Background(), NewDocGate())
+	ctx = permission.WithPolicyChecker(ctx, checker)
 
+	// A write command on purpose: the default Redis policy is a read-only allowlist, so a
+	// read like `GET foo` resolves to Allow without ever consulting the user. That would
+	// make the *checkCalled assertion below vacuous — it would hold even with the
+	// permission check hoisted above the gate. `SET` falls outside the allowlist and so
+	// reaches HandleConfirm, which is the side effect the ordering invariant forbids.
 	out, err := handleExec(ctx, map[string]any{
-		"asset": "7", "command": "GET foo",
+		"asset": "7", "command": "SET foo bar",
 	})
 	if err != nil {
 		t.Fatalf("gate must not return a Go error, got %v", err)
@@ -72,6 +106,13 @@ func TestHandleExec_UndocumentedTypeReturnsGuidance(t *testing.T) {
 	// 引导语必须点出解析出的类型（spec §4.6）。
 	if !strings.Contains(out, "redis") {
 		t.Fatalf("guidance should name the resolved asset type, got %q", out)
+	}
+	// 门禁必须排在权限检查之前——见 handleExec 的顺序注释。只断言"返回了引导文本"
+	// 挡不住有人把权限检查上提：那样用户会先被弹一次审批，批准（甚至 allow all
+	// 落一条常驻 grant）之后才拿到"请先调 help"的引导，命令根本没执行。
+	if *checkCalled {
+		t.Fatal("CheckForAsset ran on the gate-blocked path — an approval dialog must " +
+			"never appear for a type whose usage doc the model hasn't seen")
 	}
 }
 
@@ -92,12 +133,7 @@ func TestHandleExec_SerialPrecheckBlocksApprovalDialog(t *testing.T) {
 	m.EXPECT().FindByName(gomock.Any(), "11").Return(nil, nil).AnyTimes()
 	m.EXPECT().Find(gomock.Any(), int64(11)).Return(asset, nil).AnyTimes()
 
-	confirmCalled := false
-	confirm := func(_ context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
-		confirmCalled = true
-		return permission.ApprovalResponse{Decision: "allow"}
-	}
-	checker := permission.NewCommandPolicyChecker(confirm)
+	checker, checkCalled := newRecordingChecker()
 
 	ctx := WithDocGate(context.Background(), NewDocGate())
 	ctx = permission.WithPolicyChecker(ctx, checker)
@@ -113,8 +149,8 @@ func TestHandleExec_SerialPrecheckBlocksApprovalDialog(t *testing.T) {
 	if !strings.Contains(err.Error(), "no active serial session") {
 		t.Fatalf("got %q, want the no-active-session error", err.Error())
 	}
-	if confirmCalled {
-		t.Fatal("permission checker's confirm callback fired before the precheck failed — " +
+	if *checkCalled {
+		t.Fatal("CheckForAsset ran before the precheck failed — " +
 			"an approval dialog must never appear for a session-less serial asset")
 	}
 }
@@ -159,14 +195,22 @@ func TestHandleHelp_ReturnsDocAndMarksGate(t *testing.T) {
 // message's distinguishing wording and explicitly rules out the guidance text.
 func TestHandleExec_UnsupportedTypeIsExplicit(t *testing.T) {
 	m := setupUnified(t)
-	m.EXPECT().FindByName(gomock.Any(), "5").Return(nil, nil)
+	// AnyTimes for the same reason as TestHandleExec_UndocumentedTypeReturnsGuidance: a
+	// permission check hoisted above the executor lookup must be caught by *checkCalled
+	// below, not by gomock complaining about an extra Find.
+	m.EXPECT().FindByName(gomock.Any(), "5").Return(nil, nil).AnyTimes()
 	m.EXPECT().Find(gomock.Any(), int64(5)).Return(
-		&asset_entity.Asset{ID: 5, Name: "m1", Type: asset_entity.AssetTypeMongoDB}, nil)
+		&asset_entity.Asset{ID: 5, Name: "m1", Type: asset_entity.AssetTypeMongoDB}, nil).AnyTimes()
 
+	checker, checkCalled := newRecordingChecker()
 	ctx := WithDocGate(context.Background(), NewDocGate())
+	ctx = permission.WithPolicyChecker(ctx, checker)
 
+	// A write, not a `find`: the default MongoDB policy is a read-only allowlist, so a
+	// read would resolve to Allow without reaching HandleConfirm and the *checkCalled
+	// assertion below would be vacuous (verified by mutation).
 	out, err := handleExec(ctx, map[string]any{
-		"asset": "5", "command": "find app.users {}",
+		"asset": "5", "command": "insertOne app.users {}",
 	})
 	if err == nil {
 		t.Fatalf("expected an explicit unsupported-type error, got out=%q err=nil", out)
@@ -176,6 +220,12 @@ func TestHandleExec_UnsupportedTypeIsExplicit(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "call help") {
 		t.Fatalf("got the doc-gate guidance text instead of the unsupported-type error: %q", err.Error())
+	}
+	// 执行器查找同样必须排在权限检查之前：对一个压根没有执行器的类型，用户不该先被
+	// 弹一次审批、批准之后才被告知"这个类型还不支持"。
+	if *checkCalled {
+		t.Fatal("CheckForAsset ran for an asset type that has no executor at all — " +
+			"an approval dialog must never appear for a command that cannot run")
 	}
 }
 
