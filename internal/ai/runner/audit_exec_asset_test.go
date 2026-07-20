@@ -11,6 +11,8 @@ import (
 
 	. "github.com/smartystreets/goconvey/convey"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	aitool "github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -18,6 +20,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
+	"github.com/opskat/opskat/internal/service/serial_svc"
 )
 
 // setupExecAssetRepo registers a mock AssetRepo for the duration of the test,
@@ -301,4 +304,131 @@ func TestAuditMiddleware_ExecToolResolvesAssetBeforeToolRuns(t *testing.T) {
 		So(entry.AssetID, ShouldEqual, int64(5))
 		So(entry.AssetName, ShouldEqual, "web-5")
 	})
+}
+
+// TestAuditMiddleware_ExecGateBlockedIsDistinguishable is the regression lock for the
+// finding that a gate-blocked exec wrote an audit row indistinguishable from a
+// successful execution.
+//
+// auditMiddleware resolves and canonicalizes before c.Next() (by design -- see
+// resolveAssetForAudit), so when handleExec short-circuits at the doc gate the row
+// still lands with the asset attributed and args["command"] fully populated. The gate
+// returns guidance text rather than a Go error (deliberately: the model self-corrects
+// mid-turn), so success stays 1 too. Before the fix nothing on that row said the
+// command never ran -- a policy-denied row at least carries a populated decision,
+// this one carried none, and `WHERE success = 1` counted it as an executed command.
+//
+// The fix reuses the existing RecordDecision plumbing rather than adding a column:
+// decision=deny + decision_source=exec_gate_blocked. Asserting DecisionSource (not
+// just a non-empty Decision) is what distinguishes it from a genuine policy denial.
+func TestAuditMiddleware_ExecGateBlockedIsDistinguishable(t *testing.T) {
+	Convey("门禁短路的 exec 审计行必须能跟执行成功的行区分开", t, func() {
+		mockRepo := registerMockAuditRepo(t)
+
+		asset := &asset_entity.Asset{ID: 77, Name: "cache-77", Type: asset_entity.AssetTypeRedis}
+		origAsset := asset_repo.Asset()
+		asset_repo.RegisterAsset(&staticAssetRepo{asset: asset})
+		t.Cleanup(func() { asset_repo.RegisterAsset(origAsset) })
+
+		// A real, empty DocGate: redis was never marked documented in this conversation,
+		// so handleExec short-circuits at the gate.
+		ctx := aitool.WithDocGate(context.Background(), aitool.NewDocGate())
+
+		execTool := findExecTool(t, "exec")
+		td := &agent.ToolDispatcher{
+			Tools:      []agent.Tool{execTool},
+			Middleware: []agent.ToolHookEntry[agent.ToolMiddleware]{{Matcher: ".*", Fn: auditMiddleware}},
+		}
+		td.Run(ctx, agent.DispatchInput{
+			ToolName:  "exec",
+			ToolUseID: "tu_gate_blocked",
+			Input:     map[string]any{"asset": "77", "command": "SET foo bar"},
+		})
+
+		entry := waitForAuditEntry(t, mockRepo, "exec", 77)
+		// The row still looks like a successful call on every pre-existing signal --
+		// which is precisely why the decision columns have to carry the distinction.
+		So(entry.Success, ShouldEqual, 1)
+		So(entry.Command, ShouldEqual, "SET foo bar")
+		So(entry.Decision, ShouldEqual, "deny")
+		So(entry.DecisionSource, ShouldEqual, aictx.SourceExecGateBlocked)
+	})
+}
+
+// TestAuditMiddleware_ExecUnsupportedTypeIsDistinguishable covers the sibling
+// short-circuit: an asset type with no registered executor. This one does return a Go
+// error (success=0), so it was already distinguishable from a successful run -- but
+// not attributable to a reason, which is what DecisionSource adds. Locking it here
+// keeps the three short-circuit paths consistent.
+func TestAuditMiddleware_ExecUnsupportedTypeIsDistinguishable(t *testing.T) {
+	Convey("未注册执行器的类型，审计行要标出短路原因", t, func() {
+		mockRepo := registerMockAuditRepo(t)
+
+		asset := &asset_entity.Asset{ID: 78, Name: "mongo-78", Type: asset_entity.AssetTypeMongoDB}
+		origAsset := asset_repo.Asset()
+		asset_repo.RegisterAsset(&staticAssetRepo{asset: asset})
+		t.Cleanup(func() { asset_repo.RegisterAsset(origAsset) })
+
+		ctx := aitool.WithDocGate(context.Background(), aitool.NewDocGate())
+
+		execTool := findExecTool(t, "exec")
+		td := &agent.ToolDispatcher{
+			Tools:      []agent.Tool{execTool},
+			Middleware: []agent.ToolHookEntry[agent.ToolMiddleware]{{Matcher: ".*", Fn: auditMiddleware}},
+		}
+		td.Run(ctx, agent.DispatchInput{
+			ToolName:  "exec",
+			ToolUseID: "tu_unsupported",
+			Input:     map[string]any{"asset": "78", "command": "insertOne app.users {}"},
+		})
+
+		entry := waitForAuditEntry(t, mockRepo, "exec", 78)
+		So(entry.Success, ShouldEqual, 0)
+		So(entry.Decision, ShouldEqual, "deny")
+		So(entry.DecisionSource, ShouldEqual, aictx.SourceExecUnsupportedType)
+	})
+}
+
+// TestAuditMiddleware_ExecPrecheckFailureIsDistinguishable covers the third
+// short-circuit: a serial asset with no connected port (permission.PrecheckFunc).
+func TestAuditMiddleware_ExecPrecheckFailureIsDistinguishable(t *testing.T) {
+	Convey("precheck 失败的 exec 审计行要标出短路原因", t, func() {
+		mockRepo := registerMockAuditRepo(t)
+
+		asset := &asset_entity.Asset{ID: 79, Name: "console-79", Type: asset_entity.AssetTypeSerial}
+		origAsset := asset_repo.Asset()
+		asset_repo.RegisterAsset(&staticAssetRepo{asset: asset})
+		t.Cleanup(func() { asset_repo.RegisterAsset(origAsset) })
+
+		// Mark serial documented so the call reaches the precheck rather than stopping at
+		// the gate -- otherwise this would just re-test the gate path above.
+		gate := aitool.NewDocGate()
+		gate.MarkDocumented(0, asset_entity.AssetTypeSerial)
+		ctx := aitool.WithDocGate(context.Background(), gate)
+		ctx = helper.WithSerialManager(ctx, noSessionSerialManager{})
+
+		execTool := findExecTool(t, "exec")
+		td := &agent.ToolDispatcher{
+			Tools:      []agent.Tool{execTool},
+			Middleware: []agent.ToolHookEntry[agent.ToolMiddleware]{{Matcher: ".*", Fn: auditMiddleware}},
+		}
+		td.Run(ctx, agent.DispatchInput{
+			ToolName:  "exec",
+			ToolUseID: "tu_precheck",
+			Input:     map[string]any{"asset": "79", "command": "display version"},
+		})
+
+		entry := waitForAuditEntry(t, mockRepo, "exec", 79)
+		So(entry.Success, ShouldEqual, 0)
+		So(entry.Decision, ShouldEqual, "deny")
+		So(entry.DecisionSource, ShouldEqual, aictx.SourceExecPrecheckFailed)
+	})
+}
+
+// noSessionSerialManager reports "no active session" for every asset, driving the
+// serial PrecheckFunc's failure path.
+type noSessionSerialManager struct{}
+
+func (noSessionSerialManager) GetSessionByAssetID(_ int64) (serial_svc.CommandSession, bool) {
+	return nil, false
 }

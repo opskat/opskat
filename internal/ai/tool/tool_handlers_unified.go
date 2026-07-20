@@ -51,12 +51,14 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 
 	exec, ok := permission.ExecutorFor(asset.Type)
 	if !ok {
+		recordShortCircuit(ctx, aictx.SourceExecUnsupportedType)
 		return "", unsupportedTypeError(asset)
 	}
 
 	if gate := GetDocGate(ctx); gate != nil {
 		convID := aictx.GetConversationID(ctx)
 		if !gate.IsDocumented(convID, asset.Type) {
+			recordShortCircuit(ctx, aictx.SourceExecGateBlocked)
 			return execGuidance(asset), nil
 		}
 	}
@@ -72,6 +74,7 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 
 	if precheck, ok := permission.PrecheckFor(asset.Type); ok {
 		if err := precheck(ctx, asset); err != nil {
+			recordShortCircuit(ctx, aictx.SourceExecPrecheckFailed)
 			return "", err
 		}
 	}
@@ -87,6 +90,27 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 	}
 
 	return exec(ctx, asset, command, scope)
+}
+
+// recordShortCircuit 把"命令在权限检查之前就被挡下"写进审计决策槽。
+//
+// 不加审计列，而是复用 RecordDecision 这条既有链路（handler 写 aictx 槽 →
+// runner.auditMiddleware 在 c.Next() 之后读出 → audit.ToolCallInfo.Decision →
+// audit_logs 的 decision / decision_source 列）：这三条路径的语义跟策略拒绝是同一类
+// ——被挡下、没有执行——只是挡下的理由不同，而"理由"正是 DecisionSource 这一列存在
+// 的意义。
+//
+// 不这么做的话，门禁短路会落下一条 success=1、command 完整、decision 为空的审计行：
+// 跟一条真正执行成功的行无法区分（策略拒绝的行还有 decision 可认，门禁短路的没有），
+// 任何按 success=1 统计"执行过的命令"的审计查询都会把它算进去。
+//
+// command 列保持原样填充是有意的：知道模型尝试过什么本身有价值，只要这一行同时被
+// decision=deny 标成"没有执行"就不会被误读。
+func recordShortCircuit(ctx context.Context, source string) {
+	aictx.RecordDecision(ctx, aictx.CheckResult{
+		Decision:       aictx.Deny,
+		DecisionSource: source,
+	})
 }
 
 // execGuidance 门禁未满足时返回的引导文本：点名资产与解析出的类型，指引模型
