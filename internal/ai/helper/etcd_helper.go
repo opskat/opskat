@@ -69,23 +69,8 @@ func HandleExecEtcd(ctx context.Context, args map[string]any) (string, error) {
 	return string(data), nil
 }
 
-// FormatEtcdCommand 把结构化 ExecRequest 还原为策略匹配 / 审计可读的命令字符串。
-//
-// 规则：
-//   - 复合 op（"member_list" / "endpoint_status" 等）还原为 "member list" / "endpoint status"；
-//   - 依次追加 key、value 与 --prefix 标志；
-//   - 与 audit 提取器、SaveGrantPattern 共用同一份格式，避免策略匹配与审计文本漂移。
+// FormatEtcdCommand 委托给 etcd_svc.FormatCommand——格式定义与其逆函数 ParseCommand
+// 同住一处，避免二者再次漂移。保留本名是因为 helper 侧已有调用方。
 func FormatEtcdCommand(req *etcd_svc.ExecRequest) string {
-	op := strings.ReplaceAll(req.Op, "_", " ")
-	parts := []string{op}
-	if req.Key != "" {
-		parts = append(parts, req.Key)
-	}
-	if req.Value != "" {
-		parts = append(parts, req.Value)
-	}
-	if req.Prefix {
-		parts = append(parts, "--prefix")
-	}
-	return strings.Join(parts, " ")
+	return etcd_svc.FormatCommand(req)
 }
