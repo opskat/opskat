@@ -30,10 +30,11 @@ export function flattenPrefixTree(
   rootPrefix = ""
 ): OssPrefixRow[] {
   const rows: OssPrefixRow[] = [];
-  const walk = (parentPrefix: string, depth: number) => {
+  const walk = (parentPrefix: string, depth: number, ancestors: Set<string>) => {
     const node = tree[parentPrefix];
     if (!node) return;
     for (const childPrefix of node.childPrefixes) {
+      if (ancestors.has(childPrefix)) continue;
       const isExpanded = expanded.has(childPrefix);
       const childNode = tree[childPrefix];
       rows.push({
@@ -44,10 +45,10 @@ export function flattenPrefixTree(
         loaded: childNode?.loaded ?? false,
       });
       // 只有 expanded 且子节点已懒填才继续下钻；expanded 但未 loaded 的节点先只画自己。
-      if (isExpanded && childNode?.loaded) walk(childPrefix, depth + 1);
+      if (isExpanded && childNode?.loaded) walk(childPrefix, depth + 1, new Set([...ancestors, childPrefix]));
     }
   };
-  walk(rootPrefix, 0);
+  walk(rootPrefix, 0, new Set([rootPrefix]));
   return rows;
 }
 

@@ -3,6 +3,7 @@ package helper
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -11,6 +12,70 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	. "github.com/smartystreets/goconvey/convey"
 )
+
+func TestFormatRowsJSONContracts(t *testing.T) {
+	tests := []struct {
+		name       string
+		paged      bool
+		totalCount int
+	}{
+		{name: "unpaged", paged: false},
+		{name: "paged", paged: true, totalCount: 7},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = db.Close() }()
+
+			mock.ExpectQuery("SELECT").WillReturnRows(
+				sqlmock.NewRows([]string{"name", "nullable"}).
+					AddRow([]byte("alice"), nil),
+			)
+			rows, err := db.Query("SELECT")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = rows.Close() }()
+
+			var result string
+			if tt.paged {
+				result, err = formatRowsPagedJSON(rows, tt.totalCount)
+			} else {
+				result, err = formatRowsJSON(rows)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var got map[string]any
+			if err := json.Unmarshal([]byte(result), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got["count"] != float64(1) {
+				t.Fatalf("count = %#v, want 1", got["count"])
+			}
+			if tt.paged {
+				if got["total_count"] != float64(tt.totalCount) {
+					t.Fatalf("total_count = %#v, want %d", got["total_count"], tt.totalCount)
+				}
+			} else if _, ok := got["total_count"]; ok {
+				t.Fatal("unpaged result unexpectedly contains total_count")
+			}
+			resultRows := got["rows"].([]any)
+			row := resultRows[0].(map[string]any)
+			if row["name"] != "alice" || row["nullable"] != nil {
+				t.Fatalf("row = %#v, want converted bytes and preserved nil", row)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
 
 type recordCloser struct {
 	name   string

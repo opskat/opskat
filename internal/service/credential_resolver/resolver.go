@@ -204,8 +204,7 @@ type PasswordSource interface {
 	GetPassword() string
 }
 
-// ResolvePasswordGeneric 通用密码解密。
-// 仅供 assettype handler 使用。现有 ResolveXxxPassword 方法保持不变。
+// ResolvePasswordGeneric 为 assettype handler 解析托管或内联密码。
 func (r *Resolver) ResolvePasswordGeneric(ctx context.Context, src PasswordSource) (string, error) {
 	if src.GetCredentialID() > 0 {
 		password, err := credential_mgr_svc.GetDecryptedPassword(ctx, src.GetCredentialID())

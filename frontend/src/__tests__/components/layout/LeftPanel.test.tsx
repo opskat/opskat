@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { render, fireEvent, cleanup } from "@testing-library/react";
+import { render, fireEvent, cleanup, act } from "@testing-library/react";
 import { LeftPanel } from "../../../components/layout/LeftPanel";
 import { useLayoutStore } from "../../../stores/layoutStore";
 
@@ -77,5 +77,21 @@ describe("LeftPanel", () => {
     fireEvent(document, new MouseEvent("mouseup"));
 
     expect(useLayoutStore.getState().leftPanelWidth).toBe(48);
+  });
+
+  it("starts a drag from the latest externally updated store width", () => {
+    const { container } = render(
+      <LeftPanel>
+        <span />
+      </LeftPanel>
+    );
+    act(() => useLayoutStore.getState().setPanelWidth(300));
+
+    const handle = container.querySelector(".cursor-col-resize") as HTMLElement;
+    fireEvent.mouseDown(handle, { clientX: 300 });
+    fireEvent(document, new MouseEvent("mousemove", { clientX: 320 }));
+    fireEvent(document, new MouseEvent("mouseup"));
+
+    expect(useLayoutStore.getState().leftPanelWidth).toBe(320);
   });
 });

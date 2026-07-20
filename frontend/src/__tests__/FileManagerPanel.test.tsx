@@ -265,6 +265,24 @@ describe("FileManagerPanel", () => {
     vi.mocked(SFTPListDir).mockResolvedValue([]);
   });
 
+  it("resizes through the shared drag lifecycle and commits once on mouseup", () => {
+    const onWidthChange = vi.fn();
+    const { container } = render(
+      <FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={onWidthChange} />
+    );
+    const handle = container.querySelector(".cursor-col-resize") as HTMLElement;
+
+    fireEvent.mouseDown(handle, { clientX: 300 });
+    expect(document.body.style.cursor).toBe("col-resize");
+    fireEvent(document, new MouseEvent("mousemove", { clientX: 250 }));
+    expect(onWidthChange).not.toHaveBeenCalled();
+    fireEvent(document, new MouseEvent("mouseup"));
+
+    expect(onWidthChange).toHaveBeenCalledTimes(1);
+    expect(onWidthChange).toHaveBeenCalledWith(330);
+    expect(document.body.style.cursor).toBe("");
+  });
+
   it("copies a file address from the file context menu", async () => {
     vi.mocked(SFTPListDir).mockResolvedValue([{ name: "demo.txt", isDir: false, size: 12, modTime: 0 }]);
 

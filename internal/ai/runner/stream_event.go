@@ -12,10 +12,9 @@ import (
 	"go.uber.org/zap"
 )
 
-// EventTranslator 把 cago agent.Event 翻译成 OpsKat 现有 StreamEvent。
+// EventTranslator 把 cago agent.Event 翻译成前端 StreamEvent 契约。
 //
-// 前端契约（type 字段名 + 内部字段）保持不变；这里只是从 cago 的 event 流里
-// 反推出旧 provider 的事件形态，保证前端 ai:event:{convID} 监听者无感知。
+// 翻译保持 type 字段名和事件字段稳定，供前端 ai:event:{convID} 监听者消费。
 //
 // 翻译是有状态的：thinking → content / tool_start 之间的转移需要插入一条
 // "thinking_done"，保持前端既有 stream contract。EventTranslator 实例每个对话每轮 1 个。
@@ -36,7 +35,7 @@ func NewStreamTranslator() *EventTranslator {
 // 多发场景：thinking → content 转移会先发 "thinking_done" 再发 "content"。
 // 不映射的 EventKind（如 EventMessageEnd / EventToolDelta）直接静默——
 // 前者由 EventTextDelta / EventTurnEnd 隐含，后者是 cago 流式工具参数增量，
-// 旧 OpsKat StreamEvent 没有对应字段，可丢弃。
+// 前端 StreamEvent 契约没有对应字段，可丢弃。
 func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 	switch ev.Kind {
 	case agent.EventTextDelta:

@@ -9,7 +9,7 @@ vi.mock("../extension/inject", () => ({ injectExtensionAPI: vi.fn() }));
 vi.mock("../extension/api", () => ({ createExtensionAPI: vi.fn() }));
 vi.mock("../extension/loader", () => ({ clearExtensionCache: vi.fn() }));
 
-import { initExtensions, _refreshExtensions, _resetForTesting } from "../extension/init";
+import { bootstrapExtensions, _refreshExtensions, _resetForTesting } from "../extension/init";
 
 const manifest = {
   name: "oss",
@@ -63,7 +63,7 @@ describe("extension store", () => {
   });
 });
 
-describe("initExtensions (bootstrap + subscribe)", () => {
+describe("bootstrapExtensions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetStore();
@@ -73,7 +73,7 @@ describe("initExtensions (bootstrap + subscribe)", () => {
   it("registers enabled extensions and sets ready=true", async () => {
     vi.mocked(ListInstalledExtensions).mockResolvedValue([{ name: "oss", enabled: true, manifest }] as any);
 
-    await initExtensions();
+    await bootstrapExtensions();
 
     const state = useExtensionStore.getState();
     expect(state.ready).toBe(true);
@@ -83,7 +83,7 @@ describe("initExtensions (bootstrap + subscribe)", () => {
   it("skips disabled extensions", async () => {
     vi.mocked(ListInstalledExtensions).mockResolvedValue([{ name: "oss", enabled: false, manifest }] as any);
 
-    await initExtensions();
+    await bootstrapExtensions();
 
     const state = useExtensionStore.getState();
     // disabled-only list still has length > 0, so ready is set
@@ -94,7 +94,7 @@ describe("initExtensions (bootstrap + subscribe)", () => {
   it("defers ready when ListInstalledExtensions fails (waits for ext:ready)", async () => {
     vi.mocked(ListInstalledExtensions).mockRejectedValue(new Error("IPC not ready"));
 
-    await initExtensions();
+    await bootstrapExtensions();
 
     // ready stays false — ext:ready event will set it later
     expect(useExtensionStore.getState().ready).toBe(false);
@@ -103,7 +103,7 @@ describe("initExtensions (bootstrap + subscribe)", () => {
   it("defers ready on null response (waits for ext:ready)", async () => {
     vi.mocked(ListInstalledExtensions).mockResolvedValue(null as any);
 
-    await initExtensions();
+    await bootstrapExtensions();
 
     // empty list means backend init not done — ready deferred to ext:ready
     expect(useExtensionStore.getState().ready).toBe(false);
@@ -115,7 +115,7 @@ describe("initExtensions (bootstrap + subscribe)", () => {
 
     vi.mocked(ListInstalledExtensions).mockResolvedValue([{ name: "oss", enabled: true, manifest }] as any);
 
-    await initExtensions();
+    await bootstrapExtensions();
 
     const state = useExtensionStore.getState();
     expect(state.extensions["old-ext"]).toBeUndefined();
@@ -126,7 +126,7 @@ describe("initExtensions (bootstrap + subscribe)", () => {
     vi.mocked(ListInstalledExtensions).mockResolvedValue([]);
     vi.mocked(EventsOn).mockReturnValue(() => {});
 
-    await initExtensions();
+    await bootstrapExtensions();
 
     expect(EventsOn).toHaveBeenCalledWith("ext:reload", expect.any(Function));
     expect(EventsOn).toHaveBeenCalledWith("ext:ready", expect.any(Function));
@@ -136,8 +136,8 @@ describe("initExtensions (bootstrap + subscribe)", () => {
     vi.mocked(ListInstalledExtensions).mockResolvedValue([]);
     vi.mocked(EventsOn).mockReturnValue(() => {});
 
-    await initExtensions();
-    await initExtensions();
+    await bootstrapExtensions();
+    await bootstrapExtensions();
 
     expect(ListInstalledExtensions).toHaveBeenCalledTimes(1);
     // 2 subscriptions: ext:reload + ext:ready

@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -30,7 +32,9 @@ import (
 	aitool "github.com/opskat/opskat/internal/ai/tool"
 	_ "github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/bootstrap"
+	"github.com/opskat/opskat/internal/pkg/portable"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/internal/service/extension_svc"
@@ -49,6 +53,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
+	"github.com/wailsapp/wails/v2/pkg/options/windows"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"go.uber.org/zap"
 )
@@ -83,6 +88,28 @@ func resolveBootstrap() (dataDir string, opts bootstrap.Options, disableSingleIn
 	opts = bootstrap.Options{DataDir: dataDir, MasterKey: os.Getenv("OPSKAT_MASTER_KEY")}
 	disableSingleInstance = os.Getenv("OPSKAT_E2E") == "1"
 	return dataDir, opts, disableSingleInstance
+}
+
+// singleInstanceBaseID 是非便携安装的单实例锁 id，历史值不可改：改了会让
+// 升级前后的两个版本互不感知，同时开出两个窗口。
+const singleInstanceBaseID = "com.opskat.desktop"
+
+// singleInstanceID 返回单实例锁 id：便携模式下把便携目录路径哈希进去，
+// 使便携版与已安装版、以及两个不同的便携目录互不抢锁。
+//
+// 否则常量 id 会让"已装了 OpsKat 的用户双击便携版 opskat.exe"变成静默失败：
+// bootstrap.Init 先跑完（便携目录里日志、master.key、opskat.db 都已落盘），
+// 随后 Wails 发现同名 mutex 已存在，把已安装的窗口弹到前台并 os.Exit(0)——
+// 便携版没有窗口也没有报错。
+//
+// 取 sha256 前 4 字节（8 个十六进制字符）：够短，且只含 [0-9a-f]，
+// 对 Windows 命名 mutex 与 Linux 侧由该 id 派生的 dbus 名都是安全字符。
+func singleInstanceID(portableRoot string) string {
+	if portableRoot == "" {
+		return singleInstanceBaseID
+	}
+	sum := sha256.Sum256([]byte(portableRoot))
+	return fmt.Sprintf("%s.%x", singleInstanceBaseID, sum[:4])
 }
 
 func main() {
@@ -157,7 +184,21 @@ func main() {
 	opsctlB := opsctl.New(appCtx, sys, sys, proxyServer)
 	opsctlB.SetAuthToken(authToken)
 	extB := extension.New(appCtx, sys, pool)
-	extEditB := external_edit.New(appCtx, sys, sftpSvc, sshMgr)
+	externalEditEmitter := external_edit.NewEventEmitter()
+	externalEditSvc, err := external_edit_svc.NewService(external_edit_svc.Options{
+		DataDir:        bootstrap.AppDataDir(),
+		ConfigProvider: bootstrap.GetConfig,
+		ConfigSaver:    bootstrap.SaveConfig,
+		Remote:         sftpSvc,
+		FindSessions:   sshMgr.ListActiveSessionIDsByAsset,
+		Assets:         asset_repo.Asset(),
+		Audit:          audit_repo.Audit(),
+		Emit:           externalEditEmitter.Emit,
+	})
+	if err != nil {
+		zap.L().Warn("init external edit service", zap.Error(err))
+	}
+	extEditB := external_edit.New(sys, externalEditSvc, externalEditEmitter)
 
 	// 3. 注入跨 binder 依赖
 	aiB.SetKafkaService(kafkaB.Service())
@@ -216,9 +257,24 @@ func main() {
 			WebviewIsTransparent: true,
 		},
 	}
+	// 便携模式下把 WebView2 的用户数据目录也收进便携目录：其中的 localStorage
+	// 存着真实用户内容（SQL 编辑器文本、etcd 命令历史、打开的标签页），Wails 默认
+	// 会写到 %APPDATA%\opskat.exe，既污染宿主机器（便携版承诺"不留痕迹"），
+	// UI 状态也无法随文件夹迁移。只在便携模式下设置：无条件设置会让已安装用户的
+	// WebView2 数据换一次位置，标签页/布局/主题被一次性清空。
+	if portableRoot := portable.Dir(); portableRoot != "" {
+		appOptions.Windows = &windows.Options{
+			WebviewUserDataPath: filepath.Join(portableRoot, "webview2"),
+			// Wails 只在 Windows 选项非 nil 时才下发缩放设置，且直接取字段值；
+			// 保持 nil 时 WebView2 用自己的默认值（缩放开启）。这里显式置 true，
+			// 否则零值 false 会把 Ctrl+滚轮缩放只在便携版上关掉。
+			IsZoomControlEnabled: true,
+		}
+	}
+
 	if !disableSingleInstance {
 		appOptions.SingleInstanceLock = &options.SingleInstanceLock{
-			UniqueId: "com.opskat.desktop",
+			UniqueId: singleInstanceID(portable.Dir()),
 			OnSecondInstanceLaunch: func(secondInstanceData options.SecondInstanceData) {
 				sys.OnSecondInstanceLaunch()
 			},

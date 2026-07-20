@@ -40,8 +40,16 @@ describe("AssetIcon", () => {
 
 describe("EntityIcon", () => {
   it("renders the provided fallback when no icon value is configured", () => {
-    render(<EntityIcon fallback={Server} data-testid="icon" />);
+    render(<EntityIcon fallback={Server} style={{ opacity: 0.5 }} data-testid="icon" />);
 
-    expect(screen.getByTestId("icon").tagName.toLowerCase()).toBe("svg");
+    const icon = screen.getByTestId("icon");
+    expect(icon.tagName.toLowerCase()).toBe("svg");
+    expect(icon).toHaveStyle({ opacity: "0.5" });
+  });
+
+  it("merges the configured icon color with caller-provided styles", () => {
+    render(<EntityIcon icon="server#ff0000" style={{ opacity: 0.5 }} data-testid="icon" />);
+
+    expect(screen.getByTestId("icon")).toHaveStyle({ color: "#ff0000", opacity: "0.5" });
   });
 });

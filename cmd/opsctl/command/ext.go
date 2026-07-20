@@ -39,7 +39,7 @@ func cmdExt(args []string) int {
 
 // cmdExtList lists installed extensions by scanning manifest files.
 func cmdExtList() int {
-	extDir := filepath.Join(bootstrap.AppDataDir(), "extensions")
+	extDir := filepath.Join(bootstrap.ResolvedDataDir(), "extensions")
 
 	entries, err := os.ReadDir(extDir)
 	if err != nil {
@@ -155,7 +155,7 @@ func cmdExtExec(args []string) int {
 
 // delegateExtExec sends an ext_tool request to the desktop app via approval socket.
 func delegateExtExec(extName, toolName string, toolArgs json.RawMessage) (string, error) {
-	dataDir := bootstrap.AppDataDir()
+	dataDir := bootstrap.ResolvedDataDir()
 	sockPath := approval.SocketPath(dataDir)
 
 	token, err := bootstrap.ReadAuthToken(dataDir)

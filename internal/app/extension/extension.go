@@ -57,7 +57,7 @@ func (e *Extension) NewAssetConfigGetter() *assetConfigGetter { return &assetCon
 func (e *Extension) NewFileDialogOpener() *fileDialogOpener { return &fileDialogOpener{ctx: e.ctx} }
 
 // NewKVStore 为指定扩展返回 kvStore 实例。
-func (e *Extension) NewKVStore(extName string) *kvStore { return &kvStore{extName: extName} }
+func (e *Extension) NewKVStore(extName string) *kvStore { return &kvStore{ext: e, extName: extName} }
 
 // NewActionEventHandler 为指定扩展返回 actionEventHandler 实例。
 func (e *Extension) NewActionEventHandler(extName string) *actionEventHandler {

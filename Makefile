@@ -1,4 +1,4 @@
-.PHONY: dev run build build-embed clean install build-cli install-cli lint test test-cover test-e2e test-e2e-scratch install-skill devserver build-devserver-ui
+.PHONY: dev run build build-embed install-app clean install build-cli install-cli lint test test-cover test-e2e test-e2e-scratch install-skill devserver build-devserver-ui
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -10,6 +10,7 @@ else
 endif
 
 VERSION ?= 1.0.0
+APP_INSTALL_DIR ?= $(HOME)/Applications
 COMMIT_ID := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 VERSION_PKG := github.com/cago-frame/cago/configs
 BUILDINFO_PKG := github.com/opskat/opskat/internal/buildinfo
@@ -31,6 +32,19 @@ build:
 # 构建生产版本（内嵌 opsctl CLI）
 build-embed: build-cli-embed
 	wails build -ldflags="$(LDFLAGS)" -tags embed_opsctl
+
+# 构建并安装 macOS 桌面应用（默认安装到当前用户的 ~/Applications）
+ifeq ($(UNAME_S),Darwin)
+install-app: build-embed
+	@mkdir -p "$(APP_INSTALL_DIR)"
+	@rm -rf "$(APP_INSTALL_DIR)/opskat.app"
+	@ditto "./build/bin/opskat.app" "$(APP_INSTALL_DIR)/opskat.app"
+	@echo "OpsKat installed to $(APP_INSTALL_DIR)/opskat.app"
+else
+install-app:
+	@echo "install-app currently supports macOS only" >&2
+	@exit 1
+endif
 
 # 构建 opsctl 用于嵌入桌面端
 build-cli-embed:
@@ -60,14 +74,14 @@ lint-fix:
 test:
 	go test ./internal/... ./cmd/opsctl/... ./pkg/... ./cmd/devserver/...
 
-# E2E：Playwright 驱动真实 wails dev 跑 GUI 端到端。详见 docs/e2e-harness-guide.md。
+# E2E：Playwright 驱动真实 wails dev 跑 GUI 端到端。详见 docs/references/e2e-harness-guide.md。
 # 一次性装依赖 + 浏览器：cd e2e && pnpm run setup（CI 在独立步骤里装，故这里不重复）。
 # 配方只做 shell 无关的 cd && pnpm，跨平台(cmd/sh 皆可)；编排与收尾清理(回收残留
 # vite、删临时目录)都在 e2e/run-e2e.mjs 里用 Node 跨平台完成。
 test-e2e:
 	cd e2e && pnpm test
 
-# 临时功能验证：跑 e2e/scratch/ 里的一次性 spec（不提交）。约定/用法见 docs/e2e-harness-guide.md。
+# 临时功能验证：跑 e2e/scratch/ 里的一次性 spec（不提交）。约定/用法见 docs/references/e2e-harness-guide.md。
 test-e2e-scratch:
 	cd e2e && pnpm run test:scratch
 

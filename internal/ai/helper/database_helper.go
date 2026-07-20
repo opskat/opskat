@@ -325,32 +325,8 @@ func isSQLSpace(ch byte) bool {
 }
 
 func formatRowsPagedJSON(rows *sql.Rows, totalCount int) (string, error) {
-	columns, err := rows.Columns()
+	columns, resultRows, err := scanRows(rows)
 	if err != nil {
-		return "", err
-	}
-
-	var resultRows []map[string]any
-	for rows.Next() {
-		values := make([]any, len(columns))
-		ptrs := make([]any, len(columns))
-		for i := range values {
-			ptrs[i] = &values[i]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			return "", err
-		}
-		row := make(map[string]any, len(columns))
-		for i, col := range columns {
-			val := values[i]
-			if b, ok := val.([]byte); ok {
-				val = string(b)
-			}
-			row[col] = val
-		}
-		resultRows = append(resultRows, row)
-	}
-	if err := rows.Err(); err != nil {
 		return "", err
 	}
 
@@ -378,33 +354,8 @@ func isQueryStatement(upper string) bool {
 }
 
 func formatRowsJSON(rows *sql.Rows) (string, error) {
-	columns, err := rows.Columns()
+	columns, resultRows, err := scanRows(rows)
 	if err != nil {
-		return "", err
-	}
-
-	var resultRows []map[string]any
-	for rows.Next() {
-		values := make([]any, len(columns))
-		ptrs := make([]any, len(columns))
-		for i := range values {
-			ptrs[i] = &values[i]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			return "", err
-		}
-		row := make(map[string]any, len(columns))
-		for i, col := range columns {
-			val := values[i]
-			// 将 []byte 转为 string
-			if b, ok := val.([]byte); ok {
-				val = string(b)
-			}
-			row[col] = val
-		}
-		resultRows = append(resultRows, row)
-	}
-	if err := rows.Err(); err != nil {
 		return "", err
 	}
 
@@ -418,4 +369,36 @@ func formatRowsJSON(rows *sql.Rows) (string, error) {
 		return "", fmt.Errorf("failed to marshal query result: %w", err)
 	}
 	return string(data), nil
+}
+
+func scanRows(rows *sql.Rows) ([]string, []map[string]any, error) {
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var resultRows []map[string]any
+	for rows.Next() {
+		values := make([]any, len(columns))
+		ptrs := make([]any, len(columns))
+		for i := range values {
+			ptrs[i] = &values[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, nil, err
+		}
+		row := make(map[string]any, len(columns))
+		for i, col := range columns {
+			val := values[i]
+			if b, ok := val.([]byte); ok {
+				val = string(b)
+			}
+			row[col] = val
+		}
+		resultRows = append(resultRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return columns, resultRows, nil
 }

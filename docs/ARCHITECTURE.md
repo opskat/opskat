@@ -2,13 +2,13 @@
 
 The canonical map of how OpsKat is put together: the processes it runs, the backend layering, the request lifecycle, each subsystem, the data model, and the AI / extension / opsctl flows.
 
-> This doc owns **structure** (what the pieces are and how they fit). It does *not* repeat the cross-cutting **principles** (SOLID seams, Fix policy, Reuse first, defensive code) — those live in [AGENTS.md](../AGENTS.md) — nor the **how-to** (commands, conventions, logging rules, generated files) — those live in [DEVELOP.md](DEVELOP.md). The step-by-step path for adding a built-in asset type is in [adding-an-asset-type.md](adding-an-asset-type.md).
+> This doc owns **structure** (what the pieces are and how they fit). It does *not* repeat the cross-cutting **principles** (SOLID seams, Fix policy, Reuse first, defensive code) — those live in [AGENTS.md](../AGENTS.md) — nor the **how-to** (commands, conventions, logging rules, generated files) — those live in [DEVELOP.md](DEVELOP.md). The step-by-step path for adding a built-in asset type is in [adding-an-asset-type.md](references/adding-an-asset-type.md).
 >
 > **Keep it true for the current branch.** Every claim here must be verifiable in committed code. Counts (asset types, migrations, stores) are deliberately written as "enumerate from `<source>`" rather than hardcoded — they drift silently. Before editing, read [DOC-MAINTENANCE.md](DOC-MAINTENANCE.md).
 
-## 1. Topology — three processes, no HTTP API
+## 1. Topology — desktop app and opsctl, no app HTTP API
 
-OpsKat is a **Wails v2** desktop app (Go 1.26 backend + React 19 frontend). The frontend and backend communicate over **Wails IPC only** — there is no REST/HTTP server for the app's own UI. Two other process kinds talk to the running app over **Unix-domain sockets**, and extensions run as sandboxed **WASM** modules inside the backend.
+OpsKat is a **Wails v2** desktop app (Go 1.26 backend + React 19 frontend). The frontend and backend communicate over **Wails IPC only** — there is no REST/HTTP server for the app's own UI. `opsctl` talks to the running app over two **Unix-domain sockets**, and extensions run as sandboxed **WASM** modules inside the backend.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -71,7 +71,9 @@ Backend-initiated updates flow the other way as **events**: the app emits a Wail
 
 ## 4. Process wiring (`main.go`)
 
-`main.go` is the composition root. In order, it: resolves the data dir / master key (env overrides `OPSKAT_DATA_DIR`, `OPSKAT_MASTER_KEY`; `OPSKAT_E2E` relaxes the single-instance lock for the e2e harness); runs `bootstrap.Init` (DB open, master-key resolve, repository registration, migrations); initializes the logger and config; builds the shared infrastructure (SSH pool, SFTP service); constructs the per-domain **binders** and hands them to `wails.Run` via `Bind`.
+`main.go` is the composition root. In order, it: resolves the data dir / master key (`OPSKAT_DATA_DIR` / `OPSKAT_MASTER_KEY` override; otherwise `bootstrap.AppDataDir()` returns the **portable** dir — `data/` next to the executable, see `internal/pkg/portable` — and falls back to the per-platform dir); runs `bootstrap.Init` (master-key resolve, DB open, repository registration, migrations); initializes the logger and config; builds the shared infrastructure (SSH pool, SFTP service); constructs the per-domain **binders** and hands them to `wails.Run` via `Bind`.
+
+**Portable mode** shapes three more decisions, all of which must keep the host machine untouched and let the folder travel. `bootstrap.Init` keeps the master key in `<dataDir>/master.key` instead of the OS keychain — keyed off the *resolved* data dir, so an explicit `--data-dir` / `OPSKAT_DATA_DIR` pointing at an installed dir still uses the keychain. The two below instead key off `internal/pkg/portable` alone, which an override does not move. `main.go` then points WebView2's user-data dir at `<portable>/webview2` (Wails otherwise defaults it to `%APPDATA%\opskat.exe`, which would strand the frontend's `localStorage` — open tabs, editor buffers — on the host), and salts the `SingleInstanceLock` id with the portable path so a portable build started next to an installed one gets its own window instead of silently handing off and exiting. `OPSKAT_E2E` relaxes the single-instance lock for the e2e harness.
 
 Binders implement a small `Lifecycle` (`Startup(ctx)` / `Cleanup()`) that `main.go` drives explicitly from Wails' `OnStartup` / `OnShutdown` hooks (Wails does not auto-call lifecycle methods on bound structs). The extension subsystem is initialized **asynchronously after startup** so WASM compilation never blocks the UI coming up.
 
@@ -140,6 +142,6 @@ End to end — `opsctl exec <asset> -- <cmd>`: resolve asset → local policy ch
 | --- | --- | --- |
 | Engineering principles, SOLID seams | [AGENTS.md](../AGENTS.md) | [§2](#2-backend-layering) |
 | Commands, conventions, logging rules, generated files | [DEVELOP.md](DEVELOP.md) | [§3](#3-request-lifecycle), [§6](#6-ai-subsystem) |
-| Adding a built-in asset type (handler + frontend registration, remaining couplings) | [adding-an-asset-type.md](adding-an-asset-type.md) | [§5](#5-data--persistence) |
-| Verifying / debugging a feature (logs, DB, headless opsctl) | [testing-debugging-guide.md](testing-debugging-guide.md) | [§8](#8-opsctl--the-multi-process-flow) |
-| GUI end-to-end harness (Playwright × Wails) | [e2e-harness-guide.md](e2e-harness-guide.md) | [§9](#9-frontend) |
+| Adding a built-in asset type (handler + frontend registration, remaining couplings) | [adding-an-asset-type.md](references/adding-an-asset-type.md) | [§5](#5-data--persistence) |
+| Verifying / debugging a feature (logs, DB, headless opsctl) | [testing-debugging-guide.md](references/testing-debugging-guide.md) | [§8](#8-opsctl--the-multi-process-flow) |
+| GUI end-to-end harness (Playwright × Wails) | [e2e-harness-guide.md](references/e2e-harness-guide.md) | [§9](#9-frontend) |

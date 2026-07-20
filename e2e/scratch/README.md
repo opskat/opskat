@@ -6,7 +6,7 @@ scripts are not committed; write, run, observe, delete.
 
 This is the GUI counterpart of "verify by observing": drive the real app, then read the
 observable side-effects (UI assertions + the temp DB + logs). Full workflow, conventions, and
-gotchas: **[docs/e2e-harness-guide.md](../../docs/e2e-harness-guide.md)** (§6).
+gotchas: **[docs/references/e2e-harness-guide.md](../../docs/references/e2e-harness-guide.md)** (§6).
 
 ## Run
 
@@ -41,6 +41,9 @@ test("my feature works end-to-end", async ({ page }) => {
   // await expect.poll(() => findAssetByName("…")?.status).toBe(1);
 });
 ```
+
+If the result needs handing off (PR / review), drop the proof + a short `report.md` into the
+gitignored `docs/verification/<topic>/` dir — convention: [docs/VERIFICATION.md](../../docs/VERIFICATION.md) §4.
 
 If a flow proves to be **core and stable**, promote it: move the spec into `e2e/tests/`,
 harden it, and commit (see the harness guide §5). Otherwise just delete it.

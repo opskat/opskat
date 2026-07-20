@@ -8,6 +8,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/transfer"
 	"github.com/opskat/opskat/internal/service/conntest"
+	"github.com/opskat/opskat/internal/service/forward_svc"
 	"github.com/opskat/opskat/internal/service/sessionid"
 	"github.com/opskat/opskat/internal/service/sftp_svc"
 	"github.com/opskat/opskat/internal/service/ssh_svc"
@@ -49,6 +50,7 @@ type SSH struct {
 	zmodem         *zmodem_svc.FileBridge
 	pool           *sshpool.Pool
 	forwardManager *ForwardManager
+	forward        *forward_svc.Service
 
 	connIDGen *sessionid.Generator
 
@@ -73,6 +75,7 @@ func New(appCtx context.Context, lang LangProvider, mgr *ssh_svc.Manager, sftp *
 		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+p.TransferID, p)
 	})
 	s.forwardManager = NewForwardManager(&poolDialer{})
+	s.forward = forward_svc.New(s.forwardManager)
 	conntest.Register(asset_entity.AssetTypeSSH, s.testConnection)
 	return s
 }

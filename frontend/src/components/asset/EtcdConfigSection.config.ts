@@ -54,7 +54,7 @@ interface EtcdConfig {
   proxy_chain?: ProxyChainJSON;
 }
 
-/** 端点文本→数组(镜像旧 save/test/etcdEndpointsList 三处一致切分)。 */
+/** 将换行、逗号或分号分隔的端点文本规范化为数组。 */
 export function parseEtcdEndpoints(raw: string): string[] {
   return raw
     .split(/[\n,;]+/)

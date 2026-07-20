@@ -44,7 +44,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@opskat/ui";
-import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
+import { EntityIcon } from "@/components/asset/AssetIcon";
 import { filterAssets } from "@/lib/assetSearch";
 import {
   flattenTree,
@@ -825,27 +825,13 @@ function GroupContextMenuContent({
   );
 }
 
-function DynamicIcon({
-  icon,
-  fallback = Folder,
-  className,
-  style,
-}: {
-  icon?: string;
-  fallback?: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
-  className?: string;
-  style?: React.CSSProperties;
-}) {
-  return React.createElement(icon ? getIconComponent(icon) : fallback, { className, style });
-}
-
 function AssetDragPreview({ asset, active }: { asset: asset_entity.Asset; active: boolean }) {
   return (
     <div className="flex min-w-36 max-w-56 items-center gap-1.5 rounded-md border bg-popover px-2 py-1.5 text-sm shadow-lg">
-      <DynamicIcon
+      <EntityIcon
         icon={asset.Icon || undefined}
+        fallback={Folder}
         className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-        style={asset.Icon ? { color: getIconColor(asset.Icon) } : undefined}
       />
       {active && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" />}
       <span className="truncate text-popover-foreground">{asset.Name}</span>
@@ -946,11 +932,7 @@ function GroupItem({
       ) : (
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       )}
-      <DynamicIcon
-        icon={group.Icon}
-        className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-        style={group.Icon ? { color: getIconColor(group.Icon) } : undefined}
-      />
+      <EntityIcon icon={group.Icon} fallback={Folder} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       <span className="truncate text-sidebar-foreground">{group.Name}</span>
       <span className="ml-auto text-xs text-muted-foreground">{totalCount}</span>
     </div>
@@ -1122,11 +1104,10 @@ const AssetRowContent = React.memo(function AssetRowContent({
           {isConnecting ? (
             <Loader2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground animate-spin" />
           ) : (
-            <DynamicIcon
+            <EntityIcon
               icon={asset.Icon || undefined}
               fallback={Server}
               className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-              style={asset.Icon ? { color: getIconColor(asset.Icon) } : undefined}
             />
           )}
           {activeAssetIds.has(asset.ID) && <span className="h-1.5 w-1.5 rounded-full bg-success shrink-0" />}

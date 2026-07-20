@@ -2,7 +2,7 @@
 
 > This guide is the concrete how-to for adding a new built-in asset type to OpsKat: which interfaces to implement, which files to edit, which parts are registration-driven, and which parts still require shared-code edits.
 >
-> Engineering principles such as SOLID, high cohesion/low coupling, Reuse first, and the Fix policy live in [`../AGENTS.md`](../AGENTS.md). The architecture and subsystem map live in [`./ARCHITECTURE.md`](./ARCHITECTURE.md). This guide only covers the asset-type integration path. Before editing this file, read [`./DOC-MAINTENANCE.md`](./DOC-MAINTENANCE.md).
+> Engineering principles such as SOLID, high cohesion/low coupling, Reuse first, and the Fix policy live in [`../AGENTS.md`](../../AGENTS.md). The architecture and subsystem map live in [`./ARCHITECTURE.md`](../ARCHITECTURE.md). This guide only covers the asset-type integration path. Before editing this file, read [`./DOC-MAINTENANCE.md`](../DOC-MAINTENANCE.md).
 
 ## Core Idea: Register, Do Not Switch
 
@@ -548,7 +548,7 @@ Frontend, from `frontend/`:
 Wails bindings:
 
 - `frontend/wailsjs` is generated and gitignored.
-- When bindings change, regenerate through the project's Wails flow described in [`DEVELOP.md`](./DEVELOP.md), such as `make dev` / `wails build` or a deliberate binding-generation command when appropriate.
+- When bindings change, regenerate through the project's Wails flow described in [`DEVELOP.md`](../DEVELOP.md), such as `make dev` / `wails build` or a deliberate binding-generation command when appropriate.
 - Verify backend truth from `internal/app/*.go`, not from generated TypeScript files.
 
 Observable verification:
@@ -556,12 +556,3 @@ Observable verification:
 - GUI clicks are not the only verification path. Prefer headless or observable side effects when possible.
 - Use `opsctl`, structured logs in `logs/opskat.log`, and the SQLite DB `opskat.db` (especially `audit_logs`).
 - See [`./testing-debugging-guide.md`](./testing-debugging-guide.md).
-
-## Reference: Design Evolution
-
-The asset-type and policy registration work was introduced over several phases. Historical snapshots live in:
-
-- `docs/superpowers/specs/2026-06-04-asset-type-decoupling-design.md`
-- `docs/superpowers/specs/2026-06-05-assetform-registration-phase4-design.md`
-
-Those date-named files are archives for specific pieces of work, not current truth. Current truth is this branch's committed code.

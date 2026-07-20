@@ -13,13 +13,20 @@ export interface OSSTransferDockProps {
 
 export function OSSTransferDock({ transfers, onCancel, onClear, onClearCompleted }: OSSTransferDockProps) {
   const { t } = useTranslation();
+  const hasCompleted = transfers.some((tr) => tr.status !== "active");
   return (
     <div className="border-t bg-muted/10" data-testid="oss-transfer-dock">
       <div className="flex items-center justify-between px-3 py-1 text-xs text-muted-foreground">
         <span>
           {t("oss.transfer.transfers")} ({transfers.length})
         </span>
-        <Button size="sm" variant="ghost" onClick={onClearCompleted} data-testid="oss-transfer-clear-completed">
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onClearCompleted}
+          disabled={!hasCompleted}
+          data-testid="oss-transfer-clear-completed"
+        >
           {t("oss.transfer.clearCompleted")}
         </Button>
       </div>
@@ -29,30 +36,55 @@ export function OSSTransferDock({ transfers, onCancel, onClear, onClearCompleted
           const DirIcon = tr.direction === "upload" ? Upload : Download;
           const StatusIcon = tr.status === "active" ? Loader2 : tr.status === "done" ? CheckCircle2 : XCircle;
           const active = tr.status === "active";
+          const statusLabel = t(
+            tr.status === "active"
+              ? "oss.transfer.statusActive"
+              : tr.status === "done"
+                ? "oss.transfer.statusDone"
+                : "oss.transfer.statusFailed"
+          );
+          const statusClass = active
+            ? "animate-spin text-info"
+            : tr.status === "done"
+              ? "text-success"
+              : "text-destructive";
           return (
             <div
               key={tr.transferId}
               className="flex items-center gap-2 px-3 py-1 text-xs"
               data-testid={`oss-transfer-row-${tr.transferId}`}
             >
-              <DirIcon className="size-3 shrink-0 text-muted-foreground" />
+              <DirIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden />
               <span className="min-w-0 flex-1 truncate" title={tr.error ?? tr.name}>
                 {tr.name}
               </span>
-              <div className="h-1 w-24 shrink-0 overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-1 w-24 shrink-0 overflow-hidden rounded-full bg-muted"
+                role="progressbar"
+                aria-label={`${tr.name}: ${percent}%`}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={percent}
+              >
                 <div className="h-full bg-primary" style={{ width: `${percent}%` }} />
               </div>
               <span className="w-16 shrink-0 text-right text-muted-foreground">{formatSpeed(tr.speed)}</span>
               <span className="w-24 shrink-0 text-right text-muted-foreground">
                 {formatBytes(tr.bytesDone)}/{formatBytes(tr.bytesTotal)}
               </span>
-              <StatusIcon className={`size-3 shrink-0 ${active ? "animate-spin text-muted-foreground" : ""}`} />
+              <StatusIcon
+                className={`size-3 shrink-0 ${statusClass}`}
+                aria-hidden
+                data-testid={`oss-transfer-status-${tr.transferId}`}
+              />
+              <span className="sr-only">{statusLabel}</span>
               <Button
                 size="sm"
                 variant="ghost"
                 className="size-5 shrink-0 p-0"
                 onClick={() => (active ? onCancel(tr.transferId) : onClear(tr.transferId))}
                 title={active ? t("oss.transfer.cancel") : t("oss.transfer.clear")}
+                aria-label={active ? t("oss.transfer.cancel") : t("oss.transfer.clear")}
                 data-testid={`oss-transfer-action-${tr.transferId}`}
               >
                 <X className="size-3" />

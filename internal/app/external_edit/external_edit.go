@@ -4,15 +4,9 @@ package external_edit
 
 import (
 	"context"
-	"os/exec"
+	"sync"
 
-	"github.com/opskat/opskat/internal/bootstrap"
-	"github.com/opskat/opskat/internal/pkg/executil"
-	"github.com/opskat/opskat/internal/repository/asset_repo"
-	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"github.com/opskat/opskat/internal/service/external_edit_svc"
-	"github.com/opskat/opskat/internal/service/sftp_svc"
-	"github.com/opskat/opskat/internal/service/ssh_svc"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -37,54 +31,59 @@ type (
 	MergeApplyRequest  = external_edit_svc.MergeApplyRequest
 )
 
-// ExternalEdit 外部编辑 binder：仅依赖 sftpSvc + sshMgr，不直接持有数据库。
+// ExternalEdit 外部编辑 binder：只持有已经装配完成的 service，不直接解析下层依赖。
 type ExternalEdit struct {
-	appCtx  context.Context
 	ctx     context.Context
 	lang    LangProvider
-	sftpSvc *sftp_svc.Service
-	sshMgr  *ssh_svc.Manager
-
-	svc *external_edit_svc.Service
+	svc     *external_edit_svc.Service
+	emitter *EventEmitter
 }
 
-// New 构造 external edit binder。sftpSvc/sshMgr 由 main.go 创建后注入。
-func New(appCtx context.Context, lang LangProvider, sftpSvc *sftp_svc.Service, sshMgr *ssh_svc.Manager) *ExternalEdit {
-	return &ExternalEdit{
-		appCtx:  appCtx,
-		lang:    lang,
-		sftpSvc: sftpSvc,
-		sshMgr:  sshMgr,
+// EventEmitter bridges the service's process-lifetime callback to the Wails
+// context, which only becomes available during binder startup.
+type EventEmitter struct {
+	mu  sync.RWMutex
+	ctx context.Context
+}
+
+func NewEventEmitter() *EventEmitter { return &EventEmitter{} }
+
+func (e *EventEmitter) Startup(ctx context.Context) {
+	e.mu.Lock()
+	e.ctx = ctx
+	e.mu.Unlock()
+}
+
+func (e *EventEmitter) Emit(event external_edit_svc.Event) {
+	e.mu.RLock()
+	ctx := e.ctx
+	e.mu.RUnlock()
+	if ctx != nil {
+		wailsRuntime.EventsEmit(ctx, "external-edit:event", event)
 	}
 }
 
-// Startup 保存 Wails ctx 后再启动 service：Emit 回调依赖 ctx 才能 EventsEmit。
+// New constructs the IPC binder from an already composed service.
+func New(lang LangProvider, svc *external_edit_svc.Service, emitter *EventEmitter) *ExternalEdit {
+	return &ExternalEdit{
+		lang:    lang,
+		svc:     svc,
+		emitter: emitter,
+	}
+}
+
+// Startup saves the Wails context and starts the already composed service.
 func (e *ExternalEdit) Startup(ctx context.Context) {
 	e.ctx = ctx
-	svc, err := external_edit_svc.NewService(external_edit_svc.Options{
-		DataDir:        bootstrap.AppDataDir(),
-		ConfigProvider: bootstrap.GetConfig,
-		ConfigSaver:    bootstrap.SaveConfig,
-		Remote:         e.sftpSvc,
-		FindSessions:   e.sshMgr.ListActiveSessionIDsByAsset,
-		Assets:         asset_repo.Asset(),
-		Audit:          audit_repo.Audit(),
-		Emit: func(event external_edit_svc.Event) {
-			if e.ctx == nil {
-				return
-			}
-			wailsRuntime.EventsEmit(e.ctx, "external-edit:event", event)
-		},
-		Launch: launcher{},
-	})
-	if err != nil {
-		logger.Default().Warn("init external edit service", zap.Error(err))
+	if e.emitter != nil {
+		e.emitter.Startup(ctx)
+	}
+	if e.svc == nil {
 		return
 	}
-	if err := svc.Start(context.Background()); err != nil {
+	if err := e.svc.Start(context.Background()); err != nil {
 		logger.Default().Warn("start external edit service", zap.Error(err))
 	}
-	e.svc = svc
 }
 
 // Cleanup 关闭 service：watcher / 后台 goroutine / 文件句柄都在 service.Close 里收口。
@@ -95,13 +94,4 @@ func (e *ExternalEdit) Cleanup() {
 	if err := e.svc.Close(); err != nil {
 		logger.Default().Warn("close external edit service", zap.Error(err))
 	}
-}
-
-// launcher 在桌面端启动外部编辑器进程，Windows 下隐藏控制台窗口。
-type launcher struct{}
-
-func (launcher) Launch(execPath string, args []string) error {
-	cmd := exec.Command(execPath, args...) //nolint:gosec // path 与 args 已在 external_edit_svc 内校验
-	executil.HideConsoleWindow(cmd)
-	return cmd.Start()
 }

@@ -50,10 +50,6 @@ interface ConnectionMethodFieldsProps {
   onChange: (patch: Partial<ConnectionFormFields>) => void;
   /** 排除可选 SSH 资产(如自身),不能把自己选作跳板机/隧道。 */
   excludeIds?: number[];
-  /** 兼容旧三段式连接方式字段;新 UI 统一显示为“隧道/代理”。 */
-  tunnelOptionLabelKey?: string;
-  /** 兼容旧三段式连接方式字段;新 UI 不再单独渲染 SSH 隧道选择器。 */
-  tunnelSelectLabelKey?: string;
 }
 
 interface LayerVisual {

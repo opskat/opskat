@@ -18,6 +18,7 @@ import { OSSObjectDetail } from "@/components/oss/OSSObjectDetail";
 import { OSSPresignDialog } from "@/components/oss/OSSPresignDialog";
 import { OSSTransferDock } from "@/components/oss/OSSTransferDock";
 import { useOssFileDrop } from "@/components/oss/useOssFileDrop";
+import { NameDialog } from "@/components/common/NameDialog";
 
 export interface OSSBrowserPanelProps {
   tabId: string;
@@ -57,6 +58,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [detailDeleteOpen, setDetailDeleteOpen] = useState(false);
+  const [newFolderOpen, setNewFolderOpen] = useState(false);
 
   const fail = useCallback((e: unknown) => toast.error(`${t("oss.browser.loadFailed")}: ${String(e)}`), [t]);
 
@@ -216,14 +218,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
                 onNavigate={onNavigate}
                 onRefresh={() => void refresh(tabId).catch(fail)}
                 onUpload={onUpload}
-                onNewFolder={() => {
-                  const name = window.prompt(t("oss.browser.newFolderPrompt"))?.trim();
-                  if (name) {
-                    void createFolder(tabId, name)
-                      .then(() => notifySuccess(t("oss.browser.newFolderSuccess")))
-                      .catch(fail);
-                  }
-                }}
+                onNewFolder={() => setNewFolderOpen(true)}
                 viewMode={state.viewMode}
                 onViewModeChange={(m) => setViewMode(tabId, m)}
               />
@@ -337,6 +332,18 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
           </>
         )}
       </div>
+      <NameDialog
+        open={newFolderOpen}
+        title={t("oss.browser.newFolder")}
+        placeholder={t("oss.browser.newFolderPrompt")}
+        onCancel={() => setNewFolderOpen(false)}
+        onSubmit={(name) => {
+          setNewFolderOpen(false);
+          void createFolder(tabId, name)
+            .then(() => notifySuccess(t("oss.browser.newFolderSuccess")))
+            .catch(fail);
+        }}
+      />
 
       <ConfirmDialog
         open={confirmOpen}

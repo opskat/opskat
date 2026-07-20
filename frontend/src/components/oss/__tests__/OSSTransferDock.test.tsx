@@ -48,9 +48,44 @@ describe("OSSTransferDock", () => {
   it("clear-completed header button fires onClearCompleted", () => {
     const onClearCompleted = vi.fn();
     render(
-      <OSSTransferDock transfers={[tx({})]} onCancel={vi.fn()} onClear={vi.fn()} onClearCompleted={onClearCompleted} />
+      <OSSTransferDock
+        transfers={[tx({ status: "done" })]}
+        onCancel={vi.fn()}
+        onClear={vi.fn()}
+        onClearCompleted={onClearCompleted}
+      />
     );
     fireEvent.click(screen.getByTestId("oss-transfer-clear-completed"));
     expect(onClearCompleted).toHaveBeenCalledTimes(1);
+  });
+
+  it("exposes transfer progress and icon actions to assistive technology", () => {
+    render(
+      <OSSTransferDock
+        transfers={[tx({ bytesDone: 25, bytesTotal: 100 })]}
+        onCancel={vi.fn()}
+        onClear={vi.fn()}
+        onClearCompleted={vi.fn()}
+      />
+    );
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "25");
+    expect(screen.getByTestId("oss-transfer-action-t1")).toHaveAttribute("aria-label", "oss.transfer.cancel");
+    expect(screen.getByTestId("oss-transfer-status-t1")).toHaveClass("text-info");
+  });
+
+  it("disables clear completed when every transfer is still active", () => {
+    const { rerender } = render(
+      <OSSTransferDock transfers={[tx({})]} onCancel={vi.fn()} onClear={vi.fn()} onClearCompleted={vi.fn()} />
+    );
+    expect(screen.getByTestId("oss-transfer-clear-completed")).toBeDisabled();
+    rerender(
+      <OSSTransferDock
+        transfers={[tx({ status: "done" })]}
+        onCancel={vi.fn()}
+        onClear={vi.fn()}
+        onClearCompleted={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId("oss-transfer-clear-completed")).toBeEnabled();
   });
 });

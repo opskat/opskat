@@ -200,10 +200,6 @@ func grantItemMatchesTarget(item *grant_entity.GrantItem, assetID int64, groupID
 	return true
 }
 
-// Reset 重置会话级白名单（已迁移到 DB Grant，无需内存清理）
-func (c *CommandPolicyChecker) Reset() {
-}
-
 // Check 检查命令是否允许执行
 func (c *CommandPolicyChecker) Check(ctx context.Context, assetID int64, command string) aictx.CheckResult {
 	result := CheckPermission(ctx, asset_entity.AssetTypeSSH, assetID, command)
@@ -211,22 +207,6 @@ func (c *CommandPolicyChecker) Check(ctx context.Context, assetID int64, command
 		return result
 	}
 	return c.HandleConfirm(ctx, assetID, asset_entity.AssetTypeSSH, command)
-}
-
-// CheckPolicyOnly 只检查 allow/deny 列表 + DB Grant 匹配，不触发确认回调。
-// 向后兼容包装器，内部委托 CheckPermission。
-func CheckPolicyOnly(ctx context.Context, assetID int64, command string) aictx.CheckResult {
-	return CheckPermission(ctx, asset_entity.AssetTypeSSH, assetID, command)
-}
-
-// CheckSQLPolicyForOpsctl 检查 SQL 策略，向后兼容包装器，内部委托 CheckPermission。
-func CheckSQLPolicyForOpsctl(ctx context.Context, assetID int64, sqlText string) aictx.CheckResult {
-	return CheckPermission(ctx, asset_entity.AssetTypeDatabase, assetID, sqlText)
-}
-
-// CheckRedisPolicyForOpsctl 检查 Redis 策略，向后兼容包装器，内部委托 CheckPermission。
-func CheckRedisPolicyForOpsctl(ctx context.Context, assetID int64, command string) aictx.CheckResult {
-	return CheckPermission(ctx, asset_entity.AssetTypeRedis, assetID, command)
 }
 
 // CheckForAsset 按资产类型分发权限检查
@@ -253,23 +233,9 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 		assetName = asset.Name
 	}
 
-	// 映射资产类型到审批项类型
 	approvalType := "exec"
-	switch assetType {
-	case asset_entity.AssetTypeSerial:
-		approvalType = "serial"
-	case asset_entity.AssetTypeDatabase:
-		approvalType = "sql"
-	case asset_entity.AssetTypeRedis:
-		approvalType = "redis"
-	case asset_entity.AssetTypeEtcd:
-		approvalType = "etcd"
-	case asset_entity.AssetTypeMongoDB:
-		approvalType = "mongo"
-	case asset_entity.AssetTypeKafka:
-		approvalType = "kafka"
-	case asset_entity.AssetTypeK8s:
-		approvalType = "k8s"
+	if handler, ok := permissionTypeFor(assetType); ok {
+		approvalType = handler.approvalType
 	}
 
 	items := []ApprovalItem{{

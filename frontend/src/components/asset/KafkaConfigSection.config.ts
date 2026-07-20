@@ -143,7 +143,7 @@ export function buildKafkaBaseConfig(
   return cfg;
 }
 
-/** 把主凭据片段并入 base(键序:base → credential_id|password)。镜像旧 save 凭据追加分支。 */
+/** 把主凭据片段并入 base(键序:base → credential_id|password)。 */
 export function appendKafkaCredential(base: KafkaConfig, cred: CredentialFragment): KafkaConfig {
   if (cred.credential_id) base.credential_id = cred.credential_id;
   else if (cred.password) base.password = cred.password;
@@ -164,8 +164,8 @@ export function kafkaCompanionPlainSecretFromConfig(
   return cfg.username || "";
 }
 
-/** 编辑态回填非凭据/非伴随字段(镜像旧 loadKafkaConfig;connectionType 派生需要 asset 顶层
- *  sshTunnelId 优先(镜像旧 `asset.sshTunnelId || cfg.ssh_asset_id || 0`),故由 section 传入)。 */
+/** 编辑态回填非凭据/非伴随字段。connectionType 派生时优先使用 asset 顶层 sshTunnelId,
+ *  因此由 section 传入。 */
 export function parseKafkaConfig(configJSON: string, assetTunnelId = 0): KafkaFormState {
   try {
     const cfg: KafkaConfig = JSON.parse(configJSON || "{}");

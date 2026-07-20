@@ -23,6 +23,7 @@ export function OSSBucketTree({
   onNavigatePrefix,
 }: OSSBucketTreeProps) {
   const { t } = useTranslation();
+  const customButtonClass = "cursor-pointer rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring/45";
 
   if (loadingBuckets && buckets === null) {
     return (
@@ -47,8 +48,11 @@ export function OSSBucketTree({
           <div key={b.name}>
             <button
               type="button"
-              className={`flex w-full items-center gap-1 px-2 py-1 text-left hover:bg-accent/50 ${selected ? "bg-accent font-medium" : ""}`}
+              className={`${customButtonClass} flex w-full items-center gap-1 px-2 py-1 text-left hover:bg-accent/50 ${
+                selected ? "bg-accent font-medium" : ""
+              }`}
               onClick={() => onSelectBucket(b.name)}
+              aria-current={selected ? "true" : undefined}
               data-testid={`oss-bucket-${b.name}`}
             >
               <Database className="size-3 text-muted-foreground" /> {b.name}
@@ -63,15 +67,17 @@ export function OSSBucketTree({
                 >
                   <button
                     type="button"
-                    className="shrink-0"
+                    className={`${customButtonClass} shrink-0`}
                     onClick={() => onToggleExpand(row.prefix)}
+                    aria-label={row.name}
+                    aria-expanded={row.isExpanded}
                     data-testid={`oss-tree-toggle-${row.prefix}`}
                   >
                     {row.isExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
                   </button>
                   <button
                     type="button"
-                    className="flex min-w-0 flex-1 items-center gap-1 text-left"
+                    className={`${customButtonClass} flex min-w-0 flex-1 items-center gap-1 text-left`}
                     onClick={() => onNavigatePrefix(row.prefix)}
                     data-testid={`oss-tree-nav-${row.prefix}`}
                   >

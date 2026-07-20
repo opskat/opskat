@@ -11,6 +11,7 @@ import (
 	"github.com/opskat/opskat/internal/app/sshadapt"
 	"github.com/opskat/opskat/internal/model/entity/forward_entity"
 	"github.com/opskat/opskat/internal/repository/forward_repo"
+	"github.com/opskat/opskat/internal/service/forward_svc"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -46,24 +47,20 @@ type runningForward struct {
 }
 
 // RuleStatus 返回给前端的规则运行状态
-type RuleStatus struct {
-	RuleID int64  `json:"ruleId"`
-	Status string `json:"status"` // "running" | "error" | "stopped"
-	Error  string `json:"error,omitempty"`
-}
+type RuleStatus = forward_svc.RuleStatus
 
 // ForwardConfigWithStatus 配置 + 规则 + 运行状态
 type ForwardConfigWithStatus struct {
 	forward_entity.ForwardConfig
 	AssetName string           `json:"assetName"`
 	Rules     []RuleWithStatus `json:"rules"`
-	Status    string           `json:"status"` // "running" | "partial" | "error" | "stopped"
+	Status    string           `json:"status"`
 }
 
 // RuleWithStatus 规则 + 运行状态
 type RuleWithStatus struct {
 	forward_entity.ForwardRule
-	Status string `json:"status"` // "running" | "error" | "stopped"
+	Status string `json:"status"`
 	Error  string `json:"error,omitempty"`
 }
 

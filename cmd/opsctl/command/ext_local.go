@@ -20,7 +20,7 @@ import (
 // localExtExec loads the extension locally and executes the tool via WASM.
 func localExtExec(extName string, toolName string, toolArgs json.RawMessage) int {
 	ctx := context.Background()
-	extDir := filepath.Join(bootstrap.AppDataDir(), "extensions")
+	extDir := filepath.Join(bootstrap.ResolvedDataDir(), "extensions")
 
 	mgr := extension.NewManager(extDir, func(name string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{

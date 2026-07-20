@@ -15,6 +15,7 @@ make clean                               # Remove build artifacts / caches
 
 # Build
 make build / make build-embed            # Production (embed = bundled opsctl)
+make install-app                         # Build + install macOS app to ~/Applications
 make build-cli                           # Standalone opsctl
 make install-cli                         # Install opsctl to GOPATH/bin
 
@@ -37,7 +38,7 @@ make build-devserver-ui                  # Rebuild embedded devserver UI
 make install-skill                       # Register opsctl plugin marketplace
 ```
 
-> **Feature verification & debugging**: how to run and verify a feature, read the logs (`logs/opskat.log`) and database (`opskat.db`, e.g. `audit_logs`) to aid diagnosis, and run headless functional tests with `opsctl` — see [docs/testing-debugging-guide.md](testing-debugging-guide.md) (written for agents like Claude/Codex, in English). For driving the **real GUI end-to-end** (Playwright × Wails) — both the committed suite and throwaway per-feature verification — see [docs/e2e-harness-guide.md](e2e-harness-guide.md).
+> **Feature verification & debugging**: the verification order and ad-hoc workflow (cheap signals → `opsctl` → the real app; scratch specs; evidence) is [docs/VERIFICATION.md](VERIFICATION.md). Mechanics: reading logs (`logs/opskat.log`) / database (`opskat.db`, e.g. `audit_logs`) / headless `opsctl` — [docs/references/testing-debugging-guide.md](references/testing-debugging-guide.md) (written for agents like Claude/Codex, in English); driving the **real GUI end-to-end** (Playwright × Wails) — [docs/references/e2e-harness-guide.md](references/e2e-harness-guide.md).
 
 ## Architecture
 
@@ -71,7 +72,7 @@ Common emoji (each also maps to a changelog category at release time):
 
 ### Others
 
-- **CI:** runs Go lint/tests, the GUI e2e suite (`make test-e2e` under `xvfb` on Linux — see [e2e-harness-guide.md](e2e-harness-guide.md)), and frontend lint/tests on PRs and pushes to `main` / `develop/*`.
+- **CI:** runs Go lint/tests, the GUI e2e suite (`make test-e2e` under `xvfb` on Linux — see [e2e-harness-guide.md](references/e2e-harness-guide.md)), and frontend lint/tests on PRs and pushes to `main` / `develop/*`.
 - **Go:** mocks in `mock_*/` (`go.uber.org/mock`, regen `go generate ./...`); tests use goconvey + testify. Service tests mock transaction boundaries — when code uses `dbutil.WithTransaction`, prefer `dbutil.WithTransactionRunner` over opening in-memory SQLite.
 - **Frontend:** Prettier 120 col, 2-space.
 - **Design system / UI:** color tokens (light/dark oklch), theming, the `@opskat/ui` component palette, the desktop pane shell, motion / state patterns, accessibility, and a new-surface recipe live in [DESIGN.md](DESIGN.md). Read it — and reuse its tokens/components — before building a new tab, pane, dialog, or block.
@@ -83,7 +84,7 @@ Common emoji (each also maps to a changelog category at release time):
 Diagnosing production issues relies on logs. Log every cross-boundary / cross-process / long-lived operation — don't write only on error.
 
 - **One entry point (cago logger):** `github.com/cago-frame/cago/pkg/logger`. **Prefer `logger.Ctx(ctx)`** — the cago source comments explicitly say `Default()` "should be avoided where possible, as it loses context information". Use `logger.Default()` only when there genuinely is no ctx (`main` / `init` / a standalone goroutine). To attach shared fields for everything downstream, use `logger.WithContextField(ctx, zap.String("k", v))`; downstream `logger.Ctx(ctx)` inherits them automatically. ⚠️ Most legacy code is still `Default()` with few `Ctx` calls (historical inertia; the exact count keeps changing — don't hardcode it); write new code per the rule above.
-- **Field types:** pick a strongly-typed field matching the value's natural type: `error` → `zap.Error`, string → `zap.String`, integer → `zap.Int`/`Int64`, bool → `zap.Bool`, duration → `zap.Duration`, anything with `String()` → `zap.Stringer`. **No `zap.Any`** (the only reasonable exception is the value from `recover()` — its type is genuinely unknown), and **don't `fmt.Sprintf(...)` into a `zap.String`** — choose the right-typed field instead of squeezing a typed value into a string. Don't use `log.Printf` as a logger in business code; exceptions: the `fmt.Println` in `cmd/opsctl/command/*` is CLI stdout for the user (not a log), and the `log.Printf` in `main.go` before the logger is initialized is also kept.
+- **Field types:** pick a strongly-typed field matching the value's natural type: `error` → `zap.Error`, string → `zap.String`, integer → `zap.Int`/`Int64`, bool → `zap.Bool`, duration → `zap.Duration`, anything with `String()` → `zap.Stringer`. **No `zap.Any`** (the only reasonable exception is the value from `recover()` — its type is genuinely unknown), and **don't `fmt.Sprintf(...)` into a `zap.String`** — choose the right-typed field instead of squeezing a typed value into a string. Don't use `log.Printf` as a logger in business code; exceptions: the `fmt.Println` in `cmd/opsctl/command/*` is CLI stdout for the user (not a log), and the `log.Printf` in `main.go` before the logger is initialized is also kept. *Enforced since 2026-07-18 by `internal/archtest` (runs in `go test ./...`): importing stdlib `log` is banned outside `main.go` (`log/slog` adapters for third-party libs stay allowed), and `zap.Any` is allowed only with key `"panic"` (the `recover()` exception).*
 - **Key flows that must be logged:** IPC entry (`internal/app/**`), AI tool dispatch (`internal/ai/`), extension WASM calls (`pkg/extension/`, `internal/app/extension/`), approval / authorization (`internal/approval/`, `internal/app/opsctl/`), SSH and protocol connection-pool/session open/close (`internal/sshpool/`, `internal/connpool/`, including RDP and VNC), credential & key operations, migration runs, scheduled tasks, external command execution. Log all **three states (start / end / fail)** of an operation, and attach a correlatable ID (`assetID` / `sessionID` / `grantID` / `toolName` / `extension`, as applicable).
 - **Logs don't replace error returns.** After `logger.Ctx(ctx).Error(..., zap.Error(err))` you must still `return err` — see [AGENTS.md → Defensive Code / Error Handling](../AGENTS.md#defensive-code--error-handling-no-meaningless-fallbacks). At `recover()` boundaries capture the stack with `zap.Stack("stack")`, e.g. `logger.Ctx(ctx).Error("xxx panic recovered", zap.String("sessionID", id), zap.Stack("stack"))`; in a standalone goroutine with no ctx, fall back to `logger.Default()`.
 - **Level convention:** Error = a failure the user/caller needs to know about; Warn = self-healed or degraded; Info = key state changes (connection established, task scheduled, extension loaded); Debug = high-frequency detail (terminal keystrokes, SFTP frames, heartbeats), off by default.

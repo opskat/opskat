@@ -15,7 +15,3 @@ export const useRDPStore = create<RDPState>((set) => ({
       return { activeAssetIds };
     }),
 }));
-
-export function getRDPActiveAssetIds(): Set<number> {
-  return useRDPStore.getState().activeAssetIds;
-}

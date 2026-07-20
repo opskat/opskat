@@ -97,7 +97,7 @@ export function OSSPresignDialog({
   const pathCrumb = [bucket, ...dirs].join(" / ");
 
   const seg = (active: boolean) =>
-    `min-w-0 flex-1 truncate rounded px-2 py-1 text-[12px] transition-colors ${
+    `min-w-0 flex-1 cursor-pointer truncate rounded px-2 py-1 text-[12px] outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring/45 ${
       active ? "bg-primary font-semibold text-primary-foreground" : "text-muted-foreground hover:text-foreground"
     }`;
   const segGroup = "flex gap-0.5 rounded-md border bg-muted/40 p-0.5";
@@ -135,6 +135,7 @@ export function OSSPresignDialog({
                 type="button"
                 className={seg(method === "get")}
                 onClick={() => changeMethod("get")}
+                aria-pressed={method === "get"}
                 data-testid="oss-share-method-get"
               >
                 {t("oss.share.methodGet")}
@@ -143,6 +144,7 @@ export function OSSPresignDialog({
                 type="button"
                 className={seg(method === "put")}
                 onClick={() => changeMethod("put")}
+                aria-pressed={method === "put"}
                 data-testid="oss-share-method-put"
               >
                 {t("oss.share.methodPut")}
@@ -160,6 +162,7 @@ export function OSSPresignDialog({
                   type="button"
                   className={seg(expirySecs === e.secs)}
                   onClick={() => changeExpiry(e.secs)}
+                  aria-pressed={expirySecs === e.secs}
                   data-testid={`oss-share-expiry-${e.secs}`}
                 >
                   {t(e.key)}
@@ -185,7 +188,7 @@ export function OSSPresignDialog({
                   <div className="flex justify-end">
                     <button
                       type="button"
-                      className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                      className="flex cursor-pointer items-center gap-1 rounded px-2 py-1 text-[11px] text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/45"
                       onClick={copy}
                       data-testid="oss-share-copy-inline"
                     >
@@ -208,7 +211,11 @@ export function OSSPresignDialog({
 
         <DialogFooter className="flex-row justify-between gap-2">
           <Button size="sm" variant="outline" onClick={runGenerate} disabled={loading} data-testid="oss-share-generate">
-            <RefreshCw className="size-3" /> {url ? t("oss.share.regenerate") : t("oss.share.generate")}
+            <RefreshCw
+              className={`size-3 ${loading ? "animate-spin" : ""}`}
+              data-testid={loading ? "oss-share-generating-spinner" : undefined}
+            />{" "}
+            {url ? t("oss.share.regenerate") : t("oss.share.generate")}
           </Button>
           <div className="flex gap-2">
             <Button size="sm" variant="ghost" onClick={() => handleOpenChange(false)}>

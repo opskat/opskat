@@ -1,12 +1,50 @@
 package import_svc
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/opskat/opskat/internal/model/entity/group_entity"
+	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/repository/group_repo"
 	. "github.com/smartystreets/goconvey/convey"
 )
+
+type failingListGroupRepo struct {
+	group_repo.GroupRepo
+}
+
+func (f *failingListGroupRepo) List(context.Context) ([]*group_entity.Group, error) {
+	return nil, errors.New("group repository unavailable")
+}
+
+func TestImportSSHConfigDoesNotDependOnGroups(t *testing.T) {
+	assetRepo := &windTermAssetRepo{}
+	originalAssetRepo := asset_repo.Asset()
+	originalGroupRepo := group_repo.Group()
+	asset_repo.RegisterAsset(assetRepo)
+	group_repo.RegisterGroup(&failingListGroupRepo{})
+	t.Cleanup(func() {
+		asset_repo.RegisterAsset(originalAssetRepo)
+		group_repo.RegisterGroup(originalGroupRepo)
+	})
+
+	data := []byte("Host prod\n  HostName prod.example.com\n  User deploy\n")
+	result, err := ImportSSHConfigSelected(context.Background(), data, []int{0}, ImportOptions{})
+
+	if err != nil {
+		t.Fatalf("SSH Config import should not depend on groups: %v", err)
+	}
+	if result.Success != 1 {
+		t.Fatalf("expected one imported asset, got %+v", result)
+	}
+	if len(assetRepo.assets) != 1 || assetRepo.assets[0].GroupID != 0 {
+		t.Fatalf("expected imported asset in root group, got %+v", assetRepo.assets)
+	}
+}
 
 func TestParseSSHConfig(t *testing.T) {
 	Convey("parseSSHConfig", t, func() {

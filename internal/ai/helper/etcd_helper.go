@@ -31,7 +31,7 @@ func HandleExecEtcd(ctx context.Context, args map[string]any) (string, error) {
 		Op:       op,
 		Key:      aictx.ArgString(args, "key"),
 		Value:    aictx.ArgString(args, "value"),
-		Prefix:   argEtcdBool(args, "prefix"),
+		Prefix:   aictx.ArgBool(args, "prefix"),
 		Limit:    aictx.ArgInt64(args, "limit"),
 		Revision: aictx.ArgInt64(args, "revision"),
 		LeaseID:  aictx.ArgInt64(args, "lease_id"),
@@ -88,17 +88,4 @@ func FormatEtcdCommand(req *etcd_svc.ExecRequest) string {
 		parts = append(parts, "--prefix")
 	}
 	return strings.Join(parts, " ")
-}
-
-// argEtcdBool 提取布尔参数。LLM 可能传 true / "true"，统一处理。
-func argEtcdBool(args map[string]any, key string) bool {
-	if v, ok := args[key]; ok {
-		switch b := v.(type) {
-		case bool:
-			return b
-		case string:
-			return strings.EqualFold(strings.TrimSpace(b), "true")
-		}
-	}
-	return false
 }

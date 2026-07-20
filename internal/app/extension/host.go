@@ -9,9 +9,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/opskat/opskat/internal/repository/asset_repo"
-	"github.com/opskat/opskat/internal/repository/extension_data_repo"
 	"github.com/opskat/opskat/internal/service/credential_svc"
+	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/internal/sshpool"
 	"github.com/opskat/opskat/pkg/extension"
 
@@ -27,7 +26,7 @@ type assetConfigGetter struct {
 func (g *assetConfigGetter) GetAssetConfig(assetID int64) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	asset, err := asset_repo.Asset().Find(ctx, assetID)
+	asset, err := g.ext.service.GetHostAssetConfig(ctx, assetID)
 	if err != nil {
 		return nil, fmt.Errorf("asset %d not found: %w", assetID, err)
 	}
@@ -89,23 +88,20 @@ func toWailsFilters(filters []string) []wailsRuntime.FileFilter {
 
 // kvStore implements extension.KVStore, scoped to one extension
 type kvStore struct {
+	ext     *Extension
 	extName string
 }
 
 func (s *kvStore) Get(key string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	val, err := extension_data_repo.ExtensionData().Get(ctx, s.extName, key)
-	if err != nil {
-		return nil, nil // KV miss returns nil, not error
-	}
-	return val, nil
+	return s.ext.service.GetHostKV(ctx, s.extName, key)
 }
 
 func (s *kvStore) Set(key string, value []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return extension_data_repo.ExtensionData().Set(ctx, s.extName, key, value)
+	return s.ext.service.SetHostKV(ctx, s.extName, key, value)
 }
 
 // actionEventHandler implements extension.ActionEventHandler
@@ -124,10 +120,10 @@ func (h *actionEventHandler) OnActionEvent(eventType string, data json.RawMessag
 }
 
 // getDecryptedExtConfig returns the asset config with password fields decrypted.
-func getDecryptedExtConfig(assetID int64, bridge *extension.Bridge) (string, error) {
+func getDecryptedExtConfig(assetID int64, svc *extension_svc.Service, bridge *extension.Bridge) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	asset, err := asset_repo.Asset().Find(ctx, assetID)
+	asset, err := svc.GetHostAssetConfig(ctx, assetID)
 	if err != nil {
 		return "", fmt.Errorf("asset %d not found: %w", assetID, err)
 	}

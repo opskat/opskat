@@ -58,12 +58,6 @@ function subscribeExtensionReady(): void {
   });
 }
 
-/** Compat wrapper — calls bootstrap + subscribe. */
-export async function initExtensions(): Promise<void> {
-  await bootstrapExtensions();
-  subscribeExtensionReload();
-}
-
 /**
  * Refresh extension list from the backend.
  * Returns true if extensions were loaded, false if the list was empty.

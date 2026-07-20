@@ -47,7 +47,7 @@ A few conventions to know:
 - **Bug fixes start with a failing test.** Reproduce the bug as a `go test` / `vitest` case before touching the implementation, then fix the root cause — see the Fix policy in [AGENTS.md](./AGENTS.md).
 - **Reuse first.** Before adding a new component / hook / helper, grep for an existing one — parallel copies drift apart quickly.
 - Frontend style is enforced by Prettier (120 columns, 2-space indent).
-- To verify a feature by observing logs / database / headless `opsctl`, see [docs/testing-debugging-guide.md](./docs/testing-debugging-guide.md) (written for AI coding agents); for GUI end-to-end details, see [docs/e2e-harness-guide.md](./docs/e2e-harness-guide.md).
+- Verification workflow (what to run, in what order): [docs/VERIFICATION.md](./docs/VERIFICATION.md). To verify by observing logs / database / headless `opsctl`, see [docs/references/testing-debugging-guide.md](./docs/references/testing-debugging-guide.md) (written for AI coding agents); for GUI end-to-end details, see [docs/references/e2e-harness-guide.md](./docs/references/e2e-harness-guide.md).
 
 ## Commit Messages — gitmoji
 

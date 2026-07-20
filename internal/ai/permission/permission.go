@@ -10,7 +10,6 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/policy"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/grant_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/repository/grant_repo"
@@ -22,35 +21,11 @@ import (
 // assetType: "ssh" | "serial" | "database" | "redis" | "mongodb" | "kafka" | "k8s" |
 // "exec"（exec 等同于 ssh）| "sql"（sql 等同于 database）| "mongo"（mongo 等同于 mongodb）
 func CheckPermission(ctx context.Context, assetType string, assetID int64, command string) aictx.CheckResult {
-	// opsctl 使用的类型名映射到内部类型
-	switch assetType {
-	case "exec":
-		assetType = asset_entity.AssetTypeSSH
-	case "sql":
-		assetType = asset_entity.AssetTypeDatabase
-	case "mongo":
-		assetType = asset_entity.AssetTypeMongoDB
-	}
-
-	switch assetType {
-	case asset_entity.AssetTypeSSH, asset_entity.AssetTypeSerial:
-		// SSH 与串口共用同一份命令策略（CommandPolicy + grant）。
-		return checkCommandPolicyPermission(ctx, assetID, command)
-	case asset_entity.AssetTypeDatabase:
-		return checkDatabasePermission(ctx, assetID, command)
-	case asset_entity.AssetTypeRedis:
-		return checkRedisPermission(ctx, assetID, command)
-	case asset_entity.AssetTypeEtcd:
-		return checkEtcdPermission(ctx, assetID, command)
-	case asset_entity.AssetTypeMongoDB:
-		return checkMongoDBPermission(ctx, assetID, command)
-	case asset_entity.AssetTypeKafka:
-		return checkKafkaPermission(ctx, assetID, command)
-	case asset_entity.AssetTypeK8s:
-		return checkK8sPermission(ctx, assetID, command)
-	default:
+	handler, ok := permissionTypeFor(assetType)
+	if !ok {
 		return aictx.CheckResult{Decision: aictx.NeedConfirm}
 	}
+	return handler.check(ctx, assetID, command)
 }
 
 // --- SSH / Serial（共用 shell 命令策略） ---
@@ -387,11 +362,8 @@ func matchGrantForAssetSubCmdsWith(ctx context.Context, assetID int64, subCmds [
 // isShellLikeApprovalType 判断审批类型是否走 shell（SSH/K8s），grant 保存时需要按 AST 子命令拆。
 // 接受审批协议字符串（"exec"）以及 asset_entity 的内部类型常量（AssetTypeSSH/AssetTypeK8s）。
 func isShellLikeApprovalType(t string) bool {
-	switch t {
-	case "exec", asset_entity.AssetTypeSSH, asset_entity.AssetTypeK8s:
-		return true
-	}
-	return false
+	handler, ok := permissionTypeFor(t)
+	return ok && handler.shellLike
 }
 
 // NormalizeGrantPatterns 把一条用户审批输入拆成可独立匹配的 grant pattern 列表。

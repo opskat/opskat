@@ -7,9 +7,6 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 )
 
-// CheckPermission delegation is tested in internal/ai/permission_test.go.
-// matchGrantItem was removed — grant matching is now unified inside CheckPermission.
-
 func TestFormatOfflineDenyMessage(t *testing.T) {
 	Convey("formatOfflineDenyMessage", t, func() {
 		Convey("exec with hints", func() {

@@ -249,49 +249,11 @@ function ContextMenuShortcut({ className, ...props }: React.ComponentProps<"span
   );
 }
 
-// Stub exports for unused components (preserve API compatibility)
-function ContextMenuGroup(props: React.HTMLAttributes<HTMLDivElement>) {
-  return <div data-slot="context-menu-group" role="group" {...props} />;
-}
-function ContextMenuPortal({ children }: { children: React.ReactNode }) {
-  return <>{children}</>;
-}
-function ContextMenuSub({ children }: { children: React.ReactNode }) {
-  return <>{children}</>;
-}
-function ContextMenuRadioGroup(props: React.HTMLAttributes<HTMLDivElement>) {
-  return <div data-slot="context-menu-radio-group" role="radiogroup" {...props} />;
-}
-function ContextMenuSubTrigger(_props: Record<string, unknown>) {
-  return null;
-}
-function ContextMenuSubContent(_props: Record<string, unknown>) {
-  return null;
-}
-function ContextMenuCheckboxItem(_props: Record<string, unknown>) {
-  return null;
-}
-function ContextMenuRadioItem(_props: Record<string, unknown>) {
-  return null;
-}
-function ContextMenuLabel(_props: Record<string, unknown>) {
-  return null;
-}
-
 export {
   ContextMenu,
   ContextMenuTrigger,
   ContextMenuContent,
   ContextMenuItem,
-  ContextMenuCheckboxItem,
-  ContextMenuRadioItem,
-  ContextMenuLabel,
   ContextMenuSeparator,
   ContextMenuShortcut,
-  ContextMenuGroup,
-  ContextMenuPortal,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
-  ContextMenuRadioGroup,
 };

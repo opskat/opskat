@@ -149,7 +149,7 @@ func (e *Extension) GetDecryptedExtensionConfig(assetID int64, extName string) (
 	if e.service == nil {
 		return "", fmt.Errorf("extension system not initialized")
 	}
-	return getDecryptedExtConfig(assetID, e.service.Bridge())
+	return getDecryptedExtConfig(assetID, e.service, e.service.Bridge())
 }
 
 // InstallExtension opens a file dialog and installs an extension from a zip file.

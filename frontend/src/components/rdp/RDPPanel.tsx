@@ -157,6 +157,11 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
     const viewport = viewportRef.current;
     if (!sessionId || !viewport) return;
     const rect = viewport.getBoundingClientRect();
+    // A keep-mounted RDP tab is hidden with display:none, which collapses its
+    // viewport to 0x0 and triggers ResizeObserver. Ignore that non-layout state
+    // instead of clamping it to the protocol minimum and resizing the remote to
+    // 200x200; the observer fires again with the real dimensions when shown.
+    if (rect.width <= 1 || rect.height <= 1) return;
     const desired = clampRemoteSize(rect.width, rect.height);
     if (desired.width === requestedSizeRef.current.width && desired.height === requestedSizeRef.current.height) return;
     void ResizeRDP(sessionId, desired.width, desired.height)
