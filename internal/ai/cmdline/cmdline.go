@@ -191,32 +191,37 @@ func Parse(s string) (*Command, error) {
 // turn back into a parse error instead of the original Command.
 var safeVerbWord = regexp.MustCompile(`^[A-Za-z0-9_@%+:,./-]+$`)
 
-// shellReservedWords are words the shell grammar treats as compound-command
-// keywords when they start a statement (`if`, `for`, ...), never as a
-// literal command name — even though every character in them individually
-// passes safeVerbWord. Rendering a Command whose Verb is one of these
-// unquoted reparses as the start of that compound command (e.g. Verb "if"
-// renders as "if x", which Words then rejects with "`if <cond>` must be
-// followed by `then`" instead of round-tripping back to Verb "if"). None of
-// these are plain DSL identifiers (topic/get/find/put/db/query/...), so
-// rejecting them costs nothing real.
-var shellReservedWords = map[string]bool{
-	"if": true, "then": true, "elif": true, "else": true, "fi": true,
-	"for": true, "while": true, "until": true, "do": true, "done": true,
-	"case": true, "esac": true, "function": true, "select": true,
-	"time": true, "in": true, "!": true, "{": true, "}": true,
+// verbSurvivesCommandPosition asks the parser directly whether verb, sitting
+// in command position, tokenizes back as itself. A prior round hand-maintained
+// a shellReservedWords list derived from syntax.IsKeyword(), but
+// mvdan.cc/sh/v3/syntax's parser dispatches on more literals than
+// IsKeyword() reports — parser.go has separate cases producing LetClause,
+// DeclClause, and CoprocClause (covering "export", "let", "declare",
+// "local", "readonly", "typeset", "nameref", "coproc") that a keyword-table
+// copy misses entirely, and will keep missing on every future mvdan/sh
+// upgrade. Probing the parser with the verb itself asks the actual question
+// this package needs answered — "does Render(verb ...) re-tokenize as
+// verb?" — instead of maintaining a shadow copy of the parser's internals.
+//
+// Note this correctly accepts "else" and "in": they are only special
+// immediately after "if"/"for" ... "do", not in statement-start (command)
+// position, so Words("else x") and Words("in x") both round-trip fine.
+func verbSurvivesCommandPosition(verb string) bool {
+	words, err := Words(verb + " __probe__")
+	return err == nil && len(words) == 2 && words[0] == verb && words[1] == "__probe__"
 }
 
 // validateVerb rejects a Verb that Render cannot safely leave unquoted:
 // anything outside safeVerbWord's character allowlist (this also rejects
-// the empty string, since the pattern requires at least one character) and
-// every entry in shellReservedWords.
+// the empty string, since the pattern requires at least one character), and
+// anything that doesn't survive being placed in command position and
+// re-tokenized (compound-command keywords like "if"/"for"/"export"/"let").
 func validateVerb(verb string) error {
 	if !safeVerbWord.MatchString(verb) {
 		return fmt.Errorf("invalid command verb %q: use a plain identifier (letters, digits, and _@%%+:,./- characters)", verb)
 	}
-	if shellReservedWords[verb] {
-		return fmt.Errorf("invalid command verb %q: it is a shell reserved word, not a valid command name", verb)
+	if !verbSurvivesCommandPosition(verb) {
+		return fmt.Errorf("invalid command verb %q: the shell grammar treats it as a compound-command keyword, not a valid command name", verb)
 	}
 	return nil
 }

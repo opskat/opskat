@@ -146,16 +146,66 @@ func TestParse_RejectsUnsafeVerb(t *testing.T) {
 	}
 }
 
-// TestParse_RejectsShellReservedVerb pins validateVerb's reserved-word half.
-// Every word here matches safeVerbWord's character allowlist (they're all
-// plain letters), so without the dedicated reserved-word check they would
-// pass straight through — and then break the round-trip on Render, since the
-// shell grammar reads them as compound-command keywords in position 0, not
-// literal command names.
+// TestParse_RejectsShellReservedVerb pins validateVerb's structural
+// reserved-word check (verbSurvivesCommandPosition) against a literal table,
+// deliberately NOT derived from the implementation: a table sourced from the
+// production code (e.g. iterating a map inside cmdline.go) cannot detect an
+// omission in that same code, which is exactly how a previous round shipped
+// a shellReservedWords list missing "export"/"let"/"declare"/"local"/
+// "readonly"/"typeset"/"nameref"/"coproc" — mvdan.cc/sh/v3/syntax dispatches
+// on more literals than syntax.IsKeyword() reports, and the hand-copied list
+// only tracked IsKeyword()'s output.
+//
+// Each case single-quotes the verb, like TestParse_RejectsUnsafeVerb does,
+// and for the same reason: an *unquoted* reserved word (e.g. `Parse("if
+// x")`) never even reaches validateVerb — mvdan's parser rejects most of
+// them one layer up, inside Words itself (a hard parse error for the
+// IsKeyword() set, or a non-CallExpr node for the Decl/Let/Coproc clauses),
+// so a test using the unquoted form would pass vacuously regardless of
+// whether validateVerb does anything at all. Quoting forces the word through
+// Words as an ordinary CallExpr argument (Verb == the word) so it actually
+// reaches validateVerb — reproducing the real attack shape from the finding:
+// Parse("'export' x") is accepted (quoting bypasses the DeclClause dispatch)
+// and only breaks later, when Render emits the Verb unquoted and Parse can't
+// read it back.
 func TestParse_RejectsShellReservedVerb(t *testing.T) {
-	for word := range shellReservedWords {
-		if _, err := Parse(word + " x"); err == nil {
-			t.Fatalf("Parse(%q) = nil error, want rejection (reserved word %q as Verb)", word+" x", word)
+	words := []string{
+		// syntax.IsKeyword()-reported compound-command keywords.
+		"if", "then", "elif", "fi",
+		"for", "while", "until", "do", "done",
+		"case", "esac", "function", "select", "time",
+		// Extra parser.go dispatch cases IsKeyword() does not report:
+		// LetClause, DeclClause, CoprocClause.
+		"export", "let", "declare", "local", "readonly", "typeset", "nameref", "coproc",
+	}
+	for _, word := range words {
+		in := "'" + word + "' x"
+		if _, err := Parse(in); err == nil {
+			t.Fatalf("Parse(%q) = nil error, want rejection (reserved word %q as Verb)", in, word)
+		}
+	}
+}
+
+// TestParse_AcceptsElseAndIn locks in that "else" and "in" — previously
+// rejected by the hand-maintained shellReservedWords list — are actually
+// safe as a Verb: they are only special immediately after "if"/"for" ...
+// "do", not in statement-start (command) position, so they round-trip fine
+// and verbSurvivesCommandPosition correctly accepts them.
+func TestParse_AcceptsElseAndIn(t *testing.T) {
+	for _, word := range []string{"else", "in"} {
+		c, err := Parse(word + " x")
+		if err != nil {
+			t.Fatalf("Parse(%q) unexpected error: %v", word+" x", err)
+		}
+		if c.Verb != word {
+			t.Fatalf("Parse(%q) Verb = %q, want %q", word+" x", c.Verb, word)
+		}
+		reparsed, err := Parse(c.Render())
+		if err != nil {
+			t.Fatalf("Parse(Render(%q)) unexpected error: %v (rendered: %s)", word, err, c.Render())
+		}
+		if reparsed.Verb != word {
+			t.Fatalf("round-trip Verb = %q, want %q (rendered: %s)", reparsed.Verb, word, c.Render())
 		}
 	}
 }
