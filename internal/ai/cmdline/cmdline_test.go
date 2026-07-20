@@ -104,6 +104,131 @@ func TestParse_RejectsMalformedFlag(t *testing.T) {
 	}
 }
 
+// TestParse_RejectsExactReviewRepros reproduces, verbatim, the five inputs
+// from the round-2 review's IMPORTANT-1 finding: Render never quoted Verb or
+// flag names, so Parse used to accept arbitrary strings there and mint a
+// Command whose Render output either silently meant something different on
+// re-parse, or flat-out failed to re-parse. The fix moves the check to
+// Parse's boundary — these inputs must now be rejected up front, before a
+// bad Command can even be constructed.
+func TestParse_RejectsExactReviewRepros(t *testing.T) {
+	cases := []string{
+		`'a b' x`,       // unquoted Verb "a b" would re-tokenize as two words
+		`get --'a b'=1`, // unquoted flag name "a b" would re-tokenize as flag "a" + arg "b=1"
+		`'#x' delete`,   // unquoted Verb "#x" starts a shell comment on re-parse
+		`'A=b' x`,       // unquoted Verb "A=b" re-parses as a variable assignment
+		`'if' x`,        // unquoted Verb "if" re-parses as the start of an if-statement
+	}
+	for _, in := range cases {
+		if _, err := Parse(in); err == nil {
+			t.Fatalf("Parse(%q) = nil error, want rejection", in)
+		}
+	}
+}
+
+// TestParse_RejectsUnsafeVerb pins validateVerb's character-allowlist half:
+// any Verb outside safeVerbWord must be rejected, independent of the
+// reserved-word check.
+//
+// Each case single-quotes the verb directly in the input string rather than
+// going through Command.Render() — Render never quotes Verb (by design, see
+// its doc comment), so rendering an already-unsafe Verb wouldn't reproduce
+// the bug: it would just silently re-tokenize into multiple words on
+// re-parse (exactly IMPORTANT-1's "SILENT" corruption case), never reaching
+// validateVerb as the single bad token this test needs to hand it.
+func TestParse_RejectsUnsafeVerb(t *testing.T) {
+	cases := []string{"a b", "a&b", "a;b", "a#b", "A=b", "a$b", `a"b`}
+	for _, verb := range cases {
+		in := "'" + verb + "' x"
+		if _, err := Parse(in); err == nil {
+			t.Fatalf("Parse(%q) (Verb %q) = nil error, want rejection", in, verb)
+		}
+	}
+}
+
+// TestParse_RejectsShellReservedVerb pins validateVerb's reserved-word half.
+// Every word here matches safeVerbWord's character allowlist (they're all
+// plain letters), so without the dedicated reserved-word check they would
+// pass straight through — and then break the round-trip on Render, since the
+// shell grammar reads them as compound-command keywords in position 0, not
+// literal command names.
+func TestParse_RejectsShellReservedVerb(t *testing.T) {
+	for word := range shellReservedWords {
+		if _, err := Parse(word + " x"); err == nil {
+			t.Fatalf("Parse(%q) = nil error, want rejection (reserved word %q as Verb)", word+" x", word)
+		}
+	}
+}
+
+// TestParse_RejectsEmptyVerb pins IMPORTANT-2: Parse of a command that is
+// only a single quoted empty word used to mint &Command{Verb: ""} (a
+// regression from Words no longer dropping deliberately-quoted empty
+// words), and that Command's Render() ("") could not itself be re-parsed
+// ("empty command"). validateVerb's safeVerbWord
+// check rejects the empty string directly (the pattern requires at least
+// one character), so this is covered by TestParse_RejectsUnsafeVerb's
+// mechanism too — but the empty-Verb case gets its own dedicated test since
+// it was the literal regression reported, not just an instance of the
+// general character-allowlist rule.
+func TestParse_RejectsEmptyVerb(t *testing.T) {
+	if _, err := Parse(`''`); err == nil {
+		t.Fatalf(`Parse("''") = nil error, want rejection`)
+	}
+}
+
+// TestParse_RejectsUnsafeFlagName pins the flag-name half of IMPORTANT-1:
+// a flag name built from an unquoted word containing shell metacharacters
+// must be rejected the same way an unsafe Arg or Verb is, instead of being
+// accepted and later rendered bare.
+//
+// As with TestParse_RejectsUnsafeVerb, each case single-quotes the flag name
+// directly in the input string instead of going through Command.Render():
+// Render never quotes flag names either, so an unsafe name would just
+// silently re-tokenize into a different flag/arg split on re-parse (see the
+// review's second SILENT repro, also covered verbatim by
+// TestParse_RejectsExactReviewRepros).
+func TestParse_RejectsUnsafeFlagName(t *testing.T) {
+	cases := []string{"a b", "a&b", "a;b", "a#b"}
+	for _, name := range cases {
+		in := "get --'" + name + "'=1"
+		if _, err := Parse(in); err == nil {
+			t.Fatalf("Parse(%q) (flag name %q) = nil error, want rejection", in, name)
+		}
+	}
+}
+
+// TestQuoteIfNeeded_CRLFAndNULAreLossy pins MINOR-2's known, undocumented-
+// until-now limitation: mvdan's parser normalizes CRLF to LF and drops NUL
+// entirely, even for content inside single quotes, so no quoting choice
+// QuoteIfNeeded could make avoids it. This is not reachable from model input
+// today — Words normalizes CRLF at tokenization time, so a model-authored
+// value can never carry a CR into a Command — but it pins the current
+// behavior so a future change to either mvdan or this package's quoting is a
+// deliberate decision, not a silent surprise.
+func TestQuoteIfNeeded_CRLFAndNULAreLossy(t *testing.T) {
+	t.Run("CRLF collapses to LF even single-quoted", func(t *testing.T) {
+		c := &Command{Verb: "put", Args: []string{"k"}, Flags: map[string]string{"value": "a\r\nb"}}
+		reparsed, err := Parse(c.Render())
+		if err != nil {
+			t.Fatalf("Parse(Render(c)) unexpected error: %v (rendered: %s)", err, c.Render())
+		}
+		if reparsed.Flags["value"] != "a\nb" {
+			t.Fatalf("round-trip Flags[value] = %q, want %q (rendered: %s)", reparsed.Flags["value"], "a\nb", c.Render())
+		}
+	})
+
+	t.Run("NUL is dropped even single-quoted", func(t *testing.T) {
+		c := &Command{Verb: "put", Args: []string{"k"}, Flags: map[string]string{"value": "a\x00b"}}
+		reparsed, err := Parse(c.Render())
+		if err != nil {
+			t.Fatalf("Parse(Render(c)) unexpected error: %v (rendered: %s)", err, c.Render())
+		}
+		if reparsed.Flags["value"] != "ab" {
+			t.Fatalf("round-trip Flags[value] = %q, want %q (rendered: %s)", reparsed.Flags["value"], "ab", c.Render())
+		}
+	})
+}
+
 // TestQuoteIfNeeded_MetacharactersForceQuoting is the direct regression test
 // for the CRITICAL finding: QuoteIfNeeded used to allowlist-miss shell
 // metacharacters (# & ; | < > ( )) and leave them unquoted, which Words then
@@ -319,6 +444,14 @@ func TestParseRender_RoundTrip(t *testing.T) {
 		{"value": "abc&", "note": "a;b"},
 		{"value": "a(b)"},
 		{"value": ""},
+		// MINOR-3: no prior entry contains a literal backslash, so a mutation
+		// that made the *syntax.SglQuoted case in appendWordPart run
+		// unescapeDblQuotedLit (which is only correct inside double quotes —
+		// single-quoted shell content never gets escape-processed) survived
+		// the whole suite. This value renders single-quoted (no "'" inside
+		// it, so QuoteIfNeeded doesn't fall back to the double-quote branch)
+		// and carries two literal backslashes through that path.
+		{"value": `{"re": "^a\\d+$"}`},
 	}
 
 	for _, verb := range verbs {

@@ -44,6 +44,46 @@ func TestBuildK8sCommandPlan(t *testing.T) {
 	})
 }
 
+// TestParseK8sCommandArgs_RejectsEmptyWordSubcommand pins MINOR-1's fix.
+// cmdline.Words used to silently drop a deliberately-quoted empty word
+// (an empty single- or double-quoted word); now it preserves it, so a
+// command whose subcommand position (args[0]
+// after any leading "kubectl"/"kubectl.exe" is stripped) resolves to the
+// empty string must be rejected the same way a truly empty args slice
+// already was — otherwise it falls through to decrypting the kubeconfig and
+// spawning kubectl with an empty-string argv entry. Uses plain testing
+// (not the goconvey style used elsewhere in this file) per this fix round's
+// constraints.
+func TestParseK8sCommandArgs_RejectsEmptyWordSubcommand(t *testing.T) {
+	rejectCases := []string{
+		`''`,          // only word is empty -> no subcommand at all
+		`'' get pods`, // first word (the subcommand slot) is empty
+	}
+	for _, in := range rejectCases {
+		if _, err := parseK8sCommandArgs(in); err == nil {
+			t.Fatalf("parseK8sCommandArgs(%q) = nil error, want rejection (missing subcommand)", in)
+		}
+	}
+
+	// A trailing empty word is a plain positional argument, not the
+	// subcommand slot this guard protects — left unchanged intentionally,
+	// not part of this fix's scope.
+	const trailingEmpty = `kubectl get pods ''`
+	args, err := parseK8sCommandArgs(trailingEmpty)
+	if err != nil {
+		t.Fatalf("parseK8sCommandArgs(%q) unexpected error: %v", trailingEmpty, err)
+	}
+	want := []string{"get", "pods", ""}
+	if len(args) != len(want) {
+		t.Fatalf("parseK8sCommandArgs(%q) = %#v, want %#v", trailingEmpty, args, want)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Fatalf("parseK8sCommandArgs(%q) = %#v, want %#v", trailingEmpty, args, want)
+		}
+	}
+}
+
 func TestExecuteK8sCommandLocalFindsHomebrewKubectlWhenPathIsMinimal(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("Homebrew kubectl PATH fallback is macOS-specific")

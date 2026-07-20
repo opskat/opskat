@@ -95,7 +95,13 @@ func parseK8sCommandArgs(command string) ([]string, error) {
 	if isKubectlProgram(args[0]) {
 		args = args[1:]
 	}
-	if len(args) == 0 {
+	// args[0] is the subcommand once any leading "kubectl"/"kubectl.exe" is
+	// stripped. cmdline.Words now preserves a deliberately quoted empty word
+	// (e.g. `''`) instead of dropping it, so a command consisting solely of
+	// that empty word — or starting with it — no longer trips len(args) == 0;
+	// without this check it would fall through with an empty-string
+	// subcommand, decrypt the kubeconfig, and spawn kubectl with argv [""].
+	if len(args) == 0 || args[0] == "" {
 		return nil, fmt.Errorf("missing kubectl subcommand")
 	}
 
