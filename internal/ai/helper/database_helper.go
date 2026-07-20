@@ -85,14 +85,22 @@ func HandleExecSQL(ctx context.Context, args map[string]any) (string, error) {
 	if !asset.IsDatabase() {
 		return "", fmt.Errorf("asset is not database type")
 	}
+
+	return ExecSQLOnAsset(ctx, asset, sqlText, aictx.ArgString(args, "database"))
+}
+
+// ExecSQLOnAsset 是不含权限检查的纯执行入口，供统一 exec 使用。
+// HandleExecSQL 保留“检查 + 调用本函数”的形态，两条路径共用同一执行体。
+// scope 非空时覆盖资产默认配置的数据库名。
+func ExecSQLOnAsset(ctx context.Context, asset *asset_entity.Asset, sqlText, scope string) (string, error) {
 	cfg, err := asset.GetDatabaseConfig()
 	if err != nil {
 		return "", fmt.Errorf("failed to get database config: %w", err)
 	}
 
 	// 覆盖默认数据库
-	if dbOverride := aictx.ArgString(args, "database"); dbOverride != "" {
-		cfg.Database = dbOverride
+	if scope != "" {
+		cfg.Database = scope
 	}
 
 	db, closer, err := getOrDialDatabase(ctx, asset, cfg)
