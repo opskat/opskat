@@ -12,12 +12,12 @@ import (
 // 这个清单**只可缩短，不可增长**——与 internal/archtest 的 legacy 豁免清单同一惯例。
 // 新增资产类型时不要往这里加，而应实现执行器。
 //
-//   - local / oss：spec §2 明确列为非目标，另开 issue 跟踪
+//   - local：spec §2 明确列为非目标，另开 issue 跟踪
 //   - mongodb / etcd / kafka：Plan B 补齐
-//   - vnc / rdp：交互式协议，无可脚本化命令面，PolicyKind 为空因而本就不在检查范围
+//   - vnc / rdp / oss：PolicyKind 为空，下面的循环在到达豁免检查之前就已 continue，
+//     本就不在检查范围内，因此不需要（也不能通过）豁免条目——列在这里仅供交叉核对。
 var exemptFromExec = map[string]string{
 	"local":   "spec §2 非目标：有 PolicyKind 却无 permission 注册",
-	"oss":     "spec §2 非目标：仅扩展可达",
 	"mongodb": "Plan B",
 	"etcd":    "Plan B",
 	"kafka":   "Plan B",
@@ -26,7 +26,7 @@ var exemptFromExec = map[string]string{
 func TestEveryPolicyKindTypeHasExecutor(t *testing.T) {
 	for _, h := range assettype.All() {
 		if h.PolicyKind() == "" {
-			continue // vnc / rdp：无策略种类，不在统一 exec 范围内
+			continue // vnc / rdp / oss：无策略种类，不在统一 exec 范围内
 		}
 		if reason, exempt := exemptFromExec[h.Type()]; exempt {
 			t.Logf("skipping %s (%s)", h.Type(), reason)
@@ -42,7 +42,7 @@ func TestEveryPolicyKindTypeHasExecutor(t *testing.T) {
 
 // 豁免清单只可缩短：数量增长即失败，逼迫增改者正视。
 func TestExemptionListDoesNotGrow(t *testing.T) {
-	const maxExemptions = 5
+	const maxExemptions = 4
 	if len(exemptFromExec) > maxExemptions {
 		t.Fatalf("exemptFromExec grew to %d entries (max %d); "+
 			"the list may only shrink — implement the executor instead",
