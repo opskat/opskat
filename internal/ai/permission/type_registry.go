@@ -3,6 +3,7 @@ package permission
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -53,4 +54,60 @@ func init() {
 	registerPermissionType(asset_entity.AssetTypeMongoDB, "mongo", false, checkMongoDBPermission, "mongo")
 	registerPermissionType(asset_entity.AssetTypeKafka, "kafka", false, checkKafkaPermission)
 	registerPermissionType(asset_entity.AssetTypeK8s, "k8s", true, checkK8sPermission)
+}
+
+// --- 执行器注册表 ---
+//
+// 注册方向是自下而上推送：helper 等持有协议代码的包导入本包，
+// 因此本包只声明类型与注册入口，实现由它们在 init() 中调 RegisterExecutor 推上来。
+
+// ExecFunc 按资产真实类型执行一条命令。scope 是"不属于命令本身的连接级目标"
+// （database 用库名、redis 用 db 序号），其余类型忽略。
+type ExecFunc func(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error)
+
+type execEntry struct {
+	exec ExecFunc
+	help string
+}
+
+var execEntries = make(map[string]*execEntry)
+
+// RegisterExecutor 注册某资产类型的执行器与用法文档。重复注册 panic——
+// 与 registerPermissionType 一致，注册冲突是启动期的编程错误，不该静默覆盖。
+func RegisterExecutor(canonical string, exec ExecFunc, help string) {
+	if canonical == "" || exec == nil {
+		panic("permission: invalid executor registration")
+	}
+	if _, exists := execEntries[canonical]; exists {
+		panic(fmt.Sprintf("permission: duplicate executor registration %q", canonical))
+	}
+	execEntries[canonical] = &execEntry{exec: exec, help: help}
+}
+
+// ExecutorFor 返回该资产类型的执行器。
+func ExecutorFor(assetType string) (ExecFunc, bool) {
+	entry, ok := execEntries[assetType]
+	if !ok {
+		return nil, false
+	}
+	return entry.exec, true
+}
+
+// HelpFor 返回该资产类型的用法文档。
+func HelpFor(assetType string) (string, bool) {
+	entry, ok := execEntries[assetType]
+	if !ok {
+		return "", false
+	}
+	return entry.help, true
+}
+
+// RegisteredExecTypes 返回已注册执行器的资产类型，已排序。
+func RegisteredExecTypes() []string {
+	types := make([]string, 0, len(execEntries))
+	for name := range execEntries {
+		types = append(types, name)
+	}
+	sort.Strings(types)
+	return types
 }
