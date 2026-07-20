@@ -148,3 +148,22 @@ func TestResolve_NumericRefWithNoIDButMatchingName(t *testing.T) {
 		t.Fatalf("got id %d, want 99", got.ID)
 	}
 }
+
+// TestResolve_SameAssetMatchesIDAndNameIsNotAmbiguous ensures that when a single
+// asset matches both the id lookup and the name lookup (e.g., asset with id=42 and
+// name="42"), the dedup logic correctly recognizes it as a single candidate and
+// resolves cleanly without reporting ambiguity with itself.
+func TestResolve_SameAssetMatchesIDAndNameIsNotAmbiguous(t *testing.T) {
+	m := setupRepo(t)
+	self := &asset_entity.Asset{ID: 42, Name: "42", Type: asset_entity.AssetTypeSSH}
+	m.EXPECT().Find(gomock.Any(), int64(42)).Return(self, nil)
+	m.EXPECT().FindByName(gomock.Any(), "42").Return([]*asset_entity.Asset{self}, nil)
+
+	got, err := Resolve(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("same asset matching both id and name must not be ambiguous, got %v", err)
+	}
+	if got.ID != 42 {
+		t.Fatalf("got id %d, want 42", got.ID)
+	}
+}
