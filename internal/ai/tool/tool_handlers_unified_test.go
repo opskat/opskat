@@ -8,11 +8,21 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
+	"github.com/opskat/opskat/internal/service/serial_svc"
 )
+
+// noSessionSerialManager 是最小的 serial_svc.CommandManager 假实现，永远报告
+// "没有活跃会话"——用来驱动下面 TestHandleExec_SerialPrecheckBlocksApprovalDialog。
+type noSessionSerialManager struct{}
+
+func (noSessionSerialManager) GetSessionByAssetID(_ int64) (serial_svc.CommandSession, bool) {
+	return nil, false
+}
 
 func setupUnified(t *testing.T) *mock_asset_repo.MockAssetRepo {
 	ctrl := gomock.NewController(t)
@@ -62,6 +72,50 @@ func TestHandleExec_UndocumentedTypeReturnsGuidance(t *testing.T) {
 	// 引导语必须点出解析出的类型（spec §4.6）。
 	if !strings.Contains(out, "redis") {
 		t.Fatalf("guidance should name the resolved asset type, got %q", out)
+	}
+}
+
+// TestHandleExec_SerialPrecheckBlocksApprovalDialog is the regression lock for the finding
+// that the unified exec fired an approval dialog for a session-less serial asset and THEN
+// failed with "no active serial session" — the exact double-failure
+// HandleRunSerialCommand's ordering (session check before permission check, see
+// internal/ai/helper/serial_helper.go) was written to avoid. Serial registers no
+// CanonicalizeFunc (nothing to rewrite), so before this fix nothing hoisted the session
+// check ahead of CheckForAsset for the unified exec path.
+//
+// The doc gate is pre-marked documented so this test isolates the precheck: without that,
+// the call would fail at the gate before ever reaching either the precheck or the
+// permission checker, and this test wouldn't prove anything about ordering between the two.
+func TestHandleExec_SerialPrecheckBlocksApprovalDialog(t *testing.T) {
+	m := setupUnified(t)
+	asset := &asset_entity.Asset{ID: 11, Name: "console-1", Type: asset_entity.AssetTypeSerial}
+	m.EXPECT().FindByName(gomock.Any(), "11").Return(nil, nil).AnyTimes()
+	m.EXPECT().Find(gomock.Any(), int64(11)).Return(asset, nil).AnyTimes()
+
+	confirmCalled := false
+	confirm := func(_ context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
+		confirmCalled = true
+		return permission.ApprovalResponse{Decision: "allow"}
+	}
+	checker := permission.NewCommandPolicyChecker(confirm)
+
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	ctx = permission.WithPolicyChecker(ctx, checker)
+	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeSerial)
+	ctx = helper.WithSerialManager(ctx, noSessionSerialManager{})
+
+	_, err := handleExec(ctx, map[string]any{
+		"asset": "11", "command": "display version",
+	})
+	if err == nil {
+		t.Fatal("expected an error for a serial asset with no active session")
+	}
+	if !strings.Contains(err.Error(), "no active serial session") {
+		t.Fatalf("got %q, want the no-active-session error", err.Error())
+	}
+	if confirmCalled {
+		t.Fatal("permission checker's confirm callback fired before the precheck failed — " +
+			"an approval dialog must never appear for a session-less serial asset")
 	}
 }
 

@@ -69,10 +69,17 @@ type ExecFunc func(ctx context.Context, asset *asset_entity.Asset, command, scop
 // 仅当某类型执行前会改写命令时才需要注册（目前只有 k8s 注入 --context/--namespace）。
 type CanonicalizeFunc func(asset *asset_entity.Asset, command string) (string, error)
 
+// PrecheckFunc 校验某类型执行前的前置条件——与 CanonicalizeFunc 一样，存在的唯一理由是
+// 把一个必然会失败的检查挪到权限检查（可能弹审批对话框）之前，避免用户先被打断、
+// 批准之后命令才因为这个检查而失败。仅当某类型有这类检查时才需要注册（目前只有
+// serial：会话不存在）。与 CanonicalizeFunc 不同的是它不改写命令，只返回错误。
+type PrecheckFunc func(ctx context.Context, asset *asset_entity.Asset) error
+
 type execEntry struct {
 	exec         ExecFunc
 	help         string
 	canonicalize CanonicalizeFunc
+	precheck     PrecheckFunc
 }
 
 var execEntries = make(map[string]*execEntry)
@@ -120,6 +127,32 @@ func CanonicalizeFor(assetType string) (CanonicalizeFunc, bool) {
 		return nil, false
 	}
 	return entry.canonicalize, true
+}
+
+// RegisterPrecheck 为一个已注册执行器的资产类型追加可选的 PrecheckFunc。必须在
+// RegisterExecutor 之后调用——precheck 挂在已存在的 execEntry 上，就像 CanonicalizeFunc
+// 一样。重复注册 panic，与 RegisterExecutor 的重复注册检查同一原则：注册冲突是启动期
+// 编程错误，不该被静默覆盖。
+func RegisterPrecheck(canonical string, precheck PrecheckFunc) {
+	entry, ok := execEntries[canonical]
+	if !ok {
+		panic(fmt.Sprintf("permission: RegisterPrecheck on unregistered executor %q", canonical))
+	}
+	if entry.precheck != nil {
+		panic(fmt.Sprintf("permission: duplicate precheck registration %q", canonical))
+	}
+	entry.precheck = precheck
+}
+
+// PrecheckFor 返回该资产类型注册的前置条件检查（如有）。没有注册 precheck 的类型
+// （绝大多数类型）返回 (nil, false)——调用方不应把 false 当成"允许"以外的任何含义，
+// 只是"没有额外检查要跑"。
+func PrecheckFor(assetType string) (PrecheckFunc, bool) {
+	entry, ok := execEntries[assetType]
+	if !ok || entry.precheck == nil {
+		return nil, false
+	}
+	return entry.precheck, true
 }
 
 // UnregisterExecutorForTest 移除一个已注册的执行器。仅供包外测试使用：测试想验证

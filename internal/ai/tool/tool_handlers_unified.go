@@ -24,16 +24,20 @@ import (
 //  5. 规范化（如该类型注册了 CanonicalizeFunc）：把模型给的原始命令改写成
 //     "真正会被执行、也应被策略匹配"的形式（目前只有 k8s，注入 --context/--namespace），
 //     结果只用于下一步的权限检查，不覆盖原始命令。
-//  6. 权限检查：用规范化后的命令字符串做检查——批的是这个，就该按这个匹配策略/审计。
-//  7. 执行：用原始命令，不是规范化后的字符串。规范化命令是给策略匹配/审批弹窗/审计展示
+//  6. 前置条件检查（如该类型注册了 PrecheckFunc）：校验一个跟命令内容无关、但一定会
+//     让执行失败的前提条件（目前只有 serial：没有活跃会话）。与规范化一样无副作用，
+//     必须排在权限检查之前——原因见下方。
+//  7. 权限检查：用规范化后的命令字符串做检查——批的是这个，就该按这个匹配策略/审计。
+//  8. 执行：用原始命令，不是规范化后的字符串。规范化命令是给策略匹配/审批弹窗/审计展示
 //     用的形式（例如 k8s 的 EffectiveCommand 是未加引号的 "kubectl " + strings.Join(args,
 //     " ")），执行器（如 helper.ExecK8sOnAsset）会对原始命令重新解析一次；把展示形式喂给
 //     它是有损的（引号、内部空格都会被吃掉），批准的命令就和实际执行的命令对不上了。
 //
-// 执行器查找与门禁必须排在权限检查之前：CheckForAsset 有用户可见副作用
+// 执行器查找、门禁与 precheck 都必须排在权限检查之前：CheckForAsset 有用户可见副作用
 // （NeedConfirm 会弹审批对话框并阻塞等待用户响应）。若把权限检查提前，模型对一个
-// 压根不支持、或用法未知的类型调 exec 时，用户会先被弹一次审批，批准之后命令却因
-// 查不到执行器/撞上门禁而根本不执行——所以无副作用的判断必须全部走完，才能碰有副作用的那一步。
+// 压根不支持、用法未知、或前提条件不满足（如没有活跃串口会话）的类型调 exec 时，
+// 用户会先被弹一次审批，批准之后命令却因查不到执行器/撞上门禁/precheck 失败而根本
+// 不执行——所以无副作用的判断必须全部走完，才能碰有副作用的那一步。
 func handleExec(ctx context.Context, args map[string]any) (string, error) {
 	asset, err := assetref.Resolve(ctx, aictx.ArgString(args, "asset"))
 	if err != nil {
@@ -64,6 +68,12 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 			return "", err
 		}
 		checkCommand = canonicalCommand
+	}
+
+	if precheck, ok := permission.PrecheckFor(asset.Type); ok {
+		if err := precheck(ctx, asset); err != nil {
+			return "", err
+		}
 	}
 
 	scope := aictx.ArgString(args, "scope")

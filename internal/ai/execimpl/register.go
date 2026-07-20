@@ -26,6 +26,9 @@ func init() {
 		func(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
 			return helper.ExecSerialOnAsset(ctx, asset, command, scope)
 		}, serialHelp)
+	// serial 没有可规范化的命令，所以用 precheck 而不是 canonicalize 达到同一个目的：
+	// 见 helper.PrecheckSerialSession 的注释，以及下面 canonicalizeK8sCommand 的注释。
+	permission.RegisterPrecheck(asset_entity.AssetTypeSerial, helper.PrecheckSerialSession)
 
 	databaseHelp, _ := skills.Get(asset_entity.AssetTypeDatabase)
 	permission.RegisterExecutor(asset_entity.AssetTypeDatabase,
