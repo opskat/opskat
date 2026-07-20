@@ -96,20 +96,22 @@ func TestHandleHelp_ReturnsDocAndMarksGate(t *testing.T) {
 // 未注册执行器的类型（Plan A 尚未支持 mongodb）应给出明确错误，而不是撞上门禁的引导文本。
 //
 // I3: executor lookup must run before the doc gate, so this must be reachable regardless
-// of gate state — it uses bare context.Background() (GetDocGate returns nil, i.e. no
-// gating at all) specifically to prove the unsupported-type error doesn't depend on a
-// gate check happening first. The old assertion only checked that the output contained
-// "mongodb", which both the guidance text ("call help(asset=\"m1\")...") and the
-// unsupported-type error name — so it passed even when the gate fired first and returned
-// guidance instead of the real error. This tightens it to the unsupported-type message's
-// distinguishing wording and explicitly rules out the guidance text.
+// of gate state. Injects a real undocumented gate so that, if executor lookup were moved
+// back after the gate, this test would receive the "call help" guidance instead of the
+// unsupported-type error and fail. The old assertion only checked that the output
+// contained "mongodb", which both the guidance text ("call help(asset=\"m1\")...") and
+// the unsupported-type error name — so it passed even when the gate fired first and
+// returned guidance instead of the real error. This tightens it to the unsupported-type
+// message's distinguishing wording and explicitly rules out the guidance text.
 func TestHandleExec_UnsupportedTypeIsExplicit(t *testing.T) {
 	m := setupUnified(t)
 	m.EXPECT().FindByName(gomock.Any(), "5").Return(nil, nil)
 	m.EXPECT().Find(gomock.Any(), int64(5)).Return(
 		&asset_entity.Asset{ID: 5, Name: "m1", Type: asset_entity.AssetTypeMongoDB}, nil)
 
-	out, err := handleExec(context.Background(), map[string]any{
+	ctx := WithDocGate(context.Background(), NewDocGate())
+
+	out, err := handleExec(ctx, map[string]any{
 		"asset": "5", "command": "find app.users {}",
 	})
 	if err == nil {
