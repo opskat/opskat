@@ -1,6 +1,26 @@
 import { create } from "zustand";
 import { GetSSHServerStatus } from "../../wailsjs/go/ssh/SSH";
 
+export interface ServerStatusGPU {
+  index: number;
+  id?: string;
+  pciBusId?: string;
+  vendor?: string;
+  name?: string;
+  driver?: string;
+  driverVersion?: string;
+  runtime?: string;
+  runtimeVersion?: string;
+  utilizationPercent?: number;
+  memoryUsedBytes?: number;
+  memoryTotalBytes?: number;
+  temperatureC?: number;
+  powerDrawWatts?: number;
+  powerLimitWatts?: number;
+  fanPercent?: number;
+  computeProcessCount?: number;
+}
+
 export interface ServerStatusSnapshot {
   hostname?: string;
   os?: string;
@@ -14,6 +34,9 @@ export interface ServerStatusSnapshot {
   diskMount?: string;
   diskUsedBytes?: number;
   diskTotalBytes?: number;
+  gpus?: ServerStatusGPU[];
+  gpuDriverVersion?: string;
+  cudaVersion?: string;
   collectedAt?: number;
 }
 

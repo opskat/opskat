@@ -1,0 +1,22 @@
+[
+  {
+    "gpu": 0,
+    "usage": {
+      "gfx_activity": 73
+    },
+    "mem_usage": {
+      "used_vram": 17179869184,
+      "total_vram": 68702699520
+    },
+    "temperature": {
+      "hotspot": 78
+    },
+    "power": {
+      "socket_power": 420.5,
+      "power_limit": 560
+    },
+    "fan": {
+      "fan_speed": 45
+    }
+  }
+]

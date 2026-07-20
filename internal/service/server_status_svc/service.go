@@ -11,6 +11,27 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// GPU 表示服务器中的一个图形/计算加速器。可选指标使用指针区分“真实为 0”和“不可用”。
+type GPU struct {
+	Index               int      `json:"index"`
+	DeviceID            string   `json:"id,omitempty"`
+	PCIBusID            string   `json:"pciBusId,omitempty"`
+	Vendor              string   `json:"vendor,omitempty"`
+	Name                string   `json:"name,omitempty"`
+	Driver              string   `json:"driver,omitempty"`
+	DriverVersion       string   `json:"driverVersion,omitempty"`
+	Runtime             string   `json:"runtime,omitempty"`
+	RuntimeVersion      string   `json:"runtimeVersion,omitempty"`
+	UtilizationPercent  *float64 `json:"utilizationPercent,omitempty"`
+	MemoryUsedBytes     *int64   `json:"memoryUsedBytes,omitempty"`
+	MemoryTotalBytes    *int64   `json:"memoryTotalBytes,omitempty"`
+	TemperatureC        *float64 `json:"temperatureC,omitempty"`
+	PowerDrawWatts      *float64 `json:"powerDrawWatts,omitempty"`
+	PowerLimitWatts     *float64 `json:"powerLimitWatts,omitempty"`
+	FanPercent          *float64 `json:"fanPercent,omitempty"`
+	ComputeProcessCount *int     `json:"computeProcessCount,omitempty"`
+}
+
 // Snapshot 表示一次服务器状态快照。
 type Snapshot struct {
 	Hostname         string  `json:"hostname,omitempty"`
@@ -25,7 +46,12 @@ type Snapshot struct {
 	DiskMount        string  `json:"diskMount,omitempty"`
 	DiskUsedBytes    int64   `json:"diskUsedBytes,omitempty"`
 	DiskTotalBytes   int64   `json:"diskTotalBytes,omitempty"`
-	CollectedAt      int64   `json:"collectedAt,omitempty"`
+	GPUs             []GPU   `json:"gpus,omitempty"`
+	// GPUDriverVersion and CUDAVersion are retained for NVIDIA snapshot compatibility.
+	// New collectors attach driver/runtime metadata to each GPU.
+	GPUDriverVersion string `json:"gpuDriverVersion,omitempty"`
+	CUDAVersion      string `json:"cudaVersion,omitempty"`
+	CollectedAt      int64  `json:"collectedAt,omitempty"`
 }
 
 const snapshotCommand = `sh <<'OPSKAT_STATUS'
@@ -118,10 +144,39 @@ func Collect(ctx context.Context, client *ssh.Client) (*Snapshot, error) {
 	if client == nil {
 		return nil, fmt.Errorf("ssh client is nil")
 	}
+	return collectWithRunner(ctx, func(ctx context.Context, command, failurePrefix string) (string, error) {
+		return runSSHCommand(ctx, client, command, failurePrefix)
+	})
+}
 
+type statusCommandRunner func(ctx context.Context, command, failurePrefix string) (string, error)
+
+func collectWithRunner(ctx context.Context, run statusCommandRunner) (*Snapshot, error) {
+	stdout, err := run(ctx, snapshotCommand, "collect server status failed")
+	if err != nil {
+		return nil, err
+	}
+
+	snapshot, err := parseSnapshot(stdout)
+	if err != nil {
+		return nil, err
+	}
+
+	gpuCtx, cancelGPU := context.WithTimeout(ctx, gpuOptionalBudget)
+	defer cancelGPU()
+	gpuResult := collectGPUStatus(gpuCtx, run)
+	snapshot.GPUs = gpuResult.GPUs
+	snapshot.GPUDriverVersion = gpuResult.GPUDriverVersion
+	snapshot.CUDAVersion = gpuResult.CUDAVersion
+
+	snapshot.CollectedAt = time.Now().UnixMilli()
+	return snapshot, nil
+}
+
+func runSSHCommand(ctx context.Context, client *ssh.Client, command, failurePrefix string) (string, error) {
 	session, err := client.NewSession()
 	if err != nil {
-		return nil, fmt.Errorf("create ssh session: %w", err)
+		return "", fmt.Errorf("create ssh session: %w", err)
 	}
 	defer func() {
 		_ = session.Close()
@@ -134,28 +189,23 @@ func Collect(ctx context.Context, client *ssh.Client) (*Snapshot, error) {
 
 	runCh := make(chan error, 1)
 	go func() {
-		runCh <- session.Run(snapshotCommand)
+		runCh <- session.Run(command)
 	}()
 
 	select {
 	case err := <-runCh:
 		if err != nil {
 			if stderr.Len() > 0 {
-				return nil, fmt.Errorf("collect server status failed: %s", strings.TrimSpace(stderr.String()))
+				return "", fmt.Errorf("%s: %s", failurePrefix, strings.TrimSpace(stderr.String()))
 			}
-			return nil, fmt.Errorf("collect server status failed: %w", err)
+			return "", fmt.Errorf("%s: %w", failurePrefix, err)
 		}
 	case <-ctx.Done():
 		_ = session.Close()
-		return nil, ctx.Err()
+		return "", ctx.Err()
 	}
 
-	snapshot, err := parseSnapshot(stdout.String())
-	if err != nil {
-		return nil, err
-	}
-	snapshot.CollectedAt = time.Now().UnixMilli()
-	return snapshot, nil
+	return stdout.String(), nil
 }
 
 func parseSnapshot(raw string) (*Snapshot, error) {

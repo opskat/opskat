@@ -1,0 +1,19 @@
+{
+  "card0": {
+    "Unique ID": "0x1122334455667788",
+    "Card series": "AMD Radeon PRO W7900",
+    "Card model": "0x7448",
+    "Card vendor": "Advanced Micro Devices, Inc. [AMD/ATI]",
+    "PCI Bus": "0000:0d:00.0",
+    "GPU use (%)": "61",
+    "VRAM Total Used Memory (B)": "8589934592",
+    "VRAM Total Memory (B)": "51527024640",
+    "Temperature (Sensor junction) (C)": "71.0",
+    "Average Graphics Package Power (W)": "248.0",
+    "Max Graphics Package Power (W)": "295.0",
+    "Fan speed (%)": "38"
+  },
+  "system": {
+    "Driver version": "6.8.5"
+  }
+}

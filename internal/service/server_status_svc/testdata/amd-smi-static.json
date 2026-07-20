@@ -1,0 +1,19 @@
+[
+  {
+    "gpu": 0,
+    "uuid": "a1b2c3d4-0000-0000-0000-000000000000",
+    "asic": {
+      "market_name": "AMD Instinct MI250X"
+    },
+    "bus": {
+      "bdf": "0000:41:00.0"
+    },
+    "driver": {
+      "name": "amdgpu",
+      "version": "6.8.5"
+    },
+    "vram": {
+      "size": 68702699520
+    }
+  }
+]

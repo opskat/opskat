@@ -1,0 +1,29 @@
+{
+  "device_list": [
+    {
+      "device_id": 0,
+      "device_level": [
+        {
+          "metrics_type": "XPUM_STATS_GPU_UTILIZATION",
+          "value": 52,
+          "scale": 1
+        },
+        {
+          "metrics_type": "XPUM_STATS_MEMORY_USED",
+          "value": 12884901888,
+          "scale": 1
+        },
+        {
+          "metrics_type": "XPUM_STATS_GPU_CORE_TEMPERATURE",
+          "value": 64,
+          "scale": 1
+        },
+        {
+          "metrics_type": "XPUM_STATS_POWER",
+          "value": 231.5,
+          "scale": 1
+        }
+      ]
+    }
+  ]
+}
