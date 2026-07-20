@@ -49,3 +49,49 @@ func TestInit_StructuredTypesNotYetRegistered(t *testing.T) {
 		}
 	}
 }
+
+// M5 regression lock: the empty-kubeconfig check must live in canonicalizeK8sCommand, not
+// only in helper.ExecK8sOnAsset — canonicalize runs before the unified exec's permission
+// check (internal/ai/tool/tool_handlers_unified.go's handleExec), so this is what makes
+// an unconfigured k8s asset fail before the user ever sees an approval dialog, matching
+// what handleExecK8s already does before calling BuildK8sCommandPlan.
+func TestCanonicalizeK8sCommand_EmptyKubeconfigFailsBeforeApproval(t *testing.T) {
+	canonicalize, ok := permission.CanonicalizeFor(asset_entity.AssetTypeK8s)
+	if !ok {
+		t.Fatal("k8s canonicalizer not registered")
+	}
+
+	asset := &asset_entity.Asset{Type: asset_entity.AssetTypeK8s}
+	if err := asset.SetK8sConfig(&asset_entity.K8sConfig{Context: "prod-ctx"}); err != nil {
+		t.Fatalf("set k8s config: %v", err)
+	}
+
+	if _, err := canonicalize(asset, "get pods"); err == nil {
+		t.Fatal("expected an error for a k8s asset with no kubeconfig configured")
+	}
+}
+
+func TestCanonicalizeK8sCommand_NonEmptyKubeconfigSucceeds(t *testing.T) {
+	canonicalize, ok := permission.CanonicalizeFor(asset_entity.AssetTypeK8s)
+	if !ok {
+		t.Fatal("k8s canonicalizer not registered")
+	}
+
+	asset := &asset_entity.Asset{Type: asset_entity.AssetTypeK8s}
+	if err := asset.SetK8sConfig(&asset_entity.K8sConfig{
+		Kubeconfig: "enc-kubeconfig",
+		Context:    "prod-ctx",
+		Namespace:  "prod-ns",
+	}); err != nil {
+		t.Fatalf("set k8s config: %v", err)
+	}
+
+	got, err := canonicalize(asset, "get pods")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "kubectl --context prod-ctx --namespace prod-ns get pods"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

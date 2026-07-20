@@ -45,33 +45,35 @@ func TestDocGate_Reset(t *testing.T) {
 	}
 }
 
-// GetDocGate falls back to a process-wide default when ctx carries no gate — the real
-// per-conversation wiring (injecting one via WithDocGate on each Send) is a later task;
-// until then, callers still need a non-nil gate to consult.
-func TestGetDocGate_NoInjectionFallsBackToProcessDefault(t *testing.T) {
-	g := GetDocGate(context.Background())
-	if g == nil {
-		t.Fatal("GetDocGate must fall back to a process-wide default when ctx has no injected gate")
-	}
-	if got := GetDocGate(context.Background()); got != g {
-		t.Fatal("GetDocGate must return the same default instance across calls")
+// GetDocGate returns nil when ctx carries no injected gate — there is no process-wide
+// default. There used to be one (a package-level singleton every conversation shared),
+// but it made GetDocGate's result depend on which test/conversation happened to run
+// first: two tests using bare context.Background() would silently read and write the
+// same gate, so `go test -shuffle=on` failed 5 of 6 runs depending on ordering. Callers
+// must treat nil as "allow" — DocGate is a guidance mechanism, not the security
+// boundary; the permission check is. The real per-conversation wiring (injecting one via
+// WithDocGate on each Send) is a later task; until then, callers with no injected gate
+// get no gating at all, which is safe because it's not the boundary.
+func TestGetDocGate_NoInjectionReturnsNil(t *testing.T) {
+	if got := GetDocGate(context.Background()); got != nil {
+		t.Fatalf("GetDocGate must return nil when ctx has no injected gate, got %v", got)
 	}
 }
 
-func TestWithDocGate_InjectedGateOverridesDefault(t *testing.T) {
+func TestWithDocGate_InjectedGateIsReturned(t *testing.T) {
 	injected := NewDocGate()
 	ctx := WithDocGate(context.Background(), injected)
 	if got := GetDocGate(ctx); got != injected {
-		t.Fatal("GetDocGate must return the ctx-injected gate, not the process default")
+		t.Fatal("GetDocGate must return the ctx-injected gate")
 	}
 }
 
-// Callers must be able to explicitly opt out of gating (e.g. a future call site that
-// wants no guidance behavior) by injecting a nil gate; GetDocGate must respect that
-// nil rather than silently reverting to the process default.
+// Callers must be able to explicitly opt out of gating (e.g. a call site that wants no
+// guidance behavior) by injecting a nil gate; GetDocGate must return that nil rather than
+// treating "found a nil value" differently from "found nothing" — both mean allow.
 func TestWithDocGate_ExplicitNilIsRespected(t *testing.T) {
 	ctx := WithDocGate(context.Background(), nil)
 	if got := GetDocGate(ctx); got != nil {
-		t.Fatal("GetDocGate must return the explicitly injected nil, not fall back to the default")
+		t.Fatal("GetDocGate must return nil for an explicitly injected nil gate")
 	}
 }

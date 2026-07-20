@@ -122,6 +122,15 @@ func CanonicalizeFor(assetType string) (CanonicalizeFunc, bool) {
 	return entry.canonicalize, true
 }
 
+// UnregisterExecutorForTest 移除一个已注册的执行器。仅供包外测试使用：测试想验证
+// "check 用规范化命令、exec 用原始命令"这类跨类型行为时，需要注册一个临时的假类型
+// 并在结束后清理（同一个测试 binary 内 `-count>1` 会重复执行同一个测试函数，
+// RegisterExecutor 撞见重复注册会 panic）。RegisterExecutor 本身的 panic-on-duplicate
+// 是有意的——那是给生产 init() 用的，编程期冲突不该被这个函数悄悄放过。
+func UnregisterExecutorForTest(canonical string) {
+	delete(execEntries, canonical)
+}
+
 // RegisteredExecTypes 返回已注册执行器的资产类型，已排序。
 func RegisteredExecTypes() []string {
 	types := make([]string, 0, len(execEntries))

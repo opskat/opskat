@@ -43,27 +43,28 @@ func (g *DocGate) Reset(convID int64) {
 
 // --- context 注入 ---
 //
-// 真正按会话分片的 DocGate 尚未接入 runner（下一个任务的工作）：在那之前，
-// defaultDocGate 是唯一实例，被进程内所有调用方共享。这比设计意图粗一档
-// （不同会话之间会互相"学会"同一类型），但不是安全隐患——DocGate 只是引导
-// 机制，真正的边界是权限检查；下一个任务接入 runner 后，各会话会通过
-// WithDocGate 注入各自的实例。
+// 真正按会话分片的 DocGate 尚未接入 runner（下一个任务的工作）：在那之前，未注入
+// ctx 的调用方拿到的是 nil，等同于"放行"——DocGate 只是引导机制，不是安全边界，
+// 真正的边界是权限检查。下一个任务接入 runner 后，各会话会通过 WithDocGate 注入
+// 各自的实例。
+//
+// 这里刻意不提供进程级默认实例回退：曾经有过一个，但它被进程内所有调用方共享，
+// 会话之间互相"学会"同一类型只是坏味道，真正的问题是它让测试行为依赖执行
+// 顺序——两个都用裸 context.Background() 的测试并发/乱序跑（`go test -shuffle=on`）
+// 时会互相污染对方的门禁状态，6 次里能有 5 次失败。没有默认实例，调用方要么显式
+// 注入 *DocGate，要么显式接受 nil == 放行，没有第三种隐藏状态。
 
 type docGateKeyType struct{}
 
-var defaultDocGate = NewDocGate()
-
-// WithDocGate 把 *DocGate 注入 ctx，覆盖进程级默认实例。
+// WithDocGate 把 *DocGate 注入 ctx。
 func WithDocGate(ctx context.Context, gate *DocGate) context.Context {
 	return context.WithValue(ctx, docGateKeyType{}, gate)
 }
 
-// GetDocGate 返回 ctx 上注入的 *DocGate；未注入时回退到进程级默认实例。
+// GetDocGate 返回 ctx 上注入的 *DocGate；未注入时返回 nil。
 // 调用方必须把 nil 返回值当作"放行"处理——DocGate 是引导机制，不是安全边界，
 // 真正的边界是权限检查。
 func GetDocGate(ctx context.Context) *DocGate {
-	if g, ok := ctx.Value(docGateKeyType{}).(*DocGate); ok {
-		return g
-	}
-	return defaultDocGate
+	g, _ := ctx.Value(docGateKeyType{}).(*DocGate)
+	return g
 }
