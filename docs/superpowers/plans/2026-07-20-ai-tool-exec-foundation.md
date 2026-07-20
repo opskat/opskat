@@ -17,7 +17,7 @@
 - 测试命令统一 `go test ./internal/...`。
 - 提交信息用 gitmoji；**仅在刻意关联 issue 时** subject 才带 `#123`。
 - 仓内 mock 用法：`asset_repo.RegisterAsset(mock)` + `t.Cleanup` 还原，范本见 `internal/ai/testhelpers_test.go:41-63`。
-- 新增用户可见文案需同时提供 en 与 zh-CN，且**各语言用地道表达，不逐字对译**。
+- **模型面文本一律英文，不走 i18n**：SKILL.md、`exec` / `help` 的引导文本、unsupported 与解析错误，全部只写英文——与仓内现有 tool 文案（`"asset not found: %s"` 等）保持一致。模型会依 `buildLanguageHint` 用用户语言回复，无需在工具层翻译。本约束**不适用**于前端 UI 文案：那些仍需 en 与 zh-CN 双份，且各语言用地道表达、不逐字对译。
 
 ---
 
@@ -1160,13 +1160,18 @@ Expected: 编译失败，`undefined: handleExec`
 
 - [ ] **Step 3: 写 handler**
 
-创建 `internal/ai/tool/tool_handlers_unified.go`。要点，按顺序：
+创建 `internal/ai/tool/tool_handlers_unified.go`。**顺序是有讲究的，必须严格按下列次序**：
 
 1. `assetref.Resolve(ctx, aictx.ArgString(args, "asset"))` → 拿到资产（错误直接返回）
-2. **用资产的真实 `asset.Type` 做权限检查**（`checker.CheckForAsset(ctx, asset.ID, asset.Type, command)`），修掉 `database_helper.go:74` 用写死类型先检查、`:85` 才验类型的顺序缺陷（spec §5 第 2 条）
-3. 门禁：`docGate.IsDocumented(convID, asset.Type)` 为假 → 返回引导文本（**非 error**），文本含资产名与解析出的类型
-4. `permission.ExecutorFor(asset.Type)` → 未注册则返回明确的 unsupported 文本
+2. 门禁：`tool.GetDocGate(ctx)` 非 nil 且 `IsDocumented(convID, asset.Type)` 为假 → 返回引导文本（**非 error**），文本含资产名与解析出的类型
+3. `permission.ExecutorFor(asset.Type)` → 未注册则返回明确的 unsupported 文本
+4. **用资产的真实 `asset.Type` 做权限检查**（`checker.CheckForAsset(ctx, asset.ID, asset.Type, command)`），修掉 `database_helper.go:74` 用写死类型先检查、`:85` 才验类型的顺序缺陷（spec §5 第 2 条）
 5. 执行并返回
+
+> **为什么门禁与执行器查找必须排在权限检查之前**：权限检查有**用户可见副作用**——
+> `NeedConfirm` 会弹审批对话框并阻塞等待。若把它放在门禁之前，模型对一个用法未知
+> （或根本不支持）的类型调 `exec` 时，用户会先被弹一次审批，批准之后命令却因门禁被拦下
+> 根本不执行。先做无副作用的判断（解析、门禁、执行器查找），再做有副作用的审批。
 
 `handleHelp` 解析资产 → `permission.HelpFor(asset.Type)` → `docGate.MarkDocumented` → 返回 `"Asset \"<name>\" is type=<type>.\n\n" + doc`。
 
