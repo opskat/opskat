@@ -14,6 +14,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/runner"
+	"github.com/opskat/opskat/internal/ai/skills"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/model/entity/ai_provider_entity"
@@ -45,6 +46,24 @@ func maskAPIKey(key string) string {
 		return "****"
 	}
 	return key[:4] + "****" + key[len(key)-4:]
+}
+
+// builtinAssetTypeSkillsForTabs 收集 openTabs 中每个内置资产类型（ssh/serial/database/
+// redis/k8s）去重后的一行技能描述（skills.Description），用于 PromptBuilder 的技能清单，
+// 同时也是 DocGate 第二个满足条件的依据——同一批类型会在调用方被标记为"已文档化"。
+// 未内置文档的类型（如 extension 承载的 mongodb）被忽略，走的是另一条 extension SKILL.md
+// 注入路径，不属于这里。
+func builtinAssetTypeSkillsForTabs(tabs []runner.TabInfo) map[string]string {
+	out := make(map[string]string)
+	for _, tab := range tabs {
+		if _, ok := out[tab.Type]; ok {
+			continue
+		}
+		if desc, ok := skills.Description(tab.Type); ok {
+			out[tab.Type] = desc
+		}
+	}
+	return out
 }
 
 // normalizeConversationTitle 统一会话标题规则。
@@ -298,6 +317,7 @@ func (a *AI) DeleteConversation(id int64) error {
 	if err != nil {
 		return err
 	}
+	a.docGate.Reset(id)
 	if a.currentConversationID == id {
 		a.currentConversationID = 0
 	}
@@ -362,6 +382,18 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 		}
 	}
 
+	// Inject the compact per-type skill listing for built-in asset types, and satisfy the
+	// exec doc gate's second condition: a type whose description is already in this Send's
+	// prompt doesn't need a help() round trip before exec — only the first, explicit-help
+	// condition is handled inside handleHelp (internal/ai/tool/tool_handlers_unified.go).
+	builtinSkills := builtinAssetTypeSkillsForTabs(aiCtx.OpenTabs)
+	if len(builtinSkills) > 0 {
+		builder.SetAssetTypeSkills(builtinSkills)
+	}
+	for assetType := range builtinSkills {
+		a.docGate.MarkDocumented(convID, assetType)
+	}
+
 	systemPrompt := builder.Build()
 
 	// 注入审计上下文
@@ -372,6 +404,10 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 	if a.pool != nil {
 		chatCtx = helper.WithSSHPool(chatCtx, a.pool)
 	}
+
+	// 注入 exec 用法门禁：单实例贯穿 AI binder 生命周期，内部按 convID 分片记录，
+	// 与 LocalToolGate 的 allow-list 用同一种存储形态（见 ai.go 的字段注释）。
+	chatCtx = tool.WithDocGate(chatCtx, a.docGate)
 
 	// 同一次 Send 内复用连接。
 	sshCache := tool.NewSSHClientCache()

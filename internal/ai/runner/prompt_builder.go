@@ -22,6 +22,7 @@ type AIContext struct {
 type PromptBuilder struct {
 	language          string
 	context           AIContext
+	assetTypeSkills   map[string]string // 内置资产类型 → 一行描述（skills.Description）
 	extensionSkillMDs map[string]string // extName → SKILL.md content
 }
 
@@ -29,6 +30,15 @@ type PromptBuilder struct {
 // Keys are extension names, values are the raw markdown.
 func (b *PromptBuilder) SetExtensionSkillMDs(mds map[string]string) {
 	b.extensionSkillMDs = mds
+}
+
+// SetAssetTypeSkills sets the compact per-built-in-type skill listing to render in the
+// prompt. Keys are asset types (ssh/serial/database/redis/k8s), values are their
+// one-line skills.Description() — never the full SKILL.md body. The full body is loaded
+// on demand via the help(asset) tool; inlining it here would defeat the whole point of
+// having a separate help tool (token savings from collapsing 14 tools into exec/help).
+func (b *PromptBuilder) SetAssetTypeSkills(descriptions map[string]string) {
+	b.assetTypeSkills = descriptions
 }
 
 // NewPromptBuilder 创建 PromptBuilder
@@ -71,7 +81,12 @@ func (b *PromptBuilder) Build() string {
 	// 8. 用户拒绝操作引导
 	parts = append(parts, b.buildUserDenialGuidance())
 
-	// 9. Extension tools guide
+	// 9. 内置资产类型技能清单（只列一行描述，正文由 help 按需加载）
+	if assetTypeSkills := b.buildAssetTypeSkills(); assetTypeSkills != "" {
+		parts = append(parts, assetTypeSkills)
+	}
+
+	// 10. Extension tools guide
 	if len(b.extensionSkillMDs) > 0 {
 		names := make([]string, 0, len(b.extensionSkillMDs))
 		for name := range b.extensionSkillMDs {
@@ -147,6 +162,27 @@ func (b *PromptBuilder) buildSecretsGuidance() string {
 
 func (b *PromptBuilder) buildErrorRecoveryGuidance() string {
 	return `When a tool execution fails, analyze the error and try a different approach. If repeated attempts fail, explain the issue to the user and suggest alternatives. Do not give up after a single failure.`
+}
+
+// buildAssetTypeSkills 渲染内置资产类型的一行技能清单（只列描述，不内联 SKILL.md 正文）。
+func (b *PromptBuilder) buildAssetTypeSkills() string {
+	if len(b.assetTypeSkills) == 0 {
+		return ""
+	}
+	types := make([]string, 0, len(b.assetTypeSkills))
+	for t := range b.assetTypeSkills {
+		types = append(types, t)
+	}
+	sort.Strings(types)
+
+	lines := []string{
+		"Asset command syntax is documented per asset type. Call help(<asset>) to load the syntax for an asset before running exec against it.",
+		"",
+	}
+	for _, t := range types {
+		lines = append(lines, fmt.Sprintf("- %s: %s", t, b.assetTypeSkills[t]))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (b *PromptBuilder) buildUserDenialGuidance() string {

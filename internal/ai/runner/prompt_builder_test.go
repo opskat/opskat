@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"strings"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
@@ -43,4 +44,19 @@ func TestPromptBuilderBuild(t *testing.T) {
 			So(got, ShouldContainSubstring, "k8s skill body")
 		})
 	})
+}
+
+func TestBuild_ListsBuiltinAssetTypeSkills(t *testing.T) {
+	b := NewPromptBuilder("en", AIContext{})
+	b.SetAssetTypeSkills(map[string]string{
+		"redis": "Run Redis commands against a Redis asset via exec.",
+	})
+	got := b.Build()
+	if !strings.Contains(got, "redis") {
+		t.Fatalf("prompt should list the redis skill, got:\n%s", got)
+	}
+	// 只列描述，不内联正文——正文由 help 按需加载（spec §3.3）。
+	if strings.Contains(got, "## Command syntax") {
+		t.Fatal("prompt must not inline the full SKILL.md body")
+	}
 }
