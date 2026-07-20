@@ -87,6 +87,22 @@ mongo 暴露了这个代价：用户批准的是 `find`，实际执行的是"对
 协议依赖留在 `internal/ai/helper`。且 `shellLike`（驱动子命令拆分）与产出命令的 parser
 必须语义一致，放在一起才能保证这一点。
 
+**注册方向必须自下而上推送（重要）**：`internal/ai/helper` **导入** `internal/ai/permission`
+（每个 helper 都调用 `permission.GetPolicyChecker`），因此 `permission` **不能**反向导入 `helper`，
+执行函数无法以直接引用的方式写进表里。
+
+解法保持设计不变：`permission` 只声明函数类型与注册入口
+
+```go
+type ExecFunc func(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error)
+
+func RegisterExecutor(canonical string, exec ExecFunc, parse ParseFunc, help string)
+```
+
+由持有协议代码的包在 `init()` 中调用 `permission.RegisterExecutor(...)` 把实现推上来。
+无循环依赖，表仍只有一张。这也是仓内既有惯例——扩展执行器正是通过
+`tool.SetExecToolExecutor` 在 `main.go:323` 注入的。
+
 被否决的方案：
 
 - 扩展 `assettype.AssetTypeHandler`——层级反转，如上。
