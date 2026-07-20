@@ -88,6 +88,37 @@ func TestHandleRunSerialCommandRespectsSerialPolicy(t *testing.T) {
 	assert.Equal(t, 0, sess.calls)
 }
 
+// TestExecSerialOnAsset_IgnoresPolicyChecker proves the pure-exec body registered
+// as the unified exec's ExecFunc does NOT consult the policy checker in ctx — the
+// check is the unified exec tool's job, once, before dispatch (Task 6). Under the
+// identical deny policy that blocks HandleRunSerialCommand (see
+// TestHandleRunSerialCommandRespectsSerialPolicy, which asserts sess.calls == 0),
+// calling ExecSerialOnAsset directly must still execute. If a permission check were
+// ever reintroduced into this function, the command would be blocked here too and
+// this test would fail — that's exactly the double-approval-dialog regression the
+// split guards against.
+func TestExecSerialOnAsset_IgnoresPolicyChecker(t *testing.T) {
+	ctx, mockAsset, _ := setupPolicyTest(t)
+	asset := &asset_entity.Asset{
+		ID:   1,
+		Type: asset_entity.AssetTypeSerial,
+		CmdPolicy: mustJSON(asset_entity.CommandPolicy{
+			DenyList: []string{"reload *"},
+		}),
+	}
+	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+	sess := &fakeSerialSession{output: "should execute"}
+	ctx = permission.WithPolicyChecker(ctx, permission.NewCommandPolicyChecker(nil))
+	ctx = WithSerialManager(ctx, &fakeSerialManager{session: sess, ok: true})
+
+	result, err := ExecSerialOnAsset(ctx, asset, "reload now", "")
+
+	require.NoError(t, err)
+	assert.Equal(t, "should execute", result)
+	assert.Equal(t, 1, sess.calls)
+}
+
 func TestCommandPolicyCheckerSerialApprovalType(t *testing.T) {
 	ctx, mockAsset, _ := setupPolicyTest(t)
 	asset := &asset_entity.Asset{
