@@ -7,7 +7,10 @@ import (
 
 	// execimpl 在 init() 中把 ssh/serial/database/redis/k8s 的纯执行体注册进
 	// permission 的执行器表（供统一 exec 工具派发）。blank-import 是唯一的触发点：
-	// 桌面端与 opsctl 都通过本包接入 exec，因此这里注册一次即可覆盖两条路径。
+	// 导入本包的两条路径（桌面端与 opsctl）都会触发这次注册，注册一次即可。
+	// 但注册被共用不等于工具被共用——exec/help 目前只在 Tools()（桌面端 AI）里，
+	// 下面的 AllToolDefs()（opsctl 派发表）没有它们的条目，所以 opsctl 现在还调不到
+	// 统一 exec，只能走按类型的旧工具。
 	// execimpl 不导入本包（tool），避免循环依赖。
 	_ "github.com/opskat/opskat/internal/ai/execimpl"
 )
