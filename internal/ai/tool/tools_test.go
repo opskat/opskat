@@ -35,6 +35,8 @@ func TestTools_RegistryShape(t *testing.T) {
 			"kafka_schema", "kafka_connect", "kafka_message",
 			// extension
 			"exec_tool",
+			// unified
+			"exec", "help",
 		}
 
 		Convey("所有契约里的工具都注册了", func() {
@@ -50,6 +52,7 @@ func TestTools_RegistryShape(t *testing.T) {
 				"exec_tool",
 				"kafka_cluster", "kafka_topic", "kafka_consumer_group", "kafka_acl",
 				"kafka_schema", "kafka_connect", "kafka_message",
+				"exec",
 			}
 			for _, name := range serialNames {
 				st, ok := names[name].(agent.SerialTool)

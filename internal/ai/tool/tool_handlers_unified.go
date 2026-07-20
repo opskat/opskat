@@ -1,0 +1,111 @@
+package tool
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/assetref"
+	"github.com/opskat/opskat/internal/ai/permission"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+)
+
+// handleExec 按资产真实类型派发命令执行，取代 14 个按类型区分的专用工具
+// （run_command/exec_sql/exec_redis/exec_k8s/...）。
+//
+// 执行顺序是有意为之，不能重排：
+//  1. 解析资产（assetref.Resolve）——错误直接返回，无副作用。
+//  2. 门禁：该资产类型的用法文档是否已到过模型面前；未到过则返回引导文本
+//     （非 Go error，让模型能在同一轮里自纠：调用 help 后重试），而不是让整轮
+//     因 error 中断。
+//  3. 执行器查找：类型未注册执行器（Plan A 尚不支持的类型）→ 明确的 unsupported 错误。
+//  4. 规范化（如该类型注册了 CanonicalizeFunc）：把模型给的原始命令改写成
+//     "真正会被执行、也应被策略匹配"的形式（目前只有 k8s，注入 --context/--namespace）。
+//  5. 权限检查：用同一个（规范化后的）命令字符串做检查——批的是这个，就该执行这个。
+//  6. 执行：同样用规范化后的命令。
+//
+// 门禁与执行器查找必须排在权限检查之前：CheckForAsset 有用户可见副作用
+// （NeedConfirm 会弹审批对话框并阻塞等待用户响应）。若把权限检查提前，模型对一个
+// 用法未知、或压根不支持的类型调 exec 时，用户会先被弹一次审批，批准之后命令却因
+// 门禁被拦下、根本不执行——所以无副作用的判断必须全部走完，才能碰有副作用的那一步。
+func handleExec(ctx context.Context, args map[string]any) (string, error) {
+	asset, err := assetref.Resolve(ctx, aictx.ArgString(args, "asset"))
+	if err != nil {
+		return "", err
+	}
+
+	command := aictx.ArgString(args, "command")
+	if strings.TrimSpace(command) == "" {
+		return "", fmt.Errorf("missing required parameter: command")
+	}
+
+	if gate := GetDocGate(ctx); gate != nil {
+		convID := aictx.GetConversationID(ctx)
+		if !gate.IsDocumented(convID, asset.Type) {
+			return execGuidance(asset), nil
+		}
+	}
+
+	exec, ok := permission.ExecutorFor(asset.Type)
+	if !ok {
+		return "", unsupportedTypeError(asset)
+	}
+
+	if canonicalize, ok := permission.CanonicalizeFor(asset.Type); ok {
+		canonicalCommand, err := canonicalize(asset, command)
+		if err != nil {
+			return "", err
+		}
+		command = canonicalCommand
+	}
+
+	scope := aictx.ArgString(args, "scope")
+
+	if checker := permission.GetPolicyChecker(ctx); checker != nil {
+		result := checker.CheckForAsset(ctx, asset.ID, asset.Type, command)
+		aictx.RecordDecision(ctx, result)
+		if result.Decision != aictx.Allow {
+			return result.Message, nil
+		}
+	}
+
+	return exec(ctx, asset, command, scope)
+}
+
+// execGuidance 门禁未满足时返回的引导文本：点名资产与解析出的类型，指引模型
+// 先调 help 再重试 exec（spec §4.6 第 1 条给出的措辞）。返回值而非 error——
+// 模型看到这段文本后能在同一轮内自纠。
+func execGuidance(asset *asset_entity.Asset) string {
+	return fmt.Sprintf(
+		"asset %q is type=%s — call help(asset=%q) for its command syntax before using exec.",
+		asset.Name, asset.Type, asset.Name)
+}
+
+// unsupportedTypeError 类型未注册执行器（当前 Plan A 尚未覆盖，如 mongodb/etcd/kafka）
+// 时返回的明确错误。
+func unsupportedTypeError(asset *asset_entity.Asset) error {
+	return fmt.Errorf("asset %q (type=%s) has no exec support yet; supported types: %s",
+		asset.Name, asset.Type, strings.Join(permission.RegisteredExecTypes(), ", "))
+}
+
+// handleHelp 返回资产类型的用法文档，并把该类型标记为"该会话已知晓"，供 exec 的
+// 门禁检查使用。
+func handleHelp(ctx context.Context, args map[string]any) (string, error) {
+	asset, err := assetref.Resolve(ctx, aictx.ArgString(args, "asset"))
+	if err != nil {
+		return "", err
+	}
+
+	doc, ok := permission.HelpFor(asset.Type)
+	if !ok {
+		return "", fmt.Errorf("asset %q (type=%s) has no help documentation yet; supported types: %s",
+			asset.Name, asset.Type, strings.Join(permission.RegisteredExecTypes(), ", "))
+	}
+
+	if gate := GetDocGate(ctx); gate != nil {
+		gate.MarkDocumented(aictx.GetConversationID(ctx), asset.Type)
+	}
+
+	return fmt.Sprintf("Asset %q is type=%s.\n\n%s", asset.Name, asset.Type, doc), nil
+}
