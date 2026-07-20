@@ -4,6 +4,12 @@ import (
 	"context"
 
 	"github.com/opskat/opskat/internal/ai/helper"
+
+	// execimpl 在 init() 中把 ssh/serial/database/redis/k8s 的纯执行体注册进
+	// permission 的执行器表（供统一 exec 工具派发）。blank-import 是唯一的触发点：
+	// 桌面端与 opsctl 都通过本包接入 exec，因此这里注册一次即可覆盖两条路径。
+	// execimpl 不导入本包（tool），避免循环依赖。
+	_ "github.com/opskat/opskat/internal/ai/execimpl"
 )
 
 // opsctl CLI 直接以 (ctx, args)→(string, error) 的形式调用 handler，
