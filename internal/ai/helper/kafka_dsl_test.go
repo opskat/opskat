@@ -1,9 +1,13 @@
 package helper
 
 import (
+	"context"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/opskat/opskat/internal/ai/policy"
 )
 
 func TestParseKafkaCommand(t *testing.T) {
@@ -297,6 +301,87 @@ func TestKafkaCommand_PolicyStringIsUnchangedTwoTokenForm(t *testing.T) {
 			t.Fatalf("PolicyString() for %q = %q has %d fields, want exactly 2 (splitKafkaRule requires it)",
 				c.in, got, fields)
 		}
+	}
+}
+
+// kafkaActionIsMutating 按策略串 action 的**末段**判定读还是写：
+// "topic.records.delete" → delete → 写，"broker.config.read" → read → 读。
+//
+// 词表是封闭的，出现没见过的末段就 fail：新末段意味着有人加了一类操作，它算读还是算写
+// 必须由人来定。给个默认值猜的话，猜成"读"就等于悄悄把它移出下面那条覆盖检查——
+// 一个漏掉 deny 覆盖的写操作，正好从此不会被任何测试提起。
+var kafkaActionIsMutating = map[string]bool{
+	"read": false, "list": false,
+	"create": true, "write": true, "delete": true,
+}
+
+// TestKafkaBuiltinDeny_CoversEveryMutatingFamily 从 kafkaVerbs 推导"哪些 family 有写操作"，
+// 再用默认生效的 deny 清单（EffectiveKafkaPolicy(nil) 展开 BuiltinKafkaDangerousDeny）逐条
+// 匹配，把"有写 verb、却一条内置 deny 规则都不沾"的 family 钉成一个已知集合。
+//
+// 两张表各自维护、都会漂，而漂的症状是静默的：给 cluster 加一个写 verb、或把
+// "acl.write *" 从内置清单里删掉，今天不会让任何测试变红——只是危险操作默认不再被拦，
+// 也就是本分支已经出过五次的 fail-open 形状。
+//
+// 粒度是 family 不是 verb：topic.create 本来就不在 deny 清单里（内置 Kafka Operator 组
+// 明确允许建 topic），逐 verb 断言会把这类有意的放行也算成缺口。family 级别问的是
+// "这个 family 产出的策略串到底能不能被内置 deny 命中"。
+//
+// message 在 want 里，是一条真实的缺口而非笔误：message produce 产出
+// "message.write <topic>"，是往生产集群写数据的操作，BuiltinKafkaDangerousDeny 里却没有
+// 对应规则（内置 Kafka Operator 组反倒把 "message.write *" 列进了 allow）。默认策略下
+// 它落到 NeedConfirm——弹审批而不是直接拒绝。这是既有的产品判断，本测试只负责让它
+// 不再是无人知晓的状态；tool 包的 TestHandleExec_KafkaDenyListStopsBeforeConnecting
+// 用自定义策略覆盖了这条唯一能拦住它的路径。
+func TestKafkaBuiltinDeny_CoversEveryMutatingFamily(t *testing.T) {
+	denyRules := policy.EffectiveKafkaPolicy(context.Background(), nil).DenyList
+	if len(denyRules) == 0 {
+		t.Fatal("default kafka policy has an empty deny list — BuiltinKafkaDangerousDeny is not being resolved")
+	}
+
+	mutating := map[string]bool{}
+	denied := map[string]bool{}
+	for family, verbs := range kafkaVerbs {
+		for verb, needsTarget := range verbs {
+			c := &KafkaCommand{Family: family, Verb: verb}
+			if needsTarget {
+				c.Target = "res"
+			}
+			command, err := c.PolicyString()
+			if err != nil {
+				t.Fatalf("PolicyString() for %q %q unexpected error: %v", family, verb, err)
+			}
+			action, _, _ := strings.Cut(command, " ")
+			kind := action[strings.LastIndex(action, ".")+1:]
+			isMutating, known := kafkaActionIsMutating[kind]
+			if !known {
+				t.Fatalf("policy action %q (from %q %q) ends in %q, which is not in kafkaActionIsMutating — classify it as read or write before adding it",
+					action, family, verb, kind)
+			}
+			if !isMutating {
+				continue
+			}
+			mutating[family] = true
+			for _, rule := range denyRules {
+				if policy.MatchKafkaRule(rule, command) {
+					denied[family] = true
+				}
+			}
+		}
+	}
+
+	var uncovered []string
+	for family := range mutating {
+		if !denied[family] {
+			uncovered = append(uncovered, family)
+		}
+	}
+	slices.Sort(uncovered)
+
+	want := []string{"message"}
+	if !slices.Equal(uncovered, want) {
+		t.Fatalf("families with write verbs but no builtin deny rule = %v, want %v — a new one means a destructive operation ships un-denied by default; one disappearing means the finding was fixed and this expectation must shrink",
+			uncovered, want)
 	}
 }
 
