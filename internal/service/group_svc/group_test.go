@@ -2,6 +2,7 @@ package group_svc
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
@@ -117,6 +118,60 @@ func TestGroupSvc_Delete(t *testing.T) {
 			err := Group().Delete(ctx, 20, true)
 			assert.NoError(t, err)
 		})
+	})
+}
+
+// TestGroupSvc_Delete_RunsInTransaction 钉住 Delete 的多步写操作在同一个事务里。
+//
+// Delete 要依次做三件写操作：子分组改挂父级、组内资产删除或移到未分组、删除分组本身。
+// 不包事务时任何一步失败都会把分组树留在中间态——最典型的是资产已经 MoveToGroup(0)
+// 但分组没删掉，用户看到一个空分组而资产全跑到未分组去了，且没有任何提示。同文件的
+// Reorder 已经用 dbutil.WithTransaction，Delete 漏了。
+func TestGroupSvc_Delete_RunsInTransaction(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	t.Cleanup(func() { mockCtrl.Finish() })
+	mockGroupRepo := mock_group_repo.NewMockGroupRepo(mockCtrl)
+	mockAssetRepo := mock_asset_repo.NewMockAssetRepo(mockCtrl)
+	group_repo.RegisterGroup(mockGroupRepo)
+	asset_repo.RegisterAsset(mockAssetRepo)
+
+	inTx := false
+	txCalls := 0
+	ctx := dbutil.WithTransactionRunner(context.Background(), func(ctx context.Context, fn func(context.Context) error) error {
+		txCalls++
+		inTx = true
+		defer func() { inTx = false }()
+		return fn(ctx)
+	})
+
+	convey.Convey("删除分组的每一步都在同一个事务内，末步失败时错误原样冒出", t, func() {
+		deleteErr := errors.New("delete group failed")
+		group := &group_entity.Group{ID: 10, ParentID: 0}
+
+		mockGroupRepo.EXPECT().Find(gomock.Any(), int64(10)).
+			DoAndReturn(func(context.Context, int64) (*group_entity.Group, error) {
+				assert.True(t, inTx, "Find 必须在事务内：读到的父级 ID 决定后面怎么改挂")
+				return group, nil
+			})
+		mockGroupRepo.EXPECT().ReparentChildren(gomock.Any(), int64(10), int64(0)).
+			DoAndReturn(func(context.Context, int64, int64) error {
+				assert.True(t, inTx, "ReparentChildren 必须在事务内")
+				return nil
+			})
+		mockAssetRepo.EXPECT().MoveToGroup(gomock.Any(), int64(10), int64(0)).
+			DoAndReturn(func(context.Context, int64, int64) error {
+				assert.True(t, inTx, "MoveToGroup 必须在事务内")
+				return nil
+			})
+		mockGroupRepo.EXPECT().Delete(gomock.Any(), int64(10)).
+			DoAndReturn(func(context.Context, int64) error {
+				assert.True(t, inTx, "Delete 必须在事务内")
+				return deleteErr
+			})
+
+		err := Group().Delete(ctx, 10, false)
+		assert.ErrorIs(t, err, deleteErr)
+		assert.Equal(t, 1, txCalls, "三步写操作必须共用一个事务，而不是各开一个")
 	})
 }
 

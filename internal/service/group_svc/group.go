@@ -72,27 +72,33 @@ func (s *groupSvc) Rename(ctx context.Context, id int64, name string) error {
 
 // Delete 删除分组
 // deleteAssets: true 删除分组下的资产，false 移动到未分组
+//
+// 三步写操作（子分组改挂父级、处理组内资产、删除分组本身）共用一个事务：中途失败时
+// 分组树不能停在中间态——例如资产已经被移到未分组、分组却还在，用户看到一个空分组，
+// 且没有任何提示。与同文件 Reorder 的事务边界一致。
 func (s *groupSvc) Delete(ctx context.Context, id int64, deleteAssets bool) error {
-	// 获取分组信息，用于将子分组挂到父分组
-	group, err := group_repo.Group().Find(ctx, id)
-	if err != nil {
-		return err
-	}
-	// 子分组挂到被删分组的父级
-	if err := group_repo.Group().ReparentChildren(ctx, id, group.ParentID); err != nil {
-		return err
-	}
-	// 处理分组下的资产
-	if deleteAssets {
-		if err := asset_repo.Asset().DeleteByGroupID(ctx, id); err != nil {
+	return dbutil.WithTransaction(ctx, func(txCtx context.Context) error {
+		// 获取分组信息，用于将子分组挂到父分组
+		group, err := group_repo.Group().Find(txCtx, id)
+		if err != nil {
 			return err
 		}
-	} else {
-		if err := asset_repo.Asset().MoveToGroup(ctx, id, 0); err != nil {
+		// 子分组挂到被删分组的父级
+		if err := group_repo.Group().ReparentChildren(txCtx, id, group.ParentID); err != nil {
 			return err
 		}
-	}
-	return group_repo.Group().Delete(ctx, id)
+		// 处理分组下的资产
+		if deleteAssets {
+			if err := asset_repo.Asset().DeleteByGroupID(txCtx, id); err != nil {
+				return err
+			}
+		} else {
+			if err := asset_repo.Asset().MoveToGroup(txCtx, id, 0); err != nil {
+				return err
+			}
+		}
+		return group_repo.Group().Delete(txCtx, id)
+	})
 }
 
 // Move 移动分组排序（up/down/top）
