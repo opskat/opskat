@@ -20,6 +20,24 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// checkFileTransfer 在真正建连之前过一次 cp 审批。审批主体是远端路径——grant 按资产
+// 存，本地路径不属于任何资产，塞进 pattern 无法匹配；方向与本地路径进 detail 供展示。
+//
+// checker 为 nil 表示调用方不是 AI 会话（opsctl 直接调 handler），审批由 CLI 层
+// 自己发起（cmd/opsctl/command/cp.go），这里放行。
+func checkFileTransfer(ctx context.Context, assetID int64, remotePath, detail string) error {
+	checker := permission.GetPolicyChecker(ctx)
+	if checker == nil {
+		return nil
+	}
+	result := checker.CheckForAsset(ctx, assetID, permission.GrantToolCp, remotePath, detail)
+	aictx.RecordDecision(ctx, result)
+	if result.Decision != aictx.Allow {
+		return fmt.Errorf("%s", result.Message)
+	}
+	return nil
+}
+
 func handleRequestGrant(ctx context.Context, args map[string]any) (string, error) {
 	itemsJSON := aictx.ArgString(args, "items")
 	reason := aictx.ArgString(args, "reason")
@@ -141,6 +159,10 @@ func handleUploadFile(ctx context.Context, args map[string]any) (string, error) 
 		return "", fmt.Errorf("missing required parameters: asset_id, local_path, remote_path")
 	}
 
+	if err := checkFileTransfer(ctx, assetID, remotePath, fmt.Sprintf("upload %s → %s", localPath, remotePath)); err != nil {
+		return "", err
+	}
+
 	err := helper.ExecuteWithSFTP(ctx, assetID, func(client *sftp.Client) error {
 		srcFile, err := os.Open(localPath) //nolint:gosec
 		if err != nil {
@@ -177,6 +199,10 @@ func handleDownloadFile(ctx context.Context, args map[string]any) (string, error
 	localPath := aictx.ArgString(args, "local_path")
 	if assetID == 0 || remotePath == "" || localPath == "" {
 		return "", fmt.Errorf("missing required parameters: asset_id, remote_path, local_path")
+	}
+
+	if err := checkFileTransfer(ctx, assetID, remotePath, fmt.Sprintf("download %s → %s", remotePath, localPath)); err != nil {
+		return "", err
 	}
 
 	err := helper.ExecuteWithSFTP(ctx, assetID, func(client *sftp.Client) error {
