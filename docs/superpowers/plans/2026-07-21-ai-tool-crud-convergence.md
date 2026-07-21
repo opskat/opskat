@@ -1324,12 +1324,25 @@ func crudTools() []tool.Tool {
 `tools_asset.go` 删掉 `add_asset`/`update_asset`/`add_group`/`update_group` 四个定义
 （连同那张 40 属性的 schema）。
 
-- [ ] **Step 5: 同步派发表与清单**
+- [ ] **Step 5: 同步派发表与清单，并在同一个 commit 里修好 opsctl 的调用点**
 
 - `tool_registry.go` 的 `AllToolDefs()`：`{"add_asset", handleAddAsset}` / `{"update_asset", handleUpdateAsset}` /
   `{"add_group", handleAddGroup}` / `{"update_group", handleUpdateGroup}`
   → `{"put_asset", handlePutAsset}` / `{"put_group", handlePutGroup}`。
 - `tools_test.go` 的 `expected`：四个旧名 → 两个新名（数量断言会立刻抓到漏改）。
+- **`cmd/opsctl/command/create.go:148,224`**：`callHandler(..., "add_asset", ...)` /
+  `callHandler(..., "update_asset", ...)` → 均改为 `"put_asset"`，且**更新分支的 args 键
+  `"id"` 必须同时改成 `"asset"`**（`handlePutAsset` 认的是 `asset`；只改工具名不改键名，
+  更新会静默变成创建）。传的值仍是 `strconv.FormatInt(id, 10)` —— `assetref.Resolve` 认数字串。
+- **`cmd/opsctl/command/handler.go:69-80`** 的桌面端刷新白名单
+  `toolName == "add_asset" || toolName == "update_asset"` → `put_asset` / `put_group`。
+- `cmd/opsctl/command/handler_test.go:112` 的清单加 `"put_asset"`、`"put_group"`。
+
+> **为什么这四处必须留在本 task，而不是等到 Task 10/11 的 opsctl 批次**：
+> `buildHandlerMap` 是**按名字的运行期查表**（查不到只打印 `Internal error: unknown tool`），
+> 而 `handler_test.go:112` 的既有清单**不含** `add_asset`——也就是说，把它们留到后面，
+> 中间每一个 task 期间 `opsctl create asset` 都是坏的，且**没有任何测试会红**。
+> 这正是本仓 Plan B 反复吃过的那类静默失效。
 
 - [ ] **Step 6: 跑测试确认通过**
 
@@ -2872,14 +2885,13 @@ Expected: FAIL（缺 put_*/delete_*；`help <asset>` 被 `root.go:73-76` 拦截�
    拿到桌面端确认，再以已预批的形态派发。这与 `create`/`update` 的既有形状一致
    （`create.go:139-148`），照它写，`Detail` 串按 `create.go:135-138` 的格式给出
    （`opsctl delete asset <ref>`）。
-4. **`create.go:148,224`**：`"add_asset"` → `"put_asset"`、`"update_asset"` → `"put_asset"`
-   （更新分支的 args 里已有 `id`——但新 handler 认的是 `asset`，**必须同步改键名**，
-   否则更新会静默变成创建）。`cmdCreate`/`cmdUpdate` 的 CLI 表面不变。
-   顺带给 `create`/`update`/`delete` 三个 switch 补 `group` 分支
-   （recon B 节：`create group` 今天根本不存在，只有 `asset`）。
-5. **`handler.go:69-80`** 的 UI 刷新白名单 `toolName == "add_asset" || toolName == "update_asset"`
-   → `put_asset` / `put_group` / `delete_asset` / `delete_group`。
-   **漏改这处不会有任何测试变红，只会让桌面端在 CLI 改数据后不刷新**——
+4. **`create.go` 的派发名已在 Task 4 改完**（连同 `handler.go` 的刷新白名单）。
+   本 task 只补一件事：给 `cmdCreate` / `cmdUpdate` 的 `switch resource` 加 `group` 分支
+   （recon B 节：`create group` 今天根本不存在，只有 `case "asset"` + 一个
+   `unknown resource %q. Supported: asset` 的 default），派发进 `put_group`。
+5. **`handler.go:69-80`** 的刷新白名单在 Task 4 已含 `put_asset`/`put_group`，
+   本 task 追加 `delete_asset` / `delete_group`。
+   **漏改这处不会有任何测试变红，只会让桌面端在 CLI 删数据后不刷新**——
    本 task 必须为它补一条断言。
 6. **`batch.go:87-125`**：前缀语义从选择器变断言。`parseBatchArg`（`479-509`）与
    `validBatchTypes`（`65`）**一行不改**——前缀语法保持不变（用户明确要求）。
