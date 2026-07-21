@@ -87,39 +87,67 @@ func TestHandleExec_KafkaChecksTwoTokenPolicyString(t *testing.T) {
 // "已注册、模型可直接调用、完全无权限检查"的窗口（含 kafka_topic delete / kafka_acl
 // delete）。两件事已在同一个 commit 完成，本测试是那件事的端到端验收证据：断言
 // 回调**恰好**被触发一次。
+//
+// **逐 family 跑**，不是只跑一条命令：内部那次检查曾经在 7 个 HandleKafka* 里各有一份，
+// 只覆盖 topic 的话，另外六个里任何一份被重新加回来都不会有测试失败——评审实测过，
+// 把等价的检查加回 HandleKafkaSchema 之后全仓测试依然全绿。被这个断言接手的那六个
+// TestKafka*PermissionStopsBeforeConnection 本来就是逐 family 写的。
 func TestHandleExec_KafkaIsCheckedExactlyOnce(t *testing.T) {
-	m := setupUnified(t)
-
-	asset := &asset_entity.Asset{ID: 7, Name: "kafka-prod", Type: asset_entity.AssetTypeKafka}
-	m.EXPECT().FindByName(gomock.Any(), "kafka-prod").Return([]*asset_entity.Asset{asset}, nil).AnyTimes()
-	m.EXPECT().Find(gomock.Any(), int64(7)).Return(asset, nil).AnyTimes()
-
-	var seen []string
-	checker := permission.NewCommandPolicyChecker(
-		func(_ context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
-			for _, item := range items {
-				seen = append(seen, item.Command)
-			}
-			return permission.ApprovalResponse{Decision: "allow"}
-		})
-
-	ctx := WithDocGate(context.Background(), NewDocGate())
-	ctx = permission.WithPolicyChecker(ctx, checker)
-	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeKafka)
-
-	// 批准之后命令真的会被执行，止于资产没有 Kafka 配置——正因为它执行到了执行器
-	// 内部，"只检查了一次"才不是"根本没走到执行器"的假象。
-	_, err := handleExec(ctx, map[string]any{
-		"asset":   "kafka-prod",
-		"command": `topic create orders --partitions=3 --replication-factor=2`,
-	})
-	if err == nil {
-		t.Fatal("handleExec = nil error, want the executor to be reached and fail on the asset's empty Kafka config")
+	// 每个 family 一条命令，覆盖 kafkaFamilyHandlers 的全部 7 个分支。
+	cases := []struct{ command, want string }{
+		{`cluster overview`, "cluster.read *"},
+		{`topic create orders --partitions=3 --replication-factor=2`, "topic.create orders"},
+		{`consumer-group describe mygroup`, "consumer_group.read mygroup"},
+		{`acl list`, "acl.read *"},
+		{`schema register subj --schema='{}'`, "schema.write subj"},
+		{`connect pause conn`, "connect.state.write conn"},
+		{`message produce orders --value=x`, "message.write orders"},
 	}
 
-	want := []string{"topic.create orders"}
-	if !slices.Equal(seen, want) {
-		t.Fatalf("approval saw %q, want %q — exactly one check, done by handleExec before dispatching to the executor", seen, want)
+	for _, tc := range cases {
+		t.Run(tc.command, func(t *testing.T) {
+			m := setupUnified(t)
+
+			// 自定义 allowList 把默认策略的 allowList **整体替换**掉
+			// （EffectiveKafkaPolicy：custom 非空时不与默认取并集），于是每条命令都落到
+			// NeedConfirm、触发审批回调。不这么做的话 cluster/consumer-group 的只读命令
+			// 会被内置 allowlist 直接放行、回调根本不触发，断言就成了空转——而空转恰恰
+			// 是这个测试要防的东西。deny 侧仍与默认取并集，所以这不会放宽任何危险命令。
+			asset := &asset_entity.Asset{
+				ID: 7, Name: "kafka-prod", Type: asset_entity.AssetTypeKafka,
+				CmdPolicy: `{"allow_list":["nothing.matches-any-command *"]}`,
+			}
+			m.EXPECT().FindByName(gomock.Any(), "kafka-prod").Return([]*asset_entity.Asset{asset}, nil).AnyTimes()
+			m.EXPECT().Find(gomock.Any(), int64(7)).Return(asset, nil).AnyTimes()
+
+			var seen []string
+			checker := permission.NewCommandPolicyChecker(
+				func(_ context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
+					for _, item := range items {
+						seen = append(seen, item.Command)
+					}
+					return permission.ApprovalResponse{Decision: "allow"}
+				})
+
+			ctx := WithDocGate(context.Background(), NewDocGate())
+			ctx = permission.WithPolicyChecker(ctx, checker)
+			GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeKafka)
+
+			// 批准之后命令真的会被执行，止于资产没有 Kafka 配置——正因为它执行到了执行器
+			// 内部，"只检查了一次"才不是"根本没走到执行器"的假象。
+			_, err := handleExec(ctx, map[string]any{
+				"asset":   "kafka-prod",
+				"command": tc.command,
+			})
+			if err == nil {
+				t.Fatal("handleExec = nil error, want the executor to be reached and fail on the asset's empty Kafka config")
+			}
+
+			want := []string{tc.want}
+			if !slices.Equal(seen, want) {
+				t.Fatalf("approval saw %q, want %q — exactly one check, done by handleExec before dispatching to the executor", seen, want)
+			}
+		})
 	}
 }
 

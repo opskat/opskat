@@ -5,8 +5,10 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/helper"
 
-	// execimpl 在 init() 中把 ssh/serial/database/redis/k8s 的纯执行体注册进
-	// permission 的执行器表（供统一 exec 工具派发）。blank-import 是唯一的触发点：
+	// execimpl 在 init() 中把各资产类型的纯执行体注册进 permission 的执行器表
+	// （供统一 exec 工具派发）。当前有哪些类型以 permission.RegisteredExecTypes() 为准，
+	// 这里不再抄一份名单——抄的那份停在 ssh/serial/database/redis/k8s，漏了后来接入的
+	// mongodb/etcd/kafka。blank-import 是唯一的触发点：
 	// 导入本包的两条路径（桌面端与 opsctl）都会触发这次注册，注册一次即可。
 	// 但注册被共用不等于工具被共用——exec/help 目前只在 Tools()（桌面端 AI）里，
 	// 下面的 AllToolDefs()（opsctl 派发表）没有它们的条目，所以 opsctl 现在还调不到
