@@ -11,42 +11,61 @@ import (
 	"github.com/opskat/opskat/internal/service/etcd_svc"
 )
 
-func TestExtractRedisCommand(t *testing.T) {
-	Convey("ExtractRedisCommand", t, func() {
+// extractForTest 走与 MatchRedisRule 相同的单次切词管线（splitRedisPair →
+// parseRedisCommand），只是把同一个串同时当规则和命令喂进去。
+func extractForTest(s string) redisCommand {
+	tokens, _ := splitRedisPair(s, s)
+	return parseRedisCommand(tokens)
+}
+
+func TestParseRedisCommand(t *testing.T) {
+	Convey("parseRedisCommand", t, func() {
 		Convey("简单命令 GET", func() {
-			cmd, args := ExtractRedisCommand("GET mykey")
-			So(cmd, ShouldEqual, "GET")
-			So(args, ShouldEqual, "mykey")
+			c := extractForTest("GET mykey")
+			So(c.Name, ShouldEqual, "GET")
+			So(c.Args, ShouldResemble, []string{"mykey"})
 		})
 
 		Convey("多词命令 CONFIG SET", func() {
-			cmd, args := ExtractRedisCommand("CONFIG SET maxmemory 128mb")
-			So(cmd, ShouldEqual, "CONFIG SET")
-			So(args, ShouldEqual, "maxmemory 128mb")
+			c := extractForTest("CONFIG SET maxmemory 128mb")
+			So(c.Name, ShouldEqual, "CONFIG SET")
+			So(c.Args, ShouldResemble, []string{"maxmemory", "128mb"})
 		})
 
 		Convey("空字符串", func() {
-			cmd, args := ExtractRedisCommand("")
-			So(cmd, ShouldBeEmpty)
-			So(args, ShouldBeEmpty)
+			c := extractForTest("")
+			So(c.Name, ShouldBeEmpty)
+			So(c.Args, ShouldBeEmpty)
 		})
 
 		Convey("单命令无参数 PING", func() {
-			cmd, args := ExtractRedisCommand("PING")
-			So(cmd, ShouldEqual, "PING")
-			So(args, ShouldBeEmpty)
+			c := extractForTest("PING")
+			So(c.Name, ShouldEqual, "PING")
+			So(c.Args, ShouldBeEmpty)
 		})
 
 		Convey("非多词命令带参数 DEL", func() {
-			cmd, args := ExtractRedisCommand("DEL key1 key2")
-			So(cmd, ShouldEqual, "DEL")
-			So(args, ShouldEqual, "key1 key2")
+			c := extractForTest("DEL key1 key2")
+			So(c.Name, ShouldEqual, "DEL")
+			So(c.Args, ShouldResemble, []string{"key1", "key2"})
 		})
 
 		Convey("多词命令 XGROUP CREATE", func() {
-			cmd, args := ExtractRedisCommand("XGROUP CREATE mystream grpname $")
-			So(cmd, ShouldEqual, "XGROUP CREATE")
-			So(args, ShouldEqual, "mystream grpname $")
+			c := extractForTest("XGROUP CREATE mystream grpname $")
+			So(c.Name, ShouldEqual, "XGROUP CREATE")
+			So(c.Args, ShouldResemble, []string{"mystream", "grpname", "$"})
+		})
+
+		Convey("引号内的空格是参数的一部分，不再被二次切开", func() {
+			c := extractForTest("DEL '/prod/my key'")
+			So(c.Name, ShouldEqual, "DEL")
+			So(c.Args, ShouldResemble, []string{"/prod/my key"})
+		})
+
+		Convey("引号让命令名 token 自带空格时，参数下标不受影响", func() {
+			c := extractForTest("'CONFIG SET' maxmemory")
+			So(c.Name, ShouldEqual, "CONFIG SET")
+			So(c.Args, ShouldResemble, []string{"maxmemory"})
 		})
 	})
 }
@@ -96,10 +115,41 @@ func TestMatchRedisRule(t *testing.T) {
 		})
 
 		Convey("规则或命令不是合法 shell 语法时，切词退回按空白分词，不静默失配", func() {
-			// 未闭合引号：cmdline.Words 报错，splitRedisTokens 必须退回 strings.Fields
+			// 未闭合引号：cmdline.Words 报错，切词必须退回 strings.Fields
 			// 而不是把它当"零 token"处理——否则一条切不了词的 deny 规则会从"总能命中"
 			// 悄悄变成"永远不命中"。
 			So(MatchRedisRule("del 'unterminated", "del 'unterminated"), ShouldBeTrue)
+		})
+
+		Convey("只有一侧切词失败时，两侧一起退回分词——不能在两套词法里比较", func() {
+			// 规则是用户手写文本，可能带未闭合引号（切词失败）；命令侧却是
+			// FormatCommand 产出的合法带引号串（切词成功）。若只退回失败的那一侧，
+			// 规则里保留着引号字符、命令里已被剥掉，path.Match 必然失配——一条本该
+			// 命中的 deny 规则静默失效（fail-open）。
+			So(MatchRedisRule("del '/prod/*", "del '/prod/x'"), ShouldBeTrue)
+			So(MatchRedisRule(`DEL "/prod/*`, `DEL "/prod/x"`), ShouldBeTrue)
+			So(MatchRedisRule("DEL 'user:*", "DEL 'user:1'"), ShouldBeTrue)
+		})
+
+		Convey("命令名 token 含空格（引号切词的结果）不再让下标错位", func() {
+			// 回归：命令名曾按 strings.Fields(joined) 数词数、再回原 token 切片取下标，
+			// 一个 'CONFIG SET' 这样的带空格 token 会让词数多于 token 数，直接
+			// index out of range —— 全链路无 recover()，等于整个应用崩溃。
+			// 引号包起来的命令名规范化后与两个词的写法同名，于是仍然命中：deny 规则
+			// 保持有效（fail-closed），而不是被一对引号绕过。
+			So(MatchRedisRule("CONFIG SET maxmemory", "'CONFIG SET' maxmemory"), ShouldBeTrue)
+			So(MatchRedisRule("'GET KEY' a", "'GET KEY' a"), ShouldBeTrue)
+			So(MatchRedisRule("CONFIG 'SET X' foo", "CONFIG 'SET X' foo"), ShouldBeTrue)
+		})
+
+		Convey("显式空参数是一个真实参数，不等于「无参数」", func() {
+			// `get ''` 的参数是一个空串 key，只应匹配同样是空 key 的命令；曾经因为
+			// 参数被 Join 成字符串后空参数塌缩成 ""（与"没有参数"无法区分）而匹配一切，
+			// 在 allow list 里就是一条过度放行的规则。
+			So(MatchRedisRule("get ''", "get /prod/secret"), ShouldBeFalse)
+			So(MatchRedisRule("get ''", "get ''"), ShouldBeTrue)
+			// etcd 的"列出整个 key 空间"就渲染成空 key，通配规则仍要能覆盖它。
+			So(MatchRedisRule("get *", "get '' --prefix"), ShouldBeTrue)
 		})
 
 		Convey("不同命令不匹配", func() {

@@ -29,88 +29,89 @@ var redisMultiWordCmds = map[string]bool{
 	"XINFO":   true,
 }
 
-// splitRedisTokens 对命令/规则串做引号感知切词（cmdline.Words，与 etcd 的
-// FormatCommand/ParseCommand 用同一套词法），失败时退回按空白分词。
+// splitRedisPair 把规则串和命令串切成词，供一次比较使用。引号感知切词走
+// cmdline.Words（与 etcd 的 FormatCommand/ParseCommand 同一套词法）。
 //
-// 规则串是用户手写文本，未必是合法 shell 语法；cmd 串在 Redis 侧也是模型/用户直接
-// 拼出来的自由文本，同样可能不合法。退回 Fields 而不是把解析失败当"零 token"处理，
-// 是因为后者会让一条切不了词的 deny 规则从"总能命中"悄悄变成"永远不命中"而失效
-// ——这在允许清单里表现为误放行，在拒绝清单里表现为放过本该拒绝的命令，两者都比
-// "退回到切词引入前的匹配结果"更危险。
-func splitRedisTokens(s string) []string {
-	if words, err := cmdline.Words(s); err == nil {
-		return words
+// 两个串必须一起切、要退回一起退回：规则串是用户手写文本，未必是合法 shell 语法；
+// cmd 串在 Redis 侧也是模型/用户直接拼出来的自由文本，同样可能不合法。
+//   - 退回 strings.Fields 而不是把解析失败当"零 token"，是因为后者会让一条切不了词的
+//     deny 规则从"总能命中"悄悄变成"永远不命中"而失效。
+//   - 只退回失败的那一侧则更糟：两个串会被放进不同的词法空间比较——一边还带着引号
+//     字符，另一边已经剥掉——本该命中的规则同样会静默失配。任一侧失败就双双退回，
+//     这次比较整体落回引号感知引入前的行为，至少是自洽的。
+func splitRedisPair(rule, cmd string) (ruleTokens, cmdTokens []string) {
+	ruleTokens, ruleErr := cmdline.Words(rule)
+	cmdTokens, cmdErr := cmdline.Words(cmd)
+	if ruleErr != nil || cmdErr != nil {
+		return strings.Fields(rule), strings.Fields(cmd)
 	}
-	return strings.Fields(s)
+	return ruleTokens, cmdTokens
 }
 
-// ExtractRedisCommand 提取 Redis 命令名（含子命令）和参数
-func ExtractRedisCommand(cmd string) (fullCmd string, args string) {
-	parts := splitRedisTokens(cmd)
-	if len(parts) == 0 {
-		return "", ""
+// redisCommand 是一条切好词的 Redis/etcd 命令（或规则）。
+//
+// 切词只发生一次，结果以 []string 往下流：Name 是大写规范化后的命令名（多词命令为
+// "A B"），Args 是命令名之后的参数 token。历史上这里返回的是用空格 Join 过的字符串，
+// 调用方再 Fields/数词一次，切词建立的 token 边界因此被摧毁又被不一致地重建——带空格
+// 的 key 被拆成两个参数、带空格的命令名让下标越界 panic、显式空参数塌缩成"没有参数"
+// 而匹配一切，三轮修复各出一个新缺陷都来自这一个根因。
+type redisCommand struct {
+	Name string
+	Args []string
+}
+
+// parseRedisCommand 从已切词的 token 中分出命令名（含 redisMultiWordCmds 的子命令）与参数。
+func parseRedisCommand(tokens []string) redisCommand {
+	if len(tokens) == 0 {
+		return redisCommand{}
 	}
-	name := strings.ToUpper(parts[0])
-	if len(parts) > 1 && redisMultiWordCmds[name] {
-		fullCmd = name + " " + strings.ToUpper(parts[1])
-		if len(parts) > 2 {
-			args = strings.Join(parts[2:], " ")
-		}
-	} else {
-		fullCmd = name
-		if len(parts) > 1 {
-			args = strings.Join(parts[1:], " ")
-		}
+	name := strings.ToUpper(tokens[0])
+	rest := tokens[1:]
+	if len(rest) > 0 && redisMultiWordCmds[name] {
+		name += " " + strings.ToUpper(rest[0])
+		rest = rest[1:]
 	}
-	return
+	return redisCommand{Name: name, Args: rest}
 }
 
 // MatchRedisRule 检查 Redis 命令是否匹配规则
 // 规则格式: "FLUSHDB", "CONFIG SET *", "DEL user:*"
 func MatchRedisRule(rule, cmd string) bool {
+	ruleTokens, cmdTokens := splitRedisPair(rule, cmd)
+	command := parseRedisCommand(cmdTokens)
+	if command.Name == "" {
+		return false
+	}
 	if isWildcardAll(rule) {
-		cmdCmd, _ := ExtractRedisCommand(cmd)
-		return cmdCmd != ""
+		return true
 	}
-
-	ruleParts := splitRedisTokens(rule)
-	cmdParts := splitRedisTokens(cmd)
-	if len(ruleParts) == 0 || len(cmdParts) == 0 {
+	if len(ruleTokens) == 0 {
 		return false
 	}
-	if redisMultiWordCmds[strings.ToUpper(ruleParts[0])] &&
-		len(ruleParts) == 2 &&
-		isWildcardAll(ruleParts[1]) &&
-		len(cmdParts) >= 2 &&
-		strings.EqualFold(ruleParts[0], cmdParts[0]) {
+	// "CONFIG *" 这类多词命令的子命令通配：匹配该命令的任意子命令。
+	if redisMultiWordCmds[strings.ToUpper(ruleTokens[0])] &&
+		len(ruleTokens) == 2 &&
+		isWildcardAll(ruleTokens[1]) &&
+		len(cmdTokens) >= 2 &&
+		strings.EqualFold(ruleTokens[0], cmdTokens[0]) {
 		return true
 	}
 
-	ruleCmd, ruleArgs := ExtractRedisCommand(rule)
-	cmdCmd, cmdArgs := ExtractRedisCommand(cmd)
-
-	if ruleCmd != cmdCmd {
+	r := parseRedisCommand(ruleTokens)
+	if r.Name != command.Name {
 		return false
 	}
-	// 无参数规则或 * 通配 → 匹配
-	if ruleArgs == "" || ruleArgs == "*" {
+	// 无参数规则或单个 * 通配 → 匹配任意参数
+	if len(r.Args) == 0 || (len(r.Args) == 1 && r.Args[0] == "*") {
 		return true
 	}
-	if cmdArgs == "" {
+	if len(command.Args) == 0 {
 		return false
 	}
-	// 按首个参数做 glob 匹配（key pattern）。必须从 ruleParts/cmdParts 按下标取，
-	// 不能对 ruleArgs/cmdArgs 再 strings.Fields 一次——它们是 ExtractRedisCommand
-	// 用空格 Join 过的字符串，一个带内部空格的 key（引号切词后空格是字面值的一
-	// 部分，例如 "/prod/my key"）会被这第二次 Fields 错误地拆成两段参数。
-	// ruleCmd 只可能是 1 个词或 "A B" 两个词（redisMultiWordCmds），len(Fields(ruleCmd))
-	// 就是命令名占用的 token 数；ruleCmd == cmdCmd 已在上面保证，两边词数相同。
-	skip := len(strings.Fields(ruleCmd))
-	ruleFirstArg := ruleParts[skip]
-	cmdFirstArg := cmdParts[skip]
-	matched, err := path.Match(ruleFirstArg, cmdFirstArg)
+	// 按首个参数做 glob 匹配（key pattern）
+	matched, err := path.Match(r.Args[0], command.Args[0])
 	if err != nil {
-		logger.Default().Warn("redis policy path match", zap.String("pattern", ruleFirstArg), zap.Error(err))
+		logger.Default().Warn("redis policy path match", zap.String("pattern", r.Args[0]), zap.Error(err))
 	}
 	return matched
 }

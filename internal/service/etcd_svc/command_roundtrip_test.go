@@ -15,6 +15,14 @@ func TestParseFormat_RoundTrip(t *testing.T) {
 		{Op: "put", Key: "/app/config", Value: "v", LeaseID: 0x694d5c0f},
 		{Op: "put", Key: "/app/config", Value: ""}, // IMPORTANT-2: etcd 允许空 value
 		{Op: "del", Key: "/app/", Prefix: true},
+		// 空 key 是一个正常请求，不是"没给 key"：`etcdctl get "" --prefix` 就是列出
+		// 整个 key 空间，HandleExecEtcd 在模型只给 op=get/prefix=true 时正是这样构造
+		// （ArgString 缺省返回 ""），dispatchGet/dispatchDel 也接受 Key == ""。
+		// key 必须被渲染成显式空词 ''，否则读回来会变成"缺少 key"的报错。
+		{Op: "get", Prefix: true},
+		{Op: "get", Limit: 10},
+		{Op: "del", Prefix: true},
+		{Op: "put", Value: "v"},
 		{Op: "lease_grant", Args: map[string]any{"ttl": int64(3600)}},
 		{Op: "lease_revoke", LeaseID: 0x694d5c0f},
 		{Op: "lease_list"},

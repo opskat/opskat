@@ -37,6 +37,12 @@ var supportedOps = map[string]bool{
 	"member_list": true,
 }
 
+// opRequiresKey 是"key 位置参数必需"的 op 集合，ParseCommand 与 FormatCommand 共用：
+// 前者对它们在缺少位置参数时报错，后者对它们无条件输出 key（空 key 渲染为一对单引号
+// 包起来的空词）。
+// 两边共用一份定义，round trip 才不会因为一侧改了判断而漂移。
+var opRequiresKey = map[string]bool{"get": true, "put": true, "del": true}
+
 // ParseCommand 解析 etcd 命令串,是 FormatCommand 的逆函数
 // （TestParseFormat_RoundTrip 锁住这条性质）。目前全仓没有生产调用方——只被本包
 // 测试直接调用；接入统一 exec 工具是 docs/superpowers/plans/2026-07-20-ai-tool-exec-convergence.md
@@ -124,20 +130,22 @@ func ParseCommand(s string) (*ExecRequest, error) {
 		}
 	}
 
+	// opRequiresKey 的 op 必须给出 key 位置参数，而不是像 endpoint_status/endpoint_health
+	// 那样把 key 当可选：一个形如 "--prefix" 的 key（FormatCommand 对它不加引号，因为
+	// "-" 本身在 safeUnquotedWord 允许表里）在这里如果被当成可选参数放过，会与"没给
+	// key、只给了 --prefix flag"这个完全不同的请求渲染成同一个字符串——对 del 来说，
+	// 后者是"用空串前缀删除整个 key 空间"，是本任务范围内能做的最安全选择：拒绝到底，
+	// 把静默的灾难性误解析变成一次响亮的拒绝，而不是猜测意图。
+	// 注意这里要求的是"位置参数存在"，不是"key 非空"：显式空词 ''（FormatCommand 对
+	// 空 key 的渲染）是一个合法的位置参数，读回来就是空 key。
+	if opRequiresKey[op] && len(positional) == 0 {
+		if bad := dashPrefixedRestToken(rest); bad != "" {
+			return nil, fmt.Errorf("%s requires a key; %q was parsed as a flag, not a key — etcd keys starting with \"-\" are not addressable through this command syntax", op, bad)
+		}
+		return nil, fmt.Errorf("%s requires a key", op)
+	}
 	switch op {
 	case "get", "del":
-		// 要求非空 key，而不是像 endpoint_status/endpoint_health 那样把 key 当可选：
-		// 一个形如 "--prefix" 的 key（FormatCommand 对它不加引号，因为 "-" 本身在
-		// safeUnquotedWord 允许表里）在这里如果被当成可选参数放过，会与"没给 key、
-		// 只给了 --prefix flag"这个完全不同的请求渲染成同一个字符串——对 del 来说，
-		// 后者是"用空串前缀删除整个 key 空间"，是本任务范围内能做的最安全选择：
-		// 拒绝到底，把静默的灾难性误解析变成一次响亮的拒绝，而不是猜测意图。
-		if len(positional) == 0 {
-			if bad := dashPrefixedRestToken(rest); bad != "" {
-				return nil, fmt.Errorf("%s requires a key; %q was parsed as a flag, not a key — etcd keys starting with \"-\" are not addressable through this command syntax", op, bad)
-			}
-			return nil, fmt.Errorf("%s requires a key", op)
-		}
 		req.Key = positional[0]
 	case "endpoint_status", "endpoint_health":
 		if len(positional) >= 1 {
@@ -184,13 +192,17 @@ func dashPrefixedRestToken(rest []string) string {
 func FormatCommand(req *ExecRequest) string {
 	op := strings.ReplaceAll(req.Op, "_", " ")
 	parts := []string{op}
-	if req.Key != "" {
+	// get/del/put 恒定需要 key 这个位置参数——etcd 允许空 key（`etcdctl get "" --prefix`
+	// 就是列出整个 key 空间），所以 key 不能用"非空才输出"当判断：那样
+	// {Op:"get", Prefix:true} 会渲染成 "get --prefix"，ParseCommand 再读回来变成
+	// "get requires a key"，round trip 直接断裂。空串经 QuoteIfNeeded 变成显式空词
+	// ''，位置参数仍在，"del --prefix"（真的没给 key）继续被拒。
+	// endpoint_status/endpoint_health 的 key 是可选的，不在这个集合里。
+	if req.Key != "" || opRequiresKey[req.Op] {
 		parts = append(parts, cmdline.QuoteIfNeeded(req.Key))
 	}
-	// put 恒定需要两个位置参数（key、value）——etcd 允许空值，所以 value 不能像其他
-	// op 那样用"非空才输出"当判断：那样 {Op:"put", Value:""} 会被渲染成只有一个位置
-	// 参数的 "put /k"，ParseCommand 再读回来变成"put requires key and value"，round
-	// trip 直接断裂。其余 op 的 Value 恒为空字符串，这条件对它们等价于原来的
+	// put 恒定需要两个位置参数（key、value）——etcd 允许空值，所以 value 同理不能用
+	// "非空才输出"当判断。其余 op 的 Value 恒为空字符串，这条件对它们等价于原来的
 	// req.Value != ""，行为不变。
 	if req.Value != "" || req.Op == "put" {
 		parts = append(parts, cmdline.QuoteIfNeeded(req.Value))
@@ -207,19 +219,22 @@ func FormatCommand(req *ExecRequest) string {
 	if req.LeaseID != 0 {
 		parts = append(parts, "--lease="+strconv.FormatInt(req.LeaseID, 16))
 	}
-	if req.Args != nil {
-		if ttl, ok := ttlFromArgs(req.Args); ok && ttl != 0 {
-			parts = append(parts, "--ttl="+strconv.FormatInt(ttl, 10))
-		}
+	if ttl, ok := ttlFromArgs(req.Args); ok && ttl != 0 {
+		parts = append(parts, "--ttl="+strconv.FormatInt(ttl, 10))
 	}
 	return strings.Join(parts, " ")
 }
 
-// ttlFromArgs 从 Args["ttl"] 里取出 ttl 秒数。ExecRequest 的字段注释写明它"既给 IPC
-// 用，也给 Dispatch 用"——不能假定 Args 里一定是 ParseCommand/HandleExecEtcd 内部
-// 产出的规范 int64：兼容 int（Go 测试里常见的无类型字面量）与 float64（JSON 解码
-// tool 参数的默认数值类型），其余类型按坏数据处理——记警告后跳过，而不是被
-// req.Args["ttl"].(int64) 的类型断言默默吃掉、不留任何痕迹。
+// ttlFromArgs 是 Args["ttl"] 的唯一读取入口：FormatCommand（渲染给审批对话框与审计
+// 日志看的命令文本）与 dispatchLeaseGrant（真正执行的那一侧）都只经过它。
+//
+// 两侧各自做类型断言是上一轮的缺陷：FormatCommand 认 float64、执行侧只认 int64，
+// 于是一个 JSON 解码来的 ttl 会让用户批准 "--ttl=3600"、实际执行 ttl=0——正是
+// "批准的文本 ≠ 执行的动作"这类分叉。ExecRequest 的字段注释写明 Args"既给 IPC 用，
+// 也给 Dispatch 用"：Wails IPC 的 JSON 解码给的是 float64，ParseCommand/
+// HandleExecEtcd 给的是 int64，Go 调用方手写字面量给的是 int，三者都是真实来源，
+// 都要认；其余类型按坏数据处理——记警告后跳过，而不是被类型断言默默吃掉、不留
+// 任何痕迹。
 func ttlFromArgs(args map[string]any) (int64, bool) {
 	v, ok := args["ttl"]
 	if !ok {
