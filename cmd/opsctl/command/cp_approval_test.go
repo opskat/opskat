@@ -27,8 +27,8 @@ type recordingAuditRepo struct {
 }
 
 func (r *recordingAuditRepo) Create(_ context.Context, log *audit_entity.AuditLog) error {
-	copy := *log
-	r.logs = append(r.logs, &copy)
+	entry := *log
+	r.logs = append(r.logs, &entry)
 	return nil
 }
 
