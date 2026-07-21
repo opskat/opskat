@@ -19,9 +19,12 @@ func init() {
 	RegisterExtractor("exec_redis", func(a map[string]any) string { return aictx.ArgString(a, "command") })
 	RegisterExtractor("exec_mongo", func(a map[string]any) string { return aictx.ArgString(a, "operation") })
 	RegisterExtractor("exec_etcd", func(a map[string]any) string {
-		// 与 helper.FormatEtcdCommand 保持等价；audit 不便引 helper（避免循环），手写一份。
-		// prefix 兼容 bool 与字符串 "true"，对齐 helper.argEtcdBool 的接受形态，
-		// 否则 LLM 传字符串时审计日志会丢失 --prefix。
+		// 手写的第二份 format，与 helper.FormatEtcdCommand（现委托给
+		// etcd_svc.FormatCommand）已经分叉，不再等价：这里 key/value 从不加引号，
+		// 也从不输出 --limit=/--revision=/--lease=/--ttl=。audit 不便引 helper
+		// （避免循环）是当初手抄的理由，但现在不要为了"追平"去改这段逻辑——
+		// 这整块连同 exec_etcd 工具本身会在 Task 10（14 个旧工具下线）一并删除。
+		// prefix 仍兼容 bool 与字符串 "true"，避免 LLM 传字符串时审计日志丢失 --prefix。
 		op := strings.ReplaceAll(aictx.ArgString(a, "op"), "_", " ")
 		parts := []string{op}
 		if k := aictx.ArgString(a, "key"); k != "" {

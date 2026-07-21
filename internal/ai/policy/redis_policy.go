@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/cmdline"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
@@ -28,9 +29,24 @@ var redisMultiWordCmds = map[string]bool{
 	"XINFO":   true,
 }
 
+// splitRedisTokens 对命令/规则串做引号感知切词（cmdline.Words，与 etcd 的
+// FormatCommand/ParseCommand 用同一套词法），失败时退回按空白分词。
+//
+// 规则串是用户手写文本，未必是合法 shell 语法；cmd 串在 Redis 侧也是模型/用户直接
+// 拼出来的自由文本，同样可能不合法。退回 Fields 而不是把解析失败当"零 token"处理，
+// 是因为后者会让一条切不了词的 deny 规则从"总能命中"悄悄变成"永远不命中"而失效
+// ——这在允许清单里表现为误放行，在拒绝清单里表现为放过本该拒绝的命令，两者都比
+// "退回到切词引入前的匹配结果"更危险。
+func splitRedisTokens(s string) []string {
+	if words, err := cmdline.Words(s); err == nil {
+		return words
+	}
+	return strings.Fields(s)
+}
+
 // ExtractRedisCommand 提取 Redis 命令名（含子命令）和参数
 func ExtractRedisCommand(cmd string) (fullCmd string, args string) {
-	parts := strings.Fields(strings.TrimSpace(cmd))
+	parts := splitRedisTokens(cmd)
 	if len(parts) == 0 {
 		return "", ""
 	}
@@ -57,8 +73,8 @@ func MatchRedisRule(rule, cmd string) bool {
 		return cmdCmd != ""
 	}
 
-	ruleParts := strings.Fields(strings.TrimSpace(rule))
-	cmdParts := strings.Fields(strings.TrimSpace(cmd))
+	ruleParts := splitRedisTokens(rule)
+	cmdParts := splitRedisTokens(cmd)
 	if len(ruleParts) == 0 || len(cmdParts) == 0 {
 		return false
 	}
@@ -83,9 +99,15 @@ func MatchRedisRule(rule, cmd string) bool {
 	if cmdArgs == "" {
 		return false
 	}
-	// 按首个参数做 glob 匹配（key pattern）
-	ruleFirstArg := strings.Fields(ruleArgs)[0]
-	cmdFirstArg := strings.Fields(cmdArgs)[0]
+	// 按首个参数做 glob 匹配（key pattern）。必须从 ruleParts/cmdParts 按下标取，
+	// 不能对 ruleArgs/cmdArgs 再 strings.Fields 一次——它们是 ExtractRedisCommand
+	// 用空格 Join 过的字符串，一个带内部空格的 key（引号切词后空格是字面值的一
+	// 部分，例如 "/prod/my key"）会被这第二次 Fields 错误地拆成两段参数。
+	// ruleCmd 只可能是 1 个词或 "A B" 两个词（redisMultiWordCmds），len(Fields(ruleCmd))
+	// 就是命令名占用的 token 数；ruleCmd == cmdCmd 已在上面保证，两边词数相同。
+	skip := len(strings.Fields(ruleCmd))
+	ruleFirstArg := ruleParts[skip]
+	cmdFirstArg := cmdParts[skip]
 	matched, err := path.Match(ruleFirstArg, cmdFirstArg)
 	if err != nil {
 		logger.Default().Warn("redis policy path match", zap.String("pattern", ruleFirstArg), zap.Error(err))

@@ -6,6 +6,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
+
 	"github.com/opskat/opskat/internal/ai/cmdline"
 )
 
@@ -34,8 +37,10 @@ var supportedOps = map[string]bool{
 	"member_list": true,
 }
 
-// ParseCommand 解析 exec 工具传入的 etcd 命令串,是 FormatCommand 的逆函数
-// （TestParseFormat_RoundTrip 锁住这条性质）。
+// ParseCommand 解析 etcd 命令串,是 FormatCommand 的逆函数
+// （TestParseFormat_RoundTrip 锁住这条性质）。目前全仓没有生产调用方——只被本包
+// 测试直接调用；接入统一 exec 工具是 docs/superpowers/plans/2026-07-20-ai-tool-exec-convergence.md
+// 的 Task 3（etcd 接入 exec）的范围。
 // 不追求 etcdctl 完全兼容,只识别支持的子集:
 //
 //	<op> [key] [value...] [--flag] [--flag=val]
@@ -120,12 +125,29 @@ func ParseCommand(s string) (*ExecRequest, error) {
 	}
 
 	switch op {
-	case "get", "del", "endpoint_status", "endpoint_health":
+	case "get", "del":
+		// 要求非空 key，而不是像 endpoint_status/endpoint_health 那样把 key 当可选：
+		// 一个形如 "--prefix" 的 key（FormatCommand 对它不加引号，因为 "-" 本身在
+		// safeUnquotedWord 允许表里）在这里如果被当成可选参数放过，会与"没给 key、
+		// 只给了 --prefix flag"这个完全不同的请求渲染成同一个字符串——对 del 来说，
+		// 后者是"用空串前缀删除整个 key 空间"，是本任务范围内能做的最安全选择：
+		// 拒绝到底，把静默的灾难性误解析变成一次响亮的拒绝，而不是猜测意图。
+		if len(positional) == 0 {
+			if bad := dashPrefixedRestToken(rest); bad != "" {
+				return nil, fmt.Errorf("%s requires a key; %q was parsed as a flag, not a key — etcd keys starting with \"-\" are not addressable through this command syntax", op, bad)
+			}
+			return nil, fmt.Errorf("%s requires a key", op)
+		}
+		req.Key = positional[0]
+	case "endpoint_status", "endpoint_health":
 		if len(positional) >= 1 {
 			req.Key = positional[0]
 		}
 	case "put":
 		if len(positional) < 2 {
+			if bad := dashPrefixedRestToken(rest); bad != "" {
+				return nil, fmt.Errorf("put requires key and value; %q was parsed as a flag, not positional data — etcd keys/values starting with \"-\" are not addressable through this command syntax", bad)
+			}
 			return nil, errors.New("put requires key and value")
 		}
 		req.Key = positional[0]
@@ -136,6 +158,20 @@ func ParseCommand(s string) (*ExecRequest, error) {
 		req.Value = strings.Join(positional[1:], " ")
 	}
 	return req, nil
+}
+
+// dashPrefixedRestToken 返回 rest 中第一个以 '-' 开头的原始 token（没有则返回空串）。
+// 走到调用处时，它必然已经通过了上面的 flag 循环——未识别的 --xxx 在那里已经直接
+// 报错——所以这里找到的一定是一个被成功识别为 flag 的 token，用来在"必需的位置参数
+// 缺失"错误里指出真正原因：它很可能是调用方想要的 key/value，只是形似 flag 被当 flag
+// 吃掉了。
+func dashPrefixedRestToken(rest []string) string {
+	for _, t := range rest {
+		if strings.HasPrefix(t, "-") {
+			return t
+		}
+	}
+	return ""
 }
 
 // FormatCommand 把 ExecRequest 还原为命令串，是 ParseCommand 的逆函数
@@ -151,7 +187,12 @@ func FormatCommand(req *ExecRequest) string {
 	if req.Key != "" {
 		parts = append(parts, cmdline.QuoteIfNeeded(req.Key))
 	}
-	if req.Value != "" {
+	// put 恒定需要两个位置参数（key、value）——etcd 允许空值，所以 value 不能像其他
+	// op 那样用"非空才输出"当判断：那样 {Op:"put", Value:""} 会被渲染成只有一个位置
+	// 参数的 "put /k"，ParseCommand 再读回来变成"put requires key and value"，round
+	// trip 直接断裂。其余 op 的 Value 恒为空字符串，这条件对它们等价于原来的
+	// req.Value != ""，行为不变。
+	if req.Value != "" || req.Op == "put" {
 		parts = append(parts, cmdline.QuoteIfNeeded(req.Value))
 	}
 	if req.Prefix {
@@ -167,9 +208,33 @@ func FormatCommand(req *ExecRequest) string {
 		parts = append(parts, "--lease="+strconv.FormatInt(req.LeaseID, 16))
 	}
 	if req.Args != nil {
-		if ttl, ok := req.Args["ttl"].(int64); ok && ttl != 0 {
+		if ttl, ok := ttlFromArgs(req.Args); ok && ttl != 0 {
 			parts = append(parts, "--ttl="+strconv.FormatInt(ttl, 10))
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// ttlFromArgs 从 Args["ttl"] 里取出 ttl 秒数。ExecRequest 的字段注释写明它"既给 IPC
+// 用，也给 Dispatch 用"——不能假定 Args 里一定是 ParseCommand/HandleExecEtcd 内部
+// 产出的规范 int64：兼容 int（Go 测试里常见的无类型字面量）与 float64（JSON 解码
+// tool 参数的默认数值类型），其余类型按坏数据处理——记警告后跳过，而不是被
+// req.Args["ttl"].(int64) 的类型断言默默吃掉、不留任何痕迹。
+func ttlFromArgs(args map[string]any) (int64, bool) {
+	v, ok := args["ttl"]
+	if !ok {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case int64:
+		return n, true
+	case int:
+		return int64(n), true
+	case float64:
+		return int64(n), true
+	default:
+		logger.Default().Warn("etcd FormatCommand: Args[\"ttl\"] has unexpected type, dropping",
+			zap.String("type", fmt.Sprintf("%T", v)))
+		return 0, false
+	}
 }

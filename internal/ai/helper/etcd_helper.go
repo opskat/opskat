@@ -45,8 +45,7 @@ func HandleExecEtcd(ctx context.Context, args map[string]any) (string, error) {
 	}
 
 	// 把结构化请求还原成策略匹配 / grant pattern 用的命令字符串。
-	// 与 audit extractor 的 formatEtcdCommand 保持等价。
-	cmd := FormatEtcdCommand(req)
+	cmd := etcd_svc.FormatCommand(req)
 
 	if checker := permission.GetPolicyChecker(ctx); checker != nil {
 		result := checker.CheckForAsset(ctx, assetID, asset_entity.AssetTypeEtcd, cmd)
@@ -67,10 +66,4 @@ func HandleExecEtcd(ctx context.Context, args map[string]any) (string, error) {
 		return "", fmt.Errorf("failed to marshal etcd result: %w", err)
 	}
 	return string(data), nil
-}
-
-// FormatEtcdCommand 委托给 etcd_svc.FormatCommand——格式定义与其逆函数 ParseCommand
-// 同住一处，避免二者再次漂移。保留本名是因为 helper 侧已有调用方。
-func FormatEtcdCommand(req *etcd_svc.ExecRequest) string {
-	return etcd_svc.FormatCommand(req)
 }
