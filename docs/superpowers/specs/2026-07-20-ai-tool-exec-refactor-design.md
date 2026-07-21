@@ -172,13 +172,15 @@ snippets 是用户编写的可执行命令库（按资产类型、扩展可播�
 ### 4.1 `exec`
 
 ```
-exec(asset: string, command: string, scope?: string)
+exec(asset: string, command: string, scope?: string, type?: string)
 ```
 
 - `asset`——id 或名称。共用解析器，**同名歧义必须报错**而非任选其一（当前允许重名）。
 - `command`——该类型的规范命令字符串。
 - `scope`——确实不属于命令本身的连接级目标。仅两个类型使用：
   `database`（库名）与 `redis`（db 序号，因为连接池下 `SELECT` 无效）。
+- `type`——**可选断言，不参与派发**。给出时与资产真实类型比对，不符则在权限检查/审批
+  **之前**返回点名双方类型的错误。Plan C 新增，理由与三处落点见 §4.6 的决策更新。
 
 | 类型 | 命令形态 |
 |---|---|
@@ -301,23 +303,40 @@ help 门禁把"可发现"升级为"有保证"：`exec` 解析资产 → 得到�
    `asset "cache-1" is type=redis; "SELECT * FROM users" is not a valid Redis command`。
    今天这类错配只会浮现为协议层的服务端报错，读起来像基础设施故障而非建模错误。
 
-**不加** 由模型声明的 `type` 断言参数：既然派发已由资产导出，
+~~**不加** 由模型声明的 `type` 断言参数：既然派发已由资产导出，
 校验模型给出的类型是在防一个不可能产生错误路由的场景，
-正是 AGENTS.md 所禁止的无意义防御式代码。
+正是 AGENTS.md 所禁止的无意义防御式代码。~~
 
-> **补充（2026-07-21，Plan C）：CLI 侧是这条决策的一个有理由的例外。**
-> `opsctl exec <asset> [--type <t>] -- <command>` 接受一个**可选**的 `--type`，
-> `opsctl batch` 沿用既有的 `'sql:2:SELECT 1'` 前缀语法。二者都**不参与派发**——
-> 协议仍然只从资产记录取——只在给出时做一次校验：与资产真实类型不符则报错，
-> 且**报错发生在审批之前**（对照 Plan A 收尾评审的 IMPORTANT-1：serial 走统一 exec 时
-> "先弹审批、批准后才失败"）。
+> **决策更新（2026-07-21，Plan C，用户裁定）：改为加一个可选的 `type` 断言参数。**
 >
-> 与工具侧不同的理由：CLI 的调用者是人或外部 agent 手敲的命令行，
-> 命令与资产是分两处输入的，把 redis 命令发给 database 资产是真实存在的手误面；
-> 而 `--type` 让它在协议层报「像基础设施故障」的错之前，先变成一条点名类型的建模错误
-> （与本节三条可供性措施同一意图）。
-> 这也让 `opsctl batch` 的前缀语法**无需破坏性变更**即可完成语义迁移：
-> 从"选 handler"变成"类型断言"，裸 `'1:uptime'` 继续可用。
+> 上面那段划掉的推理有一处越界：它论证的是「type 无法产生错误**路由**」——这仍然成立，
+> `type` **绝不参与派发**，协议永远只从资产记录取。但它由此推出「因此不该校验」，
+> 而实际要防的根本不是路由，是**方言错配**：模型完全可能把 Redis 命令写给一个
+> database 资产。本节末尾「一处诚实的局限」已经承认，五个原样透传的类型
+> （ssh、serial、database、redis、k8s）**无法靠解析发现错配**——`SELECT 1` 在 SQL 与
+> Redis 里都合法。`type` 恰好补上的就是这个洞：让模型把它以为的类型说出来，与资产的
+> 真实类型对一次。
+>
+> 这也不违反 AGENTS.md 的「无意义防御式代码」条款——工具入参是**边界**
+> （模型产出的 `map[string]any`），而 AGENTS.md 的规则正是「Validate at boundaries only」。
+>
+> 落点三处，形态一致、共用同一个校验函数：
+>
+> | 面 | 形态 | 缺省 |
+> |---|---|---|
+> | AI `exec` 工具 | `exec(asset, command, scope?, type?)` | 不给则跳过校验，按资产真实类型执行 |
+> | AI `batch_exec` 条目 | 每条可带 `type` | 同上 |
+> | `opsctl` | `opsctl exec <asset> [--type <t>] -- <cmd>`；`batch` 沿用既有 `'sql:2:SELECT 1'` 前缀 | 同上，裸 `'1:uptime'` 继续可用 |
+>
+> 两条硬性要求：
+>
+> 1. **校验发生在权限检查与审批之前**。对照 Plan A 收尾评审的 IMPORTANT-1
+>    （serial 走统一 exec 时"先弹审批、批准后才失败"）——断言失败不该让用户先批一个注定失败的命令。
+> 2. **错误信息点名双方**，与本节三条可供性措施同格式：
+>    `asset "cache-1" is type=redis, but you passed type=database — call help("cache-1") for its command syntax`。
+>
+> 副作用（正面）：`opsctl batch` 的前缀语法**无需破坏性变更**即可完成语义迁移——
+> 从"选 handler"变成"类型断言"。
 
 **一处诚实的局限**：五个原样透传的类型（ssh、serial、database、redis、k8s）
 无法靠解析发现错配，因为任何字符串在语法上都成立——`SELECT 1` 甚至在 SQL 与 Redis 中都合法。
@@ -382,13 +401,21 @@ mongo/etcd/kafka 的策略字符串形状改变：mongo 当前匹配裸 `"find"`
   `selectedAssetId`。AI 路径删除资产不会触发该清理，需要经由既有 `data:changed`
   事件让前端重取。
 
-> **实施期修正（2026-07-21，Plan C 计划编写时）**：`ApprovalBlock.tsx` 在本仓**已不存在**
-> （审批 UI 现为 `PermissionDialog.tsx`，它按 `tool_name` 只特判 `Bash`/`Read`/`Write`/`Edit`
-> 这些本地工具，不含资产类工具名，故不受工具改名影响）。
-> `ToolBlock.tsx` 的 `toolIcons` 表已含 `exec`/`help`（Plan A 收尾的 MINOR-5 已修），
-> Plan C 只需补 `put_asset`/`put_group`/`delete_asset`/`delete_group`/`ext_exec` 五个图标。
-> 第二条仍然成立，但需实测确认 AI 删除路径确实经 `internal/app/ai/notifier.go` 广播
-> `data:changed`（`App.tsx:61` 已在监听）。
+> **补充（2026-07-21，Plan C 计划编写时，逐处核实）**：
+>
+> - `ApprovalBlock.tsx` 现位于 `frontend/src/components/approval/`（不在 `components/ai/`）。
+>   它的 `TypeBadge` 图标表按 **`item.type`**（`exec`/`sql`/`redis`/`mongo`/`kafka`/`cp`/`grant`/
+>   `local_*`）映射，**不按工具名**——所以 `put_*`/`batch_exec`/`ext_exec` 改名不影响它。
+> - 真正需要前端配合的是 `delete_*`：`kind === "single"` 会渲染 rememberMode（"全部允许"→
+>   写 grant）。而 §4.4 要求删除**不可 grant**，因此删除审批必须用一个新的 `kind`
+>   （不渲染 rememberMode、不带 allowAll 按钮），并给 `TypeBadge` 补删除图标。
+>   前端不改就等于在 UI 上给用户提供了一个"以后自动批准删除"的按钮——把后端的
+>   不可 grant 约束当场架空。
+> - `ToolBlock.tsx` 的 `toolIcons` 表已含 `exec`/`help`（Plan A 收尾的 MINOR-5 已修），
+>   Plan C 补 `put_asset`/`put_group`/`delete_asset`/`delete_group`/`ext_exec` 五个图标。
+> - `assetStore` 那条仍然成立，但 AI 侧删除只需复用既有的 `aictx.NotifyDataChanged("asset")`
+>   （`handleAddAsset` 等已在调用，经 `internal/app/ai/notifier.go` 广播 `data:changed`，
+>   `App.tsx:61` 已在监听）。
 
 ## 8. 测试策略
 
