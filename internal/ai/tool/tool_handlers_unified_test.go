@@ -183,7 +183,8 @@ func TestHandleHelp_ReturnsDocAndMarksGate(t *testing.T) {
 	}
 }
 
-// 未注册执行器的类型（尚未支持 kafka）应给出明确错误，而不是撞上门禁的引导文本。
+// 未注册执行器的类型（vnc 这类没有命令执行语义的远程桌面）应给出明确错误，
+// 而不是撞上门禁的引导文本。
 //
 // I3: executor lookup must run before the doc gate, so this must be reachable regardless
 // of gate state. Injects a real undocumented gate so that, if executor lookup were moved
@@ -200,17 +201,18 @@ func TestHandleExec_UnsupportedTypeIsExplicit(t *testing.T) {
 	// below, not by gomock complaining about an extra Find.
 	m.EXPECT().FindByName(gomock.Any(), "5").Return(nil, nil).AnyTimes()
 	m.EXPECT().Find(gomock.Any(), int64(5)).Return(
-		&asset_entity.Asset{ID: 5, Name: "m1", Type: asset_entity.AssetTypeKafka}, nil).AnyTimes()
+		&asset_entity.Asset{ID: 5, Name: "m1", Type: asset_entity.AssetTypeVNC}, nil).AnyTimes()
 
 	checker, checkCalled := newRecordingChecker()
 	ctx := WithDocGate(context.Background(), NewDocGate())
 	ctx = permission.WithPolicyChecker(ctx, checker)
 
-	// A write, not a read: the default Kafka policy is a read-only allowlist, so a read
-	// would resolve to Allow without reaching HandleConfirm and the *checkCalled
-	// assertion below would be vacuous (verified by mutation).
+	// vnc has no registered permission type either, so CheckPermission returns NeedConfirm
+	// and a check hoisted above the executor lookup would reach HandleConfirm — i.e. the
+	// *checkCalled assertion below is not vacuous. (kafka used to stand in here; once it
+	// joined the unified exec it stopped being an unsupported type.)
 	out, err := handleExec(ctx, map[string]any{
-		"asset": "5", "command": "topic.write orders",
+		"asset": "5", "command": "whoami",
 	})
 	if err == nil {
 		t.Fatalf("expected an explicit unsupported-type error, got out=%q err=nil", out)

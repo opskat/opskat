@@ -39,8 +39,8 @@ func TestGet_BodyExcludesFrontmatter(t *testing.T) {
 
 func TestTypes_Sorted(t *testing.T) {
 	got := Types()
-	if len(got) != 7 {
-		t.Fatalf("got %d types, want 7", len(got))
+	if len(got) != 8 {
+		t.Fatalf("got %d types, want 8", len(got))
 	}
 	for i := 1; i < len(got); i++ {
 		if got[i-1] > got[i] {
@@ -50,7 +50,9 @@ func TestTypes_Sorted(t *testing.T) {
 }
 
 func TestGet_UnknownType(t *testing.T) {
-	if _, ok := Get("kafka"); ok {
-		t.Fatal("kafka should not be registered yet (Plan B)")
+	// vnc is a remote-desktop type with no command syntax to document, so it will not
+	// gain a SKILL.md. (kafka used to stand in here and now has one.)
+	if _, ok := Get("vnc"); ok {
+		t.Fatal("vnc has no SKILL.md; Get should report it as unknown")
 	}
 }

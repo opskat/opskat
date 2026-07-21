@@ -12,7 +12,7 @@ import (
 func TestAllBuiltinAssetTypeSkills(t *testing.T) {
 	t.Run("every built-in type is included, with no tabs involved", func(t *testing.T) {
 		got := allBuiltinAssetTypeSkills()
-		for _, want := range []string{"ssh", "serial", "database", "redis", "k8s", "etcd", "mongodb"} {
+		for _, want := range []string{"ssh", "serial", "database", "redis", "k8s", "etcd", "mongodb", "kafka"} {
 			desc, ok := got[want]
 			if !ok {
 				t.Fatalf("expected %q to be included, got %v", want, got)
@@ -24,12 +24,13 @@ func TestAllBuiltinAssetTypeSkills(t *testing.T) {
 	})
 
 	t.Run("a type with no embedded SKILL.md is not included", func(t *testing.T) {
-		// kafka has no internal/ai/skills entry yet (its exec wiring is still pending),
-		// so it must not appear in the listing — the listing is derived from the embedded
-		// SKILL.md set, not from the asset-type registry.
+		// vnc is a remote-desktop type with no command syntax, so it has no
+		// internal/ai/skills entry and must not appear in the listing — the listing is
+		// derived from the embedded SKILL.md set, not from the asset-type registry.
+		// (kafka used to stand in here, until it got a SKILL.md of its own.)
 		got := allBuiltinAssetTypeSkills()
-		if _, ok := got["kafka"]; ok {
-			t.Fatalf("kafka has no built-in skills.Description, must not be included, got %v", got)
+		if _, ok := got["vnc"]; ok {
+			t.Fatalf("vnc has no built-in skills.Description, must not be included, got %v", got)
 		}
 	})
 }

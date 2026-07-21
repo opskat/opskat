@@ -16,6 +16,7 @@ func TestInit_RegistersVerbatimTypes(t *testing.T) {
 		asset_entity.AssetTypeK8s,
 		asset_entity.AssetTypeEtcd,
 		asset_entity.AssetTypeMongoDB,
+		asset_entity.AssetTypeKafka,
 	}
 	for _, at := range want {
 		if _, ok := permission.ExecutorFor(at); !ok {
@@ -33,21 +34,11 @@ func TestInit_HelpDocAttachedForEachType(t *testing.T) {
 		asset_entity.AssetTypeK8s,
 		asset_entity.AssetTypeEtcd,
 		asset_entity.AssetTypeMongoDB,
+		asset_entity.AssetTypeKafka,
 	} {
 		help, ok := permission.HelpFor(at)
 		if !ok || help == "" {
 			t.Fatalf("no help doc registered for %q", at)
-		}
-	}
-}
-
-func TestInit_StructuredTypesNotYetRegistered(t *testing.T) {
-	// mongo 已在本任务接入，只剩 kafka 待补；此处锁定剩余边界。
-	for _, at := range []string{
-		asset_entity.AssetTypeKafka,
-	} {
-		if _, ok := permission.ExecutorFor(at); ok {
-			t.Fatalf("%q should not be registered yet", at)
 		}
 	}
 }

@@ -59,6 +59,12 @@ func init() {
 		func(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
 			return helper.ExecMongoOnAsset(ctx, asset, command, scope)
 		}, mongoHelp, helper.CanonicalizeMongoCommand)
+
+	kafkaHelp, _ := skills.Get(asset_entity.AssetTypeKafka)
+	permission.RegisterExecutor(asset_entity.AssetTypeKafka,
+		func(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
+			return helper.ExecKafkaOnAsset(ctx, asset, command, scope)
+		}, kafkaHelp, helper.CanonicalizeKafkaCommand)
 }
 
 // canonicalizeK8sCommand 把原始 kubectl 命令规范化为注入 --context/--namespace 之后的

@@ -364,7 +364,10 @@ func TestAuditMiddleware_ExecUnsupportedTypeIsDistinguishable(t *testing.T) {
 	Convey("未注册执行器的类型，审计行要标出短路原因", t, func() {
 		mockRepo := registerMockAuditRepo(t)
 
-		asset := &asset_entity.Asset{ID: 78, Name: "kafka-78", Type: asset_entity.AssetTypeKafka}
+		// vnc: a remote-desktop type that has no command execution at all, so it is a
+		// stable stand-in for "no executor registered". kafka used to play this role and
+		// stopped being unsupported the moment it joined the unified exec.
+		asset := &asset_entity.Asset{ID: 78, Name: "vnc-78", Type: asset_entity.AssetTypeVNC}
 		origAsset := asset_repo.Asset()
 		asset_repo.RegisterAsset(&staticAssetRepo{asset: asset})
 		t.Cleanup(func() { asset_repo.RegisterAsset(origAsset) })
@@ -379,7 +382,7 @@ func TestAuditMiddleware_ExecUnsupportedTypeIsDistinguishable(t *testing.T) {
 		td.Run(ctx, agent.DispatchInput{
 			ToolName:  "exec",
 			ToolUseID: "tu_unsupported",
-			Input:     map[string]any{"asset": "78", "command": "topic.write orders"},
+			Input:     map[string]any{"asset": "78", "command": "whoami"},
 		})
 
 		entry := waitForAuditEntry(t, mockRepo, "exec", 78)
