@@ -261,6 +261,19 @@ func (c *Command) Render() string {
 // 还额外拒绝 shell 保留字），不是这个集合。
 var safeUnquotedWord = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
 
+// ValidFlagName 报告 name 能否作为 Command.Flags 的键、并让 Render 的输出重新解析回
+// 同一个 flag。Parse 在入口处已经保证了这一点，所以它只对**手写** Command 字面量有意义
+// ——Render 的文档写明那条路径不受 Parse 保护、由调用方自证 flag 名合法，这个函数就是
+// 给那些调用方用的，省得各自照抄一份 safeUnquotedWord（照抄出来的副本迟早和这里分叉）。
+//
+// 比 safeUnquotedWord 多排除一个 "="：Render 输出 `--name=value`，重新解析时按**第一个**
+// "=" 切分，所以名字里含 "=" 会把值的一部分吃进名字里——`{"cfg=x": "1"}` 渲染成
+// `--cfg=x=1`，解析回来是 flag "cfg" 值 "x=1"，静默的数据损坏。Parse 撞不到这种输入
+// （它先 Cut 掉 "=" 才校验名字），所以这个额外条件只在手写路径上生效。
+func ValidFlagName(name string) bool {
+	return safeUnquotedWord.MatchString(name) && !strings.Contains(name, "=")
+}
+
 // QuoteIfNeeded 决定一个值要不要加引号，以及加哪种引号，使其与 Words 的剥引号逻辑
 // 互逆（两者必须一起改）：只有匹配 safeUnquotedWord 的值才原样输出；其余一律加引号
 // ——默认单引号，值本身含单引号时退化为转义后的双引号包裹。这是 shlex.quote 的标准

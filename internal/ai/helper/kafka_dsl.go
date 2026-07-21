@@ -5,6 +5,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/opskat/opskat/internal/ai/cmdline"
 )
@@ -107,12 +108,48 @@ func ParseKafkaCommand(s string) (*KafkaCommand, error) {
 
 	c := &KafkaCommand{Family: parsed.Verb, Verb: verb, Flags: parsed.Flags}
 	if len(parsed.Args) == 2 {
+		// needsTarget 既是下界也是上界。只当下界用的话，`topic list orders`
+		// （模型想说 describe orders）会解析通过、审批弹窗照原样显示这一串，
+		// 而执行器把多出来的 orders 丢掉、列出集群里全部 topic —— 批准一件事、
+		// 拿到另一件。ParseMongoCommand 在 collection 上有同形的守卫。
+		if !needsTarget {
+			return nil, fmt.Errorf("verb %q takes no target, got %q; use: %s %s", verb, parsed.Args[1], c.Family, verb)
+		}
 		c.Target = parsed.Args[1]
 	}
 	if needsTarget && c.Target == "" {
 		return nil, fmt.Errorf("verb %q requires a target: %s %s <name>", verb, c.Family, verb)
 	}
+	if err := validateKafkaTarget(c.Target); err != nil {
+		return nil, err
+	}
 	return c, nil
+}
+
+// validateKafkaTarget 拒绝含任何 Unicode 空白的 target。
+//
+// 策略串是 "<action> <resource>" 恰好两个 whitespace 分隔的 token，splitKafkaRule
+// （internal/ai/policy/kafka_policy.go:50）用 strings.Fields 切、`len != 2` 就返回
+// ok=false，MatchKafkaRule 随之对**任何**规则返回 false，既不报错也不记日志：
+// 实测 `consumer-group delete 'my group'` 在 BuiltinKafkaDangerousDeny 下从 Deny
+// 掉成 NeedConfirm —— deny 列表整个失效。
+//
+// 判定谓词特意用 unicode.IsSpace，也就是 strings.Fields 自己的切分谓词：这里要挡的
+// 恰好是"会被 Fields 切开的字符"，用同一个谓词，检查和它保护的约束才不会各自漂移。
+// 这也顺带覆盖了 shell 切词与 Fields 的错位——NBSP(U+00A0) / U+3000 不是 shell 分隔符，
+// 能不带引号一路走进 Target，Fields 却认它们。
+//
+// 代价是明确的、也是有意接受的：名字里带空白的 consumer group / schema subject /
+// connector 在统一 exec 下不可达。这严格优于现状——现状是够得着，但 deny 列表在那一次
+// 调用里静默失效。别想着靠加引号绕过：引号会破坏与现有 7 个 kafka_* 工具的字节相同，
+// 而 splitKafkaRule 也不认引号。
+func validateKafkaTarget(target string) error {
+	for i, r := range target {
+		if unicode.IsSpace(r) {
+			return fmt.Errorf("target %q cannot contain whitespace (found %q at byte %d): kafka permission rules are matched as exactly two space-separated tokens \"<action> <resource>\", so a name containing whitespace cannot be authorized at all", target, r, i)
+		}
+	}
+	return nil
 }
 
 // Render 是 ParseKafkaCommand 的逆函数（TestKafkaCommand_RoundTrip 锁住）。
@@ -123,9 +160,19 @@ func ParseKafkaCommand(s string) (*KafkaCommand, error) {
 // 丢失之后，所以加引号救不了。ParseKafkaCommand 自己永远产不出这种 Target，但
 // KafkaCommand 是导出结构体，统一 exec 会用结构化的工具参数直接构造它、绕开 Parse——
 // 拒绝好过悄悄产出一个 Render 完语义就变了的串。
+// 同理还要校验 flag 名：cmdline.Command.Render 明说手写字面量不受 Parse 的入口校验
+// 保护、由调用方保证 flag 名合法，KafkaCommand.Render 就是那个调用方。mongo 靠写死
+// db / query 两个 flag 名绕开了这件事，kafka 接受任意 flag 名，绕不开——
+// `{"cfg=x": "1"}` 渲染成 `--cfg=x=1`，重新解析后是 flag "cfg" 值 "x=1"。
+// 判定复用 cmdline.ValidFlagName，不在这里重抄一份 safeUnquotedWord。
 func (c *KafkaCommand) Render() (string, error) {
 	if strings.HasPrefix(c.Target, "--") {
 		return "", fmt.Errorf("target %q cannot start with \"--\": it would be misread as a flag when the rendered command is re-parsed", c.Target)
+	}
+	for _, name := range slices.Sorted(maps.Keys(c.Flags)) {
+		if !cmdline.ValidFlagName(name) {
+			return "", fmt.Errorf("invalid flag name %q: it would not survive re-parsing of the rendered command; use only letters, digits, and _@%%+:,./- characters", name)
+		}
 	}
 
 	cmd := &cmdline.Command{Verb: c.Family, Args: []string{c.Verb}, Flags: c.Flags}
@@ -142,7 +189,25 @@ func (c *KafkaCommand) Render() (string, error) {
 // 理由见 TestKafkaCommand_PolicyStringIsUnchangedTwoTokenForm 的注释：
 // splitKafkaRule 要求恰好 2 段，不满足时 MatchKafkaRule 静默返回 false，
 // 于是 BuiltinKafkaDangerousDeny 的 deny 规则不再匹配任何命令（fail-open）。
+//
+// 后置条件（结果必须恰好 2 个 Fields）不是可有可无的防御性代码，别顺手删：
+// ParseKafkaCommand 的 validateKafkaTarget 只守住"解析命令串"这一条路，而 KafkaCommand
+// 是导出结构体，统一 exec 会从结构化的工具参数直接构造它（mongo 侧的 HandleExecMongo
+// 就是这么做的）、完全绕开解析。这条后置条件是那条缝上唯一的守卫，而这条缝一旦破了
+// 是静默的——不满足 2-token 时 splitKafkaRule 返回 ok=false，deny 规则一条都不匹配。
+// 宁可在这里 fail closed 报错，也不能把一个匹配不上任何规则的串交出去。
 func (c *KafkaCommand) PolicyString() (string, error) {
+	s, err := c.policyString()
+	if err != nil {
+		return "", err
+	}
+	if fields := len(strings.Fields(s)); fields != 2 {
+		return "", fmt.Errorf("kafka permission command %q has %d whitespace-separated tokens, want exactly 2: it would match no policy rule at all (neither allow nor deny)", s, fields)
+	}
+	return s, nil
+}
+
+func (c *KafkaCommand) policyString() (string, error) {
 	op := c.operation()
 	switch c.Family {
 	case "cluster":

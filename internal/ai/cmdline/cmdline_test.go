@@ -247,6 +247,45 @@ func TestParse_RejectsUnsafeFlagName(t *testing.T) {
 	}
 }
 
+// TestValidFlagName covers the hand-written-Command path Parse can't reach.
+// The "=" cases are the reason this exists as its own predicate rather than a
+// re-export of safeUnquotedWord: that pattern allows "=" (it's a fine flag
+// *value* character), but a flag *name* containing "=" makes Render emit
+// "--cfg=x=1", which re-parses as flag "cfg" with value "x=1" — silent
+// corruption. Parse never sees such a name because it cuts on "=" first.
+func TestValidFlagName(t *testing.T) {
+	valid := []string{"db", "query", "replication-factor", "a_b", "a.b", "a/b", "a:b", "a,b", "a+b", "a@b", "a%b", "9"}
+	for _, name := range valid {
+		if !ValidFlagName(name) {
+			t.Fatalf("ValidFlagName(%q) = false, want true", name)
+		}
+	}
+	invalid := []string{"", "cfg=x", "=", "a b", "a&b", "a;b", "a#b", "a|b", "a$b", "a\tb", "a\nb"}
+	for _, name := range invalid {
+		if ValidFlagName(name) {
+			t.Fatalf("ValidFlagName(%q) = true, want false", name)
+		}
+	}
+}
+
+// TestValidFlagName_AgreesWithRenderParseRoundTrip ties the predicate to the
+// property it exists to guarantee: every name it accepts must survive
+// Render -> Parse unchanged. Without this the predicate could drift into
+// accepting something Render mangles, which is exactly the failure it guards.
+func TestValidFlagName_AgreesWithRenderParseRoundTrip(t *testing.T) {
+	names := []string{"db", "replication-factor", "a_b", "a.b", "a/b", "a:b", "a,b", "a+b", "a@b", "a%b"}
+	for _, name := range names {
+		c := &Command{Verb: "get", Flags: map[string]string{name: "v"}}
+		got, err := Parse(c.Render())
+		if err != nil {
+			t.Fatalf("Parse(Render(flag %q)) = error %v (rendered: %s)", name, err, c.Render())
+		}
+		if got.Flags[name] != "v" {
+			t.Fatalf("Parse(Render(flag %q)).Flags = %#v, want %q -> \"v\"", name, got.Flags, name)
+		}
+	}
+}
+
 // TestQuoteIfNeeded_CRLFAndNULAreLossy pins MINOR-2's known, undocumented-
 // until-now limitation: mvdan's parser normalizes CRLF to LF and drops NUL
 // entirely, even for content inside single quotes, so no quoting choice

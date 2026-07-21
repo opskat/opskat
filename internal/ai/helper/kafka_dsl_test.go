@@ -47,6 +47,106 @@ func TestParseKafkaCommand_RejectsUnknownFamilyOrVerb(t *testing.T) {
 	}
 }
 
+// TestParseKafkaCommand_RejectsWhitespaceInTarget 锁住 fail-open 修复：策略串是
+// "<action> <resource>" 恰好两个 whitespace 分隔 token，target 里带空白会让
+// splitKafkaRule 切出 3 段、返回 ok=false，MatchKafkaRule 对**任何**规则都静默返回
+// false —— 实测 `consumer-group delete 'my group'` 在 BuiltinKafkaDangerousDeny 下
+// 从 Deny 掉成 NeedConfirm。
+//
+// NBSP(U+00A0) / U+3000 单列且不加引号：shell 切词不认它们（所以它们能不带引号
+// 直接走进 Target），而 strings.Fields 的切分谓词 unicode.IsSpace 认得——这个错位
+// 正是漏洞本体，中文输入法下完全够得着。
+func TestParseKafkaCommand_RejectsWhitespaceInTarget(t *testing.T) {
+	cases := []string{
+		`consumer-group delete 'my group'`,
+		"consumer-group delete my\u00a0group",
+		"consumer-group delete 'my\u00a0group'",
+		"consumer-group delete my\u3000group",
+		`schema describe 'sub ject'`,
+		`connect describe 'my conn'`,
+		"schema describe 'a\tb'",
+		`topic delete ' orders '`,
+	}
+	for _, in := range cases {
+		if _, err := ParseKafkaCommand(in); err == nil {
+			t.Fatalf("ParseKafkaCommand(%q) = nil error, want rejection (whitespace in target breaks the 2-token policy string)", in)
+		}
+	}
+}
+
+// TestParseKafkaCommand_RejectsTargetForVerbThatTakesNone 锁住 needsTarget 的**上界**。
+// `topic list orders`（模型想说 "describe orders" 却写成 list）在修复前解析成功、审批
+// 弹窗照原样显示 `topic list orders`，然后执行器列出集群里全部 topic —— 批准一件事、
+// 拿到另一件。ParseMongoCommand 早就有同形的守卫。
+func TestParseKafkaCommand_RejectsTargetForVerbThatTakesNone(t *testing.T) {
+	cases := []string{
+		`topic list orders`,
+		`connect list-connectors prod-cluster`,
+		`cluster brokers broker-1`,
+		`schema list-subjects mysubject`,
+		`consumer-group list mygroup`,
+		`acl list mytopic`,
+	}
+	for _, in := range cases {
+		if _, err := ParseKafkaCommand(in); err == nil {
+			t.Fatalf("ParseKafkaCommand(%q) = nil error, want rejection (verb takes no target)", in)
+		}
+	}
+}
+
+// TestParseKafkaCommand_RejectsMissingTarget 锁住 needsTarget 的下界。
+// 今天"看起来不出事"只是巧合：每个 needsTarget 的 verb 对应的 Kafka*Command 自己也拒空
+// 资源名。哪天某个策略函数不再拒空，这一层没拦截就变成静默放行。
+func TestParseKafkaCommand_RejectsMissingTarget(t *testing.T) {
+	cases := []string{
+		`topic describe`,
+		`topic delete`,
+		`consumer-group reset-offset`,
+		`schema register`,
+		`connect restart`,
+		`message produce`,
+	}
+	for _, in := range cases {
+		if _, err := ParseKafkaCommand(in); err == nil {
+			t.Fatalf("ParseKafkaCommand(%q) = nil error, want rejection (verb requires a target)", in)
+		}
+	}
+}
+
+// TestParseKafkaCommand_RejectsExtraPositional 锁住 `<family> <verb> [target]` 之外的
+// 多余 positional：不拒绝就会被静默丢弃，而审批文本里还留着它。
+func TestParseKafkaCommand_RejectsExtraPositional(t *testing.T) {
+	cases := []string{
+		`topic describe orders extra`,
+		`message produce orders t1 t2`,
+		`topic list a b`,
+	}
+	for _, in := range cases {
+		if _, err := ParseKafkaCommand(in); err == nil {
+			t.Fatalf("ParseKafkaCommand(%q) = nil error, want rejection (too many positional arguments)", in)
+		}
+	}
+}
+
+// TestKafkaCommand_PolicyStringRejectsNonTwoTokenResult 覆盖 ParseKafkaCommand 够不到
+// 的那条路：KafkaCommand 是导出结构体，统一 exec 会从结构化工具参数直接构造它
+// （mongo 侧的 HandleExecMongo 就是这么干的），完全绕开解析期的空白校验。
+// PolicyString 的后置条件是这条缝上唯一的守卫，而这条缝破了是**静默**的。
+func TestKafkaCommand_PolicyStringRejectsNonTwoTokenResult(t *testing.T) {
+	cases := []KafkaCommand{
+		{Family: "consumer-group", Verb: "delete", Target: "my group"},
+		{Family: "consumer-group", Verb: "delete", Target: "my\u00a0group"},
+		{Family: "schema", Verb: "delete", Target: "a\u3000b"},
+		{Family: "connect", Verb: "delete", Target: "a\tb"},
+	}
+	for _, c := range cases {
+		got, err := c.PolicyString()
+		if err == nil {
+			t.Fatalf("PolicyString(%#v) = %q, nil error; want rejection (result is not exactly 2 fields)", c, got)
+		}
+	}
+}
+
 func TestKafkaCommand_RoundTrip(t *testing.T) {
 	cmds := []KafkaCommand{
 		{Family: "topic", Verb: "list", Flags: map[string]string{}},
@@ -72,6 +172,27 @@ func TestKafkaCommand_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestKafkaCommand_RoundTripNormalizesNilFlags 锁住 KafkaCommand.Flags 的 nil 语义：
+// 手工构造（统一 exec 的结构化参数路径）允许 Flags 为 nil，但 ParseKafkaCommand 永远
+// 返回非 nil map，所以 round-trip 回来的是空 map 而不是 nil，reflect.DeepEqual 判不相等。
+// 这是有意的：nil 与空 map 在读取侧完全等价，与其在 Render 里加一层归一化，不如把它
+// 写成契约测下来——否则下游会以"round-trip 挂了"的形式撞见它。
+func TestKafkaCommand_RoundTripNormalizesNilFlags(t *testing.T) {
+	src := KafkaCommand{Family: "topic", Verb: "describe", Target: "orders"}
+	rendered, err := src.Render()
+	if err != nil {
+		t.Fatalf("Render(%#v) unexpected error: %v", src, err)
+	}
+	got, err := ParseKafkaCommand(rendered)
+	if err != nil {
+		t.Fatalf("ParseKafkaCommand(%q) unexpected error: %v", rendered, err)
+	}
+	want := KafkaCommand{Family: "topic", Verb: "describe", Target: "orders", Flags: map[string]string{}}
+	if !reflect.DeepEqual(*got, want) {
+		t.Fatalf("round-trip of nil-Flags command = %#v, want %#v", *got, want)
+	}
+}
+
 // TestKafkaCommand_RenderRejectsFlagLikeTarget 锁住 Render 对 "--" 开头 Target 的拒绝。
 // Target 是导出字段，统一 exec 会用结构化的 topic / group 工具参数直接构造
 // KafkaCommand 而绕开 ParseKafkaCommand（ParseKafkaCommand 自己永远产不出这种值——
@@ -86,6 +207,25 @@ func TestKafkaCommand_RenderRejectsFlagLikeTarget(t *testing.T) {
 	for _, c := range cases {
 		if _, err := c.Render(); err == nil {
 			t.Fatalf("Render(%#v) = nil error, want rejection (target looks like a flag)", c)
+		}
+	}
+}
+
+// TestKafkaCommand_RenderRejectsUnsafeFlagName 同上一条的理由，只是换到 flag 名这一维：
+// cmdline.Command.Render 的文档明说手写字面量不受 Parse 的入口校验保护、由调用方保证
+// flag 名合法——KafkaCommand.Render 就是那个调用方。mongo 靠写死两个 flag 名绕开了这件事，
+// kafka 接受任意 flag 名，绕不开。`cfg=x` 渲染成 --cfg=x=1，重新解析后变成 flag "cfg"
+// 值 "x=1"，是静默的数据损坏。
+func TestKafkaCommand_RenderRejectsUnsafeFlagName(t *testing.T) {
+	cases := []KafkaCommand{
+		{Family: "topic", Verb: "create", Target: "orders", Flags: map[string]string{"cfg=x": "1"}},
+		{Family: "topic", Verb: "create", Target: "orders", Flags: map[string]string{"a b": "1"}},
+		{Family: "topic", Verb: "create", Target: "orders", Flags: map[string]string{"": "1"}},
+		{Family: "topic", Verb: "create", Target: "orders", Flags: map[string]string{"a;rm -rf": "1"}},
+	}
+	for _, c := range cases {
+		if got, err := c.Render(); err == nil {
+			t.Fatalf("Render(%#v) = %q, nil error; want rejection (flag name does not survive re-parsing)", c, got)
 		}
 	}
 }
