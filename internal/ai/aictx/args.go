@@ -40,6 +40,14 @@ func ArgBool(args map[string]any, key string) bool {
 // 的命令 DSL 把 --limit=500 这类 flag 原样以字符串送进来,落到这里返回 0 是**静默**的:
 // Limit 变 0 之后 service 套用默认条数,用户批准了取 500 条、拿到别的数字,不报错。
 // kafka_args.go 的 ArgOptionalPartition 自己单独做了一份 string 解析,正是这个缺口的症状。
+//
+// 解析不出来一律返回 0,**越界也算解析不出来**:strconv.ParseInt 与 json.Number.Int64
+// (它包着同一个 ParseInt)在 ErrRange 时返回的是**钳位后的** MaxInt64/MinInt64 而不是 0,
+// 顺手把 i 交出去会绕过调用方的守卫。0 在这组调用方那里是 fail-closed 哨兵
+// (tool_handlers_asset.go 的 `if id == 0 { error }`、`if gid > 0`,kafka_svc 的
+// `Partitions <= 0`),MaxInt64 不是:它一路通过那些守卫,再被 kafka_args.go 收窄成
+// int32 时变成 -1,而 -1 恰好是 Kafka 线上协议里 "用 broker 默认值" 的哨兵。
+// 越界输入本就没有正确答案,返回 0 让它落到各调用方既有的必填校验上,是唯一安全的选择。
 func ArgInt64(args map[string]any, key string) int64 {
 	if v, ok := args[key]; ok {
 		switch n := v.(type) {
@@ -53,14 +61,14 @@ func ArgInt64(args map[string]any, key string) int64 {
 			i, err := n.Int64()
 			if err != nil {
 				logger.Default().Warn("convert json.Number to int64", zap.String("value", n.String()), zap.Error(err))
+				return 0
 			}
 			return i
 		case string:
-			// 解析失败记 warn 并返回 0,与 json.Number 分支一致:这个函数不返回 error,
-			// 调用方拿到 0 之后各自的必填校验会接手,但日志里必须留下痕迹。
 			i, err := strconv.ParseInt(strings.TrimSpace(n), 10, 64)
 			if err != nil {
 				logger.Default().Warn("convert string to int64", zap.String("value", n), zap.Error(err))
+				return 0
 			}
 			return i
 		}

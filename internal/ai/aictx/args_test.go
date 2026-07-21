@@ -23,6 +23,15 @@ func TestArgInt64(t *testing.T) {
 		{name: "padded string", args: map[string]any{"n": " 42 "}, want: 42},
 		{name: "non-numeric string", args: map[string]any{"n": "abc"}, want: 0},
 		{name: "empty string", args: map[string]any{"n": ""}, want: 0},
+		// 越界必须落回 0,不能是 ParseInt 连同 ErrRange 一起返回的钳位值:MaxInt64
+		// 会穿过所有 `== 0` / `> 0` 的 fail-closed 守卫,收窄成 int32 后还等于 -1
+		// （Kafka 的 "用 broker 默认值" 哨兵）。
+		{name: "out of range string", args: map[string]any{"n": "99999999999999999999"}, want: 0},
+		{name: "out of range negative string", args: map[string]any{"n": "-99999999999999999999"}, want: 0},
+		{name: "out of range json.Number", args: map[string]any{"n": json.Number("99999999999999999999")}, want: 0},
+		{name: "non-numeric json.Number", args: map[string]any{"n": json.Number("abc")}, want: 0},
+		{name: "float-shaped string", args: map[string]any{"n": "3.0"}, want: 0},
+		{name: "thousands-separated string", args: map[string]any{"n": "1,000"}, want: 0},
 		{name: "wrong type", args: map[string]any{"n": true}, want: 0},
 		{name: "missing", args: map[string]any{}, want: 0},
 		{name: "nil args", args: nil, want: 0},

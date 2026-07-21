@@ -216,8 +216,16 @@ func executeBatchItem(ctx context.Context, item batchCommandItem, assetID int64,
 	return result
 }
 
-// resolveAssetForBatch 把 LLM 传入的 asset 标识（name 或 id）解析成 (id, name)。
-// 复用 handleGetAsset 的解析逻辑，避免重复实现 name→id 查询。
+// resolveAssetForBatch 把 LLM 传入的 asset 标识解析成 (id, name)。
+//
+// 只认**数字形式的 id**：它把 assetRef 包成 {"id": ...} 交给 handleGetAsset，而
+// handleGetAsset 只做 aictx.ArgInt64(args, "id") + `id == 0 就报错`
+// （tool_handlers_asset.go:176-180），没有任何 name→id 查询。所以按名字指定资产
+// （batch_command 的参数描述允许这么写）在这里必然失败，报 "missing required
+// parameter: id"。行为由 TestResolveAssetForBatch_NameRefDoesNotResolve 钉住。
+//
+// 补 name 解析要改的是 get_asset 工具自己的契约，不是在这里绕一条私路——那样
+// batch_command 与 get_asset 对"什么是合法的资产标识"就有了两套答案。
 func resolveAssetForBatch(ctx context.Context, assetRef string) (int64, string, error) {
 	out, err := handleGetAsset(ctx, map[string]any{"id": assetRef})
 	if err != nil {
