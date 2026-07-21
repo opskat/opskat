@@ -26,16 +26,21 @@ func mongoAsset(t *testing.T, defaultDB string) *asset_entity.Asset {
 // 过滤条件——而不带 --query 的 deleteMany 会清空整个集合，用户无法从弹窗区分这两者。
 // 现在策略侧改用 op 感知的 policy.MatchMongoRule，裸 op 规则照样命中富命令串。
 func TestCanonicalizeMongoCommand_YieldsFullCommand(t *testing.T) {
+	// database-requiring cases pass --db explicitly (asset has no default): this test is
+	// about output *shape* (positional collection, flag order, quoting), not about
+	// database resolution — that is covered separately by
+	// TestCanonicalizeMongoCommand_InjectsAssetDefaultDatabase and
+	// TestCanonicalizeMongoCommand_NoDefaultDatabaseRejectsDatabaseRequiringOp.
 	asset := mongoAsset(t, "")
 	cases := []struct{ in, want string }{
-		{`find users --query='{"filter":{"a":1}}'`, `find users --query='{"filter":{"a":1}}'`},
-		{`deleteMany logs --query='{"filter":{"level":"debug"}}'`, `deleteMany logs --query='{"filter":{"level":"debug"}}'`},
+		{`find users --db=test --query='{"filter":{"a":1}}'`, `find users --db=test --query='{"filter":{"a":1}}'`},
+		{`deleteMany logs --db=test --query='{"filter":{"level":"debug"}}'`, `deleteMany logs --db=test --query='{"filter":{"level":"debug"}}'`},
 		{`listDatabases`, `listDatabases`},
 		{`aggregate events --db=analytics --query='{"pipeline":[]}'`, `aggregate events --db=analytics --query='{"pipeline":[]}'`},
 		// 规范化：多余空白塌缩，flag 按名字排序（--db 先于 --query），
 		// 带空格的集合名保持单个 token。
 		{`find    users   --query='{"filter":{}}'    --db=prod`, `find users --db=prod --query='{"filter":{}}'`},
-		{`countDocuments 'my coll'`, `countDocuments 'my coll'`},
+		{`countDocuments 'my coll' --db=test`, `countDocuments 'my coll' --db=test`},
 	}
 	for _, c := range cases {
 		got, err := CanonicalizeMongoCommand(asset, c.in)
@@ -70,15 +75,36 @@ func TestCanonicalizeMongoCommand_InjectsAssetDefaultDatabase(t *testing.T) {
 	}
 }
 
-// TestCanonicalizeMongoCommand_NoDefaultDatabaseLeavesCommandUnchanged：资产没配
-// 默认库时不注入空 --db（`--db=` 会被解析成空库名，比不写更糟）。
-func TestCanonicalizeMongoCommand_NoDefaultDatabaseLeavesCommandUnchanged(t *testing.T) {
-	got, err := CanonicalizeMongoCommand(mongoAsset(t, ""), "find users")
+// TestCanonicalizeMongoCommand_NoDefaultDatabaseLeavesDatabaseFreeOpUnchanged：资产没配
+// 默认库时不注入空 --db（`--db=` 会被解析成空库名，比不写更糟）——对不需要 database
+// 的操作（listDatabases）命令保持原样。
+func TestCanonicalizeMongoCommand_NoDefaultDatabaseLeavesDatabaseFreeOpUnchanged(t *testing.T) {
+	got, err := CanonicalizeMongoCommand(mongoAsset(t, ""), "listDatabases")
 	if err != nil {
 		t.Fatalf("CanonicalizeMongoCommand unexpected error: %v", err)
 	}
-	if got != "find users" {
-		t.Fatalf("CanonicalizeMongoCommand = %q, want %q", got, "find users")
+	if got != "listDatabases" {
+		t.Fatalf("CanonicalizeMongoCommand = %q, want %q", got, "listDatabases")
+	}
+}
+
+// TestCanonicalizeMongoCommand_NoDefaultDatabaseRejectsDatabaseRequiringOp is the
+// regression lock for the finding that a database-requiring operation with no resolvable
+// database (no asset default, no --db in the command) used to canonicalize successfully
+// and only fail later at execution time — after the user had already been shown an
+// approval dialog for a command that was always going to fail. resolveMongoCommand must
+// reject this before CanonicalizeMongoCommand returns, so handleExec's canonicalize step
+// (which runs before the permission check, see the ordering comment on handleExec in
+// tool_handlers_unified.go) fails fast instead of interrupting the user. The
+// ordering-level lock that proves the approval dialog itself never fires is
+// TestHandleExec_MongoMissingDatabaseNeverReachesPermissionCheck in internal/ai/tool.
+func TestCanonicalizeMongoCommand_NoDefaultDatabaseRejectsDatabaseRequiringOp(t *testing.T) {
+	_, err := CanonicalizeMongoCommand(mongoAsset(t, ""), "find users")
+	if err == nil {
+		t.Fatal("CanonicalizeMongoCommand with no default database and no --db = nil error, want rejection")
+	}
+	if !strings.Contains(err.Error(), "database") {
+		t.Fatalf("got %q, want it to name the missing database", err.Error())
 	}
 }
 

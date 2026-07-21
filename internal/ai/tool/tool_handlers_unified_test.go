@@ -564,3 +564,113 @@ func TestHandleExec_MongoChecksCanonicalCommand(t *testing.T) {
 		t.Fatalf("permission check saw %q, want the canonicalized command %q", gotCheckCommand, want)
 	}
 }
+
+// TestHandleExec_MongoLegacyToolMatchesUnifiedPolicyDecision is the regression lock for
+// the finding that exec_mongo (the legacy tool, helper.HandleExecMongo) bypassed
+// collection-narrowed deny rules: it passed the bare operation token ("deleteMany") to
+// CheckForAsset instead of a rich command string, so a deny rule written to protect one
+// collection (`deleteMany users`) matched the unified exec's canonicalized command
+// (`deleteMany users`) but never matched exec_mongo's bare op — the identical logical
+// delete on the identical collection was denied on one path and silently allowed on the
+// other. HandleExecMongo now builds a MongoCommand from its structured args and renders
+// it the same way CanonicalizeMongoCommand does (see mongodb_helper.go), so both paths
+// must present policy with the same string and reach the same decision.
+//
+// Both invocations target the same asset/operation/collection so the only thing that
+// differs is which tool entry point is used: handleExec's "command" string vs.
+// HandleExecMongo's structured operation/collection args.
+func TestHandleExec_MongoLegacyToolMatchesUnifiedPolicyDecision(t *testing.T) {
+	m := setupUnified(t)
+	asset := &asset_entity.Asset{ID: 34, Name: "mongo-legacy", Type: asset_entity.AssetTypeMongoDB}
+	if err := asset.SetMongoDBConfig(&asset_entity.MongoDBConfig{Host: "127.0.0.1", Port: 27017, Database: "prod"}); err != nil {
+		t.Fatalf("SetMongoDBConfig: %v", err)
+	}
+	if err := asset.SetMongoPolicy(&asset_entity.MongoPolicy{
+		AllowTypes: []string{"find", "deleteMany"},
+		DenyTypes:  []string{"deleteMany users"},
+	}); err != nil {
+		t.Fatalf("SetMongoPolicy: %v", err)
+	}
+	m.EXPECT().FindByName(gomock.Any(), "34").Return(nil, nil).AnyTimes()
+	m.EXPECT().Find(gomock.Any(), int64(34)).Return(asset, nil).AnyTimes()
+
+	checker, _ := newRecordingChecker()
+
+	// Unified exec path: a command string naming the "users" collection.
+	unifiedSlot := &aictx.CheckResult{}
+	unifiedCtx := aictx.WithCheckResultSlot(context.Background(), unifiedSlot)
+	unifiedCtx = WithDocGate(unifiedCtx, NewDocGate())
+	unifiedCtx = permission.WithPolicyChecker(unifiedCtx, checker)
+	GetDocGate(unifiedCtx).MarkDocumented(aictx.GetConversationID(unifiedCtx), asset_entity.AssetTypeMongoDB)
+	if _, err := handleExec(unifiedCtx, map[string]any{
+		"asset": "34", "command": "deleteMany users",
+	}); err != nil {
+		t.Fatalf("unified exec: unexpected error: %v", err)
+	}
+
+	// Legacy exec_mongo path: the identical logical operation via structured args instead
+	// of a command string.
+	legacySlot := &aictx.CheckResult{}
+	legacyCtx := aictx.WithCheckResultSlot(context.Background(), legacySlot)
+	legacyCtx = permission.WithPolicyChecker(legacyCtx, checker)
+	if _, err := helper.HandleExecMongo(legacyCtx, map[string]any{
+		"asset_id": int64(34), "operation": "deleteMany", "collection": "users",
+	}); err != nil {
+		t.Fatalf("exec_mongo: unexpected error: %v", err)
+	}
+
+	if unifiedSlot.Decision != aictx.Deny {
+		t.Fatalf("unified exec decision = %v, want %v", unifiedSlot.Decision, aictx.Deny)
+	}
+	if legacySlot.Decision != unifiedSlot.Decision {
+		t.Fatalf("exec_mongo decision = %v, want it to match unified exec's %v — a collection-narrowed "+
+			"deny rule must not be bypassable via the legacy tool", legacySlot.Decision, unifiedSlot.Decision)
+	}
+}
+
+// TestHandleExec_MongoMissingDatabaseNeverReachesPermissionCheck is the regression lock
+// for the finding that a write operation with no resolvable database (asset has no
+// default database configured and the model's command doesn't pass --db) popped an
+// approval dialog and only then failed at execution time — interrupting the user for a
+// command that was always going to fail. resolveMongoCommand (mongo_exec.go) now rejects
+// this before the unified exec's permission check ever runs, matching the ordering
+// invariant already enforced for etcd's malformed commands above.
+//
+// "deleteMany" is a write op outside the default read-only allowlist, so — per the trap
+// documented on newRecordingChecker — CheckForAsset would actually reach the confirm
+// callback (and this test would actually fail) if the guard regressed; a read-only
+// command would make *checkCalled vacuously false regardless of ordering.
+func TestHandleExec_MongoMissingDatabaseNeverReachesPermissionCheck(t *testing.T) {
+	m := setupUnified(t)
+	asset := &asset_entity.Asset{ID: 35, Name: "mongo-nodefaultdb", Type: asset_entity.AssetTypeMongoDB}
+	if err := asset.SetMongoDBConfig(&asset_entity.MongoDBConfig{Host: "127.0.0.1", Port: 27017}); err != nil {
+		t.Fatalf("SetMongoDBConfig: %v", err)
+	}
+	m.EXPECT().FindByName(gomock.Any(), "35").Return(nil, nil).AnyTimes()
+	m.EXPECT().Find(gomock.Any(), int64(35)).Return(asset, nil).AnyTimes()
+
+	checker, checkCalled := newRecordingChecker()
+	slot := &aictx.CheckResult{}
+	ctx := aictx.WithCheckResultSlot(context.Background(), slot)
+	ctx = WithDocGate(ctx, NewDocGate())
+	ctx = permission.WithPolicyChecker(ctx, checker)
+	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeMongoDB)
+
+	_, err := handleExec(ctx, map[string]any{
+		"asset": "35", "command": "deleteMany logs",
+	})
+	if err == nil {
+		t.Fatal("expected an error for a write op with no resolvable database, got nil")
+	}
+	if !strings.Contains(err.Error(), "database") {
+		t.Fatalf("got %q, want an error naming the missing database", err.Error())
+	}
+	if slot.Decision != aictx.Deny {
+		t.Fatalf("audit decision = %v, want %v (a canonicalize failure must not audit as an un-checked call)",
+			slot.Decision, aictx.Deny)
+	}
+	if *checkCalled {
+		t.Fatal("CheckForAsset ran for a write op with no resolvable database — an approval " +
+			"dialog must never appear for a command that is going to fail regardless")
+	}
+}

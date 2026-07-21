@@ -75,20 +75,27 @@ func CanonicalizeMongoCommand(asset *asset_entity.Asset, command string) (string
 // 与"实际执行的命令"在库名上分叉。k8s 的 --context/--namespace 注入也是这个形状
 // （canonicalizeK8sCommand 与 ExecK8sOnAsset 各自跑一次 BuildK8sCommandPlan）。
 //
-// 命令显式写了 --db 就不覆盖。资产没配默认库时保持为空，由执行阶段报出
-// "需要 database 参数"——不在这里编一个库名出来。
+// 命令显式写了 --db 就不覆盖。资产没配默认库、命令也没写 --db 时，对一个
+// needsDatabase 的操作直接在这里报错，而不是留一个空 Database 混过 Render/权限检查——
+// 那样的命令下面每个 mongoXxx 执行函数都会因 database 为空而报错，属于"这条命令
+// 已经能证明必然失败"的一类，必须在权限检查（可能弹审批对话框）之前失败，理由与
+// canonicalize 排在权限检查之前的顺序注释（handleExec，internal/ai/tool/tool_handlers_unified.go）
+// 完全一致：不这样做，用户会先被弹一次审批（"allow all" 甚至落一条常驻 grant），
+// 批准之后命令才因为这个必然会发生的检查而失败。
 func resolveMongoCommand(asset *asset_entity.Asset, command string) (*MongoCommand, error) {
 	c, err := ParseMongoCommand(command)
 	if err != nil {
 		return nil, err
 	}
-	if c.Database != "" {
-		return c, nil
+	if c.Database == "" {
+		cfg, err := asset.GetMongoDBConfig()
+		if err != nil {
+			return nil, fmt.Errorf("get mongodb config: %w", err)
+		}
+		c.Database = cfg.Database
 	}
-	cfg, err := asset.GetMongoDBConfig()
-	if err != nil {
-		return nil, fmt.Errorf("get mongodb config: %w", err)
+	if c.Database == "" && mongoOps[c.Op].needsDatabase {
+		return nil, fmt.Errorf("operation %q requires a database: pass --db=<database> or configure a default database on the asset", c.Op)
 	}
-	c.Database = cfg.Database
 	return c, nil
 }

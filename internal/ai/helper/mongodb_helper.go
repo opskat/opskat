@@ -56,9 +56,20 @@ func HandleExecMongo(ctx context.Context, args map[string]any) (string, error) {
 		return "", fmt.Errorf("missing required parameters: asset_id, operation")
 	}
 
+	// 权限检查必须看到与统一 exec 相同的富命令串，而不是裸 operation：策略侧的
+	// MatchMongoRule 按 op+collection 收窄（见 internal/ai/policy/mongo_rule.go），
+	// 一条 `deleteMany users` 的 deny 规则只在命令串里带着 collection 时才命中。
+	// 这里复用 mongo_command.go 的 Render，不重新发明一份渲染逻辑——与
+	// CanonicalizeMongoCommand 共用同一个类型，两条路径产出同一个字符串。
+	command := &MongoCommand{Op: operation, Database: database, Collection: collection, Query: query}
+	canonicalCommand, err := command.Render()
+	if err != nil {
+		return "", err
+	}
+
 	// 权限检查
 	if checker := permission.GetPolicyChecker(ctx); checker != nil {
-		result := checker.CheckForAsset(ctx, assetID, asset_entity.AssetTypeMongoDB, operation)
+		result := checker.CheckForAsset(ctx, assetID, asset_entity.AssetTypeMongoDB, canonicalCommand)
 		aictx.RecordDecision(ctx, result)
 		if result.Decision != aictx.Allow {
 			return result.Message, nil
@@ -128,7 +139,7 @@ func getOrDialMongoDB(ctx context.Context, asset *asset_entity.Asset) (*mongo.Cl
 	return wrapper.Client, closer, nil
 }
 
-// mongoOpSpec 描述一个 mongo 操作：是否要求 collection 参数，以及怎么执行。
+// mongoOpSpec 描述一个 mongo 操作：是否要求 collection / database 参数，以及怎么执行。
 //
 // mongoOps 是 ParseMongoCommand（internal/ai/helper/mongo_command.go）与
 // ExecuteMongoDB 共用的唯一操作列表：两者过去各维护一份同样的 12 个操作名
@@ -136,23 +147,29 @@ func getOrDialMongoDB(ctx context.Context, asset *asset_entity.Asset) (*mongo.Cl
 // 操作只改一处就会悄悄跑偏。现在两边都读这同一个 map，跑偏在结构上不可能
 // 发生——这里少一个 entry，ParseMongoCommand 和 ExecuteMongoDB 会对同一个
 // 操作名同时拒绝，不存在"一边认得一边不认得"的中间态。
+//
+// needsDatabase 供 resolveMongoCommand（internal/ai/helper/mongo_exec.go）在权限检查
+// 之前判断"这条命令没有可用的 database，必然执行失败"：本文件下方每个 mongoXxx 函数
+// 都会在 database 为空时报错，唯独 listDatabases 不需要 database。把这个判断挪到这里
+// 而不是在 resolveMongoCommand 里另建一份操作名单，理由与 needsCollection 完全一致。
 var mongoOps = map[string]mongoOpSpec{
-	"find":            {needsCollection: true, exec: mongoFind},
-	"findOne":         {needsCollection: true, exec: mongoFindOne},
-	"insertOne":       {needsCollection: true, exec: mongoInsertOne},
-	"insertMany":      {needsCollection: true, exec: mongoInsertMany},
-	"updateOne":       {needsCollection: true, exec: mongoUpdateOne},
-	"updateMany":      {needsCollection: true, exec: mongoUpdateMany},
-	"deleteOne":       {needsCollection: true, exec: mongoDeleteOne},
-	"deleteMany":      {needsCollection: true, exec: mongoDeleteMany},
-	"aggregate":       {needsCollection: true, exec: mongoAggregate},
-	"countDocuments":  {needsCollection: true, exec: mongoCountDocuments},
-	"listDatabases":   {needsCollection: false, exec: mongoListDatabases},
-	"listCollections": {needsCollection: false, exec: mongoListCollections},
+	"find":            {needsCollection: true, needsDatabase: true, exec: mongoFind},
+	"findOne":         {needsCollection: true, needsDatabase: true, exec: mongoFindOne},
+	"insertOne":       {needsCollection: true, needsDatabase: true, exec: mongoInsertOne},
+	"insertMany":      {needsCollection: true, needsDatabase: true, exec: mongoInsertMany},
+	"updateOne":       {needsCollection: true, needsDatabase: true, exec: mongoUpdateOne},
+	"updateMany":      {needsCollection: true, needsDatabase: true, exec: mongoUpdateMany},
+	"deleteOne":       {needsCollection: true, needsDatabase: true, exec: mongoDeleteOne},
+	"deleteMany":      {needsCollection: true, needsDatabase: true, exec: mongoDeleteMany},
+	"aggregate":       {needsCollection: true, needsDatabase: true, exec: mongoAggregate},
+	"countDocuments":  {needsCollection: true, needsDatabase: true, exec: mongoCountDocuments},
+	"listDatabases":   {needsCollection: false, needsDatabase: false, exec: mongoListDatabases},
+	"listCollections": {needsCollection: false, needsDatabase: true, exec: mongoListCollections},
 }
 
 type mongoOpSpec struct {
 	needsCollection bool
+	needsDatabase   bool
 	exec            func(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error)
 }
 
