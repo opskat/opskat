@@ -139,10 +139,21 @@ func (c *CommandPolicyChecker) SubmitGrantMulti(ctx context.Context, items []Gra
 // 返回首个匹配的 pattern，空字符串表示未匹配
 // groups 为资产所属的组链（组 → 父组 → ... → 根）
 func matchGrantPatterns(ctx context.Context, assetID int64, groups []*group_entity.Group, subCmds []string) string {
-	return matchGrantPatternsWith(ctx, assetID, groups, subCmds, policy.MatchCommandRule)
+	return matchGrantPatternsWith(ctx, assetID, groups, subCmds, "exec", policy.MatchCommandRule)
 }
 
-func matchGrantPatternsWith(ctx context.Context, assetID int64, groups []*group_entity.Group, subCmds []string, matchFn policy.MatchFunc) string {
+// grantItemAppliesTo 判断一条 grant item 是否属于当前检查的工具面。
+//
+// 只在 cp 与非 cp 之间划线，不是按 toolName 严格相等：存量行的 tool_name 一律被旧版
+// SaveGrantPattern 写死成 "exec"（含 redis/sql 等），严格相等会让它们集体失效。cp 行
+// 只可能由新代码产生，因此这条线是准确的——而它正是必须划的那条：cp 的 pattern 是
+// 路径、匹配走 policy.MatchPathRule，被命令面匹配到就意味着一条 `/opt/*` 授权能放行
+// 任意命令，反过来一条 `*` 命令授权也不该放行任意文件写入。
+func grantItemAppliesTo(item *grant_entity.GrantItem, toolName string) bool {
+	return (item.ToolName == GrantToolCp) == (toolName == GrantToolCp)
+}
+
+func matchGrantPatternsWith(ctx context.Context, assetID int64, groups []*group_entity.Group, subCmds []string, toolName string, matchFn policy.MatchFunc) string {
 	sessionID := aictx.GetSessionID(ctx)
 	if sessionID == "" {
 		return ""
@@ -168,6 +179,9 @@ func matchGrantPatternsWith(ctx context.Context, assetID int64, groups []*group_
 		matched := false
 		for _, item := range items {
 			if !grantItemMatchesTarget(item, assetID, groupIDs) {
+				continue
+			}
+			if !grantItemAppliesTo(item, toolName) {
 				continue
 			}
 			if matchFn(item.Command, cmd) {
@@ -268,7 +282,7 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 			patterns = []string{command}
 		}
 		for _, cmd := range patterns {
-			SaveGrantPattern(ctx, sessionID, assetID, assetName, cmd)
+			SaveGrantPattern(ctx, sessionID, assetID, assetName, approvalType, cmd)
 		}
 		audit.WriteGrantSubmitAudit(ctx, assetID, assetName, patterns)
 	}
