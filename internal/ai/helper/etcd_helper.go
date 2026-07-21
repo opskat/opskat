@@ -60,6 +60,14 @@ func HandleExecEtcd(ctx context.Context, args map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return marshalEtcdResult(ctx, assetID, op, result)
+}
+
+// marshalEtcdResult serializes an etcd_svc.Exec result to the JSON string returned to
+// the model. Shared by HandleExecEtcd (the exec_etcd tool) and ExecEtcdOnAsset (the
+// unified exec tool's etcd executor, etcd_exec.go) so the two paths can't drift on how
+// results are represented.
+func marshalEtcdResult(ctx context.Context, assetID int64, op string, result any) (string, error) {
 	data, err := json.Marshal(result)
 	if err != nil {
 		logger.Ctx(ctx).Error("marshal etcd result", zap.Int64("assetID", assetID), zap.String("op", op), zap.Error(err))

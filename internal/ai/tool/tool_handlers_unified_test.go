@@ -374,3 +374,44 @@ func TestHandleExec_ExecutorReceivesRawCommand(t *testing.T) {
 		t.Fatalf("executor saw %q, want the raw command %q", gotExecCommand, rawCommand)
 	}
 }
+
+// TestHandleExec_EtcdMalformedCommandNeverReachesPermissionCheck locks the ordering
+// invariant this task's etcd wiring depends on: etcd_svc.ParseCommand (invoked through
+// helper.CanonicalizeEtcdCommand, registered as etcd's CanonicalizeFunc) must reject a
+// syntactically invalid command before the unified exec's permission check ever runs.
+// A malformed command always fails execution, so if the permission check ran first the
+// user would be shown an approval dialog (and, on "allow all", get a persisted grant)
+// for a command that was going to fail regardless — exactly the double-failure the
+// ordering comment on handleExec (tool_handlers_unified.go) exists to prevent.
+//
+// "put" without a value is used because it is malformed in a way ParseCommand rejects
+// (etcd_svc.command.go's opRequiresKey handling for "put") while still naming a
+// mutating op — a read like `get /k` would resolve via the default read-only allowlist
+// without ever reaching HandleConfirm, which would make the *checkCalled assertion below
+// vacuous (see newRecordingChecker's doc comment on this exact trap, and the note in
+// TestHandleExec_UndocumentedTypeReturnsGuidance).
+func TestHandleExec_EtcdMalformedCommandNeverReachesPermissionCheck(t *testing.T) {
+	m := setupUnified(t)
+	asset := &asset_entity.Asset{ID: 21, Name: "etcd-1", Type: asset_entity.AssetTypeEtcd}
+	m.EXPECT().FindByName(gomock.Any(), "21").Return(nil, nil).AnyTimes()
+	m.EXPECT().Find(gomock.Any(), int64(21)).Return(asset, nil).AnyTimes()
+
+	checker, checkCalled := newRecordingChecker()
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	ctx = permission.WithPolicyChecker(ctx, checker)
+	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeEtcd)
+
+	_, err := handleExec(ctx, map[string]any{
+		"asset": "21", "command": "put /only-key",
+	})
+	if err == nil {
+		t.Fatal("expected a parse error for a malformed etcd command (put with no value), got nil")
+	}
+	if !strings.Contains(err.Error(), "put requires key and value") {
+		t.Fatalf("got %q, want the ParseCommand error surfaced verbatim", err.Error())
+	}
+	if *checkCalled {
+		t.Fatal("CheckForAsset ran for a malformed etcd command — an approval dialog must " +
+			"never appear before ParseCommand has validated the syntax")
+	}
+}

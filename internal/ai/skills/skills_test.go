@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-func TestGet_AllFiveTypesPresent(t *testing.T) {
-	for _, at := range []string{"ssh", "serial", "database", "redis", "k8s"} {
+func TestGet_AllRegisteredTypesPresent(t *testing.T) {
+	for _, at := range []string{"ssh", "serial", "database", "redis", "k8s", "etcd"} {
 		body, ok := Get(at)
 		if !ok {
 			t.Fatalf("no SKILL.md registered for %q", at)
@@ -39,8 +39,8 @@ func TestGet_BodyExcludesFrontmatter(t *testing.T) {
 
 func TestTypes_Sorted(t *testing.T) {
 	got := Types()
-	if len(got) != 5 {
-		t.Fatalf("got %d types, want 5", len(got))
+	if len(got) != 6 {
+		t.Fatalf("got %d types, want 6", len(got))
 	}
 	for i := 1; i < len(got); i++ {
 		if got[i-1] > got[i] {

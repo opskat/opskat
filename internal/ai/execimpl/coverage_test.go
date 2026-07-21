@@ -18,13 +18,12 @@ import (
 // 扩张，作用是逼出一处显眼的常量 diff 供评审注意。真正的约束仍是评审。
 //
 //   - local：spec §2 明确列为非目标，另开 issue 跟踪
-//   - mongodb / etcd / kafka：Plan B 补齐
+//   - mongodb / kafka：Plan B 补齐
 //   - vnc / rdp / oss：PolicyKind 为空，下面的循环在到达豁免检查之前就已 continue，
 //     本就不在检查范围内，因此不需要（也不能通过）豁免条目——列在这里仅供交叉核对。
 var exemptFromExec = map[string]string{
 	"local":   "spec §2 非目标：有 PolicyKind 却无 permission 注册",
 	"mongodb": "Plan B",
-	"etcd":    "Plan B",
 	"kafka":   "Plan B",
 }
 
@@ -48,7 +47,7 @@ func TestEveryPolicyKindTypeHasExecutor(t *testing.T) {
 // 豁免清单只可缩短：条目数超出常量即失败。见上方说明——这只拦得住忘记同步常量的
 // 情形，拦不住有意的同步扩张。
 func TestExemptionListDoesNotGrow(t *testing.T) {
-	const maxExemptions = 4
+	const maxExemptions = 3
 	if len(exemptFromExec) > maxExemptions {
 		t.Fatalf("exemptFromExec grew to %d entries (max %d); "+
 			"the list may only shrink — implement the executor instead",
