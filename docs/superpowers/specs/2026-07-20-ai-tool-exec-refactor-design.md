@@ -236,6 +236,16 @@ put_asset(id?, name, type, group_id?, config)   // 有 id → 更新，无 id �
   （仅 Kafka 有 `CloseAsset`，删除路径未调用）。AI 可以删掉用户正连着的资产，
   而终端标签页照常工作。工具描述不得暗示会断开连接。
 
+> **实施期修正（2026-07-21，Plan C 计划编写时）**：上面第二条的**断连部分已不成立**。
+> §9 第 5 条列的 issue 已在 `fix/exec-convergence-followups` 上实现并合回：
+> `internal/assetconn` 注册表把连接分成 Closer（交互式会话，删除时关）与 Invalidator
+> （缓存/池化连接，改配置和删除都丢），`asset_svc.Delete` 删除成功后广播、
+> `group_svc.Delete(deleteAssets=true)` 在事务提交后逐个补广播并逐条写 `delete_asset` 审计
+> （`fe71ee15`、`219b691d`）。
+> 因此 `delete_asset` 的工具描述**应当**说明连接会被断开——刻意未接的两处例外
+> （k8s 日志流、本地终端）见 `internal/assetconn` 包注释。
+> 仍然成立的是：凭据孤儿化、grant item 悬挂、软删除不可逆——这三条仍是"恒需确认、不可 grant"的理由。
+
 因此：**`delete_*` 恒需确认，且不可 grant。** grant 用于重复命令模式，
 "删除这个资产"不是可预批的模式。handler 在删除**之前**捕获名称并写入审计记录。
 
@@ -295,6 +305,20 @@ help 门禁把"可发现"升级为"有保证"：`exec` 解析资产 → 得到�
 校验模型给出的类型是在防一个不可能产生错误路由的场景，
 正是 AGENTS.md 所禁止的无意义防御式代码。
 
+> **补充（2026-07-21，Plan C）：CLI 侧是这条决策的一个有理由的例外。**
+> `opsctl exec <asset> [--type <t>] -- <command>` 接受一个**可选**的 `--type`，
+> `opsctl batch` 沿用既有的 `'sql:2:SELECT 1'` 前缀语法。二者都**不参与派发**——
+> 协议仍然只从资产记录取——只在给出时做一次校验：与资产真实类型不符则报错，
+> 且**报错发生在审批之前**（对照 Plan A 收尾评审的 IMPORTANT-1：serial 走统一 exec 时
+> "先弹审批、批准后才失败"）。
+>
+> 与工具侧不同的理由：CLI 的调用者是人或外部 agent 手敲的命令行，
+> 命令与资产是分两处输入的，把 redis 命令发给 database 资产是真实存在的手误面；
+> 而 `--type` 让它在协议层报「像基础设施故障」的错之前，先变成一条点名类型的建模错误
+> （与本节三条可供性措施同一意图）。
+> 这也让 `opsctl batch` 的前缀语法**无需破坏性变更**即可完成语义迁移：
+> 从"选 handler"变成"类型断言"，裸 `'1:uptime'` 继续可用。
+
 **一处诚实的局限**：五个原样透传的类型（ssh、serial、database、redis、k8s）
 无法靠解析发现错配，因为任何字符串在语法上都成立——`SELECT 1` 甚至在 SQL 与 Redis 中都合法。
 缓解手段不是解析，而是"资产被显式命名 + 派发由资产导出"，
@@ -329,6 +353,21 @@ mongo/etcd/kafka 的策略字符串形状改变：mongo 当前匹配裸 `"find"`
 
 - `opsctl exec <asset> -- <command>` 覆盖全部类型；`opsctl help <asset>`。
 - 旧 verb（`sql`/`redis`/`mongo`/`ssh`）移除——**已确认接受破坏性 CLI 变更**。
+
+> **实施期修正（2026-07-21，Plan C 计划编写时，对照真实代码）**：本节有两处需要更正。
+>
+> 1. **`ssh` verb 不移除。** 它不是 `exec` 的旧形态，而是**交互式 pty 会话**
+>    （`cmd/opsctl/command/ssh.go`：`term.MakeRaw` + 窗口 resize + 连接池代理），
+>    `exec` 无从替代。实际移除的只有 `sql` / `redis` / `mongo`。
+> 2. **`exec` 按类型分派，ssh 保留流式路径。** 今天的 `opsctl exec` 是 SSH 专用的**流式**通道：
+>    转发 stdin 管道、stdout/stderr 直写本地、透传远端 exit code
+>    （`exec.go`：proxy 快路径 + `helper.ExecWithStdio`）。统一 exec 的 handler 返回的是
+>    **捕获后的字符串**，全量改道会打断 `plugin/opsctl/skills/opsctl/SKILL.md` 里已文档化的
+>    管道工作流（`cat config.yml | opsctl exec web-01 -- tee ...`、
+>    `opsctl exec staging-db -- "mysqldump | gzip" > dump.gz`）。
+>    因此 `cmdExec` 先解析资产、取真实类型：ssh 走现有流式路径，其余类型走统一 `exec`。
+>    分派依据仍是资产的真实类型，OCP 不受影响。
+> 3. `--type` 可选断言与 `batch` 前缀语法的保留，见 §4.6 的补充。
 - 顺带盘活 `exec_etcd`/`exec_k8s`/`kafka_*`：这些 handler 已在 `AllToolDefs()` 注册，
   却没有任何 verb 能抵达（`root.go:110-136`），属于已注册的死代码。
 - `serial` 返回明确的"需要桌面端会话"错误——它依赖已连接的串口 session，
@@ -342,6 +381,14 @@ mongo/etcd/kafka 的策略字符串形状改变：mongo 当前匹配裸 `"find"`
 - `assetStore.ts:80-85` 的 `deleteAsset` 会同时清理 `useRecentAssetStore` 与
   `selectedAssetId`。AI 路径删除资产不会触发该清理，需要经由既有 `data:changed`
   事件让前端重取。
+
+> **实施期修正（2026-07-21，Plan C 计划编写时）**：`ApprovalBlock.tsx` 在本仓**已不存在**
+> （审批 UI 现为 `PermissionDialog.tsx`，它按 `tool_name` 只特判 `Bash`/`Read`/`Write`/`Edit`
+> 这些本地工具，不含资产类工具名，故不受工具改名影响）。
+> `ToolBlock.tsx` 的 `toolIcons` 表已含 `exec`/`help`（Plan A 收尾的 MINOR-5 已修），
+> Plan C 只需补 `put_asset`/`put_group`/`delete_asset`/`delete_group`/`ext_exec` 五个图标。
+> 第二条仍然成立，但需实测确认 AI 删除路径确实经 `internal/app/ai/notifier.go` 广播
+> `data:changed`（`App.tsx:61` 已在监听）。
 
 ## 8. 测试策略
 
