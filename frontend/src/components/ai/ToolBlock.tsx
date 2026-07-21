@@ -78,10 +78,12 @@ export const ToolBlock = memo(function ToolBlock({ block }: ToolBlockProps) {
           <code className="min-w-0 truncate text-muted-foreground font-mono text-[10px] ml-0.5">{block.toolInput}</code>
         )}
         <span className="ml-auto shrink-0">
-          {isError && <XCircle className="h-3.5 w-3.5 text-destructive/70" />}
-          {isCancelled && <XCircle className="h-3.5 w-3.5 text-muted-foreground/50" />}
+          {isError && <XCircle aria-label={t("toolBlock.failed")} className="h-3.5 w-3.5 text-destructive/70" />}
+          {isCancelled && (
+            <XCircle aria-label={t("toolBlock.cancelled")} className="h-3.5 w-3.5 text-muted-foreground/50" />
+          )}
           {!isRunning && !isError && !isCancelled && hasOutput && (
-            <CheckCircle2 className="h-3.5 w-3.5 text-success/70" />
+            <CheckCircle2 aria-label={t("toolBlock.succeeded")} className="h-3.5 w-3.5 text-success/70" />
           )}
         </span>
       </button>

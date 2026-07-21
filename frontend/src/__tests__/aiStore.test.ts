@@ -2049,6 +2049,24 @@ describe("retry/error handling", () => {
     expect(useAIStore.getState().conversationMessages[402].at(-1)?.retryStatus).toBeUndefined();
   });
 
+  it("tool_result 的结构化 is_error 将工具块标记为 error", async () => {
+    const cbs = await startStreamingConv(407);
+    cbs[0]?.({ type: "tool_start", tool_name: "upload_file", tool_input: "{}", tool_call_id: "cp-deny" });
+    cbs[0]?.({
+      type: "tool_result",
+      tool_name: "upload_file",
+      tool_call_id: "cp-deny",
+      content: "USER DENIED: transfer rejected",
+      is_error: true,
+    });
+
+    const toolBlock = useAIStore
+      .getState()
+      .conversationMessages[407].at(-1)
+      ?.blocks.find((block) => block.type === "tool");
+    expect(toolBlock?.status).toBe("error");
+  });
+
   it("error 事件 push 一个 ErrorBlock 并 classify 分类", async () => {
     const cbs = await startStreamingConv(403);
     cbs[0]?.({ type: "error", error: "401 unauthorized: invalid api key" });
