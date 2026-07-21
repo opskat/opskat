@@ -194,12 +194,18 @@ export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelPr
 
             {!activeSidebarTab ? (
               <div className="flex-1 flex items-center justify-center p-4 text-center text-sm text-muted-foreground">
-                <Trans
-                  i18nKey="ai.sidebar.emptyGuide"
-                  components={{
-                    history: <History className="inline-block h-3.5 w-3.5 mx-0.5 align-text-bottom" />,
-                  }}
-                />
+                {/* Trans 展开成「文本 + 图标 + 文本」三个并列节点。直接放进 flex 容器时，
+                    每段连续文本会各自成为一个匿名 flex item，三者被当作同一行里的三个
+                    兄弟盒子排布——长文本折行后，图标与其后的文字会被甩到右侧、与文字
+                    错开。这个 span 把它们收进同一个 flex item，恢复正常的行内文本流。 */}
+                <span>
+                  <Trans
+                    i18nKey="ai.sidebar.emptyGuide"
+                    components={{
+                      history: <History className="inline-block h-3.5 w-3.5 mx-0.5 align-text-bottom" />,
+                    }}
+                  />
+                </span>
               </div>
             ) : (
               <div className="flex-1 min-h-0 flex flex-col">
