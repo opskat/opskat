@@ -36,7 +36,7 @@ type ToolDef struct {
 }
 
 // AllToolDefs 返回 opsctl CLI 派发用的工具列表。
-// 它不是 Tools() 的镜像：batch_command 在 opsctl 中有独立的 batch 子命令入口，
+// 它不是 Tools() 的镜像：batch_exec 在 opsctl 中有独立的 batch 子命令入口，
 // 不走 name→handler 派发表。
 //
 // opsctl 的 sql / redis / mongo / batch 子命令按名字在这张表里查 handler

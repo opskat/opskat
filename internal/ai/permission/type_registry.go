@@ -45,6 +45,15 @@ func permissionTypeFor(name string) (*permissionTypeHandler, bool) {
 	return handler, ok
 }
 
+// ApprovalTypeFor 返回该资产类型在审批面板上的类型标签（前端 TypeBadge 按它取图标）。
+// 未注册类型回落到原样返回——审批项宁可显示一个陌生标签，也不该静默变成 "exec"。
+func ApprovalTypeFor(assetType string) string {
+	if handler, ok := permissionTypeFor(assetType); ok {
+		return handler.approvalType
+	}
+	return assetType
+}
+
 func init() {
 	registerPermissionType(asset_entity.AssetTypeSSH, "exec", true, checkCommandPolicyPermission, "exec")
 	registerPermissionType(asset_entity.AssetTypeSerial, "serial", false, checkCommandPolicyPermission)

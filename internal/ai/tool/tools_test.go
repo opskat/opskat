@@ -16,7 +16,7 @@ func TestTools_RegistryShape(t *testing.T) {
 	Convey("Tools 返回的工具集与既定契约一致", t, func() {
 		tools := Tools()
 
-		// batch_command 属于桌面端并行批量能力；spawn_agent 不属于 OpsKat 工具集。
+		// batch_exec 属于桌面端并行批量能力；spawn_agent 不属于 OpsKat 工具集。
 		names := make(map[string]tool.Tool, len(tools))
 		for _, t := range tools {
 			names[t.Name()] = t
@@ -32,7 +32,7 @@ func TestTools_RegistryShape(t *testing.T) {
 			"list_groups", "get_group", "add_group", "update_group",
 			// exec
 			"upload_file", "download_file",
-			"request_permission", "batch_command",
+			"request_permission", "batch_exec",
 			// extension
 			"exec_tool",
 			// unified

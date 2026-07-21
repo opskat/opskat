@@ -85,7 +85,7 @@ func TestHandleExec_PreapprovedRunsWithoutChecker(t *testing.T) {
 
 // TestHandleBatchCommand_FailsClosedWithoutChecker 钉住批量路径同样 fail-closed。
 //
-// batch_command 只对 AI 会话开放（不在 AllToolDefs 里，opsctl 走自己的 batch 子命令），
+// batch_exec 只对 AI 会话开放（不在 AllToolDefs 里，opsctl 走自己的 batch 子命令），
 // 所以它不接受 WithPreapproved 豁免。从前 checker 为 nil 时每一项的 decision 都停在
 // 初值 "allow"——整批命令一条不查地并发打到所有资产上，比单条 exec 的漏洞面大得多。
 func TestHandleBatchCommand_FailsClosedWithoutChecker(t *testing.T) {
@@ -104,7 +104,7 @@ func TestHandleBatchCommand_FailsClosedWithoutChecker(t *testing.T) {
 
 // TestHandleBatchCommand_PreapprovedStillFailsClosed 钉住豁免的边界：batch 不吃
 // WithPreapproved。opsctl 的 batch 子命令自己调 permission.CheckPermission，从不经过
-// 这个 handler；哪天有人把 batch_command 加进 AllToolDefs，这条会红，逼他先想清楚
+// 这个 handler；哪天有人把 batch_exec 加进 AllToolDefs，这条会红，逼他先想清楚
 // 审批聚合（ConfirmFunc）在 CLI 下由谁承担。
 func TestHandleBatchCommand_PreapprovedStillFailsClosed(t *testing.T) {
 	setupUnified(t)
@@ -113,6 +113,6 @@ func TestHandleBatchCommand_PreapprovedStillFailsClosed(t *testing.T) {
 		"commands": `[{"asset":"42","type":"exec","command":"uptime"}]`,
 	})
 	if err == nil {
-		t.Fatal("batch_command must not honor the opsctl preapproved exemption")
+		t.Fatal("batch_exec must not honor the opsctl preapproved exemption")
 	}
 }

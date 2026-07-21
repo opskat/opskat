@@ -43,7 +43,7 @@ func AssertAssetType(asset *asset_entity.Asset, declared string) error {
 	}
 	if canonical != asset.Type {
 		return fmt.Errorf("asset %q is type=%s, but you passed type=%s — call help(asset=%q) for its command syntax",
-			asset.Name, asset.Type, canonical, asset.Name)
+			asset.Name, asset.Type, declared, asset.Name)
 	}
 	return nil
 }

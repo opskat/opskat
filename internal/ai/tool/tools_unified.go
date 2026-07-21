@@ -28,7 +28,7 @@ func unifiedTools() []tool.Tool {
 				"The first time you use exec against a given asset type in a conversation, call help first " +
 				"to learn its command syntax; exec will tell you to if you skip that step. " +
 				"Credentials are resolved automatically from the app's encrypted store — do not ask the user for passwords. " +
-				"Pass type=<asset type> when you know it: a wrong guess is caught before execution. ",
+				"Pass type=<asset type> when you know it: a wrong guess is caught before execution.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{

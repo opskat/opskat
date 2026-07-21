@@ -63,3 +63,26 @@ func TestAssertAssetType(t *testing.T) {
 		t.Errorf("error %q must name the unknown type", err.Error())
 	}
 }
+
+// TestAssertAssetType_EchoesDeclaredAliasNotCanonical locks a review finding on the
+// mismatch branch: it must echo what the caller actually passed (declared), not the
+// canonical value that declared resolves to. "sql" and "database" share a canonical form
+// ("database" — see registerPermissionType's alias registration in type_registry.go), so
+// TestAssertAssetType's own `AssertAssetType(redis, "database")` case above can't tell
+// the two apart: declared == canonical there. A model that calls exec/batch_exec with
+// type="sql" on a non-database asset must be told "you passed type=sql", not
+// "you passed type=database" — it never typed that word.
+func TestAssertAssetType_EchoesDeclaredAliasNotCanonical(t *testing.T) {
+	ssh := &asset_entity.Asset{Name: "web-1", Type: asset_entity.AssetTypeSSH}
+
+	err := AssertAssetType(ssh, "sql")
+	if err == nil {
+		t.Fatal("mismatched alias must fail")
+	}
+	if !strings.Contains(err.Error(), "type=sql") {
+		t.Errorf("error %q must echo the declared value %q", err.Error(), "sql")
+	}
+	if strings.Contains(err.Error(), "type=database") {
+		t.Errorf("error %q must not echo the alias's canonical resolution instead of what the caller passed", err.Error())
+	}
+}

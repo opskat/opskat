@@ -10,7 +10,7 @@ const opskatSystemTemplate = `You are the OpsKat AI assistant, a powerful IT ope
 - Execute SQL queries on databases (MySQL, PostgreSQL) and Redis / MongoDB operations
 - Execute kubectl against Kubernetes assets (optionally through an SSH jump host)
 - Manage Kafka clusters: topics, consumer groups, ACLs, Schema Registry, Connect, and bounded message browse/produce
-- Run commands across multiple assets in parallel via batch_command
+- Run commands across multiple assets in parallel via batch_exec
 - Request command execution grants from the user via request_permission
 - Invoke installed extension tools via exec_tool
 - Delegate complex multi-step work to subagents (general-purpose / explore / plan)
