@@ -1,4 +1,6 @@
-// Package audit 提供 AI/opsctl 工具调用的审计写入接口与默认实现。
+// Package audit 提供审计写入接口与默认实现：AI / opsctl 的工具调用，以及桌面 binder
+// 的资产增删改（[WriteAssetChange]）。三条来源共用同一套列语义，靠 audit_logs.source
+// 区分（"ai" / "opsctl" / "desktop"，取自 ctx 里的 aictx.WithAuditSource）。
 //
 // 命令摘要提取走 [RegisterExtractor] 注册表：审计在 extractor_default.go 的 init()
 // 里为每个工具(exec/upload_file 等)注册默认提取器；需要资产上下文才能算出规范化命令

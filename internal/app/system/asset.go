@@ -10,6 +10,7 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/audit"
 	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -155,19 +156,44 @@ func (s *System) ListAssets(assetType string, groupID int64) ([]*asset_entity.As
 	return asset_svc.Asset().List(i18n.Ctx(s.ctx, s.Lang()), assetType, groupID)
 }
 
+// desktopCtx 桌面 binder 的调用上下文：在 i18n 之上标记审计来源为 "desktop"。
+//
+// audit_logs.source 用它区分同一件事是从界面、AI 会话（ai）还是 CLI（opsctl）做的。
+// 标在这里而不是各调用点，是为了让"经 System 发起 == 桌面来源"这件事只有一个说法。
+func (s *System) desktopCtx() context.Context {
+	return aictx.WithAuditSource(i18n.Ctx(s.ctx, s.Lang()), "desktop")
+}
+
 // CreateAsset 创建资产
 func (s *System) CreateAsset(asset *asset_entity.Asset) error {
-	return asset_svc.Asset().Create(i18n.Ctx(s.ctx, s.Lang()), asset)
+	ctx := s.desktopCtx()
+	err := asset_svc.Asset().Create(ctx, asset)
+	audit.WriteAssetChange(ctx, audit.ActionAddAsset, asset, err)
+	return err
 }
 
 // UpdateAsset 更新资产
 func (s *System) UpdateAsset(asset *asset_entity.Asset) error {
-	return asset_svc.Asset().Update(i18n.Ctx(s.ctx, s.Lang()), asset)
+	ctx := s.desktopCtx()
+	err := asset_svc.Asset().Update(ctx, asset)
+	audit.WriteAssetChange(ctx, audit.ActionUpdateAsset, asset, err)
+	return err
 }
 
 // DeleteAsset 删除资产
+//
+// 先把资产读出来：审计行要记名字和类型，而删除之后就查不到了（asset_repo 按
+// status 过滤）。读不到就直接返回错误，不删——删一个读不出来的资产，既写不出
+// 有意义的审计行，本身也说明前端拿的是一份过期列表。
 func (s *System) DeleteAsset(id int64) error {
-	return asset_svc.Asset().Delete(i18n.Ctx(s.ctx, s.Lang()), id)
+	ctx := s.desktopCtx()
+	asset, err := asset_svc.Asset().Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	err = asset_svc.Asset().Delete(ctx, id)
+	audit.WriteAssetChange(ctx, audit.ActionDeleteAsset, asset, err)
+	return err
 }
 
 // MoveAsset 移动资产排序（up/down/top）
