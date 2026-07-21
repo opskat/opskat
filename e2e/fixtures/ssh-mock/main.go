@@ -87,11 +87,24 @@ func handleConn(conn net.Conn, config *ssh.ServerConfig) {
 	}
 }
 
+// handleSession answers one session request. "exec" echoes the command it was
+// given back on stdout — that echo is what lets an AI-exec spec prove the string
+// the *server* received is the same one the approval dialog showed and the audit
+// row recorded, rather than only comparing the app's own two copies of it.
 func handleSession(channel ssh.Channel, requests <-chan *ssh.Request) {
 	defer func() { _ = channel.Close() }()
 	for req := range requests {
 		switch req.Type {
-		case "exec", "shell":
+		case "exec":
+			_ = req.Reply(true, nil)
+			// RFC 4254 §6.5: the "exec" payload is a single string field.
+			var payload struct{ Command string }
+			if err := ssh.Unmarshal(req.Payload, &payload); err == nil {
+				_, _ = fmt.Fprintf(channel, "mock-exec-ran: %s\n", payload.Command)
+			}
+			_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{Status: 0}))
+			return
+		case "shell":
 			_ = req.Reply(true, nil)
 			_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{Status: 0}))
 			return

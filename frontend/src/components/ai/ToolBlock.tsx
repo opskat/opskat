@@ -54,6 +54,9 @@ export const ToolBlock = memo(function ToolBlock({ block }: ToolBlockProps) {
 
   return (
     <div
+      data-testid="ai-tool-block"
+      data-tool-name={block.toolName}
+      data-status={block.status}
       className={`my-1.5 rounded-lg border bg-background text-xs overflow-hidden ${
         isRunning ? "border-primary/30" : "border-border/60"
       }`}
@@ -107,7 +110,10 @@ export const ToolBlock = memo(function ToolBlock({ block }: ToolBlockProps) {
                   {t("toolBlock.output")}
                 </div>
               )}
-              <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground leading-relaxed">
+              <pre
+                data-testid="ai-tool-output"
+                className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground leading-relaxed"
+              >
                 {block.content}
               </pre>
             </div>
