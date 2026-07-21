@@ -602,6 +602,21 @@ func (m *Manager) Disconnect(sessionID string) {
 	m.closeSession(sessionID)
 }
 
+// CloseAsset 关闭指定资产的全部串口会话。
+// 不复用 GetSessionByAssetID：它只返回首个匹配，而会话表并不保证一个资产只有一个会话。
+func (m *Manager) CloseAsset(assetID int64) {
+	var sessionIDs []string
+	m.sessions.Range(func(key, value any) bool {
+		if sess, ok := value.(*Session); ok && sess.AssetID == assetID {
+			sessionIDs = append(sessionIDs, key.(string))
+		}
+		return true
+	})
+	for _, sessionID := range sessionIDs {
+		m.closeSession(sessionID)
+	}
+}
+
 // CloseAll 关闭所有活跃串口会话。
 func (m *Manager) CloseAll() {
 	var sessionIDs []string

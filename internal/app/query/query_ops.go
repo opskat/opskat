@@ -29,7 +29,7 @@ import (
 // 的 MaxOpenConns=1 让并发面板操作排队复用同一条连接,而非各自重连抢锁、并发时硬失败。
 func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, password string) (*sql.DB, func() error, error) {
 	key := panelDBCacheKey(asset.ID, cfg)
-	db, _, err := q.dbPanelCache.GetOrDial(key, func() (*sql.DB, io.Closer, error) {
+	db, _, err := q.dbPanelCache.GetOrDial(asset.ID, key, func() (*sql.DB, io.Closer, error) {
 		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 		return connpool.DialDatabase(ctx, asset, cfg, password, q.pool)
 	})
@@ -59,7 +59,7 @@ func finishPanelDBOperation(opErr error, cleanup func() error) error {
 // getOrDialPanelRedis 从面板缓存取 *redis.Client。
 func (q *Query) getOrDialPanelRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig, password string) (*redis.Client, error) {
 	key := fmt.Sprintf("%d:%d", asset.ID, cfg.Database)
-	client, _, err := q.redisPanelCache.GetOrDial(key, func() (*redis.Client, io.Closer, error) {
+	client, _, err := q.redisPanelCache.GetOrDial(asset.ID, key, func() (*redis.Client, io.Closer, error) {
 		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 		return connpool.DialRedis(ctx, asset, cfg, password, q.pool)
 	})
@@ -72,7 +72,7 @@ func (q *Query) getOrDialPanelRedis(ctx context.Context, asset *asset_entity.Ass
 // getOrDialPanelMongo 从面板缓存取 mongo 客户端。
 func (q *Query) getOrDialPanelMongo(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.MongoDBConfig, password string) (*connpool.MongoClientCloser, error) {
 	key := fmt.Sprintf("%d", asset.ID)
-	wrapped, _, err := q.mongoPanelCache.GetOrDial(key, func() (*connpool.MongoClientCloser, io.Closer, error) {
+	wrapped, _, err := q.mongoPanelCache.GetOrDial(asset.ID, key, func() (*connpool.MongoClientCloser, io.Closer, error) {
 		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
 		client, closer, derr := connpool.DialMongoDB(ctx, asset, cfg, password, q.pool)
 		if derr != nil {

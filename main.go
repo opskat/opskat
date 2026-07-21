@@ -30,6 +30,7 @@ import (
 	"github.com/opskat/opskat/internal/app/vnc"
 
 	aitool "github.com/opskat/opskat/internal/ai/tool"
+	"github.com/opskat/opskat/internal/assetconn"
 	_ "github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/pkg/portable"
@@ -154,6 +155,16 @@ func main() {
 	serialMgr := serial_svc.NewManager()
 	localMgr := localterm_svc.NewManager()
 	vncMgr := vnc_svc.NewManager(asset_repo.Asset())
+	// serial / vnc 的管理器由 main 持有（binder 只拿到引用），所以在这里登记
+	// 「资产被删除时断开它的会话」；ssh/rdp/kafka/query 等在各自 binder 里登记。
+	assetconn.Register("serial", func(_ context.Context, assetID int64) error {
+		serialMgr.CloseAsset(assetID)
+		return nil
+	})
+	assetconn.Register("vnc", func(_ context.Context, assetID int64) error {
+		vncMgr.CloseAsset(assetID)
+		return nil
+	})
 	poolDialer := &sshadapt.PoolDialer{}
 	pool := sshpool.NewPool(poolDialer, 5*time.Minute)
 	proxyServer := sshpool.NewServer(pool, authToken)

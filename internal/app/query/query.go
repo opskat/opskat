@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/connpool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/conntest"
@@ -59,6 +60,17 @@ func (q *Query) Startup(ctx context.Context) {
 	go q.dbPanelCache.startEvictor(q.evictCtx, panelConnEvictInterval)
 	go q.redisPanelCache.startEvictor(q.evictCtx, panelConnEvictInterval)
 	go q.mongoPanelCache.startEvictor(q.evictCtx, panelConnEvictInterval)
+	// 在这里而不是 New 里注册：三个缓存到 Startup 才建出来。
+	assetconn.Register("query-panel", q.closeAssetConns)
+}
+
+// closeAssetConns 丢弃该资产在三个面板缓存里的连接（一个资产可能缓存了多个库 / 多个
+// redis db index）。资产删除时由 assetconn 广播。
+func (q *Query) closeAssetConns(_ context.Context, assetID int64) error {
+	q.dbPanelCache.DropAsset(assetID)
+	q.redisPanelCache.DropAsset(assetID)
+	q.mongoPanelCache.DropAsset(assetID)
+	return nil
 }
 
 // Cleanup 关闭 evictor 并释放所有缓存连接。

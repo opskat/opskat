@@ -2,8 +2,10 @@ package asset_svc
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
@@ -90,12 +92,30 @@ func TestAssetSvc_List(t *testing.T) {
 func TestAssetSvc_Delete(t *testing.T) {
 	ctx, mockRepo := setupTest(t)
 
+	// 资产删除后必须断开它的在用连接，这里用一个假 closer 观察 assetconn 是否被触发。
+	var closed []int64
+	assetconn.Register("asset_svc_test", func(_ context.Context, assetID int64) error {
+		closed = append(closed, assetID)
+		return nil
+	})
+
 	convey.Convey("删除资产", t, func() {
-		convey.Convey("软删除成功", func() {
+		convey.Convey("软删除成功后断开在用连接", func() {
+			closed = nil
 			mockRepo.EXPECT().Delete(gomock.Any(), int64(1)).Return(nil)
 
 			err := Asset().Delete(ctx, 1)
 			assert.NoError(t, err)
+			assert.Equal(t, []int64{1}, closed)
+		})
+
+		convey.Convey("删除失败不断开连接", func() {
+			closed = nil
+			mockRepo.EXPECT().Delete(gomock.Any(), int64(2)).Return(errors.New("db down"))
+
+			err := Asset().Delete(ctx, 2)
+			assert.Error(t, err)
+			assert.Empty(t, closed)
 		})
 	})
 }

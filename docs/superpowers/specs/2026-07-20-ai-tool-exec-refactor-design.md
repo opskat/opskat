@@ -370,8 +370,8 @@ mongo/etcd/kafka 的策略字符串形状改变：mongo 当前匹配裸 `"find"`
    传递性地保证了 checker 非 nil。属结构性隐患（不变式由赋值顺序承载，无类型/测试锁定），
    不是活的漏洞——定优先级时别按后者算。*
 3. ✅ [#250](https://github.com/opskat/opskat/issues/250) `local` / `oss` 的 AI 工具支持（豁免清单清零）。
-4. `group_svc.Delete` 事务化。
-5. 删除资产时断开在用连接。
+4. ✅ `group_svc.Delete` 事务化。
+5. ✅ 删除资产时断开在用连接（`internal/assetconn` 注册表 + `asset_svc.Delete` 删除成功后广播）。
 6. 桌面 UI 路径的资产 CRUD 未写审计（`Source: "desktop"` 有定义但无写入方）。
 
-1–3 已于 2026-07-20 随 Plan A 收尾开出；4–6 未开。
+1–3 已于 2026-07-20 随 Plan A 收尾开出；4–6 未开 issue，其中 4、5 已直接实现。

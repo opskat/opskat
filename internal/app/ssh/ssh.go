@@ -5,6 +5,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/transfer"
 	"github.com/opskat/opskat/internal/service/conntest"
@@ -77,7 +78,19 @@ func New(appCtx context.Context, lang LangProvider, mgr *ssh_svc.Manager, sftp *
 	s.forwardManager = NewForwardManager(&poolDialer{})
 	s.forward = forward_svc.New(s.forwardManager)
 	conntest.Register(asset_entity.AssetTypeSSH, s.testConnection)
+	assetconn.Register("ssh", s.closeAssetConns)
 	return s
+}
+
+// closeAssetConns 断开该资产在 SSH 侧的一切在用连接：终端会话（连带挂在会话上的
+// SFTP 客户端）、端口转发、以及各协议共用的 SSH 隧道池条目。资产删除时由 assetconn 广播。
+func (s *SSH) closeAssetConns(_ context.Context, assetID int64) error {
+	for _, sessionID := range s.manager.CloseAsset(assetID) {
+		s.sftp.CleanupSession(sessionID)
+	}
+	s.forwardManager.CloseAsset(assetID)
+	s.pool.Remove(assetID)
+	return nil
 }
 
 // nextConnectionID 生成跨重启唯一的连接中转 ID(连接中阶段的 tab id),

@@ -2,6 +2,7 @@ package rdp_svc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -497,6 +498,26 @@ func (s *Service) closeSession(sess *session) {
 	if sess.clipboardTempDir != "" {
 		_ = os.RemoveAll(sess.clipboardTempDir)
 	}
+}
+
+// CloseAsset 关闭指定资产的全部 RDP 会话。
+// 与 Close 一样只关 client：会话表由 frameLoop 收到 done 后经 closeSession 摘除。
+func (s *Service) CloseAsset(assetID int64) error {
+	s.mu.Lock()
+	sessions := make([]*session, 0, len(s.sessions))
+	for _, sess := range s.sessions {
+		if sess.assetID == assetID {
+			sessions = append(sessions, sess)
+		}
+	}
+	s.mu.Unlock()
+	var errs []error
+	for _, sess := range sessions {
+		if err := sess.client.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (s *Service) CloseAll() {

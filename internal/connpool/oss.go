@@ -15,9 +15,17 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
+	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"go.uber.org/zap"
 )
+
+func init() {
+	assetconn.Register("oss", func(_ context.Context, assetID int64) error {
+		InvalidateOSS(assetID)
+		return nil
+	})
+}
 
 // buildMinioOptions 从 OSS 配置 + 解密后的密钥推导 minio 端点与选项(纯函数,单测)。
 func buildMinioOptions(ctx context.Context, cfg *asset_entity.OSSConfig, secret string) (string, *minio.Options, error) {

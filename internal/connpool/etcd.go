@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
+	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/sshpool"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -140,6 +141,10 @@ func init() {
 			globalEtcdPool.gc(5 * time.Minute)
 		}
 	}()
+	assetconn.Register("etcd", func(_ context.Context, assetID int64) error {
+		InvalidateEtcd(assetID)
+		return nil
+	})
 }
 
 // InvalidateEtcd 资产更新/删除时调用,强制清理缓存的客户端。

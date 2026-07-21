@@ -8,6 +8,7 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 
+	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/pkg/dbutil"
@@ -82,7 +83,13 @@ func (s *assetSvc) Update(ctx context.Context, asset *asset_entity.Asset) error 
 }
 
 func (s *assetSvc) Delete(ctx context.Context, id int64) error {
-	return asset_repo.Asset().Delete(ctx, id)
+	if err := asset_repo.Asset().Delete(ctx, id); err != nil {
+		return err
+	}
+	// 资产已经删了，各协议管理器里挂着的会话/客户端必须跟着断开，否则会一直连着一个不存在的资产。
+	// 关闭失败由 assetconn 内部按 closer 记日志：删除本身已经成功，没有可回滚的东西。
+	assetconn.CloseAsset(ctx, id)
+	return nil
 }
 
 // Move 移动资产排序（up/down/top）

@@ -4,6 +4,7 @@ package kafka
 import (
 	"context"
 
+	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/service/kafka_svc"
@@ -33,6 +34,10 @@ func New(appCtx context.Context, lang LangProvider, pool *sshpool.Pool) *Kafka {
 		service: kafka_svc.New(pool),
 	}
 	conntest.Register(asset_entity.AssetTypeKafka, k.testConnection)
+	assetconn.Register("kafka", func(_ context.Context, assetID int64) error {
+		k.service.CloseAsset(assetID)
+		return nil
+	})
 	return k
 }
 
