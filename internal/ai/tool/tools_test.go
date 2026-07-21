@@ -27,12 +27,10 @@ func TestTools_RegistryShape(t *testing.T) {
 			"list_assets", "get_asset", "add_asset", "update_asset",
 			"list_groups", "get_group", "add_group", "update_group",
 			// exec
-			"run_command", "upload_file", "download_file", "request_permission", "batch_command",
+			"run_command", "run_serial_command", "upload_file", "download_file",
+			"request_permission", "batch_command",
 			// data
 			"exec_sql", "exec_redis", "exec_mongo", "exec_k8s", "exec_etcd",
-			// kafka
-			"kafka_cluster", "kafka_topic", "kafka_consumer_group", "kafka_acl",
-			"kafka_schema", "kafka_connect", "kafka_message",
 			// extension
 			"exec_tool",
 			// unified
@@ -45,13 +43,20 @@ func TestTools_RegistryShape(t *testing.T) {
 			}
 		})
 
+		// ShouldContainKey 不检查穷尽性，所以单靠上面那条断言，删掉 7 个 kafka 工具
+		// 之后测试会反常地继续通过。这条数量断言是唯一能发现"注册了却没人知道"的
+		// 检查——run_serial_command 正是这样漂移了很久（注册着，却不在任何清单里，
+		// 本次才补进 expected）。删工具时必须同步改这里。
+		Convey("没有清单之外的工具（穷尽性）", func() {
+			So(len(tools), ShouldEqual, len(expected))
+		})
+
 		Convey("命令类工具标 Serial", func() {
 			serialNames := []string{
-				"run_command", "upload_file", "download_file", "request_permission",
+				"run_command", "run_serial_command", "upload_file", "download_file",
+				"request_permission",
 				"exec_sql", "exec_redis", "exec_mongo", "exec_k8s", "exec_etcd",
 				"exec_tool",
-				"kafka_cluster", "kafka_topic", "kafka_consumer_group", "kafka_acl",
-				"kafka_schema", "kafka_connect", "kafka_message",
 				"exec",
 			}
 			for _, name := range serialNames {

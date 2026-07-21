@@ -4,6 +4,7 @@ import (
 	"context"
 	"maps"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -11,7 +12,6 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
-	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/kafka_svc"
 )
@@ -321,7 +321,7 @@ func TestCanonicalizeKafkaCommand_AcceptsDocumentedCommands(t *testing.T) {
 		`connect resume myconnector`,
 		`connect restart myconnector --include-tasks --only-failed`,
 		`connect delete myconnector`,
-		`message browse orders --partition=0 --start-mode=latest --limit=100 --decode-mode=json`,
+		`message browse orders --partition=0 --start-mode=newest --limit=100 --decode-mode=json`,
 		`message inspect orders --offset=1000 --partition=0`,
 		`message produce orders --value='{"a":1}' --key=k1 --value-encoding=string --headers='[{"key":"h","value":"v"}]'`,
 	}
@@ -814,55 +814,72 @@ func kafkaCoverageRequest(t *testing.T, c kafkaFlagCoverageCase, flags map[strin
 
 // TestExecKafkaOnAsset_DispatchesToItsOwnFamilyHandler 钉住 7 路分派。
 //
-// 把 `case "topic"` 接到 HandleKafkaConsumerGroup 上，整个测试套件此前是全绿的——
-// 而它在生产里意味着"删 topic"的请求走进了 consumer group 处理器：同一个资产上
-// **另一类资源**被操作，或者更常见地，静默失败在一个看不懂的错误上。
+// 把 topic 接到 HandleKafkaConsumerGroup 上，整个测试套件此前是全绿的——而它在生产里
+// 意味着"删 topic"的请求走进了 consumer group 处理器：同一个资产上**另一类资源**被
+// 操作，或者更常见地，静默失败在一个看不懂的错误上。
 //
-// 观察点选权限检查而不是 service 调用：每个 Handle* 在碰服务之前都会先算出**自己家族的**
-// 策略串交给 checker（kafka_helper.go 各函数开头），所以 checker 收到的串就是"哪个
-// handler 真的跑了"的指纹；回调返回 deny，函数在此返回，全程不连集群。
-// 这也顺带证明了 ExecKafkaOnAsset → Handle* → 权限检查这条链是通的。
+// 本用例原先用"权限 checker 收到哪个家族的策略串"当 handler 指纹。摘掉 HandleKafka*
+// 内部的权限检查（检查上移到 handleExec）之后那个观察点没有了，而错误文本区分不出
+// acl —— 它的 list / create / delete 三个 operation 在 topic / connect 等 handler 里
+// 都存在，接错线也只会得到同一个"Kafka 配置为空"。所以分派改成了 kafkaFamilyHandlers
+// 这张表，这里直接比对函数指针，并额外锁住表的 key 集合与 kafkaVerbs 完全一致。
 func TestExecKafkaOnAsset_DispatchesToItsOwnFamilyHandler(t *testing.T) {
-	// 每条都特意避开 BuiltinKafkaDangerousDeny 的 deny 列表（topic.delete /
-	// consumer_group.delete / acl.write / schema.delete / connect.delete …）：
-	// 命中 deny 时 checker 直接返回，回调根本不触发，断言就成了空转。
-	cases := []struct{ command, wantPolicyCommand string }{
-		{`cluster overview`, "cluster.read *"},
-		{`topic describe orders`, "topic.read orders"},
-		{`consumer-group describe mygroup`, "consumer_group.read mygroup"},
-		{`acl list`, "acl.read *"},
-		{`schema register subj --schema='{}'`, "schema.write subj"},
-		{`connect pause conn`, "connect.state.write conn"},
-		{`message produce orders --value=x`, "message.write orders"},
+	want := map[string]func(context.Context, map[string]any) (string, error){
+		"cluster":        HandleKafkaCluster,
+		"topic":          HandleKafkaTopic,
+		"consumer-group": HandleKafkaConsumerGroup,
+		"acl":            HandleKafkaACL,
+		"schema":         HandleKafkaSchema,
+		"connect":        HandleKafkaConnect,
+		"message":        HandleKafkaMessage,
 	}
-	for _, c := range cases {
-		t.Run(c.command, func(t *testing.T) {
+
+	// 少一个 family：命令解析得过（kafkaVerbs 认它），执行时 fail closed，那个 family
+	// 在统一 exec 下整体不可达。多一个：一个永远够不着的 handler。
+	if got, wantKeys := slices.Sorted(maps.Keys(kafkaFamilyHandlers)), slices.Sorted(maps.Keys(kafkaVerbs)); !slices.Equal(got, wantKeys) {
+		t.Fatalf("kafkaFamilyHandlers covers %v, kafkaVerbs accepts %v — every family the DSL parses must have a handler, and vice versa", got, wantKeys)
+	}
+	for family, wantFn := range want {
+		gotFn, ok := kafkaFamilyHandlers[family]
+		if !ok {
+			t.Fatalf("kafkaFamilyHandlers has no entry for %q", family)
+		}
+		if reflect.ValueOf(gotFn).Pointer() != reflect.ValueOf(wantFn).Pointer() {
+			t.Fatalf("kafkaFamilyHandlers[%q] = %s, want %s — the family dispatch is wired to the wrong handler",
+				family, runtime.FuncForPC(reflect.ValueOf(gotFn).Pointer()).Name(),
+				runtime.FuncForPC(reflect.ValueOf(wantFn).Pointer()).Name())
+		}
+	}
+}
+
+// TestExecKafkaOnAsset_ReachesTheHandler 端到端锁住 ExecKafkaOnAsset → kafkaFlagsToArgs
+// → HandleKafka* 这条链是通的：上面那个用例只看表，看不出表有没有被真的用上。
+//
+// 判据是错误来自**资产没有 Kafka 配置**（handler 里 kafkaServiceFromCtx 之后的第一步），
+// 而不是 "unsupported kafka command"——后者说明 args 里的 operation 到了一个不认识它的
+// handler，也就是分派或 kafkaOperationFor 错了。
+func TestExecKafkaOnAsset_ReachesTheHandler(t *testing.T) {
+	commands := []string{
+		`cluster overview`,
+		`topic describe orders`,
+		`consumer-group describe mygroup`,
+		`acl list`,
+		`schema register subj --schema='{}'`,
+		`connect pause conn`,
+		`message produce orders --value=x`,
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
 			ctx, mockAsset, _ := setupPolicyTest(t)
-			asset := &asset_entity.Asset{
-				ID: 1, Name: "kafka-prod", Type: asset_entity.AssetTypeKafka,
-				// 一条谁也匹配不上的 allowlist：让每条命令都落到 NeedConfirm，
-				// 从而必然经过下面这个回调。
-				CmdPolicy: mustJSON(asset_entity.CommandPolicy{AllowList: []string{"nothing.matches *"}}),
-			}
+			asset := &asset_entity.Asset{ID: 1, Name: "kafka-prod", Type: asset_entity.AssetTypeKafka}
 			mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
 
-			var gotPolicyCommand string
-			checker := permission.NewCommandPolicyChecker(
-				func(_ context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
-					if len(items) > 0 {
-						gotPolicyCommand = items[0].Command
-					}
-					return permission.ApprovalResponse{Decision: "deny"}
-				})
-			ctx = permission.WithPolicyChecker(ctx, checker)
-
-			if _, err := ExecKafkaOnAsset(ctx, asset, c.command, ""); err != nil {
-				t.Fatalf("ExecKafkaOnAsset(%q) unexpected error: %v", c.command, err)
+			_, err := ExecKafkaOnAsset(ctx, asset, command, "")
+			if err == nil {
+				t.Fatalf("ExecKafkaOnAsset(%q) = nil error, want the handler to be reached and fail on the asset's empty Kafka config", command)
 			}
-			if gotPolicyCommand != c.wantPolicyCommand {
-				t.Fatalf("ExecKafkaOnAsset(%q) reached the handler that checks %q, want the one that checks %q "+
-					"— the family dispatch is wired to the wrong handler",
-					c.command, gotPolicyCommand, c.wantPolicyCommand)
+			if strings.Contains(err.Error(), "unsupported kafka command") {
+				t.Fatalf("ExecKafkaOnAsset(%q) = %v — the operation reached a handler that does not know it", command, err)
 			}
 		})
 	}

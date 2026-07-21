@@ -2,6 +2,8 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -69,19 +71,23 @@ func TestHandleExec_KafkaChecksTwoTokenPolicyString(t *testing.T) {
 	}
 }
 
-// TestHandleExec_KafkaIsCheckedTwiceUntilLegacyToolsAreRemoved 如实记录注册后的中间态：
-// 同一条命令会被检查**两次**——handleExec 一次（用 CanonicalizeKafkaCommand 的产物），
-// HandleKafkaTopic 内部的 checkKafkaToolPermission 再一次（用它自己从结构化 args 拼出的
-// 策略串）。7 个 kafka_* 工具还注册着、模型可以直接调用，摘掉内部那次检查必须与删除
-// 那 7 个工具在同一个 commit 里发生，否则中间会出现"已注册、可直接调用、完全无权限
-// 检查"的窗口。所以这里不掩盖重复，而是把它钉住。
+// TestHandleExec_KafkaIsCheckedExactlyOnce 锁住：走 exec 的一条 kafka 命令**只**被
+// 检查一次——handleExec 那一次（用 CanonicalizeKafkaCommand 的产物）。
 //
-// 顺带锁住一件让上面那步安全的事：两次检查看到的是**同一个**字符串。若两条路径对同一
-// 条命令拼出不同的策略串，删掉内部那次就会静默改变授权语义。
+// 曾经是两次：7 个 kafka_* 旧工具直连 HandleKafka*，而它们唯一的权限检查就是内部那次
+// checkKafkaToolPermission；kafka 接入 exec 之后同一条命令被检查两次。用户可见的后果
+// 有两个，都不是"多余但无害"：
+//   - 选一次性「允许」（而非「全部允许」）会**弹两次审批对话框**——HandleConfirm
+//     只在 allowAll 时持久化 grant（internal/ai/permission/checker.go），所以更安全的
+//     那个选项反而被惩罚。
+//   - 第一次允许、第二次拒绝时，checkKafkaToolPermission 返回 (result.Message, nil)，
+//     handleExec 会把拒绝文案当作**成功的**工具结果返回给模型。
 //
-// Task 8b 删掉内部检查后本测试会失败（次数变 1），这是有意的——届时把期望改成 1 并
-// 把这段注释改写成"只检查一次"。
-func TestHandleExec_KafkaIsCheckedTwiceUntilLegacyToolsAreRemoved(t *testing.T) {
+// 删掉内部那次检查必须与删除那 7 个工具在同一个 commit 里发生，否则中间会出现
+// "已注册、模型可直接调用、完全无权限检查"的窗口（含 kafka_topic delete / kafka_acl
+// delete）。两件事已在同一个 commit 完成，本测试是那件事的端到端验收证据：断言
+// 回调**恰好**被触发一次。
+func TestHandleExec_KafkaIsCheckedExactlyOnce(t *testing.T) {
 	m := setupUnified(t)
 
 	asset := &asset_entity.Asset{ID: 7, Name: "kafka-prod", Type: asset_entity.AssetTypeKafka}
@@ -101,8 +107,8 @@ func TestHandleExec_KafkaIsCheckedTwiceUntilLegacyToolsAreRemoved(t *testing.T) 
 	ctx = permission.WithPolicyChecker(ctx, checker)
 	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeKafka)
 
-	// 批准之后命令真的会被执行，止于资产没有 Kafka 配置——正因为它执行到了那里，
-	// 才证明第二次检查确实发生在执行器内部，而不是被短路掉了。
+	// 批准之后命令真的会被执行，止于资产没有 Kafka 配置——正因为它执行到了执行器
+	// 内部，"只检查了一次"才不是"根本没走到执行器"的假象。
 	_, err := handleExec(ctx, map[string]any{
 		"asset":   "kafka-prod",
 		"command": `topic create orders --partitions=3 --replication-factor=2`,
@@ -111,9 +117,53 @@ func TestHandleExec_KafkaIsCheckedTwiceUntilLegacyToolsAreRemoved(t *testing.T) 
 		t.Fatal("handleExec = nil error, want the executor to be reached and fail on the asset's empty Kafka config")
 	}
 
-	want := []string{"topic.create orders", "topic.create orders"}
-	if len(seen) != len(want) || seen[0] != want[0] || seen[len(seen)-1] != want[len(want)-1] {
-		t.Fatalf("approval saw %q, want %q (handleExec once + checkKafkaToolPermission once, same string)", seen, want)
+	want := []string{"topic.create orders"}
+	if !slices.Equal(seen, want) {
+		t.Fatalf("approval saw %q, want %q — exactly one check, done by handleExec before dispatching to the executor", seen, want)
+	}
+}
+
+// TestHandleExec_KafkaDenyListStopsBeforeConnecting 接手了六个
+// TestKafka*PermissionStopsBeforeConnection（internal/ai/kafka_helper_test.go）留下的
+// 不变式：资产 CmdPolicy 的 deny 命中时，命令在**连上集群之前**就被拒绝。
+//
+// 那六个测试直接调 HandleKafka*，靠的是它们内部那次 checkKafkaToolPermission；
+// 检查上移到 handleExec 之后，同一个不变式必须在新的、也是唯一的检查点上重新钉住，
+// 否则它会随那六个测试一起消失。
+//
+// 判据是 err == nil：上面那个测试证明了一旦走进执行器，就会因为资产没有 Kafka 配置
+// 报错。所以"无错误 + 返回拒绝文案"恰好等价于"没连过集群"。
+func TestHandleExec_KafkaDenyListStopsBeforeConnecting(t *testing.T) {
+	m := setupUnified(t)
+
+	policy, err := json.Marshal(asset_entity.KafkaPolicy{DenyList: []string{"message.write *"}})
+	if err != nil {
+		t.Fatalf("marshal policy: %v", err)
+	}
+	asset := &asset_entity.Asset{
+		ID: 7, Name: "kafka-prod", Type: asset_entity.AssetTypeKafka, CmdPolicy: string(policy),
+	}
+	m.EXPECT().FindByName(gomock.Any(), "kafka-prod").Return([]*asset_entity.Asset{asset}, nil).AnyTimes()
+	m.EXPECT().Find(gomock.Any(), int64(7)).Return(asset, nil).AnyTimes()
+
+	checker, called := newRecordingChecker()
+
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	ctx = permission.WithPolicyChecker(ctx, checker)
+	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeKafka)
+
+	out, err := handleExec(ctx, map[string]any{
+		"asset":   "kafka-prod",
+		"command": `message produce orders --value=hello`,
+	})
+	if err != nil {
+		t.Fatalf("handleExec unexpected error: %v — a denied command must not reach the executor", err)
+	}
+	if !strings.Contains(out, "message.write orders") {
+		t.Fatalf("handleExec = %q, want the denial to name the policy string %q", out, "message.write orders")
+	}
+	if *called {
+		t.Fatal("approval callback fired for a command the deny list already rejects")
 	}
 }
 

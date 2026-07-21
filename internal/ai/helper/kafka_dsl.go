@@ -14,7 +14,7 @@ import (
 //
 // 格式：`<family> <verb> [target] [--flags]`
 //
-// family 对应今天的 7 个 kafka_* 工具，verb 对应各工具的 operation 参数，
+// family 对应已删除的 7 个 kafka_* 工具，verb 对应各工具的 operation 参数，
 // target 是资源名（topic / group / subject / connector），flags 承载其余全部参数。
 // 之所以让 family 占 Verb 位、verb 退到第一个 positional：cmdline 只认"第一个词是
 // 动词"这一条词法规则，kafka 的资源维度比其他类型多一层，把 family 放在最前面
@@ -28,7 +28,7 @@ type KafkaCommand struct {
 
 // kafkaVerbs 列出每个 family 支持的 verb，以及该 verb 是否需要 target。
 //
-// verb 名与今天工具的 operation 值一一对应，但改用连字符（reset-offset 而非
+// verb 名与旧工具的 operation 值一一对应，但改用连字符（reset-offset 而非
 // reset_offset），与命令行惯例一致；映射在 kafkaOperationFor 里做。
 // 同义 operation（get / describe、brokers / list_brokers、get_connector / get）
 // 各只保留一个写法：它们在 kafka_command.go 里落到同一个 case、产出同一个策略串，
@@ -77,6 +77,30 @@ var kafkaOperationFor = map[string]string{
 	"check-compatibility": "check_compatibility",
 	"list-clusters":       "list_clusters",
 	"list-connectors":     "list_connectors",
+}
+
+// kafkaVerbForOperation 是 kafkaOperationFor 的逆映射，由它反转得到而不是手抄——
+// 手抄一份就是第二处真相，两边漂移时报错文本会静默指向一个模型写不出来的 verb。
+var kafkaVerbForOperation = func() map[string]string {
+	m := make(map[string]string, len(kafkaOperationFor))
+	for verb, operation := range kafkaOperationFor {
+		m[operation] = verb
+	}
+	return m
+}()
+
+// kafkaCommandForm 把 (family, operation) 还原成模型真的能写出来的 exec 命令形式
+// `<family> <verb>`（如 topic delete-records）。
+//
+// 面向模型的报错串专用：7 个 kafka_* 工具已删除，报错里再出现 kafka_topic 之类的
+// 名字，等于让模型去调一个不存在的工具。未登记的 operation 原样透传——它要么本来
+// 就与 verb 同名（list / create / delete …），要么是个非法值，这时把用户给的原值
+// 回显出来比编一个更有用。
+func kafkaCommandForm(family, operation string) string {
+	if verb, ok := kafkaVerbForOperation[operation]; ok {
+		return family + " " + verb
+	}
+	return family + " " + operation
 }
 
 // ParseKafkaCommand 解析富命令串。
@@ -141,7 +165,7 @@ func ParseKafkaCommand(s string) (*KafkaCommand, error) {
 //
 // 代价是明确的、也是有意接受的：名字里带空白的 consumer group / schema subject /
 // connector 在统一 exec 下不可达。这严格优于现状——现状是够得着，但 deny 列表在那一次
-// 调用里静默失效。别想着靠加引号绕过：引号会破坏与现有 7 个 kafka_* 工具的字节相同，
+// 调用里静默失效。别想着靠加引号绕过：引号会破坏与旧 7 个 kafka_* 工具的字节相同，
 // 而 splitKafkaRule 也不认引号。
 func validateKafkaTarget(target string) error {
 	for i, r := range target {
@@ -184,7 +208,7 @@ func (c *KafkaCommand) Render() (string, error) {
 
 // PolicyString 返回策略匹配用的 "<action> <resource>" 串。
 //
-// **必须**恰好两个 token，且与今天 7 个 kafka_* 工具的输出逐字节相同——所以这里
+// **必须**恰好两个 token，且与已删除的 7 个 kafka_* 工具的输出逐字节相同——所以这里
 // 直接复用现有的 Kafka*Command 函数（internal/ai/helper/kafka_command.go），不重写一遍。
 // 理由见 TestKafkaCommand_PolicyStringIsUnchangedTwoTokenForm 的注释：
 // splitKafkaRule 要求恰好 2 段，不满足时 MatchKafkaRule 静默返回 false，

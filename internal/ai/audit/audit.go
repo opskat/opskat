@@ -1,7 +1,7 @@
 // Package audit 提供 AI/opsctl 工具调用的审计写入接口与默认实现。
 //
 // 命令摘要提取走 [RegisterExtractor] 注册表：审计自带常见工具(run_command/exec_sql 等)
-// 的默认提取器；协议特有的(kafka_*, exec_k8s)由各自子包在 init() 中注册。
+// 的默认提取器；协议特有的(exec_k8s)由各自子包在 init() 中注册。
 package audit
 
 import (

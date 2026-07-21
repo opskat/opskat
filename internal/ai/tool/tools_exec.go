@@ -118,7 +118,7 @@ func execTools() []tool.Tool {
 		},
 		&tool.RawTool{
 			NameStr: "request_permission",
-			DescStr: "Request approval for grant of command patterns BEFORE executing them. Submit command patterns (one per line, supports '*' wildcard) for one or more target assets. The user will review and may edit the patterns before approving. Once approved, subsequent run_command/exec_sql/exec_redis/exec_mongo/exec_k8s/kafka_* calls matching any approved pattern will be auto-approved.",
+			DescStr: "Request approval for grant of command patterns BEFORE executing them. Submit command patterns (one per line, supports '*' wildcard) for one or more target assets. The user will review and may edit the patterns before approving. Once approved, subsequent exec/run_command/exec_sql/exec_redis/exec_mongo/exec_k8s calls matching any approved pattern will be auto-approved.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{

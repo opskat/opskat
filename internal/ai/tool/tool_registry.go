@@ -55,13 +55,6 @@ func AllToolDefs() []ToolDef {
 		{"exec_mongo", helper.HandleExecMongo},
 		{"exec_etcd", helper.HandleExecEtcd},
 		{"exec_k8s", handleExecK8s},
-		{"kafka_cluster", helper.HandleKafkaCluster},
-		{"kafka_topic", helper.HandleKafkaTopic},
-		{"kafka_consumer_group", helper.HandleKafkaConsumerGroup},
-		{"kafka_acl", helper.HandleKafkaACL},
-		{"kafka_schema", helper.HandleKafkaSchema},
-		{"kafka_connect", helper.HandleKafkaConnect},
-		{"kafka_message", helper.HandleKafkaMessage},
 		{"request_permission", handleRequestGrant},
 		{"exec_tool", handleExecTool},
 	}

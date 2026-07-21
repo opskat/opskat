@@ -6,7 +6,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 )
 
-// 注册非协议特有的常见工具提取器；协议特有(kafka_*, exec_k8s)在各自子包 init() 注册。
+// 注册非协议特有的常见工具提取器；协议特有(exec_k8s)在各自子包 init() 注册。
 func init() {
 	RegisterExtractor("run_command", func(a map[string]any) string { return aictx.ArgString(a, "command") })
 	RegisterExtractor("upload_file", func(a map[string]any) string {

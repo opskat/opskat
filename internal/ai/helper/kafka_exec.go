@@ -12,9 +12,8 @@ import (
 )
 
 // ExecKafkaOnAsset is the permission-check-free execution entry point used by the
-// unified exec tool.
-// The seven kafka_* tools are removed alongside their in-handler permission checks in a
-// later task; until then the two paths coexist and this one is not yet registered.
+// unified exec tool — the only path to Kafka now that the seven kafka_* tools and their
+// in-handler permission checks are gone. handleExec checks permission before calling it.
 // scope is meaningless for Kafka and is ignored — the target resource is named by the
 // command's target position (see internal/ai/skills/kafka/SKILL.md).
 //
@@ -31,28 +30,39 @@ func ExecKafkaOnAsset(ctx context.Context, asset *asset_entity.Asset, command, _
 		return "", err
 	}
 
-	switch c.Family {
-	case "cluster":
-		return HandleKafkaCluster(ctx, args)
-	case "topic":
-		return HandleKafkaTopic(ctx, args)
-	case "consumer-group":
-		return HandleKafkaConsumerGroup(ctx, args)
-	case "acl":
-		return HandleKafkaACL(ctx, args)
-	case "schema":
-		return HandleKafkaSchema(ctx, args)
-	case "connect":
-		return HandleKafkaConnect(ctx, args)
-	case "message":
-		return HandleKafkaMessage(ctx, args)
-	default:
-		return "", fmt.Errorf("unknown kafka resource family %q", c.Family)
+	handle, ok := kafkaFamilyHandlers[c.Family]
+	if !ok {
+		return "", fmt.Errorf("unknown kafka resource family %q; supported: %s",
+			c.Family, strings.Join(slices.Sorted(maps.Keys(kafkaFamilyHandlers)), ", "))
 	}
+	return handle(ctx, args)
+}
+
+// kafkaFamilyHandlers 把 DSL 的 family 映射到执行它的 handler。
+//
+// 写成表而不是 switch，是为了让这份 wiring 可以被直接断言。接错线
+// （`case "topic"` 接到 HandleKafkaConsumerGroup）在运行期是静默的：删 topic 的请求
+// 走进 consumer group 处理器，最好的结局是一个看不懂的错误，最坏的结局是同一资产上
+// **另一类资源**被操作。
+//
+// 之前 TestExecKafkaOnAsset_DispatchesToItsOwnFamilyHandler 用"权限 checker 收到哪个
+// 家族的策略串"当指纹，但权限检查已经从 HandleKafka* 内部上移到 handleExec，那个观察点
+// 没有了；而靠错误文本区分不出 acl —— 它的三个 operation（list / create / delete）在
+// topic / connect 等 handler 里都存在，接错线也只会得到同一个"Kafka 配置为空"。
+// 所以把控制流换成数据，让测试直接比对函数指针，并断言 family 集合与 kafkaVerbs 一致。
+var kafkaFamilyHandlers = map[string]func(context.Context, map[string]any) (string, error){
+	"cluster":        HandleKafkaCluster,
+	"topic":          HandleKafkaTopic,
+	"consumer-group": HandleKafkaConsumerGroup,
+	"acl":            HandleKafkaACL,
+	"schema":         HandleKafkaSchema,
+	"connect":        HandleKafkaConnect,
+	"message":        HandleKafkaMessage,
 }
 
 // CanonicalizeKafkaCommand 把模型给的富命令串规范化为策略层的双 token 串
-// "<action> <resource>"——与今天 7 个 kafka_* 工具逐字节相同的形式，理由见
+// "<action> <resource>"——与已删除的 7 个 kafka_* 工具逐字节相同的形式（用户库里
+// 存着的 CmdPolicy 与 grant 都是照那个形式写的，不能变），理由见
 // KafkaCommand.PolicyString 的注释。
 //
 // 排在权限检查之前（handleExec 的顺序，见 internal/ai/tool/tool_handlers_unified.go）：

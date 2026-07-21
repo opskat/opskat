@@ -9,6 +9,13 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/audit"
+
+	// exec_k8s 的命令摘要提取器由 tool 包的 init() 注册
+	// （internal/ai/tool/audit_extractor_k8s.go），audit 包自己不认识它。
+	// 本包在删掉 kafka 旧工具的用例之前是顺带通过别处的 tool 导入触发这次注册的，
+	// 那条链断了之后 "exec_k8s 规范化 kubectl 命令" 会静默地拿到空串——所以这里显式
+	// blank-import，把依赖写出来。
+	_ "github.com/opskat/opskat/internal/ai/tool"
 )
 
 func TestContext_AuditSource(t *testing.T) {

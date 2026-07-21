@@ -6,8 +6,6 @@ import (
 	"strings"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
-	"github.com/opskat/opskat/internal/ai/permission"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/kafka_svc"
 )
 
@@ -42,6 +40,13 @@ func kafkaServiceFromCtx(ctx context.Context) (*kafka_svc.Service, func()) {
 }
 
 // --- Handlers ---
+//
+// 这 7 个 HandleKafka* 只有一个调用方了：ExecKafkaOnAsset（kafka_exec.go），统一 exec
+// 工具的 kafka 执行体。它们**不做权限检查**——检查由 handleExec 在调用执行器之前统一
+// 完成（internal/ai/tool/tool_handlers_unified.go），用的是 CanonicalizeKafkaCommand
+// 产出的双 token 策略串。别在这里补一次"保险起见"的检查：同一条命令被检查两次时，
+// 用户若选的是一次性"允许"而非"全部允许"，第二次检查会为同一条命令再弹一次审批
+// 对话框（HandleConfirm 只在 allowAll 时持久化 grant），并多写一条审计行。
 
 func HandleKafkaCluster(ctx context.Context, args map[string]any) (string, error) {
 	assetID := aictx.ArgInt64(args, "asset_id")
@@ -49,14 +54,6 @@ func HandleKafkaCluster(ctx context.Context, args map[string]any) (string, error
 	if assetID == 0 {
 		return "", fmt.Errorf("missing required parameter: asset_id")
 	}
-	command, err := KafkaClusterCommand(operation)
-	if err != nil {
-		return "", err
-	}
-	if result, ok := checkKafkaToolPermission(ctx, assetID, command); !ok {
-		return result.Message, nil
-	}
-
 	svc, release := kafkaServiceFromCtx(ctx)
 	defer release()
 
@@ -87,7 +84,7 @@ func HandleKafkaCluster(ctx context.Context, args map[string]any) (string, error
 		}
 		return marshalKafkaResult(result)
 	default:
-		return "", fmt.Errorf("unsupported kafka_cluster operation: %s", operation)
+		return "", fmt.Errorf("unsupported kafka command %q", kafkaCommandForm("cluster", operation))
 	}
 }
 
@@ -97,14 +94,6 @@ func HandleKafkaTopic(ctx context.Context, args map[string]any) (string, error) 
 	if assetID == 0 {
 		return "", fmt.Errorf("missing required parameter: asset_id")
 	}
-	command, err := KafkaTopicCommand(operation, aictx.ArgString(args, "topic"))
-	if err != nil {
-		return "", err
-	}
-	if result, ok := checkKafkaToolPermission(ctx, assetID, command); !ok {
-		return result.Message, nil
-	}
-
 	svc, release := kafkaServiceFromCtx(ctx)
 	defer release()
 
@@ -172,7 +161,7 @@ func HandleKafkaTopic(ctx context.Context, args map[string]any) (string, error) 
 		}
 		return marshalKafkaResult(result)
 	default:
-		return "", fmt.Errorf("unsupported kafka_topic operation: %s", operation)
+		return "", fmt.Errorf("unsupported kafka command %q", kafkaCommandForm("topic", operation))
 	}
 }
 
@@ -182,14 +171,6 @@ func HandleKafkaConsumerGroup(ctx context.Context, args map[string]any) (string,
 	if assetID == 0 {
 		return "", fmt.Errorf("missing required parameter: asset_id")
 	}
-	command, err := KafkaConsumerGroupCommand(operation, aictx.ArgString(args, "group"))
-	if err != nil {
-		return "", err
-	}
-	if result, ok := checkKafkaToolPermission(ctx, assetID, command); !ok {
-		return result.Message, nil
-	}
-
 	svc, release := kafkaServiceFromCtx(ctx)
 	defer release()
 
@@ -223,7 +204,7 @@ func HandleKafkaConsumerGroup(ctx context.Context, args map[string]any) (string,
 		}
 		return marshalKafkaResult(result)
 	default:
-		return "", fmt.Errorf("unsupported kafka_consumer_group operation: %s", operation)
+		return "", fmt.Errorf("unsupported kafka command %q", kafkaCommandForm("consumer-group", operation))
 	}
 }
 
@@ -233,14 +214,6 @@ func HandleKafkaACL(ctx context.Context, args map[string]any) (string, error) {
 	if assetID == 0 {
 		return "", fmt.Errorf("missing required parameter: asset_id")
 	}
-	command, err := KafkaACLCommand(operation)
-	if err != nil {
-		return "", err
-	}
-	if result, ok := checkKafkaToolPermission(ctx, assetID, command); !ok {
-		return result.Message, nil
-	}
-
 	svc, release := kafkaServiceFromCtx(ctx)
 	defer release()
 
@@ -264,7 +237,7 @@ func HandleKafkaACL(ctx context.Context, args map[string]any) (string, error) {
 		}
 		return marshalKafkaResult(result)
 	default:
-		return "", fmt.Errorf("unsupported kafka_acl operation: %s", operation)
+		return "", fmt.Errorf("unsupported kafka command %q", kafkaCommandForm("acl", operation))
 	}
 }
 
@@ -274,14 +247,6 @@ func HandleKafkaSchema(ctx context.Context, args map[string]any) (string, error)
 	if assetID == 0 {
 		return "", fmt.Errorf("missing required parameter: asset_id")
 	}
-	command, err := KafkaSchemaCommand(operation, aictx.ArgString(args, "subject"))
-	if err != nil {
-		return "", err
-	}
-	if result, ok := checkKafkaToolPermission(ctx, assetID, command); !ok {
-		return result.Message, nil
-	}
-
 	svc, release := kafkaServiceFromCtx(ctx)
 	defer release()
 
@@ -331,7 +296,7 @@ func HandleKafkaSchema(ctx context.Context, args map[string]any) (string, error)
 		}
 		return marshalKafkaResult(result)
 	default:
-		return "", fmt.Errorf("unsupported kafka_schema operation: %s", operation)
+		return "", fmt.Errorf("unsupported kafka command %q", kafkaCommandForm("schema", operation))
 	}
 }
 
@@ -341,14 +306,6 @@ func HandleKafkaConnect(ctx context.Context, args map[string]any) (string, error
 	if assetID == 0 {
 		return "", fmt.Errorf("missing required parameter: asset_id")
 	}
-	command, err := KafkaConnectCommand(operation, aictx.ArgString(args, "connector"))
-	if err != nil {
-		return "", err
-	}
-	if result, ok := checkKafkaToolPermission(ctx, assetID, command); !ok {
-		return result.Message, nil
-	}
-
 	svc, release := kafkaServiceFromCtx(ctx)
 	defer release()
 
@@ -417,25 +374,16 @@ func HandleKafkaConnect(ctx context.Context, args map[string]any) (string, error
 		}
 		return marshalKafkaResult(result)
 	default:
-		return "", fmt.Errorf("unsupported kafka_connect operation: %s", operation)
+		return "", fmt.Errorf("unsupported kafka command %q", kafkaCommandForm("connect", operation))
 	}
 }
 
 func HandleKafkaMessage(ctx context.Context, args map[string]any) (string, error) {
 	assetID := aictx.ArgInt64(args, "asset_id")
 	operation := NormalizeKafkaOperation(aictx.ArgString(args, "operation"), "browse")
-	topic := aictx.ArgString(args, "topic")
 	if assetID == 0 {
 		return "", fmt.Errorf("missing required parameter: asset_id")
 	}
-	command, err := KafkaMessageCommand(operation, topic)
-	if err != nil {
-		return "", err
-	}
-	if result, ok := checkKafkaToolPermission(ctx, assetID, command); !ok {
-		return result.Message, nil
-	}
-
 	svc, release := kafkaServiceFromCtx(ctx)
 	defer release()
 
@@ -471,20 +419,8 @@ func HandleKafkaMessage(ctx context.Context, args map[string]any) (string, error
 		}
 		return marshalKafkaResult(result)
 	default:
-		return "", fmt.Errorf("unsupported kafka_message operation: %s", operation)
+		return "", fmt.Errorf("unsupported kafka command %q", kafkaCommandForm("message", operation))
 	}
-}
-
-func checkKafkaToolPermission(ctx context.Context, assetID int64, command string) (aictx.CheckResult, bool) {
-	if checker := permission.GetPolicyChecker(ctx); checker != nil {
-		result := checker.CheckForAsset(ctx, assetID, asset_entity.AssetTypeKafka, command)
-		aictx.RecordDecision(ctx, result)
-		if result.Decision != aictx.Allow {
-			return result, false
-		}
-		return result, true
-	}
-	return aictx.CheckResult{Decision: aictx.Allow}, true
 }
 
 func NormalizeKafkaOperation(operation, fallback string) string {

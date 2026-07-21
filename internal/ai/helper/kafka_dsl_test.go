@@ -232,7 +232,8 @@ func TestKafkaCommand_RenderRejectsUnsafeFlagName(t *testing.T) {
 
 // TestKafkaCommand_PolicyStringIsUnchangedTwoTokenForm 是本 Plan 最要紧的测试。
 //
-// 它锁住：新 DSL 产出的策略串与今天 7 个 kafka_* 工具产出的**逐字节相同**。
+// 它锁住：新 DSL 产出的策略串与已删除的 7 个 kafka_* 工具产出的**逐字节相同**——
+// 工具没了，但用户库里按那个形式写下的 CmdPolicy 与 grant 还在，形式变了就全部失配。
 // 不相同的后果不是报错，而是静默——splitKafkaRule 在非 2-token 输入上返回 false，
 // MatchKafkaRule 随之返回 false，于是 BuiltinKafkaDangerousDeny 的 deny 规则不再匹配
 // 任何东西（fail-open），而 allowlist 侧变成永远 NeedConfirm。两种都不会抛错、不会记日志。
