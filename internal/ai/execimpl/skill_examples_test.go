@@ -1,6 +1,7 @@
 package execimpl
 
 import (
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -14,36 +15,64 @@ import (
 // SKILL.md 是**喂给模型**的那份文档：模型照着它写命令。在此之前没有任何测试读过它，
 // 于是它可以独立于执行器漂移——helper 侧的 "AcceptsDocumentedCommands" 类测试把命令
 // 硬编码在测试里，锁住的是执行器，锁不住文档。Plan B 的 kafka SKILL.md 草稿因此攒下
-// 四条执行器一定会拒绝的示例命令（--only-failed 挂错 verb、acl delete 漏必填 --host、
-// config-updates 用了会被 encoding/json 静默丢弃的 "key" 字段名）。
+// 五条执行器一定会拒绝的示例命令（--only-failed / --include-tasks 挂错 verb、
+// acl delete 漏必填 --host、config-updates 用了会被 encoding/json 静默丢弃的 "key"
+// 字段名、message inspect 漏必填 --partition）。
 //
 // 本文件把这条缝焊上：读每个类型的 SKILL.md 正文，抽出示例命令，逐条送进该类型
 // **已注册**的 canonicalizer。canonicalizer 从 permission 注册表拿（也就是 handleExec
 // 在生产里用的同一份），不在测试里手抄一张类型→函数表——那只会变成第三处真相。
+//
+// 抽取按"**默认失败**"设计，这是第一版评审拍出来的关键修正：第一版只认一种写法、
+// 认不出的行**静默跳过**，于是围栏代码块、有序列表、`- Example: <cmd>`、同一条列表项
+// 里的第二个反引号片段、以及另起一个 `## More examples` 小节，五种写法都能夹带
+// 一条执行器会拒绝的命令而测试全绿——同时输出还理直气壮地写着 "checked N examples"。
+// 现在的规则是：文档里每一处**看起来像示例**的地方都必须被抽取器认出来，认不出就报错
+// 并指名文件、行号与那一行的形状（见 scanSkillDoc）。
 
-// skillCommandSection 是示例命令所在的小节标题。只扫这一节：Notes 里的行内代码是
-// 讲解片段（`--lease` 是十六进制、`get --prefix` 会报错），不是可执行命令。
+// skillCommandSection 是示例命令所在的小节标题。示例只能写在这一节里：Notes 里的
+// 行内代码是讲解片段与**反例**，不是可执行命令。
 const skillCommandSection = "## Command syntax"
 
-// skillExampleRe 定义"可执行示例"的形状：`## Command syntax` 一节里、形如
-// "- `<命令>`" 的列表项，取**第一个**反引号片段。
+// skillExampleShape 定义唯一被承认的"可执行示例"写法：`## Command syntax` 一节里、
+// 整行就是一个列表项 + 一个反引号命令，后面最多再跟一个括号说明。
 //
-// 只取第一个是有意的：etcd 那条"整个 keyspace"的示例后面跟了一句括号说明，里面用
-// 行内代码举了个**反例**（一条会报错的 get），抽进来会让测试要求它通过。
-// 因此约定：一个列表项 = 一条完整可执行命令，多条命令分行写。
-var skillExampleRe = regexp.MustCompile("^\\s*[-*]\\s+`([^`]+)`")
+// 括号说明里可以再出现反引号（etcd 那条"整个 keyspace"示例的括号里举了个会报错的
+// 反例），但命令本身只取第一个片段——所以一个列表项只能写一条命令。
+var skillExampleShape = regexp.MustCompile("^\\s*[-*+]\\s+`([^`]+)`\\s*(\\(.*\\))?\\s*$")
 
-// skillPlaceholderRe 挡住占位符写法。约定是**示例命令必须字面可执行、不含占位符**：
-// 可选 flag 不写成 `[--flag]`，而是另起一行写出带该 flag 的完整命令；`<name>` 这类
-// 占位只允许出现在小节开头的语法模板段落（那不是列表项，抽取时本就不会命中）。
+// skillListItem 匹配任意列表项（含有序列表），用来把"不是示例形状的列表项"揪出来。
+var skillListItem = regexp.MustCompile(`^\s*([-*+]|\d+[.)])\s+`)
+
+// skillSpanOnlyLine 匹配"整行只有一个反引号片段"的非列表行。这种行在
+// `## Command syntax` 一节里只允许是语法模板（必须含占位符），否则就是一条不带列表
+// 标记、因而不会被抽取的示例。
+var skillSpanOnlyLine = regexp.MustCompile("^`([^`]+)`$")
+
+// skillPlaceholders 列出被当作"占位符"的写法，以及报错时给人看的名字。
+//
+// 约定是**示例命令必须字面可执行、不含占位符**：可选 flag 不写成 `[--flag]`，而是
+// 另起一行写出带该 flag 的完整命令；`<name>` 这类占位只允许出现在小节开头的语法
+// 模板里（模板必须含占位符，正是靠这一点与示例区分）。
 //
 // 选"禁止"而不是"抽取时展开"：展开要么组合爆炸（一条 8 个可选 flag 的 browse 有 256
 // 种组合），要么只测其中一种、剩下的仍然漂移；而占位符版本对模型也更差——它得自己
 // 猜方括号是不是要照抄。
 //
-// 判定谓词写得窄，只认这两种真实出现过的写法：`[--` 开头的可选 flag（Plan 草稿的写法）
-// 与 `<单词>` 形状的占位。JSON 值里的 `[{"partition":0}]` 不会命中前者。
-var skillPlaceholderRe = regexp.MustCompile(`\[--|<[A-Za-z][A-Za-z0-9_.-]*>`)
+// 判定按空白切词后逐词做，这样 JSON 值里的 `[{"partition":0}]`（`--records=` 开头的
+// 一个词）不会被误判成方括号占位。刻意不去猜 TOPIC_NAME 这类全大写占位：SQL 与
+// Redis 的示例里全大写词是真命令（SELECT / HGETALL），猜错的代价比漏判大——所以
+// 报错文案只声明这里真正拦下的这几种形状，不吹成"任何占位符"。
+var skillPlaceholders = []struct {
+	name string
+	re   *regexp.Regexp
+}{
+	{"[bracketed] optional/placeholder token", regexp.MustCompile(`^\[.*\]$`)},
+	{"{braced} placeholder token", regexp.MustCompile(`^\{.*\}$`)},
+	{"<angled> placeholder", regexp.MustCompile(`<[A-Za-z][A-Za-z0-9_.-]*>`)},
+	{"[--flag] optional marker", regexp.MustCompile(`\[--`)},
+	{"... elision", regexp.MustCompile(`^\.\.\.$`)},
+}
 
 // skillExampleAssetConfig 为 canonicalizer 会读取资产配置的类型准备最小可用配置。
 //
@@ -90,20 +119,26 @@ func TestSkillDocs_DocumentedExamplesAreCanonicalizable(t *testing.T) {
 			t.Fatalf("skills.Get(%q) = not found, but it is listed by skills.Types()", assetType)
 		}
 
-		examples := extractSkillExamples(body)
-		// 每个类型都必须抽到东西：抽取规则一旦与文档写法错位（改了标题、改成代码块），
+		examples, violations := scanSkillDoc(body)
+		// 形状违规逐条报出：它们不是"抽不到"，而是"文档里有东西看起来像示例、
+		// 抽取器不认识"——静默放过就等于给漂移开了后门。
+		for _, v := range violations {
+			t.Errorf("%s/SKILL.md (body line %d): %s", assetType, v.line, v.message)
+		}
+		// 每个类型都必须抽到东西：抽取规则一旦与文档写法整体错位（改了标题），
 		// 静默地什么都不检查是最坏的结果——这条断言把"空转"变成失败。
 		if len(examples) == 0 {
-			t.Errorf("%s/SKILL.md: extracted 0 executable examples; they must live under %q as list items of the form \"- `<command>`\"",
+			t.Errorf("%s/SKILL.md: extracted 0 executable examples; they must live under %q, one per list item, written as \"- `<command>`\"",
 				assetType, skillCommandSection)
 			continue
 		}
 		totalExamples += len(examples)
 
-		for _, cmd := range examples {
-			if m := skillPlaceholderRe.FindString(cmd); m != "" {
-				t.Errorf("%s/SKILL.md: example %q contains placeholder %q; examples must be literally executable — write each optional-flag variant out on its own line",
-					assetType, cmd, m)
+		for _, ex := range examples {
+			if name, match := skillPlaceholderIn(ex.command); match != "" {
+				t.Errorf("%s/SKILL.md (body line %d): example %q contains %s (%q); examples must be literally executable — write each optional-flag variant out on its own line. "+
+					"Note this check only recognizes [bracketed] / {braced} / <angled> tokens and a bare \"...\"; a placeholder spelled as a plain word (TOPIC_NAME) passes it, so the rule is on you, not on the check",
+					assetType, ex.line, ex.command, name, match)
 			}
 		}
 
@@ -114,10 +149,10 @@ func TestSkillDocs_DocumentedExamplesAreCanonicalizable(t *testing.T) {
 		}
 
 		asset := skillExampleAsset(t, assetType)
-		for _, cmd := range examples {
-			if _, err := canonicalize(asset, cmd); err != nil {
-				t.Errorf("%s/SKILL.md documents %q, but the registered canonicalizer rejects it: %v",
-					assetType, cmd, err)
+		for _, ex := range examples {
+			if _, err := canonicalize(asset, ex.command); err != nil {
+				t.Errorf("%s/SKILL.md (body line %d) documents %q, but the registered canonicalizer rejects it: %v",
+					assetType, ex.line, ex.command, err)
 			}
 		}
 	}
@@ -136,24 +171,97 @@ func TestSkillDocs_DocumentedExamplesAreCanonicalizable(t *testing.T) {
 	}
 }
 
-// extractSkillExamples 按 skillExampleRe 的约定抽取示例命令。
-// `### ` 子标题不终止小节（kafka 按 family 分了子节），只有下一个 `## ` 才终止。
-func extractSkillExamples(body string) []string {
-	var examples []string
-	inSection := false
-	for _, line := range strings.Split(body, "\n") {
+type skillExample struct {
+	line    int
+	command string
+}
+
+type skillViolation struct {
+	line    int
+	message string
+}
+
+// scanSkillDoc 扫描整份 SKILL.md 正文，返回可执行示例与"看起来像示例但抽取器不认识"
+// 的违规行。行号是**正文**行号（skills.Get 已剥掉 frontmatter），报错时一并带上原文，
+// 定位不必靠行号。
+//
+// 默认失败：只要一行有可能被读者当成示例、又不是被承认的那一种形状，就报违规，
+// 而不是跳过。报错文案本身就是写给贡献者看的规则说明——规则只写在注释里等于没写，
+// 下一个写 SKILL.md 的人看不到。
+//
+// 认下面这些为"看起来像示例"：
+//   - `## Command syntax` 一节里的任何列表项（含 1. 有序列表、`- Example: <cmd>`
+//     这种带前缀的、以及一项里写两条命令的）
+//   - 该节里不带列表标记、整行只有一个反引号片段的行（语法模板除外——模板必须含占位符）
+//   - 该节**之外**任何恰好长成示例形状的列表项（另起 `## More examples` 塞示例，
+//     或把示例混进 Notes，都会被这条挡下）
+//   - 任何位置的围栏代码块（``` ）——本抽取器不读围栏块，允许它存在就是允许夹带
+func scanSkillDoc(body string) ([]skillExample, []skillViolation) {
+	var (
+		examples   []skillExample
+		violations []skillViolation
+		inSection  bool
+		inFence    bool
+	)
+	for i, line := range strings.Split(body, "\n") {
+		lineNo := i + 1
+		trimmed := strings.TrimSpace(line)
+
+		if strings.HasPrefix(trimmed, "```") {
+			if !inFence {
+				violations = append(violations, skillViolation{lineNo, fmt.Sprintf(
+					"fenced code block (%q) is not a recognized shape — this scanner does not read fenced blocks, so any command inside one would never be checked; write each command as a list item \"- `<command>`\" under %q",
+					trimmed, skillCommandSection)})
+			}
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
+
 		if strings.HasPrefix(line, "## ") {
-			inSection = strings.TrimSpace(line) == skillCommandSection
+			inSection = trimmed == skillCommandSection
 			continue
 		}
-		if !inSection {
-			continue
-		}
-		if m := skillExampleRe.FindStringSubmatch(line); m != nil {
-			examples = append(examples, m[1])
+
+		switch {
+		case skillListItem.MatchString(line):
+			m := skillExampleShape.FindStringSubmatch(line)
+			switch {
+			case inSection && m != nil:
+				examples = append(examples, skillExample{lineNo, m[1]})
+			case inSection:
+				violations = append(violations, skillViolation{lineNo, fmt.Sprintf(
+					"unrecognized example shape %q; under %q every list item must be exactly \"- `<command>`\" (one command per item, optionally followed by a parenthetical note)",
+					trimmed, skillCommandSection)})
+			case m != nil:
+				violations = append(violations, skillViolation{lineNo, fmt.Sprintf(
+					"example-shaped list item %q outside %q — it would never be checked; move it into that section, or reword it so it reads as prose",
+					trimmed, skillCommandSection)})
+			}
+		case inSection && skillSpanOnlyLine.MatchString(trimmed):
+			// 语法模板（`<op> [key] [value]`）与示例的唯一区别就是占位符，
+			// 所以不含占位符的裸片段行按"漏写列表标记的示例"处理。
+			if _, match := skillPlaceholderIn(trimmed); match == "" {
+				violations = append(violations, skillViolation{lineNo, fmt.Sprintf(
+					"bare code span %q is not a recognized shape; an example must be a list item (\"- `<command>`\"), while the syntax template must contain a placeholder such as <name>",
+					trimmed)})
+			}
 		}
 	}
-	return examples
+	return examples, violations
+}
+
+func skillPlaceholderIn(command string) (name, match string) {
+	for _, field := range strings.Fields(command) {
+		for _, p := range skillPlaceholders {
+			if m := p.re.FindString(field); m != "" {
+				return p.name, m
+			}
+		}
+	}
+	return "", ""
 }
 
 func skillExampleAsset(t *testing.T, assetType string) *asset_entity.Asset {
