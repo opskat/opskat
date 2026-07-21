@@ -46,7 +46,15 @@ func FuzzParseMongoCommandRoundTrip(f *testing.F) {
 		if err != nil {
 			return
 		}
-		rendered := cmd.Render()
+		rendered, err := cmd.Render()
+		if err != nil {
+			// A MongoCommand produced by ParseMongoCommand never has a Collection
+			// starting with "--" (Words+Parse would have consumed such a word as a
+			// flag, not a positional), so Render should never reject it. See
+			// TestMongoCommand_RenderRejectsFlagLikeCollection for the struct-side
+			// input Parse can never produce.
+			t.Fatalf("ParseMongoCommand(%q) ok as %#v, but Render rejected it: %v", s, *cmd, err)
+		}
 		reparsed, err := ParseMongoCommand(rendered)
 		if err != nil {
 			t.Fatalf("ParseMongoCommand(%q) ok as %#v, but its Render output %q fails to parse: %v", s, *cmd, rendered, err)
@@ -54,8 +62,8 @@ func FuzzParseMongoCommandRoundTrip(f *testing.F) {
 		if *reparsed != *cmd {
 			t.Fatalf("round-trip mismatch for %q: parsed %#v, rendered %q, reparsed %#v", s, *cmd, rendered, *reparsed)
 		}
-		if again := reparsed.Render(); again != rendered {
-			t.Fatalf("Render not idempotent for %q: %q -> %q", s, rendered, again)
+		if again, err := reparsed.Render(); err != nil || again != rendered {
+			t.Fatalf("Render not idempotent for %q: %q -> %q (err: %v)", s, rendered, again, err)
 		}
 	})
 }

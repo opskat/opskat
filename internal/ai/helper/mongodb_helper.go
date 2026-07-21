@@ -128,6 +128,34 @@ func getOrDialMongoDB(ctx context.Context, asset *asset_entity.Asset) (*mongo.Cl
 	return wrapper.Client, closer, nil
 }
 
+// mongoOpSpec 描述一个 mongo 操作：是否要求 collection 参数，以及怎么执行。
+//
+// mongoOps 是 ParseMongoCommand（internal/ai/helper/mongo_command.go）与
+// ExecuteMongoDB 共用的唯一操作列表：两者过去各维护一份同样的 12 个操作名
+// （一份 map[string]bool 判断要不要 collection，一份 switch 分发执行），新增
+// 操作只改一处就会悄悄跑偏。现在两边都读这同一个 map，跑偏在结构上不可能
+// 发生——这里少一个 entry，ParseMongoCommand 和 ExecuteMongoDB 会对同一个
+// 操作名同时拒绝，不存在"一边认得一边不认得"的中间态。
+var mongoOps = map[string]mongoOpSpec{
+	"find":            {needsCollection: true, exec: mongoFind},
+	"findOne":         {needsCollection: true, exec: mongoFindOne},
+	"insertOne":       {needsCollection: true, exec: mongoInsertOne},
+	"insertMany":      {needsCollection: true, exec: mongoInsertMany},
+	"updateOne":       {needsCollection: true, exec: mongoUpdateOne},
+	"updateMany":      {needsCollection: true, exec: mongoUpdateMany},
+	"deleteOne":       {needsCollection: true, exec: mongoDeleteOne},
+	"deleteMany":      {needsCollection: true, exec: mongoDeleteMany},
+	"aggregate":       {needsCollection: true, exec: mongoAggregate},
+	"countDocuments":  {needsCollection: true, exec: mongoCountDocuments},
+	"listDatabases":   {needsCollection: false, exec: mongoListDatabases},
+	"listCollections": {needsCollection: false, exec: mongoListCollections},
+}
+
+type mongoOpSpec struct {
+	needsCollection bool
+	exec            func(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error)
+}
+
 // ExecuteMongoDB 执行 MongoDB 操作并返回 JSON 结果
 func ExecuteMongoDB(ctx context.Context, client *mongo.Client, database, collection, operation, query string) (string, error) {
 	// 解析 query JSON
@@ -136,45 +164,30 @@ func ExecuteMongoDB(ctx context.Context, client *mongo.Client, database, collect
 		return "", fmt.Errorf("无效的查询参数: %w", err)
 	}
 
-	switch operation {
-	case "find":
-		return mongoFind(ctx, client, database, collection, queryMap)
-	case "findOne":
-		return mongoFindOne(ctx, client, database, collection, queryMap)
-	case "insertOne":
-		return mongoInsertOne(ctx, client, database, collection, queryMap)
-	case "insertMany":
-		return mongoInsertMany(ctx, client, database, collection, queryMap)
-	case "updateOne":
-		return mongoUpdateOne(ctx, client, database, collection, queryMap)
-	case "updateMany":
-		return mongoUpdateMany(ctx, client, database, collection, queryMap)
-	case "deleteOne":
-		return mongoDeleteOne(ctx, client, database, collection, queryMap)
-	case "deleteMany":
-		return mongoDeleteMany(ctx, client, database, collection, queryMap)
-	case "aggregate":
-		return mongoAggregate(ctx, client, database, collection, queryMap)
-	case "countDocuments":
-		return mongoCountDocuments(ctx, client, database, collection, queryMap)
-	case "listDatabases":
-		names, err := ListMongoDatabases(ctx, client)
-		if err != nil {
-			return "", err
-		}
-		return marshalResult(map[string]any{"databases": names, "count": len(names)})
-	case "listCollections":
-		if database == "" {
-			return "", fmt.Errorf("database 参数不能为空")
-		}
-		names, err := ListMongoCollections(ctx, client, database)
-		if err != nil {
-			return "", err
-		}
-		return marshalResult(map[string]any{"collections": names, "count": len(names)})
-	default:
+	spec, ok := mongoOps[operation]
+	if !ok {
 		return "", fmt.Errorf("不支持的 MongoDB 操作: %s", operation)
 	}
+	return spec.exec(ctx, client, database, collection, queryMap)
+}
+
+func mongoListDatabases(ctx context.Context, client *mongo.Client, _, _ string, _ map[string]json.RawMessage) (string, error) {
+	names, err := ListMongoDatabases(ctx, client)
+	if err != nil {
+		return "", err
+	}
+	return marshalResult(map[string]any{"databases": names, "count": len(names)})
+}
+
+func mongoListCollections(ctx context.Context, client *mongo.Client, database, _ string, _ map[string]json.RawMessage) (string, error) {
+	if database == "" {
+		return "", fmt.Errorf("database 参数不能为空")
+	}
+	names, err := ListMongoCollections(ctx, client, database)
+	if err != nil {
+		return "", err
+	}
+	return marshalResult(map[string]any{"collections": names, "count": len(names)})
 }
 
 // ListMongoDatabases 列出所有数据库名称
