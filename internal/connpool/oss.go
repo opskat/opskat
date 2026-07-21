@@ -21,7 +21,7 @@ import (
 )
 
 func init() {
-	assetconn.Register("oss", func(_ context.Context, assetID int64) error {
+	assetconn.RegisterInvalidator("oss", func(_ context.Context, assetID int64) error {
 		InvalidateOSS(assetID)
 		return nil
 	})

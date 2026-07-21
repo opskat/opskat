@@ -141,7 +141,7 @@ func init() {
 			globalEtcdPool.gc(5 * time.Minute)
 		}
 	}()
-	assetconn.Register("etcd", func(_ context.Context, assetID int64) error {
+	assetconn.RegisterInvalidator("etcd", func(_ context.Context, assetID int64) error {
 		InvalidateEtcd(assetID)
 		return nil
 	})

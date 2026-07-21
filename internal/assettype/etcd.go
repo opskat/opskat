@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/opskat/opskat/internal/connpool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
@@ -136,6 +135,5 @@ func (h *etcdHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, 
 	if err := a.SetEtcdConfig(cfg); err != nil {
 		return err
 	}
-	connpool.InvalidateEtcd(a.ID)
 	return nil
 }

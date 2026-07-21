@@ -79,16 +79,29 @@ func New(appCtx context.Context, lang LangProvider, mgr *ssh_svc.Manager, sftp *
 	s.forward = forward_svc.New(s.forwardManager)
 	conntest.Register(asset_entity.AssetTypeSSH, s.testConnection)
 	assetconn.Register("ssh", s.closeAssetConns)
+	assetconn.RegisterInvalidator("ssh", s.dropPooledConns)
 	return s
 }
 
-// closeAssetConns 断开该资产在 SSH 侧的一切在用连接：终端会话（连带挂在会话上的
-// SFTP 客户端）、端口转发、以及各协议共用的 SSH 隧道池条目。资产删除时由 assetconn 广播。
+// closeAssetConns 断开该资产在 SSH 侧的交互式在用连接：终端会话（连带挂在会话上的
+// SFTP 客户端）与端口转发。只在资产被删除时广播。
+//
+// 隧道池不在这里——它是可重拨的缓存，归 dropPooledConns 管，而 CloseAsset 会把两者
+// 都跑一遍。
 func (s *SSH) closeAssetConns(_ context.Context, assetID int64) error {
 	for _, sessionID := range s.manager.CloseAsset(assetID) {
 		s.sftp.CleanupSession(sessionID)
 	}
 	s.forwardManager.CloseAsset(assetID)
+	return nil
+}
+
+// dropPooledConns 丢弃各协议共用的 SSH 隧道池里属于该资产的条目。
+//
+// 资产删除和改配置都要丢：数据库/redis 等资产经这台跳板机建隧道，跳板机的地址或口令
+// 改了之后，池里那条按旧配置拨出去的隧道还在，下一次连接照旧复用它。丢掉之后下次
+// 自动重拨——池本来就是这么用的，所以这里不影响用户开着的终端。
+func (s *SSH) dropPooledConns(_ context.Context, assetID int64) error {
 	s.pool.Remove(assetID)
 	return nil
 }

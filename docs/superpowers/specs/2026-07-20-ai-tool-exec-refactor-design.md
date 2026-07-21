@@ -378,7 +378,13 @@ mongo/etcd/kafka 的策略字符串形状改变：mongo 当前匹配裸 `"find"`
 4. ✅ `group_svc.Delete` 事务化。
 5. ✅ 删除资产时断开在用连接（`internal/assetconn` 注册表 + `asset_svc.Delete` 删除成功后广播；
    `group_svc.Delete(deleteAssets=true)` 走 `DeleteByGroupID` 绕过 asset_svc，在事务提交后
-   逐个补广播）。k8s 日志流（streamID 与 assetID 无关）与本地终端刻意未接，见 `internal/assetconn` 包注释。
+   逐个补广播，并逐条写 `delete_asset` 审计）。k8s 日志流（streamID 与 assetID 无关）与
+   本地终端刻意未接，见 `internal/assetconn` 包注释。
+   *顺带修掉的邻接缺陷*：资产**改配置**同样要处置连接，而此前只有 etcd / oss 做了失效、
+   还挂在 `assettype.ApplyUpdateArgs` 里（只有 AI / opsctl 的 `update_asset` 会走到，
+   桌面 UI 改资产不触发）。现在 `assetconn` 分成 Closer（交互式会话，只在删除时关）
+   与 Invalidator（缓存/池化连接，改配置和删除都丢），`asset_svc.Update` 写库成功后
+   广播 `InvalidateAsset`——改口令 / 换主机之后不必再手动重开面板。
 6. ✅ 桌面 UI 路径的资产 CRUD 补审计（`audit.WriteAssetChange`，经 `System.desktopCtx()`
    标 `source=desktop`；请求体是白名单字段，不带 `Config` 里的口令）。
    *开 issue 时那句"`Source: "desktop"` 有定义但无写入方"当时就已经不准：

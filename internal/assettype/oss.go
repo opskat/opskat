@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/opskat/opskat/internal/connpool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/credential_svc"
@@ -116,6 +115,5 @@ func (h *ossHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, a
 	if err := a.SetOSSConfig(cfg); err != nil {
 		return err
 	}
-	connpool.InvalidateOSS(a.ID)
 	return nil
 }

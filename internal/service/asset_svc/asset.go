@@ -79,7 +79,15 @@ func (s *assetSvc) Update(ctx context.Context, asset *asset_entity.Asset) error 
 		return err
 	}
 	asset.Updatetime = time.Now().Unix()
-	return asset_repo.Asset().Update(ctx, asset)
+	if err := asset_repo.Asset().Update(ctx, asset); err != nil {
+		return err
+	}
+	// 连接配置可能变了（主机、端口、口令、隧道），缓存/池化的连接是按旧配置拨出去的，
+	// 不丢掉的话下一次操作照旧复用它，用户会觉得"改了没生效"。放在写库成功之后：
+	// 失败时配置没落库，缓存里的连接仍然是对的。
+	// 只失效不关会话——用户开着的终端不该因为改了个字段被掐断。
+	assetconn.InvalidateAsset(ctx, asset.ID)
+	return nil
 }
 
 func (s *assetSvc) Delete(ctx context.Context, id int64) error {

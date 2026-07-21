@@ -61,12 +61,13 @@ func (q *Query) Startup(ctx context.Context) {
 	go q.redisPanelCache.startEvictor(q.evictCtx, panelConnEvictInterval)
 	go q.mongoPanelCache.startEvictor(q.evictCtx, panelConnEvictInterval)
 	// 在这里而不是 New 里注册：三个缓存到 Startup 才建出来。
-	assetconn.Register("query-panel", q.closeAssetConns)
+	assetconn.RegisterInvalidator("query-panel", q.dropAssetConns)
 }
 
-// closeAssetConns 丢弃该资产在三个面板缓存里的连接（一个资产可能缓存了多个库 / 多个
-// redis db index）。资产删除时由 assetconn 广播。
-func (q *Query) closeAssetConns(_ context.Context, assetID int64) error {
+// dropAssetConns 丢弃该资产在三个面板缓存里的连接（一个资产可能缓存了多个库 / 多个
+// redis db index）。资产被删除或改了连接配置时由 assetconn 广播；下次查询会按最新
+// 配置重新拨号，所以改口令 / 换主机之后不必手动重开面板。
+func (q *Query) dropAssetConns(_ context.Context, assetID int64) error {
 	q.dbPanelCache.DropAsset(assetID)
 	q.redisPanelCache.DropAsset(assetID)
 	q.mongoPanelCache.DropAsset(assetID)

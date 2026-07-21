@@ -182,3 +182,55 @@ func TestAssetSvc_Reorder(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
+
+// TestAssetSvc_Update_InvalidatesConnections 钉住改配置要丢掉缓存/池化的连接。
+//
+// 改了主机地址或口令之后，连接池里那条按旧配置拨出去的连接还在，下一次查询/操作照旧
+// 复用它——用户改完发现"没生效"。此前只有 etcd 与 oss 做了失效，还是挂在 assettype 的
+// ApplyUpdateArgs 里（AI / opsctl 的 update_asset 才会走到），桌面 UI 改资产根本不触发。
+//
+// 只丢缓存不关会话：改配置不该掐断用户开着的终端，那一侧由 CloseAsset 负责。
+func TestAssetSvc_Update_InvalidatesConnections(t *testing.T) {
+	ctx, mockRepo := setupTest(t)
+
+	var invalidated, closed []int64
+	assetconn.RegisterInvalidator("asset_svc_update_test", func(_ context.Context, assetID int64) error {
+		invalidated = append(invalidated, assetID)
+		return nil
+	})
+	assetconn.Register("asset_svc_update_session_test", func(_ context.Context, assetID int64) error {
+		closed = append(closed, assetID)
+		return nil
+	})
+	t.Cleanup(func() {
+		assetconn.UnregisterForTest("asset_svc_update_test")
+		assetconn.UnregisterForTest("asset_svc_update_session_test")
+	})
+
+	convey.Convey("更新资产", t, func() {
+		convey.Convey("更新成功后丢弃该资产的缓存连接，但不动交互式会话", func() {
+			invalidated, closed = nil, nil
+			asset := &asset_entity.Asset{ID: 5, Name: "web-01", Type: asset_entity.AssetTypeSSH}
+			_ = asset.SetSSHConfig(&asset_entity.SSHConfig{
+				Host: "10.0.0.9", Port: 22, Username: "root", AuthType: asset_entity.AuthTypePassword,
+			})
+			mockRepo.EXPECT().Update(gomock.Any(), asset).Return(nil)
+
+			assert.NoError(t, Asset().Update(ctx, asset))
+			assert.Equal(t, []int64{5}, invalidated)
+			assert.Empty(t, closed, "改配置不该关掉用户开着的会话")
+		})
+
+		convey.Convey("更新失败时不失效：配置没落库，缓存里的连接仍然是对的", func() {
+			invalidated = nil
+			asset := &asset_entity.Asset{ID: 6, Name: "web-02", Type: asset_entity.AssetTypeSSH}
+			_ = asset.SetSSHConfig(&asset_entity.SSHConfig{
+				Host: "10.0.0.9", Port: 22, Username: "root", AuthType: asset_entity.AuthTypePassword,
+			})
+			mockRepo.EXPECT().Update(gomock.Any(), asset).Return(errors.New("db down"))
+
+			assert.Error(t, Asset().Update(ctx, asset))
+			assert.Empty(t, invalidated)
+		})
+	})
+}
