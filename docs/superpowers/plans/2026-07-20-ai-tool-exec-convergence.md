@@ -1092,12 +1092,59 @@ git commit -m "✨ 新增 mongo 命令 DSL 与 round-trip 属性测试"
 
 ### Task 5: mongo 接入 exec
 
+> **实施期修正（2026-07-21，用户裁定）——本块优先于下方原文。**
+>
+> 原文让 `CanonicalizeMongoCommand` 返回**裸 op**，理由是不破坏 `BuiltinMongoReadOnly`。
+> Task 4 评审实测指出：这样审批弹窗仍只显示 `deleteMany`，看不到集合与过滤条件，
+> 而**不带 `--query` 的 `deleteMany` 会清空整个集合**（`mongodb_helper.go:464-465`
+> 把 filter 默认成 `bson.D{}`），用户无法从弹窗区分这两者——正是本 Plan 要消灭的
+> 信息缺失。反过来，若直接把富命令串喂给现有匹配器则是 **fail-open**（我已实测：
+> `dropCollection` 命中 deny，`dropCollection users` 掉到 NeedConfirm）。
+>
+> **裁定：改匹配器，用富命令串。** 新增 op 感知的 `MatchMongoRule`，与 `MatchRedisRule`
+> 同形；`CanonicalizeMongoCommand` 返回 `Render()` 的完整命令串。评审已原型验证：
+> 现有 mongo 测试与 `go test ./internal/ai/...` 全绿，内置 deny 规则仍命中。
+>
+> 因此下方原文中这三处**作废**：
+> 1. `TestCanonicalizeMongoCommand_YieldsBareOp` 及其"裸 op"注释 —— 改为断言完整命令串；
+> 2. SKILL.md 里 "`--db` overrides the asset's default database; omit it to use the default"
+>    —— **该默认不存在**（Task 4 评审确认：`mongoFind` 等硬要求非空 database，
+>    且这条路径从不读 `MongoDBConfig.Database`）。见下方"必须同时完成"第 5 条；
+> 3. `PolicyString()` 在 `MatchMongoRule` 落地后应删除 —— 否则仓内并存两种"策略串"定义，
+>    正是 AGENTS.md 禁止的并行副本。
+>
+> **必须与接线在同一个任务内完成（否则留下 fail-open 窗口）：**
+> 1. `MatchMongoRule(rule, command)`：只切一次词，字段 0 用 **`EqualFold`** 比较
+>    —— 现有 `policyValueMatches` 折叠大小写，而 `MatchCommandRule` **不折叠**，
+>    照搬后者会把 `DenyTypes:["DropDatabase"]` 变成静默 fail-open。单 token 规则直接为真；
+>    字段 1 作为可选的集合收窄做 glob 匹配。
+> 2. `checkMongoPolicyRules`（`internal/ai/policy/mongo_policy.go:16,27`）的两处
+>    `policyValueMatches` 换成它。
+> 3. **组通用规则路径**：`permission.go:260` 传的是 `policy.MatchCommandRule`，
+>    实测 `MatchCommandRule("deleteMany", "deleteMany users --db=prod --query=…")` = false
+>    → 写成裸 op 的组通用 **deny 规则会静默失效**。改传 `MatchMongoRule`，
+>    与 redis/etcd 在 `permission.go:150/187` 的做法一致。
+> 4. **grant 匹配**：`matchGrantForAsset` 走 `MatchCommandRule`（`permission.go:332-333`）。
+>    改用 `matchGrantForAssetWith(..., policy.MatchMongoRule)`，与 kafka 在 `permission.go:317`
+>    的做法一致；否则新 grant 会绑死具体 filter，"全部允许"几乎不可复用。
+> 5. `CanonicalizeMongoCommand` 在资产配了默认库而命令没写 `--db` 时注入它，
+>    与 k8s 注入 `--context/--namespace` 同一手法；SKILL.md 按**实际行为**描述。
+> 6. `policy_tester.go:331/349` 与运行时同步，且 `:329` 那条
+>    "Mongo 操作是单 token，组通用策略用 MatchCommandRule" 的注释会变成假话，需一并改。
+> 7. **审计缺口**：`dropDatabase`/`dropCollection` 在 deny 清单里，却**不在** `mongoOps`
+>    （从来不可执行）。模型尝试时会在 canonicalize 阶段拿到解析错误，而
+>    `tool_handlers_unified.go:69-73` 对 canonicalize 错误**没有** `recordShortCircuit`
+>    → 不落 `decision=deny` 的审计行，比今天更差。把 `recordShortCircuit` 扩展到
+>    canonicalize 失败路径（通用修复，同时惠及其他类型）。
+
 **Files:**
 - Create: `internal/ai/skills/mongodb/SKILL.md`
 - Create: `internal/ai/helper/mongo_exec.go`
+- Create: `internal/ai/policy/mongo_rule.go`（`MatchMongoRule`）
+- Modify: `internal/ai/policy/mongo_policy.go`、`internal/ai/permission/permission.go`、`internal/ai/policy/policy_tester.go`、`internal/ai/tool/tool_handlers_unified.go`
 - Modify: `internal/ai/execimpl/register.go`
 - Modify: `internal/ai/execimpl/coverage_test.go`
-- Test: `internal/ai/helper/mongo_exec_test.go`
+- Test: `internal/ai/helper/mongo_exec_test.go`、`internal/ai/policy/mongo_rule_test.go`
 
 **Interfaces:**
 - Consumes: `ParseMongoCommand`（Task 4）、`ExecuteMongoDB`（`internal/ai/helper/mongodb_helper.go:132`）、`getOrDialMongoDB`（`:100`）
