@@ -351,6 +351,11 @@ func executeBatchHandler(ctx context.Context, handlers map[string]tool.ToolHandl
 	}
 
 	ctx = aictx.WithAuditSource(ctx, "opsctl")
+	// batch 不走 callHandler，得自己声明"已预检"：上面 Step 3 已经对每条命令跑过
+	// permission.CheckPermission，need-confirm 的还聚合成一次桌面审批。handler 内部的
+	// 权限检查是 fail-closed 的（permission.RequireCheckerOrPreapproved），而 opsctl 的
+	// context 里没有 PolicyChecker——不声明的话这里会直接报 checker not available。
+	ctx = permission.WithPreapproved(ctx)
 	handler, ok := handlers[toolName]
 	if !ok {
 		result.Error = fmt.Sprintf("unknown tool: %s", toolName)

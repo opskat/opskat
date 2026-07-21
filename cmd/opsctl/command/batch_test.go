@@ -1,10 +1,15 @@
 package command
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
+
+	"github.com/opskat/opskat/internal/ai/permission"
+	"github.com/opskat/opskat/internal/ai/tool"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
 func TestParseBatchArg(t *testing.T) {
@@ -176,6 +181,31 @@ func TestBatchAuditToolIsDispatchable(t *testing.T) {
 	Convey("batchAuditTool 必须能在 AllToolDefs 派发表里查到", t, func() {
 		So(batchAuditTool, ShouldEqual, "exec")
 		So(buildHandlerMap(), ShouldContainKey, batchAuditTool)
+	})
+}
+
+// TestExecuteBatchHandlerMarksPreapproved 锁住 batch 派发时声明了"已预检"。
+//
+// batch 不经过 callHandler（那里统一标记），而是自己查 handler 直接调。工具侧的权限
+// 检查是 fail-closed 的：opsctl 的 context 里没有 PolicyChecker，不声明就会在
+// permission.RequireCheckerOrPreapproved 上直接失败，`opsctl batch --type sql` 整个不可用。
+// batch 有资格拿这个豁免——Step 3 已经对每条命令跑过 permission.CheckPermission。
+func TestExecuteBatchHandlerMarksPreapproved(t *testing.T) {
+	Convey("executeBatchHandler 传给 handler 的 ctx 必须通得过 fail-closed 检查", t, func() {
+		var checkErr error
+		handlers := map[string]tool.ToolHandlerFunc{
+			batchAuditTool: func(ctx context.Context, _ map[string]any) (string, error) {
+				_, checkErr = permission.RequireCheckerOrPreapproved(ctx)
+				return "ok", nil
+			},
+		}
+
+		result := executeBatchHandler(context.Background(), handlers, batchAuditTool,
+			resolvedBatchCmd{asset: &asset_entity.Asset{ID: 1, Name: "db-1"}, cmdType: "sql", command: "SELECT 1"},
+			map[string]any{"asset": "1", "command": "SELECT 1"})
+
+		So(checkErr, ShouldBeNil)
+		So(result.ExitCode, ShouldEqual, 0)
 	})
 }
 
