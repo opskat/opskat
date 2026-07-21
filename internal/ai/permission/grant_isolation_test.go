@@ -6,20 +6,38 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/policy"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/repository/grant_repo"
 
 	. "github.com/smartystreets/goconvey/convey"
+	"go.uber.org/mock/gomock"
 )
 
-// withStubGrant 注册 stubGrantRepo 并返回带 sessionID 的 ctx。
-// grant 匹配依赖 aictx.GetSessionID —— 不注入 sessionID 会直接返回空串，测试会假绿。
+// withStubGrant 注册 stubGrantRepo 与一个只认 assetID=1 的 mock asset repo，
+// 返回带 sessionID 的 ctx。两件事都是必须的：grant 匹配依赖 aictx.GetSessionID
+// （不注入会直接返回空串，测试假绿），而按资产的匹配链会解析资产拿组链
+// （asset_repo 未注册时是空指针崩溃，不是失败）。
 func withStubGrant(t *testing.T) context.Context {
 	stub := newStubGrantRepo()
-	orig := grant_repo.Grant()
+	origGrant := grant_repo.Grant()
 	grant_repo.RegisterGrant(stub)
+
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).
+		Return(&asset_entity.Asset{ID: 1, Name: "web-01", Type: asset_entity.AssetTypeSSH}, nil).AnyTimes()
+	origAsset := asset_repo.Asset()
+	asset_repo.RegisterAsset(mockAsset)
+
 	t.Cleanup(func() {
-		if orig != nil {
-			grant_repo.RegisterGrant(orig)
+		if origGrant != nil {
+			grant_repo.RegisterGrant(origGrant)
+		}
+		if origAsset != nil {
+			asset_repo.RegisterAsset(origAsset)
 		}
 	})
 	return aictx.WithSessionID(context.Background(), "sess-cp")

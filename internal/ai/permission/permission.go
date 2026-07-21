@@ -333,6 +333,24 @@ func checkKafkaPermission(ctx context.Context, assetID int64, command string) ai
 
 // --- Grant 匹配辅助 ---
 
+// --- 文件传输（cp） ---
+
+// checkFileTransferPermission 校验一次文件传输的远端路径。
+//
+// 与命令类检查有意不同：只查 grant，不查 CommandPolicy 的 allow/deny 规则——那些
+// 规则是命令形状的（`systemctl *`），拿路径去撞它们只会产生误判。匹配用
+// policy.MatchPathRule（POSIX glob），与 local_write 的路径白名单同一套语义。
+func checkFileTransferPermission(ctx context.Context, assetID int64, remotePath string) aictx.CheckResult {
+	remotePath = strings.TrimSpace(remotePath)
+	if remotePath == "" {
+		return aictx.CheckResult{Decision: aictx.NeedConfirm}
+	}
+	if grantResult := matchGrantForAssetWith(ctx, assetID, remotePath, GrantToolCp, policy.MatchPathRule); grantResult != nil {
+		return *grantResult
+	}
+	return aictx.CheckResult{Decision: aictx.NeedConfirm}
+}
+
 // matchGrantForAsset 为 database/redis 类型做 DB Grant 匹配。
 // toolName 是调用方的审批类型，决定这次匹配看哪个工具面的 grant（见 grantItemAppliesTo）。
 func matchGrantForAsset(ctx context.Context, assetID int64, command, toolName string) *aictx.CheckResult {
