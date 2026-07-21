@@ -97,6 +97,7 @@ function AIChatInputComponent({
       attributes: {
         class: "ProseMirror min-h-[3rem] max-h-[25vh] overflow-y-auto px-3 pt-3 pb-1 text-sm outline-none resize-none",
         role: "textbox",
+        "data-testid": "ai-chat-input",
       },
       handleKeyDown: (view, event) => {
         if (!editor) return false;

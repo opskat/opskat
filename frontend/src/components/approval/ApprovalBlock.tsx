@@ -60,7 +60,12 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
   };
 
   return (
-    <div className="my-2 rounded-[10px] border border-warning/30 bg-warning/10 p-4 space-y-3 text-xs overflow-hidden">
+    <div
+      data-testid="ai-approval-block"
+      data-approval-kind={kind}
+      data-confirm-id={block.confirmId}
+      className="my-2 rounded-[10px] border border-warning/30 bg-warning/10 p-4 space-y-3 text-xs overflow-hidden"
+    >
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -119,7 +124,10 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                 />
               ) : (
                 <div className="rounded-md bg-warning/5 px-2.5 py-2">
-                  <code className="block font-mono text-[11px] text-muted-foreground whitespace-pre-wrap break-all">
+                  <code
+                    data-testid="ai-approval-command"
+                    className="block font-mono text-[11px] text-muted-foreground whitespace-pre-wrap break-all"
+                  >
                     {item.command}
                   </code>
                 </div>
@@ -223,6 +231,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
             <Button
               size="sm"
               variant="outline"
+              data-testid="ai-approval-deny"
               className="h-8 rounded-md px-4 text-xs border-warning/30 text-warning hover:bg-warning/10 hover:text-warning"
               onClick={() => respond("deny")}
             >
@@ -231,6 +240,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
             {rememberMode ? (
               <Button
                 size="sm"
+                data-testid="ai-approval-allow-all"
                 className="h-8 rounded-md px-4 text-xs bg-warning/20 text-warning hover:bg-warning/30"
                 onClick={() => respond("allowAll")}
               >
@@ -239,6 +249,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
             ) : (
               <Button
                 size="sm"
+                data-testid="ai-approval-remember"
                 className="h-8 rounded-md px-4 text-xs bg-warning/20 text-warning hover:bg-warning/30"
                 onClick={() => {
                   setRememberMode(true);
@@ -249,6 +260,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
             )}
             <Button
               size="sm"
+              data-testid="ai-approval-allow"
               className="h-8 rounded-md px-4 text-xs bg-warning hover:bg-warning/90 text-warning-foreground font-semibold"
               onClick={() => respond("allow")}
             >

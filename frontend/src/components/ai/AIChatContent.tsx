@@ -610,6 +610,7 @@ export function AIChatContent({
                   <Button
                     size="icon"
                     variant="destructive"
+                    data-testid="ai-stop-button"
                     className="h-7 w-7 shrink-0 rounded-lg"
                     onClick={handleStop}
                   >
@@ -618,6 +619,7 @@ export function AIChatContent({
                 ) : (
                   <Button
                     size="icon"
+                    data-testid="ai-send-button"
                     className="h-7 w-7 shrink-0 rounded-lg"
                     onClick={() => inputRef.current?.submit()}
                     disabled={empty}

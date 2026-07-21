@@ -64,6 +64,7 @@ export function SideAssistantHeader({
                 variant="ghost"
                 size="icon"
                 className="h-6 w-6"
+                data-testid="ai-new-chat"
                 onClick={onNewChat}
                 aria-label={t("ai.sidebar.newChat")}
                 title={t("ai.sidebar.newChat")}
