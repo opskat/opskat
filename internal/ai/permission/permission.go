@@ -16,6 +16,11 @@ import (
 	"github.com/opskat/opskat/internal/service/asset_svc"
 )
 
+// GrantToolCp 是文件传输授权在 grant_items.tool_name 里的取值，同时也是它的审批类型。
+// 它的 Command 是路径而非命令，匹配走 policy.MatchPathRule，必须与命令面的 grant
+// 彻底隔离——见 grantItemAppliesTo。
+const GrantToolCp = "cp"
+
 // CheckPermission 统一权限检查（策略 + DB Grant 匹配）。
 // 不包含用户确认逻辑 — aictx.NeedConfirm 时由调用方处理。
 // assetType: "ssh" | "serial" | "database" | "redis" | "mongodb" | "kafka" | "k8s" |
@@ -131,7 +136,7 @@ func checkDatabasePermission(ctx context.Context, assetID int64, sqlText string)
 	}
 
 	// DB Grant 匹配：每条语句都必须命中 grant，不能用单条 grant 整串覆盖多语句
-	if grantResult := matchGrantForAssetSubCmds(ctx, assetID, stmtTexts); grantResult != nil {
+	if grantResult := matchGrantForAssetSubCmds(ctx, assetID, stmtTexts, "sql"); grantResult != nil {
 		return *grantResult
 	}
 
@@ -167,7 +172,7 @@ func checkRedisPermission(ctx context.Context, assetID int64, command string) ai
 	}
 
 	// DB Grant 匹配
-	if grantResult := matchGrantForAsset(ctx, assetID, command); grantResult != nil {
+	if grantResult := matchGrantForAsset(ctx, assetID, command, "redis"); grantResult != nil {
 		return *grantResult
 	}
 
@@ -201,7 +206,7 @@ func checkEtcdPermission(ctx context.Context, assetID int64, command string) aic
 		return result
 	}
 
-	if grantResult := matchGrantForAsset(ctx, assetID, command); grantResult != nil {
+	if grantResult := matchGrantForAsset(ctx, assetID, command, "etcd"); grantResult != nil {
 		return *grantResult
 	}
 
@@ -242,7 +247,7 @@ func checkK8sPermission(ctx context.Context, assetID int64, command string) aict
 
 	// K8s grant 也要按子命令逐条匹配，否则 `kubectl get *` 整串匹配会让
 	// `kubectl get pods && kubectl apply -f x.yaml` 被错误放行。
-	if grantResult := matchGrantForAssetSubCmds(ctx, assetID, subCmds); grantResult != nil {
+	if grantResult := matchGrantForAssetSubCmds(ctx, assetID, subCmds, "k8s"); grantResult != nil {
 		return *grantResult
 	}
 
@@ -282,7 +287,7 @@ func checkMongoDBPermission(ctx context.Context, assetID int64, command string) 
 	// DB Grant 匹配：同样走 MatchMongoRule（与 Kafka 传 MatchKafkaRule 同理）。
 	// 用 MatchCommandRule 会让 grant 绑死审批时那一条命令的 --db/--query，
 	// "全部允许"批下来的 pattern 连自己都匹配不上，几乎不可复用。
-	if grantResult := matchGrantForAssetWith(ctx, assetID, command, policy.MatchMongoRule); grantResult != nil {
+	if grantResult := matchGrantForAssetWith(ctx, assetID, command, "mongo", policy.MatchMongoRule); grantResult != nil {
 		return *grantResult
 	}
 
@@ -319,7 +324,7 @@ func checkKafkaPermission(ctx context.Context, assetID int64, command string) ai
 	}
 
 	// DB Grant 匹配
-	if grantResult := matchGrantForAssetWith(ctx, assetID, command, policy.MatchKafkaRule); grantResult != nil {
+	if grantResult := matchGrantForAssetWith(ctx, assetID, command, "kafka", policy.MatchKafkaRule); grantResult != nil {
 		return *grantResult
 	}
 
@@ -333,21 +338,40 @@ func checkKafkaPermission(ctx context.Context, assetID int64, command string) ai
 
 // --- Grant 匹配辅助 ---
 
-// matchGrantForAsset 为 database/redis 类型做 DB Grant 匹配
-func matchGrantForAsset(ctx context.Context, assetID int64, command string) *aictx.CheckResult {
-	return matchGrantForAssetWith(ctx, assetID, command, policy.MatchCommandRule)
+// --- 文件传输（cp） ---
+
+// checkFileTransferPermission 校验一次文件传输的远端路径。
+//
+// 与命令类检查有意不同：只查 grant，不查 CommandPolicy 的 allow/deny 规则——那些
+// 规则是命令形状的（`systemctl *`），拿路径去撞它们只会产生误判。匹配用
+// policy.MatchPathRule（POSIX glob），与 local_write 的路径白名单同一套语义。
+func checkFileTransferPermission(ctx context.Context, assetID int64, remotePath string) aictx.CheckResult {
+	remotePath = strings.TrimSpace(remotePath)
+	if remotePath == "" {
+		return aictx.CheckResult{Decision: aictx.NeedConfirm}
+	}
+	if grantResult := matchGrantForAssetWith(ctx, assetID, remotePath, GrantToolCp, policy.MatchPathRule); grantResult != nil {
+		return *grantResult
+	}
+	return aictx.CheckResult{Decision: aictx.NeedConfirm}
 }
 
-func matchGrantForAssetWith(ctx context.Context, assetID int64, command string, matchFn policy.MatchFunc) *aictx.CheckResult {
-	return matchGrantForAssetSubCmdsWith(ctx, assetID, []string{command}, matchFn)
+// matchGrantForAsset 为 database/redis 类型做 DB Grant 匹配。
+// toolName 是调用方的审批类型，决定这次匹配看哪个工具面的 grant（见 grantItemAppliesTo）。
+func matchGrantForAsset(ctx context.Context, assetID int64, command, toolName string) *aictx.CheckResult {
+	return matchGrantForAssetWith(ctx, assetID, command, toolName, policy.MatchCommandRule)
+}
+
+func matchGrantForAssetWith(ctx context.Context, assetID int64, command, toolName string, matchFn policy.MatchFunc) *aictx.CheckResult {
+	return matchGrantForAssetSubCmdsWith(ctx, assetID, []string{command}, toolName, matchFn)
 }
 
 // matchGrantForAssetSubCmds 用 policy.MatchCommandRule 按子命令逐条匹配，专给 shell 类资产（如 K8s）使用。
-func matchGrantForAssetSubCmds(ctx context.Context, assetID int64, subCmds []string) *aictx.CheckResult {
-	return matchGrantForAssetSubCmdsWith(ctx, assetID, subCmds, policy.MatchCommandRule)
+func matchGrantForAssetSubCmds(ctx context.Context, assetID int64, subCmds []string, toolName string) *aictx.CheckResult {
+	return matchGrantForAssetSubCmdsWith(ctx, assetID, subCmds, toolName, policy.MatchCommandRule)
 }
 
-func matchGrantForAssetSubCmdsWith(ctx context.Context, assetID int64, subCmds []string, matchFn policy.MatchFunc) *aictx.CheckResult {
+func matchGrantForAssetSubCmdsWith(ctx context.Context, assetID int64, subCmds []string, toolName string, matchFn policy.MatchFunc) *aictx.CheckResult {
 	asset, err := asset_svc.Asset().Get(ctx, assetID)
 	if err != nil {
 		return nil
@@ -356,7 +380,7 @@ func matchGrantForAssetSubCmdsWith(ctx context.Context, assetID int64, subCmds [
 	if asset != nil && asset.GroupID > 0 {
 		groups = policy.ResolveGroupChain(ctx, asset.GroupID)
 	}
-	if pattern := matchGrantPatternsWith(ctx, assetID, groups, subCmds, matchFn); pattern != "" {
+	if pattern := matchGrantPatternsWith(ctx, assetID, groups, subCmds, toolName, matchFn); pattern != "" {
 		return &aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceGrantAllow, MatchedPattern: pattern}
 	}
 	return nil
@@ -408,13 +432,16 @@ func NormalizeGrantPatterns(approvalType, command string) []string {
 // 适合 app 层在多种审批回调（opsctl 单审批、AI grant 流）里调用，避免每个路径重复拆分逻辑。
 func SaveGrantPatternsForApproval(ctx context.Context, sessionID string, assetID int64, assetName, approvalType, command string) {
 	for _, p := range NormalizeGrantPatterns(approvalType, command) {
-		SaveGrantPattern(ctx, sessionID, assetID, assetName, p)
+		SaveGrantPattern(ctx, sessionID, assetID, assetName, approvalType, p)
 	}
 }
 
-// SaveGrantPattern 将命令模式保存为已批准的 GrantItem。
+// SaveGrantPattern 将模式保存为已批准的 GrantItem。
 // 如果 sessionID 对应的 GrantSession 不存在，自动创建（状态: approved）。
-func SaveGrantPattern(ctx context.Context, sessionID string, assetID int64, assetName string, command string) {
+//
+// toolName 取审批类型（"exec" / "redis" / "cp" …），决定这条授权属于哪个工具面：
+// 匹配时按它隔离，命令授权与文件传输授权互不可见（见 grantItemAppliesTo）。
+func SaveGrantPattern(ctx context.Context, sessionID string, assetID int64, assetName, toolName, command string) {
 	if sessionID == "" || command == "" {
 		return
 	}
@@ -438,7 +465,7 @@ func SaveGrantPattern(ctx context.Context, sessionID string, assetID int64, asse
 
 	item := &grant_entity.GrantItem{
 		GrantSessionID: sessionID,
-		ToolName:       "exec",
+		ToolName:       toolName,
 		AssetID:        assetID,
 		AssetName:      assetName,
 		Command:        command,
