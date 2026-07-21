@@ -49,8 +49,8 @@ func maskAPIKey(key string) string {
 }
 
 // allBuiltinAssetTypeSkills 返回全部已内嵌用法文档的资产类型（skills.Types()，目前是
-// ssh/serial/database/redis/k8s）的一行技能描述（skills.Description），用于 PromptBuilder
-// 的技能清单。
+// database/etcd/k8s/redis/serial/ssh）的一行技能描述（skills.Description），用于
+// PromptBuilder 的技能清单。
 //
 // 无条件全量返回，不看 openTabs：这份清单是**发现**用的，让模型知道 help 存在、以及
 // exec 覆盖了哪些类型。按 Tab 过滤会让没开对应 Tab 的会话完全看不到这条路径。一行一

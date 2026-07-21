@@ -25,7 +25,8 @@ func RegisterExtractor(toolName string, fn CommandExtractorFunc) {
 // auditMiddleware，审计命令摘要永远走这条别名。统一 AI exec 工具
 // （internal/ai/tool/tools_unified.go）复用了同一个工具名 "exec"，但正常情况下
 // 不会落到这条别名——auditMiddleware 会在工具执行前解析资产、按需算出规范化命令
-// （目前只有 k8s，注入 --context/--namespace），通过 ToolCallInfo.Command 直接
+// （k8s 注入 --context/--namespace；etcd 走 ParseCommand+FormatCommand 的 round trip，
+// 规范化大小写/复合命令拼写/flag 顺序），通过 ToolCallInfo.Command 直接
 // 覆盖（见 runner.resolveAssetForAudit），此函数根本不会被调用去决定它的展示值。
 // 只有 auditMiddleware 解析不出资产（引用不存在/歧义）时才会落回这条别名，用
 // run_command 提取器读 args["command"]——这对 ssh/serial/redis/database 同样正确，

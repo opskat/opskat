@@ -22,7 +22,8 @@ import (
 //     （非 Go error，让模型能在同一轮里自纠：调用 help 后重试），而不是让整轮
 //     因 error 中断。
 //  5. 规范化（如该类型注册了 CanonicalizeFunc）：把模型给的原始命令改写成
-//     "真正会被执行、也应被策略匹配"的形式（目前只有 k8s，注入 --context/--namespace），
+//     "真正会被执行、也应被策略匹配"的形式（k8s 注入 --context/--namespace；etcd 走
+//     ParseCommand+FormatCommand 的 round trip，规范化大小写/复合命令拼写/flag 顺序），
 //     结果只用于下一步的权限检查，不覆盖原始命令。
 //  6. 前置条件检查（如该类型注册了 PrecheckFunc）：校验一个跟命令内容无关、但一定会
 //     让执行失败的前提条件（目前只有 serial：没有活跃会话）。与规范化一样无副作用，
@@ -122,7 +123,7 @@ func execGuidance(asset *asset_entity.Asset) string {
 		asset.Name, asset.Type, asset.Name)
 }
 
-// unsupportedTypeError 类型未注册执行器（当前 Plan A 尚未覆盖，如 mongodb/etcd/kafka）
+// unsupportedTypeError 类型未注册执行器（当前 Plan A 尚未覆盖，如 mongodb/kafka）
 // 时返回的明确错误。
 func unsupportedTypeError(asset *asset_entity.Asset) error {
 	return fmt.Errorf("asset %q (type=%s) has no exec support yet; supported types: %s",

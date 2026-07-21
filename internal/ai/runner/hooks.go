@@ -68,10 +68,11 @@ func auditMiddleware(c *agent.ToolContext) {
 // the result through audit.ToolCallInfo instead.
 //
 // It also computes the command's canonical form for asset types that register a
-// permission.CanonicalizeFunc (currently only k8s, which injects
-// --context/--namespace) — matching what the permission check and approval dialog
-// already saw, so the audit row doesn't show the model's raw string while the
-// approval showed the effective one.
+// permission.CanonicalizeFunc (k8s injects --context/--namespace; etcd round-trips
+// through ParseCommand+FormatCommand to normalize case, compound-op spelling, and flag
+// order) — matching what the permission check and approval dialog already saw, so the
+// audit row doesn't show the model's raw string while the approval showed the effective
+// one.
 //
 // Best-effort throughout: any resolution failure (missing/ambiguous/unknown asset,
 // no canonicalize hook, canonicalize error) just leaves the corresponding return

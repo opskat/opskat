@@ -43,8 +43,9 @@ type ToolCallInfo struct {
 
 	// Command 允许调用方预先算好命令摘要，覆盖 ExtractCommandForAudit 的默认解析。
 	// 目前只有 auditMiddleware 给 exec 工具填：资产类型注册了 CanonicalizeFunc 时
-	// （目前只有 k8s，注入 --context/--namespace），这里存规范化后、真正过了权限
-	// 检查/审批弹窗展示的命令，而不是模型传入的原始字符串——否则 k8s 的审计会跟
+	// （k8s 注入 --context/--namespace；etcd 走 ParseCommand+FormatCommand 的 round
+	// trip 规范化大小写/复合命令拼写/flag 顺序），这里存规范化后、真正过了权限
+	// 检查/审批弹窗展示的命令，而不是模型传入的原始字符串——否则审计会跟
 	// 审批弹窗对不上。空字符串表示未提供，回退到 ExtractCommandForAudit。
 	Command string
 }

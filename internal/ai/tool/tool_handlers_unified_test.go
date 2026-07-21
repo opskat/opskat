@@ -415,3 +415,57 @@ func TestHandleExec_EtcdMalformedCommandNeverReachesPermissionCheck(t *testing.T
 			"never appear before ParseCommand has validated the syntax")
 	}
 }
+
+// TestHandleExec_EtcdLeaseCommandsMissingRequiredArgNeverReachesPermissionCheck extends
+// the ordering guard above to "lease grant"/"lease revoke" without their required
+// argument. Unlike "put /only-key", these are syntactically well-formed as far as the
+// generic key/value positional parsing goes — ParseCommand used to accept them and let
+// them fail later, at dispatch time (etcd_svc/ops.go's dispatchLeaseGrant/
+// dispatchLeaseRevoke), which is after the unified exec's permission check. That let an
+// approval dialog pop (and, on "allow all", persist a grant) for a command that was
+// always going to fail — the exact bug this test locks shut. ParseCommand now rejects
+// both directly (etcd_svc/command.go, next to opRequiresKey), so
+// CanonicalizeEtcdCommand rejects them before handleExec ever reaches the permission
+// check.
+//
+// Both commands are mutating ops outside the default read-only allowlist, so — per the
+// trap documented on newRecordingChecker — CheckForAsset actually runs (and this test
+// would actually fail) if the ordering regresses; a read-only command would make
+// *checkCalled vacuously false regardless of ordering.
+func TestHandleExec_EtcdLeaseCommandsMissingRequiredArgNeverReachesPermissionCheck(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		wantErr string
+	}{
+		{"lease grant without --ttl", "lease grant", "lease_grant requires positive ttl"},
+		{"lease revoke without --lease", "lease revoke", "lease_revoke requires lease id"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := setupUnified(t)
+			asset := &asset_entity.Asset{ID: 21, Name: "etcd-1", Type: asset_entity.AssetTypeEtcd}
+			m.EXPECT().FindByName(gomock.Any(), "21").Return(nil, nil).AnyTimes()
+			m.EXPECT().Find(gomock.Any(), int64(21)).Return(asset, nil).AnyTimes()
+
+			checker, checkCalled := newRecordingChecker()
+			ctx := WithDocGate(context.Background(), NewDocGate())
+			ctx = permission.WithPolicyChecker(ctx, checker)
+			GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeEtcd)
+
+			_, err := handleExec(ctx, map[string]any{
+				"asset": "21", "command": tc.command,
+			})
+			if err == nil {
+				t.Fatalf("expected a parse error for %q, got nil", tc.command)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("got %q, want it to contain %q", err.Error(), tc.wantErr)
+			}
+			if *checkCalled {
+				t.Fatalf("CheckForAsset ran for %q — an approval dialog must never appear for a "+
+					"command that ParseCommand can already prove will fail", tc.command)
+			}
+		})
+	}
+}

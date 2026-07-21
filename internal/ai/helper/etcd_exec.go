@@ -18,6 +18,7 @@ func ExecEtcdOnAsset(ctx context.Context, asset *asset_entity.Asset, command, _ 
 		return "", err
 	}
 	req.AssetID = asset.ID
+	req.Source = "ai"
 
 	svc := etcd_svc.New(getSSHPool(ctx))
 	result, err := svc.Exec(ctx, req)

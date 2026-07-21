@@ -44,9 +44,8 @@ var supportedOps = map[string]bool{
 var opRequiresKey = map[string]bool{"get": true, "put": true, "del": true}
 
 // ParseCommand 解析 etcd 命令串,是 FormatCommand 的逆函数
-// （TestParseFormat_RoundTrip 锁住这条性质）。目前全仓没有生产调用方——只被本包
-// 测试直接调用；接入统一 exec 工具是 docs/superpowers/plans/2026-07-20-ai-tool-exec-convergence.md
-// 的 Task 3（etcd 接入 exec）的范围。
+// （TestParseFormat_RoundTrip 锁住这条性质）。生产调用方是 internal/ai/helper/etcd_exec.go
+// 的 ExecEtcdOnAsset / CanonicalizeEtcdCommand（统一 exec 工具的 etcd 执行器与规范化钩子）。
 // 不追求 etcdctl 完全兼容,只识别支持的子集:
 //
 //	<op> [key] [value...] [--flag] [--flag=val]
@@ -164,6 +163,20 @@ func ParseCommand(s string) (*ExecRequest, error) {
 		// round-trip 不受影响——FormatCommand 对含空格的值总是加引号，
 		// 引号内的空格经 cmdline.Words 已收进单个 token，Join 一个元素是恒等。
 		req.Value = strings.Join(positional[1:], " ")
+	case "lease_grant":
+		// 与 put/get/del 的位置参数校验同一原则：lease_grant/lease_revoke 缺少必需参数
+		// 时必然在 dispatch 阶段失败（ops.go 的 dispatchLeaseGrant/dispatchLeaseRevoke
+		// 各有一份等价检查，是 IPC 路径——它直接构造 ExecRequest,不经过 ParseCommand——
+		// 的边界防线,继续保留)。这里提前拒绝是为了让 CanonicalizeEtcdCommand（统一 exec
+		// 工具的规范化钩子）在权限检查、审批弹窗之前就能识别"语法合法但注定失败"的命令,
+		// 不然模型会先被弹一次审批,批准后命令才因为这个检查失败。
+		if ttl, ok := ttlFromArgs(req.Args); !ok || ttl <= 0 {
+			return nil, errors.New("lease_grant requires positive ttl")
+		}
+	case "lease_revoke":
+		if req.LeaseID == 0 {
+			return nil, errors.New("lease_revoke requires lease id")
+		}
 	}
 	return req, nil
 }
