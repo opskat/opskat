@@ -7,16 +7,21 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
-// checkMongoPolicyRules 检查 MongoDB 操作是否符合给定策略（不合并默认策略）
-func checkMongoPolicyRules(ctx context.Context, p *asset_entity.MongoPolicy, operation string) aictx.CheckResult {
+// checkMongoPolicyRules 检查 MongoDB 命令是否符合给定策略（不合并默认策略）。
+//
+// command 是完整的 mongo 命令串（`<op> [collection] [--db=…] [--query=…]`），
+// 不是裸 operation：统一 exec 的 CanonicalizeMongoCommand 送进来的就是这个形式，
+// 审批弹窗与审计看到的也是它。匹配交给 op 感知的 MatchMongoRule——用裸 op 全等
+// 比较（policyValueMatches）会让所有内置 deny 在富命令串上静默失配。
+func checkMongoPolicyRules(ctx context.Context, p *asset_entity.MongoPolicy, command string) aictx.CheckResult {
 	if p == nil {
 		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourcePolicyAllow}
 	}
 	for _, denied := range p.DenyTypes {
-		if policyValueMatches(denied, operation) {
+		if MatchMongoRule(denied, command) {
 			return aictx.CheckResult{
 				Decision:       aictx.Deny,
-				Message:        PolicyFmt(ctx, "MongoDB operation %s denied by policy", "MongoDB 操作 %s 被策略禁止", operation),
+				Message:        PolicyFmt(ctx, "MongoDB operation %s denied by policy", "MongoDB 操作 %s 被策略禁止", command),
 				DecisionSource: aictx.SourcePolicyDeny,
 				MatchedPattern: denied,
 			}
@@ -24,7 +29,7 @@ func checkMongoPolicyRules(ctx context.Context, p *asset_entity.MongoPolicy, ope
 	}
 	if len(p.AllowTypes) > 0 {
 		for _, allowed := range p.AllowTypes {
-			if policyValueMatches(allowed, operation) {
+			if MatchMongoRule(allowed, command) {
 				return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourcePolicyAllow}
 			}
 		}
@@ -33,8 +38,10 @@ func checkMongoPolicyRules(ctx context.Context, p *asset_entity.MongoPolicy, ope
 	return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourcePolicyAllow}
 }
 
-// policy.CheckMongoDBPolicy 检查 MongoDB 操作是否符合策略（合并默认策略后检查）
-func CheckMongoDBPolicy(ctx context.Context, p *asset_entity.MongoPolicy, operation string) aictx.CheckResult {
+// CheckMongoDBPolicy 检查 MongoDB 命令是否符合策略（合并默认策略后检查）。
+// command 的形式见 checkMongoPolicyRules；裸 operation 是它的合法子集
+// （exec_mongo 旧工具路径仍然只传 operation）。
+func CheckMongoDBPolicy(ctx context.Context, p *asset_entity.MongoPolicy, command string) aictx.CheckResult {
 	merged := EffectiveMongoPolicy(ctx, p)
-	return checkMongoPolicyRules(ctx, merged, operation)
+	return checkMongoPolicyRules(ctx, merged, command)
 }

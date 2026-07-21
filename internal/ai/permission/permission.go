@@ -255,9 +255,12 @@ func checkK8sPermission(ctx context.Context, assetID int64, command string) aict
 
 // --- MongoDB ---
 
-func checkMongoDBPermission(ctx context.Context, assetID int64, operation string) aictx.CheckResult {
-	// 组通用策略（Mongo 操作是单 token，单元素切片）
-	groupResult := policy.CheckGroupGenericPolicy(ctx, assetID, []string{operation}, policy.MatchCommandRule)
+func checkMongoDBPermission(ctx context.Context, assetID int64, command string) aictx.CheckResult {
+	// 组通用策略（Mongo 命令是单条，单元素切片）。匹配函数必须与类型专用策略同为
+	// MatchMongoRule：统一 exec 送进来的是富命令串，而
+	// MatchCommandRule("deleteMany", "deleteMany users --db=prod --query=…") = false
+	// ——写成裸 op 的组通用 deny 规则会静默失效。与 redis/etcd 传 MatchRedisRule 同理。
+	groupResult := policy.CheckGroupGenericPolicy(ctx, assetID, []string{command}, policy.MatchMongoRule)
 	if groupResult.Decision == aictx.Deny {
 		return groupResult
 	}
@@ -265,7 +268,7 @@ func checkMongoDBPermission(ctx context.Context, assetID int64, operation string
 	// MongoDB 策略
 	asset := resolveAssetForPolicy(ctx, assetID)
 	mergedPolicy := collectMongoDBPolicies(ctx, asset)
-	result := policy.CheckMongoDBPolicy(ctx, mergedPolicy, operation)
+	result := policy.CheckMongoDBPolicy(ctx, mergedPolicy, command)
 
 	// 组通用 allow 优先于类型专用的 aictx.NeedConfirm
 	if result.Decision == aictx.NeedConfirm && groupResult.Decision == aictx.Allow {
@@ -276,8 +279,10 @@ func checkMongoDBPermission(ctx context.Context, assetID int64, operation string
 		return result
 	}
 
-	// DB Grant 匹配
-	if grantResult := matchGrantForAsset(ctx, assetID, operation); grantResult != nil {
+	// DB Grant 匹配：同样走 MatchMongoRule（与 Kafka 传 MatchKafkaRule 同理）。
+	// 用 MatchCommandRule 会让 grant 绑死审批时那一条命令的 --db/--query，
+	// "全部允许"批下来的 pattern 连自己都匹配不上，几乎不可复用。
+	if grantResult := matchGrantForAssetWith(ctx, assetID, command, policy.MatchMongoRule); grantResult != nil {
 		return *grantResult
 	}
 

@@ -326,9 +326,12 @@ func testEtcdPolicy(ctx context.Context, current *asset_entity.EtcdPolicy, group
 // --- MongoDB ---
 
 func testMongoPolicy(ctx context.Context, current *asset_entity.MongoPolicy, groups []*group_entity.Group, command string) PolicyTestOutput {
-	// 与真实 checkMongoDBPermission 对齐：Mongo 操作是单 token，组通用策略用 MatchCommandRule。
+	// 与真实 checkMongoDBPermission 对齐：组通用策略与类型专用策略都用 MatchMongoRule。
+	// （命令是 `<op> [collection] [--db=…] [--query=…]` 的富串，不是裸 op；用
+	// MatchCommandRule 会让写成裸 op 的组通用规则在这里判定为不命中，策略测试面板
+	// 就会给出与运行时相反的答案。）
 	groupDeny, groupAllow := collectGroupGenericRules(ctx, groups)
-	if out := checkGenericDeny(groupDeny, command, MatchCommandRule); out != nil {
+	if out := checkGenericDeny(groupDeny, command, MatchMongoRule); out != nil {
 		out.Message = PolicyFmt(ctx, "MongoDB operation denied by group policy: %s", "MongoDB 操作被组策略禁止: %s", command)
 		return *out
 	}
@@ -346,7 +349,7 @@ func testMongoPolicy(ctx context.Context, current *asset_entity.MongoPolicy, gro
 
 	// 与 runtime 一致：组通用 allow 只用来把 aictx.NeedConfirm 升为 aictx.Allow。
 	if result.Decision == aictx.NeedConfirm {
-		if out := checkGenericAllow(groupAllow, command, MatchCommandRule); out != nil {
+		if out := checkGenericAllow(groupAllow, command, MatchMongoRule); out != nil {
 			return *out
 		}
 		return PolicyTestOutput{Decision: aictx.NeedConfirm}

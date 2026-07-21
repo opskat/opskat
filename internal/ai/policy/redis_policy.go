@@ -29,8 +29,10 @@ var redisMultiWordCmds = map[string]bool{
 	"XINFO":   true,
 }
 
-// splitRedisPair 把规则串和命令串切成词，供一次比较使用。引号感知切词走
+// splitRulePair 把规则串和命令串切成词，供一次比较使用。引号感知切词走
 // cmdline.Words（与 etcd 的 FormatCommand/ParseCommand 同一套词法）。
+// MatchRedisRule（Redis/etcd）与 MatchMongoRule 共用它——两者的规则与命令都是
+// "动词 + 若干 token" 的形状，切词与退回策略没有类型差异。
 //
 // 两个串必须一起切、要退回一起退回：规则串是用户手写文本，未必是合法 shell 语法；
 // cmd 串在 Redis 侧也是模型/用户直接拼出来的自由文本，同样可能不合法。
@@ -39,7 +41,7 @@ var redisMultiWordCmds = map[string]bool{
 //   - 只退回失败的那一侧则更糟：两个串会被放进不同的词法空间比较——一边还带着引号
 //     字符，另一边已经剥掉——本该命中的规则同样会静默失配。任一侧失败就双双退回，
 //     这次比较整体落回引号感知引入前的行为，至少是自洽的。
-func splitRedisPair(rule, cmd string) (ruleTokens, cmdTokens []string) {
+func splitRulePair(rule, cmd string) (ruleTokens, cmdTokens []string) {
 	ruleTokens, ruleErr := cmdline.Words(rule)
 	cmdTokens, cmdErr := cmdline.Words(cmd)
 	if ruleErr != nil || cmdErr != nil {
@@ -77,7 +79,7 @@ func parseRedisCommand(tokens []string) redisCommand {
 // MatchRedisRule 检查 Redis 命令是否匹配规则
 // 规则格式: "FLUSHDB", "CONFIG SET *", "DEL user:*"
 func MatchRedisRule(rule, cmd string) bool {
-	ruleTokens, cmdTokens := splitRedisPair(rule, cmd)
+	ruleTokens, cmdTokens := splitRulePair(rule, cmd)
 	command := parseRedisCommand(cmdTokens)
 	if command.Name == "" {
 		return false

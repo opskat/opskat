@@ -183,7 +183,7 @@ func TestHandleHelp_ReturnsDocAndMarksGate(t *testing.T) {
 	}
 }
 
-// 未注册执行器的类型（Plan A 尚未支持 mongodb）应给出明确错误，而不是撞上门禁的引导文本。
+// 未注册执行器的类型（尚未支持 kafka）应给出明确错误，而不是撞上门禁的引导文本。
 //
 // I3: executor lookup must run before the doc gate, so this must be reachable regardless
 // of gate state. Injects a real undocumented gate so that, if executor lookup were moved
@@ -200,17 +200,17 @@ func TestHandleExec_UnsupportedTypeIsExplicit(t *testing.T) {
 	// below, not by gomock complaining about an extra Find.
 	m.EXPECT().FindByName(gomock.Any(), "5").Return(nil, nil).AnyTimes()
 	m.EXPECT().Find(gomock.Any(), int64(5)).Return(
-		&asset_entity.Asset{ID: 5, Name: "m1", Type: asset_entity.AssetTypeMongoDB}, nil).AnyTimes()
+		&asset_entity.Asset{ID: 5, Name: "m1", Type: asset_entity.AssetTypeKafka}, nil).AnyTimes()
 
 	checker, checkCalled := newRecordingChecker()
 	ctx := WithDocGate(context.Background(), NewDocGate())
 	ctx = permission.WithPolicyChecker(ctx, checker)
 
-	// A write, not a `find`: the default MongoDB policy is a read-only allowlist, so a
-	// read would resolve to Allow without reaching HandleConfirm and the *checkCalled
+	// A write, not a read: the default Kafka policy is a read-only allowlist, so a read
+	// would resolve to Allow without reaching HandleConfirm and the *checkCalled
 	// assertion below would be vacuous (verified by mutation).
 	out, err := handleExec(ctx, map[string]any{
-		"asset": "5", "command": "insertOne app.users {}",
+		"asset": "5", "command": "topic.write orders",
 	})
 	if err == nil {
 		t.Fatalf("expected an explicit unsupported-type error, got out=%q err=nil", out)
@@ -467,5 +467,100 @@ func TestHandleExec_EtcdLeaseCommandsMissingRequiredArgNeverReachesPermissionChe
 					"command that ParseCommand can already prove will fail", tc.command)
 			}
 		})
+	}
+}
+
+// TestHandleExec_CanonicalizeFailureRecordsAuditDecision locks the audit gap that
+// motivated extending recordShortCircuit to the canonicalize path.
+//
+// The three other pre-permission short circuits (unsupported type / doc gate /
+// precheck) already write a decision=deny audit row. Canonicalize failures did not:
+// the tool call landed in audit_logs with the command filled in but decision empty,
+// which in the existing semantics means "this call never involved a permission check
+// at all" — indistinguishable from list_assets. That is worst exactly where it matters
+// most: mongo's dropDatabase / dropCollection sit in the builtin deny group yet are not
+// executable operations at all (they are absent from mongoOps), so every model attempt
+// at them fails in canonicalize and would have left no deny trace whatsoever.
+func TestHandleExec_CanonicalizeFailureRecordsAuditDecision(t *testing.T) {
+	m := setupUnified(t)
+	asset := &asset_entity.Asset{ID: 31, Name: "mongo-1", Type: asset_entity.AssetTypeMongoDB}
+	if err := asset.SetMongoDBConfig(&asset_entity.MongoDBConfig{Host: "127.0.0.1", Port: 27017}); err != nil {
+		t.Fatalf("SetMongoDBConfig: %v", err)
+	}
+	m.EXPECT().FindByName(gomock.Any(), "31").Return(nil, nil).AnyTimes()
+	m.EXPECT().Find(gomock.Any(), int64(31)).Return(asset, nil).AnyTimes()
+
+	checker, checkCalled := newRecordingChecker()
+	slot := &aictx.CheckResult{}
+	ctx := aictx.WithCheckResultSlot(context.Background(), slot)
+	ctx = WithDocGate(ctx, NewDocGate())
+	ctx = permission.WithPolicyChecker(ctx, checker)
+	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeMongoDB)
+
+	_, err := handleExec(ctx, map[string]any{
+		"asset": "31", "command": "dropCollection users",
+	})
+	if err == nil {
+		t.Fatal("expected dropCollection to be rejected as an unsupported mongo operation, got nil")
+	}
+	if slot.Decision != aictx.Deny {
+		t.Fatalf("audit decision = %v, want %v (a canonicalize failure must not audit as an un-checked call)",
+			slot.Decision, aictx.Deny)
+	}
+	if slot.DecisionSource != aictx.SourceExecCanonicalizeError {
+		t.Fatalf("audit decision source = %q, want %q", slot.DecisionSource, aictx.SourceExecCanonicalizeError)
+	}
+	if *checkCalled {
+		t.Fatal("CheckForAsset ran for a command that cannot be canonicalized — an approval " +
+			"dialog must never appear for a command that is going to fail regardless")
+	}
+}
+
+// TestHandleExec_MongoChecksCanonicalCommand locks what the mongo permission check
+// must see: the canonicalized command — asset default database injected, whitespace
+// collapsed, flags ordered — not the model's raw string and not a bare operation token.
+//
+// Both halves matter. Checking a bare op (the shape exec_mongo still passes) would show
+// the user an approval dialog reading just "deleteMany", which cannot distinguish
+// `deleteMany logs --query=...` from `deleteMany logs`, and the latter empties the whole
+// collection. Checking the raw string would let a policy or grant written against the
+// effective form (with --db) silently stop matching. The executor still gets the raw
+// command; that asymmetry is locked type-agnostically by
+// TestHandleExec_ExecutorReceivesRawCommand above.
+//
+// The confirm callback denies, so nothing is ever executed and no MongoDB connection is
+// attempted — same technique as TestHandleExec_K8sCanonicalizesBeforePermissionCheck.
+// `deleteMany` is deliberately outside the default read-only allowlist so the check
+// actually reaches the callback (see newRecordingChecker's note on that trap).
+func TestHandleExec_MongoChecksCanonicalCommand(t *testing.T) {
+	m := setupUnified(t)
+	asset := &asset_entity.Asset{ID: 32, Name: "mongo-2", Type: asset_entity.AssetTypeMongoDB}
+	if err := asset.SetMongoDBConfig(&asset_entity.MongoDBConfig{
+		Host: "127.0.0.1", Port: 27017, Database: "appdb",
+	}); err != nil {
+		t.Fatalf("SetMongoDBConfig: %v", err)
+	}
+	m.EXPECT().FindByName(gomock.Any(), "32").Return(nil, nil).AnyTimes()
+	m.EXPECT().Find(gomock.Any(), int64(32)).Return(asset, nil).AnyTimes()
+
+	var gotCheckCommand string
+	checker := permission.NewCommandPolicyChecker(
+		func(_ context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
+			if len(items) > 0 {
+				gotCheckCommand = items[0].Command
+			}
+			return permission.ApprovalResponse{Decision: "deny"}
+		})
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	ctx = permission.WithPolicyChecker(ctx, checker)
+	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeMongoDB)
+
+	const raw = `deleteMany    logs   --query='{"filter":{"level":"debug"}}'`
+	const want = `deleteMany logs --db=appdb --query='{"filter":{"level":"debug"}}'`
+	if _, err := handleExec(ctx, map[string]any{"asset": "32", "command": raw}); err != nil {
+		t.Fatalf("handleExec: %v", err)
+	}
+	if gotCheckCommand != want {
+		t.Fatalf("permission check saw %q, want the canonicalized command %q", gotCheckCommand, want)
 	}
 }

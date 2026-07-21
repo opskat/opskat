@@ -23,8 +23,10 @@ import (
 //     因 error 中断。
 //  5. 规范化（如该类型注册了 CanonicalizeFunc）：把模型给的原始命令改写成
 //     "真正会被执行、也应被策略匹配"的形式（k8s 注入 --context/--namespace；etcd 走
-//     ParseCommand+FormatCommand 的 round trip，规范化大小写/复合命令拼写/flag 顺序），
-//     结果只用于下一步的权限检查，不覆盖原始命令。
+//     ParseCommand+FormatCommand 的 round trip，规范化大小写/复合命令拼写/flag 顺序；
+//     mongo 注入资产默认库并渲染回完整命令串），结果只用于下一步的权限检查，
+//     不覆盖原始命令。规范化失败 = 该命令必然执行失败，直接返回错误并记一条审计
+//     决策（recordShortCircuit）。
 //  6. 前置条件检查（如该类型注册了 PrecheckFunc）：校验一个跟命令内容无关、但一定会
 //     让执行失败的前提条件（目前只有 serial：没有活跃会话）。与规范化一样无副作用，
 //     必须排在权限检查之前——原因见下方。
@@ -68,6 +70,12 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 	if canonicalize, ok := permission.CanonicalizeFor(asset.Type); ok {
 		canonicalCommand, err := canonicalize(asset, command)
 		if err != nil {
+			// 与其他三条短路路径同样记一条 decision=deny 的审计行：规范化失败的命令
+			// 从不执行，但模型尝试过什么本身有审计价值——尤其是那些**永远**过不了
+			// 规范化的命令，例如 mongo 的 dropDatabase/dropCollection（在内置 deny
+			// 清单里，却不在可执行的 mongoOps 里）。不记的话，一条被挡下的高危尝试
+			// 连 decision 都不落，比策略拒绝还难查。
+			recordShortCircuit(ctx, aictx.SourceExecCanonicalizeError)
 			return "", err
 		}
 		checkCommand = canonicalCommand
@@ -97,7 +105,7 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 //
 // 不加审计列，而是复用 RecordDecision 这条既有链路（handler 写 aictx 槽 →
 // runner.auditMiddleware 在 c.Next() 之后读出 → audit.ToolCallInfo.Decision →
-// audit_logs 的 decision / decision_source 列）：这三条路径的语义跟策略拒绝是同一类
+// audit_logs 的 decision / decision_source 列）：这四条路径的语义跟策略拒绝是同一类
 // ——被挡下、没有执行——只是挡下的理由不同，而"理由"正是 DecisionSource 这一列存在
 // 的意义。
 //

@@ -364,7 +364,7 @@ func TestAuditMiddleware_ExecUnsupportedTypeIsDistinguishable(t *testing.T) {
 	Convey("未注册执行器的类型，审计行要标出短路原因", t, func() {
 		mockRepo := registerMockAuditRepo(t)
 
-		asset := &asset_entity.Asset{ID: 78, Name: "mongo-78", Type: asset_entity.AssetTypeMongoDB}
+		asset := &asset_entity.Asset{ID: 78, Name: "kafka-78", Type: asset_entity.AssetTypeKafka}
 		origAsset := asset_repo.Asset()
 		asset_repo.RegisterAsset(&staticAssetRepo{asset: asset})
 		t.Cleanup(func() { asset_repo.RegisterAsset(origAsset) })
@@ -379,7 +379,7 @@ func TestAuditMiddleware_ExecUnsupportedTypeIsDistinguishable(t *testing.T) {
 		td.Run(ctx, agent.DispatchInput{
 			ToolName:  "exec",
 			ToolUseID: "tu_unsupported",
-			Input:     map[string]any{"asset": "78", "command": "insertOne app.users {}"},
+			Input:     map[string]any{"asset": "78", "command": "topic.write orders"},
 		})
 
 		entry := waitForAuditEntry(t, mockRepo, "exec", 78)

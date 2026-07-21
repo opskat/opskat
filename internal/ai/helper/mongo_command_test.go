@@ -114,12 +114,3 @@ func TestMongoCommand_RenderRejectsFlagLikeCollection(t *testing.T) {
 		}
 	}
 }
-
-// TestMongoCommand_PolicyStringIsBareOp 锁住最要紧的兼容性约束：策略串必须仍是
-// 裸 operation token。改它 = BuiltinMongoReadOnly 的 AllowTypes 与全部存量 grant 静默失配。
-func TestMongoCommand_PolicyStringIsBareOp(t *testing.T) {
-	c := MongoCommand{Op: "find", Collection: "users", Database: "analytics", Query: `{"filter":{"a":1}}`}
-	if got := c.PolicyString(); got != "find" {
-		t.Fatalf("PolicyString() = %q, want %q — changing this breaks BuiltinMongoReadOnly and stored grants", got, "find")
-	}
-}

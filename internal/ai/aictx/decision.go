@@ -21,7 +21,7 @@ const (
 
 // 统一 exec 的短路来源：命令在触达权限检查之前就已经确定不会执行。
 //
-// 这三条路径都不经过策略判定，本来不会写 Decision/DecisionSource，审计行于是落成
+// 这四条路径都不经过策略判定，本来不会写 Decision/DecisionSource，审计行于是落成
 // decision 为空——而 decision 为空在既有语义里表示"这次工具调用压根不涉及权限检查"
 // （list_assets 之类）。门禁短路那条更糟：它返回引导文本而不是 error，success 也是 1，
 // 于是一条命令从未执行的行看起来跟执行成功的行一模一样。
@@ -29,9 +29,10 @@ const (
 // 复用 Decision/DecisionSource 这套既有字段（而不是加一列）把它们标成 Deny：语义上
 // 与策略拒绝一致——都是"被挡下、没有执行"，靠 DecisionSource 区分是被谁挡下的。
 const (
-	SourceExecUnsupportedType = "exec_unsupported_type" // 该资产类型没有注册执行器
-	SourceExecGateBlocked     = "exec_gate_blocked"     // 该类型用法文档本会话未到过模型面前
-	SourceExecPrecheckFailed  = "exec_precheck_failed"  // 类型前置条件不满足（如串口无活跃会话）
+	SourceExecUnsupportedType   = "exec_unsupported_type"   // 该资产类型没有注册执行器
+	SourceExecGateBlocked       = "exec_gate_blocked"       // 该类型用法文档本会话未到过模型面前
+	SourceExecPrecheckFailed    = "exec_precheck_failed"    // 类型前置条件不满足（如串口无活跃会话）
+	SourceExecCanonicalizeError = "exec_canonicalize_error" // 命令没通过该类型的规范化（语法/配置错误）
 )
 
 // CheckResult 权限检查结果

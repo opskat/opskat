@@ -6,7 +6,7 @@ import (
 )
 
 func TestGet_AllRegisteredTypesPresent(t *testing.T) {
-	for _, at := range []string{"ssh", "serial", "database", "redis", "k8s", "etcd"} {
+	for _, at := range []string{"ssh", "serial", "database", "redis", "k8s", "etcd", "mongodb"} {
 		body, ok := Get(at)
 		if !ok {
 			t.Fatalf("no SKILL.md registered for %q", at)
@@ -39,8 +39,8 @@ func TestGet_BodyExcludesFrontmatter(t *testing.T) {
 
 func TestTypes_Sorted(t *testing.T) {
 	got := Types()
-	if len(got) != 6 {
-		t.Fatalf("got %d types, want 6", len(got))
+	if len(got) != 7 {
+		t.Fatalf("got %d types, want 7", len(got))
 	}
 	for i := 1; i < len(got); i++ {
 		if got[i-1] > got[i] {
@@ -50,7 +50,7 @@ func TestTypes_Sorted(t *testing.T) {
 }
 
 func TestGet_UnknownType(t *testing.T) {
-	if _, ok := Get("mongodb"); ok {
-		t.Fatal("mongodb should not be registered in Plan A")
+	if _, ok := Get("kafka"); ok {
+		t.Fatal("kafka should not be registered yet (Plan B)")
 	}
 }

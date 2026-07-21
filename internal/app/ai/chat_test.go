@@ -12,7 +12,7 @@ import (
 func TestAllBuiltinAssetTypeSkills(t *testing.T) {
 	t.Run("every built-in type is included, with no tabs involved", func(t *testing.T) {
 		got := allBuiltinAssetTypeSkills()
-		for _, want := range []string{"ssh", "serial", "database", "redis", "k8s"} {
+		for _, want := range []string{"ssh", "serial", "database", "redis", "k8s", "etcd", "mongodb"} {
 			desc, ok := got[want]
 			if !ok {
 				t.Fatalf("expected %q to be included, got %v", want, got)
@@ -24,11 +24,12 @@ func TestAllBuiltinAssetTypeSkills(t *testing.T) {
 	})
 
 	t.Run("a type with no embedded SKILL.md is not included", func(t *testing.T) {
-		// mongodb is reached through an extension, whose SKILL.md rides the separate
-		// extension-injection path — it has no internal/ai/skills entry.
+		// kafka has no internal/ai/skills entry yet (its exec wiring is still pending),
+		// so it must not appear in the listing — the listing is derived from the embedded
+		// SKILL.md set, not from the asset-type registry.
 		got := allBuiltinAssetTypeSkills()
-		if _, ok := got["mongodb"]; ok {
-			t.Fatalf("mongodb has no built-in skills.Description, must not be included, got %v", got)
+		if _, ok := got["kafka"]; ok {
+			t.Fatalf("kafka has no built-in skills.Description, must not be included, got %v", got)
 		}
 	})
 }

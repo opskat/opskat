@@ -15,6 +15,7 @@ func TestInit_RegistersVerbatimTypes(t *testing.T) {
 		asset_entity.AssetTypeRedis,
 		asset_entity.AssetTypeK8s,
 		asset_entity.AssetTypeEtcd,
+		asset_entity.AssetTypeMongoDB,
 	}
 	for _, at := range want {
 		if _, ok := permission.ExecutorFor(at); !ok {
@@ -31,6 +32,7 @@ func TestInit_HelpDocAttachedForEachType(t *testing.T) {
 		asset_entity.AssetTypeRedis,
 		asset_entity.AssetTypeK8s,
 		asset_entity.AssetTypeEtcd,
+		asset_entity.AssetTypeMongoDB,
 	} {
 		help, ok := permission.HelpFor(at)
 		if !ok || help == "" {
@@ -40,13 +42,12 @@ func TestInit_HelpDocAttachedForEachType(t *testing.T) {
 }
 
 func TestInit_StructuredTypesNotYetRegistered(t *testing.T) {
-	// Plan B 才补 mongo / kafka；etcd 已在本任务接入，此处锁定剩余边界。
+	// mongo 已在本任务接入，只剩 kafka 待补；此处锁定剩余边界。
 	for _, at := range []string{
-		asset_entity.AssetTypeMongoDB,
 		asset_entity.AssetTypeKafka,
 	} {
 		if _, ok := permission.ExecutorFor(at); ok {
-			t.Fatalf("%q should not be registered in Plan A", at)
+			t.Fatalf("%q should not be registered yet", at)
 		}
 	}
 }

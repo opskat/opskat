@@ -11,10 +11,10 @@ import (
 	"github.com/opskat/opskat/internal/service/etcd_svc"
 )
 
-// extractForTest 走与 MatchRedisRule 相同的单次切词管线（splitRedisPair →
+// extractForTest 走与 MatchRedisRule 相同的单次切词管线（splitRulePair →
 // parseRedisCommand），只是把同一个串同时当规则和命令喂进去。
 func extractForTest(s string) redisCommand {
-	tokens, _ := splitRedisPair(s, s)
+	tokens, _ := splitRulePair(s, s)
 	return parseRedisCommand(tokens)
 }
 

@@ -14,12 +14,11 @@ import (
 // 格式：`<op> [collection] [--db=<database>] [--query=<json>]`
 //
 // 之所以让 collection 走 positional、database 走 flag：collection 是几乎每次调用
-// 都要给的字段，正好也是最自然的 positional 用法。database **没有隐式默认**——
-// mongoFind 等执行函数（internal/ai/helper/mongodb_helper.go:201 及同类）在
-// database 为空时直接报错，这条路径也从不读取资产的 MongoDBConfig.Database
-// （internal/model/entity/asset_entity/asset.go:251）。要不要在接入统一 exec 时
-// 从资产配置注入默认 database，是下一个任务的决定（会进它的 CanonicalizeFunc，
-// 参照 k8s 注入 --context/--namespace 的方式），这里不做。
+// 都要给的字段，正好也是最自然的 positional 用法。database 在**这一层**没有默认值：
+// mongoFind 等执行函数（internal/ai/helper/mongodb_helper.go:212 及同类）在 database
+// 为空时直接报错。资产的 MongoDBConfig.Database 由上一层的 resolveMongoCommand
+// （internal/ai/helper/mongo_exec.go）注入，规范化与执行两条路径共用它——本文件只做
+// 词法，不碰资产。
 type MongoCommand struct {
 	Op         string
 	Database   string
@@ -106,15 +105,3 @@ func (c *MongoCommand) Render() (string, error) {
 	}
 	return cmd.Render(), nil
 }
-
-// PolicyString 返回策略匹配用的串——**必须**是裸 operation token（下方注释说明理由）。
-//
-// mongo 的策略是 AllowTypes/DenyTypes 的精确匹配（policyValueMatches，
-// internal/ai/policy/policy_effective.go:14-16），内置组 BuiltinMongoReadOnly 存的是
-// "find" / "findOne" / "aggregate" / "countDocuments"。返回任何更丰富的形式都会让
-// 内置组与全部存量 grant 静默失配（匹配失败不报错、不记日志，只是永远 NeedConfirm）。
-//
-// 代价是审批弹窗仍只显示操作名，看不到 collection 与 filter。审计不受此限——
-// exec 的审计记录的是原始富命令（见 internal/ai/audit/extractor.go），比今天的
-// 裸 token 信息更全。收窄审批展示粒度另开 issue，不在本 Plan。
-func (c *MongoCommand) PolicyString() string { return c.Op }
