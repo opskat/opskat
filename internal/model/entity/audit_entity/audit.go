@@ -11,7 +11,7 @@ type AuditLog struct {
 	Request        string `gorm:"column:request;type:text"`
 	Result         string `gorm:"column:result;type:text"`
 	Error          string `gorm:"column:error;type:text"`
-	Success        int    `gorm:"column:success;default:1"` // 1=成功, 0=失败
+	Success        int    `gorm:"column:success"` // 1=成功, 0=失败
 	ConversationID int64  `gorm:"column:conversation_id;default:0;index"`
 	GrantSessionID string `gorm:"column:grant_session_id;type:varchar(36)"`
 	SessionID      string `gorm:"column:session_id;type:varchar(64);index"` // opsctl/AI 会话 ID
