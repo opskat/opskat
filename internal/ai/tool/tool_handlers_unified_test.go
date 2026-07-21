@@ -472,6 +472,77 @@ func TestHandleExec_EtcdLeaseCommandsMissingRequiredArgNeverReachesPermissionChe
 	}
 }
 
+// exec 的可选 type 断言必须在权限检查之前失败：CheckForAsset 会弹审批对话框并阻塞，
+// 让用户先批准一条注定失败的命令是缺陷（与本文件其余"ordering"测试同一形状）。
+//
+// Deviates from the task-1 brief's literal `env.checkCalls`/`env.execCalls` fixture: this
+// file has no such counters, only the checkCalled-via-confirm-callback technique documented
+// on newRecordingChecker. "SET foo bar" (not the brief's "SELECT 1") is used deliberately —
+// it is the same write command TestHandleExec_UndocumentedTypeReturnsGuidance already relies
+// on to fall outside redis's default read-only allowlist and reach HandleConfirm, which is
+// what makes *checkCalled a faithful, non-vacuous proxy for "CheckForAsset ran" (see the
+// trap documented on newRecordingChecker). A real executor-call counter isn't needed on top
+// of that: handleExec returns immediately when AssertAssetType fails, and exec() is only
+// ever reached after the checker block — so checkCalled==false already entails the executor
+// never ran, without touching the shared production "redis" registration.
+func TestHandleExec_TypeAssertionFailsBeforeApproval(t *testing.T) {
+	m := setupUnified(t)
+	asset := &asset_entity.Asset{ID: 7, Name: "cache-1", Type: asset_entity.AssetTypeRedis}
+	m.EXPECT().FindByName(gomock.Any(), "7").Return(nil, nil).AnyTimes()
+	m.EXPECT().Find(gomock.Any(), int64(7)).Return(asset, nil).AnyTimes()
+
+	checker, checkCalled := newRecordingChecker()
+	ctx := permission.WithPolicyChecker(context.Background(), checker)
+
+	_, err := handleExec(ctx, map[string]any{
+		"asset":   "7",
+		"command": "SET foo bar",
+		"type":    "database",
+	})
+	if err == nil {
+		t.Fatal("declaring the wrong type must fail")
+	}
+	if !strings.Contains(err.Error(), "type=redis") || !strings.Contains(err.Error(), "type=database") {
+		t.Errorf("error %q must name both the real and the declared type", err.Error())
+	}
+	if *checkCalled {
+		t.Error("CheckForAsset ran; the assertion must short-circuit before approval")
+	}
+}
+
+// 声明正确的类型（含不声明）照常放行，不被断言拦下——继续走到权限检查。
+//
+// Uses a deny-returning confirm callback (like TestHandleExec_K8sCanonicalizesBeforePermissionCheck)
+// rather than newRecordingChecker: that helper's callback always answers "allow", which would
+// let the call fall through to the real production redis executor (registered via execimpl)
+// and attempt an actual network connection. Denying here proves the same thing — the
+// assertion did not block the call — while stopping short of any real I/O.
+func TestHandleExec_TypeAssertionAcceptsMatch(t *testing.T) {
+	m := setupUnified(t)
+	asset := &asset_entity.Asset{ID: 7, Name: "cache-1", Type: asset_entity.AssetTypeRedis}
+	m.EXPECT().FindByName(gomock.Any(), "7").Return(nil, nil).AnyTimes()
+	m.EXPECT().Find(gomock.Any(), int64(7)).Return(asset, nil).AnyTimes()
+
+	for _, declared := range []string{"", "redis"} {
+		checkCalled := false
+		confirm := func(_ context.Context, _ string, _ []permission.ApprovalItem) permission.ApprovalResponse {
+			checkCalled = true
+			return permission.ApprovalResponse{Decision: "deny"}
+		}
+		checker := permission.NewCommandPolicyChecker(confirm)
+		ctx := permission.WithPolicyChecker(context.Background(), checker)
+
+		if _, err := handleExec(ctx, map[string]any{
+			"asset": "7", "command": "SET foo bar", "type": declared,
+		}); err != nil {
+			t.Fatalf("type=%q must be accepted, got %v", declared, err)
+		}
+		if !checkCalled {
+			t.Errorf("type=%q: CheckForAsset never ran — the assertion should not have blocked it", declared)
+		}
+	}
+}
+
 // TestHandleExec_CanonicalizeFailureRecordsAuditDecision locks the audit gap that
 // motivated extending recordShortCircuit to the canonicalize path.
 //

@@ -33,6 +33,7 @@ const (
 	SourceExecGateBlocked       = "exec_gate_blocked"       // 该类型用法文档本会话未到过模型面前
 	SourceExecPrecheckFailed    = "exec_precheck_failed"    // 类型前置条件不满足（如串口无活跃会话）
 	SourceExecCanonicalizeError = "exec_canonicalize_error" // 命令没通过该类型的规范化（语法/配置错误）
+	SourceExecTypeMismatch      = "exec_type_mismatch"      // exec/batch_exec 的可选 type 断言与资产真实类型不符，命令在权限检查之前就被挡下
 )
 
 // CheckResult 权限检查结果
