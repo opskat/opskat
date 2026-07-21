@@ -644,7 +644,7 @@ func TestSaveGrantPattern(t *testing.T) {
 		ctx := context.Background()
 
 		Convey("creates session and item", func() {
-			SaveGrantPattern(ctx, "sess-1", 1, "web-01", "uptime")
+			SaveGrantPattern(ctx, "sess-1", 1, "web-01", "exec", "uptime")
 
 			So(stubGrant.sessions, ShouldContainKey, "sess-1")
 			So(stubGrant.sessions["sess-1"].Status, ShouldEqual, grant_entity.GrantStatusApproved)
@@ -659,19 +659,19 @@ func TestSaveGrantPattern(t *testing.T) {
 				ID: "sess-2", Status: grant_entity.GrantStatusApproved,
 			}
 
-			SaveGrantPattern(ctx, "sess-2", 1, "web-01", "ls *")
-			SaveGrantPattern(ctx, "sess-2", 1, "web-01", "cat *")
+			SaveGrantPattern(ctx, "sess-2", 1, "web-01", "exec", "ls *")
+			SaveGrantPattern(ctx, "sess-2", 1, "web-01", "exec", "cat *")
 
 			So(stubGrant.items["sess-2"], ShouldHaveLength, 2)
 		})
 
 		Convey("no-op for empty sessionID", func() {
-			SaveGrantPattern(ctx, "", 1, "web-01", "uptime")
+			SaveGrantPattern(ctx, "", 1, "web-01", "exec", "uptime")
 			So(stubGrant.sessions, ShouldBeEmpty)
 		})
 
 		Convey("no-op for empty command", func() {
-			SaveGrantPattern(ctx, "sess-3", 1, "web-01", "")
+			SaveGrantPattern(ctx, "sess-3", 1, "web-01", "exec", "")
 			So(stubGrant.sessions, ShouldNotContainKey, "sess-3")
 		})
 	})

@@ -53,4 +53,7 @@ func init() {
 	registerPermissionType(asset_entity.AssetTypeMongoDB, "mongo", false, checkMongoDBPermission, "mongo")
 	registerPermissionType(asset_entity.AssetTypeKafka, "kafka", false, checkKafkaPermission)
 	registerPermissionType(asset_entity.AssetTypeK8s, "k8s", true, checkK8sPermission)
+	// cp 不是资产类型而是操作面：任何能开 SFTP 的资产上的文件传输都归它，
+	// 主体是远端路径而非命令，因此 shellLike=false（grant 不按 shell 子命令拆）。
+	registerPermissionType(GrantToolCp, "cp", false, checkFileTransferPermission)
 }
