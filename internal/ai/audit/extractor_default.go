@@ -9,11 +9,16 @@ import (
 // 注册非协议特有的常见工具提取器；协议特有(kafka_*, exec_k8s)在各自子包 init() 注册。
 func init() {
 	RegisterExtractor("run_command", func(a map[string]any) string { return aictx.ArgString(a, "command") })
+	RegisterToolAlias("upload_file", "cp")
 	RegisterExtractor("upload_file", func(a map[string]any) string {
 		return "upload " + aictx.ArgString(a, "local_path") + " → " + aictx.ArgString(a, "remote_path")
 	})
+	RegisterToolAlias("download_file", "cp")
 	RegisterExtractor("download_file", func(a map[string]any) string {
 		return "download " + aictx.ArgString(a, "remote_path") + " → " + aictx.ArgString(a, "local_path")
+	})
+	RegisterExtractor("cp", func(a map[string]any) string {
+		return "cp " + aictx.ArgString(a, "src") + " → " + aictx.ArgString(a, "dst")
 	})
 	RegisterExtractor("exec_sql", func(a map[string]any) string { return aictx.ArgString(a, "sql") })
 	RegisterExtractor("exec_redis", func(a map[string]any) string { return aictx.ArgString(a, "command") })

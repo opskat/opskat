@@ -88,6 +88,28 @@ func TestEventTranslator_PostToolUse(t *testing.T) {
 	})
 }
 
+func TestEventTranslator_PostToolUsePreservesErrorState(t *testing.T) {
+	Convey("EventPostToolUse preserves ToolResultBlock.IsError", t, func() {
+		out := drain(NewStreamTranslator(), agent.Event{
+			Kind: agent.EventPostToolUse,
+			Tool: &agent.ToolEvent{
+				ToolUseID: "tu_denied",
+				Name:      "upload_file",
+				Output: &agent.ToolResultBlock{
+					IsError: true,
+					Content: []agent.ContentBlock{
+						agent.TextBlock{Text: "USER DENIED: transfer rejected"},
+					},
+				},
+			},
+		})
+
+		So(out, ShouldHaveLength, 1)
+		So(out[0].Type, ShouldEqual, "tool_result")
+		So(out[0].IsError, ShouldBeTrue)
+	})
+}
+
 func TestEventTranslator_TurnEndUsage(t *testing.T) {
 	Convey("EventTurnEnd（带 Usage）→ usage", t, func() {
 		out := drain(NewStreamTranslator(),

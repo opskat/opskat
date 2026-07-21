@@ -73,6 +73,7 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 			ToolName:   ev.Tool.Name,
 			ToolCallID: ev.Tool.ToolUseID,
 			Content:    extractToolResultText(ev.Tool.Output),
+			IsError:    ev.Tool.Output != nil && ev.Tool.Output.IsError,
 		})
 
 	case agent.EventTurnEnd:
