@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/opskat/opskat/internal/assetconn"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/pkg/sortutil"
@@ -20,7 +21,7 @@ type GroupSvc interface {
 	Create(ctx context.Context, group *group_entity.Group) error
 	Update(ctx context.Context, group *group_entity.Group) error
 	Rename(ctx context.Context, id int64, name string) error
-	Delete(ctx context.Context, id int64, deleteAssets bool) error
+	Delete(ctx context.Context, id int64, deleteAssets bool) ([]*asset_entity.Asset, error)
 	Move(ctx context.Context, id int64, direction string) error
 	Reorder(ctx context.Context, id, targetParentID, beforeID int64) error
 }
@@ -82,8 +83,12 @@ func (s *groupSvc) Rename(ctx context.Context, id int64, name string) error {
 // 批量删，绕过了 asset_svc.Delete（断连的广播在那里），所以得在这里补上——否则删掉一个
 // 含资产的分组，那些资产的 SSH 终端 / RDP 会话 / 连接池条目会继续连着已经不存在的资产。
 // 广播放在事务**提交之后**：回滚时资产还在，连接不该被关掉。
-func (s *groupSvc) Delete(ctx context.Context, id int64, deleteAssets bool) error {
-	var deletedAssetIDs []int64
+//
+// 返回被连带删掉的资产，交给调用方逐条写审计（deleteAssets=false 时为空）。审计不在
+// 这里写：审计来源（desktop / ai / opsctl）由调用方的 context 决定，服务层不该假设自己
+// 是被谁调的。
+func (s *groupSvc) Delete(ctx context.Context, id int64, deleteAssets bool) ([]*asset_entity.Asset, error) {
+	var deletedAssets []*asset_entity.Asset
 
 	err := dbutil.WithTransaction(ctx, func(txCtx context.Context) error {
 		// 获取分组信息，用于将子分组挂到父分组
@@ -97,7 +102,7 @@ func (s *groupSvc) Delete(ctx context.Context, id int64, deleteAssets bool) erro
 		}
 		// 处理分组下的资产
 		if deleteAssets {
-			// 先列出来：删完就查不到了，而断连需要逐个资产 id。
+			// 先列出来：删完就查不到了，而断连要逐个资产 id、审计还要名字和类型。
 			assets, err := asset_repo.Asset().List(txCtx, asset_repo.ListOptions{GroupID: id, ExactGroupID: true})
 			if err != nil {
 				return err
@@ -105,10 +110,7 @@ func (s *groupSvc) Delete(ctx context.Context, id int64, deleteAssets bool) erro
 			if err := asset_repo.Asset().DeleteByGroupID(txCtx, id); err != nil {
 				return err
 			}
-			deletedAssetIDs = make([]int64, 0, len(assets))
-			for _, a := range assets {
-				deletedAssetIDs = append(deletedAssetIDs, a.ID)
-			}
+			deletedAssets = assets
 		} else {
 			if err := asset_repo.Asset().MoveToGroup(txCtx, id, 0); err != nil {
 				return err
@@ -117,13 +119,13 @@ func (s *groupSvc) Delete(ctx context.Context, id int64, deleteAssets bool) erro
 		return group_repo.Group().Delete(txCtx, id)
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	for _, assetID := range deletedAssetIDs {
-		assetconn.CloseAsset(ctx, assetID)
+	for _, asset := range deletedAssets {
+		assetconn.CloseAsset(ctx, asset.ID)
 	}
-	return nil
+	return deletedAssets, nil
 }
 
 // Move 移动分组排序（up/down/top）

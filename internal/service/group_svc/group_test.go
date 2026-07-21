@@ -106,7 +106,7 @@ func TestGroupSvc_Delete(t *testing.T) {
 			mockAssetRepo.EXPECT().MoveToGroup(gomock.Any(), int64(10), int64(0)).Return(nil)
 			mockGroupRepo.EXPECT().Delete(gomock.Any(), int64(10)).Return(nil)
 
-			err := Group().Delete(ctx, 10, false)
+			_, err := Group().Delete(ctx, 10, false)
 			assert.NoError(t, err)
 		})
 
@@ -121,7 +121,7 @@ func TestGroupSvc_Delete(t *testing.T) {
 			mockAssetRepo.EXPECT().DeleteByGroupID(gomock.Any(), int64(20)).Return(nil)
 			mockGroupRepo.EXPECT().Delete(gomock.Any(), int64(20)).Return(nil)
 
-			err := Group().Delete(ctx, 20, true)
+			_, err := Group().Delete(ctx, 20, true)
 			assert.NoError(t, err)
 		})
 	})
@@ -175,7 +175,7 @@ func TestGroupSvc_Delete_RunsInTransaction(t *testing.T) {
 				return deleteErr
 			})
 
-		err := Group().Delete(ctx, 10, false)
+		_, err := Group().Delete(ctx, 10, false)
 		assert.ErrorIs(t, err, deleteErr)
 		assert.Equal(t, 1, txCalls, "三步写操作必须共用一个事务，而不是各开一个")
 	})
@@ -209,7 +209,8 @@ func TestGroupSvc_Delete_ClosesDeletedAssetConnections(t *testing.T) {
 		mockAssetRepo.EXPECT().DeleteByGroupID(gomock.Any(), int64(30)).Return(nil)
 		mockGroupRepo.EXPECT().Delete(gomock.Any(), int64(30)).Return(nil)
 
-		assert.NoError(t, Group().Delete(ctx, 30, true))
+		_, err := Group().Delete(ctx, 30, true)
+		assert.NoError(t, err)
 		assert.Equal(t, []int64{4, 5}, closed)
 	})
 
@@ -221,7 +222,8 @@ func TestGroupSvc_Delete_ClosesDeletedAssetConnections(t *testing.T) {
 		mockAssetRepo.EXPECT().MoveToGroup(gomock.Any(), int64(31), int64(0)).Return(nil)
 		mockGroupRepo.EXPECT().Delete(gomock.Any(), int64(31)).Return(nil)
 
-		assert.NoError(t, Group().Delete(ctx, 31, false))
+		_, err := Group().Delete(ctx, 31, false)
+		assert.NoError(t, err)
 		assert.Empty(t, closed)
 	})
 
@@ -235,7 +237,8 @@ func TestGroupSvc_Delete_ClosesDeletedAssetConnections(t *testing.T) {
 		mockAssetRepo.EXPECT().DeleteByGroupID(gomock.Any(), int64(32)).Return(nil)
 		mockGroupRepo.EXPECT().Delete(gomock.Any(), int64(32)).Return(errors.New("boom"))
 
-		assert.Error(t, Group().Delete(ctx, 32, true))
+		_, err := Group().Delete(ctx, 32, true)
+		assert.Error(t, err)
 		assert.Empty(t, closed)
 	})
 }

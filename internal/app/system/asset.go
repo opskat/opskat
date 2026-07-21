@@ -247,8 +247,22 @@ func (s *System) UpdateGroup(group *group_entity.Group) error {
 
 // DeleteGroup 删除分组
 // deleteAssets: true 删除分组下的资产，false 移动到未分组
+// DeleteGroup 删除分组。deleteAssets=true 时组内资产一并删除。
+//
+// 连带删掉的资产逐条写 delete_asset 审计：单删一台机器有审计行，删一个含 20 台机器的
+// 分组却一行不留的话，从审计看那 20 台就是凭空消失的。审计写在这里而不是 group_svc 里，
+// 是为了让 source=desktop 只有 desktopCtx() 一个说法。
 func (s *System) DeleteGroup(id int64, deleteAssets bool) error {
-	return group_svc.Group().Delete(i18n.Ctx(s.ctx, s.Lang()), id, deleteAssets)
+	ctx := s.desktopCtx()
+	deleted, err := group_svc.Group().Delete(ctx, id, deleteAssets)
+	if err != nil {
+		// 整个删除包在一个事务里，失败时一台资产都没删掉，没有可记的资产变更。
+		return err
+	}
+	for _, asset := range deleted {
+		audit.WriteAssetChange(ctx, audit.ActionDeleteAsset, asset, nil)
+	}
+	return nil
 }
 
 // SelectSQLiteFile 打开原生文件对话框，返回选中的 SQLite 文件绝对路径。

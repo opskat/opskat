@@ -10,9 +10,13 @@ import (
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
+	"github.com/opskat/opskat/internal/model/entity/group_entity"
+	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
+	"github.com/opskat/opskat/internal/repository/group_repo"
+	"github.com/opskat/opskat/internal/repository/group_repo/mock_group_repo"
 )
 
 // memAuditRepo 同步记录写入的审计行。WriteAssetChange 是同步调用（不像 AI 侧
@@ -122,4 +126,78 @@ func TestUpdateAsset_FailureStillAudited(t *testing.T) {
 	assert.Equal(t, "update_asset", auditMem.logs[0].ToolName)
 	assert.Equal(t, 0, auditMem.logs[0].Success)
 	assert.NotEmpty(t, auditMem.logs[0].Error)
+}
+
+// TestDeleteGroup_AuditsCascadedAssetDeletes 钉住"连组带资产一起删"也逐条留痕。
+//
+// 单删一台机器有 delete_asset 审计行，但删一个含 20 台机器的分组走的是
+// group_svc.Delete → asset_repo.DeleteByGroupID，一行都不落——从审计看那 20 台
+// 机器凭空消失。这是 System.DeleteAsset 补上审计后暴露出来的另一面。
+func TestDeleteGroup_AuditsCascadedAssetDeletes(t *testing.T) {
+	s, assetMock, auditMem := setupAssetAudit(t)
+	// group_svc.Delete 包在事务里，测试没有真实 DB，注入一个直通的 runner。
+	s.ctx = dbutil.WithTransactionRunner(s.ctx, func(ctx context.Context, fn func(context.Context) error) error {
+		return fn(ctx)
+	})
+
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	groupMock := mock_group_repo.NewMockGroupRepo(ctrl)
+	origGroup := group_repo.Group()
+	group_repo.RegisterGroup(groupMock)
+	t.Cleanup(func() {
+		if origGroup != nil {
+			group_repo.RegisterGroup(origGroup)
+		}
+	})
+
+	deleted := []*asset_entity.Asset{sshAsset(t, 11, "web-1"), sshAsset(t, 12, "web-2")}
+	groupMock.EXPECT().Find(gomock.Any(), int64(3)).
+		Return(&group_entity.Group{ID: 3, ParentID: 0}, nil)
+	groupMock.EXPECT().ReparentChildren(gomock.Any(), int64(3), int64(0)).Return(nil)
+	assetMock.EXPECT().List(gomock.Any(), asset_repo.ListOptions{GroupID: 3, ExactGroupID: true}).
+		Return(deleted, nil)
+	assetMock.EXPECT().DeleteByGroupID(gomock.Any(), int64(3)).Return(nil)
+	groupMock.EXPECT().Delete(gomock.Any(), int64(3)).Return(nil)
+
+	require.NoError(t, s.DeleteGroup(3, true))
+
+	require.Len(t, auditMem.logs, 2)
+	for i, log := range auditMem.logs {
+		assert.Equal(t, "desktop", log.Source)
+		assert.Equal(t, "delete_asset", log.ToolName)
+		assert.Equal(t, 1, log.Success)
+		assert.Equal(t, deleted[i].ID, log.AssetID)
+		assert.Equal(t, deleted[i].Name, log.AssetName)
+	}
+}
+
+// TestDeleteGroup_KeepingAssetsWritesNoAssetAudit 分组删掉但资产只是移到未分组，
+// 资产还在，不该留下 delete_asset 的痕迹。
+func TestDeleteGroup_KeepingAssetsWritesNoAssetAudit(t *testing.T) {
+	s, assetMock, auditMem := setupAssetAudit(t)
+	// group_svc.Delete 包在事务里，测试没有真实 DB，注入一个直通的 runner。
+	s.ctx = dbutil.WithTransactionRunner(s.ctx, func(ctx context.Context, fn func(context.Context) error) error {
+		return fn(ctx)
+	})
+
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	groupMock := mock_group_repo.NewMockGroupRepo(ctrl)
+	origGroup := group_repo.Group()
+	group_repo.RegisterGroup(groupMock)
+	t.Cleanup(func() {
+		if origGroup != nil {
+			group_repo.RegisterGroup(origGroup)
+		}
+	})
+
+	groupMock.EXPECT().Find(gomock.Any(), int64(4)).
+		Return(&group_entity.Group{ID: 4, ParentID: 0}, nil)
+	groupMock.EXPECT().ReparentChildren(gomock.Any(), int64(4), int64(0)).Return(nil)
+	assetMock.EXPECT().MoveToGroup(gomock.Any(), int64(4), int64(0)).Return(nil)
+	groupMock.EXPECT().Delete(gomock.Any(), int64(4)).Return(nil)
+
+	require.NoError(t, s.DeleteGroup(4, false))
+	assert.Empty(t, auditMem.logs)
 }
