@@ -2,6 +2,7 @@ package aictx
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -31,7 +32,14 @@ func ArgBool(args map[string]any, key string) bool {
 	return false
 }
 
-// ArgInt64 从 tool 参数 map 中提取 int64,兼容 JSON 反序列化后的 float64 / json.Number。
+// ArgInt64 从 tool 参数 map 中提取 int64,兼容 JSON 反序列化后的 float64 / json.Number,
+// 以及以字符串形式给出的数值。
+//
+// string 分支不是给 kafka 开的特例:这组 Arg* 函数的职责就是在 IPC/LLM 边界上容忍模型
+// 给出的各种标量写法(ArgBool 早就容忍 "true"),缺 string 分支是它自己的缺口——统一 exec
+// 的命令 DSL 把 --limit=500 这类 flag 原样以字符串送进来,落到这里返回 0 是**静默**的:
+// Limit 变 0 之后 service 套用默认条数,用户批准了取 500 条、拿到别的数字,不报错。
+// kafka_args.go 的 ArgOptionalPartition 自己单独做了一份 string 解析,正是这个缺口的症状。
 func ArgInt64(args map[string]any, key string) int64 {
 	if v, ok := args[key]; ok {
 		switch n := v.(type) {
@@ -45,6 +53,14 @@ func ArgInt64(args map[string]any, key string) int64 {
 			i, err := n.Int64()
 			if err != nil {
 				logger.Default().Warn("convert json.Number to int64", zap.String("value", n.String()), zap.Error(err))
+			}
+			return i
+		case string:
+			// 解析失败记 warn 并返回 0,与 json.Number 分支一致:这个函数不返回 error,
+			// 调用方拿到 0 之后各自的必填校验会接手,但日志里必须留下痕迹。
+			i, err := strconv.ParseInt(strings.TrimSpace(n), 10, 64)
+			if err != nil {
+				logger.Default().Warn("convert string to int64", zap.String("value", n), zap.Error(err))
 			}
 			return i
 		}
