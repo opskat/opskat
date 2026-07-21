@@ -161,37 +161,55 @@ func TestHandleExec_KafkaIsCheckedExactlyOnce(t *testing.T) {
 //
 // 判据是 err == nil：上面那个测试证明了一旦走进执行器，就会因为资产没有 Kafka 配置
 // 报错。所以"无错误 + 返回拒绝文案"恰好等价于"没连过集群"。
+// 逐 family 覆盖，而不是只测 message 一个：删掉 7 个 kafka_* 旧工具时，
+// kafka_helper_test.go 里 6 个 family 各一条的 deny 用例随之消失，deny 路径一度
+// 收敛成单点覆盖。7 个 family 各自走不同的 Kafka*Command 产出策略串，
+// 任何一个的 (family, verb) → "<action> <resource>" 映射错位，都会让针对它的
+// deny 规则静默失配——而这正是本分支已经发生过五次的 fail-open 形状。
 func TestHandleExec_KafkaDenyListStopsBeforeConnecting(t *testing.T) {
-	m := setupUnified(t)
-
-	policy, err := json.Marshal(asset_entity.KafkaPolicy{DenyList: []string{"message.write *"}})
-	if err != nil {
-		t.Fatalf("marshal policy: %v", err)
+	cases := []struct {
+		family, command, denyRule, wantPolicy string
+	}{
+		{"cluster", `cluster overview`, "cluster.read *", "cluster.read *"},
+		{"topic", `topic delete orders`, "topic.delete *", "topic.delete orders"},
+		{"consumer-group", `consumer-group delete mygroup`, "consumer_group.delete *", "consumer_group.delete mygroup"},
+		{"acl", `acl delete --resource-type=topic --resource-name=orders --principal=User:alice --acl-operation=read --permission=allow --host='*'`, "acl.write *", "acl.write *"},
+		{"schema", `schema delete mysubject`, "schema.delete *", "schema.delete mysubject"},
+		{"connect", `connect delete myconnector`, "connect.delete *", "connect.delete myconnector"},
+		{"message", `message produce orders --value=hello`, "message.write *", "message.write orders"},
 	}
-	asset := &asset_entity.Asset{
-		ID: 7, Name: "kafka-prod", Type: asset_entity.AssetTypeKafka, CmdPolicy: string(policy),
-	}
-	m.EXPECT().FindByName(gomock.Any(), "kafka-prod").Return([]*asset_entity.Asset{asset}, nil).AnyTimes()
-	m.EXPECT().Find(gomock.Any(), int64(7)).Return(asset, nil).AnyTimes()
 
-	checker, called := newRecordingChecker()
+	for _, c := range cases {
+		t.Run(c.family, func(t *testing.T) {
+			m := setupUnified(t)
 
-	ctx := WithDocGate(context.Background(), NewDocGate())
-	ctx = permission.WithPolicyChecker(ctx, checker)
-	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeKafka)
+			policy, err := json.Marshal(asset_entity.KafkaPolicy{DenyList: []string{c.denyRule}})
+			if err != nil {
+				t.Fatalf("marshal policy: %v", err)
+			}
+			asset := &asset_entity.Asset{
+				ID: 7, Name: "kafka-prod", Type: asset_entity.AssetTypeKafka, CmdPolicy: string(policy),
+			}
+			m.EXPECT().FindByName(gomock.Any(), "kafka-prod").Return([]*asset_entity.Asset{asset}, nil).AnyTimes()
+			m.EXPECT().Find(gomock.Any(), int64(7)).Return(asset, nil).AnyTimes()
 
-	out, err := handleExec(ctx, map[string]any{
-		"asset":   "kafka-prod",
-		"command": `message produce orders --value=hello`,
-	})
-	if err != nil {
-		t.Fatalf("handleExec unexpected error: %v — a denied command must not reach the executor", err)
-	}
-	if !strings.Contains(out, "message.write orders") {
-		t.Fatalf("handleExec = %q, want the denial to name the policy string %q", out, "message.write orders")
-	}
-	if *called {
-		t.Fatal("approval callback fired for a command the deny list already rejects")
+			checker, called := newRecordingChecker()
+
+			ctx := WithDocGate(context.Background(), NewDocGate())
+			ctx = permission.WithPolicyChecker(ctx, checker)
+			GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeKafka)
+
+			out, err := handleExec(ctx, map[string]any{"asset": "kafka-prod", "command": c.command})
+			if err != nil {
+				t.Fatalf("handleExec unexpected error: %v — a denied command must not reach the executor", err)
+			}
+			if !strings.Contains(out, c.wantPolicy) {
+				t.Fatalf("handleExec = %q, want the denial to name the policy string %q", out, c.wantPolicy)
+			}
+			if *called {
+				t.Fatal("approval callback fired for a command the deny list already rejects")
+			}
+		})
 	}
 }
 

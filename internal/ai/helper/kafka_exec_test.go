@@ -387,7 +387,7 @@ func TestCanonicalizeKafkaCommand_RejectsMalformedFlagValue(t *testing.T) {
 //
 // 11 个 verb 的 DSL 写法与 Handle* switch 里的 operation 值不同（连字符 vs 下划线）。
 // 把 c.operation() 换成 c.Verb，那 11 个操作全部落到各 Handle* 的 default 分支、
-// 报 "unsupported kafka_X operation" —— 又一个"审批之后才失败"。此前整个测试套件
+// 报 "unsupported kafka command" —— 又一个"审批之后才失败"。此前整个测试套件
 // 唯一断言 operation 的地方用的是 "create"（一个**不需要**映射的 verb），
 // 所以那个变异是全绿的。
 func TestKafkaFlagsToArgs_OperationMatchesHandlerSwitch(t *testing.T) {

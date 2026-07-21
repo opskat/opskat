@@ -79,27 +79,19 @@ var kafkaOperationFor = map[string]string{
 	"list-connectors":     "list_connectors",
 }
 
-// kafkaVerbForOperation 是 kafkaOperationFor 的逆映射，由它反转得到而不是手抄——
-// 手抄一份就是第二处真相，两边漂移时报错文本会静默指向一个模型写不出来的 verb。
-var kafkaVerbForOperation = func() map[string]string {
-	m := make(map[string]string, len(kafkaOperationFor))
-	for verb, operation := range kafkaOperationFor {
-		m[operation] = verb
-	}
-	return m
-}()
-
-// kafkaCommandForm 把 (family, operation) 还原成模型真的能写出来的 exec 命令形式
-// `<family> <verb>`（如 topic delete-records）。
+// kafkaCommandForm 把 (family, operation) 拼成模型真的能写出来的 exec 命令形式
+// `<family> <verb>`。
 //
 // 面向模型的报错串专用：7 个 kafka_* 工具已删除，报错里再出现 kafka_topic 之类的
-// 名字，等于让模型去调一个不存在的工具。未登记的 operation 原样透传——它要么本来
-// 就与 verb 同名（list / create / delete …），要么是个非法值，这时把用户给的原值
-// 回显出来比编一个更有用。
+// 名字，等于让模型去调一个不存在的工具。
+//
+// 只做拼接，不把 operation 反查回 verb。反查曾经存在（由 kafkaOperationFor 反转得到），
+// 但它一次也命中不了：调用点全在各 Kafka*Command / HandleKafka* 的 default 分支上，
+// 而唯一的生产调用方 PolicyString 按 c.Family 分派、传的是 c.operation()，
+// 两者都已被 ParseKafkaCommand 按 kafkaVerbs 校验过——属于别的 family 的 operation
+// 根本到不了这里。反查唯一能改变的输出（把 reset_offset 显示成 reset-offset）
+// 因此是一个到不了的分支，删掉而不是留着当承重噪音。
 func kafkaCommandForm(family, operation string) string {
-	if verb, ok := kafkaVerbForOperation[operation]; ok {
-		return family + " " + verb
-	}
 	return family + " " + operation
 }
 
