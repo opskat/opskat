@@ -1,6 +1,17 @@
 import { memo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ShieldAlert, Terminal, Database, Server, Globe, FolderOpen, FileEdit, FilePlus, Usb } from "lucide-react";
+import {
+  ShieldAlert,
+  Terminal,
+  Database,
+  Server,
+  Globe,
+  FolderOpen,
+  FileEdit,
+  FilePlus,
+  FileUp,
+  Usb,
+} from "lucide-react";
 import { Button, Input, Textarea } from "@opskat/ui";
 import { RespondAIApproval } from "../../../wailsjs/go/ai/AI";
 import { permission } from "../../../wailsjs/go/models";
@@ -124,13 +135,9 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                   </code>
                 </div>
               )}
-              {isLocalTool && item.detail && (
+              {item.detail && (
                 <details className="text-[10px] text-muted-foreground/80">
-                  <summary className="cursor-pointer select-none">
-                    {item.type === "local_write"
-                      ? t("ai.approvalLocalToolContentPreview")
-                      : t("ai.approvalLocalToolEditPreview")}
-                  </summary>
+                  <summary className="cursor-pointer select-none">{t(detailSummaryKey(item.type))}</summary>
                   <pre className="mt-1.5 max-h-48 overflow-auto rounded bg-warning/5 px-2 py-1.5 font-mono whitespace-pre-wrap break-all">
                     {item.detail}
                   </pre>
@@ -261,6 +268,18 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
   );
 });
 
+// detail 的展开标题按审批类型取：本地写入看内容、本地编辑看改动、文件传输看方向。
+function detailSummaryKey(type: string): string {
+  switch (type) {
+    case "local_write":
+      return "ai.approvalLocalToolContentPreview";
+    case "local_edit":
+      return "ai.approvalLocalToolEditPreview";
+    default:
+      return "ai.approvalTransferDetail";
+  }
+}
+
 function TypeBadge({ type, compact }: { type: string; compact?: boolean }) {
   const icons: Record<string, typeof Terminal> = {
     exec: Terminal,
@@ -270,6 +289,7 @@ function TypeBadge({ type, compact }: { type: string; compact?: boolean }) {
     mongo: Database,
     kafka: Database,
     grant: Globe,
+    cp: FileUp,
     local_bash: Terminal,
     local_write: FilePlus,
     local_edit: FileEdit,
