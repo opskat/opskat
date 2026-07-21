@@ -188,7 +188,7 @@ func findExecTool(t *testing.T, name string) agent.Tool {
 }
 
 // TestAuditMiddleware_ExecToolCanonicalizesK8sCommand is the regression lock for
-// defect B: the "exec"->"run_command" alias in extractor.go records args["command"]
+// defect B: exec's own extractor in extractor_default.go records args["command"]
 // verbatim, which is correct for ssh/serial/redis/database (raw == effective there)
 // but wrong for k8s, where handleExec canonicalizes the command (injects
 // --context/--namespace) before the permission check / approval dialog sees it.

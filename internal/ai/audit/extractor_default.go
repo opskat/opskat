@@ -9,6 +9,10 @@ import (
 // 注册非协议特有的常见工具提取器；协议特有(exec_k8s)在各自子包 init() 注册。
 func init() {
 	RegisterExtractor("run_command", func(a map[string]any) string { return aictx.ArgString(a, "command") })
+	// exec 与 run_command 读同一个 command 参数，但必须各自注册：exec 曾经靠
+	// extractor.go 里一句 toolName 别名借用 run_command 的提取器，这让新工具的审计
+	// 取决于旧工具的注册是否还在。run_command 在本 Plan 里会被删除，别名随之移除。
+	RegisterExtractor("exec", func(a map[string]any) string { return aictx.ArgString(a, "command") })
 	RegisterExtractor("upload_file", func(a map[string]any) string {
 		return "upload " + aictx.ArgString(a, "local_path") + " → " + aictx.ArgString(a, "remote_path")
 	})
