@@ -165,7 +165,7 @@ func requireCpApproval(ctx context.Context, srcAssetID int64, srcPath string, ds
 func assetNameForApproval(ctx context.Context, assetID int64) string {
 	asset, err := asset_repo.Asset().Find(ctx, assetID)
 	if err != nil {
-		logger.Default().Warn("get asset for cp approval", zap.Int64("assetID", assetID), zap.Error(err))
+		logger.Ctx(ctx).Warn("get asset for cp approval", zap.Int64("assetID", assetID), zap.Error(err))
 		return ""
 	}
 	return asset.Name
