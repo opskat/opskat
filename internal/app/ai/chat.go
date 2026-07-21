@@ -436,10 +436,12 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 		}
 	}
 
-	// 注入 policy checker
-	if a.policyChecker != nil {
-		chatCtx = permission.WithPolicyChecker(chatCtx, a.policyChecker)
-	}
+	// 注入 policy checker。无条件注入：工具侧的权限检查是 fail-closed 的
+	// （permission.RequireChecker），checker 缺失不再等于放行，而是整条 exec 直接失败。
+	// 从前这里的 `if a.policyChecker != nil` 暗示它可能为 nil——实际不会（activateProvider
+	// 在 systemCfg 之前赋值，而入口守卫 systemCfg == nil），但把这个不变式写成条件分支，
+	// 等于把"安全"寄托在读者不会误以为 nil 是合法状态上。
+	chatCtx = permission.WithPolicyChecker(chatCtx, a.policyChecker)
 
 	// 旧 entry 若存在，先取消并释放。
 	if v, ok := a.runners.LoadAndDelete(convID); ok {
