@@ -57,9 +57,9 @@ func handleRequestGrant(ctx context.Context, args map[string]any) (string, error
 		return "", fmt.Errorf("no valid command patterns provided")
 	}
 
-	checker := permission.GetPolicyChecker(ctx)
-	if checker == nil {
-		return "", fmt.Errorf("permission checker not available")
+	checker, err := permission.RequireChecker(ctx)
+	if err != nil {
+		return "", err
 	}
 
 	result := checker.SubmitGrantMulti(ctx, grantItems, reason)

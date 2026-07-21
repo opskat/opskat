@@ -8,6 +8,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/audit"
+	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/bootstrap"
@@ -36,16 +37,26 @@ func callHandler(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, 
 	}
 
 	ctx = aictx.WithAuditSource(ctx, "opsctl")
+
+	var dec *aictx.CheckResult
+	if len(decision) > 0 {
+		dec = decision[0]
+	}
+	// 带着 ApprovalResult 进来，说明调用方已经走过 requireApproval（策略 / Grant /
+	// 桌面审批）。handler 内部的权限检查是 fail-closed 的（permission.RequireChecker），
+	// 而 opsctl 的 context 里没有 PolicyChecker——那是桌面 AI 会话专属的。这里显式声明
+	// "已预检"，让 handler 跳过第二次检查，而不是靠"checker 为 nil 就放行"兜着。
+	// 只对真的带了审批结论的调用生效：没预检过的（cp / list / create）拿不到豁免。
+	if dec != nil {
+		ctx = permission.WithPreapproved(ctx)
+	}
+
 	result, err := handler(ctx, params)
 
 	// 写审计日志
 	argsJSON, marshalErr := json.Marshal(params)
 	if marshalErr != nil {
 		logger.Default().Warn("marshal audit params", zap.Error(marshalErr))
-	}
-	var dec *aictx.CheckResult
-	if len(decision) > 0 {
-		dec = decision[0]
 	}
 	writeOpsctlAudit(ctx, toolName, string(argsJSON), result, err, dec)
 

@@ -69,7 +69,14 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 		}
 	}
 
-	checker := permission.GetPolicyChecker(ctx)
+	// batch_command 只对 AI 会话开放（不在 AllToolDefs 里，opsctl 走自己的 batch 子命令
+	// 并在那边自行 CheckPermission），所以这里没有 WithPreapproved 那条豁免：checker
+	// 缺失一定是接线漏了。从前它 nil 时每一项的 decision 都停在初值 "allow"，整批命令
+	// 一条不查地打到所有资产上。
+	checker, err := permission.RequireChecker(ctx)
+	if err != nil {
+		return "", err
+	}
 
 	type resolvedCmd struct {
 		item      batchCommandItem
@@ -94,17 +101,15 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 
 		decision := "allow"
 		denyMsg := ""
-		if checker != nil {
-			result := permission.CheckPermission(ctx, batchApprovalAssetType(cmd.Type), assetID, cmd.Command)
-			switch result.Decision {
-			case aictx.Deny:
-				decision = "deny"
-				denyMsg = result.Message
-			case aictx.NeedConfirm:
-				decision = "needConfirm"
-			case aictx.Allow:
-				decision = "allow"
-			}
+		result := permission.CheckPermission(ctx, batchApprovalAssetType(cmd.Type), assetID, cmd.Command)
+		switch result.Decision {
+		case aictx.Deny:
+			decision = "deny"
+			denyMsg = result.Message
+		case aictx.NeedConfirm:
+			decision = "needConfirm"
+		case aictx.Allow:
+			decision = "allow"
 		}
 
 		resolved = append(resolved, resolvedCmd{
@@ -114,7 +119,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 	}
 
 	// 聚合 needConfirm，一次性弹审批。
-	if checker != nil && checker.ConfirmFunc() != nil {
+	if checker.ConfirmFunc() != nil {
 		var needConfirmItems []permission.ApprovalItem
 		var needConfirmIndices []int
 		for i, r := range resolved {

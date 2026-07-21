@@ -91,7 +91,13 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 
 	scope := aictx.ArgString(args, "scope")
 
-	if checker := permission.GetPolicyChecker(ctx); checker != nil {
+	// checker 为 nil 只在 opsctl 那条已预检的路径上合法（permission.WithPreapproved），
+	// 其余情况 RequireChecker 直接报错——漏接线不能等于放行。
+	checker, err := permission.RequireCheckerOrPreapproved(ctx)
+	if err != nil {
+		return "", err
+	}
+	if checker != nil {
 		result := checker.CheckForAsset(ctx, asset.ID, asset.Type, checkCommand)
 		aictx.RecordDecision(ctx, result)
 		if result.Decision != aictx.Allow {

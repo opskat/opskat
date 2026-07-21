@@ -65,12 +65,18 @@ func handleExecTool(ctx context.Context, args map[string]any) (string, error) {
 			case aictx.Deny:
 				return "", fmt.Errorf("exec_tool: policy denied: %s", result.Message)
 			case aictx.NeedConfirm:
-				checker := permission.GetPolicyChecker(ctx)
-				if checker != nil {
-					confirmResult := checker.HandleConfirm(ctx, assetID, ext.Manifest.Policies.Type, extName+"."+toolName)
-					if confirmResult.Decision != aictx.Allow {
-						return "", fmt.Errorf("exec_tool: user denied: %s.%s", extName, toolName)
-					}
+				// 这里不接受 permission.WithPreapproved 那条豁免：扩展策略的确认没有
+				// opsctl 侧的等价物（requireApproval 查的是内置类型的策略 / Grant，
+				// 不认识扩展 manifest 里的 action），所以"没有 checker"在这条路径上
+				// 一定是接线漏了。从前它 checker == nil 时直接往下执行，等于把一条
+				// 需要用户点头的扩展调用静默放行。
+				checker, err := permission.RequireChecker(ctx)
+				if err != nil {
+					return "", fmt.Errorf("exec_tool: %s.%s needs confirmation but %w", extName, toolName, err)
+				}
+				confirmResult := checker.HandleConfirm(ctx, assetID, ext.Manifest.Policies.Type, extName+"."+toolName)
+				if confirmResult.Decision != aictx.Allow {
+					return "", fmt.Errorf("exec_tool: user denied: %s.%s", extName, toolName)
 				}
 			}
 		}

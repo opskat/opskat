@@ -2,6 +2,7 @@ package permission
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -525,8 +526,54 @@ func WithPolicyChecker(ctx context.Context, c *CommandPolicyChecker) context.Con
 	return context.WithValue(ctx, policyCheckerKeyType{}, c)
 }
 
-// GetPolicyChecker 从 context 中获取 PolicyChecker
-func GetPolicyChecker(ctx context.Context) *CommandPolicyChecker {
+// getPolicyChecker 从 context 中取 PolicyChecker，可能为 nil。
+//
+// **故意不导出**：包外只能经 RequireChecker / RequireCheckerOrPreapproved 拿它，
+// 这两个都在缺失时返回错误。`if checker := GetPolicyChecker(ctx); checker != nil { 检查 }`
+// 这种"注入缺失 == 放行"的写法因此不再写得出来——这是 #249 的根因，靠评审和注释是
+// 挡不住的，得让它在类型层面不可达。
+func getPolicyChecker(ctx context.Context) *CommandPolicyChecker {
 	c, _ := ctx.Value(policyCheckerKeyType{}).(*CommandPolicyChecker)
 	return c
+}
+
+// RequireChecker 取出 PolicyChecker，缺失即报错。没有任何豁免。
+//
+// 给那些没有 opsctl 对应物的路径用：batch_command（只对 AI 会话开放）、扩展策略确认
+// （opsctl 的 requireApproval 不认识扩展 manifest 里的 action）、request_permission。
+func RequireChecker(ctx context.Context) (*CommandPolicyChecker, error) {
+	if c := getPolicyChecker(ctx); c != nil {
+		return c, nil
+	}
+	return nil, errors.New("permission checker not available")
+}
+
+type preapprovedKeyType struct{}
+
+// WithPreapproved 声明：本次调用的权限检查已经由调用方在工具之外完成，工具内不必再查。
+//
+// 唯一的合法使用者是 opsctl：它在 requireApproval 里跑完策略 / DB Grant / 桌面审批
+// （cmd/opsctl/command/approval.go），拿到 ApprovalResult 之后才派发 handler，因此
+// 派发时 context 里没有 PolicyChecker——那是桌面 AI 会话专属的。
+//
+// 存在的意义是把"没有 checker"这个状态一分为二：**声明过**的是 opsctl 已检查，
+// **没声明过**的是接线漏了。后者必须失败（见 RequireChecker），否则漏接线等于放行。
+func WithPreapproved(ctx context.Context) context.Context {
+	return context.WithValue(ctx, preapprovedKeyType{}, true)
+}
+
+// RequireCheckerOrPreapproved 取出 PolicyChecker，fail-closed，但认 WithPreapproved 豁免。
+//
+// 返回 (nil, nil) **只**发生在 ctx 被 WithPreapproved 标记过时——调用方据此跳过检查。
+// 既没有 checker 又没有标记，说明这条调用路径压根没接上权限系统，返回错误而不是放行：
+// 从前这里写成 `if checker != nil { 检查 }`，语义是"注入缺失 == 放行"，安全不变式全靠
+// internal/app/ai/chat.go 里两个字段的赋值顺序兜着，既没有类型表达也没有测试锁定。
+func RequireCheckerOrPreapproved(ctx context.Context) (*CommandPolicyChecker, error) {
+	if c := getPolicyChecker(ctx); c != nil {
+		return c, nil
+	}
+	if preapproved, _ := ctx.Value(preapprovedKeyType{}).(bool); preapproved {
+		return nil, nil
+	}
+	return nil, errors.New("permission checker not available")
 }
