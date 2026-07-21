@@ -646,6 +646,10 @@
           "name": "Kafka 安全管理",
           "desc": "允许管理 Kafka ACL"
         },
+        "kafka-message-write-deny": {
+          "name": "Kafka 禁止写入消息",
+          "desc": "拒绝向 Topic 投递消息"
+        },
         "kafka-dangerous-deny": {
           "name": "Kafka 高危拒绝",
           "desc": "拒绝删除、截断和安全变更等高危操作"

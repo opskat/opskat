@@ -171,8 +171,8 @@ func TestBuiltinGroups(t *testing.T) {
 		groups := BuiltinGroups()
 		counts := countBuiltinGroupsByPolicyType(groups)
 
-		convey.Convey("共返回21个内置组", func() {
-			assert.Len(t, groups, 21)
+		convey.Convey("共返回22个内置组", func() {
+			assert.Len(t, groups, 22)
 		})
 
 		convey.Convey("所有内置组ID均以builtin:开头", func() {
@@ -197,10 +197,11 @@ func TestBuiltinGroups(t *testing.T) {
 			assert.Equal(t, 3, counts[PolicyTypeMongo])
 		})
 
-		convey.Convey("kafka类型内置组有7个", func() {
-			assert.Equal(t, 7, counts[PolicyTypeKafka])
+		convey.Convey("kafka类型内置组有8个", func() {
+			assert.Equal(t, 8, counts[PolicyTypeKafka])
 			assert.NotNil(t, FindBuiltin(policy.BuiltinKafkaMetadataReadOnly))
 			assert.NotNil(t, FindBuiltin(policy.BuiltinKafkaDangerousDeny))
+			assert.NotNil(t, FindBuiltin(policy.BuiltinKafkaMessageWriteDeny))
 		})
 
 		convey.Convey("etcd类型内置组有2个", func() {

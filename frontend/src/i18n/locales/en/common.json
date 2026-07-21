@@ -646,6 +646,10 @@
           "name": "Kafka Security Admin",
           "desc": "Allow Kafka ACL management"
         },
+        "kafka-message-write-deny": {
+          "name": "Kafka Message Write Deny",
+          "desc": "Deny producing messages to topics"
+        },
         "kafka-dangerous-deny": {
           "name": "Kafka Dangerous Deny",
           "desc": "Deny destructive and security-sensitive Kafka operations"
