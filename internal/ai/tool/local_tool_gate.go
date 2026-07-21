@@ -3,7 +3,6 @@ package tool
 import (
 	"context"
 	"fmt"
-	"path"
 	"strings"
 	"sync"
 
@@ -155,7 +154,7 @@ func (g *LocalToolGate) allMatch(convID int64, tool string, subjects []string) b
 }
 
 // matchLocalPattern：local_bash 用 policy.MatchCommandRule（与 run_command 一致，支持 *），
-// local_write/local_edit 用 path.Match（POSIX glob，* 不跨 /）。
+// local_write/local_edit 用 policy.MatchPathRule（POSIX glob，* 不跨 /，与远程 cp 同一套语义）。
 func matchLocalPattern(tool, pattern, subject string) bool {
 	if pattern == "*" || pattern == subject {
 		return true
@@ -164,8 +163,7 @@ func matchLocalPattern(tool, pattern, subject string) bool {
 	case "local_bash":
 		return policy.MatchCommandRule(pattern, subject)
 	default:
-		ok, _ := path.Match(pattern, subject)
-		return ok
+		return policy.MatchPathRule(pattern, subject)
 	}
 }
 
