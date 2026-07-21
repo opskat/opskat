@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/opskat/opskat/internal/assetconn"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
@@ -112,6 +114,10 @@ func TestGroupSvc_Delete(t *testing.T) {
 			group := &group_entity.Group{ID: 20, ParentID: 5}
 			mockGroupRepo.EXPECT().Find(gomock.Any(), int64(20)).Return(group, nil)
 			mockGroupRepo.EXPECT().ReparentChildren(gomock.Any(), int64(20), int64(5)).Return(nil)
+			// 删之前先列一次：被删资产的 id 要用来断开在用连接（见
+			// TestGroupSvc_Delete_ClosesDeletedAssetConnections）。
+			mockAssetRepo.EXPECT().List(gomock.Any(), asset_repo.ListOptions{GroupID: 20, ExactGroupID: true}).
+				Return(nil, nil)
 			mockAssetRepo.EXPECT().DeleteByGroupID(gomock.Any(), int64(20)).Return(nil)
 			mockGroupRepo.EXPECT().Delete(gomock.Any(), int64(20)).Return(nil)
 
@@ -172,6 +178,65 @@ func TestGroupSvc_Delete_RunsInTransaction(t *testing.T) {
 		err := Group().Delete(ctx, 10, false)
 		assert.ErrorIs(t, err, deleteErr)
 		assert.Equal(t, 1, txCalls, "三步写操作必须共用一个事务，而不是各开一个")
+	})
+}
+
+// TestGroupSvc_Delete_ClosesDeletedAssetConnections 钉住"连组带资产一起删"也断连。
+//
+// asset_svc.Delete 会广播 assetconn.CloseAsset，但 deleteAssets=true 这条路走的是
+// asset_repo.DeleteByGroupID —— 直接落到仓储，绕过了 asset_svc。不补这一段的话，
+// 从界面上删掉一个含资产的分组，那些资产的 SSH 终端 / RDP 会话 / 连接池条目会全部
+// 留着连一个已经不存在的资产。
+//
+// 广播必须在事务**提交之后**：事务回滚时资产还在，连接不该被关掉。
+func TestGroupSvc_Delete_ClosesDeletedAssetConnections(t *testing.T) {
+	ctx, mockGroupRepo, mockAssetRepo := setupTest(t)
+
+	var closed []int64
+	assetconn.Register("group-delete-test", func(_ context.Context, assetID int64) error {
+		closed = append(closed, assetID)
+		return nil
+	})
+	t.Cleanup(func() { assetconn.UnregisterForTest("group-delete-test") })
+
+	convey.Convey("deleteAssets=true 时，被删资产的连接逐个断开", t, func() {
+		closed = nil
+		mockGroupRepo.EXPECT().Find(gomock.Any(), int64(30)).
+			Return(&group_entity.Group{ID: 30, ParentID: 0}, nil)
+		mockGroupRepo.EXPECT().ReparentChildren(gomock.Any(), int64(30), int64(0)).Return(nil)
+		mockAssetRepo.EXPECT().List(gomock.Any(), asset_repo.ListOptions{GroupID: 30, ExactGroupID: true}).
+			Return([]*asset_entity.Asset{{ID: 4}, {ID: 5}}, nil)
+		mockAssetRepo.EXPECT().DeleteByGroupID(gomock.Any(), int64(30)).Return(nil)
+		mockGroupRepo.EXPECT().Delete(gomock.Any(), int64(30)).Return(nil)
+
+		assert.NoError(t, Group().Delete(ctx, 30, true))
+		assert.Equal(t, []int64{4, 5}, closed)
+	})
+
+	convey.Convey("deleteAssets=false 时资产只是移到未分组，连接不能断", t, func() {
+		closed = nil
+		mockGroupRepo.EXPECT().Find(gomock.Any(), int64(31)).
+			Return(&group_entity.Group{ID: 31, ParentID: 0}, nil)
+		mockGroupRepo.EXPECT().ReparentChildren(gomock.Any(), int64(31), int64(0)).Return(nil)
+		mockAssetRepo.EXPECT().MoveToGroup(gomock.Any(), int64(31), int64(0)).Return(nil)
+		mockGroupRepo.EXPECT().Delete(gomock.Any(), int64(31)).Return(nil)
+
+		assert.NoError(t, Group().Delete(ctx, 31, false))
+		assert.Empty(t, closed)
+	})
+
+	convey.Convey("事务失败时不断连：资产还在，连接不该被关掉", t, func() {
+		closed = nil
+		mockGroupRepo.EXPECT().Find(gomock.Any(), int64(32)).
+			Return(&group_entity.Group{ID: 32, ParentID: 0}, nil)
+		mockGroupRepo.EXPECT().ReparentChildren(gomock.Any(), int64(32), int64(0)).Return(nil)
+		mockAssetRepo.EXPECT().List(gomock.Any(), asset_repo.ListOptions{GroupID: 32, ExactGroupID: true}).
+			Return([]*asset_entity.Asset{{ID: 6}}, nil)
+		mockAssetRepo.EXPECT().DeleteByGroupID(gomock.Any(), int64(32)).Return(nil)
+		mockGroupRepo.EXPECT().Delete(gomock.Any(), int64(32)).Return(errors.New("boom"))
+
+		assert.Error(t, Group().Delete(ctx, 32, true))
+		assert.Empty(t, closed)
 	})
 }
 

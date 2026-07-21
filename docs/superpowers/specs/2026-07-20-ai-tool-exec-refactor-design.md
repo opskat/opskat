@@ -362,16 +362,31 @@ mongo/etcd/kafka 的策略字符串形状改变：mongo 当前匹配裸 `"find"`
 实现时应开出：
 
 1. ✅ [#248](https://github.com/opskat/opskat/issues/248) `upload_file`/`download_file` 无审批检查（安全）。
-2. ✅ [#249](https://github.com/opskat/opskat/issues/249) 审批 fail-open：10 处 `if checker != nil` 应改为 fail-closed，
-   参照唯一正确的 `tool_handlers_exec.go:61-64`，以及已中心化且 fail-closed 的
-   `LocalToolGate.Middleware()`（`local_tool_gate.go:78-81`）。
-   *开 issue 时核实的结论：这条当前**不可达**——`policyChecker` 与 `systemCfg` 都只在
+2. ✅ [#249](https://github.com/opskat/opskat/issues/249) 审批 fail-open，**已修**。
+   开 issue 时数的 10 处，到统一 exec 收尾时只剩 4 处（`internal/ai/helper/` 下那 6 处
+   随旧工具一起删了）：unified exec、`exec_tool` 的 NeedConfirm 分支、batch 的 2 处。
+   修法不是逐处补 `== nil` 判断，而是**把放行分支写不出来**：`GetPolicyChecker` 收成包内的
+   `getPolicyChecker`，包外只剩 `RequireChecker`（缺失即报错）与 `RequireCheckerOrPreapproved`
+   （只在 ctx 带 `WithPreapproved` 时返回空 checker）。opsctl 是唯一的豁免方——它在
+   `requireApproval` 里已经跑完策略/Grant/桌面审批，两个派发点（`callHandler` 带审批结论时、
+   `executeBatchHandler`）显式打标记。
+   *开 issue 时核实的结论仍然成立：这条当前**不可达**——`policyChecker` 与 `systemCfg` 都只在
    `activateProvider` 成功路径赋值且前者在先，而 `SendAIMessage` 守卫 `systemCfg == nil`，
-   传递性地保证了 checker 非 nil。属结构性隐患（不变式由赋值顺序承载，无类型/测试锁定），
-   不是活的漏洞——定优先级时别按后者算。*
+   传递性地保证了 checker 非 nil。修它是为了消除"不变式由赋值顺序承载、无类型/测试锁定"
+   这个结构性隐患，不是在补一个活的漏洞。*
 3. ✅ [#250](https://github.com/opskat/opskat/issues/250) `local` / `oss` 的 AI 工具支持（豁免清单清零）。
 4. ✅ `group_svc.Delete` 事务化。
-5. ✅ 删除资产时断开在用连接（`internal/assetconn` 注册表 + `asset_svc.Delete` 删除成功后广播）。
-6. 桌面 UI 路径的资产 CRUD 未写审计（`Source: "desktop"` 有定义但无写入方）。
+5. ✅ 删除资产时断开在用连接（`internal/assetconn` 注册表 + `asset_svc.Delete` 删除成功后广播；
+   `group_svc.Delete(deleteAssets=true)` 走 `DeleteByGroupID` 绕过 asset_svc，在事务提交后
+   逐个补广播）。k8s 日志流（streamID 与 assetID 无关）与本地终端刻意未接，见 `internal/assetconn` 包注释。
+6. ✅ 桌面 UI 路径的资产 CRUD 补审计（`audit.WriteAssetChange`，经 `System.desktopCtx()`
+   标 `source=desktop`；请求体是白名单字段，不带 `Config` 里的口令）。
+   *开 issue 时那句"`Source: "desktop"` 有定义但无写入方"当时就已经不准：
+   `external_edit_svc` 一直在写外部编辑器会话的 desktop 审计。真正缺的只有资产 CRUD。*
 
-1–3 已于 2026-07-20 随 Plan A 收尾开出；4–6 未开 issue，其中 4、5 已直接实现。
+另有一条不在原清单里、实现期间发现并一并修掉的：`batch_command` 按名字寻址资产恒失败
+（`resolveAssetForBatch` 借道只认数字 id 的 `handleGetAsset`，而工具参数描述写的是
+`{"asset": "name-or-id"}`）。已改走 `assetref.Resolve`，与 exec / help 同一个解析器。
+
+1–3 已于 2026-07-20 随 Plan A 收尾开出；4–6 未开 issue，直接在
+`fix/exec-convergence-followups` 上实现并合回本分支。

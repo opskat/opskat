@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/pkg/sortutil"
@@ -76,8 +77,15 @@ func (s *groupSvc) Rename(ctx context.Context, id int64, name string) error {
 // 三步写操作（子分组改挂父级、处理组内资产、删除分组本身）共用一个事务：中途失败时
 // 分组树不能停在中间态——例如资产已经被移到未分组、分组却还在，用户看到一个空分组，
 // 且没有任何提示。与同文件 Reorder 的事务边界一致。
+//
+// deleteAssets=true 时还要断开被删资产的在用连接。这条路走 asset_repo.DeleteByGroupID
+// 批量删，绕过了 asset_svc.Delete（断连的广播在那里），所以得在这里补上——否则删掉一个
+// 含资产的分组，那些资产的 SSH 终端 / RDP 会话 / 连接池条目会继续连着已经不存在的资产。
+// 广播放在事务**提交之后**：回滚时资产还在，连接不该被关掉。
 func (s *groupSvc) Delete(ctx context.Context, id int64, deleteAssets bool) error {
-	return dbutil.WithTransaction(ctx, func(txCtx context.Context) error {
+	var deletedAssetIDs []int64
+
+	err := dbutil.WithTransaction(ctx, func(txCtx context.Context) error {
 		// 获取分组信息，用于将子分组挂到父分组
 		group, err := group_repo.Group().Find(txCtx, id)
 		if err != nil {
@@ -89,8 +97,17 @@ func (s *groupSvc) Delete(ctx context.Context, id int64, deleteAssets bool) erro
 		}
 		// 处理分组下的资产
 		if deleteAssets {
+			// 先列出来：删完就查不到了，而断连需要逐个资产 id。
+			assets, err := asset_repo.Asset().List(txCtx, asset_repo.ListOptions{GroupID: id, ExactGroupID: true})
+			if err != nil {
+				return err
+			}
 			if err := asset_repo.Asset().DeleteByGroupID(txCtx, id); err != nil {
 				return err
+			}
+			deletedAssetIDs = make([]int64, 0, len(assets))
+			for _, a := range assets {
+				deletedAssetIDs = append(deletedAssetIDs, a.ID)
 			}
 		} else {
 			if err := asset_repo.Asset().MoveToGroup(txCtx, id, 0); err != nil {
@@ -99,6 +116,14 @@ func (s *groupSvc) Delete(ctx context.Context, id int64, deleteAssets bool) erro
 		}
 		return group_repo.Group().Delete(txCtx, id)
 	})
+	if err != nil {
+		return err
+	}
+
+	for _, assetID := range deletedAssetIDs {
+		assetconn.CloseAsset(ctx, assetID)
+	}
+	return nil
 }
 
 // Move 移动分组排序（up/down/top）

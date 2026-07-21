@@ -113,6 +113,6 @@ func TestHandleBatchCommand_PreapprovedStillFailsClosed(t *testing.T) {
 		"commands": `[{"asset":"42","type":"exec","command":"uptime"}]`,
 	})
 	if err == nil {
-		t.Fatal("batch_command must not honour the opsctl preapproved exemption")
+		t.Fatal("batch_command must not honor the opsctl preapproved exemption")
 	}
 }
