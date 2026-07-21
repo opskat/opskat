@@ -46,9 +46,8 @@ func getSSHCache(ctx context.Context) *SSHClientCache {
 	return nil
 }
 
-// ExecCommandOnAsset 是不含权限检查的纯执行入口，供统一 exec 使用。
-// handleRunCommand（internal/ai/tool）保留“检查 + 调用本函数”的形态，两条路径
-// 共用同一执行体。scope 对 SSH 无意义，忽略。
+// ExecCommandOnAsset 是不含权限检查的纯执行入口：权限检查由调用方（统一 exec 工具的
+// handleExec、batch_command 的预检）在调用之前完成。scope 对 SSH 无意义，忽略。
 func ExecCommandOnAsset(ctx context.Context, asset *asset_entity.Asset, command, _ string) (string, error) {
 	// 如果 context 注入了 SSH 缓存，复用同一资产的连接
 	if cache := getSSHCache(ctx); cache != nil {

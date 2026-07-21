@@ -130,7 +130,7 @@ func TestParseKafkaCommand_RejectsExtraPositional(t *testing.T) {
 
 // TestKafkaCommand_PolicyStringRejectsNonTwoTokenResult 覆盖 ParseKafkaCommand 够不到
 // 的那条路：KafkaCommand 是导出结构体，统一 exec 会从结构化工具参数直接构造它
-// （mongo 侧的 HandleExecMongo 就是这么干的），完全绕开解析期的空白校验。
+// （opsctl 的 mongo 子命令就是这么干的），完全绕开解析期的空白校验。
 // PolicyString 的后置条件是这条缝上唯一的守卫，而这条缝破了是**静默**的。
 func TestKafkaCommand_PolicyStringRejectsNonTwoTokenResult(t *testing.T) {
 	cases := []KafkaCommand{

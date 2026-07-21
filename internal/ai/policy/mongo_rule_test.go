@@ -18,7 +18,7 @@ func TestMatchMongoRule(t *testing.T) {
 		command string
 		want    bool
 	}{
-		// --- 裸 op（存量内置组与 exec_mongo 旧路径的形状） ---
+		// --- 裸 op（存量内置组的形状） ---
 		{"bare op matches itself", "find", "find", true},
 		{"bare op rejects another op", "find", "insertOne", false},
 		{"deny op matches itself", "dropCollection", "dropCollection", true},
@@ -81,7 +81,7 @@ func TestMatchMongoRule(t *testing.T) {
 // TestMatchMongoRule_MatchesPolicyValueMatchesOnBareOps 是存量兼容的机械证明：
 // 对"规则与命令都是裸 op"的全部组合，新匹配器必须与它替换掉的 policyValueMatches
 // 给出完全相同的答案。这层组合正是内置组（BuiltinMongoReadOnly /
-// BuiltinMongoDangerousDeny）与 exec_mongo 旧路径唯一会产生的形状。
+// BuiltinMongoDangerousDeny）唯一会产生的形状。
 func TestMatchMongoRule_MatchesPolicyValueMatchesOnBareOps(t *testing.T) {
 	ops := []string{
 		"find", "findOne", "insertOne", "insertMany", "updateOne", "updateMany",

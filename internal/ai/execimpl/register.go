@@ -68,13 +68,13 @@ func init() {
 }
 
 // canonicalizeK8sCommand 把原始 kubectl 命令规范化为注入 --context/--namespace 之后的
-// effective 命令——这正是 handleExecK8s（internal/ai/tool/tool_handler_k8s.go）今天用来
-// 做权限检查、并呈现给审批弹窗与审计日志的形式。统一 exec 复用同一个 BuildK8sCommandPlan，
-// 避免两条路径校验不同字符串导致既有策略/grant 静默失配。
+// effective 命令——这正是已删除的 exec_k8s 工具用来做权限检查、并呈现给审批弹窗与
+// 审计日志的形式。统一 exec 复用同一个 BuildK8sCommandPlan，避免换了入口之后校验的
+// 字符串变了，导致既有策略/grant 静默失配。
 //
 // 这里也检查 kubeconfig 是否已配置：canonicalize 排在统一 exec 的权限检查之前
 // （internal/ai/tool/tool_handlers_unified.go 的 handleExec），所以这个检查会在审批
-// 弹窗弹出之前失败，对齐 handleExecK8s 在 BuildK8sCommandPlan 之前就做的同一个检查。
+// 弹窗弹出之前失败，对齐 exec_k8s 当年在 BuildK8sCommandPlan 之前就做的同一个检查。
 // 若把它留在 helper.ExecK8sOnAsset 内部（纯执行体，只在权限检查通过之后才会被调用），
 // 用户会先被弹一次审批，批准之后命令才因为没有 kubeconfig 而失败。
 func canonicalizeK8sCommand(asset *asset_entity.Asset, command string) (string, error) {

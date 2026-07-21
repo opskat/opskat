@@ -31,7 +31,7 @@ type LocalToolConfirmFunc func(ctx context.Context, req LocalToolApprovalRequest
 // LocalToolGate 拦截 coding system 的 local_bash/local_write/local_edit 工具调用
 // （即经 WrapLocalTool 重命名后的本地工具——见 internal/ai/local_tool_wrap.go）。
 //
-// 行为对齐 run_command：local_bash 按 && / || / ; / | 拆出子命令，全部命中已存 pattern
+// 行为对齐远程 exec：local_bash 按 && / || / ; / | 拆出子命令，全部命中已存 pattern
 // （* 通配，path.Match 语义）才放行；否则发起审批。"本次会话允许" 把用户编辑后的
 // pattern 写入会话内存白名单，键为 conversationID。
 type LocalToolGate struct {
@@ -154,7 +154,7 @@ func (g *LocalToolGate) allMatch(convID int64, tool string, subjects []string) b
 	return true
 }
 
-// matchLocalPattern：local_bash 用 policy.MatchCommandRule（与 run_command 一致，支持 *），
+// matchLocalPattern：local_bash 用 policy.MatchCommandRule（与远程 exec 一致，支持 *），
 // local_write/local_edit 用 path.Match（POSIX glob，* 不跨 /）。
 func matchLocalPattern(tool, pattern, subject string) bool {
 	if pattern == "*" || pattern == subject {

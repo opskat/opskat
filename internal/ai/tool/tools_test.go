@@ -31,10 +31,8 @@ func TestTools_RegistryShape(t *testing.T) {
 			"list_assets", "get_asset", "add_asset", "update_asset",
 			"list_groups", "get_group", "add_group", "update_group",
 			// exec
-			"run_command", "run_serial_command", "upload_file", "download_file",
+			"upload_file", "download_file",
 			"request_permission", "batch_command",
-			// data
-			"exec_sql", "exec_redis", "exec_mongo", "exec_k8s", "exec_etcd",
 			// extension
 			"exec_tool",
 			// unified
@@ -47,10 +45,10 @@ func TestTools_RegistryShape(t *testing.T) {
 			}
 		})
 
-		// ShouldContainKey 不检查穷尽性，所以单靠上面那条断言，删掉 7 个 kafka 工具
-		// 之后测试会反常地继续通过。这条数量断言是唯一能发现"注册了却没人知道"的
-		// 检查——run_serial_command 正是这样漂移了很久（注册着，却不在任何清单里，
-		// 本次才补进 expected）。删工具时必须同步改这里。
+		// ShouldContainKey 不检查穷尽性，所以单靠上面那条断言，删掉一批工具之后测试
+		// 会反常地继续通过。这条数量断言是唯一能发现"注册了却没人知道"的检查——
+		// run_serial_command 正是这样漂移了很久（注册着，却不在任何清单里，
+		// 删除它的那一版才被补进 expected 记账）。删工具时必须同步改这里。
 		Convey("没有清单之外的工具（穷尽性）", func() {
 			// 比的是**去重后**的名字数（names 是按名字建的 map），不是 tools 的切片长度：
 			// 同名重复注册会让切片长于 map，于是"N 个切片项 == N 个 expected 名字"仍然
@@ -61,9 +59,8 @@ func TestTools_RegistryShape(t *testing.T) {
 
 		Convey("命令类工具标 Serial", func() {
 			serialNames := []string{
-				"run_command", "run_serial_command", "upload_file", "download_file",
+				"upload_file", "download_file",
 				"request_permission",
-				"exec_sql", "exec_redis", "exec_mongo", "exec_k8s", "exec_etcd",
 				"exec_tool",
 				"exec",
 			}

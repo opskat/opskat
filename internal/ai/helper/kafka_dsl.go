@@ -216,7 +216,7 @@ func (c *KafkaCommand) Render() (string, error) {
 //
 // 后置条件（结果必须恰好 2 个 Fields）不是可有可无的防御性代码，别顺手删：
 // ParseKafkaCommand 的 validateKafkaTarget 只守住"解析命令串"这一条路，而 KafkaCommand
-// 是导出结构体，统一 exec 会从结构化的工具参数直接构造它（mongo 侧的 HandleExecMongo
+// 是导出结构体，统一 exec 会从结构化的工具参数直接构造它（mongo 侧的 opsctl mongo 子命令
 // 就是这么做的）、完全绕开解析。这条后置条件是那条缝上唯一的守卫，而这条缝一旦破了
 // 是静默的——不满足 2-token 时 splitKafkaRule 返回 ok=false，deny 规则一条都不匹配。
 // 宁可在这里 fail closed 报错，也不能把一个匹配不上任何规则的串交出去。

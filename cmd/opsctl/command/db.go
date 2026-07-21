@@ -5,9 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 )
@@ -63,19 +65,19 @@ func cmdSQL(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args 
 	})
 	auditCtx := aictx.WithSessionID(ctx, approvalResult.SessionID)
 	if approvalErr != nil {
-		writeOpsctlAudit(auditCtx, "exec_sql", argsJSON, "", approvalErr, approvalResult.ToCheckResult())
+		writeOpsctlAudit(auditCtx, "exec", argsJSON, "", approvalErr, approvalResult.ToCheckResult())
 		fmt.Fprintf(os.Stderr, "Error: %v\n", approvalErr)
 		return 1
 	}
 
 	params := map[string]any{
-		"asset_id": float64(asset.ID),
-		"sql":      sqlText,
+		"asset":   strconv.FormatInt(asset.ID, 10),
+		"command": sqlText,
 	}
 	if *database != "" {
-		params["database"] = *database
+		params["scope"] = *database
 	}
-	return callHandler(auditCtx, handlers, "exec_sql", params, approvalResult.ToCheckResult())
+	return callHandler(auditCtx, handlers, "exec", params, approvalResult.ToCheckResult())
 }
 
 func cmdRedisCmd(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
@@ -117,19 +119,19 @@ func cmdRedisCmd(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, 
 	})
 	auditCtx := aictx.WithSessionID(ctx, approvalResult.SessionID)
 	if approvalErr != nil {
-		writeOpsctlAudit(auditCtx, "exec_redis", argsJSON, "", approvalErr, approvalResult.ToCheckResult())
+		writeOpsctlAudit(auditCtx, "exec", argsJSON, "", approvalErr, approvalResult.ToCheckResult())
 		fmt.Fprintf(os.Stderr, "Error: %v\n", approvalErr)
 		return 1
 	}
 
 	params := map[string]any{
-		"asset_id": float64(asset.ID),
-		"command":  command,
+		"asset":   strconv.FormatInt(asset.ID, 10),
+		"command": command,
 	}
 	if *db >= 0 {
-		params["db"] = float64(*db)
+		params["scope"] = strconv.Itoa(*db)
 	}
-	return callHandler(auditCtx, handlers, "exec_redis", params, approvalResult.ToCheckResult())
+	return callHandler(auditCtx, handlers, "exec", params, approvalResult.ToCheckResult())
 }
 
 func cmdMongo(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
@@ -170,32 +172,39 @@ func cmdMongo(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 		query = "{}"
 	}
 
+	// 结构化的 flag 拼成统一 exec 的富命令串。渲染走 helper.MongoCommand.Render，
+	// 不在这里手拼字符串：策略匹配（policy.MatchMongoRule 按 op+collection 收窄）与
+	// AI 侧的规范化读的都是这一种形式，两处各拼一份迟早在引号/flag 顺序上分叉。
+	command, renderErr := (&helper.MongoCommand{
+		Op: *operation, Database: *database, Collection: *collection, Query: query,
+	}).Render()
+	if renderErr != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", renderErr)
+		return 1
+	}
+
 	// Require approval
-	argsJSON := fmt.Sprintf(`{"asset_id":%d,"database":%q,"collection":%q,"operation":%q,"query":%q}`,
-		asset.ID, *database, *collection, *operation, truncateStr(query, 200))
+	argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, asset.ID, truncateStr(command, 200))
 	approvalResult, approvalErr := requireApproval(ctx, approval.ApprovalRequest{
 		Type:      "mongo",
 		AssetID:   asset.ID,
 		AssetName: asset.Name,
-		Command:   fmt.Sprintf("%s.%s.%s(%s)", *database, *collection, *operation, truncateStr(query, 100)),
+		Command:   command,
 		Detail:    fmt.Sprintf("opsctl mongo %s -d %s -c %s -o %s %s", args[0], *database, *collection, *operation, truncateStr(query, 100)),
 		SessionID: session,
 	})
 	auditCtx := aictx.WithSessionID(ctx, approvalResult.SessionID)
 	if approvalErr != nil {
-		writeOpsctlAudit(auditCtx, "exec_mongo", argsJSON, "", approvalErr, approvalResult.ToCheckResult())
+		writeOpsctlAudit(auditCtx, "exec", argsJSON, "", approvalErr, approvalResult.ToCheckResult())
 		fmt.Fprintf(os.Stderr, "Error: %v\n", approvalErr)
 		return 1
 	}
 
 	params := map[string]any{
-		"asset_id":   float64(asset.ID),
-		"database":   *database,
-		"collection": *collection,
-		"operation":  *operation,
-		"query":      query,
+		"asset":   strconv.FormatInt(asset.ID, 10),
+		"command": command,
 	}
-	return callHandler(auditCtx, handlers, "exec_mongo", params, approvalResult.ToCheckResult())
+	return callHandler(auditCtx, handlers, "exec", params, approvalResult.ToCheckResult())
 }
 
 func printSQLUsage() {

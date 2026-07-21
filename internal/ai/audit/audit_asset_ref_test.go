@@ -80,12 +80,11 @@ func TestWriteToolCall_PrefersPreResolvedAssetAttribution(t *testing.T) {
 	}
 }
 
-// TestWriteToolCall_PrefersPreResolvedCommand locks in the k8s canonicalization fix
-// (the "exec"->"run_command" alias records the raw command for every asset type,
-// including k8s, where the permission check and approval dialog see the
-// --context/--namespace-injected effective command instead). When the caller
-// supplies Command, WriteToolCall must use it verbatim instead of calling
-// ExtractCommandForAudit.
+// TestWriteToolCall_PrefersPreResolvedCommand locks in the k8s canonicalization fix:
+// exec's own extractor records the raw command for every asset type, including k8s,
+// where the permission check and approval dialog instead see the
+// --context/--namespace-injected effective command. When the caller supplies Command,
+// WriteToolCall must use it verbatim instead of calling ExtractCommandForAudit.
 func TestWriteToolCall_PrefersPreResolvedCommand(t *testing.T) {
 	repo := setupAuditRepo(t)
 	w := NewDefaultAuditWriter()
@@ -105,11 +104,11 @@ func TestWriteToolCall_PrefersPreResolvedCommand(t *testing.T) {
 	}
 }
 
-// TestWriteToolCall_FallsBackToArgsWhenNotPreResolved verifies the 14 pre-existing
-// tools (run_command/exec_sql/...) are unaffected by this change: when the caller
-// doesn't supply AssetID/AssetName/Command (their zero values), WriteToolCall must
-// still fall back to the original args["asset_id"]/args["id"] + ExtractCommandForAudit
-// path exactly as before.
+// TestWriteToolCall_FallsBackToArgsWhenNotPreResolved verifies the callers that don't
+// pre-resolve (opsctl writes ToolCallInfo directly; the AI runner only fills Command in
+// when it could resolve the asset) still work: with AssetID/AssetName/Command left at
+// their zero values, WriteToolCall must fall back to args["asset_id"]/args["id"] +
+// ExtractCommandForAudit.
 func TestWriteToolCall_FallsBackToArgsWhenNotPreResolved(t *testing.T) {
 	repo := setupAuditRepo(t)
 
@@ -124,7 +123,7 @@ func TestWriteToolCall_FallsBackToArgsWhenNotPreResolved(t *testing.T) {
 
 	w := NewDefaultAuditWriter()
 	w.WriteToolCall(context.Background(), ToolCallInfo{
-		ToolName: "run_command",
+		ToolName: "exec",
 		ArgsJSON: `{"asset_id":3,"command":"uptime"}`,
 	})
 
@@ -137,5 +136,61 @@ func TestWriteToolCall_FallsBackToArgsWhenNotPreResolved(t *testing.T) {
 	}
 	if entry.Command != "uptime" {
 		t.Fatalf("Command = %q, want %q", entry.Command, "uptime")
+	}
+}
+
+// TestWriteToolCall_ResolvesNumericAssetRef locks the audit row's asset attribution for
+// callers that don't pre-resolve. opsctl's sql / redis / mongo subcommands resolve the
+// asset themselves and then hand the unified exec tool args["asset"]=<numeric id> — the
+// per-type tools they replaced passed args["asset_id"], so before numericAssetRef every
+// one of those audit rows silently landed with asset_id=0 and an empty asset_name.
+// Nothing errors when that happens; the row just stops being attributable.
+func TestWriteToolCall_ResolvesNumericAssetRef(t *testing.T) {
+	repo := setupAuditRepo(t)
+
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+	origAsset := asset_repo.Asset()
+	asset_repo.RegisterAsset(mockAsset)
+	t.Cleanup(func() { asset_repo.RegisterAsset(origAsset) })
+	mockAsset.EXPECT().Find(gomock.Any(), int64(9)).Return(
+		&asset_entity.Asset{ID: 9, Name: "cache-1"}, nil)
+
+	w := NewDefaultAuditWriter()
+	w.WriteToolCall(context.Background(), ToolCallInfo{
+		ToolName: "exec",
+		ArgsJSON: `{"asset":"9","command":"PING"}`,
+	})
+
+	if len(repo.logs) != 1 {
+		t.Fatalf("expected 1 audit log, got %d", len(repo.logs))
+	}
+	entry := repo.logs[0]
+	if entry.AssetID != 9 || entry.AssetName != "cache-1" {
+		t.Fatalf("got AssetID=%d AssetName=%q, want 9/cache-1", entry.AssetID, entry.AssetName)
+	}
+}
+
+// TestWriteToolCall_NameAssetRefLeavesAssetUnresolved documents the deliberate limit of
+// numericAssetRef: a NAME in args["asset"] needs assetref.Resolve, which package audit
+// cannot import (permission already depends on audit, so the reverse edge would cycle).
+// Callers that can resolve names — runner.auditMiddleware — must pre-fill AssetID.
+// Guessing here (e.g. a name→id lookup by string match) would attribute audit rows to
+// the wrong asset whenever names collide.
+func TestWriteToolCall_NameAssetRefLeavesAssetUnresolved(t *testing.T) {
+	repo := setupAuditRepo(t)
+
+	w := NewDefaultAuditWriter()
+	w.WriteToolCall(context.Background(), ToolCallInfo{
+		ToolName: "exec",
+		ArgsJSON: `{"asset":"cache-1","command":"PING"}`,
+	})
+
+	if len(repo.logs) != 1 {
+		t.Fatalf("expected 1 audit log, got %d", len(repo.logs))
+	}
+	if got := repo.logs[0].AssetID; got != 0 {
+		t.Fatalf("AssetID = %d, want 0 (a name is not resolvable here)", got)
 	}
 }

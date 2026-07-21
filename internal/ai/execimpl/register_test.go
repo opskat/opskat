@@ -47,7 +47,7 @@ func TestInit_HelpDocAttachedForEachType(t *testing.T) {
 // only in helper.ExecK8sOnAsset — canonicalize runs before the unified exec's permission
 // check (internal/ai/tool/tool_handlers_unified.go's handleExec), so this is what makes
 // an unconfigured k8s asset fail before the user ever sees an approval dialog, matching
-// what handleExecK8s already does before calling BuildK8sCommandPlan.
+// what the deleted exec_k8s tool did before calling BuildK8sCommandPlan.
 func TestCanonicalizeK8sCommand_EmptyKubeconfigFailsBeforeApproval(t *testing.T) {
 	canonicalize, ok := permission.CanonicalizeFor(asset_entity.AssetTypeK8s)
 	if !ok {

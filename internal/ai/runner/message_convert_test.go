@@ -53,7 +53,7 @@ func TestToAgentMessages(t *testing.T) {
 				ID:   "tu_1",
 				Type: "function",
 			}
-			tc.Function.Name = "run_command"
+			tc.Function.Name = "exec"
 			tc.Function.Arguments = `{"asset_id":1,"command":"uptime"}`
 			out := ToAgentMessages([]Message{
 				{
@@ -78,14 +78,14 @@ func TestToAgentMessages(t *testing.T) {
 			tu, ok := out[0].Content[2].(agent.ToolUseBlock)
 			So(ok, ShouldBeTrue)
 			So(tu.ID, ShouldEqual, "tu_1")
-			So(tu.Name, ShouldEqual, "run_command")
+			So(tu.Name, ShouldEqual, "exec")
 			So(tu.State, ShouldEqual, agent.ToolUseReady)
 			So(tu.Input["command"], ShouldEqual, "uptime")
 		})
 
 		Convey("assistant 消息 ToolCall.Arguments 非法 JSON → ToolUseMalformed", func() {
 			tc := ToolCall{ID: "tu_x", Type: "function"}
-			tc.Function.Name = "run_command"
+			tc.Function.Name = "exec"
 			tc.Function.Arguments = "not-json"
 			out := ToAgentMessages([]Message{
 				{Role: RoleAssistant, ToolCalls: []ToolCall{tc}},

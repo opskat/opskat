@@ -118,9 +118,9 @@ func TestHandleExec_UndocumentedTypeReturnsGuidance(t *testing.T) {
 
 // TestHandleExec_SerialPrecheckBlocksApprovalDialog is the regression lock for the finding
 // that the unified exec fired an approval dialog for a session-less serial asset and THEN
-// failed with "no active serial session" — the exact double-failure
-// HandleRunSerialCommand's ordering (session check before permission check, see
-// internal/ai/helper/serial_helper.go) was written to avoid. Serial registers no
+// failed with "no active serial session" — the exact double-failure the deleted
+// run_serial_command tool avoided by checking the session before the permission check
+// (that ordering now lives in helper.PrecheckSerialSession). Serial registers no
 // CanonicalizeFunc (nothing to rewrite), so before this fix nothing hoisted the session
 // check ahead of CheckForAsset for the unified exec path.
 //
@@ -254,10 +254,10 @@ func TestHandleExec_AmbiguousNameErrors(t *testing.T) {
 }
 
 // TestHandleExec_K8sCanonicalizesBeforePermissionCheck is the regression lock for the
-// policy-matching risk this task's canonicalization hook exists to close: handleExecK8s
-// (tool_handler_k8s.go) checks policy against plan.EffectiveCommand — the command after
+// policy-matching risk the canonicalization hook exists to close: the deleted exec_k8s
+// tool checked policy against plan.EffectiveCommand — the command after
 // --context/--namespace injection, which is also what approval dialogs and audit logs
-// show today. If the unified exec checked the raw command instead, every existing policy
+// show. If the unified exec checked the raw command instead, every existing policy
 // or grant written against the effective form would silently stop matching.
 //
 // With no CmdPolicy configured on the asset, the k8s permission check falls through to
@@ -522,8 +522,8 @@ func TestHandleExec_CanonicalizeFailureRecordsAuditDecision(t *testing.T) {
 // must see: the canonicalized command — asset default database injected, whitespace
 // collapsed, flags ordered — not the model's raw string and not a bare operation token.
 //
-// Both halves matter. Checking a bare op (the shape exec_mongo still passes) would show
-// the user an approval dialog reading just "deleteMany", which cannot distinguish
+// Both halves matter. Checking a bare op (the shape the deleted exec_mongo tool passed)
+// would show an approval dialog reading just "deleteMany", which cannot distinguish
 // `deleteMany logs --query=...` from `deleteMany logs`, and the latter empties the whole
 // collection. Checking the raw string would let a policy or grant written against the
 // effective form (with --db) silently stop matching. The executor still gets the raw
@@ -564,69 +564,6 @@ func TestHandleExec_MongoChecksCanonicalCommand(t *testing.T) {
 	}
 	if gotCheckCommand != want {
 		t.Fatalf("permission check saw %q, want the canonicalized command %q", gotCheckCommand, want)
-	}
-}
-
-// TestHandleExec_MongoLegacyToolMatchesUnifiedPolicyDecision is the regression lock for
-// the finding that exec_mongo (the legacy tool, helper.HandleExecMongo) bypassed
-// collection-narrowed deny rules: it passed the bare operation token ("deleteMany") to
-// CheckForAsset instead of a rich command string, so a deny rule written to protect one
-// collection (`deleteMany users`) matched the unified exec's canonicalized command
-// (`deleteMany users`) but never matched exec_mongo's bare op — the identical logical
-// delete on the identical collection was denied on one path and silently allowed on the
-// other. HandleExecMongo now builds a MongoCommand from its structured args and renders
-// it the same way CanonicalizeMongoCommand does (see mongodb_helper.go), so both paths
-// must present policy with the same string and reach the same decision.
-//
-// Both invocations target the same asset/operation/collection so the only thing that
-// differs is which tool entry point is used: handleExec's "command" string vs.
-// HandleExecMongo's structured operation/collection args.
-func TestHandleExec_MongoLegacyToolMatchesUnifiedPolicyDecision(t *testing.T) {
-	m := setupUnified(t)
-	asset := &asset_entity.Asset{ID: 34, Name: "mongo-legacy", Type: asset_entity.AssetTypeMongoDB}
-	if err := asset.SetMongoDBConfig(&asset_entity.MongoDBConfig{Host: "127.0.0.1", Port: 27017, Database: "prod"}); err != nil {
-		t.Fatalf("SetMongoDBConfig: %v", err)
-	}
-	if err := asset.SetMongoPolicy(&asset_entity.MongoPolicy{
-		AllowTypes: []string{"find", "deleteMany"},
-		DenyTypes:  []string{"deleteMany users"},
-	}); err != nil {
-		t.Fatalf("SetMongoPolicy: %v", err)
-	}
-	m.EXPECT().FindByName(gomock.Any(), "34").Return(nil, nil).AnyTimes()
-	m.EXPECT().Find(gomock.Any(), int64(34)).Return(asset, nil).AnyTimes()
-
-	checker, _ := newRecordingChecker()
-
-	// Unified exec path: a command string naming the "users" collection.
-	unifiedSlot := &aictx.CheckResult{}
-	unifiedCtx := aictx.WithCheckResultSlot(context.Background(), unifiedSlot)
-	unifiedCtx = WithDocGate(unifiedCtx, NewDocGate())
-	unifiedCtx = permission.WithPolicyChecker(unifiedCtx, checker)
-	GetDocGate(unifiedCtx).MarkDocumented(aictx.GetConversationID(unifiedCtx), asset_entity.AssetTypeMongoDB)
-	if _, err := handleExec(unifiedCtx, map[string]any{
-		"asset": "34", "command": "deleteMany users",
-	}); err != nil {
-		t.Fatalf("unified exec: unexpected error: %v", err)
-	}
-
-	// Legacy exec_mongo path: the identical logical operation via structured args instead
-	// of a command string.
-	legacySlot := &aictx.CheckResult{}
-	legacyCtx := aictx.WithCheckResultSlot(context.Background(), legacySlot)
-	legacyCtx = permission.WithPolicyChecker(legacyCtx, checker)
-	if _, err := helper.HandleExecMongo(legacyCtx, map[string]any{
-		"asset_id": int64(34), "operation": "deleteMany", "collection": "users",
-	}); err != nil {
-		t.Fatalf("exec_mongo: unexpected error: %v", err)
-	}
-
-	if unifiedSlot.Decision != aictx.Deny {
-		t.Fatalf("unified exec decision = %v, want %v", unifiedSlot.Decision, aictx.Deny)
-	}
-	if legacySlot.Decision != unifiedSlot.Decision {
-		t.Fatalf("exec_mongo decision = %v, want it to match unified exec's %v — a collection-narrowed "+
-			"deny rule must not be bypassable via the legacy tool", legacySlot.Decision, unifiedSlot.Decision)
 	}
 }
 

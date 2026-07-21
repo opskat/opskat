@@ -41,7 +41,7 @@ func checkMongoPolicyRules(ctx context.Context, p *asset_entity.MongoPolicy, com
 // CheckMongoDBPolicy 检查 MongoDB 命令是否符合策略（合并默认策略后检查）。
 // command 的形式见 checkMongoPolicyRules；裸 operation 是它的合法子集
 // （没有 collection 的操作，如 listDatabases，会渲染成一个只有 op 的串）。
-// exec_mongo 旧工具路径同样传完整命令串——见 helper.HandleExecMongo，
+// opsctl 的 mongo 子命令同样传完整命令串——见 cmd/opsctl/command/db.go，
 // 它用 MongoCommand.Render() 而不是裸 operation 喂给 CheckForAsset。
 func CheckMongoDBPolicy(ctx context.Context, p *asset_entity.MongoPolicy, command string) aictx.CheckResult {
 	merged := EffectiveMongoPolicy(ctx, p)

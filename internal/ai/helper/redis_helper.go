@@ -11,11 +11,8 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 
-	"github.com/opskat/opskat/internal/ai/aictx"
-	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/connpool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 
 	"github.com/redis/go-redis/v9"
@@ -45,43 +42,10 @@ func getRedisCache(ctx context.Context) *RedisClientCache {
 	return nil
 }
 
-// --- Handler ---
+// --- Executor ---
 
-func HandleExecRedis(ctx context.Context, args map[string]any) (string, error) {
-	assetID := aictx.ArgInt64(args, "asset_id")
-	command := aictx.ArgString(args, "command")
-	if assetID == 0 || command == "" {
-		return "", fmt.Errorf("missing required parameters: asset_id, command")
-	}
-
-	// 权限检查
-	if checker := permission.GetPolicyChecker(ctx); checker != nil {
-		result := checker.CheckForAsset(ctx, assetID, asset_entity.AssetTypeRedis, command)
-		aictx.RecordDecision(ctx, result)
-		if result.Decision != aictx.Allow {
-			return result.Message, nil
-		}
-	}
-
-	asset, err := asset_svc.Asset().Get(ctx, assetID)
-	if err != nil {
-		return "", fmt.Errorf("asset not found: %w", err)
-	}
-	if !asset.IsRedis() {
-		return "", fmt.Errorf("asset is not Redis type")
-	}
-
-	// 覆盖默认数据库
-	scope := ""
-	if _, ok := args["db"]; ok {
-		scope = strconv.FormatInt(aictx.ArgInt64(args, "db"), 10)
-	}
-
-	return ExecRedisOnAsset(ctx, asset, command, scope)
-}
-
-// ExecRedisOnAsset 是不含权限检查的纯执行入口，供统一 exec 使用。
-// HandleExecRedis 保留“检查 + 调用本函数”的形态，两条路径共用同一执行体。
+// ExecRedisOnAsset 是不含权限检查的纯执行入口：权限检查由调用方（统一 exec 工具的
+// handleExec、batch_command 的预检）在调用之前完成，这里只负责连接与执行。
 // scope 非空时按 redis db 序号（0-15）覆盖资产默认库。
 func ExecRedisOnAsset(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
 	cfg, err := asset.GetRedisConfig()

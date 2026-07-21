@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   XCircle,
   Shield,
+  BookOpen,
 } from "lucide-react";
 import type { ContentBlock } from "@/stores/aiStore";
 
@@ -20,7 +21,8 @@ const toolIcons: Record<string, typeof Terminal> = {
   Edit: FilePen,
   Glob: Search,
   Grep: Search,
-  run_command: Terminal,
+  exec: Terminal,
+  help: BookOpen,
   request_permission: Shield,
 };
 

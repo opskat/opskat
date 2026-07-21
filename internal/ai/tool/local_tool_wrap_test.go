@@ -47,8 +47,8 @@ func TestWrapLocalTool_RenamesLocalFileShell(t *testing.T) {
 func TestWrapLocalTool_LeavesOtherToolsAlone(t *testing.T) {
 	// bash_output/kill_shell: cago tool/bash/background.go runtime 文案写死了名字。
 	// task_*: 任务管理，与文件/shell 操作正交。
-	// run_command: OpsKat 自家远程工具，根本不走 WithToolDecorator（这里只是回归）。
-	for _, name := range []string{"bash_output", "kill_shell", "task_create", "task_list", "run_command"} {
+	// exec: OpsKat 自家远程工具，根本不走 WithToolDecorator（这里只是回归）。
+	for _, name := range []string{"bash_output", "kill_shell", "task_create", "task_list", "exec"} {
 		t.Run(name, func(t *testing.T) {
 			in := &tool.RawTool{NameStr: name, DescStr: "orig"}
 			out := WrapLocalTool(in)

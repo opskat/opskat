@@ -41,7 +41,7 @@ var fuzzCommands = []string{
 // 都不能 panic。
 //
 // 这条不变式看着弱，但它正是这个函数反复出问题的地方：它同时是 Redis 与 etcd 的策略
-// 匹配器，调用链 helper.HandleExecRedis → permission.CheckForAsset 与 IPC 的
+// 匹配器，调用链 tool.handleExec → permission.CheckForAsset 与 IPC 的
 // TestPolicyRule（策略测试面板的自由文本输入框）都能把任意字符串喂进来，而
 // internal/ai 与 internal/app 全链路没有 recover()——一次 index out of range 就是
 // 整个桌面应用崩溃，而不是一次 fail-closed。三轮基于举例的回归测试各自漏掉了下一个

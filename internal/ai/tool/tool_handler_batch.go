@@ -10,6 +10,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/service/asset_svc"
 )
 
 // batchCommandItem 是 LLM 提交的批量项：对 N 个资产并发跑同一类命令。
@@ -181,25 +182,45 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 	return string(output), nil
 }
 
-// executeBatchItem 把单条命令派发到对应 handler。
-// 直接调 package 内私有函数，避免再走 AllToolDefs 名字派发表。
+// executeBatchItem 把单条命令派发到对应资产类型的纯执行体（helper.Exec*OnAsset）。
+//
+// 直接调纯执行体，不再经过按类型区分的旧工具 handler（run_command / exec_sql /
+// exec_redis，已随统一 exec 下线）：那些 handler 内部各自还做一次
+// CheckForAsset，而 handleBatchCommand 上面已经对每一项做过策略预检、并把所有
+// needConfirm 聚合成**一次**审批弹窗。走 handler 就等于把批准过的命令再检查一遍，
+// 用户会为同一条命令被弹第二次框——kafka 侧删旧工具时修掉的正是这个形状
+// （见 internal/ai/tool/tool_handlers_unified_kafka_test.go）。
 func executeBatchItem(ctx context.Context, item batchCommandItem, assetID int64, assetName string) batchResultItem {
 	result := batchResultItem{
 		AssetID: assetID, AssetName: assetName,
 		Type: item.Type, Command: item.Command,
 	}
 
-	var (
-		output string
-		err    error
-	)
+	asset, err := asset_svc.Asset().Get(ctx, assetID)
+	if err != nil {
+		result.ExitCode = -1
+		result.Error = fmt.Sprintf("asset not found: %v", err)
+		return result
+	}
+
+	var output string
 	switch item.Type {
 	case "exec":
-		output, err = handleRunCommand(ctx, map[string]any{"asset_id": assetID, "command": item.Command})
+		output, err = helper.ExecCommandOnAsset(ctx, asset, item.Command, "")
 	case "sql":
-		output, err = helper.HandleExecSQL(ctx, map[string]any{"asset_id": assetID, "sql": item.Command})
+		if !asset.IsDatabase() {
+			result.ExitCode = -1
+			result.Error = "asset is not database type"
+			return result
+		}
+		output, err = helper.ExecSQLOnAsset(ctx, asset, item.Command, "")
 	case "redis":
-		output, err = helper.HandleExecRedis(ctx, map[string]any{"asset_id": assetID, "command": item.Command})
+		if !asset.IsRedis() {
+			result.ExitCode = -1
+			result.Error = "asset is not Redis type"
+			return result
+		}
+		output, err = helper.ExecRedisOnAsset(ctx, asset, item.Command, "")
 	default:
 		result.ExitCode = -1
 		result.Error = fmt.Sprintf("unknown type: %s", item.Type)

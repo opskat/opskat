@@ -14,7 +14,6 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 
 	"github.com/pkg/sftp"
 )
@@ -66,28 +65,6 @@ func handleRequestGrant(ctx context.Context, args map[string]any) (string, error
 	result := checker.SubmitGrantMulti(ctx, grantItems, reason)
 	aictx.RecordDecision(ctx, result)
 	return result.Message, nil
-}
-
-func handleRunCommand(ctx context.Context, args map[string]any) (string, error) {
-	assetID := aictx.ArgInt64(args, "asset_id")
-	command := aictx.ArgString(args, "command")
-	if assetID == 0 {
-		return "", fmt.Errorf("missing required parameter: asset_id")
-	}
-	if command == "" {
-		return "", fmt.Errorf("missing required parameter: command")
-	}
-
-	// 权限检查（两条路径共用）
-	if checker := permission.GetPolicyChecker(ctx); checker != nil {
-		result := checker.Check(ctx, assetID, command)
-		aictx.RecordDecision(ctx, result)
-		if result.Decision != aictx.Allow {
-			return result.Message, nil
-		}
-	}
-
-	return helper.ExecCommandOnAsset(ctx, &asset_entity.Asset{ID: assetID}, command, "")
 }
 
 func handleUploadFile(ctx context.Context, args map[string]any) (string, error) {

@@ -8,9 +8,7 @@ import (
 )
 
 // ExecEtcdOnAsset is the permission-check-free execution entry point used by the
-// unified exec tool.
-// HandleExecEtcd is removed alongside the exec_etcd tool in a later task; until then
-// the two paths coexist.
+// unified exec tool — the only path to etcd since the exec_etcd tool was deleted.
 // scope is meaningless for etcd and is ignored.
 func ExecEtcdOnAsset(ctx context.Context, asset *asset_entity.Asset, command, _ string) (string, error) {
 	req, err := etcd_svc.ParseCommand(command)

@@ -156,7 +156,7 @@ Use asset-id for tool calls. When target="database", scope SQL work to the datab
 func (b *PromptBuilder) buildKnowledgeGuidance() string {
 	return `Discover before acting: call list_assets / get_asset first, then operate. The asset Description often contains prior findings (OS, services, DB version) — read it to avoid redundant exploration. When you learn new non-secret facts about an asset during work, append them to the asset Description via update_asset.
 
-Running commands on an asset: prefer exec(asset, command), preceded by help(asset) the first time you touch a given asset type. exec dispatches on the asset's real type, so it is the primary path for SSH, serial, database, Redis, K8s, etcd, MongoDB, and Kafka assets. The older per-type tools (run_command, exec_sql, exec_redis, exec_k8s, exec_etcd) still work and behave identically — they are kept for compatibility, so prefer exec for new work. exec_mongo is checked against the same policies as exec, but it takes operation/database/collection/query as separate arguments instead of one command string, and — unlike exec — never fills in the asset's default database for you: always pass database explicitly. Some capabilities have no exec equivalent yet and still require their own tool: upload_file / download_file for SFTP transfer, and batch_command for the same operation across several assets.
+Running commands on an asset: use exec(asset, command), preceded by help(asset) the first time you touch a given asset type. exec dispatches on the asset's real type, so it is the only path for running commands on SSH, serial, database, Redis, K8s, etcd, MongoDB, and Kafka assets. Some capabilities are not commands and still have their own tool: upload_file / download_file for SFTP transfer, and batch_command for the same operation across several assets.
 
 Local vs remote — VERY IMPORTANT: every tool whose name starts with ` + "`local_`" + ` (local_bash / local_write / local_edit / local_read / local_grep / local_find / local_ls) operates ONLY on the USER'S OWN MACHINE — they do NOT touch any remote asset. When the scenario targets a specific server / database / Redis / Kafka / K8s asset (an SSH / Database / Redis / SFTP tab is open for it, the user names the asset, or the request is clearly about that asset), you MUST reach it through a remote tool: exec(asset, command) for SSH / serial / database / Redis / K8s / etcd / MongoDB / Kafka assets (use ` + "`cat`/`ls`/`grep`" + ` inside an SSH exec for file inspection), and upload_file / download_file for SFTP transfer. Never fall back to a local_* tool even when the command looks identical — running ` + "`local_ls /etc/nginx`" + ` lists YOUR machine's filesystem, not the server the user asked about. local_* tools are only correct when the user explicitly asks about their local machine, or when there is no remote asset in scope.
 
@@ -178,9 +178,9 @@ func (b *PromptBuilder) buildErrorRecoveryGuidance() string {
 // buildAssetTypeSkills 渲染 exec/help 的用法说明，以及内置资产类型的一行技能清单
 // （只列描述，不内联 SKILL.md 正文）。
 //
-// 说明段无条件渲染，清单段只在调用方给了描述时追加：exec/help 是资产操作的主路径，
-// 若只在"有匹配的 Tab 打开"时才出现，模型在没开 Tab 的会话里就看不到这条路径，
-// 只能退回按类型的旧工具——那正是本分支要收敛掉的用法。
+// 说明段无条件渲染，清单段只在调用方给了描述时追加：exec/help 是资产操作的**唯一**
+// 路径（按类型区分的旧工具已全部删除），若只在"有匹配的 Tab 打开"时才出现，模型在
+// 没开 Tab 的会话里就看不到这条路径，只能瞎猜工具名。
 func (b *PromptBuilder) buildAssetTypeSkills() string {
 	lines := []string{
 		"Operating on an asset — exec / help: exec(asset, command) runs a command against an asset and dispatches on the asset's REAL type, read from the asset record. You do not need to know the type in advance and you cannot mis-route: passing a Redis asset to exec runs it as Redis. Pass the asset's id or name as `asset`; use `scope` for the connection-level target that is not part of the command itself (database name for database assets, db index for Redis).",

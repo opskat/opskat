@@ -11,8 +11,9 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
-// handleExec 按资产真实类型派发命令执行，取代 14 个按类型区分的专用工具
-// （run_command/exec_sql/exec_redis/exec_k8s/...）。
+// handleExec 按资产真实类型派发命令执行。它取代了 14 个按类型区分的专用工具
+// （run_command / exec_sql / exec_redis / exec_k8s / kafka_* 等，均已删除），现在是
+// 在资产上执行命令的唯一入口。
 //
 // 执行顺序是有意为之，不能重排：
 //  1. 解析资产（assetref.Resolve）——错误直接返回，无副作用。

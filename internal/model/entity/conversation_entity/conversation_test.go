@@ -11,7 +11,7 @@ func TestMessageBlocksRoundtrip(t *testing.T) {
 		msg := &Message{}
 		blocks := []ContentBlock{
 			{Type: "text", Content: "hi"},
-			{Type: "tool", ToolName: "run_command", ToolCallID: "call_1", Status: "completed"},
+			{Type: "tool", ToolName: "exec", ToolCallID: "call_1", Status: "completed"},
 		}
 
 		Convey("非空写入后能读回", func() {

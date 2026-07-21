@@ -12,11 +12,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.uber.org/zap"
 
-	"github.com/opskat/opskat/internal/ai/aictx"
-	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/connpool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 )
 
@@ -42,70 +39,6 @@ func getMongoDBCache(ctx context.Context) *MongoDBClientCache {
 		return cache
 	}
 	return nil
-}
-
-// --- Handler ---
-
-func HandleExecMongo(ctx context.Context, args map[string]any) (string, error) {
-	assetID := aictx.ArgInt64(args, "asset_id")
-	operation := aictx.ArgString(args, "operation")
-	database := aictx.ArgString(args, "database")
-	collection := aictx.ArgString(args, "collection")
-	query := aictx.ArgString(args, "query")
-	if assetID == 0 || operation == "" {
-		return "", fmt.Errorf("missing required parameters: asset_id, operation")
-	}
-
-	// 权限检查必须看到与统一 exec 相同的富命令串，而不是裸 operation：策略侧的
-	// MatchMongoRule 按 op+collection 收窄（见 internal/ai/policy/mongo_rule.go），
-	// 一条 `deleteMany users` 的 deny 规则只在命令串里带着 collection 时才命中。
-	// 这里复用 mongo_command.go 的 Render，不重新发明一份渲染逻辑——与
-	// CanonicalizeMongoCommand 共用同一个类型，两条路径产出同一个字符串。
-	command := &MongoCommand{Op: operation, Database: database, Collection: collection, Query: query}
-	canonicalCommand, err := command.Render()
-	if err != nil {
-		return "", err
-	}
-
-	// 权限检查
-	if checker := permission.GetPolicyChecker(ctx); checker != nil {
-		result := checker.CheckForAsset(ctx, assetID, asset_entity.AssetTypeMongoDB, canonicalCommand)
-		aictx.RecordDecision(ctx, result)
-		if result.Decision != aictx.Allow {
-			return result.Message, nil
-		}
-	}
-
-	asset, err := asset_svc.Asset().Get(ctx, assetID)
-	if err != nil {
-		return "", fmt.Errorf("asset not found: %w", err)
-	}
-	if !asset.IsMongoDB() {
-		return "", fmt.Errorf("asset is not MongoDB type")
-	}
-
-	client, closer, err := getOrDialMongoDB(ctx, asset)
-	if err != nil {
-		return "", fmt.Errorf("failed to connect to MongoDB: %w", err)
-	}
-	if getMongoDBCache(ctx) == nil {
-		if client != nil {
-			defer func() {
-				if err := client.Disconnect(context.Background()); err != nil {
-					logger.Default().Warn("close MongoDB connection", zap.Error(err))
-				}
-			}()
-		}
-		if closer != nil {
-			defer func() {
-				if err := closer.Close(); err != nil {
-					logger.Default().Warn("close MongoDB tunnel", zap.Error(err))
-				}
-			}()
-		}
-	}
-
-	return ExecuteMongoDB(ctx, client, database, collection, operation, query)
 }
 
 func getOrDialMongoDB(ctx context.Context, asset *asset_entity.Asset) (*mongo.Client, io.Closer, error) {

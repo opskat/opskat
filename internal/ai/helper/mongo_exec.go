@@ -11,9 +11,7 @@ import (
 )
 
 // ExecMongoOnAsset is the permission-check-free execution entry point used by the
-// unified exec tool.
-// HandleExecMongo is removed alongside the exec_mongo tool in a later task; until then
-// the two paths coexist.
+// unified exec tool — the only path to MongoDB since the exec_mongo tool was deleted.
 // scope is meaningless for MongoDB and is ignored — the database is named by the
 // command's --db flag (see internal/ai/skills/mongodb/SKILL.md).
 func ExecMongoOnAsset(ctx context.Context, asset *asset_entity.Asset, command, _ string) (string, error) {
@@ -27,7 +25,7 @@ func ExecMongoOnAsset(ctx context.Context, asset *asset_entity.Asset, command, _
 		return "", fmt.Errorf("failed to connect to MongoDB: %w", err)
 	}
 	// 没有连接缓存时这次调用独占这条连接，必须自己关；有缓存时缓存负责生命周期
-	// （与 HandleExecMongo / ExecRedisOnAsset 的处理一致）。
+	// （与 ExecRedisOnAsset 的处理一致）。
 	if getMongoDBCache(ctx) == nil {
 		if client != nil {
 			defer func() {

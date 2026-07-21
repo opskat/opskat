@@ -10,9 +10,8 @@ import (
 	// 这里不再抄一份名单——抄的那份停在 ssh/serial/database/redis/k8s，漏了后来接入的
 	// mongodb/etcd/kafka。blank-import 是唯一的触发点：
 	// 导入本包的两条路径（桌面端与 opsctl）都会触发这次注册，注册一次即可。
-	// 但注册被共用不等于工具被共用——exec/help 目前只在 Tools()（桌面端 AI）里，
-	// 下面的 AllToolDefs()（opsctl 派发表）没有它们的条目，所以 opsctl 现在还调不到
-	// 统一 exec，只能走按类型的旧工具。
+	// 桌面端 Tools() 与下面的 AllToolDefs()（opsctl 派发表）都只经由 exec 执行命令，
+	// 两边共用这一份执行器表。
 	// execimpl 不导入本包（tool），避免循环依赖。
 	_ "github.com/opskat/opskat/internal/ai/execimpl"
 )
@@ -37,8 +36,13 @@ type ToolDef struct {
 }
 
 // AllToolDefs 返回 opsctl CLI 派发用的工具列表。
-// 它不是 Tools() 的镜像：run_serial_command 依赖桌面端已连接的串口 session；
-// batch_command 在 opsctl 中有独立的 batch 子命令入口，不走 name→handler 派发表。
+// 它不是 Tools() 的镜像：batch_command 在 opsctl 中有独立的 batch 子命令入口，
+// 不走 name→handler 派发表。
+//
+// opsctl 的 sql / redis / mongo / batch 子命令按名字在这张表里查 handler
+// （cmd/opsctl/command/handler.go 的 buildHandlerMap），查不到只在**运行时**报
+// "unknown tool"——所以删条目必须同步改那些调用点，加条目必须真的加进来。
+// 按类型区分的旧工具下线后，它们统一改查 "exec"，因此 exec / help 必须在表里。
 func AllToolDefs() []ToolDef {
 	return []ToolDef{
 		{"list_assets", handleListAssets},
@@ -49,16 +53,12 @@ func AllToolDefs() []ToolDef {
 		{"get_group", handleGetGroup},
 		{"add_group", handleAddGroup},
 		{"update_group", handleUpdateGroup},
-		{"run_command", handleRunCommand},
 		{"upload_file", handleUploadFile},
 		{"download_file", handleDownloadFile},
-		{"exec_sql", helper.HandleExecSQL},
-		{"exec_redis", helper.HandleExecRedis},
-		{"exec_mongo", helper.HandleExecMongo},
-		{"exec_etcd", helper.HandleExecEtcd},
-		{"exec_k8s", handleExecK8s},
 		{"request_permission", handleRequestGrant},
 		{"exec_tool", handleExecTool},
+		{"exec", handleExec},
+		{"help", handleHelp},
 	}
 }
 

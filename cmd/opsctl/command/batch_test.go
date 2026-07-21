@@ -168,12 +168,14 @@ func TestBatchOutputJSON(t *testing.T) {
 	})
 }
 
-func TestBatchAuditTool(t *testing.T) {
-	Convey("batchAuditTool", t, func() {
-		So(batchAuditTool("exec"), ShouldEqual, "exec")
-		So(batchAuditTool("sql"), ShouldEqual, "exec_sql")
-		So(batchAuditTool("redis"), ShouldEqual, "exec_redis")
-		So(batchAuditTool("unknown"), ShouldEqual, "exec")
+// TestBatchAuditToolIsDispatchable 锁住 batch 每一项落到的工具名**在派发表里查得到**。
+// batchAuditTool 曾经是个 cmdType→名字的映射函数，现在只剩一个名字；但无论几个，
+// executeBatchHandler 都拿它去 buildHandlerMap() 里查 handler，查不到只在运行时打印
+// "Internal error: unknown tool"。这条断言把那次运行时失败提前到编译-测试阶段。
+func TestBatchAuditToolIsDispatchable(t *testing.T) {
+	Convey("batchAuditTool 必须能在 AllToolDefs 派发表里查到", t, func() {
+		So(batchAuditTool, ShouldEqual, "exec")
+		So(buildHandlerMap(), ShouldContainKey, batchAuditTool)
 	})
 }
 

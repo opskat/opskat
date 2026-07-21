@@ -4,69 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
-
-	"github.com/opskat/opskat/internal/ai/aictx"
-	"github.com/opskat/opskat/internal/ai/permission"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/service/etcd_svc"
 )
 
-// HandleExecEtcd 是 exec_etcd AI 工具的入口。
-//
-// 策略 / grant / 审批由 permission.CheckForAsset 在 svc 调用前完成；
-// svc.Exec 内部已有三态日志与 dispatch，这里不重复记录。
-func HandleExecEtcd(ctx context.Context, args map[string]any) (string, error) {
-	assetID := aictx.ArgInt64(args, "asset_id")
-	op := strings.ToLower(strings.TrimSpace(aictx.ArgString(args, "op")))
-	if assetID == 0 || op == "" {
-		return "", fmt.Errorf("missing required parameters: asset_id, op")
-	}
-
-	req := &etcd_svc.ExecRequest{
-		AssetID:  assetID,
-		Op:       op,
-		Key:      aictx.ArgString(args, "key"),
-		Value:    aictx.ArgString(args, "value"),
-		Prefix:   aictx.ArgBool(args, "prefix"),
-		Limit:    aictx.ArgInt64(args, "limit"),
-		Revision: aictx.ArgInt64(args, "revision"),
-		LeaseID:  aictx.ArgInt64(args, "lease_id"),
-		Source:   "ai",
-	}
-	if ttl := aictx.ArgInt64(args, "ttl"); ttl > 0 {
-		if req.Args == nil {
-			req.Args = map[string]any{}
-		}
-		req.Args["ttl"] = ttl
-	}
-
-	// 把结构化请求还原成策略匹配 / grant pattern 用的命令字符串。
-	cmd := etcd_svc.FormatCommand(req)
-
-	if checker := permission.GetPolicyChecker(ctx); checker != nil {
-		result := checker.CheckForAsset(ctx, assetID, asset_entity.AssetTypeEtcd, cmd)
-		aictx.RecordDecision(ctx, result)
-		if result.Decision != aictx.Allow {
-			return result.Message, nil
-		}
-	}
-
-	svc := etcd_svc.New(getSSHPool(ctx))
-	result, err := svc.Exec(ctx, req)
-	if err != nil {
-		return "", err
-	}
-	return marshalEtcdResult(ctx, assetID, op, result)
-}
-
 // marshalEtcdResult serializes an etcd_svc.Exec result to the JSON string returned to
-// the model. Shared by HandleExecEtcd (the exec_etcd tool) and ExecEtcdOnAsset (the
-// unified exec tool's etcd executor, etcd_exec.go) so the two paths can't drift on how
-// results are represented.
+// the model. Used by ExecEtcdOnAsset (the unified exec tool's etcd executor,
+// etcd_exec.go).
 func marshalEtcdResult(ctx context.Context, assetID int64, op string, result any) (string, error) {
 	data, err := json.Marshal(result)
 	if err != nil {

@@ -54,10 +54,10 @@ func BuildK8sCommandPlan(rawCommand string, cfg *asset_entity.K8sConfig) (*K8sCo
 }
 
 // ExecK8sOnAsset 是不含权限检查的纯执行入口，供统一 exec 使用。
-// handleExecK8s（internal/ai/tool）保留“检查 + 调用本函数”的形态，两条路径
+// 统一 exec 的 canonicalizeK8sCommand（internal/ai/execimpl）先算一次同样的 plan，两条路径
 // 共用同一执行体。command 是原始 kubectl 命令；scope 对 k8s 无意义，忽略。
 //
-// 注意：cfg 与 plan 在这里会被重新计算一次——调用方（handleExecK8s）为了权限检查
+// 注意：cfg 与 plan 在这里会被重新计算一次——调用方（canonicalizeK8sCommand）为了权限检查
 // 已经算过一次 EffectiveCommand，但 ExecFunc 的签名只接受 (ctx, asset, command,
 // scope），没有位置传入已算好的 plan，所以这里必须以同一份 BuildK8sCommandPlan
 // 重新推导 Args。两处调用的是同一个函数，不构成第二份实现。

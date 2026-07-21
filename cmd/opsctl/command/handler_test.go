@@ -37,11 +37,8 @@ func TestCallHandler_Decision(t *testing.T) {
 		defer func() { opsctlAuditWriter = origWriter }()
 
 		handlers := map[string]tool.ToolHandlerFunc{
-			"exec_sql": func(_ context.Context, args map[string]any) (string, error) {
+			"exec": func(_ context.Context, args map[string]any) (string, error) {
 				return `{"rows":[]}`, nil
-			},
-			"exec_redis": func(_ context.Context, args map[string]any) (string, error) {
-				return "PONG", nil
 			},
 		}
 
@@ -51,30 +48,30 @@ func TestCallHandler_Decision(t *testing.T) {
 				DecisionSource: aictx.SourcePolicyAllow,
 				MatchedPattern: "SELECT *",
 			}
-			exitCode := callHandler(context.Background(), handlers, "exec_sql", map[string]any{
-				"asset_id": float64(1),
-				"sql":      "SELECT 1",
+			exitCode := callHandler(context.Background(), handlers, "exec", map[string]any{
+				"asset":   "1",
+				"command": "SELECT 1",
 			}, decision)
 
 			So(exitCode, ShouldEqual, 0)
 			So(len(mock.calls), ShouldEqual, 1)
 
 			info := mock.lastCall()
-			So(info.ToolName, ShouldEqual, "exec_sql")
+			So(info.ToolName, ShouldEqual, "exec")
 			So(info.Decision, ShouldNotBeNil)
 			So(info.Decision.Decision, ShouldEqual, aictx.Allow)
 			So(info.Decision.DecisionSource, ShouldEqual, aictx.SourcePolicyAllow)
 			So(info.Decision.MatchedPattern, ShouldEqual, "SELECT *")
 		})
 
-		Convey("exec_redis 传入 decision 时审计日志包含决策信息", func() {
+		Convey("SourceUserAllow 决策同样写进审计日志", func() {
 			decision := &aictx.CheckResult{
 				Decision:       aictx.Allow,
 				DecisionSource: aictx.SourceUserAllow,
 			}
-			exitCode := callHandler(context.Background(), handlers, "exec_redis", map[string]any{
-				"asset_id": float64(1),
-				"command":  "PING",
+			exitCode := callHandler(context.Background(), handlers, "exec", map[string]any{
+				"asset":   "1",
+				"command": "PING",
 			}, decision)
 
 			So(exitCode, ShouldEqual, 0)
@@ -87,9 +84,9 @@ func TestCallHandler_Decision(t *testing.T) {
 		})
 
 		Convey("不传 decision 时审计日志 Decision 为 nil", func() {
-			exitCode := callHandler(context.Background(), handlers, "exec_sql", map[string]any{
-				"asset_id": float64(1),
-				"sql":      "SELECT 1",
+			exitCode := callHandler(context.Background(), handlers, "exec", map[string]any{
+				"asset":   "1",
+				"command": "SELECT 1",
 			})
 
 			So(exitCode, ShouldEqual, 0)
@@ -98,5 +95,22 @@ func TestCallHandler_Decision(t *testing.T) {
 			info := mock.lastCall()
 			So(info.Decision, ShouldBeNil)
 		})
+	})
+}
+
+// TestBuildHandlerMap_HasEveryToolOpsctlLooksUp 锁住 opsctl 按名字查表这条**运行时**
+// 依赖。cmdSQL / cmdRedisCmd / cmdMongo / cmdBatch 都把工具名当字符串传给 callHandler，
+// 名字不在 tool.AllToolDefs() 里只会在用户真的敲那条命令时打印
+// "Internal error: unknown tool"——编译不报错，别的单测也照样过。
+//
+// 按类型区分的旧工具（exec_sql / exec_redis / exec_mongo）删除时，这几条路径统一
+// 改查 "exec"；如果那次只删了注册项而没把这里加上，opsctl 的 sql/redis/mongo/batch
+// 会整体变成运行时错误。help 一并断言：它和 exec 是同一次补进 AllToolDefs 的。
+func TestBuildHandlerMap_HasEveryToolOpsctlLooksUp(t *testing.T) {
+	Convey("opsctl 派发表覆盖所有按名字查找的工具", t, func() {
+		handlers := buildHandlerMap()
+		for _, name := range []string{"exec", "help", "exec_tool", "upload_file", "download_file"} {
+			So(handlers, ShouldContainKey, name)
+		}
 	})
 }

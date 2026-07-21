@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -143,7 +144,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 		cmd := resolved[b.idx]
 		results[b.idx].Error = fmt.Sprintf("denied by policy: %s", b.result.Message)
 		argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, cmd.asset.ID, truncateStr(cmd.command, 200))
-		writeOpsctlAudit(auditCtx, batchAuditTool(cmd.cmdType), argsJSON, "", fmt.Errorf("denied by policy: %s", b.result.Message), cmd.decision)
+		writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, "", fmt.Errorf("denied by policy: %s", b.result.Message), cmd.decision)
 	}
 
 	// Determine which commands to execute
@@ -173,7 +174,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 				results[b.idx].Error = fmt.Sprintf("approval failed: %v", approvalErr)
 				argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, cmd.asset.ID, truncateStr(cmd.command, 200))
 				decision := &aictx.CheckResult{Decision: aictx.Deny, DecisionSource: approvalResult.DecisionSource}
-				writeOpsctlAudit(auditCtx, batchAuditTool(cmd.cmdType), argsJSON, "", approvalErr, decision)
+				writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, "", approvalErr, decision)
 			}
 		} else {
 			session = approvalResult.SessionID
@@ -246,14 +247,14 @@ func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerF
 	case "exec":
 		result = executeBatchExec(ctx, cmd)
 	case "sql":
-		result = executeBatchHandler(ctx, handlers, "exec_sql", cmd, map[string]any{
-			"asset_id": float64(cmd.asset.ID),
-			"sql":      cmd.command,
+		result = executeBatchHandler(ctx, handlers, batchAuditTool, cmd, map[string]any{
+			"asset":   strconv.FormatInt(cmd.asset.ID, 10),
+			"command": cmd.command,
 		})
 	case "redis":
-		result = executeBatchHandler(ctx, handlers, "exec_redis", cmd, map[string]any{
-			"asset_id": float64(cmd.asset.ID),
-			"command":  cmd.command,
+		result = executeBatchHandler(ctx, handlers, batchAuditTool, cmd, map[string]any{
+			"asset":   strconv.FormatInt(cmd.asset.ID, 10),
+			"command": cmd.command,
 		})
 	case "mongo":
 		// Parse command as JSON: {"operation":"find","database":"db","collection":"col","query":"{}"}
@@ -268,12 +269,19 @@ func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerF
 			result.ExitCode = -1
 			return result
 		}
-		result = executeBatchHandler(ctx, handlers, "exec_mongo", cmd, map[string]any{
-			"asset_id":   float64(cmd.asset.ID),
-			"operation":  mongoArgs.Operation,
-			"database":   mongoArgs.Database,
-			"collection": mongoArgs.Collection,
-			"query":      mongoArgs.Query,
+		// 与 cmdMongo 同理：结构化字段渲染成统一 exec 的富命令串，共用 Render。
+		mongoCommand, renderErr := (&helper.MongoCommand{
+			Op: mongoArgs.Operation, Database: mongoArgs.Database,
+			Collection: mongoArgs.Collection, Query: mongoArgs.Query,
+		}).Render()
+		if renderErr != nil {
+			result.Error = fmt.Sprintf("invalid mongo command: %v", renderErr)
+			result.ExitCode = -1
+			return result
+		}
+		result = executeBatchHandler(ctx, handlers, batchAuditTool, cmd, map[string]any{
+			"asset":   strconv.FormatInt(cmd.asset.ID, 10),
+			"command": mongoCommand,
 		})
 	default:
 		result.Error = fmt.Sprintf("unsupported type: %s", cmd.cmdType)
@@ -286,7 +294,7 @@ func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerF
 	if result.Error != "" {
 		execErr = fmt.Errorf("%s", result.Error)
 	}
-	writeOpsctlAudit(ctx, batchAuditTool(cmd.cmdType), argsJSON, result.Stdout, execErr, cmd.decision)
+	writeOpsctlAudit(ctx, batchAuditTool, argsJSON, result.Stdout, execErr, cmd.decision)
 
 	return result
 }
@@ -499,19 +507,13 @@ func newSessionID() string {
 	return fmt.Sprintf("batch_%d", time.Now().UnixNano())
 }
 
-// batchAuditTool maps batch command type to audit tool name.
-func batchAuditTool(cmdType string) string {
-	switch cmdType {
-	case "sql":
-		return "exec_sql"
-	case "redis":
-		return "exec_redis"
-	case "mongo":
-		return "exec_mongo"
-	default:
-		return "exec"
-	}
-}
+// batchAuditTool is the tool name every batch item is dispatched to and audited under.
+// It used to be a cmdType→name map (exec / exec_sql / exec_redis / exec_mongo); those
+// per-type tools are gone and the unified exec tool dispatches on the asset's real type,
+// so there is exactly one name left. The batch item's own `type` field is still recorded
+// in the JSON output and still selects the policy group for the pre-check
+// (batchApprovalAssetType), so nothing is lost by collapsing this.
+const batchAuditTool = "exec"
 
 func printBatchUsage() {
 	fmt.Fprint(os.Stderr, `Usage:

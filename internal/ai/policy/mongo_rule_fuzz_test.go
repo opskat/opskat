@@ -25,7 +25,7 @@ var fuzzMongoRules = []string{
 }
 
 // fuzzMongoCommands 是命令侧种子：CanonicalizeMongoCommand 会产出的规范形状
-// （cmdline.Render：collection 走 QuoteIfNeeded，flag 按名排序），exec_mongo 旧路径
+// （cmdline.Render：collection 走 QuoteIfNeeded，flag 按名排序），存量的裸 op 规则
 // 的裸 op，以及模型可能直接写错的形状。
 var fuzzMongoCommands = []string{
 	"find", "findOne", "insertOne", "deleteMany", "listDatabases", "listCollections",

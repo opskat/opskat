@@ -13,8 +13,7 @@ import (
 // unifiedTools exec 按资产真实类型（见 permission.RegisteredExecTypes，注册发生在
 // internal/ai/execimpl 的 init）派发命令，取代按类型定义的专用工具；help 返回该类型的用法
 // 文档并把它标记为"该会话已知晓"。两者共用 assetref 解析同一个 asset 参数（数字 id
-// 或名称）。exec 标 Serial（跟原 run_command/exec_sql 等一致：远端连接复用、审批弹窗、
-// 审计排序都要求整轮内串行）；help 不做远程调用，不标 Serial。
+// 或名称）。exec 标 Serial（远端连接复用、审批弹窗、审计排序都要求整轮内串行）；help 不做远程调用，不标 Serial。
 func unifiedTools() []tool.Tool {
 	return []tool.Tool{
 		&tool.RawTool{
