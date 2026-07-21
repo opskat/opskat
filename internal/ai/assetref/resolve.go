@@ -1,5 +1,5 @@
 // Package assetref 把 LLM 传入的资产标识（数字 id 或名称）解析为资产实体。
-// exec / help / batch_exec 共用它，避免各自实现一遍 name→id 查询。
+// exec / help / batch_command 共用它，避免各自实现一遍 name→id 查询。
 package assetref
 
 import (

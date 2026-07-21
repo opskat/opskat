@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/assetref"
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -82,8 +83,11 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 	for _, cmd := range commands {
 		assetID, assetName, resolveErr := resolveAssetForBatch(ctx, cmd.Asset)
 		if resolveErr != nil {
+			// 原样透出解析错误，不再一律写成 "asset not found"：同名歧义
+			// （assetref.ErrAmbiguous）会明确告诉模型改用数字 id，压成"找不到"
+			// 只会让它换个名字重试，而重试同样歧义。
 			resolved = append(resolved, resolvedCmd{
-				item: cmd, decision: "deny", denyMsg: fmt.Sprintf("asset not found: %s", cmd.Asset),
+				item: cmd, decision: "deny", denyMsg: resolveErr.Error(),
 			})
 			continue
 		}
@@ -239,25 +243,16 @@ func executeBatchItem(ctx context.Context, item batchCommandItem, assetID int64,
 
 // resolveAssetForBatch 把 LLM 传入的 asset 标识解析成 (id, name)。
 //
-// 只认**数字形式的 id**：它把 assetRef 包成 {"id": ...} 交给 handleGetAsset，而
-// handleGetAsset 只做 aictx.ArgInt64(args, "id") + `id == 0 就报错`
-// （tool_handlers_asset.go:176-180），没有任何 name→id 查询。所以按名字指定资产
-// （batch_command 的参数描述允许这么写）在这里必然失败，报 "missing required
-// parameter: id"。行为由 TestResolveAssetForBatch_NameRefDoesNotResolve 钉住。
-//
-// 补 name 解析要改的是 get_asset 工具自己的契约，不是在这里绕一条私路——那样
-// batch_command 与 get_asset 对"什么是合法的资产标识"就有了两套答案。
+// 走 assetref.Resolve —— 与 exec / help 同一个解析器。batch 的 asset 字段跟 exec 的
+// asset 是同一个契约（数字 id 或名称，同名报错），batch_command 的参数描述也照这个
+// 写着 {"asset": "name-or-id"}；两边共用一份实现，"什么是合法的资产标识"才只有一个
+// 答案。此前它包成 {"id": ref} 借道 handleGetAsset，而 get_asset 的契约是 number 型
+// 的 id（tools_asset.go 的 SchemaVal），没有也不该有 name 查询，于是文档承诺的名字
+// 形态必然报 "missing required parameter: id"。
 func resolveAssetForBatch(ctx context.Context, assetRef string) (int64, string, error) {
-	out, err := handleGetAsset(ctx, map[string]any{"id": assetRef})
+	asset, err := assetref.Resolve(ctx, assetRef)
 	if err != nil {
 		return 0, "", err
-	}
-	var asset struct {
-		ID   int64  `json:"id"`
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal([]byte(out), &asset); err != nil {
-		return 0, "", fmt.Errorf("cannot resolve asset: %s", assetRef)
 	}
 	return asset.ID, asset.Name, nil
 }
