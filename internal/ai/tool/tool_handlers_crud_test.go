@@ -8,6 +8,7 @@ import (
 
 	"context"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
@@ -113,7 +114,26 @@ func (r *fakeAssetRepo) Delete(_ context.Context, id int64) error {
 	return nil
 }
 
-func (r *fakeAssetRepo) MoveToGroup(_ context.Context, _, _ int64) error { return nil }
+// MoveToGroup mirrors asset_repo.assetRepo.MoveToGroup (internal/repository/asset_repo/asset.go):
+// every asset currently in fromGroupID moves to toGroupID. A no-op stub let
+// TestHandleDeleteGroup_DefaultsToMovingAssetsOut pass while only ever checking the
+// asset still existed, never that it actually left the deleted group — a regression
+// that forgot to move assets out would have gone undetected.
+// MoveToGroup mirrors asset_repo.assetRepo.MoveToGroup (internal/repository/asset_repo/asset.go):
+// every asset currently in fromGroupID moves to toGroupID. A no-op stub let
+// TestHandleDeleteGroup_DefaultsToMovingAssetsOut pass while only ever checking the
+// asset still existed, never that it actually left the deleted group — a regression
+// that forgot to move assets out would have gone undetected.
+func (r *fakeAssetRepo) MoveToGroup(_ context.Context, fromGroupID, toGroupID int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, a := range r.byID {
+		if a.GroupID == fromGroupID {
+			a.GroupID = toGroupID
+		}
+	}
+	return nil
+}
 
 func (r *fakeAssetRepo) DeleteByGroupID(_ context.Context, groupID int64) error {
 	r.mu.Lock()
@@ -200,7 +220,24 @@ func (r *fakeGroupRepo) UpdateName(_ context.Context, id int64, name string) err
 	return nil
 }
 
-func (r *fakeGroupRepo) ReparentChildren(_ context.Context, _, _ int64) error { return nil }
+// ReparentChildren mirrors group_repo.groupRepo.ReparentChildren
+// (internal/repository/group_repo/group.go): every child of oldParentID is reparented
+// to newParentID. group_svc.Delete always calls this before removing a group so its
+// children don't end up dangling — a no-op stub can't catch a regression there.
+// ReparentChildren mirrors group_repo.groupRepo.ReparentChildren
+// (internal/repository/group_repo/group.go): every child of oldParentID is reparented
+// to newParentID. group_svc.Delete always calls this before removing a group so its
+// children don't end up dangling — a no-op stub can't catch a regression there.
+func (r *fakeGroupRepo) ReparentChildren(_ context.Context, oldParentID, newParentID int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, g := range r.byID {
+		if g.ParentID == oldParentID {
+			g.ParentID = newParentID
+		}
+	}
+	return nil
+}
 
 func (r *fakeGroupRepo) UpdateSortOrder(_ context.Context, id int64, sortOrder int) error {
 	r.mu.Lock()
@@ -460,7 +497,9 @@ func TestHandleDeleteAsset_AlwaysConfirmsAndIsNotGrantable(t *testing.T) {
 	env.grantEverything() // 往策略里塞一条 allow * ——对 delete 必须无效
 
 	env.confirmDecision = "allow"
-	if _, err := handleDeleteAsset(env.ctx, map[string]any{"asset": "web-9"}); err != nil {
+	slot := &aictx.CheckResult{}
+	ctx := aictx.WithCheckResultSlot(env.ctx, slot)
+	if _, err := handleDeleteAsset(ctx, map[string]any{"asset": "web-9"}); err != nil {
 		t.Fatalf("delete failed: %v", err)
 	}
 	if env.confirmCalls != 1 {
@@ -472,6 +511,11 @@ func TestHandleDeleteAsset_AlwaysConfirmsAndIsNotGrantable(t *testing.T) {
 	if env.assetCount() != 0 {
 		t.Errorf("asset should be gone, %d left", env.assetCount())
 	}
+	// decisionFromApproval 把用户点头映射进审计的 decision 列；写反了会让一次真实
+	// 允许的删除在 audit_logs 里记成 decision=deny，且没有任何测试会报错。
+	if slot.Decision != aictx.Allow || slot.DecisionSource != aictx.SourceUserAllow {
+		t.Errorf("recorded decision = %v/%q, want Allow/%q", slot.Decision, slot.DecisionSource, aictx.SourceUserAllow)
+	}
 }
 
 // 用户拒绝 → 不删，且不报 Go error（模型据此自纠，而不是整轮中断）。
@@ -480,15 +524,28 @@ func TestHandleDeleteAsset_DenyKeepsTheAsset(t *testing.T) {
 	env.seedAsset("web-9", 0)
 	env.confirmDecision = "deny"
 
-	out, err := handleDeleteAsset(env.ctx, map[string]any{"asset": "web-9"})
+	slot := &aictx.CheckResult{}
+	ctx := aictx.WithCheckResultSlot(env.ctx, slot)
+	out, err := handleDeleteAsset(ctx, map[string]any{"asset": "web-9"})
 	if err != nil {
 		t.Fatalf("a user denial is not a tool error: %v", err)
 	}
 	if !strings.Contains(strings.ToLower(out), "denied") {
 		t.Errorf("result must tell the model it was denied: %q", out)
 	}
+	// 仓内拒绝文案的惯例是明确制止后续动作（checker.go:270、SubmitGrant、
+	// local_tool_gate.go:93 都是这个措辞），不是软弱的小写 "user denied ..."——模型
+	// 读到软弱的措辞可能换个引用重试。
+	if !strings.Contains(out, "USER DENIED") || !strings.Contains(strings.ToLower(out), "stop the current task") {
+		t.Errorf("result must use the repo's stop-now denial phrasing, got %q", out)
+	}
 	if env.assetCount() != 1 {
 		t.Error("denied delete must keep the asset")
+	}
+	// 一次被拒绝的删除若在 decisionFromApproval 里被记成 Allow，audit_logs 会把它写成
+	// decision=allow/user_allow——审计上看起来像被批准了，且没有任何东西会因此报错。
+	if slot.Decision != aictx.Deny || slot.DecisionSource != aictx.SourceUserDeny {
+		t.Errorf("recorded decision = %v/%q, want Deny/%q", slot.Decision, slot.DecisionSource, aictx.SourceUserDeny)
 	}
 }
 
@@ -529,6 +586,31 @@ func TestHandleDeleteGroup_DefaultsToMovingAssetsOut(t *testing.T) {
 	if env.groupCount() != 0 {
 		t.Error("the group itself should be gone")
 	}
+	// 光"还在"不够——它必须真的移出了被删的分组，否则就是一条指向已经不存在的
+	// group_id 的悬空引用。fakeAssetRepo.MoveToGroup 从前是空实现，这条断言测不出来。
+	if got := env.asset("worker-1").GroupID; got != 0 {
+		t.Errorf("survivor asset must move to ungrouped (group_id=0), got group_id=%d", got)
+	}
+}
+
+// delete_group 删除一个有子分组的分组时，子分组要挂到被删分组的父级，而不是变成
+// 悬空引用——group_svc.Delete 在事务里调 group_repo.ReparentChildren 做这件事。
+// fakeGroupRepo.ReparentChildren 从前是空实现，这个行为在单元测试里从未被真正验证过。
+func TestHandleDeleteGroup_ReparentsChildGroups(t *testing.T) {
+	env := setupCRUD(t)
+	root := env.seedGroup("root")
+	mid := env.seedGroup("prod")
+	mid.ParentID = root.ID
+	child := env.seedGroup("prod-child")
+	child.ParentID = mid.ID
+	env.confirmDecision = "allow"
+
+	if _, err := handleDeleteGroup(env.ctx, map[string]any{"id": float64(mid.ID)}); err != nil {
+		t.Fatalf("delete_group failed: %v", err)
+	}
+	if got := env.group("prod-child").ParentID; got != root.ID {
+		t.Errorf("child group must be reparented to the deleted group's parent, got parent_id=%d want %d", got, root.ID)
+	}
 }
 
 // delete_group 拒绝 → 组和组内资产都不动。
@@ -538,18 +620,27 @@ func TestHandleDeleteGroup_DenyKeepsGroupAndAssets(t *testing.T) {
 	env.seedAsset("worker-1", g.ID)
 	env.confirmDecision = "deny"
 
-	out, err := handleDeleteGroup(env.ctx, map[string]any{"id": float64(g.ID)})
+	slot := &aictx.CheckResult{}
+	ctx := aictx.WithCheckResultSlot(env.ctx, slot)
+	out, err := handleDeleteGroup(ctx, map[string]any{"id": float64(g.ID)})
 	if err != nil {
 		t.Fatalf("a user denial is not a tool error: %v", err)
 	}
 	if !strings.Contains(strings.ToLower(out), "denied") {
 		t.Errorf("result must tell the model it was denied: %q", out)
 	}
+	// 与 TestHandleDeleteAsset_DenyKeepsTheAsset 同一条惯例断言。
+	if !strings.Contains(out, "USER DENIED") || !strings.Contains(strings.ToLower(out), "stop the current task") {
+		t.Errorf("result must use the repo's stop-now denial phrasing, got %q", out)
+	}
 	if env.groupCount() != 1 {
 		t.Error("denied delete must keep the group")
 	}
 	if env.assetCount() != 1 {
 		t.Error("denied delete must keep the group's assets")
+	}
+	if slot.Decision != aictx.Deny || slot.DecisionSource != aictx.SourceUserDeny {
+		t.Errorf("recorded decision = %v/%q, want Deny/%q", slot.Decision, slot.DecisionSource, aictx.SourceUserDeny)
 	}
 }
 

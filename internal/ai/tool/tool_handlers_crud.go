@@ -237,7 +237,7 @@ func handleDeleteAsset(ctx context.Context, args map[string]any) (string, error)
 	}})
 	aictx.RecordDecision(ctx, decisionFromApproval(resp))
 	if resp.Decision == "deny" {
-		return fmt.Sprintf("user denied deleting asset %q", asset.Name), nil
+		return fmt.Sprintf("USER DENIED: The user has denied deleting asset %q. Stop the current task immediately.", asset.Name), nil
 	}
 
 	if err := asset_svc.Asset().Delete(ctx, asset.ID); err != nil {
@@ -287,7 +287,7 @@ func handleDeleteGroup(ctx context.Context, args map[string]any) (string, error)
 	}})
 	aictx.RecordDecision(ctx, decisionFromApproval(resp))
 	if resp.Decision == "deny" {
-		return fmt.Sprintf("user denied deleting group %q", group.Name), nil
+		return fmt.Sprintf("USER DENIED: The user has denied deleting group %q. Stop the current task immediately.", group.Name), nil
 	}
 
 	deleted, err := group_svc.Group().Delete(ctx, id, deleteAssets)
