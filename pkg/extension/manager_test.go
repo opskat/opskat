@@ -11,6 +11,7 @@ import (
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // writeMinimalExtension writes a manifest.json + minimal valid WASM module for
@@ -139,6 +140,30 @@ func TestManager(t *testing.T) {
 			So(ext, ShouldNotBeNil)
 			So(ext.SkillMD, ShouldEqual, raw)
 			So(ext.SkillDescription, ShouldEqual, "")
+		})
+
+		Convey("LoadExtension warns when SKILL.md has no frontmatter", func() {
+			// The tolerate branch above degrades silently on success (err == nil,
+			// empty SkillDescription) -- there was previously no way to tell from the
+			// logs that a given extension's SKILL.md fell back to raw body text.
+			// ScanManifests logs a Warn on its sibling silent-failure path
+			// ("skip extension manifest"); this asserts the same for LoadExtension's
+			// degrade branch.
+			core, logs := observer.New(zap.WarnLevel)
+			obsMgr := NewManager(dir, newHost, zap.New(core))
+
+			extDir := filepath.Join(dir, "bare-skill-warn")
+			writeMinimalExtension(t, extDir, "bare-skill-warn")
+			raw := "# Just a heading\n\nNo frontmatter here.\n"
+			So(os.WriteFile(filepath.Join(extDir, "SKILL.md"), []byte(raw), 0644), ShouldBeNil)
+
+			_, err := obsMgr.LoadExtension(ctx, extDir)
+			So(err, ShouldBeNil)
+
+			entries := logs.FilterMessageSnippet("SKILL.md").All()
+			So(len(entries), ShouldEqual, 1)
+			So(entries[0].Level, ShouldEqual, zap.WarnLevel)
+			So(entries[0].ContextMap()["extension"], ShouldEqual, "bare-skill-warn")
 		})
 
 		Convey("LoadExtension fails when SKILL.md has a malformed frontmatter block", func() {

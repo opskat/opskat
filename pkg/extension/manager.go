@@ -317,6 +317,8 @@ func (m *Manager) LoadExtension(ctx context.Context, dir string) (*Manifest, err
 			skillDescription = parsed.Description
 		case errors.Is(perr, skillmd.ErrNoFrontmatter):
 			skillMD = raw
+			m.logger.Warn("extension SKILL.md has no frontmatter, using raw body with no description",
+				zap.String("extension", manifest.Name))
 		default:
 			return nil, fmt.Errorf("SKILL.md: %w", perr)
 		}
