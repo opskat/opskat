@@ -60,8 +60,8 @@ func maskAPIKey(key string) string {
 // 类型，成本可以忽略。
 //
 // 它**不**满足 exec 的门禁——门禁只认模型显式调用过 help（见 tool.DocGate 的注释）。
-// 未内嵌文档的类型（如 extension 承载的 mongodb）不在这里，走的是另一条 extension
-// SKILL.md 注入路径。
+// 未内嵌文档、仅由已安装 extension 提供的资产类型不在这里，走的是另一条 extension
+// SKILL.md 注入路径（见下方 bridge.GetSkillMDWithExtension）。
 func allBuiltinAssetTypeSkills() map[string]string {
 	out := make(map[string]string)
 	for _, assetType := range skills.Types() {
