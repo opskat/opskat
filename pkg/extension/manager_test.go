@@ -121,10 +121,32 @@ func TestManager(t *testing.T) {
 			So(ext.SkillDescription, ShouldEqual, "")
 		})
 
-		Convey("LoadExtension fails when SKILL.md has no frontmatter", func() {
+		Convey("LoadExtension tolerates a SKILL.md with no frontmatter at all", func() {
+			// Extension SKILL.md predates the frontmatter convention -- the published
+			// extensions/oss/SKILL.md is exactly this shape (starts with
+			// "# OSS Object Storage", no frontmatter block). We cannot retroactively
+			// edit that separate repo, so this boundary must keep accepting bare
+			// Markdown rather than hard-failing the load.
+			extDir := filepath.Join(dir, "bare-skill")
+			writeMinimalExtension(t, extDir, "bare-skill")
+			raw := "# Just a heading\n\nNo frontmatter here.\n"
+			So(os.WriteFile(filepath.Join(extDir, "SKILL.md"), []byte(raw), 0644), ShouldBeNil)
+
+			_, err := mgr.LoadExtension(ctx, extDir)
+			So(err, ShouldBeNil)
+
+			ext := mgr.GetExtension("bare-skill")
+			So(ext, ShouldNotBeNil)
+			So(ext.SkillMD, ShouldEqual, raw)
+			So(ext.SkillDescription, ShouldEqual, "")
+		})
+
+		Convey("LoadExtension fails when SKILL.md has a malformed frontmatter block", func() {
 			extDir := filepath.Join(dir, "bad-skill")
 			writeMinimalExtension(t, extDir, "bad-skill")
-			So(os.WriteFile(filepath.Join(extDir, "SKILL.md"), []byte("# Just a heading\n\nNo frontmatter here.\n"), 0644), ShouldBeNil)
+			// Opens a frontmatter block but never closes it -- a real authoring
+			// mistake (as opposed to no frontmatter at all) that must still fail loudly.
+			So(os.WriteFile(filepath.Join(extDir, "SKILL.md"), []byte("---\nname: bad-skill\n"), 0644), ShouldBeNil)
 
 			_, err := mgr.LoadExtension(ctx, extDir)
 			So(err, ShouldNotBeNil)

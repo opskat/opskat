@@ -3,6 +3,7 @@ package extension
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -291,21 +292,34 @@ func (m *Manager) LoadExtension(ctx context.Context, dir string) (*Manifest, err
 		return nil, fmt.Errorf("read wasm binary: %w", err)
 	}
 
-	// SKILL.md 可选；一旦存在就必须是合规的 cago skill 格式。
+	// SKILL.md 可选；当它存在且带 frontmatter 时，frontmatter 必须合规。
 	//
 	// 此前这里有一个 4 KiB 硬上限，理由是整份正文会进系统提示词。上限是错的解法：
 	// 它把"文档写长了"变成"整个扩展加载失败"，而真正该做的是解析 frontmatter、
 	// 让 description 进清单、正文只在相关 Tab 打开时注入（bridge → chat.go → prompt_builder）。
-	// 上限去掉，严格性移到格式上：解析失败响亮失败，不再把原始 frontmatter 当正文塞进 prompt。
+	// 上限去掉，严格性移到格式上：frontmatter 解析失败响亮失败。
+	//
+	// 但"没有 frontmatter"本身不算格式错误：扩展 SKILL.md 早于 frontmatter 约定
+	// 存在（已发布的 extensions/oss/SKILL.md 就是裸 Markdown，首行是 `# OSS ...`），
+	// 我们不能反向修改另一个仓库来配合本仓的严格化。内置 skill（internal/ai/skills）
+	// 是本仓完全控制的一手内容，缺 frontmatter 就该 panic；扩展是边界之外的第三方
+	// 内容，边界处的规则是「宽进严出」——没有 frontmatter 就退化成整份原文当正文
+	// （等价于此前的行为，只是去掉了 4 KiB 上限），真正写坏了 frontmatter（写了
+	// 开头分隔符但没写全）才响亮失败。
 	skillMD := ""
 	skillDescription := ""
 	if data, err := os.ReadFile(filepath.Join(dir, "SKILL.md")); err == nil { //nolint:gosec // path constructed from trusted extension directory
-		parsed, perr := skillmd.Parse(string(data))
-		if perr != nil {
+		raw := string(data)
+		parsed, perr := skillmd.Parse(raw)
+		switch {
+		case perr == nil:
+			skillMD = parsed.Body
+			skillDescription = parsed.Description
+		case errors.Is(perr, skillmd.ErrNoFrontmatter):
+			skillMD = raw
+		default:
 			return nil, fmt.Errorf("SKILL.md: %w", perr)
 		}
-		skillMD = parsed.Body
-		skillDescription = parsed.Description
 	}
 
 	host := m.newHost(manifest.Name)

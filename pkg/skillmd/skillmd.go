@@ -7,9 +7,19 @@
 package skillmd
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
+
+// ErrNoFrontmatter indicates raw content has no `---`-delimited frontmatter block
+// at all (as opposed to a frontmatter block that is present but malformed).
+// Built-in skills (internal/ai/skills) treat this the same as any other parse
+// error — every embedded SKILL.md is first-party and required to have frontmatter.
+// pkg/extension distinguishes it: extension SKILL.md predates the frontmatter
+// convention (e.g. the published oss extension's SKILL.md is bare Markdown), so
+// that boundary tolerates a missing block and only hard-fails on a malformed one.
+var ErrNoFrontmatter = errors.New("missing frontmatter opening delimiter")
 
 // Skill 是一份解析后的 SKILL.md。Name 可选（内置侧的目录名、扩展侧的扩展名才是权威
 // 标识），Description 必填——它是 prompt 里那份类型清单的唯一内容来源，缺了就等于
@@ -25,7 +35,7 @@ type Skill struct {
 func Parse(raw string) (Skill, error) {
 	raw = strings.ReplaceAll(raw, "\r\n", "\n")
 	if !strings.HasPrefix(raw, "---\n") {
-		return Skill{}, fmt.Errorf("missing frontmatter opening delimiter")
+		return Skill{}, ErrNoFrontmatter
 	}
 	rest := raw[len("---\n"):]
 	end := strings.Index(rest, "\n---\n")
