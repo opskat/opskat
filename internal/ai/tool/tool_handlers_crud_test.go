@@ -8,9 +8,13 @@ import (
 
 	"context"
 
+	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/audit_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
+	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"github.com/opskat/opskat/internal/repository/group_repo"
 )
 
@@ -24,6 +28,12 @@ type fakeAssetRepo struct {
 	mu     sync.Mutex
 	nextID int64
 	byID   map[int64]*asset_entity.Asset
+
+	// policyLookups, when set by setupCRUD, is incremented on every by-id Find — the
+	// exact call permission.CheckPermission's internal asset_svc.Asset().Get makes to
+	// load an asset's CommandPolicy. See crudTestEnv.policyChecks's doc comment for why
+	// that specific call is a faithful "did anything consult policy/grant" signal.
+	policyLookups *int
 }
 
 func newFakeAssetRepo() *fakeAssetRepo {
@@ -33,6 +43,9 @@ func newFakeAssetRepo() *fakeAssetRepo {
 func (r *fakeAssetRepo) Find(_ context.Context, id int64) (*asset_entity.Asset, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.policyLookups != nil {
+		*r.policyLookups++
+	}
 	a, ok := r.byID[id]
 	if !ok {
 		return nil, fmt.Errorf("asset %d not found", id)
@@ -58,6 +71,15 @@ func (r *fakeAssetRepo) List(_ context.Context, opts asset_repo.ListOptions) ([]
 	var out []*asset_entity.Asset
 	for _, a := range r.byID {
 		if opts.Type != "" && a.Type != opts.Type {
+			continue
+		}
+		// Mirrors the real asset_repo.List's group filtering (see asset_repo/asset.go):
+		// ExactGroupID matches the group id verbatim (including 0, for "ungrouped");
+		// otherwise a positive GroupID still filters, 0 means "don't filter by group".
+		if opts.ExactGroupID && a.GroupID != opts.GroupID {
+			continue
+		}
+		if !opts.ExactGroupID && opts.GroupID > 0 && a.GroupID != opts.GroupID {
 			continue
 		}
 		out = append(out, a)
@@ -91,8 +113,18 @@ func (r *fakeAssetRepo) Delete(_ context.Context, id int64) error {
 	return nil
 }
 
-func (r *fakeAssetRepo) MoveToGroup(_ context.Context, _, _ int64) error  { return nil }
-func (r *fakeAssetRepo) DeleteByGroupID(_ context.Context, _ int64) error { return nil }
+func (r *fakeAssetRepo) MoveToGroup(_ context.Context, _, _ int64) error { return nil }
+
+func (r *fakeAssetRepo) DeleteByGroupID(_ context.Context, groupID int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id, a := range r.byID {
+		if a.GroupID == groupID {
+			delete(r.byID, id)
+		}
+	}
+	return nil
+}
 func (r *fakeAssetRepo) FindByCredentialID(_ context.Context, _ int64) ([]*asset_entity.Asset, error) {
 	return nil, nil
 }
@@ -188,13 +220,25 @@ func (r *fakeGroupRepo) UpdateParentID(_ context.Context, id, parentID int64) er
 	return nil
 }
 
-// crudTestEnv is the fixture shared by the TestHandlePut* tests below: an isolated,
-// in-memory asset/group repo pair swapped in for the process-global singletons and
-// restored on cleanup.
+// crudTestEnv is the fixture shared by the TestHandlePut*/TestHandleDelete* tests
+// below: an isolated, in-memory asset/group repo pair swapped in for the process-global
+// singletons and restored on cleanup, plus a permission.CommandPolicyChecker wired into
+// ctx so the delete tests can drive and observe the confirmation dialog.
 type crudTestEnv struct {
 	ctx    context.Context
 	assets *fakeAssetRepo
 	groups *fakeGroupRepo
+
+	// confirmDecision drives the fake ConfirmFunc's response ("allow" / "deny"),
+	// settable by the test *after* setupCRUD returns (the closure reads it live).
+	// confirmCalls/lastConfirmKind/lastConfirmItems record what it was last called with.
+	confirmDecision  string
+	confirmCalls     int
+	lastConfirmKind  string
+	lastConfirmItems []permission.ApprovalItem
+
+	// policyChecks mirrors fakeAssetRepo.policyLookups — see that field's doc comment.
+	policyChecks int
 }
 
 func setupCRUD(t *testing.T) *crudTestEnv {
@@ -210,7 +254,61 @@ func setupCRUD(t *testing.T) *crudTestEnv {
 	group_repo.RegisterGroup(groups)
 	t.Cleanup(func() { group_repo.RegisterGroup(origGroup) })
 
-	return &crudTestEnv{ctx: context.Background(), assets: assets, groups: groups}
+	env := &crudTestEnv{assets: assets, groups: groups}
+	assets.policyLookups = &env.policyChecks
+
+	// group_svc.Group().Delete wraps its writes in dbutil.WithTransaction; without a
+	// runner injected that falls through to a real GORM DB, which these tests don't
+	// have. A passthrough runner makes it behave like a no-op wrapper, same as
+	// group_svc's own tests (see group_test.go's setupTest).
+	ctx := dbutil.WithTransactionRunner(context.Background(),
+		func(ctx context.Context, fn func(context.Context) error) error { return fn(ctx) })
+
+	checker := permission.NewCommandPolicyChecker(
+		func(_ context.Context, kind string, items []permission.ApprovalItem) permission.ApprovalResponse {
+			env.confirmCalls++
+			env.lastConfirmKind = kind
+			env.lastConfirmItems = items
+			return permission.ApprovalResponse{Decision: env.confirmDecision}
+		})
+	env.ctx = permission.WithPolicyChecker(ctx, checker)
+
+	return env
+}
+
+// seedAsset directly inserts an SSH asset into the fake repo, bypassing asset_svc's
+// validation — the delete tests operate on a target that must already exist, not one
+// created through the tool under test.
+func (e *crudTestEnv) seedAsset(name string, groupID int64) *asset_entity.Asset {
+	a := &asset_entity.Asset{Name: name, Type: asset_entity.AssetTypeSSH, GroupID: groupID}
+	if err := e.assets.Create(e.ctx, a); err != nil {
+		panic(err)
+	}
+	return a
+}
+
+// seedGroup directly inserts a group into the fake repo, for the same reason.
+func (e *crudTestEnv) seedGroup(name string) *group_entity.Group {
+	g := &group_entity.Group{Name: name}
+	if err := e.groups.Create(e.ctx, g); err != nil {
+		panic(err)
+	}
+	return g
+}
+
+// grantEverything seeds (or reuses) the asset named "web-9" that the delete tests
+// target and stuffs an allow-* command policy onto it — "往策略里塞一条 allow *". Delete
+// must ignore this entirely: it never consults CommandPolicy or grant, so even the most
+// permissive policy surface must not change whether the user gets prompted.
+func (e *crudTestEnv) grantEverything() *asset_entity.Asset {
+	a := e.asset("web-9")
+	if a == nil {
+		a = e.seedAsset("web-9", 0)
+	}
+	if err := a.SetCommandPolicy(&asset_entity.CommandPolicy{AllowList: []string{"*"}}); err != nil {
+		panic(err)
+	}
+	return a
 }
 
 func (e *crudTestEnv) assetCount() int {
@@ -352,5 +450,174 @@ func TestHandlePutGroup_CreateThenUpdate(t *testing.T) {
 	}
 	if got := env.group("prod").Description; got != "production fleet" {
 		t.Errorf("description = %q, want %q", got, "production fleet")
+	}
+}
+
+// 删除恒需确认：即使策略里有 allow * 的 grant，也必须弹确认。
+// 实现方式决定了这一点——delete 根本不查策略/grant，直接调 ConfirmFunc。
+func TestHandleDeleteAsset_AlwaysConfirmsAndIsNotGrantable(t *testing.T) {
+	env := setupCRUD(t)
+	env.grantEverything() // 往策略里塞一条 allow * ——对 delete 必须无效
+
+	env.confirmDecision = "allow"
+	if _, err := handleDeleteAsset(env.ctx, map[string]any{"asset": "web-9"}); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+	if env.confirmCalls != 1 {
+		t.Fatalf("delete must always prompt exactly once, got %d prompts", env.confirmCalls)
+	}
+	if env.policyChecks != 0 {
+		t.Errorf("delete must not consult policy/grant at all, got %d checks", env.policyChecks)
+	}
+	if env.assetCount() != 0 {
+		t.Errorf("asset should be gone, %d left", env.assetCount())
+	}
+}
+
+// 用户拒绝 → 不删，且不报 Go error（模型据此自纠，而不是整轮中断）。
+func TestHandleDeleteAsset_DenyKeepsTheAsset(t *testing.T) {
+	env := setupCRUD(t)
+	env.seedAsset("web-9", 0)
+	env.confirmDecision = "deny"
+
+	out, err := handleDeleteAsset(env.ctx, map[string]any{"asset": "web-9"})
+	if err != nil {
+		t.Fatalf("a user denial is not a tool error: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(out), "denied") {
+		t.Errorf("result must tell the model it was denied: %q", out)
+	}
+	if env.assetCount() != 1 {
+		t.Error("denied delete must keep the asset")
+	}
+}
+
+// 审批项必须带上资产名与删除语义，审批弹窗上"删哪台"要一眼可见。
+func TestHandleDeleteAsset_ApprovalItemNamesTheAsset(t *testing.T) {
+	env := setupCRUD(t)
+	env.seedAsset("web-9", 0)
+	env.confirmDecision = "allow"
+
+	_, _ = handleDeleteAsset(env.ctx, map[string]any{"asset": "web-9"})
+
+	if env.lastConfirmKind != "delete" {
+		t.Errorf("approval kind = %q, want %q (the frontend renders this one without an allow-all button)",
+			env.lastConfirmKind, "delete")
+	}
+	item := env.lastConfirmItems[0]
+	if item.AssetName != "web-9" {
+		t.Errorf("approval item asset name = %q, want web-9", item.AssetName)
+	}
+	if !strings.Contains(item.Command, "delete") {
+		t.Errorf("approval item must read as a delete, got %q", item.Command)
+	}
+}
+
+// delete_group 默认非破坏性分支：资产移入未分组，不删。
+func TestHandleDeleteGroup_DefaultsToMovingAssetsOut(t *testing.T) {
+	env := setupCRUD(t)
+	g := env.seedGroup("prod")
+	env.seedAsset("worker-1", g.ID)
+	env.confirmDecision = "allow"
+
+	if _, err := handleDeleteGroup(env.ctx, map[string]any{"id": float64(env.group("prod").ID)}); err != nil {
+		t.Fatalf("delete_group failed: %v", err)
+	}
+	if env.assetCount() == 0 {
+		t.Error("delete_assets defaults to false — the group's assets must survive")
+	}
+	if env.groupCount() != 0 {
+		t.Error("the group itself should be gone")
+	}
+}
+
+// delete_group 拒绝 → 组和组内资产都不动。
+func TestHandleDeleteGroup_DenyKeepsGroupAndAssets(t *testing.T) {
+	env := setupCRUD(t)
+	g := env.seedGroup("prod")
+	env.seedAsset("worker-1", g.ID)
+	env.confirmDecision = "deny"
+
+	out, err := handleDeleteGroup(env.ctx, map[string]any{"id": float64(g.ID)})
+	if err != nil {
+		t.Fatalf("a user denial is not a tool error: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(out), "denied") {
+		t.Errorf("result must tell the model it was denied: %q", out)
+	}
+	if env.groupCount() != 1 {
+		t.Error("denied delete must keep the group")
+	}
+	if env.assetCount() != 1 {
+		t.Error("denied delete must keep the group's assets")
+	}
+}
+
+// fakeAuditRepo captures WriteToolCall's rows in memory, mirroring the audit package's
+// own memAuditRepo test helper (internal/ai/audit/audit_asset_ref_test.go) — that one
+// isn't exported, and package tool can't import a _test.go file from another package.
+type fakeAuditRepo struct {
+	mu   sync.Mutex
+	logs []*audit_entity.AuditLog
+}
+
+func (r *fakeAuditRepo) Create(_ context.Context, log *audit_entity.AuditLog) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.logs = append(r.logs, log)
+	return nil
+}
+
+func (r *fakeAuditRepo) List(_ context.Context, _ audit_repo.ListOptions) ([]*audit_entity.AuditLog, int64, error) {
+	return nil, 0, nil
+}
+
+func (r *fakeAuditRepo) ListSessions(_ context.Context, _ int64) ([]audit_repo.SessionInfo, error) {
+	return nil, nil
+}
+
+func setupFakeAuditRepo(t *testing.T) *fakeAuditRepo {
+	t.Helper()
+	repo := &fakeAuditRepo{}
+	orig := audit_repo.Audit()
+	audit_repo.RegisterAudit(repo)
+	t.Cleanup(func() { audit_repo.RegisterAudit(orig) })
+	return repo
+}
+
+// deleteAssets=true 连带删除组内资产，且逐条补 delete_asset 审计——删一个含多台机器的
+// 分组不能只留一行审计（internal/app/system/asset.go 的 System.DeleteGroup 同一份写法，
+// 这里是它在 AI 路径上的对照）。
+func TestHandleDeleteGroup_CascadeDeletesAssetsAndAuditsEachOne(t *testing.T) {
+	env := setupCRUD(t)
+	repo := setupFakeAuditRepo(t)
+	g := env.seedGroup("prod")
+	env.seedAsset("worker-1", g.ID)
+	env.seedAsset("worker-2", g.ID)
+	env.confirmDecision = "allow"
+
+	out, err := handleDeleteGroup(env.ctx, map[string]any{"id": float64(g.ID), "delete_assets": true})
+	if err != nil {
+		t.Fatalf("delete_group failed: %v", err)
+	}
+	if !strings.Contains(out, `"deleted_assets":2`) {
+		t.Errorf("result must report how many assets were cascaded, got %q", out)
+	}
+	if env.assetCount() != 0 {
+		t.Errorf("deleteAssets=true must remove the group's assets too, %d left", env.assetCount())
+	}
+	if env.groupCount() != 0 {
+		t.Error("the group itself should be gone")
+	}
+
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	if len(repo.logs) != 2 {
+		t.Fatalf("expected 2 delete_asset audit rows (one per cascaded asset), got %d", len(repo.logs))
+	}
+	for _, l := range repo.logs {
+		if l.ToolName != "delete_asset" {
+			t.Errorf("cascade audit row tool_name = %q, want delete_asset", l.ToolName)
+		}
 	}
 }

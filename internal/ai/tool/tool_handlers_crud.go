@@ -8,12 +8,14 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/assetref"
+	"github.com/opskat/opskat/internal/ai/audit"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/repository/group_repo"
 	"github.com/opskat/opskat/internal/service/asset_svc"
+	"github.com/opskat/opskat/internal/service/group_svc"
 )
 
 // putArgs 把工具入参摊平成 assettype 处理器认识的形态。
@@ -173,4 +175,129 @@ func handlePutGroup(ctx context.Context, args map[string]any) (string, error) {
 	}
 	aictx.NotifyDataChanged("group")
 	return fmt.Sprintf(`{"id":%d,"message":"group updated successfully"}`, group.ID), nil
+}
+
+// decisionFromApproval maps a checker.ConfirmFunc response onto the audit CheckResult
+// slot (aictx.RecordDecision): "allow"/"allowAll" both count as a user allow — delete
+// has no rememberMode branch, so "allowAll" can only mean the user clicked through,
+// never that a grant got written. "deny" is the only other value the confirm callback
+// can return.
+func decisionFromApproval(resp permission.ApprovalResponse) aictx.CheckResult {
+	if resp.Decision == "deny" {
+		return aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny}
+	}
+	return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow}
+}
+
+// auditDeletedAsset writes one delete_asset audit row for an asset that was removed
+// as a side effect of deleting its group. Mirrors internal/app/system/asset.go's
+// System.DeleteGroup: same action constant, same audit.WriteAssetChange call, ctx
+// carries whatever source (desktop/ai/opsctl) the caller already stamped on it — this
+// helper doesn't guess.
+func auditDeletedAsset(ctx context.Context, asset *asset_entity.Asset) {
+	audit.WriteAssetChange(ctx, audit.ActionDeleteAsset, asset, nil)
+}
+
+// handleDeleteAsset 删除资产。
+//
+// 两条与其它工具都不同的规则（spec §4.4）：
+//
+//  1. **恒需确认**：不查策略、不查 grant，直接调 ConfirmFunc。这不是"检查后发现需要确认"，
+//     而是"根本没有可以放行的分支"——与 #249 的修法同款：把放行写不出来，比补一个
+//     `if !grantable` 判断更难被后来的改动绕过。
+//  2. **不可 grant**："删除这个资产"不是可预批的重复命令模式。既然从不经过策略层，
+//     grant 也就无从匹配。前端必须同步用 delete 这个 kind 渲染（不出现"全部允许"按钮），
+//     否则 UI 上仍然可以把删除写进 grant，把这条约束当场架空。
+//
+// 名称在删除**之前**捕获：asset_repo.Find 过滤 status = Active，删完再查就查不到了，
+// 而审计中间件（runner.resolveAssetForAudit）本身就在 c.Next() 之前解析 args["asset"]，
+// 所以审计行的归属不依赖这里——这里捕获是给审批弹窗与返回值用的。
+func handleDeleteAsset(ctx context.Context, args map[string]any) (string, error) {
+	asset, err := assetref.Resolve(ctx, aictx.ArgString(args, "asset"))
+	if err != nil {
+		return "", err
+	}
+
+	checker, err := permission.RequireChecker(ctx)
+	if err != nil {
+		return "", err
+	}
+	confirm := checker.ConfirmFunc()
+	if confirm == nil {
+		// 没有确认回调 = 没有人能点头。删除不存在"无人值守也放行"的形态。
+		return "", fmt.Errorf("delete_asset requires an interactive approval channel, none is wired")
+	}
+
+	resp := confirm(ctx, permission.ApprovalKindDelete, []permission.ApprovalItem{{
+		Type:      permission.ApprovalTypeDelete,
+		AssetID:   asset.ID,
+		AssetName: asset.Name,
+		Command:   fmt.Sprintf("delete asset %q (type=%s)", asset.Name, asset.Type),
+		Detail:    "The asset row is soft-deleted and its connection config is cleared — this cannot be undone from the app. Open sessions and pooled connections for this asset are closed.",
+	}})
+	aictx.RecordDecision(ctx, decisionFromApproval(resp))
+	if resp.Decision == "deny" {
+		return fmt.Sprintf("user denied deleting asset %q", asset.Name), nil
+	}
+
+	if err := asset_svc.Asset().Delete(ctx, asset.ID); err != nil {
+		return "", fmt.Errorf("failed to delete asset: %w", err)
+	}
+	aictx.NotifyDataChanged("asset")
+	return fmt.Sprintf(`{"id":%d,"name":%q,"message":"asset deleted"}`, asset.ID, asset.Name), nil
+}
+
+// handleDeleteGroup 删除分组。delete_assets 默认 false——那是非破坏性分支
+// （分组内资产移入未分组）。true 时连带删除，group_svc 在事务提交之后逐个断连
+// 并把被删资产回传，这里逐条写 delete_asset 审计（单删一台机器有审计行，
+// 删一个含 20 台机器的分组却只有一行是审计盲区）。
+func handleDeleteGroup(ctx context.Context, args map[string]any) (string, error) {
+	id := aictx.ArgInt64(args, "id")
+	if id == 0 {
+		return "", fmt.Errorf("missing required parameter: id")
+	}
+	group, err := group_repo.Group().Find(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("group not found: %w", err)
+	}
+	deleteAssets := aictx.ArgBool(args, "delete_assets")
+
+	checker, err := permission.RequireChecker(ctx)
+	if err != nil {
+		return "", err
+	}
+	confirm := checker.ConfirmFunc()
+	if confirm == nil {
+		return "", fmt.Errorf("delete_group requires an interactive approval channel, none is wired")
+	}
+
+	command := fmt.Sprintf("delete group %q (assets move to ungrouped)", group.Name)
+	detail := "Assets in this group are moved to ungrouped; nothing is deleted besides the group itself."
+	if deleteAssets {
+		command = fmt.Sprintf("delete group %q AND every asset in it", group.Name)
+		detail = "Every asset in this group is soft-deleted and its connection config cleared — this cannot be undone from the app."
+	}
+
+	resp := confirm(ctx, permission.ApprovalKindDelete, []permission.ApprovalItem{{
+		Type:      permission.ApprovalTypeDelete,
+		GroupID:   group.ID,
+		GroupName: group.Name,
+		Command:   command,
+		Detail:    detail,
+	}})
+	aictx.RecordDecision(ctx, decisionFromApproval(resp))
+	if resp.Decision == "deny" {
+		return fmt.Sprintf("user denied deleting group %q", group.Name), nil
+	}
+
+	deleted, err := group_svc.Group().Delete(ctx, id, deleteAssets)
+	if err != nil {
+		return "", fmt.Errorf("failed to delete group: %w", err)
+	}
+	for _, a := range deleted {
+		auditDeletedAsset(ctx, a) // 连带删掉的资产逐条补 delete_asset 审计
+	}
+	aictx.NotifyDataChanged("group")
+	return fmt.Sprintf(`{"id":%d,"name":%q,"deleted_assets":%d,"message":"group deleted"}`,
+		group.ID, group.Name, len(deleted)), nil
 }

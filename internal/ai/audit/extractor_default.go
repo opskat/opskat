@@ -1,6 +1,8 @@
 package audit
 
 import (
+	"strconv"
+
 	"github.com/opskat/opskat/internal/ai/aictx"
 )
 
@@ -25,5 +27,17 @@ func init() {
 	})
 	RegisterExtractor("exec_tool", func(a map[string]any) string {
 		return aictx.ArgString(a, "extension") + "." + aictx.ArgString(a, "tool")
+	})
+	RegisterExtractor("delete_asset", func(a map[string]any) string {
+		return "delete asset " + aictx.ArgString(a, "asset")
+	})
+	RegisterExtractor("delete_group", func(a map[string]any) string {
+		// id 在 args 里是数字（JSON number → float64），不是 ArgString 认得的字符串——
+		// 这里必须走 ArgInt64，否则摘要永远是 "delete group "，id 部分静默丢失。
+		s := "delete group " + strconv.FormatInt(aictx.ArgInt64(a, "id"), 10)
+		if aictx.ArgBool(a, "delete_assets") {
+			s += " (with assets)"
+		}
+		return s
 	})
 }

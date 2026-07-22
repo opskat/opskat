@@ -32,6 +32,7 @@ func TestTools_RegistryShape(t *testing.T) {
 			"list_groups", "get_group",
 			// crud
 			"put_asset", "put_group",
+			"delete_asset", "delete_group",
 			// exec
 			"upload_file", "download_file",
 			"request_permission", "batch_exec",
@@ -65,6 +66,8 @@ func TestTools_RegistryShape(t *testing.T) {
 				"request_permission",
 				"exec_tool",
 				"exec",
+				"put_asset", "put_group",
+				"delete_asset", "delete_group",
 			}
 			for _, name := range serialNames {
 				st, ok := names[name].(agent.SerialTool)

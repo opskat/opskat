@@ -65,5 +65,48 @@ func crudTools() []tool.Tool {
 				return &agent.ToolResultBlock{Content: []agent.ContentBlock{agent.TextBlock{Text: out}}}, nil
 			},
 		},
+		&tool.RawTool{
+			NameStr: "delete_asset",
+			DescStr: "Delete an asset. This always asks the user for confirmation and can never be pre-approved via request_permission. " +
+				"The row is soft-deleted and its connection config is cleared — it cannot be restored from the app. " +
+				"Open sessions and pooled connections for this asset are closed. Credentials linked to it are left orphaned.",
+			SchemaVal: agent.Schema{
+				Type: "object",
+				Properties: map[string]*agent.Property{
+					"asset": {Type: "string", Description: "Asset id or name to delete. Use list_assets to find it."},
+				},
+				Required: []string{"asset"},
+			},
+			IsSerial: true,
+			Handler: func(ctx context.Context, in map[string]any) (*agent.ToolResultBlock, error) {
+				out, err := handleDeleteAsset(ctx, in)
+				if err != nil {
+					return nil, err
+				}
+				return &agent.ToolResultBlock{Content: []agent.ContentBlock{agent.TextBlock{Text: out}}}, nil
+			},
+		},
+		&tool.RawTool{
+			NameStr: "delete_group",
+			DescStr: "Delete an asset group. By default the group's assets are moved to ungrouped and survive. " +
+				"Pass delete_assets=true to delete them too — that is irreversible from the app. " +
+				"This always asks the user for confirmation and can never be pre-approved.",
+			SchemaVal: agent.Schema{
+				Type: "object",
+				Properties: map[string]*agent.Property{
+					"id":            {Type: "number", Description: "Group ID to delete. Use list_groups to find it."},
+					"delete_assets": {Type: "boolean", Description: "Delete the assets in this group as well. Defaults to false (they move to ungrouped)."},
+				},
+				Required: []string{"id"},
+			},
+			IsSerial: true,
+			Handler: func(ctx context.Context, in map[string]any) (*agent.ToolResultBlock, error) {
+				out, err := handleDeleteGroup(ctx, in)
+				if err != nil {
+					return nil, err
+				}
+				return &agent.ToolResultBlock{Content: []agent.ContentBlock{agent.TextBlock{Text: out}}}, nil
+			},
+		},
 	}
 }
