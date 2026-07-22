@@ -14,7 +14,7 @@ import {
 import { useWailsEvent } from "@/hooks/useWailsEvent";
 import { RespondOpsctlApproval } from "../../../wailsjs/go/opsctl/Opsctl";
 import { permission } from "../../../wailsjs/go/models";
-import { ShieldAlert, Terminal, Database, Server, FolderOpen, Globe, Usb } from "lucide-react";
+import { ShieldAlert, Terminal, Database, Server, FolderOpen, Globe, Usb, Trash2, Boxes, FileUp } from "lucide-react";
 
 interface ApprovalItemData {
   type: string;
@@ -50,7 +50,9 @@ interface GrantApprovalEvent {
 
 interface QueueItem {
   id: string;
-  kind: "single" | "batch" | "grant";
+  // "delete" 与 "single" 共用同一套渲染骨架（同一个 opsctl:approval 事件），
+  // 只在按钮区按 kind 收窄——与 ApprovalBlock.tsx 的 kind 取值保持一致，不新造第三套判断。
+  kind: "single" | "batch" | "grant" | "delete";
   items: ApprovalItemData[];
   description?: string;
   sessionID?: string;
@@ -65,6 +67,10 @@ function TypeBadge({ type }: { type: string }) {
     redis: Server,
     mongo: Database,
     kafka: Database,
+    delete: Trash2,
+    etcd: Database,
+    k8s: Boxes,
+    cp: FileUp,
   };
   const Icon = icons[type] || Terminal;
   return (
@@ -119,7 +125,10 @@ export function OpsctlApprovalDialog() {
       (data: SingleApprovalEvent) => {
         enqueue({
           id: data.confirm_id,
-          kind: "single",
+          // 删除恒需确认、不可 grant（后端 handleDeleteAsset/handleDeleteGroup 无条件走
+          // RequireChecker，从不查 grant）——用独立的 "delete" kind 把「记住」入口整个关掉，
+          // 而不是让它落进 "single" 分支再靠一个额外 if 补救。与 ApprovalBlock.tsx 同一判断。
+          kind: data.type === "delete" ? "delete" : "single",
           items: [
             {
               type: data.type,
@@ -253,7 +262,9 @@ export function OpsctlApprovalDialog() {
                   ? t("opsctlApproval.grantTitle")
                   : current.kind === "batch"
                     ? t("opsctlApproval.batchTitle")
-                    : t("opsctlApproval.title")}
+                    : current.kind === "delete"
+                      ? t("ai.approvalDeleteTitle")
+                      : t("opsctlApproval.title")}
                 {queue.length > 1 && (
                   <span className="text-sm font-normal text-muted-foreground">(1/{queue.length})</span>
                 )}
