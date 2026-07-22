@@ -5,12 +5,39 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/zap"
 )
+
+// writeMinimalExtension writes a manifest.json + minimal valid WASM module for
+// extName under extDir, without any SKILL.md.
+func writeMinimalExtension(t *testing.T, extDir, extName string) {
+	t.Helper()
+	if err := os.MkdirAll(extDir, 0755); err != nil {
+		t.Fatalf("mkdir extension dir: %v", err)
+	}
+	manifest := map[string]any{
+		"name":    extName,
+		"version": "1.0.0",
+		"hostABI": "1.0",
+		"backend": map[string]any{"runtime": "wasm", "binary": "main.wasm"},
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(extDir, "manifest.json"), data, 0644); err != nil {
+		t.Fatalf("write manifest.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(extDir, "main.wasm"),
+		[]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}, 0644); err != nil {
+		t.Fatalf("write main.wasm: %v", err)
+	}
+}
 
 func TestManager(t *testing.T) {
 	Convey("Manager", t, func() {
@@ -64,6 +91,59 @@ func TestManager(t *testing.T) {
 		Convey("GetExtension returns nil for unknown", func() {
 			ext := mgr.GetExtension("nonexistent")
 			So(ext, ShouldBeNil)
+		})
+
+		Convey("LoadExtension parses a compliant SKILL.md into body + description", func() {
+			extDir := filepath.Join(dir, "with-skill")
+			writeMinimalExtension(t, extDir, "with-skill")
+			raw := "---\nname: with-skill\ndescription: \"Test extension with a skill doc.\"\n---\n\n# With Skill\n\nSome body content.\n"
+			So(os.WriteFile(filepath.Join(extDir, "SKILL.md"), []byte(raw), 0644), ShouldBeNil)
+
+			_, err := mgr.LoadExtension(ctx, extDir)
+			So(err, ShouldBeNil)
+
+			ext := mgr.GetExtension("with-skill")
+			So(ext, ShouldNotBeNil)
+			So(ext.SkillMD, ShouldEqual, "# With Skill\n\nSome body content.\n")
+			So(ext.SkillDescription, ShouldEqual, "Test extension with a skill doc.")
+		})
+
+		Convey("LoadExtension succeeds when SKILL.md is absent", func() {
+			extDir := filepath.Join(dir, "no-skill")
+			writeMinimalExtension(t, extDir, "no-skill")
+
+			_, err := mgr.LoadExtension(ctx, extDir)
+			So(err, ShouldBeNil)
+
+			ext := mgr.GetExtension("no-skill")
+			So(ext, ShouldNotBeNil)
+			So(ext.SkillMD, ShouldEqual, "")
+			So(ext.SkillDescription, ShouldEqual, "")
+		})
+
+		Convey("LoadExtension fails when SKILL.md has no frontmatter", func() {
+			extDir := filepath.Join(dir, "bad-skill")
+			writeMinimalExtension(t, extDir, "bad-skill")
+			So(os.WriteFile(filepath.Join(extDir, "SKILL.md"), []byte("# Just a heading\n\nNo frontmatter here.\n"), 0644), ShouldBeNil)
+
+			_, err := mgr.LoadExtension(ctx, extDir)
+			So(err, ShouldNotBeNil)
+			So(mgr.GetExtension("bad-skill"), ShouldBeNil)
+		})
+
+		Convey("LoadExtension accepts a SKILL.md larger than the old 4 KiB cap", func() {
+			extDir := filepath.Join(dir, "big-skill")
+			writeMinimalExtension(t, extDir, "big-skill")
+			body := strings.Repeat("x", 6*1024)
+			raw := "---\nname: big-skill\ndescription: \"A big skill doc.\"\n---\n\n" + body + "\n"
+			So(os.WriteFile(filepath.Join(extDir, "SKILL.md"), []byte(raw), 0644), ShouldBeNil)
+
+			_, err := mgr.LoadExtension(ctx, extDir)
+			So(err, ShouldBeNil)
+
+			ext := mgr.GetExtension("big-skill")
+			So(ext, ShouldNotBeNil)
+			So(len(ext.SkillMD), ShouldBeGreaterThan, 4*1024)
 		})
 
 		Convey("Watch calls onChange on filesystem event", func() {

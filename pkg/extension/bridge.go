@@ -30,6 +30,7 @@ type ExtPolicyGroup struct {
 type SkillMDWithExtension struct {
 	ExtensionName string
 	Content       string
+	Description   string
 }
 
 // Bridge connects loaded extensions to the main app's tool, policy, and frontend systems.
@@ -76,6 +77,7 @@ func (b *Bridge) Register(ext *Extension) {
 			b.skillMDs[at.Type] = SkillMDWithExtension{
 				ExtensionName: ext.Name,
 				Content:       ext.SkillMD,
+				Description:   ext.SkillDescription,
 			}
 		}
 		if len(m.Policies.Default) > 0 {

@@ -11,18 +11,20 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/fsnotify/fsnotify"
+	"github.com/opskat/opskat/pkg/skillmd"
 	"github.com/tetratelabs/wazero"
 	"go.uber.org/zap"
 )
 
 // Extension represents a loaded extension.
 type Extension struct {
-	Name     string
-	Dir      string
-	Manifest *Manifest
-	Plugin   *Plugin
-	SkillMD  string                       // Contents of SKILL.md
-	Locales  map[string]map[string]string // lang → key → translated text
+	Name             string
+	Dir              string
+	Manifest         *Manifest
+	Plugin           *Plugin
+	SkillMD          string                       // Body of SKILL.md (frontmatter stripped)
+	SkillDescription string                       // description from SKILL.md frontmatter, if any
+	Locales          map[string]map[string]string // lang → key → translated text
 }
 
 // Translate resolves an i18n key for the given language.
@@ -289,13 +291,21 @@ func (m *Manager) LoadExtension(ctx context.Context, dir string) (*Manifest, err
 		return nil, fmt.Errorf("read wasm binary: %w", err)
 	}
 
-	const maxSkillMDBytes = 4 * 1024
+	// SKILL.md 可选；一旦存在就必须是合规的 cago skill 格式。
+	//
+	// 此前这里有一个 4 KiB 硬上限，理由是整份正文会进系统提示词。上限是错的解法：
+	// 它把"文档写长了"变成"整个扩展加载失败"，而真正该做的是解析 frontmatter、
+	// 让 description 进清单、正文只在相关 Tab 打开时注入（bridge → chat.go → prompt_builder）。
+	// 上限去掉，严格性移到格式上：解析失败响亮失败，不再把原始 frontmatter 当正文塞进 prompt。
 	skillMD := ""
-	if skillData, err := os.ReadFile(filepath.Join(dir, "SKILL.md")); err == nil { //nolint:gosec // path constructed from trusted extension directory
-		if len(skillData) > maxSkillMDBytes {
-			return nil, fmt.Errorf("SKILL.md exceeds %d bytes (got %d)", maxSkillMDBytes, len(skillData))
+	skillDescription := ""
+	if data, err := os.ReadFile(filepath.Join(dir, "SKILL.md")); err == nil { //nolint:gosec // path constructed from trusted extension directory
+		parsed, perr := skillmd.Parse(string(data))
+		if perr != nil {
+			return nil, fmt.Errorf("SKILL.md: %w", perr)
 		}
-		skillMD = string(skillData)
+		skillMD = parsed.Body
+		skillDescription = parsed.Description
 	}
 
 	host := m.newHost(manifest.Name)
@@ -307,12 +317,13 @@ func (m *Manager) LoadExtension(ctx context.Context, dir string) (*Manifest, err
 	}
 
 	ext := &Extension{
-		Name:     manifest.Name,
-		Dir:      dir,
-		Manifest: manifest,
-		Plugin:   plugin,
-		SkillMD:  skillMD,
-		Locales:  LoadLocales(dir),
+		Name:             manifest.Name,
+		Dir:              dir,
+		Manifest:         manifest,
+		Plugin:           plugin,
+		SkillMD:          skillMD,
+		SkillDescription: skillDescription,
+		Locales:          LoadLocales(dir),
 	}
 
 	m.mu.Lock()
@@ -354,6 +365,7 @@ func (m *Manager) ScanManifests() ([]*ManifestInfo, error) {
 		}
 		manifest, err := ParseManifest(data)
 		if err != nil {
+			m.logger.Warn("skip extension manifest", zap.String("dir", entry.Name()), zap.Error(err))
 			continue
 		}
 		result = append(result, &ManifestInfo{
