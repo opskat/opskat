@@ -50,12 +50,14 @@ func unifiedTools() []tool.Tool {
 		},
 		&tool.RawTool{
 			NameStr: "help",
-			DescStr: "Get the command syntax and usage notes for an asset's type, so you can call exec correctly. " +
-				"Call this the first time you use exec against a given asset type in a conversation.",
+			DescStr: "Get the command syntax and usage notes for an asset type, so you can call exec or put_asset correctly. " +
+				"Call this the first time you use exec against a given asset type in a conversation, and before creating " +
+				"the first asset of a type you haven't used yet.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
-					"asset": {Type: "string", Description: "Target asset id or name whose type's usage you want to learn. Use list_assets to find it."},
+					"asset": {Type: "string", Description: "An existing asset's id or name whose type's usage you want to learn (use list_assets to find it), " +
+						"or — if no asset of that type exists yet — the type name itself (e.g. \"rdp\")."},
 				},
 				Required: []string{"asset"},
 			},

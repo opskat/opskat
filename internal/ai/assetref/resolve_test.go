@@ -81,8 +81,15 @@ func TestResolve_NotFound(t *testing.T) {
 	m := setupRepo(t)
 	m.EXPECT().FindByName(gomock.Any(), "nope").Return([]*asset_entity.Asset{}, nil)
 
-	if _, err := Resolve(context.Background(), "nope"); err == nil {
+	_, err := Resolve(context.Background(), "nope")
+	if err == nil {
 		t.Fatal("expected not-found error, got nil")
+	}
+	// handleHelp (internal/ai/tool) relies on errors.Is(err, ErrNotFound) to distinguish
+	// "ref matches no asset" — where it falls back to treating ref as a bare type name —
+	// from ErrAmbiguous / the empty-ref error, neither of which should trigger that fallback.
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected errors.Is(err, ErrNotFound), got %v", err)
 	}
 }
 

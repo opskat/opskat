@@ -4,6 +4,7 @@ package assetref
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -11,6 +12,13 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 )
+
+// ErrNotFound 在 ref 既不匹配任何资产 id 也不匹配任何资产名时返回，用 %w 包在
+// Resolve 的错误里。调用方用 errors.Is 区分这一种失败（ref 可能不是一个资产引用，
+// 而是别的东西——例如 help 允许把 ref 当资产类型名再试一次）与 ErrAmbiguous /
+// 缺参这两种"ref 确实是想引用一个资产，只是解析不出来"的失败——后两种不该触发
+// 那样的回落。
+var ErrNotFound = errors.New("asset not found")
 
 // ErrAmbiguous 在同名资产多于一个时返回。名称不是唯一键，静默取第一个会让模型
 // 对着错误的机器执行命令，因此这里必须报错并要求改用数字 id。
@@ -64,7 +72,7 @@ func Resolve(ctx context.Context, ref string) (*asset_entity.Asset, error) {
 
 	switch len(order) {
 	case 0:
-		return nil, fmt.Errorf("asset not found: %s", ref)
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, ref)
 	case 1:
 		return candidates[order[0]], nil
 	default:

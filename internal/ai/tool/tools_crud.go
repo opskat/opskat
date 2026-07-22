@@ -18,8 +18,9 @@ func crudTools() []tool.Tool {
 		&tool.RawTool{
 			NameStr: "put_asset",
 			DescStr: "Create or update an asset. Pass asset=<id-or-name> to update an existing one; omit it to create. " +
-				"The per-type shape of `config` is documented by help(asset) — call help against any asset of that type " +
-				"(supported types: " + strings.Join(permission.RegisteredHelpTypes(), ", ") + "). " +
+				"The per-type shape of `config` is documented by help — pass the asset id/name to look up an existing " +
+				"asset's type, or pass the type name itself (e.g. help(asset=\"rdp\")) when no asset of that type " +
+				"exists yet (supported types: " + strings.Join(permission.RegisteredHelpTypes(), ", ") + "). " +
 				"Credentials inside config (password / private_key) are stored encrypted; never echo them back to the user.",
 			SchemaVal: agent.Schema{
 				Type: "object",

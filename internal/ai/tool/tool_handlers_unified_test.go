@@ -8,6 +8,7 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/assetref"
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -180,6 +181,94 @@ func TestHandleHelp_ReturnsDocAndMarksGate(t *testing.T) {
 	}
 	if !GetDocGate(ctx).IsDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeRedis) {
 		t.Fatal("help must mark the resolved type as documented on the injected gate")
+	}
+}
+
+// TestHandleHelp_FallsBackToTypeNameWhenNoAssetExists locks C1: help must be reachable
+// before any asset of a given type exists — a brand-new install, or one of this branch's
+// doc-only types (rdp/vnc/oss/local), has zero assets of that type, so assetref.Resolve
+// (which only recognizes an existing asset's id or name) always fails. Before this fix the
+// model had nothing to learn a type's config shape from but a free-form `config` object —
+// silently wrong for "local", whose ValidateCreateArgs accepts anything.
+func TestHandleHelp_FallsBackToTypeNameWhenNoAssetExists(t *testing.T) {
+	m := setupUnified(t)
+	m.EXPECT().FindByName(gomock.Any(), "rdp").Return(nil, nil)
+
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	out, err := handleHelp(ctx, map[string]any{"asset": "rdp"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "rdp") {
+		t.Fatalf("help should name the type, got %q", out)
+	}
+	if !GetDocGate(ctx).IsDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeRDP) {
+		t.Fatal("falling back to a bare type name must still mark the gate documented, " +
+			"so a later exec against a freshly created asset of this type isn't blocked")
+	}
+}
+
+// TestHandleHelp_UnknownRefReportsErrorListingAvailableTypes locks the other half of C1:
+// a ref that matches neither an existing asset nor a registered type name must still be a
+// clear error — the fallback must not swallow genuine typos into a confusing result — and
+// that error must give the model something to recover with (the list of documented types).
+func TestHandleHelp_UnknownRefReportsErrorListingAvailableTypes(t *testing.T) {
+	m := setupUnified(t)
+	m.EXPECT().FindByName(gomock.Any(), "not-a-real-thing").Return(nil, nil)
+
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	_, err := handleHelp(ctx, map[string]any{"asset": "not-a-real-thing"})
+	if err == nil {
+		t.Fatal("expected an error for a ref matching neither an asset nor a type")
+	}
+	for _, want := range permission.RegisteredHelpTypes() {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error should list registered help types (e.g. %q), got %q", want, err.Error())
+		}
+	}
+}
+
+// TestHandleHelp_AmbiguousNameDoesNotFallBackToTypeName locks the other guard the C1 fix
+// depends on: Resolve reports two same-named assets as *assetref.ErrAmbiguous, which is a
+// distinct sentinel from ErrNotFound, so errors.Is(err, assetref.ErrNotFound) must be false
+// here. If handleHelp fell back to treating "db" as a type name on *any* Resolve failure,
+// "you have two machines named db, use the numeric id" would be swallowed into "db is not a
+// known asset type" — strictly less useful, and it would hide the ambiguity from the model.
+func TestHandleHelp_AmbiguousNameDoesNotFallBackToTypeName(t *testing.T) {
+	m := setupUnified(t)
+	m.EXPECT().FindByName(gomock.Any(), "db").Return([]*asset_entity.Asset{
+		{ID: 1, Name: "db", Type: asset_entity.AssetTypeDatabase},
+		{ID: 2, Name: "db", Type: asset_entity.AssetTypeDatabase},
+	}, nil)
+
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	_, err := handleHelp(ctx, map[string]any{"asset": "db"})
+	if err == nil {
+		t.Fatal("expected ambiguity error, got nil")
+	}
+	if _, ok := err.(*assetref.ErrAmbiguous); !ok {
+		t.Fatalf("expected the ambiguity error to surface as-is (*assetref.ErrAmbiguous), got %T: %v", err, err)
+	}
+}
+
+// TestHandleHelp_MissingAssetParamDoesNotFallBack locks the third Resolve failure mode:
+// an empty/missing "asset" argument is a caller mistake ("ref is meant to name an asset,
+// there's just none given"), not "ref might be a type name instead" — Resolve's empty-ref
+// error is a plain fmt.Errorf, not wrapped in ErrNotFound, so it must come back unchanged
+// instead of being reinterpreted as "" is not a known asset type.
+func TestHandleHelp_MissingAssetParamDoesNotFallBack(t *testing.T) {
+	setupUnified(t)
+
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	_, err := handleHelp(ctx, map[string]any{})
+	if err == nil {
+		t.Fatal("expected error for missing asset param")
+	}
+	if !strings.Contains(err.Error(), "missing required parameter") {
+		t.Fatalf("expected Resolve's missing-parameter error to surface as-is, got %q", err.Error())
+	}
+	if strings.Contains(err.Error(), "known asset type") {
+		t.Fatalf("missing-param error must not be reworded into the type-name-fallback error, got %q", err.Error())
 	}
 }
 

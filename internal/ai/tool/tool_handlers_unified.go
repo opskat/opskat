@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -158,10 +159,21 @@ func unsupportedTypeError(asset *asset_entity.Asset) error {
 
 // handleHelp 返回资产类型的用法文档，并把该类型标记为"该会话已知晓"，供 exec 的
 // 门禁检查使用。
+//
+// ref 既可以是资产 id/名（常规用法），也可以直接是资产类型名（如 "rdp"）——后者是模型
+// 在该类型一个资产都不存在时（全新安装，或本分支新增的 rdp/vnc/oss/local 这类
+// doc-only 类型）唯一能学到 config 字段的办法：put_asset 的 config 是自由对象，
+// 按类型的形状全靠 help 文档说明，而 help 曾经排他性地要求一个已存在的资产（C1）。
 func handleHelp(ctx context.Context, args map[string]any) (string, error) {
-	asset, err := assetref.Resolve(ctx, aictx.ArgString(args, "asset"))
+	ref := aictx.ArgString(args, "asset")
+	asset, err := assetref.Resolve(ctx, ref)
 	if err != nil {
-		return "", err
+		if !errors.Is(err, assetref.ErrNotFound) {
+			// 缺参数 / 同名歧义：ref 确实是在指一个资产，只是解析不出来——原样报错，
+			// 不去猜它是不是类型名。
+			return "", err
+		}
+		return helpForTypeName(ctx, ref)
 	}
 
 	doc, ok := permission.HelpFor(asset.Type)
@@ -175,4 +187,22 @@ func handleHelp(ctx context.Context, args map[string]any) (string, error) {
 	}
 
 	return fmt.Sprintf("Asset %q is type=%s.\n\n%s", asset.Name, asset.Type, doc), nil
+}
+
+// helpForTypeName 是 ref 不匹配任何已有资产时的回落：把 ref 当资产类型名直接查
+// help 文档表。命中就按类型返回文档并标记门禁；两边都不命中则报错并列出可用类型——
+// 错误信息不能再暗示"只认资产"，那正是 C1 让模型走投无路的措辞。
+func helpForTypeName(ctx context.Context, ref string) (string, error) {
+	typeName := strings.TrimSpace(ref)
+	doc, ok := permission.HelpFor(typeName)
+	if !ok {
+		return "", fmt.Errorf("%q is neither an existing asset nor a known asset type; documented types: %s",
+			ref, strings.Join(permission.RegisteredHelpTypes(), ", "))
+	}
+
+	if gate := GetDocGate(ctx); gate != nil {
+		gate.MarkDocumented(aictx.GetConversationID(ctx), typeName)
+	}
+
+	return fmt.Sprintf("Type %q.\n\n%s", typeName, doc), nil
 }
