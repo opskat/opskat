@@ -3,13 +3,19 @@ package command
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"os"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
+	"go.uber.org/mock/gomock"
 
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 )
 
 func TestParseBatchArg(t *testing.T) {
@@ -216,5 +222,99 @@ func TestValidBatchTypes(t *testing.T) {
 		So(validBatchTypes["redis"], ShouldBeTrue)
 		So(validBatchTypes["cp"], ShouldBeFalse)
 		So(validBatchTypes[""], ShouldBeFalse)
+	})
+}
+
+// TestBatchAssertPrefixType 锁住前缀"选 handler"变"类型断言"这条语义迁移的核心规则：
+// exec（parseBatchArg/parseBatchInput 对无前缀条目的默认值，两者语法均未改动）永不断言，
+// 否则每一条无前缀的非 ssh 命令都会在这里被拒——这与"非 ssh 且无前缀的条目必须能跑"
+// 直接矛盾。sql/redis/mongo 只可能来自显式前缀，断言真实生效。
+func TestBatchAssertPrefixType(t *testing.T) {
+	Convey("batchAssertPrefixType", t, func() {
+		sshAsset := &asset_entity.Asset{ID: 1, Name: "web", Type: asset_entity.AssetTypeSSH}
+		redisAsset := &asset_entity.Asset{ID: 2, Name: "cache", Type: asset_entity.AssetTypeRedis}
+		dbAsset := &asset_entity.Asset{ID: 3, Name: "db", Type: asset_entity.AssetTypeDatabase}
+
+		Convey("exec 是无前缀默认值，不断言，任何真实类型都放行", func() {
+			So(batchAssertPrefixType(sshAsset, "exec"), ShouldBeNil)
+			So(batchAssertPrefixType(redisAsset, "exec"), ShouldBeNil)
+			So(batchAssertPrefixType(dbAsset, "exec"), ShouldBeNil)
+		})
+
+		Convey("sql 断言真实类型是 database", func() {
+			So(batchAssertPrefixType(dbAsset, "sql"), ShouldBeNil)
+			So(batchAssertPrefixType(redisAsset, "sql"), ShouldNotBeNil)
+		})
+
+		Convey("redis 断言真实类型是 redis", func() {
+			So(batchAssertPrefixType(redisAsset, "redis"), ShouldBeNil)
+			So(batchAssertPrefixType(dbAsset, "redis"), ShouldNotBeNil)
+		})
+	})
+}
+
+// TestExecuteBatchItem_DefaultDispatchesByRealType 锁住 executeBatchItem 的 default
+// 分支：无前缀（cmdType=="exec"）的条目现在按资产真实类型派发，而不是一律当 SSH 执行。
+// 用一个 redis 资产验证——如果这条回归了，代码会试图对一个 redis 资产发起 SSH 连接
+// （executeBatchExec），而不是调用这里注入的 "exec" handler。
+func TestExecuteBatchItem_DefaultDispatchesByRealType(t *testing.T) {
+	Convey("cmdType 为 exec（无前缀默认值）时，非 ssh 资产走统一 handler 而非 SSH 流式执行", t, func() {
+		called := false
+		handlers := map[string]tool.ToolHandlerFunc{
+			"exec": func(_ context.Context, args map[string]any) (string, error) {
+				called = true
+				So(args["asset"], ShouldEqual, "7")
+				So(args["command"], ShouldEqual, "PING")
+				return `{"result":"PONG"}`, nil
+			},
+		}
+		cmd := resolvedBatchCmd{
+			asset:   &asset_entity.Asset{ID: 7, Name: "cache", Type: asset_entity.AssetTypeRedis},
+			cmdType: "exec",
+			command: "PING",
+		}
+
+		result := executeBatchItem(context.Background(), handlers, cmd)
+
+		So(called, ShouldBeTrue)
+		So(result.Error, ShouldBeEmpty)
+		So(result.ExitCode, ShouldEqual, 0)
+	})
+}
+
+// TestCmdBatch_ResolveFailureDoesNotAbortWholeBatch 锁住"一条解析失败不再拖垮整批"这条
+// 行为变化：两个条目都指向不存在的资产 ID，此前第一个就会让 cmdBatch 直接 return 1、
+// 第二个条目的结果永远不会出现在输出里；现在两条都应该出现在 JSON 输出的 results 里，
+// 各自带上自己的 resolve 错误。
+func TestCmdBatch_ResolveFailureDoesNotAbortWholeBatch(t *testing.T) {
+	Convey("解析失败的条目落入 results 而不中断整批", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+		mockAsset.EXPECT().Find(gomock.Any(), int64(888)).Return(nil, errors.New("not found")).AnyTimes()
+		mockAsset.EXPECT().Find(gomock.Any(), int64(999)).Return(nil, errors.New("not found")).AnyTimes()
+		origAsset := asset_repo.Asset()
+		asset_repo.RegisterAsset(mockAsset)
+		defer asset_repo.RegisterAsset(origAsset)
+
+		r, w, pipeErr := os.Pipe()
+		So(pipeErr, ShouldBeNil)
+		origStdout := os.Stdout
+		os.Stdout = w
+
+		code := cmdBatch(context.Background(), map[string]tool.ToolHandlerFunc{}, []string{"999:uptime", "888:hostname"}, "")
+
+		So(w.Close(), ShouldBeNil)
+		os.Stdout = origStdout
+		data, readErr := io.ReadAll(r)
+		So(readErr, ShouldBeNil)
+
+		So(code, ShouldEqual, 1) // all failed
+
+		var output batchOutput
+		So(json.Unmarshal(data, &output), ShouldBeNil)
+		So(len(output.Results), ShouldEqual, 2)
+		So(output.Results[0].Error, ShouldContainSubstring, "resolve asset")
+		So(output.Results[1].Error, ShouldContainSubstring, "resolve asset")
 	})
 }

@@ -112,8 +112,27 @@ func TestCallHandler_Decision(t *testing.T) {
 func TestBuildHandlerMap_HasEveryToolOpsctlLooksUp(t *testing.T) {
 	Convey("opsctl 派发表覆盖所有按名字查找的工具", t, func() {
 		handlers := buildHandlerMap()
-		for _, name := range []string{"exec", "help", "ext_exec", "upload_file", "download_file", "put_asset", "put_group"} {
+		for _, name := range []string{
+			"exec", "help", "ext_exec", "upload_file", "download_file",
+			"put_asset", "put_group", "delete_asset", "delete_group",
+		} {
 			So(handlers, ShouldContainKey, name)
+		}
+	})
+}
+
+// TestRefreshesDesktopUI 锁住"哪些工具成功后要通知桌面端刷新 UI"这条判定本身,不只是
+// 判定用到的工具名在派发表里查得到。此前这条规则是 callHandler 里一句内联
+// `if toolName == "put_asset" || toolName == "put_group"`,没有任何测试断言过
+// "调用 put_asset 真的会触发通知"——漏改这条不会有任何测试变红,只会让桌面端在 CLI
+// 改完数据后不刷新。delete_asset/delete_group 补进白名单时正是这样漏掉过一次。
+func TestRefreshesDesktopUI(t *testing.T) {
+	Convey("refreshesDesktopUI 覆盖全部写操作,且不误报只读操作", t, func() {
+		for _, name := range []string{"put_asset", "put_group", "delete_asset", "delete_group"} {
+			So(refreshesDesktopUI(name), ShouldBeTrue)
+		}
+		for _, name := range []string{"exec", "help", "get_asset", "list_assets", "list_groups", "ext_exec"} {
+			So(refreshesDesktopUI(name), ShouldBeFalse)
 		}
 	})
 }
