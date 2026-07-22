@@ -217,15 +217,16 @@ spell them exactly:
 ## Asset config (for put_asset)
 
 Either `brokers`, or `host` + `port`, must be provided — at least one path to the cluster
-is required.
+is required. Once `sasl_mechanism` is anything other than `"none"`, `username` and
+`password` both become required — creation is rejected if either is empty.
 
 | field | type | required | notes |
 |---|---|---|---|
 | `brokers` | string | yes* | Comma/semicolon/newline separated `host:port` list, e.g. `"kafka-0:9092,kafka-1:9092"` |
 | `host` | string | no | Single-broker fallback used only when `brokers` is omitted |
 | `port` | number | no | Used with `host` when `brokers` is omitted; no default — pass `9092` explicitly |
-| `username` | string | no | Only used when `sasl_mechanism` is set |
-| `password` | string | no | Stored encrypted; used with SASL auth |
+| `username` | string | no* | Required when `sasl_mechanism` is not `"none"`; unused otherwise |
+| `password` | string | no* | Stored encrypted; required when `sasl_mechanism` is not `"none"`, unless `credential_id` already supplies it |
 | `client_id` | string | no | Defaults to `"opskat"` |
 | `sasl_mechanism` | string | no | `"none"` (default), `"plain"`, `"scram-sha-256"`, `"scram-sha-512"` |
 | `tls` | string | no | `"true"` to enable TLS |
