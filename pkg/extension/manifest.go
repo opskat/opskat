@@ -382,16 +382,24 @@ func (m *Manifest) validateTools() error {
 				return fmt.Errorf("manifest: tools[%q].parameters.properties.%s has unsupported type %q (supported: string, integer, number, boolean, array)", t.Name, name, typ)
 			}
 			if typ == "array" {
-				items, ok := prop["items"].(map[string]any)
-				if !ok {
+				rawItems, exists := prop["items"]
+				if !exists {
 					return fmt.Errorf("manifest: tools[%q].parameters.properties.%s is an array without items", t.Name, name)
+				}
+				items, ok := rawItems.(map[string]any)
+				if !ok {
+					return fmt.Errorf("manifest: tools[%q].parameters.properties.%s.items must be an object, got %T", t.Name, name, rawItems)
 				}
 				if it, _ := items["type"].(string); it != "string" {
 					return fmt.Errorf("manifest: tools[%q].parameters.properties.%s: only array<string> is supported, got array<%s>", t.Name, name, it)
 				}
 			}
 		}
-		if req, ok := t.Parameters["required"].([]any); ok {
+		if rawReq, exists := t.Parameters["required"]; exists {
+			req, ok := rawReq.([]any)
+			if !ok {
+				return fmt.Errorf("manifest: tools[%q].parameters.required must be an array, got %T", t.Name, rawReq)
+			}
 			for _, r := range req {
 				name, _ := r.(string)
 				if _, exists := props[name]; !exists {
