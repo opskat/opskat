@@ -551,9 +551,10 @@ func newSessionID() string {
 // batchAuditTool is the tool name every batch item is dispatched to and audited under.
 // It used to be a cmdType→name map (exec / exec_sql / exec_redis / exec_mongo); those
 // per-type tools are gone and the unified exec tool dispatches on the asset's real type,
-// so there is exactly one name left. The batch item's own `type` field is still recorded
-// in the JSON output and still selects the policy group for the pre-check
-// (batchApprovalAssetType), so nothing is lost by collapsing this.
+// so there is exactly one name left. The item's own `type` field survives only in the
+// JSON output and as an optional type assertion (batchAssertPrefixType above) — the
+// policy pre-check (Step 3 in cmdBatch) always keys off the resolved asset's real type
+// (cmd.asset.Type), never this field, so nothing is lost by collapsing this.
 const batchAuditTool = "exec"
 
 func printBatchUsage() {

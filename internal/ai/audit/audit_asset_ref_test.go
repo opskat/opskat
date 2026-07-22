@@ -140,11 +140,12 @@ func TestWriteToolCall_FallsBackToArgsWhenNotPreResolved(t *testing.T) {
 }
 
 // TestWriteToolCall_ResolvesNumericAssetRef locks the audit row's asset attribution for
-// callers that don't pre-resolve. opsctl's sql / redis / mongo subcommands resolve the
-// asset themselves and then hand the unified exec tool args["asset"]=<numeric id> — the
-// per-type tools they replaced passed args["asset_id"], so before numericAssetRef every
-// one of those audit rows silently landed with asset_id=0 and an empty asset_name.
-// Nothing errors when that happens; the row just stops being attributable.
+// callers that don't pre-resolve. opsctl's exec/batch commands resolve the asset
+// themselves and then hand the unified exec tool args["asset"]=<numeric id> — the
+// per-type tools and verbs they replaced passed args["asset_id"], so before
+// numericAssetRef every one of those audit rows silently landed with asset_id=0 and an
+// empty asset_name. Nothing errors when that happens; the row just stops being
+// attributable.
 func TestWriteToolCall_ResolvesNumericAssetRef(t *testing.T) {
 	repo := setupAuditRepo(t)
 

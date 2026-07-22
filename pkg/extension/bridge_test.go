@@ -37,7 +37,7 @@ func TestBridge(t *testing.T) {
 		ext := &Extension{
 			Name:     "oss",
 			Manifest: manifest,
-			SkillMD:  "# OSS Tools\nUse exec_tool...",
+			SkillMD:  "# OSS Tools\nUse ext_exec...",
 		}
 
 		bridge.Register(ext)

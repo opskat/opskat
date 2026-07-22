@@ -1,11 +1,11 @@
 ---
 name: opsctl
-description: "opskat CLI for asset management and remote operations (SSH, SQL, Redis, file transfer). Use when: managing server assets, executing remote commands, writing opsctl scripts/automation, or working with approval/grant/session workflows. Also triggers for: deploying to servers, server diagnostics/troubleshooting, batch operations across fleet, database queries, file transfers between servers, server inventory/discovery."
+description: "opskat CLI for asset management and remote operations (SSH, databases, Redis, MongoDB, Kafka, Kubernetes, etcd, file transfer). Use when: managing server assets, executing remote commands, writing opsctl scripts/automation, or working with approval/grant/session workflows. Also triggers for: deploying to servers, server diagnostics/troubleshooting, batch operations across fleet, database queries, file transfers between servers, server inventory/discovery."
 ---
 
 # opsctl CLI Tool
 
-Standalone CLI for asset management and remote operations without the GUI. All managed assets (servers, databases, Redis) are stored in the desktop app — use `list`/`get` to discover available targets before operating.
+Standalone CLI for asset management and remote operations without the GUI. All managed assets (servers, databases, Redis, MongoDB, Kafka, Kubernetes, etcd, ...) are stored in the desktop app — use `list`/`get` to discover available targets before operating.
 
 ## Global Flags
 
@@ -35,7 +35,7 @@ Most write operations require desktop app approval.
 **Flow**: policy check → grant pattern match → session auto-approve → desktop app approval dialog.
 
 - **Queue mode**: Multiple concurrent approval requests are queued into a single dialog. User can approve/deny individually or batch "Approve All" / "Deny All".
-- **Offline**: Policy/grant matches still auto-approve; otherwise rejects. CP/Create/Update always need desktop app.
+- **Offline**: Policy/grant matches still auto-approve; otherwise rejects. CP/Create/Update always need desktop app. **Delete always needs desktop app too, and cannot be pre-approved or granted even with an active session** — there is no "allow all" for it.
 - **Pre-approve patterns**: Use `grant submit` or `request_permission` tool to submit command patterns (supports `*` wildcard). Approved patterns auto-pass subsequent matching commands.
 
 ## Sessions
@@ -46,10 +46,12 @@ For explicit session management, grant workflow, and details, see [references/co
 
 ## Parallel Execution
 
-**Preferred: `opsctl batch`** — Execute multiple commands (exec/sql/redis) in a single invocation with one approval dialog and parallel execution. This avoids approval race conditions and process-level failures.
+**Preferred: `opsctl batch`** — Execute multiple commands against any asset type (ssh, database, redis, mongodb, etcd, kafka, k8s, ...) in a single invocation with one approval dialog and parallel execution. This avoids approval race conditions and process-level failures.
 
 ```bash
-# Args mode (default exec, use type: prefix for sql/redis)
+# Args mode: 'asset:command' (no assertion) or 'type:asset:command'. The type
+# prefix is optional and now asserts the asset's real type rather than
+# selecting a handler — dispatch always comes from the asset's own type.
 opsctl batch '1:uptime' 'sql:2:SELECT 1' 'redis:3:PING'
 
 # JSON stdin mode (AI-friendly)
@@ -72,7 +74,7 @@ Output is structured JSON with per-command results (`exit_code`, `stdout`, `stde
 
 ## Commands
 
-Core commands: `list`, `get`, `create`, `update`, `ssh`, `exec`, `batch`, `sql`, `redis`, `mongo`, `cp`, `grant`, `session`, `init`.
+Core commands: `list`, `get`, `help`, `create`, `update`, `delete`, `ssh`, `exec`, `batch`, `cp`, `grant`, `session`, `init`.
 
 For full command reference with flags and examples, see [references/commands.md](references/commands.md).
 
@@ -116,7 +118,7 @@ opsctl exec staging-db -- "mysqldump -u app dbname | gzip" > /tmp/dump.sql.gz
 opsctl exec prod-db -- "gunzip | mysql -u app dbname" < /tmp/dump.sql.gz
 
 # Or query + transfer
-opsctl sql staging-db "SELECT * FROM config WHERE env='staging'"
+opsctl exec staging-db -- "SELECT * FROM config WHERE env='staging'"
 opsctl cp staging:/var/backups/db.sql prod:/var/tmp/db.sql
 ```
 

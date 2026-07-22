@@ -142,7 +142,7 @@ OpsKat 还提供了独立命令行工具 `opsctl`，主要给 **Claude Code**、
 
 ```bash
 opsctl exec web-01 -- tail -n 100 /var/log/nginx/error.log
-opsctl sql db-prod "SELECT status, COUNT(*) FROM users GROUP BY status"
+opsctl exec db-prod -- "SELECT status, COUNT(*) FROM users GROUP BY status"
 opsctl ssh web-01
 ```
 

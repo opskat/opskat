@@ -39,10 +39,11 @@ type ToolDef struct {
 // 它不是 Tools() 的镜像：batch_exec 在 opsctl 中有独立的 batch 子命令入口，
 // 不走 name→handler 派发表。
 //
-// opsctl 的 sql / redis / mongo / batch 子命令按名字在这张表里查 handler
+// opsctl 的 exec / batch 命令（非 ssh 资产的分支）按名字在这张表里查 handler
 // （cmd/opsctl/command/handler.go 的 buildHandlerMap），查不到只在**运行时**报
 // "unknown tool"——所以删条目必须同步改那些调用点，加条目必须真的加进来。
-// 按类型区分的旧工具下线后，它们统一改查 "exec"，因此 exec / help 必须在表里。
+// 按类型区分的旧工具与旧的 sql/redis/mongo verb 下线后，它们统一改查 "exec"，
+// 因此 exec / help 必须在表里。
 func AllToolDefs() []ToolDef {
 	return []ToolDef{
 		{"list_assets", handleListAssets},

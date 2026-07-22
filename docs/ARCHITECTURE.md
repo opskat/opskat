@@ -30,7 +30,7 @@ OpsKat is a **Wails v2** desktop app (Go 1.26 backend + React 19 frontend). The 
         │ approval.sock                 │ sshpool.sock
         │ (approve / grant)             │ (reuse pooled SSH conns)
         ▼                               ▼
-   opsctl CLI  ── headless asset ops (exec / sql / redis / cp / batch) ──►
+   opsctl CLI  ── headless asset ops (exec / create / update / delete / cp / batch) ──►
    (cmd/opsctl, also embeddable in the app via internal/embedded)
 ```
 
@@ -124,7 +124,7 @@ For the exact logging obligations on this path, see [DEVELOP.md → Logging for 
 
 `opsctl` performs asset operations headlessly while the desktop app remains the broker for connections and approvals. It shares the same bootstrap (DB, credentials) and talks to the running app over two Unix sockets, both under the data dir and mode-0600, authenticated with a token file written at startup:
 
-- **`approval.sock`** (`internal/approval`, server started from `internal/app/opsctl`) — line-delimited JSON request/response. When a command needs confirmation, opsctl sends an `ApprovalRequest` (exec / cp / create / update / grant / batch / ext_tool); the app emits a Wails event, the UI shows the dialog, and the decision (plus any user-edited grant patterns) is returned. Approved **grants** are persisted via `grant_repo` so later matching commands are auto-approved.
+- **`approval.sock`** (`internal/approval`, server started from `internal/app/opsctl`) — line-delimited JSON request/response. When a command needs confirmation, opsctl sends an `ApprovalRequest` (exec / cp / create / update / delete / grant / batch / ext_tool); the app emits a Wails event, the UI shows the dialog, and the decision (plus any user-edited grant patterns) is returned. Approved **grants** are persisted via `grant_repo` so later matching commands are auto-approved.
 - **`sshpool.sock`** (`internal/sshpool`) — a framed binary proxy. opsctl asks the app to run exec / upload / download / copy over an **already-open** pooled SSH connection instead of dialing (and re-authenticating) itself.
 
 `internal/sshpool` pools live SSH clients (ref-counted, idle-reaped). `internal/pkg/proxychain` composes ordered SSH, SOCKS5, and HTTP-script layers; `credential_resolver.ResolveProxyChain` resolves referenced SSH assets and secrets once, and `internal/connpool.ProxyChainDialContext` adapts the result for protocol and HTTP transports. Database, Redis, MongoDB, Kafka (brokers plus Schema Registry and Connect), etcd, RDP, Kubernetes, and the cached S3-compatible clients use that path. Local SQLite does not; remote SQLite VFS accesses its file through the selected pooled SSH asset, so that SSH asset owns the network chain. The RDP app service streams framebuffer dirty regions, pointer/input events, and clipboard text/files over Wails events; the VNC app service composes the same proxy chain but dials the RFB endpoint directly from `vnc_svc` and bridges the raw RFB byte stream to the in-app noVNC client over Wails events (with an optional SSH/SFTP file channel); the OSS app/service exposes the built-in bucket/object browser, transfer queue, copy/move/delete, previews, and presigned URLs over Wails IPC. A presigned URL opened by an external browser does not inherit the app's in-process proxy chain. None of RDP, VNC, or OSS currently has a built-in policy kind or a dedicated opsctl operation command. When the app isn't running, opsctl falls back to `pkg/client` (direct SSH with TOFU known-hosts) and a local policy/grant check for the operations that allow offline use.

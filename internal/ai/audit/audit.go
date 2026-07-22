@@ -178,9 +178,9 @@ func (w *DefaultAuditWriter) WriteToolCall(ctx context.Context, info ToolCallInf
 // exec/help 的资产标识是一个既可以是数字 id、也可以是名称的字符串。名称要
 // assetref.Resolve 才能解析，package audit 依赖不了它（会与 permission 成环），
 // 所以预解析的调用方走 ToolCallInfo.AssetID（runner.auditMiddleware 就是这么做的）。
-// 但**数字**形式在这里就能认出来——opsctl 的 sql / redis / mongo 子命令自己
-// resolveAsset 之后把数字 id 塞进 args["asset"]，不认它这些审计行的 asset_id 会
-// 全是 0（按类型区分的旧工具传的是 args["asset_id"]，所以以前不会）。
+// 但**数字**形式在这里就能认出来——opsctl 的 exec/batch 命令自己 resolveAsset 之后
+// 把数字 id 塞进 args["asset"]，不认它这些审计行的 asset_id 会全是 0（按类型区分的
+// 旧工具下线前传的是 args["asset_id"]，所以以前不会）。
 //
 // 用 strconv 而不是 aictx.ArgInt64：后者遇到解析不了的字符串会打一条 Warn 日志，
 // 而"asset 是个名称"在这里是完全正常的情况，不该刷日志。
