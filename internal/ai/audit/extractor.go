@@ -41,6 +41,42 @@ func ExtractCommandForAudit(toolName string, args map[string]any) string {
 	return ""
 }
 
+// canonicalizingTools 记录哪些工具的 args["command"] 是**目标资产类型自己的** exec DSL，
+// 因此在写审计前应该按 permission.CanonicalizeFor(asset.Type) 规范化——与审批弹窗、策略
+// 检查看到的是同一个串。
+//
+// 目前只有 "exec" 注册（extractor_default.go）。ext_exec 的 args 形状恰好也是
+// asset+command（Task 9 把 exec_tool 改名而来），但它的 command 是扩展自己的调用语法
+// （`<extension> <tool> --flag=value`），从来不是资产类型的 exec DSL——runner.
+// resolveAssetForAudit 曾经只看参数形状、不看工具名，把这条命令也喂给
+// permission.CanonicalizeFor(asset.Type)：对 k8s 资产，BuildK8sCommandPlan 不会因为
+// 语法不认识而报错（cmdline.Words 只是分词），而是把整句话当成 kubectl 参数，注入
+// --context/--namespace，写出一条从未执行、也从未被批准过的审计命令。
+//
+// 与 RegisterGroupScopedTool 同一种"注册而不是分支"的解法：resolveAssetForAudit 只查表，
+// 不按工具名 if/switch。
+var (
+	canonicalizingMu    sync.RWMutex
+	canonicalizingTools = map[string]bool{}
+)
+
+// RegisterCanonicalizingTool 把 toolName 标记为"command 参数是资产类型自己的 exec DSL"，
+// 使其在写审计前经过 permission.CanonicalizeFor(asset.Type) 规范化。只有真正把
+// args["command"] 当作目标资产类型 exec 语法使用的工具才应该注册——见本文件上方
+// canonicalizingTools 的文档注释。
+func RegisterCanonicalizingTool(toolName string) {
+	canonicalizingMu.Lock()
+	defer canonicalizingMu.Unlock()
+	canonicalizingTools[toolName] = true
+}
+
+// ShouldCanonicalizeCommand 报告 toolName 是否通过 RegisterCanonicalizingTool 注册过。
+func ShouldCanonicalizeCommand(toolName string) bool {
+	canonicalizingMu.RLock()
+	defer canonicalizingMu.RUnlock()
+	return canonicalizingTools[toolName]
+}
+
 // unregisterExtractorForTest 摘掉一个已注册的提取器并返回还原函数。仅供测试：
 // 用来验证某个工具的提取不依赖另一个工具的注册是否还在。
 func unregisterExtractorForTest(toolName string) func() {

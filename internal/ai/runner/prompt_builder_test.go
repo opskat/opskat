@@ -1,10 +1,14 @@
 package runner
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
+
+	"github.com/opskat/opskat/internal/ai/permission"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
 func TestPromptBuilderBuild(t *testing.T) {
@@ -73,6 +77,64 @@ func TestBuild_ExplainsExecAndHelpUnconditionally(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("prompt should explain %q with no skills set, got:\n%s", want, got)
 		}
+	}
+}
+
+// TestBuild_SeparatesExecCoveredFromConfigOnlyTypes locks the fix for the Important
+// review finding on task 3: doc-only types (rdp/vnc/oss/local in production) used to be
+// listed under the single heading "Asset types exec currently covers:" alongside real
+// exec-capable types, even though each doc-only type's own one-line description says
+// "exec is not supported for this type" — self-contradictory from the model's point of
+// view (a heading claiming coverage, immediately followed by a line disclaiming it).
+// buildAssetTypeSkills must split the listing using permission.ExecutorFor so a type with
+// no registered executor never appears under the "currently covers" heading, and instead
+// appears under a heading that itself says exec is NOT supported.
+//
+// Uses synthetic types registered directly (not real ones like ssh/rdp) so the test does
+// not depend on execimpl's init() having run in this package's test binary.
+func TestBuild_SeparatesExecCoveredFromConfigOnlyTypes(t *testing.T) {
+	const execType = "test-exec-covered-type"
+	const docOnlyType = "test-config-only-type"
+
+	permission.RegisterExecutor(execType,
+		func(context.Context, *asset_entity.Asset, string, string) (string, error) { return "", nil },
+		"usage doc")
+	t.Cleanup(func() { permission.UnregisterExecutorForTest(execType) })
+
+	permission.RegisterHelpDoc(docOnlyType, "config-only doc")
+	t.Cleanup(func() { permission.UnregisterExecutorForTest(docOnlyType) })
+
+	b := NewPromptBuilder("en", AIContext{})
+	b.SetAssetTypeSkills(map[string]string{
+		execType:    "Run shell commands over a terminal asset.",
+		docOnlyType: "Remote desktop assets; no command surface — exec is not supported for this type.",
+	})
+	got := b.Build()
+
+	execHeadingIdx := strings.Index(got, "exec currently covers")
+	if execHeadingIdx == -1 {
+		t.Fatalf("prompt should contain the exec-covers heading, got:\n%s", got)
+	}
+	configHeadingIdx := strings.Index(got, "exec is NOT supported")
+	if configHeadingIdx == -1 {
+		t.Fatalf("prompt should contain a config-only heading that itself says exec is NOT supported, got:\n%s", got)
+	}
+	if configHeadingIdx < execHeadingIdx {
+		t.Fatalf("the config-only heading should come after the exec-covers heading, got:\n%s", got)
+	}
+
+	execListItemIdx := strings.Index(got, "- "+execType+":")
+	docOnlyListItemIdx := strings.Index(got, "- "+docOnlyType+":")
+	if execListItemIdx == -1 || docOnlyListItemIdx == -1 {
+		t.Fatalf("prompt should list both types, got:\n%s", got)
+	}
+	if execHeadingIdx >= execListItemIdx || execListItemIdx >= configHeadingIdx {
+		t.Fatalf("%q (has an executor) should be listed under the exec-covers heading, before the config-only heading, got:\n%s",
+			execType, got)
+	}
+	if docOnlyListItemIdx < configHeadingIdx {
+		t.Fatalf("%q (no executor) must be listed under the config-only heading, not the exec-covers one, got:\n%s",
+			docOnlyType, got)
 	}
 }
 

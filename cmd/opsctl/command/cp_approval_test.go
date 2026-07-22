@@ -3,6 +3,8 @@ package command
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
@@ -11,6 +13,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
+	"github.com/opskat/opskat/internal/sshpool"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/mock/gomock"
@@ -34,6 +37,20 @@ func registerCpTestAsset(t *testing.T) {
 }
 
 func TestCmdCpRequiresApproval(t *testing.T) {
+	// 本地源文件必须真实存在：最后那条"批准后传输照常发起"的反证走到了真正的
+	// 上传路径，cmdCp 会打开它。此前这里写死 /tmp/payload，于是这条断言只在
+	// 恰好有人在 /tmp 下留过同名文件的机器上通过，干净机器上恒红。
+	localPath := filepath.Join(t.TempDir(), "payload")
+	if err := os.WriteFile(localPath, []byte("payload"), 0o600); err != nil {
+		t.Fatalf("write local fixture: %v", err)
+	}
+
+	// 隔离桌面端 SSH proxy 探测：本机开着 opskat 时 cmdCp 会走 proxy 分支，
+	// 下面被 stub 的 handler 一次都不会被调到。
+	origProxyFn := cpProxyFn
+	cpProxyFn = func() *sshpool.Client { return nil }
+	t.Cleanup(func() { cpProxyFn = origProxyFn })
+
 	Convey("cp 被拒时不得发起任何传输", t, func() {
 		registerCpTestAsset(t)
 
@@ -63,7 +80,7 @@ func TestCmdCpRequiresApproval(t *testing.T) {
 		defer func() { cpApprovalFn = origApproval }()
 
 		Convey("上传：审批主体是目的端路径", func() {
-			exitCode := cmdCp(context.Background(), handlers, []string{"/tmp/payload", "1:/etc/cron.d/backup"}, "")
+			exitCode := cmdCp(context.Background(), handlers, []string{localPath, "1:/etc/cron.d/backup"}, "")
 
 			So(exitCode, ShouldEqual, 1)
 			So(called, ShouldBeFalse)
@@ -88,7 +105,7 @@ func TestCmdCpRequiresApproval(t *testing.T) {
 				return ApprovalResult{Decision: aictx.Allow, SessionID: "sess-cp"}, nil
 			}
 
-			exitCode := cmdCp(context.Background(), handlers, []string{"/tmp/payload", "1:/etc/cron.d/backup"}, "")
+			exitCode := cmdCp(context.Background(), handlers, []string{localPath, "1:/etc/cron.d/backup"}, "")
 
 			So(exitCode, ShouldEqual, 0)
 			So(called, ShouldBeTrue)

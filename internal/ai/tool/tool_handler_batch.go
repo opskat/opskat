@@ -8,13 +8,14 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/assetref"
-	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/service/asset_svc"
 )
 
 // batchCommandItem 是 LLM 提交的批量项：对 N 个资产并发跑同一类命令。
+//
+// Type 与 exec 的 type 参数同语义：可选的类型断言，不参与派发（派发永远由资产真实类型
+// 决定），空值表示不声明，声明了就必须对得上（含协议别名，如 "sql"→database）。
 type batchCommandItem struct {
 	Asset   string `json:"asset"`
 	Type    string `json:"type"`
@@ -22,6 +23,8 @@ type batchCommandItem struct {
 }
 
 // batchResultItem 是单条命令的执行结果（聚合后整体返回给 LLM）。
+// Type 是资产的真实类型（asset.Type），不是调用方声明的类型断言——
+// 断言从不参与派发，回显真实类型才能让模型看懂"为什么这条被按这个策略检查"。
 type batchResultItem struct {
 	AssetID   int64  `json:"asset_id"`
 	AssetName string `json:"asset_name"`
@@ -34,8 +37,12 @@ type batchResultItem struct {
 }
 
 // handleBatchCommand 并发执行多条命令并聚合返回。
-// 流程：解析 → 策略预检 → 聚合 needConfirm 一次审批 → max 10 并发执行。
-// 与 opsctl batch 的审批/并发流程保持一致；桌面 AI 工具当前派发 exec/sql/redis。
+// 单条 per-item 流程与 handleExec 同一顺序、同一理由（见 handleExec 的文档注释）：
+// 解析 → 可选类型断言 → 执行器查找 → 门禁（IsDocumented）→ 规范化 → precheck →
+// 权限检查。所有无副作用的判断都排在权限检查（可能弹审批、聚合成一次批量确认）之前。
+// max 10 并发执行。与 opsctl batch 的审批/并发流程保持一致；派发按资产真实类型走
+// permission.ExecutorFor，覆盖面与统一 exec 工具一致（含 database/redis/mongodb/etcd/
+// kafka/k8s）。
 func handleBatchCommand(ctx context.Context, args map[string]any) (string, error) {
 	commandsRaw, ok := args["commands"]
 	if !ok {
@@ -63,13 +70,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 		return "No commands to execute.", nil
 	}
 
-	for i := range commands {
-		if commands[i].Type == "" {
-			commands[i].Type = "exec"
-		}
-	}
-
-	// batch_command 只对 AI 会话开放（不在 AllToolDefs 里，opsctl 走自己的 batch 子命令
+	// batch_exec 只对 AI 会话开放（不在 AllToolDefs 里，opsctl 走自己的 batch 子命令
 	// 并在那边自行 CheckPermission），所以这里没有 WithPreapproved 那条豁免：checker
 	// 缺失一定是接线漏了。从前它 nil 时每一项的 decision 都停在初值 "allow"，整批命令
 	// 一条不查地打到所有资产上。
@@ -79,16 +80,18 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 	}
 
 	type resolvedCmd struct {
-		item      batchCommandItem
-		assetID   int64
-		assetName string
-		decision  string // "allow" / "deny" / "needConfirm"
-		denyMsg   string
+		item         batchCommandItem
+		asset        *asset_entity.Asset // 仅当资产解析成功时非 nil
+		assetID      int64
+		assetName    string
+		checkCommand string // 权限检查用的（可能已规范化的）命令串
+		decision     string // "allow" / "deny" / "needConfirm"
+		denyMsg      string
 	}
 	resolved := make([]resolvedCmd, 0, len(commands))
 
 	for _, cmd := range commands {
-		assetID, assetName, resolveErr := resolveAssetForBatch(ctx, cmd.Asset)
+		asset, resolveErr := assetref.Resolve(ctx, cmd.Asset)
 		if resolveErr != nil {
 			// 原样透出解析错误，不再一律写成 "asset not found"：同名歧义
 			// （assetref.ErrAmbiguous）会明确告诉模型改用数字 id，压成"找不到"
@@ -99,13 +102,76 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 			continue
 		}
 
-		decision := "allow"
-		denyMsg := ""
-		result := permission.CheckPermission(ctx, batchApprovalAssetType(cmd.Type), assetID, cmd.Command)
+		// 可选类型断言——与 exec 同一个函数、同一条不变式（早于审批）。断言不参与
+		// 派发：协议永远从 asset.Type 取，这里只把方言写错的情况提前变成一条点名
+		// 双方类型的错误。
+		if err := permission.AssertAssetType(asset, cmd.Type); err != nil {
+			resolved = append(resolved, resolvedCmd{
+				item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
+				decision: "deny", denyMsg: err.Error(),
+			})
+			continue
+		}
+
+		if _, ok := permission.ExecutorFor(asset.Type); !ok {
+			resolved = append(resolved, resolvedCmd{
+				item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
+				decision: "deny",
+				denyMsg:  fmt.Sprintf("asset %q (type=%s) has no exec support yet", asset.Name, asset.Type),
+			})
+			continue
+		}
+
+		// 门禁：该资产类型的用法文档是否已到过模型面前——与 handleExec 同一道检查、
+		// 同一个位置（执行器查找之后、规范化之前）。没有这道检查，batch 就是绕过它的
+		// 通道：模型可以借 batch 执行一个从没查过语法的类型。deny 文案复用
+		// execGuidance，措辞与 handleExec 的引导语一致（点名资产与类型、指引先调 help）。
+		if gate := GetDocGate(ctx); gate != nil {
+			convID := aictx.GetConversationID(ctx)
+			if !gate.IsDocumented(convID, asset.Type) {
+				resolved = append(resolved, resolvedCmd{
+					item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
+					decision: "deny", denyMsg: execGuidance(asset),
+				})
+				continue
+			}
+		}
+
+		// 权限检查用规范化后的命令：批的是这个，就该按这个匹配策略/审批弹窗/审计——
+		// 与 handleExec 的第 8 步同一理由（kafka 的双 token 串就是靠这条才对得上）。
+		checkCommand := cmd.Command
+		if canonicalize, ok := permission.CanonicalizeFor(asset.Type); ok {
+			canonical, cerr := canonicalize(asset, cmd.Command)
+			if cerr != nil {
+				resolved = append(resolved, resolvedCmd{
+					item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
+					decision: "deny", denyMsg: cerr.Error(),
+				})
+				continue
+			}
+			checkCommand = canonical
+		}
+
+		// 前置条件检查（如该类型注册了 PrecheckFunc，目前只有 serial）：与 handleExec 第 7
+		// 步同一理由，必须排在权限检查之前——没有这道检查，一个没有活跃会话的串口资产会
+		// 先弹一次审批，批准之后才因为没有会话而失败。serial 在改造前根本进不了 batch
+		// （旧的三路 switch 没有 serial 分支），是本次改造让它第一次可达，这道检查补上
+		// 同时打开的洞。
+		if precheck, ok := permission.PrecheckFor(asset.Type); ok {
+			if err := precheck(ctx, asset); err != nil {
+				resolved = append(resolved, resolvedCmd{
+					item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
+					checkCommand: checkCommand, decision: "deny", denyMsg: err.Error(),
+				})
+				continue
+			}
+		}
+
+		decision, denyMsg := "allow", ""
+		result := permission.CheckPermission(ctx, asset.Type, asset.ID, checkCommand)
 		switch result.Decision {
 		case aictx.Deny:
-			decision = "deny"
-			denyMsg = result.Message
+			decision, denyMsg = "deny", result.Message
 		case aictx.NeedConfirm:
 			decision = "needConfirm"
 		case aictx.Allow:
@@ -113,8 +179,8 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 		}
 
 		resolved = append(resolved, resolvedCmd{
-			item: cmd, assetID: assetID, assetName: assetName,
-			decision: decision, denyMsg: denyMsg,
+			item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
+			checkCommand: checkCommand, decision: decision, denyMsg: denyMsg,
 		})
 	}
 
@@ -125,10 +191,10 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 		for i, r := range resolved {
 			if r.decision == "needConfirm" {
 				needConfirmItems = append(needConfirmItems, permission.ApprovalItem{
-					Type:      r.item.Type,
+					Type:      permission.ApprovalTypeFor(r.asset.Type),
 					AssetID:   r.assetID,
 					AssetName: r.assetName,
-					Command:   r.item.Command,
+					Command:   r.checkCommand,
 				})
 				needConfirmIndices = append(needConfirmIndices, i)
 			}
@@ -161,9 +227,14 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 	results := make([]batchResultItem, 0, len(commands))
 
 	for _, r := range denied {
+		// 已解析出资产的条目回显真实类型；解析本身失败的条目没有类型可回显。
+		resultType := r.item.Type
+		if r.asset != nil {
+			resultType = r.asset.Type
+		}
 		results = append(results, batchResultItem{
 			AssetID: r.assetID, AssetName: r.assetName,
-			Type: r.item.Type, Command: r.item.Command,
+			Type: resultType, Command: r.item.Command,
 			ExitCode: -1, Error: fmt.Sprintf("denied: %s", r.denyMsg),
 		})
 	}
@@ -176,7 +247,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			result := executeBatchItem(ctx, r.item, r.assetID, r.assetName)
+			result := executeBatchItem(ctx, r.item, r.asset)
 			mu.Lock()
 			results = append(results, result)
 			mu.Unlock()
@@ -191,51 +262,26 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 	return string(output), nil
 }
 
-// executeBatchItem 把单条命令派发到对应资产类型的纯执行体（helper.Exec*OnAsset）。
-//
-// 直接调纯执行体，不再经过按类型区分的旧工具 handler（run_command / exec_sql /
-// exec_redis，已随统一 exec 下线）：那些 handler 内部各自还做一次
-// CheckForAsset，而 handleBatchCommand 上面已经对每一项做过策略预检、并把所有
-// needConfirm 聚合成**一次**审批弹窗。走 handler 就等于把批准过的命令再检查一遍，
-// 用户会为同一条命令被弹第二次框——kafka 侧删旧工具时修掉的正是这个形状
-// （见 internal/ai/tool/tool_handlers_unified_kafka_test.go）。
-func executeBatchItem(ctx context.Context, item batchCommandItem, assetID int64, assetName string) batchResultItem {
+// executeBatchItem 把单条命令派发到资产真实类型对应的执行器（permission.ExecutorFor），
+// 覆盖面与统一 exec 工具一致——不再是写死的 exec/sql/redis 三路 switch。
+func executeBatchItem(ctx context.Context, item batchCommandItem, asset *asset_entity.Asset) batchResultItem {
 	result := batchResultItem{
-		AssetID: assetID, AssetName: assetName,
-		Type: item.Type, Command: item.Command,
+		AssetID: asset.ID, AssetName: asset.Name,
+		Type: asset.Type, Command: item.Command,
 	}
 
-	asset, err := asset_svc.Asset().Get(ctx, assetID)
-	if err != nil {
+	exec, ok := permission.ExecutorFor(asset.Type)
+	if !ok {
+		// 解析阶段已经拦过一次；这里是并发执行路径上的兜底，只可能在执行器被
+		// 反注册（仅测试）时发生。
 		result.ExitCode = -1
-		result.Error = fmt.Sprintf("asset not found: %v", err)
+		result.Error = fmt.Sprintf("asset %q (type=%s) has no exec support yet", asset.Name, asset.Type)
 		return result
 	}
 
-	var output string
-	switch item.Type {
-	case "exec":
-		output, err = helper.ExecCommandOnAsset(ctx, asset, item.Command, "")
-	case "sql":
-		if !asset.IsDatabase() {
-			result.ExitCode = -1
-			result.Error = "asset is not database type"
-			return result
-		}
-		output, err = helper.ExecSQLOnAsset(ctx, asset, item.Command, "")
-	case "redis":
-		if !asset.IsRedis() {
-			result.ExitCode = -1
-			result.Error = "asset is not Redis type"
-			return result
-		}
-		output, err = helper.ExecRedisOnAsset(ctx, asset, item.Command, "")
-	default:
-		result.ExitCode = -1
-		result.Error = fmt.Sprintf("unknown type: %s", item.Type)
-		return result
-	}
-
+	// 执行用**原始**命令，不是规范化后的串——规范化结果是给策略/审批/审计看的展示形式，
+	// 喂给执行器是有损的（引号与内部空格会被吃掉）。与 handleExec 第 8 步同一理由。
+	output, err := exec(ctx, asset, item.Command, "")
 	if err != nil {
 		result.ExitCode = -1
 		result.Error = err.Error()
@@ -244,33 +290,4 @@ func executeBatchItem(ctx context.Context, item batchCommandItem, assetID int64,
 	result.ExitCode = 0
 	result.Stdout = output
 	return result
-}
-
-// resolveAssetForBatch 把 LLM 传入的 asset 标识解析成 (id, name)。
-//
-// 走 assetref.Resolve —— 与 exec / help 同一个解析器。batch 的 asset 字段跟 exec 的
-// asset 是同一个契约（数字 id 或名称，同名报错），batch_command 的参数描述也照这个
-// 写着 {"asset": "name-or-id"}；两边共用一份实现，"什么是合法的资产标识"才只有一个
-// 答案。此前它包成 {"id": ref} 借道 handleGetAsset，而 get_asset 的契约是 number 型
-// 的 id（tools_asset.go 的 SchemaVal），没有也不该有 name 查询，于是文档承诺的名字
-// 形态必然报 "missing required parameter: id"。
-func resolveAssetForBatch(ctx context.Context, assetRef string) (int64, string, error) {
-	asset, err := assetref.Resolve(ctx, assetRef)
-	if err != nil {
-		return 0, "", err
-	}
-	return asset.ID, asset.Name, nil
-}
-
-// batchApprovalAssetType 把 batch 的 type 映射成 permission.CheckPermission 期望的资产类型字符串。
-// permission.CheckPermission 内部据此选择对应的策略组（exec→ssh、sql→database、redis→redis）。
-func batchApprovalAssetType(batchType string) string {
-	switch batchType {
-	case "sql":
-		return asset_entity.AssetTypeDatabase
-	case "redis":
-		return asset_entity.AssetTypeRedis
-	default:
-		return asset_entity.AssetTypeSSH
-	}
 }

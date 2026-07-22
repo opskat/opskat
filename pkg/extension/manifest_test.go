@@ -336,6 +336,131 @@ func TestParseManifest(t *testing.T) {
 	})
 }
 
+func TestParseManifest_ToolsValidation(t *testing.T) {
+	base := `{"name":"x","version":"1.0.0","hostABI":"1.0"`
+
+	Convey("ParseManifest tools[].parameters validation", t, func() {
+		Convey("should accept a manifest without any tools", func() {
+			_, err := ParseManifest([]byte(base + `}`))
+			So(err, ShouldBeNil)
+		})
+
+		Convey("should reject a tool missing parameters", func() {
+			_, err := ParseManifest([]byte(base + `,"tools":[{"name":"t"}]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "parameters")
+		})
+
+		Convey("should reject parameters whose type is not object", func() {
+			_, err := ParseManifest([]byte(base + `,"tools":[{"name":"t","parameters":{"type":"array"}}]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "parameters.type")
+		})
+
+		Convey("should reject a property missing type", func() {
+			_, err := ParseManifest([]byte(base +
+				`,"tools":[{"name":"t","parameters":{"type":"object","properties":{"k":{"description":"no type"}}}}]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "k")
+		})
+
+		Convey("should reject a dangling required entry", func() {
+			_, err := ParseManifest([]byte(base +
+				`,"tools":[{"name":"t","parameters":{"type":"object","properties":{},"required":["ghost"]}}]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "ghost")
+		})
+
+		Convey("should reject a duplicate tool name", func() {
+			one := `{"name":"t","parameters":{"type":"object","properties":{}}}`
+			_, err := ParseManifest([]byte(base + `,"tools":[` + one + `,` + one + `]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "duplicate")
+		})
+
+		Convey("should accept the shapes used by the real oss manifest", func() {
+			// 覆盖 oss 用到的三种类型：string / integer / array<string>，含空 properties。
+			ok := base + `,"tools":[
+				{"name":"list_buckets","parameters":{"type":"object","properties":{}}},
+				{"name":"list_objects","parameters":{"type":"object","properties":{"maxKeys":{"type":"integer"}}}},
+				{"name":"delete_objects","parameters":{"type":"object","properties":{"keys":{"type":"array","items":{"type":"string"}}},"required":["keys"]}}
+			]}`
+			_, err := ParseManifest([]byte(ok))
+			So(err, ShouldBeNil)
+		})
+
+		Convey("should reject a tool without a name, naming its index", func() {
+			_, err := ParseManifest([]byte(base + `,"tools":[{"parameters":{"type":"object","properties":{}}}]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "tools[0].name")
+		})
+
+		Convey("should reject parameters.type=object when properties is absent", func() {
+			_, err := ParseManifest([]byte(base + `,"tools":[{"name":"t","parameters":{"type":"object"}}]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, `tools["t"]`)
+			So(err.Error(), ShouldContainSubstring, "properties")
+		})
+
+		Convey("should reject parameters.type=object when properties is not an object", func() {
+			_, err := ParseManifest([]byte(base + `,"tools":[{"name":"t","parameters":{"type":"object","properties":"nope"}}]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, `tools["t"]`)
+			So(err.Error(), ShouldContainSubstring, "properties")
+		})
+
+		Convey("should reject a property whose value itself is not an object", func() {
+			_, err := ParseManifest([]byte(base + `,"tools":[{"name":"t","parameters":{"type":"object","properties":{"k":"x"}}}]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "properties.k")
+			So(err.Error(), ShouldContainSubstring, "must be an object")
+		})
+
+		Convey("should reject a genuinely unsupported property type", func() {
+			// "object" is deliberately unsupported: nested structures go through ext_exec's
+			// --json escape hatch instead of inventing a nested flag syntax.
+			_, err := ParseManifest([]byte(base +
+				`,"tools":[{"name":"t","parameters":{"type":"object","properties":{"nested":{"type":"object"}}}}]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "properties.nested")
+			So(err.Error(), ShouldContainSubstring, `unsupported type "object"`)
+		})
+
+		Convey("should reject an array property without items", func() {
+			_, err := ParseManifest([]byte(base +
+				`,"tools":[{"name":"t","parameters":{"type":"object","properties":{"tags":{"type":"array"}}}}]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "properties.tags")
+			So(err.Error(), ShouldContainSubstring, "without items")
+		})
+
+		Convey("should reject an array property with a non-string item type", func() {
+			_, err := ParseManifest([]byte(base +
+				`,"tools":[{"name":"t","parameters":{"type":"object","properties":{"tags":{"type":"array","items":{"type":"integer"}}}}}]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "properties.tags")
+			So(err.Error(), ShouldContainSubstring, "array<integer>")
+		})
+
+		Convey("should reject required when it is not an array", func() {
+			_, err := ParseManifest([]byte(base +
+				`,"tools":[{"name":"t","parameters":{"type":"object","properties":{"key":{"type":"string"}},"required":"key"}}]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "parameters.required")
+			So(err.Error(), ShouldContainSubstring, "must be an array")
+		})
+
+		Convey("should not claim items is missing when items is present but malformed", func() {
+			_, err := ParseManifest([]byte(base +
+				`,"tools":[{"name":"t","parameters":{"type":"object","properties":{"tags":{"type":"array","items":"string"}}}}]}`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "properties.tags.items")
+			So(err.Error(), ShouldContainSubstring, "must be an object")
+			So(err.Error(), ShouldNotContainSubstring, "without items")
+		})
+	})
+}
+
 func TestCapabilityChecks(t *testing.T) {
 	Convey("Capability checks", t, func() {
 		extDir := "/var/ext/test-ext"

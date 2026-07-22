@@ -39,8 +39,10 @@ func TestGet_BodyExcludesFrontmatter(t *testing.T) {
 
 func TestTypes_Sorted(t *testing.T) {
 	got := Types()
-	if len(got) != 8 {
-		t.Fatalf("got %d types, want 8", len(got))
+	// 8 exec types (ssh/serial/database/redis/k8s/etcd/mongodb/kafka) + 4 doc-only
+	// types (rdp/vnc/oss/local) registered via RegisterHelpDoc — see execimpl/register.go.
+	if len(got) != 12 {
+		t.Fatalf("got %d types, want 12", len(got))
 	}
 	for i := 1; i < len(got); i++ {
 		if got[i-1] > got[i] {
@@ -50,9 +52,9 @@ func TestTypes_Sorted(t *testing.T) {
 }
 
 func TestGet_UnknownType(t *testing.T) {
-	// vnc is a remote-desktop type with no command syntax to document, so it will not
-	// gain a SKILL.md. (kafka used to stand in here and now has one.)
-	if _, ok := Get("vnc"); ok {
-		t.Fatal("vnc has no SKILL.md; Get should report it as unknown")
+	// "bogus" is not a registered asset type and never will be, so it has no SKILL.md.
+	// (vnc used to stand in here; it now has a doc-only SKILL.md — see internal/ai/skills/vnc.)
+	if _, ok := Get("bogus"); ok {
+		t.Fatal("bogus is not a real asset type; Get should report it as unknown")
 	}
 }

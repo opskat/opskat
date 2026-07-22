@@ -50,3 +50,20 @@ description: "Read and write etcd keys via exec, using an etcdctl-like command s
   silently dropped for `get`/`del` (`get /a /b` reads only `/a`) and joined into
   the value for `put`. Use `--prefix` for range-like reads.
 - The `scope` parameter is not used by etcd assets.
+
+## Asset config (for put_asset)
+
+| field | type | required | notes |
+|---|---|---|---|
+| `endpoints` | string | yes | Comma/semicolon/newline separated `host:port` list, no scheme prefix — each entry is parsed with `net.SplitHostPort`, so `http://`/`https://` fails with "too many colons in address": e.g. `"10.0.1.5:2379,10.0.1.6:2379"` |
+| `username` | string | no | |
+| `password` | string | no | Stored encrypted; never echoed back |
+| `tls` | string | no | `"true"` to enable TLS |
+| `tls_insecure` | string | no | `"true"` to skip TLS certificate verification |
+| `tls_server_name` | string | no | TLS SNI / server name override |
+| `tls_ca_file` | string | no | Path to a CA certificate file |
+| `tls_cert_file` | string | no | Path to a client certificate file (mTLS) |
+| `tls_key_file` | string | no | Path to a client key file (mTLS) |
+| `dial_timeout_seconds` | number | no | Connection dial timeout override, in seconds |
+| `command_timeout_seconds` | number | no | Per-command timeout override, in seconds |
+| `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches |

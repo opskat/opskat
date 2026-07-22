@@ -35,7 +35,11 @@ func writeTestExtension(dir, name string) {
 			{"type": name, "i18n": map[string]any{"name": name + ".name"}},
 		},
 		"tools": []map[string]any{
-			{"name": "test_tool", "i18n": map[string]any{"description": "a tool"}},
+			{
+				"name":       "test_tool",
+				"i18n":       map[string]any{"description": "a tool"},
+				"parameters": map[string]any{"type": "object", "properties": map[string]any{}},
+			},
 		},
 	}
 	data, _ := json.Marshal(manifest)

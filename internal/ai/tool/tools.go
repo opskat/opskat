@@ -10,6 +10,7 @@ import (
 func Tools() []tool.Tool {
 	tools := make([]tool.Tool, 0, 15)
 	tools = append(tools, assetTools()...)
+	tools = append(tools, crudTools()...)
 	tools = append(tools, execTools()...)
 	tools = append(tools, extTools()...)
 	tools = append(tools, unifiedTools()...)

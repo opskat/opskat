@@ -148,7 +148,7 @@ You can also use it manually:
 
 ```bash
 opsctl exec web-01 -- tail -n 100 /var/log/nginx/error.log
-opsctl sql db-prod "SELECT status, COUNT(*) FROM users GROUP BY status"
+opsctl exec db-prod -- "SELECT status, COUNT(*) FROM users GROUP BY status"
 opsctl ssh web-01
 ```
 

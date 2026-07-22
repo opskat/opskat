@@ -27,3 +27,14 @@ correct way to switch databases.
 - Results are returned as JSON.
 - Credentials are resolved automatically from the app's encrypted store; never
   ask the user for a password.
+
+## Asset config (for put_asset)
+
+| field | type | required | notes |
+|---|---|---|---|
+| `host` | string | yes | |
+| `port` | number | yes | No server-side default — pass `6379` explicitly |
+| `username` | string | yes | Required by validation even for legacy single-password Redis (no ACL); pass `"default"`, Redis's built-in default user |
+| `password` | string | no | Stored encrypted; never echoed back |
+| `redis_db` | number | no | Default DB index (0-15) |
+| `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches |

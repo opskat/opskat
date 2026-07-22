@@ -963,7 +963,7 @@ var skillTargetDefs = []skillTargetDef{
 
 const pluginRegistryName = "opskat"
 const pluginName = "opsctl"
-const pluginVersion = "1.0.0"
+const pluginVersion = "1.1.0"
 
 // claudePluginDir 返回 Claude Code 插件目录（marketplace 内的插件根目录）
 func claudePluginDir(home string) string {

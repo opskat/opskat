@@ -63,7 +63,7 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 	decision := approvalResult.ToCheckResult()
 
 	// 尝试通过 proxy 执行文件传输
-	if proxy := getSSHProxyClient(); proxy != nil {
+	if proxy := cpProxyFn(); proxy != nil {
 		exitCode := cmdCpViaProxy(proxy, srcAssetID, srcPath, dstAssetID, dstPath, srcIsRemote, dstIsRemote, src, dst)
 		var cpErr error
 		if exitCode != 0 {
@@ -117,6 +117,12 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 // cpApprovalFn 是 cp 的审批入口。用变量而非直接调用是为了可测——与本包的
 // opsctlAuditWriter 同一套路：测试替换掉它，避免真的去连桌面端审批 socket。
 var cpApprovalFn = requireApproval
+
+// cpProxyFn 是 cp 的连接池探测入口，同上一套路。它探的是桌面端的 SSH proxy
+// unix socket：**开发机上只要 opskat 桌面端在跑，探测就会成功**，cmdCp 随即走
+// proxy 分支、完全绕开 handler 表。不把它做成缝，cp 的传输路径测试就只在
+// "桌面端没开" 的机器上通过，红绿取决于运行环境而不是代码。
+var cpProxyFn = getSSHProxyClient
 
 // requireCpApproval 为一次传输发起审批，审批主体是**远端路径**（grant 按资产存，
 // 本地路径不属于任何资产，塞进 pattern 无法匹配）。

@@ -45,6 +45,15 @@ func permissionTypeFor(name string) (*permissionTypeHandler, bool) {
 	return handler, ok
 }
 
+// ApprovalTypeFor 返回该资产类型在审批面板上的类型标签（前端 TypeBadge 按它取图标）。
+// 未注册类型回落到原样返回——审批项宁可显示一个陌生标签，也不该静默变成 "exec"。
+func ApprovalTypeFor(assetType string) string {
+	if handler, ok := permissionTypeFor(assetType); ok {
+		return handler.approvalType
+	}
+	return assetType
+}
+
 func init() {
 	registerPermissionType(asset_entity.AssetTypeSSH, "exec", true, checkCommandPolicyPermission, "exec")
 	registerPermissionType(asset_entity.AssetTypeSerial, "serial", false, checkCommandPolicyPermission)
@@ -91,8 +100,15 @@ var execEntries = make(map[string]*execEntry)
 // RegisterExecutor 注册某资产类型的执行器与用法文档。canonicalize 是可选的第四个参数——
 // 只有执行前会改写命令的类型（目前是 k8s、etcd）才需要传；不传的类型按原样校验与执行。
 // 重复注册 panic——与 registerPermissionType 一致，注册冲突是启动期的编程错误，不该静默覆盖。
+//
+// help == "" 同样 panic，与 RegisterHelpDoc 的校验对齐：这条守卫是本包唯一能兜住
+// "调用方拿到一个空字符串却还是调用了注册函数"的地方——execimpl/register.go 的每个
+// exec 类型都从 skills.Get 取 help，若那次调用漏检了 ok（曾经发生过：8 处全写成
+// `sshHelp, _ := skills.Get(...)`），SKILL.md 缺失就会静默注册成一个内容为空的执行器：
+// HelpFor 仍然返回 ("", true)，help_coverage_test.go 的 TestEveryAssetTypeHasHelpDoc
+// 只检查 ok、不检查内容，因此测试保持全绿，而模型实际拿到的用法文档是空的。
 func RegisterExecutor(canonical string, exec ExecFunc, help string, canonicalize ...CanonicalizeFunc) {
-	if canonical == "" || exec == nil {
+	if canonical == "" || exec == nil || help == "" {
 		panic("permission: invalid executor registration")
 	}
 	if _, exists := execEntries[canonical]; exists {
@@ -105,10 +121,27 @@ func RegisterExecutor(canonical string, exec ExecFunc, help string, canonicalize
 	execEntries[canonical] = &execEntry{exec: exec, help: help, canonicalize: canon}
 }
 
-// ExecutorFor 返回该资产类型的执行器。
+// RegisterHelpDoc 只注册用法文档，不注册执行器——给没有命令面、但可以被 put_asset
+// 创建/更新的类型用（rdp / vnc / oss / local）。它们的 SKILL.md 只写配置字段。
+//
+// 与 RegisterExecutor 共用同一张 execEntries 表，因此 HelpFor 天然可用；
+// 而 ExecutorFor / RegisteredExecTypes 会跳过 exec == nil 的条目——
+// exec 对这些类型必须报"尚不支持"，不能查到一个 nil 函数再 panic。
+func RegisterHelpDoc(canonical, help string) {
+	if canonical == "" || help == "" {
+		panic("permission: invalid help-doc registration")
+	}
+	if _, exists := execEntries[canonical]; exists {
+		panic(fmt.Sprintf("permission: duplicate help-doc registration %q", canonical))
+	}
+	execEntries[canonical] = &execEntry{help: help}
+}
+
+// ExecutorFor 返回该资产类型的执行器。doc-only 条目（exec == nil）报 (nil, false)——
+// 调用方不能查到一个 nil 函数再去调用它。
 func ExecutorFor(assetType string) (ExecFunc, bool) {
 	entry, ok := execEntries[assetType]
-	if !ok {
+	if !ok || entry.exec == nil {
 		return nil, false
 	}
 	return entry.exec, true
@@ -168,8 +201,23 @@ func UnregisterExecutorForTest(canonical string) {
 	delete(execEntries, canonical)
 }
 
-// RegisteredExecTypes 返回已注册执行器的资产类型，已排序。
+// RegisteredExecTypes 返回**能执行命令**的资产类型，已排序。doc-only 条目不在其中——
+// 这份清单会进模型看到的 exec 工具描述，把只有配置文档的类型列进去等于承诺一个做不到的能力。
 func RegisteredExecTypes() []string {
+	types := make([]string, 0, len(execEntries))
+	for name, entry := range execEntries {
+		if entry.exec == nil {
+			continue
+		}
+		types = append(types, name)
+	}
+	sort.Strings(types)
+	return types
+}
+
+// RegisteredHelpTypes 返回有用法文档的资产类型（有执行器的 + doc-only 的），已排序。
+// put_asset 的错误信息与 prompt 的类型清单用它。
+func RegisteredHelpTypes() []string {
 	types := make([]string, 0, len(execEntries))
 	for name := range execEntries {
 		types = append(types, name)

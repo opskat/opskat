@@ -14,7 +14,7 @@ import (
 
 // BatchItem 批量执行中的单条操作
 type BatchItem struct {
-	Type      string `json:"type"` // "exec"|"sql"|"redis"
+	Type      string `json:"type"` // "exec"|"sql"|"redis"|"mongo"
 	AssetID   int64  `json:"asset_id"`
 	AssetName string `json:"asset_name"`
 	Command   string `json:"command"`
@@ -23,7 +23,7 @@ type BatchItem struct {
 // ApprovalRequest is sent from opsctl to the desktop app.
 type ApprovalRequest struct {
 	Token       string          `json:"token,omitempty"` // 认证 token
-	Type        string          `json:"type"`            // "exec"|"cp"|"create"|"update"|"grant"|"batch"|"ext_tool"
+	Type        string          `json:"type"`            // "exec"|"cp"|"create"|"update"|"delete"|"grant"|"batch"|"ext_tool"
 	AssetID     int64           `json:"asset_id,omitempty"`
 	AssetName   string          `json:"asset_name,omitempty"`
 	Command     string          `json:"command,omitempty"`

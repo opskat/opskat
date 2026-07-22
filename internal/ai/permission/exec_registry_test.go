@@ -54,6 +54,28 @@ func TestRegisterExecutor_DuplicatePanics(t *testing.T) {
 	RegisterExecutor(typeName, noop, "doc")
 }
 
+// TestRegisterExecutor_EmptyHelpPanics locks the fix for the critical review finding on
+// task 3: execimpl/register.go's 8 exec-type init() calls used to discard skills.Get's ok
+// (`sshHelp, _ := skills.Get(...)`), so a missing or emptied SKILL.md silently became an
+// empty help string that RegisterExecutor accepted without complaint. HelpFor then
+// reported ("", true) for that type — which satisfies TestEveryAssetTypeHasHelpDoc's
+// existence-only check even though the model would receive zero bytes of usage doc.
+// RegisterExecutor must refuse an empty help string exactly like RegisterHelpDoc already
+// does (see the sibling panic in RegisterHelpDoc), turning a missing/empty doc into a
+// startup-time panic instead of a silently-green coverage test.
+func TestRegisterExecutor_EmptyHelpPanics(t *testing.T) {
+	const typeName = "test-empty-help-type"
+	t.Cleanup(func() { delete(execEntries, typeName) })
+
+	noop := func(_ context.Context, _ *asset_entity.Asset, _, _ string) (string, error) { return "", nil }
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic when registering an executor with an empty help string")
+		}
+	}()
+	RegisterExecutor(typeName, noop, "")
+}
+
 func TestRegisteredExecTypes_Sorted(t *testing.T) {
 	got := RegisteredExecTypes()
 	for i := 1; i < len(got); i++ {

@@ -23,3 +23,12 @@ Pass the kubectl command as `command`, with or without the leading `kubectl`:
 - If the asset has an SSH jump host configured, kubectl runs on that host;
   otherwise it runs locally.
 - The `scope` parameter is not used by Kubernetes assets.
+
+## Asset config (for put_asset)
+
+| field | type | required | notes |
+|---|---|---|---|
+| `kubeconfig` | string | yes | Full kubeconfig YAML content; stored encrypted |
+| `namespace` | string | no | Default namespace; must not contain whitespace or start with `-` |
+| `context` | string | no | Kubeconfig context to use; same character restrictions as `namespace` |
+| `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches |

@@ -27,13 +27,15 @@ func unifiedTools() []tool.Tool {
 				"(" + strings.Join(permission.RegisteredExecTypes(), ", ") + ") — you don't need to know the type ahead of time. " +
 				"The first time you use exec against a given asset type in a conversation, call help first " +
 				"to learn its command syntax; exec will tell you to if you skip that step. " +
-				"Credentials are resolved automatically from the app's encrypted store — do not ask the user for passwords.",
+				"Credentials are resolved automatically from the app's encrypted store — do not ask the user for passwords. " +
+				"Pass type=<asset type> when you know it: a wrong guess is caught before execution.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
 					"asset":   {Type: "string", Description: "Target asset id or name. Use list_assets to find it."},
 					"command": {Type: "string", Description: "Command to run, in the syntax for this asset's type — call help first if you don't know it."},
 					"scope":   {Type: "string", Description: "Optional connection-level target that is not part of the command itself: database name for database assets, db index for redis assets. Ignored for other types."},
+					"type":    {Type: "string", Description: "Optional assertion of the asset's type (e.g. \"redis\", \"database\"). Not used for dispatch — the protocol always comes from the asset record. Pass it when you believe you know the type: a mismatch is reported before anything executes, instead of surfacing later as a protocol-level error."},
 				},
 				Required: []string{"asset", "command"},
 			},
@@ -48,12 +50,14 @@ func unifiedTools() []tool.Tool {
 		},
 		&tool.RawTool{
 			NameStr: "help",
-			DescStr: "Get the command syntax and usage notes for an asset's type, so you can call exec correctly. " +
-				"Call this the first time you use exec against a given asset type in a conversation.",
+			DescStr: "Get the command syntax and usage notes for an asset type, so you can call exec or put_asset correctly. " +
+				"Call this the first time you use exec against a given asset type in a conversation, and before creating " +
+				"the first asset of a type you haven't used yet.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
-					"asset": {Type: "string", Description: "Target asset id or name whose type's usage you want to learn. Use list_assets to find it."},
+					"asset": {Type: "string", Description: "An existing asset's id or name whose type's usage you want to learn (use list_assets to find it), " +
+						"or — if no asset of that type exists yet — the type name itself (e.g. \"rdp\")."},
 				},
 				Required: []string{"asset"},
 			},

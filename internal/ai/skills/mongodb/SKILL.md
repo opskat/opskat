@@ -52,3 +52,16 @@ Supported operations: `find`, `findOne`, `insertOne`, `insertMany`, `updateOne`,
   redirecting. Wrap values containing them in single quotes.
 - Unknown flags are rejected rather than ignored; only `--db` and `--query` exist.
 - The `scope` parameter is not used by MongoDB assets; use `--db` instead.
+
+## Asset config (for put_asset)
+
+| field | type | required | notes |
+|---|---|---|---|
+| `host` | string | yes | |
+| `port` | number | yes | No server-side default — pass `27017` explicitly |
+| `username` | string | yes | |
+| `password` | string | no | Stored encrypted; never echoed back |
+| `database` | string | no | Default database |
+| `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches |
+
+Auth source is fixed to `admin`; it is not configurable through `put_asset`.

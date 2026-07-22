@@ -45,7 +45,7 @@ func NewCommandPolicyChecker(confirmFunc CommandConfirmFunc) *CommandPolicyCheck
 	}
 }
 
-// ConfirmFunc 返回确认回调，供 batch_command 聚合多条审批项一次性调用。
+// ConfirmFunc 返回确认回调，供 batch_exec 聚合多条审批项一次性调用。
 func (c *CommandPolicyChecker) ConfirmFunc() CommandConfirmFunc {
 	return c.confirmFunc
 }
@@ -251,10 +251,9 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 		assetName = asset.Name
 	}
 
-	approvalType := "exec"
-	if handler, ok := permissionTypeFor(assetType); ok {
-		approvalType = handler.approvalType
-	}
+	// 与 ApprovalTypeFor 同一张表、同一条不变式：未注册类型回落到原样的 assetType，
+	// 不是静默变成 "exec"（type_registry.go 的 ApprovalTypeFor doc comment 有论证）。
+	approvalType := ApprovalTypeFor(assetType)
 
 	item := ApprovalItem{
 		Type:      approvalType,
@@ -559,7 +558,7 @@ func getPolicyChecker(ctx context.Context) *CommandPolicyChecker {
 
 // RequireChecker 取出 PolicyChecker，缺失即报错。没有任何豁免。
 //
-// 给那些没有 opsctl 对应物的路径用：batch_command（只对 AI 会话开放）、扩展策略确认
+// 给那些没有 opsctl 对应物的路径用：batch_exec（只对 AI 会话开放）、扩展策略确认
 // （opsctl 的 requireApproval 不认识扩展 manifest 里的 action）、request_permission。
 func RequireChecker(ctx context.Context) (*CommandPolicyChecker, error) {
 	if c := getPolicyChecker(ctx); c != nil {

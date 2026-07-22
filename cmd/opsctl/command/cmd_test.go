@@ -97,6 +97,48 @@ func TestExtractCommand(t *testing.T) {
 	})
 }
 
+func TestExtractTypeFlag(t *testing.T) {
+	Convey("extractTypeFlag", t, func() {
+		Convey("should extract --type <value> before --", func() {
+			declared, rest := extractTypeFlag([]string{"--type", "database", "--", "PING"})
+			So(declared, ShouldEqual, "database")
+			So(rest, ShouldResemble, []string{"--", "PING"})
+		})
+
+		Convey("should extract --type=<value> before --", func() {
+			declared, rest := extractTypeFlag([]string{"--type=redis", "--", "GET", "k"})
+			So(declared, ShouldEqual, "redis")
+			So(rest, ShouldResemble, []string{"--", "GET", "k"})
+		})
+
+		Convey("should return empty declared type and unchanged args when absent", func() {
+			declared, rest := extractTypeFlag([]string{"--", "uptime"})
+			So(declared, ShouldEqual, "")
+			So(rest, ShouldResemble, []string{"--", "uptime"})
+		})
+
+		Convey("should not treat --type after -- as the flag", func() {
+			// Everything past "--" belongs to the command, never to opsctl itself —
+			// same contract as extractCommand.
+			declared, rest := extractTypeFlag([]string{"--", "ls", "--type"})
+			So(declared, ShouldEqual, "")
+			So(rest, ShouldResemble, []string{"--", "ls", "--type"})
+		})
+
+		Convey("should leave a dangling --type (no value) for downstream handling", func() {
+			declared, rest := extractTypeFlag([]string{"--type"})
+			So(declared, ShouldEqual, "")
+			So(rest, ShouldResemble, []string{"--type"})
+		})
+
+		Convey("should return empty declared type and unchanged args for empty input", func() {
+			declared, rest := extractTypeFlag([]string{})
+			So(declared, ShouldEqual, "")
+			So(rest, ShouldResemble, []string{})
+		})
+	})
+}
+
 func TestGrantSessionFlagParsing(t *testing.T) {
 	Convey("--grant-session flag 解析", t, func() {
 		Convey("有 --grant-session 时正确提取", func() {

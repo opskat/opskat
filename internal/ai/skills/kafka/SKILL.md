@@ -213,3 +213,29 @@ spell them exactly:
   approves both granting and revoking.
 - The `scope` parameter is not used by Kafka assets; the target position names the
   resource.
+
+## Asset config (for put_asset)
+
+Either `brokers`, or `host` + `port`, must be provided — at least one path to the cluster
+is required. Once `sasl_mechanism` is anything other than `"none"`, `username` and
+`password` both become required — creation is rejected if either is empty.
+
+| field | type | required | notes |
+|---|---|---|---|
+| `brokers` | string | yes* | Comma/semicolon/newline separated `host:port` list, e.g. `"kafka-0:9092,kafka-1:9092"` |
+| `host` | string | no | Single-broker fallback used only when `brokers` is omitted |
+| `port` | number | no | Used with `host` when `brokers` is omitted; no default — pass `9092` explicitly |
+| `username` | string | no* | Required when `sasl_mechanism` is not `"none"`; unused otherwise |
+| `password` | string | no* | Stored encrypted; required when `sasl_mechanism` is not `"none"`, unless `credential_id` already supplies it |
+| `client_id` | string | no | Defaults to `"opskat"` |
+| `sasl_mechanism` | string | no | `"none"` (default), `"plain"`, `"scram-sha-256"`, `"scram-sha-512"` |
+| `tls` | string | no | `"true"` to enable TLS |
+| `tls_insecure` | string | no | `"true"` to skip TLS certificate verification |
+| `tls_server_name` | string | no | TLS SNI / server name override |
+| `tls_ca_file` | string | no | Path to a CA certificate file |
+| `tls_cert_file` | string | no | Path to a client certificate file (mTLS) |
+| `tls_key_file` | string | no | Path to a client key file (mTLS) |
+| `request_timeout_seconds` | number | no | Per-request timeout override |
+| `message_preview_bytes` | number | no | Max bytes shown per message in `message browse` / `message inspect` |
+| `message_fetch_limit` | number | no | Max messages fetched per `message browse` call |
+| `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches |

@@ -771,6 +771,36 @@ func TestHandleConfirm_AllowAllGrantPatternSaving(t *testing.T) {
 	})
 }
 
+// TestHandleConfirm_UnregisteredAssetTypeApprovalItem locks the exact behavior change in
+// HandleConfirm (checker.go): the approval item's Type for an assetType with no entry in
+// permissionTypes must be the assetType itself, not the literal "exec" the old inline
+// mapping defaulted to.
+//
+// "oss" stands in for a real caller: tool_handler_ext.go's handleExecTool passes an
+// extension's declared ext.Manifest.Policies.Type straight into HandleConfirm, and that
+// type (e.g. "oss", see pkg/extension/manifest_test.go) is never going to be one of the
+// nine registered permission types. Before this fix every such approval was mislabeled
+// "EXEC" in the front end regardless of what it actually was.
+func TestHandleConfirm_UnregisteredAssetTypeApprovalItem(t *testing.T) {
+	Convey("HandleConfirm 对未注册资产类型的审批项 Type 落回原样，不是 exec", t, func() {
+		ctx, mockAsset, _ := setupPolicyTest(t)
+		asset := &asset_entity.Asset{ID: 9, Name: "oss-bucket-1", Type: "oss"}
+		mockAsset.EXPECT().Find(gomock.Any(), int64(9)).Return(asset, nil).AnyTimes()
+
+		var gotType string
+		checker := NewCommandPolicyChecker(func(_ context.Context, _ string, items []ApprovalItem) ApprovalResponse {
+			if len(items) > 0 {
+				gotType = items[0].Type
+			}
+			return ApprovalResponse{Decision: "deny"}
+		})
+
+		checker.HandleConfirm(ctx, 9, "oss", "put-object bucket/key")
+
+		So(gotType, ShouldEqual, "oss")
+	})
+}
+
 func TestCheckPermission_TypeAlias(t *testing.T) {
 	Convey("CheckPermission type alias mapping", t, func() {
 		_, mockAsset, _ := setupPolicyTest(t)

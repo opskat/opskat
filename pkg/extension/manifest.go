@@ -321,8 +321,92 @@ func (m *Manifest) validate() error {
 			return fmt.Errorf("manifest: policy group ID has invalid characters (got %q)", g.ID)
 		}
 	}
+	if err := m.validateTools(); err != nil {
+		return err
+	}
 	if err := m.validateSnippets(); err != nil {
 		return err
+	}
+	return nil
+}
+
+// supportedParamTypes 是 flag DSL 能表达的参数类型。
+// 现存两个真实 manifest 只用到 string / integer / array<string>；
+// number / boolean 一并支持（它们的转换是同一形状），object 不支持——
+// 嵌套结构走 ext_exec 的 --json 逃生口，而不是发明一套嵌套 flag 语法。
+var supportedParamTypes = map[string]bool{
+	"string": true, "integer": true, "number": true, "boolean": true, "array": true,
+}
+
+// validateTools validates tools[].parameters.
+//
+// This field was never validated — nor read by any code — before this change:
+// ext_exec's flag DSL (task 9) is its first consumer. Promoting a field that was
+// never exercised into a load-bearing contract requires giving it load-time
+// validation in the same change: otherwise a manifest that omits parameters would
+// install silently, only to surface as a runtime error that reads like a parser
+// bug the day a model actually calls the tool.
+func (m *Manifest) validateTools() error {
+	seen := make(map[string]bool, len(m.Tools))
+	for i, t := range m.Tools {
+		if t.Name == "" {
+			return fmt.Errorf("manifest: tools[%d].name is required", i)
+		}
+		if seen[t.Name] {
+			// Bridge.toolIndex is a map; a duplicate name would silently keep only one entry,
+			// and which one survives depends on iteration order.
+			return fmt.Errorf("manifest: duplicate tool name %q", t.Name)
+		}
+		seen[t.Name] = true
+
+		if t.Parameters == nil {
+			return fmt.Errorf("manifest: tools[%q].parameters is required (use {\"type\":\"object\",\"properties\":{}} for a no-arg tool)", t.Name)
+		}
+		if typ, _ := t.Parameters["type"].(string); typ != "object" {
+			return fmt.Errorf("manifest: tools[%q].parameters.type must be \"object\", got %q", t.Name, typ)
+		}
+		props, ok := t.Parameters["properties"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("manifest: tools[%q].parameters.properties must be an object", t.Name)
+		}
+		for name, raw := range props {
+			prop, ok := raw.(map[string]any)
+			if !ok {
+				return fmt.Errorf("manifest: tools[%q].parameters.properties.%s must be an object", t.Name, name)
+			}
+			typ, _ := prop["type"].(string)
+			if typ == "" {
+				return fmt.Errorf("manifest: tools[%q].parameters.properties.%s has no type", t.Name, name)
+			}
+			if !supportedParamTypes[typ] {
+				return fmt.Errorf("manifest: tools[%q].parameters.properties.%s has unsupported type %q (supported: string, integer, number, boolean, array)", t.Name, name, typ)
+			}
+			if typ == "array" {
+				rawItems, exists := prop["items"]
+				if !exists {
+					return fmt.Errorf("manifest: tools[%q].parameters.properties.%s is an array without items", t.Name, name)
+				}
+				items, ok := rawItems.(map[string]any)
+				if !ok {
+					return fmt.Errorf("manifest: tools[%q].parameters.properties.%s.items must be an object, got %T", t.Name, name, rawItems)
+				}
+				if it, _ := items["type"].(string); it != "string" {
+					return fmt.Errorf("manifest: tools[%q].parameters.properties.%s: only array<string> is supported, got array<%s>", t.Name, name, it)
+				}
+			}
+		}
+		if rawReq, exists := t.Parameters["required"]; exists {
+			req, ok := rawReq.([]any)
+			if !ok {
+				return fmt.Errorf("manifest: tools[%q].parameters.required must be an array, got %T", t.Name, rawReq)
+			}
+			for _, r := range req {
+				name, _ := r.(string)
+				if _, exists := props[name]; !exists {
+					return fmt.Errorf("manifest: tools[%q].parameters.required references undeclared property %q", t.Name, name)
+				}
+			}
+		}
 	}
 	return nil
 }

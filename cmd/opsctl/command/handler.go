@@ -25,6 +25,22 @@ func buildHandlerMap() map[string]tool.ToolHandlerFunc {
 	return m
 }
 
+// refreshesDesktopUI reports whether a successful call to toolName changed asset or
+// group data the desktop app's own UI caches — put_asset/put_group/delete_asset/
+// delete_group all do. It is a named, directly-testable predicate rather than an
+// inline `if` precisely because the inline form has no test coverage of its own: a
+// change that mutates data through opsctl (e.g. delete_asset) but is missing from
+// this list produces no failing test anywhere — the desktop just silently stops
+// refreshing after that command. See TestRefreshesDesktopUI.
+func refreshesDesktopUI(toolName string) bool {
+	switch toolName {
+	case "put_asset", "put_group", "delete_asset", "delete_group":
+		return true
+	default:
+		return false
+	}
+}
+
 func callHandler(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, toolName string, params map[string]any, decision ...*aictx.CheckResult) int {
 	handler, ok := handlers[toolName]
 	if !ok {
@@ -66,7 +82,7 @@ func callHandler(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, 
 	}
 
 	// 写操作成功后通知桌面端刷新 UI
-	if toolName == "add_asset" || toolName == "update_asset" {
+	if refreshesDesktopUI(toolName) {
 		dataDir := bootstrap.ResolvedDataDir()
 		token, tokenErr := bootstrap.ReadAuthToken(dataDir)
 		if tokenErr != nil {

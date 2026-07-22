@@ -58,16 +58,41 @@ Open interactive SSH terminal. No approval needed (human use).
 opsctl ssh web-server
 ```
 
+## help
+
+### `help <asset>`
+
+Print the command syntax and usage notes for an asset's type — the same
+documentation the AI `help` tool returns before it calls `exec` against a type
+for the first time. Read-only: never asks for approval.
+
+```bash
+opsctl help web-server
+opsctl help prod-db
+opsctl help 1
+```
+
 ## exec
 
-### `exec <asset> [--] <command>`
+### `exec <asset> [--type <type>] [--] <command>`
 
-Execute remote command via SSH with stdio piping.
+Execute a command against **any** asset type (ssh, serial, database, redis,
+mongodb, etcd, kafka, k8s, ...) — dispatch always comes from the asset's real
+type, never from a flag or verb name.
 
-**Behavior**:
-- If stdin is piped (not a terminal), data forwards to remote stdin
-- stdout/stderr pass through directly
-- Remote exit code propagated as opsctl exit code
+- **ssh** assets keep the original streaming channel: stdin piping, direct
+  stdout/stderr passthrough, and the remote exit code propagated as opsctl's
+  exit code.
+- Every other type runs through the same unified `exec` handler the AI uses
+  and returns captured output (JSON for database/redis/mongodb/etcd/kafka
+  reads; an affected-row / exit-code summary for writes). Command syntax is
+  per-type — run `opsctl help <asset>` first if you don't already know it.
+
+**Flags**:
+- `--type <type>` — Optional assertion: fails fast (before any approval
+  prompt) if the asset is not of this type. Accepts protocol aliases (e.g.
+  `sql` for `database`). Does not select dispatch — that always comes from
+  the asset's real type.
 
 **Approval flow**:
 1. Command policy check (allow-list/deny-list per asset)
@@ -79,64 +104,20 @@ opsctl exec web-server -- uptime
 opsctl exec 1 -- ls -la /var/log
 echo "data" | opsctl exec web-server -- cat
 opsctl exec web-01 -- systemctl restart nginx
-```
-
-## sql
-
-### `sql <asset> [flags] "<SQL>"`
-
-Execute SQL on a database asset (MySQL, PostgreSQL). Requires approval.
-
-**Flags**:
-- `-f <file>` — Read SQL from file instead of argument
-- `-d <database>` — Override the default database for this execution
-
-```bash
-opsctl sql prod-db "SELECT * FROM users LIMIT 10"
-opsctl sql prod-db -f migration.sql
-opsctl sql prod-db -d other_db "SHOW TABLES"
-```
-
-## redis
-
-### `redis <asset> [flags] "<command>"`
-
-Execute a Redis command on a Redis asset. Requires approval.
-
-**Flags**:
-- `-n <db>` — Override the default database number (0-15)
-
-```bash
-opsctl redis cache "GET session:abc123"
-opsctl redis cache "HGETALL user:1"
-opsctl redis cache -n 2 "KEYS user:*"
-opsctl redis cache "SET key value EX 3600"
-```
-
-## mongo
-
-### `mongo <asset> [flags] [query_json]`
-
-Execute MongoDB operations on a MongoDB asset. Requires approval.
-
-**Flags**:
-- `-o <operation>` — Operation type (default: find): find, findOne, insertOne, insertMany, updateOne, updateMany, deleteOne, deleteMany, aggregate, countDocuments
-- `-d <database>` — Database name (required)
-- `-c <collection>` — Collection name (required)
-
-**Examples**:
-
-```bash
-opsctl mongo prod-db -d mydb -c users -o find '{"filter":{"status":"active"}}'
-opsctl mongo prod-db -d mydb -c logs -o aggregate '{"pipeline":[{"$match":{"level":"error"}}]}'
-opsctl mongo prod-db -d mydb -c users -o countDocuments '{"filter":{}}'
+opsctl exec prod-db -- "SELECT * FROM users LIMIT 10"
+opsctl exec cache -- "GET session:abc123"
+opsctl exec cache --type redis -- "GET session:abc123"
+opsctl exec mongo-db -- find users --query='{"filter":{"status":"active"}}'
+opsctl exec etcd-cluster -- get /app/config --prefix
 ```
 
 ## batch
 
 ### `batch [args...]`
 
-Execute multiple commands in parallel with a single approval request. Supports exec (SSH), sql, redis, and mongo types in a single batch.
+Execute multiple commands in parallel with a single approval request.
+Dispatches every item by its asset's real type (database, redis, mongodb,
+etcd, kafka, k8s, ...), the same coverage as `exec` — not just ssh.
 
 **Input modes**:
 
@@ -146,7 +127,7 @@ echo '{"commands":[
   {"asset":"web-01","type":"exec","command":"uptime"},
   {"asset":"db-01","type":"sql","command":"SELECT 1"},
   {"asset":"cache","type":"redis","command":"PING"},
-  {"asset":"mongo-db","type":"mongo","command":"{\"operation\":\"find\",\"database\":\"mydb\",\"collection\":\"users\",\"query\":\"{}\"}"}
+  {"asset":"mongo-db","type":"mongo","command":"find users --query={\"filter\":{\"status\":\"active\"}}"}
 ]}' | opsctl batch
 ```
 
@@ -158,7 +139,7 @@ opsctl batch 'web-01:uptime' 'db-01:hostname'
 opsctl batch 'sql:db-01:SELECT 1' 'redis:cache:PING' 'web-01:uptime'
 ```
 
-**Args format**: `asset:command` (default exec) or `type:asset:command`. First `:` before a known type (`exec`/`sql`/`redis`/`mongo`) is the type separator.
+**Args format**: `asset:command` (no assertion) or `type:asset:command`. First `:` before a known type (`exec`/`sql`/`redis`/`mongo`) is the type separator. The type is now a **type assertion**, not a dispatch selector — `exec` (or no prefix) asserts nothing and dispatches on the asset's real type; `sql`/`redis`/`mongo` fail that one item fast if the resolved asset isn't actually that type. This mirrors `exec`'s `--type` flag.
 
 **Output**: JSON with per-command results:
 ```json
@@ -176,23 +157,31 @@ opsctl batch 'sql:db-01:SELECT 1' 'redis:cache:PING' 'web-01:uptime'
 
 ## create
 
+Both `create` and `update` (below) dispatch to the same `put_asset` /
+`put_group` tools the AI uses (`internal/ai/tool/tool_handlers_crud.go`) — the
+CLI surface is unchanged from before Plan C, only the tool underneath it.
+
 ### `create asset [flags]`
 
-Create a new asset (ssh, database, redis, or mongodb). Requires approval.
+Create a new asset (ssh, database, redis, mongodb, or k8s). Requires approval.
 
 **Required flags**:
 - `--name <string>` — Display name
-- `--host <string>` — Hostname or IP
-- `--username <string>` — Login username
+- `--host <string>` — Hostname or IP (not required for k8s — use `--kubeconfig`/`--kubeconfig-file` instead)
+- `--username <string>` — Login username (not required for k8s)
 
 **Optional flags**:
-- `--type <string>` — Asset type: "ssh" (default), "database", "redis", or "mongodb"
+- `--type <string>` — Asset type: "ssh" (default), "database", "redis", "mongodb", or "k8s"
 - `--port <int>` — Port number (default: auto by type — 22/3306/5432/6379/27017)
 - `--auth-type <string>` — SSH auth method: "password" or "key" (SSH type only)
 - `--driver <string>` — Database driver: "mysql" or "postgresql" (required for database type)
 - `--database <string>` — Default database name (database type)
 - `--read-only` — Enable read-only mode (database type)
-- `--ssh-asset <asset>` — SSH asset name/ID for tunnel connection (database/redis types)
+- `--kubeconfig <string>` — Kubeconfig YAML content (k8s type)
+- `--kubeconfig-file <path>` — Path to a kubeconfig YAML file (k8s type)
+- `--namespace <string>` — Default Kubernetes namespace (k8s type)
+- `--context <string>` — Kubeconfig context name (k8s type)
+- `--ssh-asset <asset>` — SSH asset name/ID for tunnel connection (database/redis/k8s types)
 - `--group-id <int>` — Group ID (0 = ungrouped)
 - `--description <string>` — Description
 - `--icon <string>` — Icon name (default: auto by type). Available icons:
@@ -209,6 +198,25 @@ opsctl create asset --type database --driver postgresql --name "Analytics" --hos
 opsctl create asset --type mongodb --name "MongoDB" --host mongo.internal --port 27017 --username admin
 opsctl create asset --type redis --name "Cache" --host redis.internal --username default
 opsctl create asset --type database --driver mysql --name "DB via SSH" --host 127.0.0.1 --username app --ssh-asset web-server
+opsctl create asset --type k8s --name "Prod Cluster" --kubeconfig-file ~/.kube/config --context prod
+```
+
+### `create group [flags]`
+
+Create a new asset group. Requires approval.
+
+**Required flags**:
+- `--name <string>` — Display name
+
+**Optional flags**:
+- `--parent-id <int>` — Parent group ID for nesting (0 = top-level)
+- `--icon <string>` — Icon name
+- `--description <string>` — Description
+- `--sort-order <int>` — Sort order within the parent; lower comes first
+
+```bash
+opsctl create group --name "Production"
+opsctl create group --name "Web Tier" --parent-id 3
 ```
 
 ## update
@@ -230,6 +238,51 @@ Update an existing asset. Only provided fields change. Requires approval.
 opsctl update asset web-server --name "New Name"
 opsctl update asset 1 --host 192.168.1.100 --port 2222
 opsctl update asset 1 --icon kubernetes
+```
+
+### `update group <group> [flags]`
+
+Update an existing asset group. Only provided fields change. Requires approval.
+
+**Optional flags**:
+- `--name <string>` — New display name
+- `--parent-id <int>` — New parent group ID (-1 = unchanged, 0 = top-level)
+- `--icon <string>` — New icon name
+- `--description <string>` — New description
+- `--sort-order <int>` — New sort order (-1 = unchanged)
+
+```bash
+opsctl update group 3 --name "Production"
+opsctl update group staging --parent-id 1
+```
+
+## delete
+
+Dispatches to the same `delete_asset` / `delete_group` tools the AI uses
+(`internal/ai/tool/tool_handlers_crud.go`). **Always requires desktop app
+confirmation — this cannot be pre-approved or granted, even with an active
+session.** Unlike `exec`/`create`/`update`, there is no "allow all" for delete.
+
+### `delete asset <asset>`
+
+Delete an asset (soft-delete; connection config is cleared).
+
+```bash
+opsctl delete asset old-server
+opsctl delete asset 1
+```
+
+### `delete group <group> [--delete-assets]`
+
+Delete a group. Assets in the group move to ungrouped by default; pass
+`--delete-assets` to delete them as well (irreversible from the app).
+
+**Flags**:
+- `--delete-assets` — Also delete every asset in this group (default: assets move to ungrouped and survive)
+
+```bash
+opsctl delete group 3
+opsctl delete group staging --delete-assets
 ```
 
 ## cp

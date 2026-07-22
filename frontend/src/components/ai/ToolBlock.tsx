@@ -11,6 +11,8 @@ import {
   XCircle,
   Shield,
   BookOpen,
+  Trash2,
+  Puzzle,
 } from "lucide-react";
 import type { ContentBlock } from "@/stores/aiStore";
 
@@ -24,6 +26,11 @@ const toolIcons: Record<string, typeof Terminal> = {
   exec: Terminal,
   help: BookOpen,
   request_permission: Shield,
+  put_asset: FilePen,
+  put_group: FilePen,
+  delete_asset: Trash2,
+  delete_group: Trash2,
+  ext_exec: Puzzle,
 };
 
 interface ToolBlockProps {

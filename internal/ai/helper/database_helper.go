@@ -60,7 +60,7 @@ func getSSHPool(ctx context.Context) *sshpool.Pool {
 // --- Executor ---
 
 // ExecSQLOnAsset 是不含权限检查的纯执行入口：权限检查由调用方（统一 exec 工具的
-// handleExec、batch_command 的预检）在调用之前完成，这里只负责连接与执行。
+// handleExec、batch_exec 的预检）在调用之前完成，这里只负责连接与执行。
 // scope 非空时覆盖资产默认配置的数据库名。
 func ExecSQLOnAsset(ctx context.Context, asset *asset_entity.Asset, sqlText, scope string) (string, error) {
 	cfg, err := asset.GetDatabaseConfig()

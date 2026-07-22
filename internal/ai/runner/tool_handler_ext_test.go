@@ -12,16 +12,16 @@ func TestPromptBuilderExtensionSkillMD(t *testing.T) {
 
 		Convey("should not include extension content by default", func() {
 			prompt := builder.Build()
-			So(prompt, ShouldNotContainSubstring, "exec_tool")
+			So(prompt, ShouldNotContainSubstring, "ext_exec")
 		})
 
 		Convey("should include SKILL.md when set", func() {
 			builder.SetExtensionSkillMDs(map[string]string{
-				"oss": "# OSS Tools\nUse exec_tool to call OSS tools.",
+				"oss": "# OSS Tools\nUse ext_exec to call OSS tools.",
 			})
 			prompt := builder.Build()
 			So(prompt, ShouldContainSubstring, "OSS Tools")
-			So(prompt, ShouldContainSubstring, "exec_tool")
+			So(prompt, ShouldContainSubstring, "ext_exec")
 		})
 	})
 }

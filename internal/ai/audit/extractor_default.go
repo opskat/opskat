@@ -1,6 +1,8 @@
 package audit
 
 import (
+	"strconv"
+
 	"github.com/opskat/opskat/internal/ai/aictx"
 )
 
@@ -10,6 +12,13 @@ import (
 // 的提取因为有自己的注册而毫发无损（TestExtractor_ExecDoesNotBorrowAnotherToolsExtractor）。
 func init() {
 	RegisterExtractor("exec", func(a map[string]any) string { return aictx.ArgString(a, "command") })
+	// "exec"'s args["command"] is the target asset type's own exec DSL, so
+	// runner.resolveAssetForAudit's canonicalize step (k8s --context/--namespace
+	// injection, etcd/mongo/kafka DSL round-trip) is meaningful for it. ext_exec below
+	// shares the same asset+command argument shape but speaks a different DSL (an
+	// extension's own invocation syntax) and must not register here — see
+	// canonicalizingTools' doc comment in extractor.go.
+	RegisterCanonicalizingTool("exec")
 	RegisterExtractor("upload_file", func(a map[string]any) string {
 		return "upload " + aictx.ArgString(a, "local_path") + " → " + aictx.ArgString(a, "remote_path")
 	})
@@ -23,7 +32,25 @@ func init() {
 		}
 		return "grant: " + v
 	})
-	RegisterExtractor("exec_tool", func(a map[string]any) string {
-		return aictx.ArgString(a, "extension") + "." + aictx.ArgString(a, "tool")
+	RegisterExtractor("ext_exec", func(a map[string]any) string { return aictx.ArgString(a, "command") })
+	RegisterExtractor("delete_asset", func(a map[string]any) string {
+		return "delete asset " + aictx.ArgString(a, "asset")
 	})
+	RegisterExtractor("delete_group", func(a map[string]any) string {
+		// id 在 args 里是数字（JSON number → float64），不是 ArgString 认得的字符串——
+		// 这里必须走 ArgInt64，否则摘要永远是 "delete group "，id 部分静默丢失。
+		s := "delete group " + strconv.FormatInt(aictx.ArgInt64(a, "id"), 10)
+		if aictx.ArgBool(a, "delete_assets") {
+			s += " (with assets)"
+		}
+		return s
+	})
+
+	// get_group/put_group/delete_group 都用 args["id"] 装分组 id——get_asset 恰好也用
+	// args["id"] 装资产 id，同一个键名在不同工具里指两种不同实体。不注册的话，
+	// WriteToolCall 的通用兜底会把分组 id 误当资产 id 去查 asset_repo，写出一条指向
+	// 无关资产的审计行（Important 4）。见 [RegisterGroupScopedTool] 的文档注释。
+	RegisterGroupScopedTool("get_group")
+	RegisterGroupScopedTool("put_group")
+	RegisterGroupScopedTool("delete_group")
 }

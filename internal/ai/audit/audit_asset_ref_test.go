@@ -140,11 +140,12 @@ func TestWriteToolCall_FallsBackToArgsWhenNotPreResolved(t *testing.T) {
 }
 
 // TestWriteToolCall_ResolvesNumericAssetRef locks the audit row's asset attribution for
-// callers that don't pre-resolve. opsctl's sql / redis / mongo subcommands resolve the
-// asset themselves and then hand the unified exec tool args["asset"]=<numeric id> — the
-// per-type tools they replaced passed args["asset_id"], so before numericAssetRef every
-// one of those audit rows silently landed with asset_id=0 and an empty asset_name.
-// Nothing errors when that happens; the row just stops being attributable.
+// callers that don't pre-resolve. opsctl's exec/batch commands resolve the asset
+// themselves and then hand the unified exec tool args["asset"]=<numeric id> — the
+// per-type tools and verbs they replaced passed args["asset_id"], so before
+// numericAssetRef every one of those audit rows silently landed with asset_id=0 and an
+// empty asset_name. Nothing errors when that happens; the row just stops being
+// attributable.
 func TestWriteToolCall_ResolvesNumericAssetRef(t *testing.T) {
 	repo := setupAuditRepo(t)
 
@@ -169,6 +170,110 @@ func TestWriteToolCall_ResolvesNumericAssetRef(t *testing.T) {
 	entry := repo.logs[0]
 	if entry.AssetID != 9 || entry.AssetName != "cache-1" {
 		t.Fatalf("got AssetID=%d AssetName=%q, want 9/cache-1", entry.AssetID, entry.AssetName)
+	}
+}
+
+// TestWriteToolCall_GroupScopedToolDoesNotMisattributeToAsset locks Important 4's fix:
+// delete_group/put_group/get_group's numeric identifier is also spelled args["id"], but
+// it names a *group*, not an asset — get_asset uses the very same key for an asset id.
+// Before the fix, WriteToolCall's generic fallback blindly read args["id"] as an asset
+// id and looked it up in asset_repo, so "delete group 3" would silently attribute to
+// whatever asset happens to have id 3 (a completely unrelated row) whenever one exists.
+// This test deliberately makes group id 3 and asset id 3 both exist, and asserts the
+// fixed fallback refuses to conflate them: no EXPECT() is set on the asset mock, so if
+// WriteToolCall ever queries it again, gomock fails the test outright.
+func TestWriteToolCall_GroupScopedToolDoesNotMisattributeToAsset(t *testing.T) {
+	repo := setupAuditRepo(t)
+
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+	origAsset := asset_repo.Asset()
+	asset_repo.RegisterAsset(mockAsset)
+	t.Cleanup(func() { asset_repo.RegisterAsset(origAsset) })
+	// Deliberately no .EXPECT() on Find: a fixed WriteToolCall must never ask asset_repo
+	// about a group-scoped tool's "id" at all.
+
+	w := NewDefaultAuditWriter()
+	w.WriteToolCall(context.Background(), ToolCallInfo{
+		ToolName: "delete_group",
+		ArgsJSON: `{"id":3,"delete_assets":false}`,
+	})
+
+	if len(repo.logs) != 1 {
+		t.Fatalf("expected 1 audit log, got %d", len(repo.logs))
+	}
+	entry := repo.logs[0]
+	if entry.AssetID != 0 || entry.AssetName != "" {
+		t.Fatalf("delete_group must not attribute to an asset, got AssetID=%d AssetName=%q "+
+			"— the group id was misread as an asset id", entry.AssetID, entry.AssetName)
+	}
+}
+
+// TestWriteToolCall_GetGroupDoesNotMisattributeToAsset extends
+// TestWriteToolCall_GroupScopedToolDoesNotMisattributeToAsset's coverage to get_group.
+// The groupScopedTools registry (extractor_default.go's init()) is pure opt-in: a tool
+// name missing from it doesn't fail to compile and doesn't turn any *other* test red —
+// before this test, get_group's registration was locked by nothing at all, so dropping
+// its RegisterGroupScopedTool("get_group") call would silently resurrect the original
+// misattribution bug for it while every other test kept passing. This pins
+// WriteToolCall's actual behavior for get_group specifically.
+func TestWriteToolCall_GetGroupDoesNotMisattributeToAsset(t *testing.T) {
+	repo := setupAuditRepo(t)
+
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+	origAsset := asset_repo.Asset()
+	asset_repo.RegisterAsset(mockAsset)
+	t.Cleanup(func() { asset_repo.RegisterAsset(origAsset) })
+	// Deliberately no .EXPECT() on Find: get_group's "id" names a group, so a correctly
+	// registered WriteToolCall must never ask asset_repo about it.
+
+	w := NewDefaultAuditWriter()
+	w.WriteToolCall(context.Background(), ToolCallInfo{
+		ToolName: "get_group",
+		ArgsJSON: `{"id":3}`,
+	})
+
+	if len(repo.logs) != 1 {
+		t.Fatalf("expected 1 audit log, got %d", len(repo.logs))
+	}
+	entry := repo.logs[0]
+	if entry.AssetID != 0 || entry.AssetName != "" {
+		t.Fatalf("get_group must not attribute to an asset, got AssetID=%d AssetName=%q "+
+			"— the group id was misread as an asset id", entry.AssetID, entry.AssetName)
+	}
+}
+
+// TestWriteToolCall_PutGroupDoesNotMisattributeToAsset is put_group's sibling of
+// TestWriteToolCall_GetGroupDoesNotMisattributeToAsset — see that test's comment for why
+// each group-scoped tool needs its own lock rather than relying on delete_group's.
+func TestWriteToolCall_PutGroupDoesNotMisattributeToAsset(t *testing.T) {
+	repo := setupAuditRepo(t)
+
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+	origAsset := asset_repo.Asset()
+	asset_repo.RegisterAsset(mockAsset)
+	t.Cleanup(func() { asset_repo.RegisterAsset(origAsset) })
+	// Deliberately no .EXPECT() on Find: put_group's "id" names a group, so a correctly
+	// registered WriteToolCall must never ask asset_repo about it.
+
+	w := NewDefaultAuditWriter()
+	w.WriteToolCall(context.Background(), ToolCallInfo{
+		ToolName: "put_group",
+		ArgsJSON: `{"id":3,"name":"renamed"}`,
+	})
+
+	if len(repo.logs) != 1 {
+		t.Fatalf("expected 1 audit log, got %d", len(repo.logs))
+	}
+	entry := repo.logs[0]
+	if entry.AssetID != 0 || entry.AssetName != "" {
+		t.Fatalf("put_group must not attribute to an asset, got AssetID=%d AssetName=%q "+
+			"— the group id was misread as an asset id", entry.AssetID, entry.AssetName)
 	}
 }
 

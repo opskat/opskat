@@ -20,6 +20,9 @@ import (
 //   - local：spec §2 明确列为非目标，另开 issue 跟踪
 //   - vnc / rdp / oss：PolicyKind 为空，下面的循环在到达豁免检查之前就已 continue，
 //     本就不在检查范围内，因此不需要（也不能通过）豁免条目——列在这里仅供交叉核对。
+//     这三个类型现在都有 doc-only 的 help 文档（RegisterHelpDoc，help_coverage_test.go
+//     的 TestEveryAssetTypeHasHelpDoc / TestDocOnlyTypesHaveNoExecutor 锁住），但仍然
+//     没有执行器——help 覆盖与 exec 覆盖是两件事，补文档不代表补执行器。
 var exemptFromExec = map[string]string{
 	"local": "spec §2 非目标：有 PolicyKind 却无 permission 注册",
 }

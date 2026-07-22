@@ -15,56 +15,81 @@ import (
 )
 
 func init() {
-	sshHelp, _ := skills.Get(asset_entity.AssetTypeSSH)
 	permission.RegisterExecutor(asset_entity.AssetTypeSSH,
 		func(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
 			return helper.ExecCommandOnAsset(ctx, asset, command, scope)
-		}, sshHelp)
+		}, mustSkillDoc(asset_entity.AssetTypeSSH))
 
-	serialHelp, _ := skills.Get(asset_entity.AssetTypeSerial)
 	permission.RegisterExecutor(asset_entity.AssetTypeSerial,
 		func(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
 			return helper.ExecSerialOnAsset(ctx, asset, command, scope)
-		}, serialHelp)
+		}, mustSkillDoc(asset_entity.AssetTypeSerial))
 	// serial 没有可规范化的命令，所以用 precheck 而不是 canonicalize 达到同一个目的：
 	// 见 helper.PrecheckSerialSession 的注释，以及下面 canonicalizeK8sCommand 的注释。
 	permission.RegisterPrecheck(asset_entity.AssetTypeSerial, helper.PrecheckSerialSession)
 
-	databaseHelp, _ := skills.Get(asset_entity.AssetTypeDatabase)
 	permission.RegisterExecutor(asset_entity.AssetTypeDatabase,
 		func(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
 			return helper.ExecSQLOnAsset(ctx, asset, command, scope)
-		}, databaseHelp)
+		}, mustSkillDoc(asset_entity.AssetTypeDatabase))
 
-	redisHelp, _ := skills.Get(asset_entity.AssetTypeRedis)
 	permission.RegisterExecutor(asset_entity.AssetTypeRedis,
 		func(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
 			return helper.ExecRedisOnAsset(ctx, asset, command, scope)
-		}, redisHelp)
+		}, mustSkillDoc(asset_entity.AssetTypeRedis))
 
-	k8sHelp, _ := skills.Get(asset_entity.AssetTypeK8s)
 	permission.RegisterExecutor(asset_entity.AssetTypeK8s,
 		func(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
 			return helper.ExecK8sOnAsset(ctx, asset, command, scope)
-		}, k8sHelp, canonicalizeK8sCommand)
+		}, mustSkillDoc(asset_entity.AssetTypeK8s), canonicalizeK8sCommand)
 
-	etcdHelp, _ := skills.Get(asset_entity.AssetTypeEtcd)
 	permission.RegisterExecutor(asset_entity.AssetTypeEtcd,
 		func(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
 			return helper.ExecEtcdOnAsset(ctx, asset, command, scope)
-		}, etcdHelp, helper.CanonicalizeEtcdCommand)
+		}, mustSkillDoc(asset_entity.AssetTypeEtcd), helper.CanonicalizeEtcdCommand)
 
-	mongoHelp, _ := skills.Get(asset_entity.AssetTypeMongoDB)
 	permission.RegisterExecutor(asset_entity.AssetTypeMongoDB,
 		func(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
 			return helper.ExecMongoOnAsset(ctx, asset, command, scope)
-		}, mongoHelp, helper.CanonicalizeMongoCommand)
+		}, mustSkillDoc(asset_entity.AssetTypeMongoDB), helper.CanonicalizeMongoCommand)
 
-	kafkaHelp, _ := skills.Get(asset_entity.AssetTypeKafka)
 	permission.RegisterExecutor(asset_entity.AssetTypeKafka,
 		func(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
 			return helper.ExecKafkaOnAsset(ctx, asset, command, scope)
-		}, kafkaHelp, helper.CanonicalizeKafkaCommand)
+		}, mustSkillDoc(asset_entity.AssetTypeKafka), helper.CanonicalizeKafkaCommand)
+
+	// 没有命令面、但可以被 put_asset 创建/更新的类型：只注册文档。
+	// exec 对它们仍然报 "no exec support yet"（RegisteredExecTypes 会跳过 exec == nil 的条目）。
+	for _, docOnly := range []string{
+		asset_entity.AssetTypeRDP,
+		asset_entity.AssetTypeVNC,
+		asset_entity.AssetTypeOSS,
+		asset_entity.AssetTypeLocal,
+	} {
+		permission.RegisterHelpDoc(docOnly, mustSkillDoc(docOnly))
+	}
+}
+
+// mustSkillDoc 返回某资产类型内嵌的 SKILL.md 正文，缺失时直接 panic。
+//
+// 这是本文件所有 12 处注册（8 个 exec 类型 + 4 个 doc-only 类型）取 help 文档的唯一
+// 入口，取代了曾经的 `doc, _ := skills.Get(assetType)`——8 处 exec 类型全部丢弃了
+// skills.Get 的第二个返回值，SKILL.md 缺失时会静默把一个空字符串喂给
+// permission.RegisterExecutor：HelpFor 依然返回 ("", true)（entry 存在，只是内容为
+// 空），help_coverage_test.go 的 TestEveryAssetTypeHasHelpDoc 只检查 ok、不检查内容，
+// 于是测试保持全绿，模型却拿不到任何用法文档。
+//
+// 文档缺失本身是编译期就能发现的接线错误（SKILL.md 是 //go:embed 进来的），因此这里
+// panic 而不是把空字符串传下去——permission.RegisterExecutor / RegisterHelpDoc 也各自
+// 对 help == "" 兜底一次（属于该包自身的不变式），但那道防线不能替代这里：如果这里继续
+// 丢弃 ok，两道防线中只有第二道生效，第一道形同虚设，且首次触发时的 panic 信息
+// （"permission: invalid executor registration"）不会点名是哪个资产类型、哪个文件缺失。
+func mustSkillDoc(assetType string) string {
+	doc, ok := skills.Get(assetType)
+	if !ok {
+		panic("execimpl: missing SKILL.md for asset type " + assetType)
+	}
+	return doc
 }
 
 // canonicalizeK8sCommand 把原始 kubectl 命令规范化为注入 --context/--namespace 之后的
