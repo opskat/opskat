@@ -2,12 +2,15 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
 
 	"go.uber.org/mock/gomock"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
@@ -198,5 +201,204 @@ func TestHandleBatch_EmptyTypeIsNoAssertion(t *testing.T) {
 	}
 	if env.execCalls["cache-1"] != 1 {
 		t.Errorf("redis item without type must execute, got %d calls", env.execCalls["cache-1"])
+	}
+}
+
+// TestHandleBatch_SerialPrecheckBlocksApprovalDialog is handleBatchCommand's counterpart to
+// TestHandleExec_SerialPrecheckBlocksApprovalDialog (tool_handlers_unified_test.go): a serial
+// asset with no active session must be denied by permission.PrecheckFor before the item ever
+// reaches the permission check — no approval dialog, no execution. Serial could not reach
+// handleBatchCommand at all before the type-string-selector → optional-assertion rewrite (the
+// old three-way switch had no serial branch); this is the test that locks the ordering the
+// rewrite had to add at the same time it made serial reachable, to avoid the same
+// double-failure handleExec already guards against: approve first, then discover there's no
+// session to run the command on.
+func TestHandleBatch_SerialPrecheckBlocksApprovalDialog(t *testing.T) {
+	m := setupUnified(t)
+	asset := &asset_entity.Asset{ID: 11, Name: "console-1", Type: asset_entity.AssetTypeSerial}
+	m.EXPECT().FindByName(gomock.Any(), "console-1").Return([]*asset_entity.Asset{asset}, nil).AnyTimes()
+	m.EXPECT().Find(gomock.Any(), int64(11)).Return(asset, nil).AnyTimes()
+
+	var execCalls int
+	replaceExecutorForTest(t, asset_entity.AssetTypeSerial, func(_ context.Context, _ *asset_entity.Asset, _, _ string) (string, error) {
+		execCalls++
+		return "ok", nil
+	})
+
+	var confirmCalled bool
+	confirm := func(_ context.Context, _ string, _ []permission.ApprovalItem) permission.ApprovalResponse {
+		confirmCalled = true
+		return permission.ApprovalResponse{Decision: "allow"}
+	}
+	checker := permission.NewCommandPolicyChecker(confirm)
+
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	ctx = permission.WithPolicyChecker(ctx, checker)
+	// Pre-mark the gate documented so this test isolates the precheck: without that, the
+	// item would be denied by the doc gate before ever reaching the precheck, and this test
+	// wouldn't prove anything about precheck-vs-permission-check ordering.
+	GetDocGate(ctx).MarkDocumented(aictx.GetConversationID(ctx), asset_entity.AssetTypeSerial)
+	ctx = helper.WithSerialManager(ctx, noSessionSerialManager{})
+
+	out, err := handleBatchCommand(ctx, map[string]any{
+		"commands": `[{"asset":"console-1","command":"display version"}]`,
+	})
+	if err != nil {
+		t.Fatalf("handleBatchCommand must not fail the whole batch for one denied item: %v", err)
+	}
+	if execCalls != 0 {
+		t.Errorf("serial item without an active session must not execute, got %d calls", execCalls)
+	}
+	if confirmCalled {
+		t.Fatal("an approval dialog fired for a session-less serial asset — the precheck " +
+			"must deny it before the permission check ever runs")
+	}
+	if !strings.Contains(out, "no active serial session") {
+		t.Errorf("result must carry the precheck's reason, got %s", out)
+	}
+}
+
+// TestHandleBatch_UndocumentedTypeDeniesWithoutExecutingOrConfirming is handleBatchCommand's
+// counterpart to TestHandleExec_UndocumentedTypeReturnsGuidance: an item whose asset type the
+// model hasn't called help() for yet must be denied before the permission check — no approval
+// dialog — and the denial message must be execGuidance's wording (the same guidance handleExec
+// gives, so the model can self-correct in the same turn: call help, then retry).
+//
+// Without this gate, batch_exec is a bypass for the entire doc-gate mechanism: a model could
+// execute a type sight-unseen through batch even though the single-command exec path would
+// have refused and told it to read the docs first.
+func TestHandleBatch_UndocumentedTypeDeniesWithoutExecutingOrConfirming(t *testing.T) {
+	env := setupBatch(t)
+
+	var confirmCalled bool
+	confirm := func(_ context.Context, _ string, _ []permission.ApprovalItem) permission.ApprovalResponse {
+		confirmCalled = true
+		return permission.ApprovalResponse{Decision: "allow"}
+	}
+	checker := permission.NewCommandPolicyChecker(confirm)
+	ctx := permission.WithPolicyChecker(env.ctx, checker)
+	ctx = WithDocGate(ctx, NewDocGate()) // fresh gate — nothing marked documented yet
+
+	// SET, not GET/PING: redis's built-in read-only allowlist would resolve a read straight
+	// to Allow and never touch the confirm callback, making *confirmCalled vacuously false
+	// regardless of whether the gate check actually ran first (same trap documented on
+	// newRecordingChecker in tool_handlers_unified_test.go, and on setupBatch above).
+	out, err := handleBatchCommand(ctx, map[string]any{
+		"commands": `[{"asset":"cache-1","command":"SET foo bar"}]`,
+	})
+	if err != nil {
+		t.Fatalf("handleBatchCommand must not fail the whole batch for one denied item: %v", err)
+	}
+	if env.execCalls["cache-1"] != 0 {
+		t.Errorf("undocumented-type item must not execute, got %d calls", env.execCalls["cache-1"])
+	}
+	if confirmCalled {
+		t.Fatal("an approval dialog fired for a type the model hasn't called help() for — " +
+			"the doc gate must deny it before the permission check ever runs")
+	}
+	// out is the JSON-marshaled result, so execGuidance's embedded double quotes come back
+	// backslash-escaped (`\"cache-1\"`), not literal (`"cache-1"`).
+	if !strings.Contains(out, `call help(asset=\"cache-1\")`) {
+		t.Errorf("result must carry execGuidance's wording, got %s", out)
+	}
+	if !strings.Contains(out, "type=redis") {
+		t.Errorf("guidance must name the resolved type, got %s", out)
+	}
+}
+
+// TestHandleBatch_CanonicalizeChecksCanonicalExecutesRaw table-drives the invariant
+// handleExec's ordering comment states for steps 8/9 (tool_handlers_unified.go): the
+// permission check must see the canonicalized command; the executor must see the raw one.
+// batch_exec dispatches through the same permission.CanonicalizeFor/ExecutorFor pair
+// (tool_handler_batch.go's checkCommand/executeBatchItem), so it is exactly as easy to get
+// backwards there — feed the executor the canonicalized (lossy) string, or feed the policy
+// check the raw (unmatchable) one — and there was no batch-level test locking it before this
+// one.
+//
+// Kafka and etcd are the only two batch-eligible types registered with a CanonicalizeFunc
+// (execimpl/register.go: canonicalizeK8sCommand is the third, but k8s isn't used here because
+// its canonicalization needs a configured kubeconfig to reach CheckForAsset, which would
+// couple this test to k8s config plumbing it doesn't need). Every other type's checkCommand
+// equals its raw command, so only kafka/etcd can distinguish "fed the executor the check
+// string" from "fed it the raw string" at all — a test built on any other type would pass
+// vacuously even if that swap happened.
+func TestHandleBatch_CanonicalizeChecksCanonicalExecutesRaw(t *testing.T) {
+	cases := []struct {
+		name         string
+		assetType    string
+		assetID      int64
+		assetName    string
+		rawCommand   string
+		wantCheckCmd string
+	}{
+		{
+			// Mirrors TestHandleExec_KafkaChecksTwoTokenPolicyString's fixture (same
+			// package, tool_handlers_unified_kafka_test.go): "topic create" is deliberately
+			// far from its two-token policy string (spacing, target, two flags) so a
+			// canonicalization bug can't coincidentally produce matching text on both sides.
+			name:         "kafka",
+			assetType:    asset_entity.AssetTypeKafka,
+			assetID:      401,
+			assetName:    "kafka-1",
+			rawCommand:   "topic   create   orders --partitions=3 --replication-factor=2",
+			wantCheckCmd: "topic.create orders",
+		},
+		{
+			// etcd_svc.ParseCommand lowercases the op; FormatCommand renders it back
+			// lowercase. Upper-casing "PUT" in the raw command is what makes the raw and
+			// canonical strings byte-different without changing what the command does.
+			name:         "etcd",
+			assetType:    asset_entity.AssetTypeEtcd,
+			assetID:      402,
+			assetName:    "etcd-1",
+			rawCommand:   "PUT mykey myvalue",
+			wantCheckCmd: "put mykey myvalue",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := setupUnified(t)
+
+			var gotExecCommand string
+			replaceExecutorForTest(t, tc.assetType, func(_ context.Context, _ *asset_entity.Asset, command, _ string) (string, error) {
+				gotExecCommand = command
+				return "ok", nil
+			})
+
+			asset := &asset_entity.Asset{ID: tc.assetID, Name: tc.assetName, Type: tc.assetType}
+			m.EXPECT().FindByName(gomock.Any(), tc.assetName).Return([]*asset_entity.Asset{asset}, nil).AnyTimes()
+			m.EXPECT().Find(gomock.Any(), tc.assetID).Return(asset, nil).AnyTimes()
+
+			var gotCheckCommand string
+			confirm := func(_ context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
+				if len(items) > 0 {
+					gotCheckCommand = items[0].Command
+				}
+				// "allow", not "deny": the raw-vs-canonical assertion on the executor side
+				// needs the item to actually reach executeBatchItem. A "deny" response would
+				// still exercise the check-string capture above but never call the executor,
+				// leaving gotExecCommand permanently empty and the second assertion vacuous.
+				return permission.ApprovalResponse{Decision: "allow"}
+			}
+			checker := permission.NewCommandPolicyChecker(confirm)
+			ctx := permission.WithPolicyChecker(context.Background(), checker)
+
+			cmdJSON, err := json.Marshal([]batchCommandItem{{Asset: tc.assetName, Command: tc.rawCommand}})
+			if err != nil {
+				t.Fatalf("marshal commands: %v", err)
+			}
+
+			if _, err := handleBatchCommand(ctx, map[string]any{"commands": string(cmdJSON)}); err != nil {
+				t.Fatalf("handleBatchCommand: %v", err)
+			}
+
+			if gotCheckCommand != tc.wantCheckCmd {
+				t.Errorf("permission check saw %q, want the canonicalized form %q", gotCheckCommand, tc.wantCheckCmd)
+			}
+			if gotExecCommand != tc.rawCommand {
+				t.Errorf("executor saw %q, want the raw command %q — the canonicalized form must never reach exec", gotExecCommand, tc.rawCommand)
+			}
+		})
 	}
 }

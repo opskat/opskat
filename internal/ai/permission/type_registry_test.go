@@ -42,3 +42,46 @@ func TestPermissionTypeRegistry(t *testing.T) {
 	_, ok := permissionTypeFor("unknown")
 	assert.False(t, ok)
 }
+
+// TestApprovalTypeFor locks the two branches of ApprovalTypeFor: registered types (and
+// their protocol aliases) resolve to the handler's approvalType, exactly like
+// permissionTypeFor; unregistered types fall back to the input unchanged — NOT to the
+// literal "exec" that HandleConfirm used to hardcode as its zero value
+// (internal/ai/permission/checker.go, Important 2 in the review this test backs).
+//
+// The unregistered-type case is not a hypothetical: extensions declare an arbitrary
+// Policies.Type in their manifest (e.g. "oss", see pkg/extension/manifest_test.go) and
+// tool_handler_ext.go's handleExecTool calls checker.HandleConfirm with it directly — that
+// type is never going to be in permissionTypes. Falling back to "exec" would show an "OSS"
+// approval as an "EXEC" badge in the front end (ApprovalBlock.tsx's TypeBadge), which is
+// actively misleading about what is being approved; falling back to the type itself just
+// shows an unstyled-but-honest "OSS" badge (TypeBadge defaults to a generic icon for
+// unknown types, it does not error).
+func TestApprovalTypeFor(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"ssh canonical", asset_entity.AssetTypeSSH, "exec"},
+		{"ssh alias exec", "exec", "exec"},
+		{"serial canonical", asset_entity.AssetTypeSerial, "serial"},
+		{"database canonical", asset_entity.AssetTypeDatabase, "sql"},
+		{"database alias sql", "sql", "sql"},
+		{"redis canonical", asset_entity.AssetTypeRedis, "redis"},
+		{"etcd canonical", asset_entity.AssetTypeEtcd, "etcd"},
+		{"mongodb canonical", asset_entity.AssetTypeMongoDB, "mongo"},
+		{"mongodb alias mongo", "mongo", "mongo"},
+		{"kafka canonical", asset_entity.AssetTypeKafka, "kafka"},
+		{"k8s canonical", asset_entity.AssetTypeK8s, "k8s"},
+		{"cp grant tool", GrantToolCp, "cp"},
+		{"unregistered type falls back to itself, not exec", "oss", "oss"},
+		{"unregistered arbitrary string", "unknown-thing", "unknown-thing"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, ApprovalTypeFor(tt.input))
+		})
+	}
+}
