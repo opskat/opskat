@@ -75,7 +75,7 @@ func handleExecTool(ctx context.Context, args map[string]any) (string, error) {
 
 	if ext.Manifest.Policies.Type != "" {
 		if assetID <= 0 {
-			return "", fmt.Errorf("exec_tool: %s.%s requires asset_id (extension declares policy type %q)",
+			return "", fmt.Errorf("ext_exec: %s.%s requires asset (extension declares policy type %q)",
 				extName, toolName, ext.Manifest.Policies.Type)
 		}
 		action, _, err := ext.Plugin.CheckPolicy(ctx, toolName, argsJSON)
@@ -86,7 +86,7 @@ func handleExecTool(ctx context.Context, args map[string]any) (string, error) {
 			result := policy.CheckExtensionPolicy(ctx, policyGroups, action)
 			switch result.Decision {
 			case aictx.Deny:
-				return "", fmt.Errorf("exec_tool: policy denied: %s", result.Message)
+				return "", fmt.Errorf("ext_exec: policy denied: %s", result.Message)
 			case aictx.NeedConfirm:
 				// 这里不接受 permission.WithPreapproved 那条豁免：扩展策略的确认没有
 				// opsctl 侧的等价物（requireApproval 查的是内置类型的策略 / Grant，
@@ -95,11 +95,11 @@ func handleExecTool(ctx context.Context, args map[string]any) (string, error) {
 				// 需要用户点头的扩展调用静默放行。
 				checker, err := permission.RequireChecker(ctx)
 				if err != nil {
-					return "", fmt.Errorf("exec_tool: %s.%s needs confirmation but %w", extName, toolName, err)
+					return "", fmt.Errorf("ext_exec: %s.%s needs confirmation but %w", extName, toolName, err)
 				}
 				confirmResult := checker.HandleConfirm(ctx, assetID, ext.Manifest.Policies.Type, extName+"."+toolName)
 				if confirmResult.Decision != aictx.Allow {
-					return "", fmt.Errorf("exec_tool: user denied: %s.%s", extName, toolName)
+					return "", fmt.Errorf("ext_exec: user denied: %s.%s", extName, toolName)
 				}
 			}
 		}
@@ -107,7 +107,7 @@ func handleExecTool(ctx context.Context, args map[string]any) (string, error) {
 
 	result, err := ext.Plugin.CallTool(ctx, toolName, argsJSON)
 	if err != nil {
-		return "", fmt.Errorf("exec_tool: %s.%s failed: %w", extName, toolName, err)
+		return "", fmt.Errorf("ext_exec: %s.%s failed: %w", extName, toolName, err)
 	}
 
 	return string(result), nil

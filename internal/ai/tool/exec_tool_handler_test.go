@@ -114,7 +114,7 @@ func TestExecToolHandler(t *testing.T) {
 			execToolExecutor = &mockExtToolExecutor{ext: ext, def: def, defOK: true}
 
 			out, err := handleExecTool(t.Context(), map[string]any{"command": "oss noop"})
-			// 没有资产也没有被拦下（没有 "requires asset_id" 之类的错误），调用直接
+			// 没有资产也没有被拦下（没有 "requires asset" 之类的错误），调用直接
 			// 放行到执行——空 Policies.Type 确实完全跳过了策略检查。
 			So(err, ShouldBeNil)
 			So(out, ShouldEqual, "")
