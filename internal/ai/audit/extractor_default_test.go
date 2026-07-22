@@ -45,6 +45,26 @@ func TestExtractor_ExecDoesNotBorrowAnotherToolsExtractor(t *testing.T) {
 	assert.Equal(t, "uptime", got, "exec must have its own registration, not borrow another tool's")
 }
 
+// TestExtractor_DeleteAsset 锁住 delete_asset 的摘要提取：直接读 args["asset"]。
+func TestExtractor_DeleteAsset(t *testing.T) {
+	got := ExtractCommandForAudit("delete_asset", map[string]any{"asset": "web-9"})
+	assert.Equal(t, "delete asset web-9", got)
+}
+
+// TestExtractor_DeleteGroup 锁住 delete_group 的摘要提取，覆盖 delete_assets 为
+// true/false 两种情况。args["id"] 在真实调用里是 JSON number（解码成 float64），不是
+// ArgString 认得的字符串——实施者写这个提取器时就踩过这个坑：用 ArgString(a, "id")
+// 会静默拿到空串，摘要永远是 "delete group "，id 部分整个消失，而且不报错，测试也
+// 不会因为编译失败而拦住它。这条测试就是钉住那个具体回归的锁。
+func TestExtractor_DeleteGroup(t *testing.T) {
+	got := ExtractCommandForAudit("delete_group", map[string]any{"id": float64(3)})
+	assert.Equal(t, "delete group 3", got)
+
+	gotWithAssets := ExtractCommandForAudit("delete_group",
+		map[string]any{"id": float64(3), "delete_assets": true})
+	assert.Equal(t, "delete group 3 (with assets)", gotWithAssets)
+}
+
 // TestUnregisterExtractorForTest_Restores 锁住辅助函数自身：它若还原不干净，
 // 上面那个测试就会污染同包其他用例，而污染的表现是别处莫名其妙地失败。
 // The subject is "exec" — a name that is actually registered. It used to be
