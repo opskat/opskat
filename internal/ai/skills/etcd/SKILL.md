@@ -55,7 +55,7 @@ description: "Read and write etcd keys via exec, using an etcdctl-like command s
 
 | field | type | required | notes |
 |---|---|---|---|
-| `endpoints` | string | yes | Comma/semicolon/newline separated etcd endpoint list, e.g. `"http://10.0.1.5:2379,http://10.0.1.6:2379"` |
+| `endpoints` | string | yes | Comma/semicolon/newline separated `host:port` list, no scheme prefix — each entry is parsed with `net.SplitHostPort`, so `http://`/`https://` fails with "too many colons in address": e.g. `"10.0.1.5:2379,10.0.1.6:2379"` |
 | `username` | string | no | |
 | `password` | string | no | Stored encrypted; never echoed back |
 | `tls` | string | no | `"true"` to enable TLS |
