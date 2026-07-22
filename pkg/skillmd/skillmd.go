@@ -35,6 +35,10 @@ type Skill struct {
 func Parse(raw string) (Skill, error) {
 	raw = strings.ReplaceAll(raw, "\r\n", "\n")
 	if !strings.HasPrefix(raw, "---\n") {
+		if looksLikeFrontmatterAttempt(raw) {
+			return Skill{}, fmt.Errorf(
+				"frontmatter opening delimiter must be exactly %q as the first line, with no leading blank line and no trailing characters", "---")
+		}
 		return Skill{}, ErrNoFrontmatter
 	}
 	rest := raw[len("---\n"):]
@@ -62,4 +66,30 @@ func Parse(raw string) (Skill, error) {
 		return Skill{}, fmt.Errorf("frontmatter has no description")
 	}
 	return s, nil
+}
+
+// looksLikeFrontmatterAttempt reports whether raw's first non-blank line, once
+// trailing whitespace is trimmed, is exactly "---" -- i.e. whether the author
+// clearly tried to open a frontmatter block, even though the input doesn't
+// match the strict "---\n" prefix Parse requires (a stray leading blank line,
+// or trailing whitespace after the delimiter, are the two shapes this guards
+// against). Both are easy to introduce via copy/paste or editor
+// auto-formatting, and the underlying frontmatter can otherwise be entirely
+// well-formed.
+//
+// This exists so such input hard-fails instead of falling through to
+// ErrNoFrontmatter: at the pkg/extension boundary that sentinel means
+// "nothing was attempted, tolerate it and use the whole document as body" --
+// which would silently fold a near-miss frontmatter block into the body and
+// inject it into the system prompt as raw noise, exactly the failure mode
+// pkg/skillmd exists to avoid.
+func looksLikeFrontmatterAttempt(raw string) bool {
+	for _, line := range strings.Split(raw, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		return trimmed == "---"
+	}
+	return false
 }
