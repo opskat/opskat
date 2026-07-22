@@ -126,7 +126,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                 ) : (
                   <>
                     <TypeBadge type={item.type} />
-                    {item.asset_name && <span className="text-xs text-warning">{item.asset_name}</span>}
+                    {scopeName(item) && <span className="text-xs text-warning">{scopeName(item)}</span>}
                   </>
                 )}
               </div>
@@ -147,14 +147,19 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                   </code>
                 </div>
               )}
-              {item.detail && (
-                <details className="text-[10px] text-muted-foreground/80">
-                  <summary className="cursor-pointer select-none">{t(detailSummaryKey(item.type))}</summary>
-                  <pre className="mt-1.5 max-h-48 overflow-auto rounded bg-warning/5 px-2 py-1.5 font-mono whitespace-pre-wrap break-all">
-                    {item.detail}
-                  </pre>
-                </details>
-              )}
+              {item.detail &&
+                (kind === "delete" ? (
+                  // 删除不可逆：警告不能藏在一次点击之后，常驻展示而不是 <details> 折叠。
+                  <div className="text-[10px] text-muted-foreground/80">
+                    <div className="select-none">{t(detailSummaryKey(item.type))}</div>
+                    <DetailPre text={item.detail} />
+                  </div>
+                ) : (
+                  <details className="text-[10px] text-muted-foreground/80">
+                    <summary className="cursor-pointer select-none">{t(detailSummaryKey(item.type))}</summary>
+                    <DetailPre text={item.detail} />
+                  </details>
+                ))}
             </div>
           )
         )}
@@ -301,6 +306,23 @@ function detailSummaryKey(type: string): string {
   }
 }
 
+function DetailPre({ text }: { text: string }) {
+  return (
+    <pre className="mt-1.5 max-h-48 overflow-auto rounded bg-warning/5 px-2 py-1.5 font-mono whitespace-pre-wrap break-all">
+      {text}
+    </pre>
+  );
+}
+
+// asset_name 优先，退回 group_name——删除分组等以 group 为目标的操作没有 asset_id，
+// 只有 group_id/group_name（handleDeleteGroup 就是这样填的）。ScopeBadge 的 asset/group
+// 回退分支复用同一份逻辑，避免第三份判断分叉。
+function scopeName(item: { asset_id: number; asset_name: string; group_id?: number; group_name?: string }): string {
+  if (item.asset_id > 0) return item.asset_name;
+  if (item.group_id && item.group_id > 0) return item.group_name || "";
+  return "";
+}
+
 function TypeBadge({ type, compact }: { type: string; compact?: boolean }) {
   const icons: Record<string, typeof Terminal> = {
     exec: Terminal,
@@ -347,7 +369,7 @@ function ScopeBadge({
     return (
       <span className={cls}>
         <Server className="h-[11px] w-[11px]" />
-        {item.asset_name}
+        {scopeName(item)}
       </span>
     );
   }
@@ -355,7 +377,7 @@ function ScopeBadge({
     return (
       <span className={cls}>
         <FolderOpen className="h-[11px] w-[11px]" />
-        {item.group_name}
+        {scopeName(item)}
       </span>
     );
   }
