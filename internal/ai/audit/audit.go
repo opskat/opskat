@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -43,7 +44,9 @@ type ToolCallInfo struct {
 	// 权限检查审计，直接依赖会成环），所以解析放在同时依赖两者、且能拿到 ctx 的
 	// runner.auditMiddleware 里，在 c.Next() 之前完成，结果通过这两个字段传进来。
 	// 零值表示调用方没有预先解析，走 args 解析路径（opsctl 是这条路径：它自己
-	// resolveAsset 之后传的是数字 id，numericAssetRef 认得）。
+	// resolveAsset 之后传的是数字 id，numericAssetRef 认得）。args["id"] 这一档
+	// 对注册过 [RegisterGroupScopedTool] 的工具名不生效——那些工具的 "id" 命名的是
+	// 分组，不是资产，见该函数的文档注释。
 	AssetID   int64
 	AssetName string
 
@@ -66,6 +69,35 @@ type AuditWriter interface {
 	WriteToolCall(ctx context.Context, info ToolCallInfo)
 }
 
+// groupScopedTools 记录哪些工具的数字 args["id"] 命名的是**分组**而不是资产。
+//
+// get_asset 也用 args["id"] 装资产 id（同一个参数名，不同工具里指两种不同实体）——
+// WriteToolCall 光看参数名分不清"这个 3 是资产 3 还是分组 3"。get_group/put_group/
+// delete_group 在自己的 init() 里把工具名注册进这张表（见 extractor_default.go），
+// WriteToolCall 只查表，不按工具名 switch/if-else（AGENTS.md 禁止在共享代码里按类型/
+// 名字分支；这与同文件已有的 RegisterExtractor 是同一种"注册而不是分支"的解法）。
+//
+// 只做到"不误判"：audit_logs 目前没有 group_id/group_name 列，把分组归属真正记下来
+// 需要加列（迁移 + 实体 + 前端渲染），超出了这里要修的问题范围——修复后这些工具的
+// 审计行 asset_id/asset_name 就是空，而不是编造一个恰好同 id 的无关资产。
+var (
+	groupScopedMu    sync.RWMutex
+	groupScopedTools = map[string]bool{}
+)
+
+// RegisterGroupScopedTool 把 toolName 标记为"分组作用域"。
+func RegisterGroupScopedTool(toolName string) {
+	groupScopedMu.Lock()
+	defer groupScopedMu.Unlock()
+	groupScopedTools[toolName] = true
+}
+
+func isGroupScopedTool(toolName string) bool {
+	groupScopedMu.RLock()
+	defer groupScopedMu.RUnlock()
+	return groupScopedTools[toolName]
+}
+
 // DefaultAuditWriter 默认审计日志写入实现
 type DefaultAuditWriter struct{}
 
@@ -85,7 +117,7 @@ func (w *DefaultAuditWriter) WriteToolCall(ctx context.Context, info ToolCallInf
 	assetName := info.AssetName
 	if assetID == 0 {
 		assetID = aictx.ArgInt64(args, "asset_id")
-		if assetID == 0 {
+		if assetID == 0 && !isGroupScopedTool(info.ToolName) {
 			assetID = aictx.ArgInt64(args, "id")
 		}
 		if assetID == 0 {

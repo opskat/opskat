@@ -40,4 +40,12 @@ func init() {
 		}
 		return s
 	})
+
+	// get_group/put_group/delete_group 都用 args["id"] 装分组 id——get_asset 恰好也用
+	// args["id"] 装资产 id，同一个键名在不同工具里指两种不同实体。不注册的话，
+	// WriteToolCall 的通用兜底会把分组 id 误当资产 id 去查 asset_repo，写出一条指向
+	// 无关资产的审计行（Important 4）。见 [RegisterGroupScopedTool] 的文档注释。
+	RegisterGroupScopedTool("get_group")
+	RegisterGroupScopedTool("put_group")
+	RegisterGroupScopedTool("delete_group")
 }
