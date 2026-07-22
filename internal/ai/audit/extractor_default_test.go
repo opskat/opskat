@@ -51,6 +51,32 @@ func TestExtractor_DeleteAsset(t *testing.T) {
 	assert.Equal(t, "delete asset web-9", got)
 }
 
+// TestGroupScopedTools_Exhaustive 锁住 groupScopedTools 的**完整**成员，而不只是"这三个
+// 名字都在表里"。isGroupScopedTool 式的单点检查能抓住"该注册而漏注册"，但抓不住反过来
+// 的漂移：extractor_default.go 的 init() 里少了一行 RegisterGroupScopedTool 调用（比如
+// 重构时手滑删掉），既不会编译失败，也不会让除了该工具自己那条锁定测试之外的任何测试
+// 变红——TestWriteToolCall_GetGroupDoesNotMisattributeToAsset 只锁 get_group，
+// ...PutGroupDoesNotMisattributeToAsset 只锁 put_group，两者互不覆盖对方。把整张表与一份
+// 显式清单做集合相等比较，任何增删都会在这里产生一处显眼的 diff，供评审注意——
+// 与 internal/ai/tool/tools_test.go 的注册表穷尽性断言是同一种解法（该文件的注释解释了
+// 为什么 ShouldContainKey 抓不住"多注册了一个没人知道的"）。
+func TestGroupScopedTools_Exhaustive(t *testing.T) {
+	expected := map[string]bool{
+		"get_group":    true,
+		"put_group":    true,
+		"delete_group": true,
+	}
+
+	groupScopedMu.RLock()
+	got := make(map[string]bool, len(groupScopedTools))
+	for name, v := range groupScopedTools {
+		got[name] = v
+	}
+	groupScopedMu.RUnlock()
+
+	assert.Equal(t, expected, got)
+}
+
 // TestExtractor_DeleteGroup 锁住 delete_group 的摘要提取，覆盖 delete_assets 为
 // true/false 两种情况。args["id"] 在真实调用里是 JSON number（解码成 float64），不是
 // ArgString 认得的字符串——实施者写这个提取器时就踩过这个坑：用 ArgString(a, "id")

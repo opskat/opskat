@@ -119,11 +119,6 @@ func (r *fakeAssetRepo) Delete(_ context.Context, id int64) error {
 // TestHandleDeleteGroup_DefaultsToMovingAssetsOut pass while only ever checking the
 // asset still existed, never that it actually left the deleted group — a regression
 // that forgot to move assets out would have gone undetected.
-// MoveToGroup mirrors asset_repo.assetRepo.MoveToGroup (internal/repository/asset_repo/asset.go):
-// every asset currently in fromGroupID moves to toGroupID. A no-op stub let
-// TestHandleDeleteGroup_DefaultsToMovingAssetsOut pass while only ever checking the
-// asset still existed, never that it actually left the deleted group — a regression
-// that forgot to move assets out would have gone undetected.
 func (r *fakeAssetRepo) MoveToGroup(_ context.Context, fromGroupID, toGroupID int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -220,10 +215,6 @@ func (r *fakeGroupRepo) UpdateName(_ context.Context, id int64, name string) err
 	return nil
 }
 
-// ReparentChildren mirrors group_repo.groupRepo.ReparentChildren
-// (internal/repository/group_repo/group.go): every child of oldParentID is reparented
-// to newParentID. group_svc.Delete always calls this before removing a group so its
-// children don't end up dangling — a no-op stub can't catch a regression there.
 // ReparentChildren mirrors group_repo.groupRepo.ReparentChildren
 // (internal/repository/group_repo/group.go): every child of oldParentID is reparented
 // to newParentID. group_svc.Delete always calls this before removing a group so its
