@@ -451,3 +451,136 @@ func TestCmdBatch_OrderingAndCanonicalizeGateMatchesCmdExec(t *testing.T) {
 		So(output.Results[3].Error, ShouldContainSubstring, "put requires key and value")
 	})
 }
+
+// TestExecuteBatchItem_MongoDispatchesLikeSQLRedisNotJSONBlob locks the fix for the
+// "mongo:" prefix: it used to be the one dispatch selector left in cmdBatch —
+// executeBatchItem's "mongo" case required the command to be a JSON blob
+// ({"operation":...,"database":...,"collection":...,"query":...}), while every other
+// prefix (sql/redis) and the unprefixed default both just pass the raw command straight
+// to the "exec" handler. That JSON-blob format is incompatible with the DSL
+// (`find app.users {...}`) the same mongodb asset accepts everywhere else (opsctl exec,
+// bare/unprefixed batch entries, the AI ext_exec tool) — three docs (batch.go's own
+// usage, SKILL.md, commands.md) all say the type prefix is "assertion only", but the
+// code still branched on it here.
+//
+// A DSL command through the "mongo" prefix must dispatch exactly like "sql"/"redis":
+// unmodified, straight to the "exec" handler. Before the fix this test fails with
+// `invalid mongo args JSON: invalid character 'f' looking for beginning of value`.
+func TestExecuteBatchItem_MongoDispatchesLikeSQLRedisNotJSONBlob(t *testing.T) {
+	Convey("mongo 前缀的 executeBatchItem 派发方式与 sql/redis 一致，不再把 command 当 JSON 解析", t, func() {
+		var gotArgs map[string]any
+		handlers := map[string]tool.ToolHandlerFunc{
+			"exec": func(_ context.Context, args map[string]any) (string, error) {
+				gotArgs = args
+				return `{"result":"ok"}`, nil
+			},
+		}
+		cmd := resolvedBatchCmd{
+			asset:   &asset_entity.Asset{ID: 401, Name: "mongo-1", Type: asset_entity.AssetTypeMongoDB},
+			cmdType: "mongo",
+			command: `find users --db=appdb --query='{"status":"active"}'`,
+		}
+
+		result := executeBatchItem(context.Background(), handlers, cmd)
+
+		So(result.Error, ShouldBeEmpty)
+		So(result.ExitCode, ShouldEqual, 0)
+		So(gotArgs, ShouldNotBeNil)
+		So(gotArgs["asset"], ShouldEqual, "401")
+		So(gotArgs["command"], ShouldEqual, `find users --db=appdb --query='{"status":"active"}'`)
+	})
+}
+
+// TestCmdBatch_MongoPrefixRunsDSLEndToEnd is the positive end-to-end companion: a bare
+// mongo DSL command ("find users", no --db) through the "mongo:" prefix must clear
+// Step 2/3 (canonicalize injects the asset's default database, "find" is built-in
+// read-only so Step 3 auto-allows — no desktop dial needed) and reach the handler with
+// the *raw*, uncanonicalized command — same contract prepareExecCommand documents for
+// every other type: the checked and executed strings may differ (approval sees the
+// canonical form), but execution always dispatches the original.
+func TestCmdBatch_MongoPrefixRunsDSLEndToEnd(t *testing.T) {
+	Convey("mongo 前缀的 DSL 命令跑通：check 用规范化串，执行仍用原始命令", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		asset := &asset_entity.Asset{ID: 402, Name: "mongo-2", Type: asset_entity.AssetTypeMongoDB}
+		So(asset.SetMongoDBConfig(&asset_entity.MongoDBConfig{Database: "appdb"}), ShouldBeNil)
+		mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+		mockAsset.EXPECT().Find(gomock.Any(), int64(402)).Return(asset, nil).AnyTimes()
+		origAsset := asset_repo.Asset()
+		asset_repo.RegisterAsset(mockAsset)
+		defer asset_repo.RegisterAsset(origAsset)
+
+		var gotCommand any
+		handlers := map[string]tool.ToolHandlerFunc{
+			"exec": func(_ context.Context, args map[string]any) (string, error) {
+				gotCommand = args["command"]
+				return `{"result":"ok"}`, nil
+			},
+		}
+
+		r, w, pipeErr := os.Pipe()
+		So(pipeErr, ShouldBeNil)
+		origStdout := os.Stdout
+		os.Stdout = w
+
+		code := cmdBatch(context.Background(), handlers, []string{"mongo:402:find users"}, "")
+
+		So(w.Close(), ShouldBeNil)
+		os.Stdout = origStdout
+		data, readErr := io.ReadAll(r)
+		So(readErr, ShouldBeNil)
+
+		So(code, ShouldEqual, 0)
+		var output batchOutput
+		So(json.Unmarshal(data, &output), ShouldBeNil)
+		So(len(output.Results), ShouldEqual, 1)
+		So(output.Results[0].Error, ShouldBeEmpty)
+		So(output.Results[0].ExitCode, ShouldEqual, 0)
+		// Execution dispatches the raw command, never the canonicalized one.
+		So(gotCommand, ShouldEqual, "find users")
+	})
+}
+
+// TestCmdBatch_MongoPrefixCanonicalizesBeforeApproval is the negative companion locking
+// I1 for the "mongo:" prefix specifically: Step 2's prepareExecCommand (executor lookup /
+// canonicalize / precheck) used to be skipped entirely for cmdType=="mongo" — the
+// production comment justified this by "the Command field is a JSON blob", which was only
+// true because of the JSON-only dispatch bug this fix removes. With that bug gone, a
+// malformed mongo DSL command must fail at Step 2 with CanonicalizeMongoCommand's own
+// validation error ("requires a database"), before ever reaching the policy pre-check or a
+// desktop approval popup — never with the old "invalid mongo args JSON" message, which
+// only exec did-run of the deleted JSON-parsing branch.
+func TestCmdBatch_MongoPrefixCanonicalizesBeforeApproval(t *testing.T) {
+	Convey("mongo 前缀命令语法错误必须在 Step 2 canonicalize 时就失败，不再是执行期 JSON 解析错误", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		// No default database configured — "find" needs one and the command doesn't pass --db.
+		asset := &asset_entity.Asset{ID: 403, Name: "mongo-3", Type: asset_entity.AssetTypeMongoDB}
+		So(asset.SetMongoDBConfig(&asset_entity.MongoDBConfig{}), ShouldBeNil)
+		mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+		mockAsset.EXPECT().Find(gomock.Any(), int64(403)).Return(asset, nil).AnyTimes()
+		origAsset := asset_repo.Asset()
+		asset_repo.RegisterAsset(mockAsset)
+		defer asset_repo.RegisterAsset(origAsset)
+
+		r, w, pipeErr := os.Pipe()
+		So(pipeErr, ShouldBeNil)
+		origStdout := os.Stdout
+		os.Stdout = w
+
+		// handlers deliberately empty: this must never reach execution.
+		code := cmdBatch(context.Background(), map[string]tool.ToolHandlerFunc{}, []string{"mongo:403:find users"}, "")
+
+		So(w.Close(), ShouldBeNil)
+		os.Stdout = origStdout
+		data, readErr := io.ReadAll(r)
+		So(readErr, ShouldBeNil)
+
+		So(code, ShouldEqual, 1)
+		var output batchOutput
+		So(json.Unmarshal(data, &output), ShouldBeNil)
+		So(len(output.Results), ShouldEqual, 1)
+		So(output.Results[0].Error, ShouldContainSubstring, "requires a database")
+		So(output.Results[0].Error, ShouldNotContainSubstring, "invalid mongo args JSON")
+	})
+}

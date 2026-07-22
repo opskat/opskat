@@ -141,21 +141,18 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 		// Executor lookup / canonicalize / precheck — the same no-side-effect gate
 		// cmdExec runs (prepareExecCommand), hoisted above Step 3/4 so an asset type with
 		// no executor at all, a malformed command, or an unmet precondition (serial: no
-		// active session) fails here instead of after a desktop approval popup. Skipped
-		// for the legacy "mongo" prefix: its Command field is a JSON-encoded
-		// {"operation":...} blob (executeBatchItem renders it into a real mongo command
-		// string only at execution time), not a command string — running
-		// CanonicalizeFor("mongodb") on that JSON would reject it as malformed.
-		checkCommand := cmd.Command
-		if cmdType != "mongo" {
-			prepared, prepErr := prepareExecCommand(ctx, asset, cmd.Command)
-			if prepErr != nil {
-				results[i].Error = prepErr.Error()
-				argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, asset.ID, truncateStr(cmd.Command, 200))
-				writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, "", prepErr, nil)
-				continue
-			}
-			checkCommand = prepared
+		// active session) fails here instead of after a desktop approval popup. The
+		// "mongo" prefix used to skip this because its Command field was a JSON-encoded
+		// {"operation":...} blob — that special case is gone (see executeBatchItem's
+		// "sql","redis","mongo" case below): every prefix now carries the same DSL command
+		// string the bare/unprefixed form does, so mongo goes through prepareExecCommand
+		// like everything else.
+		checkCommand, prepErr := prepareExecCommand(ctx, asset, cmd.Command)
+		if prepErr != nil {
+			results[i].Error = prepErr.Error()
+			argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, asset.ID, truncateStr(cmd.Command, 200))
+			writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, "", prepErr, nil)
+			continue
 		}
 
 		resolved[i] = resolvedBatchCmd{
@@ -302,37 +299,16 @@ func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerF
 	}
 
 	switch cmd.cmdType {
-	case "sql", "redis":
+	case "sql", "redis", "mongo":
+		// All three prefixes are pure type assertions now (batchAssertPrefixType) — the
+		// command is always DSL text, dispatched unmodified to the unified "exec"
+		// handler, exactly like a bare/unprefixed entry against the same asset. "mongo"
+		// used to require a JSON-encoded {"operation":...} blob here, incompatible with
+		// the DSL (`find app.users {...}`) every other path into a mongodb asset accepts;
+		// that special case is gone.
 		result = executeBatchHandler(ctx, handlers, batchAuditTool, cmd, map[string]any{
 			"asset":   strconv.FormatInt(cmd.asset.ID, 10),
 			"command": cmd.command,
-		})
-	case "mongo":
-		// Parse command as JSON: {"operation":"find","database":"db","collection":"col","query":"{}"}
-		var mongoArgs struct {
-			Operation  string `json:"operation"`
-			Database   string `json:"database"`
-			Collection string `json:"collection"`
-			Query      string `json:"query"`
-		}
-		if err := json.Unmarshal([]byte(cmd.command), &mongoArgs); err != nil {
-			result.Error = fmt.Sprintf("invalid mongo args JSON: %v", err)
-			result.ExitCode = -1
-			return result
-		}
-		// 结构化字段渲染成统一 exec 认识的富命令串，共用 helper.MongoCommand.Render。
-		mongoCommand, renderErr := (&helper.MongoCommand{
-			Op: mongoArgs.Operation, Database: mongoArgs.Database,
-			Collection: mongoArgs.Collection, Query: mongoArgs.Query,
-		}).Render()
-		if renderErr != nil {
-			result.Error = fmt.Sprintf("invalid mongo command: %v", renderErr)
-			result.ExitCode = -1
-			return result
-		}
-		result = executeBatchHandler(ctx, handlers, batchAuditTool, cmd, map[string]any{
-			"asset":   strconv.FormatInt(cmd.asset.ID, 10),
-			"command": mongoCommand,
 		})
 	default:
 		// "exec" — the sentinel both parseBatchArg and parseBatchInput default an
