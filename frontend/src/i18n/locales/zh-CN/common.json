@@ -1026,6 +1026,8 @@
     "approvalSingleTitle": "需要确认",
     "approvalBatchTitle": "需要确认（{{count}} 条命令）",
     "approvalGrantTitle": "权限申请",
+    "approvalDeleteTitle": "确认删除",
+    "approvalDeleteDetail": "查看删除影响",
     "approvalDeny": "拒绝",
     "approvalAllow": "允许",
     "approvalAlwaysAllow": "始终允许",

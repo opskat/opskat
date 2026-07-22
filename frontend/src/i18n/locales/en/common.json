@@ -1026,6 +1026,8 @@
     "approvalSingleTitle": "Approval Required",
     "approvalBatchTitle": "Approval Required ({{count}} commands)",
     "approvalGrantTitle": "Permission Request",
+    "approvalDeleteTitle": "Confirm deletion",
+    "approvalDeleteDetail": "What gets deleted",
     "approvalDeny": "Deny",
     "approvalAllow": "Allow",
     "approvalAlwaysAllow": "Always Allow",

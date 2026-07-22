@@ -46,7 +46,7 @@ export interface ContentBlock {
   agentTask?: string;
   childBlocks?: ContentBlock[];
   // approval 块专用
-  approvalKind?: "single" | "batch" | "grant" | "local_tool";
+  approvalKind?: "single" | "batch" | "grant" | "local_tool" | "delete";
   approvalItems?: Array<{
     type: string;
     asset_id: number;
@@ -116,7 +116,7 @@ interface StreamEventData {
   agent_role?: string;
   agent_task?: string;
   // approval_request 专用
-  kind?: "single" | "batch" | "grant" | "local_tool";
+  kind?: "single" | "batch" | "grant" | "local_tool" | "delete";
   items?: Array<{
     type: string;
     asset_id: number;

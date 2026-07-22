@@ -11,6 +11,8 @@ import {
   FilePlus,
   FileUp,
   Usb,
+  Trash2,
+  Boxes,
 } from "lucide-react";
 import { Button, Input, Textarea } from "@opskat/ui";
 import { RespondAIApproval } from "../../../wailsjs/go/ai/AI";
@@ -88,7 +90,9 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                 ? t("ai.approvalBatchTitle", { count: items.length })
                 : kind === "local_tool"
                   ? t("ai.approvalLocalToolTitle", { tool: localToolName })
-                  : t("ai.approvalSingleTitle")}
+                  : kind === "delete"
+                    ? t("ai.approvalDeleteTitle")
+                    : t("ai.approvalSingleTitle")}
           </span>
           {block.agentRole && (
             <span className="text-[10px] text-muted-foreground bg-muted rounded px-1 py-0.5">{block.agentRole}</span>
@@ -234,6 +238,8 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
           </>
         ) : (
           // single & local_tool: deny / remember-and-allow / allow（仅本次）
+          // delete: deny / allow only —— 后端 delete_* 不查 grant 也不接受 allowAll，
+          // 「记住」开关是通往 allowAll 的唯一入口，删除审批不给这个入口。
           <>
             <Button
               size="sm"
@@ -244,27 +250,28 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
             >
               {t("ai.approvalDeny")}
             </Button>
-            {rememberMode ? (
-              <Button
-                size="sm"
-                data-testid="ai-approval-allow-all"
-                className="h-8 rounded-md px-4 text-xs bg-warning/20 text-warning hover:bg-warning/30"
-                onClick={() => respond("allowAll")}
-              >
-                {t("ai.approvalRememberAndAllow")}
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                data-testid="ai-approval-remember"
-                className="h-8 rounded-md px-4 text-xs bg-warning/20 text-warning hover:bg-warning/30"
-                onClick={() => {
-                  setRememberMode(true);
-                }}
-              >
-                {t("opsctlApproval.remember")}
-              </Button>
-            )}
+            {(kind === "single" || kind === "local_tool") &&
+              (rememberMode ? (
+                <Button
+                  size="sm"
+                  data-testid="ai-approval-allow-all"
+                  className="h-8 rounded-md px-4 text-xs bg-warning/20 text-warning hover:bg-warning/30"
+                  onClick={() => respond("allowAll")}
+                >
+                  {t("ai.approvalRememberAndAllow")}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  data-testid="ai-approval-remember"
+                  className="h-8 rounded-md px-4 text-xs bg-warning/20 text-warning hover:bg-warning/30"
+                  onClick={() => {
+                    setRememberMode(true);
+                  }}
+                >
+                  {t("opsctlApproval.remember")}
+                </Button>
+              ))}
             <Button
               size="sm"
               data-testid="ai-approval-allow"
@@ -280,13 +287,15 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
   );
 });
 
-// detail 的展开标题按审批类型取：本地写入看内容、本地编辑看改动、文件传输看方向。
+// detail 的展开标题按审批类型取：本地写入看内容、本地编辑看改动、删除看不可撤销影响、文件传输看方向。
 function detailSummaryKey(type: string): string {
   switch (type) {
     case "local_write":
       return "ai.approvalLocalToolContentPreview";
     case "local_edit":
       return "ai.approvalLocalToolEditPreview";
+    case "delete":
+      return "ai.approvalDeleteDetail";
     default:
       return "ai.approvalTransferDetail";
   }
@@ -305,6 +314,9 @@ function TypeBadge({ type, compact }: { type: string; compact?: boolean }) {
     local_bash: Terminal,
     local_write: FilePlus,
     local_edit: FileEdit,
+    delete: Trash2,
+    etcd: Database,
+    k8s: Boxes,
   };
   const Icon = icons[type] || Terminal;
   if (compact) {
