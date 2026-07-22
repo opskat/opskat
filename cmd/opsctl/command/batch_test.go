@@ -318,3 +318,51 @@ func TestCmdBatch_ResolveFailureDoesNotAbortWholeBatch(t *testing.T) {
 		So(output.Results[1].Error, ShouldContainSubstring, "resolve asset")
 	})
 }
+
+// TestCmdBatch_AssertionFailureDoesNotAbortWholeBatch is the prefix-assertion mirror of
+// TestCmdBatch_ResolveFailureDoesNotAbortWholeBatch above: both entries resolve fine
+// (asset lookup succeeds) but declare a prefix type ("sql") that does not match the
+// resolved asset's real type (redis) — batchAssertPrefixType must reject both, and,
+// symmetric to the resolve-failure case, the first rejection must not stop the second
+// entry from being resolved, asserted, and reported in its own results[i] slot.
+func TestCmdBatch_AssertionFailureDoesNotAbortWholeBatch(t *testing.T) {
+	Convey("前缀断言失败的条目落入 results 而不中断整批", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+		mockAsset.EXPECT().Find(gomock.Any(), int64(10)).
+			Return(&asset_entity.Asset{ID: 10, Name: "cache-a", Type: asset_entity.AssetTypeRedis}, nil).AnyTimes()
+		mockAsset.EXPECT().Find(gomock.Any(), int64(11)).
+			Return(&asset_entity.Asset{ID: 11, Name: "cache-b", Type: asset_entity.AssetTypeRedis}, nil).AnyTimes()
+		origAsset := asset_repo.Asset()
+		asset_repo.RegisterAsset(mockAsset)
+		defer asset_repo.RegisterAsset(origAsset)
+
+		r, w, pipeErr := os.Pipe()
+		So(pipeErr, ShouldBeNil)
+		origStdout := os.Stdout
+		os.Stdout = w
+
+		code := cmdBatch(context.Background(), map[string]tool.ToolHandlerFunc{}, []string{"sql:10:PING", "sql:11:PING"}, "")
+
+		So(w.Close(), ShouldBeNil)
+		os.Stdout = origStdout
+		data, readErr := io.ReadAll(r)
+		So(readErr, ShouldBeNil)
+
+		So(code, ShouldEqual, 1) // all failed
+
+		var output batchOutput
+		So(json.Unmarshal(data, &output), ShouldBeNil)
+		So(len(output.Results), ShouldEqual, 2)
+
+		// Both must have resolved (AssetID populated, no "resolve asset" error) — the
+		// failure under test is the type assertion, not the lookup.
+		So(output.Results[0].AssetID, ShouldEqual, 10)
+		So(output.Results[0].Error, ShouldNotContainSubstring, "resolve asset")
+		So(output.Results[0].Error, ShouldNotBeEmpty)
+		So(output.Results[1].AssetID, ShouldEqual, 11)
+		So(output.Results[1].Error, ShouldNotContainSubstring, "resolve asset")
+		So(output.Results[1].Error, ShouldNotBeEmpty)
+	})
+}

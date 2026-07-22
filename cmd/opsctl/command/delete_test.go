@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
@@ -31,6 +32,11 @@ type opsctlDeleteTestEnv struct {
 	// approvalDecision drives the stubbed deleteApprovalFn: "allow" or "deny".
 	approvalDecision string
 	approvalCalls    int
+
+	// lastApprovalRequest captures the ApprovalRequest cmdDelete actually built, so
+	// tests can assert on its content (e.g. Detail wording) instead of only on
+	// approvalCalls/handlerCalls counts.
+	lastApprovalRequest approval.ApprovalRequest
 }
 
 func setupOpsctlDelete(t *testing.T) *opsctlDeleteTestEnv {
@@ -84,8 +90,9 @@ func setupOpsctlDelete(t *testing.T) *opsctlDeleteTestEnv {
 	}
 
 	origApproval := deleteApprovalFn
-	deleteApprovalFn = func(_ context.Context, _ approval.ApprovalRequest) (ApprovalResult, error) {
+	deleteApprovalFn = func(_ context.Context, req approval.ApprovalRequest) (ApprovalResult, error) {
 		env.approvalCalls++
+		env.lastApprovalRequest = req
 		if env.approvalDecision == "deny" {
 			return ApprovalResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny}, errors.New("operation denied: user denied")
 		}
@@ -180,6 +187,57 @@ func TestCmdDelete_Group(t *testing.T) {
 	})
 }
 
+// 组删除的审批 Detail 必须让用户在批准前就读到组名和 --delete-assets 的后果。
+// Detail 是桌面 OpsctlApprovalDialog 对这类请求唯一会渲染的字段——AssetName 只在
+// asset 分支被填，group 分支没有对应的 GroupName 字段可用；Command 依合同必须留空
+// （见 cmdDelete 文档注释：非空会唤醒 requireApproval 的 Stage-2 策略/grant 检查）。
+// 漏了这条,用户对着 "opsctl delete group staging --delete-assets" 在批准前看到的
+// 只有一个 DELETE 徽章和一行不含组名、不含"连带删资产"提示的命令回显。
+func TestCmdDelete_GroupApprovalDetailMentionsNameAndCascade(t *testing.T) {
+	env := setupOpsctlDelete(t)
+	env.approvalDecision = "allow"
+
+	t.Run("--delete-assets: Detail 同时含组名与连带删除提示", func(t *testing.T) {
+		env.approvalCalls = 0
+		env.lastApprovalRequest = approval.ApprovalRequest{}
+
+		if code := cmdDelete(env.ctx, env.handlers, []string{"group", "1", "--delete-assets"}, ""); code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+
+		detail := env.lastApprovalRequest.Detail
+		if !strings.Contains(detail, "grp") {
+			t.Errorf("Detail %q must mention the resolved group name %q, not just echo the raw ref", detail, "grp")
+		}
+		if !strings.Contains(detail, "every asset") {
+			t.Errorf("Detail %q must warn that every asset in the group is deleted too", detail)
+		}
+		if env.lastApprovalRequest.Command != "" {
+			t.Errorf("Command must stay empty (non-empty wakes Stage-2 policy/grant checks), got %q", env.lastApprovalRequest.Command)
+		}
+	})
+
+	t.Run("不带 --delete-assets: Detail 含组名且不得暗示会删资产", func(t *testing.T) {
+		env.approvalCalls = 0
+		env.lastApprovalRequest = approval.ApprovalRequest{}
+
+		if code := cmdDelete(env.ctx, env.handlers, []string{"group", "1"}, ""); code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+
+		detail := env.lastApprovalRequest.Detail
+		if !strings.Contains(detail, "grp") {
+			t.Errorf("Detail %q must mention the resolved group name %q", detail, "grp")
+		}
+		if strings.Contains(detail, "every asset") {
+			t.Errorf("Detail %q must not imply assets are deleted when --delete-assets was not passed", detail)
+		}
+		if env.lastApprovalRequest.Command != "" {
+			t.Errorf("Command must stay empty, got %q", env.lastApprovalRequest.Command)
+		}
+	})
+}
+
 // 未知资源类型必须报错而不是静默派发。
 func TestCmdDelete_UnknownResource(t *testing.T) {
 	env := setupOpsctlDelete(t)
@@ -188,5 +246,74 @@ func TestCmdDelete_UnknownResource(t *testing.T) {
 	}
 	if env.approvalCalls != 0 {
 		t.Errorf("unknown resource must not reach approval, got %d calls", env.approvalCalls)
+	}
+}
+
+// TestCmdDelete_WiresRealDeleteAssetHandler is the only test in this package that
+// dispatches into the actual delete_asset handler from tool.AllToolDefs() (via
+// buildHandlerMap()) instead of the fake handlers setupOpsctlDelete installs above.
+//
+// Every other test in this file proves cmdDelete's own gate ordering (approval before
+// dispatch, deny blocks dispatch) against a handler that returns a canned string and
+// never touches permission.RequireChecker. None of them exercise the one genuinely
+// unusual wire in cmdDelete: withPreapprovedDeleteChecker installs a real
+// *permission.CommandPolicyChecker via permission.WithPolicyChecker so that
+// handleDeleteAsset/handleDeleteGroup's unconditional permission.RequireChecker(ctx)
+// call finds one instead of failing closed with "permission checker not available"
+// (see cmdDelete's doc comment and task-11-report.md for why that gap exists and why
+// it cannot be closed any other way without touching internal/ai/tool). That wiring
+// had zero committed test coverage — the implementer verified it with a throwaway
+// program that was deleted before commit. If permission.WithPolicyChecker's context
+// key type, permission.NewCommandPolicyChecker's signature, or RequireChecker's lookup
+// ever changes shape, this test — not just production — must fail.
+func TestCmdDelete_WiresRealDeleteAssetHandler(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+	asset := &asset_entity.Asset{ID: 9, Name: "web-9", Type: asset_entity.AssetTypeSSH}
+	// resolveAsset (cmdDelete, before approval) resolves "9" via Find.
+	mockAsset.EXPECT().Find(gomock.Any(), int64(9)).Return(asset, nil).AnyTimes()
+	// assetref.Resolve, inside the real handleDeleteAsset, always tries a name lookup
+	// first even for a numeric ref, then falls back to Find/Get by id.
+	mockAsset.EXPECT().FindByName(gomock.Any(), "9").Return(nil, nil).AnyTimes()
+	deleteCalled := false
+	mockAsset.EXPECT().Delete(gomock.Any(), int64(9)).DoAndReturn(func(context.Context, int64) error {
+		deleteCalled = true
+		return nil
+	}).Times(1)
+
+	origAsset := asset_repo.Asset()
+	asset_repo.RegisterAsset(mockAsset)
+	t.Cleanup(func() {
+		if origAsset != nil {
+			asset_repo.RegisterAsset(origAsset)
+		}
+	})
+
+	// Keep the real handler's audit write off the default (DB-backed) writer — same
+	// isolation pattern as TestCallHandler_Decision / cp_approval_test.go.
+	mockAudit := &mockAuditWriter{}
+	origWriter := opsctlAuditWriter
+	opsctlAuditWriter = mockAudit
+	t.Cleanup(func() { opsctlAuditWriter = origWriter })
+
+	// Stub only the desktop-socket round trip (no running desktop app in tests) — the
+	// real permission wiring under test lives entirely below this line, inside
+	// cmdDelete/withPreapprovedDeleteChecker/handleDeleteAsset.
+	origApproval := deleteApprovalFn
+	deleteApprovalFn = func(_ context.Context, _ approval.ApprovalRequest) (ApprovalResult, error) {
+		return ApprovalResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow, SessionID: "sess-real"}, nil
+	}
+	t.Cleanup(func() { deleteApprovalFn = origApproval })
+
+	handlers := buildHandlerMap()
+
+	code := cmdDelete(context.Background(), handlers, []string{"asset", "9"}, "")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !deleteCalled {
+		t.Error("the real delete_asset handler must have actually deleted the asset via asset_repo.Delete")
 	}
 }

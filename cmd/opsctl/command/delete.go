@@ -84,15 +84,30 @@ func cmdDelete(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 		fs.Usage = func() { printDeleteGroupUsage() }
 		_ = fs.Parse(args[2:])
 
-		id, _, err := resolveGroup(ctx, ref)
+		id, name, err := resolveGroup(ctx, ref)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 1
 		}
 
+		// Detail is the only field the desktop OpsctlApprovalDialog renders for this
+		// request: AssetName is asset-only (ApprovalRequest has no GroupName field,
+		// and the single-approval event opsctl:approval never carries one either —
+		// see internal/app/opsctl/approval.go), and Command must stay empty (see this
+		// function's doc comment on why). Without the resolved group name and a
+		// --delete-assets-aware warning here, a user approving "opsctl delete group
+		// staging --delete-assets" would see only a DELETE badge and a bare command
+		// echo — no group name, no hint that every asset in the group goes with it.
+		// Wording mirrors handleDeleteGroup's two branches
+		// (internal/ai/tool/tool_handlers_crud.go).
+		detail := fmt.Sprintf("opsctl delete group %q: assets move to ungrouped, nothing else is deleted", name)
+		if *deleteAssets {
+			detail = fmt.Sprintf("opsctl delete group %q AND every asset in it — this cannot be undone from the app", name)
+		}
+
 		approvalResult, err := deleteApprovalFn(ctx, approval.ApprovalRequest{
 			Type:      "delete",
-			Detail:    fmt.Sprintf("opsctl delete group %s", ref),
+			Detail:    detail,
 			SessionID: session,
 		})
 		if err != nil {
