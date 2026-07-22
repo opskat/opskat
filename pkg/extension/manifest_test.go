@@ -1,6 +1,7 @@
 package extension
 
 import (
+	"strings"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
@@ -333,6 +334,66 @@ func TestParseManifest(t *testing.T) {
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "content")
 		})
+	})
+}
+
+func TestParseManifest_ToolsValidation(t *testing.T) {
+	base := `{"name":"x","version":"1.0.0","hostABI":"1.0"`
+
+	t.Run("没有 tools 仍然合法", func(t *testing.T) {
+		if _, err := ParseManifest([]byte(base + `}`)); err != nil {
+			t.Fatalf("a manifest without tools must stay valid: %v", err)
+		}
+	})
+
+	t.Run("缺 parameters 被拒", func(t *testing.T) {
+		_, err := ParseManifest([]byte(base + `,"tools":[{"name":"t"}]}`))
+		if err == nil || !strings.Contains(err.Error(), "parameters") {
+			t.Fatalf("missing parameters must be rejected by name, got %v", err)
+		}
+	})
+
+	t.Run("parameters 不是 object 被拒", func(t *testing.T) {
+		_, err := ParseManifest([]byte(base + `,"tools":[{"name":"t","parameters":{"type":"array"}}]}`))
+		if err == nil {
+			t.Fatal(`parameters.type must be "object"`)
+		}
+	})
+
+	t.Run("属性缺 type 被拒", func(t *testing.T) {
+		_, err := ParseManifest([]byte(base +
+			`,"tools":[{"name":"t","parameters":{"type":"object","properties":{"k":{"description":"no type"}}}}]}`))
+		if err == nil || !strings.Contains(err.Error(), "k") {
+			t.Fatalf("a property without a type must be rejected and named, got %v", err)
+		}
+	})
+
+	t.Run("required 引用不存在的属性被拒", func(t *testing.T) {
+		_, err := ParseManifest([]byte(base +
+			`,"tools":[{"name":"t","parameters":{"type":"object","properties":{},"required":["ghost"]}}]}`))
+		if err == nil || !strings.Contains(err.Error(), "ghost") {
+			t.Fatalf("a dangling required entry must be rejected, got %v", err)
+		}
+	})
+
+	t.Run("tool 重名被拒", func(t *testing.T) {
+		one := `{"name":"t","parameters":{"type":"object","properties":{}}}`
+		_, err := ParseManifest([]byte(base + `,"tools":[` + one + `,` + one + `]}`))
+		if err == nil {
+			t.Fatal("duplicate tool names must be rejected: toolIndex would silently keep only one")
+		}
+	})
+
+	t.Run("真实 manifest 形状全部通过", func(t *testing.T) {
+		// 覆盖 oss 用到的三种类型：string / integer / array<string>，含空 properties。
+		ok := base + `,"tools":[
+			{"name":"list_buckets","parameters":{"type":"object","properties":{}}},
+			{"name":"list_objects","parameters":{"type":"object","properties":{"maxKeys":{"type":"integer"}}}},
+			{"name":"delete_objects","parameters":{"type":"object","properties":{"keys":{"type":"array","items":{"type":"string"}}},"required":["keys"]}}
+		]}`
+		if _, err := ParseManifest([]byte(ok)); err != nil {
+			t.Fatalf("the shapes used by the real oss manifest must pass: %v", err)
+		}
 	})
 }
 

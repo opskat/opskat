@@ -91,6 +91,23 @@ func TestBridge(t *testing.T) {
 			So(found, ShouldBeNil)
 		})
 
+		Convey("FindToolDef returns the tool declaration", func() {
+			def, ok := bridge.FindToolDef("oss", "list_buckets")
+			So(ok, ShouldBeTrue)
+			So(def.Name, ShouldEqual, "list_buckets")
+			So(def.I18n.Description, ShouldEqual, "tools.list_buckets.description")
+		})
+
+		Convey("FindToolDef returns false for unknown extension", func() {
+			_, ok := bridge.FindToolDef("nonexistent-ext", "list_buckets")
+			So(ok, ShouldBeFalse)
+		})
+
+		Convey("FindToolDef returns false for unknown tool", func() {
+			_, ok := bridge.FindToolDef("oss", "nonexistent-tool")
+			So(ok, ShouldBeFalse)
+		})
+
 		Convey("Register syncs default policy to policy registry", func() {
 			p, ok := policy.GetDefaultPolicyOf("oss")
 			So(ok, ShouldBeTrue)

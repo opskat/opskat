@@ -33,15 +33,23 @@ type SkillMDWithExtension struct {
 	Description   string
 }
 
+// toolEntry holds both the owning extension and that tool's declaration.
+// Before this, toolIndex stored only *Extension, so ext_exec had nowhere to look up
+// a tool's parameters to convert flags into typed JSON.
+type toolEntry struct {
+	ext  *Extension
+	tool ToolDef
+}
+
 // Bridge connects loaded extensions to the main app's tool, policy, and frontend systems.
 type Bridge struct {
 	mu              sync.RWMutex
 	extensions      map[string]*Extension
 	assetTypes      []ExtAssetType
 	policyGroups    []ExtPolicyGroup
-	defaultPolicies map[string][]string              // asset type → default policy group IDs
-	skillMDs        map[string]SkillMDWithExtension  // asset type → SKILL.md content + ext name
-	toolIndex       map[string]map[string]*Extension // extName → toolName → Extension
+	defaultPolicies map[string][]string             // asset type → default policy group IDs
+	skillMDs        map[string]SkillMDWithExtension // asset type → SKILL.md content + ext name
+	toolIndex       map[string]map[string]toolEntry // extName → toolName → extension + tool declaration
 }
 
 func NewBridge() *Bridge {
@@ -49,7 +57,7 @@ func NewBridge() *Bridge {
 		extensions:      make(map[string]*Extension),
 		defaultPolicies: make(map[string][]string),
 		skillMDs:        make(map[string]SkillMDWithExtension),
-		toolIndex:       make(map[string]map[string]*Extension),
+		toolIndex:       make(map[string]map[string]toolEntry),
 	}
 }
 
@@ -109,9 +117,9 @@ func (b *Bridge) Register(ext *Extension) {
 		})
 	}
 
-	b.toolIndex[ext.Name] = make(map[string]*Extension)
+	b.toolIndex[ext.Name] = make(map[string]toolEntry, len(m.Tools))
 	for _, tool := range m.Tools {
-		b.toolIndex[ext.Name][tool.Name] = ext
+		b.toolIndex[ext.Name][tool.Name] = toolEntry{ext: ext, tool: tool}
 	}
 }
 
@@ -217,7 +225,23 @@ func (b *Bridge) FindExtensionByTool(extName, toolName string) *Extension {
 	if !ok {
 		return nil
 	}
-	return tools[toolName]
+	return tools[toolName].ext
+}
+
+// FindToolDef returns a tool's parameter declaration so ext_exec can convert a flag
+// string into typed JSON according to it. Returns false if the extension or tool is unknown.
+func (b *Bridge) FindToolDef(extName, toolName string) (ToolDef, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	tools, ok := b.toolIndex[extName]
+	if !ok {
+		return ToolDef{}, false
+	}
+	entry, ok := tools[toolName]
+	if !ok {
+		return ToolDef{}, false
+	}
+	return entry.tool, true
 }
 
 // GetExtensionByAssetType returns the Extension that registered the given asset type,
