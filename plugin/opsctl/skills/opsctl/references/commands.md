@@ -127,7 +127,7 @@ echo '{"commands":[
   {"asset":"web-01","type":"exec","command":"uptime"},
   {"asset":"db-01","type":"sql","command":"SELECT 1"},
   {"asset":"cache","type":"redis","command":"PING"},
-  {"asset":"mongo-db","type":"mongo","command":"{\"operation\":\"find\",\"database\":\"mydb\",\"collection\":\"users\",\"query\":\"{}\"}"}
+  {"asset":"mongo-db","type":"mongo","command":"find users --query={\"filter\":{\"status\":\"active\"}}"}
 ]}' | opsctl batch
 ```
 
