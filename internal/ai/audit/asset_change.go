@@ -10,9 +10,15 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
-// 资产增删改的审计动作名。沿用 AI 侧同名工具（add_asset / update_asset）的命名，
-// 桌面与 AI 两条路径做同一件事时落在 audit_logs.tool_name 的值一致，审计查询不必
-// 按来源分别写条件。delete_asset 没有对应的 AI 工具，桌面是唯一入口。
+// 资产增删改的审计动作名，写进 audit_logs.tool_name。
+//
+// ActionDeleteAsset 与 AI 侧同名工具 delete_asset（internal/ai/tool/tool_handlers_crud.go
+// 的 handleDeleteAsset）撞名：桌面（DeleteAsset、以及 DeleteGroup 的级联删除）与 AI
+// 两条路径删同一台资产时，落在 audit_logs.tool_name 的值一致，审计查询不必按来源
+// 分别写条件。ActionAddAsset / ActionUpdateAsset 不再有这个性质——AI 侧已经把
+// add_asset / update_asset 合并成单一的 put_asset 工具，只有桌面仍按增/改分别记名，
+// 两侧的 tool_name 从此不一致（AI 一侧的等价记录靠 runner.auditMiddleware 直接用工具名
+// "put_asset" 写 ToolCallInfo，不经过本文件）。
 const (
 	ActionAddAsset    = "add_asset"
 	ActionUpdateAsset = "update_asset"
