@@ -31,7 +31,7 @@ Use `scope` to override the default database for this call, e.g. `scope: "analyt
 | field | type | required | notes |
 |---|---|---|---|
 | `host` | string | yes | |
-| `port` | number | yes | 3306 (mysql) / 5432 (postgresql) |
+| `port` | number | yes | 3306 (mysql) / 5432 (postgresql) / 1433 (mssql) |
 | `username` | string | yes | |
 | `password` | string | no | Stored encrypted; never echoed back |
 | `driver` | string | yes | `"mysql"`, `"postgresql"`, or `"mssql"` |
