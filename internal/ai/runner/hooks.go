@@ -30,7 +30,7 @@ func auditMiddleware(c *agent.ToolContext) {
 	slot := &aictx.CheckResult{}
 	c.WithContext(aictx.WithCheckResultSlot(c.Context(), slot))
 
-	assetID, assetName, command := resolveAssetForAudit(c.Context(), c.Input)
+	assetID, assetName, command := resolveAssetForAudit(c.Context(), c.ToolName, c.Input)
 
 	c.Next()
 
@@ -67,19 +67,29 @@ func auditMiddleware(c *agent.ToolContext) {
 // checks), but runner already depends on both, so it resolves once here and threads
 // the result through audit.ToolCallInfo instead.
 //
-// It also computes the command's canonical form for asset types that register a
-// permission.CanonicalizeFunc (k8s injects --context/--namespace; etcd round-trips
-// through ParseCommand+FormatCommand to normalize case, compound-op spelling, and flag
-// order) — matching what the permission check and approval dialog already saw, so the
-// audit row doesn't show the model's raw string while the approval showed the effective
-// one.
+// It also computes the command's canonical form for tools that registered via
+// audit.RegisterCanonicalizingTool (currently only "exec") on asset types that in turn
+// register a permission.CanonicalizeFunc (k8s injects --context/--namespace; etcd
+// round-trips through ParseCommand+FormatCommand to normalize case, compound-op
+// spelling, and flag order) — matching what the permission check and approval dialog
+// already saw, so the audit row doesn't show the model's raw string while the approval
+// showed the effective one.
+//
+// The audit.RegisterCanonicalizingTool gate matters because args["asset"]+args["command"]
+// is not unique to "exec": ext_exec shares the exact same argument shape but its command
+// is an extension's own invocation syntax, never the target asset type's exec DSL.
+// Running a k8s asset's CanonicalizeFunc on an ext_exec command doesn't error (it just
+// tokenizes the string as if it were kubectl args) — it silently rewrites the audit row
+// into a command that was never approved nor executed. Gating by an allow-list (not a
+// toolName == "exec" branch here) follows the same "register, don't switch" pattern as
+// audit.RegisterGroupScopedTool.
 //
 // Best-effort throughout: any resolution failure (missing/ambiguous/unknown asset,
 // no canonicalize hook, canonicalize error) just leaves the corresponding return
 // value at its zero value / the raw command, and the caller falls back to its
 // existing args["asset_id"]/ExtractCommandForAudit path — which also covers every
 // tool that doesn't use the asset-string convention at all (the pre-existing 14).
-func resolveAssetForAudit(ctx context.Context, input map[string]any) (assetID int64, assetName, command string) {
+func resolveAssetForAudit(ctx context.Context, toolName string, input map[string]any) (assetID int64, assetName, command string) {
 	ref := aictx.ArgString(input, "asset")
 	if ref == "" {
 		return 0, "", ""
@@ -94,9 +104,11 @@ func resolveAssetForAudit(ctx context.Context, input map[string]any) (assetID in
 		return asset.ID, asset.Name, ""
 	}
 	command = raw
-	if canonicalize, ok := permission.CanonicalizeFor(asset.Type); ok {
-		if canonical, cerr := canonicalize(asset, raw); cerr == nil {
-			command = canonical
+	if audit.ShouldCanonicalizeCommand(toolName) {
+		if canonicalize, ok := permission.CanonicalizeFor(asset.Type); ok {
+			if canonical, cerr := canonicalize(asset, raw); cerr == nil {
+				command = canonical
+			}
 		}
 	}
 	return asset.ID, asset.Name, command

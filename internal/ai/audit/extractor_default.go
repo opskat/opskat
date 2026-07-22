@@ -12,6 +12,13 @@ import (
 // 的提取因为有自己的注册而毫发无损（TestExtractor_ExecDoesNotBorrowAnotherToolsExtractor）。
 func init() {
 	RegisterExtractor("exec", func(a map[string]any) string { return aictx.ArgString(a, "command") })
+	// "exec"'s args["command"] is the target asset type's own exec DSL, so
+	// runner.resolveAssetForAudit's canonicalize step (k8s --context/--namespace
+	// injection, etcd/mongo/kafka DSL round-trip) is meaningful for it. ext_exec below
+	// shares the same asset+command argument shape but speaks a different DSL (an
+	// extension's own invocation syntax) and must not register here — see
+	// canonicalizingTools' doc comment in extractor.go.
+	RegisterCanonicalizingTool("exec")
 	RegisterExtractor("upload_file", func(a map[string]any) string {
 		return "upload " + aictx.ArgString(a, "local_path") + " → " + aictx.ArgString(a, "remote_path")
 	})

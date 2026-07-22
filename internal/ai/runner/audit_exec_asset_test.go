@@ -254,6 +254,60 @@ func TestAuditMiddleware_ExecToolCanonicalizesK8sCommand(t *testing.T) {
 	})
 }
 
+// TestAuditMiddleware_ExtExecToolDoesNotCanonicalizeAsAssetCommand is the regression
+// lock for M4: resolveAssetForAudit used to trigger its canonicalize step off argument
+// *shape* alone (an "asset" string + a "command" string), not the tool name. Task 9
+// renamed exec_tool to ext_exec(asset, command) — the same shape "exec" uses — so this
+// path started firing for extension calls too. ext_exec's command is an extension's own
+// invocation syntax (`<extension> <tool> --flag=value`), never the target asset type's
+// exec DSL; running a k8s asset's CanonicalizeFunc on it (BuildK8sCommandPlan) doesn't
+// error (cmdline.Words happily tokenizes "myext mytool --flag=x" as if it were kubectl
+// args) — it silently rewrites the audit row into a `kubectl ... --context=... ` string
+// that was never approved and never executed, exactly the divergence
+// TestAuditMiddleware_ExecToolCanonicalizesK8sCommand above exists to prevent for the
+// tool that *is* supposed to canonicalize.
+//
+// The fix gates the canonicalize step by an audit.RegisterCanonicalizingTool allow-list
+// (only "exec" registers, extractor_default.go) rather than branching on tool name in
+// resolveAssetForAudit itself — same registration pattern as RegisterExtractor /
+// RegisterGroupScopedTool in package audit.
+func TestAuditMiddleware_ExtExecToolDoesNotCanonicalizeAsAssetCommand(t *testing.T) {
+	Convey("ext_exec 审计记录原始扩展命令，不按资产类型的 exec DSL 规范化改写", t, func() {
+		mockRepo := registerMockAuditRepo(t)
+
+		asset := &asset_entity.Asset{ID: 43, Name: "k8s-2", Type: asset_entity.AssetTypeK8s}
+		if err := asset.SetK8sConfig(&asset_entity.K8sConfig{
+			Kubeconfig: "enc-kubeconfig",
+			Context:    "prod-ctx",
+			Namespace:  "prod-ns",
+		}); err != nil {
+			t.Fatalf("set k8s config: %v", err)
+		}
+		origAsset := asset_repo.Asset()
+		asset_repo.RegisterAsset(&staticAssetRepo{asset: asset})
+		t.Cleanup(func() { asset_repo.RegisterAsset(origAsset) })
+
+		extExecTool := findExecTool(t, "ext_exec")
+		td := &agent.ToolDispatcher{
+			Tools:      []agent.Tool{extExecTool},
+			Middleware: []agent.ToolHookEntry[agent.ToolMiddleware]{{Matcher: ".*", Fn: auditMiddleware}},
+		}
+		const rawCommand = "myext mytool --flag=x"
+		td.Run(context.Background(), agent.DispatchInput{
+			ToolName:  "ext_exec",
+			ToolUseID: "tu_ext_exec_k8s",
+			Input:     map[string]any{"asset": "43", "command": rawCommand},
+		})
+
+		entry := waitForAuditEntry(t, mockRepo, "ext_exec", 43)
+		// Asset attribution is still correct and desired -- only the command rewrite is the bug.
+		So(entry.AssetID, ShouldEqual, int64(43))
+		So(entry.AssetName, ShouldEqual, "k8s-2")
+		So(entry.Command, ShouldEqual, rawCommand)
+		So(entry.Command, ShouldNotContainSubstring, "kubectl")
+	})
+}
+
 // phaseGatedAssetRepo resolves successfully only until *toolStarted flips true, then
 // fails -- standing in for an asset that becomes unresolvable (e.g. soft-deleted,
 // status != Active, see asset_repo.Find/FindByName's "AND status = Active" filter)
