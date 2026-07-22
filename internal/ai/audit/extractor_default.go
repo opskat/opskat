@@ -25,9 +25,7 @@ func init() {
 		}
 		return "grant: " + v
 	})
-	RegisterExtractor("exec_tool", func(a map[string]any) string {
-		return aictx.ArgString(a, "extension") + "." + aictx.ArgString(a, "tool")
-	})
+	RegisterExtractor("ext_exec", func(a map[string]any) string { return aictx.ArgString(a, "command") })
 	RegisterExtractor("delete_asset", func(a map[string]any) string {
 		return "delete asset " + aictx.ArgString(a, "asset")
 	})

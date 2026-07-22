@@ -111,7 +111,7 @@ func TestCallHandler_Decision(t *testing.T) {
 func TestBuildHandlerMap_HasEveryToolOpsctlLooksUp(t *testing.T) {
 	Convey("opsctl 派发表覆盖所有按名字查找的工具", t, func() {
 		handlers := buildHandlerMap()
-		for _, name := range []string{"exec", "help", "exec_tool", "upload_file", "download_file", "put_asset", "put_group"} {
+		for _, name := range []string{"exec", "help", "ext_exec", "upload_file", "download_file", "put_asset", "put_group"} {
 			So(handlers, ShouldContainKey, name)
 		}
 	})

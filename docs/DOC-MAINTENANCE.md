@@ -53,7 +53,7 @@ Verify each one against the code. Common claim types in opskat and how to check 
 | Backend layer / subsystem directory exists | `git ls-tree --name-only -d HEAD internal/` (then `git ls-files internal/<name>/` to confirm a subsystem, e.g. `sshpool` / `connpool` / `approval`) |
 | **Asset-type list** (N adapters) | `git grep -hn "Register(&" -- internal/assettype/*.go \| grep -v _test` — enumerate the registered handlers (including interactive-only types such as RDP and OSS), **don't hardcode a number**. Registration-based extension, no `switch assetType` |
 | A file / package path exists **by exact name** | `git ls-files 'internal/ai/policy/*_policy.go'` — renamed / moved files are the **#1 drift source** (the `command_policy.go` trap above) |
-| AI dispatches extensions via a **single `exec_tool`** | `git grep -n "tool_handler_ext" -- internal/ai` (one `exec_tool` dispatcher, not one AI tool per extension) |
+| AI dispatches extensions via a **single `ext_exec`** | `git grep -n "tool_handler_ext" -- internal/ai` (one `ext_exec` dispatcher, not one AI tool per extension) |
 | Migration directory / count | `git ls-files 'migrations/*.go' \| grep -v _test \| wc -l` (enumerate; new migrations are **appended**, old files unchanged) |
 | Frontend stores (one per domain) | `git ls-files 'frontend/src/stores/*.ts' \| grep -v '\.test\.'` |
 | Locales (which / namespace) | `git ls-files 'frontend/src/i18n/locales/*/common.json'` — two, `zh-CN` / `en`; the i18next namespace is `common` |

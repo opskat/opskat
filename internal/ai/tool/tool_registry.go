@@ -56,7 +56,7 @@ func AllToolDefs() []ToolDef {
 		{"upload_file", handleUploadFile},
 		{"download_file", handleDownloadFile},
 		{"request_permission", handleRequestGrant},
-		{"exec_tool", handleExecTool},
+		{"ext_exec", handleExecTool},
 		{"exec", handleExec},
 		{"help", handleHelp},
 	}
