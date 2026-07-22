@@ -45,7 +45,7 @@ func getRedisCache(ctx context.Context) *RedisClientCache {
 // --- Executor ---
 
 // ExecRedisOnAsset 是不含权限检查的纯执行入口：权限检查由调用方（统一 exec 工具的
-// handleExec、batch_command 的预检）在调用之前完成，这里只负责连接与执行。
+// handleExec、batch_exec 的预检）在调用之前完成，这里只负责连接与执行。
 // scope 非空时按 redis db 序号（0-15）覆盖资产默认库。
 func ExecRedisOnAsset(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
 	cfg, err := asset.GetRedisConfig()

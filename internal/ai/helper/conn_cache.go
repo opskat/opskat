@@ -12,7 +12,7 @@ import (
 
 // ConnCache 泛型连接缓存，在同一次 AI Send 中复用连接。
 // 并发模型：mu 保护 maps；sf 保证同一 assetID 并发首拨只发生一次（second waiter
-// 拿到 first dialer 的结果），batch_command 多条命令并发命中同资产时只握手一次。
+// 拿到 first dialer 的结果），batch_exec 多条命令并发命中同资产时只握手一次。
 type ConnCache[C io.Closer] struct {
 	mu      sync.Mutex
 	clients map[int64]C

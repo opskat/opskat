@@ -37,7 +37,9 @@ type batchResultItem struct {
 }
 
 // handleBatchCommand 并发执行多条命令并聚合返回。
-// 流程：解析 → （可选类型断言 + 规范化）策略预检 → 聚合 needConfirm 一次审批 →
+// 单条 per-item 流程与 handleExec 同一顺序、同一理由（见 handleExec 的文档注释）：
+// 解析 → 可选类型断言 → 执行器查找 → 门禁（IsDocumented）→ 规范化 → precheck →
+// 权限检查。所有无副作用的判断都排在权限检查（可能弹审批、聚合成一次批量确认）之前。
 // max 10 并发执行。与 opsctl batch 的审批/并发流程保持一致；派发按资产真实类型走
 // permission.ExecutorFor，覆盖面与统一 exec 工具一致（含 database/redis/mongodb/etcd/
 // kafka/k8s）。
@@ -120,6 +122,21 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 			continue
 		}
 
+		// 门禁：该资产类型的用法文档是否已到过模型面前——与 handleExec 同一道检查、
+		// 同一个位置（执行器查找之后、规范化之前）。没有这道检查，batch 就是绕过它的
+		// 通道：模型可以借 batch 执行一个从没查过语法的类型。deny 文案复用
+		// execGuidance，措辞与 handleExec 的引导语一致（点名资产与类型、指引先调 help）。
+		if gate := GetDocGate(ctx); gate != nil {
+			convID := aictx.GetConversationID(ctx)
+			if !gate.IsDocumented(convID, asset.Type) {
+				resolved = append(resolved, resolvedCmd{
+					item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
+					decision: "deny", denyMsg: execGuidance(asset),
+				})
+				continue
+			}
+		}
+
 		// 权限检查用规范化后的命令：批的是这个，就该按这个匹配策略/审批弹窗/审计——
 		// 与 handleExec 的第 8 步同一理由（kafka 的双 token 串就是靠这条才对得上）。
 		checkCommand := cmd.Command
@@ -133,6 +150,21 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 				continue
 			}
 			checkCommand = canonical
+		}
+
+		// 前置条件检查（如该类型注册了 PrecheckFunc，目前只有 serial）：与 handleExec 第 7
+		// 步同一理由，必须排在权限检查之前——没有这道检查，一个没有活跃会话的串口资产会
+		// 先弹一次审批，批准之后才因为没有会话而失败。serial 在改造前根本进不了 batch
+		// （旧的三路 switch 没有 serial 分支），是本次改造让它第一次可达，这道检查补上
+		// 同时打开的洞。
+		if precheck, ok := permission.PrecheckFor(asset.Type); ok {
+			if err := precheck(ctx, asset); err != nil {
+				resolved = append(resolved, resolvedCmd{
+					item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
+					checkCommand: checkCommand, decision: "deny", denyMsg: err.Error(),
+				})
+				continue
+			}
 		}
 
 		decision, denyMsg := "allow", ""
