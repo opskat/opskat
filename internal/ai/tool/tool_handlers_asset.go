@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -12,7 +11,6 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/repository/group_repo"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 )
@@ -190,86 +188,6 @@ func handleGetAsset(ctx context.Context, args map[string]any) (string, error) {
 	return string(data), nil
 }
 
-func handleAddAsset(ctx context.Context, args map[string]any) (string, error) {
-	name := aictx.ArgString(args, "name")
-	assetType := aictx.ArgString(args, "type")
-	if assetType == "" {
-		assetType = asset_entity.AssetTypeSSH
-	}
-	if name == "" {
-		return "", fmt.Errorf("missing required parameter: name")
-	}
-
-	h, ok := assettype.Get(assetType)
-	if !ok {
-		return "", fmt.Errorf("unsupported asset type: %s", assetType)
-	}
-	if err := h.ValidateCreateArgs(args); err != nil {
-		return "", err
-	}
-
-	groupID := aictx.ArgInt64(args, "group_id")
-	description := aictx.ArgString(args, "description")
-	icon := aictx.ArgString(args, "icon")
-
-	asset := &asset_entity.Asset{
-		Name:        name,
-		Type:        assetType,
-		Icon:        icon,
-		GroupID:     groupID,
-		Description: description,
-	}
-
-	if err := h.ApplyCreateArgs(ctx, asset, args); err != nil {
-		return "", err
-	}
-
-	if err := asset_svc.Asset().Create(ctx, asset); err != nil {
-		return "", fmt.Errorf("failed to create asset: %w", err)
-	}
-	aictx.NotifyDataChanged("asset")
-	return fmt.Sprintf(`{"id":%d,"message":"asset created successfully"}`, asset.ID), nil
-}
-
-func handleUpdateAsset(ctx context.Context, args map[string]any) (string, error) {
-	id := aictx.ArgInt64(args, "id")
-	if id == 0 {
-		return "", fmt.Errorf("missing required parameter: id")
-	}
-
-	asset, err := asset_svc.Asset().Get(ctx, id)
-	if err != nil {
-		return "", fmt.Errorf("asset not found: %w", err)
-	}
-
-	if name := aictx.ArgString(args, "name"); name != "" {
-		asset.Name = name
-	}
-	if _, ok := args["description"]; ok {
-		asset.Description = aictx.ArgString(args, "description")
-	}
-	// 仅接受正整数：避免 AI 误传 group_id=0 把资产悄悄移到未分组。
-	// 用户若想解绑，请走前端 UI——这是潜在破坏性操作。
-	if gid := aictx.ArgInt64(args, "group_id"); gid > 0 {
-		asset.GroupID = gid
-	}
-	if icon := aictx.ArgString(args, "icon"); icon != "" {
-		asset.Icon = icon
-	}
-
-	if h, ok := assettype.Get(asset.Type); ok {
-		if err := h.ApplyUpdateArgs(ctx, asset, args); err != nil {
-			return "", fmt.Errorf("apply update args failed: %w", err)
-		}
-	}
-
-	if err := asset_svc.Asset().Update(ctx, asset); err != nil {
-		return "", fmt.Errorf("failed to update asset: %w", err)
-	}
-	aictx.NotifyDataChanged("asset")
-	return `{"message":"asset updated successfully"}`, nil
-}
-
 func handleListGroups(ctx context.Context, _ map[string]any) (string, error) {
 	groups, err := group_repo.Group().List(ctx)
 	if err != nil {
@@ -318,59 +236,4 @@ func handleGetGroup(ctx context.Context, args map[string]any) (string, error) {
 		return "", fmt.Errorf("failed to marshal group detail: %w", err)
 	}
 	return string(data), nil
-}
-
-func handleAddGroup(ctx context.Context, args map[string]any) (string, error) {
-	name := aictx.ArgString(args, "name")
-	if name == "" {
-		return "", fmt.Errorf("missing required parameter: name")
-	}
-	now := time.Now().Unix()
-	group := &group_entity.Group{
-		Name:        name,
-		ParentID:    aictx.ArgInt64(args, "parent_id"),
-		Icon:        aictx.ArgString(args, "icon"),
-		Description: aictx.ArgString(args, "description"),
-		SortOrder:   aictx.ArgInt(args, "sort_order"),
-		Createtime:  now,
-		Updatetime:  now,
-	}
-	if err := group_repo.Group().Create(ctx, group); err != nil {
-		return "", fmt.Errorf("failed to create group: %w", err)
-	}
-	aictx.NotifyDataChanged("group")
-	return fmt.Sprintf(`{"id":%d,"message":"group created successfully"}`, group.ID), nil
-}
-
-func handleUpdateGroup(ctx context.Context, args map[string]any) (string, error) {
-	id := aictx.ArgInt64(args, "id")
-	if id == 0 {
-		return "", fmt.Errorf("missing required parameter: id")
-	}
-	group, err := group_repo.Group().Find(ctx, id)
-	if err != nil {
-		return "", fmt.Errorf("group not found: %w", err)
-	}
-	if name := aictx.ArgString(args, "name"); name != "" {
-		group.Name = name
-	}
-	// 仅接受正整数：避免 AI 误传 parent_id=0 把分组悄悄变成顶级。
-	if pid := aictx.ArgInt64(args, "parent_id"); pid > 0 {
-		group.ParentID = pid
-	}
-	if _, ok := args["icon"]; ok {
-		group.Icon = aictx.ArgString(args, "icon")
-	}
-	if _, ok := args["description"]; ok {
-		group.Description = aictx.ArgString(args, "description")
-	}
-	if _, ok := args["sort_order"]; ok {
-		group.SortOrder = aictx.ArgInt(args, "sort_order")
-	}
-	group.Updatetime = time.Now().Unix()
-	if err := group_repo.Group().Update(ctx, group); err != nil {
-		return "", fmt.Errorf("failed to update group: %w", err)
-	}
-	aictx.NotifyDataChanged("group")
-	return `{"message":"group updated successfully"}`, nil
 }

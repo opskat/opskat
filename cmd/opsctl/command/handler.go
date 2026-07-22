@@ -66,7 +66,7 @@ func callHandler(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, 
 	}
 
 	// 写操作成功后通知桌面端刷新 UI
-	if toolName == "add_asset" || toolName == "update_asset" {
+	if toolName == "put_asset" || toolName == "put_group" {
 		dataDir := bootstrap.ResolvedDataDir()
 		token, tokenErr := bootstrap.ReadAuthToken(dataDir)
 		if tokenErr != nil {

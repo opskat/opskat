@@ -99,17 +99,19 @@ func TestCallHandler_Decision(t *testing.T) {
 }
 
 // TestBuildHandlerMap_HasEveryToolOpsctlLooksUp 锁住 opsctl 按名字查表这条**运行时**
-// 依赖。cmdSQL / cmdRedisCmd / cmdMongo / cmdBatch 都把工具名当字符串传给 callHandler，
-// 名字不在 tool.AllToolDefs() 里只会在用户真的敲那条命令时打印
+// 依赖。cmdSQL / cmdRedisCmd / cmdMongo / cmdBatch / cmdCreate / cmdUpdate 都把工具名当
+// 字符串传给 callHandler，名字不在 tool.AllToolDefs() 里只会在用户真的敲那条命令时打印
 // "Internal error: unknown tool"——编译不报错，别的单测也照样过。
 //
 // 按类型区分的旧工具（exec_sql / exec_redis / exec_mongo）删除时，这几条路径统一
 // 改查 "exec"；如果那次只删了注册项而没把这里加上，opsctl 的 sql/redis/mongo/batch
-// 会整体变成运行时错误。help 一并断言：它和 exec 是同一次补进 AllToolDefs 的。
+// 会整体变成运行时错误。help 一并断言：它和 exec 是同一次补进 AllToolDefs 的。put_asset /
+// put_group 同理锁住 create/update：这份清单此前不含 add_asset/update_asset，四个 opsctl
+// 调用点改名的那次改动本可以在这里毫无察觉地漏改一处（详见 create.go 的 callHandler 调用）。
 func TestBuildHandlerMap_HasEveryToolOpsctlLooksUp(t *testing.T) {
 	Convey("opsctl 派发表覆盖所有按名字查找的工具", t, func() {
 		handlers := buildHandlerMap()
-		for _, name := range []string{"exec", "help", "exec_tool", "upload_file", "download_file"} {
+		for _, name := range []string{"exec", "help", "exec_tool", "upload_file", "download_file", "put_asset", "put_group"} {
 			So(handlers, ShouldContainKey, name)
 		}
 	})

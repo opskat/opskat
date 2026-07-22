@@ -28,8 +28,10 @@ func TestTools_RegistryShape(t *testing.T) {
 
 		expected := []string{
 			// asset
-			"list_assets", "get_asset", "add_asset", "update_asset",
-			"list_groups", "get_group", "add_group", "update_group",
+			"list_assets", "get_asset",
+			"list_groups", "get_group",
+			// crud
+			"put_asset", "put_group",
 			// exec
 			"upload_file", "download_file",
 			"request_permission", "batch_exec",

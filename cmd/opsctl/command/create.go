@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
@@ -84,34 +85,36 @@ func cmdCreate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 			}
 		}
 
-		params := map[string]any{
-			"name":     *name,
-			"type":     *assetType,
+		// Type-specific connection fields go under "config": put_asset (the AI CRUD tool
+		// this dispatches to, see tool_handlers_crud.go) only reads config through its
+		// nested "config" object, not the top-level args — name/type/group_id/description/
+		// icon are the only fields it reads at the top level.
+		config := map[string]any{
 			"host":     *host,
 			"port":     float64(*port),
 			"username": *username,
 		}
 		if *assetType == "ssh" && *authType != "" {
-			params["auth_type"] = *authType
+			config["auth_type"] = *authType
 		}
 		if *assetType == "database" {
 			if *driver != "" {
-				params["driver"] = *driver
+				config["driver"] = *driver
 			}
 			if *database != "" {
-				params["database"] = *database
+				config["database"] = *database
 			}
 			if *readOnly {
-				params["read_only"] = "true"
+				config["read_only"] = "true"
 			}
 		}
 		if *assetType == "k8s" {
-			params["kubeconfig"] = *kubeconfig
+			config["kubeconfig"] = *kubeconfig
 			if *k8sNamespace != "" {
-				params["namespace"] = *k8sNamespace
+				config["namespace"] = *k8sNamespace
 			}
 			if *k8sContext != "" {
-				params["context"] = *k8sContext
+				config["context"] = *k8sContext
 			}
 		}
 		if *sshAsset != "" {
@@ -120,7 +123,13 @@ func cmdCreate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 				fmt.Fprintf(os.Stderr, "Error resolving SSH asset: %v\n", resolveErr)
 				return 1
 			}
-			params["ssh_asset_id"] = float64(sshID)
+			config["ssh_asset_id"] = float64(sshID)
+		}
+
+		params := map[string]any{
+			"name":   *name,
+			"type":   *assetType,
+			"config": config,
 		}
 		if *groupID != 0 {
 			params["group_id"] = float64(*groupID)
@@ -145,7 +154,7 @@ func cmdCreate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 			return 1
 		}
 
-		return callHandler(ctx, handlers, "add_asset", params)
+		return callHandler(ctx, handlers, "put_asset", params)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown resource %q. Supported: asset\n", resource)
@@ -186,20 +195,28 @@ func cmdUpdate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 		fs.Usage = func() { printUpdateAssetUsage() }
 		_ = fs.Parse(args[2:])
 
+		// handlePutAsset resolves the target via assetref.Resolve, which accepts numeric
+		// id strings — so the "asset" key takes the same id already resolved above, just
+		// formatted as a string. Connection fields go under "config" (see cmdCreate).
+		config := map[string]any{}
+		if *host != "" {
+			config["host"] = *host
+		}
+		if *port != 0 {
+			config["port"] = float64(*port)
+		}
+		if *username != "" {
+			config["username"] = *username
+		}
+
 		params := map[string]any{
-			"id": float64(id),
+			"asset": strconv.FormatInt(id, 10),
+		}
+		if len(config) > 0 {
+			params["config"] = config
 		}
 		if *name != "" {
 			params["name"] = *name
-		}
-		if *host != "" {
-			params["host"] = *host
-		}
-		if *port != 0 {
-			params["port"] = float64(*port)
-		}
-		if *username != "" {
-			params["username"] = *username
 		}
 		if *description != "" {
 			params["description"] = *description
@@ -221,7 +238,7 @@ func cmdUpdate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 			return 1
 		}
 
-		return callHandler(ctx, handlers, "update_asset", params)
+		return callHandler(ctx, handlers, "put_asset", params)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown resource %q. Supported: asset\n", resource)

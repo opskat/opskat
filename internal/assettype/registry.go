@@ -22,7 +22,7 @@ type AssetTypeHandler interface {
 	// 经 Register 写入 entity/policy 的 asset-kind 注册表,供 ai/policy.ResolvePolicyKind 派生。
 	PolicyKind() string
 	// ValidateCreateArgs 校验 AI 工具创建资产时的必填字段。
-	// 由 handleAddAsset 在 ApplyCreateArgs 之前调用，每种类型自行声明所需字段。
+	// 由 put_asset 的 createAsset 在 ApplyCreateArgs 之前调用，每种类型自行声明所需字段。
 	ValidateCreateArgs(args map[string]any) error
 	ApplyCreateArgs(ctx context.Context, a *asset_entity.Asset, args map[string]any) error
 	ApplyUpdateArgs(ctx context.Context, a *asset_entity.Asset, args map[string]any) error

@@ -187,7 +187,7 @@ func TestAssetSvc_Reorder(t *testing.T) {
 //
 // 改了主机地址或口令之后，连接池里那条按旧配置拨出去的连接还在，下一次查询/操作照旧
 // 复用它——用户改完发现"没生效"。此前只有 etcd 与 oss 做了失效，还是挂在 assettype 的
-// ApplyUpdateArgs 里（AI / opsctl 的 update_asset 才会走到），桌面 UI 改资产根本不触发。
+// ApplyUpdateArgs 里（AI / opsctl 的 put_asset 才会走到），桌面 UI 改资产根本不触发。
 //
 // 只丢缓存不关会话：改配置不该掐断用户开着的终端，那一侧由 CloseAsset 负责。
 func TestAssetSvc_Update_InvalidatesConnections(t *testing.T) {
