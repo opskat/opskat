@@ -11,6 +11,7 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/mock/gomock"
 
+	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -364,5 +365,89 @@ func TestCmdBatch_AssertionFailureDoesNotAbortWholeBatch(t *testing.T) {
 		So(output.Results[1].AssetID, ShouldEqual, 11)
 		So(output.Results[1].Error, ShouldNotContainSubstring, "resolve asset")
 		So(output.Results[1].Error, ShouldNotBeEmpty)
+	})
+}
+
+// TestCmdBatch_OrderingAndCanonicalizeGateMatchesCmdExec locks batch.go's I2 + I1 fix:
+// cmdBatch used to only assert --type (batchAssertPrefixType) before Step 3/4 — executor
+// lookup, canonicalize, and precheck all lived inside the dispatched handler, past both
+// the Step 3 policy pre-check and the Step 4 desktop batch-approval popup. And Step 3's
+// CheckPermission was called with the entry's *raw* command, not canonicalize's output —
+// same bug as cmdExec's I1, on the "default" (bare, unprefixed) dispatch path Task 10
+// newly opened up to non-ssh, non-legacy-prefixed types (etcd/kafka/k8s/...).
+//
+// Four bare entries, each independently terminal at Step 2 or Step 3 — none of them ever
+// reach Step 4 (requireBatchApproval, which would dial the real desktop socket), so this
+// stays a safe, fast unit test:
+//   - kafka: canonicalizes "topic delete orders" -> "topic.delete orders" and must be
+//     denied by the built-in dangerous-op policy (the most important case — I1).
+//   - rdp: doc-only type, no executor at all — must fail at Step 2, never even entering
+//     Step 3's permission bucket.
+//   - serial: has an executor but no active session — PrecheckFor must fail at Step 2.
+//   - etcd: syntactically malformed ("put" with no value) — CanonicalizeFor must reject
+//     it at Step 2.
+func TestCmdBatch_OrderingAndCanonicalizeGateMatchesCmdExec(t *testing.T) {
+	Convey("kafka/rdp/serial/etcd 四条裸目都必须在 Step 4 之前失败，且策略检查用规范化命令", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+		assets := []*asset_entity.Asset{
+			{ID: 201, Name: "kafka-1", Type: asset_entity.AssetTypeKafka},
+			{ID: 202, Name: "rdp-1", Type: asset_entity.AssetTypeRDP},
+			{ID: 203, Name: "serial-1", Type: asset_entity.AssetTypeSerial},
+			{ID: 204, Name: "etcd-1", Type: asset_entity.AssetTypeEtcd},
+		}
+		mockAsset.EXPECT().List(gomock.Any(), gomock.Any()).Return(assets, nil).AnyTimes()
+		for _, a := range assets {
+			mockAsset.EXPECT().Find(gomock.Any(), a.ID).Return(a, nil).AnyTimes()
+		}
+		origAsset := asset_repo.Asset()
+		asset_repo.RegisterAsset(mockAsset)
+		defer asset_repo.RegisterAsset(origAsset)
+
+		ctx := helper.WithSerialManager(context.Background(), noSessionSerialManager{})
+
+		r, w, pipeErr := os.Pipe()
+		So(pipeErr, ShouldBeNil)
+		origStdout := os.Stdout
+		os.Stdout = w
+
+		code := cmdBatch(ctx, map[string]tool.ToolHandlerFunc{}, []string{
+			"kafka-1:topic delete orders",
+			"rdp-1:foo",
+			"serial-1:ls",
+			"etcd-1:put /only-key",
+		}, "")
+
+		So(w.Close(), ShouldBeNil)
+		os.Stdout = origStdout
+		data, readErr := io.ReadAll(r)
+		So(readErr, ShouldBeNil)
+
+		So(code, ShouldEqual, 1) // all four entries fail
+
+		var output batchOutput
+		So(json.Unmarshal(data, &output), ShouldBeNil)
+		So(len(output.Results), ShouldEqual, 4)
+
+		// kafka: must be denied by the canonical-command policy check (Step 3), not by
+		// a downstream approval/execution failure — "denied by policy" only appears on
+		// that exact path.
+		So(output.Results[0].AssetID, ShouldEqual, 201)
+		So(output.Results[0].Error, ShouldContainSubstring, "denied by policy")
+
+		// rdp: no executor at all — Step 2's prepareExecCommand gate.
+		So(output.Results[1].AssetID, ShouldEqual, 202)
+		So(output.Results[1].Error, ShouldContainSubstring, "has no exec support yet")
+
+		// serial: precheck fails (no active session) — Step 2's prepareExecCommand gate.
+		So(output.Results[2].AssetID, ShouldEqual, 203)
+		So(output.Results[2].Error, ShouldContainSubstring, "no active serial session")
+
+		// etcd: malformed command rejected by canonicalize — Step 2's
+		// prepareExecCommand gate.
+		So(output.Results[3].AssetID, ShouldEqual, 204)
+		So(output.Results[3].Error, ShouldContainSubstring, "put requires key and value")
 	})
 }

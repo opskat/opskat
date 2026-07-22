@@ -56,10 +56,14 @@ type batchOutput struct {
 
 // resolvedBatchCmd is a batch command with resolved asset info.
 type resolvedBatchCmd struct {
-	asset    *asset_entity.Asset
-	cmdType  string // "exec"|"sql"|"redis"|"mongo"
-	command  string
-	decision *aictx.CheckResult // 策略预检结果，用于审计
+	asset   *asset_entity.Asset
+	cmdType string // "exec"|"sql"|"redis"|"mongo"
+	command string
+	// checkCommand is the (possibly canonicalized) form used for policy matching and
+	// approval display — see prepareExecCommand's doc comment. Execution always
+	// uses command (raw), never this field.
+	checkCommand string
+	decision     *aictx.CheckResult // 策略预检结果，用于审计
 }
 
 var validBatchTypes = map[string]bool{"exec": true, "sql": true, "redis": true, "mongo": true}
@@ -134,10 +138,31 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 			continue
 		}
 
+		// Executor lookup / canonicalize / precheck — the same no-side-effect gate
+		// cmdExec runs (prepareExecCommand), hoisted above Step 3/4 so an asset type with
+		// no executor at all, a malformed command, or an unmet precondition (serial: no
+		// active session) fails here instead of after a desktop approval popup. Skipped
+		// for the legacy "mongo" prefix: its Command field is a JSON-encoded
+		// {"operation":...} blob (executeBatchItem renders it into a real mongo command
+		// string only at execution time), not a command string — running
+		// CanonicalizeFor("mongodb") on that JSON would reject it as malformed.
+		checkCommand := cmd.Command
+		if cmdType != "mongo" {
+			prepared, prepErr := prepareExecCommand(ctx, asset, cmd.Command)
+			if prepErr != nil {
+				results[i].Error = prepErr.Error()
+				argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, asset.ID, truncateStr(cmd.Command, 200))
+				writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, "", prepErr, nil)
+				continue
+			}
+			checkCommand = prepared
+		}
+
 		resolved[i] = resolvedBatchCmd{
-			asset:   asset,
-			cmdType: cmdType,
-			command: cmd.Command,
+			asset:        asset,
+			cmdType:      cmdType,
+			command:      cmd.Command,
+			checkCommand: checkCommand,
 		}
 	}
 
@@ -155,7 +180,10 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 			continue
 		}
 		permCtx := aictx.WithSessionID(ctx, session)
-		pr := permission.CheckPermission(permCtx, cmd.asset.Type, cmd.asset.ID, cmd.command)
+		// checkCommand, not command: policy matching must see whatever canonicalize
+		// produced (kafka's deny rules are keyed on its two-token canonical shape), same
+		// as cmdExec — see prepareExecCommand's doc comment.
+		pr := permission.CheckPermission(permCtx, cmd.asset.Type, cmd.asset.ID, cmd.checkCommand)
 		prCopy := pr
 		resolved[i].decision = &prCopy
 		bucket := permBucket{idx: i, result: pr}
@@ -192,7 +220,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 				Type:      cmd.cmdType,
 				AssetID:   cmd.asset.ID,
 				AssetName: cmd.asset.Name,
-				Command:   cmd.command,
+				Command:   cmd.checkCommand,
 			})
 		}
 

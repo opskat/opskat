@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/opskat/opskat/internal/ai/permission"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
 // extractCommand extracts the command string after "--" separator.
@@ -98,4 +101,50 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// prepareExecCommand runs the side-effect-free gates a command must clear before any
+// approval step touches it — executor lookup, canonicalize, precheck, in that order.
+// It mirrors internal/ai/tool/tool_handlers_unified.go's handleExec steps 4/6/7 (see that
+// function's doc comment for the full ordering rationale): opsctl used to run only the
+// --type assertion before requireApproval, so an asset type with no executor at all
+// (rdp/vnc/oss/local), a malformed command that canonicalize would reject (kafka/etcd
+// DSL parse errors, k8s with no kubeconfig), or an unmet precondition (serial: no active
+// session) all surfaced only *after* the user had already been shown — and had to answer
+// — a desktop approval dialog for a command that could never have run.
+//
+// Returns the command to use for policy matching AND approval display: the canonical
+// form if the asset's type registered a CanonicalizeFunc, the original command
+// otherwise. The caller must still dispatch execution with the original, raw command —
+// see cmdExec's doc comment (step 9) for why feeding the canonical form to the executor
+// is lossy.
+func prepareExecCommand(ctx context.Context, asset *asset_entity.Asset, command string) (string, error) {
+	if _, ok := permission.ExecutorFor(asset.Type); !ok {
+		return "", unsupportedExecTypeError(asset)
+	}
+
+	checkCommand := command
+	if canonicalize, ok := permission.CanonicalizeFor(asset.Type); ok {
+		canonical, err := canonicalize(asset, command)
+		if err != nil {
+			return "", err
+		}
+		checkCommand = canonical
+	}
+
+	if precheck, ok := permission.PrecheckFor(asset.Type); ok {
+		if err := precheck(ctx, asset); err != nil {
+			return "", err
+		}
+	}
+
+	return checkCommand, nil
+}
+
+// unsupportedExecTypeError mirrors internal/ai/tool/tool_handlers_unified.go's
+// unsupportedTypeError verbatim, so the same asset type reports the same message
+// whether the command came in through opsctl or the AI exec tool.
+func unsupportedExecTypeError(asset *asset_entity.Asset) error {
+	return fmt.Errorf("asset %q (type=%s) has no exec support yet; supported types: %s",
+		asset.Name, asset.Type, strings.Join(permission.RegisteredExecTypes(), ", "))
 }

@@ -67,6 +67,17 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		return 1
 	}
 
+	// Executor lookup / canonicalize / precheck — all side-effect-free, all must run
+	// before requireApproval (which pops a blocking desktop dialog). See
+	// prepareExecCommand's doc comment for why. checkCommand is the (possibly
+	// canonicalized) form used below for policy matching and approval display; command
+	// stays raw and is what actually gets executed.
+	checkCommand, err := prepareExecCommand(ctx, asset, command)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+
 	// Require approval. Type 用 asset 真实类型对应的审批类型（ApprovalTypeFor），
 	// 不能写死 "exec"：requireApproval 内部拿它去 permission.CheckPermission 做
 	// 策略/Grant 匹配，写死 "exec" 会让 redis/database/mongodb 资产统统走上
@@ -74,13 +85,20 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	// 且离线提示也会挂错检查结果。ApprovalTypeFor(asset.Type) 对 ssh 资产返回
 	// "exec"，行为与改造前完全一致；对 database/redis/mongodb 资产返回
 	// "sql"/"redis"/"mongo"，与旧 cmdSQL/cmdRedisCmd/cmdMongo 传入的字面量一致。
+	//
+	// req.Command 是 checkCommand（可能已规范化），不是原始 command：CheckPermission
+	// 与桌面审批弹窗都按它匹配/展示——kafka 的策略规则是"恰好两个 token"的规范形状，
+	// 喂原始富命令（"topic delete orders"）会让 deny 规则整条失配，见 prepareExecCommand
+	// 的注释。用户点"始终允许"时落库的 grant pattern 同样取自 req.Command
+	// （approval.go 的 SaveGrantPatternsForApproval 调用点），必须是规范形状才能在
+	// 下一次同类命令上重新命中。
 	approvalType := permission.ApprovalTypeFor(asset.Type)
 	argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, asset.ID, command)
 	approvalResult, err := execApprovalFn(ctx, approval.ApprovalRequest{
 		Type:      approvalType,
 		AssetID:   asset.ID,
 		AssetName: asset.Name,
-		Command:   command,
+		Command:   checkCommand,
 		Detail:    fmt.Sprintf("opsctl exec %s -- %s", args[0], command),
 		SessionID: session,
 	})
