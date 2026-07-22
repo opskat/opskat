@@ -65,6 +65,23 @@ func init() {
 		func(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
 			return helper.ExecKafkaOnAsset(ctx, asset, command, scope)
 		}, kafkaHelp, helper.CanonicalizeKafkaCommand)
+
+	// 没有命令面、但可以被 put_asset 创建/更新的类型：只注册文档。
+	// exec 对它们仍然报 "no exec support yet"（RegisteredExecTypes 会跳过 exec == nil 的条目）。
+	for _, docOnly := range []string{
+		asset_entity.AssetTypeRDP,
+		asset_entity.AssetTypeVNC,
+		asset_entity.AssetTypeOSS,
+		asset_entity.AssetTypeLocal,
+	} {
+		doc, ok := skills.Get(docOnly)
+		if !ok {
+			// 文档缺失是编译期就能发现的接线错误（SKILL.md 是 //go:embed 进来的），
+			// 静默跳过会让 put_asset 对该类型永远无从查起。
+			panic("execimpl: missing SKILL.md for doc-only asset type " + docOnly)
+		}
+		permission.RegisterHelpDoc(docOnly, doc)
+	}
 }
 
 // canonicalizeK8sCommand 把原始 kubectl 命令规范化为注入 --context/--namespace 之后的

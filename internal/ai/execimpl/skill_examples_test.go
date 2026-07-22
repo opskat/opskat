@@ -105,6 +105,19 @@ var skillTypesWithoutCanonicalizer = []string{
 	asset_entity.AssetTypeSSH,
 }
 
+// skillDocOnlyTypes 是只通过 permission.RegisterHelpDoc 注册的类型（没有命令面）：
+// 它们的 SKILL.md 不含 "## Command syntax"，因此**必须**抽不到任何示例——这不是
+// 抽取器的疏漏，是预期状态。写成断言（下面的 for 循环里）而不是静默跳过，是为了防止
+// 未来有人往这些类型的 SKILL.md 里夹带一条示例命令：exec 对它们没有注册执行器
+// （help_coverage_test.go 的 TestDocOnlyTypesHaveNoExecutor 锁住了这一点），一条
+// "看起来能跑"的示例命令只会误导模型。
+var skillDocOnlyTypes = []string{
+	asset_entity.AssetTypeRDP,
+	asset_entity.AssetTypeVNC,
+	asset_entity.AssetTypeOSS,
+	asset_entity.AssetTypeLocal,
+}
+
 func TestSkillDocs_DocumentedExamplesAreCanonicalizable(t *testing.T) {
 	types := skills.Types()
 	if len(types) == 0 {
@@ -124,6 +137,15 @@ func TestSkillDocs_DocumentedExamplesAreCanonicalizable(t *testing.T) {
 		// 抽取器不认识"——静默放过就等于给漂移开了后门。
 		for _, v := range violations {
 			t.Errorf("%s/SKILL.md (body line %d): %s", assetType, v.line, v.message)
+		}
+
+		if slices.Contains(skillDocOnlyTypes, assetType) {
+			if len(examples) != 0 {
+				t.Errorf("%s/SKILL.md: doc-only type documents %d example(s) under %q, but this type has no "+
+					"command surface — exec is not registered for it, so an example here would mislead the model",
+					assetType, len(examples), skillCommandSection)
+			}
+			continue
 		}
 		// 每个类型都必须抽到东西：抽取规则一旦与文档写法整体错位（改了标题），
 		// 静默地什么都不检查是最坏的结果——这条断言把"空转"变成失败。

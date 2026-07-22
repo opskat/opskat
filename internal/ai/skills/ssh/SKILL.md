@@ -22,3 +22,15 @@ Pass the shell command verbatim as `command`:
 - Use `cat` / `ls` / `grep` inside the command to inspect remote files.
 - The `scope` parameter is not used by SSH assets.
 - Credentials are resolved automatically; never ask the user for a password.
+
+## Asset config (for put_asset)
+
+| field | type | required | notes |
+|---|---|---|---|
+| `host` | string | yes | |
+| `port` | number | yes | No server-side default — pass `22` explicitly |
+| `username` | string | yes | |
+| `password` | string | no | Stored encrypted; never echoed back |
+| `auth_type` | string | no | `"password"` or `"key"`; defaults to `"key"` when `private_key` is set, else `"password"` |
+| `private_key` | string | no | SSH private key in PEM format; imported into the credential store |
+| `passphrase` | string | no | Passphrase for `private_key`, if encrypted |
