@@ -183,6 +183,40 @@ func TestHandleHelp_ReturnsDocAndMarksGate(t *testing.T) {
 	}
 }
 
+// TestHandleHelp_UnknownTypeListsHelpTypesNotExecTypes locks the Minor review finding on
+// task 3: handleHelp's "no help documentation" error must enumerate types that HAVE a
+// help doc (permission.RegisteredHelpTypes), not types that can run commands
+// (permission.RegisteredExecTypes) — those two sets diverge once doc-only types exist
+// (rdp/vnc/oss/local have help but no executor). Listing RegisteredExecTypes silently
+// omits every doc-only type from an error message whose whole point is "here is what IS
+// documented".
+//
+// Registers a synthetic doc-only type (help, no executor) rather than relying on a real
+// asset type, so the assertion does not depend on which production types currently lack
+// docs (none do, post task 3) or on execimpl's init() having run in this test binary.
+func TestHandleHelp_UnknownTypeListsHelpTypesNotExecTypes(t *testing.T) {
+	m := setupUnified(t)
+	const docOnlyType = "test-doc-only-help-type"
+	const undocumentedType = "test-truly-undocumented-type"
+
+	permission.RegisterHelpDoc(docOnlyType, "fake doc-only body")
+	t.Cleanup(func() { permission.UnregisterExecutorForTest(docOnlyType) })
+
+	m.EXPECT().FindByName(gomock.Any(), "9").Return(nil, nil)
+	m.EXPECT().Find(gomock.Any(), int64(9)).Return(
+		&asset_entity.Asset{ID: 9, Name: "mystery-1", Type: undocumentedType}, nil)
+
+	ctx := WithDocGate(context.Background(), NewDocGate())
+	_, err := handleHelp(ctx, map[string]any{"asset": "9"})
+	if err == nil {
+		t.Fatal("expected an error for a type with no help doc")
+	}
+	if !strings.Contains(err.Error(), docOnlyType) {
+		t.Fatalf("error should list %q — it has a help doc (via RegisterHelpDoc) but no executor, "+
+			"so it must appear when the message enumerates documented types, got %q", docOnlyType, err.Error())
+	}
+}
+
 // 未注册执行器的类型（vnc 这类没有命令执行语义的远程桌面）应给出明确错误，
 // 而不是撞上门禁的引导文本。
 //

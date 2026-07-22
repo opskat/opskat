@@ -166,8 +166,8 @@ func handleHelp(ctx context.Context, args map[string]any) (string, error) {
 
 	doc, ok := permission.HelpFor(asset.Type)
 	if !ok {
-		return "", fmt.Errorf("asset %q (type=%s) has no help documentation yet; supported types: %s",
-			asset.Name, asset.Type, strings.Join(permission.RegisteredExecTypes(), ", "))
+		return "", fmt.Errorf("asset %q (type=%s) has no help documentation yet; documented types: %s",
+			asset.Name, asset.Type, strings.Join(permission.RegisteredHelpTypes(), ", "))
 	}
 
 	if gate := GetDocGate(ctx); gate != nil {

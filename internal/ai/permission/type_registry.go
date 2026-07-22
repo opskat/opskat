@@ -100,8 +100,15 @@ var execEntries = make(map[string]*execEntry)
 // RegisterExecutor 注册某资产类型的执行器与用法文档。canonicalize 是可选的第四个参数——
 // 只有执行前会改写命令的类型（目前是 k8s、etcd）才需要传；不传的类型按原样校验与执行。
 // 重复注册 panic——与 registerPermissionType 一致，注册冲突是启动期的编程错误，不该静默覆盖。
+//
+// help == "" 同样 panic，与 RegisterHelpDoc 的校验对齐：这条守卫是本包唯一能兜住
+// "调用方拿到一个空字符串却还是调用了注册函数"的地方——execimpl/register.go 的每个
+// exec 类型都从 skills.Get 取 help，若那次调用漏检了 ok（曾经发生过：8 处全写成
+// `sshHelp, _ := skills.Get(...)`），SKILL.md 缺失就会静默注册成一个内容为空的执行器：
+// HelpFor 仍然返回 ("", true)，help_coverage_test.go 的 TestEveryAssetTypeHasHelpDoc
+// 只检查 ok、不检查内容，因此测试保持全绿，而模型实际拿到的用法文档是空的。
 func RegisterExecutor(canonical string, exec ExecFunc, help string, canonicalize ...CanonicalizeFunc) {
-	if canonical == "" || exec == nil {
+	if canonical == "" || exec == nil || help == "" {
 		panic("permission: invalid executor registration")
 	}
 	if _, exists := execEntries[canonical]; exists {

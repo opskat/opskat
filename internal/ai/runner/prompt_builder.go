@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/opskat/opskat/internal/ai/permission"
 )
 
 // TabInfo 当前打开的 Tab 信息
@@ -181,6 +183,13 @@ func (b *PromptBuilder) buildErrorRecoveryGuidance() string {
 // 说明段无条件渲染，清单段只在调用方给了描述时追加：exec/help 是资产操作的**唯一**
 // 路径（按类型区分的旧工具已全部删除），若只在"有匹配的 Tab 打开"时才出现，模型在
 // 没开 Tab 的会话里就看不到这条路径，只能瞎猜工具名。
+//
+// 清单按 permission.ExecutorFor 拆成两段——不能把有执行器的类型和 doc-only 类型
+// （rdp/vnc/oss/local：只有 help、没有 exec）混进同一份"exec currently covers"清单。
+// 混装过 doc-only 类型的旧版本会让模型读到自相矛盾的文本：标题说"exec 覆盖以下类型"，
+// 紧接着列出的某一行描述却写着"exec is not supported for this type"——这正是这段
+// 清单本该消除的歧义，不能靠模型自己去调和。见 help_coverage_test.go /
+// TestEveryAssetTypeHasHelpDoc 对应的评审发现。
 func (b *PromptBuilder) buildAssetTypeSkills() string {
 	lines := []string{
 		"Operating on an asset — exec / help: exec(asset, command) runs a command against an asset and dispatches on the asset's REAL type, read from the asset record. You do not need to know the type in advance and you cannot mis-route: passing a Redis asset to exec runs it as Redis. Pass the asset's id or name as `asset`; use `scope` for the connection-level target that is not part of the command itself (database name for database assets, db index for Redis).",
@@ -188,15 +197,29 @@ func (b *PromptBuilder) buildAssetTypeSkills() string {
 		"Command syntax differs per asset type and is documented per type. The FIRST time you use exec against a given asset type in a conversation, call help(asset) to load that type's syntax — exec will tell you to if you skip it, and that round trip is wasted. Once you have called help for a type, it stays loaded for the rest of the conversation.",
 	}
 	if len(b.assetTypeSkills) > 0 {
-		types := make([]string, 0, len(b.assetTypeSkills))
+		var execTypes, configOnlyTypes []string
 		for t := range b.assetTypeSkills {
-			types = append(types, t)
+			if _, ok := permission.ExecutorFor(t); ok {
+				execTypes = append(execTypes, t)
+			} else {
+				configOnlyTypes = append(configOnlyTypes, t)
+			}
 		}
-		sort.Strings(types)
+		sort.Strings(execTypes)
+		sort.Strings(configOnlyTypes)
 
-		lines = append(lines, "", "Asset types exec currently covers:", "")
-		for _, t := range types {
-			lines = append(lines, fmt.Sprintf("- %s: %s", t, b.assetTypeSkills[t]))
+		if len(execTypes) > 0 {
+			lines = append(lines, "", "Asset types exec currently covers (help + exec both work):", "")
+			for _, t := range execTypes {
+				lines = append(lines, fmt.Sprintf("- %s: %s", t, b.assetTypeSkills[t]))
+			}
+		}
+		if len(configOnlyTypes) > 0 {
+			lines = append(lines, "",
+				"Config-only asset types — help documents put_asset config fields for these; exec is NOT supported for these:", "")
+			for _, t := range configOnlyTypes {
+				lines = append(lines, fmt.Sprintf("- %s: %s", t, b.assetTypeSkills[t]))
+			}
 		}
 	}
 	return strings.Join(lines, "\n")

@@ -53,9 +53,11 @@ func maskAPIKey(key string) string {
 // 一行技能描述（skills.Description），用于 PromptBuilder 的技能清单。
 //
 // 无条件全量返回，不看 openTabs：这份清单是**发现**用的，让模型知道 help 存在、以及
-// exec 覆盖了哪些类型（doc-only 类型有 help 无 exec，模型需要靠这份清单+help 内容
-// 分清两者，而不是等 exec 报错才知道）。按 Tab 过滤会让没开对应 Tab 的会话完全看不到
-// 这条路径。一行一类型，成本可以忽略。
+// exec 覆盖了哪些类型。doc-only 类型（有 help 无 exec）也混在这同一份返回值里——
+// 拆成"exec 真的覆盖"与"仅有配置文档"两段是 PromptBuilder.buildAssetTypeSkills 的
+// 职责（按 permission.ExecutorFor 拆分），本函数只负责提供全量的 类型→一行描述 映射，
+// 不在这里预判归属。按 Tab 过滤会让没开对应 Tab 的会话完全看不到这条路径。一行一
+// 类型，成本可以忽略。
 //
 // 它**不**满足 exec 的门禁——门禁只认模型显式调用过 help（见 tool.DocGate 的注释）。
 // 未内嵌文档的类型（如 extension 承载的 mongodb）不在这里，走的是另一条 extension
