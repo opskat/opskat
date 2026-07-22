@@ -16,6 +16,7 @@ func TestParseExtCommand(t *testing.T) {
 			"maxKeys": map[string]any{"type": "integer"},
 			"keys":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			"force":   map[string]any{"type": "boolean"},
+			"ratio":   map[string]any{"type": "number"},
 		},
 	}}
 
@@ -42,6 +43,27 @@ func TestParseExtCommand(t *testing.T) {
 		}
 		if got["bucket"] != "my-bucket" {
 			t.Errorf("bucket = %#v", got["bucket"])
+		}
+	})
+
+	t.Run("number 按浮点数转换", func(t *testing.T) {
+		_, _, argsJSON, err := parseExtCommand(`oss list_objects --ratio=3.14`, def)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(argsJSON, &got); err != nil {
+			t.Fatalf("args must be valid JSON: %v", err)
+		}
+		if got["ratio"] != 3.14 {
+			t.Errorf("ratio = %#v, want 3.14 (number, not string)", got["ratio"])
+		}
+	})
+
+	t.Run("number 类型不符报错并点名 flag", func(t *testing.T) {
+		_, _, _, err := parseExtCommand(`oss list_objects --ratio=abc`, def)
+		if err == nil || !strings.Contains(err.Error(), "ratio") {
+			t.Fatalf("a bad number must name the flag, got %v", err)
 		}
 	})
 
