@@ -25,6 +25,39 @@ func extractCommand(args []string) string {
 	return ""
 }
 
+// extractTypeFlag pulls an optional "--type <value>" (or "--type=<value>") token out of
+// args and returns (declaredType, remaining args). It only recognizes the flag before the
+// "--" command separator — after "--" every token belongs to the command, never to opsctl
+// itself (matching extractCommand's contract that everything past "--" is opaque payload).
+// Absent, it returns ("", args) unchanged so extractCommand keeps working on the same list.
+func extractTypeFlag(args []string) (string, []string) {
+	for i, arg := range args {
+		if arg == "--" {
+			break
+		}
+		if arg == "--type" {
+			valueIdx := i + 1
+			if valueIdx >= len(args) {
+				// "--type" with nothing after it: leave it for extractCommand/validation
+				// to deal with rather than silently swallowing a malformed flag.
+				return "", args
+			}
+			value := args[valueIdx] //nolint:gosec // guarded by the valueIdx >= len(args) check above
+			rest := make([]string, 0, len(args)-2)
+			rest = append(rest, args[:i]...)
+			rest = append(rest, args[valueIdx+1:]...)
+			return value, rest
+		}
+		if value, ok := strings.CutPrefix(arg, "--type="); ok {
+			rest := make([]string, 0, len(args)-1)
+			rest = append(rest, args[:i]...)
+			rest = append(rest, args[i+1:]...)
+			return value, rest
+		}
+	}
+	return "", args
+}
+
 // parseRemotePathCtx parses <asset>:<path> format where <asset> is an ID or name.
 // Returns (assetID, path, error). If not a remote path, assetID is 0.
 func parseRemotePathCtx(ctx context.Context, s string) (int64, string, error) {

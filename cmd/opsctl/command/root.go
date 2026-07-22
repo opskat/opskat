@@ -98,7 +98,7 @@ func Execute() int {
 
 	handlers := buildHandlerMap()
 
-	// 创建 SSH 连接池，供 redis/sql 命令的 SSH 隧道使用
+	// 创建 SSH 连接池，供统一 exec/cp 等命令复用 SSH 隧道使用
 	sshPool := sshpool.NewPool(&helper.AIPoolDialer{}, 5*time.Minute)
 	defer sshPool.Close()
 	ctx = helper.WithSSHPool(ctx, sshPool)
@@ -112,19 +112,13 @@ func Execute() int {
 	case "get":
 		return cmdGet(ctx, handlers, args)
 	case "exec":
-		return cmdExec(ctx, args, resolvedSession)
+		return cmdExec(ctx, handlers, args, resolvedSession)
 	case "create":
 		return cmdCreate(ctx, handlers, args, resolvedSession)
 	case "update":
 		return cmdUpdate(ctx, handlers, args, resolvedSession)
 	case "cp":
 		return cmdCp(ctx, handlers, args, resolvedSession)
-	case "sql":
-		return cmdSQL(ctx, handlers, args, resolvedSession)
-	case "redis":
-		return cmdRedisCmd(ctx, handlers, args, resolvedSession)
-	case "mongo":
-		return cmdMongo(ctx, handlers, args, resolvedSession)
 	case "ssh":
 		return cmdSSH(ctx, args)
 	case "batch":
@@ -151,14 +145,11 @@ Commands:
   list      List resources (assets or groups)
   get       Get detailed information about a resource
   ssh       Open an interactive SSH terminal session
-  exec      Execute a shell command on a remote server via SSH
-  sql       Execute SQL on a database asset (MySQL, PostgreSQL)
-  redis     Execute a Redis command on a Redis asset
-  mongo     Execute a MongoDB operation on a MongoDB asset
+  exec      Execute a command on any asset (ssh, database, redis, mongodb, etcd, kafka, k8s)
   create    Create a new resource (ssh, database, or redis)
   update    Update an existing resource
   cp        Copy files between local and remote servers (scp-style)
-  batch     Execute multiple commands in parallel (exec/sql/redis)
+  batch     Execute multiple commands in parallel across assets
   grant     Submit a batch grant for approval
   session   Manage approval sessions (start, end, status)
   ext       Manage and execute extension tools (list, exec)
@@ -195,9 +186,9 @@ Examples:
   opsctl ssh web-server                           Open interactive SSH session
   opsctl ssh production/web-01                    Disambiguate by group/name
   opsctl exec web-server -- uptime                Run command (auto-creates session)
-  opsctl sql prod-db "SELECT * FROM users"        Query a database
-  opsctl redis cache "GET session:abc"            Execute Redis command
-  opsctl mongo prod-mongo -d mydb -c users '{}'  Query a MongoDB collection
+  opsctl exec prod-db -- "SELECT * FROM users"    Query a database
+  opsctl exec cache -- "GET session:abc"          Execute a Redis command
+  opsctl exec cache --type redis -- "GET session:abc"  Assert the asset's type first
   opsctl create asset --type database --driver mysql --name "DB" --host db.local --username app
   opsctl cp ./config.yml web-server:/etc/app/     Upload a file
   opsctl cp 1:/var/log/app.log ./app.log          Download a file
