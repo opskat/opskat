@@ -11,7 +11,6 @@ import (
 func TestRuntimeCommandsUseResolvedDataDir(t *testing.T) {
 	files := []string{
 		"ext.go",
-		"ext_local.go",
 		"batch.go",
 		"handler.go",
 		"approval.go",

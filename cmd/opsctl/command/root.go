@@ -46,12 +46,7 @@ func Execute() int {
 		return 1
 	}
 
-	// Environment variable fallback
-	if *masterKey == "" {
-		if envKey := os.Getenv("OPSKAT_MASTER_KEY"); envKey != "" {
-			*masterKey = envKey
-		}
-	}
+	*dataDir, *masterKey = applyEnvironmentOverrides(*dataDir, *masterKey)
 
 	remaining := os.Args[verbIdx:]
 	if len(remaining) == 0 {
@@ -137,6 +132,16 @@ func Execute() int {
 		fmt.Fprintf(os.Stderr, "Error: unknown command %q\n\nRun 'opsctl help' for usage.\n", verb)
 		return 1
 	}
+}
+
+func applyEnvironmentOverrides(dataDir, masterKey string) (string, string) {
+	if dataDir == "" {
+		dataDir = os.Getenv("OPSKAT_DATA_DIR")
+	}
+	if masterKey == "" {
+		masterKey = os.Getenv("OPSKAT_MASTER_KEY")
+	}
+	return dataDir, masterKey
 }
 
 // isCLIUsageHelp reports whether remaining (the CLI args after global flags) means

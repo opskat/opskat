@@ -14,10 +14,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	delegateExtExecFn = delegateExtExec
-	localExtExecFn    = localExtExec
-)
+var delegateExtExecFn = delegateExtExec
 
 func cmdExt(args []string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
@@ -108,7 +105,7 @@ func cmdExtList() int {
 	return 0
 }
 
-// cmdExtExec executes an extension tool: delegate to desktop app first, fallback to local.
+// cmdExtExec delegates extension execution to the desktop app, which owns policy checks and approval.
 func cmdExtExec(args []string) int {
 	if len(args) < 2 || args[0] == "-h" || args[0] == "--help" {
 		printExtExecUsage()
@@ -208,8 +205,7 @@ Subcommands:
   list                              List installed extensions
   exec <extension> <tool> [--args]  Execute an extension tool
 
-When the desktop app is running, ext exec delegates execution to it.
-Otherwise, extensions are loaded and executed locally via WASM.
+ext exec requires the desktop app because extension policy checks and approval are owned by it.
 
 Examples:
   opsctl ext list

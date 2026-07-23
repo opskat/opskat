@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
+
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/assetref"
 	"github.com/opskat/opskat/internal/ai/cmdline"
@@ -84,7 +87,18 @@ func handleExecTool(ctx context.Context, args map[string]any) (string, error) {
 // ExecuteExtensionTool is the single policy-and-execution seam shared by AI ext_exec
 // and the desktop-delegated opsctl ext exec path.
 func ExecuteExtensionTool(ctx context.Context, executor ExtensionToolExecutor, assetID int64,
-	extName, toolName string, argsJSON []byte) ([]byte, error) {
+	extName, toolName string, argsJSON []byte) (result []byte, retErr error) {
+	logger.Ctx(ctx).Info("extension tool execution start", zap.String("extension", extName),
+		zap.String("tool", toolName), zap.Int64("assetID", assetID))
+	defer func() {
+		if retErr != nil {
+			logger.Ctx(ctx).Error("extension tool execution failed", zap.String("extension", extName),
+				zap.String("tool", toolName), zap.Int64("assetID", assetID), zap.Error(retErr))
+			return
+		}
+		logger.Ctx(ctx).Info("extension tool execution end", zap.String("extension", extName),
+			zap.String("tool", toolName), zap.Int64("assetID", assetID))
+	}()
 	ext := executor.FindExtensionByTool(extName, toolName)
 	if ext == nil || ext.Plugin == nil {
 		return nil, fmt.Errorf("ext_exec: tool %q not found in extension %q", toolName, extName)
