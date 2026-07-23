@@ -14,6 +14,11 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	delegateExtExecFn = delegateExtExec
+	localExtExecFn    = localExtExec
+)
+
 func cmdExt(args []string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		printExtUsage()
@@ -137,15 +142,17 @@ func cmdExtExec(args []string) int {
 	}
 
 	// Try delegate mode first (desktop app running)
-	result, err := delegateExtExec(extName, toolName, toolArgs)
+	result, err := delegateExtExecFn(extName, toolName, toolArgs)
 	if err == nil {
 		printToolResult(result)
 		return 0
 	}
 
-	// If desktop app is not running, fallback to local mode
+	// Extension policy and user confirmation are owned by the desktop app. Running
+	// the WASM locally here would bypass both, so offline execution fails closed.
 	if strings.Contains(err.Error(), "cannot connect") {
-		return localExtExec(extName, toolName, toolArgs)
+		fmt.Fprintln(os.Stderr, "Error: desktop app is required for extension policy checks and approval")
+		return 1
 	}
 
 	// Delegation succeeded but tool execution failed

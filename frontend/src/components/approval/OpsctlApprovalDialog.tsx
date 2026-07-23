@@ -248,6 +248,7 @@ export function OpsctlApprovalDialog() {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
+        data-testid="opsctl-approval-dialog"
         className="sm:max-w-lg max-h-[80vh] flex flex-col"
         showCloseButton={false}
         onInteractOutside={(e) => e.preventDefault()}
@@ -341,7 +342,7 @@ export function OpsctlApprovalDialog() {
             </div>
 
             <DialogFooter className="gap-2">
-              <Button variant="outline" onClick={() => respond("deny")}>
+              <Button data-testid="opsctl-approval-deny" variant="outline" onClick={() => respond("deny")}>
                 {t("opsctlApproval.deny")}
               </Button>
               {current.kind === "single" &&
@@ -366,7 +367,7 @@ export function OpsctlApprovalDialog() {
                     {t("opsctlApproval.remember")}
                   </Button>
                 ))}
-              <Button onClick={() => respond("allow")}>
+              <Button data-testid="opsctl-approval-allow" onClick={() => respond("allow")}>
                 {current.kind === "grant" ? t("opsctlApproval.approve") : t("opsctlApproval.allow")}
               </Button>
             </DialogFooter>

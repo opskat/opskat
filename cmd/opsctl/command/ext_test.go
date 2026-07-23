@@ -2,6 +2,7 @@ package command
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -79,6 +80,32 @@ func TestExtListManifestParsing(t *testing.T) {
 			So(count, ShouldEqual, 0)
 		})
 	})
+}
+
+func TestExtExecFailsClosedWhenDesktopIsOffline(t *testing.T) {
+	origDelegate := delegateExtExecFn
+	origLocal := localExtExecFn
+	localCalled := false
+	delegateExtExecFn = func(string, string, json.RawMessage) (string, error) {
+		return "", errors.New("cannot connect to approval socket")
+	}
+	localExtExecFn = func(string, string, json.RawMessage) int {
+		localCalled = true
+		return 0
+	}
+	t.Cleanup(func() {
+		delegateExtExecFn = origDelegate
+		localExtExecFn = origLocal
+	})
+
+	exitCode := cmdExtExec([]string{"oss", "delete_object", `--args={"asset_id":1,"key":"prod"}`})
+
+	if exitCode != 1 {
+		t.Fatalf("offline extension execution must fail closed, got exit code %d", exitCode)
+	}
+	if localCalled {
+		t.Fatal("offline extension execution reached the local WASM fallback")
+	}
 }
 
 func TestExtExecArgParsing(t *testing.T) {
