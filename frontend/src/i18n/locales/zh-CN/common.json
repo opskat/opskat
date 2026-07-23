@@ -101,7 +101,10 @@
   },
   "toolBlock": {
     "arguments": "参数",
-    "output": "输出"
+    "output": "输出",
+    "succeeded": "工具执行成功",
+    "failed": "工具执行失败",
+    "cancelled": "工具执行已取消"
   },
   "tab": {
     "close": "关闭",

@@ -101,7 +101,10 @@
   },
   "toolBlock": {
     "arguments": "Arguments",
-    "output": "Output"
+    "output": "Output",
+    "succeeded": "Tool succeeded",
+    "failed": "Tool failed",
+    "cancelled": "Tool cancelled"
   },
   "tab": {
     "close": "Close",

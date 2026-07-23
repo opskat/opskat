@@ -33,6 +33,11 @@ func auditMiddleware(c *agent.ToolContext) {
 	assetID, assetName, command := resolveAssetForAudit(c.Context(), c.ToolName, c.Input)
 
 	c.Next()
+	// Deny 是工具调用的失败终态，即使具体 handler 按 agent 协议把拒绝说明作为
+	// 普通文本返回。统一在 middleware 边界标记，事件、UI 与审计由同一结构化语义驱动。
+	if slot.Decision == aictx.Deny && c.Output != nil {
+		c.Output.IsError = true
+	}
 
 	argsJSON, err := json.Marshal(c.Input)
 	if err != nil {

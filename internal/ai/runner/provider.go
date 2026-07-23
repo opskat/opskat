@@ -55,6 +55,7 @@ type StreamEvent struct {
 	ToolName   string `json:"tool_name,omitempty"`    // type=tool_start/tool_result 时的工具名
 	ToolInput  string `json:"tool_input,omitempty"`   // type=tool_start 时的输入摘要
 	ToolCallID string `json:"tool_call_id,omitempty"` // type=tool_start/tool_result 时的工具调用 ID，前端用于跨 turn 还原 tool_calls 历史
+	IsError    bool   `json:"is_error,omitempty"`     // type=tool_result 时表示工具拒绝或执行失败
 	ConfirmID  string `json:"confirm_id,omitempty"`   // type=approval_request/approval_result 时的确认请求 ID
 	Error      string `json:"error,omitempty"`        // type=error 时的错误信息
 	AgentRole  string `json:"agent_role,omitempty"`   // type=agent_start/approval_request 时的角色描述

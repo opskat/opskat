@@ -111,6 +111,7 @@ interface StreamEventData {
   tool_name?: string;
   tool_input?: string;
   tool_call_id?: string;
+  is_error?: boolean;
   confirm_id?: string;
   error?: string;
   agent_role?: string;
@@ -1121,6 +1122,7 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
     }
 
     case "tool_result": {
+      const resultStatus: ContentBlock["status"] = event.is_error ? "error" : "completed";
       const updated = updateLastAssistant(msgs, (msg) => {
         const newBlocks = [...msg.blocks];
 
@@ -1154,7 +1156,7 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
           const children = [...(agentBlock.childBlocks || [])];
           const matchIdx = findToolMatch(children);
           if (matchIdx !== -1) {
-            children[matchIdx] = { ...children[matchIdx], content: event.content || "", status: "completed" };
+            children[matchIdx] = { ...children[matchIdx], content: event.content || "", status: resultStatus };
             agentBlock.childBlocks = children;
             newBlocks[agentIdx] = agentBlock;
             return { ...msg, blocks: newBlocks };
@@ -1164,7 +1166,7 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
         // 顶层工具块匹配
         const matchIdx = findToolMatch(newBlocks);
         if (matchIdx !== -1) {
-          newBlocks[matchIdx] = { ...newBlocks[matchIdx], content: event.content || "", status: "completed" };
+          newBlocks[matchIdx] = { ...newBlocks[matchIdx], content: event.content || "", status: resultStatus };
         }
         return { ...msg, blocks: newBlocks };
       });

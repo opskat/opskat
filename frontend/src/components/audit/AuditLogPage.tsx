@@ -433,9 +433,9 @@ export function AuditLogPage() {
                       </td>
                       <td className="px-4 py-2 text-center">
                         {log.Success === 1 ? (
-                          <CheckCircle2 className="h-4 w-4 text-success mx-auto" />
+                          <CheckCircle2 aria-label={t("audit.success")} className="h-4 w-4 text-success mx-auto" />
                         ) : (
-                          <XCircle className="h-4 w-4 text-destructive mx-auto" />
+                          <XCircle aria-label={t("audit.failed")} className="h-4 w-4 text-destructive mx-auto" />
                         )}
                       </td>
                       <td className="px-4 py-2">

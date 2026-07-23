@@ -19,11 +19,16 @@ func init() {
 	// extension's own invocation syntax) and must not register here — see
 	// canonicalizingTools' doc comment in extractor.go.
 	RegisterCanonicalizingTool("exec")
+	RegisterToolAlias("upload_file", "cp")
 	RegisterExtractor("upload_file", func(a map[string]any) string {
 		return "upload " + aictx.ArgString(a, "local_path") + " → " + aictx.ArgString(a, "remote_path")
 	})
+	RegisterToolAlias("download_file", "cp")
 	RegisterExtractor("download_file", func(a map[string]any) string {
 		return "download " + aictx.ArgString(a, "remote_path") + " → " + aictx.ArgString(a, "local_path")
+	})
+	RegisterExtractor("cp", func(a map[string]any) string {
+		return "cp " + aictx.ArgString(a, "src") + " → " + aictx.ArgString(a, "dst")
 	})
 	RegisterExtractor("request_permission", func(a map[string]any) string {
 		v := aictx.ArgString(a, "items")

@@ -23,6 +23,7 @@ func TestAuditRepoCreatePreservesExplicitSuccess(t *testing.T) {
 
 	sqlDB, err := gdb.DB()
 	require.NoError(t, err)
+	db.SetDefault(gdb)
 	t.Cleanup(func() {
 		require.NoError(t, sqlDB.Close())
 	})
@@ -33,7 +34,6 @@ func TestAuditRepoCreatePreservesExplicitSuccess(t *testing.T) {
 	).Scan(&databaseDefault).Error)
 	require.Equal(t, "1", databaseDefault, "the production schema must retain its historical default")
 
-	db.SetDefault(gdb)
 	repo := NewAudit()
 	for _, success := range []int{0, 1} {
 		t.Run("success="+strconv.Itoa(success), func(t *testing.T) {

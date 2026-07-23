@@ -143,10 +143,19 @@ func (w *DefaultAuditWriter) WriteToolCall(ctx context.Context, info ToolCallInf
 		success = 0
 		errMsg = info.Error.Error()
 	}
+	if info.Decision != nil && info.Decision.Decision == aictx.Deny {
+		success = 0
+		if errMsg == "" {
+			errMsg = info.Decision.Message
+		}
+		if errMsg == "" {
+			errMsg = info.Result
+		}
+	}
 
 	entry := &audit_entity.AuditLog{
 		Source:         aictx.GetAuditSource(ctx),
-		ToolName:       info.ToolName,
+		ToolName:       ToolNameForAudit(info.ToolName),
 		AssetID:        assetID,
 		AssetName:      assetName,
 		Command:        command,

@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -44,17 +45,31 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 	srcIsRemote := srcAssetID > 0
 	dstIsRemote := dstAssetID > 0
 
-	argsJSON := fmt.Sprintf(`{"src":%q,"dst":%q}`, src, dst)
-
 	if session != "" {
 		ctx = aictx.WithSessionID(ctx, session)
+	}
+	ctx = aictx.WithAuditSource(ctx, "opsctl")
+
+	primaryAssetID := dstAssetID
+	if primaryAssetID == 0 {
+		primaryAssetID = srcAssetID
+	}
+	argsJSON, err := buildCpAuditArgs(src, dst, srcAssetID, dstAssetID, primaryAssetID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
 	}
 
 	// 文件传输与执行命令等价（写 authorized_keys / cron / 被 systemd 引用的脚本都够
 	// 换来一次执行），因此必须与 exec 一样过审批。审批放在 proxy 与直连分支的共同上游，
 	// 否则走 proxy 的那条路径会漏。
-	approvalCtx, approvalResult, err := requireCpApproval(ctx, srcAssetID, srcPath, dstAssetID, dstPath, src, dst)
+	approvalCtx, approvalResult, approvalAssetID, err := requireCpApproval(ctx, srcAssetID, srcPath, dstAssetID, dstPath, src, dst)
 	if err != nil {
+		argsJSON, marshalErr := buildCpAuditArgs(src, dst, srcAssetID, dstAssetID, approvalAssetID)
+		if marshalErr != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", marshalErr)
+			return 1
+		}
 		writeOpsctlAudit(approvalCtx, "cp", argsJSON, "", err, approvalResult.ToCheckResult())
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
@@ -63,7 +78,7 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 	decision := approvalResult.ToCheckResult()
 
 	// 尝试通过 proxy 执行文件传输
-	if proxy := cpProxyFn(); proxy != nil {
+	if proxy := cpSSHProxyClientFn(); proxy != nil {
 		exitCode := cmdCpViaProxy(proxy, srcAssetID, srcPath, dstAssetID, dstPath, srcIsRemote, dstIsRemote, src, dst)
 		var cpErr error
 		if exitCode != 0 {
@@ -118,19 +133,16 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 // opsctlAuditWriter 同一套路：测试替换掉它，避免真的去连桌面端审批 socket。
 var cpApprovalFn = requireApproval
 
-// cpProxyFn 是 cp 的连接池探测入口，同上一套路。它探的是桌面端的 SSH proxy
-// unix socket：**开发机上只要 opskat 桌面端在跑，探测就会成功**，cmdCp 随即走
-// proxy 分支、完全绕开 handler 表。不把它做成缝，cp 的传输路径测试就只在
-// "桌面端没开" 的机器上通过，红绿取决于运行环境而不是代码。
-var cpProxyFn = getSSHProxyClient
+// cpSSHProxyClientFn 允许单测显式关闭 proxy 探测，避免读取默认用户数据目录下的 socket/token。
+var cpSSHProxyClientFn = getSSHProxyClient
 
 // requireCpApproval 为一次传输发起审批，审批主体是**远端路径**（grant 按资产存，
 // 本地路径不属于任何资产，塞进 pattern 无法匹配）。
 //
 // 资产间传输（remote → remote）要审两次：先源端读，再目的端写。任一被拒即整体失败。
-// 返回的 ctx 带上审批分配的 sessionID，供审计归组。
-func requireCpApproval(ctx context.Context, srcAssetID int64, srcPath string, dstAssetID int64, dstPath, src, dst string) (context.Context, ApprovalResult, error) {
-	detail := fmt.Sprintf("opsctl cp %s %s", src, dst)
+// 返回的 ctx 带上审批分配的 sessionID，assetID 是最后审批或拒绝的远端资产，供审计归组和展示。
+func requireCpApproval(ctx context.Context, srcAssetID int64, srcPath string, dstAssetID int64, dstPath, src, dst string) (context.Context, ApprovalResult, int64, error) {
+	detail := fmt.Sprintf("opsctl cp %s → %s", src, dst)
 
 	type target struct {
 		assetID int64
@@ -160,10 +172,36 @@ func requireCpApproval(ctx context.Context, srcAssetID int64, srcPath string, ds
 			ctx = aictx.WithSessionID(ctx, result.SessionID)
 		}
 		if err != nil {
-			return ctx, result, err
+			return ctx, result, tg.assetID, err
 		}
 	}
-	return ctx, last, nil
+	lastAssetID := int64(0)
+	if len(targets) > 0 {
+		lastAssetID = targets[len(targets)-1].assetID
+	}
+	return ctx, last, lastAssetID, nil
+}
+
+type cpAuditArgs struct {
+	AssetID            int64  `json:"asset_id"`
+	Src                string `json:"src"`
+	Dst                string `json:"dst"`
+	SourceAssetID      int64  `json:"source_asset_id,omitempty"`
+	DestinationAssetID int64  `json:"destination_asset_id,omitempty"`
+}
+
+func buildCpAuditArgs(src, dst string, srcAssetID, dstAssetID, assetID int64) (string, error) {
+	data, err := json.Marshal(cpAuditArgs{
+		AssetID:            assetID,
+		Src:                src,
+		Dst:                dst,
+		SourceAssetID:      srcAssetID,
+		DestinationAssetID: dstAssetID,
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal cp audit arguments: %w", err)
+	}
+	return string(data), nil
 }
 
 // assetNameForApproval 取资产名用于审批弹窗展示。资产在 parseRemotePathCtx 里已经解析过

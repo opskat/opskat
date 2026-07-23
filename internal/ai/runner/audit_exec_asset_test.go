@@ -368,9 +368,8 @@ func TestAuditMiddleware_ExecToolResolvesAssetBeforeToolRuns(t *testing.T) {
 // resolveAssetForAudit), so when handleExec short-circuits at the doc gate the row
 // still lands with the asset attributed and args["command"] fully populated. The gate
 // returns guidance text rather than a Go error (deliberately: the model self-corrects
-// mid-turn), so success stays 1 too. Before the fix nothing on that row said the
-// command never ran -- a policy-denied row at least carries a populated decision,
-// this one carried none, and `WHERE success = 1` counted it as an executed command.
+// mid-turn). The structured deny decision still makes the audit row unsuccessful,
+// so it cannot be counted as an executed command.
 //
 // The fix reuses the existing RecordDecision plumbing rather than adding a column:
 // decision=deny + decision_source=exec_gate_blocked. Asserting DecisionSource (not
@@ -400,9 +399,7 @@ func TestAuditMiddleware_ExecGateBlockedIsDistinguishable(t *testing.T) {
 		})
 
 		entry := waitForAuditEntry(t, mockRepo, "exec", 77)
-		// The row still looks like a successful call on every pre-existing signal --
-		// which is precisely why the decision columns have to carry the distinction.
-		So(entry.Success, ShouldEqual, 1)
+		So(entry.Success, ShouldEqual, 0)
 		So(entry.Command, ShouldEqual, "SET foo bar")
 		So(entry.Decision, ShouldEqual, "deny")
 		So(entry.DecisionSource, ShouldEqual, aictx.SourceExecGateBlocked)
