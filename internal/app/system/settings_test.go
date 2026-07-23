@@ -128,7 +128,8 @@ func TestUpdateInstalledSkillsOnlyReinstallsChangedTargets(t *testing.T) {
 	if err := s.updateInstalledSkills(home); err != nil {
 		t.Fatalf("updateInstalledSkills: %v", err)
 	}
-	got, err := os.ReadFile(filepath.Join(codexDir, "references", "commands.md"))
+	// codexDir is rooted in t.TempDir(), so the test controls the complete path.
+	got, err := os.ReadFile(filepath.Join(codexDir, "references", "commands.md")) //nolint:gosec
 	if err != nil {
 		t.Fatalf("ReadFile updated commands: %v", err)
 	}

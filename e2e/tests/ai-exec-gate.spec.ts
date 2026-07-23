@@ -113,7 +113,8 @@ test("a command that fails canonicalization is rejected before any approval prom
 
   expect(await execOutcome(page, () => execRows(asset).length > 0)).toBe("settled");
   const row = execRows(asset)[0];
-  expect(row.error).toBe("unsupported op: frobnicate");
+  expect(row.error).toContain(`asset "${asset}" is type=etcd`);
+  expect(row.error).toContain("unsupported op: frobnicate");
   expect(row.decision).toBe("deny");
   expect(row.decision_source).toBe("exec_canonicalize_error");
 });

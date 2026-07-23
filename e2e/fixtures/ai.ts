@@ -278,5 +278,8 @@ export async function sendChat(page: Page, text: string): Promise<void> {
     await input.fill(text);
     await expect(send).toBeEnabled({ timeout: 15_000 });
   }
-  await send.click();
+  // The composer advertises Enter as its primary send action. Use that keyboard
+  // path so an unrelated bottom-right toast (for example an update notice) cannot
+  // cover the button and turn an AI-flow assertion into a layout timeout.
+  await input.press("Enter");
 }

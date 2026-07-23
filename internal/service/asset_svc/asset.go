@@ -24,6 +24,8 @@ type AssetSvc interface {
 	Create(ctx context.Context, asset *asset_entity.Asset) error
 	Update(ctx context.Context, asset *asset_entity.Asset) error
 	Delete(ctx context.Context, id int64) error
+	DeleteByGroup(ctx context.Context, groupID int64) ([]*asset_entity.Asset, error)
+	MoveFromGroup(ctx context.Context, groupID int64) error
 	Move(ctx context.Context, id int64, direction string) error
 	Reorder(ctx context.Context, id, targetGroupID, beforeID int64) error
 }
@@ -98,6 +100,24 @@ func (s *assetSvc) Delete(ctx context.Context, id int64) error {
 	// 关闭失败由 assetconn 内部按 closer 记日志：删除本身已经成功，没有可回滚的东西。
 	assetconn.CloseAsset(ctx, id)
 	return nil
+}
+
+// DeleteByGroup 删除指定分组下的全部资产，并返回删除前的资产信息。
+// 调用方可用返回值在事务提交后断开连接、写入带名称和类型的审计记录。
+func (s *assetSvc) DeleteByGroup(ctx context.Context, groupID int64) ([]*asset_entity.Asset, error) {
+	assets, err := asset_repo.Asset().List(ctx, asset_repo.ListOptions{GroupID: groupID, ExactGroupID: true})
+	if err != nil {
+		return nil, err
+	}
+	if err := asset_repo.Asset().DeleteByGroupID(ctx, groupID); err != nil {
+		return nil, err
+	}
+	return assets, nil
+}
+
+// MoveFromGroup 将指定分组下的资产移到未分组。
+func (s *assetSvc) MoveFromGroup(ctx context.Context, groupID int64) error {
+	return asset_repo.Asset().MoveToGroup(ctx, groupID, 0)
 }
 
 // Move 移动资产排序（up/down/top）

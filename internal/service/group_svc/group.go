@@ -10,8 +10,8 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/pkg/sortutil"
-	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/group_repo"
+	"github.com/opskat/opskat/internal/service/asset_svc"
 )
 
 // GroupSvc 分组业务接口
@@ -79,10 +79,8 @@ func (s *groupSvc) Rename(ctx context.Context, id int64, name string) error {
 // 分组树不能停在中间态——例如资产已经被移到未分组、分组却还在，用户看到一个空分组，
 // 且没有任何提示。与同文件 Reorder 的事务边界一致。
 //
-// deleteAssets=true 时还要断开被删资产的在用连接。这条路走 asset_repo.DeleteByGroupID
-// 批量删，绕过了 asset_svc.Delete（断连的广播在那里），所以得在这里补上——否则删掉一个
-// 含资产的分组，那些资产的 SSH 终端 / RDP 会话 / 连接池条目会继续连着已经不存在的资产。
-// 广播放在事务**提交之后**：回滚时资产还在，连接不该被关掉。
+// deleteAssets=true 时还要断开被删资产的在用连接。asset_svc.DeleteByGroup 返回删除前的
+// 资产信息；广播放在事务**提交之后**：回滚时资产还在，连接不该被关掉。
 //
 // 返回被连带删掉的资产，交给调用方逐条写审计（deleteAssets=false 时为空）。审计不在
 // 这里写：审计来源（desktop / ai / opsctl）由调用方的 context 决定，服务层不该假设自己
@@ -102,17 +100,13 @@ func (s *groupSvc) Delete(ctx context.Context, id int64, deleteAssets bool) ([]*
 		}
 		// 处理分组下的资产
 		if deleteAssets {
-			// 先列出来：删完就查不到了，而断连要逐个资产 id、审计还要名字和类型。
-			assets, err := asset_repo.Asset().List(txCtx, asset_repo.ListOptions{GroupID: id, ExactGroupID: true})
+			assets, err := asset_svc.Asset().DeleteByGroup(txCtx, id)
 			if err != nil {
-				return err
-			}
-			if err := asset_repo.Asset().DeleteByGroupID(txCtx, id); err != nil {
 				return err
 			}
 			deletedAssets = assets
 		} else {
-			if err := asset_repo.Asset().MoveToGroup(txCtx, id, 0); err != nil {
+			if err := asset_svc.Asset().MoveFromGroup(txCtx, id); err != nil {
 				return err
 			}
 		}

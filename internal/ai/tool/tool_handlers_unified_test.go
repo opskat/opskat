@@ -699,6 +699,11 @@ func TestHandleExec_CanonicalizeFailureRecordsAuditDecision(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected dropCollection to be rejected as an unsupported mongo operation, got nil")
 	}
+	for _, want := range []string{`asset "mongo-1"`, "type=mongodb", "unsupported mongo operation"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("canonicalize error = %q, want it to include %q", err.Error(), want)
+		}
+	}
 	if slot.Decision != aictx.Deny {
 		t.Fatalf("audit decision = %v, want %v (a canonicalize failure must not audit as an un-checked call)",
 			slot.Decision, aictx.Deny)

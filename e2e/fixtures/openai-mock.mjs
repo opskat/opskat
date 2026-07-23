@@ -151,9 +151,13 @@ const server = http.createServer((req, res) => {
           body = { unparsed: raw };
         }
         requests.push(body);
-        const step = steps[stepIndex];
+        // Conversation-title generation also uses chat completions, but does not
+        // send tool definitions. It must not consume an agent script step or the
+        // next real tool call becomes timing-dependent on when title generation runs.
+        const isAgentRequest = Array.isArray(body.tools) && body.tools.length > 0;
+        const step = isAgentRequest ? steps[stepIndex] : { text: "e2e conversation" };
         const { content, toolCalls } = materialize(step);
-        stepIndex++;
+        if (isAgentRequest) stepIndex++;
         const model = body.model || "mock-model";
         if (body.stream) {
           streamReply(res, model, content, toolCalls);

@@ -32,14 +32,17 @@ test("put_asset creates, then updates the same row through the same tool", async
         },
       },
     },
-    { tool: { name: "put_asset", args: { asset: name, name: renamed } } },
     { text: "done" },
   ]);
   await openNewChat(page);
-  await sendChat(page, `create an ssh asset called ${name}, then rename it to ${renamed}`);
+  await sendChat(page, `create an ssh asset called ${name}`);
 
   // No approval dialog for put_asset — unlike opsctl (which runs headlessly and must
   // gate every write), the chat session already puts the change in front of the user.
+  await expect.poll(() => findAssetByName(name)?.status, { timeout: 60_000 }).toBe(1);
+
+  await scriptModel([{ tool: { name: "put_asset", args: { asset: name, name: renamed } } }, { text: "done" }]);
+  await sendChat(page, `rename the asset ${name} to ${renamed}`);
   await expect.poll(() => findAssetByName(renamed)?.status, { timeout: 60_000 }).toBe(1);
 
   // Same underlying row, not a second asset created under the new name: the id the

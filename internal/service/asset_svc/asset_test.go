@@ -120,6 +120,29 @@ func TestAssetSvc_Delete(t *testing.T) {
 	})
 }
 
+func TestAssetSvc_GroupMembership(t *testing.T) {
+	ctx, mockRepo := setupTest(t)
+
+	convey.Convey("按分组处理资产", t, func() {
+		convey.Convey("删除前返回资产信息，供事务提交后的断连与审计使用", func() {
+			assets := []*asset_entity.Asset{{ID: 4, Name: "web-01"}, {ID: 5, Name: "db-01"}}
+			mockRepo.EXPECT().List(gomock.Any(), asset_repo.ListOptions{GroupID: 30, ExactGroupID: true}).
+				Return(assets, nil)
+			mockRepo.EXPECT().DeleteByGroupID(gomock.Any(), int64(30)).Return(nil)
+
+			got, err := Asset().DeleteByGroup(ctx, 30)
+			assert.NoError(t, err)
+			assert.Equal(t, assets, got)
+		})
+
+		convey.Convey("移出分组时统一移动到未分组", func() {
+			mockRepo.EXPECT().MoveToGroup(gomock.Any(), int64(31), int64(0)).Return(nil)
+
+			assert.NoError(t, Asset().MoveFromGroup(ctx, 31))
+		})
+	})
+}
+
 func TestAssetSvc_Reorder(t *testing.T) {
 	convey.Convey("Reorder：同分组插入到 beforeID 之前", t, func() {
 		ctx, mockRepo := setupTest(t)

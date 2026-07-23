@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/audit"
@@ -167,16 +169,28 @@ func (s *System) desktopCtx() context.Context {
 // CreateAsset 创建资产
 func (s *System) CreateAsset(asset *asset_entity.Asset) error {
 	ctx := s.desktopCtx()
+	logger.Ctx(ctx).Info("create asset started", zap.String("assetType", asset.Type))
 	err := asset_svc.Asset().Create(ctx, asset)
 	audit.WriteAssetChange(ctx, audit.ActionAddAsset, asset, err)
+	if err != nil {
+		logger.Ctx(ctx).Error("create asset failed", zap.String("assetType", asset.Type), zap.Error(err))
+		return err
+	}
+	logger.Ctx(ctx).Info("create asset completed", zap.Int64("assetID", asset.ID), zap.String("assetType", asset.Type))
 	return err
 }
 
 // UpdateAsset 更新资产
 func (s *System) UpdateAsset(asset *asset_entity.Asset) error {
 	ctx := s.desktopCtx()
+	logger.Ctx(ctx).Info("update asset started", zap.Int64("assetID", asset.ID), zap.String("assetType", asset.Type))
 	err := asset_svc.Asset().Update(ctx, asset)
 	audit.WriteAssetChange(ctx, audit.ActionUpdateAsset, asset, err)
+	if err != nil {
+		logger.Ctx(ctx).Error("update asset failed", zap.Int64("assetID", asset.ID), zap.String("assetType", asset.Type), zap.Error(err))
+		return err
+	}
+	logger.Ctx(ctx).Info("update asset completed", zap.Int64("assetID", asset.ID), zap.String("assetType", asset.Type))
 	return err
 }
 
@@ -187,12 +201,19 @@ func (s *System) UpdateAsset(asset *asset_entity.Asset) error {
 // 有意义的审计行，本身也说明前端拿的是一份过期列表。
 func (s *System) DeleteAsset(id int64) error {
 	ctx := s.desktopCtx()
+	logger.Ctx(ctx).Info("delete asset started", zap.Int64("assetID", id))
 	asset, err := asset_svc.Asset().Get(ctx, id)
 	if err != nil {
+		logger.Ctx(ctx).Error("delete asset failed", zap.Int64("assetID", id), zap.Error(err))
 		return err
 	}
 	err = asset_svc.Asset().Delete(ctx, id)
 	audit.WriteAssetChange(ctx, audit.ActionDeleteAsset, asset, err)
+	if err != nil {
+		logger.Ctx(ctx).Error("delete asset failed", zap.Int64("assetID", id), zap.String("assetType", asset.Type), zap.Error(err))
+		return err
+	}
+	logger.Ctx(ctx).Info("delete asset completed", zap.Int64("assetID", id), zap.String("assetType", asset.Type))
 	return err
 }
 
@@ -245,8 +266,6 @@ func (s *System) UpdateGroup(group *group_entity.Group) error {
 	return group_svc.Group().Update(i18n.Ctx(s.ctx, s.Lang()), group)
 }
 
-// DeleteGroup 删除分组
-// deleteAssets: true 删除分组下的资产，false 移动到未分组
 // DeleteGroup 删除分组。deleteAssets=true 时组内资产一并删除。
 //
 // 连带删掉的资产逐条写 delete_asset 审计：单删一台机器有审计行，删一个含 20 台机器的
@@ -254,14 +273,17 @@ func (s *System) UpdateGroup(group *group_entity.Group) error {
 // 是为了让 source=desktop 只有 desktopCtx() 一个说法。
 func (s *System) DeleteGroup(id int64, deleteAssets bool) error {
 	ctx := s.desktopCtx()
+	logger.Ctx(ctx).Info("delete group started", zap.Int64("groupID", id), zap.Bool("deleteAssets", deleteAssets))
 	deleted, err := group_svc.Group().Delete(ctx, id, deleteAssets)
 	if err != nil {
 		// 整个删除包在一个事务里，失败时一台资产都没删掉，没有可记的资产变更。
+		logger.Ctx(ctx).Error("delete group failed", zap.Int64("groupID", id), zap.Bool("deleteAssets", deleteAssets), zap.Error(err))
 		return err
 	}
 	for _, asset := range deleted {
 		audit.WriteAssetChange(ctx, audit.ActionDeleteAsset, asset, nil)
 	}
+	logger.Ctx(ctx).Info("delete group completed", zap.Int64("groupID", id), zap.Bool("deleteAssets", deleteAssets), zap.Int("deletedAssets", len(deleted)))
 	return nil
 }
 

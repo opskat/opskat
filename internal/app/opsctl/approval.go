@@ -60,6 +60,13 @@ func (o *Opsctl) startApprovalServer() {
 
 func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
 	confirmID := fmt.Sprintf("opsctl_%d", time.Now().UnixNano())
+	log := logger.Ctx(o.ctx).With(
+		zap.String("confirmID", confirmID),
+		zap.String("approvalType", req.Type),
+		zap.Int64("assetID", req.AssetID),
+		zap.String("sessionID", req.SessionID),
+	)
+	log.Info("opsctl approval started")
 
 	if o.window != nil {
 		o.window.ActivateWindow()
@@ -82,6 +89,7 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 	select {
 	case resp := <-ch:
 		if resp.Decision == "deny" {
+			log.Info("opsctl approval completed", zap.Bool("approved", false), zap.String("decision", resp.Decision))
 			return approval.ApprovalResponse{Approved: false, Reason: "user denied"}
 		}
 		if resp.Decision == "allowAll" && req.SessionID != "" {
@@ -91,10 +99,13 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 			}
 			permission.SaveGrantPatternsForApproval(i18n.Ctx(o.ctx, o.lang.Lang()), req.SessionID, req.AssetID, req.AssetName, req.Type, pattern)
 		}
+		log.Info("opsctl approval completed", zap.Bool("approved", true), zap.String("decision", resp.Decision))
 		return approval.ApprovalResponse{Approved: true}
 	case <-o.ctx.Done():
+		log.Error("opsctl approval failed", zap.Error(o.ctx.Err()))
 		return approval.ApprovalResponse{Approved: false, Reason: "app shutting down"}
 	case <-o.appCtx.Done():
+		log.Error("opsctl approval failed", zap.Error(o.appCtx.Err()))
 		return approval.ApprovalResponse{Approved: false, Reason: "app shutting down"}
 	}
 }

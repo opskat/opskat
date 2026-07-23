@@ -89,7 +89,7 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 			// 清单里，却不在可执行的 mongoOps 里）。不记的话，一条被挡下的高危尝试
 			// 连 decision 都不落，比策略拒绝还难查。
 			recordShortCircuit(ctx, aictx.SourceExecCanonicalizeError)
-			return "", err
+			return "", fmt.Errorf("asset %q is type=%s; invalid command: %w", asset.Name, asset.Type, err)
 		}
 		checkCommand = canonicalCommand
 	}

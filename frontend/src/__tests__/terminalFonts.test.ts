@@ -6,7 +6,6 @@ import {
   resolveDefaultFontPrimary,
   resolveFontPresetOrphan,
   resolveTerminalFontFamily,
-  terminalFontPresets,
   withTerminalFontFallback,
 } from "../data/terminalFonts";
 

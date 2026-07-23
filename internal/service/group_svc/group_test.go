@@ -184,9 +184,8 @@ func TestGroupSvc_Delete_RunsInTransaction(t *testing.T) {
 // TestGroupSvc_Delete_ClosesDeletedAssetConnections 钉住"连组带资产一起删"也断连。
 //
 // asset_svc.Delete 会广播 assetconn.CloseAsset，但 deleteAssets=true 这条路走的是
-// asset_repo.DeleteByGroupID —— 直接落到仓储，绕过了 asset_svc。不补这一段的话，
-// 从界面上删掉一个含资产的分组，那些资产的 SSH 终端 / RDP 会话 / 连接池条目会全部
-// 留着连一个已经不存在的资产。
+// asset_svc.DeleteByGroup 负责资产域的批量删除，但单资产 Delete 的提交后断连不能发生在
+// 外层分组事务中；分组服务因此使用它返回的资产列表，在整个事务提交后逐个断连。
 //
 // 广播必须在事务**提交之后**：事务回滚时资产还在，连接不该被关掉。
 func TestGroupSvc_Delete_ClosesDeletedAssetConnections(t *testing.T) {
