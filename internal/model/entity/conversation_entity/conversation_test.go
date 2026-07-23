@@ -1,9 +1,14 @@
 package conversation_entity
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/glebarez/sqlite"
 	. "github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestMessageBlocksRoundtrip(t *testing.T) {
@@ -29,4 +34,26 @@ func TestMessageBlocksRoundtrip(t *testing.T) {
 			So(got, ShouldBeNil)
 		})
 	})
+}
+
+func TestMessageBlocksPersistenceRedactsToolCredentials(t *testing.T) {
+	gdb, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "conversation.db")), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, gdb.AutoMigrate(&Message{}))
+
+	const secret = "review-only-credential-sentinel"
+	msg := &Message{ConversationID: 1, Role: "assistant"}
+	require.NoError(t, msg.SetBlocks([]ContentBlock{{
+		Type:     "tool",
+		ToolName: "put_asset",
+		ToolInput: `{"name":"prod","config":{"host":"db.internal","password":"` + secret +
+			`","private_key":"` + secret + `","token":"` + secret + `"}}`,
+	}}))
+	require.NoError(t, gdb.Create(msg).Error)
+
+	var stored string
+	require.NoError(t, gdb.Raw("SELECT blocks FROM conversation_messages WHERE id = ?", msg.ID).Scan(&stored).Error)
+	require.NotContains(t, stored, secret)
+	require.Contains(t, stored, "db.internal")
+	require.True(t, strings.Contains(stored, "redacted"), "stored blocks should retain explicit redaction markers")
 }

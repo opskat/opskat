@@ -18,6 +18,7 @@ func TestParseExtCommand(t *testing.T) {
 			"force":   map[string]any{"type": "boolean"},
 			"ratio":   map[string]any{"type": "number"},
 		},
+		"required": []any{"bucket"},
 	}}
 
 	t.Run("按声明类型转换", func(t *testing.T) {
@@ -47,7 +48,7 @@ func TestParseExtCommand(t *testing.T) {
 	})
 
 	t.Run("number 按浮点数转换", func(t *testing.T) {
-		_, _, argsJSON, err := parseExtCommand(`oss list_objects --ratio=3.14`, def)
+		_, _, argsJSON, err := parseExtCommand(`oss list_objects --bucket=b --ratio=3.14`, def)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
 		}
@@ -61,14 +62,14 @@ func TestParseExtCommand(t *testing.T) {
 	})
 
 	t.Run("number 类型不符报错并点名 flag", func(t *testing.T) {
-		_, _, _, err := parseExtCommand(`oss list_objects --ratio=abc`, def)
+		_, _, _, err := parseExtCommand(`oss list_objects --bucket=b --ratio=abc`, def)
 		if err == nil || !strings.Contains(err.Error(), "ratio") {
 			t.Fatalf("a bad number must name the flag, got %v", err)
 		}
 	})
 
 	t.Run("array<string> 按逗号切分", func(t *testing.T) {
-		_, _, argsJSON, err := parseExtCommand(`oss list_objects --keys=a,b,c`, def)
+		_, _, argsJSON, err := parseExtCommand(`oss list_objects --bucket=b --keys=a,b,c`, def)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
 		}
@@ -81,14 +82,15 @@ func TestParseExtCommand(t *testing.T) {
 	})
 
 	t.Run("--json 逃生口整体接管", func(t *testing.T) {
-		_, _, argsJSON, err := parseExtCommand(`oss list_objects --json='{"bucket":"b","nested":{"k":1}}'`, def)
+		_, _, argsJSON, err := parseExtCommand(`oss list_objects --json='{"bucket":"b","keys":["a,b","c"]}'`, def)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
 		}
 		var got map[string]any
 		_ = json.Unmarshal(argsJSON, &got)
-		if got["nested"] == nil {
-			t.Error("--json must pass through shapes the flag DSL cannot express")
+		keys, ok := got["keys"].([]any)
+		if !ok || len(keys) != 2 || keys[0] != "a,b" {
+			t.Errorf("--json must preserve declared values the comma flag syntax cannot express, got %#v", got["keys"])
 		}
 	})
 
@@ -123,6 +125,43 @@ func TestParseExtCommand(t *testing.T) {
 		_, _, _, err := parseExtCommand(`oss list_objects extra --bucket=b`, def)
 		if err == nil || !strings.Contains(err.Error(), "extra") {
 			t.Fatalf("an unexpected positional argument must be named in the error, got %v", err)
+		}
+	})
+
+	t.Run("缺少 required 参数在调用期拒绝", func(t *testing.T) {
+		_, _, _, err := parseExtCommand(`oss list_objects --force`, def)
+		if err == nil || !strings.Contains(err.Error(), "bucket") || !strings.Contains(err.Error(), "required") {
+			t.Fatalf("missing required bucket = %v, want an explicit required-parameter error", err)
+		}
+	})
+
+	t.Run("--json 必须是 object", func(t *testing.T) {
+		for _, raw := range []string{`[]`, `7`, `null`, `"text"`} {
+			_, _, _, err := parseExtCommand(`oss list_objects --json='`+raw+`'`, def)
+			if err == nil || !strings.Contains(err.Error(), "object") {
+				t.Fatalf("--json=%s error = %v, want object-shape rejection", raw, err)
+			}
+		}
+	})
+
+	t.Run("--json 拒绝未知参数", func(t *testing.T) {
+		_, _, _, err := parseExtCommand(`oss list_objects --json='{"bucket":"b","ghost":1}'`, def)
+		if err == nil || !strings.Contains(err.Error(), "ghost") {
+			t.Fatalf("unknown JSON parameter = %v, want rejection naming ghost", err)
+		}
+	})
+
+	t.Run("--json 拒绝重复参数", func(t *testing.T) {
+		_, _, _, err := parseExtCommand(`oss list_objects --json='{"bucket":"a","bucket":"b"}'`, def)
+		if err == nil || !strings.Contains(err.Error(), "duplicate") {
+			t.Fatalf("duplicate JSON parameter = %v, want rejection", err)
+		}
+	})
+
+	t.Run("--json 校验声明类型", func(t *testing.T) {
+		_, _, _, err := parseExtCommand(`oss list_objects --json='{"bucket":"b","maxKeys":"100"}'`, def)
+		if err == nil || !strings.Contains(err.Error(), "maxKeys") || !strings.Contains(err.Error(), "integer") {
+			t.Fatalf("wrong JSON parameter type = %v, want rejection", err)
 		}
 	})
 }

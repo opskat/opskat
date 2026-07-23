@@ -34,6 +34,11 @@ const (
 	SourceExecPrecheckFailed    = "exec_precheck_failed"    // 类型前置条件不满足（如串口无活跃会话）
 	SourceExecCanonicalizeError = "exec_canonicalize_error" // 命令没通过该类型的规范化（语法/配置错误）
 	SourceExecTypeMismatch      = "exec_type_mismatch"      // exec/batch_exec 的可选 type 断言与资产真实类型不符，命令在权限检查之前就被挡下
+	SourceExecResolveFailed     = "exec_resolve_failed"     // 资产引用不存在或歧义
+	SourceExecInvalidInput      = "exec_invalid_input"      // 命令等边界参数为空或形状错误
+	SourceBatchComplete         = "batch_complete"          // batch_exec 所有 item 均成功
+	SourceBatchPartialFailure   = "batch_partial_failure"   // 至少一项成功、至少一项拒绝/失败
+	SourceBatchFailed           = "batch_failed"            // batch_exec 没有任何成功 item
 )
 
 // CheckResult 权限检查结果

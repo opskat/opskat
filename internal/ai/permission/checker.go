@@ -21,7 +21,7 @@ import (
 
 // CommandConfirmFunc 命令确认回调，发送审批请求并阻塞等待前端响应
 // ctx 携带会话 ID 等上下文（通过 aictx.GetConversationID 获取）
-// kind: "single", "batch", "grant"
+// kind: ApprovalKind* 常量
 // items: 审批项列表
 // 返回 ApprovalResponse
 type CommandConfirmFunc func(ctx context.Context, kind string, items []ApprovalItem) ApprovalResponse
@@ -264,19 +264,28 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 	if len(detail) > 0 {
 		item.Detail = detail[0]
 	}
-	resp := c.confirmFunc(ctx, "single", []ApprovalItem{item})
-
-	if resp.Decision == "deny" {
+	resp := c.confirmFunc(ctx, ApprovalKindSingle, []ApprovalItem{item})
+	parsed, parseErr := ParseApprovalResponse(ApprovalKindSingle, resp, []ApprovalItem{item})
+	if parseErr != nil || parsed.Decision == ApprovalDeny {
 		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyFmt(ctx, "USER DENIED: The user has denied execution of command: %s. Stop the current task immediately.", "用户拒绝：用户已拒绝执行命令: %s。请立即停止当前任务。", command), DecisionSource: aictx.SourceUserDeny}
 	}
-	if resp.Decision == "allowAll" {
+	switch parsed.Decision {
+	case ApprovalAllow:
+		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow}
+	case ApprovalAllowAll:
 		sessionID := aictx.GetSessionID(ctx)
+		if sessionID == "" {
+			return aictx.CheckResult{
+				Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny,
+				Message: policy.PolicyMsg(ctx, "allowAll requires a grant session; execution denied", "全部允许需要授权会话，拒绝执行"),
+			}
+		}
 		// 三条 grant 落库路径（HandleConfirm / opsctl 单审批 / AI grant 流）共用 NormalizeGrantPatterns：
 		// SSH/K8s shell 类按 AST 子命令拆，其他类型直通。这里既保持本路径行为一致，
 		// 又保证编辑模式（多行/通配）后的每一行都按子命令分别落库。
 		var patterns []string
-		if len(resp.EditedItems) > 0 {
-			for _, item := range resp.EditedItems {
+		if len(parsed.EditedItems) > 0 {
+			for _, item := range parsed.EditedItems {
 				patterns = append(patterns, NormalizeGrantPatterns(assetType, item.Command)...)
 			}
 		}
@@ -291,8 +300,10 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 			SaveGrantPattern(ctx, sessionID, assetID, assetName, approvalType, cmd)
 		}
 		audit.WriteGrantSubmitAudit(ctx, assetID, assetName, patterns)
+		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow}
+	default:
+		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyMsg(ctx, "invalid approval response, execution denied", "审批响应无效，拒绝执行"), DecisionSource: aictx.SourceUserDeny}
 	}
-	return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow}
 }
 
 // --- 策略收集 ---

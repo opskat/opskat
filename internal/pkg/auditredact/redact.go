@@ -15,6 +15,7 @@ var textRedactors = []struct {
 	pattern     *regexp.Regexp
 	replacement string
 }{
+	{regexp.MustCompile(`(?i)(["']?(?:password|passphrase|token|api[-_]?key|private[-_]?key|secret[-_]?access[-_]?key)["']?\s*:\s*)(?:"[^"]*"|'[^']*'|[^\s,;&}]+)`), `${1}` + `"` + RedactedValue + `"`},
 	{regexp.MustCompile(`(?i)(--(?:password|passphrase|token|api[-_]?key|private[-_]?key|secret[-_]?access[-_]?key)(?:=|\s+))(?:"[^"]*"|'[^']*'|[^\s,;&]+)`), `${1}` + RedactedValue},
 	{regexp.MustCompile(`(?i)((?:password|passphrase|token|api[-_]?key|private[-_]?key|secret[-_]?access[-_]?key)\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+)`), `${1}` + RedactedValue},
 	{regexp.MustCompile(`(?i)(authorization\s*:\s*bearer\s+)[^\s'"]+`), `${1}` + RedactedValue},
@@ -34,11 +35,13 @@ func JSON(raw string) string {
 	if err := decoder.Decode(&value); err != nil {
 		return RedactedValue
 	}
-	data, err := json.Marshal(redactValue(value))
-	if err != nil {
+	var out bytes.Buffer
+	encoder := json.NewEncoder(&out)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(redactValue(value)); err != nil {
 		return RedactedValue
 	}
-	return string(data)
+	return strings.TrimSuffix(out.String(), "\n")
 }
 
 // Result preserves ordinary command/query output while recursively redacting JSON.

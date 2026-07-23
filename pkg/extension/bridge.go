@@ -1,7 +1,9 @@
 package extension
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 
 	"github.com/opskat/opskat/internal/model/entity/policy"
@@ -242,6 +244,25 @@ func (b *Bridge) FindToolDef(extName, toolName string) (ToolDef, bool) {
 		return ToolDef{}, false
 	}
 	return entry.tool, true
+}
+
+// CheckToolPolicy invokes the selected extension's policy function behind the bridge
+// interface used by the shared AI/opsctl execution seam.
+func (b *Bridge) CheckToolPolicy(ctx context.Context, extName, toolName string, argsJSON []byte) (string, string, error) {
+	ext := b.FindExtensionByTool(extName, toolName)
+	if ext == nil || ext.Plugin == nil {
+		return "", "", fmt.Errorf("extension tool %s.%s is not loaded", extName, toolName)
+	}
+	return ext.Plugin.CheckPolicy(ctx, toolName, argsJSON)
+}
+
+// CallTool invokes the selected extension tool behind the same bridge interface.
+func (b *Bridge) CallTool(ctx context.Context, extName, toolName string, argsJSON []byte) ([]byte, error) {
+	ext := b.FindExtensionByTool(extName, toolName)
+	if ext == nil || ext.Plugin == nil {
+		return nil, fmt.Errorf("extension tool %s.%s is not loaded", extName, toolName)
+	}
+	return ext.Plugin.CallTool(ctx, toolName, argsJSON)
 }
 
 // GetExtensionByAssetType returns the Extension that registered the given asset type,

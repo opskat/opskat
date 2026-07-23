@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"go.uber.org/mock/gomock"
@@ -16,9 +17,11 @@ import (
 
 // mockExtToolExecutor implements ExtensionToolExecutor for testing.
 type mockExtToolExecutor struct {
-	ext   *extension.Extension
-	def   extension.ToolDef
-	defOK bool
+	ext            *extension.Extension
+	def            extension.ToolDef
+	defOK          bool
+	policyArgsSeen []byte
+	callArgsSeen   []byte
 }
 
 func (m *mockExtToolExecutor) FindExtensionByTool(extName, toolName string) *extension.Extension {
@@ -31,6 +34,16 @@ func (m *mockExtToolExecutor) FindToolDef(extName, toolName string) (extension.T
 
 func (m *mockExtToolExecutor) GetExtensionPolicyGroups(extName, assetType string, assetID int64) []string {
 	return nil
+}
+
+func (m *mockExtToolExecutor) CheckToolPolicy(ctx context.Context, _, toolName string, argsJSON []byte) (string, string, error) {
+	m.policyArgsSeen = append([]byte(nil), argsJSON...)
+	return m.ext.Plugin.CheckPolicy(ctx, toolName, argsJSON)
+}
+
+func (m *mockExtToolExecutor) CallTool(ctx context.Context, _, toolName string, argsJSON []byte) ([]byte, error) {
+	m.callArgsSeen = append([]byte(nil), argsJSON...)
+	return m.ext.Plugin.CallTool(ctx, toolName, argsJSON)
 }
 
 // Compile-time interface check.
@@ -114,23 +127,57 @@ func TestExecToolHandler(t *testing.T) {
 
 		Convey("Policies.Type 为空时经显式确认后才执行", func() {
 			def := extension.ToolDef{Name: "noop", Parameters: map[string]any{
-				"type": "object", "properties": map[string]any{},
+				"type": "object", "properties": map[string]any{
+					"bucket": map[string]any{"type": "string"},
+					"token":  map[string]any{"type": "string"},
+				},
 			}}
 			ext := &extension.Extension{
 				Name: "oss", Manifest: &extension.Manifest{Name: "oss"}, Plugin: newNoopPlugin(t),
 			}
-			execToolExecutor = &mockExtToolExecutor{ext: ext, def: def, defOK: true}
+			executor := &mockExtToolExecutor{ext: ext, def: def, defOK: true}
+			execToolExecutor = executor
 			confirmed := false
-			checker := permission.NewCommandPolicyChecker(func(_ context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
+			var approvedCommand, approvedKind string
+			checker := permission.NewCommandPolicyChecker(func(_ context.Context, kind string, items []permission.ApprovalItem) permission.ApprovalResponse {
 				confirmed = true
+				approvedKind = kind
+				approvedCommand = items[0].Command
 				So(items[0].Type, ShouldEqual, "ext_tool")
 				return permission.ApprovalResponse{Decision: "allow"}
 			})
 
-			out, err := handleExecTool(permission.WithPolicyChecker(t.Context(), checker), map[string]any{"command": "oss noop"})
+			out, err := handleExecTool(permission.WithPolicyChecker(t.Context(), checker), map[string]any{
+				"command": "oss noop --bucket=production-target --token=review-secret",
+			})
 			So(err, ShouldBeNil)
 			So(out, ShouldEqual, "")
 			So(confirmed, ShouldBeTrue)
+			So(approvedKind, ShouldEqual, "extension")
+			So(approvedCommand, ShouldContainSubstring, "production-target")
+			So(approvedCommand, ShouldNotContainSubstring, "review-secret")
+			So(string(executor.callArgsSeen), ShouldContainSubstring, "production-target")
+			So(string(executor.callArgsSeen), ShouldContainSubstring, "review-secret")
+		})
+
+		Convey("required 参数缺失在 policy approval plugin 之前拒绝", func() {
+			def := extension.ToolDef{Name: "noop", Parameters: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"bucket": map[string]any{"type": "string"}},
+				"required":   []any{"bucket"},
+			}}
+			ext := &extension.Extension{Name: "oss", Manifest: &extension.Manifest{Name: "oss"}, Plugin: newNoopPlugin(t)}
+			execToolExecutor = &mockExtToolExecutor{ext: ext, def: def, defOK: true}
+			confirmCalls := 0
+			checker := permission.NewCommandPolicyChecker(func(_ context.Context, _ string, _ []permission.ApprovalItem) permission.ApprovalResponse {
+				confirmCalls++
+				return permission.ApprovalResponse{Decision: "allow"}
+			})
+
+			_, err := handleExecTool(permission.WithPolicyChecker(t.Context(), checker), map[string]any{"command": "oss noop"})
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "bucket")
+			So(confirmCalls, ShouldEqual, 0)
 		})
 
 		Convey("CheckPolicy 报错时必须 fail-closed，不能执行工具", func() {
@@ -154,4 +201,78 @@ func TestExecToolHandler(t *testing.T) {
 			So(err.Error(), ShouldContainSubstring, "policy check failed")
 		})
 	})
+}
+
+func TestExecuteExtensionToolValidatesDelegatedArgsBeforeApprovalAndPlugin(t *testing.T) {
+	def := extension.ToolDef{Name: "delete_objects", Parameters: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"bucket": map[string]any{"type": "string"},
+			"keys":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		},
+		"required": []any{"bucket", "keys"},
+	}}
+	executor := &mockExtToolExecutor{
+		ext: &extension.Extension{
+			Name: "oss", Manifest: &extension.Manifest{Name: "oss"}, Plugin: newNoopPlugin(t),
+		},
+		def: def, defOK: true,
+	}
+	confirmCalls := 0
+	checker := permission.NewCommandPolicyChecker(func(_ context.Context, _ string, _ []permission.ApprovalItem) permission.ApprovalResponse {
+		confirmCalls++
+		return permission.ApprovalResponse{Decision: "allow"}
+	})
+
+	_, err := ExecuteExtensionTool(permission.WithPolicyChecker(t.Context(), checker), executor, 0,
+		"oss", "delete_objects", []byte(`{"bucket":"production-target"}`))
+	if err == nil || !strings.Contains(err.Error(), "keys") || !strings.Contains(err.Error(), "required") {
+		t.Fatalf("delegated missing required args error = %v", err)
+	}
+	if confirmCalls != 0 {
+		t.Fatalf("invalid delegated args reached approval %d times", confirmCalls)
+	}
+	if len(executor.callArgsSeen) != 0 || len(executor.policyArgsSeen) != 0 {
+		t.Fatalf("invalid delegated args reached extension runtime: policy=%s call=%s",
+			executor.policyArgsSeen, executor.callArgsSeen)
+	}
+}
+
+func TestExecuteExtensionToolInvalidApprovalDoesNotCallPlugin(t *testing.T) {
+	responses := []permission.ApprovalResponse{
+		{},
+		{Decision: "bogus"},
+		{Decision: "ALLOW"},
+		{Decision: "allowAll"},
+		{Decision: "allow", EditedItems: []permission.ApprovalItem{{Type: "ext_tool", Command: "changed"}}},
+	}
+	for _, resp := range responses {
+		name := resp.Decision
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			executor := &mockExtToolExecutor{
+				ext: &extension.Extension{
+					Name: "oss", Manifest: &extension.Manifest{Name: "oss"}, Plugin: newNoopPlugin(t),
+				},
+				def: extension.ToolDef{Name: "noop", Parameters: map[string]any{
+					"type": "object", "properties": map[string]any{},
+				}},
+				defOK: true,
+			}
+			checker := permission.NewCommandPolicyChecker(func(_ context.Context, _ string, _ []permission.ApprovalItem) permission.ApprovalResponse {
+				return resp
+			})
+
+			_, err := ExecuteExtensionTool(permission.WithPolicyChecker(t.Context(), checker), executor, 0,
+				"oss", "noop", []byte(`{}`))
+			if err == nil {
+				t.Fatalf("invalid approval response %#v unexpectedly executed", resp)
+			}
+			if len(executor.callArgsSeen) != 0 {
+				t.Fatalf("invalid approval response %#v reached plugin with %s", resp, executor.callArgsSeen)
+			}
+		})
+	}
 }

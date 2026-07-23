@@ -28,6 +28,7 @@ interface ApprovalItemData {
 
 interface SingleApprovalEvent {
   confirm_id: string;
+  kind: "single" | "once" | "delete" | "extension";
   type: string;
   asset_id: number;
   asset_name: string;
@@ -52,7 +53,7 @@ interface QueueItem {
   id: string;
   // "delete" 与 "single" 共用同一套渲染骨架（同一个 opsctl:approval 事件），
   // 只在按钮区按 kind 收窄——与 ApprovalBlock.tsx 的 kind 取值保持一致，不新造第三套判断。
-  kind: "single" | "batch" | "grant" | "delete";
+  kind: "single" | "once" | "batch" | "grant" | "delete" | "extension";
   items: ApprovalItemData[];
   description?: string;
   sessionID?: string;
@@ -125,10 +126,9 @@ export function OpsctlApprovalDialog() {
       (data: SingleApprovalEvent) => {
         enqueue({
           id: data.confirm_id,
-          // 删除恒需确认、不可 grant（后端 handleDeleteAsset/handleDeleteGroup 无条件走
-          // RequireChecker，从不查 grant）——用独立的 "delete" kind 把「记住」入口整个关掉，
-          // 而不是让它落进 "single" 分支再靠一个额外 if 补救。与 ApprovalBlock.tsx 同一判断。
-          kind: data.type === "delete" ? "delete" : "single",
+          // 后端按 permission registry 发送 capability kind；只有真正有 pattern
+          // 匹配契约的 single 才能进入 remember/allowAll。
+          kind: data.kind,
           items: [
             {
               type: data.type,

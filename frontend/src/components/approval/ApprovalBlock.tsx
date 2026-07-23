@@ -243,8 +243,8 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
           </>
         ) : (
           // single & local_tool: deny / remember-and-allow / allow（仅本次）
-          // delete: deny / allow only —— 后端 delete_* 不查 grant 也不接受 allowAll，
-          // 「记住」开关是通往 allowAll 的唯一入口，删除审批不给这个入口。
+          // delete & extension: deny / allow only —— 两者都没有安全、已定义的 grant pattern，
+          // 「记住」开关是通往 allowAll 的唯一入口，因此不给这个入口。
           <>
             <Button
               size="sm"

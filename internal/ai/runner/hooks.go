@@ -29,11 +29,17 @@ import (
 // 每次调用的状态都保存在当前 ctx 和闭包内，不通过全局索引跨调用共享。
 func auditMiddleware(c *agent.ToolContext) {
 	slot := &aictx.CheckResult{}
-	c.WithContext(aictx.WithCheckResultSlot(c.Context(), slot))
+	commandSlot := ""
+	ctx := aictx.WithCheckResultSlot(c.Context(), slot)
+	ctx = aictx.WithAuditCommandSlot(ctx, &commandSlot)
+	c.WithContext(ctx)
 
 	assetID, assetName, command := resolveAssetForAudit(c.Context(), c.ToolName, c.Input)
 
 	c.Next()
+	if commandSlot != "" {
+		command = commandSlot
+	}
 	// Deny 是工具调用的失败终态，即使具体 handler 按 agent 协议把拒绝说明作为
 	// 普通文本返回。统一在 middleware 边界标记，事件、UI 与审计由同一结构化语义驱动。
 	if slot.Decision == aictx.Deny && c.Output != nil {

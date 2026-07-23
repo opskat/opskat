@@ -8,13 +8,8 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 )
 
-// confirmExtensionTool 把 ConfirmFunc 的响应映射成放行/拒绝，映射规则必须与
-// decisionFromApproval（delete）、HandleConfirm、local_tool_gate 一致：只有
-// "deny" 是拒绝，"allow"/"allowAll" 都是放行。
-//
-// ext_tool 审批走 kind="single"，前端 ApprovalBlock 对 single 会渲染「记住并允许」
-// 按钮（respond("allowAll")），所以 allowAll 必然可达。把 allowAll 当成拒绝会让用户
-// 明确批准过的扩展工具静默不执行，并在 audit_logs 里把一次真实允许记成 user denied。
+// 扩展审批没有定义可安全复用的参数/grant pattern，因此只接受 allow/deny。
+// allowAll、空值、未知值和大小写变体都必须拒绝，且 kind 必须让前端隐藏 remember。
 func TestConfirmExtensionTool_DecisionMapping(t *testing.T) {
 	cases := []struct {
 		decision   string
@@ -23,11 +18,18 @@ func TestConfirmExtensionTool_DecisionMapping(t *testing.T) {
 		wantSource string
 	}{
 		{"allow", false, aictx.Allow, aictx.SourceUserAllow},
-		{"allowAll", false, aictx.Allow, aictx.SourceUserAllow},
+		{"allowAll", true, aictx.Deny, aictx.SourceUserDeny},
 		{"deny", true, aictx.Deny, aictx.SourceUserDeny},
+		{"", true, aictx.Deny, aictx.SourceUserDeny},
+		{"bogus", true, aictx.Deny, aictx.SourceUserDeny},
+		{"ALLOW", true, aictx.Deny, aictx.SourceUserDeny},
 	}
 	for _, tc := range cases {
-		t.Run(tc.decision, func(t *testing.T) {
+		name := tc.decision
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
 			var gotKind string
 			checker := permission.NewCommandPolicyChecker(
 				func(_ context.Context, kind string, _ []permission.ApprovalItem) permission.ApprovalResponse {
@@ -37,12 +39,12 @@ func TestConfirmExtensionTool_DecisionMapping(t *testing.T) {
 			slot := &aictx.CheckResult{}
 			ctx := aictx.WithCheckResultSlot(permission.WithPolicyChecker(context.Background(), checker), slot)
 
-			err := confirmExtensionTool(ctx, 1, "oss", "list_objects", "test reason")
+			err := confirmExtensionTool(ctx, 1, "oss", "list_objects", "oss.list_objects {}", "test reason")
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("decision %q: err = %v, wantErr = %v", tc.decision, err, tc.wantErr)
 			}
-			if gotKind != "single" {
-				t.Errorf("confirm kind = %q, want single", gotKind)
+			if gotKind != "extension" {
+				t.Errorf("confirm kind = %q, want extension", gotKind)
 			}
 			if slot.Decision != tc.wantResult || slot.DecisionSource != tc.wantSource {
 				t.Errorf("recorded decision = %v/%q, want %v/%q",

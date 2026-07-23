@@ -23,14 +23,20 @@ import (
 // 工具契约是 `config` 嵌套对象（spec §4.3），而 assettype.ApplyCreateArgs / ApplyUpdateArgs
 // 的契约是扁平 map——后者被桌面端与 opsctl 共用，不该为了 AI 工具的形状改动。
 // 摊平只在这一处发生，是 AGENTS.md「在边界归一化一次」的直接应用。
-func putArgs(args map[string]any) map[string]any {
-	flat := map[string]any{}
-	if config, ok := args["config"].(map[string]any); ok {
-		for k, v := range config {
-			flat[k] = v
-		}
+func putArgs(args map[string]any) (map[string]any, error) {
+	raw, exists := args["config"]
+	if !exists {
+		return map[string]any{}, nil
 	}
-	return flat
+	config, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("parameter config must be an object, got %T", raw)
+	}
+	flat := make(map[string]any, len(config))
+	for k, v := range config {
+		flat[k] = v
+	}
+	return flat, nil
 }
 
 // handlePutAsset 创建或更新资产：带 asset 标识 → 更新，不带 → 创建。
@@ -40,7 +46,10 @@ func putArgs(args map[string]any) map[string]any {
 // 旧的巨型 schema 把 10 种类型的字段并集写进 JSON Schema，既是我们正在移除的类型分支的
 // 另一种写法，又漏掉了 oss——那类资产此前经 AI 完全无法创建。
 func handlePutAsset(ctx context.Context, args map[string]any) (string, error) {
-	config := putArgs(args)
+	config, err := putArgs(args)
+	if err != nil {
+		return "", err
+	}
 	ref := aictx.ArgString(args, "asset")
 
 	if ref == "" {
@@ -177,13 +186,13 @@ func handlePutGroup(ctx context.Context, args map[string]any) (string, error) {
 	return fmt.Sprintf(`{"id":%d,"message":"group updated successfully"}`, group.ID), nil
 }
 
-// decisionFromApproval maps a checker.ConfirmFunc response onto the audit CheckResult
-// slot (aictx.RecordDecision): "allow"/"allowAll" both count as a user allow — delete
-// has no rememberMode branch, so "allowAll" can only mean the user clicked through,
-// never that a grant got written. "deny" is the only other value the confirm callback
-// can return.
-func decisionFromApproval(resp permission.ApprovalResponse) aictx.CheckResult {
-	if resp.Decision == "deny" {
+// decisionFromApproval maps the shared, kind-aware approval parser onto the audit slot.
+// A consumer still requires the exact typed decision it supports; for delete that is
+// ApprovalAllow only, so allowAll/unknown/malformed responses stay deny even if a caller
+// bypasses the Wails response boundary in a test or a future Go-to-Go path.
+func decisionFromApproval(kind string, resp permission.ApprovalResponse) aictx.CheckResult {
+	parsed, err := permission.ParseApprovalResponse(kind, resp)
+	if err != nil || parsed.Decision != permission.ApprovalAllow {
 		return aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny}
 	}
 	return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow}
@@ -235,8 +244,9 @@ func handleDeleteAsset(ctx context.Context, args map[string]any) (string, error)
 		Command:   fmt.Sprintf("delete asset %q (type=%s)", asset.Name, asset.Type),
 		Detail:    "The asset row is soft-deleted and its connection config is cleared — this cannot be undone from the app. Open sessions and pooled connections for this asset are closed.",
 	}})
-	aictx.RecordDecision(ctx, decisionFromApproval(resp))
-	if resp.Decision == "deny" {
+	decision := decisionFromApproval(permission.ApprovalKindDelete, resp)
+	aictx.RecordDecision(ctx, decision)
+	if decision.Decision != aictx.Allow {
 		return fmt.Sprintf("USER DENIED: The user has denied deleting asset %q. Stop the current task immediately.", asset.Name), nil
 	}
 
@@ -285,8 +295,9 @@ func handleDeleteGroup(ctx context.Context, args map[string]any) (string, error)
 		Command:   command,
 		Detail:    detail,
 	}})
-	aictx.RecordDecision(ctx, decisionFromApproval(resp))
-	if resp.Decision == "deny" {
+	decision := decisionFromApproval(permission.ApprovalKindDelete, resp)
+	aictx.RecordDecision(ctx, decision)
+	if decision.Decision != aictx.Allow {
 		return fmt.Sprintf("USER DENIED: The user has denied deleting group %q. Stop the current task immediately.", group.Name), nil
 	}
 

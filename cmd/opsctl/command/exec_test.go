@@ -71,6 +71,7 @@ type opsctlExecTestEnv struct {
 	approvalDecision string
 	handlerCalls     map[string]int
 	sshStreamCalls   int
+	sshAuditSources  []string
 }
 
 func setupOpsctlExec(t *testing.T) *opsctlExecTestEnv {
@@ -132,8 +133,9 @@ func setupOpsctlExecAssets(t *testing.T) *opsctlExecTestEnv {
 	}
 
 	origStream := execSSHStreamFn
-	execSSHStreamFn = func(_ context.Context, _ context.Context, _ *asset_entity.Asset, _ string, _ ApprovalResult) int {
+	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, _ *asset_entity.Asset, _ string, _ ApprovalResult) int {
 		env.sshStreamCalls++
+		env.sshAuditSources = append(env.sshAuditSources, aictx.GetAuditSource(auditCtx))
 		return 0
 	}
 	t.Cleanup(func() { execSSHStreamFn = origStream })
@@ -200,6 +202,67 @@ func TestCmdExec_SSHKeepsStreamingPath(t *testing.T) {
 	}
 	if env.handlerCalls["exec"] != 0 {
 		t.Errorf("ssh must not double-dispatch through the handler (%d calls)", env.handlerCalls["exec"])
+	}
+	if len(env.sshAuditSources) != 1 || env.sshAuditSources[0] != "opsctl" {
+		t.Errorf("ssh streaming audit source = %v, want [opsctl]", env.sshAuditSources)
+	}
+}
+
+func TestCmdExec_DeniedApprovalAuditSourceIsOpsctl(t *testing.T) {
+	env := setupOpsctlExec(t)
+
+	code := cmdExec(env.ctx, env.handlers, []string{"web-1", "--", "systemctl restart review"}, "")
+	if code == 0 {
+		t.Fatal("denied approval must fail")
+	}
+	mock := opsctlAuditWriter.(*mockAuditWriter)
+	if got := mock.lastSource(); got != "opsctl" {
+		t.Fatalf("denied SSH approval audit source = %q, want opsctl", got)
+	}
+}
+
+func TestCmdExec_SSHRemoteFailureAuditSourceIsOpsctl(t *testing.T) {
+	env := setupOpsctlExec(t)
+	env.approvalDecision = "allow"
+	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, result ApprovalResult) int {
+		writeOpsctlAudit(auditCtx, "exec", `{"asset_id":2,"command":"review"}`, "", errors.New("remote failure"), result.ToCheckResult())
+		return 1
+	}
+
+	code := cmdExec(env.ctx, env.handlers, []string{"web-1", "--", "review"}, "")
+	if code == 0 {
+		t.Fatal("remote failure must fail")
+	}
+	mock := opsctlAuditWriter.(*mockAuditWriter)
+	if got := mock.lastSource(); got != "opsctl" {
+		t.Fatalf("SSH remote-failure audit source = %q, want opsctl", got)
+	}
+}
+
+func TestCmdExec_SSHPolicyShortCircuitAuditSourceIsOpsctl(t *testing.T) {
+	env := setupOpsctlExecAssets(t)
+	assets, err := asset_repo.Asset().List(env.ctx, asset_repo.ListOptions{})
+	if err != nil {
+		t.Fatalf("list test assets: %v", err)
+	}
+	for _, asset := range assets {
+		if asset.Name == "web-1" {
+			if err := asset.SetCommandPolicy(&asset_entity.CommandPolicy{DenyList: []string{"rm *"}}); err != nil {
+				t.Fatalf("set deny policy: %v", err)
+			}
+		}
+	}
+
+	code := cmdExec(env.ctx, env.handlers, []string{"web-1", "--", "rm -rf /"}, "")
+	if code == 0 {
+		t.Fatal("dangerous SSH command must be denied by policy")
+	}
+	if env.sshStreamCalls != 0 {
+		t.Fatal("policy-denied SSH command reached streaming execution")
+	}
+	mock := opsctlAuditWriter.(*mockAuditWriter)
+	if got := mock.lastSource(); got != "opsctl" {
+		t.Fatalf("SSH policy-short-circuit audit source = %q, want opsctl", got)
 	}
 }
 

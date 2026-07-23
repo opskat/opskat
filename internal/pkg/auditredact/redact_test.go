@@ -27,11 +27,14 @@ func TestJSONInvalidPayloadFailsClosed(t *testing.T) {
 }
 
 func TestTextRedactsCommonCredentialForms(t *testing.T) {
-	raw := "--password one --api-key=two Authorization: Bearer three postgres://user:four@db CREATE USER x IDENTIFIED BY 'five'\n-----BEGIN PRIVATE KEY-----\nsix\n-----END PRIVATE KEY-----"
+	raw := "--password one --api-key=two Authorization: Bearer three postgres://user:four@db CREATE USER x IDENTIFIED BY 'five' --json='{\"token\":\"seven\",\"bucket\":\"production-target\"}'\n-----BEGIN PRIVATE KEY-----\nsix\n-----END PRIVATE KEY-----"
 	got := Text(raw)
-	for _, secret := range []string{"one", "two", "three", "four", "five", "six"} {
+	for _, secret := range []string{"one", "two", "three", "four", "five", "six", "seven"} {
 		if strings.Contains(got, secret) {
 			t.Fatalf("text leaked %q: %s", secret, got)
 		}
+	}
+	if !strings.Contains(got, "production-target") {
+		t.Fatalf("text redaction removed a non-sensitive resource target: %s", got)
 	}
 }

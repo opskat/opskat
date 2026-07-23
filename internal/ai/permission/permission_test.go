@@ -700,7 +700,7 @@ func TestHandleConfirm_AllowAllGrantPatternSaving(t *testing.T) {
 				return ApprovalResponse{
 					Decision: "allowAll",
 					EditedItems: []ApprovalItem{
-						{Type: "exec", Command: "set -e; uname -a\ncat /etc/hosts"},
+						{Type: "exec", AssetID: 1, Command: "set -e; uname -a\ncat /etc/hosts"},
 					},
 				}
 			})
@@ -799,6 +799,44 @@ func TestHandleConfirm_UnregisteredAssetTypeApprovalItem(t *testing.T) {
 
 		So(gotType, ShouldEqual, "oss")
 	})
+}
+
+func TestHandleConfirm_InvalidApprovalResponsesFailClosed(t *testing.T) {
+	tests := []struct {
+		name string
+		resp ApprovalResponse
+	}{
+		{name: "empty decision", resp: ApprovalResponse{}},
+		{name: "unknown decision", resp: ApprovalResponse{Decision: "bogus"}},
+		{name: "case variant", resp: ApprovalResponse{Decision: "ALLOW"}},
+		{
+			name: "malformed edited items",
+			resp: ApprovalResponse{
+				Decision:    "allowAll",
+				EditedItems: []ApprovalItem{{Type: "exec", Command: "   "}},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, mockAsset, _ := setupPolicyTest(t)
+			asset := &asset_entity.Asset{ID: 1, Name: "web-01", Type: asset_entity.AssetTypeSSH}
+			mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+			checker := NewCommandPolicyChecker(func(_ context.Context, _ string, _ []ApprovalItem) ApprovalResponse {
+				return tc.resp
+			})
+			result := checker.HandleConfirm(ctx, asset.ID, asset.Type, "touch /tmp/review-proof")
+
+			if result.Decision != aictx.Deny {
+				t.Fatalf("invalid approval response %#v produced decision %v, want deny", tc.resp, result.Decision)
+			}
+			if result.DecisionSource != aictx.SourceUserDeny {
+				t.Fatalf("invalid approval response source = %q, want %q", result.DecisionSource, aictx.SourceUserDeny)
+			}
+		})
+	}
 }
 
 func TestCheckPermission_TypeAlias(t *testing.T) {
@@ -1170,7 +1208,7 @@ func TestCheckPermission_GrantSaveReuseRoundTrip(t *testing.T) {
 			return ApprovalResponse{
 				Decision: "allowAll",
 				EditedItems: []ApprovalItem{
-					{Type: "exec", Command: "ls *\ncat *"},
+					{Type: "exec", AssetID: 1, Command: "ls *\ncat *"},
 				},
 			}
 		})

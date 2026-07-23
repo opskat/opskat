@@ -71,6 +71,25 @@ describe("ApprovalBlock", () => {
     expect(screen.getByTestId("ai-approval-remember")).toBeInTheDocument();
   });
 
+  it("扩展审批不提供 remember/allowAll", () => {
+    renderApproval({
+      approvalKind: "extension",
+      approvalItems: [
+        {
+          type: "ext_tool",
+          asset_id: 0,
+          asset_name: "",
+          command: 'oss.delete_objects {"bucket":"prod"}',
+        },
+      ],
+    });
+
+    expect(screen.getByTestId("ai-approval-block")).toHaveAttribute("data-approval-kind", "extension");
+    expect(screen.queryByTestId("ai-approval-remember")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("ai-approval-allow-all")).not.toBeInTheDocument();
+    expect(screen.getByTestId("ai-approval-allow")).toBeInTheDocument();
+  });
+
   it("删除分组的审批项在徽标行也要显示分组名（没有 asset_name，只有 group_name）", () => {
     renderApproval({
       approvalKind: "delete",

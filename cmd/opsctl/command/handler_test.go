@@ -13,20 +13,28 @@ import (
 
 // mockAuditWriter 捕获审计日志写入
 type mockAuditWriter struct {
-	mu    sync.Mutex
-	calls []audit.ToolCallInfo
+	mu      sync.Mutex
+	calls   []audit.ToolCallInfo
+	sources []string
 }
 
-func (m *mockAuditWriter) WriteToolCall(_ context.Context, info audit.ToolCallInfo) {
+func (m *mockAuditWriter) WriteToolCall(ctx context.Context, info audit.ToolCallInfo) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, info)
+	m.sources = append(m.sources, aictx.GetAuditSource(ctx))
 }
 
 func (m *mockAuditWriter) lastCall() audit.ToolCallInfo {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.calls[len(m.calls)-1]
+}
+
+func (m *mockAuditWriter) lastSource() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sources[len(m.sources)-1]
 }
 
 func TestCallHandler_Decision(t *testing.T) {

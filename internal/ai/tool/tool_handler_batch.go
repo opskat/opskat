@@ -9,6 +9,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/assetref"
+	"github.com/opskat/opskat/internal/ai/audit"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
@@ -88,6 +89,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 		checkCommand string // 权限检查用的（可能已规范化的）命令串
 		decision     string // "allow" / "deny" / "needConfirm"
 		denyMsg      string
+		checkResult  aictx.CheckResult // 每项独立审计的授权/拒绝语义
 	}
 	resolved := make([]resolvedCmd, 0, len(commands))
 
@@ -98,7 +100,8 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 			// （assetref.ErrAmbiguous）会明确告诉模型改用数字 id，压成"找不到"
 			// 只会让它换个名字重试，而重试同样歧义。
 			resolved = append(resolved, resolvedCmd{
-				item: cmd, decision: "deny", denyMsg: resolveErr.Error(),
+				item: cmd, assetName: cmd.Asset, decision: "deny", denyMsg: resolveErr.Error(),
+				checkResult: aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceExecResolveFailed, Message: resolveErr.Error()},
 			})
 			continue
 		}
@@ -110,6 +113,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 			resolved = append(resolved, resolvedCmd{
 				item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
 				decision: "deny", denyMsg: err.Error(),
+				checkResult: aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceExecTypeMismatch, Message: err.Error()},
 			})
 			continue
 		}
@@ -121,6 +125,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 			resolved = append(resolved, resolvedCmd{
 				item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
 				decision: "deny", denyMsg: "missing required parameter: command",
+				checkResult: aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceExecInvalidInput, Message: "missing required parameter: command"},
 			})
 			continue
 		}
@@ -130,6 +135,8 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 				item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
 				decision: "deny",
 				denyMsg:  fmt.Sprintf("asset %q (type=%s) has no exec support yet", asset.Name, asset.Type),
+				checkResult: aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceExecUnsupportedType,
+					Message: fmt.Sprintf("asset %q (type=%s) has no exec support yet", asset.Name, asset.Type)},
 			})
 			continue
 		}
@@ -144,6 +151,8 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 				resolved = append(resolved, resolvedCmd{
 					item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
 					decision: "deny", denyMsg: execGuidance(asset),
+					checkResult: aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceExecGateBlocked,
+						Message: execGuidance(asset)},
 				})
 				continue
 			}
@@ -158,6 +167,8 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 				resolved = append(resolved, resolvedCmd{
 					item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
 					decision: "deny", denyMsg: cerr.Error(),
+					checkResult: aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceExecCanonicalizeError,
+						Message: cerr.Error()},
 				})
 				continue
 			}
@@ -174,6 +185,8 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 				resolved = append(resolved, resolvedCmd{
 					item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
 					checkCommand: checkCommand, decision: "deny", denyMsg: err.Error(),
+					checkResult: aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceExecPrecheckFailed,
+						Message: err.Error()},
 				})
 				continue
 			}
@@ -192,7 +205,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 
 		resolved = append(resolved, resolvedCmd{
 			item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
-			checkCommand: checkCommand, decision: decision, denyMsg: denyMsg,
+			checkCommand: checkCommand, decision: decision, denyMsg: denyMsg, checkResult: result,
 		})
 	}
 
@@ -212,15 +225,52 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 			}
 		}
 		if len(needConfirmItems) > 0 {
-			resp := checker.ConfirmFunc()(ctx, "batch", needConfirmItems)
+			resp := checker.ConfirmFunc()(ctx, permission.ApprovalKindBatch, needConfirmItems)
+			parsed, parseErr := permission.ParseApprovalResponse(permission.ApprovalKindBatch, resp, needConfirmItems)
 			for _, idx := range needConfirmIndices {
-				if resp.Decision == "deny" {
+				switch {
+				case parseErr != nil:
+					resolved[idx].decision = "deny"
+					resolved[idx].denyMsg = fmt.Sprintf("invalid approval response: %v", parseErr)
+					resolved[idx].checkResult = aictx.CheckResult{
+						Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny,
+						Message: resolved[idx].denyMsg,
+					}
+				case parsed.Decision == permission.ApprovalDeny:
 					resolved[idx].decision = "deny"
 					resolved[idx].denyMsg = "user denied batch execution"
-				} else {
+					resolved[idx].checkResult = aictx.CheckResult{
+						Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny,
+						Message: resolved[idx].denyMsg,
+					}
+				case parsed.Decision == permission.ApprovalAllow:
 					resolved[idx].decision = "allow"
+					resolved[idx].checkResult = aictx.CheckResult{
+						Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow,
+					}
+				default:
+					resolved[idx].decision = "deny"
+					resolved[idx].denyMsg = "unsupported batch approval decision"
+					resolved[idx].checkResult = aictx.CheckResult{
+						Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny,
+						Message: resolved[idx].denyMsg,
+					}
 				}
 			}
+		}
+	}
+	// A checker without a callback is still not authorization. Any item left in the
+	// NeedConfirm state after the aggregation attempt is denied explicitly so neither
+	// execution nor per-item audit can inherit a zero/default allow.
+	for i := range resolved {
+		if resolved[i].decision != "needConfirm" {
+			continue
+		}
+		resolved[i].decision = "deny"
+		resolved[i].denyMsg = "command requires confirmation but no approval mechanism is configured"
+		resolved[i].checkResult = aictx.CheckResult{
+			Decision: aictx.Deny, DecisionSource: aictx.SourcePolicyDeny,
+			Message: resolved[i].denyMsg,
 		}
 	}
 
@@ -249,6 +299,8 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 			Type: resultType, Command: r.item.Command,
 			ExitCode: -1, Error: fmt.Sprintf("denied: %s", r.denyMsg),
 		})
+		writeBatchItemAudit(ctx, r.assetID, r.assetName, resultType, r.item.Command,
+			r.checkCommand, results[len(results)-1], r.checkResult)
 	}
 
 	var wg sync.WaitGroup
@@ -260,6 +312,8 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 			defer func() { <-sem }()
 
 			result := executeBatchItem(ctx, r.item, r.asset)
+			writeBatchItemAudit(ctx, r.assetID, r.assetName, r.asset.Type, r.item.Command,
+				r.checkCommand, result, r.checkResult)
 			mu.Lock()
 			results = append(results, result)
 			mu.Unlock()
@@ -267,11 +321,79 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 	}
 	wg.Wait()
 
+	var summaryParts []string
+	for _, r := range resolved {
+		command := r.checkCommand
+		if command == "" {
+			command = r.item.Command
+		}
+		summaryParts = append(summaryParts, fmt.Sprintf("%s: %s", r.assetName, command))
+	}
+	aictx.RecordAuditCommand(ctx, "batch ["+strings.Join(summaryParts, "; ")+"]")
+
+	successCount := 0
+	for _, result := range results {
+		if result.Error == "" && result.ExitCode == 0 {
+			successCount++
+		}
+	}
+	switch {
+	case successCount == len(results):
+		aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceBatchComplete})
+	case successCount > 0:
+		aictx.RecordDecision(ctx, aictx.CheckResult{
+			Decision: aictx.Deny, DecisionSource: aictx.SourceBatchPartialFailure,
+			Message: fmt.Sprintf("batch partially failed: %d of %d items succeeded", successCount, len(results)),
+		})
+	default:
+		source := aictx.SourceBatchFailed
+		allUserDenied := len(denied) == len(resolved)
+		for _, r := range denied {
+			if r.checkResult.DecisionSource != aictx.SourceUserDeny {
+				allUserDenied = false
+				break
+			}
+		}
+		if allUserDenied {
+			source = aictx.SourceUserDeny
+		}
+		aictx.RecordDecision(ctx, aictx.CheckResult{
+			Decision: aictx.Deny, DecisionSource: source,
+			Message: fmt.Sprintf("batch failed: 0 of %d items succeeded", len(results)),
+		})
+	}
+
 	output, err := json.MarshalIndent(map[string]any{"results": results}, "", "  ")
 	if err != nil {
 		return "", err
 	}
 	return string(output), nil
+}
+
+func writeBatchItemAudit(ctx context.Context, assetID int64, assetName, assetType, rawCommand,
+	checkCommand string, result batchResultItem, decision aictx.CheckResult) {
+	command := checkCommand
+	if command == "" {
+		command = rawCommand
+	}
+	argsJSON, err := json.Marshal(map[string]any{
+		"asset": assetName, "type": assetType, "command": rawCommand,
+	})
+	if err != nil {
+		argsJSON = []byte(`{"error":"failed to marshal batch item audit request"}`)
+	}
+	resultJSON, marshalErr := json.Marshal(result)
+	if marshalErr != nil {
+		resultJSON = []byte(`{"error":"failed to marshal batch item audit result"}`)
+	}
+	var execErr error
+	if result.Error != "" {
+		execErr = fmt.Errorf("%s", result.Error)
+	}
+	audit.NewDefaultAuditWriter().WriteToolCall(ctx, audit.ToolCallInfo{
+		ToolName: "batch_exec_item", ArgsJSON: string(argsJSON), Result: string(resultJSON),
+		Error: execErr, Decision: &decision, AssetID: assetID, AssetName: assetName, Command: command,
+	})
 }
 
 // executeBatchItem 把单条命令派发到资产真实类型对应的执行器（permission.ExecutorFor），

@@ -54,8 +54,8 @@ func NewLocalToolGate(confirm LocalToolConfirmFunc) *LocalToolGate {
 // agent.Use(`^local_(bash|write|edit)$`, gate.Middleware()) 挂载。
 //
 // 行为：subjects 缺失或全部命中已存 pattern 时直接 Next 放行；无 confirm 回调
-// 时 AbortWithDeny；用户 deny → AbortWithDeny；allowAll → 写白名单后 Next；
-// 其他（"allow" 或未知）按单次允许处理，不写白名单。
+// 时 AbortWithDeny；用户 deny/无效响应 → AbortWithDeny；allowAll → 写白名单后 Next；
+// 只有精确的 allow 才按单次允许处理。
 func (g *LocalToolGate) Middleware() agent.ToolMiddleware {
 	return func(c *agent.ToolContext) {
 		ctx := c.Context()
@@ -87,18 +87,25 @@ func (g *LocalToolGate) Middleware() agent.ToolMiddleware {
 			DefaultPatterns: defaultPatterns(toolName, subjects),
 		}
 		resp := g.confirm(ctx, req)
+		expected := []permission.ApprovalItem{{Type: toolName, Command: req.Command}}
+		parsed, err := permission.ParseApprovalResponse(permission.ApprovalKindLocalTool, resp, expected)
+		if err != nil {
+			c.AbortWithDeny(fmt.Sprintf("invalid approval response for local tool %s: %v", toolName, err))
+			return
+		}
 
-		switch resp.Decision {
-		case "deny":
+		switch parsed.Decision {
+		case permission.ApprovalDeny:
 			c.AbortWithDeny(fmt.Sprintf("USER DENIED: user rejected local tool %s. Stop the current task.", toolName))
-		case "allowAll":
-			for _, p := range patternsFromResponse(toolName, subjects, resp.EditedItems) {
+		case permission.ApprovalAllowAll:
+			for _, p := range patternsFromResponse(toolName, subjects, parsed.EditedItems) {
 				g.remember(convID, toolName, p)
 			}
 			c.Next()
-		default:
-			// "allow" 或其他都按单次允许处理；不写白名单。
+		case permission.ApprovalAllow:
 			c.Next()
+		default:
+			c.AbortWithDeny(fmt.Sprintf("invalid approval decision for local tool %s", toolName))
 		}
 	}
 }

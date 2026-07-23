@@ -1,8 +1,10 @@
 package tool
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,10 +42,11 @@ func parseExtCommand(command string, def extension.ToolDef) (string, string, []b
 		if len(c.Flags) > 1 {
 			return "", "", nil, fmt.Errorf("ext_exec: --json cannot be combined with other flags")
 		}
-		if !json.Valid([]byte(raw)) {
-			return "", "", nil, fmt.Errorf("ext_exec: --json value is not valid JSON")
+		argsJSON, err := validateExtensionToolArgs(extName, toolName, def, []byte(raw))
+		if err != nil {
+			return "", "", nil, err
 		}
-		return extName, toolName, []byte(raw), nil
+		return extName, toolName, argsJSON, nil
 	}
 
 	props, _ := def.Parameters["properties"].(map[string]any)
@@ -66,7 +69,184 @@ func parseExtCommand(command string, def extension.ToolDef) (string, string, []b
 	if err != nil {
 		return "", "", nil, fmt.Errorf("ext_exec: marshal args: %w", err)
 	}
+	argsJSON, err = validateExtensionToolArgs(extName, toolName, def, argsJSON)
+	if err != nil {
+		return "", "", nil, err
+	}
 	return extName, toolName, argsJSON, nil
+}
+
+// validateExtensionToolArgs applies the manifest's supported JSON-schema subset at call
+// time. Manifest loading proves the schema itself is well-formed; this function proves one
+// invocation is an object with no duplicate/unknown keys, contains every required key, and
+// supplies the declared scalar/array<string> types. It returns deterministic canonical JSON
+// (encoding/json sorts object keys), shared by policy, approval summary, audit, and plugin.
+func validateExtensionToolArgs(extName, toolName string, def extension.ToolDef, raw []byte) ([]byte, error) {
+	values, err := decodeStrictJSONObject(raw)
+	if err != nil {
+		return nil, fmt.Errorf("ext_exec: %s.%s arguments must be an object: %w", extName, toolName, err)
+	}
+
+	props, ok := def.Parameters["properties"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("ext_exec: %s.%s has invalid manifest parameters.properties", extName, toolName)
+	}
+	for name := range values {
+		if _, ok := props[name]; !ok {
+			return nil, fmt.Errorf("ext_exec: %s.%s has no parameter %q (declared: %s)",
+				extName, toolName, name, strings.Join(declaredParamNames(props), ", "))
+		}
+	}
+	for _, name := range requiredExtensionParams(def.Parameters["required"]) {
+		if _, ok := values[name]; !ok {
+			return nil, fmt.Errorf("ext_exec: %s.%s missing required parameter %q", extName, toolName, name)
+		}
+	}
+
+	canonical := make(map[string]any, len(values))
+	for name, rawValue := range values {
+		prop, ok := props[name].(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("ext_exec: %s.%s parameter %q has an invalid manifest declaration", extName, toolName, name)
+		}
+		typ, _ := prop["type"].(string)
+		value, err := decodeExtensionValue(rawValue, typ)
+		if err != nil {
+			return nil, fmt.Errorf("ext_exec: %s.%s parameter %q must be %s: %w", extName, toolName, name, typ, err)
+		}
+		canonical[name] = value
+	}
+	data, err := json.Marshal(canonical)
+	if err != nil {
+		return nil, fmt.Errorf("ext_exec: marshal %s.%s arguments: %w", extName, toolName, err)
+	}
+	return data, nil
+}
+
+func decodeStrictJSONObject(raw []byte) (map[string]json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok || delim != '{' {
+		return nil, fmt.Errorf("got %s", jsonTypeName(token))
+	}
+	values := make(map[string]json.RawMessage)
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return nil, fmt.Errorf("object key is not a string")
+		}
+		if _, exists := values[key]; exists {
+			return nil, fmt.Errorf("duplicate parameter %q", key)
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, err
+		}
+		values[key] = value
+	}
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("multiple JSON values")
+		}
+		return nil, err
+	}
+	return values, nil
+}
+
+func requiredExtensionParams(raw any) []string {
+	switch required := raw.(type) {
+	case []any:
+		out := make([]string, 0, len(required))
+		for _, item := range required {
+			if name, ok := item.(string); ok {
+				out = append(out, name)
+			}
+		}
+		return out
+	case []string:
+		return required
+	default:
+		return nil
+	}
+}
+
+func decodeExtensionValue(raw json.RawMessage, typ string) (any, error) {
+	switch typ {
+	case "string":
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return nil, err
+		}
+		return value, nil
+	case "integer":
+		var value any
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&value); err != nil {
+			return nil, err
+		}
+		number, ok := value.(json.Number)
+		if !ok {
+			return nil, fmt.Errorf("got %s", jsonTypeName(value))
+		}
+		if _, err := number.Int64(); err != nil {
+			return nil, err
+		}
+		return number, nil
+	case "number":
+		var value any
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&value); err != nil {
+			return nil, err
+		}
+		number, ok := value.(json.Number)
+		if !ok {
+			return nil, fmt.Errorf("got %s", jsonTypeName(value))
+		}
+		if _, err := number.Float64(); err != nil {
+			return nil, err
+		}
+		return number, nil
+	case "boolean":
+		var value bool
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return nil, err
+		}
+		return value, nil
+	case "array":
+		var items []json.RawMessage
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return nil, err
+		}
+		values := make([]string, len(items))
+		for i, item := range items {
+			if err := json.Unmarshal(item, &values[i]); err != nil {
+				return nil, fmt.Errorf("item %d: %w", i, err)
+			}
+		}
+		return values, nil
+	default:
+		return nil, fmt.Errorf("unsupported parameter type %q", typ)
+	}
+}
+
+func jsonTypeName(token any) string {
+	if token == nil {
+		return "null"
+	}
+	return fmt.Sprintf("%T", token)
 }
 
 // convertExtFlag 按 manifest 声明的类型转换 flag 值。类型不是可选的——

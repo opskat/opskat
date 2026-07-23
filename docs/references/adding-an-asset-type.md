@@ -127,7 +127,7 @@ Reuse shared argument parsing:
 - `ArgStringSlice`
 - `validateRemoteServerArgs` for the existing SSH/database/Redis/MongoDB host/port/username validation shape
 
-The AI handlers dispatch `put_asset` (create when `id` is absent, update when it is present), get, and list through `assettype.Get(type)`, so handler code is registration-driven. Type-specific fields live under `put_asset.config`; its schema intentionally stays a free object instead of rebuilding a central union of every type's fields. Document the exact config keys in the type's `SKILL.md` as described in [B7](#b7-ai-help-and-command-execution).
+The AI handlers dispatch `put_asset` (create when `asset` is absent, update when `asset=<id-or-name>` is present), get, and list through `assettype.Get(type)`, so handler code is registration-driven. Type-specific fields live under `put_asset.config`; its schema intentionally stays a free object instead of rebuilding a central union of every type's fields. Document the exact config keys in the type's `SKILL.md` as described in [B7](#b7-ai-help-and-command-execution).
 
 ### B3. Policy: Reuse an Existing Kind or Add a New Kind
 

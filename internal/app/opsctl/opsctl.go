@@ -7,6 +7,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/sshpool"
 )
@@ -39,7 +40,13 @@ type Opsctl struct {
 	authToken      string
 	extExecutor    ExtToolExecutor
 
-	pendingOpsctlApprovals sync.Map // map[string]chan ai.ApprovalResponse
+	pendingOpsctlApprovals sync.Map // map[string]pendingOpsctlApproval
+}
+
+type pendingOpsctlApproval struct {
+	kind  string
+	items []permission.ApprovalItem
+	ch    chan permission.ApprovalResponse
 }
 
 // SetAuthToken main.go 注入 socket 鉴权 token，供 startApprovalServer/startSSHPoolServer 使用。

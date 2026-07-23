@@ -19,6 +19,7 @@ function fireSingleApproval(handlers: Map<string, (data: unknown) => void>, over
   act(() => {
     handler({
       confirm_id: "opsctl_1",
+      kind: "single",
       type: "exec",
       asset_id: 1,
       asset_name: "web-1",
@@ -39,6 +40,7 @@ describe("OpsctlApprovalDialog", () => {
     render(<OpsctlApprovalDialog />);
 
     fireSingleApproval(handlers, {
+      kind: "delete",
       type: "delete",
       command: 'delete asset "web-9" (type=ssh)',
       session_id: "session-1",
@@ -61,11 +63,31 @@ describe("OpsctlApprovalDialog", () => {
     expect(screen.getByText("opsctlApproval.remember")).toBeInTheDocument();
   });
 
+  it("扩展审批（type=ext_tool）不提供 remember/allowAll", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+
+    fireSingleApproval(handlers, { kind: "extension", type: "ext_tool", session_id: "session-1" });
+
+    expect(screen.queryByText("opsctlApproval.remember")).not.toBeInTheDocument();
+    expect(screen.getByText("opsctlApproval.allow")).toBeInTheDocument();
+  });
+
+  it("普通一次性审批（kind=once）不提供 remember/allowAll", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+
+    fireSingleApproval(handlers, { kind: "once", type: "create", session_id: "session-1" });
+
+    expect(screen.queryByText("opsctlApproval.remember")).not.toBeInTheDocument();
+    expect(screen.getByText("opsctlApproval.allow")).toBeInTheDocument();
+  });
+
   it("删除审批的标题与 ApprovalBlock 保持一致的措辞（复用同一 key，不新造文案）", () => {
     const handlers = captureHandlers();
     render(<OpsctlApprovalDialog />);
 
-    fireSingleApproval(handlers, { type: "delete", session_id: "session-1" });
+    fireSingleApproval(handlers, { kind: "delete", type: "delete", session_id: "session-1" });
 
     expect(screen.getByText("ai.approvalDeleteTitle")).toBeInTheDocument();
   });

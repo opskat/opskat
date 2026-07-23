@@ -2246,10 +2246,6 @@ go test ./pkg/extension/ -run TestParseManifest -v
 go run ./cmd/opsctl ext list   # 若本机装了 oss 扩展，应正常列出而非静默消失
 ```
 
-若 `../extensions/examples/echo/manifest.json` 被当作 fixture 用到，注意它**今天就加载不了**
-（缺 `hostABI`，撞 `manifest.go:307`）——这不是本次改动引入的，不要顺手"修"它，
-只在报告里记一笔。
-
 - [ ] **Step 7: 变异验证**
 
 从 `validateTools` 里删掉「属性缺 type」那条检查，重跑 `go test ./pkg/extension/`。
@@ -2279,11 +2275,10 @@ spec §4.5。现状（recon 实测，与 spec 原文有出入）：工具是
 **`ext_exec` 保持与 `exec` 分离**——策略路径确实不同（WASM `Plugin.CheckPolicy` 往返 +
 `CheckExtensionPolicy`，且并非所有扩展都是资产范围的）。
 
-> **不在本 task 修的三条既有 fail-open**（recon E 节实测，均**先于**本改动存在）：
-> `tool_handler_ext.go:53`（`Policies.Type == ""` 整段跳过策略检查）、
-> `:59`（`CheckPolicy` 报错即放行）、`main.go:377-381`（opsctl 的 `ext_tool` 通路直接
-> `CallTool`，零策略检查）。它们与本 task 的参数形态改造正交，**混进来会让这次 diff
-> 无法评审**。Task 12 的收尾要求把它们开成 issue。
+> **实施状态更新（2026-07-23）：** 本段原先记录的三条扩展 fail-open 已在当前分支关闭。
+> `ExecuteExtensionTool` 在调用期先按 manifest 校验参数；无 policy/action 时发起不可 grant
+> 的逐次审批，`CheckPolicy` 错误直接拒绝；AI 与 opsctl 委托路径都调用这一共享 seam。
+> 下方步骤保留为当时的实施记录，不应再按旧行号或旧控制流判断当前安全语义。
 
 **Files:**
 - Modify: `internal/ai/tool/tools_ext.go`（全文）
@@ -2992,12 +2987,14 @@ Expected: 全绿 / 0 issue
 - `delete_asset` → 弹确认，面板无「全部允许」；批准后资产消失、终端标签页断开；
 - `batch_exec` 混合 ssh + redis 两条 → 一次审批弹窗、两条结果。
 
-- [ ] **Step 7: 开出遗留 issue**
+- [x] **Step 7: 扩展 fail-open 实施状态（2026-07-23 更新）**
 
-Task 9 刻意不修的三条 fail-open，各开一条 issue（标题写清楚位置与后果）：
-`tool_handler_ext.go:53`（`Policies.Type == ""` 跳过全部策略检查）、
-`:59`（`CheckPolicy` 报错即放行）、`main.go:377-381`（opsctl `ext_tool` 通路零策略检查）。
-另记一条：`../extensions/examples/echo/manifest.json` 缺 `hostABI`，**今天就加载不了**。
+原计划在 Task 9 结束时保留的三条风险已在当前分支关闭：`ExecuteExtensionTool` 对未声明
+policy type 或 policy 未返回 action 的调用发起不可 grant 的逐次审批，`CheckPolicy` 错误
+直接返回失败；AI 与 opsctl 委托路径都复用这一共享 seam，并在 policy/审批/plugin 之前执行
+manifest 参数的调用期校验。不要再按旧行号创建“尚未修复”的 issue；应从当前实现和回归测试
+重新判断。`../extensions/examples/echo/manifest.json` 属于独立 sibling repo，不在本仓当前分支
+事实范围内。
 
 - [ ] **Step 8: 提交并合回**
 
@@ -3028,4 +3025,4 @@ git merge --no-ff feature/ai-tool-exec-crud
 
 **已知偏离 spec 之处（均已在 spec 内就地标注）**：
 `opsctl ssh` 保留、`opsctl exec` 按类型分派、`put_asset` 用 `asset` 而非 `id`、
-`references/` 渐进披露不做、`ext_exec` 的三条既有 fail-open 不在本 Plan 修。
+`references/` 渐进披露不做。`ext_exec` 的三条 fail-open 已在上方 Step 7 的实施更新中关闭。

@@ -45,6 +45,10 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		}
 		return 1
 	}
+	// Stamp provenance once before any policy/approval/audit branch. SSH streaming and
+	// approval failures bypass callHandler (which also stamps source for non-SSH tools),
+	// so doing this at the command boundary is what keeps every terminal path consistent.
+	ctx = aictx.WithAuditSource(ctx, "opsctl")
 
 	asset, err := resolveAsset(ctx, args[0])
 	if err != nil {

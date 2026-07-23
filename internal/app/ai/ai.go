@@ -54,9 +54,15 @@ type AI struct {
 	currentConversationID int64
 
 	permissionChan     chan runner.PermissionResponse
-	pendingAIApprovals sync.Map // map[string]chan permission.ApprovalResponse
+	pendingAIApprovals sync.Map // map[string]pendingAIApproval
 
 	flushAckCh chan struct{}
+}
+
+type pendingAIApproval struct {
+	kind  string
+	items []permission.ApprovalItem
+	ch    chan permission.ApprovalResponse
 }
 
 // SetKafkaService 由 main.go 注入：AI tool 在 chat ctx 中通过 helper.WithKafkaService 暴露给 handler。

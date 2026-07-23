@@ -12,6 +12,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/cmdline"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/policy"
+	"github.com/opskat/opskat/internal/pkg/auditredact"
 	"github.com/opskat/opskat/pkg/extension"
 )
 
@@ -20,6 +21,8 @@ type ExtensionToolExecutor interface {
 	FindExtensionByTool(extName, toolName string) *extension.Extension
 	FindToolDef(extName, toolName string) (extension.ToolDef, bool)
 	GetExtensionPolicyGroups(extName, assetType string, assetID int64) []string
+	CheckToolPolicy(ctx context.Context, extName, toolName string, argsJSON []byte) (action, resource string, err error)
+	CallTool(ctx context.Context, extName, toolName string, argsJSON []byte) ([]byte, error)
 }
 
 var execToolExecutor ExtensionToolExecutor
@@ -100,12 +103,23 @@ func ExecuteExtensionTool(ctx context.Context, executor ExtensionToolExecutor, a
 			zap.String("tool", toolName), zap.Int64("assetID", assetID))
 	}()
 	ext := executor.FindExtensionByTool(extName, toolName)
-	if ext == nil || ext.Plugin == nil {
+	if ext == nil {
 		return nil, fmt.Errorf("ext_exec: tool %q not found in extension %q", toolName, extName)
 	}
+	def, ok := executor.FindToolDef(extName, toolName)
+	if !ok {
+		return nil, fmt.Errorf("ext_exec: tool %q not found in extension %q", toolName, extName)
+	}
+	argsJSON, err := validateExtensionToolArgs(extName, toolName, def, argsJSON)
+	if err != nil {
+		return nil, err
+	}
+	command := extensionInvocationSummary(extName, toolName, argsJSON)
+	aictx.RecordAuditCommand(ctx, command)
+
 	policyType := ext.Manifest.Policies.Type
 	if policyType == "" {
-		if err := confirmExtensionTool(ctx, assetID, extName, toolName, "extension declares no policy type"); err != nil {
+		if err := confirmExtensionTool(ctx, assetID, extName, toolName, command, "extension declares no policy type"); err != nil {
 			return nil, err
 		}
 	} else {
@@ -113,12 +127,12 @@ func ExecuteExtensionTool(ctx context.Context, executor ExtensionToolExecutor, a
 			return nil, fmt.Errorf("ext_exec: %s.%s requires asset (extension declares policy type %q)",
 				extName, toolName, policyType)
 		}
-		action, _, err := ext.Plugin.CheckPolicy(ctx, toolName, argsJSON)
+		action, _, err := executor.CheckToolPolicy(ctx, extName, toolName, argsJSON)
 		if err != nil {
 			return nil, fmt.Errorf("ext_exec: %s.%s policy check failed: %w", extName, toolName, err)
 		}
 		if action == "" {
-			if err := confirmExtensionTool(ctx, assetID, extName, toolName, "extension policy returned no action"); err != nil {
+			if err := confirmExtensionTool(ctx, assetID, extName, toolName, command, "extension policy returned no action"); err != nil {
 				return nil, err
 			}
 		} else {
@@ -129,20 +143,24 @@ func ExecuteExtensionTool(ctx context.Context, executor ExtensionToolExecutor, a
 			case aictx.Deny:
 				return nil, fmt.Errorf("ext_exec: policy denied: %s", result.Message)
 			case aictx.NeedConfirm:
-				if err := confirmExtensionTool(ctx, assetID, extName, toolName, policyType); err != nil {
+				if err := confirmExtensionTool(ctx, assetID, extName, toolName, command, policyType); err != nil {
 					return nil, err
 				}
 			}
 		}
 	}
-	result, err := ext.Plugin.CallTool(ctx, toolName, argsJSON)
+	result, err = executor.CallTool(ctx, extName, toolName, argsJSON)
 	if err != nil {
 		return nil, fmt.Errorf("ext_exec: %s.%s failed: %w", extName, toolName, err)
 	}
 	return result, nil
 }
 
-func confirmExtensionTool(ctx context.Context, assetID int64, extName, toolName, reason string) error {
+func extensionInvocationSummary(extName, toolName string, argsJSON []byte) string {
+	return extName + "." + toolName + " " + auditredact.JSON(string(argsJSON))
+}
+
+func confirmExtensionTool(ctx context.Context, assetID int64, extName, toolName, command, reason string) error {
 	checker, err := permission.RequireChecker(ctx)
 	if err != nil {
 		return fmt.Errorf("ext_exec: %s.%s needs confirmation (%s) but %w", extName, toolName, reason, err)
@@ -152,18 +170,19 @@ func confirmExtensionTool(ctx context.Context, assetID int64, extName, toolName,
 		return fmt.Errorf("ext_exec: %s.%s needs confirmation (%s) but no confirmation callback is configured",
 			extName, toolName, reason)
 	}
-	resp := confirm(ctx, "single", []permission.ApprovalItem{{
+	items := []permission.ApprovalItem{{
 		Type:    "ext_tool",
 		AssetID: assetID,
-		Command: extName + "." + toolName,
+		Command: command,
 		Detail:  reason,
-	}})
-	// 只有 "deny" 是拒绝；"allow" 与 "allowAll" 都是放行——与 decisionFromApproval、
-	// HandleConfirm、local_tool_gate 同一套映射。kind="single" 的审批前端会渲染
-	// 「记住并允许」（respond("allowAll")），扩展没有 grant 落库通路所以 allowAll 等同
-	// 单次允许；若在这里把它当拒绝，用户点头过的扩展工具会静默不执行、审计记成 user denied。
-	if resp.Decision == "deny" {
+	}}
+	resp := confirm(ctx, permission.ApprovalKindExtension, items)
+	parsed, parseErr := permission.ParseApprovalResponse(permission.ApprovalKindExtension, resp, items)
+	if parseErr != nil || parsed.Decision != permission.ApprovalAllow {
 		aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny})
+		if parseErr != nil {
+			return fmt.Errorf("ext_exec: invalid approval response for %s.%s: %w", extName, toolName, parseErr)
+		}
 		return fmt.Errorf("ext_exec: user denied: %s.%s", extName, toolName)
 	}
 	aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow})

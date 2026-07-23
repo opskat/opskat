@@ -85,3 +85,12 @@ func TestApprovalTypeFor(t *testing.T) {
 		})
 	}
 }
+
+func TestSupportsGrantApprovalUsesPermissionRegistry(t *testing.T) {
+	for _, approvalType := range []string{"exec", "serial", "sql", "redis", "etcd", "mongo", "kafka", "k8s", GrantToolCp} {
+		assert.True(t, SupportsGrantApproval(approvalType), approvalType)
+	}
+	for _, approvalType := range []string{"create", "update", "delete", "ext_tool", "unknown"} {
+		assert.False(t, SupportsGrantApproval(approvalType), approvalType)
+	}
+}

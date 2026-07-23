@@ -3,16 +3,24 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/cago-frame/cago/database/db"
+	"github.com/glebarez/sqlite"
 	"go.uber.org/mock/gomock"
+	"gorm.io/gorm"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/audit_entity"
+	"github.com/opskat/opskat/internal/repository/audit_repo"
+	"github.com/opskat/opskat/migrations"
 )
 
 // batchTestEnv is the fixture shared by the TestHandleBatch_* tests below: a ctx wired
@@ -424,4 +432,130 @@ func TestHandleBatch_CanonicalizeChecksCanonicalExecutesRaw(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandleBatch_InvalidApprovalResponseDoesNotExecute(t *testing.T) {
+	for _, decision := range []string{"", "bogus", "ALLOW", "allowAll"} {
+		name := decision
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			env := setupBatch(t)
+			confirm := func(_ context.Context, _ string, _ []permission.ApprovalItem) permission.ApprovalResponse {
+				return permission.ApprovalResponse{Decision: decision}
+			}
+			ctx := permission.WithPolicyChecker(env.ctx, permission.NewCommandPolicyChecker(confirm))
+
+			out, err := handleBatchCommand(ctx, map[string]any{
+				"commands": `[{"asset":"cache-1","command":"SET review-key must-not-run"}]`,
+			})
+			if err != nil {
+				t.Fatalf("invalid approval should be represented as a denied item, got %v", err)
+			}
+			if env.execCalls["cache-1"] != 0 {
+				t.Fatalf("decision %q executed the remote command %d times", decision, env.execCalls["cache-1"])
+			}
+			if !strings.Contains(out, "denied") {
+				t.Fatalf("decision %q result = %s, want denied item", decision, out)
+			}
+		})
+	}
+}
+
+func TestHandleBatch_UserDenyPersistsFailedPerItemAudit(t *testing.T) {
+	env := setupBatch(t)
+
+	dataDir := t.TempDir()
+	gdb, err := gorm.Open(sqlite.Open(filepath.Join(dataDir, "opskat.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := migrations.RunMigrations(gdb, dataDir); err != nil {
+		t.Fatalf("migrate sqlite: %v", err)
+	}
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		t.Fatalf("sql db: %v", err)
+	}
+	origAudit := audit_repo.Audit()
+	db.SetDefault(gdb)
+	audit_repo.RegisterAudit(audit_repo.NewAudit())
+	t.Cleanup(func() {
+		audit_repo.RegisterAudit(origAudit)
+		_ = sqlDB.Close()
+	})
+
+	ctx := aictx.WithAuditSource(env.ctx, "ai")
+	aggregateDecision := &aictx.CheckResult{}
+	aggregateCommand := ""
+	ctx = aictx.WithCheckResultSlot(ctx, aggregateDecision)
+	ctx = aictx.WithAuditCommandSlot(ctx, &aggregateCommand)
+	out, err := handleBatchCommand(ctx, map[string]any{
+		"commands": `[{"asset":"cache-1","command":"SET review-key denied"}]`,
+	})
+	if err != nil {
+		t.Fatalf("handle batch: %v", err)
+	}
+	if !strings.Contains(out, "user denied") {
+		t.Fatalf("batch result = %s, want user denial", out)
+	}
+	if aggregateDecision.Decision != aictx.Deny || aggregateDecision.DecisionSource != aictx.SourceUserDeny {
+		t.Fatalf("aggregate deny decision = %v/%q, want deny/%q",
+			aggregateDecision.Decision, aggregateDecision.DecisionSource, aictx.SourceUserDeny)
+	}
+	if !strings.Contains(aggregateCommand, "cache-1") || !strings.Contains(aggregateCommand, "SET review-key denied") {
+		t.Fatalf("aggregate command summary lost item target: %q", aggregateCommand)
+	}
+
+	var row audit_entity.AuditLog
+	if err := gdb.Where("tool_name = ?", "batch_exec_item").First(&row).Error; err != nil {
+		t.Fatalf("load per-item audit: %v", err)
+	}
+	if row.Source != "ai" || row.AssetID != 203 || row.AssetName != "cache-1" ||
+		row.Command != "SET review-key denied" || row.Success != 0 ||
+		row.Decision != "deny" || row.DecisionSource != aictx.SourceUserDeny {
+		t.Fatalf("unexpected denied audit row: source=%q asset=%d/%q command=%q success=%d decision=%q/%q",
+			row.Source, row.AssetID, row.AssetName, row.Command, row.Success, row.Decision, row.DecisionSource)
+	}
+}
+
+func TestHandleBatch_AggregateOutcomeSemantics(t *testing.T) {
+	t.Run("partial success is aggregate failure", func(t *testing.T) {
+		env := setupBatch(t)
+		decision := &aictx.CheckResult{}
+		ctx := aictx.WithCheckResultSlot(env.ctx, decision)
+
+		_, err := handleBatchCommand(ctx, map[string]any{
+			"commands": `[{"asset":"cache-1","command":"PING"},{"asset":"cache-1","command":"SET review-key denied"}]`,
+		})
+		if err != nil {
+			t.Fatalf("handle batch: %v", err)
+		}
+		if decision.Decision != aictx.Deny || decision.DecisionSource != aictx.SourceBatchPartialFailure {
+			t.Fatalf("partial aggregate = %v/%q, want deny/%q",
+				decision.Decision, decision.DecisionSource, aictx.SourceBatchPartialFailure)
+		}
+	})
+
+	t.Run("all executions failed is aggregate failure", func(t *testing.T) {
+		env := setupBatch(t)
+		replaceExecutorForTest(t, asset_entity.AssetTypeRedis,
+			func(context.Context, *asset_entity.Asset, string, string) (string, error) {
+				return "", fmt.Errorf("controlled remote failure")
+			})
+		decision := &aictx.CheckResult{}
+		ctx := aictx.WithCheckResultSlot(env.ctx, decision)
+
+		_, err := handleBatchCommand(ctx, map[string]any{
+			"commands": `[{"asset":"cache-1","command":"PING"}]`,
+		})
+		if err != nil {
+			t.Fatalf("handle batch: %v", err)
+		}
+		if decision.Decision != aictx.Deny || decision.DecisionSource != aictx.SourceBatchFailed {
+			t.Fatalf("all-failed aggregate = %v/%q, want deny/%q",
+				decision.Decision, decision.DecisionSource, aictx.SourceBatchFailed)
+		}
+	})
 }

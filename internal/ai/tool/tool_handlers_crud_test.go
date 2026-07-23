@@ -439,6 +439,49 @@ func TestHandlePutAsset_ValidationComesFromAssetType(t *testing.T) {
 	}
 }
 
+func TestHandlePutAsset_ConfigMustBeAnObject(t *testing.T) {
+	tests := []struct {
+		name   string
+		config any
+	}{
+		{name: "string", config: "not-an-object"},
+		{name: "array", config: []any{"host"}},
+		{name: "number", config: float64(7)},
+		{name: "null", config: nil},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := setupCRUD(t)
+			_, err := handlePutAsset(env.ctx, map[string]any{
+				"name": "invalid-config", "type": "local", "config": tc.config,
+			})
+			if err == nil || !strings.Contains(err.Error(), "config") || !strings.Contains(err.Error(), "object") {
+				t.Fatalf("config=%#v error = %v, want an explicit object-shape error", tc.config, err)
+			}
+			if env.assetCount() != 0 {
+				t.Fatalf("invalid config created %d assets, want none", env.assetCount())
+			}
+		})
+	}
+}
+
+func TestHandlePutAsset_InvalidConfigDoesNotPartiallyUpdateAsset(t *testing.T) {
+	env := setupCRUD(t)
+	asset := env.seedAsset("web-9", 0)
+	asset.Description = "before"
+
+	_, err := handlePutAsset(env.ctx, map[string]any{
+		"asset": "web-9", "description": "must-not-apply", "config": "not-an-object",
+	})
+	if err == nil || !strings.Contains(err.Error(), "config") {
+		t.Fatalf("invalid update config error = %v, want explicit rejection", err)
+	}
+	if got := env.asset("web-9").Description; got != "before" {
+		t.Fatalf("invalid config partially updated description to %q", got)
+	}
+}
+
 // oss 类型此前被巨型 schema 完全遗漏（40 个属性里一个 oss 字段都没有），
 // 自由 config 之后它必须可创建。
 func TestHandlePutAsset_SupportsTypesTheOldSchemaOmitted(t *testing.T) {
@@ -537,6 +580,31 @@ func TestHandleDeleteAsset_DenyKeepsTheAsset(t *testing.T) {
 	// decision=allow/user_allow——审计上看起来像被批准了，且没有任何东西会因此报错。
 	if slot.Decision != aictx.Deny || slot.DecisionSource != aictx.SourceUserDeny {
 		t.Errorf("recorded decision = %v/%q, want Deny/%q", slot.Decision, slot.DecisionSource, aictx.SourceUserDeny)
+	}
+}
+
+func TestHandleDeleteAsset_InvalidApprovalResponsesKeepTheAsset(t *testing.T) {
+	for _, decision := range []string{"", "bogus", "ALLOW", "allowAll"} {
+		name := decision
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			env := setupCRUD(t)
+			env.seedAsset("web-9", 0)
+			env.confirmDecision = decision
+
+			slot := &aictx.CheckResult{}
+			ctx := aictx.WithCheckResultSlot(env.ctx, slot)
+			_, _ = handleDeleteAsset(ctx, map[string]any{"asset": "web-9"})
+
+			if env.assetCount() != 1 {
+				t.Fatalf("decision %q deleted the asset; invalid/delete allowAll responses must fail closed", decision)
+			}
+			if slot.Decision != aictx.Deny {
+				t.Fatalf("decision %q recorded %v, want deny", decision, slot.Decision)
+			}
+		})
 	}
 }
 

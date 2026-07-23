@@ -54,6 +54,15 @@ func ApprovalTypeFor(assetType string) string {
 	return assetType
 }
 
+// SupportsGrantApproval reports whether an approval type is registered with a
+// permission checker and therefore has a defined pattern-matching contract. CRUD and
+// other one-shot operations are deliberately absent from the registry and must not
+// expose allowAll merely because they share the single-approval dialog shape.
+func SupportsGrantApproval(approvalType string) bool {
+	_, ok := permissionTypeFor(approvalType)
+	return ok
+}
+
 func init() {
 	registerPermissionType(asset_entity.AssetTypeSSH, "exec", true, checkCommandPolicyPermission, "exec")
 	registerPermissionType(asset_entity.AssetTypeSerial, "serial", false, checkCommandPolicyPermission)
