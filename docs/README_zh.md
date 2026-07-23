@@ -85,12 +85,18 @@ _更多资产类型将通过插件模式持续扩展。_
 - Kafka 集群、Topic、消息、消费组、ACL、Schema Registry 和 Kafka Connect 管理
 - 对象存储浏览器，支持 Bucket/目录/对象浏览、上传下载、复制移动、删除、预览与预签名 URL
 - 端口转发、SOCKS 代理
+- 凭据加密存储
+- 从 SSH config / Tabby / WindTerm 导入
 
 ### 代理链
 
-SSH、数据库、Redis、MongoDB、Kafka、etcd、Kubernetes、RDP 和 S3 兼容对象存储均可配置有序代理链，链中可以组合 SSH、SOCKS5 和 HTTP 脚本隧道层。Kafka 的 Broker、Schema Registry 和所有 Kafka Connect 集群共享资产级代理链。本地 SQLite 不使用代理链；远程 SQLite VFS 通过所选 SSH 资产访问文件，并继承该 SSH 资产自己的代理链。
-- 凭据加密存储
-- 从 SSH config / Tabby / WindTerm 导入
+SSH 和远程数据资产在无法直连时，可以使用有序代理链。链中可以组合：
+
+- **SSH 隧道**层：复用已有 SSH 资产作为下一跳
+- **SOCKS5 代理**层：支持可选的用户名/密码认证
+- **HTTP 脚本隧道**层：兼容 DBX 风格的隧道脚本（`URL + token + timeout`）
+
+SSH、SQL 数据库、Redis、MongoDB、Kafka、etcd、Kubernetes、VNC、RDP 和 S3 兼容对象存储连接共享同一套代理链模型。Kafka 资产会把代理链应用到 Broker、Schema Registry 和每个 Kafka Connect 集群。本地 SQLite 保持本地连接；远程 SQLite VFS 通过所选 SSH 资产访问文件，而该 SSH 资产可以配置自己的代理链。编辑资产时，已有的单层 SSH 隧道（`sshTunnelId` / `ssh_asset_id`）和 SOCKS5 `proxy` 配置仍会被读取并映射为单层代理链；保存新代理链后，以 `proxy_chain` 为准。
 
 ### 远程桌面
 

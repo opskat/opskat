@@ -76,7 +76,7 @@ func cmdSSHViaProxy(proxy *sshpool.Client, assetID int64) int {
 	return exitCode
 }
 
-// cmdSSHDirect 直连建立交互式 SSH（原逻辑）
+// cmdSSHDirect 直连建立交互式 SSH。
 func cmdSSHDirect(ctx context.Context, assetID int64) int {
 	client, cleanup, err := helper.DialSSHClient(ctx, assetID)
 	if err != nil {

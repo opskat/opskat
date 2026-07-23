@@ -86,3 +86,34 @@ func TestAssertAssetType_EchoesDeclaredAliasNotCanonical(t *testing.T) {
 		t.Errorf("error %q must not echo the alias's canonical resolution instead of what the caller passed", err.Error())
 	}
 }
+
+func TestCanonicalExecTypeFor(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+		ok   bool
+	}{
+		{name: "ssh", want: asset_entity.AssetTypeSSH, ok: true},
+		{name: "exec", want: asset_entity.AssetTypeSSH, ok: true},
+		{name: "database", want: asset_entity.AssetTypeDatabase, ok: true},
+		{name: "sql", want: asset_entity.AssetTypeDatabase, ok: true},
+		{name: "mongodb", want: asset_entity.AssetTypeMongoDB, ok: true},
+		{name: "mongo", want: asset_entity.AssetTypeMongoDB, ok: true},
+		{name: "etcd", want: asset_entity.AssetTypeEtcd, ok: true},
+		{name: "kafka", want: asset_entity.AssetTypeKafka, ok: true},
+		{name: "k8s", want: asset_entity.AssetTypeK8s, ok: true},
+		{name: "serial", want: asset_entity.AssetTypeSerial, ok: true},
+		{name: "cp", ok: false},
+		{name: "rdp", ok: false},
+		{name: "bogus", ok: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := CanonicalExecTypeFor(tt.name)
+			if got != tt.want || ok != tt.ok {
+				t.Fatalf("CanonicalExecTypeFor(%q) = (%q, %v), want (%q, %v)", tt.name, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}

@@ -49,13 +49,25 @@ func Parse(raw string) (Skill, error) {
 	head := rest[:end]
 
 	s := Skill{Body: strings.TrimLeft(rest[end+len("\n---\n"):], "\n")}
-	for _, line := range strings.Split(head, "\n") {
-		key, value, found := strings.Cut(line, ":")
-		if !found {
+	seen := make(map[string]bool, 2)
+	for lineNo, line := range strings.Split(head, "\n") {
+		if strings.TrimSpace(line) == "" {
 			continue
 		}
+		key, value, found := strings.Cut(line, ":")
+		if !found {
+			return Skill{}, fmt.Errorf("frontmatter line %d is not a key-value pair", lineNo+1)
+		}
+		key = strings.TrimSpace(key)
+		if key != "name" && key != "description" {
+			return Skill{}, fmt.Errorf("frontmatter line %d has unknown field %q", lineNo+1, key)
+		}
+		if seen[key] {
+			return Skill{}, fmt.Errorf("frontmatter line %d duplicates field %q", lineNo+1, key)
+		}
+		seen[key] = true
 		value = strings.Trim(strings.TrimSpace(value), `"`)
-		switch strings.TrimSpace(key) {
+		switch key {
 		case "name":
 			s.Name = value
 		case "description":

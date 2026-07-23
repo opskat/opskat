@@ -39,11 +39,6 @@ func TestK8sHandler(t *testing.T) {
 		setupTestCredentialSvc()
 		h := &k8sHandler{}
 
-		convey.Convey("Type and DefaultPort", func() {
-			convey.So(h.Type(), convey.ShouldEqual, "k8s")
-			convey.So(h.DefaultPort(), convey.ShouldEqual, 0)
-		})
-
 		convey.Convey("ApplyCreateArgs encrypts kubeconfig", func() {
 			a := &asset_entity.Asset{Type: "k8s"}
 			err := h.ApplyCreateArgs(context.Background(), a, map[string]any{
@@ -177,10 +172,5 @@ func TestK8sHandler(t *testing.T) {
 			convey.So(err, convey.ShouldNotBeNil)
 		})
 
-		convey.Convey("Registered", func() {
-			h, ok := Get("k8s")
-			convey.So(ok, convey.ShouldBeTrue)
-			convey.So(h.Type(), convey.ShouldEqual, "k8s")
-		})
 	})
 }

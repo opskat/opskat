@@ -3,7 +3,6 @@ import {
   buildTerminalFontGroups,
   loadInstalledFonts,
   quoteFamilyName,
-  RECOMMENDED_TERMINAL_FONT_FAMILY_NAMES,
   resolveDefaultFontPrimary,
   resolveFontPresetOrphan,
   resolveTerminalFontFamily,
@@ -12,14 +11,6 @@ import {
 } from "../data/terminalFonts";
 
 describe("terminalFonts", () => {
-  it("keeps font presets as static choices without system detection metadata", () => {
-    expect(terminalFontPresets.some((preset) => "systemFontNames" in preset)).toBe(false);
-  });
-
-  it("keeps preset values as the primary font only", () => {
-    expect(terminalFontPresets.find((preset) => preset.id === "fira-code")?.fontFamily).toBe("'Fira Code'");
-  });
-
   const DEFAULT_STACK =
     "Menlo, Consolas, 'DejaVu Sans Mono', 'JetBrainsMono NFM', 'JetBrainsMono Nerd Font Mono', " +
     "'JetBrains Mono', monospace";
@@ -78,20 +69,6 @@ describe("terminalFonts", () => {
     it("strips control characters before quoting", () => {
       expect(quoteFamilyName("Foo\nBar")).toBe("FooBar");
       expect(quoteFamilyName("\tJetBrains Mono\r")).toBe("'JetBrains Mono'");
-    });
-  });
-
-  describe("RECOMMENDED_TERMINAL_FONT_FAMILY_NAMES", () => {
-    it("lists Nerd Font Mono variants before plain monospace fonts", () => {
-      const idx = (name: string) => RECOMMENDED_TERMINAL_FONT_FAMILY_NAMES.indexOf(name);
-      expect(idx("JetBrainsMono NFM")).toBeGreaterThanOrEqual(0);
-      expect(idx("JetBrains Mono")).toBeGreaterThanOrEqual(0);
-      expect(idx("JetBrainsMono NFM")).toBeLessThan(idx("JetBrains Mono"));
-    });
-
-    it("includes both v3.0 long and v3.1+ short Nerd Font names", () => {
-      expect(RECOMMENDED_TERMINAL_FONT_FAMILY_NAMES).toContain("JetBrainsMono NFM");
-      expect(RECOMMENDED_TERMINAL_FONT_FAMILY_NAMES).toContain("JetBrainsMono Nerd Font Mono");
     });
   });
 

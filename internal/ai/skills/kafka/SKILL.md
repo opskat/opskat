@@ -217,8 +217,9 @@ spell them exactly:
 ## Asset config (for put_asset)
 
 Either `brokers`, or `host` + `port`, must be provided — at least one path to the cluster
-is required. Once `sasl_mechanism` is anything other than `"none"`, `username` and
-`password` both become required — creation is rejected if either is empty.
+is required. Once `sasl_mechanism` is anything other than `"none"`, `username` becomes
+required and either `password` or `credential_id` becomes required — creation is rejected
+when the username or both password sources are missing.
 
 | field | type | required | notes |
 |---|---|---|---|
@@ -227,10 +228,11 @@ is required. Once `sasl_mechanism` is anything other than `"none"`, `username` a
 | `port` | number | no | Used with `host` when `brokers` is omitted; no default — pass `9092` explicitly |
 | `username` | string | no* | Required when `sasl_mechanism` is not `"none"`; unused otherwise |
 | `password` | string | no* | Stored encrypted; required when `sasl_mechanism` is not `"none"`, unless `credential_id` already supplies it |
+| `credential_id` | number | no* | Managed password credential; an alternative to inline `password`; 0 means none |
 | `client_id` | string | no | Defaults to `"opskat"` |
 | `sasl_mechanism` | string | no | `"none"` (default), `"plain"`, `"scram-sha-256"`, `"scram-sha-512"` |
-| `tls` | string | no | `"true"` to enable TLS |
-| `tls_insecure` | string | no | `"true"` to skip TLS certificate verification |
+| `tls` | boolean | no | `true` to enable TLS |
+| `tls_insecure` | boolean | no | `true` to skip TLS certificate verification |
 | `tls_server_name` | string | no | TLS SNI / server name override |
 | `tls_ca_file` | string | no | Path to a CA certificate file |
 | `tls_cert_file` | string | no | Path to a client certificate file (mTLS) |

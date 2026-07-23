@@ -35,7 +35,8 @@ this guide owns the observation mechanics.
 
 ## 2. Where everything lives
 
-The app data directory is platform-specific (`bootstrap.AppDataDir()`):
+The default app data directory comes from `bootstrap.AppDataDir()`. A portable build uses
+the `data/` directory next to its executable; otherwise the platform defaults are:
 
 | OS | Data directory |
 |----|----------------|
@@ -53,7 +54,8 @@ Inside the data directory:
 | `logs/error.log` | Errors only (`error`+), always written |
 | `extensions/` | Installed WASM extensions |
 
-Print the directory for the current OS so later commands can reference it:
+Print the directory for the current OS so later commands can reference it (or set `DIR` to
+the portable / `OPSKAT_DATA_DIR` override you launched with):
 
 ```bash
 # macOS
@@ -245,14 +247,18 @@ make build-embed  # Production build with bundled opsctl
 
 Environment toggles for the desktop app:
 
+- `OPSKAT_DATA_DIR=/path/to/data` — redirect DB, config, logs, and sockets to an
+  isolated directory (the GUI equivalent of opsctl's `--data-dir`).
+- `OPSKAT_MASTER_KEY=<key>` — provide the credential-KDF passphrase explicitly; useful
+  with an isolated data directory and required by the hermetic e2e harness.
 - `OPSKAT_EXTENSIONS=0` — start with the extension system disabled (isolate
   extension-related behavior).
 - `OPSKAT_ENV=production` — production mode (e.g. `make devserver` refuses to run).
 
-> **No `--data-dir` for the GUI.** The desktop app always uses the default data
-> directory above; there is no flag to redirect it. Before a destructive GUI test, back
-> up the data dir (`cp -a "$DIR" "$DIR.bak"`) and restore it afterwards. `opsctl`, by
-> contrast, *does* accept `--data-dir` (see below) — prefer it when you need isolation.
+The GUI has no `--data-dir` command-line flag; use `OPSKAT_DATA_DIR` instead. Prefer a
+throwaway directory for destructive verification. If you must use the default data
+directory, back it up (`cp -a "$DIR" "$DIR.bak"`) and restore it afterwards. `opsctl`
+accepts either `--data-dir` or the same environment variable (see below).
 
 ---
 

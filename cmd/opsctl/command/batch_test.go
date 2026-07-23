@@ -21,10 +21,10 @@ import (
 
 func TestParseBatchArg(t *testing.T) {
 	Convey("parseBatchArg", t, func() {
-		Convey("asset:command defaults to exec", func() {
+		Convey("asset:command leaves the assertion empty", func() {
 			cmd, err := parseBatchArg("web-01:uptime")
 			So(err, ShouldBeNil)
-			So(cmd.Type, ShouldEqual, "exec")
+			So(cmd.Type, ShouldEqual, "")
 			So(cmd.Asset, ShouldEqual, "web-01")
 			So(cmd.Command, ShouldEqual, "uptime")
 		})
@@ -32,7 +32,7 @@ func TestParseBatchArg(t *testing.T) {
 		Convey("numeric asset ID", func() {
 			cmd, err := parseBatchArg("1:df -h")
 			So(err, ShouldBeNil)
-			So(cmd.Type, ShouldEqual, "exec")
+			So(cmd.Type, ShouldEqual, "")
 			So(cmd.Asset, ShouldEqual, "1")
 			So(cmd.Command, ShouldEqual, "df -h")
 		})
@@ -61,6 +61,16 @@ func TestParseBatchArg(t *testing.T) {
 			So(cmd.Command, ShouldEqual, "PING")
 		})
 
+		Convey("canonical asset type prefixes", func() {
+			for _, assetType := range []string{"ssh", "database", "mongodb", "etcd", "kafka", "k8s", "serial"} {
+				cmd, err := parseBatchArg(assetType + ":target:command")
+				So(err, ShouldBeNil)
+				So(cmd.Type, ShouldEqual, assetType)
+				So(cmd.Asset, ShouldEqual, "target")
+				So(cmd.Command, ShouldEqual, "command")
+			}
+		})
+
 		Convey("command with colons preserved", func() {
 			cmd, err := parseBatchArg("sql:db:SELECT * FROM t WHERE ts > '2024-01-01T00:00:00'")
 			So(err, ShouldBeNil)
@@ -83,7 +93,7 @@ func TestParseBatchArg(t *testing.T) {
 		Convey("unknown prefix treated as asset name", func() {
 			cmd, err := parseBatchArg("myserver:hostname")
 			So(err, ShouldBeNil)
-			So(cmd.Type, ShouldEqual, "exec")
+			So(cmd.Type, ShouldEqual, "")
 			So(cmd.Asset, ShouldEqual, "myserver")
 			So(cmd.Command, ShouldEqual, "hostname")
 		})
@@ -97,7 +107,7 @@ func TestParseBatchInput(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(len(cmds), ShouldEqual, 3)
 
-			So(cmds[0].Type, ShouldEqual, "exec")
+			So(cmds[0].Type, ShouldEqual, "")
 			So(cmds[0].Asset, ShouldEqual, "1")
 			So(cmds[0].Command, ShouldEqual, "uptime")
 
@@ -218,11 +228,12 @@ func TestExecuteBatchHandlerMarksPreapproved(t *testing.T) {
 
 func TestValidBatchTypes(t *testing.T) {
 	Convey("validBatchTypes", t, func() {
-		So(validBatchTypes["exec"], ShouldBeTrue)
-		So(validBatchTypes["sql"], ShouldBeTrue)
-		So(validBatchTypes["redis"], ShouldBeTrue)
-		So(validBatchTypes["cp"], ShouldBeFalse)
-		So(validBatchTypes[""], ShouldBeFalse)
+		for _, name := range []string{"ssh", "exec", "database", "sql", "redis", "mongodb", "mongo", "etcd", "kafka", "k8s", "serial"} {
+			So(isValidBatchType(name), ShouldBeTrue)
+		}
+		for _, name := range []string{"cp", "rdp", "", "bogus"} {
+			So(isValidBatchType(name), ShouldBeFalse)
+		}
 	})
 }
 
@@ -236,10 +247,16 @@ func TestBatchAssertPrefixType(t *testing.T) {
 		redisAsset := &asset_entity.Asset{ID: 2, Name: "cache", Type: asset_entity.AssetTypeRedis}
 		dbAsset := &asset_entity.Asset{ID: 3, Name: "db", Type: asset_entity.AssetTypeDatabase}
 
-		Convey("exec 是无前缀默认值，不断言，任何真实类型都放行", func() {
+		Convey("空 type 是无前缀默认值，不断言，任何真实类型都放行", func() {
+			So(batchAssertPrefixType(sshAsset, ""), ShouldBeNil)
+			So(batchAssertPrefixType(redisAsset, ""), ShouldBeNil)
+			So(batchAssertPrefixType(dbAsset, ""), ShouldBeNil)
+		})
+
+		Convey("exec 是 ssh 的兼容别名，显式写出时参与断言", func() {
 			So(batchAssertPrefixType(sshAsset, "exec"), ShouldBeNil)
-			So(batchAssertPrefixType(redisAsset, "exec"), ShouldBeNil)
-			So(batchAssertPrefixType(dbAsset, "exec"), ShouldBeNil)
+			So(batchAssertPrefixType(redisAsset, "exec"), ShouldNotBeNil)
+			So(batchAssertPrefixType(dbAsset, "exec"), ShouldNotBeNil)
 		})
 
 		Convey("sql 断言真实类型是 database", func() {
@@ -251,11 +268,17 @@ func TestBatchAssertPrefixType(t *testing.T) {
 			So(batchAssertPrefixType(redisAsset, "redis"), ShouldBeNil)
 			So(batchAssertPrefixType(dbAsset, "redis"), ShouldNotBeNil)
 		})
+
+		Convey("真实类型名可直接断言", func() {
+			So(batchAssertPrefixType(sshAsset, "ssh"), ShouldBeNil)
+			So(batchAssertPrefixType(dbAsset, "database"), ShouldBeNil)
+			So(batchAssertPrefixType(redisAsset, "database"), ShouldNotBeNil)
+		})
 	})
 }
 
-// TestExecuteBatchItem_DefaultDispatchesByRealType 锁住 executeBatchItem 的 default
-// 分支：无前缀（cmdType=="exec"）的条目现在按资产真实类型派发，而不是一律当 SSH 执行。
+// TestExecuteBatchItem_DefaultDispatchesByRealType 锁住 executeBatchItem 的默认
+// 分支：无前缀（cmdType==""）的条目现在按资产真实类型派发，而不是一律当 SSH 执行。
 // 用一个 redis 资产验证——如果这条回归了，代码会试图对一个 redis 资产发起 SSH 连接
 // （executeBatchExec），而不是调用这里注入的 "exec" handler。
 func TestExecuteBatchItem_DefaultDispatchesByRealType(t *testing.T) {

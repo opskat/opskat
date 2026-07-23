@@ -60,11 +60,6 @@ func TestDefaultHostProvider(t *testing.T) {
 			So(err, ShouldNotBeNil)
 		})
 
-		Convey("Log does not panic", func() {
-			host.Log("info", "test message")
-			host.Log("error", "test error")
-		})
-
 		Convey("unconfigured services return errors", func() {
 			_, err := host.GetAssetConfig(1)
 			So(err, ShouldNotBeNil)

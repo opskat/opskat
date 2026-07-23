@@ -57,11 +57,11 @@ func execTools() []tool.Tool {
 		},
 		&tool.RawTool{
 			NameStr: "batch_exec",
-			DescStr: "Execute commands on multiple assets in parallel. Dispatches each item by that asset's real type — the same coverage as exec, including database/redis/mongodb/etcd/kafka/k8s. Each command is policy-checked; items needing user confirmation are batched into a single approval prompt. Results are returned per-asset (success or error). Prefer this over looping exec calls when targeting >1 asset.",
+			DescStr: "Execute commands on multiple assets in parallel. Dispatches each item by that asset's real type — the same coverage as exec, including database/redis/mongodb/etcd/kafka/k8s. Always include each item's canonical type when known so a wrong target is caught before execution. Each command is policy-checked; items needing user confirmation are batched into a single approval prompt. Results are returned per-asset (success or error). Prefer this over looping exec calls when targeting >1 asset.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
-					"commands": {Type: "string", Description: `JSON array of commands. Each item: {"asset": "name-or-id", "command": "...", "type": "<optional type assertion>"}. type is never used for dispatch — omit it unless you want a wrong guess caught before execution. Example: [{"asset":"web-1","command":"uptime"},{"asset":"42","type":"database","command":"SELECT VERSION()"}]`},
+					"commands": {Type: "string", Description: `JSON array of commands. Each item: {"asset": "name-or-id", "command": "...", "type": "<canonical asset type>"}. Always include type when known; omit it only when genuinely unknown. type is an assertion and never used for dispatch. Example: [{"asset":"web-1","type":"ssh","command":"uptime"},{"asset":"42","type":"database","command":"SELECT VERSION()"}]`},
 				},
 				Required: []string{"commands"},
 			},

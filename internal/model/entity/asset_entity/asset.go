@@ -125,7 +125,7 @@ type SSHConfig struct {
 	RestoreCwdOnReconnect bool `json:"restore_cwd_on_reconnect,omitempty"`
 }
 
-// RDPConfig RDP 类型的特定配置。PoC 阶段只覆盖基础连接、分辨率和剪贴板。
+// RDPConfig RDP 类型的特定配置。
 type RDPConfig struct {
 	Host         string            `json:"host"`
 	Port         int               `json:"port"`

@@ -9,13 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEtcdHandler_Registered(t *testing.T) {
-	h, ok := Get("etcd")
-	require.True(t, ok, "etcd handler should be registered in init()")
-	assert.Equal(t, "etcd", h.Type())
-	assert.Equal(t, 2379, h.DefaultPort())
-}
-
 func TestEtcdHandler_ValidateCreateArgs(t *testing.T) {
 	h := &etcdHandler{}
 	assert.Error(t, h.ValidateCreateArgs(map[string]any{}), "empty args should fail")

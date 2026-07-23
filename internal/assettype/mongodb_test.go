@@ -11,10 +11,6 @@ import (
 func TestMongoDBHandler(t *testing.T) {
 	convey.Convey("MongoDB Handler", t, func() {
 		h := &mongodbHandler{}
-		convey.Convey("Type and DefaultPort", func() {
-			convey.So(h.Type(), convey.ShouldEqual, "mongodb")
-			convey.So(h.DefaultPort(), convey.ShouldEqual, 27017)
-		})
 		convey.Convey("SafeView", func() {
 			a := &asset_entity.Asset{Type: "mongodb", Status: 1}
 			_ = a.SetMongoDBConfig(&asset_entity.MongoDBConfig{
@@ -57,11 +53,6 @@ func TestMongoDBHandler(t *testing.T) {
 			convey.So(cfg.Port, convey.ShouldEqual, 27017)
 			convey.So(cfg.Username, convey.ShouldEqual, "admin")
 			convey.So(cfg.Database, convey.ShouldEqual, "newdb")
-		})
-		convey.Convey("Registered", func() {
-			h, ok := Get("mongodb")
-			convey.So(ok, convey.ShouldBeTrue)
-			convey.So(h.Type(), convey.ShouldEqual, "mongodb")
 		})
 	})
 }

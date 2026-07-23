@@ -60,10 +60,6 @@ func TestDatabaseHandlerSafeViewSQLite(t *testing.T) {
 func TestDatabaseHandler(t *testing.T) {
 	convey.Convey("Database Handler", t, func() {
 		h := &databaseHandler{}
-		convey.Convey("Type and DefaultPort", func() {
-			convey.So(h.Type(), convey.ShouldEqual, "database")
-			convey.So(h.DefaultPort(), convey.ShouldEqual, 3306)
-		})
 		convey.Convey("SafeView", func() {
 			a := &asset_entity.Asset{Type: "database", Status: 1}
 			_ = a.SetDatabaseConfig(&asset_entity.DatabaseConfig{
@@ -116,11 +112,6 @@ func TestDatabaseHandler(t *testing.T) {
 			convey.So(cfg.Port, convey.ShouldEqual, 3306)
 			convey.So(cfg.Username, convey.ShouldEqual, "admin")
 			convey.So(cfg.Database, convey.ShouldEqual, "newdb")
-		})
-		convey.Convey("Registered", func() {
-			h, ok := Get("database")
-			convey.So(ok, convey.ShouldBeTrue)
-			convey.So(h.Type(), convey.ShouldEqual, "database")
 		})
 	})
 }

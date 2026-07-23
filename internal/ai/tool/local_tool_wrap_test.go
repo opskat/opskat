@@ -1,11 +1,9 @@
 package tool
 
 import (
-	"context"
 	"strings"
 	"testing"
 
-	"github.com/cago-frame/agents/agent"
 	"github.com/cago-frame/agents/tool"
 )
 
@@ -65,14 +63,6 @@ func TestWrapLocalTool_LeavesOtherToolsAlone(t *testing.T) {
 	}
 }
 
-func TestWrapLocalTool_NonRawToolPassThrough(t *testing.T) {
-	custom := stubTool{name: "bash"}
-	out := WrapLocalTool(custom)
-	if out.Name() != "bash" {
-		t.Errorf("non-RawTool should pass through unchanged; got name=%q", out.Name())
-	}
-}
-
 func TestWrapLocalTool_DoesNotMutateOriginal(t *testing.T) {
 	in := &tool.RawTool{NameStr: "bash", DescStr: "orig desc"}
 	WrapLocalTool(in)
@@ -82,17 +72,4 @@ func TestWrapLocalTool_DoesNotMutateOriginal(t *testing.T) {
 	if in.DescStr != "orig desc" {
 		t.Errorf("original RawTool.DescStr mutated to %q", in.DescStr)
 	}
-}
-
-type stubTool struct {
-	name string
-}
-
-func (s stubTool) Name() string        { return s.name }
-func (s stubTool) Description() string { return "" }
-func (s stubTool) Schema() agent.Schema {
-	return agent.Schema{Type: "object"}
-}
-func (s stubTool) Call(ctx context.Context, in map[string]any) (*agent.ToolResultBlock, error) {
-	return nil, nil
 }

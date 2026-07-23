@@ -25,6 +25,18 @@ func CanonicalTypeFor(name string) (string, bool) {
 	return handler.canonical, true
 }
 
+// CanonicalExecTypeFor resolves a canonical asset type or protocol alias only
+// when that name belongs to an executable asset permission type. This is the
+// shared parser contract for optional type assertions: operation faces such as
+// cp and doc-only asset types are deliberately excluded.
+func CanonicalExecTypeFor(name string) (string, bool) {
+	canonical, ok := CanonicalTypeFor(name)
+	if !ok || canonical == GrantToolCp {
+		return "", false
+	}
+	return canonical, true
+}
+
 // AssertAssetType 校验调用方声明的类型与资产的真实类型是否一致。
 //
 // declared 为空 = 不声明 = 跳过校验（这是缺省形态，spec §4.6 的表格）。

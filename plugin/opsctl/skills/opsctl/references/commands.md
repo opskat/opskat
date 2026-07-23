@@ -60,16 +60,18 @@ opsctl ssh web-server
 
 ## help
 
-### `help <asset>`
+### `help <asset-or-type>`
 
-Print the command syntax and usage notes for an asset's type — the same
-documentation the AI `help` tool returns before it calls `exec` against a type
-for the first time. Read-only: never asks for approval.
+Print the config contract, command syntax, and usage notes for an asset's type —
+the same documentation the AI `help` tool uses before `put_asset` or `exec`.
+Pass an asset name/ID, or pass a canonical type name when no asset of that type
+exists yet. Read-only: never asks for approval.
 
 ```bash
 opsctl help web-server
 opsctl help prod-db
 opsctl help 1
+opsctl help kafka
 ```
 
 ## exec
@@ -86,7 +88,7 @@ type, never from a flag or verb name.
 - Every other type runs through the same unified `exec` handler the AI uses
   and returns captured output (JSON for database/redis/mongodb/etcd/kafka
   reads; an affected-row / exit-code summary for writes). Command syntax is
-  per-type — run `opsctl help <asset>` first if you don't already know it.
+  per-type — run `opsctl help <asset-or-type>` first if you don't already know it.
 
 **Flags**:
 - `--type <type>` — Optional assertion: fails fast (before any approval
@@ -94,21 +96,27 @@ type, never from a flag or verb name.
   `sql` for `database`). Does not select dispatch — that always comes from
   the asset's real type.
 
+When the type is known, always pass this assertion. Prefer canonical asset
+types (`ssh`, `database`, `redis`, `mongodb`, `etcd`, `kafka`, `k8s`,
+`serial`) over the accepted compatibility aliases (`exec`, `sql`, `mongo`).
+Omit it only when the type is genuinely unknown.
+
 **Approval flow**:
 1. Command policy check (allow-list/deny-list per asset)
 2. Session check (grant item consumption or session auto-approve)
 3. Desktop app approval (blocks until response)
 
 ```bash
-opsctl exec web-server -- uptime
-opsctl exec 1 -- ls -la /var/log
-echo "data" | opsctl exec web-server -- cat
-opsctl exec web-01 -- systemctl restart nginx
-opsctl exec prod-db -- "SELECT * FROM users LIMIT 10"
-opsctl exec cache -- "GET session:abc123"
+opsctl exec web-server --type ssh -- uptime
+opsctl exec 1 --type ssh -- ls -la /var/log
+echo "data" | opsctl exec web-server --type ssh -- cat
+opsctl exec web-01 --type ssh -- systemctl restart nginx
+opsctl exec prod-db --type database -- "SELECT * FROM users LIMIT 10"
 opsctl exec cache --type redis -- "GET session:abc123"
-opsctl exec mongo-db -- find users --query='{"filter":{"status":"active"}}'
-opsctl exec etcd-cluster -- get /app/config --prefix
+opsctl exec mongo-db --type mongodb -- find users --query='{"filter":{"status":"active"}}'
+opsctl exec etcd-cluster --type etcd -- get /app/config --prefix
+opsctl exec events --type kafka -- topic list
+opsctl exec prod-k8s --type k8s -- get pods -A
 ```
 
 ## batch
@@ -124,29 +132,36 @@ etcd, kafka, k8s, ...), the same coverage as `exec` — not just ssh.
 1. **Stdin JSON** (AI-friendly — primary mode):
 ```bash
 echo '{"commands":[
-  {"asset":"web-01","type":"exec","command":"uptime"},
-  {"asset":"db-01","type":"sql","command":"SELECT 1"},
+  {"asset":"web-01","type":"ssh","command":"uptime"},
+  {"asset":"db-01","type":"database","command":"SELECT 1"},
   {"asset":"cache","type":"redis","command":"PING"},
-  {"asset":"mongo-db","type":"mongo","command":"find users --query={\"filter\":{\"status\":\"active\"}}"}
+  {"asset":"mongo-db","type":"mongodb","command":"find users --query={\"filter\":{\"status\":\"active\"}}"},
+  {"asset":"events","type":"kafka","command":"topic list"}
 ]}' | opsctl batch
 ```
 
 2. **Positional args**:
 ```bash
-# Default type=exec
-opsctl batch 'web-01:uptime' 'db-01:hostname'
+# No assertion when the type is genuinely unknown
+opsctl batch 'unknown-target:hostname'
 # With type prefix (type:asset:command)
-opsctl batch 'sql:db-01:SELECT 1' 'redis:cache:PING' 'web-01:uptime'
+opsctl batch 'ssh:web-01:uptime' 'database:db-01:SELECT 1' 'redis:cache:PING' 'mongodb:mongo-db:find users'
 ```
 
-**Args format**: `asset:command` (no assertion) or `type:asset:command`. First `:` before a known type (`exec`/`sql`/`redis`/`mongo`) is the type separator. The type is now a **type assertion**, not a dispatch selector — `exec` (or no prefix) asserts nothing and dispatches on the asset's real type; `sql`/`redis`/`mongo` fail that one item fast if the resolved asset isn't actually that type. This mirrors `exec`'s `--type` flag.
+**Args format**: `asset:command` (no assertion) or `type:asset:command`.
+When the type is known, always use the prefixed form. Prefer canonical asset
+types (`ssh`, `database`, `redis`, `mongodb`, `etcd`, `kafka`, `k8s`,
+`serial`); compatibility aliases (`exec`, `sql`, `mongo`) remain accepted.
+The prefix is a **type assertion**, not a dispatch selector: a mismatch fails
+that item before approval, while dispatch always uses the asset's real type.
+This mirrors `exec`'s `--type` flag.
 
 **Output**: JSON with per-command results:
 ```json
 {
   "results": [
-    {"asset_id":1,"asset_name":"web-01","type":"exec","command":"uptime","exit_code":0,"stdout":"...","stderr":""},
-    {"asset_id":2,"asset_name":"db-01","type":"sql","command":"SELECT 1","exit_code":0,"stdout":"...","error":""}
+    {"asset_id":1,"asset_name":"web-01","type":"ssh","command":"uptime","exit_code":0,"stdout":"...","stderr":""},
+    {"asset_id":2,"asset_name":"db-01","type":"database","command":"SELECT 1","exit_code":0,"stdout":"...","error":""}
   ]
 }
 ```
@@ -350,7 +365,7 @@ echo '{"items":[{"type":"exec","command":"uptime"}]}' | opsctl grant submit web-
 # Per-item overrides (no expansion)
 opsctl grant submit < complex-grant.json
 # Commands matching grant patterns auto-pass
-opsctl exec web-01 -- uptime
+opsctl exec web-01 --type ssh -- uptime
 ```
 
 ## session
@@ -378,12 +393,12 @@ Show the current active session ID.
 
 ```bash
 # Auto session (default, no manual steps needed)
-opsctl exec web-01 -- uptime       # auto-creates session on first call
-opsctl exec web-02 -- df -h        # reuses same session
+opsctl exec web-01 --type ssh -- uptime       # auto-creates session on first call
+opsctl exec web-02 --type ssh -- df -h        # reuses same session
 
 # Explicit management (cross-terminal/scripting only)
 SESSION=$(opsctl session start)
-opsctl --session $SESSION exec web-01 -- uptime
+opsctl --session $SESSION exec web-01 --type ssh -- uptime
 opsctl session end
 ```
 

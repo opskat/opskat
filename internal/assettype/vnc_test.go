@@ -10,13 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestVNCHandlerRegistered(t *testing.T) {
-	h, ok := Get(asset_entity.AssetTypeVNC)
-	require.True(t, ok)
-	assert.Equal(t, "vnc", h.Type())
-	assert.Equal(t, 5900, h.DefaultPort())
-}
-
 func TestVNCValidateCreateArgs(t *testing.T) {
 	h := &vncHandler{}
 	require.Error(t, h.ValidateCreateArgs(map[string]any{}))

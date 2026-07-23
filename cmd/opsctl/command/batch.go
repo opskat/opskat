@@ -34,7 +34,7 @@ type batchInput struct {
 
 type batchCommand struct {
 	Asset   string `json:"asset"`
-	Type    string `json:"type,omitempty"` // "exec"|"sql"|"redis"|"mongo", default "exec"
+	Type    string `json:"type,omitempty"` // Optional canonical asset type or protocol alias.
 	Command string `json:"command"`
 }
 
@@ -57,7 +57,7 @@ type batchOutput struct {
 // resolvedBatchCmd is a batch command with resolved asset info.
 type resolvedBatchCmd struct {
 	asset   *asset_entity.Asset
-	cmdType string // "exec"|"sql"|"redis"|"mongo"
+	cmdType string // Optional canonical asset type or protocol alias.
 	command string
 	// checkCommand is the (possibly canonicalized) form used for policy matching and
 	// approval display — see prepareExecCommand's doc comment. Execution always
@@ -66,28 +66,22 @@ type resolvedBatchCmd struct {
 	decision     *aictx.CheckResult // 策略预检结果，用于审计
 }
 
-var validBatchTypes = map[string]bool{"exec": true, "sql": true, "redis": true, "mongo": true}
+func isValidBatchType(name string) bool {
+	_, ok := permission.CanonicalExecTypeFor(name)
+	return ok
+}
 
 // batchAssertPrefixType checks the batch item's prefix (cmdType) against the
-// resolved asset's real type. The prefix grammar is unchanged (validBatchTypes /
-// parseBatchArg above) but its meaning has shifted from "select a handler" to
+// resolved asset's real type. The prefix grammar's meaning has shifted from "select a handler" to
 // "assert a type" — same shift opsctl exec's --type flag went through
 // (permission.AssertAssetType, exec.go).
 //
-// "exec" is treated as no assertion (declared=="", which AssertAssetType already
-// treats as "skip"), not as "assert ssh": both parseBatchArg's bare 'asset:command'
-// form and parseBatchInput's JSON-with-no-type both normalize to cmdType=="exec"
-// before this is ever called (see the Step 2 loop in cmdBatch) — there is no way to
-// tell "user wrote exec:" apart from "user wrote nothing" once parsing is done, and
-// the whole point of this task is that a bare, unprefixed entry must run against any
-// asset type, not just ssh. Only the prefixes that can *only* come from an explicit,
-// unambiguous prefix — sql/redis/mongo — are real assertions.
+// An empty value is the unprefixed form and skips the assertion. Explicit values,
+// including compatibility aliases such as exec/sql/mongo, assert their canonical
+// asset type. Parsing preserves that distinction instead of normalizing both forms
+// to exec.
 func batchAssertPrefixType(asset *asset_entity.Asset, cmdType string) error {
-	declared := cmdType
-	if declared == "exec" {
-		declared = ""
-	}
-	return permission.AssertAssetType(asset, declared)
+	return permission.AssertAssetType(asset, cmdType)
 }
 
 func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
@@ -118,8 +112,12 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 	auditCtx = aictx.WithAuditSource(auditCtx, "opsctl")
 
 	for i, cmd := range commands {
-		cmdType := cmd.Type // never "" here — parseBatchArg/parseBatchInput both default it to "exec"
-		results[i] = batchResult{AssetName: cmd.Asset, Type: cmdType, Command: cmd.Command, ExitCode: -1}
+		cmdType := cmd.Type
+		resultType := cmdType
+		if resultType == "" {
+			resultType = "exec"
+		}
+		results[i] = batchResult{AssetName: cmd.Asset, Type: resultType, Command: cmd.Command, ExitCode: -1}
 
 		asset, resolveErr := resolveAsset(ctx, cmd.Asset)
 		if resolveErr != nil {
@@ -214,7 +212,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 		for _, b := range needConfirm {
 			cmd := resolved[b.idx]
 			batchItems = append(batchItems, approval.BatchItem{
-				Type:      cmd.cmdType,
+				Type:      permission.ApprovalTypeFor(cmd.asset.Type),
 				AssetID:   cmd.asset.ID,
 				AssetName: cmd.asset.Name,
 				Command:   cmd.checkCommand,
@@ -291,41 +289,26 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 
 // executeBatchItem runs a single command and returns the result.
 func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, cmd resolvedBatchCmd) batchResult {
+	resultType := cmd.cmdType
+	if resultType == "" {
+		resultType = "exec"
+	}
 	result := batchResult{
 		AssetID:   cmd.asset.ID,
 		AssetName: cmd.asset.Name,
-		Type:      cmd.cmdType,
+		Type:      resultType,
 		Command:   cmd.command,
 	}
 
-	switch cmd.cmdType {
-	case "sql", "redis", "mongo":
-		// All three prefixes are pure type assertions now (batchAssertPrefixType) — the
-		// command is always DSL text, dispatched unmodified to the unified "exec"
-		// handler, exactly like a bare/unprefixed entry against the same asset. "mongo"
-		// used to require a JSON-encoded {"operation":...} blob here, incompatible with
-		// the DSL (`find app.users {...}`) every other path into a mongodb asset accepts;
-		// that special case is gone.
+	// cmdType is assertion metadata only. Dispatch always follows the resolved
+	// asset's real type, for canonical names, aliases, and the unprefixed form.
+	if cmd.asset.IsSSH() {
+		result = executeBatchExec(ctx, cmd)
+	} else {
 		result = executeBatchHandler(ctx, handlers, batchAuditTool, cmd, map[string]any{
 			"asset":   strconv.FormatInt(cmd.asset.ID, 10),
 			"command": cmd.command,
 		})
-	default:
-		// "exec" — the sentinel both parseBatchArg and parseBatchInput default an
-		// unprefixed entry to (see cmdBatch's Step 2 / batchAssertPrefixType above),
-		// not "unsupported type" anymore. Dispatch by the asset's real type: ssh
-		// keeps the existing streaming channel (pipes, exit code), everything else
-		// goes through the unified exec handler — exactly like cmdExec.go's non-ssh
-		// branch. This is what makes a bare, unprefixed entry against a non-ssh asset
-		// (database/redis/mongodb/etcd/kafka/k8s/...) work, not just ssh.
-		if cmd.asset.IsSSH() {
-			result = executeBatchExec(ctx, cmd)
-		} else {
-			result = executeBatchHandler(ctx, handlers, batchAuditTool, cmd, map[string]any{
-				"asset":   strconv.FormatInt(cmd.asset.ID, 10),
-				"command": cmd.command,
-			})
-		}
 	}
 
 	// Write audit log with decision from policy pre-check
@@ -485,13 +468,10 @@ func parseBatchInput(args []string) ([]batchCommand, error) {
 				if err := json.Unmarshal(data, &input); err != nil {
 					return nil, fmt.Errorf("parse JSON input: %w", err)
 				}
-				// Validate types
+				// Validate explicit type assertions. Empty means no assertion.
 				for i := range input.Commands {
-					if input.Commands[i].Type == "" {
-						input.Commands[i].Type = "exec"
-					}
-					if !validBatchTypes[input.Commands[i].Type] {
-						return nil, fmt.Errorf("invalid type %q for command %d (must be exec/sql/redis/mongo)", input.Commands[i].Type, i)
+					if input.Commands[i].Type != "" && !isValidBatchType(input.Commands[i].Type) {
+						return nil, fmt.Errorf("invalid type %q for command %d", input.Commands[i].Type, i)
 					}
 				}
 				return input.Commands, nil
@@ -527,7 +507,7 @@ func parseBatchArg(arg string) (batchCommand, error) {
 	rest := arg[idx+1:]
 
 	// Check if first part is a known type
-	if validBatchTypes[first] {
+	if isValidBatchType(first) {
 		// 'type:asset:command' — split rest on first ':'
 		idx2 := strings.IndexByte(rest, ':')
 		if idx2 < 0 {
@@ -540,9 +520,8 @@ func parseBatchArg(arg string) (batchCommand, error) {
 		}, nil
 	}
 
-	// 'asset:command' — default type exec
+	// 'asset:command' — no type assertion
 	return batchCommand{
-		Type:    "exec",
 		Asset:   first,
 		Command: rest,
 	}, nil
@@ -567,26 +546,26 @@ func printBatchUsage() {
 
 Executes multiple commands in parallel with a single approval request.
 Dispatches every item by its asset's real type (database, redis, mongodb,
-etcd, kafka, k8s, ...) — not just ssh. The optional type prefix (sql, redis,
-mongo) is now an assertion, not a dispatch selector: it fails that one item
-fast if the asset isn't actually that type. A bare 'asset:command' entry
+etcd, kafka, k8s, ...) — not just ssh. The optional type prefix accepts canonical
+asset types (ssh, database, redis, mongodb, etcd, kafka, k8s, serial) and the
+compatibility aliases exec/sql/mongo. It is an assertion, not a dispatch selector:
+it fails that one item fast if the asset isn't actually that type. A bare 'asset:command' entry
 (no prefix) makes no assertion and runs against any asset type.
 
 Input Modes:
   Stdin JSON (AI-friendly):
     echo '{"commands":[
-      {"asset":"web-01","type":"exec","command":"uptime"},
-      {"asset":"db-01","type":"sql","command":"SELECT 1"},
+      {"asset":"web-01","type":"ssh","command":"uptime"},
+      {"asset":"db-01","type":"database","command":"SELECT 1"},
       {"asset":"cache","type":"redis","command":"PING"}
     ]}' | opsctl batch
 
   Positional Args:
     opsctl batch 'web-01:uptime' 'db-01:hostname'
-    opsctl batch 'sql:db-01:SELECT 1' 'redis:cache:PING' 'web-01:uptime'
+    opsctl batch 'database:db-01:SELECT 1' 'redis:cache:PING' 'ssh:web-01:uptime'
 
-    Format: 'asset:command' (no assertion) or 'type:asset:command' (sql/redis/
-    mongo assert the asset's real type; exec is a no-op assertion, same as
-    no prefix)
+    Format: 'asset:command' (no assertion) or 'type:asset:command'. When known,
+    use the canonical asset type. Compatibility aliases exec/sql/mongo are accepted.
 
 Output:
   JSON with per-command results:

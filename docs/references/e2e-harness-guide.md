@@ -106,12 +106,13 @@ context menu, each verified in the tree **and** on disk), `redis-connect` (creat
 *Redis* asset, drive its **Test Connection** against an in-harness mock Redis so the app
 actually dials and `PING`s, then persist), and `ssh-connect` (create an *SSH* asset and drive
 **Test Connection** against an in-harness mock SSH server — the app completes a real SSH
-handshake — then persist), plus the three **AI exec** specs — `ai-exec` (the unified `exec`
-tool: approval dialog → real execution → audit row), `ai-exec-gate` (nothing unexecutable
-reaches the approval dialog), `ai-exec-policy` (policy allow / deny and grant persistence),
-all driven by a **scripted model** (§4.1). After Playwright exits, `run-e2e.mjs` reaps the
-orphan `vite` and removes the temp dir (see §7). webServer output →
-`<tmpdir>/opskat-e2e-webserver.log`.
+handshake — then persist), plus the **AI exec** specs — `ai-exec` (the unified `exec` tool:
+approval dialog → real execution → audit row), `ai-exec-crud` (asset CRUD through AI tools),
+`ai-exec-gate` (nothing unexecutable reaches the approval dialog), and `ai-exec-policy`
+(policy allow / deny and grant persistence), all driven by a **scripted model** (§4.1).
+After Playwright exits, `run-e2e.mjs` reaps the orphan `vite` and removes the temp data dir
+(see §7). It also removes `<tmpdir>/opskat-e2e-webserver.log` after a successful run but
+preserves that log after a failure.
 
 The mock Redis (`e2e/fixtures/redis-mock.mjs`, pure Node, no deps) is started as a **second
 Playwright `webServer`** on a dedicated port (`34216` is the app; `34217` the mock); the spec
@@ -230,13 +231,13 @@ rule: drive the real app, then read observable side-effects (UI, DB, logs).
    ```
    `playwright.scratch.config.ts` reuses the exact same webServer / env / isolation as the
    committed suite — only `testDir` points at `./scratch`.
-3. **Observe.** Read the spec's assertions, then corroborate with the other surfaces:
-   - DB — query the temp `opskat.db` with `findX` helpers (or add one), or open it read-only
-     at `$OPSKAT_DATA_DIR/opskat.db`.
-   - logs — the app's structured log is under `<tmp>/opskat-e2e-data/logs/`; the webServer's
-     stdout/stderr is at `<tmpdir>/opskat-e2e-webserver.log`. (Log/DB reading: see
-     [testing-debugging-guide.md](./testing-debugging-guide.md).)
-   - on failure, Playwright keeps a trace/screenshot under `e2e/test-results/`.
+3. **Observe in the spec.** Assert UI state and query the temp `opskat.db` through the
+   `findX` helpers while the harness is running; add a read-only helper when needed. The
+   runner deletes the temp data directory when Playwright exits, so DB / app-log evidence
+   must be captured by the spec rather than inspected afterward. On failure, inspect the
+   preserved `<tmpdir>/opskat-e2e-webserver.log` and Playwright trace/screenshots under
+   `e2e/test-results/`. (Log/DB reading mechanics: see
+   [testing-debugging-guide.md](./testing-debugging-guide.md).)
 4. **Discard.** The scratch file is gitignored — delete it (or leave it; it's never
    committed). If the flow turns out to be core and worth guarding forever, *promote* it: move
    it into `e2e/tests/`, harden it, and commit (§5).

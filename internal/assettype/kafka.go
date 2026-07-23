@@ -53,6 +53,15 @@ func (h *kafkaHandler) ValidateCreateArgs(args map[string]any) error {
 			return fmt.Errorf("missing required parameter: brokers (or host+port) for kafka type")
 		}
 	}
+	mechanism := ArgString(args, "sasl_mechanism")
+	if mechanism != "" && mechanism != asset_entity.KafkaSASLNone {
+		if ArgString(args, "username") == "" {
+			return fmt.Errorf("missing required parameter: username for Kafka SASL")
+		}
+		if ArgString(args, "password") == "" && ArgInt64(args, "credential_id") <= 0 {
+			return fmt.Errorf("missing required parameter: password or credential_id for Kafka SASL")
+		}
+	}
 	return nil
 }
 
@@ -63,6 +72,7 @@ func (h *kafkaHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset,
 		ClientID:              ArgString(args, "client_id"),
 		SASLMechanism:         ArgString(args, "sasl_mechanism"),
 		Username:              ArgString(args, "username"),
+		CredentialID:          ArgInt64(args, "credential_id"),
 		TLS:                   ArgBool(args, "tls"),
 		TLSInsecure:           ArgBool(args, "tls_insecure"),
 		TLSServerName:         ArgString(args, "tls_server_name"),
@@ -90,6 +100,7 @@ func (h *kafkaHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset,
 			return fmt.Errorf("encrypt Kafka password: %w", err)
 		}
 		cfg.Password = encrypted
+		cfg.CredentialID = 0
 	}
 	return a.SetKafkaConfig(cfg)
 }
@@ -110,6 +121,9 @@ func (h *kafkaHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset,
 	}
 	if _, ok := args["username"]; ok {
 		cfg.Username = ArgString(args, "username")
+	}
+	if _, ok := args["credential_id"]; ok {
+		cfg.CredentialID = ArgInt64(args, "credential_id")
 	}
 	if _, ok := args["tls"]; ok {
 		cfg.TLS = ArgBool(args, "tls")

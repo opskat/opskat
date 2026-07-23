@@ -32,7 +32,7 @@ var execSSHStreamFn = execSSHStreaming
 
 // cmdExec 按资产真实类型分派命令执行：ssh 走 execSSHStreaming 这条已文档化的流式
 // 通道（stdin 管道转发、stdout/stderr 直写、远端 exit code 透传——SKILL.md 里
-// `cat config.yml | opsctl exec web-01 -- tee ...` 这类管道工作流靠的就是它，
+// `cat config.yml | opsctl exec web-01 --type ssh -- tee ...` 这类管道工作流靠的就是它，
 // 统一 exec handler 返回的是捕获后的字符串，改道会静默打断它们）；其余类型
 // （database/redis/mongodb/etcd/kafka/k8s）走统一 exec handler——这是 opsctl 第一次
 // 覆盖它们，此前只有 sql/redis/mongo 三个专用 verb，etcd/kafka/k8s 的 handler
@@ -237,13 +237,12 @@ Approval:
     "Allow Session", subsequent commands in the same session skip approval.
 
 Examples:
-  opsctl exec web-server -- uptime
-  opsctl exec 1 -- ls -la /var/log
-  opsctl exec production/web-01 -- cat /etc/hosts
-  echo "hello" | opsctl exec web-server -- cat
-  opsctl exec prod-db -- "SELECT * FROM users LIMIT 10"
-  opsctl exec cache -- "GET session:abc123"
+  opsctl exec web-server --type ssh -- uptime
+  opsctl exec 1 --type ssh -- ls -la /var/log
+  opsctl exec production/web-01 --type ssh -- cat /etc/hosts
+  echo "hello" | opsctl exec web-server --type ssh -- cat
+  opsctl exec prod-db --type database -- "SELECT * FROM users LIMIT 10"
   opsctl exec cache --type redis -- "GET session:abc123"
-  opsctl --session $ID exec web-01 -- systemctl restart nginx
+  opsctl --session $ID exec web-01 --type ssh -- systemctl restart nginx
 `)
 }

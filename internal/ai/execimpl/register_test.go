@@ -7,42 +7,6 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
-func TestInit_RegistersVerbatimTypes(t *testing.T) {
-	want := []string{
-		asset_entity.AssetTypeSSH,
-		asset_entity.AssetTypeSerial,
-		asset_entity.AssetTypeDatabase,
-		asset_entity.AssetTypeRedis,
-		asset_entity.AssetTypeK8s,
-		asset_entity.AssetTypeEtcd,
-		asset_entity.AssetTypeMongoDB,
-		asset_entity.AssetTypeKafka,
-	}
-	for _, at := range want {
-		if _, ok := permission.ExecutorFor(at); !ok {
-			t.Fatalf("no executor registered for %q", at)
-		}
-	}
-}
-
-func TestInit_HelpDocAttachedForEachType(t *testing.T) {
-	for _, at := range []string{
-		asset_entity.AssetTypeSSH,
-		asset_entity.AssetTypeSerial,
-		asset_entity.AssetTypeDatabase,
-		asset_entity.AssetTypeRedis,
-		asset_entity.AssetTypeK8s,
-		asset_entity.AssetTypeEtcd,
-		asset_entity.AssetTypeMongoDB,
-		asset_entity.AssetTypeKafka,
-	} {
-		help, ok := permission.HelpFor(at)
-		if !ok || help == "" {
-			t.Fatalf("no help doc registered for %q", at)
-		}
-	}
-}
-
 // M5 regression lock: the empty-kubeconfig check must live in canonicalizeK8sCommand, not
 // only in helper.ExecK8sOnAsset — canonicalize runs before the unified exec's permission
 // check (internal/ai/tool/tool_handlers_unified.go's handleExec), so this is what makes

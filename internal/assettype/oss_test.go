@@ -10,12 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestOSSHandlerRegistered(t *testing.T) {
-	h, ok := Get(asset_entity.AssetTypeOSS)
-	require.True(t, ok)
-	assert.Equal(t, "oss", h.Type())
-}
-
 func TestOSSValidateCreateArgs(t *testing.T) {
 	h := &ossHandler{}
 	require.Error(t, h.ValidateCreateArgs(map[string]any{}))

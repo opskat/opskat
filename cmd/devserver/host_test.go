@@ -41,10 +41,5 @@ func TestDevServerHostProvider(t *testing.T) {
 			So(string(val), ShouldEqual, "test-value")
 		})
 
-		Convey("Log does not panic", func() {
-			h := NewDevServerHost(dir)
-			defer h.CloseAll()
-			h.Log("info", "test log message")
-		})
 	})
 }

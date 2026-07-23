@@ -31,10 +31,14 @@ func TestParse_CRLF(t *testing.T) {
 
 func TestParse_Rejects(t *testing.T) {
 	cases := map[string]string{
-		"no frontmatter": "# Just a heading\n",
-		"unterminated":   "---\nname: x\n",
-		"no description": "---\nname: x\n---\nbody\n",
-		"empty":          "",
+		"no frontmatter":        "# Just a heading\n",
+		"unterminated":          "---\nname: x\n",
+		"no description":        "---\nname: x\n---\nbody\n",
+		"empty":                 "",
+		"malformed line":        "---\nname: x\ngarbage\ndescription: d\n---\nbody\n",
+		"unknown field":         "---\nname: x\ndescription: d\nowner: ops\n---\nbody\n",
+		"duplicate name":        "---\nname: x\nname: y\ndescription: d\n---\nbody\n",
+		"duplicate description": "---\nname: x\ndescription: first\ndescription: second\n---\nbody\n",
 	}
 	for label, raw := range cases {
 		if _, err := Parse(raw); err == nil {
