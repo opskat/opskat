@@ -79,11 +79,11 @@ func resolveResultAssetForAudit(ctx context.Context, result string) (int64, stri
 }
 
 // resolveAssetForAudit resolves the tool's args["asset"] identifier (numeric id or
-// name string — the convention shared by exec/help, and any future single-asset
-// tool) before c.Next() runs the tool, so the audit row keeps correct attribution
+// name string — the convention shared by exec/help, and any single-asset tool)
+// before c.Next() runs the tool, so the audit row keeps correct attribution
 // even if the tool itself changes the asset's status: asset_repo filters by
-// status=Active, so resolving afterward would silently lose the name for e.g. a
-// future delete_asset tool — exactly the operation where the name matters most.
+// status=Active, so resolving afterward would silently lose the name for the
+// delete_asset tool — exactly the operation where the name matters most.
 //
 // It lives here rather than in package audit: audit can't import assetref/permission
 // without an import cycle (permission already imports audit, to audit its own policy

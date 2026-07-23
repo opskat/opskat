@@ -204,6 +204,29 @@ func TestHandleBatch_EmptyTypeIsNoAssertion(t *testing.T) {
 	}
 }
 
+// 空命令必须在执行器查找之前按单项 deny 挡下（与 handleExec 一致），既不执行也不弹
+// 审批；同批次里其它条目照常。缺了这道检查，空 command 会一路走到规范化 / 权限检查。
+func TestHandleBatch_EmptyCommandDeniedBeforeExecutor(t *testing.T) {
+	env := setupBatch(t)
+
+	out, err := handleBatchCommand(env.ctx, map[string]any{
+		"commands": `[{"asset":"cache-1","command":"   "},
+		              {"asset":"prod-db","command":"SELECT 1"}]`,
+	})
+	if err != nil {
+		t.Fatalf("one empty-command item must not fail the whole batch: %v", err)
+	}
+	if env.execCalls["cache-1"] != 0 {
+		t.Errorf("empty-command item must not execute, got %d calls", env.execCalls["cache-1"])
+	}
+	if env.execCalls["prod-db"] != 1 {
+		t.Errorf("the sibling item must still run, got %d calls", env.execCalls["prod-db"])
+	}
+	if !strings.Contains(out, "missing required parameter: command") {
+		t.Errorf("result must report the empty-command reason: %s", out)
+	}
+}
+
 // TestHandleBatch_SerialPrecheckBlocksApprovalDialog is handleBatchCommand's counterpart to
 // TestHandleExec_SerialPrecheckBlocksApprovalDialog (tool_handlers_unified_test.go): a serial
 // asset with no active session must be denied by permission.PrecheckFor before the item ever

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"go.uber.org/mock/gomock"
+	"gorm.io/gorm"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
@@ -142,7 +143,9 @@ func TestResolve_NumericIDAlsoMatchesName(t *testing.T) {
 // would make such an asset unreachable. It must still resolve by name.
 func TestResolve_NumericRefWithNoIDButMatchingName(t *testing.T) {
 	m := setupRepo(t)
-	m.EXPECT().Find(gomock.Any(), int64(42)).Return(nil, errors.New("record not found"))
+	// 生产里 asset_repo.Find 的 id-miss 就是 gorm.ErrRecordNotFound（.First()），
+	// Resolve 只对这个哨兵静默回落到名称查——用真实哨兵才测的是真实路径。
+	m.EXPECT().Find(gomock.Any(), int64(42)).Return(nil, gorm.ErrRecordNotFound)
 	m.EXPECT().FindByName(gomock.Any(), "42").Return([]*asset_entity.Asset{
 		{ID: 99, Name: "42", Type: asset_entity.AssetTypeRedis},
 	}, nil)
@@ -153,6 +156,23 @@ func TestResolve_NumericRefWithNoIDButMatchingName(t *testing.T) {
 	}
 	if got.ID != 99 {
 		t.Fatalf("got id %d, want 99", got.ID)
+	}
+}
+
+// 纯数字 ref 的 id 查若遇到真实 DB 错误（非 not-found），必须上抛，而不是被吞成
+// "资产不存在"——否则一次 DB 故障会被伪装成 ErrNotFound，误导排障。
+func TestResolve_NumericIDPropagatesRealDBError(t *testing.T) {
+	m := setupRepo(t)
+	dbErr := errors.New("database is locked")
+	m.EXPECT().FindByName(gomock.Any(), "42").Return(nil, nil)
+	m.EXPECT().Find(gomock.Any(), int64(42)).Return(nil, dbErr)
+
+	_, err := Resolve(context.Background(), "42")
+	if !errors.Is(err, dbErr) {
+		t.Fatalf("real DB error must propagate, got %v", err)
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Error("a DB failure must not be reported as ErrNotFound")
 	}
 }
 

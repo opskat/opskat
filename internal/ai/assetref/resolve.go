@@ -11,6 +11,7 @@ import (
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/asset_svc"
+	"gorm.io/gorm"
 )
 
 // ErrNotFound 在 ref 既不匹配任何资产 id 也不匹配任何资产名时返回，用 %w 包在
@@ -62,8 +63,15 @@ func Resolve(ctx context.Context, ref string) (*asset_entity.Asset, error) {
 	}
 
 	if id, err := strconv.ParseInt(ref, 10, 64); err == nil {
-		if idAsset, err := asset_svc.Asset().Get(ctx, id); err == nil {
+		idAsset, gerr := asset_svc.Asset().Get(ctx, id)
+		switch {
+		case gerr == nil:
 			add(idAsset)
+		case !errors.Is(gerr, gorm.ErrRecordNotFound):
+			// 没有 id=ref 的资产是常态（纯数字 ref 往往只是个名称候选），忽略；但真实
+			// DB 错误必须上抛——否则会被后面的 case 0 当成"资产不存在"，把一次 DB 故障
+			// 悄悄伪装成 ErrNotFound（与上面 FindByName 的错误处理对称）。
+			return nil, gerr
 		}
 	}
 	for _, a := range nameMatches {

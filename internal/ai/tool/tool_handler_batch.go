@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
@@ -109,6 +110,17 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 			resolved = append(resolved, resolvedCmd{
 				item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
 				decision: "deny", denyMsg: err.Error(),
+			})
+			continue
+		}
+
+		// 空命令在执行器查找之前挡下——与 handleExec 同一顺序、同一理由。缺了它，空
+		// command 会一路走到规范化 / precheck / 权限检查，报错更晚也更含糊。批处理按单项
+		// deny 处理（不中断整批），文案与 handleExec 的 missing-command 错误对齐。
+		if strings.TrimSpace(cmd.Command) == "" {
+			resolved = append(resolved, resolvedCmd{
+				item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
+				decision: "deny", denyMsg: "missing required parameter: command",
 			})
 			continue
 		}

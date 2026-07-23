@@ -224,9 +224,10 @@ Arguments:
   --args      Tool arguments as a JSON object (default: "{}")
 
 Execution Mode:
-  If the desktop app is running, the tool is executed via delegation (using the
-  app's loaded extensions and credentials). Otherwise, the extension is loaded
-  locally from the extensions directory and executed via WASM.
+  The tool is executed by the desktop app via delegation (using the app's loaded
+  extensions and credentials). The desktop app is required: it owns extension
+  policy checks and approval, so if it is not running the command fails closed
+  rather than running the WASM locally and bypassing both.
 
 Examples:
   opsctl ext exec oss list_buckets --args '{"asset_id": 1}'
