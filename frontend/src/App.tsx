@@ -66,13 +66,23 @@ function App() {
     };
   }, []);
 
-  // 监听自动更新检查结果
+  // 监听自动更新检查结果，以及内置工具（opsctl / Skill）重装失败。
+  // 重装在启动时由后端 updateInstalledTools 触发，此时设置页未必挂载，所以这两条
+  // 失败事件必须全局监听（不能只放在 UpdateSection），否则失败对用户完全无感知。
   useEffect(() => {
-    const cancel = EventsOn("update:available", (info: { latestVersion: string }) => {
+    const cancelAvailable = EventsOn("update:available", (info: { latestVersion: string }) => {
       toast.info(t("appUpdate.autoUpdateFound", { version: info.latestVersion }));
     });
+    const cancelOpsctlErr = EventsOn("update:opsctl-error", (errMsg: string) => {
+      toast.error(t("appUpdate.opsctlUpdateFailed", { error: errMsg }));
+    });
+    const cancelSkillErr = EventsOn("update:skill-error", (errMsg: string) => {
+      toast.error(t("appUpdate.skillUpdateFailed", { error: errMsg }));
+    });
     return () => {
-      cancel();
+      cancelAvailable();
+      cancelOpsctlErr();
+      cancelSkillErr();
     };
   }, [t]);
 

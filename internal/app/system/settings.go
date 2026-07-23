@@ -1324,7 +1324,10 @@ func (s *System) updateInstalledTools() {
 		} else if needsUpdate {
 			logger.Default().Info("updating installed opsctl", zap.String("path", opsctlInfo.Path))
 			if _, err := embedded.InstallOpsctl(filepath.Dir(opsctlInfo.Path)); err != nil {
+				// 重装失败不阻塞启动，但要通知用户——事件由 App.tsx 全局监听（重装在启动时
+				// 触发，设置页未必挂载，不能只靠 UpdateSection 的监听器），否则失败完全无感知。
 				logger.Default().Warn("update installed opsctl failed", zap.Error(err))
+				wailsRuntime.EventsEmit(s.ctx, "update:opsctl-error", err.Error())
 			} else {
 				logger.Default().Info("updated installed opsctl", zap.String("path", opsctlInfo.Path))
 			}
@@ -1338,6 +1341,7 @@ func (s *System) updateInstalledTools() {
 	}
 	if err := s.updateInstalledSkills(home); err != nil {
 		logger.Default().Warn("update installed skill failed", zap.Error(err))
+		wailsRuntime.EventsEmit(s.ctx, "update:skill-error", err.Error())
 	}
 }
 

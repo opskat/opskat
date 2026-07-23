@@ -158,7 +158,11 @@ func confirmExtensionTool(ctx context.Context, assetID int64, extName, toolName,
 		Command: extName + "." + toolName,
 		Detail:  reason,
 	}})
-	if resp.Decision != "allow" {
+	// 只有 "deny" 是拒绝；"allow" 与 "allowAll" 都是放行——与 decisionFromApproval、
+	// HandleConfirm、local_tool_gate 同一套映射。kind="single" 的审批前端会渲染
+	// 「记住并允许」（respond("allowAll")），扩展没有 grant 落库通路所以 allowAll 等同
+	// 单次允许；若在这里把它当拒绝，用户点头过的扩展工具会静默不执行、审计记成 user denied。
+	if resp.Decision == "deny" {
 		aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny})
 		return fmt.Errorf("ext_exec: user denied: %s.%s", extName, toolName)
 	}
