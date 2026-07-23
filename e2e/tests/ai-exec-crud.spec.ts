@@ -47,7 +47,10 @@ test("put_asset creates, then updates the same row through the same tool", async
   // Both the create and the update went through the one put_asset tool.
   await expect.poll(() => putAssetRows().length, { timeout: 10_000 }).toBe(before + 2);
   const rows = putAssetRows();
-  expect(rows[rows.length - 1].asset_name).toBe(name); // resolved from `asset` before the rename took effect
+  const createdAudit = rows[before];
+  expect(createdAudit.asset_id).toBe(row.id);
+  expect(createdAudit.asset_name).toBe(name);
+  expect(rows[before + 1].asset_name).toBe(name); // resolved from `asset` before the rename took effect
 });
 
 test("delete_asset always prompts, and the panel offers no allow-all — approving removes the asset", async ({

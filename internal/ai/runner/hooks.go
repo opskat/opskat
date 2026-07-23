@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 
 	"github.com/cago-frame/agents/agent"
@@ -45,6 +46,9 @@ func auditMiddleware(c *agent.ToolContext) {
 	}
 
 	result, errVal := extractAuditResult(c.Output)
+	if assetID == 0 && errVal == nil && audit.ShouldResolveAssetFromResult(c.ToolName) {
+		assetID, assetName = resolveResultAssetForAudit(c.Context(), result)
+	}
 
 	info := audit.ToolCallInfo{
 		ToolName:  c.ToolName,
@@ -58,6 +62,20 @@ func auditMiddleware(c *agent.ToolContext) {
 	}
 	auditCtx := detachAuditContext(c.Context())
 	go auditWriter.WriteToolCall(auditCtx, info)
+}
+
+func resolveResultAssetForAudit(ctx context.Context, result string) (int64, string) {
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(result), &created); err != nil || created.ID <= 0 {
+		return 0, ""
+	}
+	asset, err := assetref.Resolve(ctx, strconv.FormatInt(created.ID, 10))
+	if err != nil {
+		return 0, ""
+	}
+	return asset.ID, asset.Name
 }
 
 // resolveAssetForAudit resolves the tool's args["asset"] identifier (numeric id or

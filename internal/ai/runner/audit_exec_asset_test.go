@@ -145,6 +145,27 @@ func TestAuditMiddleware_HelpToolResolvesAssetAttribution(t *testing.T) {
 	})
 }
 
+func TestAuditMiddleware_PutAssetCreateAttributesCreatedAsset(t *testing.T) {
+	Convey("put_asset 创建成功后，审计从结果 id 解析新资产归属", t, func() {
+		mockRepo := registerMockAuditRepo(t)
+		m := setupExecAssetRepo(t)
+		m.EXPECT().FindByName(gomock.Any(), "12").Return(nil, nil)
+		m.EXPECT().Find(gomock.Any(), int64(12)).Return(
+			&asset_entity.Asset{ID: 12, Name: "created-by-ai", Type: asset_entity.AssetTypeSSH}, nil)
+
+		runAuditChain(t, context.Background(), "put_asset", "tu_put_asset_create",
+			map[string]any{"name": "created-by-ai", "type": "ssh"}, nil,
+			func() (*agent.ToolResultBlock, error) {
+				return &agent.ToolResultBlock{Content: []agent.ContentBlock{
+					agent.TextBlock{Text: `{"id":12,"message":"asset created successfully"}`},
+				}}, nil
+			})
+
+		entry := waitForAuditEntry(t, mockRepo, "put_asset", 12)
+		So(entry.AssetName, ShouldEqual, "created-by-ai")
+	})
+}
+
 // staticAssetRepo resolves a single fixed asset for both id- and name-based
 // lookups, standing in for assetref.Resolve's FindByName-then-Find fallback.
 // TestAuditMiddleware_ExecToolCanonicalizesK8sCommand drives the real "exec" tool

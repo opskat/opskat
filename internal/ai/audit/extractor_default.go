@@ -11,6 +11,7 @@ import (
 // 取决于旧工具的注册是否还在——run_command 现已删除，别名与它一起没了，而 exec
 // 的提取因为有自己的注册而毫发无损（TestExtractor_ExecDoesNotBorrowAnotherToolsExtractor）。
 func init() {
+	RegisterResultAssetTool("put_asset")
 	RegisterExtractor("exec", func(a map[string]any) string { return aictx.ArgString(a, "command") })
 	// "exec"'s args["command"] is the target asset type's own exec DSL, so
 	// runner.resolveAssetForAudit's canonicalize step (k8s --context/--namespace

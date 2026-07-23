@@ -78,6 +78,8 @@ func ExtractCommandForAudit(toolName string, args map[string]any) string {
 var (
 	canonicalizingMu    sync.RWMutex
 	canonicalizingTools = map[string]bool{}
+	resultAssetMu       sync.RWMutex
+	resultAssetTools    = map[string]bool{}
 )
 
 // RegisterCanonicalizingTool 把 toolName 标记为"command 参数是资产类型自己的 exec DSL"，
@@ -95,6 +97,23 @@ func ShouldCanonicalizeCommand(toolName string) bool {
 	canonicalizingMu.RLock()
 	defer canonicalizingMu.RUnlock()
 	return canonicalizingTools[toolName]
+}
+
+// RegisterResultAssetTool marks a create-style tool whose successful JSON result
+// contains the newly created asset id. Such tools cannot identify the asset before
+// execution, so runner.auditMiddleware resolves attribution after the call instead.
+func RegisterResultAssetTool(toolName string) {
+	resultAssetMu.Lock()
+	defer resultAssetMu.Unlock()
+	resultAssetTools[toolName] = true
+}
+
+// ShouldResolveAssetFromResult reports whether toolName registered the post-call
+// asset-attribution contract.
+func ShouldResolveAssetFromResult(toolName string) bool {
+	resultAssetMu.RLock()
+	defer resultAssetMu.RUnlock()
+	return resultAssetTools[toolName]
 }
 
 // unregisterExtractorForTest 摘掉一个已注册的提取器并返回还原函数。仅供测试：
