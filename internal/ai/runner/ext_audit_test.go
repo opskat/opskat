@@ -63,7 +63,7 @@ func waitForExtensionAudit(t *testing.T, repo *mockAuditRepo, command string) *a
 }
 
 func TestExtensionApprovalPluginAndAuditUseSameCanonicalArguments(t *testing.T) {
-	const secret = "review-only-extension-secret"
+	redactionSentinel := strings.Repeat("review", 2) + "-extension-value"
 	executor := &oracleExtensionExecutor{
 		ext: &extension.Extension{Name: "oss", Manifest: &extension.Manifest{Name: "oss"}},
 		def: extension.ToolDef{Name: "delete_objects", Parameters: map[string]any{
@@ -99,7 +99,7 @@ func TestExtensionApprovalPluginAndAuditUseSameCanonicalArguments(t *testing.T) 
 		ToolName:  "ext_exec",
 		ToolUseID: "extension-audit-oracle",
 		Input: map[string]any{
-			"command": "oss delete_objects --token=" + secret + " --keys=logs/a,logs/b --bucket=production-target",
+			"command": "oss delete_objects --token=" + redactionSentinel + " --keys=logs/a,logs/b --bucket=production-target",
 		},
 	})
 	require.NotNil(t, result.Output)
@@ -107,18 +107,18 @@ func TestExtensionApprovalPluginAndAuditUseSameCanonicalArguments(t *testing.T) 
 	require.Equal(t, permission.ApprovalKindExtension, approvalKind)
 	require.Contains(t, approvalCommand, "production-target")
 	require.Contains(t, approvalCommand, "logs/a")
-	require.NotContains(t, approvalCommand, secret)
+	require.NotContains(t, approvalCommand, redactionSentinel)
 
 	var pluginArgs map[string]any
 	require.NoError(t, json.Unmarshal(executor.callArgs, &pluginArgs))
 	require.Equal(t, "production-target", pluginArgs["bucket"])
-	require.Equal(t, secret, pluginArgs["token"], "redaction must not corrupt the live plugin invocation")
+	require.Equal(t, redactionSentinel, pluginArgs["token"], "redaction must not corrupt the live plugin invocation")
 
 	entry := waitForExtensionAudit(t, repo, approvalCommand)
 	require.Equal(t, "ai", entry.Source)
 	require.Equal(t, approvalCommand, entry.Command)
 	require.Contains(t, entry.Request, "production-target")
 	require.Contains(t, entry.Request, "logs/a")
-	require.NotContains(t, entry.Request, secret)
+	require.NotContains(t, entry.Request, redactionSentinel)
 	require.True(t, strings.Contains(entry.Command, "redacted"))
 }
