@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -374,16 +375,17 @@ func (b *bridgeExtExecutor) ExecuteExtTool(ctx context.Context, extName, tool st
 	if br == nil {
 		return nil, errExtNotInit
 	}
-	ext := br.FindExtensionByTool(extName, tool)
-	if ext == nil || ext.Plugin == nil {
-		return nil, errExtToolNotFound
+	var input struct {
+		AssetID int64 `json:"asset_id"`
 	}
-	return ext.Plugin.CallTool(ctx, tool, args)
+	if err := json.Unmarshal(args, &input); err != nil {
+		return nil, fmt.Errorf("decode extension tool args: %w", err)
+	}
+	return aitool.ExecuteExtensionTool(ctx, br, input.AssetID, extName, tool, args)
 }
 
 var (
-	errExtNotInit      = errExt("extension system not initialized")
-	errExtToolNotFound = errExt("extension tool not found")
+	errExtNotInit = errExt("extension system not initialized")
 )
 
 type errExt string

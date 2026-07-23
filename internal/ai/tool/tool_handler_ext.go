@@ -73,42 +73,81 @@ func handleExecTool(ctx context.Context, args map[string]any) (string, error) {
 		assetID = asset.ID
 	}
 
-	if ext.Manifest.Policies.Type != "" {
+	result, err := ExecuteExtensionTool(ctx, execToolExecutor, assetID, extName, toolName, argsJSON)
+	if err != nil {
+		return "", err
+	}
+
+	return string(result), nil
+}
+
+// ExecuteExtensionTool is the single policy-and-execution seam shared by AI ext_exec
+// and the desktop-delegated opsctl ext exec path.
+func ExecuteExtensionTool(ctx context.Context, executor ExtensionToolExecutor, assetID int64,
+	extName, toolName string, argsJSON []byte) ([]byte, error) {
+	ext := executor.FindExtensionByTool(extName, toolName)
+	if ext == nil || ext.Plugin == nil {
+		return nil, fmt.Errorf("ext_exec: tool %q not found in extension %q", toolName, extName)
+	}
+	policyType := ext.Manifest.Policies.Type
+	if policyType == "" {
+		if err := confirmExtensionTool(ctx, assetID, extName, toolName, "extension declares no policy type"); err != nil {
+			return nil, err
+		}
+	} else {
 		if assetID <= 0 {
-			return "", fmt.Errorf("ext_exec: %s.%s requires asset (extension declares policy type %q)",
-				extName, toolName, ext.Manifest.Policies.Type)
+			return nil, fmt.Errorf("ext_exec: %s.%s requires asset (extension declares policy type %q)",
+				extName, toolName, policyType)
 		}
 		action, _, err := ext.Plugin.CheckPolicy(ctx, toolName, argsJSON)
-		if err == nil && action != "" {
-			policyGroups := execToolExecutor.GetExtensionPolicyGroups(
-				extName, ext.Manifest.Policies.Type, assetID,
-			)
-			result := policy.CheckExtensionPolicy(ctx, policyGroups, action)
+		if err != nil {
+			return nil, fmt.Errorf("ext_exec: %s.%s policy check failed: %w", extName, toolName, err)
+		}
+		if action == "" {
+			if err := confirmExtensionTool(ctx, assetID, extName, toolName, "extension policy returned no action"); err != nil {
+				return nil, err
+			}
+		} else {
+			groups := executor.GetExtensionPolicyGroups(extName, policyType, assetID)
+			result := policy.CheckExtensionPolicy(ctx, groups, action)
+			aictx.RecordDecision(ctx, result)
 			switch result.Decision {
 			case aictx.Deny:
-				return "", fmt.Errorf("ext_exec: policy denied: %s", result.Message)
+				return nil, fmt.Errorf("ext_exec: policy denied: %s", result.Message)
 			case aictx.NeedConfirm:
-				// 这里不接受 permission.WithPreapproved 那条豁免：扩展策略的确认没有
-				// opsctl 侧的等价物（requireApproval 查的是内置类型的策略 / Grant，
-				// 不认识扩展 manifest 里的 action），所以"没有 checker"在这条路径上
-				// 一定是接线漏了。从前它 checker == nil 时直接往下执行，等于把一条
-				// 需要用户点头的扩展调用静默放行。
-				checker, err := permission.RequireChecker(ctx)
-				if err != nil {
-					return "", fmt.Errorf("ext_exec: %s.%s needs confirmation but %w", extName, toolName, err)
-				}
-				confirmResult := checker.HandleConfirm(ctx, assetID, ext.Manifest.Policies.Type, extName+"."+toolName)
-				if confirmResult.Decision != aictx.Allow {
-					return "", fmt.Errorf("ext_exec: user denied: %s.%s", extName, toolName)
+				if err := confirmExtensionTool(ctx, assetID, extName, toolName, policyType); err != nil {
+					return nil, err
 				}
 			}
 		}
 	}
-
 	result, err := ext.Plugin.CallTool(ctx, toolName, argsJSON)
 	if err != nil {
-		return "", fmt.Errorf("ext_exec: %s.%s failed: %w", extName, toolName, err)
+		return nil, fmt.Errorf("ext_exec: %s.%s failed: %w", extName, toolName, err)
 	}
+	return result, nil
+}
 
-	return string(result), nil
+func confirmExtensionTool(ctx context.Context, assetID int64, extName, toolName, reason string) error {
+	checker, err := permission.RequireChecker(ctx)
+	if err != nil {
+		return fmt.Errorf("ext_exec: %s.%s needs confirmation (%s) but %w", extName, toolName, reason, err)
+	}
+	confirm := checker.ConfirmFunc()
+	if confirm == nil {
+		return fmt.Errorf("ext_exec: %s.%s needs confirmation (%s) but no confirmation callback is configured",
+			extName, toolName, reason)
+	}
+	resp := confirm(ctx, "single", []permission.ApprovalItem{{
+		Type:    "ext_tool",
+		AssetID: assetID,
+		Command: extName + "." + toolName,
+		Detail:  reason,
+	}})
+	if resp.Decision != "allow" {
+		aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny})
+		return fmt.Errorf("ext_exec: user denied: %s.%s", extName, toolName)
+	}
+	aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow})
+	return nil
 }

@@ -1,6 +1,7 @@
 package opsctl
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -45,45 +46,7 @@ func (o *Opsctl) startApprovalServer() {
 			return o.handleExtToolExec(req)
 		}
 
-		// 单条审批
-		confirmID := fmt.Sprintf("opsctl_%d", time.Now().UnixNano())
-
-		if o.window != nil {
-			o.window.ActivateWindow()
-		}
-
-		wailsRuntime.EventsEmit(o.ctx, "opsctl:approval", map[string]any{
-			"confirm_id": confirmID,
-			"type":       req.Type,
-			"asset_id":   req.AssetID,
-			"asset_name": req.AssetName,
-			"command":    req.Command,
-			"detail":     req.Detail,
-			"session_id": req.SessionID,
-		})
-
-		ch := make(chan permission.ApprovalResponse, 1)
-		o.pendingOpsctlApprovals.Store(confirmID, ch)
-		defer o.pendingOpsctlApprovals.Delete(confirmID)
-
-		select {
-		case resp := <-ch:
-			if resp.Decision == "deny" {
-				return approval.ApprovalResponse{Approved: false, Reason: "user denied"}
-			}
-			if resp.Decision == "allowAll" && req.SessionID != "" {
-				pattern := req.Command
-				if len(resp.EditedItems) > 0 {
-					pattern = resp.EditedItems[0].Command
-				}
-				permission.SaveGrantPatternsForApproval(i18n.Ctx(o.ctx, o.lang.Lang()), req.SessionID, req.AssetID, req.AssetName, req.Type, pattern)
-			}
-			return approval.ApprovalResponse{Approved: true}
-		case <-o.ctx.Done():
-			return approval.ApprovalResponse{Approved: false, Reason: "app shutting down"}
-		case <-o.appCtx.Done():
-			return approval.ApprovalResponse{Approved: false, Reason: "app shutting down"}
-		}
+		return o.requestSingleApproval(req)
 	}
 
 	srv := approval.NewServer(handler, o.authToken)
@@ -93,6 +56,47 @@ func (o *Opsctl) startApprovalServer() {
 		return
 	}
 	o.approvalServer = srv
+}
+
+func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
+	confirmID := fmt.Sprintf("opsctl_%d", time.Now().UnixNano())
+
+	if o.window != nil {
+		o.window.ActivateWindow()
+	}
+
+	wailsRuntime.EventsEmit(o.ctx, "opsctl:approval", map[string]any{
+		"confirm_id": confirmID,
+		"type":       req.Type,
+		"asset_id":   req.AssetID,
+		"asset_name": req.AssetName,
+		"command":    req.Command,
+		"detail":     req.Detail,
+		"session_id": req.SessionID,
+	})
+
+	ch := make(chan permission.ApprovalResponse, 1)
+	o.pendingOpsctlApprovals.Store(confirmID, ch)
+	defer o.pendingOpsctlApprovals.Delete(confirmID)
+
+	select {
+	case resp := <-ch:
+		if resp.Decision == "deny" {
+			return approval.ApprovalResponse{Approved: false, Reason: "user denied"}
+		}
+		if resp.Decision == "allowAll" && req.SessionID != "" {
+			pattern := req.Command
+			if len(resp.EditedItems) > 0 {
+				pattern = resp.EditedItems[0].Command
+			}
+			permission.SaveGrantPatternsForApproval(i18n.Ctx(o.ctx, o.lang.Lang()), req.SessionID, req.AssetID, req.AssetName, req.Type, pattern)
+		}
+		return approval.ApprovalResponse{Approved: true}
+	case <-o.ctx.Done():
+		return approval.ApprovalResponse{Approved: false, Reason: "app shutting down"}
+	case <-o.appCtx.Done():
+		return approval.ApprovalResponse{Approved: false, Reason: "app shutting down"}
+	}
 }
 
 // startSSHPoolServer 启动 SSH 连接池 proxy 服务
@@ -286,7 +290,20 @@ func (o *Opsctl) handleExtToolExec(req approval.ApprovalRequest) approval.Approv
 		args = json.RawMessage("{}")
 	}
 
-	result, err := o.extExecutor.ExecuteExtTool(i18n.Ctx(o.ctx, o.lang.Lang()), req.Extension, req.Tool, args)
+	ctx := i18n.Ctx(o.ctx, o.lang.Lang())
+	checker := permission.NewCommandPolicyChecker(func(_ context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
+		item := items[0]
+		resp := o.requestSingleApproval(approval.ApprovalRequest{
+			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName,
+			Command: item.Command, Detail: item.Detail,
+		})
+		if resp.Approved {
+			return permission.ApprovalResponse{Decision: "allow"}
+		}
+		return permission.ApprovalResponse{Decision: "deny"}
+	})
+	ctx = permission.WithPolicyChecker(ctx, checker)
+	result, err := o.extExecutor.ExecuteExtTool(ctx, req.Extension, req.Tool, args)
 	if err != nil {
 		return approval.ApprovalResponse{ToolError: fmt.Sprintf("call tool %s/%s: %v", req.Extension, req.Tool, err)}
 	}
