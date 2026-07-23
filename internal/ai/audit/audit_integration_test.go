@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cago-frame/cago/database/db"
@@ -125,4 +126,24 @@ func TestDefaultAuditWriterPersistsToolAuditSemantics(t *testing.T) {
 			require.Equal(t, tc.wantErrorSet, stored.Error != "")
 		})
 	}
+
+	writer.WriteToolCall(aictx.WithSessionID(context.Background(), "sensitive-fields"), ToolCallInfo{
+		ToolName: "put_asset",
+		ArgsJSON: `{"name":"prod","config":{"host":"db.internal","password":"stored-request-secret","private_key":"stored-private-key"}}`,
+		Result:   `{"id":7,"config":{"apiKey":"stored-result-secret"}}`,
+		Command:  `client --token stored-command-secret`,
+		Error:    errors.New("Authorization: Bearer stored-error-secret"),
+	})
+	var sensitive audit_entity.AuditLog
+	require.NoError(t, gdb.Where("session_id = ?", "sensitive-fields").First(&sensitive).Error)
+	for column, value := range map[string]string{
+		"request": sensitive.Request,
+		"result":  sensitive.Result,
+		"command": sensitive.Command,
+		"error":   sensitive.Error,
+	} {
+		require.NotContains(t, value, "stored-", "audit_logs.%s leaked credential plaintext", column)
+	}
+	require.Contains(t, sensitive.Request, "db.internal")
+	require.True(t, strings.Contains(sensitive.Request, "redacted"))
 }

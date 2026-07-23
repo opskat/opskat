@@ -41,6 +41,7 @@ export interface AuditRow {
   asset_id: number;
   asset_name: string;
   command: string;
+  request: string;
   result: string;
   error: string;
   success: number;
@@ -67,7 +68,7 @@ export function findAuditLogs(filter: { assetName?: string; toolName?: string } 
     args.push(filter.toolName);
   }
   const sql =
-    "SELECT id, source, tool_name, asset_id, asset_name, command, result, error, success, decision," +
+    "SELECT id, source, tool_name, asset_id, asset_name, command, request, result, error, success, decision," +
     " decision_source, matched_pattern, conversation_id, session_id FROM audit_logs" +
     (where.length ? ` WHERE ${where.join(" AND ")}` : "") +
     " ORDER BY id";

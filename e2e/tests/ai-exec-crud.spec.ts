@@ -18,13 +18,18 @@ test.beforeEach(async ({ page }) => {
 test("put_asset creates, then updates the same row through the same tool", async ({ page }) => {
   const name = `e2e-ai-put-${Date.now()}`;
   const renamed = `${name}-renamed`;
+  const auditSecret = `e2e-audit-secret-${Date.now()}`;
   const before = putAssetRows().length;
 
   await scriptModel([
     {
       tool: {
         name: "put_asset",
-        args: { name, type: "ssh", config: { host: "127.0.0.1", port: 22, username: "e2e" } },
+        args: {
+          name,
+          type: "ssh",
+          config: { host: "127.0.0.1", port: 22, username: "e2e", password: auditSecret },
+        },
       },
     },
     { tool: { name: "put_asset", args: { asset: name, name: renamed } } },
@@ -50,6 +55,8 @@ test("put_asset creates, then updates the same row through the same tool", async
   const createdAudit = rows[before];
   expect(createdAudit.asset_id).toBe(row.id);
   expect(createdAudit.asset_name).toBe(name);
+  expect(createdAudit.request).not.toContain(auditSecret);
+  expect(JSON.parse(createdAudit.request).config.password).toBe("<redacted>");
   expect(rows[before + 1].asset_name).toBe(name); // resolved from `asset` before the rename took effect
 });
 

@@ -23,6 +23,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
+	"github.com/opskat/opskat/internal/pkg/auditredact"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 )
@@ -136,20 +137,21 @@ func (w *DefaultAuditWriter) WriteToolCall(ctx context.Context, info ToolCallInf
 	if command == "" {
 		command = ExtractCommandForAudit(info.ToolName, args)
 	}
+	command = auditredact.Text(command)
 
 	success := 1
 	errMsg := ""
 	if info.Error != nil {
 		success = 0
-		errMsg = info.Error.Error()
+		errMsg = auditredact.Text(info.Error.Error())
 	}
 	if info.Decision != nil && info.Decision.Decision == aictx.Deny {
 		success = 0
 		if errMsg == "" {
-			errMsg = info.Decision.Message
+			errMsg = auditredact.Text(info.Decision.Message)
 		}
 		if errMsg == "" {
-			errMsg = info.Result
+			errMsg = auditredact.Result(info.Result)
 		}
 	}
 
@@ -159,8 +161,8 @@ func (w *DefaultAuditWriter) WriteToolCall(ctx context.Context, info ToolCallInf
 		AssetID:        assetID,
 		AssetName:      assetName,
 		Command:        command,
-		Request:        truncateString(info.ArgsJSON, 4096),
-		Result:         truncateString(info.Result, 32768),
+		Request:        truncateString(auditredact.JSON(info.ArgsJSON), 4096),
+		Result:         truncateString(auditredact.Result(info.Result), 32768),
 		Error:          errMsg,
 		Success:        success,
 		ConversationID: aictx.GetConversationID(ctx),
@@ -213,7 +215,7 @@ func WriteGrantSubmitAudit(ctx context.Context, assetID int64, assetName string,
 			ToolName:   "grant_submit",
 			AssetID:    assetID,
 			AssetName:  assetName,
-			Command:    strings.Join(patterns, ", "),
+			Command:    auditredact.Text(strings.Join(patterns, ", ")),
 			SessionID:  aictx.GetSessionID(ctx),
 			Decision:   "allow",
 			Success:    1,

@@ -2,6 +2,9 @@ package audit
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"go.uber.org/mock/gomock"
@@ -12,6 +15,82 @@ import (
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 )
+
+func TestWriteToolCall_RedactsSensitiveRequestFieldsRecursively(t *testing.T) {
+	repo := setupAuditRepo(t)
+	NewDefaultAuditWriter().WriteToolCall(context.Background(), ToolCallInfo{
+		ToolName: "put_asset",
+		ArgsJSON: `{"name":"db","config":{"username":"admin","password":"db-pass","privateKey":"pem-body","nested":[{"api_key":"provider-key","authorization":"Bearer socket-token"}]}}`,
+	})
+
+	if len(repo.logs) != 1 {
+		t.Fatalf("expected 1 audit log, got %d", len(repo.logs))
+	}
+	request := repo.logs[0].Request
+	for _, secret := range []string{"db-pass", "pem-body", "provider-key", "socket-token"} {
+		if strings.Contains(request, secret) {
+			t.Fatalf("audit request leaked %q: %s", secret, request)
+		}
+	}
+	var stored struct {
+		Config map[string]any `json:"config"`
+	}
+	if err := json.Unmarshal([]byte(request), &stored); err != nil {
+		t.Fatalf("decode stored audit request: %v", err)
+	}
+	if stored.Config["username"] != "admin" || stored.Config["password"] != "<redacted>" {
+		t.Fatalf("audit request lost safe context or redaction marker: %s", request)
+	}
+}
+
+func TestWriteToolCall_RedactsSensitiveResultFieldsRecursively(t *testing.T) {
+	repo := setupAuditRepo(t)
+	NewDefaultAuditWriter().WriteToolCall(context.Background(), ToolCallInfo{
+		ToolName: "get_asset",
+		ArgsJSON: `{"id":7}`,
+		Result:   `{"id":7,"config":{"host":"db.internal","password":"result-pass","items":[{"refreshToken":"refresh-secret","secret_access_key":"oss-secret"}]}}`,
+	})
+
+	if len(repo.logs) != 1 {
+		t.Fatalf("expected 1 audit log, got %d", len(repo.logs))
+	}
+	result := repo.logs[0].Result
+	for _, secret := range []string{"result-pass", "refresh-secret", "oss-secret"} {
+		if strings.Contains(result, secret) {
+			t.Fatalf("audit result leaked %q: %s", secret, result)
+		}
+	}
+	if !strings.Contains(result, "db.internal") {
+		t.Fatalf("audit result lost non-sensitive context: %s", result)
+	}
+}
+
+func TestWriteToolCall_RedactsRecognizableSecretsFromTextColumns(t *testing.T) {
+	repo := setupAuditRepo(t)
+	NewDefaultAuditWriter().WriteToolCall(context.Background(), ToolCallInfo{
+		ToolName: "exec",
+		ArgsJSON: `{"asset":"db","command":"connect"}`,
+		Command:  `client --password command-pass --api-key=command-key`,
+		Result:   "-----BEGIN PRIVATE KEY-----\nprivate-key-body\n-----END PRIVATE KEY-----",
+		Error:    errors.New("request failed: Authorization: Bearer error-token"),
+	})
+
+	if len(repo.logs) != 1 {
+		t.Fatalf("expected 1 audit log, got %d", len(repo.logs))
+	}
+	entry := repo.logs[0]
+	for column, value := range map[string]string{
+		"command": entry.Command,
+		"result":  entry.Result,
+		"error":   entry.Error,
+	} {
+		for _, secret := range []string{"command-pass", "command-key", "private-key-body", "error-token"} {
+			if strings.Contains(value, secret) {
+				t.Fatalf("audit %s leaked %q: %s", column, secret, value)
+			}
+		}
+	}
+}
 
 // memAuditRepo captures Create() calls synchronously. Unlike runner's
 // mockAuditRepo (used behind the async auditMiddleware goroutine), WriteToolCall is
