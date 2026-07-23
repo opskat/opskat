@@ -41,8 +41,9 @@ test("exec before help is gated with guidance, without prompting the user", asyn
   expect(await execOutcome(page, () => execRows(asset).length > 0)).toBe("settled");
 
   const row = execRows(asset)[0];
-  // Guidance, not a hard error — the model can self-correct inside the same turn.
-  expect(row.result).toContain(`call help(asset="${asset}")`);
+  // The failed tool block is stored in the audit error column, while its text is
+  // still returned to the model so it can self-correct inside the same turn.
+  expect(row.error).toContain(`call help(asset="${asset}")`);
   expect(row.result).not.toContain("mock-exec-ran");
   // Blocked-before-execution is recorded as such, so audit queries can't mistake
   // it for a command that ran.

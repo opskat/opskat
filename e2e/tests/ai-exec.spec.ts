@@ -82,10 +82,10 @@ test("denied exec never reaches the server and the model is told it was denied",
   expect(row.decision).toBe("deny");
   expect(row.decision_source).toBe("user_deny");
   // The mock sshd echoes every command it is asked to run; nothing was echoed,
-  // so nothing ran.
+  // so nothing ran. Failed tool-block text belongs in the audit error column.
   expect(row.result).not.toContain("mock-exec-ran");
-  expect(row.result).toContain(`USER DENIED`);
-  expect(row.result).toContain(command);
+  expect(row.error).toContain(`USER DENIED`);
+  expect(row.error).toContain(command);
 
   // …and the refusal is what the model was handed back as the tool result.
   await expect
