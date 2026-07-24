@@ -16,6 +16,7 @@ type ConversationRepo interface {
 	Create(ctx context.Context, conv *conversation_entity.Conversation) error
 	Update(ctx context.Context, conv *conversation_entity.Conversation) error
 	UpdateTitle(ctx context.Context, id int64, title string, updatetime int64) error
+	UpdateProvider(ctx context.Context, id int64, providerID int64, model string, updatetime int64) error
 	Delete(ctx context.Context, id int64) error
 
 	// 消息操作
@@ -76,6 +77,26 @@ func (r *conversationRepo) UpdateTitle(ctx context.Context, id int64, title stri
 		Updates(map[string]any{
 			"title":      title,
 			"updatetime": updatetime,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+// UpdateProvider 只更新会话选定的 Provider 及其模型（不动其它字段），
+// 用于「按会话切换模型」。语义与 UpdateTitle 一致：0 行命中即返回 ErrRecordNotFound。
+func (r *conversationRepo) UpdateProvider(ctx context.Context, id int64, providerID int64, model string, updatetime int64) error {
+	result := db.Ctx(ctx).
+		Model(&conversation_entity.Conversation{}).
+		Where("id = ? AND status = ?", id, conversation_entity.StatusActive).
+		Updates(map[string]any{
+			"provider_id": providerID,
+			"model":       model,
+			"updatetime":  updatetime,
 		})
 	if result.Error != nil {
 		return result.Error

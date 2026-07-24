@@ -20,6 +20,7 @@ type ConversationSvc interface {
 	Get(ctx context.Context, id int64) (*conversation_entity.Conversation, error)
 	Update(ctx context.Context, conv *conversation_entity.Conversation) error
 	UpdateTitle(ctx context.Context, id int64, title string) error
+	UpdateProvider(ctx context.Context, id int64, providerID int64, model string) error
 	Delete(ctx context.Context, id int64) error
 
 	// 消息持久化
@@ -67,6 +68,11 @@ func (s *conversationSvc) Update(ctx context.Context, conv *conversation_entity.
 
 func (s *conversationSvc) UpdateTitle(ctx context.Context, id int64, title string) error {
 	return conversation_repo.Conversation().UpdateTitle(ctx, id, title, time.Now().Unix())
+}
+
+// UpdateProvider 按会话切换 Provider（模型），只改这条会话。
+func (s *conversationSvc) UpdateProvider(ctx context.Context, id int64, providerID int64, model string) error {
+	return conversation_repo.Conversation().UpdateProvider(ctx, id, providerID, model, time.Now().Unix())
 }
 
 func (s *conversationSvc) Delete(ctx context.Context, id int64) error {

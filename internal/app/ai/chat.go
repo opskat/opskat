@@ -112,6 +112,33 @@ func (a *AI) activateProvider(p *ai_provider_entity.AIProvider) error {
 	return nil
 }
 
+// buildSendConfig 决定本次发送使用哪个 Provider（模型）：优先会话自身选定的
+// ProviderID（「按会话切换模型」#246），为 0 或对应 Provider 已被删除/解密失败时
+// 回退到全局激活的 systemCfg。返回值已按最终 Provider 填好 Model；调用方只需再补
+// SystemPrompt。工作目录 / 工具 / LocalToolGate 与具体 LLM Provider 无关，直接复用
+// systemCfg 的那份，不随会话重建。
+func (a *AI) buildSendConfig(ctx context.Context, conv *conversation_entity.Conversation) runner.SystemConfig {
+	cfg := *a.systemCfg
+	if conv != nil && conv.ProviderID != 0 &&
+		(cfg.ProviderEntity == nil || conv.ProviderID != cfg.ProviderEntity.ID) {
+		p, err := ai_provider_svc.AIProvider().Get(ctx, conv.ProviderID)
+		if err != nil {
+			logger.Default().Warn("会话选定的 Provider 不存在，回退全局激活 Provider",
+				zap.Int64("conv_id", conv.ID), zap.Int64("provider_id", conv.ProviderID), zap.Error(err))
+		} else if apiKey, derr := ai_provider_svc.AIProvider().DecryptAPIKey(p); derr != nil {
+			logger.Default().Warn("解密会话 Provider API Key 失败，回退全局激活 Provider",
+				zap.Int64("conv_id", conv.ID), zap.Int64("provider_id", conv.ProviderID), zap.Error(derr))
+		} else {
+			cfg.ProviderEntity = p
+			cfg.APIKey = apiKey
+		}
+	}
+	if cfg.ProviderEntity != nil {
+		cfg.Model = cfg.ProviderEntity.Model
+	}
+	return cfg
+}
+
 // defaultAICwd 默认 AI 工作目录 = ~/.opskat。不存在时自动创建。
 func defaultAICwd() (string, error) {
 	home, err := os.UserHomeDir()
@@ -235,6 +262,11 @@ func (a *AI) CreateConversation() (*conversation_entity.Conversation, error) {
 		Title:      "新对话",
 		ProviderID: providerID,
 	}
+	// 新会话默认沿用激活 Provider 的模型/类型，让「按会话切换模型」有一份初始记录。
+	if activeProvider != nil {
+		conv.Model = activeProvider.Model
+		conv.ProviderType = activeProvider.Type
+	}
 	if err := conversation_svc.Conversation().Create(ctx, conv); err != nil {
 		return nil, err
 	}
@@ -258,6 +290,30 @@ func (a *AI) UpdateConversationTitle(id int64, title string) error {
 		return fmt.Errorf("会话不存在: %w", err)
 	}
 	return fmt.Errorf("更新会话标题失败: %w", err)
+}
+
+// SetConversationProvider 为指定会话切换使用的 Provider（模型）。作用域是**单会话**：
+// 只改这条会话，不影响全局激活 Provider，也不影响其它会话（#246）。
+//
+// 只持久化选择、不动缓存的 runner：下次 SendAIMessage 本就会 LoadAndDelete 旧 entry 并按
+// 新 Provider 重建（buildSendConfig 从库里读最新 ProviderID）。因此切换不会打断该会话正在
+// 进行的生成——正在流式的回答用旧 Provider 跑完，下一条消息才用新 Provider。
+func (a *AI) SetConversationProvider(convID, providerID int64) error {
+	if a.systemCfg == nil {
+		return fmt.Errorf("请先配置 AI Provider")
+	}
+	ctx := i18n.Ctx(a.ctx, a.lang.Lang())
+	p, err := ai_provider_svc.AIProvider().Get(ctx, providerID)
+	if err != nil {
+		return fmt.Errorf("provider 不存在: %w", err)
+	}
+	if err := conversation_svc.Conversation().UpdateProvider(ctx, convID, providerID, p.Model); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("会话不存在: %w", err)
+		}
+		return fmt.Errorf("切换会话模型失败: %w", err)
+	}
+	return nil
 }
 
 // SwitchConversation 切换到指定会话，返回显示消息
@@ -347,8 +403,14 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 		convID = conv.ID
 	}
 
+	// 加载会话：既用于标题回填，也用于决定本次发送使用哪个 Provider（按会话切换模型）。
+	conv, convErr := conversation_svc.Conversation().Get(ctx, convID)
+	if convErr != nil {
+		logger.Default().Warn("加载会话失败，将回退全局激活 Provider", zap.Int64("conv_id", convID), zap.Error(convErr))
+	}
+
 	// 更新会话标题（如果仍是默认标题"新对话"）
-	if conv, err := conversation_svc.Conversation().Get(ctx, convID); err == nil && conv.Title == "新对话" {
+	if conv != nil && conv.Title == "新对话" {
 		for _, msg := range messages {
 			if msg.Role == runner.RoleUser {
 				title := normalizeConversationTitle(string(msg.Content))
@@ -451,11 +513,9 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 		a.stopEntry(v.(*runnerEntry))
 	}
 
-	cfg := *a.systemCfg
+	// 按会话选定的 Provider 组装本次发送配置（#246：可与全局激活 Provider 不同）。
+	cfg := a.buildSendConfig(ctx, conv)
 	cfg.SystemPrompt = systemPrompt
-	if cfg.ProviderEntity != nil {
-		cfg.Model = cfg.ProviderEntity.Model
-	}
 	sys, err := runner.BuildSystem(chatCtx, cfg)
 	if err != nil {
 		onEvent(runner.StreamEvent{Type: "error", Error: fmt.Sprintf("build coding system: %s", err.Error())})
@@ -463,8 +523,8 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 	}
 
 	history, lastUserText := runner.SplitForReplay(messages)
-	conv := agent.LoadConversation(fmt.Sprintf("opskat-conv-%d", convID), runner.ToAgentMessages(history))
-	aiRunner := sys.Agent().Runner(conv)
+	agentConv := agent.LoadConversation(fmt.Sprintf("opskat-conv-%d", convID), runner.ToAgentMessages(history))
+	aiRunner := sys.Agent().Runner(agentConv)
 
 	entry := &runnerEntry{
 		sys:        sys,
