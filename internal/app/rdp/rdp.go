@@ -6,6 +6,7 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/app/i18n"
+	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/service/rdp_svc"
@@ -34,6 +35,9 @@ func New(lang LangProvider, pool *sshpool.Pool) *RDP {
 		wailsRuntime.EventsEmit(r.ctx, "rdp:event:"+event.SessionID, event)
 	}, pool)
 	conntest.Register(asset_entity.AssetTypeRDP, r.testConnection)
+	assetconn.Register("rdp", func(_ context.Context, assetID int64) error {
+		return r.service.CloseAsset(assetID)
+	})
 	return r
 }
 

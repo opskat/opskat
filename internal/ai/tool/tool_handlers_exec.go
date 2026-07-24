@@ -14,19 +14,20 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
-	"github.com/opskat/opskat/internal/service/credential_resolver"
 
 	"github.com/pkg/sftp"
-	"golang.org/x/crypto/ssh"
 )
 
 // checkFileTransfer 在真正建连之前过一次 cp 审批。审批主体是远端路径——grant 按资产
 // 存，本地路径不属于任何资产，塞进 pattern 无法匹配；方向与本地路径进 detail 供展示。
 //
-// checker 为 nil 表示调用方不是 AI 会话（opsctl 直接调 handler），审批由 CLI 层
-// 自己发起（cmd/opsctl/command/cp.go），这里放行。
+// checker 为 nil 只在 opsctl 已完成审批并通过 WithPreapproved 标记上下文时
+// 合法；其余缺少 checker 的路径 fail-closed。
 func checkFileTransfer(ctx context.Context, assetID int64, remotePath, detail string) error {
-	checker := permission.GetPolicyChecker(ctx)
+	checker, err := permission.RequireCheckerOrPreapproved(ctx)
+	if err != nil {
+		return err
+	}
 	if checker == nil {
 		return nil
 	}
@@ -77,78 +78,14 @@ func handleRequestGrant(ctx context.Context, args map[string]any) (string, error
 		return "", fmt.Errorf("no valid command patterns provided")
 	}
 
-	checker := permission.GetPolicyChecker(ctx)
-	if checker == nil {
-		return "", fmt.Errorf("permission checker not available")
+	checker, err := permission.RequireChecker(ctx)
+	if err != nil {
+		return "", err
 	}
 
 	result := checker.SubmitGrantMulti(ctx, grantItems, reason)
 	aictx.RecordDecision(ctx, result)
 	return result.Message, nil
-}
-
-func handleRunCommand(ctx context.Context, args map[string]any) (string, error) {
-	assetID := aictx.ArgInt64(args, "asset_id")
-	command := aictx.ArgString(args, "command")
-	if assetID == 0 {
-		return "", fmt.Errorf("missing required parameter: asset_id")
-	}
-	if command == "" {
-		return "", fmt.Errorf("missing required parameter: command")
-	}
-
-	// 权限检查（两条路径共用）
-	if checker := permission.GetPolicyChecker(ctx); checker != nil {
-		result := checker.Check(ctx, assetID, command)
-		aictx.RecordDecision(ctx, result)
-		if result.Decision != aictx.Allow {
-			return result.Message, nil
-		}
-	}
-
-	// 如果 context 注入了 SSH 缓存，复用同一资产的连接
-	if cache := getSSHCache(ctx); cache != nil {
-		return runCommandWithCache(ctx, cache, assetID, command)
-	}
-
-	// 无缓存，创建一次性连接
-	return helper.ExecuteSSHCommand(ctx, assetID, command)
-}
-
-func runCommandWithCache(ctx context.Context, cache *SSHClientCache, assetID int64, command string) (string, error) {
-	dial := func() (*ssh.Client, io.Closer, error) {
-		client, extras, err := credential_resolver.Default().DialAssetSSH(ctx, assetID)
-		if err != nil {
-			return nil, nil, err
-		}
-		return client, helper.ClosersAsOne(extras), nil
-	}
-
-	client, _, err := cache.GetOrDial(assetID, dial)
-	if err != nil {
-		return "", err
-	}
-	output, err := helper.RunSSHCommand(ctx, client, command)
-	if err != nil {
-		// 当前会话已经取消时，helper.RunSSHCommand 已主动关闭 client 以打断阻塞；
-		// 这里只需把条目从缓存中摘除（避免下次复用半失效连接），不能再次 Close。
-		if ctx.Err() != nil {
-			cache.Forget(assetID)
-			return "", ctx.Err()
-		}
-		// 非取消错误优先按连接失效处理，删除缓存后只重试一次，避免重复执行
-		cache.Remove(assetID)
-		client, _, err = cache.GetOrDial(assetID, dial)
-		if err != nil {
-			return "", err
-		}
-		output, err = helper.RunSSHCommand(ctx, client, command)
-		if err != nil {
-			cache.Remove(assetID)
-			return "", err
-		}
-	}
-	return output, nil
 }
 
 func handleUploadFile(ctx context.Context, args map[string]any) (string, error) {

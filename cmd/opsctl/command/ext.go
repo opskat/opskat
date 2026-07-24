@@ -14,6 +14,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var delegateExtExecFn = delegateExtExec
+
 func cmdExt(args []string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		printExtUsage()
@@ -103,7 +105,7 @@ func cmdExtList() int {
 	return 0
 }
 
-// cmdExtExec executes an extension tool: delegate to desktop app first, fallback to local.
+// cmdExtExec delegates extension execution to the desktop app, which owns policy checks and approval.
 func cmdExtExec(args []string) int {
 	if len(args) < 2 || args[0] == "-h" || args[0] == "--help" {
 		printExtExecUsage()
@@ -137,15 +139,17 @@ func cmdExtExec(args []string) int {
 	}
 
 	// Try delegate mode first (desktop app running)
-	result, err := delegateExtExec(extName, toolName, toolArgs)
+	result, err := delegateExtExecFn(extName, toolName, toolArgs)
 	if err == nil {
 		printToolResult(result)
 		return 0
 	}
 
-	// If desktop app is not running, fallback to local mode
+	// Extension policy and user confirmation are owned by the desktop app. Running
+	// the WASM locally here would bypass both, so offline execution fails closed.
 	if strings.Contains(err.Error(), "cannot connect") {
-		return localExtExec(extName, toolName, toolArgs)
+		fmt.Fprintln(os.Stderr, "Error: desktop app is required for extension policy checks and approval")
+		return 1
 	}
 
 	// Delegation succeeded but tool execution failed
@@ -201,8 +205,7 @@ Subcommands:
   list                              List installed extensions
   exec <extension> <tool> [--args]  Execute an extension tool
 
-When the desktop app is running, ext exec delegates execution to it.
-Otherwise, extensions are loaded and executed locally via WASM.
+ext exec requires the desktop app because extension policy checks and approval are owned by it.
 
 Examples:
   opsctl ext list
@@ -221,9 +224,10 @@ Arguments:
   --args      Tool arguments as a JSON object (default: "{}")
 
 Execution Mode:
-  If the desktop app is running, the tool is executed via delegation (using the
-  app's loaded extensions and credentials). Otherwise, the extension is loaded
-  locally from the extensions directory and executed via WASM.
+  The tool is executed by the desktop app via delegation (using the app's loaded
+  extensions and credentials). The desktop app is required: it owns extension
+  policy checks and approval, so if it is not running the command fails closed
+  rather than running the WASM locally and bypassing both.
 
 Examples:
   opsctl ext exec oss list_buckets --args '{"asset_id": 1}'

@@ -2,84 +2,189 @@ package tool
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
+
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/assetref"
+	"github.com/opskat/opskat/internal/ai/cmdline"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/policy"
+	"github.com/opskat/opskat/internal/pkg/auditredact"
 	"github.com/opskat/opskat/pkg/extension"
 )
 
 // ExtensionToolExecutor provides extension tool execution to the AI system.
 type ExtensionToolExecutor interface {
 	FindExtensionByTool(extName, toolName string) *extension.Extension
+	FindToolDef(extName, toolName string) (extension.ToolDef, bool)
 	GetExtensionPolicyGroups(extName, assetType string, assetID int64) []string
+	CheckToolPolicy(ctx context.Context, extName, toolName string, argsJSON []byte) (action, resource string, err error)
+	CallTool(ctx context.Context, extName, toolName string, argsJSON []byte) ([]byte, error)
 }
 
 var execToolExecutor ExtensionToolExecutor
 
-// SetExecToolExecutor wires the extension executor into the exec_tool handler.
+// SetExecToolExecutor wires the extension executor into the ext_exec handler.
 func SetExecToolExecutor(executor ExtensionToolExecutor) {
 	execToolExecutor = executor
 }
 
 func handleExecTool(ctx context.Context, args map[string]any) (string, error) {
-	extName := aictx.ArgString(args, "extension")
-	if extName == "" {
-		return "", fmt.Errorf("exec_tool: extension name is required")
-	}
-	toolName := aictx.ArgString(args, "tool")
-	if toolName == "" {
-		return "", fmt.Errorf("exec_tool: tool name is required")
+	command := aictx.ArgString(args, "command")
+	if command == "" {
+		return "", fmt.Errorf("ext_exec: command is required")
 	}
 
 	if execToolExecutor == nil {
-		return "", fmt.Errorf("exec_tool: extension %q not found (no extensions loaded)", extName)
+		return "", fmt.Errorf("ext_exec: command %q not found (no extensions loaded)", command)
 	}
+
+	// 此时还不知道 ToolDef——parseExtCommand 需要它按声明类型转换 flag——所以先只用
+	// cmdline 切出扩展名与工具名去定位 ToolDef，再用 parseExtCommand 对同一个 command
+	// 做一次完整解析。
+	c, err := cmdline.Parse(command)
+	if err != nil {
+		return "", fmt.Errorf("ext_exec: %w", err)
+	}
+	if len(c.Args) == 0 {
+		return "", fmt.Errorf("ext_exec: command %q names an extension but no tool; use `<extension> <tool> [--flags]`", command)
+	}
+	extName, toolName := c.Verb, c.Args[0]
 
 	ext := execToolExecutor.FindExtensionByTool(extName, toolName)
 	if ext == nil {
-		return "", fmt.Errorf("exec_tool: tool %q not found in extension %q", toolName, extName)
+		return "", fmt.Errorf("ext_exec: tool %q not found in extension %q", toolName, extName)
+	}
+	def, ok := execToolExecutor.FindToolDef(extName, toolName)
+	if !ok {
+		return "", fmt.Errorf("ext_exec: tool %q not found in extension %q", toolName, extName)
 	}
 
-	toolArgs, _ := args["args"].(map[string]any)
-	argsJSON, err := json.Marshal(toolArgs)
+	_, _, argsJSON, err := parseExtCommand(command, def)
 	if err != nil {
-		return "", fmt.Errorf("exec_tool: marshal args: %w", err)
+		return "", err
 	}
 
-	assetID := aictx.ArgInt64(args, "asset_id")
-	if ext.Manifest.Policies.Type != "" {
-		if assetID <= 0 {
-			return "", fmt.Errorf("exec_tool: %s.%s requires asset_id (extension declares policy type %q)",
-				extName, toolName, ext.Manifest.Policies.Type)
+	// asset 是可选的：非资产范围的扩展不该被迫编一个资产。assetref 是仓内唯一的资产
+	// 标识契约（数字 id 或名称），不在这里另接一个数字 id 通道。
+	var assetID int64
+	if assetRef := aictx.ArgString(args, "asset"); assetRef != "" {
+		asset, err := assetref.Resolve(ctx, assetRef)
+		if err != nil {
+			return "", fmt.Errorf("ext_exec: %w", err)
 		}
-		action, _, err := ext.Plugin.CheckPolicy(ctx, toolName, argsJSON)
-		if err == nil && action != "" {
-			policyGroups := execToolExecutor.GetExtensionPolicyGroups(
-				extName, ext.Manifest.Policies.Type, assetID,
-			)
-			result := policy.CheckExtensionPolicy(ctx, policyGroups, action)
+		assetID = asset.ID
+	}
+
+	result, err := ExecuteExtensionTool(ctx, execToolExecutor, assetID, extName, toolName, argsJSON)
+	if err != nil {
+		return "", err
+	}
+
+	return string(result), nil
+}
+
+// ExecuteExtensionTool is the single policy-and-execution seam shared by AI ext_exec
+// and the desktop-delegated opsctl ext exec path.
+func ExecuteExtensionTool(ctx context.Context, executor ExtensionToolExecutor, assetID int64,
+	extName, toolName string, argsJSON []byte) (result []byte, retErr error) {
+	logger.Ctx(ctx).Info("extension tool execution start", zap.String("extension", extName),
+		zap.String("tool", toolName), zap.Int64("assetID", assetID))
+	defer func() {
+		if retErr != nil {
+			logger.Ctx(ctx).Error("extension tool execution failed", zap.String("extension", extName),
+				zap.String("tool", toolName), zap.Int64("assetID", assetID), zap.Error(retErr))
+			return
+		}
+		logger.Ctx(ctx).Info("extension tool execution end", zap.String("extension", extName),
+			zap.String("tool", toolName), zap.Int64("assetID", assetID))
+	}()
+	ext := executor.FindExtensionByTool(extName, toolName)
+	if ext == nil {
+		return nil, fmt.Errorf("ext_exec: tool %q not found in extension %q", toolName, extName)
+	}
+	def, ok := executor.FindToolDef(extName, toolName)
+	if !ok {
+		return nil, fmt.Errorf("ext_exec: tool %q not found in extension %q", toolName, extName)
+	}
+	argsJSON, err := validateExtensionToolArgs(extName, toolName, def, argsJSON)
+	if err != nil {
+		return nil, err
+	}
+	command := extensionInvocationSummary(extName, toolName, argsJSON)
+	aictx.RecordAuditCommand(ctx, command)
+
+	policyType := ext.Manifest.Policies.Type
+	if policyType == "" {
+		if err := confirmExtensionTool(ctx, assetID, extName, toolName, command, "extension declares no policy type"); err != nil {
+			return nil, err
+		}
+	} else {
+		if assetID <= 0 {
+			return nil, fmt.Errorf("ext_exec: %s.%s requires asset (extension declares policy type %q)",
+				extName, toolName, policyType)
+		}
+		action, _, err := executor.CheckToolPolicy(ctx, extName, toolName, argsJSON)
+		if err != nil {
+			return nil, fmt.Errorf("ext_exec: %s.%s policy check failed: %w", extName, toolName, err)
+		}
+		if action == "" {
+			if err := confirmExtensionTool(ctx, assetID, extName, toolName, command, "extension policy returned no action"); err != nil {
+				return nil, err
+			}
+		} else {
+			groups := executor.GetExtensionPolicyGroups(extName, policyType, assetID)
+			result := policy.CheckExtensionPolicy(ctx, groups, action)
+			aictx.RecordDecision(ctx, result)
 			switch result.Decision {
 			case aictx.Deny:
-				return "", fmt.Errorf("exec_tool: policy denied: %s", result.Message)
+				return nil, fmt.Errorf("ext_exec: policy denied: %s", result.Message)
 			case aictx.NeedConfirm:
-				checker := permission.GetPolicyChecker(ctx)
-				if checker != nil {
-					confirmResult := checker.HandleConfirm(ctx, assetID, ext.Manifest.Policies.Type, extName+"."+toolName)
-					if confirmResult.Decision != aictx.Allow {
-						return "", fmt.Errorf("exec_tool: user denied: %s.%s", extName, toolName)
-					}
+				if err := confirmExtensionTool(ctx, assetID, extName, toolName, command, policyType); err != nil {
+					return nil, err
 				}
 			}
 		}
 	}
-
-	result, err := ext.Plugin.CallTool(ctx, toolName, argsJSON)
+	result, err = executor.CallTool(ctx, extName, toolName, argsJSON)
 	if err != nil {
-		return "", fmt.Errorf("exec_tool: %s.%s failed: %w", extName, toolName, err)
+		return nil, fmt.Errorf("ext_exec: %s.%s failed: %w", extName, toolName, err)
 	}
+	return result, nil
+}
 
-	return string(result), nil
+func extensionInvocationSummary(extName, toolName string, argsJSON []byte) string {
+	return extName + "." + toolName + " " + auditredact.JSON(string(argsJSON))
+}
+
+func confirmExtensionTool(ctx context.Context, assetID int64, extName, toolName, command, reason string) error {
+	checker, err := permission.RequireChecker(ctx)
+	if err != nil {
+		return fmt.Errorf("ext_exec: %s.%s needs confirmation (%s) but %w", extName, toolName, reason, err)
+	}
+	confirm := checker.ConfirmFunc()
+	if confirm == nil {
+		return fmt.Errorf("ext_exec: %s.%s needs confirmation (%s) but no confirmation callback is configured",
+			extName, toolName, reason)
+	}
+	items := []permission.ApprovalItem{{
+		Type:    "ext_tool",
+		AssetID: assetID,
+		Command: command,
+		Detail:  reason,
+	}}
+	resp := confirm(ctx, permission.ApprovalKindExtension, items)
+	parsed, parseErr := permission.ParseApprovalResponse(permission.ApprovalKindExtension, resp, items)
+	if parseErr != nil || parsed.Decision != permission.ApprovalAllow {
+		aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny})
+		if parseErr != nil {
+			return fmt.Errorf("ext_exec: invalid approval response for %s.%s: %w", extName, toolName, parseErr)
+		}
+		return fmt.Errorf("ext_exec: user denied: %s.%s", extName, toolName)
+	}
+	aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow})
+	return nil
 }

@@ -106,14 +106,6 @@ func TestCheckResult_Context(t *testing.T) {
 
 func TestExtractCommandForAudit(t *testing.T) {
 	convey.Convey("从工具参数提取命令", t, func() {
-		convey.Convey("run_command 提取 command 字段", func() {
-			cmd := audit.ExtractCommandForAudit("run_command", map[string]any{
-				"asset_id": float64(1),
-				"command":  "uptime",
-			})
-			assert.Equal(t, "uptime", cmd)
-		})
-
 		convey.Convey("upload_file 生成上传描述", func() {
 			cmd := audit.ExtractCommandForAudit("upload_file", map[string]any{
 				"asset_id":    float64(1),
@@ -132,36 +124,12 @@ func TestExtractCommandForAudit(t *testing.T) {
 			assert.Equal(t, "download /var/log/app.log → ./app.log", cmd)
 		})
 
-		convey.Convey("exec (opsctl) 提取 command 字段", func() {
+		convey.Convey("exec 提取 command 字段", func() {
 			cmd := audit.ExtractCommandForAudit("exec", map[string]any{
 				"asset_id": float64(1),
 				"command":  "df -h",
 			})
 			assert.Equal(t, "df -h", cmd)
-		})
-
-		convey.Convey("exec_sql 提取 sql 字段", func() {
-			cmd := audit.ExtractCommandForAudit("exec_sql", map[string]any{
-				"asset_id": float64(1),
-				"sql":      "SELECT * FROM users LIMIT 10",
-			})
-			assert.Equal(t, "SELECT * FROM users LIMIT 10", cmd)
-		})
-
-		convey.Convey("exec_redis 提取 command 字段", func() {
-			cmd := audit.ExtractCommandForAudit("exec_redis", map[string]any{
-				"asset_id": float64(1),
-				"command":  "GET mykey",
-			})
-			assert.Equal(t, "GET mykey", cmd)
-		})
-
-		convey.Convey("exec_k8s 规范化 kubectl 命令", func() {
-			cmd := audit.ExtractCommandForAudit("exec_k8s", map[string]any{
-				"asset_id": float64(1),
-				"command":  "get pods -A",
-			})
-			assert.Equal(t, "kubectl get pods -A", cmd)
 		})
 
 		convey.Convey("其他工具返回空字符串", func() {

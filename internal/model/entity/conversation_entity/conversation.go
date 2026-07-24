@@ -3,6 +3,8 @@ package conversation_entity
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/opskat/opskat/internal/pkg/auditredact"
 )
 
 // 状态常量
@@ -122,7 +124,17 @@ func (m *Message) SetBlocks(blocks []ContentBlock) error {
 		m.Blocks = ""
 		return nil
 	}
-	data, err := json.Marshal(blocks)
+	// Display blocks are a persistence copy, not the live model invocation. Redact only
+	// this copy so the runner still receives the original tool arguments while chat
+	// history cannot become a plaintext side channel around credential encryption.
+	persisted := make([]ContentBlock, len(blocks))
+	copy(persisted, blocks)
+	for i := range persisted {
+		if persisted[i].ToolInput != "" {
+			persisted[i].ToolInput = auditredact.JSON(persisted[i].ToolInput)
+		}
+	}
+	data, err := json.Marshal(persisted)
 	if err != nil {
 		return err
 	}

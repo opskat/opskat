@@ -149,24 +149,18 @@ export function UpdateSection() {
     }
   };
 
+  // opsctl / Skill 重装失败的 toast 已挪到 App.tsx 全局监听——重装在启动时触发，设置页
+  // 未必挂载。这里只保留手动「下载并安装」流程的进度事件。
   useEffect(() => {
     const cancelProgress = EventsOn("update:progress", (data: { downloaded: number; total: number }) => {
       if (data.total > 0) {
         setProgress(Math.round((data.downloaded / data.total) * 100));
       }
     });
-    const cancelOpsctlErr = EventsOn("update:opsctl-error", (errMsg: string) => {
-      toast.error(t("appUpdate.opsctlUpdateFailed", { error: errMsg }));
-    });
-    const cancelSkillErr = EventsOn("update:skill-error", (errMsg: string) => {
-      toast.error(t("appUpdate.skillUpdateFailed", { error: errMsg }));
-    });
     return () => {
       cancelProgress();
-      cancelOpsctlErr();
-      cancelSkillErr();
     };
-  }, [t]);
+  }, []);
 
   const handleCheck = async () => {
     setChecking(true);

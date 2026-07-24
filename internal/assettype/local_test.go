@@ -9,13 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLocalHandler_Registered(t *testing.T) {
-	h, ok := Get("local")
-	require.True(t, ok, "local handler should be registered in init()")
-	assert.Equal(t, "local", h.Type())
-	assert.Equal(t, 0, h.DefaultPort())
-}
-
 func TestLocalHandler_ValidateCreateArgsAllowsEmpty(t *testing.T) {
 	h := &localHandler{}
 	assert.NoError(t, h.ValidateCreateArgs(map[string]any{}), "shell 可空")

@@ -79,7 +79,9 @@ func dispatchDel(ctx context.Context, kv clientv3.KV, req *ExecRequest) (*ExecRe
 }
 
 func dispatchLeaseGrant(ctx context.Context, lease clientv3.Lease, req *ExecRequest) (*ExecResult, error) {
-	ttl, _ := req.Args["ttl"].(int64)
+	// 与 FormatCommand 走同一个 ttlFromArgs：审批对话框/审计日志里显示的 --ttl= 与
+	// 这里真正申请的 ttl 必须来自同一次读取，否则批准的文本会与执行的动作分叉。
+	ttl, _ := ttlFromArgs(req.Args)
 	if ttl <= 0 {
 		return nil, fmt.Errorf("lease_grant requires positive ttl")
 	}
@@ -135,8 +137,8 @@ func dispatchMemberList(ctx context.Context, cluster clientv3.Cluster, _ *ExecRe
 }
 
 // dispatchEndpointStatus 处理 endpoint_status 与 endpoint_health。
-// 注意:当前 ParseCommand 不会为 endpoint_* op 写入 req.Key,
-// 需由调用方(Task 12 Service / Task 20 query UI)显式提供 endpoint 地址。
+// endpoint 地址走 req.Key:ParseCommand 会把第一个位置参数写进去(对这两个 op 是可选的),
+// 其他调用方(Service / query UI)需自己显式提供;缺失时这里报错,不猜默认 endpoint。
 func dispatchEndpointStatus(ctx context.Context, ms clientv3.Maintenance, req *ExecRequest) (*ExecResult, error) {
 	if req.Key == "" {
 		return nil, fmt.Errorf("%s requires endpoint key", req.Op)

@@ -5,16 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 
-	"github.com/opskat/opskat/internal/ai/aictx"
-	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/connpool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 
 	"github.com/redis/go-redis/v9"
@@ -44,39 +42,22 @@ func getRedisCache(ctx context.Context) *RedisClientCache {
 	return nil
 }
 
-// --- Handler ---
+// --- Executor ---
 
-func HandleExecRedis(ctx context.Context, args map[string]any) (string, error) {
-	assetID := aictx.ArgInt64(args, "asset_id")
-	command := aictx.ArgString(args, "command")
-	if assetID == 0 || command == "" {
-		return "", fmt.Errorf("missing required parameters: asset_id, command")
-	}
-
-	// 权限检查
-	if checker := permission.GetPolicyChecker(ctx); checker != nil {
-		result := checker.CheckForAsset(ctx, assetID, asset_entity.AssetTypeRedis, command)
-		aictx.RecordDecision(ctx, result)
-		if result.Decision != aictx.Allow {
-			return result.Message, nil
-		}
-	}
-
-	asset, err := asset_svc.Asset().Get(ctx, assetID)
-	if err != nil {
-		return "", fmt.Errorf("asset not found: %w", err)
-	}
-	if !asset.IsRedis() {
-		return "", fmt.Errorf("asset is not Redis type")
-	}
+// ExecRedisOnAsset 是不含权限检查的纯执行入口：权限检查由调用方（统一 exec 工具的
+// handleExec、batch_exec 的预检）在调用之前完成，这里只负责连接与执行。
+// scope 非空时按 redis db 序号（0-15）覆盖资产默认库。
+func ExecRedisOnAsset(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
 	cfg, err := asset.GetRedisConfig()
 	if err != nil {
 		return "", fmt.Errorf("failed to get Redis config: %w", err)
 	}
-
-	// 覆盖默认数据库
-	if _, ok := args["db"]; ok {
-		cfg.Database = int(aictx.ArgInt64(args, "db"))
+	if scope != "" {
+		dbIndex, err := strconv.Atoi(scope)
+		if err != nil {
+			return "", fmt.Errorf("scope must be a redis db number (0-15), got %q", scope)
+		}
+		cfg.Database = dbIndex
 	}
 
 	client, closer, err := getOrDialRedis(ctx, asset, cfg)

@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/service/backup_svc"
@@ -106,6 +107,53 @@ func TestUninstallSkillRemovesSingleSkillTarget(t *testing.T) {
 		if _, err := os.Stat(targets[key]); err != nil {
 			t.Fatalf("%s target should remain: %v", key, err)
 		}
+	}
+}
+
+func TestUpdateInstalledSkillsOnlyReinstallsChangedTargets(t *testing.T) {
+	home := setTestHome(t)
+	s := New(t.Context(), SkillContent{
+		SkillMD:    "---\nname: opsctl\n---\n\n## Global Flags\n",
+		CommandsMD: "current commands\n",
+		InitMD:     "current init\n",
+	})
+	codexDir := filepath.Join(home, ".codex", "skills", "opsctl")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(codexDir, "SKILL.md"), []byte("old skill\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := s.updateInstalledSkills(home); err != nil {
+		t.Fatalf("updateInstalledSkills: %v", err)
+	}
+	// codexDir is rooted in t.TempDir(), so the test controls the complete path.
+	got, err := os.ReadFile(filepath.Join(codexDir, "references", "commands.md")) //nolint:gosec
+	if err != nil {
+		t.Fatalf("ReadFile updated commands: %v", err)
+	}
+	if string(got) != "current commands\n" {
+		t.Fatalf("commands = %q, want current content", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "skills", "opsctl")); !os.IsNotExist(err) {
+		t.Fatalf("uninstalled OpenCode target should remain absent, stat err=%v", err)
+	}
+
+	skillPath := filepath.Join(codexDir, "SKILL.md")
+	mtime := time.Unix(1_700_000_000, 0)
+	if err := os.Chtimes(skillPath, mtime, mtime); err != nil {
+		t.Fatalf("Chtimes current skill: %v", err)
+	}
+	if err := s.updateInstalledSkills(home); err != nil {
+		t.Fatalf("second updateInstalledSkills: %v", err)
+	}
+	infoAfter, err := os.Stat(skillPath)
+	if err != nil {
+		t.Fatalf("Stat skill after second check: %v", err)
+	}
+	if !infoAfter.ModTime().Equal(mtime) {
+		t.Fatal("unchanged installed skill should not be rewritten")
 	}
 }
 

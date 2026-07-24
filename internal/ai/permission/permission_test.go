@@ -700,7 +700,7 @@ func TestHandleConfirm_AllowAllGrantPatternSaving(t *testing.T) {
 				return ApprovalResponse{
 					Decision: "allowAll",
 					EditedItems: []ApprovalItem{
-						{Type: "exec", Command: "set -e; uname -a\ncat /etc/hosts"},
+						{Type: "exec", AssetID: 1, Command: "set -e; uname -a\ncat /etc/hosts"},
 					},
 				}
 			})
@@ -769,6 +769,74 @@ func TestHandleConfirm_AllowAllGrantPatternSaving(t *testing.T) {
 			So(stubGrant.items["sess-db"][0].Command, ShouldEqual, "INSERT INTO users VALUES (1); UPDATE users SET name='x'")
 		})
 	})
+}
+
+// TestHandleConfirm_UnregisteredAssetTypeApprovalItem locks the exact behavior change in
+// HandleConfirm (checker.go): the approval item's Type for an assetType with no entry in
+// permissionTypes must be the assetType itself, not the literal "exec" the old inline
+// mapping defaulted to.
+//
+// "oss" stands in for a real caller: tool_handler_ext.go's handleExecTool passes an
+// extension's declared ext.Manifest.Policies.Type straight into HandleConfirm, and that
+// type (e.g. "oss", see pkg/extension/manifest_test.go) is never going to be one of the
+// nine registered permission types. Before this fix every such approval was mislabeled
+// "EXEC" in the front end regardless of what it actually was.
+func TestHandleConfirm_UnregisteredAssetTypeApprovalItem(t *testing.T) {
+	Convey("HandleConfirm 对未注册资产类型的审批项 Type 落回原样，不是 exec", t, func() {
+		ctx, mockAsset, _ := setupPolicyTest(t)
+		asset := &asset_entity.Asset{ID: 9, Name: "oss-bucket-1", Type: "oss"}
+		mockAsset.EXPECT().Find(gomock.Any(), int64(9)).Return(asset, nil).AnyTimes()
+
+		var gotType string
+		checker := NewCommandPolicyChecker(func(_ context.Context, _ string, items []ApprovalItem) ApprovalResponse {
+			if len(items) > 0 {
+				gotType = items[0].Type
+			}
+			return ApprovalResponse{Decision: "deny"}
+		})
+
+		checker.HandleConfirm(ctx, 9, "oss", "put-object bucket/key")
+
+		So(gotType, ShouldEqual, "oss")
+	})
+}
+
+func TestHandleConfirm_InvalidApprovalResponsesFailClosed(t *testing.T) {
+	tests := []struct {
+		name string
+		resp ApprovalResponse
+	}{
+		{name: "empty decision", resp: ApprovalResponse{}},
+		{name: "unknown decision", resp: ApprovalResponse{Decision: "bogus"}},
+		{name: "case variant", resp: ApprovalResponse{Decision: "ALLOW"}},
+		{
+			name: "malformed edited items",
+			resp: ApprovalResponse{
+				Decision:    "allowAll",
+				EditedItems: []ApprovalItem{{Type: "exec", Command: "   "}},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, mockAsset, _ := setupPolicyTest(t)
+			asset := &asset_entity.Asset{ID: 1, Name: "web-01", Type: asset_entity.AssetTypeSSH}
+			mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+			checker := NewCommandPolicyChecker(func(_ context.Context, _ string, _ []ApprovalItem) ApprovalResponse {
+				return tc.resp
+			})
+			result := checker.HandleConfirm(ctx, asset.ID, asset.Type, "touch /tmp/review-proof")
+
+			if result.Decision != aictx.Deny {
+				t.Fatalf("invalid approval response %#v produced decision %v, want deny", tc.resp, result.Decision)
+			}
+			if result.DecisionSource != aictx.SourceUserDeny {
+				t.Fatalf("invalid approval response source = %q, want %q", result.DecisionSource, aictx.SourceUserDeny)
+			}
+		})
+	}
 }
 
 func TestCheckPermission_TypeAlias(t *testing.T) {
@@ -1140,7 +1208,7 @@ func TestCheckPermission_GrantSaveReuseRoundTrip(t *testing.T) {
 			return ApprovalResponse{
 				Decision: "allowAll",
 				EditedItems: []ApprovalItem{
-					{Type: "exec", Command: "ls *\ncat *"},
+					{Type: "exec", AssetID: 1, Command: "ls *\ncat *"},
 				},
 			}
 		})

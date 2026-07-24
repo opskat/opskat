@@ -14,6 +14,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/runner"
+	"github.com/opskat/opskat/internal/ai/skills"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/model/entity/ai_provider_entity"
@@ -45,6 +46,30 @@ func maskAPIKey(key string) string {
 		return "****"
 	}
 	return key[:4] + "****" + key[len(key)-4:]
+}
+
+// allBuiltinAssetTypeSkills 返回全部已内嵌用法文档的资产类型（skills.Types()——8 个
+// exec 类型 + rdp/vnc/oss/local 4 个 doc-only 类型，见 permission.RegisterHelpDoc）的
+// 一行技能描述（skills.Description），用于 PromptBuilder 的技能清单。
+//
+// 无条件全量返回，不看 openTabs：这份清单是**发现**用的，让模型知道 help 存在、以及
+// exec 覆盖了哪些类型。doc-only 类型（有 help 无 exec）也混在这同一份返回值里——
+// 拆成"exec 真的覆盖"与"仅有配置文档"两段是 PromptBuilder.buildAssetTypeSkills 的
+// 职责（按 permission.ExecutorFor 拆分），本函数只负责提供全量的 类型→一行描述 映射，
+// 不在这里预判归属。按 Tab 过滤会让没开对应 Tab 的会话完全看不到这条路径。一行一
+// 类型，成本可以忽略。
+//
+// 它**不**满足 exec 的门禁——门禁只认模型显式调用过 help（见 tool.DocGate 的注释）。
+// 未内嵌文档、仅由已安装 extension 提供的资产类型不在这里，走的是另一条 extension
+// SKILL.md 注入路径（见下方 bridge.GetSkillMDWithExtension）。
+func allBuiltinAssetTypeSkills() map[string]string {
+	out := make(map[string]string)
+	for _, assetType := range skills.Types() {
+		if desc, ok := skills.Description(assetType); ok {
+			out[assetType] = desc
+		}
+	}
+	return out
 }
 
 // normalizeConversationTitle 统一会话标题规则。
@@ -298,6 +323,7 @@ func (a *AI) DeleteConversation(id int64) error {
 	if err != nil {
 		return err
 	}
+	a.docGate.Reset(id)
 	if a.currentConversationID == id {
 		a.currentConversationID = 0
 	}
@@ -362,6 +388,13 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 		}
 	}
 
+	// Inject the compact per-type skill listing for built-in asset types. This is
+	// discovery only — it tells the model that help(asset) exists and which types exec
+	// covers. It deliberately does NOT mark anything documented on the doc gate: the only
+	// thing that satisfies the gate is an explicit help(asset) call, handled inside
+	// handleHelp (internal/ai/tool/tool_handlers_unified.go).
+	builder.SetAssetTypeSkills(allBuiltinAssetTypeSkills())
+
 	systemPrompt := builder.Build()
 
 	// 注入审计上下文
@@ -372,6 +405,10 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 	if a.pool != nil {
 		chatCtx = helper.WithSSHPool(chatCtx, a.pool)
 	}
+
+	// 注入 exec 用法门禁：单实例贯穿 AI binder 生命周期，内部按 convID 分片记录，
+	// 与 LocalToolGate 的 allow-list 用同一种存储形态（见 ai.go 的字段注释）。
+	chatCtx = tool.WithDocGate(chatCtx, a.docGate)
 
 	// 同一次 Send 内复用连接。
 	sshCache := tool.NewSSHClientCache()
@@ -402,10 +439,12 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 		}
 	}
 
-	// 注入 policy checker
-	if a.policyChecker != nil {
-		chatCtx = permission.WithPolicyChecker(chatCtx, a.policyChecker)
-	}
+	// 注入 policy checker。无条件注入：工具侧的权限检查是 fail-closed 的
+	// （permission.RequireChecker），checker 缺失不再等于放行，而是整条 exec 直接失败。
+	// 从前这里的 `if a.policyChecker != nil` 暗示它可能为 nil——实际不会（activateProvider
+	// 在 systemCfg 之前赋值，而入口守卫 systemCfg == nil），但把这个不变式写成条件分支，
+	// 等于把"安全"寄托在读者不会误以为 nil 是合法状态上。
+	chatCtx = permission.WithPolicyChecker(chatCtx, a.policyChecker)
 
 	// 旧 entry 若存在，先取消并释放。
 	if v, ok := a.runners.LoadAndDelete(convID); ok {

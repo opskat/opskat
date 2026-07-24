@@ -12,11 +12,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.uber.org/zap"
 
-	"github.com/opskat/opskat/internal/ai/aictx"
-	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/connpool"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 )
 
@@ -42,59 +39,6 @@ func getMongoDBCache(ctx context.Context) *MongoDBClientCache {
 		return cache
 	}
 	return nil
-}
-
-// --- Handler ---
-
-func HandleExecMongo(ctx context.Context, args map[string]any) (string, error) {
-	assetID := aictx.ArgInt64(args, "asset_id")
-	operation := aictx.ArgString(args, "operation")
-	database := aictx.ArgString(args, "database")
-	collection := aictx.ArgString(args, "collection")
-	query := aictx.ArgString(args, "query")
-	if assetID == 0 || operation == "" {
-		return "", fmt.Errorf("missing required parameters: asset_id, operation")
-	}
-
-	// 权限检查
-	if checker := permission.GetPolicyChecker(ctx); checker != nil {
-		result := checker.CheckForAsset(ctx, assetID, asset_entity.AssetTypeMongoDB, operation)
-		aictx.RecordDecision(ctx, result)
-		if result.Decision != aictx.Allow {
-			return result.Message, nil
-		}
-	}
-
-	asset, err := asset_svc.Asset().Get(ctx, assetID)
-	if err != nil {
-		return "", fmt.Errorf("asset not found: %w", err)
-	}
-	if !asset.IsMongoDB() {
-		return "", fmt.Errorf("asset is not MongoDB type")
-	}
-
-	client, closer, err := getOrDialMongoDB(ctx, asset)
-	if err != nil {
-		return "", fmt.Errorf("failed to connect to MongoDB: %w", err)
-	}
-	if getMongoDBCache(ctx) == nil {
-		if client != nil {
-			defer func() {
-				if err := client.Disconnect(context.Background()); err != nil {
-					logger.Default().Warn("close MongoDB connection", zap.Error(err))
-				}
-			}()
-		}
-		if closer != nil {
-			defer func() {
-				if err := closer.Close(); err != nil {
-					logger.Default().Warn("close MongoDB tunnel", zap.Error(err))
-				}
-			}()
-		}
-	}
-
-	return ExecuteMongoDB(ctx, client, database, collection, operation, query)
 }
 
 func getOrDialMongoDB(ctx context.Context, asset *asset_entity.Asset) (*mongo.Client, io.Closer, error) {
@@ -128,6 +72,40 @@ func getOrDialMongoDB(ctx context.Context, asset *asset_entity.Asset) (*mongo.Cl
 	return wrapper.Client, closer, nil
 }
 
+// mongoOpSpec 描述一个 mongo 操作：是否要求 collection / database 参数，以及怎么执行。
+//
+// mongoOps 是 ParseMongoCommand（internal/ai/helper/mongo_command.go）与
+// ExecuteMongoDB 共用的唯一操作列表：两者过去各维护一份同样的 12 个操作名
+// （一份 map[string]bool 判断要不要 collection，一份 switch 分发执行），新增
+// 操作只改一处就会悄悄跑偏。现在两边都读这同一个 map，跑偏在结构上不可能
+// 发生——这里少一个 entry，ParseMongoCommand 和 ExecuteMongoDB 会对同一个
+// 操作名同时拒绝，不存在"一边认得一边不认得"的中间态。
+//
+// needsDatabase 供 resolveMongoCommand（internal/ai/helper/mongo_exec.go）在权限检查
+// 之前判断"这条命令没有可用的 database，必然执行失败"：本文件下方每个 mongoXxx 函数
+// 都会在 database 为空时报错，唯独 listDatabases 不需要 database。把这个判断挪到这里
+// 而不是在 resolveMongoCommand 里另建一份操作名单，理由与 needsCollection 完全一致。
+var mongoOps = map[string]mongoOpSpec{
+	"find":            {needsCollection: true, needsDatabase: true, exec: mongoFind},
+	"findOne":         {needsCollection: true, needsDatabase: true, exec: mongoFindOne},
+	"insertOne":       {needsCollection: true, needsDatabase: true, exec: mongoInsertOne},
+	"insertMany":      {needsCollection: true, needsDatabase: true, exec: mongoInsertMany},
+	"updateOne":       {needsCollection: true, needsDatabase: true, exec: mongoUpdateOne},
+	"updateMany":      {needsCollection: true, needsDatabase: true, exec: mongoUpdateMany},
+	"deleteOne":       {needsCollection: true, needsDatabase: true, exec: mongoDeleteOne},
+	"deleteMany":      {needsCollection: true, needsDatabase: true, exec: mongoDeleteMany},
+	"aggregate":       {needsCollection: true, needsDatabase: true, exec: mongoAggregate},
+	"countDocuments":  {needsCollection: true, needsDatabase: true, exec: mongoCountDocuments},
+	"listDatabases":   {needsCollection: false, needsDatabase: false, exec: mongoListDatabases},
+	"listCollections": {needsCollection: false, needsDatabase: true, exec: mongoListCollections},
+}
+
+type mongoOpSpec struct {
+	needsCollection bool
+	needsDatabase   bool
+	exec            func(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error)
+}
+
 // ExecuteMongoDB 执行 MongoDB 操作并返回 JSON 结果
 func ExecuteMongoDB(ctx context.Context, client *mongo.Client, database, collection, operation, query string) (string, error) {
 	// 解析 query JSON
@@ -136,45 +114,30 @@ func ExecuteMongoDB(ctx context.Context, client *mongo.Client, database, collect
 		return "", fmt.Errorf("无效的查询参数: %w", err)
 	}
 
-	switch operation {
-	case "find":
-		return mongoFind(ctx, client, database, collection, queryMap)
-	case "findOne":
-		return mongoFindOne(ctx, client, database, collection, queryMap)
-	case "insertOne":
-		return mongoInsertOne(ctx, client, database, collection, queryMap)
-	case "insertMany":
-		return mongoInsertMany(ctx, client, database, collection, queryMap)
-	case "updateOne":
-		return mongoUpdateOne(ctx, client, database, collection, queryMap)
-	case "updateMany":
-		return mongoUpdateMany(ctx, client, database, collection, queryMap)
-	case "deleteOne":
-		return mongoDeleteOne(ctx, client, database, collection, queryMap)
-	case "deleteMany":
-		return mongoDeleteMany(ctx, client, database, collection, queryMap)
-	case "aggregate":
-		return mongoAggregate(ctx, client, database, collection, queryMap)
-	case "countDocuments":
-		return mongoCountDocuments(ctx, client, database, collection, queryMap)
-	case "listDatabases":
-		names, err := ListMongoDatabases(ctx, client)
-		if err != nil {
-			return "", err
-		}
-		return marshalResult(map[string]any{"databases": names, "count": len(names)})
-	case "listCollections":
-		if database == "" {
-			return "", fmt.Errorf("database 参数不能为空")
-		}
-		names, err := ListMongoCollections(ctx, client, database)
-		if err != nil {
-			return "", err
-		}
-		return marshalResult(map[string]any{"collections": names, "count": len(names)})
-	default:
+	spec, ok := mongoOps[operation]
+	if !ok {
 		return "", fmt.Errorf("不支持的 MongoDB 操作: %s", operation)
 	}
+	return spec.exec(ctx, client, database, collection, queryMap)
+}
+
+func mongoListDatabases(ctx context.Context, client *mongo.Client, _, _ string, _ map[string]json.RawMessage) (string, error) {
+	names, err := ListMongoDatabases(ctx, client)
+	if err != nil {
+		return "", err
+	}
+	return marshalResult(map[string]any{"databases": names, "count": len(names)})
+}
+
+func mongoListCollections(ctx context.Context, client *mongo.Client, database, _ string, _ map[string]json.RawMessage) (string, error) {
+	if database == "" {
+		return "", fmt.Errorf("database 参数不能为空")
+	}
+	names, err := ListMongoCollections(ctx, client, database)
+	if err != nil {
+		return "", err
+	}
+	return marshalResult(map[string]any{"collections": names, "count": len(names)})
 }
 
 // ListMongoDatabases 列出所有数据库名称

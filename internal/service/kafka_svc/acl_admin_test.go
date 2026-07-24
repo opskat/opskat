@@ -1,6 +1,7 @@
 package kafka_svc
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -125,4 +126,45 @@ func TestListACLsResponseSortsAndPaginates(t *testing.T) {
 	require.Len(t, response.ACLs, 1)
 	assert.Equal(t, 2, response.Total)
 	assert.Equal(t, "a", response.ACLs[0].ResourceName)
+}
+
+// TestNormalizePageClampsPageToAvoidSliceOverflow 锁住分页下标不会溢出成负数。
+//
+// 两个调用点都用 start := (page-1)*pageSize 算切片下标，page 大到让乘法溢出 int 时
+// start 是负数，`if start > total` 拦不住，切片表达式直接 panic。修复前实测：
+// normalizePage(200000000000000000, 50) 原样返回，listACLsResponse 随即 panic
+// "slice bounds out of range [:-8446744073709551616]"。internal/ai 里没有 recover()，
+// 这个 panic 会带走整个桌面进程；而 page/pageSize 是 AI 工具参数，模型可写。
+func TestNormalizePageClampsPageToAvoidSliceOverflow(t *testing.T) {
+	acls := []KafkaACL{{ResourceType: "TOPIC", ResourceName: "a", Principal: "User:a"}}
+	for _, tc := range []struct{ page, pageSize int }{
+		{200000000000000000, 50},
+		{math.MaxInt, 1},
+		{math.MaxInt, 500},
+		{math.MaxInt/50 + 2, 50},
+	} {
+		page, pageSize := normalizePage(tc.page, tc.pageSize)
+		require.Positive(t, (page-1)*pageSize, "start index overflowed for page=%d pageSize=%d", tc.page, tc.pageSize)
+
+		// 真正的回归断言：这一行在修复前 panic。
+		response := listACLsResponse(acls, page, pageSize)
+		assert.Empty(t, response.ACLs, "a page past the end must come back empty, not panic")
+		assert.Equal(t, 1, response.Total)
+	}
+}
+
+// TestNormalizePageKeepsOrdinaryValues 是上面那条钳位的反面守卫：钳位不能顺手改掉
+// 正常页码，否则第 2 页会变成别的页。
+func TestNormalizePageKeepsOrdinaryValues(t *testing.T) {
+	for _, tc := range []struct{ inPage, inSize, wantPage, wantSize int }{
+		{0, 0, 1, 50},
+		{-5, -1, 1, 50},
+		{2, 20, 2, 20},
+		{1, 1000, 1, 500},
+		{1000000, 50, 1000000, 50},
+	} {
+		page, pageSize := normalizePage(tc.inPage, tc.inSize)
+		assert.Equal(t, tc.wantPage, page)
+		assert.Equal(t, tc.wantSize, pageSize)
+	}
 }

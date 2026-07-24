@@ -31,8 +31,11 @@ type panelConnCache[C io.Closer] struct {
 }
 
 type panelConnEntry[C io.Closer] struct {
-	client   C
-	tunnel   io.Closer
+	client C
+	tunnel io.Closer
+	// assetID 让 DropAsset 能按资产回收。key 里虽然也带 assetID,但那是字符串前缀,
+	// 拿 "1:" 去匹配会把 "12:xxx" 一起误伤,所以单独存一份。
+	assetID  int64
 	lastUsed atomic.Int64 // unix nano
 }
 
@@ -45,7 +48,8 @@ func newPanelConnCache[C io.Closer](name string, idleTTL time.Duration) *panelCo
 }
 
 // GetOrDial 从缓存取连接,不存在则调 dial 并入缓存。
-func (c *panelConnCache[C]) GetOrDial(key string, dial func() (C, io.Closer, error)) (C, io.Closer, error) {
+// assetID 只用于 DropAsset 按资产回收;缓存命中与否仍只看 key。
+func (c *panelConnCache[C]) GetOrDial(assetID int64, key string, dial func() (C, io.Closer, error)) (C, io.Closer, error) {
 	c.mu.Lock()
 	if e, ok := c.entries[key]; ok {
 		e.lastUsed.Store(time.Now().UnixNano())
@@ -69,7 +73,7 @@ func (c *panelConnCache[C]) GetOrDial(key string, dial func() (C, io.Closer, err
 		if derr != nil {
 			return *new(C), derr
 		}
-		e := &panelConnEntry[C]{client: client, tunnel: closer}
+		e := &panelConnEntry[C]{client: client, tunnel: closer, assetID: assetID}
 		e.lastUsed.Store(time.Now().UnixNano())
 		c.mu.Lock()
 		c.entries[key] = e
@@ -93,6 +97,25 @@ func (c *panelConnCache[C]) Drop(key string) {
 		return
 	}
 	c.closeEntry(key, e)
+}
+
+// DropAsset 关闭并移除指定资产的全部连接(一个资产可能缓存了多个库/多个 db index)。
+func (c *panelConnCache[C]) DropAsset(assetID int64) {
+	c.mu.Lock()
+	var dropped map[string]*panelConnEntry[C]
+	for key, e := range c.entries {
+		if e.assetID == assetID {
+			if dropped == nil {
+				dropped = make(map[string]*panelConnEntry[C])
+			}
+			dropped[key] = e
+			delete(c.entries, key)
+		}
+	}
+	c.mu.Unlock()
+	for key, e := range dropped {
+		c.closeEntry(key, e)
+	}
 }
 
 // Close 关闭并移除所有连接。可重复调用,二次调用为空操作。

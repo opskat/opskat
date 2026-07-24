@@ -6,6 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
+
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/runner"
@@ -33,7 +36,7 @@ func (a *AI) makeCommandConfirmFunc() permission.CommandConfirmFunc {
 		})
 
 		ch := make(chan permission.ApprovalResponse, 1)
-		a.pendingAIApprovals.Store(confirmID, ch)
+		a.pendingAIApprovals.Store(confirmID, pendingAIApproval{kind: kind, items: items, ch: ch})
 		defer a.pendingAIApprovals.Delete(confirmID)
 
 		select {
@@ -71,7 +74,7 @@ func (a *AI) makeGrantRequestFunc() permission.GrantRequestFunc {
 
 		wailsRuntime.EventsEmit(a.ctx, eventName, runner.StreamEvent{
 			Type:        "approval_request",
-			Kind:        "grant",
+			Kind:        permission.ApprovalKindGrant,
 			Items:       items,
 			ConfirmID:   confirmID,
 			Description: reason,
@@ -79,7 +82,7 @@ func (a *AI) makeGrantRequestFunc() permission.GrantRequestFunc {
 		})
 
 		ch := make(chan permission.ApprovalResponse, 1)
-		a.pendingAIApprovals.Store(confirmID, ch)
+		a.pendingAIApprovals.Store(confirmID, pendingAIApproval{kind: permission.ApprovalKindGrant, items: items, ch: ch})
 		defer a.pendingAIApprovals.Delete(confirmID)
 
 		select {
@@ -89,13 +92,14 @@ func (a *AI) makeGrantRequestFunc() permission.GrantRequestFunc {
 				ConfirmID: confirmID,
 				Content:   resp.Decision,
 			})
-			if resp.Decision == "deny" {
+			parsed, err := permission.ParseApprovalResponse(permission.ApprovalKindGrant, resp, items)
+			if err != nil || parsed.Decision != permission.ApprovalAllow {
 				return false, nil
 			}
 			var finalPatterns []string
 			sessionID := fmt.Sprintf("conv_%d", convID)
-			if len(resp.EditedItems) > 0 {
-				for _, item := range resp.EditedItems {
+			if len(parsed.EditedItems) > 0 {
+				for _, item := range parsed.EditedItems {
 					cmd := strings.TrimSpace(item.Command)
 					if cmd != "" {
 						finalPatterns = append(finalPatterns, cmd)
@@ -145,21 +149,22 @@ func (a *AI) makeLocalToolConfirmFunc() tool.LocalToolConfirmFunc {
 		if a.window != nil {
 			a.window.ActivateWindow()
 		}
+		approvalItems := []permission.ApprovalItem{{
+			Type:    req.ToolName,
+			Command: req.Command,
+			Detail:  req.Detail,
+		}}
 		wailsRuntime.EventsEmit(a.ctx, eventName, runner.StreamEvent{
 			Type:      "approval_request",
-			Kind:      "local_tool",
+			Kind:      permission.ApprovalKindLocalTool,
 			ConfirmID: confirmID,
 			ToolName:  req.ToolName,
-			Items: []permission.ApprovalItem{{
-				Type:    req.ToolName,
-				Command: req.Command,
-				Detail:  req.Detail,
-			}},
-			Patterns: req.DefaultPatterns,
+			Items:     approvalItems,
+			Patterns:  req.DefaultPatterns,
 		})
 
 		ch := make(chan permission.ApprovalResponse, 1)
-		a.pendingAIApprovals.Store(confirmID, ch)
+		a.pendingAIApprovals.Store(confirmID, pendingAIApproval{kind: permission.ApprovalKindLocalTool, items: approvalItems, ch: ch})
 		defer a.pendingAIApprovals.Delete(confirmID)
 
 		select {
@@ -188,9 +193,15 @@ func (a *AI) makeLocalToolConfirmFunc() tool.LocalToolConfirmFunc {
 // RespondAIApproval 前端响应 AI 审批请求（统一入口）
 func (a *AI) RespondAIApproval(confirmID string, resp permission.ApprovalResponse) {
 	if v, ok := a.pendingAIApprovals.Load(confirmID); ok {
-		ch := v.(chan permission.ApprovalResponse)
+		pending := v.(pendingAIApproval)
+		if _, err := permission.ParseApprovalResponse(pending.kind, resp, pending.items); err != nil {
+			logger.Ctx(a.ctx).Warn("invalid AI approval response denied",
+				zap.String("confirmID", confirmID), zap.String("kind", pending.kind),
+				zap.String("decision", resp.Decision), zap.Error(err))
+			resp = permission.ApprovalResponse{Decision: "deny"}
+		}
 		select {
-		case ch <- resp:
+		case pending.ch <- resp:
 		default:
 		}
 	}

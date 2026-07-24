@@ -35,7 +35,8 @@ this guide owns the observation mechanics.
 
 ## 2. Where everything lives
 
-The app data directory is platform-specific (`bootstrap.AppDataDir()`):
+The default app data directory comes from `bootstrap.AppDataDir()`. A portable build uses
+the `data/` directory next to its executable; otherwise the platform defaults are:
 
 | OS | Data directory |
 |----|----------------|
@@ -53,7 +54,8 @@ Inside the data directory:
 | `logs/error.log` | Errors only (`error`+), always written |
 | `extensions/` | Installed WASM extensions |
 
-Print the directory for the current OS so later commands can reference it:
+Print the directory for the current OS so later commands can reference it (or set `DIR` to
+the portable / `OPSKAT_DATA_DIR` override you launched with):
 
 ```bash
 # macOS
@@ -245,14 +247,18 @@ make build-embed  # Production build with bundled opsctl
 
 Environment toggles for the desktop app:
 
+- `OPSKAT_DATA_DIR=/path/to/data` — redirect DB, config, logs, and sockets to an
+  isolated directory (the GUI equivalent of opsctl's `--data-dir`).
+- `OPSKAT_MASTER_KEY=<key>` — provide the credential-KDF passphrase explicitly; useful
+  with an isolated data directory and required by the hermetic e2e harness.
 - `OPSKAT_EXTENSIONS=0` — start with the extension system disabled (isolate
   extension-related behavior).
 - `OPSKAT_ENV=production` — production mode (e.g. `make devserver` refuses to run).
 
-> **No `--data-dir` for the GUI.** The desktop app always uses the default data
-> directory above; there is no flag to redirect it. Before a destructive GUI test, back
-> up the data dir (`cp -a "$DIR" "$DIR.bak"`) and restore it afterwards. `opsctl`, by
-> contrast, *does* accept `--data-dir` (see below) — prefer it when you need isolation.
+The GUI has no `--data-dir` command-line flag; use `OPSKAT_DATA_DIR` instead. Prefer a
+throwaway directory for destructive verification. If you must use the default data
+directory, back it up (`cp -a "$DIR" "$DIR.bak"`) and restore it afterwards. `opsctl`
+accepts either `--data-dir` or the same environment variable (see below).
 
 ---
 
@@ -260,10 +266,11 @@ Environment toggles for the desktop app:
 
 `opsctl` is the standalone CLI for headless asset operations. It shares the app's asset,
 credential, policy, audit, connection-pool, and approval infrastructure where the command
-supports it. It is the realistic way for an agent to exercise SSH / SQL / Redis / Mongo /
-file / extension features without a GUI, then verify via logs and `audit_logs`. Interactive
-RDP sessions and the built-in OSS browser do not currently have dedicated opsctl operation
-commands.
+supports it. It is the realistic way for an agent to exercise SSH / databases / Redis /
+MongoDB / Kafka / Kubernetes / etcd / file / extension features without a GUI — all of them
+through the one `exec` verb, which dispatches on the asset's real type — then verify via
+logs and `audit_logs`. Interactive RDP sessions and the built-in OSS browser do not
+currently have dedicated opsctl operation commands.
 
 ```bash
 make install-cli         # install opsctl to GOPATH/bin
@@ -275,11 +282,12 @@ Common verbs (run `opsctl <command> --help` for details):
 ```bash
 opsctl list assets                         # inventory
 opsctl get asset web-server                # details by name or numeric ID
+opsctl help prod-db                        # command syntax for that asset's type
 opsctl exec web-server -- uptime           # run a command over SSH
-opsctl sql prod-db "SELECT 1"              # query a database asset
-opsctl redis cache "PING"                  # Redis command
-opsctl mongo prod-mongo -d mydb -c users '{}'   # Mongo query
+opsctl exec prod-db -- "SELECT 1"          # query a database asset — same verb, any type
+opsctl exec cache -- "PING"                # Redis command
 opsctl cp ./file web-server:/tmp/          # scp-style transfer
+opsctl delete asset old-server             # always asks the desktop app for confirmation
 opsctl ext list                            # installed extensions
 opsctl ext exec oss list_buckets --args '{}'
 ```
@@ -292,11 +300,13 @@ Global flags worth knowing for testing:
   decryption when running outside the app.
 - `--session <id>` (or `OPSKAT_SESSION_ID`) — approval session id.
 
-> **Approval gate:** write operations (`exec`, `cp`, `create`, `update`) require approval
-> from the **running desktop app** over a Unix socket. On first write a session is
-> auto-created; "Allow Session" in the app auto-approves the rest for 24h. For fully
-> headless write tests you need the app running to approve, or a policy/session that
-> permits the operation. **Read** verbs (`list`, `get`, `sql` SELECTs) do not need approval.
+> **Approval gate:** write operations (`exec`, `cp`, `create`, `update`, `delete`) require
+> approval from the **running desktop app** over a Unix socket. On first write a session is
+> auto-created; "Allow Session" in the app auto-approves the rest for 24h — except `delete`,
+> which always asks and can never be pre-approved or granted. For fully headless write
+> tests you need the app running to approve, or a policy/session that permits the
+> operation. **Read** verbs (`list`, `get`, `help`, `exec` for reads like `SELECT`) do not
+> need approval.
 
 After running an `opsctl` op, confirm it the same way you would any other path:
 

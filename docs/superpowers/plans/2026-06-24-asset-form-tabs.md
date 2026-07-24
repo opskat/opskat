@@ -1323,7 +1323,7 @@ Expected: 无新增错误/告警(lint 脚本若不存在则跳过并记录)。
 
 - [ ] **Step 3: 人工验证(观察副作用)**
 
-按 [docs/testing-debugging-guide.md](../../testing-debugging-guide.md) 运行应用,逐类型打开"添加资产":
+按 [docs/references/testing-debugging-guide.md](../../references/testing-debugging-guide.md) 运行应用,逐类型打开"添加资产":
 - 单分组类型(串口 / 本地 / 扩展)**无标签条**,单面板;K8s 出 连接 + SSH 隧道 两标签;
 - 其余类型出标签,第一个「连接」填完即可"测试连接"+"保存";
 - Kafka:启用 Schema Registry 但空 URL → `schema_registry` 标签红点 + 底部"前往"可跳;Connect 标签带集群数徽标;

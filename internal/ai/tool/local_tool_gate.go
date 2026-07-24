@@ -30,7 +30,7 @@ type LocalToolConfirmFunc func(ctx context.Context, req LocalToolApprovalRequest
 // LocalToolGate 拦截 coding system 的 local_bash/local_write/local_edit 工具调用
 // （即经 WrapLocalTool 重命名后的本地工具——见 internal/ai/local_tool_wrap.go）。
 //
-// 行为对齐 run_command：local_bash 按 && / || / ; / | 拆出子命令，全部命中已存 pattern
+// 行为对齐远程 exec：local_bash 按 && / || / ; / | 拆出子命令，全部命中已存 pattern
 // （* 通配，path.Match 语义）才放行；否则发起审批。"本次会话允许" 把用户编辑后的
 // pattern 写入会话内存白名单，键为 conversationID。
 type LocalToolGate struct {
@@ -54,8 +54,8 @@ func NewLocalToolGate(confirm LocalToolConfirmFunc) *LocalToolGate {
 // agent.Use(`^local_(bash|write|edit)$`, gate.Middleware()) 挂载。
 //
 // 行为：subjects 缺失或全部命中已存 pattern 时直接 Next 放行；无 confirm 回调
-// 时 AbortWithDeny；用户 deny → AbortWithDeny；allowAll → 写白名单后 Next；
-// 其他（"allow" 或未知）按单次允许处理，不写白名单。
+// 时 AbortWithDeny；用户 deny/无效响应 → AbortWithDeny；allowAll → 写白名单后 Next；
+// 只有精确的 allow 才按单次允许处理。
 func (g *LocalToolGate) Middleware() agent.ToolMiddleware {
 	return func(c *agent.ToolContext) {
 		ctx := c.Context()
@@ -87,18 +87,25 @@ func (g *LocalToolGate) Middleware() agent.ToolMiddleware {
 			DefaultPatterns: defaultPatterns(toolName, subjects),
 		}
 		resp := g.confirm(ctx, req)
+		expected := []permission.ApprovalItem{{Type: toolName, Command: req.Command}}
+		parsed, err := permission.ParseApprovalResponse(permission.ApprovalKindLocalTool, resp, expected)
+		if err != nil {
+			c.AbortWithDeny(fmt.Sprintf("invalid approval response for local tool %s: %v", toolName, err))
+			return
+		}
 
-		switch resp.Decision {
-		case "deny":
+		switch parsed.Decision {
+		case permission.ApprovalDeny:
 			c.AbortWithDeny(fmt.Sprintf("USER DENIED: user rejected local tool %s. Stop the current task.", toolName))
-		case "allowAll":
-			for _, p := range patternsFromResponse(toolName, subjects, resp.EditedItems) {
+		case permission.ApprovalAllowAll:
+			for _, p := range patternsFromResponse(toolName, subjects, parsed.EditedItems) {
 				g.remember(convID, toolName, p)
 			}
 			c.Next()
-		default:
-			// "allow" 或其他都按单次允许处理；不写白名单。
+		case permission.ApprovalAllow:
 			c.Next()
+		default:
+			c.AbortWithDeny(fmt.Sprintf("invalid approval decision for local tool %s", toolName))
 		}
 	}
 }
@@ -153,7 +160,7 @@ func (g *LocalToolGate) allMatch(convID int64, tool string, subjects []string) b
 	return true
 }
 
-// matchLocalPattern：local_bash 用 policy.MatchCommandRule（与 run_command 一致，支持 *），
+// matchLocalPattern：local_bash 用 policy.MatchCommandRule（与远程 exec 一致，支持 *），
 // local_write/local_edit 用 policy.MatchPathRule（POSIX glob，* 不跨 /，与远程 cp 同一套语义）。
 func matchLocalPattern(tool, pattern, subject string) bool {
 	if pattern == "*" || pattern == subject {

@@ -46,12 +46,7 @@ func Execute() int {
 		return 1
 	}
 
-	// Environment variable fallback
-	if *masterKey == "" {
-		if envKey := os.Getenv("OPSKAT_MASTER_KEY"); envKey != "" {
-			*masterKey = envKey
-		}
-	}
+	*dataDir, *masterKey = applyEnvironmentOverrides(*dataDir, *masterKey)
 
 	remaining := os.Args[verbIdx:]
 	if len(remaining) == 0 {
@@ -70,7 +65,7 @@ func Execute() int {
 		fmt.Println(v)
 		return 0
 	}
-	if verb == "help" || verb == "-h" || verb == "--help" {
+	if isCLIUsageHelp(remaining) {
 		printUsage()
 		return 0
 	}
@@ -98,7 +93,7 @@ func Execute() int {
 
 	handlers := buildHandlerMap()
 
-	// 创建 SSH 连接池，供 redis/sql 命令的 SSH 隧道使用
+	// 创建 SSH 连接池，供统一 exec/cp 等命令复用 SSH 隧道使用
 	sshPool := sshpool.NewPool(&helper.AIPoolDialer{}, 5*time.Minute)
 	defer sshPool.Close()
 	ctx = helper.WithSSHPool(ctx, sshPool)
@@ -111,20 +106,18 @@ func Execute() int {
 		return cmdList(ctx, handlers, args)
 	case "get":
 		return cmdGet(ctx, handlers, args)
+	case "help":
+		return cmdHelp(ctx, handlers, args)
 	case "exec":
-		return cmdExec(ctx, args, resolvedSession)
+		return cmdExec(ctx, handlers, args, resolvedSession)
 	case "create":
 		return cmdCreate(ctx, handlers, args, resolvedSession)
 	case "update":
 		return cmdUpdate(ctx, handlers, args, resolvedSession)
+	case "delete":
+		return cmdDelete(ctx, handlers, args, resolvedSession)
 	case "cp":
 		return cmdCp(ctx, handlers, args, resolvedSession)
-	case "sql":
-		return cmdSQL(ctx, handlers, args, resolvedSession)
-	case "redis":
-		return cmdRedisCmd(ctx, handlers, args, resolvedSession)
-	case "mongo":
-		return cmdMongo(ctx, handlers, args, resolvedSession)
 	case "ssh":
 		return cmdSSH(ctx, args)
 	case "batch":
@@ -141,6 +134,36 @@ func Execute() int {
 	}
 }
 
+func applyEnvironmentOverrides(dataDir, masterKey string) (string, string) {
+	if dataDir == "" {
+		dataDir = os.Getenv("OPSKAT_DATA_DIR")
+	}
+	if masterKey == "" {
+		masterKey = os.Getenv("OPSKAT_MASTER_KEY")
+	}
+	return dataDir, masterKey
+}
+
+// isCLIUsageHelp reports whether remaining (the CLI args after global flags) means
+// "print the top-level opsctl usage screen," as opposed to "opsctl help <asset>" —
+// a real verb that needs the database and handler map bootstrapped (cmdHelp,
+// dispatched from the switch below) and must not be swallowed by this early,
+// pre-bootstrap check. Bare "help"/"-h"/"--help" (no asset argument) still means
+// the usage screen.
+func isCLIUsageHelp(remaining []string) bool {
+	if len(remaining) == 0 {
+		return false
+	}
+	switch remaining[0] {
+	case "-h", "--help":
+		return true
+	case "help":
+		return len(remaining) == 1
+	default:
+		return false
+	}
+}
+
 func printUsage() {
 	fmt.Fprint(os.Stderr, `opsctl - CLI for managing opskat remote server assets
 
@@ -150,25 +173,23 @@ Usage:
 Commands:
   list      List resources (assets or groups)
   get       Get detailed information about a resource
+  help      Show CLI usage, or 'opsctl help <asset>' for that asset type's command syntax
   ssh       Open an interactive SSH terminal session
-  exec      Execute a shell command on a remote server via SSH
-  sql       Execute SQL on a database asset (MySQL, PostgreSQL)
-  redis     Execute a Redis command on a Redis asset
-  mongo     Execute a MongoDB operation on a MongoDB asset
-  create    Create a new resource (ssh, database, or redis)
-  update    Update an existing resource
+  exec      Execute a command on any asset (ssh, database, redis, mongodb, etcd, kafka, k8s)
+  create    Create a new resource (asset or group)
+  update    Update an existing resource (asset or group)
+  delete    Delete an asset or group (always asks for desktop confirmation)
   cp        Copy files between local and remote servers (scp-style)
-  batch     Execute multiple commands in parallel (exec/sql/redis)
+  batch     Execute multiple commands in parallel across assets
   grant     Submit a batch grant for approval
   session   Manage approval sessions (start, end, status)
   ext       Manage and execute extension tools (list, exec)
   version   Print version information
-  help      Show this help message
 
 Note:
   Assets can be referenced by numeric ID or by name.
   Use "group/name" to disambiguate when multiple assets share a name.
-  Write operations (exec, cp, create, update) require desktop app approval.
+  Write operations (exec, cp, create, update, delete) require desktop app approval.
 
 Approval & Sessions:
   Write operations require approval from the running desktop app. On first
@@ -192,13 +213,17 @@ Examples:
   opsctl list assets --type ssh --group-id 3      List SSH assets in group 3
   opsctl get asset web-server                     Show details by name
   opsctl get asset 1                              Show details by ID
+  opsctl help web-server                          Show that asset type's command syntax
   opsctl ssh web-server                           Open interactive SSH session
   opsctl ssh production/web-01                    Disambiguate by group/name
   opsctl exec web-server -- uptime                Run command (auto-creates session)
-  opsctl sql prod-db "SELECT * FROM users"        Query a database
-  opsctl redis cache "GET session:abc"            Execute Redis command
-  opsctl mongo prod-mongo -d mydb -c users '{}'  Query a MongoDB collection
+  opsctl exec prod-db -- "SELECT * FROM users"    Query a database
+  opsctl exec cache -- "GET session:abc"          Execute a Redis command
+  opsctl exec cache --type redis -- "GET session:abc"  Assert the asset's type first
   opsctl create asset --type database --driver mysql --name "DB" --host db.local --username app
+  opsctl create group --name "Production"         Create a new group
+  opsctl delete asset old-server                  Delete an asset (asks for confirmation)
+  opsctl delete group 3 --delete-assets           Delete a group and its assets
   opsctl cp ./config.yml web-server:/etc/app/     Upload a file
   opsctl cp 1:/var/log/app.log ./app.log          Download a file
   opsctl --session $ID exec web-01 -- uptime      Use explicit session

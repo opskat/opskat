@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,7 +34,7 @@ type batchInput struct {
 
 type batchCommand struct {
 	Asset   string `json:"asset"`
-	Type    string `json:"type,omitempty"` // "exec"|"sql"|"redis"|"mongo", default "exec"
+	Type    string `json:"type,omitempty"` // Optional canonical asset type or protocol alias.
 	Command string `json:"command"`
 }
 
@@ -55,13 +56,33 @@ type batchOutput struct {
 
 // resolvedBatchCmd is a batch command with resolved asset info.
 type resolvedBatchCmd struct {
-	asset    *asset_entity.Asset
-	cmdType  string // "exec"|"sql"|"redis"|"mongo"
-	command  string
-	decision *aictx.CheckResult // 策略预检结果，用于审计
+	asset   *asset_entity.Asset
+	cmdType string // Optional canonical asset type or protocol alias.
+	command string
+	// checkCommand is the (possibly canonicalized) form used for policy matching and
+	// approval display — see prepareExecCommand's doc comment. Execution always
+	// uses command (raw), never this field.
+	checkCommand string
+	decision     *aictx.CheckResult // 策略预检结果，用于审计
 }
 
-var validBatchTypes = map[string]bool{"exec": true, "sql": true, "redis": true, "mongo": true}
+func isValidBatchType(name string) bool {
+	_, ok := permission.CanonicalExecTypeFor(name)
+	return ok
+}
+
+// batchAssertPrefixType checks the batch item's prefix (cmdType) against the
+// resolved asset's real type. The prefix grammar's meaning has shifted from "select a handler" to
+// "assert a type" — same shift opsctl exec's --type flag went through
+// (permission.AssertAssetType, exec.go).
+//
+// An empty value is the unprefixed form and skips the assertion. Explicit values,
+// including compatibility aliases such as exec/sql/mongo, assert their canonical
+// asset type. Parsing preserves that distinction instead of normalizing both forms
+// to exec.
+func batchAssertPrefixType(asset *asset_entity.Asset, cmdType string) error {
+	return permission.AssertAssetType(asset, cmdType)
+}
 
 func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
@@ -81,26 +102,68 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 		return 1
 	}
 
-	// Step 2: Resolve all assets
+	// Step 2: Resolve all assets and assert the declared type. Either failure is now
+	// terminal for that one item only (results[i] gets an error, ExitCode -1, and is
+	// never touched again) — one bad entry no longer aborts the whole batch; the rest
+	// still runs. resolved[i].asset == nil marks a terminal entry for Step 3 to skip.
 	resolved := make([]resolvedBatchCmd, len(commands))
+	results := make([]batchResult, len(commands))
+	auditCtx := aictx.WithSessionID(ctx, session)
+	auditCtx = aictx.WithAuditSource(auditCtx, "opsctl")
+
 	for i, cmd := range commands {
+		cmdType := cmd.Type
+		resultType := cmdType
+		if resultType == "" {
+			resultType = "exec"
+		}
+		results[i] = batchResult{AssetName: cmd.Asset, Type: resultType, Command: cmd.Command, ExitCode: -1}
+
 		asset, resolveErr := resolveAsset(ctx, cmd.Asset)
 		if resolveErr != nil {
-			fmt.Fprintf(os.Stderr, "Error resolving asset %q: %v\n", cmd.Asset, resolveErr)
-			return 1
+			results[i].Error = fmt.Sprintf("resolve asset: %v", resolveErr)
+			argsJSON := fmt.Sprintf(`{"asset":%q,"command":%q}`, cmd.Asset, truncateStr(cmd.Command, 200))
+			writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, "", resolveErr, nil)
+			continue
 		}
-		cmdType := cmd.Type
-		if cmdType == "" {
-			cmdType = "exec"
+		results[i].AssetID = asset.ID
+		results[i].AssetName = asset.Name
+
+		if assertErr := batchAssertPrefixType(asset, cmdType); assertErr != nil {
+			results[i].Error = assertErr.Error()
+			argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, asset.ID, truncateStr(cmd.Command, 200))
+			writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, "", assertErr, nil)
+			continue
 		}
+
+		// Executor lookup / canonicalize / precheck — the same no-side-effect gate
+		// cmdExec runs (prepareExecCommand), hoisted above Step 3/4 so an asset type with
+		// no executor at all, a malformed command, or an unmet precondition (serial: no
+		// active session) fails here instead of after a desktop approval popup. The
+		// "mongo" prefix used to skip this because its Command field was a JSON-encoded
+		// {"operation":...} blob — that special case is gone (see executeBatchItem's
+		// "sql","redis","mongo" case below): every prefix now carries the same DSL command
+		// string the bare/unprefixed form does, so mongo goes through prepareExecCommand
+		// like everything else.
+		checkCommand, prepErr := prepareExecCommand(ctx, asset, cmd.Command)
+		if prepErr != nil {
+			results[i].Error = prepErr.Error()
+			argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, asset.ID, truncateStr(cmd.Command, 200))
+			writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, "", prepErr, nil)
+			continue
+		}
+
 		resolved[i] = resolvedBatchCmd{
-			asset:   asset,
-			cmdType: cmdType,
-			command: cmd.Command,
+			asset:        asset,
+			cmdType:      cmdType,
+			command:      cmd.Command,
+			checkCommand: checkCommand,
 		}
 	}
 
-	// Step 3: Policy pre-check — split into auto-allow / auto-deny / need-confirm
+	// Step 3: Policy pre-check — split into auto-allow / auto-deny / need-confirm.
+	// Entries that failed Step 2 (resolved[i].asset == nil) are already terminal —
+	// results[i] carries their error — and never enter a bucket.
 	type permBucket struct {
 		idx    int
 		result aictx.CheckResult
@@ -108,8 +171,14 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 	var autoAllow, autoDeny, needConfirm []permBucket
 
 	for i, cmd := range resolved {
+		if cmd.asset == nil {
+			continue
+		}
 		permCtx := aictx.WithSessionID(ctx, session)
-		pr := permission.CheckPermission(permCtx, cmd.cmdType, cmd.asset.ID, cmd.command)
+		// checkCommand, not command: policy matching must see whatever canonicalize
+		// produced (kafka's deny rules are keyed on its two-token canonical shape), same
+		// as cmdExec — see prepareExecCommand's doc comment.
+		pr := permission.CheckPermission(permCtx, cmd.asset.Type, cmd.asset.ID, cmd.checkCommand)
 		prCopy := pr
 		resolved[i].decision = &prCopy
 		bucket := permBucket{idx: i, result: pr}
@@ -123,27 +192,12 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 		}
 	}
 
-	// Build results array
-	results := make([]batchResult, len(resolved))
-	for i, cmd := range resolved {
-		results[i] = batchResult{
-			AssetID:   cmd.asset.ID,
-			AssetName: cmd.asset.Name,
-			Type:      cmd.cmdType,
-			Command:   cmd.command,
-			ExitCode:  -1, // default: not executed
-		}
-	}
-
-	auditCtx := aictx.WithSessionID(ctx, session)
-	auditCtx = aictx.WithAuditSource(auditCtx, "opsctl")
-
 	// Fill in denied results + write audit for each denied command
 	for _, b := range autoDeny {
 		cmd := resolved[b.idx]
 		results[b.idx].Error = fmt.Sprintf("denied by policy: %s", b.result.Message)
 		argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, cmd.asset.ID, truncateStr(cmd.command, 200))
-		writeOpsctlAudit(auditCtx, batchAuditTool(cmd.cmdType), argsJSON, "", fmt.Errorf("denied by policy: %s", b.result.Message), cmd.decision)
+		writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, "", fmt.Errorf("denied by policy: %s", b.result.Message), cmd.decision)
 	}
 
 	// Determine which commands to execute
@@ -158,10 +212,10 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 		for _, b := range needConfirm {
 			cmd := resolved[b.idx]
 			batchItems = append(batchItems, approval.BatchItem{
-				Type:      cmd.cmdType,
+				Type:      permission.ApprovalTypeFor(cmd.asset.Type),
 				AssetID:   cmd.asset.ID,
 				AssetName: cmd.asset.Name,
-				Command:   cmd.command,
+				Command:   cmd.checkCommand,
 			})
 		}
 
@@ -173,7 +227,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 				results[b.idx].Error = fmt.Sprintf("approval failed: %v", approvalErr)
 				argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, cmd.asset.ID, truncateStr(cmd.command, 200))
 				decision := &aictx.CheckResult{Decision: aictx.Deny, DecisionSource: approvalResult.DecisionSource}
-				writeOpsctlAudit(auditCtx, batchAuditTool(cmd.cmdType), argsJSON, "", approvalErr, decision)
+				writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, "", approvalErr, decision)
 			}
 		} else {
 			session = approvalResult.SessionID
@@ -235,49 +289,26 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 
 // executeBatchItem runs a single command and returns the result.
 func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, cmd resolvedBatchCmd) batchResult {
+	resultType := cmd.cmdType
+	if resultType == "" {
+		resultType = "exec"
+	}
 	result := batchResult{
 		AssetID:   cmd.asset.ID,
 		AssetName: cmd.asset.Name,
-		Type:      cmd.cmdType,
+		Type:      resultType,
 		Command:   cmd.command,
 	}
 
-	switch cmd.cmdType {
-	case "exec":
+	// cmdType is assertion metadata only. Dispatch always follows the resolved
+	// asset's real type, for canonical names, aliases, and the unprefixed form.
+	if cmd.asset.IsSSH() {
 		result = executeBatchExec(ctx, cmd)
-	case "sql":
-		result = executeBatchHandler(ctx, handlers, "exec_sql", cmd, map[string]any{
-			"asset_id": float64(cmd.asset.ID),
-			"sql":      cmd.command,
+	} else {
+		result = executeBatchHandler(ctx, handlers, batchAuditTool, cmd, map[string]any{
+			"asset":   strconv.FormatInt(cmd.asset.ID, 10),
+			"command": cmd.command,
 		})
-	case "redis":
-		result = executeBatchHandler(ctx, handlers, "exec_redis", cmd, map[string]any{
-			"asset_id": float64(cmd.asset.ID),
-			"command":  cmd.command,
-		})
-	case "mongo":
-		// Parse command as JSON: {"operation":"find","database":"db","collection":"col","query":"{}"}
-		var mongoArgs struct {
-			Operation  string `json:"operation"`
-			Database   string `json:"database"`
-			Collection string `json:"collection"`
-			Query      string `json:"query"`
-		}
-		if err := json.Unmarshal([]byte(cmd.command), &mongoArgs); err != nil {
-			result.Error = fmt.Sprintf("invalid mongo args JSON: %v", err)
-			result.ExitCode = -1
-			return result
-		}
-		result = executeBatchHandler(ctx, handlers, "exec_mongo", cmd, map[string]any{
-			"asset_id":   float64(cmd.asset.ID),
-			"operation":  mongoArgs.Operation,
-			"database":   mongoArgs.Database,
-			"collection": mongoArgs.Collection,
-			"query":      mongoArgs.Query,
-		})
-	default:
-		result.Error = fmt.Sprintf("unsupported type: %s", cmd.cmdType)
-		result.ExitCode = -1
 	}
 
 	// Write audit log with decision from policy pre-check
@@ -286,7 +317,7 @@ func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerF
 	if result.Error != "" {
 		execErr = fmt.Errorf("%s", result.Error)
 	}
-	writeOpsctlAudit(ctx, batchAuditTool(cmd.cmdType), argsJSON, result.Stdout, execErr, cmd.decision)
+	writeOpsctlAudit(ctx, batchAuditTool, argsJSON, result.Stdout, execErr, cmd.decision)
 
 	return result
 }
@@ -343,6 +374,11 @@ func executeBatchHandler(ctx context.Context, handlers map[string]tool.ToolHandl
 	}
 
 	ctx = aictx.WithAuditSource(ctx, "opsctl")
+	// batch 不走 callHandler，得自己声明"已预检"：上面 Step 3 已经对每条命令跑过
+	// permission.CheckPermission，need-confirm 的还聚合成一次桌面审批。handler 内部的
+	// 权限检查是 fail-closed 的（permission.RequireCheckerOrPreapproved），而 opsctl 的
+	// context 里没有 PolicyChecker——不声明的话这里会直接报 checker not available。
+	ctx = permission.WithPreapproved(ctx)
 	handler, ok := handlers[toolName]
 	if !ok {
 		result.Error = fmt.Sprintf("unknown tool: %s", toolName)
@@ -432,13 +468,10 @@ func parseBatchInput(args []string) ([]batchCommand, error) {
 				if err := json.Unmarshal(data, &input); err != nil {
 					return nil, fmt.Errorf("parse JSON input: %w", err)
 				}
-				// Validate types
+				// Validate explicit type assertions. Empty means no assertion.
 				for i := range input.Commands {
-					if input.Commands[i].Type == "" {
-						input.Commands[i].Type = "exec"
-					}
-					if !validBatchTypes[input.Commands[i].Type] {
-						return nil, fmt.Errorf("invalid type %q for command %d (must be exec/sql/redis/mongo)", input.Commands[i].Type, i)
+					if input.Commands[i].Type != "" && !isValidBatchType(input.Commands[i].Type) {
+						return nil, fmt.Errorf("invalid type %q for command %d", input.Commands[i].Type, i)
 					}
 				}
 				return input.Commands, nil
@@ -474,7 +507,7 @@ func parseBatchArg(arg string) (batchCommand, error) {
 	rest := arg[idx+1:]
 
 	// Check if first part is a known type
-	if validBatchTypes[first] {
+	if isValidBatchType(first) {
 		// 'type:asset:command' — split rest on first ':'
 		idx2 := strings.IndexByte(rest, ':')
 		if idx2 < 0 {
@@ -487,9 +520,8 @@ func parseBatchArg(arg string) (batchCommand, error) {
 		}, nil
 	}
 
-	// 'asset:command' — default type exec
+	// 'asset:command' — no type assertion
 	return batchCommand{
-		Type:    "exec",
 		Asset:   first,
 		Command: rest,
 	}, nil
@@ -499,40 +531,41 @@ func newSessionID() string {
 	return fmt.Sprintf("batch_%d", time.Now().UnixNano())
 }
 
-// batchAuditTool maps batch command type to audit tool name.
-func batchAuditTool(cmdType string) string {
-	switch cmdType {
-	case "sql":
-		return "exec_sql"
-	case "redis":
-		return "exec_redis"
-	case "mongo":
-		return "exec_mongo"
-	default:
-		return "exec"
-	}
-}
+// batchAuditTool is the tool name every batch item is dispatched to and audited under.
+// It used to be a cmdType→name map (exec / exec_sql / exec_redis / exec_mongo); those
+// per-type tools are gone and the unified exec tool dispatches on the asset's real type,
+// so there is exactly one name left. The item's own `type` field survives only in the
+// JSON output and as an optional type assertion (batchAssertPrefixType above) — the
+// policy pre-check (Step 3 in cmdBatch) always keys off the resolved asset's real type
+// (cmd.asset.Type), never this field, so nothing is lost by collapsing this.
+const batchAuditTool = "exec"
 
 func printBatchUsage() {
 	fmt.Fprint(os.Stderr, `Usage:
   opsctl [--session <id>] batch [args...]
 
 Executes multiple commands in parallel with a single approval request.
-Supports exec (SSH), sql, redis, and mongo command types.
+Dispatches every item by its asset's real type (database, redis, mongodb,
+etcd, kafka, k8s, ...) — not just ssh. The optional type prefix accepts canonical
+asset types (ssh, database, redis, mongodb, etcd, kafka, k8s, serial) and the
+compatibility aliases exec/sql/mongo. It is an assertion, not a dispatch selector:
+it fails that one item fast if the asset isn't actually that type. A bare 'asset:command' entry
+(no prefix) makes no assertion and runs against any asset type.
 
 Input Modes:
   Stdin JSON (AI-friendly):
     echo '{"commands":[
-      {"asset":"web-01","type":"exec","command":"uptime"},
-      {"asset":"db-01","type":"sql","command":"SELECT 1"},
+      {"asset":"web-01","type":"ssh","command":"uptime"},
+      {"asset":"db-01","type":"database","command":"SELECT 1"},
       {"asset":"cache","type":"redis","command":"PING"}
     ]}' | opsctl batch
 
   Positional Args:
     opsctl batch 'web-01:uptime' 'db-01:hostname'
-    opsctl batch 'sql:db-01:SELECT 1' 'redis:cache:PING' 'web-01:uptime'
+    opsctl batch 'database:db-01:SELECT 1' 'redis:cache:PING' 'ssh:web-01:uptime'
 
-    Format: 'asset:command' (default exec) or 'type:asset:command'
+    Format: 'asset:command' (no assertion) or 'type:asset:command'. When known,
+    use the canonical asset type. Compatibility aliases exec/sql/mongo are accepted.
 
 Output:
   JSON with per-command results:

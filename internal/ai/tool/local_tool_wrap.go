@@ -22,10 +22,9 @@ var localRenames = map[string]string{
 }
 
 // localWarning 前置到被重命名工具的 Description 前面，提醒 LLM 这些是本机工具，
-// 远程操作必须改用 run_command / exec_sql / exec_redis 等。
+// 远程操作必须改用统一的 exec。
 const localWarning = "LOCAL MACHINE ONLY — do not use for actions on " +
-	"remote SSH/DB/Redis/Mongo/K8s assets. For remote work use " +
-	"run_command / exec_sql / exec_redis / exec_mongo / exec_k8s. "
+	"remote SSH/DB/Redis/Mongo/K8s assets. For remote work use exec. "
 
 // WrapLocalTool 实现 cago coding.WithToolDecorator 的 decorator 签名。
 // 命中 localRenames 的工具返回带新名字 + 警示描述的浅拷贝；其它工具原样返回。

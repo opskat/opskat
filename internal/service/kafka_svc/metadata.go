@@ -3,6 +3,7 @@ package kafka_svc
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -390,6 +391,19 @@ func aclOperationsToStrings(ops []kadm.ACLOperation) []string {
 	return out
 }
 
+// normalizePage 归一化分页参数。
+//
+// page 有上界，而且这个上界不是"防御性代码"：两个调用点都用
+// `start := (page - 1) * pageSize` 算切片下标（本文件的 ListTopics 与
+// acl_admin.go 的 listACLsResponse），page 大到让这个乘法溢出 int 时结果是**负数**，
+// 随后的 `if start > total` 拦不住负数，`summaries[start:end]` 直接 panic：
+// 实测 normalizePage(200000000000000000, 50) → listACLsResponse →
+// "slice bounds out of range [:-8446744073709551616]"。
+// internal/ai 里没有 recover()，这样一个 panic 会带走整个桌面进程。
+//
+// 钳到 (MaxInt/pageSize)+1 之后，最大的 start 仍在 int 范围内、且必然 >= total，
+// 于是落到既有的 `start > total → start = total` 分支，返回一页空数据——
+// 这正是"页码超出末页"本来就该有的行为。
 func normalizePage(page, pageSize int) (int, int) {
 	if page <= 0 {
 		page = 1
@@ -399,6 +413,9 @@ func normalizePage(page, pageSize int) (int, int) {
 	}
 	if pageSize > 500 {
 		pageSize = 500
+	}
+	if maxPage := math.MaxInt/pageSize + 1; page > maxPage {
+		page = maxPage
 	}
 	return page, pageSize
 }

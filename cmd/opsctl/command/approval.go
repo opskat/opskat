@@ -45,7 +45,7 @@ func requireApproval(ctx context.Context, req approval.ApprovalRequest) (Approva
 		req.SessionID = id
 	}
 
-	// Stage 2: 统一权限检查（策略 + DB Grant）— 与 AI run_command 共用 CheckPermission
+	// Stage 2: 统一权限检查（策略 + DB Grant）— 与 AI 的 exec 工具共用 CheckPermission
 	var permResult aictx.CheckResult
 	var policyHints []string
 	if req.AssetID > 0 && req.Command != "" {

@@ -31,7 +31,7 @@ Contributor docs describe a living codebase, so two classes of problem recur:
 | [`./references/e2e-harness-guide.md`](./references/e2e-harness-guide.md) | GUI end-to-end harness (Playwright × the real Wails app): the committed core-flow suite (`make test-e2e`) + ad-hoc functional verification (gitignored `e2e/scratch/`, `make test-e2e-scratch`), isolation guarantees, and harness-engineering gotchas. Owns everything GUI-e2e; `testing-debugging-guide.md` only points here. |
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) / [`./CONTRIBUTING_ZH.md`](./CONTRIBUTING_ZH.md) | Contributor guide (EN / ZH mirror — keep them in sync): contribution channels, setup, the fork → branch → PR flow, commit / CI expectations. Summarizes and links into `DEVELOP.md` / `AGENTS.md` — owned facts stay there, not here. |
 | [`./DOC-MAINTENANCE.md`](./DOC-MAINTENANCE.md) | This guide: doc-set organization rules + fact-check / anti-drift discipline. |
-| `./superpowers/{plans,specs}/` | Date-named design / plan **archives**. A snapshot of one piece of work at the time, **not** current truth — don't backfill "current state" from here. |
+| [`./superpowers/README.md`](./superpowers/README.md) | Entry point for the date-named design / plan **archives** under `superpowers/{plans,specs}/`. Each file is a snapshot of one piece of work at the time, **not** current truth — don't backfill "current state" from it. |
 
 opskat has **no separate docs index page**; `AGENTS.md` is the entry point (`CLAUDE.md → @AGENTS.md → docs/DEVELOP.md → the rest`). **Topology rule:** entry docs (`AGENTS.md`, `DEVELOP.md`, `ARCHITECTURE.md`, `DESIGN.md`, `VERIFICATION.md`, this guide) stay thin and always-read; heavy, load-on-demand detail lives under [`docs/references/`](./references/) and is only linked from the entry docs — a new deep-dive doc goes there, not at the docs top level.
 
@@ -53,7 +53,7 @@ Verify each one against the code. Common claim types in opskat and how to check 
 | Backend layer / subsystem directory exists | `git ls-tree --name-only -d HEAD internal/` (then `git ls-files internal/<name>/` to confirm a subsystem, e.g. `sshpool` / `connpool` / `approval`) |
 | **Asset-type list** (N adapters) | `git grep -hn "Register(&" -- internal/assettype/*.go \| grep -v _test` — enumerate the registered handlers (including interactive-only types such as RDP and OSS), **don't hardcode a number**. Registration-based extension, no `switch assetType` |
 | A file / package path exists **by exact name** | `git ls-files 'internal/ai/policy/*_policy.go'` — renamed / moved files are the **#1 drift source** (the `command_policy.go` trap above) |
-| AI dispatches extensions via a **single `exec_tool`** | `git grep -n "tool_handler_ext" -- internal/ai` (one `exec_tool` dispatcher, not one AI tool per extension) |
+| AI dispatches extensions via a **single `ext_exec`** | `git grep -n "tool_handler_ext" -- internal/ai` (one `ext_exec` dispatcher, not one AI tool per extension) |
 | Migration directory / count | `git ls-files 'migrations/*.go' \| grep -v _test \| wc -l` (enumerate; new migrations are **appended**, old files unchanged) |
 | Frontend stores (one per domain) | `git ls-files 'frontend/src/stores/*.ts' \| grep -v '\.test\.'` |
 | Locales (which / namespace) | `git ls-files 'frontend/src/i18n/locales/*/common.json'` — two, `zh-CN` / `en`; the i18next namespace is `common` |

@@ -106,9 +106,13 @@ context menu, each verified in the tree **and** on disk), `redis-connect` (creat
 *Redis* asset, drive its **Test Connection** against an in-harness mock Redis so the app
 actually dials and `PING`s, then persist), and `ssh-connect` (create an *SSH* asset and drive
 **Test Connection** against an in-harness mock SSH server — the app completes a real SSH
-handshake — then persist). After Playwright exits, `run-e2e.mjs` reaps the
-orphan `vite` and removes the temp dir (see §7). webServer output →
-`<tmpdir>/opskat-e2e-webserver.log`.
+handshake — then persist), plus the **AI exec** specs — `ai-exec` (the unified `exec` tool:
+approval dialog → real execution → audit row), `ai-exec-crud` (asset CRUD through AI tools),
+`ai-exec-gate` (nothing unexecutable reaches the approval dialog), and `ai-exec-policy`
+(policy allow / deny and grant persistence), all driven by a **scripted model** (§4.1).
+After Playwright exits, `run-e2e.mjs` reaps the orphan `vite` and removes the temp data dir
+(see §7). It also removes `<tmpdir>/opskat-e2e-webserver.log` after a successful run but
+preserves that log after a failure.
 
 The mock Redis (`e2e/fixtures/redis-mock.mjs`, pure Node, no deps) is started as a **second
 Playwright `webServer`** on a dedicated port (`34216` is the app; `34217` the mock); the spec
@@ -119,7 +123,44 @@ everything else → `+OK` — which is why no real Redis is needed. This is the 
 `webServer` (TCP `port` readiness) and point the asset at `127.0.0.1:<port>`. `ssh-connect`
 uses the same shape with a Go mock — `e2e/fixtures/ssh-mock/main.go`, a tiny `x/crypto/ssh`
 server (`NoClientAuth`, so the connect "none" probe succeeds; random host key auto-trusted on
-first connect) on `34218`, `go run` as a third `webServer`.
+first connect) on `34218`, `go run` as a third `webServer`. That SSH mock also **echoes back
+any command it is asked to `exec`** (`mock-exec-ran: <command>`), which is what lets the AI
+specs compare the string the *server* received against the one the approval dialog showed.
+
+### 4.1 Driving the AI stack with a scripted model
+
+The AI specs run the **real** AI stack — `internal/ai/runner` → cago provider/openai →
+`sashabaranov/go-openai` — against `e2e/fixtures/openai-mock.mjs` (pure Node) on `34219`,
+a fourth `webServer`. It speaks just enough OpenAI: SSE `/v1/chat/completions` plus a
+control API, so a **spec** decides what the "model" does — the mock hard-codes nothing:
+
+```ts
+await scriptModel([                                        // fixtures/ai.ts
+  { tool: { name: "help", args: { asset } } },             // one tool call per model round
+  { tool: { name: "exec", args: { asset, command: "uptime" } } },
+  { text: "done" },                                        // …then a plain reply ends the turn
+]);
+await openNewChat(page);                                   // fresh conversation ⇒ fresh doc gate
+await sendChat(page, `run uptime on ${asset}`);
+```
+
+`mockRequests()` / `toolResultsSeenByModel()` read back what the app *sent* the model, which
+is how a spec asserts "the model was told the user denied it".
+
+The provider row itself is created through the **real** `CreateAIProvider` /
+`SetActiveAIProvider` bindings (`ensureAIProvider`), not seeded as SQL: `api_key` is
+encrypted at rest by `credential_svc`, so a plaintext INSERT would fail to decrypt on
+activate. Assets, by contrast, are seeded directly (§8) — SSH against the `NoClientAuth`
+mock and Redis with no password need no credential row.
+
+Two behaviors bite when writing these specs, both by design in the backend:
+
+- **`exec` is doc-gated.** The first `exec` against a given asset *type* in a conversation
+  is refused with guidance text until the model has called `help(asset)` in that same
+  conversation — so a script that jumps straight to `exec` is testing the gate, not exec.
+- **Types have default policies.** SSH/etcd/Redis assets with no `command_policy` inherit
+  built-in read-only allow lists, so a *read* command is auto-allowed with no dialog. Use a
+  write command (`SET …`, `put …`) when the spec needs the approval prompt.
 
 **In CI:** the committed suite runs on every PR / push as the `Wails E2E` job (`ubuntu-22.04`)
 in `.github/workflows/ci.yml` — it installs `xvfb` + GTK/WebKit, then runs `xvfb-run -a make
@@ -137,8 +178,12 @@ Only when the flow is genuinely core (§1). Conventions:
   `asset-type-picker` / `asset-type-option-<type>`, `redis-host-input` / `redis-port-input`,
   `asset-test-connection`, the asset right-click items `asset-context-edit` /
   `asset-context-delete`, and the delete confirm button `confirm-delete-asset` (a
-  `confirmTestId` prop threaded through the shared `ConfirmDialog`). Reuse these; add new ones
-  in the same style.
+  `confirmTestId` prop threaded through the shared `ConfirmDialog`). AI side: `ai-new-chat`,
+  `ai-chat-input`, `ai-send-button` / `ai-stop-button`, `ai-tool-block` (+ `data-tool-name` /
+  `data-status`) and `ai-tool-output`, and the approval block `ai-approval-block`
+  (+ `data-approval-kind`) with `ai-approval-command` / `ai-approval-deny` /
+  `ai-approval-remember` / `ai-approval-allow-all` / `ai-approval-allow`. Reuse these; add new
+  ones in the same style.
 - **No `sleep`.** Use Playwright's auto-waiting assertions (`await expect(locator).toBeVisible()`,
   `.toBeHidden()`, `expect.poll(...)`). Sleeps are the #1 source of flake.
 - **Verify side effects independently.** Asserting the UI updated is necessary but not
@@ -186,13 +231,13 @@ rule: drive the real app, then read observable side-effects (UI, DB, logs).
    ```
    `playwright.scratch.config.ts` reuses the exact same webServer / env / isolation as the
    committed suite — only `testDir` points at `./scratch`.
-3. **Observe.** Read the spec's assertions, then corroborate with the other surfaces:
-   - DB — query the temp `opskat.db` with `findX` helpers (or add one), or open it read-only
-     at `$OPSKAT_DATA_DIR/opskat.db`.
-   - logs — the app's structured log is under `<tmp>/opskat-e2e-data/logs/`; the webServer's
-     stdout/stderr is at `<tmpdir>/opskat-e2e-webserver.log`. (Log/DB reading: see
-     [testing-debugging-guide.md](./testing-debugging-guide.md).)
-   - on failure, Playwright keeps a trace/screenshot under `e2e/test-results/`.
+3. **Observe in the spec.** Assert UI state and query the temp `opskat.db` through the
+   `findX` helpers while the harness is running; add a read-only helper when needed. The
+   runner deletes the temp data directory when Playwright exits, so DB / app-log evidence
+   must be captured by the spec rather than inspected afterward. On failure, inspect the
+   preserved `<tmpdir>/opskat-e2e-webserver.log` and Playwright trace/screenshots under
+   `e2e/test-results/`. (Log/DB reading mechanics: see
+   [testing-debugging-guide.md](./testing-debugging-guide.md).)
 4. **Discard.** The scratch file is gitignored — delete it (or leave it; it's never
    committed). If the flow turns out to be core and worth guarding forever, *promote* it: move
    it into `e2e/tests/`, harden it, and commit (§5).
@@ -339,11 +384,13 @@ These bit us while building the harness; keep them in mind when changing it.
 | Path | Role | Committed? |
 |---|---|---|
 | `e2e/run-e2e.mjs` | cross-platform runner: spawns `playwright test`, then reaps orphan `vite` + removes temp dir after it exits | yes |
-| `e2e/playwright.config.ts` | base harness: temp dir + env + `frontend/dist` prep, optional repo-root `.env` load (§6), three `webServer`s (mock Redis on `34217`, mock SSH on `34218`, + `wails dev -devserver 34216`) | yes |
+| `e2e/playwright.config.ts` | base harness: temp dir + env + `frontend/dist` prep, optional repo-root `.env` load (§6), four `webServer`s (mock Redis on `34217`, mock SSH on `34218`, mock OpenAI on `34219`, + `wails dev -devserver 34216`) | yes |
 | `e2e/playwright.scratch.config.ts` | extends base, `testDir: ./scratch` for throwaway specs | yes |
-| `e2e/fixtures/db.ts` | read-only `node:sqlite` DB oracle (`findAssetByName`, …) | yes |
+| `e2e/fixtures/db.ts` | read-only `node:sqlite` DB oracle (`findAssetByName`, `findAuditLogs`, `findApprovedGrantItems`, …) | yes |
+| `e2e/fixtures/ai.ts` | AI-spec plumbing: model scripting, provider setup via the real bindings, asset seeding, chat gestures, `execOutcome` (§4.1) | yes |
 | `e2e/fixtures/redis-mock.mjs` | minimal pure-Node RESP mock (HELLO→`-ERR` / PING→`+PONG`), started as a 2nd webServer for the `redis-connect` spec | yes |
-| `e2e/fixtures/ssh-mock/main.go` | minimal Go `x/crypto/ssh` server (`NoClientAuth`), `go run` as a webServer for the `ssh-connect` spec | yes |
+| `e2e/fixtures/ssh-mock/main.go` | minimal Go `x/crypto/ssh` server (`NoClientAuth`) that echoes `exec`'d commands, `go run` as a webServer | yes |
+| `e2e/fixtures/openai-mock.mjs` | scripted OpenAI-compatible chat-completions server (SSE + `/__mock/*` control API) on `34219` (§4.1) | yes |
 | `e2e/tests/*.spec.ts` | committed **core-flow** specs | yes |
 | `e2e/scratch/*.spec.ts` | throwaway functional-verification specs | **no (gitignored)** |
 | `e2e/scratch/README.md` | scratch convention + starter template | yes |

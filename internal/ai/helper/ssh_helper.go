@@ -11,11 +11,87 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
+
+// --- SSH 客户端缓存（同一次 AI Send 内复用连接）---
+//
+// 原实现位于 internal/ai/tool，因 execimpl 不能依赖 tool（tool 反过来要 blank-import
+// execimpl 触发注册，避免循环依赖）而移入 helper。tool 包保留同名导出符号作为薄别名，
+// 外部调用方（如 internal/app/ai）不受影响。
+
+type sshCacheKeyType struct{}
+
+// SSHClientCache 在同一次 AI Send 中复用 SSH 连接。
+type SSHClientCache = ConnCache[*ssh.Client]
+
+// NewSSHClientCache 创建 SSH 客户端缓存。
+func NewSSHClientCache() *SSHClientCache {
+	return NewConnCache[*ssh.Client]("SSH")
+}
+
+// WithSSHCache 将 SSH 缓存注入 context。
+func WithSSHCache(ctx context.Context, cache *SSHClientCache) context.Context {
+	return context.WithValue(ctx, sshCacheKeyType{}, cache)
+}
+
+func getSSHCache(ctx context.Context) *SSHClientCache {
+	if cache, ok := ctx.Value(sshCacheKeyType{}).(*SSHClientCache); ok {
+		return cache
+	}
+	return nil
+}
+
+// ExecCommandOnAsset 是不含权限检查的纯执行入口：权限检查由调用方（统一 exec 工具的
+// handleExec、batch_exec 的预检）在调用之前完成。scope 对 SSH 无意义，忽略。
+func ExecCommandOnAsset(ctx context.Context, asset *asset_entity.Asset, command, _ string) (string, error) {
+	// 如果 context 注入了 SSH 缓存，复用同一资产的连接
+	if cache := getSSHCache(ctx); cache != nil {
+		return runCommandWithCache(ctx, cache, asset.ID, command)
+	}
+	// 无缓存，创建一次性连接
+	return ExecuteSSHCommand(ctx, asset.ID, command)
+}
+
+func runCommandWithCache(ctx context.Context, cache *SSHClientCache, assetID int64, command string) (string, error) {
+	dial := func() (*ssh.Client, io.Closer, error) {
+		client, extras, err := credential_resolver.Default().DialAssetSSH(ctx, assetID)
+		if err != nil {
+			return nil, nil, err
+		}
+		return client, ClosersAsOne(extras), nil
+	}
+
+	client, _, err := cache.GetOrDial(assetID, dial)
+	if err != nil {
+		return "", err
+	}
+	output, err := RunSSHCommand(ctx, client, command)
+	if err != nil {
+		// 当前会话已经取消时，RunSSHCommand 已主动关闭 client 以打断阻塞；
+		// 这里只需把条目从缓存中摘除（避免下次复用半失效连接），不能再次 Close。
+		if ctx.Err() != nil {
+			cache.Forget(assetID)
+			return "", ctx.Err()
+		}
+		// 非取消错误优先按连接失效处理，删除缓存后只重试一次，避免重复执行
+		cache.Remove(assetID)
+		client, _, err = cache.GetOrDial(assetID, dial)
+		if err != nil {
+			return "", err
+		}
+		output, err = RunSSHCommand(ctx, client, command)
+		if err != nil {
+			cache.Remove(assetID)
+			return "", err
+		}
+	}
+	return output, nil
+}
 
 // IsExpectedCloseErr 判断 SSH/网络连接关闭时的预期错误。
 // 取消路径会主动 Close session/client 打断阻塞，随后的 defer 关闭就会返回这些错误；

@@ -1,0 +1,89 @@
+// Package assetref 把 LLM 传入的资产标识（数字 id 或名称）解析为资产实体。
+// exec / help / batch_exec 共用它，避免各自实现一遍 name→id 查询。
+package assetref
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/service/asset_svc"
+	"gorm.io/gorm"
+)
+
+// ErrNotFound 在 ref 既不匹配任何资产 id 也不匹配任何资产名时返回，用 %w 包在
+// Resolve 的错误里。调用方用 errors.Is 区分这一种失败（ref 可能不是一个资产引用，
+// 而是别的东西——例如 help 允许把 ref 当资产类型名再试一次）与 ErrAmbiguous /
+// 缺参这两种"ref 确实是想引用一个资产，只是解析不出来"的失败——后两种不该触发
+// 那样的回落。
+var ErrNotFound = errors.New("asset not found")
+
+// ErrAmbiguous 在同名资产多于一个时返回。名称不是唯一键，静默取第一个会让模型
+// 对着错误的机器执行命令，因此这里必须报错并要求改用数字 id。
+type ErrAmbiguous struct {
+	Ref string
+	IDs []int64
+}
+
+func (e *ErrAmbiguous) Error() string {
+	parts := make([]string, 0, len(e.IDs))
+	for _, id := range e.IDs {
+		parts = append(parts, strconv.FormatInt(id, 10))
+	}
+	return fmt.Sprintf(
+		"asset reference %q is ambiguous, it matches ids [%s]; use the numeric id instead",
+		e.Ref, strings.Join(parts, ", "))
+}
+
+// Resolve 解析资产标识。纯数字既按 id 查，也按名称查——资产名称允许纯数字
+// （Validate 只拒绝空名称，name 列也没有唯一索引），如果两者命中不同的资产，
+// 说明引用有歧义，必须报错而不是默默选一个，否则可能对着错误的机器执行命令。
+func Resolve(ctx context.Context, ref string) (*asset_entity.Asset, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil, fmt.Errorf("missing required parameter: asset")
+	}
+
+	nameMatches, err := asset_svc.Asset().FindByName(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	// 按 id 去重合并候选：同一个资产既匹配 id 又匹配名称时不算歧义。
+	candidates := make(map[int64]*asset_entity.Asset, len(nameMatches)+1)
+	order := make([]int64, 0, len(nameMatches)+1)
+	add := func(a *asset_entity.Asset) {
+		if _, exists := candidates[a.ID]; !exists {
+			order = append(order, a.ID)
+		}
+		candidates[a.ID] = a
+	}
+
+	if id, err := strconv.ParseInt(ref, 10, 64); err == nil {
+		idAsset, gerr := asset_svc.Asset().Get(ctx, id)
+		switch {
+		case gerr == nil:
+			add(idAsset)
+		case !errors.Is(gerr, gorm.ErrRecordNotFound):
+			// 没有 id=ref 的资产是常态（纯数字 ref 往往只是个名称候选），忽略；但真实
+			// DB 错误必须上抛——否则会被后面的 case 0 当成"资产不存在"，把一次 DB 故障
+			// 悄悄伪装成 ErrNotFound（与上面 FindByName 的错误处理对称）。
+			return nil, gerr
+		}
+	}
+	for _, a := range nameMatches {
+		add(a)
+	}
+
+	switch len(order) {
+	case 0:
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, ref)
+	case 1:
+		return candidates[order[0]], nil
+	default:
+		return nil, &ErrAmbiguous{Ref: ref, IDs: order}
+	}
+}

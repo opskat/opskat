@@ -945,6 +945,16 @@ func (m *Manager) Disconnect(id string) {
 	}
 }
 
+// CloseAsset 断开指定资产的全部会话，返回被断开的会话 ID。
+// 资产被删除时由 assetconn 广播过来，调用方据此清理挂在这些会话上的资源（如 SFTP 客户端）。
+func (m *Manager) CloseAsset(assetID int64) []string {
+	ids := m.ListActiveSessionIDsByAsset(assetID)
+	for _, id := range ids {
+		m.Disconnect(id)
+	}
+	return ids
+}
+
 // DisconnectAll 断开所有会话
 func (m *Manager) DisconnectAll() {
 	m.sessions.Range(func(key, value any) bool {

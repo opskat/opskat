@@ -25,7 +25,8 @@ Not every new type touches every item below. A minimal type such as `local` has 
 
 | Area | Registration-driven | Shared-code edit still required |
 | --- | --- | --- |
-| AI add/update/get/list safe-view handlers | Yes, via `assettype.Get(type)` | Update the AI tool schema/descriptions when the model-facing args change |
+| AI `put_asset` / get / list safe-view handlers | Yes, via `assettype.Get(type)` | Add the type's config contract to its `SKILL.md`; `put_asset.config` deliberately has no per-type union schema |
+| AI / CLI command execution | Yes, via the executor registry | Add `SKILL.md` plus `RegisterExecutor`; doc-only types use `RegisterHelpDoc` |
 | Connection test button | Yes, once a binder calls `conntest.Register` from `New()` | None in `System.TestAssetConnection` |
 | Policy test / built-in policy groups when reusing an existing kind | Yes, via `PolicyKind()` returning that kind | None |
 | Type selector, filters, grouping, labels, detail-card choice, config-section rendering, connect action dispatch, new-tab visibility, file-manager menu visibility, and Test button visibility | Yes, derived from the frontend asset-type registry | File-manager opening still has an `ssh` guard in `App.tsx`; see section 7 |
@@ -43,7 +44,7 @@ Several asset-type features are shared capabilities rather than type-local inven
 
 | Capability | Backend owner | Frontend owner | Notes |
 | --- | --- | --- | --- |
-| Asset-type registration and AI safe views | `internal/assettype/` | `src/lib/assetTypes/` | Backend add/update/get/list dispatch is registration-driven through `assettype.Get(type)`. Frontend selector/filter/detail/config rendering is derived from `registerAssetType`. |
+| Asset-type registration and AI safe views | `internal/assettype/` | `src/lib/assetTypes/` | Backend `put_asset`/get/list dispatch is registration-driven through `assettype.Get(type)`. Frontend selector/filter/detail/config rendering is derived from `registerAssetType`. |
 | Config form contract and serialization | Entity config structs plus type-specific services | `src/lib/assetTypes/formContract.ts`, the shared `useConfigSection` hook, the `configFields.tsx` field schema (`ConfigGroupSchema` / `FieldDesc`), `ConfigTabs`, and `<Name>ConfigSection*.ts` | The shell calls `buildConfig` / `buildTestConfig`; a section declares a `ConfigGroupSchema` and wires state/validity/build through `useConfigSection`, while the pure `.config.ts` owns parsing, validation, and exact JSON output. |
 | Proxy chains and TLS | `internal/pkg/proxychain`, `credential_resolver.ResolveProxyChain`, and `internal/connpool.ProxyChainDialContext` | `ConnectionMethodFields`, `proxyConfig.ts`, and type config sections | Networked types store `proxy_chain`; legacy `sshTunnelId` / `ssh_asset_id` and `proxy` fields are normalized to a one-layer chain. Resolve secrets once at the connection boundary and propagate errors—never silently downgrade a configured chain to direct. Save/test serialization differs; see [F3](#f3-configsection-and-pure-configts-serialization). |
 | Password credentials and SSH keys | `credential_svc`, `credential_mgr_svc`, `credential_resolver` | `credentialConfig.ts`, `useAssetCredential.ts`, `PasswordSourceField.tsx`, and SSH key controls | `credential_id` is not globally one thing. In SSH password-auth it refers to a password credential; in SSH key-auth it refers to an `ssh_key` credential. |
@@ -52,7 +53,8 @@ Several asset-type features are shared capabilities rather than type-local inven
 | Runtime routing and panels | Type-specific app binders and services | `connectAction`, `terminalStore.ts`, `queryStore.ts`, `MainPanel.tsx`, `App.tsx` | Registry covers basic connect action dispatch, but query tab state and panel selection still have shared-code coupling points. |
 | Detail display | Asset config structs | `DetailInfoCardProps`, `parseDetailConfig`, `InfoItem`, `TunnelInfo` | Detail-card selection is registered. Tunnel-capable cards should display top-level `asset.sshTunnelId` first, then legacy config fields. |
 | File manager | SSH/SFTP services | `canOpenFileManager` plus `App.tsx` handler | Menu visibility is registered; the current handler is still SSH-only. |
-| AI tool schema | `internal/ai/tool/tools_asset.go` | Mention/open helpers when needed | Asset add/update handlers are registry-driven, but model-facing schema/descriptions still need shared edits when args change. |
+| AI asset CRUD and help | `internal/assettype/`, `internal/ai/skills/`, `internal/ai/execimpl/` | Mention/open helpers when needed | `put_asset.config` is a free object validated by the handler. The type's `SKILL.md` is the model-facing config and command contract served by `help`. |
+| AI / CLI command execution | `internal/ai/permission` executor registry; pure bodies in `internal/ai/helper/` | None | AI `exec`, AI `batch_exec`, `opsctl exec`, and `opsctl batch` dispatch from the stored asset type. Never add a per-type tool or CLI verb. |
 
 ## Backend Integration
 
@@ -125,7 +127,7 @@ Reuse shared argument parsing:
 - `ArgStringSlice`
 - `validateRemoteServerArgs` for the existing SSH/database/Redis/MongoDB host/port/username validation shape
 
-The AI handlers in `internal/ai/tool/tool_handlers_asset.go` dispatch add/update/get/list through `assettype.Get(type)`, so handler code is registration-driven. Also update `internal/ai/tool/tools_asset.go` when the new type has model-facing create/update args; that schema is descriptive, but it is the contract the model sees.
+The AI handlers dispatch `put_asset` (create when `asset` is absent, update when `asset=<id-or-name>` is present), get, and list through `assettype.Get(type)`, so handler code is registration-driven. Type-specific fields live under `put_asset.config`; its schema intentionally stays a free object instead of rebuilding a central union of every type's fields. Document the exact config keys in the type's `SKILL.md` as described in [B7](#b7-ai-help-and-command-execution).
 
 ### B3. Policy: Reuse an Existing Kind or Add a New Kind
 
@@ -212,6 +214,38 @@ Only types that need a runtime panel or public Wails binding need their own `int
 
 Pure config types and types whose connection test can be registered from an existing binder do not need a new binder.
 
+### B7. AI Help and Command Execution
+
+Every registered asset type must have `internal/ai/skills/<type>/SKILL.md`, including types with no command surface. The frontmatter supplies the short capability description used in the prompt; the body is the detailed contract returned by AI `help(asset)` and `opsctl help <asset-or-type>`. The body must document:
+
+- the `put_asset.config` fields, required fields, defaults, and a valid creation example;
+- the command grammar and examples when the type supports `exec`;
+- an explicit statement that command execution is unsupported when the type is configuration-only.
+
+`help` accepts an asset ID/name and, when no asset matches, a canonical type name. The type-name form is essential for creating the first asset of a type because the model must learn its config shape before any instance exists.
+
+For a type with a command surface:
+
+1. Put protocol parsing and I/O in a pure execution body under `internal/ai/helper/`, following the existing `Exec*OnAsset` functions. It must not perform a second permission check.
+2. Add one `permission.RegisterExecutor` call in `internal/ai/execimpl/register.go`, passing the type, execution body, and `mustSkillDoc(type)`.
+3. If policy, approval, audit, and execution need a normalized command, supply a `CanonicalizeFunc`. It must produce the single effective command shown to policy matching, approval, and audit.
+4. If a side-effect-free runtime prerequisite can fail before approval, register a `PrecheckFunc` (serial's active-session check is the pattern).
+
+For a type without a command surface, add it to the `RegisterHelpDoc` block instead. This makes its config contract discoverable while `exec` continues to return an explicit unsupported-type error.
+
+Do not add a per-type AI tool, edit `handleExec`, or add a protocol-selecting CLI verb. AI `exec` / `batch_exec` and opsctl `exec` / `batch` all resolve the stored asset and dispatch through this registry. An optional type supplied by AI or `opsctl --type` is only an assertion and must never select the executor.
+
+The unified ordering is load-bearing: resolve asset → validate command/type assertion → find executor and help doc → canonicalize → precheck → permission/approval → execute. All deterministic failures belong before permission checking because approval is user-visible and may persist a grant.
+
+Existing guards make this contract mechanical:
+
+- `internal/ai/execimpl/help_coverage_test.go` requires every registered asset type to have a non-empty help document.
+- `internal/ai/execimpl/coverage_test.go` checks the registered execution surface.
+- `internal/ai/execimpl/skill_examples_test.go` extracts documented command examples and sends them through the registered canonicalizer; unknown example shapes fail closed.
+- Protocol-specific doc/code contracts may add a bidirectional test, as Kafka does in `internal/ai/helper/kafka_skill_doc_test.go`.
+
+When adding a command-capable type, extend the relevant table-driven coverage rather than weakening or exempting it. When adding new command flags or grammar, update the implementation, `SKILL.md`, and its doc-contract tests together.
+
 ### Backend Checklist
 
 1. Add entity constants, `XxxConfig`, accessors, `validateXxx`, `Validate()` case, and `CanConnect()` case in `asset_entity/asset.go`. This is shared entity code and is not fully registered yet.
@@ -220,7 +254,9 @@ Pure config types and types whose connection test can be registered from an exis
 4. Add `connpool/<type>.go` only for networked types that need pooled/dialed connections.
 5. Register a connection tester with `conntest.Register` if the type supports Test.
 6. Add an app binder and wire `main.go` only when the type needs runtime panel bindings.
-7. AI add/update/get/list handler code needs no per-type edit, but `tools_asset.go` schema/descriptions should be updated when AI-visible args change.
+7. Add `internal/ai/skills/<type>/SKILL.md` with the complete `put_asset.config` contract.
+8. Register an executor plus any canonicalizer/precheck for command-capable types; otherwise register the type as help-only. Do not add a per-type AI tool or CLI verb.
+9. Run the help/executor coverage and documented-example tests described in B7.
 
 ## Frontend Integration
 
@@ -509,7 +545,6 @@ The following surfaces still branch on type strings. A new type only needs these
 | `src/App.tsx` (`handleOpenFileManager`) | `asset.Type !== "ssh"` early return | File-manager opening behavior; menu visibility is registered, but the handler is still SSH-only | Types that need SFTP/file-manager opening |
 | `src/components/asset/CommandPolicyCard.tsx` and `PolicyGroupManager.tsx` | `ssh`, `k8s`, `database`, `redis`, `mongodb`, and built-in tab keys | Policy editor tab mapping and labels | Types whose policy UI needs custom tab mapping or labels |
 | `src/components/ai/MentionList.tsx`, `ai/input/content.ts`, `lib/mentionXml.ts`, `lib/openMentionTarget.ts` | `database` | AI mention databases/tables | Types that need mention autocomplete/open behavior |
-| `internal/ai/tool/tools_asset.go` | Supported type and field descriptions | Model-facing AI tool schema | Types with AI-visible create/update args |
 
 Already registered; do not add branches:
 
@@ -533,6 +568,8 @@ Backend:
 
 - `go build ./...`
 - `go test ./internal/...`
+- `go test ./internal/ai/execimpl ./internal/ai/helper` to check help coverage, executor coverage, documented examples, and protocol-specific doc contracts.
+- `go test ./cmd/opsctl/command` when the type is command-capable or changes CLI-visible help/behavior.
 - Add `-race` for changed backend packages when the touched code has concurrency, connection pools, cancellation, or shared registries.
 - `make lint` or `golangci-lint run --timeout 10m ./internal/...`
 - Connection tests should flow through `conntest` and `System.TestAssetConnection`.

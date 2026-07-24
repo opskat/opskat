@@ -1,11 +1,42 @@
 package embedded
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestOpsctlNeedsUpdate(t *testing.T) {
+	original := opsctlBinary
+	t.Cleanup(func() { opsctlBinary = original })
+	opsctlBinary = []byte("current opsctl")
+
+	installed := filepath.Join(t.TempDir(), "opsctl")
+	if err := os.WriteFile(installed, []byte("older opsctl"), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	needsUpdate, err := OpsctlNeedsUpdate(installed)
+	if err != nil {
+		t.Fatalf("OpsctlNeedsUpdate older binary: %v", err)
+	}
+	if !needsUpdate {
+		t.Fatal("older installed binary should need an update")
+	}
+
+	if err := os.WriteFile(installed, opsctlBinary, 0o755); err != nil {
+		t.Fatalf("WriteFile current binary: %v", err)
+	}
+	needsUpdate, err = OpsctlNeedsUpdate(installed)
+	if err != nil {
+		t.Fatalf("OpsctlNeedsUpdate current binary: %v", err)
+	}
+	if needsUpdate {
+		t.Fatal("current installed binary should not need an update")
+	}
+}
 
 func TestDefaultInstallDir(t *testing.T) {
 	t.Run("便携模式返回可执行文件所在目录", func(t *testing.T) {

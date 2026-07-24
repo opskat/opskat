@@ -1,6 +1,7 @@
 package embedded
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,19 @@ var opsctlBinary []byte
 // HasEmbeddedOpsctl 检查是否嵌入了 opsctl 二进制
 func HasEmbeddedOpsctl() bool {
 	return len(opsctlBinary) > 0
+}
+
+// OpsctlNeedsUpdate reports whether path differs from the opsctl binary embedded
+// in the running application. Callers should only use it for an installed path.
+func OpsctlNeedsUpdate(path string) (bool, error) {
+	if len(opsctlBinary) == 0 {
+		return false, nil
+	}
+	installed, err := os.ReadFile(path) //nolint:gosec // path is the detected opsctl executable
+	if err != nil {
+		return false, fmt.Errorf("read installed opsctl: %w", err)
+	}
+	return !bytes.Equal(installed, opsctlBinary), nil
 }
 
 // portableDir 解析便携数据目录，便携模式外返回 ""。变量而非直接调用，是为了可测。

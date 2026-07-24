@@ -11,10 +11,10 @@ package mock_asset_repo
 
 import (
 	context "context"
-	asset_entity "github.com/opskat/opskat/internal/model/entity/asset_entity"
-	asset_repo "github.com/opskat/opskat/internal/repository/asset_repo"
 	reflect "reflect"
 
+	asset_entity "github.com/opskat/opskat/internal/model/entity/asset_entity"
+	asset_repo "github.com/opskat/opskat/internal/repository/asset_repo"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -40,6 +40,21 @@ func NewMockAssetRepo(ctrl *gomock.Controller) *MockAssetRepo {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockAssetRepo) EXPECT() *MockAssetRepoMockRecorder {
 	return m.recorder
+}
+
+// CountByTypes mocks base method.
+func (m *MockAssetRepo) CountByTypes(ctx context.Context, types []string) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CountByTypes", ctx, types)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CountByTypes indicates an expected call of CountByTypes.
+func (mr *MockAssetRepoMockRecorder) CountByTypes(ctx, types any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountByTypes", reflect.TypeOf((*MockAssetRepo)(nil).CountByTypes), ctx, types)
 }
 
 // Create mocks base method.
@@ -114,6 +129,21 @@ func (mr *MockAssetRepoMockRecorder) FindByCredentialID(ctx, credentialID any) *
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByCredentialID", reflect.TypeOf((*MockAssetRepo)(nil).FindByCredentialID), ctx, credentialID)
 }
 
+// FindByName mocks base method.
+func (m *MockAssetRepo) FindByName(ctx context.Context, name string) ([]*asset_entity.Asset, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByName", ctx, name)
+	ret0, _ := ret[0].([]*asset_entity.Asset)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByName indicates an expected call of FindByName.
+func (mr *MockAssetRepoMockRecorder) FindByName(ctx, name any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByName", reflect.TypeOf((*MockAssetRepo)(nil).FindByName), ctx, name)
+}
+
 // List mocks base method.
 func (m *MockAssetRepo) List(ctx context.Context, opts asset_repo.ListOptions) ([]*asset_entity.Asset, error) {
 	m.ctrl.T.Helper()
@@ -157,20 +187,6 @@ func (mr *MockAssetRepoMockRecorder) Update(ctx, asset any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockAssetRepo)(nil).Update), ctx, asset)
 }
 
-// UpdateSortOrder mocks base method.
-func (m *MockAssetRepo) UpdateSortOrder(ctx context.Context, id int64, sortOrder int) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateSortOrder", ctx, id, sortOrder)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// UpdateSortOrder indicates an expected call of UpdateSortOrder.
-func (mr *MockAssetRepoMockRecorder) UpdateSortOrder(ctx, id, sortOrder any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSortOrder", reflect.TypeOf((*MockAssetRepo)(nil).UpdateSortOrder), ctx, id, sortOrder)
-}
-
 // UpdateGroupID mocks base method.
 func (m *MockAssetRepo) UpdateGroupID(ctx context.Context, id, groupID int64) error {
 	m.ctrl.T.Helper()
@@ -185,17 +201,16 @@ func (mr *MockAssetRepoMockRecorder) UpdateGroupID(ctx, id, groupID any) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateGroupID", reflect.TypeOf((*MockAssetRepo)(nil).UpdateGroupID), ctx, id, groupID)
 }
 
-// CountByTypes mocks base method.
-func (m *MockAssetRepo) CountByTypes(ctx context.Context, types []string) (int64, error) {
+// UpdateSortOrder mocks base method.
+func (m *MockAssetRepo) UpdateSortOrder(ctx context.Context, id int64, sortOrder int) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CountByTypes", ctx, types)
-	ret0, _ := ret[0].(int64)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret := m.ctrl.Call(m, "UpdateSortOrder", ctx, id, sortOrder)
+	ret0, _ := ret[0].(error)
+	return ret0
 }
 
-// CountByTypes indicates an expected call of CountByTypes.
-func (mr *MockAssetRepoMockRecorder) CountByTypes(ctx, types any) *gomock.Call {
+// UpdateSortOrder indicates an expected call of UpdateSortOrder.
+func (mr *MockAssetRepoMockRecorder) UpdateSortOrder(ctx, id, sortOrder any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountByTypes", reflect.TypeOf((*MockAssetRepo)(nil).CountByTypes), ctx, types)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSortOrder", reflect.TypeOf((*MockAssetRepo)(nil).UpdateSortOrder), ctx, id, sortOrder)
 }

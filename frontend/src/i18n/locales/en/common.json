@@ -424,7 +424,7 @@
     "mongoPolicyAllowTypes": "Allowed Operation Types",
     "mongoPolicyDenyTypes": "Denied Operation Types",
     "mongoPolicyHint": "Uses default policy when not configured",
-    "mongoPolicyPlaceholder": "Press Enter to add, comma-separated, e.g. find, aggregate",
+    "mongoPolicyPlaceholder": "Add operation rules, optionally narrowed to a collection, e.g. find, deleteMany orders-*",
     "kafkaPolicy": "Kafka Operation Policy",
     "kafkaPolicyAllowList": "Allow List (execute without confirmation)",
     "kafkaPolicyDenyList": "Deny List (always reject)",
@@ -550,7 +550,7 @@
     "policyTestPlaceholder": "Type a command to test...",
     "policyTestSqlPlaceholder": "Type SQL to test, e.g. SELECT * FROM users",
     "policyTestRedisPlaceholder": "Type Redis command to test, e.g. GET user:1",
-    "policyTestMongoPlaceholder": "Type MongoDB operation to test, e.g. find",
+    "policyTestMongoPlaceholder": "Type a MongoDB command to test, e.g. deleteMany orders --db=prod",
     "policyTestKafkaPlaceholder": "Type Kafka operation to test, e.g. topic.read orders",
     "policyTestAllow": "Allowed",
     "policyTestDeny": "Denied",
@@ -648,6 +648,10 @@
         "kafka-security-admin": {
           "name": "Kafka Security Admin",
           "desc": "Allow Kafka ACL management"
+        },
+        "kafka-message-write-deny": {
+          "name": "Kafka Message Write Deny",
+          "desc": "Deny producing messages to topics"
         },
         "kafka-dangerous-deny": {
           "name": "Kafka Dangerous Deny",
@@ -1025,6 +1029,8 @@
     "approvalSingleTitle": "Approval Required",
     "approvalBatchTitle": "Approval Required ({{count}} commands)",
     "approvalGrantTitle": "Permission Request",
+    "approvalDeleteTitle": "Confirm deletion",
+    "approvalDeleteDetail": "What gets deleted",
     "approvalDeny": "Deny",
     "approvalAllow": "Allow",
     "approvalAlwaysAllow": "Always Allow",

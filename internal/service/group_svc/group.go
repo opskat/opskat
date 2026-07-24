@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/opskat/opskat/internal/assetconn"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/pkg/sortutil"
-	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/group_repo"
+	"github.com/opskat/opskat/internal/service/asset_svc"
 )
 
 // GroupSvc 分组业务接口
@@ -19,7 +21,7 @@ type GroupSvc interface {
 	Create(ctx context.Context, group *group_entity.Group) error
 	Update(ctx context.Context, group *group_entity.Group) error
 	Rename(ctx context.Context, id int64, name string) error
-	Delete(ctx context.Context, id int64, deleteAssets bool) error
+	Delete(ctx context.Context, id int64, deleteAssets bool) ([]*asset_entity.Asset, error)
 	Move(ctx context.Context, id int64, direction string) error
 	Reorder(ctx context.Context, id, targetParentID, beforeID int64) error
 }
@@ -72,27 +74,52 @@ func (s *groupSvc) Rename(ctx context.Context, id int64, name string) error {
 
 // Delete 删除分组
 // deleteAssets: true 删除分组下的资产，false 移动到未分组
-func (s *groupSvc) Delete(ctx context.Context, id int64, deleteAssets bool) error {
-	// 获取分组信息，用于将子分组挂到父分组
-	group, err := group_repo.Group().Find(ctx, id)
+//
+// 三步写操作（子分组改挂父级、处理组内资产、删除分组本身）共用一个事务：中途失败时
+// 分组树不能停在中间态——例如资产已经被移到未分组、分组却还在，用户看到一个空分组，
+// 且没有任何提示。与同文件 Reorder 的事务边界一致。
+//
+// deleteAssets=true 时还要断开被删资产的在用连接。asset_svc.DeleteByGroup 返回删除前的
+// 资产信息；广播放在事务**提交之后**：回滚时资产还在，连接不该被关掉。
+//
+// 返回被连带删掉的资产，交给调用方逐条写审计（deleteAssets=false 时为空）。审计不在
+// 这里写：审计来源（desktop / ai / opsctl）由调用方的 context 决定，服务层不该假设自己
+// 是被谁调的。
+func (s *groupSvc) Delete(ctx context.Context, id int64, deleteAssets bool) ([]*asset_entity.Asset, error) {
+	var deletedAssets []*asset_entity.Asset
+
+	err := dbutil.WithTransaction(ctx, func(txCtx context.Context) error {
+		// 获取分组信息，用于将子分组挂到父分组
+		group, err := group_repo.Group().Find(txCtx, id)
+		if err != nil {
+			return err
+		}
+		// 子分组挂到被删分组的父级
+		if err := group_repo.Group().ReparentChildren(txCtx, id, group.ParentID); err != nil {
+			return err
+		}
+		// 处理分组下的资产
+		if deleteAssets {
+			assets, err := asset_svc.Asset().DeleteByGroup(txCtx, id)
+			if err != nil {
+				return err
+			}
+			deletedAssets = assets
+		} else {
+			if err := asset_svc.Asset().MoveFromGroup(txCtx, id); err != nil {
+				return err
+			}
+		}
+		return group_repo.Group().Delete(txCtx, id)
+	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	// 子分组挂到被删分组的父级
-	if err := group_repo.Group().ReparentChildren(ctx, id, group.ParentID); err != nil {
-		return err
+
+	for _, asset := range deletedAssets {
+		assetconn.CloseAsset(ctx, asset.ID)
 	}
-	// 处理分组下的资产
-	if deleteAssets {
-		if err := asset_repo.Asset().DeleteByGroupID(ctx, id); err != nil {
-			return err
-		}
-	} else {
-		if err := asset_repo.Asset().MoveToGroup(ctx, id, 0); err != nil {
-			return err
-		}
-	}
-	return group_repo.Group().Delete(ctx, id)
+	return deletedAssets, nil
 }
 
 // Move 移动分组排序（up/down/top）

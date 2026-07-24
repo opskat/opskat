@@ -2,6 +2,7 @@ package permission
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -20,7 +21,7 @@ import (
 
 // CommandConfirmFunc 命令确认回调，发送审批请求并阻塞等待前端响应
 // ctx 携带会话 ID 等上下文（通过 aictx.GetConversationID 获取）
-// kind: "single", "batch", "grant"
+// kind: ApprovalKind* 常量
 // items: 审批项列表
 // 返回 ApprovalResponse
 type CommandConfirmFunc func(ctx context.Context, kind string, items []ApprovalItem) ApprovalResponse
@@ -44,7 +45,7 @@ func NewCommandPolicyChecker(confirmFunc CommandConfirmFunc) *CommandPolicyCheck
 	}
 }
 
-// ConfirmFunc 返回确认回调，供 batch_command 聚合多条审批项一次性调用。
+// ConfirmFunc 返回确认回调，供 batch_exec 聚合多条审批项一次性调用。
 func (c *CommandPolicyChecker) ConfirmFunc() CommandConfirmFunc {
 	return c.confirmFunc
 }
@@ -250,10 +251,9 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 		assetName = asset.Name
 	}
 
-	approvalType := "exec"
-	if handler, ok := permissionTypeFor(assetType); ok {
-		approvalType = handler.approvalType
-	}
+	// 与 ApprovalTypeFor 同一张表、同一条不变式：未注册类型回落到原样的 assetType，
+	// 不是静默变成 "exec"（type_registry.go 的 ApprovalTypeFor doc comment 有论证）。
+	approvalType := ApprovalTypeFor(assetType)
 
 	item := ApprovalItem{
 		Type:      approvalType,
@@ -264,19 +264,28 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 	if len(detail) > 0 {
 		item.Detail = detail[0]
 	}
-	resp := c.confirmFunc(ctx, "single", []ApprovalItem{item})
-
-	if resp.Decision == "deny" {
+	resp := c.confirmFunc(ctx, ApprovalKindSingle, []ApprovalItem{item})
+	parsed, parseErr := ParseApprovalResponse(ApprovalKindSingle, resp, []ApprovalItem{item})
+	if parseErr != nil || parsed.Decision == ApprovalDeny {
 		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyFmt(ctx, "USER DENIED: The user has denied execution of command: %s. Stop the current task immediately.", "用户拒绝：用户已拒绝执行命令: %s。请立即停止当前任务。", command), DecisionSource: aictx.SourceUserDeny}
 	}
-	if resp.Decision == "allowAll" {
+	switch parsed.Decision {
+	case ApprovalAllow:
+		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow}
+	case ApprovalAllowAll:
 		sessionID := aictx.GetSessionID(ctx)
+		if sessionID == "" {
+			return aictx.CheckResult{
+				Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny,
+				Message: policy.PolicyMsg(ctx, "allowAll requires a grant session; execution denied", "全部允许需要授权会话，拒绝执行"),
+			}
+		}
 		// 三条 grant 落库路径（HandleConfirm / opsctl 单审批 / AI grant 流）共用 NormalizeGrantPatterns：
 		// SSH/K8s shell 类按 AST 子命令拆，其他类型直通。这里既保持本路径行为一致，
 		// 又保证编辑模式（多行/通配）后的每一行都按子命令分别落库。
 		var patterns []string
-		if len(resp.EditedItems) > 0 {
-			for _, item := range resp.EditedItems {
+		if len(parsed.EditedItems) > 0 {
+			for _, item := range parsed.EditedItems {
 				patterns = append(patterns, NormalizeGrantPatterns(assetType, item.Command)...)
 			}
 		}
@@ -291,8 +300,10 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 			SaveGrantPattern(ctx, sessionID, assetID, assetName, approvalType, cmd)
 		}
 		audit.WriteGrantSubmitAudit(ctx, assetID, assetName, patterns)
+		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow}
+	default:
+		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyMsg(ctx, "invalid approval response, execution denied", "审批响应无效，拒绝执行"), DecisionSource: aictx.SourceUserDeny}
 	}
-	return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow}
 }
 
 // --- 策略收集 ---
@@ -545,8 +556,54 @@ func WithPolicyChecker(ctx context.Context, c *CommandPolicyChecker) context.Con
 	return context.WithValue(ctx, policyCheckerKeyType{}, c)
 }
 
-// GetPolicyChecker 从 context 中获取 PolicyChecker
-func GetPolicyChecker(ctx context.Context) *CommandPolicyChecker {
+// getPolicyChecker 从 context 中取 PolicyChecker，可能为 nil。
+//
+// **故意不导出**：包外只能经 RequireChecker / RequireCheckerOrPreapproved 拿它，
+// 这两个都在缺失时返回错误。`if checker := GetPolicyChecker(ctx); checker != nil { 检查 }`
+// 这种"注入缺失 == 放行"的写法因此不再写得出来——这是 #249 的根因，靠评审和注释是
+// 挡不住的，得让它在类型层面不可达。
+func getPolicyChecker(ctx context.Context) *CommandPolicyChecker {
 	c, _ := ctx.Value(policyCheckerKeyType{}).(*CommandPolicyChecker)
 	return c
+}
+
+// RequireChecker 取出 PolicyChecker，缺失即报错。没有任何豁免。
+//
+// 给那些没有 opsctl 对应物的路径用：batch_exec（只对 AI 会话开放）、扩展策略确认
+// （opsctl 的 requireApproval 不认识扩展 manifest 里的 action）、request_permission。
+func RequireChecker(ctx context.Context) (*CommandPolicyChecker, error) {
+	if c := getPolicyChecker(ctx); c != nil {
+		return c, nil
+	}
+	return nil, errors.New("permission checker not available")
+}
+
+type preapprovedKeyType struct{}
+
+// WithPreapproved 声明：本次调用的权限检查已经由调用方在工具之外完成，工具内不必再查。
+//
+// 唯一的合法使用者是 opsctl：它在 requireApproval 里跑完策略 / DB Grant / 桌面审批
+// （cmd/opsctl/command/approval.go），拿到 ApprovalResult 之后才派发 handler，因此
+// 派发时 context 里没有 PolicyChecker——那是桌面 AI 会话专属的。
+//
+// 存在的意义是把"没有 checker"这个状态一分为二：**声明过**的是 opsctl 已检查，
+// **没声明过**的是接线漏了。后者必须失败（见 RequireChecker），否则漏接线等于放行。
+func WithPreapproved(ctx context.Context) context.Context {
+	return context.WithValue(ctx, preapprovedKeyType{}, true)
+}
+
+// RequireCheckerOrPreapproved 取出 PolicyChecker，fail-closed，但认 WithPreapproved 豁免。
+//
+// 返回 (nil, nil) **只**发生在 ctx 被 WithPreapproved 标记过时——调用方据此跳过检查。
+// 既没有 checker 又没有标记，说明这条调用路径压根没接上权限系统，返回错误而不是放行：
+// 从前这里写成 `if checker != nil { 检查 }`，语义是"注入缺失 == 放行"，安全不变式全靠
+// internal/app/ai/chat.go 里两个字段的赋值顺序兜着，既没有类型表达也没有测试锁定。
+func RequireCheckerOrPreapproved(ctx context.Context) (*CommandPolicyChecker, error) {
+	if c := getPolicyChecker(ctx); c != nil {
+		return c, nil
+	}
+	if preapproved, _ := ctx.Value(preapprovedKeyType{}).(bool); preapproved {
+		return nil, nil
+	}
+	return nil, errors.New("permission checker not available")
 }

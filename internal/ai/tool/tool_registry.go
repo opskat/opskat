@@ -4,7 +4,16 @@ import (
 	"context"
 
 	"github.com/opskat/opskat/internal/ai/helper"
-	"golang.org/x/crypto/ssh"
+
+	// execimpl 在 init() 中把各资产类型的纯执行体注册进 permission 的执行器表
+	// （供统一 exec 工具派发）。当前有哪些类型以 permission.RegisteredExecTypes() 为准，
+	// 这里不再抄一份名单——抄的那份停在 ssh/serial/database/redis/k8s，漏了后来接入的
+	// mongodb/etcd/kafka。blank-import 是唯一的触发点：
+	// 导入本包的两条路径（桌面端与 opsctl）都会触发这次注册，注册一次即可。
+	// 桌面端 Tools() 与下面的 AllToolDefs()（opsctl 派发表）都只经由 exec 执行命令，
+	// 两边共用这一份执行器表。
+	// execimpl 不导入本包（tool），避免循环依赖。
+	_ "github.com/opskat/opskat/internal/ai/execimpl"
 )
 
 // opsctl CLI 直接以 (ctx, args)→(string, error) 的形式调用 handler，
@@ -27,58 +36,47 @@ type ToolDef struct {
 }
 
 // AllToolDefs 返回 opsctl CLI 派发用的工具列表。
-// 它不是 Tools() 的镜像：run_serial_command 依赖桌面端已连接的串口 session；
-// batch_command 在 opsctl 中有独立的 batch 子命令入口，不走 name→handler 派发表。
+// 它不是 Tools() 的镜像：batch_exec 在 opsctl 中有独立的 batch 子命令入口，
+// 不走 name→handler 派发表。
+//
+// opsctl 的 exec / batch 命令（非 ssh 资产的分支）按名字在这张表里查 handler
+// （cmd/opsctl/command/handler.go 的 buildHandlerMap），查不到只在**运行时**报
+// "unknown tool"——所以删条目必须同步改那些调用点，加条目必须真的加进来。
+// 按类型区分的旧工具与旧的 sql/redis/mongo verb 下线后，它们统一改查 "exec"，
+// 因此 exec / help 必须在表里。
 func AllToolDefs() []ToolDef {
 	return []ToolDef{
 		{"list_assets", handleListAssets},
 		{"get_asset", handleGetAsset},
-		{"add_asset", handleAddAsset},
-		{"update_asset", handleUpdateAsset},
+		{"put_asset", handlePutAsset},
+		{"delete_asset", handleDeleteAsset},
 		{"list_groups", handleListGroups},
 		{"get_group", handleGetGroup},
-		{"add_group", handleAddGroup},
-		{"update_group", handleUpdateGroup},
-		{"run_command", handleRunCommand},
+		{"put_group", handlePutGroup},
+		{"delete_group", handleDeleteGroup},
 		{"upload_file", handleUploadFile},
 		{"download_file", handleDownloadFile},
-		{"exec_sql", helper.HandleExecSQL},
-		{"exec_redis", helper.HandleExecRedis},
-		{"exec_mongo", helper.HandleExecMongo},
-		{"exec_etcd", helper.HandleExecEtcd},
-		{"exec_k8s", handleExecK8s},
-		{"kafka_cluster", helper.HandleKafkaCluster},
-		{"kafka_topic", helper.HandleKafkaTopic},
-		{"kafka_consumer_group", helper.HandleKafkaConsumerGroup},
-		{"kafka_acl", helper.HandleKafkaACL},
-		{"kafka_schema", helper.HandleKafkaSchema},
-		{"kafka_connect", helper.HandleKafkaConnect},
-		{"kafka_message", helper.HandleKafkaMessage},
 		{"request_permission", handleRequestGrant},
-		{"exec_tool", handleExecTool},
+		{"ext_exec", handleExecTool},
+		{"exec", handleExec},
+		{"help", handleHelp},
 	}
 }
 
 // --- SSH 客户端缓存（cago 工具 handler 在同一次 Send 中复用连接）---
-
-type sshCacheKeyType struct{}
+//
+// 实现已移入 helper（execimpl 需要在不依赖 tool 包的前提下复用同一执行体），
+// 这里保留同名导出符号作为薄别名，避免影响 internal/app/ai 等外部调用方。
 
 // SSHClientCache 在同一次 AI Send 中复用 SSH 连接。
-type SSHClientCache = helper.ConnCache[*ssh.Client]
+type SSHClientCache = helper.SSHClientCache
 
 // NewSSHClientCache 创建 SSH 客户端缓存。
 func NewSSHClientCache() *SSHClientCache {
-	return helper.NewConnCache[*ssh.Client]("SSH")
+	return helper.NewSSHClientCache()
 }
 
 // WithSSHCache 将 SSH 缓存注入 context。
 func WithSSHCache(ctx context.Context, cache *SSHClientCache) context.Context {
-	return context.WithValue(ctx, sshCacheKeyType{}, cache)
-}
-
-func getSSHCache(ctx context.Context) *SSHClientCache {
-	if cache, ok := ctx.Value(sshCacheKeyType{}).(*SSHClientCache); ok {
-		return cache
-	}
-	return nil
+	return helper.WithSSHCache(ctx, cache)
 }

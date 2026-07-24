@@ -48,9 +48,9 @@ Tick each item after manually exercising it in the running app.
 - [ ] `del /flags/example` → also gated by ConfirmDialog.
 - [ ] `del /flags/ --prefix` → ConfirmDialog should preview the destructive scope.
 
-### AI tool (`exec_etcd`)
-- [ ] Open AI tab; ask "list the keys under /config". The AI calls `exec_etcd` with op=get prefix=true.
-- [ ] AI calls `member list` (op=member_list). Result shows cluster members.
+### AI tool (`exec`)
+- [ ] Open AI tab; ask "list the keys under /config". The AI calls `exec` against the etcd asset with command `get /config --prefix`.
+- [ ] AI calls `member list`. Result shows cluster members.
 - [ ] AI tries `member remove …` → permission policy denies (default `BuiltinEtcdDangerousDeny`).
 
 ### TLS / mTLS / SSH-tunnel (optional, if you have the setup)

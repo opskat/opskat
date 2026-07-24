@@ -4,11 +4,18 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/opskat/opskat/internal/ai/permission"
 )
 
 // TabInfo 当前打开的 Tab 信息
 type TabInfo struct {
-	Type      string `json:"type"` // "ssh" | "database" | "redis" | "sftp"
+	// Type 是该 Tab 所指资产的**真实资产类型**（asset_entity.AssetType* 的取值，
+	// 如 ssh / serial / database / redis / k8s / mongodb / oss ...），不是 Tab 的
+	// 界面种类：前端传的是 ref.assetType（frontend/src/stores/aiStore.ts 收集
+	// openTabs 处），会话绑定资产时传 linkedAssetType。所以这里不是一个封闭的短枚举，
+	// 新增资产类型会直接出现在这里，不需要改本文件。
+	Type      string `json:"type"`
 	AssetID   int64  `json:"assetId"`
 	AssetName string `json:"assetName"`
 }
@@ -22,6 +29,7 @@ type AIContext struct {
 type PromptBuilder struct {
 	language          string
 	context           AIContext
+	assetTypeSkills   map[string]string // 内置资产类型 → 一行描述（skills.Description）
 	extensionSkillMDs map[string]string // extName → SKILL.md content
 }
 
@@ -29,6 +37,22 @@ type PromptBuilder struct {
 // Keys are extension names, values are the raw markdown.
 func (b *PromptBuilder) SetExtensionSkillMDs(mds map[string]string) {
 	b.extensionSkillMDs = mds
+}
+
+// SetAssetTypeSkills sets the compact per-built-in-type skill listing to render in the
+// prompt. Keys are asset types (ssh/serial/database/redis/k8s), values are their
+// one-line skills.Description() — never the full SKILL.md body. The full body is loaded
+// on demand via the help(asset) tool; inlining it here would defeat the whole point of
+// having a separate help tool (token savings from collapsing 14 tools into exec/help).
+//
+// This listing is purely a DISCOVERY aid: it tells the model that help exists and which
+// types it covers. It does NOT satisfy the exec doc gate — only an actual help(asset)
+// call does. A one-line description is not command syntax, so treating its presence as
+// "the model has seen the docs" would let exec run against a type whose syntax never
+// reached the model. Callers must therefore pass every built-in type unconditionally
+// (it's one line each), not just the types with an open tab.
+func (b *PromptBuilder) SetAssetTypeSkills(descriptions map[string]string) {
+	b.assetTypeSkills = descriptions
 }
 
 // NewPromptBuilder 创建 PromptBuilder
@@ -71,7 +95,11 @@ func (b *PromptBuilder) Build() string {
 	// 8. 用户拒绝操作引导
 	parts = append(parts, b.buildUserDenialGuidance())
 
-	// 9. Extension tools guide
+	// 9. exec/help 用法说明 + 内置资产类型技能清单（只列一行描述，正文由 help 按需加载）。
+	// 无条件渲染：exec/help 是资产操作的主路径，不能只在"恰好开着某个 Tab"时才告诉模型。
+	parts = append(parts, b.buildAssetTypeSkills())
+
+	// 10. Extension tools guide
 	if len(b.extensionSkillMDs) > 0 {
 		names := make([]string, 0, len(b.extensionSkillMDs))
 		for name := range b.extensionSkillMDs {
@@ -128,17 +156,17 @@ Use asset-id for tool calls. When target="database", scope SQL work to the datab
 }
 
 func (b *PromptBuilder) buildKnowledgeGuidance() string {
-	return `Discover before acting: call list_assets / get_asset first, then operate. The asset Description often contains prior findings (OS, services, DB version) — read it to avoid redundant exploration. When you learn new non-secret facts about an asset during work, append them to the asset Description via update_asset.
+	return `Discover before acting: call list_assets / get_asset first, then operate. The asset Description often contains prior findings (OS, services, DB version) — read it to avoid redundant exploration. When you learn new non-secret facts about an asset during work, append them to the asset Description via put_asset.
 
-Pick the dedicated tool for each asset type: exec_sql for databases, exec_redis for Redis, exec_mongo for MongoDB, exec_k8s for kubectl (do not invoke kubectl through run_command), kafka_* for Kafka. Use run_command only for plain SSH shell commands.
+Running commands on an asset: use exec(asset, command), preceded by help(asset) the first time you touch a given asset type. exec dispatches on the asset's real type, so it is the only path for running commands on SSH, serial, database, Redis, K8s, etcd, MongoDB, and Kafka assets. Some capabilities are not commands and still have their own tool: upload_file / download_file for SFTP transfer, and batch_exec for the same operation across several assets.
 
-Local vs remote — VERY IMPORTANT: every tool whose name starts with ` + "`local_`" + ` (local_bash / local_write / local_edit / local_read / local_grep / local_find / local_ls) operates ONLY on the USER'S OWN MACHINE — they do NOT touch any remote asset. When the scenario targets a specific server / database / Redis / Kafka / K8s asset (an SSH / Database / Redis / SFTP tab is open for it, the user names the asset, or the request is clearly about that asset), you MUST use that asset's dedicated remote tool: run_command for SSH (use ` + "`cat`/`ls`/`grep`" + ` inside it for file inspection), exec_sql / exec_redis / exec_mongo / exec_k8s / kafka_*, and upload_file / download_file for SFTP transfer. Never fall back to a local_* tool even when the command looks identical — running ` + "`local_ls /etc/nginx`" + ` lists YOUR machine's filesystem, not the server the user asked about. local_* tools are only correct when the user explicitly asks about their local machine, or when there is no remote asset in scope.
+Local vs remote — VERY IMPORTANT: every tool whose name starts with ` + "`local_`" + ` (local_bash / local_write / local_edit / local_read / local_grep / local_find / local_ls) operates ONLY on the USER'S OWN MACHINE — they do NOT touch any remote asset. When the scenario targets a specific server / database / Redis / Kafka / K8s asset (an SSH / Database / Redis / SFTP tab is open for it, the user names the asset, or the request is clearly about that asset), you MUST reach it through a remote tool: exec(asset, command) for SSH / serial / database / Redis / K8s / etcd / MongoDB / Kafka assets (use ` + "`cat`/`ls`/`grep`" + ` inside an SSH exec for file inspection), and upload_file / download_file for SFTP transfer. Never fall back to a local_* tool even when the command looks identical — running ` + "`local_ls /etc/nginx`" + ` lists YOUR machine's filesystem, not the server the user asked about. local_* tools are only correct when the user explicitly asks about their local machine, or when there is no remote asset in scope.
 
 Within the local_* family: prefer local_grep / local_find / local_ls / local_read over local_bash for file exploration on the user's machine (they are faster, .gitignore-aware, and don't require shell escaping). Use local_bash only when you need shell features (pipes, env vars, scripts).`
 }
 
 func (b *PromptBuilder) buildMultiAssetGuidance() string {
-	return `When the same operation targets 2 or more assets, prefer batch_command over a loop of run_command / exec_sql / exec_redis — it parallelizes execution and batches approval prompts. When you expect to issue several command patterns that will trigger approval, call request_permission upfront so the user grants them in a single review instead of one popup per call.`
+	return `When the same operation targets 2 or more assets, prefer batch_exec over a loop of exec calls — it parallelizes execution and batches approval prompts. When you expect to issue several command patterns that will trigger approval, call request_permission upfront so the user grants them in a single review instead of one popup per call.`
 }
 
 func (b *PromptBuilder) buildSecretsGuidance() string {
@@ -147,6 +175,54 @@ func (b *PromptBuilder) buildSecretsGuidance() string {
 
 func (b *PromptBuilder) buildErrorRecoveryGuidance() string {
 	return `When a tool execution fails, analyze the error and try a different approach. If repeated attempts fail, explain the issue to the user and suggest alternatives. Do not give up after a single failure.`
+}
+
+// buildAssetTypeSkills 渲染 exec/help 的用法说明，以及内置资产类型的一行技能清单
+// （只列描述，不内联 SKILL.md 正文）。
+//
+// 说明段无条件渲染，清单段只在调用方给了描述时追加：exec/help 是资产操作的**唯一**
+// 路径（按类型区分的旧工具已全部删除），若只在"有匹配的 Tab 打开"时才出现，模型在
+// 没开 Tab 的会话里就看不到这条路径，只能瞎猜工具名。
+//
+// 清单按 permission.ExecutorFor 拆成两段——不能把有执行器的类型和 doc-only 类型
+// （rdp/vnc/oss/local：只有 help、没有 exec）混进同一份"exec currently covers"清单。
+// 混装过 doc-only 类型的旧版本会让模型读到自相矛盾的文本：标题说"exec 覆盖以下类型"，
+// 紧接着列出的某一行描述却写着"exec is not supported for this type"——这正是这段
+// 清单本该消除的歧义，不能靠模型自己去调和。见 help_coverage_test.go /
+// TestEveryAssetTypeHasHelpDoc 对应的评审发现。
+func (b *PromptBuilder) buildAssetTypeSkills() string {
+	lines := []string{
+		"Operating on an asset — exec / help: exec(asset, command) runs a command against an asset and dispatches on the asset's REAL type, read from the asset record. You do not need to know the type in advance and you cannot mis-route: passing a Redis asset to exec runs it as Redis. Pass the asset's id or name as `asset`; use `scope` for the connection-level target that is not part of the command itself (database name for database assets, db index for Redis).",
+		"",
+		"Command syntax differs per asset type and is documented per type. The FIRST time you use exec against a given asset type in a conversation, call help(asset) to load that type's syntax — exec will tell you to if you skip it, and that round trip is wasted. Once you have called help for a type, it stays loaded for the rest of the conversation.",
+	}
+	if len(b.assetTypeSkills) > 0 {
+		var execTypes, configOnlyTypes []string
+		for t := range b.assetTypeSkills {
+			if _, ok := permission.ExecutorFor(t); ok {
+				execTypes = append(execTypes, t)
+			} else {
+				configOnlyTypes = append(configOnlyTypes, t)
+			}
+		}
+		sort.Strings(execTypes)
+		sort.Strings(configOnlyTypes)
+
+		if len(execTypes) > 0 {
+			lines = append(lines, "", "Asset types exec currently covers (help + exec both work):", "")
+			for _, t := range execTypes {
+				lines = append(lines, fmt.Sprintf("- %s: %s", t, b.assetTypeSkills[t]))
+			}
+		}
+		if len(configOnlyTypes) > 0 {
+			lines = append(lines, "",
+				"Config-only asset types — help documents put_asset config fields for these; exec is NOT supported for these:", "")
+			for _, t := range configOnlyTypes {
+				lines = append(lines, fmt.Sprintf("- %s: %s", t, b.assetTypeSkills[t]))
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (b *PromptBuilder) buildUserDenialGuidance() string {

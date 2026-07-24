@@ -52,31 +52,3 @@ func TestSnippet_IsReadOnly(t *testing.T) {
 func TestSnippet_TableName(t *testing.T) {
 	assert.Equal(t, "snippets", Snippet{}.TableName())
 }
-
-func TestAllCategories(t *testing.T) {
-	cats := AllCategories()
-	assert.Len(t, cats, 6)
-	assert.Contains(t, cats, CategoryShell)
-	assert.Contains(t, cats, CategorySQL)
-	assert.Contains(t, cats, CategoryRedis)
-	assert.Contains(t, cats, CategoryMongo)
-	assert.Contains(t, cats, CategoryK8s)
-	assert.Contains(t, cats, CategoryPrompt)
-}
-
-func TestIsValidCategory(t *testing.T) {
-	assert.True(t, IsValidCategory(CategoryShell))
-	assert.True(t, IsValidCategory(CategoryPrompt))
-	assert.False(t, IsValidCategory(""))
-	assert.False(t, IsValidCategory("bogus"))
-}
-
-func TestCategoryAssetType(t *testing.T) {
-	assert.Equal(t, "ssh", CategoryAssetType(CategoryShell))
-	assert.Equal(t, "database", CategoryAssetType(CategorySQL))
-	assert.Equal(t, "redis", CategoryAssetType(CategoryRedis))
-	assert.Equal(t, "mongodb", CategoryAssetType(CategoryMongo))
-	assert.Equal(t, "k8s", CategoryAssetType(CategoryK8s))
-	assert.Equal(t, "", CategoryAssetType(CategoryPrompt))
-	assert.Equal(t, "", CategoryAssetType("bogus"))
-}

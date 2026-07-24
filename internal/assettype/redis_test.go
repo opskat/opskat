@@ -11,10 +11,6 @@ import (
 func TestRedisHandler(t *testing.T) {
 	convey.Convey("Redis Handler", t, func() {
 		h := &redisHandler{}
-		convey.Convey("Type and DefaultPort", func() {
-			convey.So(h.Type(), convey.ShouldEqual, "redis")
-			convey.So(h.DefaultPort(), convey.ShouldEqual, 6379)
-		})
 		convey.Convey("SafeView", func() {
 			a := &asset_entity.Asset{Type: "redis", Status: 1}
 			_ = a.SetRedisConfig(&asset_entity.RedisConfig{
@@ -53,11 +49,6 @@ func TestRedisHandler(t *testing.T) {
 			convey.So(cfg.Host, convey.ShouldEqual, "10.0.0.2")
 			convey.So(cfg.Port, convey.ShouldEqual, 6379)
 			convey.So(cfg.Username, convey.ShouldEqual, "default")
-		})
-		convey.Convey("Registered", func() {
-			h, ok := Get("redis")
-			convey.So(ok, convey.ShouldBeTrue)
-			convey.So(h.Type(), convey.ShouldEqual, "redis")
 		})
 	})
 }

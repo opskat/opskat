@@ -11,10 +11,6 @@ import (
 func TestSSHHandler(t *testing.T) {
 	convey.Convey("SSH Handler", t, func() {
 		h := &sshHandler{}
-		convey.Convey("Type and DefaultPort", func() {
-			convey.So(h.Type(), convey.ShouldEqual, "ssh")
-			convey.So(h.DefaultPort(), convey.ShouldEqual, 22)
-		})
 		convey.Convey("SafeView", func() {
 			a := &asset_entity.Asset{Type: "ssh", Status: 1}
 			_ = a.SetSSHConfig(&asset_entity.SSHConfig{
@@ -51,11 +47,6 @@ func TestSSHHandler(t *testing.T) {
 			convey.So(cfg.Host, convey.ShouldEqual, "10.0.0.2")
 			convey.So(cfg.Port, convey.ShouldEqual, 22)
 			convey.So(cfg.Username, convey.ShouldEqual, "root")
-		})
-		convey.Convey("Registered", func() {
-			h, ok := Get("ssh")
-			convey.So(ok, convey.ShouldBeTrue)
-			convey.So(h.Type(), convey.ShouldEqual, "ssh")
 		})
 	})
 }

@@ -48,12 +48,12 @@ func TestPanelConnCache_GetOrDial_CachesAndReuses(t *testing.T) {
 			return &fakeClient{id: 1}, &fakeCloser{}, nil
 		}
 
-		client1, _, err := c.GetOrDial("1:db", dial)
+		client1, _, err := c.GetOrDial(1, "1:db", dial)
 		So(err, ShouldBeNil)
 		So(client1, ShouldNotBeNil)
 		So(dialCount.Load(), ShouldEqual, 1)
 
-		client2, _, err := c.GetOrDial("1:db", dial)
+		client2, _, err := c.GetOrDial(1, "1:db", dial)
 		So(err, ShouldBeNil)
 		So(client2, ShouldEqual, client1)
 		So(dialCount.Load(), ShouldEqual, 1)
@@ -81,7 +81,7 @@ func TestPanelConnCache_GetOrDial_ConcurrentSameKeyDialsOnce(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				<-start
-				client, _, err := c.GetOrDial("1:db", dial)
+				client, _, err := c.GetOrDial(1, "1:db", dial)
 				assert.NoError(t, err)
 				mu.Lock()
 				if firstClient == nil {
@@ -110,8 +110,8 @@ func TestPanelConnCache_DifferentKeysIndependent(t *testing.T) {
 			return &fakeClient{id: 2}, nil, nil
 		}
 
-		a, _, _ := c.GetOrDial("1:db1", dialA)
-		b, _, _ := c.GetOrDial("2:db2", dialB)
+		a, _, _ := c.GetOrDial(1, "1:db1", dialA)
+		b, _, _ := c.GetOrDial(2, "2:db2", dialB)
 		So(a.id, ShouldEqual, 1)
 		So(b.id, ShouldEqual, 2)
 		So(a, ShouldNotEqual, b)
@@ -132,10 +132,10 @@ func TestPanelConnCache_DialError_NotCached(t *testing.T) {
 			return &fakeClient{id: 1}, nil, nil
 		}
 
-		_, _, err := c.GetOrDial("1:db", dial)
+		_, _, err := c.GetOrDial(1, "1:db", dial)
 		So(err, ShouldNotBeNil)
 
-		client, _, err := c.GetOrDial("1:db", dial)
+		client, _, err := c.GetOrDial(1, "1:db", dial)
 		So(err, ShouldBeNil)
 		So(client, ShouldNotBeNil)
 		So(attempts.Load(), ShouldEqual, 2)
@@ -152,7 +152,7 @@ func TestPanelConnCache_Drop_ClosesAndRemoves(t *testing.T) {
 		dial := func() (*fakeClient, io.Closer, error) {
 			return client, tunnel, nil
 		}
-		_, _, err := c.GetOrDial("1:db", dial)
+		_, _, err := c.GetOrDial(1, "1:db", dial)
 		So(err, ShouldBeNil)
 
 		c.Drop("1:db")
@@ -164,7 +164,7 @@ func TestPanelConnCache_Drop_ClosesAndRemoves(t *testing.T) {
 		dial2 := func() (*fakeClient, io.Closer, error) {
 			return newClient, nil, nil
 		}
-		got, _, err := c.GetOrDial("1:db", dial2)
+		got, _, err := c.GetOrDial(1, "1:db", dial2)
 		So(err, ShouldBeNil)
 		So(got, ShouldEqual, newClient)
 	})
@@ -179,10 +179,10 @@ func TestPanelConnCache_Close_ReleasesAll(t *testing.T) {
 		tunnelA := &fakeCloser{}
 		tunnelB := &fakeCloser{}
 
-		_, _, _ = c.GetOrDial("1:db", func() (*fakeClient, io.Closer, error) {
+		_, _, _ = c.GetOrDial(1, "1:db", func() (*fakeClient, io.Closer, error) {
 			return clientA, tunnelA, nil
 		})
-		_, _, _ = c.GetOrDial("2:db", func() (*fakeClient, io.Closer, error) {
+		_, _, _ = c.GetOrDial(2, "2:db", func() (*fakeClient, io.Closer, error) {
 			return clientB, tunnelB, nil
 		})
 
@@ -201,7 +201,7 @@ func TestPanelConnCache_Evictor_EvictsIdle(t *testing.T) {
 		defer func() { _ = c.Close() }()
 
 		client := &fakeClient{id: 1}
-		_, _, _ = c.GetOrDial("1:db", func() (*fakeClient, io.Closer, error) {
+		_, _, _ = c.GetOrDial(1, "1:db", func() (*fakeClient, io.Closer, error) {
 			return client, nil, nil
 		})
 
@@ -212,5 +212,27 @@ func TestPanelConnCache_Evictor_EvictsIdle(t *testing.T) {
 
 		// 缓存里应该已经没有这个 key 了
 		So(c.size(), ShouldEqual, 0)
+	})
+}
+
+func TestPanelConnCache_DropAsset(t *testing.T) {
+	Convey("DropAsset 关掉该资产的全部连接,不误伤其它资产", t, func() {
+		c := newPanelConnCache[*fakeClient]("test", time.Minute)
+		defer func() { _ = c.Close() }()
+
+		dial := func(id int64) func() (*fakeClient, io.Closer, error) {
+			return func() (*fakeClient, io.Closer, error) { return &fakeClient{id: id}, nil, nil }
+		}
+		// key 前缀相同但资产不同（1 vs 12）：靠字符串前缀匹配会误伤，靠 assetID 不会。
+		a1, _, _ := c.GetOrDial(1, "1:db1", dial(1))
+		a2, _, _ := c.GetOrDial(1, "1:db2", dial(2))
+		other, _, _ := c.GetOrDial(12, "12:db1", dial(3))
+
+		c.DropAsset(1)
+
+		So(a1.closed.Load(), ShouldBeTrue)
+		So(a2.closed.Load(), ShouldBeTrue)
+		So(other.closed.Load(), ShouldBeFalse)
+		So(c.size(), ShouldEqual, 1)
 	})
 }

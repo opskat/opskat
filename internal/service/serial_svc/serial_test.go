@@ -593,3 +593,29 @@ func TestManagerReadOutputClosesSessionOnUnexpectedError(t *testing.T) {
 	_, ok := mgr.GetSession(sess.ID)
 	assert.False(t, ok)
 }
+
+func TestManagerCloseAsset(t *testing.T) {
+	mgr := NewManager()
+	portA1, portA2, portB := &fakePort{}, &fakePort{}, &fakePort{}
+	mgr.sessions.Store("a1", &Session{ID: "a1", AssetID: 1, port: portA1})
+	mgr.sessions.Store("a2", &Session{ID: "a2", AssetID: 1, port: portA2})
+	mgr.sessions.Store("b1", &Session{ID: "b1", AssetID: 2, port: portB})
+
+	mgr.CloseAsset(1)
+
+	if _, ok := mgr.sessions.Load("a1"); ok {
+		t.Fatal("a1 应已从会话表移除")
+	}
+	if _, ok := mgr.sessions.Load("a2"); ok {
+		t.Fatal("a2 应已从会话表移除")
+	}
+	if portA1.getCloseCount() == 0 || portA2.getCloseCount() == 0 {
+		t.Fatal("该资产的串口应已关闭")
+	}
+	if _, ok := mgr.sessions.Load("b1"); !ok {
+		t.Fatal("其它资产的会话不应受影响")
+	}
+	if portB.getCloseCount() != 0 {
+		t.Fatal("其它资产的串口不应被关闭")
+	}
+}

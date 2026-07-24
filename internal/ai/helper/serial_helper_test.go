@@ -36,14 +36,35 @@ func (s *fakeSerialSession) ExecCommand(command string, _ time.Duration, _ time.
 	return s.output, s.err
 }
 
-func TestHandleRunSerialCommandSuccess(t *testing.T) {
+// TestNoActiveSerialSession_SameErrorFromBothPaths locks errNoActiveSerialSession's
+// reason for existing: the precheck registered for the unified exec
+// (PrecheckSerialSession) and the pure executor (ExecSerialOnAsset) must report the
+// same sentence. They are reached in that order for one command, and a user who sees
+// two different wordings for one condition cannot tell they are the same problem.
+//
+// This replaces TestHandleRunSerialCommandRequiresActiveSession, which asserted the
+// same condition on the deleted run_serial_command tool.
+func TestNoActiveSerialSession_SameErrorFromBothPaths(t *testing.T) {
+	ctx := WithSerialManager(context.Background(), &fakeSerialManager{ok: false})
+	asset := &asset_entity.Asset{ID: 7, Type: asset_entity.AssetTypeSerial}
+
+	precheckErr := PrecheckSerialSession(ctx, asset)
+	require.Error(t, precheckErr)
+	assert.Contains(t, precheckErr.Error(), "no active serial session")
+
+	_, execErr := ExecSerialOnAsset(ctx, asset, "display version", "")
+	require.Error(t, execErr)
+	assert.Equal(t, precheckErr.Error(), execErr.Error())
+}
+
+// TestExecSerialOnAsset_SendsCommandVerbatim keeps the coverage the deleted
+// TestHandleRunSerialCommandSuccess had over the happy path: the command reaches the
+// session unmodified and its output is returned as-is.
+func TestExecSerialOnAsset_SendsCommandVerbatim(t *testing.T) {
 	sess := &fakeSerialSession{output: "version\r\nOK\r\n"}
 	ctx := WithSerialManager(context.Background(), &fakeSerialManager{session: sess, ok: true})
 
-	result, err := HandleRunSerialCommand(ctx, map[string]any{
-		"asset_id": int64(7),
-		"command":  "display version",
-	})
+	result, err := ExecSerialOnAsset(ctx, &asset_entity.Asset{ID: 7}, "display version", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, "version\r\nOK\r\n", result)
@@ -51,19 +72,16 @@ func TestHandleRunSerialCommandSuccess(t *testing.T) {
 	assert.Equal(t, "display version", sess.lastCommand)
 }
 
-func TestHandleRunSerialCommandRequiresActiveSession(t *testing.T) {
-	ctx := WithSerialManager(context.Background(), &fakeSerialManager{ok: false})
-
-	_, err := HandleRunSerialCommand(ctx, map[string]any{
-		"asset_id": int64(7),
-		"command":  "display version",
-	})
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no active serial session")
-}
-
-func TestHandleRunSerialCommandRespectsSerialPolicy(t *testing.T) {
+// TestExecSerialOnAsset_IgnoresPolicyChecker proves the pure-exec body registered
+// as the unified exec's ExecFunc does NOT consult the policy checker in ctx — the
+// check is the unified exec tool's job, once, before dispatch (Task 6). Under the
+// identical deny policy that the (now deleted) run_serial_command tool used to block
+// before ever touching the session, calling ExecSerialOnAsset directly must still
+// execute. If a permission check were
+// ever reintroduced into this function, the command would be blocked here too and
+// this test would fail — that's exactly the double-approval-dialog regression the
+// split guards against.
+func TestExecSerialOnAsset_IgnoresPolicyChecker(t *testing.T) {
 	ctx, mockAsset, _ := setupPolicyTest(t)
 	asset := &asset_entity.Asset{
 		ID:   1,
@@ -74,18 +92,15 @@ func TestHandleRunSerialCommandRespectsSerialPolicy(t *testing.T) {
 	}
 	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
 
-	sess := &fakeSerialSession{output: "should not execute"}
+	sess := &fakeSerialSession{output: "should execute"}
 	ctx = permission.WithPolicyChecker(ctx, permission.NewCommandPolicyChecker(nil))
 	ctx = WithSerialManager(ctx, &fakeSerialManager{session: sess, ok: true})
 
-	result, err := HandleRunSerialCommand(ctx, map[string]any{
-		"asset_id": int64(1),
-		"command":  "reload now",
-	})
+	result, err := ExecSerialOnAsset(ctx, asset, "reload now", "")
 
 	require.NoError(t, err)
-	assert.NotEmpty(t, result)
-	assert.Equal(t, 0, sess.calls)
+	assert.Equal(t, "should execute", result)
+	assert.Equal(t, 1, sess.calls)
 }
 
 func TestCommandPolicyCheckerSerialApprovalType(t *testing.T) {

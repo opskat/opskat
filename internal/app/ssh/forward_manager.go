@@ -139,6 +139,33 @@ func (m *ForwardManager) stopConfigLocked(configID int64) {
 	}
 }
 
+// CloseAsset 停掉指定资产的全部转发规则并关闭它的 SSH 连接。
+// 不走 releaseClientLocked：那是按引用计数递减，而资产已经被删除，
+// 这条连接不会再有新的使用者，必须直接关掉，否则本地监听端口会一直挂着。
+func (m *ForwardManager) CloseAsset(assetID int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for ruleID, rf := range m.running {
+		if rf.assetID == assetID {
+			rf.cancel()
+			delete(m.running, ruleID)
+		}
+	}
+	fc, ok := m.clients[assetID]
+	if !ok {
+		return
+	}
+	delete(m.clients, assetID)
+	if err := fc.client.Close(); err != nil {
+		logger.Default().Warn("close SSH client", zap.Int64("assetID", assetID), zap.Error(err))
+	}
+	for _, c := range fc.closers {
+		if err := c.Close(); err != nil {
+			logger.Default().Warn("close closer", zap.Int64("assetID", assetID), zap.Error(err))
+		}
+	}
+}
+
 // StopAll 停止所有转发
 func (m *ForwardManager) StopAll() {
 	m.mu.Lock()

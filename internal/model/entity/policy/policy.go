@@ -156,6 +156,11 @@ const (
 	BuiltinKafkaOperator         = "builtin:kafka-operator"
 	BuiltinKafkaSecurityAdmin    = "builtin:kafka-security-admin"
 	BuiltinKafkaDangerousDeny    = "builtin:kafka-dangerous-deny"
+	// BuiltinKafkaMessageWriteDeny 是**可选**的，刻意不进 DefaultKafkaPolicy：
+	// EffectiveKafkaPolicy 无条件追加默认 DenyList 且 deny 命中即返回，默认清单因此是
+	// 一道任何配置都覆盖不了的地板。message.write 进了那道地板，AI 就永久无法 produce，
+	// 连 BuiltinKafkaOperator 显式列出的 "message.write *" 也会变成死条目。
+	BuiltinKafkaMessageWriteDeny = "builtin:kafka-message-write-deny"
 	BuiltinEtcdReadOnly          = "builtin:etcd-readonly"
 	BuiltinEtcdDangerousDeny     = "builtin:etcd-dangerous-deny"
 

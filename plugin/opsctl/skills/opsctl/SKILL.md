@@ -1,11 +1,11 @@
 ---
 name: opsctl
-description: "opskat CLI for asset management and remote operations (SSH, SQL, Redis, file transfer). Use when: managing server assets, executing remote commands, writing opsctl scripts/automation, or working with approval/grant/session workflows. Also triggers for: deploying to servers, server diagnostics/troubleshooting, batch operations across fleet, database queries, file transfers between servers, server inventory/discovery."
+description: "opskat CLI for asset management and remote operations (SSH, databases, Redis, MongoDB, Kafka, Kubernetes, etcd, file transfer). Use when: managing server assets, executing remote commands, writing opsctl scripts/automation, or working with approval/grant/session workflows. Also triggers for: deploying to servers, server diagnostics/troubleshooting, batch operations across fleet, database queries, file transfers between servers, server inventory/discovery."
 ---
 
 # opsctl CLI Tool
 
-Standalone CLI for asset management and remote operations without the GUI. All managed assets (servers, databases, Redis) are stored in the desktop app — use `list`/`get` to discover available targets before operating.
+Standalone CLI for asset management and remote operations without the GUI. All managed assets (servers, databases, Redis, MongoDB, Kafka, Kubernetes, etcd, ...) are stored in the desktop app — use `list`/`get` to discover available targets before operating, and `help <asset-or-type>` to learn a type's config and command contract.
 
 ## Global Flags
 
@@ -20,13 +20,29 @@ Assets can be referenced by:
 - **Name**: `opsctl get asset web-server`
 - **Group/Name path**: `opsctl get asset production/web-01`
 
+## Type Assertions
+
+**When the asset type is known, always include a type assertion.** This catches
+a target/type mismatch before policy checks, approval, or execution. Assertions
+never select the protocol: dispatch still comes from the asset record.
+
+- Single command: `opsctl exec <asset> --type <asset-type> -- <command>`
+- Positional batch: `<asset-type>:<asset>:<command>`
+- JSON batch: include `"type":"<asset-type>"` on every known-type item
+
+Prefer canonical asset types (`ssh`, `database`, `redis`, `mongodb`, `etcd`,
+`kafka`, `k8s`, `serial`). Compatibility aliases (`exec`, `sql`, `mongo`) are
+accepted, but canonical names make the AI's intent clear. Omit the assertion
+only when the type is genuinely unknown; use `get asset` to discover it first
+when practical.
+
 ## Context Efficiency
 
 Minimize output to save context window:
 - **Filter lists**: `opsctl list assets --type ssh --group-id 2` instead of unfiltered `list assets` when the target type/group is known.
 - **Targeted get**: Use `get asset <name>` for a single asset instead of listing all then filtering.
 - **Batch over sequential**: One `opsctl batch` call returns structured JSON — more compact than N separate `exec` outputs with shell overhead.
-- **Pipe to grep/head**: When only partial output is needed, pipe remote commands: `opsctl exec web -- "tail -50 /var/log/app.log"` instead of dumping entire logs.
+- **Pipe to grep/head**: When only partial output is needed, pipe remote commands: `opsctl exec web --type ssh -- "tail -50 /var/log/app.log"` instead of dumping entire logs.
 
 ## Approval Mechanism
 
@@ -35,7 +51,7 @@ Most write operations require desktop app approval.
 **Flow**: policy check → grant pattern match → session auto-approve → desktop app approval dialog.
 
 - **Queue mode**: Multiple concurrent approval requests are queued into a single dialog. User can approve/deny individually or batch "Approve All" / "Deny All".
-- **Offline**: Policy/grant matches still auto-approve; otherwise rejects. CP/Create/Update always need desktop app.
+- **Offline**: Policy/grant matches still auto-approve; otherwise rejects. CP/Create/Update always need desktop app. **Delete always needs desktop app too, and cannot be pre-approved or granted even with an active session** — there is no "allow all" for it.
 - **Pre-approve patterns**: Use `grant submit` or `request_permission` tool to submit command patterns (supports `*` wildcard). Approved patterns auto-pass subsequent matching commands.
 
 ## Sessions
@@ -46,16 +62,16 @@ For explicit session management, grant workflow, and details, see [references/co
 
 ## Parallel Execution
 
-**Preferred: `opsctl batch`** — Execute multiple commands (exec/sql/redis) in a single invocation with one approval dialog and parallel execution. This avoids approval race conditions and process-level failures.
+**Preferred: `opsctl batch`** — Execute multiple commands against any asset type (ssh, database, redis, mongodb, etcd, kafka, k8s, ...) in a single invocation with one approval dialog and parallel execution. This avoids approval race conditions and process-level failures.
 
 ```bash
-# Args mode (default exec, use type: prefix for sql/redis)
-opsctl batch '1:uptime' 'sql:2:SELECT 1' 'redis:3:PING'
+# Args mode: mark every item whose type is known.
+opsctl batch 'ssh:web-01:uptime' 'database:db-01:SELECT COUNT(*) FROM users' 'redis:cache:PING'
 
 # JSON stdin mode (AI-friendly)
 echo '{"commands":[
-  {"asset":"web-01","type":"exec","command":"uptime"},
-  {"asset":"db-01","type":"sql","command":"SELECT COUNT(*) FROM users"},
+  {"asset":"web-01","type":"ssh","command":"uptime"},
+  {"asset":"db-01","type":"database","command":"SELECT COUNT(*) FROM users"},
   {"asset":"cache","type":"redis","command":"PING"}
 ]}' | opsctl batch
 ```
@@ -72,7 +88,7 @@ Output is structured JSON with per-command results (`exit_code`, `stdout`, `stde
 
 ## Commands
 
-Core commands: `list`, `get`, `create`, `update`, `ssh`, `exec`, `batch`, `sql`, `redis`, `mongo`, `cp`, `grant`, `session`, `init`.
+Core commands: `list`, `get`, `help`, `create`, `update`, `delete`, `ssh`, `exec`, `batch`, `cp`, `grant`, `session`, `ext`, `version`.
 
 For full command reference with flags and examples, see [references/commands.md](references/commands.md).
 
@@ -93,7 +109,7 @@ For full command reference with flags and examples, see [references/commands.md]
 
 ```bash
 # Check disk/memory across all production servers
-opsctl batch 'web-01:df -h && free -h' 'web-02:df -h && free -h' 'db-01:df -h && free -h'
+opsctl batch 'ssh:web-01:df -h && free -h' 'ssh:web-02:df -h && free -h' 'ssh:db-01:df -h && free -h'
 ```
 
 ### Deploy Config → Restart Service
@@ -103,20 +119,20 @@ opsctl batch 'web-01:df -h && free -h' 'web-02:df -h && free -h' 'db-01:df -h &&
 opsctl grant submit web-01 web-02 "tee /etc/app/config.yml" "systemctl restart app"
 
 # 2. Deploy (all auto-approved by grant)
-cat config.yml | opsctl exec web-01 -- tee /etc/app/config.yml
-cat config.yml | opsctl exec web-02 -- tee /etc/app/config.yml
-opsctl batch 'web-01:systemctl restart app' 'web-02:systemctl restart app'
+cat config.yml | opsctl exec web-01 --type ssh -- tee /etc/app/config.yml
+cat config.yml | opsctl exec web-02 --type ssh -- tee /etc/app/config.yml
+opsctl batch 'ssh:web-01:systemctl restart app' 'ssh:web-02:systemctl restart app'
 ```
 
 ### Cross-Environment Data Migration
 
 ```bash
 # Export from staging, import to prod (direct streaming, no local disk)
-opsctl exec staging-db -- "mysqldump -u app dbname | gzip" > /tmp/dump.sql.gz
-opsctl exec prod-db -- "gunzip | mysql -u app dbname" < /tmp/dump.sql.gz
+opsctl exec staging-db --type ssh -- "mysqldump -u app dbname | gzip" > /tmp/dump.sql.gz
+opsctl exec prod-db --type ssh -- "gunzip | mysql -u app dbname" < /tmp/dump.sql.gz
 
 # Or query + transfer
-opsctl sql staging-db "SELECT * FROM config WHERE env='staging'"
+opsctl exec staging-db --type database -- "SELECT * FROM config WHERE env='staging'"
 opsctl cp staging:/var/backups/db.sql prod:/var/tmp/db.sql
 ```
 

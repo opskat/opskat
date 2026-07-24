@@ -8,24 +8,6 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 )
 
-func TestPolicyKindRegistry(t *testing.T) {
-	Convey("policyKind 注册表", t, func() {
-		Convey("内置 7 个 kind 已注册", func() {
-			for _, k := range []string{
-				PolicyKindCommand, PolicyKindQuery, PolicyKindRedis,
-				PolicyKindMongo, PolicyKindKafka, PolicyKindK8s, PolicyKindEtcd,
-			} {
-				_, ok := kindRegistry[k]
-				So(ok, ShouldBeTrue)
-			}
-		})
-		Convey("未知 kind 未注册", func() {
-			_, ok := kindRegistry["bogus"]
-			So(ok, ShouldBeFalse)
-		})
-	})
-}
-
 func TestDecodeCurrentPolicy(t *testing.T) {
 	Convey("DecodeCurrentPolicy", t, func() {
 		Convey("command → *CommandPolicy", func() {

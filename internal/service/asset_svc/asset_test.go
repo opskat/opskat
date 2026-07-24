@@ -2,8 +2,10 @@ package asset_svc
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
@@ -90,12 +92,53 @@ func TestAssetSvc_List(t *testing.T) {
 func TestAssetSvc_Delete(t *testing.T) {
 	ctx, mockRepo := setupTest(t)
 
+	// 资产删除后必须断开它的在用连接，这里用一个假 closer 观察 assetconn 是否被触发。
+	var closed []int64
+	assetconn.Register("asset_svc_test", func(_ context.Context, assetID int64) error {
+		closed = append(closed, assetID)
+		return nil
+	})
+
 	convey.Convey("删除资产", t, func() {
-		convey.Convey("软删除成功", func() {
+		convey.Convey("软删除成功后断开在用连接", func() {
+			closed = nil
 			mockRepo.EXPECT().Delete(gomock.Any(), int64(1)).Return(nil)
 
 			err := Asset().Delete(ctx, 1)
 			assert.NoError(t, err)
+			assert.Equal(t, []int64{1}, closed)
+		})
+
+		convey.Convey("删除失败不断开连接", func() {
+			closed = nil
+			mockRepo.EXPECT().Delete(gomock.Any(), int64(2)).Return(errors.New("db down"))
+
+			err := Asset().Delete(ctx, 2)
+			assert.Error(t, err)
+			assert.Empty(t, closed)
+		})
+	})
+}
+
+func TestAssetSvc_GroupMembership(t *testing.T) {
+	ctx, mockRepo := setupTest(t)
+
+	convey.Convey("按分组处理资产", t, func() {
+		convey.Convey("删除前返回资产信息，供事务提交后的断连与审计使用", func() {
+			assets := []*asset_entity.Asset{{ID: 4, Name: "web-01"}, {ID: 5, Name: "db-01"}}
+			mockRepo.EXPECT().List(gomock.Any(), asset_repo.ListOptions{GroupID: 30, ExactGroupID: true}).
+				Return(assets, nil)
+			mockRepo.EXPECT().DeleteByGroupID(gomock.Any(), int64(30)).Return(nil)
+
+			got, err := Asset().DeleteByGroup(ctx, 30)
+			assert.NoError(t, err)
+			assert.Equal(t, assets, got)
+		})
+
+		convey.Convey("移出分组时统一移动到未分组", func() {
+			mockRepo.EXPECT().MoveToGroup(gomock.Any(), int64(31), int64(0)).Return(nil)
+
+			assert.NoError(t, Asset().MoveFromGroup(ctx, 31))
 		})
 	})
 }
@@ -160,5 +203,57 @@ func TestAssetSvc_Reorder(t *testing.T) {
 
 		err := Asset().Reorder(ctx, 5, 20, 8)
 		assert.NoError(t, err)
+	})
+}
+
+// TestAssetSvc_Update_InvalidatesConnections 钉住改配置要丢掉缓存/池化的连接。
+//
+// 改了主机地址或口令之后，连接池里那条按旧配置拨出去的连接还在，下一次查询/操作照旧
+// 复用它——用户改完发现"没生效"。此前只有 etcd 与 oss 做了失效，还是挂在 assettype 的
+// ApplyUpdateArgs 里（AI / opsctl 的 put_asset 才会走到），桌面 UI 改资产根本不触发。
+//
+// 只丢缓存不关会话：改配置不该掐断用户开着的终端，那一侧由 CloseAsset 负责。
+func TestAssetSvc_Update_InvalidatesConnections(t *testing.T) {
+	ctx, mockRepo := setupTest(t)
+
+	var invalidated, closed []int64
+	assetconn.RegisterInvalidator("asset_svc_update_test", func(_ context.Context, assetID int64) error {
+		invalidated = append(invalidated, assetID)
+		return nil
+	})
+	assetconn.Register("asset_svc_update_session_test", func(_ context.Context, assetID int64) error {
+		closed = append(closed, assetID)
+		return nil
+	})
+	t.Cleanup(func() {
+		assetconn.UnregisterForTest("asset_svc_update_test")
+		assetconn.UnregisterForTest("asset_svc_update_session_test")
+	})
+
+	convey.Convey("更新资产", t, func() {
+		convey.Convey("更新成功后丢弃该资产的缓存连接，但不动交互式会话", func() {
+			invalidated, closed = nil, nil
+			asset := &asset_entity.Asset{ID: 5, Name: "web-01", Type: asset_entity.AssetTypeSSH}
+			_ = asset.SetSSHConfig(&asset_entity.SSHConfig{
+				Host: "10.0.0.9", Port: 22, Username: "root", AuthType: asset_entity.AuthTypePassword,
+			})
+			mockRepo.EXPECT().Update(gomock.Any(), asset).Return(nil)
+
+			assert.NoError(t, Asset().Update(ctx, asset))
+			assert.Equal(t, []int64{5}, invalidated)
+			assert.Empty(t, closed, "改配置不该关掉用户开着的会话")
+		})
+
+		convey.Convey("更新失败时不失效：配置没落库，缓存里的连接仍然是对的", func() {
+			invalidated = nil
+			asset := &asset_entity.Asset{ID: 6, Name: "web-02", Type: asset_entity.AssetTypeSSH}
+			_ = asset.SetSSHConfig(&asset_entity.SSHConfig{
+				Host: "10.0.0.9", Port: 22, Username: "root", AuthType: asset_entity.AuthTypePassword,
+			})
+			mockRepo.EXPECT().Update(gomock.Any(), asset).Return(errors.New("db down"))
+
+			assert.Error(t, Asset().Update(ctx, asset))
+			assert.Empty(t, invalidated)
+		})
 	})
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 
+	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/pkg/dbutil"
@@ -18,10 +19,13 @@ import (
 // AssetSvc 资产业务接口
 type AssetSvc interface {
 	Get(ctx context.Context, id int64) (*asset_entity.Asset, error)
+	FindByName(ctx context.Context, name string) ([]*asset_entity.Asset, error)
 	List(ctx context.Context, assetType string, groupID int64) ([]*asset_entity.Asset, error)
 	Create(ctx context.Context, asset *asset_entity.Asset) error
 	Update(ctx context.Context, asset *asset_entity.Asset) error
 	Delete(ctx context.Context, id int64) error
+	DeleteByGroup(ctx context.Context, groupID int64) ([]*asset_entity.Asset, error)
+	MoveFromGroup(ctx context.Context, groupID int64) error
 	Move(ctx context.Context, id int64, direction string) error
 	Reorder(ctx context.Context, id, targetGroupID, beforeID int64) error
 }
@@ -37,6 +41,10 @@ func Asset() AssetSvc {
 
 func (s *assetSvc) Get(ctx context.Context, id int64) (*asset_entity.Asset, error) {
 	return asset_repo.Asset().Find(ctx, id)
+}
+
+func (s *assetSvc) FindByName(ctx context.Context, name string) ([]*asset_entity.Asset, error) {
+	return asset_repo.Asset().FindByName(ctx, name)
 }
 
 func (s *assetSvc) List(ctx context.Context, assetType string, groupID int64) ([]*asset_entity.Asset, error) {
@@ -73,11 +81,43 @@ func (s *assetSvc) Update(ctx context.Context, asset *asset_entity.Asset) error 
 		return err
 	}
 	asset.Updatetime = time.Now().Unix()
-	return asset_repo.Asset().Update(ctx, asset)
+	if err := asset_repo.Asset().Update(ctx, asset); err != nil {
+		return err
+	}
+	// 连接配置可能变了（主机、端口、口令、隧道），缓存/池化的连接是按旧配置拨出去的，
+	// 不丢掉的话下一次操作照旧复用它，用户会觉得"改了没生效"。放在写库成功之后：
+	// 失败时配置没落库，缓存里的连接仍然是对的。
+	// 只失效不关会话——用户开着的终端不该因为改了个字段被掐断。
+	assetconn.InvalidateAsset(ctx, asset.ID)
+	return nil
 }
 
 func (s *assetSvc) Delete(ctx context.Context, id int64) error {
-	return asset_repo.Asset().Delete(ctx, id)
+	if err := asset_repo.Asset().Delete(ctx, id); err != nil {
+		return err
+	}
+	// 资产已经删了，各协议管理器里挂着的会话/客户端必须跟着断开，否则会一直连着一个不存在的资产。
+	// 关闭失败由 assetconn 内部按 closer 记日志：删除本身已经成功，没有可回滚的东西。
+	assetconn.CloseAsset(ctx, id)
+	return nil
+}
+
+// DeleteByGroup 删除指定分组下的全部资产，并返回删除前的资产信息。
+// 调用方可用返回值在事务提交后断开连接、写入带名称和类型的审计记录。
+func (s *assetSvc) DeleteByGroup(ctx context.Context, groupID int64) ([]*asset_entity.Asset, error) {
+	assets, err := asset_repo.Asset().List(ctx, asset_repo.ListOptions{GroupID: groupID, ExactGroupID: true})
+	if err != nil {
+		return nil, err
+	}
+	if err := asset_repo.Asset().DeleteByGroupID(ctx, groupID); err != nil {
+		return nil, err
+	}
+	return assets, nil
+}
+
+// MoveFromGroup 将指定分组下的资产移到未分组。
+func (s *assetSvc) MoveFromGroup(ctx context.Context, groupID int64) error {
+	return asset_repo.Asset().MoveToGroup(ctx, groupID, 0)
 }
 
 // Move 移动资产排序（up/down/top）

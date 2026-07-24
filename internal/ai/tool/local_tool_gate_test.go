@@ -105,6 +105,31 @@ func TestLocalToolGate_Deny_ReturnsDecisionDenyWithReason(t *testing.T) {
 	assert.Len(t, fc.calls, 1)
 }
 
+func TestLocalToolGate_InvalidApprovalResponsesDoNotRun(t *testing.T) {
+	responses := []permission.ApprovalResponse{
+		{},
+		{Decision: "bogus"},
+		{Decision: "ALLOW"},
+		{Decision: "allowAll", EditedItems: []permission.ApprovalItem{{Type: "local_write", Command: "  "}}},
+	}
+	for _, resp := range responses {
+		name := resp.Decision
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			fc := &fakeConfirm{response: resp}
+			g := NewLocalToolGate(fc.fn)
+
+			out := driveGate(ctxWithConv(1), g, "local_write", map[string]any{
+				"path": "/tmp/review-proof", "content": "must-not-be-written",
+			})
+			assert.False(t, out.allowed, "invalid approval response must not reach the local write tool")
+			assert.True(t, out.denied)
+		})
+	}
+}
+
 func TestLocalToolGate_AllowAll_RemembersPatternAndSkipsNextCall(t *testing.T) {
 	fc := &fakeConfirm{response: permission.ApprovalResponse{
 		Decision: "allowAll",

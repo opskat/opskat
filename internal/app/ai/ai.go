@@ -10,6 +10,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/runner"
+	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/internal/service/kafka_svc"
 	"github.com/opskat/opskat/internal/service/serial_svc"
@@ -37,13 +38,31 @@ type AI struct {
 	systemCfg     *runner.SystemConfig
 	policyChecker *permission.CommandPolicyChecker
 
+	// docGate 记录"某会话内，某内置资产类型的 exec 用法文档已经到过模型面前"。
+	// **唯一**的满足条件是模型显式调用过 help——prompt 里那份按类型清单只注入一行描述，
+	// 不含命令语法，仅供发现 help 的存在，不满足门禁（原设计的第二个条件已在实施收尾
+	// 评审中移除，理由见 spec §4.2 的"实施期修正"）。单实例贯穿 AI binder 的整个
+	// 生命周期，内部按 convID 分片——与 systemCfg.LocalToolGate 的 allow-list 同一种存储
+	// 形态（sync.Map/mutex 保护的 map[int64]..., 提供按 convID 的 Reset）。之所以不像
+	// LocalToolGate 那样在 activateProvider 里随 provider 切换重建：门禁记录的是"模型是否
+	// 见过这份文档"，而文档一旦作为 help 工具调用结果写入过会话历史，就会随 conv 消息重放
+	// 一直留在模型上下文里，与当前用的是哪个 LLM provider 无关；切 provider 时重置它只会
+	// 制造一次不必要的 help 往返，不会带来任何正确性收益。
+	docGate *tool.DocGate
+
 	runners               sync.Map // map[int64]*runnerEntry
 	currentConversationID int64
 
 	permissionChan     chan runner.PermissionResponse
-	pendingAIApprovals sync.Map // map[string]chan permission.ApprovalResponse
+	pendingAIApprovals sync.Map // map[string]pendingAIApproval
 
 	flushAckCh chan struct{}
+}
+
+type pendingAIApproval struct {
+	kind  string
+	items []permission.ApprovalItem
+	ch    chan permission.ApprovalResponse
 }
 
 // SetKafkaService 由 main.go 注入：AI tool 在 chat ctx 中通过 helper.WithKafkaService 暴露给 handler。
@@ -61,6 +80,7 @@ func New(appCtx context.Context, lang LangProvider, pool *sshpool.Pool) *AI {
 		appCtx:         appCtx,
 		lang:           lang,
 		pool:           pool,
+		docGate:        tool.NewDocGate(),
 		permissionChan: make(chan runner.PermissionResponse, 1),
 		flushAckCh:     make(chan struct{}, 1),
 	}

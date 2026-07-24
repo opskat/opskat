@@ -963,7 +963,7 @@ var skillTargetDefs = []skillTargetDef{
 
 const pluginRegistryName = "opskat"
 const pluginName = "opsctl"
-const pluginVersion = "1.0.0"
+const pluginVersion = "1.1.0"
 
 // claudePluginDir 返回 Claude Code 插件目录（marketplace 内的插件根目录）
 func claudePluginDir(home string) string {
@@ -1256,6 +1256,95 @@ func (s *System) installTarget(def skillTargetDef, home string) error {
 	}
 }
 
+func (s *System) skillTargetCurrent(def skillTargetDef, home string) (bool, error) {
+	root := def.SkillFn(home)
+	expected := map[string]string{}
+	switch def.Type {
+	case installClaude:
+		expected[filepath.Join(root, ".claude-plugin", "plugin.json")] = s.skillContent.PluginJSON
+		expected[filepath.Join(root, ".claude-plugin", "marketplace.json")] = s.skillContent.PluginMarketplaceJSON
+		expected[filepath.Join(root, "skills", "opsctl", "SKILL.md")] = s.skillMDWithDataDir()
+		expected[filepath.Join(root, "skills", "opsctl", "references", "commands.md")] = s.skillContent.CommandsMD
+		expected[filepath.Join(root, "commands", "init.md")] = s.skillContent.InitMD
+	case installSkill:
+		expected[filepath.Join(root, "SKILL.md")] = s.skillMDWithDataDir()
+		expected[filepath.Join(root, "references", "commands.md")] = s.skillContent.CommandsMD
+		expected[filepath.Join(root, "references", "init.md")] = s.skillContent.InitMD
+	case installGemini:
+		expected[filepath.Join(root, "gemini-extension.json")] = `{"name":"opsctl","version":"` + pluginVersion + `"}` + "\n"
+		expected[filepath.Join(root, "GEMINI.md")] = "See the opsctl skill in skills/opsctl/ for asset management instructions.\n"
+		expected[filepath.Join(root, "skills", "opsctl", "SKILL.md")] = s.skillMDWithDataDir()
+		expected[filepath.Join(root, "skills", "opsctl", "references", "commands.md")] = s.skillContent.CommandsMD
+		expected[filepath.Join(root, "skills", "opsctl", "references", "init.md")] = s.skillContent.InitMD
+	default:
+		return false, fmt.Errorf("unknown install type: %d", def.Type)
+	}
+	for path, want := range expected {
+		got, err := os.ReadFile(path) //nolint:gosec // path is a known skill target under the user home
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("read %s: %w", path, err)
+		}
+		if string(got) != want {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (s *System) updateInstalledSkills(home string) error {
+	for _, def := range skillTargetDefs {
+		if !def.DetectFn(def.SkillFn(home)) {
+			continue
+		}
+		current, err := s.skillTargetCurrent(def, home)
+		if err != nil {
+			return fmt.Errorf("check %s update: %w", def.Name, err)
+		}
+		if current {
+			continue
+		}
+		logger.Default().Info("updating installed skill", zap.String("target", def.Key))
+		if err := s.installTarget(def, home); err != nil {
+			return fmt.Errorf("update %s: %w", def.Name, err)
+		}
+		logger.Default().Info("updated installed skill", zap.String("target", def.Key))
+	}
+	return nil
+}
+
+func (s *System) updateInstalledTools() {
+	opsctlInfo := s.DetectOpsctl()
+	if opsctlInfo.Installed && opsctlInfo.Embedded {
+		needsUpdate, err := embedded.OpsctlNeedsUpdate(opsctlInfo.Path)
+		if err != nil {
+			logger.Default().Warn("check installed opsctl update failed", zap.Error(err))
+		} else if needsUpdate {
+			logger.Default().Info("updating installed opsctl", zap.String("path", opsctlInfo.Path))
+			if _, err := embedded.InstallOpsctl(filepath.Dir(opsctlInfo.Path)); err != nil {
+				// 重装失败不阻塞启动，但要通知用户——事件由 App.tsx 全局监听（重装在启动时
+				// 触发，设置页未必挂载，不能只靠 UpdateSection 的监听器），否则失败完全无感知。
+				logger.Default().Warn("update installed opsctl failed", zap.Error(err))
+				wailsRuntime.EventsEmit(s.ctx, "update:opsctl-error", err.Error())
+			} else {
+				logger.Default().Info("updated installed opsctl", zap.String("path", opsctlInfo.Path))
+			}
+		}
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		logger.Default().Warn("get home directory for skill update failed", zap.Error(err))
+		return
+	}
+	if err := s.updateInstalledSkills(home); err != nil {
+		logger.Default().Warn("update installed skill failed", zap.Error(err))
+		wailsRuntime.EventsEmit(s.ctx, "update:skill-error", err.Error())
+	}
+}
+
 // InstallSkills 安装 Skill 文件到所有支持的 AI 工具
 func (s *System) InstallSkills() error {
 	home, err := os.UserHomeDir()
@@ -1538,6 +1627,7 @@ func (s *System) startAutoUpdateCheck() {
 	go func() {
 		// 延迟 5 秒，等前端就绪
 		time.Sleep(5 * time.Second)
+		s.updateInstalledTools()
 
 		cfg := bootstrap.GetConfig()
 		if cfg == nil {
@@ -1747,28 +1837,6 @@ func (s *System) DownloadAndInstallUpdate(skipChecksum bool) error {
 	})
 	if err != nil {
 		return err
-	}
-
-	// 更新后重新安装 opsctl（如果已安装）
-	opsctlInfo := s.DetectOpsctl()
-	if opsctlInfo.Installed && embedded.HasEmbeddedOpsctl() {
-		installDir := filepath.Dir(opsctlInfo.Path)
-		if _, err := embedded.InstallOpsctl(installDir); err != nil {
-			// opsctl 更新失败不阻塞主更新
-			wailsRuntime.EventsEmit(s.ctx, "update:opsctl-error", err.Error())
-		}
-	}
-
-	// 更新后重新安装 Skills/Plugin（如果已安装）
-	home, _ := os.UserHomeDir()
-	skills := s.DetectSkills()
-	for i, sk := range skills {
-		if !sk.Installed {
-			continue
-		}
-		if installErr := s.installTarget(skillTargetDefs[i], home); installErr != nil {
-			wailsRuntime.EventsEmit(s.ctx, "update:skill-error", installErr.Error())
-		}
 	}
 
 	return nil

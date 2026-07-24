@@ -10,6 +10,9 @@ import {
   CheckCircle2,
   XCircle,
   Shield,
+  BookOpen,
+  Trash2,
+  Puzzle,
 } from "lucide-react";
 import type { ContentBlock } from "@/stores/aiStore";
 
@@ -20,8 +23,14 @@ const toolIcons: Record<string, typeof Terminal> = {
   Edit: FilePen,
   Glob: Search,
   Grep: Search,
-  run_command: Terminal,
+  exec: Terminal,
+  help: BookOpen,
   request_permission: Shield,
+  put_asset: FilePen,
+  put_group: FilePen,
+  delete_asset: Trash2,
+  delete_group: Trash2,
+  ext_exec: Puzzle,
 };
 
 interface ToolBlockProps {
@@ -52,6 +61,9 @@ export const ToolBlock = memo(function ToolBlock({ block }: ToolBlockProps) {
 
   return (
     <div
+      data-testid="ai-tool-block"
+      data-tool-name={block.toolName}
+      data-status={block.status}
       className={`my-1.5 rounded-lg border bg-background text-xs overflow-hidden ${
         isRunning ? "border-primary/30" : "border-border/60"
       }`}
@@ -107,7 +119,10 @@ export const ToolBlock = memo(function ToolBlock({ block }: ToolBlockProps) {
                   {t("toolBlock.output")}
                 </div>
               )}
-              <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground leading-relaxed">
+              <pre
+                data-testid="ai-tool-output"
+                className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground leading-relaxed"
+              >
                 {block.content}
               </pre>
             </div>

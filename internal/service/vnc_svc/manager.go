@@ -30,6 +30,9 @@ type Session struct {
 	Password       string `json:"password,omitempty"`
 	FileSSHAssetID int64  `json:"fileSshAssetId"`
 
+	// assetID 是这个会话所属的 VNC 资产（区别于上面用于文件传输的 FileSSHAssetID）。
+	// 不导出：前端不需要它，它只用于资产被删除时按资产断开会话。
+	assetID   int64
 	conn      net.Conn
 	onData    func([]byte)
 	onClose   func()
@@ -92,6 +95,7 @@ func (m *Manager) connectVNC(ctx context.Context, asset *asset_entity.Asset) (*S
 		Username:       cfg.Username,
 		Password:       password,
 		FileSSHAssetID: cfg.FileSSHAssetID,
+		assetID:        asset.ID,
 		conn:           conn,
 	}
 	m.store(session)
@@ -145,6 +149,21 @@ func (m *Manager) retire(sessionID string, session *Session) {
 		delete(m.sessions, sessionID)
 	}
 	m.mu.Unlock()
+}
+
+// CloseAsset 断开指定资产的全部 VNC 会话。
+func (m *Manager) CloseAsset(assetID int64) {
+	m.mu.Lock()
+	ids := make([]string, 0, len(m.sessions))
+	for id, session := range m.sessions {
+		if session.assetID == assetID {
+			ids = append(ids, id)
+		}
+	}
+	m.mu.Unlock()
+	for _, id := range ids {
+		m.Disconnect(id)
+	}
 }
 
 func (m *Manager) Cleanup() {

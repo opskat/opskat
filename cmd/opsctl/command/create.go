@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
@@ -84,34 +85,36 @@ func cmdCreate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 			}
 		}
 
-		params := map[string]any{
-			"name":     *name,
-			"type":     *assetType,
+		// Type-specific connection fields go under "config": put_asset (the AI CRUD tool
+		// this dispatches to, see tool_handlers_crud.go) only reads config through its
+		// nested "config" object, not the top-level args — name/type/group_id/description/
+		// icon are the only fields it reads at the top level.
+		config := map[string]any{
 			"host":     *host,
 			"port":     float64(*port),
 			"username": *username,
 		}
 		if *assetType == "ssh" && *authType != "" {
-			params["auth_type"] = *authType
+			config["auth_type"] = *authType
 		}
 		if *assetType == "database" {
 			if *driver != "" {
-				params["driver"] = *driver
+				config["driver"] = *driver
 			}
 			if *database != "" {
-				params["database"] = *database
+				config["database"] = *database
 			}
 			if *readOnly {
-				params["read_only"] = "true"
+				config["read_only"] = "true"
 			}
 		}
 		if *assetType == "k8s" {
-			params["kubeconfig"] = *kubeconfig
+			config["kubeconfig"] = *kubeconfig
 			if *k8sNamespace != "" {
-				params["namespace"] = *k8sNamespace
+				config["namespace"] = *k8sNamespace
 			}
 			if *k8sContext != "" {
-				params["context"] = *k8sContext
+				config["context"] = *k8sContext
 			}
 		}
 		if *sshAsset != "" {
@@ -120,7 +123,13 @@ func cmdCreate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 				fmt.Fprintf(os.Stderr, "Error resolving SSH asset: %v\n", resolveErr)
 				return 1
 			}
-			params["ssh_asset_id"] = float64(sshID)
+			config["ssh_asset_id"] = float64(sshID)
+		}
+
+		params := map[string]any{
+			"name":   *name,
+			"type":   *assetType,
+			"config": config,
 		}
 		if *groupID != 0 {
 			params["group_id"] = float64(*groupID)
@@ -145,10 +154,52 @@ func cmdCreate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 			return 1
 		}
 
-		return callHandler(ctx, handlers, "add_asset", params)
+		return callHandler(ctx, handlers, "put_asset", params)
+
+	case "group":
+		fs := flag.NewFlagSet("create group", flag.ExitOnError)
+		name := fs.String("name", "", "Display name for the group (required)")
+		parentID := fs.Int64("parent-id", 0, "Parent group ID for nesting (0 = top-level)")
+		icon := fs.String("icon", "", "Icon name")
+		description := fs.String("description", "", "Optional description or notes")
+		sortOrder := fs.Int("sort-order", 0, "Sort order within the parent; lower comes first")
+		fs.Usage = func() { printCreateGroupUsage() }
+		_ = fs.Parse(args[1:])
+
+		if *name == "" {
+			fmt.Fprintln(os.Stderr, "Error: --name is required")
+			fmt.Fprintln(os.Stderr)
+			printCreateGroupUsage()
+			return 1
+		}
+
+		params := map[string]any{"name": *name}
+		if *parentID != 0 {
+			params["parent_id"] = float64(*parentID)
+		}
+		if *icon != "" {
+			params["icon"] = *icon
+		}
+		if *description != "" {
+			params["description"] = *description
+		}
+		if *sortOrder != 0 {
+			params["sort_order"] = float64(*sortOrder)
+		}
+
+		if _, err := requireApproval(ctx, approval.ApprovalRequest{
+			Type:      "create",
+			Detail:    fmt.Sprintf("opsctl create group --name %s", *name),
+			SessionID: session,
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+
+		return callHandler(ctx, handlers, "put_group", params)
 
 	default:
-		fmt.Fprintf(os.Stderr, "Error: unknown resource %q. Supported: asset\n", resource)
+		fmt.Fprintf(os.Stderr, "Error: unknown resource %q. Supported: asset, group\n", resource)
 		return 1
 	}
 }
@@ -186,20 +237,28 @@ func cmdUpdate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 		fs.Usage = func() { printUpdateAssetUsage() }
 		_ = fs.Parse(args[2:])
 
+		// handlePutAsset resolves the target via assetref.Resolve, which accepts numeric
+		// id strings — so the "asset" key takes the same id already resolved above, just
+		// formatted as a string. Connection fields go under "config" (see cmdCreate).
+		config := map[string]any{}
+		if *host != "" {
+			config["host"] = *host
+		}
+		if *port != 0 {
+			config["port"] = float64(*port)
+		}
+		if *username != "" {
+			config["username"] = *username
+		}
+
 		params := map[string]any{
-			"id": float64(id),
+			"asset": strconv.FormatInt(id, 10),
+		}
+		if len(config) > 0 {
+			params["config"] = config
 		}
 		if *name != "" {
 			params["name"] = *name
-		}
-		if *host != "" {
-			params["host"] = *host
-		}
-		if *port != 0 {
-			params["port"] = float64(*port)
-		}
-		if *username != "" {
-			params["username"] = *username
 		}
 		if *description != "" {
 			params["description"] = *description
@@ -221,10 +280,54 @@ func cmdUpdate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 			return 1
 		}
 
-		return callHandler(ctx, handlers, "update_asset", params)
+		return callHandler(ctx, handlers, "put_asset", params)
+
+	case "group":
+		id, _, err := resolveGroup(ctx, args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+
+		fs := flag.NewFlagSet("update group", flag.ExitOnError)
+		name := fs.String("name", "", "New display name")
+		parentID := fs.Int64("parent-id", -1, "New parent group ID (-1 = unchanged, 0 = top-level)")
+		icon := fs.String("icon", "", "New icon name")
+		description := fs.String("description", "", "New description")
+		sortOrder := fs.Int("sort-order", -1, "New sort order (-1 = unchanged)")
+		fs.Usage = func() { printUpdateGroupUsage() }
+		_ = fs.Parse(args[2:])
+
+		params := map[string]any{"id": float64(id)}
+		if *name != "" {
+			params["name"] = *name
+		}
+		if *parentID >= 0 {
+			params["parent_id"] = float64(*parentID)
+		}
+		if *icon != "" {
+			params["icon"] = *icon
+		}
+		if *description != "" {
+			params["description"] = *description
+		}
+		if *sortOrder >= 0 {
+			params["sort_order"] = float64(*sortOrder)
+		}
+
+		if _, err := requireApproval(ctx, approval.ApprovalRequest{
+			Type:      "update",
+			Detail:    fmt.Sprintf("opsctl update group %s", args[1]),
+			SessionID: session,
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+
+		return callHandler(ctx, handlers, "put_group", params)
 
 	default:
-		fmt.Fprintf(os.Stderr, "Error: unknown resource %q. Supported: asset\n", resource)
+		fmt.Fprintf(os.Stderr, "Error: unknown resource %q. Supported: asset, group\n", resource)
 		return 1
 	}
 }
@@ -235,8 +338,31 @@ func printCreateUsage() {
 
 Resources:
   asset     Create a new asset (ssh, database, redis, mongodb, or k8s)
+  group     Create a new asset group
 
-Run 'opsctl create asset --help' for details.
+Run 'opsctl create asset --help' or 'opsctl create group --help' for details.
+`)
+}
+
+func printCreateGroupUsage() {
+	fmt.Fprint(os.Stderr, `Usage:
+  opsctl [--session <id>] create group [flags]
+
+Required Flags:
+  --name <string>         Display name for the group
+
+Optional Flags:
+  --parent-id <int>       Parent group ID for nesting (0 = top-level)
+  --icon <string>         Icon name
+  --description <string>  Optional description or notes
+  --sort-order <int>      Sort order within the parent; lower comes first
+
+Approval:
+  Requires desktop app approval. Session auto-created if not specified.
+
+Examples:
+  opsctl create group --name "Production"
+  opsctl create group --name "Web Tier" --parent-id 3
 `)
 }
 
@@ -291,12 +417,36 @@ Examples:
 
 func printUpdateUsage() {
 	fmt.Fprint(os.Stderr, `Usage:
-  opsctl update <resource> <asset> [flags]
+  opsctl update <resource> <ref> [flags]
 
 Resources:
-  asset     Update an existing SSH server asset
+  asset     Update an existing asset
+  group     Update an existing asset group
 
-Run 'opsctl update asset <asset> --help' for details.
+Run 'opsctl update asset <asset> --help' or 'opsctl update group <group> --help' for details.
+`)
+}
+
+func printUpdateGroupUsage() {
+	fmt.Fprint(os.Stderr, `Usage:
+  opsctl [--session <id>] update group <ref> [flags]
+
+Arguments:
+  ref       Group name, path, or numeric ID
+
+Flags (only provided fields are updated, others remain unchanged):
+  --name <string>         New display name
+  --parent-id <int>       New parent group ID (-1 = unchanged, 0 = top-level)
+  --icon <string>         New icon name
+  --description <string>  New description
+  --sort-order <int>      New sort order (-1 = unchanged)
+
+Approval:
+  Requires desktop app approval. Session auto-created if not specified.
+
+Examples:
+  opsctl update group 3 --name "Production"
+  opsctl update group staging --parent-id 1
 `)
 }
 

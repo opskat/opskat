@@ -8,6 +8,7 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
+	"github.com/opskat/opskat/internal/pkg/auditredact"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"go.uber.org/zap"
 )
@@ -31,10 +32,10 @@ func (s *Service) writeAudit(session *Session, toolName string, success bool, re
 		ToolName:   toolName,
 		AssetID:    session.AssetID,
 		AssetName:  session.AssetName,
-		Command:    session.RemotePath,
-		Request:    marshalAuditPayload(request, 4096),
-		Result:     marshalAuditPayload(result, 8192),
-		Error:      truncateText(errText, 2048),
+		Command:    auditredact.Text(session.RemotePath),
+		Request:    auditredact.JSON(marshalAuditPayload(request, 4096)),
+		Result:     auditredact.Result(marshalAuditPayload(result, 8192)),
+		Error:      truncateText(auditredact.Text(errText), 2048),
 		Success:    boolToSuccess(success),
 		SessionID:  session.ID,
 		Createtime: s.now().Unix(),
