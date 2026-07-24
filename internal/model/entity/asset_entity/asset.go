@@ -178,22 +178,24 @@ type ProxyChainLayer struct {
 
 // DatabaseConfig 数据库类型的特定配置
 type DatabaseConfig struct {
-	Driver       DatabaseDriver    `json:"driver"`
-	Host         string            `json:"host"`
-	Port         int               `json:"port"`
-	Username     string            `json:"username"`
-	Password     string            `json:"password,omitempty"`      // credential_svc 加密（内联，向后兼容）
-	CredentialID int64             `json:"credential_id,omitempty"` // 统一凭证 ID（密码）
-	Database     string            `json:"database,omitempty"`      // 默认数据库
-	SSLMode      string            `json:"ssl_mode,omitempty"`      // postgresql: disable/require/verify-full
-	TLS          bool              `json:"tls,omitempty"`           // mysql: 启用 TLS 加密连接
-	Params       string            `json:"params,omitempty"`        // 额外连接参数
-	ReadOnly     bool              `json:"read_only,omitempty"`     // 连接级只读
-	SSHAssetID   int64             `json:"ssh_asset_id,omitempty"`  // Deprecated: use Asset.SSHTunnelID
-	SQLiteSource SQLiteSource      `json:"sqlite_source,omitempty"` // SQLite 文件来源: local(默认) / remote_ssh_vfs
-	Path         string            `json:"path,omitempty"`          // SQLite 文件路径;local 为本地绝对路径,remote_ssh_vfs 为远端绝对路径
-	Proxy        *ProxyConfig      `json:"proxy,omitempty"`         // SOCKS5 代理（与 SSH 隧道互斥，隧道优先）
-	ProxyChain   *ProxyChainConfig `json:"proxy_chain,omitempty"`
+	Driver       DatabaseDriver `json:"driver"`
+	Host         string         `json:"host"`
+	Port         int            `json:"port"`
+	Username     string         `json:"username"`
+	Password     string         `json:"password,omitempty"`      // credential_svc 加密（内联，向后兼容）
+	CredentialID int64          `json:"credential_id,omitempty"` // 统一凭证 ID（密码）
+	Database     string         `json:"database,omitempty"`      // 默认数据库
+	SSLMode      string         `json:"ssl_mode,omitempty"`      // postgresql: disable/require/verify-full
+	TLS          bool           `json:"tls,omitempty"`           // mysql: 启用 TLS 加密连接
+	Params       string         `json:"params,omitempty"`        // 额外连接参数
+	ReadOnly     bool           `json:"read_only,omitempty"`     // 连接级只读
+	// QueryTimeoutSeconds 查询超时（秒），0 使用默认值 30s；元数据浏览与 SQL 查询共用。
+	QueryTimeoutSeconds int               `json:"query_timeout_seconds,omitempty"`
+	SSHAssetID          int64             `json:"ssh_asset_id,omitempty"`  // Deprecated: use Asset.SSHTunnelID
+	SQLiteSource        SQLiteSource      `json:"sqlite_source,omitempty"` // SQLite 文件来源: local(默认) / remote_ssh_vfs
+	Path                string            `json:"path,omitempty"`          // SQLite 文件路径;local 为本地绝对路径,remote_ssh_vfs 为远端绝对路径
+	Proxy               *ProxyConfig      `json:"proxy,omitempty"`         // SOCKS5 代理（与 SSH 隧道互斥，隧道优先）
+	ProxyChain          *ProxyChainConfig `json:"proxy_chain,omitempty"`
 }
 
 // RedisConfig Redis类型的特定配置
@@ -925,6 +927,10 @@ func (a *Asset) validateDatabase() error {
 		}
 	default:
 		return fmt.Errorf("不支持的数据库驱动: %s", cfg.Driver)
+	}
+	// 0 表示使用默认值（30s）；显式配置时限定 5~600s。
+	if cfg.QueryTimeoutSeconds != 0 && (cfg.QueryTimeoutSeconds < 5 || cfg.QueryTimeoutSeconds > 600) {
+		return errors.New("数据库查询超时时间无效")
 	}
 	return ValidateProxyChain(EffectiveProxyChain(cfg.ProxyChain, firstNonZero(a.SSHTunnelID, cfg.SSHAssetID), cfg.Proxy))
 }

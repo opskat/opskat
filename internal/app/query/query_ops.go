@@ -179,7 +179,7 @@ func (q *Query) ExecuteSQL(assetID int64, sqlText string, database string) (stri
 		return "", fmt.Errorf("解析凭据失败: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), 30*time.Second)
+	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), queryTimeout(cfg))
 	defer cancel()
 
 	db, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
@@ -265,7 +265,7 @@ func (q *Query) OpenTable(assetID int64, database, table string, pageSize int) (
 		return "", fmt.Errorf("解析凭据失败: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), 30*time.Second)
+	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), queryTimeout(cfg))
 	defer cancel()
 
 	db, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
@@ -307,7 +307,7 @@ func (q *Query) ExecuteSQLPaged(assetID int64, sqlText string, database string, 
 		return "", fmt.Errorf("解析凭据失败: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), 30*time.Second)
+	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), queryTimeout(cfg))
 	defer cancel()
 
 	db, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)

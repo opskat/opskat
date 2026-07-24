@@ -373,6 +373,7 @@
     "sshTunnelNone": "Direct (no tunnel)",
     "params": "Extra Parameters",
     "paramsPlaceholder": "Connection params (optional)",
+    "queryTimeout": "Query Timeout (s)",
     "redisDatabase": "Database Index",
     "redisCommandTimeout": "Command Timeout (s)",
     "redisScanPageSize": "SCAN Page Size",

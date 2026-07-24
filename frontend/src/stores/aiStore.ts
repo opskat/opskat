@@ -607,6 +607,9 @@ function toDisplayMessages(msgs: ChatMessage[], includeStreaming = false): ai.Co
                 content: b.content,
                 toolName: b.toolName,
                 toolInput: b.toolInput,
+                // #230: 持久化 toolCallId，否则重载会话后 expandToAPIMessages 无法配对
+                // tool_use↔tool_result，会退化回塌缩，工具历史再次丢失。
+                toolCallId: b.toolCallId,
                 status: includeStreaming ? normalizeSnapshotStatus(b.status) : b.status,
                 errorKind: b.errorKind,
                 errorDetail: b.errorDetail,
@@ -627,6 +630,7 @@ function convertDisplayMessages(displayMsgs: ai.ConversationDisplayMessage[]): C
       content: b.content,
       toolName: b.toolName,
       toolInput: b.toolInput,
+      toolCallId: b.toolCallId, // #230: 还原 toolCallId 以便重载后仍能展开 tool_calls 历史
       status: b.status as ContentBlock["status"],
       errorKind: b.errorKind as ErrorKind | undefined,
       errorDetail: b.errorDetail,
@@ -1454,12 +1458,15 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
 // 把前端塌缩的 ChatMessage 还原成 OpenAI/Anthropic 标准的多条 LLM 消息：
 //   - 一次 user turn 对应一条 ChatMessage(assistant)，blocks 顺序为
 //     thinking_n -> tool_n(含 input/result) -> ... -> text(最终回复)
-//   - 展开后变成：assistant(thinking + tool_calls) + tool(result) + ... + assistant(text)
+//   - 展开后变成：assistant(thinking? + tool_calls) + tool(result) + ... + assistant(text)
 //   - 前置约束：tool block 必须带 toolCallId 才能展开；缺失的（旧数据）直接忽略 tool 块，回退到塌缩
 //
-// 这样跨 turn 时 DeepSeek/OpenAI 能看到上一 turn 的中间 tool_calls 与结果，
-// 同时也满足 DeepSeek thinking 模式"带 tool_calls 的 assistant 必须回传 reasoning_content"的强制要求。
-function expandToAPIMessages(messages: ChatMessage[]): runner.Message[] {
+// 所有支持工具调用的 provider 都需要看到上一 turn 的 tool_calls 与结果，否则模型跨 turn
+// 看不到自己曾经调过工具，长对话里会被自身"直接作答"的历史带偏、编造工具结果（issue #230）。
+// 因此 tool 结构无条件展开；而 reasoning_content/thinking 仅在 includeThinking=true 时回放
+// ——只有 DeepSeek thinking 模式强制要求"带 tool_calls 的 assistant 必须回传 reasoning_content"，
+// 其它 provider 不需要，且 Anthropic 会因缺 signature 拒绝未签名的 thinking，故默认不回放。
+function expandToAPIMessages(messages: ChatMessage[], includeThinking: boolean): runner.Message[] {
   const out: runner.Message[] = [];
   for (const m of messages) {
     if (m.role !== "assistant") {
@@ -1467,15 +1474,23 @@ function expandToAPIMessages(messages: ChatMessage[]): runner.Message[] {
       continue;
     }
 
+    // content-only 的 assistant 历史（无 block，如内存里刚构造或旧塌缩数据）：直接按 content
+    // 塌缩发送，避免下面基于 block 的展开把 content 丢掉（text 只从 text block 累加）。
+    if (m.blocks.length === 0) {
+      out.push(new runner.Message({ role: "assistant", content: m.content }));
+      continue;
+    }
+
     // assistant 累加器：在遇到 tool block 时刷出当前 assistant + 跟一条 tool 消息
     let thinking = "";
     let text = "";
+    let sawText = false;
     const pendingToolCalls: { id: string; type: string; function: { name: string; arguments: string } }[] = [];
 
     const flushAssistant = () => {
       if (!thinking && !text && pendingToolCalls.length === 0) return;
       const payload: Record<string, unknown> = { role: "assistant", content: text };
-      if (thinking) {
+      if (includeThinking && thinking) {
         payload.thinking = thinking;
         payload.reasoning_content = thinking;
       }
@@ -1501,7 +1516,7 @@ function expandToAPIMessages(messages: ChatMessage[]): runner.Message[] {
         .map((b) => b.content)
         .join("");
       const payload: Record<string, unknown> = { role: "assistant", content: m.content };
-      if (allThinking) {
+      if (includeThinking && allThinking) {
         payload.thinking = allThinking;
         payload.reasoning_content = allThinking;
       }
@@ -1514,6 +1529,7 @@ function expandToAPIMessages(messages: ChatMessage[]): runner.Message[] {
         thinking += b.content;
       } else if (b.type === "text") {
         text += b.content;
+        sawText = true;
       } else if (b.type === "tool" && b.toolCallId) {
         pendingToolCalls.push({
           id: b.toolCallId,
@@ -1532,6 +1548,9 @@ function expandToAPIMessages(messages: ChatMessage[]): runner.Message[] {
       // approval / agent / error 块不参与 LLM 历史还原，跳过。
       // error 块的归类标签和原始错误正文是 UI 显示用，不应作为历史 prompt 影响 LLM。
     }
+    // blocks 里没有 text block 但 content 有值（少见：最终回复只落在 content 上）时，
+    // 用 m.content 兜底最终 assistant 文本，避免把回复丢掉。
+    if (!sawText && !text && m.content) text = m.content;
     flushAssistant();
   }
   return out;
@@ -1611,16 +1630,15 @@ async function _sendForConversation(convId: number, content: string) {
     handleStreamEvent(convId, event);
   });
 
-  // 仅 DeepSeek-v4 thinking 模式强制要求"带 tool_calls 的 assistant 必须回传 reasoning_content"，
-  // 且需要历史中间 tool_calls 可见才能跨 turn 继续推理；其他 provider（Anthropic / OpenAI / Kimi 等）
-  // 保持原有塌缩行为，避免引入不必要的回归。
+  // #230: 每一轮都把上一 turn 的 tool_calls + 工具结果回放给 LLM（对所有 provider 生效）。
+  // 旧实现只对 deepseek-v4 展开、其余塌缩成 {role,content}，丢掉了工具结构——模型跨 turn
+  // 看不到自己调过工具，长对话里会被自身"直接作答"的历史带偏，从而不再发起真正的工具调用、
+  // 直接编造结果。reasoning_content 仍只对 deepseek-v4 回放（它强制要求带 tool_calls 时回传
+  // reasoning_content），其它 provider 不需要，Anthropic 还会拒绝未签名 thinking。
   // 用**会话自身**的模型判断（#246 会话可选与全局激活不同的模型）；老会话 Model 为空时回退全局。
   const convModel = useAIStore.getState().conversations.find((c) => c.ID === convId)?.Model;
   const modelName = convModel || useAIStore.getState().modelName;
-  const needExpand = modelName.startsWith("deepseek-v4");
-  const apiMessages = needExpand
-    ? expandToAPIMessages(newMessages)
-    : newMessages.map((m) => new runner.Message({ role: m.role, content: m.content }));
+  const apiMessages = expandToAPIMessages(newMessages, modelName.startsWith("deepseek-v4"));
 
   // 收集当前 Tab 上下文
   const assets = useAssetStore.getState().assets;

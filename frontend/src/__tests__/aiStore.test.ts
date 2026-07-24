@@ -1638,9 +1638,11 @@ describe("DeepSeek-v4 多轮 tool 调用历史展开", () => {
     expect(finalAssistant.tool_calls).toBeUndefined();
   });
 
-  it("非 DeepSeek-v4 模型：保持原有塌缩行为，不展开 tool_calls，不带 reasoning_content", async () => {
+  it("非 DeepSeek-v4 模型：也展开 tool_calls + 工具结果（#230），但不回放 reasoning_content", async () => {
+    // 回归 #230：塌缩历史会丢掉工具结构，长对话里模型跨 turn 看不到自己调过工具、开始编造。
+    // 修复后所有 provider 都展开 tool_calls/结果；reasoning_content 仍仅 deepseek-v4 回放。
     useAIStore.setState({
-      modelName: "deepseek-chat",
+      modelName: "gpt-4o",
       sidebarTabs: [buildSidebarTabFor(101)],
       activeSidebarTabId: "sidebar-101",
       conversationMessages: { 101: buildHistory() },
@@ -1652,15 +1654,70 @@ describe("DeepSeek-v4 多轮 tool 调用历史展开", () => {
     const args = vi.mocked(SendAIMessage).mock.calls.at(-1)!;
     const apiMsgs = args[1] as any[];
 
-    // 只有 user / assistant / user / user（assistant 是塌缩后单条，不展开）
-    const roles = apiMsgs.map((m) => m.role);
-    expect(roles).toEqual(["user", "assistant", "user", "user"]);
+    // user / assistant(tool_calls) / tool / assistant(final text) / user / user
+    expect(apiMsgs.map((m) => m.role)).toEqual(["user", "assistant", "tool", "assistant", "user", "user"]);
 
-    const assistantMsg = apiMsgs[1];
-    expect(assistantMsg.content).toBe("找到 2 台");
-    expect(assistantMsg.tool_calls).toBeUndefined();
-    expect(assistantMsg.reasoning_content).toBeUndefined();
-    expect(assistantMsg.thinking).toBeUndefined();
+    const toolCallAssistant = apiMsgs[1];
+    expect(toolCallAssistant.tool_calls).toHaveLength(1);
+    expect(toolCallAssistant.tool_calls[0].id).toBe("call_001");
+    expect(toolCallAssistant.tool_calls[0].function.name).toBe("list_assets");
+    // 非 deepseek-v4：不带 reasoning_content / thinking
+    expect(toolCallAssistant.reasoning_content).toBeUndefined();
+    expect(toolCallAssistant.thinking).toBeUndefined();
+
+    expect(apiMsgs[2].tool_call_id).toBe("call_001");
+    expect(apiMsgs[2].content).toBe('[{"id":1}]');
+
+    const finalAssistant = apiMsgs[3];
+    expect(finalAssistant.content).toBe("找到 2 台");
+    expect(finalAssistant.tool_calls).toBeUndefined();
+    expect(finalAssistant.reasoning_content).toBeUndefined();
+  });
+
+  it("存盘/重载会话保留 tool block 的 toolCallId（#230：重载后仍能展开工具历史）", async () => {
+    // 存盘侧：toDisplayMessages 必须写出 toolCallId
+    useAIStore.setState({
+      modelName: "gpt-4o",
+      sidebarTabs: [buildSidebarTabFor(103)],
+      activeSidebarTabId: "sidebar-103",
+      conversationMessages: { 103: buildHistory() },
+      conversationStreaming: { 103: { sending: false, pendingQueue: [] } },
+    });
+    await useAIStore.getState().sendFromSidebarTab("sidebar-103", "再看 redis");
+
+    const savedBlocks = vi
+      .mocked(SaveConversationMessages)
+      .mock.calls.flatMap((c) => (c[1] as any[]).flatMap((m) => m.blocks || []));
+    const savedTool = savedBlocks.find((b) => b.type === "tool");
+    expect(savedTool).toBeDefined();
+    expect(savedTool.toolCallId).toBe("call_001");
+
+    // 重载侧：convertDisplayMessages 必须还原 toolCallId
+    vi.mocked(LoadConversationMessages).mockResolvedValue([
+      { role: "user", content: "查 SSH", blocks: [] },
+      {
+        role: "assistant",
+        content: "找到 2 台",
+        blocks: [
+          {
+            type: "tool",
+            content: '[{"id":1}]',
+            toolName: "list_assets",
+            toolInput: "{}",
+            toolCallId: "call_777",
+            status: "completed",
+          },
+          { type: "text", content: "找到 2 台" },
+        ],
+      },
+    ] as any);
+    useAIStore.setState({ conversations: [{ ID: 104, Title: "t" } as any] });
+
+    await useAIStore.getState().openConversationTab(104);
+
+    const loaded = useAIStore.getState().conversationMessages[104];
+    const loadedTool = loaded.flatMap((m) => m.blocks).find((b) => b.type === "tool");
+    expect(loadedTool?.toolCallId).toBe("call_777");
   });
 
   it("DeepSeek-v4 模型 + 老数据（tool block 缺 toolCallId）：兜底为塌缩消息，不抛错", async () => {
