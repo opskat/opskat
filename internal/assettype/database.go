@@ -27,20 +27,22 @@ func (h *databaseHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	}
 	if cfg.Driver == asset_entity.DriverSQLite {
 		return map[string]any{
-			"driver":        string(cfg.Driver),
-			"sqlite_source": cfg.SQLiteSource,
-			"path":          cfg.Path,
-			"database":      cfg.Database,
-			"read_only":     cfg.ReadOnly,
+			"driver":                string(cfg.Driver),
+			"sqlite_source":         cfg.SQLiteSource,
+			"path":                  cfg.Path,
+			"database":              cfg.Database,
+			"read_only":             cfg.ReadOnly,
+			"query_timeout_seconds": cfg.QueryTimeoutSeconds,
 		}
 	}
 	return map[string]any{
-		"host":      cfg.Host,
-		"port":      cfg.Port,
-		"username":  cfg.Username,
-		"driver":    string(cfg.Driver),
-		"database":  cfg.Database,
-		"read_only": cfg.ReadOnly,
+		"host":                  cfg.Host,
+		"port":                  cfg.Port,
+		"username":              cfg.Username,
+		"driver":                string(cfg.Driver),
+		"database":              cfg.Database,
+		"read_only":             cfg.ReadOnly,
+		"query_timeout_seconds": cfg.QueryTimeoutSeconds,
 	}
 }
 
@@ -65,9 +67,10 @@ func (h *databaseHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Ass
 		return fmt.Errorf("database type requires driver parameter (mysql, postgresql, mssql, sqlite)")
 	}
 	cfg := &asset_entity.DatabaseConfig{
-		Driver:   asset_entity.DatabaseDriver(driver),
-		Database: ArgString(args, "database"),
-		ReadOnly: ArgString(args, "read_only") == "true",
+		Driver:              asset_entity.DatabaseDriver(driver),
+		Database:            ArgString(args, "database"),
+		ReadOnly:            ArgString(args, "read_only") == "true",
+		QueryTimeoutSeconds: ArgInt(args, "query_timeout_seconds"),
 	}
 	if cfg.Driver == asset_entity.DriverSQLite {
 		cfg.Path = ArgString(args, "path")
@@ -104,6 +107,9 @@ func (h *databaseHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Ass
 	}
 	if v := ArgString(args, "read_only"); v != "" {
 		cfg.ReadOnly = v == "true"
+	}
+	if v := ArgInt(args, "query_timeout_seconds"); v > 0 {
+		cfg.QueryTimeoutSeconds = v
 	}
 
 	if cfg.Driver == asset_entity.DriverSQLite {

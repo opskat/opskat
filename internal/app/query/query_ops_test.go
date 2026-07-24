@@ -3,9 +3,25 @@ package query
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
+
+func TestQueryTimeout(t *testing.T) {
+	t.Run("configured value wins", func(t *testing.T) {
+		cfg := &asset_entity.DatabaseConfig{QueryTimeoutSeconds: 120}
+		if got := queryTimeout(cfg); got != 120*time.Second {
+			t.Fatalf("queryTimeout() = %v, want %v", got, 120*time.Second)
+		}
+	})
+	t.Run("zero falls back to default", func(t *testing.T) {
+		cfg := &asset_entity.DatabaseConfig{QueryTimeoutSeconds: 0}
+		if got := queryTimeout(cfg); got != defaultQueryTimeout {
+			t.Fatalf("queryTimeout() = %v, want %v", got, defaultQueryTimeout)
+		}
+	})
+}
 
 func TestPanelDBCacheKey(t *testing.T) {
 	t.Run("SQLite reuses one panel connection across schema names", func(t *testing.T) {

@@ -21,6 +21,7 @@ export interface DatabaseFormState extends ConnectionFormFields {
   readOnly: boolean;
   params: string;
   path: string;
+  queryTimeoutSeconds: number;
 }
 
 export const DATABASE_DEFAULTS: DatabaseFormState = {
@@ -35,6 +36,7 @@ export const DATABASE_DEFAULTS: DatabaseFormState = {
   readOnly: false,
   params: "",
   path: "",
+  queryTimeoutSeconds: 30,
   ...CONNECTION_DEFAULTS,
 };
 
@@ -50,6 +52,7 @@ interface DatabaseConfig {
   tls?: boolean;
   params?: string;
   read_only?: boolean;
+  query_timeout_seconds?: number;
   ssh_asset_id?: number;
   sqlite_source?: "local" | "remote_ssh_vfs";
   path?: string;
@@ -111,6 +114,7 @@ export function buildDatabaseConfig(
   if (state.database) cfg.database = state.database;
   if (state.readOnly) cfg.read_only = true;
   if (state.params) cfg.params = state.params;
+  if (state.queryTimeoutSeconds > 0) cfg.query_timeout_seconds = state.queryTimeoutSeconds;
   return JSON.stringify(cfg);
 }
 
@@ -131,6 +135,7 @@ export function parseDatabaseConfig(configJSON: string, assetTunnelId = 0): Data
       readOnly: cfg.read_only || false,
       params: cfg.params || "",
       path: cfg.path || "",
+      queryTimeoutSeconds: cfg.query_timeout_seconds || 30,
       ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0, cfg.proxy_chain),
     };
   } catch {

@@ -34,6 +34,7 @@ export type FieldDesc<S> = WithVisibility<S> &
         label: string;
         placeholder?: string;
         min?: number;
+        max?: number;
         blankWhenZero?: boolean;
         width?: string;
         testid?: string;
@@ -125,11 +126,13 @@ function FieldNode<S>({
             className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
             type="number"
             min={field.min}
+            max={field.max}
             value={display}
             placeholder={field.placeholder ? t(field.placeholder, { defaultValue: field.placeholder }) : undefined}
             onChange={(e) => {
               const n = Number(e.target.value);
-              const next = field.min !== undefined ? Math.max(field.min, n || 0) : n;
+              let next = field.min !== undefined ? Math.max(field.min, n || 0) : n;
+              if (field.max !== undefined) next = Math.min(field.max, next);
               patch({ [field.key]: next } as Partial<S>);
             }}
           />
