@@ -480,6 +480,33 @@ func TestValidateDatabaseMSSQL(t *testing.T) {
 	})
 }
 
+func TestValidateDatabaseQueryTimeout(t *testing.T) {
+	newDB := func(timeout int) *Asset {
+		a := &Asset{Type: AssetTypeDatabase, Name: "x", GroupID: 1}
+		cfg := &DatabaseConfig{
+			Driver: DriverMySQL, Host: "localhost", Port: 3306, Username: "root",
+			QueryTimeoutSeconds: timeout,
+		}
+		_ = a.SetDatabaseConfig(cfg)
+		return a
+	}
+	convey.Convey("查询超时校验", t, func() {
+		convey.Convey("0 表示默认值,通过", func() {
+			convey.So(newDB(0).Validate(), convey.ShouldBeNil)
+		})
+		convey.Convey("边界 5 与 600 通过", func() {
+			convey.So(newDB(5).Validate(), convey.ShouldBeNil)
+			convey.So(newDB(600).Validate(), convey.ShouldBeNil)
+		})
+		convey.Convey("低于 5 报错", func() {
+			convey.So(newDB(4).Validate().Error(), convey.ShouldContainSubstring, "查询超时")
+		})
+		convey.Convey("高于 600 报错", func() {
+			convey.So(newDB(601).Validate().Error(), convey.ShouldContainSubstring, "查询超时")
+		})
+	})
+}
+
 func TestValidateDatabaseSQLite(t *testing.T) {
 	convey.Convey("SQLite driver validation", t, func() {
 		convey.Convey("缺 path 应报错", func() {

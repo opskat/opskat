@@ -373,6 +373,7 @@
     "sshTunnelNone": "直连（无隧道）",
     "params": "额外参数",
     "paramsPlaceholder": "连接参数（可选）",
+    "queryTimeout": "查询超时（秒）",
     "redisDatabase": "数据库索引",
     "redisCommandTimeout": "命令超时（秒）",
     "redisScanPageSize": "SCAN 分页大小",

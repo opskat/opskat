@@ -251,6 +251,15 @@ export function DatabaseConfigSection({ editAsset, onValidityChange, onIconChang
       fields: [
         { kind: "text", key: "params", label: "asset.params", placeholder: "asset.paramsPlaceholder" },
         { kind: "switch", key: "readOnly", label: "asset.readOnly" },
+        {
+          kind: "number",
+          key: "queryTimeoutSeconds",
+          label: "asset.queryTimeout",
+          min: 5,
+          max: 600,
+          width: "flex-1",
+          testid: "database-query-timeout-input",
+        },
       ],
     },
   ];

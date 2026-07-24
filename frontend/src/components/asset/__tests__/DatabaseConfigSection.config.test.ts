@@ -22,6 +22,7 @@ const FULL_MYSQL: DatabaseFormState = {
   readOnly: true,
   params: "charset=utf8mb4",
   path: "",
+  queryTimeoutSeconds: 0,
   connectionType: "jumphost",
   sshTunnelId: 5,
 };
@@ -39,6 +40,7 @@ const FULL_PG: DatabaseFormState = {
   readOnly: false,
   params: "",
   path: "",
+  queryTimeoutSeconds: 0,
 };
 
 const FULL_MSSQL: DatabaseFormState = {
@@ -54,6 +56,7 @@ const FULL_MSSQL: DatabaseFormState = {
   readOnly: false,
   params: "",
   path: "",
+  queryTimeoutSeconds: 0,
 };
 
 const FULL_SQLITE: DatabaseFormState = {
@@ -69,6 +72,7 @@ const FULL_SQLITE: DatabaseFormState = {
   readOnly: true,
   params: "mode=ro",
   path: "/tmp/data.db",
+  queryTimeoutSeconds: 0,
   connectionType: "jumphost",
   sshTunnelId: 9,
 };
@@ -162,9 +166,9 @@ describe("buildDatabaseConfig (键序锁旧 save: driver→[sqlite:path | host/p
     }
   });
 
-  it("最小 mysql 态(host+port+username,空凭据)", () => {
+  it("最小 mysql 态(host+port+username,空凭据,默认查询超时 30)", () => {
     expect(buildDatabaseConfig({ ...DATABASE_DEFAULTS, host: "127.0.0.1", username: "u" }, {})).toBe(
-      '{"driver":"mysql","host":"127.0.0.1","port":3306,"username":"u"}'
+      '{"driver":"mysql","host":"127.0.0.1","port":3306,"username":"u","query_timeout_seconds":30}'
     );
   });
 
@@ -221,6 +225,32 @@ describe("buildDatabaseConfig (键序锁旧 save: driver→[sqlite:path | host/p
   });
 });
 
+describe("queryTimeoutSeconds (查询超时,镜像 Redis commandTimeoutSeconds)", () => {
+  it("默认 30", () => {
+    expect(DATABASE_DEFAULTS.queryTimeoutSeconds).toBe(30);
+  });
+
+  it(">0 时写 query_timeout_seconds(键序: params 后)", () => {
+    const json = buildDatabaseConfig({ ...FULL_MYSQL, params: "", queryTimeoutSeconds: 120 }, {});
+    expect(json).toContain('"read_only":true,"query_timeout_seconds":120}');
+  });
+
+  it("=0 时省略 query_timeout_seconds", () => {
+    const json = buildDatabaseConfig({ ...FULL_MYSQL, queryTimeoutSeconds: 0 }, {});
+    expect(json).not.toContain("query_timeout_seconds");
+  });
+
+  it("回填显式值", () => {
+    expect(parseDatabaseConfig('{"driver":"mysql","host":"h","query_timeout_seconds":90}').queryTimeoutSeconds).toBe(
+      90
+    );
+  });
+
+  it("缺字段回填默认 30(向后兼容旧资产)", () => {
+    expect(parseDatabaseConfig('{"driver":"mysql","host":"h"}').queryTimeoutSeconds).toBe(30);
+  });
+});
+
 describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", () => {
   it("mysql 全字段回填(无凭据)", () => {
     expect(
@@ -241,6 +271,7 @@ describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", (
       readOnly: true,
       params: "charset=utf8mb4",
       path: "",
+      queryTimeoutSeconds: 30,
       connectionType: "jumphost",
       sshTunnelId: 5,
       proxyChainLayers: [sshProxyLayer(5, "SSH Tunnel", "legacy-ssh-5")],
@@ -312,12 +343,12 @@ describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", (
   it("parse→build 往返(mysql 全字段,inline 密文沿用)", () => {
     const original =
       '{"driver":"mysql","host":"db.example.com","port":3306,"username":"root","password":"OLD",' +
-      '"ssh_asset_id":5,"tls":true,"database":"mydb","read_only":true,"params":"charset=utf8mb4"}';
+      '"ssh_asset_id":5,"tls":true,"database":"mydb","read_only":true,"params":"charset=utf8mb4","query_timeout_seconds":45}';
     const expected =
       '{"driver":"mysql","host":"db.example.com","port":3306,"username":"root","password":"OLD",' +
       '"ssh_asset_id":5,"tls":true,' +
       '"proxy_chain":{"layers":[{"id":"legacy-ssh-5","name":"SSH Tunnel","enabled":true,"type":"ssh","order":1,"ssh_asset_id":5}]},' +
-      '"database":"mydb","read_only":true,"params":"charset=utf8mb4"}';
+      '"database":"mydb","read_only":true,"params":"charset=utf8mb4","query_timeout_seconds":45}';
     const state = parseDatabaseConfig(original);
     expect(buildDatabaseConfig(state, { password: "OLD" })).toBe(expected);
   });
@@ -325,13 +356,14 @@ describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", (
   it("parse→build 往返(postgresql ssl_mode)", () => {
     const original =
       '{"driver":"postgresql","host":"pg.example.com","port":5432,"username":"postgres","password":"OLD",' +
-      '"ssl_mode":"require","database":"mydb"}';
+      '"ssl_mode":"require","database":"mydb","query_timeout_seconds":120}';
     const state = parseDatabaseConfig(original);
     expect(buildDatabaseConfig(state, { password: "OLD" })).toBe(original);
   });
 
   it("parse→build 往返(sqlite path)", () => {
-    const original = '{"driver":"sqlite","path":"/tmp/x.db","database":"main","read_only":true}';
+    const original =
+      '{"driver":"sqlite","path":"/tmp/x.db","database":"main","read_only":true,"query_timeout_seconds":300}';
     const state = parseDatabaseConfig(original);
     expect(buildDatabaseConfig(state, {})).toBe(original);
   });
@@ -340,12 +372,12 @@ describe("parseDatabaseConfig (镜像旧 loadDatabaseConfig 非凭据字段)", (
     const original =
       '{"driver":"mysql","host":"db.example.com","port":3306,"username":"root","password":"OLD",' +
       '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"},' +
-      '"database":"mydb"}';
+      '"database":"mydb","query_timeout_seconds":60}';
     const expected =
       '{"driver":"mysql","host":"db.example.com","port":3306,"username":"root","password":"OLD",' +
       '"proxy":{"type":"socks5","host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"},' +
       '"proxy_chain":{"layers":[{"id":"legacy-socks5-proxy","name":"SOCKS5 Proxy","enabled":true,"type":"socks5","order":1,"host":"p.example.com","port":1081,"username":"pu","password":"PROXYENC"}]},' +
-      '"database":"mydb"}';
+      '"database":"mydb","query_timeout_seconds":60}';
     const state = parseDatabaseConfig(original);
     expect(buildDatabaseConfig(state, { password: "OLD" }, state.encryptedProxyPassword)).toBe(expected);
   });

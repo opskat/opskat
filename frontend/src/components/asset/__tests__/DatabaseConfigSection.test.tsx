@@ -97,7 +97,8 @@ describe("DatabaseConfigSection ref 契约", () => {
 
     const built = await ref.current!.buildConfig(ctx);
     expect(built).toEqual({
-      configJSON: '{"driver":"sqlite","sqlite_source":"remote_ssh_vfs","ssh_asset_id":8,"path":"/tmp/x.db"}',
+      configJSON:
+        '{"driver":"sqlite","sqlite_source":"remote_ssh_vfs","ssh_asset_id":8,"path":"/tmp/x.db","query_timeout_seconds":30}',
       sshTunnelId: 8,
     });
   });
@@ -118,7 +119,7 @@ describe("DatabaseConfigSection ref 契约", () => {
         '{"driver":"postgresql","host":"pg.example.com","port":5432,"username":"postgres","password":"OLD",' +
         '"ssh_asset_id":5,"ssl_mode":"require",' +
         '"proxy_chain":{"layers":[{"id":"legacy-ssh-5","name":"SSH Tunnel","enabled":true,"type":"ssh","order":1,"ssh_asset_id":5}]},' +
-        '"database":"mydb"}',
+        '"database":"mydb","query_timeout_seconds":30}',
       sshTunnelId: 5,
     });
     const tc = await ref.current!.buildTestConfig!(ctx);
@@ -134,7 +135,7 @@ describe("DatabaseConfigSection ref 契约", () => {
     render(<DatabaseConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
     const built = await ref.current!.buildConfig(ctx);
     expect(built).toEqual({
-      configJSON: '{"driver":"sqlite","path":"/tmp/x.db","database":"main","read_only":true}',
+      configJSON: '{"driver":"sqlite","path":"/tmp/x.db","database":"main","read_only":true,"query_timeout_seconds":30}',
       sshTunnelId: 0,
     });
   });
