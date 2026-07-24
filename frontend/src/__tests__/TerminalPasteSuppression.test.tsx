@@ -35,6 +35,10 @@ const hoisted = vi.hoisted(() => {
       setEnabled: vi.fn(),
       setColor: vi.fn(),
     },
+    clipboardOsc52: {
+      setEnabled: vi.fn(),
+      dispose: vi.fn(),
+    },
   };
   return {
     copyBehavior: "popover-menu",

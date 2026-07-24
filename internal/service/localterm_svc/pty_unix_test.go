@@ -52,6 +52,46 @@ func TestStartPTYEchoesInput(t *testing.T) {
 	}
 }
 
+// TestStartPTYExportsTruecolorEnv 验证本地 PTY 会给 shell 注入 COLORTERM=truecolor,
+// 这样只按 COLORTERM 判断是否发 24-bit SGR 的 TUI 程序也能输出真彩,而不是被
+// TERM=xterm-256color 的 256 色能力位限制住。
+func TestStartPTYExportsTruecolorEnv(t *testing.T) {
+	proc, err := startPTY(ptySpec{Shell: "/bin/sh", Cols: 80, Rows: 24})
+	require.NoError(t, err)
+	defer func() { _ = proc.Close() }()
+
+	_, err = proc.Write([]byte("printenv COLORTERM\n"))
+	require.NoError(t, err)
+
+	out := make(chan string, 2)
+	go func() {
+		r := bufio.NewReader(readerFunc(proc.Read))
+		var sb strings.Builder
+		buf := make([]byte, 1024)
+		for {
+			n, e := r.Read(buf)
+			if n > 0 {
+				sb.Write(buf[:n])
+				if strings.Contains(sb.String(), "truecolor") {
+					out <- sb.String()
+					return
+				}
+			}
+			if e != nil {
+				out <- sb.String()
+				return
+			}
+		}
+	}()
+
+	select {
+	case s := <-out:
+		require.Contains(t, s, "truecolor")
+	case <-time.After(5 * time.Second):
+		t.Fatal("PTY 未在超时内输出 COLORTERM=truecolor")
+	}
+}
+
 func TestStartPTYResizeNoError(t *testing.T) {
 	proc, err := startPTY(ptySpec{Shell: "/bin/sh"})
 	require.NoError(t, err)

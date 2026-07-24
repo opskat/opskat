@@ -120,6 +120,8 @@ export function TerminalSection() {
     webglError,
     highlightLinks,
     setHighlightLinks,
+    osc52ClipboardEnabled,
+    setOsc52ClipboardEnabled,
     copyBehavior,
     setCopyBehavior,
     customThemes,
@@ -325,6 +327,14 @@ export function TerminalSection() {
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">{t("terminal.copyBehaviorHint")}</p>
+          </div>
+
+          <div className="flex items-start justify-between gap-4">
+            <div className="grid gap-1">
+              <Label>{t("terminal.osc52Clipboard")}</Label>
+              <p className="text-xs text-muted-foreground">{t("terminal.osc52ClipboardHint")}</p>
+            </div>
+            <Switch checked={osc52ClipboardEnabled} onCheckedChange={setOsc52ClipboardEnabled} />
           </div>
 
           <Separator />

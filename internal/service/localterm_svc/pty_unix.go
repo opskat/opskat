@@ -34,7 +34,10 @@ func startPTY(spec ptySpec) (ptyProcess, error) {
 	}
 	cmd := exec.Command(shell, spec.Args...) //nolint:gosec // G204: 启动用户在本地终端资产里选择的 shell 是本功能的核心意图
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	// COLORTERM=truecolor：TERM=xterm-256color 的能力位只到 256 色，部分 TUI 会据此
+	// 关掉 24-bit 输出。补这个变量让"看 COLORTERM 才发真彩 SGR"的程序也能出真彩；
+	// 前端 xterm 本就按 24-bit 渲染，两端对齐。
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor")
 
 	cols, rows := clampSize(spec.Cols, spec.Rows)
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})

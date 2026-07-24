@@ -74,6 +74,7 @@ export function Terminal({ sessionId, active, tabId, ref }: TerminalProps) {
   const scrollback = useTerminalThemeStore((s) => s.scrollback);
   const webglEnabled = useTerminalThemeStore((s) => s.webglEnabled);
   const highlightLinks = useTerminalThemeStore((s) => s.highlightLinks);
+  const osc52Clipboard = useTerminalThemeStore((s) => s.osc52ClipboardEnabled);
   const copyBehavior = useTerminalThemeStore((s) => s.copyBehavior);
   const selectedThemeId = useTerminalThemeStore((s) => s.selectedThemeId);
   const customThemes = useTerminalThemeStore((s) => s.customThemes);
@@ -156,6 +157,7 @@ export function Terminal({ sessionId, active, tabId, ref }: TerminalProps) {
       transport,
       webglEnabled,
       highlightLinks,
+      osc52Clipboard,
     });
     termRef.current = inst.term;
     fitAddonRef.current = inst.fitAddon;
@@ -243,9 +245,10 @@ export function Terminal({ sessionId, active, tabId, ref }: TerminalProps) {
     const inst = getTerminalInstance(sessionId);
     inst?.urlHighlighter.setEnabled(highlightLinks);
     inst?.urlHighlighter.setColor(terminalUrlHighlightColor(xtermTheme));
+    inst?.clipboardOsc52.setEnabled(osc52Clipboard);
     fitAddonRef.current?.fit();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [xtermTheme, fontSize, fontFamily, scrollback, highlightLinks]);
+  }, [xtermTheme, fontSize, fontFamily, scrollback, highlightLinks, osc52Clipboard]);
 
   useEffect(() => {
     const inst = getTerminalInstance(sessionId);
