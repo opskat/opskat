@@ -1304,6 +1304,8 @@
     "copyBehaviorSmartRightClick": "Smart Right-click Copy / Paste",
     "copyBehaviorSelectCopyRightPaste": "Copy on Selection / Right-click Paste",
     "copyBehaviorHint": "Default shows a copy popover for selected text and keeps the right-click menu. You can switch to right-click copy/paste or copy-on-selection.",
+    "osc52Clipboard": "OSC 52 Clipboard Write",
+    "osc52ClipboardHint": "Let remote programs write to your system clipboard via OSC 52 (tmux set-clipboard, vim \"+y). On by default; only writes pass through and read-back is never allowed, so the worst case is a malicious remote overwriting your clipboard — turn it off for untrusted hosts.",
     "default": "Default",
     "builtinThemes": "Built-in Themes",
     "customThemes": "Custom Themes",

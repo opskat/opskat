@@ -5,7 +5,13 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { toast } from "sonner";
-import { BrowserOpenURL, EventsOn, EventsOff, ClipboardGetText } from "../../../wailsjs/runtime/runtime";
+import {
+  BrowserOpenURL,
+  EventsOn,
+  EventsOff,
+  ClipboardGetText,
+  ClipboardSetText,
+} from "../../../wailsjs/runtime/runtime";
 import { bytesToBase64 } from "@/lib/terminalEncode";
 import { useTerminalStore, TRANSPORTS, type TerminalTransport } from "@/stores/terminalStore";
 import { useShortcutStore } from "@/stores/shortcutStore";
@@ -16,6 +22,7 @@ import { createTerminalInputBridge, type TerminalInputBridge } from "./terminalI
 import { createZmodemController, type ZmodemController } from "./zmodem/zmodemSession";
 import { attachXtermRolloverGuard } from "./xtermRolloverGuard";
 import { attachTerminalUrlHighlighter, type TerminalUrlHighlighterController } from "./terminalUrlHighlighter";
+import { attachTerminalClipboardOsc52, type TerminalClipboardOsc52Controller } from "./terminalOsc52";
 import { normalizeHttpUrl } from "./terminalUrlScan";
 
 const PENDING_RZ_UPLOAD_TTL_MS = 10_000;
@@ -27,6 +34,7 @@ export interface TerminalInstance {
   container: HTMLDivElement;
   bridge: TerminalInputBridge;
   urlHighlighter: TerminalUrlHighlighterController;
+  clipboardOsc52: TerminalClipboardOsc52Controller;
 }
 
 interface InternalInstance extends TerminalInstance {
@@ -48,6 +56,7 @@ export function getOrCreateTerminal(
     transport?: TerminalTransport;
     webglEnabled?: boolean;
     highlightLinks?: boolean;
+    osc52Clipboard?: boolean;
   }
 ): TerminalInstance {
   const cached = registry.get(sessionId);
@@ -87,6 +96,14 @@ export function getOrCreateTerminal(
   const urlHighlighter = attachTerminalUrlHighlighter(term, {
     enabled: init.highlightLinks === true,
     color: terminalUrlHighlightColor(init.theme),
+  });
+  // OSC 52 剪贴板透传：远端(tmux set-clipboard / vim "+y)写入的内容 → 系统剪贴板。
+  // 写侧走 Wails 原生 ClipboardSetText（与选区复制 copyText 同源）；读回请求被内部拒绝。
+  const clipboardOsc52 = attachTerminalClipboardOsc52(term, {
+    enabled: init.osc52Clipboard === true,
+    write: (text) => {
+      ClipboardSetText(text).catch(console.error);
+    },
   });
 
   // 优先用调用方传入的 transport；首次挂载若没拿到（罕见），退回 session id 前缀。
@@ -258,6 +275,7 @@ export function getOrCreateTerminal(
     container,
     bridge,
     urlHighlighter,
+    clipboardOsc52,
     isClosed: false,
     suppressNextNativePaste,
     uploadFilesWithRz,
@@ -266,6 +284,7 @@ export function getOrCreateTerminal(
       // 必须在 term.dispose 之前调用,避免 dispose 后访问已释放对象。
       bridge.dispose();
       urlHighlighter.dispose();
+      clipboardOsc52.dispose();
       rolloverGuard.dispose();
       zmodem?.dispose();
       onDataDispose.dispose();

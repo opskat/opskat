@@ -35,6 +35,10 @@ interface TerminalThemeState {
   scrollback: number;
   webglEnabled: boolean;
   highlightLinks: boolean;
+  // OSC 52 剪贴板写入：允许 tmux `set-clipboard on` / vim `"+y` / 远端 TUI 把内容送进
+  // 系统剪贴板。默认开启（多数现代终端如此）；仅"写入"透传，读回请求始终被拒绝，所以
+  // 最坏情况是恶意远端覆盖剪贴板，连接不受信主机时可在设置里关掉。
+  osc52ClipboardEnabled: boolean;
   copyBehavior: TerminalCopyBehavior;
   // 分屏窗格顶部工具条：true = 固定常驻；false = 隐藏，鼠标移到窗格顶部时向下滑出。
   toolbarPinned: boolean;
@@ -49,6 +53,7 @@ interface TerminalThemeState {
   setScrollback: (lines: number) => void;
   setWebglEnabled: (enabled: boolean) => void;
   setHighlightLinks: (enabled: boolean) => void;
+  setOsc52ClipboardEnabled: (enabled: boolean) => void;
   setCopyBehavior: (behavior: TerminalCopyBehavior) => void;
   setToolbarPinned: (pinned: boolean) => void;
   reportWebglFailure: (failure: WebglFailure) => void;
@@ -84,6 +89,7 @@ export const useTerminalThemeStore = create<TerminalThemeState>()(
       scrollback: SCROLLBACK_DEFAULT,
       webglEnabled: true,
       highlightLinks: false,
+      osc52ClipboardEnabled: true,
       copyBehavior: "popover-menu",
       toolbarPinned: true,
       webglError: null,
@@ -93,6 +99,7 @@ export const useTerminalThemeStore = create<TerminalThemeState>()(
       // （手动关掉不该写入 webglError，但也不主动清——下次自动关掉的错误能继续展示）。
       setWebglEnabled: (enabled) => set(enabled ? { webglEnabled: true, webglError: null } : { webglEnabled: false }),
       setHighlightLinks: (enabled) => set({ highlightLinks: enabled }),
+      setOsc52ClipboardEnabled: (enabled) => set({ osc52ClipboardEnabled: enabled }),
       setCopyBehavior: (behavior) => set({ copyBehavior: behavior }),
       setToolbarPinned: (pinned) => set({ toolbarPinned: pinned }),
       reportWebglFailure: (failure) => set({ webglError: failure }),

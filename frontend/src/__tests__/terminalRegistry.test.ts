@@ -134,6 +134,8 @@ vi.mock("@xterm/xterm", () => {
     });
     onWriteParsed = vi.fn(() => ({ dispose: vi.fn() }));
     onRender = vi.fn(() => ({ dispose: vi.fn() }));
+    // OSC 52 剪贴板透传在 term.parser 上注册处理器（见 terminalOsc52）。
+    parser = { registerOscHandler: vi.fn(() => ({ dispose: vi.fn() })) };
     attachCustomKeyEventHandler = vi.fn();
     textarea = document.createElement("textarea");
     registerLinkProvider = vi.fn((provider) => {

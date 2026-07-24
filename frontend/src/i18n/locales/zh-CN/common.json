@@ -1304,6 +1304,8 @@
     "copyBehaviorSmartRightClick": "右键智能复制 / 粘贴",
     "copyBehaviorSelectCopyRightPaste": "选中即复制 / 右键粘贴",
     "copyBehaviorHint": "默认显示选区复制浮窗并保留右键菜单；可按个人习惯切换为右键复制/粘贴或选中即复制。",
+    "osc52Clipboard": "OSC 52 剪贴板写入",
+    "osc52ClipboardHint": "允许远端程序通过 OSC 52 把内容写入系统剪贴板（如 tmux set-clipboard、vim \"+y）。默认开启；只透传写入、读取始终禁止，最坏情况仅是恶意远端篡改你的剪贴板——连接不受信主机时可关闭。",
     "default": "默认",
     "builtinThemes": "预置配色",
     "customThemes": "自定义配色",
