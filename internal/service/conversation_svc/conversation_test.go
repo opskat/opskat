@@ -145,6 +145,32 @@ func TestConversationSvc_UpdateTitle(t *testing.T) {
 	})
 }
 
+func TestConversationSvc_UpdateProvider(t *testing.T) {
+	ctx, mockRepo := setupTest(t)
+
+	convey.Convey("按会话切换 Provider", t, func() {
+		convey.Convey("仅更新 provider_id / model / updatetime", func() {
+			mockRepo.EXPECT().UpdateProvider(gomock.Any(), int64(1), int64(7), "gpt-4o", gomock.Any()).DoAndReturn(
+				func(_ context.Context, _ int64, _ int64, _ string, updatetime int64) error {
+					assert.Greater(t, updatetime, int64(0))
+					return nil
+				},
+			)
+
+			err := Conversation().UpdateProvider(ctx, 1, 7, "gpt-4o")
+			assert.NoError(t, err)
+		})
+
+		convey.Convey("会话不存在时透传 repo 错误", func() {
+			mockRepo.EXPECT().UpdateProvider(gomock.Any(), int64(999), int64(7), "gpt-4o", gomock.Any()).
+				Return(errors.New("record not found"))
+
+			err := Conversation().UpdateProvider(ctx, 999, 7, "gpt-4o")
+			assert.Error(t, err)
+		})
+	})
+}
+
 func TestConversationSvc_Delete(t *testing.T) {
 	ctx, mockRepo := setupTest(t)
 

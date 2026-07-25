@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { create } from "zustand";
+import { toast } from "sonner";
 import { SendAIMessage } from "../../wailsjs/go/ai/AI";
 import {
   StopAIGeneration,
@@ -7,6 +8,8 @@ import {
   RemoveQueuedAIMessage,
   ClearQueuedAIMessages,
   GetActiveAIProvider,
+  ListAIProviders,
+  SetConversationProvider,
   CreateConversation,
   ListConversations,
   LoadConversationMessages,
@@ -205,15 +208,42 @@ function resolveNextActiveId(prevActive: string | null, candidate: string, activ
 // 更新 store 的工作交给 attach 回调——sendToTab 需要更新 workspace tab meta，
 // sendFromSidebarTab 需要更新 sidebar tab + 预置 conversations/messages/streaming。
 async function createConversationForEmptyHost(
-  attach: (conv: conversation_entity.Conversation) => void
+  attach: (conv: conversation_entity.Conversation) => void,
+  pendingProviderId?: number
 ): Promise<number | null> {
   try {
     const conv = await CreateConversation();
+    // 会话创建前若用户已在切换器里选过模型（会话尚未存在，仅暂存），此刻落到新会话上。
+    if (pendingProviderId != null && pendingProviderId !== conv.ProviderID) {
+      try {
+        await SetConversationProvider(conv.ID, pendingProviderId);
+        const provider = useAIStore.getState().providers.find((p) => p.id === pendingProviderId);
+        conv.ProviderID = pendingProviderId;
+        if (provider) conv.Model = provider.model;
+      } catch {
+        // 切换失败不阻断新会话创建：退回默认 Provider 即可，用户可再切一次。
+      }
+    }
     attach(conv);
     return conv.ID;
   } catch {
     return null;
   }
+}
+
+// clearPendingProviderForTab 清除某个 host tab 已消费的预选 Provider（会话创建后即失效）。
+function clearPendingProviderForTab(
+  set: (partial: (state: AIState) => Partial<AIState>) => void,
+  hostTabId: string,
+  pendingProviderId: number | undefined
+) {
+  if (pendingProviderId == null) return;
+  set((state) => {
+    if (state.pendingProviderByTab[hostTabId] == null) return {};
+    const next = { ...state.pendingProviderByTab };
+    delete next[hostTabId];
+    return { pendingProviderByTab: next };
+  });
 }
 
 function getDefaultSidebarTitle() {
@@ -1605,7 +1635,9 @@ async function _sendForConversation(convId: number, content: string) {
   // 看不到自己调过工具，长对话里会被自身"直接作答"的历史带偏，从而不再发起真正的工具调用、
   // 直接编造结果。reasoning_content 仍只对 deepseek-v4 回放（它强制要求带 tool_calls 时回传
   // reasoning_content），其它 provider 不需要，Anthropic 还会拒绝未签名 thinking。
-  const modelName = useAIStore.getState().modelName;
+  // 用**会话自身**的模型判断（#246 会话可选与全局激活不同的模型）；老会话 Model 为空时回退全局。
+  const convModel = useAIStore.getState().conversations.find((c) => c.ID === convId)?.Model;
+  const modelName = convModel || useAIStore.getState().modelName;
   const apiMessages = expandToAPIMessages(newMessages, modelName.startsWith("deepseek-v4"));
 
   // 收集当前 Tab 上下文
@@ -1664,12 +1696,26 @@ interface AIState {
   providerName: string;
   modelName: string;
 
+  // 已配置的模型（AI Provider）列表 + 全局激活的 Provider id（用于「按会话切换模型」#246）。
+  providers: ai.AIProviderInfo[];
+  activeProviderId: number;
+  // 尚未创建会话的 host tab（sidebar/workspace）预选的 Provider，key = host tab id。
+  // 会话一旦创建即落库（见 createConversationForEmptyHost），随后这里的条目失效。
+  pendingProviderByTab: Record<string, number>;
+
   // 侧边助手状态
   sidebarTabs: SidebarAITab[];
   activeSidebarTabId: string | null;
 
   // 配置
   checkConfigured: () => Promise<void>;
+  loadProviders: () => Promise<void>;
+  // 按会话切换模型：已存在会话→落库；尚未创建→暂存到 pendingProviderByTab。
+  selectConversationProvider: (params: {
+    conversationId: number | null;
+    hostTabId: string;
+    providerId: number;
+  }) => Promise<void>;
 
   // 发送
   sendToTab: (tabId: string, content: string) => Promise<void>;
@@ -1755,6 +1801,9 @@ export const useAIStore = create<AIState>((set, get) => {
     configured: false,
     providerName: "",
     modelName: "",
+    providers: [],
+    activeProviderId: 0,
+    pendingProviderByTab: {},
 
     sidebarTabs: initialSidebarState.tabs,
     activeSidebarTabId: initialSidebarState.activeSidebarTabId,
@@ -1763,12 +1812,51 @@ export const useAIStore = create<AIState>((set, get) => {
       try {
         const active = await GetActiveAIProvider();
         if (active) {
-          set({ configured: true, providerName: active.name, modelName: active.model });
+          set({ configured: true, providerName: active.name, modelName: active.model, activeProviderId: active.id });
         } else {
-          set({ configured: false, providerName: "", modelName: "" });
+          set({ configured: false, providerName: "", modelName: "", activeProviderId: 0 });
         }
       } catch {
         set({ configured: false });
+      }
+      // 刷新可切换的模型列表（与 configured 同源刷新：启动 + 增删改激活 Provider 后都会走到）。
+      await get().loadProviders();
+    },
+
+    loadProviders: async () => {
+      try {
+        const providers = await ListAIProviders();
+        set({ providers: providers ?? [] });
+      } catch {
+        set({ providers: [] });
+      }
+    },
+
+    selectConversationProvider: async ({ conversationId, hostTabId, providerId }) => {
+      if (conversationId != null) {
+        try {
+          await SetConversationProvider(conversationId, providerId);
+        } catch {
+          toast.error(i18n.t("ai.switchModelFailed"));
+          return;
+        }
+        const provider = get().providers.find((p) => p.id === providerId);
+        set((state) => ({
+          conversations: state.conversations.map((c) =>
+            c.ID === conversationId
+              ? conversation_entity.Conversation.createFrom({
+                  ...c,
+                  ProviderID: providerId,
+                  Model: provider?.model ?? c.Model,
+                })
+              : c
+          ),
+        }));
+      } else {
+        // 会话尚未创建：暂存选择，等首次发送创建会话时落库。
+        set((state) => ({
+          pendingProviderByTab: { ...state.pendingProviderByTab, [hostTabId]: providerId },
+        }));
       }
     },
 
@@ -2215,6 +2303,7 @@ export const useAIStore = create<AIState>((set, get) => {
       // Ensure tab has a conversation ID *before* writing any message state —
       // conversationMessages / conversationStreaming are keyed by convId.
       if (convId == null) {
+        const pendingProviderId = get().pendingProviderByTab[tabId];
         const newId = await createConversationForEmptyHost((conv) => {
           const curTab = useTabStore.getState().tabs.find((t) => t.id === tabId);
           useTabStore.getState().updateTab(tabId, {
@@ -2238,9 +2327,10 @@ export const useAIStore = create<AIState>((set, get) => {
                   [conv.ID]: { sending: false, pendingQueue: [] },
                 },
           }));
-        });
+        }, pendingProviderId);
         if (newId == null) return;
         convId = newId;
+        clearPendingProviderForTab(set, tabId, pendingProviderId);
       }
 
       if (shouldSyncConversationTitleBeforeSend(convId, content)) {
@@ -2271,6 +2361,7 @@ export const useAIStore = create<AIState>((set, get) => {
       }
 
       if (convId == null) {
+        const pendingProviderId = get().pendingProviderByTab[tabId];
         const newId = await createConversationForEmptyHost((conv) => {
           set((state) => ({
             conversations: state.conversations.some((item) => item.ID === conv.ID)
@@ -2296,9 +2387,10 @@ export const useAIStore = create<AIState>((set, get) => {
                 : tab
             ),
           }));
-        });
+        }, pendingProviderId);
         if (newId == null) return;
         convId = newId;
+        clearPendingProviderForTab(set, tabId, pendingProviderId);
       }
 
       if (shouldSyncConversationTitleBeforeSend(convId, content)) {
@@ -2542,13 +2634,11 @@ registerTabCloseHook((tab) => {
 // === Restore Hook: load AI settings and restore conversation tabs ===
 
 async function restoreAITabs(tabs: Tab[]) {
-  try {
-    const active = await GetActiveAIProvider();
-    if (!active) {
-      return;
-    }
-    useAIStore.setState({ configured: true });
-  } catch {
+  // 启动时统一走 checkConfigured：一处加载 configured / providerName / modelName /
+  // activeProviderId 以及可切换的 providers 列表（#246 的模型切换器依赖它在启动时就绪；
+  // 从前这里只内联判定 GetActiveAIProvider 并置 configured，providers 永远不会在启动时加载）。
+  await useAIStore.getState().checkConfigured();
+  if (!useAIStore.getState().configured) {
     return;
   }
 

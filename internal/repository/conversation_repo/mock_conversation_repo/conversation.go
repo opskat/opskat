@@ -156,6 +156,20 @@ func (mr *MockConversationRepoMockRecorder) Update(ctx, conv any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockConversationRepo)(nil).Update), ctx, conv)
 }
 
+// UpdateProvider mocks base method.
+func (m *MockConversationRepo) UpdateProvider(ctx context.Context, id, providerID int64, model string, updatetime int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateProvider", ctx, id, providerID, model, updatetime)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateProvider indicates an expected call of UpdateProvider.
+func (mr *MockConversationRepoMockRecorder) UpdateProvider(ctx, id, providerID, model, updatetime any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateProvider", reflect.TypeOf((*MockConversationRepo)(nil).UpdateProvider), ctx, id, providerID, model, updatetime)
+}
+
 // UpdateTitle mocks base method.
 func (m *MockConversationRepo) UpdateTitle(ctx context.Context, id int64, title string, updatetime int64) error {
 	m.ctrl.T.Helper()
