@@ -135,7 +135,8 @@ describe("DatabaseConfigSection ref 契约", () => {
     render(<DatabaseConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
     const built = await ref.current!.buildConfig(ctx);
     expect(built).toEqual({
-      configJSON: '{"driver":"sqlite","path":"/tmp/x.db","database":"main","read_only":true,"query_timeout_seconds":30}',
+      configJSON:
+        '{"driver":"sqlite","path":"/tmp/x.db","database":"main","read_only":true,"query_timeout_seconds":30}',
       sshTunnelId: 0,
     });
   });
