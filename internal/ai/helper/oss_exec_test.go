@@ -521,6 +521,33 @@ func TestCanonicalizeOSSCommand_RejectsFileWithMaxBytes(t *testing.T) {
 	}
 }
 
+// TestCanonicalizeOSSCommand_RejectsOverCapFlagsBeforeApproval 是本任务的核心不变式：
+// --max-keys 与 --expiry 超过硬上限时必须在**规范化**这一步（handleExec 的
+// canonicalize → precheck → 权限检查顺序里最靠前的一环）就报错，与 --file 的绝对路径
+// 守卫、--file/--max-bytes 互斥同一个位置。断言在 CanonicalizeOSSCommand 本身，而不是
+// 只在 run() 里——这条命令批准之后必然失败（--expiry 超限会被存储后端以"超过 7 天"为由
+// 拒掉），把校验挪到执行器里会让用户先被弹一次审批（选"始终允许"还落一条常驻 grant），
+// 命令才失败，正是 §3.1 要挡的那类事故。
+func TestCanonicalizeOSSCommand_RejectsOverCapFlagsBeforeApproval(t *testing.T) {
+	cases := []string{
+		fmt.Sprintf("object list mybucket --max-keys=%d", ossMaxListKeys+1),
+		fmt.Sprintf("object presign mybucket/a.txt --expiry=%d", ossMaxPresignExpirySecs+1),
+	}
+	for _, command := range cases {
+		if _, err := CanonicalizeOSSCommand(ossExecAsset(), command); err == nil {
+			t.Errorf("CanonicalizeOSSCommand(%q) = nil error, want rejection of the over-cap flag value "+
+				"before approval", command)
+		}
+		f := &fakeOSSExec{url: "https://example.com/signed"}
+		if _, err := (ossExecutor{svc: f}).run(context.Background(), ossExecAsset(), command); err == nil {
+			t.Errorf("run(%q) = nil error, want the same rejection", command)
+		}
+		if len(f.calls) != 0 {
+			t.Errorf("run(%q) reached the service (%v); a rejected command must not touch the backend", command, f.ops())
+		}
+	}
+}
+
 // 规范化返回的是**规范 DSL 串**（决策 D6）：它同时是审批弹窗与 audit_logs.command 的
 // 展示态，所以 flag 顺序与 bucket 根的写法都要归一，否则同一条操作会以两种字面量落库。
 func TestCanonicalizeOSSCommand_RendersCanonicalDSL(t *testing.T) {

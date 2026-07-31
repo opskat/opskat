@@ -69,6 +69,12 @@ Checked before any approval dialog, so a wrong value costs nothing:
   one of them would have to be ignored.
 - `--max-bytes` defaults to 64 KiB and is capped at 1 MiB. A larger value is reduced to the
   cap rather than rejected, and `truncated` then reports that the object was longer.
+- `--max-keys` is capped at 1000. A larger value is **rejected**, not reduced: silently
+  returning fewer keys than asked would break `--after` pagination against what the caller
+  expected to page through.
+- `--expiry` is capped at 604800 seconds (7 days) and is also **rejected** rather than
+  reduced: a longer-lived presigned URL is what S3-compatible backends refuse to sign in
+  the first place, so a value over the cap would otherwise be approved and then fail.
 - `--to` is a second `<bucket>/<key>` and follows the same rules as the target, including
   the requirement that it name a single object.
 

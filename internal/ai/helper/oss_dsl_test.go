@@ -1,6 +1,7 @@
 package helper
 
 import (
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -276,11 +277,38 @@ func TestParseOSSCommand_RejectsBadFlagValue(t *testing.T) {
 		`object copy src/a --to=/dst/b`,
 		`object copy src/a --to=' dst/b'`,
 		`object move src/a --to=`,
+		fmt.Sprintf(`object list mybucket --max-keys=%d`, ossMaxListKeys+1),
+		fmt.Sprintf(`object presign mybucket/key --expiry=%d`, ossMaxPresignExpirySecs+1),
 	}
 	for _, in := range cases {
 		if _, err := ParseOSSCommand(in); err == nil {
 			t.Fatalf("ParseOSSCommand(%q) = nil error, want rejection (invalid flag value)", in)
 		}
+	}
+}
+
+// TestParseOSSCommand_MaxKeysHasAHardCap 锁住 --max-keys 的上界本身（而不只是"某个大数
+// 被拒"）：模型能一次把一个前缀的全部 key 拉进上下文，与 --max-bytes 不设上限时能拉整个
+// 大对象是同一个顾虑（决策见任务交回记录）。边界必须精确到"刚好等于上限"与"多 1"两个
+// 用例——只断言一个很大的数会被拒，改动上限值本身不会让测试失败。
+func TestParseOSSCommand_MaxKeysHasAHardCap(t *testing.T) {
+	if _, err := ParseOSSCommand(fmt.Sprintf("object list mybucket --max-keys=%d", ossMaxListKeys)); err != nil {
+		t.Fatalf("ParseOSSCommand with --max-keys=%d (the cap itself) unexpected error: %v", ossMaxListKeys, err)
+	}
+	if _, err := ParseOSSCommand(fmt.Sprintf("object list mybucket --max-keys=%d", ossMaxListKeys+1)); err == nil {
+		t.Fatalf("ParseOSSCommand with --max-keys=%d = nil error, want rejection (one over the cap)", ossMaxListKeys+1)
+	}
+}
+
+// TestParseOSSCommand_ExpiryHasAHardCap 锁住 --expiry 的上界：presign 的有效期没有上限时，
+// 模型批准的命令会在执行时才被存储后端以"超过 7 天"为由拒掉（S3 兼容后端对 SigV4
+// 预签名 URL 的通行约束）——这正是 §3.1 要挡在弹窗之前的那一类"批准之后必然失败"。
+func TestParseOSSCommand_ExpiryHasAHardCap(t *testing.T) {
+	if _, err := ParseOSSCommand(fmt.Sprintf("object presign mybucket/key --expiry=%d", ossMaxPresignExpirySecs)); err != nil {
+		t.Fatalf("ParseOSSCommand with --expiry=%d (the cap itself) unexpected error: %v", ossMaxPresignExpirySecs, err)
+	}
+	if _, err := ParseOSSCommand(fmt.Sprintf("object presign mybucket/key --expiry=%d", ossMaxPresignExpirySecs+1)); err == nil {
+		t.Fatalf("ParseOSSCommand with --expiry=%d = nil error, want rejection (one second over the cap)", ossMaxPresignExpirySecs+1)
 	}
 }
 

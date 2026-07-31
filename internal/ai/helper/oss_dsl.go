@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -200,19 +201,74 @@ func ossPresignMethod(value string) error {
 	return fmt.Errorf("must be get or put, got %q", value)
 }
 
+// ossMaxListKeys 是 --max-keys 的硬上限。
+//
+// 与 --max-bytes 的 ossMaxInlineBytes（oss_exec.go）是同一个顾虑的两种答案：`object get`
+// 已经为了上下文预算给内联内容封了顶，而 `object list` 此前完全不设限——模型能一次把
+// 一个前缀下的十万个 key 拉进上下文。1000 对齐大多数 S3 兼容实现单页列举的惯用上限，
+// 量级上也与 --max-bytes 的上限同属"一次调用喂给模型的东西不该失控"这同一档。
+//
+// 与 --max-bytes 不同的是这里选择**拒绝**而不是钳制到上限再执行：钳制对"内容太长"是
+// 合理的降级（截断后仍是一段有意义的前缀），但"列出前 1000 个而不是模型要求的 N 个"
+// 会让 --after 续传游标失去意义——那不是同一个请求的缩水版，是另一个请求，静默换掉
+// 该在解析期就报错，而不是在批准之后才让模型察觉结果被动过手脚。
+const ossMaxListKeys = 1000
+
+// ossMaxKeysValue 校验 --max-keys：形状复用 kafkaInt，上限是本行独有的判断。
+func ossMaxKeysValue(value string) error {
+	if err := kafkaInt(value); err != nil {
+		return err
+	}
+	n, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64) // 形状已经过 kafkaInt
+	if n > ossMaxListKeys {
+		return fmt.Errorf("must be at most %d, got %d: a larger listing page is rejected before "+
+			"approval rather than silently capped, because --after continuation would then no longer "+
+			"line up with what the model asked for", ossMaxListKeys, n)
+	}
+	return nil
+}
+
+// ossMaxPresignExpirySecs 是 --expiry 的硬上限：7 天，秒数写成 7*24*3600 而不是字面量
+// 604800，读起来才看得出是"7 天"这个数，不是随手拍的一个整数。
+//
+// 这个数不是本产品发明的：S3 兼容存储的预签名 URL（AWS SigV4）本来就有 7 天的通行约束
+// （minio-go 的 isValidExpiry 会在这条线之上直接报错），这里按"文档化的产品上限"处理，
+// 自己声明这个常量而不引用 minio SDK 里的那个——引用会让本包在编译期依赖一个后端 SDK
+// 未导出/易变的实现细节，而这条约束本身足够稳定、值得写成我们自己的常量。
+//
+// 排在解析期拒绝，而不是让 oss_svc.PresignGet/PresignPut 在批准之后才报错：那正是 §3.1
+// 要挡的"批准之后才被 minio 以超过 7 天为由拒掉"。
+const ossMaxPresignExpirySecs = 7 * 24 * 3600
+
+// ossExpiryValue 校验 --expiry：形状复用 kafkaInt，上限是本行独有的判断。
+func ossExpiryValue(value string) error {
+	if err := kafkaInt(value); err != nil {
+		return err
+	}
+	n, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64) // 形状已经过 kafkaInt
+	if n > ossMaxPresignExpirySecs {
+		return fmt.Errorf("must be at most %d seconds (7 days), got %d: a longer expiry is rejected "+
+			"before approval — the storage backend would refuse to sign it anyway", ossMaxPresignExpirySecs, n)
+	}
+	return nil
+}
+
 // ossFlagRules 列出每个 (family, verb) 认得的 flag 与其值的形状。
 // 不在表里的 flag 一律拒绝：静默丢弃意味着审批弹窗上写着 `--recursive`、执行器却只删
 // 一个对象——用户批准的和发生的不是一件事。
 //
 // 整数形状直接复用同包的 kafkaInt，不另抄一份：判定谓词与 aictx.ArgInt64 的 string
 // 分支一致（`1,000` / `1e3` / `3.0` 会被解析成 0，然后被服务端默认值顶掉），
-// 两份副本迟早分叉。
+// 两份副本迟早分叉。--max-keys / --expiry 在 kafkaInt 的形状之外还各自有一条硬上限
+// （ossMaxKeysValue / ossExpiryValue），--max-bytes 的上限则留给执行器去钳制
+// （oss_exec.go 的 ossMaxInlineBytes）——三者是否在解析期拒绝而不是执行期降级，
+// 分别在各自的注释里说明理由，不是同一个模子刻出来的。
 var ossFlagRules = map[string]map[string]flagSpec{
 	"bucket": {
 		"list": {},
 	},
 	"object": {
-		"list": {optional: flags{"max-keys": kafkaInt, "after": ossText}},
+		"list": {optional: flags{"max-keys": ossMaxKeysValue, "after": ossText}},
 		"stat": {},
 		"get":  {optional: flags{"file": ossText, "max-bytes": kafkaInt}},
 		"put":  {required: flags{"file": ossText}, optional: flags{"content-type": ossText}},
@@ -222,7 +278,7 @@ var ossFlagRules = map[string]map[string]flagSpec{
 		"copy":    {required: flags{"to": validateOSSObjectRef}},
 		"move":    {required: flags{"to": validateOSSObjectRef}},
 		"delete":  {},
-		"presign": {optional: flags{"expiry": kafkaInt, "method": ossPresignMethod}},
+		"presign": {optional: flags{"expiry": ossExpiryValue, "method": ossPresignMethod}},
 	},
 }
 
