@@ -11,6 +11,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/grant_entity"
+	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/repository/grant_repo"
 )
 
@@ -33,7 +34,9 @@ var ossStubPolicyStrings = map[string][]string{
 	"object list mybucket/":                           {"object.list mybucket/"},
 	"object move mybucket/a --to=other/logs/":         {"object.read mybucket/a", "object.write other/logs/", "object.delete mybucket/a"},
 	"bucket list": {"bucket.list *"},
-	"object put mybucket/report.txt --file=/tmp/r.txt": {"object.write mybucket/report.txt"},
+	"object put mybucket/report.txt --file=/tmp/r.txt":         {"object.write mybucket/report.txt"},
+	"object copy mybucket/secrets/key.pem --to=public/key.pem": {"object.read mybucket/secrets/key.pem", "object.write public/key.pem"},
+	"object delete mybucket/tmp/old.log":                       {"object.delete mybucket/tmp/old.log"},
 }
 
 // withOSSPolicyStrings 注册上表并在测试结束后还原，仓内 mock 惯例（全局单例 + t.Cleanup）。
@@ -135,6 +138,68 @@ func TestCheckPermission_OSSCopyChecksEveryPolicyString(t *testing.T) {
 		// move 还要删源，allow 名单没有 object.delete，整条命令退回审批。
 		moved := CheckPermission(ctx, asset_entity.AssetTypeOSS, 1, "object move mybucket/a --to=other/b")
 		assert.Equal(t, aictx.NeedConfirm, moved.Decision)
+	})
+}
+
+// TestCheckPermission_OSSGroupGenericPolicy 锁 §4.1 的第 2 步与第 4 步：组的**通用**命令策略
+// （groups.command_policy 列，与喂给 collectOSSPolicies 的 groups.oss_policy 是两列，只有
+// CheckGroupGenericPolicy 这一条路能读到它）也参与 OSS 判定，且比对必须用 MatchOSSRule。
+//
+// 匹配函数不是形式选择：MatchCommandRule 把规则读成 `<程序> <子命令>` 并要求程序段字面
+// 相等，于是 `object.* mybucket/secrets/` 的程序段 "object.*" 对不上命令的 "object.read"，
+// 一条本该拦住的 deny 规则一条都匹配不上——静默 fail-open，正是 §4.1 第 2 步那句注释
+// （以及 mongo/redis/etcd 传各自匹配器）在防的事故。同一条规则里的尾随 "/" 递归前缀
+// （决策 D5）也只有 MatchOSSRule 懂。
+func TestCheckPermission_OSSGroupGenericPolicy(t *testing.T) {
+	withOSSPolicyStrings(t)
+
+	t.Run("组通用 deny 拦住整条 copy，哪怕资产 allow 是 *", func(t *testing.T) {
+		ctx, mockAsset, stubGrp := setupPolicyTest(t)
+		stubGrp.groups[10] = &group_entity.Group{
+			ID: 10, Name: "prod",
+			CmdPolicy: `{"deny_list":["object.* mybucket/secrets/"]}`,
+		}
+		mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(&asset_entity.Asset{
+			ID: 1, Type: asset_entity.AssetTypeOSS, GroupID: 10,
+			CmdPolicy: mustJSON(asset_entity.OSSPolicy{AllowList: []string{"*"}}),
+		}, nil).AnyTimes()
+
+		// deny 只命中"读源"那一条，目的地不受限：D7 的安全点换到组通用这一层同样成立。
+		got := CheckPermission(ctx, asset_entity.AssetTypeOSS, 1, "object copy mybucket/secrets/key.pem --to=public/key.pem")
+		assert.Equal(t, aictx.Deny, got.Decision)
+		assert.Equal(t, aictx.SourcePolicyDeny, got.DecisionSource)
+		assert.Equal(t, "object.* mybucket/secrets/", got.MatchedPattern)
+	})
+
+	t.Run("组通用 allow 盖过类型策略的 NeedConfirm", func(t *testing.T) {
+		ctx, mockAsset, stubGrp := setupPolicyTest(t)
+		stubGrp.groups[10] = &group_entity.Group{
+			ID: 10, Name: "prod",
+			CmdPolicy: `{"allow_list":["object.delete mybucket/tmp/"]}`,
+		}
+		mockAsset.EXPECT().Find(gomock.Any(), int64(1)).
+			Return(&asset_entity.Asset{ID: 1, Type: asset_entity.AssetTypeOSS, GroupID: 10}, nil).AnyTimes()
+
+		// 默认只读组不含 object.delete，类型策略给的是 NeedConfirm。
+		got := CheckPermission(ctx, asset_entity.AssetTypeOSS, 1, "object delete mybucket/tmp/old.log")
+		assert.Equal(t, aictx.Allow, got.Decision)
+		assert.Equal(t, "object.delete mybucket/tmp/", got.MatchedPattern)
+	})
+
+	t.Run("组通用 allow 翻不过默认地板", func(t *testing.T) {
+		ctx, mockAsset, stubGrp := setupPolicyTest(t)
+		stubGrp.groups[10] = &group_entity.Group{
+			ID: 10, Name: "prod",
+			CmdPolicy: `{"allow_list":["*"]}`,
+		}
+		mockAsset.EXPECT().Find(gomock.Any(), int64(1)).
+			Return(&asset_entity.Asset{ID: 1, Type: asset_entity.AssetTypeOSS, GroupID: 10}, nil).AnyTimes()
+
+		// 组通用 allow 只优先于类型策略的 NeedConfirm，不优先于它的 Deny——
+		// 先取组结果再判类型策略的话，presign PUT 这条地板会被一条 `*` 组规则掀掉。
+		got := CheckPermission(ctx, asset_entity.AssetTypeOSS, 1, "object presign mybucket/report.txt --method=put")
+		assert.Equal(t, aictx.Deny, got.Decision)
+		assert.Equal(t, aictx.SourcePolicyDeny, got.DecisionSource)
 	})
 }
 

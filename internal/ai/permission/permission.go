@@ -426,9 +426,11 @@ func checkOSSPermission(ctx context.Context, assetID int64, command string) aict
 // "删掉这个目录标记"并选"始终允许"，换来的就是一条"递归删除 logs/ 下全部对象"的常驻授权。
 // 丢弃而不是拒绝命令：目录标记该删得掉，只是这一条不该变成可复用的授权。
 //
-// 用户手写的策略形式 pattern 不受此限——那是他明确要求的授权范围，与系统替他推导出来的
-// 不是一回事；cp 端点给出的策略串同样原样落库，它形状上到不了这里（OSS 端点路径在
-// 解析期就拒绝尾随 "/"，§6.2）。
+// 已经是策略串形状的输入不受此限，原样落库。这一支上的两个来源都不是"单对象命令被
+// 悄悄放大成前缀规则"：用户在审批弹窗里手写的 pattern 是他明确要求的授权范围；cp 的
+// OSS 端点给出的 ApprovalSubject（§6.2）本身就带方向——object.read / object.write 是
+// 具体对象 key，只有 object.list 的主体是前缀（`object.list B/P/`），而那一条落成
+// "递归列举该前缀"的常驻授权，与用户批准的那次递归列举范围恰好相同。
 func ossGrantPatterns(command string) []string {
 	policyStrings, derived, err := ossPolicyStrings(command)
 	if err != nil || len(policyStrings) == 0 {
