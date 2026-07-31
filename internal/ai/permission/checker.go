@@ -505,6 +505,34 @@ func collectKafkaPolicies(ctx context.Context, asset *asset_entity.Asset) *asset
 	return merged
 }
 
+// collectOSSPolicies 收集资产 + 组链的 OSS 权限策略并合并
+func collectOSSPolicies(ctx context.Context, asset *asset_entity.Asset) *asset_entity.OSSPolicy {
+	holders := policyHoldersForAsset(ctx, asset)
+	policies := collectPoliciesFromChain(holders, func(h policyent.Holder) (*asset_entity.OSSPolicy, error) {
+		return h.GetOSSPolicy()
+	})
+	if len(policies) == 0 {
+		return nil
+	}
+	// 解析引用的权限组
+	for _, p := range policies {
+		if len(p.Groups) > 0 {
+			grpAllow, grpDeny := policy.ResolveOSSGroups(ctx, p.Groups)
+			p.AllowList = append(p.AllowList, grpAllow...)
+			p.DenyList = append(p.DenyList, grpDeny...)
+		}
+	}
+	// 合并：allow_list 取第一个非空（资产优先），deny_list 全部合并
+	merged := &asset_entity.OSSPolicy{}
+	for _, p := range policies {
+		if len(merged.AllowList) == 0 && len(p.AllowList) > 0 {
+			merged.AllowList = p.AllowList
+		}
+		merged.DenyList = policy.AppendUnique(merged.DenyList, p.DenyList...)
+	}
+	return merged
+}
+
 // collectK8sPolicies 收集资产 + 组链的 K8s 权限策略并合并
 func collectK8sPolicies(ctx context.Context, asset *asset_entity.Asset) *asset_entity.K8sPolicy {
 	holders := policyHoldersForAsset(ctx, asset)

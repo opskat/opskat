@@ -2,6 +2,7 @@ package permission
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/policy"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/grant_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/repository/grant_repo"
@@ -336,6 +338,115 @@ func checkKafkaPermission(ctx context.Context, assetID int64, command string) ai
 	return result
 }
 
+// --- OSS ---
+
+// ossPolicyStrings 把一条送进 OSS 权限检查的命令展开成它请求的策略串（`<action> <resource>`）。
+// derived 报告这些串是不是由 DSL 派生出来的——ossGrantPatterns 靠它区分"系统替用户推导的"
+// 与"用户自己写的"（设计 §4.3）。
+//
+// 两个入口喂进来的形状不同：
+//   - exec 送规范 DSL（`object copy S --to=D`），一条命令派生 1~3 条串（§4.1）；
+//   - cp 的 OSS 端点送的**已经是策略串**（`object.read b/k`），由传输适配器的
+//     ApprovalSubject 给出（§6.2）；用户在审批弹窗里手写的 pattern 也是这个形状。
+//
+// 判别只看第一个词里有没有 '.'：DSL 的 family 只有 bucket / object 两种，而策略串的
+// action 恒带点（bucket.list / object.read / object.presign.write）。两种形状因此不会
+// 互相误判，走错分支也不会 fail open——一条 DSL 命令被当策略串读时 action 是 "object"，
+// 匹配不上任何 `object.*` 规则，退回审批。
+func ossPolicyStrings(command string) (policyStrings []string, derived bool, err error) {
+	if isOSSPolicyString(command) {
+		return []string{command}, false, nil
+	}
+	derive, ok := policyStringsFor(asset_entity.AssetTypeOSS)
+	if !ok {
+		return nil, false, errors.New("oss policy string deriver not registered")
+	}
+	policyStrings, err = derive(command)
+	return policyStrings, true, err
+}
+
+// isOSSPolicyString 判断一条输入是否已经是策略串形状：第一个词带 '.'。
+func isOSSPolicyString(command string) bool {
+	action, _, ok := strings.Cut(strings.TrimSpace(command), " ")
+	return ok && strings.Contains(action, ".")
+}
+
+// checkOSSPermission 镜像 checkKafkaPermission 的顺序，差别只在"命令 → 策略串"是一对多：
+// copy 读源写目的、move 还要删源，任一条被 deny 即整条命令被拒，allow 名单存在时必须
+// 每条都命中才放行（设计 §4.1 / D7）。
+func checkOSSPermission(ctx context.Context, assetID int64, command string) aictx.CheckResult {
+	// 派生失败退回 aictx.NeedConfirm，不整串匹配——与 shell 分支同一 fail-closed 姿态：
+	// 拿一条没派生出策略串的原文去撞规则，`*` 会把它当成一条合法策略串放行。
+	policyStrings, _, err := ossPolicyStrings(command)
+	if err != nil || len(policyStrings) == 0 {
+		return aictx.CheckResult{Decision: aictx.NeedConfirm}
+	}
+
+	// 组通用策略：匹配函数必须是 MatchOSSRule，传 MatchCommandRule 会让写成
+	// `object.delete *` 的组通用 deny 规则静默失配（与 mongo/redis/etcd 传各自匹配器同理）。
+	groupResult := policy.CheckGroupGenericPolicy(ctx, assetID, policyStrings, policy.MatchOSSRule)
+	if groupResult.Decision == aictx.Deny {
+		return groupResult
+	}
+
+	asset := resolveAssetForPolicy(ctx, assetID)
+	mergedPolicy := collectOSSPolicies(ctx, asset)
+	result := policy.CheckOSSPolicy(ctx, mergedPolicy, policyStrings)
+
+	// 组通用 allow 优先于类型专用的 aictx.NeedConfirm
+	if result.Decision == aictx.NeedConfirm && groupResult.Decision == aictx.Allow {
+		return groupResult
+	}
+
+	if result.Decision != aictx.NeedConfirm {
+		return result
+	}
+
+	// DB Grant 匹配：每条策略串都必须命中 grant，不能用单条 grant 覆盖 copy/move 的多个资源。
+	if grantResult := matchGrantForAssetSubCmdsWith(ctx, assetID, policyStrings, asset_entity.AssetTypeOSS, policy.MatchOSSRule); grantResult != nil {
+		return *grantResult
+	}
+
+	// aictx.NeedConfirm：把有效 allow 名单作为提示回给模型
+	merged := policy.EffectiveOSSPolicy(ctx, mergedPolicy)
+	if len(merged.AllowList) > 0 {
+		result.HintRules = merged.AllowList
+	}
+	return result
+}
+
+// ossGrantPatterns 是 OSS 注册的 grant 归一化：一条审批输入 → 常驻授权的 pattern 列表。
+//
+// 派生失败退回原串，与 shell 分支的"解析失败退回原行"同一姿态。
+//
+// **resource 以 "/" 结尾的派生串被丢弃**（设计 §4.3 / 决策 D20）：尾随斜杠的 key 是合法的
+// 单个对象——S3 用零字节的 `<prefix>/` 当目录标记，本产品自己的"新建文件夹"就在建它们，
+// 所以 `object delete mybucket/logs/` 说的是一个对象。但同一个串当规则读时，尾随 "/"
+// 意味着递归前缀（policy.MatchOSSRule 的 key 段语义，决策 D5）。原样落库，用户批准一次
+// "删掉这个目录标记"并选"始终允许"，换来的就是一条"递归删除 logs/ 下全部对象"的常驻授权。
+// 丢弃而不是拒绝命令：目录标记该删得掉，只是这一条不该变成可复用的授权。
+//
+// 用户手写的策略形式 pattern 不受此限——那是他明确要求的授权范围，与系统替他推导出来的
+// 不是一回事；cp 端点给出的策略串同样原样落库，它形状上到不了这里（OSS 端点路径在
+// 解析期就拒绝尾随 "/"，§6.2）。
+func ossGrantPatterns(command string) []string {
+	policyStrings, derived, err := ossPolicyStrings(command)
+	if err != nil || len(policyStrings) == 0 {
+		return []string{command}
+	}
+	if !derived {
+		return policyStrings
+	}
+	patterns := make([]string, 0, len(policyStrings))
+	for _, ps := range policyStrings {
+		if strings.HasSuffix(ps, "/") {
+			continue
+		}
+		patterns = append(patterns, ps)
+	}
+	return patterns
+}
+
 // --- Grant 匹配辅助 ---
 
 // --- 文件传输（cp） ---
@@ -388,32 +499,13 @@ func matchGrantForAssetSubCmdsWith(ctx context.Context, assetID int64, subCmds [
 
 // --- SaveGrantPattern ---
 
-// isShellLikeApprovalType 判断审批类型是否走 shell（SSH/K8s），grant 保存时需要按 AST 子命令拆。
-// 接受审批协议字符串（"exec"）以及 asset_entity 的内部类型常量（AssetTypeSSH/AssetTypeK8s）。
-func isShellLikeApprovalType(t string) bool {
-	handler, ok := permissionTypeFor(t)
-	return ok && handler.shellLike
-}
-
-// NormalizeGrantPatterns 把一条用户审批输入拆成可独立匹配的 grant pattern 列表。
-//
-// 设计要点：
-//   - SSH/K8s 等 shell 类资产：按行 + policy.ExtractSubCommands 拆，复合命令必须按子命令存，
-//     否则 `ls /tmp && cat /etc/hosts` 会被存成单条 pattern，后续 grant 子命令匹配永远命中失败。
-//   - 非 shell 类资产（sql/redis/mongo/kafka）：保留原命令，匹配规则各自处理。
-//   - 解析失败时退回原行，让上层依旧能存下 grant；下次匹配同样会解析失败走 aictx.NeedConfirm。
-//
-// 所有 SaveGrantPattern 调用前都应当先经过这个归一化函数。
-func NormalizeGrantPatterns(approvalType, command string) []string {
-	cmd := strings.TrimSpace(command)
-	if cmd == "" {
-		return nil
-	}
-	if !isShellLikeApprovalType(approvalType) {
-		return []string{cmd}
-	}
+// shellGrantPatterns 是 SSH / K8s 注册的 grant 归一化：按行 + policy.ExtractSubCommands 拆。
+// 复合命令必须按子命令存，否则 `ls /tmp && cat /etc/hosts` 会被存成单条 pattern，
+// 后续 grant 子命令匹配永远命中失败。
+// AST 解析失败时退回原行，让上层依旧能存下 grant；下次匹配同样会解析失败走 aictx.NeedConfirm。
+func shellGrantPatterns(command string) []string {
 	var patterns []string
-	for line := range strings.SplitSeq(cmd, "\n") {
+	for line := range strings.SplitSeq(command, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -426,6 +518,26 @@ func NormalizeGrantPatterns(approvalType, command string) []string {
 		}
 	}
 	return patterns
+}
+
+// NormalizeGrantPatterns 把一条用户审批输入拆成可独立匹配的 grant pattern 列表。
+//
+// 拆法由类型注册表上的 grantPatterns 给出（type_registry.go 的 init）：
+//   - 未注册归一化函数的类型（sql/redis/mongo/kafka/serial/cp）保留原命令，匹配规则各自处理；
+//   - SSH/K8s 走 shellGrantPatterns；
+//   - OSS 走 ossGrantPatterns（DSL → 策略串）。
+//
+// 所有 SaveGrantPattern 调用前都应当先经过这个归一化函数。
+func NormalizeGrantPatterns(approvalType, command string) []string {
+	cmd := strings.TrimSpace(command)
+	if cmd == "" {
+		return nil
+	}
+	handler, ok := permissionTypeFor(approvalType)
+	if !ok || handler.grantPatterns == nil {
+		return []string{cmd}
+	}
+	return handler.grantPatterns(cmd)
 }
 
 // SaveGrantPatternsForApproval 用 NormalizeGrantPatterns 拆出 patterns 后依次落库。

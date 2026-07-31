@@ -13,24 +13,29 @@ type permissionCheckFunc func(context.Context, int64, string) aictx.CheckResult
 
 // permissionTypeHandler is the single source of truth for permission dispatch,
 // opsctl aliases, approval item types, and grant normalization behavior.
+//
+// grantPatterns 把一条审批输入拆成可独立匹配的 grant pattern（见 NormalizeGrantPatterns）。
+// nil 表示"整串存一条"，是绝大多数类型的形态；shell 类按 AST 子命令拆，OSS 按 DSL 派生
+// 策略串。这里是一个注册的函数而不是一个 shellLike 布尔开关，因为要选的本来就是这个
+// 函数——第三种归一化方式出现时，布尔开关只能变成 dispatcher 里的类型分支（设计 D8）。
 type permissionTypeHandler struct {
-	canonical    string
-	approvalType string
-	shellLike    bool
-	check        permissionCheckFunc
+	canonical     string
+	approvalType  string
+	grantPatterns func(command string) []string
+	check         permissionCheckFunc
 }
 
 var permissionTypes = make(map[string]*permissionTypeHandler)
 
-func registerPermissionType(canonical, approvalType string, shellLike bool, check permissionCheckFunc, aliases ...string) {
+func registerPermissionType(canonical, approvalType string, grantPatterns func(command string) []string, check permissionCheckFunc, aliases ...string) {
 	if canonical == "" || approvalType == "" || check == nil {
 		panic("permission: invalid type registration")
 	}
 	handler := &permissionTypeHandler{
-		canonical:    canonical,
-		approvalType: approvalType,
-		shellLike:    shellLike,
-		check:        check,
+		canonical:     canonical,
+		approvalType:  approvalType,
+		grantPatterns: grantPatterns,
+		check:         check,
 	}
 	for _, name := range append([]string{canonical}, aliases...) {
 		if _, exists := permissionTypes[name]; exists {
@@ -64,17 +69,18 @@ func SupportsGrantApproval(approvalType string) bool {
 }
 
 func init() {
-	registerPermissionType(asset_entity.AssetTypeSSH, "exec", true, checkCommandPolicyPermission, "exec")
-	registerPermissionType(asset_entity.AssetTypeSerial, "serial", false, checkCommandPolicyPermission)
-	registerPermissionType(asset_entity.AssetTypeDatabase, "sql", false, checkDatabasePermission, "sql")
-	registerPermissionType(asset_entity.AssetTypeRedis, "redis", false, checkRedisPermission)
-	registerPermissionType(asset_entity.AssetTypeEtcd, "etcd", false, checkEtcdPermission)
-	registerPermissionType(asset_entity.AssetTypeMongoDB, "mongo", false, checkMongoDBPermission, "mongo")
-	registerPermissionType(asset_entity.AssetTypeKafka, "kafka", false, checkKafkaPermission)
-	registerPermissionType(asset_entity.AssetTypeK8s, "k8s", true, checkK8sPermission)
+	registerPermissionType(asset_entity.AssetTypeSSH, "exec", shellGrantPatterns, checkCommandPolicyPermission, "exec")
+	registerPermissionType(asset_entity.AssetTypeSerial, "serial", nil, checkCommandPolicyPermission)
+	registerPermissionType(asset_entity.AssetTypeDatabase, "sql", nil, checkDatabasePermission, "sql")
+	registerPermissionType(asset_entity.AssetTypeRedis, "redis", nil, checkRedisPermission)
+	registerPermissionType(asset_entity.AssetTypeEtcd, "etcd", nil, checkEtcdPermission)
+	registerPermissionType(asset_entity.AssetTypeMongoDB, "mongo", nil, checkMongoDBPermission, "mongo")
+	registerPermissionType(asset_entity.AssetTypeKafka, "kafka", nil, checkKafkaPermission)
+	registerPermissionType(asset_entity.AssetTypeK8s, "k8s", shellGrantPatterns, checkK8sPermission)
+	registerPermissionType(asset_entity.AssetTypeOSS, "oss", ossGrantPatterns, checkOSSPermission)
 	// cp 不是资产类型而是操作面：任何能开 SFTP 的资产上的文件传输都归它，
-	// 主体是远端路径而非命令，因此 shellLike=false（grant 不按 shell 子命令拆）。
-	registerPermissionType(GrantToolCp, "cp", false, checkFileTransferPermission)
+	// 主体是远端路径而非命令，因此 grantPatterns 为 nil（grant 不按 shell 子命令拆）。
+	registerPermissionType(GrantToolCp, "cp", nil, checkFileTransferPermission)
 }
 
 // --- 执行器注册表 ---
@@ -90,6 +96,47 @@ type ExecFunc func(ctx context.Context, asset *asset_entity.Asset, command, scop
 // 仅当某类型执行前会改写命令时才需要注册（k8s 注入 --context/--namespace；etcd 走
 // ParseCommand+FormatCommand 的 round trip，规范化大小写/复合命令拼写/flag 顺序）。
 type CanonicalizeFunc func(asset *asset_entity.Asset, command string) (string, error)
+
+// PolicyStringsFunc 把一条命令展开为它实际请求的权限串（`<action> <resource>`）。
+//
+// 只有"一条命令请求多项权限"的类型需要它：OSS 的 `object copy` 同时读源、写目的，
+// `object move` 还要删源，只按其中一条判定就等于放行"把受限对象复制到可读位置再读"
+// 的绕过路径（设计 D7）。其余类型的命令与权限一一对应，不注册。
+//
+// 注册方向与 CanonicalizeFunc / PrecheckFunc 相同，理由却更硬：DSL 解析器在持有协议
+// 代码的包里（internal/ai/helper），而那个包**已经 import 本包**
+// （transfer_ssh.go 取 GrantToolCp），本包再反向 import 就是 import cycle。
+// 因此本包只声明入口，由 internal/ai/execimpl 在 init() 里连同执行器一起推上来。
+type PolicyStringsFunc func(command string) ([]string, error)
+
+var policyStringFuncs = make(map[string]PolicyStringsFunc)
+
+// RegisterPolicyStrings 注册某资产类型的策略串派生函数。
+// 重复/空注册 panic，与 RegisterExecutor 同一原则：注册冲突是启动期的编程错误。
+//
+// 没有注册时，依赖它的权限检查按"解析失败"处理并退回 NeedConfirm——fail-closed，
+// 且漏接线不会被静默吞掉：该类型的每条命令都要弹一次审批，而不是悄悄放行。
+func RegisterPolicyStrings(canonical string, fn PolicyStringsFunc) {
+	if canonical == "" || fn == nil {
+		panic("permission: invalid policy strings registration")
+	}
+	if _, exists := policyStringFuncs[canonical]; exists {
+		panic(fmt.Sprintf("permission: duplicate policy strings registration %q", canonical))
+	}
+	policyStringFuncs[canonical] = fn
+}
+
+// UnregisterPolicyStringsForTest 移除一个已注册的派生函数，仅供测试清理使用——
+// 与 UnregisterExecutorForTest 同一理由：`-count>1` 会重跑同一个测试函数，
+// 而生产注册路径的 panic-on-duplicate 是有意保留的。
+func UnregisterPolicyStringsForTest(canonical string) {
+	delete(policyStringFuncs, canonical)
+}
+
+func policyStringsFor(canonical string) (PolicyStringsFunc, bool) {
+	fn, ok := policyStringFuncs[canonical]
+	return fn, ok
+}
 
 // PrecheckFunc 校验某类型执行前的前置条件——与 CanonicalizeFunc 一样，存在的唯一理由是
 // 把一个必然会失败的检查挪到权限检查（可能弹审批对话框）之前，避免用户先被打断、
