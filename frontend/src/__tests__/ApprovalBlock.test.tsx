@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { ApprovalBlock } from "../components/approval/ApprovalBlock";
 import type { ContentBlock } from "../stores/aiStore";
 
@@ -19,6 +19,18 @@ function cpBlock(): ContentBlock {
       },
     ],
   } as ContentBlock;
+}
+
+// 一条递归/通配 cp 展开出的批量审批项：每条都是独立主体（D17），detail 是这次传输
+// 唯一携带"两端基点"的地方（checkAccessBatch 给每条都填了同一句 "cp src → dst"）。
+function batchItems(n: number, detail?: string) {
+  return Array.from({ length: n }, (_, i) => ({
+    type: "cp",
+    asset_id: (i % 2) + 1,
+    asset_name: i % 2 === 0 ? "web-01" : "s3-prod",
+    command: `/var/log/app-${i}.log`,
+    detail,
+  }));
 }
 
 function renderApproval(overrides: Partial<ContentBlock>) {
@@ -143,5 +155,71 @@ describe("ApprovalBlock", () => {
 
     // 不做任何点击/展开操作，警告文本必须直接可见——藏在一次点击之后就等于没警告。
     expect(screen.getByText("此操作不可撤销，连接会被断开。")).toBeVisible();
+  });
+});
+
+// 递归/通配 cp 一次性送来上百条 ApprovalItem，原样铺开没法读——超过 10 条时折叠为一行
+// 摘要（条数 + 两端基点），展开后仍是全部具体主体。折叠只是呈现，批的还是那 N 条主体（D17），
+// 因此只对 kind=batch 生效——grant 的每条都要能编辑，折叠会让人够不着编辑框。
+describe("ApprovalBlock 批量审批折叠（kind=batch，D17）", () => {
+  it("恰好 10 条不折叠：全部主体直接可见，没有折叠摘要", () => {
+    renderApproval({ approvalKind: "batch", approvalItems: batchItems(10) });
+
+    expect(screen.queryByTestId("ai-approval-batch-summary")).not.toBeInTheDocument();
+    expect(screen.getByText("/var/log/app-0.log")).toBeVisible();
+    expect(screen.getByText("/var/log/app-9.log")).toBeVisible();
+  });
+
+  it("11 条时折叠为一行摘要（含条数与两端基点），具体主体默认不可见", () => {
+    renderApproval({
+      approvalKind: "batch",
+      approvalItems: batchItems(11, "cp web-01:/var/log → s3-prod:/bucket/logs/"),
+    });
+
+    const summary = screen.getByTestId("ai-approval-batch-summary");
+    expect(summary).toHaveAttribute("data-count", "11");
+    expect(summary.textContent).toContain("cp web-01:/var/log → s3-prod:/bucket/logs/");
+    expect(screen.getByText("/var/log/app-0.log")).not.toBeVisible();
+  });
+
+  it("展开折叠摘要后，11 条具体主体全部可见——折叠只是呈现，不是新的授权范围（D17）", () => {
+    renderApproval({ approvalKind: "batch", approvalItems: batchItems(11) });
+
+    fireEvent.click(screen.getByTestId("ai-approval-batch-summary"));
+
+    for (let i = 0; i < 11; i++) {
+      expect(screen.getByText(`/var/log/app-${i}.log`)).toBeVisible();
+    }
+  });
+
+  it("200 条（D19 上限）同样折叠，展开后 200 条全部可见，一条不少", () => {
+    renderApproval({ approvalKind: "batch", approvalItems: batchItems(200) });
+
+    const summary = screen.getByTestId("ai-approval-batch-summary");
+    expect(summary).toHaveAttribute("data-count", "200");
+
+    fireEvent.click(summary);
+    expect(screen.getByText("/var/log/app-0.log")).toBeVisible();
+    expect(screen.getByText("/var/log/app-199.log")).toBeVisible();
+  });
+
+  it("1 条批量审批不折叠", () => {
+    renderApproval({ approvalKind: "batch", approvalItems: batchItems(1) });
+
+    expect(screen.queryByTestId("ai-approval-batch-summary")).not.toBeInTheDocument();
+    expect(screen.getByText("/var/log/app-0.log")).toBeVisible();
+  });
+
+  it("grant 审批哪怕超过 10 条也不折叠——每条都要能编辑，折叠只对 batch 生效", () => {
+    const items = Array.from({ length: 12 }, (_, i) => ({
+      type: "exec",
+      asset_id: i + 1,
+      asset_name: `web-${i}`,
+      command: `cat /var/log/app-${i}.log`,
+    }));
+    renderApproval({ approvalKind: "grant", approvalItems: items });
+
+    expect(screen.queryByTestId("ai-approval-batch-summary")).not.toBeInTheDocument();
+    expect(screen.getAllByDisplayValue(/cat \/var\/log\/app-/)).toHaveLength(12);
   });
 });

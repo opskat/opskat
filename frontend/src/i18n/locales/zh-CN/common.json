@@ -1048,6 +1048,7 @@
     "permissionDeny": "拒绝",
     "approvalSingleTitle": "需要确认",
     "approvalBatchTitle": "需要确认（{{count}} 条命令）",
+    "approvalBatchCollapsedSummary": "已折叠 {{count}} 条审批项，点击展开逐条查看",
     "approvalGrantTitle": "权限申请",
     "approvalDeleteTitle": "确认删除",
     "approvalDeleteDetail": "查看删除影响",
@@ -1621,6 +1622,7 @@
     "grantDescription": "请审核以下命令模式，可编辑后批准",
     "batchTitle": "批量操作审批",
     "batchDescription": "以下 {{count}} 条操作需要您的批准",
+    "batchCollapsedSummary": "已折叠 {{count}} 条审批项，点击展开逐条查看",
     "alwaysAllow": "始终允许",
     "approve": "批准",
     "scopeAll": "所有资产"

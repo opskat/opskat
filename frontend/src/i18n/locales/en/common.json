@@ -1048,6 +1048,7 @@
     "permissionDeny": "Deny",
     "approvalSingleTitle": "Approval Required",
     "approvalBatchTitle": "Approval Required ({{count}} commands)",
+    "approvalBatchCollapsedSummary": "{{count}} approval items collapsed — click to expand and review each one",
     "approvalGrantTitle": "Permission Request",
     "approvalDeleteTitle": "Confirm deletion",
     "approvalDeleteDetail": "What gets deleted",
@@ -1621,6 +1622,7 @@
     "grantDescription": "Review the command patterns below. You may edit before approving.",
     "batchTitle": "Batch Approval",
     "batchDescription": "The following {{count}} operations require your approval",
+    "batchCollapsedSummary": "{{count}} approval items collapsed — click to expand and review each one",
     "alwaysAllow": "Always Allow",
     "approve": "Approve",
     "scopeAll": "All Assets"
