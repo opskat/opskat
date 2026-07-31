@@ -47,34 +47,48 @@ func TestDefaultAuditWriterPersistsToolAuditSemantics(t *testing.T) {
 	require.NoError(t, gdb.Create(asset).Error)
 
 	tests := []struct {
-		name         string
-		toolName     string
-		argsJSON     string
-		execErr      error
-		result       string
-		decision     aictx.CheckResult
-		wantToolName string
-		wantCommand  string
-		wantSuccess  int
-		wantErrorSet bool
+		name          string
+		toolName      string
+		argsJSON      string
+		infoAssetID   int64
+		infoAssetName string
+		execErr       error
+		result        string
+		decision      aictx.CheckResult
+		wantToolName  string
+		wantCommand   string
+		wantSuccess   int
+		wantErrorSet  bool
 	}{
 		// 传输面只剩 cp 一个工具名（upload_file / download_file 及其 RegisterToolAlias
-		// 一并退役，spec §6.3 / §7）。两条 cp 用例的差别是**决策**：被拒的那条必须落成
-		// success=0 且 error 非空，否则一次被拒绝的传输在审计里与一次成功的传输长得一样。
-		// 参数形状是 opsctl 那一侧的（带 asset_id），资产归属这一列才有东西可断言。
+		// 一并退役，spec §6.3 / §7），但它有**两个生产者**，各自把资产归属交给这里的方式
+		// 不同——两条 cp 用例因此一边一个，不能都用同一种参数形状：那样另一个生产者就没人
+		// 覆盖了，而它恰恰回归过（AI 侧的 cp 一度全部落成 asset_id=0）。
+		//
+		//   - AI 工具调用：参数只有端点串（src/dst），里面没有任何 id 可解析。归属由
+		//     runner.auditMiddleware 预先解析好，经 ToolCallInfo.AssetID/AssetName 传进来
+		//     （package audit 依赖不了 assetref，会与 permission 成环）。这一行同时钉住
+		//     "预解析优先于 args 解析"：它的 args 里没有 asset_id，靠回落是解析不出东西的。
+		//   - opsctl：自己 resolveAsset 之后把数字 id 写进 args["asset_id"]，走 WriteToolCall
+		//     里的 args 回落链。
+		//
+		// 两条用例的**决策**也各不相同：被拒的那条必须落成 success=0 且 error 非空，
+		// 否则一次被拒绝的传输在审计里与一次成功的传输长得一样。
 		{
-			name:         "cp denied",
-			toolName:     "cp",
-			argsJSON:     `{"asset_id":1,"src":"/tmp/deny.bin","dst":"controlled-sftp:/srv/deny.bin"}`,
-			execErr:      errors.New("USER DENIED: transfer rejected"),
-			decision:     aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny},
-			wantToolName: "cp",
-			wantCommand:  "cp /tmp/deny.bin → controlled-sftp:/srv/deny.bin",
-			wantSuccess:  0,
-			wantErrorSet: true,
+			name:          "cp denied (AI tool call: endpoints only, attribution pre-resolved)",
+			toolName:      "cp",
+			argsJSON:      `{"src":"/tmp/deny.bin","dst":"controlled-sftp:/srv/deny.bin"}`,
+			infoAssetID:   1,
+			infoAssetName: "controlled-sftp",
+			execErr:       errors.New("USER DENIED: transfer rejected"),
+			decision:      aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny},
+			wantToolName:  "cp",
+			wantCommand:   "cp /tmp/deny.bin → controlled-sftp:/srv/deny.bin",
+			wantSuccess:   0,
+			wantErrorSet:  true,
 		},
 		{
-			name:         "cp allowed",
+			name:         "cp allowed (opsctl: asset id in args)",
 			toolName:     "cp",
 			argsJSON:     `{"asset_id":1,"src":"controlled-sftp:/srv/app.log","dst":"/tmp/app.log"}`,
 			decision:     aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow},
@@ -101,11 +115,13 @@ func TestDefaultAuditWriterPersistsToolAuditSemantics(t *testing.T) {
 			ctx := aictx.WithAuditSource(context.Background(), "ai")
 			ctx = aictx.WithSessionID(ctx, tc.name)
 			writer.WriteToolCall(ctx, ToolCallInfo{
-				ToolName: tc.toolName,
-				ArgsJSON: tc.argsJSON,
-				Result:   tc.result,
-				Error:    tc.execErr,
-				Decision: &tc.decision,
+				ToolName:  tc.toolName,
+				ArgsJSON:  tc.argsJSON,
+				AssetID:   tc.infoAssetID,
+				AssetName: tc.infoAssetName,
+				Result:    tc.result,
+				Error:     tc.execErr,
+				Decision:  &tc.decision,
 			})
 
 			var stored audit_entity.AuditLog
