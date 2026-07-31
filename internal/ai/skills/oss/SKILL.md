@@ -1,14 +1,153 @@
 ---
 name: oss
-description: "Object storage (S3-compatible) assets. Config fields for put_asset; no command surface — exec is not supported for this type."
+description: "List, read, upload, copy, move, delete and presign objects in S3-compatible object storage via exec, using a family + verb + target command syntax."
 ---
 
 # OSS assets
 
-OSS assets connect to an S3-compatible object storage endpoint; the app browses buckets and
-objects on it interactively. There is **no command surface**: `exec` is not supported for this
-type, and there is nothing to script. The asset itself has no per-bucket field — bucket/object
-selection happens when browsing, not at creation time.
+OSS assets connect to an S3-compatible object storage endpoint (AWS S3, MinIO, Aliyun OSS,
+…). The asset names the endpoint and credentials only — the bucket is part of every
+command's target, not part of the asset.
+
+## Command syntax
+
+`<family> <verb> [target] [--flags]` — `family` is `bucket` or `object`, `verb` is the
+operation, and `target` is `<bucket>/<key>` (no leading slash).
+
+Every example below is literally executable as written. Optional flags are not marked with
+brackets; each useful combination is spelled out on its own line.
+
+### bucket
+
+- `bucket list`
+
+### object
+
+- `object list backups`
+- `object list backups/2026/`
+- `object list backups/2026/ --max-keys=100`
+- `object list backups/2026/ --max-keys=100 --after=2026/03/db.sql.gz`
+- `object stat backups/2026/db.sql.gz`
+- `object get backups/app.conf` (returns the content inline, truncated to 64 KiB)
+- `object get backups/app.conf --max-bytes=4096`
+- `object get backups/2026/db.sql.gz --file=/tmp/db.sql.gz` (streams to a local file instead)
+- `object put backups/2026/db.sql.gz --file=/tmp/db.sql.gz`
+- `object put backups/app.conf --file=/tmp/app.conf --content-type=text/plain`
+- `object copy backups/2026/db.sql.gz --to=archive/db-2026.sql.gz`
+- `object move backups/2026/db.sql.gz --to=archive/db-2026.sql.gz`
+- `object delete backups/2026/old.log`
+- `object presign backups/2026/db.sql.gz`
+- `object presign backups/2026/db.sql.gz --expiry=600`
+- `object presign uploads/inbox/report.pdf --method=put --expiry=600`
+
+## Flag reference
+
+Every flag each verb accepts — anything else is rejected rather than ignored. **Bold**
+flags are required: omitting one does not default it, the command is rejected before it
+runs. Verbs not listed here take no flags at all.
+
+- `object list`: `--max-keys`, `--after`
+- `object get`: `--file`, `--max-bytes`
+- `object put`: **`--file`**, `--content-type`
+- `object copy`: **`--to`**
+- `object move`: **`--to`**
+- `object presign`: `--expiry`, `--method`
+
+## Flag values
+
+Checked before any approval dialog, so a wrong value costs nothing:
+
+- `--max-keys`, `--after`, `--max-bytes` and `--expiry` must be plain decimal integers
+  where numeric: `1000`, not `1,000`, `1_000`, `1e3` or `3.0`.
+- `--method` is `get` or `put`, lower case exactly. Nothing else is accepted, and there is
+  no case folding: `GET` is an error rather than a synonym.
+- `--file` must be an **absolute** local path. This command runs inside the app's process,
+  whose working directory is not your shell's, so a relative path would resolve somewhere
+  unpredictable.
+- `--to` is a second `<bucket>/<key>` and follows the same rules as the target, including
+  the requirement that it name a single object.
+
+Not checked on this side at all — the storage service is the only thing that will reject a
+wrong value, after approval and a round trip:
+
+- `--content-type` is passed through verbatim as the object's MIME type; omitting it lets
+  the service decide.
+- `--after` is a continuation cursor, not a filter: pass back the `nextContinuationToken`
+  from the previous `object list` result to read the next page.
+
+## Results
+
+- `bucket list` returns `{"buckets":[…]}`.
+- `object list` returns the raw listing: `prefixes` (one level of "folders"),
+  `objects`, plus `isTruncated` and `nextContinuationToken` for paging.
+- `object stat` returns the object's metadata.
+- `object get` without `--file` returns `content` together with `encoding`
+  (`utf-8`, or `base64` when the bytes are not valid UTF-8) and `truncated`. When
+  `truncated` is true you read only the first bytes — re-run with `--file` rather than
+  guessing at the rest.
+- `object get --file` and `object put --file` return the byte count and the paths; the
+  content never passes through the conversation.
+- `object copy`, `object move` and `object delete` return `{"status":"ok",…}`.
+- `object presign` returns the signed `url`, its `method` and `expiresIn` seconds. The URL
+  is fully usable; the audit log stores it with the signature parameters redacted.
+
+## Approval and policy rules
+
+Approval is granted per `<action> <resource>`, where resource is `<bucket>/<key>`:
+
+| command | permission(s) requested |
+|---|---|
+| `bucket list` | `bucket.list *` |
+| `object list B/P` | `object.list B/P` |
+| `object stat B/K`, `object get B/K` | `object.read B/K` |
+| `object put B/K` | `object.write B/K` |
+| `object copy S --to=D` | `object.read S` **and** `object.write D` |
+| `object move S --to=D` | `object.read S`, `object.write D` **and** `object.delete S` |
+| `object delete B/K` | `object.delete B/K` |
+| `object presign B/K --method=get` | `object.presign.read B/K` |
+| `object presign B/K --method=put` | `object.presign.write B/K` |
+
+`copy` and `move` request every one of their resources: any one of them being denied
+rejects the whole command, and where an allow list exists all of them must match.
+
+Rules are written the same way, with `*` wildcards that do not cross `/` inside a key:
+
+| rule | meaning |
+|---|---|
+| `*` | everything |
+| `object.read mybucket` or `object.read mybucket/` | every object in the bucket, at any depth |
+| `object.read mybucket/logs/` | everything under the `logs/` prefix, at any depth |
+| `object.read mybucket/logs/*.gz` | only `*.gz` directly under `logs/` |
+| `object.* mybucket/` | any object operation on that bucket |
+| `object.presign.* *` | any presigned URL on any bucket |
+
+## Notes
+
+- Presigned **PUT** URLs are denied by the default policy and cannot be enabled by an
+  allow rule: a signed upload URL moves write access outside this app entirely — anyone
+  holding it can write that key until it expires, with no further policy, approval or
+  audit. Use `object put` instead, or ask the user to change the asset's policy.
+- Object keys may contain spaces; quote the whole target when they do, e.g.
+  `object stat 'mybucket/My Report.pdf'`. Leading or trailing whitespace is rejected —
+  permission rules split `<action> <resource>` at the first whitespace, so a padded name
+  could never be authorized.
+- Every `object` verb takes exactly one target and it must name a real key:
+  `object stat mybucket` is rejected, because `mybucket` as a rule would authorize the
+  whole bucket rather than one object. `object list` is the exception — listing is always
+  by prefix, so a bare bucket name is normalized to `mybucket/`.
+- A trailing `/` names the zero-byte "folder marker" object, so `object delete mybucket/logs/`
+  deletes exactly that marker. Because the same string read as a *rule* means the whole
+  prefix, such an approval is never turned into a standing grant: repeating it asks again.
+- Targets must not start with `/` or `--`, and the bucket is part of the target rather
+  than of the asset — there is no per-asset default bucket.
+- `object copy` and `object move` are single-object and server-side; both endpoints must
+  be on this same asset. Use the `cp` tool to move data between different assets or
+  between object storage and a server, and to copy whole prefixes.
+- Unknown flags are rejected rather than ignored, so a typo such as `--max_keys=100` fails
+  instead of silently listing the default page size.
+- The command line is shell-tokenized but never shell-executed: `$`, `|`, `>` and `&`
+  produce an error rather than expanding or redirecting.
+- The `scope` parameter is not used by OSS assets; the target names bucket and key.
 
 ## Asset config (for put_asset)
 
@@ -26,4 +165,4 @@ selection happens when browsing, not at creation time.
 
 Example:
 
-    put_asset(name="backups-bucket", type="oss", config={"endpoint":"s3.us-east-1.amazonaws.com","region":"us-east-1","access_key_id":"AKIA...","secret_access_key":"...","use_ssl":"true"})
+    put_asset(name="backups-bucket", type="oss", config={"endpoint":"s3.us-east-1.amazonaws.com","region":"us-east-1","access_key_id":"AKIAEXAMPLE","secret_access_key":"...","use_ssl":"true"})

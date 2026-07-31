@@ -114,7 +114,6 @@ var skillTypesWithoutCanonicalizer = []string{
 var skillDocOnlyTypes = []string{
 	asset_entity.AssetTypeRDP,
 	asset_entity.AssetTypeVNC,
-	asset_entity.AssetTypeOSS,
 	asset_entity.AssetTypeLocal,
 }
 
