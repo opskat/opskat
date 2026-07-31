@@ -584,6 +584,19 @@ func TestTestOSSPolicy(t *testing.T) {
 			So(out.MatchedPattern, ShouldEqual, "object.delete *")
 		})
 
+		// 上一例的组用的是 OSS 专用列，groupAllow 是空的，没有真正测到"组通用 allow
+		// 排在类型策略之后"这一步（spec §4.1 步骤 4：它只把 NeedConfirm 升为 Allow）。
+		// 这一例用组通用 CmdPolicy 的 "*"，若它抢在类型策略之前生效，
+		// presign PUT 这条用户改不掉的地板就被绕过了。
+		Convey("组通用 allow 不能越过默认 deny 地板", func() {
+			groups := []*group_entity.Group{
+				makeGroup("dev组", `{"allow_list":["*"]}`),
+			}
+			out := testOSSPolicy(ctx, nil, groups, "object.presign.write mybucket/a")
+			So(out.Decision, ShouldEqual, aictx.Deny)
+			So(out.MatchedPattern, ShouldEqual, "object.presign.write *")
+		})
+
 		Convey("默认策略（引用内置组）正确生效", func() {
 			p := policy.DefaultOSSPolicy()
 			So(testOSSPolicy(ctx, p, nil, "bucket.list *").Decision, ShouldEqual, aictx.Allow)

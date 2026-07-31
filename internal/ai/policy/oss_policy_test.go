@@ -150,6 +150,25 @@ func TestCheckOSSPolicy(t *testing.T) {
 			So(part.Decision, ShouldEqual, aictx.NeedConfirm)
 		})
 
+		// 上面两例失败的都是**最后**一条策略串，只看目的地的实现照样能通过。
+		// 这一例把失败点放在**源**上，锁住 spec §3.3 点名的核心安全点：
+		// 只检查目的地就等于放行"把受限对象复制到可读位置再读"。
+		Convey("受限的源不能被可写的目的地带过去(copy 的目的地旁路)", func() {
+			denySrc := &asset_entity.OSSPolicy{
+				AllowList: []string{"object.* *"},
+				DenyList:  []string{"object.read locked/"},
+			}
+			res := CheckOSSPolicy(ctx, denySrc, []string{"object.read locked/a.txt", "object.write dst/a.txt"})
+			So(res.Decision, ShouldEqual, aictx.Deny)
+			So(res.MatchedPattern, ShouldEqual, "object.read locked/")
+			So(res.Message, ShouldContainSubstring, "object.read locked/a.txt")
+
+			// 源不在 allow 名单里，只有目的地命中 → 整条回落到审批
+			writeOnly := &asset_entity.OSSPolicy{AllowList: []string{"object.write dst/"}}
+			part := CheckOSSPolicy(ctx, writeOnly, []string{"object.read locked/a.txt", "object.write dst/a.txt"})
+			So(part.Decision, ShouldEqual, aictx.NeedConfirm)
+		})
+
 		Convey("空策略串不得凭空放行(与 CheckGroupGenericPolicy 同姿态)", func() {
 			So(CheckOSSPolicy(ctx, nil, nil).Decision, ShouldEqual, aictx.NeedConfirm)
 		})

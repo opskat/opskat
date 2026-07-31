@@ -145,7 +145,7 @@ func ResolveOSSGroups(ctx context.Context, groupIDs []string) (allow, deny []str
 		}
 		var p policy.OSSPolicy
 		if err := json.Unmarshal([]byte(pg.Policy), &p); err != nil {
-			logger.Default().Warn("unmarshal policy group oss policy", zap.String("id", pg.BuiltinID), zap.Error(err))
+			logger.Ctx(ctx).Warn("unmarshal policy group oss policy", zap.String("id", pg.BuiltinID), zap.Error(err))
 			continue
 		}
 		allow = append(allow, p.AllowList...)
