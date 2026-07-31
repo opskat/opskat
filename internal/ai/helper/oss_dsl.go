@@ -177,21 +177,14 @@ func validateOSSObjectRef(ref string) error {
 	return validateOSSObjectKey(ref)
 }
 
-// ossFlagCheck 校验单个 flag 值的形状；nil 表示自由文本。
-type ossFlagCheck func(value string) error
-
-type ossFlags = map[string]ossFlagCheck
-
 // ossText 表示不约束形状。写成具名的 nil，比在表里散落 nil 好读。
-var ossText ossFlagCheck
-
-// ossFlagSpec 是某个 (family, verb) 认得的 flag 与其值的形状。
-// required 收的是"缺了这条命令必然跑不成"的 flag：`object put` 没有 --file 就没有数据源，
-// copy / move 没有 --to 就连策略串都少一条。
-type ossFlagSpec struct {
-	required ossFlags
-	optional ossFlags
-}
+//
+// flagCheck / flags / flagSpec 是与 kafka 共用的机件（flag_spec.go）：单个 flag 值的
+// 形状校验签名、"flag 名 → 校验"的映射、以及一个 (family, verb) 的 required/optional
+// 两张表，两边的形态完全同形，只有各自的 per-verb 表（下面的 ossFlagRules）不同——
+// required 收的是"缺了这条命令必然跑不成"的 flag：`object put` 没有 --file 就没有
+// 数据源，copy / move 没有 --to 就连策略串都少一条。
+var ossText flagCheck
 
 // ossPresignMethod 只收 get / put，且区分大小写。
 //
@@ -213,22 +206,22 @@ func ossPresignMethod(value string) error {
 // 整数形状直接复用同包的 kafkaInt，不另抄一份：判定谓词与 aictx.ArgInt64 的 string
 // 分支一致（`1,000` / `1e3` / `3.0` 会被解析成 0，然后被服务端默认值顶掉），
 // 两份副本迟早分叉。
-var ossFlagRules = map[string]map[string]ossFlagSpec{
+var ossFlagRules = map[string]map[string]flagSpec{
 	"bucket": {
 		"list": {},
 	},
 	"object": {
-		"list": {optional: ossFlags{"max-keys": kafkaInt, "after": ossText}},
+		"list": {optional: flags{"max-keys": kafkaInt, "after": ossText}},
 		"stat": {},
-		"get":  {optional: ossFlags{"file": ossText, "max-bytes": kafkaInt}},
-		"put":  {required: ossFlags{"file": ossText}, optional: ossFlags{"content-type": ossText}},
+		"get":  {optional: flags{"file": ossText, "max-bytes": kafkaInt}},
+		"put":  {required: flags{"file": ossText}, optional: flags{"content-type": ossText}},
 		// --to 是第二个资源引用，与单对象 verb 的 target 同规：它会原样成为 object.write
 		// 那条策略串的 resource 段，所以同样必须指名一个对象——`--to=dst` 派生出的
 		// "object.write dst" 当规则用是整桶可写。
-		"copy":    {required: ossFlags{"to": validateOSSObjectRef}},
-		"move":    {required: ossFlags{"to": validateOSSObjectRef}},
+		"copy":    {required: flags{"to": validateOSSObjectRef}},
+		"move":    {required: flags{"to": validateOSSObjectRef}},
 		"delete":  {},
-		"presign": {optional: ossFlags{"expiry": kafkaInt, "method": ossPresignMethod}},
+		"presign": {optional: flags{"expiry": kafkaInt, "method": ossPresignMethod}},
 	},
 }
 
@@ -236,62 +229,15 @@ var ossFlagRules = map[string]map[string]ossFlagSpec{
 //
 // 三者都排在权限检查之前（解析期），理由与 kafka 的 validateKafkaFlags 一致：这些调用
 // 批准之后必然失败，必须在弹审批对话框之前失败，否则用户先被打断批准一次
-// （选 "allow all" 还会落一条常驻 grant），命令才失败。
+// （选 "allow all" 还会落一条常驻 grant），命令才失败。校验本体与 kafka 共用
+// （validateFlags，flag_spec.go）；oss 的 flag 名没有别名，所以 normalize 传 nil——
+// `--max_keys` 因此仍是未知 flag，不是 `--max-keys` 的另一种写法。
 func validateOSSFlags(c *OSSCommand) error {
 	spec, ok := ossFlagRules[c.Family][c.Verb]
 	if !ok {
 		return fmt.Errorf("no flag rules registered for %q %q", c.Family, c.Verb)
 	}
-	known := make(ossFlags, len(spec.required)+len(spec.optional))
-	maps.Copy(known, spec.required)
-	maps.Copy(known, spec.optional)
-
-	// unknown 排序后一次性报出：c.Flags 是 map，只报"碰到的第一个"会让同一条命令在不同次
-	// 调用里报出不同的 flag 名，而这段文本是发给模型的。
-	var unknown []string
-	for name := range c.Flags {
-		if _, ok := known[name]; !ok {
-			unknown = append(unknown, name)
-		}
-	}
-	if len(unknown) > 0 {
-		slices.Sort(unknown)
-		return fmt.Errorf("unknown flag(s) --%s for %q %q; supported: %s",
-			strings.Join(unknown, ", --"), c.Family, c.Verb, ossSupportedFlagList(spec))
-	}
-
-	// 必填先于形状：`--to` 完全没给和给了个坏值是两条不同的提示，先报缺失更准。
-	var missing []string
-	for name := range spec.required {
-		if strings.TrimSpace(c.Flags[name]) == "" {
-			missing = append(missing, name)
-		}
-	}
-	if len(missing) > 0 {
-		slices.Sort(missing)
-		return fmt.Errorf("%q %q requires --%s", c.Family, c.Verb, strings.Join(missing, ", --"))
-	}
-
-	// 名字排序遍历，保证同一条命令每次报出同一个 flag。
-	for _, name := range slices.Sorted(maps.Keys(c.Flags)) {
-		check := known[name]
-		if check == nil {
-			continue
-		}
-		if err := check(c.Flags[name]); err != nil {
-			return fmt.Errorf("invalid value for --%s: %w", name, err)
-		}
-	}
-	return nil
-}
-
-func ossSupportedFlagList(spec ossFlagSpec) string {
-	all := slices.Concat(slices.Collect(maps.Keys(spec.required)), slices.Collect(maps.Keys(spec.optional)))
-	if len(all) == 0 {
-		return "this verb takes no flags"
-	}
-	slices.Sort(all)
-	return "--" + strings.Join(all, ", --")
+	return validateFlags(c.Family, c.Verb, c.Flags, spec, nil)
 }
 
 // Render 是 ParseOSSCommand 的逆函数（TestOSSCommand_RoundTrip 锁住），也是审批弹窗与

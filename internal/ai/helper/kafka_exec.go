@@ -91,32 +91,13 @@ func resolveKafkaCommand(command string) (*KafkaCommand, error) {
 	return c, nil
 }
 
-// kafkaFlagSpec 是某个 (family, verb) 认得的 flag 集合，以及每个 flag 值的形状。
-type kafkaFlagSpec struct {
-	// required：缺了它这条命令必然跑不成，且这一点在**连上集群之前**就能判定——
-	// 要么 kafka_args.go 的 *RequestFromArgs 当场报错，要么 kafka_svc 里有一条
-	// **无条件**的校验（如 CreateTopic 的 `Partitions <= 0`）。
-	//
-	// 仍然不收进来的是 kafka_svc 里的**条件性**规则：acl 的 resource-name 取决于
-	// resource-type 是不是 cluster、reset-offset 的 offset/timestamp 取决于 mode。
-	// 把条件性规则抄过来才是第二处真相——service 放宽时这边会静默地多拒。
-	required kafkaFlags
-	optional kafkaFlags
-}
-
-// kafkaFlags 把 flag 名（DSL 的连字符写法）映射到值的形状校验；nil 表示自由文本。
-type kafkaFlags = map[string]kafkaFlagCheck
-
-// kafkaFlagCheck 校验单个 flag 值的形状。
-//
-// 每个非平凡的形状都**直接调用真正会消费这个值的那个构造器**，而不是另写一遍解析：
-// 形状校验与实际解析必须不可能分叉，否则就会出现"校验放行、构造器报错"——正是这层
-// 要消灭的"批准之后必然失败"。代价是构造器被调用两次（一次校验、一次真执行），
-// 都是纯字符串解析，无副作用。
-type kafkaFlagCheck func(value string) error
-
 // kafkaText 表示不约束形状（自由文本）。写成具名的 nil，比在表里散落 nil 好读。
-var kafkaText kafkaFlagCheck
+//
+// flagCheck / flags / flagSpec 是与 oss 共用的机件（flag_spec.go）：单个 flag 值的
+// 形状校验签名、"flag 名 → 校验"的映射、以及一个 (family, verb) 的 required/optional
+// 两张表，两边的形态完全同形，只有各自的 per-verb 表（下面的 kafkaFlagRules）与
+// flag 名等价关系（normalizeKafkaFlagName）不同。
+var kafkaText flagCheck
 
 // kafkaInt 要求十进制整数，判定谓词与 aictx.ArgInt64 的 string 分支完全一致——
 // 这一条是本次要堵的静默缺陷本体：`--limit=1,000` / `1_000` / `1e3` / `3.0` today
@@ -200,6 +181,13 @@ func kafkaConnectorConfigJSON(value string) error {
 // 连字符写法（与 SKILL.md 一致），比较时两边都过 normalizeKafkaFlagName，所以下划线
 // 写法同样收。
 //
+// required：缺了它这条命令必然跑不成，且这一点在**连上集群之前**就能判定——要么
+// kafka_args.go 的 *RequestFromArgs 当场报错，要么 kafka_svc 里有一条**无条件**的
+// 校验（如 CreateTopic 的 `Partitions <= 0`）。仍然不收进来的是 kafka_svc 里的
+// **条件性**规则：acl 的 resource-name 取决于 resource-type 是不是 cluster、
+// reset-offset 的 offset/timestamp 取决于 mode。把条件性规则抄过来才是第二处
+// 真相——service 放宽时这边会静默地多拒。
+//
 // 每一条都对着 kafka_helper.go 各 Handle* 与 kafka_args.go 各 *RequestFromArgs
 // 实际读的 key 核过。不在表里的 flag 一律拒绝：今天的 map[string]any 参数对多余 key
 // 是静默丢弃，于是 `topic create orders --paritions=3`（拼错）会按"分区数 0"往下走，
@@ -209,28 +197,28 @@ func kafkaConnectorConfigJSON(value string) error {
 // 两个方向的漂移都会静默：多写一个没人读的 flag = 用户以为设置生效了其实没有；
 // 少写一个 = 那个参数在统一 exec 下不可达。TestKafkaFlagRules_EveryFlagReachesItsRequestField
 // 遍历整张表、断言每个 flag 都真的落到对应 request 字段上，把两个方向一起钉死。
-var kafkaFlagRules = map[string]map[string]kafkaFlagSpec{
+var kafkaFlagRules = map[string]map[string]flagSpec{
 	"cluster": {
 		"overview":        {},
 		"brokers":         {},
-		"broker-config":   {optional: kafkaFlags{"broker-id": kafkaInt}},
+		"broker-config":   {optional: flags{"broker-id": kafkaInt}},
 		"cluster-configs": {},
 	},
 	"topic": {
-		"list": {optional: kafkaFlags{
+		"list": {optional: flags{
 			"include-internal": kafkaBool, "search": kafkaText, "page": kafkaInt, "page-size": kafkaInt,
 		}},
 		"describe": {},
 		// partitions / replication-factor 必填：topic_admin.go:21,24 无条件要求两者 > 0，
 		// 而那两条检查在 withClient 内部——不在这里拦，用户会先被弹审批、再白连一次集群。
 		"create": {
-			required: kafkaFlags{"partitions": kafkaInt, "replication-factor": kafkaInt},
-			optional: kafkaFlags{"configs": kafkaStringMapJSON},
+			required: flags{"partitions": kafkaInt, "replication-factor": kafkaInt},
+			optional: flags{"configs": kafkaStringMapJSON},
 		},
 		"delete":              {},
-		"update-config":       {required: kafkaFlags{"config-updates": kafkaConfigUpdatesJSON}},
-		"increase-partitions": {required: kafkaFlags{"partition-count": kafkaInt}}, // topic_admin.go:99 无条件 > 0
-		"delete-records":      {required: kafkaFlags{"records": kafkaDeleteRecordsJSON}},
+		"update-config":       {required: flags{"config-updates": kafkaConfigUpdatesJSON}},
+		"increase-partitions": {required: flags{"partition-count": kafkaInt}}, // topic_admin.go:99 无条件 > 0
+		"delete-records":      {required: flags{"records": kafkaDeleteRecordsJSON}},
 	},
 	"consumer-group": {
 		"list":     {},
@@ -239,8 +227,8 @@ var kafkaFlagRules = map[string]map[string]kafkaFlagSpec{
 			// topic 必填：consumer_group_admin.go:84 无条件拒空。
 			// offset / timestamp-millis 有意留作可选——它们只在对应 mode 下才必填，
 			// 属于上面说的条件性规则。
-			required: kafkaFlags{"topic": kafkaText},
-			optional: kafkaFlags{
+			required: flags{"topic": kafkaText},
+			optional: flags{
 				"partitions": kafkaInt32SliceJSON, "mode": kafkaText,
 				"offset": kafkaInt, "timestamp-millis": kafkaInt,
 			},
@@ -248,7 +236,7 @@ var kafkaFlagRules = map[string]map[string]kafkaFlagSpec{
 		"delete": {},
 	},
 	"acl": {
-		"list": {optional: kafkaFlags{
+		"list": {optional: flags{
 			"resource-type": kafkaText, "resource-name": kafkaText, "pattern-type": kafkaText,
 			"principal": kafkaText, "host": kafkaText, "acl-operation": kafkaText,
 			"permission": kafkaText, "page": kafkaInt, "page-size": kafkaInt,
@@ -257,65 +245,65 @@ var kafkaFlagRules = map[string]map[string]kafkaFlagSpec{
 		// 四个无条件拒空，delete 还额外要求 host。resource-name 留作可选——它只在
 		// resource-type 不是 cluster 时才必填，是条件性规则。
 		"create": {
-			required: kafkaFlags{
+			required: flags{
 				"resource-type": kafkaText, "principal": kafkaText,
 				"acl-operation": kafkaText, "permission": kafkaText,
 			},
-			optional: kafkaFlags{"resource-name": kafkaText, "pattern-type": kafkaText, "host": kafkaText},
+			optional: flags{"resource-name": kafkaText, "pattern-type": kafkaText, "host": kafkaText},
 		},
 		"delete": {
-			required: kafkaFlags{
+			required: flags{
 				"resource-type": kafkaText, "principal": kafkaText,
 				"acl-operation": kafkaText, "permission": kafkaText, "host": kafkaText,
 			},
-			optional: kafkaFlags{"resource-name": kafkaText, "pattern-type": kafkaText},
+			optional: flags{"resource-name": kafkaText, "pattern-type": kafkaText},
 		},
 	},
 	"schema": {
 		"list-subjects": {},
 		"list-versions": {},
-		"describe":      {optional: kafkaFlags{"version": kafkaText}},
+		"describe":      {optional: flags{"version": kafkaText}},
 		// schema 必填：schema_registry.go:101,128 无条件拒空。
 		"check-compatibility": {
-			required: kafkaFlags{"schema": kafkaText},
-			optional: kafkaFlags{"version": kafkaText, "schema-type": kafkaText, "references": kafkaSchemaRefsJSON},
+			required: flags{"schema": kafkaText},
+			optional: flags{"version": kafkaText, "schema-type": kafkaText, "references": kafkaSchemaRefsJSON},
 		},
 		"register": {
-			required: kafkaFlags{"schema": kafkaText},
-			optional: kafkaFlags{"schema-type": kafkaText, "references": kafkaSchemaRefsJSON},
+			required: flags{"schema": kafkaText},
+			optional: flags{"schema-type": kafkaText, "references": kafkaSchemaRefsJSON},
 		},
-		"delete": {optional: kafkaFlags{"version": kafkaText, "permanent": kafkaBool}},
+		"delete": {optional: flags{"version": kafkaText, "permanent": kafkaBool}},
 	},
 	"connect": {
 		"list-clusters":   {},
-		"list-connectors": {optional: kafkaFlags{"cluster": kafkaText}},
-		"describe":        {optional: kafkaFlags{"cluster": kafkaText}},
+		"list-connectors": {optional: flags{"cluster": kafkaText}},
+		"describe":        {optional: flags{"cluster": kafkaText}},
 		"create": {
-			required: kafkaFlags{"config": kafkaConnectorConfigJSON},
-			optional: kafkaFlags{"cluster": kafkaText},
+			required: flags{"config": kafkaConnectorConfigJSON},
+			optional: flags{"cluster": kafkaText},
 		},
 		"update-config": {
-			required: kafkaFlags{"config": kafkaConnectorConfigJSON},
-			optional: kafkaFlags{"cluster": kafkaText},
+			required: flags{"config": kafkaConnectorConfigJSON},
+			optional: flags{"cluster": kafkaText},
 		},
-		"pause":  {optional: kafkaFlags{"cluster": kafkaText}},
-		"resume": {optional: kafkaFlags{"cluster": kafkaText}},
-		"restart": {optional: kafkaFlags{
+		"pause":  {optional: flags{"cluster": kafkaText}},
+		"resume": {optional: flags{"cluster": kafkaText}},
+		"restart": {optional: flags{
 			"cluster": kafkaText, "include-tasks": kafkaBool, "only-failed": kafkaBool,
 		}},
-		"delete": {optional: kafkaFlags{"cluster": kafkaText}},
+		"delete": {optional: flags{"cluster": kafkaText}},
 	},
 	"message": {
-		"browse": {optional: kafkaFlags{
+		"browse": {optional: flags{
 			"partition": kafkaPartition, "start-mode": kafkaText, "offset": kafkaInt,
 			"timestamp-millis": kafkaInt, "limit": kafkaInt, "max-bytes": kafkaInt,
 			"decode-mode": kafkaText, "max-wait-millis": kafkaInt,
 		}},
 		"inspect": {
-			required: kafkaFlags{"partition": kafkaPartition, "offset": kafkaInt},
-			optional: kafkaFlags{"max-bytes": kafkaInt, "decode-mode": kafkaText, "max-wait-millis": kafkaInt},
+			required: flags{"partition": kafkaPartition, "offset": kafkaInt},
+			optional: flags{"max-bytes": kafkaInt, "decode-mode": kafkaText, "max-wait-millis": kafkaInt},
 		},
-		"produce": {optional: kafkaFlags{
+		"produce": {optional: flags{
 			"partition": kafkaPartition, "key": kafkaText, "key-encoding": kafkaText,
 			"value": kafkaText, "value-encoding": kafkaText,
 			"headers": kafkaProduceHeadersJSON, "timestamp-millis": kafkaInt,
@@ -323,92 +311,18 @@ var kafkaFlagRules = map[string]map[string]kafkaFlagSpec{
 	},
 }
 
-// kafkaProvidedFlag 记住模型实际写下的拼写：报重复时要把两种写法都还给它，
-// 只回归一化后的名字会让它看不出自己写了哪两个。
-type kafkaProvidedFlag struct {
-	name  string
-	value string
-}
-
 // validateKafkaFlags 拒绝这一层——也只有这一层——能判定的坏 flag。
 // per-verb 的合法 flag 集合是执行器独有的知识：cmdline 只做词法，kafka_dsl.go 只认
-// family/verb/target。
+// family/verb/target。校验本体（未知 flag / 折叠拼写的重复 flag / 缺必填 / 坏形状）
+// 是与 oss 共用的 validateFlags（flag_spec.go）；这里只做 kafka 独有的两件事：
+// 从 kafkaFlagRules 按 (family, verb) 查表，以及把 normalizeKafkaFlagName 接进去
+// 折叠连字符/下划线两种拼写。
 func validateKafkaFlags(c *KafkaCommand) error {
 	spec, ok := kafkaFlagRules[c.Family][c.Verb]
 	if !ok {
 		return fmt.Errorf("no flag rules registered for %q %q", c.Family, c.Verb)
 	}
-
-	known := make(map[string]kafkaFlagCheck, len(spec.required)+len(spec.optional))
-	for name, check := range spec.required {
-		known[normalizeKafkaFlagName(name)] = check
-	}
-	for name, check := range spec.optional {
-		known[normalizeKafkaFlagName(name)] = check
-	}
-
-	// unknown 排序后一次性报出：c.Flags 是 map，只报"碰到的第一个"会让同一条命令
-	// 在不同次调用里报出不同的 flag 名，而这段文本是发给模型的（同 ParseMongoCommand）。
-	var unknown []string
-	provided := make(map[string]kafkaProvidedFlag, len(c.Flags))
-	for name, value := range c.Flags {
-		normalized := normalizeKafkaFlagName(name)
-		if _, ok := known[normalized]; !ok {
-			unknown = append(unknown, name)
-			continue
-		}
-		// 连字符与下划线两种写法归一后是同一个 args key，后写的会盖掉先写的，
-		// cmdline 的重名检查看的是原始拼写、拦不住这一对。报错时把两个拼写排序后
-		// 输出，否则同一条命令每次报出的顺序都不一样（map 迭代顺序随机）。
-		if prev, dup := provided[normalized]; dup {
-			names := []string{prev.name, name}
-			slices.Sort(names)
-			return fmt.Errorf("flags --%s and --%s are the same parameter %q; pass it once",
-				names[0], names[1], normalized)
-		}
-		provided[normalized] = kafkaProvidedFlag{name: name, value: value}
-	}
-	if len(unknown) > 0 {
-		slices.Sort(unknown)
-		return fmt.Errorf("unknown flag(s) --%s for %q %q; supported: %s",
-			strings.Join(unknown, ", --"), c.Family, c.Verb, kafkaSupportedFlagList(spec))
-	}
-
-	// 必填先于形状：`--config` 完全没给和给了个坏值是两条不同的提示，先报缺失更准。
-	var missing []string
-	for name := range spec.required {
-		if strings.TrimSpace(provided[normalizeKafkaFlagName(name)].value) == "" {
-			missing = append(missing, name)
-		}
-	}
-	if len(missing) > 0 {
-		slices.Sort(missing)
-		return fmt.Errorf("%q %q requires --%s", c.Family, c.Verb, strings.Join(missing, ", --"))
-	}
-
-	// 形状检查排在最后，但仍在权限检查之前——这才是重点：一个 --limit=1,000 或
-	// --records=notjson 今天能一路走到审批弹窗，批准之后才在构造器里失败（或者更糟，
-	// 被静默当成 0 / 默认值）。名字排序遍历，保证同一条命令每次报出同一个 flag。
-	for _, normalized := range slices.Sorted(maps.Keys(provided)) {
-		check := known[normalized]
-		if check == nil {
-			continue
-		}
-		flag := provided[normalized]
-		if err := check(flag.value); err != nil {
-			return fmt.Errorf("invalid value for --%s: %w", flag.name, err)
-		}
-	}
-	return nil
-}
-
-func kafkaSupportedFlagList(spec kafkaFlagSpec) string {
-	all := slices.Concat(slices.Collect(maps.Keys(spec.required)), slices.Collect(maps.Keys(spec.optional)))
-	if len(all) == 0 {
-		return "this verb takes no flags"
-	}
-	slices.Sort(all)
-	return "--" + strings.Join(all, ", --")
+	return validateFlags(c.Family, c.Verb, c.Flags, spec, normalizeKafkaFlagName)
 }
 
 // kafkaFlagsToArgs 把 KafkaCommand 摊平成既有 Handle* 认得的 map[string]any。
