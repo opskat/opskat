@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -30,10 +31,18 @@ func (localAdapter) List(
 		}
 		res := &ListResult{}
 		base := globBase(filepath.ToSlash(pattern))
+		var matchedDirs []string
 		for _, match := range matches {
-			if err := appendLocalPath(match, base, recursive, res); err != nil {
+			dir, err := appendLocalPath(match, base, recursive, res)
+			if err != nil {
 				return nil, err
 			}
+			if dir != "" {
+				matchedDirs = append(matchedDirs, dir)
+			}
+		}
+		if len(matchedDirs) > 0 {
+			return nil, globMatchedDirsError(pattern, matchedDirs)
 		}
 		return res, nil
 	}
@@ -79,26 +88,40 @@ func resolveNamedDir(p string) (string, error) {
 }
 
 // appendLocalPath 处理一个被展开出来的路径：符号链接跳过并计数，目录只在递归时下钻，
-// 其余是可传输条目。
-func appendLocalPath(p, base string, recursive bool, res *ListResult) error {
+// 其余是可传输条目。非递归时命中的目录作为第一个返回值交回调用方（空串表示没有），
+// 由它一次点名报错——见 globMatchedDirsError。
+func appendLocalPath(p, base string, recursive bool, res *ListResult) (matchedDir string, err error) {
 	info, err := os.Lstat(p)
 	if err != nil {
-		return err
+		return "", err
 	}
 	switch {
 	case info.Mode()&os.ModeSymlink != 0:
 		res.SkippedSymlinks = append(res.SkippedSymlinks, p)
 	case info.IsDir():
 		if recursive {
-			return walkLocal(p, base, res)
+			return "", walkLocal(p, base, res)
 		}
-		// 非递归时目录不是可传输条目：'*' 命中的目录直接略过，与 POSIX cp 一致。
+		return p, nil
 	default:
 		res.Entries = append(res.Entries, Entry{
 			Path: p, RelPath: relTo(base, filepath.ToSlash(p)), Size: info.Size(),
 		})
 	}
-	return nil
+	return "", nil
+}
+
+// globMatchedDirsError 是本地与 SSH 两端共用的答复：非递归的 glob 命中了目录。两端逐字节
+// 同一句话——换个端点不该换个解释；语气与 transfer_oss.go 里前缀那一支一致（对象存储没有
+// 目录实体，同一件事在那边表现为命中公共前缀）。
+//
+// 报错而不是略过，是因为同一个 List 里"指名目录却没有 recursive"那一支早就是报错：只因用户
+// 打了个 '*' 就换个答案，是没人选过的不一致。POSIX cp 也不站在略过那一边——`cp src/* dst/`
+// 会打 "cp: src/sub is a directory (not copied)" 并以非零退出；静默略过换来的是一次看起来
+// 成功、实际只传了一部分的传输（spec D19 否决静默截断）。
+func globMatchedDirsError(pattern string, dirs []string) error {
+	return fmt.Errorf("pattern %q matches directories (%s); set recursive to transfer them",
+		pattern, strings.Join(dirs, ", "))
 }
 
 // walkLocal 递归展开 root 下的文件。WalkDir 本身不跟随符号链接，链接项在这里被跳过计数。

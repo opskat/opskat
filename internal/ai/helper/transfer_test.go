@@ -72,15 +72,12 @@ func TestLocalTransferList_GlobBaseIsLastLiteralDir(t *testing.T) {
 	writeTempFile(t, filepath.Join(dir, "logs", "a.log"), "aa")
 	writeTempFile(t, filepath.Join(dir, "logs", "b.log"), "bbb")
 	writeTempFile(t, filepath.Join(dir, "logs", "c.txt"), "no")
-	if err := os.MkdirAll(filepath.Join(dir, "logs", "sub.log"), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
 
 	got, err := localTransfer.List(context.Background(), nil, filepath.Join(dir, "logs", "*.log"), false)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	// c.txt 不匹配；sub.log 匹配但是目录，非递归时不是可传输条目。
+	// c.txt 不匹配。
 	if joinRel(got.Entries) != "a.log,b.log" {
 		t.Fatalf("RelPaths = %v, want [a.log b.log]", relPaths(got.Entries))
 	}
@@ -282,7 +279,8 @@ func newTestSFTP(t *testing.T) *sftp.Client {
 }
 
 // sshTestTree 铺一棵目录树：两个 .log、一个不匹配的 .txt、一个子目录、一个名字也匹配
-// *.log 的符号链接、一个名字匹配但其实是目录的 sub.log。返回 <root>/log。
+// *.log 的符号链接。返回 <root>/log。名字匹配通配的**目录**不放在这里：那是两端共用的
+// TestTransferList_GlobMatchingDirs* 的题面，它要的是报错而不是一份条目清单。
 func sshTestTree(t *testing.T) string {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "log")
@@ -290,9 +288,6 @@ func sshTestTree(t *testing.T) string {
 	writeTempFile(t, filepath.Join(root, "b.log"), "bbb")
 	writeTempFile(t, filepath.Join(root, "c.txt"), "c")
 	writeTempFile(t, filepath.Join(root, "old", "x.log"), strings.Repeat("x", 22))
-	if err := os.MkdirAll(filepath.Join(root, "sub.log"), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
 	if err := os.Symlink(filepath.Join(root, "a.log"), filepath.Join(root, "d.log")); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
@@ -302,8 +297,7 @@ func sshTestTree(t *testing.T) string {
 	return root
 }
 
-// glob 的基点是通配前的最后一层目录；命中的符号链接同样是"展开途中"，跳过并计数；
-// 命中的目录非递归时不是可传输条目。
+// glob 的基点是通配前的最后一层目录；命中的符号链接同样是"展开途中"，跳过并计数。
 func TestListSFTP_Glob(t *testing.T) {
 	root := sshTestTree(t)
 
@@ -377,6 +371,78 @@ func TestListSFTP_NamedSymlinkedDirIsFollowed(t *testing.T) {
 	}
 	if len(got.SkippedSymlinks) != 0 {
 		t.Fatalf("SkippedSymlinks = %v, want none", got.SkippedSymlinks)
+	}
+}
+
+// --- 两端同一个答案：非递归的 glob 命中目录 ---
+
+// globDirTree 铺一棵"通配会命中目录"的树：一个真的 .log 文件，两个名字同样以 .log 收尾的
+// 目录（各带内容）。本地端与 SFTP 端服务的是同一个真实文件系统，因此同一个绝对路径 pattern
+// 可以原样喂给两端，答案能逐字节对比。
+func globDirTree(t *testing.T) (root, pattern string) {
+	t.Helper()
+	root = filepath.Join(t.TempDir(), "logs")
+	writeTempFile(t, filepath.Join(root, "a.log"), "a")
+	writeTempFile(t, filepath.Join(root, "old.log", "x.log"), "xx")
+	writeTempFile(t, filepath.Join(root, "sub.log", "deep", "y.log"), "yyy")
+	return root, root + "/*.log"
+}
+
+// 非递归的 glob 命中目录时报错并逐个点名，而不是把它们静默丢掉。同一个 List 里"指名目录却
+// 没有 recursive"那一支早就是报错，只因用户打了个 * 就换个答案是没人选过的不一致；静默略过
+// 换来的是一次看起来成功、实际只传了一部分的传输（spec D19 否决静默截断）。
+// 两端跑同一棵树、同一个 pattern，错误必须逐字节相同——换个端点不该换个解释。
+func TestTransferList_GlobMatchingDirsWithoutRecursiveErrors(t *testing.T) {
+	root, pattern := globDirTree(t)
+
+	localRes, localErr := localTransfer.List(context.Background(), nil, pattern, false)
+	sftpRes, sftpErr := listSFTP(newTestSFTP(t), pattern, false)
+
+	for _, c := range []struct {
+		endpoint string
+		res      *ListResult
+		err      error
+	}{{"local", localRes, localErr}, {"sftp", sftpRes, sftpErr}} {
+		if c.err == nil {
+			t.Fatalf("%s: expected an error, got entries %v", c.endpoint, relPaths(c.res.Entries))
+		}
+		if c.res != nil {
+			t.Errorf("%s: result = %+v, want nil：报错就不能同时交出半份清单", c.endpoint, c.res)
+		}
+		for _, dir := range []string{filepath.Join(root, "old.log"), filepath.Join(root, "sub.log")} {
+			if !strings.Contains(c.err.Error(), dir) {
+				t.Errorf("%s: error %q should name the matched directory %q", c.endpoint, c.err, dir)
+			}
+		}
+		if !strings.Contains(c.err.Error(), "recursive") {
+			t.Errorf("%s: error %q should point at recursive", c.endpoint, c.err)
+		}
+	}
+	if localErr.Error() != sftpErr.Error() {
+		t.Errorf("两端答案分叉：\n local = %q\n  sftp = %q", localErr, sftpErr)
+	}
+}
+
+// recursive 时同一个 pattern 命中的目录被整棵下钻，基点仍是通配前的最后一层——报错只属于
+// 非递归那一档，两端也在这一档上给同一份清单。
+func TestTransferList_GlobMatchingDirsWithRecursiveDescends(t *testing.T) {
+	_, pattern := globDirTree(t)
+	const want = "a.log,old.log/x.log,sub.log/deep/y.log"
+
+	localRes, err := localTransfer.List(context.Background(), nil, pattern, true)
+	if err != nil {
+		t.Fatalf("local List: %v", err)
+	}
+	if joinRel(localRes.Entries) != want {
+		t.Errorf("local RelPaths = %v, want %q", relPaths(localRes.Entries), want)
+	}
+
+	sftpRes, err := listSFTP(newTestSFTP(t), pattern, true)
+	if err != nil {
+		t.Fatalf("listSFTP: %v", err)
+	}
+	if joinRel(sftpRes.Entries) != want {
+		t.Errorf("sftp RelPaths = %v, want %q", relPaths(sftpRes.Entries), want)
 	}
 }
 

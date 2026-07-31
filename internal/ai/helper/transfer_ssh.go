@@ -51,15 +51,23 @@ func listSFTP(client *sftp.Client, pattern string, recursive bool) (*ListResult,
 		sort.Strings(matches)
 		res := &ListResult{}
 		base := globBase(pattern)
+		var matchedDirs []string
 		for _, match := range matches {
 			// 只有 glob 这一支需要额外 Lstat：递归那边 ReadDir 已经带回了模式与大小。
 			info, err := client.Lstat(match)
 			if err != nil {
 				return nil, err
 			}
-			if err := appendSFTPInfo(client, match, base, info, recursive, res); err != nil {
+			dir, err := appendSFTPInfo(client, match, base, info, recursive, res)
+			if err != nil {
 				return nil, err
 			}
+			if dir != "" {
+				matchedDirs = append(matchedDirs, dir)
+			}
+		}
+		if len(matchedDirs) > 0 {
+			return nil, globMatchedDirsError(pattern, matchedDirs)
 		}
 		return res, nil
 	}
@@ -84,22 +92,24 @@ func listSFTP(client *sftp.Client, pattern string, recursive bool) (*ListResult,
 }
 
 // appendSFTPInfo 处理一个被展开出来的路径：符号链接跳过并计数，目录只在递归时下钻，
-// 其余是可传输条目。
+// 其余是可传输条目。非递归时命中的目录作为第一个返回值交回调用方（空串表示没有），与本地端
+// 的 appendLocalPath 同一形状——两端共用 globMatchedDirsError 报出同一句话。
+// walkSFTP 永远以 recursive=true 调用，因此那条路上第一个返回值恒为空串。
 func appendSFTPInfo(
 	client *sftp.Client, p, base string, info os.FileInfo, recursive bool, res *ListResult,
-) error {
+) (matchedDir string, err error) {
 	switch {
 	case info.Mode()&os.ModeSymlink != 0:
 		res.SkippedSymlinks = append(res.SkippedSymlinks, p)
 	case info.IsDir():
 		if recursive {
-			return walkSFTP(client, p, base, res)
+			return "", walkSFTP(client, p, base, res)
 		}
-		// 非递归时目录不是可传输条目，与本地端一致。
+		return p, nil
 	default:
 		res.Entries = append(res.Entries, Entry{Path: p, RelPath: relTo(base, p), Size: info.Size()})
 	}
-	return nil
+	return "", nil
 }
 
 // walkSFTP 递归展开 dir。ReadDir 是 lstat 语义，符号链接不会被下钻。
@@ -111,7 +121,7 @@ func walkSFTP(client *sftp.Client, dir, base string, res *ListResult) error {
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].Name() < infos[j].Name() })
 	for _, info := range infos {
-		if err := appendSFTPInfo(client, path.Join(dir, info.Name()), base, info, true, res); err != nil {
+		if _, err := appendSFTPInfo(client, path.Join(dir, info.Name()), base, info, true, res); err != nil {
 			return err
 		}
 	}
