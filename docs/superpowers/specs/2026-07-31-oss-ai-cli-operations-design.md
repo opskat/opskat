@@ -279,7 +279,7 @@ func RegisterTransferAdapter(assetType string, a TransferAdapter)
 | 端点 | `List` | `OpenRead` / `Write` | `ApprovalSubject`（read / write / list） |
 |---|---|---|---|
 | 本地（无资产） | `filepath.Glob` / `filepath.WalkDir`，包级实现，不进注册表 | `os.Open` / `os.Create`（+ `MkdirAll` 父目录） | 无——本地端不需要审批，与现状一致 |
-| `ssh` | `sftp.Client.Glob`（已验证存在，语法同 `path.Match`）/ `ReadDir` 递归 | 复用既有 `ExecuteWithSFTP` + `sftp.Open` / `sftp.Create`（+ `MkdirAll`） | `("cp", remotePath)` ×3，即现状的 `GrantToolCp` + `MatchPathRule` |
+| `ssh` | `sftp.Client.Glob`（已验证存在，语法同 `path.Match`）/ `ReadDir` 递归 | `List` / `Write` 复用既有 `ExecuteWithSFTP`；**`OpenRead` 不能用它**——它是作用域回调，`fn` 一返回就关掉 SFTP 与 SSH 连接，而 `OpenRead` 要交出一个活得比调用更久的 `io.ReadCloser`，因此走 `DialAssetSSH`，把连接寿命绑到返回值的 `Close` 上 | `("cp", remotePath)` ×3，即现状的 `GrantToolCp` + `MatchPathRule` |
 | `oss` | `oss_svc.ListObjects` 按前缀分页拉全（glob 在客户端按 `path.Match` 过滤） | `oss_svc.GetObject`（天然返回 `(io.ReadCloser, size)`）/ `oss_svc.PutObject`（天然收 `(io.Reader, size)`，size 传 -1 时 minio 走分片；对象 key 是平的，无需建目录） | `("oss", "object.read B/K")` / `("oss", "object.write B/K")` / `("oss", "object.list B/P/")` |
 
 `ApprovalSubject` 与读写、展开放在同一个接口里，是为了不出现第二张"类型 → 审批语义"的表：一个类型接进传输面，它的四件事一次说清。
