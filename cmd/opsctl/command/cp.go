@@ -152,7 +152,7 @@ func cmdCpMultiSource(
 	// 第一段·展开授权。枚举读的是元数据而不是内容，但 `cp -r web-01:/ ./x` 能把整棵文件树
 	// 的结构拖出来，所以它自己要过一次授权（D18）。交给适配器的是用户指名的那个串，
 	// 收窄到"实际会被枚举的基点"由适配器自己做。
-	expanded := make([][]helper.Entry, len(srcs))
+	expanded := make([]*helper.ListResult, len(srcs))
 	entryCount := 0
 	for i, src := range srcs {
 		approvalCtx, result, approvalAssetID, err := requireCpApproval(ctx,
@@ -176,7 +176,7 @@ func cmdCpMultiSource(
 			fmt.Fprintf(os.Stderr, "Error: no files matched %q\n", src.raw)
 			return 1
 		}
-		expanded[i] = res.Entries
+		expanded[i] = res
 		entryCount += len(res.Entries)
 	}
 	if entryCount > cpMaxEntries {
@@ -195,7 +195,7 @@ func cmdCpMultiSource(
 	seen := make(map[cpSubject]bool, 2*entryCount)
 	plans := make([]cpTransferPlan, 0, len(srcs))
 	for i, src := range srcs {
-		for _, entry := range expanded[i] {
+		for _, entry := range expanded[i].Entries {
 			dstPath := dst.path + entry.RelPath
 			// 形态校验排在这次传输的审批项之前：目的端不经过 List，ApprovalSubject 又不能
 			// 报错，少了这一关，一个形态错误的目的地会带着错误的主体走完审批、到写入才失败。
@@ -206,7 +206,7 @@ func cmdCpMultiSource(
 			subjects = appendCpSubject(subjects, seen, src, entry.Path, helper.DirRead)
 			subjects = appendCpSubject(subjects, seen, dst, dstPath, helper.DirWrite)
 		}
-		plans = append(plans, cpTransferPlan{src: src, dstArg: cpDstArg(src, dst, expanded[i], recursive)})
+		plans = append(plans, cpTransferPlanFor(src, dst, expanded[i], recursive))
 	}
 
 	batchResult, err := cpBatchApprovalFn(ctx, subjects)
@@ -222,8 +222,11 @@ func cmdCpMultiSource(
 	// 传输的字节都是一次已批准的副作用，出意外后继续会留下一个看起来完整、实际残缺的
 	// 目的地，而"残缺"这件事从目的端是看不出来的。
 	for i, plan := range plans {
-		exitCode := callHandler(ctx, handlers, "cp",
-			cpToolParams(plan.src.arg, plan.dstArg, recursive, plan.src.assetID(), dst.assetID()), decision)
+		params := cpToolParams(plan.src.arg, plan.dstArg, recursive, plan.src.assetID(), dst.assetID())
+		if plan.listing != nil {
+			params[tool.CpApprovedListingArg] = plan.listing
+		}
+		exitCode := callHandler(ctx, handlers, "cp", params, decision)
 		if exitCode != 0 {
 			if len(plans) > 1 {
 				fmt.Fprintf(os.Stderr, "Error: transferred %d/%d sources, then %q failed\n", i, len(plans), plan.src.raw)
@@ -234,23 +237,35 @@ func cmdCpMultiSource(
 	return 0
 }
 
-// cpTransferPlan 是一条源参数的传输计划：交给 cp 工具的目的端串按源的形态取——多源形态的
+// cpTransferPlan 是一条源参数的传输计划：交给 cp 工具的目的端串按源的形态取——枚举形态的
 // 源交出目的基点，由工具按 RelPath 拼落点；被指名的单个文件交出拼好的具体落点，因为工具
 // 的单源形态写的就是 dst 字面量。
 type cpTransferPlan struct {
 	src    *cpEndpoint
 	dstArg string
+	// listing 是这条源刚刚被逐条审批过的那份展开结果，枚举形态下原样交给工具，工具据此
+	// 传输而**不再自己展开**（tool.CpApprovedListingArg）。单源形态为 nil：那条路的两端都是
+	// 字面量，没有第二次展开，也就没有这条缝。
+	listing *helper.ListResult
 }
 
-// cpDstArg 见 cpTransferPlan。多源形态由**源的写法**决定（recursive 或含 glob 元字符），
-// 不看命中条数：一个只命中一个文件的 glob 仍然是多源。反过来，一个被指名的源恒展开成一条
-// （指名一个目录/前缀却没有 recursive 时 List 已经报错了，见 TransferAdapter.List），
-// 拼出来的落点与它自己那条审批主体逐字相同。
-func cpDstArg(src, dst *cpEndpoint, entries []helper.Entry, recursive bool) string {
-	if recursive || helper.HasGlobPattern(src.path) {
-		return dst.arg
+// cpTransferPlanFor 按源的形态定这条源怎么交给工具。落点与清单必须由同一处决定：拼好的
+// 具体落点配上一份按 RelPath 算落点的清单，是两种落点语义打架。
+//
+// 被指名的源恒展开成一条（指名一个目录/前缀却没有 recursive 时 List 已经报错了，见
+// TransferAdapter.List），拼出来的落点与它自己那条审批主体逐字相同。
+func cpTransferPlanFor(src, dst *cpEndpoint, listing *helper.ListResult, recursive bool) cpTransferPlan {
+	if cpSourceExpands(src, recursive) {
+		return cpTransferPlan{src: src, dstArg: dst.arg, listing: listing}
 	}
-	return dst.argFor(dst.path + entries[0].RelPath)
+	return cpTransferPlan{src: src, dstArg: dst.argFor(dst.path + listing.Entries[0].RelPath)}
+}
+
+// cpSourceExpands 报告这一条源是不是**枚举**形态：recursive 为真，或路径含 glob 元字符。
+// 判的是形态不是命中条数——一个只命中一个文件的 glob 仍然是枚举形态。与 AI 侧 handleCp 的
+// 多源形态判定同一条（spec §6.5「何时算多源」），两条入口因此在同一件事上给同一个答案。
+func cpSourceExpands(src *cpEndpoint, recursive bool) bool {
+	return recursive || helper.HasGlobPattern(src.path)
 }
 
 // cpEndpoint 是解析后的 cp 的一端：资产（本地端为 nil）、该端点上的路径，以及它的适配器。

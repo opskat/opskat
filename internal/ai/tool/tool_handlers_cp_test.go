@@ -82,6 +82,116 @@ func cpSourceNames(n int) []string {
 	return names
 }
 
+// setupCpPreapproved 造 opsctl 那条路上的 context：审批已经在工具之外走完，因此 context 里
+// 没有 PolicyChecker，只有 WithPreapproved 标记（cmd/opsctl/command/handler.go 的 callHandler）。
+// 复用 setupCp 只为它注册的 mock asset repo 与 cpFake 复位——它返回的那个带 checker 的
+// context 正是这条路上**不**该有的东西。
+func setupCpPreapproved(t *testing.T) context.Context {
+	t.Helper()
+	setupCp(t, "allow")
+	return permission.WithPreapproved(context.Background())
+}
+
+// TestCpApprovedListingIsTransferredWithoutReExpanding 锁住 TOCTOU 那条缝被关掉：调用方
+// 交来的清单就是它已经逐条审批过的那一份，工具照它传输、**不再自己展开**。
+//
+// opsctl 展开一次算审批主体、工具再展开一次实际传输，两次之间源端新出现的文件会被传输
+// 而从未进过审批清单——违反 spec 第 9 行的硬不变式。
+func TestCpApprovedListingIsTransferredWithoutReExpanding(t *testing.T) {
+	Convey("透传已批准的清单时，工具照它传输", t, func() {
+		Convey("清单之外的条目一个字节都不动，也不重新展开", func() {
+			ctx := setupCpPreapproved(t)
+			// 源端此刻比审批时多了一个 b.log：它可读、也会被重新展开命中，但它没进过
+			// 任何一份审批清单。
+			seedCpSource("a.log", "b.log")
+
+			out, err := handleCp(ctx, map[string]any{
+				"src": "sink-01:/src/", "dst": "sink-01:/backup/", "recursive": true,
+				CpApprovedListingArg: &helper.ListResult{Entries: []helper.Entry{
+					{Path: "/src/a.log", RelPath: "a.log", Size: int64(len("a.log"))},
+				}},
+			})
+
+			So(err, ShouldBeNil)
+			// 一次展开都没发生：重新展开会把 b.log 一起传走。
+			So(cpFake.listed, ShouldBeEmpty)
+			So(cpFake.written, ShouldHaveLength, 1)
+			So(string(cpFake.written["/backup/a.log"]), ShouldEqual, "a.log")
+
+			var res cpResult
+			So(json.Unmarshal([]byte(out), &res), ShouldBeNil)
+			So(res.Transferred, ShouldEqual, 1)
+		})
+
+		// 单源形态写的是 dst 字面量、没有基点拼接，一份按 RelPath 算落点的清单在那里无处可用。
+		// 收下它再安静地忽略，等于工具又自己展开了一次——正是这个参数要关掉的那件事。
+		Convey("清单与单源形态对不上时报错，而不是安静地重新展开", func() {
+			ctx := setupCpPreapproved(t)
+			seedCpSource("a.log")
+
+			_, err := handleCp(ctx, map[string]any{
+				"src": "sink-01:/src/a.log", "dst": "sink-01:/backup/a.log",
+				CpApprovedListingArg: &helper.ListResult{Entries: []helper.Entry{
+					{Path: "/src/a.log", RelPath: "a.log", Size: 5},
+				}},
+			})
+
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, CpApprovedListingArg)
+			So(cpFake.written, ShouldBeEmpty)
+		})
+	})
+}
+
+// TestCpApprovedListingStillObeysTheGuards：清单来自可信调用方**不等于**可以少做检查——
+// 容器性守卫（落点不许走出目的基点）与 200 条上限照旧执行。跳过它们就是本分支反复在修的
+// 那类 fail-open。
+//
+// 两个用例都在源端另放一条干净的条目：工具若忽略清单转而重新展开，它们都会变成一次安静的
+// 成功，而不是"错误恰好也出现了"。
+func TestCpApprovedListingStillObeysTheGuards(t *testing.T) {
+	Convey("透传的清单照样过守卫", t, func() {
+		Convey("落点走出目的基点时报错，一个字节都不传", func() {
+			ctx := setupCpPreapproved(t)
+			seedCpSource("ok.log")
+			root := t.TempDir()
+			dst := filepath.Join(root, "out")
+			So(os.MkdirAll(dst, 0o750), ShouldBeNil)
+
+			_, err := handleCp(ctx, map[string]any{
+				"src": "sink-01:/src/", "dst": dst + "/", "recursive": true,
+				CpApprovedListingArg: &helper.ListResult{Entries: []helper.Entry{
+					{Path: "/src/ok.log", RelPath: "../escaped.log", Size: 6},
+				}},
+			})
+
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "../escaped.log")
+			_, statErr := os.Stat(filepath.Join(root, "escaped.log"))
+			So(os.IsNotExist(statErr), ShouldBeTrue)
+		})
+
+		Convey("超过 200 条时报错，不截断也不传输", func() {
+			ctx := setupCpPreapproved(t)
+			seedCpSource("ok.log")
+			entries := make([]helper.Entry, 0, 201)
+			for _, name := range cpSourceNames(201) {
+				entries = append(entries, helper.Entry{Path: "/src/" + name, RelPath: name})
+			}
+
+			_, err := handleCp(ctx, map[string]any{
+				"src": "sink-01:/src/", "dst": "sink-01:/backup/", "recursive": true,
+				CpApprovedListingArg: &helper.ListResult{Entries: entries},
+			})
+
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "201")
+			So(err.Error(), ShouldContainSubstring, "200")
+			So(cpFake.written, ShouldBeEmpty)
+		})
+	})
+}
+
 // TestCpMultiSourceApprovesEveryExpandedPathAtOnce 是硬不变式本体（spec §6.5 第二段 / D17）：
 // 展开出的每一条都作为独立主体进入**同一次**批量审批，被拒时零字节被读写。
 func TestCpMultiSourceApprovesEveryExpandedPathAtOnce(t *testing.T) {

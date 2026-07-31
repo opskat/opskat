@@ -327,6 +327,9 @@ func TestCmdCpMultiSourceApprovesEveryExpandedPath(t *testing.T) {
 			So(calls, ShouldHaveLength, 2)
 			So(calls[0]["dst"], ShouldEqual, "1:/opt/app/one.txt")
 			So(calls[1]["dst"], ShouldEqual, "1:/opt/app/two.txt")
+			// 落点已经拼死，工具走的是单源那条路——那条路写 dst 字面量，一份按 RelPath
+			// 算落点的清单在那里无处可用，工具收到会直接报错。
+			So(calls[0][tool.CpApprovedListingArg], ShouldBeNil)
 		})
 
 		Convey("通配同样算多源，即使只命中一个文件", func() {
@@ -455,6 +458,59 @@ func TestCmdCpMultiSourceApprovesEveryRemoteReadPath(t *testing.T) {
 			cpTestRemoteType + " read /var/log/app.log",
 			cpTestRemoteType + " read /var/log/nginx/access.log",
 		})
+	})
+}
+
+// TestCmdCpHandsTheApprovedListingToTheTool 锁住 TOCTOU 那条缝被关掉：opsctl 展开一次算出
+// 审批主体，工具就必须照**那一份**清单传输，而不是自己再展开一次——两次展开之间源端新出现
+// 的文件会被传输，而它从未进过审批清单（spec 第 9 行的硬不变式）。
+//
+// 断的是两者的**同一性**：交给工具的每条 entry.Path，逐条对得上刚刚被批准的那些读主体。
+// 只断"参数带上了一份清单"证明不了什么——带错一份同样带得上。
+func TestCmdCpHandsTheApprovedListingToTheTool(t *testing.T) {
+	Convey("交给工具的清单就是刚被批准的那一份", t, func() {
+		registerCpTestAsset(t)
+		origProxyFn := cpSSHProxyClientFn
+		cpSSHProxyClientFn = func() *sshpool.Client { return nil }
+		defer func() { cpSSHProxyClientFn = origProxyFn }()
+		mockAudit := &mockAuditWriter{}
+		origWriter := opsctlAuditWriter
+		opsctlAuditWriter = mockAudit
+		defer func() { opsctlAuditWriter = origWriter }()
+
+		origApproval := cpApprovalFn
+		cpApprovalFn = func(_ context.Context, _ approval.ApprovalRequest) (ApprovalResult, error) {
+			return ApprovalResult{Decision: aictx.Allow, SessionID: "sess-cp"}, nil
+		}
+		defer func() { cpApprovalFn = origApproval }()
+
+		// 目的端取本地：本地端不产生审批主体，批量清单里因此只剩源端的读主体，
+		// 与交出去的 entry.Path 一一对得上。
+		cpFakeRemote.entries = []helper.Entry{
+			{Path: "/var/log/app.log", RelPath: "app.log", Size: 7},
+			{Path: "/var/log/nginx/access.log", RelPath: "nginx/access.log", Size: 9},
+		}
+		defer func() { cpFakeRemote.entries = nil }()
+
+		var batches [][]cpSubject
+		stubCpBatchApproval(t, &batches, ApprovalResult{Decision: aictx.Allow, SessionID: "s"}, nil)
+		var calls []map[string]any
+		handlers := stubCpHandler(&calls)
+
+		exitCode := cmdCp(context.Background(), handlers,
+			[]string{"-r", "3:/var/log", filepath.ToSlash(t.TempDir()) + "/"}, "")
+
+		So(exitCode, ShouldEqual, 0)
+		So(calls, ShouldHaveLength, 1)
+		listing, ok := calls[0][tool.CpApprovedListingArg].(*helper.ListResult)
+		So(ok, ShouldBeTrue)
+
+		approvedReads := make([]string, 0, len(listing.Entries))
+		for _, entry := range listing.Entries {
+			approvedReads = append(approvedReads, cpTestRemoteType+" read "+entry.Path)
+		}
+		So(batches, ShouldHaveLength, 1)
+		So(approvedReads, ShouldResemble, subjectCommands(batches[0]))
 	})
 }
 

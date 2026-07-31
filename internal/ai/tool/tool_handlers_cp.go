@@ -23,6 +23,22 @@ import (
 // 会换来更糟的东西——一次看起来成功、实际只复制了一部分的传输。
 const cpMaxEntries = 200
 
+// CpApprovedListingArg 是 cp 的一个**内部**参数名：调用方在工具之外已经展开、并按那份展开
+// 结果逐条审批过的清单，值的类型是 *helper.ListResult。
+//
+// 它**不在** SchemaVal 里（tools_exec.go），模型因此既看不见也构造不出来——模型的入参从
+// JSON 反序列化而来，永远不会是一个 *helper.ListResult；opsctl 则自己构造 params
+// （cmd/opsctl/command/handler.go 的 callHandler），可以带上它。
+//
+// 为什么必须有它：opsctl 得先展开才算得出审批主体（落点 = 目的基点 + RelPath），工具若
+// 再展开一次，两次展开之间源端新出现的文件就会被传输，而它从未进过任何一份审批清单——
+// 那正违反"每一条实际被读写的路径都必须在动手之前作为具体主体被授权过"。AI 侧没有这条
+// 缝：它自己展开、自己审批，只展开一次，因此不传这个参数，行为一如既往。
+//
+// 键名以 "src" 打头是有意的：params 同时是这一行审计的 request 原文，map 的 JSON 键按
+// 字典序排而 request 列在 4096 字符处截断，排在 src / dst 之后这份清单才挤不掉两端的原文。
+const CpApprovedListingArg = "src_approved_listing"
+
 // cpEndpoint 是解析后的 cp 的一端：资产（本地端为 nil）、该端点上的路径，以及它的适配器。
 type cpEndpoint struct {
 	raw     string
@@ -97,6 +113,10 @@ func handleCp(ctx context.Context, args map[string]any) (string, error) {
 		return "", fmt.Errorf("missing required parameters: src, dst")
 	}
 	recursive := aictx.ArgBool(args, "recursive")
+	approved, err := cpApprovedListing(args)
+	if err != nil {
+		return "", err
+	}
 
 	src, err := parseCpEndpoint(ctx, srcRaw)
 	if err != nil {
@@ -124,9 +144,32 @@ func handleCp(ctx context.Context, args map[string]any) (string, error) {
 	}
 
 	if recursive || helper.HasGlobPattern(src.path) {
-		return cpMultiSource(ctx, checker, src, dst, recursive, detail)
+		return cpMultiSource(ctx, checker, src, dst, recursive, detail, approved)
+	}
+	// 单源形态写的是 dst 字面量、没有基点拼接，一份按 RelPath 算落点的清单在这里无处可用。
+	// 收下再忽略等于工具又自己展开了一次——正是这个参数要关掉的那件事，所以报错。
+	if approved != nil {
+		return "", fmt.Errorf(
+			"%s was passed for %q, which names a single file: an approved listing only applies to the "+
+				"recursive/glob form, where each entry lands at <dst>/<RelPath>", CpApprovedListingArg, srcRaw)
 	}
 	return cpSingleSource(ctx, checker, src, dst, detail)
+}
+
+// cpApprovedListing 取出调用方透传的已批准清单；参数缺席时返回 nil（AI 路径，工具自己展开）。
+//
+// 类型不对不是"当它不存在"：那等于安静地重新展开一次，正是这个参数要关掉的那条缝。模型
+// 递不出这个类型（它的入参从 JSON 来），所以走到这里只可能是调用方接错了线。
+func cpApprovedListing(args map[string]any) (*helper.ListResult, error) {
+	raw, ok := args[CpApprovedListingArg]
+	if !ok {
+		return nil, nil
+	}
+	listing, ok := raw.(*helper.ListResult)
+	if !ok {
+		return nil, fmt.Errorf("%s must be the caller's own *helper.ListResult, got %T", CpApprovedListingArg, raw)
+	}
+	return listing, nil
 }
 
 // parseCpEndpoint 把一个端点串解析成 (资产, 路径, 适配器)。语法由 helper.ParseTransferEndpoint
@@ -183,9 +226,14 @@ func cpSingleSource(
 // cpMultiSource 处理多源形态：recursive 为真，或源路径含 glob 元字符（spec §6.5）。
 // 判的是**形态**不是命中条数——一个只命中一个文件的 glob 仍然是多源，它的落点是
 // 目的基点 + RelPath 而不是字面 dst。
+//
+// approved 是调用方在工具之外展开、并按那份结果逐条审批过的清单（opsctl 那条路）。非 nil 时
+// **不再自己展开**：两次展开之间源端新出现的文件会被传输，而它从未进过审批清单。为 nil 时
+// （AI 路径）照旧自己展开——AI 侧只展开一次，本来就没有这条缝。清单来自可信调用方**不等于**
+// 可以少做检查：下面的 200 条上限与容器性守卫对它照旧执行。
 func cpMultiSource(
 	ctx context.Context, checker *permission.CommandPolicyChecker,
-	src, dst *cpEndpoint, recursive bool, detail string,
+	src, dst *cpEndpoint, recursive bool, detail string, approved *helper.ListResult,
 ) (string, error) {
 	// D16：目的地必须以 "/" 结尾。不复刻 POSIX cp 的目的地推断（b 存在则落 b/a），那要先
 	// 探测目的地、结果依赖一次 TOCTOU 式的探测，而目的路径必须在审批之前就完全确定——
@@ -208,9 +256,13 @@ func cpMultiSource(
 		return "", err
 	}
 
-	res, err := expandSource(ctx, src, src.path, recursive)
-	if err != nil {
-		return "", err
+	res := approved
+	if res == nil {
+		var expandErr error
+		res, expandErr = expandSource(ctx, src, src.path, recursive)
+		if expandErr != nil {
+			return "", expandErr
+		}
 	}
 	if len(res.Entries) > cpMaxEntries {
 		return "", fmt.Errorf(
