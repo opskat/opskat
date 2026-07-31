@@ -3,14 +3,16 @@ package helper
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"net"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/pkg/sftp"
 
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -135,6 +137,31 @@ func TestLocalTransferList_RecursiveSkipsSymlinks(t *testing.T) {
 	}
 }
 
+// 被指名的路径跟随符号链接，递归也不例外——跳过只发生在展开途中。指名一个指向目录的链接
+// （`cp -r ./current web-01:/opt/`，current → releases/v2 是部署惯例）必须展开出目标里的
+// 文件，而不是把根当成一条被跳过的链接、交出零条目。
+func TestLocalTransferList_NamedSymlinkedDirIsFollowed(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "releases", "v2")
+	writeTempFile(t, filepath.Join(target, "app.bin"), "bin")
+	writeTempFile(t, filepath.Join(target, "conf", "app.yml"), "yml")
+	link := filepath.Join(dir, "current")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	got, err := localTransfer.List(context.Background(), nil, link, true)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if joinRel(got.Entries) != "app.bin,conf/app.yml" {
+		t.Fatalf("RelPaths = %v, want [app.bin conf/app.yml]", relPaths(got.Entries))
+	}
+	if len(got.SkippedSymlinks) != 0 {
+		t.Fatalf("SkippedSymlinks = %v, want none", got.SkippedSymlinks)
+	}
+}
+
 // 目录不加 recursive 直接报错，而不是静默展开成零条或一条。
 func TestLocalTransferList_DirectoryWithoutRecursive(t *testing.T) {
 	dir := t.TempDir()
@@ -225,112 +252,98 @@ func TestSSHTransfer_ApprovalSubject(t *testing.T) {
 	}
 }
 
-// fakeSFTP 是 sftpFS 的内存实现：仓内没有 SFTP 测试服务器，SSH 侧的展开规则
-// （glob 基点、递归基点、symlink 跳过）只能在这一层验证。
-type fakeSFTP struct {
-	entries map[string]os.FileMode // 路径 → 模式（含 ModeDir / ModeSymlink）
-	sizes   map[string]int64
-}
-
-type fakeInfo struct {
-	name string
-	size int64
-	mode os.FileMode
-}
-
-func (f fakeInfo) Name() string       { return f.name }
-func (f fakeInfo) Size() int64        { return f.size }
-func (f fakeInfo) Mode() os.FileMode  { return f.mode }
-func (f fakeInfo) ModTime() time.Time { return time.Time{} }
-func (f fakeInfo) IsDir() bool        { return f.mode.IsDir() }
-func (f fakeInfo) Sys() any           { return nil }
-
-func (f *fakeSFTP) info(p string) fakeInfo {
-	return fakeInfo{name: path.Base(p), size: f.sizes[p], mode: f.entries[p]}
-}
-
-func (f *fakeSFTP) Lstat(p string) (os.FileInfo, error) {
-	if _, ok := f.entries[p]; !ok {
-		return nil, os.ErrNotExist
+// newTestSFTP 起一个进程内 SFTP 服务端（net.Pipe + sftp.NewServer）并返回连到它的客户端，
+// 形态取自 internal/service/sftp_svc/sftp_test.go —— 仓内验证 SFTP 客户端代码的既有做法。
+// 服务端直接服务真实文件系统，因此 t.TempDir() 的绝对路径可以直接用，
+// Stat / Lstat / ReadDir / Glob 全是真实语义：手写 fake 建模不出"被指名的链接 Stat 会跟随"，
+// 而那正是展开契约里最容易错的一条。
+func newTestSFTP(t *testing.T) *sftp.Client {
+	t.Helper()
+	clientConn, serverConn := net.Pipe()
+	server, err := sftp.NewServer(serverConn)
+	if err != nil {
+		t.Fatalf("new sftp server: %v", err)
 	}
-	return f.info(p), nil
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		_ = server.Serve()
+	}()
+	client, err := sftp.NewClientPipe(clientConn, clientConn)
+	if err != nil {
+		t.Fatalf("new sftp client: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = client.Close()
+		_ = server.Close()
+		<-served
+	})
+	return client
 }
 
-// Stat 与 Lstat 同表：这个 fake 不建模链接目标，而用到 Stat 的分支（被指名的单个路径）
-// 在测试里从不指向符号链接。
-func (f *fakeSFTP) Stat(p string) (os.FileInfo, error) { return f.Lstat(p) }
-
-func (f *fakeSFTP) ReadDir(p string) ([]os.FileInfo, error) {
-	if !f.entries[p].IsDir() {
-		return nil, os.ErrNotExist
+// sshTestTree 铺一棵目录树：两个 .log、一个不匹配的 .txt、一个子目录、一个名字也匹配
+// *.log 的符号链接、一个名字匹配但其实是目录的 sub.log。返回 <root>/log。
+func sshTestTree(t *testing.T) string {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "log")
+	writeTempFile(t, filepath.Join(root, "a.log"), strings.Repeat("a", 11))
+	writeTempFile(t, filepath.Join(root, "b.log"), "bbb")
+	writeTempFile(t, filepath.Join(root, "c.txt"), "c")
+	writeTempFile(t, filepath.Join(root, "old", "x.log"), strings.Repeat("x", 22))
+	if err := os.MkdirAll(filepath.Join(root, "sub.log"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
 	}
-	out := make([]os.FileInfo, 0, len(f.entries))
-	for name := range f.entries {
-		if path.Dir(name) == p && name != p {
-			out = append(out, f.info(name))
-		}
+	if err := os.Symlink(filepath.Join(root, "a.log"), filepath.Join(root, "d.log")); err != nil {
+		t.Fatalf("symlink: %v", err)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name() < out[j].Name() })
-	return out, nil
+	if err := os.Symlink(filepath.Join(root, "a.log"), filepath.Join(root, "old", "link.log")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	return root
 }
 
-func (f *fakeSFTP) Glob(pattern string) ([]string, error) {
-	out := make([]string, 0, len(f.entries))
-	for name := range f.entries {
-		if ok, err := path.Match(pattern, name); err != nil {
-			return nil, err
-		} else if ok {
-			out = append(out, name)
-		}
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
-func newFakeSFTP() *fakeSFTP {
-	return &fakeSFTP{
-		entries: map[string]os.FileMode{
-			"/var/log":              os.ModeDir,
-			"/var/log/a.log":        0,
-			"/var/log/b.log":        0,
-			"/var/log/c.txt":        0,
-			"/var/log/old":          os.ModeDir,
-			"/var/log/old/x.log":    0,
-			"/var/log/current":      os.ModeSymlink,
-			"/var/log/old/link.log": os.ModeSymlink,
-		},
-		sizes: map[string]int64{"/var/log/a.log": 11, "/var/log/old/x.log": 22},
-	}
-}
-
+// glob 的基点是通配前的最后一层目录；命中的符号链接同样是"展开途中"，跳过并计数；
+// 命中的目录非递归时不是可传输条目。
 func TestListSFTP_Glob(t *testing.T) {
-	got, err := listSFTP(newFakeSFTP(), "/var/log/*.log", false)
+	root := sshTestTree(t)
+
+	got, err := listSFTP(newTestSFTP(t), root+"/*.log", false)
 	if err != nil {
 		t.Fatalf("listSFTP: %v", err)
 	}
 	if joinRel(got.Entries) != "a.log,b.log" {
 		t.Fatalf("RelPaths = %v, want [a.log b.log]", relPaths(got.Entries))
 	}
-	if got.Entries[0].Path != "/var/log/a.log" || got.Entries[0].Size != 11 {
+	if got.Entries[0].Path != root+"/a.log" || got.Entries[0].Size != 11 {
 		t.Errorf("entry = %+v", got.Entries[0])
+	}
+	if strings.Join(got.SkippedSymlinks, ",") != root+"/d.log" {
+		t.Fatalf("SkippedSymlinks = %v, want [%s/d.log]", got.SkippedSymlinks, root)
 	}
 }
 
+// 递归的基点是源目录自身，RelPath 保留层级；展开途中的链接跳过并计数。
 func TestListSFTP_RecursiveSkipsSymlinks(t *testing.T) {
-	got, err := listSFTP(newFakeSFTP(), "/var/log", true)
+	root := sshTestTree(t)
+
+	got, err := listSFTP(newTestSFTP(t), root, true)
 	if err != nil {
 		t.Fatalf("listSFTP: %v", err)
 	}
 	if joinRel(got.Entries) != "a.log,b.log,c.txt,old/x.log" {
 		t.Fatalf("RelPaths = %v", relPaths(got.Entries))
 	}
-	if strings.Join(got.SkippedSymlinks, ",") != "/var/log/current,/var/log/old/link.log" {
-		t.Fatalf("SkippedSymlinks = %v", got.SkippedSymlinks)
+	want := root + "/d.log," + root + "/old/link.log"
+	if strings.Join(got.SkippedSymlinks, ",") != want {
+		t.Fatalf("SkippedSymlinks = %v, want %v", got.SkippedSymlinks, want)
 	}
 }
 
 func TestListSFTP_SingleFileAndDirectoryWithoutRecursive(t *testing.T) {
-	got, err := listSFTP(newFakeSFTP(), "/var/log/a.log", false)
+	root := sshTestTree(t)
+	client := newTestSFTP(t)
+
+	got, err := listSFTP(client, root+"/a.log", false)
 	if err != nil {
 		t.Fatalf("listSFTP: %v", err)
 	}
@@ -338,8 +351,84 @@ func TestListSFTP_SingleFileAndDirectoryWithoutRecursive(t *testing.T) {
 		t.Fatalf("entries = %+v", got.Entries)
 	}
 
-	if _, err := listSFTP(newFakeSFTP(), "/var/log", false); err == nil {
+	if _, err := listSFTP(client, root, false); err == nil {
 		t.Fatal("expected error listing a directory without recursive")
+	}
+}
+
+// 与本地端同一条契约：被指名的路径跟随符号链接，递归也不例外。两端在同一形状的输入上
+// 必须给出同一份展开结果，否则 `cp -r ./current` 与 `cp -r web-01:/current` 行为分叉。
+func TestListSFTP_NamedSymlinkedDirIsFollowed(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "releases", "v2")
+	writeTempFile(t, filepath.Join(target, "app.bin"), "bin")
+	writeTempFile(t, filepath.Join(target, "conf", "app.yml"), "yml")
+	link := filepath.Join(dir, "current")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	got, err := listSFTP(newTestSFTP(t), link, true)
+	if err != nil {
+		t.Fatalf("listSFTP: %v", err)
+	}
+	if joinRel(got.Entries) != "app.bin,conf/app.yml" {
+		t.Fatalf("RelPaths = %v, want [app.bin conf/app.yml]", relPaths(got.Entries))
+	}
+	if len(got.SkippedSymlinks) != 0 {
+		t.Fatalf("SkippedSymlinks = %v, want none", got.SkippedSymlinks)
+	}
+}
+
+// SSH 端的流式往返：写入时按需建父目录，读回的字节与 size 一致，Close 拆连接恰好一次。
+func TestSFTPWriteCreatesParentsAndReadRoundTrips(t *testing.T) {
+	client := newTestSFTP(t)
+	dst := filepath.Join(t.TempDir(), "new", "deep", "f.txt")
+
+	if err := writeSFTP(client, dst, strings.NewReader("payload")); err != nil {
+		t.Fatalf("writeSFTP: %v", err)
+	}
+
+	var teardowns int
+	r, size, err := openSFTPReader(context.Background(), client, dst, func() { teardowns++ })
+	if err != nil {
+		t.Fatalf("openSFTPReader: %v", err)
+	}
+	if size != 7 {
+		t.Errorf("size = %d, want 7", size)
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(data) != "payload" {
+		t.Errorf("content = %q", data)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if teardowns != 1 {
+		t.Errorf("teardown ran %d times after Close, want 1", teardowns)
+	}
+}
+
+// 打开失败时连接必须照样拆掉：OpenRead 是先 dial 再打开的，漏一次 teardown 就是每次读
+// 失败漏一条 SSH 连接。
+func TestSFTPOpenReaderTearsDownWhenOpenFails(t *testing.T) {
+	client := newTestSFTP(t)
+	var teardowns int
+
+	r, size, err := openSFTPReader(
+		context.Background(), client, filepath.Join(t.TempDir(), "missing.txt"), func() { teardowns++ },
+	)
+	if err == nil {
+		t.Fatal("expected an error opening a missing remote file")
+	}
+	if r != nil || size != 0 {
+		t.Errorf("got reader=%v size=%d, want nil/0", r, size)
+	}
+	if teardowns != 1 {
+		t.Fatalf("teardown ran %d times, want 1", teardowns)
 	}
 }
 
@@ -348,7 +437,7 @@ func TestListSFTP_SingleFileAndDirectoryWithoutRecursive(t *testing.T) {
 func TestConnBoundReadCloser_ClosesOnceAndTearsDown(t *testing.T) {
 	file := &countingReadCloser{Reader: bytes.NewReader([]byte("data"))}
 	var teardowns int
-	rc := newConnBoundReadCloser(file, func() { teardowns++ })
+	rc := newConnBoundReadCloser(context.Background(), file, func() { teardowns++ })
 
 	if _, err := io.ReadAll(rc); err != nil {
 		t.Fatalf("ReadAll: %v", err)
@@ -366,6 +455,29 @@ func TestConnBoundReadCloser_ClosesOnceAndTearsDown(t *testing.T) {
 		t.Errorf("teardown ran %d times, want 1", teardowns)
 	}
 }
+
+// ctx 取消时 closeOnCancel 会把连接拆掉，阻塞在 reader 上的 Read 因此拿到 net.ErrClosed。
+// 与同文件的 ExecuteWithSFTP / CopyBetweenAssets 一条规矩：取消路径交出 ctx.Err()，
+// 不把底层的 "use of closed network connection" 暴露给上层；非取消错误原样透传。
+func TestConnBoundReadCloser_ReadReportsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rc := newConnBoundReadCloser(ctx, errReadCloser{err: net.ErrClosed}, func() {})
+	defer func() { _ = rc.Close() }()
+
+	if _, err := rc.Read(make([]byte, 4)); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Read before cancel = %v, want the underlying error", err)
+	}
+	cancel()
+	if _, err := rc.Read(make([]byte, 4)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Read after cancel = %v, want context.Canceled", err)
+	}
+}
+
+type errReadCloser struct{ err error }
+
+func (e errReadCloser) Read([]byte) (int, error) { return 0, e.err }
+func (e errReadCloser) Close() error             { return nil }
 
 type countingReadCloser struct {
 	io.Reader

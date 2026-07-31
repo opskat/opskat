@@ -288,36 +288,62 @@ func openSFTPFile(ctx context.Context, assetID int64, path string) (io.ReadClose
 		cleanup()
 	}
 
-	file, err := sftpClient.Open(path)
+	return openSFTPReader(ctx, sftpClient, path, teardown)
+}
+
+// openSFTPReader 在已有的 SFTP 连接上打开 p，把 teardown（拆连接）绑到返回的 ReadCloser 上。
+// 从 openSFTPFile 拆出来，是为了让"打开失败也照样拆连接"这条能在进程内 SFTP 服务端上验证：
+// dial 之后的任何一条失败路径漏掉 teardown，就是每次读失败漏一条 SSH 连接。
+func openSFTPReader(
+	ctx context.Context, client *sftp.Client, p string, teardown func(),
+) (io.ReadCloser, int64, error) {
+	file, err := client.Open(p)
 	if err != nil {
 		teardown()
-		return nil, 0, fmt.Errorf("failed to open remote file: %w", err)
+		return nil, 0, ctxErrOr(ctx, fmt.Errorf("failed to open remote file: %w", err))
 	}
-	reader := newConnBoundReadCloser(file, teardown)
+	reader := newConnBoundReadCloser(ctx, file, teardown)
 	info, err := file.Stat()
 	if err != nil {
 		if closeErr := reader.Close(); closeErr != nil {
-			logger.Default().Warn("close remote file", zap.String("path", path), zap.Error(closeErr))
+			logger.Default().Warn("close remote file", zap.String("path", p), zap.Error(closeErr))
 		}
-		return nil, 0, fmt.Errorf("failed to stat remote file: %w", err)
+		return nil, 0, ctxErrOr(ctx, fmt.Errorf("failed to stat remote file: %w", err))
 	}
 	return reader, info.Size(), nil
+}
+
+// ctxErrOr 在 ctx 已取消时把底层错误换成 ctx.Err()，与 ExecuteWithSFTP 同一条规矩：
+// 取消路径下 closeOnCancel 主动拆连接，上层看到的会是 net.ErrClosed，甚至一次截断读的
+// io.EOF——那会让"已取消"看起来像"读完了"。
+func ctxErrOr(ctx context.Context, err error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
 }
 
 // connBoundReadCloser 把一个流和它赖以存在的连接绑成单个 Closer。Close 只生效一次：
 // 重复 Close 不该把已经拆掉的连接再拆一遍。
 type connBoundReadCloser struct {
+	ctx      context.Context
 	reader   io.ReadCloser
 	teardown func()
 	once     sync.Once
 	err      error
 }
 
-func newConnBoundReadCloser(reader io.ReadCloser, teardown func()) io.ReadCloser {
-	return &connBoundReadCloser{reader: reader, teardown: teardown}
+func newConnBoundReadCloser(ctx context.Context, reader io.ReadCloser, teardown func()) io.ReadCloser {
+	return &connBoundReadCloser{ctx: ctx, reader: reader, teardown: teardown}
 }
 
-func (c *connBoundReadCloser) Read(p []byte) (int, error) { return c.reader.Read(p) }
+func (c *connBoundReadCloser) Read(p []byte) (int, error) {
+	n, err := c.reader.Read(p)
+	if err != nil {
+		return n, ctxErrOr(c.ctx, err)
+	}
+	return n, nil
+}
 
 func (c *connBoundReadCloser) Close() error {
 	c.once.Do(func() {

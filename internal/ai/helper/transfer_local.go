@@ -50,11 +50,32 @@ func (localAdapter) List(
 	if !recursive {
 		return nil, fmt.Errorf("%q is a directory; set recursive to transfer it", pattern)
 	}
+	// 上面的 Stat 已经跟随过链接，WalkDir 却只 Lstat 根：直接把一条指名的目录链接走进去，
+	// 根会被当成"展开途中的链接"跳过、交出零条目。先解析到目标再走，两者语义才一致
+	// （SSH 端的 ReadDir 对被指名的路径同样跟随）。
+	root, err := resolveNamedDir(pattern)
+	if err != nil {
+		return nil, err
+	}
 	res := &ListResult{}
-	if err := walkLocal(pattern, filepath.ToSlash(pattern), res); err != nil {
+	if err := walkLocal(root, filepath.ToSlash(root), res); err != nil {
 		return nil, err
 	}
 	return res, nil
+}
+
+// resolveNamedDir 把被指名的目录路径解析成实际要遍历的根：只有它自己是符号链接时才解析，
+// 其余原样返回——无条件 EvalSymlinks 会把中间层的链接也一并改写（macOS 上 /tmp/x 会变成
+// /private/tmp/x），让展开出的 Path 与用户输入对不上。
+func resolveNamedDir(p string) (string, error) {
+	info, err := os.Lstat(p)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return p, nil
+	}
+	return filepath.EvalSymlinks(p)
 }
 
 // appendLocalPath 处理一个被展开出来的路径：符号链接跳过并计数，目录只在递归时下钻，
