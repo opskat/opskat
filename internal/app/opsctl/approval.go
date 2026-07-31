@@ -111,11 +111,15 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 			if req.SessionID == "" {
 				return approval.ApprovalResponse{Approved: false, Reason: "approval does not support a grant without a session"}
 			}
+			// 来源要跟着 pattern 一起走：用户在弹窗里改过就是他手写的授权范围，
+			// 没改过就是系统交上来的主体（见 permission.GrantOrigin）。
 			pattern := req.Command
+			origin := permission.GrantOriginSystem
 			if len(parsed.EditedItems) > 0 {
 				pattern = parsed.EditedItems[0].Command
+				origin = permission.GrantOriginUser
 			}
-			permission.SaveGrantPatternsForApproval(i18n.Ctx(o.ctx, o.lang.Lang()), req.SessionID, req.AssetID, req.AssetName, req.Type, pattern)
+			permission.SaveGrantPatternsForApproval(i18n.Ctx(o.ctx, o.lang.Lang()), req.SessionID, req.AssetID, req.AssetName, req.Type, pattern, origin)
 			log.Info("opsctl approval completed", zap.Bool("approved", true), zap.String("decision", resp.Decision))
 			return approval.ApprovalResponse{Approved: true}
 		default:

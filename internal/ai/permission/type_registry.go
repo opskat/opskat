@@ -18,16 +18,19 @@ type permissionCheckFunc func(context.Context, int64, string) aictx.CheckResult
 // nil 表示"整串存一条"，是绝大多数类型的形态；shell 类按 AST 子命令拆，OSS 按 DSL 派生
 // 策略串。这里是一个注册的函数而不是一个 shellLike 布尔开关，因为要选的本来就是这个
 // 函数——第三种归一化方式出现时，布尔开关只能变成 dispatcher 里的类型分支（设计 D8）。
+//
+// origin 说的是这条输入是谁写的（见 GrantOrigin）：字符串本身分不出"系统推导"与
+// "用户手写"，而只有前者该被收窄，所以来源必须由调用方声明着传进来。
 type permissionTypeHandler struct {
 	canonical     string
 	approvalType  string
-	grantPatterns func(command string) []string
+	grantPatterns GrantPatternsFunc
 	check         permissionCheckFunc
 }
 
 var permissionTypes = make(map[string]*permissionTypeHandler)
 
-func registerPermissionType(canonical, approvalType string, grantPatterns func(command string) []string, check permissionCheckFunc, aliases ...string) {
+func registerPermissionType(canonical, approvalType string, grantPatterns GrantPatternsFunc, check permissionCheckFunc, aliases ...string) {
 	if canonical == "" || approvalType == "" || check == nil {
 		panic("permission: invalid type registration")
 	}

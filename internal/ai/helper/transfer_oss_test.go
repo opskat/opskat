@@ -445,17 +445,20 @@ func TestOSSTransfer_ApprovalSubject(t *testing.T) {
 		{"list a prefix without its trailing slash", "/mybucket/logs", DirList, "object.list mybucket/logs/"},
 		{"list a glob is listing its base", "/mybucket/dist/*.js", DirList, "object.list mybucket/dist/"},
 		{"list a whole bucket", "/mybucket", DirList, "object.list mybucket/"},
-		// key 段里的 `* ? [ \` 是字面量，而主体会原样成为规则（决策 D21）：不转义的话
-		// `dist/a[1].js` 这一个对象换来的授权覆盖 `dist/a1.js`。范围本身由
-		// TestOSSTransfer_ApprovalSubjectNeverOutgrowsItsPath 咬住，这里只锁主体的形状。
-		{"a key with a glob metacharacter", "/mybucket/dist/a[1].js", DirRead, `object.read mybucket/dist/a\[1].js`},
-		{"a destination key with a glob metacharacter", "/mybucket/secrets*", DirWrite, `object.write mybucket/secrets\*`},
-		// 列举方向**不**转义：ossListPrefix 交出来的 key 段恒是前缀（空串或以 "/" 收尾），
-		// 而规则侧对这种 key 走的是 strings.HasPrefix 字面比较而不是 path.Match
-		// （policy.matchOSSResource），那条路径上没有转义语法。转义过的前缀落成 grant
-		// 之后一条真实的 key 都盖不住——范围本身由
-		// TestOSSTransfer_ApprovalSubjectNeverOutgrowsItsPath 的 listing 子用例咬住。
+		// 主体是这条链上的**名字**：它先被拿去撞规则，之后才由
+		// permission.NormalizeGrantPatterns 翻成规则落库（转义在那一步，决策 D21 更正）。
+		// 这里一个反斜杠都不该有——名字侧转义会让规则匹配不上自己，"始终允许"于是失效。
+		// 覆盖范围由 TestOSSTransfer_ApprovalSubjectNeverOutgrowsItsPath 端到端咬住。
+		{"a key with a glob metacharacter", "/mybucket/dist/a[1].js", DirRead, `object.read mybucket/dist/a[1].js`},
+		{"a destination key with a glob metacharacter", "/mybucket/secrets*", DirWrite, `object.write mybucket/secrets*`},
 		{"list a prefix with a backslash in it", `/mybucket/a\b/`, DirList, `object.list mybucket/a\b/`},
+		// 用户指名的是一个**前缀**，哪怕它带字面量元字符：globBase 会在第一个元字符处
+		// 按整段截断、基点塌成空串，主体就成了 `object.list mybucket/` —— 指名一个前缀
+		// 却换来整桶列举的常驻授权。前缀形态原样交出才是准确的范围。
+		{"list a literal prefix that contains a metacharacter", "/mybucket/logs[1]/", DirList,
+			"object.list mybucket/logs[1]/"},
+		{"list a literal prefix whose first segment is all metacharacters", "/mybucket/[a]/b/", DirList,
+			"object.list mybucket/[a]/b/"},
 		// 目的地写成一个桶名是形态错误，Write 会报错；但主体是在那之前生成的。它既不能是
 		// "object.write mybucket" 也不能是 "object.write mybucket/"——按 D5 这两种写法
 		// 等价，都是**整桶可写**。资源退回原样路径，切不出桶名，因此谁也授权不了；
@@ -482,14 +485,17 @@ func TestOSSTransfer_ApprovalSubject(t *testing.T) {
 	}
 }
 
-// 主体当规则读时，绝不能覆盖它描述的那一条传输之外的东西。
+// 主体落成常驻 grant 之后，绝不能覆盖它描述的那一条传输之外的东西。
 //
-// 这不是形式检查，而是这个接口唯一的安全后置条件。主体串会**原样落成常驻 grant**：
-// permission.ossGrantPatterns 对已经是策略串形状的输入不做 §4.3 的前缀丢弃（那条丢弃只
-// 管从 DSL 派生出来的串），于是 ApprovalSubject 交出什么就落库什么。而同一个串当规则读时，
-// 桶名后为空——光桶名或以 "/" 收尾——意味着整桶任意深度（决策 D5，两种写法等价），
-// key 段里的 "*" 是通配。目的端路径不经过 List，因此形态错误的目的地直接到这里：
-// `cp ./a.txt s3:/mybucket` 一旦被点"始终允许"，换来的就是一条整桶可写的常驻授权。
+// 这不是形式检查，而是这个接口唯一的安全后置条件，而且它**跨包**：主体是名字，
+// permission.NormalizeGrantPatterns 把它翻成规则（§4.3 的前缀丢弃 + D21 的转义），
+// policy.MatchOSSRule 再按 §3.4 读那条规则。按 D5 的规则语义，桶名后为空——光桶名或以
+// "/" 收尾——意味着整桶任意深度（两种写法等价），桶段里的 "*" 是跨桶通配。目的端路径
+// 不经过 List，因此形态错误的目的地直接到这里：`cp ./a.txt s3:/mybucket` 一旦被点
+// "始终允许"，换来的绝不能是一条整桶可写的常驻授权。
+//
+// 归一化按**来源**决定要不要收窄，而适配器给出的主体是 GrantOriginSystem —— 传
+// GrantOriginUser 就等于宣称这是用户手写的 pattern，D20 与 D21 双双失效。
 //
 // 参与比对的是两个独立来源：本适配器给出的主体，与 policy.MatchOSSRule 的规则语义。
 func TestOSSTransfer_ApprovalSubjectNeverOutgrowsItsPath(t *testing.T) {
@@ -513,7 +519,8 @@ func TestOSSTransfer_ApprovalSubjectNeverOutgrowsItsPath(t *testing.T) {
 	}
 	assertGrantsNothingElse := func(t *testing.T, subject string) []string {
 		t.Helper()
-		patterns := permission.NormalizeGrantPatterns(asset_entity.AssetTypeOSS, subject)
+		patterns := permission.NormalizeGrantPatterns(
+			asset_entity.AssetTypeOSS, subject, permission.GrantOriginSystem)
 		for _, pattern := range patterns {
 			for _, other := range probe {
 				if policy.MatchOSSRule(pattern, other) {
@@ -553,14 +560,25 @@ func TestOSSTransfer_ApprovalSubjectNeverOutgrowsItsPath(t *testing.T) {
 	})
 
 	// S3 的 key 允许字面量 `* ? [`，而 §3.4 的规则语法没有转义约定——于是"批准传这一个
-	// 对象"派生出的主体当规则读时比这个对象宽（决策 D21）。递归展开本来就会合法产出这种
-	// key（`dist/*` 命中 `dist/a[1].js`），所以拒绝它们不是选项：主体必须自己收窄。
-	t.Run("a key with glob metacharacters grants only that key", func(t *testing.T) {
-		for _, p := range []string{"/mybucket/dist/a[1].js", "/mybucket/secrets*"} {
+	// 对象"落成的 grant 当规则读时比这个对象宽（决策 D21）。递归展开本来就会合法产出
+	// 这种 key（`dist/*` 命中 `dist/a[1].js`），所以拒绝它们不是选项：落库时必须收窄。
+	//
+	// **往返是这条用例的重点**，也是 c0de1b2c 弄坏、本次修回的那件事：转义曾经写在
+	// ApprovalSubject 里，于是名字与规则两侧都带反斜杠，path.Match 对不上自己——
+	// "始终允许"点了等于没点，每次重新弹框，还多落一条什么都不授权的死行。
+	// 只断言"不多授权"是抓不到那个 bug 的：一条死 grant 同样什么都不多授权。
+	t.Run("a key with glob metacharacters grants exactly that key again", func(t *testing.T) {
+		for _, p := range []string{"/mybucket/dist/a[1].js", "/mybucket/secrets*", `/mybucket/a\b.txt`} {
 			for _, dir := range []Direction{DirRead, DirWrite} {
 				_, subject := ossTransfer.ApprovalSubject(p, dir)
-				if patterns := assertGrantsNothingElse(t, subject); len(patterns) == 0 {
-					t.Fatalf("subject %q lands as no grant at all; the assertion above is vacuous", subject)
+				patterns := assertGrantsNothingElse(t, subject)
+				if len(patterns) != 1 {
+					t.Fatalf("subject %q lands as %d grants (%q), want exactly one", subject, len(patterns), patterns)
+				}
+				// 下一次同一个请求：主体逐字节相同，必须命中刚落下的那条 grant。
+				if !policy.MatchOSSRule(patterns[0], subject) {
+					t.Errorf("grant %q does not authorize the very transfer %q it came from; "+
+						`this is a dead row and "always allow" never takes effect`, patterns[0], subject)
 				}
 			}
 		}
@@ -577,6 +595,11 @@ func TestOSSTransfer_ApprovalSubjectNeverOutgrowsItsPath(t *testing.T) {
 			"object.list mybucket/logs/sub/deep/"},
 		{"listing a prefix with a backslash in it", `/mybucket/a\b/`,
 			`object.list mybucket/a\b/sub/deep/`},
+		// 字面量元字符的前缀是 globBase 会截断的那一类：截断后基点塌成空串，
+		// 主体变成 `object.list mybucket/`，一次针对某个前缀的递归 cp 换来整桶列举授权。
+		// probe 里的 `object.list mybucket/secrets/` 会抓住它。
+		{"listing a literal prefix that contains a metacharacter", "/mybucket/logs[1]/",
+			"object.list mybucket/logs[1]/sub/deep/"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, subject := ossTransfer.ApprovalSubject(tt.path, DirList)
@@ -585,6 +608,37 @@ func TestOSSTransfer_ApprovalSubjectNeverOutgrowsItsPath(t *testing.T) {
 				t.Fatalf("grants = %v, want exactly one covering the enumerated prefix %q", patterns, tt.covers)
 			}
 		})
+	}
+}
+
+// TestOSSTransfer_ValidateDestination 锁住目的端形态校验的**次序**价值：形态错误的
+// 目的地必须在审批之前就被拦下。
+//
+// 这些路径的主体（ossSubjectResource 的畸形回退）是一条谁也授权不了的惰性串，
+// 用户批准它之后 Write 必然报同一个错——那次弹窗纯属白打断。
+func TestOSSTransfer_ValidateDestination(t *testing.T) {
+	for _, p := range []string{
+		"/mybucket",       // 光桶名：是桶不是对象
+		"mybucket",        // 同上，且没有前导 "/"
+		"/mybucket/",      // 尾随 "/"：是前缀不是对象
+		"/mybucket/logs/", // 同上，深一层
+		"",                // 空串：连桶都没有
+		"/",               // 只有一个斜杠
+		"/*/logs/app.log", // 桶段带通配：指不到任何真实的桶
+	} {
+		if err := ossTransfer.ValidateDestination(p); err == nil {
+			t.Errorf("ValidateDestination(%q) = nil, want an error before the approval dialog", p)
+		}
+	}
+	for _, p := range []string{
+		"/mybucket/app.log",
+		"mybucket/logs/app.log",
+		"/mybucket/My Report.pdf",
+		`/mybucket/dist/a[1].js`,
+	} {
+		if err := ossTransfer.ValidateDestination(p); err != nil {
+			t.Errorf("ValidateDestination(%q) = %v, want nil", p, err)
+		}
 	}
 }
 

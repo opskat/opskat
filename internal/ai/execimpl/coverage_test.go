@@ -49,14 +49,14 @@ func TestEveryPolicyKindTypeHasExecutor(t *testing.T) {
 // 这份清单要跟着新类型一起维护——permission 侧问不出"这个类型需不需要派生函数"，
 // 而漏掉 RegisterPolicyStrings **既不会编译报错，也不会 panic**：checkOSSPermission
 // 会把"派生不出来"当成解析失败并退回 NeedConfirm（fail-closed，但 §4.1 的 allow/deny
-// 两种判定从此永远到不了），ossGrantPatterns 则把整条 DSL 原样落成一条谁也匹配不上的
-// grant。两者都静默，所以这条测试是接线唯一的守卫，与 TestEveryPolicyKindTypeHasExecutor
+// 两种判定从此永远到不了），ossGrantPatterns 则一条 grant 都落不下来——"始终允许"于是
+// 永远不生效。两者都静默，所以这条测试是接线唯一的守卫，与 TestEveryPolicyKindTypeHasExecutor
 // 守住执行器是同一个位置。
 //
 // 断言用的是**行为**而不是"注册表里有没有这个 key"：NormalizeGrantPatterns 是接线
-// 真正的下游消费者（SaveGrantPatternsForApproval → 落库的常驻授权），没接线时它退回
-// []string{原命令}。期望值里的 key 不含通配元字符（`* ? [ \`），因此不受派生侧转义
-// 规则（D21）影响。
+// 真正的下游消费者（SaveGrantPatternsForApproval → 落库的常驻授权），没接线时它交出
+// 空列表。期望值里的 key 不含通配元字符（`* ? [ \`），因此不受落 grant 时的转义
+// 规则（D21 更正）影响。
 var policyStringDerivingTypes = map[string]struct {
 	command string
 	want    []string
@@ -79,7 +79,7 @@ func TestEveryPolicyStringDerivingTypeHasItsDeriver(t *testing.T) {
 				"either register one or drop it from policyStringDerivingTypes", assetType)
 			continue
 		}
-		got := permission.NormalizeGrantPatterns(permission.ApprovalTypeFor(assetType), c.command)
+		got := permission.NormalizeGrantPatterns(permission.ApprovalTypeFor(assetType), c.command, permission.GrantOriginSystem)
 		if !slices.Equal(got, c.want) {
 			t.Errorf("NormalizeGrantPatterns(%q, %q) = %q, want %q; "+
 				"this is what an unregistered permission.RegisterPolicyStrings(%q, …) looks like — "+

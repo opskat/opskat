@@ -3,12 +3,15 @@ package permission
 import (
 	"context"
 	"fmt"
+	"path"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/grant_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
@@ -283,32 +286,346 @@ func TestNormalizeGrantPatterns_OSS(t *testing.T) {
 
 	t.Run("copy 落两条 grant，move 落三条", func(t *testing.T) {
 		assert.Equal(t, []string{"object.read mybucket/a", "object.write other/b"},
-			NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object copy mybucket/a --to=other/b"))
+			NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object copy mybucket/a --to=other/b", GrantOriginSystem))
 		assert.Equal(t, []string{"object.read mybucket/a", "object.write other/b", "object.delete mybucket/a"},
-			NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object move mybucket/a --to=other/b"))
+			NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object move mybucket/a --to=other/b", GrantOriginSystem))
 	})
 
-	t.Run("resource 以 / 结尾的派生串不落成 grant", func(t *testing.T) {
+	t.Run("resource 以 / 结尾的单对象操作不落成 grant", func(t *testing.T) {
 		// 目录标记是合法的单个对象，删得掉；但同一个串当规则读是"递归前缀"，
 		// 落库就等于一条递归删除授权（D20）。
-		assert.Empty(t, NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object delete mybucket/logs/"))
-		assert.Empty(t, NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object list mybucket/"))
+		assert.Empty(t, NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object delete mybucket/logs/", GrantOriginSystem))
+	})
+
+	// D20 的丢弃针对的是"命令指名一个对象、规则却读成一片前缀"的落差，而列举没有这个
+	// 落差：`object list mybucket/` 的命令语义与 `object.list mybucket/` 的规则语义是
+	// 同一个范围。丢掉它会让 cp 的递归展开（DirList 主体恒是前缀形态）永远拿不到常驻
+	// 授权、每次重新弹框，也会让同一个字符串在 exec 面被丢、在 cp 面被留，直接违反
+	// §6.2「两条入口的授权互相复用」。别照着"以 / 收尾"这个症状把它改回 Empty。
+	t.Run("列举的前缀照落 grant", func(t *testing.T) {
+		assert.Equal(t, []string{"object.list mybucket/"},
+			NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object list mybucket/", GrantOriginSystem))
 	})
 
 	t.Run("只丢前缀形状的那一条，其余照落", func(t *testing.T) {
 		assert.Equal(t, []string{"object.read mybucket/a", "object.delete mybucket/a"},
-			NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object move mybucket/a --to=other/logs/"))
+			NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object move mybucket/a --to=other/logs/", GrantOriginSystem))
 	})
 
 	t.Run("用户手写的策略形式 pattern 原样存下，含前缀形状", func(t *testing.T) {
 		assert.Equal(t, []string{"object.read mybucket/logs/"},
-			NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object.read mybucket/logs/"))
+			NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object.read mybucket/logs/", GrantOriginUser))
 		assert.Equal(t, []string{"object.* *"},
-			NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object.* *"))
+			NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object.* *", GrantOriginUser))
 	})
 
-	t.Run("派生失败退回原串", func(t *testing.T) {
-		assert.Equal(t, []string{"object frobnicate mybucket/a"},
-			NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object frobnicate mybucket/a"))
+	t.Run("派生失败一条 grant 都不落", func(t *testing.T) {
+		// 退回原串会在授权列表里显示一条用户其实没拿到的授权：它的 action 段没有点，
+		// policy.MatchOSSRule 对任何策略串都失配。
+		assert.Empty(t, NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object frobnicate mybucket/a", GrantOriginSystem))
+		assert.Empty(t, NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object frobnicate mybucket/a", GrantOriginUser))
 	})
+}
+
+// TestNormalizeGrantPatterns_OSSOriginTellsSubjectsFromUserPatterns 是本接缝的分辨力
+// 本体：**同一个字符串**按来源落成两种不同的 grant。
+//
+// 传输适配器给出的 ApprovalSubject 与用户在审批弹窗里手写的 pattern 都是策略串形状
+// （`object.write b/k`），字符串本身分不出来。曾经的判据是"形状"（isOSSPolicyString →
+// 一律豁免），于是 D20 的前缀丢弃与 D21 的转义在整条 cp 路径上双双失效：
+// `cp ./a.txt s3-prod:/mybucket` 的畸形目的地主体 `object.write mybucket/` 原样落库，
+// 而它当规则读时是**整桶可写**（决策 D5：光桶名与以 "/" 收尾等价）。
+func TestNormalizeGrantPatterns_OSSOriginTellsSubjectsFromUserPatterns(t *testing.T) {
+	withOSSPolicyStrings(t)
+
+	t.Run("适配器给出的畸形前缀主体不落成常驻授权", func(t *testing.T) {
+		assert.Empty(t, NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object.write mybucket/", GrantOriginSystem))
+	})
+
+	t.Run("适配器给出的具体 key 主体照 D21 转义", func(t *testing.T) {
+		assert.Equal(t, []string{`object.read mybucket/secrets\*`},
+			NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object.read mybucket/secrets*", GrantOriginSystem))
+	})
+
+	t.Run("用户手写的同一条串不被收窄", func(t *testing.T) {
+		// 他写的通配就是他要的授权范围（§4.3）：转义掉就等于把一条"读遍 secrets 开头
+		// 的对象"的授权悄悄改成"只读那个名字里真的带星号的对象"。
+		assert.Equal(t, []string{"object.read mybucket/secrets*"},
+			NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object.read mybucket/secrets*", GrantOriginUser))
+		assert.Equal(t, []string{"object.write mybucket/"},
+			NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object.write mybucket/", GrantOriginUser))
+	})
+
+	t.Run("DSL 形状的输入无论谁写的都要收窄", func(t *testing.T) {
+		// 用户敲进去的是一条**命令**，而命令与规则对同一个字符串的读法不同——D20 的
+		// 那条落差与谁敲的无关。
+		assert.Empty(t, NormalizeGrantPatterns(asset_entity.AssetTypeOSS, "object delete mybucket/logs/", GrantOriginUser))
+	})
+}
+
+// TestOSSGrantRule_RoundTripsThroughTheMatcher 是 D21 更正的往返本体：一次批准落下的
+// grant，必须在**下一次同一个请求**上命中，且不多命中别的东西。
+//
+// 这正是 c0de1b2c 弄坏、本次修回的那件事。当时转义写在 PolicyStrings()/ApprovalSubject()
+// 里，于是同一条串两个角色都被转义：path.Match(`b/secrets\*`, `b/secrets\*`) = false
+// —— 含通配元字符的 key 上"始终允许"从此不生效，每次重新弹框，还多落一条什么都不授权
+// 的死行。正确配对是**规则转义、名字原样**。
+//
+// 参与比对的是两个独立来源：本包的归一化，与 policy.MatchOSSRule 的规则语义。
+func TestOSSGrantRule_RoundTripsThroughTheMatcher(t *testing.T) {
+	// 只有把规则当通配读才会命中的"别的对象"。
+	victims := []string{
+		"object.read mybucket/secretsFOO", "object.read mybucket/secrets.env",
+		"object.read mybucket/logs/a1.log", "object.read mybucket/whatX.txt",
+		"object.read mybucket/dist/a1.js", "object.read otherbucket/logs/app.log",
+		"object.read mybucketX/k", "object.list mybucket/logsX/",
+		"object.write mybucket/secretsFOO", "object.delete mybucket/logs/a1.log",
+	}
+	for _, name := range []string{
+		// 名字侧（PolicyStrings / ApprovalSubject 交出来的原始串）。
+		"object.read mybucket/secrets*",
+		"object.read mybucket/logs/a[1].log",
+		"object.read mybucket/what?.txt",
+		`object.write mybucket/a\b.txt`,
+		"object.delete mybucket/logs/a[1].log",
+		// 桶段里的元字符走同一条：`object get 'my*/k'` 派生的规则不转义就授权 mybucket/k。
+		"object.read my*/k",
+		// 桶段里孤立的 `\` 不转义就是 path.Match 的 ErrBadPattern，而 MatchOSSRule 把
+		// error 一律当 false —— 规则于是谁也匹配不上（deny 侧就是 fail-open）。
+		`object.read my\/k`,
+		// 不含元字符的名字必须逐字节不变，否则既有授权会集体失效。
+		"object.read mybucket/logs/app.log",
+		"bucket.list *",
+		"object.list mybucket/logs/",
+	} {
+		t.Run(name, func(t *testing.T) {
+			rule, ok := ossGrantRule(name)
+			if !ok {
+				t.Fatalf("ossGrantRule(%q) 丢弃了它，下面的断言会变成空转", name)
+			}
+			if !policy.MatchOSSRule(rule, name) {
+				t.Errorf("grant %q 匹配不上它自己派生自的那条请求 %q —— 这是一条死行，"+
+					`"始终允许"永远不会生效`, rule, name)
+			}
+			for _, other := range victims {
+				if other == name {
+					continue
+				}
+				if policy.MatchOSSRule(rule, other) {
+					t.Errorf("grant %q 顺带授权了 %q", rule, other)
+				}
+			}
+		})
+	}
+}
+
+// TestOSSGrantRule_NeverEscapesAPrefix 咬住 cd012457 修掉的那个缺陷，它的根因与 D21
+// 更正不同（HasPrefix 字面比较 vs path.Match），所以转义搬到本包之后必须重新守一遍。
+//
+// 规则 key 以 "/" 收尾时，policy.matchOSSResource 走的是 strings.HasPrefix ——
+// 字面比较，没有转义语法。给前缀加反斜杠只能把它转坏：cp 一次 `s3:/b/a\b/` 点
+// "始终允许"，落库的就是一条一条真实 key 都盖不住的死 grant。
+func TestOSSGrantRule_NeverEscapesAPrefix(t *testing.T) {
+	for _, tt := range []struct{ name, covers string }{
+		{`object.list mybucket/a\b/`, `object.list mybucket/a\b/sub/deep/`},
+		{"object.list mybucket/logs[1]/", "object.list mybucket/logs[1]/sub/deep/"},
+		{"object.list mybucket/logs/", "object.list mybucket/logs/sub/deep/"},
+		{"object.list mybucket/", "object.list mybucket/anything/deep/"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			rule, ok := ossGrantRule(tt.name)
+			if !ok {
+				t.Fatalf("ossGrantRule(%q) 丢弃了它", tt.name)
+			}
+			if rule != tt.name {
+				t.Errorf("ossGrantRule(%q) = %q，前缀形态的 key 段一个字节都不该动", tt.name, rule)
+			}
+			if !policy.MatchOSSRule(rule, tt.covers) {
+				t.Errorf("grant %q 盖不住它刚刚批准的那次枚举 %q", rule, tt.covers)
+			}
+		})
+	}
+}
+
+// TestEscapeOSSMeta_EscapedNameMatchesItselfAndNothingElse 用 path.Match 这个独立来源
+// 反查转义的**字符集**：转出来的片段当模式读，必须恰好匹配它自己派生自的那个名字。
+//
+// 挑的名字覆盖了几个只靠推理容易判错的角落：
+//   - 只有 `]` 没有 `[`：`[` 一旦转义，字符类就永远开不了，`]` 因此是字面量、无需转义；
+//   - 以孤立 `\` 收尾：不转义就是 path.Match 的 ErrBadPattern，一条报错的模式对任何
+//     名字都是 false——deny 规则静默失配，正是 §3.4 最怕的那种 fail-open；
+//   - 整条名字全是元字符，以及空串；
+//   - 多字节 UTF-8：转义是按字节扫的，续字节一律 >= 0x80 而四个元字符都是 ASCII，
+//     所以汉字里不会冒出反斜杠。
+func TestEscapeOSSMeta_EscapedNameMatchesItselfAndNothingElse(t *testing.T) {
+	names := []string{
+		"", "]", "a]b", "][", `\`, `a\`, `*?[\`, "**", "secrets*", "what?.txt",
+		"logs/a[1].log", `a\b.txt`, "日本語*.log", "秘密?.txt", "plain/key.txt",
+	}
+	// 只有把模式当通配读才会命中的"别的名字"。
+	victims := []string{
+		"secretsFOO", "whatX.txt", "logs/a1.log", "aXb.txt", "日本語FOO.log", "秘密X.txt",
+		"a", "ab", "x", "[]", "plain/keyZtxt",
+	}
+	for _, name := range names {
+		pattern := escapeOSSMeta(name)
+		ok, err := path.Match(pattern, name)
+		if err != nil {
+			t.Errorf("escapeOSSMeta(%q) = %q is not a valid path.Match pattern: %v", name, pattern, err)
+			continue
+		}
+		if !ok {
+			t.Errorf("escapeOSSMeta(%q) = %q does not match the name it came from", name, pattern)
+		}
+		for _, other := range slices.Concat(names, victims) {
+			if other == name {
+				continue
+			}
+			if ok, err := path.Match(pattern, other); err == nil && ok {
+				t.Errorf("escapeOSSMeta(%q) = %q also matches %q", name, pattern, other)
+			}
+		}
+	}
+}
+
+// TestHandleConfirm_OSSAllowAllLeavesNoDeadGrantRow 锁住 checker.go 那条兜底的去向：
+// 归一化把全部 pattern 都丢掉时（D20 的目录标记），不该退回 []string{原命令}。
+//
+// 那条串（`object delete mybucket/logs/`，一条 DSL）当规则读时 action 段没有点，
+// policy.MatchOSSRule 对任何策略串都失配——落库只是在授权列表 UI 里显示一条用户其实
+// 没拿到的授权，外加一条同样不真实的 grant_submit 审计行。
+func TestHandleConfirm_OSSAllowAllLeavesNoDeadGrantRow(t *testing.T) {
+	withOSSPolicyStrings(t)
+	ctx, mockAsset, _ := setupPolicyTest(t)
+
+	stubGrant := newStubGrantRepo()
+	orig := grant_repo.Grant()
+	grant_repo.RegisterGrant(stubGrant)
+	t.Cleanup(func() {
+		if orig != nil {
+			grant_repo.RegisterGrant(orig)
+		}
+	})
+
+	asset := &asset_entity.Asset{ID: 1, Name: "s3-prod", Type: asset_entity.AssetTypeOSS}
+	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+	checker := NewCommandPolicyChecker(func(context.Context, string, []ApprovalItem) ApprovalResponse {
+		return ApprovalResponse{Decision: "allowAll"}
+	})
+	got := checker.HandleConfirm(aictx.WithSessionID(ctx, "sess-dead"), 1,
+		asset_entity.AssetTypeOSS, "object delete mybucket/logs/")
+
+	assert.Equal(t, aictx.Allow, got.Decision, "这一次操作本身仍然被批准，只是不产生常驻授权")
+	assert.Empty(t, stubGrant.items["sess-dead"],
+		"落库的每一条都该是能匹配上东西的授权；这一条只会在授权列表里骗人")
+}
+
+// 反过来，能落的照落——否则"什么都不落"是个廉价的通过方式。
+func TestHandleConfirm_OSSAllowAllSavesTheDerivedPolicyStrings(t *testing.T) {
+	withOSSPolicyStrings(t)
+	ctx, mockAsset, _ := setupPolicyTest(t)
+
+	stubGrant := newStubGrantRepo()
+	orig := grant_repo.Grant()
+	grant_repo.RegisterGrant(stubGrant)
+	t.Cleanup(func() {
+		if orig != nil {
+			grant_repo.RegisterGrant(orig)
+		}
+	})
+
+	asset := &asset_entity.Asset{ID: 1, Name: "s3-prod", Type: asset_entity.AssetTypeOSS}
+	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+	checker := NewCommandPolicyChecker(func(context.Context, string, []ApprovalItem) ApprovalResponse {
+		return ApprovalResponse{Decision: "allowAll"}
+	})
+	got := checker.HandleConfirm(aictx.WithSessionID(ctx, "sess-live"), 1,
+		asset_entity.AssetTypeOSS, "object move mybucket/a --to=other/b")
+
+	assert.Equal(t, aictx.Allow, got.Decision)
+	saved := make([]string, 0, len(stubGrant.items["sess-live"]))
+	for _, item := range stubGrant.items["sess-live"] {
+		saved = append(saved, item.Command)
+	}
+	assert.Equal(t, []string{"object.read mybucket/a", "object.write other/b", "object.delete mybucket/a"}, saved)
+}
+
+// TestHandleConfirm_OSSTransferSubjectIsNotAUserPattern 咬住 HandleConfirm 里另一半
+// 接线，也是 §4.3【实施期更正】记下的那个洞本身：cp 的 OSS 端点交上来的主体**已经是
+// 策略串形状**（`object.write mybucket/`），与用户手写的 pattern 逐字节同形。
+//
+// 把它当用户 pattern 放行，一次"始终允许"换来的就是一条整桶可写的常驻授权
+// （决策 D5：光桶名与以 "/" 收尾等价）；具体 key 的主体则会绕过 D21 的转义，
+// `secrets*` 这一个对象换来读遍一批对象。
+func TestHandleConfirm_OSSTransferSubjectIsNotAUserPattern(t *testing.T) {
+	ctx, mockAsset, _ := setupPolicyTest(t)
+
+	stubGrant := newStubGrantRepo()
+	orig := grant_repo.Grant()
+	grant_repo.RegisterGrant(stubGrant)
+	t.Cleanup(func() {
+		if orig != nil {
+			grant_repo.RegisterGrant(orig)
+		}
+	})
+
+	asset := &asset_entity.Asset{ID: 1, Name: "s3-prod", Type: asset_entity.AssetTypeOSS}
+	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+	checker := NewCommandPolicyChecker(func(context.Context, string, []ApprovalItem) ApprovalResponse {
+		return ApprovalResponse{Decision: "allowAll"}
+	})
+
+	// `cp ./a.txt s3-prod:/mybucket` —— 目的地少了 key，主体是前缀形状。
+	got := checker.HandleConfirm(aictx.WithSessionID(ctx, "sess-bucket"), 1,
+		asset_entity.AssetTypeOSS, "object.write mybucket/")
+	assert.Equal(t, aictx.Allow, got.Decision)
+	assert.Empty(t, stubGrant.items["sess-bucket"], "一条整桶可写的常驻授权，绝不能由一次畸形目的地换来")
+
+	// `cp s3-prod:/mybucket/secrets* ./` —— key 里的 `*` 是字面量，落库必须转义。
+	got = checker.HandleConfirm(aictx.WithSessionID(ctx, "sess-star"), 1,
+		asset_entity.AssetTypeOSS, "object.read mybucket/secrets*")
+	assert.Equal(t, aictx.Allow, got.Decision)
+	saved := make([]string, 0, len(stubGrant.items["sess-star"]))
+	for _, item := range stubGrant.items["sess-star"] {
+		saved = append(saved, item.Command)
+	}
+	assert.Equal(t, []string{`object.read mybucket/secrets\*`}, saved)
+}
+
+// TestHandleConfirm_UserEditedOSSPatternKeepsItsWildcards 咬住 HandleConfirm 里的来源
+// 接线：EditedItems 是用户手写的，不能被当成系统交上来的主体去收窄。
+func TestHandleConfirm_UserEditedOSSPatternKeepsItsWildcards(t *testing.T) {
+	withOSSPolicyStrings(t)
+	ctx, mockAsset, _ := setupPolicyTest(t)
+
+	stubGrant := newStubGrantRepo()
+	orig := grant_repo.Grant()
+	grant_repo.RegisterGrant(stubGrant)
+	t.Cleanup(func() {
+		if orig != nil {
+			grant_repo.RegisterGrant(orig)
+		}
+	})
+
+	asset := &asset_entity.Asset{ID: 1, Name: "s3-prod", Type: asset_entity.AssetTypeOSS}
+	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+	checker := NewCommandPolicyChecker(func(context.Context, string, []ApprovalItem) ApprovalResponse {
+		return ApprovalResponse{
+			Decision:    "allowAll",
+			EditedItems: []ApprovalItem{{Type: "oss", AssetID: 1, Command: "object.read mybucket/logs/*"}},
+		}
+	})
+	got := checker.HandleConfirm(aictx.WithSessionID(ctx, "sess-edit"), 1,
+		asset_entity.AssetTypeOSS, "object.read mybucket/logs/app.log")
+
+	assert.Equal(t, aictx.Allow, got.Decision)
+	saved := make([]string, 0, len(stubGrant.items["sess-edit"]))
+	for _, item := range stubGrant.items["sess-edit"] {
+		saved = append(saved, item.Command)
+	}
+	assert.Equal(t, []string{"object.read mybucket/logs/*"}, saved)
 }

@@ -220,6 +220,18 @@ func (a ossAdapter) Write(
 	return a.svc.PutObject(ctx, asset.ID, bucket, key, r, size, "")
 }
 
+// ValidateDestination 只做形态校验：目的路径必须指名一个具体对象。
+//
+// 复用 splitOSSObjectPath —— 与 Write 用的是同一条规则，也就是同一份真相；另写一遍
+// `<bucket>/<key>` 的判定只会与它漂移。这一关的价值全在**次序**上：`cp ./a.txt s3:/mybucket`
+// 的主体（ossSubjectResource 的畸形回退）是一条谁也授权不了的惰性串，用户批准它之后
+// Write 必然报同一个错，于是这次审批纯属白打断。放在审批之前，用户看到的是他真正需要
+// 看到的那句话：目的地得写成 <bucket>/<key>。
+func (ossAdapter) ValidateDestination(p string) error {
+	_, _, err := splitOSSObjectPath(p)
+	return err
+}
+
 // ApprovalSubject 交出 §3.3 的策略串 `<action> <bucket>/<key>`，与 exec 跑
 // `object get` / `object put` / `object list` 时派生的串逐字节相同——两条入口的授权
 // 因此互相复用（spec §6.2「逐端点审批」）。类型取 asset_entity.AssetTypeOSS，
@@ -239,35 +251,44 @@ func (ossAdapter) ApprovalSubject(p string, dir Direction) (string, string) {
 // ossSubjectResource 给出审批主体的资源段，它有一条硬后置条件：
 // **这个资源当规则读时，绝不能覆盖这一端点之外的东西。**
 //
-// 主体串会原样落成常驻授权——permission.ossGrantPatterns 的前缀丢弃（§4.3 / D20）只管
-// 从 DSL 派生出来的串，已经是策略串形状的输入照原样落库。而按 policy.MatchOSSRule 的
-// 规则语义，桶段后为空（光桶名**或**以 "/" 收尾，D5 说这两种写法等价）就是整桶任意深度，
-// 桶段里的 "*" 是跨桶通配。目的端路径不经过 List，所以形态错误的目的地直接到这里：
-// `cp ./a.txt s3:/mybucket` 一旦被点"始终允许"，换来的就是一条整桶可写的常驻授权。
+// 主体是这条链上的**名字**：它先被 policy.MatchOSSRule 拿去撞策略与已落库的 grant，
+// 之后才由 permission.NormalizeGrantPatterns 翻成规则落库（那一步做 §4.3 的前缀丢弃与
+// D21 的转义）。所以这里交出的是原始 bucket/key，一个反斜杠都不加——名字侧转义会让规则
+// 匹配不上自己（决策 D21 更正）。收窄是那一步的事，本函数只负责不说谎。
 //
-// 因此形态合法时资源是 <bucket>/<key>（列举方向取真正会被列举的那个前缀）；形态不合法时
-// 退回**原样路径并强制带前导 "/"**——这样的资源切出来的桶段是空串，既匹配不上任何桶范围的
-// 规则，自己当规则也匹配不上任何真实资源，落库也授权不了什么，而用户在弹窗里看到的仍是他
-// 自己写的那个路径。这个接口不能报错（形态错误由 List / OpenRead / Write 各自报出来），
-// 但它绝不能因此交出一个比实际操作更宽的主体。
-//
-// key 段里的元字符走同一条后置条件：`dist/*` 展开出来的 `dist/a[1].js` 是货真价实的对象
-// key，而它当规则读时会多匹配上 `dist/a1.js`，所以 key 段交给 escapeOSSKey 转义
-// （决策 D21，与 exec 面的 PolicyStrings 同一个函数）。代价是这类 key 的审批弹窗会显示
-// 反斜杠——只在 key 真含元字符时出现，且显示的是诚实的范围。
+// 而按 policy.MatchOSSRule 的规则语义，桶段后为空（光桶名**或**以 "/" 收尾，D5 说这两种
+// 写法等价）就是整桶任意深度，桶段里的 "*" 是跨桶通配。目的端路径不经过 List，所以形态
+// 错误的目的地直接到这里（ValidateDestination 会在审批之前拦下它们，但主体是在那之前
+// 生成的）。因此形态合法时资源是 <bucket>/<key>；形态不合法时退回**原样路径并强制带前导
+// "/"**——这样的资源切出来的桶段是空串，既匹配不上任何桶范围的规则，自己当规则也匹配不上
+// 任何真实资源，而用户在弹窗里看到的仍是他自己写的那个路径。这个接口不能报错，但它绝不能
+// 因此交出一个比实际操作更宽的主体。
 func ossSubjectResource(p string, dir Direction) string {
 	if dir == DirList {
-		// 授权的范围与真正会被列举的范围是同一个前缀，所以走 List 用的那一个函数。
-		// 这个方向上转义恒是空操作，也必须是：ossListPrefix 交出来的永远是前缀形态
-		// （空串或以 "/" 收尾），而规则侧对前缀走的是 strings.HasPrefix 字面比较、
-		// 不是 path.Match——转义过的前缀落成 grant 之后什么都授权不了。
 		if bucket, key, err := splitOSSEndpointPath(p); err == nil {
-			return bucket + "/" + escapeOSSKey(ossListPrefix(key))
+			return bucket + "/" + ossSubjectPrefix(key)
 		}
 	} else if bucket, key, err := splitOSSObjectPath(p); err == nil {
-		return bucket + "/" + escapeOSSKey(key)
+		return bucket + "/" + key
 	}
 	return "/" + strings.TrimPrefix(p, "/")
+}
+
+// ossSubjectPrefix 给出列举方向要授权的那个前缀。
+//
+// 用户**指名的就是一个前缀**（空串或以 "/" 收尾）时原样交出，不走 globBase：
+// globBase 在第一个元字符处按整段截断，而 `logs[1]/` 这种字面量前缀的第一段就带元字符，
+// 于是基点塌成空串，主体变成 `object.list mybucket/` —— 指名一个前缀却换来整桶列举的
+// 常驻授权。前缀形态的规则 key 由 policy.matchOSSResource 走 strings.HasPrefix 字面
+// 比较，元字符在那条路径上不是语法，所以原样交出既准确又不会越权。
+//
+// 其余形态（真正的通配、以及指名到某一层的 key）才归一成 ossListPrefix 的前缀——
+// 那是 List 真的会去枚举的基点。
+func ossSubjectPrefix(key string) string {
+	if key == "" || strings.HasSuffix(key, "/") {
+		return key
+	}
+	return ossListPrefix(key)
 }
 
 // cutOSSPath 把端点路径切成 (bucket, key)：剥掉前导 "/" 再按第一个 "/" 切。

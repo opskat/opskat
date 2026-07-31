@@ -1,15 +1,32 @@
 package helper
 
 import (
-	"path"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"unicode"
 
+	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/policy"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
+
+// withOSSPolicyStringsWiring 在测试期做 internal/ai/execimpl 在 init() 里做的那件事：
+// 把本包的 DSL 派生推给 permission。本包不能被 execimpl 反过来 import（cycle），
+// 所以要端到端跑完"DSL → 策略串 → grant 规则"这条链，只能在这里自己接一次线。
+// 接的是**真派生**而不是一张桩表，否则这条链上最容易漂移的那一段就没人比对了。
+func withOSSPolicyStringsWiring(t *testing.T) {
+	t.Helper()
+	permission.RegisterPolicyStrings(asset_entity.AssetTypeOSS, func(command string) ([]string, error) {
+		parsed, err := ParseOSSCommand(command)
+		if err != nil {
+			return nil, err
+		}
+		return parsed.PolicyStrings()
+	})
+	t.Cleanup(func() { permission.UnregisterPolicyStringsForTest(asset_entity.AssetTypeOSS) })
+}
 
 func TestParseOSSCommand(t *testing.T) {
 	cases := []struct {
@@ -401,38 +418,29 @@ func TestOSSCommand_PolicyStrings(t *testing.T) {
 	}
 }
 
-// TestOSSCommand_PolicyStringsEscapesMetacharactersInTheKey 锁住决策 D21：从一个**具体
-// key** 派生策略串时，key 段里的 `* ? [ \` 被转义，因此这条串当规则读时只覆盖这个 key。
+// TestOSSCommand_PolicyStringsKeepTheKeyVerbatim 锁住决策 D21 的**更正**：派生串在这里
+// 是被拿去撞规则的**名字**，key 段一个字节都不许动。
 //
-// §3.4 的规则语法没有转义约定，而 S3 的 key 允许字面量 `* ? [`——不转义的话
-// `object get 'mybucket/secrets*'` 派生出的 "object.read mybucket/secrets*" 当规则读
-// 就是"读遍所有 secrets 开头的对象"。转义写在派生侧而不是匹配器侧：path.Match 原生认
-// `\`，所以 policy.MatchOSSRule 与 §3.4 的语法都不动（覆盖范围由
-// TestOSSCommand_PolicyStringsDoNotAuthorizeAnotherKey 咬住，这里只锁串本身的形状）。
-//
-// 桶段与 `bucket.list *` 的占位不转义：桶名的合法字符集里没有这四个字符，而占位的 `*`
-// 是"全部桶"这一语义本身，转义它等于把 bucket list 变成"列举一个名叫 * 的桶"。
-func TestOSSCommand_PolicyStringsEscapesMetacharactersInTheKey(t *testing.T) {
+// 转义属于另一个角色。同一条串落成常驻 grant 时才转义，那一步在
+// permission.NormalizeGrantPatterns —— 两边都转义的结果是
+// path.Match(`b/secrets\*`, `b/secrets\*`) = false：含通配元字符的 key 上"始终允许"
+// 从此不生效，每次重新弹框，还多落一条什么都不授权的死行（c0de1b2c 的实况）。
+// 收窄本身由 TestOSSCommand_GrantsDerivedFromAKeyDoNotAuthorizeAnother 端到端咬住。
+func TestOSSCommand_PolicyStringsKeepTheKeyVerbatim(t *testing.T) {
 	cases := []struct {
 		in   string
 		want []string
 	}{
-		{`object get "mybucket/secrets*"`, []string{`object.read mybucket/secrets\*`}},
-		{`object stat "mybucket/logs/a[1].log"`, []string{`object.read mybucket/logs/a\[1].log`}},
-		{`object delete "mybucket/what?.txt"`, []string{`object.delete mybucket/what\?.txt`}},
-		{`object put 'mybucket/a\b.txt' --file=/tmp/a`, []string{`object.write mybucket/a\\b.txt`}},
+		{`object get "mybucket/secrets*"`, []string{`object.read mybucket/secrets*`}},
+		{`object stat "mybucket/logs/a[1].log"`, []string{`object.read mybucket/logs/a[1].log`}},
+		{`object delete "mybucket/what?.txt"`, []string{`object.delete mybucket/what?.txt`}},
+		{`object put 'mybucket/a\b.txt' --file=/tmp/a`, []string{`object.write mybucket/a\b.txt`}},
 		{`object copy "src/a*.txt" --to="dst/b[1].txt"`,
-			[]string{`object.read src/a\*.txt`, `object.write dst/b\[1].txt`}},
-		{`object presign "mybucket/re[port].pdf" --method=put`, []string{`object.presign.write mybucket/re\[port].pdf`}},
-		// 前缀形态的 key 段同样转义：`logs[1]` 不以 "/" 收尾，规则侧走的是 path.Match，
-		// 不转义就等于授权了 `logs1`、`logsX` 这些别的前缀。
-		{`object list "mybucket/logs[1]"`, []string{`object.list mybucket/logs\[1]`}},
-		// 以 "/" 收尾的 key 是另一回事，**不转义**：规则侧对这种 key 走的是
-		// strings.HasPrefix 字面比较而不是 path.Match（policy.matchOSSResource），
-		// 那条路径上没有转义语法，转义过的前缀一条真实的 key 都盖不住。
+			[]string{`object.read src/a*.txt`, `object.write dst/b[1].txt`}},
+		{`object presign "mybucket/re[port].pdf" --method=put`, []string{`object.presign.write mybucket/re[port].pdf`}},
+		{`object list "mybucket/logs[1]"`, []string{`object.list mybucket/logs[1]`}},
 		{`object list "mybucket/logs[1]/"`, []string{`object.list mybucket/logs[1]/`}},
 		{`object list 'mybucket/a\b/'`, []string{`object.list mybucket/a\b/`}},
-		// 不含元字符的 key 逐字节不变——统一 exec 与 cp 两侧的既有授权不能因为这条转义失效。
 		{`object get mybucket/logs/app.log`, []string{"object.read mybucket/logs/app.log"}},
 		{`bucket list`, []string{"bucket.list *"}},
 	}
@@ -454,55 +462,17 @@ func TestOSSCommand_PolicyStringsEscapesMetacharactersInTheKey(t *testing.T) {
 	}
 }
 
-// TestEscapeOSSKey_EscapedKeyMatchesItselfAndNothingElse 用 path.Match 这个独立来源
-// 反查转义的**字符集**：转出来的片段当模式读，必须恰好匹配它自己派生自的那个 key。
+// TestOSSCommand_GrantsDerivedFromAKeyDoNotAuthorizeAnother 是 D21 的安全后置条件本体，
+// 端到端跑完生产那条链：DSL → PolicyStrings()（名字）→ permission.NormalizeGrantPatterns
+// （规则）→ policy.MatchOSSRule。三段各在一个包里，接错任何一段这条断言都会红。
 //
-// 挑的 key 覆盖了几个只靠推理容易判错的角落：
-//   - 只有 `]` 没有 `[`：`[` 一旦转义，字符类就永远开不了，`]` 因此是字面量、无需转义；
-//   - 以孤立 `\` 收尾：不转义就是 path.Match 的 ErrBadPattern，一条报错的模式对任何
-//     名字都是 false——deny 规则静默失配，正是 §3.4 最怕的那种 fail-open；
-//   - 整条 key 全是元字符，以及空 key；
-//   - 多字节 UTF-8：转义是按字节扫的，续字节一律 >= 0x80 而四个元字符都是 ASCII，
-//     所以汉字里不会冒出反斜杠。
-func TestEscapeOSSKey_EscapedKeyMatchesItselfAndNothingElse(t *testing.T) {
-	keys := []string{
-		"", "]", "a]b", "][", `\`, `a\`, `*?[\`, "**", "secrets*", "what?.txt",
-		"logs/a[1].log", `a\b.txt`, "日本語*.log", "秘密?.txt", "plain/key.txt",
-	}
-	// 只有把模式当通配读才会命中的"别的对象"。
-	victims := []string{
-		"secretsFOO", "whatX.txt", "logs/a1.log", "aXb.txt", "日本語FOO.log", "秘密X.txt",
-		"a", "ab", "x", "[]", "plain/keyZtxt",
-	}
-	for _, key := range keys {
-		pattern := escapeOSSKey(key)
-		ok, err := path.Match(pattern, key)
-		if err != nil {
-			t.Errorf("escapeOSSKey(%q) = %q is not a valid path.Match pattern: %v", key, pattern, err)
-			continue
-		}
-		if !ok {
-			t.Errorf("escapeOSSKey(%q) = %q does not match the key it came from", key, pattern)
-		}
-		for _, other := range slices.Concat(keys, victims) {
-			if other == key {
-				continue
-			}
-			if ok, err := path.Match(pattern, other); err == nil && ok {
-				t.Errorf("escapeOSSKey(%q) = %q also matches %q", key, pattern, other)
-			}
-		}
-	}
-}
+// 两个方向都要成立，缺一个就能被廉价地满足：
+//   - 落下的 grant 不能覆盖**别的** key——否则批准读一个对象换来读一批；
+//   - 落下的 grant 必须覆盖**这一个** key 自己——否则它是一条死行，"始终允许"永远不生效
+//     （c0de1b2c 的两边都转义正是这样，而它同样能通过上一条）。
+func TestOSSCommand_GrantsDerivedFromAKeyDoNotAuthorizeAnother(t *testing.T) {
+	withOSSPolicyStringsWiring(t)
 
-// TestOSSCommand_PolicyStringsDoNotAuthorizeAnotherKey 是 D21 的安全后置条件本体：
-// 派生串会**原样成为规则**（§4.3 的 ossGrantPatterns 把 PolicyStrings() 直接落成常驻
-// grant），所以"批准读这一个对象"绝不能换来读另一个对象的授权。
-//
-// 参与比对的是两个独立来源：本包的派生，与 policy.MatchOSSRule 的规则语义。
-// 反过来也要成立——一条什么都不匹配的串同样能让上面那半个断言通过，所以还要求用户
-// 自己写的通配规则照旧覆盖这个对象（`dist/*` 是最常见的授权写法）。
-func TestOSSCommand_PolicyStringsDoNotAuthorizeAnotherKey(t *testing.T) {
 	cases := []struct {
 		in    string
 		other []string
@@ -521,30 +491,44 @@ func TestOSSCommand_PolicyStringsDoNotAuthorizeAnotherKey(t *testing.T) {
 			"object.read src/ax.txt",
 			"object.write dst/bOTHER.txt",
 		}},
+		// 桶段同样要收窄：`object get 'my*/k'` 派生的规则不转义就是跨桶授权。
+		{`object get "my*/k"`, []string{"object.read mybucket/k"}},
 	}
 	for _, c := range cases {
 		parsed, err := ParseOSSCommand(c.in)
 		if err != nil {
 			t.Fatalf("ParseOSSCommand(%q) unexpected error: %v", c.in, err)
 		}
-		got, err := parsed.PolicyStrings()
+		names, err := parsed.PolicyStrings()
 		if err != nil {
 			t.Fatalf("PolicyStrings() for %q unexpected error: %v", c.in, err)
 		}
-		if len(got) == 0 {
-			t.Fatalf("PolicyStrings() for %q is empty; the assertions below would be vacuous", c.in)
+		canonical, err := parsed.Render()
+		if err != nil {
+			t.Fatalf("Render() for %q unexpected error: %v", c.in, err)
 		}
-		for _, rule := range got {
+		rules := permission.NormalizeGrantPatterns(
+			asset_entity.AssetTypeOSS, canonical, permission.GrantOriginSystem)
+		if len(rules) != len(names) {
+			t.Fatalf("%q derives %d policy strings but lands as %d grants (%q); "+
+				"the assertions below would not line up", c.in, len(names), len(rules), rules)
+		}
+		for i, rule := range rules {
+			if !policy.MatchOSSRule(rule, names[i]) {
+				t.Errorf("%q lands as grant %q, which does not authorize the very request %q "+
+					`it came from — a dead row, and "always allow" never takes effect`, c.in, rule, names[i])
+			}
 			for _, other := range c.other {
 				if policy.MatchOSSRule(rule, other) {
-					t.Errorf("%q derives %q, which as a grant also authorizes %q", c.in, rule, other)
+					t.Errorf("%q lands as grant %q, which also authorizes %q", c.in, rule, other)
 				}
 			}
 		}
 	}
 
-	// 转义只收窄派生串自己的覆盖范围，不能把它挪出用户写的通配规则之外：
-	// `dist/*` 是最常见的一条授权，而 `dist/a[1].js` 是递归展开合法产出的 key。
+	// 反过来，收窄不能把派生串挪出用户自己写的通配规则之外：`dist/*` 是最常见的一条
+	// 授权，而 `dist/a[1].js` 是递归展开合法产出的 key。这里比的是**名字**——名字侧
+	// 一旦被转义，这条断言就会红。
 	parsed, err := ParseOSSCommand(`object get "mybucket/dist/a[1].js"`)
 	if err != nil {
 		t.Fatalf("ParseOSSCommand: %v", err)

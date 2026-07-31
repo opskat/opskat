@@ -154,8 +154,9 @@ func validateOSSResourceRef(ref string) error {
 // 单对象 verb 的 target 与 copy / move 的 `--to` 都要过它（§3.1 的语法；§3.3 写明
 // resource 段为 `<bucket>/<key>`）。调用方先过 validateOSSResourceRef 做形状校验。
 //
-// 不是形式主义：派生串既是被匹配的命令，也会**原样成为规则**——§4.3 的 ossGrantPatterns
-// 把 PolicyStrings() 直接存成 grant，而 policy.MatchOSSRule 里规则侧 key 为空（只写桶名，
+// 不是形式主义：派生串既是被匹配的命令，也会**成为规则**——§4.3 的 ossGrantPatterns 把
+// PolicyStrings() 翻成常驻 grant（只转义 key 里的元字符，桶/key 的分段不变），而
+// policy.MatchOSSRule 里规则侧 key 为空（只写桶名，
 // 或以 "/" 收尾）表示"该桶下任意深度的任意 key"（决策 D5，
 // internal/ai/policy/oss_policy.go:88-90）。于是 `object stat mybucket/` 派生出
 // "object.read mybucket/"：用户在审批弹窗上批准的是一个对象，选一次 "allow all"
@@ -300,65 +301,14 @@ func (c *OSSCommand) PolicyStrings() ([]string, error) {
 				return nil, fmt.Errorf("oss permission command %q does not name a single object: %w", s, err)
 			}
 		}
-		// 转义排在两条后置条件之后：它们校验的是调用方给的 key，而转义只收窄这条串
-		// 当规则读时的覆盖范围（决策 D21）。转义不引入空白也不动 "/"，因此两段性与
-		// §4.3 对尾随 "/" 的丢弃都不受影响。
-		out = append(out, a.action+" "+escapeOSSResourceKey(a.resource))
+		// key 段保持原样。派生串在这里是**名字**——它会被 policy.MatchOSSRule 拿去撞
+		// 规则（策略的 allow/deny、以及已落库的 grant）。同一条串落成常驻 grant 时
+		// 才转义，那一步在 permission.NormalizeGrantPatterns（决策 D21 更正）。
+		// 两边都转义的话 path.Match(`b/secrets\*`, `b/secrets\*`) = false，含元字符的
+		// key 上"始终允许"就再也匹配不上自己。
+		out = append(out, s)
 	}
 	return out, nil
-}
-
-// ossKeyMetaChars 是 path.Match 在**模式侧**当成语法的字符：三个通配元字符加上转义符本身。
-const ossKeyMetaChars = `*?[\`
-
-// escapeOSSKey 把一个具体的对象 key 转成"只匹配它自己"的规则片段（决策 D21）。
-//
-// §3.4 的规则语法没有转义约定，而 S3 的 key 允许字面量 `* ? [`：不转义的话，一条从具体
-// key 派生出来的策略串当规则读时比这个 key 本身宽——实测 path.Match("secrets*",
-// "secretsFOO") = true、path.Match("logs/a[1].log", "logs/a1.log") = true，批准读一个对象
-// 换来的是读遍一批对象。转义只改派生，匹配器与规则语法都不动：path.Match 原生认 `\`
-// ——模式 secrets\* 对 "secretsFOO" 为 false，对字面量 "secrets*" 为 true（均已实测）。
-//
-// 反向的解法（拒绝含元字符的 key）不成立：递归展开本来就会合法产出这种 key
-// （path.Match("dist/*", "dist/a[1].js") = true），拒绝等于 cp 传不了自己刚列出来的东西。
-//
-// **前缀形态的 key（空串，或以 "/" 收尾）原样返回**：规则侧对它走的根本不是 path.Match，
-// 而是 strings.HasPrefix 字面比较（policy.matchOSSResource，D5 的"该前缀下任意深度"），
-// 那条路径上没有转义语法。给前缀加反斜杠不会收窄任何东西，只会让这条规则一条真实的 key
-// 都盖不住——cp 一次 `s3:/b/a\b/` 点"始终允许"，落库的就是一条什么都不授权的死 grant。
-//
-// 按字节扫描是安全的：四个元字符都是 ASCII，而 UTF-8 的续字节一律 >= 0x80。
-// `]` 不在集合里也是安全的：`[` 一旦被转义，字符类就永远开不了，类外的 `]` 是字面量。
-func escapeOSSKey(key string) string {
-	if strings.HasSuffix(key, "/") || !strings.ContainsAny(key, ossKeyMetaChars) {
-		return key
-	}
-	var b strings.Builder
-	b.Grow(len(key) + 4)
-	for i := range len(key) {
-		if strings.IndexByte(ossKeyMetaChars, key[i]) >= 0 {
-			b.WriteByte('\\')
-		}
-		b.WriteByte(key[i])
-	}
-	return b.String()
-}
-
-// escapeOSSResourceKey 转义一个 `<bucket>/<key>` 资源里的 key 段。
-//
-// 桶段不转义：桶名的合法字符集（小写字母、数字、`-`、`.`）里没有这四个字符，带元字符的
-// 桶名指不到任何真实的桶。没有 `/` 的 resource 整条原样返回——那只有 `bucket.list *`
-// 的占位（`*` 是"全部桶"这个语义本身，转义它等于把 bucket list 变成"列举一个名叫 * 的桶"）
-// 与桶级前缀，两者的 key 段都是空的。
-//
-// 以 "/" 收尾的 key 段（`object.list b/logs/`）同样原样返回，理由见 escapeOSSKey：
-// 规则侧对前缀走的是字面比较，不是 path.Match。
-func escapeOSSResourceKey(resource string) string {
-	bucket, key, ok := strings.Cut(resource, "/")
-	if !ok {
-		return resource
-	}
-	return bucket + "/" + escapeOSSKey(key)
 }
 
 // ossPolicyAction 是一条策略串的两段形式，拼接与后置条件检查都在 PolicyStrings 里做。

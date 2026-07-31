@@ -341,8 +341,10 @@ func checkKafkaPermission(ctx context.Context, assetID int64, command string) ai
 // --- OSS ---
 
 // ossPolicyStrings 把一条送进 OSS 权限检查的命令展开成它请求的策略串（`<action> <resource>`）。
-// derived 报告这些串是不是由 DSL 派生出来的——ossGrantPatterns 靠它区分"系统替用户推导的"
-// 与"用户自己写的"（设计 §4.3）。
+//
+// derived 报告的是**形状**：true 表示这些串是从一条 DSL 命令派生出来的，false 表示输入
+// 本身就是策略串。它不报告作者——那是 GrantOrigin 的事，两者一起才能决定要不要收窄
+// （设计 §4.3：只有"用户手写的策略串"该豁免，而适配器给出的主体与它同形）。
 //
 // 两个入口喂进来的形状不同：
 //   - exec 送规范 DSL（`object copy S --to=D`），一条命令派生 1~3 条串（§4.1）；
@@ -417,36 +419,134 @@ func checkOSSPermission(ctx context.Context, assetID int64, command string) aict
 
 // ossGrantPatterns 是 OSS 注册的 grant 归一化：一条审批输入 → 常驻授权的 pattern 列表。
 //
-// 派生失败退回原串，与 shell 分支的"解析失败退回原行"同一姿态。
+// 这里是策略串从**名字**变成**规则**的那一步，收窄只发生在这里（决策 D21 更正，见
+// ossGrantRule）。豁免看的是来源而不是形状：用户在审批弹窗里手写的策略串是他明确要求的
+// 授权范围，原样落库；系统替他推导出来的——exec 的规范 DSL、传输适配器的 ApprovalSubject
+// ——一律收窄。两者都是策略串形状，所以只能靠 origin 区分（设计 §4.3 的【实施期更正】）。
 //
-// **resource 以 "/" 结尾的派生串被丢弃**（设计 §4.3 / 决策 D20）：尾随斜杠的 key 是合法的
-// 单个对象——S3 用零字节的 `<prefix>/` 当目录标记，本产品自己的"新建文件夹"就在建它们，
-// 所以 `object delete mybucket/logs/` 说的是一个对象。但同一个串当规则读时，尾随 "/"
-// 意味着递归前缀（policy.MatchOSSRule 的 key 段语义，决策 D5）。原样落库，用户批准一次
-// "删掉这个目录标记"并选"始终允许"，换来的就是一条"递归删除 logs/ 下全部对象"的常驻授权。
-// 丢弃而不是拒绝命令：目录标记该删得掉，只是这一条不该变成可复用的授权。
-//
-// 已经是策略串形状的输入不受此限，原样落库。这一支上的两个来源都不是"单对象命令被
-// 悄悄放大成前缀规则"：用户在审批弹窗里手写的 pattern 是他明确要求的授权范围；cp 的
-// OSS 端点给出的 ApprovalSubject（§6.2）本身就带方向——object.read / object.write 是
-// 具体对象 key，只有 object.list 的主体是前缀（`object.list B/P/`），而那一条落成
-// "递归列举该前缀"的常驻授权，与用户批准的那次递归列举范围恰好相同。
-func ossGrantPatterns(command string) []string {
+// 派生失败不落 grant：一条派生不出策略串的原文当规则读时，action 段没有点，
+// 匹配不上任何策略串（policy.MatchOSSRule），落库只会在授权列表里显示一条用户其实
+// 没拿到的授权。什么都不落是同样 fail-closed 的答案，且不留死行。
+func ossGrantPatterns(command string, origin GrantOrigin) []string {
 	policyStrings, derived, err := ossPolicyStrings(command)
 	if err != nil || len(policyStrings) == 0 {
-		return []string{command}
+		return nil
 	}
-	if !derived {
+	// 用户手写的策略串原样落库。DSL 形状的输入即便由用户敲进来也要走收窄：他写的是一条
+	// **命令**，而命令与规则对同一个字符串的读法本来就不同（这正是 D20 的那条落差）。
+	if !derived && origin == GrantOriginUser {
 		return policyStrings
 	}
 	patterns := make([]string, 0, len(policyStrings))
 	for _, ps := range policyStrings {
-		if strings.HasSuffix(ps, "/") {
-			continue
+		if rule, ok := ossGrantRule(ps); ok {
+			patterns = append(patterns, rule)
 		}
-		patterns = append(patterns, ps)
 	}
 	return patterns
+}
+
+// ossGrantRule 把一条策略串从"名字"翻译成落成常驻授权的"规则"（决策 D21 更正）。
+//
+// 同一个字符串在两个角色上要的东西相反：作为**名字**（被 policy.MatchOSSRule 拿去撞规则）
+// 必须保持原始 key，作为**规则**必须只覆盖它自己。两边都转义的结果是
+// path.Match(`b/secrets\*`, `b/secrets\*`) = false —— 一条谁也匹配不上的死 grant，
+// 含元字符的 key 上"始终允许"于是永远不生效。正确配对是规则转义、名字原样：
+// path.Match(`b/secrets\*`, "b/secrets*") = true，而对 "b/secretsFOO" 为 false。
+//
+// ok 为 false 表示这条串不该落成常驻授权（决策 D20）。
+func ossGrantRule(ps string) (rule string, ok bool) {
+	action, resource, twoSegments := strings.Cut(ps, " ")
+	if !twoSegments {
+		// 切不出两段的串当规则读时匹配不上任何东西（policy.splitOSSRule 直接 !ok），
+		// 落库就是一条死行。
+		return "", false
+	}
+
+	// 决策 D20：resource 以 "/" 收尾的**单对象**操作不落 grant。尾随斜杠的 key 是合法的
+	// 单个对象——S3 用零字节的 `<prefix>/` 当目录标记，本产品自己的"新建文件夹"就在建
+	// 它们，所以 `object delete mybucket/logs/` 说的是一个对象；而同一个串当规则读时，
+	// 尾随 "/" 意味着递归前缀（决策 D5）。批准一次"删掉这个目录标记"换来一条"递归删除
+	// logs/ 下全部对象"的常驻授权，正是 §3.3 那类"批准一件事、拿到另一件"。
+	//
+	// 列举不在此列：`object list mybucket/logs/` 的命令语义就是"列 logs/ 底下"，
+	// 规则语义也是"可列 logs/ 底下"，两者是同一个范围，没有那条落差。丢掉它反而让
+	// cp 的递归展开永远拿不到常驻授权、每次重新弹框，也让同一个字符串在 exec 面被丢、
+	// 在 cp 面被留（设计 §4.3 对 DirList 主体的规定与 §6.2「两条入口的授权互相复用」
+	// 直接冲突）。别照着"以 / 收尾"这个症状把它改回去。
+	if strings.HasSuffix(resource, "/") && !ossListAction(action) {
+		return "", false
+	}
+
+	// 桶段与 key 段都要转义，理由是同一条：`object get 'my*/k'` 派生的
+	// "object.read my*/k" 当规则读时桶段的 `*` 是跨桶通配，一条授权覆盖 mybucket/k。
+	// 桶段永远不是前缀形态（按第一个 "/" 切），所以它走不带豁免的 escapeOSSMeta。
+	//
+	// `bucket.list *` 的占位 `*` 不需要豁免：它是这条 action 唯一的 resource 形态，
+	// 转义成 `\*` 之后 path.Match(`\*`, "*") 仍然为真，往返照样成立（实测），
+	// 而豁免会多出一条谁也测不到的分支。
+	bucket, key, hasKey := strings.Cut(resource, "/")
+	escaped := escapeOSSMeta(bucket)
+	if hasKey {
+		escaped += "/" + escapeOSSRuleKey(key)
+	}
+	return action + " " + escaped, true
+}
+
+// ossListAction 报告这条 action 的 resource 段本来就是一个前缀而不是单个对象
+// （设计 §3.3 表格里的 bucket.list / object.list）。判定用后缀而不是逐个列举动作名：
+// 这张表由 internal/ai/helper 的派生持有，本包抄一份只会漂移。
+func ossListAction(action string) bool {
+	return strings.HasSuffix(action, ".list")
+}
+
+// ossKeyMetaChars 是 path.Match 在**模式侧**当成语法的字符：三个通配元字符加上转义符本身。
+const ossKeyMetaChars = `*?[\`
+
+// escapeOSSMeta 把一个具体名字转成"只匹配它自己"的 path.Match 模式（决策 D21）。
+//
+// §3.4 的规则语法没有转义约定，而 S3 的 key 允许字面量 `* ? [`：不转义的话，一条从具体
+// key 派生出来的规则比这个 key 本身宽——实测 path.Match("secrets*", "secretsFOO") = true、
+// path.Match("logs/a[1].log", "logs/a1.log") = true，批准读一个对象换来的是读遍一批对象。
+// 匹配器与规则语法都不动：path.Match 原生认 `\`。
+//
+// 反向的解法（拒绝含元字符的 key）不成立：递归展开本来就会合法产出这种 key
+// （path.Match("dist/*", "dist/a[1].js") = true），拒绝等于 cp 传不了自己刚列出来的东西。
+//
+// `\` 必须在集合里：一个孤立的 `\` 会让 path.Match 对整条模式返回 ErrBadPattern，而
+// policy.MatchOSSRule 把 error 一律当 false —— 对 deny 规则就是静默的 fail-open。
+// 按字节扫描是安全的：四个元字符都是 ASCII，而 UTF-8 的续字节一律 >= 0x80。
+// `]` 不在集合里也是安全的：`[` 一旦被转义，字符类就永远开不了，类外的 `]` 是字面量。
+func escapeOSSMeta(s string) string {
+	if !strings.ContainsAny(s, ossKeyMetaChars) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 4)
+	for i := range len(s) {
+		if strings.IndexByte(ossKeyMetaChars, s[i]) >= 0 {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// escapeOSSRuleKey 转义一条规则的 key 段。
+//
+// **前缀形态的 key（空串，或以 "/" 收尾）原样返回**：规则侧对它走的根本不是 path.Match，
+// 而是 strings.HasPrefix 字面比较（policy.matchOSSResource，决策 D5 的"该前缀下任意
+// 深度"），那条路径上没有转义语法。给前缀加反斜杠不会收窄任何东西，只会让这条规则一条
+// 真实的 key 都盖不住——cp 一次 `s3:/b/a\b/` 点"始终允许"，落库的就是一条什么都不授权
+// 的死 grant，永远重复弹框。
+//
+// 这条豁免是 cd012457 修掉的那个缺陷，它的根因（HasPrefix vs path.Match）与 D21 更正的
+// 名字/规则之分不同，因此转义搬到哪个接缝上都必须跟着搬。
+func escapeOSSRuleKey(key string) string {
+	if strings.HasSuffix(key, "/") {
+		return key
+	}
+	return escapeOSSMeta(key)
 }
 
 // --- Grant 匹配辅助 ---
@@ -505,7 +605,7 @@ func matchGrantForAssetSubCmdsWith(ctx context.Context, assetID int64, subCmds [
 // 复合命令必须按子命令存，否则 `ls /tmp && cat /etc/hosts` 会被存成单条 pattern，
 // 后续 grant 子命令匹配永远命中失败。
 // AST 解析失败时退回原行，让上层依旧能存下 grant；下次匹配同样会解析失败走 aictx.NeedConfirm。
-func shellGrantPatterns(command string) []string {
+func shellGrantPatterns(command string, _ GrantOrigin) []string {
 	var patterns []string
 	for line := range strings.SplitSeq(command, "\n") {
 		line = strings.TrimSpace(line)
@@ -522,15 +622,38 @@ func shellGrantPatterns(command string) []string {
 	return patterns
 }
 
-// NormalizeGrantPatterns 把一条用户审批输入拆成可独立匹配的 grant pattern 列表。
+// GrantPatternsFunc 把一条审批输入拆成可独立匹配的 grant pattern 列表。
+type GrantPatternsFunc func(command string, origin GrantOrigin) []string
+
+// GrantOrigin 声明一条审批输入是谁写的。
+//
+// 一条策略串有两种角色：被拿去撞规则的**名字**，与落成常驻授权的**规则**（决策 D21 更正）。
+// 归一化只在规则这一侧收窄——D20 丢弃前缀形状的资源、D21 转义具体 key 里的通配元字符——
+// 而收窄的前提是这条串是系统替用户推导出来的。用户在审批弹窗里手写的 pattern 不能收窄：
+// 他写的通配就是他要的授权范围（设计 §4.3）。
+//
+// 两种来源都是策略串形状，字符串本身分不出来，所以来源必须由调用方声明。参数是必填而不是
+// 可选的：本分支已经两次被"漏接线也照样编译"咬到（RegisterPolicyStrings、CanonicalizeFor），
+// 一个安全的默认值只会把"忘了想这件事"变成一次静默的行为差异，而必填参数把它变成编译错误。
+type GrantOrigin int
+
+const (
+	// GrantOriginSystem 是系统替用户推导出来的主体：exec 的规范 DSL、传输适配器的
+	// ApprovalSubject（helper.TransferAdapter）。
+	GrantOriginSystem GrantOrigin = iota
+	// GrantOriginUser 是用户在审批弹窗里手写或改写的 pattern。
+	GrantOriginUser
+)
+
+// NormalizeGrantPatterns 把一条审批输入拆成可独立匹配的 grant pattern 列表。
 //
 // 拆法由类型注册表上的 grantPatterns 给出（type_registry.go 的 init）：
 //   - 未注册归一化函数的类型（sql/redis/mongo/kafka/serial/cp）保留原命令，匹配规则各自处理；
-//   - SSH/K8s 走 shellGrantPatterns；
-//   - OSS 走 ossGrantPatterns（DSL → 策略串）。
+//   - SSH/K8s 走 shellGrantPatterns（origin 不参与：多行/复合命令无论谁写的都要按子命令拆）；
+//   - OSS 走 ossGrantPatterns（DSL → 策略串，并按 origin 决定要不要收窄）。
 //
 // 所有 SaveGrantPattern 调用前都应当先经过这个归一化函数。
-func NormalizeGrantPatterns(approvalType, command string) []string {
+func NormalizeGrantPatterns(approvalType, command string, origin GrantOrigin) []string {
 	cmd := strings.TrimSpace(command)
 	if cmd == "" {
 		return nil
@@ -539,13 +662,13 @@ func NormalizeGrantPatterns(approvalType, command string) []string {
 	if !ok || handler.grantPatterns == nil {
 		return []string{cmd}
 	}
-	return handler.grantPatterns(cmd)
+	return handler.grantPatterns(cmd, origin)
 }
 
 // SaveGrantPatternsForApproval 用 NormalizeGrantPatterns 拆出 patterns 后依次落库。
 // 适合 app 层在多种审批回调（opsctl 单审批、AI grant 流）里调用，避免每个路径重复拆分逻辑。
-func SaveGrantPatternsForApproval(ctx context.Context, sessionID string, assetID int64, assetName, approvalType, command string) {
-	for _, p := range NormalizeGrantPatterns(approvalType, command) {
+func SaveGrantPatternsForApproval(ctx context.Context, sessionID string, assetID int64, assetName, approvalType, command string, origin GrantOrigin) {
+	for _, p := range NormalizeGrantPatterns(approvalType, command, origin) {
 		SaveGrantPattern(ctx, sessionID, assetID, assetName, approvalType, p)
 	}
 }

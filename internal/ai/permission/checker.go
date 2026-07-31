@@ -283,23 +283,31 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 		// 三条 grant 落库路径（HandleConfirm / opsctl 单审批 / AI grant 流）共用 NormalizeGrantPatterns：
 		// SSH/K8s shell 类按 AST 子命令拆，其他类型直通。这里既保持本路径行为一致，
 		// 又保证编辑模式（多行/通配）后的每一行都按子命令分别落库。
+		//
+		// 来源在这条缝上是分得清的，必须原样透传（见 GrantOrigin）：EditedItems 是用户在
+		// 弹窗里手写的 pattern，command 是系统交上来的主体（exec 的规范 DSL、cp 的
+		// ApprovalSubject）。两者都是策略串形状，混成一种就等于把适配器给出的主体
+		// 当用户 pattern 放行——设计 §4.3 记下的正是这个洞。
 		var patterns []string
 		if len(parsed.EditedItems) > 0 {
 			for _, item := range parsed.EditedItems {
-				patterns = append(patterns, NormalizeGrantPatterns(assetType, item.Command)...)
+				patterns = append(patterns, NormalizeGrantPatterns(assetType, item.Command, GrantOriginUser)...)
 			}
 		}
 		if len(patterns) == 0 {
-			patterns = NormalizeGrantPatterns(assetType, command)
+			patterns = NormalizeGrantPatterns(assetType, command, GrantOriginSystem)
 		}
-		if len(patterns) == 0 {
-			// shell parse 失败或全为空白 — 至少保留原命令一条，避免静默丢 grant
-			patterns = []string{command}
-		}
+		// 归一化交出空列表是一个**答案**，不是失败：OSS 会把"批准了但不该变成常驻授权"
+		// 的串（决策 D20 的目录标记）全部丢掉。此处不能退回 []string{command} —— 那条串
+		// 匹配不上任何策略串，落库只是在授权列表里显示一条用户其实没拿到的授权，
+		// 外加一条同样不真实的 grant_submit 审计行。shell 类到不了这里：
+		// shellGrantPatterns 对任何非空输入至少给出一条 pattern。
 		for _, cmd := range patterns {
 			SaveGrantPattern(ctx, sessionID, assetID, assetName, approvalType, cmd)
 		}
-		audit.WriteGrantSubmitAudit(ctx, assetID, assetName, patterns)
+		if len(patterns) > 0 {
+			audit.WriteGrantSubmitAudit(ctx, assetID, assetName, patterns)
+		}
 		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow}
 	default:
 		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyMsg(ctx, "invalid approval response, execution denied", "审批响应无效，拒绝执行"), DecisionSource: aictx.SourceUserDeny}
