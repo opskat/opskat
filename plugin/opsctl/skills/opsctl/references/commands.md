@@ -79,8 +79,8 @@ opsctl help kafka
 ### `exec <asset> [--type <type>] [--] <command>`
 
 Execute a command against **any** asset type (ssh, serial, database, redis,
-mongodb, etcd, kafka, k8s, ...) — dispatch always comes from the asset's real
-type, never from a flag or verb name.
+mongodb, etcd, kafka, k8s, oss, ...) — dispatch always comes from the asset's
+real type, never from a flag or verb name.
 
 - **ssh** assets keep the original streaming channel: stdin piping, direct
   stdout/stderr passthrough, and the remote exit code propagated as opsctl's
@@ -98,7 +98,7 @@ type, never from a flag or verb name.
 
 When the type is known, always pass this assertion. Prefer canonical asset
 types (`ssh`, `database`, `redis`, `mongodb`, `etcd`, `kafka`, `k8s`,
-`serial`) over the accepted compatibility aliases (`exec`, `sql`, `mongo`).
+`serial`, `oss`) over the accepted compatibility aliases (`exec`, `sql`, `mongo`).
 Omit it only when the type is genuinely unknown.
 
 **Approval flow**:
@@ -302,18 +302,35 @@ opsctl delete group staging --delete-assets
 
 ## cp
 
-### `cp <source> <destination>`
+### `cp [-r] <source>... <destination>`
 
-SCP-style file transfer via SFTP. Requires approval.
+File transfer between any two endpoints. Each endpoint is a local path, an SSH server (over SFTP), or object storage — any combination works, including server → object storage. Requires approval, and **each asset endpoint is approved separately under that asset's own policy**, before any byte moves.
 
 **Path format**:
 - Local: `/path/to/file` or `./relative`
-- Remote: `<asset>:<remote-path>`
+- SSH: `<asset>:/<remote-path>`
+- Object storage: `<asset>:/<bucket>/<key>`
+
+The path after `:` must start with `/`. When the part before the colon does name an asset, writing `web-01:etc/hosts` is rejected outright rather than quietly treated as a local file called `web-01:etc/hosts` — so a typo shows up as a path error, not as "no such file". A Windows path like `C:\logs` is unaffected, since `C` is not an asset.
 
 **Transfer modes**:
-- Local → Remote: `opsctl cp ./config.yml web-server:/etc/app/config.yml`
-- Remote → Local: `opsctl cp 1:/var/log/app.log ./app.log`
-- Remote → Remote: `opsctl cp 1:/etc/hosts 2:/tmp/hosts` (direct streaming, no local disk)
+- Local → SSH: `opsctl cp ./config.yml web-server:/etc/app/config.yml`
+- SSH → local: `opsctl cp 1:/var/log/app.log ./app.log`
+- SSH → SSH: `opsctl cp 1:/etc/hosts 2:/tmp/hosts` (direct streaming, no local disk)
+- Local → object storage: `opsctl cp ./dump.sql.gz s3-prod:/backups/2026/dump.sql.gz`
+- Object storage → local: `opsctl cp s3-prod:/artifacts/app.tar ./app.tar`
+- SSH → object storage: `opsctl cp web-01:/var/log/app.log s3-prod:/logs/app.log`
+
+**Recursion and wildcards**:
+- `-r` transfers a directory tree or an object prefix: `opsctl cp -r ./dist s3-prod:/bucket/releases/v2/`
+- Wildcards work on the remote side too, but **must be quoted** so the local shell doesn't expand them first: `opsctl cp 'web-01:/var/log/*.log' s3-prod:/bucket/logs/`
+- Several sources with one destination is fine: `opsctl cp ./a.txt ./b.txt web-01:/opt/app/`
+- With `-r`, a wildcard, or several sources, the **destination must end with `/`** — the landing path is the destination plus each entry's path relative to the expansion base. There is no `cp`-style "does the destination exist" guessing.
+- Every expanded path is approved individually, in one batch dialog. Over **200 entries is an error**, not a truncation — narrow the pattern.
+- The first failed entry aborts the whole transfer and reports how many of how many were transferred.
+- Symlinks are skipped and reported, never followed.
+
+**Copying inside one object-storage asset**: `cp` streams the object down and back up through this process. Use `opsctl exec <asset> -- "object copy <bucket>/<src> --to=<bucket>/<dst>"` instead — that copies server-side.
 
 ## grant
 
