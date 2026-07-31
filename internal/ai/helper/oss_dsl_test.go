@@ -1,0 +1,425 @@
+package helper
+
+import (
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+	"unicode"
+)
+
+func TestParseOSSCommand(t *testing.T) {
+	cases := []struct {
+		in   string
+		want OSSCommand
+	}{
+		{`bucket list`, OSSCommand{Family: "bucket", Verb: "list", Flags: map[string]string{}}},
+		{`object list logs/2026/ --max-keys=100 --after=a.txt`,
+			OSSCommand{Family: "object", Verb: "list", Target: "logs/2026/",
+				Flags: map[string]string{"max-keys": "100", "after": "a.txt"}}},
+		{`object stat mybucket/key.txt`,
+			OSSCommand{Family: "object", Verb: "stat", Target: "mybucket/key.txt", Flags: map[string]string{}}},
+		{`object get mybucket/key.txt --file=/tmp/key.txt --max-bytes=1024`,
+			OSSCommand{Family: "object", Verb: "get", Target: "mybucket/key.txt",
+				Flags: map[string]string{"file": "/tmp/key.txt", "max-bytes": "1024"}}},
+		{`object put mybucket/key.txt --file=/tmp/key.txt --content-type=text/plain`,
+			OSSCommand{Family: "object", Verb: "put", Target: "mybucket/key.txt",
+				Flags: map[string]string{"file": "/tmp/key.txt", "content-type": "text/plain"}}},
+		{`object copy src/a.txt --to=dst/b.txt`,
+			OSSCommand{Family: "object", Verb: "copy", Target: "src/a.txt",
+				Flags: map[string]string{"to": "dst/b.txt"}}},
+		{`object move src/a.txt --to=dst/b.txt`,
+			OSSCommand{Family: "object", Verb: "move", Target: "src/a.txt",
+				Flags: map[string]string{"to": "dst/b.txt"}}},
+		{`object delete mybucket/key.txt`,
+			OSSCommand{Family: "object", Verb: "delete", Target: "mybucket/key.txt", Flags: map[string]string{}}},
+		{`object presign mybucket/key.txt --expiry=600 --method=put`,
+			OSSCommand{Family: "object", Verb: "presign", Target: "mybucket/key.txt",
+				Flags: map[string]string{"expiry": "600", "method": "put"}}},
+	}
+	for _, c := range cases {
+		got, err := ParseOSSCommand(c.in)
+		if err != nil {
+			t.Fatalf("ParseOSSCommand(%q) unexpected error: %v", c.in, err)
+		}
+		if !reflect.DeepEqual(*got, c.want) {
+			t.Fatalf("ParseOSSCommand(%q) = %#v, want %#v", c.in, *got, c.want)
+		}
+	}
+}
+
+// TestParseOSSCommand_NormalizesBareBucketListing 锁住 §3.2 的规范化：列举永远按前缀
+// 进行，bucket 根就是前缀 `<bucket>/`。不规范化的话，`object list mybucket` 会派生出
+// 策略串 "object.list mybucket"，而同一个桶下的任何前缀列举派生的都是 "mybucket/..."
+// ——同一件事两种形状，用户写的授权规则只能盖住其中一种。
+func TestParseOSSCommand_NormalizesBareBucketListing(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`object list mybucket`, "mybucket/"},
+		{`object list mybucket/`, "mybucket/"},
+		{`object list mybucket/logs`, "mybucket/logs"},
+		{`object stat mybucket`, "mybucket"}, // 只有 list 归一化
+	}
+	for _, c := range cases {
+		got, err := ParseOSSCommand(c.in)
+		if err != nil {
+			t.Fatalf("ParseOSSCommand(%q) unexpected error: %v", c.in, err)
+		}
+		if got.Target != c.want {
+			t.Fatalf("ParseOSSCommand(%q).Target = %q, want %q", c.in, got.Target, c.want)
+		}
+	}
+}
+
+// TestParseOSSCommand_AcceptsInteriorWhitespaceInTarget 是与 kafka 的有意分歧（决策 D4）：
+// 策略串按**第一段空白**切成两段，所以 key 里的空格不会让分段数出错，而
+// `My Report.pdf` 这类 key 在对象存储里再常见不过——照搬 kafka 的"拒绝一切空白"
+// 会让它们完全不可达。
+func TestParseOSSCommand_AcceptsInteriorWhitespaceInTarget(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`object stat "mybucket/My Report.pdf"`, "mybucket/My Report.pdf"},
+		{`object list "my bucket/2026 reports/"`, "my bucket/2026 reports/"},
+		{"object stat 'mybucket/a\tb'", "mybucket/a\tb"},
+	}
+	for _, c := range cases {
+		got, err := ParseOSSCommand(c.in)
+		if err != nil {
+			t.Fatalf("ParseOSSCommand(%q) unexpected error: %v", c.in, err)
+		}
+		if got.Target != c.want {
+			t.Fatalf("ParseOSSCommand(%q).Target = %q, want %q", c.in, got.Target, c.want)
+		}
+	}
+}
+
+func TestParseOSSCommand_RejectsUnknownFamilyOrVerb(t *testing.T) {
+	cases := []string{
+		`nonsense list`,
+		`object nonsense mybucket/key`,
+		`bucket delete mybucket`,
+		`object`,
+		`bucket`,
+	}
+	for _, in := range cases {
+		if _, err := ParseOSSCommand(in); err == nil {
+			t.Fatalf("ParseOSSCommand(%q) = nil error, want rejection", in)
+		}
+	}
+}
+
+// TestParseOSSCommand_RejectsMissingTarget 锁住 needsTarget 的下界：所有 object verb
+// 都必须取 target。
+func TestParseOSSCommand_RejectsMissingTarget(t *testing.T) {
+	cases := []string{
+		`object list`,
+		`object stat`,
+		`object get --file=/tmp/a`,
+		`object put --file=/tmp/a`,
+		`object copy --to=dst/b`,
+		`object move --to=dst/b`,
+		`object delete`,
+		`object presign --method=get`,
+	}
+	for _, in := range cases {
+		if _, err := ParseOSSCommand(in); err == nil {
+			t.Fatalf("ParseOSSCommand(%q) = nil error, want rejection (verb requires a target)", in)
+		}
+	}
+}
+
+// TestParseOSSCommand_RejectsExtraTarget 锁住上界：`bucket list mybucket` 不静默丢弃
+// 多余的 target（审批弹窗会照原样显示它，执行器却列出全部桶——批准一件事、拿到另一件），
+// `<family> <verb> [target]` 之外的 positional 同理。
+func TestParseOSSCommand_RejectsExtraTarget(t *testing.T) {
+	cases := []string{
+		`bucket list mybucket`,
+		`object stat mybucket/key extra`,
+		`object list mybucket a b`,
+	}
+	for _, in := range cases {
+		if _, err := ParseOSSCommand(in); err == nil {
+			t.Fatalf("ParseOSSCommand(%q) = nil error, want rejection (too many positional arguments)", in)
+		}
+	}
+}
+
+// TestParseOSSCommand_RejectsInvalidTarget 覆盖 §3.2 的形状规则。前导/尾随空白是
+// fail-open 本体：策略串在第一段空白处切开，一个带 padding 的 target 切出来的 resource
+// 与任何规则都对不上——deny 规则跟着一条都匹配不上。NBSP 单列且不加引号：shell 切词
+// 不认它（能一路走进 Target），unicode.IsSpace 认得。
+func TestParseOSSCommand_RejectsInvalidTarget(t *testing.T) {
+	cases := []string{
+		`object stat ''`,
+		`object stat /mybucket/key`,
+		`object stat /`,
+		`object stat ' mybucket/key'`,
+		`object stat 'mybucket/key '`,
+		"object stat mybucket/key\u00a0",
+		"object stat \u00a0mybucket/key",
+		"object list 'mybucket/logs\n'",
+	}
+	for _, in := range cases {
+		if _, err := ParseOSSCommand(in); err == nil {
+			t.Fatalf("ParseOSSCommand(%q) = nil error, want rejection (invalid target shape)", in)
+		}
+	}
+}
+
+// TestParseOSSCommand_RejectsUnknownFlag：多余 flag 静默丢弃意味着审批弹窗上写着
+// `--recursive`、执行器却只删一个对象。
+func TestParseOSSCommand_RejectsUnknownFlag(t *testing.T) {
+	cases := []string{
+		`bucket list --max-keys=10`,
+		`object stat mybucket/key --file=/tmp/a`,
+		`object delete mybucket/key --recursive`,
+		`object list mybucket --max_keys=10`,
+		`object get mybucket/key --expiry=600`,
+		`object presign mybucket/key --file=/tmp/a`,
+	}
+	for _, in := range cases {
+		if _, err := ParseOSSCommand(in); err == nil {
+			t.Fatalf("ParseOSSCommand(%q) = nil error, want rejection (unknown flag)", in)
+		}
+	}
+}
+
+// TestParseOSSCommand_RejectsMissingRequiredFlag：缺了这些 flag 这条命令必然跑不成，
+// 而 copy / move 缺 --to 还会让策略串少一条——弹窗上问的是一件事，检查的是另一件。
+func TestParseOSSCommand_RejectsMissingRequiredFlag(t *testing.T) {
+	cases := []string{
+		`object put mybucket/key`,
+		`object put mybucket/key --content-type=text/plain`,
+		`object copy src/a.txt`,
+		`object move src/a.txt`,
+	}
+	for _, in := range cases {
+		if _, err := ParseOSSCommand(in); err == nil {
+			t.Fatalf("ParseOSSCommand(%q) = nil error, want rejection (required flag missing)", in)
+		}
+	}
+}
+
+// TestParseOSSCommand_RejectsBadFlagValue 把"批准之后必然失败"的调用挡在弹窗之前：
+// 形状校验发生在解析期，也就是权限检查之前。--method 尤其要紧——它选的是
+// object.presign.read 还是 object.presign.write，一个没认出来的值若落回 read
+// 就是静默的 fail-open。
+func TestParseOSSCommand_RejectsBadFlagValue(t *testing.T) {
+	cases := []string{
+		`object list mybucket --max-keys=1,000`,
+		`object list mybucket --max-keys=1e3`,
+		`object get mybucket/key --max-bytes=3.0`,
+		`object presign mybucket/key --expiry=10_000`,
+		`object presign mybucket/key --method=post`,
+		`object presign mybucket/key --method=GET`,
+		`object presign mybucket/key --method`,
+		`object copy src/a --to=/dst/b`,
+		`object copy src/a --to=' dst/b'`,
+		`object move src/a --to=`,
+	}
+	for _, in := range cases {
+		if _, err := ParseOSSCommand(in); err == nil {
+			t.Fatalf("ParseOSSCommand(%q) = nil error, want rejection (invalid flag value)", in)
+		}
+	}
+}
+
+// TestOSSCommand_RoundTrip 是 Parse→Render→Parse 的往返性质：Render 出来的串重新解析
+// 必须得到同一个结构，且再渲染一次逐字节相同（规范化是幂等的）。Render 的输出是审批
+// 弹窗与审计行看到的那一串——它若不能被自己解析回来，用户批准的和执行的就是两条命令。
+func TestOSSCommand_RoundTrip(t *testing.T) {
+	cases := []string{
+		`bucket list`,
+		`object list mybucket`,
+		`object list mybucket/logs/ --max-keys=100 --after=a.txt`,
+		`object stat "mybucket/My Report.pdf"`,
+		`object get mybucket/key.txt --file=/tmp/key.txt --max-bytes=1024`,
+		`object put mybucket/key.txt --file=/tmp/key.txt --content-type=application/json`,
+		`object copy "src/My Report.pdf" --to="dst/My Report.pdf"`,
+		`object move src/a.txt --to=dst/b.txt`,
+		`object delete mybucket/key.txt`,
+		`object presign mybucket/key.txt --expiry=600 --method=put`,
+	}
+	for _, in := range cases {
+		first, err := ParseOSSCommand(in)
+		if err != nil {
+			t.Fatalf("ParseOSSCommand(%q) unexpected error: %v", in, err)
+		}
+		rendered, err := first.Render()
+		if err != nil {
+			t.Fatalf("Render() for %q unexpected error: %v", in, err)
+		}
+		second, err := ParseOSSCommand(rendered)
+		if err != nil {
+			t.Fatalf("ParseOSSCommand(Render(%q)) = error %v (rendered: %s)", in, err, rendered)
+		}
+		if !reflect.DeepEqual(*first, *second) {
+			t.Fatalf("round-trip of %q = %#v, want %#v (rendered: %s)", in, *second, *first, rendered)
+		}
+		again, err := second.Render()
+		if err != nil {
+			t.Fatalf("Render() of re-parsed %q unexpected error: %v", in, err)
+		}
+		if again != rendered {
+			t.Fatalf("Render() is not idempotent for %q: %q then %q", in, rendered, again)
+		}
+	}
+}
+
+// TestOSSCommand_RoundTripNormalizesNilFlags：手工构造（统一 exec 的结构化参数路径）
+// 允许 Flags 为 nil，ParseOSSCommand 永远返回非 nil map，所以往返回来的是空 map。
+func TestOSSCommand_RoundTripNormalizesNilFlags(t *testing.T) {
+	src := OSSCommand{Family: "object", Verb: "stat", Target: "mybucket/key.txt"}
+	rendered, err := src.Render()
+	if err != nil {
+		t.Fatalf("Render(%#v) unexpected error: %v", src, err)
+	}
+	got, err := ParseOSSCommand(rendered)
+	if err != nil {
+		t.Fatalf("ParseOSSCommand(%q) unexpected error: %v", rendered, err)
+	}
+	want := OSSCommand{Family: "object", Verb: "stat", Target: "mybucket/key.txt", Flags: map[string]string{}}
+	if !reflect.DeepEqual(*got, want) {
+		t.Fatalf("round-trip of nil-Flags command = %#v, want %#v", *got, want)
+	}
+}
+
+// TestOSSCommand_RenderRejectsFlagLikeTarget：cmdline.Parse 判断 positional 还是 flag
+// 看的是**剥掉引号之后**的词是否以 "--" 开头，所以加引号救不了。ParseOSSCommand 自己
+// 产不出这种 Target（这种词在切词阶段就被当 flag 吃掉了），但 OSSCommand 是导出结构体。
+func TestOSSCommand_RenderRejectsFlagLikeTarget(t *testing.T) {
+	cases := []OSSCommand{
+		{Family: "object", Verb: "stat", Target: "--file=/etc/passwd"},
+		{Family: "object", Verb: "stat", Target: "--"},
+	}
+	for _, c := range cases {
+		if got, err := c.Render(); err == nil {
+			t.Fatalf("Render(%#v) = %q, nil error; want rejection (target looks like a flag)", c, got)
+		}
+	}
+}
+
+// TestOSSCommand_RenderRejectsUnsafeFlagName：cmdline.Command.Render 明说手写字面量
+// 不受 Parse 的入口校验保护、由调用方保证 flag 名合法——本函数就是那个调用方。
+// `{"cfg=x": "1"}` 渲染成 --cfg=x=1，重新解析回来是 flag "cfg" 值 "x=1"。
+func TestOSSCommand_RenderRejectsUnsafeFlagName(t *testing.T) {
+	cases := []OSSCommand{
+		{Family: "object", Verb: "get", Target: "mybucket/key", Flags: map[string]string{"cfg=x": "1"}},
+		{Family: "object", Verb: "get", Target: "mybucket/key", Flags: map[string]string{"a b": "1"}},
+		{Family: "object", Verb: "get", Target: "mybucket/key", Flags: map[string]string{"": "1"}},
+	}
+	for _, c := range cases {
+		if got, err := c.Render(); err == nil {
+			t.Fatalf("Render(%#v) = %q, nil error; want rejection (flag name does not survive re-parsing)", c, got)
+		}
+	}
+}
+
+// TestOSSCommand_PolicyStrings 是本任务最要紧的测试：右侧的 want 直接抄自设计 §3.3 的
+// 表格，不是"跑一遍看看输出什么"填进来的。copy 派生两条、move 派生三条是核心安全点——
+// 只检查目的地等于放行"把受限对象复制到可读位置再读"这条绕过路径。
+func TestOSSCommand_PolicyStrings(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{`bucket list`, []string{"bucket.list *"}},
+		{`object list mybucket`, []string{"object.list mybucket/"}},
+		{`object list mybucket/logs/`, []string{"object.list mybucket/logs/"}},
+		{`object stat mybucket/key.txt`, []string{"object.read mybucket/key.txt"}},
+		{`object get mybucket/key.txt`, []string{"object.read mybucket/key.txt"}},
+		{`object put mybucket/key.txt --file=/tmp/a`, []string{"object.write mybucket/key.txt"}},
+		{`object copy src/a.txt --to=dst/b.txt`,
+			[]string{"object.read src/a.txt", "object.write dst/b.txt"}},
+		{`object move src/a.txt --to=dst/b.txt`,
+			[]string{"object.read src/a.txt", "object.write dst/b.txt", "object.delete src/a.txt"}},
+		{`object delete mybucket/key.txt`, []string{"object.delete mybucket/key.txt"}},
+		{`object presign mybucket/key.txt`, []string{"object.presign.read mybucket/key.txt"}},
+		{`object presign mybucket/key.txt --method=get`, []string{"object.presign.read mybucket/key.txt"}},
+		{`object presign mybucket/key.txt --method=put`, []string{"object.presign.write mybucket/key.txt"}},
+		{`object stat "mybucket/My Report.pdf"`, []string{"object.read mybucket/My Report.pdf"}},
+	}
+	for _, c := range cases {
+		parsed, err := ParseOSSCommand(c.in)
+		if err != nil {
+			t.Fatalf("ParseOSSCommand(%q) unexpected error: %v", c.in, err)
+		}
+		got, err := parsed.PolicyStrings()
+		if err != nil {
+			t.Fatalf("PolicyStrings() for %q unexpected error: %v", c.in, err)
+		}
+		if !slices.Equal(got, c.want) {
+			t.Fatalf("PolicyStrings() for %q = %q, want %q — a mismatch here silently fails the deny list open",
+				c.in, got, c.want)
+		}
+		for _, s := range got {
+			assertTwoSegmentOSSPolicyString(t, c.in, s)
+		}
+	}
+}
+
+// TestOSSCommand_PolicyStringsCoversEveryVerb 把 ossVerbs 与策略串派生这两份独立维护的
+// 清单钉在一起：表里多写一个派生不出策略串的 verb，症状是命令解析通过、策略串却拿不到,
+// 统一 exec 下该操作直接不可达。9 是设计 §3.1 列出的命令条数。
+func TestOSSCommand_PolicyStringsCoversEveryVerb(t *testing.T) {
+	total := 0
+	for family, verbs := range ossVerbs {
+		for verb, needsTarget := range verbs {
+			total++
+			c := &OSSCommand{Family: family, Verb: verb, Flags: map[string]string{}}
+			if needsTarget {
+				c.Target = "mybucket/key"
+			}
+			if verb == "copy" || verb == "move" {
+				c.Flags["to"] = "dst/key"
+			}
+			got, err := c.PolicyStrings()
+			if err != nil {
+				t.Fatalf("PolicyStrings() for %q %q unexpected error: %v", family, verb, err)
+			}
+			if len(got) == 0 {
+				t.Fatalf("PolicyStrings() for %q %q = empty; every command must be matched against at least one rule", family, verb)
+			}
+			for _, s := range got {
+				assertTwoSegmentOSSPolicyString(t, family+" "+verb, s)
+			}
+		}
+	}
+	if total != 9 {
+		t.Fatalf("ossVerbs has %d commands, want 9 (design §3.1 lists exactly nine)", total)
+	}
+}
+
+// TestOSSCommand_PolicyStringsRejectsUnsplittableResource 覆盖 ParseOSSCommand 够不到的
+// 那条路：OSSCommand 是导出结构体，可以被结构化参数直接构造、绕开解析期的 target 校验。
+// 后置条件是那条缝上唯一的守卫，而这条缝破了是**静默**的——分不出两段时匹配器对任何
+// 规则都返回 false，deny 规则一条都不匹配（fail-open）。
+func TestOSSCommand_PolicyStringsRejectsUnsplittableResource(t *testing.T) {
+	cases := []OSSCommand{
+		{Family: "object", Verb: "stat", Target: " mybucket/key"},
+		{Family: "object", Verb: "stat", Target: "mybucket/key "},
+		{Family: "object", Verb: "stat", Target: "mybucket/key\u00a0"},
+		{Family: "object", Verb: "delete", Target: ""},
+		{Family: "object", Verb: "copy", Target: "src/a"},
+		{Family: "object", Verb: "move", Target: "src/a", Flags: map[string]string{"to": " dst/b"}},
+		{Family: "object", Verb: "presign", Target: "b/k", Flags: map[string]string{"method": "post"}},
+		{Family: "object", Verb: "nonsense", Target: "b/k"},
+	}
+	for _, c := range cases {
+		if got, err := c.PolicyStrings(); err == nil {
+			t.Fatalf("PolicyStrings(%#v) = %q, nil error; want rejection (result would match no rule at all)", c, got)
+		}
+	}
+}
+
+// assertTwoSegmentOSSPolicyString 断言策略串能被"在第一段空白处切开"这条规则切成
+// 恰好两段：action 不含空白，resource 非空且没有前导/尾随空白（interior 空白是允许的，
+// 见决策 D4）。
+func assertTwoSegmentOSSPolicyString(t *testing.T, in, s string) {
+	t.Helper()
+	action, resource, found := strings.Cut(s, " ")
+	if !found || action == "" || strings.ContainsFunc(action, unicode.IsSpace) {
+		t.Fatalf("policy string %q from %q has no <action> segment", s, in)
+	}
+	if resource == "" || strings.TrimSpace(resource) != resource {
+		t.Fatalf("policy string %q from %q has a padded or empty <resource> segment", s, in)
+	}
+}
