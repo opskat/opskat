@@ -53,3 +53,6 @@ e2e/scratch/*
 docs/verification/
 # 本地真机验证目标（真实 host / 密钥路径）不提交，仅保留 .env.example 模板，见 docs/references/e2e-harness-guide.md §6
 .env
+
+# dev-kit 工作文件（plan / artifacts），不提交
+.dev-kit/
