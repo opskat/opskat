@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/oss_svc"
@@ -402,13 +403,16 @@ func TestOSSTransfer_WriteAndOpenReadRoundTrip(t *testing.T) {
 	}
 }
 
-// 读写两端都必须指名一个对象：桶名单独一个、或以 "/" 收尾的路径是前缀。形态错的路径
-// 必须在**够到服务端之前**就失败——空 key 的读注定失败（"批准之后必然失败"的调用），
-// 而以 "/" 收尾的写会凭空造出一个零字节的"文件夹"标记。
+// 读写两端都必须指名一个对象：桶名单独一个、或以 "/" 收尾的路径是前缀，桶段带通配的
+// 路径根本没指名哪个桶。形态错的路径必须在**够到服务端之前**就失败——空 key 的读注定
+// 失败（"批准之后必然失败"的调用），而以 "/" 收尾的写会凭空造出一个零字节的"文件夹"标记。
+//
+// key 段里的元字符**不**在此列：`dist/*` 展开出来的 `dist/a[1].js` 是一个货真价实的
+// 对象 key（path.Match 只把模式侧的元字符当通配），拒了它就是递归展开传不动自己列出来的东西。
 func TestOSSTransfer_ReadWriteRequireAnObjectPath(t *testing.T) {
 	ctx := context.Background()
 
-	for _, p := range []string{"", "/", "/mybucket", "/mybucket/", "/mybucket/logs/"} {
+	for _, p := range []string{"", "/", "/mybucket", "/mybucket/", "/mybucket/logs/", "/*/logs/app.log"} {
 		adapter, fake, asset := newOSSTest(map[string]string{"logs/app.log": "hello"})
 
 		if _, _, err := adapter.OpenRead(ctx, asset, p); err == nil {
@@ -441,10 +445,12 @@ func TestOSSTransfer_ApprovalSubject(t *testing.T) {
 		{"list a prefix without its trailing slash", "/mybucket/logs", DirList, "object.list mybucket/logs/"},
 		{"list a glob is listing its base", "/mybucket/dist/*.js", DirList, "object.list mybucket/dist/"},
 		{"list a whole bucket", "/mybucket", DirList, "object.list mybucket/"},
-		// 目的地写成一个桶名是形态错误，Write 会报错；但主体是在那之前生成的，
-		// 它绝不能是 "object.write mybucket"——那按规则读是**整桶可写**（§3.4 决策 D5），
-		// 用户点一次"始终允许"就换来一条整桶写授权。前缀形态的资源不落 grant（§4.3）。
-		{"a keyless destination stays prefix-shaped", "/mybucket", DirWrite, "object.write mybucket/"},
+		// 目的地写成一个桶名是形态错误，Write 会报错；但主体是在那之前生成的。它既不能是
+		// "object.write mybucket" 也不能是 "object.write mybucket/"——按 D5 这两种写法
+		// 等价，都是**整桶可写**。资源退回原样路径，切不出桶名，因此谁也授权不了；
+		// 覆盖范围本身由 TestOSSTransfer_ApprovalSubjectNeverOutgrowsItsPath 咬住。
+		{"a keyless destination names no object", "/mybucket", DirWrite, "object.write /mybucket"},
+		{"a glob in the bucket segment names no bucket", "/*/logs/app.log", DirRead, "object.read /*/logs/app.log"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -463,6 +469,82 @@ func TestOSSTransfer_ApprovalSubject(t *testing.T) {
 			}
 		})
 	}
+}
+
+// 主体当规则读时，绝不能覆盖它描述的那一条传输之外的东西。
+//
+// 这不是形式检查，而是这个接口唯一的安全后置条件。主体串会**原样落成常驻 grant**：
+// permission.ossGrantPatterns 对已经是策略串形状的输入不做 §4.3 的前缀丢弃（那条丢弃只
+// 管从 DSL 派生出来的串），于是 ApprovalSubject 交出什么就落库什么。而同一个串当规则读时，
+// 桶名后为空——光桶名或以 "/" 收尾——意味着整桶任意深度（决策 D5，两种写法等价），
+// key 段里的 "*" 是通配。目的端路径不经过 List，因此形态错误的目的地直接到这里：
+// `cp ./a.txt s3:/mybucket` 一旦被点"始终允许"，换来的就是一条整桶可写的常驻授权。
+//
+// 参与比对的是两个独立来源：本适配器给出的主体，与 policy.MatchOSSRule 的规则语义。
+func TestOSSTransfer_ApprovalSubjectNeverOutgrowsItsPath(t *testing.T) {
+	// 一组形态良好的策略串，用来反问一条 grant"你还授权了什么"。
+	probe := []string{
+		"object.read mybucket/other.txt",
+		"object.write mybucket/other.txt",
+		"object.read mybucket/secrets/key.pem",
+		"object.write mybucket/secrets/key.pem",
+		"object.read mybucket/logs/other/deep.log",
+		"object.write mybucket/logs/other/deep.log",
+		"object.list mybucket/secrets/",
+		"object.read otherbucket/logs/app.log",
+		"object.write otherbucket/logs/app.log",
+		"object.list otherbucket/logs/",
+	}
+	assertGrantsNothingElse := func(t *testing.T, subject string) []string {
+		t.Helper()
+		patterns := permission.NormalizeGrantPatterns(asset_entity.AssetTypeOSS, subject)
+		for _, pattern := range patterns {
+			for _, other := range probe {
+				if policy.MatchOSSRule(pattern, other) {
+					t.Errorf("subject %q lands as grant %q, which also authorizes %q", subject, pattern, other)
+				}
+			}
+		}
+		return patterns
+	}
+
+	// 形态错误的路径读写不出任何字节（OpenRead / Write 都报错），所以它的主体一条授权
+	// 都不该换来。这些路径全都到不了 List，只能是调用方直接拼出来的目的地。
+	for _, tt := range []struct {
+		name string
+		path string
+		dir  Direction
+	}{
+		{"a bare bucket destination", "/mybucket", DirWrite},
+		{"a trailing-slash destination", "/mybucket/logs/", DirWrite},
+		{"a glob in the destination bucket segment", "/*/logs/app.log", DirWrite},
+		{"a bare bucket source", "/mybucket", DirRead},
+		{"a glob in the listed bucket segment", "/*/logs/", DirList},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, subject := ossTransfer.ApprovalSubject(tt.path, tt.dir)
+			assertGrantsNothingElse(t, subject)
+		})
+	}
+
+	// 反过来，指名一个对象时授权照落——否则"什么都不授权"是个廉价的通过方式。
+	t.Run("a named object still grants exactly itself", func(t *testing.T) {
+		_, subject := ossTransfer.ApprovalSubject("/mybucket/logs/app.log", DirWrite)
+		patterns := assertGrantsNothingElse(t, subject)
+		if len(patterns) != 1 || !policy.MatchOSSRule(patterns[0], "object.write mybucket/logs/app.log") {
+			t.Fatalf("grants = %v, want exactly one authorizing the transferred object", patterns)
+		}
+	})
+
+	// 展开授权的范围本来就是一个前缀（D18），它落成的 grant 覆盖该前缀下任意深度是对的，
+	// 但不能越出那个前缀。
+	t.Run("listing a prefix grants that prefix and no other", func(t *testing.T) {
+		_, subject := ossTransfer.ApprovalSubject("/mybucket/logs/", DirList)
+		patterns := assertGrantsNothingElse(t, subject)
+		if len(patterns) != 1 || !policy.MatchOSSRule(patterns[0], "object.list mybucket/logs/sub/deep/") {
+			t.Fatalf("grants = %v, want exactly one covering the enumerated prefix", patterns)
+		}
+	})
 }
 
 // oss 资产必须能在注册表里查到传输适配器，否则 cp 的九种组合里带 oss 的那五种全都够不着。

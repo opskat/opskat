@@ -224,23 +224,46 @@ func (a ossAdapter) Write(
 // `object get` / `object put` / `object list` 时派生的串逐字节相同——两条入口的授权
 // 因此互相复用（spec §6.2「逐端点审批」）。类型取 asset_entity.AssetTypeOSS，
 // 即 permission 那张表里 oss 的登记名：它同时是权限检查的分派键与 grant 的 tool_name。
-//
-// 资源段恒为 bucket + "/" + key，缺 key 时落成前缀形态的 "object.write mybucket/"
-// 而不是 "object.write mybucket"：后者按规则读是**整桶可写**（§3.4 决策 D5），
-// 用户点一次"始终允许"就换来一条整桶写授权，而前缀形态的资源根本不落 grant（§4.3）。
-// 形态错误本身由 Write / OpenRead 报出来——这个接口不能报错，但它绝不能因此
-// 交出一个比实际操作更宽的主体。
 func (ossAdapter) ApprovalSubject(p string, dir Direction) (string, string) {
-	bucket, key := cutOSSPath(p)
+	action := "object.read"
 	switch dir {
 	case DirWrite:
-		return asset_entity.AssetTypeOSS, "object.write " + bucket + "/" + key
+		action = "object.write"
 	case DirList:
-		// 授权的范围与真正会被列举的范围是同一个前缀，所以走 List 用的那一个函数。
-		return asset_entity.AssetTypeOSS, "object.list " + bucket + "/" + ossListPrefix(key)
+		action = "object.list"
 	}
 	// 余下的是 DirRead。新增方向时必须在上面补一条 case，否则它会被当成读。
-	return asset_entity.AssetTypeOSS, "object.read " + bucket + "/" + key
+	return asset_entity.AssetTypeOSS, action + " " + ossSubjectResource(p, dir)
+}
+
+// ossSubjectResource 给出审批主体的资源段，它有一条硬后置条件：
+// **这个资源当规则读时，绝不能覆盖这一端点之外的东西。**
+//
+// 主体串会原样落成常驻授权——permission.ossGrantPatterns 的前缀丢弃（§4.3 / D20）只管
+// 从 DSL 派生出来的串，已经是策略串形状的输入照原样落库。而按 policy.MatchOSSRule 的
+// 规则语义，桶段后为空（光桶名**或**以 "/" 收尾，D5 说这两种写法等价）就是整桶任意深度，
+// 桶段里的 "*" 是跨桶通配。目的端路径不经过 List，所以形态错误的目的地直接到这里：
+// `cp ./a.txt s3:/mybucket` 一旦被点"始终允许"，换来的就是一条整桶可写的常驻授权。
+//
+// 因此形态合法时资源是 <bucket>/<key>（列举方向取真正会被列举的那个前缀）；形态不合法时
+// 退回**原样路径并强制带前导 "/"**——这样的资源切出来的桶段是空串，既匹配不上任何桶范围的
+// 规则，自己当规则也匹配不上任何真实资源，落库也授权不了什么，而用户在弹窗里看到的仍是他
+// 自己写的那个路径。这个接口不能报错（形态错误由 List / OpenRead / Write 各自报出来），
+// 但它绝不能因此交出一个比实际操作更宽的主体。
+//
+// key 段里的元字符不在此列：`dist/*` 展开出来的 `dist/a[1].js` 是货真价实的对象 key，
+// 而它派生的规则确实会多匹配上 `dist/a1.js`——那是 §3.4 的规则语法没有转义写法所致，
+// exec 的 `object get 'dist/a[1].js'` 派生出的策略串一模一样，不是这一层能收住的。
+func ossSubjectResource(p string, dir Direction) string {
+	if dir == DirList {
+		// 授权的范围与真正会被列举的范围是同一个前缀，所以走 List 用的那一个函数。
+		if bucket, key, err := splitOSSEndpointPath(p); err == nil {
+			return bucket + "/" + ossListPrefix(key)
+		}
+	} else if bucket, key, err := splitOSSObjectPath(p); err == nil {
+		return bucket + "/" + key
+	}
+	return "/" + strings.TrimPrefix(p, "/")
 }
 
 // cutOSSPath 把端点路径切成 (bucket, key)：剥掉前导 "/" 再按第一个 "/" 切。
