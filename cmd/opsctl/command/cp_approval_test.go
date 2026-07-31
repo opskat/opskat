@@ -14,9 +14,11 @@ import (
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
+	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
+	"github.com/opskat/opskat/internal/repository/group_repo"
 	"github.com/opskat/opskat/internal/sshpool"
 
 	. "github.com/smartystreets/goconvey/convey"
@@ -233,6 +235,54 @@ func TestCmdCpDirectAuditIsSingleAndConsistent(t *testing.T) {
 			require.Equal(t, "opsctl-cp-direct", entry.SessionID)
 		})
 	}
+}
+
+// parseRemotePathCtx 必须继续走 opsctl 自己的 resolveAsset（resolve.go）：只有它支持
+// "组路径/名称" 消歧。共享解析器共享的是 "<asset>:<path>" 语法，不是引用解析策略——AI 侧的
+// assetref.Resolve 只按 name = ? 精确匹配，把 opsctl 换过去会让
+// "production/web-01:/etc/hosts" 解析不出资产。
+func TestParseRemotePathCtxResolvesGroupPath(t *testing.T) {
+	Convey("parseRemotePathCtx 解析组路径限定的资产", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+		mockAsset.EXPECT().List(gomock.Any(), gomock.Any()).Return([]*asset_entity.Asset{
+			{ID: 1, Name: "web-01", GroupID: 10, Type: asset_entity.AssetTypeSSH},
+			{ID: 2, Name: "web-01", GroupID: 20, Type: asset_entity.AssetTypeSSH},
+		}, nil).AnyTimes()
+		origAsset := asset_repo.Asset()
+		asset_repo.RegisterAsset(mockAsset)
+		defer asset_repo.RegisterAsset(origAsset)
+
+		origGroup := group_repo.Group()
+		group_repo.RegisterGroup(&resolveGroupRepoStub{groups: []*group_entity.Group{
+			{ID: 10, Name: "production"},
+			{ID: 20, Name: "staging"},
+		}})
+		defer group_repo.RegisterGroup(origGroup)
+
+		Convey("组路径选中该分组下的那一台", func() {
+			id, path, err := parseRemotePathCtx(context.Background(), "production/web-01:/etc/hosts")
+
+			So(err, ShouldBeNil)
+			So(id, ShouldEqual, int64(1))
+			So(path, ShouldEqual, "/etc/hosts")
+		})
+
+		Convey("裸名字命中多个分组时报歧义，不静默挑一台", func() {
+			_, _, err := parseRemotePathCtx(context.Background(), "web-01:/etc/hosts")
+
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "ambiguous")
+		})
+
+		Convey("D15 守卫对注入的解析器同样生效：缺前导 / 且前缀是资产时报错", func() {
+			_, _, err := parseRemotePathCtx(context.Background(), "production/web-01:etc/hosts")
+
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "production/web-01:/<path>")
+		})
+	})
 }
 
 func TestBuildCpAuditArgsIncludesBothRemoteAssets(t *testing.T) {
