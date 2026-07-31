@@ -448,7 +448,7 @@
     "ossPolicyDenyList": "拒绝列表（始终拒绝执行）",
     "ossPolicyHint": "未列出的对象存储操作将请求用户确认后执行；规则支持使用 * 通配，只写桶名或以 / 结尾会匹配该前缀下的任意对象，配置范围较宽的规则时请谨慎。",
     "ossPolicyPlaceholder": "输入操作/资源规则，如: object.read mybucket/logs/",
-    "policyTestOSSPlaceholder": "输入待测试的策略串，如: object.read mybucket/logs/",
+    "policyTestOSSPlaceholder": "输入对象存储操作测试，如: object.read mybucket/logs/",
     "k8sKubeconfigProvided": "已提供 kubeconfig",
     "k8sNamespace": "命名空间",
     "k8sContext": "Context",
@@ -674,7 +674,7 @@
         },
         "oss-readonly": {
           "name": "对象存储只读",
-          "desc": "允许列出桶与读取对象"
+          "desc": "允许列出桶与对象、读取对象内容"
         },
         "oss-dangerous-deny": {
           "name": "对象存储高危拒绝",

@@ -448,7 +448,7 @@
     "ossPolicyDenyList": "Deny List (always reject)",
     "ossPolicyHint": "Object storage operations not listed will require user confirmation. Rules support * wildcards; a bucket name alone or a trailing / matches every key under that prefix, so configure broad patterns carefully.",
     "ossPolicyPlaceholder": "Add action/resource rules, e.g. object.read mybucket/logs/",
-    "policyTestOSSPlaceholder": "Type a policy string to test, e.g. object.read mybucket/logs/",
+    "policyTestOSSPlaceholder": "Type an object storage operation to test, e.g. object.read mybucket/logs/",
     "k8sKubeconfigProvided": "Kubeconfig provided",
     "k8sNamespace": "Namespace",
     "k8sContext": "Context",
@@ -674,7 +674,7 @@
         },
         "oss-readonly": {
           "name": "Object Storage Read-Only",
-          "desc": "Allow listing buckets and reading objects"
+          "desc": "Allow listing buckets and objects, and reading object content"
         },
         "oss-dangerous-deny": {
           "name": "Object Storage Dangerous Deny",

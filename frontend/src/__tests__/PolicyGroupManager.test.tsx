@@ -19,17 +19,22 @@ describe("PolicyGroupManager OSS support", () => {
     expect(await screen.findByText("asset.typeOSS")).toBeInTheDocument();
   });
 
-  it("creating a group under the OSS tab uses the allow/deny object-list shape, not the SQL query shape", async () => {
-    render(<PolicyGroupManager open onOpenChange={() => {}} initialTab="oss" />);
-    await screen.findByText("asset.typeOSS");
+  // react-i18next is mocked to identity, so the rendered label text equals the i18n key asked for.
+  // The three rows cover the whole policyType→label lookup: the new entry (oss), the pre-existing
+  // per-type entry the lookup replaced a ternary for (kafka), and the generic fallback every other
+  // list-shaped tab still uses (command). Any of them regresses if the table is edited carelessly;
+  // "oss" additionally fails if the tab were given the query shape (allow_types/deny_types, which
+  // has no *PolicyAllowList label at all).
+  it.each([
+    ["oss", "asset.ossPolicyAllowList", "asset.ossPolicyDenyList"],
+    ["kafka", "asset.kafkaPolicyAllowList", "asset.kafkaPolicyDenyList"],
+    ["command", "asset.cmdPolicyAllowList", "asset.cmdPolicyDenyList"],
+  ])("creating a group under the %s tab uses that type's allow/deny labels", async (tab, allowLabel, denyLabel) => {
+    render(<PolicyGroupManager open onOpenChange={() => {}} initialTab={tab} />);
 
-    fireEvent.click(screen.getByText("asset.policyGroup.create"));
+    fireEvent.click(await screen.findByText("asset.policyGroup.create"));
 
-    // react-i18next is mocked to identity, so the label text equals the i18n key requested —
-    // this fails both if the OSS tab falls back to the generic "cmdPolicy*" labels (pre-fix
-    // ternary only special-cased "kafka") and if it were wrongly given the query shape
-    // (allow_types/deny_types, which has no *PolicyAllowList label at all).
-    expect(screen.getByText("asset.ossPolicyAllowList")).toBeInTheDocument();
-    expect(screen.getByText("asset.ossPolicyDenyList")).toBeInTheDocument();
+    expect(screen.getByText(allowLabel)).toBeInTheDocument();
+    expect(screen.getByText(denyLabel)).toBeInTheDocument();
   });
 });
