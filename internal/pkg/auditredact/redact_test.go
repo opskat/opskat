@@ -41,8 +41,8 @@ func TestTextRedactsCommonCredentialForms(t *testing.T) {
 
 func TestTextRedactsAWSPresignedURLQueryParameters(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
+		name       string
+		input      string
 		shouldHide []string // sensitive values that should be redacted
 		shouldShow []string // non-sensitive parts that should be preserved
 	}{
@@ -54,8 +54,8 @@ func TestTextRedactsAWSPresignedURLQueryParameters(t *testing.T) {
 		},
 		{
 			name:       "SigV4 with X-Amz-Credential",
-			input:      "https://s3.amazonaws.com/bucket/key?X-Amz-Credential=AKIAIOSFODNN7EXAMPLE/20260731/us-east-1/s3/aws4_request&X-Amz-Date=20260731T120000Z",
-			shouldHide: []string{"AKIAIOSFODNN7EXAMPLE/20260731/us-east-1/s3/aws4_request"},
+			input:      "https://s3.amazonaws.com/bucket/key?X-Amz-Credential=AKIAEXAMPLE/20260731/us-east-1/s3/aws4_request&X-Amz-Date=20260731T120000Z",
+			shouldHide: []string{"AKIAEXAMPLE/20260731/us-east-1/s3/aws4_request"},
 			shouldShow: []string{"https://s3.amazonaws.com/bucket/key", "X-Amz-Credential", "X-Amz-Date=20260731T120000Z"},
 		},
 		{
@@ -72,14 +72,14 @@ func TestTextRedactsAWSPresignedURLQueryParameters(t *testing.T) {
 		},
 		{
 			name:       "Legacy V2 with Signature",
-			input:      "https://s3.amazonaws.com/bucket/key?AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE&Signature=v2sig123&Expires=1234567890",
-			shouldHide: []string{"v2sig123", "AKIAIOSFODNN7EXAMPLE"},
+			input:      "https://s3.amazonaws.com/bucket/key?AWSAccessKeyId=AKIAEXAMPLE&Signature=v2sig123&Expires=1234567890",
+			shouldHide: []string{"v2sig123", "AKIAEXAMPLE"},
 			shouldShow: []string{"https://s3.amazonaws.com/bucket/key", "AWSAccessKeyId", "Signature", "Expires=1234567890"},
 		},
 		{
 			name:       "Legacy V2 with AWSAccessKeyId only",
-			input:      "https://s3.amazonaws.com/bucket/key?AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE&Expires=1234567890",
-			shouldHide: []string{}, // AWSAccessKeyId value itself should be redacted
+			input:      "https://s3.amazonaws.com/bucket/key?AWSAccessKeyId=AKIAEXAMPLE&Expires=1234567890",
+			shouldHide: []string{"AKIAEXAMPLE"}, // AWSAccessKeyId value itself should be redacted
 			shouldShow: []string{"https://s3.amazonaws.com/bucket/key", "AWSAccessKeyId", "Expires=1234567890"},
 		},
 		{
