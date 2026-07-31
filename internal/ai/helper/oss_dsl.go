@@ -25,17 +25,39 @@ type OSSCommand struct {
 	Flags  map[string]string
 }
 
-// ossVerbs 列出每个 family 支持的 verb，以及该 verb 是否需要 target。
+// ossTargetKind 是一个 verb 的 target 形态（设计 §3.1 的语法）。
 //
-// `bucket list` 是唯一不取 target 的命令：其余全部 object verb 都作用在一个具体的
-// bucket/key（或 list 的 bucket/prefix）上。
-var ossVerbs = map[string]map[string]bool{
+// 三态而不是"需不需要 target"的 bool：key 能不能省不是形式问题。派生串会原样成为
+// grant 规则（§4.3），而规则侧 key 为空表示"该桶下任意深度的任意 key"（决策 D5），
+// 于是一个省掉 key 的单对象命令会把一次单对象授权落成整桶授权——详见 validateOSSObjectKey。
+type ossTargetKind int
+
+const (
+	// ossNoTarget：不取 target，`bucket list` 是唯一一个。
+	ossNoTarget ossTargetKind = iota
+	// ossPrefixTarget：`<bucket>[/<prefix>]`，只有 `object list`——列举本来就是前缀操作。
+	ossPrefixTarget
+	// ossObjectTarget：`<bucket>/<key>`，key 必须非空；其余全部 object verb 都作用在一个具体对象上。
+	ossObjectTarget
+)
+
+// syntax 是报错里给模型看的 target 形态。
+func (k ossTargetKind) syntax() string {
+	if k == ossPrefixTarget {
+		return "<bucket>[/<prefix>]"
+	}
+	return "<bucket>/<key>"
+}
+
+// ossVerbs 列出每个 family 支持的 verb 与它的 target 形态。
+var ossVerbs = map[string]map[string]ossTargetKind{
 	"bucket": {
-		"list": false,
+		"list": ossNoTarget,
 	},
 	"object": {
-		"list": true, "stat": true, "get": true, "put": true,
-		"copy": true, "move": true, "delete": true, "presign": true,
+		"list": ossPrefixTarget, "stat": ossObjectTarget, "get": ossObjectTarget,
+		"put": ossObjectTarget, "copy": ossObjectTarget, "move": ossObjectTarget,
+		"delete": ossObjectTarget, "presign": ossObjectTarget,
 	},
 }
 
@@ -57,7 +79,7 @@ func ParseOSSCommand(s string) (*OSSCommand, error) {
 	}
 
 	verb := parsed.Args[0]
-	needsTarget, ok := verbs[verb]
+	kind, ok := verbs[verb]
 	if !ok {
 		return nil, fmt.Errorf("unknown verb %q for %q; supported: %s",
 			verb, parsed.Verb, strings.Join(slices.Sorted(maps.Keys(verbs)), ", "))
@@ -68,26 +90,30 @@ func ParseOSSCommand(s string) (*OSSCommand, error) {
 
 	c := &OSSCommand{Family: parsed.Verb, Verb: verb, Flags: parsed.Flags}
 	if len(parsed.Args) == 2 {
-		// needsTarget 既是下界也是上界：`bucket list mybucket`（模型想说"列这个桶里的
+		// target 的有无既是下界也是上界：`bucket list mybucket`（模型想说"列这个桶里的
 		// 对象"）只当下界用的话会解析通过、审批弹窗照原样显示，执行器却把多出来的桶名
 		// 丢掉、列出全部桶——批准一件事、拿到另一件。
-		if !needsTarget {
+		if kind == ossNoTarget {
 			return nil, fmt.Errorf("verb %q takes no target, got %q; use: %s %s", verb, parsed.Args[1], c.Family, verb)
 		}
 		c.Target = parsed.Args[1]
 	}
-	if needsTarget {
+	if kind != ossNoTarget {
 		if c.Target == "" {
-			return nil, fmt.Errorf("verb %q requires a target: %s %s <bucket>[/<key>]", verb, c.Family, verb)
+			return nil, fmt.Errorf("verb %q requires a target: %s %s %s", verb, c.Family, verb, kind.syntax())
 		}
-		if err := validateOSSResourceRef(c.Target); err != nil {
+		check := validateOSSResourceRef
+		if kind == ossObjectTarget {
+			check = validateOSSObjectRef
+		}
+		if err := check(c.Target); err != nil {
 			return nil, fmt.Errorf("invalid target: %w", err)
 		}
 	}
 	// 列举永远按前缀进行，bucket 根就是前缀 `<bucket>/`：归一化让"整桶授权"的规则形态
 	// （`object.list mybucket/`）与列举命令自洽，否则同一个桶的根与其下任意前缀会派生出
 	// 两种形状的策略串，一条规则盖不住。
-	if c.Family == "object" && c.Verb == "list" && !strings.Contains(c.Target, "/") {
+	if kind == ossPrefixTarget && !strings.Contains(c.Target, "/") {
 		c.Target += "/"
 	}
 	if err := validateOSSFlags(c); err != nil {
@@ -122,6 +148,33 @@ func validateOSSResourceRef(ref string) error {
 		return fmt.Errorf("%q cannot have leading or trailing whitespace: permission rules are matched after splitting \"<action> <resource>\" at its first whitespace, so a padded name cannot be authorized at all (a key may contain interior spaces)", ref)
 	}
 	return nil
+}
+
+// validateOSSObjectKey 要求引用**指名一个对象**：形如 `<bucket>/<key>` 且 key 非空。
+// 单对象 verb 的 target 与 copy / move 的 `--to` 都要过它（§3.1 的语法；§3.3 写明
+// resource 段为 `<bucket>/<key>`）。调用方先过 validateOSSResourceRef 做形状校验。
+//
+// 不是形式主义：派生串既是被匹配的命令，也会**原样成为规则**——§4.3 的 ossGrantPatterns
+// 把 PolicyStrings() 直接存成 grant，而 policy.MatchOSSRule 里规则侧 key 为空（只写桶名，
+// 或以 "/" 收尾）表示"该桶下任意深度的任意 key"（决策 D5，
+// internal/ai/policy/oss_policy.go:88-90）。于是 `object stat mybucket/` 派生出
+// "object.read mybucket/"：用户在审批弹窗上批准的是一个对象，选一次 "allow all"
+// 落库的却是整桶可读的常驻 grant。空 key 在对象存储里也没有任何合法用途
+// （StatObject 的 key 为空必然报错），属于"批准之后必然失败"的调用，要在弹窗之前失败。
+func validateOSSObjectKey(ref string) error {
+	bucket, key, ok := strings.Cut(ref, "/")
+	if !ok || bucket == "" || key == "" {
+		return fmt.Errorf("%q must name a single object as <bucket>/<key> with a non-empty key: a keyless resource authorizes every object in the bucket", ref)
+	}
+	return nil
+}
+
+// validateOSSObjectRef 是 `--to` 这类"第二个资源引用"的完整校验：形状 + 指名一个对象。
+func validateOSSObjectRef(ref string) error {
+	if err := validateOSSResourceRef(ref); err != nil {
+		return err
+	}
+	return validateOSSObjectKey(ref)
 }
 
 // ossFlagCheck 校验单个 flag 值的形状；nil 表示自由文本。
@@ -169,10 +222,11 @@ var ossFlagRules = map[string]map[string]ossFlagSpec{
 		"stat": {},
 		"get":  {optional: ossFlags{"file": ossText, "max-bytes": kafkaInt}},
 		"put":  {required: ossFlags{"file": ossText}, optional: ossFlags{"content-type": ossText}},
-		// --to 是第二个资源引用，与 target 同规：它会原样成为 object.write 那条策略串的
-		// resource 段。
-		"copy":    {required: ossFlags{"to": validateOSSResourceRef}},
-		"move":    {required: ossFlags{"to": validateOSSResourceRef}},
+		// --to 是第二个资源引用，与单对象 verb 的 target 同规：它会原样成为 object.write
+		// 那条策略串的 resource 段，所以同样必须指名一个对象——`--to=dst` 派生出的
+		// "object.write dst" 当规则用是整桶可写。
+		"copy":    {required: ossFlags{"to": validateOSSObjectRef}},
+		"move":    {required: ossFlags{"to": validateOSSObjectRef}},
 		"delete":  {},
 		"presign": {optional: ossFlags{"expiry": kafkaInt, "method": ossPresignMethod}},
 	},
@@ -290,15 +344,28 @@ func (c *OSSCommand) PolicyStrings() ([]string, error) {
 			a.resource == "" || strings.TrimSpace(a.resource) != a.resource {
 			return nil, fmt.Errorf("oss permission command %q does not split into exactly two segments \"<action> <resource>\": it would match no policy rule at all (neither allow nor deny)", s)
 		}
+		// 第二条后置条件，与两段性同源、方向相反：单对象操作的 resource 必须指名一个对象。
+		// 切不出两段是 fail-open 到"匹配不上任何规则"，桶级的 resource 则是 fail-open 到
+		// "匹配上整个桶"——派生串会原样落成 grant 规则（§4.3），规则侧空 key 表示该桶下
+		// 任意深度（决策 D5）。同样是 ParseOSSCommand 够不到的那条缝（结构化参数直接
+		// 构造 OSSCommand）上的唯一守卫。
+		if !a.prefix {
+			if err := validateOSSObjectKey(a.resource); err != nil {
+				return nil, fmt.Errorf("oss permission command %q does not name a single object: %w", s, err)
+			}
+		}
 		out = append(out, s)
 	}
 	return out, nil
 }
 
 // ossPolicyAction 是一条策略串的两段形式，拼接与后置条件检查都在 PolicyStrings 里做。
+// prefix 标记 resource 段本来就是前缀而非单个对象（`bucket.list *`、`object.list`），
+// 它是整桶/整前缀语义的**唯一**合法来源。
 type ossPolicyAction struct {
 	action   string
 	resource string
+	prefix   bool
 }
 
 // policyActions 按设计 §3.3 的表格派生策略串。
@@ -306,29 +373,35 @@ func (c *OSSCommand) policyActions() ([]ossPolicyAction, error) {
 	switch c.Family {
 	case "bucket":
 		if c.Verb == "list" {
+			// 解析期同款上界，守的是结构化参数直接构造 OSSCommand 那条缝：Target 被静默
+			// 丢掉的话，审批弹窗按 Render 显示 `bucket list mybucket`（一个桶），
+			// 检查与落库的却是 `bucket.list *`（全部桶）——批准一件事、拿到另一件。
+			if c.Target != "" {
+				return nil, fmt.Errorf("%q %q takes no target, got %q: it derives \"bucket.list *\" (every bucket), which is not what the rendered command shows", c.Family, c.Verb, c.Target)
+			}
 			// 桶列举没有具体资源，用 "*" 占住 resource 段——策略串恒为两段。
-			return []ossPolicyAction{{"bucket.list", "*"}}, nil
+			return []ossPolicyAction{{action: "bucket.list", resource: "*", prefix: true}}, nil
 		}
 	case "object":
 		switch c.Verb {
 		case "list":
-			return []ossPolicyAction{{"object.list", c.Target}}, nil
+			return []ossPolicyAction{{action: "object.list", resource: c.Target, prefix: true}}, nil
 		case "stat", "get":
-			return []ossPolicyAction{{"object.read", c.Target}}, nil
+			return []ossPolicyAction{{action: "object.read", resource: c.Target}}, nil
 		case "put":
-			return []ossPolicyAction{{"object.write", c.Target}}, nil
+			return []ossPolicyAction{{action: "object.write", resource: c.Target}}, nil
 		case "delete":
-			return []ossPolicyAction{{"object.delete", c.Target}}, nil
+			return []ossPolicyAction{{action: "object.delete", resource: c.Target}}, nil
 		case "copy":
 			return []ossPolicyAction{
-				{"object.read", c.Target},
-				{"object.write", c.Flags["to"]},
+				{action: "object.read", resource: c.Target},
+				{action: "object.write", resource: c.Flags["to"]},
 			}, nil
 		case "move":
 			return []ossPolicyAction{
-				{"object.read", c.Target},
-				{"object.write", c.Flags["to"]},
-				{"object.delete", c.Target},
+				{action: "object.read", resource: c.Target},
+				{action: "object.write", resource: c.Flags["to"]},
+				{action: "object.delete", resource: c.Target},
 			}, nil
 		case "presign":
 			// 缺省是 get：预签名读是常见用法，而 put 必须由模型显式写出来——它是默认
@@ -343,9 +416,9 @@ func (c *OSSCommand) policyActions() ([]ossPolicyAction, error) {
 				return nil, fmt.Errorf("invalid value for --method: %w", err)
 			}
 			if method == "put" {
-				return []ossPolicyAction{{"object.presign.write", c.Target}}, nil
+				return []ossPolicyAction{{action: "object.presign.write", resource: c.Target}}, nil
 			}
-			return []ossPolicyAction{{"object.presign.read", c.Target}}, nil
+			return []ossPolicyAction{{action: "object.presign.read", resource: c.Target}}, nil
 		}
 	}
 	return nil, fmt.Errorf("unknown oss command %q %q", c.Family, c.Verb)

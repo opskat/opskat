@@ -52,12 +52,16 @@ func TestParseOSSCommand(t *testing.T) {
 // 进行，bucket 根就是前缀 `<bucket>/`。不规范化的话，`object list mybucket` 会派生出
 // 策略串 "object.list mybucket"，而同一个桶下的任何前缀列举派生的都是 "mybucket/..."
 // ——同一件事两种形状，用户写的授权规则只能盖住其中一种。
+//
+// 归一化只发生在 list 上，也只可能发生在 list 上：其余 object verb 的 target 必须自带
+// 非空 key（见 TestParseOSSCommand_RejectsTargetWithoutObjectKey），补一个 "/" 反而会把
+// 单对象操作变成整桶授权。
 func TestParseOSSCommand_NormalizesBareBucketListing(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{`object list mybucket`, "mybucket/"},
 		{`object list mybucket/`, "mybucket/"},
 		{`object list mybucket/logs`, "mybucket/logs"},
-		{`object stat mybucket`, "mybucket"}, // 只有 list 归一化
+		{`object stat mybucket/key`, "mybucket/key"}, // 已经含 "/" 的 target 原样保留
 	}
 	for _, c := range cases {
 		got, err := ParseOSSCommand(c.in)
@@ -139,6 +143,44 @@ func TestParseOSSCommand_RejectsExtraTarget(t *testing.T) {
 		if _, err := ParseOSSCommand(in); err == nil {
 			t.Fatalf("ParseOSSCommand(%q) = nil error, want rejection (too many positional arguments)", in)
 		}
+	}
+}
+
+// TestParseOSSCommand_RejectsTargetWithoutObjectKey 锁住 §3.1 的语法：除 `object list`
+// （`<bucket>[/<prefix>]`）外，每个 object verb 的 target 与 copy/move 的 `--to` 都是
+// `<bucket>/<key>`，key 不可为空。
+//
+// 这不是形式主义。派生出的 resource 段既是被匹配的命令，也会**原样成为规则**：§4.3 的
+// ossGrantPatterns 把 PolicyStrings() 直接存成 grant。而 policy.MatchOSSRule 里规则侧
+// key 为空（只写桶名，或以 "/" 收尾）表示"该桶/前缀下任意深度的任意 key"（决策 D5，
+// internal/ai/policy/oss_policy.go:88-90）。于是 `object stat mybucket/` 派生出
+// "object.read mybucket/"，用户在审批弹窗上批准的是**一个**对象、选一次 "allow all"
+// 落库的却是**整桶可读**的常驻 grant。同理 `object copy src/a.txt --to=dst` 会落一条
+// 整桶可写。空 key 在对象存储里也没有任何合法用途（StatObject("") 必然失败），
+// 所以这类命令还是"批准之后必然失败"的那一类——必须在弹窗之前失败。
+func TestParseOSSCommand_RejectsTargetWithoutObjectKey(t *testing.T) {
+	cases := []string{
+		`object stat mybucket`,
+		`object stat mybucket/`,
+		`object get mybucket`,
+		`object get mybucket/`,
+		`object put mybucket --file=/tmp/a`,
+		`object delete mybucket`,
+		`object delete mybucket/`,
+		`object presign mybucket`,
+		`object copy mybucket --to=dst/b.txt`,
+		`object copy src/a.txt --to=dst`,
+		`object copy src/a.txt --to=dst/`,
+		`object move src/a.txt --to=dst`,
+	}
+	for _, in := range cases {
+		if got, err := ParseOSSCommand(in); err == nil {
+			t.Fatalf("ParseOSSCommand(%q) = %#v, nil error; want rejection (target must be <bucket>/<key>: a keyless resource authorizes the whole bucket)", in, *got)
+		}
+	}
+	// 反向对照：list 的 target 本来就是前缀，桶根是合法写法（§3.2 会把它归一成 `mybucket/`）。
+	if _, err := ParseOSSCommand(`object list mybucket`); err != nil {
+		t.Fatalf("ParseOSSCommand(`object list mybucket`) = %v, want success (list takes <bucket>[/<prefix>])", err)
 	}
 }
 
@@ -362,10 +404,10 @@ func TestOSSCommand_PolicyStrings(t *testing.T) {
 func TestOSSCommand_PolicyStringsCoversEveryVerb(t *testing.T) {
 	total := 0
 	for family, verbs := range ossVerbs {
-		for verb, needsTarget := range verbs {
+		for verb, kind := range verbs {
 			total++
 			c := &OSSCommand{Family: family, Verb: verb, Flags: map[string]string{}}
-			if needsTarget {
+			if kind != ossNoTarget {
 				c.Target = "mybucket/key"
 			}
 			if verb == "copy" || verb == "move" {
@@ -406,6 +448,33 @@ func TestOSSCommand_PolicyStringsRejectsUnsplittableResource(t *testing.T) {
 	for _, c := range cases {
 		if got, err := c.PolicyStrings(); err == nil {
 			t.Fatalf("PolicyStrings(%#v) = %q, nil error; want rejection (result would match no rule at all)", c, got)
+		}
+	}
+}
+
+// TestOSSCommand_PolicyStringsRejectsWholeBucketResource 是上一条在**语义**方向的同一件事：
+// 解析期的 key 校验只守"解析命令串"这条路，而 OSSCommand 是导出结构体，统一 exec 会用
+// 结构化参数直接构造它。派生串同时是 grant 规则，一个单对象操作派生出桶级/前缀级的
+// resource 段，落库之后授权的是整桶（policy.MatchOSSRule 的空 key 语义，决策 D5）——
+// 比切不出两段更糟：那个是 fail-open 到"匹配不上任何规则"，这个是 fail-open 到"匹配上全部"。
+//
+// `bucket list` 带 target 也在这里：解析期把它挡掉的理由是"批准一件事、拿到另一件"
+// （审批弹窗照 Render 显示 `bucket list mybucket`，检查的却是 `bucket.list *`、执行器列出
+// 全部桶）。结构体那条缝上同一件事一样会发生，而这里是它唯一的守卫。
+func TestOSSCommand_PolicyStringsRejectsWholeBucketResource(t *testing.T) {
+	cases := []OSSCommand{
+		{Family: "object", Verb: "stat", Target: "mybucket"},
+		{Family: "object", Verb: "get", Target: "mybucket/"},
+		{Family: "object", Verb: "put", Target: "mybucket"},
+		{Family: "object", Verb: "delete", Target: "mybucket/"},
+		{Family: "object", Verb: "presign", Target: "mybucket"},
+		{Family: "object", Verb: "copy", Target: "src/a.txt", Flags: map[string]string{"to": "dst"}},
+		{Family: "object", Verb: "move", Target: "src/a.txt", Flags: map[string]string{"to": "dst/"}},
+		{Family: "bucket", Verb: "list", Target: "mybucket"},
+	}
+	for _, c := range cases {
+		if got, err := c.PolicyStrings(); err == nil {
+			t.Fatalf("PolicyStrings(%#v) = %q, nil error; want rejection (a single-object operation must not derive a bucket-wide resource)", c, got)
 		}
 	}
 }
