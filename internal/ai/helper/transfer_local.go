@@ -180,6 +180,12 @@ func (localAdapter) Write(
 	return nil
 }
 
+// ValidateDestination 本地文件系统对写入目标没有形态约束：Write 会按需建父目录，
+// 任何路径都可能是一个待创建的文件。剩下的（父目录是个文件、没有写权限）要真的写才
+// 知道，在这里探测一次只会把一条 TOCTOU 缝塞进审批与写入之间——那是 D16 否决目的地
+// 推断时给的同一个理由。
+func (localAdapter) ValidateDestination(string) error { return nil }
+
 // ApprovalSubject 见 TransferAdapter 的注释：本地端没有资产，也就没有审批主体。
 func (localAdapter) ApprovalSubject(string, Direction) (string, string) {
 	return "", ""

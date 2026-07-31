@@ -58,33 +58,28 @@ func TestDefaultAuditWriterPersistsToolAuditSemantics(t *testing.T) {
 		wantSuccess  int
 		wantErrorSet bool
 	}{
+		// 传输面只剩 cp 一个工具名（upload_file / download_file 及其 RegisterToolAlias
+		// 一并退役，spec §6.3 / §7）。两条 cp 用例的差别是**决策**：被拒的那条必须落成
+		// success=0 且 error 非空，否则一次被拒绝的传输在审计里与一次成功的传输长得一样。
+		// 参数形状是 opsctl 那一侧的（带 asset_id），资产归属这一列才有东西可断言。
 		{
-			name:         "upload denied",
-			toolName:     "upload_file",
-			argsJSON:     `{"asset_id":1,"local_path":"/tmp/deny.bin","remote_path":"/srv/deny.bin"}`,
+			name:         "cp denied",
+			toolName:     "cp",
+			argsJSON:     `{"asset_id":1,"src":"/tmp/deny.bin","dst":"controlled-sftp:/srv/deny.bin"}`,
 			execErr:      errors.New("USER DENIED: transfer rejected"),
 			decision:     aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny},
 			wantToolName: "cp",
-			wantCommand:  "upload /tmp/deny.bin → /srv/deny.bin",
+			wantCommand:  "cp /tmp/deny.bin → controlled-sftp:/srv/deny.bin",
 			wantSuccess:  0,
 			wantErrorSet: true,
 		},
 		{
-			name:         "upload allowed",
-			toolName:     "upload_file",
-			argsJSON:     `{"asset_id":1,"local_path":"/tmp/upload.bin","remote_path":"/srv/upload.bin"}`,
+			name:         "cp allowed",
+			toolName:     "cp",
+			argsJSON:     `{"asset_id":1,"src":"controlled-sftp:/srv/app.log","dst":"/tmp/app.log"}`,
 			decision:     aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow},
 			wantToolName: "cp",
-			wantCommand:  "upload /tmp/upload.bin → /srv/upload.bin",
-			wantSuccess:  1,
-		},
-		{
-			name:         "download allowed",
-			toolName:     "download_file",
-			argsJSON:     `{"asset_id":1,"remote_path":"/srv/download.bin","local_path":"/tmp/download.bin"}`,
-			decision:     aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow},
-			wantToolName: "cp",
-			wantCommand:  "download /srv/download.bin → /tmp/download.bin",
+			wantCommand:  "cp controlled-sftp:/srv/app.log → /tmp/app.log",
 			wantSuccess:  1,
 		},
 		{

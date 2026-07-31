@@ -164,6 +164,10 @@ func writeSFTP(client *sftp.Client, p string, r io.Reader) error {
 	return nil
 }
 
+// ValidateDestination 远端文件系统与本地端同一个答案：没有形态约束（writeSFTP 会
+// MkdirAll 父目录），落不下去的原因要真的写才知道。理由见 localAdapter 上的同名方法。
+func (sshAdapter) ValidateDestination(string) error { return nil }
+
 // ApprovalSubject：SSH 端点三个方向都归 cp 授权，主体是远端路径本身——与传输面收敛前的
 // checkFileTransferPermission + MatchPathRule 逐字节一致。
 func (sshAdapter) ApprovalSubject(p string, _ Direction) (string, string) {

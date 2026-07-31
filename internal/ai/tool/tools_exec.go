@@ -8,47 +8,35 @@ import (
 )
 
 // execTools 文件传输 / 批量 / grant 申请。
-// 命令类工具（upload_file / download_file）标 Serial：跟原"整轮串行"语义对齐，
+// 命令类工具（cp）标 Serial：跟原"整轮串行"语义对齐，
 // 防止同会话内并发产生不可预期的资源争用（同一 SSH 连接复用、SFTP 句柄、审计排序等）。
 // request_permission 不直接执行命令，但语义上属于"重操作触发面板"，沿用 Serial 以保证审批弹窗串行可控。
 func execTools() []tool.Tool {
 	return []tool.Tool{
 		&tool.RawTool{
-			NameStr: "upload_file",
-			DescStr: "Upload a local file to a remote server via SFTP. Credentials are resolved automatically.",
+			NameStr: "cp",
+			DescStr: "Copy one file between two endpoints. An endpoint is either an absolute local path " +
+				"(/tmp/app.log) or <asset>:/<path> on an asset — an SSH server over SFTP " +
+				"(web-01:/var/log/app.log) or object storage as /<bucket>/<key> " +
+				"(s3-prod:/backups/db.sql.gz). At least one endpoint must be on an asset; any combination " +
+				"of the two sides works, including server to object storage. Each asset endpoint is " +
+				"authorized separately under that asset's own policy, before any byte is transferred. " +
+				"Credentials are resolved automatically.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
-					"asset_id":    {Type: "number", Description: "Target server asset ID."},
-					"local_path":  {Type: "string", Description: "Absolute path of the local file to upload."},
-					"remote_path": {Type: "string", Description: "Destination path on the remote server (including filename)."},
+					"src": {Type: "string", Description: "Source endpoint: an absolute local path, or <asset>:/<path>."},
+					"dst": {Type: "string", Description: "Destination endpoint, same syntax as src. It names the " +
+						"file to write, including the filename."},
+					"recursive": {Type: "boolean", Description: "Transfer a directory tree / object prefix instead " +
+						"of a single file. With recursive, or when src contains a glob pattern (* ? [), dst must " +
+						"end with \"/\" and each entry lands under it."},
 				},
-				Required: []string{"asset_id", "local_path", "remote_path"},
+				Required: []string{"src", "dst"},
 			},
 			IsSerial: true,
 			Handler: func(ctx context.Context, in map[string]any) (*agent.ToolResultBlock, error) {
-				out, err := handleUploadFile(ctx, in)
-				if err != nil {
-					return nil, err
-				}
-				return &agent.ToolResultBlock{Content: []agent.ContentBlock{agent.TextBlock{Text: out}}}, nil
-			},
-		},
-		&tool.RawTool{
-			NameStr: "download_file",
-			DescStr: "Download a file from a remote server to the local machine via SFTP. Credentials are resolved automatically.",
-			SchemaVal: agent.Schema{
-				Type: "object",
-				Properties: map[string]*agent.Property{
-					"asset_id":    {Type: "number", Description: "Source server asset ID."},
-					"remote_path": {Type: "string", Description: "Path of the file on the remote server."},
-					"local_path":  {Type: "string", Description: "Absolute local path to save the file (including filename)."},
-				},
-				Required: []string{"asset_id", "remote_path", "local_path"},
-			},
-			IsSerial: true,
-			Handler: func(ctx context.Context, in map[string]any) (*agent.ToolResultBlock, error) {
-				out, err := handleDownloadFile(ctx, in)
+				out, err := handleCp(ctx, in)
 				if err != nil {
 					return nil, err
 				}

@@ -52,6 +52,17 @@ type TransferAdapter interface {
 	OpenRead(ctx context.Context, asset *asset_entity.Asset, path string) (io.ReadCloser, int64, error)
 	// Write 把 r 的内容写入该端点的 path，必要时创建中间目录；size 未知时传 -1。
 	Write(ctx context.Context, asset *asset_entity.Asset, path string, r io.Reader, size int64) error
+	// ValidateDestination 判断 path 能不能当这一端点的写入目标，只看形态、不碰网络。
+	//
+	// 它存在是因为目的端与源端不对称：源端的形态错误由 List 在展开时报出来，而目的端
+	// **不经过 List**（要写的东西还不存在），ApprovalSubject 又不能报错。没有这一关，
+	// 一个形态错误的目的地会带着一个错误的主体走完审批、到 Write 才失败——用户批准了
+	// 一件必然失败的事。与 handleExec 的排序不变式同源：无副作用的判断必须全部走完，
+	// 才能碰有副作用的那一步（审批弹窗）。
+	//
+	// 入参是**具体的**目的路径，即多源展开时 dst 基点拼上 RelPath 之后的结果——正是
+	// 会被审批、也会被写入的那个字符串，因此这里不需要知道是单源还是多源。
+	ValidateDestination(path string) error
 	// ApprovalSubject 返回这一端点在该方向上必须被授权的审批类型与匹配串。
 	//
 	// **一个端点有审批主体，当且仅当它有资产。** 本地端点没有资产，因此正确的调用方按
@@ -92,6 +103,26 @@ func TransferAdapterFor(asset *asset_entity.Asset) (TransferAdapter, error) {
 // 元字符取 path.Match 的三个：* ? [。
 func hasGlobMeta(s string) bool {
 	return strings.ContainsAny(s, "*?[")
+}
+
+// HasGlobPattern 是 hasGlobMeta 的导出面，供入口层按 spec §6.5 判"多源形态"。
+// 导出而不是让调用方自己写一遍 strings.ContainsAny：判形态与展开必须用同一份元字符
+// 定义，否则会出现"按单源审批、按多源展开"这种两边对不上的传输。
+func HasGlobPattern(s string) bool {
+	return hasGlobMeta(s)
+}
+
+// ExpansionBase 返回一次展开的基点：通配取通配前的最后一层目录，其余就是路径自身
+// （递归的基点是源目录自己）。
+//
+// 展开授权（spec §6.5 / D18）的主体取它，而不是用户写的那个 pattern：cp 的 grant 不分
+// 方向，一条落成 "/var/log/*.log" 的 grant 会连它命中的每个文件的读写一起授权，而这次
+// 用户批准的只是"列出这个目录"。
+func ExpansionBase(pattern string) string {
+	if hasGlobMeta(pattern) {
+		return globBase(pattern)
+	}
+	return pattern
 }
 
 // globBase 返回一个 glob 的展开基点：通配之前的最后一层目录（spec §6.5）。
