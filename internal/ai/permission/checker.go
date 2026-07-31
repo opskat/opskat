@@ -288,13 +288,19 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 		// 弹窗里手写的 pattern，command 是系统交上来的主体（exec 的规范 DSL、cp 的
 		// ApprovalSubject）。两者都是策略串形状，混成一种就等于把适配器给出的主体
 		// 当用户 pattern 放行——设计 §4.3 记下的正是这个洞。
+		//
+		// 分支条件是"用户有没有编辑"，**不是**"归一化后是不是空"。两者看起来等价，
+		// 因为 shell 类的 shellGrantPatterns 对任何非空白输入至少给一条 pattern（而
+		// ParseApprovalResponse 已经保证编辑项的 Command 非空白），所以对 SSH/K8s 这两种
+		// 写法逐字节同解。OSS 不然：空列表对它是个正常答案（下面那段注释说的 D20），
+		// 于是"编辑了但用不了"会掉进兜底，把用户的编辑**静默换成系统主体**——用户改这
+		// 一栏通常是想收窄，却反手拿到一条他没要的更宽授权。用不了就什么都不授权。
 		var patterns []string
 		if len(parsed.EditedItems) > 0 {
 			for _, item := range parsed.EditedItems {
 				patterns = append(patterns, NormalizeGrantPatterns(assetType, item.Command, GrantOriginUser)...)
 			}
-		}
-		if len(patterns) == 0 {
+		} else {
 			patterns = NormalizeGrantPatterns(assetType, command, GrantOriginSystem)
 		}
 		// 归一化交出空列表是一个**答案**，不是失败：OSS 会把"批准了但不该变成常驻授权"

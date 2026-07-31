@@ -666,3 +666,52 @@ func TestHandleConfirm_UserEditedOSSPatternKeepsItsWildcards(t *testing.T) {
 	}
 	assert.Equal(t, []string{"object.read mybucket/logs/*"}, saved)
 }
+
+// TestHandleConfirm_UnusableUserEditDoesNotFallBackToTheSystemPattern 咬住"用户编辑过"
+// 与"归一化交出空列表"这两件事必须分开。
+//
+// 兜底那条的本意是"用户根本没编辑，就用系统交上来的主体"。写成 `len(patterns) == 0`
+// 之后，它同时接住了另一件完全不同的事：用户**编辑了**，但那条编辑归一化不出任何
+// 授权。这时回落到系统主体等于**静默丢弃用户的编辑**，还反过来给了他一条他没要的
+// （通常更宽的）授权——用户改这一栏，绝大多数时候是想收窄。
+//
+// 这条路在 OSS 上是活的：归一化交出空列表对 OSS 是个正常答案（决策 D20 的目录标记、
+// 派生失败），不是失败。shell 类到不了这里——shellGrantPatterns 对任何非空白输入至少
+// 给一条 pattern，而 ParseApprovalResponse 已经保证编辑项的 Command 非空白。
+func TestHandleConfirm_UnusableUserEditDoesNotFallBackToTheSystemPattern(t *testing.T) {
+	withOSSPolicyStrings(t)
+	stubAudit := withStubAudit(t)
+	ctx, mockAsset, _ := setupPolicyTest(t)
+
+	stubGrant := newStubGrantRepo()
+	orig := grant_repo.Grant()
+	grant_repo.RegisterGrant(stubGrant)
+	t.Cleanup(func() {
+		if orig != nil {
+			grant_repo.RegisterGrant(orig)
+		}
+	})
+
+	asset := &asset_entity.Asset{ID: 1, Name: "s3-prod", Type: asset_entity.AssetTypeOSS}
+	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+	checker := NewCommandPolicyChecker(func(context.Context, string, []ApprovalItem) ApprovalResponse {
+		return ApprovalResponse{
+			Decision: "allowAll",
+			// 用户想改，但改出来的东西派生不出策略串（打错了 verb）。
+			EditedItems: []ApprovalItem{{Type: "oss", AssetID: 1, Command: "object frobnicate mybucket/a"}},
+		}
+	})
+	// 系统主体是一条 move，会派生出三条策略串——正是绝不该悄悄落库的那三条。
+	got := checker.HandleConfirm(aictx.WithSessionID(ctx, "sess-bad-edit"), 1,
+		asset_entity.AssetTypeOSS, "object move mybucket/a --to=other/b")
+
+	assert.Equal(t, aictx.Allow, got.Decision, "这一次操作仍然被批准，只是不产生常驻授权")
+	saved := make([]string, 0, len(stubGrant.items["sess-bad-edit"]))
+	for _, item := range stubGrant.items["sess-bad-edit"] {
+		saved = append(saved, item.Command)
+	}
+	assert.Empty(t, saved,
+		"用户的编辑用不了就什么都不授权；回落到系统主体等于丢掉他的编辑再塞给他一条更宽的授权")
+	assert.Empty(t, stubAudit.entries, "一条 grant 都没落下时，不该有 grant_submit 审计行")
+}

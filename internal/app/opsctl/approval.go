@@ -111,14 +111,7 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 			if req.SessionID == "" {
 				return approval.ApprovalResponse{Approved: false, Reason: "approval does not support a grant without a session"}
 			}
-			// 来源要跟着 pattern 一起走：用户在弹窗里改过就是他手写的授权范围，
-			// 没改过就是系统交上来的主体（见 permission.GrantOrigin）。
-			pattern := req.Command
-			origin := permission.GrantOriginSystem
-			if len(parsed.EditedItems) > 0 {
-				pattern = parsed.EditedItems[0].Command
-				origin = permission.GrantOriginUser
-			}
+			pattern, origin := grantPatternAndOrigin(req.Command, parsed.EditedItems)
 			permission.SaveGrantPatternsForApproval(i18n.Ctx(o.ctx, o.lang.Lang()), req.SessionID, req.AssetID, req.AssetName, req.Type, pattern, origin)
 			log.Info("opsctl approval completed", zap.Bool("approved", true), zap.String("decision", resp.Decision))
 			return approval.ApprovalResponse{Approved: true}
@@ -132,6 +125,24 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 		log.Error("opsctl approval failed", zap.Error(o.appCtx.Err()))
 		return approval.ApprovalResponse{Approved: false, Reason: "app shutting down"}
 	}
+}
+
+// grantPatternAndOrigin 决定这次 allowAll 要把哪条串落成常驻授权、以及它算谁写的。
+//
+// 来源必须跟着 pattern 一起走：用户在弹窗里改过的就是他手写的授权范围（他写的通配
+// 就是他要的范围，归一化不该收窄），没改过的是系统交上来的主体——exec 的规范 DSL、
+// cp 的 ApprovalSubject——要按 decision D20 / D21 收窄（见 permission.GrantOrigin）。
+//
+// 单独成函数是因为这条判断**没有编译期守卫**：origin 是必填参数，所以"忘了传"编译不过，
+// 但"传错一个"照样编译通过，而它的后果是安全性的——把 System 写成 User，
+// `opsctl cp 's3-prod:/mybucket/secrets*' ./` 点一次"始终允许"落下的就是一条读遍所有
+// secrets 开头对象的常驻授权。requestSingleApproval 本身跑不进测试（wailsRuntime.EventsEmit
+// 拿到非 wails context 会直接终止进程），所以判断留在函数里就等于没有任何锁。
+func grantPatternAndOrigin(command string, edited []permission.ApprovalItem) (string, permission.GrantOrigin) {
+	if len(edited) > 0 {
+		return edited[0].Command, permission.GrantOriginUser
+	}
+	return command, permission.GrantOriginSystem
 }
 
 func singleApprovalKind(approvalType string) string {
