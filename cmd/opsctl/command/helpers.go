@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
@@ -61,26 +62,22 @@ func extractTypeFlag(args []string) (string, []string) {
 	return "", args
 }
 
-// parseRemotePathCtx parses <asset>:<path> format where <asset> is an ID or name.
-// Returns (assetID, path, error). If not a remote path, assetID is 0.
+// parseRemotePathCtx parses <asset>:<path> format where <asset> is anything
+// assetref.Resolve accepts (id or name; see D15 in
+// docs/superpowers/specs/2026-07-31-oss-ai-cli-operations-design.md). Returns (assetID,
+// path, error). If not a remote path, assetID is 0.
+//
+// This delegates to the shared helper.ParseTransferEndpoint so opsctl and the AI cp tool
+// resolve "<asset>:<path>" endpoints through a single implementation.
 func parseRemotePathCtx(ctx context.Context, s string) (int64, string, error) {
-	idx := strings.Index(s, ":")
-	if idx <= 0 {
-		return 0, s, nil
-	}
-	prefix := s[:idx]
-	remotePath := s[idx+1:]
-
-	// Must start with / to be a remote path (avoid matching C:\windows paths or names without colon)
-	if !strings.HasPrefix(remotePath, "/") {
-		return 0, s, nil
-	}
-
-	id, err := resolveAssetID(ctx, prefix)
+	asset, path, err := helper.ParseTransferEndpoint(ctx, s)
 	if err != nil {
-		return 0, "", fmt.Errorf("resolving asset %q: %w", prefix, err)
+		return 0, "", err
 	}
-	return id, remotePath, nil
+	if asset == nil {
+		return 0, path, nil
+	}
+	return asset.ID, path, nil
 }
 
 // parseRemotePath parses numeric assetID:path strings without repository lookup.
