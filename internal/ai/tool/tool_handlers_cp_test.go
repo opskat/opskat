@@ -107,6 +107,38 @@ func TestCpMultiSourceApprovesEveryExpandedPathAtOnce(t *testing.T) {
 	})
 }
 
+// TestCpMultiSourceRefusesEntriesEscapingTheDestination 锁住落点的**边界**：目的路径是
+// 目的基点拼上 RelPath，那条 RelPath 必须真的落在基点之下。
+//
+// 对象存储的 key 是一段不透明的字节串，`logs/../../id_rsa` 是一个合法的 S3 key，相对
+// `logs/` 前缀展开出来的落点就是 `../../id_rsa`。目的端在本地时没有任何东西挡它：
+// localAdapter.ValidateDestination 明写"本地文件系统对写入目标没有形态约束"，Write 又会
+// 按需建父目录，于是这一条落到用户指名的目的地之外，汇总还照样报 transferred。
+// 用户批准的是清单上的那些路径，写的就必须是那些（D16 / D17）。
+func TestCpMultiSourceRefusesEntriesEscapingTheDestination(t *testing.T) {
+	Convey("展开出的落点走出目的基点时，在审批之前就报错", t, func() {
+		ctx, calls := setupCpDialogs(t, "allow", "allow")
+		cpFake.entries = append(cpFake.entries,
+			helper.Entry{Path: "/src/x", RelPath: "../escaped.log", Size: 3})
+		cpFake.contents["/src/x"] = []byte("pwn")
+		root := t.TempDir()
+		dst := filepath.Join(root, "out")
+		So(os.MkdirAll(dst, 0o750), ShouldBeNil)
+
+		_, err := handleCp(ctx, map[string]any{
+			"src": "sink-01:/src/", "dst": dst + "/", "recursive": true,
+		})
+
+		So(err, ShouldNotBeNil)
+		So(err.Error(), ShouldContainSubstring, "../escaped.log")
+		// 排在批量审批之前：一份清单里混进一条落到别处的路径，用户批准的和发生的就
+		// 不是一件事，事后再报错也已经晚了。
+		So(cpBatchCalls(*calls), ShouldHaveLength, 0)
+		_, statErr := os.Stat(filepath.Join(root, "escaped.log"))
+		So(os.IsNotExist(statErr), ShouldBeTrue)
+	})
+}
+
 // TestCpMultiSourceTransfersEveryEntry 锁多源批准之后的另一半：每一条都真的送达，
 // 汇总报的是总条数与总字节，而不是第一条的。
 func TestCpMultiSourceTransfersEveryEntry(t *testing.T) {
@@ -131,7 +163,8 @@ func TestCpMultiSourceTransfersEveryEntry(t *testing.T) {
 }
 
 // TestCpApprovalSubjectsAreDeduplicated：源与目的落在同一个前缀上时，一条 entry 的读主体
-// 与写主体逐字相同。重复条目让用户在同一份清单里读两遍同一句话，还会凭空吃掉一半的 200 条上限。
+// 与写主体逐字相同。重复条目让用户在同一份清单里读两遍同一句话，查一遍策略也是白查
+// （200 条上限数的是展开出的 entry，不是审批项，重复条目吃不掉它）。
 func TestCpApprovalSubjectsAreDeduplicated(t *testing.T) {
 	Convey("重复的主体在批量审批里只出现一次", t, func() {
 		ctx, calls := setupCpDialogs(t, "allow", "deny")

@@ -224,6 +224,12 @@ func cpMultiSource(
 	dstPaths := make([]string, len(res.Entries))
 	accesses := make([]cpAccess, 0, 2*len(res.Entries))
 	for i, entry := range res.Entries {
+		if !relPathStaysUnderBase(entry.RelPath) {
+			return "", fmt.Errorf(
+				"%q expands to an entry whose path relative to the source base is %q, which does not stay under "+
+					"the destination %q; refusing the whole transfer (nothing was transferred)",
+				src.raw, entry.RelPath, dst.raw)
+		}
 		dstPath := dst.path + entry.RelPath
 		if err := dst.adapter.ValidateDestination(dstPath); err != nil {
 			return "", err
@@ -251,6 +257,23 @@ func cpMultiSource(
 		totalBytes += entry.Size
 	}
 	return cpSummary(len(res.Entries), totalBytes, res.SkippedSymlinks)
+}
+
+// relPathStaysUnderBase 报告一条展开出来的 RelPath 拼到目的基点上之后，还落不落在这个
+// 基点之下。
+//
+// 三个展开来源里只有对象存储端产得出走出去的落点：本地与 SFTP 的 RelPath 由目录项拼成，
+// 单个名字里不可能有分隔符；而对象 key 是一段不透明的字节串，`logs/../../id_rsa` 是一个
+// 合法的 S3 key，相对 `logs/` 前缀展开出来的落点就是 `../../id_rsa`。
+// 目的端在本地时没有任何东西挡它——localAdapter.ValidateDestination 明写
+// 本地文件系统对写入目标没有形态约束，Write 又会按需建父目录——于是这一条落到用户指名的
+// 目的地之外，汇总还照样报 transferred。批的是清单上那些路径，写的就必须是那些（D16/D17）。
+//
+// 判据取 filepath.IsLocal：它按运行平台的词法判断"这条相对路径会不会走出它所在的子树"。
+// 选它而不是自己按 "/" 切段找 ".."，是因为 RelPath 的 "/" 分隔契约只约束得了展开侧——
+// 对象 key 里的 "\" 是字面量，落到 Windows 本地端却是分隔符，`..\..\x` 在那里同样逃得出去。
+func relPathStaysUnderBase(relPath string) bool {
+	return filepath.IsLocal(relPath)
 }
 
 // checkAccessBatch 让一批端点访问过一次授权：每条各自查策略，**需要确认的全部塞进同一个
@@ -283,7 +306,7 @@ func checkAccessBatch(
 			Detail:    detail,
 		}
 		// 同一条主体只查一次、只出现一次：源与目的落在同一个前缀上时读写主体逐字相同，
-		// 重复条目让用户在同一份清单里读两遍同一句话，还会凭空吃掉一半的条目上限。
+		// 重复条目让用户在同一份清单里读两遍同一句话，查一遍策略也是白查。
 		if seen[item] {
 			continue
 		}

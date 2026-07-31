@@ -1,12 +1,17 @@
 package helper
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
+
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/policy"
@@ -287,10 +292,11 @@ func TestParseOSSCommand_RejectsBadFlagValue(t *testing.T) {
 	}
 }
 
-// TestParseOSSCommand_MaxKeysHasAHardCap 锁住 --max-keys 的上界本身（而不只是"某个大数
-// 被拒"）：模型能一次把一个前缀的全部 key 拉进上下文，与 --max-bytes 不设上限时能拉整个
-// 大对象是同一个顾虑（决策见任务交回记录）。边界必须精确到"刚好等于上限"与"多 1"两个
-// 用例——只断言一个很大的数会被拒，改动上限值本身不会让测试失败。
+// TestParseOSSCommand_MaxKeysHasAHardCap 锁住 --max-keys 上界的**形状**：存在一条上界，
+// 且它是闭区间的右端（等于放行、多 1 报错）。1000 这个数是本仓自己定的，没有第二个来源
+// 可以比对，所以断言写成相对常量的——把 1000 抄进测试只是把实现里的常量重述一遍，改一处
+// 就得改两处，却发现不了任何缺陷。上界的**取值**若由外部约束决定，就该像 --expiry 那样
+// 钉在那个外部来源上（见 TestPresignExpiryCapIsWhatTheBackendWillSign）。
 func TestParseOSSCommand_MaxKeysHasAHardCap(t *testing.T) {
 	if _, err := ParseOSSCommand(fmt.Sprintf("object list mybucket --max-keys=%d", ossMaxListKeys)); err != nil {
 		t.Fatalf("ParseOSSCommand with --max-keys=%d (the cap itself) unexpected error: %v", ossMaxListKeys, err)
@@ -309,6 +315,36 @@ func TestParseOSSCommand_ExpiryHasAHardCap(t *testing.T) {
 	}
 	if _, err := ParseOSSCommand(fmt.Sprintf("object presign mybucket/key --expiry=%d", ossMaxPresignExpirySecs+1)); err == nil {
 		t.Fatalf("ParseOSSCommand with --expiry=%d = nil error, want rejection (one second over the cap)", ossMaxPresignExpirySecs+1)
+	}
+}
+
+// TestPresignExpiryCapIsWhatTheBackendWillSign 把 --expiry 上限的**取值**钉在它真正的来源
+// 上：SigV4 预签名 URL 的 7 天约束不是本仓的选择，是后端的（minio-go 的 isValidExpiry）。
+//
+// 上一条测试按常量表达边界，因此把 ossMaxPresignExpirySecs 改大一倍它照样通过——而那正好
+// 是本任务要消灭的那个缺陷本身："批准之后才被 minio 以超过 7 天为由拒掉"。这里拿 SDK 自己
+// 去签一次：上限值必须签得出来，多 1 秒必须签不出来。两个独立来源，任何一侧漂移都会红。
+//
+// 不需要服务端：presign 是本地签名，且 Region 显式给了（否则 minio-go 会去查桶所在区域）。
+func TestPresignExpiryCapIsWhatTheBackendWillSign(t *testing.T) {
+	client, err := minio.New("localhost:9000", &minio.Options{
+		Creds:  credentials.NewStaticV4("access-key", "secret-key", ""),
+		Region: "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("minio.New: %v", err)
+	}
+	sign := func(secs int) error {
+		_, err := client.PresignedGetObject(
+			context.Background(), "mybucket", "a.txt", time.Duration(secs)*time.Second, nil)
+		return err
+	}
+	if err := sign(ossMaxPresignExpirySecs); err != nil {
+		t.Fatalf("the backend refuses to sign at our own cap (%d seconds): %v", ossMaxPresignExpirySecs, err)
+	}
+	if err := sign(ossMaxPresignExpirySecs + 1); err == nil {
+		t.Fatalf("the backend signs %d seconds, one over our cap: the cap is lower than it needs to be, "+
+			"and a value the backend would accept is being rejected before approval", ossMaxPresignExpirySecs+1)
 	}
 }
 
