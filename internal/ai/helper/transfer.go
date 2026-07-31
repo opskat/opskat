@@ -65,6 +65,13 @@ type TransferAdapter interface {
 	ValidateDestination(path string) error
 	// ApprovalSubject 返回这一端点在该方向上必须被授权的审批类型与匹配串。
 	//
+	// DirList 方向收到的是用户**指名的那个串**——可能是一个 pattern，也可能是一个前缀，
+	// 与 List 收到的完全相同。收窄成"实际会被枚举的那个基点"是适配器自己的事，调用方
+	// 不得先替它截一刀：哪些字符是通配语法只有适配器知道（对象存储的前缀形态 key 里
+	// `*?[` 是字面量，规则侧走的是 strings.HasPrefix），入口层按 glob 截断会让指名一个
+	// 前缀的递归传输换来整桶列举的授权。反过来，主体也绝不能是 pattern 原文：cp 的 grant
+	// 不分方向，一条 "/var/log/*.log" 的 grant 会连它命中的每个文件的读写一起授权。
+	//
 	// **一个端点有审批主体，当且仅当它有资产。** 本地端点没有资产，因此正确的调用方按
 	// asset 是否为 nil 来决定要不要走权限检查，压根不会问本地适配器要主体；它返回的空串是
 	// "不适用"，不是一个让调用方去判空的哨兵——按哨兵写，漏判时就会静默放行。
@@ -110,19 +117,6 @@ func hasGlobMeta(s string) bool {
 // 定义，否则会出现"按单源审批、按多源展开"这种两边对不上的传输。
 func HasGlobPattern(s string) bool {
 	return hasGlobMeta(s)
-}
-
-// ExpansionBase 返回一次展开的基点：通配取通配前的最后一层目录，其余就是路径自身
-// （递归的基点是源目录自己）。
-//
-// 展开授权（spec §6.5 / D18）的主体取它，而不是用户写的那个 pattern：cp 的 grant 不分
-// 方向，一条落成 "/var/log/*.log" 的 grant 会连它命中的每个文件的读写一起授权，而这次
-// 用户批准的只是"列出这个目录"。
-func ExpansionBase(pattern string) string {
-	if hasGlobMeta(pattern) {
-		return globBase(pattern)
-	}
-	return pattern
 }
 
 // globBase 返回一个 glob 的展开基点：通配之前的最后一层目录（spec §6.5）。

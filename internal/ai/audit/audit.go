@@ -3,7 +3,7 @@
 // 区分（"ai" / "opsctl" / "desktop"，取自 ctx 里的 aictx.WithAuditSource）。
 //
 // 命令摘要提取走 [RegisterExtractor] 注册表：审计在 extractor_default.go 的 init()
-// 里为每个工具(exec/upload_file 等)注册默认提取器；需要资产上下文才能算出规范化命令
+// 里为每个工具(exec/cp 等)注册默认提取器；需要资产上下文才能算出规范化命令
 // 的类型（k8s/etcd/mongo/kafka）由 runner.auditMiddleware 直接覆盖 ToolCallInfo.Command，
 // 不经过本注册表（见 [ExtractCommandForAudit] 的注释）。
 // 每个工具名各自注册，不互相借用——借用会让一个工具的审计取决于另一个工具是否还在。

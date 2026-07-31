@@ -275,6 +275,31 @@ func TestSSHTransfer_ApprovalSubject(t *testing.T) {
 	}
 }
 
+// TestSSHTransfer_ApprovalSubjectNarrowsGlobForListing 锁住展开方向上的收窄：List 的主体
+// 不能是用户写的那个 pattern。permission 对 cp 的匹配器就是 path.Match（policy.MatchPathRule），
+// 所以一条落成 "/var/log/*.log" 的 grant 会连它命中的每个文件一起授权，而 cp 的 grant 不分
+// 方向 —— 用户批准的只是"列出这个目录"，换来的却是那些文件的读写。
+//
+// 收窄归适配器而不是调用方：只有适配器知道自己那一端哪些字符是通配语法（对象存储的前缀
+// 形态 key 里它们是字面量），入口层先截一刀会把这条判断从它手里抢走。
+func TestSSHTransfer_ApprovalSubjectNarrowsGlobForListing(t *testing.T) {
+	for _, tt := range []struct{ name, pattern, want string }{
+		{"glob narrows to the directory it expands from", "/var/log/*.log", "/var/log"},
+		{"a pattern spanning segments narrows to the last literal one", "/var/*/x.log", "/var"},
+		{"a plain directory is its own base", "/var/log", "/var/log"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			typ, subject := sshTransfer.ApprovalSubject(tt.pattern, DirList)
+			if typ != permission.GrantToolCp {
+				t.Errorf("type = %q, want %q", typ, permission.GrantToolCp)
+			}
+			if subject != tt.want {
+				t.Errorf("subject = %q, want %q", subject, tt.want)
+			}
+		})
+	}
+}
+
 // newTestSFTP 起一个进程内 SFTP 服务端（net.Pipe + sftp.NewServer）并返回连到它的客户端，
 // 形态取自 internal/service/sftp_svc/sftp_test.go —— 仓内验证 SFTP 客户端代码的既有做法。
 // 服务端直接服务真实文件系统，因此 t.TempDir() 的绝对路径可以直接用，

@@ -29,10 +29,12 @@ import (
 const cpTestAssetType = "cptest"
 
 type cpTestAdapter struct {
-	entries  []helper.Entry    // List 交出的展开结果
-	contents map[string][]byte // OpenRead 的内容
-	written  map[string][]byte // Write 收到的内容，按目的路径
-	listed   []string          // 被要求展开的 pattern，按调用序
+	entries   []helper.Entry    // List 交出的展开结果
+	contents  map[string][]byte // OpenRead 的内容
+	written   map[string][]byte // Write 收到的内容，按目的路径
+	listed    []string          // 被要求展开的 pattern，按调用序
+	validated []string          // ValidateDestination 收到的路径，按调用序
+	rejectDst string            // 等于它的目的路径被判为形态错误
 }
 
 var cpFake = &cpTestAdapter{}
@@ -44,6 +46,8 @@ func (a *cpTestAdapter) reset() {
 	a.contents = map[string][]byte{}
 	a.written = map[string][]byte{}
 	a.listed = nil
+	a.validated = nil
+	a.rejectDst = ""
 }
 
 func (a *cpTestAdapter) List(
@@ -74,7 +78,13 @@ func (a *cpTestAdapter) Write(
 	return nil
 }
 
-func (a *cpTestAdapter) ValidateDestination(string) error { return nil }
+func (a *cpTestAdapter) ValidateDestination(p string) error {
+	a.validated = append(a.validated, p)
+	if p == a.rejectDst {
+		return fmt.Errorf("cptest: %q is not a shape this endpoint can write", p)
+	}
+	return nil
+}
 
 func (a *cpTestAdapter) ApprovalSubject(p string, _ helper.Direction) (string, string) {
 	return cpTestAssetType, p
@@ -325,6 +335,24 @@ func TestCpExpansionIsAuthorizedBeforeItRuns(t *testing.T) {
 			So((*seen)[0].Command, ShouldEqual, "/var/log")
 		})
 
+		// 主体的收窄归适配器：它才知道自己那一端的规则语义。入口层先按 glob 截一刀会
+		// 把这条判断从适配器手里抢走——OSS 的前缀形态 key 里 "[" 是字面量（规则侧走
+		// strings.HasPrefix），截断之后基点塌成空串，指名一个前缀换来的是整桶列举授权，
+		// 而 object.list 是 D20 明确不丢弃的那一类，"始终允许"会把它落成常驻 grant。
+		Convey("OSS 前缀里的字面量元字符不被当成通配截掉", func() {
+			ctx, seen := setupCp(t, "deny")
+
+			_, err := handleCp(ctx, map[string]any{
+				"src": "s3-prod:/mybucket/logs[1]/", "dst": filepath.Join(t.TempDir()) + "/",
+				"recursive": true,
+			})
+
+			So(err, ShouldNotBeNil)
+			So(*seen, ShouldHaveLength, 1)
+			So((*seen)[0].Type, ShouldEqual, asset_entity.AssetTypeOSS)
+			So((*seen)[0].Command, ShouldEqual, "object.list mybucket/logs[1]/")
+		})
+
 		Convey("通配的主体是通配前的最后一层目录，不是 pattern 本身", func() {
 			ctx, seen := setupCp(t, "deny")
 
@@ -376,6 +404,32 @@ func TestCpMultiSourceEntryLandsUnderDestinationBase(t *testing.T) {
 
 		So(err, ShouldBeNil)
 		So(string(cpFake.written["/logs/app.log"]), ShouldEqual, "one")
+	})
+}
+
+// TestCpMultiSourceValidatesTheJoinedDestination 锁住 ValidateDestination 的**入参**与
+// **次序**在多源形态下的那一半（单源那一半由 TestCpMalformedDestinationFailsBeforeAnyApproval
+// 锁）：要校验的是展开之后拼出来的那条具体路径（目的基点 + RelPath），因为被审批、被写入的
+// 正是它；校验基点会让每次多源传输拿一个恒为前缀形态的串去撞"必须指名一个对象"这类规则。
+//
+// 断言的不是 fake 返回了什么，而是 handleCp 把哪个字符串交给了它、以及这一步排在审批之前：
+// fake 只是探针，拒绝哪条路径由测试指定。
+func TestCpMultiSourceValidatesTheJoinedDestination(t *testing.T) {
+	Convey("多源校验的是目的基点 + RelPath，且排在审批之前", t, func() {
+		ctx, seen := setupCp(t, "allow")
+		cpFake.rejectDst = "/logs/app.log"
+		dir := t.TempDir()
+		So(os.WriteFile(filepath.Join(dir, "app.log"), []byte("one"), 0o600), ShouldBeNil)
+
+		_, err := handleCp(ctx, map[string]any{
+			"src": filepath.Join(dir, "*.log"), "dst": "sink-01:/logs/",
+		})
+
+		So(err, ShouldNotBeNil)
+		So(cpFake.validated, ShouldResemble, []string{"/logs/app.log"})
+		// 展开授权是另一件事（源端在本地，压根没有主体），这条传输的两个审批项一个都没发出。
+		So(*seen, ShouldHaveLength, 0)
+		So(cpFake.written, ShouldBeEmpty)
 	})
 }
 

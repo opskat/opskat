@@ -61,11 +61,18 @@ type cpResult struct {
 // cp 审批"）。多源形态没有这个选择，展开必须先发生，所以它按 D18 先过一次 DirList 授权。
 //
 // **本地端点不产生审批项**（spec §6.2），本轮沿用这条既有裁定，不是默认继承：
-// download_file 今天就能写到本地任意路径，唯一的门是远端那一端的读授权。理由是本地写的
-// 位置完全由被批准的那条命令串决定——D11 强制绝对路径，端点原文又原样出现在审批项的
-// Detail 与 audit_logs 里，用户批准"读 s3-prod:/b/k → 写 /etc/passwd"时看到的就是它。
-// 已知代价：cp 的本地写不经过 local_write / local_edit 那套会话内路径白名单
-// （local_tool_gate.go），因此一个远端源 + cp 可以绕开那份白名单落到本地任意位置。
+// download_file 今天就能写到本地任意路径，唯一的门是远端那一端的读授权；本地路径只以
+// 展示的身份出场——D11 强制它绝对，端点原文又原样进审批项的 Detail 与 audit_logs。
+// 两条代价要说准，它们都比"本地路径在用户批准的那条串里看得见"这句话大：
+//
+//  1. 远端那一端判成 Allow 时**根本没有弹窗**，于是也没有"用户批准的那条串"。OSS 资产
+//     的内置默认策略就放行 object.read *（builtin:oss-readonly），所以在一个刚建好、
+//     谁也没改过策略的对象存储资产上，`cp s3:/b/k /Users/me/.ssh/authorized_keys`
+//     零交互跑完，事后只在 audit_logs 里留一行。SSH 端要一条既有 grant 才走到这一步，
+//     对象存储端不需要——这是本轮把 OSS 接进传输面新带来的一档。
+//  2. 本地写因此也不经过 local_write / local_edit 那道门（local_tool_gate.go）。那不只是
+//     一份"会话内白名单"：未命中白名单的路径要弹一次框，没接审批回调时直接拒。
+//
 // 改掉它属于本地工具授权面的重做（那是一条 cago middleware，不是可调用的检查），
 // 与 OSS 无关，不在本轮范围内——记在这里是为了它是一条被裁定过的选择，而不是没人看见。
 func handleCp(ctx context.Context, args map[string]any) (string, error) {
@@ -176,9 +183,13 @@ func cpMultiSource(
 	}
 
 	// D18：展开自己是一种能力。枚举读的是元数据而不是内容，但 `cp -r web-01:/ ./x` 能把
-	// 整棵文件树的结构拖出来，所以它在 List 之前先过一次 DirList 授权，主体是展开基点。
-	base := helper.ExpansionBase(src.path)
-	if err := checkEndpoint(ctx, checker, src, helper.DirList, base, detail); err != nil {
+	// 整棵文件树的结构拖出来，所以它在 List 之前先过一次 DirList 授权。
+	//
+	// 交给适配器的是用户指名的那个串，与 List 收到的完全相同：收窄到"实际会被枚举的基点"
+	// 由适配器自己做（见 helper.TransferAdapter.ApprovalSubject）。这里替它按 glob 截一刀，
+	// 对象存储那一端就会把前缀里的字面量 "[" 当成通配、把基点塌到桶根上——指名一个前缀，
+	// 换来一条整桶列举的常驻授权。
+	if err := checkEndpoint(ctx, checker, src, helper.DirList, src.path, detail); err != nil {
 		return "", err
 	}
 
