@@ -131,8 +131,8 @@ func cmdCpSingleSource(
 // （spec §6.5）。判的是**形态**不是命中条数——一个只命中一个文件的 glob 仍然是多源，
 // 它的落点是目的基点 + RelPath 而不是字面 dst。
 //
-// 两段授权：先按源端基点批"列出"（D18），再把展开出的每一条具体路径塞进同一个批量
-// 对话框（D17）。两段都过了才动第一个字节。
+// 两段授权：会枚举的那些源先各按自己的基点批一次"列出"（D18），再把展开出的每一条具体
+// 路径塞进同一个批量对话框（D17）。该过的都过了才动第一个字节。
 func cmdCpMultiSource(
 	ctx context.Context, handlers map[string]tool.ToolHandlerFunc,
 	srcs []*cpEndpoint, dst *cpEndpoint, recursive bool,
@@ -152,14 +152,20 @@ func cmdCpMultiSource(
 	// 第一段·展开授权。枚举读的是元数据而不是内容，但 `cp -r web-01:/ ./x` 能把整棵文件树
 	// 的结构拖出来，所以它自己要过一次授权（D18）。交给适配器的是用户指名的那个串，
 	// 收窄到"实际会被枚举的基点"由适配器自己做。
+	//
+	// 只有真的会枚举的源要这一道：指名 N 个源却既无 -r 也无通配时没有任何结构被拖出来
+	// （指名的源若是目录，无 -r 时 List 本来就直接报错），要一次"列出这个基点"的授权
+	// 比"复制这一个指名对象"宽——方向上就是"批准一件事、拿到另一件"，只是宽在授权侧。
 	expanded := make([]*helper.ListResult, len(srcs))
 	entryCount := 0
 	for i, src := range srcs {
-		approvalCtx, result, approvalAssetID, err := requireCpApproval(ctx,
-			[]cpTarget{{ep: src, dir: helper.DirList, path: src.path}}, detail)
-		ctx = approvalCtx
-		if err != nil {
-			return cpApprovalFailed(ctx, srcs, dst, approvalAssetID, err, result)
+		if cpSourceExpands(src, recursive) {
+			approvalCtx, result, approvalAssetID, err := requireCpApproval(ctx,
+				[]cpTarget{{ep: src, dir: helper.DirList, path: src.path}}, detail)
+			ctx = approvalCtx
+			if err != nil {
+				return cpApprovalFailed(ctx, srcs, dst, approvalAssetID, err, result)
+			}
 		}
 
 		res, err := src.adapter.List(ctx, src.asset, src.path, recursive)

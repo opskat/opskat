@@ -56,15 +56,24 @@ func (r *recordingAuditRepo) ListSessions(context.Context, int64) ([]audit_repo.
 // 明令禁止的"批一条递归 pattern"，整个包仍然全绿）。这个内存端点把那一半接进断言。
 const cpTestRemoteType = "cptestremote"
 
-type cpFakeAdapter struct{ entries []helper.Entry }
+type cpFakeAdapter struct {
+	entries []helper.Entry
+	// byPattern 让每条源交出各自的展开结果。N 个显式源的用例需要它：共用一份 entries
+	// 会把"每个源展开出的那一条"折叠成同一条主体，于是"每个源都进了审批"这句断言
+	// 只剩一条可断。
+	byPattern map[string][]helper.Entry
+}
 
 var cpFakeRemote = &cpFakeAdapter{}
 
 func init() { helper.RegisterTransferAdapter(cpTestRemoteType, cpFakeRemote) }
 
 func (a *cpFakeAdapter) List(
-	_ context.Context, _ *asset_entity.Asset, _ string, _ bool,
+	_ context.Context, _ *asset_entity.Asset, pattern string, _ bool,
 ) (*helper.ListResult, error) {
+	if entries, ok := a.byPattern[pattern]; ok {
+		return &helper.ListResult{Entries: entries}, nil
+	}
 	return &helper.ListResult{Entries: a.entries}, nil
 }
 
@@ -549,6 +558,76 @@ func TestCmdCpExpansionRequiresListApproval(t *testing.T) {
 		So(seen[0].Command, ShouldEqual, "/var/log")
 		So(batches, ShouldBeEmpty)
 		So(calls, ShouldBeEmpty)
+	})
+}
+
+// TestCmdCpListApprovalOnlyWhenSomethingIsEnumerated 锁住 D18 的作用域：展开授权只在真的
+// 会枚举时索取，即 recursive 为真或源含通配元字符。
+//
+// 给了 N 个显式源却既无 -r 也无通配时，没有任何东西被枚举——指名的源若是目录，无 -r 时
+// List 本来就直接报错。为它要一次"列出这个基点"的授权（OSS 上是
+// `object.list <bucket>/<prefix>/`）比"复制这一个指名对象"宽，方向上正是本分支反复在修的
+// "批准一件事、拿到另一件"，只是这次宽在授权侧。收窄方向是**要得更少**，判据与 AI 侧
+// handleCp 的多源形态判定同一条（spec §6.2 明写两条入口的授权要互相复用）。
+//
+// recursive 那一半由 TestCmdCpExpansionRequiresListApproval 守着。
+func TestCmdCpListApprovalOnlyWhenSomethingIsEnumerated(t *testing.T) {
+	Convey("展开授权只在真的会枚举时索取", t, func() {
+		registerCpTestAsset(t)
+		origProxyFn := cpSSHProxyClientFn
+		cpSSHProxyClientFn = func() *sshpool.Client { return nil }
+		defer func() { cpSSHProxyClientFn = origProxyFn }()
+		mockAudit := &mockAuditWriter{}
+		origWriter := opsctlAuditWriter
+		opsctlAuditWriter = mockAudit
+		defer func() { opsctlAuditWriter = origWriter }()
+
+		var seen []approval.ApprovalRequest
+		origApproval := cpApprovalFn
+		cpApprovalFn = func(_ context.Context, req approval.ApprovalRequest) (ApprovalResult, error) {
+			seen = append(seen, req)
+			return ApprovalResult{Decision: aictx.Allow, SessionID: "sess-cp"}, nil
+		}
+		defer func() { cpApprovalFn = origApproval }()
+
+		cpFakeRemote.byPattern = map[string][]helper.Entry{
+			"/var/log/a.log": {{Path: "/var/log/a.log", RelPath: "a.log", Size: 1}},
+			"/var/log/b.log": {{Path: "/var/log/b.log", RelPath: "b.log", Size: 2}},
+			"/var/log/*.log": {
+				{Path: "/var/log/a.log", RelPath: "a.log", Size: 1},
+				{Path: "/var/log/b.log", RelPath: "b.log", Size: 2},
+			},
+		}
+		defer func() { cpFakeRemote.byPattern = nil }()
+
+		var batches [][]cpSubject
+		stubCpBatchApproval(t, &batches, ApprovalResult{Decision: aictx.Allow, SessionID: "s"}, nil)
+		var calls []map[string]any
+		handlers := stubCpHandler(&calls)
+		dstDir := filepath.ToSlash(t.TempDir()) + "/"
+
+		Convey("N 个显式源、无 -r 无通配：不索取展开授权", func() {
+			exitCode := cmdCp(context.Background(), handlers,
+				[]string{"3:/var/log/a.log", "3:/var/log/b.log", dstDir}, "")
+
+			So(exitCode, ShouldEqual, 0)
+			So(seen, ShouldBeEmpty)
+			// 收窄掉的只有"列出源端"：这两个对象各自的读授权照旧逐条要。
+			So(batches, ShouldHaveLength, 1)
+			So(subjectCommands(batches[0]), ShouldResemble, []string{
+				cpTestRemoteType + " read /var/log/a.log",
+				cpTestRemoteType + " read /var/log/b.log",
+			})
+		})
+
+		Convey("源含通配：照旧索取展开授权", func() {
+			exitCode := cmdCp(context.Background(), handlers, []string{"3:/var/log/*.log", dstDir}, "")
+
+			So(exitCode, ShouldEqual, 0)
+			So(seen, ShouldHaveLength, 1)
+			So(seen[0].Type, ShouldEqual, cpTestRemoteType)
+			So(seen[0].Command, ShouldEqual, "list /var/log/*.log")
+		})
 	})
 }
 
