@@ -632,6 +632,8 @@ Multiple Sources:
   With -r, a glob pattern, or more than one source, the destination must end
   with "/" and each entry lands at <destination>/<path relative to the source
   base>. Quote remote globs so the local shell does not expand them first.
+  The sources may expand to at most 200 entries: beyond that the whole transfer
+  is an error, never a partial copy. Symlinks are skipped and reported.
 
 Approval:
   Every asset endpoint is authorized separately under that asset's own policy,

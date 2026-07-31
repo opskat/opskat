@@ -12,6 +12,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/audit"
+	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -46,9 +47,56 @@ func (r *recordingAuditRepo) ListSessions(context.Context, int64) ([]audit_repo.
 	return nil, nil
 }
 
+// cpTestRemoteType 是一个只在测试二进制里存在的传输端点类型（同一套路的先例：
+// internal/ai/tool/file_transfer_approval_test.go 的 cptest）。
+//
+// 它存在是因为**远端源的展开**在这个包里没有别的办法观察：SSH 端要一台真机、对象存储端
+// 要一个服务端，于是本文件此前每一条多源用例的源都是本地目录，而本地端不产生审批主体——
+// 展开出的每一条**读**主体因此从未被任何断言看见（把 entry.Path 换成 src.path，即 D17
+// 明令禁止的"批一条递归 pattern"，整个包仍然全绿）。这个内存端点把那一半接进断言。
+const cpTestRemoteType = "cptestremote"
+
+type cpFakeAdapter struct{ entries []helper.Entry }
+
+var cpFakeRemote = &cpFakeAdapter{}
+
+func init() { helper.RegisterTransferAdapter(cpTestRemoteType, cpFakeRemote) }
+
+func (a *cpFakeAdapter) List(
+	_ context.Context, _ *asset_entity.Asset, _ string, _ bool,
+) (*helper.ListResult, error) {
+	return &helper.ListResult{Entries: a.entries}, nil
+}
+
+func (a *cpFakeAdapter) OpenRead(
+	_ context.Context, _ *asset_entity.Asset, _ string,
+) (io.ReadCloser, int64, error) {
+	return nil, 0, errors.New("cptestremote: opsctl never transfers by itself; that is the cp tool's job")
+}
+
+func (a *cpFakeAdapter) Write(_ context.Context, _ *asset_entity.Asset, _ string, _ io.Reader, _ int64) error {
+	return errors.New("cptestremote: opsctl never transfers by itself; that is the cp tool's job")
+}
+
+func (a *cpFakeAdapter) ValidateDestination(string) error { return nil }
+
+// ApprovalSubject 按方向给出不同的主体：读与写的主体分不开时，"每条展开出的路径都进了
+// 审批"这句断言就分不出它断的是哪一半。
+func (a *cpFakeAdapter) ApprovalSubject(p string, dir helper.Direction) (string, string) {
+	action := "read"
+	switch dir {
+	case helper.DirWrite:
+		action = "write"
+	case helper.DirList:
+		action = "list"
+	}
+	return cpTestRemoteType, action + " " + p
+}
+
 // registerCpTestAsset 注册一个 mock asset repo：assetID=1 是 SSH 资产、assetID=2 是对象
-// 存储资产，让 "1:/path" 与 "2:/bucket/key" 两种端点串都能解析（cp 的两端各有三种形态，
-// 只有 SSH 一种时测不到"任一端是对象存储就不走 proxy"这类分派）。
+// 存储资产、assetID=3 是上面那个内存端点，让 "1:/path" 与 "2:/bucket/key" 两种端点串都能
+// 解析（cp 的两端各有三种形态，只有 SSH 一种时测不到"任一端是对象存储就不走 proxy"
+// 这类分派），而 "3:/path" 交出一份可控的展开结果。
 func registerCpTestAsset(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)
@@ -57,6 +105,8 @@ func registerCpTestAsset(t *testing.T) {
 		Return(&asset_entity.Asset{ID: 1, Name: "web-01", Type: asset_entity.AssetTypeSSH}, nil).AnyTimes()
 	mockAsset.EXPECT().Find(gomock.Any(), int64(2)).
 		Return(&asset_entity.Asset{ID: 2, Name: "s3-prod", Type: asset_entity.AssetTypeOSS}, nil).AnyTimes()
+	mockAsset.EXPECT().Find(gomock.Any(), int64(3)).
+		Return(&asset_entity.Asset{ID: 3, Name: "sink-01", Type: cpTestRemoteType}, nil).AnyTimes()
 	orig := asset_repo.Asset()
 	asset_repo.RegisterAsset(mockAsset)
 	t.Cleanup(func() {
@@ -330,6 +380,21 @@ func TestCmdCpMultiSourceApprovesEveryExpandedPath(t *testing.T) {
 			So(calls, ShouldBeEmpty)
 		})
 
+		// 零命中不是一次成功的传输：真实 cp 对无匹配同样非零退出，而这里放行的后果比"静默
+		// 的零文件成功"还重一档——落点是由 entries[0] 拼出来的，空清单会当场 index out of
+		// range（见 cpDstArg）。
+		Convey("零命中报错，不发起批量审批", func() {
+			var batches [][]cpSubject
+			stubCpBatchApproval(t, &batches, ApprovalResult{Decision: aictx.Allow}, nil)
+
+			exitCode := cmdCp(context.Background(), handlers,
+				[]string{filepath.Join(root, "*.nomatch"), "1:/opt/app/"}, "")
+
+			So(exitCode, ShouldEqual, 1)
+			So(batches, ShouldBeEmpty)
+			So(calls, ShouldBeEmpty)
+		})
+
 		Convey("超过 200 条即报错，不截断也不审批", func() {
 			big := t.TempDir()
 			for i := 0; i < cpMaxEntries+1; i++ {
@@ -343,6 +408,52 @@ func TestCmdCpMultiSourceApprovesEveryExpandedPath(t *testing.T) {
 			So(exitCode, ShouldEqual, 1)
 			So(batches, ShouldBeEmpty)
 			So(calls, ShouldBeEmpty)
+		})
+	})
+}
+
+// TestCmdCpMultiSourceApprovesEveryRemoteReadPath 锁住硬不变式的**读**那一半：远端源展开
+// 出的每一条路径，都要作为一条具体主体进批量审批（spec 第 9 行 / D17）。
+//
+// 上面那个测试的源全是本地目录，而本地端不产生审批主体，于是它断的其实只有目的端的写主体。
+// 读那一半在这里断：目的端取本地，批量清单里就只剩源端读主体，一条不多。主体必须是
+// entry.Path 而不是源端基点——批一条基点等于批一条递归 pattern，正是 D17 否决的那件事。
+func TestCmdCpMultiSourceApprovesEveryRemoteReadPath(t *testing.T) {
+	Convey("远端源：展开出的每一条读路径都是一条独立主体", t, func() {
+		registerCpTestAsset(t)
+		origProxyFn := cpSSHProxyClientFn
+		cpSSHProxyClientFn = func() *sshpool.Client { return nil }
+		defer func() { cpSSHProxyClientFn = origProxyFn }()
+		mockAudit := &mockAuditWriter{}
+		origWriter := opsctlAuditWriter
+		opsctlAuditWriter = mockAudit
+		defer func() { opsctlAuditWriter = origWriter }()
+
+		origApproval := cpApprovalFn
+		cpApprovalFn = func(_ context.Context, _ approval.ApprovalRequest) (ApprovalResult, error) {
+			return ApprovalResult{Decision: aictx.Allow, SessionID: "sess-cp"}, nil
+		}
+		defer func() { cpApprovalFn = origApproval }()
+
+		cpFakeRemote.entries = []helper.Entry{
+			{Path: "/var/log/app.log", RelPath: "app.log", Size: 7},
+			{Path: "/var/log/nginx/access.log", RelPath: "nginx/access.log", Size: 7},
+		}
+		defer func() { cpFakeRemote.entries = nil }()
+
+		var batches [][]cpSubject
+		stubCpBatchApproval(t, &batches, ApprovalResult{Decision: aictx.Allow, SessionID: "s"}, nil)
+		var calls []map[string]any
+		handlers := stubCpHandler(&calls)
+
+		exitCode := cmdCp(context.Background(), handlers,
+			[]string{"-r", "3:/var/log", filepath.ToSlash(t.TempDir()) + "/"}, "")
+
+		So(exitCode, ShouldEqual, 0)
+		So(batches, ShouldHaveLength, 1)
+		So(subjectCommands(batches[0]), ShouldResemble, []string{
+			cpTestRemoteType + " read /var/log/app.log",
+			cpTestRemoteType + " read /var/log/nginx/access.log",
 		})
 	})
 }

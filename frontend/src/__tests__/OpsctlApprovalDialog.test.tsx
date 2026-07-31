@@ -38,15 +38,29 @@ function fireBatchApproval(handlers: Map<string, (data: unknown) => void>, items
   });
 }
 
-// 一条递归/通配 opsctl cp 展开出的批量审批项：每条都是独立主体（D17）。detail 是这次
-// 传输唯一携带"两端基点"的地方——checkAccessBatch 给每条都填了同一句 "cp src → dst"。
-function batchItems(n: number, detail?: string) {
+function fireGrantApproval(handlers: Map<string, (data: unknown) => void>, items: unknown[]) {
+  const handler = handlers.get("opsctl:grant-approval");
+  if (!handler) throw new Error("opsctl:grant-approval handler not registered");
+  act(() => {
+    handler({ session_id: "grant-1", items, description: "批量授权" });
+  });
+}
+
+// 一条递归/通配 opsctl cp 展开出的批量审批项：每条都是独立主体（D17）。
+//
+// 这四个键就是载荷的全部——`opsctl:batch-approval` 的每条 item 由
+// internal/app/opsctl/approval.go 的 handleBatchApproval 拼出，只有
+// type / asset_id / asset_name / command，approval.BatchItem 本身也没有 Detail 字段
+// （single 与 grant 两个事件才有 detail）。因此 CLI 这一侧的折叠摘要目前只报得出条数，
+// 报不出 cp 的两端基点；多给一个 detail 键测出来的"两端基点"是测试自己发明的，
+// 不是用户会看到的东西。AI 侧不同：checkAccessBatch 给每条都填了 "cp src → dst"，
+// 那一半在 ApprovalBlock.test.tsx 里断。
+function batchItems(n: number) {
   return Array.from({ length: n }, (_, i) => ({
     type: "cp",
     asset_id: (i % 2) + 1,
     asset_name: i % 2 === 0 ? "web-01" : "s3-prod",
     command: `/var/log/app-${i}.log`,
-    detail,
   }));
 }
 
@@ -145,7 +159,8 @@ describe("OpsctlApprovalDialog", () => {
 });
 
 // 递归/通配 cp 一次性送来上百条 ApprovalItem，原样铺开没法读——超过 10 条时折叠为一行
-// 摘要（条数 + 两端基点），展开后仍是全部具体主体。折叠只是呈现，批的还是那 N 条主体（D17）。
+// 摘要，展开后仍是全部具体主体。折叠只是呈现，批的还是那 N 条主体（D17）。
+// 摘要里的"两端基点"这一半在 CLI 这条路上还落不下来，理由见 batchItems 的注释。
 describe("OpsctlApprovalDialog 批量审批折叠（kind=batch，D17）", () => {
   it("恰好 10 条不折叠：全部主体直接可见，没有折叠摘要", () => {
     const handlers = captureHandlers();
@@ -158,15 +173,14 @@ describe("OpsctlApprovalDialog 批量审批折叠（kind=batch，D17）", () => 
     expect(screen.getByText("/var/log/app-9.log")).toBeVisible();
   });
 
-  it("11 条时折叠为一行摘要（含条数与两端基点），具体主体默认不可见", () => {
+  it("11 条时折叠为一行摘要（含条数），具体主体默认不可见", () => {
     const handlers = captureHandlers();
     render(<OpsctlApprovalDialog />);
 
-    fireBatchApproval(handlers, batchItems(11, "cp web-01:/var/log → s3-prod:/bucket/logs/"));
+    fireBatchApproval(handlers, batchItems(11));
 
     const summary = screen.getByTestId("opsctl-approval-batch-summary");
     expect(summary).toHaveAttribute("data-count", "11");
-    expect(summary.textContent).toContain("cp web-01:/var/log → s3-prod:/bucket/logs/");
     expect(screen.getByText("/var/log/app-0.log")).not.toBeVisible();
   });
 
@@ -205,5 +219,26 @@ describe("OpsctlApprovalDialog 批量审批折叠（kind=batch，D17）", () => 
 
     expect(screen.queryByTestId("opsctl-approval-batch-summary")).not.toBeInTheDocument();
     expect(screen.getByText("/var/log/app-0.log")).toBeVisible();
+  });
+
+  // 折叠只对 kind=batch 生效，理由是 grant 的每条都要能编辑。这个对话框正是编辑真的发生的
+  // 地方（grant 事件建的队列项 editable=true，每条渲染成一个 Textarea），所以那条守卫必须
+  // 在这里也有断言：ApprovalBlock 的同名用例守不住这个组件。
+  it("grant 审批哪怕超过 10 条也不折叠——每条都要能编辑", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+
+    fireGrantApproval(
+      handlers,
+      Array.from({ length: 12 }, (_, i) => ({
+        type: "exec",
+        asset_id: i + 1,
+        asset_name: `web-${i}`,
+        command: `cat /var/log/app-${i}.log`,
+      }))
+    );
+
+    expect(screen.queryByTestId("opsctl-approval-batch-summary")).not.toBeInTheDocument();
+    expect(screen.getAllByDisplayValue(/cat \/var\/log\/app-/)).toHaveLength(12);
   });
 });
