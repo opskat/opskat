@@ -310,6 +310,19 @@ func splitOSSEndpointPath(p string) (bucket, key string, err error) {
 	if hasGlobMeta(bucket) {
 		return "", "", fmt.Errorf("oss path %q cannot use a glob pattern in the bucket segment %q", p, bucket)
 	}
+	// 与 (*OSSCommand).PolicyStrings() 的后置校验同一条理由，也必须给同一个答案
+	// （§6.2「两条入口的授权互相复用」）：policy.splitOSSRule 在比较之前把规则与命令
+	// 两侧的 resource 都 TrimSpace，所以带前导/尾随空白的资源根本没有任何规则能表达。
+	// 放行的后果是"批准一件事、拿到另一件"——`mybucket/app.log ` 与 `mybucket/app.log`
+	// 在匹配器眼里同义（一条精确到单个对象的 allow 规则会放行往另一个对象的写入），
+	// 而 `mybucket/logs/ ` 更是绕过决策 D20 的前缀丢弃：它不以 "/" 收尾，匹配器却把它
+	// 读成 `logs/` 这个递归前缀。key 内部的空白是合法的（决策 D4），只有两端不行。
+	if resource := bucket + "/" + key; strings.TrimSpace(resource) != resource {
+		return "", "", fmt.Errorf(
+			"oss path %q cannot have leading or trailing whitespace: permission rules are matched after "+
+				`splitting "<action> <resource>" at its first whitespace, so a padded name cannot be `+
+				"authorized at all (a key may contain interior spaces)", p)
+	}
 	return bucket, key, nil
 }
 

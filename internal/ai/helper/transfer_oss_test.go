@@ -642,6 +642,54 @@ func TestOSSTransfer_ValidateDestination(t *testing.T) {
 	}
 }
 
+// TestOSSTransfer_PaddedPathIsNotAnAuthorizableSubject 咬住一条**规则语言表达不了**的
+// 形态：resource 段带前导/尾随空白。
+//
+// policy.splitOSSRule 把规则与命令两侧的 resource 都 TrimSpace 之后再比，所以
+// `mybucket/app.log ` 与 `mybucket/app.log` 在匹配器眼里是同一个资源——而在 S3 眼里
+// 是两个对象，Write 落的是带空格的那一个。放行的后果正是 §3.3 那类"批准一件事、拿到
+// 另一件"：一条精确到单个对象的 allow 规则 `object.write mybucket/app.log` 会放行往
+// `mybucket/app.log ` 的写入。尾随空白还能整条绕过 D20 的前缀丢弃——
+// `mybucket/logs/ ` 不以 "/" 收尾，却在匹配器里就是 `logs/` 这个递归前缀。
+//
+// exec 面早已按同一条理由在 PolicyStrings() 里拒绝这种 target（错误信息就写着
+// "a padded name cannot be authorized at all"）；§6.2 要求两条入口的授权互相复用，
+// 因此 cp 面必须给出同一个答案，且要在形态关口上给，不能等到主体已经生成。
+func TestOSSTransfer_PaddedPathIsNotAnAuthorizableSubject(t *testing.T) {
+	padded := []string{
+		"/mybucket/app.log ",  // 尾随空白：与 mybucket/app.log 在匹配器里同义
+		"/mybucket/logs/ ",    // 尾随空白骗过 D20 的 HasSuffix(resource, "/")
+		"/mybucket/ ",         // 同上，桶级：匹配器读出来是整桶
+		"/ mybucket/app.log",  // 前导空白落在桶段
+		"/mybucket/app.log\t", // 制表符同样被 TrimSpace 吃掉
+	}
+	for _, p := range padded {
+		if err := ossTransfer.ValidateDestination(p); err == nil {
+			t.Errorf("ValidateDestination(%q) = nil, want an error: 这个 key 没有任何规则能授权它", p)
+		}
+		// 形态被拒之后主体必须退回惰性串——绝不能交出一条匹配器会 trim 成别的资源的主体。
+		for _, dir := range []Direction{DirRead, DirWrite, DirList} {
+			_, subject := ossTransfer.ApprovalSubject(p, dir)
+			for _, victim := range []string{
+				"object.write mybucket/app.log", "object.read mybucket/app.log",
+				"object.write mybucket/logs/deep/secret.env",
+				"object.list mybucket/logs/deep/", "object.write mybucket/anything",
+			} {
+				if patterns := permission.NormalizeGrantPatterns(
+					asset_entity.AssetTypeOSS, subject, permission.GrantOriginSystem,
+				); len(patterns) > 0 && policy.MatchOSSRule(patterns[0], victim) {
+					t.Errorf("padded path %q lands as grant %q, which authorizes %q",
+						p, patterns[0], victim)
+				}
+			}
+		}
+	}
+	// 内部空白是合法的 key 字符，必须照旧放行（决策 D4）。
+	if err := ossTransfer.ValidateDestination("/mybucket/My Report.pdf"); err != nil {
+		t.Errorf("ValidateDestination on an interior space = %v, want nil", err)
+	}
+}
+
 // oss 资产必须能在注册表里查到传输适配器，否则 cp 的九种组合里带 oss 的那五种全都够不着。
 func TestOSSTransferAdapterIsRegistered(t *testing.T) {
 	got, err := TransferAdapterFor(&asset_entity.Asset{Type: asset_entity.AssetTypeOSS})

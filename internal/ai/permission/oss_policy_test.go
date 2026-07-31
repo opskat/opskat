@@ -13,10 +13,38 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/audit_entity"
 	"github.com/opskat/opskat/internal/model/entity/grant_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
+	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"github.com/opskat/opskat/internal/repository/grant_repo"
 )
+
+// stubAuditRepo 只记下写进来的审计行，供"落了几条 grant 就该有几条 grant_submit"这类
+// 断言使用。仓内 mock 惯例：注册全局单例 + t.Cleanup 还原。
+type stubAuditRepo struct{ entries []*audit_entity.AuditLog }
+
+func (r *stubAuditRepo) Create(_ context.Context, log *audit_entity.AuditLog) error {
+	r.entries = append(r.entries, log)
+	return nil
+}
+
+func (r *stubAuditRepo) List(context.Context, audit_repo.ListOptions) ([]*audit_entity.AuditLog, int64, error) {
+	return nil, 0, nil
+}
+
+func (r *stubAuditRepo) ListSessions(context.Context, int64) ([]audit_repo.SessionInfo, error) {
+	return nil, nil
+}
+
+func withStubAudit(t *testing.T) *stubAuditRepo {
+	t.Helper()
+	stub := &stubAuditRepo{}
+	orig := audit_repo.Audit()
+	audit_repo.RegisterAudit(stub)
+	t.Cleanup(func() { audit_repo.RegisterAudit(orig) })
+	return stub
+}
 
 // ossStubPolicyStrings 是 exec DSL → 策略串的一张小表，用来在本包里扮演注册进来的
 // PolicyStringsFunc。
@@ -496,6 +524,7 @@ func TestEscapeOSSMeta_EscapedNameMatchesItselfAndNothingElse(t *testing.T) {
 // 没拿到的授权，外加一条同样不真实的 grant_submit 审计行。
 func TestHandleConfirm_OSSAllowAllLeavesNoDeadGrantRow(t *testing.T) {
 	withOSSPolicyStrings(t)
+	stubAudit := withStubAudit(t)
 	ctx, mockAsset, _ := setupPolicyTest(t)
 
 	stubGrant := newStubGrantRepo()
@@ -519,11 +548,17 @@ func TestHandleConfirm_OSSAllowAllLeavesNoDeadGrantRow(t *testing.T) {
 	assert.Equal(t, aictx.Allow, got.Decision, "这一次操作本身仍然被批准，只是不产生常驻授权")
 	assert.Empty(t, stubGrant.items["sess-dead"],
 		"落库的每一条都该是能匹配上东西的授权；这一条只会在授权列表里骗人")
+	// grant_submit 审计行与 grant 行是同一件事的两半：没有落成常驻授权，就没有
+	// "用户提交了这些 pattern" 这回事。审计里留一条空的 grant_submit，日后查
+	// audit_logs 的人会以为用户拿到了授权，而 grants 表里一条都没有。
+	assert.Empty(t, stubAudit.entries,
+		"一条 grant 都没落下时，不该有 grant_submit 审计行")
 }
 
 // 反过来，能落的照落——否则"什么都不落"是个廉价的通过方式。
 func TestHandleConfirm_OSSAllowAllSavesTheDerivedPolicyStrings(t *testing.T) {
 	withOSSPolicyStrings(t)
+	stubAudit := withStubAudit(t)
 	ctx, mockAsset, _ := setupPolicyTest(t)
 
 	stubGrant := newStubGrantRepo()
@@ -550,6 +585,8 @@ func TestHandleConfirm_OSSAllowAllSavesTheDerivedPolicyStrings(t *testing.T) {
 		saved = append(saved, item.Command)
 	}
 	assert.Equal(t, []string{"object.read mybucket/a", "object.write other/b", "object.delete mybucket/a"}, saved)
+	// 反过来：真落了 grant 就必须有 grant_submit 审计行，否则"永远不写"是个廉价的通过方式。
+	assert.Len(t, stubAudit.entries, 1, "落了 grant 就该有一条 grant_submit 审计行")
 }
 
 // TestHandleConfirm_OSSTransferSubjectIsNotAUserPattern 咬住 HandleConfirm 里另一半
