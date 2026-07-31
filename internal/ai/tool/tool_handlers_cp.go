@@ -17,12 +17,26 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
+// cpMaxEntries 是一次 cp 允许展开出的条目上限（D19）。超出即报错，不截断。
+//
+// 上限不是性能考虑，是审批质量：五千条的对话框不是决策，是橡皮图章。而截断到前 200 条
+// 会换来更糟的东西——一次看起来成功、实际只复制了一部分的传输。
+const cpMaxEntries = 200
+
 // cpEndpoint 是解析后的 cp 的一端：资产（本地端为 nil）、该端点上的路径，以及它的适配器。
 type cpEndpoint struct {
 	raw     string
 	asset   *asset_entity.Asset
 	path    string
 	adapter helper.TransferAdapter
+}
+
+// cpAccess 是一条待授权的端点访问：某个端点上的某条**具体**路径，在某个方向上。
+// 展开出的每条路径各产生一条源读、一条目的写，它们一起进同一次批量审批（D17）。
+type cpAccess struct {
+	ep   *cpEndpoint
+	path string
+	dir  helper.Direction
 }
 
 // isRemote 报告这一端有没有资产。**有资产才有审批主体**——本地端点没有资产，正确的调用方
@@ -53,7 +67,8 @@ type cpResult struct {
 //     更宽的常驻授权。
 //  5. 逐端点审批：每个远端端点向自己的适配器索取 ApprovalSubject，各自过一次权限检查
 //     （SSH 是 cp + 远端路径，OSS 是 oss + `object.read/write <bucket>/<key>`）。任一端
-//     被拒即整体失败，**且在任何字节被读写之前**。
+//     被拒即整体失败，**且在任何字节被读写之前**。多源形态下"每个端点"是**展开后的每条
+//     具体路径**，它们一起进同一次批量审批（D17）。
 //  6. 传输：OpenRead → Write。
 //
 // 单源形态下审批排在展开（List）之前：被指名的那个路径两端都已知，不必先连上去问一句
@@ -162,7 +177,7 @@ func cpSingleSource(
 	if err := transferOne(ctx, src, dst, res.Entries[0], dst.path); err != nil {
 		return "", err
 	}
-	return cpSummary(res.Entries[0].Size, res.SkippedSymlinks)
+	return cpSummary(1, res.Entries[0].Size, res.SkippedSymlinks)
 }
 
 // cpMultiSource 处理多源形态：recursive 为真，或源路径含 glob 元字符（spec §6.5）。
@@ -197,29 +212,115 @@ func cpMultiSource(
 	if err != nil {
 		return "", err
 	}
-	if len(res.Entries) > 1 {
+	if len(res.Entries) > cpMaxEntries {
 		return "", fmt.Errorf(
-			"%q expands to %d entries; cp transfers one entry per call for now — narrow the source pattern",
-			src.raw, len(res.Entries))
+			"%q expands to %d entries, more than the %d that can be reviewed in one approval; "+
+				"narrow the source pattern (nothing was transferred)",
+			src.raw, len(res.Entries), cpMaxEntries)
 	}
 
-	// 目的路径 = 目的基点 + RelPath。形态校验只能排在展开之后（这条路径此刻才存在），
-	// 但仍然排在这条传输的两个审批项之前——展开授权是另一件事，它批的是"列出源端"。
-	entry := res.Entries[0]
-	dstPath := dst.path + entry.RelPath
-	if err := dst.adapter.ValidateDestination(dstPath); err != nil {
+	// 目的路径 = 目的基点 + RelPath。形态校验只能排在展开之后（这些路径此刻才存在），
+	// 但仍然排在这次传输的审批项之前——展开授权是另一件事，它批的是"列出源端"。
+	dstPaths := make([]string, len(res.Entries))
+	accesses := make([]cpAccess, 0, 2*len(res.Entries))
+	for i, entry := range res.Entries {
+		dstPath := dst.path + entry.RelPath
+		if err := dst.adapter.ValidateDestination(dstPath); err != nil {
+			return "", err
+		}
+		dstPaths[i] = dstPath
+		// 读与写成对相邻：一条待批准的传输是"从这里读、写到那里"，把两半拆到一份
+		// 两百行清单的首尾两段，用户就没法逐条看出哪个文件会落到哪里。
+		accesses = append(accesses,
+			cpAccess{ep: src, path: entry.Path, dir: helper.DirRead},
+			cpAccess{ep: dst, path: dstPath, dir: helper.DirWrite})
+	}
+	if err := checkAccessBatch(ctx, checker, accesses, detail); err != nil {
 		return "", err
 	}
-	if err := checkEndpoint(ctx, checker, src, helper.DirRead, entry.Path, detail); err != nil {
-		return "", err
+
+	// 快速失败：任一条出错立即中止（D19）。不采用 POSIX cp 的"继续并最终非零"——每个已
+	// 传输的字节都是一次已批准的副作用，出意外后继续会留下一个看起来完整、实际残缺的
+	// 目的地。已经落地的那 N 条要在错误里报出来，而不是假装这次传输什么都没做。
+	var totalBytes int64
+	for i, entry := range res.Entries {
+		if err := transferOne(ctx, src, dst, entry, dstPaths[i]); err != nil {
+			return "", fmt.Errorf("transferred %d/%d entries, then %q → %q failed: %w",
+				i, len(res.Entries), entry.Path, dstPaths[i], err)
+		}
+		totalBytes += entry.Size
 	}
-	if err := checkEndpoint(ctx, checker, dst, helper.DirWrite, dstPath, detail); err != nil {
-		return "", err
+	return cpSummary(len(res.Entries), totalBytes, res.SkippedSymlinks)
+}
+
+// checkAccessBatch 让一批端点访问过一次授权：每条各自查策略，**需要确认的全部塞进同一个
+// 审批对话框**（spec §6.5 第二段 / D17）。逐条弹 N 次框不可用，批一条递归 pattern 则会
+// 顺带放宽 local_write/local_edit 那道共用的匹配器——主体始终是展开后的具体路径。
+//
+// "有资产才有审批主体"这条判断只出现在下面那一行：其余部分（主体去重、策略检查、批量
+// 对话框、拒绝处理）对端点一视同仁，本地端点将来若要产生审批项，改的是那一行而不是这条流程。
+func checkAccessBatch(
+	ctx context.Context, checker *permission.CommandPolicyChecker, accesses []cpAccess, detail string,
+) error {
+	// checker 为 nil 只在 opsctl 那条已预检的路径上合法（上游 RequireCheckerOrPreapproved
+	// 已经挡掉漏接线），与 checkEndpoint 同一条豁免。
+	if checker == nil {
+		return nil
 	}
-	if err := transferOne(ctx, src, dst, entry, dstPath); err != nil {
-		return "", err
+
+	items := make([]permission.ApprovalItem, 0, len(accesses))
+	seen := make(map[permission.ApprovalItem]bool, len(accesses))
+	for _, access := range accesses {
+		if !access.ep.isRemote() {
+			continue
+		}
+		approvalType, subject := access.ep.adapter.ApprovalSubject(access.path, access.dir)
+		item := permission.ApprovalItem{
+			Type:      permission.ApprovalTypeFor(approvalType),
+			AssetID:   access.ep.asset.ID,
+			AssetName: access.ep.asset.Name,
+			Command:   subject,
+			Detail:    detail,
+		}
+		// 同一条主体只查一次、只出现一次：源与目的落在同一个前缀上时读写主体逐字相同，
+		// 重复条目让用户在同一份清单里读两遍同一句话，还会凭空吃掉一半的条目上限。
+		if seen[item] {
+			continue
+		}
+		seen[item] = true
+
+		result := permission.CheckPermission(ctx, approvalType, access.ep.asset.ID, subject)
+		aictx.RecordDecision(ctx, result)
+		switch result.Decision {
+		case aictx.Deny:
+			return fmt.Errorf("%s", result.Message)
+		case aictx.NeedConfirm:
+			items = append(items, item)
+		}
 	}
-	return cpSummary(entry.Size, res.SkippedSymlinks)
+	if len(items) == 0 {
+		return nil
+	}
+
+	confirm := checker.ConfirmFunc()
+	if confirm == nil {
+		return fmt.Errorf("transfer requires confirmation but no approval mechanism is configured")
+	}
+	resp := confirm(ctx, permission.ApprovalKindBatch, items)
+	parsed, parseErr := permission.ParseApprovalResponse(permission.ApprovalKindBatch, resp, items)
+	if parseErr != nil || parsed.Decision != permission.ApprovalAllow {
+		// 响应解析失败与用户点拒绝合成同一条出路，与 HandleConfirm 同一裁定：两者都不是
+		// 授权，而模型该做的事（立刻停下）也是同一件。
+		msg := fmt.Sprintf(
+			"USER DENIED: The user has denied this transfer (%d paths). Stop the current task immediately.",
+			len(items))
+		aictx.RecordDecision(ctx, aictx.CheckResult{
+			Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny, Message: msg,
+		})
+		return fmt.Errorf("%s", msg)
+	}
+	aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow})
+	return nil
 }
 
 // expandSource 展开源端，并把"什么都没匹配上"翻译成错误。
@@ -291,8 +392,8 @@ func transferOne(ctx context.Context, src, dst *cpEndpoint, entry helper.Entry, 
 	return nil
 }
 
-func cpSummary(bytes int64, skipped []string) (string, error) {
-	out, err := json.Marshal(cpResult{Transferred: 1, Bytes: bytes, Skipped: skipped})
+func cpSummary(transferred int, bytes int64, skipped []string) (string, error) {
+	out, err := json.Marshal(cpResult{Transferred: transferred, Bytes: bytes, Skipped: skipped})
 	if err != nil {
 		return "", fmt.Errorf("marshal cp result: %w", err)
 	}

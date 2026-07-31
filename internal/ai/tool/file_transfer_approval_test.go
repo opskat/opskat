@@ -432,23 +432,3 @@ func TestCpMultiSourceValidatesTheJoinedDestination(t *testing.T) {
 		So(cpFake.written, ShouldBeEmpty)
 	})
 }
-
-// TestCpMultiEntryExpansionIsRejectedForNow 是一条**临时**契约：批量审批（每条展开出的
-// 路径各自是主体、一次性进同一个对话框）尚未接上，因此多于一条时必须报错而不是逐条弹框
-// 或只传一部分。接上批量审批时这条测试与它锁的那个分支一起删。
-func TestCpMultiEntryExpansionIsRejectedForNow(t *testing.T) {
-	Convey("展开出多条时报错，不静默只传一部分", t, func() {
-		ctx, _ := setupCp(t, "allow")
-		dir := t.TempDir()
-		So(os.WriteFile(filepath.Join(dir, "a.log"), []byte("a"), 0o600), ShouldBeNil)
-		So(os.WriteFile(filepath.Join(dir, "b.log"), []byte("b"), 0o600), ShouldBeNil)
-
-		_, err := handleCp(ctx, map[string]any{
-			"src": filepath.Join(dir, "*.log"), "dst": "sink-01:/logs/",
-		})
-
-		So(err, ShouldNotBeNil)
-		So(err.Error(), ShouldContainSubstring, "2 entries")
-		So(cpFake.written, ShouldBeEmpty)
-	})
-}
