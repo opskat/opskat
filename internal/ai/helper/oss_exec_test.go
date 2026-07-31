@@ -177,6 +177,14 @@ func (f *fakeOSSExec) onlyCall(t *testing.T, op string) ossExecCall {
 	if f.calls[0].op != op {
 		t.Fatalf("service call = %q, want %q", f.calls[0].op, op)
 	}
+	// 每条命令都必须打在被审批的那个资产上。断言放在这里而不是逐个用例里，是因为它对
+	// 全部九个操作是同一条不变式：assetID 是执行器唯一有机会搞错的"哪台机器"参数，
+	// 而弄错它就是在一个从没被检查过的资产上动手。实测每个 handler 各自漏掉它时，
+	// 除 bucket list 外没有任何用例会红。
+	if f.calls[0].assetID != ossExecAsset().ID {
+		t.Fatalf("%s ran with assetID = %d, want %d (the asset the command was approved for)",
+			op, f.calls[0].assetID, ossExecAsset().ID)
+	}
 	return f.calls[0]
 }
 
@@ -273,18 +281,40 @@ func TestExecOSSOnAsset_ObjectGetInline(t *testing.T) {
 
 // 截断必须**报出来**：一个看起来完整、实际只有开头 N 字节的配置文件，比一个报错糟得多
 // ——模型会照着半截内容改。
+//
+// 两条边界用例（读满上限一个字节都不多 / 只多一个字节）不是凑数：`len(data) > maxBytes`
+// 写成 `>=` 时，上面那条"多读一个字节"的探测仍然工作，整包却照样全绿（实测该变异存活）
+// ——错的只有恰好读满的那一个对象，它会被标成 truncated，模型据此白跑一次 --file，
+// 或者干脆认为自己没读全而放弃。截断标志的全部价值就在这个边界上。
 func TestExecOSSOnAsset_ObjectGetInlineTruncates(t *testing.T) {
-	f := &fakeOSSExec{objects: map[string]string{"mybucket/app.log": "0123456789"}}
-	got := runOSSExec(t, f, "object get mybucket/app.log --max-bytes=4")
+	const body = "0123456789"
+	cases := []struct {
+		name        string
+		maxBytes    int
+		wantContent string
+		wantTrunc   bool
+	}{
+		{"under the limit", 20, body, false},
+		{"exactly at the limit", len(body), body, false},
+		{"one byte over the limit", len(body) - 1, "012345678", true},
+		{"well over the limit", 4, "0123", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := &fakeOSSExec{objects: map[string]string{"mybucket/app.log": body}}
+			got := runOSSExec(t, f, fmt.Sprintf("object get mybucket/app.log --max-bytes=%d", c.maxBytes))
 
-	if got["content"] != "0123" {
-		t.Errorf("content = %v, want the first 4 bytes", got["content"])
-	}
-	if got["truncated"] != true {
-		t.Errorf("truncated = %v, want true", got["truncated"])
-	}
-	if got["size"] != float64(10) {
-		t.Errorf("size = %v, want 10 (the full object size, not the returned slice)", got["size"])
+			if got["content"] != c.wantContent {
+				t.Errorf("content = %v, want %q", got["content"], c.wantContent)
+			}
+			if got["truncated"] != c.wantTrunc {
+				t.Errorf("truncated = %v, want %v for --max-bytes=%d over a %d-byte object",
+					got["truncated"], c.wantTrunc, c.maxBytes, len(body))
+			}
+			if got["size"] != float64(len(body)) {
+				t.Errorf("size = %v, want %d (the full object size, not the returned slice)", got["size"], len(body))
+			}
+		})
 	}
 }
 
@@ -469,6 +499,25 @@ func TestCanonicalizeOSSCommand_RejectsRelativeFileBeforeApproval(t *testing.T) 
 		if len(f.calls) != 0 {
 			t.Errorf("run(%q) reached the service (%v); a rejected command must not touch the backend", command, f.ops())
 		}
+	}
+}
+
+// --file 与 --max-bytes 是 object get 的两种行为，不是一件事的两个旋钮（spec §5）：
+// 带 --file 是整个对象流式落盘，--max-bytes 只截断内联返回的内容。一起给必有一个被丢掉，
+// 而审批弹窗上两个都在——与 ossFlagRules 拒绝未知 flag 是同一条理由（用户批准的和发生的
+// 不是一件事）。所以在规范化这一步就报错，而不是执行时静默按 --file 那一支走。
+func TestCanonicalizeOSSCommand_RejectsFileWithMaxBytes(t *testing.T) {
+	const command = "object get mybucket/app.log --file=/tmp/app.log --max-bytes=4"
+	if _, err := CanonicalizeOSSCommand(ossExecAsset(), command); err == nil {
+		t.Errorf("CanonicalizeOSSCommand(%q) = nil error, want a rejection: one of the two flags "+
+			"would be silently ignored after the user approved a command showing both", command)
+	}
+	f := &fakeOSSExec{objects: map[string]string{"mybucket/app.log": "0123456789"}}
+	if _, err := (ossExecutor{svc: f}).run(context.Background(), ossExecAsset(), command); err == nil {
+		t.Errorf("run(%q) = nil error, want the same rejection", command)
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("run(%q) reached the service (%v); a rejected command must not touch the backend", command, f.ops())
 	}
 }
 

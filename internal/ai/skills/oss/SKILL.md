@@ -38,7 +38,7 @@ brackets; each useful combination is spelled out on its own line.
 - `object delete backups/2026/old.log`
 - `object presign backups/2026/db.sql.gz`
 - `object presign backups/2026/db.sql.gz --expiry=600`
-- `object presign uploads/inbox/report.pdf --method=put --expiry=600`
+- `object presign uploads/inbox/report.pdf --method=put --expiry=600` (denied by the default policy, see Notes)
 
 ## Flag reference
 
@@ -57,13 +57,18 @@ runs. Verbs not listed here take no flags at all.
 
 Checked before any approval dialog, so a wrong value costs nothing:
 
-- `--max-keys`, `--after`, `--max-bytes` and `--expiry` must be plain decimal integers
-  where numeric: `1000`, not `1,000`, `1_000`, `1e3` or `3.0`.
+- `--max-keys`, `--max-bytes` and `--expiry` must be plain decimal integers: `1000`, not
+  `1,000`, `1_000`, `1e3` or `3.0`.
 - `--method` is `get` or `put`, lower case exactly. Nothing else is accepted, and there is
   no case folding: `GET` is an error rather than a synonym.
-- `--file` must be an **absolute** local path. This command runs inside the app's process,
-  whose working directory is not your shell's, so a relative path would resolve somewhere
-  unpredictable.
+- `--file` must be an **absolute** local path. The approved command string is all that
+  identifies the file, and a relative path resolves against a working directory that is not
+  part of it, so it would land somewhere unpredictable.
+- `--file` and `--max-bytes` cannot be given together: they select two different behaviors
+  of `object get` (stream the whole object to disk, or return the first bytes inline), so
+  one of them would have to be ignored.
+- `--max-bytes` defaults to 64 KiB and is capped at 1 MiB. A larger value is reduced to the
+  cap rather than rejected, and `truncated` then reports that the object was longer.
 - `--to` is a second `<bucket>/<key>` and follows the same rules as the target, including
   the requirement that it name a single object.
 

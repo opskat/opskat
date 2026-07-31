@@ -99,25 +99,38 @@ func resolveOSSCommand(command string) (*OSSCommand, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := validateOSSLocalFile(c); err != nil {
+	if err := validateOSSFileFlags(c); err != nil {
 		return nil, err
 	}
 	return c, nil
 }
 
-// validateOSSLocalFile 要求 --file 是绝对路径（决策 D11）。
+// validateOSSFileFlags 校验 --file 的两条规则：解析器够不着（它只看单个 flag 的值形状），
+// 但执行之前就判定得了，所以两条都在这里、也就都排在审批弹窗之前。
 //
-// 不在 ossFlagRules 的形状校验里做，是因为这条规则不属于 DSL 的语法而属于**这个入口**：
-// AI 进程的工作目录不是用户的终端目录，相对路径写到哪里不可预期。opsctl 侧的相对路径
-// 由它自己的入口层展开成绝对路径，命令行手感不变。
-func validateOSSLocalFile(c *OSSCommand) error {
+//   - **必须是绝对路径**（决策 D11）。规则不属于 DSL 的语法而属于这条入口：审批弹窗与
+//     audit_logs.command 记的是这条命令串本身，而相对路径要靠一个串里看不见的工作目录
+//     才能定位——批准的字符串因此指不到一个确定的文件。§3.1 的语法写的就是
+//     `--file=<absolute-local-path>`，两个入口一视同仁；opsctl 的相对路径手感由 cp 保留
+//     （D11 说的是 `opsctl cp ./a.txt`，那条路径在入口层展开成绝对路径后才进适配器）。
+//   - **不与 --max-bytes 同时出现**。两者是 `object get` 的两种行为而不是一件事的两个
+//     旋钮（spec §5）：带 --file 是整个对象流式落盘，--max-bytes 只截断内联返回的内容。
+//     一起给就有一个必然被丢掉，而审批弹窗上两个都在——正是 ossFlagRules 那条"未知 flag
+//     宁可报错也不静默丢弃"要防的同一件事（用户批准的和发生的不是一件事）。
+func validateOSSFileFlags(c *OSSCommand) error {
 	file, ok := c.Flags["file"]
 	if !ok {
 		return nil
 	}
 	if !filepath.IsAbs(file) {
-		return fmt.Errorf("--file must be an absolute path, got %q: this command runs in the app's process, "+
-			"whose working directory is not your shell's, so a relative path would resolve somewhere unpredictable", file)
+		return fmt.Errorf("--file must be an absolute path, got %q: the approved command string is all that "+
+			"identifies the file, and a relative path resolves against a working directory that is not part "+
+			"of it, so it would land somewhere unpredictable", file)
+	}
+	if _, ok := c.Flags["max-bytes"]; ok {
+		return fmt.Errorf("--file and --max-bytes cannot be combined: --file streams the whole object to disk, " +
+			"while --max-bytes only caps the content returned inline, so one of the two would be silently " +
+			"ignored; drop --max-bytes to write the file, or drop --file to read the first bytes inline")
 	}
 	return nil
 }
