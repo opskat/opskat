@@ -117,11 +117,15 @@ func TestCallHandler_Decision(t *testing.T) {
 // AllToolDefs 的。put_asset / put_group 同理锁住 create/update：这份清单此前不含
 // add_asset/update_asset，四个 opsctl 调用点改名的那次改动本可以在这里毫无察觉地漏改
 // 一处（详见 create.go 的 callHandler 调用）。
+//
+// "cp" 是这条清单最近一次真的履职：传输面从 upload_file / download_file 收敛成单个 cp
+// 之后，这里红了整整两个 commit——cmdCp 还在按两个已经不存在的名字派发，opsctl cp 在那
+// 期间是真坏的。不许改断言让它转绿：改的是 cp.go。
 func TestBuildHandlerMap_HasEveryToolOpsctlLooksUp(t *testing.T) {
 	Convey("opsctl 派发表覆盖所有按名字查找的工具", t, func() {
 		handlers := buildHandlerMap()
 		for _, name := range []string{
-			"exec", "help", "ext_exec", "upload_file", "download_file",
+			"exec", "help", "ext_exec", "cp",
 			"put_asset", "put_group", "delete_asset", "delete_group",
 		} {
 			So(handlers, ShouldContainKey, name)

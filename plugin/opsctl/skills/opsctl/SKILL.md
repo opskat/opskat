@@ -86,6 +86,22 @@ Output is structured JSON with per-command results (`exit_code`, `stdout`, `stde
 
 **Parallelizable scenarios**: batch `init`, same command on N servers, multi-target file transfers, independent database queries.
 
+## File Transfer
+
+`opsctl cp [-r] <source>... <destination>` — an endpoint is a local path, an SSH server over SFTP (`<asset>:/<path>`), or object storage (`<asset>:/<bucket>/<key>`, leading slash required). Any combination of the two sides works, including server → object storage; at least one endpoint must be on an asset.
+
+```bash
+opsctl cp ./dump.sql.gz s3-prod:/backups/2026/dump.sql.gz   # local -> object storage
+opsctl cp web-01:/var/log/app.log s3-prod:/logs/app.log     # server -> object storage
+opsctl cp -r ./dist s3-prod:/releases/v2/                   # directory tree
+opsctl cp 'web-01:/var/log/*.log' ./logs/                   # remote glob: quote it
+```
+
+- **Recursive, glob, or several sources**: the destination must end with `/`, and each entry lands at `<destination>/<path relative to the source base>`. Quote remote globs — an unquoted one is expanded by the local shell first.
+- **Approval**: every asset endpoint is authorized separately under that asset's own policy, before any byte is transferred. A recursive/glob transfer first asks permission to list the source, then puts every expanded path into one batch dialog. That batch dialog has no "always allow", so a recursive/glob/multi-source `cp` must be approved again on every run — for scripted repeats, pre-approve paths with `echo '{"items":[{"type":"cp","command":"/opt/app/*"}]}' | opsctl grant submit web-01`.
+- Expansion is capped at 200 entries: more than that is an error, never a partial transfer. Symlinks are skipped and reported; the first failure aborts the rest.
+- Both endpoints on the same object storage asset streams the object through this process. For a server-side copy use `opsctl exec <asset> -- "object copy <bucket>/<key> --to=<bucket>/<key>"`.
+
 ## Commands
 
 Core commands: `list`, `get`, `help`, `create`, `update`, `delete`, `ssh`, `exec`, `batch`, `cp`, `grant`, `session`, `ext`, `version`.

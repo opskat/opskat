@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
@@ -60,26 +59,6 @@ func extractTypeFlag(args []string) (string, []string) {
 		}
 	}
 	return "", args
-}
-
-// parseRemotePathCtx parses <asset>:<path> format where <asset> is an ID, a name, or a
-// "group/name" path. Returns (assetID, path, error). If not a remote path, assetID is 0.
-//
-// The <asset>:<path> syntax itself — first-colon split, the Windows drive-letter guard,
-// and the D15 guard from docs/superpowers/specs/2026-07-31-oss-ai-cli-operations-design.md
-// — is shared with the AI cp tool through helper.ParseTransferEndpoint. The reference
-// resolution is not: opsctl injects its own resolveAsset (resolve.go) because only that
-// one supports "group/name" disambiguation, which the AI side's assetref.Resolve (numeric
-// id or exact name) does not.
-func parseRemotePathCtx(ctx context.Context, s string) (int64, string, error) {
-	asset, path, err := helper.ParseTransferEndpoint(ctx, s, resolveAsset)
-	if err != nil {
-		return 0, "", err
-	}
-	if asset == nil {
-		return 0, path, nil
-	}
-	return asset.ID, path, nil
 }
 
 // parseRemotePath parses numeric assetID:path strings without repository lookup.

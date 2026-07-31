@@ -23,7 +23,7 @@ import (
 const auditOutputLimit = 32768 // 审计日志捕获输出大小限制
 
 // execApprovalFn 是 exec 的审批入口。变量化是为了可测——与 cp.go 的 cpApprovalFn/
-// cpProxyFn 同一套路：测试替换掉它，避免真的去连桌面端审批 socket。
+// cpBatchApprovalFn/cpSSHProxyClientFn 同一套路：测试替换掉它，避免真的去连桌面端审批 socket。
 var execApprovalFn = requireApproval
 
 // execSSHStreamFn 是 exec 对 ssh 资产的流式执行入口，同上一套路。测试只需要断言
@@ -34,7 +34,7 @@ var execSSHStreamFn = execSSHStreaming
 // 通道（stdin 管道转发、stdout/stderr 直写、远端 exit code 透传——SKILL.md 里
 // `cat config.yml | opsctl exec web-01 --type ssh -- tee ...` 这类管道工作流靠的就是它，
 // 统一 exec handler 返回的是捕获后的字符串，改道会静默打断它们）；其余类型
-// （database/redis/mongodb/etcd/kafka/k8s）走统一 exec handler——这是 opsctl 第一次
+// （database/redis/mongodb/etcd/kafka/k8s/oss）走统一 exec handler——这是 opsctl 第一次
 // 覆盖它们，此前只有 sql/redis/mongo 三个专用 verb，etcd/kafka/k8s 的 handler
 // 注册着却没有任何 verb 能抵达。
 func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
@@ -217,8 +217,9 @@ Arguments:
               Use '--' to separate the command from opsctl flags.
               Everything after '--' is joined into a single command string.
               Dispatched by the asset's real type: ssh keeps its streaming
-              channel (pipes, exit code); database/redis/mongodb/etcd/kafka/k8s
-              run through the unified exec handler.
+              channel (pipes, exit code); the other types (database, redis,
+              mongodb, etcd, kafka, k8s, oss) run through the unified exec
+              handler.
 
 Flags:
   --type <type>   Optional assertion: fails fast if the asset is not of this
