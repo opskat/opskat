@@ -161,7 +161,13 @@ copy / move 派生多条是本设计的核心安全点：只检查目的地就�
 - ssh / k8s → `shellGrantPatterns`，即当前 `NormalizeGrantPatterns` 的 shell 分支原样搬迁；
 - oss → `ossGrantPatterns`：解析 DSL → `PolicyStrings()`；**解析失败退回 `[]string{cmd}`**，这样用户在审批弹窗里手写策略形式的 pattern（如 `object.read mybucket/logs/`）也能原样存下并在下次命中。
 
-这是"用注册取代分支"，不是新增扩展点：字段数不变，消费者不变，只是把一个布尔开关换成它本来就在选择的那个函数。
+这是"用注册取代分支"：字段数不变，消费者不变，只是把一个布尔开关换成它本来就在选择的那个函数。
+
+**【实施期更正】`permission` 无法直接调用 `ParseOSSCommand`。** `internal/ai/helper/transfer_ssh.go` 为了取 `GrantToolCp` 已经 import 了 `internal/ai/permission`，反向 import 即 import cycle（任务 5 用探针构建实测确认）。因此上面"`ossGrantPatterns`：解析 DSL → `PolicyStrings()`"在本包内不可编译。
+
+改为沿用本包既有的**推上来**方向（与 `RegisterExecutor` / `RegisterPrecheck` 同一姿态）：`permission` 只声明入口 `RegisterPolicyStrings(canonical string, fn PolicyStringsFunc)`，由 `internal/ai/execimpl` 在 `init()` 里连同执行器一起注册。未注册时按"派生失败"处理并退回 `NeedConfirm`（fail-closed，且漏接线不会被静默放行，只会每条命令都弹审批）。
+
+也就是说，`RegisterPolicyStrings` **确实是一个新增的扩展点**——本节原先那句"不是新增扩展点"不成立，D8 的表述同此更正。它没有引入按类型分支，仍然满足 OCP，但接线责任因此落到任务 9：`execimpl/register.go` 必须调用 `permission.RegisterPolicyStrings(asset_entity.AssetTypeOSS, …)`，否则 §4.1 的三种判定（allow / needconfirm / deny）在生产路径上全部到不了。
 
 #### 前缀形状的资源不落成 grant
 
@@ -459,7 +465,7 @@ AI 工具的 `src` 保持单个字符串 + `recursive` 布尔：模型没有 she
 | **D5** | 规则里"只写桶名 / 以 `/` 结尾"表示该前缀下**任意深度**递归匹配。 | 否决"纯 `path.Match`"：`*` 不跨 `/`，用户无法写出"整个桶"或"某前缀下全部"，而这正是对象存储最常见的授权粒度；更糟的是一条写着 `mybucket` 的 deny 规则会一条都匹配不上（fail-open）。否决"引入 `**` 语法"：发明本仓不存在的通配符，且 `path.Match` 不支持，要自己实现匹配器。 |
 | **D6** | `Canonicalize` 返回规范 **DSL** 串（展示态），策略/grant 匹配用派生的策略串。 | 否决"照 kafka 让规范形式就是策略串"：OSS 的 copy/move 是一对多，单串无法同时承载展示与匹配；且审批弹窗必须让用户看清一条 move 会同时读源、写目的、删源。 |
 | **D7** | copy/move 派生多条策略串，全部参与 deny/allow/grant 匹配。 | 否决"只按目的地检查"：`object copy secrets/key public/key` 随后 `object get public/key` 即可绕过对 `secrets/` 的读限制。否决"只按最危险的单一动作检查"：同一问题。 |
-| **D8** | `permissionTypeHandler.shellLike bool` 改为注册的 `grantPatterns func(string) []string`。 | 否决"让 `NormalizeGrantPatterns` 的非 shell 分支统一按 `\n` 拆"：会改变 database 多行 SQL 审批的既有落库形态，是本 issue 之外的行为变更。否决"在 `NormalizeGrantPatterns` 里加 `if approvalType == "oss"`"：正是 AGENTS.md 禁止的按类型分支。 |
+| **D8** | `permissionTypeHandler.shellLike bool` 改为注册的 `grantPatterns func(string) []string`；OSS 的派生函数经**新增的** `permission.RegisterPolicyStrings` 由 `execimpl` 推上来。 | 否决"让 `NormalizeGrantPatterns` 的非 shell 分支统一按 `\n` 拆"：会改变 database 多行 SQL 审批的既有落库形态，是本 issue 之外的行为变更。否决"在 `NormalizeGrantPatterns` 里加 `if approvalType == "oss"`"：正是 AGENTS.md 禁止的按类型分支。**【实施期更正】**原表述称"不是新增扩展点"，不成立：`helper` 已 import `permission`（取 `GrantToolCp`），`permission` 直接调 `ParseOSSCommand` 即 import cycle，故必须新增一个注册入口，接线责任落在任务 9（详见 §4.3）。 |
 | **D9** | `builtin:oss-dangerous-deny` 只含 `object.presign.write *`，且进入默认策略（不可覆盖地板）。 | 否决"把 delete/put 也放进地板"：地板不可移除，等于单方面取消 AI 的写能力，重蹈 `BuiltinKafkaMessageWriteDeny` 注释记录的那个坑。否决"地板为空、presign PUT 也只审批"：预签名 PUT 是唯一把写权限移出本产品、后续不再经过任何审批与审计的操作。**与 issue 原文有分歧，见 §4.4 的标注，可否决。** |
 | **D10** | 预签名 URL 脱敏加在 `internal/pkg/auditredact`。 | 否决"在 OSS 执行器里返回前脱敏"：那样连调用方拿到的 URL 都是坏的。否决"在 OSS 执行器里另写一份落库脱敏"：`auditredact` 是本仓脱敏的唯一入口，第二份实现会漏掉 command / request / error 三列。 |
 | **D11** | AI 侧的本地文件路径必须绝对；opsctl 侧维持相对路径由入口展开。 | 否决"AI 侧也按 cwd 解析相对路径"：AI 进程的 cwd 不是用户的终端目录，写到哪里不可预期。这条是 `upload_file` / `download_file` schema 的既有约定，`cp` 继承。`opsctl cp ./a.txt` 的命令行手感不变——相对路径在入口层展开为绝对路径后才进适配器。 |
