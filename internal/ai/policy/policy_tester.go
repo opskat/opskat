@@ -15,7 +15,7 @@ type MatchFunc func(rule, command string) bool
 
 // PolicyTestInput 策略测试入参
 type PolicyTestInput struct {
-	PolicyKind string // 规范 policyKind(command/query/redis/mongo/kafka/k8s/etcd);由 ResolvePolicyKind 得到,取值见 policy_kind.go
+	PolicyKind string // 规范 policyKind(command/query/redis/mongo/kafka/k8s/etcd/oss);由 ResolvePolicyKind 得到,取值见 policy_kind.go
 	AssetID    int64  // 资产ID（从资产的 groupID 开始解析组链）
 	GroupID    int64  // 资产组ID（从父组开始解析,当前组策略由 Current 提供）
 
@@ -388,6 +388,42 @@ func testKafkaPolicy(ctx context.Context, current *asset_entity.KafkaPolicy, gro
 	return PolicyTestOutput{Decision: aictx.Allow}
 }
 
+// --- OSS ---
+
+// testOSSPolicy 的 command 是**策略串**（`<action> <resource>`，如 object.read mybucket/a.log），
+// 不是 exec 的 DSL 串：策略面板测的就是规则匹配，而 DSL 解析在 ai/helper，那一层反过来依赖本包。
+// 运行时 checkOSSPermission 先把 DSL 派生成 1~3 条策略串再逐条送进来，这里一次测一条。
+func testOSSPolicy(ctx context.Context, current *asset_entity.OSSPolicy, groups []*group_entity.Group, command string) PolicyTestOutput {
+	// 与真实 checkOSSPermission 对齐：组通用策略也用 MatchOSSRule
+	// （策略串是两段形，MatchCommandRule 比的是字面 program，写成 object.* 的组通用
+	// deny 规则会在这里静默失配，面板就会给出与运行时相反的答案）。
+	groupDeny, groupAllow := collectGroupGenericRules(ctx, groups)
+	if out := checkGenericDeny(groupDeny, command, MatchOSSRule); out != nil {
+		out.Message = PolicyFmt(ctx, "OSS operation denied by group policy: %s", "OSS 操作被组策略禁止: %s", command)
+		return *out
+	}
+
+	merged := mergeOSSPoliciesForTest(ctx, current, groups)
+	result := checkOSSPolicyRules(ctx, EffectiveOSSPolicy(ctx, merged), []string{command})
+	if result.Decision == aictx.Deny {
+		return PolicyTestOutput{
+			Decision:       aictx.Deny,
+			MatchedPattern: result.MatchedPattern,
+			MatchedSource:  "", // 当前资产策略
+			Message:        result.Message,
+		}
+	}
+
+	// 与 runtime 一致：组通用 allow 只用来把 aictx.NeedConfirm 升为 aictx.Allow。
+	if result.Decision == aictx.NeedConfirm {
+		if out := checkGenericAllow(groupAllow, command, MatchOSSRule); out != nil {
+			return *out
+		}
+		return PolicyTestOutput{Decision: aictx.NeedConfirm}
+	}
+	return PolicyTestOutput{Decision: aictx.Allow}
+}
+
 // --- K8S ---
 
 func testK8sPolicy(ctx context.Context, current *asset_entity.K8sPolicy, groups []*group_entity.Group, command string) PolicyTestOutput {
@@ -592,6 +628,29 @@ func mergeKafkaPoliciesForTest(ctx context.Context, current *asset_entity.KafkaP
 	merged := &asset_entity.KafkaPolicy{}
 	for _, p := range policies {
 		expanded := expandKafkaPolicy(ctx, p)
+		if len(merged.AllowList) == 0 && len(expanded.AllowList) > 0 {
+			merged.AllowList = AppendUnique(merged.AllowList, expanded.AllowList...)
+		}
+		merged.DenyList = AppendUnique(merged.DenyList, expanded.DenyList...)
+	}
+	return merged
+}
+
+func mergeOSSPoliciesForTest(ctx context.Context, current *asset_entity.OSSPolicy, groups []*group_entity.Group) *asset_entity.OSSPolicy {
+	var policies []*asset_entity.OSSPolicy
+	if current != nil {
+		policies = append(policies, current)
+	}
+	for _, g := range groups {
+		p, err := g.GetOSSPolicy()
+		if err == nil && p != nil {
+			policies = append(policies, p)
+		}
+	}
+
+	merged := &asset_entity.OSSPolicy{}
+	for _, p := range policies {
+		expanded := expandOSSPolicy(ctx, p)
 		if len(merged.AllowList) == 0 && len(expanded.AllowList) > 0 {
 			merged.AllowList = AppendUnique(merged.AllowList, expanded.AllowList...)
 		}

@@ -134,6 +134,26 @@ func ResolveKafkaGroups(ctx context.Context, groupIDs []string) (allow, deny []s
 	return
 }
 
+// ResolveOSSGroups 解析引用的 OSS 权限组，返回合并后的 allow/deny 规则
+func ResolveOSSGroups(ctx context.Context, groupIDs []string) (allow, deny []string) {
+	if len(groupIDs) == 0 {
+		return
+	}
+	for _, pg := range fetchPolicyGroups(ctx, groupIDs) {
+		if pg.PolicyType != policy_group_entity.PolicyTypeOSS {
+			continue
+		}
+		var p policy.OSSPolicy
+		if err := json.Unmarshal([]byte(pg.Policy), &p); err != nil {
+			logger.Default().Warn("unmarshal policy group oss policy", zap.String("id", pg.BuiltinID), zap.Error(err))
+			continue
+		}
+		allow = append(allow, p.AllowList...)
+		deny = append(deny, p.DenyList...)
+	}
+	return
+}
+
 // fetchPolicyGroups 按 ID 列表获取权限组（内置组从代码，用户组从 DB）
 func fetchPolicyGroups(ctx context.Context, ids []string) []*policy_group_entity.PolicyGroup {
 	var result []*policy_group_entity.PolicyGroup

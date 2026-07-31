@@ -1,8 +1,11 @@
 package policy
 
 import (
+	"context"
 	"testing"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	. "github.com/smartystreets/goconvey/convey"
 )
 
@@ -93,5 +96,72 @@ func TestMatchOSSRule(t *testing.T) {
 			So(MatchOSSRule("OBJECT.READ mybucket", "object.read mybucket/x"), ShouldBeTrue)
 			So(MatchOSSRule("object.read MyBucket", "object.read mybucket/x"), ShouldBeFalse)
 		})
+	})
+}
+
+// TestCheckOSSPolicy 锁住 spec §4.1 步骤 3 的判定顺序：先 deny（任一策略串命中即拒），
+// 再 allow（allow 非空时必须全部命中才放行）。一条 OSS 命令派生 1~3 条策略串（§3.3），
+// 所以判定的输入是切片而不是单串。
+func TestCheckOSSPolicy(t *testing.T) {
+	ctx := context.Background()
+
+	Convey("默认策略下三种结果各自成立(spec §4.4)", t, func() {
+		Convey("object.read → allow（内置只读组）", func() {
+			res := CheckOSSPolicy(ctx, nil, []string{"object.read mybucket/app.log"})
+			So(res.Decision, ShouldEqual, aictx.Allow)
+			So(res.MatchedPattern, ShouldEqual, "object.read *")
+		})
+
+		Convey("object.delete → needconfirm（既不在 allow 名单也不在地板）", func() {
+			res := CheckOSSPolicy(ctx, nil, []string{"object.delete mybucket/app.log"})
+			So(res.Decision, ShouldEqual, aictx.NeedConfirm)
+		})
+
+		Convey("object.presign.write → deny（默认地板）", func() {
+			res := CheckOSSPolicy(ctx, nil, []string{"object.presign.write mybucket/app.log"})
+			So(res.Decision, ShouldEqual, aictx.Deny)
+			So(res.MatchedPattern, ShouldEqual, "object.presign.write *")
+		})
+
+		Convey("presign GET 留在审批，没有被 PUT 那条地板一起带走", func() {
+			res := CheckOSSPolicy(ctx, nil, []string{"object.presign.read mybucket/app.log"})
+			So(res.Decision, ShouldEqual, aictx.NeedConfirm)
+		})
+	})
+
+	Convey("多策略串的判定(spec §3.3：copy 两条、move 三条)", t, func() {
+		Convey("deny 命中任意一条即整条拒绝，并报出被拒的那一条", func() {
+			pol := &asset_entity.OSSPolicy{
+				AllowList: []string{"object.* *"},
+				DenyList:  []string{"object.write locked/"},
+			}
+			res := CheckOSSPolicy(ctx, pol, []string{"object.read src/a.txt", "object.write locked/a.txt"})
+			So(res.Decision, ShouldEqual, aictx.Deny)
+			So(res.MatchedPattern, ShouldEqual, "object.write locked/")
+			So(res.Message, ShouldContainSubstring, "object.write locked/a.txt")
+		})
+
+		Convey("allow 非空时必须每条都命中", func() {
+			pol := &asset_entity.OSSPolicy{AllowList: []string{"object.read mybucket/", "object.write mybucket/"}}
+			all := CheckOSSPolicy(ctx, pol, []string{"object.read mybucket/a", "object.write mybucket/b"})
+			So(all.Decision, ShouldEqual, aictx.Allow)
+			// 目的地换个桶：只有 read 命中，整条命令回落到审批
+			part := CheckOSSPolicy(ctx, pol, []string{"object.read mybucket/a", "object.write other/b"})
+			So(part.Decision, ShouldEqual, aictx.NeedConfirm)
+		})
+
+		Convey("空策略串不得凭空放行(与 CheckGroupGenericPolicy 同姿态)", func() {
+			So(CheckOSSPolicy(ctx, nil, nil).Decision, ShouldEqual, aictx.NeedConfirm)
+		})
+	})
+
+	Convey("默认 deny 是改不掉的地板，默认 allow 则可被自定义 allow 取代", t, func() {
+		floor := &asset_entity.OSSPolicy{AllowList: []string{"object.presign.write *"}}
+		res := CheckOSSPolicy(ctx, floor, []string{"object.presign.write mybucket/a"})
+		So(res.Decision, ShouldEqual, aictx.Deny)
+		So(res.MatchedPattern, ShouldEqual, "object.presign.write *")
+
+		writeOnly := &asset_entity.OSSPolicy{AllowList: []string{"object.write mybucket/"}}
+		So(CheckOSSPolicy(ctx, writeOnly, []string{"object.read mybucket/a"}).Decision, ShouldEqual, aictx.NeedConfirm)
 	})
 }

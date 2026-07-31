@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 )
@@ -40,8 +41,8 @@ func (h *ossHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asset)
 	return credential_resolver.Default().ResolvePasswordGeneric(ctx, cfg)
 }
 
-func (h *ossHandler) DefaultPolicy() any { return nil }
-func (h *ossHandler) PolicyKind() string { return "" }
+func (h *ossHandler) DefaultPolicy() any { return asset_entity.DefaultOSSPolicy() }
+func (h *ossHandler) PolicyKind() string { return policy.PolicyKindOSS }
 
 func (h *ossHandler) ValidateCreateArgs(args map[string]any) error {
 	if ArgString(args, "endpoint") == "" {

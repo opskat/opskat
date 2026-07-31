@@ -1,12 +1,16 @@
 package policy
 
 import (
+	"context"
 	"path"
 	"strings"
 	"unicode"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
+
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
 // MatchOSSRule matches canonical OSS permission strings shaped "<action> <resource>",
@@ -51,6 +55,64 @@ func MatchOSSRule(rule, command string) bool {
 	}
 
 	return matchOSSResource(ruleResource, commandResource)
+}
+
+// CheckOSSPolicy checks the policy strings one OSS command derives against the
+// effective OSS policy (asset/group policy + the default deny floor).
+//
+// Unlike every other kind, the input is a slice: a single command derives 1..3 policy
+// strings (spec §3.3 — copy reads the source and writes the destination, move also
+// deletes the source). Deny wins over the whole command as soon as one string is
+// denied, and a non-empty allow list must cover every string — checking only the
+// destination would let "copy a restricted object somewhere readable, then read it"
+// through.
+func CheckOSSPolicy(ctx context.Context, policy *asset_entity.OSSPolicy, policyStrings []string) aictx.CheckResult {
+	merged := EffectiveOSSPolicy(ctx, policy)
+	return checkOSSPolicyRules(ctx, merged, policyStrings)
+}
+
+func checkOSSPolicyRules(ctx context.Context, policy *asset_entity.OSSPolicy, policyStrings []string) aictx.CheckResult {
+	// Nothing to decide on: "every string matched" is vacuously true for an empty
+	// slice, which would allow out of thin air. Same stance CheckGroupGenericPolicy
+	// takes on empty subCmds.
+	if len(policyStrings) == 0 {
+		return aictx.CheckResult{Decision: aictx.NeedConfirm}
+	}
+
+	for _, ps := range policyStrings {
+		for _, rule := range policy.DenyList {
+			if MatchOSSRule(rule, ps) {
+				return aictx.CheckResult{
+					Decision:       aictx.Deny,
+					Message:        PolicyFmt(ctx, "OSS operation denied by policy: %s", "OSS 操作被策略禁止: %s", ps),
+					DecisionSource: aictx.SourcePolicyDeny,
+					MatchedPattern: rule,
+				}
+			}
+		}
+	}
+
+	if len(policy.AllowList) == 0 {
+		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourcePolicyAllow}
+	}
+
+	var firstMatched string
+	for _, ps := range policyStrings {
+		matched := ""
+		for _, rule := range policy.AllowList {
+			if MatchOSSRule(rule, ps) {
+				matched = rule
+				break
+			}
+		}
+		if matched == "" {
+			return aictx.CheckResult{Decision: aictx.NeedConfirm}
+		}
+		if firstMatched == "" {
+			firstMatched = matched
+		}
+	}
+	return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourcePolicyAllow, MatchedPattern: firstMatched}
 }
 
 // splitOSSRule splits value into (action, resource) on the first whitespace run.

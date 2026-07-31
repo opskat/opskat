@@ -178,6 +178,36 @@ func EffectiveKafkaPolicy(ctx context.Context, custom *asset_entity.KafkaPolicy)
 	return out
 }
 
+func expandOSSPolicy(ctx context.Context, p *asset_entity.OSSPolicy) *asset_entity.OSSPolicy {
+	out := &asset_entity.OSSPolicy{}
+	if p == nil {
+		return out
+	}
+	out.AllowList = append(out.AllowList, p.AllowList...)
+	out.DenyList = append(out.DenyList, p.DenyList...)
+	if len(p.Groups) > 0 {
+		allow, deny := ResolveOSSGroups(ctx, p.Groups)
+		out.AllowList = append(out.AllowList, allow...)
+		out.DenyList = append(out.DenyList, deny...)
+	}
+	return out
+}
+
+func EffectiveOSSPolicy(ctx context.Context, custom *asset_entity.OSSPolicy) *asset_entity.OSSPolicy {
+	custom = expandOSSPolicy(ctx, custom)
+	defaults := expandOSSPolicy(ctx, asset_entity.DefaultOSSPolicy())
+
+	out := &asset_entity.OSSPolicy{}
+	if len(custom.AllowList) > 0 {
+		out.AllowList = AppendUnique(out.AllowList, custom.AllowList...)
+	} else {
+		out.AllowList = AppendUnique(out.AllowList, defaults.AllowList...)
+	}
+	out.DenyList = AppendUnique(out.DenyList, custom.DenyList...)
+	out.DenyList = AppendUnique(out.DenyList, defaults.DenyList...)
+	return out
+}
+
 func expandK8sPolicy(ctx context.Context, p *asset_entity.K8sPolicy) *asset_entity.K8sPolicy {
 	out := &asset_entity.K8sPolicy{}
 	if p == nil {

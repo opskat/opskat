@@ -82,6 +82,13 @@ func TestPolicyDispatch(t *testing.T) {
 			}, "topic.read orders")
 			So(out.Decision, ShouldEqual, aictx.Allow)
 		})
+		Convey("oss kind 路由到 testOSSPolicy(与直接调用等价)", func() {
+			cur := &asset_entity.OSSPolicy{DenyList: []string{"object.delete *"}}
+			cmd := "object.delete mybucket/a.log"
+			out := TestPolicy(ctx, PolicyTestInput{PolicyKind: PolicyKindOSS, Current: cur}, cmd)
+			So(out.Decision, ShouldEqual, aictx.Deny)
+			So(out, ShouldResemble, testOSSPolicy(ctx, cur, nil, cmd))
+		})
 		Convey("未注册 kind(bogus)返回 NeedConfirm", func() {
 			out := TestPolicy(ctx, PolicyTestInput{PolicyKind: "bogus"}, "anything")
 			So(out.Decision, ShouldEqual, aictx.NeedConfirm)

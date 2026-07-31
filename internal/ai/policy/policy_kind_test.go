@@ -24,6 +24,13 @@ func TestDecodeCurrentPolicy(t *testing.T) {
 			So(ok, ShouldBeTrue)
 			So(mp.AllowTypes, ShouldResemble, []string{"find"})
 		})
+		Convey("oss → *OSSPolicy", func() {
+			v, err := DecodeCurrentPolicy(PolicyKindOSS, []byte(`{"deny_list":["object.delete *"]}`))
+			So(err, ShouldBeNil)
+			op, ok := v.(*asset_entity.OSSPolicy)
+			So(ok, ShouldBeTrue)
+			So(op.DenyList, ShouldResemble, []string{"object.delete *"})
+		})
 		Convey("未注册 kind 报错", func() {
 			_, err := DecodeCurrentPolicy("bogus", []byte(`{}`))
 			So(err, ShouldNotBeNil)
@@ -37,6 +44,7 @@ func TestResolvePolicyKind(t *testing.T) {
 		"ssh": PolicyKindCommand, "serial": PolicyKindCommand, "local": PolicyKindCommand,
 		"database": PolicyKindQuery, "redis": PolicyKindRedis, "mongodb": PolicyKindMongo,
 		"kafka": PolicyKindKafka, "k8s": PolicyKindK8s, "etcd": PolicyKindEtcd,
+		"oss": PolicyKindOSS,
 	}
 	for typ, kind := range seed {
 		policyent.RegisterAssetKind(typ, kind)
