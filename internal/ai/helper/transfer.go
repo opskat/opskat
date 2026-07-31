@@ -1,0 +1,117 @@
+package helper
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"path"
+	"strings"
+
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+)
+
+// Direction 是端点在一次传输里被使用的方向。展开（DirList）自己也是一个方向：枚举读的是
+// 元数据而不是内容，但 `cp -r web-01:/ ./x` 能把整棵文件树的结构拖出来，所以它同样要授权。
+type Direction int
+
+const (
+	DirRead Direction = iota
+	DirWrite
+	DirList
+)
+
+// Entry 是一次展开产出的单个可传输条目。只有文件/对象，没有目录——目录由 RelPath 隐含，
+// 目的端在写入时按需创建。
+type Entry struct {
+	// Path 是该端点上的完整路径 / 对象 key，直接交给 OpenRead / Write。
+	Path string
+	// RelPath 相对展开基点，决定它在目的端的落点：目的路径 = <dst 基点> + RelPath。
+	// 基点按形态取：单个文件是它所在目录，glob 是通配前的最后一层目录，递归是源目录自身。
+	// 始终以 "/" 分隔，跨端点拼接才不会带上本地平台的分隔符。
+	RelPath string
+	Size    int64
+}
+
+// ListResult 是一次展开的全部产出。跳过的符号链接与 Entries 分开返回，因为它们不是可传输
+// 条目，却必须原样报给用户——静默跳过就成了一次看起来完整、实际残缺的传输。
+type ListResult struct {
+	Entries         []Entry
+	SkippedSymlinks []string
+}
+
+// TransferAdapter 是一类传输端点的全部能力：怎么展开、怎么读写、以及在每个方向上要授权
+// 什么。四件事放在同一个接口里，是为了不出现第二张"类型 → 审批语义"的表。
+type TransferAdapter interface {
+	// List 展开 pattern。pattern 含 glob 元字符（* ? [）时按 glob 展开；recursive 为真时
+	// 下钻目录树；单个具体文件/对象返回单元素切片。展开途中遇到的符号链接一律跳过并计入
+	// SkippedSymlinks——跟随会让 `cp -r ./dir` 因为一条指向 / 的链接变成整机 dump。
+	// 指名到一个目录却没有 recursive 时报错，不猜。
+	List(ctx context.Context, asset *asset_entity.Asset, pattern string, recursive bool) (*ListResult, error)
+	// OpenRead 打开该端点上的 path 用于读取；size 未知时返回 -1。返回的 ReadCloser 活过
+	// 本次调用，调用方负责 Close。
+	OpenRead(ctx context.Context, asset *asset_entity.Asset, path string) (io.ReadCloser, int64, error)
+	// Write 把 r 的内容写入该端点的 path，必要时创建中间目录；size 未知时传 -1。
+	Write(ctx context.Context, asset *asset_entity.Asset, path string, r io.Reader, size int64) error
+	// ApprovalSubject 返回这一端点在该方向上必须被授权的审批类型与匹配串。
+	//
+	// **一个端点有审批主体，当且仅当它有资产。** 本地端点没有资产，因此正确的调用方按
+	// asset 是否为 nil 来决定要不要走权限检查，压根不会问本地适配器要主体；它返回的空串是
+	// "不适用"，不是一个让调用方去判空的哨兵——按哨兵写，漏判时就会静默放行。
+	ApprovalSubject(path string, dir Direction) (approvalType, subject string)
+}
+
+var transferAdapters = make(map[string]TransferAdapter)
+
+// RegisterTransferAdapter 注册某资产类型的传输适配器，由持有该协议的实现在 init() 中调用。
+// 重复注册 panic——与 permission.RegisterExecutor 一致，注册冲突是启动期的编程错误，
+// 不该静默覆盖。
+func RegisterTransferAdapter(assetType string, a TransferAdapter) {
+	if assetType == "" || a == nil {
+		panic("helper: invalid transfer adapter registration")
+	}
+	if _, exists := transferAdapters[assetType]; exists {
+		panic(fmt.Sprintf("helper: duplicate transfer adapter registration %q", assetType))
+	}
+	transferAdapters[assetType] = a
+}
+
+// TransferAdapterFor 返回该端点的适配器，与 ParseTransferEndpoint 的返回值配套：
+// asset 为 nil 就是本地端点——它没有资产，因此不进注册表，由包级实现直接交出。
+// 没有接进传输面的资产类型返回错误，而不是回落成本地。
+func TransferAdapterFor(asset *asset_entity.Asset) (TransferAdapter, error) {
+	if asset == nil {
+		return localTransfer, nil
+	}
+	if a, ok := transferAdapters[asset.Type]; ok {
+		return a, nil
+	}
+	return nil, fmt.Errorf("asset type %q does not support file transfer", asset.Type)
+}
+
+// hasGlobMeta 判断路径里是否有 glob 元字符，即这一端是不是要按通配展开。
+// 元字符取 path.Match 的三个：* ? [。
+func hasGlobMeta(s string) bool {
+	return strings.ContainsAny(s, "*?[")
+}
+
+// globBase 返回一个 glob 的展开基点：通配之前的最后一层目录（spec §6.5）。
+// 因此 "/var/log/*.log" 的基点是 "/var/log"，"/var/*/x.log" 的基点是 "/var"。
+// 入参以 "/" 分隔——本地端由调用方先 filepath.ToSlash。
+func globBase(pattern string) string {
+	segments := strings.Split(pattern, "/")
+	for i, seg := range segments {
+		if hasGlobMeta(seg) {
+			return strings.Join(segments[:i], "/")
+		}
+	}
+	return path.Dir(pattern)
+}
+
+// relTo 返回 full 相对 base 的路径。base 永远是 full 的整段前缀（它要么由 globBase 按
+// 整段截出，要么就是被递归的那个目录本身），因此这里只需把前缀和分隔符去掉。
+func relTo(base, full string) string {
+	if base == "" || base == "/" {
+		return strings.TrimPrefix(full, "/")
+	}
+	return strings.TrimPrefix(strings.TrimPrefix(full, base), "/")
+}

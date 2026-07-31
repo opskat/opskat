@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -259,6 +260,73 @@ func ExecuteWithSFTP(ctx context.Context, assetID int64, fn func(*sftp.Client) e
 		return err
 	}
 	return nil
+}
+
+// openSFTPFile 打开远端文件用于流式读取，返回 reader 与文件大小。
+//
+// 与 ExecuteWithSFTP 互补：那个在 fn 返回时就把 SFTP 与 SSH 连接拆掉，因此不能用来交出一个
+// 必须活过调用本身的 reader（传输面的 OpenRead 正是这个形状）。这里把两条连接的生命周期绑在
+// 返回的 ReadCloser 上，Close 时一并释放；打开失败的路径同样负责拆干净。
+func openSFTPFile(ctx context.Context, assetID int64, path string) (io.ReadCloser, int64, error) {
+	client, cleanup, err := DialAssetSSH(ctx, assetID)
+	if err != nil {
+		return nil, 0, err
+	}
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		cleanup()
+		return nil, 0, fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	// ctx 取消时关闭两端，打断 reader 上阻塞的 Read——与 ExecuteWithSFTP 的顺序一致：
+	// 先关 SFTP 会话，再关底层 SSH。
+	stopWatch := closeOnCancel(ctx, sftpClient, client)
+	teardown := func() {
+		stopWatch()
+		if err := sftpClient.Close(); err != nil && !IsExpectedCloseErr(err) {
+			logger.Default().Warn("close SFTP client", zap.Error(err))
+		}
+		cleanup()
+	}
+
+	file, err := sftpClient.Open(path)
+	if err != nil {
+		teardown()
+		return nil, 0, fmt.Errorf("failed to open remote file: %w", err)
+	}
+	reader := newConnBoundReadCloser(file, teardown)
+	info, err := file.Stat()
+	if err != nil {
+		if closeErr := reader.Close(); closeErr != nil {
+			logger.Default().Warn("close remote file", zap.String("path", path), zap.Error(closeErr))
+		}
+		return nil, 0, fmt.Errorf("failed to stat remote file: %w", err)
+	}
+	return reader, info.Size(), nil
+}
+
+// connBoundReadCloser 把一个流和它赖以存在的连接绑成单个 Closer。Close 只生效一次：
+// 重复 Close 不该把已经拆掉的连接再拆一遍。
+type connBoundReadCloser struct {
+	reader   io.ReadCloser
+	teardown func()
+	once     sync.Once
+	err      error
+}
+
+func newConnBoundReadCloser(reader io.ReadCloser, teardown func()) io.ReadCloser {
+	return &connBoundReadCloser{reader: reader, teardown: teardown}
+}
+
+func (c *connBoundReadCloser) Read(p []byte) (int, error) { return c.reader.Read(p) }
+
+func (c *connBoundReadCloser) Close() error {
+	c.once.Do(func() {
+		if err := c.reader.Close(); err != nil && !IsExpectedCloseErr(err) {
+			c.err = err
+		}
+		c.teardown()
+	})
+	return c.err
 }
 
 // DialSSHClient 创建 SSH 客户端连接，自动解析凭据、代理、跳板机链。
