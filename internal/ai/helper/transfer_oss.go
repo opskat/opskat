@@ -251,17 +251,20 @@ func (ossAdapter) ApprovalSubject(p string, dir Direction) (string, string) {
 // 自己写的那个路径。这个接口不能报错（形态错误由 List / OpenRead / Write 各自报出来），
 // 但它绝不能因此交出一个比实际操作更宽的主体。
 //
-// key 段里的元字符不在此列：`dist/*` 展开出来的 `dist/a[1].js` 是货真价实的对象 key，
-// 而它派生的规则确实会多匹配上 `dist/a1.js`——那是 §3.4 的规则语法没有转义写法所致，
-// exec 的 `object get 'dist/a[1].js'` 派生出的策略串一模一样，不是这一层能收住的。
+// key 段里的元字符走同一条后置条件：`dist/*` 展开出来的 `dist/a[1].js` 是货真价实的对象
+// key，而它当规则读时会多匹配上 `dist/a1.js`，所以 key 段一律按 escapeOSSKey 转义
+// （决策 D21，与 exec 面的 PolicyStrings 同一个函数）。代价是这类 key 的审批弹窗会显示
+// 反斜杠——只在 key 真含元字符时出现，且显示的是诚实的范围。
 func ossSubjectResource(p string, dir Direction) string {
 	if dir == DirList {
 		// 授权的范围与真正会被列举的范围是同一个前缀，所以走 List 用的那一个函数。
+		// 这个方向上转义只可能落在 `\` 上：带 `* ? [` 的前缀会被当成通配展开，
+		// ossListPrefix 已经在第一个元字符之前把它截断了。
 		if bucket, key, err := splitOSSEndpointPath(p); err == nil {
-			return bucket + "/" + ossListPrefix(key)
+			return bucket + "/" + escapeOSSKey(ossListPrefix(key))
 		}
 	} else if bucket, key, err := splitOSSObjectPath(p); err == nil {
-		return bucket + "/" + key
+		return bucket + "/" + escapeOSSKey(key)
 	}
 	return "/" + strings.TrimPrefix(p, "/")
 }

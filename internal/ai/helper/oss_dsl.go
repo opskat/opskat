@@ -300,9 +300,56 @@ func (c *OSSCommand) PolicyStrings() ([]string, error) {
 				return nil, fmt.Errorf("oss permission command %q does not name a single object: %w", s, err)
 			}
 		}
-		out = append(out, s)
+		// 转义排在两条后置条件之后：它们校验的是调用方给的 key，而转义只收窄这条串
+		// 当规则读时的覆盖范围（决策 D21）。转义不引入空白也不动 "/"，因此两段性与
+		// §4.3 对尾随 "/" 的丢弃都不受影响。
+		out = append(out, a.action+" "+escapeOSSResourceKey(a.resource))
 	}
 	return out, nil
+}
+
+// ossKeyMetaChars 是 path.Match 在**模式侧**当成语法的字符：三个通配元字符加上转义符本身。
+const ossKeyMetaChars = `*?[\`
+
+// escapeOSSKey 把一个具体的对象 key 转成"只匹配它自己"的规则片段（决策 D21）。
+//
+// §3.4 的规则语法没有转义约定，而 S3 的 key 允许字面量 `* ? [`：不转义的话，一条从具体
+// key 派生出来的策略串当规则读时比这个 key 本身宽——实测 path.Match("secrets*",
+// "secretsFOO") = true、path.Match("logs/a[1].log", "logs/a1.log") = true，批准读一个对象
+// 换来的是读遍一批对象。转义只改派生，匹配器与规则语法都不动：path.Match 原生认 `\`
+// ——模式 secrets\* 对 "secretsFOO" 为 false，对字面量 "secrets*" 为 true（均已实测）。
+//
+// 反向的解法（拒绝含元字符的 key）不成立：递归展开本来就会合法产出这种 key
+// （path.Match("dist/*", "dist/a[1].js") = true），拒绝等于 cp 传不了自己刚列出来的东西。
+//
+// 按字节扫描是安全的：四个元字符都是 ASCII，而 UTF-8 的续字节一律 >= 0x80。
+func escapeOSSKey(key string) string {
+	if !strings.ContainsAny(key, ossKeyMetaChars) {
+		return key
+	}
+	var b strings.Builder
+	b.Grow(len(key) + 4)
+	for i := range len(key) {
+		if strings.IndexByte(ossKeyMetaChars, key[i]) >= 0 {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(key[i])
+	}
+	return b.String()
+}
+
+// escapeOSSResourceKey 转义一个 `<bucket>/<key>` 资源里的 key 段。
+//
+// 桶段不转义：桶名的合法字符集（小写字母、数字、`-`、`.`）里没有这四个字符，带元字符的
+// 桶名指不到任何真实的桶。没有 `/` 的 resource 整条原样返回——那只有 `bucket.list *`
+// 的占位（`*` 是"全部桶"这个语义本身，转义它等于把 bucket list 变成"列举一个名叫 * 的桶"）
+// 与桶级前缀，两者的 key 段都是空的。
+func escapeOSSResourceKey(resource string) string {
+	bucket, key, ok := strings.Cut(resource, "/")
+	if !ok {
+		return resource
+	}
+	return bucket + "/" + escapeOSSKey(key)
 }
 
 // ossPolicyAction 是一条策略串的两段形式，拼接与后置条件检查都在 PolicyStrings 里做。

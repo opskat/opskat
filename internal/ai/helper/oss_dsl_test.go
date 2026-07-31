@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"unicode"
+
+	"github.com/opskat/opskat/internal/ai/policy"
 )
 
 func TestParseOSSCommand(t *testing.T) {
@@ -395,6 +397,117 @@ func TestOSSCommand_PolicyStrings(t *testing.T) {
 		for _, s := range got {
 			assertTwoSegmentOSSPolicyString(t, c.in, s)
 		}
+	}
+}
+
+// TestOSSCommand_PolicyStringsEscapesMetacharactersInTheKey 锁住决策 D21：从一个**具体
+// key** 派生策略串时，key 段里的 `* ? [ \` 被转义，因此这条串当规则读时只覆盖这个 key。
+//
+// §3.4 的规则语法没有转义约定，而 S3 的 key 允许字面量 `* ? [`——不转义的话
+// `object get 'mybucket/secrets*'` 派生出的 "object.read mybucket/secrets*" 当规则读
+// 就是"读遍所有 secrets 开头的对象"。转义写在派生侧而不是匹配器侧：path.Match 原生认
+// `\`，所以 policy.MatchOSSRule 与 §3.4 的语法都不动（覆盖范围由
+// TestOSSCommand_PolicyStringsDoNotAuthorizeAnotherKey 咬住，这里只锁串本身的形状）。
+//
+// 桶段与 `bucket.list *` 的占位不转义：桶名的合法字符集里没有这四个字符，而占位的 `*`
+// 是"全部桶"这一语义本身，转义它等于把 bucket list 变成"列举一个名叫 * 的桶"。
+func TestOSSCommand_PolicyStringsEscapesMetacharactersInTheKey(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{`object get "mybucket/secrets*"`, []string{`object.read mybucket/secrets\*`}},
+		{`object stat "mybucket/logs/a[1].log"`, []string{`object.read mybucket/logs/a\[1].log`}},
+		{`object delete "mybucket/what?.txt"`, []string{`object.delete mybucket/what\?.txt`}},
+		{`object put 'mybucket/a\b.txt' --file=/tmp/a`, []string{`object.write mybucket/a\\b.txt`}},
+		{`object copy "src/a*.txt" --to="dst/b[1].txt"`,
+			[]string{`object.read src/a\*.txt`, `object.write dst/b\[1].txt`}},
+		{`object presign "mybucket/re[port].pdf" --method=put`, []string{`object.presign.write mybucket/re\[port].pdf`}},
+		// 前缀形态的 key 段同样转义：`logs[1]` 不以 "/" 收尾，规则侧走的是 path.Match，
+		// 不转义就等于授权了 `logs1`、`logsX` 这些别的前缀。
+		{`object list "mybucket/logs[1]"`, []string{`object.list mybucket/logs\[1]`}},
+		// 不含元字符的 key 逐字节不变——统一 exec 与 cp 两侧的既有授权不能因为这条转义失效。
+		{`object get mybucket/logs/app.log`, []string{"object.read mybucket/logs/app.log"}},
+		{`bucket list`, []string{"bucket.list *"}},
+	}
+	for _, c := range cases {
+		parsed, err := ParseOSSCommand(c.in)
+		if err != nil {
+			t.Fatalf("ParseOSSCommand(%q) unexpected error: %v", c.in, err)
+		}
+		got, err := parsed.PolicyStrings()
+		if err != nil {
+			t.Fatalf("PolicyStrings() for %q unexpected error: %v", c.in, err)
+		}
+		if !slices.Equal(got, c.want) {
+			t.Errorf("PolicyStrings() for %q = %q, want %q", c.in, got, c.want)
+		}
+		for _, s := range got {
+			assertTwoSegmentOSSPolicyString(t, c.in, s)
+		}
+	}
+}
+
+// TestOSSCommand_PolicyStringsDoNotAuthorizeAnotherKey 是 D21 的安全后置条件本体：
+// 派生串会**原样成为规则**（§4.3 的 ossGrantPatterns 把 PolicyStrings() 直接落成常驻
+// grant），所以"批准读这一个对象"绝不能换来读另一个对象的授权。
+//
+// 参与比对的是两个独立来源：本包的派生，与 policy.MatchOSSRule 的规则语义。
+// 反过来也要成立——一条什么都不匹配的串同样能让上面那半个断言通过，所以还要求用户
+// 自己写的通配规则照旧覆盖这个对象（`dist/*` 是最常见的授权写法）。
+func TestOSSCommand_PolicyStringsDoNotAuthorizeAnotherKey(t *testing.T) {
+	cases := []struct {
+		in    string
+		other []string
+	}{
+		{`object get "mybucket/secrets*"`, []string{
+			"object.read mybucket/secretsFOO",
+			"object.read mybucket/secrets.env",
+		}},
+		{`object delete "mybucket/logs/a[1].log"`, []string{
+			"object.delete mybucket/logs/a1.log",
+		}},
+		{`object list "mybucket/logs[1]"`, []string{
+			"object.list mybucket/logs1",
+		}},
+		{`object copy "src/a?.txt" --to="dst/b*.txt"`, []string{
+			"object.read src/ax.txt",
+			"object.write dst/bOTHER.txt",
+		}},
+	}
+	for _, c := range cases {
+		parsed, err := ParseOSSCommand(c.in)
+		if err != nil {
+			t.Fatalf("ParseOSSCommand(%q) unexpected error: %v", c.in, err)
+		}
+		got, err := parsed.PolicyStrings()
+		if err != nil {
+			t.Fatalf("PolicyStrings() for %q unexpected error: %v", c.in, err)
+		}
+		if len(got) == 0 {
+			t.Fatalf("PolicyStrings() for %q is empty; the assertions below would be vacuous", c.in)
+		}
+		for _, rule := range got {
+			for _, other := range c.other {
+				if policy.MatchOSSRule(rule, other) {
+					t.Errorf("%q derives %q, which as a grant also authorizes %q", c.in, rule, other)
+				}
+			}
+		}
+	}
+
+	// 转义只收窄派生串自己的覆盖范围，不能把它挪出用户写的通配规则之外：
+	// `dist/*` 是最常见的一条授权，而 `dist/a[1].js` 是递归展开合法产出的 key。
+	parsed, err := ParseOSSCommand(`object get "mybucket/dist/a[1].js"`)
+	if err != nil {
+		t.Fatalf("ParseOSSCommand: %v", err)
+	}
+	got, err := parsed.PolicyStrings()
+	if err != nil {
+		t.Fatalf("PolicyStrings(): %v", err)
+	}
+	if !policy.MatchOSSRule("object.read mybucket/dist/*", got[0]) {
+		t.Errorf("%q is no longer covered by the user-written rule %q", got[0], "object.read mybucket/dist/*")
 	}
 }
 

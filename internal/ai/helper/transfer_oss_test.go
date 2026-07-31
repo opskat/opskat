@@ -445,6 +445,15 @@ func TestOSSTransfer_ApprovalSubject(t *testing.T) {
 		{"list a prefix without its trailing slash", "/mybucket/logs", DirList, "object.list mybucket/logs/"},
 		{"list a glob is listing its base", "/mybucket/dist/*.js", DirList, "object.list mybucket/dist/"},
 		{"list a whole bucket", "/mybucket", DirList, "object.list mybucket/"},
+		// key 段里的 `* ? [ \` 是字面量，而主体会原样成为规则（决策 D21）：不转义的话
+		// `dist/a[1].js` 这一个对象换来的授权覆盖 `dist/a1.js`。范围本身由
+		// TestOSSTransfer_ApprovalSubjectNeverOutgrowsItsPath 咬住，这里只锁主体的形状。
+		{"a key with a glob metacharacter", "/mybucket/dist/a[1].js", DirRead, `object.read mybucket/dist/a\[1].js`},
+		{"a destination key with a glob metacharacter", "/mybucket/secrets*", DirWrite, `object.write mybucket/secrets\*`},
+		// 列举方向也转义，主体因此与同一棵子树上的读写主体用同一套字面量写法。这是该
+		// 方向上唯一转义得到的字符：带 `* ? [` 的前缀会被当成通配，globBase 在第一个
+		// 元字符之前就把它截掉了（ossListPrefix），只有 `\` 能原样留到这里。
+		{"list a prefix with a backslash in it", `/mybucket/a\b/`, DirList, `object.list mybucket/a\\b/`},
 		// 目的地写成一个桶名是形态错误，Write 会报错；但主体是在那之前生成的。它既不能是
 		// "object.write mybucket" 也不能是 "object.write mybucket/"——按 D5 这两种写法
 		// 等价，都是**整桶可写**。资源退回原样路径，切不出桶名，因此谁也授权不了；
@@ -491,6 +500,11 @@ func TestOSSTransfer_ApprovalSubjectNeverOutgrowsItsPath(t *testing.T) {
 		"object.read mybucket/logs/other/deep.log",
 		"object.write mybucket/logs/other/deep.log",
 		"object.list mybucket/secrets/",
+		// 与下面那组带元字符的 key 配套：这些是**别的**对象，只有把主体当通配读才会命中。
+		"object.read mybucket/dist/a1.js",
+		"object.write mybucket/dist/a1.js",
+		"object.read mybucket/secretsFOO",
+		"object.write mybucket/secretsFOO",
 		"object.read otherbucket/logs/app.log",
 		"object.write otherbucket/logs/app.log",
 		"object.list otherbucket/logs/",
@@ -533,6 +547,20 @@ func TestOSSTransfer_ApprovalSubjectNeverOutgrowsItsPath(t *testing.T) {
 		patterns := assertGrantsNothingElse(t, subject)
 		if len(patterns) != 1 || !policy.MatchOSSRule(patterns[0], "object.write mybucket/logs/app.log") {
 			t.Fatalf("grants = %v, want exactly one authorizing the transferred object", patterns)
+		}
+	})
+
+	// S3 的 key 允许字面量 `* ? [`，而 §3.4 的规则语法没有转义约定——于是"批准传这一个
+	// 对象"派生出的主体当规则读时比这个对象宽（决策 D21）。递归展开本来就会合法产出这种
+	// key（`dist/*` 命中 `dist/a[1].js`），所以拒绝它们不是选项：主体必须自己收窄。
+	t.Run("a key with glob metacharacters grants only that key", func(t *testing.T) {
+		for _, p := range []string{"/mybucket/dist/a[1].js", "/mybucket/secrets*"} {
+			for _, dir := range []Direction{DirRead, DirWrite} {
+				_, subject := ossTransfer.ApprovalSubject(p, dir)
+				if patterns := assertGrantsNothingElse(t, subject); len(patterns) == 0 {
+					t.Fatalf("subject %q lands as no grant at all; the assertion above is vacuous", subject)
+				}
+			}
 		}
 	})
 
