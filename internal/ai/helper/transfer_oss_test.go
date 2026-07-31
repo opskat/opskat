@@ -450,10 +450,12 @@ func TestOSSTransfer_ApprovalSubject(t *testing.T) {
 		// TestOSSTransfer_ApprovalSubjectNeverOutgrowsItsPath 咬住，这里只锁主体的形状。
 		{"a key with a glob metacharacter", "/mybucket/dist/a[1].js", DirRead, `object.read mybucket/dist/a\[1].js`},
 		{"a destination key with a glob metacharacter", "/mybucket/secrets*", DirWrite, `object.write mybucket/secrets\*`},
-		// 列举方向也转义，主体因此与同一棵子树上的读写主体用同一套字面量写法。这是该
-		// 方向上唯一转义得到的字符：带 `* ? [` 的前缀会被当成通配，globBase 在第一个
-		// 元字符之前就把它截掉了（ossListPrefix），只有 `\` 能原样留到这里。
-		{"list a prefix with a backslash in it", `/mybucket/a\b/`, DirList, `object.list mybucket/a\\b/`},
+		// 列举方向**不**转义：ossListPrefix 交出来的 key 段恒是前缀（空串或以 "/" 收尾），
+		// 而规则侧对这种 key 走的是 strings.HasPrefix 字面比较而不是 path.Match
+		// （policy.matchOSSResource），那条路径上没有转义语法。转义过的前缀落成 grant
+		// 之后一条真实的 key 都盖不住——范围本身由
+		// TestOSSTransfer_ApprovalSubjectNeverOutgrowsItsPath 的 listing 子用例咬住。
+		{"list a prefix with a backslash in it", `/mybucket/a\b/`, DirList, `object.list mybucket/a\b/`},
 		// 目的地写成一个桶名是形态错误，Write 会报错；但主体是在那之前生成的。它既不能是
 		// "object.write mybucket" 也不能是 "object.write mybucket/"——按 D5 这两种写法
 		// 等价，都是**整桶可写**。资源退回原样路径，切不出桶名，因此谁也授权不了；
@@ -566,13 +568,24 @@ func TestOSSTransfer_ApprovalSubjectNeverOutgrowsItsPath(t *testing.T) {
 
 	// 展开授权的范围本来就是一个前缀（D18），它落成的 grant 覆盖该前缀下任意深度是对的，
 	// 但不能越出那个前缀。
-	t.Run("listing a prefix grants that prefix and no other", func(t *testing.T) {
-		_, subject := ossTransfer.ApprovalSubject("/mybucket/logs/", DirList)
-		patterns := assertGrantsNothingElse(t, subject)
-		if len(patterns) != 1 || !policy.MatchOSSRule(patterns[0], "object.list mybucket/logs/sub/deep/") {
-			t.Fatalf("grants = %v, want exactly one covering the enumerated prefix", patterns)
-		}
-	})
+	//
+	// 带字面量元字符的前缀走的是同一条断言，而**不是** D21 的转义：以 "/" 收尾的规则 key
+	// 由 policy.matchOSSResource 用 strings.HasPrefix 字面比较，那条路径上没有转义语法，
+	// 转义过的前缀谁也匹配不上——"始终允许"于是变成一条什么都不授权的死 grant。
+	for _, tt := range []struct{ name, path, covers string }{
+		{"listing a prefix grants that prefix and no other", "/mybucket/logs/",
+			"object.list mybucket/logs/sub/deep/"},
+		{"listing a prefix with a backslash in it", `/mybucket/a\b/`,
+			`object.list mybucket/a\b/sub/deep/`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, subject := ossTransfer.ApprovalSubject(tt.path, DirList)
+			patterns := assertGrantsNothingElse(t, subject)
+			if len(patterns) != 1 || !policy.MatchOSSRule(patterns[0], tt.covers) {
+				t.Fatalf("grants = %v, want exactly one covering the enumerated prefix %q", patterns, tt.covers)
+			}
+		})
+	}
 }
 
 // oss 资产必须能在注册表里查到传输适配器，否则 cp 的九种组合里带 oss 的那五种全都够不着。

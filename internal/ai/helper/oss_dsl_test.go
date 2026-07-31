@@ -1,6 +1,7 @@
 package helper
 
 import (
+	"path"
 	"reflect"
 	"slices"
 	"strings"
@@ -426,6 +427,11 @@ func TestOSSCommand_PolicyStringsEscapesMetacharactersInTheKey(t *testing.T) {
 		// 前缀形态的 key 段同样转义：`logs[1]` 不以 "/" 收尾，规则侧走的是 path.Match，
 		// 不转义就等于授权了 `logs1`、`logsX` 这些别的前缀。
 		{`object list "mybucket/logs[1]"`, []string{`object.list mybucket/logs\[1]`}},
+		// 以 "/" 收尾的 key 是另一回事，**不转义**：规则侧对这种 key 走的是
+		// strings.HasPrefix 字面比较而不是 path.Match（policy.matchOSSResource），
+		// 那条路径上没有转义语法，转义过的前缀一条真实的 key 都盖不住。
+		{`object list "mybucket/logs[1]/"`, []string{`object.list mybucket/logs[1]/`}},
+		{`object list 'mybucket/a\b/'`, []string{`object.list mybucket/a\b/`}},
 		// 不含元字符的 key 逐字节不变——统一 exec 与 cp 两侧的既有授权不能因为这条转义失效。
 		{`object get mybucket/logs/app.log`, []string{"object.read mybucket/logs/app.log"}},
 		{`bucket list`, []string{"bucket.list *"}},
@@ -444,6 +450,47 @@ func TestOSSCommand_PolicyStringsEscapesMetacharactersInTheKey(t *testing.T) {
 		}
 		for _, s := range got {
 			assertTwoSegmentOSSPolicyString(t, c.in, s)
+		}
+	}
+}
+
+// TestEscapeOSSKey_EscapedKeyMatchesItselfAndNothingElse 用 path.Match 这个独立来源
+// 反查转义的**字符集**：转出来的片段当模式读，必须恰好匹配它自己派生自的那个 key。
+//
+// 挑的 key 覆盖了几个只靠推理容易判错的角落：
+//   - 只有 `]` 没有 `[`：`[` 一旦转义，字符类就永远开不了，`]` 因此是字面量、无需转义；
+//   - 以孤立 `\` 收尾：不转义就是 path.Match 的 ErrBadPattern，一条报错的模式对任何
+//     名字都是 false——deny 规则静默失配，正是 §3.4 最怕的那种 fail-open；
+//   - 整条 key 全是元字符，以及空 key；
+//   - 多字节 UTF-8：转义是按字节扫的，续字节一律 >= 0x80 而四个元字符都是 ASCII，
+//     所以汉字里不会冒出反斜杠。
+func TestEscapeOSSKey_EscapedKeyMatchesItselfAndNothingElse(t *testing.T) {
+	keys := []string{
+		"", "]", "a]b", "][", `\`, `a\`, `*?[\`, "**", "secrets*", "what?.txt",
+		"logs/a[1].log", `a\b.txt`, "日本語*.log", "秘密?.txt", "plain/key.txt",
+	}
+	// 只有把模式当通配读才会命中的"别的对象"。
+	victims := []string{
+		"secretsFOO", "whatX.txt", "logs/a1.log", "aXb.txt", "日本語FOO.log", "秘密X.txt",
+		"a", "ab", "x", "[]", "plain/keyZtxt",
+	}
+	for _, key := range keys {
+		pattern := escapeOSSKey(key)
+		ok, err := path.Match(pattern, key)
+		if err != nil {
+			t.Errorf("escapeOSSKey(%q) = %q is not a valid path.Match pattern: %v", key, pattern, err)
+			continue
+		}
+		if !ok {
+			t.Errorf("escapeOSSKey(%q) = %q does not match the key it came from", key, pattern)
+		}
+		for _, other := range slices.Concat(keys, victims) {
+			if other == key {
+				continue
+			}
+			if ok, err := path.Match(pattern, other); err == nil && ok {
+				t.Errorf("escapeOSSKey(%q) = %q also matches %q", key, pattern, other)
+			}
 		}
 	}
 }

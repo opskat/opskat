@@ -322,9 +322,15 @@ const ossKeyMetaChars = `*?[\`
 // 反向的解法（拒绝含元字符的 key）不成立：递归展开本来就会合法产出这种 key
 // （path.Match("dist/*", "dist/a[1].js") = true），拒绝等于 cp 传不了自己刚列出来的东西。
 //
+// **前缀形态的 key（空串，或以 "/" 收尾）原样返回**：规则侧对它走的根本不是 path.Match，
+// 而是 strings.HasPrefix 字面比较（policy.matchOSSResource，D5 的"该前缀下任意深度"），
+// 那条路径上没有转义语法。给前缀加反斜杠不会收窄任何东西，只会让这条规则一条真实的 key
+// 都盖不住——cp 一次 `s3:/b/a\b/` 点"始终允许"，落库的就是一条什么都不授权的死 grant。
+//
 // 按字节扫描是安全的：四个元字符都是 ASCII，而 UTF-8 的续字节一律 >= 0x80。
+// `]` 不在集合里也是安全的：`[` 一旦被转义，字符类就永远开不了，类外的 `]` 是字面量。
 func escapeOSSKey(key string) string {
-	if !strings.ContainsAny(key, ossKeyMetaChars) {
+	if strings.HasSuffix(key, "/") || !strings.ContainsAny(key, ossKeyMetaChars) {
 		return key
 	}
 	var b strings.Builder
@@ -344,6 +350,9 @@ func escapeOSSKey(key string) string {
 // 桶名指不到任何真实的桶。没有 `/` 的 resource 整条原样返回——那只有 `bucket.list *`
 // 的占位（`*` 是"全部桶"这个语义本身，转义它等于把 bucket list 变成"列举一个名叫 * 的桶"）
 // 与桶级前缀，两者的 key 段都是空的。
+//
+// 以 "/" 收尾的 key 段（`object.list b/logs/`）同样原样返回，理由见 escapeOSSKey：
+// 规则侧对前缀走的是字面比较，不是 path.Match。
 func escapeOSSResourceKey(resource string) string {
 	bucket, key, ok := strings.Cut(resource, "/")
 	if !ok {
