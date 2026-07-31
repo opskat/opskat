@@ -22,6 +22,7 @@ var textRedactors = []struct {
 	{regexp.MustCompile(`(?i)(identified\s+by\s+)(?:"[^"]*"|'[^']*'|[^\s,;&]+)`), `${1}` + RedactedValue},
 	{regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://[^:/@\s]+:)[^@\s]+(@)`), `${1}` + RedactedValue + `${2}`},
 	{regexp.MustCompile(`(?is)-----BEGIN [^-\r\n]*PRIVATE KEY-----.*?-----END [^-\r\n]*PRIVATE KEY-----`), RedactedValue},
+	{regexp.MustCompile(`(?i)((?:x-amz-signature|x-amz-credential|x-amz-security-token|signature|awsaccesskeyid)=)([^&\s]+)`), `${1}` + RedactedValue},
 }
 
 // JSON recursively redacts credential-bearing fields. Invalid JSON fails closed.
