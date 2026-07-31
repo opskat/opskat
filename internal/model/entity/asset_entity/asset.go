@@ -433,6 +433,12 @@ type EtcdPolicy = policy.EtcdPolicy
 // DefaultEtcdPolicy 返回默认 etcd 权限策略
 var DefaultEtcdPolicy = policy.DefaultEtcdPolicy
 
+// OSSPolicy OSS 权限策略（类型别名，定义在 policy 包）
+type OSSPolicy = policy.OSSPolicy
+
+// DefaultOSSPolicy 返回默认 OSS 权限策略
+var DefaultOSSPolicy = policy.DefaultOSSPolicy
+
 // SerialConfig PasswordSource implementation（串口无密码，返回空）
 func (c *SerialConfig) GetCredentialID() int64 { return 0 }
 func (c *SerialConfig) GetPassword() string    { return "" }
@@ -806,6 +812,23 @@ func (a *Asset) SetEtcdPolicy(p *EtcdPolicy) error {
 	s, err := jsonfield.MarshalOrClear(p, func(v *EtcdPolicy) bool {
 		return v.IsEmpty()
 	}, "etcd权限策略")
+	if err != nil {
+		return err
+	}
+	a.CmdPolicy = s
+	return nil
+}
+
+// GetOSSPolicy 解析OSS权限策略
+func (a *Asset) GetOSSPolicy() (*OSSPolicy, error) {
+	return jsonfield.UnmarshalOrDefault[OSSPolicy](a.CmdPolicy, "OSS权限策略")
+}
+
+// SetOSSPolicy 序列化OSS权限策略
+func (a *Asset) SetOSSPolicy(p *OSSPolicy) error {
+	s, err := jsonfield.MarshalOrClear(p, func(v *OSSPolicy) bool {
+		return v.IsEmpty()
+	}, "OSS权限策略")
 	if err != nil {
 		return err
 	}

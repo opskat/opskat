@@ -672,3 +672,36 @@ func TestAsset_GetSetEtcdPolicy(t *testing.T) {
 		assert.Empty(t, got.Groups)
 	})
 }
+
+func TestAsset_GetSetOSSPolicy(t *testing.T) {
+	convey.Convey("Get/SetOSSPolicy 往返", t, func() {
+		a := &Asset{Type: AssetTypeOSS}
+		p := &OSSPolicy{
+			AllowList: []string{"object.read *"},
+			DenyList:  []string{"object.presign.write *"},
+		}
+		assert.NoError(t, a.SetOSSPolicy(p))
+		got, err := a.GetOSSPolicy()
+		assert.NoError(t, err)
+		assert.Equal(t, p.AllowList, got.AllowList)
+		assert.Equal(t, p.DenyList, got.DenyList)
+	})
+
+	convey.Convey("SetOSSPolicy 空策略清空字段", t, func() {
+		a := &Asset{Type: AssetTypeOSS}
+		assert.NoError(t, a.SetOSSPolicy(&OSSPolicy{AllowList: []string{"object.read *"}}))
+		assert.NotEmpty(t, a.CmdPolicy)
+		assert.NoError(t, a.SetOSSPolicy(&OSSPolicy{}))
+		assert.Empty(t, a.CmdPolicy)
+	})
+
+	convey.Convey("CmdPolicy 为空时 GetOSSPolicy 返回零值", t, func() {
+		a := &Asset{Type: AssetTypeOSS}
+		got, err := a.GetOSSPolicy()
+		assert.NoError(t, err)
+		assert.NotNil(t, got)
+		assert.Empty(t, got.AllowList)
+		assert.Empty(t, got.DenyList)
+		assert.Empty(t, got.Groups)
+	})
+}

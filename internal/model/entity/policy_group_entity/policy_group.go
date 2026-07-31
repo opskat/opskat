@@ -18,6 +18,7 @@ const (
 	PolicyTypeMongo   = policy.PolicyKindMongo
 	PolicyTypeKafka   = policy.PolicyKindKafka
 	PolicyTypeEtcd    = policy.PolicyKindEtcd
+	PolicyTypeOSS     = policy.PolicyKindOSS
 )
 
 // PolicyGroup 权限组实体（数据库）
@@ -452,6 +453,35 @@ func init() {
 					"compact *",
 					"alarm disarm *",
 					"snapshot save *",
+				},
+			}),
+		},
+	)
+	registerBuiltinGroups(PolicyTypeOSS,
+		&PolicyGroup{
+			BuiltinID:   policy.BuiltinOSSReadOnly,
+			Name:        "OSS Read-Only",
+			Description: "Allow listing buckets/objects and reading object content",
+			PolicyType:  PolicyTypeOSS,
+			Policy: mustMarshal(&policy.OSSPolicy{
+				AllowList: []string{
+					"bucket.list *",
+					"object.list *",
+					"object.read *",
+				},
+			}),
+		},
+		// BuiltinOSSDangerousDeny 只含 object.presign.write *（见 policy.BuiltinOSSDangerousDeny
+		// 与 D9）：预签名 PUT URL 是唯一把写权限完全移出本产品的操作，因此是这道不可覆盖地板上
+		// 唯一的一条；put/copy/move/delete 都走普通审批路径，不进地板。
+		&PolicyGroup{
+			BuiltinID:   policy.BuiltinOSSDangerousDeny,
+			Name:        "OSS Dangerous Deny",
+			Description: "Deny issuing presigned URLs that grant write access outside the product",
+			PolicyType:  PolicyTypeOSS,
+			Policy: mustMarshal(&policy.OSSPolicy{
+				DenyList: []string{
+					"object.presign.write *",
 				},
 			}),
 		},

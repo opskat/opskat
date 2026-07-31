@@ -205,6 +205,45 @@ func TestDefaultKafkaPolicy(t *testing.T) {
 	})
 }
 
+func TestOSSPolicyIsEmpty(t *testing.T) {
+	Convey("OSSPolicy.IsEmpty()", t, func() {
+		Convey("空策略返回 true", func() {
+			p := &OSSPolicy{}
+			So(p.IsEmpty(), ShouldBeTrue)
+		})
+
+		Convey("有 AllowList 时返回 false", func() {
+			p := &OSSPolicy{AllowList: []string{"object.read *"}}
+			So(p.IsEmpty(), ShouldBeFalse)
+		})
+
+		Convey("有 DenyList 时返回 false", func() {
+			p := &OSSPolicy{DenyList: []string{"object.presign.write *"}}
+			So(p.IsEmpty(), ShouldBeFalse)
+		})
+
+		Convey("有 Groups 时返回 false", func() {
+			p := &OSSPolicy{Groups: []string{BuiltinOSSReadOnly}}
+			So(p.IsEmpty(), ShouldBeFalse)
+		})
+	})
+}
+
+func TestDefaultOSSPolicy(t *testing.T) {
+	Convey("DefaultOSSPolicy()", t, func() {
+		p := DefaultOSSPolicy()
+
+		Convey("不为空", func() {
+			So(p.IsEmpty(), ShouldBeFalse)
+		})
+
+		Convey("包含内置 OSS 权限组引用", func() {
+			So(p.Groups, ShouldContain, BuiltinOSSReadOnly)
+			So(p.Groups, ShouldContain, BuiltinOSSDangerousDeny)
+		})
+	})
+}
+
 func TestDefaultEtcdPolicy(t *testing.T) {
 	Convey("DefaultEtcdPolicy()", t, func() {
 		p := DefaultEtcdPolicy()
