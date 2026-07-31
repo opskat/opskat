@@ -86,6 +86,32 @@ func TestLocalTransferList_GlobBaseIsLastLiteralDir(t *testing.T) {
 	}
 }
 
+// 展开途中的符号链接一律跳过并报出来，glob 这一档也不例外：跟随会把用户没审阅过的路径
+// 拖进传输（D19 否决跟随符号链接），而链接指向的目标可以在展开基点之外。
+// SSH 端的同一条契约由 TestListSFTP_Glob 守着，本地端此前没有——把 appendLocalPath 的
+// symlink 分支整个删掉，包内没有一条测试会红。
+func TestLocalTransferList_GlobSkipsSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "logs")
+	writeTempFile(t, filepath.Join(root, "a.log"), "aa")
+	outside := filepath.Join(dir, "outside.log")
+	writeTempFile(t, outside, "should not be copied")
+	if err := os.Symlink(outside, filepath.Join(root, "b.log")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	got, err := localTransfer.List(context.Background(), nil, filepath.Join(root, "*.log"), false)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if joinRel(got.Entries) != "a.log" {
+		t.Fatalf("RelPaths = %v, want [a.log]", relPaths(got.Entries))
+	}
+	if strings.Join(got.SkippedSymlinks, ",") != filepath.Join(root, "b.log") {
+		t.Fatalf("SkippedSymlinks = %v, want [%s]", got.SkippedSymlinks, filepath.Join(root, "b.log"))
+	}
+}
+
 // 递归的基点是源目录自身（spec §6.5），RelPath 因此保留子目录层级。
 func TestLocalTransferList_RecursiveBaseIsSourceItself(t *testing.T) {
 	dir := t.TempDir()
