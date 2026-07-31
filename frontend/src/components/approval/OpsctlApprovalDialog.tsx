@@ -12,6 +12,7 @@ import {
   Textarea,
 } from "@opskat/ui";
 import { useWailsEvent } from "@/hooks/useWailsEvent";
+import { S3Icon } from "@/components/asset/brand-icons";
 import { RespondOpsctlApproval } from "../../../wailsjs/go/opsctl/Opsctl";
 import { permission } from "../../../wailsjs/go/models";
 import { ShieldAlert, Terminal, Database, Server, FolderOpen, Globe, Usb, Trash2, Boxes, FileUp } from "lucide-react";
@@ -72,6 +73,7 @@ function TypeBadge({ type }: { type: string }) {
     etcd: Database,
     k8s: Boxes,
     cp: FileUp,
+    oss: S3Icon,
   };
   const Icon = icons[type] || Terminal;
   return (

@@ -15,6 +15,7 @@ import {
   Boxes,
 } from "lucide-react";
 import { Button, Input, Textarea } from "@opskat/ui";
+import { S3Icon } from "@/components/asset/brand-icons";
 import { RespondAIApproval } from "../../../wailsjs/go/ai/AI";
 import { permission } from "../../../wailsjs/go/models";
 import type { ContentBlock } from "@/stores/aiStore";
@@ -339,6 +340,7 @@ function TypeBadge({ type, compact }: { type: string; compact?: boolean }) {
     delete: Trash2,
     etcd: Database,
     k8s: Boxes,
+    oss: S3Icon,
   };
   const Icon = icons[type] || Terminal;
   if (compact) {

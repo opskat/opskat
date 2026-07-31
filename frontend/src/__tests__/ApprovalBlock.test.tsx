@@ -90,6 +90,21 @@ describe("ApprovalBlock", () => {
     expect(screen.getByTestId("ai-approval-allow")).toBeInTheDocument();
   });
 
+  it("oss 审批项有自己的徽章图标，不回落到通用的终端图标", () => {
+    renderApproval({
+      approvalKind: "single",
+      approvalItems: [{ type: "oss", asset_id: 1, asset_name: "s3-prod", command: "object.read mybucket/logs/" }],
+    });
+
+    const badge = screen.getByText("OSS").closest("span");
+    expect(badge).not.toBeNull();
+    const svg = badge!.querySelector("svg");
+    expect(svg).not.toBeNull();
+    // lucide-react 图标统一带 "lucide-<kebab-name>" class；OSS 复用的是 S3 品牌图标（Iconify），
+    // 不是这套 lucide 图标里的任何一个，因此不该带这个 class —— 这与它没有落到 Terminal 兜底是同一件事。
+    expect(svg!.getAttribute("class") || "").not.toMatch(/lucide/);
+  });
+
   it("删除分组的审批项在徽标行也要显示分组名（没有 asset_name，只有 group_name）", () => {
     renderApproval({
       approvalKind: "delete",

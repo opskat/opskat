@@ -443,6 +443,12 @@
     "etcdPolicyHint": "etcd operations not listed will require user confirmation. Rules support * wildcards; broad patterns such as * may allow high-risk operations or deny many operations, so configure them carefully.",
     "etcdPolicyPlaceholder": "Add etcd operation rules, e.g. get /app/*",
     "policyTestEtcdPlaceholder": "Type an etcd operation to test, e.g. get /app/config",
+    "ossPolicy": "Object Storage Operation Policy",
+    "ossPolicyAllowList": "Allow List (execute without confirmation)",
+    "ossPolicyDenyList": "Deny List (always reject)",
+    "ossPolicyHint": "Object storage operations not listed will require user confirmation. Rules support * wildcards; a bucket name alone or a trailing / matches every key under that prefix, so configure broad patterns carefully.",
+    "ossPolicyPlaceholder": "Add action/resource rules, e.g. object.read mybucket/logs/",
+    "policyTestOSSPlaceholder": "Type a policy string to test, e.g. object.read mybucket/logs/",
     "k8sKubeconfigProvided": "Kubeconfig provided",
     "k8sNamespace": "Namespace",
     "k8sContext": "Context",
@@ -665,6 +671,14 @@
         "etcd-dangerous-deny": {
           "name": "etcd Dangerous Deny",
           "desc": "Deny dangerous etcd operations"
+        },
+        "oss-readonly": {
+          "name": "Object Storage Read-Only",
+          "desc": "Allow listing buckets and reading objects"
+        },
+        "oss-dangerous-deny": {
+          "name": "Object Storage Dangerous Deny",
+          "desc": "Deny issuing pre-signed upload URLs"
         }
       }
     },

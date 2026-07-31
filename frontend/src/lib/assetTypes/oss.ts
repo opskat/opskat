@@ -18,6 +18,24 @@ registerAssetType({
   DetailInfoCard: OSSDetailInfoCard,
   ConfigSection: OSSConfigSection,
   testable: true,
-  // 后端 PolicyKind()=="" / DefaultPolicy()==nil —— OSS 无 policy。
-  policy: undefined,
+  policy: {
+    policyType: "oss",
+    titleKey: "asset.ossPolicy",
+    hintKey: "asset.ossPolicyHint",
+    testPlaceholderKey: "asset.policyTestOSSPlaceholder",
+    fields: [
+      {
+        key: "allow_list",
+        labelKey: "asset.ossPolicyAllowList",
+        placeholderKey: "asset.ossPolicyPlaceholder",
+        variant: "allow",
+      },
+      {
+        key: "deny_list",
+        labelKey: "asset.ossPolicyDenyList",
+        placeholderKey: "asset.ossPolicyPlaceholder",
+        variant: "deny",
+      },
+    ],
+  },
 });

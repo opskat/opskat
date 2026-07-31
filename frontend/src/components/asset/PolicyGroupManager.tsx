@@ -29,6 +29,7 @@ const builtinTabs: { key: string; label: string; labelKey?: string }[] = [
   { key: "mongo", label: "MongoDB" },
   { key: "kafka", label: "Kafka" },
   { key: "etcd", label: "etcd" },
+  { key: "oss", label: "Object Storage", labelKey: "asset.typeOSS" },
 ];
 
 const builtinTabKeys = new Set(builtinTabs.map((t) => t.key));
@@ -38,6 +39,31 @@ const tabAliasMap: Record<string, string> = {
 
 function resolveInitialTab(initialTab?: string) {
   return tabAliasMap[initialTab || ""] || initialTab || "command";
+}
+
+/** allow_list/deny_list 型策略（非 query）的标签与占位符 i18n key，按 policyType 取；
+ *  未在表中列出的类型（ssh/redis/mongo/etcd 都走同一套 command 语义）落回通用 cmdPolicy* key。
+ *  三种取值已经无法再用三元表达式表达，改成数据表——加新策略类型只需加一行，不用碰 JSX。 */
+const LIST_POLICY_I18N: Record<string, { allowLabel: string; denyLabel: string; placeholder: string }> = {
+  kafka: {
+    allowLabel: "asset.kafkaPolicyAllowList",
+    denyLabel: "asset.kafkaPolicyDenyList",
+    placeholder: "asset.kafkaPolicyPlaceholder",
+  },
+  oss: {
+    allowLabel: "asset.ossPolicyAllowList",
+    denyLabel: "asset.ossPolicyDenyList",
+    placeholder: "asset.ossPolicyPlaceholder",
+  },
+};
+const DEFAULT_LIST_POLICY_I18N = {
+  allowLabel: "asset.cmdPolicyAllowList",
+  denyLabel: "asset.cmdPolicyDenyList",
+  placeholder: "asset.cmdPolicyPlaceholder",
+};
+
+function listPolicyI18n(policyType: string) {
+  return LIST_POLICY_I18N[policyType] || DEFAULT_LIST_POLICY_I18N;
 }
 
 interface EditState {
@@ -548,9 +574,7 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
                 ) : (
                   <div className="grid grid-cols-2 gap-3">
                     <PolicyTagEditor
-                      label={t(
-                        editState.policyType === "kafka" ? "asset.kafkaPolicyAllowList" : "asset.cmdPolicyAllowList"
-                      )}
+                      label={t(listPolicyI18n(editState.policyType).allowLabel)}
                       items={editState.policy.allow_list || []}
                       onAdd={
                         editState.readonly
@@ -567,15 +591,11 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
                                 (editState.policy.allow_list || []).filter((_, idx) => idx !== i)
                               )
                       }
-                      placeholder={t(
-                        editState.policyType === "kafka" ? "asset.kafkaPolicyPlaceholder" : "asset.cmdPolicyPlaceholder"
-                      )}
+                      placeholder={t(listPolicyI18n(editState.policyType).placeholder)}
                       variant="allow"
                     />
                     <PolicyTagEditor
-                      label={t(
-                        editState.policyType === "kafka" ? "asset.kafkaPolicyDenyList" : "asset.cmdPolicyDenyList"
-                      )}
+                      label={t(listPolicyI18n(editState.policyType).denyLabel)}
                       items={editState.policy.deny_list || []}
                       onAdd={
                         editState.readonly
@@ -592,9 +612,7 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
                                 (editState.policy.deny_list || []).filter((_, idx) => idx !== i)
                               )
                       }
-                      placeholder={t(
-                        editState.policyType === "kafka" ? "asset.kafkaPolicyPlaceholder" : "asset.cmdPolicyPlaceholder"
-                      )}
+                      placeholder={t(listPolicyI18n(editState.policyType).placeholder)}
                       variant="deny"
                     />
                   </div>

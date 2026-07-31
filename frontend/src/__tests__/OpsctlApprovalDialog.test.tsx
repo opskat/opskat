@@ -107,4 +107,19 @@ describe("OpsctlApprovalDialog", () => {
     expect(document.body.querySelector(`.${iconClass}`)).not.toBeNull();
     expect(document.body.querySelector(".lucide-terminal")).toBeNull();
   });
+
+  it("TypeBadge 为 type=oss 渲染专属徽章图标（复用 S3 品牌图标，不回落到终端图标）", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+
+    fireSingleApproval(handlers, { type: "oss", session_id: "session-1" });
+
+    const badge = screen.getByText("OSS").closest("span");
+    expect(badge).not.toBeNull();
+    const svg = badge!.querySelector("svg");
+    expect(svg).not.toBeNull();
+    // S3 品牌图标经 Iconify 渲染，不带 lucide-react 统一加的 "lucide-<kebab-name>" class，
+    // 这个 class 的缺席就是"没有落到 Terminal 兜底"的可观察信号。
+    expect(svg!.getAttribute("class") || "").not.toMatch(/lucide/);
+  });
 });

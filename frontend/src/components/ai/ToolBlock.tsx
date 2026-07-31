@@ -13,6 +13,7 @@ import {
   BookOpen,
   Trash2,
   Puzzle,
+  FileUp,
 } from "lucide-react";
 import type { ContentBlock } from "@/stores/aiStore";
 
@@ -24,6 +25,7 @@ const toolIcons: Record<string, typeof Terminal> = {
   Glob: Search,
   Grep: Search,
   exec: Terminal,
+  cp: FileUp,
   help: BookOpen,
   request_permission: Shield,
   put_asset: FilePen,
