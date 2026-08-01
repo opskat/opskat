@@ -53,8 +53,9 @@ type ToolCallInfo struct {
 
 	// Command 允许调用方预先算好命令摘要，覆盖 ExtractCommandForAudit 的默认解析。
 	// AI 侧由 auditMiddleware 给 exec 工具填：资产类型注册了 CanonicalizeFunc 时
-	// （k8s 注入 --context/--namespace；etcd/mongo/kafka 走各自 DSL 的 round trip，
-	// 规范化大小写、复合命令拼写与 flag 顺序），这里存规范化后、真正过了权限
+	// （k8s 注入 --context/--namespace；etcd/mongo/kafka/oss 走各自 DSL 的 round trip，
+	// 规范化大小写、复合命令拼写与 flag 顺序，oss 另外把 `object list <bucket>` 这类
+	// 前缀目标补成 `<bucket>/`），这里存规范化后、真正过了权限
 	// 检查/审批弹窗展示的命令，而不是模型传入的原始字符串——否则审计会跟
 	// 审批弹窗对不上。opsctl 侧同理：cmd/opsctl/command.writeOpsctlAudit 通过
 	// aictx.GetAuditCommand(ctx) 读 cmdExec 预填的规范形式（同一个 aictx.

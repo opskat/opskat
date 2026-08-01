@@ -485,6 +485,31 @@ func TestCmdExec_OSSAuditCommandIsCanonical(t *testing.T) {
 	}
 }
 
+// The same requirement on the *denied* path — cmdExec's own `if err != nil` branch, the
+// second of the three audit-writing paths and the row an auditor is most likely to read.
+// It holds only because the slot is installed above that branch: move the two
+// WithAuditCommandSlot lines below it (or down into the non-ssh dispatch) and
+// TestCmdExec_OSSAuditCommandIsCanonical stays green while every denied command logs the
+// raw form again — the defect §3.1 reported, on the half of the flow it did not sample.
+func TestCmdExec_OSSDeniedAuditCommandIsCanonical(t *testing.T) {
+	env := setupOpsctlExec(t) // approvalDecision left at its zero value => denied
+
+	code := cmdExec(env.ctx, env.handlers, []string{"oss-1", "--", "object list verify-a"}, "")
+	if code == 0 {
+		t.Fatal("denied approval must fail")
+	}
+	if env.handlerCalls["exec"] != 0 {
+		t.Fatalf("a denied command must not execute (%d handler calls)", env.handlerCalls["exec"])
+	}
+
+	mock := opsctlAuditWriter.(*mockAuditWriter)
+	got := effectiveAuditCommand(t, mock.lastCall())
+	want := "object list verify-a/"
+	if got != want {
+		t.Fatalf("denied audit command = %q, want the canonical form %q the approval dialog showed", got, want)
+	}
+}
+
 // Companion regression guard: ssh has no registered CanonicalizeFunc, so checkCommand ==
 // command for it. The audited command must stay byte-identical to whatever the user typed
 // — proving the fix above canonicalizes only when an asset type actually normalizes, not

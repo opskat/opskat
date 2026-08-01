@@ -117,7 +117,8 @@ var opsctlAuditWriter audit.AuditWriter = audit.NewDefaultAuditWriter()
 //
 // Command 留空时走 audit.ToolCallInfo.Command 的默认解析（ExtractCommandForAudit 读
 // argsJSON 里的原始 command）；调用方若已经用 aictx.WithAuditCommandSlot 在 ctx 上装了
-// 规范形式（cmdExec 对非 ssh 资产就是这么做的——checkCommand 在那里已经算好），这里改用
+// 规范形式（cmdExec 每条 exec 都装，装的是它已经算好的 checkCommand：ssh 没有注册
+// CanonicalizeFunc，装进去的就等于原始命令，那边不为它分支，这里也不必），这里改用
 // 它覆盖，好让 audit_logs.command 与审批弹窗、grant pattern 展示的是同一个串，不是
 // callHandler 转发给 handler 执行、必须保持原样的那个 argsJSON["command"]。
 func writeOpsctlAudit(ctx context.Context, toolName, argsJSON, result string, execErr error, decision *aictx.CheckResult) {
