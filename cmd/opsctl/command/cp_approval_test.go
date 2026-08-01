@@ -577,9 +577,15 @@ func TestCmdCpMultiSourceBatchItemsCarryDetail(t *testing.T) {
 //
 // 断的是两者的**同一性**：交给工具的每条 entry.Path，逐条对得上刚刚被批准的那些读主体。
 // 只断"参数带上了一份清单"证明不了什么——带错一份同样带得上。
+//
+// 而"对得上"这句话，只有在两次展开会给出**不同**答案时才有内容：源端每次都交出同一份
+// entries 的话，一个"再展开一次、把新结果交给工具"的实现产出逐字节相同的参数，断言照样
+// 全绿——这个测试就证明不了它自称守着的那件事。所以源端在此装了 appearsLater：第二次及
+// 以后的 List 会多交出一个文件，它正是 TOCTOU 窗口里新出现的那个，一次都不许被传输。
 func TestCmdCpHandsTheApprovedListingToTheTool(t *testing.T) {
 	Convey("交给工具的清单就是刚被批准的那一份", t, func() {
 		registerCpTestAsset(t)
+		resetCpFakeRemote(t)
 		origProxyFn := cpSSHProxyClientFn
 		cpSSHProxyClientFn = func() *sshpool.Client { return nil }
 		defer func() { cpSSHProxyClientFn = origProxyFn }()
@@ -600,7 +606,10 @@ func TestCmdCpHandsTheApprovedListingToTheTool(t *testing.T) {
 			{Path: "/var/log/app.log", RelPath: "app.log", Size: 7},
 			{Path: "/var/log/nginx/access.log", RelPath: "nginx/access.log", Size: 9},
 		}
-		defer func() { cpFakeRemote.entries = nil }()
+		// 审批期间源端长出来的那个文件：只展开一次的实现永远看不到它。
+		cpFakeRemote.appearsLater = []helper.Entry{
+			{Path: "/var/log/planted.log", RelPath: "planted.log", Size: 11},
+		}
 
 		var batches [][]cpSubject
 		stubCpBatchApproval(t, &batches, ApprovalResult{Decision: aictx.Allow, SessionID: "s"}, nil)
@@ -621,6 +630,11 @@ func TestCmdCpHandsTheApprovedListingToTheTool(t *testing.T) {
 		}
 		So(batches, ShouldHaveLength, 1)
 		So(approvedReads, ShouldResemble, subjectCommands(batches[0]))
+
+		// 源端只被展开过一次，因此那个新出现的文件既没进审批清单、也没被交出去传输。
+		// 上面那条同一性断言在"两次展开答案相同"时是恒真的，这两条才是它的内容。
+		So(cpFakeRemote.listed, ShouldResemble, []string{"/var/log"})
+		So(approvedReads, ShouldNotContain, cpTestRemoteType+" read /var/log/planted.log")
 	})
 }
 
