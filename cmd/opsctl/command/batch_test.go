@@ -11,9 +11,11 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/mock/gomock"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/tool"
+	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
@@ -605,5 +607,185 @@ func TestCmdBatch_MongoPrefixCanonicalizesBeforeApproval(t *testing.T) {
 		So(len(output.Results), ShouldEqual, 1)
 		So(output.Results[0].Error, ShouldContainSubstring, "requires a database")
 		So(output.Results[0].Error, ShouldNotContainSubstring, "invalid mongo args JSON")
+	})
+}
+
+// batchTestAsset registers a single mock asset findable by ID and returns a cleanup func —
+// shared setup for the audit-canonicalization tests below, which (unlike most tests in this
+// file) need to assert on what opsctlAuditWriter actually received.
+func batchTestAsset(t *testing.T, ctrl *gomock.Controller, asset *asset_entity.Asset) {
+	t.Helper()
+	mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+	mockAsset.EXPECT().Find(gomock.Any(), asset.ID).Return(asset, nil).AnyTimes()
+	origAsset := asset_repo.Asset()
+	asset_repo.RegisterAsset(mockAsset)
+	t.Cleanup(func() { asset_repo.RegisterAsset(origAsset) })
+}
+
+// runBatchCapturingStdout runs cmdBatch with stdout redirected to a pipe and returns the
+// decoded JSON output — the same os.Pipe dance every cmdBatch-driving test in this file
+// already uses (e.g. TestCmdBatch_ResolveFailureDoesNotAbortWholeBatch).
+func runBatchCapturingStdout(t *testing.T, ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) (int, batchOutput) {
+	t.Helper()
+	r, w, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		t.Fatalf("os.Pipe: %v", pipeErr)
+	}
+	origStdout := os.Stdout
+	os.Stdout = w
+
+	code := cmdBatch(ctx, handlers, args, session)
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("close pipe writer: %v", err)
+	}
+	os.Stdout = origStdout
+	data, readErr := io.ReadAll(r)
+	if readErr != nil {
+		t.Fatalf("read pipe: %v", readErr)
+	}
+
+	var output batchOutput
+	if err := json.Unmarshal(data, &output); err != nil {
+		t.Fatalf("unmarshal batch output: %v (data=%s)", err, data)
+	}
+	return code, output
+}
+
+// TestCmdBatch_OSSAuditCommandIsCanonical is the batch analog of exec_test.go's
+// TestCmdExec_OSSAuditCommandIsCanonical (task 28 / G7 at a second verb): the
+// executed-successfully audit path (executeBatchItem, Step 5) must persist the same
+// canonical DSL the policy pre-check and (had one been needed) the approval dialog would
+// have shown — not the raw command the user typed. "object list <bucket>" auto-allows
+// under the built-in oss-readonly policy (see EffectiveOSSPolicy/DefaultOSSPolicy), so this
+// never dials the desktop socket and stays a pure unit test.
+func TestCmdBatch_OSSAuditCommandIsCanonical(t *testing.T) {
+	Convey("批量执行成功路径的审计命令必须落规范形式，不是用户输入的原始命令", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		batchTestAsset(t, ctrl, &asset_entity.Asset{ID: 501, Name: "oss-batch-1", Type: asset_entity.AssetTypeOSS})
+
+		mockAudit := &mockAuditWriter{}
+		origWriter := opsctlAuditWriter
+		opsctlAuditWriter = mockAudit
+		defer func() { opsctlAuditWriter = origWriter }()
+
+		handlers := map[string]tool.ToolHandlerFunc{
+			"exec": func(_ context.Context, _ map[string]any) (string, error) {
+				return `{"objects":[]}`, nil
+			},
+		}
+
+		code, output := runBatchCapturingStdout(t, context.Background(), handlers, []string{"501:object list verify-batch"}, "")
+
+		So(code, ShouldEqual, 0)
+		So(len(output.Results), ShouldEqual, 1)
+		So(output.Results[0].Error, ShouldBeEmpty)
+
+		got := effectiveAuditCommand(t, mockAudit.lastCall())
+		So(got, ShouldEqual, "object list verify-batch/") // OSS canonicalizes a bare bucket target for "list" to end in "/"
+	})
+}
+
+// TestCmdBatch_PolicyDenyAuditCommandIsCanonical covers the cheapest early-return audit
+// path (Step 3's autoDeny loop) — the one task 28's brief calls out as the minimum second
+// branch to test, precisely because a prior fix (opsctl exec, task 27) shipped once with
+// only its success path covered and left this one still logging the raw command. Reuses
+// the same kafka "topic delete orders" -> denied-by-built-in-policy scenario as
+// TestCmdBatch_OrderingAndCanonicalizeGateMatchesCmdExec, which already proves Step 3
+// checks the canonical form; this test additionally proves the *persisted audit row* also
+// carries it.
+func TestCmdBatch_PolicyDenyAuditCommandIsCanonical(t *testing.T) {
+	Convey("批量策略拒绝路径（Step 3 autoDeny）的审计命令必须落规范形式", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		batchTestAsset(t, ctrl, &asset_entity.Asset{ID: 502, Name: "kafka-batch-1", Type: asset_entity.AssetTypeKafka})
+
+		mockAudit := &mockAuditWriter{}
+		origWriter := opsctlAuditWriter
+		opsctlAuditWriter = mockAudit
+		defer func() { opsctlAuditWriter = origWriter }()
+
+		code, output := runBatchCapturingStdout(t, context.Background(), map[string]tool.ToolHandlerFunc{}, []string{"502:topic delete orders"}, "")
+
+		So(code, ShouldEqual, 1) // the only entry is denied
+		So(len(output.Results), ShouldEqual, 1)
+		So(output.Results[0].Error, ShouldContainSubstring, "denied by policy")
+
+		got := effectiveAuditCommand(t, mockAudit.lastCall())
+		So(got, ShouldEqual, "topic.delete orders") // canonical two-token DSL, not the raw "topic delete orders"
+	})
+}
+
+// TestCmdBatch_ApprovalDeniedAuditCommandIsCanonical covers the third audit path with a
+// checkCommand available: Step 4's needConfirm branch when requireBatchApprovalFn itself
+// returns an error (desktop denied / unreachable). This is the batch mirror of task 27's
+// second commit (2dd31bc1), which found the exec equivalent of this exact branch still
+// logging the raw command after the slot was installed below the wrong `if err != nil`.
+// message.write (kafka "message produce") needs confirmation by default (not auto-allow,
+// not auto-deny — see exec_test.go's TestCmdExec_KafkaAllowedCommandClearsCanonicalPolicyCheck),
+// so it reaches Step 4; requireBatchApprovalFn is stubbed so this never dials a real socket.
+func TestCmdBatch_ApprovalDeniedAuditCommandIsCanonical(t *testing.T) {
+	Convey("批量审批被拒路径（Step 4 needConfirm 被拒）的审计命令必须落规范形式", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		batchTestAsset(t, ctrl, &asset_entity.Asset{ID: 503, Name: "kafka-batch-2", Type: asset_entity.AssetTypeKafka})
+
+		mockAudit := &mockAuditWriter{}
+		origWriter := opsctlAuditWriter
+		opsctlAuditWriter = mockAudit
+		defer func() { opsctlAuditWriter = origWriter }()
+
+		origApproval := requireBatchApprovalFn
+		requireBatchApprovalFn = func(_ []approval.BatchItem, session string) (ApprovalResult, error) {
+			return ApprovalResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny, SessionID: session},
+				errors.New("batch denied: no")
+		}
+		defer func() { requireBatchApprovalFn = origApproval }()
+
+		code, output := runBatchCapturingStdout(t, context.Background(), map[string]tool.ToolHandlerFunc{}, []string{"503:message produce orders"}, "")
+
+		So(code, ShouldEqual, 1) // the only entry's approval failed
+		So(len(output.Results), ShouldEqual, 1)
+		So(output.Results[0].Error, ShouldContainSubstring, "approval failed")
+
+		got := effectiveAuditCommand(t, mockAudit.lastCall())
+		So(got, ShouldEqual, "message.write orders") // canonical form, not the raw "message produce orders"
+	})
+}
+
+// TestCmdBatch_SSHDenyAuditCommandStaysRaw is the regression guard: ssh has no registered
+// CanonicalizeFunc (permission.CanonicalizeFor), so checkCommand == command for it, and the
+// audited command must stay byte-identical to whatever the user typed — proving the fix
+// canonicalizes only when an asset type actually normalizes, not unconditionally (which
+// would silently rewrite shell commands in the audit trail). Routed through the same
+// autoDeny path as TestCmdBatch_PolicyDenyAuditCommandIsCanonical; the deny rule is set
+// explicitly on the asset (a bare mock asset has no policy at all — GetCommandPolicy
+// unmarshals its empty CmdPolicy to a zero-value CommandPolicy, it does not fall back to
+// policy.DefaultCommandPolicy()'s builtin groups) — same setup exec_test.go's
+// TestCmdExec_SSHPolicyShortCircuitAuditSourceIsOpsctl already uses, so this stays a pure
+// unit test with no real SSH dial.
+func TestCmdBatch_SSHDenyAuditCommandStaysRaw(t *testing.T) {
+	Convey("ssh 没有注册 CanonicalizeFunc，批量审计命令必须与用户输入逐字节一致", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		asset := &asset_entity.Asset{ID: 504, Name: "web-batch-1", Type: asset_entity.AssetTypeSSH}
+		So(asset.SetCommandPolicy(&asset_entity.CommandPolicy{DenyList: []string{"rm *"}}), ShouldBeNil)
+		batchTestAsset(t, ctrl, asset)
+
+		mockAudit := &mockAuditWriter{}
+		origWriter := opsctlAuditWriter
+		opsctlAuditWriter = mockAudit
+		defer func() { opsctlAuditWriter = origWriter }()
+
+		command := "rm -rf /"
+		code, output := runBatchCapturingStdout(t, context.Background(), map[string]tool.ToolHandlerFunc{}, []string{"504:" + command}, "")
+
+		So(code, ShouldEqual, 1) // denied by the asset's deny-list policy
+		So(len(output.Results), ShouldEqual, 1)
+		So(output.Results[0].Error, ShouldContainSubstring, "denied by policy")
+
+		got := effectiveAuditCommand(t, mockAudit.lastCall())
+		So(got, ShouldEqual, command)
 	})
 }
