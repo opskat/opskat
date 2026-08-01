@@ -186,10 +186,10 @@ func TestWriteToolCall_PrefersPreResolvedCommand(t *testing.T) {
 // TestWriteToolCall_FallsBackToArgsWhenNotPreResolved verifies the callers that don't
 // pre-resolve still work: with AssetID/AssetName/Command left at their zero values,
 // WriteToolCall must fall back to args["asset_id"]/args["id"] + ExtractCommandForAudit.
-// Most opsctl tool calls are still in this group — only exec and batch install
-// aictx.AuditCommandSlot (cmd/opsctl/command's writeOpsctlAudit reads it back); put_asset/
-// delete_asset/list/... never do. The AI runner similarly only fills Command in when it
-// could resolve the asset.
+// Most opsctl tool calls are still in this group — only the exec and batch *verbs* install
+// aictx.AuditCommandSlot (cmd/opsctl/command's writeOpsctlAudit reads it back; both write
+// their rows under the tool name "exec"), while the put_asset/delete_asset/list/... calls
+// never do. The AI runner similarly only fills Command in when it could resolve the asset.
 func TestWriteToolCall_FallsBackToArgsWhenNotPreResolved(t *testing.T) {
 	repo := setupAuditRepo(t)
 

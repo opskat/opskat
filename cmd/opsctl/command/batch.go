@@ -94,12 +94,11 @@ func batchAssertPrefixType(asset *asset_entity.Asset, cmdType string) error {
 // it and are deliberately left on the raw-command fallback, same as cmdExec never auditing
 // those equivalent early returns at all.
 //
-// Each call gets its own local *string via context.WithValue, so this is safe to use from
-// Step 5's concurrent goroutines sharing the same parent auditCtx: it never mutates that
-// parent, only wraps it.
+// The slot points at this call's own by-value command parameter, so it is safe to use from
+// Step 5's concurrent goroutines sharing the same parent auditCtx: each call gets a distinct
+// *string and never mutates that parent, only wraps it.
 func withBatchAuditCommand(ctx context.Context, command string) context.Context {
-	c := command
-	return aictx.WithAuditCommandSlot(ctx, &c)
+	return aictx.WithAuditCommandSlot(ctx, &command)
 }
 
 func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {

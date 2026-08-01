@@ -610,9 +610,10 @@ func TestCmdBatch_MongoPrefixCanonicalizesBeforeApproval(t *testing.T) {
 	})
 }
 
-// batchTestAsset registers a single mock asset findable by ID and returns a cleanup func —
-// shared setup for the audit-canonicalization tests below, which (unlike most tests in this
-// file) need to assert on what opsctlAuditWriter actually received.
+// batchTestAsset registers a single mock asset findable by ID and restores the previously
+// registered repo through t.Cleanup — shared setup for the audit-canonicalization tests
+// below, which (unlike most tests in this file) need to assert on what opsctlAuditWriter
+// actually received.
 func batchTestAsset(t *testing.T, ctrl *gomock.Controller, asset *asset_entity.Asset) {
 	t.Helper()
 	mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
