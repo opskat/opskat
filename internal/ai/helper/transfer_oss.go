@@ -261,9 +261,12 @@ func (ossAdapter) ApprovalSubject(p string, dir Direction) (string, string) {
 // 写法等价）就是整桶任意深度，桶段里的 "*" 是跨桶通配。目的端路径不经过 List，所以形态
 // 错误的目的地直接到这里（ValidateDestination 会在审批之前拦下它们，但主体是在那之前
 // 生成的）。因此形态合法时资源是 <bucket>/<key>；形态不合法时退回**原样路径并强制带前导
-// "/"**——这样的资源切出来的桶段是空串，既匹配不上任何桶范围的规则，自己当规则也匹配不上
-// 任何真实资源，而用户在弹窗里看到的仍是他自己写的那个路径。这个接口不能报错，但它绝不能
-// 因此交出一个比实际操作更宽的主体。
+// "/"**——切出来的桶段因此是空串，而这是**给 permission 看的记号**，不是一句"反正没人
+// 匹配得上"：path.Match("*", "") 为真，光靠规则语义，内置只读策略的 `object.read *`
+// 会把这种主体照单全收（曾经如此）。真正兜住它的是
+// permission.ossPolicyStringsNameBuckets：桶段为空的资源一律不放行（deny 照旧匹配），
+// ossGrantRule 也不把它落成 grant。名字这一侧只负责两件事——不说谎（用户在弹窗里看到的
+// 仍是他自己写的那个路径），以及绝不交出一个比实际操作更宽的主体。
 func ossSubjectResource(p string, dir Direction) string {
 	if dir == DirList {
 		if bucket, key, err := splitOSSEndpointPath(p); err == nil {

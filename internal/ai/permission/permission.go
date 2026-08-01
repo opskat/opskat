@@ -395,6 +395,26 @@ func checkOSSPermission(ctx context.Context, assetID int64, command string) aict
 	mergedPolicy := collectOSSPolicies(ctx, asset)
 	result := policy.CheckOSSPolicy(ctx, mergedPolicy, policyStrings)
 
+	// 桶段为空的资源不可**放行**：它指不到任何真实的桶，所以没有一条规则真的授权了它。
+	//
+	// 这类串来自 helper.ossSubjectResource 给形态错误的端点路径打的记号（原样路径 + 强制
+	// 前导 "/"）：前缀当单对象源、桶段带通配、resource 两端带空白。它们到不了 List，
+	// 主体却已经生成了，而 policy.splitOSSResource 把 "/mybucket/logs/" 切成
+	// bucket="" key="mybucket/logs/" —— 空桶段**不是**天然匹配不上：path.Match("*", "")
+	// 为真，于是内置默认策略 builtin:oss-readonly 的 `object.read *` / `object.list *`
+	// 照单全收，`cp 's3-prod:/mybucket/logs/' /tmp/out` 一个框都不弹就记下一行
+	// policy_allow，之后才由 ossAdapter.List 报错。审计因此记着一件没发生过的事。
+	//
+	// 判定只落在放行这一侧，deny 不受影响（上面那条 Deny 已经先返回了）：畸形串仍然是切得出
+	// 两段的策略串，deny 规则照旧匹配得上。反过来做——让主体整个不成其为策略串——会让 deny
+	// 一条都匹配不上，那才是 fail-open。
+	//
+	// 挡在这里而不是改 policy.MatchOSSRule：那是策略测试面板与规则语义的共用实现，
+	// 而这条判断说的是"这个**名字**指不到东西"，不是"这条规则不成立"。
+	if result.Decision != aictx.Deny && !ossPolicyStringsNameBuckets(policyStrings) {
+		return aictx.CheckResult{Decision: aictx.NeedConfirm}
+	}
+
 	// 组通用 allow 优先于类型专用的 aictx.NeedConfirm
 	if result.Decision == aictx.NeedConfirm && groupResult.Decision == aictx.Allow {
 		return groupResult
@@ -415,6 +435,23 @@ func checkOSSPermission(ctx context.Context, assetID int64, command string) aict
 		result.HintRules = merged.AllowList
 	}
 	return result
+}
+
+// ossPolicyStringsNameBuckets 报告这一批策略串的 resource 段是不是都指名了一个桶。
+//
+// 判据是 resource 的第一个字节不是 "/"：policy.splitOSSResource 按第一个 "/" 切
+// <bucket>/<key>，所以桶段为空**当且仅当** resource 以 "/" 打头。取 strings.Fields 的第
+// 二段而不是自己复刻 policy.splitOSSRule 的空白切分：这里只需要 resource 的首字节，
+// 而 Fields 对任意空白（含制表符）都给出同一个答案，两份切分逻辑因此不会漂移。
+// 切不出两段的串同样报 false —— 它连策略串都不是，policy.MatchOSSRule 对它一律失配。
+func ossPolicyStringsNameBuckets(policyStrings []string) bool {
+	for _, ps := range policyStrings {
+		fields := strings.Fields(ps)
+		if len(fields) < 2 || strings.HasPrefix(fields[1], "/") {
+			return false
+		}
+	}
+	return true
 }
 
 // ossGrantPatterns 是 OSS 注册的 grant 归一化：一条审批输入 → 常驻授权的 pattern 列表。
@@ -460,6 +497,14 @@ func ossGrantRule(ps string) (rule string, ok bool) {
 	if !twoSegments {
 		// 切不出两段的串当规则读时匹配不上任何东西（policy.splitOSSRule 直接 !ok），
 		// 落库就是一条死行。
+		return "", false
+	}
+
+	// 桶段为空的 resource（helper.ossSubjectResource 给形态错误的端点路径打的记号：原样
+	// 路径 + 强制前导 "/"）落成规则同样是死行：path.Match("", "mybucket") 为假，它盖不住
+	// 任何真实资源；而它唯一盖得住的那种畸形名字，checkOSSPermission 已经拒绝放行了。
+	// 不落库好过在授权列表里显示一条用户其实没拿到的授权。
+	if strings.HasPrefix(resource, "/") {
 		return "", false
 	}
 

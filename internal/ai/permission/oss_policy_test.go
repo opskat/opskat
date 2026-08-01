@@ -308,6 +308,88 @@ func TestCheckPermission_OSSWithoutDeriverFailsClosed(t *testing.T) {
 	assert.Equal(t, aictx.NeedConfirm, got.Decision)
 }
 
+// TestCheckPermission_OSSResourceWithoutABucketIsNeverAllowed 锁住 helper.ossSubjectResource
+// 那个畸形回退所依赖的不变式：**桶段为空的资源指不到任何真实的桶，因此谁也授权不了它。**
+//
+// 形态错误的端点路径（前缀当单对象源、桶段带通配、两端带空白）到不了 List，主体却已经
+// 生成了。helper 给这类路径打的记号是"原样路径 + 强制前导 /"，切出来的桶段是空串。
+// 但空串**不是**天然匹配不上：policy.splitOSSResource 把 "/mybucket/logs/" 切成
+// bucket="" key="mybucket/logs/"，而 path.Match("*", "") = true —— 于是内置默认策略
+// builtin:oss-readonly 的 `object.read *` / `object.list *` 照单全收，
+// `cp 's3-prod:/mybucket/logs/' /tmp/out` 一个框都不弹就记下一行 policy_allow，
+// 之后才由 ossAdapter.List 报错。审计说的是一件没发生过的事，用户也少看了一次弹窗。
+//
+// 判定必须落在**放行**这一侧：deny 规则照旧匹配得上（一条畸形串仍然是切得出两段的
+// 策略串），只有 allow / grant 被挡住。反过来做——让主体整个不成其为策略串——会让
+// deny 一条都匹配不上，那才是真的 fail-open。
+func TestCheckPermission_OSSResourceWithoutABucketIsNeverAllowed(t *testing.T) {
+	// 逐条都是 helper.ossSubjectResource 在形态错误时交出的那种主体。
+	malformed := []string{
+		"object.read /mybucket/logs/",    // 前缀当单对象源
+		"object.list /*/logs/",           // 桶段带通配
+		"object.read /mybucket/app.log ", // resource 两端带空白
+		"object.write /mybucket",         // 光桶名当目的地
+	}
+
+	t.Run("内置只读策略不再自动放行", func(t *testing.T) {
+		ctx, mockAsset, _ := setupPolicyTest(t)
+		mockAsset.EXPECT().Find(gomock.Any(), int64(1)).
+			Return(&asset_entity.Asset{ID: 1, Type: asset_entity.AssetTypeOSS}, nil).AnyTimes()
+
+		for _, subject := range malformed {
+			got := CheckPermission(ctx, asset_entity.AssetTypeOSS, 1, subject)
+			assert.Equal(t, aictx.NeedConfirm, got.Decision, subject)
+		}
+	})
+
+	t.Run("一条 * 的 grant 也授权不了它", func(t *testing.T) {
+		ctx, mockAsset, _ := setupPolicyTest(t)
+		mockAsset.EXPECT().Find(gomock.Any(), int64(1)).
+			Return(&asset_entity.Asset{ID: 1, Type: asset_entity.AssetTypeOSS}, nil).AnyTimes()
+		ctx = withOSSGrants(t, ctx, "*")
+
+		for _, subject := range malformed {
+			got := CheckPermission(ctx, asset_entity.AssetTypeOSS, 1, subject)
+			assert.Equal(t, aictx.NeedConfirm, got.Decision, subject)
+		}
+	})
+
+	t.Run("deny 规则照旧拦得住", func(t *testing.T) {
+		ctx, mockAsset, _ := setupPolicyTest(t)
+		mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(&asset_entity.Asset{
+			ID: 1, Type: asset_entity.AssetTypeOSS,
+			CmdPolicy: mustJSON(asset_entity.OSSPolicy{
+				AllowList: []string{"*"}, DenyList: []string{"object.* *"},
+			}),
+		}, nil).AnyTimes()
+
+		for _, subject := range malformed {
+			got := CheckPermission(ctx, asset_entity.AssetTypeOSS, 1, subject)
+			assert.Equal(t, aictx.Deny, got.Decision, subject)
+		}
+	})
+
+	// 放行侧挡住之后，这类串落成常驻授权就只是一条死行：桶段为空的规则匹配不上任何真实
+	// 资源，而它唯一盖得住的那种畸形名字上面刚拒绝掉。落库只会在授权列表 UI 里显示一条
+	// 用户其实没拿到的授权（与 D20 丢弃目录标记同一条理由）。
+	t.Run("畸形主体不落成常驻授权", func(t *testing.T) {
+		for _, subject := range malformed {
+			assert.Empty(t, NormalizeGrantPatterns(asset_entity.AssetTypeOSS, subject, GrantOriginSystem), subject)
+		}
+	})
+
+	t.Run("形态合法的主体照旧放行", func(t *testing.T) {
+		ctx, mockAsset, _ := setupPolicyTest(t)
+		mockAsset.EXPECT().Find(gomock.Any(), int64(1)).
+			Return(&asset_entity.Asset{ID: 1, Type: asset_entity.AssetTypeOSS}, nil).AnyTimes()
+
+		assert.Equal(t, aictx.Allow,
+			CheckPermission(ctx, asset_entity.AssetTypeOSS, 1, "object.read mybucket/logs/app.log").Decision)
+		assert.Equal(t, aictx.Allow,
+			CheckPermission(ctx, asset_entity.AssetTypeOSS, 1, "object.list mybucket/logs/").Decision)
+	})
+}
+
 // TestNormalizeGrantPatterns_OSS 锁 §4.3 与决策 D20。
 func TestNormalizeGrantPatterns_OSS(t *testing.T) {
 	withOSSPolicyStrings(t)
