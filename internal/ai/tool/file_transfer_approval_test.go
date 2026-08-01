@@ -100,6 +100,11 @@ func cpTestAssets() []*asset_entity.Asset {
 		{ID: 2, Name: "s3-prod", Type: asset_entity.AssetTypeOSS,
 			CmdPolicy: `{"allow_list":["object.read otherbucket/*"]}`},
 		{ID: 3, Name: "sink-01", Type: cpTestAssetType},
+		// 两个"审批被自动放行"的端点（见 cpAutoAllowedAssetType）：auto-01 用的是产品自带
+		// 的默认策略（只读，读方向零弹框），auto-rw-01 是把写也放开之后的样子（两端零弹框）。
+		{ID: 4, Name: "auto-01", Type: cpAutoAllowedAssetType, CmdPolicy: defaultOSSPolicyJSON()},
+		{ID: 5, Name: "auto-rw-01", Type: cpAutoAllowedAssetType,
+			CmdPolicy: `{"allow_list":["object.read *","object.write *"]}`},
 	}
 }
 

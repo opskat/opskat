@@ -241,3 +241,52 @@ func TestDefaultBashPattern(t *testing.T) {
 	assert.Equal(t, "rm *", defaultBashPattern("rm /tmp/foo"))
 	assert.Equal(t, "", defaultBashPattern(""))
 }
+
+// TestLocalToolGate_CheckLocalWrites_SharesTheWhitelistWithTheWriteTool 锁住"同一道门"：
+// 传输面的本地落点与模型直接调用 local_write 走的是同一份会话白名单。两侧各存一份的话，
+// 用户在 cp 的弹框里点的"本次会话允许"对随后的 local_write 就不算数（反之亦然），
+// 而他刚刚批准的正是同一条路径。
+func TestLocalToolGate_CheckLocalWrites_SharesTheWhitelistWithTheWriteTool(t *testing.T) {
+	fc := &fakeConfirm{response: permission.ApprovalResponse{
+		Decision:    "allowAll",
+		EditedItems: []permission.ApprovalItem{{Type: "local_write", Command: "/tmp/*"}},
+	}}
+	g := NewLocalToolGate(fc.fn)
+
+	// 传输面问一次：弹框，用户点"本次会话允许 /tmp/*"。
+	assert.NoError(t, g.CheckLocalWrites(ctxWithConv(3), []string{"/tmp/a.log"}, "cp s3:/b/a.log → /tmp/a.log"))
+	assert.Len(t, fc.calls, 1)
+	assert.Equal(t, LocalWriteToolName, fc.calls[0].ToolName)
+
+	// 模型随后直接写 /tmp 下的另一个文件：命中同一条白名单，不再弹框。
+	out := driveGate(ctxWithConv(3), g, "local_write", map[string]any{"path": "/tmp/b.log", "content": "x"})
+	assert.True(t, out.allowed)
+	assert.Len(t, fc.calls, 1, "命中同一份白名单后不应再次 confirm")
+
+	// 白名单之外的落点照旧要问，用户这次拒绝。
+	fc.response = permission.ApprovalResponse{Decision: "deny"}
+	assert.Error(t, g.CheckLocalWrites(ctxWithConv(3), []string{"/etc/passwd"}, "cp s3:/b/k → /etc/passwd"))
+	assert.Len(t, fc.calls, 2)
+}
+
+// 门禁没接 confirm 回调时，本地写按拒绝处理——与中间件那一侧同一条出路
+// （TestLocalToolGate_NoConfirmFunc_DeniesUnknown）。
+func TestLocalToolGate_CheckLocalWrites_NoConfirmFuncDenies(t *testing.T) {
+	g := NewLocalToolGate(nil)
+	assert.Error(t, g.CheckLocalWrites(ctxWithConv(1), []string{"/etc/passwd"}, ""))
+}
+
+// 多条落点一次问完，每一条都是主体：漏掉其中一条就等于那条路径没过门。
+func TestLocalToolGate_CheckLocalWrites_AsksAboutEveryPathAtOnce(t *testing.T) {
+	fc := &fakeConfirm{response: permission.ApprovalResponse{Decision: "allow"}}
+	g := NewLocalToolGate(fc.fn)
+	g.remember(4, "local_write", "/tmp/*")
+
+	paths := []string{"/tmp/a.log", "/var/backups/b.log"}
+	assert.NoError(t, g.CheckLocalWrites(ctxWithConv(4), paths, "cp s3:/b/ → …"))
+
+	// /tmp/a.log 命中白名单，/var/backups/b.log 没有：一条没命中就得整批过一次对话框。
+	assert.Len(t, fc.calls, 1)
+	assert.Equal(t, paths, fc.calls[0].SubCommands)
+	assert.Equal(t, paths, fc.calls[0].DefaultPatterns)
+}

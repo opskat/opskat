@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/skills"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/oss_svc"
@@ -156,9 +158,14 @@ func ossExecAsset() *asset_entity.Asset {
 }
 
 // runOSSExec 跑一条命令并把结果 JSON 解回 map，省得每个用例各写一次反序列化。
+//
+// 走"已预检"那条 context（opsctl 的形态）：这些用例断言的是 DSL 到服务调用的翻译，不是
+// 授权。裸 context.Background() 已经不是合法调用方——`object get --file=` 会向授权接缝
+// 要一个判定，缺了就 fail-closed（见 gateExecLocalWrite），那是有意的。
 func runOSSExec(t *testing.T, f *fakeOSSExec, command string) map[string]any {
 	t.Helper()
-	out, err := (ossExecutor{svc: f}).run(context.Background(), ossExecAsset(), command)
+	out, err := (ossExecutor{svc: f}).run(
+		permission.WithPreapproved(context.Background()), ossExecAsset(), command)
 	if err != nil {
 		t.Fatalf("run(%q) unexpected error: %v", command, err)
 	}
@@ -662,5 +669,143 @@ func TestOSSSkillDoc_FlagReferenceMatchesFlagRules(t *testing.T) {
 			t.Errorf("oss SKILL.md: flag reference documents %q, which either takes no flags or does not exist; "+
 				"validateOSSFlags would reject every flag shown for it", key)
 		}
+	}
+}
+
+// --- object get --file= 的本地写门禁 ---
+
+// fakeLocalWriteGate 记下门禁被问过哪些路径。真门禁是 internal/ai/tool.LocalToolGate，
+// 那个包 import 本包，所以这里只能实现接口——两者的契合由 tool 侧的用例与注入点保证。
+type fakeLocalWriteGate struct {
+	asked   [][]string
+	details []string
+	err     error
+}
+
+func (g *fakeLocalWriteGate) CheckLocalWrites(_ context.Context, paths []string, detail string) error {
+	g.asked = append(g.asked, paths)
+	g.details = append(g.details, detail)
+	return g.err
+}
+
+// ossExecAICtx 造 AI 那条路上的 context：有 PolicyChecker，审计槽里记着这次命令的判定。
+// source 就是 handleExec 在调用执行器**之前**写进槽里的那个决策来源。
+func ossExecAICtx(source string, gate LocalWriteGate) context.Context {
+	ctx := permission.WithPolicyChecker(context.Background(),
+		permission.NewCommandPolicyChecker(func(
+			context.Context, string, []permission.ApprovalItem,
+		) permission.ApprovalResponse {
+			return permission.ApprovalResponse{Decision: "deny"}
+		}))
+	ctx = aictx.WithCheckResultSlot(ctx, &aictx.CheckResult{Decision: aictx.Allow, DecisionSource: source})
+	if gate != nil {
+		ctx = WithLocalWriteGate(ctx, gate)
+	}
+	return ctx
+}
+
+// TestExecOSSObjectGetToFileGatesTheLocalWrite：`object get b/k --file=P` 与 cp 是同一个
+// 原语——localAdapter.Write 往本机任意路径落盘。策略自动放行时（内置只读组就放行
+// object.read *）这条命令一个弹框都不弹，于是本地那一头没有任何门；这一档下它改走
+// local_write 门禁，与传输面同一条判据。
+func TestExecOSSObjectGetToFileGatesTheLocalWrite(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "authorized_keys")
+	gate := &fakeLocalWriteGate{err: fmt.Errorf("USER DENIED: user rejected local tool local_write")}
+	f := &fakeOSSExec{objects: map[string]string{"mybucket/conf.yml": "debug: true\n"}}
+
+	_, err := (ossExecutor{svc: f}).run(
+		ossExecAICtx(aictx.SourcePolicyAllow, gate), ossExecAsset(),
+		"object get mybucket/conf.yml --file="+dst)
+
+	if err == nil {
+		t.Fatal("run = nil error, want the local write gate's denial")
+	}
+	if len(gate.asked) != 1 || !slices.Equal(gate.asked[0], []string{dst}) {
+		t.Errorf("gate asked about %v, want exactly one request for %q", gate.asked, dst)
+	}
+	// 门禁排在取对象之前：被拒时后端一次都没被碰过。
+	if len(f.calls) != 0 {
+		t.Errorf("service calls = %v, want none: a refused download must not read the object", f.ops())
+	}
+	if _, statErr := os.Stat(dst); !os.IsNotExist(statErr) {
+		t.Errorf("stat(%q) = %v, want the file never to have been created", dst, statErr)
+	}
+}
+
+// 弹过框的那次下载不再追问：用户批准的那条命令串里就写着 --file=P（D11 让它必须是绝对
+// 路径），前提成立，再问一次就是同一件事批两遍。
+func TestExecOSSObjectGetToFileSkipsTheGateAfterAUserApproval(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "conf.yml")
+	gate := &fakeLocalWriteGate{err: fmt.Errorf("gate must not be consulted")}
+	f := &fakeOSSExec{objects: map[string]string{"mybucket/conf.yml": "debug: true\n"}}
+
+	if _, err := (ossExecutor{svc: f}).run(
+		ossExecAICtx(aictx.SourceUserAllow, gate), ossExecAsset(),
+		"object get mybucket/conf.yml --file="+dst); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if len(gate.asked) != 0 {
+		t.Errorf("gate asked about %v, want no request after the user approved the command itself", gate.asked)
+	}
+	if _, statErr := os.Stat(dst); statErr != nil {
+		t.Errorf("stat(%q) = %v, want the download to have happened", dst, statErr)
+	}
+}
+
+// opsctl 那条路：审批在工具之外走完（WithPreapproved），没有 AI 会话也没有门禁可问，
+// 而本地路径就写在用户自己敲的那条命令串里。
+func TestExecOSSObjectGetToFileNeedsNoGateWhenPreapproved(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "conf.yml")
+	f := &fakeOSSExec{objects: map[string]string{"mybucket/conf.yml": "debug: true\n"}}
+
+	if _, err := (ossExecutor{svc: f}).run(
+		permission.WithPreapproved(context.Background()), ossExecAsset(),
+		"object get mybucket/conf.yml --file="+dst); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if _, statErr := os.Stat(dst); statErr != nil {
+		t.Errorf("stat(%q) = %v, want the download to have happened", dst, statErr)
+	}
+}
+
+// 门禁没接上时不许放行——与 permission.RequireChecker 同一条理由（#249）：走到这里时
+// 它是仅剩的那道门，"注入缺失 == 放行"就等于没有门。
+func TestExecOSSObjectGetToFileFailsWhenTheGateIsMissing(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "authorized_keys")
+	f := &fakeOSSExec{objects: map[string]string{"mybucket/conf.yml": "debug: true\n"}}
+
+	_, err := (ossExecutor{svc: f}).run(
+		ossExecAICtx(aictx.SourcePolicyAllow, nil), ossExecAsset(),
+		"object get mybucket/conf.yml --file="+dst)
+
+	if err == nil {
+		t.Fatal("run = nil error, want a failure: the local write gate was not wired")
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("service calls = %v, want none", f.ops())
+	}
+	if _, statErr := os.Stat(dst); !os.IsNotExist(statErr) {
+		t.Errorf("stat(%q) = %v, want the file never to have been created", dst, statErr)
+	}
+}
+
+// `object put --file=P` 读本地、不写本地：门禁守的是写。把它也拦下来就是拿一道写的门
+// 去挡一次读，而本地读（local_read）从来不在这套门禁里。
+func TestExecOSSObjectPutFromFileIsNotALocalWrite(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "conf.yml")
+	if err := os.WriteFile(src, []byte("debug: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gate := &fakeLocalWriteGate{err: fmt.Errorf("gate must not be consulted")}
+	f := &fakeOSSExec{objects: map[string]string{}}
+
+	if _, err := (ossExecutor{svc: f}).run(
+		ossExecAICtx(aictx.SourcePolicyAllow, gate), ossExecAsset(),
+		"object put mybucket/conf.yml --file="+src); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(gate.asked) != 0 {
+		t.Errorf("gate asked about %v, want no request: reading a local file is not a local write", gate.asked)
 	}
 }

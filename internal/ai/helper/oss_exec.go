@@ -213,6 +213,10 @@ func (e ossExecutor) getObject(ctx context.Context, asset *asset_entity.Asset, c
 // downloadObject 走传输接缝的本地端（localAdapter.Write：按需建父目录 + 流式落盘），
 // 不自己写第二份"打开并写一个本地文件"。
 //
+// 落盘之前先过 gateExecLocalWrite：这条命令与 cp 是同一个原语（往本机任意路径写文件），
+// 而 `object.read *` 是内置默认策略里就有的一条，因此它同样能在一个弹框都不弹的情况下
+// 写穿本机。门禁排在 GetObject 之前——被拒的下载不该先把对象读出来。
+//
 // OSS 那一端直接用 oss_svc.GetObject，而不是 ossAdapter.OpenRead：后者只是同一个调用
 // 外加一次 <bucket>/<key> 路径再解析（DSL 已经解析过了），而它多出来的"尾随 / 是前缀
 // 不是对象"那条规则会让 `object get mybucket/logs/ --file=…` 失败在一个合法对象上——
@@ -221,6 +225,11 @@ func (e ossExecutor) getObject(ctx context.Context, asset *asset_entity.Asset, c
 func (e ossExecutor) downloadObject(
 	ctx context.Context, asset *asset_entity.Asset, bucket, key, file string,
 ) (string, error) {
+	if err := gateExecLocalWrite(ctx, file,
+		fmt.Sprintf("object get %s/%s --file=%s", bucket, key, file)); err != nil {
+		return "", err
+	}
+
 	reader, size, err := e.svc.GetObject(ctx, asset.ID, bucket, key)
 	if err != nil {
 		return "", err

@@ -91,21 +91,17 @@ type cpResult struct {
 // 存在不存在——那正是收敛前 checkFileTransfer 守着的不变式（"在真正建连之前过一次
 // cp 审批"）。多源形态没有这个选择，展开必须先发生，所以它按 D18 先过一次 DirList 授权。
 //
-// **本地端点不产生审批项**（spec §6.2），本轮沿用这条既有裁定，不是默认继承：
-// download_file 今天就能写到本地任意路径，唯一的门是远端那一端的读授权；本地路径只以
-// 展示的身份出场——D11 强制它绝对，端点原文又原样进审批项的 Detail 与 audit_logs。
-// 两条代价要说准，它们都比"本地路径在用户批准的那条串里看得见"这句话大：
+// **本地端点不产生审批项**（spec §6.2），本轮沿用这条既有裁定：download_file 今天就能写到
+// 本地任意路径，唯一的门是远端那一端的读授权；本地路径只以展示的身份出场——D11 强制它
+// 绝对，端点原文又原样进审批项的 Detail 与 audit_logs，用户批准的那条串里因此看得见它。
 //
-//  1. 远端那一端判成 Allow 时**根本没有弹窗**，于是也没有"用户批准的那条串"。OSS 资产
-//     的内置默认策略就放行 object.read *（builtin:oss-readonly），所以在一个刚建好、
-//     谁也没改过策略的对象存储资产上，`cp s3:/b/k /Users/me/.ssh/authorized_keys`
-//     零交互跑完，事后只在 audit_logs 里留一行。SSH 端要一条既有 grant 才走到这一步，
-//     对象存储端不需要——这是本轮把 OSS 接进传输面新带来的一档。
-//  2. 本地写因此也不经过 local_write / local_edit 那道门（local_tool_gate.go）。那不只是
-//     一份"会话内白名单"：未命中白名单的路径要弹一次框，没接审批回调时直接拒。
-//
-// 改掉它属于本地工具授权面的重做（那是一条 cago middleware，不是可调用的检查），
-// 与 OSS 无关，不在本轮范围内——记在这里是为了它是一条被裁定过的选择，而不是没人看见。
+// 这条规则**有个前提**：得真的存在"用户批准的那条串"。两端都被策略或 grant 自动放行时
+// 一个弹框都没有过，前提当场不成立——OSS 资产的内置默认策略就放行 object.read *
+// （builtin:oss-readonly），于是在一个谁也没改过策略的对象存储资产上，
+// `cp s3:/b/k /Users/me/.ssh/authorized_keys` 会零交互写穿本机的任意文件。规则不变，
+// 变的是它盖不住的那一档：**没有任何端点产生过审批交互时，本地写改走 local_write 门禁**
+// （gateLocalWrites）。那道门本来就是模型直接写本地文件时要过的同一道，主体是展开后的
+// 每一条落点，会话白名单也是同一份。
 func handleCp(ctx context.Context, args map[string]any) (string, error) {
 	srcRaw := aictx.ArgString(args, "src")
 	dstRaw := aictx.ArgString(args, "dst")
@@ -202,10 +198,15 @@ func cpSingleSource(
 	if err := dst.adapter.ValidateDestination(dst.path); err != nil {
 		return "", err
 	}
-	if err := checkEndpoint(ctx, checker, src, helper.DirRead, src.path, detail); err != nil {
+	srcPrompted, err := checkEndpoint(ctx, checker, src, helper.DirRead, src.path, detail)
+	if err != nil {
 		return "", err
 	}
-	if err := checkEndpoint(ctx, checker, dst, helper.DirWrite, dst.path, detail); err != nil {
+	dstPrompted, err := checkEndpoint(ctx, checker, dst, helper.DirWrite, dst.path, detail)
+	if err != nil {
+		return "", err
+	}
+	if err := gateLocalWrites(ctx, checker, dst, []string{dst.path}, detail, srcPrompted || dstPrompted); err != nil {
 		return "", err
 	}
 
@@ -252,7 +253,8 @@ func cpMultiSource(
 	// 由适配器自己做（见 helper.TransferAdapter.ApprovalSubject）。这里替它按 glob 截一刀，
 	// 对象存储那一端就会把前缀里的字面量 "[" 当成通配、把基点塌到桶根上——指名一个前缀，
 	// 换来一条整桶列举的常驻授权。
-	if err := checkEndpoint(ctx, checker, src, helper.DirList, src.path, detail); err != nil {
+	listPrompted, err := checkEndpoint(ctx, checker, src, helper.DirList, src.path, detail)
+	if err != nil {
 		return "", err
 	}
 
@@ -293,7 +295,11 @@ func cpMultiSource(
 			cpAccess{ep: src, path: entry.Path, dir: helper.DirRead},
 			cpAccess{ep: dst, path: dstPath, dir: helper.DirWrite})
 	}
-	if err := checkAccessBatch(ctx, checker, accesses, detail); err != nil {
+	transferPrompted, err := checkAccessBatch(ctx, checker, accesses, detail)
+	if err != nil {
+		return "", err
+	}
+	if err := gateLocalWrites(ctx, checker, dst, dstPaths, detail, listPrompted || transferPrompted); err != nil {
 		return "", err
 	}
 
@@ -334,13 +340,16 @@ func relPathStaysUnderBase(relPath string) bool {
 //
 // "有资产才有审批主体"这条判断只出现在下面那一行：其余部分（主体去重、策略检查、批量
 // 对话框、拒绝处理）对端点一视同仁，本地端点将来若要产生审批项，改的是那一行而不是这条流程。
+//
+// 返回的 prompted 说的是"这一批**真的弹过框**"，不是"通过了"：全部被策略/grant 自动放行时
+// 它是 false，而那正是本地写要另找一道门的那一档（见 gateLocalWrites）。
 func checkAccessBatch(
 	ctx context.Context, checker *permission.CommandPolicyChecker, accesses []cpAccess, detail string,
-) error {
+) (bool, error) {
 	// checker 为 nil 只在 opsctl 那条已预检的路径上合法（上游 RequireCheckerOrPreapproved
 	// 已经挡掉漏接线），与 checkEndpoint 同一条豁免。
 	if checker == nil {
-		return nil
+		return false, nil
 	}
 
 	items := make([]permission.ApprovalItem, 0, len(accesses))
@@ -368,18 +377,18 @@ func checkAccessBatch(
 		aictx.RecordDecision(ctx, result)
 		switch result.Decision {
 		case aictx.Deny:
-			return fmt.Errorf("%s", result.Message)
+			return false, fmt.Errorf("%s", result.Message)
 		case aictx.NeedConfirm:
 			items = append(items, item)
 		}
 	}
 	if len(items) == 0 {
-		return nil
+		return false, nil
 	}
 
 	confirm := checker.ConfirmFunc()
 	if confirm == nil {
-		return fmt.Errorf("transfer requires confirmation but no approval mechanism is configured")
+		return false, fmt.Errorf("transfer requires confirmation but no approval mechanism is configured")
 	}
 	resp := confirm(ctx, permission.ApprovalKindBatch, items)
 	parsed, parseErr := permission.ParseApprovalResponse(permission.ApprovalKindBatch, resp, items)
@@ -392,9 +401,46 @@ func checkAccessBatch(
 		aictx.RecordDecision(ctx, aictx.CheckResult{
 			Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny, Message: msg,
 		})
-		return fmt.Errorf("%s", msg)
+		return false, fmt.Errorf("%s", msg)
 	}
 	aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow})
+	return true, nil
+}
+
+// gateLocalWrites 让本地落点过一次 local_write 门禁——**只在这次 cp 一个弹框都没弹过时**。
+//
+// spec §6.2「本地端点不产生审批项」建立在 D11 的前提上：本地路径由用户批准的那条命令串
+// 完全决定（端点原文进审批项的 Detail，D11 又强制它绝对）。两端都被策略/grant 自动放行时
+// 根本没有"用户批准的那条串"，前提不成立，于是这道门顶上——规则本身不变，补的是它的盲区。
+//
+// 三个提前返回各有各的理由，不是一串防御：
+//   - 目的端在资产上：它自己有审批主体，已经在上面查过了；本地门禁的匹配器（POSIX glob）
+//     拿去撞远端路径只会误判。
+//   - prompted：用户刚看过一个写着两端原文的对话框，前提成立，再问一次就是重复审批。
+//   - checker 为 nil：opsctl 那条已预检的路径（WithPreapproved），命令串是用户自己敲的，
+//     那里既没有 AI 会话也没有门禁可问。漏接线由上游的 RequireCheckerOrPreapproved 挡。
+//
+// 门禁没接上时**报错而不是放行**（RequireLocalWriteGate 自己 fail-closed）：走到这一行时
+// 它是仅剩的那道门。
+func gateLocalWrites(
+	ctx context.Context, checker *permission.CommandPolicyChecker,
+	dst *cpEndpoint, paths []string, detail string, prompted bool,
+) error {
+	if dst.isRemote() || prompted || checker == nil {
+		return nil
+	}
+	gate, err := helper.RequireLocalWriteGate(ctx)
+	if err != nil {
+		return err
+	}
+	if err := gate.CheckLocalWrites(ctx, paths, detail); err != nil {
+		// 被门禁挡下的传输一个字节都没写，审计行不能停在上一条端点检查记下的 allow 上。
+		// 放行时**不**改写决策：那条 allow 是策略/grant 给的，来源比"门禁也放行了"更准。
+		aictx.RecordDecision(ctx, aictx.CheckResult{
+			Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny, Message: err.Error(),
+		})
+		return err
+	}
 	return nil
 }
 
@@ -427,20 +473,24 @@ func expandSource(
 //
 // checker 为 nil 只在 opsctl 已完成审批并 WithPreapproved 标记过时合法，其余缺 checker 的
 // 路径由上游的 RequireCheckerOrPreapproved 挡掉。
+//
+// 返回的 prompted 说的是"用户**真的看见过**这次检查的对话框"（DecisionSource 为 user_allow），
+// 不是"检查通过了"：策略与 grant 都是零交互放行。gateLocalWrites 要的正是这个区别——
+// 没有任何一次交互，就没有"用户批准的那条串"，本地写因此得另找一道门。
 func checkEndpoint(
 	ctx context.Context, checker *permission.CommandPolicyChecker,
 	ep *cpEndpoint, dir helper.Direction, path, detail string,
-) error {
+) (bool, error) {
 	if !ep.isRemote() || checker == nil {
-		return nil
+		return false, nil
 	}
 	approvalType, subject := ep.adapter.ApprovalSubject(path, dir)
 	result := checker.CheckForAsset(ctx, ep.asset.ID, approvalType, subject, detail)
 	aictx.RecordDecision(ctx, result)
 	if result.Decision != aictx.Allow {
-		return fmt.Errorf("%s", result.Message)
+		return false, fmt.Errorf("%s", result.Message)
 	}
-	return nil
+	return result.DecisionSource == aictx.SourceUserAllow, nil
 }
 
 // transferOne 执行一条已获批准的传输：源端开读、目的端流式写入。
