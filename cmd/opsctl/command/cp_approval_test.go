@@ -62,6 +62,13 @@ type cpFakeAdapter struct {
 	// 会把"每个源展开出的那一条"折叠成同一条主体，于是"每个源都进了审批"这句断言
 	// 只剩一条可断。
 	byPattern map[string][]helper.Entry
+	// listed 按顺序记下每一次 List 的 pattern。**opsctl 什么时候碰远端、碰了几次**本身
+	// 就是契约：指名的源一次都不该碰（那是一次未经授权、未经审计的远端探测），枚举形态
+	// 只该展开一次。没有这份记录，两者都只能靠"结果碰巧一样"来判断。
+	listed []string
+	// appearsLater 是"两次展开之间源端新出现的文件"：第二次及以后的 List 会多交出它。
+	// 它是 TOCTOU 那条缝的探针——只展开一次的实现永远看不到它。
+	appearsLater []helper.Entry
 }
 
 var cpFakeRemote = &cpFakeAdapter{}
@@ -71,10 +78,26 @@ func init() { helper.RegisterTransferAdapter(cpTestRemoteType, cpFakeRemote) }
 func (a *cpFakeAdapter) List(
 	_ context.Context, _ *asset_entity.Asset, pattern string, _ bool,
 ) (*helper.ListResult, error) {
+	a.listed = append(a.listed, pattern)
 	if entries, ok := a.byPattern[pattern]; ok {
 		return &helper.ListResult{Entries: entries}, nil
 	}
+	if len(a.listed) > 1 && len(a.appearsLater) > 0 {
+		grown := make([]helper.Entry, 0, len(a.entries)+len(a.appearsLater))
+		return &helper.ListResult{Entries: append(append(grown, a.entries...), a.appearsLater...)}, nil
+	}
 	return &helper.ListResult{Entries: a.entries}, nil
+}
+
+// resetCpFakeRemote 清空那个内存端点并在用例结束后还原。它是全局的：上一条用例留下的
+// 调用记录会让"碰了几次远端"这类断言读到别人的账。
+func resetCpFakeRemote(t *testing.T) {
+	t.Helper()
+	cpFakeRemote.entries = nil
+	cpFakeRemote.byPattern = nil
+	cpFakeRemote.listed = nil
+	cpFakeRemote.appearsLater = nil
+	t.Cleanup(func() { *cpFakeRemote = cpFakeAdapter{} })
 }
 
 func (a *cpFakeAdapter) OpenRead(
@@ -421,9 +444,9 @@ func TestCmdCpMultiSourceApprovesEveryExpandedPath(t *testing.T) {
 			So(calls, ShouldBeEmpty)
 		})
 
-		// 零命中不是一次成功的传输：真实 cp 对无匹配同样非零退出，而这里放行的后果比"静默
-		// 的零文件成功"还重一档——被指名的源那一支落点是由 entries[0] 拼出来的，空清单会
-		// 当场 index out of range（见 cpTransferPlanFor）。
+		// 零命中不是一次成功的传输：真实 cp 对无匹配同样非零退出，一次静默的零文件"成功"
+		// 正是 D19 否决的那类"看起来成功、实际只传了一部分"。这道守卫只管枚举形态——
+		// 被指名的源恒是一条（cpNamedListing），它到不了这里。
 		Convey("零命中报错，不发起批量审批", func() {
 			var batches [][]cpSubject
 			stubCpBatchApproval(t, &batches, ApprovalResult{Decision: aictx.Allow}, nil)
@@ -648,10 +671,16 @@ func TestCmdCpExpansionRequiresListApproval(t *testing.T) {
 // "批准一件事、拿到另一件"，只是这次宽在授权侧。收窄方向是**要得更少**，判据与 AI 侧
 // handleCp 的多源形态判定同一条（spec §6.2 明写两条入口的授权要互相复用）。
 //
+// 收窄的是**索取的授权**，不是那条不变式：指名的源因此一次远端也不许碰。少要一次授权、
+// 却照旧连上去 Stat 两条路径，换来的是一次未经授权也未经审计的"这个路径在不在"——正是
+// cmdCpSingleSource 那句"先连上去问一句这个路径存在吗，只会把一次不需要授权的探测塞进
+// 审批之前"说的那件事。指名的源的条目就是它自己那条路径，本地就能算出来。
+//
 // recursive 那一半由 TestCmdCpExpansionRequiresListApproval 守着。
 func TestCmdCpListApprovalOnlyWhenSomethingIsEnumerated(t *testing.T) {
 	Convey("展开授权只在真的会枚举时索取", t, func() {
 		registerCpTestAsset(t)
+		resetCpFakeRemote(t)
 		origProxyFn := cpSSHProxyClientFn
 		cpSSHProxyClientFn = func() *sshpool.Client { return nil }
 		defer func() { cpSSHProxyClientFn = origProxyFn }()
@@ -668,6 +697,8 @@ func TestCmdCpListApprovalOnlyWhenSomethingIsEnumerated(t *testing.T) {
 		}
 		defer func() { cpApprovalFn = origApproval }()
 
+		// 两条指名路径的 fixture 特意留着：真去 List 了照样拿得到结果，于是下面"没碰过
+		// 远端"那条断言失败的原因只可能是它自己，不会被"零命中"的错误路径盖过去。
 		cpFakeRemote.byPattern = map[string][]helper.Entry{
 			"/var/log/a.log": {{Path: "/var/log/a.log", RelPath: "a.log", Size: 1}},
 			"/var/log/b.log": {{Path: "/var/log/b.log", RelPath: "b.log", Size: 2}},
@@ -676,7 +707,6 @@ func TestCmdCpListApprovalOnlyWhenSomethingIsEnumerated(t *testing.T) {
 				{Path: "/var/log/b.log", RelPath: "b.log", Size: 2},
 			},
 		}
-		defer func() { cpFakeRemote.byPattern = nil }()
 
 		var batches [][]cpSubject
 		stubCpBatchApproval(t, &batches, ApprovalResult{Decision: aictx.Allow, SessionID: "s"}, nil)
@@ -696,6 +726,14 @@ func TestCmdCpListApprovalOnlyWhenSomethingIsEnumerated(t *testing.T) {
 				cpTestRemoteType + " read /var/log/a.log",
 				cpTestRemoteType + " read /var/log/b.log",
 			})
+			// 没索取授权，就一次远端也不许碰：少要一次授权换来一次未经授权、未经审计的
+			// 远端探测，比原来那次过宽的授权更糟。
+			So(cpFakeRemote.listed, ShouldBeEmpty)
+			// 落点照旧是 <目的基点> + <源的 basename>——不碰远端也算得出来，
+			// 三个适配器指名分支返回的正是这一条。
+			So(calls, ShouldHaveLength, 2)
+			So(calls[0]["dst"], ShouldEqual, dstDir+"a.log")
+			So(calls[1]["dst"], ShouldEqual, dstDir+"b.log")
 		})
 
 		Convey("源含通配：照旧索取展开授权", func() {
@@ -705,6 +743,8 @@ func TestCmdCpListApprovalOnlyWhenSomethingIsEnumerated(t *testing.T) {
 			So(seen, ShouldHaveLength, 1)
 			So(seen[0].Type, ShouldEqual, cpTestRemoteType)
 			So(seen[0].Command, ShouldEqual, "list /var/log/*.log")
+			// 授权在前、枚举在后，且只枚举一次。
+			So(cpFakeRemote.listed, ShouldResemble, []string{"/var/log/*.log"})
 		})
 	})
 }

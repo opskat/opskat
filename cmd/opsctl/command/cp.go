@@ -156,16 +156,25 @@ func cmdCpMultiSource(
 	// 只有真的会枚举的源要这一道：指名 N 个源却既无 -r 也无通配时没有任何结构被拖出来
 	// （指名的源若是目录，无 -r 时 List 本来就直接报错），要一次"列出这个基点"的授权
 	// 比"复制这一个指名对象"宽——方向上就是"批准一件事、拿到另一件"，只是宽在授权侧。
+	//
+	// 收窄的是**索取的授权**，不是审批与副作用的先后：不枚举的源因此连 List 都不发，
+	// 它的那一条由 cpNamedListing 在本地算出（见那里）。少要一次授权、却照旧连上去
+	// Stat 一遍，换来的是一次未经授权也未经审计的"这个路径在不在、多大"——比原来那次
+	// 过宽的授权更糟，也与 cmdCpSingleSource 对同一件事的答复相反。
 	expanded := make([]*helper.ListResult, len(srcs))
 	entryCount := 0
 	for i, src := range srcs {
-		if cpSourceExpands(src, recursive) {
-			approvalCtx, result, approvalAssetID, err := requireCpApproval(ctx,
-				[]cpTarget{{ep: src, dir: helper.DirList, path: src.path}}, detail)
-			ctx = approvalCtx
-			if err != nil {
-				return cpApprovalFailed(ctx, srcs, dst, approvalAssetID, err, result)
-			}
+		if !cpSourceExpands(src, recursive) {
+			expanded[i] = cpNamedListing(src.path)
+			entryCount++
+			continue
+		}
+
+		approvalCtx, result, approvalAssetID, err := requireCpApproval(ctx,
+			[]cpTarget{{ep: src, dir: helper.DirList, path: src.path}}, detail)
+		ctx = approvalCtx
+		if err != nil {
+			return cpApprovalFailed(ctx, srcs, dst, approvalAssetID, err, result)
 		}
 
 		res, err := src.adapter.List(ctx, src.asset, src.path, recursive)
@@ -258,8 +267,9 @@ type cpTransferPlan struct {
 // cpTransferPlanFor 按源的形态定这条源怎么交给工具。落点与清单必须由同一处决定：拼好的
 // 具体落点配上一份按 RelPath 算落点的清单，是两种落点语义打架。
 //
-// 被指名的源恒展开成一条（指名一个目录/前缀却没有 recursive 时 List 已经报错了，见
-// TransferAdapter.List），拼出来的落点与它自己那条审批主体逐字相同。
+// 被指名的源恒展开成一条——那一条由 cpNamedListing 直接给出，不经过 List——拼出来的落点
+// 与它自己那条审批主体逐字相同。它若其实是个目录/前缀，报错的是工具（TransferAdapter.List
+// 的"指名一个目录却没有 recursive"那一支），排在这次读被批准之后。
 func cpTransferPlanFor(src, dst *cpEndpoint, listing *helper.ListResult, recursive bool) cpTransferPlan {
 	if cpSourceExpands(src, recursive) {
 		return cpTransferPlan{src: src, dstArg: dst.arg, listing: listing}
@@ -272,6 +282,26 @@ func cpTransferPlanFor(src, dst *cpEndpoint, listing *helper.ListResult, recursi
 // 多源形态判定同一条（spec §6.5「何时算多源」），两条入口因此在同一件事上给同一个答案。
 func cpSourceExpands(src *cpEndpoint, recursive bool) bool {
 	return recursive || helper.HasGlobPattern(src.path)
+}
+
+// cpNamedListing 是一条**被指名的**源的展开结果：它自己那一条。指名的源不枚举任何东西，
+// 所以这条清单在本地就算得出来——三个适配器的指名分支返回的正是
+// Entry{Path: 用户写的那条路径, RelPath: 它的 basename}（transfer_local.go / transfer_ssh.go
+// 的 Stat 分支、transfer_oss.go 的 StatObject 分支）。
+//
+// 在本地算而不是去 List，是因为这条路上没有任何授权：cpSourceExpands 为假时不索取展开
+// 授权（D18 的作用域），于是一次 List 就成了未经授权、未经审计的远端探测——SSH 上是一次
+// 带认证的 SFTP 会话 + Stat，对象存储上是一次 StatObject，两者都回答了"这条路径在不在、
+// 多大"。cmdCpSingleSource 对完全相同的形态早就是这个答复（见那里的注释），两条路因此
+// 一致：被指名的路径在解析时就已完全确定，动手之前该发生的只有审批。
+//
+// Size 留零：它只服务展开出的条目的展示，而这份清单不会交给工具（cpTransferPlanFor 只对
+// 枚举形态带 listing），也不进审批主体——主体是路径，不是大小。
+func cpNamedListing(path string) *helper.ListResult {
+	// filepath.Base 而非 path.Base：本地端的路径在 Windows 上是 `\` 分隔的绝对路径，
+	// 而远端路径恒为 `/` 分隔——filepath 在 Windows 上两种分隔符都认，在 Unix 上本来就
+	// 只有一种，一个函数覆盖两端。
+	return &helper.ListResult{Entries: []helper.Entry{{Path: path, RelPath: filepath.Base(path)}}}
 }
 
 // cpEndpoint 是解析后的 cp 的一端：资产（本地端为 nil）、该端点上的路径，以及它的适配器。
