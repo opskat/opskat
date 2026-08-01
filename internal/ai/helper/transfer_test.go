@@ -574,7 +574,7 @@ func TestConnBoundReadCloser_ClosesOnceAndTearsDown(t *testing.T) {
 }
 
 // ctx 取消时 closeOnCancel 会把连接拆掉，阻塞在 reader 上的 Read 因此拿到 net.ErrClosed。
-// 与同文件的 ExecuteWithSFTP / CopyBetweenAssets 一条规矩：取消路径交出 ctx.Err()，
+// 与 ssh_helper.go 的 ExecuteWithSFTP 一条规矩：取消路径交出 ctx.Err()，
 // 不把底层的 "use of closed network connection" 暴露给上层；非取消错误原样透传。
 func TestConnBoundReadCloser_ReadReportsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

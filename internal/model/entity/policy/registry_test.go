@@ -50,15 +50,20 @@ func TestDefaultPolicyRegistry(t *testing.T) {
 	})
 }
 
+// TestOSSDefaultPolicyRegisteredByInit 守的是注册表接线本身：registry.go 的 init() 真的
+// 调用了 RegisterDefaultPolicy("oss", ...)，且挂的 provider 真的返回 *OSSPolicy——这两件事
+// 只有经过 GetDefaultPolicyOf 这条查询路径才验证得到，直接调用 DefaultOSSPolicy()（如
+// policy_test.go 的 TestDefaultOSSPolicy）绕过了注册表，测不出 init() 里那一行被删掉。
+// 不在这里断言 Groups 的具体内容——那是 DefaultOSSPolicy() 自己的返回值，已经由
+// TestDefaultOSSPolicy 覆盖，在这里重复断言只是抄一遍同一份事实，两处都要改这个测试才会跟着
+// 失败，检测不出新的缺陷（AGENTS.md Fix policy）。
 func TestOSSDefaultPolicyRegisteredByInit(t *testing.T) {
 	Convey("oss 的默认策略已在 init() 中注册,消费方无需再自行调用 DefaultOSSPolicy()", t, func() {
 		p, ok := GetDefaultPolicyOf("oss")
 		So(ok, ShouldBeTrue)
 
-		op, ok := p.(*OSSPolicy)
+		_, ok = p.(*OSSPolicy)
 		So(ok, ShouldBeTrue)
-		So(op.Groups, ShouldContain, BuiltinOSSReadOnly)
-		So(op.Groups, ShouldContain, BuiltinOSSDangerousDeny)
 	})
 }
 

@@ -166,11 +166,10 @@ export function OpsctlApprovalDialog() {
             asset_id: i.asset_id,
             asset_name: i.asset_name,
             command: i.command,
-            // detail 是一条 cp 传输唯一携带"两端基点"的地方，但**这个事件目前还不带它**：
-            // internal/app/opsctl/approval.go 的 handleBatchApproval 只发
-            // type/asset_id/asset_name/command，approval.BatchItem 也还没有 Detail 字段
-            // （single 与 grant 两个事件才有）。这里透传的是消费端的那一半，发送端补上之前，
-            // CLI 侧的折叠摘要只报得出条数。
+            // detail 是一条 cp 传输唯一携带"两端基点"的地方（"opsctl cp <src> → <dst>"）。
+            // internal/app/opsctl/approval.go 的 handleBatchApproval 与 approval.BatchItem
+            // 都带了它（batch_exec 的 exec/sql/redis/mongo 混合批不产出，留空），折叠摘要
+            // 因此报得出两端基点，不止是条数。
             detail: i.detail,
           })),
           sessionID: data.session_id,

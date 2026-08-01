@@ -227,6 +227,31 @@ func WriteGrantSubmitAudit(ctx context.Context, assetID int64, assetName string,
 	}
 }
 
+// WriteGrantDiscardedAudit 记录一次"始终允许"被批准执行、但归一化后没有产出任何 grant
+// pattern，因而什么都没有落库的情况（决策 D20：OSS 的目录标记，如
+// `object delete mybucket/logs/`，命令本身仍然执行，只是不产生常驻授权，见
+// permission.HandleConfirm 的兜底分支）。不落一条空的 grant_submit 审计行是刻意的——
+// 那会被前端 AuditLogPage 的会话已允许模式聚合当成一条真实 pattern；这里用不同的
+// ToolName 把"为什么没有常驻授权"单独记下来，而不是完全没有痕迹。
+func WriteGrantDiscardedAudit(ctx context.Context, assetID int64, assetName, command string) {
+	if repo := audit_repo.Audit(); repo != nil {
+		entry := &audit_entity.AuditLog{
+			Source:     aictx.GetAuditSource(ctx),
+			ToolName:   "grant_discarded",
+			AssetID:    assetID,
+			AssetName:  assetName,
+			Command:    auditredact.Text(command),
+			SessionID:  aictx.GetSessionID(ctx),
+			Decision:   "allow",
+			Success:    1,
+			Createtime: time.Now().Unix(),
+		}
+		if err := repo.Create(context.Background(), entry); err != nil {
+			logger.Default().Error("write grant discarded audit", zap.Error(err))
+		}
+	}
+}
+
 func truncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s

@@ -328,7 +328,7 @@ The path after `:` must start with `/`. When the part before the colon does name
 - With `-r`, a wildcard, or several sources, the **destination must end with `/`** — the landing path is the destination plus each entry's path relative to the expansion base. There is no `cp`-style "does the destination exist" guessing.
 - Every expanded path is approved individually, in one batch dialog. Over **200 entries is an error**, not a truncation — narrow the pattern.
 - The first failed entry aborts the whole transfer and reports how many of how many were transferred.
-- Symlinks are skipped and reported, never followed.
+- A symlink you name directly as a source or destination is followed, matching POSIX `cp`. One encountered while expanding a wildcard or recursive walk is skipped and reported instead — that keeps `cp -r ./dir ...` from escaping into whatever the link points at.
 
 **Copying inside one object-storage asset**: `cp` streams the object down and back up through this process. Use `opsctl exec <asset> -- "object copy <bucket>/<src> --to=<bucket>/<dst>"` instead — that copies server-side.
 

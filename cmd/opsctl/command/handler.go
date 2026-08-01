@@ -62,7 +62,9 @@ func callHandler(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, 
 	// 桌面审批）。handler 内部的权限检查是 fail-closed 的（permission.RequireChecker），
 	// 而 opsctl 的 context 里没有 PolicyChecker——那是桌面 AI 会话专属的。这里显式声明
 	// "已预检"，让 handler 跳过第二次检查，而不是靠"checker 为 nil 就放行"兜着。
-	// 只对真的带了审批结论的调用生效：没预检过的（cp / list / create）拿不到豁免。
+	// 只对真的带了审批结论的调用生效：cp 的两条入口（cmdCpSingleSource / cmdCpMultiSource）
+	// 现在都先过 requireCpApproval 再带着 decision 调这里，因此拿得到豁免；没预检过的
+	// （list / create）依旧拿不到。
 	if dec != nil {
 		ctx = permission.WithPreapproved(ctx)
 	}

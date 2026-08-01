@@ -522,6 +522,12 @@ func TestEscapeOSSMeta_EscapedNameMatchesItselfAndNothingElse(t *testing.T) {
 // 那条串（`object delete mybucket/logs/`，一条 DSL）当规则读时 action 段没有点，
 // policy.MatchOSSRule 对任何策略串都失配——落库只是在授权列表 UI 里显示一条用户其实
 // 没拿到的授权，外加一条同样不真实的 grant_submit 审计行。
+//
+// 但"什么都不落"不能等于"什么都不说"：命令本身仍然放行执行，用户点的是"始终允许"，
+// 得不到任何解释就会以为拿到了一条常驻授权，下次同样命令又弹一次框，audit_logs 里也找
+// 不到原因（wrap-up finding 6）。因此这里不再断言零审计行，而是断言恰好落一条独立
+// ToolName 的 grant_discarded 审计行——不是 grant_submit，避免被 AuditLogPage 的
+// "会话已允许模式" 聚合误读成一条真实 pattern。
 func TestHandleConfirm_OSSAllowAllLeavesNoDeadGrantRow(t *testing.T) {
 	withOSSPolicyStrings(t)
 	stubAudit := withStubAudit(t)
@@ -549,10 +555,21 @@ func TestHandleConfirm_OSSAllowAllLeavesNoDeadGrantRow(t *testing.T) {
 	assert.Empty(t, stubGrant.items["sess-dead"],
 		"落库的每一条都该是能匹配上东西的授权；这一条只会在授权列表里骗人")
 	// grant_submit 审计行与 grant 行是同一件事的两半：没有落成常驻授权，就没有
-	// "用户提交了这些 pattern" 这回事。审计里留一条空的 grant_submit，日后查
+	// "用户提交了这些 pattern" 这回事。混进一条空的 grant_submit，日后查
 	// audit_logs 的人会以为用户拿到了授权，而 grants 表里一条都没有。
-	assert.Empty(t, stubAudit.entries,
-		"一条 grant 都没落下时，不该有 grant_submit 审计行")
+	for _, e := range stubAudit.entries {
+		assert.NotEqual(t, "grant_submit", e.ToolName,
+			"没有落成常驻授权时不该有 grant_submit 审计行")
+	}
+	// 但沉默同样是缺陷：换一条不同 ToolName 的审计行把"为什么"记下来。
+	if assert.Len(t, stubAudit.entries, 1, "应当恰好落一条 grant_discarded 审计行解释这次丢弃") {
+		discarded := stubAudit.entries[0]
+		assert.Equal(t, "grant_discarded", discarded.ToolName)
+		assert.Equal(t, int64(1), discarded.AssetID)
+		assert.Equal(t, "s3-prod", discarded.AssetName)
+		assert.Equal(t, "object delete mybucket/logs/", discarded.Command)
+		assert.Equal(t, "sess-dead", discarded.SessionID)
+	}
 }
 
 // 反过来，能落的照落——否则"什么都不落"是个廉价的通过方式。
@@ -713,5 +730,11 @@ func TestHandleConfirm_UnusableUserEditDoesNotFallBackToTheSystemPattern(t *test
 	}
 	assert.Empty(t, saved,
 		"用户的编辑用不了就什么都不授权；回落到系统主体等于丢掉他的编辑再塞给他一条更宽的授权")
-	assert.Empty(t, stubAudit.entries, "一条 grant 都没落下时，不该有 grant_submit 审计行")
+	for _, e := range stubAudit.entries {
+		assert.NotEqual(t, "grant_submit", e.ToolName,
+			"没有落成常驻授权时不该有 grant_submit 审计行")
+	}
+	// 同 TestHandleConfirm_OSSAllowAllLeavesNoDeadGrantRow：什么都不落不等于什么都不说，
+	// 一条 grant_discarded 审计行把"为什么"记下来。
+	assert.Len(t, stubAudit.entries, 1, "应当恰好落一条 grant_discarded 审计行解释这次丢弃")
 }
