@@ -480,13 +480,13 @@ func ossGrantRule(ps string) (rule string, ok bool) {
 
 	// 桶段与 key 段都要转义，理由是同一条：`object get 'my*/k'` 派生的
 	// "object.read my*/k" 当规则读时桶段的 `*` 是跨桶通配，一条授权覆盖 mybucket/k。
-	// 桶段永远不是前缀形态（按第一个 "/" 切），所以它走不带豁免的 escapeOSSMeta。
+	// 桶段永远不是前缀形态（按第一个 "/" 切），所以它走不带豁免的 escapeGlobMeta。
 	//
 	// `bucket.list *` 的占位 `*` 不需要豁免：它是这条 action 唯一的 resource 形态，
 	// 转义成 `\*` 之后 path.Match(`\*`, "*") 仍然为真，往返照样成立（实测），
 	// 而豁免会多出一条谁也测不到的分支。
 	bucket, key, hasKey := strings.Cut(resource, "/")
-	escaped := escapeOSSMeta(bucket)
+	escaped := escapeGlobMeta(bucket)
 	if hasKey {
 		escaped += "/" + escapeOSSRuleKey(key)
 	}
@@ -500,31 +500,34 @@ func ossListAction(action string) bool {
 	return strings.HasSuffix(action, ".list")
 }
 
-// ossKeyMetaChars 是 path.Match 在**模式侧**当成语法的字符：三个通配元字符加上转义符本身。
-const ossKeyMetaChars = `*?[\`
+// globMetaChars 是 path.Match 在**模式侧**当成语法的字符：三个通配元字符加上转义符本身。
+const globMetaChars = `*?[\`
 
-// escapeOSSMeta 把一个具体名字转成"只匹配它自己"的 path.Match 模式（决策 D21）。
+// escapeGlobMeta 把一个具体名字转成"只匹配它自己"的 path.Match 模式（决策 D21）。
 //
-// §3.4 的规则语法没有转义约定，而 S3 的 key 允许字面量 `* ? [`：不转义的话，一条从具体
-// key 派生出来的规则比这个 key 本身宽——实测 path.Match("secrets*", "secretsFOO") = true、
-// path.Match("logs/a[1].log", "logs/a1.log") = true，批准读一个对象换来的是读遍一批对象。
-// 匹配器与规则语法都不动：path.Match 原生认 `\`。
+// OSS 的规则（policy.MatchOSSRule）与 cp 的路径规则（policy.MatchPathRule）都建立在
+// path.Match 上，而两种名字——S3 的 key 与远端文件路径——都允许字面量 `* ? [`：不转义的话，
+// 一条从具体名字派生出来的规则比这个名字本身宽。实测 path.Match("secrets*", "secretsFOO")
+// = true、path.Match("logs/a[1].log", "logs/a1.log") = true，批准一个对象/一条路径换来的是
+// 一批。匹配器与规则语法都不动：path.Match 原生认 `\`，而 policy.MatchPathRule 同时是
+// local_write / local_edit 白名单的匹配器（决策 D17），改它的语义会波及本地写授权。
 //
-// 反向的解法（拒绝含元字符的 key）不成立：递归展开本来就会合法产出这种 key
+// 反向的解法（拒绝含元字符的名字）不成立：递归展开本来就会合法产出这种名字
 // （path.Match("dist/*", "dist/a[1].js") = true），拒绝等于 cp 传不了自己刚列出来的东西。
 //
 // `\` 必须在集合里：一个孤立的 `\` 会让 path.Match 对整条模式返回 ErrBadPattern，而
-// policy.MatchOSSRule 把 error 一律当 false —— 对 deny 规则就是静默的 fail-open。
+// policy.MatchOSSRule / MatchPathRule 都把 error 当 false —— 对 deny 规则就是静默的
+// fail-open，对 allow 就是一条谁也匹配不上的死 grant。
 // 按字节扫描是安全的：四个元字符都是 ASCII，而 UTF-8 的续字节一律 >= 0x80。
 // `]` 不在集合里也是安全的：`[` 一旦被转义，字符类就永远开不了，类外的 `]` 是字面量。
-func escapeOSSMeta(s string) string {
-	if !strings.ContainsAny(s, ossKeyMetaChars) {
+func escapeGlobMeta(s string) string {
+	if !strings.ContainsAny(s, globMetaChars) {
 		return s
 	}
 	var b strings.Builder
 	b.Grow(len(s) + 4)
 	for i := range len(s) {
-		if strings.IndexByte(ossKeyMetaChars, s[i]) >= 0 {
+		if strings.IndexByte(globMetaChars, s[i]) >= 0 {
 			b.WriteByte('\\')
 		}
 		b.WriteByte(s[i])
@@ -546,7 +549,7 @@ func escapeOSSRuleKey(key string) string {
 	if strings.HasSuffix(key, "/") {
 		return key
 	}
-	return escapeOSSMeta(key)
+	return escapeGlobMeta(key)
 }
 
 // --- Grant 匹配辅助 ---
@@ -567,6 +570,33 @@ func checkFileTransferPermission(ctx context.Context, assetID int64, remotePath 
 		return *grantResult
 	}
 	return aictx.CheckResult{Decision: aictx.NeedConfirm}
+}
+
+// cpGrantPatterns 是 cp 注册的 grant 归一化：一条审批主体 → 常驻授权的 pattern。
+//
+// 这是路径从**名字**变成**规则**的那一步，收窄只发生在这里——与 OSS 的 ossGrantRule
+// 同一条理由，也是同一个答案（决策 D21 更正：规则转义、名字原样）。
+//
+// cp 的主体是路径本身，而路径可以合法地含 glob 元字符：`cp ./x 'web-01:/etc/*'` 指名的是
+// 一个名字就叫 `*` 的文件（引号挡住了本地 shell，远端 shell 没参与），递归展开同样会产出
+// `a[1].log` 这类真实文件名。原样落库的后果是 policy.MatchPathRule 把它当通配读：一条
+// `/etc/*` 的 grant 授权 /etc 下的每个文件，而 cp 的 grant **不分方向**
+// （checkFileTransferPermission 只看路径），于是"批准往一个文件写"换来"读遍一个目录"。
+// 转义之后 path.Match(`/etc/\*`, "/etc/*") 仍为真、对 "/etc/passwd" 为假，"始终允许"照旧
+// 生效而范围只剩它自己。顺带修掉的是反向的死行：名字里带 `\` 的真实文件（Linux 上合法）
+// 原样落库时 path.Match 对不上自己。
+//
+// 用户在弹窗里手写的 pattern 不收窄：他写的通配就是他要的授权范围（设计 §4.3），
+// 与 ossGrantPatterns 对用户手写策略串的豁免是同一条。
+//
+// 匹配器一个字节都不用改：`\` 是 path.Match 原生的转义语法。这一点是承重的——
+// policy.MatchPathRule 同时是 local_write / local_edit 白名单的匹配器（决策 D17），
+// 改它的语义会波及本地写授权，而那条门禁走的是自己的会话白名单，根本不经过本函数。
+func cpGrantPatterns(remotePath string, origin GrantOrigin) []string {
+	if origin == GrantOriginUser {
+		return []string{remotePath}
+	}
+	return []string{escapeGlobMeta(remotePath)}
 }
 
 // matchGrantForAsset 为 database/redis 类型做 DB Grant 匹配。

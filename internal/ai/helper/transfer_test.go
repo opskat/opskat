@@ -15,6 +15,7 @@ import (
 	"github.com/pkg/sftp"
 
 	"github.com/opskat/opskat/internal/ai/permission"
+	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
@@ -295,6 +296,77 @@ func TestSSHTransfer_ApprovalSubjectNarrowsGlobForListing(t *testing.T) {
 			}
 			if subject != tt.want {
 				t.Errorf("subject = %q, want %q", subject, tt.want)
+			}
+		})
+	}
+}
+
+// TestSSHTransfer_ApprovalSubjectNeverOutgrowsItsPath 咬住这个接口唯一的安全后置条件，
+// 与对象存储端的同名断言（transfer_oss_test.go）是同一件事的两半：**主体落成常驻 grant
+// 之后，绝不能覆盖它描述的那一条传输之外的东西。**
+//
+// SSH 这一端的路径**可以合法地含 glob 元字符**：`cp ./x 'web-01:/etc/*'` 写的是一个名字
+// 就叫 `*` 的文件（远端 shell 没参与，引号挡住了本地展开），而递归展开同样会产出
+// `a[1].log` 这种真实文件名。收窄只发生在 grant 那一步（决策 D21 更正：名字原样、规则
+// 转义）——因此这条断言跨包：主体由本适配器给出，permission.NormalizeGrantPatterns 把它
+// 翻成规则，policy.MatchPathRule 再按 cp 的规则语义读那条规则。两个独立来源。
+//
+// 方向在这里是承重的：cp 的 grant **不分方向**（一条 grant 同时授权读与写），所以一条
+// 落成 "/etc/*" 的写授权会连 /etc 下每个文件的读取一起给出去。
+func TestSSHTransfer_ApprovalSubjectNeverOutgrowsItsPath(t *testing.T) {
+	// 一组具体路径，用来反问一条 grant"你还授权了什么"。
+	probe := []string{
+		"/etc", "/etc/passwd", "/etc/shadow", "/etc/cron.d",
+		"/var/log/a1.log", "/var/log/app.log", "/var/log/other/deep.log",
+		"/opt/app/deploy.sh",
+	}
+	assertGrantsNothingElse := func(t *testing.T, subject string) []string {
+		t.Helper()
+		patterns := permission.NormalizeGrantPatterns(
+			permission.GrantToolCp, subject, permission.GrantOriginSystem)
+		for _, pattern := range patterns {
+			for _, other := range probe {
+				if other == subject {
+					continue
+				}
+				if policy.MatchPathRule(pattern, other) {
+					t.Errorf("subject %q lands as grant %q, which also authorizes %q", subject, pattern, other)
+				}
+			}
+		}
+		return patterns
+	}
+
+	for _, tt := range []struct {
+		name string
+		path string
+		dir  Direction
+	}{
+		{"a globbed destination", "/etc/*", DirWrite},
+		{"a globbed source", "/var/log/*.log", DirRead},
+		{"a destination whose name is a character class", "/var/log/a[1].log", DirWrite},
+		{"a destination directly under the root", "/*", DirWrite},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, subject := sshTransfer.ApprovalSubject(tt.path, tt.dir)
+			patterns := assertGrantsNothingElse(t, subject)
+			// 往返：这条 grant 必须仍然授权它自己来自的那次传输，否则它是一条死行，
+			// "始终允许"点了等于没点（决策 D21 更正记下的那次事故）。只断言"不多授权"
+			// 抓不到它——一条死 grant 同样什么都不多授权。
+			if len(patterns) != 1 || !policy.MatchPathRule(patterns[0], subject) {
+				t.Fatalf("grants = %v, want exactly one authorizing %q itself", patterns, subject)
+			}
+		})
+	}
+
+	// 反过来，一条普通路径的授权照落，且它就是路径本身——否则"什么都不授权"是个廉价的
+	// 通过方式，而带反斜杠的真实文件名（Linux 上合法）会落成一条谁也匹配不上的死 grant。
+	for _, p := range []string{"/var/log/app.log", `/var/log/a\b.log`} {
+		t.Run("a plain path grants exactly itself: "+p, func(t *testing.T) {
+			_, subject := sshTransfer.ApprovalSubject(p, DirRead)
+			patterns := assertGrantsNothingElse(t, subject)
+			if len(patterns) != 1 || !policy.MatchPathRule(patterns[0], p) {
+				t.Fatalf("grants = %v, want exactly one authorizing %q", patterns, p)
 			}
 		})
 	}

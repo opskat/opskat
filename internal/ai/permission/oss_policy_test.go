@@ -485,7 +485,7 @@ func TestOSSGrantRule_NeverEscapesAPrefix(t *testing.T) {
 //   - 整条名字全是元字符，以及空串；
 //   - 多字节 UTF-8：转义是按字节扫的，续字节一律 >= 0x80 而四个元字符都是 ASCII，
 //     所以汉字里不会冒出反斜杠。
-func TestEscapeOSSMeta_EscapedNameMatchesItselfAndNothingElse(t *testing.T) {
+func TestEscapeGlobMeta_EscapedNameMatchesItselfAndNothingElse(t *testing.T) {
 	names := []string{
 		"", "]", "a]b", "][", `\`, `a\`, `*?[\`, "**", "secrets*", "what?.txt",
 		"logs/a[1].log", `a\b.txt`, "日本語*.log", "秘密?.txt", "plain/key.txt",
@@ -496,21 +496,21 @@ func TestEscapeOSSMeta_EscapedNameMatchesItselfAndNothingElse(t *testing.T) {
 		"a", "ab", "x", "[]", "plain/keyZtxt",
 	}
 	for _, name := range names {
-		pattern := escapeOSSMeta(name)
+		pattern := escapeGlobMeta(name)
 		ok, err := path.Match(pattern, name)
 		if err != nil {
-			t.Errorf("escapeOSSMeta(%q) = %q is not a valid path.Match pattern: %v", name, pattern, err)
+			t.Errorf("escapeGlobMeta(%q) = %q is not a valid path.Match pattern: %v", name, pattern, err)
 			continue
 		}
 		if !ok {
-			t.Errorf("escapeOSSMeta(%q) = %q does not match the name it came from", name, pattern)
+			t.Errorf("escapeGlobMeta(%q) = %q does not match the name it came from", name, pattern)
 		}
 		for _, other := range slices.Concat(names, victims) {
 			if other == name {
 				continue
 			}
 			if ok, err := path.Match(pattern, other); err == nil && ok {
-				t.Errorf("escapeOSSMeta(%q) = %q also matches %q", name, pattern, other)
+				t.Errorf("escapeGlobMeta(%q) = %q also matches %q", name, pattern, other)
 			}
 		}
 	}

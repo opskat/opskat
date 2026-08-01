@@ -171,10 +171,14 @@ func (sshAdapter) ValidateDestination(string) error { return nil }
 // ApprovalSubject：SSH 端点三个方向都归 cp 授权，主体是远端路径本身——与传输面收敛前的
 // checkFileTransferPermission + MatchPathRule 逐字节一致。
 //
-// 例外是 DirList：那一端收到的可能是个 pattern，而 cp 的匹配器就是 path.Match
-// （policy.MatchPathRule），主体照抄 pattern 等于把它命中的每个文件的读写一并授权出去，
-// 而用户批准的只是"列出这个目录"。远端文件系统上 `*?[` 确实是通配语法，因此这里的收窄
-// 就是展开基点本身（见 TransferAdapter.ApprovalSubject 的注释：收窄归适配器）。
+// 例外是 DirList：那一端收到的可能是个 pattern，而主体该说的是**实际会被枚举的那个基点**
+// ——用户批准的是"列出这个目录"，主体照抄 pattern 就把范围说成了它命中的那些文件。远端
+// 文件系统上 `*?[` 确实是通配语法，因此这里的收窄就是展开基点本身（见
+// TransferAdapter.ApprovalSubject 的注释：收窄归适配器）。
+//
+// 主体里**残留的**元字符不会变成一条通配授权：那一步在 permission.cpGrantPatterns，
+// 系统给出的主体落成规则时逐个转义（决策 D21 更正：规则转义、名字原样）。所以这里绝不能
+// 自己先转义——路径里的 `*?[` 可以是字面文件名，名字侧转义会让规则匹配不上自己。
 func (sshAdapter) ApprovalSubject(p string, dir Direction) (string, string) {
 	if dir == DirList && hasGlobMeta(p) {
 		return permission.GrantToolCp, globBase(p)

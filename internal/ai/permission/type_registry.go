@@ -16,8 +16,9 @@ type permissionCheckFunc func(context.Context, int64, string) aictx.CheckResult
 //
 // grantPatterns 把一条审批输入拆成可独立匹配的 grant pattern（见 NormalizeGrantPatterns）。
 // nil 表示"整串存一条"，是绝大多数类型的形态；shell 类按 AST 子命令拆，OSS 按 DSL 派生
-// 策略串。这里是一个注册的函数而不是一个 shellLike 布尔开关，因为要选的本来就是这个
-// 函数——第三种归一化方式出现时，布尔开关只能变成 dispatcher 里的类型分支（设计 D8）。
+// 策略串，cp 把系统给出的路径主体转义成只匹配它自己的规则。这里是一个注册的函数而不是一个
+// shellLike 布尔开关，因为要选的本来就是这个函数——第三种归一化方式出现时，布尔开关只能
+// 变成 dispatcher 里的类型分支（设计 D8）。
 //
 // origin 说的是这条输入是谁写的（见 GrantOrigin）：字符串本身分不出"系统推导"与
 // "用户手写"，而只有前者该被收窄，所以来源必须由调用方声明着传进来。
@@ -81,9 +82,10 @@ func init() {
 	registerPermissionType(asset_entity.AssetTypeKafka, "kafka", nil, checkKafkaPermission)
 	registerPermissionType(asset_entity.AssetTypeK8s, "k8s", shellGrantPatterns, checkK8sPermission)
 	registerPermissionType(asset_entity.AssetTypeOSS, "oss", ossGrantPatterns, checkOSSPermission)
-	// cp 不是资产类型而是操作面：任何能开 SFTP 的资产上的文件传输都归它，
-	// 主体是远端路径而非命令，因此 grantPatterns 为 nil（grant 不按 shell 子命令拆）。
-	registerPermissionType(GrantToolCp, "cp", nil, checkFileTransferPermission)
+	// cp 不是资产类型而是操作面：任何能开 SFTP 的资产上的文件传输都归它，主体是远端路径
+	// 而非命令，所以不按 shell 子命令拆；cpGrantPatterns 做的是另一件事——把系统给出的
+	// 主体转义成"只匹配它自己"的规则（决策 D21），因为路径里的 `* ? [` 可以是字面文件名。
+	registerPermissionType(GrantToolCp, "cp", cpGrantPatterns, checkFileTransferPermission)
 }
 
 // --- 执行器注册表 ---
