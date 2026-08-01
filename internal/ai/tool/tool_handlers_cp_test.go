@@ -325,6 +325,28 @@ func TestCpApprovalCapRefusesToTruncate(t *testing.T) {
 	})
 }
 
+// TestCpGlobFormRequiresTrailingSlash 锁 D16 在通配形态上的那一半：多源判的是**形态**
+// （recursive 为真，或源含 `* ? [`），不是单看 recursive 那一个布尔。cmd/opsctl/command
+// 那一侧曾经把判定收窄成只看 recursive（487f2aa0），同一个变异如果发生在这里，
+// `cp(src="sink-01:/src/*.log", dst="sink-01:/backup")` 会安静地把展开出的每个条目都拼到
+// 字面量 "backup" 后面，而不是报错——落点从此不再纯由输入决定。
+func TestCpGlobFormRequiresTrailingSlash(t *testing.T) {
+	Convey("通配形态（未设 recursive）的目的地同样必须以 / 收尾", t, func() {
+		ctx, seen := setupCp(t, "allow")
+
+		_, err := handleCp(ctx, map[string]any{
+			"src": "sink-01:/src/*.log", "dst": "sink-01:/backup",
+		})
+
+		So(err, ShouldNotBeNil)
+		So(err.Error(), ShouldContainSubstring, `must end with "/"`)
+		// 排在展开与任何审批之前：源端一次都没被要求列出，用户也没看见过任何弹框。
+		So(*seen, ShouldHaveLength, 0)
+		So(cpFake.listed, ShouldBeEmpty)
+		So(cpFake.written, ShouldBeEmpty)
+	})
+}
+
 // TestCpMultiSourceFastFailsAndReportsProgress 锁 D19 的快速失败：任一条出错立即中止，
 // 报出已传输 N/M 并点名失败的那条。不是 POSIX cp 的"继续并最终非零"——每个已传输的字节
 // 都是一次已批准的副作用，出意外后继续会留下一个看起来完整、实际残缺的目的地。
