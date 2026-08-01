@@ -2,13 +2,16 @@ package command
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/audit"
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
@@ -19,6 +22,23 @@ import (
 
 	"go.uber.org/mock/gomock"
 )
+
+// effectiveAuditCommand replicates DefaultAuditWriter.WriteToolCall's own resolution of
+// the persisted `command` column (audit.go's `command := info.Command; if command == ""
+// { command = ExtractCommandForAudit(...) }`), so tests can assert on what would actually
+// land in audit_logs.command without standing up a real DB. mockAuditWriter records the
+// raw ToolCallInfo verbatim — it does not replicate that fallback itself.
+func effectiveAuditCommand(t *testing.T, info audit.ToolCallInfo) string {
+	t.Helper()
+	if info.Command != "" {
+		return info.Command
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(info.ArgsJSON), &args); err != nil {
+		t.Fatalf("unmarshal ArgsJSON: %v", err)
+	}
+	return audit.ExtractCommandForAudit(info.ToolName, args)
+}
 
 // captureStderr redirects os.Stderr for the duration of f and returns everything written
 // to it. cmdExec (like the rest of this package's command handlers) reports errors via
@@ -112,6 +132,7 @@ func setupOpsctlExecAssets(t *testing.T) *opsctlExecTestEnv {
 		{ID: 4, Name: "serial-1", Type: asset_entity.AssetTypeSerial},
 		{ID: 5, Name: "etcd-1", Type: asset_entity.AssetTypeEtcd},
 		{ID: 6, Name: "kafka-1", Type: asset_entity.AssetTypeKafka},
+		{ID: 7, Name: "oss-1", Type: asset_entity.AssetTypeOSS},
 	}
 	mockAsset.EXPECT().List(gomock.Any(), gomock.Any()).Return(assets, nil).AnyTimes()
 	// permission.CheckPermission (invoked from the real requireApproval, or from Step 3
@@ -431,5 +452,61 @@ func TestCmdExec_KafkaAllowedCommandClearsCanonicalPolicyCheck(t *testing.T) {
 	}
 	if env.handlerCalls["exec"] != 1 {
 		t.Errorf("unified exec handler ran %d times, want 1", env.handlerCalls["exec"])
+	}
+}
+
+// G7 / S8 / A1 (e2e/scratch/2026-07-31-oss-ai-cli-operations/report.md §3.1): the approval
+// dialog, the persisted grant pattern and the audit row must all show the same canonical
+// DSL for a command opsctl itself would rewrite. The report reproduced a defect where the
+// opsctl approval dialog for `object list verify-a` showed the canonicalized
+// `object list verify-a/` (matching the AI entry's dialog *and* audit row) while the opsctl
+// audit_logs.command column kept the raw `object list verify-a`.
+//
+// The unified (non-ssh) exec path runs through callHandler, which marshals the *raw*
+// params (command must stay raw — it is what handleExec's own executor re-parses; feeding
+// it the canonicalized display form would be lossy for k8s/kafka/mongo/etcd, see
+// tool_handlers_unified.go's step 9 comment) and writes the audit row via writeOpsctlAudit,
+// which never set audit.ToolCallInfo.Command — so DefaultAuditWriter always fell back to
+// ExtractCommandForAudit, reading the raw command straight out of that params blob.
+func TestCmdExec_OSSAuditCommandIsCanonical(t *testing.T) {
+	env := setupOpsctlExec(t)
+	env.approvalDecision = "allow"
+
+	code := cmdExec(env.ctx, env.handlers, []string{"oss-1", "--", "object list verify-a"}, "")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	mock := opsctlAuditWriter.(*mockAuditWriter)
+	got := effectiveAuditCommand(t, mock.lastCall())
+	want := "object list verify-a/" // OSS canonicalizes a bare bucket target for "list" to end in "/"
+	if got != want {
+		t.Fatalf("persisted audit command = %q, want the canonical form %q shown by the approval dialog and used for the grant pattern", got, want)
+	}
+}
+
+// Companion regression guard: ssh has no registered CanonicalizeFunc, so checkCommand ==
+// command for it. The audited command must stay byte-identical to whatever the user typed
+// — proving the fix above canonicalizes only when an asset type actually normalizes, not
+// unconditionally (which would silently rewrite shell commands in the audit trail).
+func TestCmdExec_SSHAuditCommandStaysRaw(t *testing.T) {
+	env := setupOpsctlExec(t)
+	env.approvalDecision = "allow"
+	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, result ApprovalResult) int {
+		argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, asset.ID, command)
+		writeOpsctlAudit(auditCtx, "exec", argsJSON, `{"exit_code":0}`, nil, result.ToCheckResult())
+		return 0
+	}
+
+	command := "systemctl status nginx"
+	code := cmdExec(env.ctx, env.handlers, []string{"web-1", "--", command}, "")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	mock := opsctlAuditWriter.(*mockAuditWriter)
+	got := effectiveAuditCommand(t, mock.lastCall())
+	if got != command {
+		t.Fatalf("ssh audit command = %q, want byte-identical raw command %q", got, command)
 	}
 }

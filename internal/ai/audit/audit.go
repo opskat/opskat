@@ -52,11 +52,13 @@ type ToolCallInfo struct {
 	AssetName string
 
 	// Command 允许调用方预先算好命令摘要，覆盖 ExtractCommandForAudit 的默认解析。
-	// 目前只有 auditMiddleware 给 exec 工具填：资产类型注册了 CanonicalizeFunc 时
+	// AI 侧由 auditMiddleware 给 exec 工具填：资产类型注册了 CanonicalizeFunc 时
 	// （k8s 注入 --context/--namespace；etcd/mongo/kafka 走各自 DSL 的 round trip，
 	// 规范化大小写、复合命令拼写与 flag 顺序），这里存规范化后、真正过了权限
 	// 检查/审批弹窗展示的命令，而不是模型传入的原始字符串——否则审计会跟
-	// 审批弹窗对不上。
+	// 审批弹窗对不上。opsctl 侧同理：cmd/opsctl/command.writeOpsctlAudit 通过
+	// aictx.GetAuditCommand(ctx) 读 cmdExec 预填的规范形式（同一个 aictx.
+	// AuditCommandSlot 机制，只是不经过 runner 中间件）。
 	//
 	// kafka 是这里最需要留意的一个：它的规范化结果是策略层的**双 token 串**
 	// （如 `topic.delete orders`），不是模型写的富命令串（`topic delete orders`）。

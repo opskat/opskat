@@ -108,6 +108,13 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	})
 	// 注入 SessionID 到 context，供审计写入器使用
 	auditCtx := aictx.WithSessionID(ctx, approvalResult.SessionID)
+	// 同样把 checkCommand 挂到 context 上，供 writeOpsctlAudit 读取（aictx.
+	// AuditCommandSlot）：下面三条写审计的路径——本函数的错误分支、execSSHStreamFn、
+	// callHandler 内部——都得落这个规范形式，而不是 callHandler 转发给 handler
+	// 执行、必须保持原样的那个 command。ssh 资产没有注册 CanonicalizeFunc，
+	// checkCommand == command，这里不需要为它特殊处理。
+	auditCommand := checkCommand
+	auditCtx = aictx.WithAuditCommandSlot(auditCtx, &auditCommand)
 
 	if err != nil {
 		writeOpsctlAudit(auditCtx, "exec", argsJSON, "", err, approvalResult.ToCheckResult())
