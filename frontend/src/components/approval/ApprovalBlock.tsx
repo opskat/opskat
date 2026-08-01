@@ -25,8 +25,10 @@ interface ApprovalBlockProps {
 }
 
 // 递归/通配 cp 一次展开出的路径可以到 200 条（D19 上限），原样铺开没法读。超过这条线
-// 折叠为一行摘要，展开后仍是全部具体主体——折叠只是呈现，批的还是那 N 条主体（D17），
-// 因此只对 kind=batch 生效：grant 的每条都要能编辑，折叠会让人够不着编辑框。
+// 折叠为一行摘要，展开后仍是全部具体主体——折叠只是呈现，批的还是那 N 条主体（D17）。
+// 只对 kind=batch 生效：grant 的每条都要能编辑，折叠会让人够不着编辑框。kind=batch 里还
+// 进一步只对带 detail 的批生效（见下方 isBatchCollapsed）——detail 是 cp 每条共享的"两端
+// 基点"摘要，batch_exec 的异构批没有这个概念，硬折叠会藏起本该看见的差异。
 const BATCH_COLLAPSE_THRESHOLD = 10;
 
 export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBlockProps) {
@@ -54,10 +56,14 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
   // 确认/拒绝后不再显示
   if (!isPending) return null;
 
-  const isBatchCollapsed = kind === "batch" && items.length > BATCH_COLLAPSE_THRESHOLD;
   // detail 是这次传输唯一携带"两端基点"的地方（checkAccessBatch 给每条都填了同一句
-  // "cp src → dst"）；batch_exec 的批量项没有这个概念，detail 为空时摘要就只报条数。
+  // "cp src → dst"，哪怕批量只有一条也不为空）；batch_exec 的批量项没有这个概念——
+  // tool_handler_batch.go 建 item 时压根不设 Detail，因此永远是空串。detail 是否非空
+  // 因此是 payload 里现成的、可靠的判据：折叠是为 cp 这种"每条共享同一句摘要"的批设计的，
+  // batch_exec 的条目分属不同资产/工具，没有可摘要的共同点——折叠了只会把 Approve 按钮
+  // 架在一句读不出内容的"N 项已折叠"上面，比展示全部异构命令更危险。
   const batchDetail = items[0]?.detail;
+  const isBatchCollapsed = kind === "batch" && !!batchDetail && items.length > BATCH_COLLAPSE_THRESHOLD;
 
   const renderBatchItem = (item: (typeof items)[number], i: number) => (
     <div key={i} className="rounded-lg bg-warning/5 p-2.5 space-y-1.5">

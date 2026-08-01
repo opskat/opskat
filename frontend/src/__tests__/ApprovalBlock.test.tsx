@@ -183,7 +183,10 @@ describe("ApprovalBlock 批量审批折叠（kind=batch，D17）", () => {
   });
 
   it("展开折叠摘要后，11 条具体主体全部可见——折叠只是呈现，不是新的授权范围（D17）", () => {
-    renderApproval({ approvalKind: "batch", approvalItems: batchItems(11) });
+    renderApproval({
+      approvalKind: "batch",
+      approvalItems: batchItems(11, "cp web-01:/var/log → s3-prod:/bucket/logs/"),
+    });
 
     fireEvent.click(screen.getByTestId("ai-approval-batch-summary"));
 
@@ -193,7 +196,10 @@ describe("ApprovalBlock 批量审批折叠（kind=batch，D17）", () => {
   });
 
   it("200 条（D19 上限）同样折叠，展开后 200 条全部可见，一条不少", () => {
-    renderApproval({ approvalKind: "batch", approvalItems: batchItems(200) });
+    renderApproval({
+      approvalKind: "batch",
+      approvalItems: batchItems(200, "cp web-01:/var/log → s3-prod:/bucket/logs/"),
+    });
 
     const summary = screen.getByTestId("ai-approval-batch-summary");
     expect(summary).toHaveAttribute("data-count", "200");
@@ -221,5 +227,24 @@ describe("ApprovalBlock 批量审批折叠（kind=batch，D17）", () => {
 
     expect(screen.queryByTestId("ai-approval-batch-summary")).not.toBeInTheDocument();
     expect(screen.getAllByDisplayValue(/cat \/var\/log\/app-/)).toHaveLength(12);
+  });
+
+  // batch_exec（exec/sql/redis/mongo 混合批）同样是 kind=batch，但 tool_handler_batch.go
+  // 建 item 时不填 Detail——它的条目分属不同资产/工具，没有 cp 那种"两端基点"可摘要。
+  // 折叠是为 cp 设计的：collapse 掉一句读不出内容的"N 项已折叠"，Approve 按钮却还活着，
+  // 比展示 11 条异构命令更危险。detail 是 payload 里现成的、可靠的判据（cp 每条都填
+  // 同一句非空摘要，batch_exec 从不填）——不新增字段，只是不再对没有它的 batch 折叠。
+  it("batch_exec 没有 detail 摘要，超过 10 条也不折叠——各条目没有可摘要的共同点", () => {
+    const items = Array.from({ length: 11 }, (_, i) => ({
+      type: i % 2 === 0 ? "exec" : "sql",
+      asset_id: i + 1,
+      asset_name: `web-${i}`,
+      command: `do something ${i}`,
+    }));
+    renderApproval({ approvalKind: "batch", approvalItems: items });
+
+    expect(screen.queryByTestId("ai-approval-batch-summary")).not.toBeInTheDocument();
+    expect(screen.getByText("do something 0")).toBeVisible();
+    expect(screen.getByText("do something 10")).toBeVisible();
   });
 });

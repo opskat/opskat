@@ -62,9 +62,9 @@ interface QueueItem {
 }
 
 // 递归/通配 cp 一次展开出的路径可以到 200 条（D19 上限），原样铺开没法读。超过这条线
-// 折叠为一行摘要，展开后仍是全部具体主体——折叠只是呈现，批的还是那 N 条主体（D17），
-// 因此只对 kind=batch 生效：grant 的每条都要能编辑，折叠会让人够不着编辑框。与
-// ApprovalBlock.tsx 的折叠阈值保持一致。
+// 折叠为一行摘要，展开后仍是全部具体主体——折叠只是呈现，批的还是那 N 条主体（D17）。
+// 只对 kind=batch 生效：grant 的每条都要能编辑，折叠会让人够不着编辑框。kind=batch 里还
+// 进一步只对带 detail 的批生效（见下方 isBatchCollapsed）——与 ApprovalBlock.tsx 同理。
 const BATCH_COLLAPSE_THRESHOLD = 10;
 
 // 与 ApprovalBlock.tsx 同理：lucide 图标是 ForwardRefExoticComponent，S3Icon 是普通的
@@ -217,6 +217,15 @@ export function OpsctlApprovalDialog() {
 
   const current = queue[0] || null;
   const open = !!current;
+  // detail 是 cp 每条共享的"两端基点"摘要（cp.go 给每条 BatchItem 都填了同一句
+  // "cp src → dst"，handleBatchApproval 原样转发）；batch verb 的 exec/sql/redis 混合批
+  // 不产出（item.Detail 留空）。折叠是为 cp 设计的，只对带 detail 的批生效——batch verb
+  // 的条目分属不同资产/类型，没有可摘要的共同点，硬折叠会藏起本该看见的差异。
+  const isBatchCollapsed =
+    !!current &&
+    current.kind === "batch" &&
+    !!current.items[0]?.detail &&
+    current.items.length > BATCH_COLLAPSE_THRESHOLD;
 
   // 折叠态与展开态共用同一份单条渲染，避免同一段 JSX 抄两份。cur 显式传参而不是闭包
   // 捕获外层 current——调用点都在 `current && (...)` narrow 过的分支里，但函数本身
@@ -339,7 +348,7 @@ export function OpsctlApprovalDialog() {
 
             <div className="space-y-2 overflow-y-auto flex-1 min-h-0">
               {current.description && <div className="text-sm font-medium">{current.description}</div>}
-              {current.kind === "batch" && current.items.length > BATCH_COLLAPSE_THRESHOLD ? (
+              {isBatchCollapsed ? (
                 // 既有的折叠交互（与 ApprovalBlock.tsx 同一套 <details>/<summary>）：摘要行
                 // 常驻可见，具体主体折叠在里面，展开后就是普普通通的列表——不是新的授权范围（D17）。
                 <details className="rounded-md border p-2">
