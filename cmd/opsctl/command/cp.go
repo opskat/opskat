@@ -215,7 +215,7 @@ func cmdCpMultiSource(
 		plans = append(plans, cpTransferPlanFor(src, dst, expanded[i], recursive))
 	}
 
-	batchResult, err := cpBatchApprovalFn(ctx, subjects)
+	batchResult, err := cpBatchApprovalFn(ctx, subjects, detail)
 	if batchResult.SessionID != "" {
 		ctx = aictx.WithSessionID(ctx, batchResult.SessionID)
 	}
@@ -463,6 +463,10 @@ var cpApprovalFn = requireApproval
 // cpBatchApprovalFn 是多源 cp 的批量审批入口，同上一套路。
 var cpBatchApprovalFn = requireCpBatchApproval
 
+// cpBatchSendFn 是 requireCpBatchApproval 把展开出的 items 交给桌面端的最后一步，同上一套路：
+// 测试替换它以观察真正要发出的 items（含 Detail），不用连真实的审批 socket。
+var cpBatchSendFn = requireBatchApproval
+
 // cpSSHProxyClientFn 允许单测显式关闭 proxy 探测，避免读取默认用户数据目录下的 socket/token。
 var cpSSHProxyClientFn = getSSHProxyClient
 
@@ -471,9 +475,12 @@ var cpSSHProxyClientFn = getSSHProxyClient
 // 逐条弹 N 次框不可用；批一条递归 pattern 会顺带放宽 local_write/local_edit 那道共用的
 // 匹配器，因此主体始终是展开后的具体路径。
 //
+// detail 是这次传输的"从哪到哪"（cpDetail），原样搭在每一条 item 上——折叠摘要（§8 item 7）
+// 靠它显示"两端基点"，单端点那条路（requireCpApproval）早已这么做。
+//
 // 批量审批没有"始终允许"（ApprovalKindBatch 只允许整批本次放行或拒绝），所以多源 cp
 // 不落常驻 grant，重跑要重新批准全部条目——这是 §6.5【实施期更正】裁定接受的缺口。
-func requireCpBatchApproval(ctx context.Context, subjects []cpSubject) (ApprovalResult, error) {
+func requireCpBatchApproval(ctx context.Context, subjects []cpSubject, detail string) (ApprovalResult, error) {
 	session := aictx.GetSessionID(ctx)
 	items := make([]approval.BatchItem, 0, len(subjects))
 	var allowed aictx.CheckResult
@@ -495,6 +502,7 @@ func requireCpBatchApproval(ctx context.Context, subjects []cpSubject) (Approval
 				AssetID:   subject.assetID,
 				AssetName: subject.assetName,
 				Command:   subject.command,
+				Detail:    detail,
 			})
 		}
 	}
@@ -506,7 +514,7 @@ func requireCpBatchApproval(ctx context.Context, subjects []cpSubject) (Approval
 			SessionID:      session,
 		}, nil
 	}
-	return requireBatchApproval(items, session)
+	return cpBatchSendFn(items, session)
 }
 
 // cpToolParams 是交给 cp 工具的参数，同时也是这次调用落进 audit_logs.request 的原文

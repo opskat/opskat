@@ -140,7 +140,7 @@ func stubCpHandler(calls *[]map[string]any) map[string]tool.ToolHandlerFunc {
 // stubCpBatchApproval 替换掉批量审批入口，记录被送去审批的主体。
 func stubCpBatchApproval(t *testing.T, seen *[][]cpSubject, result ApprovalResult, err error) {
 	orig := cpBatchApprovalFn
-	cpBatchApprovalFn = func(_ context.Context, subjects []cpSubject) (ApprovalResult, error) {
+	cpBatchApprovalFn = func(_ context.Context, subjects []cpSubject, _ string) (ApprovalResult, error) {
 		*seen = append(*seen, subjects)
 		return result, err
 	}
@@ -496,6 +496,55 @@ func TestCmdCpMultiSourceApprovesEveryRemoteReadPath(t *testing.T) {
 			cpTestRemoteType + " read /var/log/app.log",
 			cpTestRemoteType + " read /var/log/nginx/access.log",
 		})
+	})
+}
+
+// TestCmdCpMultiSourceBatchItemsCarryDetail 锁住批量审批项的 detail：折叠摘要里的"两端基点"
+// 靠它显示（OpsctlApprovalDialog 已经在读 items[0].detail，
+// frontend/src/components/approval/OpsctlApprovalDialog.tsx:349-350），发送端补上之前那句
+// 摘要恒为空。这里不能用 stubCpBatchApproval——它整个替换掉 cpBatchApprovalFn，也就是
+// requireCpBatchApproval 本身，断不出这条函数有没有把 detail 塞进 approval.BatchItem；
+// 改成 stub 更下游的 cpBatchSendFn，让真正的构造逻辑跑一遍再观察它即将发出的 items。
+func TestCmdCpMultiSourceBatchItemsCarryDetail(t *testing.T) {
+	Convey("批量审批的每一条 item 都带上这次传输的 from → to", t, func() {
+		registerCpTestAsset(t)
+		origProxyFn := cpSSHProxyClientFn
+		cpSSHProxyClientFn = func() *sshpool.Client { return nil }
+		defer func() { cpSSHProxyClientFn = origProxyFn }()
+		mockAudit := &mockAuditWriter{}
+		origWriter := opsctlAuditWriter
+		opsctlAuditWriter = mockAudit
+		defer func() { opsctlAuditWriter = origWriter }()
+
+		origApproval := cpApprovalFn
+		cpApprovalFn = func(_ context.Context, _ approval.ApprovalRequest) (ApprovalResult, error) {
+			return ApprovalResult{Decision: aictx.Allow, SessionID: "sess-cp"}, nil
+		}
+		defer func() { cpApprovalFn = origApproval }()
+
+		cpFakeRemote.entries = []helper.Entry{
+			{Path: "/var/log/app.log", RelPath: "app.log", Size: 7},
+		}
+		defer func() { cpFakeRemote.entries = nil }()
+
+		var sentItems []approval.BatchItem
+		origSend := cpBatchSendFn
+		cpBatchSendFn = func(items []approval.BatchItem, session string) (ApprovalResult, error) {
+			sentItems = items
+			return ApprovalResult{Decision: aictx.Allow, SessionID: session}, nil
+		}
+		defer func() { cpBatchSendFn = origSend }()
+
+		var calls []map[string]any
+		handlers := stubCpHandler(&calls)
+		dst := filepath.ToSlash(t.TempDir()) + "/"
+
+		exitCode := cmdCp(context.Background(), handlers, []string{"-r", "3:/var/log", dst}, "")
+
+		So(exitCode, ShouldEqual, 0)
+		So(sentItems, ShouldHaveLength, 1)
+		So(sentItems[0].Command, ShouldEqual, "read /var/log/app.log")
+		So(sentItems[0].Detail, ShouldEqual, fmt.Sprintf("opsctl cp 3:/var/log → %s", dst))
 	})
 }
 

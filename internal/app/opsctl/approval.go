@@ -182,9 +182,10 @@ func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.Appr
 			"asset_id":   item.AssetID,
 			"asset_name": item.AssetName,
 			"command":    item.Command,
+			"detail":     item.Detail,
 		})
 		expectedItems = append(expectedItems, permission.ApprovalItem{
-			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName, Command: item.Command,
+			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName, Command: item.Command, Detail: item.Detail,
 		})
 	}
 
