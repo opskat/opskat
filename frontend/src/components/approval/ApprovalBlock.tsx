@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useState, type ComponentType } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ShieldAlert,
@@ -354,8 +354,13 @@ function scopeName(item: { asset_id: number; asset_name: string; group_id?: numb
   return "";
 }
 
+// lucide 图标是 ForwardRefExoticComponent，S3Icon（brand-icons.tsx）是普通的 React.FC 包装
+// @iconify/react；这张表两种都装，因此按调用点唯一用到的形状（接收 className 的组件）来
+// 收窄类型，而不是逼 S3Icon 伪装成 lucide 的 ref-forwarding 形状。
+type IconComponent = ComponentType<{ className?: string }>;
+
 function TypeBadge({ type, compact }: { type: string; compact?: boolean }) {
-  const icons: Record<string, typeof Terminal> = {
+  const icons: Record<string, IconComponent> = {
     exec: Terminal,
     serial: Usb,
     sql: Database,

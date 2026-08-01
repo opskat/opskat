@@ -44,6 +44,7 @@ describe("ToolBlock tool icon", () => {
         block={{
           type: "tool",
           toolName: "cp",
+          content: "",
           status: "completed",
         }}
       />

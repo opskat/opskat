@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, type ComponentType } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Dialog,
@@ -67,8 +67,12 @@ interface QueueItem {
 // ApprovalBlock.tsx 的折叠阈值保持一致。
 const BATCH_COLLAPSE_THRESHOLD = 10;
 
+// 与 ApprovalBlock.tsx 同理：lucide 图标是 ForwardRefExoticComponent，S3Icon 是普通的
+// React.FC，这张表按调用点唯一用到的形状（接收 className 的组件）收窄类型。
+type IconComponent = ComponentType<{ className?: string }>;
+
 function TypeBadge({ type }: { type: string }) {
-  const icons: Record<string, typeof Terminal> = {
+  const icons: Record<string, IconComponent> = {
     exec: Terminal,
     serial: Usb,
     sql: Database,
