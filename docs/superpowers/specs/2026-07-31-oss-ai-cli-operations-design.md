@@ -326,6 +326,12 @@ func RegisterTransferAdapter(assetType string, a TransferAdapter)
 - SSH 端点 → 类型 `cp`、主体是远端路径，**行为逐字节不变**（`checkFileTransferPermission` + `MatchPathRule`）。
 - OSS 端点 → 类型 `oss`、主体是 `object.read <bucket>/<key>` 或 `object.write <bucket>/<key>`，走 §4 的 OSS 策略与 OSS grant。
 - 本地端点不产生审批项。
+
+  **【实施期更正 · 用户裁定】这条规则不变，但它的前提覆盖不到"一次弹框都没有"的情形，那种情形下本地写改走 `local_write` 门禁。** 本条原本靠 D11 撑着：本地路径完全由用户批准的那条命令串决定，路径就在命令里、看得见，所以不必再单独批一次。分支级评审（两个评审各自独立发现）指出这个前提有一种情况不成立——`DefaultOSSPolicy()` 含 `builtin:oss-readonly`，其 allow 名单里有 `object.read *`，于是任何未编辑过策略的 OSS 资产，其读端直接 `Allow` 不弹框；本地目的端按本条也不产生审批项；而 `cp` 不在 `local_bash` / `local_write` / `local_edit` 的门禁名单里。三者相加：`cp(src="s3-prod:/b/k", dst="~/.ssh/authorized_keys")` **零交互**写任意本地文件，`exec` 面的 `object get b/k --file=…` 是同一个原语。
+
+  要害是**两端都自动放行时根本不存在"用户批准的那条命令串"**，D11 的前提随之消失。这在本轮之前不可达：此前的传输面只有 SSH 端，`checkFileTransferPermission` 只查 grant、从不默认放行，首次使用必定落到 `NeedConfirm`。
+
+  因此补的不是新规则，而是前提不成立时的兜底：**当没有任何端点产生过审批交互时，本地落点在读写之前逐条过 `LocalToolGate` 的 `local_write`**（同一个对象、同一份会话白名单、同一个弹框）。弹过框的传输行为逐字节不变。`object put --file=` 是本地**读**，不在此列。opsctl 两条入口都是预检路径、没有 PolicyChecker 也没有会话弹框通道，门禁天然跳过——那里 D11 的前提由用户亲手敲下路径这件事保证。
 - 任一端被拒即整体失败，且**在任何字节被读写之前**——所有端点审批通过后才开始传输。
 
 因此 `cp ./a s3-prod:/b/k` 落下的 grant 是 `object.write b/k`，与 `exec` 跑 `object put b/k --file=…` 时 `ossGrantPatterns` 派生的 pattern 逐字节相同，两条入口的授权互相复用。
