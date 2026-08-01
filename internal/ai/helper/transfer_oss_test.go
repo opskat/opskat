@@ -22,16 +22,80 @@ const (
 
 // fakeOSSService 是 oss_svc.Service 的内存等价物，只实现适配器用到的那四个方法。
 //
-// 它刻意把**分组与分页**建模到位，因为那正是这个适配器要处理的两件事：
-// 对象存储的列举是按 "/" 分层的（一层里既有对象也有公共前缀），分页游标是
-// "上一页最后一条的 key" 且过滤发生在分组**之前**（oss_svc/ops.go 的 listObjectsWith
-// + client_minio.go 的 toObjectItem）。少建模其中任何一条，测试都会盖不住
-// 展开逻辑里最容易错的地方。
+// 列举**不自己实现**：它建模的是更下面那一层（oss_svc.Client，即 minio 适配器），
+// 再把真正的 oss_svc.ListObjectsWith 跑在上面。分层与分页正是这个适配器要处理的两件事，
+// 而它们的真相在 oss_svc 里；在这里照抄一份截断/取游标的逻辑，测的就只是抄件自洽——
+// 抄件曾经把 items 建模成全局有序，于是"取最后一条当游标"看起来是对的，而真实客户端
+// 根本不那样交货，缺陷就在绿灯下活了下来。
 type fakeOSSService struct {
 	assetID int64
 	objects map[string]map[string]string // bucket → key → 内容
 	gets    []string
 	puts    []fakeOSSPut
+}
+
+// fakeOSSClient 建模 oss_svc.Client 的**真实交货顺序**，即 minio 适配器那一层。
+//
+// 两步，缺一不可（github.com/minio/minio-go/v7 api-list.go:120-198 的 listObjectsV2，
+// v1 的 listObjects:311-375 同形；internal/service/oss_svc/client_minio.go:39-58）：
+//  1. S3 按 key 序把这一层分组的结果（Contents 与 CommonPrefixes 合在一起）截到 MaxKeys；
+//  2. minio 把这一页**先逐条交出 Contents、再逐条交出 CommonPrefixes**。
+//
+// 于是交出来的这一串在 key 上是乱序的：桶根下的 archive/ 会排在 b001…b200 后面。
+// 只嵌 oss_svc.Client 而不实现其余方法：列举之外的任何调用都该在测试里当场炸开，
+// 而不是拿到一个悄无声息的零值。
+type fakeOSSClient struct {
+	oss_svc.Client
+	objects map[string]string // key → 内容
+}
+
+func (c *fakeOSSClient) ListObjects(
+	_ context.Context, _, prefix string, maxKeys int, startAfter string,
+) ([]oss_svc.ObjectItem, error) {
+	// 第一步：服务端按 key 序分组。startAfter 是**排他**的，且过滤发生在分组之前——
+	// 因此一个公共前缀只要还有 key 大于游标，就会被再次交出来。
+	type entry struct {
+		item     oss_svc.ObjectItem
+		rolledUp bool // 是 CommonPrefixes 里的一条，而不是 Contents 里的
+	}
+	var page []entry
+	lastPrefix := ""
+	for _, k := range slices.Sorted(maps.Keys(c.objects)) {
+		if !strings.HasPrefix(k, prefix) || k <= startAfter {
+			continue
+		}
+		if i := strings.Index(k[len(prefix):], "/"); i >= 0 {
+			commonPrefix := k[:len(prefix)+i+1]
+			if commonPrefix == lastPrefix {
+				continue
+			}
+			lastPrefix = commonPrefix
+			page = append(page, entry{item: oss_svc.ObjectItem{Key: commonPrefix, IsPrefix: true}, rolledUp: true})
+			continue
+		}
+		// 被列举前缀自身那个零字节"文件夹"标记是一个货真价实的对象，落在 Contents 里；
+		// 只是 toObjectItem 会按 key 形状把它标成 IsPrefix。分组归属与这个标记无关。
+		item := oss_svc.ObjectItem{Key: k, Size: int64(len(c.objects[k]))}
+		item.IsPrefix = item.Size == 0 && strings.HasSuffix(k, "/")
+		page = append(page, entry{item: item})
+	}
+	// MaxKeys 管的是 Contents + CommonPrefixes 的总条数；client_minio.go 多要一条来
+	// 判断"还有下一页"，因此这一页最多 maxKeys+1 条。
+	page = page[:min(len(page), maxKeys+1)]
+
+	// 第二步：minio 先逐条交出 Contents、再逐条交出 CommonPrefixes。
+	out := make([]oss_svc.ObjectItem, 0, len(page))
+	for _, e := range page {
+		if !e.rolledUp {
+			out = append(out, e.item)
+		}
+	}
+	for _, e := range page {
+		if e.rolledUp {
+			out = append(out, e.item)
+		}
+	}
+	return out, nil
 }
 
 type fakeOSSPut struct {
@@ -52,60 +116,16 @@ func (f *fakeOSSService) checkAsset(assetID int64) error {
 	return nil
 }
 
+// ListObjects 把真正的 oss_svc.ListObjectsWith 跑在 fakeOSSClient 上：分组、截断与
+// 续传游标全部由生产代码决定，测试只提供桶内容与交货顺序。
 func (f *fakeOSSService) ListObjects(
-	_ context.Context, req *oss_svc.ListObjectsRequest,
+	ctx context.Context, req *oss_svc.ListObjectsRequest,
 ) (*oss_svc.ListObjectsResult, error) {
 	if err := f.checkAsset(req.AssetID); err != nil {
 		return nil, err
 	}
-	limit := req.MaxKeys
-	if limit <= 0 {
-		limit = fakeOSSPageSize
-	}
-
-	// 原始 key 先按游标过滤、再按 "/" 分组——顺序与真实服务端一致，也正因为如此，
-	// 页边界恰好落在一个公共前缀上时，下一页会把同一个前缀再交出来一次。
-	keys := slices.Sorted(maps.Keys(f.objects[req.Bucket]))
-	items := make([]oss_svc.ObjectItem, 0, len(keys))
-	lastPrefix := ""
-	for _, k := range keys {
-		if !strings.HasPrefix(k, req.Prefix) {
-			continue
-		}
-		if req.ContinuationToken != "" && k <= req.ContinuationToken {
-			continue
-		}
-		if i := strings.Index(k[len(req.Prefix):], "/"); i >= 0 {
-			commonPrefix := k[:len(req.Prefix)+i+1]
-			if commonPrefix == lastPrefix {
-				continue
-			}
-			lastPrefix = commonPrefix
-			items = append(items, oss_svc.ObjectItem{Key: commonPrefix, IsPrefix: true})
-			continue
-		}
-		item := oss_svc.ObjectItem{Key: k, Size: int64(len(f.objects[req.Bucket][k]))}
-		// 与 toObjectItem 一致：零字节且以 "/" 结尾的 key 是"文件夹"标记，按前缀报。
-		item.IsPrefix = item.Size == 0 && strings.HasSuffix(k, "/")
-		items = append(items, item)
-	}
-
-	res := &oss_svc.ListObjectsResult{Prefixes: []string{}, Objects: []oss_svc.ObjectItem{}}
-	if len(items) > limit {
-		res.IsTruncated = true
-		res.NextContinuationToken = items[limit-1].Key
-		items = items[:limit]
-	}
-	for _, it := range items {
-		switch {
-		case it.IsPrefix && it.Key == req.Prefix: // listObjectsWith 丢掉被列举的前缀自身
-		case it.IsPrefix:
-			res.Prefixes = append(res.Prefixes, it.Key)
-		default:
-			res.Objects = append(res.Objects, it)
-		}
-	}
-	return res, nil
+	c := &fakeOSSClient{objects: f.objects[req.Bucket]}
+	return oss_svc.ListObjectsWith(ctx, c, req.Bucket, req.Prefix, req.MaxKeys, req.ContinuationToken)
 }
 
 func (f *fakeOSSService) StatObject(_ context.Context, req *oss_svc.ObjectRequest) (*oss_svc.ObjectItem, error) {
@@ -348,17 +368,73 @@ func TestOSSTransferList_PaginatesWithoutRepeatingPrefixAtPageBoundary(t *testin
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(got.Entries) != len(objects) {
-		t.Fatalf("expanded %d entries, want %d", len(got.Entries), len(objects))
+	assertExpandedExactlyOnce(t, got, objects, "logs/")
+}
+
+// 分页游标必须对得住它的 start-after 语义，而**服务端交货不是按 key 排序的**：
+// minio 对每个 S3 响应先交 Contents、再交 CommonPrefixes（api-list.go:164-177），
+// 而 S3 是把两者合起来按 key 序截到 MaxKeys 的。于是页边界两侧各有一种翻车方式，
+// 两种都会让一次 cp -r 报成功而结果是错的。
+func TestOSSTransferList_PaginatesAcrossTheServerSideItemOrder(t *testing.T) {
+	// 漏传：桶根下一个 archive/ 加 b001…b200。S3 首页按 key 序是
+	// [archive/, b001…b200]，minio 交出来是 [b001…b200, archive/]，
+	// 于是 archive/ 落在页外而游标停在 b200——archive/ 下的 key 全都小于 b200，
+	// 下一页的 startAfter 再也够不着它们，整棵子树静默消失。
+	omission := make(map[string]string, fakeOSSPageSize+2)
+	omission["archive/old.log"] = "x"
+	omission["archive/deep/older.log"] = "x"
+	for i := 1; i <= fakeOSSPageSize; i++ {
+		omission[fmt.Sprintf("b%03d", i)] = "x"
 	}
+
+	// 重传：桶根下 p001/…p200/ 各一个对象，外加一个排在它们之后的对象 z.txt。
+	// minio 先交 z.txt、再交 200 个公共前缀，页边界落在前缀里，游标停在 p199/——
+	// 而 z.txt 本页已经交出去了且排在游标之后，下一页会把它再交一遍：
+	// 条目重复、字节重复读写、条数虚高。
+	duplication := make(map[string]string, fakeOSSPageSize+1)
+	for i := 1; i <= fakeOSSPageSize; i++ {
+		duplication[fmt.Sprintf("p%03d/o.txt", i)] = "x"
+	}
+	duplication["z.txt"] = "x"
+
+	for _, tt := range []struct {
+		name    string
+		objects map[string]string
+	}{
+		{"a subtree sorting before the page boundary", omission},
+		{"an object sorting after the page boundary", duplication},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			adapter, _, asset := newOSSTest(tt.objects)
+
+			got, err := adapter.List(context.Background(), asset, "/mybucket", true)
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			assertExpandedExactlyOnce(t, got, tt.objects, "")
+		})
+	}
+}
+
+// assertExpandedExactlyOnce：展开出的条目集合必须与桶内容一一对应——一条不少（漏了就是
+// 一次报成功却少传的 cp），一条不多（多了就是同一个对象被读写两遍）。
+func assertExpandedExactlyOnce(t *testing.T, got *ListResult, objects map[string]string, base string) {
+	t.Helper()
 	seen := make(map[string]int, len(got.Entries))
 	for _, e := range got.Entries {
 		seen[e.RelPath]++
 	}
-	for _, rel := range []string{"000.txt", "199dir/x.txt", "204.txt"} {
-		if seen[rel] != 1 {
-			t.Errorf("RelPath %q appeared %d times, want 1", rel, seen[rel])
+	for key := range objects {
+		if strings.HasSuffix(key, "/") { // 零字节"文件夹"标记不是可传输条目
+			continue
 		}
+		if n := seen[strings.TrimPrefix(key, base)]; n != 1 {
+			t.Errorf("%q expanded %d times, want exactly 1", key, n)
+		}
+		delete(seen, strings.TrimPrefix(key, base))
+	}
+	for rel, n := range seen {
+		t.Errorf("expanded %q (%d times), which is not in the bucket", rel, n)
 	}
 }
 

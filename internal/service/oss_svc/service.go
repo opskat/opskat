@@ -62,7 +62,7 @@ func (s *Service) ListObjects(ctx context.Context, req *ListObjectsRequest) (*Li
 	if err != nil {
 		return nil, err
 	}
-	return listObjectsWith(ctx, c, req.Bucket, req.Prefix, req.MaxKeys, req.ContinuationToken)
+	return ListObjectsWith(ctx, c, req.Bucket, req.Prefix, req.MaxKeys, req.ContinuationToken)
 }
 
 func (s *Service) StatObject(ctx context.Context, req *ObjectRequest) (*ObjectItem, error) {
