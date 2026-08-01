@@ -27,6 +27,7 @@ Not every new type touches every item below. A minimal type such as `local` has 
 | --- | --- | --- |
 | AI `put_asset` / get / list safe-view handlers | Yes, via `assettype.Get(type)` | Add the type's config contract to its `SKILL.md`; `put_asset.config` deliberately has no per-type union schema |
 | AI / CLI command execution | Yes, via the executor registry | Add `SKILL.md` plus `RegisterExecutor`; doc-only types use `RegisterHelpDoc` |
+| File transfer (`cp`), for types that should support it | Yes, via `helper.RegisterTransferAdapter` | None — see [B8](#b8-file-transfer-cp); skip entirely for types with no meaningful transfer surface, which is the majority of types today |
 | Connection test button | Yes, once a binder calls `conntest.Register` from `New()` | None in `System.TestAssetConnection` |
 | Policy test / built-in policy groups when reusing an existing kind | Yes, via `PolicyKind()` returning that kind | None |
 | Type selector, filters, grouping, labels, detail-card choice, config-section rendering, connect action dispatch, new-tab visibility, file-manager menu visibility, and Test button visibility | Yes, derived from the frontend asset-type registry | File-manager opening still has an `ssh` guard in `App.tsx`; see section 7 |
@@ -55,6 +56,7 @@ Several asset-type features are shared capabilities rather than type-local inven
 | File manager | SSH/SFTP services | `canOpenFileManager` plus `App.tsx` handler | Menu visibility is registered; the current handler is still SSH-only. |
 | AI asset CRUD and help | `internal/assettype/`, `internal/ai/skills/`, `internal/ai/execimpl/` | Mention/open helpers when needed | `put_asset.config` is a free object validated by the handler. The type's `SKILL.md` is the model-facing config and command contract served by `help`. |
 | AI / CLI command execution | `internal/ai/permission` executor registry; pure bodies in `internal/ai/helper/` | None | AI `exec`, AI `batch_exec`, `opsctl exec`, and `opsctl batch` dispatch from the stored asset type. Never add a per-type tool or CLI verb. |
+| File transfer (`cp`) | `internal/ai/helper/transfer.go` `TransferAdapter` registry | None | AI `cp` and `opsctl cp` both resolve an endpoint's adapter through `TransferAdapterFor(asset)`; a `nil` asset (a local endpoint) never touches the registry. Independent of command execution — a type can support `exec` without `cp`, or the reverse. See [B8](#b8-file-transfer-cp). |
 
 ## Backend Integration
 
@@ -246,6 +248,50 @@ Existing guards make this contract mechanical:
 
 When adding a command-capable type, extend the relevant table-driven coverage rather than weakening or exempting it. When adding new command flags or grammar, update the implementation, `SKILL.md`, and its doc-contract tests together.
 
+### B8. File Transfer (cp)
+
+File: `internal/ai/helper/transfer.go`. Implementations: `transfer_local.go` (package-level, not registered), `transfer_ssh.go`, `transfer_oss.go`.
+
+This is a separate registration seam from [B7](#b7-ai-help-and-command-execution). The `cp` AI tool and the `opsctl cp` verb both resolve an endpoint's adapter through `TransferAdapterFor(asset)`, not through the executor registry — a type can support `exec` without `cp`, or `cp` without `exec`.
+
+```go
+type TransferAdapter interface {
+	List(ctx context.Context, asset *asset_entity.Asset, pattern string, recursive bool) (*ListResult, error)
+	OpenRead(ctx context.Context, asset *asset_entity.Asset, path string) (io.ReadCloser, int64, error)
+	Write(ctx context.Context, asset *asset_entity.Asset, path string, r io.Reader, size int64) error
+	ValidateDestination(path string) error
+	ApprovalSubject(path string, dir Direction) (approvalType, subject string)
+}
+```
+
+| Method | Responsibility |
+| --- | --- |
+| `List` | Expand `pattern` (glob `* ? [`, or `recursive` directory/prefix walk) into a `*ListResult{Entries, SkippedSymlinks}`. A bare directory/prefix without `recursive` is an error, not a guess. |
+| `OpenRead` | Open one path for reading; return size `-1` when unknown. The caller owns closing the returned `io.ReadCloser`. |
+| `Write` | Write one path, creating intermediate directories/prefixes as needed; size `-1` when unknown. |
+| `ValidateDestination` | Shape-only check (no network) of a concrete destination path, called before it becomes an approval subject. Destinations never go through `List` (the target doesn't exist yet), so this is the only place a malformed destination is caught before approval instead of at `Write`. |
+| `ApprovalSubject` | Per-`Direction` (`DirRead` / `DirWrite` / `DirList`) approval type and match string. A local endpoint has no asset and therefore no subject — `ApprovalSubject` returns `"", ""`, and callers gate on `asset == nil`, never on that empty string as a sentinel. |
+
+Register from `init()`, same panic-on-conflict stance as `permission.RegisterExecutor`:
+
+```go
+func init() {
+	RegisterTransferAdapter(asset_entity.AssetTypeSSH, sshTransfer)
+}
+```
+
+`RegisterTransferAdapter` panics on an empty asset type, a nil adapter, or a duplicate registration. There is no coverage test tying every registered asset type to a transfer adapter the way B7's help/executor coverage tests do — a type that skips this seam still compiles and passes `go test ./...`. The only symptom is at call time: `TransferAdapterFor` returns `asset type %q does not support file transfer`, so `cp` fails for that asset while every other capability keeps working. This is why most built-in types (anything without a file/object surface) simply have no `transfer_<type>.go` at all.
+
+The local endpoint (`asset == nil`) never goes through the registry: `TransferAdapterFor(nil)` hands back the package-level `localAdapter` in `transfer_local.go` directly. A new networked type only adds its own `transfer_<type>.go`; it never touches the local case.
+
+The `approvalType`/`subject` pair `ApprovalSubject` returns must match how that type's policy is already matched: SSH reuses `cp`'s generic path-rule matching (`permission.GrantToolCp` as the type, the raw path as subject, matched by `policy.MatchPathRule`); OSS instead reuses its own policy kind's action strings (`object.read <bucket>/<key>`, etc.), so the same string matches whether it was produced by `exec` or by `cp`. Pick whichever model matches the type's existing policy semantics rather than inventing a third shape.
+
+Enumerate registered types from committed code, not by count:
+
+```bash
+git grep -n "RegisterTransferAdapter(asset_entity" -- 'internal/ai/helper/*.go' | grep -v _test
+```
+
 ### Backend Checklist
 
 1. Add entity constants, `XxxConfig`, accessors, `validateXxx`, `Validate()` case, and `CanConnect()` case in `asset_entity/asset.go`. This is shared entity code and is not fully registered yet.
@@ -256,7 +302,8 @@ When adding a command-capable type, extend the relevant table-driven coverage ra
 6. Add an app binder and wire `main.go` only when the type needs runtime panel bindings.
 7. Add `internal/ai/skills/<type>/SKILL.md` with the complete `put_asset.config` contract.
 8. Register an executor plus any canonicalizer/precheck for command-capable types; otherwise register the type as help-only. Do not add a per-type AI tool or CLI verb.
-9. Run the help/executor coverage and documented-example tests described in B7.
+9. Optionally add `internal/ai/helper/transfer_<type>.go` and call `RegisterTransferAdapter` if the type should support `cp`; skip when the type has no file/object transfer surface. See [B8](#b8-file-transfer-cp).
+10. Run the help/executor coverage and documented-example tests described in B7.
 
 ## Frontend Integration
 
