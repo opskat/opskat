@@ -379,6 +379,35 @@ func TestCmdCpMultiSourceApprovesEveryExpandedPath(t *testing.T) {
 			So(calls, ShouldBeEmpty)
 		})
 
+		// D16 管的是字节落到哪，与"这条源会不会枚举"无关：多源的另外两种形态同样要求
+		// 尾随 "/"。展开授权按形态收窄之后（cpSourceExpands），这两种形态是唯一没有
+		// 第一段授权把关的路，落点规则一旦跟着收窄，`cp ./a.txt ./b.txt 1:/opt/app`
+		// 就会安静地把两个文件都拼成 /opt/appa.txt、/opt/appb.txt 写出去。
+		Convey("N 个显式源：目的地同样必须以 / 结尾", func() {
+			var batches [][]cpSubject
+			stubCpBatchApproval(t, &batches, ApprovalResult{Decision: aictx.Allow}, nil)
+			fileA := writeCpFixture(t, filepath.Join(t.TempDir(), "one.txt"))
+			fileB := writeCpFixture(t, filepath.Join(t.TempDir(), "two.txt"))
+
+			exitCode := cmdCp(context.Background(), handlers, []string{fileA, fileB, "1:/opt/app"}, "")
+
+			So(exitCode, ShouldEqual, 1)
+			So(batches, ShouldBeEmpty)
+			So(calls, ShouldBeEmpty)
+		})
+
+		Convey("通配源：目的地同样必须以 / 结尾", func() {
+			var batches [][]cpSubject
+			stubCpBatchApproval(t, &batches, ApprovalResult{Decision: aictx.Allow}, nil)
+
+			exitCode := cmdCp(context.Background(), handlers,
+				[]string{filepath.Join(root, "*.txt"), "1:/opt/app"}, "")
+
+			So(exitCode, ShouldEqual, 1)
+			So(batches, ShouldBeEmpty)
+			So(calls, ShouldBeEmpty)
+		})
+
 		// 落点的形态校验也要排在批量审批之前：`2:/` 少写了桶名，展开出的每条落点都不是
 		// 一个合法对象，用户没有理由为一份注定失败的清单点头。
 		Convey("落点形态错误时不发起批量审批", func() {
@@ -393,8 +422,8 @@ func TestCmdCpMultiSourceApprovesEveryExpandedPath(t *testing.T) {
 		})
 
 		// 零命中不是一次成功的传输：真实 cp 对无匹配同样非零退出，而这里放行的后果比"静默
-		// 的零文件成功"还重一档——落点是由 entries[0] 拼出来的，空清单会当场 index out of
-		// range（见 cpDstArg）。
+		// 的零文件成功"还重一档——被指名的源那一支落点是由 entries[0] 拼出来的，空清单会
+		// 当场 index out of range（见 cpTransferPlanFor）。
 		Convey("零命中报错，不发起批量审批", func() {
 			var batches [][]cpSubject
 			stubCpBatchApproval(t, &batches, ApprovalResult{Decision: aictx.Allow}, nil)
