@@ -429,6 +429,9 @@ func TestCpReportsEachCompletedEntryToAnInteractiveCaller(t *testing.T) {
 	Convey("recursive cp reports one progress event after each successful entry", t, func() {
 		ctx := setupCpPreapproved(t)
 		seedCpSource("a.log", "bb.log")
+		// 枚举元数据可能在真正打开文件前已经过期；进度必须报告实际流过的字节。
+		cpFake.entries[0].Size = 500
+		cpFake.entries[1].Size = 600
 		var progress []CpProgress
 		ctx = WithCpProgressObserver(ctx, func(event CpProgress) {
 			progress = append(progress, event)

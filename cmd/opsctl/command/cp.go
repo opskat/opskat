@@ -58,8 +58,8 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
 	}
-	multiSource := recursive || len(rest) > 2
 	srcs := make([]*cpEndpoint, 0, len(rest)-1)
+	sourcePaths := make([]string, 0, len(rest)-1)
 	for _, raw := range rest[:len(rest)-1] {
 		src, srcErr := parseCpEndpoint(ctx, raw)
 		if srcErr != nil {
@@ -73,17 +73,21 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 		// D12：两端是同一个对象存储资产时对象要下行再上行、绕一圈本地进程。服务端 copy
 		// 的能力在 exec 那一面，指过去比在 cp 里再实现一次更诚实；静默流式则会让用户不知道
 		// 自己让一个 10 GB 对象走了一趟本机。
-		if sameOSSAsset(src, dst) {
-			fmt.Fprintf(os.Stderr,
-				"Note: both endpoints are on %s; the object streams through this process. "+
-					"For a server-side copy use: opsctl exec %s -- \"object copy <bucket>/<key> --to=<bucket>/<key>\"\n",
-				dst.asset.Name, dst.asset.Name)
+		if src.isRemote() && dst.isRemote() && src.asset.ID == dst.asset.ID {
+			if hint := helper.SameAssetCopyHint(src.adapter, dst.asset.Name); hint != "" {
+				fmt.Fprintf(os.Stderr, "Note: %s\n", hint)
+			}
 		}
-		multiSource = multiSource || helper.HasGlobPattern(src.path)
 		srcs = append(srcs, src)
+		sourcePaths = append(sourcePaths, src.path)
 	}
 
-	if multiSource {
+	plan, err := helper.PlanTransfer(sourcePaths, dst.path, recursive)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	if plan.Multiple {
 		return cmdCpMultiSource(ctx, handlers, srcs, dst, recursive)
 	}
 	return cmdCpSingleSource(ctx, handlers, srcs[0], dst)
@@ -108,7 +112,7 @@ func cmdCpSingleSource(
 		{ep: dst, dir: helper.DirWrite, path: dst.path},
 	}, cpDetail([]*cpEndpoint{src}, dst))
 	if err != nil {
-		return cpApprovalFailed(approvalCtx, []*cpEndpoint{src}, dst, approvalAssetID, err, result)
+		return cpApprovalFailed(approvalCtx, []*cpEndpoint{src}, dst, false, approvalAssetID, err, result)
 	}
 	ctx = approvalCtx
 	decision := result.ToCheckResult()
@@ -117,7 +121,7 @@ func cmdCpSingleSource(
 	// proxy 快路径复用桌面端的 SSH 连接池，因此只在远端端点全是 SSH 时启用——对象存储
 	// 没有对应能力。它一次只传一个被指名的文件、且服务端不建父目录（sftp.Create），
 	// 所以也只用在单源形态上，即完全等价于收敛前的四种组合。
-	if proxy := cpSSHProxyClientFn(); proxy != nil && cpAllRemoteSSH(src, dst) {
+	if proxy := cpSSHProxyClientFn(); proxy != nil && cpAllRemoteSupportPooledProxy(src, dst) {
 		exitCode := cmdCpViaProxy(proxy, src, dst)
 		var cpErr error
 		if exitCode != 0 {
@@ -145,16 +149,6 @@ func cmdCpMultiSource(
 	ctx context.Context, handlers map[string]tool.ToolHandlerFunc,
 	srcs []*cpEndpoint, dst *cpEndpoint, recursive bool,
 ) int {
-	// D16：目的地必须以 "/" 结尾。不复刻 POSIX cp 的目的地推断（b 存在则落 b/a），那要先
-	// 探测目的地、结果依赖一次 TOCTOU 式的探测，而目的路径必须在审批之前就完全确定——
-	// 批的是哪些具体路径，写的就得是哪些。
-	if !strings.HasSuffix(dst.path, "/") {
-		fmt.Fprintf(os.Stderr,
-			"Error: destination %q must end with \"/\" when there is more than one source "+
-				"(multiple arguments, --recursive, or a glob pattern): "+
-				"each entry lands at <destination>/<path relative to the source base>\n", dst.raw)
-		return 1
-	}
 	detail := cpDetail(srcs, dst)
 
 	// 递归/通配直接审批源范围与目的范围；在审批之前不连接远端、不枚举目录。明确列出的
@@ -189,7 +183,7 @@ func cmdCpMultiSource(
 		ctx = aictx.WithSessionID(ctx, batchResult.SessionID)
 	}
 	if err != nil {
-		return cpApprovalFailed(ctx, srcs, dst, 0, err, batchResult)
+		return cpApprovalFailed(ctx, srcs, dst, recursive, 0, err, batchResult)
 	}
 	decision := batchResult.ToCheckResult()
 
@@ -313,6 +307,7 @@ func parseCpEndpoint(ctx context.Context, raw string) (*cpEndpoint, error) {
 		}
 		ep.path = abs
 	}
+	ep.path = helper.NormalizeTransferPath(adapter, ep.path)
 	ep.arg = ep.argFor(ep.path)
 	return ep, nil
 }
@@ -330,17 +325,10 @@ func absLocalPath(path string) (string, error) {
 	return abs, nil
 }
 
-// sameOSSAsset 报告两端是不是同一个对象存储资产（D12）。
-func sameOSSAsset(src, dst *cpEndpoint) bool {
-	return src.isRemote() && dst.isRemote() &&
-		src.asset.ID == dst.asset.ID && src.asset.Type == asset_entity.AssetTypeOSS
-}
-
-// cpAllRemoteSSH 报告这些端点里的远端端点是不是全是 SSH。本地端点不参与——它没有资产，
-// 也就没有协议。
-func cpAllRemoteSSH(eps ...*cpEndpoint) bool {
+// cpAllRemoteSupportPooledProxy 只询问适配器能力，不在共享编排里判断协议类型。
+func cpAllRemoteSupportPooledProxy(eps ...*cpEndpoint) bool {
 	for _, ep := range eps {
-		if ep.isRemote() && !ep.asset.IsSSH() {
+		if ep.isRemote() && !helper.SupportsPooledProxyCopy(ep.adapter) {
 			return false
 		}
 	}
@@ -384,23 +372,23 @@ func requireCpApproval(
 		if !tg.ep.isRemote() {
 			continue
 		}
-		approvalType, subject := tg.ep.adapter.ApprovalSubject(tg.path, tg.dir)
-		result, err := cpApprovalFn(ctx, approval.ApprovalRequest{
-			Type:      permission.ApprovalTypeFor(approvalType),
-			AssetID:   tg.ep.asset.ID,
-			AssetName: tg.ep.asset.Name,
-			Command:   subject,
-			Detail:    detail,
-			SessionID: aictx.GetSessionID(ctx),
-		})
-		last = result
-		lastAssetID = tg.ep.asset.ID
-		// 审批会在没有 session 时自动建一个，后续那次审批与审计都要归到同一个 session
-		if result.SessionID != "" {
-			ctx = aictx.WithSessionID(ctx, result.SessionID)
-		}
-		if err != nil {
-			return ctx, result, tg.ep.asset.ID, err
+		for _, target := range helper.ApprovalSubjectsFor(tg.ep.adapter, tg.path, tg.dir) {
+			result, err := cpApprovalFn(ctx, approval.ApprovalRequest{
+				Type:      permission.ApprovalTypeFor(target.ApprovalType),
+				AssetID:   tg.ep.asset.ID,
+				AssetName: tg.ep.asset.Name,
+				Command:   target.Subject,
+				Detail:    detail,
+				SessionID: aictx.GetSessionID(ctx),
+			})
+			last = result
+			lastAssetID = tg.ep.asset.ID
+			if result.SessionID != "" {
+				ctx = aictx.WithSessionID(ctx, result.SessionID)
+			}
+			if err != nil {
+				return ctx, result, tg.ep.asset.ID, err
+			}
 		}
 	}
 	return ctx, last, lastAssetID, nil
@@ -414,18 +402,20 @@ func appendCpSubject(
 	if !ep.isRemote() {
 		return subjects
 	}
-	approvalType, command := ep.adapter.ApprovalSubject(path, dir)
-	subject := cpSubject{
-		approvalType: approvalType,
-		assetID:      ep.asset.ID,
-		assetName:    ep.asset.Name,
-		command:      command,
+	for _, target := range helper.ApprovalSubjectsFor(ep.adapter, path, dir) {
+		subject := cpSubject{
+			approvalType: target.ApprovalType,
+			assetID:      ep.asset.ID,
+			assetName:    ep.asset.Name,
+			command:      target.Subject,
+		}
+		if seen[subject] {
+			continue
+		}
+		seen[subject] = true
+		subjects = append(subjects, subject)
 	}
-	if seen[subject] {
-		return subjects
-	}
-	seen[subject] = true
-	return append(subjects, subject)
+	return subjects
 }
 
 // cpSubject 是一条待授权的端点访问：某个端点上的某条**具体**路径在某个方向上的主体。
@@ -541,7 +531,7 @@ func cpDetail(srcs []*cpEndpoint, dst *cpEndpoint) string {
 // cpApprovalFailed 记一行被拒的审计并报错，返回退出码。一条命令一行：审计的资产列只有
 // 一对，多个源共用一行，两端的原文照旧留在 command / request 里。
 func cpApprovalFailed(
-	ctx context.Context, srcs []*cpEndpoint, dst *cpEndpoint, approvalAssetID int64,
+	ctx context.Context, srcs []*cpEndpoint, dst *cpEndpoint, recursive bool, approvalAssetID int64,
 	approvalErr error, result ApprovalResult,
 ) int {
 	srcArgs := make([]string, 0, len(srcs))
@@ -552,7 +542,7 @@ func cpApprovalFailed(
 			srcAssetID = src.assetID()
 		}
 	}
-	params := cpToolParams(strings.Join(srcArgs, " "), dst.arg, false, srcAssetID, dst.assetID())
+	params := cpToolParams(strings.Join(srcArgs, " "), dst.arg, recursive, srcAssetID, dst.assetID())
 	if approvalAssetID > 0 {
 		// 被拒的那一端才是这行审计该指向的资产：用户拒的是它。
 		params["asset_id"] = approvalAssetID

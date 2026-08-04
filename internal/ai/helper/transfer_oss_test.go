@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -33,6 +34,40 @@ type fakeOSSService struct {
 	objects map[string]map[string]string // bucket → key → 内容
 	gets    []string
 	puts    []fakeOSSPut
+}
+
+type scriptedOSSService struct {
+	ossTransferService
+	pages []*oss_svc.ListObjectsResult
+	next  int
+}
+
+func (s *scriptedOSSService) ListObjects(
+	context.Context, *oss_svc.ListObjectsRequest,
+) (*oss_svc.ListObjectsResult, error) {
+	page := s.pages[s.next]
+	s.next++
+	return page, nil
+}
+
+func TestOSSTransferWalkPrefixRejectsUntrustedListingBoundaries(t *testing.T) {
+	tests := []struct {
+		name  string
+		pages []*oss_svc.ListObjectsResult
+	}{
+		{name: "object outside prefix", pages: []*oss_svc.ListObjectsResult{{Objects: []oss_svc.ObjectItem{{Key: "secret/key"}}}}},
+		{name: "prefix cycle", pages: []*oss_svc.ListObjectsResult{{Prefixes: []string{"logs/"}}}},
+		{name: "repeated token", pages: []*oss_svc.ListObjectsResult{{IsTruncated: true, NextContinuationToken: "same"}, {IsTruncated: true, NextContinuationToken: "same"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := ossAdapter{svc: &scriptedOSSService{pages: tt.pages}}
+			err := a.walkPrefix(context.Background(), 1, "bucket", "logs/", func(oss_svc.ObjectItem) error { return nil })
+			if err == nil {
+				t.Fatal("walkPrefix trusted a listing response outside its approved traversal boundary")
+			}
+		})
+	}
 }
 
 // fakeOSSClient 建模 oss_svc.Client 的**真实交货顺序**，即 minio 适配器那一层。
@@ -563,6 +598,14 @@ func TestOSSTransfer_ApprovalSubject(t *testing.T) {
 				t.Errorf("subject %q does not split into an <action> <resource> policy string", subject)
 			}
 		})
+	}
+}
+
+func TestOSSTransfer_RecursiveConcreteObjectApprovesExactRead(t *testing.T) {
+	subjects := ApprovalSubjectsFor(ossTransfer, "/bucket/key", DirReadScope)
+	want := []ApprovalTarget{{ApprovalType: asset_entity.AssetTypeOSS, Subject: "object.read bucket/key"}}
+	if !reflect.DeepEqual(subjects, want) {
+		t.Fatalf("ApprovalSubjectsFor = %#v, want %#v", subjects, want)
 	}
 }
 

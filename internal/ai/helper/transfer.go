@@ -41,6 +41,18 @@ type ListResult struct {
 	SkippedSymlinks []string
 }
 
+// MaxTransferEntries 是执行资源边界，不是审批弹窗上限。目录范围只审批一次，但单次任务不能
+// 无界物化整棵文件树；达到该值时在开始传输前明确失败。
+const MaxTransferEntries = 100_000
+
+func (r *ListResult) appendEntry(entry Entry) error {
+	if len(r.Entries) >= MaxTransferEntries {
+		return fmt.Errorf("transfer expands beyond the execution limit of %d entries", MaxTransferEntries)
+	}
+	r.Entries = append(r.Entries, entry)
+	return nil
+}
+
 // TransferAdapter 是一类传输端点的全部能力：怎么展开、怎么读写、以及在每个方向上要授权
 // 什么。四件事放在同一个接口里，是为了不出现第二张"类型 → 审批语义"的表。
 type TransferAdapter interface {
@@ -78,6 +90,72 @@ type TransferAdapter interface {
 	// asset 是否为 nil 来决定要不要走权限检查，压根不会问本地适配器要主体；它返回的空串是
 	// "不适用"，不是一个让调用方去判空的哨兵——按哨兵写，漏判时就会静默放行。
 	ApprovalSubject(path string, dir Direction) (approvalType, subject string)
+}
+
+// TransferPathNormalizer 是文件系统类适配器的可选能力。对象存储 key 是不透明名字，不能
+// 用文件系统规则清理；本地与 SSH 则必须在审批、审计和 I/O 分叉之前归一成同一个路径。
+type TransferPathNormalizer interface {
+	NormalizeTransferPath(path string) string
+}
+
+// ApprovalTarget 是一个端点操作必须同时满足的单条授权。通常只有一条；SSH 的 `-r path`
+// 在审批前不能探测 path 是文件还是目录，因此同时要求精确路径与子树范围。
+type ApprovalTarget struct {
+	ApprovalType string
+	Subject      string
+}
+
+// TransferApprovalPlanner 是适配器的可选多主体授权能力。
+type TransferApprovalPlanner interface {
+	ApprovalSubjects(path string, dir Direction) []ApprovalTarget
+}
+
+// TransferCapabilities 让入口询问适配器能力，不按资产类型或协议分支。
+type TransferCapabilities interface {
+	SupportsPooledProxyCopy() bool
+	SameAssetCopyHint(assetName string) string
+}
+
+func SupportsPooledProxyCopy(adapter TransferAdapter) bool {
+	c, ok := adapter.(TransferCapabilities)
+	return ok && c.SupportsPooledProxyCopy()
+}
+
+func SameAssetCopyHint(adapter TransferAdapter, assetName string) string {
+	c, ok := adapter.(TransferCapabilities)
+	if !ok {
+		return ""
+	}
+	return c.SameAssetCopyHint(assetName)
+}
+
+// ApprovalSubjectsFor 返回该端点操作全部必须授权的主体。
+func ApprovalSubjectsFor(adapter TransferAdapter, p string, dir Direction) []ApprovalTarget {
+	if planner, ok := adapter.(TransferApprovalPlanner); ok {
+		return planner.ApprovalSubjects(p, dir)
+	}
+	typ, subject := adapter.ApprovalSubject(p, dir)
+	return []ApprovalTarget{{ApprovalType: typ, Subject: subject}}
+}
+
+// NormalizeTransferPath 通过适配器能力规范化端点路径；没有该能力的适配器保持原值。
+func NormalizeTransferPath(adapter TransferAdapter, p string) string {
+	if normalizer, ok := adapter.(TransferPathNormalizer); ok {
+		return normalizer.NormalizeTransferPath(p)
+	}
+	return p
+}
+
+type transferWriteScopeKey struct{}
+
+// WithTransferWriteScope fixes the filesystem root that an adapter write may not escape.
+func WithTransferWriteScope(ctx context.Context, scope string) context.Context {
+	return context.WithValue(ctx, transferWriteScopeKey{}, scope)
+}
+
+func transferWriteScope(ctx context.Context) string {
+	scope, _ := ctx.Value(transferWriteScopeKey{}).(string)
+	return scope
 }
 
 var transferAdapters = make(map[string]TransferAdapter)

@@ -17,6 +17,12 @@ func MatchPathRule(rule, filePath string) bool {
 	if rule == "" || filePath == "" {
 		return false
 	}
+	// 授权匹配必须使用规范路径。否则一条 /safe/ 目录 grant 会按字符串前缀放行
+	// /safe/../etc/passwd，而文件系统最终解析到 /etc/passwd。这里仍然 fail-closed，端点
+	// 边界负责把正常输入规范化后同时交给审批、审计和 I/O。
+	if !canonicalPathName(filePath) {
+		return false
+	}
 	if rule == "*" || rule == filePath {
 		return true
 	}
@@ -25,4 +31,11 @@ func MatchPathRule(rule, filePath string) bool {
 	}
 	ok, err := path.Match(rule, filePath)
 	return err == nil && ok
+}
+
+func canonicalPathName(name string) bool {
+	if strings.HasSuffix(name, "/") && name != "/" {
+		return path.Clean(strings.TrimSuffix(name, "/"))+"/" == name
+	}
+	return path.Clean(name) == name
 }

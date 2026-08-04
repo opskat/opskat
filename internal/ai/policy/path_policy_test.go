@@ -41,5 +41,11 @@ func TestMatchPathRule(t *testing.T) {
 			So(MatchPathRule("/opt/app/", "/opt/application/secret"), ShouldBeFalse)
 			So(MatchPathRule("/opt/app/", "/opt/app"), ShouldBeFalse)
 		})
+
+		Convey("目录授权不接受带有路径回退的主体", func() {
+			So(MatchPathRule("/safe/", "/safe/../etc/passwd"), ShouldBeFalse)
+			So(MatchPathRule("/safe/", "/safe/./deploy.sh"), ShouldBeFalse)
+			So(MatchPathRule("/safe/", "/safe//deploy.sh"), ShouldBeFalse)
+		})
 	})
 }

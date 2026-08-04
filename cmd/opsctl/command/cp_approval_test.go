@@ -680,7 +680,7 @@ func TestCmdCpExpansionRequiresListApproval(t *testing.T) {
 		So(exitCode, ShouldEqual, 1)
 		So(seen, ShouldBeEmpty)
 		So(batches, ShouldHaveLength, 1)
-		So(subjectCommands(batches[0]), ShouldResemble, []string{"cp /var/log/"})
+		So(subjectCommands(batches[0]), ShouldResemble, []string{"cp /var/log", "cp /var/log/"})
 		So(calls, ShouldBeEmpty)
 	})
 }

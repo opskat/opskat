@@ -22,6 +22,18 @@ type sshAdapter struct{}
 
 var sshTransfer TransferAdapter = sshAdapter{}
 
+func (sshAdapter) NormalizeTransferPath(p string) string {
+	trailing := strings.HasSuffix(p, "/")
+	p = path.Clean(p)
+	if trailing && p != "/" {
+		p += "/"
+	}
+	return p
+}
+
+func (sshAdapter) SupportsPooledProxyCopy() bool   { return true }
+func (sshAdapter) SameAssetCopyHint(string) string { return "" }
+
 func init() {
 	RegisterTransferAdapter(asset_entity.AssetTypeSSH, sshTransfer)
 }
@@ -108,7 +120,9 @@ func appendSFTPInfo(
 		}
 		return p, nil
 	default:
-		res.Entries = append(res.Entries, Entry{Path: p, RelPath: relTo(base, p), Size: info.Size()})
+		if err := res.appendEntry(Entry{Path: p, RelPath: relTo(base, p), Size: info.Size()}); err != nil {
+			return "", err
+		}
 	}
 	return "", nil
 }
@@ -139,14 +153,17 @@ func (sshAdapter) Write(
 	ctx context.Context, asset *asset_entity.Asset, p string, r io.Reader, _ int64,
 ) error {
 	return ExecuteWithSFTP(ctx, asset.ID, func(client *sftp.Client) error {
-		return writeSFTP(client, p, r)
+		return writeSFTP(ctx, client, p, r)
 	})
 }
 
 // writeSFTP 在已有的 SFTP 连接上流式写入 p，按需创建父目录。
 // 与 List 的 listSFTP 同一形态：连接由调用方管，这里只做那一件事，因此进程内 SFTP
 // 服务端就能验证"建父目录 + 字节往返"。
-func writeSFTP(client *sftp.Client, p string, r io.Reader) error {
+func writeSFTP(ctx context.Context, client *sftp.Client, p string, r io.Reader) error {
+	if err := validateSFTPWritePath(ctx, client, p); err != nil {
+		return err
+	}
 	if err := client.MkdirAll(path.Dir(p)); err != nil {
 		return fmt.Errorf("failed to create remote directory: %w", err)
 	}
@@ -154,13 +171,62 @@ func writeSFTP(client *sftp.Client, p string, r io.Reader) error {
 	if err != nil {
 		return fmt.Errorf("failed to create remote file: %w", err)
 	}
+	closed := false
 	defer func() {
-		if err := f.Close(); err != nil && !IsExpectedCloseErr(err) {
-			logger.Default().Warn("close remote file", zap.String("path", p), zap.Error(err))
+		if !closed {
+			if err := f.Close(); err != nil && !IsExpectedCloseErr(err) {
+				logger.Ctx(ctx).Warn("close remote file", zap.String("path", p), zap.Error(err))
+			}
 		}
 	}()
 	if _, err := io.Copy(f, r); err != nil {
 		return fmt.Errorf("failed to write remote file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		closed = true
+		return fmt.Errorf("failed to close remote file: %w", err)
+	}
+	closed = true
+	return nil
+}
+
+func validateSFTPWritePath(ctx context.Context, client *sftp.Client, p string) error {
+	scope := transferWriteScope(ctx)
+	if scope != "" {
+		cleanScope, cleanPath := path.Clean(scope), path.Clean(p)
+		if cleanPath != cleanScope && !strings.HasPrefix(cleanPath, strings.TrimSuffix(cleanScope, "/")+"/") {
+			return fmt.Errorf("remote destination %q escapes approved scope %q", p, scope)
+		}
+		if info, err := client.Lstat(cleanScope); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("remote destination scope %q is a symbolic link", scope)
+		} else if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to inspect remote destination scope %q: %w", scope, err)
+		}
+	}
+	clean := path.Clean(p)
+	current := path.Dir(clean)
+	parts := []string{path.Base(clean)}
+	if scope != "" {
+		cleanScope := path.Clean(scope)
+		current = cleanScope
+		rel := strings.TrimPrefix(strings.TrimPrefix(clean, cleanScope), "/")
+		parts = strings.Split(rel, "/")
+	}
+	for i, part := range parts {
+		current = path.Join(current, part)
+		info, err := client.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("failed to inspect remote destination %q: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("remote destination %q contains symbolic link %q", p, current)
+		}
+		if i < len(parts)-1 && !info.IsDir() {
+			return fmt.Errorf("remote destination parent %q is not a directory", current)
+		}
 	}
 	return nil
 }
@@ -195,4 +261,15 @@ func (sshAdapter) ApprovalSubject(p string, dir Direction) (string, string) {
 		return permission.GrantToolCp, base
 	}
 	return permission.GrantToolCp, p
+}
+
+func (a sshAdapter) ApprovalSubjects(p string, dir Direction) []ApprovalTarget {
+	if dir == DirReadScope && !hasGlobMeta(p) && !strings.HasSuffix(p, "/") {
+		return []ApprovalTarget{
+			{ApprovalType: permission.GrantToolCp, Subject: p},
+			{ApprovalType: permission.GrantToolCp, Subject: p + "/"},
+		}
+	}
+	typ, subject := a.ApprovalSubject(p, dir)
+	return []ApprovalTarget{{ApprovalType: typ, Subject: subject}}
 }

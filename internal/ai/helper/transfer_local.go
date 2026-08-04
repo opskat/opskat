@@ -21,6 +21,15 @@ type localAdapter struct{}
 
 var localTransfer TransferAdapter = localAdapter{}
 
+func (localAdapter) NormalizeTransferPath(p string) string {
+	trailing := strings.HasSuffix(p, string(filepath.Separator)) || strings.HasSuffix(p, "/")
+	p = filepath.Clean(p)
+	if trailing && p != string(filepath.Separator) {
+		p += string(filepath.Separator)
+	}
+	return p
+}
+
 func (localAdapter) List(
 	_ context.Context, _ *asset_entity.Asset, pattern string, recursive bool,
 ) (*ListResult, error) {
@@ -104,9 +113,11 @@ func appendLocalPath(p, base string, recursive bool, res *ListResult) (matchedDi
 		}
 		return p, nil
 	default:
-		res.Entries = append(res.Entries, Entry{
+		if err := res.appendEntry(Entry{
 			Path: p, RelPath: relTo(base, filepath.ToSlash(p)), Size: info.Size(),
-		})
+		}); err != nil {
+			return "", err
+		}
 	}
 	return "", nil
 }
@@ -141,9 +152,11 @@ func walkLocal(root, base string, res *ListResult) error {
 		if err != nil {
 			return err
 		}
-		res.Entries = append(res.Entries, Entry{
+		if err := res.appendEntry(Entry{
 			Path: p, RelPath: relTo(base, filepath.ToSlash(p)), Size: info.Size(),
-		})
+		}); err != nil {
+			return err
+		}
 		return nil
 	})
 }
@@ -157,27 +170,81 @@ func (localAdapter) OpenRead(
 	}
 	info, err := f.Stat()
 	if err != nil {
-		closeLocalFile(f, path)
+		closeLocalFile(context.Background(), f, path)
 		return nil, 0, fmt.Errorf("failed to stat local file: %w", err)
 	}
 	return f, info.Size(), nil
 }
 
 func (localAdapter) Write(
-	_ context.Context, _ *asset_entity.Asset, path string, r io.Reader, _ int64,
+	ctx context.Context, _ *asset_entity.Asset, path string, r io.Reader, _ int64,
 ) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	scope := transferWriteScope(ctx)
+	if scope == "" {
+		scope = filepath.Dir(path)
+	}
+	root, err := openOrCreateLocalRoot(scope)
+	if err != nil {
+		return fmt.Errorf("failed to open approved local destination: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	rel, err := filepath.Rel(filepath.Clean(scope), filepath.Clean(path))
+	if err != nil || !filepath.IsLocal(rel) {
+		return fmt.Errorf("local destination %q escapes approved scope %q", path, scope)
+	}
+	if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 		return fmt.Errorf("failed to create local directory: %w", err)
 	}
-	f, err := os.Create(path) //nolint:gosec // 同上：目的路径已经过端点审批
+	f, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666)
 	if err != nil {
 		return fmt.Errorf("failed to create local file: %w", err)
 	}
-	defer closeLocalFile(f, path)
+	closed := false
+	defer func() {
+		if !closed {
+			closeLocalFile(ctx, f, path)
+		}
+	}()
 	if _, err := io.Copy(f, r); err != nil {
 		return fmt.Errorf("failed to write local file: %w", err)
 	}
+	if err := f.Close(); err != nil {
+		closed = true
+		return fmt.Errorf("failed to close local file: %w", err)
+	}
+	closed = true
 	return nil
+}
+
+func openOrCreateLocalRoot(scope string) (*os.Root, error) {
+	scope = filepath.Clean(scope)
+	info, err := os.Lstat(scope)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("destination scope %q is a symbolic link", scope)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("destination scope %q is not a directory", scope)
+		}
+		return os.OpenRoot(scope)
+	}
+	if !os.IsNotExist(err) {
+		return nil, err
+	}
+	parent := filepath.Dir(scope)
+	if parent == scope {
+		return nil, err
+	}
+	parentRoot, err := openOrCreateLocalRoot(parent)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = parentRoot.Close() }()
+	base := filepath.Base(scope)
+	if err := parentRoot.Mkdir(base, 0o755); err != nil && !os.IsExist(err) {
+		return nil, err
+	}
+	return parentRoot.OpenRoot(base)
 }
 
 // ValidateDestination 本地文件系统对写入目标没有形态约束：Write 会按需建父目录，
@@ -191,8 +258,8 @@ func (localAdapter) ApprovalSubject(string, Direction) (string, string) {
 	return "", ""
 }
 
-func closeLocalFile(f *os.File, path string) {
+func closeLocalFile(ctx context.Context, f *os.File, path string) {
 	if err := f.Close(); err != nil && !IsExpectedCloseErr(err) {
-		logger.Default().Warn("close local file", zap.String("path", path), zap.Error(err))
+		logger.Ctx(ctx).Warn("close local file", zap.String("path", path), zap.Error(err))
 	}
 }

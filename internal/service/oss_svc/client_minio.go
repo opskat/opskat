@@ -2,8 +2,12 @@ package oss_svc
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,11 +17,16 @@ import (
 // minioAdapter 把 *minio.Client 适配成窄接口 Client。
 type minioAdapter struct {
 	mc         *minio.Client
+	httpClient *http.Client
 	partSizeMB int
 }
 
 func newMinioAdapter(mc *minio.Client, partSizeMB ...int) Client {
-	a := &minioAdapter{mc: mc}
+	return newMinioAdapterWithHTTP(mc, http.DefaultClient, partSizeMB...)
+}
+
+func newMinioAdapterWithHTTP(mc *minio.Client, httpClient *http.Client, partSizeMB ...int) Client {
+	a := &minioAdapter{mc: mc, httpClient: httpClient}
 	if len(partSizeMB) > 0 {
 		a.partSizeMB = partSizeMB[0]
 	}
@@ -42,18 +51,35 @@ func (a *minioAdapter) ListObjects(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	// minio-go 的高层迭代器会跨页拉平结果，丢失真实页边界。Core 返回单张 ListObjectsV2
-	// 响应，保留 S3 的 opaque continuation token；这是未填满但 truncated 的页不漏数据
-	// 所必需的契约。Core 当前没有 context 形参，因此调用前后都显式检查取消。
-	result, err := (minio.Core{Client: a.mc}).ListObjectsV2(bucket, prefix, "", continuationToken, "/", maxKeys)
+	params := url.Values{"list-type": {"2"}, "encoding-type": {"url"}, "delimiter": {"/"}, "prefix": {prefix}}
+	if continuationToken != "" {
+		params.Set("continuation-token", continuationToken)
+	}
+	if maxKeys > 0 {
+		params.Set("max-keys", strconv.Itoa(maxKeys))
+	}
+	u, err := a.mc.Presign(ctx, http.MethodGet, bucket, "", time.Minute, params)
 	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("list objects: unexpected HTTP status %s", resp.Status)
+	}
+	var result minio.ListBucketV2Result
+	if err := xml.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
 	if result.IsTruncated && result.NextContinuationToken == "" {
 		return nil, fmt.Errorf("list objects response is truncated without a continuation token")
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
 	}
 	items := make([]ObjectItem, 0, len(result.Contents)+len(result.CommonPrefixes))
 	for _, obj := range result.Contents {

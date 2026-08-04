@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
-	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -115,7 +115,11 @@ func handleCp(ctx context.Context, args map[string]any) (string, error) {
 		return "", err
 	}
 
-	if recursive || helper.HasGlobPattern(src.path) {
+	plan, err := helper.PlanTransfer([]string{src.path}, dst.path, recursive)
+	if err != nil {
+		return "", err
+	}
+	if plan.Sources[0].Expands {
 		return cpMultiSource(ctx, checker, src, dst, recursive, detail)
 	}
 	return cpSingleSource(ctx, checker, src, dst, detail)
@@ -140,6 +144,7 @@ func parseCpEndpoint(ctx context.Context, raw string) (*cpEndpoint, error) {
 			"local path %q must be absolute: it is resolved by this process, whose working directory is not "+
 				"part of the approved command string", raw)
 	}
+	p = helper.NormalizeTransferPath(adapter, p)
 	return &cpEndpoint{raw: raw, asset: asset, path: p, adapter: adapter}, nil
 }
 
@@ -171,13 +176,14 @@ func cpSingleSource(
 	if err != nil {
 		return "", err
 	}
-	if err := transferOne(ctx, src, dst, res.Entries[0], dst.path); err != nil {
+	transferredBytes, err := transferOne(ctx, src, dst, res.Entries[0], dst.path, filepath.Dir(dst.path))
+	if err != nil {
 		return "", err
 	}
 	ReportCpProgress(ctx, CpProgress{
-		Completed: 1, Total: 1, Src: res.Entries[0].Path, Dst: dst.path, Bytes: res.Entries[0].Size,
+		Completed: 1, Total: 1, Src: res.Entries[0].Path, Dst: dst.path, Bytes: transferredBytes,
 	})
-	return cpSummary(1, res.Entries[0].Size, res.SkippedSymlinks)
+	return cpSummary(1, transferredBytes, res.SkippedSymlinks)
 }
 
 // cpMultiSource 处理多源形态：recursive 为真，或源路径含 glob 元字符（spec §6.5）。
@@ -190,13 +196,6 @@ func cpMultiSource(
 	// D16：目的地必须以 "/" 结尾。不复刻 POSIX cp 的目的地推断（b 存在则落 b/a），那要先
 	// 探测目的地、结果依赖一次 TOCTOU 式的探测，而目的路径必须在审批之前就完全确定——
 	// 批的是哪些具体路径，写的就得是哪些。
-	if !strings.HasSuffix(dst.path, "/") {
-		return "", fmt.Errorf(
-			"destination %q must end with \"/\" when the source expands to multiple entries "+
-				"(recursive or a glob pattern): each entry lands at <destination>/<path relative to the source base>",
-			dst.raw)
-	}
-
 	// 递归/通配审批的是用户明确指定的源与目的范围。审批必须发生在 List 之前：目录范围
 	// 已经完整描述了这次操作的边界，不需要为了生成审批项先扫描整棵目录树。
 	transferPrompted, err := checkAccessBatch(ctx, checker, []cpAccess{
@@ -237,13 +236,14 @@ func cpMultiSource(
 	// 目的地。已经落地的那 N 条要在错误里报出来，而不是假装这次传输什么都没做。
 	var totalBytes int64
 	for i, entry := range res.Entries {
-		if err := transferOne(ctx, src, dst, entry, dstPaths[i]); err != nil {
+		transferredBytes, err := transferOne(ctx, src, dst, entry, dstPaths[i], dst.path)
+		if err != nil {
 			return "", fmt.Errorf("transferred %d/%d entries, then %q → %q failed: %w",
 				i, len(res.Entries), entry.Path, dstPaths[i], err)
 		}
-		totalBytes += entry.Size
+		totalBytes += transferredBytes
 		ReportCpProgress(ctx, CpProgress{
-			Completed: i + 1, Total: len(res.Entries), Src: entry.Path, Dst: dstPaths[i], Bytes: entry.Size,
+			Completed: i + 1, Total: len(res.Entries), Src: entry.Path, Dst: dstPaths[i], Bytes: transferredBytes,
 		})
 	}
 	return cpSummary(len(res.Entries), totalBytes, res.SkippedSymlinks)
@@ -289,28 +289,28 @@ func checkAccessBatch(
 		if !access.ep.isRemote() {
 			continue
 		}
-		approvalType, subject := access.ep.adapter.ApprovalSubject(access.path, access.dir)
-		item := permission.ApprovalItem{
-			Type:      permission.ApprovalTypeFor(approvalType),
-			AssetID:   access.ep.asset.ID,
-			AssetName: access.ep.asset.Name,
-			Command:   subject,
-			Detail:    detail,
-		}
-		// 同一条主体只查一次、只出现一次：源与目的落在同一个前缀上时读写主体逐字相同，
-		// 重复条目让用户在同一份清单里读两遍同一句话，查一遍策略也是白查。
-		if seen[item] {
-			continue
-		}
-		seen[item] = true
+		for _, target := range helper.ApprovalSubjectsFor(access.ep.adapter, access.path, access.dir) {
+			item := permission.ApprovalItem{
+				Type:      permission.ApprovalTypeFor(target.ApprovalType),
+				AssetID:   access.ep.asset.ID,
+				AssetName: access.ep.asset.Name,
+				Command:   target.Subject,
+				Detail:    detail,
+			}
+			// 同一条主体只查一次、只出现一次：源与目的落在同一个前缀上时读写主体逐字相同。
+			if seen[item] {
+				continue
+			}
+			seen[item] = true
 
-		result := permission.CheckPermission(ctx, approvalType, access.ep.asset.ID, subject)
-		aictx.RecordDecision(ctx, result)
-		switch result.Decision {
-		case aictx.Deny:
-			return false, fmt.Errorf("%s", result.Message)
-		case aictx.NeedConfirm:
-			items = append(items, item)
+			result := permission.CheckPermission(ctx, target.ApprovalType, access.ep.asset.ID, target.Subject)
+			aictx.RecordDecision(ctx, result)
+			switch result.Decision {
+			case aictx.Deny:
+				return false, fmt.Errorf("%s", result.Message)
+			case aictx.NeedConfirm:
+				items = append(items, item)
+			}
 		}
 	}
 	if len(items) == 0 {
@@ -425,14 +425,16 @@ func checkEndpoint(
 }
 
 // transferOne 执行一条已获批准的传输：源端开读、目的端流式写入。
-func transferOne(ctx context.Context, src, dst *cpEndpoint, entry helper.Entry, dstPath string) error {
+func transferOne(
+	ctx context.Context, src, dst *cpEndpoint, entry helper.Entry, dstPath, dstScope string,
+) (int64, error) {
 	logger.Ctx(ctx).Info("cp transfer start",
 		zap.String("src", entry.Path), zap.String("dst", dstPath), zap.Int64("size", entry.Size))
 
 	rc, size, err := src.adapter.OpenRead(ctx, src.asset, entry.Path)
 	if err != nil {
 		logger.Ctx(ctx).Error("cp open source", zap.String("src", entry.Path), zap.Error(err))
-		return err
+		return 0, err
 	}
 	defer func() {
 		if err := rc.Close(); err != nil && !helper.IsExpectedCloseErr(err) {
@@ -440,12 +442,25 @@ func transferOne(ctx context.Context, src, dst *cpEndpoint, entry helper.Entry, 
 		}
 	}()
 
-	if err := dst.adapter.Write(ctx, dst.asset, dstPath, rc, size); err != nil {
+	counter := &countingReader{r: rc}
+	writeCtx := helper.WithTransferWriteScope(ctx, dstScope)
+	if err := dst.adapter.Write(writeCtx, dst.asset, dstPath, counter, size); err != nil {
 		logger.Ctx(ctx).Error("cp write destination", zap.String("dst", dstPath), zap.Error(err))
-		return err
+		return counter.n, err
 	}
 	logger.Ctx(ctx).Info("cp transfer done", zap.String("src", entry.Path), zap.String("dst", dstPath))
-	return nil
+	return counter.n, nil
+}
+
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	r.n += int64(n)
+	return n, err
 }
 
 func cpSummary(transferred int, bytes int64, skipped []string) (string, error) {

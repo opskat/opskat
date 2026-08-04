@@ -24,6 +24,11 @@ type ossTransferService interface {
 // ossAdapter 是对象存储端点，路径写成 <asset>:/<bucket>/<key>（spec §6.2）。
 type ossAdapter struct{ svc ossTransferService }
 
+func (ossAdapter) SupportsPooledProxyCopy() bool { return false }
+func (ossAdapter) SameAssetCopyHint(assetName string) string {
+	return fmt.Sprintf("both endpoints are on %s; the object streams through this process. For a server-side copy use: opsctl exec %s -- \"object copy <bucket>/<key> --to=<bucket>/<key>\"", assetName, assetName)
+}
+
 var ossTransfer TransferAdapter = ossAdapter{svc: oss_svc.New()}
 
 func init() {
@@ -56,8 +61,7 @@ func (a ossAdapter) List(
 		}
 		res := &ListResult{}
 		if err := a.walkPrefix(ctx, asset.ID, bucket, key, func(obj oss_svc.ObjectItem) error {
-			res.Entries = append(res.Entries, ossEntry(bucket, obj, key))
-			return nil
+			return res.appendEntry(ossEntry(bucket, obj, key))
 		}); err != nil {
 			return nil, err
 		}
@@ -119,8 +123,7 @@ func (a ossAdapter) listGlob(
 				return nil
 			}
 		}
-		res.Entries = append(res.Entries, ossEntry(bucket, obj, base))
-		return nil
+		return res.appendEntry(ossEntry(bucket, obj, base))
 	})
 	if err != nil {
 		return nil, err
@@ -144,6 +147,7 @@ func (a ossAdapter) walkPrefix(
 	ctx context.Context, assetID int64, bucket, prefix string, visit func(oss_svc.ObjectItem) error,
 ) error {
 	token := ""
+	seenTokens := map[string]bool{"": true}
 	for {
 		res, err := a.svc.ListObjects(ctx, &oss_svc.ListObjectsRequest{
 			AssetID: assetID, Bucket: bucket, Prefix: prefix, ContinuationToken: token,
@@ -152,11 +156,17 @@ func (a ossAdapter) walkPrefix(
 			return err
 		}
 		for _, obj := range res.Objects {
+			if !strings.HasPrefix(obj.Key, prefix) {
+				return fmt.Errorf("oss list for prefix %q returned object %q outside the approved prefix", prefix, obj.Key)
+			}
 			if err := visit(obj); err != nil {
 				return err
 			}
 		}
 		for _, sub := range res.Prefixes {
+			if !strings.HasPrefix(sub, prefix) || len(sub) <= len(prefix) {
+				return fmt.Errorf("oss list for prefix %q returned non-child prefix %q", prefix, sub)
+			}
 			if err := a.walkPrefix(ctx, assetID, bucket, sub, visit); err != nil {
 				return err
 			}
@@ -164,7 +174,12 @@ func (a ossAdapter) walkPrefix(
 		if !res.IsTruncated {
 			return nil
 		}
-		token = res.NextContinuationToken
+		next := res.NextContinuationToken
+		if next == "" || seenTokens[next] {
+			return fmt.Errorf("oss list for prefix %q returned a non-advancing continuation token", prefix)
+		}
+		seenTokens[next] = true
+		token = next
 	}
 }
 
@@ -238,6 +253,20 @@ func (ossAdapter) ApprovalSubject(p string, dir Direction) (string, string) {
 	}
 	// 余下的是 DirRead。新增方向时必须在上面补一条 case，否则它会被当成读。
 	return asset_entity.AssetTypeOSS, action + " " + ossSubjectResource(p, dir)
+}
+
+func (a ossAdapter) ApprovalSubjects(p string, dir Direction) []ApprovalTarget {
+	if dir == DirReadScope {
+		if _, key, err := splitOSSEndpointPath(p); err == nil && key != "" &&
+			!strings.HasSuffix(key, "/") && !hasGlobMeta(key) {
+			return []ApprovalTarget{{
+				ApprovalType: asset_entity.AssetTypeOSS,
+				Subject:      "object.read " + strings.TrimPrefix(p, "/"),
+			}}
+		}
+	}
+	typ, subject := a.ApprovalSubject(p, dir)
+	return []ApprovalTarget{{ApprovalType: typ, Subject: subject}}
 }
 
 // ossSubjectResource 给出审批主体的资源段，它有一条硬后置条件：

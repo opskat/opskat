@@ -334,9 +334,10 @@ func TestCpExpansionIsAuthorizedBeforeItRuns(t *testing.T) {
 
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "USER DENIED")
-			So(*seen, ShouldHaveLength, 1)
+			So(*seen, ShouldHaveLength, 2)
 			So((*seen)[0].Type, ShouldEqual, "cp")
-			So((*seen)[0].Command, ShouldEqual, "/var/log/")
+			So((*seen)[0].Command, ShouldEqual, "/var/log")
+			So((*seen)[1].Command, ShouldEqual, "/var/log/")
 		})
 
 		// 主体的收窄归适配器：它才知道自己那一端的规则语义。入口层先按 glob 截一刀会

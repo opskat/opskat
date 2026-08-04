@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -57,6 +58,51 @@ func TestMinioAdapterPreservesAnUnderfilledTruncatedPage(t *testing.T) {
 		token = res.NextContinuationToken
 	}
 	require.Contains(t, prefixes, "b-prefix/")
+}
+
+func TestMinioAdapterListObjectsReturnsPromptlyWhenContextIsCanceled(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(started)
+		select {
+		case <-r.Context().Done():
+			close(requestCanceled)
+		case <-release:
+		}
+	}))
+	defer func() {
+		close(release)
+		server.Close()
+	}()
+
+	endpoint, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	mc, err := minio.New(endpoint.Host, &minio.Options{
+		Creds: credentials.NewStaticV4("access", "secret", ""), Secure: false, Region: "us-east-1",
+	})
+	require.NoError(t, err)
+	client := newMinioAdapter(mc)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, callErr := client.ListObjects(ctx, "bucket", "", 100, "")
+		done <- callErr
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("ListObjects stayed blocked after context cancellation")
+	}
+	select {
+	case <-requestCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("the underlying ListObjects HTTP request was not canceled")
+	}
 }
 
 func contentKeys(prefix string, n int) []string {

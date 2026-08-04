@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -228,6 +229,29 @@ func TestLocalTransfer_WriteCreatesParentsAndOpenReadRoundTrips(t *testing.T) {
 	}
 }
 
+func TestLocalTransferWriteCannotFollowSymlinkOutsideApprovedScope(t *testing.T) {
+	approved := t.TempDir()
+	outsideDir := t.TempDir()
+	outside := filepath.Join(outsideDir, "authorized_keys")
+	writeTempFile(t, outside, "original")
+	if err := os.Symlink(outside, filepath.Join(approved, "file")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	ctx := WithTransferWriteScope(context.Background(), approved)
+	err := localTransfer.Write(ctx, nil, filepath.Join(approved, "file"), strings.NewReader("replaced"), 8)
+	if err == nil {
+		t.Fatal("Write followed a symlink outside the approved destination scope")
+	}
+	got, readErr := os.ReadFile(outside) //nolint:gosec // 测试自己创建的临时路径
+	if readErr != nil {
+		t.Fatalf("read outside file: %v", readErr)
+	}
+	if string(got) != "original" {
+		t.Fatalf("outside content = %q, want original", got)
+	}
+}
+
 // 本地端没有资产，正确的调用方压根不会问它要审批主体；空返回是"不适用"。
 func TestLocalTransfer_ApprovalSubjectIsNotApplicable(t *testing.T) {
 	for _, dir := range []Direction{DirRead, DirWrite, DirList} {
@@ -274,6 +298,17 @@ func TestSSHTransfer_ApprovalSubject(t *testing.T) {
 		if subject != "/var/log/app.log" {
 			t.Errorf("dir %v: subject = %q", dir, subject)
 		}
+	}
+}
+
+func TestSSHTransfer_RecursiveUnknownPathApprovesFileAndSubtree(t *testing.T) {
+	subjects := ApprovalSubjectsFor(sshTransfer, "/etc/passwd", DirReadScope)
+	want := []ApprovalTarget{
+		{ApprovalType: permission.GrantToolCp, Subject: "/etc/passwd"},
+		{ApprovalType: permission.GrantToolCp, Subject: "/etc/passwd/"},
+	}
+	if !reflect.DeepEqual(subjects, want) {
+		t.Fatalf("ApprovalSubjectsFor = %#v, want %#v", subjects, want)
 	}
 }
 
@@ -615,7 +650,7 @@ func TestSFTPWriteCreatesParentsAndReadRoundTrips(t *testing.T) {
 	client := newTestSFTP(t)
 	dst := filepath.Join(t.TempDir(), "new", "deep", "f.txt")
 
-	if err := writeSFTP(client, dst, strings.NewReader("payload")); err != nil {
+	if err := writeSFTP(context.Background(), client, dst, strings.NewReader("payload")); err != nil {
 		t.Fatalf("writeSFTP: %v", err)
 	}
 
