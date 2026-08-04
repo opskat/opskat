@@ -92,18 +92,18 @@ func TestListObjectsWithEmptyBucketReturnsEmptySlicesNotNil(t *testing.T) {
 func TestListObjectsWithPreservesOpaqueContinuationToken(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	c := mock_ossclient.NewMockClient(ctrl)
-	c.EXPECT().ListObjects(gomock.Any(), "b", "docs/", 2, "incoming-token").Return(&oss_svc.ListObjectsPage{
+	c.EXPECT().ListObjects(gomock.Any(), "b", "docs/", 2, "page-1").Return(&oss_svc.ListObjectsPage{
 		Items: []oss_svc.ObjectItem{
 			{Key: "docs/archive/", IsPrefix: true},
 			{Key: "docs/b.md", Size: 20},
 		},
-		IsTruncated: true, NextContinuationToken: "opaque-next-token",
+		IsTruncated: true, NextContinuationToken: "page-2",
 	}, nil)
 
-	res, err := oss_svc.ListObjectsWith(context.Background(), c, "b", "docs/", 2, "incoming-token")
+	res, err := oss_svc.ListObjectsWith(context.Background(), c, "b", "docs/", 2, "page-1")
 	require.NoError(t, err)
 	assert.True(t, res.IsTruncated)
-	assert.Equal(t, "opaque-next-token", res.NextContinuationToken)
+	assert.Equal(t, "page-2", res.NextContinuationToken)
 	assert.Equal(t, []string{"docs/archive/"}, res.Prefixes)
 	require.Len(t, res.Objects, 1)
 	assert.Equal(t, "docs/b.md", res.Objects[0].Key)
