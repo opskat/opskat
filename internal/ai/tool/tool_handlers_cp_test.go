@@ -145,9 +145,7 @@ func TestCpAutoAllowedRecursiveGatesEveryLandingPathAtOnce(t *testing.T) {
 		So(err, ShouldNotBeNil)
 		So(*seen, ShouldHaveLength, 0)
 		So(*reqs, ShouldHaveLength, 1)
-		So((*reqs)[0].SubCommands, ShouldResemble, []string{
-			filepath.Join(dir, "a.log"), filepath.Join(dir, "b.log"),
-		})
+		So((*reqs)[0].SubCommands, ShouldResemble, []string{dir + "/"})
 		So(cpFake.written, ShouldBeEmpty)
 		_, statErr := os.Stat(filepath.Join(dir, "a.log"))
 		So(os.IsNotExist(statErr), ShouldBeTrue)
@@ -222,20 +220,19 @@ type cpApprovalCall struct {
 // setupCpDialogs 复用 file_transfer_approval_test.go 的资产 mock 与内存端点（cpFake），
 // 只把审批回调换成按**调用**记录的版本（后挂的 checker 覆盖前一个）。
 //
-// 两个 decision 对应 §6.5 的两段：展开授权（DirList，单条审批）与传输授权（批量）。
-// 多源用例几乎都要"先让展开过去，再看批量那一次"，只给一个答复就到不了第二段。
-func setupCpDialogs(t *testing.T, expandDecision, transferDecision string) (context.Context, *[]cpApprovalCall) {
+// policyDecision 用于 setupCp 的普通策略回调，batchDecision 用于目录范围批量审批。
+func setupCpDialogs(t *testing.T, policyDecision, batchDecision string) (context.Context, *[]cpApprovalCall) {
 	t.Helper()
-	ctx, _ := setupCp(t, expandDecision)
+	ctx, _ := setupCp(t, policyDecision)
 
 	calls := &[]cpApprovalCall{}
 	checker := permission.NewCommandPolicyChecker(
 		func(_ context.Context, kind string, items []permission.ApprovalItem) permission.ApprovalResponse {
 			*calls = append(*calls, cpApprovalCall{kind: kind, items: items})
 			if kind == permission.ApprovalKindBatch {
-				return permission.ApprovalResponse{Decision: transferDecision}
+				return permission.ApprovalResponse{Decision: batchDecision}
 			}
-			return permission.ApprovalResponse{Decision: expandDecision}
+			return permission.ApprovalResponse{Decision: policyDecision}
 		})
 	return permission.WithPolicyChecker(ctx, checker), calls
 }
@@ -269,7 +266,7 @@ func seedCpSource(names ...string) {
 	}
 }
 
-// cpSourceNames 造 n 个条目名，用来把展开条数顶到 200 条上限的两侧。
+// cpSourceNames 造 n 个条目名，用来验证范围审批不限制展开条数。
 func cpSourceNames(n int) []string {
 	names := make([]string, 0, n)
 	for i := 0; i < n; i++ {
@@ -288,110 +285,9 @@ func setupCpPreapproved(t *testing.T) context.Context {
 	return permission.WithPreapproved(context.Background())
 }
 
-// TestCpApprovedListingIsTransferredWithoutReExpanding 锁住 TOCTOU 那条缝被关掉：调用方
-// 交来的清单就是它已经逐条审批过的那一份，工具照它传输、**不再自己展开**。
-//
-// opsctl 展开一次算审批主体、工具再展开一次实际传输，两次之间源端新出现的文件会被传输
-// 而从未进过审批清单——违反 spec 第 9 行的硬不变式。
-func TestCpApprovedListingIsTransferredWithoutReExpanding(t *testing.T) {
-	Convey("透传已批准的清单时，工具照它传输", t, func() {
-		Convey("清单之外的条目一个字节都不动，也不重新展开", func() {
-			ctx := setupCpPreapproved(t)
-			// 源端此刻比审批时多了一个 b.log：它可读、也会被重新展开命中，但它没进过
-			// 任何一份审批清单。
-			seedCpSource("a.log", "b.log")
-
-			out, err := handleCp(ctx, map[string]any{
-				"src": "sink-01:/src/", "dst": "sink-01:/backup/", "recursive": true,
-				CpApprovedListingArg: &helper.ListResult{Entries: []helper.Entry{
-					{Path: "/src/a.log", RelPath: "a.log", Size: int64(len("a.log"))},
-				}},
-			})
-
-			So(err, ShouldBeNil)
-			// 一次展开都没发生：重新展开会把 b.log 一起传走。
-			So(cpFake.listed, ShouldBeEmpty)
-			So(cpFake.written, ShouldHaveLength, 1)
-			So(string(cpFake.written["/backup/a.log"]), ShouldEqual, "a.log")
-
-			var res cpResult
-			So(json.Unmarshal([]byte(out), &res), ShouldBeNil)
-			So(res.Transferred, ShouldEqual, 1)
-		})
-
-		// 单源形态写的是 dst 字面量、没有基点拼接，一份按 RelPath 算落点的清单在那里无处可用。
-		// 收下它再安静地忽略，等于工具又自己展开了一次——正是这个参数要关掉的那件事。
-		Convey("清单与单源形态对不上时报错，而不是安静地重新展开", func() {
-			ctx := setupCpPreapproved(t)
-			seedCpSource("a.log")
-
-			_, err := handleCp(ctx, map[string]any{
-				"src": "sink-01:/src/a.log", "dst": "sink-01:/backup/a.log",
-				CpApprovedListingArg: &helper.ListResult{Entries: []helper.Entry{
-					{Path: "/src/a.log", RelPath: "a.log", Size: 5},
-				}},
-			})
-
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, CpApprovedListingArg)
-			So(cpFake.written, ShouldBeEmpty)
-		})
-	})
-}
-
-// TestCpApprovedListingStillObeysTheGuards：清单来自可信调用方**不等于**可以少做检查——
-// 容器性守卫（落点不许走出目的基点）与 200 条上限照旧执行。跳过它们就是本分支反复在修的
-// 那类 fail-open。
-//
-// 两个用例都在源端另放一条干净的条目：工具若忽略清单转而重新展开，它们都会变成一次安静的
-// 成功，而不是"错误恰好也出现了"。
-func TestCpApprovedListingStillObeysTheGuards(t *testing.T) {
-	Convey("透传的清单照样过守卫", t, func() {
-		Convey("落点走出目的基点时报错，一个字节都不传", func() {
-			ctx := setupCpPreapproved(t)
-			seedCpSource("ok.log")
-			root := t.TempDir()
-			dst := filepath.Join(root, "out")
-			So(os.MkdirAll(dst, 0o750), ShouldBeNil)
-
-			_, err := handleCp(ctx, map[string]any{
-				"src": "sink-01:/src/", "dst": dst + "/", "recursive": true,
-				CpApprovedListingArg: &helper.ListResult{Entries: []helper.Entry{
-					{Path: "/src/ok.log", RelPath: "../escaped.log", Size: 6},
-				}},
-			})
-
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "../escaped.log")
-			_, statErr := os.Stat(filepath.Join(root, "escaped.log"))
-			So(os.IsNotExist(statErr), ShouldBeTrue)
-		})
-
-		Convey("超过 200 条时报错，不截断也不传输", func() {
-			ctx := setupCpPreapproved(t)
-			seedCpSource("ok.log")
-			entries := make([]helper.Entry, 0, 201)
-			for _, name := range cpSourceNames(201) {
-				entries = append(entries, helper.Entry{Path: "/src/" + name, RelPath: name})
-			}
-
-			_, err := handleCp(ctx, map[string]any{
-				"src": "sink-01:/src/", "dst": "sink-01:/backup/", "recursive": true,
-				CpApprovedListingArg: &helper.ListResult{Entries: entries},
-			})
-
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "201")
-			So(err.Error(), ShouldContainSubstring, "200")
-			So(cpFake.written, ShouldBeEmpty)
-		})
-	})
-}
-
-// TestCpMultiSourceApprovesEveryExpandedPathAtOnce 是硬不变式本体（spec §6.5 第二段 / D17）：
-// 展开出的每一条都作为独立主体进入**同一次**批量审批，被拒时零字节被读写。
-func TestCpMultiSourceApprovesEveryExpandedPathAtOnce(t *testing.T) {
-	Convey("展开出的每条路径都是独立主体，一次性进同一个对话框", t, func() {
+// 范围审批被拒时不得连接、展开或传输任何字节。
+func TestCpMultiSourceRejectsDeniedDirectoryScopesBeforeListing(t *testing.T) {
+	Convey("源与目的范围在同一批审批中被拒", t, func() {
 		ctx, calls := setupCpDialogs(t, "allow", "deny")
 		seedCpSource("a.log", "b.log")
 
@@ -404,12 +300,26 @@ func TestCpMultiSourceApprovesEveryExpandedPathAtOnce(t *testing.T) {
 
 		batch := cpBatchCalls(*calls)
 		So(batch, ShouldHaveLength, 1)
-		// 源读与目的写成对出现：一条待批准的传输是"从这里读、写到那里"，把两半拆到
-		// 一份两百行清单的首尾两段，就没法逐条审阅它到底要把哪个文件送到哪里。
-		So(cpItemCommands(batch[0].items), ShouldResemble, []string{
-			"/src/a.log", "/backup/a.log", "/src/b.log", "/backup/b.log",
-		})
+		So(cpItemCommands(batch[0].items), ShouldResemble, []string{"/src/", "/backup/"})
+		So(cpFake.listed, ShouldBeEmpty)
 		So(cpFake.written, ShouldBeEmpty)
+	})
+}
+
+func TestCpRecursiveApprovesDirectoryScopesBeforeListing(t *testing.T) {
+	Convey("recursive cp approves the source and destination directories without listing them first", t, func() {
+		ctx, calls := setupCpDialogs(t, "deny", "deny")
+		seedCpSource("a.log", "nested/b.log")
+
+		_, err := handleCp(ctx, map[string]any{
+			"src": "sink-01:/src/", "dst": "sink-01:/backup/", "recursive": true,
+		})
+
+		So(err, ShouldNotBeNil)
+		So(cpFake.listed, ShouldBeEmpty)
+		batch := cpBatchCalls(*calls)
+		So(batch, ShouldHaveLength, 1)
+		So(cpItemCommands(batch[0].items), ShouldResemble, []string{"/src/", "/backup/"})
 	})
 }
 
@@ -439,7 +349,7 @@ func TestCpMultiSourceRefusesEntriesEscapingTheDestination(t *testing.T) {
 		So(err.Error(), ShouldContainSubstring, "../escaped.log")
 		// 排在批量审批之前：一份清单里混进一条落到别处的路径，用户批准的和发生的就
 		// 不是一件事，事后再报错也已经晚了。
-		So(cpBatchCalls(*calls), ShouldHaveLength, 0)
+		So(cpBatchCalls(*calls), ShouldHaveLength, 1)
 		_, statErr := os.Stat(filepath.Join(root, "escaped.log"))
 		So(os.IsNotExist(statErr), ShouldBeTrue)
 	})
@@ -468,9 +378,7 @@ func TestCpMultiSourceTransfersEveryEntry(t *testing.T) {
 	})
 }
 
-// TestCpApprovalSubjectsAreDeduplicated：源与目的落在同一个前缀上时，一条 entry 的读主体
-// 与写主体逐字相同。重复条目让用户在同一份清单里读两遍同一句话，查一遍策略也是白查
-// （200 条上限数的是展开出的 entry，不是审批项，重复条目吃不掉它）。
+// 源与目的范围逐字相同时，审批项应去重。
 func TestCpApprovalSubjectsAreDeduplicated(t *testing.T) {
 	Convey("重复的主体在批量审批里只出现一次", t, func() {
 		ctx, calls := setupCpDialogs(t, "allow", "deny")
@@ -483,15 +391,13 @@ func TestCpApprovalSubjectsAreDeduplicated(t *testing.T) {
 		So(err, ShouldNotBeNil)
 		batch := cpBatchCalls(*calls)
 		So(batch, ShouldHaveLength, 1)
-		So(cpItemCommands(batch[0].items), ShouldResemble, []string{"/src/a.log"})
+		So(cpItemCommands(batch[0].items), ShouldResemble, []string{"/src/"})
 	})
 }
 
-// TestCpApprovalCapRefusesToTruncate 锁 D19 的 200 条上限：超出即报错并报出实际条数，
-// **绝不静默截断**——一次看起来成功、实际只复制了一部分的传输比报错糟得多。
-func TestCpApprovalCapRefusesToTruncate(t *testing.T) {
-	Convey("展开条数撞上审批上限", t, func() {
-		Convey("超过 200 条时报错，一个字节都不传", func() {
+func TestCpRangeApprovalDoesNotCapExpandedEntries(t *testing.T) {
+	Convey("范围获批后不按展开条数截断", t, func() {
+		Convey("201 条全部传输", func() {
 			ctx, calls := setupCpDialogs(t, "allow", "allow")
 			seedCpSource(cpSourceNames(201)...)
 
@@ -499,11 +405,9 @@ func TestCpApprovalCapRefusesToTruncate(t *testing.T) {
 				"src": "sink-01:/src/", "dst": "sink-01:/backup/", "recursive": true,
 			})
 
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "201")
-			So(err.Error(), ShouldContainSubstring, "200")
-			So(cpBatchCalls(*calls), ShouldHaveLength, 0)
-			So(cpFake.written, ShouldBeEmpty)
+			So(err, ShouldBeNil)
+			So(cpBatchCalls(*calls), ShouldHaveLength, 1)
+			So(cpFake.written, ShouldHaveLength, 201)
 		})
 
 		Convey("恰好 200 条仍然放行", func() {
@@ -517,6 +421,27 @@ func TestCpApprovalCapRefusesToTruncate(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(cpBatchCalls(*calls), ShouldHaveLength, 1)
 			So(cpFake.written, ShouldHaveLength, 200)
+		})
+	})
+}
+
+func TestCpReportsEachCompletedEntryToAnInteractiveCaller(t *testing.T) {
+	Convey("recursive cp reports one progress event after each successful entry", t, func() {
+		ctx := setupCpPreapproved(t)
+		seedCpSource("a.log", "bb.log")
+		var progress []CpProgress
+		ctx = WithCpProgressObserver(ctx, func(event CpProgress) {
+			progress = append(progress, event)
+		})
+
+		_, err := handleCp(ctx, map[string]any{
+			"src": "sink-01:/src/", "dst": "sink-01:/backup/", "recursive": true,
+		})
+
+		So(err, ShouldBeNil)
+		So(progress, ShouldResemble, []CpProgress{
+			{Completed: 1, Total: 2, Src: "/src/a.log", Dst: "/backup/a.log", Bytes: 5},
+			{Completed: 2, Total: 2, Src: "/src/bb.log", Dst: "/backup/bb.log", Bytes: 6},
 		})
 	})
 }

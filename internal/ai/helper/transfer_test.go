@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/pkg/sftp"
@@ -399,6 +400,46 @@ func newTestSFTP(t *testing.T) *sftp.Client {
 		<-served
 	})
 	return client
+}
+
+func TestSSHTransferReusesOneSFTPSessionPerAsset(t *testing.T) {
+	root := sshTestTree(t)
+	var dials atomic.Int32
+	ownedCloser := &fakeCloser{}
+	cache := newSFTPClientCache(func(context.Context, int64) (*sftp.Client, io.Closer, error) {
+		dials.Add(1)
+		return newTestSFTP(t), ownedCloser, nil
+	})
+	ctx := WithSFTPClientCache(context.Background(), cache)
+	asset := &asset_entity.Asset{ID: 7, Type: asset_entity.AssetTypeSSH}
+
+	listing, err := sshTransfer.List(ctx, asset, root, true)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, entry := range listing.Entries {
+		r, _, openErr := sshTransfer.OpenRead(ctx, asset, entry.Path)
+		if openErr != nil {
+			t.Fatalf("OpenRead(%q): %v", entry.Path, openErr)
+		}
+		dst := filepath.Join(root, "copied", entry.RelPath)
+		if writeErr := sshTransfer.Write(ctx, asset, dst, r, entry.Size); writeErr != nil {
+			t.Fatalf("Write(%q): %v", dst, writeErr)
+		}
+		if closeErr := r.Close(); closeErr != nil {
+			t.Fatalf("Close(%q): %v", entry.Path, closeErr)
+		}
+	}
+	if got := dials.Load(); got != 1 {
+		t.Fatalf("SFTP dials = %d, want 1 for List plus %d reads and writes on the same asset",
+			got, len(listing.Entries))
+	}
+	if err := cache.Close(); err != nil {
+		t.Fatalf("Close cache: %v", err)
+	}
+	if got := ownedCloser.closed.Load(); got != 1 {
+		t.Fatalf("owned SSH chain closer calls = %d, want 1", got)
+	}
 }
 
 // sshTestTree 铺一棵目录树：两个 .log、一个不匹配的 .txt、一个子目录、一个名字也匹配

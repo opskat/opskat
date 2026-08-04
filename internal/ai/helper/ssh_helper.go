@@ -30,6 +30,83 @@ type sshCacheKeyType struct{}
 // SSHClientCache 在同一次 AI Send 中复用 SSH 连接。
 type SSHClientCache = ConnCache[*ssh.Client]
 
+// SFTPClientCache 在一次 cp 命令内按资产复用 SFTP 会话。
+type SFTPClientCache struct {
+	clients *ConnCache[*sftp.Client]
+	dial    func(context.Context, int64) (*sftp.Client, io.Closer, error)
+}
+
+type sftpCacheKeyType struct{}
+
+// NewSFTPClientCache 创建使用真实资产连接的任务级 SFTP cache。
+func NewSFTPClientCache() *SFTPClientCache {
+	return newSFTPClientCache(dialAssetSFTP)
+}
+
+func newSFTPClientCache(dial func(context.Context, int64) (*sftp.Client, io.Closer, error)) *SFTPClientCache {
+	return &SFTPClientCache{clients: NewConnCache[*sftp.Client]("SFTP"), dial: dial}
+}
+
+func (c *SFTPClientCache) Close() error { return c.clients.Close() }
+
+func (c *SFTPClientCache) client(ctx context.Context, assetID int64) (*sftp.Client, error) {
+	client, _, err := c.clients.GetOrDial(assetID, func() (*sftp.Client, io.Closer, error) {
+		return c.dial(ctx, assetID)
+	})
+	return client, err
+}
+
+// WithSFTPClientCache 把任务级 SFTP cache 注入传输调用链。
+func WithSFTPClientCache(ctx context.Context, cache *SFTPClientCache) context.Context {
+	return context.WithValue(ctx, sftpCacheKeyType{}, cache)
+}
+
+func getSFTPClientCache(ctx context.Context) *SFTPClientCache {
+	cache, _ := ctx.Value(sftpCacheKeyType{}).(*SFTPClientCache)
+	return cache
+}
+
+// EnsureSFTPClientCache 复用已有 cache，或创建一个由调用方负责关闭的新 cache。
+// 第三个返回值说明本次调用是否拥有新 cache。
+func EnsureSFTPClientCache(ctx context.Context) (context.Context, *SFTPClientCache, bool) {
+	if cache := getSFTPClientCache(ctx); cache != nil {
+		return ctx, cache, false
+	}
+	cache := NewSFTPClientCache()
+	return WithSFTPClientCache(ctx, cache), cache, true
+}
+
+func dialAssetSFTP(ctx context.Context, assetID int64) (*sftp.Client, io.Closer, error) {
+	if sshCache := getSSHCache(ctx); sshCache != nil {
+		client, _, err := sshCache.GetOrDial(assetID, func() (*ssh.Client, io.Closer, error) {
+			sshClient, extras, dialErr := credential_resolver.Default().DialAssetSSH(ctx, assetID)
+			if dialErr != nil {
+				return nil, nil, dialErr
+			}
+			return sshClient, ClosersAsOne(extras), nil
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		sftpClient, err := sftp.NewClient(client)
+		if err != nil {
+			sshCache.Remove(assetID)
+			return nil, nil, fmt.Errorf("failed to create SFTP client: %w", err)
+		}
+		return sftpClient, nil, nil
+	}
+	client, cleanup, err := DialAssetSSH(ctx, assetID)
+	if err != nil {
+		return nil, nil, err
+	}
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	return sftpClient, closerFunc(func() error { cleanup(); return nil }), nil
+}
+
 // NewSSHClientCache 创建 SSH 客户端缓存。
 func NewSSHClientCache() *SSHClientCache {
 	return NewConnCache[*ssh.Client]("SSH")
@@ -228,10 +305,27 @@ func RunSSHCommand(ctx context.Context, client *ssh.Client, command string) (str
 	return output, nil
 }
 
-// ExecuteWithSFTP 创建临时 SSH+SFTP 连接并执行操作。
+// ExecuteWithSFTP 在 context 带任务级 SFTP cache 时复用该资产的会话；普通调用保持一次性
+// SSH+SFTP 连接语义。
 // ctx 取消时主动关闭底层连接以打断 fn 内部可能的 io.Copy 阻塞，
 // 从而让 AI 停止会话能立即生效（否则大文件传输会挂住 runner.Stop）。
 func ExecuteWithSFTP(ctx context.Context, assetID int64, fn func(*sftp.Client) error) error {
+	if cache := getSFTPClientCache(ctx); cache != nil {
+		client, err := cache.client(ctx, assetID)
+		if err != nil {
+			return err
+		}
+		stopWatch := closeOnCancel(ctx, client)
+		defer stopWatch()
+		if err := fn(client); err != nil {
+			if ctx != nil && ctx.Err() != nil {
+				cache.clients.Remove(assetID)
+				return ctx.Err()
+			}
+			return err
+		}
+		return nil
+	}
 	client, cleanup, err := DialAssetSSH(ctx, assetID)
 	if err != nil {
 		return err
@@ -264,10 +358,30 @@ func ExecuteWithSFTP(ctx context.Context, assetID int64, fn func(*sftp.Client) e
 
 // openSFTPFile 打开远端文件用于流式读取，返回 reader 与文件大小。
 //
-// 与 ExecuteWithSFTP 互补：那个在 fn 返回时就把 SFTP 与 SSH 连接拆掉，因此不能用来交出一个
-// 必须活过调用本身的 reader（传输面的 OpenRead 正是这个形状）。这里把两条连接的生命周期绑在
-// 返回的 ReadCloser 上，Close 时一并释放；打开失败的路径同样负责拆干净。
+// 一次性路径把连接生命周期绑在返回的 ReadCloser 上；任务 cache 路径只把远端文件句柄绑给
+// reader，SFTP/SSH 会话由整个 cp 命令统一关闭。
 func openSFTPFile(ctx context.Context, assetID int64, path string) (io.ReadCloser, int64, error) {
+	if cache := getSFTPClientCache(ctx); cache != nil {
+		client, err := cache.client(ctx, assetID)
+		if err != nil {
+			return nil, 0, err
+		}
+		file, err := client.Open(path)
+		if err != nil {
+			return nil, 0, ctxErrOr(ctx, fmt.Errorf("failed to open remote file: %w", err))
+		}
+		stopWatch := closeOnCancel(ctx, file, closerFunc(func() error {
+			cache.clients.Remove(assetID)
+			return nil
+		}))
+		reader := newConnBoundReadCloser(ctx, file, stopWatch)
+		info, err := file.Stat()
+		if err != nil {
+			_ = reader.Close()
+			return nil, 0, ctxErrOr(ctx, fmt.Errorf("failed to stat remote file: %w", err))
+		}
+		return reader, info.Size(), nil
+	}
 	client, cleanup, err := DialAssetSSH(ctx, assetID)
 	if err != nil {
 		return nil, 0, err

@@ -34,5 +34,12 @@ func TestMatchPathRule(t *testing.T) {
 		Convey("空 pattern 不放行", func() {
 			So(MatchPathRule("", "/etc/passwd"), ShouldBeFalse)
 		})
+
+		Convey("尾随斜杠表示整棵目录树，但不覆盖相邻目录", func() {
+			So(MatchPathRule("/opt/app/", "/opt/app/deploy.sh"), ShouldBeTrue)
+			So(MatchPathRule("/opt/app/", "/opt/app/releases/v2/bin"), ShouldBeTrue)
+			So(MatchPathRule("/opt/app/", "/opt/application/secret"), ShouldBeFalse)
+			So(MatchPathRule("/opt/app/", "/opt/app"), ShouldBeFalse)
+		})
 	})
 }

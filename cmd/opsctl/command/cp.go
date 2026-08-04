@@ -24,8 +24,8 @@ import (
 // callHandler(ctx, handlers, "cp", …)。
 //
 // 审批必须由 opsctl 自己走完：cp 工具内部的权限检查对已预检的调用方是豁免的
-// （permission.WithPreapproved），豁免的边界因此就是这里——展开出的每一条路径都要在
-// 动手之前作为具体主体被授权（spec 第 9 行的硬不变式 / D17 / D18）。
+// （permission.WithPreapproved），因此单文件的具体路径或递归/通配的两端范围都在这里先
+// 授权，获批后共享工具才连接、展开并传输（D17/D18）。
 func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		printCpUsage()
@@ -44,6 +44,14 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 		ctx = aictx.WithSessionID(ctx, session)
 	}
 	ctx = aictx.WithAuditSource(ctx, "opsctl")
+	ctx, sftpCache, ownsSFTPCache := helper.EnsureSFTPClientCache(ctx)
+	if ownsSFTPCache {
+		defer func() { _ = sftpCache.Close() }()
+	}
+	ctx = tool.WithCpProgressObserver(ctx, func(progress tool.CpProgress) {
+		fmt.Fprintf(os.Stderr, "Transferred %d/%d: %s -> %s (%d bytes)\n",
+			progress.Completed, progress.Total, progress.Src, progress.Dst, progress.Bytes)
+	})
 
 	dst, err := parseCpEndpoint(ctx, rest[len(rest)-1])
 	if err != nil {
@@ -131,8 +139,8 @@ func cmdCpSingleSource(
 // （spec §6.5）。判的是**形态**不是命中条数——一个只命中一个文件的 glob 仍然是多源，
 // 它的落点是目的基点 + RelPath 而不是字面 dst。
 //
-// 两段授权：会枚举的那些源先各按自己的基点批一次"列出"（D18），再把展开出的每一条具体
-// 路径塞进同一个批量对话框（D17）。该过的都过了才动第一个字节。
+// 递归/通配审批源与目的范围，明确列出的多个文件审批各自具体路径；全部通过后才调用共享
+// 工具连接、展开并传输（D17/D18）。
 func cmdCpMultiSource(
 	ctx context.Context, handlers map[string]tool.ToolHandlerFunc,
 	srcs []*cpEndpoint, dst *cpEndpoint, recursive bool,
@@ -149,68 +157,20 @@ func cmdCpMultiSource(
 	}
 	detail := cpDetail(srcs, dst)
 
-	// 第一段·展开授权。枚举读的是元数据而不是内容，但 `cp -r web-01:/ ./x` 能把整棵文件树
-	// 的结构拖出来，所以它自己要过一次授权（D18）。交给适配器的是用户指名的那个串，
-	// 收窄到"实际会被枚举的基点"由适配器自己做。
-	//
-	// 只有真的会枚举的源要这一道：指名 N 个源却既无 -r 也无通配时没有任何结构被拖出来
-	// （指名的源若是目录，无 -r 时 List 本来就直接报错），要一次"列出这个基点"的授权
-	// 比"复制这一个指名对象"宽——方向上就是"批准一件事、拿到另一件"，只是宽在授权侧。
-	//
-	// 收窄的是**索取的授权**，不是审批与副作用的先后：不枚举的源因此连 List 都不发，
-	// 它的那一条由 cpNamedListing 在本地算出（见那里）。少要一次授权、却照旧连上去
-	// Stat 一遍，换来的是一次未经授权也未经审计的"这个路径在不在、多大"——比原来那次
-	// 过宽的授权更糟，也与 cmdCpSingleSource 对同一件事的答复相反。
-	expanded := make([]*helper.ListResult, len(srcs))
-	entryCount := 0
-	for i, src := range srcs {
-		if !cpSourceExpands(src, recursive) {
-			expanded[i] = cpNamedListing(src.path)
-			entryCount++
+	// 递归/通配直接审批源范围与目的范围；在审批之前不连接远端、不枚举目录。明确列出的
+	// 多个文件仍逐个审批，因为它们的完整路径已经由用户给出，不需要扫描。
+	subjects := make([]cpSubject, 0, 2*len(srcs))
+	seen := make(map[cpSubject]bool, 2*len(srcs))
+	plans := make([]cpTransferPlan, 0, len(srcs))
+	for _, src := range srcs {
+		if cpSourceExpands(src, recursive) {
+			subjects = appendCpSubject(subjects, seen, src, src.path, helper.DirReadScope)
+			subjects = appendCpSubject(subjects, seen, dst, dst.path, helper.DirWriteScope)
+			plans = append(plans, cpTransferPlanFor(src, dst, nil, recursive))
 			continue
 		}
-
-		approvalCtx, result, approvalAssetID, err := requireCpApproval(ctx,
-			[]cpTarget{{ep: src, dir: helper.DirList, path: src.path}}, detail)
-		ctx = approvalCtx
-		if err != nil {
-			return cpApprovalFailed(ctx, srcs, dst, approvalAssetID, err, result)
-		}
-
-		res, err := src.adapter.List(ctx, src.asset, src.path, recursive)
-		if err != nil {
-			// 原样透出：List 的错误已经点名了那些目录/前缀并指向 recursive，在这里再包一层
-			// 措辞只会让同一件事有两种说法。
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
-		}
-		if len(res.Entries) == 0 {
-			// 三个适配器在零命中时一律返回空清单且不报错——那个判断留给调用方。在 cp 里它
-			// 一定是错的：真实的 cp 对无匹配同样非零退出，一次静默的零文件"成功"正是 D19
-			// 否决的那类"看起来成功、实际只传了一部分"。
-			fmt.Fprintf(os.Stderr, "Error: no files matched %q\n", src.raw)
-			return 1
-		}
-		expanded[i] = res
-		entryCount += len(res.Entries)
-	}
-	if entryCount > cpMaxEntries {
-		// 上限不是性能考虑，是审批质量：五千条的对话框不是决策，是橡皮图章。截断到前 200 条
-		// 会换来更糟的东西——一次看起来成功、实际只复制了一部分的传输（D19）。
-		fmt.Fprintf(os.Stderr,
-			"Error: the sources expand to %d entries, more than the %d that can be reviewed in one approval; "+
-				"narrow the pattern (nothing was transferred)\n", entryCount, cpMaxEntries)
-		return 1
-	}
-
-	// 第二段·传输授权。为每个 entry 生成源读 + 目的写两个主体，读写成对相邻：一条待批准的
-	// 传输是"从这里读、写到那里"，把两半拆到一份清单的首尾两段，用户就没法逐条看出哪个
-	// 文件会落到哪里。
-	subjects := make([]cpSubject, 0, 2*entryCount)
-	seen := make(map[cpSubject]bool, 2*entryCount)
-	plans := make([]cpTransferPlan, 0, len(srcs))
-	for i, src := range srcs {
-		for _, entry := range expanded[i].Entries {
+		listing := cpNamedListing(src.path)
+		for _, entry := range listing.Entries {
 			dstPath := dst.path + entry.RelPath
 			// 形态校验排在这次传输的审批项之前：目的端不经过 List，ApprovalSubject 又不能
 			// 报错，少了这一关，一个形态错误的目的地会带着错误的主体走完审批、到写入才失败。
@@ -221,7 +181,7 @@ func cmdCpMultiSource(
 			subjects = appendCpSubject(subjects, seen, src, entry.Path, helper.DirRead)
 			subjects = appendCpSubject(subjects, seen, dst, dstPath, helper.DirWrite)
 		}
-		plans = append(plans, cpTransferPlanFor(src, dst, expanded[i], recursive))
+		plans = append(plans, cpTransferPlanFor(src, dst, listing, recursive))
 	}
 
 	batchResult, err := cpBatchApprovalFn(ctx, subjects, detail)
@@ -238,9 +198,6 @@ func cmdCpMultiSource(
 	// 目的地，而"残缺"这件事从目的端是看不出来的。
 	for i, plan := range plans {
 		params := cpToolParams(plan.src.arg, plan.dstArg, recursive, plan.src.assetID(), dst.assetID())
-		if plan.listing != nil {
-			params[tool.CpApprovedListingArg] = plan.listing
-		}
 		exitCode := callHandler(ctx, handlers, "cp", params, decision)
 		if exitCode != 0 {
 			if len(plans) > 1 {
@@ -258,21 +215,17 @@ func cmdCpMultiSource(
 type cpTransferPlan struct {
 	src    *cpEndpoint
 	dstArg string
-	// listing 是这条源刚刚被逐条审批过的那份展开结果，枚举形态下原样交给工具，工具据此
-	// 传输而**不再自己展开**（tool.CpApprovedListingArg）。单源形态为 nil：那条路的两端都是
-	// 字面量，没有第二次展开，也就没有这条缝。
-	listing *helper.ListResult
 }
 
-// cpTransferPlanFor 按源的形态定这条源怎么交给工具。落点与清单必须由同一处决定：拼好的
-// 具体落点配上一份按 RelPath 算落点的清单，是两种落点语义打架。
+// cpTransferPlanFor 按源的形态定这条源怎么交给工具：枚举形态交出目的基点，明确文件交出
+// 已经按 basename 拼好的具体落点。
 //
 // 被指名的源恒展开成一条——那一条由 cpNamedListing 直接给出，不经过 List——拼出来的落点
 // 与它自己那条审批主体逐字相同。它若其实是个目录/前缀，报错的是工具（TransferAdapter.List
 // 的"指名一个目录却没有 recursive"那一支），排在这次读被批准之后。
 func cpTransferPlanFor(src, dst *cpEndpoint, listing *helper.ListResult, recursive bool) cpTransferPlan {
 	if cpSourceExpands(src, recursive) {
-		return cpTransferPlan{src: src, dstArg: dst.arg, listing: listing}
+		return cpTransferPlan{src: src, dstArg: dst.arg}
 	}
 	return cpTransferPlan{src: src, dstArg: dst.argFor(dst.path + listing.Entries[0].RelPath)}
 }
@@ -295,8 +248,8 @@ func cpSourceExpands(src *cpEndpoint, recursive bool) bool {
 // 多大"。cmdCpSingleSource 对完全相同的形态早就是这个答复（见那里的注释），两条路因此
 // 一致：被指名的路径在解析时就已完全确定，动手之前该发生的只有审批。
 //
-// Size 留零：它只服务展开出的条目的展示，而这份清单不会交给工具（cpTransferPlanFor 只对
-// 枚举形态带 listing），也不进审批主体——主体是路径，不是大小。
+// Size 留零：这份单条结果只用于计算明确文件的目的 basename，也不进审批主体——主体是路径，
+// 不是大小。
 func cpNamedListing(path string) *helper.ListResult {
 	// filepath.Base 而非 path.Base：本地端的路径在 Windows 上是 `\` 分隔的绝对路径，
 	// 而远端路径恒为 `/` 分隔——filepath 在 Windows 上两种分隔符都认，在 Unix 上本来就
@@ -475,9 +428,6 @@ func appendCpSubject(
 	return append(subjects, subject)
 }
 
-// cpMaxEntries 是一次 cp 允许展开出的条目上限（D19）。超出即报错，不截断。
-const cpMaxEntries = 200
-
 // cpSubject 是一条待授权的端点访问：某个端点上的某条**具体**路径在某个方向上的主体。
 type cpSubject struct {
 	approvalType string
@@ -500,13 +450,11 @@ var cpBatchSendFn = requireBatchApproval
 // cpSSHProxyClientFn 允许单测显式关闭 proxy 探测，避免读取默认用户数据目录下的 socket/token。
 var cpSSHProxyClientFn = getSSHProxyClient
 
-// requireCpBatchApproval 让展开出的每一条主体过一次授权：逐条查策略与 grant，需要确认的
-// **全部塞进同一个审批对话框**（spec §6.5 第二段 / D17），与 AI 侧 checkAccessBatch 同形。
-// 逐条弹 N 次框不可用；批一条递归 pattern 会顺带放宽 local_write/local_edit 那道共用的
-// 匹配器，因此主体始终是展开后的具体路径。
+// requireCpBatchApproval 让本次传输的远端范围过授权；递归/通配提交目录或对象前缀，
+// 明确列出的多个文件提交各自的具体路径。
 //
-// detail 是这次传输的"从哪到哪"（cpDetail），原样搭在每一条 item 上——折叠摘要（§8 item 7）
-// 靠它显示"两端基点"，单端点那条路（requireCpApproval）早已这么做。
+// detail 是这次传输的"从哪到哪"（cpDetail），原样搭在每一条范围 item 上，供审批弹窗
+// 同时展示另一端；单端点那条路（requireCpApproval）也使用同一字段。
 //
 // 批量审批没有"始终允许"（ApprovalKindBatch 只允许整批本次放行或拒绝），所以多源 cp
 // 不落常驻 grant，重跑要重新批准全部条目——这是 §6.5【实施期更正】裁定接受的缺口。
@@ -691,14 +639,12 @@ Multiple Sources:
   With -r, a glob pattern, or more than one source, the destination must end
   with "/" and each entry lands at <destination>/<path relative to the source
   base>. Quote remote globs so the local shell does not expand them first.
-  The sources may expand to at most 200 entries: beyond that the whole transfer
-  is an error, never a partial copy. Symlinks are skipped and reported.
+  Symlinks encountered during expansion are skipped and reported.
 
 Approval:
   Every asset endpoint is authorized separately under that asset's own policy,
-  before any byte is transferred. Recursive/glob transfers first ask for
-  permission to list the source, then batch every expanded path into a single
-  approval dialog.
+  before any byte is transferred. Recursive/glob transfers approve the source
+  and destination directory/object-prefix scopes before listing their contents.
 
 Examples:
   opsctl cp ./config.yml web-server:/etc/app/config.yml   Upload by name

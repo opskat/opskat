@@ -326,7 +326,7 @@ The path after `:` must start with `/`. When the part before the colon does name
 - Wildcards work on the remote side too, but **must be quoted** so the local shell doesn't expand them first: `opsctl cp 'web-01:/var/log/*.log' s3-prod:/bucket/logs/`
 - Several sources with one destination is fine: `opsctl cp ./a.txt ./b.txt web-01:/opt/app/`
 - With `-r`, a wildcard, or several sources, the **destination must end with `/`** — the landing path is the destination plus each entry's path relative to the expansion base. There is no `cp`-style "does the destination exist" guessing.
-- Every expanded path is approved individually, in one batch dialog. Over **200 entries is an error**, not a truncation — narrow the pattern.
+- Recursive and glob transfers approve the source and destination directory/object-prefix scopes before listing. Files inside those approved scopes are then enumerated and transferred without a per-file approval dialog.
 - The first failed entry aborts the whole transfer and reports how many of how many were transferred.
 - A symlink you name directly as a source or destination is followed, matching POSIX `cp`. One encountered while expanding a wildcard or recursive walk is skipped and reported instead — that keeps `cp -r ./dir ...` from escaping into whatever the link points at.
 

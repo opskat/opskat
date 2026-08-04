@@ -6,6 +6,7 @@ import (
 	"io"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -50,10 +51,9 @@ type fakeOSSClient struct {
 }
 
 func (c *fakeOSSClient) ListObjects(
-	_ context.Context, _, prefix string, maxKeys int, startAfter string,
-) ([]oss_svc.ObjectItem, error) {
-	// 第一步：服务端按 key 序分组。startAfter 是**排他**的，且过滤发生在分组之前——
-	// 因此一个公共前缀只要还有 key 大于游标，就会被再次交出来。
+	_ context.Context, _, prefix string, maxKeys int, continuationToken string,
+) (*oss_svc.ListObjectsPage, error) {
+	// 第一步：服务端按 key 序分组，再用 opaque continuation token 选择这一页。
 	type entry struct {
 		item     oss_svc.ObjectItem
 		rolledUp bool // 是 CommonPrefixes 里的一条，而不是 Contents 里的
@@ -61,7 +61,7 @@ func (c *fakeOSSClient) ListObjects(
 	var page []entry
 	lastPrefix := ""
 	for _, k := range slices.Sorted(maps.Keys(c.objects)) {
-		if !strings.HasPrefix(k, prefix) || k <= startAfter {
+		if !strings.HasPrefix(k, prefix) {
 			continue
 		}
 		if i := strings.Index(k[len(prefix):], "/"); i >= 0 {
@@ -79,9 +79,22 @@ func (c *fakeOSSClient) ListObjects(
 		item.IsPrefix = item.Size == 0 && strings.HasSuffix(k, "/")
 		page = append(page, entry{item: item})
 	}
-	// MaxKeys 管的是 Contents + CommonPrefixes 的总条数；client_minio.go 多要一条来
-	// 判断"还有下一页"，因此这一页最多 maxKeys+1 条。
-	page = page[:min(len(page), maxKeys+1)]
+	offset := 0
+	if continuationToken != "" {
+		var err error
+		offset, err = strconv.Atoi(continuationToken)
+		if err != nil {
+			return nil, fmt.Errorf("fake OSS: invalid continuation token %q: %w", continuationToken, err)
+		}
+	}
+	if offset > len(page) {
+		offset = len(page)
+	}
+	page = page[offset:]
+	truncated := len(page) > maxKeys
+	if truncated {
+		page = page[:maxKeys]
+	}
 
 	// 第二步：minio 先逐条交出 Contents、再逐条交出 CommonPrefixes。
 	out := make([]oss_svc.ObjectItem, 0, len(page))
@@ -95,7 +108,11 @@ func (c *fakeOSSClient) ListObjects(
 			out = append(out, e.item)
 		}
 	}
-	return out, nil
+	result := &oss_svc.ListObjectsPage{Items: out, IsTruncated: truncated}
+	if truncated {
+		result.NextContinuationToken = strconv.Itoa(offset + len(page))
+	}
+	return result, nil
 }
 
 type fakeOSSPut struct {
@@ -346,11 +363,7 @@ func TestOSSTransferList_GlobMatchesNothing(t *testing.T) {
 	}
 }
 
-// 展开必须把前缀下的每一页都拉全，且**恰好**一次。
-//
-// 页边界落在公共前缀上时服务端会把它再交出来一次（游标是"上一页最后一条 key"，
-// 而过滤发生在按 "/" 分组之前），照单全收就会把整棵子树展开两遍：审批弹窗上出现
-// 重复条目，同一个对象被传两次。
+// 展开必须把前缀下的每一张真实 S3 页都拉全，且每棵子树恰好下钻一次。
 func TestOSSTransferList_PaginatesWithoutRepeatingPrefixAtPageBoundary(t *testing.T) {
 	objects := make(map[string]string, fakeOSSPageSize+10)
 	for i := range fakeOSSPageSize - 1 { // logs/000.txt … logs/198.txt，本层第 1..199 条
@@ -371,15 +384,10 @@ func TestOSSTransferList_PaginatesWithoutRepeatingPrefixAtPageBoundary(t *testin
 	assertExpandedExactlyOnce(t, got, objects, "logs/")
 }
 
-// 分页游标必须对得住它的 start-after 语义，而**服务端交货不是按 key 排序的**：
-// minio 对每个 S3 响应先交 Contents、再交 CommonPrefixes（api-list.go:164-177），
-// 而 S3 是把两者合起来按 key 序截到 MaxKeys 的。于是页边界两侧各有一种翻车方式，
-// 两种都会让一次 cp -r 报成功而结果是错的。
+// Contents 与 CommonPrefixes 在 S3 响应中是两组字段；无论页边界落在哪一组，opaque
+// continuation token 都必须让递归展开一条不少、一条不重。
 func TestOSSTransferList_PaginatesAcrossTheServerSideItemOrder(t *testing.T) {
-	// 漏传：桶根下一个 archive/ 加 b001…b200。S3 首页按 key 序是
-	// [archive/, b001…b200]，minio 交出来是 [b001…b200, archive/]，
-	// 于是 archive/ 落在页外而游标停在 b200——archive/ 下的 key 全都小于 b200，
-	// 下一页的 startAfter 再也够不着它们，整棵子树静默消失。
+	// 公共前缀排在大量本层对象之前时，整棵 archive/ 仍必须被遍历。
 	omission := make(map[string]string, fakeOSSPageSize+2)
 	omission["archive/old.log"] = "x"
 	omission["archive/deep/older.log"] = "x"
@@ -387,10 +395,7 @@ func TestOSSTransferList_PaginatesAcrossTheServerSideItemOrder(t *testing.T) {
 		omission[fmt.Sprintf("b%03d", i)] = "x"
 	}
 
-	// 重传：桶根下 p001/…p200/ 各一个对象，外加一个排在它们之后的对象 z.txt。
-	// minio 先交 z.txt、再交 200 个公共前缀，页边界落在前缀里，游标停在 p199/——
-	// 而 z.txt 本页已经交出去了且排在游标之后，下一页会把它再交一遍：
-	// 条目重复、字节重复读写、条数虚高。
+	// 大量公共前缀排在本层对象之前时，z.txt 仍只能被遍历一次。
 	duplication := make(map[string]string, fakeOSSPageSize+1)
 	for i := 1; i <= fakeOSSPageSize; i++ {
 		duplication[fmt.Sprintf("p%03d/o.txt", i)] = "x"

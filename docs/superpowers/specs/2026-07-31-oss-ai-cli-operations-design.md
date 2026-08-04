@@ -6,7 +6,7 @@
 
 **目标**：让 `oss` 资产像 ssh/database/redis/mongodb/etcd/kafka/k8s 一样，通过统一 `exec` 接缝获得一套可脚本化、可审批、可审计的结构化对象存储操作，AI 与 opsctl 共用同一份执行与权限实现。
 
-**硬不变式**：**每一条实际被读写的路径 / 对象 key，都必须在动手之前作为一个具体主体被授权过**——单次传输如此，递归与通配展开出的每一条也如此；`exec` 与 `cp` 两条入口都成立。且 OSS 的权限判定只走 OSS 自己的策略语义，绝不落到 shell 命令策略或 cp 的路径式授权上。
+**硬不变式**：**每一次实际读写都必须落在动手前已经授权的边界内**——单次传输授权具体路径，递归与通配授权源与目的目录/对象前缀范围；`exec` 与 `cp` 两条入口都成立。且 OSS 的权限判定只走 OSS 自己的策略语义，绝不落到 shell 命令策略或 cp 的路径式授权上。
 
 ---
 
@@ -35,7 +35,7 @@
 3. 覆盖 issue 列出的 9 个操作：list buckets、list objects、stat、upload、download、copy、move、delete、presign。
 4. opsctl 经 `opsctl exec` 获得全部 9 个操作。
 5. 传输面收敛成**一个 `cp`**：AI 的 `upload_file` + `download_file` 合并为 `cp(src, dst)`，与 `opsctl cp` 共用端点解析、适配器与权限检查。两个入口都支持本地 / SSH / OSS 的任意两端组合，每一端各自按它所属资产类型的权限语义单独审批。
-6. `cp` 支持递归（`-r`）与通配复制，展开出的每一条都是独立的审批主体，一次性批量确认。
+6. `cp` 支持递归（`-r`）与通配复制；连接和展开前一次性审批源与目的目录/对象前缀范围。
 7. 审批弹窗、grant、审计三处展示与匹配的都是同一个规范形式；预签名 URL 的签名参数不入库。
 
 ### 非目标
@@ -183,8 +183,8 @@ copy / move 派生多条是本设计的核心安全点：只检查目的地就�
 
 因此把不变式改写成**生产者侧的义务**，而不是靠这条豁免去兜：
 
-- `DirRead` / `DirWrite` 的主体**必须指名一个具体对象**；前缀形状的读写主体是畸形输入，必须落成匹配不上任何东西的惰性串（`efb8aebf` 已如此实现）。
-- `DirList` 的主体**可以**是前缀形状，且应当落库——它等于用户刚刚批准的那次递归枚举，范围一致。
+- `DirRead` / `DirWrite` 的主体**必须指名一个具体对象**；前缀形状的单对象读写主体是畸形输入，必须落成匹配不上任何东西的惰性串（`efb8aebf` 已如此实现）。
+- `DirList` 以及递归 cp 的 `DirReadScope` / `DirWriteScope` 主体可以是前缀形状；后两者同时界定枚举与实际读写范围。
 
 代价要说清楚：字符串本身分不出"用户手写"与"适配器给出"，所以这条不变式目前**由每个适配器的 `ApprovalSubject` 各自保证，接缝上没有守卫**。新增 `TransferAdapter` 时必须一并遵守。要在接缝上真正拦住，得把来源透传进 `NormalizeGrantPatterns`——留待分支级评审裁定是否值得。
 
@@ -264,7 +264,7 @@ cp 当前是一个 4 分支的 switch，直连路径在 `cmd/opsctl/command/cp.g
 ```go
 // internal/ai/helper/transfer.go —— 端点解析（<asset>:<path>，经 assetref.Resolve）
 // 与适配器注册表同处一处：它们描述的是同一件事，即"什么是一个传输端点"。
-type Direction int // DirRead | DirWrite | DirList
+type Direction int // DirRead | DirWrite | DirList | DirReadScope | DirWriteScope
 
 // Entry 是一次展开产出的单个可传输条目。只有文件/对象，没有目录——
 // 目录由 RelPath 隐含，目的端按需创建。
@@ -401,25 +401,15 @@ cp(src="s3-prod:/bucket/dist/*.js", dst="/tmp/js/")
 
 **不复刻 POSIX `cp` 的目的地推断**（`cp -r a b`：b 存在则落 `b/a`，不存在则落 `b`）。那套语义要探测目的地是否存在、是否是目录，结果依赖一次 TOCTOU 式的探测，而这里的目的地必须在**审批之前**就完全确定——批的是哪些具体路径，写的就必须是哪些。强制尾随 `/` 让目的地纯由输入决定，没有探测，没有惊喜。见决策 D16。
 
-#### 展开与审批：两段
+#### 目录范围审批
 
-**第一段 · 展开授权。** 枚举读的是元数据（名字、大小），不是内容，但 `cp -r web-01:/ ./x` 能把整棵文件树的结构拖出来，所以它自己要过一次授权：向源端适配器要 `ApprovalSubject(base, DirList)`——SSH 是 `("cp", <base>)`，OSS 是 `("oss", "object.list <bucket>/<prefix>/")`。OSS 侧因此在默认只读组下自动放行（`object.list *` 在 `builtin:oss-readonly` 里），常见路径上完全无感；SSH 侧是一次新的确认，批准后落 grant，重复执行不再打断。
+**【实施期更正 · 用户裁定】递归与通配传输审批目录/对象前缀，不为每个展开条目生成审批项。** AI 与 opsctl 都先把源范围和目的范围放进同一次批量审批；获批之后才由共享 `cp` 工具执行 `List` 并传输。审批前不连接远端、不递归扫描目录，因此不再有 200 条审批清单上限。
 
-**【实施期澄清】展开授权只在真的会枚举时索取，即 `recursive` 为真或源含通配元字符。** 「何时算多源」把"给了多个源"也算作多源形态（对 D16 的目的地规则而言这是对的），但 `opsctl cp a b dst/` 这种**指名 N 个源**的形态不枚举任何东西：每个源都是用户自己写全的路径，若它是目录，无 `-r` 时本来就直接报错。对它索取 `DirList` 会要来一个比实际能力更宽的授权（OSS 上是 `object.list <bucket>/<prefix>/`，宽于"复制这一个指名对象"），而 D18 的立论——"`cp -r web-01:/ ./x` 能把整棵文件树的结构拖出来"——在这种形态下不成立。同时 §6.2 要求两条入口的授权互相复用，而 AI 侧的多源形态本来就只有 `recursive || glob` 两种。收窄的方向是**要得更少**。
+SSH 的目录主体以尾随 `/` 表示整棵子树，`MatchPathRule` 对这种规则做边界安全的前缀匹配：`/opt/app/` 匹配 `/opt/app/releases/v2/bin`，但不匹配 `/opt/application/secret`。OSS 沿用既有 `<bucket>/<prefix>/` 递归前缀语义，源范围使用 `object.read`，目的范围使用 `object.write`。明确给出的单文件与多个单文件仍按具体路径审批。
 
-已知代价：`opsctl cp 3:/a 3:/b dst/` 现在会在任何审批之前对每个指名源做一次远端 `List`，此前那步被 `DirList` 审批挡着。没有任何东西被枚举，但"这个路径在那台资产上存不存在"因此成了无需授权即可回答的问题；而且这一次 `List` 在 SSH 上不止是一次 stat，是一次带认证的 SFTP 会话（`ExecuteWithSFTP`），OSS 上则是一次 `StatObject`——"连上去"本身也排到了审批之前，而单源 cp 仍然是先审批后连。判为可接受：调用者已经拥有该资产的 opsctl 访问权，且同样的信息本来也能从随后的传输失败里得到，只是更晚。
+目录获批后，执行阶段仍保留落点容器性校验、符号链接跳过、零命中报错和快速失败；这些检查不再被描述为审批前检查，因为不扫描就无法知道展开结果。
 
-**第二段 · 传输授权。** 展开完成后，为每个 entry 生成源读 + 目的写两个主体，去重，**一次性塞进同一个审批对话框**——`CommandConfirmFunc(ctx, kind string, items []ApprovalItem)` 本来就收切片，`batch_exec` 已经在用这条路。
-
-关键点：**审批主体始终是具体路径 / 具体 key，不是递归 pattern。** 因此 `policy.MatchPathRule` 一个字节都不用改——它同时是 `local_write` / `local_edit` 白名单的匹配器（`local_tool_gate.go:173`、`path_policy.go` 的注释明写共用），让它支持递归会顺带放宽本地写授权，是一次与 OSS 毫无关系的安全回归。见决策 D17。
-
-**【实施期更正 · 用户裁定】批量审批没有"始终允许"，因此多源 cp 的传输条目不落常驻 grant。** 第一段的展开授权不在此列：它是一次 `single` 审批（`cp` / `oss` 都是注册过的权限类型，`singleApprovalKind` 因此给出 `ApprovalKindSingle`），批准后照旧落 grant——上文那句"SSH 侧批准后落 grant，重复执行不再打断"与 D20 更正说的都是它。本节原先写的是"用户点『始终允许』时，`SaveGrantPatternsForApproval` 按条落 grant，重跑同一条 cp 直接命中、不再打断"。落到代码里不成立：`ParseApprovalResponse` 只对 `single` / `local_tool` 放行 `allowAll`（`internal/ai/permission/approval.go:72`），而 grant 只在 `ApprovalAllowAll` 时才落库（`checker.go:275`）；`ApprovalKindBatch` 的注释本身就写着"只允许整批本次放行或拒绝"，前端的「记住」开关也只给那两种 kind（`ApprovalBlock.tsx:58,248`）。多源 cp 走的正是 `batch`，所以"始终允许"在这条路上是一个 parse error，不是一次授权。
-
-要让它成立有两种改法，两种都被否决：让 `batch` 支持 `allowAll` 会顺带给 `batch_exec`（跨资产批量执行 shell 命令）与 opsctl 批量审批开同一个口子，是 issue 之外的、朝放宽方向的行为变更；新开一个 cp 专用的审批 kind 则要同时接后端与两个前端弹框，成本不属于本轮。**因此接受这个缺口：多源 cp 的每一次执行都要重新批准全部传输条目。** 单源 cp 不受影响（走 `single`，"始终允许"照常可用），`exec` 面的 OSS 命令也不受影响。跟进另开 issue。
-
-用户若在弹窗里把条目自己改写成 `/opt/app/*` 这类通配 grant，那是他用既有语义做的显式决定，不是系统替他放宽——这条对单源 cp 仍然成立。
-
-**条目上限 200。** 超出即报错，报出实际条数并要求收窄 pattern，**绝不静默截断**。上限不是性能考虑，是审批质量：五千条的对话框不是决策，是橡皮图章。
+**【连接生命周期更正】一次 `cp` 命令内，同一个 SSH 资产的列举、逐文件读取和逐文件写入共用一个任务级 SFTP 会话。** AI 路径在已有的 per-send `SSHClientCache` 上创建 SFTP subsystem；opsctl 在整条命令外层持有同样的任务缓存。任务成功、失败或取消后统一关闭会话与自有连接，避免 N 文件产生 N 次完整 SSH 握手。
 
 #### 失败、符号链接、进度
 
@@ -453,7 +443,7 @@ AI 工具的 `src` 保持单个字符串 + `recursive` 布尔：模型没有 she
 4. `PolicyGroupManager.tsx`：`POLICY_TYPES` 加 `{ key: "oss", label: "OSS" }`。该文件现有四处 `editState.policyType === "kafka" ? A : B` 的三元式（:552/:571/:577/:596）无法再表达三种取值——把这四处换成一张 `policyType → i18n key` 的小映射表。这是"光标下的就地修正"：不扩大分支，而是把已经在漂移的分支换成数据。
 5. `ApprovalBlock.tsx` / `OpsctlApprovalDialog.tsx`：类型→图标映射加 `oss`（复用 `resolveAssetIcon` 已有的 S3 图标语义，不新造图标）。
 6. `ai/ToolBlock.tsx` 的 `toolIcons`（:19-34）加 `cp`。`upload_file` / `download_file` 本来就不在这张表里（一直落到 `Terminal` 兜底），所以这是补齐而不是替换；两处测试里把已删除的 `upload_file` 换成 `cp`（`aiStore.test.ts:2111`、`ToolBlock.test.tsx:12,28` —— 它们只是拿它当任意工具名用，留着一个不存在的名字会误导后来人）。
-7. `ApprovalBlock.tsx` / `OpsctlApprovalDialog.tsx`：审批项超过 10 条时折叠为一行摘要（"从 `web-01:/var/log` 复制 137 个文件到 `s3-prod:/bucket/logs/`"）+ 展开查看全部。递归 cp 会一次送来上百条 `ApprovalItem`，原样铺开没法读。**安全模型不变**：折叠只是呈现，批准的仍然是那 N 条具体主体（D17）。这一项**不做原型**——它是既有列表上的标准渐进披露，用仓内已有的折叠交互模式，没有新的布局或层级决策；摘要行的文案在 i18n 里补两个 key。
+7. `ApprovalBlock.tsx` / `OpsctlApprovalDialog.tsx` 无需新增递归清单折叠：范围审批只展示源与目的范围，不会生成上百条逐文件 `ApprovalItem`。
 
 不改动：桌面对象浏览器、`OSSConfigSection`、`OSSDetailInfoCard`。
 
@@ -476,7 +466,7 @@ AI 工具的 `src` 保持单个字符串 + `recursive` 布尔：模型没有 she
 ## 10. 文档
 
 - `internal/ai/skills/oss/SKILL.md` 重写：保留 `put_asset` 的配置字段表，替换掉 "no command surface" 段，补命令语法、flag 参考、规则语义、审批粒度说明、以及"key 含空白可用引号、但不能有前后空白"这条限制。frontmatter 的 `description` 同步。
-- `plugin/opsctl/skills/opsctl/SKILL.md`：`exec` 的类型覆盖列表补 OSS；`cp` 段改写为"任意两端组合 + `-r` + 通配"，说明每端各自审批、OSS 端点写作 `<asset>:/<bucket>/<key>`、多源时目的地必须以 `/` 结尾、远端 glob 必须加引号、200 条上限、同资产 OSS 复制应改用 `object copy`。`printCpUsage` 同步。
+- `plugin/opsctl/skills/opsctl/SKILL.md`：`exec` 的类型覆盖列表补 OSS；`cp` 段改写为"任意两端组合 + `-r` + 通配"，说明每端各自审批、OSS 端点写作 `<asset>:/<bucket>/<key>`、多源时目的地必须以 `/` 结尾、远端 glob 必须加引号、同资产 OSS 复制应改用 `object copy`。`printCpUsage` 同步。
 - `internal/ai/runner/prompt_builder.go:161,163`：两处写死的 `upload_file / download_file for SFTP transfer` 改为 `cp(src, dst)`，并说明它跨 SSH 与对象存储。
 - `docs/ARCHITECTURE.md:107`：那句 "`upload_file` / `download_file` run the same gate under the `cp` face…" 改为 `cp` 单工具的表述——它现在描述的正是本轮要消除的中间状态。
 - `docs/references/adding-an-asset-type.md`：若其中列出的"已有 policy kind"清单需要同步，就地更新。
@@ -505,13 +495,13 @@ AI 工具的 `src` 保持单个字符串 + `recursive` 布尔：模型没有 she
 | **D14** | 删除 AI 的 `upload_file` / `download_file`，合并为 `cp(src, dst)`，与 `opsctl cp` 共用适配器。 | 否决"保留两个工具、只让它们内部改调适配器"：那样 AI 仍然只能本地↔SSH，SSH↔OSS 够不着，而工具描述里还要解释为什么 `upload_file` 不能上传到对象存储。否决"再加第三个 `transfer` 工具"：三个工具做一件事。**依据**：审计层早已把两者 `RegisterToolAlias(..., "cp")` 并注册了 `src`/`dst` 形状的 `cp` 提取器（`extractor_default.go:23-33`），`permission.GrantToolCp` 也早就是 `"cp"`——工具面是这条链上唯一还没收敛的一环。代价是一次破坏性变更，见 §6.3。 |
 | **D15** | OSS 端点路径写作 `<asset>:/<bucket>/<key>`（带前导斜杠）；冒号后不以 `/` 开头但前缀能解析成资产时**报错**。 | 否决"接受 `s3:bucket/key`"：现有解析器靠"冒号后以 `/` 开头"排除 `C:\windows`（`helpers.go:74-77`），放宽它要么误判 Windows 路径，要么要先解析前缀才能判断是不是远端。否决"两种写法都接受"：同义写法让模型多一种猜法。否决"写错时静默回落成本地路径"（现状行为）：那会把一次拼错的远端路径变成一句"文件不存在"，这正是 AGENTS.md 说的"吞掉错误"。 |
 | **D16** | 多源传输的目的地必须以 `/` 结尾；不复刻 POSIX `cp` 的目的地推断。 | 否决"照抄 `cp -r a b`（b 存在→`b/a`，不存在→`b`）"：那要先探测目的地是否存在且是目录，而目的路径必须在**审批之前**完全确定——批的是哪些具体路径，写的就得是哪些。探测式推断在探测与写入之间留了一条 TOCTOU 缝，且"少打一个斜杠就写到别处"是这类命令最经典的事故。 |
-| **D17** | 递归/通配的审批主体是**展开后的每一条具体路径**，批量塞进一次对话框；`MatchPathRule` 不改。 | 否决"批一条递归 pattern（如 `/opt/app/**`）"：`MatchPathRule` 同时是 `local_write` / `local_edit` 白名单的匹配器（`local_tool_gate.go:173`，`path_policy.go` 注释明写共用），让它支持递归会顺带放宽本地写授权——一次与 OSS 完全无关的安全回归。否决"逐条弹 N 次对话框"：不可用。批量项走的是 `CommandConfirmFunc` 已有的 `[]ApprovalItem` 切片，与 `batch_exec` 同一条路。 |
-| **D18** | 展开（枚举）自己要过一次授权，主体是源端基点（`DirList` 方向）。**【实施期澄清】作用域限于真的会枚举的形态：`recursive` 为真或源含通配元字符。** | 否决"枚举不需要授权，它只是元数据"：`cp -r web-01:/ ./x` 能把整棵文件树的结构拖出来。OSS 侧映射到已有的 `object.list`，在默认只读组下自动放行，常见路径无感；SSH 侧复用 `cp` 面，批准后落 grant。澄清的理由见 §6.5：指名 N 个源时没有任何东西被枚举，索取 `DirList` 只会要来一个比实际能力更宽的授权，且让两条入口对同一件事给出不同答案（AI 侧的多源形态只有 `recursive || glob`）。 |
+| **D17 更正** | 递归/通配审批源与目的目录/对象前缀范围，批准后才枚举。 | 用户明确选择目录审批；避免为了生成审批弹窗而递归扫描整棵目录树。SSH 尾随 `/` 规则只覆盖该目录边界内的子树，OSS 复用前缀规则。 |
+| **D18 更正** | 不再单独审批列举再逐条审批传输；目录范围审批同时界定本次可枚举、读取和写入的边界。 | 两阶段模型会在最终审批前扫描全部文件，并产生不可用的大清单；范围审批把授权边界放到扫描之前。 |
 | **D20** | `ossGrantPatterns` 丢弃 resource 以 `/` 结尾的策略串，不落成常驻 grant（§4.3）。 | 实施期修正，由任务 4 的评审提出、用户裁定。否决"DSL 直接拒绝尾随斜杠的 target"：目录标记是本产品自己创建的合法对象（`oss_svc.CreateFolder`），拒绝等于 exec/cp 删不掉自己建的东西。否决"原样落库、只在文档里警告"：那把一个安全边界交给用户读文档来守，与 §3.3 已经修掉的那类"批准一件事、拿到另一件"同形。 |
 | **D20 更正** | 丢弃条件精确化为「resource 以 `/` 收尾 **且 action 不是列举**（`*.list`）」；**入口**不参与此判断。 | 实施期更正，由任务 20 的实现者发现并提出。D20 原文把条件写成「resource 以 `/` 结尾」，那是**症状**不是**病因**：它真正要防的是「命令指名一个对象、规则却读成一片前缀」这个落差。该落差只存在于单对象动作 —— `object delete b/logs/` 说的是那个零字节目录标记，规则说的是递归删除，差一个数量级。列举没有这个落差：`object list b/logs/` 与 `object.list b/logs/` 指的是同一个范围。按原措辞一刀切，会与 §4.3【实施期更正】里「`DirList` 的主体可以是前缀形状且应当落库」当场对撞，并且让同一个字符串在 exec 面被丢、在 cp 面被留，破坏 §6.2「两条入口的授权互相复用」。否决「DirList 主体也一并丢弃」：那会让递归 `cp` 的枚举步骤永远拿不到常驻授权、每次重新弹框。**【二次更正】**原措辞写的是「**来源**不参与此判断」，分支级评审指出它与 §4.3「用户在审批弹窗里手写的前缀形状 pattern 不受此限」当场冲突：对"用户手打的 `object.delete b/logs/`"这一格，两条给出相反答案。定性是措辞歧义而非语义分歧——这里的"来源"指的始终是**入口**（`exec` 面还是 `cp` 面），写它是为了满足 §6.2「两条入口的授权互相复用」；它指的**不是作者**（系统派生还是用户手写）。任务 20 的实现把这两个轴拆成了正交的 `derived`（形态：DSL 还是策略串）与 `origin`（作者），代码跟的是 §4.3。按"作者"读会让审批弹窗的编辑框对 OSS 彻底失效——用户改了也不算数——而 §4.3 明说那是他的显式决定。故改「来源」为「入口」。 |
 | **D21 更正** | 转义只发生在策略串充当**规则**（落成 grant）的那一刻；充当**名字**（被拿去匹配规则）时保持原样。 | 实施期更正，由任务 19 的实测交回。D21 原文只说"派生时转义"，漏了一件事：同一个策略串有两种角色，而 `PolicyStrings()` / `ApprovalSubject()` 同时喂给两边。两边都转义的结果是 `path.Match(\`b/secrets\*\`, \`b/secrets\*\`)` = **false** —— 规则里的 `\*` 匹配字面量 `*`，而名字里是反斜杠加星号，于是这条 grant 谁也匹配不上。实测后果：含 `*` / `?` 的 key 上"始终允许"不再生效（每次都重新弹框），还多落一条什么都不授权的死行。正确配对是**规则转义、名字原样**：`path.Match(\`b/secrets\*\`, "b/secrets*")` = true 而对 `b/secretsFOO` = false。因此转义要挪到产生 grant 的接缝上（`ossGrantPatterns`），不能留在派生处。 |
 | **D21** | 从**具体 key 派生**策略串时，对 key 段里的 `* ? [ \` 做转义；用户手写的 pattern 不转义。 | 实施期修正，由任务 8 的评审提出。§3.4 的规则语法没有转义约定，而 S3 的 key 允许字面量 `* ? [`，于是"批准一个对象"会派生出一条比它自己更宽的规则：实测 `path.Match("secrets*", "secretsFOO")` = true、`path.Match("logs/a[1].log", "logs/a1.log")` = true —— 批准读 `secrets*` 这一个对象，换来的是读遍所有 `secrets` 开头的对象。否决"DSL 拒绝含通配元字符的 key"：递归展开本来就会合法地产出这种 key（`path.Match("dist/*", "dist/a[1].js")` = true），拒绝等于 cp 传不了自己刚列出来的东西。转义可行且已实测：`path.Match(`+"`"+`secrets\*`+"`"+`, "secretsFOO")` = false 而对字面量 `secrets*` = true。代价是这类 key 的审批弹窗会显示反斜杠——只在 key 真含元字符时出现，且显示的是诚实的范围。 |
-| **D19** | 条目上限 200，超出报错；快速失败；不跟随符号链接。 | 否决"不设上限"：五千条的审批对话框是橡皮图章，不是决策。否决"静默截断到前 200 条"：一次看起来成功、实际只复制了一部分的传输，比报错糟得多。否决"POSIX 式继续并最终非零"：每个已传输字节都是已批准的副作用，出意外后继续会留下看似完整、实则残缺的目的地。**【实施期更正】**原文还援引了"重跑代价很低（grant 已落库）"——多源 cp 走 `batch` 审批而 `batch` 不支持 `allowAll`，因此传输条目不落 grant，重跑要重新批准全部传输条目（§6.5 的实施期更正）。该援引作废；快速失败仍然成立，理由是中止点已知而继续后的残缺位置未知。否决"跟随符号链接"：一条指向 `/` 的链接能把 `cp -r ./dir` 变成整机 dump，而逃逸出去的路径不在用户审阅过的清单里。 |
+| **D19 更正** | 移除 200 条审批清单上限；保留快速失败与不跟随展开途中符号链接。 | 目录范围审批不再生成逐文件审批清单，因此该 UI 上限没有对象。 |
 
 ---
 
@@ -529,8 +519,8 @@ AI 工具的 `src` 保持单个字符串 + `recursive` 布尔：模型没有 she
 | `internal/ai/helper`（传输适配器） | 三个适配器的 `ApprovalSubject` 在 read/write/list 三个方向各自产出的类型与主体串；`OpenRead`→`Write` 的字节往返（OSS 侧用 `mock_ossclient`，SSH 侧沿用既有 SFTP 测试设施） | `oss_svc/mock_ossclient`、`ssh_helper_test.go` |
 | `internal/ai/helper`（展开） | `List` 的 glob 与递归展开；`RelPath` 相对基点计算（glob 基点 = 通配前的最后一层目录；递归基点 = 源本身；OSS 基点 = 前缀）；symlink 被跳过并计数；OSS 的分页拉全 | `oss_svc/mock_ossclient`、本地端可用 `t.TempDir()` |
 | `internal/ai/tool`（`handleCp`，单源） | **9 种两端组合**各自向哪些端点发起了权限检查、类型与主体串是什么（本地端无检查；SSH 端是 `cp`+路径；OSS 端是 `oss`+`object.read/write`）；**任一端被拒时没有任何字节被读写**；本地↔本地报错；原 `upload_file` / `download_file` 的审批不变式在新工具上仍成立 | `file_transfer_approval_test.go` 就地迁移（它现在锁的正是"传输前必须过审批"） |
-| `internal/ai/tool`（`handleCp`，多源） | **硬不变式本体**：展开出的每一条都出现在批量审批项里，且拒绝时零字节读写；展开授权先于传输授权发生；多源时目的地缺尾随 `/` 报错；`RelPath` → 目的路径的拼装；条目数超 200 报错且**不截断**；快速失败时上报 `N/M` 与失败条目 | 同上 + `batch_exec` 的批量审批测试形态 |
-| `cmd/opsctl/command`（`cmdCp`） | 端点审批与 `callHandler("cp", …)` 的接线；`-r` 与 N 源 1 目的的参数解析；两端同一 OSS 资产时的 stderr 提示；proxy 快路径只在全 SSH 时启用 | `cp_approval_test.go`（已用 `cpApprovalFn` / `cpSSHProxyClientFn` 变量替换审批与 proxy 入口） |
+| `internal/ai/tool`（`handleCp`，多源） | 源与目的范围在连接/展开前进入同一次批量审批，拒绝时零连接零字节；多源时目的地缺尾随 `/` 报错；`RelPath` → 目的路径保持在获批范围；快速失败上报 `N/M` 与失败条目；可选 observer 逐条报告成功进度 | 同上 + `batch_exec` 的批量审批测试形态 |
+| `cmd/opsctl/command`（`cmdCp`） | 范围审批与 `callHandler("cp", …)` 的接线；`-r` 与 N 源 1 目的的参数解析；逐条 stderr 进度；两端同一 OSS 资产时的提示；proxy 快路径只在全 SSH 时启用 | `cp_approval_test.go`（已用 `cpApprovalFn` / `cpSSHProxyClientFn` 变量替换审批与 proxy 入口） |
 | `internal/ai/audit` | `cp` 提取器成为唯一入口后摘要仍正确；`upload_file` / `download_file` 的别名与提取器已移除 | `audit_integration_test.go`、`internal/ai/audit_test.go` 就地迁移 |
 | `internal/ai/execimpl` | OSS 不再是 doc-only：有执行器、进 `RegisteredExecTypes()`；`TestEveryPolicyKindTypeHasExecutor` 现在真的覆盖 OSS | 现有 `coverage_test.go` / `help_coverage_test.go` 就地更新 |
 | `internal/pkg/auditredact` | SigV4 与 V2 签名查询参数被替换；URL 其余部分保留 | `redact_test.go` |
@@ -540,7 +530,7 @@ AI 工具的 `src` 保持单个字符串 + `recursive` 布尔：模型没有 she
 - 对真实 S3/MinIO 的 9 个操作往返——用 `opsctl exec` 打一遍，读 `logs/opskat.log` 与 `opskat.db` 的 `audit_logs` 核对 decision / command / result。
 - 对真实 MinIO + 一台 SSH 资产跑 SSH→OSS 与 OSS→SSH 各一次，核对字节一致、两条审批各自出现、审计行的 `source_asset_id` / `destination_asset_id` 正确。
 - 递归实测：`cp -r` 一棵含嵌套子目录的真实目录树到 OSS 前缀再拉回来，核对树形与字节一致；跑一次含 symlink 的目录，确认被跳过并计数。
-- 桌面审批弹窗对 OSS 条目的渲染（类型徽章、多资源 move 的展示、cp 跨协议时两条不同类型的审批项并列、上百条时的折叠摘要与展开）。
+- 桌面审批弹窗对 OSS 条目的渲染（类型徽章、多资源 move 的展示、cp 跨协议时源与目的范围审批项并列）。
 - 前端策略编辑器与策略测试面板出现 OSS 项。
 
 e2e（`e2e/tests/`）本轮不新增 OSS 用例：现有 `ai-exec` 系列依赖脚本化的 OpenAI mock，不含对象存储后端，接一个 MinIO 容器进 e2e 属于独立的基建工作。
@@ -555,7 +545,7 @@ e2e（`e2e/tests/`）本轮不新增 OSS 用例：现有 `ai-exec` 系列依赖�
 | opsctl 能按 ID / 名称 / 组路径定位 OSS 资产并执行 | §6.1，`resolveAsset` 已支持三种形态，无需改动 |
 | AI 与 CLI 共用同一执行与权限 seam | 命令面 §6.1 走同一个 `handleExec`；传输面 §6.3/§6.4 走同一个 `handleCp`，`exec` 的 `--file=` 也走同一套适配器。OSS 端点审批走同一个 `checkOSSPermission`、落同一形态的 grant |
 | 拒绝 / 需审批 / 允许三种结果均有测试 | §12 第三行 |
-| 高风险操作在审批前无副作用 | `handleExec` 的顺序不变式（类型断言 → 执行器查找 → 门禁 → 规范化 → precheck → 权限检查 → 执行）；`cp` 的全部端点审批排在任何读写之前，递归/通配展开出的每一条也各自是审批主体（§6.2 / §6.5，硬不变式本体）。测试见 §12 的 `handleExec` 与两行 `handleCp` |
+| 高风险操作在审批前无副作用 | `handleExec` 的顺序不变式（类型断言 → 执行器查找 → 门禁 → 规范化 → precheck → 权限检查 → 执行）；`cp` 的单文件具体路径或递归/通配两端范围都在连接、展开和读写前审批（§6.2 / §6.5）。测试见 §12 的 `handleExec` 与两行 `handleCp` |
 | 操作被正确审计，错误返回调用方而不被吞掉 | §7；§5"错误原样返回" |
 | 不记录凭证或预签名 URL 的敏感查询参数 | §7 的 `auditredact` 新规则 |
 | 不为 local / RDP / VNC 增加执行器 | §2 非目标 |

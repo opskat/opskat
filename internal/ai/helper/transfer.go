@@ -18,6 +18,8 @@ const (
 	DirRead Direction = iota
 	DirWrite
 	DirList
+	DirReadScope
+	DirWriteScope
 )
 
 // Entry 是一次展开产出的单个可传输条目。只有文件/对象，没有目录——目录由 RelPath 隐含，

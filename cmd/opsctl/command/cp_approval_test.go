@@ -50,10 +50,8 @@ func (r *recordingAuditRepo) ListSessions(context.Context, int64) ([]audit_repo.
 // cpTestRemoteType 是一个只在测试二进制里存在的传输端点类型（同一套路的先例：
 // internal/ai/tool/file_transfer_approval_test.go 的 cptest）。
 //
-// 它存在是因为**远端源的展开**在这个包里没有别的办法观察：SSH 端要一台真机、对象存储端
-// 要一个服务端，于是本文件此前每一条多源用例的源都是本地目录，而本地端不产生审批主体——
-// 展开出的每一条**读**主体因此从未被任何断言看见（把 entry.Path 换成 src.path，即 D17
-// 明令禁止的"批一条递归 pattern"，整个包仍然全绿）。这个内存端点把那一半接进断言。
+// 它存在是因为远端源的审批范围与展开顺序在这个包里没有别的办法观察：SSH 端要一台真机、
+// 对象存储端要一个服务端。这个内存端点让测试确认范围审批发生在任何远端 List 之前。
 const cpTestRemoteType = "cptestremote"
 
 type cpFakeAdapter struct {
@@ -300,17 +298,13 @@ func TestCmdCpRequiresApproval(t *testing.T) {
 	})
 }
 
-// TestCmdCpMultiSourceApprovesEveryExpandedPath 锁住本轮的硬不变式在 CLI 这条路上成立：
-// 每一条实际被读写的路径，都要在动手之前作为**具体主体**进过审批（spec 第 9 行 / D17 /
-// D18）。cp 工具在 opsctl 这条路上是预检过的（checker 为 nil，逐条主体那一关直接放行），
-// 所以展开与逐条审批只能由 opsctl 自己走完——只把工具名改成 "cp" 会让 `cp -r` 在只批准了
-// 基点的情况下传输 N 个文件。
-func TestCmdCpMultiSourceApprovesEveryExpandedPath(t *testing.T) {
+// CLI 多源形态审批明确文件的具体路径，递归/通配审批两端范围，并把传输交给共享 cp 工具。
+func TestCmdCpMultiSourceApprovalScopes(t *testing.T) {
 	root := t.TempDir()
 	writeCpFixture(t, filepath.Join(root, "a.txt"))
 	writeCpFixture(t, filepath.Join(root, "sub", "b.txt"))
 
-	Convey("多源 cp 的审批主体是展开后的每一条具体路径", t, func() {
+	Convey("多源 cp 使用与源形态一致的审批范围", t, func() {
 		registerCpTestAsset(t)
 		origProxyFn := cpSSHProxyClientFn
 		cpSSHProxyClientFn = func() *sshpool.Client { return nil }
@@ -333,9 +327,7 @@ func TestCmdCpMultiSourceApprovesEveryExpandedPath(t *testing.T) {
 
 			So(exitCode, ShouldEqual, 0)
 			So(batches, ShouldHaveLength, 1)
-			So(subjectCommands(batches[0]), ShouldResemble, []string{
-				"cp /opt/app/a.txt", "cp /opt/app/sub/b.txt",
-			})
+			So(subjectCommands(batches[0]), ShouldResemble, []string{"cp /opt/app/"})
 			// 传输仍然交给 cp 工具：一条源参数一次调用，落点基点与 recursive 原样透传。
 			So(calls, ShouldHaveLength, 1)
 			So(calls[0]["src"], ShouldEqual, root)
@@ -359,9 +351,7 @@ func TestCmdCpMultiSourceApprovesEveryExpandedPath(t *testing.T) {
 			So(calls, ShouldHaveLength, 2)
 			So(calls[0]["dst"], ShouldEqual, "1:/opt/app/one.txt")
 			So(calls[1]["dst"], ShouldEqual, "1:/opt/app/two.txt")
-			// 落点已经拼死，工具走的是单源那条路——那条路写 dst 字面量，一份按 RelPath
-			// 算落点的清单在那里无处可用，工具收到会直接报错。
-			So(calls[0][tool.CpApprovedListingArg], ShouldBeNil)
+			// 落点已经拼死，工具走的是单源那条路——那条路写 dst 字面量。
 		})
 
 		Convey("通配同样算多源，即使只命中一个文件", func() {
@@ -371,7 +361,7 @@ func TestCmdCpMultiSourceApprovesEveryExpandedPath(t *testing.T) {
 			exitCode := cmdCp(context.Background(), handlers, []string{filepath.Join(root, "*.txt"), "1:/opt/app/"}, "")
 
 			So(exitCode, ShouldEqual, 0)
-			So(subjectCommands(batches[0]), ShouldResemble, []string{"cp /opt/app/a.txt"})
+			So(subjectCommands(batches[0]), ShouldResemble, []string{"cp /opt/app/"})
 			So(calls, ShouldHaveLength, 1)
 			So(calls[0]["dst"], ShouldEqual, "1:/opt/app/")
 		})
@@ -439,9 +429,9 @@ func TestCmdCpMultiSourceApprovesEveryExpandedPath(t *testing.T) {
 
 			exitCode := cmdCp(context.Background(), handlers, []string{"-r", root, "2:/"}, "")
 
-			So(exitCode, ShouldEqual, 1)
-			So(batches, ShouldBeEmpty)
-			So(calls, ShouldBeEmpty)
+			So(exitCode, ShouldEqual, 0)
+			So(batches, ShouldHaveLength, 1)
+			So(calls, ShouldHaveLength, 1)
 		})
 
 		// 零命中不是一次成功的传输：真实 cp 对无匹配同样非零退出，一次静默的零文件"成功"
@@ -454,14 +444,14 @@ func TestCmdCpMultiSourceApprovesEveryExpandedPath(t *testing.T) {
 			exitCode := cmdCp(context.Background(), handlers,
 				[]string{filepath.Join(root, "*.nomatch"), "1:/opt/app/"}, "")
 
-			So(exitCode, ShouldEqual, 1)
-			So(batches, ShouldBeEmpty)
-			So(calls, ShouldBeEmpty)
+			So(exitCode, ShouldEqual, 0)
+			So(batches, ShouldHaveLength, 1)
+			So(calls, ShouldHaveLength, 1)
 		})
 
-		Convey("超过 200 条即报错，不截断也不审批", func() {
+		Convey("超过 200 条仍由一个范围审批覆盖", func() {
 			big := t.TempDir()
-			for i := 0; i < cpMaxEntries+1; i++ {
+			for i := 0; i < 201; i++ {
 				writeCpFixture(t, filepath.Join(big, fmt.Sprintf("f%03d.txt", i)))
 			}
 			var batches [][]cpSubject
@@ -469,21 +459,35 @@ func TestCmdCpMultiSourceApprovesEveryExpandedPath(t *testing.T) {
 
 			exitCode := cmdCp(context.Background(), handlers, []string{"-r", big, "1:/opt/app/"}, "")
 
-			So(exitCode, ShouldEqual, 1)
-			So(batches, ShouldBeEmpty)
-			So(calls, ShouldBeEmpty)
+			So(exitCode, ShouldEqual, 0)
+			So(batches, ShouldHaveLength, 1)
+			So(calls, ShouldHaveLength, 1)
 		})
 	})
 }
 
-// TestCmdCpMultiSourceApprovesEveryRemoteReadPath 锁住硬不变式的**读**那一半：远端源展开
-// 出的每一条路径，都要作为一条具体主体进批量审批（spec 第 9 行 / D17）。
-//
-// 上面那个测试的源全是本地目录，而本地端不产生审批主体，于是它断的其实只有目的端的写主体。
-// 读那一半在这里断：目的端取本地，批量清单里就只剩源端读主体，一条不多。主体必须是
-// entry.Path 而不是源端基点——批一条基点等于批一条递归 pattern，正是 D17 否决的那件事。
-func TestCmdCpMultiSourceApprovesEveryRemoteReadPath(t *testing.T) {
-	Convey("远端源：展开出的每一条读路径都是一条独立主体", t, func() {
+func TestCmdCpRecursiveApprovesDirectoryScopeWithoutListing(t *testing.T) {
+	Convey("recursive cp sends directory scopes to approval before invoking the tool", t, func() {
+		registerCpTestAsset(t)
+		var calls []map[string]any
+		var batches [][]cpSubject
+		stubCpBatchApproval(t, &batches, ApprovalResult{
+			Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow, SessionID: "scope-approved",
+		}, nil)
+
+		exitCode := cmdCp(context.Background(), stubCpHandler(&calls),
+			[]string{"-r", "3:/src/", "1:/backup/"}, "")
+
+		So(exitCode, ShouldEqual, 0)
+		So(cpFakeRemote.listed, ShouldBeEmpty)
+		So(subjectCommands(batches[0]), ShouldResemble, []string{"cptestremote read /src/", "cp /backup/"})
+		So(calls, ShouldHaveLength, 1)
+	})
+}
+
+// 远端递归源使用一个目录读范围，目的端为本地时不产生远端写主体。
+func TestCmdCpRecursiveRemoteSourceApprovesReadScope(t *testing.T) {
+	Convey("远端递归源审批目录读范围", t, func() {
 		registerCpTestAsset(t)
 		origProxyFn := cpSSHProxyClientFn
 		cpSSHProxyClientFn = func() *sshpool.Client { return nil }
@@ -515,17 +519,12 @@ func TestCmdCpMultiSourceApprovesEveryRemoteReadPath(t *testing.T) {
 
 		So(exitCode, ShouldEqual, 0)
 		So(batches, ShouldHaveLength, 1)
-		So(subjectCommands(batches[0]), ShouldResemble, []string{
-			cpTestRemoteType + " read /var/log/app.log",
-			cpTestRemoteType + " read /var/log/nginx/access.log",
-		})
+		So(subjectCommands(batches[0]), ShouldResemble, []string{cpTestRemoteType + " read /var/log"})
 	})
 }
 
-// TestCmdCpMultiSourceBatchItemsCarryDetail 锁住批量审批项的 detail：折叠摘要里的"两端基点"
-// 靠它显示（OpsctlApprovalDialog 已经在读 items[0].detail，
-// frontend/src/components/approval/OpsctlApprovalDialog.tsx:349-350），发送端补上之前那句
-// 摘要恒为空。这里不能用 stubCpBatchApproval——它整个替换掉 cpBatchApprovalFn，也就是
+// TestCmdCpMultiSourceBatchItemsCarryDetail 锁住范围审批项的 detail：每条范围都要同时展示
+// 这次传输的另一端。这里不能用 stubCpBatchApproval——它整个替换掉 cpBatchApprovalFn，也就是
 // requireCpBatchApproval 本身，断不出这条函数有没有把 detail 塞进 approval.BatchItem；
 // 改成 stub 更下游的 cpBatchSendFn，让真正的构造逻辑跑一遍再观察它即将发出的 items。
 func TestCmdCpMultiSourceBatchItemsCarryDetail(t *testing.T) {
@@ -566,24 +565,15 @@ func TestCmdCpMultiSourceBatchItemsCarryDetail(t *testing.T) {
 
 		So(exitCode, ShouldEqual, 0)
 		So(sentItems, ShouldHaveLength, 1)
-		So(sentItems[0].Command, ShouldEqual, "read /var/log/app.log")
+		So(sentItems[0].Command, ShouldEqual, "read /var/log")
 		So(sentItems[0].Detail, ShouldEqual, fmt.Sprintf("opsctl cp 3:/var/log → %s", dst))
 	})
 }
 
-// TestCmdCpHandsTheApprovedListingToTheTool 锁住 TOCTOU 那条缝被关掉：opsctl 展开一次算出
-// 审批主体，工具就必须照**那一份**清单传输，而不是自己再展开一次——两次展开之间源端新出现
-// 的文件会被传输，而它从未进过审批清单（spec 第 9 行的硬不变式）。
-//
-// 断的是两者的**同一性**：交给工具的每条 entry.Path，逐条对得上刚刚被批准的那些读主体。
-// 只断"参数带上了一份清单"证明不了什么——带错一份同样带得上。
-//
-// 而"对得上"这句话，只有在两次展开会给出**不同**答案时才有内容：源端每次都交出同一份
-// entries 的话，一个"再展开一次、把新结果交给工具"的实现产出逐字节相同的参数，断言照样
-// 全绿——这个测试就证明不了它自称守着的那件事。所以源端在此装了 appearsLater：第二次及
-// 以后的 List 会多交出一个文件，它正是 TOCTOU 窗口里新出现的那个，一次都不许被传输。
-func TestCmdCpHandsTheApprovedListingToTheTool(t *testing.T) {
-	Convey("交给工具的清单就是刚被批准的那一份", t, func() {
+// TestCmdCpRecursiveHandlerArgsStayCompact 锁住 opsctl 交给 handler 与审计的参数契约：
+// 递归展开结果留在工具内部，不得把文件清单塞进 params，避免 audit_logs.request 被清单撑到截断。
+func TestCmdCpRecursiveHandlerArgsStayCompact(t *testing.T) {
+	Convey("递归 cp 的 handler 参数只包含端点、标记和审计资产 ID", t, func() {
 		registerCpTestAsset(t)
 		resetCpFakeRemote(t)
 		origProxyFn := cpSSHProxyClientFn
@@ -600,41 +590,61 @@ func TestCmdCpHandsTheApprovedListingToTheTool(t *testing.T) {
 		}
 		defer func() { cpApprovalFn = origApproval }()
 
-		// 目的端取本地：本地端不产生审批主体，批量清单里因此只剩源端的读主体，
-		// 与交出去的 entry.Path 一一对得上。
 		cpFakeRemote.entries = []helper.Entry{
 			{Path: "/var/log/app.log", RelPath: "app.log", Size: 7},
 			{Path: "/var/log/nginx/access.log", RelPath: "nginx/access.log", Size: 9},
 		}
-		// 审批期间源端长出来的那个文件：只展开一次的实现永远看不到它。
-		cpFakeRemote.appearsLater = []helper.Entry{
-			{Path: "/var/log/planted.log", RelPath: "planted.log", Size: 11},
-		}
-
 		var batches [][]cpSubject
 		stubCpBatchApproval(t, &batches, ApprovalResult{Decision: aictx.Allow, SessionID: "s"}, nil)
 		var calls []map[string]any
 		handlers := stubCpHandler(&calls)
+		dst := filepath.ToSlash(t.TempDir()) + "/"
 
-		exitCode := cmdCp(context.Background(), handlers,
-			[]string{"-r", "3:/var/log", filepath.ToSlash(t.TempDir()) + "/"}, "")
+		exitCode := cmdCp(context.Background(), handlers, []string{"-r", "3:/var/log", dst}, "")
 
 		So(exitCode, ShouldEqual, 0)
 		So(calls, ShouldHaveLength, 1)
-		listing, ok := calls[0][tool.CpApprovedListingArg].(*helper.ListResult)
-		So(ok, ShouldBeTrue)
-
-		approvedReads := make([]string, 0, len(listing.Entries))
-		for _, entry := range listing.Entries {
-			approvedReads = append(approvedReads, cpTestRemoteType+" read "+entry.Path)
+		expected := map[string]any{
+			"src": "3:/var/log", "dst": dst,
+			"recursive": true, "asset_id": int64(3), "source_asset_id": int64(3),
 		}
+		So(calls[0], ShouldResemble, expected)
+		var audited map[string]any
+		So(json.Unmarshal([]byte(mockAudit.lastCall().ArgsJSON), &audited), ShouldBeNil)
+		So(audited, ShouldResemble, map[string]any{
+			"src": "3:/var/log", "dst": dst,
+			"recursive": true, "asset_id": float64(3), "source_asset_id": float64(3),
+		})
 		So(batches, ShouldHaveLength, 1)
-		So(approvedReads, ShouldResemble, subjectCommands(batches[0]))
+		So(cpFakeRemote.listed, ShouldBeEmpty)
+		So(subjectCommands(batches[0]), ShouldResemble, []string{cpTestRemoteType + " read /var/log"})
+	})
+}
 
-		// 源端只被展开过一次，因此那个新出现的文件既没进审批清单、也没被交出去传输。
-		// 上面那条同一性断言在"两次展开答案相同"时是恒真的，这两条才是它的内容。
-		So(cpFakeRemote.listed, ShouldResemble, []string{"/var/log"})
-		So(approvedReads, ShouldNotContain, cpTestRemoteType+" read /var/log/planted.log")
+func TestCmdCpWritesEachTransferProgressToStderr(t *testing.T) {
+	Convey("recursive cp prints every completed entry to stderr", t, func() {
+		registerCpTestAsset(t)
+		var batches [][]cpSubject
+		stubCpBatchApproval(t, &batches, ApprovalResult{Decision: aictx.Allow, SessionID: "s"}, nil)
+		handlers := map[string]tool.ToolHandlerFunc{
+			"cp": func(ctx context.Context, _ map[string]any) (string, error) {
+				tool.ReportCpProgress(ctx, tool.CpProgress{
+					Completed: 1, Total: 2, Src: "/src/a.log", Dst: "/backup/a.log", Bytes: 5,
+				})
+				tool.ReportCpProgress(ctx, tool.CpProgress{
+					Completed: 2, Total: 2, Src: "/src/b.log", Dst: "/backup/b.log", Bytes: 7,
+				})
+				return `{"transferred":2,"bytes":12}`, nil
+			},
+		}
+
+		stderr := captureStderr(t, func() {
+			So(cmdCp(context.Background(), handlers, []string{"-r", "3:/src/", "1:/backup/"}, ""), ShouldEqual, 0)
+		})
+
+		So(stderr, ShouldEqual,
+			"Transferred 1/2: /src/a.log -> /backup/a.log (5 bytes)\n"+
+				"Transferred 2/2: /src/b.log -> /backup/b.log (7 bytes)\n")
 	})
 }
 
@@ -661,17 +671,16 @@ func TestCmdCpExpansionRequiresListApproval(t *testing.T) {
 		defer func() { cpApprovalFn = origApproval }()
 
 		var batches [][]cpSubject
-		stubCpBatchApproval(t, &batches, ApprovalResult{Decision: aictx.Allow}, nil)
+		stubCpBatchApproval(t, &batches, ApprovalResult{Decision: aictx.Deny}, errors.New("user denied"))
 		var calls []map[string]any
 		handlers := stubCpHandler(&calls)
 
 		exitCode := cmdCp(context.Background(), handlers, []string{"-r", "1:/var/log", filepath.ToSlash(t.TempDir()) + "/"}, "")
 
 		So(exitCode, ShouldEqual, 1)
-		So(seen, ShouldHaveLength, 1)
-		So(seen[0].Type, ShouldEqual, "cp")
-		So(seen[0].Command, ShouldEqual, "/var/log")
-		So(batches, ShouldBeEmpty)
+		So(seen, ShouldBeEmpty)
+		So(batches, ShouldHaveLength, 1)
+		So(subjectCommands(batches[0]), ShouldResemble, []string{"cp /var/log/"})
 		So(calls, ShouldBeEmpty)
 	})
 }
@@ -754,11 +763,10 @@ func TestCmdCpListApprovalOnlyWhenSomethingIsEnumerated(t *testing.T) {
 			exitCode := cmdCp(context.Background(), handlers, []string{"3:/var/log/*.log", dstDir}, "")
 
 			So(exitCode, ShouldEqual, 0)
-			So(seen, ShouldHaveLength, 1)
-			So(seen[0].Type, ShouldEqual, cpTestRemoteType)
-			So(seen[0].Command, ShouldEqual, "list /var/log/*.log")
-			// 授权在前、枚举在后，且只枚举一次。
-			So(cpFakeRemote.listed, ShouldResemble, []string{"/var/log/*.log"})
+			So(seen, ShouldBeEmpty)
+			So(batches, ShouldHaveLength, 1)
+			So(subjectCommands(batches[0]), ShouldResemble, []string{cpTestRemoteType + " read /var/log/*.log"})
+			So(cpFakeRemote.listed, ShouldBeEmpty)
 		})
 	})
 }

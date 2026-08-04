@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"sort"
+	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/pkg/sftp"
@@ -182,6 +183,16 @@ func (sshAdapter) ValidateDestination(string) error { return nil }
 func (sshAdapter) ApprovalSubject(p string, dir Direction) (string, string) {
 	if dir == DirList && hasGlobMeta(p) {
 		return permission.GrantToolCp, globBase(p)
+	}
+	if dir == DirReadScope || dir == DirWriteScope {
+		base := p
+		if hasGlobMeta(base) {
+			base = globBase(base)
+		}
+		if !strings.HasSuffix(base, "/") {
+			base += "/"
+		}
+		return permission.GrantToolCp, base
 	}
 	return permission.GrantToolCp, p
 }

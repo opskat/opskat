@@ -134,13 +134,8 @@ func (a ossAdapter) listGlob(
 
 // walkPrefix 把 prefix 之下**任意深度**的对象逐页拉全，每个对象交给 visit 恰好一次。
 //
-// 两件事必须在这里做对：
-//   - 列举是分层的（一次调用只看一层，下层作为公共前缀单独返回），所以下钻在这里；
-//   - 分页游标是"上一页留下的最大 key"（oss_svc.ListObjectsWith 排序后截断得到它），
-//     而服务端先按游标过滤原始 key、再按 "/" 分组。页边界恰好落在一个公共前缀上时，
-//     该前缀下仍有 key 大于游标，于是下一页会把同一个前缀再交出来一次，照单全收就是把
-//     那棵子树展开两遍：审批弹窗里出现重复条目、同一个对象被传两遍。按游标丢掉 <= 它的
-//     条目即可，这正是游标本身的 start-after 语义。
+// 列举是分层的（一次调用只看一层，下层作为公共前缀单独返回），所以下钻在这里。分页使用
+// S3 返回的 opaque continuation token；它不是对象 key，不能比较或自行解释。
 //
 // 页大小不指定，用服务端默认值：分页策略只该有 oss_svc 一处真相。展开顺序是
 // "本层对象、再逐个子树"，服务端每一页内按 key 字典序——同一份桶内容展开出的顺序固定，
@@ -157,17 +152,11 @@ func (a ossAdapter) walkPrefix(
 			return err
 		}
 		for _, obj := range res.Objects {
-			if obj.Key <= token {
-				continue
-			}
 			if err := visit(obj); err != nil {
 				return err
 			}
 		}
 		for _, sub := range res.Prefixes {
-			if sub <= token {
-				continue
-			}
 			if err := a.walkPrefix(ctx, assetID, bucket, sub, visit); err != nil {
 				return err
 			}
@@ -244,6 +233,8 @@ func (ossAdapter) ApprovalSubject(p string, dir Direction) (string, string) {
 		action = "object.write"
 	case DirList:
 		action = "object.list"
+	case DirWriteScope:
+		action = "object.write"
 	}
 	// 余下的是 DirRead。新增方向时必须在上面补一条 case，否则它会被当成读。
 	return asset_entity.AssetTypeOSS, action + " " + ossSubjectResource(p, dir)
@@ -268,7 +259,7 @@ func (ossAdapter) ApprovalSubject(p string, dir Direction) (string, string) {
 // ossGrantRule 也不把它落成 grant。名字这一侧只负责两件事——不说谎（用户在弹窗里看到的
 // 仍是他自己写的那个路径），以及绝不交出一个比实际操作更宽的主体。
 func ossSubjectResource(p string, dir Direction) string {
-	if dir == DirList {
+	if dir == DirList || dir == DirReadScope || dir == DirWriteScope {
 		if bucket, key, err := splitOSSEndpointPath(p); err == nil {
 			return bucket + "/" + ossSubjectPrefix(key)
 		}

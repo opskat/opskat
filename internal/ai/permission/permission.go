@@ -641,6 +641,9 @@ func cpGrantPatterns(remotePath string, origin GrantOrigin) []string {
 	if origin == GrantOriginUser {
 		return []string{remotePath}
 	}
+	if strings.HasSuffix(remotePath, "/") {
+		return []string{escapeGlobMeta(strings.TrimSuffix(remotePath, "/")) + "/"}
+	}
 	return []string{escapeGlobMeta(remotePath)}
 }
 

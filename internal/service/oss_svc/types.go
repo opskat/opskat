@@ -23,20 +23,20 @@ type ObjectItem struct {
 	IsPrefix     bool   `json:"isPrefix"`
 }
 
+// ListObjectsPage 是对象存储服务端返回的一张真实页。ContinuationToken 是 opaque 游标，
+// 调用方只能原样传回；不能从对象 key 猜出下一页边界。
+type ListObjectsPage struct {
+	Items                 []ObjectItem
+	IsTruncated           bool
+	NextContinuationToken string
+}
+
 // Client 是服务依赖的窄对象存储接口(可 mock)。
 type Client interface {
 	ListBuckets(ctx context.Context) ([]BucketItem, error)
-	// ListObjects 分页契约:maxKeys<=0 表示"使用服务端默认值";当超出 maxKeys 还有更多对象时,
-	// 实现必须多返回 1 条(即最多返回 maxKeys+1 条),调用方(ListObjectsWith)靠这多出的一条
-	// 判断 IsTruncated 并截断结果——若实现只按字面返回恰好 maxKeys 条,截断检测会永远为 false,
-	// 分页将在"假的最后一页"上卡死。
-	//
-	// 返回的**顺序**无所谓(ListObjectsWith 自己排序),但这一串必须是按 key 序**最靠前**的
-	// 那些:调用方要从中推出一个 start-after 续传游标,漏掉一个小 key 而带回一个大 key
-	// 会让游标直接越过前者,它再也回不来。minio 适配器在单个 S3 响应之内满足这条
-	// (S3 按 key 序截到 MaxKeys);只有 S3 少给却仍报 truncated、迫使它跨到下一页时不成立,
-	// 而 minio 的 channel API 看不到页边界。
-	ListObjects(ctx context.Context, bucket, prefix string, maxKeys int, startAfter string) ([]ObjectItem, error)
+	// ListObjects 返回一张真实 S3 页。continuationToken 来自上一页并原样交还服务端；页未填满
+	// 也可能 IsTruncated，调用方不得用返回条数或某个 key 推断是否还有下一页。
+	ListObjects(ctx context.Context, bucket, prefix string, maxKeys int, continuationToken string) (*ListObjectsPage, error)
 	StatObject(ctx context.Context, bucket, key string) (ObjectItem, error)
 	RemoveObject(ctx context.Context, bucket, key string) error
 	CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) error

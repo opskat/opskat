@@ -17,28 +17,6 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
-// cpMaxEntries 是一次 cp 允许展开出的条目上限（D19）。超出即报错，不截断。
-//
-// 上限不是性能考虑，是审批质量：五千条的对话框不是决策，是橡皮图章。而截断到前 200 条
-// 会换来更糟的东西——一次看起来成功、实际只复制了一部分的传输。
-const cpMaxEntries = 200
-
-// CpApprovedListingArg 是 cp 的一个**内部**参数名：调用方在工具之外已经展开、并按那份展开
-// 结果逐条审批过的清单，值的类型是 *helper.ListResult。
-//
-// 它**不在** SchemaVal 里（tools_exec.go），模型因此既看不见也构造不出来——模型的入参从
-// JSON 反序列化而来，永远不会是一个 *helper.ListResult；opsctl 则自己构造 params
-// （cmd/opsctl/command/handler.go 的 callHandler），可以带上它。
-//
-// 为什么必须有它：opsctl 得先展开才算得出审批主体（落点 = 目的基点 + RelPath），工具若
-// 再展开一次，两次展开之间源端新出现的文件就会被传输，而它从未进过任何一份审批清单——
-// 那正违反"每一条实际被读写的路径都必须在动手之前作为具体主体被授权过"。AI 侧没有这条
-// 缝：它自己展开、自己审批，只展开一次，因此不传这个参数，行为一如既往。
-//
-// 键名以 "src" 打头是有意的：params 同时是这一行审计的 request 原文，map 的 JSON 键按
-// 字典序排而 request 列在 4096 字符处截断，排在 src / dst 之后这份清单才挤不掉两端的原文。
-const CpApprovedListingArg = "src_approved_listing"
-
 // cpEndpoint 是解析后的 cp 的一端：资产（本地端为 nil）、该端点上的路径，以及它的适配器。
 type cpEndpoint struct {
 	raw     string
@@ -47,8 +25,7 @@ type cpEndpoint struct {
 	adapter helper.TransferAdapter
 }
 
-// cpAccess 是一条待授权的端点访问：某个端点上的某条**具体**路径，在某个方向上。
-// 展开出的每条路径各产生一条源读、一条目的写，它们一起进同一次批量审批（D17）。
+// cpAccess 是一条待授权的端点访问：单文件使用具体路径，递归/通配使用目录或对象前缀范围。
 type cpAccess struct {
 	ep   *cpEndpoint
 	path string
@@ -83,13 +60,13 @@ type cpResult struct {
 //     更宽的常驻授权。
 //  5. 逐端点审批：每个远端端点向自己的适配器索取 ApprovalSubject，各自过一次权限检查
 //     （SSH 是 cp + 远端路径，OSS 是 oss + `object.read/write <bucket>/<key>`）。任一端
-//     被拒即整体失败，**且在任何字节被读写之前**。多源形态下"每个端点"是**展开后的每条
-//     具体路径**，它们一起进同一次批量审批（D17）。
-//  6. 传输：OpenRead → Write。
+//     被拒即整体失败，**且在任何远端连接、枚举或字节读写之前**。递归/通配审批源与目的
+//     目录/前缀范围，明确文件审批具体路径（D17/D18）。
+//  6. 范围获批后展开并传输：List → OpenRead → Write。
 //
 // 单源形态下审批排在展开（List）之前：被指名的那个路径两端都已知，不必先连上去问一句
 // 存在不存在——那正是收敛前 checkFileTransfer 守着的不变式（"在真正建连之前过一次
-// cp 审批"）。多源形态没有这个选择，展开必须先发生，所以它按 D18 先过一次 DirList 授权。
+// cp 审批"）。多源形态同样先审批源与目的范围，获批后才展开（D18）。
 //
 // **本地端点不产生审批项**（spec §6.2），本轮沿用这条既有裁定：download_file 今天就能写到
 // 本地任意路径，唯一的门是远端那一端的读授权；本地路径只以展示的身份出场——D11 强制它
@@ -103,17 +80,16 @@ type cpResult struct {
 // （gateLocalWrites）。那道门本来就是模型直接写本地文件时要过的同一道，主体是展开后的
 // 每一条落点，会话白名单也是同一份。
 func handleCp(ctx context.Context, args map[string]any) (string, error) {
+	ctx, sftpCache, ownsSFTPCache := helper.EnsureSFTPClientCache(ctx)
+	if ownsSFTPCache {
+		defer func() { _ = sftpCache.Close() }()
+	}
 	srcRaw := aictx.ArgString(args, "src")
 	dstRaw := aictx.ArgString(args, "dst")
 	if srcRaw == "" || dstRaw == "" {
 		return "", fmt.Errorf("missing required parameters: src, dst")
 	}
 	recursive := aictx.ArgBool(args, "recursive")
-	approved, err := cpApprovedListing(args)
-	if err != nil {
-		return "", err
-	}
-
 	src, err := parseCpEndpoint(ctx, srcRaw)
 	if err != nil {
 		return "", err
@@ -140,32 +116,9 @@ func handleCp(ctx context.Context, args map[string]any) (string, error) {
 	}
 
 	if recursive || helper.HasGlobPattern(src.path) {
-		return cpMultiSource(ctx, checker, src, dst, recursive, detail, approved)
-	}
-	// 单源形态写的是 dst 字面量、没有基点拼接，一份按 RelPath 算落点的清单在这里无处可用。
-	// 收下再忽略等于工具又自己展开了一次——正是这个参数要关掉的那件事，所以报错。
-	if approved != nil {
-		return "", fmt.Errorf(
-			"%s was passed for %q, which names a single file: an approved listing only applies to the "+
-				"recursive/glob form, where each entry lands at <dst>/<RelPath>", CpApprovedListingArg, srcRaw)
+		return cpMultiSource(ctx, checker, src, dst, recursive, detail)
 	}
 	return cpSingleSource(ctx, checker, src, dst, detail)
-}
-
-// cpApprovedListing 取出调用方透传的已批准清单；参数缺席时返回 nil（AI 路径，工具自己展开）。
-//
-// 类型不对不是"当它不存在"：那等于安静地重新展开一次，正是这个参数要关掉的那条缝。模型
-// 递不出这个类型（它的入参从 JSON 来），所以走到这里只可能是调用方接错了线。
-func cpApprovedListing(args map[string]any) (*helper.ListResult, error) {
-	raw, ok := args[CpApprovedListingArg]
-	if !ok {
-		return nil, nil
-	}
-	listing, ok := raw.(*helper.ListResult)
-	if !ok {
-		return nil, fmt.Errorf("%s must be the caller's own *helper.ListResult, got %T", CpApprovedListingArg, raw)
-	}
-	return listing, nil
 }
 
 // parseCpEndpoint 把一个端点串解析成 (资产, 路径, 适配器)。语法由 helper.ParseTransferEndpoint
@@ -221,20 +174,18 @@ func cpSingleSource(
 	if err := transferOne(ctx, src, dst, res.Entries[0], dst.path); err != nil {
 		return "", err
 	}
+	ReportCpProgress(ctx, CpProgress{
+		Completed: 1, Total: 1, Src: res.Entries[0].Path, Dst: dst.path, Bytes: res.Entries[0].Size,
+	})
 	return cpSummary(1, res.Entries[0].Size, res.SkippedSymlinks)
 }
 
 // cpMultiSource 处理多源形态：recursive 为真，或源路径含 glob 元字符（spec §6.5）。
 // 判的是**形态**不是命中条数——一个只命中一个文件的 glob 仍然是多源，它的落点是
 // 目的基点 + RelPath 而不是字面 dst。
-//
-// approved 是调用方在工具之外展开、并按那份结果逐条审批过的清单（opsctl 那条路）。非 nil 时
-// **不再自己展开**：两次展开之间源端新出现的文件会被传输，而它从未进过审批清单。为 nil 时
-// （AI 路径）照旧自己展开——AI 侧只展开一次，本来就没有这条缝。清单来自可信调用方**不等于**
-// 可以少做检查：下面的 200 条上限与容器性守卫对它照旧执行。
 func cpMultiSource(
 	ctx context.Context, checker *permission.CommandPolicyChecker,
-	src, dst *cpEndpoint, recursive bool, detail string, approved *helper.ListResult,
+	src, dst *cpEndpoint, recursive bool, detail string,
 ) (string, error) {
 	// D16：目的地必须以 "/" 结尾。不复刻 POSIX cp 的目的地推断（b 存在则落 b/a），那要先
 	// 探测目的地、结果依赖一次 TOCTOU 式的探测，而目的路径必须在审批之前就完全确定——
@@ -246,37 +197,24 @@ func cpMultiSource(
 			dst.raw)
 	}
 
-	// D18：展开自己是一种能力。枚举读的是元数据而不是内容，但 `cp -r web-01:/ ./x` 能把
-	// 整棵文件树的结构拖出来，所以它在 List 之前先过一次 DirList 授权。
-	//
-	// 交给适配器的是用户指名的那个串，与 List 收到的完全相同：收窄到"实际会被枚举的基点"
-	// 由适配器自己做（见 helper.TransferAdapter.ApprovalSubject）。这里替它按 glob 截一刀，
-	// 对象存储那一端就会把前缀里的字面量 "[" 当成通配、把基点塌到桶根上——指名一个前缀，
-	// 换来一条整桶列举的常驻授权。
-	listPrompted, err := checkEndpoint(ctx, checker, src, helper.DirList, src.path, detail)
+	// 递归/通配审批的是用户明确指定的源与目的范围。审批必须发生在 List 之前：目录范围
+	// 已经完整描述了这次操作的边界，不需要为了生成审批项先扫描整棵目录树。
+	transferPrompted, err := checkAccessBatch(ctx, checker, []cpAccess{
+		{ep: src, path: src.path, dir: helper.DirReadScope},
+		{ep: dst, path: dst.path, dir: helper.DirWriteScope},
+	}, detail)
 	if err != nil {
 		return "", err
 	}
 
-	res := approved
-	if res == nil {
-		var expandErr error
-		res, expandErr = expandSource(ctx, src, src.path, recursive)
-		if expandErr != nil {
-			return "", expandErr
-		}
-	}
-	if len(res.Entries) > cpMaxEntries {
-		return "", fmt.Errorf(
-			"%q expands to %d entries, more than the %d that can be reviewed in one approval; "+
-				"narrow the source pattern (nothing was transferred)",
-			src.raw, len(res.Entries), cpMaxEntries)
+	res, err := expandSource(ctx, src, src.path, recursive)
+	if err != nil {
+		return "", err
 	}
 
-	// 目的路径 = 目的基点 + RelPath。形态校验只能排在展开之后（这些路径此刻才存在），
-	// 但仍然排在这次传输的审批项之前——展开授权是另一件事，它批的是"列出源端"。
+	// 目的路径 = 目的基点 + RelPath。范围审批无需知道具体路径；展开后仍逐条执行容器性与
+	// 目的端形态校验，阻止异常 RelPath 逃出已批准的目的范围。
 	dstPaths := make([]string, len(res.Entries))
-	accesses := make([]cpAccess, 0, 2*len(res.Entries))
 	for i, entry := range res.Entries {
 		if !relPathStaysUnderBase(entry.RelPath) {
 			return "", fmt.Errorf(
@@ -289,17 +227,8 @@ func cpMultiSource(
 			return "", err
 		}
 		dstPaths[i] = dstPath
-		// 读与写成对相邻：一条待批准的传输是"从这里读、写到那里"，把两半拆到一份
-		// 两百行清单的首尾两段，用户就没法逐条看出哪个文件会落到哪里。
-		accesses = append(accesses,
-			cpAccess{ep: src, path: entry.Path, dir: helper.DirRead},
-			cpAccess{ep: dst, path: dstPath, dir: helper.DirWrite})
 	}
-	transferPrompted, err := checkAccessBatch(ctx, checker, accesses, detail)
-	if err != nil {
-		return "", err
-	}
-	if err := gateLocalWrites(ctx, checker, dst, dstPaths, detail, listPrompted || transferPrompted); err != nil {
+	if err := gateLocalWrites(ctx, checker, dst, []string{dst.path}, detail, transferPrompted); err != nil {
 		return "", err
 	}
 
@@ -313,6 +242,9 @@ func cpMultiSource(
 				i, len(res.Entries), entry.Path, dstPaths[i], err)
 		}
 		totalBytes += entry.Size
+		ReportCpProgress(ctx, CpProgress{
+			Completed: i + 1, Total: len(res.Entries), Src: entry.Path, Dst: dstPaths[i], Bytes: entry.Size,
+		})
 	}
 	return cpSummary(len(res.Entries), totalBytes, res.SkippedSymlinks)
 }
@@ -325,7 +257,7 @@ func cpMultiSource(
 // 合法的 S3 key，相对 `logs/` 前缀展开出来的落点就是 `../../id_rsa`。
 // 目的端在本地时没有任何东西挡它——localAdapter.ValidateDestination 明写
 // 本地文件系统对写入目标没有形态约束，Write 又会按需建父目录——于是这一条落到用户指名的
-// 目的地之外，汇总还照样报 transferred。批的是清单上那些路径，写的就必须是那些（D16/D17）。
+// 目的地之外，汇总还照样报 transferred。实际落点必须留在获批的目的范围内（D16/D17）。
 //
 // 判据取 filepath.IsLocal：它按运行平台的词法判断"这条相对路径会不会走出它所在的子树"。
 // 选它而不是自己按 "/" 切段找 ".."，是因为 RelPath 的 "/" 分隔契约只约束得了展开侧——
@@ -334,9 +266,8 @@ func relPathStaysUnderBase(relPath string) bool {
 	return filepath.IsLocal(relPath)
 }
 
-// checkAccessBatch 让一批端点访问过一次授权：每条各自查策略，**需要确认的全部塞进同一个
-// 审批对话框**（spec §6.5 第二段 / D17）。逐条弹 N 次框不可用，批一条递归 pattern 则会
-// 顺带放宽 local_write/local_edit 那道共用的匹配器——主体始终是展开后的具体路径。
+// checkAccessBatch 让一批端点访问过一次授权：每条各自查策略，需要确认的全部塞进同一个
+// 审批对话框。递归/通配传入源与目的范围；明确文件传入具体路径（spec §6.5 / D17）。
 //
 // "有资产才有审批主体"这条判断只出现在下面那一行：其余部分（主体去重、策略检查、批量
 // 对话框、拒绝处理）对端点一视同仁，本地端点将来若要产生审批项，改的是那一行而不是这条流程。

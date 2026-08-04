@@ -36,25 +36,36 @@ func (a *minioAdapter) ListBuckets(ctx context.Context) ([]BucketItem, error) {
 	return out, nil
 }
 
-func (a *minioAdapter) ListObjects(ctx context.Context, bucket, prefix string, maxKeys int, startAfter string) ([]ObjectItem, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	out := make([]ObjectItem, 0, maxKeys+1)
-	for obj := range a.mc.ListObjects(ctx, bucket, minio.ListObjectsOptions{
-		Prefix:     prefix,
-		Recursive:  false,
-		StartAfter: startAfter,
-		MaxKeys:    maxKeys + 1,
-	}) {
-		if obj.Err != nil {
-			return nil, obj.Err
-		}
-		out = append(out, toObjectItem(obj))
-		if len(out) > maxKeys {
-			break // 已读到 maxKeys+1,足以判断"还有下一页";cancel 停止后续
-		}
+func (a *minioAdapter) ListObjects(
+	ctx context.Context, bucket, prefix string, maxKeys int, continuationToken string,
+) (*ListObjectsPage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	return out, nil
+	// minio-go 的高层迭代器会跨页拉平结果，丢失真实页边界。Core 返回单张 ListObjectsV2
+	// 响应，保留 S3 的 opaque continuation token；这是未填满但 truncated 的页不漏数据
+	// 所必需的契约。Core 当前没有 context 形参，因此调用前后都显式检查取消。
+	result, err := (minio.Core{Client: a.mc}).ListObjectsV2(bucket, prefix, "", continuationToken, "/", maxKeys)
+	if err != nil {
+		return nil, err
+	}
+	if result.IsTruncated && result.NextContinuationToken == "" {
+		return nil, fmt.Errorf("list objects response is truncated without a continuation token")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	items := make([]ObjectItem, 0, len(result.Contents)+len(result.CommonPrefixes))
+	for _, obj := range result.Contents {
+		items = append(items, toObjectItem(obj))
+	}
+	for _, p := range result.CommonPrefixes {
+		items = append(items, ObjectItem{Key: p.Prefix, IsPrefix: true})
+	}
+	return &ListObjectsPage{
+		Items: items, IsTruncated: result.IsTruncated,
+		NextContinuationToken: result.NextContinuationToken,
+	}, nil
 }
 
 func (a *minioAdapter) StatObject(ctx context.Context, bucket, key string) (ObjectItem, error) {

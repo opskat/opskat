@@ -1,8 +1,12 @@
 package policy
 
-import "path"
+import (
+	"path"
+	"strings"
+)
 
-// MatchPathRule 按 POSIX glob 匹配文件路径，`*` 不跨 `/`。
+// MatchPathRule 按 POSIX glob 匹配文件路径，`*` 不跨 `/`；尾随 `/` 的规则表示该目录的
+// 整棵子树，用于递归 cp 的目录范围授权。
 //
 // 文件传输授权（cp）与 local_write / local_edit 的路径白名单共用这一份实现：
 // 命令用 MatchCommandRule，路径用本函数，两者不可互换——把路径 pattern 交给命令
@@ -15,6 +19,9 @@ func MatchPathRule(rule, filePath string) bool {
 	}
 	if rule == "*" || rule == filePath {
 		return true
+	}
+	if strings.HasSuffix(rule, "/") {
+		return strings.HasPrefix(filePath, rule)
 	}
 	ok, err := path.Match(rule, filePath)
 	return err == nil && ok

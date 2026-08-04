@@ -278,7 +278,7 @@ func TestCpGlobMatchingNothingIsAnError(t *testing.T) {
 
 		So(err, ShouldNotBeNil)
 		So(err.Error(), ShouldContainSubstring, "no files matched")
-		So(*seen, ShouldHaveLength, 0)
+		So(*seen, ShouldHaveLength, 1)
 		So(cpFake.written, ShouldBeEmpty)
 	})
 }
@@ -322,10 +322,9 @@ func TestCpMultiSourceRequiresTrailingSlash(t *testing.T) {
 	})
 }
 
-// TestCpExpansionIsAuthorizedBeforeItRuns 锁 D18：展开自己要过一次授权。
-// `cp -r web-01:/ ./x` 能把整棵文件树的结构拖出来，所以 List 之前先审 DirList 方向。
+// TestCpExpansionIsAuthorizedBeforeItRuns 锁 D18：递归/通配的源与目的范围在 List 前授权。
 func TestCpExpansionIsAuthorizedBeforeItRuns(t *testing.T) {
-	Convey("展开前先过一次 DirList 授权", t, func() {
+	Convey("展开前先审批传输范围", t, func() {
 		Convey("递归的主体是源目录自己", func() {
 			ctx, seen := setupCp(t, "deny")
 
@@ -337,7 +336,7 @@ func TestCpExpansionIsAuthorizedBeforeItRuns(t *testing.T) {
 			So(err.Error(), ShouldContainSubstring, "USER DENIED")
 			So(*seen, ShouldHaveLength, 1)
 			So((*seen)[0].Type, ShouldEqual, "cp")
-			So((*seen)[0].Command, ShouldEqual, "/var/log")
+			So((*seen)[0].Command, ShouldEqual, "/var/log/")
 		})
 
 		// 主体的收窄归适配器：它才知道自己那一端的规则语义。入口层先按 glob 截一刀会
@@ -355,7 +354,7 @@ func TestCpExpansionIsAuthorizedBeforeItRuns(t *testing.T) {
 			So(err, ShouldNotBeNil)
 			So(*seen, ShouldHaveLength, 1)
 			So((*seen)[0].Type, ShouldEqual, asset_entity.AssetTypeOSS)
-			So((*seen)[0].Command, ShouldEqual, "object.list mybucket/logs[1]/")
+			So((*seen)[0].Command, ShouldEqual, "object.read mybucket/logs[1]/")
 		})
 
 		Convey("通配的主体是通配前的最后一层目录，不是 pattern 本身", func() {
@@ -367,10 +366,8 @@ func TestCpExpansionIsAuthorizedBeforeItRuns(t *testing.T) {
 
 			So(err, ShouldNotBeNil)
 			So(*seen, ShouldHaveLength, 1)
-			// 主体是 pattern 本身的话，点一次"始终允许"就落下一条 `/var/log/*.log` 的
-			// cp grant —— cp 的 grant 不分方向，那等于把它命中的每个文件的读写都授权了，
-			// 而用户批准的只是"列出这个目录"。
-			So((*seen)[0].Command, ShouldEqual, "/var/log")
+			// 通配范围收窄到其目录边界，不能把 pattern 本身误当成目录授权。
+			So((*seen)[0].Command, ShouldEqual, "/var/log/")
 		})
 	})
 }
@@ -414,13 +411,13 @@ func TestCpMultiSourceEntryLandsUnderDestinationBase(t *testing.T) {
 
 // TestCpMultiSourceValidatesTheJoinedDestination 锁住 ValidateDestination 的**入参**与
 // **次序**在多源形态下的那一半（单源那一半由 TestCpMalformedDestinationFailsBeforeAnyApproval
-// 锁）：要校验的是展开之后拼出来的那条具体路径（目的基点 + RelPath），因为被审批、被写入的
-// 正是它；校验基点会让每次多源传输拿一个恒为前缀形态的串去撞"必须指名一个对象"这类规则。
+// 锁）：范围获批并展开后，要校验实际写入的具体路径（目的基点 + RelPath）；校验基点会让
+// 每次多源传输拿一个恒为前缀形态的串去撞"必须指名一个对象"这类规则。
 //
-// 断言的不是 fake 返回了什么，而是 handleCp 把哪个字符串交给了它、以及这一步排在审批之前：
-// fake 只是探针，拒绝哪条路径由测试指定。
+// 断言的不是 fake 返回了什么，而是 handleCp 把哪个字符串交给了它；fake 只是探针，拒绝
+// 哪条路径由测试指定。
 func TestCpMultiSourceValidatesTheJoinedDestination(t *testing.T) {
-	Convey("多源校验的是目的基点 + RelPath，且排在审批之前", t, func() {
+	Convey("范围获批后逐条校验目的基点 + RelPath", t, func() {
 		ctx, seen := setupCp(t, "allow")
 		cpFake.rejectDst = "/logs/app.log"
 		dir := t.TempDir()
@@ -432,8 +429,8 @@ func TestCpMultiSourceValidatesTheJoinedDestination(t *testing.T) {
 
 		So(err, ShouldNotBeNil)
 		So(cpFake.validated, ShouldResemble, []string{"/logs/app.log"})
-		// 展开授权是另一件事（源端在本地，压根没有主体），这条传输的两个审批项一个都没发出。
-		So(*seen, ShouldHaveLength, 0)
+		// 目的范围已经审批；具体落点校验失败后没有任何字节写入。
+		So(*seen, ShouldHaveLength, 1)
 		So(cpFake.written, ShouldBeEmpty)
 	})
 }
