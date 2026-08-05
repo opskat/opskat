@@ -89,23 +89,46 @@ func (a *Agent) selectSigner(ctx context.Context, fingerprint string) (*VerifySi
 	return NewVerifySigner(signers[idx]), nil
 }
 
-// Dial authenticates to addr using only the single publickey method of aa. cfg
-// supplies the user, host key verification and timeout; its Auth and
-// AuthCallback are cleared so no inherited or temporary auth method can leak
-// into the handshake. The agent transport is closed on every path before the
-// client is returned. If the server accepts "none" before the signer is used,
-// the connection is closed and ssh_agent_auth_not_used is returned; a handshake
-// that fails to complete the precise publickey exchange maps to
-// ssh_agent_publickey_failed unless a typed agent error (e.g. sign_failed or
-// canceled) is already in flight.
-func (a *Agent) Dial(ctx context.Context, addr string, cfg *ssh.ClientConfig, aa *AgentAuth) (*ssh.Client, error) {
+// Dial authenticates to addr using only the single publickey method of aa,
+// with optional MFA continuation (DialOptions). cfg supplies the user, host
+// key verification and timeout; its Auth and AuthCallback are replaced so no
+// inherited or temporary auth method can leak into the handshake. The agent
+// transport is closed on every path before the client is returned.
+//
+// The host key boundary contract is enforced: an explicit verifier is required
+// (no InsecureIgnoreHostKey fallback), the first accepted key is pinned for the
+// connection, same-key rekeys pass without re-invoking the verifier, and a
+// changed key fails. Keyboard-interactive is offered at most once, only after
+// the precise public key partially succeeded; a non-interactive caller that
+// would need MFA gets ssh_agent_mfa_required. If the server accepts "none"
+// before the signer is used, the connection is closed and ssh_agent_auth_not_used
+// is returned.
+func (a *Agent) Dial(ctx context.Context, addr string, cfg *ssh.ClientConfig, aa *AgentAuth, opts ...DialOptions) (*ssh.Client, error) {
+	var mfa InteractiveCaller
+	if len(opts) > 0 {
+		mfa = opts[0].MFA
+	}
 	if cfg == nil {
 		a.closeLog(ctx)
 		return nil, newError(CodeProtocolError, "ssh client config is required")
 	}
+	// Host key boundary: an explicit verifier is required. Wrapping it with a
+	// per-connection pinning contract pins the first accepted key and lets
+	// same-key rekeys pass without re-invoking the verifier; a changed key
+	// fails the connection. There is no InsecureIgnoreHostKey fallback.
+	if cfg.HostKeyCallback == nil {
+		a.closeLog(ctx)
+		return nil, newError(CodeHostKeyVerifierMissing, "an explicit host key verifier is required")
+	}
+	hk := NewHostKeyContract(cfg.HostKeyCallback)
 	cc := *cfg
-	cc.Auth = []ssh.AuthMethod{aa.method}
-	cc.AuthCallback = nil
+	cc.HostKeyCallback = hk.Callback()
+	// The MFA controller owns the whole auth sequence: the precise public key
+	// first, then at most one keyboard-interactive after public key partial
+	// success. config.Auth is cleared so no inherited or temporary method can
+	// leak into the handshake.
+	cc.Auth = nil
+	cc.AuthCallback = (&mfaController{ctx: ctx, publicKey: aa.method, interactive: mfa}).choose
 
 	dialCtx := ctx
 	if cc.Timeout > 0 {

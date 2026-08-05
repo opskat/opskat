@@ -43,6 +43,23 @@ const (
 	// CodeAuthNotUsed: SSH succeeded without ever using the selected signer
 	// (the server accepted "none").
 	CodeAuthNotUsed = "ssh_agent_auth_not_used"
+	// CodeAuthSequenceUnsupported: the MFA or authentication method sequence
+	// (repeated partial success, a third factor, or an unexpected method) is
+	// not supported.
+	CodeAuthSequenceUnsupported = "ssh_agent_auth_sequence_unsupported"
+	// CodeMFARequired: a new connection requires interaction the caller
+	// cannot provide (no hidden prompts are shown).
+	CodeMFARequired = "ssh_agent_mfa_required"
+	// CodeMFAFailed: challenge input or server verification failed.
+	CodeMFAFailed = "ssh_agent_mfa_failed"
+	// CodeHostKeyVerifierMissing: the product connection lacks an explicit
+	// host key verifier.
+	CodeHostKeyVerifierMissing = "ssh_host_key_verifier_missing"
+	// CodeHostKeyStoreFailed: host key persistence failed before Agent signing.
+	CodeHostKeyStoreFailed = "ssh_host_key_store_failed"
+	// CodeHostKeyChanged: a rekey delivered a different key than the one
+	// accepted at the start of the connection.
+	CodeHostKeyChanged = "ssh_host_key_changed"
 )
 
 // Error is a typed Agent failure carrying a stable code and a clean message.
