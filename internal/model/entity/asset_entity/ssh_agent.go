@@ -18,9 +18,15 @@ import (
 	"unicode"
 )
 
-// SSH Agent 字段写入边界的稳定错误 token。消费方（前端/AI）据此识别"原始写入对
-// Agent 判别字段或来源字段制造了顶层歧义"，而不是把它当作普通格式错误重试。
-const CodeAgentConfigAmbiguous = "ssh_config_agent_write_ambiguous"
+// SSH Agent 字段写入边界的稳定错误 token（与规格错误码表一致）。消费方（前端/AI）
+// 据此识别"原始写入对 Agent 判别字段或来源字段制造了顶层歧义"，而不是把它当作
+// 普通格式错误重试：
+//   - CodeAgentConfigDuplicateKey：顶层重复 key（如两个 auth_type）；
+//   - CodeAgentConfigNoncanonicalKey：Agent 相关已知 key 的非规范拼写。
+const (
+	CodeAgentConfigDuplicateKey    = "asset_config_duplicate_key"
+	CodeAgentConfigNoncanonicalKey = "asset_config_noncanonical_key"
+)
 
 // Error 是 SSH 资产契约层的类型化错误，携带稳定错误码。
 type Error struct {
@@ -204,11 +210,11 @@ func CheckSSHConfigAgentWriteBoundary(raw string) error {
 			continue
 		}
 		if key != canon {
-			return newAgentConfigError(CodeAgentConfigAmbiguous,
+			return newAgentConfigError(CodeAgentConfigNoncanonicalKey,
 				fmt.Sprintf("SSH Agent 字段 %q 使用了非规范拼写，应为 %q", key, canon))
 		}
 		if seen[norm] {
-			return newAgentConfigError(CodeAgentConfigAmbiguous,
+			return newAgentConfigError(CodeAgentConfigDuplicateKey,
 				fmt.Sprintf("SSH 配置 JSON 顶层出现重复 key %q", key))
 		}
 		seen[norm] = true

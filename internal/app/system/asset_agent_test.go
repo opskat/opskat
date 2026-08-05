@@ -62,7 +62,7 @@ func TestCreateAsset_SSHAgentWriteBoundary(t *testing.T) {
 			assert.Error(t, err)
 			code, ok := asset_entity.AgentConfigCodeOf(err)
 			assert.True(t, ok)
-			assert.Equal(t, asset_entity.CodeAgentConfigAmbiguous, code)
+			assert.Equal(t, asset_entity.CodeAgentConfigDuplicateKey, code)
 			require.Len(t, auditMem.logs, 1)
 			assert.Equal(t, 0, auditMem.logs[0].Success)
 		})
@@ -73,7 +73,7 @@ func TestCreateAsset_SSHAgentWriteBoundary(t *testing.T) {
 			assert.Error(t, err)
 			code, ok := asset_entity.AgentConfigCodeOf(err)
 			assert.True(t, ok)
-			assert.Equal(t, asset_entity.CodeAgentConfigAmbiguous, code)
+			assert.Equal(t, asset_entity.CodeAgentConfigNoncanonicalKey, code)
 		})
 
 		Convey("非 SSH 资产不检查 Agent 写入边界", func() {

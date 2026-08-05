@@ -145,7 +145,7 @@ func TestCheckSSHConfigAgentWriteBoundary(t *testing.T) {
 			assert.Error(t, err)
 			code, ok := AgentConfigCodeOf(err)
 			assert.True(t, ok)
-			assert.Equal(t, CodeAgentConfigAmbiguous, code)
+			assert.Equal(t, CodeAgentConfigDuplicateKey, code)
 		})
 
 		convey.Convey("重复 agent_source_id key 被拒绝", func() {
@@ -165,7 +165,7 @@ func TestCheckSSHConfigAgentWriteBoundary(t *testing.T) {
 				assert.Error(t, err, "raw=%s", raw)
 				code, ok := AgentConfigCodeOf(err)
 				assert.True(t, ok)
-				assert.Equal(t, CodeAgentConfigAmbiguous, code)
+				assert.Equal(t, CodeAgentConfigNoncanonicalKey, code)
 			}
 		})
 
