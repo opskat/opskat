@@ -8,6 +8,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/forward_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
+	"github.com/opskat/opskat/internal/model/entity/ssh_agent_source_entity"
 )
 
 // CredentialCrypto 凭证加解密接口
@@ -31,16 +32,19 @@ type BackupForward struct {
 
 // BackupData 备份数据结构
 type BackupData struct {
-	Version             string                             `json:"version"`
-	ExportedAt          string                             `json:"exported_at"`
-	IncludesCredentials bool                               `json:"includes_credentials,omitempty"`
-	Groups              []*group_entity.Group              `json:"groups,omitempty"`
-	Assets              []*asset_entity.Asset              `json:"assets,omitempty"`
-	Credentials         []*BackupCredential                `json:"credentials,omitempty"`
-	PolicyGroups        []*policy_group_entity.PolicyGroup `json:"policy_groups,omitempty"`
-	Forwards            []*BackupForward                   `json:"forwards,omitempty"`
-	Shortcuts           json.RawMessage                    `json:"shortcuts,omitempty"`
-	CustomThemes        json.RawMessage                    `json:"custom_themes,omitempty"`
+	Version             string                `json:"version"`
+	ExportedAt          string                `json:"exported_at"`
+	IncludesCredentials bool                  `json:"includes_credentials,omitempty"`
+	Groups              []*group_entity.Group `json:"groups,omitempty"`
+	Assets              []*asset_entity.Asset `json:"assets,omitempty"`
+	Credentials         []*BackupCredential   `json:"credentials,omitempty"`
+	// AgentSources 是 SSH Agent 来源定义（端点类型 + 端点值 + 显示元数据），
+	// 不含任何身份、公钥、签名或运行时 payload。
+	AgentSources []*ssh_agent_source_entity.SSHAgentSource `json:"agent_sources,omitempty"`
+	PolicyGroups []*policy_group_entity.PolicyGroup        `json:"policy_groups,omitempty"`
+	Forwards     []*BackupForward                          `json:"forwards,omitempty"`
+	Shortcuts    json.RawMessage                           `json:"shortcuts,omitempty"`
+	CustomThemes json.RawMessage                           `json:"custom_themes,omitempty"`
 }
 
 // BackupSummary 备份概览信息（用于导入前预览）
@@ -52,6 +56,7 @@ type BackupSummary struct {
 	AssetCount          int    `json:"asset_count"`
 	GroupCount          int    `json:"group_count"`
 	CredentialCount     int    `json:"credential_count"`
+	AgentSourceCount    int    `json:"agent_source_count"`
 	PolicyGroupCount    int    `json:"policy_group_count"`
 	ForwardCount        int    `json:"forward_count"`
 	HasShortcuts        bool   `json:"has_shortcuts"`
@@ -67,6 +72,7 @@ func (d *BackupData) Summary() *BackupSummary {
 		AssetCount:          len(d.Assets),
 		GroupCount:          len(d.Groups),
 		CredentialCount:     len(d.Credentials),
+		AgentSourceCount:    len(d.AgentSources),
 		PolicyGroupCount:    len(d.PolicyGroups),
 		ForwardCount:        len(d.Forwards),
 		HasShortcuts:        len(d.Shortcuts) > 0,
@@ -102,6 +108,7 @@ type ImportResult struct {
 	AssetsImported       int    `json:"assets_imported"`
 	GroupsImported       int    `json:"groups_imported"`
 	CredentialsImported  int    `json:"credentials_imported"`
+	AgentSourcesImported int    `json:"agent_sources_imported"`
 	PolicyGroupsImported int    `json:"policy_groups_imported"`
 	ForwardsImported     int    `json:"forwards_imported"`
 	Shortcuts            string `json:"shortcuts,omitempty"` // JSON 字符串，前端处理

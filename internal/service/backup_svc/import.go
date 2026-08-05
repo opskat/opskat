@@ -14,12 +14,21 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
+	"github.com/opskat/opskat/internal/sshagent"
 )
 
 // Import 导入备份数据
 func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto CredentialCrypto) (*ImportResult, error) {
 	result := &ImportResult{}
 	isReplace := opts.Mode != "merge"
+
+	// Agent 预检在写入前执行：重复来源 ID、缺失来源引用和畸形 Agent 字段
+	// 都在任何写入（含 replace 模式的清空）之前拒绝。
+	if opts.ImportAssets {
+		if err := precheckAgentSources(data); err != nil {
+			return nil, err
+		}
+	}
 
 	err := db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
 		// 1. 策略组
@@ -41,7 +50,26 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 			}
 		}
 
-		// 2. 凭据
+		// 2. SSH Agent 来源（先建来源，再建 Agent 认证资产）
+		agentSourceIDMap := make(map[int64]int64)
+		if opts.ImportAssets && len(data.AgentSources) > 0 {
+			if isReplace {
+				if err := tx.Exec("DELETE FROM ssh_agent_sources").Error; err != nil {
+					return fmt.Errorf("清除 SSH Agent 来源失败: %w", err)
+				}
+			}
+			for _, src := range data.AgentSources {
+				oldID := src.ID
+				src.ID = 0
+				if err := tx.Create(src).Error; err != nil {
+					return fmt.Errorf("创建 SSH Agent 来源 %s 失败: %w", src.Name, err)
+				}
+				agentSourceIDMap[oldID] = src.ID
+				result.AgentSourcesImported++
+			}
+		}
+
+		// 3. 凭据
 		credIDMap := make(map[int64]int64)
 		if opts.ImportCredentials && len(data.Credentials) > 0 && crypto != nil {
 			if isReplace {
@@ -76,7 +104,7 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 			}
 		}
 
-		// 3. 分组
+		// 4. 分组
 		groupIDMap := make(map[int64]int64)
 		if opts.ImportAssets && len(data.Groups) > 0 {
 			if isReplace {
@@ -103,7 +131,7 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 			}
 		}
 
-		// 4. 资产
+		// 5. 资产
 		assetIDMap := make(map[int64]int64)
 		if opts.ImportAssets && len(data.Assets) > 0 {
 			if isReplace {
@@ -145,6 +173,12 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 								cfg.CredentialID = newID
 							} else if !opts.ImportCredentials {
 								cfg.CredentialID = 0
+							}
+						}
+						// Agent 来源引用重映射：旧来源 ID → 新来源 ID（预检保证可映射）
+						if cfg.AuthType == asset_entity.AuthTypeAgent && cfg.AgentSourceID > 0 {
+							if newID, ok := agentSourceIDMap[cfg.AgentSourceID]; ok {
+								cfg.AgentSourceID = newID
 							}
 						}
 						// 重新加密内联密码
@@ -270,7 +304,7 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 			}
 		}
 
-		// 5. 端口转发
+		// 6. 端口转发
 		if opts.ImportForwards && len(data.Forwards) > 0 {
 			if isReplace {
 				if err := tx.Exec("DELETE FROM forward_rules").Error; err != nil {
@@ -318,6 +352,47 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 	}
 
 	return result, nil
+}
+
+// precheckAgentSources 在写入前拒绝来源/资产中的 Agent 引用问题：
+//   - 重复来源 ID；
+//   - 结构非法的来源端点（畸形 Agent 字段；平台不兼容但结构合法的来源保留为 unsupported）；
+//   - Agent 认证 SSH 资产引用了备份中不存在的来源；
+//   - Agent 认证 SSH 资产的 Agent 契约畸形（指纹非法、非 Agent 认证携带来源字段等）。
+//
+// 只校验备份数据本身，不触碰数据库；任一项失败即整体拒绝导入。
+func precheckAgentSources(data *BackupData) error {
+	seen := make(map[int64]bool, len(data.AgentSources))
+	for _, src := range data.AgentSources {
+		if seen[src.ID] {
+			return fmt.Errorf("备份包含重复的 Agent 来源 ID: %d", src.ID)
+		}
+		seen[src.ID] = true
+		s := sshagent.Source{Type: sshagent.EndpointType(src.EndpointType), Value: src.Endpoint}
+		if err := s.Validate(); err != nil {
+			return fmt.Errorf("来源 %s 字段畸形: %w", src.Name, err)
+		}
+	}
+	for _, a := range data.Assets {
+		if !a.IsSSH() || a.Config == "" {
+			continue
+		}
+		cfg, err := a.GetSSHConfig()
+		if err != nil {
+			// 无法解析的配置保持既有宽松导入行为，不做 Agent 预检
+			continue
+		}
+		if cfg.AuthType != asset_entity.AuthTypeAgent && cfg.AgentSourceID == 0 && cfg.AgentKeyFingerprint == "" {
+			continue
+		}
+		if cfg.AuthType == asset_entity.AuthTypeAgent && cfg.AgentSourceID > 0 && !seen[cfg.AgentSourceID] {
+			return fmt.Errorf("资产 %s 引用的 Agent 来源 %d 不在备份中", a.Name, cfg.AgentSourceID)
+		}
+		if err := a.Validate(); err != nil {
+			return fmt.Errorf("资产 %s 的 Agent 字段畸形: %w", a.Name, err)
+		}
+	}
+	return nil
 }
 
 // --- 导入辅助函数 ---
