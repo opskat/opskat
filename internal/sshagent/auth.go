@@ -62,28 +62,28 @@ func (a *Agent) selectSigner(ctx context.Context, fingerprint string) (*VerifySi
 			continue
 		}
 		if idx != -1 {
-			a.Close()
+			a.closeLog(ctx)
 			return nil, newError(CodeIdentityDuplicate, "more than one agent identity matches the saved fingerprint")
 		}
 		idx = i
 	}
 	if idx == -1 {
-		a.Close()
+		a.closeLog(ctx)
 		return nil, newError(CodeIdentityMissing, "no agent identity matches the saved fingerprint")
 	}
 	signers, err := a.client.Signers()
 	if err != nil {
-		a.Close()
+		a.closeLog(ctx)
 		return nil, a.listError(ctx, err)
 	}
 	if len(signers) <= idx {
-		a.Close()
+		a.closeLog(ctx)
 		return nil, newError(CodeProtocolError, "agent identity list changed while selecting the signer")
 	}
 	// Guard against the agent's state changing between the listing and the
 	// signer fetch: the selected signer must still match the saved fingerprint.
 	if FingerprintSHA256(signers[idx].PublicKey()) != fingerprint {
-		a.Close()
+		a.closeLog(ctx)
 		return nil, newError(CodeIdentityMissing, "no agent identity matches the saved fingerprint")
 	}
 	return NewVerifySigner(signers[idx]), nil
@@ -97,10 +97,10 @@ func (a *Agent) selectSigner(ctx context.Context, fingerprint string) (*VerifySi
 // the connection is closed and ssh_agent_auth_not_used is returned; a handshake
 // that fails to complete the precise publickey exchange maps to
 // ssh_agent_publickey_failed unless a typed agent error (e.g. sign_failed or
-// cancelled) is already in flight.
+// canceled) is already in flight.
 func (a *Agent) Dial(ctx context.Context, addr string, cfg *ssh.ClientConfig, aa *AgentAuth) (*ssh.Client, error) {
 	if cfg == nil {
-		a.Close()
+		a.closeLog(ctx)
 		return nil, newError(CodeProtocolError, "ssh client config is required")
 	}
 	cc := *cfg
@@ -115,17 +115,17 @@ func (a *Agent) Dial(ctx context.Context, addr string, cfg *ssh.ClientConfig, aa
 	}
 	raw, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", addr)
 	if err != nil {
-		a.Close()
+		a.closeLog(ctx)
 		if ctx.Err() != nil {
-			return nil, newError(CodeCancelled, "agent handshake was cancelled")
+			return nil, newError(CodeCancelled, "agent handshake was canceled")
 		}
 		return nil, err
 	}
 	client, chans, reqs, err := ssh.NewClientConn(raw, addr, &cc)
 	if err != nil {
-		a.Close()
+		a.closeLog(ctx)
 		if ctx.Err() != nil {
-			return nil, newError(CodeCancelled, "agent handshake was cancelled")
+			return nil, newError(CodeCancelled, "agent handshake was canceled")
 		}
 		if _, ok := CodeOf(err); ok {
 			return nil, err
@@ -134,7 +134,7 @@ func (a *Agent) Dial(ctx context.Context, addr string, cfg *ssh.ClientConfig, aa
 	}
 	// The handshake owns the agent transport: release it before returning the
 	// established client so no socket or pipe reference is held.
-	a.Close()
+	a.closeLog(ctx)
 	if !aa.Used() {
 		_ = client.Close()
 		return nil, newError(CodeAuthNotUsed, "server accepted authentication without using the selected agent signer")

@@ -175,7 +175,7 @@ func TestListIdentitiesHappyPath(t *testing.T) {
 		)
 		ag, err := Open(context.Background(), Source{Type: EndpointTypeUnixSocket, Value: srv.path})
 		convey.So(err, convey.ShouldBeNil)
-		defer ag.Close()
+		defer func() { _ = ag.Close() }()
 
 		ids, err := ag.ListIdentities(context.Background())
 		convey.So(err, convey.ShouldBeNil)
@@ -193,7 +193,7 @@ func TestListIdentitiesCommentCleaning(t *testing.T) {
 		srv, _ := keyringServer(t, agent.AddedKey{PrivateKey: priv, Comment: "line1\n\x01line2\x7f"})
 		ag, err := Open(context.Background(), Source{Type: EndpointTypeUnixSocket, Value: srv.path})
 		convey.So(err, convey.ShouldBeNil)
-		defer ag.Close()
+		defer func() { _ = ag.Close() }()
 
 		ids, err := ag.ListIdentities(context.Background())
 		convey.So(err, convey.ShouldBeNil)
@@ -255,7 +255,7 @@ func TestListIdentitiesPayloadLimits(t *testing.T) {
 		convey.Convey("duplicate identities are listed and validated without crashing", func() {
 			body := identitiesResponse(2, keyRecord(pubBlob, "a"), keyRecord(pubBlob, "b"))
 			ag := openAgainst(t, body)
-			defer ag.Close()
+			defer func() { _ = ag.Close() }()
 			ids, err := ag.ListIdentities(context.Background())
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ids, convey.ShouldHaveLength, 2)
@@ -296,12 +296,12 @@ func TestListIdentitiesDelayed(t *testing.T) {
 
 func TestListIdentitiesCancelled(t *testing.T) {
 	convey.Convey("context cancellation aborts listing", t, func() {
-		convey.Convey("cancelled before the call", func() {
+		convey.Convey("canceled before the call", func() {
 			priv, _ := newTestKey(t)
 			srv, _ := keyringServer(t, agent.AddedKey{PrivateKey: priv, Comment: "k"})
 			ag, err := Open(context.Background(), Source{Type: EndpointTypeUnixSocket, Value: srv.path})
 			convey.So(err, convey.ShouldBeNil)
-			defer ag.Close()
+			defer func() { _ = ag.Close() }()
 
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
@@ -309,11 +309,11 @@ func TestListIdentitiesCancelled(t *testing.T) {
 			convey.So(errCode(err), convey.ShouldEqual, CodeCancelled)
 		})
 
-		convey.Convey("cancelled while waiting on a silent agent", func() {
+		convey.Convey("canceled while waiting on a silent agent", func() {
 			srv := newUnixAgentServer(t, serveDelayed)
 			ag, err := Open(context.Background(), Source{Type: EndpointTypeUnixSocket, Value: srv.path})
 			convey.So(err, convey.ShouldBeNil)
-			defer ag.Close()
+			defer func() { _ = ag.Close() }()
 
 			ctx, cancel := context.WithCancel(context.Background())
 			go func() {
@@ -370,7 +370,7 @@ func TestTransportLifecycle(t *testing.T) {
 				cancel()
 			}()
 			if _, err := ag.ListIdentities(ctx); err == nil {
-				t.Fatal("expected cancelled error")
+				t.Fatal("expected canceled error")
 			}
 			convey.So(waitClose(connClosed, time.Second), convey.ShouldBeTrue)
 		})
@@ -396,7 +396,7 @@ func TestPeerUID(t *testing.T) {
 			srv, _ := keyringServer(t, agent.AddedKey{PrivateKey: priv, Comment: "k"})
 			ag, err := Open(context.Background(), Source{Type: EndpointTypeUnixSocket, Value: srv.path})
 			convey.So(err, convey.ShouldBeNil)
-			defer ag.Close()
+			defer func() { _ = ag.Close() }()
 
 			uid, ok := peerEUID(ag.conn.(*net.UnixConn))
 			convey.So(ok, convey.ShouldBeTrue)
@@ -459,7 +459,7 @@ func openAgainst(t *testing.T, body []byte) *Agent {
 func listAgainst(t *testing.T, body []byte) ([]Identity, error) {
 	t.Helper()
 	ag := openAgainst(t, body)
-	defer ag.Close()
+	defer func() { _ = ag.Close() }()
 	return ag.ListIdentities(context.Background())
 }
 

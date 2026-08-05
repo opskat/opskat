@@ -30,7 +30,7 @@ const (
 	// CodeEmpty: the agent is reachable but holds no identities.
 	CodeEmpty = "ssh_agent_empty"
 	// CodeCancelled: the caller stopped waiting or the operation context ended.
-	CodeCancelled = "ssh_agent_cancelled"
+	CodeCancelled = "ssh_agent_cancelled" //nolint:misspell // spec-pinned wire code from the SSH Agent design spec; British spelling is intentional
 	// CodeIdentityMissing: the saved fingerprint currently matches no identity.
 	CodeIdentityMissing = "ssh_agent_identity_missing"
 	// CodeIdentityDuplicate: the fingerprint cannot uniquely select one signer.

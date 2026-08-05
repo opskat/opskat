@@ -37,7 +37,7 @@ func newUnixAgentServer(t *testing.T, handler func(net.Conn)) *testAgentServer {
 				return
 			}
 			go func() {
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				handler(conn)
 			}()
 		}

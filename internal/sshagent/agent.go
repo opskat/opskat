@@ -13,6 +13,9 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // Bounded identity limits from the design spec.
@@ -45,7 +48,7 @@ type Identity struct {
 }
 
 // Agent is an open SSH Agent transport. It owns its connection: after a failed
-// or cancelled operation it closes itself, and the caller closes it after a
+// or canceled operation it closes itself, and the caller closes it after a
 // successful one.
 type Agent struct {
 	conn        transport
@@ -73,7 +76,7 @@ func Open(ctx context.Context, src Source) (*Agent, error) {
 	conn, err := dialEndpoint(ctx, kind, value)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, newError(CodeCancelled, "agent open was cancelled")
+			return nil, newError(CodeCancelled, "agent open was canceled")
 		}
 		return nil, newError(CodeEndpointUnavailable, "agent endpoint is unavailable")
 	}
@@ -100,13 +103,22 @@ func (a *Agent) Close() error {
 	return a.closeErr
 }
 
+// closeLog closes the transport, logging any close error. Every call site is
+// already returning a typed protocol error, so a failed close is logged rather
+// than masking the primary failure.
+func (a *Agent) closeLog(ctx context.Context) {
+	if err := a.Close(); err != nil {
+		logger.Ctx(ctx).Warn("close ssh agent transport", zap.Error(err))
+	}
+}
+
 // ListIdentities lists the agent's identities under the bounded limits. On any
 // error (including cancellation, empty or malformed payloads) the transport is
 // closed; on success it stays open for the caller (e.g. signing).
 func (a *Agent) ListIdentities(ctx context.Context) ([]Identity, error) {
 	if err := ctx.Err(); err != nil {
-		a.Close()
-		return nil, newError(CodeCancelled, "agent operation was cancelled")
+		a.closeLog(ctx)
+		return nil, newError(CodeCancelled, "agent operation was canceled")
 	}
 
 	deadline := time.Now().Add(a.listTimeout)
@@ -122,7 +134,7 @@ func (a *Agent) ListIdentities(ctx context.Context) ([]Identity, error) {
 	go func() {
 		select {
 		case <-ctx.Done():
-			a.Close()
+			a.closeLog(ctx)
 		case <-done:
 		}
 	}()
@@ -130,39 +142,39 @@ func (a *Agent) ListIdentities(ctx context.Context) ([]Identity, error) {
 	keys, err := a.client.List()
 	close(done)
 	if err != nil {
-		a.Close()
+		a.closeLog(ctx)
 		return nil, a.listError(ctx, err)
 	}
 	// Success: drop the listing deadline so later operations (e.g. signing)
 	// are not bounded by it.
 	_ = a.conn.SetDeadline(time.Time{})
 	if cerr := ctx.Err(); cerr != nil {
-		a.Close()
-		return nil, newError(CodeCancelled, "agent operation was cancelled")
+		a.closeLog(ctx)
+		return nil, newError(CodeCancelled, "agent operation was canceled")
 	}
 
 	if len(keys) > MaxIdentities {
-		a.Close()
+		a.closeLog(ctx)
 		return nil, newError(CodePayloadInvalid, "agent returned too many identities")
 	}
 	if len(keys) == 0 {
-		a.Close()
+		a.closeLog(ctx)
 		return nil, newError(CodeEmpty, "agent is reachable but holds no identities")
 	}
 
 	ids := make([]Identity, 0, len(keys))
 	for _, k := range keys {
 		if len(k.Blob) > MaxKeyBlobBytes {
-			a.Close()
+			a.closeLog(ctx)
 			return nil, newError(CodePayloadInvalid, "agent returned an oversized key blob")
 		}
 		if len(k.Comment) > MaxCommentBytes {
-			a.Close()
+			a.closeLog(ctx)
 			return nil, newError(CodePayloadInvalid, "agent returned an oversized key comment")
 		}
 		pub, err := ssh.ParsePublicKey(k.Blob)
 		if err != nil {
-			a.Close()
+			a.closeLog(ctx)
 			return nil, newError(CodePayloadInvalid, "agent returned a key blob that is not a valid SSH public key")
 		}
 		ids = append(ids, Identity{
@@ -178,7 +190,7 @@ func (a *Agent) ListIdentities(ctx context.Context) ([]Identity, error) {
 // caller cancellation, an unresponsive agent (timeout) and a broken protocol.
 func (a *Agent) listError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
-		return newError(CodeCancelled, "agent operation was cancelled")
+		return newError(CodeCancelled, "agent operation was canceled")
 	}
 	var ne net.Error
 	if errors.As(err, &ne) && ne.Timeout() {
