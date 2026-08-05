@@ -14,6 +14,8 @@ interface SSHConfig {
   port: number;
   username: string;
   auth_type: string;
+  agent_source_id?: number;
+  agent_key_fingerprint?: string;
   password?: string;
   credential_id?: number;
   private_keys?: string[];
@@ -31,6 +33,12 @@ export interface SSHFormState extends ConnectionFormFields {
   port: number;
   username: string;
   authType: string;
+  /** agent-auth 选中的来源 id(0 = 未选;新建不自动选)。 */
+  agentSourceId: number;
+  /** agent-auth 选中的精确指纹("" = 未选)。 */
+  agentKeyFingerprint: string;
+  /** 编辑态已存指纹在当前来源身份中缺失时的只读展示值;非空时禁止保存。 */
+  agentMissingFingerprint: string;
   keySource: "managed" | "file";
   /** key-auth managed ssh_key 凭据 id(非 password 凭据)。 */
   credentialId: number;
@@ -50,6 +58,9 @@ export const SSH_DEFAULTS: SSHFormState = {
   port: 22,
   username: "root",
   authType: "password",
+  agentSourceId: 0,
+  agentKeyFingerprint: "",
+  agentMissingFingerprint: "",
   keySource: "managed",
   credentialId: 0,
   selectedKeyPaths: [],
@@ -97,6 +108,14 @@ export function buildSSHConfig(state: SSHFormState, opts: SSHBuildOptions): stri
     }
   }
 
+  if (state.authType === "agent") {
+    // Agent 模式:仅保存来源 + 规范指纹;与密码/密钥互斥,即便 state 残留 password/key 字段也不序列化。
+    if (state.agentSourceId > 0 && state.agentKeyFingerprint) {
+      cfg.agent_source_id = state.agentSourceId;
+      cfg.agent_key_fingerprint = state.agentKeyFingerprint;
+    }
+  }
+
   if (opts.includeJumpHost && state.connectionType === "jumphost" && state.sshTunnelId > 0) {
     cfg.jump_host_id = state.sshTunnelId;
   }
@@ -133,6 +152,9 @@ export function parseSSHConfig(configJSON: string, assetTunnelId = 0): SSHFormSt
       port: cfg.port || 22,
       username: cfg.username || "root",
       authType: cfg.auth_type || "password",
+      agentSourceId: cfg.auth_type === "agent" ? cfg.agent_source_id || 0 : 0,
+      agentKeyFingerprint: cfg.auth_type === "agent" ? cfg.agent_key_fingerprint || "" : "",
+      agentMissingFingerprint: "", // 运行时检查缺失态,解析阶段未知
       keySource: cfg.private_keys && cfg.private_keys.length > 0 ? "file" : "managed",
       credentialId: cfg.auth_type === "key" ? cfg.credential_id || 0 : 0,
       selectedKeyPaths: cfg.private_keys || [],

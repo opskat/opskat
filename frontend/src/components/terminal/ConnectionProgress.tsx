@@ -50,9 +50,13 @@ function getStepIndex(step: ConnectionStep, steps: { key: ConnectionStep }[]): n
 
 interface ConnectionProgressProps {
   connectionId: string;
+  /** 所在终端标签页是否当前活动(可见);隐藏标签页不抢夺焦点。 */
+  isTabActive?: boolean;
+  /** 该连接窗格是否当前聚焦。 */
+  isPaneActive?: boolean;
 }
 
-export function ConnectionProgress({ connectionId }: ConnectionProgressProps) {
+export function ConnectionProgress({ connectionId, isTabActive, isPaneActive }: ConnectionProgressProps) {
   const { t } = useTranslation();
   const connection = useTerminalStore((s) => s.connections[connectionId]) as ConnectionState | undefined;
   const retryConnect = useTerminalStore((s) => s.retryConnect);
@@ -196,7 +200,9 @@ export function ConnectionProgress({ connectionId }: ConnectionProgressProps) {
           <AuthChallengeForm
             prompts={connection.challenge.prompts}
             echo={connection.challenge.echo}
+            visible={!!isTabActive && !!isPaneActive}
             onSubmit={(answers) => respondChallenge(connectionId, answers)}
+            onCancel={() => cancelConnect(connectionId)}
           />
         )}
 
@@ -204,6 +210,7 @@ export function ConnectionProgress({ connectionId }: ConnectionProgressProps) {
         {isError && (
           <ErrorActions
             authFailed={connection.authFailed || false}
+            error={connection.error}
             onRetry={(password) => retryConnect(connectionId, password)}
             onClose={() => cancelConnect(connectionId)}
           />
@@ -260,11 +267,16 @@ function LogArea({ logs }: { logs: ConnectionState["logs"] }) {
 function AuthChallengeForm({
   prompts,
   echo,
+  visible,
   onSubmit,
+  onCancel,
 }: {
   prompts: string[];
   echo: boolean[];
+  /** 仅当前活动且可见的连接操作自动聚焦;隐藏标签页不抢夺焦点。 */
+  visible: boolean;
   onSubmit: (answers: string[]) => void;
+  onCancel: () => void;
 }) {
   const { t } = useTranslation();
   const [answers, setAnswers] = useState<string[]>(() => new Array(prompts.length).fill(""));
@@ -273,11 +285,24 @@ function AuthChallengeForm({
   };
 
   return (
-    <div className="w-full max-w-xs space-y-3 mb-4">
+    <div
+      className="w-full max-w-xs space-y-3 mb-4"
+      onKeyDown={(e) => {
+        // Esc 取消当前操作:答案只存在于本地 state,取消即随卸载丢弃。
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
+        }
+      }}
+    >
       {prompts.map((prompt, i) => (
         <div key={i} className="space-y-1">
-          <label className="text-xs text-muted-foreground">{prompt}</label>
+          {/* 服务器提示按普通文本渲染(不是 HTML);label 与输入框正确关联。 */}
+          <label htmlFor={`mfa-answer-${i}`} className="text-xs text-muted-foreground">
+            {prompt}
+          </label>
           <Input
+            id={`mfa-answer-${i}`}
             type={echo[i] ? "text" : "password"}
             value={answers[i]}
             onChange={(e) => {
@@ -287,7 +312,7 @@ function AuthChallengeForm({
             }}
             onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
             className="h-8 text-sm"
-            autoFocus={i === 0}
+            autoFocus={visible && i === 0}
           />
         </div>
       ))}
@@ -352,22 +377,30 @@ function HostKeyVerifyForm({
 
 function ErrorActions({
   authFailed,
+  error,
   onRetry,
   onClose,
 }: {
   authFailed: boolean;
+  error?: string;
   onRetry: (password?: string) => void;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
   const [password, setPassword] = useState("");
+  // Agent 错误绝不进入密码更新/重试流程:后端对 Agent 失败不置 authFailed,这里再加前端兜底。
+  const isAgentError = /ssh_agent_|SSH Agent|Agent 认证/.test(error || "");
+  const showPasswordRetry = authFailed && !isAgentError;
 
   return (
     <div className="w-full max-w-xs space-y-3 mb-4">
-      {authFailed && (
+      {showPasswordRetry && (
         <div className="space-y-1">
-          <label className="text-xs text-muted-foreground">{t("ssh.password")}</label>
+          <label htmlFor="pw-retry" className="text-xs text-muted-foreground">
+            {t("ssh.password")}
+          </label>
           <Input
+            id="pw-retry"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -382,7 +415,11 @@ function ErrorActions({
           <X className="h-3.5 w-3.5 mr-1" />
           {t("action.close")}
         </Button>
-        <Button size="sm" onClick={() => onRetry(authFailed ? password || undefined : undefined)} className="flex-1">
+        <Button
+          size="sm"
+          onClick={() => onRetry(showPasswordRetry ? password || undefined : undefined)}
+          className="flex-1"
+        >
           <RotateCcw className="h-3.5 w-3.5 mr-1" />
           {t("ssh.connectProgress.retry")}
         </Button>

@@ -70,6 +70,57 @@ describe("buildSSHConfig (锁旧 save/test 序:host→port→username→auth_typ
     });
   });
 
+  describe("agent-auth", () => {
+    const agentState = base({
+      authType: "agent",
+      agentSourceId: 7,
+      agentKeyFingerprint: "SHA256:9ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmn",
+    });
+
+    it("来源+指纹 → agent_source_id + agent_key_fingerprint(位于 auth_type 后)", () => {
+      expect(buildSSHConfig(agentState, NO_SECRETS)).toBe(
+        '{"host":"1.2.3.4","port":22,"username":"root","auth_type":"agent",' +
+          '"agent_source_id":7,"agent_key_fingerprint":"SHA256:9ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmn"}'
+      );
+    });
+
+    it("agent 与密码/密钥互斥:即使 state 残留 password/key 字段也不序列化", () => {
+      const dirty = base({
+        authType: "agent",
+        agentSourceId: 7,
+        agentKeyFingerprint: "SHA256:9ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmn",
+        // 残留互斥字段:切换认证方式后不应再写入
+        credentialId: 5,
+        keySource: "file",
+        selectedKeyPaths: ["/id_rsa"],
+        privateKeyPassphrase: "PP",
+        encryptedPrivateKeyPassphrase: "PPENC",
+      });
+      const json = buildSSHConfig(dirty, { ...NO_SECRETS, keyCredentialId: 5, passphrase: "PPENC" });
+      expect(json).toContain("agent_source_id");
+      expect(json).not.toContain("credential_id");
+      expect(json).not.toContain("private_keys");
+      expect(json).not.toContain("private_key_passphrase");
+    });
+
+    it("agent 未选来源或指纹 → 不写 agent 字段(留待 validate 拦截)", () => {
+      expect(buildSSHConfig(base({ authType: "agent" }), NO_SECRETS)).toBe(
+        '{"host":"1.2.3.4","port":22,"username":"root","auth_type":"agent"}'
+      );
+    });
+
+    it("password/key 切换离开 agent → 不写 agent 字段(互斥清除)", () => {
+      const away = base({
+        authType: "password",
+        agentSourceId: 7,
+        agentKeyFingerprint: "SHA256:9ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmn",
+      });
+      expect(buildSSHConfig(away, { ...NO_SECRETS, passwordCred: { credential_id: 3 } })).toBe(
+        '{"host":"1.2.3.4","port":22,"username":"root","auth_type":"password","credential_id":3}'
+      );
+    });
+  });
+
   describe("proxy", () => {
     it("proxy + 密码 + username", () => {
       expect(
@@ -234,6 +285,26 @@ describe("parseSSHConfig (镜像旧 loadSSHConfig)", () => {
     expect(parseSSHConfig('{"host":"h","port":22,"username":"u","auth_type":"password"}').restoreCwdOnReconnect).toBe(
       false
     );
+  });
+
+  it("agent:agent_source_id/agent_key_fingerprint → agentSourceId/agentKeyFingerprint;残留互斥字段不进入 agent 态", () => {
+    const s = parseSSHConfig(
+      '{"host":"h","port":22,"username":"u","auth_type":"agent",' +
+        '"agent_source_id":7,"agent_key_fingerprint":"SHA256:9ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmn"}'
+    );
+    expect(s.authType).toBe("agent");
+    expect(s.agentSourceId).toBe(7);
+    expect(s.agentKeyFingerprint).toBe("SHA256:9ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmn");
+    expect(s.agentMissingFingerprint).toBe("");
+    expect(s.credentialId).toBe(0);
+    expect(s.selectedKeyPaths).toEqual([]);
+  });
+
+  it("非 agent:即便 config 残留 agent 字段也不回填", () => {
+    const s = parseSSHConfig('{"host":"h","port":22,"username":"u","auth_type":"password","agent_source_id":7}');
+    expect(s.authType).toBe("password");
+    expect(s.agentSourceId).toBe(0);
+    expect(s.agentKeyFingerprint).toBe("");
   });
 
   it("缺字段用默认", () => {
