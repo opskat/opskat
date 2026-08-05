@@ -31,6 +31,18 @@ const (
 	CodeEmpty = "ssh_agent_empty"
 	// CodeCancelled: the caller stopped waiting or the operation context ended.
 	CodeCancelled = "ssh_agent_cancelled"
+	// CodeIdentityMissing: the saved fingerprint currently matches no identity.
+	CodeIdentityMissing = "ssh_agent_identity_missing"
+	// CodeIdentityDuplicate: the fingerprint cannot uniquely select one signer.
+	CodeIdentityDuplicate = "ssh_agent_identity_duplicate"
+	// CodeSignFailed: the provider refused to sign, returned a malformed
+	// signature, or the signature failed local verification.
+	CodeSignFailed = "ssh_agent_sign_failed"
+	// CodePublicKeyFailed: the precise public key exchange did not complete.
+	CodePublicKeyFailed = "ssh_agent_publickey_failed"
+	// CodeAuthNotUsed: SSH succeeded without ever using the selected signer
+	// (the server accepted "none").
+	CodeAuthNotUsed = "ssh_agent_auth_not_used"
 )
 
 // Error is a typed Agent failure carrying a stable code and a clean message.
