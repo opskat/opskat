@@ -200,6 +200,8 @@ export function ConnectionProgress({ connectionId, isTabActive, isPaneActive }: 
           <AuthChallengeForm
             prompts={connection.challenge.prompts}
             echo={connection.challenge.echo}
+            name={connection.challenge.name}
+            instruction={connection.challenge.instruction}
             visible={!!isTabActive && !!isPaneActive}
             onSubmit={(answers) => respondChallenge(connectionId, answers)}
             onCancel={() => cancelConnect(connectionId)}
@@ -267,12 +269,17 @@ function LogArea({ logs }: { logs: ConnectionState["logs"] }) {
 function AuthChallengeForm({
   prompts,
   echo,
+  name,
+  instruction,
   visible,
   onSubmit,
   onCancel,
 }: {
   prompts: string[];
   echo: boolean[];
+  /** 服务器发送的挑战名称/说明（Agent 结构化 MFA;可能为空）。 */
+  name?: string;
+  instruction?: string;
   /** 仅当前活动且可见的连接操作自动聚焦;隐藏标签页不抢夺焦点。 */
   visible: boolean;
   onSubmit: (answers: string[]) => void;
@@ -295,6 +302,9 @@ function AuthChallengeForm({
         }
       }}
     >
+      {/* 挑战名称与说明按普通文本渲染(不是 HTML),与提示同一信任边界。 */}
+      {name && <div className="text-xs font-medium">{name}</div>}
+      {instruction && <p className="text-xs text-muted-foreground whitespace-pre-wrap break-words">{instruction}</p>}
       {prompts.map((prompt, i) => (
         <div key={i} className="space-y-1">
           {/* 服务器提示按普通文本渲染(不是 HTML);label 与输入框正确关联。 */}

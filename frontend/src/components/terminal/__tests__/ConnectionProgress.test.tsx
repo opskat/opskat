@@ -106,6 +106,28 @@ describe("ConnectionProgress MFA 挑战", () => {
     expect((window as { __x?: number }).__x).toBeUndefined();
   });
 
+  it("Agent 结构化 MFA 的挑战名称与说明按普通文本展示(不解析为 HTML)", () => {
+    useTerminalStore.setState({
+      connections: {
+        "conn-1": challengeConnection({
+          challenge: {
+            challengeId: "ch-1",
+            name: '<img src=x onerror="window.__y=1">Verification',
+            instruction: "Enter the code shown on your device",
+            prompts: ["Code:"],
+            echo: [false],
+          },
+        }),
+      },
+    });
+    render(<ConnectionProgress connectionId="conn-1" isTabActive isPaneActive />);
+    expect(screen.getByText("Enter the code shown on your device")).toBeInTheDocument();
+    expect(screen.getByText(/Verification/)).toBeInTheDocument();
+    // 名称/说明/提示都按普通文本渲染,不产生可注入的 HTML 元素。
+    expect(document.querySelector("img")).toBeNull();
+    expect((window as { __y?: number }).__y).toBeUndefined();
+  });
+
   it("Enter 提交当前挑战(answers 按提示顺序)", async () => {
     useTerminalStore.setState({ connections: { "conn-1": challengeConnection() } });
     const u = userEvent.setup();

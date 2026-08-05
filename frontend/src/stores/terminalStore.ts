@@ -214,6 +214,9 @@ export interface ConnectionState {
   authFailed?: boolean;
   challenge?: {
     challengeId: string;
+    /** 服务器发送的挑战名称与说明（Agent 结构化 MFA；可能为空）。 */
+    name?: string;
+    instruction?: string;
     prompts: string[];
     echo: boolean[];
   };
@@ -357,6 +360,8 @@ function setupConnectionListener(
       error?: string;
       authFailed?: boolean;
       challengeId?: string;
+      name?: string;
+      instruction?: string;
       prompts?: string[];
       echo?: boolean[];
       hostKeyVerifyId?: string;
@@ -424,6 +429,8 @@ function setupConnectionListener(
                 status: "auth_challenge",
                 challenge: {
                   challengeId: event.challengeId!,
+                  name: event.name,
+                  instruction: event.instruction,
                   prompts: event.prompts || [],
                   echo: event.echo || [],
                 },

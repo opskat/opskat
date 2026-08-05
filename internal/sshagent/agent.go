@@ -112,66 +112,19 @@ func (a *Agent) closeLog(ctx context.Context) {
 	}
 }
 
-// ListIdentities lists the agent's identities under the bounded limits. On any
-// error (including cancellation, empty or malformed payloads) the transport is
-// closed; on success it stays open for the caller (e.g. signing).
+// ListIdentities lists the agent's identities under the bounded limits and
+// returns their bounded summaries. The bounded raw listing (deadline, context
+// cancellation, payload limits and transport ownership) lives in
+// listRawIdentities; this method only converts the validated raw keys into
+// summaries. On any error the transport is closed; on success it stays open
+// for the caller (e.g. signing).
 func (a *Agent) ListIdentities(ctx context.Context) ([]Identity, error) {
-	if err := ctx.Err(); err != nil {
-		a.closeLog(ctx)
-		return nil, newError(CodeCancelled, "agent operation was canceled")
-	}
-
-	deadline := time.Now().Add(a.listTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	_ = a.conn.SetDeadline(deadline)
-
-	// Watcher: a blocked agent read cannot be interrupted by context alone, so
-	// closing the transport is the prompt cancellation mechanism (and works
-	// even where deadlines are not enforced).
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			a.closeLog(ctx)
-		case <-done:
-		}
-	}()
-
-	keys, err := a.client.List()
-	close(done)
+	keys, err := a.listRawIdentities(ctx)
 	if err != nil {
-		a.closeLog(ctx)
-		return nil, a.listError(ctx, err)
+		return nil, err
 	}
-	// Success: drop the listing deadline so later operations (e.g. signing)
-	// are not bounded by it.
-	_ = a.conn.SetDeadline(time.Time{})
-	if cerr := ctx.Err(); cerr != nil {
-		a.closeLog(ctx)
-		return nil, newError(CodeCancelled, "agent operation was canceled")
-	}
-
-	if len(keys) > MaxIdentities {
-		a.closeLog(ctx)
-		return nil, newError(CodePayloadInvalid, "agent returned too many identities")
-	}
-	if len(keys) == 0 {
-		a.closeLog(ctx)
-		return nil, newError(CodeEmpty, "agent is reachable but holds no identities")
-	}
-
 	ids := make([]Identity, 0, len(keys))
 	for _, k := range keys {
-		if len(k.Blob) > MaxKeyBlobBytes {
-			a.closeLog(ctx)
-			return nil, newError(CodePayloadInvalid, "agent returned an oversized key blob")
-		}
-		if len(k.Comment) > MaxCommentBytes {
-			a.closeLog(ctx)
-			return nil, newError(CodePayloadInvalid, "agent returned an oversized key comment")
-		}
 		pub, err := ssh.ParsePublicKey(k.Blob)
 		if err != nil {
 			a.closeLog(ctx)
