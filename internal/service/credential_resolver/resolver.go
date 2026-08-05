@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"sort"
 
@@ -15,7 +16,9 @@ import (
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_mgr_svc"
 	"github.com/opskat/opskat/internal/service/credential_svc"
+	"github.com/opskat/opskat/internal/service/ssh_agent_svc"
 	"github.com/opskat/opskat/internal/service/ssh_svc"
+	"github.com/opskat/opskat/internal/sshagent"
 )
 
 // Resolver 统一凭据解析服务
@@ -57,6 +60,22 @@ func (r *Resolver) ResolveProxyChain(ctx context.Context, chain *asset_entity.Pr
 			cfg, err := asset.GetSSHConfig()
 			if err != nil {
 				return nil, err
+			}
+			// Agent 层：不解析密码/密钥材料，经同一认证工厂在真正拨号时完成握手。
+			if cfg.AuthType == asset_entity.AuthTypeAgent {
+				agentCfg, err := r.ResolveAgentAuthConfig(cfg)
+				if err != nil {
+					return nil, err
+				}
+				resolved = append(resolved, proxychain.Layer{
+					Type:      proxychain.LayerSSH,
+					Name:      layer.Name,
+					Host:      cfg.Host,
+					Port:      cfg.Port,
+					Username:  cfg.Username,
+					Handshake: r.agentHandshakeLayer(agentCfg, cfg.Username, cfg.Host, cfg.Port),
+				})
+				break
 			}
 			password, key, passphrase, err := r.ResolveSSHCredentials(ctx, cfg)
 			if err != nil {
@@ -152,6 +171,41 @@ func (r *Resolver) ResolveSSHCredentials(ctx context.Context, cfg *asset_entity.
 	return "", "", "", nil
 }
 
+// ResolveAgentAuthConfig 从 SSHConfig 构建 Agent 认证配置（auth_type=agent 时）。
+// 来源（sourceID → 端点）在真正拨号 / 握手发生时解析，绝不提前打开 Agent 传输；
+// 也绝不解析出密码/密钥材料。非 Agent 认证返回 nil。MFA 由调用方按交互性设置。
+func (r *Resolver) ResolveAgentAuthConfig(sshCfg *asset_entity.SSHConfig) (*ssh_svc.AgentConfig, error) {
+	if sshCfg == nil || sshCfg.AuthType != asset_entity.AuthTypeAgent {
+		return nil, nil
+	}
+	if sshCfg.AgentSourceID <= 0 {
+		return nil, fmt.Errorf("SSH Agent 认证缺少来源 ID")
+	}
+	sourceID := sshCfg.AgentSourceID
+	return &ssh_svc.AgentConfig{
+		Source: func(ctx context.Context) (sshagent.Source, error) {
+			src, err := ssh_agent_svc.Get(ctx, sourceID)
+			if err != nil {
+				return sshagent.Source{}, err
+			}
+			return sshagent.Source{
+				Type:  sshagent.EndpointType(src.EndpointType),
+				Value: src.Endpoint,
+			}, nil
+		},
+		Fingerprint: sshCfg.AgentKeyFingerprint,
+	}, nil
+}
+
+// agentHandshakeLayer 为代理链的 Agent SSH 层构造握手闭包：来源在握手发生时解析，
+// 执行握手的组件拥有 Agent 传输。
+func (r *Resolver) agentHandshakeLayer(agentCfg *ssh_svc.AgentConfig, username, host string, port int) func(context.Context, net.Conn, string) (*ssh.Client, error) {
+	return func(ctx context.Context, conn net.Conn, addr string) (*ssh.Client, error) {
+		hk := ssh_svc.MakeAgentHostKeyCallback(host, port, ssh_svc.AutoTrustFirstRejectChangeVerifyFunc())
+		return ssh_svc.AgentClientConn(ctx, agentCfg, username, hk, conn, addr)
+	}
+}
+
 // ResolveJumpHosts 递归解析跳板机链（含凭据解密），返回从第一跳到最后一跳的顺序
 func (r *Resolver) ResolveJumpHosts(ctx context.Context, jumpHostID int64, maxDepth int) ([]ssh_svc.JumpHostEntry, error) {
 	if maxDepth <= 0 {
@@ -181,6 +235,13 @@ func (r *Resolver) ResolveJumpHosts(ctx context.Context, jumpHostID int64, maxDe
 		Password:   password,
 		Key:        key,
 		Passphrase: passphrase,
+	}
+	if jumpCfg.AuthType == asset_entity.AuthTypeAgent {
+		agentCfg, err := r.ResolveAgentAuthConfig(jumpCfg)
+		if err != nil {
+			return nil, fmt.Errorf("解析跳板机 Agent 认证配置失败: %w", err)
+		}
+		entry.Agent = agentCfg
 	}
 
 	nextJumpID := jumpAsset.SSHTunnelID
@@ -356,6 +417,10 @@ func (r *Resolver) DialAssetSSH(ctx context.Context, assetID int64) (*ssh.Client
 	if err != nil {
 		return nil, nil, err
 	}
+	agentCfg, err := r.ResolveAgentAuthConfig(sshCfg)
+	if err != nil {
+		return nil, nil, err
+	}
 	cfg := ssh_svc.ConnectConfig{
 		Host:                     sshCfg.Host,
 		Port:                     sshCfg.Port,
@@ -366,6 +431,8 @@ func (r *Resolver) DialAssetSSH(ctx context.Context, assetID int64) (*ssh.Client
 		KeyPassphrase:            passphrase,
 		PrivateKeys:              sshCfg.PrivateKeys,
 		AssetID:                  assetID,
+		Ctx:                      ctx,
+		Agent:                    agentCfg,
 		Proxy:                    r.DecryptProxyPassword(sshCfg.Proxy),
 		JumpHosts:                jumpHosts,
 		ProxyChain:               proxyChain,

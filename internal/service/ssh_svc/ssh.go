@@ -215,11 +215,16 @@ func (m *Manager) nextSessionID() string {
 
 // ConnectConfig SSH 连接配置
 type ConnectConfig struct {
-	Host          string
-	Port          int
-	Username      string
-	AuthType      string // password | key | keyboard-interactive
-	Password      string
+	Host     string
+	Port     int
+	Username string
+	AuthType string // password | key | keyboard-interactive | agent
+	Password string
+	// Ctx 供握手 / 取消使用（Agent 列举、签名、MFA 等待与握手取消）。nil 时用 background。
+	Ctx context.Context
+	// Agent 非 nil 时该层经 Agent 认证工厂（agent_factory.go）完成握手：精确签名器
+	// + MFA 适配 + 主机密钥契约。与 Password/Key 等常规材料互斥。
+	Agent         *AgentConfig
 	Key           string   // PEM 格式私钥（直接传入）
 	KeyPassphrase string   // 私钥密码（用于加密的私钥）
 	PrivateKeys   []string // 私钥文件路径列表
@@ -266,6 +271,9 @@ type JumpHostEntry struct {
 	Password   string
 	Key        string
 	Passphrase string
+	// Agent 非 nil 时该跳板层经 Agent 认证工厂完成握手（旧 jump-host 字段同样使用
+	// 同一个工厂，没有单独的回退实现）。
+	Agent *AgentConfig
 }
 
 // emitProgress 安全调用进度回调
@@ -277,16 +285,9 @@ func emitProgress(cfg *ConnectConfig, step, message string) {
 
 // Dial 仅建立 SSH 连接（不创建 PTY/Session），用于连接池等场景
 func (m *Manager) Dial(cfg ConnectConfig) (*ssh.Client, []io.Closer, error) {
-	authMethods, err := buildAuthMethods(cfg.AuthType, cfg.Password, cfg.Key, cfg.KeyPassphrase, cfg.PrivateKeys, cfg.OnAuthChallenge)
+	sshConfig, err := buildClientConfig(cfg)
 	if err != nil {
 		return nil, nil, err
-	}
-
-	sshConfig := &ssh.ClientConfig{
-		User:            cfg.Username,
-		Auth:            authMethods,
-		HostKeyCallback: MakeHostKeyCallback(cfg.Host, cfg.Port, cfg.HostKeyVerifyFunc),
-		Timeout:         sshtuning.Get().DialTimeoutOrDefault(),
 	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
@@ -311,17 +312,10 @@ func (f closerFunc) Close() error {
 
 // Connect 建立 SSH 连接并启动 PTY 会话
 func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
-	// 构建目标认证方式
-	authMethods, err := buildAuthMethods(cfg.AuthType, cfg.Password, cfg.Key, cfg.KeyPassphrase, cfg.PrivateKeys, cfg.OnAuthChallenge)
+	// 构建目标认证方式（Agent 模式走认证工厂）
+	sshConfig, err := buildClientConfig(cfg)
 	if err != nil {
 		return "", err
-	}
-
-	sshConfig := &ssh.ClientConfig{
-		User:            cfg.Username,
-		Auth:            authMethods,
-		HostKeyCallback: MakeHostKeyCallback(cfg.Host, cfg.Port, cfg.HostKeyVerifyFunc),
-		Timeout:         sshtuning.Get().DialTimeoutOrDefault(),
 	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
@@ -362,15 +356,9 @@ func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
 // ConnectClient 建立仅用于 SFTP/端口转发等非终端用途的 SSH 会话 ID。
 // 它不创建 PTY 和 shell，但会注册到 Manager sessions，供 SFTP 服务按 sessionID 复用。
 func (m *Manager) ConnectClient(cfg ConnectConfig) (string, error) {
-	authMethods, err := buildAuthMethods(cfg.AuthType, cfg.Password, cfg.Key, cfg.KeyPassphrase, cfg.PrivateKeys, cfg.OnAuthChallenge)
+	sshConfig, err := buildClientConfig(cfg)
 	if err != nil {
 		return "", err
-	}
-	sshConfig := &ssh.ClientConfig{
-		User:            cfg.Username,
-		Auth:            authMethods,
-		HostKeyCallback: MakeHostKeyCallback(cfg.Host, cfg.Port, cfg.HostKeyVerifyFunc),
-		Timeout:         sshtuning.Get().DialTimeoutOrDefault(),
 	}
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	client, extraClosers, err := m.dial(cfg, sshConfig, addr)
@@ -508,6 +496,7 @@ func (m *Manager) NewSessionFrom(existingSessionID string, cols, rows int,
 
 // dial 建立到目标的网络连接，支持代理和跳板机链
 func (m *Manager) dial(cfg ConnectConfig, sshConfig *ssh.ClientConfig, targetAddr string) (*ssh.Client, []io.Closer, error) {
+	ctx := connectCtx(cfg)
 	var closers []io.Closer
 
 	if len(cfg.ProxyChain) > 0 {
@@ -515,20 +504,20 @@ func (m *Manager) dial(cfg ConnectConfig, sshConfig *ssh.ClientConfig, targetAdd
 		conn, err := proxychain.Chain{
 			Layers: cfg.ProxyChain,
 			Direct: dialTCP,
-		}.Dial(context.Background(), targetAddr)
+		}.Dial(ctx, targetAddr)
 		if err != nil {
 			return nil, nil, err
 		}
 		closers = append(closers, conn)
 		emitProgress(&cfg, "auth", "正在认证...")
-		c, chans, reqs, err := ssh.NewClientConn(conn, targetAddr, sshConfig)
+		client, err := newClientLayer(ctx, cfg, sshConfig, conn, targetAddr)
 		if err != nil {
 			if closeErr := conn.Close(); closeErr != nil {
 				logger.Default().Warn("close proxy chain connection after handshake failure", zap.Error(closeErr))
 			}
 			return nil, nil, fmt.Errorf("SSH握手失败: %w", err)
 		}
-		return ssh.NewClient(c, chans, reqs), closers, nil
+		return client, closers, nil
 	}
 
 	// 情况1: 有跳板机链
@@ -539,37 +528,50 @@ func (m *Manager) dial(cfg ConnectConfig, sshConfig *ssh.ClientConfig, targetAdd
 	// 情况2: 有代理（无跳板机）
 	if cfg.Proxy != nil {
 		emitProgress(&cfg, "connect", fmt.Sprintf("正在通过代理 %s:%d 连接...", cfg.Proxy.Host, cfg.Proxy.Port))
-		conn, err := socksdial.Dial(context.Background(), cfg.Proxy, targetAddr)
+		conn, err := socksdial.Dial(ctx, cfg.Proxy, targetAddr)
 		if err != nil {
 			return nil, nil, err
 		}
 		closers = append(closers, conn)
 
 		emitProgress(&cfg, "auth", "正在认证...")
-		c, chans, reqs, err := ssh.NewClientConn(conn, targetAddr, sshConfig)
+		client, err := newClientLayer(ctx, cfg, sshConfig, conn, targetAddr)
 		if err != nil {
 			if closeErr := conn.Close(); closeErr != nil {
 				logger.Default().Warn("close proxy connection after handshake failure", zap.Error(closeErr))
 			}
 			return nil, nil, fmt.Errorf("SSH握手失败: %w", err)
 		}
-		return ssh.NewClient(c, chans, reqs), closers, nil
+		return client, closers, nil
 	}
 
 	// 情况3: 直连
 	emitProgress(&cfg, "auth", "正在认证...")
-	conn, err := dialTCP(context.Background(), targetAddr)
+	conn, err := dialTCP(ctx, targetAddr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("SSH连接失败: %w", err)
 	}
-	c, chans, reqs, err := ssh.NewClientConn(conn, targetAddr, sshConfig)
+	client, err := newClientLayer(ctx, cfg, sshConfig, conn, targetAddr)
 	if err != nil {
 		if closeErr := conn.Close(); closeErr != nil {
 			logger.Default().Warn("close connection after handshake failure", zap.Error(closeErr))
 		}
 		return nil, nil, fmt.Errorf("SSH连接失败: %w", err)
 	}
-	return ssh.NewClient(c, chans, reqs), nil, nil
+	return client, nil, nil
+}
+
+// newClientLayer 在已建立的 conn 上完成一个 SSH 层握手。cfg.Agent 非 nil 时经
+// Agent 认证工厂（精确签名器 + MFA + 主机密钥契约）；否则用常规 ssh.NewClientConn。
+func newClientLayer(ctx context.Context, cfg ConnectConfig, sshConfig *ssh.ClientConfig, conn net.Conn, addr string) (*ssh.Client, error) {
+	if cfg.Agent != nil {
+		return AgentClientConn(ctx, cfg.Agent, cfg.Username, MakeAgentHostKeyCallback(cfg.Host, cfg.Port, cfg.HostKeyVerifyFunc), conn, addr)
+	}
+	c, chans, reqs, err := ssh.NewClientConn(conn, addr, sshConfig)
+	if err != nil {
+		return nil, err
+	}
+	return ssh.NewClient(c, chans, reqs), nil
 }
 
 // dialTCP 建立到 addr 的底层 TCP 连接，并按 sshtuning 配置施加 TCP_NODELAY /
@@ -593,53 +595,48 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 	var closers []io.Closer
 
 	// 连接第一个跳板机（可能通过代理）
+	ctx := connectCtx(cfg)
 	firstJump := cfg.JumpHosts[0]
 	firstAddr := fmt.Sprintf("%s:%d", firstJump.Host, firstJump.Port)
 
 	emitProgress(&cfg, "connect", fmt.Sprintf("正在连接跳板机 %s...", firstAddr))
 
-	firstAuth, err := buildAuthMethods(firstJump.AuthType, firstJump.Password, firstJump.Key, firstJump.Passphrase, nil, nil)
+	firstConfig, err := buildJumpHostConfig(cfg, firstJump)
 	if err != nil {
 		return nil, nil, fmt.Errorf("跳板机认证配置失败: %w", err)
-	}
-	firstConfig := &ssh.ClientConfig{
-		User:            firstJump.Username,
-		Auth:            firstAuth,
-		HostKeyCallback: MakeHostKeyCallback(firstJump.Host, firstJump.Port, cfg.HostKeyVerifyFunc),
-		Timeout:         sshtuning.Get().DialTimeoutOrDefault(),
 	}
 
 	var currentClient *ssh.Client
 
 	if cfg.Proxy != nil {
 		emitProgress(&cfg, "connect", fmt.Sprintf("正在通过代理 %s:%d 连接跳板机...", cfg.Proxy.Host, cfg.Proxy.Port))
-		conn, err := socksdial.Dial(context.Background(), cfg.Proxy, firstAddr)
+		conn, err := socksdial.Dial(ctx, cfg.Proxy, firstAddr)
 		if err != nil {
 			return nil, nil, fmt.Errorf("通过代理连接跳板机失败: %w", err)
 		}
 		closers = append(closers, conn)
 
-		c, chans, reqs, err := ssh.NewClientConn(conn, firstAddr, firstConfig)
+		client, err := newJumpClientLayer(ctx, cfg, firstJump, firstConfig, conn, firstAddr)
 		if err != nil {
 			if closeErr := conn.Close(); closeErr != nil {
 				logger.Default().Warn("close proxy connection after jump host handshake failure", zap.Error(closeErr))
 			}
 			return nil, nil, fmt.Errorf("跳板机SSH握手失败: %w", err)
 		}
-		currentClient = ssh.NewClient(c, chans, reqs)
+		currentClient = client
 	} else {
-		conn, err := dialTCP(context.Background(), firstAddr)
+		conn, err := dialTCP(ctx, firstAddr)
 		if err != nil {
 			return nil, nil, fmt.Errorf("连接跳板机失败: %w", err)
 		}
-		c, chans, reqs, err := ssh.NewClientConn(conn, firstAddr, firstConfig)
+		client, err := newJumpClientLayer(ctx, cfg, firstJump, firstConfig, conn, firstAddr)
 		if err != nil {
 			if closeErr := conn.Close(); closeErr != nil {
 				logger.Default().Warn("close jump host connection after handshake failure", zap.Error(closeErr))
 			}
 			return nil, nil, fmt.Errorf("连接跳板机失败: %w", err)
 		}
-		currentClient = ssh.NewClient(c, chans, reqs)
+		currentClient = client
 	}
 	closers = append(closers, currentClient)
 
@@ -650,7 +647,7 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 
 		emitProgress(&cfg, "connect", fmt.Sprintf("正在连接跳板机 %s...", jumpAddr))
 
-		jumpAuth, err := buildAuthMethods(jump.AuthType, jump.Password, jump.Key, jump.Passphrase, nil, nil)
+		jumpConfig, err := buildJumpHostConfig(cfg, jump)
 		if err != nil {
 			for _, c := range closers {
 				if closeErr := c.Close(); closeErr != nil {
@@ -658,12 +655,6 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 				}
 			}
 			return nil, nil, fmt.Errorf("跳板机认证配置失败: %w", err)
-		}
-		jumpConfig := &ssh.ClientConfig{
-			User:            jump.Username,
-			Auth:            jumpAuth,
-			HostKeyCallback: MakeHostKeyCallback(jump.Host, jump.Port, cfg.HostKeyVerifyFunc),
-			Timeout:         sshtuning.Get().DialTimeoutOrDefault(),
 		}
 
 		conn, err := currentClient.Dial("tcp", jumpAddr)
@@ -676,7 +667,7 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 			return nil, nil, fmt.Errorf("通过跳板机连接下一跳失败: %w", err)
 		}
 
-		c, chans, reqs, err := ssh.NewClientConn(conn, jumpAddr, jumpConfig)
+		client, err := newJumpClientLayer(ctx, cfg, jump, jumpConfig, conn, jumpAddr)
 		if err != nil {
 			if closeErr := conn.Close(); closeErr != nil {
 				logger.Default().Warn("close jump host connection after handshake failure", zap.Error(closeErr))
@@ -688,7 +679,7 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 			}
 			return nil, nil, fmt.Errorf("跳板机SSH握手失败: %w", err)
 		}
-		currentClient = ssh.NewClient(c, chans, reqs)
+		currentClient = client
 		closers = append(closers, currentClient)
 	}
 
@@ -707,7 +698,7 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 
 	emitProgress(&cfg, "auth", "正在认证...")
 
-	c, chans, reqs, err := ssh.NewClientConn(conn, targetAddr, targetConfig)
+	client, err := newClientLayer(ctx, cfg, targetConfig, conn, targetAddr)
 	if err != nil {
 		if closeErr := conn.Close(); closeErr != nil {
 			logger.Default().Warn("close target connection after handshake failure", zap.Error(closeErr))
@@ -720,7 +711,62 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 		return nil, nil, fmt.Errorf("目标SSH握手失败: %w", err)
 	}
 
-	return ssh.NewClient(c, chans, reqs), closers, nil
+	return client, closers, nil
+}
+
+// buildJumpHostConfig 构建一个跳板层的 ClientConfig。j.Agent 非 nil 时该跳板层经
+// Agent 认证工厂；否则沿用常规认证方式。
+func buildJumpHostConfig(cfg ConnectConfig, j JumpHostEntry) (*ssh.ClientConfig, error) {
+	if j.Agent != nil {
+		return &ssh.ClientConfig{
+			User:    j.Username,
+			Timeout: sshtuning.Get().DialTimeoutOrDefault(),
+		}, nil
+	}
+	auth, err := buildAuthMethods(j.AuthType, j.Password, j.Key, j.Passphrase, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &ssh.ClientConfig{
+		User:            j.Username,
+		Auth:            auth,
+		HostKeyCallback: MakeHostKeyCallback(j.Host, j.Port, cfg.HostKeyVerifyFunc),
+		Timeout:         sshtuning.Get().DialTimeoutOrDefault(),
+	}, nil
+}
+
+// newJumpClientLayer 在已建立的 conn 上完成一个跳板层握手。j.Agent 非 nil 时经
+// Agent 认证工厂；否则用常规 ssh.NewClientConn。
+func newJumpClientLayer(ctx context.Context, cfg ConnectConfig, j JumpHostEntry, config *ssh.ClientConfig, conn net.Conn, addr string) (*ssh.Client, error) {
+	if j.Agent != nil {
+		return AgentClientConn(ctx, j.Agent, j.Username, MakeAgentHostKeyCallback(j.Host, j.Port, cfg.HostKeyVerifyFunc), conn, addr)
+	}
+	c, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
+	if err != nil {
+		return nil, err
+	}
+	return ssh.NewClient(c, chans, reqs), nil
+}
+
+// buildClientConfig 构建目标层的 ClientConfig。Agent 模式走认证工厂（host key 回调
+// 在握手内组装，这里只带 User/Timeout）；常规模式沿用 buildAuthMethods。
+func buildClientConfig(cfg ConnectConfig) (*ssh.ClientConfig, error) {
+	if cfg.Agent != nil {
+		return &ssh.ClientConfig{
+			User:    cfg.Username,
+			Timeout: sshtuning.Get().DialTimeoutOrDefault(),
+		}, nil
+	}
+	authMethods, err := buildAuthMethods(cfg.AuthType, cfg.Password, cfg.Key, cfg.KeyPassphrase, cfg.PrivateKeys, cfg.OnAuthChallenge)
+	if err != nil {
+		return nil, err
+	}
+	return &ssh.ClientConfig{
+		User:            cfg.Username,
+		Auth:            authMethods,
+		HostKeyCallback: MakeHostKeyCallback(cfg.Host, cfg.Port, cfg.HostKeyVerifyFunc),
+		Timeout:         sshtuning.Get().DialTimeoutOrDefault(),
+	}, nil
 }
 
 // buildAuthMethods 构建 SSH 认证方式
@@ -967,17 +1013,12 @@ func (m *Manager) DisconnectAll() {
 // TestConnection 测试 SSH 连接（仅验证连通性，不创建会话）。
 // ctx 取消时函数立即返回 ctx.Err()，后台 dial 仍会跑到 10s 兜底超时并自行清理。
 func (m *Manager) TestConnection(ctx context.Context, cfg ConnectConfig) error {
-	authMethods, err := buildAuthMethods(cfg.AuthType, cfg.Password, cfg.Key, cfg.KeyPassphrase, cfg.PrivateKeys, cfg.OnAuthChallenge)
+	sshConfig, err := buildClientConfig(cfg)
 	if err != nil {
 		return err
 	}
-
-	sshConfig := &ssh.ClientConfig{
-		User:            cfg.Username,
-		Auth:            authMethods,
-		HostKeyCallback: MakeHostKeyCallback(cfg.Host, cfg.Port, cfg.HostKeyVerifyFunc),
-		Timeout:         sshtuning.Get().DialTimeoutOrDefault(),
-	}
+	// Agent 列举、签名、MFA 等待与握手取消都使用本调用方 ctx。
+	cfg.Ctx = ctx
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 
