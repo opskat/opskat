@@ -14,6 +14,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/assetref"
 	"github.com/opskat/opskat/internal/ai/audit"
+	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 )
 
@@ -121,7 +122,8 @@ func resolveResultAssetForAudit(ctx context.Context, result string) (int64, stri
 func resolveAssetForAudit(ctx context.Context, toolName string, input map[string]any) (assetID int64, assetName, command string) {
 	ref := aictx.ArgString(input, "asset")
 	if ref == "" {
-		return 0, "", ""
+		id, name := resolveTransferAssetForAudit(ctx, input)
+		return id, name, ""
 	}
 	asset, err := assetref.Resolve(ctx, ref)
 	if err != nil {
@@ -141,6 +143,51 @@ func resolveAssetForAudit(ctx context.Context, toolName string, input map[string
 		}
 	}
 	return asset.ID, asset.Name, command
+}
+
+// transferEndpointArgs are the transfer face's endpoint arguments, **in attribution
+// priority order** — the destination first (see resolveTransferAssetForAudit). They are
+// the cp tool's own parameter names (internal/ai/tool/tools_exec.go), and opsctl's cp
+// audit arguments use the same two keys.
+var transferEndpointArgs = []string{"dst", "src"}
+
+// resolveTransferAssetForAudit resolves the asset attribution of the *transfer* argument
+// shape: args["src"] / args["dst"], each an endpoint that is either a local path or
+// "<asset>:/<path>" (helper.ParseTransferEndpoint — the same parse the cp handler and
+// opsctl cp run). Without it a transfer's audit row lands with asset_id=0 / asset_name=""
+// and audit_repo's AssetID filter finds no AI-initiated transfer at all: the per-type
+// upload_file / download_file tools it replaced carried args["asset_id"], while cp's
+// arguments name only endpoints — the asset is a prefix inside one of them.
+//
+// Keyed off the arguments, not off the tool name, exactly like args["asset"] above: an
+// endpoint pair *is* the transfer face's parameter convention, so a second transfer tool
+// gets attribution by speaking it rather than by being added to a switch here.
+//
+// **The destination wins when both ends are assets** (server → object storage is one of
+// the nine supported combinations). audit_logs carries a single (asset_id, asset_name)
+// pair, and one tool call has to stay one row — two rows would double-count a single
+// transfer and leave decision/success describing an operation that happened once. Of the
+// two ends the destination is the mutated one, the side "what was done to this asset?"
+// asks about; it is also what opsctl already stores for the same transfer
+// (cmd/opsctl/command/cp.go: primaryAssetID = dstAssetID, falling back to srcAssetID),
+// so one asset filter answers the same for both producers. The source end is not erased,
+// only unindexed: both endpoint strings stay verbatim in audit_logs.command
+// ("cp <src> → <dst>") and in audit_logs.request.
+//
+// Best-effort like everything else here: a malformed endpoint, an unknown or ambiguous
+// asset, or two local paths all leave the attribution at zero and fall back to the
+// caller's args-based path.
+func resolveTransferAssetForAudit(ctx context.Context, input map[string]any) (int64, string) {
+	for _, key := range transferEndpointArgs {
+		// A tool without this argument yields "", which parses as a local path: no asset,
+		// no lookup. Nothing here needs a "does this tool have endpoints?" guard.
+		asset, _, err := helper.ParseTransferEndpoint(ctx, aictx.ArgString(input, key), assetref.Resolve)
+		if err != nil || asset == nil {
+			continue
+		}
+		return asset.ID, asset.Name
+	}
+	return 0, ""
 }
 
 // extractAuditResult 把 cago 的 *ToolResultBlock 拆成审计需要的 (result, error)。

@@ -84,6 +84,23 @@ func batchAssertPrefixType(asset *asset_entity.Asset, cmdType string) error {
 	return permission.AssertAssetType(asset, cmdType)
 }
 
+// withBatchAuditCommand installs command as the current call's audit-command slot
+// (aictx.AuditCommandSlot — writeOpsctlAudit/handler.go reads it back), mirroring cmdExec's
+// mechanism in exec.go so a batch item's audit row shows the same canonical DSL the policy
+// check and approval dialog already used for it, not the raw command re-derived from
+// argsJSON. Every call site below passes a per-item resolvedBatchCmd.checkCommand, so this
+// is only ever meaningful once Step 2 (prepareExecCommand) has produced one — the three
+// earlier failure branches (resolve / assert / prepare-error) have no checkCommand to give
+// it and are deliberately left on the raw-command fallback, same as cmdExec never auditing
+// those equivalent early returns at all.
+//
+// The slot points at this call's own by-value command parameter, so it is safe to use from
+// Step 5's concurrent goroutines sharing the same parent auditCtx: each call gets a distinct
+// *string and never mutates that parent, only wraps it.
+func withBatchAuditCommand(ctx context.Context, command string) context.Context {
+	return aictx.WithAuditCommandSlot(ctx, &command)
+}
+
 func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
 		printBatchUsage()
@@ -197,7 +214,8 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 		cmd := resolved[b.idx]
 		results[b.idx].Error = fmt.Sprintf("denied by policy: %s", b.result.Message)
 		argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, cmd.asset.ID, truncateStr(cmd.command, 200))
-		writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, "", fmt.Errorf("denied by policy: %s", b.result.Message), cmd.decision)
+		denyCtx := withBatchAuditCommand(auditCtx, cmd.checkCommand)
+		writeOpsctlAudit(denyCtx, batchAuditTool, argsJSON, "", fmt.Errorf("denied by policy: %s", b.result.Message), cmd.decision)
 	}
 
 	// Determine which commands to execute
@@ -219,7 +237,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 			})
 		}
 
-		approvalResult, approvalErr := requireBatchApproval(batchItems, session)
+		approvalResult, approvalErr := requireBatchApprovalFn(batchItems, session)
 		if approvalErr != nil {
 			// All need-confirm commands are denied — write audit for each
 			for _, b := range needConfirm {
@@ -227,7 +245,8 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 				results[b.idx].Error = fmt.Sprintf("approval failed: %v", approvalErr)
 				argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, cmd.asset.ID, truncateStr(cmd.command, 200))
 				decision := &aictx.CheckResult{Decision: aictx.Deny, DecisionSource: approvalResult.DecisionSource}
-				writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, "", approvalErr, decision)
+				deniedCtx := withBatchAuditCommand(auditCtx, cmd.checkCommand)
+				writeOpsctlAudit(deniedCtx, batchAuditTool, argsJSON, "", approvalErr, decision)
 			}
 		} else {
 			session = approvalResult.SessionID
@@ -317,7 +336,8 @@ func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerF
 	if result.Error != "" {
 		execErr = fmt.Errorf("%s", result.Error)
 	}
-	writeOpsctlAudit(ctx, batchAuditTool, argsJSON, result.Stdout, execErr, cmd.decision)
+	auditCtx := withBatchAuditCommand(ctx, cmd.checkCommand)
+	writeOpsctlAudit(auditCtx, batchAuditTool, argsJSON, result.Stdout, execErr, cmd.decision)
 
 	return result
 }
@@ -397,6 +417,14 @@ func executeBatchHandler(ctx context.Context, handlers map[string]tool.ToolHandl
 	result.ExitCode = 0
 	return result
 }
+
+// requireBatchApprovalFn is cmdBatch's Step 4 approval entry point, variable-ized so tests
+// can stub it without dialing the real desktop approval socket — same pattern as
+// execApprovalFn (exec.go) / cpApprovalFn (cp.go). cp.go keeps its own separate var
+// (cpBatchSendFn) pointing at this same requireBatchApproval function rather than sharing
+// this one: each command file owns its seam so overriding one path's stub in a test can
+// never silently change another, unrelated command's behavior.
+var requireBatchApprovalFn = requireBatchApproval
 
 // requireBatchApproval sends a single batch approval request to the desktop app.
 func requireBatchApproval(items []approval.BatchItem, session string) (ApprovalResult, error) {

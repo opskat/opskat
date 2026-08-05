@@ -532,3 +532,76 @@ func TestCheckGenericDenyAllow(t *testing.T) {
 		})
 	})
 }
+
+func TestTestOSSPolicy(t *testing.T) {
+	ctx := context.Background()
+
+	Convey("testOSSPolicy", t, func() {
+		Convey("无策略时套用默认策略的三种结果", func() {
+			So(testOSSPolicy(ctx, nil, nil, "object.read mybucket/app.log").Decision, ShouldEqual, aictx.Allow)
+			So(testOSSPolicy(ctx, nil, nil, "object.delete mybucket/app.log").Decision, ShouldEqual, aictx.NeedConfirm)
+			So(testOSSPolicy(ctx, nil, nil, "object.presign.write mybucket/app.log").Decision, ShouldEqual, aictx.Deny)
+		})
+
+		Convey("组通用策略用 MatchOSSRule 匹配(与运行时 checkOSSPermission 一致)", func() {
+			// 这条规则的两段形只有 MatchOSSRule 认得：MatchCommandRule 比的是字面 program，
+			// "object.*" 打不中 "object.read"，规则会静默失配。
+			groups := []*group_entity.Group{
+				makeGroup("生产组", `{"deny_list":["object.* prod-bucket/"]}`),
+			}
+			out := testOSSPolicy(ctx, nil, groups, "object.read prod-bucket/secret.txt")
+			So(out.Decision, ShouldEqual, aictx.Deny)
+			So(out.MatchedSource, ShouldEqual, "生产组")
+			So(out.MatchedPattern, ShouldEqual, "object.* prod-bucket/")
+		})
+
+		Convey("组通用 allow 把 NeedConfirm 提升为 Allow", func() {
+			groups := []*group_entity.Group{
+				makeGroup("dev组", `{"allow_list":["object.delete sandbox/"]}`),
+			}
+			out := testOSSPolicy(ctx, nil, groups, "object.delete sandbox/tmp.txt")
+			So(out.Decision, ShouldEqual, aictx.Allow)
+			So(out.MatchedSource, ShouldEqual, "dev组")
+		})
+
+		Convey("组的 OSS 专用策略参与合并", func() {
+			groups := []*group_entity.Group{
+				{Name: "归档组", OssPolicy: `{"allow_list":["object.delete archive/tmp/"]}`},
+			}
+			So(testOSSPolicy(ctx, nil, groups, "object.delete archive/tmp/a.log").Decision, ShouldEqual, aictx.Allow)
+			// 组 allow 名单整体取代默认只读组，桶外的删除仍需确认
+			So(testOSSPolicy(ctx, nil, groups, "object.delete archive/keep/a.log").Decision, ShouldEqual, aictx.NeedConfirm)
+		})
+
+		Convey("资产 deny 优先于组 allow", func() {
+			current := &asset_entity.OSSPolicy{DenyList: []string{"object.delete *"}}
+			groups := []*group_entity.Group{
+				{Name: "归档组", OssPolicy: `{"allow_list":["object.delete archive/tmp/"]}`},
+			}
+			out := testOSSPolicy(ctx, current, groups, "object.delete archive/tmp/a.log")
+			So(out.Decision, ShouldEqual, aictx.Deny)
+			So(out.MatchedSource, ShouldEqual, "")
+			So(out.MatchedPattern, ShouldEqual, "object.delete *")
+		})
+
+		// 上一例的组用的是 OSS 专用列，groupAllow 是空的，没有真正测到"组通用 allow
+		// 排在类型策略之后"这一步（spec §4.1 步骤 4：它只把 NeedConfirm 升为 Allow）。
+		// 这一例用组通用 CmdPolicy 的 "*"，若它抢在类型策略之前生效，
+		// presign PUT 这条用户改不掉的地板就被绕过了。
+		Convey("组通用 allow 不能越过默认 deny 地板", func() {
+			groups := []*group_entity.Group{
+				makeGroup("dev组", `{"allow_list":["*"]}`),
+			}
+			out := testOSSPolicy(ctx, nil, groups, "object.presign.write mybucket/a")
+			So(out.Decision, ShouldEqual, aictx.Deny)
+			So(out.MatchedPattern, ShouldEqual, "object.presign.write *")
+		})
+
+		Convey("默认策略（引用内置组）正确生效", func() {
+			p := policy.DefaultOSSPolicy()
+			So(testOSSPolicy(ctx, p, nil, "bucket.list *").Decision, ShouldEqual, aictx.Allow)
+			So(testOSSPolicy(ctx, p, nil, "object.write mybucket/a").Decision, ShouldEqual, aictx.NeedConfirm)
+			So(testOSSPolicy(ctx, p, nil, "object.presign.write mybucket/a").Decision, ShouldEqual, aictx.Deny)
+		})
+	})
+}

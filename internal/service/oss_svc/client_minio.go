@@ -2,8 +2,12 @@ package oss_svc
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,11 +17,16 @@ import (
 // minioAdapter 把 *minio.Client 适配成窄接口 Client。
 type minioAdapter struct {
 	mc         *minio.Client
+	httpClient *http.Client
 	partSizeMB int
 }
 
 func newMinioAdapter(mc *minio.Client, partSizeMB ...int) Client {
-	a := &minioAdapter{mc: mc}
+	return newMinioAdapterWithHTTP(mc, http.DefaultClient, partSizeMB...)
+}
+
+func newMinioAdapterWithHTTP(mc *minio.Client, httpClient *http.Client, partSizeMB ...int) Client {
+	a := &minioAdapter{mc: mc, httpClient: httpClient}
 	if len(partSizeMB) > 0 {
 		a.partSizeMB = partSizeMB[0]
 	}
@@ -36,25 +45,53 @@ func (a *minioAdapter) ListBuckets(ctx context.Context) ([]BucketItem, error) {
 	return out, nil
 }
 
-func (a *minioAdapter) ListObjects(ctx context.Context, bucket, prefix string, maxKeys int, startAfter string) ([]ObjectItem, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	out := make([]ObjectItem, 0, maxKeys+1)
-	for obj := range a.mc.ListObjects(ctx, bucket, minio.ListObjectsOptions{
-		Prefix:     prefix,
-		Recursive:  false,
-		StartAfter: startAfter,
-		MaxKeys:    maxKeys + 1,
-	}) {
-		if obj.Err != nil {
-			return nil, obj.Err
-		}
-		out = append(out, toObjectItem(obj))
-		if len(out) > maxKeys {
-			break // 已读到 maxKeys+1,足以判断"还有下一页";cancel 停止后续
-		}
+func (a *minioAdapter) ListObjects(
+	ctx context.Context, bucket, prefix string, maxKeys int, continuationToken string,
+) (*ListObjectsPage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	return out, nil
+	params := url.Values{"list-type": {"2"}, "encoding-type": {"url"}, "delimiter": {"/"}, "prefix": {prefix}}
+	if continuationToken != "" {
+		params.Set("continuation-token", continuationToken)
+	}
+	if maxKeys > 0 {
+		params.Set("max-keys", strconv.Itoa(maxKeys))
+	}
+	u, err := a.mc.Presign(ctx, http.MethodGet, bucket, "", time.Minute, params)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("list objects: unexpected HTTP status %s", resp.Status)
+	}
+	var result minio.ListBucketV2Result
+	if err := xml.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if result.IsTruncated && result.NextContinuationToken == "" {
+		return nil, fmt.Errorf("list objects response is truncated without a continuation token")
+	}
+	items := make([]ObjectItem, 0, len(result.Contents)+len(result.CommonPrefixes))
+	for _, obj := range result.Contents {
+		items = append(items, toObjectItem(obj))
+	}
+	for _, p := range result.CommonPrefixes {
+		items = append(items, ObjectItem{Key: p.Prefix, IsPrefix: true})
+	}
+	return &ListObjectsPage{
+		Items: items, IsTruncated: result.IsTruncated,
+		NextContinuationToken: result.NextContinuationToken,
+	}, nil
 }
 
 func (a *minioAdapter) StatObject(ctx context.Context, bucket, key string) (ObjectItem, error) {

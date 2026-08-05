@@ -283,23 +283,48 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 		// 三条 grant 落库路径（HandleConfirm / opsctl 单审批 / AI grant 流）共用 NormalizeGrantPatterns：
 		// SSH/K8s shell 类按 AST 子命令拆，其他类型直通。这里既保持本路径行为一致，
 		// 又保证编辑模式（多行/通配）后的每一行都按子命令分别落库。
+		//
+		// 来源在这条缝上是分得清的，必须原样透传（见 GrantOrigin）：EditedItems 是用户在
+		// 弹窗里手写的 pattern，command 是系统交上来的主体（exec 的规范 DSL、cp 的
+		// ApprovalSubject）。两者都是策略串形状，混成一种就等于把适配器给出的主体
+		// 当用户 pattern 放行——设计 §4.3 记下的正是这个洞。
+		//
+		// 分支条件是"用户有没有编辑"，**不是**"归一化后是不是空"。两者看起来等价，
+		// 因为 shell 类的 shellGrantPatterns 对任何非空白输入至少给一条 pattern（而
+		// ParseApprovalResponse 已经保证编辑项的 Command 非空白），所以对 SSH/K8s 这两种
+		// 写法逐字节同解。OSS 不然：空列表对它是个正常答案（下面那段注释说的 D20），
+		// 于是"编辑了但用不了"会掉进兜底，把用户的编辑**静默换成系统主体**——用户改这
+		// 一栏通常是想收窄，却反手拿到一条他没要的更宽授权。用不了就什么都不授权。
 		var patterns []string
 		if len(parsed.EditedItems) > 0 {
 			for _, item := range parsed.EditedItems {
-				patterns = append(patterns, NormalizeGrantPatterns(assetType, item.Command)...)
+				patterns = append(patterns, NormalizeGrantPatterns(assetType, item.Command, GrantOriginUser)...)
 			}
+		} else {
+			patterns = NormalizeGrantPatterns(assetType, command, GrantOriginSystem)
 		}
-		if len(patterns) == 0 {
-			patterns = NormalizeGrantPatterns(assetType, command)
+		// 归一化交出空列表是一个**答案**，不是失败：OSS 会把"批准了但不该变成常驻授权"
+		// 的串（决策 D20 的目录标记）全部丢掉。此处不能退回 []string{command} —— 那条串
+		// 匹配不上任何策略串，落库只是在授权列表里显示一条用户其实没拿到的授权，
+		// 外加一条同样不真实的 grant_submit 审计行。shell 类到不了这里：
+		// shellGrantPatterns 对任何非空输入至少给出一条 pattern。
+		if len(patterns) > 0 {
+			for _, cmd := range patterns {
+				SaveGrantPattern(ctx, sessionID, assetID, assetName, approvalType, cmd)
+			}
+			audit.WriteGrantSubmitAudit(ctx, assetID, assetName, patterns)
+		} else {
+			// "什么都不落"不能等于"什么都不说"：命令本身仍然照常放行执行（下面的
+			// return），用户点的却是"始终允许"——不留痕迹的话，用户会以为自己拿到了一条
+			// 常驻授权，下次同样的命令还会再弹一次框，audit_logs 里也查不出原因。
+			// 日志给现场排查，独立 ToolName 的审计行把"为什么"留在 audit_logs 里——
+			// 不能复用 grant_submit：AuditLogPage 把那个 ToolName 的 Command 当已生效的
+			// pattern 聚合展示给用户看，混进去就是本条要防的同一种"显示一条没拿到的
+			// 授权"，只是换了个地方发生。
+			logger.Ctx(ctx).Warn("always-allow approved but normalized to zero grant patterns; nothing persisted",
+				zap.Int64("assetID", assetID), zap.String("assetType", assetType), zap.String("command", command))
+			audit.WriteGrantDiscardedAudit(ctx, assetID, assetName, command)
 		}
-		if len(patterns) == 0 {
-			// shell parse 失败或全为空白 — 至少保留原命令一条，避免静默丢 grant
-			patterns = []string{command}
-		}
-		for _, cmd := range patterns {
-			SaveGrantPattern(ctx, sessionID, assetID, assetName, approvalType, cmd)
-		}
-		audit.WriteGrantSubmitAudit(ctx, assetID, assetName, patterns)
 		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow}
 	default:
 		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyMsg(ctx, "invalid approval response, execution denied", "审批响应无效，拒绝执行"), DecisionSource: aictx.SourceUserDeny}
@@ -496,6 +521,34 @@ func collectKafkaPolicies(ctx context.Context, asset *asset_entity.Asset) *asset
 	}
 	// 合并：allow_list 取第一个非空（资产优先），deny_list 全部合并
 	merged := &asset_entity.KafkaPolicy{}
+	for _, p := range policies {
+		if len(merged.AllowList) == 0 && len(p.AllowList) > 0 {
+			merged.AllowList = p.AllowList
+		}
+		merged.DenyList = policy.AppendUnique(merged.DenyList, p.DenyList...)
+	}
+	return merged
+}
+
+// collectOSSPolicies 收集资产 + 组链的 OSS 权限策略并合并
+func collectOSSPolicies(ctx context.Context, asset *asset_entity.Asset) *asset_entity.OSSPolicy {
+	holders := policyHoldersForAsset(ctx, asset)
+	policies := collectPoliciesFromChain(holders, func(h policyent.Holder) (*asset_entity.OSSPolicy, error) {
+		return h.GetOSSPolicy()
+	})
+	if len(policies) == 0 {
+		return nil
+	}
+	// 解析引用的权限组
+	for _, p := range policies {
+		if len(p.Groups) > 0 {
+			grpAllow, grpDeny := policy.ResolveOSSGroups(ctx, p.Groups)
+			p.AllowList = append(p.AllowList, grpAllow...)
+			p.DenyList = append(p.DenyList, grpDeny...)
+		}
+	}
+	// 合并：allow_list 取第一个非空（资产优先），deny_list 全部合并
+	merged := &asset_entity.OSSPolicy{}
 	for _, p := range policies {
 		if len(merged.AllowList) == 0 && len(p.AllowList) > 0 {
 			merged.AllowList = p.AllowList

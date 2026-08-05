@@ -47,10 +47,10 @@ func TestPolicyGroup_Validate(t *testing.T) {
 
 func TestIsBuiltinKind(t *testing.T) {
 	convey.Convey("isBuiltinKind 从注册数据派生合法 kind", t, func() {
-		convey.Convey("已注册的 6 个内置 kind 均为真", func() {
+		convey.Convey("已注册的 7 个内置 kind 均为真", func() {
 			for _, k := range []string{
 				PolicyTypeCommand, PolicyTypeQuery, PolicyTypeRedis,
-				PolicyTypeMongo, PolicyTypeKafka, PolicyTypeEtcd,
+				PolicyTypeMongo, PolicyTypeKafka, PolicyTypeEtcd, PolicyTypeOSS,
 			} {
 				assert.True(t, isBuiltinKind(k), "kind %s 应为已注册内置 kind", k)
 			}
@@ -171,8 +171,8 @@ func TestBuiltinGroups(t *testing.T) {
 		groups := BuiltinGroups()
 		counts := countBuiltinGroupsByPolicyType(groups)
 
-		convey.Convey("共返回22个内置组", func() {
-			assert.Len(t, groups, 22)
+		convey.Convey("共返回24个内置组", func() {
+			assert.Len(t, groups, 24)
 		})
 
 		convey.Convey("所有内置组ID均以builtin:开头", func() {
@@ -206,6 +206,12 @@ func TestBuiltinGroups(t *testing.T) {
 
 		convey.Convey("etcd类型内置组有2个", func() {
 			assert.Equal(t, 2, counts[PolicyTypeEtcd])
+		})
+
+		convey.Convey("oss类型内置组有2个", func() {
+			assert.Equal(t, 2, counts[PolicyTypeOSS])
+			assert.NotNil(t, FindBuiltin(policy.BuiltinOSSReadOnly))
+			assert.NotNil(t, FindBuiltin(policy.BuiltinOSSDangerousDeny))
 		})
 	})
 }
@@ -251,4 +257,57 @@ func TestPolicyGroup_ValidateEtcdType(t *testing.T) {
 func TestPolicyGroup_FindBuiltinEtcd(t *testing.T) {
 	assert.NotNil(t, FindBuiltin(policy.BuiltinEtcdReadOnly))
 	assert.NotNil(t, FindBuiltin(policy.BuiltinEtcdDangerousDeny))
+}
+
+func TestBuiltinGroups_OSS(t *testing.T) {
+	groups := BuiltinGroups()
+	var readOnly, deny *PolicyGroup
+	for _, g := range groups {
+		switch g.BuiltinID {
+		case policy.BuiltinOSSReadOnly:
+			readOnly = g
+		case policy.BuiltinOSSDangerousDeny:
+			deny = g
+		}
+	}
+	assert.NotNil(t, readOnly, "oss read-only builtin group missing")
+	assert.NotNil(t, deny, "oss dangerous-deny builtin group missing")
+	assert.Equal(t, PolicyTypeOSS, readOnly.PolicyType)
+	assert.Equal(t, PolicyTypeOSS, deny.PolicyType)
+
+	var pRO policy.OSSPolicy
+	assert.NoError(t, json.Unmarshal([]byte(readOnly.Policy), &pRO))
+	assert.Contains(t, pRO.AllowList, "bucket.list *")
+	assert.Contains(t, pRO.AllowList, "object.list *")
+	assert.Contains(t, pRO.AllowList, "object.read *")
+
+	var pDeny policy.OSSPolicy
+	assert.NoError(t, json.Unmarshal([]byte(deny.Policy), &pDeny))
+	// D9: 地板不可被用户覆盖，因此只放一条——预签名 PUT URL 是唯一把写权限完全移出本产品
+	// 的操作。这里锁的是"恰好一条"这个不变式，而不是重复实现里已有的规则串字面量。
+	assert.Equal(t, []string{"object.presign.write *"}, pDeny.DenyList)
+}
+
+func TestPolicyGroup_ValidateOSSType(t *testing.T) {
+	pg := &PolicyGroup{Name: "test oss group", PolicyType: PolicyTypeOSS, Policy: "{}"}
+	assert.NoError(t, pg.Validate())
+}
+
+func TestPolicyGroup_FindBuiltinOSS(t *testing.T) {
+	assert.NotNil(t, FindBuiltin(policy.BuiltinOSSReadOnly))
+	assert.NotNil(t, FindBuiltin(policy.BuiltinOSSDangerousDeny))
+}
+
+func TestDefaultOSSPolicy_GroupsResolveViaFindBuiltin(t *testing.T) {
+	// 交叉核对两个独立来源：policy.DefaultOSSPolicy() 引用的组 ID 必须真的能被
+	// policy_group_entity.FindBuiltin 解出，且解出的策略与 spec §4.4 一致，
+	// 否则默认策略会静默引用一个不存在的组。
+	def := policy.DefaultOSSPolicy()
+	assert.Len(t, def.Groups, 2)
+
+	for _, id := range def.Groups {
+		pg := FindBuiltin(id)
+		assert.NotNil(t, pg, "DefaultOSSPolicy 引用的组 %s 必须能被 FindBuiltin 找到", id)
+		assert.Equal(t, PolicyTypeOSS, pg.PolicyType)
+	}
 }

@@ -23,14 +23,20 @@ type ObjectItem struct {
 	IsPrefix     bool   `json:"isPrefix"`
 }
 
+// ListObjectsPage 是对象存储服务端返回的一张真实页。ContinuationToken 是 opaque 游标，
+// 调用方只能原样传回；不能从对象 key 猜出下一页边界。
+type ListObjectsPage struct {
+	Items                 []ObjectItem
+	IsTruncated           bool
+	NextContinuationToken string
+}
+
 // Client 是服务依赖的窄对象存储接口(可 mock)。
 type Client interface {
 	ListBuckets(ctx context.Context) ([]BucketItem, error)
-	// ListObjects 分页契约:maxKeys<=0 表示"使用服务端默认值";当超出 maxKeys 还有更多对象时,
-	// 实现必须多返回 1 条(即最多返回 maxKeys+1 条),调用方(listObjectsWith)靠这多出的一条
-	// 判断 IsTruncated 并截断结果——若实现只按字面返回恰好 maxKeys 条,截断检测会永远为 false,
-	// 分页将在"假的最后一页"上卡死。
-	ListObjects(ctx context.Context, bucket, prefix string, maxKeys int, startAfter string) ([]ObjectItem, error)
+	// ListObjects 返回一张真实 S3 页。continuationToken 来自上一页并原样交还服务端；页未填满
+	// 也可能 IsTruncated，调用方不得用返回条数或某个 key 推断是否还有下一页。
+	ListObjects(ctx context.Context, bucket, prefix string, maxKeys int, continuationToken string) (*ListObjectsPage, error)
 	StatObject(ctx context.Context, bucket, key string) (ObjectItem, error)
 	RemoveObject(ctx context.Context, bucket, key string) error
 	CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) error

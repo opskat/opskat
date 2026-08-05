@@ -34,7 +34,7 @@ func TestTools_RegistryShape(t *testing.T) {
 			"put_asset", "put_group",
 			"delete_asset", "delete_group",
 			// exec
-			"upload_file", "download_file",
+			"cp",
 			"request_permission", "batch_exec",
 			// extension
 			"ext_exec",
@@ -62,7 +62,7 @@ func TestTools_RegistryShape(t *testing.T) {
 
 		Convey("命令类工具标 Serial", func() {
 			serialNames := []string{
-				"upload_file", "download_file",
+				"cp",
 				"request_permission",
 				"ext_exec",
 				"exec",

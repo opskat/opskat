@@ -2108,10 +2108,10 @@ describe("retry/error handling", () => {
 
   it("tool_result 的结构化 is_error 将工具块标记为 error", async () => {
     const cbs = await startStreamingConv(407);
-    cbs[0]?.({ type: "tool_start", tool_name: "upload_file", tool_input: "{}", tool_call_id: "cp-deny" });
+    cbs[0]?.({ type: "tool_start", tool_name: "cp", tool_input: "{}", tool_call_id: "cp-deny" });
     cbs[0]?.({
       type: "tool_result",
-      tool_name: "upload_file",
+      tool_name: "cp",
       tool_call_id: "cp-deny",
       content: "USER DENIED: transfer rejected",
       is_error: true,

@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, type ComponentType } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Dialog,
@@ -12,6 +12,7 @@ import {
   Textarea,
 } from "@opskat/ui";
 import { useWailsEvent } from "@/hooks/useWailsEvent";
+import { S3Icon } from "@/components/asset/brand-icons";
 import { RespondOpsctlApproval } from "../../../wailsjs/go/opsctl/Opsctl";
 import { permission } from "../../../wailsjs/go/models";
 import { ShieldAlert, Terminal, Database, Server, FolderOpen, Globe, Usb, Trash2, Boxes, FileUp } from "lucide-react";
@@ -60,8 +61,18 @@ interface QueueItem {
   editable: boolean;
 }
 
+// 递归/通配 cp 一次展开出的路径可以到 200 条（D19 上限），原样铺开没法读。超过这条线
+// 折叠为一行摘要，展开后仍是全部具体主体——折叠只是呈现，批的还是那 N 条主体（D17）。
+// 只对 kind=batch 生效：grant 的每条都要能编辑，折叠会让人够不着编辑框。kind=batch 里还
+// 进一步只对带 detail 的批生效（见下方 isBatchCollapsed）——与 ApprovalBlock.tsx 同理。
+const BATCH_COLLAPSE_THRESHOLD = 10;
+
+// 与 ApprovalBlock.tsx 同理：lucide 图标是 ForwardRefExoticComponent，S3Icon 是普通的
+// React.FC，这张表按调用点唯一用到的形状（接收 className 的组件）收窄类型。
+type IconComponent = ComponentType<{ className?: string }>;
+
 function TypeBadge({ type }: { type: string }) {
-  const icons: Record<string, typeof Terminal> = {
+  const icons: Record<string, IconComponent> = {
     exec: Terminal,
     serial: Usb,
     sql: Database,
@@ -72,6 +83,7 @@ function TypeBadge({ type }: { type: string }) {
     etcd: Database,
     k8s: Boxes,
     cp: FileUp,
+    oss: S3Icon,
   };
   const Icon = icons[type] || Terminal;
   return (
@@ -158,6 +170,11 @@ export function OpsctlApprovalDialog() {
             asset_id: i.asset_id,
             asset_name: i.asset_name,
             command: i.command,
+            // detail 是一条 cp 传输唯一携带"两端基点"的地方（"opsctl cp <src> → <dst>"）。
+            // internal/app/opsctl/approval.go 的 handleBatchApproval 与 approval.BatchItem
+            // 都带了它（batch_exec 的 exec/sql/redis/mongo 混合批不产出，留空），折叠摘要
+            // 因此报得出两端基点，不止是条数。
+            detail: i.detail,
           })),
           sessionID: data.session_id,
           editable: false,
@@ -200,6 +217,56 @@ export function OpsctlApprovalDialog() {
 
   const current = queue[0] || null;
   const open = !!current;
+  // detail 是 cp 每条共享的"两端基点"摘要（cp.go 给每条 BatchItem 都填了同一句
+  // "cp src → dst"，handleBatchApproval 原样转发）；batch verb 的 exec/sql/redis 混合批
+  // 不产出（item.Detail 留空）。折叠是为 cp 设计的，只对带 detail 的批生效——batch verb
+  // 的条目分属不同资产/类型，没有可摘要的共同点，硬折叠会藏起本该看见的差异。
+  const isBatchCollapsed =
+    !!current &&
+    current.kind === "batch" &&
+    !!current.items[0]?.detail &&
+    current.items.length > BATCH_COLLAPSE_THRESHOLD;
+
+  // 折叠态与展开态共用同一份单条渲染，避免同一段 JSX 抄两份。cur 显式传参而不是闭包
+  // 捕获外层 current——调用点都在 `current && (...)` narrow 过的分支里，但函数本身
+  // 定义在分支外，闭包捕获会把 current 的类型退回 QueueItem | null。
+  const renderApprovalItem = (cur: QueueItem, item: ApprovalItemData, i: number) => (
+    <div key={i} className="rounded-md border p-2 space-y-1.5">
+      <div className="flex items-center gap-2">
+        {cur.kind === "grant" ? (
+          <ScopeBadge item={item} />
+        ) : (
+          <>
+            <TypeBadge type={item.type} />
+            {item.asset_name && (
+              <span className="text-sm text-muted-foreground">
+                {item.asset_name}
+                {item.asset_id > 0 && ` (ID: ${item.asset_id})`}
+              </span>
+            )}
+          </>
+        )}
+      </div>
+      {cur.editable ? (
+        <Textarea
+          value={editState[cur.id]?.[i] ?? item.command}
+          onChange={(e) =>
+            setEditState((prev) => ({
+              ...prev,
+              [cur.id]: { ...prev[cur.id], [i]: e.target.value },
+            }))
+          }
+          className="font-mono text-xs min-h-[40px] resize-y"
+          rows={Math.max(2, (editState[cur.id]?.[i] ?? item.command).split("\n").length)}
+        />
+      ) : (
+        <div className="rounded-md bg-muted p-2 max-h-[150px] overflow-auto">
+          <code className="text-xs font-mono whitespace-pre-wrap break-all">{item.command}</code>
+        </div>
+      )}
+      {item.detail && <div className="text-xs text-muted-foreground font-mono">{item.detail}</div>}
+    </div>
+  );
 
   const respond = useCallback(
     (decision: string) => {
@@ -281,43 +348,27 @@ export function OpsctlApprovalDialog() {
 
             <div className="space-y-2 overflow-y-auto flex-1 min-h-0">
               {current.description && <div className="text-sm font-medium">{current.description}</div>}
-              {current.items.map((item, i) => (
-                <div key={i} className="rounded-md border p-2 space-y-1.5">
-                  <div className="flex items-center gap-2">
-                    {current.kind === "grant" ? (
-                      <ScopeBadge item={item} />
-                    ) : (
-                      <>
-                        <TypeBadge type={item.type} />
-                        {item.asset_name && (
-                          <span className="text-sm text-muted-foreground">
-                            {item.asset_name}
-                            {item.asset_id > 0 && ` (ID: ${item.asset_id})`}
-                          </span>
-                        )}
-                      </>
+              {isBatchCollapsed ? (
+                // 既有的折叠交互（与 ApprovalBlock.tsx 同一套 <details>/<summary>）：摘要行
+                // 常驻可见，具体主体折叠在里面，展开后就是普普通通的列表——不是新的授权范围（D17）。
+                <details className="rounded-md border p-2">
+                  <summary
+                    data-testid="opsctl-approval-batch-summary"
+                    data-count={current.items.length}
+                    className="cursor-pointer select-none text-sm"
+                  >
+                    {t("opsctlApproval.batchCollapsedSummary", { count: current.items.length })}
+                    {current.items[0]?.detail && (
+                      <span className="text-muted-foreground"> · {current.items[0].detail}</span>
                     )}
+                  </summary>
+                  <div className="space-y-2 mt-2">
+                    {current.items.map((item, i) => renderApprovalItem(current, item, i))}
                   </div>
-                  {current.editable ? (
-                    <Textarea
-                      value={editState[current.id]?.[i] ?? item.command}
-                      onChange={(e) =>
-                        setEditState((prev) => ({
-                          ...prev,
-                          [current.id]: { ...prev[current.id], [i]: e.target.value },
-                        }))
-                      }
-                      className="font-mono text-xs min-h-[40px] resize-y"
-                      rows={Math.max(2, (editState[current.id]?.[i] ?? item.command).split("\n").length)}
-                    />
-                  ) : (
-                    <div className="rounded-md bg-muted p-2 max-h-[150px] overflow-auto">
-                      <code className="text-xs font-mono whitespace-pre-wrap break-all">{item.command}</code>
-                    </div>
-                  )}
-                  {item.detail && <div className="text-xs text-muted-foreground font-mono">{item.detail}</div>}
-                </div>
-              ))}
+                </details>
+              ) : (
+                current.items.map((item, i) => renderApprovalItem(current, item, i))
+              )}
               {/* 记住模式：展开模式编辑器 */}
               {current.kind === "single" && current.sessionID && rememberMode && (
                 <div className="space-y-1.5 pt-1">

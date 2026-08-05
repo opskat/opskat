@@ -18,6 +18,9 @@ type BatchItem struct {
 	AssetID   int64  `json:"asset_id"`
 	AssetName string `json:"asset_name"`
 	Command   string `json:"command"`
+	// Detail 是这一条的补充说明，供折叠摘要展示"两端基点"一类信息（如 cp 的
+	// "opsctl cp <src> → <dst>"）；exec/sql/redis/mongo 的 batch_exec 条目不产出，留空。
+	Detail string `json:"detail"`
 }
 
 // ApprovalRequest is sent from opsctl to the desktop app.

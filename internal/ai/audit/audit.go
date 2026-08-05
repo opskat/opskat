@@ -3,7 +3,7 @@
 // 区分（"ai" / "opsctl" / "desktop"，取自 ctx 里的 aictx.WithAuditSource）。
 //
 // 命令摘要提取走 [RegisterExtractor] 注册表：审计在 extractor_default.go 的 init()
-// 里为每个工具(exec/upload_file 等)注册默认提取器；需要资产上下文才能算出规范化命令
+// 里为每个工具(exec/cp 等)注册默认提取器；需要资产上下文才能算出规范化命令
 // 的类型（k8s/etcd/mongo/kafka）由 runner.auditMiddleware 直接覆盖 ToolCallInfo.Command，
 // 不经过本注册表（见 [ExtractCommandForAudit] 的注释）。
 // 每个工具名各自注册，不互相借用——借用会让一个工具的审计取决于另一个工具是否还在。
@@ -52,11 +52,14 @@ type ToolCallInfo struct {
 	AssetName string
 
 	// Command 允许调用方预先算好命令摘要，覆盖 ExtractCommandForAudit 的默认解析。
-	// 目前只有 auditMiddleware 给 exec 工具填：资产类型注册了 CanonicalizeFunc 时
-	// （k8s 注入 --context/--namespace；etcd/mongo/kafka 走各自 DSL 的 round trip，
-	// 规范化大小写、复合命令拼写与 flag 顺序），这里存规范化后、真正过了权限
+	// AI 侧由 auditMiddleware 给 exec 工具填：资产类型注册了 CanonicalizeFunc 时
+	// （k8s 注入 --context/--namespace；etcd/mongo/kafka/oss 走各自 DSL 的 round trip，
+	// 规范化大小写、复合命令拼写与 flag 顺序，oss 另外把 `object list <bucket>` 这类
+	// 前缀目标补成 `<bucket>/`），这里存规范化后、真正过了权限
 	// 检查/审批弹窗展示的命令，而不是模型传入的原始字符串——否则审计会跟
-	// 审批弹窗对不上。
+	// 审批弹窗对不上。opsctl 侧同理：cmd/opsctl/command.writeOpsctlAudit 通过
+	// aictx.GetAuditCommand(ctx) 读 cmdExec 预填的规范形式（同一个 aictx.
+	// AuditCommandSlot 机制，只是不经过 runner 中间件）。
 	//
 	// kafka 是这里最需要留意的一个：它的规范化结果是策略层的**双 token 串**
 	// （如 `topic.delete orders`），不是模型写的富命令串（`topic delete orders`）。
@@ -223,6 +226,31 @@ func WriteGrantSubmitAudit(ctx context.Context, assetID int64, assetName string,
 		}
 		if err := repo.Create(context.Background(), entry); err != nil {
 			logger.Default().Error("write grant submit audit", zap.Error(err))
+		}
+	}
+}
+
+// WriteGrantDiscardedAudit 记录一次"始终允许"被批准执行、但归一化后没有产出任何 grant
+// pattern，因而什么都没有落库的情况（决策 D20：OSS 的目录标记，如
+// `object delete mybucket/logs/`，命令本身仍然执行，只是不产生常驻授权，见
+// permission.HandleConfirm 的兜底分支）。不落一条空的 grant_submit 审计行是刻意的——
+// 那会被前端 AuditLogPage 的会话已允许模式聚合当成一条真实 pattern；这里用不同的
+// ToolName 把"为什么没有常驻授权"单独记下来，而不是完全没有痕迹。
+func WriteGrantDiscardedAudit(ctx context.Context, assetID int64, assetName, command string) {
+	if repo := audit_repo.Audit(); repo != nil {
+		entry := &audit_entity.AuditLog{
+			Source:     aictx.GetAuditSource(ctx),
+			ToolName:   "grant_discarded",
+			AssetID:    assetID,
+			AssetName:  assetName,
+			Command:    auditredact.Text(command),
+			SessionID:  aictx.GetSessionID(ctx),
+			Decision:   "allow",
+			Success:    1,
+			Createtime: time.Now().Unix(),
+		}
+		if err := repo.Create(context.Background(), entry); err != nil {
+			logger.Default().Error("write grant discarded audit", zap.Error(err))
 		}
 	}
 }

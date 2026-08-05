@@ -220,3 +220,47 @@ func TestGroup_EtcdPolicy(t *testing.T) {
 		})
 	})
 }
+
+func TestGroup_OSSPolicy(t *testing.T) {
+	Convey("OSS 权限策略序列化与反序列化", t, func() {
+		Convey("设置策略后可正确读取", func() {
+			g := &Group{Name: "测试分组"}
+			p := &policy.OSSPolicy{
+				AllowList: []string{"object.read *"},
+				DenyList:  []string{"object.presign.write *"},
+				Groups:    []string{policy.BuiltinOSSReadOnly, policy.BuiltinOSSDangerousDeny},
+			}
+			err := g.SetOSSPolicy(p)
+			assert.NoError(t, err)
+
+			got, err := g.GetOSSPolicy()
+			assert.NoError(t, err)
+			assert.Equal(t, p.AllowList, got.AllowList)
+			assert.Equal(t, p.DenyList, got.DenyList)
+			assert.Equal(t, p.Groups, got.Groups)
+		})
+
+		Convey("设置空策略时清空字段", func() {
+			g := &Group{Name: "测试分组"}
+			err := g.SetOSSPolicy(&policy.OSSPolicy{
+				AllowList: []string{"object.read *"},
+			})
+			assert.NoError(t, err)
+			assert.NotEmpty(t, g.OssPolicy)
+
+			err = g.SetOSSPolicy(&policy.OSSPolicy{})
+			assert.NoError(t, err)
+			assert.Empty(t, g.OssPolicy)
+		})
+
+		Convey("字段为空时GetOSSPolicy返回零值", func() {
+			g := &Group{Name: "测试分组"}
+			got, err := g.GetOSSPolicy()
+			assert.NoError(t, err)
+			assert.NotNil(t, got)
+			assert.Empty(t, got.AllowList)
+			assert.Empty(t, got.DenyList)
+			assert.Empty(t, got.Groups)
+		})
+	})
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { ApprovalBlock } from "../components/approval/ApprovalBlock";
 import type { ContentBlock } from "../stores/aiStore";
 
@@ -19,6 +19,18 @@ function cpBlock(): ContentBlock {
       },
     ],
   } as ContentBlock;
+}
+
+// 一条递归/通配 cp 展开出的批量审批项：每条都是独立主体（D17），detail 是这次传输
+// 唯一携带"两端基点"的地方（checkAccessBatch 给每条都填了同一句 "cp src → dst"）。
+function batchItems(n: number, detail?: string) {
+  return Array.from({ length: n }, (_, i) => ({
+    type: "cp",
+    asset_id: (i % 2) + 1,
+    asset_name: i % 2 === 0 ? "web-01" : "s3-prod",
+    command: `/var/log/app-${i}.log`,
+    detail,
+  }));
 }
 
 function renderApproval(overrides: Partial<ContentBlock>) {
@@ -90,6 +102,21 @@ describe("ApprovalBlock", () => {
     expect(screen.getByTestId("ai-approval-allow")).toBeInTheDocument();
   });
 
+  it("oss 审批项有自己的徽章图标，不回落到通用的终端图标", () => {
+    renderApproval({
+      approvalKind: "single",
+      approvalItems: [{ type: "oss", asset_id: 1, asset_name: "s3-prod", command: "object.read mybucket/logs/" }],
+    });
+
+    const badge = screen.getByText("OSS").closest("span");
+    expect(badge).not.toBeNull();
+    const svg = badge!.querySelector("svg");
+    expect(svg).not.toBeNull();
+    // lucide-react 图标统一带 "lucide-<kebab-name>" class；OSS 复用的是 S3 品牌图标（Iconify），
+    // 不是这套 lucide 图标里的任何一个，因此不该带这个 class —— 这与它没有落到 Terminal 兜底是同一件事。
+    expect(svg!.getAttribute("class") || "").not.toMatch(/lucide/);
+  });
+
   it("删除分组的审批项在徽标行也要显示分组名（没有 asset_name，只有 group_name）", () => {
     renderApproval({
       approvalKind: "delete",
@@ -128,5 +155,96 @@ describe("ApprovalBlock", () => {
 
     // 不做任何点击/展开操作，警告文本必须直接可见——藏在一次点击之后就等于没警告。
     expect(screen.getByText("此操作不可撤销，连接会被断开。")).toBeVisible();
+  });
+});
+
+// 递归/通配 cp 一次性送来上百条 ApprovalItem，原样铺开没法读——超过 10 条时折叠为一行
+// 摘要（条数 + 两端基点），展开后仍是全部具体主体。折叠只是呈现，批的还是那 N 条主体（D17），
+// 因此只对 kind=batch 生效——grant 的每条都要能编辑，折叠会让人够不着编辑框。
+describe("ApprovalBlock 批量审批折叠（kind=batch，D17）", () => {
+  it("恰好 10 条不折叠：全部主体直接可见，没有折叠摘要", () => {
+    renderApproval({ approvalKind: "batch", approvalItems: batchItems(10) });
+
+    expect(screen.queryByTestId("ai-approval-batch-summary")).not.toBeInTheDocument();
+    expect(screen.getByText("/var/log/app-0.log")).toBeVisible();
+    expect(screen.getByText("/var/log/app-9.log")).toBeVisible();
+  });
+
+  it("11 条时折叠为一行摘要（含条数与两端基点），具体主体默认不可见", () => {
+    renderApproval({
+      approvalKind: "batch",
+      approvalItems: batchItems(11, "cp web-01:/var/log → s3-prod:/bucket/logs/"),
+    });
+
+    const summary = screen.getByTestId("ai-approval-batch-summary");
+    expect(summary).toHaveAttribute("data-count", "11");
+    expect(summary.textContent).toContain("cp web-01:/var/log → s3-prod:/bucket/logs/");
+    expect(screen.getByText("/var/log/app-0.log")).not.toBeVisible();
+  });
+
+  it("展开折叠摘要后，11 条具体主体全部可见——折叠只是呈现，不是新的授权范围（D17）", () => {
+    renderApproval({
+      approvalKind: "batch",
+      approvalItems: batchItems(11, "cp web-01:/var/log → s3-prod:/bucket/logs/"),
+    });
+
+    fireEvent.click(screen.getByTestId("ai-approval-batch-summary"));
+
+    for (let i = 0; i < 11; i++) {
+      expect(screen.getByText(`/var/log/app-${i}.log`)).toBeVisible();
+    }
+  });
+
+  it("200 条（D19 上限）同样折叠，展开后 200 条全部可见，一条不少", () => {
+    renderApproval({
+      approvalKind: "batch",
+      approvalItems: batchItems(200, "cp web-01:/var/log → s3-prod:/bucket/logs/"),
+    });
+
+    const summary = screen.getByTestId("ai-approval-batch-summary");
+    expect(summary).toHaveAttribute("data-count", "200");
+
+    fireEvent.click(summary);
+    expect(screen.getByText("/var/log/app-0.log")).toBeVisible();
+    expect(screen.getByText("/var/log/app-199.log")).toBeVisible();
+  });
+
+  it("1 条批量审批不折叠", () => {
+    renderApproval({ approvalKind: "batch", approvalItems: batchItems(1) });
+
+    expect(screen.queryByTestId("ai-approval-batch-summary")).not.toBeInTheDocument();
+    expect(screen.getByText("/var/log/app-0.log")).toBeVisible();
+  });
+
+  it("grant 审批哪怕超过 10 条也不折叠——每条都要能编辑，折叠只对 batch 生效", () => {
+    const items = Array.from({ length: 12 }, (_, i) => ({
+      type: "exec",
+      asset_id: i + 1,
+      asset_name: `web-${i}`,
+      command: `cat /var/log/app-${i}.log`,
+    }));
+    renderApproval({ approvalKind: "grant", approvalItems: items });
+
+    expect(screen.queryByTestId("ai-approval-batch-summary")).not.toBeInTheDocument();
+    expect(screen.getAllByDisplayValue(/cat \/var\/log\/app-/)).toHaveLength(12);
+  });
+
+  // batch_exec（exec/sql/redis/mongo 混合批）同样是 kind=batch，但 tool_handler_batch.go
+  // 建 item 时不填 Detail——它的条目分属不同资产/工具，没有 cp 那种"两端基点"可摘要。
+  // 折叠是为 cp 设计的：collapse 掉一句读不出内容的"N 项已折叠"，Approve 按钮却还活着，
+  // 比展示 11 条异构命令更危险。detail 是 payload 里现成的、可靠的判据（cp 每条都填
+  // 同一句非空摘要，batch_exec 从不填）——不新增字段，只是不再对没有它的 batch 折叠。
+  it("batch_exec 没有 detail 摘要，超过 10 条也不折叠——各条目没有可摘要的共同点", () => {
+    const items = Array.from({ length: 11 }, (_, i) => ({
+      type: i % 2 === 0 ? "exec" : "sql",
+      asset_id: i + 1,
+      asset_name: `web-${i}`,
+      command: `do something ${i}`,
+    }));
+    renderApproval({ approvalKind: "batch", approvalItems: items });
+
+    expect(screen.queryByTestId("ai-approval-batch-summary")).not.toBeInTheDocument();
+    expect(screen.getByText("do something 0")).toBeVisible();
+    expect(screen.getByText("do something 10")).toBeVisible();
   });
 });

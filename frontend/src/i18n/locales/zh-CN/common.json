@@ -443,6 +443,12 @@
     "etcdPolicyHint": "未列出的 etcd 操作将请求用户确认后执行；规则支持使用 * 通配，范围过宽（如 *）可能放行高风险操作或误拒大量操作，请谨慎配置。",
     "etcdPolicyPlaceholder": "输入 etcd 操作规则，如: get /app/*",
     "policyTestEtcdPlaceholder": "输入 etcd 操作测试，如: get /app/config",
+    "ossPolicy": "对象存储操作权限",
+    "ossPolicyAllowList": "允许列表（直接执行，无需确认）",
+    "ossPolicyDenyList": "拒绝列表（始终拒绝执行）",
+    "ossPolicyHint": "未列出的对象存储操作将请求用户确认后执行；规则支持使用 * 通配，只写桶名或以 / 结尾会匹配该前缀下的任意对象，配置范围较宽的规则时请谨慎。",
+    "ossPolicyPlaceholder": "输入操作/资源规则，如: object.read mybucket/logs/",
+    "policyTestOSSPlaceholder": "输入对象存储操作测试，如: object.read mybucket/logs/",
     "k8sKubeconfigProvided": "已提供 kubeconfig",
     "k8sNamespace": "命名空间",
     "k8sContext": "Context",
@@ -665,6 +671,14 @@
         "etcd-dangerous-deny": {
           "name": "etcd 高危拒绝",
           "desc": "拒绝 etcd 高危操作"
+        },
+        "oss-readonly": {
+          "name": "对象存储只读",
+          "desc": "允许列出桶与对象、读取对象内容"
+        },
+        "oss-dangerous-deny": {
+          "name": "对象存储高危拒绝",
+          "desc": "禁止签发预签名上传链接"
         }
       }
     },
@@ -1034,6 +1048,7 @@
     "permissionDeny": "拒绝",
     "approvalSingleTitle": "需要确认",
     "approvalBatchTitle": "需要确认（{{count}} 条命令）",
+    "approvalBatchCollapsedSummary": "已折叠 {{count}} 条审批项，点击展开逐条查看",
     "approvalGrantTitle": "权限申请",
     "approvalDeleteTitle": "确认删除",
     "approvalDeleteDetail": "查看删除影响",
@@ -1607,6 +1622,7 @@
     "grantDescription": "请审核以下命令模式，可编辑后批准",
     "batchTitle": "批量操作审批",
     "batchDescription": "以下 {{count}} 条操作需要您的批准",
+    "batchCollapsedSummary": "已折叠 {{count}} 条审批项，点击展开逐条查看",
     "alwaysAllow": "始终允许",
     "approve": "批准",
     "scopeAll": "所有资产"

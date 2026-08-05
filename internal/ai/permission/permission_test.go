@@ -776,15 +776,14 @@ func TestHandleConfirm_AllowAllGrantPatternSaving(t *testing.T) {
 // permissionTypes must be the assetType itself, not the literal "exec" the old inline
 // mapping defaulted to.
 //
-// "oss" stands in for a real caller: tool_handler_ext.go's handleExecTool passes an
+// "prometheus" stands in for a real caller: tool_handler_ext.go's handleExecTool passes an
 // extension's declared ext.Manifest.Policies.Type straight into HandleConfirm, and that
-// type (e.g. "oss", see pkg/extension/manifest_test.go) is never going to be one of the
-// nine registered permission types. Before this fix every such approval was mislabeled
-// "EXEC" in the front end regardless of what it actually was.
+// type is not going to be one of the registered permission types. Before this fix every
+// such approval was mislabeled "EXEC" in the front end regardless of what it actually was.
 func TestHandleConfirm_UnregisteredAssetTypeApprovalItem(t *testing.T) {
 	Convey("HandleConfirm 对未注册资产类型的审批项 Type 落回原样，不是 exec", t, func() {
 		ctx, mockAsset, _ := setupPolicyTest(t)
-		asset := &asset_entity.Asset{ID: 9, Name: "oss-bucket-1", Type: "oss"}
+		asset := &asset_entity.Asset{ID: 9, Name: "metrics-1", Type: "prometheus"}
 		mockAsset.EXPECT().Find(gomock.Any(), int64(9)).Return(asset, nil).AnyTimes()
 
 		var gotType string
@@ -795,9 +794,9 @@ func TestHandleConfirm_UnregisteredAssetTypeApprovalItem(t *testing.T) {
 			return ApprovalResponse{Decision: "deny"}
 		})
 
-		checker.HandleConfirm(ctx, 9, "oss", "put-object bucket/key")
+		checker.HandleConfirm(ctx, 9, "prometheus", "query up")
 
-		So(gotType, ShouldEqual, "oss")
+		So(gotType, ShouldEqual, "prometheus")
 	})
 }
 
@@ -1456,39 +1455,39 @@ func TestCheckPermission_SQLMultiStatementGroupBypass(t *testing.T) {
 func TestNormalizeGrantPatterns(t *testing.T) {
 	Convey("NormalizeGrantPatterns", t, func() {
 		Convey("SSH 类型按行 + policy.ExtractSubCommands 拆", func() {
-			patterns := NormalizeGrantPatterns("exec", "ls /tmp && cat /etc/hosts\nuptime")
+			patterns := NormalizeGrantPatterns("exec", "ls /tmp && cat /etc/hosts\nuptime", GrantOriginSystem)
 			So(patterns, ShouldResemble, []string{"ls /tmp", "cat /etc/hosts", "uptime"})
 		})
 
 		Convey("K8s 类型与 SSH 一致拆分", func() {
-			patterns := NormalizeGrantPatterns("k8s", "kubectl get pods && kubectl apply -f x.yaml")
+			patterns := NormalizeGrantPatterns("k8s", "kubectl get pods && kubectl apply -f x.yaml", GrantOriginSystem)
 			So(patterns, ShouldResemble, []string{"kubectl get pods", "kubectl apply -f x.yaml"})
 		})
 
 		Convey("非 shell 类型保留原命令", func() {
-			patterns := NormalizeGrantPatterns("sql", "SELECT 1; UPDATE users SET name='x'")
+			patterns := NormalizeGrantPatterns("sql", "SELECT 1; UPDATE users SET name='x'", GrantOriginSystem)
 			So(patterns, ShouldResemble, []string{"SELECT 1; UPDATE users SET name='x'"})
 
-			patterns = NormalizeGrantPatterns("redis", "GET user:1")
+			patterns = NormalizeGrantPatterns("redis", "GET user:1", GrantOriginSystem)
 			So(patterns, ShouldResemble, []string{"GET user:1"})
 		})
 
 		Convey("空命令返回 nil", func() {
-			So(NormalizeGrantPatterns("exec", ""), ShouldBeNil)
-			So(NormalizeGrantPatterns("exec", "   "), ShouldBeNil)
+			So(NormalizeGrantPatterns("exec", "", GrantOriginSystem), ShouldBeNil)
+			So(NormalizeGrantPatterns("exec", "   ", GrantOriginSystem), ShouldBeNil)
 		})
 
 		Convey("AST 解析失败保留原行", func() {
-			patterns := NormalizeGrantPatterns("exec", "echo $(")
+			patterns := NormalizeGrantPatterns("exec", "echo $(", GrantOriginSystem)
 			So(patterns, ShouldResemble, []string{"echo $("})
 		})
 
 		Convey("asset_entity 类型常量与 approval type 都能识别", func() {
 			// 单元测试不依赖具体常量值；只要传 AssetTypeSSH/K8s 也能走 shell 路径
-			patterns := NormalizeGrantPatterns(asset_entity.AssetTypeSSH, "ls && pwd")
+			patterns := NormalizeGrantPatterns(asset_entity.AssetTypeSSH, "ls && pwd", GrantOriginSystem)
 			So(patterns, ShouldResemble, []string{"ls", "pwd"})
 
-			patterns = NormalizeGrantPatterns(asset_entity.AssetTypeK8s, "kubectl get pods")
+			patterns = NormalizeGrantPatterns(asset_entity.AssetTypeK8s, "kubectl get pods", GrantOriginSystem)
 			So(patterns, ShouldResemble, []string{"kubectl get pods"})
 		})
 	})

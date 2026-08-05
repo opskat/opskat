@@ -103,13 +103,16 @@ func (a *AI) makeGrantRequestFunc() permission.GrantRequestFunc {
 					cmd := strings.TrimSpace(item.Command)
 					if cmd != "" {
 						finalPatterns = append(finalPatterns, cmd)
-						permission.SaveGrantPatternsForApproval(i18n.Ctx(a.ctx, a.lang.Lang()), sessionID, item.AssetID, item.AssetName, item.Type, cmd)
+						// 用户在弹窗里手写/改写的 pattern：他写的通配就是他要的授权范围，
+						// 归一化不该收窄它（见 permission.GrantOrigin）。
+						permission.SaveGrantPatternsForApproval(i18n.Ctx(a.ctx, a.lang.Lang()), sessionID, item.AssetID, item.AssetName, item.Type, cmd, permission.GrantOriginUser)
 					}
 				}
 			} else {
 				for _, item := range items {
 					finalPatterns = append(finalPatterns, item.Command)
-					permission.SaveGrantPatternsForApproval(i18n.Ctx(a.ctx, a.lang.Lang()), sessionID, item.AssetID, item.AssetName, item.Type, item.Command)
+					// 用户原样批准了系统交上来的主体，没有改写：按系统来源归一化。
+					permission.SaveGrantPatternsForApproval(i18n.Ctx(a.ctx, a.lang.Lang()), sessionID, item.AssetID, item.AssetName, item.Type, item.Command, permission.GrantOriginSystem)
 				}
 			}
 			return true, finalPatterns

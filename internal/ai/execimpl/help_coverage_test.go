@@ -25,8 +25,11 @@ func TestEveryAssetTypeHasHelpDoc(t *testing.T) {
 
 // doc-only 类型有文档但**没有**执行器：help 能查，exec 必须明确报"尚不支持"，
 // 而不是查到一个 nil 执行器后 panic。
+//
+// oss 曾经在这份清单里（"There is no command surface"）；它现在有 exec DSL、
+// 执行器与策略种类，因此归 coverage_test.go 的 TestEveryPolicyKindTypeHasExecutor 管。
 func TestDocOnlyTypesHaveNoExecutor(t *testing.T) {
-	for _, docOnly := range []string{"rdp", "vnc", "oss", "local"} {
+	for _, docOnly := range []string{"rdp", "vnc", "local"} {
 		if _, ok := permission.HelpFor(docOnly); !ok {
 			t.Errorf("doc-only type %q must have a help doc", docOnly)
 		}
@@ -37,7 +40,7 @@ func TestDocOnlyTypesHaveNoExecutor(t *testing.T) {
 	// 且不得混进 exec 的类型清单（它会进模型看到的 exec 工具描述）。
 	for _, listed := range permission.RegisteredExecTypes() {
 		switch listed {
-		case "rdp", "vnc", "oss", "local":
+		case "rdp", "vnc", "local":
 			t.Errorf("doc-only type %q must not appear in RegisteredExecTypes()", listed)
 		}
 	}

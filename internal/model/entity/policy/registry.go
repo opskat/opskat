@@ -12,6 +12,7 @@ const (
 	PolicyKindKafka   = "kafka"
 	PolicyKindK8s     = "k8s"
 	PolicyKindEtcd    = "etcd"
+	PolicyKindOSS     = "oss"
 )
 
 // assetKindRegistry 资产类型 → 规范 policyKind。由 assettype.Register 在 handler 注册时
@@ -87,4 +88,5 @@ func init() {
 	RegisterDefaultPolicy("mongodb", func() any { return DefaultMongoPolicy() })
 	RegisterDefaultPolicy("kafka", func() any { return DefaultKafkaPolicy() })
 	RegisterDefaultPolicy("k8s", func() any { return DefaultK8sPolicy() })
+	RegisterDefaultPolicy("oss", func() any { return DefaultOSSPolicy() })
 }

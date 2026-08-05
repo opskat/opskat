@@ -106,6 +106,25 @@ func DefaultK8sPolicy() *K8sPolicy {
 	}
 }
 
+// OSSPolicy OSS 对象存储权限策略（与 KafkaPolicy 同形）
+type OSSPolicy struct {
+	AllowList []string `json:"allow_list"`       // 允许的 OSS action/resource 模式
+	DenyList  []string `json:"deny_list"`        // 拒绝的 OSS action/resource 模式
+	Groups    []string `json:"groups,omitempty"` // 引用的权限组 ID
+}
+
+// IsEmpty 检查策略是否为空
+func (p *OSSPolicy) IsEmpty() bool {
+	return len(p.AllowList) == 0 && len(p.DenyList) == 0 && len(p.Groups) == 0
+}
+
+// DefaultOSSPolicy 返回默认 OSS 权限策略（引用内置权限组）
+func DefaultOSSPolicy() *OSSPolicy {
+	return &OSSPolicy{
+		Groups: []string{BuiltinOSSReadOnly, BuiltinOSSDangerousDeny},
+	}
+}
+
 // Holder 策略持有者接口，Asset 和 Group 均实现此接口
 type Holder interface {
 	GetCommandPolicy() (*CommandPolicy, error)
@@ -115,6 +134,7 @@ type Holder interface {
 	GetKafkaPolicy() (*KafkaPolicy, error)
 	GetK8sPolicy() (*K8sPolicy, error)
 	GetEtcdPolicy() (*EtcdPolicy, error)
+	GetOSSPolicy() (*OSSPolicy, error)
 }
 
 // DefaultRedisPolicy 返回默认 Redis 权限策略（引用内置权限组）
@@ -163,6 +183,12 @@ const (
 	BuiltinKafkaMessageWriteDeny = "builtin:kafka-message-write-deny"
 	BuiltinEtcdReadOnly          = "builtin:etcd-readonly"
 	BuiltinEtcdDangerousDeny     = "builtin:etcd-dangerous-deny"
+	BuiltinOSSReadOnly           = "builtin:oss-readonly"
+	// BuiltinOSSDangerousDeny 只含 object.presign.write *（见 D9）：预签名 PUT URL 是唯一
+	// 把写权限完全移出本产品的操作 —— URL 签发后任何持有者都能在有效期内写入，不再经过
+	// 任何策略/审批/审计。这与 etcd 把 auth disable 放进地板是同一类判断；put/copy/move/
+	// delete 都走"每次都要过一次审批"的普通路径，因此不进这道不可覆盖的地板。
+	BuiltinOSSDangerousDeny = "builtin:oss-dangerous-deny"
 
 	// BuiltinPrefix 内置权限组 ID 前缀
 	BuiltinPrefix = "builtin:"

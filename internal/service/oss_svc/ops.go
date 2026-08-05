@@ -3,27 +3,34 @@ package oss_svc
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 )
 
 const defaultListMaxKeys = 200
 
-// listObjectsWith 读一层有界页:拆"文件夹"前缀与对象;超出 maxKeys 则回续传游标。
-func listObjectsWith(ctx context.Context, c Client, bucket, prefix string, maxKeys int, startAfter string) (*ListObjectsResult, error) {
+// ListObjectsWith 读一层有界页:拆"文件夹"前缀与对象;超出 maxKeys 则回续传游标。
+//
+// 导出是因为它是**分页契约本身**,而 Service 的 connect 没有注入点:任何要按这份契约
+// 逐页拉全一棵子树的调用方(internal/ai/helper 的传输适配器),都得能拿一个假 Client
+// 把这段真实现跑起来,而不是在自己的测试里照抄一份截断逻辑——照抄的那份会与这里漂移,
+// 而漂移出来的恰恰是"测试模型比真实客户端更宽容",于是缺陷在绿灯下活着。
+func ListObjectsWith(ctx context.Context, c Client, bucket, prefix string, maxKeys int, continuationToken string) (*ListObjectsResult, error) {
 	limit := maxKeys
 	if limit <= 0 {
 		limit = defaultListMaxKeys
 	}
-	items, err := c.ListObjects(ctx, bucket, prefix, limit, startAfter)
+	page, err := c.ListObjects(ctx, bucket, prefix, limit, continuationToken)
 	if err != nil {
 		return nil, err
 	}
 	res := &ListObjectsResult{Prefixes: []string{}, Objects: []ObjectItem{}}
-	if len(items) > limit {
-		res.IsTruncated = true
-		res.NextContinuationToken = items[limit-1].Key
-		items = items[:limit]
-	}
+	items := page.Items
+	// Contents 与 CommonPrefixes 在响应结构中分开，合并后排序以提供稳定的展示/遍历顺序；
+	// 分页本身只使用服务端 opaque token，不再从排序结果猜游标。
+	slices.SortStableFunc(items, func(a, b ObjectItem) int { return strings.Compare(a.Key, b.Key) })
+	res.IsTruncated = page.IsTruncated
+	res.NextContinuationToken = page.NextContinuationToken
 	for _, it := range items {
 		if it.IsPrefix {
 			if it.Key == prefix {

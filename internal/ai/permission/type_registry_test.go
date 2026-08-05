@@ -13,7 +13,8 @@ func TestPermissionTypeRegistry(t *testing.T) {
 		input        string
 		canonical    string
 		approvalType string
-		shellLike    bool
+		// splitsGrant 是"该类型注册了 grant 归一化函数"——nil 表示整串存一条。
+		splitsGrant bool
 	}{
 		{asset_entity.AssetTypeSSH, asset_entity.AssetTypeSSH, "exec", true},
 		{"exec", asset_entity.AssetTypeSSH, "exec", true},
@@ -26,6 +27,7 @@ func TestPermissionTypeRegistry(t *testing.T) {
 		{"mongo", asset_entity.AssetTypeMongoDB, "mongo", false},
 		{asset_entity.AssetTypeKafka, asset_entity.AssetTypeKafka, "kafka", false},
 		{asset_entity.AssetTypeK8s, asset_entity.AssetTypeK8s, "k8s", true},
+		{asset_entity.AssetTypeOSS, asset_entity.AssetTypeOSS, "oss", true},
 	}
 
 	for _, tt := range tests {
@@ -34,7 +36,7 @@ func TestPermissionTypeRegistry(t *testing.T) {
 			require.True(t, ok)
 			assert.Equal(t, tt.canonical, handler.canonical)
 			assert.Equal(t, tt.approvalType, handler.approvalType)
-			assert.Equal(t, tt.shellLike, handler.shellLike)
+			assert.Equal(t, tt.splitsGrant, handler.grantPatterns != nil)
 			require.NotNil(t, handler.check)
 		})
 	}
@@ -50,13 +52,12 @@ func TestPermissionTypeRegistry(t *testing.T) {
 // (internal/ai/permission/checker.go, Important 2 in the review this test backs).
 //
 // The unregistered-type case is not a hypothetical: extensions declare an arbitrary
-// Policies.Type in their manifest (e.g. "oss", see pkg/extension/manifest_test.go) and
-// tool_handler_ext.go's handleExecTool calls checker.HandleConfirm with it directly — that
-// type is never going to be in permissionTypes. Falling back to "exec" would show an "OSS"
-// approval as an "EXEC" badge in the front end (ApprovalBlock.tsx's TypeBadge), which is
-// actively misleading about what is being approved; falling back to the type itself just
-// shows an unstyled-but-honest "OSS" badge (TypeBadge defaults to a generic icon for
-// unknown types, it does not error).
+// Policies.Type in their manifest and tool_handler_ext.go's handleExecTool calls
+// checker.HandleConfirm with it directly — that type is not going to be in permissionTypes.
+// Falling back to "exec" would show such an approval as an "EXEC" badge in the front end
+// (ApprovalBlock.tsx's TypeBadge), which is actively misleading about what is being
+// approved; falling back to the type itself just shows an unstyled-but-honest badge
+// (TypeBadge defaults to a generic icon for unknown types, it does not error).
 func TestApprovalTypeFor(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -74,8 +75,9 @@ func TestApprovalTypeFor(t *testing.T) {
 		{"mongodb alias mongo", "mongo", "mongo"},
 		{"kafka canonical", asset_entity.AssetTypeKafka, "kafka"},
 		{"k8s canonical", asset_entity.AssetTypeK8s, "k8s"},
+		{"oss canonical", asset_entity.AssetTypeOSS, "oss"},
 		{"cp grant tool", GrantToolCp, "cp"},
-		{"unregistered type falls back to itself, not exec", "oss", "oss"},
+		{"unregistered type falls back to itself, not exec", "prometheus", "prometheus"},
 		{"unregistered arbitrary string", "unknown-thing", "unknown-thing"},
 	}
 
@@ -87,7 +89,7 @@ func TestApprovalTypeFor(t *testing.T) {
 }
 
 func TestSupportsGrantApprovalUsesPermissionRegistry(t *testing.T) {
-	for _, approvalType := range []string{"exec", "serial", "sql", "redis", "etcd", "mongo", "kafka", "k8s", GrantToolCp} {
+	for _, approvalType := range []string{"exec", "serial", "sql", "redis", "etcd", "mongo", "kafka", "k8s", "oss", GrantToolCp} {
 		assert.True(t, SupportsGrantApproval(approvalType), approvalType)
 	}
 	for _, approvalType := range []string{"create", "update", "delete", "ext_tool", "unknown"} {

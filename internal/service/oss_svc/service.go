@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"time"
 
 	"github.com/opskat/opskat/internal/connpool"
@@ -42,11 +43,11 @@ func (s *Service) connect(ctx context.Context, assetID int64) (Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	mc, err := connpool.GetOrDialOSS(ctx, asset.ID, cfg, secret)
+	mc, transport, err := connpool.GetOrDialOSSWithTransport(ctx, asset.ID, cfg, secret)
 	if err != nil {
 		return nil, err
 	}
-	return newMinioAdapter(mc, cfg.PartSizeMB), nil
+	return newMinioAdapterWithHTTP(mc, &http.Client{Transport: transport}, cfg.PartSizeMB), nil
 }
 
 func (s *Service) ListBuckets(ctx context.Context, assetID int64) ([]BucketItem, error) {
@@ -62,7 +63,7 @@ func (s *Service) ListObjects(ctx context.Context, req *ListObjectsRequest) (*Li
 	if err != nil {
 		return nil, err
 	}
-	return listObjectsWith(ctx, c, req.Bucket, req.Prefix, req.MaxKeys, req.ContinuationToken)
+	return ListObjectsWith(ctx, c, req.Bucket, req.Prefix, req.MaxKeys, req.ContinuationToken)
 }
 
 func (s *Service) StatObject(ctx context.Context, req *ObjectRequest) (*ObjectItem, error) {

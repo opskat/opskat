@@ -62,7 +62,9 @@ func callHandler(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, 
 	// 桌面审批）。handler 内部的权限检查是 fail-closed 的（permission.RequireChecker），
 	// 而 opsctl 的 context 里没有 PolicyChecker——那是桌面 AI 会话专属的。这里显式声明
 	// "已预检"，让 handler 跳过第二次检查，而不是靠"checker 为 nil 就放行"兜着。
-	// 只对真的带了审批结论的调用生效：没预检过的（cp / list / create）拿不到豁免。
+	// 只对真的带了审批结论的调用生效：cp 的两条入口（cmdCpSingleSource / cmdCpMultiSource）
+	// 现在都先过 requireCpApproval 再带着 decision 调这里，因此拿得到豁免；没预检过的
+	// （list / create）依旧拿不到。
 	if dec != nil {
 		ctx = permission.WithPreapproved(ctx)
 	}
@@ -111,13 +113,24 @@ func callHandler(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, 
 // opsctlAuditWriter 全局审计写入器
 var opsctlAuditWriter audit.AuditWriter = audit.NewDefaultAuditWriter()
 
-// writeOpsctlAudit 统一的审计日志写入函数
+// writeOpsctlAudit 统一的审计日志写入函数。
+//
+// Command 留空时走 audit.ToolCallInfo.Command 的默认解析（ExtractCommandForAudit 读
+// argsJSON 里的原始 command）；调用方若已经用 aictx.WithAuditCommandSlot 在 ctx 上装了
+// 规范形式（cmdExec 每条 exec 都装，装的是它已经算好的 checkCommand：ssh 没有注册
+// CanonicalizeFunc，装进去的就等于原始命令，那边不为它分支，这里也不必），这里改用
+// 它覆盖，好让 audit_logs.command 与审批弹窗、grant pattern 展示的是同一个串，不是
+// callHandler 转发给 handler 执行、必须保持原样的那个 argsJSON["command"]。
 func writeOpsctlAudit(ctx context.Context, toolName, argsJSON, result string, execErr error, decision *aictx.CheckResult) {
-	opsctlAuditWriter.WriteToolCall(ctx, audit.ToolCallInfo{
+	info := audit.ToolCallInfo{
 		ToolName: toolName,
 		ArgsJSON: argsJSON,
 		Result:   result,
 		Error:    execErr,
 		Decision: decision,
-	})
+	}
+	if slot := aictx.GetAuditCommand(ctx); slot != nil && *slot != "" {
+		info.Command = *slot
+	}
+	opsctlAuditWriter.WriteToolCall(ctx, info)
 }

@@ -21,6 +21,7 @@ type Group struct {
 	KfkPolicy   string `gorm:"column:kafka_policy;type:text"`
 	K8sPol      string `gorm:"column:k8s_policy;type:text"`
 	EtdPolicy   string `gorm:"column:etcd_policy;type:text"`
+	OssPolicy   string `gorm:"column:oss_policy;type:text"`
 	SortOrder   int    `gorm:"column:sort_order;default:0"`
 	Createtime  int64  `gorm:"column:createtime"`
 	Updatetime  int64  `gorm:"column:updatetime"`
@@ -160,5 +161,22 @@ func (g *Group) SetEtcdPolicy(p *policy.EtcdPolicy) error {
 		return err
 	}
 	g.EtdPolicy = s
+	return nil
+}
+
+// GetOSSPolicy 解析 OSS 权限策略
+func (g *Group) GetOSSPolicy() (*policy.OSSPolicy, error) {
+	return jsonfield.UnmarshalOrDefault[policy.OSSPolicy](g.OssPolicy, "OSS权限策略")
+}
+
+// SetOSSPolicy 序列化 OSS 权限策略
+func (g *Group) SetOSSPolicy(p *policy.OSSPolicy) error {
+	s, err := jsonfield.MarshalOrClear(p, func(v *policy.OSSPolicy) bool {
+		return v.IsEmpty()
+	}, "OSS权限策略")
+	if err != nil {
+		return err
+	}
+	g.OssPolicy = s
 	return nil
 }

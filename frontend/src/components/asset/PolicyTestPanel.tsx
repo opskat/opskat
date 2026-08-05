@@ -28,6 +28,7 @@ const PLACEHOLDER_MAP: Record<string, string> = {
   mongo: "asset.policyTestMongoPlaceholder",
   kafka: "asset.policyTestKafkaPlaceholder",
   etcd: "asset.policyTestEtcdPlaceholder",
+  oss: "asset.policyTestOSSPlaceholder",
 };
 
 const RESULT_CONFIG = {

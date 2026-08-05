@@ -89,31 +89,42 @@ func DialOSS(ctx context.Context, cfg *asset_entity.OSSConfig, secret string) (*
 }
 
 type ossPool struct {
-	mu      sync.Mutex
-	clients map[int64]*minio.Client
+	mu         sync.Mutex
+	clients    map[int64]*minio.Client
+	transports map[int64]http.RoundTripper
 }
 
-var globalOSSPool = &ossPool{clients: map[int64]*minio.Client{}}
+var globalOSSPool = &ossPool{clients: map[int64]*minio.Client{}, transports: map[int64]http.RoundTripper{}}
 
 // GetOrDialOSS 返回缓存的 minio 客户端,没有则新建并缓存。
 func GetOrDialOSS(ctx context.Context, assetID int64, cfg *asset_entity.OSSConfig, secret string) (*minio.Client, error) {
+	c, _, err := GetOrDialOSSWithTransport(ctx, assetID, cfg, secret)
+	return c, err
+}
+
+func GetOrDialOSSWithTransport(ctx context.Context, assetID int64, cfg *asset_entity.OSSConfig, secret string) (*minio.Client, http.RoundTripper, error) {
 	logger.Ctx(ctx).Info("oss connection open start", zap.Int64("assetId", assetID))
 	globalOSSPool.mu.Lock()
 	defer globalOSSPool.mu.Unlock()
 	if c, ok := globalOSSPool.clients[assetID]; ok {
 		logger.Ctx(ctx).Info("oss connection open end", zap.Int64("assetId", assetID), zap.Bool("cached", true))
-		return c, nil
+		return c, globalOSSPool.transports[assetID], nil
 	}
-	c, err := DialOSS(ctx, cfg, secret)
+	endpoint, opts, err := buildMinioOptions(ctx, cfg, secret)
+	if err != nil {
+		return nil, nil, err
+	}
+	c, err := minio.New(endpoint, opts)
 	if err != nil {
 		logger.Ctx(ctx).Error("oss connection open fail", zap.Int64("assetId", assetID), zap.Error(err))
-		return nil, err
+		return nil, nil, err
 	}
 	if assetID > 0 {
 		globalOSSPool.clients[assetID] = c
+		globalOSSPool.transports[assetID] = opts.Transport
 	}
 	logger.Ctx(ctx).Info("oss connection open end", zap.Int64("assetId", assetID), zap.Bool("cached", false))
-	return c, nil
+	return c, opts.Transport, nil
 }
 
 // InvalidateOSS 丢弃某资产的缓存客户端(配置更新/删除时调用)。
@@ -121,6 +132,7 @@ func InvalidateOSS(assetID int64) {
 	logger.Default().Info("oss connection close start", zap.Int64("assetId", assetID))
 	globalOSSPool.mu.Lock()
 	delete(globalOSSPool.clients, assetID)
+	delete(globalOSSPool.transports, assetID)
 	globalOSSPool.mu.Unlock()
 	logger.Default().Info("oss connection close end", zap.Int64("assetId", assetID))
 }

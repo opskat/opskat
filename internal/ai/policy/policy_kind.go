@@ -21,6 +21,7 @@ const (
 	PolicyKindKafka   = policyent.PolicyKindKafka
 	PolicyKindK8s     = policyent.PolicyKindK8s
 	PolicyKindEtcd    = policyent.PolicyKindEtcd
+	PolicyKindOSS     = policyent.PolicyKindOSS
 )
 
 // policyKindHandler 每个 policyKind 的测试/解码处理器。
@@ -113,6 +114,17 @@ func init() {
 		test: func(ctx context.Context, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
 			kp, _ := current.(*asset_entity.KafkaPolicy)
 			return testKafkaPolicy(ctx, kp, groups, command)
+		},
+	})
+	registerPolicyKind(PolicyKindOSS, policyKindHandler{
+		decode: func(raw []byte) (any, error) {
+			var p asset_entity.OSSPolicy
+			err := json.Unmarshal(raw, &p)
+			return &p, err
+		},
+		test: func(ctx context.Context, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
+			op, _ := current.(*asset_entity.OSSPolicy)
+			return testOSSPolicy(ctx, op, groups, command)
 		},
 	})
 }

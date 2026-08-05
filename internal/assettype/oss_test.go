@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	policyent "github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -90,4 +91,19 @@ func TestOSSApplyCreateArgsInlineSecretClearsCredentialID(t *testing.T) {
 	decrypted, err := credential_svc.Default().Decrypt(cfg.SecretAccessKey)
 	require.NoError(t, err)
 	assert.Equal(t, "newsecret", decrypted)
+}
+
+// TestOSSHandlerPolicy 锁住 OSS 成为一等策略种类的接线：Register 依据 PolicyKind()
+// 写 asset-kind 注册表，ResolvePolicyKind("oss") 与策略编辑器都靠这张表找到 oss。
+func TestOSSHandlerPolicy(t *testing.T) {
+	h := &ossHandler{}
+	p := h.DefaultPolicy()
+	require.NotNil(t, p)
+	pol, ok := p.(*asset_entity.OSSPolicy)
+	require.True(t, ok)
+	assert.NotEmpty(t, pol.Groups, "default oss policy should reference builtin groups")
+
+	kind, ok := policyent.AssetKindOf(asset_entity.AssetTypeOSS)
+	require.True(t, ok, "Register should have written the asset-kind mapping from PolicyKind()")
+	assert.Equal(t, policyent.PolicyKindOSS, kind)
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/cago-frame/agents/agent"
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/policy"
 )
@@ -58,8 +59,6 @@ func NewLocalToolGate(confirm LocalToolConfirmFunc) *LocalToolGate {
 // 只有精确的 allow 才按单次允许处理。
 func (g *LocalToolGate) Middleware() agent.ToolMiddleware {
 	return func(c *agent.ToolContext) {
-		ctx := c.Context()
-		convID := aictx.GetConversationID(ctx)
 		toolName := c.ToolName
 
 		subjects := extractSubjects(toolName, c.Input)
@@ -69,44 +68,85 @@ func (g *LocalToolGate) Middleware() agent.ToolMiddleware {
 			return
 		}
 
-		if g.allMatch(convID, toolName, subjects) {
-			c.Next()
-			return
-		}
-
-		if g.confirm == nil {
-			c.AbortWithDeny(fmt.Sprintf("no approval mechanism configured for local tool %s", toolName))
-			return
-		}
-
-		req := LocalToolApprovalRequest{
+		err := g.decide(c.Context(), subjects, LocalToolApprovalRequest{
 			ToolName:        toolName,
 			Command:         primaryCommand(toolName, c.Input),
 			Detail:          detailOf(toolName, c.Input),
 			SubCommands:     subjects,
 			DefaultPatterns: defaultPatterns(toolName, subjects),
-		}
-		resp := g.confirm(ctx, req)
-		expected := []permission.ApprovalItem{{Type: toolName, Command: req.Command}}
-		parsed, err := permission.ParseApprovalResponse(permission.ApprovalKindLocalTool, resp, expected)
+		})
 		if err != nil {
-			c.AbortWithDeny(fmt.Sprintf("invalid approval response for local tool %s: %v", toolName, err))
+			c.AbortWithDeny(err.Error())
 			return
 		}
+		c.Next()
+	}
+}
 
-		switch parsed.Decision {
-		case permission.ApprovalDeny:
-			c.AbortWithDeny(fmt.Sprintf("USER DENIED: user rejected local tool %s. Stop the current task.", toolName))
-		case permission.ApprovalAllowAll:
-			for _, p := range patternsFromResponse(toolName, subjects, parsed.EditedItems) {
-				g.remember(convID, toolName, p)
-			}
-			c.Next()
-		case permission.ApprovalAllow:
-			c.Next()
-		default:
-			c.AbortWithDeny(fmt.Sprintf("invalid approval decision for local tool %s", toolName))
+// LocalWriteToolName 是本地写工具在门禁里的名字：白名单按它分片，审批弹框也按它渲染。
+// 传输面的本地目的端复用它（见 CheckLocalWrites），因此"本次会话允许 /tmp/*"对模型直接
+// 调用 local_write 和对 cp 的本地落点是同一条记录 —— 两份白名单会当场分叉。
+const LocalWriteToolName = "local_write"
+
+// 传输面（handleCp）与 exec 的 `object get --file=` 都经这个接口拿到它，见
+// helper.WithLocalWriteGate；写成断言是为了签名漂移在这里报错，而不是在注入点。
+var _ helper.LocalWriteGate = (*LocalToolGate)(nil)
+
+// CheckLocalWrites 让一批本地写路径过一次 local_write 门禁，实现 helper.LocalWriteGate。
+//
+// 与模型直接调用 local_write 工具**走的是同一条判定**（同一份会话白名单、同一个对话框、
+// 同一套 pattern 匹配），只是主体由调用方给出而不是从工具入参里抽。paths 必须非空：
+// 空清单在 allMatch 里恒真，那是一次静默放行。
+//
+// detail 进对话框的 Detail 栏，用来说明"这些路径是从哪儿来的"（传输面传的是 cp 的两端原文）。
+func (g *LocalToolGate) CheckLocalWrites(ctx context.Context, paths []string, detail string) error {
+	return g.decide(ctx, paths, LocalToolApprovalRequest{
+		ToolName: LocalWriteToolName,
+		// 多条路径时 Command 逐行列出：前端把它当成审批项的正文渲染，而"始终允许"回来的
+		// 编辑框同样按行拆（patternsFromResponse），两侧的形态因此一致。
+		Command:         strings.Join(paths, "\n"),
+		Detail:          detail,
+		SubCommands:     paths,
+		DefaultPatterns: defaultPatterns(LocalWriteToolName, paths),
+	})
+}
+
+// decide 是门禁的判定本体：命中会话白名单直接放行，否则弹一次框。返回 nil 表示放行，
+// 非 nil 是拒绝理由。middleware 与 CheckLocalWrites 共用它 —— 两条入口若各写一份，
+// "本次会话允许"的记法迟早分叉。
+func (g *LocalToolGate) decide(ctx context.Context, subjects []string, req LocalToolApprovalRequest) error {
+	convID := aictx.GetConversationID(ctx)
+	toolName := req.ToolName
+
+	if g.allMatch(convID, toolName, subjects) {
+		return nil
+	}
+	if g.confirm == nil {
+		return fmt.Errorf("no approval mechanism configured for local tool %s", toolName)
+	}
+
+	resp := g.confirm(ctx, req)
+	expected := []permission.ApprovalItem{{Type: toolName, Command: req.Command}}
+	parsed, err := permission.ParseApprovalResponse(permission.ApprovalKindLocalTool, resp, expected)
+	if err != nil {
+		return fmt.Errorf("invalid approval response for local tool %s: %w", toolName, err)
+	}
+
+	switch parsed.Decision {
+	case permission.ApprovalDeny:
+		// 措辞是给模型看的指令（"立刻停下"），句号必须留着；用 %s 绕开 ST1005 是仓内既有
+		// 写法（tool_handlers_cp.go 的 USER DENIED 同形）。
+		return fmt.Errorf("%s",
+			fmt.Sprintf("USER DENIED: user rejected local tool %s. Stop the current task.", toolName))
+	case permission.ApprovalAllowAll:
+		for _, p := range patternsFromResponse(toolName, subjects, parsed.EditedItems) {
+			g.remember(convID, toolName, p)
 		}
+		return nil
+	case permission.ApprovalAllow:
+		return nil
+	default:
+		return fmt.Errorf("invalid approval decision for local tool %s", toolName)
 	}
 }
 

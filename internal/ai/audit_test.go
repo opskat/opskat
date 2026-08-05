@@ -106,22 +106,14 @@ func TestCheckResult_Context(t *testing.T) {
 
 func TestExtractCommandForAudit(t *testing.T) {
 	convey.Convey("从工具参数提取命令", t, func() {
-		convey.Convey("upload_file 生成上传描述", func() {
-			cmd := audit.ExtractCommandForAudit("upload_file", map[string]any{
-				"asset_id":    float64(1),
-				"local_path":  "/tmp/config.yml",
-				"remote_path": "/etc/app/config.yml",
+		// upload_file / download_file 退役后 cp 是传输面唯一的工具名（spec §6.3）：两端
+		// 都是端点串，摘要必须把两端都留下——审计行只有这一列能说清"东西从哪来、到哪去"。
+		convey.Convey("cp 生成两端俱全的传输描述", func() {
+			cmd := audit.ExtractCommandForAudit("cp", map[string]any{
+				"src": "web-01:/var/log/app.log",
+				"dst": "s3-prod:/logs/app.log",
 			})
-			assert.Equal(t, "upload /tmp/config.yml → /etc/app/config.yml", cmd)
-		})
-
-		convey.Convey("download_file 生成下载描述", func() {
-			cmd := audit.ExtractCommandForAudit("download_file", map[string]any{
-				"asset_id":    float64(1),
-				"remote_path": "/var/log/app.log",
-				"local_path":  "./app.log",
-			})
-			assert.Equal(t, "download /var/log/app.log → ./app.log", cmd)
+			assert.Equal(t, "cp web-01:/var/log/app.log → s3-prod:/logs/app.log", cmd)
 		})
 
 		convey.Convey("exec 提取 command 字段", func() {

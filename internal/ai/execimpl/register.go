@@ -58,12 +58,33 @@ func init() {
 			return helper.ExecKafkaOnAsset(ctx, asset, command, scope)
 		}, mustSkillDoc(asset_entity.AssetTypeKafka), helper.CanonicalizeKafkaCommand)
 
+	permission.RegisterExecutor(asset_entity.AssetTypeOSS,
+		func(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
+			return helper.ExecOSSOnAsset(ctx, asset, command, scope)
+		}, mustSkillDoc(asset_entity.AssetTypeOSS), helper.CanonicalizeOSSCommand)
+	// OSS 是唯一一条命令请求多项权限的类型（`object move` 同时读源、写目的、删源），
+	// 所以它比其它类型多一条接线：permission 只声明 RegisterPolicyStrings 这个入口，
+	// 派生函数由这里推上来。方向是被逼出来的而不是选的——internal/ai/helper 已经
+	// import permission（transfer_ssh.go 取 GrantToolCp），permission 反向 import
+	// helper 去调 ParseOSSCommand 就是 import cycle（设计 §4.3 / D8 的实施期更正）。
+	//
+	// 漏掉这一行**不会编译报错也不会 panic**：checkOSSPermission 把"派生不出策略串"
+	// 当解析失败处理并退回 NeedConfirm，于是生产路径上每一条 OSS 命令都要弹一次审批，
+	// §4.1 的 allow / deny 两种判定永远到不了。fail-closed，但也彻底失效。
+	// coverage_test.go 的 TestEveryPolicyStringDerivingTypeHasItsDeriver 守住它。
+	permission.RegisterPolicyStrings(asset_entity.AssetTypeOSS, func(command string) ([]string, error) {
+		c, err := helper.ParseOSSCommand(command)
+		if err != nil {
+			return nil, err
+		}
+		return c.PolicyStrings()
+	})
+
 	// 没有命令面、但可以被 put_asset 创建/更新的类型：只注册文档。
 	// exec 对它们仍然报 "no exec support yet"（RegisteredExecTypes 会跳过 exec == nil 的条目）。
 	for _, docOnly := range []string{
 		asset_entity.AssetTypeRDP,
 		asset_entity.AssetTypeVNC,
-		asset_entity.AssetTypeOSS,
 		asset_entity.AssetTypeLocal,
 	} {
 		permission.RegisterHelpDoc(docOnly, mustSkillDoc(docOnly))
@@ -72,8 +93,8 @@ func init() {
 
 // mustSkillDoc 返回某资产类型内嵌的 SKILL.md 正文，缺失时直接 panic。
 //
-// 这是本文件所有 12 处注册（8 个 exec 类型 + 4 个 doc-only 类型）取 help 文档的唯一
-// 入口，取代了曾经的 `doc, _ := skills.Get(assetType)`——8 处 exec 类型全部丢弃了
+// 这是本文件所有 12 处注册（9 个 exec 类型 + 3 个 doc-only 类型）取 help 文档的唯一
+// 入口，取代了曾经的 `doc, _ := skills.Get(assetType)`——当时 8 处 exec 类型全部丢弃了
 // skills.Get 的第二个返回值，SKILL.md 缺失时会静默把一个空字符串喂给
 // permission.RegisterExecutor：HelpFor 依然返回 ("", true)（entry 存在，只是内容为
 // 空），help_coverage_test.go 的 TestEveryAssetTypeHasHelpDoc 只检查 ok、不检查内容，

@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useState, type ComponentType } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ShieldAlert,
@@ -15,6 +15,7 @@ import {
   Boxes,
 } from "lucide-react";
 import { Button, Input, Textarea } from "@opskat/ui";
+import { S3Icon } from "@/components/asset/brand-icons";
 import { RespondAIApproval } from "../../../wailsjs/go/ai/AI";
 import { permission } from "../../../wailsjs/go/models";
 import type { ContentBlock } from "@/stores/aiStore";
@@ -22,6 +23,13 @@ import type { ContentBlock } from "@/stores/aiStore";
 interface ApprovalBlockProps {
   block: ContentBlock;
 }
+
+// 递归/通配 cp 一次展开出的路径可以到 200 条（D19 上限），原样铺开没法读。超过这条线
+// 折叠为一行摘要，展开后仍是全部具体主体——折叠只是呈现，批的还是那 N 条主体（D17）。
+// 只对 kind=batch 生效：grant 的每条都要能编辑，折叠会让人够不着编辑框。kind=batch 里还
+// 进一步只对带 detail 的批生效（见下方 isBatchCollapsed）——detail 是 cp 每条共享的"两端
+// 基点"摘要，batch_exec 的异构批没有这个概念，硬折叠会藏起本该看见的差异。
+const BATCH_COLLAPSE_THRESHOLD = 10;
 
 export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBlockProps) {
   const { t } = useTranslation();
@@ -47,6 +55,29 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
 
   // 确认/拒绝后不再显示
   if (!isPending) return null;
+
+  // detail 是这次传输唯一携带"两端基点"的地方（checkAccessBatch 给每条都填了同一句
+  // "cp src → dst"，哪怕批量只有一条也不为空）；batch_exec 的批量项没有这个概念——
+  // tool_handler_batch.go 建 item 时压根不设 Detail，因此永远是空串。detail 是否非空
+  // 因此是 payload 里现成的、可靠的判据：折叠是为 cp 这种"每条共享同一句摘要"的批设计的，
+  // batch_exec 的条目分属不同资产/工具，没有可摘要的共同点——折叠了只会把 Approve 按钮
+  // 架在一句读不出内容的"N 项已折叠"上面，比展示全部异构命令更危险。
+  const batchDetail = items[0]?.detail;
+  const isBatchCollapsed = kind === "batch" && !!batchDetail && items.length > BATCH_COLLAPSE_THRESHOLD;
+
+  const renderBatchItem = (item: (typeof items)[number], i: number) => (
+    <div key={i} className="rounded-lg bg-warning/5 p-2.5 space-y-1.5">
+      <div className="flex items-center gap-1.5">
+        <TypeBadge type={item.type} compact />
+        {item.asset_name && <span className="text-[11px] text-warning">{item.asset_name}</span>}
+      </div>
+      <div className="rounded bg-warning/5 px-2 py-[5px]">
+        <code className="block font-mono text-[10px] text-muted-foreground whitespace-pre-wrap break-all">
+          {item.command}
+        </code>
+      </div>
+    </div>
+  );
 
   const respond = (decision: string) => {
     if (!block.confirmId) return;
@@ -104,66 +135,72 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
       </div>
 
       {/* Items */}
-      <div className="space-y-2">
-        {items.map((item, i) =>
-          kind === "batch" ? (
-            <div key={i} className="rounded-lg bg-warning/5 p-2.5 space-y-1.5">
-              <div className="flex items-center gap-1.5">
-                <TypeBadge type={item.type} compact />
-                {item.asset_name && <span className="text-[11px] text-warning">{item.asset_name}</span>}
-              </div>
-              <div className="rounded bg-warning/5 px-2 py-[5px]">
-                <code className="block font-mono text-[10px] text-muted-foreground whitespace-pre-wrap break-all">
-                  {item.command}
-                </code>
-              </div>
-            </div>
-          ) : (
-            <div key={i} className="rounded-lg bg-warning/5 p-3 space-y-2">
-              <div className="flex items-center gap-2">
-                {kind === "grant" ? (
-                  <ScopeBadge item={item} />
-                ) : (
-                  <>
-                    <TypeBadge type={item.type} />
-                    {scopeName(item) && <span className="text-xs text-warning">{scopeName(item)}</span>}
-                  </>
-                )}
-              </div>
-              {kind === "grant" ? (
-                <Textarea
-                  value={editedCommands[i] || ""}
-                  onChange={(e) => setEditedCommands((prev) => ({ ...prev, [i]: e.target.value }))}
-                  className="font-mono text-[11px] min-h-[32px] resize-y bg-background border-border"
-                  rows={Math.max(1, (editedCommands[i] || "").split("\n").length)}
-                />
-              ) : (
-                <div className="rounded-md bg-warning/5 px-2.5 py-2">
-                  <code
-                    data-testid="ai-approval-command"
-                    className="block font-mono text-[11px] text-muted-foreground whitespace-pre-wrap break-all"
-                  >
-                    {item.command}
-                  </code>
+      {isBatchCollapsed ? (
+        // 既有的折叠交互（同一份 detail 展开态在本文件里已经在用，见下方 <details>）：
+        // 摘要行常驻可见，具体主体折叠在里面，点开就是普普通通的列表——不是新的授权范围。
+        <details className="rounded-lg bg-warning/5 p-2.5">
+          <summary
+            data-testid="ai-approval-batch-summary"
+            data-count={items.length}
+            className="cursor-pointer select-none text-[11px] text-warning"
+          >
+            {t("ai.approvalBatchCollapsedSummary", { count: items.length })}
+            {batchDetail && <span className="text-muted-foreground"> · {batchDetail}</span>}
+          </summary>
+          <div className="space-y-2 mt-2">{items.map((item, i) => renderBatchItem(item, i))}</div>
+        </details>
+      ) : (
+        <div className="space-y-2">
+          {items.map((item, i) =>
+            kind === "batch" ? (
+              renderBatchItem(item, i)
+            ) : (
+              <div key={i} className="rounded-lg bg-warning/5 p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  {kind === "grant" ? (
+                    <ScopeBadge item={item} />
+                  ) : (
+                    <>
+                      <TypeBadge type={item.type} />
+                      {scopeName(item) && <span className="text-xs text-warning">{scopeName(item)}</span>}
+                    </>
+                  )}
                 </div>
-              )}
-              {item.detail &&
-                (kind === "delete" ? (
-                  // 删除不可逆：警告不能藏在一次点击之后，常驻展示而不是 <details> 折叠。
-                  <div className="text-[10px] text-muted-foreground/80">
-                    <div className="select-none">{t(detailSummaryKey(item.type))}</div>
-                    <DetailPre text={item.detail} />
-                  </div>
+                {kind === "grant" ? (
+                  <Textarea
+                    value={editedCommands[i] || ""}
+                    onChange={(e) => setEditedCommands((prev) => ({ ...prev, [i]: e.target.value }))}
+                    className="font-mono text-[11px] min-h-[32px] resize-y bg-background border-border"
+                    rows={Math.max(1, (editedCommands[i] || "").split("\n").length)}
+                  />
                 ) : (
-                  <details className="text-[10px] text-muted-foreground/80">
-                    <summary className="cursor-pointer select-none">{t(detailSummaryKey(item.type))}</summary>
-                    <DetailPre text={item.detail} />
-                  </details>
-                ))}
-            </div>
-          )
-        )}
-      </div>
+                  <div className="rounded-md bg-warning/5 px-2.5 py-2">
+                    <code
+                      data-testid="ai-approval-command"
+                      className="block font-mono text-[11px] text-muted-foreground whitespace-pre-wrap break-all"
+                    >
+                      {item.command}
+                    </code>
+                  </div>
+                )}
+                {item.detail &&
+                  (kind === "delete" ? (
+                    // 删除不可逆：警告不能藏在一次点击之后，常驻展示而不是 <details> 折叠。
+                    <div className="text-[10px] text-muted-foreground/80">
+                      <div className="select-none">{t(detailSummaryKey(item.type))}</div>
+                      <DetailPre text={item.detail} />
+                    </div>
+                  ) : (
+                    <details className="text-[10px] text-muted-foreground/80">
+                      <summary className="cursor-pointer select-none">{t(detailSummaryKey(item.type))}</summary>
+                      <DetailPre text={item.detail} />
+                    </details>
+                  ))}
+              </div>
+            )
+          )}
+        </div>
+      )}
 
       {/* Reason (grant only, before buttons) */}
       {kind === "grant" && block.approvalDescription && (
@@ -323,8 +360,13 @@ function scopeName(item: { asset_id: number; asset_name: string; group_id?: numb
   return "";
 }
 
+// lucide 图标是 ForwardRefExoticComponent，S3Icon（brand-icons.tsx）是普通的 React.FC 包装
+// @iconify/react；这张表两种都装，因此按调用点唯一用到的形状（接收 className 的组件）来
+// 收窄类型，而不是逼 S3Icon 伪装成 lucide 的 ref-forwarding 形状。
+type IconComponent = ComponentType<{ className?: string }>;
+
 function TypeBadge({ type, compact }: { type: string; compact?: boolean }) {
-  const icons: Record<string, typeof Terminal> = {
+  const icons: Record<string, IconComponent> = {
     exec: Terminal,
     serial: Usb,
     sql: Database,
@@ -339,6 +381,7 @@ function TypeBadge({ type, compact }: { type: string; compact?: boolean }) {
     delete: Trash2,
     etcd: Database,
     k8s: Boxes,
+    oss: S3Icon,
   };
   const Icon = icons[type] || Terminal;
   if (compact) {

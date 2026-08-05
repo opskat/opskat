@@ -472,6 +472,12 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 	// 与 LocalToolGate 的 allow-list 用同一种存储形态（见 ai.go 的字段注释）。
 	chatCtx = tool.WithDocGate(chatCtx, a.docGate)
 
+	// 注入本地写门禁：与 local_write 工具走的是**同一个** LocalToolGate 实例，因此
+	// "本次会话允许"在两条路上是同一条记录。传输面与 `object get --file=` 在两端都被
+	// 策略/grant 自动放行（一个弹框都没有）时靠它守住本地落点——那一档下 spec §6.2
+	// 「本地端点不产生审批项」所依赖的"用户批准的那条命令串"并不存在。
+	chatCtx = helper.WithLocalWriteGate(chatCtx, a.systemCfg.LocalToolGate)
+
 	// 同一次 Send 内复用连接。
 	sshCache := tool.NewSSHClientCache()
 	dbCache := helper.NewDatabaseClientCache()

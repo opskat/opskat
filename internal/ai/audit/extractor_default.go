@@ -20,14 +20,9 @@ func init() {
 	// extension's own invocation syntax) and must not register here — see
 	// canonicalizingTools' doc comment in extractor.go.
 	RegisterCanonicalizingTool("exec")
-	RegisterToolAlias("upload_file", "cp")
-	RegisterExtractor("upload_file", func(a map[string]any) string {
-		return "upload " + aictx.ArgString(a, "local_path") + " → " + aictx.ArgString(a, "remote_path")
-	})
-	RegisterToolAlias("download_file", "cp")
-	RegisterExtractor("download_file", func(a map[string]any) string {
-		return "download " + aictx.ArgString(a, "remote_path") + " → " + aictx.ArgString(a, "local_path")
-	})
+	// cp 是传输面的唯一工具名，两个入口（AI 工具与 opsctl cp）用同一个 src/dst 参数形状。
+	// upload_file / download_file 的两条 RegisterToolAlias 随工具一起退役：别名存在的唯一
+	// 理由就是把它们归到 cp 这个面上，工具真的叫 cp 之后别名就是纯噪音。
 	RegisterExtractor("cp", func(a map[string]any) string {
 		return "cp " + aictx.ArgString(a, "src") + " → " + aictx.ArgString(a, "dst")
 	})
