@@ -6,6 +6,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 
 	"github.com/cago-frame/cago/database/db"
+	"gorm.io/gorm"
 )
 
 // AssetRepo 资产数据访问接口
@@ -22,6 +23,11 @@ type AssetRepo interface {
 	UpdateSortOrder(ctx context.Context, id int64, sortOrder int) error
 	UpdateGroupID(ctx context.Context, id, groupID int64) error
 	CountByTypes(ctx context.Context, types []string) (int64, error)
+	// CountAgentAuthBySourceID 统计引用了指定 SSH Agent 来源的活动 SSH 资产数
+	// （config 中 auth_type=agent 且 agent_source_id 匹配）。
+	CountAgentAuthBySourceID(ctx context.Context, sourceID int64) (int64, error)
+	// ListAgentAuthBySourceID 列出引用了指定 SSH Agent 来源的活动 SSH 资产。
+	ListAgentAuthBySourceID(ctx context.Context, sourceID int64) ([]*asset_entity.Asset, error)
 }
 
 // ListOptions 列表查询选项
@@ -143,4 +149,29 @@ func (r *assetRepo) CountByTypes(ctx context.Context, types []string) (int64, er
 		Where("type IN ? AND status = ?", types, asset_entity.StatusActive).
 		Count(&count).Error
 	return count, err
+}
+
+// agentSourceAssetQuery 是“引用指定 SSH Agent 来源的活动 SSH 资产”的查询条件。
+// agent_source_id 与 auth_type 都以 JSON 存在 assets.config 单列，任务 5 才把
+// 这两个字段加进 SSHConfig 结构体；这里先按既有 json_extract 模式（同
+// FindByCredentialID）查询。
+func agentSourceAssetQuery(ctx context.Context, sourceID int64) *gorm.DB {
+	return db.Ctx(ctx).
+		Where("status = ? AND type = ?", asset_entity.StatusActive, asset_entity.AssetTypeSSH).
+		Where("json_extract(config, '$.auth_type') = ?", "agent").
+		Where("json_extract(config, '$.agent_source_id') = ?", sourceID)
+}
+
+func (r *assetRepo) CountAgentAuthBySourceID(ctx context.Context, sourceID int64) (int64, error) {
+	var count int64
+	err := agentSourceAssetQuery(ctx, sourceID).Model(&asset_entity.Asset{}).Count(&count).Error
+	return count, err
+}
+
+func (r *assetRepo) ListAgentAuthBySourceID(ctx context.Context, sourceID int64) ([]*asset_entity.Asset, error) {
+	var assets []*asset_entity.Asset
+	if err := agentSourceAssetQuery(ctx, sourceID).Order("id ASC").Find(&assets).Error; err != nil {
+		return nil, err
+	}
+	return assets, nil
 }

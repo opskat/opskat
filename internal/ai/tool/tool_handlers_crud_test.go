@@ -148,6 +148,12 @@ func (r *fakeAssetRepo) UpdateGroupID(_ context.Context, _, _ int64) error      
 func (r *fakeAssetRepo) CountByTypes(_ context.Context, _ []string) (int64, error) {
 	return 0, nil
 }
+func (r *fakeAssetRepo) CountAgentAuthBySourceID(_ context.Context, _ int64) (int64, error) {
+	return 0, nil
+}
+func (r *fakeAssetRepo) ListAgentAuthBySourceID(_ context.Context, _ int64) ([]*asset_entity.Asset, error) {
+	return nil, nil
+}
 
 // fakeGroupRepo mirrors fakeAssetRepo for groups, for the same reason.
 type fakeGroupRepo struct {
