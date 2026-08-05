@@ -23,6 +23,7 @@ import (
 	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/service/group_svc"
 	"github.com/opskat/opskat/internal/service/policy_group_svc"
+	"github.com/opskat/opskat/internal/service/ssh_agent_svc"
 	"github.com/opskat/opskat/internal/service/testreg"
 )
 
@@ -166,11 +167,38 @@ func (s *System) desktopCtx() context.Context {
 	return aictx.WithAuditSource(i18n.Ctx(s.ctx, s.Lang()), "desktop")
 }
 
+// enforceSSHAgentContract 在 IPC 边界执行 SSH Agent 资产契约（桌面 raw 写入的权威
+// 边界，即使调用方绕过前端）。两步：
+//  1. JSON 写入边界：拒绝会让 Go 与 SQLite 对 auth_type / agent_source_id 解释不一致
+//     的重复 key 与非规范拼写（以稳定错误 token 拒绝）；
+//  2. 引用完整性：活动 Agent 认证资产不能引用不存在的来源。
+//
+// config 无法解析时返回 nil，把具体错误交给 asset_svc 的常规校验报告。
+func (s *System) enforceSSHAgentContract(ctx context.Context, asset *asset_entity.Asset) error {
+	if asset == nil || asset.Type != asset_entity.AssetTypeSSH {
+		return nil
+	}
+	if err := asset_entity.CheckSSHConfigAgentWriteBoundary(asset.Config); err != nil {
+		return err
+	}
+	cfg, err := asset.GetSSHConfig()
+	if err != nil {
+		return nil //nolint:nilerr // config 无法解析时交给 asset_svc 常规校验报出具体错误
+	}
+	if cfg != nil && cfg.AuthType == asset_entity.AuthTypeAgent && cfg.AgentSourceID > 0 {
+		return ssh_agent_svc.RequireSourceExists(ctx, cfg.AgentSourceID)
+	}
+	return nil
+}
+
 // CreateAsset 创建资产
 func (s *System) CreateAsset(asset *asset_entity.Asset) error {
 	ctx := s.desktopCtx()
 	logger.Ctx(ctx).Info("create asset started", zap.String("assetType", asset.Type))
-	err := asset_svc.Asset().Create(ctx, asset)
+	err := s.enforceSSHAgentContract(ctx, asset)
+	if err == nil {
+		err = asset_svc.Asset().Create(ctx, asset)
+	}
 	audit.WriteAssetChange(ctx, audit.ActionAddAsset, asset, err)
 	if err != nil {
 		logger.Ctx(ctx).Error("create asset failed", zap.String("assetType", asset.Type), zap.Error(err))
@@ -184,7 +212,10 @@ func (s *System) CreateAsset(asset *asset_entity.Asset) error {
 func (s *System) UpdateAsset(asset *asset_entity.Asset) error {
 	ctx := s.desktopCtx()
 	logger.Ctx(ctx).Info("update asset started", zap.Int64("assetID", asset.ID), zap.String("assetType", asset.Type))
-	err := asset_svc.Asset().Update(ctx, asset)
+	err := s.enforceSSHAgentContract(ctx, asset)
+	if err == nil {
+		err = asset_svc.Asset().Update(ctx, asset)
+	}
 	audit.WriteAssetChange(ctx, audit.ActionUpdateAsset, asset, err)
 	if err != nil {
 		logger.Ctx(ctx).Error("update asset failed", zap.Int64("assetID", asset.ID), zap.String("assetType", asset.Type), zap.Error(err))

@@ -131,6 +131,13 @@ func Get(ctx context.Context, id int64) (*ssh_agent_source_entity.SSHAgentSource
 	return sourceOrErr(ctx, id)
 }
 
+// RequireSourceExists 校验来源存在，供 SSH 资产保存边界做引用完整性检查：活动
+// Agent 认证资产不能引用不存在的来源。缺失返回稳定的 ssh_agent_source_not_found。
+func RequireSourceExists(ctx context.Context, id int64) error {
+	_, err := sourceOrErr(ctx, id)
+	return err
+}
+
 // List 列出全部来源。
 func List(ctx context.Context) ([]*ssh_agent_source_entity.SSHAgentSource, error) {
 	return ssh_agent_source_repo.SSHAgentSource().List(ctx)

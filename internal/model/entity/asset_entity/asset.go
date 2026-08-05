@@ -66,6 +66,7 @@ func (d DatabaseDriver) DefaultPort() int {
 const (
 	AuthTypePassword = "password"
 	AuthTypeKey      = "key"
+	AuthTypeAgent    = "agent"
 )
 
 // 状态常量
@@ -123,6 +124,12 @@ type SSHConfig struct {
 	// RestoreCwdOnReconnect 开启后，该资产 SSH 终端断线手动重连时自动 cd 回上次目录，
 	// 并在连接时自动启用目录同步以持续追踪 cwd（仅 bash/zsh/ksh/mksh）。
 	RestoreCwdOnReconnect bool `json:"restore_cwd_on_reconnect,omitempty"`
+	// AgentSourceID 是 Agent 模式（AuthType=agent）选用的 SSH Agent 来源 ID，
+	// 必须是正数且对应现存来源（引用完整性由服务/写入边界兜底）。
+	AgentSourceID int64 `json:"agent_source_id,omitempty"`
+	// AgentKeyFingerprint 是 Agent 模式选用的规范 SHA256 公钥指纹
+	// （大写 SHA256: 前缀、32 字节、base64 无填充、重编码一致）。
+	AgentKeyFingerprint string `json:"agent_key_fingerprint,omitempty"`
 }
 
 // RDPConfig RDP 类型的特定配置。
@@ -892,6 +899,9 @@ func (a *Asset) validateSSH() error {
 	}
 	if cfg.AuthType == "" {
 		return errors.New("SSH认证方式不能为空")
+	}
+	if err := validateSSHAgentContract(cfg); err != nil {
+		return err
 	}
 	return ValidateProxyChain(EffectiveProxyChain(cfg.ProxyChain, a.SSHTunnelID, cfg.Proxy))
 }
