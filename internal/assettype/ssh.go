@@ -27,10 +27,17 @@ func (h *sshHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	if err != nil || cfg == nil {
 		return nil
 	}
-	return map[string]any{
+	view := map[string]any{
 		"host": cfg.Host, "port": cfg.Port,
 		"username": cfg.Username, "auth_type": cfg.AuthType,
 	}
+	// Agent 认证资产：AI 安全视图对称返回来源 ID 与规范指纹（规格允许）。
+	// 端点/公钥/备注/签名/挑战答案不落在 SSHConfig 里，安全视图绝不包含它们。
+	if cfg.AuthType == asset_entity.AuthTypeAgent {
+		view["agent_source_id"] = cfg.AgentSourceID
+		view["agent_key_fingerprint"] = cfg.AgentKeyFingerprint
+	}
+	return view
 }
 
 func (h *sshHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asset) (string, error) {

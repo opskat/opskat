@@ -2,9 +2,14 @@ package helper
 
 import (
 	"context"
+	"io"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/opskat/opskat/internal/sshagent"
+	"github.com/stretchr/testify/assert"
+	"golang.org/x/crypto/ssh"
 )
 
 type fakeCloser struct {
@@ -62,5 +67,37 @@ func TestCloseOnCancel_NoCallOnStop(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if c.closed.Load() != 0 {
 		t.Fatalf("expected closer not called, got %d", c.closed.Load())
+	}
+}
+
+// TestRunCommandWithCache_AgentDialErrorNotRetriedAndNoPasswordFallback 覆盖
+// "AI 绝不把 Agent 失败转换为密码更新或重试流程"：拨号阶段返回类型化 Agent 错误
+// （mfa_required / sign_failed）时，runCommandWithCache 原样返回该错误，不做任何
+// 重拨（calls==1），更不切换到密码认证。
+func TestRunCommandWithCache_AgentDialErrorNotRetriedAndNoPasswordFallback(t *testing.T) {
+	cases := []struct {
+		name string
+		code string
+	}{
+		{name: "mfa_required", code: sshagent.CodeMFARequired},
+		{name: "sign_failed", code: sshagent.CodeSignFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := NewSSHClientCache()
+			calls := 0
+			agentErr := &sshagent.Error{Code: tc.code, Message: "boom"}
+
+			_, err := runCommandWithCacheDial(context.Background(), cache, 1, "uptime", func(_ context.Context, _ int64) (*ssh.Client, io.Closer, error) {
+				calls++
+				return nil, nil, agentErr
+			})
+
+			assert.Equal(t, 1, calls, "agent dial failure must not trigger a retry")
+			assert.ErrorIs(t, err, agentErr, "the typed agent error must be returned as-is, not converted")
+			code, ok := sshagent.CodeOf(err)
+			assert.True(t, ok)
+			assert.Equal(t, tc.code, code)
+		})
 	}
 }
