@@ -16,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@opskat/ui";
-import { CheckCircle2, Loader2, PlugZap, X, XCircle } from "lucide-react";
+import { CheckCircle2, Inbox, Loader2, PlugZap, X, XCircle } from "lucide-react";
 import { ProbeAgentSource } from "../../../wailsjs/go/system/System";
 import type { ssh_agent_svc } from "../../../wailsjs/go/models";
 import { usePlatform } from "@/hooks/usePlatform";
@@ -36,7 +36,7 @@ export interface AgentSourceDraft {
   description: string;
 }
 
-type ProbeState = { state: "idle" | "loading" | "success" | "error"; count?: number };
+type ProbeState = { state: "idle" | "loading" | "success" | "empty" | "error"; count?: number };
 
 /**
  * 来源对话框：名称 / 端点类型 / 端点 / 可选描述。
@@ -94,6 +94,8 @@ export function AgentSourceDialog({
       const result = await ProbeAgentSource(type, endpoint);
       if (result.status === "ok") {
         setProbe({ state: "success", count: result.identity_count });
+      } else if (result.status === "empty") {
+        setProbe({ state: "empty" });
       } else {
         setProbe({ state: "error" });
       }
@@ -184,6 +186,14 @@ export function AgentSourceDialog({
               <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <div>
                 <span className="font-medium">{t("agentSource.testSuccess", { count: probe.count ?? 0 })}</span>
+              </div>
+            </div>
+          )}
+          {probe.state === "empty" && (
+            <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+              <Inbox className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <div>
+                <span className="font-medium">{t("agentSource.testEmpty")}</span>
               </div>
             </div>
           )}

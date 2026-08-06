@@ -124,6 +124,15 @@ func Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
+// Usage 返回引用该来源的活动 SSH 资产数。纯数据库查询，不打开 Agent 传输——来源即便
+// 离线或为空，使用数仍可读（与 Delete 的在用判断同一查询）。
+func Usage(ctx context.Context, id int64) (int64, error) {
+	if _, err := sourceOrErr(ctx, id); err != nil {
+		return 0, err
+	}
+	return asset_repo.Asset().CountAgentAuthBySourceID(ctx, id)
+}
+
 // Get 读取单个来源定义（完整端点，仅供来源编辑/探测界面使用）。
 func Get(ctx context.Context, id int64) (*ssh_agent_source_entity.SSHAgentSource, error) {
 	return sourceOrErr(ctx, id)

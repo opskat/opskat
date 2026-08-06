@@ -107,18 +107,11 @@ func (h *sshHandler) ApplyCreateArgs(ctx context.Context, a *asset_entity.Asset,
 	}
 
 	if authType == asset_entity.AuthTypeAgent {
-		// Agent 模式：仅保存来源 + 规范指纹，绝不落密码/密钥材料（序列化器权威）。
-		if password != "" || privateKey != "" {
-			return fmt.Errorf("SSH Agent 认证与密码/私钥互斥")
-		}
+		// Agent 模式：仅保存来源 + 规范指纹，绝不落密码/密钥材料。结构校验（来源 ID/
+		// 指纹/与凭据材料互斥）由边界 ValidateCreateArgs 与实体 validateSSHAgentContract
+		// 权威负责，ApplyCreateArgs 只做引用完整性（查库）与字段赋值，不重复结构校验。
 		sourceID := ArgInt64(args, "agent_source_id")
 		fp := ArgString(args, "agent_key_fingerprint")
-		if sourceID <= 0 {
-			return fmt.Errorf("SSH Agent 认证需要有效的来源 ID")
-		}
-		if err := asset_entity.ValidateFingerprintSHA256(fp); err != nil {
-			return fmt.Errorf("SSH Agent 认证指纹无效: %w", err)
-		}
 		if err := ssh_agent_svc.RequireSourceExists(ctx, sourceID); err != nil {
 			return err
 		}

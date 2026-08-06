@@ -113,6 +113,7 @@
     "test": "检测连接",
     "testSuccess": "连接成功，检测到 {{count}} 把密钥",
     "testFail": "无法连接 Agent。仍可先保存来源。",
+    "testEmpty": "已连接，但 Agent 未装载密钥。仍可先保存来源。",
     "kindEnvironment": "环境变量",
     "kindUnixSocket": "Unix socket",
     "kindWindowsNamedPipe": "Windows named pipe",

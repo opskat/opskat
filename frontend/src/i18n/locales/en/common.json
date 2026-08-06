@@ -113,6 +113,7 @@
     "test": "Test connection",
     "testSuccess": "Connected, found {{count}} keys",
     "testFail": "Could not connect to the agent. You can still save the source.",
+    "testEmpty": "Connected, but the agent holds no keys. You can still save the source.",
     "kindEnvironment": "Environment variable",
     "kindUnixSocket": "Unix socket",
     "kindWindowsNamedPipe": "Windows named pipe",

@@ -126,4 +126,16 @@ describe("AgentSourceDialog", () => {
     await user.click(screen.getByRole("button", { name: "agentSource.test" }));
     await waitFor(() => expect(screen.getByText("agentSource.testSuccess")).toBeInTheDocument());
   });
+
+  it("shows an empty (non-failure) state when the agent is reachable but holds no keys", async () => {
+    renderDialog();
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("agentSource.name"), "x");
+    await user.type(screen.getByLabelText("agentSource.endpointEnv"), "SSH_AUTH_SOCK");
+
+    vi.mocked(ProbeAgentSource).mockResolvedValue({ status: "empty" });
+    await user.click(screen.getByRole("button", { name: "agentSource.test" }));
+    await waitFor(() => expect(screen.getByText("agentSource.testEmpty")).toBeInTheDocument());
+    expect(screen.queryByText("agentSource.testFail")).not.toBeInTheDocument();
+  });
 });

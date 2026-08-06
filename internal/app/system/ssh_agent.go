@@ -136,15 +136,10 @@ func (s *System) CopyAgentSourcePublicKey(id int64, fingerprint string) (string,
 	return ssh_agent_svc.CopyPublicKey(i18n.Ctx(s.ctx, s.Lang()), id, fingerprint)
 }
 
-// GetAgentSourceUsage 读取来源使用数（引用该来源的活动 SSH 资产数）。经 Inspect
-// 获得；来源不可达时随 Inspect 报错，前端可用 ProbeSavedAgentSource 的运行时状态
-// 覆盖展示。
+// GetAgentSourceUsage 读取来源使用数（引用该来源的活动 SSH 资产数）。纯数据库查询，
+// 不依赖 Agent 传输可达——来源离线或为空时使用数仍可读。
 func (s *System) GetAgentSourceUsage(id int64) (int64, error) {
-	res, err := ssh_agent_svc.Inspect(i18n.Ctx(s.ctx, s.Lang()), id)
-	if err != nil {
-		return 0, err
-	}
-	return res.Usages, nil
+	return ssh_agent_svc.Usage(i18n.Ctx(s.ctx, s.Lang()), id)
 }
 
 // GetAgentAssetDetail 为资产详情读取所选 Agent 信息（来源名 / 已存指纹 / 当前可用

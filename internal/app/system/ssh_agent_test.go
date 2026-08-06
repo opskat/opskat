@@ -338,6 +338,16 @@ func TestGetAgentSourceUsage(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, int64(1), n)
 		})
+
+		Convey("来源不可达时使用数仍可读（纯数据库查询，不打开 Agent 传输）", func() {
+			dead, err := s.CreateAgentSource(ssh_agent_svc.SourceInput{Name: "dead", EndpointType: "unix_socket", Endpoint: "/tmp/does-not-exist-opskat-usage"})
+			require.NoError(t, err)
+			assetID := createAgentRefAsset(t, ctx, dead.ID)
+			defer func() { _ = asset_repo.Asset().Delete(ctx, assetID) }()
+			n, err := s.GetAgentSourceUsage(dead.ID)
+			assert.NoError(t, err)
+			assert.Equal(t, int64(1), n, "Agent 离线不影响使用数（数据库事实）")
+		})
 	})
 }
 
