@@ -25,7 +25,8 @@ import (
 //
 // 审批必须由 opsctl 自己走完：cp 工具内部的权限检查对已预检的调用方是豁免的
 // （permission.WithPreapproved），因此单文件的具体路径或递归/通配的两端范围都在这里先
-// 授权，获批后共享工具才连接、展开并传输（D17/D18）。
+// 授权，获批后共享工具才探测目标路径、展开并传输（D17/D18）。唯一例外是 SSH 的 `~`：
+// 解析它必须先建立 SFTP 会话查询 home，展开后的绝对路径才会进入审批与后续 I/O。
 func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		printCpUsage()
@@ -94,8 +95,9 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 }
 
 // cmdCpSingleSource 传一个被指名的文件/对象：目的地就是用户写的那个字符串，没有基点拼接，
-// 因此也不要求尾随 "/"。审批排在展开之前——两端在解析时就已完全确定，先连上去问一句
-// "这个路径存在吗"只会把一次不需要授权的探测塞进审批之前。
+// 因此也不要求尾随 "/"。审批排在目标路径探测之前——两端在解析时就已完全确定，先问一句
+// "这个路径存在吗"只会把一次不需要授权的探测塞进审批之前。SSH `~` 的 home 查询不探测
+// 目标路径，是把审批主体变成确定绝对路径所必需的解析步骤。
 func cmdCpSingleSource(
 	ctx context.Context, handlers map[string]tool.ToolHandlerFunc, src, dst *cpEndpoint,
 ) int {
@@ -151,8 +153,9 @@ func cmdCpMultiSource(
 ) int {
 	detail := cpDetail(srcs, dst)
 
-	// 递归/通配直接审批源范围与目的范围；在审批之前不连接远端、不枚举目录。明确列出的
-	// 多个文件仍逐个审批，因为它们的完整路径已经由用户给出，不需要扫描。
+	// 递归/通配直接审批源范围与目的范围；在审批之前不探测或枚举目标路径。SSH `~` 会先
+	// 查询 SFTP home，除此之外不读取远端元数据。明确列出的多个文件仍逐个审批，因为它们的
+	// 完整路径已经由用户给出，不需要扫描。
 	subjects := make([]cpSubject, 0, 2*len(srcs))
 	seen := make(map[cpSubject]bool, 2*len(srcs))
 	plans := make([]cpTransferPlan, 0, len(srcs))
@@ -297,6 +300,10 @@ func parseCpEndpoint(ctx context.Context, raw string) (*cpEndpoint, error) {
 	if err != nil {
 		return nil, err
 	}
+	path, err = helper.ResolveTransferPath(ctx, adapter, asset, path)
+	if err != nil {
+		return nil, err
+	}
 	ep := &cpEndpoint{raw: raw, asset: asset, path: path, adapter: adapter}
 	if asset == nil {
 		// 相对路径在入口层展开成绝对路径：`opsctl cp ./a.txt` 的手感不变，而工具那一侧
@@ -375,6 +382,7 @@ func requireCpApproval(
 		for _, target := range helper.ApprovalSubjectsFor(tg.ep.adapter, tg.path, tg.dir) {
 			result, err := cpApprovalFn(ctx, approval.ApprovalRequest{
 				Type:      permission.ApprovalTypeFor(target.ApprovalType),
+				CheckType: target.ApprovalType,
 				AssetID:   tg.ep.asset.ID,
 				AssetName: tg.ep.asset.Name,
 				Command:   target.Subject,

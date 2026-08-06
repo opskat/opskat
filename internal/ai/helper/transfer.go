@@ -98,6 +98,12 @@ type TransferPathNormalizer interface {
 	NormalizeTransferPath(path string) string
 }
 
+// TransferPathResolver 把端点专属的路径缩写解析为审批和 I/O 共用的确定路径。
+// 当前只有 SSH 的 "~" / "~/..." 需要这一步；对象存储 key 不具有 home 语义。
+type TransferPathResolver interface {
+	ResolveTransferPath(ctx context.Context, asset *asset_entity.Asset, path string) (string, error)
+}
+
 // ApprovalTarget 是一个端点操作必须同时满足的单条授权。通常只有一条；SSH 的 `-r path`
 // 在审批前不能探测 path 是文件还是目录，因此同时要求精确路径与子树范围。
 type ApprovalTarget struct {
@@ -144,6 +150,20 @@ func NormalizeTransferPath(adapter TransferAdapter, p string) string {
 		return normalizer.NormalizeTransferPath(p)
 	}
 	return p
+}
+
+// ResolveTransferPath 在审批主体生成之前解析端点路径，确保批准的路径就是实际传输的路径。
+func ResolveTransferPath(
+	ctx context.Context, adapter TransferAdapter, asset *asset_entity.Asset, p string,
+) (string, error) {
+	if asset == nil || (p != "~" && !strings.HasPrefix(p, "~/")) {
+		return p, nil
+	}
+	resolver, ok := adapter.(TransferPathResolver)
+	if !ok {
+		return "", fmt.Errorf("path %q uses remote home syntax, which this endpoint does not support", p)
+	}
+	return resolver.ResolveTransferPath(ctx, asset, p)
 }
 
 type transferWriteScopeKey struct{}

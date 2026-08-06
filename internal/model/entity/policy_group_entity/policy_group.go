@@ -198,6 +198,15 @@ func init() {
 				},
 			}),
 		},
+		&PolicyGroup{
+			BuiltinID:   policy.BuiltinCpFullAccess,
+			Name:        "File Transfer Full Access",
+			Description: "Allow cp reads and writes on every remote path",
+			PolicyType:  PolicyTypeCommand,
+			Policy: mustMarshal(&policy.CommandPolicy{
+				AllowList: []string{"cp:*"},
+			}),
+		},
 	)
 	registerBuiltinGroups(PolicyTypeQuery,
 		&PolicyGroup{

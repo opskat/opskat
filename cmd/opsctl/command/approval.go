@@ -51,7 +51,11 @@ func requireApproval(ctx context.Context, req approval.ApprovalRequest) (Approva
 	if req.AssetID > 0 && req.Command != "" {
 		// 注入 sessionID 到 context，供 matchGrantPatterns 使用
 		permCtx := aictx.WithSessionID(ctx, req.SessionID)
-		permResult = permission.CheckPermission(permCtx, req.Type, req.AssetID, req.Command)
+		checkType := req.CheckType
+		if checkType == "" {
+			checkType = req.Type
+		}
+		permResult = permission.CheckPermission(permCtx, checkType, req.AssetID, req.Command)
 
 		switch permResult.Decision {
 		case aictx.Allow:

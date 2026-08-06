@@ -60,13 +60,15 @@ type cpResult struct {
 //     更宽的常驻授权。
 //  5. 逐端点审批：每个远端端点向自己的适配器索取 ApprovalSubject，各自过一次权限检查
 //     （SSH 是 cp + 远端路径，OSS 是 oss + `object.read/write <bucket>/<key>`）。任一端
-//     被拒即整体失败，**且在任何远端连接、枚举或字节读写之前**。递归/通配审批源与目的
-//     目录/前缀范围，明确文件审批具体路径（D17/D18）。
+//     被拒即整体失败，**且在任何目标路径探测、枚举或字节读写之前**。SSH `~` 是唯一需要
+//     预先连接的语法：先查询 SFTP home，展开后的绝对路径才进入审批。递归/通配审批源与
+//     目的目录/前缀范围，明确文件审批具体路径（D17/D18）。
 //  6. 范围获批后展开并传输：List → OpenRead → Write。
 //
 // 单源形态下审批排在展开（List）之前：被指名的那个路径两端都已知，不必先连上去问一句
 // 存在不存在——那正是收敛前 checkFileTransfer 守着的不变式（"在真正建连之前过一次
-// cp 审批"）。多源形态同样先审批源与目的范围，获批后才展开（D18）。
+// cp 审批"）。SSH `~` 的 home 查询不探测目标路径；多源形态同样先审批源与目的范围，
+// 获批后才展开（D18）。
 //
 // **本地端点不产生审批项**（spec §6.2），本轮沿用这条既有裁定：download_file 今天就能写到
 // 本地任意路径，唯一的门是远端那一端的读授权；本地路径只以展示的身份出场——D11 强制它
@@ -133,6 +135,10 @@ func parseCpEndpoint(ctx context.Context, raw string) (*cpEndpoint, error) {
 		return nil, err
 	}
 	adapter, err := helper.TransferAdapterFor(asset)
+	if err != nil {
+		return nil, err
+	}
+	p, err = helper.ResolveTransferPath(ctx, adapter, asset, p)
 	if err != nil {
 		return nil, err
 	}
@@ -290,6 +296,15 @@ func checkAccessBatch(
 			continue
 		}
 		for _, target := range helper.ApprovalSubjectsFor(access.ep.adapter, access.path, access.dir) {
+			result := permission.CheckPermission(ctx, target.ApprovalType, access.ep.asset.ID, target.Subject)
+			aictx.RecordDecision(ctx, result)
+			switch result.Decision {
+			case aictx.Deny:
+				return false, fmt.Errorf("%s", result.Message)
+			case aictx.Allow:
+				continue
+			}
+
 			item := permission.ApprovalItem{
 				Type:      permission.ApprovalTypeFor(target.ApprovalType),
 				AssetID:   access.ep.asset.ID,
@@ -303,14 +318,7 @@ func checkAccessBatch(
 			}
 			seen[item] = true
 
-			result := permission.CheckPermission(ctx, target.ApprovalType, access.ep.asset.ID, target.Subject)
-			aictx.RecordDecision(ctx, result)
-			switch result.Decision {
-			case aictx.Deny:
-				return false, fmt.Errorf("%s", result.Message)
-			case aictx.NeedConfirm:
-				items = append(items, item)
-			}
+			items = append(items, item)
 		}
 	}
 	if len(items) == 0 {

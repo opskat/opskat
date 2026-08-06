@@ -21,7 +21,11 @@ import (
 // GrantToolCp 是文件传输授权在 grant_items.tool_name 里的取值，同时也是它的审批类型。
 // 它的 Command 是路径而非命令，匹配走 policy.MatchPathRule，必须与命令面的 grant
 // 彻底隔离——见 grantItemAppliesTo。
-const GrantToolCp = "cp"
+const (
+	GrantToolCp      = "cp"
+	GrantToolCpRead  = "cp:read"
+	GrantToolCpWrite = "cp:write"
+)
 
 // CheckPermission 统一权限检查（策略 + DB Grant 匹配）。
 // 不包含用户确认逻辑 — aictx.NeedConfirm 时由调用方处理。
@@ -59,7 +63,7 @@ func checkCommandPolicyPermission(ctx context.Context, assetID int64, command st
 	// 策略检查
 	allPolicies := collectPolicies(ctx, asset, groups)
 	allDenyRules := collectDenyRules(allPolicies)
-	allAllowRules := collectAllowRules(allPolicies)
+	allAllowRules := commandAllowRules(collectAllowRules(allPolicies))
 
 	// deny list
 	for _, cmd := range subCmds {
@@ -101,6 +105,16 @@ func checkCommandPolicyPermission(ctx context.Context, assetID int64, command st
 		}
 	}
 	return aictx.CheckResult{Decision: aictx.NeedConfirm, HintRules: filteredHints}
+}
+
+func commandAllowRules(rules []string) []string {
+	filtered := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		if !strings.HasPrefix(rule, "cp:") {
+			filtered = append(filtered, rule)
+		}
+	}
+	return filtered
 }
 
 // --- Database ---
@@ -607,14 +621,54 @@ func escapeOSSRuleKey(key string) string {
 // 规则是命令形状的（`systemctl *`），拿路径去撞它们只会产生误判。匹配用
 // policy.MatchPathRule（POSIX glob），与 local_write 的路径白名单同一套语义。
 func checkFileTransferPermission(ctx context.Context, assetID int64, remotePath string) aictx.CheckResult {
+	return checkFileTransferPermissionForDirection(ctx, assetID, remotePath, "")
+}
+
+func checkFileTransferReadPermission(ctx context.Context, assetID int64, remotePath string) aictx.CheckResult {
+	return checkFileTransferPermissionForDirection(ctx, assetID, remotePath, "read")
+}
+
+func checkFileTransferWritePermission(ctx context.Context, assetID int64, remotePath string) aictx.CheckResult {
+	return checkFileTransferPermissionForDirection(ctx, assetID, remotePath, "write")
+}
+
+func checkFileTransferPermissionForDirection(ctx context.Context, assetID int64, remotePath, direction string) aictx.CheckResult {
 	remotePath = strings.TrimSpace(remotePath)
 	if remotePath == "" {
 		return aictx.CheckResult{Decision: aictx.NeedConfirm}
+	}
+	if direction != "" {
+		asset, err := asset_svc.Asset().Get(ctx, assetID)
+		if err != nil {
+			logger.Ctx(ctx).Warn("get asset for cp permission check", zap.Int64("assetID", assetID), zap.Error(err))
+		}
+		if asset != nil {
+			var groups []*group_entity.Group
+			if asset.GroupID > 0 {
+				groups = policy.ResolveGroupChain(ctx, asset.GroupID)
+			}
+			for _, rule := range collectAllowRules(collectPolicies(ctx, asset, groups)) {
+				if matchCpPolicyRule(rule, direction, remotePath) {
+					return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourcePolicyAllow, MatchedPattern: rule}
+				}
+			}
+		}
 	}
 	if grantResult := matchGrantForAssetWith(ctx, assetID, remotePath, GrantToolCp, policy.MatchPathRule); grantResult != nil {
 		return *grantResult
 	}
 	return aictx.CheckResult{Decision: aictx.NeedConfirm}
+}
+
+func matchCpPolicyRule(rule, direction, remotePath string) bool {
+	if rule == "cp:*" {
+		return true
+	}
+	prefix := "cp:" + direction + ":"
+	if !strings.HasPrefix(rule, prefix) {
+		return false
+	}
+	return policy.MatchPathRule(strings.TrimPrefix(rule, prefix), remotePath)
 }
 
 // cpGrantPatterns 是 cp 注册的 grant 归一化：一条审批主体 → 常驻授权的 pattern。

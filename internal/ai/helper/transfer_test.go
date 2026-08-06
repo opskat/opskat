@@ -288,12 +288,16 @@ func TestTransferAdapterFor(t *testing.T) {
 
 // --- SSH 端点 ---
 
-// SSH 端点三个方向都归 cp 授权，主体是远端路径——与现状逐字节一致。
+// SSH 端点按读写方向进入各自的 cp 权限面，主体仍是远端路径。
 func TestSSHTransfer_ApprovalSubject(t *testing.T) {
 	for _, dir := range []Direction{DirRead, DirWrite, DirList} {
 		typ, subject := sshTransfer.ApprovalSubject("/var/log/app.log", dir)
-		if typ != permission.GrantToolCp {
-			t.Errorf("dir %v: type = %q, want %q", dir, typ, permission.GrantToolCp)
+		wantType := permission.GrantToolCpRead
+		if dir == DirWrite {
+			wantType = permission.GrantToolCpWrite
+		}
+		if typ != wantType {
+			t.Errorf("dir %v: type = %q, want %q", dir, typ, wantType)
 		}
 		if subject != "/var/log/app.log" {
 			t.Errorf("dir %v: subject = %q", dir, subject)
@@ -304,8 +308,8 @@ func TestSSHTransfer_ApprovalSubject(t *testing.T) {
 func TestSSHTransfer_RecursiveUnknownPathApprovesFileAndSubtree(t *testing.T) {
 	subjects := ApprovalSubjectsFor(sshTransfer, "/etc/passwd", DirReadScope)
 	want := []ApprovalTarget{
-		{ApprovalType: permission.GrantToolCp, Subject: "/etc/passwd"},
-		{ApprovalType: permission.GrantToolCp, Subject: "/etc/passwd/"},
+		{ApprovalType: permission.GrantToolCpRead, Subject: "/etc/passwd"},
+		{ApprovalType: permission.GrantToolCpRead, Subject: "/etc/passwd/"},
 	}
 	if !reflect.DeepEqual(subjects, want) {
 		t.Fatalf("ApprovalSubjectsFor = %#v, want %#v", subjects, want)
@@ -327,8 +331,8 @@ func TestSSHTransfer_ApprovalSubjectNarrowsGlobForListing(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			typ, subject := sshTransfer.ApprovalSubject(tt.pattern, DirList)
-			if typ != permission.GrantToolCp {
-				t.Errorf("type = %q, want %q", typ, permission.GrantToolCp)
+			if typ != permission.GrantToolCpRead {
+				t.Errorf("type = %q, want %q", typ, permission.GrantToolCpRead)
 			}
 			if subject != tt.want {
 				t.Errorf("subject = %q, want %q", subject, tt.want)
@@ -414,9 +418,17 @@ func TestSSHTransfer_ApprovalSubjectNeverOutgrowsItsPath(t *testing.T) {
 // Stat / Lstat / ReadDir / Glob 全是真实语义：手写 fake 建模不出"被指名的链接 Stat 会跟随"，
 // 而那正是展开契约里最容易错的一条。
 func newTestSFTP(t *testing.T) *sftp.Client {
+	return newTestSFTPAt(t, "")
+}
+
+func newTestSFTPAt(t *testing.T, workingDirectory string) *sftp.Client {
 	t.Helper()
 	clientConn, serverConn := net.Pipe()
-	server, err := sftp.NewServer(serverConn)
+	options := make([]sftp.ServerOption, 0, 1)
+	if workingDirectory != "" {
+		options = append(options, sftp.WithServerWorkingDirectory(workingDirectory))
+	}
+	server, err := sftp.NewServer(serverConn, options...)
 	if err != nil {
 		t.Fatalf("new sftp server: %v", err)
 	}
@@ -435,6 +447,30 @@ func newTestSFTP(t *testing.T) *sftp.Client {
 		<-served
 	})
 	return client
+}
+
+func TestSSHTransferResolvesRemoteHomeBeforeApproval(t *testing.T) {
+	home := t.TempDir()
+	var dials atomic.Int32
+	cache := newSFTPClientCache(func(context.Context, int64) (*sftp.Client, io.Closer, error) {
+		dials.Add(1)
+		return newTestSFTPAt(t, home), &fakeCloser{}, nil
+	})
+	ctx := WithSFTPClientCache(context.Background(), cache)
+	t.Cleanup(func() { _ = cache.Close() })
+	asset := &asset_entity.Asset{ID: 7, Name: "web-01", Type: asset_entity.AssetTypeSSH}
+
+	got, err := ResolveTransferPath(ctx, sshTransfer, asset, "~/project/")
+	if err != nil {
+		t.Fatalf("ResolveTransferPath: %v", err)
+	}
+	want := filepath.ToSlash(filepath.Join(home, "project")) + "/"
+	if got != want {
+		t.Fatalf("ResolveTransferPath = %q, want %q", got, want)
+	}
+	if dials.Load() != 1 {
+		t.Fatalf("SFTP dials = %d, want 1", dials.Load())
+	}
 }
 
 func TestSSHTransferReusesOneSFTPSessionPerAsset(t *testing.T) {

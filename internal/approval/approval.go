@@ -25,8 +25,9 @@ type BatchItem struct {
 
 // ApprovalRequest is sent from opsctl to the desktop app.
 type ApprovalRequest struct {
-	Token       string          `json:"token,omitempty"` // 认证 token
-	Type        string          `json:"type"`            // "exec"|"cp"|"create"|"update"|"delete"|"grant"|"batch"|"ext_tool"
+	Token       string          `json:"token,omitempty"`      // 认证 token
+	Type        string          `json:"type"`                 // "exec"|"cp"|"create"|"update"|"delete"|"grant"|"batch"|"ext_tool"
+	CheckType   string          `json:"check_type,omitempty"` // internal permission face; cp keeps read/write direction while Type stays "cp"
 	AssetID     int64           `json:"asset_id,omitempty"`
 	AssetName   string          `json:"asset_name,omitempty"`
 	Command     string          `json:"command,omitempty"`
