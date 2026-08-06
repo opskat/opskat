@@ -1,5 +1,0 @@
-# Runtime fixture artifacts (machine-readable results + logs). They are
-# regenerated on every run and are asserted to be secret-free; never commit.
-out/
-# Private key + agent socket used by the run; removed on exit.
-work/

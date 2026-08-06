@@ -501,7 +501,7 @@ Issue #267 消费但不重构以下外部契约：
 
 | 测试边界 | 验证内容 | 既有基础 |
 |---|---|---|
-| 端点校验与传输 | 离线保存、环境变量重新解析、Unix 同 UID、本机 Windows pipe、context 取消 | 现有 context-aware 网络测试；需新增真实 Agent fixture |
+| 端点校验与传输 | 离线保存、环境变量重新解析、Unix 同 UID、本机 Windows pipe、context 取消 | 现有 context-aware 网络测试 |
 | 恶意 Agent fixture | 空、超限、畸形、延迟和重复身份；拒绝签名；无效签名；payload 不泄露 | `x/crypto/ssh/agent` 协议行为 |
 | 精确认证状态机 | 只提供所选密钥；签名器实际使用；拒绝 SSH `none`；清除继承认证；无回退 | 现有可控 SSH 服务器测试 |
 | MFA 延续 | 一次公钥部分成功后的一次 keyboard-interactive；拒绝、重复和非交互行为 | 现有 SSH 进度和交互测试 |
@@ -511,9 +511,9 @@ Issue #267 消费但不重构以下外部契约：
 | 来源持久化 | 仅显式保存、来源存在或删除约束、端点变更失效回调 | SQLite 仓库和服务集成测试 |
 | 备份与重映射 | 先来源后资产、来源 ID 重映射、回滚、不支持来源保留、不含 Agent payload | 现有备份导入导出测试 |
 | 前端体验 | 混排列表、空白或预填对话框、不自动选择、缺失指纹、重试行为、MFA 焦点或取消和无障碍 | Vitest、RTL 与已提交交互原型证据 |
-| 跨平台真实 fixture | macOS 或 Linux 真实 Unix socket、Windows OpenSSH 兼容 named pipe、保留日志和机器可读结果 | CI 和发布工作流调用的新平台 fixture 脚本 |
+| 跨平台验证 | Unix socket 与 Windows named-pipe 端点、原生成功/身份缺失/拒绝签名/等待取消/Agent+MFA | 在真实 Windows 主机人工验证；原计划的 CI fixture 脚本与工作流已移除 |
 
-跨平台验证必须包含一次原生成功流程、身份缺失、提供方拒绝签名、等待 Agent 时取消以及 Agent+MFA。CI 工具链支持时，Windows named-pipe 取消路径在竞态检测器下运行。fixture 产物不能包含私钥、签名或挑战答案。
+跨平台验证覆盖一次原生成功流程、身份缺失、提供方拒绝签名、等待 Agent 时取消以及 Agent+MFA。该路径在真实 Windows 主机上完成人工验证，不再维护独立的 CI fixture 工作流与产物。
 
 人工审查覆盖六个已提交交互原型场景的视觉一致性，并确认对原生提供方提示的描述准确；提供方自身 UI 不属于 OpsKat 自动化范围。
 
