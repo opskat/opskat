@@ -7,16 +7,25 @@ import (
 	"testing"
 
 	"context"
+	"encoding/base64"
+
+	"github.com/cago-frame/cago/database/db"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
+	"github.com/opskat/opskat/internal/model/entity/ssh_agent_source_entity"
 	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"github.com/opskat/opskat/internal/repository/group_repo"
+	"github.com/opskat/opskat/internal/repository/ssh_agent_source_repo"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // fakeAssetRepo is a minimal in-memory AssetRepo for the CRUD tests below.
@@ -147,6 +156,12 @@ func (r *fakeAssetRepo) UpdateSortOrder(_ context.Context, _ int64, _ int) error
 func (r *fakeAssetRepo) UpdateGroupID(_ context.Context, _, _ int64) error       { return nil }
 func (r *fakeAssetRepo) CountByTypes(_ context.Context, _ []string) (int64, error) {
 	return 0, nil
+}
+func (r *fakeAssetRepo) CountAgentAuthBySourceID(_ context.Context, _ int64) (int64, error) {
+	return 0, nil
+}
+func (r *fakeAssetRepo) ListAgentAuthBySourceID(_ context.Context, _ int64) ([]*asset_entity.Asset, error) {
+	return nil, nil
 }
 
 // fakeGroupRepo mirrors fakeAssetRepo for groups, for the same reason.
@@ -480,6 +495,84 @@ func TestHandlePutAsset_InvalidConfigDoesNotPartiallyUpdateAsset(t *testing.T) {
 	if got := env.asset("web-9").Description; got != "before" {
 		t.Fatalf("invalid config partially updated description to %q", got)
 	}
+}
+
+// validAgentFingerprintForTest 构造一个规范大写 SHA256: 前缀的 32 字节指纹，
+// 通过 asset_entity.ValidateFingerprintSHA256 校验。
+func validAgentFingerprintForTest() string {
+	raw := make([]byte, 32)
+	for i := range raw {
+		raw[i] = byte(i)
+	}
+	return "SHA256:" + base64.RawStdEncoding.EncodeToString(raw)
+}
+
+// seedSSHAgentSourceForTest 用真实 in-memory SQLite 注册来源仓库并插入一个来源，
+// 供 ApplyCreateArgs/ApplyUpdateArgs 的引用完整性校验（RequireSourceExists）命中。
+func seedSSHAgentSourceForTest(t *testing.T) int64 {
+	t.Helper()
+	gdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, gdb.AutoMigrate(&ssh_agent_source_entity.SSHAgentSource{}, &asset_entity.Asset{}))
+	db.SetDefault(gdb)
+	ssh_agent_source_repo.RegisterSSHAgentSource(ssh_agent_source_repo.New())
+	src := &ssh_agent_source_entity.SSHAgentSource{
+		Name: "work", EndpointType: "environment", Endpoint: "SSH_AUTH_SOCK", Createtime: 1, Updatetime: 1,
+	}
+	require.NoError(t, ssh_agent_source_repo.SSHAgentSource().Create(context.Background(), src))
+	return src.ID
+}
+
+// TestHandlePutAsset_AgentSSHFieldsFlowSymmetric 覆盖规格「AI 资产增删改查对 Agent
+// 认证 SSH 资产对称接收并返回 agent_source_id 和 agent_key_fingerprint」：create/
+// update 经 assettype 处理器保存来源 ID + 规范指纹（引用完整性校验与桌面一致），
+// get 的安全视图对称返回这两个字段，校验规则复用任务 5 的同一处理器。
+func TestHandlePutAsset_AgentSSHFieldsFlowSymmetric(t *testing.T) {
+	env := setupCRUD(t)
+	sourceID := seedSSHAgentSourceForTest(t)
+	fp := validAgentFingerprintForTest()
+
+	out, err := handlePutAsset(env.ctx, map[string]any{
+		"name": "box", "type": "ssh",
+		"config": map[string]any{
+			"host": "10.0.0.1", "port": float64(22), "username": "root",
+			"auth_type":             "agent",
+			"agent_source_id":       float64(sourceID),
+			"agent_key_fingerprint": fp,
+		},
+	})
+	require.NoError(t, err, "agent asset create failed: %v", err)
+	_ = out
+
+	sshCfg, err := env.asset("box").GetSSHConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "agent", sshCfg.AuthType)
+	assert.Equal(t, sourceID, sshCfg.AgentSourceID)
+	assert.Equal(t, fp, sshCfg.AgentKeyFingerprint)
+
+	// get 的安全视图对称返回（不泄露端点/公钥/备注）。
+	view := toSafeView(env.asset("box"))
+	assert.Equal(t, sourceID, view.AgentSourceID)
+	assert.Equal(t, fp, view.AgentKeyFingerprint)
+
+	// update 换指纹（同一来源）同样走校验路径。
+	raw := make([]byte, 32)
+	for i := range raw {
+		raw[i] = byte(i) + 1
+	}
+	fp2 := "SHA256:" + base64.RawStdEncoding.EncodeToString(raw)
+	_, err = handlePutAsset(env.ctx, map[string]any{
+		"asset": "box",
+		"config": map[string]any{
+			"agent_source_id":       float64(sourceID),
+			"agent_key_fingerprint": fp2,
+		},
+	})
+	require.NoError(t, err, "agent asset update failed: %v", err)
+	sshCfg, err = env.asset("box").GetSSHConfig()
+	require.NoError(t, err)
+	assert.Equal(t, fp2, sshCfg.AgentKeyFingerprint)
+	assert.Equal(t, sourceID, sshCfg.AgentSourceID)
 }
 
 // oss 类型此前被巨型 schema 完全遗漏（40 个属性里一个 oss 字段都没有），

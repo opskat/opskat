@@ -36,6 +36,10 @@ type safeAssetView struct {
 	Width     int    `json:"width,omitempty"`
 	Height    int    `json:"height,omitempty"`
 	Clipboard bool   `json:"clipboard,omitempty"`
+	// SSH Agent 认证资产对称返回来源 ID 与规范指纹（与桌面保存校验一致）。
+	// 端点/公钥/备注/签名/挑战答案绝不进入安全视图。
+	AgentSourceID       int64  `json:"agent_source_id,omitempty"`
+	AgentKeyFingerprint string `json:"agent_key_fingerprint,omitempty"`
 	// Database 专属
 	Driver   string `json:"driver,omitempty"`
 	Database string `json:"database,omitempty"`
@@ -106,6 +110,12 @@ func toSafeView(a *asset_entity.Asset) safeAssetView {
 			}
 			if val, ok := fields["auth_type"].(string); ok {
 				v.AuthType = val
+			}
+			if val, ok := fields["agent_source_id"].(int64); ok {
+				v.AgentSourceID = val
+			}
+			if val, ok := fields["agent_key_fingerprint"].(string); ok {
+				v.AgentKeyFingerprint = val
 			}
 			if val, ok := fields["domain"].(string); ok {
 				v.Domain = val

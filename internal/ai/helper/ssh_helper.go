@@ -14,6 +14,8 @@ import (
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
+	"github.com/opskat/opskat/internal/service/ssh_svc"
+	"github.com/opskat/opskat/internal/sshagent"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -136,15 +138,30 @@ func ExecCommandOnAsset(ctx context.Context, asset *asset_entity.Asset, command,
 }
 
 func runCommandWithCache(ctx context.Context, cache *SSHClientCache, assetID int64, command string) (string, error) {
-	dial := func() (*ssh.Client, io.Closer, error) {
+	return runCommandWithCacheDial(ctx, cache, assetID, command, func(ctx context.Context, assetID int64) (*ssh.Client, io.Closer, error) {
 		client, extras, err := credential_resolver.Default().DialAssetSSH(ctx, assetID)
 		if err != nil {
 			return nil, nil, err
 		}
 		return client, ClosersAsOne(extras), nil
+	})
+}
+
+// sshAssetDialer 拨号一个资产的 SSH 连接。抽成参数只为测试注入假拨号，
+// 生产路径统一走 credential_resolver 的 DialAssetSSH。
+type sshAssetDialer func(ctx context.Context, assetID int64) (*ssh.Client, io.Closer, error)
+
+// runCommandWithCacheDial 是 runCommandWithCache 的可注入拨号形态。
+//
+// Agent 认证失败（ssh_agent_mfa_required / sign_failed 等）只可能在拨号阶段出现：
+// 这里对拨号错误原样返回，绝不重试、绝不切换到密码认证——「AI 绝不把 Agent 失败
+// 转换成密码更新或重试流程」。只有已建立连接上的命令执行失败（连接失效）才重拨一次。
+func runCommandWithCacheDial(ctx context.Context, cache *SSHClientCache, assetID int64, command string, dial sshAssetDialer) (string, error) {
+	dialOnce := func() (*ssh.Client, io.Closer, error) {
+		return dial(ctx, assetID)
 	}
 
-	client, _, err := cache.GetOrDial(assetID, dial)
+	client, _, err := cache.GetOrDial(assetID, dialOnce)
 	if err != nil {
 		return "", err
 	}
@@ -158,7 +175,7 @@ func runCommandWithCache(ctx context.Context, cache *SSHClientCache, assetID int
 		}
 		// 非取消错误优先按连接失效处理，删除缓存后只重试一次，避免重复执行
 		cache.Remove(assetID)
-		client, _, err = cache.GetOrDial(assetID, dial)
+		client, _, err = cache.GetOrDial(assetID, dialOnce)
 		if err != nil {
 			return "", err
 		}
@@ -473,6 +490,55 @@ func (c *connBoundReadCloser) Close() error {
 // 调用者必须调用返回的 cleanup 关闭 client 与链路资源。
 func DialSSHClient(ctx context.Context, assetID int64) (*ssh.Client, func(), error) {
 	return DialAssetSSH(ctx, assetID)
+}
+
+// DialSSHClientInteractive 建立到资产的 SSH 连接，并把 Agent 认证需要的结构化
+// MFA 挑战交给 mfa（交互式调用方，如 opsctl ssh）。Agent 认证仍经产品认证工厂
+// （ConnectConfig.Agent → ssh_svc.Dial），来源拨号时解析、传输由握手方拥有，与
+// 桌面交互路径同一接法；非 Agent 资产与 mfa==nil 时与 DialAssetSSH 行为一致。
+// 调用者必须调用返回的 cleanup 关闭 client 与链路资源。
+func DialSSHClientInteractive(ctx context.Context, assetID int64, mfa sshagent.InteractiveCaller) (*ssh.Client, func(), error) {
+	sshCfg, password, key, passphrase, jumpHosts, proxyChain, err := credential_resolver.Default().ResolveSSHConnectConfig(ctx, assetID)
+	if err != nil {
+		return nil, nil, err
+	}
+	agentCfg, err := credential_resolver.Default().ResolveAgentAuthConfig(sshCfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	if agentCfg != nil {
+		// 交互式调用方接入 MFA 适配器；答案只存在于当前挑战请求，绝不保留。
+		agentCfg.MFA = mfa
+	}
+	cfg := ssh_svc.ConnectConfig{
+		Host:                     sshCfg.Host,
+		Port:                     sshCfg.Port,
+		Username:                 sshCfg.Username,
+		AuthType:                 sshCfg.AuthType,
+		Password:                 password,
+		Key:                      key,
+		KeyPassphrase:            passphrase,
+		PrivateKeys:              sshCfg.PrivateKeys,
+		AssetID:                  assetID,
+		Ctx:                      ctx,
+		Agent:                    agentCfg,
+		Proxy:                    credential_resolver.Default().DecryptProxyPassword(sshCfg.Proxy),
+		JumpHosts:                jumpHosts,
+		ProxyChain:               proxyChain,
+		HostKeyVerifyFunc:        ssh_svc.AutoTrustFirstRejectChangeVerifyFunc(),
+		KeepAliveIntervalSeconds: sshCfg.KeepAliveIntervalSeconds,
+	}
+	client, closers, err := ssh_svc.NewManager().Dial(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	cleanup := func() {
+		if err := client.Close(); err != nil && !IsExpectedCloseErr(err) {
+			logger.Default().Warn("close interactive SSH client", zap.Error(err))
+		}
+		closeExtras(closers)
+	}
+	return client, cleanup, nil
 }
 
 // ExecWithStdio 在远程服务器执行命令，直接连接 stdio（支持管道）

@@ -9,6 +9,7 @@ import (
 	"github.com/opskat/opskat/internal/service/credential_mgr_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/credential_svc"
+	"github.com/opskat/opskat/internal/service/ssh_agent_svc"
 )
 
 type sshHandler struct{}
@@ -26,10 +27,17 @@ func (h *sshHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	if err != nil || cfg == nil {
 		return nil
 	}
-	return map[string]any{
+	view := map[string]any{
 		"host": cfg.Host, "port": cfg.Port,
 		"username": cfg.Username, "auth_type": cfg.AuthType,
 	}
+	// Agent 认证资产：AI 安全视图对称返回来源 ID 与规范指纹（规格允许）。
+	// 端点/公钥/备注/签名/挑战答案不落在 SSHConfig 里，安全视图绝不包含它们。
+	if cfg.AuthType == asset_entity.AuthTypeAgent {
+		view["agent_source_id"] = cfg.AgentSourceID
+		view["agent_key_fingerprint"] = cfg.AgentKeyFingerprint
+	}
+	return view
 }
 
 func (h *sshHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asset) (string, error) {
@@ -45,7 +53,38 @@ func (h *sshHandler) DefaultPolicy() any { return asset_entity.DefaultCommandPol
 func (h *sshHandler) PolicyKind() string { return policy.PolicyKindCommand }
 
 func (h *sshHandler) ValidateCreateArgs(args map[string]any) error {
-	return validateRemoteServerArgs(args)
+	if err := validateRemoteServerArgs(args); err != nil {
+		return err
+	}
+	return validateSSHAgentArgs(args)
+}
+
+// validateSSHAgentArgs 校验 AI 工具创建/更新 SSH 资产时的 Agent 参数（不触库）：
+// auth_type=agent 必须带正数来源 ID 与规范指纹，且与密码/私钥/口令互斥；非 Agent
+// 认证方式不得携带 Agent 来源字段。来源存在性（引用完整性）在 Apply*Args 里查库。
+func validateSSHAgentArgs(args map[string]any) error {
+	authType := ArgString(args, "auth_type")
+	if authType == "" {
+		return nil
+	}
+	if authType == asset_entity.AuthTypeAgent {
+		sourceID := ArgInt64(args, "agent_source_id")
+		fp := ArgString(args, "agent_key_fingerprint")
+		if sourceID <= 0 {
+			return fmt.Errorf("SSH Agent 认证需要有效的来源 ID")
+		}
+		if err := asset_entity.ValidateFingerprintSHA256(fp); err != nil {
+			return fmt.Errorf("SSH Agent 认证指纹无效: %w", err)
+		}
+		if ArgString(args, "password") != "" || ArgString(args, "private_key") != "" || ArgString(args, "passphrase") != "" || ArgInt64(args, "credential_id") != 0 {
+			return fmt.Errorf("SSH Agent 认证与托管凭据/密码/私钥/口令互斥")
+		}
+		return nil
+	}
+	if ArgInt64(args, "agent_source_id") != 0 || ArgString(args, "agent_key_fingerprint") != "" {
+		return fmt.Errorf("非 Agent 认证方式不得携带 Agent 来源字段")
+	}
+	return nil
 }
 
 func (h *sshHandler) ApplyCreateArgs(ctx context.Context, a *asset_entity.Asset, args map[string]any) error {
@@ -67,7 +106,18 @@ func (h *sshHandler) ApplyCreateArgs(ctx context.Context, a *asset_entity.Asset,
 		AuthType: authType,
 	}
 
-	if privateKey != "" {
+	if authType == asset_entity.AuthTypeAgent {
+		// Agent 模式：仅保存来源 + 规范指纹，绝不落密码/密钥材料。结构校验（来源 ID/
+		// 指纹/与凭据材料互斥）由边界 ValidateCreateArgs 与实体 validateSSHAgentContract
+		// 权威负责，ApplyCreateArgs 只做引用完整性（查库）与字段赋值，不重复结构校验。
+		sourceID := ArgInt64(args, "agent_source_id")
+		fp := ArgString(args, "agent_key_fingerprint")
+		if err := ssh_agent_svc.RequireSourceExists(ctx, sourceID); err != nil {
+			return err
+		}
+		cfg.AgentSourceID = sourceID
+		cfg.AgentKeyFingerprint = fp
+	} else if privateKey != "" {
 		credName := a.Name
 		if credName == "" {
 			credName = "ai-imported-key"
@@ -124,9 +174,42 @@ func (h *sshHandler) ApplyUpdateArgs(ctx context.Context, a *asset_entity.Asset,
 		cfg.Password = ""
 		cfg.AuthType = "key"
 	}
-	// 用户显式传入 auth_type 时最终覆盖（用于仅切换认证方式而不动凭据的场景）
-	if v := ArgString(args, "auth_type"); v != "" {
-		cfg.AuthType = v
+
+	authType := ArgString(args, "auth_type")
+	sourceID := ArgInt64(args, "agent_source_id")
+	fp := ArgString(args, "agent_key_fingerprint")
+
+	// 进入 Agent 模式：来源 + 指纹必须齐全且有效，引用完整性必须成立，并清除全部
+	// 密码/密钥材料。只要带 Agent 字段即视为进入 Agent 模式（切到 Agent 删除密码
+	// 与密钥材料）。
+	if authType == asset_entity.AuthTypeAgent || sourceID > 0 || fp != "" {
+		if sourceID <= 0 {
+			return fmt.Errorf("SSH Agent 认证需要有效的来源 ID")
+		}
+		if err := asset_entity.ValidateFingerprintSHA256(fp); err != nil {
+			return fmt.Errorf("SSH Agent 认证指纹无效: %w", err)
+		}
+		if err := ssh_agent_svc.RequireSourceExists(ctx, sourceID); err != nil {
+			return err
+		}
+		cfg.AuthType = asset_entity.AuthTypeAgent
+		cfg.AgentSourceID = sourceID
+		cfg.AgentKeyFingerprint = fp
+	} else if authType != "" {
+		// 显式切换离开 Agent（或指定其它认证方式而不动凭据）。
+		cfg.AuthType = authType
+	}
+
+	// 序列化器强制不变量（切换离开 Agent 删除 Agent 字段；Agent 模式清除密码与
+	// 密钥材料），与实体层权威校验 validateSSHAgentContract 一致。
+	if cfg.AuthType == asset_entity.AuthTypeAgent {
+		cfg.CredentialID = 0
+		cfg.Password = ""
+		cfg.PrivateKeys = nil
+		cfg.PrivateKeyPassphrase = ""
+	} else {
+		cfg.AgentSourceID = 0
+		cfg.AgentKeyFingerprint = ""
 	}
 	return a.SetSSHConfig(cfg)
 }

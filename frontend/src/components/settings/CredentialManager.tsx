@@ -19,6 +19,7 @@ import {
   Upload,
   CheckCircle2,
   AlertCircle,
+  Cable,
 } from "lucide-react";
 import {
   Dialog,
@@ -43,10 +44,10 @@ import {
   TabsContent,
   TabsList,
   TabsTrigger,
+  ConfirmDialog,
   cn,
 } from "@opskat/ui";
 import { OnFileDrop, OnFileDropOff } from "../../../wailsjs/runtime/runtime";
-import { ListCredentials } from "../../../wailsjs/go/system/System";
 import {
   GenerateSSHKey,
   ImportSSHKeyPath,
@@ -59,9 +60,22 @@ import {
   CreatePasswordCredential,
   UpdateCredentialPassword,
   UpdateCredentialPassphrase,
+  ListCredentials,
+  ListAgentSources,
+  ProbeSavedAgentSource,
+  InspectAgentSource,
+  CopyAgentSourcePublicKey,
+  GetAgentSourceUsage,
+  DeleteAgentSource,
+  CreateAgentSource,
+  UpdateAgentSource,
+  GetAgentSource,
 } from "../../../wailsjs/go/system/System";
 import { SelectSSHKeyFile } from "../../../wailsjs/go/ssh/SSH";
-import { credential_entity, ssh as ssh_models } from "../../../wailsjs/go/models";
+import { credential_entity, ssh as ssh_models, system, ssh_agent_svc } from "../../../wailsjs/go/models";
+import { AgentSourceRow } from "@/components/settings/AgentSourceRow";
+import { AgentSourceDialog, type AgentSourceDraft } from "@/components/settings/AgentSourceDialog";
+import { type AgentEndpointType, type AgentSourceRuntimeStatus } from "@/components/settings/agentSource";
 
 function generatePassword(length = 20): string {
   const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
@@ -83,6 +97,24 @@ export function CredentialManager() {
   const [changePasswordCred, setChangePasswordCred] = useState<credential_entity.Credential | null>(null);
   const [changePassphraseCred, setChangePassphraseCred] = useState<credential_entity.Credential | null>(null);
 
+  // ---- SSH Agent 来源（与密码/SSH 密钥混排显示） ----
+  const [agentSources, setAgentSources] = useState<system.AgentSourceSummary[]>([]);
+  const [agentLoading, setAgentLoading] = useState(true);
+  const [agentStatuses, setAgentStatuses] = useState<Record<number, AgentSourceRuntimeStatus>>({});
+  const [agentCounts, setAgentCounts] = useState<Record<number, number>>({});
+  const [expandedSource, setExpandedSource] = useState<number | null>(null);
+  const [agentIdentities, setAgentIdentities] = useState<Record<number, ssh_agent_svc.IdentitySummary[]>>({});
+  const [agentIdentitiesLoading, setAgentIdentitiesLoading] = useState<Record<number, boolean>>({});
+  const [agentIdentityError, setAgentIdentityError] = useState<Record<number, string>>({});
+  const [agentDialog, setAgentDialog] = useState<{
+    open: boolean;
+    mode: "create" | "edit";
+    sourceId?: number;
+    initial: AgentSourceDraft | null;
+  }>({ open: false, mode: "create", initial: null });
+  const [deleteSource, setDeleteSource] = useState<system.AgentSourceSummary | null>(null);
+  const [deleteSourceUsage, setDeleteSourceUsage] = useState(0);
+
   const loadCredentials = useCallback(async () => {
     try {
       const result = await ListCredentials();
@@ -100,6 +132,171 @@ export function CredentialManager() {
   useEffect(() => {
     void loadCredentials();
   }, [loadCredentials]);
+
+  // ---- SSH Agent 来源加载 / 探测 / 检查 ----
+  const probeAgentSource = useCallback(async (id: number) => {
+    setAgentStatuses((prev) => ({ ...prev, [id]: "loading" }));
+    try {
+      const result = await ProbeSavedAgentSource(id);
+      setAgentStatuses((prev) => ({ ...prev, [id]: result.status as AgentSourceRuntimeStatus }));
+      if (result.status === "ok") {
+        const count = result.identity_count;
+        if (count) setAgentCounts((prev) => ({ ...prev, [id]: count }));
+      }
+    } catch {
+      setAgentStatuses((prev) => ({ ...prev, [id]: "unavailable" }));
+    }
+  }, []);
+
+  const loadAgentIdentities = useCallback(async (id: number) => {
+    setAgentIdentitiesLoading((prev) => ({ ...prev, [id]: true }));
+    setAgentIdentityError((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    try {
+      const result = await InspectAgentSource(id);
+      const identities = result?.identities || [];
+      setAgentIdentities((prev) => ({ ...prev, [id]: identities }));
+      // 用检查结果同步运行时状态（可用且包含身份 / 可用但为空）
+      setAgentStatuses((prev) => ({ ...prev, [id]: identities.length > 0 ? "ok" : "empty" }));
+      if (identities.length > 0) setAgentCounts((prev) => ({ ...prev, [id]: identities.length }));
+    } catch (e) {
+      setAgentIdentityError((prev) => ({ ...prev, [id]: String(e) }));
+    } finally {
+      setAgentIdentitiesLoading((prev) => ({ ...prev, [id]: false }));
+    }
+  }, []);
+
+  const loadAgentSources = useCallback(async () => {
+    setAgentLoading(true);
+    try {
+      const result = await ListAgentSources();
+      const list = result || [];
+      setAgentSources(list);
+      for (const source of list) void probeAgentSource(source.id);
+    } finally {
+      setAgentLoading(false);
+    }
+  }, [probeAgentSource]);
+
+  useEffect(() => {
+    void loadAgentSources();
+  }, [loadAgentSources]);
+
+  const refreshAgentSource = useCallback(
+    (id: number) => {
+      void probeAgentSource(id);
+      // 刷新后清空已缓存身份，避免与新的运行时状态错位
+      setAgentIdentities((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      if (expandedSource === id) void loadAgentIdentities(id);
+    },
+    [expandedSource, loadAgentIdentities, probeAgentSource]
+  );
+
+  const toggleAgentExpand = useCallback(
+    (id: number) => {
+      if (expandedSource === id) {
+        // 折叠时清除有界身份摘要（折叠/关闭/来源变更时清）
+        setExpandedSource(null);
+        setAgentIdentities((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+        setAgentIdentityError((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+      } else {
+        setExpandedSource(id);
+        void loadAgentIdentities(id);
+      }
+    },
+    [expandedSource, loadAgentIdentities]
+  );
+
+  const handleCopyAgentPublicKey = useCallback(
+    async (id: number, fingerprint: string) => {
+      try {
+        const pubKey = await CopyAgentSourcePublicKey(id, fingerprint);
+        await navigator.clipboard.writeText(pubKey);
+        notifyCopied(t("agentSource.copiedPublicKey"));
+      } catch (e) {
+        toast.error(String(e));
+      }
+    },
+    [t]
+  );
+
+  const openCreateAgentDialog = useCallback(() => {
+    setAgentDialog({ open: true, mode: "create", initial: null });
+  }, []);
+
+  const openEditAgentDialog = useCallback(async (source: system.AgentSourceSummary) => {
+    try {
+      const full = await GetAgentSource(source.id);
+      setAgentDialog({
+        open: true,
+        mode: "edit",
+        sourceId: source.id,
+        initial: {
+          name: full.name,
+          type: full.endpoint_type as AgentEndpointType,
+          endpoint: full.endpoint,
+          description: full.description || "",
+        },
+      });
+    } catch (e) {
+      toast.error(String(e));
+    }
+  }, []);
+
+  const handleSaveAgentSource = useCallback(
+    async (input: ssh_agent_svc.SourceInput) => {
+      try {
+        if (agentDialog.mode === "edit" && agentDialog.sourceId) {
+          await UpdateAgentSource(agentDialog.sourceId, input);
+          notifySuccess(t("agentSource.updateSuccess"));
+        } else {
+          await CreateAgentSource(input);
+          notifySuccess(t("agentSource.createSuccess"));
+        }
+        void loadAgentSources();
+      } catch (e) {
+        toast.error(String(e));
+      }
+    },
+    [agentDialog.mode, agentDialog.sourceId, loadAgentSources, t]
+  );
+
+  const handleDeleteSourceClick = useCallback(async (source: system.AgentSourceSummary) => {
+    try {
+      const usage = await GetAgentSourceUsage(source.id);
+      setDeleteSourceUsage(usage || 0);
+    } catch {
+      setDeleteSourceUsage(0);
+    }
+    setDeleteSource(source);
+  }, []);
+
+  const handleDeleteSourceConfirm = useCallback(async () => {
+    if (!deleteSource) return;
+    try {
+      await DeleteAgentSource(deleteSource.id);
+      notifySuccess(t("agentSource.deleteSuccess"));
+      setDeleteSource(null);
+      void loadAgentSources();
+    } catch (e) {
+      toast.error(String(e));
+    }
+  }, [deleteSource, loadAgentSources, t]);
 
   const handleDeleteClick = async (cred: credential_entity.Credential) => {
     try {
@@ -171,10 +368,14 @@ export function CredentialManager() {
             <Plus className="h-3.5 w-3.5" />
             {t("credential.createPassword")}
           </Button>
+          <Button size="sm" className="h-8 gap-1.5" onClick={openCreateAgentDialog}>
+            <Cable className="h-3.5 w-3.5" />
+            {t("agentSource.add")}
+          </Button>
         </div>
       </div>
 
-      {credentials.length === 0 && !loading ? (
+      {credentials.length === 0 && agentSources.length === 0 && !loading && !agentLoading ? (
         <div className="text-center py-8 text-sm text-muted-foreground">
           <Key className="h-8 w-8 mx-auto mb-2 opacity-30" />
           {t("sshKey.empty")}
@@ -295,6 +496,23 @@ export function CredentialManager() {
               </div>
             </div>
           ))}
+          {agentSources.map((source) => (
+            <AgentSourceRow
+              key={source.id}
+              source={source}
+              status={agentStatuses[source.id] ?? "loading"}
+              identityCount={agentCounts[source.id]}
+              expanded={expandedSource === source.id}
+              identities={expandedSource === source.id ? (agentIdentities[source.id] ?? null) : null}
+              identitiesLoading={!!agentIdentitiesLoading[source.id]}
+              identitiesError={expandedSource === source.id ? (agentIdentityError[source.id] ?? null) : null}
+              onToggle={() => toggleAgentExpand(source.id)}
+              onRefresh={() => refreshAgentSource(source.id)}
+              onEdit={() => void openEditAgentDialog(source)}
+              onDelete={() => void handleDeleteSourceClick(source)}
+              onCopyPublicKey={(fingerprint) => void handleCopyAgentPublicKey(source.id, fingerprint)}
+            />
+          ))}
         </div>
       )}
 
@@ -323,6 +541,35 @@ export function CredentialManager() {
         onOpenChange={(open) => !open && setChangePassphraseCred(null)}
         credential={changePassphraseCred}
         onSuccess={fetchCredentials}
+      />
+      <AgentSourceDialog
+        open={agentDialog.open}
+        mode={agentDialog.mode}
+        initial={agentDialog.initial}
+        onOpenChange={(open) => {
+          if (!open) setAgentDialog((prev) => ({ ...prev, open: false }));
+        }}
+        onSaved={handleSaveAgentSource}
+      />
+
+      {/* Agent 来源删除确认：被引用时拒绝删除（后端同样强制） */}
+      <ConfirmDialog
+        open={!!deleteSource}
+        onOpenChange={(open) => {
+          if (!open) setDeleteSource(null);
+        }}
+        title={t("agentSource.deleteConfirmTitle")}
+        description={
+          deleteSourceUsage > 0
+            ? t("agentSource.deleteConfirmUsage", {
+                name: deleteSource?.name ?? "",
+                count: deleteSourceUsage,
+              })
+            : t("agentSource.deleteConfirm", { name: deleteSource?.name ?? "" })
+        }
+        cancelText={t("action.cancel")}
+        confirmText={t("action.delete")}
+        onConfirm={() => void handleDeleteSourceConfirm()}
       />
 
       {/* Delete confirmation */}

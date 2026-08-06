@@ -20,6 +20,7 @@ import (
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/internal/service/server_status_svc"
 	"github.com/opskat/opskat/internal/service/ssh_svc"
+	"github.com/opskat/opskat/internal/sshagent"
 	"github.com/opskat/opskat/internal/sshpool"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -88,6 +89,11 @@ func (s *SSH) ConnectSSH(req SSHConnectRequest) (string, error) {
 			wailsRuntime.EventsEmit(s.ctx, "ssh:sync:"+sid, state)
 		},
 	}
+	agentCfg, err := credential_resolver.Default().ResolveAgentAuthConfig(sshCfg)
+	if err != nil {
+		return "", err
+	}
+	connectCfg.Agent = agentCfg
 
 	jumpHostID := asset.SSHTunnelID
 	if jumpHostID == 0 {
@@ -144,6 +150,11 @@ func (s *SSH) OpenSFTPSession(assetID int64) (string, error) {
 			wailsRuntime.EventsEmit(s.ctx, "ssh:closed:"+sid, nil)
 		},
 	}
+	agentCfg, err := credential_resolver.Default().ResolveAgentAuthConfig(sshCfg)
+	if err != nil {
+		return "", err
+	}
+	connectCfg.Agent = agentCfg
 	return s.manager.ConnectClient(connectCfg)
 }
 
@@ -274,6 +285,23 @@ func (s *SSH) ConnectSSHAsync(req SSHConnectRequest) (string, error) {
 				}
 			},
 		}
+
+		agentCfg, err := credential_resolver.Default().ResolveAgentAuthConfig(sshCfg)
+		if err != nil {
+			emitEvent(SSHConnectEvent{Type: "error", Error: fmt.Sprintf("解析 Agent 认证配置失败: %s", err.Error())})
+			return
+		}
+		if agentCfg != nil {
+			// 交互式桌面路径：结构化 MFA 挑战经现有 auth_challenge 事件 / RespondAuthChallenge
+			// 应答机制呈现；答案只存在于当前请求，提交或取消后立即清除。
+			agentCfg.MFA = &sshAgentMFACaller{
+				ssh:  s,
+				ctx:  connCtx,
+				emit: emitEvent,
+			}
+		}
+		connectCfg.Agent = agentCfg
+		connectCfg.Ctx = connCtx
 
 		jumpHostID := asset.SSHTunnelID
 		if jumpHostID == 0 {
@@ -407,6 +435,12 @@ func (s *SSH) testConnection(ctx context.Context, configJSON string, plainPasswo
 		Proxy:             sshCfg.Proxy,
 		HostKeyVerifyFunc: ssh_svc.AutoTrustFirstRejectChangeVerifyFunc(),
 	}
+	agentCfg, err := credential_resolver.Default().ResolveAgentAuthConfig(&sshCfg)
+	if err != nil {
+		return err
+	}
+	connectCfg.Agent = agentCfg
+	connectCfg.Ctx = ctx
 
 	effectiveChain := asset_entity.EffectiveProxyChain(sshCfg.ProxyChain, sshCfg.JumpHostID, sshCfg.Proxy)
 	proxyChain, err := credential_resolver.Default().ResolveProxyChain(ctx, effectiveChain, 5)
@@ -568,4 +602,37 @@ func (s *SSH) GetSSHPoolConnections() []sshpool.PoolEntryInfo {
 		return nil
 	}
 	return s.pool.List()
+}
+
+// sshAgentMFACaller 把结构化 Agent MFA 挑战桥接到现有 auth_challenge 事件 /
+// RespondAuthChallenge 应答机制（交互式桌面路径）。答案只存在于当前请求：提交或
+// 取消后立即清除，绝不落入模块级状态。
+type sshAgentMFACaller struct {
+	ssh  *SSH
+	ctx  context.Context // 连接级取消（connCtx / appCtx）
+	emit func(SSHConnectEvent)
+}
+
+// SubmitChallenge 实现 sshagent.InteractiveCaller：发出结构化挑战并等待前端答案。
+func (c *sshAgentMFACaller) SubmitChallenge(ctx context.Context, ch sshagent.MFAChallenge) ([]string, error) {
+	challengeID := fmt.Sprintf("agent_mfa_%d", time.Now().UnixNano())
+	c.emit(SSHConnectEvent{
+		Type:        "auth_challenge",
+		ChallengeID: challengeID,
+		Name:        ch.Name,
+		Instruction: ch.Instruction,
+		Prompts:     ch.Prompts,
+		Echo:        ch.Echo,
+	})
+	respCh := make(chan []string, 1)
+	c.ssh.pendingAuthResponses.Store(challengeID, respCh)
+	defer c.ssh.pendingAuthResponses.Delete(challengeID)
+	select {
+	case answers := <-respCh:
+		return answers, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-c.ctx.Done():
+		return nil, c.ctx.Err()
+	}
 }

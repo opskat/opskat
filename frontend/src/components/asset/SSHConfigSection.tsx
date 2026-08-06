@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Trash2, FolderOpen, Loader2, Lock } from "lucide-react";
+import { AlertTriangle, FolderOpen, Loader2, Lock, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
@@ -19,9 +19,19 @@ import { Field, Segmented } from "@/components/asset/fields";
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
-import { GetSSHConnectionSettings, ListCredentialsByType } from "../../../wailsjs/go/system/System";
+import {
+  GetSSHConnectionSettings,
+  InspectAgentSource,
+  ListAgentSources,
+  ListCredentialsByType,
+} from "../../../wailsjs/go/system/System";
 import { ListLocalSSHKeys, SelectSSHKeyFile } from "../../../wailsjs/go/ssh/SSH";
-import { credential_entity, ssh as ssh_models } from "../../../wailsjs/go/models";
+import {
+  credential_entity,
+  ssh as ssh_models,
+  ssh_agent_svc,
+  system as system_models,
+} from "../../../wailsjs/go/models";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
 import {
@@ -56,8 +66,19 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
     validate: (s) => {
       const ok = !!s.host.trim();
       const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
-      const canUse = ok && !proxyChainError;
-      return { canTest: canUse, canSave: canUse, saveDisabledReason: ok ? proxyChainError : "asset.formMissingHost" };
+      // agent-auth:未选来源 / 未选指纹 / 已存指纹当前缺失 → 禁止保存;绝不推断替代项。
+      let agentError = "";
+      if (s.authType === "agent") {
+        if (s.agentMissingFingerprint) agentError = "asset.agentKeyUnavailable";
+        else if (s.agentSourceId <= 0) agentError = "asset.agentSourceRequired";
+        else if (!s.agentKeyFingerprint) agentError = "asset.agentKeyRequired";
+      }
+      const canUse = ok && !proxyChainError && !agentError;
+      return {
+        canTest: canUse,
+        canSave: canUse,
+        saveDisabledReason: !ok ? "asset.formMissingHost" : proxyChainError ? proxyChainError : agentError,
+      };
     },
     build: async (s, ctx) => {
       // password-auth 凭据加密;passphrase / proxy 密码:明文优先加密,否则沿用既有密文。
@@ -99,6 +120,18 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
 
   const [managedKeys, setManagedKeys] = useState<credential_entity.Credential[]>([]);
   const [localKeys, setLocalKeys] = useState<ssh_models.LocalSSHKeyInfo[]>([]);
+  // SSH Agent 表单:来源列表 / 选中来源的身份摘要(有界,随来源变更重载并清除)。
+  const [agentSources, setAgentSources] = useState<system_models.AgentSourceSummary[]>([]);
+  const [agentSourceLoading, setAgentSourceLoading] = useState(true);
+  const [agentIdentities, setAgentIdentities] = useState<ssh_agent_svc.IdentitySummary[]>([]);
+  // 当前 agentIdentities 所属来源 id;与选中来源不一致即视为加载中(来源变更时旧身份不展示)。
+  const [agentIdentitySource, setAgentIdentitySource] = useState(0);
+  const [agentInspectError, setAgentInspectError] = useState(false);
+  // state 最新快照:身份加载 effect 读"本次加载开始时的已选指纹",避免把 agentKeyFingerprint 加进 deps。
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
   // 全局保活默认值：新建时写入此值；留空态的 placeholder 也显示它。
   const [globalKeepAlive, setGlobalKeepAlive] = useState(DEFAULT_GLOBAL_KEEPALIVE_SECONDS);
   // 用户是否手动清空过保活输入：清空后回落跟随全局，不再被异步加载的全局值覆盖。
@@ -132,6 +165,48 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
 
   // 排除自身,不能把自己选作跳板机 / SSH 隧道。
   const jumpHostExcludeIds = editAsset?.ID ? [editAsset.ID] : undefined;
+
+  // Agent 来源列表(挂载一次);新建表单绝不自动选择来源。初始 loading=true,仅在回调中解除。
+  useEffect(() => {
+    ListAgentSources()
+      .then((sources) => setAgentSources(sources || []))
+      .catch(() => setAgentSources([]))
+      .finally(() => setAgentSourceLoading(false));
+  }, []);
+
+  // 选择来源后加载其身份;编辑态对已存指纹做可用性核对(缺失 → 单独只读展示 + 禁止保存)。
+  // 加载中 = agentIdentitySource 与选中来源不一致(来源变更即隐藏旧身份),不在 effect 内同步 setState。
+  useEffect(() => {
+    if (state.authType !== "agent" || state.agentSourceId <= 0) return;
+    const sourceId = state.agentSourceId;
+    const fpToVerify = stateRef.current.agentKeyFingerprint;
+    let cancelled = false;
+    InspectAgentSource(sourceId)
+      .then((res) => {
+        if (cancelled) return;
+        const identities = res?.identities || [];
+        setAgentIdentities(identities);
+        setAgentIdentitySource(sourceId);
+        setAgentInspectError(false);
+        if (fpToVerify && !identities.some((i) => i.fingerprint === fpToVerify)) {
+          // 已存指纹当前不存在:单独只读展示、不入可选列表、不推断替代,保持禁止保存。
+          patch({ agentKeyFingerprint: "", agentMissingFingerprint: fpToVerify });
+        } else if (fpToVerify) {
+          patch({ agentMissingFingerprint: "" });
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // 来源不可达:标记已尝试(结束加载态),保持已选值不变(不算"缺失")。
+        setAgentIdentitySource(sourceId);
+        setAgentInspectError(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // 身份加载仅依赖来源选择;已选指纹经 stateRef 读最新态(选择密钥不触发重载)。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.authType, state.agentSourceId]);
 
   const groups: ConfigGroupSchema<SSHFormState>[] = [
     {
@@ -173,6 +248,7 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
               options: [
                 { value: "password", label: "asset.authPassword", testid: "ssh-auth-type-option-password" },
                 { value: "key", label: "asset.authKey", testid: "ssh-auth-type-option-key" },
+                { value: "agent", label: "asset.authAgentOption", testid: "ssh-auth-type-option-agent" },
               ],
             },
           ],
@@ -340,6 +416,97 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
                   )}
                 </Field>
               )}
+            </div>
+          ),
+        },
+        {
+          kind: "custom",
+          visibleWhen: (s) => s.authType === "agent",
+          render: () => (
+            <div className="flex flex-col gap-4">
+              <Field label={t("asset.agentSource")}>
+                {agentSourceLoading ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    {t("asset.agentSourceLoading")}
+                  </div>
+                ) : agentSources.length > 0 ? (
+                  <Select
+                    value={state.agentSourceId > 0 ? String(state.agentSourceId) : ""}
+                    onValueChange={(v) => {
+                      const id = Number(v);
+                      // 修改来源清除尚未保存的密钥选择;身份随新来源重新加载。
+                      patch({ agentSourceId: id || 0, agentKeyFingerprint: "", agentMissingFingerprint: "" });
+                    }}
+                  >
+                    <SelectTrigger className="w-full" data-testid="ssh-agent-source-trigger">
+                      <SelectValue placeholder={t("asset.agentSourcePlaceholder")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {agentSources.map((src) => (
+                        <SelectItem key={src.id} value={String(src.id)}>
+                          {src.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <p className="text-xs text-muted-foreground">{t("asset.agentNoSources")}</p>
+                )}
+              </Field>
+
+              {state.agentMissingFingerprint && (
+                <div
+                  data-testid="ssh-agent-key-unavailable"
+                  className="rounded-md border border-destructive/40 bg-destructive/10 p-3 space-y-1"
+                >
+                  <div className="flex items-center gap-2 text-xs text-destructive">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    <span>{t("asset.agentKeyUnavailable")}</span>
+                  </div>
+                  <div className="font-mono text-xs break-all select-text text-foreground">
+                    {state.agentMissingFingerprint}
+                  </div>
+                  <p className="text-[11px] leading-snug text-muted-foreground">{t("asset.agentKeyUnavailableHint")}</p>
+                </div>
+              )}
+
+              <Field label={t("asset.agentSelectKey")}>
+                {state.agentSourceId <= 0 ? (
+                  <p className="text-xs text-muted-foreground">{t("asset.agentSelectSourceFirst")}</p>
+                ) : state.agentSourceId > 0 && agentIdentitySource !== state.agentSourceId ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    {t("asset.agentIdentityLoading")}
+                  </div>
+                ) : agentInspectError ? (
+                  <p className="text-xs text-muted-foreground">{t("asset.agentIdentityLoadError")}</p>
+                ) : agentIdentities.length > 0 ? (
+                  <Select
+                    value={state.agentKeyFingerprint}
+                    onValueChange={(fp) => patch({ agentKeyFingerprint: fp, agentMissingFingerprint: "" })}
+                  >
+                    <SelectTrigger className="w-full" data-testid="ssh-agent-key-trigger">
+                      <SelectValue placeholder={t("asset.agentSelectKeyPlaceholder")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {agentIdentities.map((idn) => (
+                        <SelectItem key={idn.fingerprint} value={idn.fingerprint}>
+                          <span className="flex w-full items-center gap-1.5 min-w-0">
+                            <span className="font-mono text-xs truncate">{idn.fingerprint}</span>
+                            <span className="text-muted-foreground shrink-0 text-xs">{idn.type}</span>
+                            <span className="text-muted-foreground truncate text-xs">
+                              {idn.comment || t("agentSource.noComment")}
+                            </span>
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <p className="text-xs text-muted-foreground">{t("asset.agentNoIdentity")}</p>
+                )}
+              </Field>
             </div>
           ),
         },

@@ -45,6 +45,9 @@ type Layer struct {
 	URL            string
 	Token          string
 	TimeoutSeconds int
+	// Handshake 覆盖该 SSH 层的握手（SSH Agent 认证需要持有 Agent 传输走完整握手）。
+	// 为 nil 时使用标准 ssh.NewClientConn。调用方负责在握手前关闭 conn 的失败路径。
+	Handshake func(ctx context.Context, conn net.Conn, addr string) (*ssh.Client, error)
 }
 
 func (c Chain) Dial(ctx context.Context, targetAddr string) (net.Conn, error) {
@@ -119,7 +122,7 @@ func normalizeLayers(layers []Layer) []Layer {
 }
 
 func dialSSHLayer(ctx context.Context, dial DialFunc, layer Layer) (*ssh.Client, error) {
-	if layer.SSHConfig == nil {
+	if layer.SSHConfig == nil && layer.Handshake == nil {
 		return nil, fmt.Errorf("SSH 代理层缺少认证配置")
 	}
 	addr := net.JoinHostPort(layer.Host, strconv.Itoa(layer.Port))
@@ -128,13 +131,20 @@ func dialSSHLayer(ctx context.Context, dial DialFunc, layer Layer) (*ssh.Client,
 		return nil, fmt.Errorf("连接 SSH 代理层失败: %w", err)
 	}
 	done := make(chan struct{})
-	var c ssh.Conn
-	var chans <-chan ssh.NewChannel
-	var reqs <-chan *ssh.Request
+	var client *ssh.Client
 	var hsErr error
 	go func() {
-		c, chans, reqs, hsErr = ssh.NewClientConn(conn, addr, layer.SSHConfig)
-		close(done)
+		defer close(done)
+		if layer.Handshake != nil {
+			client, hsErr = layer.Handshake(ctx, conn, addr)
+			return
+		}
+		c, chans, reqs, err := ssh.NewClientConn(conn, addr, layer.SSHConfig)
+		if err != nil {
+			hsErr = err
+			return
+		}
+		client = ssh.NewClient(c, chans, reqs)
 	}()
 	select {
 	case <-ctx.Done():
@@ -146,7 +156,7 @@ func dialSSHLayer(ctx context.Context, dial DialFunc, layer Layer) (*ssh.Client,
 		_ = conn.Close()
 		return nil, fmt.Errorf("SSH 代理层握手失败: %w", hsErr)
 	}
-	return ssh.NewClient(c, chans, reqs), nil
+	return client, nil
 }
 
 type connWithClosers struct {

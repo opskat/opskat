@@ -33,6 +33,8 @@ type SSHConnectEvent struct {
 	Error       string   `json:"error,omitempty"`
 	AuthFailed  bool     `json:"authFailed,omitempty"`
 	ChallengeID string   `json:"challengeId,omitempty"`
+	Name        string   `json:"name,omitempty"`
+	Instruction string   `json:"instruction,omitempty"`
 	Prompts     []string `json:"prompts,omitempty"`
 	Echo        []bool   `json:"echo,omitempty"`
 

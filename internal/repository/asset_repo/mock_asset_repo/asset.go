@@ -42,6 +42,21 @@ func (m *MockAssetRepo) EXPECT() *MockAssetRepoMockRecorder {
 	return m.recorder
 }
 
+// CountAgentAuthBySourceID mocks base method.
+func (m *MockAssetRepo) CountAgentAuthBySourceID(ctx context.Context, sourceID int64) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CountAgentAuthBySourceID", ctx, sourceID)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CountAgentAuthBySourceID indicates an expected call of CountAgentAuthBySourceID.
+func (mr *MockAssetRepoMockRecorder) CountAgentAuthBySourceID(ctx, sourceID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountAgentAuthBySourceID", reflect.TypeOf((*MockAssetRepo)(nil).CountAgentAuthBySourceID), ctx, sourceID)
+}
+
 // CountByTypes mocks base method.
 func (m *MockAssetRepo) CountByTypes(ctx context.Context, types []string) (int64, error) {
 	m.ctrl.T.Helper()
@@ -157,6 +172,21 @@ func (m *MockAssetRepo) List(ctx context.Context, opts asset_repo.ListOptions) (
 func (mr *MockAssetRepoMockRecorder) List(ctx, opts any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "List", reflect.TypeOf((*MockAssetRepo)(nil).List), ctx, opts)
+}
+
+// ListAgentAuthBySourceID mocks base method.
+func (m *MockAssetRepo) ListAgentAuthBySourceID(ctx context.Context, sourceID int64) ([]*asset_entity.Asset, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListAgentAuthBySourceID", ctx, sourceID)
+	ret0, _ := ret[0].([]*asset_entity.Asset)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListAgentAuthBySourceID indicates an expected call of ListAgentAuthBySourceID.
+func (mr *MockAssetRepoMockRecorder) ListAgentAuthBySourceID(ctx, sourceID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAgentAuthBySourceID", reflect.TypeOf((*MockAssetRepo)(nil).ListAgentAuthBySourceID), ctx, sourceID)
 }
 
 // MoveToGroup mocks base method.

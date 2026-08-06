@@ -22,6 +22,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/host_key_repo"
 	"github.com/opskat/opskat/internal/repository/policy_group_repo"
 	"github.com/opskat/opskat/internal/repository/snippet_repo"
+	"github.com/opskat/opskat/internal/repository/ssh_agent_source_repo"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/internal/service/snippet_svc"
 	"github.com/opskat/opskat/migrations"
@@ -155,6 +156,7 @@ func registerRepositories() {
 	credential_repo.RegisterCredential(credential_repo.NewCredential())
 	host_key_repo.RegisterHostKey(host_key_repo.NewHostKey())
 	forward_repo.RegisterForward(forward_repo.NewForward())
+	ssh_agent_source_repo.RegisterSSHAgentSource(ssh_agent_source_repo.New())
 	policy_group_repo.RegisterPolicyGroup(policy_group_repo.NewPolicyGroup())
 	ai_provider_repo.RegisterAIProvider(ai_provider_repo.NewAIProvider())
 	extension_data_repo.RegisterExtensionData(extension_data_repo.NewExtensionData())

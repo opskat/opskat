@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, cleanup, within } from "@testing-library/react";
-import { asset_entity } from "../../../../../wailsjs/go/models";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { render, cleanup, within, screen } from "@testing-library/react";
+import { asset_entity, system } from "../../../../../wailsjs/go/models";
 import { SSHDetailInfoCard } from "../SSHDetailInfoCard";
 import { DatabaseDetailInfoCard } from "../DatabaseDetailInfoCard";
 import { RedisDetailInfoCard } from "../RedisDetailInfoCard";
@@ -13,6 +13,33 @@ import { OSSDetailInfoCard } from "../OSSDetailInfoCard";
 
 afterEach(() => {
   cleanup();
+});
+
+// SSHDetailInfoCard 的 Agent 详情读取绑定;仅 agent 认证调用。
+let agentDetail: Partial<system.AgentAssetDetail> | null = null;
+let agentDetailError: string | null = null;
+
+vi.mock("../../../../../wailsjs/go/system/System", () => ({
+  GetAgentAssetDetail: (id: number, fp: string) =>
+    agentDetailError
+      ? Promise.reject(new Error(agentDetailError))
+      : Promise.resolve({
+          source_id: id,
+          source_name: "System Agent",
+          fingerprint: fp,
+          availability: "ok",
+          type: "ssh-ed25519",
+          comment: "work key",
+          ...agentDetail,
+        }),
+  GetAgentSource: vi.fn(() => {
+    throw new Error("GetAgentSource 不应被资产详情调用(会暴露端点)");
+  }),
+}));
+
+beforeEach(() => {
+  agentDetail = null;
+  agentDetailError = null;
 });
 
 function makeAsset(type: string, config: Record<string, unknown>): asset_entity.Asset {
@@ -104,6 +131,58 @@ describe("SSHDetailInfoCard", () => {
     const asset = makeAsset("ssh", {});
     const { container } = render(<SSHDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
     expect(container).toBeDefined();
+  });
+});
+
+describe("SSHDetailInfoCard Agent 认证", () => {
+  const AGENT_FP = "SHA256:AGENTDETAILFINGERPRINTAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  const agentAsset = () =>
+    makeAsset("ssh", {
+      host: "10.0.0.1",
+      port: 22,
+      username: "root",
+      auth_type: "agent",
+      agent_source_id: 3,
+      agent_key_fingerprint: AGENT_FP,
+    });
+
+  it("可用:显示 认证类型/来源名/已存指纹/当前可用性/密钥类型/备注;不调用 GetAgentSource(不暴露端点)", async () => {
+    agentDetail = { availability: "ok", type: "ssh-ed25519", comment: "dev key" };
+    render(<SSHDetailInfoCard asset={agentAsset()} sshTunnelName={noopTunnel} />);
+
+    expect(await screen.findByText("System Agent")).toBeInTheDocument();
+    expect(screen.getByText(AGENT_FP)).toBeInTheDocument();
+    // 认证类型在连接段与 Agent 段各出现一次。
+    expect(screen.getAllByText("asset.authAgent").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("agentSource.statusOk")).toBeInTheDocument(); // 可用
+    expect(screen.getByText("ssh-ed25519")).toBeInTheDocument();
+    expect(screen.getByText("dev key")).toBeInTheDocument();
+  });
+
+  it("身份缺失:显示指纹与'身份缺失',不显示过期的密钥类型/备注元数据", async () => {
+    agentDetail = { availability: "missing", type: undefined, comment: undefined };
+    render(<SSHDetailInfoCard asset={agentAsset()} sshTunnelName={noopTunnel} />);
+
+    expect(await screen.findByText("System Agent")).toBeInTheDocument();
+    expect(screen.getByText(AGENT_FP)).toBeInTheDocument();
+    expect(screen.getByText("asset.agentIdentityMissing")).toBeInTheDocument();
+    expect(screen.queryByText("ssh-ed25519")).not.toBeInTheDocument();
+    expect(screen.queryByText("dev key")).not.toBeInTheDocument();
+  });
+
+  it("来源不可用:显示'不可用',不显示密钥类型/备注", async () => {
+    agentDetail = { availability: "unavailable", type: undefined, comment: undefined };
+    render(<SSHDetailInfoCard asset={agentAsset()} sshTunnelName={noopTunnel} />);
+
+    expect(await screen.findByText("System Agent")).toBeInTheDocument();
+    expect(screen.getByText("agentSource.statusUnavailable")).toBeInTheDocument();
+    expect(screen.queryByText("ssh-ed25519")).not.toBeInTheDocument();
+  });
+
+  it("详情读取失败时仍显示已存指纹,不崩溃", async () => {
+    agentDetailError = "source not found";
+    render(<SSHDetailInfoCard asset={agentAsset()} sshTunnelName={noopTunnel} />);
+    expect(await screen.findByText(AGENT_FP)).toBeInTheDocument();
   });
 });
 

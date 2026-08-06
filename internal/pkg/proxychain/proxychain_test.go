@@ -11,6 +11,7 @@ import (
 
 	"github.com/opskat/opskat/internal/pkg/socksdial/socksdialtest"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 )
 
 type deadlineErrorConn struct {
@@ -74,4 +75,32 @@ func TestDeadlineIgnoredConn(t *testing.T) {
 	if err := conn.SetWriteDeadline(time.Now()); err != nil {
 		t.Fatalf("SetWriteDeadline() error = %v", err)
 	}
+}
+
+// TestSSHLayerHandshakeOverride: SSH 层的 Handshake 覆盖标准 ssh.NewClientConn，
+// 供 Agent 认证等需要持有传输走完整握手的场景复用同一拨号管线。
+func TestSSHLayerHandshakeOverride(t *testing.T) {
+	// 真实的 TCP 端点：dialSSHLayer 先连到该层，再调用 Handshake 接管握手。
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	host, portText, err := net.SplitHostPort(ln.Addr().String())
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portText)
+	require.NoError(t, err)
+
+	var called bool
+	layer := Layer{
+		Type: LayerSSH, Host: host, Port: port,
+		Handshake: func(_ context.Context, conn net.Conn, addr string) (*ssh.Client, error) {
+			called = true
+			_ = conn
+			_ = addr
+			return nil, errors.New("handshake-invoked")
+		},
+	}
+	_, err = (Chain{Layers: []Layer{layer}}).Dial(context.Background(), "target:1")
+	require.True(t, called, "Handshake 应被调用而非走标准 NewClientConn")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "handshake-invoked")
 }

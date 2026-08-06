@@ -1,21 +1,30 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { createRef } from "react";
 import { SSHConfigSection } from "@/components/asset/SSHConfigSection";
 import type { AssetFormHandle, AssetFormContext } from "@/lib/assetTypes/formContract";
-import { asset_entity, credential_entity } from "../../../../wailsjs/go/models";
+import { asset_entity, credential_entity, system, ssh_agent_svc } from "../../../../wailsjs/go/models";
 
 // 托管凭据按类型注入:autofill 用例往这里塞 password / ssh_key 凭据,
 // ref-契约用例保持默认空数组(与原 mock 行为一致)。
 let pwCreds: credential_entity.Credential[] = [];
 let keyCreds: credential_entity.Credential[] = [];
+// SSH Agent 表单:可注入来源列表 / 检查结果 / 检查失败。
+let agentSources: system.AgentSourceSummary[] = [];
+let agentIdentities: ssh_agent_svc.IdentitySummary[] = [];
+let agentInspectError: string | null = null;
 
 vi.mock("../../../../wailsjs/go/system/System", () => ({
   ListCredentialsByType: (type: string) =>
     Promise.resolve(type === "ssh_key" ? keyCreds : type === "password" ? pwCreds : []),
   GetAssetPassword: () => Promise.resolve(""),
   GetSSHConnectionSettings: () => Promise.resolve({ keepAliveIntervalSeconds: 30 }),
+  ListAgentSources: () => Promise.resolve(agentSources),
+  InspectAgentSource: (id: number) =>
+    agentInspectError
+      ? Promise.reject(new Error(agentInspectError))
+      : Promise.resolve({ source_id: id, usages: 0, identities: agentIdentities }),
 }));
 
 vi.mock("../../../../wailsjs/go/ssh/SSH", () => ({
@@ -26,6 +35,9 @@ vi.mock("../../../../wailsjs/go/ssh/SSH", () => ({
 beforeEach(() => {
   pwCreds = [];
   keyCreds = [];
+  agentSources = [];
+  agentIdentities = [];
+  agentInspectError = null;
 });
 
 function makeCred(id: number, username: string, type = "password"): credential_entity.Credential {
@@ -317,5 +329,175 @@ describe("SSHConfigSection 保活预填(新建跟随全局)", () => {
     await openAdvanced(u);
     const input = await screen.findByTestId("ssh-keepalive-input");
     expect(input).toHaveValue(null);
+  });
+});
+
+describe("SSHConfigSection Agent 认证", () => {
+  const user = () => userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+  const FP_SAVED = "SHA256:SAVEDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  const FP_AVAIL = "SHA256:AVAILABLEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  const FP_OTHER = "SHA256:OTHERBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+
+  function source(id: number, name: string): system.AgentSourceSummary {
+    return { id, name, endpoint_type: "unix_socket" } as system.AgentSourceSummary;
+  }
+  function identity(fp: string, comment = "work key", type = "ssh-ed25519"): ssh_agent_svc.IdentitySummary {
+    return { fingerprint: fp, type, comment, usages: 0 } as ssh_agent_svc.IdentitySummary;
+  }
+  const agentAsset = (fp: string) =>
+    new asset_entity.Asset({
+      Type: "ssh",
+      Config: `{"host":"h","port":22,"username":"u","auth_type":"agent","agent_source_id":1,"agent_key_fingerprint":"${fp}"}`,
+    });
+
+  it("认证选择器包含 Agent 选项", async () => {
+    render(<SSHConfigSection ref={createRef()} ctx={ctx} onValidityChange={() => {}} />);
+    expect(screen.getByTestId("ssh-auth-type-option-agent")).toBeInTheDocument();
+  });
+
+  it("新建:即使只有一个来源也不自动选择来源/密钥,保存被禁(先选来源)", async () => {
+    agentSources = [source(1, "System Agent")];
+    agentIdentities = [identity(FP_AVAIL)];
+    const u = user();
+    const ref = createRef<AssetFormHandle>();
+    const onValidity = vi.fn();
+    render(<SSHConfigSection ref={ref} ctx={ctx} onValidityChange={onValidity} />);
+
+    await u.click(screen.getByTestId("ssh-auth-type-option-agent"));
+    await u.type(screen.getByTestId("ssh-host-input"), "1.2.3.4");
+    // 来源列表加载后仍显示占位符(不自动选唯一的来源)。
+    const trigger = await screen.findByTestId("ssh-agent-source-trigger");
+    expect(within(trigger).queryByText("System Agent")).not.toBeInTheDocument();
+    expect(onValidity).toHaveBeenLastCalledWith({
+      canTest: false,
+      canSave: false,
+      saveDisabledReason: "asset.agentSourceRequired",
+    });
+  });
+
+  it("选择来源后加载身份;密钥显示指纹/类型/清理备注;不自动选唯一的身份;显式选择后可保存", async () => {
+    agentSources = [source(1, "System Agent")];
+    agentIdentities = [identity(FP_AVAIL, "dev laptop key", "ssh-rsa")];
+    const u = user();
+    const ref = createRef<AssetFormHandle>();
+    const onValidity = vi.fn();
+    render(<SSHConfigSection ref={ref} ctx={ctx} onValidityChange={onValidity} />);
+
+    await u.click(screen.getByTestId("ssh-auth-type-option-agent"));
+    await u.type(screen.getByTestId("ssh-host-input"), "1.2.3.4");
+    await u.click(await screen.findByTestId("ssh-agent-source-trigger"));
+    await u.click(await screen.findByRole("option", { name: "System Agent" }));
+
+    // 身份加载完成后,触发仍显示占位符 —— 不自动选择唯一身份。
+    const keyTrigger = await screen.findByTestId("ssh-agent-key-trigger");
+    expect(within(keyTrigger).queryByText(FP_AVAIL)).not.toBeInTheDocument();
+    expect(onValidity).toHaveBeenLastCalledWith({
+      canTest: false,
+      canSave: false,
+      saveDisabledReason: "asset.agentKeyRequired",
+    });
+
+    // 展开身份列表:选项展示 指纹/类型/清理备注。
+    await u.click(keyTrigger);
+    const keyOption = await screen.findByRole("option", { name: new RegExp(FP_AVAIL) });
+    expect(keyOption.textContent).toContain("ssh-rsa");
+    expect(keyOption.textContent).toContain("dev laptop key");
+
+    // 显式选择身份 → 可保存,config 写入来源+指纹。
+    await u.click(keyOption);
+    expect(onValidity).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "" });
+    const built = await ref.current!.buildConfig(ctx);
+    expect(JSON.parse(built.configJSON)).toMatchObject({
+      auth_type: "agent",
+      agent_source_id: 1,
+      agent_key_fingerprint: FP_AVAIL,
+    });
+  });
+
+  it("修改来源清除尚未保存的密钥选择", async () => {
+    agentSources = [source(1, "Agent A"), source(2, "Agent B")];
+    agentIdentities = [identity(FP_AVAIL)];
+    const u = user();
+    const ref = createRef<AssetFormHandle>();
+    render(<SSHConfigSection ref={ref} ctx={ctx} onValidityChange={() => {}} />);
+
+    await u.click(screen.getByTestId("ssh-auth-type-option-agent"));
+    await u.click(await screen.findByTestId("ssh-agent-source-trigger"));
+    await u.click(await screen.findByRole("option", { name: "Agent A" }));
+    // 选一把身份。
+    await u.click(await screen.findByTestId("ssh-agent-key-trigger"));
+    await u.click(await screen.findByRole("option", { name: new RegExp(FP_AVAIL) }));
+    let built = await ref.current!.buildConfig(ctx);
+    expect(JSON.parse(built.configJSON).agent_key_fingerprint).toBe(FP_AVAIL);
+
+    // 切到 Agent B → 身份选择被清空。
+    await u.click(await screen.findByTestId("ssh-agent-source-trigger"));
+    await u.click(await screen.findByRole("option", { name: "Agent B" }));
+    await waitFor(async () => {
+      built = await ref.current!.buildConfig(ctx);
+      expect(JSON.parse(built.configJSON).agent_key_fingerprint).toBeUndefined();
+    });
+  });
+
+  it("编辑:已存指纹当前缺失 → 单独只读'当前不可用'展示 + 禁止保存;显式选可用身份后恢复可保存", async () => {
+    agentSources = [source(1, "System Agent")];
+    agentIdentities = [identity(FP_OTHER, "other key")];
+    const u = user();
+    const ref = createRef<AssetFormHandle>();
+    const onValidity = vi.fn();
+    render(<SSHConfigSection ref={ref} editAsset={agentAsset(FP_SAVED)} ctx={ctx} onValidityChange={onValidity} />);
+
+    // 只读"当前不可用"行展示已存指纹,且不进入可选身份列表。
+    const missingRow = await screen.findByTestId("ssh-agent-key-unavailable");
+    expect(within(missingRow).getByText(FP_SAVED)).toBeInTheDocument();
+    expect(onValidity).toHaveBeenLastCalledWith({
+      canTest: false,
+      canSave: false,
+      saveDisabledReason: "asset.agentKeyUnavailable",
+    });
+
+    // 显式选择当前可用身份 → 缺失态解除,保存恢复。
+    await u.click(await screen.findByTestId("ssh-agent-key-trigger"));
+    await u.click(await screen.findByRole("option", { name: new RegExp(FP_OTHER) }));
+    await waitFor(() =>
+      expect(onValidity).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "" })
+    );
+    const built = await ref.current!.buildConfig(ctx);
+    expect(JSON.parse(built.configJSON).agent_key_fingerprint).toBe(FP_OTHER);
+  });
+
+  it("编辑:已存指纹当前可用 → 无缺失行,保存可用,config 保持已存指纹", async () => {
+    agentSources = [source(1, "System Agent")];
+    agentIdentities = [identity(FP_SAVED, "saved key")];
+    const onValidity = vi.fn();
+    render(
+      <SSHConfigSection ref={createRef()} editAsset={agentAsset(FP_SAVED)} ctx={ctx} onValidityChange={onValidity} />
+    );
+
+    await waitFor(() => expect(screen.queryByTestId("ssh-agent-key-unavailable")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(onValidity).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "" })
+    );
+  });
+
+  it("切换认证类型清除互斥字段:agent→password 不写 agent 字段", async () => {
+    agentSources = [source(1, "System Agent")];
+    agentIdentities = [identity(FP_AVAIL)];
+    const u = user();
+    const ref = createRef<AssetFormHandle>();
+    render(<SSHConfigSection ref={ref} ctx={ctx} onValidityChange={() => {}} />);
+
+    await u.click(screen.getByTestId("ssh-auth-type-option-agent"));
+    await u.click(await screen.findByTestId("ssh-agent-source-trigger"));
+    await u.click(await screen.findByRole("option", { name: "System Agent" }));
+    await u.click(await screen.findByTestId("ssh-agent-key-trigger"));
+    await u.click(await screen.findByRole("option", { name: new RegExp(FP_AVAIL) }));
+
+    await u.click(screen.getByTestId("ssh-auth-type-option-password"));
+    const built = await ref.current!.buildConfig(ctx);
+    const parsed = JSON.parse(built.configJSON);
+    expect(parsed.auth_type).toBe("password");
+    expect(parsed.agent_source_id).toBeUndefined();
+    expect(parsed.agent_key_fingerprint).toBeUndefined();
   });
 });

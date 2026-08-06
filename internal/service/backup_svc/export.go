@@ -13,11 +13,13 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
+	"github.com/opskat/opskat/internal/model/entity/ssh_agent_source_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/credential_repo"
 	"github.com/opskat/opskat/internal/repository/forward_repo"
 	"github.com/opskat/opskat/internal/repository/group_repo"
 	"github.com/opskat/opskat/internal/repository/policy_group_repo"
+	"github.com/opskat/opskat/internal/repository/ssh_agent_source_repo"
 )
 
 // Export 导出数据
@@ -137,6 +139,15 @@ func Export(ctx context.Context, opts *ExportOptions, crypto CredentialCrypto) (
 		}
 		data.Forwards = forwards
 	}
+
+	// SSH Agent 来源定义：只含端点定义，不受凭据秘密包含选项控制。
+	// 部分导出（AssetIDs 非空）只含被导出 Agent 认证资产引用的来源，
+	// 全量导出包含全部来源（含未使用）。
+	agentSources, err := exportAgentSources(ctx, selectedAssets, len(opts.AssetIDs) > 0)
+	if err != nil {
+		return nil, fmt.Errorf("导出 SSH Agent 来源失败: %w", err)
+	}
+	data.AgentSources = agentSources
 
 	return data, nil
 }
@@ -371,6 +382,44 @@ func stripAssetSecrets(assets []*asset_entity.Asset) {
 			}
 		}
 	}
+}
+
+// exportAgentSources 导出 SSH Agent 来源定义。
+//
+// partial=true 时只导出被选中 Agent 认证 SSH 资产引用的来源；
+// partial=false（全量）时导出全部来源，包括当前未使用的。
+// 来源实体只含端点定义，任何情况下都不会导出身份、公钥、签名或运行时 payload。
+func exportAgentSources(ctx context.Context, assets []*asset_entity.Asset, partial bool) ([]*ssh_agent_source_entity.SSHAgentSource, error) {
+	if !partial {
+		return ssh_agent_source_repo.SSHAgentSource().List(ctx)
+	}
+
+	// 收集被导出 Agent 认证 SSH 资产引用的来源 ID
+	sourceIDs := make(map[int64]bool)
+	for _, a := range assets {
+		if !a.IsSSH() || a.Config == "" {
+			continue
+		}
+		cfg, err := a.GetSSHConfig()
+		if err != nil || cfg.AuthType != asset_entity.AuthTypeAgent || cfg.AgentSourceID <= 0 {
+			continue
+		}
+		sourceIDs[cfg.AgentSourceID] = true
+	}
+	if len(sourceIDs) == 0 {
+		return nil, nil
+	}
+
+	var result []*ssh_agent_source_entity.SSHAgentSource
+	for id := range sourceIDs {
+		src, err := ssh_agent_source_repo.SSHAgentSource().Find(ctx, id)
+		if err != nil {
+			logger.Default().Warn("ssh agent source not found during export", zap.Int64("id", id), zap.Error(err))
+			continue
+		}
+		result = append(result, src)
+	}
+	return result, nil
 }
 
 // exportForwards 导出关联的端口转发配置

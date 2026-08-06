@@ -37,7 +37,13 @@ export function SplitPane({ node, tabId, isTabActive, activePaneId, showFocusRin
   }
 
   if (node.type === "connecting") {
-    return <ConnectionProgress connectionId={node.connectionId} />;
+    return (
+      <ConnectionProgress
+        connectionId={node.connectionId}
+        isTabActive={isTabActive}
+        isPaneActive={activePaneId === node.connectionId}
+      />
+    );
   }
 
   return (
