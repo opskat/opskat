@@ -3,8 +3,6 @@ package ssh_agent_svc
 import (
 	"context"
 	"errors"
-	"os"
-	"runtime"
 	"strings"
 	"time"
 
@@ -141,54 +139,4 @@ func RequireSourceExists(ctx context.Context, id int64) error {
 // List 列出全部来源。
 func List(ctx context.Context) ([]*ssh_agent_source_entity.SSHAgentSource, error) {
 	return ssh_agent_source_repo.SSHAgentSource().List(ctx)
-}
-
-// Candidate 是发现流程产出的、尚未持久化的端点候选项。
-type Candidate struct {
-	EndpointType string `json:"endpoint_type"`
-	Endpoint     string `json:"endpoint"`
-}
-
-// Discover 返回已知且数量有限的候选项：
-//   - 当前进程环境中非空的 SSH_AUTH_SOCK；
-//   - Windows 默认 OpenSSH pipe \\.\pipe\openssh-ssh-agent。
-//
-// 发现流程不扫描文件系统。候选项按规范端点身份去重，并排除已保存来源。
-func Discover(ctx context.Context) ([]Candidate, error) {
-	var out []Candidate
-	seen := map[string]bool{}
-	add := func(endpointType, endpoint string) {
-		key := endpointType + "\x00" + endpoint
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		out = append(out, Candidate{EndpointType: endpointType, Endpoint: endpoint})
-	}
-
-	if v := os.Getenv("SSH_AUTH_SOCK"); v != "" {
-		add(string(sshagent.EndpointTypeEnvironment), "SSH_AUTH_SOCK")
-	}
-	if runtime.GOOS == "windows" {
-		add(string(sshagent.EndpointTypeWindowsNamedPipe), `\\.\pipe\openssh-ssh-agent`)
-	}
-	if len(out) == 0 {
-		return out, nil
-	}
-
-	saved, err := ssh_agent_source_repo.SSHAgentSource().List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	savedKeys := make(map[string]bool, len(saved))
-	for _, s := range saved {
-		savedKeys[s.EndpointType+"\x00"+s.Endpoint] = true
-	}
-	filtered := out[:0]
-	for _, c := range out {
-		if !savedKeys[c.EndpointType+"\x00"+c.Endpoint] {
-			filtered = append(filtered, c)
-		}
-	}
-	return filtered, nil
 }

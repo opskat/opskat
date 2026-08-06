@@ -82,11 +82,6 @@ func (s *System) DeleteAgentSource(id int64) error {
 	return ssh_agent_svc.Delete(i18n.Ctx(s.ctx, s.Lang()), id)
 }
 
-// DiscoverAgentSourceCandidates 发现候选项（env + 默认 pipe，排除已保存来源）。
-func (s *System) DiscoverAgentSourceCandidates() ([]ssh_agent_svc.Candidate, error) {
-	return ssh_agent_svc.Discover(i18n.Ctx(s.ctx, s.Lang()))
-}
-
 // ProbeAgentSource 探测候选或显式端点，返回运行状态与身份数，不持久化。
 func (s *System) ProbeAgentSource(endpointType, endpoint string) (ssh_agent_svc.ProbeResult, error) {
 	return ssh_agent_svc.Probe(i18n.Ctx(s.ctx, s.Lang()), endpointType, endpoint)

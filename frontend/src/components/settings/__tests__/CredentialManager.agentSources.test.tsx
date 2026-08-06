@@ -12,7 +12,6 @@ import {
   CopyAgentSourcePublicKey,
   GetAgentSourceUsage,
   DeleteAgentSource,
-  DiscoverAgentSourceCandidates,
   ProbeAgentSource,
   CreateAgentSource,
 } from "../../../../wailsjs/go/system/System";
@@ -65,9 +64,6 @@ beforeEach(() => {
       ],
     })
   );
-  vi.mocked(DiscoverAgentSourceCandidates).mockResolvedValue([
-    { endpoint_type: "environment", endpoint: "SSH_AUTH_SOCK" } as ssh_agent_svc.Candidate,
-  ]);
   vi.mocked(ProbeAgentSource).mockResolvedValue({ status: "ok", identity_count: 2 });
   vi.mocked(CopyAgentSourcePublicKey).mockResolvedValue("ssh-ed25519 AAAA work");
   vi.mocked(GetAgentSourceUsage).mockResolvedValue(0);
@@ -147,14 +143,6 @@ describe("CredentialManager agent sources", () => {
     expect(await screen.findByLabelText("agentSource.name")).toHaveValue("");
     expect(screen.getByLabelText("agentSource.endpointEnv")).toHaveValue("");
     expect(screen.getByRole("button", { name: "action.save" })).toBeDisabled();
-  });
-
-  it("prefills the dialog from a detected candidate", async () => {
-    renderManager();
-    await screen.findByText("agentSource.detected");
-    await userEvent.click(screen.getByRole("button", { name: "agentSource.addCandidate" }));
-    expect(await screen.findByLabelText("agentSource.name")).toHaveValue("SSH_AUTH_SOCK");
-    expect(screen.getByLabelText("agentSource.endpointEnv")).toHaveValue("SSH_AUTH_SOCK");
   });
 
   it("saves a new source through CreateAgentSource without requiring a probe", async () => {

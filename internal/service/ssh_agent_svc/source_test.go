@@ -166,38 +166,6 @@ func TestSource_Delete_RejectsInUse(t *testing.T) {
 	})
 }
 
-func TestSource_Discover(t *testing.T) {
-	ctx := setupServiceTest(t)
-
-	Convey("发现候选项", t, func() {
-		Convey("SSH_AUTH_SOCK 非空时给出 environment 候选项", func() {
-			t.Setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
-			cands, err := Discover(ctx)
-			assert.NoError(t, err)
-			require.Len(t, cands, 1)
-			assert.Equal(t, "environment", cands[0].EndpointType)
-			assert.Equal(t, "SSH_AUTH_SOCK", cands[0].Endpoint)
-		})
-
-		Convey("SSH_AUTH_SOCK 为空时没有候选项", func() {
-			t.Setenv("SSH_AUTH_SOCK", "")
-			cands, err := Discover(ctx)
-			assert.NoError(t, err)
-			assert.Empty(t, cands)
-		})
-
-		Convey("已保存来源被排除", func() {
-			t.Setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
-			_, err := Create(ctx, SourceInput{Name: "work", EndpointType: "environment", Endpoint: "SSH_AUTH_SOCK"})
-			require.NoError(t, err)
-
-			cands, err := Discover(ctx)
-			assert.NoError(t, err)
-			assert.Empty(t, cands)
-		})
-	})
-}
-
 func TestSource_GetAndList(t *testing.T) {
 	ctx := setupServiceTest(t)
 

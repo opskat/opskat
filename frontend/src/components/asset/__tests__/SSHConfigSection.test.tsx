@@ -332,7 +332,7 @@ describe("SSHConfigSection 保活预填(新建跟随全局)", () => {
   });
 });
 
-describe("SSHConfigSection SSH Agent 认证", () => {
+describe("SSHConfigSection Agent 认证", () => {
   const user = () => userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
   const FP_SAVED = "SHA256:SAVEDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
   const FP_AVAIL = "SHA256:AVAILABLEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -350,7 +350,7 @@ describe("SSHConfigSection SSH Agent 认证", () => {
       Config: `{"host":"h","port":22,"username":"u","auth_type":"agent","agent_source_id":1,"agent_key_fingerprint":"${fp}"}`,
     });
 
-  it("认证选择器包含 SSH Agent 选项", async () => {
+  it("认证选择器包含 Agent 选项", async () => {
     render(<SSHConfigSection ref={createRef()} ctx={ctx} onValidityChange={() => {}} />);
     expect(screen.getByTestId("ssh-auth-type-option-agent")).toBeInTheDocument();
   });

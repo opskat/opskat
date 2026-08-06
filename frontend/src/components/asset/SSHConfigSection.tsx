@@ -248,7 +248,7 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
               options: [
                 { value: "password", label: "asset.authPassword", testid: "ssh-auth-type-option-password" },
                 { value: "key", label: "asset.authKey", testid: "ssh-auth-type-option-key" },
-                { value: "agent", label: "asset.authAgent", testid: "ssh-auth-type-option-agent" },
+                { value: "agent", label: "asset.authAgentOption", testid: "ssh-auth-type-option-agent" },
               ],
             },
           ],

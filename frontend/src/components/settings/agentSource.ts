@@ -83,19 +83,3 @@ export function agentStatusInfo(status: AgentSourceRuntimeStatus, t: Translate) 
 }
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
-
-/** 从检测候选派生一个可编辑的默认名称（后端候选只含类型与端点）。 */
-export function candidateDefaultName(type: AgentEndpointType, endpoint: string): string {
-  switch (type) {
-    case "environment":
-      return endpoint || "SSH Agent";
-    case "unix_socket": {
-      const seg = endpoint.split("/").filter(Boolean).at(-1);
-      return seg || endpoint || "SSH Agent";
-    }
-    case "windows_named_pipe":
-      return "OpenSSH Agent";
-    default:
-      return "SSH Agent";
-  }
-}

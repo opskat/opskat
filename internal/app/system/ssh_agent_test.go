@@ -208,20 +208,6 @@ func TestDeleteAgentSource_RejectsInUse(t *testing.T) {
 	})
 }
 
-func TestDiscoverAgentSourceCandidates(t *testing.T) {
-	s := setupAgentBinderTest(t)
-
-	Convey("发现候选项返回环境变量端点且排除已保存来源", t, func() {
-		t.Setenv("SSH_AUTH_SOCK", "/tmp/real-agent")
-		_, err := s.CreateAgentSource(ssh_agent_svc.SourceInput{Name: "saved", EndpointType: "environment", Endpoint: "SSH_AUTH_SOCK"})
-		require.NoError(t, err)
-
-		cands, err := s.DiscoverAgentSourceCandidates()
-		assert.NoError(t, err)
-		assert.Empty(t, cands, "唯一候选项已被保存，排除后为空")
-	})
-}
-
 func TestProbeAgentSource(t *testing.T) {
 	s := setupAgentBinderTest(t)
 	priv, fp := agentTestKey(t)

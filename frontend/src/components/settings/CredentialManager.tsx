@@ -67,8 +67,6 @@ import {
   CopyAgentSourcePublicKey,
   GetAgentSourceUsage,
   DeleteAgentSource,
-  DiscoverAgentSourceCandidates,
-  ProbeAgentSource,
   CreateAgentSource,
   UpdateAgentSource,
   GetAgentSource,
@@ -76,13 +74,8 @@ import {
 import { SelectSSHKeyFile } from "../../../wailsjs/go/ssh/SSH";
 import { credential_entity, ssh as ssh_models, system, ssh_agent_svc } from "../../../wailsjs/go/models";
 import { AgentSourceRow } from "@/components/settings/AgentSourceRow";
-import { DetectedSourcesSection, type DetectedCandidate } from "@/components/settings/DetectedSourcesSection";
 import { AgentSourceDialog, type AgentSourceDraft } from "@/components/settings/AgentSourceDialog";
-import {
-  candidateDefaultName,
-  type AgentEndpointType,
-  type AgentSourceRuntimeStatus,
-} from "@/components/settings/agentSource";
+import { type AgentEndpointType, type AgentSourceRuntimeStatus } from "@/components/settings/agentSource";
 
 function generatePassword(length = 20): string {
   const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
@@ -113,8 +106,6 @@ export function CredentialManager() {
   const [agentIdentities, setAgentIdentities] = useState<Record<number, ssh_agent_svc.IdentitySummary[]>>({});
   const [agentIdentitiesLoading, setAgentIdentitiesLoading] = useState<Record<number, boolean>>({});
   const [agentIdentityError, setAgentIdentityError] = useState<Record<number, string>>({});
-  const [candidates, setCandidates] = useState<DetectedCandidate[]>([]);
-  const [candidatesLoading, setCandidatesLoading] = useState(true);
   const [agentDialog, setAgentDialog] = useState<{
     open: boolean;
     mode: "create" | "edit";
@@ -190,35 +181,9 @@ export function CredentialManager() {
     }
   }, [probeAgentSource]);
 
-  const loadAgentCandidates = useCallback(async () => {
-    setCandidatesLoading(true);
-    try {
-      const result = await DiscoverAgentSourceCandidates();
-      const list = result || [];
-      const probed = await Promise.all(
-        list.map(async (candidate) => {
-          let status: AgentSourceRuntimeStatus;
-          let count: number | undefined;
-          try {
-            const r = await ProbeAgentSource(candidate.endpoint_type, candidate.endpoint);
-            status = r.status as AgentSourceRuntimeStatus;
-            if (r.status === "ok") count = r.identity_count;
-          } catch {
-            status = "unavailable";
-          }
-          return { candidate, status, identityCount: count };
-        })
-      );
-      setCandidates(probed);
-    } finally {
-      setCandidatesLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     void loadAgentSources();
-    void loadAgentCandidates();
-  }, [loadAgentSources, loadAgentCandidates]);
+  }, [loadAgentSources]);
 
   const refreshAgentSource = useCallback(
     (id: number) => {
@@ -291,19 +256,6 @@ export function CredentialManager() {
     } catch (e) {
       toast.error(String(e));
     }
-  }, []);
-
-  const openAddCandidateDialog = useCallback((candidate: ssh_agent_svc.Candidate) => {
-    setAgentDialog({
-      open: true,
-      mode: "create",
-      initial: {
-        name: candidateDefaultName(candidate.endpoint_type as AgentEndpointType, candidate.endpoint),
-        type: candidate.endpoint_type as AgentEndpointType,
-        endpoint: candidate.endpoint,
-        description: "",
-      },
-    });
   }, []);
 
   const handleSaveAgentSource = useCallback(
@@ -563,13 +515,6 @@ export function CredentialManager() {
           ))}
         </div>
       )}
-
-      <DetectedSourcesSection
-        candidates={candidates}
-        loading={candidatesLoading}
-        onRefresh={() => void loadAgentCandidates()}
-        onAdd={openAddCandidateDialog}
-      />
 
       {/* Dialogs */}
       <GenerateKeyDialog open={generateOpen} onOpenChange={setGenerateOpen} onSuccess={fetchCredentials} />

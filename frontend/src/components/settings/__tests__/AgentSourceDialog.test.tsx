@@ -85,7 +85,7 @@ describe("AgentSourceDialog", () => {
     expect(option).not.toHaveAttribute("data-disabled");
   });
 
-  it("prefills fields from an initial draft (detected candidate)", () => {
+  it("prefills fields from an initial draft (edit)", () => {
     renderDialog({
       initial: { name: "SSH_AUTH_SOCK", type: "environment", endpoint: "SSH_AUTH_SOCK", description: "" },
     });

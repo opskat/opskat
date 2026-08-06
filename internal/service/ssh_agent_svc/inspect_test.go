@@ -229,19 +229,11 @@ func TestLifecycle_NoImplicitPersistence(t *testing.T) {
 	priv, _, _ := testKey(t)
 	srv := startFakeAgent(t, agent.AddedKey{PrivateKey: priv, Comment: "k"})
 
-	Convey("发现/探测/检查都不会写入 ssh_agent_sources（仅显式保存）", t, func() {
+	Convey("探测/检查都不会写入 ssh_agent_sources（仅显式保存）", t, func() {
 		Convey("探测候选不落库", func() {
 			_, err := Probe(ctx, "unix_socket", srv.path)
 			assert.NoError(t, err)
 			assert.Empty(t, mustListSources(t, ctx), "探测不得持久化任何来源")
-		})
-
-		Convey("发现候选不落库", func() {
-			t.Setenv("SSH_AUTH_SOCK", srv.path)
-			cands, err := Discover(ctx)
-			assert.NoError(t, err)
-			require.NotEmpty(t, cands, "环境变量应产生候选项")
-			assert.Empty(t, mustListSources(t, ctx), "发现不得持久化任何来源")
 		})
 
 		Convey("检查已保存来源不新增来源行", func() {
