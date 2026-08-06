@@ -7,6 +7,7 @@ import { DetailGrid, DetailSection, InfoItem, ProxyChainDetailSection, ProxyDeta
 import { parseDetailConfig } from "./utils";
 import { GetAgentAssetDetail } from "../../../../wailsjs/go/system/System";
 import { system as system_models } from "../../../../wailsjs/go/models";
+import { agentStatusLabel } from "@/components/settings/agentSource";
 
 interface SSHConfig {
   host: string;
@@ -23,22 +24,19 @@ interface SSHConfig {
   proxy_chain?: ProxyChainJSON | null;
 }
 
-// 详情可用性文案;未知(读取失败/未加载)显示占位符,不编造运行时状态。
+// 详情可用性文案：运行时状态（ok/empty/unavailable/unsupported）复用 agentStatusLabel，
+// 资产级 missing 单独处理；未知（读取失败/未加载）显示占位符，不编造运行时状态。
 function availabilityLabel(t: TFunction, availability?: string): string {
-  switch (availability) {
-    case "ok":
-      return t("agentSource.statusOk");
-    case "empty":
-      return t("agentSource.statusEmpty");
-    case "unavailable":
-      return t("agentSource.statusUnavailable");
-    case "unsupported":
-      return t("agentSource.statusUnsupported");
-    case "missing":
-      return t("asset.agentIdentityMissing");
-    default:
-      return "—";
+  if (availability === "missing") return t("asset.agentIdentityMissing");
+  if (
+    availability === "ok" ||
+    availability === "empty" ||
+    availability === "unavailable" ||
+    availability === "unsupported"
+  ) {
+    return agentStatusLabel(availability, t);
   }
+  return "—";
 }
 
 export function SSHDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProps) {

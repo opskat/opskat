@@ -14,8 +14,7 @@ import (
 	"fmt"
 )
 
-// Stable error codes for Agent failures. They match the codes in the SSH Agent
-// design spec (docs/superpowers/specs/2026-08-04-ssh-agent-auth-design.md).
+// Stable error codes for Agent failures.
 const (
 	// CodePlatformUnsupported: the current platform cannot serve this endpoint type.
 	CodePlatformUnsupported = "ssh_agent_platform_unsupported"

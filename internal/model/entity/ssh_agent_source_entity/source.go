@@ -4,15 +4,6 @@
 // 签名、私钥或运行时状态——那些只在运行时存在于传输层，绝不进入数据库。
 package ssh_agent_source_entity
 
-// EndpointType 是来源端点值的解释方式，与 internal/sshagent 的端点类型一致。
-type EndpointType string
-
-const (
-	EndpointTypeEnvironment      EndpointType = "environment"
-	EndpointTypeUnixSocket       EndpointType = "unix_socket"
-	EndpointTypeWindowsNamedPipe EndpointType = "windows_named_pipe"
-)
-
 // SSHAgentSource 持久化的 SSH Agent 来源定义。
 type SSHAgentSource struct {
 	ID           int64  `gorm:"column:id;primaryKey;autoIncrement" json:"id"`

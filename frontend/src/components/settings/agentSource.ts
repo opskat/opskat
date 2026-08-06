@@ -66,19 +66,36 @@ export function endpointKindLabel(type: string, t: Translate): string {
   }
 }
 
-/** 运行时状态的图标/文案/色调映射。颜色只作辅助，标签文本始终区分五态。 */
-export function agentStatusInfo(status: AgentSourceRuntimeStatus, t: Translate) {
+/** 运行时状态的文案（仅标签）：来源行、来源对话框与资产详情可用性标签复用。 */
+export function agentStatusLabel(status: AgentSourceRuntimeStatus, t: Translate): string {
   switch (status) {
     case "loading":
-      return { label: t("agentSource.statusLoading"), Icon: Loader2, spin: true, tone: "text-primary" };
+      return t("agentSource.statusLoading");
     case "ok":
-      return { label: t("agentSource.statusOk"), Icon: CheckCircle2, spin: false, tone: "text-success" };
+      return t("agentSource.statusOk");
     case "empty":
-      return { label: t("agentSource.statusEmpty"), Icon: Inbox, spin: false, tone: "text-warning" };
+      return t("agentSource.statusEmpty");
     case "unavailable":
-      return { label: t("agentSource.statusUnavailable"), Icon: XCircle, spin: false, tone: "text-destructive" };
+      return t("agentSource.statusUnavailable");
     case "unsupported":
-      return { label: t("agentSource.statusUnsupported"), Icon: Ban, spin: false, tone: "text-warning" };
+      return t("agentSource.statusUnsupported");
+  }
+}
+
+/** 运行时状态的图标/文案/色调映射。颜色只作辅助，标签文本始终区分五态。 */
+export function agentStatusInfo(status: AgentSourceRuntimeStatus, t: Translate) {
+  const label = agentStatusLabel(status, t);
+  switch (status) {
+    case "loading":
+      return { label, Icon: Loader2, spin: true, tone: "text-primary" };
+    case "ok":
+      return { label, Icon: CheckCircle2, spin: false, tone: "text-success" };
+    case "empty":
+      return { label, Icon: Inbox, spin: false, tone: "text-warning" };
+    case "unavailable":
+      return { label, Icon: XCircle, spin: false, tone: "text-destructive" };
+    case "unsupported":
+      return { label, Icon: Ban, spin: false, tone: "text-warning" };
   }
 }
 

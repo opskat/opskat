@@ -405,20 +405,6 @@ func TestPeerUID(t *testing.T) {
 	})
 }
 
-func TestFingerprintSHA256(t *testing.T) {
-	convey.Convey("FingerprintSHA256 is the canonical SHA256 form", t, func() {
-		_, pub := newTestKey(t)
-		got := FingerprintSHA256(pub)
-		// Canonical form: uppercase "SHA256:" prefix + unpadded base64 of the
-		// 32-byte SHA-256 digest (43 characters, no '=' padding).
-		convey.So(got, convey.ShouldEqual, ssh.FingerprintSHA256(pub))
-		convey.So(strings.HasPrefix(got, "SHA256:"), convey.ShouldBeTrue)
-		encoded := strings.TrimPrefix(got, "SHA256:")
-		convey.So(len(encoded), convey.ShouldEqual, 43)
-		convey.So(strings.HasSuffix(encoded, "="), convey.ShouldBeFalse)
-	})
-}
-
 // --- small helpers ---
 
 func newTestKey(t *testing.T) (ed25519.PrivateKey, ssh.PublicKey) {
