@@ -50,7 +50,12 @@ func Inspect(ctx context.Context, id int64) (*InspectResult, error) {
 	}
 	ids, err := inspectIdentities(ctx, sshagent.Source{Type: sshagent.EndpointType(src.EndpointType), Value: src.Endpoint})
 	if err != nil {
-		return nil, err
+		// 可达但无身份是合法观察态，不是错误（与 Probe 返回 ProbeEmpty 一致）：
+		// 按空身份继续，使用数仍按引用资产数计算。其余类型化错误如实上报。
+		if code, ok := sshagent.CodeOf(err); !ok || code != sshagent.CodeEmpty {
+			return nil, err
+		}
+		ids = nil
 	}
 	usages, err := asset_repo.Asset().CountAgentAuthBySourceID(ctx, id)
 	if err != nil {

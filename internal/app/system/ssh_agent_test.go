@@ -372,6 +372,17 @@ func TestGetAgentAssetDetail(t *testing.T) {
 			assert.Empty(t, detail.Comment)
 		})
 
+		Convey("来源可达但未装载任何身份时标记 empty（不与 missing 混淆）", func() {
+			emptySrv := startFakeAgent(t)
+			emptySrc, err := s.CreateAgentSource(ssh_agent_svc.SourceInput{Name: "empty", EndpointType: "unix_socket", Endpoint: emptySrv.path})
+			require.NoError(t, err)
+			detail, err := s.GetAgentAssetDetail(emptySrc.ID, fp)
+			assert.NoError(t, err)
+			assert.Equal(t, "empty", detail.Availability)
+			assert.Empty(t, detail.Type)
+			assert.Empty(t, detail.Comment)
+		})
+
 		Convey("来源不可用时标记 unavailable", func() {
 			dead, err := s.CreateAgentSource(ssh_agent_svc.SourceInput{Name: "dead", EndpointType: "unix_socket", Endpoint: "/tmp/does-not-exist-xyz"})
 			require.NoError(t, err)

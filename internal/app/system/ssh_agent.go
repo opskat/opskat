@@ -178,18 +178,23 @@ func (s *System) GetAgentAssetDetail(sourceID int64, fingerprint string) (AgentA
 			return detail, nil
 		}
 	}
-	detail.Availability = "missing"
+	// 指纹不在当前身份中：来源可达但为空 → empty；持有身份但无匹配 → missing。
+	if len(res.Identities) == 0 {
+		detail.Availability = "empty"
+	} else {
+		detail.Availability = "missing"
+	}
 	return detail, nil
 }
 
 // agentAvailabilityOfCode 把类型化 Agent 错误码映射为资产详情的运行状态。未知/
-// 其它类型化码一律按不可用处理——详情是展示视图，不向上抛传输级错误。
+// 其它类型化码一律按不可用处理——详情是展示视图，不向上抛传输级错误。CodeEmpty 不
+// 在此出现：Inspect 已把可达但为空归一为空身份结果（非错误），由调用方的成功路径
+// 区分 empty 与 missing。
 func agentAvailabilityOfCode(code string) string {
 	switch code {
 	case sshagent.CodePlatformUnsupported:
 		return "unsupported"
-	case sshagent.CodeEmpty:
-		return "empty"
 	case sshagent.CodeEnvUnset, sshagent.CodeEndpointUnavailable, sshagent.CodeProtocolError,
 		sshagent.CodePayloadInvalid, sshagent.CodeCancelled:
 		return "unavailable"

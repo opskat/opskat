@@ -113,6 +113,25 @@ func TestInspect_ReturnsBoundedIdentitySummary(t *testing.T) {
 	})
 }
 
+func TestInspect_ReachableEmptyAgent(t *testing.T) {
+	ctx := setupInspectTest(t)
+
+	// Agent 可达但未装载任何身份。
+	srv := startFakeAgent(t)
+	src, err := Create(ctx, SourceInput{Name: "empty", EndpointType: "unix_socket", Endpoint: srv.path})
+	require.NoError(t, err)
+	assetID := createAgentAsset(t, ctx, src.ID)
+	defer func() { _ = asset_repo.Asset().Delete(ctx, assetID) }()
+
+	Convey("可达但无身份是合法观察态，不是错误（与 Probe 的 ProbeEmpty 一致）", t, func() {
+		res, err := Inspect(ctx, src.ID)
+		assert.NoError(t, err, "空 agent 不应报错")
+		require.NotNil(t, res)
+		assert.Empty(t, res.Identities, "身份列表为空")
+		assert.Equal(t, int64(1), res.Usages, "使用数按引用资产数计算，与是否持有身份无关")
+	})
+}
+
 func TestInspect_MissingSource(t *testing.T) {
 	ctx := setupInspectTest(t)
 
