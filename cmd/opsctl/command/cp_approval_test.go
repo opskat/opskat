@@ -67,6 +67,7 @@ type cpFakeAdapter struct {
 	// appearsLater 是"两次展开之间源端新出现的文件"：第二次及以后的 List 会多交出它。
 	// 它是 TOCTOU 那条缝的探针——只展开一次的实现永远看不到它。
 	appearsLater []helper.Entry
+	resolved     []string
 }
 
 var cpFakeRemote = &cpFakeAdapter{}
@@ -109,6 +110,16 @@ func (a *cpFakeAdapter) Write(_ context.Context, _ *asset_entity.Asset, _ string
 }
 
 func (a *cpFakeAdapter) ValidateDestination(string) error { return nil }
+
+func (a *cpFakeAdapter) ResolveTransferPath(
+	_ context.Context, _ *asset_entity.Asset, p string,
+) (string, error) {
+	a.resolved = append(a.resolved, p)
+	if p == "~/upload.txt" {
+		return "/home/deploy/upload.txt", nil
+	}
+	return p, nil
+}
 
 // ApprovalSubject 按方向给出不同的主体：读与写的主体分不开时，"每条展开出的路径都进了
 // 审批"这句断言就分不出它断的是哪一半。
@@ -278,6 +289,23 @@ func TestCmdCpRequiresApproval(t *testing.T) {
 			So(calls[0]["recursive"], ShouldBeFalse)
 		})
 
+		Convey("远端 home 路径在审批和传输前展开为同一个绝对路径", func() {
+			resetCpFakeRemote(t)
+			cpApprovalFn = func(_ context.Context, req approval.ApprovalRequest) (ApprovalResult, error) {
+				seen = append(seen, req)
+				return ApprovalResult{Decision: aictx.Allow, SessionID: "sess-cp"}, nil
+			}
+
+			exitCode := cmdCp(context.Background(), handlers, []string{localPath, "3:~/upload.txt"}, "")
+
+			So(exitCode, ShouldEqual, 0)
+			So(cpFakeRemote.resolved, ShouldResemble, []string{"~/upload.txt"})
+			So(seen, ShouldHaveLength, 1)
+			So(seen[0].Command, ShouldEqual, "write /home/deploy/upload.txt")
+			So(calls, ShouldHaveLength, 1)
+			So(calls[0]["dst"], ShouldEqual, "3:/home/deploy/upload.txt")
+		})
+
 		// 相对路径是 opsctl 的既有手感，而 cp 工具要求本地路径绝对（D11）：入口层必须
 		// 在交出去之前展开，否则这条命令会撞上一句"local path must be absolute"。
 		Convey("本地相对路径在入口层展开成绝对路径", func() {
@@ -327,7 +355,7 @@ func TestCmdCpMultiSourceApprovalScopes(t *testing.T) {
 
 			So(exitCode, ShouldEqual, 0)
 			So(batches, ShouldHaveLength, 1)
-			So(subjectCommands(batches[0]), ShouldResemble, []string{"cp /opt/app/"})
+			So(subjectCommands(batches[0]), ShouldResemble, []string{"cp:write /opt/app/"})
 			// 传输仍然交给 cp 工具：一条源参数一次调用，落点基点与 recursive 原样透传。
 			So(calls, ShouldHaveLength, 1)
 			So(calls[0]["src"], ShouldEqual, root)
@@ -346,7 +374,7 @@ func TestCmdCpMultiSourceApprovalScopes(t *testing.T) {
 			So(exitCode, ShouldEqual, 0)
 			So(batches, ShouldHaveLength, 1)
 			So(subjectCommands(batches[0]), ShouldResemble, []string{
-				"cp /opt/app/one.txt", "cp /opt/app/two.txt",
+				"cp:write /opt/app/one.txt", "cp:write /opt/app/two.txt",
 			})
 			So(calls, ShouldHaveLength, 2)
 			So(calls[0]["dst"], ShouldEqual, "1:/opt/app/one.txt")
@@ -361,7 +389,7 @@ func TestCmdCpMultiSourceApprovalScopes(t *testing.T) {
 			exitCode := cmdCp(context.Background(), handlers, []string{filepath.Join(root, "*.txt"), "1:/opt/app/"}, "")
 
 			So(exitCode, ShouldEqual, 0)
-			So(subjectCommands(batches[0]), ShouldResemble, []string{"cp /opt/app/"})
+			So(subjectCommands(batches[0]), ShouldResemble, []string{"cp:write /opt/app/"})
 			So(calls, ShouldHaveLength, 1)
 			So(calls[0]["dst"], ShouldEqual, "1:/opt/app/")
 		})
@@ -480,7 +508,7 @@ func TestCmdCpRecursiveApprovesDirectoryScopeWithoutListing(t *testing.T) {
 
 		So(exitCode, ShouldEqual, 0)
 		So(cpFakeRemote.listed, ShouldBeEmpty)
-		So(subjectCommands(batches[0]), ShouldResemble, []string{"cptestremote read /src/", "cp /backup/"})
+		So(subjectCommands(batches[0]), ShouldResemble, []string{"cptestremote read /src/", "cp:write /backup/"})
 		So(calls, ShouldHaveLength, 1)
 	})
 }
@@ -680,7 +708,7 @@ func TestCmdCpExpansionRequiresListApproval(t *testing.T) {
 		So(exitCode, ShouldEqual, 1)
 		So(seen, ShouldBeEmpty)
 		So(batches, ShouldHaveLength, 1)
-		So(subjectCommands(batches[0]), ShouldResemble, []string{"cp /var/log", "cp /var/log/"})
+		So(subjectCommands(batches[0]), ShouldResemble, []string{"cp:read /var/log", "cp:read /var/log/"})
 		So(calls, ShouldBeEmpty)
 	})
 }

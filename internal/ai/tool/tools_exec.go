@@ -17,7 +17,7 @@ func execTools() []tool.Tool {
 			NameStr: "cp",
 			DescStr: "Copy one file between two endpoints. An endpoint is either an absolute local path " +
 				"(/tmp/app.log) or <asset>:/<path> on an asset — an SSH server over SFTP " +
-				"(web-01:/var/log/app.log) or object storage as /<bucket>/<key> " +
+				"(web-01:/var/log/app.log; SSH also accepts <asset>:~/<path>) or object storage as /<bucket>/<key> " +
 				"(s3-prod:/backups/db.sql.gz). At least one endpoint must be on an asset; any combination " +
 				"of the two sides works, including server to object storage. Each asset endpoint is " +
 				"authorized separately under that asset's own policy, before any byte is transferred. " +
@@ -25,7 +25,8 @@ func execTools() []tool.Tool {
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
-					"src": {Type: "string", Description: "Source endpoint: an absolute local path, or <asset>:/<path>."},
+					"src": {Type: "string", Description: "Source endpoint: an absolute local path, <asset>:/<path>, " +
+						"or <asset>:~/<path> for an SSH asset."},
 					"dst": {Type: "string", Description: "Destination endpoint, same syntax as src. It names the " +
 						"file to write, including the filename."},
 					"recursive": {Type: "boolean", Description: "Transfer a directory tree / object prefix instead " +

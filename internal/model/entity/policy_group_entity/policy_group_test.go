@@ -171,8 +171,8 @@ func TestBuiltinGroups(t *testing.T) {
 		groups := BuiltinGroups()
 		counts := countBuiltinGroupsByPolicyType(groups)
 
-		convey.Convey("共返回24个内置组", func() {
-			assert.Len(t, groups, 24)
+		convey.Convey("共返回25个内置组", func() {
+			assert.Len(t, groups, 25)
 		})
 
 		convey.Convey("所有内置组ID均以builtin:开头", func() {
@@ -181,8 +181,12 @@ func TestBuiltinGroups(t *testing.T) {
 			}
 		})
 
-		convey.Convey("command类型内置组有5个", func() {
-			assert.Equal(t, 5, counts[PolicyTypeCommand])
+		convey.Convey("command类型包含文件传输完全访问组", func() {
+			assert.Equal(t, 6, counts[PolicyTypeCommand])
+			cpGroup := FindBuiltin(policy.BuiltinCpFullAccess)
+			if assert.NotNil(t, cpGroup) {
+				assert.JSONEq(t, `{"allow_list":["cp:*"],"deny_list":null}`, cpGroup.Policy)
+			}
 		})
 
 		convey.Convey("query类型内置组有2个", func() {

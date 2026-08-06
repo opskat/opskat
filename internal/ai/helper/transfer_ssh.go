@@ -31,6 +31,31 @@ func (sshAdapter) NormalizeTransferPath(p string) string {
 	return p
 }
 
+func (sshAdapter) ResolveTransferPath(
+	ctx context.Context, asset *asset_entity.Asset, p string,
+) (string, error) {
+	var home string
+	err := ExecuteWithSFTP(ctx, asset.ID, func(client *sftp.Client) error {
+		var getwdErr error
+		home, getwdErr = client.Getwd()
+		return getwdErr
+	})
+	if err != nil {
+		return "", fmt.Errorf("resolve remote home for asset %q: %w", asset.Name, err)
+	}
+	if !strings.HasPrefix(home, "/") {
+		return "", fmt.Errorf("resolve remote home for asset %q: SFTP returned non-absolute path %q", asset.Name, home)
+	}
+	if p == "~" {
+		return home, nil
+	}
+	resolved := path.Join(home, strings.TrimPrefix(p, "~/"))
+	if strings.HasSuffix(p, "/") && resolved != "/" {
+		resolved += "/"
+	}
+	return resolved, nil
+}
+
 func (sshAdapter) SupportsPooledProxyCopy() bool   { return true }
 func (sshAdapter) SameAssetCopyHint(string) string { return "" }
 
@@ -247,8 +272,12 @@ func (sshAdapter) ValidateDestination(string) error { return nil }
 // 系统给出的主体落成规则时逐个转义（决策 D21 更正：规则转义、名字原样）。所以这里绝不能
 // 自己先转义——路径里的 `*?[` 可以是字面文件名，名字侧转义会让规则匹配不上自己。
 func (sshAdapter) ApprovalSubject(p string, dir Direction) (string, string) {
+	approvalType := permission.GrantToolCpRead
+	if dir == DirWrite || dir == DirWriteScope {
+		approvalType = permission.GrantToolCpWrite
+	}
 	if dir == DirList && hasGlobMeta(p) {
-		return permission.GrantToolCp, globBase(p)
+		return approvalType, globBase(p)
 	}
 	if dir == DirReadScope || dir == DirWriteScope {
 		base := p
@@ -258,16 +287,16 @@ func (sshAdapter) ApprovalSubject(p string, dir Direction) (string, string) {
 		if !strings.HasSuffix(base, "/") {
 			base += "/"
 		}
-		return permission.GrantToolCp, base
+		return approvalType, base
 	}
-	return permission.GrantToolCp, p
+	return approvalType, p
 }
 
 func (a sshAdapter) ApprovalSubjects(p string, dir Direction) []ApprovalTarget {
 	if dir == DirReadScope && !hasGlobMeta(p) && !strings.HasSuffix(p, "/") {
 		return []ApprovalTarget{
-			{ApprovalType: permission.GrantToolCp, Subject: p},
-			{ApprovalType: permission.GrantToolCp, Subject: p + "/"},
+			{ApprovalType: permission.GrantToolCpRead, Subject: p},
+			{ApprovalType: permission.GrantToolCpRead, Subject: p + "/"},
 		}
 	}
 	typ, subject := a.ApprovalSubject(p, dir)

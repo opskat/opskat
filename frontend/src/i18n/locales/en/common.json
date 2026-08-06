@@ -296,7 +296,7 @@
     "cmdPolicy": "Command Policy",
     "cmdPolicyAllowList": "Allow List (execute without confirmation)",
     "cmdPolicyDenyList": "Deny List (always reject)",
-    "cmdPolicyHint": "Commands not listed will require user confirmation. Rules support * wildcards; broad patterns such as * may allow high-risk commands or deny many commands, so configure them carefully.",
+    "cmdPolicyHint": "Commands not listed require confirmation. File transfers support cp:read:<path>, cp:write:<path>, or cp:*. Rules support * wildcards; configure broad patterns carefully.",
     "cmdPolicyGroupHint": "This policy is inherited by all assets in the group (unless overridden)",
     "cmdPolicyPlaceholder": "Press Enter to add, comma-separated for batch import",
     "policyReset": {
@@ -674,6 +674,10 @@
         "dangerous-deny": {
           "name": "Dangerous Command Deny",
           "desc": "Deny dangerous system commands"
+        },
+        "cp-full-access": {
+          "name": "File Transfer Full Access",
+          "desc": "Allow reads and writes to every remote path (cp:*)"
         },
         "sql-readonly": {
           "name": "SQL Read-Only",

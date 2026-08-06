@@ -5,6 +5,9 @@ import (
 	"testing"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+
+	"go.uber.org/mock/gomock"
 
 	. "github.com/smartystreets/goconvey/convey"
 )
@@ -41,6 +44,54 @@ func TestCheckFileTransferPermission(t *testing.T) {
 			r := CheckPermission(ctx, GrantToolCp, 1, "")
 			So(r.Decision, ShouldEqual, aictx.NeedConfirm)
 		})
+	})
+}
+
+func TestCheckFileTransferPermission_CommandPolicy(t *testing.T) {
+	Convey("SSH command policy can allow cp by direction without authorizing shell commands", t, func() {
+		ctx, mockAsset, _ := setupPolicyTest(t)
+		asset := &asset_entity.Asset{
+			ID:   1,
+			Type: asset_entity.AssetTypeSSH,
+			CmdPolicy: mustJSON(asset_entity.CommandPolicy{AllowList: []string{
+				"cp:read:/var/log/",
+				"cp:write:/srv/releases/*",
+			}}),
+		}
+		mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+		So(CheckPermission(ctx, GrantToolCpRead, 1, "/var/log/nginx/access.log").Decision, ShouldEqual, aictx.Allow)
+		So(CheckPermission(ctx, GrantToolCpWrite, 1, "/var/log/nginx/access.log").Decision, ShouldEqual, aictx.NeedConfirm)
+		So(CheckPermission(ctx, GrantToolCpWrite, 1, "/srv/releases/app.tar").Decision, ShouldEqual, aictx.Allow)
+		So(CheckPermission(ctx, GrantToolCpRead, 1, "/srv/releases/app.tar").Decision, ShouldEqual, aictx.NeedConfirm)
+		So(CheckPermission(ctx, asset_entity.AssetTypeSSH, 1, "cp:read:/var/log/").Decision, ShouldEqual, aictx.NeedConfirm)
+	})
+
+	Convey("cp:* allows both directions and composes with existing grants", t, func() {
+		ctx, mockAsset, _ := setupPolicyTest(t)
+		asset := &asset_entity.Asset{
+			ID:        1,
+			Type:      asset_entity.AssetTypeSSH,
+			CmdPolicy: mustJSON(asset_entity.CommandPolicy{AllowList: []string{"cp:*"}}),
+		}
+		mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+		So(CheckPermission(ctx, GrantToolCpRead, 1, "/etc/hosts").Decision, ShouldEqual, aictx.Allow)
+		So(CheckPermission(ctx, GrantToolCpWrite, 1, "/opt/app/config.yml").Decision, ShouldEqual, aictx.Allow)
+	})
+
+	Convey("the built-in file transfer group composes through command policy groups", t, func() {
+		ctx, mockAsset, _ := setupPolicyTest(t)
+		asset := &asset_entity.Asset{
+			ID:        1,
+			Type:      asset_entity.AssetTypeSSH,
+			CmdPolicy: mustJSON(asset_entity.CommandPolicy{Groups: []string{"builtin:cp-full-access"}}),
+		}
+		mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+		result := CheckPermission(ctx, GrantToolCpRead, 1, "/etc/hosts")
+		So(result.Decision, ShouldEqual, aictx.Allow)
+		So(result.MatchedPattern, ShouldEqual, "cp:*")
 	})
 }
 

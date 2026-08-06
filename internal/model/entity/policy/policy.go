@@ -161,6 +161,7 @@ const (
 	BuiltinK8sReadOnly           = "builtin:k8s-readonly"
 	BuiltinK8sDangerousDeny      = "builtin:k8s-dangerous-deny"
 	BuiltinDockerReadOnly        = "builtin:docker-readonly"
+	BuiltinCpFullAccess          = "builtin:cp-full-access"
 	BuiltinDangerousDeny         = "builtin:dangerous-deny"
 	BuiltinSQLReadOnly           = "builtin:sql-readonly"
 	BuiltinSQLDangerousDeny      = "builtin:sql-dangerous-deny"

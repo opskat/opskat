@@ -296,7 +296,7 @@
     "cmdPolicy": "命令权限",
     "cmdPolicyAllowList": "允许列表（直接执行，无需确认）",
     "cmdPolicyDenyList": "拒绝列表（始终拒绝执行）",
-    "cmdPolicyHint": "未列出的命令将请求用户确认后执行；规则支持使用 * 通配，范围过宽（如 *）可能放行高风险命令或误拒大量命令，请谨慎配置。",
+    "cmdPolicyHint": "未列出的命令将请求用户确认后执行；文件传输可使用 cp:read:<路径>、cp:write:<路径> 或 cp:*。规则支持 * 通配，范围过宽可能放行高风险操作，请谨慎配置。",
     "cmdPolicyGroupHint": "此策略将被组内所有资产继承（除非资产自身覆盖）",
     "cmdPolicyPlaceholder": "输入命令规则后按回车，支持逗号分隔批量添加",
     "policyReset": {
@@ -674,6 +674,10 @@
         "dangerous-deny": {
           "name": "高危命令拒绝",
           "desc": "拒绝执行高危系统命令"
+        },
+        "cp-full-access": {
+          "name": "文件传输完全访问",
+          "desc": "允许读取和写入所有远程路径（cp:*）"
         },
         "sql-readonly": {
           "name": "SQL 只读",

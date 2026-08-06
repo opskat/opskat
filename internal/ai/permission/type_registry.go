@@ -86,6 +86,8 @@ func init() {
 	// 而非命令，所以不按 shell 子命令拆；cpGrantPatterns 做的是另一件事——把系统给出的
 	// 主体转义成"只匹配它自己"的规则（决策 D21），因为路径里的 `* ? [` 可以是字面文件名。
 	registerPermissionType(GrantToolCp, "cp", cpGrantPatterns, checkFileTransferPermission)
+	registerPermissionType(GrantToolCpRead, "cp", cpGrantPatterns, checkFileTransferReadPermission)
+	registerPermissionType(GrantToolCpWrite, "cp", cpGrantPatterns, checkFileTransferWritePermission)
 }
 
 // --- 执行器注册表 ---
