@@ -1304,8 +1304,7 @@
   "panel": {
     "toggleSidebar": "Toggle Sidebar",
     "hideSidebar": "Hide Toolbar",
-    "showSidebar": "Show Toolbar",
-    "showAIPanel": "Show AI Assistant"
+    "showSidebar": "Show Toolbar"
   },
   "topBar": {
     "searchPlaceholder": "Search assets or commands...",

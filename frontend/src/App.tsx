@@ -11,7 +11,6 @@ import { WindowControls } from "@/components/layout/WindowControls";
 import { TopBar } from "@/components/layout/TopBar";
 import { CommandPaletteDialog } from "@/components/command/CommandPaletteDialog";
 import { SnippetAssetDrawer } from "@/components/snippet/SnippetAssetDrawer";
-import { EdgeRevealStrip } from "@/components/layout/EdgeRevealStrip";
 import { useLayoutStore } from "@/stores/layoutStore";
 import { LeftPanel } from "@/components/layout/LeftPanel";
 import { SideTabList } from "@/components/layout/SideTabList";
@@ -379,7 +378,6 @@ function App() {
             <div className="flex flex-1 min-h-0 overflow-hidden">
               {tabBarLayout === "left" ? (
                 <>
-                  {sidebarHidden && <EdgeRevealStrip onClick={toggleSidebarHidden} />}
                   {!sidebarHidden && (
                     <Sidebar
                       activePage={activePage}
@@ -424,7 +422,6 @@ function App() {
                 </>
               ) : (
                 <>
-                  {sidebarHidden && <EdgeRevealStrip onClick={toggleSidebarHidden} />}
                   {!sidebarHidden && (
                     <Sidebar
                       activePage={activePage}
@@ -480,7 +477,6 @@ function App() {
                 topBarHidden={sidebarHidden}
               />
               <SideAssistantPanel collapsed={aiPanelCollapsed} onToggle={toggleAIPanel} />
-              {aiPanelCollapsed && <EdgeRevealStrip side="right" onClick={toggleAIPanel} />}
             </div>
           </div>
 
