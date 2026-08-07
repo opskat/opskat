@@ -71,7 +71,7 @@ func (s *Service) GenerateTransferID() string {
 	return transfer.GenerateID("sftp")
 }
 
-// getSFTPClient 获取或创建 SFTP 客户端（懒加载）
+// getSFTPClient 获取或创建 SFTP 客户端（懒加载，高性能配置）
 func (s *Service) getSFTPClient(sessionID string) (*sftp.Client, error) {
 	if v, ok := s.clients.Load(sessionID); ok {
 		client := v.(*sftp.Client)
@@ -94,7 +94,8 @@ func (s *Service) getSFTPClient(sessionID string) (*sftp.Client, error) {
 		return nil, fmt.Errorf("SSH 会话已关闭: %s", sessionID)
 	}
 
-	client, err := sftp.NewClient(sess.Client())
+	//并发请求 + 并发写
+	client, err := sftp.NewClient(sess.Client(), sftp.UseConcurrentReads(true), sftp.UseConcurrentWrites(true))
 	if err != nil {
 		return nil, fmt.Errorf("创建 SFTP 客户端失败: %w", err)
 	}
@@ -329,7 +330,7 @@ func (s *Service) WriteFile(sessionID, remotePath string, data []byte) error {
 	return writeFileAtomically(sftpAtomicClient{client: sftpClient}, remotePath, data)
 }
 
-// Upload 上传单个文件
+// Upload 上传单个文件（并发写 + 远程原子替换）
 func (s *Service) Upload(ctx context.Context, transferID, sessionID, localPath, remotePath string, onProgress func(transfer.Progress)) error {
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancels.Store(transferID, cancel)
@@ -358,20 +359,10 @@ func (s *Service) Upload(ctx context.Context, transferID, sessionID, localPath, 
 		return fmt.Errorf("获取文件信息失败: %w", err)
 	}
 
-	remoteFile, err := sftpClient.Create(remotePath)
-	if err != nil {
-		return fmt.Errorf("创建远程文件失败: %w", err)
-	}
-	defer func() {
-		if err := remoteFile.Close(); err != nil {
-			logger.Default().Warn("close remote file", zap.String("path", remotePath), zap.Error(err))
-		}
-	}()
-
-	return s.copyWithProgress(ctx, transferID, remoteFile, localFile, stat.Size(), 1, filepath.Base(remotePath), onProgress)
+	return s.uploadFileAtomic(ctx, transferID, sftpClient, localFile, remotePath, stat.Size(), 1, filepath.Base(remotePath), 0, stat.Size(), 0, onProgress)
 }
 
-// Download 下载单个文件
+// Download 下载单个文件（并发读 + 本地原子替换）
 func (s *Service) Download(ctx context.Context, transferID, sessionID, remotePath, localPath string, onProgress func(transfer.Progress)) error {
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancels.Store(transferID, cancel)
@@ -400,17 +391,7 @@ func (s *Service) Download(ctx context.Context, transferID, sessionID, remotePat
 		return fmt.Errorf("获取远程文件信息失败: %w", err)
 	}
 
-	localFile, err := os.Create(localPath) //nolint:gosec // file path from user config
-	if err != nil {
-		return fmt.Errorf("创建本地文件失败: %w", err)
-	}
-	defer func() {
-		if err := localFile.Close(); err != nil {
-			logger.Default().Warn("close local file", zap.String("path", localPath), zap.Error(err))
-		}
-	}()
-
-	return s.copyWithProgress(ctx, transferID, localFile, remoteFile, stat.Size(), 1, filepath.Base(remotePath), onProgress)
+	return s.downloadFileAtomic(ctx, transferID, remoteFile, localPath, stat.Size(), 1, filepath.Base(remotePath), 0, 0, onProgress)
 }
 
 // UploadDir 上传目录
@@ -453,7 +434,6 @@ func (s *Service) UploadDir(ctx context.Context, transferID, sessionID, localDir
 	// 传输阶段
 	var filesCompleted int
 	var bytesDone int64
-	reporter := transfer.NewReporter(onProgress)
 
 	return filepath.WalkDir(localDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -474,8 +454,7 @@ func (s *Service) UploadDir(ctx context.Context, transferID, sessionID, localDir
 			return sftpClient.MkdirAll(remoteFull)
 		}
 
-		// 上传文件
-		localFile, err := os.Open(path) //nolint:gosec // file path from user config
+		localFile, err := os.Open(path) //nolint:gosec
 		if err != nil {
 			return err
 		}
@@ -485,46 +464,15 @@ func (s *Service) UploadDir(ctx context.Context, transferID, sessionID, localDir
 			}
 		}()
 
-		remoteFile, err := sftpClient.Create(remoteFull)
+		stat, err := localFile.Stat()
 		if err != nil {
 			return err
 		}
-		defer func() {
-			if err := remoteFile.Close(); err != nil {
-				logger.Default().Warn("close remote file", zap.String("path", remoteFull), zap.Error(err))
-			}
-		}()
 
-		buf := make([]byte, 32*1024)
-		for {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			n, readErr := localFile.Read(buf)
-			if n > 0 {
-				if _, writeErr := remoteFile.Write(buf[:n]); writeErr != nil {
-					return writeErr
-				}
-				bytesDone += int64(n)
-
-				reporter.Report(transfer.Progress{
-					TransferID:     transferID,
-					Status:         "progress",
-					CurrentFile:    relPath,
-					FilesCompleted: filesCompleted,
-					FilesTotal:     filesTotal,
-					BytesDone:      bytesDone,
-					BytesTotal:     bytesTotal,
-				})
-			}
-			if readErr == io.EOF {
-				break
-			}
-			if readErr != nil {
-				return readErr
-			}
+		if err := s.uploadFileAtomic(ctx, transferID, sftpClient, localFile, remoteFull, stat.Size(), filesTotal, relPath, bytesDone, stat.Size(), filesCompleted, onProgress); err != nil {
+			return err
 		}
-
+		bytesDone += stat.Size()
 		filesCompleted++
 		return nil
 	})
@@ -590,7 +538,6 @@ func (s *Service) DownloadDir(ctx context.Context, transferID, sessionID, remote
 	// 传输阶段
 	var filesCompleted int
 	var bytesDone int64
-	reporter := transfer.NewReporter(onProgress)
 
 	for _, entry := range entries {
 		if ctx.Err() != nil {
@@ -608,74 +555,21 @@ func (s *Service) DownloadDir(ctx context.Context, transferID, sessionID, remote
 			continue
 		}
 
-		// 下载文件
+		if err := os.MkdirAll(filepath.Dir(localFull), 0755); err != nil {
+			return err
+		}
+
 		remoteFile, err := sftpClient.Open(entry.remotePath)
 		if err != nil {
 			return err
 		}
 
-		localFile, err := os.Create(localFull) //nolint:gosec // file path from user config
+		err = s.downloadFileAtomic(ctx, transferID, remoteFile, localFull, entry.size, filesTotal, relPath, bytesDone, filesCompleted, onProgress)
+		_ = remoteFile.Close()
 		if err != nil {
-			if closeErr := remoteFile.Close(); closeErr != nil {
-				logger.Default().Warn("close remote file", zap.String("path", entry.remotePath), zap.Error(closeErr))
-			}
 			return err
 		}
-
-		buf := make([]byte, 32*1024)
-		for {
-			if ctx.Err() != nil {
-				if closeErr := localFile.Close(); closeErr != nil {
-					logger.Default().Warn("close local file", zap.String("path", localFull), zap.Error(closeErr))
-				}
-				if closeErr := remoteFile.Close(); closeErr != nil {
-					logger.Default().Warn("close remote file", zap.String("path", entry.remotePath), zap.Error(closeErr))
-				}
-				return ctx.Err()
-			}
-			n, readErr := remoteFile.Read(buf)
-			if n > 0 {
-				if _, writeErr := localFile.Write(buf[:n]); writeErr != nil {
-					if closeErr := localFile.Close(); closeErr != nil {
-						logger.Default().Warn("close local file", zap.String("path", localFull), zap.Error(closeErr))
-					}
-					if closeErr := remoteFile.Close(); closeErr != nil {
-						logger.Default().Warn("close remote file", zap.String("path", entry.remotePath), zap.Error(closeErr))
-					}
-					return writeErr
-				}
-				bytesDone += int64(n)
-
-				reporter.Report(transfer.Progress{
-					TransferID:     transferID,
-					Status:         "progress",
-					CurrentFile:    relPath,
-					FilesCompleted: filesCompleted,
-					FilesTotal:     filesTotal,
-					BytesDone:      bytesDone,
-					BytesTotal:     bytesTotal,
-				})
-			}
-			if readErr == io.EOF {
-				break
-			}
-			if readErr != nil {
-				if closeErr := localFile.Close(); closeErr != nil {
-					logger.Default().Warn("close local file", zap.String("path", localFull), zap.Error(closeErr))
-				}
-				if closeErr := remoteFile.Close(); closeErr != nil {
-					logger.Default().Warn("close remote file", zap.String("path", entry.remotePath), zap.Error(closeErr))
-				}
-				return readErr
-			}
-		}
-
-		if closeErr := localFile.Close(); closeErr != nil {
-			logger.Default().Warn("close local file", zap.String("path", localFull), zap.Error(closeErr))
-		}
-		if closeErr := remoteFile.Close(); closeErr != nil {
-			logger.Default().Warn("close remote file", zap.String("path", entry.remotePath), zap.Error(closeErr))
-		}
+		bytesDone += entry.size
 		filesCompleted++
 	}
 
@@ -736,40 +630,262 @@ func (s *Service) removeDirRecursive(client *sftp.Client, path string) error {
 	return client.RemoveDirectory(path)
 }
 
-// copyWithProgress 带进度的文件拷贝
-func (s *Service) copyWithProgress(ctx context.Context, transferID string, dst io.Writer, src io.Reader, totalBytes int64, filesTotal int, currentFile string, onProgress func(transfer.Progress)) error {
-	buf := make([]byte, 32*1024)
-	var bytesDone int64
-	reporter := transfer.NewReporter(onProgress)
+// uploadFileAtomic：本地 → 远程临时文件（并发写）→ 原子 rename
+func (s *Service) uploadFileAtomic(ctx context.Context, transferID string, client *sftp.Client, local io.Reader, remotePath string, fileSize int64, filesTotal int, currentFile string, baseBytesDone int64, bytesTotal int64, filesCompleted int, onProgress func(transfer.Progress)) error {
+	targetMode, targetExists, err := statRemoteRegularFile(sftpAtomicClient{client: client}, remotePath)
+	if err != nil {
+		return err
+	}
 
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
+	tempPath := buildRemoteTempPath(remotePath, "part")
+	cleanupTemp := true
+	defer func() {
+		if cleanupTemp {
+			cleanupRemotePath(sftpAtomicClient{client: client}, tempPath)
 		}
+	}()
 
-		n, readErr := src.Read(buf)
-		if n > 0 {
-			if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
-				return writeErr
-			}
-			bytesDone += int64(n)
+	// O_EXCL 避免并发冲突；不直接 TRUNCATE 目标文件
+	remoteFile, err := client.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
+	if err != nil {
+		return fmt.Errorf("创建远程临时文件失败: %w", err)
+	}
+	if bytesTotal <= 0 {
+		bytesTotal = baseBytesDone + fileSize
+	}
 
-			reporter.Report(transfer.Progress{
-				TransferID:  transferID,
-				Status:      "progress",
-				CurrentFile: currentFile,
-				FilesTotal:  filesTotal,
-				BytesDone:   bytesDone,
-				BytesTotal:  totalBytes,
-			})
+	pr := &progressReader{
+		ctx:            ctx,
+		r:              local,
+		size:           fileSize,
+		baseBytesDone:  baseBytesDone,
+		bytesTotal:     bytesTotal, // ← 关键
+		transferID:     transferID,
+		currentFile:    currentFile,
+		filesTotal:     filesTotal,
+		filesCompleted: filesCompleted,
+		onProgress:     onProgress,
+		reporter:       transfer.NewReporter(onProgress),
+	}
+
+	written, err := remoteFile.ReadFrom(pr)
+	closeErr := remoteFile.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return fmt.Errorf("关闭远程临时文件失败: %w", closeErr)
+	}
+
+	// 强制最终进度（并发读盘太快时中间回调可能被节流掉）
+	if onProgress != nil {
+		onProgress(transfer.Progress{
+			TransferID:     transferID,
+			Status:         "progress",
+			CurrentFile:    currentFile,
+			FilesCompleted: filesCompleted,
+			FilesTotal:     filesTotal,
+			BytesDone:      baseBytesDone + written,
+			BytesTotal:     bytesTotal,
+		})
+	}
+
+	if targetExists {
+		if err := client.Chmod(tempPath, targetMode); err != nil {
+			return fmt.Errorf("同步远程文件权限失败: %w", err)
 		}
-		if readErr == io.EOF {
+		if err := client.PosixRename(tempPath, remotePath); err == nil {
+			cleanupTemp = false
 			return nil
+		} else if !isSFTPOpUnsupported(err) {
+			return fmt.Errorf("原子替换远程文件失败: %w", err)
 		}
-		if readErr != nil {
-			return readErr
+
+		// 不支持 PosixRename 时回退 backup 路径
+		backupPath := buildRemoteTempPath(remotePath, "bak")
+		if err := client.Rename(remotePath, backupPath); err != nil {
+			return fmt.Errorf("创建远程备份文件失败: %w", err)
+		}
+		if err := client.Rename(tempPath, remotePath); err != nil {
+			_ = client.Rename(backupPath, remotePath)
+			return fmt.Errorf("替换远程文件失败: %w", err)
+		}
+		_ = client.Remove(backupPath)
+		cleanupTemp = false
+		return nil
+	}
+
+	if err := client.Rename(tempPath, remotePath); err != nil {
+		return fmt.Errorf("提交远程临时文件失败: %w", err)
+	}
+	cleanupTemp = false
+	return nil
+}
+
+// downloadFileAtomic：远程 → 本地临时文件（并发读）→ 原子 rename
+func (s *Service) downloadFileAtomic(ctx context.Context, transferID string, remote *sftp.File, localPath string, fileSize int64, filesTotal int, currentFile string, baseBytesDone int64, filesCompleted int, onProgress func(transfer.Progress)) error {
+	dir := filepath.Dir(localPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("创建本地目录失败: %w", err)
+	}
+
+	base := filepath.Base(localPath)
+	tempPath := filepath.Join(dir, fmt.Sprintf(".%s.opskat-part-%d", base, time.Now().UnixNano()))
+
+	localFile, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644) //nolint:gosec
+	if err != nil {
+		return fmt.Errorf("创建本地临时文件失败: %w", err)
+	}
+	committed := false
+	defer func() {
+		_ = localFile.Close()
+		if !committed {
+			_ = os.Remove(tempPath)
+		}
+	}()
+
+	pw := &progressWriter{
+		ctx:            ctx,
+		w:              localFile,
+		transferID:     transferID,
+		currentFile:    currentFile,
+		filesTotal:     filesTotal,
+		filesCompleted: filesCompleted,
+		baseBytesDone:  baseBytesDone,
+		totalBytes:     fileSize + baseBytesDone, // 目录场景下 total 由上层控制；单文件时 base=0
+		fileTotal:      fileSize,
+		onProgress:     onProgress,
+		reporter:       transfer.NewReporter(onProgress),
+	}
+	// 单文件时 BytesTotal 应是 fileSize；目录时上层用 base 累加
+	if baseBytesDone == 0 && filesTotal <= 1 {
+		pw.totalBytes = fileSize
+	}
+
+	// WriteTo 在 UseConcurrentReads 时走并发读流水线
+	_, err = remote.WriteTo(pw)
+	if err != nil {
+		return err
+	}
+	if err := localFile.Sync(); err != nil {
+		return fmt.Errorf("同步本地文件失败: %w", err)
+	}
+	if err := localFile.Close(); err != nil {
+		return fmt.Errorf("关闭本地临时文件失败: %w", err)
+	}
+
+	if err := os.Rename(tempPath, localPath); err != nil {
+		return fmt.Errorf("提交本地文件失败: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+// progressReader：包装本地读，提供 Size() 让 ReadFrom 走并发写，并稳定上报进度
+type progressReader struct {
+	ctx            context.Context
+	r              io.Reader
+	size           int64 // 当前文件大小
+	bytesDone      int64
+	baseBytesDone  int64
+	bytesTotal     int64 // 整次传输总字节
+	transferID     string
+	currentFile    string
+	filesTotal     int
+	filesCompleted int
+	onProgress     func(transfer.Progress)
+	reporter       *transfer.Reporter
+	lastReport     time.Time
+}
+
+func (p *progressReader) Size() int64 { return p.size }
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	if err := p.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.bytesDone += int64(n)
+		p.report(false)
+	}
+	if errors.Is(err, io.EOF) {
+		p.report(true) // EOF 强制再报一次
+	}
+	return n, err
+}
+
+func (p *progressReader) report(force bool) {
+	now := time.Now()
+	if !force && now.Sub(p.lastReport) < 50*time.Millisecond {
+		return
+	}
+	p.lastReport = now
+
+	total := p.bytesTotal
+	if total <= 0 {
+		total = p.baseBytesDone + p.size
+	}
+
+	prog := transfer.Progress{
+		TransferID:     p.transferID,
+		Status:         "progress",
+		CurrentFile:    p.currentFile,
+		FilesCompleted: p.filesCompleted,
+		FilesTotal:     p.filesTotal,
+		BytesDone:      p.baseBytesDone + p.bytesDone,
+		BytesTotal:     total,
+	}
+	if p.reporter != nil {
+		p.reporter.Report(prog)
+	} else if p.onProgress != nil {
+		p.onProgress(prog)
+	}
+}
+
+// progressWriter：包装本地写，上报进度
+type progressWriter struct {
+	ctx            context.Context
+	w              io.Writer
+	bytesDone      int64
+	baseBytesDone  int64
+	totalBytes     int64
+	fileTotal      int64
+	transferID     string
+	currentFile    string
+	filesTotal     int
+	filesCompleted int
+	onProgress     func(transfer.Progress)
+	reporter       *transfer.Reporter
+	lastReport     time.Time
+}
+
+func (p *progressWriter) Write(b []byte) (int, error) {
+	if err := p.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n, err := p.w.Write(b)
+	if n > 0 {
+		p.bytesDone += int64(n)
+		now := time.Now()
+		if now.Sub(p.lastReport) >= 100*time.Millisecond || err != nil {
+			total := p.totalBytes
+			if total == 0 {
+				total = p.baseBytesDone + p.fileTotal
+			}
+			p.reporter.Report(transfer.Progress{
+				TransferID:     p.transferID,
+				Status:         "progress",
+				CurrentFile:    p.currentFile,
+				FilesCompleted: p.filesCompleted,
+				FilesTotal:     p.filesTotal,
+				BytesDone:      p.baseBytesDone + p.bytesDone,
+				BytesTotal:     total,
+			})
+			p.lastReport = now
 		}
 	}
+	return n, err
 }
 
 func writeFileAtomically(client remoteAtomicClient, remotePath string, data []byte) error {
