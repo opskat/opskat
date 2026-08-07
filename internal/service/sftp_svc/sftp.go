@@ -26,6 +26,12 @@ import (
 
 // MaxReadFileSize limits full-file reads used by desktop features such as external edit.
 const MaxReadFileSize int64 = 10 * 1024 * 1024
+const (
+	SFTPBufferSize        = 256 * 1024
+	SFTPChunkSize         = 61440 // 60KB
+	SFTPMaxInflight       = 64
+	SFTPPipelineThreshold = 512 * 1024
+)
 
 // Service SFTP 文件传输服务
 type Service struct {
@@ -94,7 +100,7 @@ func (s *Service) getSFTPClient(sessionID string) (*sftp.Client, error) {
 		return nil, fmt.Errorf("SSH 会话已关闭: %s", sessionID)
 	}
 
-	client, err := sftp.NewClient(sess.Client())
+	client, err := sftp.NewClient(sess.Client(), sftp.UseConcurrentWrites(true), sftp.UseConcurrentReads(true))
 	if err != nil {
 		return nil, fmt.Errorf("创建 SFTP 客户端失败: %w", err)
 	}
@@ -737,41 +743,263 @@ func (s *Service) removeDirRecursive(client *sftp.Client, path string) error {
 }
 
 // copyWithProgress 带进度的文件拷贝
-func (s *Service) copyWithProgress(ctx context.Context, transferID string, dst io.Writer, src io.Reader, totalBytes int64, filesTotal int, currentFile string, onProgress func(transfer.Progress)) error {
-	buf := make([]byte, 32*1024)
-	var bytesDone int64
+func (s *Service) copyWithProgress(ctx context.Context, transferID string, dst io.WriterAt, src io.ReaderAt, totalBytes int64, filesTotal int, currentFile string, onProgress func(transfer.Progress)) error {
+
+	type chunkResult struct {
+		offset int64
+		data   []byte
+		err    error
+	}
+
+	results := make(chan chunkResult, SFTPMaxInflight)
+
+	var (
+		offset    int64
+		nextWrite int64
+		inflight  int
+		bytesDone int64
+	)
+
+	// 保存乱序返回的数据
+	pending := make(map[int64][]byte)
+
+	lastReport := time.Now()
+
 	reporter := transfer.NewReporter(onProgress)
 
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
+	// 启动读取任务
+	startChunk := func(offset, size int64) {
 
-		n, readErr := src.Read(buf)
-		if n > 0 {
-			if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
-				return writeErr
+		go func() {
+
+			buf := make([]byte, size)
+
+			n, err := src.ReadAt(
+				buf,
+				offset,
+			)
+
+			if err != nil && err != io.EOF {
+
+				select {
+				case results <- chunkResult{
+					offset: offset,
+					err:    err,
+				}:
+				case <-ctx.Done():
+				}
+
+				return
 			}
-			bytesDone += int64(n)
 
-			reporter.Report(transfer.Progress{
-				TransferID:  transferID,
-				Status:      "progress",
-				CurrentFile: currentFile,
-				FilesTotal:  filesTotal,
-				BytesDone:   bytesDone,
-				BytesTotal:  totalBytes,
-			})
-		}
-		if readErr == io.EOF {
-			return nil
-		}
-		if readErr != nil {
-			return readErr
-		}
+			if int64(n) != size {
+
+				select {
+				case results <- chunkResult{
+					offset: offset,
+					err: fmt.Errorf(
+						"short read offset=%d got=%d expected=%d",
+						offset,
+						n,
+						size,
+					),
+				}:
+				case <-ctx.Done():
+				}
+
+				return
+			}
+
+			select {
+			case results <- chunkResult{
+				offset: offset,
+				data:   buf,
+			}:
+
+			case <-ctx.Done():
+			}
+
+		}()
+
 	}
-}
 
+	// 顺序写入
+	writeChunk := func(data []byte) error {
+
+		n, err := dst.WriteAt(
+			data,
+			nextWrite,
+		)
+
+		if err != nil {
+			return err
+		}
+
+		if n != len(data) {
+			return io.ErrShortWrite
+		}
+
+		nextWrite += int64(n)
+
+		bytesDone += int64(n)
+
+		return nil
+	}
+
+	// 小文件不用pipeline
+	if totalBytes <= SFTPPipelineThreshold {
+
+		buf := make([]byte, SFTPBufferSize)
+
+		var offset int64
+
+		for offset < totalBytes {
+
+			size := int64(len(buf))
+
+			if offset+size > totalBytes {
+				size = totalBytes - offset
+			}
+
+			n, err := src.ReadAt(
+				buf[:size],
+				offset,
+			)
+
+			if err != nil && err != io.EOF {
+				return err
+			}
+
+			if n > 0 {
+
+				_, err = dst.WriteAt(
+					buf[:n],
+					offset,
+				)
+
+				if err != nil {
+					return err
+				}
+
+				offset += int64(n)
+
+				bytesDone += int64(n)
+
+			}
+
+		}
+
+		return nil
+	}
+
+	// pipeline模式
+
+	for offset < totalBytes || inflight > 0 {
+
+		// 填充请求
+		for offset < totalBytes &&
+			inflight < SFTPMaxInflight {
+
+			size := int64(SFTPChunkSize)
+
+			if offset+size > totalBytes {
+				size = totalBytes - offset
+			}
+
+			startChunk(
+				offset,
+				size,
+			)
+
+			offset += size
+
+			inflight++
+
+		}
+
+		select {
+
+		case <-ctx.Done():
+
+			return ctx.Err()
+
+		case result := <-results:
+
+			inflight--
+
+			if result.err != nil {
+				return result.err
+			}
+
+			// 保存结果
+			pending[result.offset] = result.data
+
+			// 尝试连续写
+			for {
+
+				data, ok := pending[nextWrite]
+
+				if !ok {
+					break
+				}
+
+				delete(
+					pending,
+					nextWrite,
+				)
+
+				err := writeChunk(data)
+
+				if err != nil {
+					return err
+				}
+
+			}
+
+			// 更新进度
+
+			if time.Since(lastReport) >= 100*time.Millisecond {
+
+				reporter.Report(
+					transfer.Progress{
+
+						TransferID: transferID,
+
+						Status: "progress",
+
+						CurrentFile: currentFile,
+						FilesTotal:  filesTotal,
+
+						BytesDone:  bytesDone,
+						BytesTotal: totalBytes,
+					},
+				)
+
+				lastReport = time.Now()
+
+			}
+
+		}
+
+	}
+
+	reporter.Report(
+		transfer.Progress{
+
+			TransferID: transferID,
+
+			Status: "progress",
+
+			CurrentFile: currentFile,
+			FilesTotal:  filesTotal,
+
+			BytesDone:  totalBytes,
+			BytesTotal: totalBytes,
+		},
+	)
+
+	return nil
+}
 func writeFileAtomically(client remoteAtomicClient, remotePath string, data []byte) error {
 	// 优先写临时文件再切换目标文件名：
 	// 成功时远端始终只会看到“旧版本”或“完整新版本”，不会暴露半写入状态。
