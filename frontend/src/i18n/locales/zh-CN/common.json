@@ -722,7 +722,7 @@
     "openAICompatibleDesc": "兼容 OpenAI、DeepSeek 等主流 API",
     "anthropicDesc": "Anthropic Claude 系列模型 API",
     "opsctlBannerTitle": "通过 opsctl 插件使用",
-    "opsctlBannerDesc": "安装 opsctl CLI 并启用 AI Skill 插件，即可在 Claude Code、Codex 等 AI 编程工具中直接管理和操作你的服务器资产。",
+    "opsctlBannerDesc": "安装 opsctl CLI 并启用 AI Skill 插件，即可在 Claude Code、Codex、Pi 等 AI 编程工具中直接管理和操作你的服务器资产。",
     "goToSettings": "前往设置",
     "selectProvider": "选择 AI 提供商",
     "configureProvider": "配置 {{provider}}",

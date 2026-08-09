@@ -793,7 +793,7 @@ type skillInstallType int
 
 const (
 	installClaude skillInstallType = iota // Claude Code 插件格式
-	installSkill                          // 普通 SKILL.md 格式（Codex/OpenCode）
+	installSkill                          // 普通 SKILL.md 格式（Codex/OpenCode/Pi）
 	installGemini                         // Gemini CLI 扩展格式
 )
 
@@ -823,6 +823,15 @@ var skillTargetDefs = []struct {
 	{
 		"OpenCode", installSkill,
 		func(home string) string { return filepath.Join(home, ".config", "opencode", "skills", "opsctl") },
+		func(path string) bool {
+			_, err := os.Stat(filepath.Join(path, "SKILL.md"))
+			return err == nil
+		},
+	},
+	{
+		// Pi 的全局 skills 目录（https://pi.dev/docs/latest/skills），SKILL.md 格式与 Codex 一致
+		"Pi", installSkill,
+		func(home string) string { return filepath.Join(home, ".pi", "agent", "skills", "opsctl") },
 		func(path string) bool {
 			_, err := os.Stat(filepath.Join(path, "SKILL.md"))
 			return err == nil
@@ -1156,6 +1165,12 @@ func (a *App) writePluginReference() error {
 			filepath.Join(base, "opencode", "opsctl", "SKILL.md"):                  skillMD,
 			filepath.Join(base, "opencode", "opsctl", "references", "commands.md"): a.skillContent.CommandsMD,
 			filepath.Join(base, "opencode", "opsctl", "references", "init.md"):     a.skillContent.InitMD,
+		}},
+		// Pi
+		{files: map[string]string{
+			filepath.Join(base, "pi", "opsctl", "SKILL.md"):                  skillMD,
+			filepath.Join(base, "pi", "opsctl", "references", "commands.md"): a.skillContent.CommandsMD,
+			filepath.Join(base, "pi", "opsctl", "references", "init.md"):     a.skillContent.InitMD,
 		}},
 		// Gemini CLI
 		{files: map[string]string{
