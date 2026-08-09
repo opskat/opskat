@@ -952,6 +952,15 @@ var skillTargetDefs = []skillTargetDef{
 		},
 	},
 	{
+		// Pi 的全局 skills 目录（https://pi.dev/docs/latest/skills），SKILL.md 格式与 Codex 一致
+		"pi", "Pi", installSkill,
+		func(home string) string { return filepath.Join(home, ".pi", "agent", "skills", "opsctl") },
+		func(path string) bool {
+			_, err := os.Stat(filepath.Join(path, "SKILL.md"))
+			return err == nil
+		},
+	},
+	{
 		"gemini-cli", "Gemini CLI", installGemini,
 		func(home string) string { return filepath.Join(home, ".gemini", "extensions", "opsctl") },
 		func(path string) bool {
@@ -1556,6 +1565,12 @@ func (s *System) writePluginReference() error {
 			filepath.Join(base, "opencode", "opsctl", "SKILL.md"):                  skillMD,
 			filepath.Join(base, "opencode", "opsctl", "references", "commands.md"): s.skillContent.CommandsMD,
 			filepath.Join(base, "opencode", "opsctl", "references", "init.md"):     s.skillContent.InitMD,
+		}},
+		// Pi
+		{files: map[string]string{
+			filepath.Join(base, "pi", "opsctl", "SKILL.md"):                  skillMD,
+			filepath.Join(base, "pi", "opsctl", "references", "commands.md"): s.skillContent.CommandsMD,
+			filepath.Join(base, "pi", "opsctl", "references", "init.md"):     s.skillContent.InitMD,
 		}},
 		// Gemini CLI
 		{files: map[string]string{

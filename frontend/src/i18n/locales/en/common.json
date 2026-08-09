@@ -1095,7 +1095,7 @@
     "openAICompatibleDesc": "Works with OpenAI, DeepSeek, and other major APIs",
     "anthropicDesc": "Anthropic Claude series model API",
     "opsctlBannerTitle": "Use via opsctl Plugin",
-    "opsctlBannerDesc": "Install the opsctl CLI and enable the AI Skill plugin to manage and operate your server assets directly from Claude Code, Codex, and other AI coding tools.",
+    "opsctlBannerDesc": "Install the opsctl CLI and enable the AI Skill plugin to manage and operate your server assets directly from Claude Code, Codex, Pi, and other AI coding tools.",
     "goToSettings": "Go to Settings",
     "selectProvider": "Select AI Provider",
     "configureProvider": "Configure {{provider}}",
