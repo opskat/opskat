@@ -913,11 +913,10 @@ type skillInstallType int
 
 const (
 	installClaude skillInstallType = iota // Claude Code 插件格式
-	installSkill                          // 普通 SKILL.md 格式（Codex/OpenCode）
-	installGemini                         // Gemini CLI 扩展格式
+	installSkill                          // 普通 SKILL.md 格式
 )
 
-// skillTargetDefs 支持的 Skill 安装目标，添加新 CLI 只需在此追加
+// skillTargetDef 支持的 Skill 安装目标，添加新 CLI 只需在此追加
 type skillTargetDef struct {
 	Key      string                   // 稳定标识，供前端逐项卸载调用
 	Name     string                   // 显示名称
@@ -926,7 +925,57 @@ type skillTargetDef struct {
 	DetectFn func(path string) bool   // 检测是否已安装
 }
 
-var skillTargetDefs = []skillTargetDef{
+// SkillAgent 通用目录（~/.agents/skills）受益的 agent
+type SkillAgent struct {
+	Key  string `json:"key"`
+	Name string `json:"name"`
+}
+
+// SkillInstallInfo Skill 安装状态总览
+type SkillInstallInfo struct {
+	UniversalPath      string        `json:"universalPath"`
+	UniversalInstalled bool          `json:"universalInstalled"`
+	UniversalAgents    []SkillAgent  `json:"universalAgents"`
+	Standalone         []SkillTarget `json:"standalone"`
+}
+
+const universalSkillKey = "universal"
+
+// universalSkillDir 返回跨 agent 共享目录 ~/.agents/skills/opsctl
+// 该目录遵循 Agent Skills 通用约定，被 Pi/Codex/Cursor/Copilot/Windsurf/Gemini CLI/Cline/Warp 等读取。
+func universalSkillDir(home string) string {
+	return filepath.Join(home, ".agents", "skills", pluginName)
+}
+
+// universalAgents 支持读取 ~/.agents/skills 的 agent，一次安装全部生效
+var universalAgents = []SkillAgent{
+	{"pi", "Pi"},
+	{"codex", "Codex"},
+	{"cursor", "Cursor"},
+	{"copilot", "GitHub Copilot"},
+	{"windsurf", "Windsurf"},
+	{"gemini-cli", "Gemini CLI"},
+	{"cline", "Cline"},
+	{"warp", "Warp"},
+	{"rovo", "Rovo Dev"},
+	{"amp", "Amp"},
+}
+
+// universalDef 通用目录安装目标
+var universalDef = skillTargetDef{
+	Key: universalSkillKey, Name: "Universal", Type: installSkill,
+	SkillFn:  func(home string) string { return universalSkillDir(home) },
+	DetectFn: skillInstalledAt,
+}
+
+// skillInstalledAt 检测目录是否已安装 SKILL.md
+func skillInstalledAt(path string) bool {
+	_, err := os.Stat(filepath.Join(path, "SKILL.md"))
+	return err == nil
+}
+
+// standaloneDefs 不读取 ~/.agents/skills、需要单独安装的目标
+var standaloneDefs = []skillTargetDef{
 	{
 		"claude-code", "Claude Code", installClaude,
 		func(home string) string { return claudePluginDir(home) },
@@ -936,35 +985,10 @@ var skillTargetDefs = []skillTargetDef{
 		},
 	},
 	{
-		"codex", "Codex", installSkill,
-		func(home string) string { return filepath.Join(home, ".codex", "skills", "opsctl") },
-		func(path string) bool {
-			_, err := os.Stat(filepath.Join(path, "SKILL.md"))
-			return err == nil
-		},
-	},
-	{
 		"opencode", "OpenCode", installSkill,
 		func(home string) string { return filepath.Join(home, ".config", "opencode", "skills", "opsctl") },
 		func(path string) bool {
 			_, err := os.Stat(filepath.Join(path, "SKILL.md"))
-			return err == nil
-		},
-	},
-	{
-		// Pi 的全局 skills 目录（https://pi.dev/docs/latest/skills），SKILL.md 格式与 Codex 一致
-		"pi", "Pi", installSkill,
-		func(home string) string { return filepath.Join(home, ".pi", "agent", "skills", "opsctl") },
-		func(path string) bool {
-			_, err := os.Stat(filepath.Join(path, "SKILL.md"))
-			return err == nil
-		},
-	},
-	{
-		"gemini-cli", "Gemini CLI", installGemini,
-		func(home string) string { return filepath.Join(home, ".gemini", "extensions", "opsctl") },
-		func(path string) bool {
-			_, err := os.Stat(filepath.Join(path, "gemini-extension.json"))
 			return err == nil
 		},
 	},
@@ -1001,23 +1025,29 @@ func claudeMarketplaceDir(home string) string {
 	return filepath.Join(home, ".claude", "plugins", "marketplaces", pluginRegistryName)
 }
 
-// DetectSkills 检测所有 AI 工具的 Skill 安装状态
-func (s *System) DetectSkills() []SkillTarget {
+// DetectSkills 检测通用目录与单独安装目标的 Skill 安装状态
+func (s *System) DetectSkills() SkillInstallInfo {
 	home, err := os.UserHomeDir()
+	info := SkillInstallInfo{UniversalAgents: universalAgents}
 	if err != nil {
-		return nil
+		return info
 	}
-	targets := make([]SkillTarget, 0, len(skillTargetDefs))
-	for _, def := range skillTargetDefs {
+
+	upath := universalSkillDir(home)
+	info.UniversalPath = upath
+	info.UniversalInstalled = universalDef.DetectFn(upath)
+
+	info.Standalone = make([]SkillTarget, 0, len(standaloneDefs))
+	for _, def := range standaloneDefs {
 		path := def.SkillFn(home)
-		targets = append(targets, SkillTarget{
+		info.Standalone = append(info.Standalone, SkillTarget{
 			Key:       def.Key,
 			Name:      def.Name,
 			Installed: def.DetectFn(path),
 			Path:      path,
 		})
 	}
-	return targets
+	return info
 }
 
 // skillMDWithDataDir 返回注入数据目录后的 SKILL.md 内容
@@ -1215,41 +1245,6 @@ func (s *System) installSkillTo(skillDir string) error {
 	return nil
 }
 
-// installGeminiExtension 将 Skill 以 Gemini CLI 扩展格式安装
-// extDir = ~/.gemini/extensions/opsctl/
-func (s *System) installGeminiExtension(extDir string) error {
-	if pathTraversesSymlink(extDir) {
-		logger.Default().Info("skip Gemini extension install: target traverses symlink (dev mode)", zap.String("path", extDir))
-		return nil
-	}
-	dirs := []string{
-		filepath.Join(extDir, "skills", "opsctl", "references"),
-	}
-	for _, d := range dirs {
-		if err := os.MkdirAll(d, 0755); err != nil {
-			return fmt.Errorf("create directory %s failed: %w", d, err)
-		}
-	}
-
-	// 扩展清单（version 为必填字段）
-	manifest := `{"name":"opsctl","version":"` + pluginVersion + `"}` + "\n"
-
-	files := map[string]string{
-		filepath.Join(extDir, "gemini-extension.json"):                         manifest,
-		filepath.Join(extDir, "GEMINI.md"):                                     "See the opsctl skill in skills/opsctl/ for asset management instructions.\n",
-		filepath.Join(extDir, "skills", "opsctl", "SKILL.md"):                  s.skillMDWithDataDir(),
-		filepath.Join(extDir, "skills", "opsctl", "references", "commands.md"): s.skillContent.CommandsMD,
-		filepath.Join(extDir, "skills", "opsctl", "references", "init.md"):     s.skillContent.InitMD,
-	}
-	for path, content := range files {
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			return fmt.Errorf("write %s failed: %w", filepath.Base(path), err)
-		}
-	}
-
-	return nil
-}
-
 // installTarget 根据安装类型分发到对应安装方法
 func (s *System) installTarget(def skillTargetDef, home string) error {
 	path := def.SkillFn(home)
@@ -1258,8 +1253,6 @@ func (s *System) installTarget(def skillTargetDef, home string) error {
 		return s.installPluginTo(path, home)
 	case installSkill:
 		return s.installSkillTo(path)
-	case installGemini:
-		return s.installGeminiExtension(path)
 	default:
 		return fmt.Errorf("unknown install type: %d", def.Type)
 	}
@@ -1279,12 +1272,6 @@ func (s *System) skillTargetCurrent(def skillTargetDef, home string) (bool, erro
 		expected[filepath.Join(root, "SKILL.md")] = s.skillMDWithDataDir()
 		expected[filepath.Join(root, "references", "commands.md")] = s.skillContent.CommandsMD
 		expected[filepath.Join(root, "references", "init.md")] = s.skillContent.InitMD
-	case installGemini:
-		expected[filepath.Join(root, "gemini-extension.json")] = `{"name":"opsctl","version":"` + pluginVersion + `"}` + "\n"
-		expected[filepath.Join(root, "GEMINI.md")] = "See the opsctl skill in skills/opsctl/ for asset management instructions.\n"
-		expected[filepath.Join(root, "skills", "opsctl", "SKILL.md")] = s.skillMDWithDataDir()
-		expected[filepath.Join(root, "skills", "opsctl", "references", "commands.md")] = s.skillContent.CommandsMD
-		expected[filepath.Join(root, "skills", "opsctl", "references", "init.md")] = s.skillContent.InitMD
 	default:
 		return false, fmt.Errorf("unknown install type: %d", def.Type)
 	}
@@ -1303,8 +1290,13 @@ func (s *System) skillTargetCurrent(def skillTargetDef, home string) (bool, erro
 	return true, nil
 }
 
+// allSkillDefs 返回全部安装目标（通用目录 + 单独安装）
+func allSkillDefs() []skillTargetDef {
+	return append([]skillTargetDef{universalDef}, standaloneDefs...)
+}
+
 func (s *System) updateInstalledSkills(home string) error {
-	for _, def := range skillTargetDefs {
+	for _, def := range allSkillDefs() {
 		if !def.DetectFn(def.SkillFn(home)) {
 			continue
 		}
@@ -1354,14 +1346,14 @@ func (s *System) updateInstalledTools() {
 	}
 }
 
-// InstallSkills 安装 Skill 文件到所有支持的 AI 工具
+// InstallSkills 安装 Skill 到通用目录（~/.agents/skills）及所有单独安装目标
 func (s *System) InstallSkills() error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("get home directory failed: %w", err)
 	}
 
-	for _, def := range skillTargetDefs {
+	for _, def := range allSkillDefs() {
 		if err := s.installTarget(def, home); err != nil {
 			return fmt.Errorf("install %s failed: %w", def.Name, err)
 		}
@@ -1375,6 +1367,21 @@ func (s *System) InstallSkills() error {
 	return nil
 }
 
+// InstallSkillTarget 单独安装指定目标（universal / claude-code / opencode）
+func (s *System) InstallSkillTarget(key string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("get home directory failed: %w", err)
+	}
+
+	for _, def := range allSkillDefs() {
+		if def.Key == key {
+			return s.installTarget(def, home)
+		}
+	}
+	return fmt.Errorf("unknown skill target: %s", key)
+}
+
 // UninstallSkill 卸载指定 AI 工具中的 opsctl Skill/插件。
 func (s *System) UninstallSkill(key string) error {
 	home, err := os.UserHomeDir()
@@ -1382,7 +1389,7 @@ func (s *System) UninstallSkill(key string) error {
 		return fmt.Errorf("get home directory failed: %w", err)
 	}
 
-	for _, def := range skillTargetDefs {
+	for _, def := range allSkillDefs() {
 		if def.Key != key {
 			continue
 		}
@@ -1545,6 +1552,12 @@ func (s *System) writePluginReference() error {
 	structures := []struct {
 		files map[string]string
 	}{
+		// Universal（~/.agents/skills 布局，一次安装多 agent 生效）
+		{files: map[string]string{
+			filepath.Join(base, "agents", "opsctl", "SKILL.md"):                  skillMD,
+			filepath.Join(base, "agents", "opsctl", "references", "commands.md"): s.skillContent.CommandsMD,
+			filepath.Join(base, "agents", "opsctl", "references", "init.md"):     s.skillContent.InitMD,
+		}},
 		// Claude Code
 		{files: map[string]string{
 			filepath.Join(base, "claude-code", ".claude-plugin", "marketplace.json"):                      s.skillContent.MarketplaceJSON,
@@ -1554,31 +1567,11 @@ func (s *System) writePluginReference() error {
 			filepath.Join(base, "claude-code", "opsctl", "skills", "opsctl", "references", "commands.md"): s.skillContent.CommandsMD,
 			filepath.Join(base, "claude-code", "opsctl", "commands", "init.md"):                           s.skillContent.InitMD,
 		}},
-		// Codex
-		{files: map[string]string{
-			filepath.Join(base, "codex", "opsctl", "SKILL.md"):                  skillMD,
-			filepath.Join(base, "codex", "opsctl", "references", "commands.md"): s.skillContent.CommandsMD,
-			filepath.Join(base, "codex", "opsctl", "references", "init.md"):     s.skillContent.InitMD,
-		}},
 		// OpenCode
 		{files: map[string]string{
 			filepath.Join(base, "opencode", "opsctl", "SKILL.md"):                  skillMD,
 			filepath.Join(base, "opencode", "opsctl", "references", "commands.md"): s.skillContent.CommandsMD,
 			filepath.Join(base, "opencode", "opsctl", "references", "init.md"):     s.skillContent.InitMD,
-		}},
-		// Pi
-		{files: map[string]string{
-			filepath.Join(base, "pi", "opsctl", "SKILL.md"):                  skillMD,
-			filepath.Join(base, "pi", "opsctl", "references", "commands.md"): s.skillContent.CommandsMD,
-			filepath.Join(base, "pi", "opsctl", "references", "init.md"):     s.skillContent.InitMD,
-		}},
-		// Gemini CLI
-		{files: map[string]string{
-			filepath.Join(base, "gemini", "opsctl", "gemini-extension.json"):                         `{"name":"opsctl","version":"` + pluginVersion + `"}` + "\n",
-			filepath.Join(base, "gemini", "opsctl", "GEMINI.md"):                                     "See the opsctl skill in skills/opsctl/ for asset management instructions.\n",
-			filepath.Join(base, "gemini", "opsctl", "skills", "opsctl", "SKILL.md"):                  skillMD,
-			filepath.Join(base, "gemini", "opsctl", "skills", "opsctl", "references", "commands.md"): s.skillContent.CommandsMD,
-			filepath.Join(base, "gemini", "opsctl", "skills", "opsctl", "references", "init.md"):     s.skillContent.InitMD,
 		}},
 	}
 
