@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -84,8 +85,8 @@ func TestUninstallSkillRemovesUniversalTarget(t *testing.T) {
 	s := New(t.Context(), SkillContent{})
 
 	universal := universalSkillDir(home)
-	opencode := filepath.Join(home, ".config", "opencode", "skills", "opsctl")
-	for _, path := range []string{universal, opencode} {
+	claudePlugin := claudePluginDir(home)
+	for _, path := range []string{universal, claudePlugin} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatalf("MkdirAll %s: %v", path, err)
 		}
@@ -100,8 +101,8 @@ func TestUninstallSkillRemovesUniversalTarget(t *testing.T) {
 	if _, err := os.Stat(universal); !os.IsNotExist(err) {
 		t.Fatalf("universal target should be removed, stat err=%v", err)
 	}
-	if _, err := os.Stat(opencode); err != nil {
-		t.Fatalf("opencode target should remain: %v", err)
+	if _, err := os.Stat(claudePlugin); err != nil {
+		t.Fatalf("claude-code target should remain: %v", err)
 	}
 }
 
@@ -112,11 +113,11 @@ func TestUpdateInstalledSkillsOnlyReinstallsChangedTargets(t *testing.T) {
 		CommandsMD: "current commands\n",
 		InitMD:     "current init\n",
 	})
-	codexDir := universalSkillDir(home)
-	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+	universalDir := universalSkillDir(home)
+	if err := os.MkdirAll(universalDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(codexDir, "SKILL.md"), []byte("old skill\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(universalDir, "SKILL.md"), []byte("old skill\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -124,18 +125,18 @@ func TestUpdateInstalledSkillsOnlyReinstallsChangedTargets(t *testing.T) {
 		t.Fatalf("updateInstalledSkills: %v", err)
 	}
 	// universalDir is rooted in t.TempDir(), so the test controls the complete path.
-	got, err := os.ReadFile(filepath.Join(codexDir, "references", "commands.md")) //nolint:gosec
+	got, err := os.ReadFile(filepath.Join(universalDir, "references", "commands.md")) //nolint:gosec
 	if err != nil {
 		t.Fatalf("ReadFile updated commands: %v", err)
 	}
 	if string(got) != "current commands\n" {
 		t.Fatalf("commands = %q, want current content", got)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "skills", "opsctl")); !os.IsNotExist(err) {
-		t.Fatalf("uninstalled OpenCode target should remain absent, stat err=%v", err)
+	if _, err := os.Stat(claudePluginDir(home)); !os.IsNotExist(err) {
+		t.Fatalf("uninstalled Claude Code target should remain absent, stat err=%v", err)
 	}
 
-	skillPath := filepath.Join(codexDir, "SKILL.md")
+	skillPath := filepath.Join(universalDir, "SKILL.md")
 	mtime := time.Unix(1_700_000_000, 0)
 	if err := os.Chtimes(skillPath, mtime, mtime); err != nil {
 		t.Fatalf("Chtimes current skill: %v", err)
@@ -149,6 +150,59 @@ func TestUpdateInstalledSkillsOnlyReinstallsChangedTargets(t *testing.T) {
 	}
 	if !infoAfter.ModTime().Equal(mtime) {
 		t.Fatal("unchanged installed skill should not be rewritten")
+	}
+}
+
+func TestUpdateInstalledSkillsMigratesLegacyTargetsToUniversalDir(t *testing.T) {
+	home := setTestHome(t)
+	s := New(t.Context(), SkillContent{
+		SkillMD:    "---\nname: opsctl\n---\n\n## Global Flags\n",
+		CommandsMD: "current commands\n",
+		InitMD:     "current init\n",
+	})
+
+	legacy := []string{
+		filepath.Join(home, ".codex", "skills", "opsctl"),
+		filepath.Join(home, ".gemini", "extensions", "opsctl"),
+		filepath.Join(home, ".config", "opencode", "skills", "opsctl"),
+	}
+	for _, dir := range legacy {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("stale skill\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile %s: %v", dir, err)
+		}
+	}
+
+	if err := s.updateInstalledSkills(home); err != nil {
+		t.Fatalf("updateInstalledSkills: %v", err)
+	}
+
+	for _, dir := range legacy {
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("legacy dir %s should be removed, stat err=%v", dir, err)
+		}
+	}
+	// universalSkillDir is rooted in t.TempDir(), so the test controls the complete path.
+	got, err := os.ReadFile(filepath.Join(universalSkillDir(home), "SKILL.md"))
+	if err != nil {
+		t.Fatalf("legacy install should be migrated to the universal dir: %v", err)
+	}
+	if !strings.Contains(string(got), "name: opsctl") {
+		t.Fatalf("universal SKILL.md = %q, want current skill content", got)
+	}
+}
+
+func TestUpdateInstalledSkillsSkipsMigrationWithoutLegacyInstall(t *testing.T) {
+	home := setTestHome(t)
+	s := New(t.Context(), SkillContent{SkillMD: "---\nname: opsctl\n---\n\n## Global Flags\n"})
+
+	if err := s.updateInstalledSkills(home); err != nil {
+		t.Fatalf("updateInstalledSkills: %v", err)
+	}
+	if _, err := os.Stat(universalSkillDir(home)); !os.IsNotExist(err) {
+		t.Fatalf("universal dir should not be created when nothing was installed, stat err=%v", err)
 	}
 }
 

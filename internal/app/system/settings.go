@@ -942,7 +942,7 @@ type SkillInstallInfo struct {
 const universalSkillKey = "universal"
 
 // universalSkillDir 返回跨 agent 共享目录 ~/.agents/skills/opsctl
-// 该目录遵循 Agent Skills 通用约定，被 Pi/Codex/Cursor/Copilot/Windsurf/Gemini CLI/Cline/Warp 等读取。
+// 该目录遵循 Agent Skills 通用约定，被 Pi/Codex/OpenCode/Cursor/Copilot/Windsurf/Gemini CLI/Cline/Warp 等读取。
 func universalSkillDir(home string) string {
 	return filepath.Join(home, ".agents", "skills", pluginName)
 }
@@ -951,6 +951,7 @@ func universalSkillDir(home string) string {
 var universalAgents = []SkillAgent{
 	{"pi", "Pi"},
 	{"codex", "Codex"},
+	{"opencode", "OpenCode"},
 	{"cursor", "Cursor"},
 	{"copilot", "GitHub Copilot"},
 	{"windsurf", "Windsurf"},
@@ -959,6 +960,17 @@ var universalAgents = []SkillAgent{
 	{"warp", "Warp"},
 	{"rovo", "Rovo Dev"},
 	{"amp", "Amp"},
+}
+
+// legacySkillDirs 返回旧版本装到 agent 私有目录、现已被通用目录取代的安装路径。
+// 这些 agent 都会读取 ~/.agents/skills，留着旧副本会让同一个 opsctl skill 出现两份，
+// 且旧副本不再被更新（Gemini 扩展的 GEMINI.md 还会无条件注入上下文）。
+func legacySkillDirs(home string) []string {
+	return []string{
+		filepath.Join(home, ".codex", "skills", pluginName),
+		filepath.Join(home, ".gemini", "extensions", pluginName),
+		filepath.Join(home, ".config", "opencode", "skills", pluginName),
+	}
 }
 
 // universalDef 通用目录安装目标
@@ -981,14 +993,6 @@ var standaloneDefs = []skillTargetDef{
 		func(home string) string { return claudePluginDir(home) },
 		func(path string) bool {
 			_, err := os.Stat(filepath.Join(path, ".claude-plugin", "plugin.json"))
-			return err == nil
-		},
-	},
-	{
-		"opencode", "OpenCode", installSkill,
-		func(home string) string { return filepath.Join(home, ".config", "opencode", "skills", "opsctl") },
-		func(path string) bool {
-			_, err := os.Stat(filepath.Join(path, "SKILL.md"))
 			return err == nil
 		},
 	},
@@ -1219,8 +1223,8 @@ func writeJSON(path string, v any) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-// installSkillTo 将 Skill 文件以普通格式安装到目标目录（Codex/OpenCode）
-// Codex/OpenCode 没有 commands/ 机制，init.md 作为 references 供自动加载
+// installSkillTo 将 Skill 文件以普通 Agent Skills 格式安装到目标目录
+// 这类工具没有 commands/ 机制，init.md 作为 references 供自动加载
 func (s *System) installSkillTo(skillDir string) error {
 	if pathTraversesSymlink(skillDir) {
 		logger.Default().Info("skip skill install: target traverses symlink (dev mode)", zap.String("path", skillDir))
@@ -1295,7 +1299,47 @@ func allSkillDefs() []skillTargetDef {
 	return append([]skillTargetDef{universalDef}, standaloneDefs...)
 }
 
+// migrateLegacySkills 把旧版本装在 agent 私有目录的 Skill 收敛到通用目录：
+// 先确保通用目录已安装，再删除旧副本。通用目录没装成功（开发模式软链接）时保留旧副本，
+// 否则会把用户当下唯一可用的安装删掉。
+func (s *System) migrateLegacySkills(home string) error {
+	legacy := legacySkillDirs(home)
+	stale := make([]string, 0, len(legacy))
+	for _, dir := range legacy {
+		if _, err := os.Stat(dir); err == nil {
+			stale = append(stale, dir)
+		}
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+
+	universalPath := universalSkillDir(home)
+	if !universalDef.DetectFn(universalPath) {
+		if err := s.installTarget(universalDef, home); err != nil {
+			return fmt.Errorf("install universal skill for migration: %w", err)
+		}
+		if !universalDef.DetectFn(universalPath) {
+			logger.Default().Info("skip legacy skill migration: universal skill install was skipped",
+				zap.String("path", universalPath))
+			return nil
+		}
+	}
+
+	for _, dir := range stale {
+		if err := removeOwnedDir(dir, home, pluginName); err != nil {
+			return fmt.Errorf("remove legacy skill dir %s: %w", dir, err)
+		}
+		logger.Default().Info("migrated legacy skill install to universal dir",
+			zap.String("removed", dir), zap.String("universal", universalPath))
+	}
+	return nil
+}
+
 func (s *System) updateInstalledSkills(home string) error {
+	if err := s.migrateLegacySkills(home); err != nil {
+		return err
+	}
 	for _, def := range allSkillDefs() {
 		if !def.DetectFn(def.SkillFn(home)) {
 			continue
@@ -1357,6 +1401,10 @@ func (s *System) InstallSkills() error {
 		if err := s.installTarget(def, home); err != nil {
 			return fmt.Errorf("install %s failed: %w", def.Name, err)
 		}
+	}
+
+	if err := s.migrateLegacySkills(home); err != nil {
+		return err
 	}
 
 	// 在应用数据目录写一份各工具的插件结构，方便用户手动拷贝
@@ -1566,12 +1614,6 @@ func (s *System) writePluginReference() error {
 			filepath.Join(base, "claude-code", "opsctl", "skills", "opsctl", "SKILL.md"):                  skillMD,
 			filepath.Join(base, "claude-code", "opsctl", "skills", "opsctl", "references", "commands.md"): s.skillContent.CommandsMD,
 			filepath.Join(base, "claude-code", "opsctl", "commands", "init.md"):                           s.skillContent.InitMD,
-		}},
-		// OpenCode
-		{files: map[string]string{
-			filepath.Join(base, "opencode", "opsctl", "SKILL.md"):                  skillMD,
-			filepath.Join(base, "opencode", "opsctl", "references", "commands.md"): s.skillContent.CommandsMD,
-			filepath.Join(base, "opencode", "opsctl", "references", "init.md"):     s.skillContent.InitMD,
 		}},
 	}
 
