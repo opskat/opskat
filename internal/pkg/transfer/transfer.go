@@ -89,52 +89,123 @@ func (r *Reporter) Report(p Progress) {
 	r.emit(p)
 }
 
-// ProgressReader 包裹一个 io.Reader：在 sink 拥有读循环（如 minio PutObject）的流式上传里，
-// 于源 reader 侧观测进度并经 Reporter 节流上报；ctx 取消即中断读取。同一传输的 Read 串行，
-// 内部无需加锁（与 Reporter 约定一致）。
-type ProgressReader struct {
+// Tracker 跟踪一次传输的整体进度。一次传输可能包含多个文件（目录上传/下载），
+// 总文件数与总字节数在扫描阶段一次确定，之后每个文件只需上报"当前文件已传字节"，
+// 累计量由 Tracker 维护 —— 调用方不再需要把 base/total 这类跨文件状态逐层透传，
+// 那正是把"当前文件大小"误当成整次总量的来源。
+//
+// 整次传输共用一个 Reporter，因此速率是整次传输的平均值，不会因为换文件而重置计时起点。
+// 同一传输的上报必须串行（拷贝循环天然满足），内部不加锁。
+type Tracker struct {
+	reporter   *Reporter
+	transferID string
+	filesTotal int
+	bytesTotal int64
+
+	filesDone int
+	bytesDone int64 // 已完成文件的累计字节，不含当前文件
+}
+
+// NewTracker 创建传输跟踪器。filesTotal/bytesTotal 是整次传输的总量。
+func NewTracker(transferID string, filesTotal int, bytesTotal int64, onProgress func(Progress)) *Tracker {
+	return newTracker(transferID, filesTotal, bytesTotal, onProgress, time.Now)
+}
+
+// newTracker 允许注入时钟，便于在测试里确定性地验证节流与测速。
+func newTracker(transferID string, filesTotal int, bytesTotal int64, onProgress func(Progress), now func() time.Time) *Tracker {
+	return &Tracker{
+		reporter:   newReporter(onProgress, now),
+		transferID: transferID,
+		filesTotal: filesTotal,
+		bytesTotal: bytesTotal,
+	}
+}
+
+// FileDone 把一个已传完文件的字节数计入累计量。
+func (t *Tracker) FileDone(size int64) {
+	t.filesDone++
+	t.bytesDone += size
+}
+
+func (t *Tracker) report(currentFile string, currentFileBytes int64) {
+	t.reporter.Report(Progress{
+		TransferID:     t.transferID,
+		Status:         StatusProgress,
+		CurrentFile:    currentFile,
+		FilesCompleted: t.filesDone,
+		FilesTotal:     t.filesTotal,
+		BytesDone:      t.bytesDone + currentFileBytes,
+		BytesTotal:     t.bytesTotal,
+	})
+}
+
+// Reader 包裹当前文件的源 reader：在 sink 拥有读循环（minio PutObject、
+// sftp.File.ReadFrom）的流式上传里，于源侧观测进度；ctx 取消即中断读取。
+// size 是当前文件的大小，经 Size() 暴露给 pkg/sftp 的 ReadFrom 以启用并发写。
+func (t *Tracker) Reader(ctx context.Context, r io.Reader, currentFile string, size int64) *TrackedReader {
+	return &TrackedReader{ctx: ctx, r: r, tracker: t, currentFile: currentFile, size: size}
+}
+
+// Writer 包裹当前文件的目标 writer，用于 source 拥有写循环的流式下载
+// （sftp.File.WriteTo）；ctx 取消即中断写入。
+func (t *Tracker) Writer(ctx context.Context, w io.Writer, currentFile string) *TrackedWriter {
+	return &TrackedWriter{ctx: ctx, w: w, tracker: t, currentFile: currentFile}
+}
+
+// TrackedReader 是 Tracker 包裹出的源 reader。
+type TrackedReader struct {
 	ctx         context.Context
 	r           io.Reader
-	reporter    *Reporter
-	transferID  string
+	tracker     *Tracker
 	currentFile string
-	total       int64
+	size        int64
 	done        int64
 }
 
-// NewProgressReader 构造进度 reader，内部持有独立 Reporter（100ms 节流）。
-func NewProgressReader(ctx context.Context, transferID, currentFile string, r io.Reader, total int64, onProgress func(Progress)) *ProgressReader {
-	return &ProgressReader{
-		ctx:         ctx,
-		r:           r,
-		reporter:    NewReporter(onProgress),
-		transferID:  transferID,
-		currentFile: currentFile,
-		total:       total,
-	}
-}
+// Size 返回当前文件的大小。pkg/sftp 的 ReadFrom 依赖它决定并发写窗口，
+// 返回整次传输总量会让它按错误的长度切分。
+func (r *TrackedReader) Size() int64 { return r.size }
 
-func (p *ProgressReader) Read(b []byte) (int, error) {
-	if err := p.ctx.Err(); err != nil {
+func (r *TrackedReader) Read(b []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
 		return 0, err
 	}
-	n, err := p.r.Read(b)
+	n, err := r.r.Read(b)
 	if n > 0 {
-		p.done += int64(n)
-		p.reporter.Report(Progress{
-			TransferID:  p.transferID,
-			Status:      StatusProgress,
-			CurrentFile: p.currentFile,
-			FilesTotal:  1,
-			BytesDone:   p.done,
-			BytesTotal:  p.total,
-		})
+		r.done += int64(n)
+		r.tracker.report(r.currentFile, r.done)
 	}
 	return n, err
 }
 
+// TrackedWriter 是 Tracker 包裹出的目标 writer。
+type TrackedWriter struct {
+	ctx         context.Context
+	w           io.Writer
+	tracker     *Tracker
+	currentFile string
+	done        int64
+}
+
+func (w *TrackedWriter) Write(b []byte) (int, error) {
+	if err := w.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n, err := w.w.Write(b)
+	if n > 0 {
+		w.done += int64(n)
+		w.tracker.report(w.currentFile, w.done)
+	}
+	return n, err
+}
+
+// NewProgressReader 是单文件传输的快捷方式，等价于一个 filesTotal=1 的 Tracker。
+func NewProgressReader(ctx context.Context, transferID, currentFile string, r io.Reader, total int64, onProgress func(Progress)) *TrackedReader {
+	return NewTracker(transferID, 1, total, onProgress).Reader(ctx, r, currentFile, total)
+}
+
 // Copy 以 32KiB 分片把 src 流式写入 dst,经独立 Reporter(100ms 节流)上报进度,
-// ctx 取消即中断。镜像 sftp_svc.copyWithProgress,让每种传输源共用一套节流拷贝循环。
+// ctx 取消即中断。用于两端都不提供 ReadFrom/WriteTo 的传输源。
 func Copy(ctx context.Context, transferID string, dst io.Writer, src io.Reader, totalBytes int64, currentFile string, onProgress func(Progress)) error {
 	buf := make([]byte, 32*1024)
 	var bytesDone int64

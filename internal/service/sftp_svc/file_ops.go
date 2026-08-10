@@ -11,6 +11,9 @@ import (
 	"strings"
 
 	"github.com/pkg/sftp"
+	"go.uber.org/zap"
+
+	"github.com/cago-frame/cago/pkg/logger"
 )
 
 // ClipboardItem describes a remote path captured by the file-manager clipboard.
@@ -145,11 +148,12 @@ func (s *Service) Paste(ctx context.Context, req PasteRequest) error {
 			continue
 		}
 
+		src, dst := sftpCopyClient{client: srcClient}, sftpCopyClient{client: dstClient}
 		if item.IsDir {
-			if err := copyRemoteDir(ctx, srcClient, dstClient, item.Path, dstPath); err != nil {
+			if err := copyRemoteDir(ctx, src, dst, item.Path, dstPath); err != nil {
 				return fmt.Errorf("copy directory %s: %w", item.Path, err)
 			}
-		} else if err := copyRemoteFile(ctx, srcClient, dstClient, item.Path, dstPath); err != nil {
+		} else if err := copyRemoteFile(ctx, src, dst, item.Path, dstPath); err != nil {
 			return fmt.Errorf("copy file %s: %w", item.Path, err)
 		}
 		if req.Mode == "cut" {
@@ -353,14 +357,38 @@ func uniqueRemotePath(client interface {
 	return "", fmt.Errorf("cannot find available copy name for %s", desired)
 }
 
-func copyRemoteFile(ctx context.Context, srcClient, dstClient interface {
-	Open(string) (*sftp.File, error)
-	Create(string) (*sftp.File, error)
+// remoteCopyClient 是 SFTP 粘贴需要的远端操作集合。
+// 用 io.ReadCloser / io.WriteCloser 而不是具体的 *sftp.File，让失败清理路径能被 fake 驱动；
+// io.Copy 仍会在运行时发现底层 *sftp.File 的 WriterTo/ReaderFrom，不损失吞吐。
+type remoteCopyClient interface {
+	Open(string) (io.ReadCloser, error)
+	Create(string) (io.WriteCloser, error)
 	Chmod(string, os.FileMode) error
 	Stat(string) (os.FileInfo, error)
-}, srcPath, dstPath string) error {
+	Remove(string) error
+	ReadDir(string) ([]os.FileInfo, error)
+	MkdirAll(string) error
+}
+
+type sftpCopyClient struct {
+	client *sftp.Client
+}
+
+func (c sftpCopyClient) Open(path string) (io.ReadCloser, error)    { return c.client.Open(path) }
+func (c sftpCopyClient) Create(path string) (io.WriteCloser, error) { return c.client.Create(path) }
+func (c sftpCopyClient) Chmod(path string, mode os.FileMode) error  { return c.client.Chmod(path, mode) }
+func (c sftpCopyClient) Stat(path string) (os.FileInfo, error)      { return c.client.Stat(path) }
+func (c sftpCopyClient) Remove(path string) error                   { return c.client.Remove(path) }
+func (c sftpCopyClient) ReadDir(path string) ([]os.FileInfo, error) { return c.client.ReadDir(path) }
+func (c sftpCopyClient) MkdirAll(path string) error                 { return c.client.MkdirAll(path) }
+
+func copyRemoteFile(ctx context.Context, srcClient, dstClient remoteCopyClient, srcPath, dstPath string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
+	}
+	srcInfo, err := srcClient.Stat(srcPath)
+	if err != nil {
+		return err
 	}
 	src, err := srcClient.Open(srcPath)
 	if err != nil {
@@ -371,24 +399,42 @@ func copyRemoteFile(ctx context.Context, srcClient, dstClient interface {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = dst.Close() }()
+
+	// 客户端启用了并发写，出错时目标文件可能比成功写入的部分更长（中间留空洞）。
+	// 粘贴失败必须把半成品删掉：留下一个同名、长度看似正确、内容却有空洞的文件，
+	// 比直接报错危险得多。
+	committed := false
+	defer func() {
+		_ = dst.Close()
+		if !committed {
+			if err := dstClient.Remove(dstPath); err != nil && !os.IsNotExist(err) {
+				logger.Default().Warn("cleanup partial remote copy", zap.String("path", dstPath), zap.Error(err))
+			}
+		}
+	}()
+
 	if _, err := io.Copy(dst, src); err != nil {
 		return err
 	}
-	if info, err := srcClient.Stat(srcPath); err == nil {
-		_ = dstClient.Chmod(dstPath, info.Mode())
+	if err := dst.Close(); err != nil {
+		return err
 	}
+	// 复核落盘字节数：上游 ReadFrom/WriteTo 会吞掉最后一片的写入错误，
+	// 详见 sftp.go 的 verifyRemoteSize。
+	dstInfo, err := dstClient.Stat(dstPath)
+	if err != nil {
+		return err
+	}
+	if dstInfo.Size() != srcInfo.Size() {
+		return fmt.Errorf("复制远程文件大小校验失败：期望 %d 字节，实际写入 %d 字节", srcInfo.Size(), dstInfo.Size())
+	}
+
+	_ = dstClient.Chmod(dstPath, srcInfo.Mode())
+	committed = true
 	return nil
 }
 
-func copyRemoteDir(ctx context.Context, srcClient, dstClient interface {
-	Open(string) (*sftp.File, error)
-	Create(string) (*sftp.File, error)
-	Chmod(string, os.FileMode) error
-	Stat(string) (os.FileInfo, error)
-	ReadDir(string) ([]os.FileInfo, error)
-	MkdirAll(string) error
-}, srcDir, dstDir string) error {
+func copyRemoteDir(ctx context.Context, srcClient, dstClient remoteCopyClient, srcDir, dstDir string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
