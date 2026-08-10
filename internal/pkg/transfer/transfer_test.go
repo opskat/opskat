@@ -3,6 +3,8 @@ package transfer
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +66,102 @@ func TestReporterEmitsTerminalImmediately(t *testing.T) {
 	if len(statuses) != 2 || statuses[0] != "progress" || statuses[1] != "done" {
 		t.Fatalf("want [progress done], got %v", statuses)
 	}
+}
+
+func TestTrackerKeepsTransferTotalAcrossFiles(t *testing.T) {
+	// 3 个 100 字节的文件：无论传到第几个，BytesTotal 都必须是整次传输的 300，
+	// BytesDone 必须单调递增且不越过总量。回归 #272：目录上传曾把"当前文件大小"
+	// 当成 bytesTotal 传下去，导致进度条走到 250%。
+	cur := time.Unix(0, 0)
+	clock := func() time.Time { return cur }
+	var got []Progress
+	tr := newTracker("sftp-1", 3, 300, func(p Progress) { got = append(got, p) }, clock)
+
+	for i := range 3 {
+		r := tr.Reader(context.Background(), bytes.NewReader(bytes.Repeat([]byte("x"), 100)), fmt.Sprintf("f%d.bin", i), 100)
+		for {
+			cur = cur.Add(200 * time.Millisecond) // 越过节流窗口，保证每次读都上报
+			if _, err := r.Read(make([]byte, 50)); err != nil {
+				break
+			}
+		}
+		tr.FileDone(100)
+	}
+
+	require.Len(t, got, 6)
+	var prev int64
+	for _, p := range got {
+		assert.Equal(t, int64(300), p.BytesTotal, "BytesTotal 必须是整次传输总量")
+		assert.Equal(t, 3, p.FilesTotal)
+		assert.GreaterOrEqual(t, p.BytesDone, prev, "BytesDone 必须单调递增")
+		assert.LessOrEqual(t, p.BytesDone, p.BytesTotal, "BytesDone 不得越过总量")
+		prev = p.BytesDone
+	}
+	assert.Equal(t, int64(300), got[len(got)-1].BytesDone)
+	assert.Equal(t, "f2.bin", got[len(got)-1].CurrentFile)
+	assert.Equal(t, 2, got[len(got)-1].FilesCompleted)
+}
+
+func TestTrackerReaderSizeIsCurrentFileNotTransferTotal(t *testing.T) {
+	// Size() 是 pkg/sftp ReadFrom 判断并发窗口的依据，必须是当前文件大小；
+	// 若误报成整次传输总量，ReadFrom 会按错误的长度切分并发写。
+	tr := NewTracker("sftp-1", 3, 300, func(Progress) {})
+	r := tr.Reader(context.Background(), bytes.NewReader(make([]byte, 100)), "f0.bin", 100)
+	assert.Equal(t, int64(100), r.Size())
+}
+
+func TestTrackerSpeedSpansWholeTransfer(t *testing.T) {
+	// 整次传输共用一个 Reporter：换文件不重置计时起点。
+	// 回归 #272：原实现每个文件 new 一个 Reporter，第 N 个文件的首条上报会用
+	// "累计字节 / 刚过去的几毫秒"算出 TB/s 级速率。
+	cur := time.Unix(0, 0)
+	clock := func() time.Time { return cur }
+	var got []Progress
+	tr := newTracker("sftp-1", 2, 1000, func(p Progress) { got = append(got, p) }, clock)
+
+	r0 := tr.Reader(context.Background(), bytes.NewReader(make([]byte, 500)), "a.bin", 500)
+	cur = cur.Add(5 * time.Second)
+	_, err := r0.Read(make([]byte, 500))
+	require.NoError(t, err)
+	tr.FileDone(500)
+
+	// 第二个文件只花 1ms —— 若各文件独立计时，速率会是 500B/0.001s = 500KB/s。
+	r1 := tr.Reader(context.Background(), bytes.NewReader(make([]byte, 500)), "b.bin", 500)
+	cur = cur.Add(5 * time.Second)
+	_, err = r1.Read(make([]byte, 500))
+	require.NoError(t, err)
+
+	require.Len(t, got, 2)
+	assert.Equal(t, int64(100), got[len(got)-1].Speed, "1000 字节 / 10 秒 = 100 B/s")
+}
+
+func TestTrackerWriterReportsAgainstTransferTotal(t *testing.T) {
+	// 下载侧同理：downloadFileAtomic 原先根本没有整次总量这个参数，
+	// 每个文件都把 BytesTotal 算成 "已完成 + 当前文件"，进度条每个文件都跑满 100%。
+	cur := time.Unix(0, 0)
+	clock := func() time.Time { return cur }
+	var got []Progress
+	tr := newTracker("sftp-2", 2, 200, func(p Progress) { got = append(got, p) }, clock)
+
+	tr.FileDone(100) // 第一个文件已完成
+	w := tr.Writer(context.Background(), io.Discard, "b.bin")
+	cur = cur.Add(200 * time.Millisecond)
+	_, err := w.Write(make([]byte, 60))
+	require.NoError(t, err)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, int64(200), got[0].BytesTotal)
+	assert.Equal(t, int64(160), got[0].BytesDone)
+	assert.Equal(t, 1, got[0].FilesCompleted)
+}
+
+func TestTrackerWriterAbortsOnCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w := NewTracker("sftp-2", 1, 4, func(Progress) {}).Writer(ctx, io.Discard, "b.bin")
+
+	_, err := w.Write([]byte("data"))
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestProgressReaderReportsCumulativeBytes(t *testing.T) {

@@ -71,7 +71,7 @@ func (s *Service) GenerateTransferID() string {
 	return transfer.GenerateID("sftp")
 }
 
-// getSFTPClient 获取或创建 SFTP 客户端（懒加载）
+// getSFTPClient 获取或创建 SFTP 客户端（懒加载，高性能配置）
 func (s *Service) getSFTPClient(sessionID string) (*sftp.Client, error) {
 	if v, ok := s.clients.Load(sessionID); ok {
 		client := v.(*sftp.Client)
@@ -94,7 +94,7 @@ func (s *Service) getSFTPClient(sessionID string) (*sftp.Client, error) {
 		return nil, fmt.Errorf("SSH 会话已关闭: %s", sessionID)
 	}
 
-	client, err := sftp.NewClient(sess.Client())
+	client, err := sftp.NewClient(sess.Client(), sftpClientOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("创建 SFTP 客户端失败: %w", err)
 	}
@@ -162,15 +162,34 @@ type RemoteFileInfo struct {
 	RealPath string `json:"realPath,omitempty"`
 }
 
+// sftpClientOptions 是所有 SFTP 客户端共用的选项，测试里的进程内客户端也走这一份，
+// 以免"生产开了并发写、测试没开"这种最容易漏掉的差异。
+//
+// UseConcurrentWrites 让 File.ReadFrom 走并发写流水线，在高延迟链路上显著提升上传吞吐。
+// 代价见 pkg/sftp 文档：写入出错时文件长度可能长于成功写入的部分（中间留空洞），
+// 因此每条写入路径都必须在失败时清理或截断目标 —— 这是启用该选项的前置条件，不是可选项。
+//
+// 不显式设置 UseConcurrentReads：pkg/sftp 文档写明它默认即为开启，传 true 是空操作。
+func sftpClientOptions() []sftp.ClientOption {
+	return []sftp.ClientOption{sftp.UseConcurrentWrites(true)}
+}
+
 type remoteAtomicWriter interface {
 	io.Writer
+	io.ReaderFrom
+	Truncate(size int64) error
 	Close() error
 }
 
+// remoteAtomicClient 是"把一个文件安全地换成新内容"所需的远端文件系统操作集合。
+// 上传与远程文件编辑都经由它，因此 PosixRename 不被支持时的回退路径也能用 fake 驱动。
 type remoteAtomicClient interface {
 	OpenFile(path string, f int) (remoteAtomicWriter, error)
 	Stat(path string) (os.FileInfo, error)
+	Lstat(path string) (os.FileInfo, error)
+	ReadLink(path string) (string, error)
 	Chmod(path string, mode os.FileMode) error
+	Chown(path string, uid, gid int) error
 	Remove(path string) error
 	Rename(oldname, newname string) error
 	PosixRename(oldname, newname string) error
@@ -188,8 +207,20 @@ func (c sftpAtomicClient) Stat(path string) (os.FileInfo, error) {
 	return c.client.Stat(path)
 }
 
+func (c sftpAtomicClient) Lstat(path string) (os.FileInfo, error) {
+	return c.client.Lstat(path)
+}
+
+func (c sftpAtomicClient) ReadLink(path string) (string, error) {
+	return c.client.ReadLink(path)
+}
+
 func (c sftpAtomicClient) Chmod(path string, mode os.FileMode) error {
 	return c.client.Chmod(path, mode)
+}
+
+func (c sftpAtomicClient) Chown(path string, uid, gid int) error {
+	return c.client.Chown(path, uid, gid)
 }
 
 func (c sftpAtomicClient) Remove(path string) error {
@@ -329,7 +360,7 @@ func (s *Service) WriteFile(sessionID, remotePath string, data []byte) error {
 	return writeFileAtomically(sftpAtomicClient{client: sftpClient}, remotePath, data)
 }
 
-// Upload 上传单个文件
+// Upload 上传单个文件（并发写 + 远程原子替换）
 func (s *Service) Upload(ctx context.Context, transferID, sessionID, localPath, remotePath string, onProgress func(transfer.Progress)) error {
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancels.Store(transferID, cancel)
@@ -358,20 +389,11 @@ func (s *Service) Upload(ctx context.Context, transferID, sessionID, localPath, 
 		return fmt.Errorf("获取文件信息失败: %w", err)
 	}
 
-	remoteFile, err := sftpClient.Create(remotePath)
-	if err != nil {
-		return fmt.Errorf("创建远程文件失败: %w", err)
-	}
-	defer func() {
-		if err := remoteFile.Close(); err != nil {
-			logger.Default().Warn("close remote file", zap.String("path", remotePath), zap.Error(err))
-		}
-	}()
-
-	return s.copyWithProgress(ctx, transferID, remoteFile, localFile, stat.Size(), 1, filepath.Base(remotePath), onProgress)
+	tracker := transfer.NewTracker(transferID, 1, stat.Size(), onProgress)
+	return s.uploadFile(ctx, tracker, sftpAtomicClient{client: sftpClient}, localFile, remotePath, filepath.Base(remotePath), stat.Size())
 }
 
-// Download 下载单个文件
+// Download 下载单个文件（并发读 + 本地原子替换）
 func (s *Service) Download(ctx context.Context, transferID, sessionID, remotePath, localPath string, onProgress func(transfer.Progress)) error {
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancels.Store(transferID, cancel)
@@ -400,17 +422,8 @@ func (s *Service) Download(ctx context.Context, transferID, sessionID, remotePat
 		return fmt.Errorf("获取远程文件信息失败: %w", err)
 	}
 
-	localFile, err := os.Create(localPath) //nolint:gosec // file path from user config
-	if err != nil {
-		return fmt.Errorf("创建本地文件失败: %w", err)
-	}
-	defer func() {
-		if err := localFile.Close(); err != nil {
-			logger.Default().Warn("close local file", zap.String("path", localPath), zap.Error(err))
-		}
-	}()
-
-	return s.copyWithProgress(ctx, transferID, localFile, remoteFile, stat.Size(), 1, filepath.Base(remotePath), onProgress)
+	tracker := transfer.NewTracker(transferID, 1, stat.Size(), onProgress)
+	return s.downloadFile(ctx, tracker, remoteFile, localPath, filepath.Base(remotePath))
 }
 
 // UploadDir 上传目录
@@ -451,9 +464,7 @@ func (s *Service) UploadDir(ctx context.Context, transferID, sessionID, localDir
 	}
 
 	// 传输阶段
-	var filesCompleted int
-	var bytesDone int64
-	reporter := transfer.NewReporter(onProgress)
+	tracker := transfer.NewTracker(transferID, filesTotal, bytesTotal, onProgress)
 
 	return filepath.WalkDir(localDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -474,8 +485,7 @@ func (s *Service) UploadDir(ctx context.Context, transferID, sessionID, localDir
 			return sftpClient.MkdirAll(remoteFull)
 		}
 
-		// 上传文件
-		localFile, err := os.Open(path) //nolint:gosec // file path from user config
+		localFile, err := os.Open(path) //nolint:gosec
 		if err != nil {
 			return err
 		}
@@ -485,47 +495,15 @@ func (s *Service) UploadDir(ctx context.Context, transferID, sessionID, localDir
 			}
 		}()
 
-		remoteFile, err := sftpClient.Create(remoteFull)
+		stat, err := localFile.Stat()
 		if err != nil {
 			return err
 		}
-		defer func() {
-			if err := remoteFile.Close(); err != nil {
-				logger.Default().Warn("close remote file", zap.String("path", remoteFull), zap.Error(err))
-			}
-		}()
 
-		buf := make([]byte, 32*1024)
-		for {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			n, readErr := localFile.Read(buf)
-			if n > 0 {
-				if _, writeErr := remoteFile.Write(buf[:n]); writeErr != nil {
-					return writeErr
-				}
-				bytesDone += int64(n)
-
-				reporter.Report(transfer.Progress{
-					TransferID:     transferID,
-					Status:         "progress",
-					CurrentFile:    relPath,
-					FilesCompleted: filesCompleted,
-					FilesTotal:     filesTotal,
-					BytesDone:      bytesDone,
-					BytesTotal:     bytesTotal,
-				})
-			}
-			if readErr == io.EOF {
-				break
-			}
-			if readErr != nil {
-				return readErr
-			}
+		if err := s.uploadFile(ctx, tracker, sftpAtomicClient{client: sftpClient}, localFile, remoteFull, relPath, stat.Size()); err != nil {
+			return err
 		}
-
-		filesCompleted++
+		tracker.FileDone(stat.Size())
 		return nil
 	})
 }
@@ -588,9 +566,7 @@ func (s *Service) DownloadDir(ctx context.Context, transferID, sessionID, remote
 	}
 
 	// 传输阶段
-	var filesCompleted int
-	var bytesDone int64
-	reporter := transfer.NewReporter(onProgress)
+	tracker := transfer.NewTracker(transferID, filesTotal, bytesTotal, onProgress)
 
 	for _, entry := range entries {
 		if ctx.Err() != nil {
@@ -608,75 +584,18 @@ func (s *Service) DownloadDir(ctx context.Context, transferID, sessionID, remote
 			continue
 		}
 
-		// 下载文件
 		remoteFile, err := sftpClient.Open(entry.remotePath)
 		if err != nil {
 			return err
 		}
 
-		localFile, err := os.Create(localFull) //nolint:gosec // file path from user config
+		// downloadFile 自己会建父目录，这里不重复。
+		err = s.downloadFile(ctx, tracker, remoteFile, localFull, relPath)
+		_ = remoteFile.Close()
 		if err != nil {
-			if closeErr := remoteFile.Close(); closeErr != nil {
-				logger.Default().Warn("close remote file", zap.String("path", entry.remotePath), zap.Error(closeErr))
-			}
 			return err
 		}
-
-		buf := make([]byte, 32*1024)
-		for {
-			if ctx.Err() != nil {
-				if closeErr := localFile.Close(); closeErr != nil {
-					logger.Default().Warn("close local file", zap.String("path", localFull), zap.Error(closeErr))
-				}
-				if closeErr := remoteFile.Close(); closeErr != nil {
-					logger.Default().Warn("close remote file", zap.String("path", entry.remotePath), zap.Error(closeErr))
-				}
-				return ctx.Err()
-			}
-			n, readErr := remoteFile.Read(buf)
-			if n > 0 {
-				if _, writeErr := localFile.Write(buf[:n]); writeErr != nil {
-					if closeErr := localFile.Close(); closeErr != nil {
-						logger.Default().Warn("close local file", zap.String("path", localFull), zap.Error(closeErr))
-					}
-					if closeErr := remoteFile.Close(); closeErr != nil {
-						logger.Default().Warn("close remote file", zap.String("path", entry.remotePath), zap.Error(closeErr))
-					}
-					return writeErr
-				}
-				bytesDone += int64(n)
-
-				reporter.Report(transfer.Progress{
-					TransferID:     transferID,
-					Status:         "progress",
-					CurrentFile:    relPath,
-					FilesCompleted: filesCompleted,
-					FilesTotal:     filesTotal,
-					BytesDone:      bytesDone,
-					BytesTotal:     bytesTotal,
-				})
-			}
-			if readErr == io.EOF {
-				break
-			}
-			if readErr != nil {
-				if closeErr := localFile.Close(); closeErr != nil {
-					logger.Default().Warn("close local file", zap.String("path", localFull), zap.Error(closeErr))
-				}
-				if closeErr := remoteFile.Close(); closeErr != nil {
-					logger.Default().Warn("close remote file", zap.String("path", entry.remotePath), zap.Error(closeErr))
-				}
-				return readErr
-			}
-		}
-
-		if closeErr := localFile.Close(); closeErr != nil {
-			logger.Default().Warn("close local file", zap.String("path", localFull), zap.Error(closeErr))
-		}
-		if closeErr := remoteFile.Close(); closeErr != nil {
-			logger.Default().Warn("close remote file", zap.String("path", entry.remotePath), zap.Error(closeErr))
-		}
-		filesCompleted++
+		tracker.FileDone(entry.size)
 	}
 
 	return nil
@@ -736,59 +655,240 @@ func (s *Service) removeDirRecursive(client *sftp.Client, path string) error {
 	return client.RemoveDirectory(path)
 }
 
-// copyWithProgress 带进度的文件拷贝
-func (s *Service) copyWithProgress(ctx context.Context, transferID string, dst io.Writer, src io.Reader, totalBytes int64, filesTotal int, currentFile string, onProgress func(transfer.Progress)) error {
-	buf := make([]byte, 32*1024)
-	var bytesDone int64
-	reporter := transfer.NewReporter(onProgress)
+// remoteTarget 描述上传目标路径当前的状态，决定用哪条写入路径。
+type remoteTarget struct {
+	path     string      // 解析符号链接之后的真实路径
+	mode     os.FileMode // 完整模式，含类型位
+	exists   bool
+	uid, gid int
+	hasOwner bool
+}
 
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
+func (t remoteTarget) regular() bool { return t.mode.IsRegular() }
 
-		n, readErr := src.Read(buf)
-		if n > 0 {
-			if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
-				return writeErr
+// streamOnly 表示目标是命名管道或套接字。SFTP 的写请求带绝对偏移量，
+// 服务端对这类节点做 pwrite 会返回 illegal seek —— 它们根本无法经 SFTP 写入。
+func (t remoteTarget) streamOnly() bool { return t.mode&(os.ModeNamedPipe|os.ModeSocket) != 0 }
+
+// inspectRemoteTarget 解析目标路径：跟随符号链接找到真正要写的文件，并读出它的权限与属主。
+//
+// 跟随符号链接是必须的 —— 原地覆盖的语义是"写穿到链接指向的文件"，
+// 而 rename 作用在链接本身会把链接替换成普通文件，悄悄破坏 sites-enabled/ 这类布局。
+func inspectRemoteTarget(client remoteAtomicClient, remotePath string) (remoteTarget, error) {
+	const maxSymlinkHops = 8
+	current := remotePath
+	for hop := 0; ; hop++ {
+		info, err := client.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return remoteTarget{path: current}, nil
 			}
-			bytesDone += int64(n)
+			return remoteTarget{}, fmt.Errorf("获取远程文件信息失败: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			target := remoteTarget{
+				path:   current,
+				exists: true,
+				mode:   info.Mode(),
+			}
+			if stat, ok := info.Sys().(*sftp.FileStat); ok && stat != nil {
+				target.uid, target.gid, target.hasOwner = int(stat.UID), int(stat.GID), true
+			}
+			return target, nil
+		}
+		if hop >= maxSymlinkHops {
+			return remoteTarget{}, fmt.Errorf("远程路径符号链接层级过深: %s", remotePath)
+		}
+		dest, err := client.ReadLink(current)
+		if err != nil {
+			return remoteTarget{}, fmt.Errorf("解析远程符号链接失败: %w", err)
+		}
+		if !path.IsAbs(dest) {
+			dest = path.Join(path.Dir(current), dest)
+		}
+		current = dest
+	}
+}
 
-			reporter.Report(transfer.Progress{
-				TransferID:  transferID,
-				Status:      "progress",
-				CurrentFile: currentFile,
-				FilesTotal:  filesTotal,
-				BytesDone:   bytesDone,
-				BytesTotal:  totalBytes,
-			})
+// uploadFile 把 local 写到 remotePath。默认走"同目录临时文件 + 原子切换"，
+// 让远端只能看到旧版本或完整新版本，不会暴露半写入状态。
+//
+// 两种情况回退到原地写入，因为它们无法用 rename 表达：
+// 目标是设备节点（rename 会把节点本身换成普通文件），
+// 以及父目录不可写（建不出临时文件，但目标文件本身仍可写）。
+// 命名管道/套接字则直接报错 —— SFTP 协议就写不了它们。
+func (s *Service) uploadFile(ctx context.Context, tracker *transfer.Tracker, client remoteAtomicClient, local io.Reader, remotePath, currentFile string, fileSize int64) error {
+	target, err := inspectRemoteTarget(client, remotePath)
+	if err != nil {
+		return err
+	}
+
+	if target.exists && !target.regular() {
+		if target.streamOnly() {
+			return fmt.Errorf("远程路径是命名管道或套接字，SFTP 按偏移量写入，无法写入该类型: %s", target.path)
 		}
-		if readErr == io.EOF {
-			return nil
+		return uploadInPlace(ctx, tracker, client, local, target, currentFile, fileSize)
+	}
+
+	tempPath := buildRemoteTempPath(target.path, "part")
+	// O_EXCL：临时名带纳秒时间戳，撞名说明有并发写入，宁可失败也不覆盖
+	remoteFile, err := client.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
+	if err != nil {
+		if os.IsPermission(err) && target.exists {
+			logger.Default().Info("remote dir not writable, uploading in place",
+				zap.String("path", target.path), zap.Error(err))
+			return uploadInPlace(ctx, tracker, client, local, target, currentFile, fileSize)
 		}
-		if readErr != nil {
-			return readErr
+		return fmt.Errorf("创建远程临时文件失败: %w", err)
+	}
+
+	committed := false
+	defer func() {
+		if !committed {
+			cleanupRemotePath(client, tempPath)
+		}
+	}()
+
+	if _, err := remoteFile.ReadFrom(tracker.Reader(ctx, local, currentFile, fileSize)); err != nil {
+		_ = remoteFile.Close()
+		return fmt.Errorf("写入远程临时文件失败: %w", err)
+	}
+	if err := remoteFile.Close(); err != nil {
+		return fmt.Errorf("关闭远程临时文件失败: %w", err)
+	}
+	if err := verifyRemoteSize(client, tempPath, fileSize); err != nil {
+		return err
+	}
+
+	if target.exists && target.hasOwner {
+		// rename 后的文件属主是上传者。非 root 无权改回，属于这条路径的固有限制，
+		// 记一条日志让排查有据可依，不当作上传失败。
+		if err := client.Chown(tempPath, target.uid, target.gid); err != nil {
+			logger.Default().Info("preserve remote file owner failed",
+				zap.String("path", target.path), zap.Int("uid", target.uid), zap.Int("gid", target.gid), zap.Error(err))
 		}
 	}
+
+	if err := commitRemoteTempFile(client, tempPath, target.path, target.mode.Perm(), target.exists); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+// uploadInPlace 直接覆盖目标文件本身，用于无法用 rename 表达的目标。
+// 这条路径没有原子性可言 —— 写到一半失败就是写到一半，只能尽量不留下更糟的状态。
+func uploadInPlace(ctx context.Context, tracker *transfer.Tracker, client remoteAtomicClient, local io.Reader, target remoteTarget, currentFile string, fileSize int64) error {
+	remoteFile, err := client.OpenFile(target.path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
+	if err != nil {
+		return fmt.Errorf("打开远程文件失败: %w", err)
+	}
+	written, err := remoteFile.ReadFrom(tracker.Reader(ctx, local, currentFile, fileSize))
+	if err != nil {
+		// 并发写出错时文件长度可能长于成功写入的部分，截回读到的长度至少能去掉尾部垃圾。
+		// 这不保证内容完整（中间仍可能有空洞），所以错误照样往上抛。
+		// 设备节点不做截断：ftruncate 对它们没有意义。
+		if target.regular() {
+			if truncErr := remoteFile.Truncate(written); truncErr != nil {
+				logger.Default().Warn("truncate remote file after failed write",
+					zap.String("path", target.path), zap.Int64("size", written), zap.Error(truncErr))
+			}
+		}
+		_ = remoteFile.Close()
+		return fmt.Errorf("写入远程文件失败: %w", err)
+	}
+	if err := remoteFile.Close(); err != nil {
+		return fmt.Errorf("关闭远程文件失败: %w", err)
+	}
+	if !target.regular() {
+		// 设备节点的"大小"没有意义（写 /dev/null 后 Stat 仍是 0），跳过复核。
+		return nil
+	}
+	return verifyRemoteSize(client, target.path, fileSize)
+}
+
+// verifyRemoteSize 复核写入的字节数确实落到了远端。
+//
+// pkg/sftp v1.13.10 的 File.ReadFrom 会在"最后一个分片是短读"时丢掉该分片的写入错误：
+// io.ReadFull 返回 ErrUnexpectedEOF 覆盖了 writeChunkAt 的错误，随后被当成正常 EOF 返回 nil
+// （client.go:2078-2090）。绝大多数文件的最后一片都是短读，因此一次失败的上传会报告成功。
+// 这是上游缺陷，不在这里绕开 ReadFrom，只按大小复核，避免把静默的数据丢失当作上传成功。
+func verifyRemoteSize(client remoteAtomicClient, remotePath string, want int64) error {
+	info, err := client.Stat(remotePath)
+	if err != nil {
+		return fmt.Errorf("校验远程文件失败: %w", err)
+	}
+	if info.Size() != want {
+		return fmt.Errorf("远程文件大小校验失败：期望 %d 字节，实际写入 %d 字节", want, info.Size())
+	}
+	return nil
+}
+
+// downloadFile：远程 → 本地临时文件（并发读）→ 原子 rename。
+func (s *Service) downloadFile(ctx context.Context, tracker *transfer.Tracker, remote io.WriterTo, localPath, currentFile string) error {
+	dir := filepath.Dir(localPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("创建本地目录失败: %w", err)
+	}
+
+	// 覆盖已有文件时沿用它的权限：os.Create 对已存在文件不改权限，
+	// 而"新建临时文件再 rename"会把权限换成新建时的模式 ——
+	// 重新下载一个 0600 的私钥不能把它变成 0644。
+	perm := os.FileMode(0o644)
+	if info, err := os.Stat(localPath); err == nil {
+		perm = info.Mode().Perm()
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("获取本地文件信息失败: %w", err)
+	}
+
+	tempPath := filepath.Join(dir, fmt.Sprintf(".%s.opskat-part-%d", filepath.Base(localPath), time.Now().UnixNano()))
+	localFile, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm) //nolint:gosec // perm 继承自被覆盖的目标文件
+	if err != nil {
+		return fmt.Errorf("创建本地临时文件失败: %w", err)
+	}
+	committed := false
+	defer func() {
+		_ = localFile.Close()
+		if !committed {
+			if err := os.Remove(tempPath); err != nil && !os.IsNotExist(err) {
+				logger.Default().Warn("cleanup local temp file", zap.String("path", tempPath), zap.Error(err))
+			}
+		}
+	}()
+
+	if _, err := remote.WriteTo(tracker.Writer(ctx, localFile, currentFile)); err != nil {
+		return err
+	}
+	if err := localFile.Close(); err != nil {
+		return fmt.Errorf("关闭本地临时文件失败: %w", err)
+	}
+
+	if err := os.Rename(tempPath, localPath); err != nil {
+		return fmt.Errorf("提交本地文件失败: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 func writeFileAtomically(client remoteAtomicClient, remotePath string, data []byte) error {
 	// 优先写临时文件再切换目标文件名：
 	// 成功时远端始终只会看到“旧版本”或“完整新版本”，不会暴露半写入状态。
-	targetMode, targetExists, err := statRemoteRegularFile(client, remotePath)
+	target, err := inspectRemoteTarget(client, remotePath)
 	if err != nil {
 		return err
 	}
+	if target.exists && !target.regular() {
+		// 目录、管道或其他特殊节点一旦进入原子替换流程，失败恢复和权限继承语义都会变得不可控。
+		return fmt.Errorf("远程路径不是常规文件: %s (mode=%s, perm=%#o, isDir=%t)",
+			target.path, target.mode, target.mode.Perm(), target.mode.IsDir())
+	}
+	remotePath = target.path // 跟随符号链接：写穿到链接指向的文件，而不是把链接换成普通文件
 
 	tempPath := buildRemoteTempPath(remotePath, "tmp")
-	backupPath := ""
-	cleanupTemp := true
+	committed := false
 	defer func() {
-		if cleanupTemp {
+		if !committed {
 			cleanupRemotePath(client, tempPath)
-		}
-		if backupPath != "" {
-			cleanupRemotePath(client, backupPath)
 		}
 	}()
 
@@ -804,59 +904,51 @@ func writeFileAtomically(client remoteAtomicClient, remotePath string, data []by
 		return fmt.Errorf("关闭远程临时文件失败: %w", err)
 	}
 
-	if targetExists {
-		if err := client.Chmod(tempPath, targetMode); err != nil {
-			return fmt.Errorf("同步远程文件权限失败: %w", err)
-		}
-		if err := client.PosixRename(tempPath, remotePath); err == nil {
-			cleanupTemp = false
-			return nil
-		} else if !isSFTPOpUnsupported(err) {
-			return fmt.Errorf("原子替换远程文件失败: %w", err)
-		}
-
-		// 某些 SFTP 服务端不支持 PosixRename。
-		// 这里回退到“先备份旧文件，再切换新文件，再尽力恢复”的兼容路径，把副作用控制在单个目标文件范围内。
-		backupPath = buildRemoteTempPath(remotePath, "bak")
-		if err := client.Rename(remotePath, backupPath); err != nil {
-			return fmt.Errorf("创建远程备份文件失败: %w", err)
-		}
-		if err := client.Rename(tempPath, remotePath); err != nil {
-			restoreErr := client.Rename(backupPath, remotePath)
-			if restoreErr != nil {
-				return fmt.Errorf("替换远程文件失败且恢复原文件失败: %w; restore: %v", err, restoreErr)
-			}
-			return fmt.Errorf("替换远程文件失败，已恢复原文件: %w", err)
-		}
-		if err := client.Remove(backupPath); err != nil && !os.IsNotExist(err) {
-			logger.Default().Warn("cleanup remote backup file", zap.String("path", backupPath), zap.Error(err))
-		}
-		cleanupTemp = false
-		backupPath = ""
-		return nil
+	if err := commitRemoteTempFile(client, tempPath, remotePath, target.mode.Perm(), target.exists); err != nil {
+		return err
 	}
-
-	if err := client.Rename(tempPath, remotePath); err != nil {
-		return fmt.Errorf("提交远程临时文件失败: %w", err)
-	}
-	cleanupTemp = false
+	committed = true
 	return nil
 }
 
-func statRemoteRegularFile(client remoteAtomicClient, remotePath string) (os.FileMode, bool, error) {
-	// 这里只允许覆盖常规文件。
-	// 目录、管道或其他特殊节点一旦进入原子替换流程，失败恢复和权限继承语义都会变得不可控。
-	info, err := client.Stat(remotePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, false, nil
+// commitRemoteTempFile 把写好的临时文件切换成目标文件。返回 nil 表示 tempPath 已经易主，
+// 调用方不应再清理它。
+//
+// 优先 PosixRename（单次原子操作）；服务端不支持时回退到"先备份旧文件，再切换新文件，
+// 再尽力恢复"，把副作用控制在单个目标文件范围内。
+func commitRemoteTempFile(client remoteAtomicClient, tempPath, remotePath string, targetMode os.FileMode, targetExists bool) error {
+	if !targetExists {
+		if err := client.Rename(tempPath, remotePath); err != nil {
+			return fmt.Errorf("提交远程临时文件失败: %w", err)
 		}
-		return 0, false, fmt.Errorf("获取远程文件信息失败: %w", err)
+		return nil
 	}
-	if info.IsDir() || !info.Mode().IsRegular() {
-		return 0, false, fmt.Errorf("远程路径不是常规文件: %s (mode=%s, perm=%#o, isDir=%t)", remotePath, info.Mode(), info.Mode().Perm(), info.IsDir())
+
+	if err := client.Chmod(tempPath, targetMode); err != nil {
+		return fmt.Errorf("同步远程文件权限失败: %w", err)
 	}
-	return info.Mode().Perm(), true, nil
+	if err := client.PosixRename(tempPath, remotePath); err == nil {
+		return nil
+	} else if !isSFTPOpUnsupported(err) {
+		return fmt.Errorf("原子替换远程文件失败: %w", err)
+	}
+
+	backupPath := buildRemoteTempPath(remotePath, "bak")
+	if err := client.Rename(remotePath, backupPath); err != nil {
+		return fmt.Errorf("创建远程备份文件失败: %w", err)
+	}
+
+	if err := client.Rename(tempPath, remotePath); err != nil {
+		if restoreErr := client.Rename(backupPath, remotePath); restoreErr != nil {
+			// 目标路径已经空出来了，原文件只剩备份这一份 —— 绝不能删，
+			// 必须把路径告诉用户，否则这就是一次静默的数据丢失。
+			return fmt.Errorf("替换远程文件失败且恢复原文件失败，原文件保留在 %s: %w; restore: %v", backupPath, err, restoreErr)
+		}
+		return fmt.Errorf("替换远程文件失败，已恢复原文件: %w", err)
+	}
+	// 恢复分支里备份已经改回目标路径，只有切换成功这一条路需要清理备份。
+	cleanupRemotePath(client, backupPath)
+	return nil
 }
 
 func buildRemoteTempPath(remotePath, suffix string) string {
