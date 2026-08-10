@@ -3,6 +3,8 @@ package sftp_svc
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -84,6 +86,66 @@ func TestUploadPreservesExistingFilePermissions(t *testing.T) {
 	content, err := os.ReadFile(remote) //nolint:gosec // 测试内的临时目录路径
 	require.NoError(t, err)
 	assert.Equal(t, "new-key", string(content))
+}
+
+func TestUploadDownloadPreserveContentAcrossPacketBoundaries(t *testing.T) {
+	// 并发写按 maxPacket（默认 32KiB）切片、按偏移量派发，出错时可能留下空洞。
+	// 空洞读回来是零字节且文件长度不变，所以只比长度发现不了 —— 必须比内容，
+	// 且内容必须是随机的：全零数据会把空洞完全掩盖。
+	const maxPacket = 32 << 10
+	sizes := []int{0, 1, 4095, maxPacket - 1, maxPacket, maxPacket + 1, 2 * maxPacket, 3*maxPacket - 7, 1 << 20}
+
+	service, session, root := newTestService(t)
+	localRoot := t.TempDir()
+
+	for _, size := range sizes {
+		t.Run(fmt.Sprintf("%d字节", size), func(t *testing.T) {
+			body := make([]byte, size)
+			_, err := rand.Read(body)
+			require.NoError(t, err)
+
+			local := filepath.Join(localRoot, fmt.Sprintf("up-%d.bin", size))
+			require.NoError(t, os.WriteFile(local, body, 0o644))
+			remote := filepath.Join(root, fmt.Sprintf("up-%d.bin", size))
+			require.NoError(t, service.Upload(context.Background(), "c1", session, local, remote, discardProgress))
+
+			uploaded, err := os.ReadFile(remote) //nolint:gosec // 测试内的临时目录路径
+			require.NoError(t, err)
+			assert.Equal(t, md5.Sum(body), md5.Sum(uploaded), "%d 字节上传后内容不一致", size)
+
+			back := filepath.Join(localRoot, fmt.Sprintf("back-%d.bin", size))
+			require.NoError(t, service.Download(context.Background(), "c2", session, remote, back, discardProgress))
+			downloaded, err := os.ReadFile(back) //nolint:gosec // 测试内的临时目录路径
+			require.NoError(t, err)
+			assert.Equal(t, md5.Sum(body), md5.Sum(downloaded), "%d 字节下载后内容不一致", size)
+		})
+	}
+}
+
+func TestUploadOverwriteLeavesNoTrailingOldData(t *testing.T) {
+	// 用更短的内容覆盖：若替换没生效，尾部会残留旧数据而长度看着也"合理"。
+	service, session, root := newTestService(t)
+	localRoot := t.TempDir()
+	remote := filepath.Join(root, "overwrite.bin")
+
+	big := make([]byte, 3<<20)
+	_, err := rand.Read(big)
+	require.NoError(t, err)
+	localBig := filepath.Join(localRoot, "big.bin")
+	require.NoError(t, os.WriteFile(localBig, big, 0o644))
+	require.NoError(t, service.Upload(context.Background(), "o1", session, localBig, remote, discardProgress))
+
+	small := make([]byte, 1000)
+	_, err = rand.Read(small)
+	require.NoError(t, err)
+	localSmall := filepath.Join(localRoot, "small.bin")
+	require.NoError(t, os.WriteFile(localSmall, small, 0o644))
+	require.NoError(t, service.Upload(context.Background(), "o2", session, localSmall, remote, discardProgress))
+
+	got, err := os.ReadFile(remote) //nolint:gosec // 测试内的临时目录路径
+	require.NoError(t, err)
+	assert.Len(t, got, 1000, "覆盖后不得残留旧内容")
+	assert.Equal(t, md5.Sum(small), md5.Sum(got))
 }
 
 func TestUploadWritesThroughSymlinkInsteadOfReplacingIt(t *testing.T) {

@@ -713,9 +713,10 @@ func inspectRemoteTarget(client remoteAtomicClient, remotePath string) (remoteTa
 // uploadFile 把 local 写到 remotePath。默认走"同目录临时文件 + 原子切换"，
 // 让远端只能看到旧版本或完整新版本，不会暴露半写入状态。
 //
-// 两种情况回退到原地写入，因为它们根本无法用 rename 表达：
-// 目标是 FIFO/设备节点等非常规文件（rename 会把节点本身换成普通文件），
+// 两种情况回退到原地写入，因为它们无法用 rename 表达：
+// 目标是设备节点（rename 会把节点本身换成普通文件），
 // 以及父目录不可写（建不出临时文件，但目标文件本身仍可写）。
+// 命名管道/套接字则直接报错 —— SFTP 协议就写不了它们。
 func (s *Service) uploadFile(ctx context.Context, tracker *transfer.Tracker, client remoteAtomicClient, local io.Reader, remotePath, currentFile string, fileSize int64) error {
 	target, err := inspectRemoteTarget(client, remotePath)
 	if err != nil {
@@ -776,7 +777,7 @@ func (s *Service) uploadFile(ctx context.Context, tracker *transfer.Tracker, cli
 }
 
 // uploadInPlace 直接覆盖目标文件本身，用于无法用 rename 表达的目标。
-// 并发写出错时文件长度可能长于成功写入的部分，按 pkg/sftp 的要求截断回去。
+// 这条路径没有原子性可言 —— 写到一半失败就是写到一半，只能尽量不留下更糟的状态。
 func uploadInPlace(ctx context.Context, tracker *transfer.Tracker, client remoteAtomicClient, local io.Reader, target remoteTarget, currentFile string, fileSize int64) error {
 	remoteFile, err := client.OpenFile(target.path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
 	if err != nil {
@@ -784,9 +785,14 @@ func uploadInPlace(ctx context.Context, tracker *transfer.Tracker, client remote
 	}
 	written, err := remoteFile.ReadFrom(tracker.Reader(ctx, local, currentFile, fileSize))
 	if err != nil {
-		if truncErr := remoteFile.Truncate(written); truncErr != nil {
-			logger.Default().Warn("truncate remote file after failed write",
-				zap.String("path", target.path), zap.Int64("size", written), zap.Error(truncErr))
+		// 并发写出错时文件长度可能长于成功写入的部分，截回读到的长度至少能去掉尾部垃圾。
+		// 这不保证内容完整（中间仍可能有空洞），所以错误照样往上抛。
+		// 设备节点不做截断：ftruncate 对它们没有意义。
+		if target.regular() {
+			if truncErr := remoteFile.Truncate(written); truncErr != nil {
+				logger.Default().Warn("truncate remote file after failed write",
+					zap.String("path", target.path), zap.Int64("size", written), zap.Error(truncErr))
+			}
 		}
 		_ = remoteFile.Close()
 		return fmt.Errorf("写入远程文件失败: %w", err)
@@ -794,7 +800,7 @@ func uploadInPlace(ctx context.Context, tracker *transfer.Tracker, client remote
 	if err := remoteFile.Close(); err != nil {
 		return fmt.Errorf("关闭远程文件失败: %w", err)
 	}
-	if target.exists && !target.regular() {
+	if !target.regular() {
 		// 设备节点的"大小"没有意义（写 /dev/null 后 Stat 仍是 0），跳过复核。
 		return nil
 	}
