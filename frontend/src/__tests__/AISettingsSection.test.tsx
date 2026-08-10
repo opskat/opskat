@@ -45,6 +45,28 @@ describe("AISettingsSection", () => {
     expect(BrowserOpenURL).toHaveBeenCalledWith("https://github.com/opskat/opskat/releases");
   });
 
+  it("marks the skill card installed when only a standalone target is installed", async () => {
+    vi.mocked(DetectSkills).mockResolvedValue(
+      system.SkillInstallInfo.createFrom({
+        universalPath: "C:/Users/test/.agents/skills/opsctl",
+        universalInstalled: false,
+        universalAgents: [],
+        standalone: [
+          {
+            key: "claude-code",
+            name: "Claude Code",
+            installed: true,
+            path: "C:/Users/test/.claude/plugins/marketplaces/opskat/opsctl",
+          },
+        ],
+      })
+    );
+
+    render(<AISettingsSection />);
+
+    expect(await screen.findByText("integration.skillInstalled")).toBeTruthy();
+  });
+
   it("uninstalls a single standalone AI plugin target", async () => {
     const base = {
       universalPath: "C:/Users/test/.agents/skills/opsctl",

@@ -60,6 +60,9 @@ import { useAIStore } from "@/stores/aiStore";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+// 与后端 universalSkillKey 对应：通用目录（~/.agents/skills）作为一个安装目标参与安装/卸载
+const UNIVERSAL_KEY = "universal";
+
 type SkillAgent = { key: string; name: string };
 type SkillTarget = { key: string; name: string; installed: boolean; path: string };
 type SkillInstallInfo = {
@@ -169,6 +172,12 @@ function IntegrationSection() {
       setUninstallingKey("");
     }
   };
+
+  // 通用目录和单独安装目标各自独立，任一装上就算这张卡片已生效
+  const anySkillInstalled =
+    !!skillInfo && (skillInfo.universalInstalled || skillInfo.standalone.some((s) => s.installed));
+  const allSkillsInstalled =
+    !!skillInfo && skillInfo.universalInstalled && skillInfo.standalone.every((s) => s.installed);
 
   const handlePreview = async () => {
     if (showPreview) {
@@ -316,7 +325,7 @@ function IntegrationSection() {
               <CardDescription>{t("integration.skillDesc")}</CardDescription>
             </div>
             <div className="flex items-center gap-2">
-              {skillInfo?.universalInstalled && (
+              {anySkillInstalled && (
                 <span className="inline-flex items-center gap-1 text-xs font-medium text-success">
                   <Check className="h-3.5 w-3.5" />
                   {t("integration.skillInstalled")}
@@ -347,10 +356,10 @@ function IntegrationSection() {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={installingKey === "universal"}
-                  onClick={() => handleInstallTarget("universal")}
+                  disabled={installingKey === UNIVERSAL_KEY || uninstallingKey === UNIVERSAL_KEY}
+                  onClick={() => handleInstallTarget(UNIVERSAL_KEY)}
                 >
-                  {installingKey === "universal" ? (
+                  {installingKey === UNIVERSAL_KEY ? (
                     <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
                   ) : skillInfo?.universalInstalled ? (
                     t("integration.skillUpdate")
@@ -363,17 +372,17 @@ function IntegrationSection() {
                     variant="ghost"
                     size="sm"
                     className="h-8 px-2 text-destructive hover:text-destructive"
-                    disabled={uninstallingKey === "universal"}
+                    disabled={uninstallingKey === UNIVERSAL_KEY}
                     onClick={() =>
                       setUninstallTarget({
-                        key: "universal",
+                        key: UNIVERSAL_KEY,
                         name: t("integration.skillUniversalTitle"),
                         installed: true,
                         path: skillInfo.universalPath,
                       })
                     }
                   >
-                    {uninstallingKey === "universal" ? (
+                    {uninstallingKey === UNIVERSAL_KEY ? (
                       <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
                     ) : (
                       <Trash2 className="h-3.5 w-3.5 mr-1" />
@@ -464,7 +473,7 @@ function IntegrationSection() {
                   <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
                   {t("integration.skillInstalling")}
                 </>
-              ) : skillInfo && skillInfo.universalInstalled && skillInfo.standalone.every((s) => s.installed) ? (
+              ) : allSkillsInstalled ? (
                 t("integration.skillUpdate")
               ) : (
                 t("integration.skillInstall")
