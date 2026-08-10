@@ -79,6 +79,7 @@
     "eslint-plugin-react-refresh": "^0.5.2",
     "eslint-plugin-react-x": "^5.13.2",
     "happy-dom": "^20.8.8",
+    "lightningcss": "^1.32.0",
     "prettier": "^3.8.1",
     "tailwindcss": "^4.0.0",
     "terser": "^5.46.1",
