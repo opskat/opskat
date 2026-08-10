@@ -23,6 +23,7 @@ import {
   InstallOpsctl,
   DetectSkills,
   InstallSkills,
+  InstallSkillTarget,
   UninstallSkill,
   GetSkillPreview,
   GetDataDir,
@@ -59,7 +60,17 @@ import { useAIStore } from "@/stores/aiStore";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+// 与后端 universalSkillKey 对应：通用目录（~/.agents/skills）作为一个安装目标参与安装/卸载
+const UNIVERSAL_KEY = "universal";
+
+type SkillAgent = { key: string; name: string };
 type SkillTarget = { key: string; name: string; installed: boolean; path: string };
+type SkillInstallInfo = {
+  universalPath: string;
+  universalInstalled: boolean;
+  universalAgents: SkillAgent[];
+  standalone: SkillTarget[];
+};
 
 function IntegrationSection() {
   const { t } = useTranslation();
@@ -69,10 +80,11 @@ function IntegrationSection() {
     version: string;
     embedded: boolean;
   }>({ installed: false, path: "", version: "", embedded: false });
-  const [skillTargets, setSkillTargets] = useState<SkillTarget[]>([]);
+  const [skillInfo, setSkillInfo] = useState<SkillInstallInfo | null>(null);
   const [installDir, setInstallDir] = useState("");
   const [installing, setInstalling] = useState(false);
   const [skillInstalling, setSkillInstalling] = useState(false);
+  const [installingKey, setInstallingKey] = useState("");
   const [uninstallTarget, setUninstallTarget] = useState<SkillTarget | null>(null);
   const [uninstallingKey, setUninstallingKey] = useState("");
   const [skillPreview, setSkillPreview] = useState("");
@@ -90,7 +102,7 @@ function IntegrationSection() {
         GetAppVersion(),
       ]);
       setOpsctlInfo(info);
-      setSkillTargets(skills || []);
+      setSkillInfo(skills || null);
       setInstallDir(dir);
       setDataDir(dd);
       setAppVersion(ver);
@@ -133,6 +145,19 @@ function IntegrationSection() {
     }
   };
 
+  const handleInstallTarget = async (key: string) => {
+    setInstallingKey(key);
+    try {
+      await InstallSkillTarget(key);
+      notifySuccess(t("integration.skillInstallSuccess"));
+      await detect();
+    } catch (e: unknown) {
+      toast.error(errMsg(e));
+    } finally {
+      setInstallingKey("");
+    }
+  };
+
   const handleUninstallSkill = async () => {
     if (!uninstallTarget) return;
     setUninstallingKey(uninstallTarget.key);
@@ -147,6 +172,12 @@ function IntegrationSection() {
       setUninstallingKey("");
     }
   };
+
+  // 通用目录和单独安装目标各自独立，任一装上就算这张卡片已生效
+  const anySkillInstalled =
+    !!skillInfo && (skillInfo.universalInstalled || skillInfo.standalone.some((s) => s.installed));
+  const allSkillsInstalled =
+    !!skillInfo && skillInfo.universalInstalled && skillInfo.standalone.every((s) => s.installed);
 
   const handlePreview = async () => {
     if (showPreview) {
@@ -294,55 +325,144 @@ function IntegrationSection() {
               <CardDescription>{t("integration.skillDesc")}</CardDescription>
             </div>
             <div className="flex items-center gap-2">
-              {skillTargets
-                .filter((s) => s.installed)
-                .map((s) => (
-                  <span key={s.name} className="inline-flex items-center gap-1 text-xs font-medium text-success">
-                    <Check className="h-3.5 w-3.5" />
-                    {s.name}
-                  </span>
-                ))}
+              {anySkillInstalled && (
+                <span className="inline-flex items-center gap-1 text-xs font-medium text-success">
+                  <Check className="h-3.5 w-3.5" />
+                  {t("integration.skillInstalled")}
+                </span>
+              )}
             </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-3">
-          {skillTargets.some((s) => s.installed) && (
-            <div className="space-y-1">
-              {skillTargets
-                .filter((s) => s.installed)
-                .map((s) => (
-                  <div key={s.name} className="flex items-center justify-between text-sm gap-2">
-                    <span className="text-muted-foreground shrink-0">{s.name}</span>
-                    <div className="flex items-center gap-1 min-w-0">
-                      <span className="font-mono text-xs truncate">{s.path}</span>
-                      <button
-                        type="button"
-                        className="shrink-0 p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-                        onClick={() => OpenDirectory(s.path)}
-                        title={t("integration.openDir")}
-                      >
-                        <FolderOpen className="h-3.5 w-3.5" />
-                      </button>
+        <CardContent className="space-y-4">
+          {/* 通用安装（~/.agents/skills，一次安装多 agent 生效） */}
+          <div className="rounded-lg border p-3 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">{t("integration.skillUniversalTitle")}</p>
+                <p className="text-xs text-muted-foreground font-mono truncate">{skillInfo?.universalPath ?? ""}</p>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                {skillInfo?.universalInstalled && (
+                  <button
+                    type="button"
+                    className="shrink-0 p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                    onClick={() => OpenDirectory(skillInfo.universalPath)}
+                    title={t("integration.openDir")}
+                  >
+                    <FolderOpen className="h-3.5 w-3.5" />
+                  </button>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={installingKey === UNIVERSAL_KEY || uninstallingKey === UNIVERSAL_KEY}
+                  onClick={() => handleInstallTarget(UNIVERSAL_KEY)}
+                >
+                  {installingKey === UNIVERSAL_KEY ? (
+                    <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                  ) : skillInfo?.universalInstalled ? (
+                    t("integration.skillUpdate")
+                  ) : (
+                    t("integration.skillInstall")
+                  )}
+                </Button>
+                {skillInfo?.universalInstalled && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2 text-destructive hover:text-destructive"
+                    disabled={uninstallingKey === UNIVERSAL_KEY}
+                    onClick={() =>
+                      setUninstallTarget({
+                        key: UNIVERSAL_KEY,
+                        name: t("integration.skillUniversalTitle"),
+                        installed: true,
+                        path: skillInfo.universalPath,
+                      })
+                    }
+                  >
+                    {uninstallingKey === UNIVERSAL_KEY ? (
+                      <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-3.5 w-3.5 mr-1" />
+                    )}
+                    {t("integration.skillUninstall")}
+                  </Button>
+                )}
+              </div>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground mb-1.5">{t("integration.skillUniversalAgents")}</p>
+              <div className="flex flex-wrap gap-1">
+                {(skillInfo?.universalAgents ?? []).map((a) => (
+                  <span key={a.key} className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                    {a.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* 单独安装（不读取共享目录的工具） */}
+          {skillInfo && skillInfo.standalone.length > 0 && (
+            <div className="rounded-lg border p-3 space-y-2">
+              <div>
+                <p className="text-sm font-medium">{t("integration.skillStandaloneTitle")}</p>
+                <p className="text-xs text-muted-foreground">{t("integration.skillStandaloneDesc")}</p>
+              </div>
+              <div className="space-y-2">
+                {skillInfo.standalone.map((s) => (
+                  <div key={s.key} className="flex items-center justify-between gap-2 text-sm">
+                    <div className="min-w-0">
+                      <p className="font-medium">{s.name}</p>
+                      <p className="text-xs text-muted-foreground font-mono truncate">{s.path}</p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {s.installed && (
+                        <button
+                          type="button"
+                          className="shrink-0 p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                          onClick={() => OpenDirectory(s.path)}
+                          title={t("integration.openDir")}
+                        >
+                          <FolderOpen className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                       <Button
-                        type="button"
-                        variant="ghost"
+                        variant="outline"
                         size="sm"
-                        className="h-7 px-2 text-destructive hover:text-destructive"
-                        disabled={uninstallingKey === s.key}
-                        onClick={() => setUninstallTarget(s)}
+                        disabled={installingKey === s.key || uninstallingKey === s.key}
+                        onClick={() => handleInstallTarget(s.key)}
                       >
-                        {uninstallingKey === s.key ? (
+                        {installingKey === s.key ? (
                           <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                        ) : s.installed ? (
+                          t("integration.skillUpdate")
                         ) : (
-                          <Trash2 className="h-3.5 w-3.5 mr-1" />
+                          t("integration.skillInstall")
                         )}
-                        {uninstallingKey === s.key
-                          ? t("integration.skillUninstalling")
-                          : t("integration.skillUninstall")}
                       </Button>
+                      {s.installed && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 px-2 text-destructive hover:text-destructive"
+                          disabled={uninstallingKey === s.key}
+                          onClick={() => setUninstallTarget(s)}
+                        >
+                          {uninstallingKey === s.key ? (
+                            <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-3.5 w-3.5 mr-1" />
+                          )}
+                          {t("integration.skillUninstall")}
+                        </Button>
+                      )}
                     </div>
                   </div>
                 ))}
+              </div>
             </div>
           )}
 
@@ -353,7 +473,7 @@ function IntegrationSection() {
                   <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
                   {t("integration.skillInstalling")}
                 </>
-              ) : skillTargets.every((s) => s.installed) ? (
+              ) : allSkillsInstalled ? (
                 t("integration.skillUpdate")
               ) : (
                 t("integration.skillInstall")

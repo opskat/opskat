@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -79,34 +80,29 @@ func TestPathTraversesSymlink(t *testing.T) {
 	})
 }
 
-func TestUninstallSkillRemovesSingleSkillTarget(t *testing.T) {
+func TestUninstallSkillRemovesUniversalTarget(t *testing.T) {
 	home := setTestHome(t)
 	s := New(t.Context(), SkillContent{})
 
-	targets := map[string]string{
-		"codex":      filepath.Join(home, ".codex", "skills", "opsctl"),
-		"opencode":   filepath.Join(home, ".config", "opencode", "skills", "opsctl"),
-		"gemini-cli": filepath.Join(home, ".gemini", "extensions", "opsctl"),
-	}
-	for key, path := range targets {
+	universal := universalSkillDir(home)
+	claudePlugin := claudePluginDir(home)
+	for _, path := range []string{universal, claudePlugin} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
-			t.Fatalf("MkdirAll %s: %v", key, err)
+			t.Fatalf("MkdirAll %s: %v", path, err)
 		}
-		if err := os.WriteFile(filepath.Join(path, "marker.txt"), []byte(key), 0o644); err != nil {
-			t.Fatalf("WriteFile %s: %v", key, err)
+		if err := os.WriteFile(filepath.Join(path, "marker.txt"), []byte("x"), 0o644); err != nil {
+			t.Fatalf("WriteFile %s: %v", path, err)
 		}
 	}
 
-	if err := s.UninstallSkill("codex"); err != nil {
-		t.Fatalf("UninstallSkill codex: %v", err)
+	if err := s.UninstallSkill(universalSkillKey); err != nil {
+		t.Fatalf("UninstallSkill universal: %v", err)
 	}
-	if _, err := os.Stat(targets["codex"]); !os.IsNotExist(err) {
-		t.Fatalf("codex target should be removed, stat err=%v", err)
+	if _, err := os.Stat(universal); !os.IsNotExist(err) {
+		t.Fatalf("universal target should be removed, stat err=%v", err)
 	}
-	for _, key := range []string{"opencode", "gemini-cli"} {
-		if _, err := os.Stat(targets[key]); err != nil {
-			t.Fatalf("%s target should remain: %v", key, err)
-		}
+	if _, err := os.Stat(claudePlugin); err != nil {
+		t.Fatalf("claude-code target should remain: %v", err)
 	}
 }
 
@@ -117,30 +113,30 @@ func TestUpdateInstalledSkillsOnlyReinstallsChangedTargets(t *testing.T) {
 		CommandsMD: "current commands\n",
 		InitMD:     "current init\n",
 	})
-	codexDir := filepath.Join(home, ".codex", "skills", "opsctl")
-	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+	universalDir := universalSkillDir(home)
+	if err := os.MkdirAll(universalDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(codexDir, "SKILL.md"), []byte("old skill\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(universalDir, "SKILL.md"), []byte("old skill\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
 	if err := s.updateInstalledSkills(home); err != nil {
 		t.Fatalf("updateInstalledSkills: %v", err)
 	}
-	// codexDir is rooted in t.TempDir(), so the test controls the complete path.
-	got, err := os.ReadFile(filepath.Join(codexDir, "references", "commands.md")) //nolint:gosec
+	// universalDir is rooted in t.TempDir(), so the test controls the complete path.
+	got, err := os.ReadFile(filepath.Join(universalDir, "references", "commands.md")) //nolint:gosec
 	if err != nil {
 		t.Fatalf("ReadFile updated commands: %v", err)
 	}
 	if string(got) != "current commands\n" {
 		t.Fatalf("commands = %q, want current content", got)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "skills", "opsctl")); !os.IsNotExist(err) {
-		t.Fatalf("uninstalled OpenCode target should remain absent, stat err=%v", err)
+	if _, err := os.Stat(claudePluginDir(home)); !os.IsNotExist(err) {
+		t.Fatalf("uninstalled Claude Code target should remain absent, stat err=%v", err)
 	}
 
-	skillPath := filepath.Join(codexDir, "SKILL.md")
+	skillPath := filepath.Join(universalDir, "SKILL.md")
 	mtime := time.Unix(1_700_000_000, 0)
 	if err := os.Chtimes(skillPath, mtime, mtime); err != nil {
 		t.Fatalf("Chtimes current skill: %v", err)
@@ -157,6 +153,59 @@ func TestUpdateInstalledSkillsOnlyReinstallsChangedTargets(t *testing.T) {
 	}
 }
 
+func TestUpdateInstalledSkillsMigratesLegacyTargetsToUniversalDir(t *testing.T) {
+	home := setTestHome(t)
+	s := New(t.Context(), SkillContent{
+		SkillMD:    "---\nname: opsctl\n---\n\n## Global Flags\n",
+		CommandsMD: "current commands\n",
+		InitMD:     "current init\n",
+	})
+
+	legacy := []string{
+		filepath.Join(home, ".codex", "skills", "opsctl"),
+		filepath.Join(home, ".gemini", "extensions", "opsctl"),
+		filepath.Join(home, ".config", "opencode", "skills", "opsctl"),
+	}
+	for _, dir := range legacy {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("stale skill\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile %s: %v", dir, err)
+		}
+	}
+
+	if err := s.updateInstalledSkills(home); err != nil {
+		t.Fatalf("updateInstalledSkills: %v", err)
+	}
+
+	for _, dir := range legacy {
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("legacy dir %s should be removed, stat err=%v", dir, err)
+		}
+	}
+	// universalSkillDir is rooted in t.TempDir(), so the test controls the complete path.
+	got, err := os.ReadFile(filepath.Join(universalSkillDir(home), "SKILL.md"))
+	if err != nil {
+		t.Fatalf("legacy install should be migrated to the universal dir: %v", err)
+	}
+	if !strings.Contains(string(got), "name: opsctl") {
+		t.Fatalf("universal SKILL.md = %q, want current skill content", got)
+	}
+}
+
+func TestUpdateInstalledSkillsSkipsMigrationWithoutLegacyInstall(t *testing.T) {
+	home := setTestHome(t)
+	s := New(t.Context(), SkillContent{SkillMD: "---\nname: opsctl\n---\n\n## Global Flags\n"})
+
+	if err := s.updateInstalledSkills(home); err != nil {
+		t.Fatalf("updateInstalledSkills: %v", err)
+	}
+	if _, err := os.Stat(universalSkillDir(home)); !os.IsNotExist(err) {
+		t.Fatalf("universal dir should not be created when nothing was installed, stat err=%v", err)
+	}
+}
+
 func TestUninstallSkillHandlesUnknownAndMissingTargets(t *testing.T) {
 	setTestHome(t)
 	s := New(t.Context(), SkillContent{})
@@ -164,7 +213,7 @@ func TestUninstallSkillHandlesUnknownAndMissingTargets(t *testing.T) {
 	if err := s.UninstallSkill("does-not-exist"); err == nil {
 		t.Fatalf("unknown key should return error")
 	}
-	if err := s.UninstallSkill("codex"); err != nil {
+	if err := s.UninstallSkill(universalSkillKey); err != nil {
 		t.Fatalf("missing target should be treated as success: %v", err)
 	}
 }
@@ -345,7 +394,7 @@ func TestUninstallSkillSkipsSymlinkTarget(t *testing.T) {
 	if err := os.MkdirAll(realTarget, 0o755); err != nil {
 		t.Fatalf("MkdirAll realTarget: %v", err)
 	}
-	linkParent := filepath.Join(home, ".codex", "skills")
+	linkParent := filepath.Join(home, ".agents", "skills")
 	if err := os.MkdirAll(linkParent, 0o755); err != nil {
 		t.Fatalf("MkdirAll linkParent: %v", err)
 	}
@@ -358,7 +407,7 @@ func TestUninstallSkillSkipsSymlinkTarget(t *testing.T) {
 	}
 
 	// 开发模式：目标是软链接时跳过删除且不报错（与安装侧一致）。
-	if err := s.UninstallSkill("codex"); err != nil {
+	if err := s.UninstallSkill(universalSkillKey); err != nil {
 		t.Fatalf("symlink target should be skipped, got error: %v", err)
 	}
 	if _, err := os.Stat(realTarget); err != nil {
