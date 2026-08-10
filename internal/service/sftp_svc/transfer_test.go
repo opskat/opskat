@@ -170,6 +170,40 @@ func TestUploadWritesThroughSymlinkInsteadOfReplacingIt(t *testing.T) {
 	assert.Equal(t, "server {}", string(content), "内容应写穿到链接指向的文件")
 }
 
+func TestUploadThroughDanglingSymlinkCreatesLinkTarget(t *testing.T) {
+	// 悬空软链在配置目录里很常见（sites-enabled/x -> 还没上传的 sites-available/x）。
+	// 语义应与原地覆盖一致：在软链指向的路径上把文件建出来，而不是把软链本身换掉。
+	service, session, root := newTestService(t)
+	local := filepath.Join(t.TempDir(), "new.conf")
+	require.NoError(t, os.WriteFile(local, []byte("fresh"), 0o644))
+
+	link := filepath.Join(root, "enabled.conf")
+	require.NoError(t, os.Symlink("available.conf", link))
+
+	require.NoError(t, service.Upload(context.Background(), "t1", session, local, link, discardProgress))
+
+	info, err := os.Lstat(link)
+	require.NoError(t, err)
+	assert.NotZero(t, info.Mode()&os.ModeSymlink, "软链必须保留")
+	body, err := os.ReadFile(filepath.Join(root, "available.conf")) //nolint:gosec // 测试内的临时目录路径
+	require.NoError(t, err, "应在软链指向的路径上创建文件")
+	assert.Equal(t, "fresh", string(body))
+}
+
+func TestUploadRejectsSymlinkLoopInsteadOfHanging(t *testing.T) {
+	// 解析软链是个循环，必须有跳数上限：成环时要报错退出，不能转到天荒地老。
+	service, session, root := newTestService(t)
+	local := filepath.Join(t.TempDir(), "x")
+	require.NoError(t, os.WriteFile(local, []byte("x"), 0o644))
+	require.NoError(t, os.Symlink("b", filepath.Join(root, "a")))
+	require.NoError(t, os.Symlink("a", filepath.Join(root, "b")))
+
+	err := service.Upload(context.Background(), "t1", session, local, filepath.Join(root, "a"), discardProgress)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "符号链接层级过深")
+}
+
 func TestWriteFileWritesThroughSymlinkInsteadOfReplacingIt(t *testing.T) {
 	// 外部编辑回写走的是同一套原子替换。编辑一个软链过去的配置文件时，
 	// 保存不能把软链本身换成普通文件。
