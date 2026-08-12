@@ -24,7 +24,7 @@ func TestServerStopInterruptsConnectedClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect client: %v", err)
 	}
-	defer conn.Close()
+	t.Cleanup(func() { _ = conn.Close() })
 
 	stopped := make(chan struct{})
 	go func() {
