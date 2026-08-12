@@ -42,20 +42,10 @@ func expandQueryPolicy(ctx context.Context, p *asset_entity.QueryPolicy) *asset_
 }
 
 func EffectiveQueryPolicy(ctx context.Context, custom *asset_entity.QueryPolicy) *asset_entity.QueryPolicy {
-	custom = expandQueryPolicy(ctx, custom)
-	defaults := expandQueryPolicy(ctx, asset_entity.DefaultQueryPolicy())
-
-	out := &asset_entity.QueryPolicy{}
-	if len(custom.AllowTypes) > 0 {
-		out.AllowTypes = AppendUnique(out.AllowTypes, custom.AllowTypes...)
-	} else {
-		out.AllowTypes = AppendUnique(out.AllowTypes, defaults.AllowTypes...)
+	if custom == nil || custom.IsEmpty() {
+		return expandQueryPolicy(ctx, asset_entity.DefaultQueryPolicy())
 	}
-	out.DenyTypes = AppendUnique(out.DenyTypes, custom.DenyTypes...)
-	out.DenyTypes = AppendUnique(out.DenyTypes, defaults.DenyTypes...)
-	out.DenyFlags = AppendUnique(out.DenyFlags, custom.DenyFlags...)
-	out.DenyFlags = AppendUnique(out.DenyFlags, defaults.DenyFlags...)
-	return out
+	return expandQueryPolicy(ctx, custom)
 }
 
 func expandRedisPolicy(ctx context.Context, p *asset_entity.RedisPolicy) *asset_entity.RedisPolicy {
@@ -74,18 +64,10 @@ func expandRedisPolicy(ctx context.Context, p *asset_entity.RedisPolicy) *asset_
 }
 
 func EffectiveRedisPolicy(ctx context.Context, custom *asset_entity.RedisPolicy) *asset_entity.RedisPolicy {
-	custom = expandRedisPolicy(ctx, custom)
-	defaults := expandRedisPolicy(ctx, asset_entity.DefaultRedisPolicy())
-
-	out := &asset_entity.RedisPolicy{}
-	if len(custom.AllowList) > 0 {
-		out.AllowList = AppendUnique(out.AllowList, custom.AllowList...)
-	} else {
-		out.AllowList = AppendUnique(out.AllowList, defaults.AllowList...)
+	if custom == nil || custom.IsEmpty() {
+		return expandRedisPolicy(ctx, asset_entity.DefaultRedisPolicy())
 	}
-	out.DenyList = AppendUnique(out.DenyList, custom.DenyList...)
-	out.DenyList = AppendUnique(out.DenyList, defaults.DenyList...)
-	return out
+	return expandRedisPolicy(ctx, custom)
 }
 
 func expandEtcdPolicy(ctx context.Context, p *asset_entity.EtcdPolicy) *asset_entity.EtcdPolicy {
@@ -104,18 +86,10 @@ func expandEtcdPolicy(ctx context.Context, p *asset_entity.EtcdPolicy) *asset_en
 }
 
 func EffectiveEtcdPolicy(ctx context.Context, custom *asset_entity.EtcdPolicy) *asset_entity.EtcdPolicy {
-	custom = expandEtcdPolicy(ctx, custom)
-	defaults := expandEtcdPolicy(ctx, asset_entity.DefaultEtcdPolicy())
-
-	out := &asset_entity.EtcdPolicy{}
-	if len(custom.AllowList) > 0 {
-		out.AllowList = AppendUnique(out.AllowList, custom.AllowList...)
-	} else {
-		out.AllowList = AppendUnique(out.AllowList, defaults.AllowList...)
+	if custom == nil || custom.IsEmpty() {
+		return expandEtcdPolicy(ctx, asset_entity.DefaultEtcdPolicy())
 	}
-	out.DenyList = AppendUnique(out.DenyList, custom.DenyList...)
-	out.DenyList = AppendUnique(out.DenyList, defaults.DenyList...)
-	return out
+	return expandEtcdPolicy(ctx, custom)
 }
 
 func expandMongoPolicy(ctx context.Context, p *asset_entity.MongoPolicy) *asset_entity.MongoPolicy {
@@ -134,18 +108,10 @@ func expandMongoPolicy(ctx context.Context, p *asset_entity.MongoPolicy) *asset_
 }
 
 func EffectiveMongoPolicy(ctx context.Context, custom *asset_entity.MongoPolicy) *asset_entity.MongoPolicy {
-	custom = expandMongoPolicy(ctx, custom)
-	defaults := expandMongoPolicy(ctx, asset_entity.DefaultMongoPolicy())
-
-	out := &asset_entity.MongoPolicy{}
-	if len(custom.AllowTypes) > 0 {
-		out.AllowTypes = AppendUnique(out.AllowTypes, custom.AllowTypes...)
-	} else {
-		out.AllowTypes = AppendUnique(out.AllowTypes, defaults.AllowTypes...)
+	if custom == nil || custom.IsEmpty() {
+		return expandMongoPolicy(ctx, asset_entity.DefaultMongoPolicy())
 	}
-	out.DenyTypes = AppendUnique(out.DenyTypes, custom.DenyTypes...)
-	out.DenyTypes = AppendUnique(out.DenyTypes, defaults.DenyTypes...)
-	return out
+	return expandMongoPolicy(ctx, custom)
 }
 
 func expandKafkaPolicy(ctx context.Context, p *asset_entity.KafkaPolicy) *asset_entity.KafkaPolicy {
@@ -164,18 +130,10 @@ func expandKafkaPolicy(ctx context.Context, p *asset_entity.KafkaPolicy) *asset_
 }
 
 func EffectiveKafkaPolicy(ctx context.Context, custom *asset_entity.KafkaPolicy) *asset_entity.KafkaPolicy {
-	custom = expandKafkaPolicy(ctx, custom)
-	defaults := expandKafkaPolicy(ctx, asset_entity.DefaultKafkaPolicy())
-
-	out := &asset_entity.KafkaPolicy{}
-	if len(custom.AllowList) > 0 {
-		out.AllowList = AppendUnique(out.AllowList, custom.AllowList...)
-	} else {
-		out.AllowList = AppendUnique(out.AllowList, defaults.AllowList...)
+	if custom == nil || custom.IsEmpty() {
+		return expandKafkaPolicy(ctx, asset_entity.DefaultKafkaPolicy())
 	}
-	out.DenyList = AppendUnique(out.DenyList, custom.DenyList...)
-	out.DenyList = AppendUnique(out.DenyList, defaults.DenyList...)
-	return out
+	return expandKafkaPolicy(ctx, custom)
 }
 
 func expandOSSPolicy(ctx context.Context, p *asset_entity.OSSPolicy) *asset_entity.OSSPolicy {
@@ -194,18 +152,10 @@ func expandOSSPolicy(ctx context.Context, p *asset_entity.OSSPolicy) *asset_enti
 }
 
 func EffectiveOSSPolicy(ctx context.Context, custom *asset_entity.OSSPolicy) *asset_entity.OSSPolicy {
-	custom = expandOSSPolicy(ctx, custom)
-	defaults := expandOSSPolicy(ctx, asset_entity.DefaultOSSPolicy())
-
-	out := &asset_entity.OSSPolicy{}
-	if len(custom.AllowList) > 0 {
-		out.AllowList = AppendUnique(out.AllowList, custom.AllowList...)
-	} else {
-		out.AllowList = AppendUnique(out.AllowList, defaults.AllowList...)
+	if custom == nil || custom.IsEmpty() {
+		return expandOSSPolicy(ctx, asset_entity.DefaultOSSPolicy())
 	}
-	out.DenyList = AppendUnique(out.DenyList, custom.DenyList...)
-	out.DenyList = AppendUnique(out.DenyList, defaults.DenyList...)
-	return out
+	return expandOSSPolicy(ctx, custom)
 }
 
 func expandK8sPolicy(ctx context.Context, p *asset_entity.K8sPolicy) *asset_entity.K8sPolicy {
@@ -224,16 +174,8 @@ func expandK8sPolicy(ctx context.Context, p *asset_entity.K8sPolicy) *asset_enti
 }
 
 func EffectiveK8sPolicy(ctx context.Context, custom *asset_entity.K8sPolicy) *asset_entity.K8sPolicy {
-	custom = expandK8sPolicy(ctx, custom)
-	defaults := expandK8sPolicy(ctx, asset_entity.DefaultK8sPolicy())
-
-	out := &asset_entity.K8sPolicy{}
-	if len(custom.AllowList) > 0 {
-		out.AllowList = AppendUnique(out.AllowList, custom.AllowList...)
-	} else {
-		out.AllowList = AppendUnique(out.AllowList, defaults.AllowList...)
+	if custom == nil || custom.IsEmpty() {
+		return expandK8sPolicy(ctx, asset_entity.DefaultK8sPolicy())
 	}
-	out.DenyList = AppendUnique(out.DenyList, custom.DenyList...)
-	out.DenyList = AppendUnique(out.DenyList, defaults.DenyList...)
-	return out
+	return expandK8sPolicy(ctx, custom)
 }

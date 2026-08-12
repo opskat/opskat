@@ -58,7 +58,8 @@ func MatchOSSRule(rule, command string) bool {
 }
 
 // CheckOSSPolicy checks the policy strings one OSS command derives against the
-// effective OSS policy (asset/group policy + the default deny floor).
+// effective OSS policy. An empty policy uses the defaults; an explicit policy applies
+// only the rules and groups the user selected.
 //
 // Unlike every other kind, the input is a slice: a single command derives 1..3 policy
 // strings (spec §3.3 — copy reads the source and writes the destination, move also

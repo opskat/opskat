@@ -174,11 +174,10 @@ func TestCheckOSSPolicy(t *testing.T) {
 		})
 	})
 
-	Convey("默认 deny 是改不掉的地板，默认 allow 则可被自定义 allow 取代", t, func() {
-		floor := &asset_entity.OSSPolicy{AllowList: []string{"object.presign.write *"}}
-		res := CheckOSSPolicy(ctx, floor, []string{"object.presign.write mybucket/a"})
-		So(res.Decision, ShouldEqual, aictx.Deny)
-		So(res.MatchedPattern, ShouldEqual, "object.presign.write *")
+	Convey("显式策略不会继承未选择的默认组", t, func() {
+		allowPresign := &asset_entity.OSSPolicy{AllowList: []string{"object.presign.write *"}}
+		res := CheckOSSPolicy(ctx, allowPresign, []string{"object.presign.write mybucket/a"})
+		So(res.Decision, ShouldEqual, aictx.Allow)
 
 		writeOnly := &asset_entity.OSSPolicy{AllowList: []string{"object.write mybucket/"}}
 		So(CheckOSSPolicy(ctx, writeOnly, []string{"object.read mybucket/a"}).Decision, ShouldEqual, aictx.NeedConfirm)

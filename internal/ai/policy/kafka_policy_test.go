@@ -11,13 +11,8 @@ import (
 
 // TestKafkaMessageWriteDeny_IsOptInNotDefault 锁住 message.write 的两条性质。
 //
-// 背景：内置 deny 清单是一道**不可覆盖的地板**——EffectiveKafkaPolicy 无条件追加默认
-// DenyList（policy_effective.go:176-177），而 checkKafkaPolicyRules 先查 deny、命中即返回。
-// 实测显式 AllowList:["topic.delete *"] 仍被判 Deny 并命中 "topic.delete *"。
-// 所以把 message.write 放进 BuiltinKafkaDangerousDeny 等于让 AI 永久丧失 produce 能力，
-// 且 BuiltinKafkaOperator 里的 "message.write *" 会变成永远生效不了的死条目。
-// 定为可选组之后，「默认不拒绝」本身就成了要钉住的契约——否则哪天有人把它挪进
-// 默认清单，只会表现为 produce 静默失效。
+// message.write 是独立的可选拒绝组，不属于未配置资产采用的默认危险操作组。
+// 「默认不拒绝」与「显式选择后拒绝」共同保护这个用户可配置契约。
 func TestKafkaMessageWriteDeny_IsOptInNotDefault(t *testing.T) {
 	ctx := context.Background()
 
@@ -25,7 +20,7 @@ func TestKafkaMessageWriteDeny_IsOptInNotDefault(t *testing.T) {
 		res := CheckKafkaPolicy(ctx, nil, "message.write orders")
 		if res.Decision == aictx.Deny {
 			t.Fatalf("默认策略把 message.write 判成 Deny（命中 %q）——该规则只应在勾选可选组后生效；"+
-				"进了默认地板就没有任何配置能再放开 produce", res.MatchedPattern)
+				"该规则只应由可选策略组控制", res.MatchedPattern)
 		}
 	})
 

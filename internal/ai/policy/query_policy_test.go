@@ -93,14 +93,13 @@ func TestCheckQueryPolicy(t *testing.T) {
 			So(result.Decision, ShouldEqual, aictx.NeedConfirm)
 		})
 
-		Convey("explicit allow_types still keeps default dangerous deny", func() {
+		Convey("explicit policy does not inherit an unselected dangerous deny group", func() {
 			p := &asset_entity.QueryPolicy{
 				AllowTypes: []string{"SELECT"},
 			}
-			stmts, _ := ClassifyStatements("DROP TABLE users")
+			stmts, _ := ClassifyStatements("CREATE USER 'app'@'%'")
 			result := CheckQueryPolicy(ctx, p, stmts)
-			So(result.Decision, ShouldEqual, aictx.Deny)
-			So(result.DecisionSource, ShouldEqual, aictx.SourcePolicyDeny)
+			So(result.Decision, ShouldEqual, aictx.NeedConfirm)
 		})
 
 		Convey("DROP TABLE in deny_types → aictx.Deny", func() {
@@ -150,12 +149,11 @@ func TestCheckQueryPolicy(t *testing.T) {
 			So(result.Decision, ShouldEqual, aictx.Allow)
 		})
 
-		Convey("allow_types wildcard does not override default dangerous deny", func() {
+		Convey("allow_types wildcard allows operations when dangerous deny is not selected", func() {
 			p := &asset_entity.QueryPolicy{AllowTypes: []string{"*"}}
 			stmts, _ := ClassifyStatements("DROP TABLE users")
 			result := CheckQueryPolicy(ctx, p, stmts)
-			So(result.Decision, ShouldEqual, aictx.Deny)
-			So(result.DecisionSource, ShouldEqual, aictx.SourcePolicyDeny)
+			So(result.Decision, ShouldEqual, aictx.Allow)
 		})
 
 		Convey("deny_types wildcard denies every SQL statement", func() {

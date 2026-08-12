@@ -238,21 +238,19 @@ func TestCheckRedisPolicy(t *testing.T) {
 			So(result.Decision, ShouldEqual, aictx.Deny)
 		})
 
-		Convey("allow_list wildcard allows any non-dangerous Redis command", func() {
+		Convey("explicit allow_list wildcard does not inherit an unselected dangerous deny group", func() {
 			p := &asset_entity.RedisPolicy{AllowList: []string{"*"}}
 			result := CheckRedisPolicy(ctx, p, "SET mykey value")
 			So(result.Decision, ShouldEqual, aictx.Allow)
 
 			result = CheckRedisPolicy(ctx, p, "DEBUG STATS")
-			So(result.Decision, ShouldEqual, aictx.Deny)
-			So(result.DecisionSource, ShouldEqual, aictx.SourcePolicyDeny)
+			So(result.Decision, ShouldEqual, aictx.Allow)
 		})
 
 		Convey("deny_list wildcard denies every Redis command", func() {
 			p := &asset_entity.RedisPolicy{DenyList: []string{"*"}}
 			result := CheckRedisPolicy(ctx, p, "INFO")
 			So(result.Decision, ShouldEqual, aictx.Deny)
-			So(result.DecisionSource, ShouldEqual, aictx.SourcePolicyDeny)
 			So(result.MatchedPattern, ShouldEqual, "*")
 		})
 
@@ -262,8 +260,7 @@ func TestCheckRedisPolicy(t *testing.T) {
 			So(result.Decision, ShouldEqual, aictx.NeedConfirm)
 
 			result = CheckRedisPolicy(ctx, p, "DEBUG STATS")
-			So(result.Decision, ShouldEqual, aictx.Deny)
-			So(result.DecisionSource, ShouldEqual, aictx.SourcePolicyDeny)
+			So(result.Decision, ShouldEqual, aictx.NeedConfirm)
 		})
 	})
 }

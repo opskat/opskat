@@ -399,9 +399,7 @@ func init() {
 			}),
 		},
 		// 可选：默认不启用。produce 往生产 topic 注入数据的后果不可逆，但它不是
-		// 破坏性操作，且 BuiltinKafkaOperator 明确把 "message.write *" 列为允许——
-		// 放进 BuiltinKafkaDangerousDeny 会让那条 allow 永远生效不了（默认 DenyList
-		// 是不可覆盖的地板），等于单方面取消 AI 的 produce 能力。需要收紧的用户勾选本组。
+		// BuiltinKafkaOperator 明确允许 message.write；需要收紧该能力的用户选择本组。
 		&PolicyGroup{
 			BuiltinID:   policy.BuiltinKafkaMessageWriteDeny,
 			Name:        "Kafka Message Write Deny",

@@ -177,18 +177,16 @@ const (
 	BuiltinKafkaOperator         = "builtin:kafka-operator"
 	BuiltinKafkaSecurityAdmin    = "builtin:kafka-security-admin"
 	BuiltinKafkaDangerousDeny    = "builtin:kafka-dangerous-deny"
-	// BuiltinKafkaMessageWriteDeny 是**可选**的，刻意不进 DefaultKafkaPolicy：
-	// EffectiveKafkaPolicy 无条件追加默认 DenyList 且 deny 命中即返回，默认清单因此是
-	// 一道任何配置都覆盖不了的地板。message.write 进了那道地板，AI 就永久无法 produce，
-	// 连 BuiltinKafkaOperator 显式列出的 "message.write *" 也会变成死条目。
+	// BuiltinKafkaMessageWriteDeny 是可选的，刻意不进 DefaultKafkaPolicy：默认未配置资产
+	// 仍可通过审批 produce；用户选择本组后才会直接拒绝 message.write。
 	BuiltinKafkaMessageWriteDeny = "builtin:kafka-message-write-deny"
 	BuiltinEtcdReadOnly          = "builtin:etcd-readonly"
 	BuiltinEtcdDangerousDeny     = "builtin:etcd-dangerous-deny"
 	BuiltinOSSReadOnly           = "builtin:oss-readonly"
 	// BuiltinOSSDangerousDeny 只含 object.presign.write *（见 D9）：预签名 PUT URL 是唯一
 	// 把写权限完全移出本产品的操作 —— URL 签发后任何持有者都能在有效期内写入，不再经过
-	// 任何策略/审批/审计。这与 etcd 把 auth disable 放进地板是同一类判断；put/copy/move/
-	// delete 都走"每次都要过一次审批"的普通路径，因此不进这道不可覆盖的地板。
+	// 任何策略/审批/审计。put/copy/move/delete 都走"每次都要过一次审批"的普通路径，
+	// 因此不放入默认危险操作组。
 	BuiltinOSSDangerousDeny = "builtin:oss-dangerous-deny"
 
 	// BuiltinPrefix 内置权限组 ID 前缀

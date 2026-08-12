@@ -90,8 +90,8 @@ func TestCheckKafkaPolicy_DefaultsAndWildcard(t *testing.T) {
 	assert.Equal(t, "*", allowAll.MatchedPattern)
 
 	allowAllDangerous := policy.CheckKafkaPolicy(ctx, &asset_entity.KafkaPolicy{AllowList: []string{"*"}}, "topic.delete orders")
-	assert.Equal(t, aictx.Deny, allowAllDangerous.Decision)
-	assert.Equal(t, aictx.SourcePolicyDeny, allowAllDangerous.DecisionSource)
+	assert.Equal(t, aictx.Allow, allowAllDangerous.Decision)
+	assert.Equal(t, aictx.SourcePolicyAllow, allowAllDangerous.DecisionSource)
 
 	denyAll := policy.CheckKafkaPolicy(ctx, &asset_entity.KafkaPolicy{DenyList: []string{"*"}}, "topic.read orders")
 	assert.Equal(t, aictx.Deny, denyAll.Decision)
@@ -130,8 +130,7 @@ func TestCheckKafkaPolicy_TopicAdminDenyWins(t *testing.T) {
 	assert.Equal(t, "topic.records.delete *", records.MatchedPattern)
 
 	reset := policy.CheckKafkaPolicy(ctx, p, "consumer_group.offset.write billing")
-	assert.Equal(t, aictx.Deny, reset.Decision)
-	assert.Equal(t, "consumer_group.offset.write *", reset.MatchedPattern)
+	assert.Equal(t, aictx.Allow, reset.Decision)
 
 	deleteGroup := policy.CheckKafkaPolicy(ctx, p, "consumer_group.delete billing")
 	assert.Equal(t, aictx.Deny, deleteGroup.Decision)

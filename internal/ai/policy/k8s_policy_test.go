@@ -71,14 +71,13 @@ func TestCheckK8sPolicy_DefaultsAndWildcard(t *testing.T) {
 			So(result.MatchedPattern, ShouldEqual, "kubectl delete *")
 		})
 
-		Convey("allow wildcard allows any non-dangerous kubectl command", func() {
+		Convey("explicit allow wildcard does not inherit an unselected dangerous deny group", func() {
 			policy := &asset_entity.K8sPolicy{AllowList: []string{"*"}}
 			result := CheckK8sPolicy(ctx, policy, "kubectl apply -f deploy.yaml")
 			So(result.Decision, ShouldEqual, aictx.Allow)
 
 			result = CheckK8sPolicy(ctx, policy, "kubectl delete pod api-0")
-			So(result.Decision, ShouldEqual, aictx.Deny)
-			So(result.DecisionSource, ShouldEqual, aictx.SourcePolicyDeny)
+			So(result.Decision, ShouldEqual, aictx.Allow)
 		})
 
 		Convey("deny wildcard denies every command", func() {

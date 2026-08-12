@@ -32,14 +32,13 @@ func TestCheckMongoDBPolicy_DefaultsAndWildcard(t *testing.T) {
 			So(result.MatchedPattern, ShouldEqual, "dropDatabase")
 		})
 
-		Convey("allow_types wildcard allows any non-dangerous operation", func() {
+		Convey("explicit allow wildcard does not inherit an unselected dangerous deny group", func() {
 			policy := &asset_entity.MongoPolicy{AllowTypes: []string{"*"}}
 			result := CheckMongoDBPolicy(ctx, policy, "insertOne")
 			So(result.Decision, ShouldEqual, aictx.Allow)
 
 			result = CheckMongoDBPolicy(ctx, policy, "dropDatabase")
-			So(result.Decision, ShouldEqual, aictx.Deny)
-			So(result.DecisionSource, ShouldEqual, aictx.SourcePolicyDeny)
+			So(result.Decision, ShouldEqual, aictx.Allow)
 		})
 
 		Convey("deny_types wildcard denies every operation", func() {
