@@ -230,7 +230,11 @@ Arguments:
 
 Flags:
   --type <type>   Optional assertion: fails fast if the asset is not of this
-                  type (accepts protocol aliases, e.g. "sql" for database).
+                  type. Accepts protocol aliases ("sql"/"db" for database,
+                  "exec" for ssh, "mongo", "kubernetes"/"kube" for k8s), and
+                  database driver names ("mysql", "postgres", "mssql",
+                  "sqlite"), which additionally assert the asset's driver —
+                  "--type mysql" fails on a PostgreSQL asset.
                   Does not select dispatch — that always comes from the
                   asset's real type.
 

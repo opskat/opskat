@@ -92,14 +92,21 @@ real type, never from a flag or verb name.
 
 **Flags**:
 - `--type <type>` — Optional assertion: fails fast (before any approval
-  prompt) if the asset is not of this type. Accepts protocol aliases (e.g.
-  `sql` for `database`). Does not select dispatch — that always comes from
-  the asset's real type.
+  prompt) if the asset is not of this type. Does not select dispatch — that
+  always comes from the asset's real type. Accepts three kinds of value:
+  - canonical asset types: `ssh`, `serial`, `database`, `redis`, `mongodb`,
+    `etcd`, `kafka`, `k8s`, `oss`;
+  - protocol aliases: `exec` (ssh), `sql` / `db` (database), `mongo`
+    (mongodb), `kubernetes` / `kube` (k8s);
+  - database driver names: `mysql`, `postgresql` / `postgres`, `mssql` /
+    `sqlserver`, `sqlite` / `sqlite3`. These assert the driver **as well as**
+    the type — `--type mysql` fails on a PostgreSQL asset, which is the whole
+    reason driver names are accepted rather than folded into `database`.
 
-When the type is known, always pass this assertion. Prefer canonical asset
-types (`ssh`, `database`, `redis`, `mongodb`, `etcd`, `kafka`, `k8s`,
-`serial`, `oss`) over the accepted compatibility aliases (`exec`, `sql`, `mongo`).
-Omit it only when the type is genuinely unknown.
+When the type is known, always pass this assertion. Prefer the canonical
+asset type; reach for a driver name only when the dialect actually matters to
+the command you are about to run. Omit it only when the type is genuinely
+unknown.
 
 **Approval flow**:
 1. Command policy check (allow-list/deny-list per asset)

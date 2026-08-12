@@ -17,8 +17,16 @@ func TestCanonicalTypeFor(t *testing.T) {
 		{"exec", asset_entity.AssetTypeSSH, true},     // 协议别名
 		{"sql", asset_entity.AssetTypeDatabase, true}, // opsctl batch 前缀沿用
 		{"database", asset_entity.AssetTypeDatabase, true},
+		{"db", asset_entity.AssetTypeDatabase, true},
 		{"mongo", asset_entity.AssetTypeMongoDB, true},
 		{"redis", asset_entity.AssetTypeRedis, true},
+		{"kubernetes", asset_entity.AssetTypeK8s, true},
+		{"kube", asset_entity.AssetTypeK8s, true},
+		// Driver names resolve to the database type too, so the opsctl batch prefix
+		// (`mysql:prod-db:SELECT 1`) validates the same set of words --type accepts.
+		// The driver constraint itself is enforced by AssertAssetType, not here.
+		{"mysql", asset_entity.AssetTypeDatabase, true},
+		{"postgres", asset_entity.AssetTypeDatabase, true},
 		{"nonsense", "", false},
 		{"", "", false},
 	}
@@ -87,6 +95,81 @@ func TestAssertAssetType_EchoesDeclaredAliasNotCanonical(t *testing.T) {
 	}
 }
 
+// newDBAsset builds a database asset carrying a real DatabaseConfig, which is what the
+// driver-level assertion reads back. Constructing it through SetDatabaseConfig (rather
+// than hand-writing Config JSON) keeps the test honest about the serialization the
+// production path actually parses.
+func newDBAsset(t *testing.T, name string, driver asset_entity.DatabaseDriver) *asset_entity.Asset {
+	t.Helper()
+	a := &asset_entity.Asset{Name: name, Type: asset_entity.AssetTypeDatabase}
+	if err := a.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+		Driver: driver, Host: "10.0.0.1", Port: 3306, Username: "app",
+	}); err != nil {
+		t.Fatalf("SetDatabaseConfig: %v", err)
+	}
+	return a
+}
+
+// TestAssertAssetType_DriverAlias covers the whole point of admitting driver names as
+// --type values: they must assert the *driver*, not just resolve to "database". A plain
+// alias (mysql→database) would let type=mysql pass on a PostgreSQL asset, which turns the
+// assertion into a lie exactly where it is supposed to catch a wrong dialect.
+func TestAssertAssetType_DriverAlias(t *testing.T) {
+	mysqlAsset := newDBAsset(t, "prod-db", asset_entity.DriverMySQL)
+	pgAsset := newDBAsset(t, "analytics", asset_entity.DriverPostgreSQL)
+
+	if err := AssertAssetType(mysqlAsset, "mysql"); err != nil {
+		t.Fatalf("driver alias matching the asset's driver must pass, got %v", err)
+	}
+	if err := AssertAssetType(pgAsset, "postgres"); err != nil {
+		t.Fatalf("spelling variant of the driver must pass, got %v", err)
+	}
+	// The canonical type name still skips the driver check — declaring "database" says
+	// nothing about the dialect, so every database asset satisfies it.
+	if err := AssertAssetType(pgAsset, "database"); err != nil {
+		t.Fatalf("canonical type must not imply a driver, got %v", err)
+	}
+
+	err := AssertAssetType(pgAsset, "mysql")
+	if err == nil {
+		t.Fatal("driver alias must fail on an asset with a different driver")
+	}
+	// Same shape as the type-mismatch error: name both sides, echo what the caller
+	// actually passed, point at help.
+	for _, want := range []string{`"analytics"`, "driver=postgresql", "type=mysql", "help"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q must contain %q", err.Error(), want)
+		}
+	}
+
+	// A driver name on a non-database asset fails at the type layer, and must still echo
+	// the declared word rather than its canonical resolution.
+	redis := &asset_entity.Asset{Name: "cache-1", Type: asset_entity.AssetTypeRedis}
+	err = AssertAssetType(redis, "mysql")
+	if err == nil {
+		t.Fatal("driver alias must fail on a non-database asset")
+	}
+	if !strings.Contains(err.Error(), "type=mysql") {
+		t.Errorf("error %q must echo the declared value %q", err.Error(), "mysql")
+	}
+}
+
+// TestDriverAliasStaysOutOfPermissionRegistry locks the seam between the two tables.
+// permissionTypes is the source of truth for permission dispatch, approval labels and
+// grant support; driver names are none of those things. Registering them there would make
+// SupportsGrantApproval("mysql") report true, widening the grant contract to a name that
+// is not an approval type.
+func TestDriverAliasStaysOutOfPermissionRegistry(t *testing.T) {
+	for _, name := range []string{"mysql", "postgres", "postgresql", "sqlite", "mssql"} {
+		if SupportsGrantApproval(name) {
+			t.Errorf("driver alias %q must not register as an approval type", name)
+		}
+		if got := ApprovalTypeFor(name); got != name {
+			t.Errorf("ApprovalTypeFor(%q) = %q, want passthrough %q", name, got, name)
+		}
+	}
+}
+
 func TestCanonicalExecTypeFor(t *testing.T) {
 	tests := []struct {
 		name string
@@ -102,6 +185,8 @@ func TestCanonicalExecTypeFor(t *testing.T) {
 		{name: "etcd", want: asset_entity.AssetTypeEtcd, ok: true},
 		{name: "kafka", want: asset_entity.AssetTypeKafka, ok: true},
 		{name: "k8s", want: asset_entity.AssetTypeK8s, ok: true},
+		{name: "kubernetes", want: asset_entity.AssetTypeK8s, ok: true},
+		{name: "mysql", want: asset_entity.AssetTypeDatabase, ok: true},
 		{name: "serial", want: asset_entity.AssetTypeSerial, ok: true},
 		{name: "cp", ok: false},
 		{name: "rdp", ok: false},
