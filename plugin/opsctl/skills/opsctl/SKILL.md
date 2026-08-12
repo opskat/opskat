@@ -51,12 +51,12 @@ Most write operations require desktop app approval.
 **Flow**: policy check → grant pattern match → session auto-approve → desktop app approval dialog.
 
 - **Queue mode**: Multiple concurrent approval requests are queued into a single dialog. User can approve/deny individually or batch "Approve All" / "Deny All".
-- **Offline**: Policy/grant matches still auto-approve; otherwise rejects. CP/Create/Update always need desktop app. **Delete always needs desktop app too, and cannot be pre-approved or granted even with an active session** — there is no "allow all" for it.
+- **Offline**: Policy/grant matches still auto-approve; otherwise rejects. Create/Update always need the desktop app (they carry no command, so no policy can match). CP is auto-approved when every endpoint subject matches a policy/grant, and needs the desktop app otherwise. **Delete always needs desktop app too, and cannot be pre-approved or granted even with an active session** — there is no "allow all" for it.
 - **Pre-approve patterns**: Use `grant submit` or `request_permission` tool to submit command patterns (supports `*` wildcard). Approved patterns auto-pass subsequent matching commands.
 
 ## Sessions
 
-Sessions auto-create on first write — do NOT manually `session start`. "Allow Session" in the first approval dialog auto-approves subsequent operations. Sessions expire after 24 hours.
+Sessions auto-create on first write — do NOT manually `session start`. The approval dialog offers Deny / Remember / Allow: "Remember" saves that command pattern (editable before you confirm) for the session, so later commands matching it skip approval — it is not a blanket allow for the session. Sessions expire after 24 hours.
 
 For explicit session management, grant workflow, and details, see [references/commands.md](references/commands.md).
 
@@ -114,7 +114,7 @@ For full command reference with flags and examples, see [references/commands.md]
 
 ## Error Handling
 
-- **User rejection** (output contains "user denied execution" or "user denied grant approval"): Stop the entire task immediately. Report the denied command and wait for user instructions. Do NOT retry, work around, or continue with remaining steps.
+- **User rejection** (output contains "USER DENIED" or "denied: user denied"): Stop the entire task immediately. Report the denied command and wait for user instructions. Do NOT retry, work around, or continue with remaining steps.
 - **SSH connection failure**: Report the error, check asset config with `get asset`. Do not retry blindly — ask user if host/credentials changed.
 - **Partial batch failure**: `batch` returns per-command results. Report failed commands with their errors, summarize successes. Ask user how to proceed with failures.
 - **Command not found on remote**: Suggest installing the missing tool or an alternative command. Do not assume package managers.
@@ -132,7 +132,8 @@ opsctl batch 'ssh:web-01:df -h && free -h' 'ssh:web-02:df -h && free -h' 'ssh:db
 
 ```bash
 # 1. Pre-approve the operations
-opsctl grant submit web-01 web-02 "tee /etc/app/config.yml" "systemctl restart app"
+# Simple mode takes exactly ONE asset — use JSON mode to target several.
+echo '{"items":[{"type":"exec","command":"tee /etc/app/config.yml"},{"type":"exec","command":"systemctl restart app"}]}' | opsctl grant submit web-01 web-02
 
 # 2. Deploy (all auto-approved by grant)
 cat config.yml | opsctl exec web-01 --type ssh -- tee /etc/app/config.yml

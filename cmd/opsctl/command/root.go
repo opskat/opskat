@@ -194,8 +194,8 @@ Note:
 Approval & Sessions:
   Write operations require approval from the running desktop app. On first
   write, a session is auto-created in .opskat/sessions/. When the user
-  approves with "Allow Session", all subsequent operations in the same
-  session are auto-approved. Sessions expire after 24 hours.
+  approves with "Remember", that command pattern is saved for the session,
+  so later matching operations skip approval. Sessions expire after 24 hours.
 
 Global Flags:
   --data-dir <path>     Override the application data directory
