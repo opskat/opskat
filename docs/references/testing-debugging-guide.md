@@ -329,7 +329,7 @@ Always prefer a failing test that reproduces the issue before changing impl (see
 
 ```bash
 # Go
-make test                                  # all Go tests
+make test                                  # Go tests: internal/, cmd/opsctl, pkg/, cmd/devserver (CI runs `go test ./...`)
 go test ./internal/ai/...                  # package scope
 go test ./internal/ai/ -run TestName       # single test
 make test-cover                            # coverage HTML

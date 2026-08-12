@@ -20,7 +20,7 @@ make build-cli                           # Standalone opsctl
 make install-cli                         # Install opsctl to GOPATH/bin
 
 # Test
-make test                                # All Go tests
+make test                                # Go tests (internal/, cmd/opsctl, pkg/, cmd/devserver; CI runs the broader `go test ./...`)
 go test ./internal/ai/...                # Package scope
 go test ./internal/ai/ -run TestName     # Single Go test
 make test-cover                          # Coverage HTML
@@ -94,7 +94,7 @@ Diagnosing production issues relies on logs. Log every cross-boundary / cross-pr
 
 | Path | Producer | Regenerate |
 |------|----------|------------|
-| `frontend/wailsjs/go/app/App.{d.ts,js}`, `models.ts` | Wails (from `internal/app/**` + Go structs) | `make dev` / `wails build` |
+| `frontend/wailsjs/go/<domain>/*.{d.ts,js}`, `models.ts` | Wails (from the per-domain `internal/app/<domain>` binders + Go structs) | `make dev` / `wails build` |
 | `frontend/wailsjs/runtime/*` | Wails runtime shim | ships with Wails CLI |
 | `internal/**/mock_*/` | `mockgen` | `go generate ./...` |
 | `internal/embedded/opsctl_bin` | `make build-cli-embed` | `make build-embed` |

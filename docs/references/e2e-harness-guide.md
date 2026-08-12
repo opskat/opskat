@@ -129,7 +129,7 @@ specs compare the string the *server* received against the one the approval dial
 
 ### 4.1 Driving the AI stack with a scripted model
 
-The AI specs run the **real** AI stack — `internal/ai/runner` → cago provider/openai →
+The AI specs run the **real** AI stack — `internal/ai/runner` → cago-agents `provider/openai` →
 `sashabaranov/go-openai` — against `e2e/fixtures/openai-mock.mjs` (pure Node) on `34219`,
 a fourth `webServer`. It speaks just enough OpenAI: SSE `/v1/chat/completions` plus a
 control API, so a **spec** decides what the "model" does — the mock hard-codes nothing:

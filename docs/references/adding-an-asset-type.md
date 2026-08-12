@@ -391,7 +391,7 @@ The unavoidable shared edit is the side-effect import. `registerAssetType` only 
 import "./<newtype>";
 ```
 
-`src/lib/assetTypes/__tests__/registry.test.ts` asserts the exact `getBuiltinTypes()` order. Add the new type to that ordered assertion.
+`src/__tests__/assetTypeOptions.test.ts` asserts the exact `getBuiltinTypes()` order. Add the new type to that ordered assertion.
 
 Once registered, the type selector, filters, grouping, labels, detail-card selection, config-section render path, connect action dispatch, new-tab visibility, menu visibility, and Test button visibility are derived from the registry. Do not add new type-string branches for those surfaces.
 
@@ -570,7 +570,7 @@ Required or likely keys:
 
 1. Add `src/lib/assetTypes/<newtype>.ts` and call `registerAssetType`.
 2. Add `import "./<newtype>";` in `src/lib/assetTypes/index.ts`.
-3. Add the type to the ordered assertion in `src/lib/assetTypes/__tests__/registry.test.ts`.
+3. Add the type to the ordered assertion in `src/__tests__/assetTypeOptions.test.ts`.
 4. Add `src/components/asset/<Name>ConfigSection.config.ts`.
 5. Add golden tests for serialized config when the type has meaningful saved/test JSON behavior.
 6. Add `src/components/asset/<Name>ConfigSection.tsx`: drive it with `useConfigSection`, declare a `ConfigGroupSchema`, and render it through `ConfigTabs` (reuse the field `kind`s in `configFields.tsx`; escape to a `custom` field or group `render` only for bespoke UI). Feed `useAssetCredential`'s result as `ctx.cred` for the `password` field kind when the type uses password/managed credentials.
@@ -627,7 +627,7 @@ Frontend, from `frontend/`:
 - `npx vitest run`
 - `pnpm lint` or focused `npx eslint <paths>`
 - Serialization helpers that affect saved/test JSON should have golden tests.
-- Registry order is locked by `src/lib/assetTypes/__tests__/registry.test.ts`.
+- Registry order is locked by `src/__tests__/assetTypeOptions.test.ts`.
 
 Wails bindings:
 
