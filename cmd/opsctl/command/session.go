@@ -191,9 +191,9 @@ Subcommands:
   end       End the current session (remove session file)
   status    Show the current session ID
 
-Sessions allow batch approval of write operations. When the desktop app user
-approves with "Allow Session", all subsequent operations in the same session
-are auto-approved without further dialogs.
+Sessions scope approval of write operations. When the desktop app user approves
+with "Remember", that command pattern is saved for the session, so later
+operations matching it are approved without another dialog.
 
 Note: Sessions are auto-created on the first write operation if none exists.
 You only need 'session start' if you want to explicitly manage the lifecycle.

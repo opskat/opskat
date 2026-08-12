@@ -73,23 +73,7 @@ export const useTheme = () => {
   return context;
 };
 
-/** 返回当前生效的主题（"dark" | "light"），跟随系统和用户设置实时变化 */
+// useResolvedTheme 的实现已移入 @opskat/ui（包内组件如 Toaster 也要用它），
+// 这里重新导出，保持既有 import 路径不变。
 // eslint-disable-next-line react-refresh/only-export-components
-export function useResolvedTheme(): "dark" | "light" {
-  const [resolved, setResolved] = useState<"dark" | "light">(() =>
-    document.documentElement.classList.contains("dark") ? "dark" : "light"
-  );
-
-  useEffect(() => {
-    const observer = new MutationObserver(() => {
-      setResolved(document.documentElement.classList.contains("dark") ? "dark" : "light");
-    });
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class"],
-    });
-    return () => observer.disconnect();
-  }, []);
-
-  return resolved;
-}
+export { useResolvedTheme } from "@opskat/ui";

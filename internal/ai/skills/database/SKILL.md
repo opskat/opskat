@@ -37,6 +37,7 @@ Use `scope` to override the default database for this call, e.g. `scope: "analyt
 | `driver` | string | yes | `"mysql"`, `"postgresql"`, or `"mssql"` |
 | `database` | string | no | Default database; empty string clears it |
 | `read_only` | string | no | `"true"` enables read-only mode |
+| `query_timeout_seconds` | number | no | Per-query timeout override, in seconds |
 | `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches |
 
 `"sqlite"` is not creatable through `put_asset`: the validator requires `host` + `port` +

@@ -55,11 +55,11 @@ description: "Read and write etcd keys via exec, using an etcdctl-like command s
 
 | field | type | required | notes |
 |---|---|---|---|
-| `endpoints` | string | yes | Comma/semicolon/newline separated `host:port` list, no scheme prefix — each entry is parsed with `net.SplitHostPort`, so `http://`/`https://` fails with "too many colons in address": e.g. `"10.0.1.5:2379,10.0.1.6:2379"` |
+| `endpoints` | string | yes | Comma/semicolon/newline separated `host:port` list, no scheme prefix — each entry must parse as `host:port`, so `http://`/`https://` is rejected with `etcd endpoint必须为host:port格式`: e.g. `"10.0.1.5:2379,10.0.1.6:2379"` |
 | `username` | string | no | |
 | `password` | string | no | Stored encrypted; never echoed back |
-| `tls` | string | no | `"true"` to enable TLS |
-| `tls_insecure` | string | no | `"true"` to skip TLS certificate verification |
+| `tls` | bool | no | `true` to enable TLS |
+| `tls_insecure` | bool | no | `true` to skip TLS certificate verification |
 | `tls_server_name` | string | no | TLS SNI / server name override |
 | `tls_ca_file` | string | no | Path to a CA certificate file |
 | `tls_cert_file` | string | no | Path to a client certificate file (mTLS) |

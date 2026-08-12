@@ -108,7 +108,7 @@ func ExecuteRedis(ctx context.Context, client *redis.Client, command string) (st
 
 	// SELECT 命令在连接池模式下无效，必须通过 db 参数指定数据库
 	if strings.EqualFold(parts[0], "SELECT") {
-		return "", fmt.Errorf("SELECT command is not supported due to connection pooling. Use the 'db' parameter to specify the database number")
+		return "", fmt.Errorf("SELECT command is not supported due to connection pooling. Use the 'scope' parameter to specify the database number")
 	}
 
 	redisArgs := make([]any, len(parts))
@@ -135,7 +135,7 @@ func ExecuteRedisRaw(ctx context.Context, client *redis.Client, args []string) (
 
 	// SELECT 命令在连接池模式下无效，必须通过 db 参数指定数据库
 	if strings.EqualFold(args[0], "SELECT") {
-		return "", fmt.Errorf("SELECT command is not supported due to connection pooling. Use the 'db' parameter to specify the database number")
+		return "", fmt.Errorf("SELECT command is not supported due to connection pooling. Use the 'scope' parameter to specify the database number")
 	}
 
 	redisArgs := make([]any, len(args))

@@ -60,7 +60,9 @@ Checked before any approval dialog, so a wrong value costs nothing:
 - `--max-keys`, `--max-bytes` and `--expiry` must be plain decimal integers: `1000`, not
   `1,000`, `1_000`, `1e3` or `3.0`.
 - `--method` is `get` or `put`, lower case exactly. Nothing else is accepted, and there is
-  no case folding: `GET` is an error rather than a synonym.
+  no case folding: `GET` is an error rather than a synonym. Omitting it means `get`, so a
+  bare `object presign` requests `object.presign.read`.
+- `--expiry` defaults to 3600 seconds when omitted.
 - `--file` must be an **absolute** local path. The approved command string is all that
   identifies the file, and a relative path resolves against a working directory that is not
   part of it, so it would land somewhere unpredictable.
@@ -96,8 +98,9 @@ wrong value, after approval and a round trip:
   (`utf-8`, or `base64` when the bytes are not valid UTF-8) and `truncated`. When
   `truncated` is true you read only the first bytes — re-run with `--file` rather than
   guessing at the rest.
-- `object get --file` and `object put --file` return the byte count and the paths; the
-  content never passes through the conversation.
+- `object get --file` returns the byte count, the object and the local file path;
+  `object put` returns the byte count and the object (bucket/key), with no `file`. The
+  content never passes through the conversation either way.
 - `object copy`, `object move` and `object delete` return `{"status":"ok",…}`.
 - `object presign` returns the signed `url`, its `method` and `expiresIn` seconds. The URL
   is fully usable; the audit log stores it with the signature parameters redacted.
@@ -111,6 +114,7 @@ Approval is granted per `<action> <resource>`, where resource is `<bucket>/<key>
 | `bucket list` | `bucket.list *` |
 | `object list B/P` | `object.list B/P` |
 | `object stat B/K`, `object get B/K` | `object.read B/K` |
+| `object get B/K --file=P` | `object.read B/K` **and** a local-write check on `P` (the same gate `cp` uses when writing to this machine) |
 | `object put B/K` | `object.write B/K` |
 | `object copy S --to=D` | `object.read S` **and** `object.write D` |
 | `object move S --to=D` | `object.read S`, `object.write D` **and** `object.delete S` |
@@ -137,7 +141,8 @@ Rules are written the same way, with `*` wildcards that do not cross `/` inside 
 - Presigned **PUT** URLs are denied by the default policy and cannot be enabled by an
   allow rule: a signed upload URL moves write access outside this app entirely — anyone
   holding it can write that key until it expires, with no further policy, approval or
-  audit. Use `object put` instead, or ask the user to change the asset's policy.
+  audit. Use `object put` instead — no asset or group policy change can enable it, because
+  the deny is a floor merged into every effective policy.
 - Object keys may contain spaces; quote the whole target when they do, e.g.
   `object stat 'mybucket/My Report.pdf'`. Leading or trailing whitespace is rejected —
   permission rules split `<action> <resource>` at the first whitespace, so a padded name
@@ -149,6 +154,8 @@ Rules are written the same way, with `*` wildcards that do not cross `/` inside 
 - A trailing `/` names the zero-byte "folder marker" object, so `object delete mybucket/logs/`
   deletes exactly that marker. Because the same string read as a *rule* means the whole
   prefix, such an approval is never turned into a standing grant: repeating it asks again.
+  `object list` is the exception — a listing approval on `mybucket/logs/` *does* become a
+  standing grant, because there the command and the rule cover the same range.
 - Targets must not start with `/` or `--`, and the bucket is part of the target rather
   than of the asset — there is no per-asset default bucket.
 - `object copy` and `object move` are single-object and server-side; both endpoints must
@@ -170,8 +177,8 @@ Rules are written the same way, with `*` wildcards that do not cross `/` inside 
 | `credential_id` | number | no | Reference to a managed credential instead of an inline `secret_access_key`; 0 means none |
 | `provider` | string | no | UI provider preset label (e.g. `"s3"`, `"minio"`); does not change connection behavior |
 | `region` | string | no | |
-| `use_path_style` | string | no | `"true"` to force path-style addressing (needed by most self-hosted S3-compatible services) |
-| `use_ssl` | string | no | `"true"` to connect over HTTPS |
+| `use_path_style` | bool | no | `true` to force path-style addressing (needed by most self-hosted S3-compatible services) |
+| `use_ssl` | bool | no | `true` to connect over HTTPS |
 | `connect_timeout` | number | no | Seconds; 0 uses the default |
 
 Example:

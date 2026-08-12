@@ -132,8 +132,10 @@ Checked only once the command runs — i.e. after you have been approved, so a w
 value here means an approved command that then fails:
 
 - `consumer-group reset-offset --mode`: `earliest`, `latest`, `offset`, `timestamp`
-  (default `latest`). `offset` mode needs `--offset`, `timestamp` mode needs
-  `--timestamp-millis`.
+  (default `latest`). `timestamp` mode needs `--timestamp-millis` or it fails.
+  `offset` mode does **not** check for `--offset`: omitting it is read as
+  `--offset=0`, which resets every selected partition to the start of the topic
+  with no error. Always pass `--offset` explicitly in that mode.
 - `message browse --start-mode`: `newest`, `oldest`, `offset`, `timestamp`
   (default `newest`). Note it is `newest`/`oldest` here, **not** `latest`/`earliest`
   — those two spellings belong to `reset-offset --mode`.
@@ -143,7 +145,8 @@ value here means an approved command that then fails:
 - `acl --permission`: `allow` or `deny` — plus `any` on `acl list` only, which is
   also its default there.
 - `acl --acl-operation`: `read`, `write`, `create`, `delete`, `alter`, `describe`,
-  `cluster_action`, `describe_configs`, `alter_configs`, `idempotent_write`, `all`
+  `cluster_action`, `describe_configs`, `alter_configs`, `idempotent_write`,
+  `create_tokens`, `describe_tokens`, `all`
   — plus `any` on `acl list` only, which is also its default there.
 - `acl --resource-type`: `topic`, `group`, `cluster`, `transactional_id`,
   `delegation_token` — plus `any` on `acl list` only, which is also its default
@@ -184,6 +187,10 @@ spell them exactly:
 
 ## Notes
 
+- The `schema` and `connect` families require Schema Registry / Kafka Connect to be
+  configured on the asset. Neither is settable through `put_asset`, so on an asset you
+  created that way every `schema *` / `connect *` command fails with "schema registry
+  未启用" / "kafka connect 未启用" — configure them in the desktop UI first.
 - Flag names use hyphens (`--replication-factor`); underscores are accepted as the
   same flag, but do not pass both spellings in one command.
 - Unknown flags are rejected rather than ignored, so a typo such as
@@ -195,9 +202,10 @@ spell them exactly:
   `topic list orders` is an error, not "describe orders".
 - A target containing whitespace cannot be used at all — permission rules match
   two space-separated tokens, so such a name could never be authorized.
-- `acl` commands take no target; the resource is named by `--resource-name`, which
-  is required unless `--resource-type=cluster`. `acl create` without `--host`
-  applies to every host.
+- `acl` commands take no target; the resource is named by `--resource-name`. On
+  `acl create` / `acl delete` it is required unless `--resource-type=cluster`; on
+  `acl list` it is an optional filter — omitting it lists **every** ACL. `acl create`
+  without `--host` applies to every host.
 - Omitting `--version` on `schema delete` deletes **every** version of the subject,
   not just the latest — it is a whole-subject delete, and with `--permanent` it is
   unrecoverable. Pass an explicit `--version` whenever you mean one version.
@@ -223,7 +231,7 @@ when the username or both password sources are missing.
 
 | field | type | required | notes |
 |---|---|---|---|
-| `brokers` | string | yes* | Comma/semicolon/newline separated `host:port` list, e.g. `"kafka-0:9092,kafka-1:9092"` |
+| `brokers` | string or string[] | yes* | Comma/semicolon/newline separated `host:port` list, e.g. `"kafka-0:9092,kafka-1:9092"` |
 | `host` | string | no | Single-broker fallback used only when `brokers` is omitted |
 | `port` | number | no | Used with `host` when `brokers` is omitted; no default — pass `9092` explicitly |
 | `username` | string | no* | Required when `sasl_mechanism` is not `"none"`; unused otherwise |
@@ -238,6 +246,6 @@ when the username or both password sources are missing.
 | `tls_cert_file` | string | no | Path to a client certificate file (mTLS) |
 | `tls_key_file` | string | no | Path to a client key file (mTLS) |
 | `request_timeout_seconds` | number | no | Per-request timeout override |
-| `message_preview_bytes` | number | no | Max bytes shown per message in `message browse` / `message inspect` |
-| `message_fetch_limit` | number | no | Max messages fetched per `message browse` call |
+| `message_preview_bytes` | number | no | Default byte budget per message when `--max-bytes` is omitted; `--max-bytes` overrides it, hard cap 1 MiB |
+| `message_fetch_limit` | number | no | Default message count when `--limit` is omitted; `--limit` overrides it, hard cap 1000 |
 | `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches |

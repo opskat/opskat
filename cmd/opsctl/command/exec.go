@@ -249,8 +249,9 @@ Approval:
   This command requires approval from the running desktop app.
   - Commands matching the asset's allow list execute without approval.
   - Commands matching the deny list are rejected immediately.
-  - A session is auto-created if not specified. Once the user approves with
-    "Allow Session", subsequent commands in the same session skip approval.
+  - A session is auto-created if not specified. When the user approves with
+    "Remember", that command pattern is saved for the session, so later
+    commands matching it skip approval.
 
 Examples:
   opsctl exec web-server --type ssh -- uptime

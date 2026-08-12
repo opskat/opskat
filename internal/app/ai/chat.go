@@ -48,8 +48,8 @@ func maskAPIKey(key string) string {
 	return key[:4] + "****" + key[len(key)-4:]
 }
 
-// allBuiltinAssetTypeSkills 返回全部已内嵌用法文档的资产类型（skills.Types()——8 个
-// exec 类型 + rdp/vnc/oss/local 4 个 doc-only 类型，见 permission.RegisterHelpDoc）的
+// allBuiltinAssetTypeSkills 返回全部已内嵌用法文档的资产类型（skills.Types()——9 个
+// exec 类型 + rdp/vnc/local 3 个 doc-only 类型，见 permission.RegisterHelpDoc）的
 // 一行技能描述（skills.Description），用于 PromptBuilder 的技能清单。
 //
 // 无条件全量返回，不看 openTabs：这份清单是**发现**用的，让模型知道 help 存在、以及

@@ -1,13 +1,15 @@
 import { CircleCheckIcon, InfoIcon, Loader2Icon, OctagonXIcon, TriangleAlertIcon } from "lucide-react";
-import { useTheme } from "next-themes";
 import { Toaster as Sonner, type ToasterProps } from "sonner";
+import { useResolvedTheme } from "../hooks/useResolvedTheme";
 
 const Toaster = ({ ...props }: ToasterProps) => {
-  const { theme = "system" } = useTheme();
+  // 不能交给 sonner 的 theme="system"：它按 prefers-color-scheme 自行解析，
+  // 而应用允许用户显式选浅色/深色，两者在系统与选择不一致时会分叉。
+  const resolvedTheme = useResolvedTheme();
 
   return (
     <Sonner
-      theme={theme as ToasterProps["theme"]}
+      theme={resolvedTheme}
       className="toaster group"
       icons={{
         success: <CircleCheckIcon className="size-4" />,

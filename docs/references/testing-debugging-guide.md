@@ -302,7 +302,8 @@ Global flags worth knowing for testing:
 
 > **Approval gate:** write operations (`exec`, `cp`, `create`, `update`, `delete`) require
 > approval from the **running desktop app** over a Unix socket. On first write a session is
-> auto-created; "Allow Session" in the app auto-approves the rest for 24h — except `delete`,
+> auto-created; "Remember" in the app saves that command pattern for the session (24h), so
+> later commands matching it auto-approve — except `delete`,
 > which always asks and can never be pre-approved or granted. For fully headless write
 > tests you need the app running to approve, or a policy/session that permits the
 > operation. **Read** verbs (`list`, `get`, `help`, `exec` for reads like `SELECT`) do not
@@ -328,7 +329,7 @@ Always prefer a failing test that reproduces the issue before changing impl (see
 
 ```bash
 # Go
-make test                                  # all Go tests
+make test                                  # Go tests: internal/, cmd/opsctl, pkg/, cmd/devserver (CI runs `go test ./...`)
 go test ./internal/ai/...                  # package scope
 go test ./internal/ai/ -run TestName       # single test
 make test-cover                            # coverage HTML
