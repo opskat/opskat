@@ -4,6 +4,7 @@ export { computeContextMenuPosition } from "./lib/context-menu-position";
 export type { ContextMenuPosition, ContextMenuPositionInput } from "./lib/context-menu-position";
 export { useIMEComposing } from "./hooks/useIMEComposing";
 export { useResizeHandle } from "./hooks/useResizeHandle";
+export { useResolvedTheme } from "./hooks/useResolvedTheme";
 export * from "./components/alert-dialog";
 export * from "./components/button";
 export * from "./components/card";

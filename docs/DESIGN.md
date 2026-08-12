@@ -185,7 +185,7 @@ UI primitives live in the **`@opskat/ui`** workspace package ([`frontend/package
 | `scroll-area.tsx` / `scrollable-container.tsx` | Radix scroll area / a plain scrollable wrapper |
 | `tree-select.tsx` | **`TreeSelect`** — generic single-select tree dropdown (pinyin search) |
 | `tree-check-list.tsx` | **`TreeCheckList`** — generic tri-state checkbox tree |
-| `sonner.tsx` | Global `Toaster` (theme-aware, `richColors`) |
+| `sonner.tsx` | Global `Toaster` (resolves light/dark itself; `richColors` comes from the mount site) |
 
 > **There is no `badge.tsx`.** Status is shown with `success` / `warning` / `destructive` / `info`-tinted icons, dots, or small soft chips (`bg-<status>/15 text-<status>`, [design-tokens.md](./references/design-tokens.md) §5) composed inline — there is no `Badge` primitive to reach for. The `*-foreground` pairs now exist (design-tokens.md §5), so if badges become common, add one primitive over them rather than re-deriving chips per view. There is also **no shared `Skeleton` / `EmptyState` / `LoadingState` / `StateScreen`** — see §10.
 
@@ -226,7 +226,7 @@ These project blocks already solve picker / credential / icon / form-field probl
 
 ### 6.4 Toast (`notify` + sonner)
 
-The global `Toaster` ([`sonner.tsx`](../frontend/packages/ui/src/components/sonner.tsx)) is theme-aware with `richColors`, a neutral `popover` surface bound to the design tokens, and semantic Lucide icons; it's mounted once in [`App.tsx`](../frontend/src/App.tsx) inside `TooltipProvider`.
+The global `Toaster` ([`sonner.tsx`](../frontend/packages/ui/src/components/sonner.tsx)) resolves its own light/dark from the `.dark` class on `<html>` via `useResolvedTheme`, on a neutral `popover` surface bound to the design tokens, with semantic Lucide icons; it's mounted once in [`App.tsx`](../frontend/src/App.tsx) inside `TooltipProvider`, which is where `richColors` is supplied.
 
 Business code **uses `notify` for success** ([`frontend/src/lib/notify.ts`](../frontend/src/lib/notify.ts)) — never `toast.success` directly (an `AGENTS.md` reuse rule):
 
