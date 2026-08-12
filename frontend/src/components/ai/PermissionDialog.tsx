@@ -18,7 +18,7 @@ interface PermissionRequest {
   input: Record<string, unknown>;
 }
 
-export function PermissionDialog() {
+export function PermissionDialog({ suspended = false }: { suspended?: boolean }) {
   const { t } = useTranslation();
   const [request, setRequest] = useState<PermissionRequest | null>(null);
 
@@ -33,7 +33,7 @@ export function PermissionDialog() {
     setRequest(null);
   };
 
-  if (!request) return null;
+  if (!request || suspended) return null;
 
   // 格式化工具输入信息
   const formatInput = (req: PermissionRequest): string => {

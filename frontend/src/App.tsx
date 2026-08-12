@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, lazy, Suspense } from "react"
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { ThemeProvider } from "@/components/theme-provider";
-import { TooltipProvider, Toaster } from "@opskat/ui";
+import { ConfirmDialog, TooltipProvider, Toaster } from "@opskat/ui";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { AssetTree } from "@/components/layout/AssetTree";
 import { MainPanel } from "@/components/layout/MainPanel";
@@ -34,9 +34,18 @@ import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useExternalEditStore } from "@/stores/externalEditStore";
 import { asset_entity, group_entity } from "../wailsjs/go/models";
 import { EventsOn, WindowToggleMaximise } from "../wailsjs/runtime/runtime";
+import { ConfirmQuit } from "../wailsjs/go/system/System";
 
 function App() {
   const { t } = useTranslation();
+  const [quitTaskCount, setQuitTaskCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    const cancel = EventsOn("app:quit-confirm", (payload: { active_tasks?: number }) => {
+      setQuitTaskCount(Math.max(1, payload?.active_tasks ?? 1));
+    });
+    return () => cancel();
+  }, []);
 
   // 异步加载数据，不阻塞首屏渲染
   useEffect(() => {
@@ -493,8 +502,18 @@ function App() {
               <GroupDialog open={groupDialogOpen} onOpenChange={setGroupDialogOpen} editGroup={editingGroup} />
             )}
           </Suspense>
-          <PermissionDialog />
-          <OpsctlApprovalDialog />
+          <PermissionDialog suspended={quitTaskCount !== null} />
+          <OpsctlApprovalDialog suspended={quitTaskCount !== null} />
+          <ConfirmDialog
+            open={quitTaskCount !== null}
+            onOpenChange={(open) => !open && setQuitTaskCount(null)}
+            title={t("appQuit.runningTitle")}
+            description={t("appQuit.runningDescription", { count: quitTaskCount ?? 0 })}
+            cancelText={t("action.cancel")}
+            confirmText={t("appQuit.quitAnyway")}
+            confirmTestId="confirm-force-quit"
+            onConfirm={() => ConfirmQuit()}
+          />
           {snippetRunTarget && <SnippetAssetDrawer snippet={snippetRunTarget} onClose={clearSnippetHostPick} />}
           <Toaster richColors />
         </TooltipProvider>

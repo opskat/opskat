@@ -86,3 +86,17 @@ func (o *Opsctl) Cleanup() {
 		o.approvalServer.Stop()
 	}
 }
+
+// ActiveTaskCount returns opsctl operations that have started and would be
+// interrupted by an application shutdown. Idle and half-open connections are
+// deliberately excluded.
+func (o *Opsctl) ActiveTaskCount() int {
+	count := 0
+	if o.proxyServer != nil {
+		count += o.proxyServer.ActiveRequests()
+	}
+	if o.approvalServer != nil {
+		count += o.approvalServer.ActiveRequests()
+	}
+	return count
+}

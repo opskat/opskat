@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/opskat/opskat/internal/app/ai"
@@ -218,6 +219,8 @@ func main() {
 	aiB.SetWindowActivator(sys)
 
 	binders := []Lifecycle{sys, sshB, queryB, redisB, rdpB, etcdB, kafkaB, k8sB, serialB, localB, vncB, aiB, opsctlB, extB, extEditB, ossB}
+	var forceQuit atomic.Bool
+	sys.SetConfirmQuitHandler(func() { forceQuit.Store(true) })
 
 	appOptions := &options.App{
 		Title:     "OpsKat",
@@ -242,6 +245,13 @@ func main() {
 		// OnBeforeClose 在窗口真正关闭前触发：emit ai:flush-all 让前端落盘所有活跃会话。
 		OnBeforeClose: func(wctx context.Context) bool {
 			saveWindowSize(wctx)
+			if forceQuit.Load() {
+				return false
+			}
+			if active := opsctlB.ActiveTaskCount() + aiB.ActiveTaskCount(); active > 0 {
+				wailsRuntime.EventsEmit(wctx, "app:quit-confirm", map[string]any{"active_tasks": active})
+				return true
+			}
 			aiB.DrainAIFlushAck()
 			wailsRuntime.EventsEmit(wctx, "ai:flush-all")
 			select {
@@ -252,10 +262,20 @@ func main() {
 		},
 		OnShutdown: func(_ context.Context) {
 			cancelApp() // 解除所有 wait loop
+			// socket Stop 只做监听器/连接断开且不等待，先同步执行以保证在返回
+			// Wails 前已向所有 opsctl 客户端广播关闭。
+			opsctlB.Cleanup()
+			// 用户已经确认退出后不再等待任何资源自然收尾。各 Cleanup 只负责
+			// 广播取消和主动断开；放到独立 goroutine，避免异常远端或第三方库
+			// 的 Close 阻塞 Wails 的进程退出。
 			for i := len(binders) - 1; i >= 0; i-- {
-				binders[i].Cleanup()
+				if binders[i] == opsctlB {
+					continue
+				}
+				binder := binders[i]
+				go binder.Cleanup()
 			}
-			pool.Close()
+			go pool.Close()
 		},
 		Bind: []interface{}{
 			sys, sshB, queryB, redisB, rdpB, etcdB, kafkaB, k8sB, serialB, localB, vncB, aiB, opsctlB, extB, extEditB, ossB,

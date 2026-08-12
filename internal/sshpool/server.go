@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/pkg/sftp"
@@ -49,6 +50,11 @@ type Server struct {
 	done      chan struct{}
 	wg        sync.WaitGroup
 	authToken string // 认证 token，非空时校验
+	mu        sync.Mutex
+	conns     map[net.Conn]struct{}
+	stopping  bool
+	stopOnce  sync.Once
+	active    atomic.Int64
 }
 
 // NewServer 创建代理服务端
@@ -57,6 +63,7 @@ func NewServer(pool *Pool, authToken string) *Server {
 		pool:      pool,
 		done:      make(chan struct{}),
 		authToken: authToken,
+		conns:     make(map[net.Conn]struct{}),
 	}
 }
 
@@ -93,16 +100,30 @@ func (s *Server) Start(socketPath string) error {
 	return nil
 }
 
-// Stop 停止服务
+// Stop 停止接收并主动断开所有客户端。它不等待请求处理协程，以保证应用退出
+// 不会被远端命令、文件传输或异常客户端阻塞。
 func (s *Server) Stop() {
-	close(s.done)
-	if s.listener != nil {
-		if err := s.listener.Close(); err != nil {
-			logger.Default().Warn("close listener", zap.Error(err))
+	s.stopOnce.Do(func() {
+		close(s.done)
+		if s.listener != nil {
+			if err := s.listener.Close(); err != nil {
+				logger.Default().Warn("close listener", zap.Error(err))
+			}
 		}
-	}
-	s.wg.Wait()
+		s.mu.Lock()
+		s.stopping = true
+		for conn := range s.conns {
+			if err := conn.Close(); err != nil {
+				logger.Default().Warn("close active client connection", zap.Error(err))
+			}
+		}
+		s.mu.Unlock()
+	})
 }
+
+// ActiveRequests returns authenticated operations that have started and would
+// be interrupted by shutting down the desktop app.
+func (s *Server) ActiveRequests() int { return int(s.active.Load()) }
 
 func (s *Server) acceptLoop() {
 	defer s.wg.Done()
@@ -116,7 +137,15 @@ func (s *Server) acceptLoop() {
 				continue
 			}
 		}
+		s.mu.Lock()
+		if s.stopping {
+			s.mu.Unlock()
+			_ = conn.Close()
+			continue
+		}
+		s.conns[conn] = struct{}{}
 		s.wg.Add(1)
+		s.mu.Unlock()
 		go s.handleConn(conn)
 	}
 }
@@ -124,6 +153,9 @@ func (s *Server) acceptLoop() {
 func (s *Server) handleConn(conn net.Conn) {
 	defer s.wg.Done()
 	defer func() {
+		s.mu.Lock()
+		delete(s.conns, conn)
+		s.mu.Unlock()
 		if err := conn.Close(); err != nil {
 			logger.Default().Warn("close client connection", zap.Error(err))
 		}
@@ -149,6 +181,8 @@ func (s *Server) handleConn(conn net.Conn) {
 		writeJSONResponse(conn, false, "authentication failed")
 		return
 	}
+	s.active.Add(1)
+	defer s.active.Add(-1)
 
 	switch req.Op {
 	case "exec":

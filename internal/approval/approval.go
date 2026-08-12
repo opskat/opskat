@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -82,6 +83,11 @@ type Server struct {
 	done      chan struct{}
 	wg        sync.WaitGroup
 	authToken string // 认证 token，非空时校验
+	mu        sync.Mutex
+	conns     map[net.Conn]struct{}
+	stopping  bool
+	stopOnce  sync.Once
+	active    atomic.Int64
 }
 
 // NewServer creates a new approval server.
@@ -90,6 +96,7 @@ func NewServer(handler ApprovalHandler, authToken string) *Server {
 		handler:   handler,
 		done:      make(chan struct{}),
 		authToken: authToken,
+		conns:     make(map[net.Conn]struct{}),
 	}
 }
 
@@ -128,16 +135,31 @@ func (s *Server) Start(socketPath string) error {
 	return nil
 }
 
-// Stop closes the listener, removes the socket file, and waits for goroutines.
+// Stop prevents new clients and interrupts every accepted connection. It does
+// not wait for request handlers, so application shutdown can never be held up
+// by a remote client or an in-flight handler.
 func (s *Server) Stop() {
-	close(s.done)
-	if s.listener != nil {
-		if err := s.listener.Close(); err != nil {
-			logger.Default().Warn("close listener", zap.Error(err))
+	s.stopOnce.Do(func() {
+		close(s.done)
+		if s.listener != nil {
+			if err := s.listener.Close(); err != nil {
+				logger.Default().Warn("close listener", zap.Error(err))
+			}
 		}
-	}
-	s.wg.Wait()
+		s.mu.Lock()
+		s.stopping = true
+		for conn := range s.conns {
+			if err := conn.Close(); err != nil {
+				logger.Default().Warn("close active client connection", zap.Error(err))
+			}
+		}
+		s.mu.Unlock()
+	})
 }
+
+// ActiveRequests returns authenticated approvals that have started and would
+// be interrupted by shutting down the desktop app.
+func (s *Server) ActiveRequests() int { return int(s.active.Load()) }
 
 func (s *Server) acceptLoop() {
 	defer s.wg.Done()
@@ -151,7 +173,15 @@ func (s *Server) acceptLoop() {
 				continue
 			}
 		}
+		s.mu.Lock()
+		if s.stopping {
+			s.mu.Unlock()
+			_ = conn.Close()
+			continue
+		}
+		s.conns[conn] = struct{}{}
 		s.wg.Add(1)
+		s.mu.Unlock()
 		go s.handleConn(conn)
 	}
 }
@@ -159,6 +189,9 @@ func (s *Server) acceptLoop() {
 func (s *Server) handleConn(conn net.Conn) {
 	defer s.wg.Done()
 	defer func() {
+		s.mu.Lock()
+		delete(s.conns, conn)
+		s.mu.Unlock()
 		if err := conn.Close(); err != nil {
 			logger.Default().Warn("close client connection", zap.Error(err))
 		}
@@ -182,6 +215,8 @@ func (s *Server) handleConn(conn net.Conn) {
 		}
 		return
 	}
+	s.active.Add(1)
+	defer s.active.Add(-1)
 
 	resp := s.handler(req)
 	if err := json.NewEncoder(conn).Encode(resp); err != nil {

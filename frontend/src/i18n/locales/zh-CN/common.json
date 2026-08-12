@@ -76,6 +76,11 @@
     "deleteConfirmTitle": "确认删除配置",
     "deleteConfirmDesc": "确定要删除转发配置 \"{{name}}\" 吗？此操作不可撤销。"
   },
+  "appQuit": {
+    "runningTitle": "仍有任务正在运行",
+    "runningDescription": "有 {{count}} 个任务正在运行。立即退出会中断这些任务，是否仍然退出？",
+    "quitAnyway": "仍然退出"
+  },
   "action": {
     "confirm": "确认",
     "ok": "确定",

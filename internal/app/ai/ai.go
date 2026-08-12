@@ -97,6 +97,16 @@ func (a *AI) Startup(ctx context.Context) {
 // Cleanup 占位（ai service 没持有需要主动关的资源）。
 func (a *AI) Cleanup() {}
 
+// ActiveTaskCount 返回仍在运行、退出后会丢失当前进度的 AI 生成任务数。
+func (a *AI) ActiveTaskCount() int {
+	count := 0
+	a.runners.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	return count
+}
+
 // WaitAIFlushAck 暴露给 main.go 的 OnBeforeClose，等待前端 flush 完成。
 func (a *AI) WaitAIFlushAck() <-chan struct{} { return a.flushAckCh }
 

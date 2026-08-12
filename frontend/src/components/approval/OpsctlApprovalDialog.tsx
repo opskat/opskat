@@ -122,7 +122,7 @@ function ScopeBadge({ item }: { item: ApprovalItemData }) {
   );
 }
 
-export function OpsctlApprovalDialog() {
+export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolean }) {
   const { t } = useTranslation();
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [editState, setEditState] = useState<Record<string, Record<number, string>>>({});
@@ -313,7 +313,7 @@ export function OpsctlApprovalDialog() {
   );
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <Dialog open={open && !suspended} onOpenChange={handleOpenChange}>
       <DialogContent
         data-testid="opsctl-approval-dialog"
         className="sm:max-w-lg max-h-[80vh] flex flex-col"

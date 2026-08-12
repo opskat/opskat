@@ -32,6 +32,19 @@ type System struct {
 	lang string
 
 	githubAuthCancel context.CancelFunc
+	confirmQuit      func()
+}
+
+func (s *System) SetConfirmQuitHandler(handler func()) { s.confirmQuit = handler }
+
+// ConfirmQuit records that the user accepted interruption of running tasks.
+func (s *System) ConfirmQuit() {
+	if s.confirmQuit != nil {
+		s.confirmQuit()
+	}
+	if s.ctx != nil {
+		wailsRuntime.Quit(s.ctx)
+	}
 }
 
 type windowRuntimeOps struct {

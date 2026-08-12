@@ -76,6 +76,11 @@
     "deleteConfirmTitle": "Confirm Delete Config",
     "deleteConfirmDesc": "Are you sure you want to delete forward config \"{{name}}\"? This cannot be undone."
   },
+  "appQuit": {
+    "runningTitle": "Tasks are still running",
+    "runningDescription": "{{count}} task(s) are still running. Quitting now will interrupt them. Quit anyway?",
+    "quitAnyway": "Quit Anyway"
+  },
   "action": {
     "confirm": "Confirm",
     "ok": "OK",
