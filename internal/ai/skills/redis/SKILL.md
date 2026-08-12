@@ -18,9 +18,9 @@ Pass the Redis command verbatim as `command`:
 
 Use the `scope` parameter to pick the database number (0-15), e.g. `scope: "3"`.
 
-**Do NOT send `SELECT`.** Connections are pooled, so `SELECT` either has no
-effect or corrupts another caller's database selection. `scope` is the only
-correct way to switch databases.
+**Do NOT send `SELECT`.** It is rejected outright before execution — connections
+are pooled, so a per-connection database switch would corrupt another caller's
+selection. `scope` is the only correct way to switch databases.
 
 ## Notes
 

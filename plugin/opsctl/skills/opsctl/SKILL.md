@@ -81,7 +81,7 @@ Output is structured JSON with per-command results (`exit_code`, `stdout`, `stde
 **Alternative: Parallel sub-agents** — For operations that `batch` doesn't support (e.g., `cp`, `create`), dispatch parallel sub-agents. The desktop app queues concurrent approval requests into a single dialog with "Approve All" / "Deny All" buttons.
 
 **Setup for sub-agents**: Ensure approval is handled before parallelizing:
-- **Option A**: Run one command first → user selects "Allow Session" → subsequent commands auto-approve
+- **Option A**: Run one command first → user selects "Remember" → subsequent commands matching that saved pattern auto-approve
 - **Option B**: `grant submit` patterns for all targets upfront → all matching commands auto-approve
 
 **Parallelizable scenarios**: batch `init`, same command on N servers, multi-target file transfers, independent database queries.

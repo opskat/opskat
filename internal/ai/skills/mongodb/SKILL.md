@@ -27,7 +27,8 @@ Supported operations: `find`, `findOne`, `insertOne`, `insertMany`, `updateOne`,
 
 `--query` is a single JSON object. Which sub-keys apply depends on the operation:
 
-- `find` / `findOne`: `filter`, `sort`, `projection`, `limit`, `skip`
+- `find`: `filter`, `sort`, `projection`, `limit`, `skip`
+- `findOne`: `filter`, `projection` (`sort` / `limit` / `skip` are silently ignored)
 - `insertOne`: `document` · `insertMany`: `documents`
 - `updateOne` / `updateMany`: `filter`, `update`
 - `deleteOne` / `deleteMany`: `filter`
@@ -37,6 +38,8 @@ Supported operations: `find`, `findOne`, `insertOne`, `insertMany`, `updateOne`,
 ## Notes
 
 - Always single-quote `--query` — it is JSON and contains spaces and braces.
+- `find` returns at most 100 documents when `limit` is omitted. Pass an explicit `limit`
+  when you need to know you have the whole result set.
 - Every operation except `listDatabases` needs a database. `--db` names it; if you
   omit `--db`, the asset's configured default database is used. When the asset has
   no default database configured, omitting `--db` fails — pass it explicitly.

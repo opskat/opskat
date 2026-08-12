@@ -17,7 +17,7 @@ opsctl list assets --type ssh --group-id 2
 
 ### `list groups`
 
-List all asset groups. Does not include description — use `get group` to view descriptions.
+List all asset groups. Descriptions are not included.
 
 ```bash
 opsctl list groups
@@ -33,15 +33,6 @@ Get asset details including description and SSH config (host, port, username, au
 opsctl get asset web-server
 opsctl get asset 1
 opsctl get asset production/web-01
-```
-
-### `get group <group>`
-
-Get group details including description.
-
-```bash
-opsctl get group 1
-opsctl get group production
 ```
 
 ## ssh
