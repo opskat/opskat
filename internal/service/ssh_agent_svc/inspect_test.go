@@ -96,7 +96,7 @@ func TestInspect_ReturnsBoundedIdentitySummary(t *testing.T) {
 
 	src, err := Create(ctx, SourceInput{Name: "work", EndpointType: "unix_socket", Endpoint: srv.path})
 	require.NoError(t, err)
-	assetID := createAgentAsset(t, ctx, src.ID)
+	assetID := createAgentAsset(t, ctx, "box", src.ID, fp)
 	defer func() { _ = asset_repo.Asset().Delete(ctx, assetID) }()
 
 	Convey("检查来源返回有界身份摘要", t, func() {
@@ -113,6 +113,42 @@ func TestInspect_ReturnsBoundedIdentitySummary(t *testing.T) {
 	})
 }
 
+// 回归 #278：来源下每把身份显示的使用数必须是"绑定该指纹的活动资产数"，
+// 而不是整个来源的引用总数——后者会让同一来源的每把密钥都显示相同的数字。
+func TestInspect_UsagesAreCountedPerIdentity(t *testing.T) {
+	ctx := setupInspectTest(t)
+
+	privA, _, fpA := testKey(t)
+	privB, _, fpB := testKey(t)
+	privC, _, fpC := testKey(t)
+	srv := startFakeAgent(t,
+		agent.AddedKey{PrivateKey: privA, Comment: "a"},
+		agent.AddedKey{PrivateKey: privB, Comment: "b"},
+		agent.AddedKey{PrivateKey: privC, Comment: "c"},
+	)
+
+	src, err := Create(ctx, SourceInput{Name: "work", EndpointType: "unix_socket", Endpoint: srv.path})
+	require.NoError(t, err)
+	createAgentAsset(t, ctx, "only-a", src.ID, fpA)
+	createAgentAsset(t, ctx, "b-one", src.ID, fpB)
+	createAgentAsset(t, ctx, "b-two", src.ID, fpB)
+
+	Convey("同一来源下不同身份各自统计使用数", t, func() {
+		res, err := Inspect(ctx, src.ID)
+		assert.NoError(t, err)
+		require.NotNil(t, res)
+
+		byFingerprint := map[string]int64{}
+		for _, ident := range res.Identities {
+			byFingerprint[ident.Fingerprint] = ident.Usages
+		}
+		assert.Equal(t, int64(1), byFingerprint[fpA], "只有一个资产绑定该密钥")
+		assert.Equal(t, int64(2), byFingerprint[fpB], "两个资产绑定该密钥")
+		assert.Equal(t, int64(0), byFingerprint[fpC], "没有资产绑定该密钥")
+		assert.Equal(t, int64(3), res.Usages, "来源级使用数仍是引用该来源的资产总数")
+	})
+}
+
 func TestInspect_ReachableEmptyAgent(t *testing.T) {
 	ctx := setupInspectTest(t)
 
@@ -120,7 +156,8 @@ func TestInspect_ReachableEmptyAgent(t *testing.T) {
 	srv := startFakeAgent(t)
 	src, err := Create(ctx, SourceInput{Name: "empty", EndpointType: "unix_socket", Endpoint: srv.path})
 	require.NoError(t, err)
-	assetID := createAgentAsset(t, ctx, src.ID)
+	_, _, fp := testKey(t)
+	assetID := createAgentAsset(t, ctx, "box", src.ID, fp)
 	defer func() { _ = asset_repo.Asset().Delete(ctx, assetID) }()
 
 	Convey("可达但无身份是合法观察态，不是错误（与 Probe 的 ProbeEmpty 一致）", t, func() {

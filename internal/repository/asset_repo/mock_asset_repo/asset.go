@@ -57,6 +57,21 @@ func (mr *MockAssetRepoMockRecorder) CountAgentAuthBySourceID(ctx, sourceID any)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountAgentAuthBySourceID", reflect.TypeOf((*MockAssetRepo)(nil).CountAgentAuthBySourceID), ctx, sourceID)
 }
 
+// CountAgentAuthBySourceIDGroupByFingerprint mocks base method.
+func (m *MockAssetRepo) CountAgentAuthBySourceIDGroupByFingerprint(ctx context.Context, sourceID int64) (map[string]int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CountAgentAuthBySourceIDGroupByFingerprint", ctx, sourceID)
+	ret0, _ := ret[0].(map[string]int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CountAgentAuthBySourceIDGroupByFingerprint indicates an expected call of CountAgentAuthBySourceIDGroupByFingerprint.
+func (mr *MockAssetRepoMockRecorder) CountAgentAuthBySourceIDGroupByFingerprint(ctx, sourceID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountAgentAuthBySourceIDGroupByFingerprint", reflect.TypeOf((*MockAssetRepo)(nil).CountAgentAuthBySourceIDGroupByFingerprint), ctx, sourceID)
+}
+
 // CountByTypes mocks base method.
 func (m *MockAssetRepo) CountByTypes(ctx context.Context, types []string) (int64, error) {
 	m.ctrl.T.Helper()

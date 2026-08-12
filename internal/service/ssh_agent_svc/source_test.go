@@ -32,16 +32,18 @@ func setupServiceTest(t *testing.T) context.Context {
 	return context.Background()
 }
 
-// createAgentAsset inserts an active SSH asset whose config references the
-// given source (auth_type=agent + agent_source_id).
-func createAgentAsset(t *testing.T, ctx context.Context, sourceID int64) int64 {
+// createAgentAsset inserts an active SSH asset whose config references the given
+// source and identity (auth_type=agent + agent_source_id + agent_key_fingerprint,
+// the shape validateSSHAgentContract requires of every agent-mode asset).
+func createAgentAsset(t *testing.T, ctx context.Context, name string, sourceID int64, fingerprint string) int64 {
 	t.Helper()
 	asset := &asset_entity.Asset{
-		Name:       "box",
+		Name:       name,
 		Type:       asset_entity.AssetTypeSSH,
 		Status:     asset_entity.StatusActive,
 		Createtime: 1,
-		Config:     fmt.Sprintf(`{"host":"h","port":22,"username":"u","auth_type":"agent","agent_source_id":%d}`, sourceID),
+		Config: fmt.Sprintf(`{"host":"h","port":22,"username":"u","auth_type":"agent","agent_source_id":%d,"agent_key_fingerprint":%q}`,
+			sourceID, fingerprint),
 	}
 	require.NoError(t, asset_repo.Asset().Create(ctx, asset))
 	return asset.ID
@@ -112,7 +114,8 @@ func TestSource_Update_InvalidatesOnEndpointChange(t *testing.T) {
 
 	src, err := Create(ctx, SourceInput{Name: "work", EndpointType: "environment", Endpoint: "SSH_AUTH_SOCK"})
 	require.NoError(t, err)
-	assetID := createAgentAsset(t, ctx, src.ID)
+	_, _, fp := testKey(t)
+	assetID := createAgentAsset(t, ctx, "box", src.ID, fp)
 
 	Convey("修改端点类型或值触发连接失效回调", t, func() {
 		Convey("端点值变化使引用资产被失效", func() {
@@ -143,7 +146,8 @@ func TestSource_Delete_RejectsInUse(t *testing.T) {
 		Convey("被活动 Agent 资产引用的来源拒绝删除（ssh_agent_source_in_use）", func() {
 			src, err := Create(ctx, SourceInput{Name: "a", EndpointType: "environment", Endpoint: "SSH_AUTH_SOCK"})
 			require.NoError(t, err)
-			assetID := createAgentAsset(t, ctx, src.ID)
+			_, _, fp := testKey(t)
+			assetID := createAgentAsset(t, ctx, "box", src.ID, fp)
 
 			err = Delete(ctx, src.ID)
 			assert.Error(t, err)
