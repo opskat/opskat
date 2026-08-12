@@ -10,7 +10,7 @@ import {
   sendChat,
   seedSSHAsset,
 } from "../fixtures/ai";
-import { findApprovedGrantItems, findAuditLogs } from "../fixtures/db";
+import { findApprovedGrantItems, findAuditLogs, waitForAuditLogs } from "../fixtures/db";
 
 // The two decision paths that must NOT prompt (policy allow / policy deny), and
 // the authorization-persistence rule: "remember + allow" persists a grant that
@@ -117,8 +117,7 @@ test("allow-this-once persists nothing and the next command prompts again", asyn
   await expect(pendingApproval(page, answered)).toBeVisible({ timeout: 60_000 });
   await page.getByTestId("ai-approval-allow").click();
 
-  await expect.poll(() => execRows(asset).length, { timeout: 60_000 }).toBe(2);
-  const rows = execRows(asset);
+  const rows = await waitForAuditLogs({ assetName: asset, toolName: "exec" }, 2);
   expect(rows.map((r) => r.decision_source)).toEqual(["user_allow", "user_allow"]);
   expect(findApprovedGrantItems(asset)).toEqual([]);
 });

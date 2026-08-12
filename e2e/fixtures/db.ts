@@ -1,3 +1,4 @@
+import { expect } from "@playwright/test";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 
@@ -73,6 +74,32 @@ export function findAuditLogs(filter: { assetName?: string; toolName?: string } 
     (where.length ? ` WHERE ${where.join(" AND ")}` : "") +
     " ORDER BY id";
   return query((db) => db.prepare(sql).all(...args) as unknown as AuditRow[]);
+}
+
+/**
+ * 等审计行落库，返回满足断言的那一份快照。审计断言一律走这里。
+ *
+ * 审计行不是工具调用的同步产物：runner.auditMiddleware 在工具返回**之后**用一个独立
+ * goroutine 写（internal/ai/runner/hooks.go）。所以"资产已经软删除了""对话已经出结果了"
+ * 都不代表审计行已经在表里——先等别的副作用、再同步读审计表，是等错了信号。
+ * 这里等的信号和读的数据是同一个，也不会在等到之后重查一次（重查可能多出刚落库的行）。
+ */
+export async function waitForAuditLogs(
+  filter: { assetName?: string; toolName?: string },
+  count: number,
+  opts: { timeout?: number } = {}
+): Promise<AuditRow[]> {
+  let rows: AuditRow[] = [];
+  await expect
+    .poll(
+      () => {
+        rows = findAuditLogs(filter);
+        return rows.length;
+      },
+      { timeout: opts.timeout ?? 60_000 }
+    )
+    .toBe(count);
+  return rows;
 }
 
 export interface GrantItemRow {
