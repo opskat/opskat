@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { ensureAIProvider, openApp, openNewChat, scriptModel, sendChat, seedSSHAsset } from "../fixtures/ai";
-import { findAssetByName, findAuditLogs } from "../fixtures/db";
+import { findAssetByName, findAuditLogs, waitForAuditLogs } from "../fixtures/db";
 
 // Plan C collapsed the old per-verb add_asset/update_asset/delete_asset tools into
 // put_asset (create-or-update, branching on whether `asset` is passed) and delete_asset
@@ -8,7 +8,7 @@ import { findAssetByName, findAuditLogs } from "../fixtures/db";
 // invariants, through the real app: a scripted model calls the tool, and the DB /
 // approval UI are read back independently of the app's own claims.
 
-const putAssetRows = () => findAuditLogs({ toolName: "put_asset" });
+const putAssetFilter = { toolName: "put_asset" };
 
 test.beforeEach(async ({ page }) => {
   await openApp(page);
@@ -19,7 +19,7 @@ test("put_asset creates, then updates the same row through the same tool", async
   const name = `e2e-ai-put-${Date.now()}`;
   const renamed = `${name}-renamed`;
   const auditSecret = `e2e-audit-secret-${Date.now()}`;
-  const before = putAssetRows().length;
+  const before = findAuditLogs(putAssetFilter).length;
 
   await scriptModel([
     {
@@ -53,8 +53,7 @@ test("put_asset creates, then updates the same row through the same tool", async
   expect(findAssetByName(name)).toBeUndefined();
 
   // Both the create and the update went through the one put_asset tool.
-  await expect.poll(() => putAssetRows().length, { timeout: 10_000 }).toBe(before + 2);
-  const rows = putAssetRows();
+  const rows = await waitForAuditLogs(putAssetFilter, before + 2);
   const createdAudit = rows[before];
   expect(createdAudit.asset_id).toBe(row.id);
   expect(createdAudit.asset_name).toBe(name);
@@ -87,8 +86,7 @@ test("delete_asset always prompts, and the panel offers no allow-all — approvi
   // Soft-deleted (StatusDeleted=2), not gone from the table.
   await expect.poll(() => findAssetByName(asset)?.status, { timeout: 60_000 }).toBe(2);
 
-  const rows = findAuditLogs({ assetName: asset, toolName: "delete_asset" });
-  expect(rows.length).toBe(1);
-  expect(rows[0].decision).toBe("allow");
-  expect(rows[0].decision_source).toBe("user_allow");
+  const [deleteAudit] = await waitForAuditLogs({ assetName: asset, toolName: "delete_asset" }, 1);
+  expect(deleteAudit.decision).toBe("allow");
+  expect(deleteAudit.decision_source).toBe("user_allow");
 });

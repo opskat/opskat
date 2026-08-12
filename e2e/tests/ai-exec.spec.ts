@@ -10,7 +10,7 @@ import {
   seedSSHAsset,
   toolResultsSeenByModel,
 } from "../fixtures/ai";
-import { findAuditLogs } from "../fixtures/db";
+import { waitForAuditLogs } from "../fixtures/db";
 
 // The unified `exec` AI tool, end-to-end through the real app: a scripted model
 // (fixtures/openai-mock.mjs, reached via a real ai_providers row) calls exec, the
@@ -26,7 +26,8 @@ import { findAuditLogs } from "../fixtures/db";
 //      `mock-exec-ran: <command>` — i.e. the far end of the wire, not another of
 //      the app's own copies of the string.
 
-const execRows = (asset: string) => findAuditLogs({ assetName: asset, toolName: "exec" });
+// 每个用例都恰好产生一条 exec 审计行；等它落库并取回。
+const waitExecRow = async (asset: string) => (await waitForAuditLogs({ assetName: asset, toolName: "exec" }, 1))[0];
 
 test.beforeEach(async ({ page }) => {
   await openApp(page);
@@ -53,8 +54,7 @@ test("approved exec runs exactly the command the dialog showed, and audits that 
 
   await page.getByTestId("ai-approval-allow").click();
 
-  await expect.poll(() => execRows(asset).length, { timeout: 60_000 }).toBe(1);
-  const row = execRows(asset)[0];
+  const row = await waitExecRow(asset);
   expect(row.command).toBe(shown); // audited == approved
   expect(row.result).toBe(`mock-exec-ran: ${shown}\n`); // executed == approved
   expect(row.decision).toBe("allow");
@@ -77,8 +77,7 @@ test("denied exec never reaches the server and the model is told it was denied",
   await expect(page.getByTestId("ai-approval-block")).toBeVisible({ timeout: 60_000 });
   await page.getByTestId("ai-approval-deny").click();
 
-  await expect.poll(() => execRows(asset).length, { timeout: 60_000 }).toBe(1);
-  const row = execRows(asset)[0];
+  const row = await waitExecRow(asset);
   expect(row.decision).toBe("deny");
   expect(row.decision_source).toBe("user_deny");
   // The mock sshd echoes every command it is asked to run; nothing was echoed,
@@ -116,11 +115,11 @@ test("the dialog shows the canonicalized command, and that is the string audited
 
   await page.getByTestId("ai-approval-allow").click();
 
-  await expect.poll(() => execRows(asset).length, { timeout: 60_000 }).toBe(1);
   // The audit row records the approved (canonical) string, not the model's raw one.
   // The etcd endpoint itself is unreachable by design here, so this row's `error`
   // is a dial failure — irrelevant to the string identity being asserted.
-  expect(execRows(asset)[0].command).toBe(shown);
+  const row = await waitExecRow(asset);
+  expect(row.command).toBe(shown);
 });
 
 test("stopping the turn while an approval is pending cancels it instead of executing", async ({ page }) => {
@@ -142,8 +141,7 @@ test("stopping the turn while an approval is pending cancels it instead of execu
   await page.getByTestId("ai-stop-button").click();
   await expect(dialog).toBeHidden({ timeout: 30_000 });
 
-  await expect.poll(() => execRows(asset).length, { timeout: 60_000 }).toBe(1);
-  const row = execRows(asset)[0];
+  const row = await waitExecRow(asset);
   // An unanswered prompt resolves as a denial — never as a silent approval.
   expect(row.decision).toBe("deny");
   expect(row.decision_source).toBe("user_deny");
@@ -169,8 +167,7 @@ test("a Redis asset dispatches through the same exec tool", async ({ page }) => 
   expect((await page.getByTestId("ai-approval-command").innerText()).trim()).toBe(command);
   await page.getByTestId("ai-approval-allow").click();
 
-  await expect.poll(() => execRows(asset).length, { timeout: 60_000 }).toBe(1);
-  const row = execRows(asset)[0];
+  const row = await waitExecRow(asset);
   expect(row.command).toBe(command);
   expect(row.decision_source).toBe("user_allow");
   // The reply came from the mock Redis through the app's real Redis client.

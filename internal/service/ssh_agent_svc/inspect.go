@@ -61,6 +61,12 @@ func Inspect(ctx context.Context, id int64) (*InspectResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 每把身份的使用数按所选指纹单独统计：来源级 usages 是所有身份的合计，
+	// 直接套用到每一行会让同来源的每把密钥都显示相同的数字（#278）。
+	perIdentity, err := asset_repo.Asset().CountAgentAuthBySourceIDGroupByFingerprint(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	result := &InspectResult{
 		SourceID:   id,
 		Usages:     usages,
@@ -71,7 +77,7 @@ func Inspect(ctx context.Context, id int64) (*InspectResult, error) {
 			Fingerprint: ident.Fingerprint,
 			Type:        ident.Type,
 			Comment:     ident.Comment,
-			Usages:      usages,
+			Usages:      perIdentity[ident.Fingerprint],
 		})
 	}
 	return result, nil

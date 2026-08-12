@@ -315,6 +315,9 @@ func (r *windTermAssetRepo) CountByTypes(context.Context, []string) (int64, erro
 func (r *windTermAssetRepo) CountAgentAuthBySourceID(context.Context, int64) (int64, error) {
 	return 0, nil
 }
+func (r *windTermAssetRepo) CountAgentAuthBySourceIDGroupByFingerprint(context.Context, int64) (map[string]int64, error) {
+	return nil, nil
+}
 func (r *windTermAssetRepo) ListAgentAuthBySourceID(context.Context, int64) ([]*asset_entity.Asset, error) {
 	return nil, nil
 }

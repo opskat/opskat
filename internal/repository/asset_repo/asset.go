@@ -26,6 +26,9 @@ type AssetRepo interface {
 	// CountAgentAuthBySourceID 统计引用了指定 SSH Agent 来源的活动 SSH 资产数
 	// （config 中 auth_type=agent 且 agent_source_id 匹配）。
 	CountAgentAuthBySourceID(ctx context.Context, sourceID int64) (int64, error)
+	// CountAgentAuthBySourceIDGroupByFingerprint 把引用了指定来源的活动 SSH 资产
+	// 按所选身份指纹（agent_key_fingerprint）分组计数，用于逐把密钥展示使用数。
+	CountAgentAuthBySourceIDGroupByFingerprint(ctx context.Context, sourceID int64) (map[string]int64, error)
 	// ListAgentAuthBySourceID 列出引用了指定 SSH Agent 来源的活动 SSH 资产。
 	ListAgentAuthBySourceID(ctx context.Context, sourceID int64) ([]*asset_entity.Asset, error)
 }
@@ -166,6 +169,27 @@ func (r *assetRepo) CountAgentAuthBySourceID(ctx context.Context, sourceID int64
 	var count int64
 	err := agentSourceAssetQuery(ctx, sourceID).Model(&asset_entity.Asset{}).Count(&count).Error
 	return count, err
+}
+
+func (r *assetRepo) CountAgentAuthBySourceIDGroupByFingerprint(ctx context.Context, sourceID int64) (map[string]int64, error) {
+	// Agent 模式资产在写入时必须携带规范指纹（validateSSHAgentContract），所以这里
+	// 不存在指纹缺失的分组。
+	const fingerprintExpr = "json_extract(config, '$.agent_key_fingerprint')"
+	var rows []struct {
+		Fingerprint string
+		Total       int64
+	}
+	if err := agentSourceAssetQuery(ctx, sourceID).Model(&asset_entity.Asset{}).
+		Select(fingerprintExpr + " AS fingerprint, COUNT(*) AS total").
+		Group(fingerprintExpr).
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		counts[row.Fingerprint] = row.Total
+	}
+	return counts, nil
 }
 
 func (r *assetRepo) ListAgentAuthBySourceID(ctx context.Context, sourceID int64) ([]*asset_entity.Asset, error) {

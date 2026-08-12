@@ -160,6 +160,9 @@ func (r *fakeAssetRepo) CountByTypes(_ context.Context, _ []string) (int64, erro
 func (r *fakeAssetRepo) CountAgentAuthBySourceID(_ context.Context, _ int64) (int64, error) {
 	return 0, nil
 }
+func (r *fakeAssetRepo) CountAgentAuthBySourceIDGroupByFingerprint(_ context.Context, _ int64) (map[string]int64, error) {
+	return nil, nil
+}
 func (r *fakeAssetRepo) ListAgentAuthBySourceID(_ context.Context, _ int64) ([]*asset_entity.Asset, error) {
 	return nil, nil
 }
