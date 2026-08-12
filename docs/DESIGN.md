@@ -10,7 +10,7 @@
 
 | Owned here | Owned elsewhere |
 | --- | --- |
-| Color-token semantics & usage (full oklch value tables → [`references/design-tokens.md`](./references/design-tokens.md)) | The hard rules that mandate them (no hard-coded colors, hover via pseudo-classes, `cn()` / CVA / `lucide`, `notify` over `toast.success`) → [`DEVELOP.md`](./DEVELOP.md), [`AGENTS.md` → Reuse first](../AGENTS.md) |
+| Color-token semantics & usage (full oklch value tables → [`references/design-tokens.md`](./references/design-tokens.md)) | The `notify` over `toast.success` rule and the reuse-first heuristics → [`AGENTS.md` → Reuse first](../AGENTS.md); commands / commit flow → [`DEVELOP.md`](./DEVELOP.md). (The no-hard-coded-colors, pseudo-class hover, `cn()` / CVA / `lucide` rules are owned here, §1.) |
 | Theming mechanism, `dark:` usage | Commands, structure, coding style, testing, i18n, commit/PR → [`DEVELOP.md`](./DEVELOP.md) |
 | Component palette, variants, shared composites, selection guidance | Process model, IPC, services, repositories, asset-type backend → [`ARCHITECTURE.md`](./ARCHITECTURE.md); end-to-end new asset type → [`adding-an-asset-type.md`](./references/adding-an-asset-type.md) |
 | The desktop pane shell, domain surfaces (terminal / query / editor), **elevation (shadows)**, **layering (z-index)**, motion, state patterns, **accessibility**, surface recipe | — |
@@ -483,6 +483,6 @@ export default function ExamplePane({ loading }: { loading: boolean }) {
 - Shell & panes → [`App.tsx`](../frontend/src/App.tsx) + [`components/layout/`](../frontend/src/components/layout/) + [`stores/`](../frontend/src/stores/)
 - Toast → [`frontend/src/lib/notify.ts`](../frontend/src/lib/notify.ts) + [`packages/ui/src/components/sonner.tsx`](../frontend/packages/ui/src/components/sonner.tsx)
 
-**Related docs:** UI hard rules and commit flow → [`DEVELOP.md`](./DEVELOP.md); cross-cutting principles (reuse, SOLID seams) → [`AGENTS.md`](../AGENTS.md); internals & subsystems → [`ARCHITECTURE.md`](./ARCHITECTURE.md); doc maintenance and fact-checking → [`DOC-MAINTENANCE.md`](./DOC-MAINTENANCE.md).
+**Related docs:** commands and commit flow → [`DEVELOP.md`](./DEVELOP.md); cross-cutting principles (reuse, SOLID seams) → [`AGENTS.md`](../AGENTS.md); internals & subsystems → [`ARCHITECTURE.md`](./ARCHITECTURE.md); doc maintenance and fact-checking → [`DOC-MAINTENANCE.md`](./DOC-MAINTENANCE.md).
 
 > When editing this doc, follow [`DOC-MAINTENANCE.md`](./DOC-MAINTENANCE.md): token values, component names, and variant names track the current branch's `frontend/` code (if you can't `git grep` it, don't claim it); enumerate counts and lists (asset types, stores, primitives) from their source directory rather than trusting memory.

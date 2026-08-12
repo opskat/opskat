@@ -150,8 +150,8 @@ func execGuidance(asset *asset_entity.Asset) string {
 		asset.Name, asset.Type, asset.Name)
 }
 
-// unsupportedTypeError 类型未注册执行器（当前 Plan A 尚未覆盖，如 mongodb/kafka）
-// 时返回的明确错误。
+// unsupportedTypeError 类型未注册执行器（只注册了 help 文档的 doc-only 类型，
+// 如 rdp/vnc/local）时返回的明确错误。
 func unsupportedTypeError(asset *asset_entity.Asset) error {
 	return fmt.Errorf("asset %q (type=%s) has no exec support yet; supported types: %s",
 		asset.Name, asset.Type, strings.Join(permission.RegisteredExecTypes(), ", "))
