@@ -14,7 +14,7 @@ import (
 
 // BatchItem 批量执行中的单条操作
 type BatchItem struct {
-	Type      string `json:"type"` // 审批类型，由 permission.ApprovalTypeFor(资产类型) 得出：
+	Type string `json:"type"` // 审批类型，由 permission.ApprovalTypeFor(资产类型) 得出：
 	// "exec"|"serial"|"sql"|"redis"|"etcd"|"mongo"|"kafka"|"k8s"|"oss"
 	AssetID   int64  `json:"asset_id"`
 	AssetName string `json:"asset_name"`
