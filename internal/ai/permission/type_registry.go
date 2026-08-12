@@ -75,12 +75,12 @@ func SupportsGrantApproval(approvalType string) bool {
 func init() {
 	registerPermissionType(asset_entity.AssetTypeSSH, "exec", shellGrantPatterns, checkCommandPolicyPermission, "exec")
 	registerPermissionType(asset_entity.AssetTypeSerial, "serial", nil, checkCommandPolicyPermission)
-	registerPermissionType(asset_entity.AssetTypeDatabase, "sql", nil, checkDatabasePermission, "sql")
+	registerPermissionType(asset_entity.AssetTypeDatabase, "sql", nil, checkDatabasePermission, "sql", "db")
 	registerPermissionType(asset_entity.AssetTypeRedis, "redis", nil, checkRedisPermission)
 	registerPermissionType(asset_entity.AssetTypeEtcd, "etcd", nil, checkEtcdPermission)
 	registerPermissionType(asset_entity.AssetTypeMongoDB, "mongo", nil, checkMongoDBPermission, "mongo")
 	registerPermissionType(asset_entity.AssetTypeKafka, "kafka", nil, checkKafkaPermission)
-	registerPermissionType(asset_entity.AssetTypeK8s, "k8s", shellGrantPatterns, checkK8sPermission)
+	registerPermissionType(asset_entity.AssetTypeK8s, "k8s", shellGrantPatterns, checkK8sPermission, "kubernetes", "kube")
 	registerPermissionType(asset_entity.AssetTypeOSS, "oss", ossGrantPatterns, checkOSSPermission)
 	// cp 不是资产类型而是操作面：任何能开 SFTP 的资产上的文件传输都归它，主体是远端路径
 	// 而非命令，所以不按 shell 子命令拆；cpGrantPatterns 做的是另一件事——把系统给出的
