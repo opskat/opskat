@@ -66,6 +66,7 @@ func (h *etcdHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, 
 	cfg := &asset_entity.EtcdConfig{
 		Endpoints:             ArgStringSlice(args, "endpoints"),
 		Username:              ArgString(args, "username"),
+		CredentialID:          ArgInt64(args, "credential_id"),
 		TLS:                   ArgBool(args, "tls"),
 		TLSInsecure:           ArgBool(args, "tls_insecure"),
 		TLSServerName:         ArgString(args, "tls_server_name"),

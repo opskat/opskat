@@ -4,6 +4,7 @@ package assettype
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -21,6 +22,8 @@ type AssetTypeHandler interface {
 	// PolicyKind 返回该资产类型所用的规范 policyKind(见 entity/policy.PolicyKind*）。
 	// 经 Register 写入 entity/policy 的 asset-kind 注册表,供 ai/policy.ResolvePolicyKind 派生。
 	PolicyKind() string
+	// AutomationContract declares the type-owned generic create and credential seam.
+	AutomationContract() AutomationContract
 	// ValidateCreateArgs 校验 AI 工具创建资产时的必填字段。
 	// 由 put_asset 的 createAsset 在 ApplyCreateArgs 之前调用，每种类型自行声明所需字段。
 	ValidateCreateArgs(args map[string]any) error
@@ -42,6 +45,10 @@ var (
 )
 
 func Register(h AssetTypeHandler) {
+	contract := h.AutomationContract()
+	if len(contract.ConfigFields) == 0 {
+		panic(fmt.Sprintf("asset type %q must declare automation config fields", h.Type()))
+	}
 	mu.Lock()
 	registry[h.Type()] = h
 	mu.Unlock()
@@ -60,9 +67,14 @@ func Get(assetType string) (AssetTypeHandler, bool) {
 func All() []AssetTypeHandler {
 	mu.RLock()
 	defer mu.RUnlock()
-	out := make([]AssetTypeHandler, 0, len(registry))
-	for _, h := range registry {
-		out = append(out, h)
+	types := make([]string, 0, len(registry))
+	for assetType := range registry {
+		types = append(types, assetType)
+	}
+	sort.Strings(types)
+	out := make([]AssetTypeHandler, 0, len(types))
+	for _, assetType := range types {
+		out = append(out, registry[assetType])
 	}
 	return out
 }

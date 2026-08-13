@@ -54,6 +54,7 @@ func (h *vncHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, a
 		Host:           ArgString(args, "host"),
 		Port:           ArgInt(args, "port"),
 		Username:       ArgString(args, "username"),
+		CredentialID:   ArgInt64(args, "credential_id"),
 		FileSSHAssetID: ArgInt64(args, "file_ssh_asset_id"),
 	}
 	if cfg.Port == 0 {

@@ -22,8 +22,11 @@ func (s *stubHandler) SafeView(_ *asset_entity.Asset) map[string]any {
 func (s *stubHandler) ResolvePassword(_ context.Context, _ *asset_entity.Asset) (string, error) {
 	return "", nil
 }
-func (s *stubHandler) DefaultPolicy() any                        { return nil }
-func (s *stubHandler) PolicyKind() string                        { return "" }
+func (s *stubHandler) DefaultPolicy() any { return nil }
+func (s *stubHandler) PolicyKind() string { return "" }
+func (s *stubHandler) AutomationContract() AutomationContract {
+	return newAutomationContract([]string{"value"}, []string{"value"}, nil, nil, nil)
+}
 func (s *stubHandler) ValidateCreateArgs(_ map[string]any) error { return nil }
 func (s *stubHandler) ApplyCreateArgs(_ context.Context, _ *asset_entity.Asset, _ map[string]any) error {
 	return nil
@@ -57,10 +60,13 @@ func TestRegistry(t *testing.T) {
 			convey.So(h.DefaultPort(), convey.ShouldEqual, 9999)
 		})
 
-		convey.Convey("All returns all registered handlers", func() {
-			Register(&stubHandler{typ: "a", port: 1})
+		convey.Convey("All returns handlers in stable type order", func() {
 			Register(&stubHandler{typ: "b", port: 2})
-			convey.So(len(All()), convey.ShouldEqual, 2)
+			Register(&stubHandler{typ: "a", port: 1})
+			handlers := All()
+			convey.So(len(handlers), convey.ShouldEqual, 2)
+			convey.So(handlers[0].Type(), convey.ShouldEqual, "a")
+			convey.So(handlers[1].Type(), convey.ShouldEqual, "b")
 		})
 	})
 }

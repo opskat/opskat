@@ -58,6 +58,16 @@ func (h *databaseHandler) DefaultPolicy() any { return asset_entity.DefaultQuery
 func (h *databaseHandler) PolicyKind() string { return policy.PolicyKindQuery }
 
 func (h *databaseHandler) ValidateCreateArgs(args map[string]any) error {
+	driver := asset_entity.DatabaseDriver(ArgString(args, "driver"))
+	if driver == "" {
+		return fmt.Errorf("database type requires driver parameter (mysql, postgresql, mssql, sqlite)")
+	}
+	if driver == asset_entity.DriverSQLite {
+		if ArgString(args, "path") == "" {
+			return fmt.Errorf("missing required parameter: path for SQLite")
+		}
+		return nil
+	}
 	return validateRemoteServerArgs(args)
 }
 
@@ -68,8 +78,9 @@ func (h *databaseHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Ass
 	}
 	cfg := &asset_entity.DatabaseConfig{
 		Driver:              asset_entity.DatabaseDriver(driver),
+		CredentialID:        ArgInt64(args, "credential_id"),
 		Database:            ArgString(args, "database"),
-		ReadOnly:            ArgString(args, "read_only") == "true",
+		ReadOnly:            ArgBool(args, "read_only"),
 		QueryTimeoutSeconds: ArgInt(args, "query_timeout_seconds"),
 	}
 	if cfg.Driver == asset_entity.DriverSQLite {
@@ -77,10 +88,16 @@ func (h *databaseHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Ass
 		if source := ArgString(args, "sqlite_source"); source != "" {
 			cfg.SQLiteSource = asset_entity.SQLiteSource(source)
 		}
+		if cfg.SQLiteSource == "" {
+			cfg.SQLiteSource = asset_entity.SQLiteSourceLocal
+		}
 		cfg.SSHAssetID = ArgInt64(args, "ssh_asset_id")
 	} else {
 		cfg.Host = ArgString(args, "host")
 		cfg.Port = ArgInt(args, "port")
+		if cfg.Port == 0 {
+			cfg.Port = cfg.Driver.DefaultPort()
+		}
 		cfg.Username = ArgString(args, "username")
 		cfg.SSHAssetID = ArgInt64(args, "ssh_asset_id")
 		if password := ArgString(args, "password"); password != "" {

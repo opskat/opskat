@@ -77,7 +77,7 @@ func validateSSHAgentArgs(args map[string]any) error {
 			return fmt.Errorf("SSH Agent 认证指纹无效: %w", err)
 		}
 		if ArgString(args, "password") != "" || ArgString(args, "private_key") != "" || ArgString(args, "passphrase") != "" || ArgInt64(args, "credential_id") != 0 {
-			return fmt.Errorf("SSH Agent 认证与托管凭据/密码/私钥/口令互斥")
+			return fmt.Errorf("SSH Agent authentication rejects password, private_key, passphrase, and credential_id inputs")
 		}
 		return nil
 	}
@@ -100,10 +100,11 @@ func (h *sshHandler) ApplyCreateArgs(ctx context.Context, a *asset_entity.Asset,
 	}
 
 	cfg := &asset_entity.SSHConfig{
-		Host:     ArgString(args, "host"),
-		Port:     ArgInt(args, "port"),
-		Username: ArgString(args, "username"),
-		AuthType: authType,
+		Host:         ArgString(args, "host"),
+		Port:         ArgInt(args, "port"),
+		Username:     ArgString(args, "username"),
+		AuthType:     authType,
+		CredentialID: ArgInt64(args, "credential_id"),
 	}
 
 	if authType == asset_entity.AuthTypeAgent {

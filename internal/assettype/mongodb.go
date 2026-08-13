@@ -49,11 +49,12 @@ func (h *mongodbHandler) PolicyKind() string { return policy.PolicyKindMongo }
 func (h *mongodbHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
 	a.SSHTunnelID = ArgInt64(args, "ssh_asset_id")
 	cfg := &asset_entity.MongoDBConfig{
-		Host:       ArgString(args, "host"),
-		Port:       ArgInt(args, "port"),
-		Username:   ArgString(args, "username"),
-		Database:   ArgString(args, "database"),
-		AuthSource: "admin",
+		Host:         ArgString(args, "host"),
+		Port:         ArgInt(args, "port"),
+		Username:     ArgString(args, "username"),
+		CredentialID: ArgInt64(args, "credential_id"),
+		Database:     ArgString(args, "database"),
+		AuthSource:   "admin",
 	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)

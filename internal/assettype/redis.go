@@ -48,11 +48,12 @@ func (h *redisHandler) PolicyKind() string { return policy.PolicyKindRedis }
 
 func (h *redisHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
 	cfg := &asset_entity.RedisConfig{
-		Host:       ArgString(args, "host"),
-		Port:       ArgInt(args, "port"),
-		Username:   ArgString(args, "username"),
-		Database:   ArgInt(args, "redis_db"),
-		SSHAssetID: ArgInt64(args, "ssh_asset_id"),
+		Host:         ArgString(args, "host"),
+		Port:         ArgInt(args, "port"),
+		Username:     ArgString(args, "username"),
+		CredentialID: ArgInt64(args, "credential_id"),
+		Database:     ArgInt(args, "redis_db"),
+		SSHAssetID:   ArgInt64(args, "ssh_asset_id"),
 	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)

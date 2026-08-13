@@ -51,13 +51,14 @@ func (h *rdpHandler) ValidateCreateArgs(args map[string]any) error {
 
 func (h *rdpHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
 	cfg := &asset_entity.RDPConfig{
-		Host:      ArgString(args, "host"),
-		Port:      ArgInt(args, "port"),
-		Username:  ArgString(args, "username"),
-		Domain:    ArgString(args, "domain"),
-		Width:     ArgInt(args, "width"),
-		Height:    ArgInt(args, "height"),
-		Clipboard: ArgBool(args, "clipboard"),
+		Host:         ArgString(args, "host"),
+		Port:         ArgInt(args, "port"),
+		Username:     ArgString(args, "username"),
+		CredentialID: ArgInt64(args, "credential_id"),
+		Domain:       ArgString(args, "domain"),
+		Width:        ArgInt(args, "width"),
+		Height:       ArgInt(args, "height"),
+		Clipboard:    ArgBool(args, "clipboard"),
 	}
 	if cfg.Port == 0 {
 		cfg.Port = h.DefaultPort()
