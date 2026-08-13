@@ -61,10 +61,13 @@ Supported operations: `find`, `findOne`, `insertOne`, `insertMany`, `updateOne`,
 | field | type | required | notes |
 |---|---|---|---|
 | `host` | string | yes | |
-| `port` | number | yes | No server-side default — pass `27017` explicitly |
-| `username` | string | yes | |
-| `password` | string | no | Stored encrypted; never echoed back |
+| `port` | number | no | Defaults to `27017` |
+| `username` | string | yes | Copied to newly created credential metadata |
+| `password` | string | no | **Write-only.** Creates a managed password credential |
+| `credential_id` | number | no | Existing managed password credential ID |
 | `database` | string | no | Default database |
 | `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches |
 
-Auth source is fixed to `admin`; it is not configurable through `put_asset`.
+`password` and `credential_id` are mutually exclusive. Plaintext is never returned and is
+materialized under top-level `credential_name` (default: final asset name). Auth source is
+fixed to `admin`; it is not configurable through `put_asset`.

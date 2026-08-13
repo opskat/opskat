@@ -30,16 +30,26 @@ Use `scope` to override the default database for this call, e.g. `scope: "analyt
 
 | field | type | required | notes |
 |---|---|---|---|
-| `host` | string | yes | |
-| `port` | number | yes | 3306 (mysql) / 5432 (postgresql) / 1433 (mssql) |
-| `username` | string | yes | |
-| `password` | string | no | Stored encrypted; never echoed back |
-| `driver` | string | yes | `"mysql"`, `"postgresql"`, or `"mssql"` |
-| `database` | string | no | Default database; empty string clears it |
-| `read_only` | string | no | `"true"` enables read-only mode |
-| `query_timeout_seconds` | number | no | Per-query timeout override, in seconds |
-| `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches |
+| `driver` | string | yes | `"mysql"`, `"postgresql"`, `"mssql"`, or `"sqlite"` |
+| `host` | string | non-SQLite | Hostname or IP |
+| `port` | number | no | Defaults by driver: 3306 / 5432 / 1433 |
+| `username` | string | non-SQLite | Copied to newly created credential metadata |
+| `password` | string | no | **Write-only.** For non-SQLite, creates a managed password credential |
+| `credential_id` | number | no | Existing managed password credential ID; rejected for SQLite |
+| `database` | string | no | Default database |
+| `read_only` | boolean | no | Connection-level read-only mode |
+| `query_timeout_seconds` | number | no | Per-query timeout override, seconds |
+| `ssh_asset_id` | number | no | SSH asset for remote connections; required by remote SQLite VFS |
+| `sqlite_source` | string | SQLite only | `"local"` (default) or `"remote_ssh_vfs"` |
+| `path` | string | SQLite only | Absolute database-file path |
 
-`"sqlite"` is not creatable through `put_asset`: the validator requires `host` + `port` +
-`username` unconditionally, and SQLite doesn't use any of them, so the request always fails
-validation. Create SQLite assets from the desktop UI instead.
+For non-SQLite drivers, `password` and `credential_id` are mutually exclusive. Plaintext is
+write-only and becomes a managed credential named by top-level `credential_name` (default:
+final asset name). SQLite accepts neither password source: local SQLite must not have an SSH
+asset; `remote_ssh_vfs` requires one and uses a POSIX absolute remote path.
+
+Examples:
+
+    put_asset(name="prod-db", type="database", config={"driver":"postgresql","host":"db.internal","username":"app","password":"..."})
+    put_asset(name="local-db", type="database", config={"driver":"sqlite","path":"/var/lib/app/data.db"})
+    put_asset(name="remote-db", type="database", config={"driver":"sqlite","sqlite_source":"remote_ssh_vfs","path":"/srv/data.db","ssh_asset_id":12})

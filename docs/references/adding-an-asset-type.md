@@ -25,7 +25,7 @@ Not every new type touches every item below. A minimal type such as `local` has 
 
 | Area | Registration-driven | Shared-code edit still required |
 | --- | --- | --- |
-| AI `put_asset` / get / list safe-view handlers | Yes, via `assettype.Get(type)` | Add the type's config contract to its `SKILL.md`; `put_asset.config` deliberately has no per-type union schema |
+| AI `put_asset` / opsctl generic create / get / list safe-view handlers | Yes, via `assettype.Get(type)` and the handler's `AutomationContract()` | Add the type's config contract to its `SKILL.md`; `put_asset.config` and `opsctl --config` deliberately have no central per-type union/list |
 | AI / CLI command execution | Yes, via the executor registry | Add `SKILL.md` plus `RegisterExecutor`; doc-only types use `RegisterHelpDoc` |
 | File transfer (`cp`), for types that should support it | Yes, via `helper.RegisterTransferAdapter` | None — see [B8](#b8-file-transfer-cp); skip entirely for types with no meaningful transfer surface, which is the majority of types today |
 | Connection test button | Yes, once a binder calls `conntest.Register` from `New()` | None in `System.TestAssetConnection` |
@@ -45,10 +45,10 @@ Several asset-type features are shared capabilities rather than type-local inven
 
 | Capability | Backend owner | Frontend owner | Notes |
 | --- | --- | --- | --- |
-| Asset-type registration and AI safe views | `internal/assettype/` | `src/lib/assetTypes/` | Backend `put_asset`/get/list dispatch is registration-driven through `assettype.Get(type)`. Frontend selector/filter/detail/config rendering is derived from `registerAssetType`. |
+| Asset-type registration, automation contract and safe views | `internal/assettype/`, `internal/service/asset_put_svc` | `src/lib/assetTypes/` | AI `put_asset` and `opsctl create asset --config` share the registered `AutomationContract`; get/list use the same handler. Frontend selector/filter/detail/config rendering is derived from `registerAssetType`. |
 | Config form contract and serialization | Entity config structs plus type-specific services | `src/lib/assetTypes/formContract.ts`, the shared `useConfigSection` hook, the `configFields.tsx` field schema (`ConfigGroupSchema` / `FieldDesc`), `ConfigTabs`, and `<Name>ConfigSection*.ts` | The shell calls `buildConfig` / `buildTestConfig`; a section declares a `ConfigGroupSchema` and wires state/validity/build through `useConfigSection`, while the pure `.config.ts` owns parsing, validation, and exact JSON output. |
 | Proxy chains and TLS | `internal/pkg/proxychain`, `credential_resolver.ResolveProxyChain`, and `internal/connpool.ProxyChainDialContext` | `ConnectionMethodFields`, `proxyConfig.ts`, and type config sections | Networked types store `proxy_chain`; legacy `sshTunnelId` / `ssh_asset_id` and `proxy` fields are normalized to a one-layer chain. Resolve secrets once at the connection boundary and propagate errors—never silently downgrade a configured chain to direct. Save/test serialization differs; see [F3](#f3-configsection-and-pure-configts-serialization). |
-| Password credentials and SSH keys | `credential_svc`, `credential_mgr_svc`, `credential_resolver` | `credentialConfig.ts`, `useAssetCredential.ts`, `PasswordSourceField.tsx`, and SSH key controls | `credential_id` is not globally one thing. In SSH password-auth it refers to a password credential; in SSH key-auth it refers to an `ssh_key` credential. |
+| Password credentials and SSH keys | `credential_svc`, `credential_mgr_svc`, `credential_resolver`, `asset_put_svc`, `credential_query_svc` | `credentialConfig.ts`, `useAssetCredential.ts`, `PasswordSourceField.tsx`, and SSH key controls | `credential_id` is not globally one thing. The type-owned automation contract declares accepted kinds; `asset_put_svc` validates/materializes atomically, while `credential_query_svc` exposes only typed-ref safe metadata. |
 | Connection tests | `internal/service/conntest` plus binder `New()` registration | `testable` and `buildTestConfig` | Do not edit `System.TestAssetConnection`; register a tester and let the common binding dispatch. |
 | Policy and policy groups | `internal/model/entity/policy`, `internal/ai/policy`, policy-group entities | `PolicyDefinition`, `CommandPolicyCard`, `PolicyGroupManager` | Reuse an existing policy kind when semantics match; add a new kind only for genuinely new policy behavior. |
 | Runtime routing and panels | Type-specific app binders and services | `connectAction`, `terminalStore.ts`, `queryStore.ts`, `MainPanel.tsx`, `App.tsx` | Registry covers basic connect action dispatch, but query tab state and panel selection still have shared-code coupling points. |
@@ -90,6 +90,7 @@ type AssetTypeHandler interface {
 	ResolvePassword(ctx context.Context, a *asset_entity.Asset) (string, error)
 	DefaultPolicy() any
 	PolicyKind() string
+	AutomationContract() AutomationContract
 	ValidateCreateArgs(args map[string]any) error
 	ApplyCreateArgs(ctx context.Context, a *asset_entity.Asset, args map[string]any) error
 	ApplyUpdateArgs(ctx context.Context, a *asset_entity.Asset, args map[string]any) error
@@ -104,8 +105,9 @@ type AssetTypeHandler interface {
 | `ResolvePassword(ctx, a)` | Decrypt or resolve plaintext credentials; DB-family types use `credential_resolver.Default().ResolvePasswordGeneric`, SSH uses `ResolveSSHCredentials`, no-credential types return `"", nil` |
 | `DefaultPolicy()` | The default policy object for this type, such as `asset_entity.DefaultRedisPolicy()` |
 | `PolicyKind()` | Canonical policy kind from `internal/model/entity/policy.PolicyKind*`; `Register()` uses this to register the asset-type-to-kind mapping automatically |
-| `ValidateCreateArgs(args)` | Required-argument validation for AI-created assets; called before `ApplyCreateArgs` |
-| `ApplyCreateArgs` / `ApplyUpdateArgs` | Fill or update the config from AI tool args; encrypt secrets through `credential_svc.Default().Encrypt` |
+| `AutomationContract()` | Complete generic automation declaration: accepted `ConfigFields`, safe `ApprovalFields`, optional normalization, credential plan, and credential binding. AI `put_asset` and `opsctl create asset --config` consume this same contract. |
+| `ValidateCreateArgs(args)` | Create-only required-field and legal-combination validation after type-owned normalization |
+| `ApplyCreateArgs` / `ApplyUpdateArgs` | Materialize the already-prepared config into the entity. Automation plaintext credentials have already been replaced by a validated managed association; handlers must not create/encrypt them inline on this path. Direct desktop/legacy callers may still have their established handler behavior. |
 
 Registration example:
 
@@ -129,7 +131,11 @@ Reuse shared argument parsing:
 - `ArgStringSlice`
 - `validateRemoteServerArgs` for the existing SSH/database/Redis/MongoDB host/port/username validation shape
 
-The AI handlers dispatch `put_asset` (create when `asset` is absent, update when `asset=<id-or-name>` is present), get, and list through `assettype.Get(type)`, so handler code is registration-driven. Type-specific fields live under `put_asset.config`; its schema intentionally stays a free object instead of rebuilding a central union of every type's fields. Document the exact config keys in the type's `SKILL.md` as described in [B7](#b7-ai-help-and-command-execution).
+`AutomationContract.ConfigFields` is the executable source of truth: unknown generic keys are rejected by name instead of being silently discarded. `Normalize` owns create defaults; `CredentialPlan` declares plaintext/reference semantics and accepted credential kinds; `BindCredential` applies the non-secret materialized ID without a type switch in shared code. Keep `ApprovalFields` to safe endpoint/account metadata only.
+
+`internal/service/asset_put_svc` owns materialization. Its side-effect-free `Prepare` consumes the contract, validates referenced credentials/Agent sources and produces safe approval/audit data. `Commit` creates a managed password credential or imports an SSH key when requested, calls `BindCredential`, and writes credential + asset in one transaction. **Do not encrypt automation plaintext or call `credential_mgr_svc` from `ApplyCreateArgs` as the automation design**—that bypasses atomic materialization and creates a second credential path.
+
+The AI handlers dispatch `put_asset` (create when `asset` is absent, update when `asset=<id-or-name>` is present), and opsctl generic create dispatches through the same registered contract. Type-specific fields live under `put_asset.config` / opsctl `--config`; neither surface rebuilds a central union or hand-maintained supported-type list. Document the exact config keys in the type's `SKILL.md` as described in [B7](#b7-ai-help-and-command-execution).
 
 ### B3. Policy: Reuse an Existing Kind or Add a New Kind
 
@@ -220,7 +226,8 @@ Pure config types and types whose connection test can be registered from an exis
 
 Every registered asset type must have `internal/ai/skills/<type>/SKILL.md`, including types with no command surface. The frontmatter supplies the short capability description used in the prompt; the body is the detailed contract returned by AI `help(asset)` and `opsctl help <asset-or-type>`. The body must document:
 
-- the `put_asset.config` fields, required fields, defaults, and a valid creation example;
+- every field in `AutomationContract.ConfigFields`, required combinations, defaults, and a valid creation example;
+- managed credential/reference behavior and write-only fields (or explicit credential inapplicability); direct-encrypted secrets such as K8s kubeconfig must be distinguished from managed materialization;
 - the command grammar and examples when the type supports `exec`;
 - an explicit statement that command execution is unsupported when the type is configuration-only.
 
@@ -241,7 +248,7 @@ The unified ordering is load-bearing: resolve asset → validate command/type as
 
 Existing guards make this contract mechanical:
 
-- `internal/ai/execimpl/help_coverage_test.go` requires every registered asset type to have a non-empty help document.
+- `internal/ai/execimpl/help_coverage_test.go` requires every registered asset type to have a non-empty help document and compares the parsed config-field table with the independently declared `AutomationContract.ConfigFields` set. It does not lock prose.
 - `internal/ai/execimpl/coverage_test.go` checks the registered execution surface.
 - `internal/ai/execimpl/skill_examples_test.go` extracts documented command examples and sends them through the registered canonicalizer; unknown example shapes fail closed.
 - Protocol-specific doc/code contracts may add a bidirectional test, as Kafka does in `internal/ai/helper/kafka_skill_doc_test.go`.
@@ -295,12 +302,12 @@ git grep -n "RegisterTransferAdapter(asset_entity" -- 'internal/ai/helper/*.go' 
 ### Backend Checklist
 
 1. Add entity constants, `XxxConfig`, accessors, `validateXxx`, `Validate()` case, and `CanConnect()` case in `asset_entity/asset.go`. This is shared entity code and is not fully registered yet.
-2. Add `internal/assettype/<type>.go`, implement `AssetTypeHandler`, and call `Register(...)`.
+2. Add `internal/assettype/<type>.go`, implement `AssetTypeHandler` including its complete `AutomationContract`, and call `Register(...)`.
 3. Policy kind: reuse an existing kind when possible; add a new kind only when the semantics are new. See B3.
 4. Add `connpool/<type>.go` only for networked types that need pooled/dialed connections.
 5. Register a connection tester with `conntest.Register` if the type supports Test.
 6. Add an app binder and wire `main.go` only when the type needs runtime panel bindings.
-7. Add `internal/ai/skills/<type>/SKILL.md` with the complete `put_asset.config` contract.
+7. Add `internal/ai/skills/<type>/SKILL.md` with the complete `put_asset.config` contract; its field table must match `AutomationContract.ConfigFields` and explain write-only/materialization semantics.
 8. Register an executor plus any canonicalizer/precheck for command-capable types; otherwise register the type as help-only. Do not add a per-type AI tool or CLI verb.
 9. Optionally add `internal/ai/helper/transfer_<type>.go` and call `RegisterTransferAdapter` if the type should support `cp`; skip when the type has no file/object transfer surface. See [B8](#b8-file-transfer-cp).
 10. Run the help/executor coverage and documented-example tests described in B7.
@@ -522,7 +529,7 @@ SSH keeps its own authentication-mode and private-key handling:
 - Managed key auth loads `ListCredentialsByType("ssh_key")` and stores the selected SSH-key credential ID in `credential_id`.
 - File key auth stores selected private-key paths in `private_keys`; passphrase handling is local to `SSHConfigSection`.
 
-On the backend, credential storage and SSH key management live in `credential_svc`, `credential_mgr_svc`, and `credential_resolver`. Do not add type-local encryption or key-storage code. K8s encrypts kubeconfig directly through `ctx.encryptPassword(kubeconfig)`. `local` and `serial` have no credentials.
+On the backend, credential storage and SSH key management live in `credential_svc`, `credential_mgr_svc`, and `credential_resolver`. Automation writes additionally go through `asset_put_svc`: the handler contract declares what is accepted, and the service materializes/binds it atomically before `Apply*Args`. Do not add a type-local automation encryption or key-storage path. Safe AI/opsctl discovery goes through `credential_query_svc` using `credential:<id>` / `agent-source:<id>` refs; it never reveals secrets or Agent endpoints. K8s remains the exception in shape, not a credential: kubeconfig is directly encrypted asset config. `local` and `serial` have no credentials.
 
 ### F5. Detail Card
 

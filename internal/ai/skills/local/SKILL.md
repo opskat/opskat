@@ -22,6 +22,11 @@ There are no required fields — an empty `config` object is valid.
 | `shell` | string | no | Shell executable path/name; empty uses the OS default |
 | `args` | string | no | Comma/semicolon/newline separated extra shell arguments |
 | `cwd` | string | no | Initial working directory; empty uses the OS default |
+| `password` | string | no | Reserved compatibility key; any non-empty value is rejected as inapplicable |
+| `credential_id` | number | no | Reserved compatibility key; any non-zero value is rejected as inapplicable |
+
+Local automation never creates or references managed credentials; top-level
+`credential_name` is therefore invalid.
 
 Example:
 

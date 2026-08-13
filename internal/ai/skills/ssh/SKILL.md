@@ -27,12 +27,23 @@ Pass the shell command verbatim as `command`:
 
 | field | type | required | notes |
 |---|---|---|---|
-| `host` | string | yes | |
-| `port` | number | yes | No server-side default — pass `22` explicitly |
-| `username` | string | yes | |
-| `password` | string | no | Stored encrypted; never echoed back |
-| `auth_type` | string | no | `"password"`, `"key"`, or `"agent"`; defaults to `"key"` when `private_key` is set, else `"password"` |
-| `private_key` | string | no | SSH private key in PEM format; imported into the credential store |
-| `passphrase` | string | no | Passphrase for `private_key`, if encrypted |
-| `agent_source_id` | number | yes when `auth_type="agent"` | SSH agent source to authenticate through; must be a positive ID of an existing source |
-| `agent_key_fingerprint` | string | yes when `auth_type="agent"` | SHA256 fingerprint of the identity to use. With `agent_source_id`, mutually exclusive with `password` / `private_key` / `passphrase` / `credential_id`; non-agent auth types must not carry either agent field |
+| `host` | string | yes | Hostname or IP |
+| `port` | number | no | Defaults to `22` |
+| `username` | string | yes | Login username; copied to newly created credential metadata |
+| `auth_type` | string | no | `"password"`, `"key"`, or `"agent"`; inferred from plaintext/reference/Agent inputs when omitted |
+| `password` | string | no | **Write-only.** Creates a managed password credential; never returned or stored inline by `put_asset` |
+| `private_key` | string | no | **Write-only.** PEM private key imported as a managed SSH-key credential |
+| `passphrase` | string | no | **Write-only.** Allowed only with `private_key`; never returned |
+| `credential_id` | number | no | Existing managed password or SSH-key credential ID; its type infers auth when `auth_type` is omitted and must match an explicit auth type |
+| `agent_source_id` | number | yes for Agent | Existing SSH Agent source ID; the source may be offline at save time |
+| `agent_key_fingerprint` | string | yes for Agent | Canonical SHA256 identity fingerprint; both Agent fields are required and infer Agent auth when `auth_type` is omitted |
+| `ssh_asset_id` | number | no | Accepted compatibility key; the current automation handler does not persist it |
+
+`password`, `private_key`, and `credential_id` are mutually exclusive. Agent auth rejects all
+three plus `passphrase`; non-Agent auth rejects Agent fields. Use top-level
+`credential_name` only when creating a managed password/key (default: final asset name).
+Changing auth clears the old asset association but does not delete a possibly shared credential.
+
+Example:
+
+    put_asset(name="web-01", type="ssh", credential_name="web-01 root", config={"host":"10.0.0.7","username":"root","password":"..."})

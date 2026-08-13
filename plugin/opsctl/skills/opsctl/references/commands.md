@@ -27,13 +27,45 @@ opsctl list groups
 
 ### `get asset <asset>`
 
-Get asset details including description and SSH config (host, port, username, auth method).
+Get safe asset detail including registered type-specific connection metadata. When the asset
+references managed authentication, the response adds `authentication` with a typed ref and
+availability (`stored`/`missing` for credentials; runtime status for SSH Agent). It never
+returns passwords, private keys/passphrases, kubeconfig, Agent endpoint values, or Agent
+public-key blobs. Existing inline-encrypted authentication has no fabricated managed ref.
 
 ```bash
 opsctl get asset web-server
 opsctl get asset 1
 opsctl get asset production/web-01
 ```
+
+### `list credentials [--type password|ssh_key|ssh_agent]`
+
+List the unified safe key-management inventory. Omit `--type` to include password credentials,
+SSH-key credentials, and SSH Agent sources. Each item has a typed `ref`: `credential:<id>` or
+`agent-source:<id>`. Agent availability is metadata (`ok`, `empty`, `unavailable`, or
+`unsupported`), not an error or endpoint disclosure.
+
+```bash
+opsctl list credentials
+opsctl list credentials --type ssh_agent
+```
+
+### `get credential <typed-ref>`
+
+Get safe metadata and usage. A bare numeric ID is rejected as ambiguous. Credential details
+include referencing assets; SSH-key detail may include its public key. Agent detail includes
+sanitized identity fingerprints/comments and usage, but not endpoint values or full Agent
+public keys. No command reveals password/ciphertext, private key/passphrase, signing material,
+or challenges.
+
+```bash
+opsctl get credential credential:3
+opsctl get credential agent-source:2
+```
+
+`--credential-id` on `create asset` remains a numeric credential-row ID, not one of these
+typed detail refs.
 
 ## ssh
 
@@ -170,47 +202,45 @@ This mirrors `exec`'s `--type` flag.
 
 ## create
 
-Both `create` and `update` (below) dispatch to the same `put_asset` /
-`put_group` tools the AI uses (`internal/ai/tool/tool_handlers_crud.go`) — the
-CLI surface is unchanged from before Plan C, only the tool underneath it.
-
 ### `create asset [flags]`
 
-Create a new asset (ssh, database, redis, mongodb, or k8s). Requires approval.
+Create any registered built-in asset type. `--name` is required; `--type` defaults to `ssh`.
+The selected registered handler owns accepted fields, required combinations, and defaults.
+`opsctl create asset --help` prints the current registered types; `opsctl help <type>` prints
+the exact config contract. Unknown config keys fail before approval.
 
-**Required flags**:
-- `--name <string>` — Display name
-- `--host <string>` — Hostname or IP (not required for k8s — use `--kubeconfig`/`--kubeconfig-file` instead)
-- `--username <string>` — Login username (not required for k8s)
+**Generic config**:
+- `--config '<JSON object>'` — Type-owned config object
+- `--config-file <path>` — File containing that JSON object; mutually exclusive with `--config`
 
-**Optional flags**:
-- `--type <string>` — Asset type: "ssh" (default), "database", "redis", "mongodb", or "k8s"
-- `--port <int>` — Port number (default: auto by type — 22/3306/5432/6379/27017)
-- `--auth-type <string>` — SSH auth method: "password" or "key" (SSH type only)
-- `--driver <string>` — Database driver: "mysql" or "postgresql" (required for database type)
-- `--database <string>` — Default database name (database type)
-- `--read-only` — Enable read-only mode (database type)
-- `--kubeconfig <string>` — Kubeconfig YAML content (k8s type)
-- `--kubeconfig-file <path>` — Path to a kubeconfig YAML file (k8s type)
-- `--namespace <string>` — Default Kubernetes namespace (k8s type)
-- `--context <string>` — Kubeconfig context name (k8s type)
-- `--ssh-asset <asset>` — SSH asset name/ID for tunnel connection (database/redis/k8s types)
-- `--group-id <int>` — Group ID (0 = ungrouped)
-- `--description <string>` — Description
-- `--icon <string>` — Icon name (default: auto by type). Available icons:
-  - Infrastructure: server, database, cloud, monitor, laptop, router, hard-drive, globe, shield, container, cpu, network
-  - Cloud: aws, azure, gcp, alicloud, tencentcloud, huaweicloud, cloudflare
-  - DB/Middleware: mysql, postgresql, redis, mongodb, elasticsearch, kafka, mariadb, sqlite, rabbitmq, etcd, clickhouse
-  - System/OS: docker, kubernetes, linux, windows, ubuntu, centos, debian, redhat, macos
-  - DevOps: nginx, grafana, prometheus
+**Managed authentication**:
+- `--credential-id <id>` — Reuse an existing managed credential after type/auth validation
+- `--password-stdin` — Preferred plaintext path; reads stdin without prompt/echo, removes one terminal LF/CRLF
+- `--password <value>` — Unsafe argv path; warns about shell history, process listings, and CI logs
+- `--credential-name <name>` — Name for a newly created managed password/SSH-key credential; defaults to final asset name
+- `--agent-source-id <id>` and `--agent-key-fingerprint <SHA256...>` — SSH Agent identity pair; both required
+
+Plaintext inline `--config` has the same argv risk. A plaintext `--config-file` must use
+restrictive permissions, must not be committed, and should be removed afterward. Plaintext,
+credential reference, imported private key, and Agent identity are conflicting auth sources;
+the command fails instead of applying override precedence.
+
+**Compatibility flags** remain accepted: `--host`, `--port`, `--username`, `--auth-type`,
+`--driver`, `--database`, `--read-only`, `--ssh-asset`, `--kubeconfig`,
+`--kubeconfig-file`, `--namespace`, `--context`, `--group-id`, `--description`, and `--icon`.
+Only explicitly supplied convenience flags override matching non-secret generic config keys.
+`--kubeconfig-file` remains a K8s raw-file convenience input.
+
+The flow is parse/merge → resolve references/files and validate → desktop approval → one
+transaction materializing the credential/imported key and asset. Denial or failure commits
+neither new row. Successful JSON contains the asset ID and a safe authentication reference
+when applicable, never supplied plaintext/ciphertext.
 
 ```bash
-opsctl create asset --name "Web Server" --host 10.0.0.1 --username root
-opsctl create asset --type database --driver mysql --name "Prod DB" --host db.internal --username app
-opsctl create asset --type database --driver postgresql --name "Analytics" --host pg.internal --port 5432 --username readonly --read-only
-opsctl create asset --type mongodb --name "MongoDB" --host mongo.internal --port 27017 --username admin
-opsctl create asset --type redis --name "Cache" --host redis.internal --username default
-opsctl create asset --type database --driver mysql --name "DB via SSH" --host 127.0.0.1 --username app --ssh-asset web-server
+printf '%s\n' "$SSH_PASSWORD" | opsctl create asset --name "Web Server" --host 10.0.0.1 --username root --password-stdin
+opsctl create asset --type database --name "Prod DB" --config '{"driver":"mysql","host":"db.internal","username":"app"}' --credential-id 4
+opsctl create asset --type database --name "Local SQLite" --config '{"driver":"sqlite","path":"/var/lib/app.db"}'
+opsctl create asset --type ssh --name "Agent Host" --host host.internal --username root --agent-source-id 2 --agent-key-fingerprint SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 opsctl create asset --type k8s --name "Prod Cluster" --kubeconfig-file ~/.kube/config --context prod
 ```
 

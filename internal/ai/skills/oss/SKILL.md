@@ -173,13 +173,16 @@ Rules are written the same way, with `*` wildcards that do not cross `/` inside 
 |---|---|---|---|
 | `endpoint` | string | yes | Host, or `scheme://host[:port]` |
 | `access_key_id` | string | yes | |
-| `secret_access_key` | string | no | Stored encrypted; never echoed back |
-| `credential_id` | number | no | Reference to a managed credential instead of an inline `secret_access_key`; 0 means none |
+| `secret_access_key` | string | no | **Write-only.** Creates a managed password credential whose secret is used as the Secret Access Key |
+| `credential_id` | number | no | Existing managed password credential ID; mutually exclusive with `secret_access_key` |
 | `provider` | string | no | UI provider preset label (e.g. `"s3"`, `"minio"`); does not change connection behavior |
 | `region` | string | no | |
 | `use_path_style` | bool | no | `true` to force path-style addressing (needed by most self-hosted S3-compatible services) |
 | `use_ssl` | bool | no | `true` to connect over HTTPS |
 | `connect_timeout` | number | no | Seconds; 0 uses the default |
+
+`access_key_id` is copied to newly created credential username metadata. Plaintext is never
+returned and is materialized under top-level `credential_name` (default: final asset name).
 
 Example:
 

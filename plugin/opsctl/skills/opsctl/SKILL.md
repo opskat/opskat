@@ -5,7 +5,7 @@ description: "opskat CLI for asset management and remote operations (SSH, databa
 
 # opsctl CLI Tool
 
-Standalone CLI for asset management and remote operations without the GUI. All managed assets (servers, databases, Redis, MongoDB, Kafka, Kubernetes, etcd, ...) are stored in the desktop app — use `list`/`get` to discover available targets before operating, and `help <asset-or-type>` to learn a type's config and command contract.
+Standalone CLI for asset management and remote operations without the GUI. All managed assets are stored in the desktop app — use `list`/`get` to discover targets and `help <asset-or-type>` for the registered type's current config/command contract. `create asset --help` discovers the registered built-in type set at runtime; do not maintain a separate supported-type list in automation.
 
 ## Global Flags
 
@@ -43,6 +43,42 @@ Minimize output to save context window:
 - **Targeted get**: Use `get asset <name>` for a single asset instead of listing all then filtering.
 - **Batch over sequential**: One `opsctl batch` call returns structured JSON — more compact than N separate `exec` outputs with shell overhead.
 - **Pipe to grep/head**: When only partial output is needed, pipe remote commands: `opsctl exec web --type ssh -- "tail -50 /var/log/app.log"` instead of dumping entire logs.
+
+## Generic Asset Creation and Credentials
+
+`opsctl create asset --name <name> --type <type> --config '<JSON object>'` accepts every
+registered built-in type. Use `--config-file <path>` instead for a JSON object file; the two
+inputs are mutually exclusive. Existing convenience flags (`--host`, `--port`, `--username`,
+`--driver`, K8s flags, etc.) remain compatible, and only explicitly supplied flags override
+non-secret config keys. Run `opsctl help <type>` for exact accepted fields and defaults.
+
+For plaintext credentials prefer `--password-stdin`; it removes one terminal LF/CRLF and
+preserves other bytes. `--password` and plaintext inline `--config` expose values through
+argv (shell history, process listings, CI logs) and print a warning. Plaintext config files
+must use restrictive permissions, must not be committed, and should be removed after use.
+`--credential-id <numeric-id>` reuses an existing managed credential, while
+`--credential-name` names a newly materialized password/SSH key. Secret sources conflict
+rather than override each other.
+
+SSH Agent creation uses both `--agent-source-id` and `--agent-key-fingerprint` (or the
+corresponding config keys). Agent auth rejects password/private-key/credential inputs and
+does not require the Agent source to be online at save time.
+
+Discover safe credential refs with:
+
+```bash
+opsctl list credentials [--type password|ssh_key|ssh_agent]
+opsctl get credential credential:3
+opsctl get credential agent-source:2
+```
+
+Detail lookup requires a typed ref; bare IDs are ambiguous. `--credential-id` for creation
+remains the numeric credential-row ID. These queries return metadata/status/usage only—no
+password, private key, passphrase, Agent endpoint, signing material, or full Agent public key.
+
+Create flow is prevalidate/resolve → desktop approval → atomic credential+asset transaction.
+A denied or failed create leaves neither new row committed; output/audit contains only safe
+metadata and an authentication reference when applicable.
 
 ## Approval Mechanism
 
@@ -157,7 +193,7 @@ opsctl cp staging:/var/backups/db.sql prod:/var/tmp/db.sql
 
 ```bash
 # Create assets → init discovery (use parallel sub-agents for create)
-opsctl create asset --name web-03 --host 10.0.1.3 --username root
-opsctl create asset --name web-04 --host 10.0.1.4 --username root
+printf '%s\n' "$WEB03_PASSWORD" | opsctl create asset --name web-03 --host 10.0.1.3 --username root --password-stdin
+opsctl create asset --name web-04 --host 10.0.1.4 --username root --credential-id 4
 # Then batch init with /opsctl:init --group <group-id>
 ```

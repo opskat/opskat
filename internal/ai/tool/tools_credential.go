@@ -11,7 +11,7 @@ func credentialTools() []tool.Tool {
 	return []tool.Tool{
 		&tool.RawTool{
 			NameStr: "list_credentials",
-			DescStr: "List safe managed credential and SSH Agent source metadata. Optional type filter: password, ssh_key, or ssh_agent. Results never contain passwords, private keys, passphrases, ciphertext, or Agent endpoint values.",
+			DescStr: "List the unified safe key-management inventory. Omit type for password, ssh_key, and ssh_agent; or filter by one kind. Every item has a typed ref (credential:<id> or agent-source:<id>), public identification metadata, and usage/status counts where applicable. Agent connectivity problems are represented by availability instead of exposing endpoint values. Never returns password/ciphertext, private key/passphrase, or Agent endpoint/signing material.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
@@ -28,7 +28,7 @@ func credentialTools() []tool.Tool {
 		},
 		&tool.RawTool{
 			NameStr: "get_credential",
-			DescStr: "Get safe credential detail and usage by typed ref. Use credential:<id> for managed passwords/SSH keys or agent-source:<id> for SSH Agent sources. Bare numeric IDs are rejected. No secret or Agent endpoint value is returned.",
+			DescStr: "Get safe credential or SSH Agent source detail by typed ref. Use credential:<id> for managed passwords/SSH keys or agent-source:<id> for Agent sources; bare numeric IDs are ambiguous and rejected. Password/key detail includes referencing assets; SSH-key detail may include its public key. Agent detail includes persisted source metadata, availability, sanitized identity fingerprints/comments and usage, but never endpoint values or full Agent public keys. No password/ciphertext, private key/passphrase, signature, challenge, or challenge answer is returned.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
