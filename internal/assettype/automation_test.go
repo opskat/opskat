@@ -57,7 +57,6 @@ func TestPrepareCreateCoversRegisteredBuiltins(t *testing.T) {
 	assert.True(t, sort.StringsAreSorted(types), "registered types must be stable and sorted")
 
 	for _, assetType := range types {
-		assetType := assetType
 		t.Run(assetType, func(t *testing.T) {
 			args, ok := valid[assetType]
 			require.True(t, ok, "every registered built-in needs a contract fixture")

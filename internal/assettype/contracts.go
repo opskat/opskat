@@ -79,9 +79,10 @@ func sshCredentialPlan(args map[string]any) (CredentialPlan, error) {
 	}
 	if credentialID > 0 {
 		accepted := []string{credential_entity.TypePassword, credential_entity.TypeSSHKey}
-		if authType == asset_entity.AuthTypePassword {
+		switch authType {
+		case asset_entity.AuthTypePassword:
 			accepted = []string{credential_entity.TypePassword}
-		} else if authType == asset_entity.AuthTypeKey {
+		case asset_entity.AuthTypeKey:
 			accepted = []string{credential_entity.TypeSSHKey}
 		}
 		return CredentialPlan{Kind: CredentialKindReference, ReferenceID: credentialID, AcceptedTypes: accepted}, nil
