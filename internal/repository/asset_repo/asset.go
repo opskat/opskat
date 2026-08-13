@@ -136,8 +136,15 @@ func (r *assetRepo) UpdateGroupID(ctx context.Context, id, groupID int64) error 
 
 func (r *assetRepo) FindByCredentialID(ctx context.Context, credentialID int64) ([]*asset_entity.Asset, error) {
 	var assets []*asset_entity.Asset
-	if err := db.Ctx(ctx).Where("status = ? AND json_extract(config, '$.credential_id') = ?", asset_entity.StatusActive, credentialID).
-		Find(&assets).Error; err != nil {
+	// Managed credentials can be owned by the primary asset config or by nested
+	// Kafka companion configs. json_tree finds every credential_id leaf while
+	// EXISTS keeps each referencing asset in the result only once.
+	if err := db.Ctx(ctx).Where(`status = ? AND EXISTS (
+		SELECT 1 FROM json_tree(assets.config) AS credential_refs
+		WHERE credential_refs.key = 'credential_id'
+			AND credential_refs.type IN ('integer', 'real')
+			AND credential_refs.atom = ?
+	)`, asset_entity.StatusActive, credentialID).Order("id ASC").Find(&assets).Error; err != nil {
 		return nil, err
 	}
 	return assets, nil

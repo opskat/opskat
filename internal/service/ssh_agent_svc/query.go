@@ -101,8 +101,11 @@ func Observe(ctx context.Context, id int64) (Observation, error) {
 			case sshagent.CodeEmpty:
 				return observedUnavailable(ctx, id, ProbeEmpty, usages), nil
 			case sshagent.CodeEnvUnset, sshagent.CodeEndpointUnavailable,
-				sshagent.CodeProtocolError, sshagent.CodePayloadInvalid, sshagent.CodeCancelled:
+				sshagent.CodeProtocolError, sshagent.CodePayloadInvalid:
 				return observedUnavailable(ctx, id, ProbeUnavailable, usages), nil
+			case sshagent.CodeCancelled:
+				logger.Ctx(ctx).Info("ssh agent source observation canceled", zap.Int64("sourceID", id))
+				return Observation{}, err
 			}
 		}
 		logger.Ctx(ctx).Error("ssh agent source observation failed", zap.Int64("sourceID", id), zap.Error(err))

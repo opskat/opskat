@@ -77,3 +77,33 @@ func TestAssetRepo_AgentAuthSourceIgnoresDeleted(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), count)
 }
+
+func TestAssetRepo_FindByCredentialIDIncludesNestedReferences(t *testing.T) {
+	ctx, r := setupAssetRepo(t)
+	create := func(name, assetType, config string) int64 {
+		t.Helper()
+		asset := &asset_entity.Asset{
+			Name: name, Type: assetType, Config: config,
+			Status: asset_entity.StatusActive, Createtime: 1,
+		}
+		require.NoError(t, r.Create(ctx, asset))
+		return asset.ID
+	}
+
+	topLevelID := create("redis", asset_entity.AssetTypeRedis, `{"credential_id":7}`)
+	nestedID := create("kafka", asset_entity.AssetTypeKafka, `{
+		"schema_registry":{"credential_id":7},
+		"connect":{"clusters":[{"name":"primary","credential_id":7}]}
+	}`)
+	create("other", asset_entity.AssetTypeKafka, `{"schema_registry":{"credential_id":8}}`)
+	deletedID := create("deleted", asset_entity.AssetTypeKafka, `{"schema_registry":{"credential_id":7}}`)
+	require.NoError(t, r.Delete(ctx, deletedID))
+
+	assets, err := r.FindByCredentialID(ctx, 7)
+	require.NoError(t, err)
+	got := make([]int64, 0, len(assets))
+	for _, asset := range assets {
+		got = append(got, asset.ID)
+	}
+	assert.ElementsMatch(t, []int64{topLevelID, nestedID}, got)
+}

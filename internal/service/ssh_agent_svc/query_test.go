@@ -118,3 +118,24 @@ func TestObserveDegradesExpectedRuntimeFailureButPropagatesUsageError(t *testing
 	_, err = Observe(context.Background(), 4)
 	assert.ErrorIs(t, err, repoErr)
 }
+
+func TestObservePropagatesCancellationInsteadOfReportingAgentUnavailable(t *testing.T) {
+	sourceRepo, assetRepo := registerQueryRepos(t)
+	sourceRepo.EXPECT().Find(gomock.Any(), int64(4)).Return(&ssh_agent_source_entity.SSHAgentSource{
+		ID: 4, Name: "work", EndpointType: "test", Endpoint: "ignored",
+	}, nil)
+	assetRepo.EXPECT().CountAgentAuthBySourceID(gomock.Any(), int64(4)).Return(int64(2), nil)
+
+	oldInspect := observeIdentities
+	observeIdentities = func(context.Context, string, string) ([]IdentitySummary, error) {
+		return nil, &sshagent.Error{Code: sshagent.CodeCancelled, Message: "caller stopped waiting"}
+	}
+	t.Cleanup(func() { observeIdentities = oldInspect })
+
+	observation, err := Observe(context.Background(), 4)
+	assert.Empty(t, observation)
+	require.Error(t, err)
+	code, ok := sshagent.CodeOf(err)
+	assert.True(t, ok)
+	assert.Equal(t, sshagent.CodeCancelled, code)
+}
