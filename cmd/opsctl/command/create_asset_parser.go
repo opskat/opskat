@@ -13,6 +13,8 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
+const maxPasswordStdinBytes = 1 << 20
+
 type assetCreateRequest struct {
 	asset          *asset_entity.Asset
 	config         map[string]any
@@ -300,9 +302,12 @@ func configValuePresent(value any) bool {
 }
 
 func readPasswordStdin(reader io.Reader) (string, error) {
-	data, err := io.ReadAll(reader)
+	data, err := io.ReadAll(io.LimitReader(reader, maxPasswordStdinBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("read --password-stdin: %w", err)
+	}
+	if len(data) > maxPasswordStdinBytes {
+		return "", fmt.Errorf("--password-stdin exceeds %d bytes", maxPasswordStdinBytes)
 	}
 	if strings.HasSuffix(string(data), "\r\n") {
 		data = data[:len(data)-2]

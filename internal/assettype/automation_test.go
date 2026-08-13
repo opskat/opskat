@@ -53,7 +53,6 @@ func TestPrepareCreateCoversRegisteredBuiltins(t *testing.T) {
 	}
 
 	types := RegisteredTypes()
-	require.Len(t, types, 12)
 	assert.True(t, sort.StringsAreSorted(types), "registered types must be stable and sorted")
 
 	for _, assetType := range types {

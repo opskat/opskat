@@ -112,6 +112,17 @@ func TestParseAssetCreateKubeconfigFileOverridesOnlyWhenExplicit(t *testing.T) {
 	assert.Equal(t, "from-file", request.config["kubeconfig"])
 }
 
+func TestParseAssetCreatePasswordStdinRejectsOversizedInput(t *testing.T) {
+	oversized := strings.Repeat("x", maxPasswordStdinBytes+1)
+	_, stderr, err := parseAssetCreateForTest(t, []string{
+		"--name", "cache", "--type", "redis", "--config", `{"host":"redis.internal","username":"default"}`, "--password-stdin",
+	}, oversized, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds")
+	assert.NotContains(t, err.Error(), oversized)
+	assert.Empty(t, stderr)
+}
+
 func TestParseAssetCreatePasswordStdinTrimsExactlyOneTerminalLineEnding(t *testing.T) {
 	tests := []struct {
 		name  string
