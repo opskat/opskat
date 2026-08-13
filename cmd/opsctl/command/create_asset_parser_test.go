@@ -147,25 +147,32 @@ func TestParseAssetCreatePasswordStdinTrimsExactlyOneTerminalLineEnding(t *testi
 
 func TestParseAssetCreateRejectsEquivalentSecretSourceConflicts(t *testing.T) {
 	tests := []struct {
-		name  string
-		args  []string
-		stdin string
+		name   string
+		args   []string
+		stdin  string
+		wantOK bool
 	}{
 		{name: "argv and stdin", args: []string{"--name", "x", "--password", "argv", "--password-stdin"}, stdin: "stdin"},
 		{name: "reference and argv", args: []string{"--name", "x", "--credential-id", "4", "--password", "argv"}},
 		{name: "config password and argv", args: []string{"--name", "x", "--config", `{"password":"config-secret"}`, "--password", "argv-secret"}},
 		{name: "config OSS secret and stdin", args: []string{"--name", "x", "--type", "oss", "--config", `{"secret_access_key":"config-secret"}`, "--password-stdin"}, stdin: "stdin-secret"},
 		{name: "config private key and reference", args: []string{"--name", "x", "--config", `{"private_key":"private-secret"}`, "--credential-id", "9"}},
+		{name: "config passphrase and reference", args: []string{"--name", "x", "--config", `{"passphrase":"passphrase-secret"}`, "--credential-id", "9"}},
 		{name: "config reference and argv", args: []string{"--name", "x", "--config", `{"credential_id":3}`, "--password", "argv-secret"}},
+		{name: "SSH private key with passphrase is one source", args: []string{"--name", "x", "--config", `{"host":"ssh.example.com","username":"root","private_key":"private-secret","passphrase":"passphrase-secret"}`}, wantOK: true},
 		{name: "OSS config secret and config reference", args: []string{"--name", "x", "--type", "oss", "--config", `{"secret_access_key":"config-secret","credential_id":3}`}},
 		{name: "SSH config private key and password", args: []string{"--name", "x", "--config", `{"private_key":"private-secret","password":"config-secret"}`}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, stderr, err := parseAssetCreateForTest(t, tt.args, tt.stdin, nil)
+			if tt.wantOK {
+				require.NoError(t, err)
+				return
+			}
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "mutually exclusive")
-			for _, secret := range []string{"argv-secret", "config-secret", "stdin-secret", "private-secret"} {
+			for _, secret := range []string{"argv-secret", "config-secret", "stdin-secret", "private-secret", "passphrase-secret"} {
 				assert.NotContains(t, err.Error(), secret)
 				assert.NotContains(t, stderr, secret)
 			}

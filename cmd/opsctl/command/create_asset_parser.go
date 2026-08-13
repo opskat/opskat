@@ -263,13 +263,23 @@ func normalizeJSONNumbers(config map[string]any) map[string]any {
 func presentSecretFields(config map[string]any) (string, int) {
 	first := ""
 	count := 0
-	for _, field := range []string{"credential_id", "password", "secret_access_key", "private_key"} {
-		if value, ok := config[field]; ok && configValuePresent(value) {
-			if first == "" {
-				first = field
-			}
-			count++
+	addSource := func(field string) {
+		if first == "" {
+			first = field
 		}
+		count++
+	}
+	for _, field := range []string{"credential_id", "password", "secret_access_key"} {
+		if value, ok := config[field]; ok && configValuePresent(value) {
+			addSource(field)
+		}
+	}
+	privateKeyPresent := configValuePresent(config["private_key"])
+	passphrasePresent := configValuePresent(config["passphrase"])
+	if privateKeyPresent {
+		addSource("private_key")
+	} else if passphrasePresent {
+		addSource("passphrase")
 	}
 	return first, count
 }

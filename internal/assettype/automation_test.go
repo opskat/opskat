@@ -171,6 +171,32 @@ func TestCredentialPlanAndBindingArePure(t *testing.T) {
 		assert.Equal(t, asset_entity.AuthTypeKey, bound["auth_type"])
 	})
 
+	t.Run("ssh passphrase requires imported private key", func(t *testing.T) {
+		for _, args := range []map[string]any{
+			{"host": "ssh.example.com", "username": "root", "password": "password-secret", "passphrase": "key-secret"},
+			{"host": "ssh.example.com", "username": "root", "credential_id": int64(9), "passphrase": "key-secret"},
+		} {
+			_, err := PrepareCreate(asset_entity.AssetTypeSSH, args)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "passphrase requires private_key")
+			assert.NotContains(t, err.Error(), "key-secret")
+		}
+	})
+
+	t.Run("managed credential IDs must be integral", func(t *testing.T) {
+		for _, tt := range []struct {
+			assetType string
+			args      map[string]any
+		}{
+			{assetType: asset_entity.AssetTypeSSH, args: map[string]any{"host": "ssh.example.com", "username": "root", "credential_id": 9.5}},
+			{assetType: asset_entity.AssetTypeRedis, args: map[string]any{"host": "redis.example.com", "username": "default", "credential_id": 9.5}},
+		} {
+			_, err := PrepareCreate(tt.assetType, tt.args)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "credential_id must be a positive integer")
+		}
+	})
+
 	t.Run("oss owns secret field mapping", func(t *testing.T) {
 		prepared, err := PrepareCreate(asset_entity.AssetTypeOSS, map[string]any{
 			"endpoint": "s3.example.com", "access_key_id": "AKIA", "secret_access_key": "secret",

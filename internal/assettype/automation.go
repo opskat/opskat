@@ -197,9 +197,9 @@ func joinRegisteredTypes() string {
 }
 
 func passwordCredentialPlan(args map[string]any, plaintextField, usernameField string) (CredentialPlan, error) {
-	credentialID := ArgInt64(args, "credential_id")
-	if _, supplied := args["credential_id"]; supplied && credentialID <= 0 {
-		return CredentialPlan{}, fmt.Errorf("credential_id must be a positive integer")
+	credentialID, _, err := positiveInt64Arg(args, "credential_id")
+	if err != nil {
+		return CredentialPlan{}, err
 	}
 	plaintext := ArgString(args, plaintextField)
 	if credentialID > 0 && plaintext != "" {
@@ -242,6 +242,31 @@ func noCredentialPlan(fields ...string) func(map[string]any) (CredentialPlan, er
 		}
 		return CredentialPlan{Kind: CredentialKindNone}, nil
 	}
+}
+
+func positiveInt64Arg(args map[string]any, key string) (int64, bool, error) {
+	value, supplied := args[key]
+	if !supplied {
+		return 0, false, nil
+	}
+	var id int64
+	switch typed := value.(type) {
+	case int:
+		id = int64(typed)
+	case int64:
+		id = typed
+	case float64:
+		id = int64(typed)
+		if float64(id) != typed {
+			return 0, true, fmt.Errorf("%s must be a positive integer", key)
+		}
+	default:
+		return 0, true, fmt.Errorf("%s must be a positive integer", key)
+	}
+	if id <= 0 {
+		return 0, true, fmt.Errorf("%s must be a positive integer", key)
+	}
+	return id, true, nil
 }
 
 func valuePresent(value any) bool {

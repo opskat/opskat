@@ -54,13 +54,16 @@ func normalizeSSHAutomation(args map[string]any) error {
 
 func sshCredentialPlan(args map[string]any) (CredentialPlan, error) {
 	authType := ArgString(args, "auth_type")
-	credentialID := ArgInt64(args, "credential_id")
-	if _, supplied := args["credential_id"]; supplied && credentialID <= 0 {
-		return CredentialPlan{}, fmt.Errorf("credential_id must be a positive integer")
+	credentialID, _, err := positiveInt64Arg(args, "credential_id")
+	if err != nil {
+		return CredentialPlan{}, err
 	}
 	password := ArgString(args, "password")
 	privateKey := ArgString(args, "private_key")
 	passphrase := ArgString(args, "passphrase")
+	if passphrase != "" && privateKey == "" {
+		return CredentialPlan{}, fmt.Errorf("passphrase requires private_key")
+	}
 	if authType == asset_entity.AuthTypeAgent {
 		return noCredentialPlan("password", "private_key", "passphrase", "credential_id")(args)
 	}
@@ -98,9 +101,6 @@ func sshCredentialPlan(args map[string]any) (CredentialPlan, error) {
 			return CredentialPlan{}, fmt.Errorf("private_key conflicts with auth_type %q", authType)
 		}
 		return CredentialPlan{Kind: CredentialKindSSHKey, PrivateKey: privateKey, Passphrase: passphrase, Username: ArgString(args, "username"), UsernameField: "username"}, nil
-	}
-	if passphrase != "" {
-		return CredentialPlan{}, fmt.Errorf("passphrase requires private_key")
 	}
 	return CredentialPlan{Kind: CredentialKindNone}, nil
 }
