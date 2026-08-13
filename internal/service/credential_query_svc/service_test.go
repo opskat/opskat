@@ -42,6 +42,7 @@ func TestListReturnsStableSafeSummariesAndDegradesUnavailableAgent(t *testing.T)
 	deps := dependencies{
 		listCredentials: func(context.Context) ([]*credential_entity.Credential, error) {
 			return []*credential_entity.Credential{
+				//nolint:gosec // Intentional sentinel ciphertext verifies that credential secrets never reach DTO JSON.
 				{ID: 2, Name: "deploy", Type: credential_entity.TypeSSHKey, Username: "root", PrivateKey: "cipher-private", Passphrase: "cipher-passphrase", PublicKey: "ssh-ed25519 AAAA public", KeyType: "ed25519", KeySize: 256, Fingerprint: "SHA256:key", Comment: "deploy key", Createtime: 20, Updatetime: 21},
 				{ID: 1, Name: "database", Type: credential_entity.TypePassword, Username: "app", Password: "cipher-password", Description: "prod", Createtime: 10, Updatetime: 11},
 			}, nil
@@ -117,6 +118,7 @@ func TestListFiltersKindsAndRejectsUnknownFilter(t *testing.T) {
 func TestGetCredentialReturnsUsageAndOnlyKeyPublicMaterial(t *testing.T) {
 	deps := dependencies{
 		getCredential: func(_ context.Context, id int64) (*credential_entity.Credential, error) {
+			//nolint:gosec // Intentional sentinel ciphertext verifies that credential secrets never reach DTO JSON.
 			return &credential_entity.Credential{ID: id, Name: "deploy", Type: credential_entity.TypeSSHKey, Username: "root", PrivateKey: "cipher-private", Passphrase: "cipher-passphrase", PublicKey: "ssh-ed25519 AAAA public", Fingerprint: "SHA256:key"}, nil
 		},
 		usageAssets: func(_ context.Context, id int64) ([]asset_credential_svc.AssetUsage, error) {
