@@ -65,6 +65,24 @@ func (h *databaseHandler) ResolvePassword(ctx context.Context, a *asset_entity.A
 func (h *databaseHandler) DefaultPolicy() any { return asset_entity.DefaultQueryPolicy() }
 func (h *databaseHandler) PolicyKind() string { return policy.PolicyKindQuery }
 
+func (h *databaseHandler) AutomationUpdateContext(a *asset_entity.Asset, args map[string]any) (map[string]any, error) {
+	if _, ok := args["driver"]; ok {
+		return args, nil
+	}
+	if _, hasPassword := args["password"]; !hasPassword {
+		if _, hasReference := args["credential_id"]; !hasReference {
+			return args, nil
+		}
+	}
+	current, err := a.GetDatabaseConfig()
+	if err != nil {
+		return nil, err
+	}
+	out := cloneArgs(args)
+	out["driver"] = string(current.Driver)
+	return out, nil
+}
+
 func (h *databaseHandler) ValidateCreateArgs(args map[string]any) error {
 	driver := asset_entity.DatabaseDriver(ArgString(args, "driver"))
 	if driver == "" {

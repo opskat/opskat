@@ -6,6 +6,7 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/model/entity/ssh_agent_source_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/sshagent"
 	"go.uber.org/zap"
 )
 
@@ -25,6 +26,22 @@ type Observation struct {
 	IdentityCount int               `json:"identity_count"`
 	Usages        int64             `json:"usages"`
 	Identities    []IdentitySummary `json:"identities"`
+}
+
+var observeIdentities = func(ctx context.Context, endpointType, endpoint string) ([]IdentitySummary, error) {
+	ids, err := inspectIdentities(ctx, sshagent.Source{Type: sshagent.EndpointType(endpointType), Value: endpoint})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]IdentitySummary, 0, len(ids))
+	for _, ident := range ids {
+		result = append(result, IdentitySummary{
+			Fingerprint: ident.Fingerprint,
+			Type:        ident.Type,
+			Comment:     ident.Comment,
+		})
+	}
+	return result, nil
 }
 
 func metadataOf(src *ssh_agent_source_entity.SSHAgentSource) SourceMetadata {
@@ -75,28 +92,40 @@ func Observe(ctx context.Context, id int64) (Observation, error) {
 		return Observation{}, err
 	}
 
-	probe, err := Probe(ctx, source.EndpointType, source.Endpoint)
+	identities, err := observeIdentities(ctx, source.EndpointType, source.Endpoint)
+	if err != nil {
+		if code, ok := sshagent.CodeOf(err); ok {
+			switch code {
+			case sshagent.CodePlatformUnsupported:
+				return observedUnavailable(ctx, id, ProbeUnsupported, usages), nil
+			case sshagent.CodeEmpty:
+				return observedUnavailable(ctx, id, ProbeEmpty, usages), nil
+			case sshagent.CodeEnvUnset, sshagent.CodeEndpointUnavailable,
+				sshagent.CodeProtocolError, sshagent.CodePayloadInvalid, sshagent.CodeCancelled:
+				return observedUnavailable(ctx, id, ProbeUnavailable, usages), nil
+			}
+		}
+		logger.Ctx(ctx).Error("ssh agent source observation failed", zap.Int64("sourceID", id), zap.Error(err))
+		return Observation{}, err
+	}
+	perIdentity, err := asset_repo.Asset().CountAgentAuthBySourceIDGroupByFingerprint(ctx, id)
 	if err != nil {
 		logger.Ctx(ctx).Error("ssh agent source observation failed", zap.Int64("sourceID", id), zap.Error(err))
 		return Observation{}, err
 	}
-	result := Observation{Status: probe.Status, IdentityCount: probe.IdentityCount, Usages: usages, Identities: []IdentitySummary{}}
-	if probe.Status != ProbeOK {
-		logger.Ctx(ctx).Info("ssh agent source observation end", zap.Int64("sourceID", id), zap.String("availability", string(result.Status)), zap.Int64("usages", result.Usages))
-		return result, nil
+	for i := range identities {
+		identities[i].Usages = perIdentity[identities[i].Fingerprint]
 	}
-
-	inspection, err := Inspect(ctx, id)
-	if err != nil {
-		logger.Ctx(ctx).Error("ssh agent source observation failed", zap.Int64("sourceID", id), zap.Error(err))
-		return Observation{}, err
-	}
-	result.Usages = inspection.Usages
-	result.Identities = inspection.Identities
-	result.IdentityCount = len(inspection.Identities)
+	result := Observation{Status: ProbeOK, IdentityCount: len(identities), Usages: usages, Identities: identities}
 	if result.IdentityCount == 0 {
 		result.Status = ProbeEmpty
 	}
 	logger.Ctx(ctx).Info("ssh agent source observation end", zap.Int64("sourceID", id), zap.String("availability", string(result.Status)), zap.Int("identities", result.IdentityCount), zap.Int64("usages", result.Usages))
 	return result, nil
+}
+
+func observedUnavailable(ctx context.Context, id int64, status ProbeStatus, usages int64) Observation {
+	result := Observation{Status: status, Usages: usages, Identities: []IdentitySummary{}}
+	logger.Ctx(ctx).Info("ssh agent source observation end", zap.Int64("sourceID", id), zap.String("availability", string(status)), zap.Int64("usages", usages))
+	return result
 }

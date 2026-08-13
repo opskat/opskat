@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"runtime"
 	"testing"
 
 	"github.com/opskat/opskat/internal/model/entity/ssh_agent_source_entity"
@@ -12,6 +11,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/repository/ssh_agent_source_repo"
 	"github.com/opskat/opskat/internal/repository/ssh_agent_source_repo/mock_ssh_agent_source_repo"
+	"github.com/opskat/opskat/internal/sshagent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
@@ -49,14 +49,62 @@ func TestSourceMetadataNeverContainsEndpointValue(t *testing.T) {
 	assert.NotContains(t, string(encoded), "SECRET_AGENT_ENV")
 }
 
-func TestObserveDegradesExpectedRuntimeFailureButPropagatesUsageError(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix socket unavailable fixture is platform-specific")
-	}
+func TestObserveAvailableSourceInspectsIdentitiesOnlyOnce(t *testing.T) {
 	sourceRepo, assetRepo := registerQueryRepos(t)
-	source := &ssh_agent_source_entity.SSHAgentSource{ID: 4, Name: "offline", EndpointType: "unix_socket", Endpoint: "/tmp/definitely-not-an-agent-opskat"}
+	source := &ssh_agent_source_entity.SSHAgentSource{ID: 4, Name: "work", EndpointType: "test", Endpoint: "ignored"}
+	sourceRepo.EXPECT().Find(gomock.Any(), int64(4)).Return(source, nil).Times(1)
+	assetRepo.EXPECT().CountAgentAuthBySourceID(gomock.Any(), int64(4)).Return(int64(2), nil).Times(1)
+	assetRepo.EXPECT().CountAgentAuthBySourceIDGroupByFingerprint(gomock.Any(), int64(4)).Return(map[string]int64{}, nil).Times(1)
+
+	oldInspect := observeIdentities
+	observeIdentities = func(context.Context, string, string) ([]IdentitySummary, error) {
+		return []IdentitySummary{{Fingerprint: "SHA256:selected", Type: "ssh-ed25519", Comment: "safe comment"}}, nil
+	}
+	t.Cleanup(func() { observeIdentities = oldInspect })
+
+	observation, err := Observe(context.Background(), 4)
+	require.NoError(t, err)
+	assert.Equal(t, ProbeOK, observation.Status)
+	assert.Equal(t, int64(2), observation.Usages)
+	assert.Equal(t, []IdentitySummary{{Fingerprint: "SHA256:selected", Type: "ssh-ed25519", Comment: "safe comment"}}, observation.Identities)
+}
+
+func TestObserveAvailableSourceReturnsPerIdentityUsage(t *testing.T) {
+	sourceRepo, assetRepo := registerQueryRepos(t)
+	source := &ssh_agent_source_entity.SSHAgentSource{ID: 4, Name: "work", EndpointType: "test", Endpoint: "ignored"}
+	sourceRepo.EXPECT().Find(gomock.Any(), int64(4)).Return(source, nil)
+	assetRepo.EXPECT().CountAgentAuthBySourceID(gomock.Any(), int64(4)).Return(int64(3), nil)
+	assetRepo.EXPECT().CountAgentAuthBySourceIDGroupByFingerprint(gomock.Any(), int64(4)).Return(map[string]int64{
+		"SHA256:selected": 2,
+	}, nil)
+
+	oldInspect := observeIdentities
+	observeIdentities = func(context.Context, string, string) ([]IdentitySummary, error) {
+		return []IdentitySummary{
+			{Fingerprint: "SHA256:selected", Type: "ssh-ed25519", Comment: "selected"},
+			{Fingerprint: "SHA256:unused", Type: "ssh-rsa", Comment: "unused"},
+		}, nil
+	}
+	t.Cleanup(func() { observeIdentities = oldInspect })
+
+	observation, err := Observe(context.Background(), 4)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), observation.Usages)
+	assert.Equal(t, int64(2), observation.Identities[0].Usages)
+	assert.Zero(t, observation.Identities[1].Usages)
+}
+
+func TestObserveDegradesExpectedRuntimeFailureButPropagatesUsageError(t *testing.T) {
+	sourceRepo, assetRepo := registerQueryRepos(t)
+	source := &ssh_agent_source_entity.SSHAgentSource{ID: 4, Name: "offline", EndpointType: "test", Endpoint: "ignored"}
 	sourceRepo.EXPECT().Find(gomock.Any(), int64(4)).Return(source, nil)
 	assetRepo.EXPECT().CountAgentAuthBySourceID(gomock.Any(), int64(4)).Return(int64(2), nil)
+
+	oldInspect := observeIdentities
+	observeIdentities = func(context.Context, string, string) ([]IdentitySummary, error) {
+		return nil, &sshagent.Error{Code: sshagent.CodeEndpointUnavailable, Message: "agent unavailable"}
+	}
+	t.Cleanup(func() { observeIdentities = oldInspect })
 
 	observation, err := Observe(context.Background(), 4)
 	require.NoError(t, err)

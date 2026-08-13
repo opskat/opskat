@@ -43,6 +43,10 @@ type authenticationPreparer interface {
 	PrepareAutomationAuthentication(context.Context, map[string]any) (authType string, ref int64, applicable bool, err error)
 }
 
+type automationUpdateContextProvider interface {
+	AutomationUpdateContext(*asset_entity.Asset, map[string]any) (map[string]any, error)
+}
+
 // Result contains only the persisted asset identity and safe authentication reference.
 type Result struct {
 	Asset          *asset_entity.Asset `json:"-"`
@@ -74,7 +78,10 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 	if asset.ID == 0 {
 		preparedCreate, err = assettype.PrepareCreate(asset.Type, config)
 	} else {
-		preparedCreate, err = assettype.PrepareUpdate(asset.Type, config)
+		config, err = updateAutomationContext(&asset, config)
+		if err == nil {
+			preparedCreate, err = assettype.PrepareUpdate(asset.Type, config)
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -279,6 +286,18 @@ func cloneMap(args map[string]any) map[string]any {
 		}
 	}
 	return out
+}
+
+func updateAutomationContext(asset *asset_entity.Asset, config map[string]any) (map[string]any, error) {
+	handler, ok := assettype.Get(asset.Type)
+	if !ok {
+		return config, nil
+	}
+	provider, ok := handler.(automationUpdateContextProvider)
+	if !ok {
+		return config, nil
+	}
+	return provider.AutomationUpdateContext(asset, config)
 }
 
 func existingUsername(asset *asset_entity.Asset, field string) string {

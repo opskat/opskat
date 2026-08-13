@@ -373,6 +373,73 @@ func TestPutRejectsCredentialNameWithoutMaterialization(t *testing.T) {
 	assert.Equal(t, int64(1), credentialCount)
 }
 
+func TestPrepareSQLiteUpdateRejectsPasswordCredentialsWhenDriverIsOmitted(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		config func(*testing.T, *putTestEnv) map[string]any
+	}{
+		{
+			name: "plaintext",
+			config: func(*testing.T, *putTestEnv) map[string]any {
+				return map[string]any{"password": "not-applicable"}
+			},
+		},
+		{
+			name: "managed reference",
+			config: func(t *testing.T, env *putTestEnv) map[string]any {
+				credential := &credential_entity.Credential{Name: "shared", Type: credential_entity.TypePassword, Password: "ciphertext"}
+				require.NoError(t, credential_repo.Credential().Create(env.ctx, credential))
+				return map[string]any{"credential_id": float64(credential.ID)}
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env := setupPutTest(t)
+			asset := &asset_entity.Asset{Name: "local-db", Type: asset_entity.AssetTypeDatabase, Status: asset_entity.StatusActive}
+			require.NoError(t, asset.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+				Driver: asset_entity.DriverSQLite, SQLiteSource: asset_entity.SQLiteSourceLocal, Path: "/tmp/local.db",
+			}))
+			require.NoError(t, asset_repo.Asset().Create(env.ctx, asset))
+
+			enteredTransaction := false
+			ctx := dbutil.WithTransactionRunner(env.ctx, func(ctx context.Context, fn func(context.Context) error) error {
+				enteredTransaction = true
+				return fn(ctx)
+			})
+			candidate := *asset
+			_, err := Put(ctx, Request{Asset: &candidate, Config: tt.config(t, env)})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "not applicable")
+			assert.NotContains(t, err.Error(), "not-applicable")
+			assert.False(t, enteredTransaction, "SQLite credential rejection must happen before the write transaction")
+		})
+	}
+}
+
+func TestPutDatabaseUpdatePasswordRetainsExistingDriverContext(t *testing.T) {
+	env := setupPutTest(t)
+	asset := &asset_entity.Asset{Name: "postgres", Type: asset_entity.AssetTypeDatabase, Status: asset_entity.StatusActive}
+	require.NoError(t, asset.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+		Driver: asset_entity.DriverPostgreSQL, Host: "db.internal", Port: 5432, Username: "existing-user",
+	}))
+	require.NoError(t, asset_repo.Asset().Create(env.ctx, asset))
+
+	candidate := *asset
+	result, err := Put(env.ctx, Request{Asset: &candidate, Config: map[string]any{"password": "replacement-secret"}})
+	require.NoError(t, err)
+	require.NotNil(t, result.Authentication)
+	credential, err := credential_repo.Credential().Find(env.ctx, result.Authentication.Ref)
+	require.NoError(t, err)
+	assert.Equal(t, "existing-user", credential.Username)
+	stored, err := asset_repo.Asset().Find(env.ctx, asset.ID)
+	require.NoError(t, err)
+	config, err := stored.GetDatabaseConfig()
+	require.NoError(t, err)
+	assert.Equal(t, asset_entity.DriverPostgreSQL, config.Driver)
+	assert.Equal(t, result.Authentication.Ref, config.CredentialID)
+	assert.Empty(t, config.Password)
+}
+
 func TestPutUpdatePlaintextDefaultsCredentialMetadataFromExistingAsset(t *testing.T) {
 	env := setupPutTest(t)
 	asset := newRedisAsset("cache")
