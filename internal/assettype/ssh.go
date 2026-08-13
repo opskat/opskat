@@ -59,9 +59,45 @@ func (h *sshHandler) ValidateCreateArgs(args map[string]any) error {
 	return validateSSHAgentArgs(args)
 }
 
+func (h *sshHandler) ValidateAutomationConfig(args map[string]any) error {
+	return validateSSHAgentArgs(args)
+}
+
+// NormalizeAutomationConfig infers Agent auth from its dedicated identity pair
+// without exposing SSH rules to the shared dispatcher.
+func (h *sshHandler) NormalizeAutomationConfig(args map[string]any) error {
+	if ArgString(args, "auth_type") != "" {
+		return nil
+	}
+	sourceID := ArgInt64(args, "agent_source_id")
+	fingerprint := ArgString(args, "agent_key_fingerprint")
+	if sourceID == 0 && fingerprint == "" {
+		return nil
+	}
+	if sourceID <= 0 || fingerprint == "" {
+		return fmt.Errorf("SSH Agent authentication requires both agent_source_id and agent_key_fingerprint")
+	}
+	args["auth_type"] = asset_entity.AuthTypeAgent
+	return nil
+}
+
+// PrepareAutomationAuthentication validates persisted SSH Agent source references
+// during the side-effect-free prepare phase and describes their safe association.
+func (h *sshHandler) PrepareAutomationAuthentication(ctx context.Context, args map[string]any) (string, int64, bool, error) {
+	if ArgString(args, "auth_type") != asset_entity.AuthTypeAgent {
+		return "", 0, false, nil
+	}
+	sourceID := ArgInt64(args, "agent_source_id")
+	if err := ssh_agent_svc.RequireSourceExists(ctx, sourceID); err != nil {
+		return "", 0, false, err
+	}
+	return "ssh_agent", sourceID, true, nil
+}
+
 // validateSSHAgentArgs 校验 AI 工具创建/更新 SSH 资产时的 Agent 参数（不触库）：
 // auth_type=agent 必须带正数来源 ID 与规范指纹，且与密码/私钥/口令互斥；非 Agent
-// 认证方式不得携带 Agent 来源字段。来源存在性（引用完整性）在 Apply*Args 里查库。
+// 认证方式不得携带 Agent 来源字段。来源存在性由共享 Prepare 边界校验，Apply*Args
+// 仍兜底直接 handler 调用。
 func validateSSHAgentArgs(args map[string]any) error {
 	authType := ArgString(args, "auth_type")
 	if authType == "" {
@@ -93,9 +129,9 @@ func (h *sshHandler) ApplyCreateArgs(ctx context.Context, a *asset_entity.Asset,
 	privateKey := ArgString(args, "private_key")
 	if authType == "" {
 		if privateKey != "" {
-			authType = "key"
+			authType = asset_entity.AuthTypeKey
 		} else {
-			authType = "password"
+			authType = asset_entity.AuthTypePassword
 		}
 	}
 
@@ -108,16 +144,12 @@ func (h *sshHandler) ApplyCreateArgs(ctx context.Context, a *asset_entity.Asset,
 	}
 
 	if authType == asset_entity.AuthTypeAgent {
-		// Agent 模式：仅保存来源 + 规范指纹，绝不落密码/密钥材料。结构校验（来源 ID/
-		// 指纹/与凭据材料互斥）由边界 ValidateCreateArgs 与实体 validateSSHAgentContract
-		// 权威负责，ApplyCreateArgs 只做引用完整性（查库）与字段赋值，不重复结构校验。
 		sourceID := ArgInt64(args, "agent_source_id")
-		fp := ArgString(args, "agent_key_fingerprint")
 		if err := ssh_agent_svc.RequireSourceExists(ctx, sourceID); err != nil {
 			return err
 		}
 		cfg.AgentSourceID = sourceID
-		cfg.AgentKeyFingerprint = fp
+		cfg.AgentKeyFingerprint = ArgString(args, "agent_key_fingerprint")
 	} else if privateKey != "" {
 		credName := a.Name
 		if credName == "" {
@@ -156,6 +188,8 @@ func (h *sshHandler) ApplyUpdateArgs(ctx context.Context, a *asset_entity.Asset,
 	if _, ok := args["credential_id"]; ok {
 		cfg.CredentialID = ArgInt64(args, "credential_id")
 		cfg.Password = ""
+		cfg.PrivateKeys = nil
+		cfg.PrivateKeyPassphrase = ""
 	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)
@@ -163,8 +197,10 @@ func (h *sshHandler) ApplyUpdateArgs(ctx context.Context, a *asset_entity.Asset,
 			return fmt.Errorf("encrypt SSH password: %w", err)
 		}
 		cfg.Password = encrypted
-		cfg.CredentialID = 0 // 切换为内联密码，与原先关联的统一凭证解绑
-		cfg.AuthType = "password"
+		cfg.CredentialID = 0 // legacy direct handler writes remain inline for compatibility
+		cfg.PrivateKeys = nil
+		cfg.PrivateKeyPassphrase = ""
+		cfg.AuthType = asset_entity.AuthTypePassword
 	}
 	if privateKey := ArgString(args, "private_key"); privateKey != "" {
 		credName := a.Name
@@ -177,7 +213,9 @@ func (h *sshHandler) ApplyUpdateArgs(ctx context.Context, a *asset_entity.Asset,
 		}
 		cfg.CredentialID = cred.ID
 		cfg.Password = ""
-		cfg.AuthType = "key"
+		cfg.PrivateKeys = nil
+		cfg.PrivateKeyPassphrase = ""
+		cfg.AuthType = asset_entity.AuthTypeKey
 	}
 
 	authType := ArgString(args, "auth_type")

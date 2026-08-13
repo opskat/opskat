@@ -31,6 +31,18 @@ type AuthenticationRef struct {
 	Ref  int64  `json:"ref"`
 }
 
+type automationNormalizer interface {
+	NormalizeAutomationConfig(map[string]any) error
+}
+
+type automationValidator interface {
+	ValidateAutomationConfig(map[string]any) error
+}
+
+type authenticationPreparer interface {
+	PrepareAutomationAuthentication(context.Context, map[string]any) (authType string, ref int64, applicable bool, err error)
+}
+
 // Result contains only the persisted asset identity and safe authentication reference.
 type Result struct {
 	Asset          *asset_entity.Asset `json:"-"`
@@ -47,6 +59,7 @@ type Prepared struct {
 	credential     assettype.CredentialPlan
 	credentialName string
 	referencedType string
+	authentication *AuthenticationRef
 }
 
 // Prepare validates and normalizes a request without mutating caller data or writing rows.
@@ -65,6 +78,16 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if normalizer, ok := preparedCreate.Handler.(automationNormalizer); ok {
+		if err := normalizer.NormalizeAutomationConfig(preparedCreate.Config); err != nil {
+			return nil, err
+		}
+	}
+	if validator, ok := preparedCreate.Handler.(automationValidator); ok {
+		if err := validator.ValidateAutomationConfig(preparedCreate.Config); err != nil {
+			return nil, err
+		}
 	}
 	if asset.ID > 0 && preparedCreate.Credential.Kind == assettype.CredentialKindPassword && preparedCreate.Credential.Username == "" {
 		preparedCreate.Credential.Username = existingUsername(&asset, preparedCreate.Credential.UsernameField)
@@ -85,6 +108,16 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 		}
 		referencedType = cred.Type
 	}
+	var authentication *AuthenticationRef
+	if authPreparer, ok := preparedCreate.Handler.(authenticationPreparer); ok {
+		authType, ref, applicable, err := authPreparer.PrepareAutomationAuthentication(ctx, preparedCreate.Config)
+		if err != nil {
+			return nil, err
+		}
+		if applicable {
+			authentication = &AuthenticationRef{Type: authType, Ref: ref}
+		}
+	}
 
 	return &Prepared{
 		asset:          &asset,
@@ -94,6 +127,7 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 		credential:     preparedCreate.Credential,
 		credentialName: credentialName,
 		referencedType: referencedType,
+		authentication: authentication,
 	}, nil
 }
 
@@ -169,6 +203,8 @@ func (p *Prepared) SafeAuditArgs() map[string]any {
 	}
 	if p.credential.Kind == assettype.CredentialKindReference {
 		out["authentication"] = AuthenticationRef{Type: p.referencedType, Ref: p.credential.ReferenceID}
+	} else if p.authentication != nil {
+		out["authentication"] = *p.authentication
 	}
 	return out
 }
@@ -176,7 +212,7 @@ func (p *Prepared) SafeAuditArgs() map[string]any {
 func (p *Prepared) materialize(ctx context.Context) (map[string]any, *AuthenticationRef, error) {
 	switch p.credential.Kind {
 	case assettype.CredentialKindNone:
-		return cloneMap(p.config), nil, nil
+		return cloneMap(p.config), p.authentication, nil
 	case assettype.CredentialKindReference:
 		cred, err := credential_mgr_svc.RequireType(ctx, p.credential.ReferenceID, p.credential.AcceptedTypes)
 		if err != nil {
@@ -194,10 +230,11 @@ func (p *Prepared) materialize(ctx context.Context) (map[string]any, *Authentica
 		}
 		return p.bind(cred)
 	case assettype.CredentialKindSSHKey:
-		// Task 3 moves this legacy handler-owned import behind the shared materializer.
-		// Keep the established SSH behavior working until then; dbutil still makes the
-		// handler's credential write atomic with the asset write.
-		return cloneMap(p.config), nil, nil
+		cred, err := credential_mgr_svc.ImportSSHKeyFromPEM(ctx, p.credentialName, "", p.credential.PrivateKey, p.credential.Passphrase, p.credential.Username)
+		if err != nil {
+			return nil, nil, fmt.Errorf("import managed SSH key credential: %w", err)
+		}
+		return p.bind(cred)
 	default:
 		return nil, nil, fmt.Errorf("unsupported credential materialization kind %q", p.credential.Kind)
 	}

@@ -535,6 +535,76 @@ func TestHandlePutAsset_CreateThenUpdate(t *testing.T) {
 	_ = out
 }
 
+func TestHandlePutAsset_SSHAuthenticationSwitchesRemainManagedAndSafe(t *testing.T) {
+	gdb, err := gorm.Open(sqlite.Open("file:tool_put_ssh_switch?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, gdb.AutoMigrate(&asset_entity.Asset{}, &credential_entity.Credential{}, &ssh_agent_source_entity.SSHAgentSource{}))
+	db.SetDefault(gdb)
+	origAsset := asset_repo.Asset()
+	origCredential := credential_repo.Credential()
+	origAgentSource := ssh_agent_source_repo.SSHAgentSource()
+	asset_repo.RegisterAsset(asset_repo.NewAsset())
+	credential_repo.RegisterCredential(credential_repo.NewCredential())
+	ssh_agent_source_repo.RegisterSSHAgentSource(ssh_agent_source_repo.New())
+	credential_svc.SetDefault(credential_svc.New("tool-put-master-key", []byte("tool-put-salt-16")))
+	t.Cleanup(func() {
+		asset_repo.RegisterAsset(origAsset)
+		credential_repo.RegisterCredential(origCredential)
+		ssh_agent_source_repo.RegisterSSHAgentSource(origAgentSource)
+		sqlDB, sqlErr := gdb.DB()
+		if sqlErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	password := "ai-password-must-not-leak"
+	created, err := handlePutAsset(context.Background(), map[string]any{
+		"name": "ssh-switch", "type": "ssh",
+		"config": map[string]any{"host": "ssh.internal", "username": "root", "password": password},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, created, password)
+	assert.Contains(t, created, `"authentication":{"type":"password","ref":`)
+
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	block, err := gossh.MarshalPrivateKey(privateKey, "ai-key")
+	require.NoError(t, err)
+	privateKeyPEM := string(pem.EncodeToMemory(block))
+	updated, err := handlePutAsset(context.Background(), map[string]any{
+		"asset": "ssh-switch", "credential_name": "managed-ai-key",
+		"config": map[string]any{"private_key": privateKeyPEM},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, updated, privateKeyPEM)
+	assert.Contains(t, updated, `"authentication":{"type":"ssh_key","ref":`)
+
+	source := &ssh_agent_source_entity.SSHAgentSource{Name: "offline", EndpointType: "unix", Endpoint: "/offline.sock", Createtime: 1, Updatetime: 1}
+	require.NoError(t, ssh_agent_source_repo.SSHAgentSource().Create(context.Background(), source))
+	agentUpdated, err := handlePutAsset(context.Background(), map[string]any{
+		"asset": "ssh-switch",
+		"config": map[string]any{
+			"auth_type": "agent", "agent_source_id": float64(source.ID),
+			"agent_key_fingerprint": validAgentFingerprintForTest(),
+		},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, agentUpdated, fmt.Sprintf(`"authentication":{"type":"ssh_agent","ref":%d}`, source.ID))
+	assert.NotContains(t, agentUpdated, password)
+	assert.NotContains(t, agentUpdated, privateKeyPEM)
+
+	var credentialCount int64
+	require.NoError(t, gdb.Model(&credential_entity.Credential{}).Count(&credentialCount).Error)
+	assert.Equal(t, int64(2), credentialCount, "AI replacement must retain the old managed password and key credentials")
+	stored, err := asset_repo.Asset().Find(context.Background(), 1)
+	require.NoError(t, err)
+	cfg, err := stored.GetSSHConfig()
+	require.NoError(t, err)
+	assert.Equal(t, asset_entity.AuthTypeAgent, cfg.AuthType)
+	assert.Zero(t, cfg.CredentialID)
+	assert.Empty(t, cfg.Password)
+}
+
 func TestHandlePutAsset_PreservesExistingSSHPrivateKeyBehavior(t *testing.T) {
 	gdb, err := gorm.Open(sqlite.Open("file:tool_put_ssh_key?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
