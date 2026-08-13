@@ -21,17 +21,19 @@ func crudTools() []tool.Tool {
 				"The per-type shape of `config` is documented by help — pass the asset id/name to look up an existing " +
 				"asset's type, or pass the type name itself (e.g. help(asset=\"rdp\")) when no asset of that type " +
 				"exists yet (supported types: " + strings.Join(permission.RegisteredHelpTypes(), ", ") + "). " +
-				"Credentials inside config (password / private_key) are stored encrypted; never echo them back to the user.",
+				"Plaintext password and OSS secret_access_key fields are write-only and become managed credentials; " +
+				"never echo them back to the user. Existing credential_id references are type-checked before persistence.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
-					"asset":       {Type: "string", Description: "Existing asset id or name to update. Omit to create a new asset."},
-					"name":        {Type: "string", Description: "Display name. Required when creating."},
-					"type":        {Type: "string", Description: `Asset type when creating (defaults to "ssh"). When updating, this is an assertion — the type of an existing asset cannot be changed.`},
-					"group_id":    {Type: "number", Description: "Group ID to assign this asset to. Values <= 0 are ignored."},
-					"description": {Type: "string", Description: "Description or notes. Empty string clears it."},
-					"icon":        {Type: "string", Description: "Icon name."},
-					"config":      {Type: "object", Description: "Type-specific connection fields (host, port, username, credentials, …). Call help(asset) for the exact field list of a given type."},
+					"asset":           {Type: "string", Description: "Existing asset id or name to update. Omit to create a new asset."},
+					"name":            {Type: "string", Description: "Display name. Required when creating."},
+					"type":            {Type: "string", Description: `Asset type when creating (defaults to "ssh"). When updating, this is an assertion — the type of an existing asset cannot be changed.`},
+					"group_id":        {Type: "number", Description: "Group ID to assign this asset to. Values <= 0 are ignored."},
+					"description":     {Type: "string", Description: "Description or notes. Empty string clears it."},
+					"icon":            {Type: "string", Description: "Icon name."},
+					"credential_name": {Type: "string", Description: "Name for a managed credential created from plaintext. Defaults to the final asset name; invalid with credential_id."},
+					"config":          {Type: "object", Description: "Type-specific connection fields (host, port, username, credentials, …). Plaintext credential fields are write-only. Call help(asset) for the exact field list of a given type."},
 				},
 			},
 			IsSerial: true,

@@ -153,6 +153,10 @@ func (h *sshHandler) ApplyUpdateArgs(ctx context.Context, a *asset_entity.Asset,
 	if v := ArgString(args, "username"); v != "" {
 		cfg.Username = v
 	}
+	if _, ok := args["credential_id"]; ok {
+		cfg.CredentialID = ArgInt64(args, "credential_id")
+		cfg.Password = ""
+	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)
 		if err != nil {

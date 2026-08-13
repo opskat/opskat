@@ -7,7 +7,11 @@ import (
 	"testing"
 
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
 
 	"github.com/cago-frame/cago/database/db"
 	"github.com/glebarez/sqlite"
@@ -17,15 +21,19 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
+	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/model/entity/ssh_agent_source_entity"
 	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
+	"github.com/opskat/opskat/internal/repository/credential_repo"
 	"github.com/opskat/opskat/internal/repository/group_repo"
 	"github.com/opskat/opskat/internal/repository/ssh_agent_source_repo"
+	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 // fakeAssetRepo is a minimal in-memory AssetRepo for the CRUD tests below.
@@ -405,6 +413,95 @@ func (e *crudTestEnv) validOSSConfig() map[string]any {
 }
 
 // 有 asset → 更新；无 asset → 创建。同一个工具，分支只由标识的有无决定。
+func TestHandlePutAsset_ManagedPasswordUsesSharedAtomicBoundary(t *testing.T) {
+	gdb, err := gorm.Open(sqlite.Open("file:tool_put_managed?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, gdb.AutoMigrate(&asset_entity.Asset{}, &credential_entity.Credential{}))
+	db.SetDefault(gdb)
+	origAsset := asset_repo.Asset()
+	origCredential := credential_repo.Credential()
+	asset_repo.RegisterAsset(asset_repo.NewAsset())
+	credential_repo.RegisterCredential(credential_repo.NewCredential())
+	credential_svc.SetDefault(credential_svc.New("tool-put-master-key", []byte("tool-put-salt-16")))
+	t.Cleanup(func() {
+		asset_repo.RegisterAsset(origAsset)
+		credential_repo.RegisterCredential(origCredential)
+		sqlDB, sqlErr := gdb.DB()
+		if sqlErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	secret := "ai-plaintext-must-not-leak"
+	out, err := handlePutAsset(context.Background(), map[string]any{
+		"name": "cache-prod", "type": "redis", "credential_name": "managed-cache-login",
+		"config": map[string]any{"host": "redis.internal", "username": "default", "password": secret},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, out, secret)
+	assert.Contains(t, out, `"authentication":{"type":"password","ref":`)
+
+	var result struct {
+		ID             int64 `json:"id"`
+		Authentication struct {
+			Type string `json:"type"`
+			Ref  int64  `json:"ref"`
+		} `json:"authentication"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	assert.Positive(t, result.ID)
+	assert.Equal(t, credential_entity.TypePassword, result.Authentication.Type)
+
+	cred, err := credential_repo.Credential().Find(context.Background(), result.Authentication.Ref)
+	require.NoError(t, err)
+	assert.Equal(t, "managed-cache-login", cred.Name)
+	assert.Equal(t, "default", cred.Username)
+	plaintext, err := credential_svc.Default().Decrypt(cred.Password)
+	require.NoError(t, err)
+	assert.Equal(t, secret, plaintext)
+
+	asset, err := asset_repo.Asset().Find(context.Background(), result.ID)
+	require.NoError(t, err)
+	cfg, err := asset.GetRedisConfig()
+	require.NoError(t, err)
+	assert.Equal(t, cred.ID, cfg.CredentialID)
+	assert.Empty(t, cfg.Password)
+}
+
+func TestHandlePutAsset_ManagedCredentialInputFailuresLeaveNoAsset(t *testing.T) {
+	gdb, err := gorm.Open(sqlite.Open("file:tool_put_invalid_managed?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, gdb.AutoMigrate(&asset_entity.Asset{}, &credential_entity.Credential{}))
+	db.SetDefault(gdb)
+	origAsset := asset_repo.Asset()
+	origCredential := credential_repo.Credential()
+	asset_repo.RegisterAsset(asset_repo.NewAsset())
+	credential_repo.RegisterCredential(credential_repo.NewCredential())
+	credential_svc.SetDefault(credential_svc.New("tool-put-master-key", []byte("tool-put-salt-16")))
+	t.Cleanup(func() {
+		asset_repo.RegisterAsset(origAsset)
+		credential_repo.RegisterCredential(origCredential)
+		sqlDB, sqlErr := gdb.DB()
+		if sqlErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	key := &credential_entity.Credential{Name: "wrong-kind", Type: credential_entity.TypeSSHKey, PrivateKey: "ciphertext", PublicKey: "ssh-ed25519 AAAA", KeyType: credential_entity.KeyTypeED25519}
+	require.NoError(t, credential_repo.Credential().Create(context.Background(), key))
+
+	for _, config := range []map[string]any{
+		{"host": "redis.internal", "username": "default", "credential_id": float64(key.ID)},
+		{"host": "redis.internal", "username": "default", "credential_id": float64(key.ID), "password": "conflicting-secret"},
+	} {
+		_, err := handlePutAsset(context.Background(), map[string]any{"name": "invalid", "type": "redis", "config": config})
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "conflicting-secret")
+	}
+	var count int64
+	require.NoError(t, gdb.Model(&asset_entity.Asset{}).Count(&count).Error)
+	assert.Zero(t, count)
+}
+
 func TestHandlePutAsset_CreateThenUpdate(t *testing.T) {
 	env := setupCRUD(t)
 
@@ -436,6 +533,47 @@ func TestHandlePutAsset_CreateThenUpdate(t *testing.T) {
 		t.Errorf("username = %q, want %q", got, "deploy")
 	}
 	_ = out
+}
+
+func TestHandlePutAsset_PreservesExistingSSHPrivateKeyBehavior(t *testing.T) {
+	gdb, err := gorm.Open(sqlite.Open("file:tool_put_ssh_key?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, gdb.AutoMigrate(&asset_entity.Asset{}, &credential_entity.Credential{}))
+	db.SetDefault(gdb)
+	origAsset := asset_repo.Asset()
+	origCredential := credential_repo.Credential()
+	asset_repo.RegisterAsset(asset_repo.NewAsset())
+	credential_repo.RegisterCredential(credential_repo.NewCredential())
+	credential_svc.SetDefault(credential_svc.New("tool-put-master-key", []byte("tool-put-salt-16")))
+	t.Cleanup(func() {
+		asset_repo.RegisterAsset(origAsset)
+		credential_repo.RegisterCredential(origCredential)
+		sqlDB, sqlErr := gdb.DB()
+		if sqlErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	block, err := gossh.MarshalPrivateKey(privateKey, "ai-key")
+	require.NoError(t, err)
+	privateKeyPEM := string(pem.EncodeToMemory(block))
+
+	out, err := handlePutAsset(context.Background(), map[string]any{
+		"name": "ssh-key-box", "type": "ssh",
+		"config": map[string]any{"host": "ssh.internal", "username": "root", "private_key": privateKeyPEM},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, out, privateKeyPEM)
+	var credentialCount int64
+	require.NoError(t, gdb.Model(&credential_entity.Credential{}).Count(&credentialCount).Error)
+	assert.Equal(t, int64(1), credentialCount)
+	var asset asset_entity.Asset
+	require.NoError(t, gdb.First(&asset).Error)
+	cfg, err := asset.GetSSHConfig()
+	require.NoError(t, err)
+	assert.Equal(t, asset_entity.AuthTypeKey, cfg.AuthType)
+	assert.Positive(t, cfg.CredentialID)
 }
 
 // config 是自由对象，校验回到 assettype.ValidateCreateArgs——不是回到工具 schema。

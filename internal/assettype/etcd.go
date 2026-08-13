@@ -125,6 +125,10 @@ func (h *etcdHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, 
 	if _, ok := args["ssh_asset_id"]; ok {
 		a.SSHTunnelID = ArgInt64(args, "ssh_asset_id")
 	}
+	if _, ok := args["credential_id"]; ok {
+		cfg.CredentialID = ArgInt64(args, "credential_id")
+		cfg.Password = ""
+	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)
 		if err != nil {

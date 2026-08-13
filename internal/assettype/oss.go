@@ -104,6 +104,7 @@ func (h *ossHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, a
 	}
 	if _, ok := args["credential_id"]; ok {
 		cfg.CredentialID = ArgInt64(args, "credential_id")
+		cfg.SecretAccessKey = ""
 	}
 	if secret := ArgString(args, "secret_access_key"); secret != "" {
 		encrypted, err := credential_svc.Default().Encrypt(secret)

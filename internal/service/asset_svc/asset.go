@@ -23,6 +23,8 @@ type AssetSvc interface {
 	List(ctx context.Context, assetType string, groupID int64) ([]*asset_entity.Asset, error)
 	Create(ctx context.Context, asset *asset_entity.Asset) error
 	Update(ctx context.Context, asset *asset_entity.Asset) error
+	UpdateWithinTransaction(ctx context.Context, asset *asset_entity.Asset) error
+	Invalidate(ctx context.Context, id int64)
 	Delete(ctx context.Context, id int64) error
 	DeleteByGroup(ctx context.Context, groupID int64) ([]*asset_entity.Asset, error)
 	MoveFromGroup(ctx context.Context, groupID int64) error
@@ -77,19 +79,29 @@ func (s *assetSvc) Create(ctx context.Context, asset *asset_entity.Asset) error 
 }
 
 func (s *assetSvc) Update(ctx context.Context, asset *asset_entity.Asset) error {
+	if err := s.UpdateWithinTransaction(ctx, asset); err != nil {
+		return err
+	}
+	s.Invalidate(ctx, asset.ID)
+	return nil
+}
+
+// UpdateWithinTransaction persists an update without invalidating connections before
+// an outer transaction commits. Callers must invoke Invalidate after successful commit.
+func (s *assetSvc) UpdateWithinTransaction(ctx context.Context, asset *asset_entity.Asset) error {
 	if err := asset.Validate(); err != nil {
 		return err
 	}
 	asset.Updatetime = time.Now().Unix()
-	if err := asset_repo.Asset().Update(ctx, asset); err != nil {
-		return err
-	}
+	return asset_repo.Asset().Update(ctx, asset)
+}
+
+// Invalidate drops cached connections after a successful asset update commit.
+func (s *assetSvc) Invalidate(ctx context.Context, id int64) {
 	// 连接配置可能变了（主机、端口、口令、隧道），缓存/池化的连接是按旧配置拨出去的，
-	// 不丢掉的话下一次操作照旧复用它，用户会觉得"改了没生效"。放在写库成功之后：
-	// 失败时配置没落库，缓存里的连接仍然是对的。
-	// 只失效不关会话——用户开着的终端不该因为改了个字段被掐断。
-	assetconn.InvalidateAsset(ctx, asset.ID)
-	return nil
+	// 不丢掉的话下一次操作照旧复用它，用户会觉得"改了没生效"。只失效不关会话——
+	// 用户开着的终端不该因为改了个字段被掐断。
+	assetconn.InvalidateAsset(ctx, id)
 }
 
 func (s *assetSvc) Delete(ctx context.Context, id int64) error {

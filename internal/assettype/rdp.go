@@ -111,6 +111,10 @@ func (h *rdpHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, a
 	if _, ok := args["clipboard"]; ok {
 		cfg.Clipboard = ArgBool(args, "clipboard")
 	}
+	if _, ok := args["credential_id"]; ok {
+		cfg.CredentialID = ArgInt64(args, "credential_id")
+		cfg.Password = ""
+	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)
 		if err != nil {

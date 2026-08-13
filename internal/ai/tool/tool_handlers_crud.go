@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/repository/group_repo"
+	"github.com/opskat/opskat/internal/service/asset_put_svc"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/group_svc"
 )
@@ -67,13 +69,9 @@ func createAsset(ctx context.Context, args, config map[string]any) (string, erro
 	if assetType == "" {
 		assetType = asset_entity.AssetTypeSSH
 	}
-	h, ok := assettype.Get(assetType)
-	if !ok {
+	if _, ok := assettype.Get(assetType); !ok {
 		return "", fmt.Errorf("unsupported asset type %q; supported: %s",
 			assetType, strings.Join(permission.RegisteredHelpTypes(), ", "))
-	}
-	if err := h.ValidateCreateArgs(config); err != nil {
-		return "", err
 	}
 
 	asset := &asset_entity.Asset{
@@ -83,14 +81,29 @@ func createAsset(ctx context.Context, args, config map[string]any) (string, erro
 		GroupID:     aictx.ArgInt64(args, "group_id"),
 		Description: aictx.ArgString(args, "description"),
 	}
-	if err := h.ApplyCreateArgs(ctx, asset, config); err != nil {
-		return "", err
-	}
-	if err := asset_svc.Asset().Create(ctx, asset); err != nil {
+	result, err := asset_put_svc.Put(ctx, asset_put_svc.Request{
+		Asset:          asset,
+		Config:         config,
+		CredentialName: aictx.ArgString(args, "credential_name"),
+	})
+	if err != nil {
 		return "", fmt.Errorf("failed to create asset: %w", err)
 	}
 	aictx.NotifyDataChanged("asset")
-	return fmt.Sprintf(`{"id":%d,"message":"asset created successfully"}`, asset.ID), nil
+	return putAssetResultJSON(result, "asset created successfully")
+}
+
+func putAssetResultJSON(result *asset_put_svc.Result, message string) (string, error) {
+	payload := struct {
+		ID             int64                            `json:"id"`
+		Authentication *asset_put_svc.AuthenticationRef `json:"authentication,omitempty"`
+		Message        string                           `json:"message"`
+	}{ID: result.ID, Authentication: result.Authentication, Message: message}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("encode asset result: %w", err)
+	}
+	return string(encoded), nil
 }
 
 func updateAsset(ctx context.Context, ref string, args, config map[string]any) (string, error) {
@@ -120,16 +133,16 @@ func updateAsset(ctx context.Context, ref string, args, config map[string]any) (
 		asset.Icon = icon
 	}
 
-	if h, ok := assettype.Get(asset.Type); ok {
-		if err := h.ApplyUpdateArgs(ctx, asset, config); err != nil {
-			return "", fmt.Errorf("apply update args failed: %w", err)
-		}
-	}
-	if err := asset_svc.Asset().Update(ctx, asset); err != nil {
+	result, err := asset_put_svc.Put(ctx, asset_put_svc.Request{
+		Asset:          asset,
+		Config:         config,
+		CredentialName: aictx.ArgString(args, "credential_name"),
+	})
+	if err != nil {
 		return "", fmt.Errorf("failed to update asset: %w", err)
 	}
 	aictx.NotifyDataChanged("asset")
-	return fmt.Sprintf(`{"id":%d,"message":"asset updated successfully"}`, asset.ID), nil
+	return putAssetResultJSON(result, "asset updated successfully")
 }
 
 // handlePutGroup 创建或更新分组：带 id → 更新，不带 → 创建。

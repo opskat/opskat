@@ -36,6 +36,7 @@ type CredentialPlan struct {
 	PrivateKey    string
 	Passphrase    string
 	Username      string
+	UsernameField string
 }
 
 type CredentialBinding struct {
@@ -73,40 +74,56 @@ func newAutomationContract(configFields, approvalFields []string, normalize func
 }
 
 func PrepareCreate(assetType string, args map[string]any) (PreparedCreate, error) {
+	prepared, contract, err := prepareAutomation(assetType, args)
+	if err != nil {
+		return PreparedCreate{}, err
+	}
+	if contract.Normalize != nil {
+		if err := contract.Normalize(prepared.Config); err != nil {
+			return PreparedCreate{}, err
+		}
+	}
+	if err := prepared.Handler.ValidateCreateArgs(prepared.Config); err != nil {
+		return PreparedCreate{}, err
+	}
+	prepared.Approval = approvalView(prepared.Config, contract.ApprovalFields)
+	prepared.Credential, err = credentialPlan(contract, prepared.Config)
+	return prepared, err
+}
+
+// PrepareUpdate validates a partial update through the same type-owned field and
+// credential declarations without applying create-only defaults or required fields.
+func PrepareUpdate(assetType string, args map[string]any) (PreparedCreate, error) {
+	prepared, contract, err := prepareAutomation(assetType, args)
+	if err != nil {
+		return PreparedCreate{}, err
+	}
+	prepared.Approval = approvalView(prepared.Config, contract.ApprovalFields)
+	prepared.Credential, err = credentialPlan(contract, prepared.Config)
+	return prepared, err
+}
+
+func prepareAutomation(assetType string, args map[string]any) (PreparedCreate, AutomationContract, error) {
 	h, ok := Get(assetType)
 	if !ok {
-		return PreparedCreate{}, fmt.Errorf("unsupported asset type %q (registered types: %s)", assetType, joinRegisteredTypes())
+		return PreparedCreate{}, AutomationContract{}, fmt.Errorf("unsupported asset type %q (registered types: %s)", assetType, joinRegisteredTypes())
 	}
 	contract := h.AutomationContract()
 	if len(contract.ConfigFields) == 0 {
-		return PreparedCreate{}, fmt.Errorf("asset type %q has no automation config contract", assetType)
+		return PreparedCreate{}, AutomationContract{}, fmt.Errorf("asset type %q has no automation config contract", assetType)
 	}
 	config := cloneArgs(args)
 	if err := rejectUnknownFields(config, contract.ConfigFields); err != nil {
-		return PreparedCreate{}, fmt.Errorf("invalid %s config: %w", assetType, err)
+		return PreparedCreate{}, AutomationContract{}, fmt.Errorf("invalid %s config: %w", assetType, err)
 	}
-	if contract.Normalize != nil {
-		if err := contract.Normalize(config); err != nil {
-			return PreparedCreate{}, err
-		}
+	return PreparedCreate{Handler: h, Config: config}, contract, nil
+}
+
+func credentialPlan(contract AutomationContract, config map[string]any) (CredentialPlan, error) {
+	if contract.CredentialPlan == nil {
+		return CredentialPlan{Kind: CredentialKindNone}, nil
 	}
-	if err := h.ValidateCreateArgs(config); err != nil {
-		return PreparedCreate{}, err
-	}
-	plan := CredentialPlan{Kind: CredentialKindNone}
-	if contract.CredentialPlan != nil {
-		var err error
-		plan, err = contract.CredentialPlan(config)
-		if err != nil {
-			return PreparedCreate{}, err
-		}
-	}
-	return PreparedCreate{
-		Handler:    h,
-		Config:     config,
-		Approval:   approvalView(config, contract.ApprovalFields),
-		Credential: plan,
-	}, nil
+	return contract.CredentialPlan(config)
 }
 
 func RegisteredTypes() []string {
@@ -181,6 +198,9 @@ func joinRegisteredTypes() string {
 
 func passwordCredentialPlan(args map[string]any, plaintextField, usernameField string) (CredentialPlan, error) {
 	credentialID := ArgInt64(args, "credential_id")
+	if _, supplied := args["credential_id"]; supplied && credentialID <= 0 {
+		return CredentialPlan{}, fmt.Errorf("credential_id must be a positive integer")
+	}
 	plaintext := ArgString(args, plaintextField)
 	if credentialID > 0 && plaintext != "" {
 		return CredentialPlan{}, fmt.Errorf("credential_id and %s are mutually exclusive", plaintextField)
@@ -196,9 +216,10 @@ func passwordCredentialPlan(args map[string]any, plaintextField, usernameField s
 		return CredentialPlan{Kind: CredentialKindNone}, nil
 	}
 	return CredentialPlan{
-		Kind:      CredentialKindPassword,
-		Plaintext: plaintext,
-		Username:  ArgString(args, usernameField),
+		Kind:          CredentialKindPassword,
+		Plaintext:     plaintext,
+		Username:      ArgString(args, usernameField),
+		UsernameField: usernameField,
 	}, nil
 }
 

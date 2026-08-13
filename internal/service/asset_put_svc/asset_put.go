@@ -1,0 +1,247 @@
+// Package asset_put_svc owns the shared automation boundary for atomic asset and
+// managed-credential writes.
+package asset_put_svc
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
+
+	"github.com/opskat/opskat/internal/assettype"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/credential_entity"
+	"github.com/opskat/opskat/internal/pkg/dbutil"
+	"github.com/opskat/opskat/internal/service/asset_svc"
+	"github.com/opskat/opskat/internal/service/credential_mgr_svc"
+)
+
+// Request contains one create or update operation. Asset.ID == 0 creates;
+// Asset.ID > 0 updates. CredentialName applies only to plaintext materialization.
+type Request struct {
+	Asset          *asset_entity.Asset
+	Config         map[string]any
+	CredentialName string
+}
+
+// AuthenticationRef is the stable, non-secret association returned to callers.
+type AuthenticationRef struct {
+	Type string `json:"type"`
+	Ref  int64  `json:"ref"`
+}
+
+// Result contains only the persisted asset identity and safe authentication reference.
+type Result struct {
+	Asset          *asset_entity.Asset `json:"-"`
+	ID             int64               `json:"id"`
+	Authentication *AuthenticationRef  `json:"authentication,omitempty"`
+}
+
+// Prepared is a side-effect-free operation ready for approval and commit.
+type Prepared struct {
+	asset          *asset_entity.Asset
+	handler        assettype.AssetTypeHandler
+	config         map[string]any
+	approvalConfig map[string]any
+	credential     assettype.CredentialPlan
+	credentialName string
+	referencedType string
+}
+
+// Prepare validates and normalizes a request without mutating caller data or writing rows.
+func Prepare(ctx context.Context, req Request) (*Prepared, error) {
+	if req.Asset == nil {
+		return nil, fmt.Errorf("asset is required")
+	}
+	asset := *req.Asset
+	config := cloneMap(req.Config)
+	var preparedCreate assettype.PreparedCreate
+	var err error
+	if asset.ID == 0 {
+		preparedCreate, err = assettype.PrepareCreate(asset.Type, config)
+	} else {
+		preparedCreate, err = assettype.PrepareUpdate(asset.Type, config)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if asset.ID > 0 && preparedCreate.Credential.Kind == assettype.CredentialKindPassword && preparedCreate.Credential.Username == "" {
+		preparedCreate.Credential.Username = existingUsername(&asset, preparedCreate.Credential.UsernameField)
+	}
+
+	credentialName := req.CredentialName
+	if credentialName == "" {
+		credentialName = asset.Name
+	}
+	if req.CredentialName != "" && preparedCreate.Credential.Kind != assettype.CredentialKindPassword && preparedCreate.Credential.Kind != assettype.CredentialKindSSHKey {
+		return nil, fmt.Errorf("credential_name is valid only when creating a managed credential")
+	}
+	var referencedType string
+	if preparedCreate.Credential.Kind == assettype.CredentialKindReference {
+		cred, err := credential_mgr_svc.RequireType(ctx, preparedCreate.Credential.ReferenceID, preparedCreate.Credential.AcceptedTypes)
+		if err != nil {
+			return nil, err
+		}
+		referencedType = cred.Type
+	}
+
+	return &Prepared{
+		asset:          &asset,
+		handler:        preparedCreate.Handler,
+		config:         preparedCreate.Config,
+		approvalConfig: preparedCreate.Approval,
+		credential:     preparedCreate.Credential,
+		credentialName: credentialName,
+		referencedType: referencedType,
+	}, nil
+}
+
+// Commit performs credential materialization/reference validation and the asset write
+// in one dbutil transaction.
+func Commit(ctx context.Context, prepared *Prepared) (*Result, error) {
+	if prepared == nil {
+		return nil, fmt.Errorf("prepared asset put is required")
+	}
+	logger.Ctx(ctx).Info("asset put commit start", zap.String("assetType", prepared.asset.Type), zap.Int64("assetID", prepared.asset.ID))
+
+	var result *Result
+	err := dbutil.WithTransaction(ctx, func(txCtx context.Context) error {
+		config, authentication, err := prepared.materialize(txCtx)
+		if err != nil {
+			return err
+		}
+
+		asset := *prepared.asset
+		if asset.ID == 0 {
+			if err := prepared.handler.ApplyCreateArgs(txCtx, &asset, config); err != nil {
+				return fmt.Errorf("apply create args: %w", err)
+			}
+			if err := asset_svc.Asset().Create(txCtx, &asset); err != nil {
+				return fmt.Errorf("create asset: %w", err)
+			}
+		} else {
+			if err := prepared.handler.ApplyUpdateArgs(txCtx, &asset, config); err != nil {
+				return fmt.Errorf("apply update args: %w", err)
+			}
+			if err := updateAsset(txCtx, &asset); err != nil {
+				return fmt.Errorf("update asset: %w", err)
+			}
+		}
+		result = &Result{Asset: &asset, ID: asset.ID, Authentication: authentication}
+		return nil
+	})
+	if err != nil {
+		logger.Ctx(ctx).Error("asset put commit failed", zap.String("assetType", prepared.asset.Type), zap.Int64("assetID", prepared.asset.ID), zap.Error(err))
+		return nil, err
+	}
+	if prepared.asset.ID > 0 {
+		asset_svc.Asset().Invalidate(ctx, result.ID)
+	}
+	logger.Ctx(ctx).Info("asset put commit end", zap.String("assetType", prepared.asset.Type), zap.Int64("assetID", result.ID))
+	return result, nil
+}
+
+// Put is the convenience Prepare+Commit entry point.
+func Put(ctx context.Context, req Request) (*Result, error) {
+	prepared, err := Prepare(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return Commit(ctx, prepared)
+}
+
+// SafeApprovalDetail returns only the type-owned approval field allowlist.
+func (p *Prepared) SafeApprovalDetail() map[string]any {
+	return map[string]any{
+		"name":   p.asset.Name,
+		"type":   p.asset.Type,
+		"config": cloneMap(p.approvalConfig),
+	}
+}
+
+// SafeAuditArgs returns the same non-secret metadata plus a typed reference when
+// the request reuses an existing credential.
+func (p *Prepared) SafeAuditArgs() map[string]any {
+	out := p.SafeApprovalDetail()
+	if p.asset.ID > 0 {
+		out["id"] = p.asset.ID
+	}
+	if p.credential.Kind == assettype.CredentialKindReference {
+		out["authentication"] = AuthenticationRef{Type: p.referencedType, Ref: p.credential.ReferenceID}
+	}
+	return out
+}
+
+func (p *Prepared) materialize(ctx context.Context) (map[string]any, *AuthenticationRef, error) {
+	switch p.credential.Kind {
+	case assettype.CredentialKindNone:
+		return cloneMap(p.config), nil, nil
+	case assettype.CredentialKindReference:
+		cred, err := credential_mgr_svc.RequireType(ctx, p.credential.ReferenceID, p.credential.AcceptedTypes)
+		if err != nil {
+			return nil, nil, err
+		}
+		return p.bind(cred)
+	case assettype.CredentialKindPassword:
+		cred, err := credential_mgr_svc.CreatePassword(ctx, credential_mgr_svc.CreatePasswordRequest{
+			Name:     p.credentialName,
+			Username: p.credential.Username,
+			Password: p.credential.Plaintext,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("create managed password credential: %w", err)
+		}
+		return p.bind(cred)
+	case assettype.CredentialKindSSHKey:
+		// Task 3 moves this legacy handler-owned import behind the shared materializer.
+		// Keep the established SSH behavior working until then; dbutil still makes the
+		// handler's credential write atomic with the asset write.
+		return cloneMap(p.config), nil, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported credential materialization kind %q", p.credential.Kind)
+	}
+}
+
+func (p *Prepared) bind(cred *credential_entity.Credential) (map[string]any, *AuthenticationRef, error) {
+	config, err := (&assettype.PreparedCreate{Handler: p.handler, Config: p.config}).BindCredential(assettype.CredentialBinding{ID: cred.ID, Type: cred.Type})
+	if err != nil {
+		return nil, nil, err
+	}
+	return config, &AuthenticationRef{Type: cred.Type, Ref: cred.ID}, nil
+}
+
+func updateAsset(ctx context.Context, asset *asset_entity.Asset) error {
+	return asset_svc.Asset().UpdateWithinTransaction(ctx, asset)
+}
+
+func cloneMap(args map[string]any) map[string]any {
+	out := make(map[string]any, len(args))
+	for key, value := range args {
+		switch typed := value.(type) {
+		case []string:
+			out[key] = append([]string(nil), typed...)
+		case []any:
+			out[key] = append([]any(nil), typed...)
+		default:
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func existingUsername(asset *asset_entity.Asset, field string) string {
+	safe := map[string]any(nil)
+	if handler, ok := assettype.Get(asset.Type); ok {
+		safe = handler.SafeView(asset)
+	}
+	value, _ := safe[field].(string)
+	return value
+}
+
+func firstAcceptedType(types []string) string {
+	if len(types) == 0 {
+		return ""
+	}
+	return types[0]
+}

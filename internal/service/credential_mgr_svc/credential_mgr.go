@@ -65,6 +65,20 @@ func Get(ctx context.Context, id int64) (*credential_entity.Credential, error) {
 	return credential_repo.Credential().Find(ctx, id)
 }
 
+// RequireType validates a managed credential reference without decrypting or modifying it.
+func RequireType(ctx context.Context, id int64, acceptedTypes []string) (*credential_entity.Credential, error) {
+	cred, err := credential_repo.Credential().Find(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("credential %d not found: %w", id, err)
+	}
+	for _, accepted := range acceptedTypes {
+		if cred.Type == accepted {
+			return cred, nil
+		}
+	}
+	return nil, fmt.Errorf("credential %d has type %q; accepted types: %s", id, cred.Type, strings.Join(acceptedTypes, ", "))
+}
+
 // GetDecryptedPassword 获取解密后的密码
 func GetDecryptedPassword(ctx context.Context, id int64) (string, error) {
 	cred, err := credential_repo.Credential().Find(ctx, id)

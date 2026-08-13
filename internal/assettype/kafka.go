@@ -124,6 +124,7 @@ func (h *kafkaHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset,
 	}
 	if _, ok := args["credential_id"]; ok {
 		cfg.CredentialID = ArgInt64(args, "credential_id")
+		cfg.Password = ""
 	}
 	if _, ok := args["tls"]; ok {
 		cfg.TLS = ArgBool(args, "tls")

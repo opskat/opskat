@@ -87,6 +87,10 @@ func (h *vncHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, a
 	if _, ok := args["file_ssh_asset_id"]; ok {
 		cfg.FileSSHAssetID = ArgInt64(args, "file_ssh_asset_id")
 	}
+	if _, ok := args["credential_id"]; ok {
+		cfg.CredentialID = ArgInt64(args, "credential_id")
+		cfg.Password = ""
+	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)
 		if err != nil {
