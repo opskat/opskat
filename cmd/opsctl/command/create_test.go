@@ -276,6 +276,31 @@ func TestCreateAssetCommitFailureAuditsSafeErrorAndDoesNotNotify(t *testing.T) {
 	assert.Empty(t, stdout.String())
 }
 
+func TestCreateAssetOutputWriteFailureReturnsNonzeroAndReportsError(t *testing.T) {
+	preserveCreateSeams(t)
+	oldWriter := opsctlAuditWriter
+	opsctlAuditWriter = &mockAuditWriter{}
+	t.Cleanup(func() { opsctlAuditWriter = oldWriter })
+	prepareAssetPut = func(context.Context, asset_put_svc.Request) (preparedAssetCreate, error) {
+		return &fakePreparedAssetCreate{
+			approval: map[string]any{"name": "cache", "type": "redis"},
+			result:   &asset_put_svc.Result{ID: 8},
+		}, nil
+	}
+	requireCreateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+		return ApprovalResult{Decision: aictx.Allow}, nil
+	}
+	notifyAssetChanged = func() {}
+
+	var stderr bytes.Buffer
+	code := createAsset(context.Background(), createArgs(t, "redis", validCreateConfig("redis")), "session", commandIO{
+		stdin: &bytes.Buffer{}, stdout: failingWriter{err: errors.New("stdout closed")}, stderr: &stderr,
+	})
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr.String(), "write asset result")
+	assert.Contains(t, stderr.String(), "stdout closed")
+}
+
 func TestCreateAssetCommitAuditUsesOnlySafeArgsAndOutput(t *testing.T) {
 	preserveCreateSeams(t)
 	oldWriter := opsctlAuditWriter

@@ -15,6 +15,9 @@ import (
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/service/asset_put_svc"
+
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
 )
 
 func cmdCreate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
@@ -129,7 +132,7 @@ func createAsset(ctx context.Context, args []string, session string, streams com
 		stdin: streams.stdin, stderr: streams.stderr, readFile: streams.readFile, resolveAssetID: resolveAssetID,
 	})
 	if err != nil {
-		fmt.Fprintf(streams.stderr, "Error: %v\n", err)
+		writeCreateAssetError(ctx, streams.stderr, err)
 		return 1
 	}
 
@@ -137,19 +140,19 @@ func createAsset(ctx context.Context, args []string, session string, streams com
 		Asset: request.asset, Config: request.config, CredentialName: request.credentialName,
 	})
 	if err != nil {
-		fmt.Fprintf(streams.stderr, "Error: %v\n", err)
+		writeCreateAssetError(ctx, streams.stderr, err)
 		return 1
 	}
 	approvalDetail, err := json.Marshal(prepared.SafeApprovalDetail())
 	if err != nil {
-		fmt.Fprintf(streams.stderr, "Error: encode safe approval detail: %v\n", err)
+		writeCreateAssetError(ctx, streams.stderr, fmt.Errorf("encode safe approval detail: %w", err))
 		return 1
 	}
 	approvalResult, err := requireCreateApproval(ctx, approval.ApprovalRequest{
 		Type: "create", Detail: string(approvalDetail), SessionID: session,
 	})
 	if err != nil {
-		fmt.Fprintf(streams.stderr, "Error: %v\n", err)
+		writeCreateAssetError(ctx, streams.stderr, err)
 		return 1
 	}
 
@@ -161,13 +164,23 @@ func createAsset(ctx context.Context, args []string, session string, streams com
 	}
 	if err != nil {
 		writeSafeOpsctlAudit(ctx, "put_asset", safeArgs, resultJSON, err, approvalResult.ToCheckResult())
-		fmt.Fprintf(streams.stderr, "Error: %v\n", err)
+		writeCreateAssetError(ctx, streams.stderr, err)
 		return 1
 	}
 	writeSafeOpsctlAudit(ctx, "put_asset", safeArgs, resultJSON, nil, approvalResult.ToCheckResult())
 	notifyAssetChanged()
-	fmt.Fprintln(streams.stdout, prettyJSON(resultJSON))
+	if _, err := fmt.Fprintln(streams.stdout, prettyJSON(resultJSON)); err != nil {
+		writeCreateAssetError(ctx, streams.stderr, fmt.Errorf("write asset result: %w", err))
+		return 1
+	}
 	return 0
+}
+
+func writeCreateAssetError(ctx context.Context, stderr io.Writer, err error) {
+	if _, writeErr := fmt.Fprintf(stderr, "Error: %v\n", err); writeErr != nil {
+		logger.Ctx(ctx).Error("write create asset error",
+			zap.NamedError("commandError", err), zap.NamedError("writeError", writeErr))
+	}
 }
 
 func assetPutResultJSON(result *asset_put_svc.Result) (string, error) {

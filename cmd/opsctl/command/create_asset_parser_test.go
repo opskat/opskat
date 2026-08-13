@@ -11,6 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
 func parseAssetCreateForTest(t *testing.T, args []string, stdin string, files map[string][]byte) (*assetCreateRequest, string, error) {
 	t.Helper()
 	var stderr bytes.Buffer
@@ -186,6 +190,48 @@ func TestParseAssetCreateCredentialNameIsForwardedOnlyWhenVisited(t *testing.T) 
 	}, "", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "shared-cache-password", request.credentialName)
+}
+
+func TestParseAssetCreatePlaintextWarningWriteFailuresAreReturned(t *testing.T) {
+	tests := []struct {
+		name  string
+		args  []string
+		files map[string][]byte
+		want  string
+	}{
+		{
+			name: "argv warning",
+			args: []string{"--name", "x", "--password", "argv-top-secret"},
+			want: "write plaintext argv warning",
+		},
+		{
+			name:  "config file warning",
+			args:  []string{"--name", "x", "--config-file", "asset.json"},
+			files: map[string][]byte{"asset.json": []byte(`{"password":"file-top-secret"}`)},
+			want:  "write plaintext config file warning",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseAssetCreate(context.Background(), tt.args, assetCreateParserDeps{
+				stdin:  strings.NewReader(""),
+				stderr: failingWriter{err: errors.New("writer closed")},
+				readFile: func(path string) ([]byte, error) {
+					data, ok := tt.files[path]
+					if !ok {
+						return nil, errors.New("read failed")
+					}
+					return data, nil
+				},
+				resolveAssetID: func(context.Context, string) (int64, error) {
+					return 0, errors.New("unexpected resolve")
+				},
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+			assert.Contains(t, err.Error(), "writer closed")
+		})
+	}
 }
 
 func TestParseAssetCreatePlaintextWarningsNeverEchoValues(t *testing.T) {

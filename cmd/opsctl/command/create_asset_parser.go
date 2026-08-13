@@ -107,13 +107,19 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 	}
 
 	if visited["password"] {
-		warnArgvPlaintext(deps.stderr)
+		if err := warnArgvPlaintext(deps.stderr); err != nil {
+			return nil, err
+		}
 	}
 	if configSource == "--config" && secretInConfig != "" {
-		warnArgvPlaintext(deps.stderr)
+		if err := warnArgvPlaintext(deps.stderr); err != nil {
+			return nil, err
+		}
 	}
 	if configSource == "--config-file" && secretInConfig != "" {
-		warnConfigFilePlaintext(deps.stderr)
+		if err := warnConfigFilePlaintext(deps.stderr); err != nil {
+			return nil, err
+		}
 	}
 
 	if visited["credential-id"] {
@@ -299,10 +305,16 @@ func readPasswordStdin(reader io.Reader) (string, error) {
 	return string(data), nil
 }
 
-func warnArgvPlaintext(stderr io.Writer) {
-	fmt.Fprintln(stderr, "Warning: plaintext supplied in argv may be exposed in shell history, process listings, and CI/automation logs; prefer --password-stdin or --credential-id.")
+func warnArgvPlaintext(stderr io.Writer) error {
+	if _, err := fmt.Fprintln(stderr, "Warning: plaintext supplied in argv may be exposed in shell history, process listings, and CI/automation logs; prefer --password-stdin or --credential-id."); err != nil {
+		return fmt.Errorf("write plaintext argv warning: %w", err)
+	}
+	return nil
 }
 
-func warnConfigFilePlaintext(stderr io.Writer) {
-	fmt.Fprintln(stderr, "Warning: plaintext config files require restrictive permissions; do not commit them, and remove them when no longer needed.")
+func warnConfigFilePlaintext(stderr io.Writer) error {
+	if _, err := fmt.Fprintln(stderr, "Warning: plaintext config files require restrictive permissions; do not commit them, and remove them when no longer needed."); err != nil {
+		return fmt.Errorf("write plaintext config file warning: %w", err)
+	}
+	return nil
 }
