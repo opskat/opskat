@@ -38,7 +38,7 @@ make build-devserver-ui                  # Rebuild embedded devserver UI
 make install-skill                       # Register opsctl plugin marketplace
 ```
 
-> **Feature verification & debugging**: the verification order and ad-hoc workflow (cheap signals → `opsctl` → the real app; scratch specs; evidence) is [docs/VERIFICATION.md](VERIFICATION.md). Mechanics: reading logs (`logs/opskat.log`) / database (`opskat.db`, e.g. `audit_logs`) / headless `opsctl` — [docs/references/testing-debugging-guide.md](references/testing-debugging-guide.md) (written for agents like Claude/Codex, in English); driving the **real GUI end-to-end** (Playwright × Wails) — [docs/references/e2e-harness-guide.md](references/e2e-harness-guide.md).
+> **Feature verification & debugging**: the verification order and ad-hoc workflow (cheap signals → `opsctl` → `make dev-sandbox` + `e2e/drive.mjs`; evidence) is [docs/VERIFICATION.md](VERIFICATION.md). Mechanics: reading logs (`logs/opskat.log`) / database (`opskat.db`, e.g. `audit_logs`) / headless `opsctl` — [docs/references/testing-debugging-guide.md](references/testing-debugging-guide.md) (written for agents like Claude/Codex, in English); driving the **real GUI end-to-end** (Playwright × Wails) — [docs/references/e2e-harness-guide.md](references/e2e-harness-guide.md).
 
 ## Architecture
 

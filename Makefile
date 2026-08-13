@@ -1,4 +1,4 @@
-.PHONY: dev run build build-embed install-app clean install build-cli install-cli lint test test-cover test-e2e test-e2e-scratch install-skill devserver build-devserver-ui
+.PHONY: dev dev-sandbox dev-sandbox-down dev-sandbox-status run build build-embed install-app clean install build-cli install-cli lint test test-cover test-e2e test-e2e-scratch install-skill devserver build-devserver-ui
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -16,10 +16,24 @@ VERSION_PKG := github.com/cago-frame/cago/configs
 BUILDINFO_PKG := github.com/opskat/opskat/internal/buildinfo
 LDFLAGS := -s -w -X $(VERSION_PKG).Version=$(VERSION) -X $(BUILDINFO_PKG).CommitID=$(COMMIT_ID)
 
-# 开发模式（前后端热重载）
+# 开发模式（前后端热重载）。用你自己的真实数据目录，供人手动开发/试用。
+# 要做功能验证（尤其是会写数据的）请用 dev-sandbox，别在真实库上验。
 dev:
 	@mkdir -p frontend/dist && [ -e frontend/dist/.keep ] || touch frontend/dist/.keep
 	wails dev
+
+# 验证沙箱：在隔离数据目录上把真实应用跑起来并保持后台运行，附带一个无头 Chromium。
+# 启动后用 e2e/drive.mjs 操作、e2e/oracle.mjs 读取副作用——一次性验证不再需要写 spec。
+# 端口/数据目录按 checkout 分配，多个 worktree 可同时验证。流程见 docs/VERIFICATION.md。
+# ARGS=--reset 清空沙箱数据，ARGS=--mocks 顺带起协议 mock，ARGS=--headed 显示浏览器。
+dev-sandbox:
+	node e2e/sandbox.mjs up $(ARGS)
+
+dev-sandbox-down:
+	node e2e/sandbox.mjs down $(ARGS)
+
+dev-sandbox-status:
+	node e2e/sandbox.mjs status
 
 # 直接运行（不热重载）
 run: build-embed

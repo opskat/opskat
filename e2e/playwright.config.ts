@@ -1,80 +1,51 @@
 import { defineConfig, devices } from "@playwright/test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { rmSync, mkdirSync } from "node:fs";
+import {
+  SUITE_MASTER_KEY,
+  loadDotEnv,
+  mockServers,
+  ports,
+  prepareFrontendDist,
+  suiteDataDir,
+  webserverLogPath,
+} from "./harness/env.js";
 
-const MASTER_KEY = "opskat-e2e-master-key-do-not-use-in-prod";
-// Deterministic data dir so every config re-eval resolves the SAME path:
-// Playwright loads this config in the main runner AND in each worker process,
-// so a random mkdtemp would yield a different dir per process — the db-oracle
-// worker would then read a file the app (launched by the main process) never wrote.
-const dataDir = join(tmpdir(), "opskat-e2e-data");
+// Ports, data dirs, `.env` loading and `frontend/dist` prep are owned by
+// ./harness/env.js, shared with the interactive sandbox (`make dev-sandbox`)
+// so the two can never drift apart. All of them are scoped to this checkout, so
+// another worktree can run its own suite at the same time. This file only wires
+// them into Playwright.
+const dataDir = suiteDataDir();
+const PORTS = ports();
 
 // Only the main runner (TEST_WORKER_INDEX undefined), not workers, prepares a
-// fresh dir — and it runs before the webServer launches. Workers reuse the same
-// path to read the db the app wrote.
+// fresh dir — and it runs before the webServer launches. Playwright re-evaluates
+// this config in each worker; they reuse the same path to read the db the app wrote.
 if (process.env.TEST_WORKER_INDEX === undefined) {
   rmSync(dataDir, { recursive: true, force: true });
   mkdirSync(dataDir, { recursive: true });
-  // `wails dev` needs frontend/dist to exist for the //go:embed (mirrors `make dev`).
-  // Done here in Node — not via `mkdir -p`/`touch` in the webServer command — so that
-  // command stays shell-agnostic and runs on native Windows (cmd) too.
-  const distDir = join(__dirname, "..", "frontend", "dist");
-  mkdirSync(distDir, { recursive: true });
-  writeFileSync(join(distDir, ".keep"), "");
+  prepareFrontendDist();
 }
 
 process.env.OPSKAT_DATA_DIR = dataDir;
-process.env.OPSKAT_MASTER_KEY = MASTER_KEY;
+process.env.OPSKAT_MASTER_KEY = SUITE_MASTER_KEY;
 process.env.OPSKAT_E2E = "1";
 process.env.OPSKAT_EXTENSIONS = "0";
 
-// Load the repo-root .env (gitignored) into process.env so specs can read real
-// verification targets (E2E_SSH_*, …) the same way they read OPSKAT_DATA_DIR —
-// this config is re-evaluated in every worker, so the vars reach the test process.
-// Optional by design: .env is absent on CI / a fresh clone, so we skip when it's
-// not there; an explicit env var already set always wins over the file.
-// Convention & usage: docs/references/e2e-harness-guide.md §6.
-const envFile = join(__dirname, "..", ".env");
-if (existsSync(envFile)) {
-  for (const line of readFileSync(envFile, "utf8").split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eq = trimmed.indexOf("=");
-    if (eq < 1) continue;
-    const key = trimmed.slice(0, eq).trim();
-    if (process.env[key] === undefined) process.env[key] = trimmed.slice(eq + 1).trim();
-  }
-}
+// Real verification targets (E2E_SSH_*, …) reach specs through process.env exactly
+// like OPSKAT_DATA_DIR. Convention & usage: docs/references/e2e-harness-guide.md §6.
+loadDotEnv();
 
-// Dedicated wails dev server port for e2e (avoids the default 34115).
-const DEVSERVER = "localhost:34216";
+const DEVSERVER = `localhost:${PORTS.app}`;
 const BASE_URL = `http://${DEVSERVER}`;
-const WEBSERVER_LOG = join(tmpdir(), "opskat-e2e-webserver.log");
+const WEBSERVER_LOG = webserverLogPath();
 
-// A tiny in-harness mock Redis (pure Node, see fixtures/redis-mock.mjs) on a
-// dedicated port, so the real app can actually dial a "Redis" asset and its
-// "Test Connection" (a single PING) succeeds — no external Redis needed. Read
-// back from the spec via process.env.MOCK_REDIS_PORT (config is re-evaluated in
-// each worker, so the env carries the port into the test process).
-const MOCK_REDIS_PORT = 34217;
-process.env.MOCK_REDIS_PORT = String(MOCK_REDIS_PORT);
-const REDIS_MOCK = join(__dirname, "fixtures", "redis-mock.mjs");
-
-// A tiny in-harness mock SSH server (golang.org/x/crypto/ssh, NoClientAuth) on a
-// dedicated port, so the real app can dial an "SSH" asset and its "Test Connection"
-// (a TCP dial + SSH handshake) succeeds — no real sshd needed. Same shape as the
-// Redis mock; the spec reads the port from process.env.SSH_MOCK_PORT.
-const SSH_MOCK_PORT = 34218;
-process.env.SSH_MOCK_PORT = String(SSH_MOCK_PORT);
-
-// A tiny in-harness OpenAI-compatible chat-completions server (pure Node, see
-// fixtures/openai-mock.mjs), so an AI provider row pointing at it drives the real
-// AI stack with a *scripted* model — the spec decides which tool the "model"
-// calls. Read back from the spec via process.env.OPENAI_MOCK_PORT.
-const OPENAI_MOCK_PORT = 34219;
-process.env.OPENAI_MOCK_PORT = String(OPENAI_MOCK_PORT);
-const OPENAI_MOCK = join(__dirname, "fixtures", "openai-mock.mjs");
+// The in-harness protocol mocks, so the real app can actually dial a "Redis" / "SSH"
+// asset and drive its Test Connection, and the real AI stack can talk to a *scripted*
+// model — no external Redis, sshd or OpenAI needed. Each spec reads its port back from
+// the env var below (the config is re-evaluated in each worker, so it carries through).
+const mocks = mockServers();
+for (const mock of mocks) process.env[mock.env] = String(mock.port);
 
 export default defineConfig({
   testDir: "./tests",
@@ -90,36 +61,16 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: [
-    {
-      // Mock Redis for the connect spec. Playwright waits on the TCP `port`
-      // (raw socket, not HTTP) and tears the process down after the run.
-      command: `node "${REDIS_MOCK}" ${MOCK_REDIS_PORT}`,
-      port: MOCK_REDIS_PORT,
+    // Playwright waits on each mock's raw TCP `port` (not HTTP) and tears the
+    // process down after the run.
+    ...mocks.map((mock) => ({
+      command: mock.command,
+      cwd: mock.cwd,
+      port: mock.port,
       reuseExistingServer: !process.env.CI,
-      stdout: "ignore",
-      stderr: "ignore",
-    },
-    {
-      // Mock SSH server for the connect spec. `go run` a tiny x/crypto/ssh server
-      // (a project dep); cwd is the repo root so the relative package path resolves
-      // inside the Go module. Playwright waits on the raw TCP `port`.
-      command: `go run ./e2e/fixtures/ssh-mock ${SSH_MOCK_PORT}`,
-      cwd: "..",
-      port: SSH_MOCK_PORT,
-      reuseExistingServer: !process.env.CI,
-      stdout: "ignore",
-      stderr: "ignore",
-    },
-    {
-      // Mock OpenAI-compatible API for the AI exec specs. Same shape as the Redis
-      // mock (pure Node, raw TCP `port` readiness); the specs POST a script to it
-      // over HTTP before each AI turn.
-      command: `node "${OPENAI_MOCK}" ${OPENAI_MOCK_PORT}`,
-      port: OPENAI_MOCK_PORT,
-      reuseExistingServer: !process.env.CI,
-      stdout: "ignore",
-      stderr: "ignore",
-    },
+      stdout: "ignore" as const,
+      stderr: "ignore" as const,
+    })),
     {
       // `wails dev -devserver` binds the IPC bridge to our dedicated port. frontend/dist
       // prep happens in Node above (not in this command) so the command is just one
@@ -137,7 +88,7 @@ export default defineConfig({
       stderr: "ignore",
       env: {
         OPSKAT_DATA_DIR: dataDir,
-        OPSKAT_MASTER_KEY: MASTER_KEY,
+        OPSKAT_MASTER_KEY: SUITE_MASTER_KEY,
         OPSKAT_E2E: "1",
         OPSKAT_EXTENSIONS: "0",
       },

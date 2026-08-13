@@ -78,19 +78,34 @@ type Lifecycle interface {
 	Cleanup()
 }
 
-// resolveBootstrap reads optional env overrides used by the GUI e2e harness
-// (OPSKAT_MASTER_KEY mirrors opsctl's env var; OPSKAT_DATA_DIR mirrors its
-// --data-dir flag) and returns the resolved data dir, bootstrap options, and
-// whether the single-instance lock must be disabled (so an e2e instance does
-// not collide with a running app).
-func resolveBootstrap() (dataDir string, opts bootstrap.Options, disableSingleInstance bool) {
+// resolveBootstrap reads optional env overrides used by the GUI e2e harness and
+// the interactive verification sandbox (OPSKAT_MASTER_KEY mirrors opsctl's env
+// var; OPSKAT_DATA_DIR mirrors its --data-dir flag) and returns the resolved
+// data dir, bootstrap options, and whether the single-instance lock must be
+// disabled (so a verification instance does not collide with a running app).
+//
+// OPSKAT_E2E=1 marks the process as a verification run, and a verification run
+// must never boot on the user's real data directory — that is where the real
+// asset inventory, encrypted credentials, master.key and audit log live. The
+// data dir is therefore checked here rather than left to convention, because a
+// documented "back it up first" does not survive an agent driving the app.
+func resolveBootstrap() (dataDir string, opts bootstrap.Options, disableSingleInstance bool, err error) {
 	dataDir = bootstrap.AppDataDir()
 	if env := os.Getenv("OPSKAT_DATA_DIR"); env != "" {
 		dataDir = env
 	}
 	opts = bootstrap.Options{DataDir: dataDir, MasterKey: os.Getenv("OPSKAT_MASTER_KEY")}
 	disableSingleInstance = os.Getenv("OPSKAT_E2E") == "1"
-	return dataDir, opts, disableSingleInstance
+	if disableSingleInstance {
+		// 字符串相等挡住「未覆盖」与「原样填入」，SameDir 再用文件系统身份挡住
+		// 尾斜杠 / . / .. / symlink / Windows 大小写这些等价写法。
+		if dataDir == bootstrap.AppDataDir() || portable.SameDir(dataDir, bootstrap.AppDataDir()) {
+			return "", bootstrap.Options{}, false, fmt.Errorf(
+				"OPSKAT_E2E=1 标记这是一次验证运行，但 OPSKAT_DATA_DIR 指向真实数据目录 %q；"+
+					"请把 OPSKAT_DATA_DIR 指向隔离目录（见 docs/VERIFICATION.md）", dataDir)
+		}
+	}
+	return dataDir, opts, disableSingleInstance, nil
 }
 
 // singleInstanceBaseID 是非便携安装的单实例锁 id，历史值不可改：改了会让
@@ -119,7 +134,10 @@ func main() {
 	ctx := context.Background()
 
 	// 初始化数据库、凭证、Repository、迁移（e2e 可经 env 覆盖数据目录/master key）
-	dataDir, bootstrapOpts, disableSingleInstance := resolveBootstrap()
+	dataDir, bootstrapOpts, disableSingleInstance, err := resolveBootstrap()
+	if err != nil {
+		log.Fatalf("启动参数无效: %v", err)
+	}
 	if err := bootstrap.Init(ctx, bootstrapOpts); err != nil {
 		log.Fatalf("初始化失败: %v", err)
 	}

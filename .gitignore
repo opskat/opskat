@@ -48,6 +48,8 @@ coverage_new.out
 e2e/node_modules/
 e2e/test-results/
 e2e/playwright-report/
+# drive.mjs 自行拉起浏览器时的 Chromium profile（沙箱在时用沙箱自己的 profile）
+e2e/.drive-profile/
 # 一次性功能验证脚本不提交（约定见 docs/references/e2e-harness-guide.md），仅保留 README
 e2e/scratch/*
 !e2e/scratch/README.md

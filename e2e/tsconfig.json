@@ -6,7 +6,15 @@
     "types": ["node"],
     "strict": true,
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    // playwright.config.ts imports the shared harness facts from harness/env.js
+    // (plain ESM, shared with sandbox.mjs / drive.mjs / oracle.mjs, which Node runs
+    // directly). allowJs lets TS infer its types from source instead of needing a
+    // hand-written .d.mts that would be a second owner of those signatures.
+    "allowJs": true
   },
-  "include": ["**/*.ts"]
+  "include": ["tests/**/*.ts", "fixtures/**/*.ts", "harness/*.js", "*.ts"],
+  // scratch/ is gitignored throwaway written mid-verification — a stale one-off from
+  // last month must not be able to fail the repo's typecheck.
+  "exclude": ["scratch", "node_modules"]
 }

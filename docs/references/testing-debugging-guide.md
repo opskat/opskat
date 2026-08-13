@@ -351,42 +351,43 @@ Notes:
 ### GUI E2E (Playwright × the real Wails app)
 
 There is also a Playwright harness that drives the **real running app** through the Wails dev
-browser bridge — both a committed core-flow suite (`make test-e2e`) and **ad-hoc
-functional verification of a feature you just finished** (`make test-e2e-scratch`, throwaway
-scripts in the gitignored `e2e/scratch/`). The committed suite also runs in CI (Linux + `xvfb`,
-the `Wails E2E` job); scratch is local-only. Full workflow, isolation guarantees, and
+browser bridge: a committed core-flow suite (`make test-e2e`, also run in CI on Linux + `xvfb`
+as the `Wails E2E` job). For **ad-hoc verification of a feature you just finished**, don't run
+that suite — start the sandbox (`make dev-sandbox`) and drive it with `e2e/drive.mjs` /
+`e2e/oracle.mjs`, which needs no script at all. Full workflow, isolation guarantees, and
 conventions: **[e2e-harness-guide.md](./e2e-harness-guide.md)**.
 
 ---
 
 ## 8. End-to-end verification recipe (template)
 
-A repeatable loop for "I changed X; does it work?":
+A repeatable loop for "I changed X; does it work?". Run it against the **sandbox**, never
+your real data directory — `make dev-sandbox` starts the app on an isolated dir and
+`oracle.mjs` reads it, so no step here needs a backup-and-restore dance:
 
 ```bash
-DIR="$HOME/Library/Application Support/opskat"   # adjust per OS
-DB="$DIR/opskat.db"; LOG="$DIR/logs/opskat.log"
+make dev-sandbox                       # once, in another terminal (ARGS=--reset for a clean DB)
 
-# 0. (optional) enable debug logging: set config.json debug_mode=true, restart
+# 0. (optional) enable debug logging: set config.json debug_mode=true in the sandbox dir, restart
 # 1. Mark a baseline so you only read NEW audit rows
-BASE=$(sqlite3 -readonly "$DB" "SELECT COALESCE(MAX(id),0) FROM audit_logs;")
+BASE=$(node e2e/oracle.mjs mark)
 
 # 2. Exercise the path:
 #    - unit/integration:  go test ./... -run TestThing
-#    - headless:          opsctl exec web-server -- uptime
-#    - GUI:               run `make dev`, perform the action in the window
+#    - headless:          opsctl --data-dir <tmp> exec web-server -- uptime
+#    - GUI:               node e2e/drive.mjs snapshot   → click / fill → shot
 
 # 3. Confirm the side-effect in the audit log
-sqlite3 -readonly "$DB" \
-  "SELECT id, source, tool_name, asset_name, success, substr(COALESCE(error,''),1,80)
-   FROM audit_logs WHERE id > $BASE ORDER BY id;"
+node e2e/oracle.mjs audit --since="$BASE"
 
-# 4. Confirm in the logs (use an ID printed during step 2)
-jq -c 'select(.sessionID=="…" or .assetID==…)' "$LOG"
+# 4. Confirm in the logs
+node e2e/oracle.mjs logs --grep=<assetName> --tail=50
 
-# 5. Reset state so the next run is clean (restore a backup, delete the test asset
-#    via the app/opsctl, or use a throwaway --data-dir for opsctl runs)
+# 5. Reset state so the next run is clean: restart with `make dev-sandbox ARGS=--reset`
 ```
+
+Workflow and when to use which form: [../VERIFICATION.md](../VERIFICATION.md). The same loop
+against a real data directory is what §9 forbids — the sandbox exists so you never have to.
 
 ---
 
@@ -395,7 +396,10 @@ jq -c 'select(.sessionID=="…" or .assetID==…)' "$LOG"
 - **Never write `opskat.db` directly.** Read-only (`sqlite3 -readonly`) or query a
   stopped app. Schema belongs to `/migrations/`.
 - **Never reuse secrets** seen anywhere; report plaintext secrets in logs as a bug.
-- **Isolate destructive runs** — `opsctl --data-dir <tmp>`, or back up/restore the GUI's
-  data dir.
+- **Isolate destructive runs** — `opsctl --data-dir <tmp>` for headless, `make dev-sandbox`
+  for the GUI. Backing up and restoring your real data dir is not an acceptable substitute:
+  it fails open, and one forgotten restore costs the whole inventory. The app enforces this
+  for GUI verification (`OPSKAT_E2E=1` refuses to boot on the real dir, see
+  [e2e-harness-guide.md §3](./e2e-harness-guide.md#3-isolation--safety-guarantees)).
 - **Leave `debug_mode` off** when you're done; it's noisy.
 - **Reset state** between runs so results are reproducible.

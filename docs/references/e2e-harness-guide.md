@@ -17,32 +17,33 @@ way a user does.
 
 | | **Committed core-flow suite** | **Ad-hoc functional verification** |
 |---|---|---|
-| Lives in | `e2e/tests/*.spec.ts` (committed) | `e2e/scratch/*.spec.ts` (**gitignored**) |
-| Run with | `make test-e2e` | `make test-e2e-scratch` |
-| Lifetime | permanent regression guard | throwaway — write, run, observe, delete |
+| Lives in | `e2e/tests/*.spec.ts` (committed) | nothing — you drive the live sandbox |
+| Run with | `make test-e2e` | `make dev-sandbox`, then `drive.mjs` / `oracle.mjs` |
+| Lifetime | permanent regression guard | the session you are in |
 | What goes here | **only core / critical flows** | "I just built X — does it actually work in the real app?" |
 | Audience | everyone, every time the suite runs | you / the AI, right now |
 
 **The bar for a committed spec is high.** A committed GUI e2e spec is slow (builds + runs
 the real app, minutes per run) and is a maintenance liability. Only add one for a **core
 flow** — app boots, primary navigation, create/connect the main asset types, a critical
-data-integrity path. Everything else gets **verified ad-hoc** (mode 2) and the script
-thrown away. When in doubt, verify ad-hoc; promote to a committed spec only once the flow
-is clearly core and stable.
+data-integrity path. Everything else gets **verified ad-hoc** (mode 2). When in doubt,
+verify ad-hoc; promote to a committed spec only once the flow is clearly core and stable.
 
-**Most feature verification is mode 2.** After finishing a feature, the right move is
-usually: write a scratch spec, run it against the real app, read the assertions + DB + the
-webServer log, confirm it works, then delete the script. See §6.
+**Most feature verification is mode 2, and mode 2 authors nothing.** The sandbox holds the
+real app open on an isolated data dir; you look at it, act on it, and read its side-effects
+one command at a time, changing your mind as you go. A throwaway spec is warranted only
+when a sequence must be replayed identically or when timing/concurrency is the contract.
+See §6.
 
 ## 2. Architecture
 
 ```
 make test-e2e  →  cd e2e && pnpm test  →  node run-e2e.mjs   (spawns playwright, cleans up after)
   └─ playwright (workers:1)
-       ├─ webServer:  wails dev -devserver localhost:34216   (real Go app, native window opens)
+       ├─ webServer:  wails dev -devserver localhost:<app>    (real Go app, native window opens)
        │                 ├─ vite (frontend HMR)
-       │                 └─ opskat app  → service/repository → <tmp>/opskat-e2e-data/opskat.db
-       └─ chromium → http://localhost:34216   (Wails IPC websocket bridge → real Go backend)
+       │                 └─ opskat app  → service/repository → <tmp>/opskat-e2e-data-<ws>/opskat.db
+       └─ chromium → http://localhost:<app>    (Wails IPC websocket bridge → real Go backend)
                          └─ specs assert on the UI …
                               … and on the DB via a direct read-only node:sqlite query (independent oracle)
 ```
@@ -52,19 +53,21 @@ in `main.go` via `resolveBootstrap()` and `initExtensionSystem`):
 
 | Env | Effect |
 |---|---|
-| `OPSKAT_DATA_DIR=<tmp>/opskat-e2e-data` | DB, config, sockets, logs all under a throwaway dir |
+| `OPSKAT_DATA_DIR=<tmp>/opskat-e2e-data-<workspaceId>` | DB, config, sockets, logs all under a throwaway dir |
 | `OPSKAT_MASTER_KEY=<fixed test key>` | passphrase for credential KDF; **bypasses the OS keychain** (`ResolveMasterKey` returns the explicit key) |
 | `OPSKAT_E2E=1` | disables the single-instance lock so the e2e app coexists with a running opskat |
 | `OPSKAT_EXTENSIONS=0` | skips the slow WASM extension init |
 
-The bridge runs on a **dedicated port 34216** (not Wails' default 34115) so it never reuses
-— or collides with — a dev server you (or the sibling `agentre` app) already have open.
+The bridge runs on a **dedicated port** — never Wails' default 34115 — so it never reuses, or
+collides with, a dev server you (or the sibling `agentre` app) already have open. The exact
+number is allocated per checkout (§3, "Workspace"): the first checkout gets 34216, the next
+34224, and so on. `node e2e/oracle.mjs where` prints what yours resolved to.
 
 ## 3. Isolation & safety guarantees
 
 A run is fully hermetic, and in particular **a running opskat does not interfere**:
 
-- **Data** — DB / config / `master.key` live under `<tmp>/opskat-e2e-data`, removed by
+- **Data** — DB / config / `master.key` live under `<tmp>/opskat-e2e-data-<workspaceId>`, removed by
   `run-e2e.mjs` after the run. Your real `~/Library/Application Support/opskat` is never touched.
 - **Keychain** — the explicit `OPSKAT_MASTER_KEY` short-circuits keychain access; nothing is
   read from or written to the OS keychain.
@@ -73,13 +76,32 @@ A run is fully hermetic, and in particular **a running opskat does not interfere
   in the real dir; no `another instance is already listening` collision.
 - **Single-instance lock** — `OPSKAT_E2E=1` skips it, so the e2e instance launches even with
   a real opskat open, and doesn't trigger the real app's second-instance handler.
-- **Port** — 34216, dedicated. The committed `boot` spec also asserts the page `<title>` is
-  `OpsKat`, so if some *other* app ever answered on the port the suite fails loudly instead
-  of false-greening.
+- **Port** — never Wails' default 34115. The committed `boot` spec also asserts the page
+  `<title>` is `OpsKat`, so if some *other* app ever answered on the port the suite fails
+  loudly instead of false-greening. The interactive sandbox (§6) gets its *own* port rather
+  than reusing the suite's: the suite's webServer entries run with `reuseExistingServer`
+  locally, so sharing would let `make test-e2e` silently adopt a live sandbox and report green
+  against an app it never built.
+- **Workspace** — every isolated resource above is keyed by `workspaceId`, an 8-hex hash of
+  the checkout path (`harness/env.js`). Ports come in blocks of 8 from 34216 (`+0` suite app,
+  `+1` redis, `+2` ssh, `+3` openai, `+4` sandbox app, `+5` sandbox CDP); the block index is
+  claimed once per checkout and recorded in `~/.opskat-verify/workspaces.json`, under an
+  exclusive-create lock. It is persisted rather than recomputed because Playwright
+  re-evaluates the config in every worker and `drive.mjs` runs as a fresh process per command
+   — all of them must resolve the same block. Data dirs, log files and the session file carry
+  the same id, and `reapOrphanVite` matches only this checkout's `frontend/` path, so **several
+  worktrees can verify at the same time** without colliding or reaping each other.
+- **Enforced, not just arranged** — every bullet above is something the harness *sets up*. The
+  one that must not depend on setup being correct is the data dir, so it is also checked in the
+  app: `resolveBootstrap` in `main.go` returns an error, and `main` exits, when `OPSKAT_E2E=1`
+  is set and the resolved data dir is (or resolves to, via `portable.SameDir` — trailing slash,
+  `.`, symlink, Windows case) the real `AppDataDir()`. Proven by
+  `TestResolveBootstrapRefusesProductionDataDir`. This is what makes "verification never touches
+  your real inventory" a property of the app rather than a convention in a document.
 
 The one thing that *does* matter: extra running apps add machine load and slow the `wails
-dev` build. **Locally**, run one e2e invocation at a time (the temp data-dir path is fixed);
-CI runners are isolated, so each job's run is independent.
+dev` build. Correctness-wise nothing is shared any more — a sandbox and a suite run, or two
+worktrees, can overlap freely.
 
 ## 4. Running the committed suite
 
@@ -91,7 +113,7 @@ make test-e2e              # or, equivalently: cd e2e && pnpm test
 Prereqs: `wails` CLI on PATH, `pnpm`, Node (with the built-in `node:sqlite` — Node ≥ 22).
 `pnpm run setup` installs the e2e deps and the Chromium build **once**; `make test-e2e`
 itself only runs the suite — no per-run install. First run builds Go + Vite (a few minutes)
-and **opens a native OpsKat window** — expected; the test drives the `:34216` browser
+and **opens a native OpsKat window** — expected; the test drives the headless browser
 instance, not that window. The window closes when the suite ends.
 
 **Platforms.** Runs on macOS, Linux, and native Windows. `make test-e2e` is a thin alias for
@@ -115,7 +137,8 @@ After Playwright exits, `run-e2e.mjs` reaps the orphan `vite` and removes the te
 preserves that log after a failure.
 
 The mock Redis (`e2e/fixtures/redis-mock.mjs`, pure Node, no deps) is started as a **second
-Playwright `webServer`** on a dedicated port (`34216` is the app; `34217` the mock); the spec
+Playwright `webServer`** on its own port from this checkout's block (`+0` is the app, `+1` the
+mock); the spec
 reads the port from `process.env.MOCK_REDIS_PORT`. It answers only what go-redis v9's connect
 handshake needs — `HELLO` → a `-ERR` reply (triggers the RESP2 fallback), `PING` → `+PONG`,
 everything else → `+OK` — which is why no real Redis is needed. This is the reusable shape for
@@ -123,14 +146,14 @@ everything else → `+OK` — which is why no real Redis is needed. This is the 
 `webServer` (TCP `port` readiness) and point the asset at `127.0.0.1:<port>`. `ssh-connect`
 uses the same shape with a Go mock — `e2e/fixtures/ssh-mock/main.go`, a tiny `x/crypto/ssh`
 server (`NoClientAuth`, so the connect "none" probe succeeds; random host key auto-trusted on
-first connect) on `34218`, `go run` as a third `webServer`. That SSH mock also **echoes back
+first connect) on `+2`, `go run` as a third `webServer`. That SSH mock also **echoes back
 any command it is asked to `exec`** (`mock-exec-ran: <command>`), which is what lets the AI
 specs compare the string the *server* received against the one the approval dialog showed.
 
 ### 4.1 Driving the AI stack with a scripted model
 
 The AI specs run the **real** AI stack — `internal/ai/runner` → cago-agents `provider/openai` →
-`sashabaranov/go-openai` — against `e2e/fixtures/openai-mock.mjs` (pure Node) on `34219`,
+`sashabaranov/go-openai` — against `e2e/fixtures/openai-mock.mjs` (pure Node) on `+3`,
 a fourth `webServer`. It speaks just enough OpenAI: SSE `/v1/chat/completions` plus a
 control API, so a **spec** decides what the "model" does — the mock hard-codes nothing:
 
@@ -219,35 +242,63 @@ app?"** without committing a test. It is the GUI counterpart of the
 [AGENTS.md "verify by observing, not asserting"](../../AGENTS.md#fix-policy--tdd-root-cause-in-scope)
 rule: drive the real app, then read observable side-effects (UI, DB, logs).
 
-1. **Write a throwaway spec** under `e2e/scratch/` (gitignored). Same harness conventions as
-   §5 — `data-testid` locators, auto-wait, the DB oracle. If the feature needs a UI hook that
-   doesn't exist yet, add a `data-testid` (additive); if it surfaces a real bug, fix the
-   producer per the Fix policy.
-2. **Run it against the real app:**
+1. **Start the sandbox.** It returns immediately and is idempotent — a second call reports the
+   running session rather than starting a rival app.
    ```bash
-   make test-e2e-scratch        # runs every e2e/scratch/*.spec.ts via the live harness
-   # or a single file (still through the runner, so cleanup happens):
-   cd e2e && pnpm run test:scratch scratch/<file>.spec.ts
+   make dev-sandbox            # ARGS=--reset wipes it first; ARGS=--mocks adds the protocol mocks
+   make dev-sandbox-status     # what's up for this checkout
+   make dev-sandbox-down       # stop it (the data dir survives)
+   ```
+   It boots the real app on this checkout's own sandbox dir (`~/.opskat-verify/<workspaceId>`,
+   persistent across launches) with a **headless** Chromium attached over CDP, and prints the
+   port, data dir, DB path and log paths — run `node e2e/oracle.mjs where` any time to see them
+   again. Isolation is the same as §3 — plus a hard gate: `main.go`'s `resolveBootstrap`
+   **refuses to boot** any `OPSKAT_E2E=1` run whose data dir resolves to the real one, so this
+   cannot be pointed at your live inventory. `ARGS=--headed` shows the browser when you want to
+   watch it work.
+2. **Look, act, observe — one command at a time.** Each `drive.mjs` invocation attaches over
+   CDP, does one thing and exits; the page and its state persist in between.
+   ```bash
+   node e2e/drive.mjs snapshot                    # visible structure: testids, roles, text, state
+   node e2e/drive.mjs click add-asset-button      # a bare word is a data-testid (§5)
+   node e2e/drive.mjs fill ssh-host-input example.com
+   node e2e/oracle.mjs audit --since=41           # the independent DB oracle, read live
+   ```
+   `snapshot` is what removes the selector guesswork: it lists what is actually on screen with
+   the testid to address it by, plus roles, values and disabled state — including inside modals,
+   which live in a portal. A bare word is a testid; otherwise name the kind (`text=`, `role=`,
+   `label=`, `placeholder=`, `title=`, `css=`). If the feature needs a UI hook that doesn't exist
+   yet, add a `data-testid` (additive); if it surfaces a real bug, fix the producer per the Fix
+   policy.
+3. **Record while you go.** Every `drive.mjs` call appends one line — command, arguments and
+   outcome, including failures and refusals — to `e2e/scratch/<slug>/drive.log`, and
+   `shot <name>` writes the screenshot beside it. `oracle.mjs` output is copied into the same
+   directory. The sandbox's data dir persists after `down`, so unlike a suite run there is no
+   race to capture evidence before teardown. (Log/DB reading mechanics:
+   [testing-debugging-guide.md](./testing-debugging-guide.md).)
+4. **When a spec really is needed** — a sequence that must be replayed identically, or timing /
+   concurrency as the contract — write it under `e2e/scratch/<scenario>/` (gitignored) with the
+   same conventions as §5 and run it on the hermetic harness:
+   ```bash
+   cd e2e && pnpm run test:scratch scratch/<scenario>/verify.spec.ts
+   make test-e2e-scratch        # everything left under e2e/scratch/
    ```
    `playwright.scratch.config.ts` reuses the exact same webServer / env / isolation as the
-   committed suite — only `testDir` points at `./scratch`.
-3. **Observe in the spec.** Assert UI state and query the temp `opskat.db` through the
-   `findX` helpers while the harness is running; add a read-only helper when needed. The
-   runner deletes the temp data directory when Playwright exits, so DB / app-log evidence
-   must be captured by the spec rather than inspected afterward. On failure, inspect the
-   preserved `<tmpdir>/opskat-e2e-webserver.log` and Playwright trace/screenshots under
-   `e2e/test-results/`. (Log/DB reading mechanics: see
-   [testing-debugging-guide.md](./testing-debugging-guide.md).)
-4. **Discard.** The scratch file is gitignored — delete it (or leave it; it's never
-   committed). If the flow turns out to be core and worth guarding forever, *promote* it: move
-   it into `e2e/tests/`, harden it, and commit (§5).
+   committed suite — only `testDir` points at `./scratch`. That is a *different* run from the
+   sandbox: the suite's own port, and a temp data dir the runner **deletes when Playwright exits**, so such a
+   spec must capture its evidence during the run. On failure, inspect the preserved
+   `<tmpdir>/opskat-e2e-webserver.log` and the trace/screenshots under `e2e/test-results/`.
+5. **Discard.** Anything under `e2e/scratch/` is gitignored. If the flow turns out to be core
+   and worth guarding forever, *promote* it: move it into `e2e/tests/`, harden it, and commit (§5).
 
-**Keeping durable artifacts for review.** The evidence convention — gitignored
-`docs/verification/<topic>/` with a short `report.md` per verification — is owned by
-[VERIFICATION.md §4](../VERIFICATION.md). The scratch spec that produced the evidence stays
-throwaway; only genuinely core flows get promoted and committed (§5).
+**Keeping durable artifacts for review.** One scenario, one gitignored directory
+`e2e/scratch/<scenario>/`, holding `report.md`, screenshots and oracle output — the layout and
+verdicts are owned by
+[verification-report-template.md](./verification-report-template.md). Whatever produced the
+evidence stays throwaway; only genuinely core flows get promoted and committed (§5).
 
-See [`e2e/scratch/README.md`](../../e2e/scratch/README.md) for a copy-paste starter.
+See [`e2e/scratch/README.md`](../../e2e/scratch/README.md) for the copy-paste starter, and
+`node e2e/drive.mjs --help` / `node e2e/oracle.mjs --help` for the full command sets.
 
 ### Verifying against a real server (`.env` targets)
 
@@ -302,7 +353,7 @@ These bit us while building the harness; keep them in mind when changing it.
 
 - **False green against the wrong app.** *Symptom:* suite "passes" but never built opskat.
   *Cause:* a dev server (opskat or the `agentre` fork) on Wails' default 34115 +
-  `reuseExistingServer` reusing it. *Fix:* dedicated port **34216** + the `boot` spec asserts
+  `reuseExistingServer` reusing it. *Fix:* a dedicated per-checkout port + the `boot` spec asserts
   the `OpsKat` title.
 - **`unable to open database file` in the DB oracle.** *Symptom:* UI passed, oracle threw.
   *Cause:* Playwright re-evaluates `playwright.config.ts` in **every worker** process, so a
@@ -330,6 +381,18 @@ These bit us while building the harness; keep them in mind when changing it.
   *Fix:* `internal/app/opsctl/approval.go` uses `bootstrap.ResolvedDataDir()` (§8).
 - **Single-instance lock blocks the e2e app.** *Fix:* `OPSKAT_E2E=1` skips
   `SingleInstanceLock` (see `main.go`).
+- **Click and screenshot hang; `evaluate` works.** *Symptom:* the element is visible and enabled
+  in `snapshot`, but `drive.mjs click` times out, and so does `shot`. *Cause:* the sandbox's
+  Chromium was spawned as a bare binary, and a headless Chromium launched that way never
+  produces frames — `requestAnimationFrame` never fires, so every Playwright action that waits
+  for an element to be *stable* waits forever, while `evaluate` (which needs no frame) keeps
+  working. Copying Playwright's launch flags by hand did **not** fix it. *Fix:* let Playwright
+  launch the browser, and keep it alive in a detached owner process
+  (`e2e/harness/browser-host.mjs`) so it outlives the short-lived `sandbox.mjs up`.
+- **Teardown leaves the app and vite running.** *Symptom:* `down` reports success, but the port
+  is still held. *Cause:* the app is spawned through a `sh -c` wrapper, so killing that pid
+  orphans `wails` and its children. *Fix:* spawn `detached` (own process group) and signal the
+  **group** (`process.kill(-pid)`), then sweep for orphan vite by command line.
 - **Master key format.** Any non-empty string works — it's an Argon2id passphrase
   (`credential_svc.New`), not a fixed-length key, so a literal test string is fine.
 
@@ -383,19 +446,25 @@ These bit us while building the harness; keep them in mind when changing it.
 
 | Path | Role | Committed? |
 |---|---|---|
-| `e2e/run-e2e.mjs` | cross-platform runner: spawns `playwright test`, then reaps orphan `vite` + removes temp dir after it exits | yes |
-| `e2e/playwright.config.ts` | base harness: temp dir + env + `frontend/dist` prep, optional repo-root `.env` load (§6), four `webServer`s (mock Redis on `34217`, mock SSH on `34218`, mock OpenAI on `34219`, + `wails dev -devserver 34216`) | yes |
+| `e2e/harness/env.js` | **the shared harness facts**: ports, suite/sandbox data dirs, `.env` loading, `frontend/dist` prep, orphan-vite reaping, the mock list. One owner, so the suite and the sandbox cannot drift apart | yes |
+| `e2e/sandbox.mjs` | the sandbox launcher (§6): `up` / `down` / `status`. `up` starts the real app on `~/.opskat-verify/<workspaceId>` at port `+4` plus a browser host, records the session, and returns | yes |
+| `e2e/harness/browser-host.mjs` | the detached process that owns the sandbox's Chromium, so it outlives `up`. Playwright launches the browser (§7 — a hand-spawned headless Chromium never produces frames) | yes |
+| `e2e/drive.mjs` | drives that sandbox one command at a time over CDP — `snapshot` / `click` / `fill` / `shot` / `eval` (§6) | yes |
+| `e2e/oracle.mjs` | reads the live sandbox's DB and structured logs from the shell — `assets` / `audit` / `mark` / `sql` / `logs` | yes |
+| `e2e/run-e2e.mjs` | cross-platform *suite* runner: spawns `playwright test`, then reaps orphan `vite` + removes temp dir after it exits | yes |
+| `e2e/playwright.config.ts` | base harness: temp dir + env + `frontend/dist` prep, optional repo-root `.env` load (§6), four `webServer`s (mock Redis `+1`, mock SSH `+2`, mock OpenAI `+3`, + `wails dev` on `+0`) — all sourced from `harness/env.js` | yes |
 | `e2e/playwright.scratch.config.ts` | extends base, `testDir: ./scratch` for throwaway specs | yes |
-| `e2e/fixtures/db.ts` | read-only `node:sqlite` DB oracle (`findAssetByName`, `findAuditLogs`, `findApprovedGrantItems`, …) | yes |
+| `e2e/fixtures/db-queries.js` | the read-only `node:sqlite` statements, shared by specs and `oracle.mjs` | yes |
+| `e2e/fixtures/db.ts` | the DB oracle as specs use it: typed views over `db-queries.js` + `waitForAuditLogs`'s Playwright polling | yes |
 | `e2e/fixtures/ai.ts` | AI-spec plumbing: model scripting, provider setup via the real bindings, asset seeding, chat gestures, `execOutcome` (§4.1) | yes |
 | `e2e/fixtures/redis-mock.mjs` | minimal pure-Node RESP mock (HELLO→`-ERR` / PING→`+PONG`), started as a 2nd webServer for the `redis-connect` spec | yes |
 | `e2e/fixtures/ssh-mock/main.go` | minimal Go `x/crypto/ssh` server (`NoClientAuth`) that echoes `exec`'d commands, `go run` as a webServer | yes |
-| `e2e/fixtures/openai-mock.mjs` | scripted OpenAI-compatible chat-completions server (SSE + `/__mock/*` control API) on `34219` (§4.1) | yes |
+| `e2e/fixtures/openai-mock.mjs` | scripted OpenAI-compatible chat-completions server (SSE + `/__mock/*` control API) on `+3` (§4.1) | yes |
 | `e2e/tests/*.spec.ts` | committed **core-flow** specs | yes |
-| `e2e/scratch/*.spec.ts` | throwaway functional-verification specs | **no (gitignored)** |
+| `e2e/scratch/<scenario>/` | one-off verification evidence: `report.md`, screenshots, any throwaway spec | **no (gitignored)** |
 | `e2e/scratch/README.md` | scratch convention + starter template | yes |
-| `e2e/package.json` → `setup` / `test` / `test:scratch` | one-time install+Chromium / run suite / run scratch | yes |
-| `Makefile` → `test-e2e` / `test-e2e-scratch` | thin aliases for `pnpm test` / `pnpm run test:scratch` | yes |
+| `e2e/package.json` → `setup` / `test` / `test:scratch` / `sandbox` / `drive` / `oracle` / `typecheck` | one-time install+Chromium / run suite / run scratch / the §6 tools / `tsc` | yes |
+| `Makefile` → `dev-sandbox` / `test-e2e` / `test-e2e-scratch` | start the sandbox (`ARGS=…`) / thin aliases for `pnpm test` / `pnpm run test:scratch` | yes |
 | `.env.example` | template for real-target verification (`.env` schema — one block per asset type), copied to a gitignored `.env` (§6) | yes |
 | `.env` | real verification targets (host / port / user / credentials); read by no app code — `playwright.config.ts` loads it into `process.env` for §6 real-server checks | **no (gitignored)** |
 
