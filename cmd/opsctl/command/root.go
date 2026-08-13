@@ -171,8 +171,8 @@ Usage:
   opsctl [global-flags] <command> [arguments]
 
 Commands:
-  list      List resources (assets or groups)
-  get       Get detailed information about a resource
+  list      List resources (assets, groups, or credentials)
+  get       Get detailed information about an asset or credential
   help      Show CLI usage, or 'opsctl help <asset>' for that asset type's command syntax
   ssh       Open an interactive SSH terminal session
   exec      Execute a command on any asset (ssh, database, redis, mongodb, etcd, kafka, k8s)
@@ -211,6 +211,8 @@ Run 'opsctl <command> --help' for more information on a specific command.
 Examples:
   opsctl list assets                              List all server assets
   opsctl list assets --type ssh --group-id 3      List SSH assets in group 3
+  opsctl list credentials --type ssh_agent        List safe SSH Agent source metadata
+  opsctl get credential credential:3              Show safe credential detail and usage
   opsctl get asset web-server                     Show details by name
   opsctl get asset 1                              Show details by ID
   opsctl help web-server                          Show that asset type's command syntax

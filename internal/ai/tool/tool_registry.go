@@ -48,6 +48,8 @@ func AllToolDefs() []ToolDef {
 	return []ToolDef{
 		{"list_assets", handleListAssets},
 		{"get_asset", handleGetAsset},
+		{"list_credentials", handleListCredentials},
+		{"get_credential", handleGetCredential},
 		{"put_asset", handlePutAsset},
 		{"delete_asset", handleDeleteAsset},
 		{"list_groups", handleListGroups},

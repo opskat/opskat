@@ -126,6 +126,7 @@ func TestBuildHandlerMap_HasEveryToolOpsctlLooksUp(t *testing.T) {
 		handlers := buildHandlerMap()
 		for _, name := range []string{
 			"exec", "help", "ext_exec", "cp",
+			"list_credentials", "get_credential",
 			"put_asset", "put_group", "delete_asset", "delete_group",
 		} {
 			So(handlers, ShouldContainKey, name)

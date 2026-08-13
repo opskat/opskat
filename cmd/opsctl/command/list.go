@@ -39,8 +39,15 @@ func cmdList(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	case "groups":
 		return callHandler(ctx, handlers, "list_groups", nil)
 
+	case "credentials":
+		fs := flag.NewFlagSet("list credentials", flag.ExitOnError)
+		credentialType := fs.String("type", "", "Filter by credential type: password, ssh_key, or ssh_agent")
+		fs.Usage = func() { printListCredentialsUsage() }
+		_ = fs.Parse(args[1:])
+		return cmdListCredentials(ctx, handlers, *credentialType)
+
 	default:
-		fmt.Fprintf(os.Stderr, "Error: unknown resource %q. Supported: assets, groups\n", resource)
+		fmt.Fprintf(os.Stderr, "Error: unknown resource %q. Supported: assets, groups, credentials\n", resource)
 		return 1
 	}
 }
@@ -69,8 +76,10 @@ func cmdGet(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args 
 		return callHandler(ctx, handlers, "get_asset", map[string]any{
 			"id": float64(id),
 		})
+	case "credential":
+		return cmdGetCredential(ctx, handlers, args[1])
 	default:
-		fmt.Fprintf(os.Stderr, "Error: unknown resource %q. Supported: asset\n", resource)
+		fmt.Fprintf(os.Stderr, "Error: unknown resource %q. Supported: asset, credential\n", resource)
 		return 1
 	}
 }
@@ -80,15 +89,17 @@ func printListUsage() {
   opsctl list <resource> [flags]
 
 Resources:
-  assets    List server assets
-  groups    List asset groups
+  assets       List server assets
+  groups       List asset groups
+  credentials  List safe credential and SSH Agent metadata
 
-Run 'opsctl list assets --help' for asset-specific flags.
+Run 'opsctl list assets --help' or 'opsctl list credentials --help' for resource-specific flags.
 
 Examples:
   opsctl list assets
   opsctl list assets --type ssh --group-id 3
   opsctl list groups
+  opsctl list credentials --type ssh_agent
 `)
 }
 
@@ -107,19 +118,36 @@ Examples:
 `)
 }
 
+func printListCredentialsUsage() {
+	fmt.Fprint(os.Stderr, `Usage:
+  opsctl list credentials [flags]
+
+Flags:
+  --type <string>       Filter by password, ssh_key, or ssh_agent. Omit to list all.
+
+Examples:
+  opsctl list credentials
+  opsctl list credentials --type ssh_key
+`)
+}
+
 func printGetUsage() {
 	fmt.Fprint(os.Stderr, `Usage:
-  opsctl get <resource> <asset>
+  opsctl get <resource> <identifier>
 
 Resources:
-  asset     Get detailed asset information including SSH connection config
+  asset       Get detailed asset information including safe connection metadata
+  credential  Get safe credential detail and usage by typed ref
 
 Arguments:
-  asset     Asset name or numeric ID (use 'opsctl list assets' to find them)
+  asset       Asset name or numeric ID (use 'opsctl list assets' to find them)
+  credential  credential:<id> or agent-source:<id>; bare numeric IDs are rejected
 
 Examples:
   opsctl get asset web-server
   opsctl get asset 1
   opsctl get asset production/web-01
+  opsctl get credential credential:3
+  opsctl get credential agent-source:2
 `)
 }

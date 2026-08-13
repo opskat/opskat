@@ -17,6 +17,12 @@ func TestApplyEnvironmentOverridesUsesDataDirectory(t *testing.T) {
 	require.Equal(t, "env-master-key", masterKey)
 }
 
+func TestTopLevelUsageNamesCredentialReadCommands(t *testing.T) {
+	usage := captureStderr(t, printUsage)
+	require.Contains(t, usage, "opsctl list credentials")
+	require.Contains(t, usage, "opsctl get credential")
+}
+
 func TestApplyEnvironmentOverridesKeepsExplicitFlags(t *testing.T) {
 	t.Setenv("OPSKAT_DATA_DIR", "env-data")
 	t.Setenv("OPSKAT_MASTER_KEY", "env-key")

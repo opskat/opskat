@@ -30,6 +30,8 @@ func TestTools_RegistryShape(t *testing.T) {
 			// asset
 			"list_assets", "get_asset",
 			"list_groups", "get_group",
+			// credential
+			"list_credentials", "get_credential",
 			// crud
 			"put_asset", "put_group",
 			"delete_asset", "delete_group",

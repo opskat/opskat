@@ -47,6 +47,22 @@ func TestResolvePassword(t *testing.T) {
 	})
 }
 
+func TestUsageAssetsReturnsOnlySafeSummaries(t *testing.T) {
+	repo := setupAssetRepo(t)
+	repo.EXPECT().FindByCredentialID(gomock.Any(), int64(3)).Return([]*asset_entity.Asset{
+		{ID: 2, Name: "database", Type: "database", Config: `{"password":"secret"}`},
+		{ID: 1, Name: "server", Type: "ssh", Description: "private notes"},
+	}, nil)
+
+	assets, err := Default().UsageAssets(context.Background(), 3)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []AssetUsage{
+		{ID: 2, Name: "database", Type: "database"},
+		{ID: 1, Name: "server", Type: "ssh"},
+	}, assets)
+}
+
 func TestUsageAssetNames(t *testing.T) {
 	t.Run("projects names in repository order", func(t *testing.T) {
 		repo := setupAssetRepo(t)
