@@ -6,7 +6,11 @@
   "scripts": {
     "setup": "pnpm install && pnpm exec playwright install chromium",
     "test": "node run-e2e.mjs",
-    "test:scratch": "node run-e2e.mjs -c playwright.scratch.config.ts"
+    "test:scratch": "node run-e2e.mjs -c playwright.scratch.config.ts",
+    "sandbox": "node sandbox.mjs",
+    "drive": "node drive.mjs",
+    "oracle": "node oracle.mjs",
+    "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",

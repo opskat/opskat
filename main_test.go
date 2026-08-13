@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"testing"
 
@@ -81,8 +83,9 @@ func TestResolveBootstrap(t *testing.T) {
 		t.Setenv("OPSKAT_MASTER_KEY", "test-master-key")
 		t.Setenv("OPSKAT_E2E", "1")
 
-		dataDir, opts, disableSingleInstance := resolveBootstrap()
+		dataDir, opts, disableSingleInstance, err := resolveBootstrap()
 
+		So(err, ShouldBeNil)
 		So(dataDir, ShouldEqual, "/tmp/opskat-e2e-xyz")
 		So(opts.DataDir, ShouldEqual, "/tmp/opskat-e2e-xyz")
 		So(opts.MasterKey, ShouldEqual, "test-master-key")
@@ -94,11 +97,67 @@ func TestResolveBootstrap(t *testing.T) {
 		t.Setenv("OPSKAT_MASTER_KEY", "")
 		t.Setenv("OPSKAT_E2E", "")
 
-		dataDir, opts, disableSingleInstance := resolveBootstrap()
+		dataDir, opts, disableSingleInstance, err := resolveBootstrap()
 
+		So(err, ShouldBeNil)
 		So(dataDir, ShouldEqual, bootstrap.AppDataDir())
 		So(opts.DataDir, ShouldEqual, bootstrap.AppDataDir())
 		So(opts.MasterKey, ShouldEqual, "")
 		So(disableSingleInstance, ShouldBeFalse)
+	})
+}
+
+// TestResolveBootstrapRefusesProductionDataDir 锁定数据隔离硬闸：OPSKAT_E2E=1 是
+// 「这是一次验证运行」的标记，验证运行绝不能落在用户真实的数据目录上——那里有真实
+// 资产清单、加密凭据、master.key 和审计日志。约定（"记得先备份"）挡不住这件事，
+// 所以在 boot 前直接拒绝启动。
+func TestResolveBootstrapRefusesProductionDataDir(t *testing.T) {
+	Convey("OPSKAT_E2E=1 但没有覆盖数据目录时拒绝启动", t, func() {
+		t.Setenv("OPSKAT_DATA_DIR", "")
+		t.Setenv("OPSKAT_MASTER_KEY", "test-master-key")
+		t.Setenv("OPSKAT_E2E", "1")
+
+		_, _, _, err := resolveBootstrap()
+
+		So(err, ShouldNotBeNil)
+		So(err.Error(), ShouldContainSubstring, "OPSKAT_DATA_DIR")
+	})
+
+	Convey("OPSKAT_E2E=1 显式指向真实数据目录时拒绝启动", t, func() {
+		t.Setenv("OPSKAT_DATA_DIR", bootstrap.AppDataDir())
+		t.Setenv("OPSKAT_MASTER_KEY", "test-master-key")
+		t.Setenv("OPSKAT_E2E", "1")
+
+		_, _, _, err := resolveBootstrap()
+
+		So(err, ShouldNotBeNil)
+	})
+
+	Convey("真实数据目录带尾斜杠 / . 段时同样拒绝启动", t, func() {
+		// 字符串比较挡不住 `<dir>/.`——真正的判据是文件系统身份（portable.SameDir）。
+		// 目录不存在的机器（全新 clone）上 os.Stat 失败，此断言无从谈起，跳过。
+		productionDir := bootstrap.AppDataDir()
+		if info, statErr := os.Stat(productionDir); statErr != nil || !info.IsDir() {
+			SkipSo(nil, ShouldBeNil)
+			return
+		}
+		t.Setenv("OPSKAT_DATA_DIR", filepath.Join(productionDir, "."))
+		t.Setenv("OPSKAT_MASTER_KEY", "test-master-key")
+		t.Setenv("OPSKAT_E2E", "1")
+
+		_, _, _, err := resolveBootstrap()
+
+		So(err, ShouldNotBeNil)
+	})
+
+	Convey("OPSKAT_E2E 未设置时不干预正常启动", t, func() {
+		t.Setenv("OPSKAT_DATA_DIR", "")
+		t.Setenv("OPSKAT_MASTER_KEY", "")
+		t.Setenv("OPSKAT_E2E", "")
+
+		dataDir, _, _, err := resolveBootstrap()
+
+		So(err, ShouldBeNil)
+		So(dataDir, ShouldEqual, bootstrap.AppDataDir())
 	})
 }
