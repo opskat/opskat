@@ -13,11 +13,15 @@ import (
 type fakePinger struct {
 	mu       sync.Mutex
 	count    int32
+	called   chan struct{}
 	returnFn func() error
 }
 
 func (f *fakePinger) SendRequest(name string, wantReply bool, payload []byte) (bool, []byte, error) {
 	atomic.AddInt32(&f.count, 1)
+	if f.called != nil {
+		f.called <- struct{}{}
+	}
 	f.mu.Lock()
 	fn := f.returnFn
 	f.mu.Unlock()
@@ -31,65 +35,109 @@ func (f *fakePinger) calls() int32 {
 	return atomic.LoadInt32(&f.count)
 }
 
+func manualStart(fp *fakePinger) (chan<- time.Time, func()) {
+	ticks := make(chan time.Time, 1)
+	return ticks, start(fp, ticks, func() {})
+}
+
+func waitForCall(t *testing.T, fp *fakePinger) {
+	t.Helper()
+	select {
+	case <-fp.called:
+	case <-time.After(time.Second):
+		t.Fatal("keepalive request was not observed")
+	}
+}
+
 func TestStart(t *testing.T) {
-	Convey("Start sends keepalive ticks", t, func() {
-		fp := &fakePinger{}
-		stop := Start(fp, 10*time.Millisecond)
+	Convey("Start sends one keepalive per tick", t, func() {
+		fp := &fakePinger{called: make(chan struct{}, 2)}
+		ticks, stop := manualStart(fp)
 		defer stop()
 
-		time.Sleep(55 * time.Millisecond)
-		So(fp.calls(), ShouldBeGreaterThanOrEqualTo, 3)
+		ticks <- time.Time{}
+		waitForCall(t, fp)
+		ticks <- time.Time{}
+		waitForCall(t, fp)
+
+		So(fp.calls(), ShouldEqual, 2)
 	})
 
 	Convey("Start does not fire before the first interval", t, func() {
 		fp := &fakePinger{}
-		stop := Start(fp, 100*time.Millisecond)
-		defer stop()
+		_, stop := manualStart(fp)
+		stop()
 
-		time.Sleep(20 * time.Millisecond)
 		So(fp.calls(), ShouldEqual, 0)
 	})
 
-	Convey("stop halts the ticker", t, func() {
-		fp := &fakePinger{}
-		stop := Start(fp, 10*time.Millisecond)
-		time.Sleep(35 * time.Millisecond)
-		stop()
-		baseline := fp.calls()
+	Convey("stop waits for an in-flight ping and no calls happen after it returns", t, func() {
+		pingStarted := make(chan struct{})
+		releasePing := make(chan struct{})
+		var startedOnce sync.Once
+		fp := &fakePinger{returnFn: func() error {
+			startedOnce.Do(func() { close(pingStarted) })
+			<-releasePing
+			return nil
+		}}
+		ticks, stop := manualStart(fp)
+		ticks <- time.Time{}
+		<-pingStarted
 
-		time.Sleep(50 * time.Millisecond)
+		stopReturned := make(chan struct{})
+		go func() {
+			stop()
+			close(stopReturned)
+		}()
+
+		select {
+		case <-stopReturned:
+			t.Fatal("stop returned while SendRequest was still in flight")
+		case <-time.After(100 * time.Millisecond):
+		}
+
+		close(releasePing)
+		select {
+		case <-stopReturned:
+		case <-time.After(time.Second):
+			t.Fatal("stop did not return after the in-flight SendRequest completed")
+		}
+
+		baseline := fp.calls()
+		ticks <- time.Time{}
 		So(fp.calls(), ShouldEqual, baseline)
 	})
 
 	Convey("stop is idempotent", t, func() {
 		fp := &fakePinger{}
-		stop := Start(fp, 10*time.Millisecond)
+		_, stop := manualStart(fp)
 		stop()
-		stop() // must not panic
+		stop()
 		stop()
 		So(true, ShouldBeTrue)
 	})
 
 	Convey("ping error stops the goroutine", t, func() {
-		fp := &fakePinger{returnFn: func() error { return errors.New("boom") }}
-		stop := Start(fp, 5*time.Millisecond)
-		defer stop()
+		fp := &fakePinger{
+			called:   make(chan struct{}, 1),
+			returnFn: func() error { return errors.New("boom") },
+		}
+		ticks, stop := manualStart(fp)
+		ticks <- time.Time{}
+		waitForCall(t, fp)
+		stop()
 
-		time.Sleep(40 * time.Millisecond)
-		// First failing call exits the goroutine; allow at most a couple
-		// scheduled ticks before the error is observed.
-		So(fp.calls(), ShouldBeLessThanOrEqualTo, 2)
+		ticks <- time.Time{}
+		So(fp.calls(), ShouldEqual, 1)
 	})
 
 	Convey("non-positive interval disables the heartbeat", t, func() {
 		for _, interval := range []time.Duration{0, -1 * time.Second} {
 			fp := &fakePinger{}
 			stop := Start(fp, interval)
-
-			time.Sleep(30 * time.Millisecond)
-			So(fp.calls(), ShouldEqual, 0)
-			stop() // returned stop must be safe and idempotent
 			stop()
+			stop()
+			So(fp.calls(), ShouldEqual, 0)
 		}
 	})
 }

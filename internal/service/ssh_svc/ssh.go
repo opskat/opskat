@@ -57,11 +57,13 @@ func (sc *sharedClient) release() {
 	sc.refCount--
 	if sc.refCount <= 0 && !sc.closed {
 		sc.closed = true
-		if sc.stopKeepalive != nil {
-			sc.stopKeepalive()
-		}
+		// Close the client before joining the keepalive goroutine: SendRequest may
+		// be blocked on network I/O, and client.Close is what unblocks it.
 		if err := sc.client.Close(); err != nil {
 			logger.Default().Warn("close client", zap.Error(err))
+		}
+		if sc.stopKeepalive != nil {
+			sc.stopKeepalive()
 		}
 		for _, c := range sc.closers {
 			if err := c.Close(); err != nil {
@@ -295,8 +297,9 @@ func (m *Manager) Dial(cfg ConnectConfig) (*ssh.Client, []io.Closer, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	// 非终端连接（连接池 / 端口转发 / AI）的 keepalive 由本函数负责：把 stop 作为
-	// 首个 closer 交回调用方，调用方关闭 closers 时即停止心跳，无需各池自管。
+	// 非终端连接（连接池 / 端口转发 / AI）的 keepalive 由本函数负责。调用方先关闭
+	// 返回的 client（打断可能阻塞的 SendRequest），再按序关闭 closers；stop 放在
+	// 首位以便随后等待心跳 goroutine 完全退出，再释放跳板链等中间资源。
 	stop := sshkeepalive.Start(client, sshtuning.ResolveKeepAlive(cfg.KeepAliveIntervalSeconds))
 	closers = append([]io.Closer{closerFunc(stop)}, closers...)
 	return client, closers, nil
