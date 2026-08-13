@@ -11,6 +11,7 @@ import (
 	"github.com/opskat/opskat/internal/service/ssh_agent_svc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestParseRefRequiresTypedPositiveID(t *testing.T) {
@@ -188,5 +189,137 @@ func TestRepositoryErrorsFailQueries(t *testing.T) {
 		},
 		usageAssets: func(context.Context, int64) ([]asset_credential_svc.AssetUsage, error) { return nil, repoErr },
 	}).Get(context.Background(), "credential:1")
+	assert.ErrorIs(t, err, repoErr)
+}
+
+func TestGetAssetAuthenticationManagedCredentialStoredMissingAndRepositoryError(t *testing.T) {
+	ctx := context.Background()
+	svc := newAssetAuthenticationService(dependencies{
+		getCredential: func(_ context.Context, id int64) (*credential_entity.Credential, error) {
+			switch id {
+			case 7:
+				return &credential_entity.Credential{
+					ID: 7, Type: credential_entity.TypeSSHKey, Name: "deploy", Username: "root",
+				}, nil
+			case 8:
+				return nil, gorm.ErrRecordNotFound
+			default:
+				return nil, errors.New("database unavailable")
+			}
+		},
+	})
+
+	stored, err := svc.GetAssetAuthentication(ctx, AssetAuthenticationRequest{
+		Type: TypeSSHKey, Ref: "credential:7",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, AssetAuthentication{
+		Type: TypeSSHKey, Ref: "credential:7", Name: "deploy", Username: "root", Availability: AvailabilityStored,
+	}, *stored)
+	encoded, err := json.Marshal(stored)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "public_key")
+
+	missing, err := svc.GetAssetAuthentication(ctx, AssetAuthenticationRequest{
+		Type: TypePassword, Ref: "credential:8",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, AssetAuthentication{
+		Type: TypePassword, Ref: "credential:8", Availability: AvailabilityMissing,
+	}, *missing)
+
+	_, err = svc.GetAssetAuthentication(ctx, AssetAuthenticationRequest{
+		Type: TypePassword, Ref: "credential:9",
+	})
+	assert.EqualError(t, err, "database unavailable")
+}
+
+func TestGetAssetAuthenticationAgentProjectsSelectedIdentityAndSafeRuntimeStates(t *testing.T) {
+	ctx := context.Background()
+	status := ssh_agent_svc.ProbeOK
+	identities := []ssh_agent_svc.IdentitySummary{{
+		Fingerprint: "SHA256:selected", Type: "ssh-ed25519", Comment: "safe comment",
+	}}
+	svc := newAssetAuthenticationService(dependencies{
+		getAgentSource: func(_ context.Context, id int64) (ssh_agent_svc.SourceMetadata, error) {
+			if id == 99 {
+				return ssh_agent_svc.SourceMetadata{}, &ssh_agent_svc.Error{Code: ssh_agent_svc.CodeSourceNotFound, Message: "missing"}
+			}
+			return ssh_agent_svc.SourceMetadata{ID: id, Name: "work", EndpointType: "unix_socket"}, nil
+		},
+		observeAgent: func(context.Context, int64) (ssh_agent_svc.Observation, error) {
+			return ssh_agent_svc.Observation{Status: status, IdentityCount: len(identities), Identities: identities}, nil
+		},
+	})
+
+	available, err := svc.GetAssetAuthentication(ctx, AssetAuthenticationRequest{
+		Type: TypeSSHAgent, Ref: "agent-source:4", Fingerprint: "SHA256:selected",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, AssetAuthentication{
+		Type: TypeSSHAgent, Ref: "agent-source:4", Name: "work", EndpointType: "unix_socket",
+		Fingerprint: "SHA256:selected", Availability: AvailabilityOK, KeyType: "ssh-ed25519", Comment: "safe comment",
+	}, *available)
+
+	for _, tc := range []struct {
+		name   string
+		status ssh_agent_svc.ProbeStatus
+	}{
+		{name: "empty", status: ssh_agent_svc.ProbeEmpty},
+		{name: "unavailable", status: ssh_agent_svc.ProbeUnavailable},
+		{name: "unsupported", status: ssh_agent_svc.ProbeUnsupported},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status = tc.status
+			identities = nil
+			got, err := svc.GetAssetAuthentication(ctx, AssetAuthenticationRequest{
+				Type: TypeSSHAgent, Ref: "agent-source:4", Fingerprint: "SHA256:selected",
+			})
+			require.NoError(t, err)
+			assert.Equal(t, string(tc.status), got.Availability)
+			assert.Empty(t, got.KeyType)
+			assert.Empty(t, got.Comment)
+		})
+	}
+
+	status = ssh_agent_svc.ProbeOK
+	identities = []ssh_agent_svc.IdentitySummary{{Fingerprint: "SHA256:other", Type: "ssh-rsa", Comment: "other"}}
+	missingIdentity, err := svc.GetAssetAuthentication(ctx, AssetAuthenticationRequest{
+		Type: TypeSSHAgent, Ref: "agent-source:4", Fingerprint: "SHA256:selected",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, AvailabilityMissing, missingIdentity.Availability)
+	assert.Empty(t, missingIdentity.KeyType)
+	assert.Empty(t, missingIdentity.Comment)
+
+	missingSource, err := svc.GetAssetAuthentication(ctx, AssetAuthenticationRequest{
+		Type: TypeSSHAgent, Ref: "agent-source:99", Fingerprint: "SHA256:selected",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, AssetAuthentication{
+		Type: TypeSSHAgent, Ref: "agent-source:99", Fingerprint: "SHA256:selected", Availability: AvailabilityMissing,
+	}, *missingSource)
+
+	encoded, err := json.Marshal(available)
+	require.NoError(t, err)
+	for _, forbidden := range []string{"endpoint_value", "public_key", "signature", "challenge", "private_key", "password"} {
+		assert.NotContains(t, string(encoded), forbidden)
+	}
+}
+
+func TestGetAssetAuthenticationAgentPropagatesRepositoryErrors(t *testing.T) {
+	repoErr := errors.New("database unavailable")
+	svc := newAssetAuthenticationService(dependencies{
+		getAgentSource: func(context.Context, int64) (ssh_agent_svc.SourceMetadata, error) {
+			return ssh_agent_svc.SourceMetadata{ID: 4, Name: "work", EndpointType: "environment"}, nil
+		},
+		observeAgent: func(context.Context, int64) (ssh_agent_svc.Observation, error) {
+			return ssh_agent_svc.Observation{}, repoErr
+		},
+	})
+
+	_, err := svc.GetAssetAuthentication(context.Background(), AssetAuthenticationRequest{
+		Type: TypeSSHAgent, Ref: "agent-source:4", Fingerprint: "SHA256:selected",
+	})
 	assert.ErrorIs(t, err, repoErr)
 }

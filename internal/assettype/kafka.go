@@ -34,6 +34,14 @@ func (h *kafkaHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	}
 }
 
+func (h *kafkaHandler) AuthenticationAssociation(a *asset_entity.Asset) (AuthenticationAssociation, bool, error) {
+	cfg, err := a.GetKafkaConfig()
+	if err != nil || cfg == nil {
+		return AuthenticationAssociation{}, false, err
+	}
+	return passwordAuthenticationAssociation(cfg.CredentialID)
+}
+
 func (h *kafkaHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asset) (string, error) {
 	cfg, err := a.GetKafkaConfig()
 	if err != nil {

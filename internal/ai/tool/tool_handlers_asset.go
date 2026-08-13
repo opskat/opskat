@@ -13,6 +13,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/repository/group_repo"
 	"github.com/opskat/opskat/internal/service/asset_svc"
+	"github.com/opskat/opskat/internal/service/credential_query_svc"
 )
 
 // --- 工具 handler 实现 ---
@@ -51,12 +52,13 @@ type safeAssetView struct {
 	K8sContext  string `json:"context,omitempty"`
 	SSHTunnelID int64  `json:"ssh_tunnel_id,omitempty"`
 	// Serial 专属（COM/TTY 类设备，没有 host/port 概念）
-	PortPath    string `json:"port_path,omitempty"`
-	BaudRate    int    `json:"baud_rate,omitempty"`
-	DataBits    int    `json:"data_bits,omitempty"`
-	StopBits    string `json:"stop_bits,omitempty"`
-	Parity      string `json:"parity,omitempty"`
-	FlowControl string `json:"flow_control,omitempty"`
+	PortPath       string                                    `json:"port_path,omitempty"`
+	BaudRate       int                                       `json:"baud_rate,omitempty"`
+	DataBits       int                                       `json:"data_bits,omitempty"`
+	StopBits       string                                    `json:"stop_bits,omitempty"`
+	Parity         string                                    `json:"parity,omitempty"`
+	FlowControl    string                                    `json:"flow_control,omitempty"`
+	Authentication *credential_query_svc.AssetAuthentication `json:"authentication,omitempty"`
 }
 
 // safeGroupListView 列表视图（不含描述）
@@ -190,7 +192,22 @@ func handleGetAsset(ctx context.Context, args map[string]any) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("asset not found: %w", err)
 	}
-	data, err := json.Marshal(toSafeView(asset))
+	view := toSafeView(asset)
+	if h, ok := assettype.Get(asset.Type); ok {
+		association, applicable, err := assettype.AuthenticationAssociationOf(h, asset)
+		if err != nil {
+			return "", err
+		}
+		if applicable {
+			view.Authentication, err = credential_query_svc.DefaultAssetAuthentication().GetAssetAuthentication(ctx, credential_query_svc.AssetAuthenticationRequest{
+				Type: association.Type, Ref: association.Ref, Fingerprint: association.Fingerprint,
+			})
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+	data, err := json.Marshal(view)
 	if err != nil {
 		logger.Default().Error("marshal asset detail", zap.Error(err))
 		return "", fmt.Errorf("failed to marshal asset detail: %w", err)

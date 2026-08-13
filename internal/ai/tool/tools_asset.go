@@ -33,7 +33,7 @@ func assetTools() []tool.Tool {
 		},
 		&tool.RawTool{
 			NameStr: "get_asset",
-			DescStr: "Get detailed information about a specific asset, including connection fields and asset-type-specific metadata. For k8s assets, inspect namespace, context, and ssh_tunnel_id to decide whether kubectl should run through an SSH jump host. For rdp assets, inspect host, port, username, domain, width, height, and clipboard.",
+			DescStr: "Get detailed information about a specific asset, including connection fields, asset-type-specific metadata, and safe managed authentication status when present. For k8s assets, inspect namespace, context, and ssh_tunnel_id to decide whether kubectl should run through an SSH jump host. For rdp assets, inspect host, port, username, domain, width, height, and clipboard.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{

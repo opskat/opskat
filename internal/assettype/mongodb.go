@@ -31,6 +31,14 @@ func (h *mongodbHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	}
 }
 
+func (h *mongodbHandler) AuthenticationAssociation(a *asset_entity.Asset) (AuthenticationAssociation, bool, error) {
+	cfg, err := a.GetMongoDBConfig()
+	if err != nil || cfg == nil {
+		return AuthenticationAssociation{}, false, err
+	}
+	return passwordAuthenticationAssociation(cfg.CredentialID)
+}
+
 func (h *mongodbHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asset) (string, error) {
 	cfg, err := a.GetMongoDBConfig()
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/service/credential_mgr_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
@@ -38,6 +39,26 @@ func (h *sshHandler) SafeView(a *asset_entity.Asset) map[string]any {
 		view["agent_key_fingerprint"] = cfg.AgentKeyFingerprint
 	}
 	return view
+}
+
+func (h *sshHandler) AuthenticationAssociation(a *asset_entity.Asset) (AuthenticationAssociation, bool, error) {
+	cfg, err := a.GetSSHConfig()
+	if err != nil || cfg == nil {
+		return AuthenticationAssociation{}, false, err
+	}
+	if cfg.AuthType == asset_entity.AuthTypeAgent {
+		return AuthenticationAssociation{
+			Type: "ssh_agent", Ref: fmt.Sprintf("agent-source:%d", cfg.AgentSourceID), Fingerprint: cfg.AgentKeyFingerprint,
+		}, true, nil
+	}
+	if cfg.CredentialID <= 0 {
+		return AuthenticationAssociation{}, false, nil
+	}
+	authType := credential_entity.TypePassword
+	if cfg.AuthType == asset_entity.AuthTypeKey {
+		authType = credential_entity.TypeSSHKey
+	}
+	return AuthenticationAssociation{Type: authType, Ref: fmt.Sprintf("credential:%d", cfg.CredentialID)}, true, nil
 }
 
 func (h *sshHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asset) (string, error) {

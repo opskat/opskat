@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	policyent "github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/smartystreets/goconvey/convey"
@@ -106,6 +109,66 @@ func TestRegisterSkipsEmptyKind(t *testing.T) {
 		_, ok := policyent.AssetKindOf("emptykindstub")
 		convey.So(ok, convey.ShouldBeFalse)
 	})
+}
+
+func TestRegisteredHandlersOwnAuthenticationAssociationProjection(t *testing.T) {
+	tests := []struct {
+		name     string
+		asset    *asset_entity.Asset
+		want     AuthenticationAssociation
+		wantAuth bool
+	}{
+		{
+			name: "SSH managed key",
+			asset: func() *asset_entity.Asset {
+				a := &asset_entity.Asset{Type: asset_entity.AssetTypeSSH}
+				require.NoError(t, a.SetSSHConfig(&asset_entity.SSHConfig{AuthType: asset_entity.AuthTypeKey, CredentialID: 7}))
+				return a
+			}(),
+			want:     AuthenticationAssociation{Type: "ssh_key", Ref: "credential:7"},
+			wantAuth: true,
+		},
+		{
+			name: "SSH agent",
+			asset: func() *asset_entity.Asset {
+				a := &asset_entity.Asset{Type: asset_entity.AssetTypeSSH}
+				require.NoError(t, a.SetSSHConfig(&asset_entity.SSHConfig{AuthType: asset_entity.AuthTypeAgent, AgentSourceID: 4, AgentKeyFingerprint: "SHA256:selected"}))
+				return a
+			}(),
+			want:     AuthenticationAssociation{Type: "ssh_agent", Ref: "agent-source:4", Fingerprint: "SHA256:selected"},
+			wantAuth: true,
+		},
+		{
+			name: "database password",
+			asset: func() *asset_entity.Asset {
+				a := &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}
+				require.NoError(t, a.SetDatabaseConfig(&asset_entity.DatabaseConfig{Driver: asset_entity.DriverMySQL, CredentialID: 8}))
+				return a
+			}(),
+			want:     AuthenticationAssociation{Type: "password", Ref: "credential:8"},
+			wantAuth: true,
+		},
+		{
+			name: "legacy inline password",
+			asset: func() *asset_entity.Asset {
+				a := &asset_entity.Asset{Type: asset_entity.AssetTypeRedis}
+				require.NoError(t, a.SetRedisConfig(&asset_entity.RedisConfig{Password: "cipher-inline"}))
+				return a
+			}(),
+			wantAuth: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, ok := Get(tc.asset.Type)
+			require.True(t, ok)
+			got, ok, err := AuthenticationAssociationOf(h, tc.asset)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantAuth, ok)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }
 
 func TestRDPHasNoPolicy(t *testing.T) {

@@ -43,6 +43,14 @@ func (h *etcdHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	return view
 }
 
+func (h *etcdHandler) AuthenticationAssociation(a *asset_entity.Asset) (AuthenticationAssociation, bool, error) {
+	cfg, err := a.GetEtcdConfig()
+	if err != nil || cfg == nil {
+		return AuthenticationAssociation{}, false, err
+	}
+	return passwordAuthenticationAssociation(cfg.CredentialID)
+}
+
 func (h *etcdHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asset) (string, error) {
 	cfg, err := a.GetEtcdConfig()
 	if err != nil {

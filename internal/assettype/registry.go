@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy"
 )
 
@@ -29,6 +30,33 @@ type AssetTypeHandler interface {
 	ValidateCreateArgs(args map[string]any) error
 	ApplyCreateArgs(ctx context.Context, a *asset_entity.Asset, args map[string]any) error
 	ApplyUpdateArgs(ctx context.Context, a *asset_entity.Asset, args map[string]any) error
+}
+
+// AuthenticationAssociation is a non-secret, type-owned pointer to managed authentication.
+type AuthenticationAssociation struct {
+	Type        string
+	Ref         string
+	Fingerprint string
+}
+
+type authenticationAssociationOwner interface {
+	AuthenticationAssociation(a *asset_entity.Asset) (AuthenticationAssociation, bool, error)
+}
+
+// AuthenticationAssociationOf delegates association extraction to the registered type owner.
+func AuthenticationAssociationOf(h AssetTypeHandler, a *asset_entity.Asset) (AuthenticationAssociation, bool, error) {
+	owner, ok := h.(authenticationAssociationOwner)
+	if !ok {
+		return AuthenticationAssociation{}, false, nil
+	}
+	return owner.AuthenticationAssociation(a)
+}
+
+func passwordAuthenticationAssociation(id int64) (AuthenticationAssociation, bool, error) {
+	if id <= 0 {
+		return AuthenticationAssociation{}, false, nil
+	}
+	return AuthenticationAssociation{Type: credential_entity.TypePassword, Ref: fmt.Sprintf("credential:%d", id)}, true, nil
 }
 
 // validateRemoteServerArgs 是 ssh/database/redis/mongodb 共用的 host/port/username 校验。

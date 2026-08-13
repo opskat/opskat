@@ -31,6 +31,14 @@ func (h *rdpHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	}
 }
 
+func (h *rdpHandler) AuthenticationAssociation(a *asset_entity.Asset) (AuthenticationAssociation, bool, error) {
+	cfg, err := a.GetRDPConfig()
+	if err != nil || cfg == nil {
+		return AuthenticationAssociation{}, false, err
+	}
+	return passwordAuthenticationAssociation(cfg.CredentialID)
+}
+
 func (h *rdpHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asset) (string, error) {
 	cfg, err := a.GetRDPConfig()
 	if err != nil {

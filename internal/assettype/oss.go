@@ -33,6 +33,14 @@ func (h *ossHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	}
 }
 
+func (h *ossHandler) AuthenticationAssociation(a *asset_entity.Asset) (AuthenticationAssociation, bool, error) {
+	cfg, err := a.GetOSSConfig()
+	if err != nil || cfg == nil {
+		return AuthenticationAssociation{}, false, err
+	}
+	return passwordAuthenticationAssociation(cfg.CredentialID)
+}
+
 func (h *ossHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asset) (string, error) {
 	cfg, err := a.GetOSSConfig()
 	if err != nil {
