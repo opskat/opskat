@@ -205,6 +205,22 @@ func TestPrepareIsSideEffectFreeAndBuildsOnlySafeViews(t *testing.T) {
 	}
 }
 
+func TestSafeAuditArgsForResultAddsOnlyPersistedIdentityAndAuthentication(t *testing.T) {
+	env := setupPutTest(t)
+	prepared, err := Prepare(env.ctx, Request{Asset: newRedisAsset("cache"), Config: map[string]any{
+		"host": "redis.internal", "username": "default", "password": "audit-secret",
+	}})
+	require.NoError(t, err)
+
+	safe := prepared.SafeAuditArgsForResult(&Result{ID: 91, Authentication: &AuthenticationRef{Type: credential_entity.TypePassword, Ref: 12}})
+	encoded, err := json.Marshal(safe)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"id":91`)
+	assert.Contains(t, string(encoded), `"ref":12`)
+	assert.NotContains(t, string(encoded), "audit-secret")
+	assert.NotContains(t, string(encoded), `"password":`)
+}
+
 func TestPutMaterializesCanonicalPasswordCredentials(t *testing.T) {
 	for _, tt := range []struct {
 		name         string

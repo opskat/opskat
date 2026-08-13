@@ -2,14 +2,19 @@ package command
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
+	"strings"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/assettype"
+	"github.com/opskat/opskat/internal/service/asset_put_svc"
 )
 
 func cmdCreate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
@@ -24,138 +29,9 @@ func cmdCreate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 	resource := args[0]
 	switch resource {
 	case "asset":
-		fs := flag.NewFlagSet("create asset", flag.ExitOnError)
-		assetType := fs.String("type", "ssh", `Asset type: "ssh", "database", "redis", "mongodb", or "k8s"`)
-		name := fs.String("name", "", "Display name for the asset (required)")
-		host := fs.String("host", "", "Hostname or IP address (required)")
-		port := fs.Int("port", 0, "Port number (default: auto by type)")
-		username := fs.String("username", "", "Login username (required)")
-		authType := fs.String("auth-type", "password", "SSH auth method: password or key")
-		driver := fs.String("driver", "", `Database driver: "mysql" or "postgresql" (required for database type)`)
-		database := fs.String("database", "", "Default database name (for database type)")
-		readOnly := fs.Bool("read-only", false, "Enable read-only mode (for database type)")
-		sshAsset := fs.String("ssh-asset", "", "SSH asset name/ID for tunnel connection (for database/redis/k8s)")
-		kubeconfig := fs.String("kubeconfig", "", "Kubeconfig YAML content (k8s type)")
-		kubeconfigFile := fs.String("kubeconfig-file", "", "Path to kubeconfig YAML file (k8s type)")
-		k8sNamespace := fs.String("namespace", "", "Default Kubernetes namespace (k8s type)")
-		k8sContext := fs.String("context", "", "Kubeconfig context name (k8s type)")
-		groupID := fs.Int64("group-id", 0, "Group ID to assign the asset to (0 = ungrouped)")
-		description := fs.String("description", "", "Optional description or notes")
-		icon := fs.String("icon", "", "Icon name (e.g. server, kubernetes, docker)")
-		fs.Usage = func() { printCreateAssetUsage() }
-		_ = fs.Parse(args[1:])
-
-		if *kubeconfig == "" && *kubeconfigFile != "" {
-			data, readErr := os.ReadFile(*kubeconfigFile)
-			if readErr != nil {
-				fmt.Fprintf(os.Stderr, "Error reading kubeconfig file: %v\n", readErr)
-				return 1
-			}
-			*kubeconfig = string(data)
-		}
-
-		if *name == "" {
-			fmt.Fprintln(os.Stderr, "Error: --name is required")
-			fmt.Fprintln(os.Stderr)
-			printCreateAssetUsage()
-			return 1
-		}
-		if *assetType == "k8s" {
-			if *kubeconfig == "" {
-				fmt.Fprintln(os.Stderr, "Error: --kubeconfig or --kubeconfig-file is required for k8s assets")
-				fmt.Fprintln(os.Stderr)
-				printCreateAssetUsage()
-				return 1
-			}
-		} else if *host == "" || *username == "" {
-			fmt.Fprintln(os.Stderr, "Error: --host and --username are required")
-			fmt.Fprintln(os.Stderr)
-			printCreateAssetUsage()
-			return 1
-		}
-
-		// 自动设置默认端口
-		if *port == 0 {
-			if h, ok := assettype.Get(*assetType); ok {
-				*port = h.DefaultPort()
-			}
-			// Database driver-specific override
-			if *assetType == "database" && *driver == "postgresql" {
-				*port = 5432
-			}
-		}
-
-		// Type-specific connection fields go under "config": put_asset (the AI CRUD tool
-		// this dispatches to, see tool_handlers_crud.go) only reads config through its
-		// nested "config" object, not the top-level args — name/type/group_id/description/
-		// icon are the only fields it reads at the top level.
-		config := map[string]any{
-			"host":     *host,
-			"port":     float64(*port),
-			"username": *username,
-		}
-		if *assetType == "ssh" && *authType != "" {
-			config["auth_type"] = *authType
-		}
-		if *assetType == "database" {
-			if *driver != "" {
-				config["driver"] = *driver
-			}
-			if *database != "" {
-				config["database"] = *database
-			}
-			if *readOnly {
-				config["read_only"] = "true"
-			}
-		}
-		if *assetType == "k8s" {
-			config["kubeconfig"] = *kubeconfig
-			if *k8sNamespace != "" {
-				config["namespace"] = *k8sNamespace
-			}
-			if *k8sContext != "" {
-				config["context"] = *k8sContext
-			}
-		}
-		if *sshAsset != "" {
-			sshID, resolveErr := resolveAssetID(ctx, *sshAsset)
-			if resolveErr != nil {
-				fmt.Fprintf(os.Stderr, "Error resolving SSH asset: %v\n", resolveErr)
-				return 1
-			}
-			config["ssh_asset_id"] = float64(sshID)
-		}
-
-		params := map[string]any{
-			"name":   *name,
-			"type":   *assetType,
-			"config": config,
-		}
-		if *groupID != 0 {
-			params["group_id"] = float64(*groupID)
-		}
-		if *description != "" {
-			params["description"] = *description
-		}
-		if *icon != "" {
-			params["icon"] = *icon
-		}
-		// Require approval
-		detail := fmt.Sprintf("opsctl create asset --type %s --name %s", *assetType, *name)
-		if *assetType != "k8s" {
-			detail = fmt.Sprintf("%s --host %s", detail, *host)
-		}
-		if _, err := requireApproval(ctx, approval.ApprovalRequest{
-			Type:      "create",
-			Detail:    detail,
-			SessionID: session,
-		}); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
-		}
-
-		return callHandler(ctx, handlers, "put_asset", params)
-
+		return createAsset(ctx, args[1:], session, commandIO{
+			stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr, readFile: os.ReadFile,
+		})
 	case "group":
 		fs := flag.NewFlagSet("create group", flag.ExitOnError)
 		name := fs.String("name", "", "Display name for the group (required)")
@@ -202,6 +78,130 @@ func cmdCreate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 		fmt.Fprintf(os.Stderr, "Error: unknown resource %q. Supported: asset, group\n", resource)
 		return 1
 	}
+}
+
+type commandIO struct {
+	stdin    io.Reader
+	stdout   io.Writer
+	stderr   io.Writer
+	readFile func(string) ([]byte, error)
+}
+
+type preparedAssetCreate interface {
+	SafeApprovalDetail() map[string]any
+	SafeAuditArgsForResult(*asset_put_svc.Result) map[string]any
+	Commit(context.Context) (*asset_put_svc.Result, error)
+}
+
+type preparedAssetCreateAdapter struct{ *asset_put_svc.Prepared }
+
+func (p preparedAssetCreateAdapter) Commit(ctx context.Context) (*asset_put_svc.Result, error) {
+	return asset_put_svc.Commit(ctx, p.Prepared)
+}
+
+var (
+	prepareAssetPut = func(ctx context.Context, request asset_put_svc.Request) (preparedAssetCreate, error) {
+		prepared, err := asset_put_svc.Prepare(ctx, request)
+		if err != nil {
+			return nil, err
+		}
+		return preparedAssetCreateAdapter{Prepared: prepared}, nil
+	}
+	requireCreateApproval = requireApproval
+	notifyAssetChanged    = notifyDesktopAssetChanged
+)
+
+func createAsset(ctx context.Context, args []string, session string, streams commandIO) int {
+	ctx = aictx.WithAuditSource(ctx, "opsctl")
+	if streams.stdin == nil {
+		streams.stdin = os.Stdin
+	}
+	if streams.stdout == nil {
+		streams.stdout = os.Stdout
+	}
+	if streams.stderr == nil {
+		streams.stderr = os.Stderr
+	}
+	if streams.readFile == nil {
+		streams.readFile = os.ReadFile
+	}
+	request, err := parseAssetCreate(ctx, args, assetCreateParserDeps{
+		stdin: streams.stdin, stderr: streams.stderr, readFile: streams.readFile, resolveAssetID: resolveAssetID,
+	})
+	if err != nil {
+		fmt.Fprintf(streams.stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	prepared, err := prepareAssetPut(ctx, asset_put_svc.Request{
+		Asset: request.asset, Config: request.config, CredentialName: request.credentialName,
+	})
+	if err != nil {
+		fmt.Fprintf(streams.stderr, "Error: %v\n", err)
+		return 1
+	}
+	approvalDetail, err := json.Marshal(prepared.SafeApprovalDetail())
+	if err != nil {
+		fmt.Fprintf(streams.stderr, "Error: encode safe approval detail: %v\n", err)
+		return 1
+	}
+	approvalResult, err := requireCreateApproval(ctx, approval.ApprovalRequest{
+		Type: "create", Detail: string(approvalDetail), SessionID: session,
+	})
+	if err != nil {
+		fmt.Fprintf(streams.stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	result, err := prepared.Commit(ctx)
+	safeArgs := prepared.SafeAuditArgsForResult(result)
+	resultJSON := ""
+	if err == nil {
+		resultJSON, err = assetPutResultJSON(result)
+	}
+	if err != nil {
+		writeSafeOpsctlAudit(ctx, "put_asset", safeArgs, resultJSON, err, approvalResult.ToCheckResult())
+		fmt.Fprintf(streams.stderr, "Error: %v\n", err)
+		return 1
+	}
+	writeSafeOpsctlAudit(ctx, "put_asset", safeArgs, resultJSON, nil, approvalResult.ToCheckResult())
+	notifyAssetChanged()
+	fmt.Fprintln(streams.stdout, prettyJSON(resultJSON))
+	return 0
+}
+
+func assetPutResultJSON(result *asset_put_svc.Result) (string, error) {
+	payload := struct {
+		ID             int64                            `json:"id"`
+		Authentication *asset_put_svc.AuthenticationRef `json:"authentication,omitempty"`
+		Message        string                           `json:"message"`
+	}{ID: result.ID, Authentication: result.Authentication, Message: "asset created successfully"}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("encode asset result: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func prettyJSON(value string) string {
+	var object any
+	if json.Unmarshal([]byte(value), &object) != nil {
+		return value
+	}
+	encoded, err := json.MarshalIndent(object, "", "  ")
+	if err != nil {
+		return value
+	}
+	return string(encoded)
+}
+
+func writeSafeOpsctlAudit(ctx context.Context, toolName string, safeArgs map[string]any, result string, execErr error, decision *aictx.CheckResult) {
+	argsJSON, err := json.Marshal(safeArgs)
+	if err != nil {
+		writeOpsctlAudit(ctx, toolName, `{}`, "", fmt.Errorf("encode safe audit args: %w", err), decision)
+		return
+	}
+	writeOpsctlAudit(ctx, toolName, string(argsJSON), result, execErr, decision)
 }
 
 func cmdUpdate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string, session string) int {
@@ -337,7 +337,7 @@ func printCreateUsage() {
   opsctl create <resource> [flags]
 
 Resources:
-  asset     Create a new asset (ssh, database, redis, mongodb, or k8s)
+  asset     Create any registered built-in asset type through generic config
   group     Create a new asset group
 
 Run 'opsctl create asset --help' or 'opsctl create group --help' for details.
@@ -367,52 +367,47 @@ Examples:
 }
 
 func printCreateAssetUsage() {
-	fmt.Fprint(os.Stderr, `Usage:
-  opsctl [--session <id>] create asset [flags]
+	fmt.Fprintf(os.Stderr, `Usage:
+  opsctl [--session <id>] create asset --name <name> [flags]
 
-Required Flags:
-  --name <string>         Display name for the asset
-  --host <string>         Hostname or IP address (required except k8s)
-  --username <string>     Login username (required except k8s)
+Generic config:
+  --type <type>           Registered built-in asset type (default: ssh)
+  --config '<JSON>'       Type-owned JSON object
+  --config-file <path>    File containing a type-owned JSON object (mutually exclusive with --config)
 
-Optional Flags:
-  --type <string>         Asset type: "ssh" (default), "database", "redis", "mongodb", or "k8s"
-  --port <int>            Port number (default: auto by type — 22/3306/5432/6379/27017)
-  --auth-type <string>    SSH auth method: "password" or "key" (SSH type only)
-  --driver <string>       Database driver: "mysql" or "postgresql" (database type, required)
-  --database <string>     Default database name (database type)
-  --read-only             Enable read-only mode (database type)
-  --kubeconfig <string>   Kubeconfig YAML content (k8s type)
-  --kubeconfig-file <path>
-                          Path to kubeconfig YAML file (k8s type)
-  --namespace <string>    Default Kubernetes namespace (k8s type)
-  --context <string>      Kubeconfig context name (k8s type)
-  --ssh-asset <asset>     SSH asset name/ID for tunnel connection (database/redis/k8s types)
-  --group-id <int>        Group ID to assign the asset to (0 = ungrouped)
-  --description <string>  Optional description or notes
-  --icon <string>         Icon name (default: auto by type)
+Registered built-in types: %s
+Run 'opsctl help <type>' for that type's exact accepted/required config fields.
 
-Available Icons:
-  Infrastructure: server, database, cloud, monitor, laptop, router, hard-drive,
-                  globe, shield, container, cpu, network
-  Cloud:          aws, azure, gcp, alicloud, tencentcloud, huaweicloud, cloudflare
-  DB/Middleware:   mysql, postgresql, redis, mongodb, elasticsearch, kafka, mariadb,
-                  sqlite, rabbitmq, etcd, clickhouse
-  System/OS:      docker, kubernetes, linux, windows, ubuntu, centos, debian,
-                  redhat, macos
-  DevOps:         nginx, grafana, prometheus
+Managed authentication:
+  --credential-id <id>       Reuse an existing managed credential
+  --password-stdin           Read plaintext from stdin without a prompt or echo (recommended)
+  --password <value>         Unsafe argv plaintext path
+  --credential-name <name>   Name a newly materialized password or SSH-key credential
+  --agent-source-id <id>     SSH Agent source ID
+  --agent-key-fingerprint <SHA256 fingerprint>
+
+Warning: --password and plaintext inline --config values may be visible in shell history,
+process listings, and CI/automation logs. Prefer --password-stdin or --credential-id.
+For plaintext --config-file input, use restrictive file permissions, avoid committing it,
+and remove it when no longer needed.
+
+Compatibility convenience flags (only explicitly supplied flags override --config):
+  --host, --port, --username, --auth-type, --driver, --database, --read-only
+  --ssh-asset, --kubeconfig, --kubeconfig-file, --namespace, --context
+  --group-id, --description, --icon
+
+The selected type handler owns required fields, legal combinations, unknown-field rejection,
+and default ports. --kubeconfig-file remains the K8s raw-file convenience input.
 
 Approval:
-  Requires desktop app approval. Session auto-created if not specified.
+  Validation and reference checks run before desktop approval. Credential and asset rows
+  are committed atomically only after approval.
 
 Examples:
-  opsctl create asset --name "Web Server" --host 10.0.0.1 --username root
-  opsctl create asset --type database --driver mysql --name "Prod DB" --host db.internal --username app
-  opsctl create asset --type database --driver postgresql --name "Analytics" --host pg.internal --port 5432 --username readonly --read-only
-  opsctl create asset --type redis --name "Cache" --host redis.internal --username default
-  opsctl create asset --type database --driver mysql --name "DB via SSH" --host 127.0.0.1 --username app --ssh-asset web-server
+  opsctl create asset --name "Web Server" --host 10.0.0.1 --username root --password-stdin
+  opsctl create asset --type database --name "Prod DB" --config '{"driver":"mysql","host":"db.internal","username":"app"}' --credential-id 4
   opsctl create asset --type k8s --name "Prod Cluster" --kubeconfig-file ~/.kube/config --context prod
-`)
+`, strings.Join(assettype.RegisteredTypes(), ", "))
 }
 
 func printUpdateUsage() {

@@ -209,6 +209,20 @@ func (p *Prepared) SafeAuditArgs() map[string]any {
 	return out
 }
 
+// SafeAuditArgsForResult adds only the persisted identity and safe typed association.
+// It never exposes the prepared config or materialized credential payload.
+func (p *Prepared) SafeAuditArgsForResult(result *Result) map[string]any {
+	out := p.SafeAuditArgs()
+	if result == nil {
+		return out
+	}
+	out["id"] = result.ID
+	if result.Authentication != nil {
+		out["authentication"] = *result.Authentication
+	}
+	return out
+}
+
 func (p *Prepared) materialize(ctx context.Context) (map[string]any, *AuthenticationRef, error) {
 	switch p.credential.Kind {
 	case assettype.CredentialKindNone:
