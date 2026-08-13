@@ -125,7 +125,7 @@ func registerWriteFailure(t *testing.T, gdb *gorm.DB, operation, table string) {
 	name := fmt.Sprintf("asset_put_%s_%s", operation, table)
 	callback := func(tx *gorm.DB) {
 		if tx.Statement.Schema != nil && tx.Statement.Schema.Table == table {
-			tx.AddError(errors.New(table + " write failed"))
+			_ = tx.AddError(errors.New(table + " write failed"))
 		}
 	}
 	switch operation {

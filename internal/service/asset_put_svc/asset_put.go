@@ -275,10 +275,3 @@ func existingUsername(asset *asset_entity.Asset, field string) string {
 	value, _ := safe[field].(string)
 	return value
 }
-
-func firstAcceptedType(types []string) string {
-	if len(types) == 0 {
-		return ""
-	}
-	return types[0]
-}

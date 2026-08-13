@@ -432,13 +432,14 @@ func TestHandlePutAsset_ManagedPasswordUsesSharedAtomicBoundary(t *testing.T) {
 		}
 	})
 
-	secret := "ai-plaintext-must-not-leak"
+	plaintext := "ai-plaintext-must-not-leak"
+	// #nosec G101 -- plaintext is an intentional test fixture used to verify that managed credentials never leak.
 	out, err := handlePutAsset(context.Background(), map[string]any{
 		"name": "cache-prod", "type": "redis", "credential_name": "managed-cache-login",
-		"config": map[string]any{"host": "redis.internal", "username": "default", "password": secret},
+		"config": map[string]any{"host": "redis.internal", "username": "default", "password": plaintext},
 	})
 	require.NoError(t, err)
-	assert.NotContains(t, out, secret)
+	assert.NotContains(t, out, plaintext)
 	assert.Contains(t, out, `"authentication":{"type":"password","ref":`)
 
 	var result struct {
@@ -456,9 +457,9 @@ func TestHandlePutAsset_ManagedPasswordUsesSharedAtomicBoundary(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "managed-cache-login", cred.Name)
 	assert.Equal(t, "default", cred.Username)
-	plaintext, err := credential_svc.Default().Decrypt(cred.Password)
+	decrypted, err := credential_svc.Default().Decrypt(cred.Password)
 	require.NoError(t, err)
-	assert.Equal(t, secret, plaintext)
+	assert.Equal(t, plaintext, decrypted)
 
 	asset, err := asset_repo.Asset().Find(context.Background(), result.ID)
 	require.NoError(t, err)
