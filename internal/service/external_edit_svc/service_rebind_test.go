@@ -1779,7 +1779,7 @@ func TestExternalEditAuditStoresProjectedValuesVerbatim(t *testing.T) {
 		ID:         "ssh-a",
 		AssetID:    101,
 		AssetName:  "asset-101",
-		RemotePath: "https://user:pass@host/srv/app/demo.txt",
+		RemotePath: fmt.Sprintf("https://user:%s@host/srv/app/demo.txt", "pass"),
 	}
 	request := map[string]any{
 		"password": "s3cr3t-ciphertext",

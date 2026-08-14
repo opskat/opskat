@@ -1130,7 +1130,7 @@ func setupPutAssetDB(t *testing.T) *gorm.DB {
 func TestHandlePutAsset_SuccessAuditProjectionOmitsWriteOnlyFieldsAndExecutionGetsOriginal(t *testing.T) {
 	setupPutAssetDB(t)
 	plaintext := "ai-projection-must-not-leak"
-	var slot *aictx.AuditRequestSlot = aictx.NewAuditRequestSlot()
+	slot := aictx.NewAuditRequestSlot()
 	ctx := aictx.WithAuditRequestSlot(context.Background(), slot)
 
 	out, err := handlePutAsset(ctx, map[string]any{
@@ -1173,7 +1173,7 @@ func TestHandlePutAsset_SuccessAuditProjectionOmitsWriteOnlyFieldsAndExecutionGe
 // config（它可能携带 write-only 秘密）。
 func TestHandlePutAsset_PrepareFailureProjectsTopLevelOnly(t *testing.T) {
 	env := setupCRUD(t)
-	var slot *aictx.AuditRequestSlot = aictx.NewAuditRequestSlot()
+	slot := aictx.NewAuditRequestSlot()
 	ctx := aictx.WithAuditRequestSlot(env.ctx, slot)
 
 	_, err := handlePutAsset(ctx, map[string]any{
@@ -1197,7 +1197,7 @@ func TestHandlePutAsset_PrepareFailureProjectsTopLevelOnly(t *testing.T) {
 func TestHandlePutAsset_CommitFailureProjectsSafeAuditArgs(t *testing.T) {
 	gdb := setupPutAssetDB(t)
 	toolWriteFailure(t, gdb, "create", "assets")
-	var slot *aictx.AuditRequestSlot = aictx.NewAuditRequestSlot()
+	slot := aictx.NewAuditRequestSlot()
 	ctx := aictx.WithAuditRequestSlot(context.Background(), slot)
 
 	_, err := handlePutAsset(ctx, map[string]any{
