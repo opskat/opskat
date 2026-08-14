@@ -44,13 +44,13 @@ func (e *oracleExtensionExecutor) CallTool(_ context.Context, _, _ string, args 
 	return []byte(`{"ok":true}`), nil
 }
 
-func waitForExtensionAudit(t *testing.T, repo *mockAuditRepo, command string) *audit_entity.AuditLog {
+func waitForExtensionAudit(t *testing.T, repo *mockAuditRepo) *audit_entity.AuditLog {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		repo.mu.Lock()
 		for _, entry := range repo.logs {
-			if entry.ToolName == "ext_exec" && entry.Command == command {
+			if entry.ToolName == "ext_exec" {
 				repo.mu.Unlock()
 				return entry
 			}
@@ -58,11 +58,11 @@ func waitForExtensionAudit(t *testing.T, repo *mockAuditRepo, command string) *a
 		repo.mu.Unlock()
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("extension audit command %q not found", command)
+	t.Fatal("extension audit not found")
 	return nil
 }
 
-func TestExtensionApprovalPluginAndAuditUseSameCanonicalArguments(t *testing.T) {
+func TestExtensionApprovalAndPluginUseRawArgumentsWhileAuditRedacts(t *testing.T) {
 	redactionSentinel := strings.Repeat("review", 2) + "-extension-value"
 	executor := &oracleExtensionExecutor{
 		ext: &extension.Extension{Name: "oss", Manifest: &extension.Manifest{Name: "oss"}},
@@ -107,16 +107,18 @@ func TestExtensionApprovalPluginAndAuditUseSameCanonicalArguments(t *testing.T) 
 	require.Equal(t, permission.ApprovalKindExtension, approvalKind)
 	require.Contains(t, approvalCommand, "production-target")
 	require.Contains(t, approvalCommand, "logs/a")
-	require.NotContains(t, approvalCommand, redactionSentinel)
+	require.Contains(t, approvalCommand, redactionSentinel)
 
 	var pluginArgs map[string]any
 	require.NoError(t, json.Unmarshal(executor.callArgs, &pluginArgs))
 	require.Equal(t, "production-target", pluginArgs["bucket"])
 	require.Equal(t, redactionSentinel, pluginArgs["token"], "redaction must not corrupt the live plugin invocation")
 
-	entry := waitForExtensionAudit(t, repo, approvalCommand)
+	entry := waitForExtensionAudit(t, repo)
 	require.Equal(t, "ai", entry.Source)
-	require.Equal(t, approvalCommand, entry.Command)
+	require.NotEqual(t, approvalCommand, entry.Command)
+	require.NotContains(t, entry.Command, redactionSentinel)
+	require.Contains(t, entry.Command, "<redacted>")
 	require.Contains(t, entry.Request, "production-target")
 	require.Contains(t, entry.Request, "logs/a")
 	require.NotContains(t, entry.Request, redactionSentinel)

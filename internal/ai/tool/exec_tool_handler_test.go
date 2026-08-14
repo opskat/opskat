@@ -162,7 +162,7 @@ func TestExecToolHandler(t *testing.T) {
 			So(confirmed, ShouldBeTrue)
 			So(approvedKind, ShouldEqual, "extension")
 			So(approvedCommand, ShouldContainSubstring, "production-target")
-			So(approvedCommand, ShouldNotContainSubstring, "review-secret")
+			So(approvedCommand, ShouldContainSubstring, "review-secret")
 			So(string(executor.callArgsSeen), ShouldContainSubstring, "production-target")
 			So(string(executor.callArgsSeen), ShouldContainSubstring, "review-secret")
 		})

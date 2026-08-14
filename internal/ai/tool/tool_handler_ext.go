@@ -12,7 +12,6 @@ import (
 	"github.com/opskat/opskat/internal/ai/cmdline"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/policy"
-	"github.com/opskat/opskat/internal/pkg/auditredact"
 	"github.com/opskat/opskat/pkg/extension"
 )
 
@@ -159,7 +158,9 @@ func ExecuteExtensionTool(ctx context.Context, executor ExtensionToolExecutor, a
 }
 
 func extensionInvocationSummary(extName, toolName string, argsJSON []byte) string {
-	return extName + "." + toolName + " " + auditredact.JSON(string(argsJSON))
+	// Approval and live execution share the original validated arguments. Audit owns its
+	// canonical projection when the middleware persists this same command later.
+	return extName + "." + toolName + " " + string(argsJSON)
 }
 
 func confirmExtensionTool(ctx context.Context, assetID int64, extName, toolName, command, reason string) error {

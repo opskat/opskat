@@ -3,6 +3,7 @@ package command
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -95,6 +96,36 @@ func TestExtExecFailsClosedWhenDesktopIsOffline(t *testing.T) {
 
 	if exitCode != 1 {
 		t.Fatalf("offline extension execution must fail closed, got exit code %d", exitCode)
+	}
+}
+
+func TestPrintToolResultPreservesExecutorBytes(t *testing.T) {
+	payload := "{\"token\":\"raw-extension-value\",\"nested\":{\"n\":1}}"
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe stdout: %v", err)
+	}
+	os.Stdout = w
+	t.Cleanup(func() {
+		os.Stdout = origStdout
+		_ = w.Close()
+		_ = r.Close()
+	})
+	printToolResult(payload)
+	if err := w.Close(); err != nil {
+		t.Fatalf("close stdout writer: %v", err)
+	}
+	os.Stdout = origStdout
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("close stdout reader: %v", err)
+	}
+	if string(got) != payload {
+		t.Fatalf("extension stdout changed executor bytes: got %q want %q", got, payload)
 	}
 }
 

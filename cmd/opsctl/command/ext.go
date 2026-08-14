@@ -184,17 +184,9 @@ func delegateExtExec(extName, toolName string, toolArgs json.RawMessage) (string
 	return resp.ToolResult, nil
 }
 
-// printToolResult pretty-prints a JSON tool result to stdout.
+// printToolResult writes the extension executor result unchanged for piping and scripts.
 func printToolResult(result string) {
-	var obj any
-	if json.Unmarshal([]byte(result), &obj) == nil {
-		pretty, err := json.MarshalIndent(obj, "", "  ")
-		if err == nil {
-			fmt.Println(string(pretty))
-			return
-		}
-	}
-	fmt.Println(result)
+	fmt.Print(result)
 }
 
 func printExtUsage() {
