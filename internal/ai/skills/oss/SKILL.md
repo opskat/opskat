@@ -103,7 +103,10 @@ wrong value, after approval and a round trip:
   content never passes through the conversation either way.
 - `object copy`, `object move` and `object delete` return `{"status":"ok",…}`.
 - `object presign` returns the signed `url`, its `method` and `expiresIn` seconds. The URL
-  is fully usable; the audit log stores it with the signature parameters redacted.
+  is fully usable. Under raw-by-default Audit the complete signed URL — signature parameters
+  included — enters the Audit result unchanged, subject only to the existing result
+  capture/truncation; nothing is redacted, so treat the URL as a capability that grants
+  access until it expires.
 
 ## Approval and policy rules
 
