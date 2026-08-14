@@ -33,16 +33,16 @@ export function SecretInput({
 }: SecretInputProps) {
   const { t } = useTranslation();
   const [internalReveal, setInternalReveal] = useState(false);
-  const controlled = onRevealChange !== undefined;
-  const reveal = controlled ? !!revealProp : internalReveal;
+  const controlled = revealProp !== undefined;
+  const reveal = controlled ? revealProp : internalReveal;
 
   const toggleReveal = () => {
     if (revealLoading) return;
-    if (controlled) {
-      onRevealChange(!reveal);
-    } else {
-      setInternalReveal(!reveal);
+    const next = !reveal;
+    if (!controlled) {
+      setInternalReveal(next);
     }
+    onRevealChange?.(next);
   };
 
   const hasActions = actions != null;
@@ -61,7 +61,7 @@ export function SecretInput({
           variant="ghost"
           size="icon"
           className="h-7 w-7"
-          disabled={disabled || revealLoading}
+          disabled={disabled || revealLoading || (controlled && onRevealChange === undefined)}
           onClick={toggleReveal}
           aria-label={t(reveal ? "action.hideSecret" : "action.showSecret")}
           aria-pressed={reveal}

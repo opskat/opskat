@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { Pencil, Shield } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { Field, Segmented } from "@/components/asset/fields";
@@ -60,8 +61,9 @@ export function PasswordSourceField({
             onPasswordChange(plaintext);
             setDecryptedOnce(true);
           }
-        } catch {
-          // 解密失败时静默处理，仍然切换显示状态
+        } catch (error) {
+          toast.error(String(error));
+          return;
         } finally {
           setDecrypting(false);
         }

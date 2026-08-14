@@ -2,16 +2,48 @@ package ai
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/opskat/opskat/internal/ai/permission"
 )
 
-// spec Decision 3：审批响应只经 ParseApprovalResponse 的既有类型/策略校验（deny、
-// allow、allowAll、edited_items 的 kind 能力），不再有投影派生的 redacted 门禁。
-// 伪造响应按既有白名单校验拒绝；合法响应逐字透传。
+func TestRespondAIApprovalInvalidResponseLogOmitsPayload(t *testing.T) {
+	core, logs := observer.New(zap.DebugLevel)
+	oldLogger := logger.Default()
+	logger.SetLogger(zap.New(core))
+	t.Cleanup(func() { logger.SetLogger(oldLogger) })
+
+	secret := "approval-log-" + "credential-sentinel"
+	a := &AI{ctx: context.Background()}
+	ch := make(chan permission.ApprovalResponse, 1)
+	a.pendingAIApprovals.Store("bad-log", pendingAIApproval{
+		kind:  permission.ApprovalKindSingle,
+		items: []permission.ApprovalItem{{Type: "exec", AssetID: 1, Command: "uptime"}},
+		ch:    ch,
+	})
+
+	a.RespondAIApproval("bad-log", permission.ApprovalResponse{Decision: "invalid --password " + secret})
+
+	require.Equal(t, "deny", (<-ch).Decision)
+	entries := logs.FilterMessage("invalid AI approval response denied").All()
+	require.Len(t, entries, 1)
+	fields := entries[0].ContextMap()
+	require.NotContains(t, fields, "decision")
+	require.NotContains(t, fields, "error")
+	for _, value := range fields {
+		require.False(t, strings.Contains(fmt.Sprint(value), secret), "approval payload leaked in log field: %v", value)
+	}
+}
+
+// 审批响应只经 ParseApprovalResponse 的既有类型/策略校验（deny、allow、allowAll、
+// edited_items 的 kind 能力）；伪造响应按白名单拒绝，合法响应逐字透传。
 func TestRespondAIApprovalPreservesParsedValidation(t *testing.T) {
 	expected := []permission.ApprovalItem{{Type: "exec", AssetID: 1, AssetName: "web-1", Command: "uptime"}}
 	edited := []permission.ApprovalItem{{Type: "exec", AssetID: 1, AssetName: "web-1", Command: "uptime *"}}

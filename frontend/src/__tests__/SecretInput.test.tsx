@@ -81,6 +81,24 @@ describe("SecretInput", () => {
     expect(onRevealChange).toHaveBeenCalledWith(true);
   });
 
+  it("reveal 属性单独传入时决定只读显示态", () => {
+    renderInput({ reveal: true });
+    expect(screen.getByLabelText("Secret")).toHaveAttribute("type", "text");
+    expect(screen.getByRole("button", { name: "action.hideSecret" })).toBeDisabled();
+  });
+
+  it("只监听 onRevealChange 时保留内部切换行为", async () => {
+    const user = userEvent.setup();
+    const onRevealChange = vi.fn();
+    renderInput({ onRevealChange });
+    const input = screen.getByLabelText("Secret");
+
+    await user.click(screen.getByRole("button", { name: "action.showSecret" }));
+
+    expect(onRevealChange).toHaveBeenCalledWith(true);
+    expect(input).toHaveAttribute("type", "text");
+  });
+
   it("revealLoading 时显示加载态且不触发切换", async () => {
     const user = userEvent.setup();
     const onRevealChange = vi.fn();

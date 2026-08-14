@@ -1,8 +1,12 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
+import { toast } from "sonner";
 import { PasswordSourceField } from "../components/asset/PasswordSourceField";
 import { credential_entity } from "../../wailsjs/go/models";
+import { GetAssetPassword } from "../../wailsjs/go/system/System";
+
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 function makeCred(id: number, username: string): credential_entity.Credential {
   return { id, name: `cred-${id}`, username, type: "password" } as credential_entity.Credential;
@@ -25,6 +29,20 @@ function renderField(overrides: Partial<React.ComponentProps<typeof PasswordSour
   };
   return { ...render(<PasswordSourceField {...props} />), props, user };
 }
+
+describe("PasswordSourceField reveal", () => {
+  it("已保存密码解密失败时保留隐藏态并向用户报错", async () => {
+    vi.mocked(GetAssetPassword).mockRejectedValueOnce(new Error("keychain unavailable"));
+    const { props, user } = renderField({ source: "inline", hasExistingPassword: true, editAssetId: 42 });
+    const input = screen.getByDisplayValue("") as HTMLInputElement;
+
+    await user.click(screen.getByRole("button", { name: "action.showSecret" }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Error: keychain unavailable"));
+    expect(input.type).toBe("password");
+    expect(props.onPasswordChange).not.toHaveBeenCalled();
+  });
+});
 
 describe("PasswordSourceField username 联动", () => {
   it("选中带 username 的密钥 → 触发 onUsernameChange", async () => {

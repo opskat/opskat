@@ -97,8 +97,9 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 	case resp := <-ch:
 		parsed, err := permission.ParseApprovalResponse(kind, resp, expectedItems)
 		if err != nil {
-			log.Warn("opsctl approval response invalid", zap.String("kind", kind),
-				zap.String("decision", resp.Decision), zap.Error(err))
+			// Response payload is an IPC input and may contain credential-shaped text.
+			// The scoped logger already carries confirmID/type/asset/session correlation.
+			log.Warn("opsctl approval response invalid", zap.String("kind", kind))
 			return approval.ApprovalResponse{Approved: false, Reason: "invalid approval response"}
 		}
 		switch parsed.Decision {
@@ -213,7 +214,7 @@ func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.Appr
 		if err != nil || parsed.Decision != permission.ApprovalAllow {
 			if err != nil {
 				logger.Ctx(o.ctx).Warn("opsctl batch approval response invalid",
-					zap.String("decision", resp.Decision), zap.Error(err))
+					zap.String("confirmID", confirmID))
 			}
 			return approval.ApprovalResponse{Approved: false, Reason: "user denied"}
 		}
@@ -408,9 +409,10 @@ func (o *Opsctl) RespondOpsctlApproval(confirmID string, resp permission.Approva
 	if v, ok := o.pendingOpsctlApprovals.Load(confirmID); ok {
 		pending := v.(pendingOpsctlApproval)
 		if _, err := permission.ParseApprovalResponse(pending.kind, resp, pending.items); err != nil {
+			// Response payload is an IPC input and may contain credential-shaped text.
+			// Keep only correlation fields; the static message already identifies validation failure.
 			logger.Ctx(o.ctx).Warn("invalid opsctl approval response denied",
-				zap.String("confirmID", confirmID), zap.String("kind", pending.kind),
-				zap.String("decision", resp.Decision), zap.Error(err))
+				zap.String("confirmID", confirmID), zap.String("kind", pending.kind))
 			resp = permission.ApprovalResponse{Decision: "deny"}
 		}
 		select {

@@ -200,9 +200,10 @@ func (a *AI) RespondAIApproval(confirmID string, resp permission.ApprovalRespons
 	if v, ok := a.pendingAIApprovals.Load(confirmID); ok {
 		pending := v.(pendingAIApproval)
 		if _, err := permission.ParseApprovalResponse(pending.kind, resp, pending.items); err != nil {
+			// Response payload is an IPC input and may contain credential-shaped text.
+			// Keep only correlation fields; the static message already identifies validation failure.
 			logger.Ctx(a.ctx).Warn("invalid AI approval response denied",
-				zap.String("confirmID", confirmID), zap.String("kind", pending.kind),
-				zap.String("decision", resp.Decision), zap.Error(err))
+				zap.String("confirmID", confirmID), zap.String("kind", pending.kind))
 			resp = permission.ApprovalResponse{Decision: "deny"}
 		}
 		select {
