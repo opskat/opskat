@@ -2,7 +2,6 @@ package tool
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -96,9 +95,10 @@ func ExecuteExtensionTool(ctx context.Context, executor ExtensionToolExecutor, a
 		zap.String("tool", toolName), zap.Int64("assetID", assetID))
 	defer func() {
 		if retErr != nil {
+			// 结构化日志不记录 raw error：它可能包装用户输入或远端输出。Error 级别本身
+			// 即失败状态，保留 extension/tool/assetID 供定位，不解析 err.Error() 造分类。
 			logger.Ctx(ctx).Error("extension tool execution failed", zap.String("extension", extName),
-				zap.String("tool", toolName), zap.Int64("assetID", assetID),
-				zap.Error(errors.New(auditredact.Text(retErr.Error()))))
+				zap.String("tool", toolName), zap.Int64("assetID", assetID))
 			return
 		}
 		logger.Ctx(ctx).Info("extension tool execution end", zap.String("extension", extName),

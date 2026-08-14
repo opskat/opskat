@@ -15,7 +15,6 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/grant_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	policyent "github.com/opskat/opskat/internal/model/entity/policy"
-	"github.com/opskat/opskat/internal/pkg/auditredact"
 	"github.com/opskat/opskat/internal/repository/grant_repo"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 )
@@ -318,12 +317,13 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 			// "什么都不落"不能等于"什么都不说"：命令本身仍然照常放行执行（下面的
 			// return），用户点的却是"始终允许"——不留痕迹的话，用户会以为自己拿到了一条
 			// 常驻授权，下次同样的命令还会再弹一次框，audit_logs 里也查不出原因。
-			// 日志给现场排查，独立 ToolName 的审计行把"为什么"留在 audit_logs 里——
-			// 不能复用 grant_submit：AuditLogPage 把那个 ToolName 的 Command 当已生效的
-			// pattern 聚合展示给用户看，混进去就是本条要防的同一种"显示一条没拿到的
-			// 授权"，只是换了个地方发生。
+			// 结构化日志只记 assetID/assetType correlation 供现场定位；独立 ToolName 的
+			// 审计行把"为什么"（含 command，Audit 仍走 canonical redaction）留在
+			// audit_logs 里——不能复用 grant_submit：AuditLogPage 把那个 ToolName 的
+			// Command 当已生效的 pattern 聚合展示给用户看，混进去就是本条要防的同一种
+			// "显示一条没拿到的授权"，只是换了个地方发生。
 			logger.Ctx(ctx).Warn("always-allow approved but normalized to zero grant patterns; nothing persisted",
-				zap.Int64("assetID", assetID), zap.String("assetType", assetType), zap.String("command", auditredact.Text(command)))
+				zap.Int64("assetID", assetID), zap.String("assetType", assetType))
 			audit.WriteGrantDiscardedAudit(ctx, assetID, assetName, command)
 		}
 		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow}

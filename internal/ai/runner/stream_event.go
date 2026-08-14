@@ -10,7 +10,6 @@ import (
 	"github.com/cago-frame/agents/agent"
 	"github.com/cago-frame/agents/provider"
 	"github.com/cago-frame/cago/pkg/logger"
-	"github.com/opskat/opskat/internal/pkg/auditredact"
 	"go.uber.org/zap"
 )
 
@@ -99,8 +98,8 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 
 	case agent.EventRetry:
 		// 透传 Attempt / Delay / Cause —— 前端用 RetryDelayMs 做倒计时同步、Content 显示第几次。
-		// 事件里的 Cause 原值外发；运维日志仍走 canonical text redaction（结构化日志由
-		// task 6 负责去掉 cause，本任务不改写日志）。
+		// 事件里的 Cause 原值外发；运维日志只记 attempt/delay_ms 与 ctx 里的 conv_id 等
+		// correlation 字段，不复制 cause payload（spec：结构化日志不记录 provider 响应正文）。
 		msg := ""
 		attempt := 0
 		delayMs := 0
@@ -116,10 +115,10 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 		// 落运维日志：用户线上反馈"看不到 RetryBanner"时，先查后端日志确认 cago
 		// 真的触发了 retry。如果日志没有，说明 cago shouldRetry 没识别错误（多半
 		// 是 provider 没把 *APIError 包成 *provider.ProviderError），与前端无关。
+		// 不记录 cause：它可能携带 provider 回显的用户输入/远端输出。
 		logger.Ctx(t.ctx).Info("AI provider retry",
 			zap.Int("attempt", attempt),
 			zap.Int("delay_ms", delayMs),
-			zap.String("cause", auditredact.Text(msg)),
 		)
 		emit(StreamEvent{
 			Type:         "retry",

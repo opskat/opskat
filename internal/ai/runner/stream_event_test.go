@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -168,8 +169,8 @@ func TestEventTranslator_RetryPassesRawCause(t *testing.T) {
 	})
 }
 
-func TestEventTranslator_RetryLogRedactsCauseKeepsCorrelation(t *testing.T) {
-	Convey("EventRetry 的运维日志 cause 脱敏，并保留 attempt/delay_ms/conv_id correlation", t, func() {
+func TestEventTranslator_RetryLogOmitsCauseKeepsCorrelation(t *testing.T) {
+	Convey("EventRetry 的运维日志不记录 cause payload，并保留 attempt/delay_ms/conv_id correlation", t, func() {
 		core, logs := observer.New(zap.DebugLevel)
 		orig := logger.Default()
 		logger.SetLogger(zap.New(core))
@@ -188,12 +189,18 @@ func TestEventTranslator_RetryLogRedactsCauseKeepsCorrelation(t *testing.T) {
 
 		var found bool
 		for _, le := range logs.All() {
+			// 面向用户的 retry 事件原文已由 RetryPassesRawCause 断言；此处保证结构化日志
+			// 任何字段都不复制 cause payload。
+			for _, v := range le.ContextMap() {
+				So(fmt.Sprint(v), ShouldNotContainSubstring, secret)
+			}
 			if le.Message != "AI provider retry" {
 				continue
 			}
 			found = true
 			cm := le.ContextMap()
-			So(cm["cause"].(string), ShouldNotContainSubstring, secret)
+			_, causeLogged := cm["cause"]
+			So(causeLogged, ShouldBeFalse) // cause payload 字段不存在
 			So(cm["attempt"], ShouldEqual, int64(4))
 			So(cm["delay_ms"], ShouldEqual, int64(5000))
 			So(cm["conv_id"], ShouldEqual, int64(42))
