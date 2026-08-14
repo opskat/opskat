@@ -100,8 +100,8 @@
     "open": "打开",
     "retry": "重试",
     "refresh": "刷新",
-    "showSecret": "显示秘密",
-    "hideSecret": "隐藏秘密"
+    "showSecret": "显示敏感内容",
+    "hideSecret": "隐藏敏感内容"
   },
   "agentSource": {
     "add": "添加 SSH Agent",
