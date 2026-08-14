@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -173,14 +174,15 @@ func TestEventTranslator_RetryRedactsCause(t *testing.T) {
 }
 
 func TestEventTranslator_RetryLogRedactsCauseKeepsCorrelation(t *testing.T) {
-	Convey("EventRetry 的运维日志 cause 脱敏，attempt/delay_ms 保留", t, func() {
+	Convey("EventRetry 的运维日志 cause 脱敏，并保留 attempt/delay_ms/conv_id correlation", t, func() {
 		core, logs := observer.New(zap.DebugLevel)
 		orig := logger.Default()
 		logger.SetLogger(zap.New(core))
 		t.Cleanup(func() { logger.SetLogger(orig) })
+		ctx := logger.WithContextField(context.Background(), zap.Int64("conv_id", 42))
 
 		secret := "log-" + "retry-secret-token"
-		drain(NewStreamTranslator(), agent.Event{
+		drain(NewStreamTranslatorWithContext(ctx), agent.Event{
 			Kind: agent.EventRetry,
 			Retry: &agent.RetryEvent{
 				Attempt: 4,
@@ -199,6 +201,7 @@ func TestEventTranslator_RetryLogRedactsCauseKeepsCorrelation(t *testing.T) {
 			So(cm["cause"].(string), ShouldNotContainSubstring, secret)
 			So(cm["attempt"], ShouldEqual, int64(4))
 			So(cm["delay_ms"], ShouldEqual, int64(5000))
+			So(cm["conv_id"], ShouldEqual, int64(42))
 		}
 		So(found, ShouldBeTrue)
 	})

@@ -80,7 +80,7 @@ func (a *AI) makeGrantRequestFunc() permission.GrantRequestFunc {
 			Kind:        permission.ApprovalKindGrant,
 			Items:       safeItems,
 			ConfirmID:   confirmID,
-			Description: reason,
+			Description: permission.SafeApprovalDescription(reason),
 			SessionID:   fmt.Sprintf("conv_%d", convID),
 		})
 

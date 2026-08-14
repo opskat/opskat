@@ -21,8 +21,14 @@ func TestJSONRedactsCredentialKeyVariantsWithoutDroppingSafeFields(t *testing.T)
 }
 
 func TestJSONInvalidPayloadFailsClosed(t *testing.T) {
-	if got := JSON(`{"password":"unterminated`); got != RedactedValue {
-		t.Fatalf("invalid JSON = %q, want %q", got, RedactedValue)
+	for _, raw := range []string{
+		`{"password":"unterminated`,
+		`{"host":"db.internal"} trailing-garbage`,
+		`{"host":"db.internal"} {"token":"second-document-secret"}`,
+	} {
+		if got := JSON(raw); got != RedactedValue {
+			t.Fatalf("invalid JSON %q = %q, want %q", raw, got, RedactedValue)
+		}
 	}
 }
 
@@ -99,6 +105,40 @@ func TestTextRedactsAuthorizationCookieAndCredentialKeyVariants(t *testing.T) {
 		if strings.Contains(got, secret) {
 			t.Fatalf("text leaked %q: %s", secret, got)
 		}
+	}
+}
+
+func TestTextRedactsQuotedAndBracketedCredentialHeaders(t *testing.T) {
+	raw := `provider failed: headers={"Authorization":"Bearer quoted-auth-secret","Cookie":"session=quoted-cookie-secret"} opaque={"Proxy-Authorization":"quoted-opaque-auth-secret"} map[Proxy-Authorization:[Basic bracket-auth-secret] Cookie:[session=bracket-cookie-secret]]`
+	got := Text(raw)
+	for _, secret := range []string{"quoted-auth-secret", "quoted-cookie-secret", "quoted-opaque-auth-secret", "bracket-auth-secret", "bracket-cookie-secret"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("text leaked %q: %s", secret, got)
+		}
+	}
+	if !strings.Contains(got, "provider failed") {
+		t.Fatalf("text redaction removed safe error context: %s", got)
+	}
+}
+
+func TestKubeconfigClientKeyDataIsSensitiveButPublicMetadataSurvives(t *testing.T) {
+	raw := "apiVersion: v1\nclusters:\n- name: prod\nusers:\n- user:\n    client-key-data: kube-private-key-data\n    client-certificate-data: public-client-certificate"
+	got := Text(raw)
+	if strings.Contains(got, "kube-private-key-data") {
+		t.Fatalf("text leaked kubeconfig client key data: %s", got)
+	}
+	for _, safe := range []string{"prod", "public-client-certificate"} {
+		if !strings.Contains(got, safe) {
+			t.Fatalf("text redaction removed safe kubeconfig metadata %q: %s", safe, got)
+		}
+	}
+
+	structured := JSON(`{"clientKeyData":"kube-json-private-key","clientCertificateData":"public-json-certificate"}`)
+	if strings.Contains(structured, "kube-json-private-key") {
+		t.Fatalf("JSON leaked kubeconfig client key data: %s", structured)
+	}
+	if !strings.Contains(structured, "public-json-certificate") {
+		t.Fatalf("JSON removed public client certificate metadata: %s", structured)
 	}
 }
 

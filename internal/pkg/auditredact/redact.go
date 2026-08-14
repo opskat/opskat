@@ -4,6 +4,7 @@ package auditredact
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"regexp"
 	"strings"
 	"unicode"
@@ -17,16 +18,23 @@ var textRedactors = []struct {
 }{
 	// Authorization / Proxy-Authorization are scheme + credential headers. Match them
 	// before the generic key rule so "Basic abc" cannot redact only "Basic" and leak abc.
-	{regexp.MustCompile(`(?i)((?:proxy[-_]?authorization|authorization)\s*:\s*[a-z][a-z0-9+._~-]*\s+)[^\s,'";]+`), `${1}` + RedactedValue},
-	// A non-standard one-token Authorization value has no scheme; redact it only when it
-	// reaches the end of the line so the scheme-preserving rule above is not reprocessed.
+	{regexp.MustCompile(`(?i)((?:proxy[-_]?authorization|authorization)["']?\s*:\s*(?:\[\s*)?["']?[a-z][a-z0-9+._~-]*\s+)[^\s,'";\]]+`), `${1}` + RedactedValue},
+	// Non-standard one-token Authorization values appear in quoted provider JSON or
+	// bracketed Go map formatting. Require the closing delimiter so a normal
+	// "Bearer credential" value is not reduced to redacting only the scheme.
+	{regexp.MustCompile(`(?i)((?:proxy[-_]?authorization|authorization)["']?\s*:\s*["'])[^\s"']+(["'])`), `${1}` + RedactedValue + `${2}`},
+	{regexp.MustCompile(`(?i)((?:proxy[-_]?authorization|authorization)["']?\s*:\s*\[\s*)[^\s\]]+(\])`), `${1}` + RedactedValue + `${2}`},
+	// A bare one-token Authorization value is safe to match only at the end of its line.
 	{regexp.MustCompile(`(?im)((?:proxy[-_]?authorization|authorization)\s*:\s*)[^\s\r\n]+\s*$`), `${1}` + RedactedValue},
 	// Cookie values may contain multiple semicolon-separated credentials; fail closed for
-	// the whole header line instead of redacting only the first pair.
+	// the whole header line instead of redacting only the first pair. Provider errors also
+	// commonly render headers as quoted JSON fragments rather than real HTTP lines.
+	{regexp.MustCompile(`(?i)((?:set[-_]?cookie|cookie)["']?\s*:\s*["'])[^"'\r\n]*`), `${1}` + RedactedValue},
+	{regexp.MustCompile(`(?i)((?:set[-_]?cookie|cookie)["']?\s*:\s*\[\s*)[^\]]*(\])`), `${1}` + RedactedValue + `${2}`},
 	{regexp.MustCompile(`(?im)((?:^|[\s,;])(?:set[-_]?cookie|cookie)\s*:\s*)[^\r\n]+`), `${1}` + RedactedValue},
-	{regexp.MustCompile(`(?i)(["']?(?:[a-z0-9_-]*(?:password|passphrase|token|secret)|api[-_]?key|client[-_]?key|private[-_]?key|secret[-_]?access[-_]?key|kubeconfig)["']?\s*:\s*)(?:"[^"]*"|'[^']*'|[^\s,;&}]+)`), `${1}` + `"` + RedactedValue + `"`},
-	{regexp.MustCompile(`(?i)(--(?:[a-z0-9_-]*(?:password|passphrase|token|secret)|api[-_]?key|client[-_]?key|private[-_]?key|secret[-_]?access[-_]?key|kubeconfig|cookie|set[-_]?cookie)(?:=|\s+))(?:"[^"]*"|'[^']*'|[^\s,;&]+)`), `${1}` + RedactedValue},
-	{regexp.MustCompile(`(?i)((?:[a-z0-9_-]*(?:password|passphrase|token|secret)|api[-_]?key|client[-_]?key|private[-_]?key|secret[-_]?access[-_]?key|kubeconfig|cookie|set[-_]?cookie)\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+)`), `${1}` + RedactedValue},
+	{regexp.MustCompile(`(?i)(["']?(?:[a-z0-9_-]*(?:password|passphrase|token|secret)|api[-_]?key|client[-_]?key(?:[-_]?data)?|private[-_]?key|secret[-_]?access[-_]?key|kubeconfig)["']?\s*:\s*)(?:"[^"]*"|'[^']*'|[^\s,;&}]+)`), `${1}` + `"` + RedactedValue + `"`},
+	{regexp.MustCompile(`(?i)(--(?:[a-z0-9_-]*(?:password|passphrase|token|secret)|api[-_]?key|client[-_]?key(?:[-_]?data)?|private[-_]?key|secret[-_]?access[-_]?key|kubeconfig|cookie|set[-_]?cookie)(?:=|\s+))(?:"[^"]*"|'[^']*'|[^\s,;&]+)`), `${1}` + RedactedValue},
+	{regexp.MustCompile(`(?i)((?:[a-z0-9_-]*(?:password|passphrase|token|secret)|api[-_]?key|client[-_]?key(?:[-_]?data)?|private[-_]?key|secret[-_]?access[-_]?key|kubeconfig|cookie|set[-_]?cookie)\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+)`), `${1}` + RedactedValue},
 	{regexp.MustCompile(`(?i)(identified\s+by\s+)(?:"[^"]*"|'[^']*'|[^\s,;&]+)`), `${1}` + RedactedValue},
 	{regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://[^:/@\s]+:)[^@\s]+(@)`), `${1}` + RedactedValue + `${2}`},
 	{regexp.MustCompile(`(?is)-----BEGIN [^-\r\n]*PRIVATE KEY-----.*?-----END [^-\r\n]*PRIVATE KEY-----`), RedactedValue},
@@ -49,6 +57,10 @@ func JSON(raw string) string {
 	decoder.UseNumber()
 	var value any
 	if err := decoder.Decode(&value); err != nil {
+		return RedactedValue
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
 		return RedactedValue
 	}
 	var out bytes.Buffer
@@ -152,7 +164,7 @@ func isSensitiveKey(key string) bool {
 	canonical := canonicalKey(key)
 	if canonical == "authorization" || canonical == "proxyauthorization" ||
 		canonical == "cookie" || canonical == "setcookie" || canonical == "kubeconfig" ||
-		canonical == "xamzcredential" || canonical == "awsaccesskeyid" {
+		canonical == "clientkeydata" || canonical == "xamzcredential" || canonical == "awsaccesskeyid" {
 		return true
 	}
 	for _, suffix := range []string{"password", "passphrase", "token", "secret", "privatekey", "privatekeys", "clientkey", "apikey",

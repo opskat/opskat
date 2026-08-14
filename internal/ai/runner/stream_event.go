@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -23,12 +24,19 @@ import (
 // 审批事件（approval_request / approval_result）由 app_ai.go 的 confirmFunc 直接
 // emit，不走 cago event 流，因此不在本适配器范围。
 type EventTranslator struct {
+	ctx        context.Context
 	inThinking bool
 }
 
-// NewStreamTranslator 创建一个新的事件翻译器。
+// NewStreamTranslator 创建一个不携带调用方 correlation 的事件翻译器（测试和独立使用）。
 func NewStreamTranslator() *EventTranslator {
-	return &EventTranslator{}
+	return NewStreamTranslatorWithContext(context.Background())
+}
+
+// NewStreamTranslatorWithContext 创建一个继承 runner 调用上下文的事件翻译器，使重试
+// 等运维日志保留 conv_id 等安全 correlation 字段，而不是退化到 logger.Default()。
+func NewStreamTranslatorWithContext(ctx context.Context) *EventTranslator {
+	return &EventTranslator{ctx: ctx}
 }
 
 // Translate 处理一条 cago agent.Event，调用 emit 0..N 次发出对应 StreamEvent。
@@ -93,7 +101,7 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 
 	case agent.EventRetry:
 		// 透传 Attempt / Delay / Cause —— 前端用 RetryDelayMs 做倒计时同步、Content 显示第几次。
-		// Cause 仅在事件外脱敏；原始 cause 落运维日志由 Task 3（audit/log 收口）统一接管。
+		// Cause 在事件与运维日志两个外发面都走 canonical text redaction。
 		msg := ""
 		attempt := 0
 		delayMs := 0
@@ -109,7 +117,7 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 		// 落运维日志：用户线上反馈"看不到 RetryBanner"时，先查后端日志确认 cago
 		// 真的触发了 retry。如果日志没有，说明 cago shouldRetry 没识别错误（多半
 		// 是 provider 没把 *APIError 包成 *provider.ProviderError），与前端无关。
-		logger.Default().Info("AI provider retry",
+		logger.Ctx(t.ctx).Info("AI provider retry",
 			zap.Int("attempt", attempt),
 			zap.Int("delay_ms", delayMs),
 			zap.String("cause", auditredact.Text(msg)),

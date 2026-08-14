@@ -69,6 +69,14 @@ func TestSafeApprovalItemsRedactsSecretsAndReportsRedaction(t *testing.T) {
 	require.Contains(t, items[0].Detail, "PRIVATE KEY")
 }
 
+func TestSafeApprovalDescriptionRedactsCredentialMaterial(t *testing.T) {
+	secret := "approval-description-" + "credential-sentinel"
+	got := SafeApprovalDescription("deploy reason: Authorization: Basic " + secret)
+	require.NotContains(t, got, secret)
+	require.Contains(t, got, auditredact.RedactedValue)
+	require.Contains(t, got, "deploy reason")
+}
+
 func TestSafeApprovalItemsCleanSubjectNoRedaction(t *testing.T) {
 	items := []ApprovalItem{{Type: "exec", AssetID: 1, AssetName: "web-1", Command: "uptime"}}
 	safe, redacted := SafeApprovalItems(items)

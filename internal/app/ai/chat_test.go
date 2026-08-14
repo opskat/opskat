@@ -33,6 +33,21 @@ func TestSafeOutwardError(t *testing.T) {
 	}
 }
 
+func TestSafeOutwardFailureUsesTheSameProjectionForEventAndReturnedWailsError(t *testing.T) {
+	message, returned := safeOutwardFailure("send to LLM", errors.New("Authorization: Basic wails-return-secret"))
+	for name, text := range map[string]string{"event": message, "returned error": returned.Error()} {
+		if strings.Contains(text, "wails-return-secret") {
+			t.Fatalf("%s leaked the raw provider error: %s", name, text)
+		}
+		if !strings.Contains(text, "<redacted>") {
+			t.Fatalf("%s lost the safe diagnostic shape: %s", name, text)
+		}
+	}
+	if !strings.Contains(returned.Error(), "send to LLM") {
+		t.Fatalf("returned Wails error lost its operation context: %s", returned)
+	}
+}
+
 func TestAllBuiltinAssetTypeSkills(t *testing.T) {
 	t.Run("every built-in type is included, with no tabs involved", func(t *testing.T) {
 		got := allBuiltinAssetTypeSkills()

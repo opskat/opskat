@@ -145,6 +145,13 @@ func SafeApprovalItems(items []ApprovalItem) ([]ApprovalItem, bool) {
 	return safe, redacted
 }
 
+// SafeApprovalDescription projects the free-form reason/description rendered beside
+// approval items. It is display/persistence text rather than an editable grant subject,
+// so it is redacted without changing the command/detail persistence gate.
+func SafeApprovalDescription(description string) string {
+	return auditredact.Text(description)
+}
+
 // ContainsRedaction 报告这批审批主体是否发生了任何 command/detail 脱敏。
 func ContainsRedaction(items []ApprovalItem) bool {
 	_, redacted := SafeApprovalItems(items)

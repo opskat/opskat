@@ -263,9 +263,10 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 	ctx := i18n.Ctx(o.ctx, o.lang.Lang())
 	sessionID := req.SessionID
 
+	safeDescription := permission.SafeApprovalDescription(req.Description)
 	session := &grant_entity.GrantSession{
 		ID:          sessionID,
-		Description: req.Description,
+		Description: safeDescription,
 		Status:      grant_entity.GrantStatusPending,
 		Createtime:  time.Now().Unix(),
 	}
@@ -307,7 +308,7 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 
 	wailsRuntime.EventsEmit(o.ctx, "opsctl:grant-approval", map[string]any{
 		"session_id":  sessionID,
-		"description": req.Description,
+		"description": safeDescription,
 		"items":       eventItems,
 	})
 

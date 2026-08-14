@@ -42,6 +42,14 @@ func safeOutwardError(err error) string {
 	return auditredact.Text(err.Error())
 }
 
+// safeOutwardFailure projects the provider error once for both outward channels. The
+// caller keeps the existing event wording while the synchronous Wails method error adds
+// its operation prefix; neither channel may retain the original wrapped error.
+func safeOutwardFailure(prefix string, err error) (string, error) {
+	message := safeOutwardError(err)
+	return message, fmt.Errorf("%s: %s", prefix, message)
+}
+
 // runnerEntry 持有一个活跃会话的 cago 运行栈。
 type runnerEntry struct {
 	sys        *coding.System
@@ -536,8 +544,9 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 	cfg.SystemPrompt = systemPrompt
 	sys, err := runner.BuildSystem(chatCtx, cfg)
 	if err != nil {
-		onEvent(runner.StreamEvent{Type: "error", Error: fmt.Sprintf("build coding system: %s", safeOutwardError(err))})
-		return fmt.Errorf("build coding system: %w", err)
+		message, outwardErr := safeOutwardFailure("build coding system", err)
+		onEvent(runner.StreamEvent{Type: "error", Error: fmt.Sprintf("build coding system: %s", message)})
+		return outwardErr
 	}
 
 	history, lastUserText := runner.SplitForReplay(messages)
@@ -565,13 +574,14 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 			onEvent(runner.StreamEvent{Type: "stopped"})
 			return nil //nolint:nilerr // 取消是用户主动行为，不是错误
 		}
-		onEvent(runner.StreamEvent{Type: "error", Error: safeOutwardError(err)})
-		return fmt.Errorf("send to LLM: %w", err)
+		message, outwardErr := safeOutwardFailure("send to LLM", err)
+		onEvent(runner.StreamEvent{Type: "error", Error: message})
+		return outwardErr
 	}
 
 	go func() {
 		defer close(entry.done)
-		translator := runner.NewStreamTranslator()
+		translator := runner.NewStreamTranslatorWithContext(chatCtx)
 		for ev := range events {
 			translator.Translate(ev, onEvent)
 		}
