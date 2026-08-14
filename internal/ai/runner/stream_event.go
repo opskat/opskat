@@ -52,10 +52,15 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 		if ev.Tool == nil {
 			return
 		}
-		var input string
+		var safeInput string
 		if ev.Tool.Input != nil {
-			if b, err := json.Marshal(ev.Tool.Input); err == nil {
-				input = string(b)
+			b, err := json.Marshal(ev.Tool.Input)
+			if err != nil {
+				// 序列化失败也属于安全投影失败：外发必须 fail closed，不能退化成
+				// 空串（会把失败伪装成“无参数”）或尝试格式化原始对象。
+				safeInput = auditredact.RedactedValue
+			} else {
+				safeInput = auditredact.JSON(string(b))
 			}
 		}
 		// 安全边界：外发前按 canonical redactor 递归脱敏 tool 参数，原始 cago 执行
@@ -63,7 +68,7 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 		emit(StreamEvent{
 			Type:       "tool_start",
 			ToolName:   ev.Tool.Name,
-			ToolInput:  auditredact.JSON(input),
+			ToolInput:  safeInput,
 			ToolCallID: ev.Tool.ToolUseID,
 		})
 

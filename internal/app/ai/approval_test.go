@@ -9,6 +9,12 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 )
 
+func TestSafeLocalApprovalPatternsDoNotSendSecretPatternsToWails(t *testing.T) {
+	patterns := []string{"echo --password local-secret", "/tmp/safe/*"}
+	require.Nil(t, safeLocalApprovalPatterns(patterns, true))
+	require.Equal(t, patterns, safeLocalApprovalPatterns(patterns, false))
+}
+
 // 审批主体被脱敏时（redacted=true），后端必须拒绝伪造的 allowAll / grant edited_items，
 // 只放行 deny 与 allow-once——<redacted> 不能成为授权 pattern，原始秘密也不能经编辑
 // 响应回传或持久化（spec Approval safety / Compatibility）。前端隐藏按钮不可作为信任

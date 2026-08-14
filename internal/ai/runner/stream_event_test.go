@@ -97,6 +97,21 @@ func TestEventTranslator_ToolStartRedactsCredentialInput(t *testing.T) {
 	})
 }
 
+func TestEventTranslator_ToolStartMarshalFailureFailsClosed(t *testing.T) {
+	Convey("EventPreToolUse 输入无法序列化时外发 <redacted> 而不是空串或原文", t, func() {
+		out := drain(NewStreamTranslator(), agent.Event{
+			Kind: agent.EventPreToolUse,
+			Tool: &agent.ToolEvent{
+				ToolUseID: "tu_bad",
+				Name:      "broken",
+				Input:     map[string]any{"unsupported": func() {}},
+			},
+		})
+		So(out, ShouldHaveLength, 1)
+		So(out[0].ToolInput, ShouldEqual, "<redacted>")
+	})
+}
+
 func TestEventTranslator_ToolResultRedactsCredentialContent(t *testing.T) {
 	Convey("EventPostToolUse 的 JSON 结果递归脱敏，普通文本按文本规则脱敏", t, func() {
 		secret := "result-" + "credential-sentinel" // 运行时拼接避免 gosec G101

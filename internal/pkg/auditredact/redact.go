@@ -15,10 +15,18 @@ var textRedactors = []struct {
 	pattern     *regexp.Regexp
 	replacement string
 }{
-	{regexp.MustCompile(`(?i)(["']?(?:password|passphrase|token|api[-_]?key|private[-_]?key|secret[-_]?access[-_]?key)["']?\s*:\s*)(?:"[^"]*"|'[^']*'|[^\s,;&}]+)`), `${1}` + `"` + RedactedValue + `"`},
-	{regexp.MustCompile(`(?i)(--(?:password|passphrase|token|api[-_]?key|private[-_]?key|secret[-_]?access[-_]?key)(?:=|\s+))(?:"[^"]*"|'[^']*'|[^\s,;&]+)`), `${1}` + RedactedValue},
-	{regexp.MustCompile(`(?i)((?:password|passphrase|token|api[-_]?key|private[-_]?key|secret[-_]?access[-_]?key)\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+)`), `${1}` + RedactedValue},
-	{regexp.MustCompile(`(?i)(authorization\s*:\s*bearer\s+)[^\s'"]+`), `${1}` + RedactedValue},
+	// Authorization / Proxy-Authorization are scheme + credential headers. Match them
+	// before the generic key rule so "Basic abc" cannot redact only "Basic" and leak abc.
+	{regexp.MustCompile(`(?i)((?:proxy[-_]?authorization|authorization)\s*:\s*[a-z][a-z0-9+._~-]*\s+)[^\s,'";]+`), `${1}` + RedactedValue},
+	// A non-standard one-token Authorization value has no scheme; redact it only when it
+	// reaches the end of the line so the scheme-preserving rule above is not reprocessed.
+	{regexp.MustCompile(`(?im)((?:proxy[-_]?authorization|authorization)\s*:\s*)[^\s\r\n]+\s*$`), `${1}` + RedactedValue},
+	// Cookie values may contain multiple semicolon-separated credentials; fail closed for
+	// the whole header line instead of redacting only the first pair.
+	{regexp.MustCompile(`(?im)((?:^|[\s,;])(?:set[-_]?cookie|cookie)\s*:\s*)[^\r\n]+`), `${1}` + RedactedValue},
+	{regexp.MustCompile(`(?i)(["']?(?:[a-z0-9_-]*(?:password|passphrase|token|secret)|api[-_]?key|client[-_]?key|private[-_]?key|secret[-_]?access[-_]?key|kubeconfig)["']?\s*:\s*)(?:"[^"]*"|'[^']*'|[^\s,;&}]+)`), `${1}` + `"` + RedactedValue + `"`},
+	{regexp.MustCompile(`(?i)(--(?:[a-z0-9_-]*(?:password|passphrase|token|secret)|api[-_]?key|client[-_]?key|private[-_]?key|secret[-_]?access[-_]?key|kubeconfig|cookie|set[-_]?cookie)(?:=|\s+))(?:"[^"]*"|'[^']*'|[^\s,;&]+)`), `${1}` + RedactedValue},
+	{regexp.MustCompile(`(?i)((?:[a-z0-9_-]*(?:password|passphrase|token|secret)|api[-_]?key|client[-_]?key|private[-_]?key|secret[-_]?access[-_]?key|kubeconfig|cookie|set[-_]?cookie)\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+)`), `${1}` + RedactedValue},
 	{regexp.MustCompile(`(?i)(identified\s+by\s+)(?:"[^"]*"|'[^']*'|[^\s,;&]+)`), `${1}` + RedactedValue},
 	{regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://[^:/@\s]+:)[^@\s]+(@)`), `${1}` + RedactedValue + `${2}`},
 	{regexp.MustCompile(`(?is)-----BEGIN [^-\r\n]*PRIVATE KEY-----.*?-----END [^-\r\n]*PRIVATE KEY-----`), RedactedValue},
@@ -70,21 +78,27 @@ func Text(text string) string {
 }
 
 func redactValue(value any) any {
+	return redactValueInContext(value, false)
+}
+
+func redactValueInContext(value any, agentSource bool) any {
 	switch typed := value.(type) {
 	case map[string]any:
 		redacted := make(map[string]any, len(typed))
+		mapIsAgentSource := agentSource || hasAgentEndpointType(typed)
 		for key, item := range typed {
-			if isSensitiveKey(key) {
+			canonical := canonicalKey(key)
+			if isSensitiveKey(key) || (mapIsAgentSource && isAgentEndpointValueKey(canonical)) {
 				redacted[key] = RedactedValue
 				continue
 			}
-			redacted[key] = redactValue(item)
+			redacted[key] = redactValueInContext(item, isAgentSourceContainerKey(canonical))
 		}
 		return redacted
 	case []any:
 		redacted := make([]any, len(typed))
 		for i, item := range typed {
-			redacted[i] = redactValue(item)
+			redacted[i] = redactValueInContext(item, agentSource)
 		}
 		return redacted
 	case string:
@@ -94,15 +108,51 @@ func redactValue(value any) any {
 	}
 }
 
-func isSensitiveKey(key string) bool {
-	canonical := strings.Map(func(r rune) rune {
+func hasAgentEndpointType(value map[string]any) bool {
+	for key, item := range value {
+		canonical := canonicalKey(key)
+		if canonical != "endpointtype" && canonical != "type" {
+			continue
+		}
+		typeName, ok := item.(string)
+		if !ok {
+			continue
+		}
+		switch canonicalKey(typeName) {
+		case "environment", "unixsocket", "windowsnamedpipe":
+			return true
+		}
+	}
+	return false
+}
+
+func isAgentSourceContainerKey(canonical string) bool {
+	return canonical == "agentsource" || canonical == "sshagentsource"
+}
+
+func isAgentEndpointValueKey(canonical string) bool {
+	switch canonical {
+	case "endpoint", "value", "path", "socket", "pipe", "namedpipe":
+		return true
+	default:
+		return false
+	}
+}
+
+func canonicalKey(key string) string {
+	return strings.Map(func(r rune) rune {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			return unicode.ToLower(r)
 		}
 		return -1
 	}, key)
+}
+
+func isSensitiveKey(key string) bool {
+	canonical := canonicalKey(key)
 	if canonical == "authorization" || canonical == "proxyauthorization" ||
-		canonical == "cookie" || canonical == "setcookie" || canonical == "kubeconfig" {
+		canonical == "cookie" || canonical == "setcookie" || canonical == "kubeconfig" ||
+		canonical == "xamzcredential" || canonical == "awsaccesskeyid" {
 		return true
 	}
 	for _, suffix := range []string{"password", "passphrase", "token", "secret", "privatekey", "privatekeys", "clientkey", "apikey",

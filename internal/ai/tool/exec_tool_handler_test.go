@@ -2,11 +2,14 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/mock/gomock"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	. "github.com/smartystreets/goconvey/convey"
 
@@ -22,6 +25,7 @@ type mockExtToolExecutor struct {
 	defOK          bool
 	policyArgsSeen []byte
 	callArgsSeen   []byte
+	policyErr      error
 }
 
 func (m *mockExtToolExecutor) FindExtensionByTool(extName, toolName string) *extension.Extension {
@@ -38,6 +42,9 @@ func (m *mockExtToolExecutor) GetExtensionPolicyGroups(extName, assetType string
 
 func (m *mockExtToolExecutor) CheckToolPolicy(ctx context.Context, _, toolName string, argsJSON []byte) (string, string, error) {
 	m.policyArgsSeen = append([]byte(nil), argsJSON...)
+	if m.policyErr != nil {
+		return "", "", m.policyErr
+	}
 	return m.ext.Plugin.CheckPolicy(ctx, toolName, argsJSON)
 }
 
@@ -235,6 +242,38 @@ func TestExecuteExtensionToolValidatesDelegatedArgsBeforeApprovalAndPlugin(t *te
 	if len(executor.callArgsSeen) != 0 || len(executor.policyArgsSeen) != 0 {
 		t.Fatalf("invalid delegated args reached extension runtime: policy=%s call=%s",
 			executor.policyArgsSeen, executor.callArgsSeen)
+	}
+}
+
+func TestExecuteExtensionToolFailureLogRedactsError(t *testing.T) {
+	core, logs := observer.New(zap.DebugLevel)
+	orig := logger.Default()
+	logger.SetLogger(zap.New(core))
+	t.Cleanup(func() { logger.SetLogger(orig) })
+
+	secret := "extension-log-" + "credential-sentinel"
+	executor := &mockExtToolExecutor{
+		ext: &extension.Extension{
+			Name: "oss", Manifest: &extension.Manifest{Name: "oss", Policies: extension.PoliciesDef{Type: "oss"}},
+		},
+		def: extension.ToolDef{Name: "noop", Parameters: map[string]any{
+			"type": "object", "properties": map[string]any{},
+		}},
+		defOK:     true,
+		policyErr: errors.New("Authorization: Basic " + secret),
+	}
+
+	_, err := ExecuteExtensionTool(t.Context(), executor, 1, "oss", "noop", []byte(`{}`))
+	if err == nil {
+		t.Fatal("expected extension policy failure")
+	}
+	entries := logs.FilterMessage("extension tool execution failed").All()
+	if len(entries) != 1 {
+		t.Fatalf("failure logs = %d, want 1", len(entries))
+	}
+	logged, _ := entries[0].ContextMap()["error"].(string)
+	if strings.Contains(logged, secret) || !strings.Contains(logged, "<redacted>") {
+		t.Fatalf("failure log error = %q, want canonical redaction", logged)
 	}
 }
 

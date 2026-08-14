@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -96,7 +97,8 @@ func ExecuteExtensionTool(ctx context.Context, executor ExtensionToolExecutor, a
 	defer func() {
 		if retErr != nil {
 			logger.Ctx(ctx).Error("extension tool execution failed", zap.String("extension", extName),
-				zap.String("tool", toolName), zap.Int64("assetID", assetID), zap.Error(retErr))
+				zap.String("tool", toolName), zap.Int64("assetID", assetID),
+				zap.Error(errors.New(auditredact.Text(retErr.Error()))))
 			return
 		}
 		logger.Ctx(ctx).Info("extension tool execution end", zap.String("extension", extName),

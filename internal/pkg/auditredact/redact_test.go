@@ -92,6 +92,37 @@ func TestTextRedactsSignatureChallengeAgentEndpointForms(t *testing.T) {
 	}
 }
 
+func TestTextRedactsAuthorizationCookieAndCredentialKeyVariants(t *testing.T) {
+	raw := "Authorization: Basic auth-secret\nProxy-Authorization: Bearer proxy-secret\nCookie: session=cookie-secret; csrf=csrf-secret\n--client-key client-key-secret --client-secret credential-client-42 --cookie cli-cookie-secret kubeconfig=kube-secret access_token=token-secret"
+	got := Text(raw)
+	for _, secret := range []string{"auth-secret", "proxy-secret", "cookie-secret", "csrf-secret", "client-key-secret", "credential-client-42", "cli-cookie-secret", "kube-secret", "token-secret"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("text leaked %q: %s", secret, got)
+		}
+	}
+}
+
+func TestJSONRedactsStructuredAgentEndpointAndPresignedFields(t *testing.T) {
+	raw := `{
+		"agent_source":{"endpoint_type":"unix_socket","endpoint":"/tmp/private-agent.sock"},
+		"object_store":{"endpoint_type":"public","endpoint":"https://oss.example.com"},
+		"X-Amz-Credential":"credential-secret",
+		"AWSAccessKeyId":"access-key-secret",
+		"X-Amz-Security-Token":"security-token-secret"
+	}`
+	got := JSON(raw)
+	for _, secret := range []string{"/tmp/private-agent.sock", "credential-secret", "access-key-secret", "security-token-secret"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("JSON leaked %q: %s", secret, got)
+		}
+	}
+	for _, safe := range []string{`"endpoint_type":"unix_socket"`, `"endpoint_type":"public"`, "https://oss.example.com"} {
+		if !strings.Contains(got, safe) {
+			t.Fatalf("JSON removed safe metadata %q: %s", safe, got)
+		}
+	}
+}
+
 func TestTextRedactsAWSPresignedURLQueryParameters(t *testing.T) {
 	tests := []struct {
 		name       string

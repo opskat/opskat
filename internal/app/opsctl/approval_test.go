@@ -2,12 +2,62 @@ package opsctl
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/internal/ai/permission"
+	approvalpkg "github.com/opskat/opskat/internal/approval"
 )
+
+type opsctlTestLang struct{}
+
+func (opsctlTestLang) Lang() string { return "en" }
+
+type extToolExecutorStub struct {
+	result []byte
+	err    error
+}
+
+func (s extToolExecutorStub) ExecuteExtTool(context.Context, string, string, []byte) ([]byte, error) {
+	return s.result, s.err
+}
+
+func TestGrantItemsForPersistenceSkipsRedactedSubjects(t *testing.T) {
+	secret := "grant-" + "credential-sentinel"
+	reqItems := []approvalpkg.GrantItem{{Type: "exec", AssetID: 1, Command: "--password " + secret}}
+
+	require.Nil(t, grantItemsForPersistence("session-1", reqItems, true))
+	got := grantItemsForPersistence("session-1", reqItems, false)
+	require.Len(t, got, 1)
+	require.Equal(t, reqItems[0].Command, got[0].Command)
+}
+
+func TestHandleExtToolExecRedactsDelegatedResultAndError(t *testing.T) {
+	secret := "extension-" + "credential-sentinel"
+
+	t.Run("result", func(t *testing.T) {
+		o := &Opsctl{ctx: context.Background(), lang: opsctlTestLang{}, extExecutor: extToolExecutorStub{
+			result: []byte(`{"rows":1,"token":"` + secret + `"}`),
+		}}
+		resp := o.handleExtToolExec(approvalpkg.ApprovalRequest{Extension: "demo", Tool: "read"})
+		require.True(t, resp.Approved)
+		require.NotContains(t, resp.ToolResult, secret)
+		require.Contains(t, resp.ToolResult, "<redacted>")
+		require.Contains(t, resp.ToolResult, `"rows":1`)
+	})
+
+	t.Run("error", func(t *testing.T) {
+		o := &Opsctl{ctx: context.Background(), lang: opsctlTestLang{}, extExecutor: extToolExecutorStub{
+			err: errors.New("Authorization: Basic " + secret),
+		}}
+		resp := o.handleExtToolExec(approvalpkg.ApprovalRequest{Extension: "demo", Tool: "read"})
+		require.False(t, resp.Approved)
+		require.NotContains(t, resp.ToolError, secret)
+		require.Contains(t, resp.ToolError, "<redacted>")
+	})
+}
 
 // 与 internal/app/ai/approval_test.go 同一套门禁语义：审批主体被脱敏时后端拒绝伪造的
 // allowAll / grant edited_items，只放行 deny 与 allow-once（spec Approval safety）。

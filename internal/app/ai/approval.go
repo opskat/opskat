@@ -146,6 +146,16 @@ type WindowActivator interface {
 // SetWindowActivator 由 main.go 注入：local-tool 审批弹出时需要把窗口拉前台。
 func (a *AI) SetWindowActivator(w WindowActivator) { a.window = w }
 
+// safeLocalApprovalPatterns 返回可发往 Wails 的本地工具默认 pattern 副本。
+// command/detail 一旦发生脱敏，pattern 编辑器按协议必须消失，原始 pattern 也没有
+// 继续跨边界的用途；直接省略，避免隐藏 UI 仍把秘密留在事件/store 中。
+func safeLocalApprovalPatterns(patterns []string, redacted bool) []string {
+	if redacted {
+		return nil
+	}
+	return append([]string(nil), patterns...)
+}
+
 // makeLocalToolConfirmFunc 创建 coding agent 本地工具审批回调。
 func (a *AI) makeLocalToolConfirmFunc() tool.LocalToolConfirmFunc {
 	return func(ctx context.Context, req tool.LocalToolApprovalRequest) permission.ApprovalResponse {
@@ -171,7 +181,7 @@ func (a *AI) makeLocalToolConfirmFunc() tool.LocalToolConfirmFunc {
 			ConfirmID: confirmID,
 			ToolName:  req.ToolName,
 			Items:     safeItems,
-			Patterns:  req.DefaultPatterns,
+			Patterns:  safeLocalApprovalPatterns(req.DefaultPatterns, redacted),
 		})
 
 		ch := make(chan permission.ApprovalResponse, 1)

@@ -12,6 +12,7 @@ import (
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/model/entity/grant_entity"
+	"github.com/opskat/opskat/internal/pkg/auditredact"
 	"github.com/opskat/opskat/internal/repository/grant_repo"
 	"github.com/opskat/opskat/internal/sshpool"
 
@@ -233,6 +234,30 @@ func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.Appr
 	}
 }
 
+// grantItemsForPersistence 构造可在审批前保存的 grant items。主体发生脱敏时，原始
+// command/detail 只保留在 pending 内存中用于校验，不能写入 grant_items；该请求最终只能
+// 被拒绝，但仍可用安全副本展示给用户。
+func grantItemsForPersistence(sessionID string, reqItems []approval.GrantItem, redacted bool) []*grant_entity.GrantItem {
+	if redacted {
+		return nil
+	}
+	items := make([]*grant_entity.GrantItem, 0, len(reqItems))
+	for i, item := range reqItems {
+		items = append(items, &grant_entity.GrantItem{
+			GrantSessionID: sessionID,
+			ItemIndex:      i,
+			ToolName:       item.Type,
+			AssetID:        item.AssetID,
+			AssetName:      item.AssetName,
+			GroupID:        item.GroupID,
+			GroupName:      item.GroupName,
+			Command:        item.Command,
+			Detail:         item.Detail,
+		})
+	}
+	return items
+}
+
 // handleGrantApproval 处理批量计划审批
 func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
 	ctx := i18n.Ctx(o.ctx, o.lang.Lang())
@@ -250,24 +275,6 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 		}
 	}
 
-	var items []*grant_entity.GrantItem
-	for i, pi := range req.GrantItems {
-		items = append(items, &grant_entity.GrantItem{
-			GrantSessionID: sessionID,
-			ItemIndex:      i,
-			ToolName:       pi.Type,
-			AssetID:        pi.AssetID,
-			AssetName:      pi.AssetName,
-			GroupID:        pi.GroupID,
-			GroupName:      pi.GroupName,
-			Command:        pi.Command,
-			Detail:         pi.Detail,
-		})
-	}
-	if err := grant_repo.Grant().CreateItems(ctx, items); err != nil {
-		return approval.ApprovalResponse{Approved: false, Reason: "failed to create grant items"}
-	}
-
 	expectedItems := make([]permission.ApprovalItem, 0, len(req.GrantItems))
 	for _, item := range req.GrantItems {
 		expectedItems = append(expectedItems, permission.ApprovalItem{
@@ -277,6 +284,10 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 	}
 	// 授权事件同样只发安全投影；后端 pending 保留原始 expectedItems 用于校验与执行。
 	safeItems, redacted := permission.SafeApprovalItems(expectedItems)
+	items := grantItemsForPersistence(sessionID, req.GrantItems, redacted)
+	if err := grant_repo.Grant().CreateItems(ctx, items); err != nil {
+		return approval.ApprovalResponse{Approved: false, Reason: "failed to create grant items"}
+	}
 	eventItems := make([]map[string]any, 0, len(safeItems))
 	for i := range safeItems {
 		eventItems = append(eventItems, map[string]any{
@@ -397,10 +408,10 @@ func (o *Opsctl) handleExtToolExec(req approval.ApprovalRequest) approval.Approv
 	ctx = permission.WithPolicyChecker(ctx, checker)
 	result, err := o.extExecutor.ExecuteExtTool(ctx, req.Extension, req.Tool, args)
 	if err != nil {
-		return approval.ApprovalResponse{ToolError: fmt.Sprintf("call tool %s/%s: %v", req.Extension, req.Tool, err)}
+		return approval.ApprovalResponse{ToolError: auditredact.Text(fmt.Sprintf("call tool %s/%s: %v", req.Extension, req.Tool, err))}
 	}
 
-	return approval.ApprovalResponse{Approved: true, ToolResult: string(result)}
+	return approval.ApprovalResponse{Approved: true, ToolResult: auditredact.Result(string(result))}
 }
 
 // RespondOpsctlApproval 前端响应 opsctl 审批请求（统一入口）

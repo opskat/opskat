@@ -111,7 +111,8 @@ type ContentBlock struct {
 	ErrorDetail string `json:"errorDetail,omitempty"`
 }
 
-// GetBlocks 获取前端显示块
+// GetBlocks 获取前端显示块。旧数据库行可能来自实时边界建立前，因此加载时也返回
+// 递归安全投影；只改返回副本，不原地重写历史行。
 func (m *Message) GetBlocks() ([]ContentBlock, error) {
 	if m.Blocks == "" {
 		return nil, nil
@@ -120,7 +121,11 @@ func (m *Message) GetBlocks() ([]ContentBlock, error) {
 	if err := json.Unmarshal([]byte(m.Blocks), &blocks); err != nil {
 		return nil, err
 	}
-	return blocks, nil
+	safe := make([]ContentBlock, len(blocks))
+	for i := range blocks {
+		safe[i] = redactContentBlock(blocks[i])
+	}
+	return safe, nil
 }
 
 // SetBlocks 设置前端显示块（安全持久化副本）。

@@ -83,6 +83,23 @@ func TestMessageBlocksPersistenceRedactsToolResultErrorAndNestedAgentBlocks(t *t
 	})
 }
 
+func TestMessageGetBlocksRedactsLegacyPlaintextBeforeDisplay(t *testing.T) {
+	Convey("GetBlocks 在旧明文历史离开后端前递归投影安全副本", t, func() {
+		secret := "legacy-" + "credential-sentinel"
+		msg := &Message{Blocks: `[{"type":"agent","content":"","childBlocks":[{"type":"tool","content":"Authorization: Basic ` + secret + `","toolInput":"{\"password\":\"` + secret + `\"}"}]}]`}
+
+		got, err := msg.GetBlocks()
+		So(err, ShouldBeNil)
+		So(got, ShouldHaveLength, 1)
+		So(got[0].ChildBlocks, ShouldHaveLength, 1)
+		So(got[0].ChildBlocks[0].ToolInput, ShouldNotContainSubstring, secret)
+		So(got[0].ChildBlocks[0].Content, ShouldNotContainSubstring, secret)
+		So(got[0].ChildBlocks[0].ToolInput, ShouldContainSubstring, "<redacted>")
+		So(got[0].ChildBlocks[0].Content, ShouldContainSubstring, "<redacted>")
+		So(msg.Blocks, ShouldContainSubstring, secret) // 加载只投影，不原地改写旧行。
+	})
+}
+
 func TestMessageBlocksPersistenceRedactsToolCredentials(t *testing.T) {
 	gdb, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "conversation.db")), &gorm.Config{})
 	require.NoError(t, err)
