@@ -259,3 +259,36 @@ describe("OpsctlApprovalDialog 批量审批折叠（kind=batch，D17）", () => 
     expect(screen.getAllByDisplayValue(/cat \/var\/log\/app-/)).toHaveLength(12);
   });
 });
+
+// 审批主体被后端脱敏（command/detail 含 <redacted>）时，UI 必须隐藏 remember/allowAll
+// 与 pattern 编辑器（spec Approval safety / Compatibility）。
+describe("OpsctlApprovalDialog 脱敏主体（spec Approval safety）", () => {
+  it("single 脱敏主体不提供「记住」入口，allow-once 仍可用", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+
+    fireSingleApproval(handlers, { type: "exec", command: "mysql --password=<redacted>", session_id: "session-1" });
+
+    expect(screen.queryByText("opsctlApproval.remember")).not.toBeInTheDocument();
+    expect(screen.getByText("opsctlApproval.allow")).toBeInTheDocument();
+    expect(screen.getByText("opsctlApproval.deny")).toBeInTheDocument();
+  });
+
+  it("grant 脱敏主体不可编辑（只读展示，<redacted> 不落成 pattern）", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+
+    fireGrantApproval(handlers, [
+      {
+        type: "exec",
+        asset_id: 1,
+        asset_name: "web-1",
+        command: "uptime",
+        detail: "-----BEGIN PRIVATE KEY----- <redacted>",
+      },
+    ]);
+
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.getByText("uptime")).toBeInTheDocument();
+  });
+});

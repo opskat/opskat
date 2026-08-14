@@ -73,23 +73,25 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 		o.window.ActivateWindow()
 	}
 
+	expectedItems := []permission.ApprovalItem{{
+		Type: req.Type, AssetID: req.AssetID, AssetName: req.AssetName,
+		Command: req.Command, Detail: req.Detail,
+	}}
+	// 发往 Wails 的 command/detail 只用安全投影；后端 pending 保留原始 items 用于校验与执行。
+	safeItems, redacted := permission.SafeApprovalItems(expectedItems)
 	wailsRuntime.EventsEmit(o.ctx, "opsctl:approval", map[string]any{
 		"confirm_id": confirmID,
 		"kind":       kind,
 		"type":       req.Type,
 		"asset_id":   req.AssetID,
 		"asset_name": req.AssetName,
-		"command":    req.Command,
-		"detail":     req.Detail,
+		"command":    safeItems[0].Command,
+		"detail":     safeItems[0].Detail,
 		"session_id": req.SessionID,
 	})
 
 	ch := make(chan permission.ApprovalResponse, 1)
-	expectedItems := []permission.ApprovalItem{{
-		Type: req.Type, AssetID: req.AssetID, AssetName: req.AssetName,
-		Command: req.Command, Detail: req.Detail,
-	}}
-	o.pendingOpsctlApprovals.Store(confirmID, pendingOpsctlApproval{kind: kind, items: expectedItems, ch: ch})
+	o.pendingOpsctlApprovals.Store(confirmID, pendingOpsctlApproval{kind: kind, items: expectedItems, redacted: redacted, ch: ch})
 	defer o.pendingOpsctlApprovals.Delete(confirmID)
 
 	select {
@@ -108,6 +110,12 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 			log.Info("opsctl approval completed", zap.Bool("approved", true), zap.String("decision", resp.Decision))
 			return approval.ApprovalResponse{Approved: true}
 		case permission.ApprovalAllowAll:
+			if !permission.CanPersistGrant(redacted, kind, parsed) {
+				// 脱敏主体不允许落成常驻授权：<redacted> 不能成为 pattern，秘密也不能回传持久化。
+				log.Warn("redacted opsctl approval subject cannot persist grant",
+					zap.String("kind", kind), zap.String("decision", resp.Decision))
+				return approval.ApprovalResponse{Approved: false, Reason: "approval subject redacted; cannot persist grant"}
+			}
 			if req.SessionID == "" {
 				return approval.ApprovalResponse{Approved: false, Reason: "approval does not support a grant without a session"}
 			}
@@ -174,18 +182,22 @@ func (o *Opsctl) startSSHPoolServer() {
 func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
 	confirmID := fmt.Sprintf("batch_%d", time.Now().UnixNano())
 
-	items := make([]map[string]any, 0, len(req.BatchItems))
 	expectedItems := make([]permission.ApprovalItem, 0, len(req.BatchItems))
 	for _, item := range req.BatchItems {
-		items = append(items, map[string]any{
-			"type":       item.Type,
-			"asset_id":   item.AssetID,
-			"asset_name": item.AssetName,
-			"command":    item.Command,
-			"detail":     item.Detail,
-		})
 		expectedItems = append(expectedItems, permission.ApprovalItem{
 			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName, Command: item.Command, Detail: item.Detail,
+		})
+	}
+	// 批量事件同样只发安全投影；后端 pending 保留原始 expectedItems 用于校验与执行。
+	safeItems, redacted := permission.SafeApprovalItems(expectedItems)
+	items := make([]map[string]any, 0, len(safeItems))
+	for i := range safeItems {
+		items = append(items, map[string]any{
+			"type":       safeItems[i].Type,
+			"asset_id":   safeItems[i].AssetID,
+			"asset_name": safeItems[i].AssetName,
+			"command":    safeItems[i].Command,
+			"detail":     safeItems[i].Detail,
 		})
 	}
 
@@ -200,7 +212,7 @@ func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.Appr
 	})
 
 	ch := make(chan permission.ApprovalResponse, 1)
-	o.pendingOpsctlApprovals.Store(confirmID, pendingOpsctlApproval{kind: permission.ApprovalKindBatch, items: expectedItems, ch: ch})
+	o.pendingOpsctlApprovals.Store(confirmID, pendingOpsctlApproval{kind: permission.ApprovalKindBatch, items: expectedItems, redacted: redacted, ch: ch})
 	defer o.pendingOpsctlApprovals.Delete(confirmID)
 
 	select {
@@ -256,16 +268,25 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 		return approval.ApprovalResponse{Approved: false, Reason: "failed to create grant items"}
 	}
 
-	eventItems := make([]map[string]any, 0, len(req.GrantItems))
-	for _, pi := range req.GrantItems {
+	expectedItems := make([]permission.ApprovalItem, 0, len(req.GrantItems))
+	for _, item := range req.GrantItems {
+		expectedItems = append(expectedItems, permission.ApprovalItem{
+			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName,
+			GroupID: item.GroupID, GroupName: item.GroupName, Command: item.Command, Detail: item.Detail,
+		})
+	}
+	// 授权事件同样只发安全投影；后端 pending 保留原始 expectedItems 用于校验与执行。
+	safeItems, redacted := permission.SafeApprovalItems(expectedItems)
+	eventItems := make([]map[string]any, 0, len(safeItems))
+	for i := range safeItems {
 		eventItems = append(eventItems, map[string]any{
-			"type":       pi.Type,
-			"asset_id":   pi.AssetID,
-			"asset_name": pi.AssetName,
-			"group_id":   pi.GroupID,
-			"group_name": pi.GroupName,
-			"command":    pi.Command,
-			"detail":     pi.Detail,
+			"type":       safeItems[i].Type,
+			"asset_id":   safeItems[i].AssetID,
+			"asset_name": safeItems[i].AssetName,
+			"group_id":   safeItems[i].GroupID,
+			"group_name": safeItems[i].GroupName,
+			"command":    safeItems[i].Command,
+			"detail":     safeItems[i].Detail,
 		})
 	}
 
@@ -280,20 +301,13 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 	})
 
 	ch := make(chan permission.ApprovalResponse, 1)
-	expectedItems := make([]permission.ApprovalItem, 0, len(req.GrantItems))
-	for _, item := range req.GrantItems {
-		expectedItems = append(expectedItems, permission.ApprovalItem{
-			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName,
-			GroupID: item.GroupID, GroupName: item.GroupName, Command: item.Command, Detail: item.Detail,
-		})
-	}
-	o.pendingOpsctlApprovals.Store(sessionID, pendingOpsctlApproval{kind: permission.ApprovalKindGrant, items: expectedItems, ch: ch})
+	o.pendingOpsctlApprovals.Store(sessionID, pendingOpsctlApproval{kind: permission.ApprovalKindGrant, items: expectedItems, redacted: redacted, ch: ch})
 	defer o.pendingOpsctlApprovals.Delete(sessionID)
 
 	select {
 	case resp := <-ch:
 		parsed, parseErr := permission.ParseApprovalResponse(permission.ApprovalKindGrant, resp, expectedItems)
-		if parseErr != nil || parsed.Decision != permission.ApprovalAllow {
+		if parseErr != nil || parsed.Decision != permission.ApprovalAllow || !permission.CanPersistGrant(redacted, permission.ApprovalKindGrant, parsed) {
 			if err := grant_repo.Grant().UpdateSessionStatus(ctx, sessionID, grant_entity.GrantStatusRejected); err != nil {
 				logger.Default().Error("update grant session status to rejected", zap.Error(err))
 			}
@@ -393,10 +407,16 @@ func (o *Opsctl) handleExtToolExec(req approval.ApprovalRequest) approval.Approv
 func (o *Opsctl) RespondOpsctlApproval(confirmID string, resp permission.ApprovalResponse) {
 	if v, ok := o.pendingOpsctlApprovals.Load(confirmID); ok {
 		pending := v.(pendingOpsctlApproval)
-		if _, err := permission.ParseApprovalResponse(pending.kind, resp, pending.items); err != nil {
+		if parsed, err := permission.ParseApprovalResponse(pending.kind, resp, pending.items); err != nil {
 			logger.Ctx(o.ctx).Warn("invalid opsctl approval response denied",
 				zap.String("confirmID", confirmID), zap.String("kind", pending.kind),
 				zap.String("decision", resp.Decision), zap.Error(err))
+			resp = permission.ApprovalResponse{Decision: "deny"}
+		} else if !permission.CanPersistGrant(pending.redacted, pending.kind, parsed) {
+			// 脱敏主体不允许 allowAll / edited_items：拒绝伪造响应，防止 <redacted> 或秘密落成授权。
+			logger.Ctx(o.ctx).Warn("redacted opsctl approval subject cannot persist grant; denied",
+				zap.String("confirmID", confirmID), zap.String("kind", pending.kind),
+				zap.String("decision", resp.Decision))
 			resp = permission.ApprovalResponse{Decision: "deny"}
 		}
 		select {

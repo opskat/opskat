@@ -28,15 +28,17 @@ func (a *AI) makeCommandConfirmFunc() permission.CommandConfirmFunc {
 		confirmID := fmt.Sprintf("ai_%d_%d", convID, time.Now().UnixNano())
 		eventName := fmt.Sprintf("ai:event:%d", convID)
 
+		// 发往 Wails 的 items 只用安全投影；后端 pending 保留原始 items 用于响应校验与执行。
+		safeItems, redacted := permission.SafeApprovalItems(items)
 		wailsRuntime.EventsEmit(a.ctx, eventName, runner.StreamEvent{
 			Type:      "approval_request",
 			Kind:      kind,
-			Items:     items,
+			Items:     safeItems,
 			ConfirmID: confirmID,
 		})
 
 		ch := make(chan permission.ApprovalResponse, 1)
-		a.pendingAIApprovals.Store(confirmID, pendingAIApproval{kind: kind, items: items, ch: ch})
+		a.pendingAIApprovals.Store(confirmID, pendingAIApproval{kind: kind, items: items, redacted: redacted, ch: ch})
 		defer a.pendingAIApprovals.Delete(confirmID)
 
 		select {
@@ -72,17 +74,18 @@ func (a *AI) makeGrantRequestFunc() permission.GrantRequestFunc {
 		confirmID := fmt.Sprintf("grant_%d_%d", convID, time.Now().UnixNano())
 		eventName := fmt.Sprintf("ai:event:%d", convID)
 
+		safeItems, redacted := permission.SafeApprovalItems(items)
 		wailsRuntime.EventsEmit(a.ctx, eventName, runner.StreamEvent{
 			Type:        "approval_request",
 			Kind:        permission.ApprovalKindGrant,
-			Items:       items,
+			Items:       safeItems,
 			ConfirmID:   confirmID,
 			Description: reason,
 			SessionID:   fmt.Sprintf("conv_%d", convID),
 		})
 
 		ch := make(chan permission.ApprovalResponse, 1)
-		a.pendingAIApprovals.Store(confirmID, pendingAIApproval{kind: permission.ApprovalKindGrant, items: items, ch: ch})
+		a.pendingAIApprovals.Store(confirmID, pendingAIApproval{kind: permission.ApprovalKindGrant, items: items, redacted: redacted, ch: ch})
 		defer a.pendingAIApprovals.Delete(confirmID)
 
 		select {
@@ -94,6 +97,10 @@ func (a *AI) makeGrantRequestFunc() permission.GrantRequestFunc {
 			})
 			parsed, err := permission.ParseApprovalResponse(permission.ApprovalKindGrant, resp, items)
 			if err != nil || parsed.Decision != permission.ApprovalAllow {
+				return false, nil
+			}
+			// 脱敏主体不允许落成持久授权：<redacted> 不能成为 pattern，秘密也不能回传持久化。
+			if !permission.CanPersistGrant(redacted, permission.ApprovalKindGrant, parsed) {
 				return false, nil
 			}
 			var finalPatterns []string
@@ -157,17 +164,18 @@ func (a *AI) makeLocalToolConfirmFunc() tool.LocalToolConfirmFunc {
 			Command: req.Command,
 			Detail:  req.Detail,
 		}}
+		safeItems, redacted := permission.SafeApprovalItems(approvalItems)
 		wailsRuntime.EventsEmit(a.ctx, eventName, runner.StreamEvent{
 			Type:      "approval_request",
 			Kind:      permission.ApprovalKindLocalTool,
 			ConfirmID: confirmID,
 			ToolName:  req.ToolName,
-			Items:     approvalItems,
+			Items:     safeItems,
 			Patterns:  req.DefaultPatterns,
 		})
 
 		ch := make(chan permission.ApprovalResponse, 1)
-		a.pendingAIApprovals.Store(confirmID, pendingAIApproval{kind: permission.ApprovalKindLocalTool, items: approvalItems, ch: ch})
+		a.pendingAIApprovals.Store(confirmID, pendingAIApproval{kind: permission.ApprovalKindLocalTool, items: approvalItems, redacted: redacted, ch: ch})
 		defer a.pendingAIApprovals.Delete(confirmID)
 
 		select {
@@ -197,10 +205,16 @@ func (a *AI) makeLocalToolConfirmFunc() tool.LocalToolConfirmFunc {
 func (a *AI) RespondAIApproval(confirmID string, resp permission.ApprovalResponse) {
 	if v, ok := a.pendingAIApprovals.Load(confirmID); ok {
 		pending := v.(pendingAIApproval)
-		if _, err := permission.ParseApprovalResponse(pending.kind, resp, pending.items); err != nil {
+		if parsed, err := permission.ParseApprovalResponse(pending.kind, resp, pending.items); err != nil {
 			logger.Ctx(a.ctx).Warn("invalid AI approval response denied",
 				zap.String("confirmID", confirmID), zap.String("kind", pending.kind),
 				zap.String("decision", resp.Decision), zap.Error(err))
+			resp = permission.ApprovalResponse{Decision: "deny"}
+		} else if !permission.CanPersistGrant(pending.redacted, pending.kind, parsed) {
+			// 脱敏主体不允许 allowAll / edited_items：拒绝伪造响应，防止 <redacted> 或秘密落成授权。
+			logger.Ctx(a.ctx).Warn("redacted AI approval subject cannot persist grant; denied",
+				zap.String("confirmID", confirmID), zap.String("kind", pending.kind),
+				zap.String("decision", resp.Decision))
 			resp = permission.ApprovalResponse{Decision: "deny"}
 		}
 		select {

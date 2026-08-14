@@ -248,3 +248,39 @@ describe("ApprovalBlock 批量审批折叠（kind=batch，D17）", () => {
     expect(screen.getByText("do something 10")).toBeVisible();
   });
 });
+
+// 审批主体被后端脱敏（command/detail 含 <redacted>）时，UI 必须隐藏 remember/allowAll
+// 与 pattern 编辑器——<redacted> 不能成为授权 pattern，原始秘密也不能经编辑响应回传
+// （spec Approval safety / Compatibility）。后端同时拒绝伪造的 allowAll/edited_items。
+describe("ApprovalBlock 脱敏主体（spec Approval safety）", () => {
+  it("single 脱敏主体不提供「记住」入口，allow-once 仍可用", () => {
+    renderApproval({
+      approvalKind: "single",
+      approvalItems: [{ type: "exec", asset_id: 1, asset_name: "web-1", command: "mysql --password=<redacted>" }],
+    });
+
+    expect(screen.queryByTestId("ai-approval-remember")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("ai-approval-allow-all")).not.toBeInTheDocument();
+    expect(screen.getByTestId("ai-approval-allow")).toBeInTheDocument();
+    expect(screen.getByTestId("ai-approval-deny")).toBeInTheDocument();
+  });
+
+  it("grant 脱敏主体不提供 pattern 编辑框，命令只读展示", () => {
+    renderApproval({
+      approvalKind: "grant",
+      approvalItems: [
+        {
+          type: "exec",
+          asset_id: 1,
+          asset_name: "web-1",
+          command: "uptime",
+          detail: "-----BEGIN PRIVATE KEY----- <redacted>",
+        },
+      ],
+    });
+
+    // grant 的编辑框换成只读展示，防止 <redacted> 被当作用户手写 pattern 回传
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.getByText("uptime")).toBeInTheDocument();
+  });
+});

@@ -44,9 +44,10 @@ type Opsctl struct {
 }
 
 type pendingOpsctlApproval struct {
-	kind  string
-	items []permission.ApprovalItem
-	ch    chan permission.ApprovalResponse
+	kind     string
+	items    []permission.ApprovalItem // 后端保留原始 items，用于响应校验与执行
+	redacted bool                      // 安全投影是否发生过脱敏
+	ch       chan permission.ApprovalResponse
 }
 
 // SetAuthToken main.go 注入 socket 鉴权 token，供 startApprovalServer/startSSHPoolServer 使用。

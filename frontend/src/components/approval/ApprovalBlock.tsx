@@ -39,6 +39,11 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
   const isLocalTool = kind === "local_tool";
   const localToolName = block.approvalToolName || items[0]?.type || "";
 
+  // 后端只发安全投影：任一 command/detail 含 <redacted> 说明主体被脱敏。此时不得提供
+  // remember/allow-all/edit —— <redacted> 不能成为授权 pattern，秘密也不能回传（spec
+  // Approval safety）。这是展示层跟随，不承担脱敏职责（无敏感字段规则）。
+  const redacted = items.some((it) => it.command.includes("<redacted>") || (it.detail || "").includes("<redacted>"));
+
   // local_tool 在 rememberMode 用 approvalPatterns（多 sub-command 时多行），
   // 其它 kind 沿用单条 item.command。
   const initialPatterns = isLocalTool ? (block.approvalPatterns || []).join("\n") : "";
@@ -166,7 +171,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                     </>
                   )}
                 </div>
-                {kind === "grant" ? (
+                {kind === "grant" && !redacted ? (
                   <Textarea
                     value={editedCommands[i] || ""}
                     onChange={(e) => setEditedCommands((prev) => ({ ...prev, [i]: e.target.value }))}
@@ -293,6 +298,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
               {t("ai.approvalDeny")}
             </Button>
             {(kind === "single" || kind === "local_tool") &&
+              !redacted &&
               (rememberMode ? (
                 <Button
                   size="sm"
