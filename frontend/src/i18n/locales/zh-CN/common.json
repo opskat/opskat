@@ -99,7 +99,9 @@
     "editPermission": "资产详情",
     "open": "打开",
     "retry": "重试",
-    "refresh": "刷新"
+    "refresh": "刷新",
+    "showSecret": "显示秘密",
+    "hideSecret": "隐藏秘密"
   },
   "agentSource": {
     "add": "添加 SSH Agent",

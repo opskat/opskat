@@ -99,7 +99,9 @@
     "editPermission": "Asset Details",
     "open": "Open",
     "retry": "Retry",
-    "refresh": "Refresh"
+    "refresh": "Refresh",
+    "showSecret": "Show secret",
+    "hideSecret": "Hide secret"
   },
   "agentSource": {
     "add": "Add SSH Agent",

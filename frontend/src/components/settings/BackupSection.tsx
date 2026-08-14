@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  cn,
   Button,
   Input,
   Label,
@@ -55,8 +54,6 @@ import {
   Loader2,
   Copy,
   ExternalLink,
-  Eye,
-  EyeOff,
   Shuffle,
   Cloud,
   Save,
@@ -68,6 +65,7 @@ import { notifyCopied, notifySuccess } from "@/lib/notify";
 import { BrowserOpenURL } from "../../../wailsjs/runtime/runtime";
 import { useShortcutStore } from "@/stores/shortcutStore";
 import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
+import { SecretInput } from "@/components/SecretInput";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const githubTokenInvalidMarker = "[GITHUB_TOKEN_INVALID]";
@@ -85,30 +83,26 @@ const emptyWebDAVExportDefaults: WebDAVExportDefaults = {
 function PasswordInput({
   showGenerate,
   onGenerate,
-  className,
   ...props
 }: React.ComponentProps<typeof Input> & {
   showGenerate?: boolean;
   onGenerate?: (password: string) => void;
 }) {
+  const { t } = useTranslation();
   const [visible, setVisible] = useState(false);
   return (
-    <div className="relative">
-      <Input
-        {...props}
-        type={visible ? "text" : "password"}
-        className={cn(showGenerate ? "pr-18" : "pr-9", className)}
-      />
-      <div className="absolute right-1 top-1/2 -translate-y-1/2 flex">
-        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setVisible(!visible)}>
-          {visible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-        </Button>
-        {showGenerate && (
+    <SecretInput
+      {...props}
+      reveal={visible}
+      onRevealChange={setVisible}
+      actions={
+        showGenerate ? (
           <Button
             type="button"
             variant="ghost"
             size="icon"
             className="h-7 w-7"
+            title={t("credential.randomPassword")}
             onClick={() => {
               const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
               const values = crypto.getRandomValues(new Uint8Array(20));
@@ -119,9 +113,9 @@ function PasswordInput({
           >
             <Shuffle className="h-3.5 w-3.5" />
           </Button>
-        )}
-      </div>
-    </div>
+        ) : undefined
+      }
+    />
   );
 }
 

@@ -16,6 +16,7 @@ import {
   TooltipTrigger,
 } from "@opskat/ui";
 import { Field, Segmented } from "@/components/asset/fields";
+import { SecretInput } from "@/components/SecretInput";
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
@@ -406,8 +407,7 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
                   {/* Passphrase for local key file */}
                   {state.selectedKeyPaths.length > 0 && (
                     <Field label={t("sshKey.passphrase")} className="mt-1">
-                      <Input
-                        type="password"
+                      <SecretInput
                         value={state.privateKeyPassphrase}
                         onChange={(e) => patch({ privateKeyPassphrase: e.target.value })}
                         placeholder={t("sshKey.passphrasePlaceholder")}
