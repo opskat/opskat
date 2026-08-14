@@ -48,6 +48,13 @@ func putArgs(args map[string]any) (map[string]any, error) {
 // 旧的巨型 schema 把 10 种类型的字段并集写进 JSON Schema，既是我们正在移除的类型分支的
 // 另一种写法，又漏掉了 oss——那类资产此前经 AI 完全无法创建。
 func handlePutAsset(ctx context.Context, args map[string]any) (string, error) {
+	// 一进来就落审计投影的基线：putArgs/校验/lookup 这些 Prepare 之前的早期返回没有
+	// producer 投影可用，若不先投影，runner 的 auditMiddleware 会回退到原始 c.Input，
+	// 把可能携带 write-only 秘密的 config 原样写进审计。这里只投影顶层非 config 字段
+	// （config 是自由对象、可能带秘密）；Prepare/Commit 成功后再用 producer 投影覆盖。
+	// 该投影是独立 map，绝不改写 args——执行/审批/ToolBlock/历史仍见原值。
+	aictx.RecordAuditRequest(ctx, putAssetTopLevelAuditArgs(args))
+
 	config, err := putArgs(args)
 	if err != nil {
 		return "", err
@@ -88,9 +95,7 @@ func createAsset(ctx context.Context, args, config map[string]any) (string, erro
 	}
 	prepared, err := asset_put_svc.Prepare(ctx, req)
 	if err != nil {
-		// prepare/validation 失败：还没有 producer 投影可用，绝不回退原始 config
-		// （config 是自由对象，可能携带 write-only 秘密）——至少投影顶层非 config 字段。
-		aictx.RecordAuditRequest(ctx, putAssetTopLevelAuditArgs(args))
+		// 顶层基线已在 handlePutAsset 入口记录，这里不重复。
 		return "", fmt.Errorf("failed to create asset: %w", err)
 	}
 	result, err := asset_put_svc.Commit(ctx, prepared)
@@ -104,9 +109,10 @@ func createAsset(ctx context.Context, args, config map[string]any) (string, erro
 	return putAssetResultJSON(result, "asset created successfully")
 }
 
-// putAssetTopLevelAuditArgs 在 prepare/validation 失败（尚无 producer 投影可用）时，
-// 只把 put_asset 顶层非 config 字段投影给 Audit：config 是自由对象、可能携带 write-only
-// 秘密，prepare 失败绝不回退原始 config；其余顶层字段（资产身份/描述/分组等）至少保留。
+// putAssetTopLevelAuditArgs 把 put_asset 顶层非 config 字段投影给 Audit，作为
+// handlePutAsset 入口的基线（record 在 putArgs/校验/lookup 之前）。config 是自由对象、
+// 可能携带 write-only 秘密，任何 Prepare 之前的失败都绝不回退原始 config；其余顶层字段
+// （资产身份/描述/分组等）至少保留。Prepare/Commit 成功后再用 producer 投影覆盖基线。
 func putAssetTopLevelAuditArgs(args map[string]any) map[string]any {
 	out := make(map[string]any)
 	for _, key := range []string{"asset", "name", "type", "group_id", "description", "icon", "credential_name"} {
@@ -164,8 +170,7 @@ func updateAsset(ctx context.Context, ref string, args, config map[string]any) (
 	}
 	prepared, err := asset_put_svc.Prepare(ctx, req)
 	if err != nil {
-		// 同 createAsset：prepare 失败绝不回退原始 config，只投影顶层非 config 字段。
-		aictx.RecordAuditRequest(ctx, putAssetTopLevelAuditArgs(args))
+		// 顶层基线已在 handlePutAsset 入口记录，这里不重复。
 		return "", fmt.Errorf("failed to update asset: %w", err)
 	}
 	result, err := asset_put_svc.Commit(ctx, prepared)

@@ -1192,6 +1192,75 @@ func TestHandlePutAsset_PrepareFailureProjectsTopLevelOnly(t *testing.T) {
 	assert.Equal(t, "database", proj["type"])
 }
 
+// TestHandlePutAsset_PrePrepareFailuresProjectTopLevelOnly: 进入 Prepare 之前的早期返回
+// （putArgs 形状校验、创建缺 name、未知类型、更新 lookup 失败）在 runner 眼里同样是
+// "没有投影"→ 回退原始 c.Input，把可能携带 write-only 秘密的 config 原样写进审计。
+// handler 必须在任何校验/lookup 之前就投影顶层非 config 字段，且原始 args/config 必须
+// 原样保留（override 只落在审计投影槽，绝不改写执行/UI/历史）。
+func TestHandlePutAsset_PrePrepareFailuresProjectTopLevelOnly(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       map[string]any
+		wantErrSub string
+		wantKey    string // 投影里应保留的顶层字段（asset/name/type）
+		wantValue  any
+	}{
+		{
+			name:       "create missing name",
+			args:       map[string]any{"type": "ssh", "config": map[string]any{"host": "10.0.0.1", "password": "missing-name-secret"}},
+			wantErrSub: "name",
+			wantKey:    "type",
+			wantValue:  "ssh",
+		},
+		{
+			name:       "create unsupported type",
+			args:       map[string]any{"name": "x", "type": "sqlite", "config": map[string]any{"host": "10.0.0.1", "password": "unknown-type-secret"}},
+			wantErrSub: "sqlite",
+			wantKey:    "name",
+			wantValue:  "x",
+		},
+		{
+			name:       "config not an object",
+			args:       map[string]any{"name": "bad", "type": "ssh", "config": "not-an-object"},
+			wantErrSub: "config",
+			wantKey:    "name",
+			wantValue:  "bad",
+		},
+		{
+			name:       "update lookup failure",
+			args:       map[string]any{"asset": "no-such-box", "config": map[string]any{"host": "10.0.0.1", "password": "lookup-secret"}},
+			wantErrSub: "no-such-box",
+			wantKey:    "asset",
+			wantValue:  "no-such-box",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := setupCRUD(t)
+			slot := aictx.NewAuditRequestSlot()
+			ctx := aictx.WithAuditRequestSlot(env.ctx, slot)
+
+			origConfig := tc.args["config"] // 快照原始 config，调用后必须原样保留
+
+			_, err := handlePutAsset(ctx, tc.args)
+			require.Error(t, err, "pre-Prepare failure must error")
+			assert.Contains(t, err.Error(), tc.wantErrSub)
+			assert.Equal(t, origConfig, tc.args["config"], "original config must be unchanged")
+			assert.Equal(t, tc.wantValue, tc.args[tc.wantKey], "original args must be unchanged")
+
+			// 投影只留顶层非 config 字段，绝不带出 secret 或 config。
+			proj := aictx.GetAuditRequest(ctx)
+			require.NotNil(t, proj, "pre-Prepare failure must still record a projection")
+			encoded, marshalErr := json.Marshal(proj)
+			require.NoError(t, marshalErr)
+			assert.NotContains(t, string(encoded), "secret", "projection must not leak write-only secret")
+			assert.NotContains(t, string(encoded), "config", "pre-Prepare failure must never project raw config")
+			assert.Equal(t, tc.wantValue, proj[tc.wantKey], "top-level identity must survive in the projection")
+		})
+	}
+}
+
 // TestHandlePutAsset_CommitFailureProjectsSafeAuditArgs: Prepare 成功、Commit/仓库失败时，
 // 用 Prepared.SafeAuditArgs 投影 —— 保留普通 config 与身份，write-only 字段整体缺席。
 func TestHandlePutAsset_CommitFailureProjectsSafeAuditArgs(t *testing.T) {
