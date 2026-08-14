@@ -60,10 +60,9 @@ type AI struct {
 }
 
 type pendingAIApproval struct {
-	kind     string
-	items    []permission.ApprovalItem // 后端保留原始 items，用于响应校验与执行
-	redacted bool                      // 安全投影是否发生过脱敏
-	ch       chan permission.ApprovalResponse
+	kind  string
+	items []permission.ApprovalItem // 后端保留原始 items，用于响应校验与执行
+	ch    chan permission.ApprovalResponse
 }
 
 // SetKafkaService 由 main.go 注入：AI tool 在 chat ctx 中通过 helper.WithKafkaService 暴露给 handler。

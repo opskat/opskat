@@ -28,18 +28,16 @@ func (a *AI) makeCommandConfirmFunc() permission.CommandConfirmFunc {
 		confirmID := fmt.Sprintf("ai_%d_%d", convID, time.Now().UnixNano())
 		eventName := fmt.Sprintf("ai:event:%d", convID)
 
-		// 发往 Wails 的 items 只用安全投影；后端 pending 保留原始 items 用于响应校验与执行。
-		safeItems, redacted := permission.SafeApprovalItems(items)
+		// 发往 Wails 的 items 即后端 pending 持有的原始 items，展示与执行主体逐字一致。
 		wailsRuntime.EventsEmit(a.ctx, eventName, runner.StreamEvent{
 			Type:      "approval_request",
 			Kind:      kind,
-			Items:     safeItems,
+			Items:     items,
 			ConfirmID: confirmID,
-			Redacted:  redacted,
 		})
 
 		ch := make(chan permission.ApprovalResponse, 1)
-		a.pendingAIApprovals.Store(confirmID, pendingAIApproval{kind: kind, items: items, redacted: redacted, ch: ch})
+		a.pendingAIApprovals.Store(confirmID, pendingAIApproval{kind: kind, items: items, ch: ch})
 		defer a.pendingAIApprovals.Delete(confirmID)
 
 		select {
@@ -75,19 +73,18 @@ func (a *AI) makeGrantRequestFunc() permission.GrantRequestFunc {
 		confirmID := fmt.Sprintf("grant_%d_%d", convID, time.Now().UnixNano())
 		eventName := fmt.Sprintf("ai:event:%d", convID)
 
-		safeItems, redacted := permission.SafeApprovalItems(items)
+		// 发往 Wails 的 items 与 description 即原始主体，展示与执行逐字一致。
 		wailsRuntime.EventsEmit(a.ctx, eventName, runner.StreamEvent{
 			Type:        "approval_request",
 			Kind:        permission.ApprovalKindGrant,
-			Items:       safeItems,
+			Items:       items,
 			ConfirmID:   confirmID,
-			Description: permission.SafeApprovalDescription(reason),
+			Description: reason,
 			SessionID:   fmt.Sprintf("conv_%d", convID),
-			Redacted:    redacted,
 		})
 
 		ch := make(chan permission.ApprovalResponse, 1)
-		a.pendingAIApprovals.Store(confirmID, pendingAIApproval{kind: permission.ApprovalKindGrant, items: items, redacted: redacted, ch: ch})
+		a.pendingAIApprovals.Store(confirmID, pendingAIApproval{kind: permission.ApprovalKindGrant, items: items, ch: ch})
 		defer a.pendingAIApprovals.Delete(confirmID)
 
 		select {
@@ -99,10 +96,6 @@ func (a *AI) makeGrantRequestFunc() permission.GrantRequestFunc {
 			})
 			parsed, err := permission.ParseApprovalResponse(permission.ApprovalKindGrant, resp, items)
 			if err != nil || parsed.Decision != permission.ApprovalAllow {
-				return false, nil
-			}
-			// 脱敏主体不允许落成持久授权：<redacted> 不能成为 pattern，秘密也不能回传持久化。
-			if !permission.CanPersistGrant(redacted, permission.ApprovalKindGrant, parsed) {
 				return false, nil
 			}
 			var finalPatterns []string
@@ -148,16 +141,6 @@ type WindowActivator interface {
 // SetWindowActivator 由 main.go 注入：local-tool 审批弹出时需要把窗口拉前台。
 func (a *AI) SetWindowActivator(w WindowActivator) { a.window = w }
 
-// safeLocalApprovalPatterns 返回可发往 Wails 的本地工具默认 pattern 副本。
-// command/detail 一旦发生脱敏，pattern 编辑器按协议必须消失，原始 pattern 也没有
-// 继续跨边界的用途；直接省略，避免隐藏 UI 仍把秘密留在事件/store 中。
-func safeLocalApprovalPatterns(patterns []string, redacted bool) []string {
-	if redacted {
-		return nil
-	}
-	return append([]string(nil), patterns...)
-}
-
 // makeLocalToolConfirmFunc 创建 coding agent 本地工具审批回调。
 func (a *AI) makeLocalToolConfirmFunc() tool.LocalToolConfirmFunc {
 	return func(ctx context.Context, req tool.LocalToolApprovalRequest) permission.ApprovalResponse {
@@ -176,19 +159,17 @@ func (a *AI) makeLocalToolConfirmFunc() tool.LocalToolConfirmFunc {
 			Command: req.Command,
 			Detail:  req.Detail,
 		}}
-		safeItems, redacted := permission.SafeApprovalItems(approvalItems)
 		wailsRuntime.EventsEmit(a.ctx, eventName, runner.StreamEvent{
 			Type:      "approval_request",
 			Kind:      permission.ApprovalKindLocalTool,
 			ConfirmID: confirmID,
 			ToolName:  req.ToolName,
-			Items:     safeItems,
-			Patterns:  safeLocalApprovalPatterns(req.DefaultPatterns, redacted),
-			Redacted:  redacted,
+			Items:     approvalItems,
+			Patterns:  req.DefaultPatterns,
 		})
 
 		ch := make(chan permission.ApprovalResponse, 1)
-		a.pendingAIApprovals.Store(confirmID, pendingAIApproval{kind: permission.ApprovalKindLocalTool, items: approvalItems, redacted: redacted, ch: ch})
+		a.pendingAIApprovals.Store(confirmID, pendingAIApproval{kind: permission.ApprovalKindLocalTool, items: approvalItems, ch: ch})
 		defer a.pendingAIApprovals.Delete(confirmID)
 
 		select {
@@ -218,16 +199,10 @@ func (a *AI) makeLocalToolConfirmFunc() tool.LocalToolConfirmFunc {
 func (a *AI) RespondAIApproval(confirmID string, resp permission.ApprovalResponse) {
 	if v, ok := a.pendingAIApprovals.Load(confirmID); ok {
 		pending := v.(pendingAIApproval)
-		if parsed, err := permission.ParseApprovalResponse(pending.kind, resp, pending.items); err != nil {
+		if _, err := permission.ParseApprovalResponse(pending.kind, resp, pending.items); err != nil {
 			logger.Ctx(a.ctx).Warn("invalid AI approval response denied",
 				zap.String("confirmID", confirmID), zap.String("kind", pending.kind),
 				zap.String("decision", resp.Decision), zap.Error(err))
-			resp = permission.ApprovalResponse{Decision: "deny"}
-		} else if !permission.CanPersistGrant(pending.redacted, pending.kind, parsed) {
-			// 脱敏主体不允许 allowAll / edited_items：拒绝伪造响应，防止 <redacted> 或秘密落成授权。
-			logger.Ctx(a.ctx).Warn("redacted AI approval subject cannot persist grant; denied",
-				zap.String("confirmID", confirmID), zap.String("kind", pending.kind),
-				zap.String("decision", resp.Decision))
 			resp = permission.ApprovalResponse{Decision: "deny"}
 		}
 		select {

@@ -24,89 +24,91 @@ func (s extToolExecutorStub) ExecuteExtTool(context.Context, string, string, []b
 	return s.result, s.err
 }
 
-func TestGrantItemsForPersistenceSkipsRedactedSubjects(t *testing.T) {
+func TestGrantItemsForPersistenceKeepsRawSubjects(t *testing.T) {
 	secret := "grant-" + "credential-sentinel"
-	reqItems := []approvalpkg.GrantItem{{Type: "exec", AssetID: 1, Command: "--password " + secret}}
+	reqItems := []approvalpkg.GrantItem{{
+		Type: "exec", AssetID: 1, AssetName: "web-1",
+		Command: "--password " + secret, Detail: "raw " + secret,
+	}}
 
-	require.Nil(t, grantItemsForPersistence("session-1", reqItems, true))
-	got := grantItemsForPersistence("session-1", reqItems, false)
+	got := grantItemsForPersistence("session-1", reqItems)
 	require.Len(t, got, 1)
 	require.Equal(t, reqItems[0].Command, got[0].Command)
+	require.Equal(t, reqItems[0].Detail, got[0].Detail)
 }
 
-func TestHandleExtToolExecRedactsDelegatedResultAndError(t *testing.T) {
-	secret := "extension-" + "credential-sentinel"
-
-	t.Run("result", func(t *testing.T) {
+// spec Decision 4 / Direct execution：opsctl extension 委托执行把 executor 返回的 bytes
+// 与 error 原样交给调用者，不做内容改写——auditredact 仅属 Audit 边界，不得在直接执行
+// 通道里改写结果或错误正文。
+func TestHandleExtToolExecPassesThroughResultAndError(t *testing.T) {
+	t.Run("result bytes unchanged", func(t *testing.T) {
 		o := &Opsctl{ctx: context.Background(), lang: opsctlTestLang{}, extExecutor: extToolExecutorStub{
-			result: []byte(`{"rows":1,"token":"` + secret + `"}`),
+			result: []byte(`{"token":"extension-credential-sentinel","rows":1}`),
 		}}
 		resp := o.handleExtToolExec(approvalpkg.ApprovalRequest{Extension: "demo", Tool: "read"})
 		require.True(t, resp.Approved)
-		require.NotContains(t, resp.ToolResult, secret)
-		require.Contains(t, resp.ToolResult, "<redacted>")
-		require.Contains(t, resp.ToolResult, `"rows":1`)
+		require.Equal(t, `{"token":"extension-credential-sentinel","rows":1}`, resp.ToolResult)
 	})
 
-	t.Run("error", func(t *testing.T) {
-		o := &Opsctl{ctx: context.Background(), lang: opsctlTestLang{}, extExecutor: extToolExecutorStub{
-			err: errors.New("Authorization: Basic " + secret),
-		}}
+	t.Run("error text unchanged", func(t *testing.T) {
+		execErr := errors.New("Authorization: Basic extension-credential-sentinel")
+		o := &Opsctl{ctx: context.Background(), lang: opsctlTestLang{}, extExecutor: extToolExecutorStub{err: execErr}}
 		resp := o.handleExtToolExec(approvalpkg.ApprovalRequest{Extension: "demo", Tool: "read"})
 		require.False(t, resp.Approved)
-		require.NotContains(t, resp.ToolError, secret)
-		require.Contains(t, resp.ToolError, "<redacted>")
+		require.Equal(t, execErr.Error(), resp.ToolError)
 	})
 }
 
-// 与 internal/app/ai/approval_test.go 同一套门禁语义：审批主体被脱敏时后端拒绝伪造的
-// allowAll / grant edited_items，只放行 deny 与 allow-once（spec Approval safety）。
-func TestRespondOpsctlApprovalRejectsForgedPersistWhenRedacted(t *testing.T) {
-	expected := []permission.ApprovalItem{{Type: "exec", AssetID: 1, AssetName: "web-1", Command: "--password secret"}}
+// spec Decision 3：审批响应只经 ParseApprovalResponse 的既有类型/策略校验（deny、
+// allow、allowAll、edited_items 的 kind 能力），不再有投影派生的 redacted 门禁。
+// 伪造响应按既有白名单校验拒绝；合法响应逐字透传。
+func TestRespondOpsctlApprovalPreservesParsedValidation(t *testing.T) {
+	expected := []permission.ApprovalItem{{Type: "exec", AssetID: 1, AssetName: "web-1", Command: "uptime"}}
 	edited := []permission.ApprovalItem{{Type: "exec", AssetID: 1, AssetName: "web-1", Command: "uptime *"}}
 
-	t.Run("forged allowAll denied", func(t *testing.T) {
+	t.Run("valid allowAll single passed through", func(t *testing.T) {
 		o := &Opsctl{ctx: context.Background()}
 		ch := make(chan permission.ApprovalResponse, 1)
-		o.pendingOpsctlApprovals.Store("c1", pendingOpsctlApproval{kind: permission.ApprovalKindSingle, items: expected, redacted: true, ch: ch})
+		o.pendingOpsctlApprovals.Store("c1", pendingOpsctlApproval{kind: permission.ApprovalKindSingle, items: expected, ch: ch})
 
 		o.RespondOpsctlApproval("c1", permission.ApprovalResponse{Decision: "allowAll", EditedItems: edited})
 
 		got := <-ch
-		require.Equal(t, "deny", got.Decision)
-		require.Empty(t, got.EditedItems)
-	})
-
-	t.Run("redacted grant allow denied", func(t *testing.T) {
-		o := &Opsctl{ctx: context.Background()}
-		ch := make(chan permission.ApprovalResponse, 1)
-		o.pendingOpsctlApprovals.Store("c2", pendingOpsctlApproval{kind: permission.ApprovalKindGrant, items: expected, redacted: true, ch: ch})
-
-		o.RespondOpsctlApproval("c2", permission.ApprovalResponse{Decision: "allow", EditedItems: edited})
-
-		got := <-ch
-		require.Equal(t, "deny", got.Decision)
-	})
-
-	t.Run("allow-once preserved when redacted", func(t *testing.T) {
-		o := &Opsctl{ctx: context.Background()}
-		ch := make(chan permission.ApprovalResponse, 1)
-		o.pendingOpsctlApprovals.Store("c3", pendingOpsctlApproval{kind: permission.ApprovalKindSingle, items: expected, redacted: true, ch: ch})
-
-		o.RespondOpsctlApproval("c3", permission.ApprovalResponse{Decision: "allow"})
-
-		got := <-ch
-		require.Equal(t, "allow", got.Decision)
-	})
-
-	t.Run("allowAll preserved when not redacted (compat)", func(t *testing.T) {
-		o := &Opsctl{ctx: context.Background()}
-		ch := make(chan permission.ApprovalResponse, 1)
-		o.pendingOpsctlApprovals.Store("c4", pendingOpsctlApproval{kind: permission.ApprovalKindSingle, items: expected, redacted: false, ch: ch})
-
-		o.RespondOpsctlApproval("c4", permission.ApprovalResponse{Decision: "allowAll", EditedItems: edited})
-
-		got := <-ch
 		require.Equal(t, "allowAll", got.Decision)
+		require.Equal(t, edited, got.EditedItems)
+	})
+
+	t.Run("batch allowAll denied by kind validation", func(t *testing.T) {
+		o := &Opsctl{ctx: context.Background()}
+		ch := make(chan permission.ApprovalResponse, 1)
+		o.pendingOpsctlApprovals.Store("c2", pendingOpsctlApproval{kind: permission.ApprovalKindBatch, items: expected, ch: ch})
+
+		o.RespondOpsctlApproval("c2", permission.ApprovalResponse{Decision: "allowAll", EditedItems: edited})
+
+		got := <-ch
+		require.Equal(t, "deny", got.Decision)
+	})
+
+	t.Run("edited_items rejected for allow-once", func(t *testing.T) {
+		o := &Opsctl{ctx: context.Background()}
+		ch := make(chan permission.ApprovalResponse, 1)
+		o.pendingOpsctlApprovals.Store("c3", pendingOpsctlApproval{kind: permission.ApprovalKindOnce, items: expected, ch: ch})
+
+		o.RespondOpsctlApproval("c3", permission.ApprovalResponse{Decision: "allow", EditedItems: edited})
+
+		got := <-ch
+		require.Equal(t, "deny", got.Decision)
+	})
+
+	t.Run("deny and allow passed through", func(t *testing.T) {
+		o := &Opsctl{ctx: context.Background()}
+		ch := make(chan permission.ApprovalResponse, 1)
+		o.pendingOpsctlApprovals.Store("c4", pendingOpsctlApproval{kind: permission.ApprovalKindSingle, items: expected, ch: ch})
+
+		o.RespondOpsctlApproval("c4", permission.ApprovalResponse{Decision: "allow"})
+		require.Equal(t, "allow", (<-ch).Decision)
+
+		o.RespondOpsctlApproval("c4", permission.ApprovalResponse{Decision: "deny"})
+		require.Equal(t, "deny", (<-ch).Decision)
 	})
 }

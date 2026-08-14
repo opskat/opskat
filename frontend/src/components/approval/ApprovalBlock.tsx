@@ -40,10 +40,6 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
   const isLocalTool = kind === "local_tool";
   const localToolName = block.approvalToolName || items[0]?.type || "";
 
-  // 后端安全投影同时携带显式标志；不能从展示文本中的字面量 <redacted> 反推，
-  // 否则合法命令 `printf '<redacted>'` 会被误判并失去持久授权入口。
-  const redacted = block.approvalRedacted === true;
-
   // local_tool 在 rememberMode 用 approvalPatterns（多 sub-command 时多行），
   // 其它 kind 沿用单条 item.command。
   const initialPatterns = isLocalTool ? (block.approvalPatterns || []).join("\n") : "";
@@ -172,7 +168,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                     </>
                   )}
                 </div>
-                {kind === "grant" && !redacted ? (
+                {kind === "grant" ? (
                   <Textarea
                     value={editedCommands[i] || ""}
                     onChange={(e) => setEditedCommands((prev) => ({ ...prev, [i]: e.target.value }))}
@@ -277,15 +273,13 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
             >
               {t("ai.approvalDeny")}
             </Button>
-            {!redacted && (
-              <Button
-                size="sm"
-                className="h-8 rounded-md px-4 text-xs bg-warning hover:bg-warning/90 text-warning-foreground font-semibold"
-                onClick={() => respond("allow")}
-              >
-                {t("ai.approvalApprove")}
-              </Button>
-            )}
+            <Button
+              size="sm"
+              className="h-8 rounded-md px-4 text-xs bg-warning hover:bg-warning/90 text-warning-foreground font-semibold"
+              onClick={() => respond("allow")}
+            >
+              {t("ai.approvalApprove")}
+            </Button>
           </>
         ) : (
           // single & local_tool: deny / remember-and-allow / allow（仅本次）
@@ -302,7 +296,6 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
               {t("ai.approvalDeny")}
             </Button>
             {(kind === "single" || kind === "local_tool") &&
-              !redacted &&
               (rememberMode ? (
                 <Button
                   size="sm"

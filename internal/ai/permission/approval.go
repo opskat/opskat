@@ -3,8 +3,6 @@ package permission
 import (
 	"fmt"
 	"strings"
-
-	"github.com/opskat/opskat/internal/pkg/auditredact"
 )
 
 // ApprovalItem 统一审批项，AI 和 opsctl 共用
@@ -137,50 +135,3 @@ func ParseApprovalResponse(kind string, resp ApprovalResponse, expectedItems ...
 
 // ApprovalTypeDelete 删除审批项的类型标签，前端 TypeBadge 按它取图标。
 const ApprovalTypeDelete = "delete"
-
-// SafeApprovalItems 在发往 Wails 前投影安全 command/detail 副本。两者都是可执行/说明
-// 文本而不是工具结果 JSON，因此按文本语义脱敏。返回安全副本与是否发生脱敏。
-// 后端 pending approval 必须继续持有原始 items（调用方用 safe 只做展示、用 redacted 做
-// 响应门禁）；原始秘密永远不会进入安全副本，原始 items 也不会被就地改写。
-func SafeApprovalItems(items []ApprovalItem) ([]ApprovalItem, bool) {
-	safe := make([]ApprovalItem, len(items))
-	redacted := false
-	for i, it := range items {
-		sc := it
-		sc.Command = auditredact.Text(it.Command)
-		sc.Detail = auditredact.Text(it.Detail)
-		if sc.Command != it.Command || sc.Detail != it.Detail {
-			redacted = true
-		}
-		safe[i] = sc
-	}
-	return safe, redacted
-}
-
-// SafeApprovalDescription projects the free-form reason/description rendered beside
-// approval items. It is display/persistence text rather than an editable grant subject,
-// so it is redacted without changing the command/detail persistence gate.
-func SafeApprovalDescription(description string) string {
-	return auditredact.Text(description)
-}
-
-// CanPersistGrant 决定是否允许把这次响应落成/批准为持久授权（allowAll 或 grant
-// edited_items）。redacted 主体在 UI 上没有 remember/allow-all/edit 入口；后端据此拒绝
-// 伪造的 allowAll 与 grant/edited_items——<redacted> 不能成为授权 pattern，原始秘密也
-// 不能经编辑响应回传或持久化（spec Approval safety）。deny 与 allow-once 仍有效并执行
-// 原始主体；grant 没有 allow-once（它总是持久化），redacted 时整单拒绝。
-func CanPersistGrant(redacted bool, kind string, parsed ParsedApprovalResponse) bool {
-	if !redacted {
-		return true
-	}
-	switch {
-	case parsed.Decision == ApprovalAllowAll:
-		return false
-	case kind == ApprovalKindGrant:
-		return false
-	case len(parsed.EditedItems) > 0:
-		return false
-	default:
-		return true
-	}
-}

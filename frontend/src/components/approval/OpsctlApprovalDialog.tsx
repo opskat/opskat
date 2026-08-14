@@ -37,21 +37,18 @@ interface SingleApprovalEvent {
   command?: string;
   detail?: string;
   session_id: string;
-  redacted?: boolean;
 }
 
 interface BatchApprovalEvent {
   confirm_id: string;
   items: ApprovalItemData[];
   session_id: string;
-  redacted?: boolean;
 }
 
 interface GrantApprovalEvent {
   items: ApprovalItemData[];
   session_id: string;
   description?: string;
-  redacted?: boolean;
 }
 
 interface QueueItem {
@@ -63,8 +60,6 @@ interface QueueItem {
   description?: string;
   sessionID?: string;
   editable: boolean;
-  // 后端安全投影是否改写了 command/detail；UI 据此关闭 remember/allowAll/edit。
-  redacted: boolean;
 }
 
 // 递归/通配 cp 一次展开出的路径可以到 200 条（D19 上限），原样铺开没法读。超过这条线
@@ -160,7 +155,6 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           ],
           sessionID: data.session_id,
           editable: false,
-          redacted: data.redacted === true,
         });
       },
       [enqueue]
@@ -188,7 +182,6 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           items: mapped,
           sessionID: data.session_id,
           editable: false,
-          redacted: data.redacted === true,
         });
       },
       [enqueue]
@@ -208,15 +201,13 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           command: i.command,
           detail: i.detail,
         }));
-        const redacted = data.redacted === true;
         enqueue({
           id: data.session_id,
           kind: "grant",
           items,
           description: data.description,
           sessionID: data.session_id,
-          editable: !redacted,
-          redacted,
+          editable: true,
         });
         const edits: Record<number, string> = {};
         items.forEach((it, idx) => {
@@ -412,7 +403,6 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
               </Button>
               {current.kind === "single" &&
                 current.sessionID &&
-                !current.redacted &&
                 (rememberMode ? (
                   <Button variant="secondary" onClick={() => respond("allowAll")}>
                     {t("opsctlApproval.approve")}
@@ -433,11 +423,9 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
                     {t("opsctlApproval.remember")}
                   </Button>
                 ))}
-              {!(current.kind === "grant" && current.redacted) && (
-                <Button data-testid="opsctl-approval-allow" onClick={() => respond("allow")}>
-                  {current.kind === "grant" ? t("opsctlApproval.approve") : t("opsctlApproval.allow")}
-                </Button>
-              )}
+              <Button data-testid="opsctl-approval-allow" onClick={() => respond("allow")}>
+                {current.kind === "grant" ? t("opsctlApproval.approve") : t("opsctlApproval.allow")}
+              </Button>
             </DialogFooter>
           </>
         )}

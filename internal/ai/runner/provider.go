@@ -66,7 +66,6 @@ type StreamEvent struct {
 	Description string                    `json:"description,omitempty"` // grant 描述
 	SessionID   string                    `json:"session_id,omitempty"`  // grant session ID
 	Patterns    []string                  `json:"patterns,omitempty"`    // local_tool 默认 pattern 列表（与 sub-commands 对齐），前端预填可编辑
-	Redacted    bool                      `json:"redacted,omitempty"`    // command/detail 的安全投影是否发生脱敏；前端据此关闭持久授权入口
 	// type=usage 时的 token 统计（前端累加到当前 assistant 消息）
 	Usage *Usage `json:"usage,omitempty"`
 	// type=retry 时的等待毫秒；前端据此显示倒计时。0 表示无显式退避（立即重试）。
