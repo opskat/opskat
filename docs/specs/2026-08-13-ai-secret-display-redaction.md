@@ -1,133 +1,161 @@
-# AI 工具与审批秘密显示统一脱敏
+# AI 工具与秘密数据边界修正
 
 > Status: Approved
 > Owner: OpsKat maintainers
-> Last updated: 2026-08-13
+> Last updated: 2026-08-14
 
-**Objective:** 在不影响当前工具执行的前提下，为 AI 工具事件、AI/opsctl 审批、会话历史、错误、日志和审计建立一个后端统一的安全投影边界，使任何展示、持久化或运维观察面都不能收到工具参数或结果中的凭据材料。
+**Objective:** 删除 AI、审批和直接交互通道中的值改写，让用户、模型和审批者看到实际业务数据；安全查询通过窄 DTO 省略秘密字段，视觉型秘密输入仅控制屏幕显示；应用结构化日志不复制业务 payload。Audit 的最终数据模型另行决策，本轮保持现状。
 
-**Hard invariant:** 密码、私钥、passphrase、kubeconfig、Secret Access Key、API key/token、Authorization 凭据、SSH Agent endpoint、签名、挑战及挑战答案不得出现在 AI 工具参数/结果卡片、错误块、审批详情、会话持久化、后续轮次历史回放、日志、审计明文、命令结果或安全视图中。原始材料只可在当前工具执行以及完成当前模型轮次所必需的内存上下文中短暂存在。
+**Hard invariant:** 执行输入、直接执行输出、AI 工具上下文、审批主体和交互历史不得被 `<redacted>` 等占位值静默改写。一个表面若允许读取数据，就返回原值；若契约不允许读取秘密，就从 DTO 中省略该字段；日志若不应保存业务内容，就不记录对应字段。视觉掩码只改变输入控件的显示方式，不改变值。
 
 ## Problem
 
-1. **AI 工具参数在实时 ToolBlock 中显示明文。** 运行时验证在 `1afd3ba54ca2c726f5dfca09b1a7252cdb50b0ea` 上通过真实 AI runner + scripted model 调用 `put_asset(config.password=...)`，`#ai-tool-block code` 直接显示了合成密码；证据位于 `e2e/scratch/2026-08-13-asset-credential-automation/ai-secret-visible.png`。生产链路为 cago `EventPreToolUse` → `internal/ai/runner/stream_event.go` → Wails `tool_input` → `frontend/src/stores/aiStore.ts` → `ToolBlock.tsx`。
-2. **工具结果、工具错误和 provider 错误没有同一安全边界。** `tool_result`、retry cause 与 terminal error 可直接进入 ToolBlock、ErrorBlock、日志和前端状态；会话持久化仅脱敏顶层 `ToolInput`，不覆盖工具结果、错误详情或嵌套 agent block，因此工具意外返回 PEM、凭据 URL、Authorization 或嵌套秘密时可能成为新的显示及持久化侧信道。
-3. **实时会话与重载会话的安全行为不一致。** 当前实时 `tool_input` 保持原文，而 `conversation_entity.Message.SetBlocks` 在落库时才脱敏，所以首次显示泄漏、重载后却显示 `<redacted>`；前端又从这些 block 重建下一轮模型历史，导致秘密保留策略依赖会话是否重载。
-4. **AI 与 opsctl 部分审批把原始 command/detail 直接发送给前端。** 资产自动化创建已提供安全摘要，但通用 command、local write/edit、批处理及部分 opsctl 审批仍按原文渲染；若命令、文件内容或 diff 包含凭据，审批 UI 会成为明文出口。
-5. **日志和审计仍有未纳入 canonical redactor 的列。** provider retry cause 可原样写日志；零条 grant pattern 的 warning 记录原始 command；审计 `matched_pattern` 未脱敏。`internal/pkg/auditredact` 也尚未把通用 signature/challenge/Agent endpoint 字段全部识别为敏感字段。
+当前分支为了阻止秘密进入 UI、历史、审批、日志和审计，引入了统一值脱敏，导致多个表面收到与实际执行主体不同的 `<redacted>` 副本：
+
+1. AI ToolBlock 展示的参数、结果和错误不是当前工具实际使用或返回的数据。
+2. 会话持久化与下一轮历史保存改写后的工具上下文，当前模型轮次与后续轮次语义不一致。
+3. 审批 UI 展示改写后的 command/detail，并因是否发生脱敏改变 allow-once、allow-all 和编辑能力；审批者不能直接看到实际主体。
+4. opsctl extension execution 的结果和错误被改写，破坏直接 CLI 输出语义。
+5. Redis 桌面查询历史改写写命令的值，历史不再等于用户实际执行的命令。
+6. AI Provider 同时向前端返回完整 `apiKey` 和 `maskedApiKey`；后者没有安全价值，秘密输入控件之间的显示/隐藏交互也不一致。
+7. 应用结构化日志仍可能通过 command、cause、detail 或完整 error 正文复制业务 payload；用 `<redacted>` 改写后记录仍然扩大了日志职责。
 
 ## Actors and user stories
 
-1. As an OpsKat AI user, I want tool cards and errors to preserve useful structure while hiding credential material, so that I can inspect automation without exposing secrets on screen or in conversation history.
-2. As an approval reviewer, I want to see the safe operation shape but never secret values, so that approving an operation does not require displaying or persisting the credential itself.
-3. As an operator investigating logs and audit rows, I want every AI/opsctl secret-bearing field to use one canonical redaction policy, so that a newly added tool cannot silently create another plaintext sink.
-4. As an AI runtime, I need the original tool input/result only while executing and completing the current model turn, so that redacting UI/history copies does not break the requested operation.
+1. As an AI user, I want ToolBlock、错误和会话历史保留原始工具上下文，使实时显示、重载和下一轮模型回放语义一致。
+2. As an approval reviewer, I want看到实际将执行的 command/detail，而不是后端改写的近似值。
+3. As an opsctl or Redis user, I want直接执行结果和交互历史保持原样，支持诊断、复制、管道和脚本。
+4. As a credential query caller, I want安全查询只返回其契约允许的元数据，秘密字段完全不存在，SSH 公钥等公开材料完整返回。
+5. As a settings user, I want API key、password、token 和 passphrase 默认视觉隐藏，并可用眼睛按钮明确查看原值。
+6. As an operator, I want应用日志保留操作和 correlation 元数据，但不复制 command、args、stdout/stderr、远端响应或其他业务 payload。
 
 ## Design decisions
 
 | # | Decision | Basis and rejected option |
 |---|---|---|
-| 1 | 原始执行数据与安全展示数据在 Go 后端边界分离：cago 当前轮次保留原始值，所有 Wails/UI、审批、持久化、日志和审计接收安全投影。 | 后端是所有消费者之前的共同边界。Rejected: 仅在 ToolBlock 前端遮挡——不能保护 Wails payload、DB、日志、审计、审批或模型历史，且会复制敏感字段规则。 |
-| 2 | 复用并扩展 `internal/pkg/auditredact` 作为唯一 canonical redactor，区分结构化 JSON 与不透明文本；非法 JSON fail-closed。 | 已有实现覆盖递归 JSON/数组、常见凭据键、PEM、URL userinfo、Bearer 和 presigned 参数。Rejected: 每个工具注册自己的敏感字段——扩展工具、错误和任意结果会继续漏网。 |
-| 3 | 工具参数、结果与错误的安全投影在流式事件发往 Wails 前完成；前端只负责展示，不判断什么是秘密。 | 这样实时会话与后续落库收到同一份安全值。Rejected: 等到会话持久化才脱敏——已经发生本次实测的首次渲染泄漏。 |
-| 4 | 当前工具执行和当前模型轮次继续使用原始参数/结果；完成该轮后，持久化和下一用户轮次回放只使用安全历史。 | 工具必须获得真实凭据才能执行，当前模型也可能需要真实工具结果完成用户请求；长期保存或再次发送这些值不再必要。Rejected: 在 dispatch 前改写原始参数——会破坏资产创建和其他依赖秘密的工具。 |
-| 5 | 审批后端保留原始待审批主体用于执行与响应校验，前端仅接收脱敏副本。若 command/detail 的安全投影与原文不同，该请求只允许拒绝或仅本次允许，不提供“记住/始终允许”及可编辑 grant pattern。 | `<redacted>` 不能成为授权 pattern，原始秘密也不能经编辑响应回传或持久化。Rejected: 继续提供 remember——可能保存无效的脱敏串或秘密原文。 |
-| 6 | 工具卡片继续显示参数/结果结构和非敏感值，敏感叶子替换为 `<redacted>`；整个 PEM 或无法安全解析的秘密文本可以整体替换。 | 用户仍需诊断工具调用形状。Rejected: 隐藏全部工具参数/结果——安全但不必要地损失可观察性。 |
-| 7 | 会话持久化对 tool input、tool result、ErrorDetail 及嵌套 agent child blocks 递归执行安全投影，作为流式边界之外的纵深防御。 | 防止其他生产者或旧事件绕过实时边界。Rejected: 只依赖 StreamEvent——未来非流式或手工构造 block 可能再次产生明文。 |
-| 8 | 审计所有文本列（包括 `matched_pattern`）和相关安全日志统一调用 canonical redactor。 | 审计 UI 会直接展示 matched pattern，日志是长期运维表面。Rejected: 假设 policy pattern 不含秘密——用户编辑及通用命令可以包含任意文本。 |
+| 1 | AI ToolBlock 的 tool input、tool result、tool error、provider retry/error 面向前端原样传递。 | 展示面应与实际工具上下文一致。Rejected: 用 `<redacted>` 局部改写——造成显示值与执行值不一致。 |
+| 2 | AI 会话 block 原样持久化和加载；下一用户轮次使用原始历史。 | 会话是用户明确保留的业务上下文，与原始用户消息采用同一数据边界。Rejected: 只让当前模型轮次见原值、后续轮次见安全副本——语义依赖轮次和重载时机。 |
+| 3 | AI/opsctl 审批 UI 接收原始 command/detail，后端 pending state 和前端不再维护 redacted 状态或基于脱敏结果限制授权控件。 | 审批者必须看到实际主体；秘密应通过 credential ID、asset ID、stdin 或工具专用参数传递，而不是写进可持久化命令 pattern 后再猜测脱敏。 |
+| 4 | opsctl `exec`、batch、extension execution 的 result/error 原样返回。 | 它们是用户明确请求的直接执行通道。Rejected: 内容改写——破坏 stdout/stderr 和错误诊断语义。 |
+| 5 | Redis 桌面查询历史记录完整原始命令，不替换写入值。 | 这是当前进程内的直接交互历史，不是安全审计副本。 |
+| 6 | `get_asset`、`list_credentials`、`get_credential` 等安全查询继续通过窄 DTO 省略 password、private key、passphrase、token、kubeconfig、Agent endpoint 等秘密字段；完整 SSH public key 可以返回。 | 查询契约明确可见字段比返回占位值更清晰。Rejected: `"password":"<redacted>"`——暗示字段存在且产生近似值困惑。 |
+| 7 | AI Provider DTO 只保留完整 `apiKey`，删除 `maskedApiKey`；设置表单通过 password 控件默认隐藏，眼睛按钮切换显示原值。 | 当前后端已经把完整 key 发给前端，额外 masked 表示冗余。视觉控制不改变业务值。 |
+| 8 | 统一秘密输入控件：API key、password、token、passphrase 等默认隐藏并提供 Eye/EyeOff；已有实现迁移到共享组件，缺少按钮的表单补齐。 | 相同交互应复用，不在各页面重复状态和按钮布局。协议驱动的 terminal echo 控件保留其协议语义。 |
+| 9 | 应用结构化日志不记录业务 payload；保留 tool/operation、asset ID、provider/extension、attempt、duration、status、session/conversation ID 和稳定失败分类。 | 日志不需要 command、args、result 或远端错误正文。Rejected: 先脱敏再写日志——仍复制了不属于日志的数据，并依赖不可靠的内容识别。 |
+| 10 | Audit 本轮不改数据模型、写入规则、页面或迁移；其内容列是否物理删除另开规格决定。 | 用户要求先完成已确定边界，再单独处理 Audit。现有 audit canonical redaction 暂时保留，不扩展到其他表面。 |
 
-## Safe projection boundary
+## Raw AI and approval flow
 
-模型或 provider 生成工具调用时，原始参数进入当前 runner 的执行上下文。工具 handler、credential materialization、连接客户端及当前模型轮次可按现有语义使用这些原始值；该执行内存不是新的 reveal API，也不得写入日志。
+runner 发送 Wails 事件时直接序列化工具原始输入和输出，不调用 `auditredact.JSON`、`Result` 或 `Text`。工具失败、provider retry 和同步 chat error 返回原始错误正文；工具名称、call ID 和状态语义不变。
 
-在 `tool_start` 事件离开 runner 前，参数按 JSON 递归脱敏。合法 JSON 保留对象、数组、键名及非敏感值；敏感键的值替换为 `<redacted>`，字符串中的 PEM、Authorization、凭据 URL、签名参数等按文本规则替换。无法解析为合法 JSON 的工具参数不得原样发送，返回 fail-closed 的 `<redacted>` 安全输入摘要。
+`conversation_entity.Message.SetBlocks`、加载和序列化不改写 tool input、tool content、error detail 或嵌套 child blocks。已经在旧版本中写成 `<redacted>` 的历史值无法恢复，本轮不猜测或逆向重建；新写入和仍为明文的旧行按数据库原值加载。
 
-在 `tool_result` 离开 runner 前，JSON 对象/数组递归脱敏；普通文本执行 canonical text redaction。工具错误、provider retry cause、terminal error 及面向前端的错误详情执行同一文本脱敏。安全投影不得改变 `tool_name`、`tool_call_id`、成功/失败状态或普通非敏感输出。
+AI 与 opsctl 审批发送原始 ApprovalItem。pending state 只保存一份真实主体；删除安全副本、`containsRedaction`、`CanPersistGrant` 等由投影产生的门禁。allow-once、allow-all、remember 和 edited-items 继续遵守原有审批类型与策略校验，不因内容是否匹配敏感字段名而改变。
 
-ToolBlock、AgentBlock 中的 child ToolBlock 和 ErrorBlock 只消费安全事件，不再实现敏感字段列表。折叠摘要与展开内容必须使用同一安全字符串，避免折叠行安全而展开区泄漏。
+秘密传递应依赖既有安全接口：credential typed ref、asset ID、managed credential、stdin 或协议客户端参数。审批和 ToolBlock 不承担修正不安全命令设计的职责；若未来需要禁止 `--password value` 一类形式，应在对应命令解析/校验契约中明确拒绝，而不是更改显示值。
 
-## Conversation persistence and replay
+## Direct execution and history
 
-会话消息只持久化安全显示副本。持久化边界递归处理：
+opsctl extension execution 与普通 exec/batch 一致，将 extension executor 返回的 bytes 和 error 原样交给调用者。审批事件仍可独立记录操作元数据；本轮不让 audit projection 回写直接结果。
 
-- tool block 的 `toolInput`；
-- tool block 的 `content`，无论是 JSON 还是普通文本；
-- error block 的 `content` 和 `errorDetail`；
-- agent block 的嵌套 child blocks；
-- 未来未知 block 中由既有安全 DTO 明确标记为展示文本的字段。
+Redis `CommandHistory` 保存 `formatCommandForHistory` 对原始 args 的正常 quoting 结果，不按命令类型替换 SET/HSET/MSET/list/set/zset/stream 等写入值。历史长度、筛选、顺序和错误语义不变。
 
-实时流式显示、关闭 tab 时的快照、自然终态落库和重载后的显示必须一致。数据库 `conversation_messages.blocks` 不得包含合成秘密标记。
+## Safe query DTOs
 
-当前模型轮次由 runner 内部 conversation 继续接收原始工具结果，以便完成正在进行的请求。该轮完成后，前端重建下一轮 API 历史时使用持久化语义相同的安全 tool input/result；因此下一轮模型不得再次收到上一轮的密码、私钥、passphrase、kubeconfig、Agent endpoint、签名或 challenge material。
+安全查询不使用 canonical redactor。DTO 只声明允许返回的字段：
 
-## Approval safety
+- 允许：ref、ID、type、name、description、username、fingerprint、key type/size、comment、availability、endpoint type、usage metadata、SSH public key、SSH Agent identity public metadata。
+- 省略：password、private key、private-key passphrase、API/client secret、token、kubeconfig、Authorization/Cookie、SSH Agent endpoint/path/socket/pipe、签名和 challenge secret。
 
-AI single/batch/grant/local-tool 和 opsctl single/batch/grant 审批在发往 Wails 前创建安全 ApprovalItem 副本。资产名、类型、安全 endpoint 摘要及不敏感命令结构保持可见；command/detail 中的凭据材料替换为 `<redacted>`。
+秘密字段即使有值也不能被序列化；不增加 `<redacted>` 占位字段。Public key 是公开身份材料，`get_credential` 的 SSH key detail 可完整返回。
 
-后端 pending approval 保存原始 items，并继续使用原始 items 校验响应及执行。安全 items 只用于显示。普通未发生脱敏的审批保持现有 remember/edit 行为。
+## Shared visual secret input
 
-只要任一可编辑 command 或 detail 的安全投影不同于原文：
+新增或抽取共享视觉秘密输入组件，行为为：
 
-- UI 不显示“记住”“始终允许”或 pattern 编辑器；
-- 响应只能是 deny 或 allow-once；
-- 后端拒绝伪造的 allow-all/edited-items 响应，而不是信任前端隐藏按钮；
-- 不保存原始或 `<redacted>` grant pattern。
+- 持有原始 `value`，不生成 masked 副本；
+- 默认渲染 `type="password"`；
+- Eye 切换为 `type="text"`，EyeOff 切回；
+- 支持现有 Input props、disabled、placeholder、validation、autocomplete 和右侧附加 action；
+- 有可访问的显示/隐藏 label；
+- 不自动解密、不记录、不复制值。
 
-本地写入/编辑审批保留非敏感上下文和 diff 结构；秘密片段被替换。若内容整体是 PEM 等秘密，预览可只显示 `<redacted>`，但仍允许用户拒绝或仅本次批准。
+AI Provider 表单删除 `maskedApiKey`，以返回的原始 `apiKey` 初始化共享控件。获取模型列表和保存继续使用同一原始值。
 
-## Canonical sensitive material
+将普通设置/资产/凭据/扩展表单中缺少显示按钮的 password、API key、token、passphrase 输入迁移到共享控件。`PasswordSourceField` 中“首次显示时按资产 ID 向后端解密”的领域行为保留，可复用共享控件的视觉部分；terminal challenge/echo 等协议驱动输入不强行改为普通表单状态。
 
-Canonical redactor 在已有规则之上必须覆盖：
+## Application structured logging
 
-- password、passphrase、token、API/client/private key、Secret Access Key、kubeconfig；
-- Authorization / Proxy-Authorization、cookie 与 URL userinfo；
-- PEM private key；
-- signature、signed value、challenge、challenge response/answer；
-- SSH Agent endpoint 值及 endpoint/path/socket/pipe/named-pipe 等来源字段；
-- presigned URL credential/signature/security-token 参数；
-- 上述字段的大小写、snake_case、kebab-case、camelCase 变体及嵌套数组/对象。
+本轮触及的 AI、permission、extension 和 opsctl 日志删除以下字段：
 
-普通安全字段如 `endpoint_type`、credential typed ref、source ID、fingerprint、key type/size、public SSH key detail仍按既有安全查询契约显示。不能因为字段名包含宽泛的 `key` 或 `endpoint` 就遮掉所有公有标识；规则应针对秘密值语义并以测试固定边界。
+- command、detail、args JSON；
+- tool result、stdout/stderr；
+- provider/远端响应正文；
+- 可能包装用户输入或远端输出的完整 error message。
 
-## Logs and audit
+保留：
 
-AI provider retry、工具失败、审批/grant 退化及其他本轮触及的日志不得把原始 error/command/detail 写入字段。保留错误分类、attempt、delay、asset/tool correlation ID 等安全信息；需要错误正文时写 canonical redacted text。
+- operation/tool name；
+- asset ID/type；
+- provider/extension name；
+- attempt、delay、duration；
+- success/status 和稳定 failure kind；
+- session、conversation、confirm correlation ID。
 
-AI/opsctl audit 的 request、result、error、command 和 `matched_pattern` 均使用 canonical redactor。审计 UI 不承担第二次脱敏责任，但测试应证明读取现有 audit DTO 时看不到秘密。
+面向用户的直接错误返回仍原样；“不写日志”不能反向改写 Wails、AI 或 opsctl 返回值。若当前错误体系没有稳定 code，本轮日志可只记录 `failed=true` 和所在操作，不得通过解析 `err.Error()` 生成分类。
 
-发生序列化或脱敏失败时 fail closed：展示/持久化 `<redacted>` 或安全错误摘要，不能回退原文。脱敏失败不得阻止原始工具执行上下文返回自己的业务错误，但外发错误仍必须安全。
+## Audit deferral
+
+Audit 继续使用现有 `audit_logs` schema 和 canonical redactor，包括 command、request、result、error 与 matched pattern 的当前行为。外部编辑 audit 也暂时保持。不得因为本轮删除其他调用点而删除 `internal/pkg/auditredact`；它暂时成为 Audit 专用实现。
+
+后续 Audit 规格将单独决定：
+
+- 是否物理删除 payload 列；
+- 历史行迁移和清理；
+- grant pattern 展示来源；
+- failure kind/code；
+- Audit 页面列和详情布局。
 
 ## Compatibility and UI behavior
 
-工具卡片、审批卡片、错误块的布局、折叠、状态图标、tool call 配对及成功/失败语义保持不变。唯一可见变化是秘密值显示为 `<redacted>`，以及包含被脱敏审批主体时不再提供持久授权控件。
-
-现有不含秘密的命令、SQL、Redis/Kafka/K8s 操作、文件路径和普通工具结果继续完整显示。现有对话中已经安全落库的 `<redacted>` 值保持原样，不进行历史数据解密或恢复。若历史数据库中已有明文 block，加载到前端前也必须经过安全投影；本轮不原地批量重写旧行。
+- 工具执行、审批结果、allow-once 和 allow-all 使用原始主体。
+- AI ToolBlock、实时会话、重载会话和下一轮模型历史保持同一原始值。
+- opsctl stdout/stderr 和 extension result/error 不增加 `--raw` 或其他模式开关。
+- Redis 历史将重新显示完整写入值；旧内存历史不会跨进程迁移。
+- 已经持久化为 `<redacted>` 的会话历史保持该字面值，因为原值不可恢复。
+- 密码/秘密控件默认仍不可见，只有用户点击眼睛后在屏幕显示。
+- AI Provider Wails DTO 移除 `maskedApiKey`，前端生成 bindings 随 Go DTO 更新。
+- Audit UI 和数据库本轮无可见变化。
 
 ## Out of scope
 
-- 密码、私钥、Agent endpoint 或其他秘密的 reveal/export 能力。
-- 对 provider 或 cago 内部当前轮次内存进行加密；其持有原始值是执行请求所必需。
-- 自动扫描或清理用户现有数据库、系统日志、截图和备份中的历史明文；加载旧会话时必须安全，但持久数据修复另行处理。
-- 改变工具业务权限、命令策略或资产凭据 materialization 语义。
-- 在前端维护第二套敏感字段注册表。
+- Audit schema、历史清理和 UI 重构。
+- 新增 reveal/export API；本轮眼睛按钮只显示已经由当前表单持有的值，`PasswordSourceField` 已有的按需解密行为保持原契约。
+- 自动改写用户命令为 `--password-stdin`，或为所有外部命令新增 stdin secret transport。
+- 恢复已经被 `<redacted>` 覆盖的历史值。
+- 改变数据库文件、会话导出和备份的访问控制。
+- 对直接 opsctl/AI/Redis 内容进行内容审查或默认过滤。
+- 调用 `.env` 中的真实 hosted AI 模型；除非用户另行明确授权外部请求。
 
 ## Testing decisions
 
-| Seam | What it verifies | Prior art |
-|---|---|---|
-| `auditredact` canonical redactor | 递归对象/数组、malformed JSON fail-closed、PEM、Authorization、URL、signature/challenge/Agent endpoint，以及安全 public metadata 不被误遮 | `internal/pkg/auditredact` 现有单元测试与 AI audit redaction 测试 |
-| Runner StreamEvent translation | `tool_start`、tool result、retry/error 在 Wails 前已安全，同时原始 cago tool execution 不受影响 | `internal/ai/runner/stream_event_test.go`、runner provider tests |
-| Conversation block persistence/load/replay | tool input/result/error/嵌套 child blocks 均脱敏；实时与重载一致；下一轮模型只见安全历史 | `conversation_entity` tests、`frontend/src/__tests__/aiStore.test.ts` |
-| AI/opsctl approval projection | UI 只收到安全 command/detail；原始 pending item 仍用于一次性执行；发生脱敏时 allow-all/edit 被前后端共同禁止 | AI approval tests、opsctl approval handler/component tests |
-| Audit/log sinks | matched pattern、retry/error、零 pattern warning 不包含合成标记 | AI audit integration tests、permission logger capture tests |
-| ToolBlock/ErrorBlock UI | 折叠摘要、展开参数/结果、agent child block 与错误详情都只渲染安全字符串，普通非敏感内容仍完整 | `ToolBlock.test.tsx`、AI store/component tests |
-| Real runtime | scripted model 分别发送嵌套 password、PEM/passphrase、kubeconfig、Authorization/URL、signature/challenge 和 secret-bearing result/error；检查实时 UI、审批、DB history、下一轮 model requests、audit、logs 全部无标记 | `make dev-sandbox ARGS=--mocks` + `drive.mjs` / `oracle.mjs` |
+| Seam | What it verifies |
+|---|---|
+| Runner StreamEvent | tool input/result/retry/error 与原始事件一致，执行链不受显示转换影响 |
+| Conversation entity and replay | tool input/result/error/嵌套 child blocks 原样写入、加载并进入下一轮历史；字面 `<redacted>` 作为普通值保留 |
+| AI/opsctl approval | Wails item、pending item 和实际执行主体一致；普通 allow-once/allow-all/edit 契约恢复 |
+| opsctl extension | result bytes 和 error text 与 executor 返回一致 |
+| Redis history | SET/HSET/MSET/list/set/zset/stream 等命令历史包含实际输入值和既有 quoting |
+| Safe credential query | secret fields 不存在，public key 完整返回，Agent endpoint 值不存在 |
+| AI Provider DTO/form | 仅有 `apiKey`，默认视觉隐藏，眼睛展示/隐藏原值，fetch/save 使用原值 |
+| Shared secret input | value 不变、Eye/EyeOff、可访问性、disabled/placeholder/right action；迁移页面不丢失原行为 |
+| Structured logs | 失败路径保留 correlation 元数据，但不存在 command/detail/result/cause/raw error payload 字段 |
+| Audit regression | 现有 Audit redaction 测试继续通过，证明本轮没有意外改变 deferred 边界 |
 
-运行时使用合成秘密和隔离数据目录，不接触真实凭据或 `.env` 目标。自动化无法证明操作系统截图/录屏等外部捕获已经被清理；验证只证明本分支不再把合成秘密发送到其拥有的 UI、Wails、DB、日志、审计和后续模型历史表面。
+验证使用合成值和隔离数据目录。运行时检查实时 ToolBlock、审批、会话重载、下一轮模型请求、opsctl extension、Redis 历史和 AI Provider 眼睛控件均展示预期原值；同时检查应用日志没有复制这些合成 payload，Audit 按本轮 deferred 规则继续保持现状。
 
 ## Relevant links
 
 - [原资产凭据自动化规格](2026-08-13-asset-credential-automation.md)
-- [运行时验证报告](../../e2e/scratch/2026-08-13-asset-credential-automation/report.md)（本地 gitignored 证据，不随 Git 交付）
 - [Verification workflow](../VERIFICATION.md)
 - [Development logging rules](../DEVELOP.md#logging-for-key-flows)
