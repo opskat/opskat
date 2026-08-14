@@ -590,8 +590,8 @@ function materializeRetryStatusAsError(msg: ChatMessage): ChatMessage {
 
 // toDisplayContentBlock 把 store 的 ContentBlock 转成持久化 DTO，并递归携带嵌套
 // agent child blocks。Wails 生成的 ContentBlock 构造器只拷贝已声明字段（models.ts 由
-// make dev 重新生成后才声明 childBlocks），因此 childBlocks 在构造后附加；后端
-// conversation_entity.SetBlocks 会递归脱敏嵌套块（流式边界之外的纵深防御）。
+// make dev 重新生成后才声明 childBlocks），因此 childBlocks 在构造后附加；
+// conversation_entity.SetBlocks 原样持久化嵌套块，不做脱敏。
 function toDisplayContentBlock(b: ContentBlock, includeStreaming: boolean): conversation_entity.ContentBlock {
   const wb = new conversation_entity.ContentBlock({
     type: b.type,
@@ -645,7 +645,7 @@ function toDisplayMessages(msgs: ChatMessage[], includeStreaming = false): ai.Co
         tokenUsage: m.tokenUsage ? new conversation_entity.TokenUsage(m.tokenUsage) : undefined,
       });
       // blocks 在构造后覆盖：Wails 构造器的 convertValues 会把 childBlocks 丢掉，
-      // 嵌套 agent 子块必须随 DTO 一起序列化，后端 SetBlocks 才能递归脱敏。
+      // 嵌套 agent 子块必须随 DTO 一起序列化，后端 SetBlocks 原样持久化。
       (dm as unknown as { blocks: conversation_entity.ContentBlock[] }).blocks = m.blocks.map((b) =>
         toDisplayContentBlock(b, includeStreaming)
       );

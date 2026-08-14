@@ -177,27 +177,35 @@ func sanitizeAuditSession(session *Session) *auditSessionPayload {
 	}
 }
 
+// auditMapAllowedFields 是 external-edit 自由 map metadata 的 fail-closed 字段白名单：
+// 只有这 11 个批准字段能进入审计，未知字段（含本地路径/哈希/样本与 bakeupPath）一律省略。
+// 这是 external_edit_svc 自己的 producer 契约，不引入通用敏感字段注册表；允许值按原样序列化。
+var auditMapAllowedFields = map[string]struct{}{
+	"auto":         {},
+	"windowSaves":  {},
+	"rebuild":      {},
+	"resolution":   {},
+	"status":       {},
+	"remoteBytes":  {},
+	"remoteSha256": {},
+	"bytes":        {},
+	"documentKey":  {},
+	"readOnly":     {},
+	"reuse":        {},
+}
+
 func sanitizeAuditMap(payload map[string]any) map[string]any {
 	if payload == nil {
 		return nil
 	}
 	sanitized := make(map[string]any, len(payload))
 	for key, value := range payload {
-		if isAuditSensitiveField(key) {
+		if _, ok := auditMapAllowedFields[key]; !ok {
 			continue
 		}
 		sanitized[key] = sanitizeAuditPayload(value)
 	}
 	return sanitized
-}
-
-func isAuditSensitiveField(key string) bool {
-	switch key {
-	case "localPath", "workspaceRoot", "workspaceDir", "editorPath", "editorArgs", "originalSha256", "originalByteSample", "lastLocalSha256":
-		return true
-	default:
-		return false
-	}
 }
 
 func shortHash(value string) string {

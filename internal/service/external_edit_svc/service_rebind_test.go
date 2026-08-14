@@ -1769,46 +1769,101 @@ func TestExternalEditClipboardResidueRuntimeEntryPointsCleanWithoutRunner(t *tes
 	require.NotContains(t, string(manifest), "clipboard-images")
 }
 
-// TestExternalEditAuditStoresProjectedValuesVerbatim 钉住 external-edit 审计在 producer
-// 字段白名单投影之后不再做任何值替换或 JSON 重编码：request/result 里长得像凭据的值、
-// 命令摘要（remote path）和错误正文都按原值逐字落库，不生成 <redacted> 字面量。
-func TestExternalEditAuditStoresProjectedValuesVerbatim(t *testing.T) {
+// TestExternalEditAuditMapAllowlistKeepsAllowedKeysVerbatim 钉住 external-edit 自由 map
+// metadata 的 fail-closed 字段白名单：11 个批准字段全部保留，值按原样序列化（即使长得像
+// 凭据也不改写），不生成 <redacted> 字面量。
+func TestExternalEditAuditMapAllowlistKeepsAllowedKeysVerbatim(t *testing.T) {
 	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
 
-	session := &Session{
-		ID:         "ssh-a",
-		AssetID:    101,
-		AssetName:  "asset-101",
-		RemotePath: fmt.Sprintf("https://user:%s@host/srv/app/demo.txt", "pass"),
-	}
+	session := &Session{ID: "ssh-a", AssetID: 101, AssetName: "asset-101", RemotePath: "/srv/app/demo.txt"}
 	request := map[string]any{
-		"password": "s3cr3t-ciphertext",
-		"token":    "tok-abc123",
-		"plain":    "keep-me",
+		"auto":         true,
+		"windowSaves":  3,
+		"rebuild":      true,
+		"resolution":   "overwrite",
+		"status":       "saved",
+		"remoteBytes":  1234,
+		"remoteSha256": "abc123",
+		"bytes":        4321,
+		"documentKey":  "ssh-a:/srv/app/demo.txt",
+		"readOnly":     true,
+		"reuse":        true,
 	}
 	result := map[string]any{
-		"status":    "saved",
-		"authToken": "tok-xyz",
-		"apiKey":    "ak-123",
+		"status":      "saved password=hunter2 token=xyz",
+		"documentKey": "ssh-a://user:pass@host/srv/app/demo.txt",
+		"resolution":  "keep",
 	}
 	actionErr := errors.New("transport failed password=hunter2 token=xyz")
 
-	h.svc.writeAudit(session, "external_edit_audit_verbatim", true, request, result, actionErr)
+	h.svc.writeAudit(session, "external_edit_audit_allowlist_all", true, request, result, actionErr)
 
 	log := h.audit.lastLog()
 	require.NotNil(t, log)
 	require.Equal(t, "desktop", log.Source)
-	assert.Equal(t, session.RemotePath, log.Command)
-	assert.Contains(t, log.Request, `"password":"s3cr3t-ciphertext"`)
-	assert.Contains(t, log.Request, `"token":"tok-abc123"`)
-	assert.Contains(t, log.Request, `"plain":"keep-me"`)
-	assert.Contains(t, log.Result, `"authToken":"tok-xyz"`)
-	assert.Contains(t, log.Result, `"apiKey":"ak-123"`)
+	assert.Contains(t, log.Request, `"auto":true`)
+	assert.Contains(t, log.Request, `"windowSaves":3`)
+	assert.Contains(t, log.Request, `"rebuild":true`)
+	assert.Contains(t, log.Request, `"resolution":"overwrite"`)
+	assert.Contains(t, log.Request, `"status":"saved"`)
+	assert.Contains(t, log.Request, `"remoteBytes":1234`)
+	assert.Contains(t, log.Request, `"remoteSha256":"abc123"`)
+	assert.Contains(t, log.Request, `"bytes":4321`)
+	assert.Contains(t, log.Request, `"documentKey":"ssh-a:/srv/app/demo.txt"`)
+	assert.Contains(t, log.Request, `"readOnly":true`)
+	assert.Contains(t, log.Request, `"reuse":true`)
+	assert.Contains(t, log.Result, `"status":"saved password=hunter2 token=xyz"`)
+	assert.Contains(t, log.Result, `"documentKey":"ssh-a://user:pass@host/srv/app/demo.txt"`)
+	assert.Contains(t, log.Result, `"resolution":"keep"`)
 	assert.Contains(t, log.Error, "password=hunter2 token=xyz")
 	assert.NotContains(t, log.Command, "<redacted>")
 	assert.NotContains(t, log.Request, "<redacted>")
 	assert.NotContains(t, log.Result, "<redacted>")
 	assert.NotContains(t, log.Error, "<redacted>")
+}
+
+// TestExternalEditAuditMapAllowlistOmitsUnknownAndSecretFields 钉住 fail-closed 语义：
+// 未知字段、password/token/apiKey 和本地 bakeupPath/工作区路径/哈希一律省略；嵌套 map
+// 同样 fail-closed（未知 key 被滤掉），允许字段的值不被替换。
+func TestExternalEditAuditMapAllowlistOmitsUnknownAndSecretFields(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
+
+	session := &Session{ID: "ssh-a", AssetID: 101, AssetName: "asset-101", RemotePath: "/srv/app/demo.txt"}
+	request := map[string]any{
+		"password":   "s3cr3t-ciphertext",
+		"token":      "tok-abc123",
+		"apiKey":     "ak-123",
+		"bakeupPath": "/Users/me/.cache/opskat/workspace/sessions/ssh-a/bakeup/old",
+		"localPath":  "/Users/me/.cache/opskat/workspace/sessions/ssh-a/local",
+		"status": map[string]any{
+			"reuse":    true,
+			"password": "nested-secret",
+			"detail":   "nested-unknown",
+		},
+	}
+	result := map[string]any{
+		"authToken":      "tok-xyz",
+		"originalSha256": "aaaabbbbcccc",
+		"readOnly":       true,
+	}
+
+	h.svc.writeAudit(session, "external_edit_audit_allowlist_omit", true, request, result, nil)
+
+	log := h.audit.lastLog()
+	require.NotNil(t, log)
+	for _, leaked := range []string{
+		"password", "token", "apiKey", "bakeupPath", "localPath",
+		"authToken", "originalSha256", "nested-secret", "nested-unknown",
+		"/Users/me",
+	} {
+		assert.NotContains(t, log.Request, leaked)
+		assert.NotContains(t, log.Result, leaked)
+	}
+	// 嵌套 map 同样 fail-closed：只保留允许字段 reuse，password/detail 被滤掉
+	assert.Contains(t, log.Request, `"status":{"reuse":true}`)
+	assert.Contains(t, log.Result, `"readOnly":true`)
+	assert.NotContains(t, log.Request, "<redacted>")
+	assert.NotContains(t, log.Result, "<redacted>")
 }
 
 // TestExternalEditAuditOmitsSensitiveProducerFields 钉住 external-edit 审计的 request/result
@@ -1865,13 +1920,13 @@ func TestExternalEditAuditOmitsSensitiveProducerFields(t *testing.T) {
 
 // TestExternalEditAuditKeepsTruncationLimits 钉住 external-edit 审计的 4096/8192/2048
 // 字节截断保持不变：request 截到 4096、result 截到 8192、error 截到 2048，截断发生在
-// 投影之后而不是替换值。
+// 投影之后而不是替换值；填充使用批准字段而非会被省略的未知字段。
 func TestExternalEditAuditKeepsTruncationLimits(t *testing.T) {
 	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
 
 	session := &Session{ID: "ssh-a", AssetID: 101, AssetName: "asset-101", RemotePath: "/srv/app/demo.txt"}
-	request := map[string]any{"padding": strings.Repeat("x", 6000)}
-	result := map[string]any{"padding": strings.Repeat("y", 10000)}
+	request := map[string]any{"status": strings.Repeat("x", 6000)}
+	result := map[string]any{"resolution": strings.Repeat("y", 10000)}
 	actionErr := errors.New(strings.Repeat("z", 3000))
 
 	h.svc.writeAudit(session, "external_edit_audit_truncate", true, request, result, actionErr)
@@ -1884,4 +1939,38 @@ func TestExternalEditAuditKeepsTruncationLimits(t *testing.T) {
 	assert.Contains(t, log.Request, "xxxx")
 	assert.Contains(t, log.Result, "yyyy")
 	assert.Contains(t, log.Error, "zzzz")
+}
+
+// TestExternalEditAuditRebuildOmitsLocalBakeupPath 钉住 rebuild 审计不携带本地备份路径：
+// 远端变化触发 rebuild 时，旧本地副本仍移入 bakeup（行为保留），但审计 result 不得包含
+// bakeupPath 或任何本地工作区路径。
+func TestExternalEditAuditRebuildOmitsLocalBakeupPath(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-b"} })
+	session := h.openSession(t, "ssh-b", "/srv/app/demo.txt", "/srv/app/demo.txt", []byte("hello\n"))
+
+	// 打开后远端内容变化，再次 Open 触发 rebuild：旧本地副本移入 bakeup，新副本按远端重写
+	h.remote.SetFile("ssh-b", "/srv/app/demo.txt", []byte("remote changed\n"), "/srv/app/demo.txt")
+	reopened, err := h.svc.Open(context.Background(), OpenRequest{
+		AssetID:    101,
+		SessionID:  "ssh-b",
+		RemotePath: "/srv/app/demo.txt",
+		EditorID:   "system-text",
+	})
+	require.NoError(t, err)
+	require.Equal(t, session.ID, reopened.ID)
+	require.Equal(t, hashBytes([]byte("remote changed\n")), sessionBaseHash(reopened))
+
+	// rebuild 行为保留：旧本地副本被移入 bakeup
+	bakeupFiles := readBakeupFiles(t, reopened.WorkspaceDir)
+	require.Len(t, bakeupFiles, 1)
+	require.Equal(t, []byte("hello\n"), bakeupFiles[0])
+
+	// 审计 request 保留 rebuild 标记，但 result 不得携带本地 bakeup/工作区路径
+	log := h.audit.lastLog()
+	require.NotNil(t, log)
+	require.Equal(t, "external_edit_open", log.ToolName)
+	require.Contains(t, log.Request, `"rebuild":true`)
+	assert.NotContains(t, log.Result, reopened.WorkspaceDir)
+	assert.NotContains(t, log.Result, "bakeup")
+	assert.NotContains(t, log.Result, reopened.LocalPath)
 }
