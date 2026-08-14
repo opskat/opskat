@@ -738,3 +738,83 @@ func TestPutSSHKeyImportRollsBackOnHandlerAndAssetWriteFailure(t *testing.T) {
 		})
 	}
 }
+
+// TestSafeAuditArgsOmitsAllFiveWriteOnlyFieldsAcrossTypes 锁定 Task 8 的 producer 投影
+// 契约：password / private_key / passphrase / secret_access_key / kubeconfig 这五类
+// write-only 字段在 SafeAuditArgs 与 SafeAuditArgsForResult 中必须整体缺席（不是脱敏），
+// 而类型允许的普通 config 与资产身份保留。
+func TestSafeAuditArgsOmitsAllFiveWriteOnlyFieldsAcrossTypes(t *testing.T) {
+	tests := []struct {
+		name       string
+		asset      *asset_entity.Asset
+		config     map[string]any
+		writeOnly  []string
+		secretText string
+		allowedKey string
+	}{
+		{
+			name:  "redis password",
+			asset: newRedisAsset("cache"),
+			config: map[string]any{
+				"host": "redis.internal", "username": "default", "password": "pw-secret",
+			},
+			writeOnly:  []string{"password"},
+			secretText: "pw-secret",
+			allowedKey: "host",
+		},
+		{
+			name:  "ssh key material",
+			asset: newSSHAsset("box"),
+			config: map[string]any{
+				"host": "ssh.internal", "username": "root",
+				"private_key": "pk-secret", "passphrase": "pp-secret",
+			},
+			writeOnly:  []string{"private_key", "passphrase"},
+			secretText: "pk-secret",
+			allowedKey: "host",
+		},
+		{
+			name:  "oss secret access key",
+			asset: &asset_entity.Asset{Name: "bucket", Type: asset_entity.AssetTypeOSS},
+			config: map[string]any{
+				"endpoint": "s3.internal", "access_key_id": "AKIAEXAMPLE", "secret_access_key": "sak-secret",
+			},
+			writeOnly:  []string{"secret_access_key"},
+			secretText: "sak-secret",
+			allowedKey: "access_key_id",
+		},
+		{
+			name:  "k8s kubeconfig",
+			asset: &asset_entity.Asset{Name: "cluster", Type: asset_entity.AssetTypeK8s},
+			config: map[string]any{
+				"kubeconfig": "apiVersion: v1\nkind: Config\n", "namespace": "prod", "context": "prod-ctx",
+			},
+			writeOnly:  []string{"kubeconfig"},
+			secretText: "apiVersion",
+			allowedKey: "namespace",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := setupPutTest(t)
+			prepared, err := Prepare(env.ctx, Request{Asset: tt.asset, Config: tt.config})
+			require.NoError(t, err)
+			projections := []map[string]any{
+				prepared.SafeAuditArgs(),
+				prepared.SafeAuditArgsForResult(&Result{ID: 7, Authentication: &AuthenticationRef{Type: "password", Ref: 3}}),
+			}
+			for _, proj := range projections {
+				encoded, marshalErr := json.Marshal(proj)
+				require.NoError(t, marshalErr)
+				text := string(encoded)
+				assert.NotContains(t, text, tt.secretText)
+				for _, field := range tt.writeOnly {
+					assert.NotContains(t, text, `"`+field+`":`, "write-only %q must be absent, not redacted", field)
+				}
+				config, ok := proj["config"].(map[string]any)
+				require.True(t, ok)
+				assert.Contains(t, config, tt.allowedKey)
+			}
+		})
+	}
+}

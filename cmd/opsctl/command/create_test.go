@@ -331,3 +331,60 @@ func TestCreateAssetCommitAuditUsesOnlySafeArgsAndOutput(t *testing.T) {
 	assert.Contains(t, call.Result, `"id":8`)
 	assert.Contains(t, call.Result, `"ref":5`)
 }
+
+// realProjectionPrepared 复用真实的 asset_put_svc.Prepared 投影方法（SafeApprovalDetail /
+// SafeAuditArgsForResult），只用假 Commit 结果避免真实物化依赖 db —— 证明 opsctl create
+// 的 Audit 走的就是 producer 自己的投影，而不是一份独立复制。
+type realProjectionPrepared struct {
+	*asset_put_svc.Prepared
+	result *asset_put_svc.Result
+}
+
+func (p *realProjectionPrepared) Commit(context.Context) (*asset_put_svc.Result, error) {
+	return p.result, nil
+}
+
+func TestCreateAssetAuditReusesRealProducerProjection(t *testing.T) {
+	preserveCreateSeams(t)
+	oldWriter := opsctlAuditWriter
+	writer := &mockAuditWriter{}
+	opsctlAuditWriter = writer
+	t.Cleanup(func() { opsctlAuditWriter = oldWriter })
+	requireCreateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+		return ApprovalResult{Decision: aictx.Allow}, nil
+	}
+	notifyAssetChanged = func() {}
+
+	prepareAssetPut = func(_ context.Context, request asset_put_svc.Request) (preparedAssetCreate, error) {
+		prepared, err := asset_put_svc.Prepare(context.Background(), request)
+		if err != nil {
+			return nil, err
+		}
+		return &realProjectionPrepared{Prepared: prepared, result: &asset_put_svc.Result{
+			ID: 7, Authentication: &asset_put_svc.AuthenticationRef{Type: "password", Ref: 3},
+		}}, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := createAsset(context.Background(), []string{
+		"--type", "redis", "--name", "cache", "--config", `{"host":"redis.internal","username":"default"}`, "--password", "opsctl-producer-secret",
+	}, "session", commandIO{stdin: &bytes.Buffer{}, stdout: &stdout, stderr: &stderr})
+	require.Equal(t, 0, code, stderr.String())
+
+	call := writer.lastCall()
+	assert.Equal(t, "put_asset", call.ToolName)
+	assert.NotContains(t, call.ArgsJSON, "opsctl-producer-secret")
+	var args map[string]any
+	require.NoError(t, json.Unmarshal([]byte(call.ArgsJSON), &args))
+	assert.Equal(t, "cache", args["name"])
+	assert.Equal(t, "redis", args["type"])
+	config, ok := args["config"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "redis.internal", config["host"])
+	_, hasPassword := config["password"]
+	assert.False(t, hasPassword, "write-only password must be absent from the opsctl create audit")
+	auth, ok := args["authentication"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "password", auth["type"])
+	assert.Equal(t, float64(3), auth["ref"])
+}

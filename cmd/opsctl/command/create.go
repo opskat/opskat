@@ -157,17 +157,17 @@ func createAsset(ctx context.Context, args []string, session string, streams com
 	}
 
 	result, err := prepared.Commit(ctx)
-	safeArgs := prepared.SafeAuditArgsForResult(result)
+	auditArgs := prepared.SafeAuditArgsForResult(result)
 	resultJSON := ""
 	if err == nil {
 		resultJSON, err = assetPutResultJSON(result)
 	}
 	if err != nil {
-		writeSafeOpsctlAudit(ctx, "put_asset", safeArgs, resultJSON, err, approvalResult.ToCheckResult())
+		writePutAssetAudit(ctx, "put_asset", auditArgs, resultJSON, err, approvalResult.ToCheckResult())
 		writeCreateAssetError(ctx, streams.stderr, err)
 		return 1
 	}
-	writeSafeOpsctlAudit(ctx, "put_asset", safeArgs, resultJSON, nil, approvalResult.ToCheckResult())
+	writePutAssetAudit(ctx, "put_asset", auditArgs, resultJSON, nil, approvalResult.ToCheckResult())
 	notifyAssetChanged()
 	if _, err := fmt.Fprintln(streams.stdout, prettyJSON(resultJSON)); err != nil {
 		writeCreateAssetError(ctx, streams.stderr, fmt.Errorf("write asset result: %w", err))
@@ -208,10 +208,16 @@ func prettyJSON(value string) string {
 	return string(encoded)
 }
 
-func writeSafeOpsctlAudit(ctx context.Context, toolName string, safeArgs map[string]any, result string, execErr error, decision *aictx.CheckResult) {
-	argsJSON, err := json.Marshal(safeArgs)
+// writePutAssetAudit 把 put_asset 的 producer 审计投影写入 opsctl 审计。
+//
+// 它只服务 put_asset：auditArgs 来自 asset_put_svc.Prepared.SafeAuditArgsForResult ——
+// producer 自己的字段白名单（普通 config + 资产身份 + typed authentication ref，write-only
+// 字段整体缺席），不是通用脱敏。其他 opsctl 命令继续走 handler.go 的 writeOpsctlAudit
+// （Task 7 raw-by-default）。
+func writePutAssetAudit(ctx context.Context, toolName string, auditArgs map[string]any, result string, execErr error, decision *aictx.CheckResult) {
+	argsJSON, err := json.Marshal(auditArgs)
 	if err != nil {
-		writeOpsctlAudit(ctx, toolName, `{}`, "", fmt.Errorf("encode safe audit args: %w", err), decision)
+		writeOpsctlAudit(ctx, toolName, `{}`, "", fmt.Errorf("encode put_asset audit args: %w", err), decision)
 		return
 	}
 	writeOpsctlAudit(ctx, toolName, string(argsJSON), result, execErr, decision)

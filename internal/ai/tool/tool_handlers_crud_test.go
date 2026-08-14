@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -1075,4 +1076,146 @@ func TestHandleDeleteGroup_CascadeDeletesAssetsAndAuditsEachOne(t *testing.T) {
 			t.Errorf("cascade audit row tool_name = %q, want delete_asset", l.ToolName)
 		}
 	}
+}
+
+// toolWriteFailure registers a gorm write failure callback on the shared DB, mirroring
+// asset_put_svc's own registerWriteFailure: the commit-failure test below drives a real
+// Prepare + Commit and needs the repository write to fail deterministically.
+func toolWriteFailure(t *testing.T, gdb *gorm.DB, operation, table string) {
+	t.Helper()
+	name := fmt.Sprintf("tool_put_%s_%s", operation, table)
+	callback := func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Table == table {
+			_ = tx.AddError(errors.New(table + " write failed"))
+		}
+	}
+	switch operation {
+	case "create":
+		require.NoError(t, gdb.Callback().Create().Before("gorm:create").Register(name, callback))
+	case "update":
+		require.NoError(t, gdb.Callback().Update().Before("gorm:update").Register(name, callback))
+	default:
+		t.Fatalf("unknown callback operation %q", operation)
+	}
+}
+
+// setupPutAssetDB 把真实 in-memory SQLite 装成 asset/credential 仓库，供走完整
+// Prepare+Commit 物化的 put_asset 测试使用（与既有 managed-password 测试同一套夹具）。
+func setupPutAssetDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	gdb, err := gorm.Open(sqlite.Open("file:tool_put_audit_proj?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, gdb.AutoMigrate(&asset_entity.Asset{}, &credential_entity.Credential{}))
+	db.SetDefault(gdb)
+	origAsset := asset_repo.Asset()
+	origCredential := credential_repo.Credential()
+	asset_repo.RegisterAsset(asset_repo.NewAsset())
+	credential_repo.RegisterCredential(credential_repo.NewCredential())
+	credential_svc.SetDefault(credential_svc.New("tool-put-audit-master-key", []byte("tool-put-audit-salt")))
+	t.Cleanup(func() {
+		asset_repo.RegisterAsset(origAsset)
+		credential_repo.RegisterCredential(origCredential)
+		sqlDB, sqlErr := gdb.DB()
+		if sqlErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	return gdb
+}
+
+// TestHandlePutAsset_SuccessAuditProjectionOmitsWriteOnlyFieldsAndExecutionGetsOriginal
+// 是 Task 8 的核心契约：put_asset 成功时，handler 记录 producer 投影（普通 config +
+// 资产身份 + typed authentication ref），write-only 字段整体缺席；而实际执行仍拿到原值
+// （managed credential 可解密回明文）。
+func TestHandlePutAsset_SuccessAuditProjectionOmitsWriteOnlyFieldsAndExecutionGetsOriginal(t *testing.T) {
+	setupPutAssetDB(t)
+	plaintext := "ai-projection-must-not-leak"
+	var slot *aictx.AuditRequestSlot = aictx.NewAuditRequestSlot()
+	ctx := aictx.WithAuditRequestSlot(context.Background(), slot)
+
+	out, err := handlePutAsset(ctx, map[string]any{
+		"name": "cache-proj", "type": "redis",
+		"config": map[string]any{"host": "redis.internal", "username": "default", "password": plaintext},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, out, plaintext)
+
+	proj := aictx.GetAuditRequest(ctx)
+	require.NotNil(t, proj, "successful put_asset must record a producer projection")
+	encoded, err := json.Marshal(proj)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), plaintext)
+
+	// authentication 是 AuthenticationRef 结构体，先经 JSON 归一成 map 再断言。
+	var projJSON map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &projJSON))
+	config, ok := projJSON["config"].(map[string]any)
+	require.True(t, ok, "ordinary config must be preserved in the projection")
+	assert.Equal(t, "redis.internal", config["host"])
+	assert.Equal(t, "default", config["username"])
+	_, hasPassword := config["password"]
+	assert.False(t, hasPassword, "write-only password must be entirely absent, not redacted")
+	auth, ok := projJSON["authentication"].(map[string]any)
+	require.True(t, ok, "typed authentication ref must be preserved")
+	assert.Equal(t, "password", auth["type"])
+	assert.Positive(t, auth["ref"].(float64))
+
+	// 执行仍收到原值：物化出的 managed credential 可解密回明文。
+	cred, err := credential_repo.Credential().Find(context.Background(), int64(auth["ref"].(float64)))
+	require.NoError(t, err)
+	decrypted, err := credential_svc.Default().Decrypt(cred.Password)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, decrypted)
+}
+
+// TestHandlePutAsset_PrepareFailureProjectsTopLevelOnly: prepare/validation 失败时没有
+// producer 投影可用，必须只投影顶层非 config 字段（name/type/asset 等），绝不回退原始
+// config（它可能携带 write-only 秘密）。
+func TestHandlePutAsset_PrepareFailureProjectsTopLevelOnly(t *testing.T) {
+	env := setupCRUD(t)
+	var slot *aictx.AuditRequestSlot = aictx.NewAuditRequestSlot()
+	ctx := aictx.WithAuditRequestSlot(env.ctx, slot)
+
+	_, err := handlePutAsset(ctx, map[string]any{
+		"name": "broken", "type": "database",
+		"config": map[string]any{"host": "10.0.0.1", "password": "prepare-secret-must-not-leak"},
+	})
+	require.Error(t, err, "database without driver must fail validation")
+
+	proj := aictx.GetAuditRequest(ctx)
+	require.NotNil(t, proj, "prepare failure must still record a projection")
+	encoded, marshalErr := json.Marshal(proj)
+	require.NoError(t, marshalErr)
+	assert.NotContains(t, string(encoded), "prepare-secret-must-not-leak")
+	assert.NotContains(t, string(encoded), "config", "prepare failure must never project raw config")
+	assert.Equal(t, "broken", proj["name"])
+	assert.Equal(t, "database", proj["type"])
+}
+
+// TestHandlePutAsset_CommitFailureProjectsSafeAuditArgs: Prepare 成功、Commit/仓库失败时，
+// 用 Prepared.SafeAuditArgs 投影 —— 保留普通 config 与身份，write-only 字段整体缺席。
+func TestHandlePutAsset_CommitFailureProjectsSafeAuditArgs(t *testing.T) {
+	gdb := setupPutAssetDB(t)
+	toolWriteFailure(t, gdb, "create", "assets")
+	var slot *aictx.AuditRequestSlot = aictx.NewAuditRequestSlot()
+	ctx := aictx.WithAuditRequestSlot(context.Background(), slot)
+
+	_, err := handlePutAsset(ctx, map[string]any{
+		"name": "cache-fail", "type": "redis",
+		"config": map[string]any{"host": "redis.internal", "username": "default", "password": "commit-secret-must-not-leak"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "write failed")
+
+	proj := aictx.GetAuditRequest(ctx)
+	require.NotNil(t, proj, "commit failure must still record a projection")
+	encoded, marshalErr := json.Marshal(proj)
+	require.NoError(t, marshalErr)
+	assert.NotContains(t, string(encoded), "commit-secret-must-not-leak")
+	assert.NotContains(t, string(encoded), "password")
+	config, ok := proj["config"].(map[string]any)
+	require.True(t, ok, "ordinary config preserved on commit failure")
+	assert.Equal(t, "redis.internal", config["host"])
+	assert.Equal(t, "cache-fail", proj["name"])
+	assert.Equal(t, "redis", proj["type"])
 }

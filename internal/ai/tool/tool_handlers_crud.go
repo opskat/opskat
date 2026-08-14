@@ -81,16 +81,40 @@ func createAsset(ctx context.Context, args, config map[string]any) (string, erro
 		GroupID:     aictx.ArgInt64(args, "group_id"),
 		Description: aictx.ArgString(args, "description"),
 	}
-	result, err := asset_put_svc.Put(ctx, asset_put_svc.Request{
+	req := asset_put_svc.Request{
 		Asset:          asset,
 		Config:         config,
 		CredentialName: aictx.ArgString(args, "credential_name"),
-	})
+	}
+	prepared, err := asset_put_svc.Prepare(ctx, req)
 	if err != nil {
+		// prepare/validation 失败：还没有 producer 投影可用，绝不回退原始 config
+		// （config 是自由对象，可能携带 write-only 秘密）——至少投影顶层非 config 字段。
+		aictx.RecordAuditRequest(ctx, putAssetTopLevelAuditArgs(args))
 		return "", fmt.Errorf("failed to create asset: %w", err)
 	}
+	result, err := asset_put_svc.Commit(ctx, prepared)
+	if err != nil {
+		// commit/仓库失败：Prepare 已产出 producer 投影（SafeAuditArgs），直接落审计。
+		aictx.RecordAuditRequest(ctx, prepared.SafeAuditArgs())
+		return "", fmt.Errorf("failed to create asset: %w", err)
+	}
+	aictx.RecordAuditRequest(ctx, prepared.SafeAuditArgsForResult(result))
 	aictx.NotifyDataChanged("asset")
 	return putAssetResultJSON(result, "asset created successfully")
+}
+
+// putAssetTopLevelAuditArgs 在 prepare/validation 失败（尚无 producer 投影可用）时，
+// 只把 put_asset 顶层非 config 字段投影给 Audit：config 是自由对象、可能携带 write-only
+// 秘密，prepare 失败绝不回退原始 config；其余顶层字段（资产身份/描述/分组等）至少保留。
+func putAssetTopLevelAuditArgs(args map[string]any) map[string]any {
+	out := make(map[string]any)
+	for _, key := range []string{"asset", "name", "type", "group_id", "description", "icon", "credential_name"} {
+		if v, ok := args[key]; ok {
+			out[key] = v
+		}
+	}
+	return out
 }
 
 func putAssetResultJSON(result *asset_put_svc.Result, message string) (string, error) {
@@ -133,14 +157,23 @@ func updateAsset(ctx context.Context, ref string, args, config map[string]any) (
 		asset.Icon = icon
 	}
 
-	result, err := asset_put_svc.Put(ctx, asset_put_svc.Request{
+	req := asset_put_svc.Request{
 		Asset:          asset,
 		Config:         config,
 		CredentialName: aictx.ArgString(args, "credential_name"),
-	})
+	}
+	prepared, err := asset_put_svc.Prepare(ctx, req)
 	if err != nil {
+		// 同 createAsset：prepare 失败绝不回退原始 config，只投影顶层非 config 字段。
+		aictx.RecordAuditRequest(ctx, putAssetTopLevelAuditArgs(args))
 		return "", fmt.Errorf("failed to update asset: %w", err)
 	}
+	result, err := asset_put_svc.Commit(ctx, prepared)
+	if err != nil {
+		aictx.RecordAuditRequest(ctx, prepared.SafeAuditArgs())
+		return "", fmt.Errorf("failed to update asset: %w", err)
+	}
+	aictx.RecordAuditRequest(ctx, prepared.SafeAuditArgsForResult(result))
 	aictx.NotifyDataChanged("asset")
 	return putAssetResultJSON(result, "asset updated successfully")
 }
