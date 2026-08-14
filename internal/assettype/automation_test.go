@@ -406,3 +406,100 @@ func TestPrepareCreateDoesNotAdvertiseUnappliedFields(t *testing.T) {
 		})
 	}
 }
+
+// TestPrepareCreateRejectsCompositeRequiredScalarFields 钉住 ArgString / ArgStringSlice
+// 的严格化：host/username 等必填标量字段若是复合值（map/slice），brokers/endpoints 等
+// 必填字符串数组含任一非字符串项（嵌套 map 藏 secret），必须在类型 owner 边界按“缺失”
+// 校验失败，绝不能被 fmt.Sprintf 字符串化混过校验，错误也不能回显嵌套 secret。
+func TestPrepareCreateRejectsCompositeRequiredScalarFields(t *testing.T) {
+	// #nosec G101 -- 嵌套 secret 是故意用于证明复合值不能混过类型校验的夹具。
+	secret := "nested-secret-must-not-leak"
+	tests := []struct {
+		name      string
+		assetType string
+		args      map[string]any
+	}{
+		{
+			name: "redis host object", assetType: asset_entity.AssetTypeRedis,
+			args: map[string]any{"host": map[string]any{"password": secret}, "username": "default"},
+		},
+		{
+			name: "ssh username slice", assetType: asset_entity.AssetTypeSSH,
+			args: map[string]any{"host": "box.example.com", "username": []any{secret}},
+		},
+		{
+			name: "kafka brokers item object", assetType: asset_entity.AssetTypeKafka,
+			args: map[string]any{"brokers": []any{map[string]any{"password": secret}}},
+		},
+		{
+			name: "etcd endpoints item object", assetType: asset_entity.AssetTypeEtcd,
+			args: map[string]any{"endpoints": []any{map[string]any{"token": secret}}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := PrepareCreate(tt.assetType, tt.args)
+			require.Error(t, err, "composite required input must fail validation at the owning type boundary")
+			assert.NotContains(t, err.Error(), secret)
+		})
+	}
+}
+
+// TestPrepareCreateApprovalOmitsNestedSecretAndKeepsFlatStringArrays 钉住 approvalView 的
+// 投影边界：允许字段的复合值（嵌套 map 藏 secret）整体省略、绝不进入 Approval；合法扁平
+// 字符串数组（[]string 或 []any 全是字符串）归一化为新的 []string 保留，不产生可变别名。
+func TestPrepareCreateApprovalOmitsNestedSecretAndKeepsFlatStringArrays(t *testing.T) {
+	// #nosec G101 -- 嵌套 secret 是故意用于证明 allowlist 键下不能藏复合值的夹具。
+	secret := "nested-secret-must-not-leak"
+
+	t.Run("ssh optional approval field composite is omitted", func(t *testing.T) {
+		prepared, err := PrepareCreate(asset_entity.AssetTypeSSH, map[string]any{
+			"host": "box.example.com", "username": "root",
+			"auth_type": map[string]any{"password": secret},
+		})
+		require.NoError(t, err)
+		_, hasAuthType := prepared.Approval["auth_type"]
+		assert.False(t, hasAuthType, "composite auth_type must be omitted from approval")
+		encoded, err := json.Marshal(prepared.Approval)
+		require.NoError(t, err)
+		assert.NotContains(t, string(encoded), secret)
+	})
+
+	t.Run("kafka flat []any of strings normalized to []string", func(t *testing.T) {
+		brokers := []any{"kafka-1:9092", "kafka-2:9092"}
+		prepared, err := PrepareCreate(asset_entity.AssetTypeKafka, map[string]any{
+			"brokers": brokers,
+		})
+		require.NoError(t, err)
+		approvalBrokers, ok := prepared.Approval["brokers"].([]string)
+		require.True(t, ok, "flat []any of strings must be normalized to []string in approval")
+		assert.Equal(t, []string{"kafka-1:9092", "kafka-2:9092"}, approvalBrokers)
+		approvalBrokers[0] = "mutated"
+		assert.Equal(t, []any{"kafka-1:9092", "kafka-2:9092"}, brokers, "approval array must not alias caller input")
+		assert.Equal(t, []any{"kafka-1:9092", "kafka-2:9092"}, prepared.Config["brokers"].([]any), "approval array must not alias prepared config")
+	})
+
+	t.Run("etcd []string retained without alias", func(t *testing.T) {
+		endpoints := []string{"etcd-1:2379", "etcd-2:2379"}
+		prepared, err := PrepareCreate(asset_entity.AssetTypeEtcd, map[string]any{
+			"endpoints": endpoints, "username": "root",
+		})
+		require.NoError(t, err)
+		approvalEndpoints, ok := prepared.Approval["endpoints"].([]string)
+		require.True(t, ok)
+		assert.Equal(t, endpoints, approvalEndpoints)
+		approvalEndpoints[0] = "mutated"
+		assert.Equal(t, []string{"etcd-1:2379", "etcd-2:2379"}, endpoints, "approval array must not alias caller input")
+		assert.Equal(t, []string{"etcd-1:2379", "etcd-2:2379"}, prepared.Config["endpoints"].([]string), "approval array must not alias prepared config")
+	})
+
+	t.Run("local args flat array retained", func(t *testing.T) {
+		prepared, err := PrepareCreate(asset_entity.AssetTypeLocal, map[string]any{
+			"shell": "/bin/zsh", "args": []any{"-l", "-f"},
+		})
+		require.NoError(t, err)
+		approvalArgs, ok := prepared.Approval["args"].([]string)
+		require.True(t, ok)
+		assert.Equal(t, []string{"-l", "-f"}, approvalArgs)
+	})
+}

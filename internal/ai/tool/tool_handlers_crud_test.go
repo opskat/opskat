@@ -1453,3 +1453,51 @@ func TestHandlePutAsset_CommitFailureProjectsSafeAuditArgs(t *testing.T) {
 	assert.Equal(t, "cache-fail", proj["name"])
 	assert.Equal(t, "redis", proj["type"])
 }
+
+// TestHandlePutAsset_CompositeConfigNeverLeaksIntoAuditProjection 钉住 AI put_asset 的
+// producer 投影边界：config 中必填标量字段为复合值时在类型边界校验失败（错误与审计投影都
+// 不含 secret）；可选审批字段的复合值在 Prepare 成功时也被 approvalView 整体省略，绝不进入
+// 审计投影——嵌套 secret 不能借任何允许键从共享 Prepare 边界流向 Audit。
+func TestHandlePutAsset_CompositeConfigNeverLeaksIntoAuditProjection(t *testing.T) {
+	env := setupCRUD(t)
+	// #nosec G101 -- 嵌套 secret 是故意用于证明复合值不能进入审计投影的夹具。
+	secret := "nested-secret-must-not-leak"
+
+	t.Run("required scalar composite fails validation without leaking", func(t *testing.T) {
+		slot := aictx.NewAuditRequestSlot()
+		ctx := aictx.WithAuditRequestSlot(env.ctx, slot)
+		_, err := handlePutAsset(ctx, map[string]any{
+			"name": "broken", "type": "redis",
+			"config": map[string]any{"host": map[string]any{"password": secret}, "username": "default"},
+		})
+		require.Error(t, err, "composite required host must fail validation")
+		assert.NotContains(t, err.Error(), secret)
+		proj := aictx.GetAuditRequest(ctx)
+		require.NotNil(t, proj, "prepare failure must still record the top-level projection")
+		encoded, marshalErr := json.Marshal(proj)
+		require.NoError(t, marshalErr)
+		assert.NotContains(t, string(encoded), secret)
+		assert.NotContains(t, string(encoded), "config")
+	})
+
+	t.Run("optional approval field composite omitted on success", func(t *testing.T) {
+		slot := aictx.NewAuditRequestSlot()
+		ctx := aictx.WithAuditRequestSlot(env.ctx, slot)
+		_, err := handlePutAsset(ctx, map[string]any{
+			"name": "box", "type": "ssh",
+			"config": map[string]any{"host": "10.0.0.1", "port": float64(22), "username": "root", "auth_type": map[string]any{"password": secret}},
+		})
+		require.NoError(t, err, "composite under an optional approval field must not fail the create")
+		proj := aictx.GetAuditRequest(ctx)
+		require.NotNil(t, proj)
+		encoded, marshalErr := json.Marshal(proj)
+		require.NoError(t, marshalErr)
+		assert.NotContains(t, string(encoded), secret)
+		var projJSON map[string]any
+		require.NoError(t, json.Unmarshal(encoded, &projJSON))
+		config, ok := projJSON["config"].(map[string]any)
+		require.True(t, ok, "ordinary config preserved in the audit projection")
+		_, hasAuthType := config["auth_type"]
+		assert.False(t, hasAuthType, "composite auth_type must be omitted from the audit projection")
+	})
+}

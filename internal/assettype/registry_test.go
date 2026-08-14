@@ -184,3 +184,34 @@ func TestRDPHasNoPolicy(t *testing.T) {
 		convey.So(ok, convey.ShouldBeFalse)
 	})
 }
+
+// TestArgStringIsStrictlyTyped 钉住 ArgString 的严格契约：只有真正的 string 才返回其值，
+// 其它类型（map/slice/数字/布尔/nil/缺失）一律返回空串，绝不用 fmt.Sprintf 把复合值
+// 字符串化——那会让藏了嵌套 secret 的复合 host/username 混过“必填”校验。
+func TestArgStringIsStrictlyTyped(t *testing.T) {
+	assert.Equal(t, "box", ArgString(map[string]any{"host": "box"}, "host"))
+	assert.Equal(t, "", ArgString(map[string]any{"host": ""}, "host"))
+	assert.Equal(t, "", ArgString(map[string]any{"host": map[string]any{"password": "s"}}, "host"))
+	assert.Equal(t, "", ArgString(map[string]any{"host": []any{"a"}}, "host"))
+	assert.Equal(t, "", ArgString(map[string]any{"host": 42}, "host"))
+	assert.Equal(t, "", ArgString(map[string]any{"host": true}, "host"))
+	assert.Equal(t, "", ArgString(map[string]any{"host": nil}, "host"))
+	assert.Equal(t, "", ArgString(map[string]any{}, "host"))
+}
+
+// TestArgStringSliceRejectsNonStringItems 钉住 ArgStringSlice 的严格契约：[]string 与
+// []any 全字符串项按原样保留并 trim/丢弃空项；[]any 含任一非字符串项（嵌套 map/数字/布尔/
+// 切片）整体拒绝返回 nil，绝不用 fmt.Sprintf 把项字符串化——那会让藏了嵌套 secret 的
+// brokers/endpoints 项混过“必填数组”校验。
+func TestArgStringSliceRejectsNonStringItems(t *testing.T) {
+	assert.Equal(t, []string{"a", "b"}, ArgStringSlice(map[string]any{"x": []string{"a", "b"}}, "x"))
+	assert.Equal(t, []string{"a", "b"}, ArgStringSlice(map[string]any{"x": []any{"a", "b"}}, "x"))
+	assert.Nil(t, ArgStringSlice(map[string]any{"x": []any{map[string]any{"password": "s"}}}, "x"))
+	assert.Nil(t, ArgStringSlice(map[string]any{"x": []any{"a", 42}}, "x"))
+	assert.Nil(t, ArgStringSlice(map[string]any{"x": []any{true}}, "x"))
+	assert.Nil(t, ArgStringSlice(map[string]any{"x": []any{[]any{"a"}}}, "x"))
+	assert.Nil(t, ArgStringSlice(map[string]any{"x": 42}, "x"))
+	assert.Nil(t, ArgStringSlice(map[string]any{"x": nil}, "x"))
+	assert.Equal(t, []string{"a", "b"}, ArgStringSlice(map[string]any{"x": "a,b"}, "x"))
+	assert.Equal(t, []string{"a"}, ArgStringSlice(map[string]any{"x": []any{" a ", " "}}, "x"))
+}

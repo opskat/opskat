@@ -8,6 +8,7 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
+	"github.com/opskat/opskat/internal/pkg/jsonscalar"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"go.uber.org/zap"
 )
@@ -176,7 +177,9 @@ func sanitizeAuditSession(session *Session) *auditSessionPayload {
 // auditMapAllowedFields 是 external-edit 自由 map metadata 的 fail-closed 字段白名单：
 // 只有这 11 个批准字段能进入审计，未知字段（含本地路径/哈希/样本与 bakeupPath）一律省略。
 // 这是 external_edit_svc 自己的 producer 契约，不引入通用敏感字段注册表；允许键的值只能是
-// JSON 标量（string/bool/数字/nil）按原样序列化，复合值整体省略，不做递归放行。
+// JSON 标量（string/bool/数字/nil，含 json.Number 与命名标量别名）按原样序列化，复合值整体
+// 省略，不做递归放行；非有限 float（NaN/±Inf）与非法 json.Number 也逐键省略，避免让整个
+// payload 的 json.Marshal 失败。
 var auditMapAllowedFields = map[string]struct{}{
 	"auto":         {},
 	"windowSaves":  {},
@@ -200,29 +203,16 @@ func sanitizeAuditMap(payload map[string]any) map[string]any {
 		if _, ok := auditMapAllowedFields[key]; !ok {
 			continue
 		}
-		// 允许键的值只能是 JSON 标量（string/bool/数字/nil），内容逐字保留；
-		// map[string]string、具体类型 map、切片/数组、结构体等复合值一律整体省略，
-		// 防止 bakeupPath/password 藏在复合值里绕过字段白名单。
-		if !isAuditScalar(value) {
+		// 允许键的值只能是 JSON 标量（string/bool/数字/nil，含 json.Number 与命名标量别名），
+		// 内容逐字保留；map[string]string、具体类型 map、切片/数组、结构体等复合值一律整体省略，
+		// 防止 bakeupPath/password 藏在复合值里绕过字段白名单。非有限 float（NaN/±Inf）与非法
+		// json.Number 会破坏整个 payload 的 json.Marshal，同样逐键省略，不让一个坏值清空其余字段。
+		if !jsonscalar.IsScalar(value) {
 			continue
 		}
 		sanitized[key] = value
 	}
 	return sanitized
-}
-
-// isAuditScalar 判断值是否为 JSON 标量原语（string/bool/数值，含 nil）。
-// 复合值（map/slice/array/struct/pointer）不是标量，审计时整体省略。
-func isAuditScalar(value any) bool {
-	switch value.(type) {
-	case string, bool,
-		int, int8, int16, int32, int64,
-		uint, uint8, uint16, uint32, uint64, uintptr,
-		float32, float64:
-		return true
-	default:
-		return value == nil
-	}
 }
 
 func shortHash(value string) string {

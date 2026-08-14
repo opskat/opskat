@@ -2,8 +2,10 @@ package external_edit_svc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1909,6 +1911,78 @@ func TestExternalEditAuditMapAllowlistOmitsCompositeValues(t *testing.T) {
 	// 允许键的标量值仍逐字保留
 	assert.Contains(t, log.Request, `"auto":true`)
 	assert.Equal(t, `{"auto":true}`, log.Request)
+}
+
+// namedAudit* are named scalar aliases used to prove the external-edit audit
+// allowlist keeps named scalar kinds, not only the builtin aliases.
+type namedAuditString string
+type namedAuditBool bool
+type namedAuditInt int
+type namedAuditFloat float64
+
+// TestExternalEditAuditMapAllowlistKeepsJSONNumberAndNamedScalars 钉住 external-edit 审计
+// allowlist 对 JSON 标量的完整覆盖：json.Number 与命名标量别名（string/bool/数值）是合法
+// JSON 标量，必须逐字保留，不被误判为复合值整体省略；其它批准字段不受影响。
+func TestExternalEditAuditMapAllowlistKeepsJSONNumberAndNamedScalars(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
+
+	session := &Session{ID: "ssh-a", AssetID: 101, AssetName: "asset-101", RemotePath: "/srv/app/demo.txt"}
+	request := map[string]any{
+		"auto":        json.Number("7"),
+		"windowSaves": namedAuditInt(3),
+		"status":      namedAuditString("saved"),
+		"remoteBytes": namedAuditFloat(1234.5),
+		"reuse":       namedAuditBool(true),
+		"readOnly":    true,
+	}
+	result := map[string]any{
+		"status":      "saved",
+		"remoteBytes": json.Number("4321"),
+	}
+
+	h.svc.writeAudit(session, "external_edit_audit_json_scalar", true, request, result, nil)
+
+	log := h.audit.lastLog()
+	require.NotNil(t, log)
+	assert.Contains(t, log.Request, `"auto":7`)
+	assert.Contains(t, log.Request, `"windowSaves":3`)
+	assert.Contains(t, log.Request, `"status":"saved"`)
+	assert.Contains(t, log.Request, `"remoteBytes":1234.5`)
+	assert.Contains(t, log.Request, `"reuse":true`)
+	assert.Contains(t, log.Request, `"readOnly":true`)
+	assert.Contains(t, log.Result, `"remoteBytes":4321`)
+	assert.NotContains(t, log.Request, "<redacted>")
+}
+
+// TestExternalEditAuditMapAllowlistOmitsNonFiniteAndInvalidIndividually 钉住 external-edit
+// 审计对非有限/非法标量的 fail-closed 语义：NaN/±Inf float 与非法 json.Number 让整体
+// json.Marshal 失败，必须逐键省略而不是让 marshalAuditPayload 把整个 payload 清空；无关的
+// 批准字段继续逐字保留，复合值依旧整体省略。
+func TestExternalEditAuditMapAllowlistOmitsNonFiniteAndInvalidIndividually(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
+
+	session := &Session{ID: "ssh-a", AssetID: 101, AssetName: "asset-101", RemotePath: "/srv/app/demo.txt"}
+	request := map[string]any{
+		"auto":        true,
+		"windowSaves": math.NaN(),
+		"rebuild":     math.Inf(1),
+		"resolution":  json.Number("abc"),
+		"status":      map[string]any{"password": "nested-secret"},
+		"remoteBytes": 1234,
+	}
+
+	h.svc.writeAudit(session, "external_edit_audit_nonfinite", true, request, nil, nil)
+
+	log := h.audit.lastLog()
+	require.NotNil(t, log)
+	// 无关批准字段保留：payload 绝不被一个坏值整体清空。
+	assert.Contains(t, log.Request, `"auto":true`)
+	assert.Contains(t, log.Request, `"remoteBytes":1234`)
+	// 每个坏值只影响它自己的键：非有限/非法 number/复合值逐一省略。
+	for _, key := range []string{`"windowSaves"`, `"rebuild"`, `"resolution"`, `"status"`} {
+		assert.NotContains(t, log.Request, key)
+	}
+	assert.NotContains(t, log.Request, "nested-secret")
 }
 
 // TestExternalEditAuditOmitsSensitiveProducerFields 钉住 external-edit 审计的 request/result

@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
+	"github.com/opskat/opskat/internal/pkg/jsonscalar"
 )
 
 // AutomationContract is owned by one registered asset type. It declares the
@@ -156,11 +157,44 @@ func rejectUnknownFields(args map[string]any, accepted []string) error {
 func approvalView(args map[string]any, fields []string) map[string]any {
 	out := make(map[string]any, len(fields))
 	for _, field := range fields {
-		if value, ok := args[field]; ok {
+		value, ok := args[field]
+		if !ok {
+			continue
+		}
+		if strings, ok := copyFlatStringArray(value); ok {
+			out[field] = strings
+			continue
+		}
+		// 只拷贝能安全 JSON 编码的标量（nil/bool/string/有限数值，含命名标量别名与合法
+		// json.Number）。复合值（map/slice/array/struct/pointer）整体省略——嵌套 secret
+		// 不能借任何允许审批字段进入 SafeApprovalDetail / SafeAuditArgs。
+		if jsonscalar.IsScalar(value) {
 			out[field] = value
 		}
 	}
 	return out
+}
+
+// copyFlatStringArray 把扁平字符串数组（[]string 或 []any 且每一项都是 string）拷贝成新的
+// []string，使审批视图既不与 config 共享可变切片（无 mutation alias），也不放行藏了嵌套值的
+// 复合项。[]any 含任一非字符串项（嵌套 map/数字/布尔/切片）就不是扁平字符串数组，整体拒绝。
+func copyFlatStringArray(value any) ([]string, bool) {
+	switch items := value.(type) {
+	case []string:
+		return append([]string(nil), items...), true
+	case []any:
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			s, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	default:
+		return nil, false
+	}
 }
 
 func cloneArgs(args map[string]any) map[string]any {

@@ -388,3 +388,48 @@ func TestCreateAssetAuditReusesRealProducerProjection(t *testing.T) {
 	assert.Equal(t, "password", auth["type"])
 	assert.Equal(t, float64(3), auth["ref"])
 }
+
+// TestCreateAssetCompositeConfigOmittedFromAuditViaRealPrepare 通过真实 asset_put_svc
+// Prepare 的 producer 投影证明 opsctl create 审计不携带 allowlist 键下的嵌套 secret：可选
+// 审批字段的复合值被 approvalView 整体省略，合法扁平字符串数组归一化保留。
+func TestCreateAssetCompositeConfigOmittedFromAuditViaRealPrepare(t *testing.T) {
+	preserveCreateSeams(t)
+	oldWriter := opsctlAuditWriter
+	writer := &mockAuditWriter{}
+	opsctlAuditWriter = writer
+	t.Cleanup(func() { opsctlAuditWriter = oldWriter })
+	requireCreateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+		return ApprovalResult{Decision: aictx.Allow}, nil
+	}
+	notifyAssetChanged = func() {}
+
+	prepareAssetPut = func(_ context.Context, request asset_put_svc.Request) (preparedAssetCreate, error) {
+		prepared, err := asset_put_svc.Prepare(context.Background(), request)
+		if err != nil {
+			return nil, err
+		}
+		return &realProjectionPrepared{Prepared: prepared, result: &asset_put_svc.Result{ID: 7}}, nil
+	}
+
+	// #nosec G101 -- 嵌套 secret 是故意用于证明 opsctl 审计不携带复合值藏匿秘密的夹具。
+	secret := "opsctl-nested-secret-must-not-leak"
+	var stdout, stderr bytes.Buffer
+	code := createAsset(context.Background(), []string{
+		"--type", "ssh", "--name", "box",
+		"--config", `{"host":"10.0.0.1","username":"root","auth_type":{"password":"` + secret + `"}}`,
+	}, "session", commandIO{stdin: &bytes.Buffer{}, stdout: &stdout, stderr: &stderr})
+	require.Equal(t, 0, code, stderr.String())
+
+	call := writer.lastCall()
+	require.NotNil(t, call)
+	assert.Equal(t, "put_asset", call.ToolName)
+	assert.NotContains(t, call.ArgsJSON, secret)
+	assert.NotContains(t, call.Result, secret)
+	var args map[string]any
+	require.NoError(t, json.Unmarshal([]byte(call.ArgsJSON), &args))
+	config, ok := args["config"].(map[string]any)
+	require.True(t, ok, "ordinary config preserved in the opsctl audit")
+	assert.Equal(t, "10.0.0.1", config["host"])
+	_, hasAuthType := config["auth_type"]
+	assert.False(t, hasAuthType, "composite auth_type must be omitted from the opsctl audit")
+}

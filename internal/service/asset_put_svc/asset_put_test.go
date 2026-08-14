@@ -818,3 +818,47 @@ func TestSafeAuditArgsOmitsAllFiveWriteOnlyFieldsAcrossTypes(t *testing.T) {
 		})
 	}
 }
+
+// TestPrepareSafeViewsOmitCompositeNestedSecretsAndKeepFlatArrays 钉住 asset_put_svc 的
+// producer 投影边界：允许审批字段的复合值（嵌套 map 藏 secret）整体省略、绝不进入
+// SafeApprovalDetail / SafeAuditArgs；合法扁平字符串数组（brokers/endpoints）归一化为
+// 新的 []string 保留。嵌套 secret 不能借任何允许键从共享 Prepare 边界流向 AI/opsctl。
+func TestPrepareSafeViewsOmitCompositeNestedSecretsAndKeepFlatArrays(t *testing.T) {
+	env := setupPutTest(t)
+	// #nosec G101 -- 嵌套 secret 是故意用于证明 allowlist 键下不能藏复合值的夹具。
+	secret := "nested-secret-must-not-leak"
+
+	t.Run("ssh optional approval field composite omitted", func(t *testing.T) {
+		prepared, err := Prepare(env.ctx, Request{Asset: newSSHAsset("box"), Config: map[string]any{
+			"host": "ssh.internal", "username": "root",
+			"auth_type": map[string]any{"password": secret},
+		}})
+		require.NoError(t, err)
+		approval := prepared.SafeApprovalDetail()
+		config, ok := approval["config"].(map[string]any)
+		require.True(t, ok)
+		_, hasAuthType := config["auth_type"]
+		assert.False(t, hasAuthType, "composite auth_type must be omitted from approval")
+		for _, proj := range []map[string]any{approval, prepared.SafeAuditArgs(), prepared.SafeAuditArgsForResult(&Result{ID: 7})} {
+			encoded, marshalErr := json.Marshal(proj)
+			require.NoError(t, marshalErr)
+			assert.NotContains(t, string(encoded), secret)
+		}
+	})
+
+	t.Run("flat string arrays retained normalized", func(t *testing.T) {
+		prepared, err := Prepare(env.ctx, Request{
+			Asset: &asset_entity.Asset{Name: "kafka", Type: asset_entity.AssetTypeKafka},
+			Config: map[string]any{
+				"brokers": []any{"kafka-1:9092", "kafka-2:9092"},
+			},
+		})
+		require.NoError(t, err)
+		approval := prepared.SafeApprovalDetail()
+		config, ok := approval["config"].(map[string]any)
+		require.True(t, ok)
+		brokers, ok := config["brokers"].([]string)
+		require.True(t, ok, "approval brokers must be normalized to []string")
+		assert.Equal(t, []string{"kafka-1:9092", "kafka-2:9092"}, brokers)
+	})
+}

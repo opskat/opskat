@@ -109,6 +109,9 @@ func All() []AssetTypeHandler {
 
 // --- Arg extraction helpers ---
 
+// ArgString 从 args 中严格解析字符串：仅当值就是 string 时返回其值；缺失、nil、数字、
+// 布尔与一切复合值（map/slice/array/struct/pointer）一律返回空串，绝不用 fmt.Sprintf
+// 字符串化——那会让藏了嵌套 secret 的复合 host/username 混过“必填”校验。
 func ArgString(args map[string]any, key string) string {
 	v, ok := args[key]
 	if !ok {
@@ -116,7 +119,7 @@ func ArgString(args map[string]any, key string) string {
 	}
 	s, ok := v.(string)
 	if !ok {
-		return fmt.Sprintf("%v", v)
+		return ""
 	}
 	return s
 }
@@ -171,8 +174,10 @@ func ArgBool(args map[string]any, key string) bool {
 	}
 }
 
-// ArgStringSlice 从 args 中解析字符串数组。支持 []string、[]any、用逗号/分号/换行分隔的字符串。
-// 自动 trim 空白并丢弃空项。
+// ArgStringSlice 从 args 中解析字符串数组。支持 []string、[]any（且每一项都是 string）、
+// 用逗号/分号/换行分隔的字符串。自动 trim 空白并丢弃空项。[]any 含任一非字符串项
+// （嵌套 map/数字/布尔/切片）整体拒绝返回 nil，绝不用 fmt.Sprintf 把项字符串化——那会让
+// 藏了嵌套 secret 的 brokers/endpoints 项混过“必填数组”校验。
 func ArgStringSlice(args map[string]any, key string) []string {
 	v, ok := args[key]
 	if !ok || v == nil {
@@ -184,7 +189,11 @@ func ArgStringSlice(args map[string]any, key string) []string {
 	case []any:
 		out := make([]string, 0, len(x))
 		for _, item := range x {
-			out = append(out, fmt.Sprintf("%v", item))
+			s, ok := item.(string)
+			if !ok {
+				return nil
+			}
+			out = append(out, s)
 		}
 		return cleanStrings(out)
 	case string:
