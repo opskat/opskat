@@ -19,7 +19,6 @@ import (
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/model/entity/ai_provider_entity"
 	"github.com/opskat/opskat/internal/model/entity/conversation_entity"
-	"github.com/opskat/opskat/internal/pkg/auditredact"
 	"github.com/opskat/opskat/internal/service/ai_provider_svc"
 	"github.com/opskat/opskat/internal/service/conversation_svc"
 
@@ -31,20 +30,20 @@ import (
 	"gorm.io/gorm"
 )
 
-// safeOutwardError 把面向前端的错误正文经 canonical redactor 投影（spec Logs and audit，
-// "外发错误仍必须安全"）：provider/工具错误文本可能内嵌凭据材料（API key、PEM、
-// Authorization 等），chat.go 直接构造的 error 事件不经过 runner 的 StreamEvent 翻译器，
-// 因此必须在这里统一脱敏后再外发。非敏感文本原样保留，不影响诊断。
+// safeOutwardError 把面向前端的错误正文原样返回（spec Task 1，「面向用户的 chat error
+// 也保持原文」）：provider/工具错误文本逐字透传，不做 canonical redaction（Audit 仍是
+// canonical redactor 的专用表面）。chat.go 直接构造的 error 事件不经过 runner 的
+// StreamEvent 翻译器，因此在这里统一取原始错误文本后再外发。
 func safeOutwardError(err error) string {
 	if err == nil {
 		return ""
 	}
-	return auditredact.Text(err.Error())
+	return err.Error()
 }
 
 // safeOutwardFailure projects the provider error once for both outward channels. The
 // caller keeps the existing event wording while the synchronous Wails method error adds
-// its operation prefix; neither channel may retain the original wrapped error.
+// its operation prefix; both channels carry the original wrapped error text unchanged.
 func safeOutwardFailure(prefix string, err error) (string, error) {
 	message := safeOutwardError(err)
 	return message, fmt.Errorf("%s: %s", prefix, message)

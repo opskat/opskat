@@ -70,8 +70,8 @@ func TestEventTranslator_ThinkingThenToolStart(t *testing.T) {
 	})
 }
 
-func TestEventTranslator_ToolStartRedactsCredentialInput(t *testing.T) {
-	Convey("EventPreToolUse 的 tool_input 在离开 runner 前脱敏，同时保留结构与非敏感值", t, func() {
+func TestEventTranslator_ToolStartPassesRawInput(t *testing.T) {
+	Convey("EventPreToolUse 的 tool_input 按原始 JSON 逐字外发，不做任何脱敏", t, func() {
 		secret := "live-" + "credential-sentinel" // 运行时拼接避免 gosec G101
 		out := drain(NewStreamTranslator(), agent.Event{
 			Kind: agent.EventPreToolUse,
@@ -91,15 +91,13 @@ func TestEventTranslator_ToolStartRedactsCredentialInput(t *testing.T) {
 		So(out[0].Type, ShouldEqual, "tool_start")
 		So(out[0].ToolName, ShouldEqual, "put_asset")
 		So(out[0].ToolCallID, ShouldEqual, "tu_secret")
-		So(out[0].ToolInput, ShouldNotContainSubstring, secret)
-		So(out[0].ToolInput, ShouldContainSubstring, "<redacted>")
-		So(out[0].ToolInput, ShouldContainSubstring, "db.internal")
-		So(out[0].ToolInput, ShouldContainSubstring, "prod")
+		// Go json.Marshal 按键名排序；逐字断言完整输入，凭据材料原样保留。
+		So(out[0].ToolInput, ShouldEqual, `{"config":{"host":"db.internal","password":"`+secret+`","private_key":{"passphrase":"`+secret+`","path":"/Users/x/.ssh/id_rsa"}},"name":"prod"}`)
 	})
 }
 
-func TestEventTranslator_ToolStartMarshalFailureFailsClosed(t *testing.T) {
-	Convey("EventPreToolUse 输入无法序列化时外发 <redacted> 而不是空串或原文", t, func() {
+func TestEventTranslator_ToolStartMarshalFailureKeepsRawErrorText(t *testing.T) {
+	Convey("EventPreToolUse 输入无法序列化时外发原始序列化错误文本，不注入 redaction 字面量", t, func() {
 		out := drain(NewStreamTranslator(), agent.Event{
 			Kind: agent.EventPreToolUse,
 			Tool: &agent.ToolEvent{
@@ -109,12 +107,13 @@ func TestEventTranslator_ToolStartMarshalFailureFailsClosed(t *testing.T) {
 			},
 		})
 		So(out, ShouldHaveLength, 1)
-		So(out[0].ToolInput, ShouldEqual, "<redacted>")
+		So(out[0].ToolInput, ShouldNotEqual, "<redacted>")
+		So(out[0].ToolInput, ShouldContainSubstring, "json:")
 	})
 }
 
-func TestEventTranslator_ToolResultRedactsCredentialContent(t *testing.T) {
-	Convey("EventPostToolUse 的 JSON 结果递归脱敏，普通文本按文本规则脱敏", t, func() {
+func TestEventTranslator_ToolResultPassesRawContent(t *testing.T) {
+	Convey("EventPostToolUse 的 JSON 结果逐字外发，不做任何脱敏", t, func() {
 		secret := "result-" + "credential-sentinel" // 运行时拼接避免 gosec G101
 		out := drain(NewStreamTranslator(), agent.Event{
 			Kind: agent.EventPostToolUse,
@@ -130,12 +129,10 @@ func TestEventTranslator_ToolResultRedactsCredentialContent(t *testing.T) {
 		})
 		So(out, ShouldHaveLength, 1)
 		So(out[0].Type, ShouldEqual, "tool_result")
-		So(out[0].Content, ShouldNotContainSubstring, secret)
-		So(out[0].Content, ShouldContainSubstring, "<redacted>")
-		So(out[0].Content, ShouldContainSubstring, `"rows":3`)
+		So(out[0].Content, ShouldEqual, `{"rows":3,"password":"`+secret+`"}`)
 	})
 
-	Convey("普通文本结果中的凭据形式也被文本规则脱敏，安全文本原样保留", t, func() {
+	Convey("普通文本结果逐字外发，凭据形式文本不被改写", t, func() {
 		out := drain(NewStreamTranslator(), agent.Event{
 			Kind: agent.EventPostToolUse,
 			Tool: &agent.ToolEvent{
@@ -149,13 +146,12 @@ func TestEventTranslator_ToolResultRedactsCredentialContent(t *testing.T) {
 			},
 		})
 		So(out, ShouldHaveLength, 1)
-		So(out[0].Content, ShouldNotContainSubstring, "hidden-cli-secret")
-		So(out[0].Content, ShouldContainSubstring, "ok")
+		So(out[0].Content, ShouldEqual, "ok\n--password hidden-cli-secret")
 	})
 }
 
-func TestEventTranslator_RetryRedactsCause(t *testing.T) {
-	Convey("EventRetry 的 Cause 在事件外脱敏，Attempt/Delay 原样保留", t, func() {
+func TestEventTranslator_RetryPassesRawCause(t *testing.T) {
+	Convey("EventRetry 的 Cause 在事件里逐字外发，Attempt/Delay 原样保留", t, func() {
 		out := drain(NewStreamTranslator(), agent.Event{
 			Kind: agent.EventRetry,
 			Retry: &agent.RetryEvent{
@@ -166,8 +162,7 @@ func TestEventTranslator_RetryRedactsCause(t *testing.T) {
 		})
 		So(out, ShouldHaveLength, 1)
 		So(out[0].Type, ShouldEqual, "retry")
-		So(out[0].Error, ShouldNotContainSubstring, "retry-secret-token")
-		So(out[0].Error, ShouldContainSubstring, "<redacted>")
+		So(out[0].Error, ShouldEqual, "auth failed: --api-key retry-secret-token")
 		So(out[0].Content, ShouldEqual, "3")
 		So(out[0].RetryDelayMs, ShouldEqual, 2000)
 	})
@@ -207,15 +202,15 @@ func TestEventTranslator_RetryLogRedactsCauseKeepsCorrelation(t *testing.T) {
 	})
 }
 
-func TestEventTranslator_ErrorRedactsMessage(t *testing.T) {
-	Convey("EventError 的消息按文本规则脱敏", t, func() {
+func TestEventTranslator_ErrorPassesRawMessage(t *testing.T) {
+	Convey("EventError 的消息逐字外发，不做任何脱敏", t, func() {
 		out := drain(NewStreamTranslator(), agent.Event{
 			Kind:  agent.EventError,
 			Error: errors.New("connection failed: --password error-secret-pass"),
 		})
 		So(out, ShouldHaveLength, 1)
 		So(out[0].Type, ShouldEqual, "error")
-		So(out[0].Error, ShouldNotContainSubstring, "error-secret-pass")
+		So(out[0].Error, ShouldEqual, "connection failed: --password error-secret-pass")
 	})
 }
 

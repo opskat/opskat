@@ -60,23 +60,21 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 		if ev.Tool == nil {
 			return
 		}
-		var safeInput string
+		// 原值语义：tool 参数按原始 JSON 序列化后逐字外发，不调用 auditredact。
+		// 真实 cago 工具参数总是由 JSON 解码而来，必然可序列化；万一序列化失败
+		// （合成/不存在的输入）就外发原始错误文本，绝不注入任何 redaction 字面量。
+		input := ""
 		if ev.Tool.Input != nil {
 			b, err := json.Marshal(ev.Tool.Input)
 			if err != nil {
-				// 序列化失败也属于安全投影失败：外发必须 fail closed，不能退化成
-				// 空串（会把失败伪装成“无参数”）或尝试格式化原始对象。
-				safeInput = auditredact.RedactedValue
-			} else {
-				safeInput = auditredact.JSON(string(b))
+				b = []byte(err.Error())
 			}
+			input = string(b)
 		}
-		// 安全边界：外发前按 canonical redactor 递归脱敏 tool 参数，原始 cago 执行
-		// 上下文仍持有原值；实时 UI / 会话落库 / 下一轮回放只拿到安全投影。
 		emit(StreamEvent{
 			Type:       "tool_start",
 			ToolName:   ev.Tool.Name,
-			ToolInput:  safeInput,
+			ToolInput:  input,
 			ToolCallID: ev.Tool.ToolUseID,
 		})
 
@@ -88,8 +86,8 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 			Type:       "tool_result",
 			ToolName:   ev.Tool.Name,
 			ToolCallID: ev.Tool.ToolUseID,
-			// 工具结果同样经 canonical redactor 投影：JSON 递归脱敏，普通文本走文本规则。
-			Content: auditredact.Result(extractToolResultText(ev.Tool.Output)),
+			// 原值语义：工具结果原文透传，不调用 auditredact。
+			Content: extractToolResultText(ev.Tool.Output),
 			IsError: ev.Tool.Output != nil && ev.Tool.Output.IsError,
 		})
 
@@ -101,7 +99,8 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 
 	case agent.EventRetry:
 		// 透传 Attempt / Delay / Cause —— 前端用 RetryDelayMs 做倒计时同步、Content 显示第几次。
-		// Cause 在事件与运维日志两个外发面都走 canonical text redaction。
+		// 事件里的 Cause 原值外发；运维日志仍走 canonical text redaction（结构化日志由
+		// task 6 负责去掉 cause，本任务不改写日志）。
 		msg := ""
 		attempt := 0
 		delayMs := 0
@@ -124,7 +123,7 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 		)
 		emit(StreamEvent{
 			Type:         "retry",
-			Error:        auditredact.Text(msg),
+			Error:        msg,
 			Content:      strconv.Itoa(attempt),
 			RetryDelayMs: delayMs,
 		})
@@ -137,7 +136,8 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 		if ev.Error != nil {
 			msg = ev.Error.Error()
 		}
-		emit(StreamEvent{Type: "error", Error: auditredact.Text(msg)})
+		// 原值语义：面向用户的错误正文原文透传，不调用 auditredact。
+		emit(StreamEvent{Type: "error", Error: msg})
 
 	case agent.EventCompacted:
 		// 新事件类型——前端尚未识别就当未知 type 忽略，不会破坏渲染。

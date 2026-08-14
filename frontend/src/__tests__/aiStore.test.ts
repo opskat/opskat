@@ -2234,7 +2234,7 @@ describe("AI 会话块递归安全持久化（嵌套 agent child blocks）", () 
     vi.useRealTimers();
   });
 
-  it("存盘时嵌套 agent child blocks 随持久化 DTO 递归携带（后端 SetBlocks 递归脱敏）", async () => {
+  it("存盘时嵌套 agent child blocks 随持久化 DTO 递归携带（原始值逐字写入）", async () => {
     useAIStore.setState({
       sidebarTabs: [
         {
@@ -2263,7 +2263,7 @@ describe("AI 会话块递归安全持久化（嵌套 agent child blocks）", () 
                     type: "tool",
                     content: "",
                     toolName: "put_asset",
-                    toolInput: '{"password":"<redacted>"}',
+                    toolInput: '{"password":"frontend-credential-sentinel"}',
                     toolCallId: "call_n1",
                     status: "completed",
                   },
@@ -2283,10 +2283,10 @@ describe("AI 会话块递归安全持久化（嵌套 agent child blocks）", () 
     expect(agentBlock).toBeDefined();
     expect(agentBlock.childBlocks).toHaveLength(1);
     expect(agentBlock.childBlocks[0].type).toBe("tool");
-    expect(agentBlock.childBlocks[0].toolInput).toContain("<redacted>");
+    expect(agentBlock.childBlocks[0].toolInput).toBe('{"password":"frontend-credential-sentinel"}');
   });
 
-  it("重载会话恢复嵌套 agent child blocks（安全值原样读回）", async () => {
+  it("重载会话恢复嵌套 agent child blocks（原始值逐字读回；旧字面 <redacted> 也原样保留）", async () => {
     vi.mocked(LoadConversationMessages).mockResolvedValue([
       { role: "user", content: "hi", blocks: [] },
       {
@@ -2302,7 +2302,7 @@ describe("AI 会话块递归安全持久化（嵌套 agent child blocks）", () 
                 type: "tool",
                 content: "ok",
                 toolName: "put_asset",
-                toolInput: '{"password":"<redacted>"}',
+                toolInput: '{"password":"frontend-credential-sentinel"}',
                 toolCallId: "call_n2",
                 status: "completed",
               },
@@ -2319,10 +2319,34 @@ describe("AI 会话块递归安全持久化（嵌套 agent child blocks）", () 
     const agentBlock = loaded.flatMap((m) => m.blocks).find((b) => b.type === "agent");
     expect(agentBlock).toBeDefined();
     expect(agentBlock!.childBlocks).toHaveLength(1);
-    expect(agentBlock!.childBlocks![0].toolInput).toContain("<redacted>");
+    expect(agentBlock!.childBlocks![0].toolInput).toBe('{"password":"frontend-credential-sentinel"}');
+
+    // 已持久化的字面 <redacted> 作为普通不可恢复字面值原样返回，不猜测不重写。
+    vi.mocked(LoadConversationMessages).mockResolvedValue([
+      {
+        role: "assistant",
+        content: "",
+        blocks: [
+          {
+            type: "tool",
+            content: "ok: --api-key <redacted>",
+            toolName: "put_asset",
+            toolInput: '{"password":"<redacted>"}',
+            toolCallId: "call_lit",
+            status: "completed",
+          },
+        ],
+      },
+    ] as any);
+    useAIStore.setState({ conversations: [{ ID: 203, Title: "t2" } as any] });
+    await useAIStore.getState().openConversationTab(203);
+    const literal = useAIStore.getState().conversationMessages[203];
+    const toolBlock = literal.flatMap((m) => m.blocks).find((b) => b.type === "tool");
+    expect(toolBlock!.toolInput).toBe('{"password":"<redacted>"}');
+    expect(toolBlock!.content).toBe("ok: --api-key <redacted>");
   });
 
-  it("下一轮模型历史携带安全 tool input/result 投影", async () => {
+  it("下一轮模型历史携带原始 tool input/result（逐字一致）", async () => {
     useAIStore.setState({
       modelName: "gpt-4o",
       sidebarTabs: [
@@ -2343,9 +2367,9 @@ describe("AI 会话块递归安全持久化（嵌套 agent child blocks）", () 
             blocks: [
               {
                 type: "tool",
-                content: `{"rows":1,"token":"<redacted>"}`,
+                content: `{"rows":1,"token":"next-round-credential-sentinel"}`,
                 toolName: "query",
-                toolInput: '{"password":"<redacted>"}',
+                toolInput: '{"password":"next-round-credential-sentinel"}',
                 toolCallId: "call_n3",
                 status: "completed",
               },
@@ -2361,11 +2385,9 @@ describe("AI 会话块递归安全持久化（嵌套 agent child blocks）", () 
 
     const args = vi.mocked(SendAIMessage).mock.calls.at(-1)!;
     const apiMsgs = args[1] as any[];
-    const serialized = JSON.stringify(apiMsgs);
-    expect(serialized).toContain("<redacted>");
     const toolAssistant = apiMsgs.find((m) => m.role === "assistant" && m.tool_calls);
-    expect(toolAssistant.tool_calls[0].function.arguments).toContain("<redacted>");
+    expect(toolAssistant.tool_calls[0].function.arguments).toBe('{"password":"next-round-credential-sentinel"}');
     const toolMsg = apiMsgs.find((m) => m.role === "tool");
-    expect(toolMsg.content).toContain("<redacted>");
+    expect(toolMsg.content).toBe(`{"rows":1,"token":"next-round-credential-sentinel"}`);
   });
 });

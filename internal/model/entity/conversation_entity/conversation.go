@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-
-	"github.com/opskat/opskat/internal/pkg/auditredact"
 )
 
 // 状态常量
@@ -101,8 +99,8 @@ type ContentBlock struct {
 	ToolInput  string `json:"toolInput,omitempty"`
 	ToolCallID string `json:"toolCallId,omitempty"` // 跨 turn 还原 tool_calls 历史；老数据无此字段，前端兜底为塌缩消息
 	Status     string `json:"status,omitempty"`     // "running" | "completed" | "error" | "canceled"
-	// ChildBlocks 是 agent 块的嵌套子块（tool 等）。持久化时递归投影，
-	// 保证实时嵌套显示与重载后的嵌套显示收到同一份安全副本。
+	// ChildBlocks 是 agent 块的嵌套子块（tool 等）。持久化时原样写入，
+	// 保证实时嵌套显示与重载后的嵌套显示收到同一份原始值。
 	ChildBlocks []ContentBlock `json:"childBlocks,omitempty"`
 	// error 块字段：
 	//   ErrorKind   — "rate_limit" | "server" | "network" | "auth" | "interrupted" | "unknown"
@@ -111,8 +109,8 @@ type ContentBlock struct {
 	ErrorDetail string `json:"errorDetail,omitempty"`
 }
 
-// GetBlocks 获取前端显示块。旧数据库行可能来自实时边界建立前，因此加载时也返回
-// 递归安全投影；只改返回副本，不原地重写历史行。
+// GetBlocks 获取前端显示块。原值语义：加载时原样返回存储的 blocks，不做脱敏；
+// 旧行中已写死的字面 <redacted> 作为普通不可恢复字面值保留（原值不可恢复，不回猜）。
 func (m *Message) GetBlocks() ([]ContentBlock, error) {
 	if m.Blocks == "" {
 		return nil, nil
@@ -121,57 +119,24 @@ func (m *Message) GetBlocks() ([]ContentBlock, error) {
 	if err := json.Unmarshal([]byte(m.Blocks), &blocks); err != nil {
 		return nil, err
 	}
-	safe := make([]ContentBlock, len(blocks))
-	for i := range blocks {
-		safe[i] = redactContentBlock(blocks[i])
-	}
-	return safe, nil
+	return blocks, nil
 }
 
-// SetBlocks 设置前端显示块（安全持久化副本）。
+// SetBlocks 设置前端显示块。原值语义：tool input/result、error 正文/详情与嵌套
+// agent child blocks 一律原样持久化，不调用 canonical redactor（Audit 仍是它专用）。
 func (m *Message) SetBlocks(blocks []ContentBlock) error {
 	if len(blocks) == 0 {
 		m.Blocks = ""
 		return nil
 	}
-	// Display blocks are a persistence copy, not the live model invocation. Redact only
-	// this copy so the runner still receives the original tool arguments while chat
-	// history cannot become a plaintext side channel around credential encryption.
-	// 递归覆盖 tool input/result、error 正文/详情与嵌套 agent child blocks，
-	// 作为流式边界之外的纵深防御（实时事件已在 runner 外发前脱敏）。
-	persisted := make([]ContentBlock, len(blocks))
-	for i := range blocks {
-		persisted[i] = redactContentBlock(blocks[i])
-	}
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(persisted); err != nil {
+	if err := encoder.Encode(blocks); err != nil {
 		return err
 	}
 	m.Blocks = strings.TrimSuffix(buf.String(), "\n")
 	return nil
-}
-
-// redactContentBlock 返回 b 的安全持久化副本：tool 的输入/结果、error 的正文/详情
-// 与嵌套 child blocks 递归走 canonical redactor；非敏感结构与非敏感值原样保留。
-func redactContentBlock(b ContentBlock) ContentBlock {
-	switch b.Type {
-	case "tool":
-		b.ToolInput = auditredact.JSON(b.ToolInput)
-		b.Content = auditredact.Result(b.Content)
-	case "error":
-		b.Content = auditredact.Text(b.Content)
-		b.ErrorDetail = auditredact.Text(b.ErrorDetail)
-	}
-	if len(b.ChildBlocks) > 0 {
-		children := b.ChildBlocks
-		b.ChildBlocks = make([]ContentBlock, len(children))
-		for i := range children {
-			b.ChildBlocks[i] = redactContentBlock(children[i])
-		}
-	}
-	return b
 }
 
 // TokenUsage 一条 assistant 消息累计消耗的 token 数
