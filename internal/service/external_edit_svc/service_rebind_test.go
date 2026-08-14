@@ -1768,3 +1768,120 @@ func TestExternalEditClipboardResidueRuntimeEntryPointsCleanWithoutRunner(t *tes
 	require.NotContains(t, string(manifest), "folder/clipboard")
 	require.NotContains(t, string(manifest), "clipboard-images")
 }
+
+// TestExternalEditAuditStoresProjectedValuesVerbatim 钉住 external-edit 审计在 producer
+// 字段白名单投影之后不再做任何值替换或 JSON 重编码：request/result 里长得像凭据的值、
+// 命令摘要（remote path）和错误正文都按原值逐字落库，不生成 <redacted> 字面量。
+func TestExternalEditAuditStoresProjectedValuesVerbatim(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
+
+	session := &Session{
+		ID:         "ssh-a",
+		AssetID:    101,
+		AssetName:  "asset-101",
+		RemotePath: "https://user:pass@host/srv/app/demo.txt",
+	}
+	request := map[string]any{
+		"password": "s3cr3t-ciphertext",
+		"token":    "tok-abc123",
+		"plain":    "keep-me",
+	}
+	result := map[string]any{
+		"status":    "saved",
+		"authToken": "tok-xyz",
+		"apiKey":    "ak-123",
+	}
+	actionErr := errors.New("transport failed password=hunter2 token=xyz")
+
+	h.svc.writeAudit(session, "external_edit_audit_verbatim", true, request, result, actionErr)
+
+	log := h.audit.lastLog()
+	require.NotNil(t, log)
+	require.Equal(t, "desktop", log.Source)
+	assert.Equal(t, session.RemotePath, log.Command)
+	assert.Contains(t, log.Request, `"password":"s3cr3t-ciphertext"`)
+	assert.Contains(t, log.Request, `"token":"tok-abc123"`)
+	assert.Contains(t, log.Request, `"plain":"keep-me"`)
+	assert.Contains(t, log.Result, `"authToken":"tok-xyz"`)
+	assert.Contains(t, log.Result, `"apiKey":"ak-123"`)
+	assert.Contains(t, log.Error, "password=hunter2 token=xyz")
+	assert.NotContains(t, log.Command, "<redacted>")
+	assert.NotContains(t, log.Request, "<redacted>")
+	assert.NotContains(t, log.Result, "<redacted>")
+	assert.NotContains(t, log.Error, "<redacted>")
+}
+
+// TestExternalEditAuditOmitsSensitiveProducerFields 钉住 external-edit 审计的 request/result
+// 保持 producer 字段白名单：本地工作区路径、编辑器路径/参数和内容哈希这些环境细节被省略，
+// 远端路径、资产信息和编辑器 id 等投影字段保留。
+func TestExternalEditAuditOmitsSensitiveProducerFields(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
+
+	session := &Session{
+		ID:                 "ssh-a",
+		AssetID:            101,
+		AssetName:          "asset-101",
+		DocumentKey:        "ssh-a:/srv/app/demo.txt",
+		SessionID:          "ssh-a",
+		RemotePath:         "/srv/app/demo.txt",
+		RemoteRealPath:     "/srv/app/demo.txt",
+		LocalPath:          "/Users/me/.cache/opskat/workspace/sessions/ssh-a/local",
+		WorkspaceRoot:      "/Users/me/.cache/opskat/workspace",
+		WorkspaceDir:       "/Users/me/.cache/opskat/workspace/sessions/ssh-a",
+		EditorID:           "system-text",
+		EditorName:         "System Text",
+		EditorPath:         "/usr/bin/open",
+		EditorArgs:         []string{"--wait"},
+		OriginalSHA256:     "aaaabbbbcccc",
+		OriginalSize:       123,
+		OriginalModTime:    1700000000,
+		OriginalEncoding:   "utf-8",
+		OriginalBOM:        "",
+		OriginalByteSample: "sensitive-sample-bytes",
+		LastLocalSHA256:    "ddddeeeeffff",
+		Dirty:              false,
+		State:              "clean",
+	}
+	request := OpenRequest{AssetID: 101, SessionID: "ssh-a", RemotePath: "/srv/app/demo.txt", EditorID: "system-text"}
+	result := &SaveResult{Status: "saved", Session: session}
+
+	h.svc.writeAudit(session, "external_edit_audit_allowlist", true, request, result, nil)
+
+	log := h.audit.lastLog()
+	require.NotNil(t, log)
+	assert.Contains(t, log.Request, `"assetId":101`)
+	assert.Contains(t, log.Request, `"remotePath":"/srv/app/demo.txt"`)
+	assert.Contains(t, log.Result, `"remotePath":"/srv/app/demo.txt"`)
+	assert.Contains(t, log.Result, `"editorId":"system-text"`)
+	for _, leaked := range []string{
+		"localPath", "workspaceRoot", "workspaceDir", "editorPath", "editorArgs",
+		"originalSha256", "originalByteSample", "lastLocalSha256",
+	} {
+		assert.NotContains(t, log.Request, leaked)
+		assert.NotContains(t, log.Result, leaked)
+	}
+	assert.NotContains(t, log.Command, "/Users/me")
+}
+
+// TestExternalEditAuditKeepsTruncationLimits 钉住 external-edit 审计的 4096/8192/2048
+// 字节截断保持不变：request 截到 4096、result 截到 8192、error 截到 2048，截断发生在
+// 投影之后而不是替换值。
+func TestExternalEditAuditKeepsTruncationLimits(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
+
+	session := &Session{ID: "ssh-a", AssetID: 101, AssetName: "asset-101", RemotePath: "/srv/app/demo.txt"}
+	request := map[string]any{"padding": strings.Repeat("x", 6000)}
+	result := map[string]any{"padding": strings.Repeat("y", 10000)}
+	actionErr := errors.New(strings.Repeat("z", 3000))
+
+	h.svc.writeAudit(session, "external_edit_audit_truncate", true, request, result, actionErr)
+
+	log := h.audit.lastLog()
+	require.NotNil(t, log)
+	assert.Len(t, log.Request, 4096)
+	assert.Len(t, log.Result, 8192)
+	assert.Len(t, log.Error, 2048)
+	assert.Contains(t, log.Request, "xxxx")
+	assert.Contains(t, log.Result, "yyyy")
+	assert.Contains(t, log.Error, "zzzz")
+}

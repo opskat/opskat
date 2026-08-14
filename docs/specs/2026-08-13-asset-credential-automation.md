@@ -101,7 +101,7 @@ For opsctl create, the observable sequence is:
 3. Request the existing desktop create approval using a detail that identifies the asset type/name and safe endpoint metadata only.
 4. On denial, stop with no credential or asset row created.
 5. On approval, create/import the managed credential when needed and create the asset in one transaction.
-6. Commit both, notify the desktop data-change channel, write redacted audit data and return safe JSON.
+6. Commit both, notify the desktop data-change channel, write producer-projected audit data and return safe JSON.
 
 Any validation, encryption, credential write, handler application or asset write failure returns a non-secret error and leaves neither new row committed. A referenced existing credential is never modified. Replacing a credential association through AI update does not automatically delete the old credential because it may be shared; cleanup remains an explicit user operation.
 
@@ -122,7 +122,7 @@ The AI continues to call `help(type)` and then the existing `put_asset` with a t
 
 AI create/update and opsctl create share the same credential-materialization boundary and per-type declarations. No CLI-only or AI-only type switch determines credential behavior.
 
-The existing AI tool visibility/approval behavior is preserved. Tool descriptions and per-type help state that plaintext credential fields are write-only, become managed credentials, and must never be echoed. Audit recursion continues to redact the original tool arguments before persistence.
+The existing AI tool visibility/approval behavior is preserved. Tool descriptions and per-type help state that plaintext credential fields are write-only, become managed credentials, and must never be echoed. Audit persistence uses the producer-owned allowlist projection (`SafeAuditArgs` / `SafeAuditArgsForResult`), omitting the write-only secret fields instead of redacting the original tool arguments.
 
 ## Unified credential discovery
 
@@ -186,7 +186,7 @@ The asset detail never returns Agent endpoint values or public-key blobs. `list_
 
 Approval requests and desktop notifications contain only safe asset metadata. Passwords and other secrets are never interpolated into approval detail or error text.
 
-opsctl converts plaintext into a managed credential inside the shared write boundary before audit serialization; audit receives only the resulting typed association. AI audit may receive the original tool payload but must recursively redact secret-bearing keys before persistence. Both paths remain fail-closed when redaction or serialization cannot safely represent a payload.
+opsctl converts plaintext into a managed credential inside the shared write boundary before audit serialization; audit receives only the resulting typed association. AI `put_asset` audit persists the producer-owned allowlist projection, omitting the write-only secret fields instead of replacing values; default Audit keeps the raw values it receives.
 
 Structured logs for create/materialize/query flows record start/end/fail with safe correlation fields such as asset ID, credential ID/ref, source ID and asset type. They do not record secret values, full config JSON, Agent endpoint values, private/public key blobs or kubeconfig.
 
@@ -220,7 +220,7 @@ Existing AI callers that pass `config.password` or OSS `secret_access_key` obser
 | AI `put_asset` handler | Plaintext becomes a managed association, reference reuse works across supported types, unsupported/mutually exclusive inputs fail, output is non-secret | Existing `internal/ai/tool/tool_handlers_crud_test.go`. |
 | Unified credential read handlers | Typed-ref parsing, filters, safe metadata, usage lists, SSH public key detail, Agent status/identities, unavailable Agent degradation and absence of all secret/endpoint fields | Existing credential manager and SSH Agent service tests; new shared handlers serve both CLI and AI. |
 | Safe asset detail | Managed credential and Agent association structures, missing managed credential state, Agent identity availability, and no expansion in asset lists | Existing safe-view and Agent asset-detail tests. |
-| Audit/log redaction | CLI audit never receives plaintext; AI audit redacts nested secret fields; errors/results/approval details never contain supplied values | Existing `internal/pkg/auditredact` and AI audit integration tests. |
+| Audit producer projection | CLI/AI `put_asset` audit request omits write-only plaintext fields via the producer-owned allowlist (`SafeAuditArgs` / `SafeAuditArgsForResult`); default Audit keeps raw values; direct outputs, errors and approval details are never rewritten | Producer-owned projection tests, desktop `assetAuditView` allowlist tests and external-edit field-allowlist tests |
 | Real opsctl runtime | In an isolated data directory with the desktop approval channel: create representative password, SSH-key/Agent, non-password and generic-config assets; query credentials and assets; verify DB rows/audit and execute at least one created connection where a test endpoint is available | `docs/VERIFICATION.md` and the sandbox/oracle workflow. |
 
 Automation cannot prove shell-history or operating-system process-list retention across every shell/platform; help text and stderr warning are asserted exactly enough to preserve the safety message, and wrap-up source review verifies no alternative argv path is documented as safe. Runtime verification must use synthetic secrets in an isolated data directory and must never inspect or modify the user's real credential store.

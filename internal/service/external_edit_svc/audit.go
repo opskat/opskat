@@ -8,7 +8,6 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
-	"github.com/opskat/opskat/internal/pkg/auditredact"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"go.uber.org/zap"
 )
@@ -32,14 +31,16 @@ func (s *Service) writeAudit(session *Session, toolName string, success bool, re
 		ToolName:   toolName,
 		AssetID:    session.AssetID,
 		AssetName:  session.AssetName,
-		Command:    auditredact.Text(session.RemotePath),
-		Request:    auditredact.JSON(marshalAuditPayload(request, 4096)),
-		Result:     auditredact.Result(marshalAuditPayload(result, 8192)),
-		Error:      truncateText(auditredact.Text(errText), 2048),
+		Command:    session.RemotePath,
+		Request:    marshalAuditPayload(request, 4096),
+		Result:     marshalAuditPayload(result, 8192),
+		Error:      truncateText(errText, 2048),
 		Success:    boolToSuccess(success),
 		SessionID:  session.ID,
 		Createtime: s.now().Unix(),
 	}
+	// 投影之后的 request/result/command/error 按原值逐字落库：字段白名单由下方
+	// sanitizeAuditPayload 的 producer DTO 承担，不再做任何值替换或 JSON 重编码。
 	// desktop 审计既要给 QA/SEC 还原状态机，又不能把本地工作区路径、编辑器安装路径等敏感环境信息带进数据库。
 	if err := repo.Create(context.Background(), entry); err != nil {
 		logger.Default().Warn("write external edit audit log", zap.Error(err))
@@ -91,8 +92,9 @@ func marshalAuditPayload(payload any, limit int) string {
 }
 
 func sanitizeAuditPayload(payload any) any {
-	// 审计脱敏发生在统一入口，而不是调用方各自删字段，
-	// 这样新增审计场景时不会因为忘记过滤本地路径/哈希而把敏感信息写入库表。
+	// 审计字段白名单收敛在统一入口，而不是调用方各自删字段：
+	// 新增审计场景时不会因为忘记省略本地路径/哈希而把环境细节写入库表。
+	// 白名单只负责省略字段，保留下来的投影值按原样序列化，不再做值替换。
 	switch value := payload.(type) {
 	case nil:
 		return nil

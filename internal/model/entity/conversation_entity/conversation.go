@@ -123,7 +123,7 @@ func (m *Message) GetBlocks() ([]ContentBlock, error) {
 }
 
 // SetBlocks 设置前端显示块。原值语义：tool input/result、error 正文/详情与嵌套
-// agent child blocks 一律原样持久化，不调用 canonical redactor（Audit 仍是它专用）。
+// agent child blocks 一律原样持久化。
 func (m *Message) SetBlocks(blocks []ContentBlock) error {
 	if len(blocks) == 0 {
 		m.Blocks = ""

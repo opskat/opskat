@@ -31,8 +31,8 @@ import (
 )
 
 // outwardFailure preserves the provider/tool error text for the user-facing event while
-// adding operation context to the synchronous Wails error. Audit redaction is owned by
-// the audit sink and must not rewrite either direct user-facing channel.
+// adding operation context to the synchronous Wails error. Audit writes raw values at
+// the sink and must not rewrite either direct user-facing channel.
 func outwardFailure(prefix string, err error) (string, error) {
 	message := err.Error()
 	return message, fmt.Errorf("%s: %s", prefix, message)

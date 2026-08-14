@@ -59,9 +59,9 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 		if ev.Tool == nil {
 			return
 		}
-		// 原值语义：tool 参数按原始 JSON 序列化后逐字外发，不调用 auditredact。
+		// 原值语义：tool 参数按原始 JSON 序列化后逐字外发。
 		// 真实 cago 工具参数总是由 JSON 解码而来，必然可序列化；万一序列化失败
-		// （合成/不存在的输入）就外发原始错误文本，绝不注入任何 redaction 字面量。
+		// （合成/不存在的输入）就外发原始错误文本，绝不注入任何占位字面量。
 		input := ""
 		if ev.Tool.Input != nil {
 			b, err := json.Marshal(ev.Tool.Input)
@@ -85,7 +85,7 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 			Type:       "tool_result",
 			ToolName:   ev.Tool.Name,
 			ToolCallID: ev.Tool.ToolUseID,
-			// 原值语义：工具结果原文透传，不调用 auditredact。
+			// 原值语义：工具结果原文透传。
 			Content: extractToolResultText(ev.Tool.Output),
 			IsError: ev.Tool.Output != nil && ev.Tool.Output.IsError,
 		})
@@ -135,7 +135,7 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 		if ev.Error != nil {
 			msg = ev.Error.Error()
 		}
-		// 原值语义：面向用户的错误正文原文透传，不调用 auditredact。
+		// 原值语义：面向用户的错误正文原文透传。
 		emit(StreamEvent{Type: "error", Error: msg})
 
 	case agent.EventCompacted:

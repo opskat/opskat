@@ -43,7 +43,7 @@ func TestGrantItemsForPersistenceKeepsRawSubjects(t *testing.T) {
 }
 
 // spec Decision 4 / Direct execution：opsctl extension 委托执行把 executor 返回的 bytes
-// 与 error 原样交给调用者，不做内容改写——auditredact 仅属 Audit 边界，不得在直接执行
+// 与 error 原样交给调用者，不做内容改写——审计只在 sink 按原值落库，不得在直接执行
 // 通道里改写结果或错误正文。
 func TestHandleExtToolExecPassesThroughResultAndError(t *testing.T) {
 	t.Run("result bytes unchanged", func(t *testing.T) {
