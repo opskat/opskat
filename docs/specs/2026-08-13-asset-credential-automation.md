@@ -6,7 +6,7 @@
 
 **Objective:** 让自动化调用方能够通过 opsctl 或统一 AI 工具创建任意已注册的内建资产类型，安全地创建或引用托管凭据，并通过统一的“密钥管理”查询面发现凭据、SSH 密钥和 SSH Agent 来源。
 
-**Hard invariant:** 密码、私钥、passphrase、kubeconfig、Secret Access Key、SSH Agent endpoint、签名与挑战内容不得出现在审批详情、日志、审计明文、命令结果或安全资产视图中；既有资产连接、审批和凭据解析行为不得因本次扩展而回退。
+**Hard invariant:** `put_asset` / `opsctl create asset` 的 producer-owned 审批与 Audit projection、安全查询 DTO、安全创建结果和应用结构化日志必须省略 password、private key、passphrase、kubeconfig、Secret Access Key、SSH Agent endpoint 等 write-only material；通用 Audit、直接命令/tool result 和其他允许读取业务内容的表面按后续修正规格保留其边界收到的原值，不生成 `<redacted>` 近似值。既有资产连接、审批和凭据解析行为不得因本次扩展而回退。
 
 ## Problem
 
