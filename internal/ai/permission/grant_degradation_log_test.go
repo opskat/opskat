@@ -36,11 +36,7 @@ func TestHandleConfirm_ZeroPatternWarningRedactsCommand(t *testing.T) {
 	stubGrant := newStubGrantRepo()
 	orig := grant_repo.Grant()
 	grant_repo.RegisterGrant(stubGrant)
-	t.Cleanup(func() {
-		if orig != nil {
-			grant_repo.RegisterGrant(orig)
-		}
-	})
+	t.Cleanup(func() { grant_repo.RegisterGrant(orig) })
 
 	asset := &asset_entity.Asset{ID: 1, Name: "s3-prod", Type: asset_entity.AssetTypeOSS}
 	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()

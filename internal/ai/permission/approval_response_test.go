@@ -82,12 +82,13 @@ func TestSafeApprovalItemsCleanSubjectNoRedaction(t *testing.T) {
 	safe, redacted := SafeApprovalItems(items)
 	require.False(t, redacted)
 	require.Equal(t, items, safe)
-	require.False(t, ContainsRedaction(items))
 }
 
-func TestContainsRedaction(t *testing.T) {
-	require.True(t, ContainsRedaction([]ApprovalItem{{Command: "--token abc123"}}))
-	require.False(t, ContainsRedaction([]ApprovalItem{{Command: "uptime"}}))
+func TestSafeApprovalItemsPreservesBracketPrefixedShellCommand(t *testing.T) {
+	items := []ApprovalItem{{Type: "exec", AssetID: 1, Command: "[ -f /tmp/ready ] && echo ready"}}
+	safe, redacted := SafeApprovalItems(items)
+	require.False(t, redacted)
+	require.Equal(t, items, safe)
 }
 
 func TestCanPersistGrantRedactionGating(t *testing.T) {

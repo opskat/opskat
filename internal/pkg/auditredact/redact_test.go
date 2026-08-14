@@ -108,10 +108,24 @@ func TestTextRedactsAuthorizationCookieAndCredentialKeyVariants(t *testing.T) {
 	}
 }
 
-func TestTextRedactsQuotedAndBracketedCredentialHeaders(t *testing.T) {
-	raw := `provider failed: headers={"Authorization":"Bearer quoted-auth-secret","Cookie":"session=quoted-cookie-secret"} opaque={"Proxy-Authorization":"quoted-opaque-auth-secret"} map[Proxy-Authorization:[Basic bracket-auth-secret] Cookie:[session=bracket-cookie-secret]]`
+func TestTextRedactsParameterizedAuthorizationHeaderCompletely(t *testing.T) {
+	raw := `request failed
+Authorization: Digest username="admin", realm="prod", nonce="nonce-secret", response="digest-secret"`
 	got := Text(raw)
-	for _, secret := range []string{"quoted-auth-secret", "quoted-cookie-secret", "quoted-opaque-auth-secret", "bracket-auth-secret", "bracket-cookie-secret"} {
+	for _, secret := range []string{"admin", "prod", "nonce-secret", "digest-secret"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("parameterized authorization header leaked %q: %s", secret, got)
+		}
+	}
+	if !strings.Contains(got, "request failed") || !strings.Contains(got, RedactedValue) {
+		t.Fatalf("authorization redaction lost safe context or marker: %s", got)
+	}
+}
+
+func TestTextRedactsQuotedAndBracketedCredentialHeaders(t *testing.T) {
+	raw := `provider failed: headers={"Authorization":"Bearer quoted-auth-secret","Cookie":"session=quoted-cookie-secret"} opaque={"Proxy-Authorization":"quoted-opaque-auth-secret"} escaped={"Authorization":"Digest username=\"escaped-user\", response=\"escaped-digest-secret\""} map[Proxy-Authorization:[Basic bracket-auth-secret] Cookie:[session=bracket-cookie-secret]]`
+	got := Text(raw)
+	for _, secret := range []string{"quoted-auth-secret", "quoted-cookie-secret", "quoted-opaque-auth-secret", "escaped-user", "escaped-digest-secret", "bracket-auth-secret", "bracket-cookie-secret"} {
 		if strings.Contains(got, secret) {
 			t.Fatalf("text leaked %q: %s", secret, got)
 		}
@@ -160,6 +174,33 @@ func TestJSONRedactsStructuredAgentEndpointAndPresignedFields(t *testing.T) {
 		if !strings.Contains(got, safe) {
 			t.Fatalf("JSON removed safe metadata %q: %s", safe, got)
 		}
+	}
+}
+
+func TestJSONDoesNotTreatGenericEnvironmentObjectsAsAgentSources(t *testing.T) {
+	raw := `{"type":"environment","value":"production","path":"/srv/app"}`
+	got := JSON(raw)
+	for _, safe := range []string{`"value":"production"`, `"path":"/srv/app"`} {
+		if !strings.Contains(got, safe) {
+			t.Fatalf("generic environment object lost %s: %s", safe, got)
+		}
+	}
+}
+
+func TestResultPreservesBracketPrefixedNonJSONText(t *testing.T) {
+	for _, raw := range []string{
+		"[INFO] service started",
+		"[ -f /tmp/ready ] && echo ready",
+	} {
+		if got := Result(raw); got != raw {
+			t.Fatalf("Result(%q) = %q, want original text", raw, got)
+		}
+	}
+}
+
+func TestResultMalformedJSONFailsClosed(t *testing.T) {
+	if got := Result(`{"opaque":"credential-material" trailing`); got != RedactedValue {
+		t.Fatalf("malformed JSON result = %q, want %q", got, RedactedValue)
 	}
 }
 

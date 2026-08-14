@@ -38,11 +38,15 @@ function fireBatchApproval(handlers: Map<string, (data: unknown) => void>, items
   });
 }
 
-function fireGrantApproval(handlers: Map<string, (data: unknown) => void>, items: unknown[]) {
+function fireGrantApproval(
+  handlers: Map<string, (data: unknown) => void>,
+  items: unknown[],
+  overrides: Record<string, unknown> = {}
+) {
   const handler = handlers.get("opsctl:grant-approval");
   if (!handler) throw new Error("opsctl:grant-approval handler not registered");
   act(() => {
-    handler({ session_id: "grant-1", items, description: "批量授权" });
+    handler({ session_id: "grant-1", items, description: "批量授权", ...overrides });
   });
 }
 
@@ -267,28 +271,53 @@ describe("OpsctlApprovalDialog 脱敏主体（spec Approval safety）", () => {
     const handlers = captureHandlers();
     render(<OpsctlApprovalDialog />);
 
-    fireSingleApproval(handlers, { type: "exec", command: "mysql --password=<redacted>", session_id: "session-1" });
+    fireSingleApproval(handlers, {
+      type: "exec",
+      command: "mysql --password=<redacted>",
+      session_id: "session-1",
+      redacted: true,
+    });
 
     expect(screen.queryByText("opsctlApproval.remember")).not.toBeInTheDocument();
     expect(screen.getByText("opsctlApproval.allow")).toBeInTheDocument();
     expect(screen.getByText("opsctlApproval.deny")).toBeInTheDocument();
   });
 
-  it("grant 脱敏主体不可编辑（只读展示，<redacted> 不落成 pattern）", () => {
+  it("literal <redacted> text does not disable grant controls without the backend flag", () => {
     const handlers = captureHandlers();
     render(<OpsctlApprovalDialog />);
 
-    fireGrantApproval(handlers, [
-      {
-        type: "exec",
-        asset_id: 1,
-        asset_name: "web-1",
-        command: "uptime",
-        detail: "-----BEGIN PRIVATE KEY----- <redacted>",
-      },
-    ]);
+    fireSingleApproval(handlers, {
+      type: "exec",
+      command: "printf '<redacted>\\n'",
+      session_id: "session-1",
+      redacted: false,
+    });
+
+    expect(screen.getByText("opsctlApproval.remember")).toBeInTheDocument();
+  });
+
+  it("grant 脱敏主体只允许拒绝，不提供编辑框或无效的批准动作", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+
+    fireGrantApproval(
+      handlers,
+      [
+        {
+          type: "exec",
+          asset_id: 1,
+          asset_name: "web-1",
+          command: "uptime",
+          detail: "-----BEGIN PRIVATE KEY----- <redacted>",
+        },
+      ],
+      { redacted: true }
+    );
 
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.getByText("uptime")).toBeInTheDocument();
+    expect(screen.queryByTestId("opsctl-approval-allow")).not.toBeInTheDocument();
+    expect(screen.getByTestId("opsctl-approval-deny")).toBeInTheDocument();
   });
 });

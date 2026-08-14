@@ -36,18 +36,21 @@ interface SingleApprovalEvent {
   command?: string;
   detail?: string;
   session_id: string;
+  redacted?: boolean;
 }
 
 interface BatchApprovalEvent {
   confirm_id: string;
   items: ApprovalItemData[];
   session_id: string;
+  redacted?: boolean;
 }
 
 interface GrantApprovalEvent {
   items: ApprovalItemData[];
   session_id: string;
   description?: string;
+  redacted?: boolean;
 }
 
 interface QueueItem {
@@ -59,7 +62,7 @@ interface QueueItem {
   description?: string;
   sessionID?: string;
   editable: boolean;
-  // 任一 command/detail 含 <redacted> 说明后端脱敏了主体，UI 不得提供 remember/allowAll/edit。
+  // 后端安全投影是否改写了 command/detail；UI 据此关闭 remember/allowAll/edit。
   redacted: boolean;
 }
 
@@ -156,7 +159,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           ],
           sessionID: data.session_id,
           editable: false,
-          redacted: command.includes("<redacted>") || (detail || "").includes("<redacted>"),
+          redacted: data.redacted === true,
         });
       },
       [enqueue]
@@ -184,7 +187,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           items: mapped,
           sessionID: data.session_id,
           editable: false,
-          redacted: mapped.some((i) => i.command.includes("<redacted>") || (i.detail || "").includes("<redacted>")),
+          redacted: data.redacted === true,
         });
       },
       [enqueue]
@@ -204,9 +207,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           command: i.command,
           detail: i.detail,
         }));
-        const redacted = items.some(
-          (it) => it.command.includes("<redacted>") || (it.detail || "").includes("<redacted>")
-        );
+        const redacted = data.redacted === true;
         enqueue({
           id: data.session_id,
           kind: "grant",
@@ -430,9 +431,11 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
                     {t("opsctlApproval.remember")}
                   </Button>
                 ))}
-              <Button data-testid="opsctl-approval-allow" onClick={() => respond("allow")}>
-                {current.kind === "grant" ? t("opsctlApproval.approve") : t("opsctlApproval.allow")}
-              </Button>
+              {!(current.kind === "grant" && current.redacted) && (
+                <Button data-testid="opsctl-approval-allow" onClick={() => respond("allow")}>
+                  {current.kind === "grant" ? t("opsctlApproval.approve") : t("opsctlApproval.allow")}
+                </Button>
+              )}
             </DialogFooter>
           </>
         )}

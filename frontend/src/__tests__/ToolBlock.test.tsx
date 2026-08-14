@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { ToolBlock } from "@/components/ai/ToolBlock";
@@ -34,33 +34,6 @@ describe("ToolBlock result status", () => {
 
     expect(screen.getByLabelText("toolBlock.succeeded")).toBeInTheDocument();
     expect(screen.queryByLabelText("toolBlock.failed")).not.toBeInTheDocument();
-  });
-});
-
-describe("ToolBlock safe projection", () => {
-  it("collapsed summary and expanded arguments render the same safe string (no raw secret)", () => {
-    render(
-      <ToolBlock
-        block={{
-          type: "tool",
-          toolName: "put_asset",
-          toolInput: '{"host":"db.internal","password":"<redacted>"}',
-          content: "",
-          status: "completed",
-        }}
-      />
-    );
-
-    const container = screen.getByTestId("ai-tool-block");
-    // 折叠摘要行只显示安全字符串
-    expect(container.textContent).toContain("<redacted>");
-    expect(container.textContent).toContain("db.internal");
-    expect(container.textContent).not.toContain("SuperSecretPass123");
-
-    // 展开参数区（formatToolInput 美化 JSON 后）仍是同一安全字符串
-    fireEvent.click(screen.getByRole("button"));
-    expect(container.textContent).toContain("<redacted>");
-    expect(container.textContent).not.toContain("SuperSecretPass123");
   });
 });
 

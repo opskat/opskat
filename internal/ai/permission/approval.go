@@ -126,8 +126,8 @@ func ParseApprovalResponse(kind string, resp ApprovalResponse, expectedItems ...
 // ApprovalTypeDelete 删除审批项的类型标签，前端 TypeBadge 按它取图标。
 const ApprovalTypeDelete = "delete"
 
-// SafeApprovalItems 在发往 Wails 前投影安全 command/detail 副本：command 按 Result 语义
-// （JSON 递归脱敏 / 普通文本），detail 按文本语义脱敏。返回安全副本与是否发生脱敏。
+// SafeApprovalItems 在发往 Wails 前投影安全 command/detail 副本。两者都是可执行/说明
+// 文本而不是工具结果 JSON，因此按文本语义脱敏。返回安全副本与是否发生脱敏。
 // 后端 pending approval 必须继续持有原始 items（调用方用 safe 只做展示、用 redacted 做
 // 响应门禁）；原始秘密永远不会进入安全副本，原始 items 也不会被就地改写。
 func SafeApprovalItems(items []ApprovalItem) ([]ApprovalItem, bool) {
@@ -135,7 +135,7 @@ func SafeApprovalItems(items []ApprovalItem) ([]ApprovalItem, bool) {
 	redacted := false
 	for i, it := range items {
 		sc := it
-		sc.Command = auditredact.Result(it.Command)
+		sc.Command = auditredact.Text(it.Command)
 		sc.Detail = auditredact.Text(it.Detail)
 		if sc.Command != it.Command || sc.Detail != it.Detail {
 			redacted = true
@@ -150,12 +150,6 @@ func SafeApprovalItems(items []ApprovalItem) ([]ApprovalItem, bool) {
 // so it is redacted without changing the command/detail persistence gate.
 func SafeApprovalDescription(description string) string {
 	return auditredact.Text(description)
-}
-
-// ContainsRedaction 报告这批审批主体是否发生了任何 command/detail 脱敏。
-func ContainsRedaction(items []ApprovalItem) bool {
-	_, redacted := SafeApprovalItems(items)
-	return redacted
 }
 
 // CanPersistGrant 决定是否允许把这次响应落成/批准为持久授权（allowAll 或 grant

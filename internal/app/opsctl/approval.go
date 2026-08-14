@@ -89,6 +89,7 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 		"command":    safeItems[0].Command,
 		"detail":     safeItems[0].Detail,
 		"session_id": req.SessionID,
+		"redacted":   redacted,
 	})
 
 	ch := make(chan permission.ApprovalResponse, 1)
@@ -210,6 +211,7 @@ func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.Appr
 		"confirm_id": confirmID,
 		"session_id": req.SessionID,
 		"items":      items,
+		"redacted":   redacted,
 	})
 
 	ch := make(chan permission.ApprovalResponse, 1)
@@ -310,6 +312,7 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 		"session_id":  sessionID,
 		"description": safeDescription,
 		"items":       eventItems,
+		"redacted":    redacted,
 	})
 
 	ch := make(chan permission.ApprovalResponse, 1)

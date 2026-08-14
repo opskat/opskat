@@ -39,10 +39,9 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
   const isLocalTool = kind === "local_tool";
   const localToolName = block.approvalToolName || items[0]?.type || "";
 
-  // 后端只发安全投影：任一 command/detail 含 <redacted> 说明主体被脱敏。此时不得提供
-  // remember/allow-all/edit —— <redacted> 不能成为授权 pattern，秘密也不能回传（spec
-  // Approval safety）。这是展示层跟随，不承担脱敏职责（无敏感字段规则）。
-  const redacted = items.some((it) => it.command.includes("<redacted>") || (it.detail || "").includes("<redacted>"));
+  // 后端安全投影同时携带显式标志；不能从展示文本中的字面量 <redacted> 反推，
+  // 否则合法命令 `printf '<redacted>'` 会被误判并失去持久授权入口。
+  const redacted = block.approvalRedacted === true;
 
   // local_tool 在 rememberMode 用 approvalPatterns（多 sub-command 时多行），
   // 其它 kind 沿用单条 item.command。
@@ -270,18 +269,21 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
             <Button
               size="sm"
               variant="outline"
+              data-testid="ai-approval-deny"
               className="h-8 rounded-md px-4 text-xs border-warning/30 text-warning hover:bg-warning/10 hover:text-warning"
               onClick={() => respond("deny")}
             >
               {t("ai.approvalDeny")}
             </Button>
-            <Button
-              size="sm"
-              className="h-8 rounded-md px-4 text-xs bg-warning hover:bg-warning/90 text-warning-foreground font-semibold"
-              onClick={() => respond("allow")}
-            >
-              {t("ai.approvalApprove")}
-            </Button>
+            {!redacted && (
+              <Button
+                size="sm"
+                className="h-8 rounded-md px-4 text-xs bg-warning hover:bg-warning/90 text-warning-foreground font-semibold"
+                onClick={() => respond("allow")}
+              >
+                {t("ai.approvalApprove")}
+              </Button>
+            )}
           </>
         ) : (
           // single & local_tool: deny / remember-and-allow / allow（仅本次）

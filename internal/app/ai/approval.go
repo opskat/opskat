@@ -35,6 +35,7 @@ func (a *AI) makeCommandConfirmFunc() permission.CommandConfirmFunc {
 			Kind:      kind,
 			Items:     safeItems,
 			ConfirmID: confirmID,
+			Redacted:  redacted,
 		})
 
 		ch := make(chan permission.ApprovalResponse, 1)
@@ -82,6 +83,7 @@ func (a *AI) makeGrantRequestFunc() permission.GrantRequestFunc {
 			ConfirmID:   confirmID,
 			Description: permission.SafeApprovalDescription(reason),
 			SessionID:   fmt.Sprintf("conv_%d", convID),
+			Redacted:    redacted,
 		})
 
 		ch := make(chan permission.ApprovalResponse, 1)
@@ -182,6 +184,7 @@ func (a *AI) makeLocalToolConfirmFunc() tool.LocalToolConfirmFunc {
 			ToolName:  req.ToolName,
 			Items:     safeItems,
 			Patterns:  safeLocalApprovalPatterns(req.DefaultPatterns, redacted),
+			Redacted:  redacted,
 		})
 
 		ch := make(chan permission.ApprovalResponse, 1)

@@ -63,6 +63,7 @@ export interface ContentBlock {
   approvalSessionId?: string;
   approvalToolName?: string; // local_tool: "local_bash" | "local_write" | "local_edit"
   approvalPatterns?: string[]; // local_tool: 默认 pattern 列表，本次会话允许时预填可编辑
+  approvalRedacted?: boolean; // 后端安全投影是否改写了 command/detail；持久授权入口必须据此关闭
   // error 块专用：
   //   kind   — classifyError 输出的归类标签，UI 据此显示标题/图标
   //   detail — 原始错误正文（content 保留为空或拼接版，前端展示用 detail 优先）
@@ -133,6 +134,7 @@ interface StreamEventData {
   description?: string;
   session_id?: string;
   patterns?: string[]; // local_tool: 默认 pattern 列表，前端在"本次会话允许"时预填到可编辑文本框
+  redacted?: boolean;
   // usage 事件：后端下发每轮 LLM 调用的 token 使用量
   usage?: {
     input_tokens?: number;
@@ -1250,6 +1252,7 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
           approvalSessionId: event.session_id,
           approvalToolName: event.tool_name,
           approvalPatterns: event.patterns,
+          approvalRedacted: event.redacted === true,
         });
         return { ...msg, blocks: newBlocks };
       });

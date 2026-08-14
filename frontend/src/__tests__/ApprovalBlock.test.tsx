@@ -256,6 +256,7 @@ describe("ApprovalBlock 脱敏主体（spec Approval safety）", () => {
   it("single 脱敏主体不提供「记住」入口，allow-once 仍可用", () => {
     renderApproval({
       approvalKind: "single",
+      approvalRedacted: true,
       approvalItems: [{ type: "exec", asset_id: 1, asset_name: "web-1", command: "mysql --password=<redacted>" }],
     });
 
@@ -265,9 +266,20 @@ describe("ApprovalBlock 脱敏主体（spec Approval safety）", () => {
     expect(screen.getByTestId("ai-approval-deny")).toBeInTheDocument();
   });
 
-  it("grant 脱敏主体不提供 pattern 编辑框，命令只读展示", () => {
+  it("literal <redacted> text does not disable grant controls without the backend flag", () => {
+    renderApproval({
+      approvalKind: "single",
+      approvalRedacted: false,
+      approvalItems: [{ type: "exec", asset_id: 1, asset_name: "web-1", command: "printf '<redacted>\\n'" }],
+    });
+
+    expect(screen.getByTestId("ai-approval-remember")).toBeInTheDocument();
+  });
+
+  it("grant 脱敏主体只允许拒绝，不提供编辑框或无效的批准动作", () => {
     renderApproval({
       approvalKind: "grant",
+      approvalRedacted: true,
       approvalItems: [
         {
           type: "exec",
@@ -279,8 +291,9 @@ describe("ApprovalBlock 脱敏主体（spec Approval safety）", () => {
       ],
     });
 
-    // grant 的编辑框换成只读展示，防止 <redacted> 被当作用户手写 pattern 回传
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.getByText("uptime")).toBeInTheDocument();
+    expect(screen.queryByText("ai.approvalApprove")).not.toBeInTheDocument();
+    expect(screen.getByTestId("ai-approval-deny")).toBeInTheDocument();
   });
 });
