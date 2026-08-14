@@ -9,6 +9,7 @@ import (
 	"github.com/cago-frame/agents/agent"
 	"github.com/cago-frame/agents/provider"
 	"github.com/cago-frame/cago/pkg/logger"
+	"github.com/opskat/opskat/internal/pkg/auditredact"
 	"go.uber.org/zap"
 )
 
@@ -57,10 +58,12 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 				input = string(b)
 			}
 		}
+		// 安全边界：外发前按 canonical redactor 递归脱敏 tool 参数，原始 cago 执行
+		// 上下文仍持有原值；实时 UI / 会话落库 / 下一轮回放只拿到安全投影。
 		emit(StreamEvent{
 			Type:       "tool_start",
 			ToolName:   ev.Tool.Name,
-			ToolInput:  input,
+			ToolInput:  auditredact.JSON(input),
 			ToolCallID: ev.Tool.ToolUseID,
 		})
 
@@ -72,8 +75,9 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 			Type:       "tool_result",
 			ToolName:   ev.Tool.Name,
 			ToolCallID: ev.Tool.ToolUseID,
-			Content:    extractToolResultText(ev.Tool.Output),
-			IsError:    ev.Tool.Output != nil && ev.Tool.Output.IsError,
+			// 工具结果同样经 canonical redactor 投影：JSON 递归脱敏，普通文本走文本规则。
+			Content: auditredact.Result(extractToolResultText(ev.Tool.Output)),
+			IsError: ev.Tool.Output != nil && ev.Tool.Output.IsError,
 		})
 
 	case agent.EventTurnEnd:
@@ -84,6 +88,7 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 
 	case agent.EventRetry:
 		// 透传 Attempt / Delay / Cause —— 前端用 RetryDelayMs 做倒计时同步、Content 显示第几次。
+		// Cause 仅在事件外脱敏；原始 cause 落运维日志由 Task 3（audit/log 收口）统一接管。
 		msg := ""
 		attempt := 0
 		delayMs := 0
@@ -106,7 +111,7 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 		)
 		emit(StreamEvent{
 			Type:         "retry",
-			Error:        msg,
+			Error:        auditredact.Text(msg),
 			Content:      strconv.Itoa(attempt),
 			RetryDelayMs: delayMs,
 		})
@@ -119,7 +124,7 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 		if ev.Error != nil {
 			msg = ev.Error.Error()
 		}
-		emit(StreamEvent{Type: "error", Error: msg})
+		emit(StreamEvent{Type: "error", Error: auditredact.Text(msg)})
 
 	case agent.EventCompacted:
 		// 新事件类型——前端尚未识别就当未知 type 忽略，不会破坏渲染。

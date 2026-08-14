@@ -36,6 +36,53 @@ func TestMessageBlocksRoundtrip(t *testing.T) {
 	})
 }
 
+func TestMessageBlocksPersistenceRedactsToolResultErrorAndNestedAgentBlocks(t *testing.T) {
+	Convey("SetBlocks 对 tool content / error 详情 / 嵌套 agent child blocks 递归脱敏", t, func() {
+		msg := &Message{}
+		secret := "nested-" + "credential-sentinel" // 运行时拼接避免 gosec G101
+		blocks := []ContentBlock{
+			{
+				Type: "tool", ToolName: "query", Status: "completed",
+				Content: `{"rows":3,"token":"` + secret + `"}`,
+			},
+			{
+				Type: "error", ErrorKind: "server",
+				Content:     "failed: --password " + secret,
+				ErrorDetail: "Authorization: Bearer " + secret,
+			},
+			{
+				Type: "agent", Status: "completed",
+				ChildBlocks: []ContentBlock{
+					{
+						Type: "tool", ToolName: "put_asset", Status: "completed",
+						ToolInput: `{"password":"` + secret + `"}`,
+						Content:   "ok: --api-key " + secret,
+					},
+				},
+			},
+			{Type: "text", Content: "safe output"},
+		}
+		So(msg.SetBlocks(blocks), ShouldBeNil)
+		So(msg.Blocks, ShouldNotContainSubstring, secret)
+		So(msg.Blocks, ShouldContainSubstring, "<redacted>")
+		So(msg.Blocks, ShouldContainSubstring, "safe output")
+
+		Convey("嵌套 agent 子块仍保留结构（GetBlocks 读回 childBlocks）", func() {
+			got, err := msg.GetBlocks()
+			So(err, ShouldBeNil)
+			So(got, ShouldHaveLength, 4)
+			So(got[0].Content, ShouldContainSubstring, `"rows":3`)
+			So(got[0].Content, ShouldNotContainSubstring, secret)
+			So(got[2].Type, ShouldEqual, "agent")
+			So(got[2].ChildBlocks, ShouldHaveLength, 1)
+			So(got[2].ChildBlocks[0].ToolInput, ShouldContainSubstring, "<redacted>")
+			So(got[2].ChildBlocks[0].ToolInput, ShouldNotContainSubstring, secret)
+			So(got[2].ChildBlocks[0].Content, ShouldContainSubstring, "<redacted>")
+			So(got[2].ChildBlocks[0].Content, ShouldNotContainSubstring, secret)
+		})
+	})
+}
+
 func TestMessageBlocksPersistenceRedactsToolCredentials(t *testing.T) {
 	gdb, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "conversation.db")), &gorm.Config{})
 	require.NoError(t, err)

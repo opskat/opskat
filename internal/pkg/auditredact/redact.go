@@ -23,6 +23,13 @@ var textRedactors = []struct {
 	{regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://[^:/@\s]+:)[^@\s]+(@)`), `${1}` + RedactedValue + `${2}`},
 	{regexp.MustCompile(`(?is)-----BEGIN [^-\r\n]*PRIVATE KEY-----.*?-----END [^-\r\n]*PRIVATE KEY-----`), RedactedValue},
 	{regexp.MustCompile(`(?i)((?:x-amz-signature|x-amz-credential|x-amz-security-token|signature|awsaccesskeyid)=)([^&\s]+)`), `${1}` + RedactedValue},
+	// signature / signed value / challenge 材料（JSON 冒号形式）。
+	// 仅在键名精确命中 signature/signed-value/challenge 语义时遮蔽，不碰普通 endpoint/path。
+	{regexp.MustCompile(`(?i)(["']?(?:signature|signature[-_]?value|signed[-_]?value|challenge|challenge[-_]?response|challenge[-_]?answer)["']?\s*:\s*)(?:"[^"]*"|'[^']*'|[^\s,;&}]+)`), `${1}` + `"` + RedactedValue + `"`},
+	// --signature / --challenge / --agent-endpoint 等 flag 形式（SSH Agent 来源路径同属秘密）。
+	{regexp.MustCompile(`(?i)(--(?:signature|signature[-_]?value|signed[-_]?value|challenge|challenge[-_]?response|challenge[-_]?answer|agent[-_]?endpoint|agent[-_]?socket|agent[-_]?pipe|agent[-_]?named[-_]?pipe|ssh[-_]?agent[-_]?endpoint)(?:=|\s+))(?:"[^"]*"|'[^']*'|[^\s,;&]+)`), `${1}` + RedactedValue},
+	// 裸 key=value / key: value 与 SSH_AUTH_SOCK 环境变量形式。
+	{regexp.MustCompile(`(?i)((?:signature|signature[-_]?value|signed[-_]?value|challenge|challenge[-_]?response|challenge[-_]?answer|agent[-_]?endpoint|agent[-_]?socket|agent[-_]?pipe|agent[-_]?named[-_]?pipe|ssh[-_]?agent[-_]?endpoint|ssh[-_]?auth[-_]?sock)\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+)`), `${1}` + RedactedValue},
 }
 
 // JSON recursively redacts credential-bearing fields. Invalid JSON fails closed.
@@ -98,8 +105,18 @@ func isSensitiveKey(key string) bool {
 		canonical == "cookie" || canonical == "setcookie" || canonical == "kubeconfig" {
 		return true
 	}
-	for _, suffix := range []string{"password", "passphrase", "token", "secret", "privatekey", "privatekeys", "clientkey", "apikey"} {
+	for _, suffix := range []string{"password", "passphrase", "token", "secret", "privatekey", "privatekeys", "clientkey", "apikey",
+		// signature / signed value / challenge 材料（challenge_id 等 correlation ID 以 id 结尾，不受影响）
+		"signature", "signaturevalue", "signedvalue", "challenge", "challengeresponse", "challengeanswer"} {
 		if strings.HasSuffix(canonical, suffix) {
+			return true
+		}
+	}
+	// SSH Agent endpoint 来源字段：值指向本地 agent socket/pipe/路径，属秘密。
+	// 只遮蔽 agent 来源语义，不碰普通 endpoint/endpoint_type/path/agent_source_id/指纹。
+	for _, prefix := range []string{"agentendpoint", "sshagentendpoint", "agentsocket", "agentpipe", "agentnamedpipe",
+		"agentendpointpath", "agentpath", "sshauthsock"} {
+		if strings.HasPrefix(canonical, prefix) {
 			return true
 		}
 	}

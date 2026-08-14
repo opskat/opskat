@@ -2212,3 +2212,162 @@ describe("retry/error handling", () => {
     expect(loadedErr?.errorDetail).toBe("connection reset");
   });
 });
+
+describe("AI 会话块递归安全持久化（嵌套 agent child blocks）", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    localStorage.clear();
+    useTabStore.setState({ tabs: [], activeTabId: null });
+    useAIStore.setState({
+      tabStates: {},
+      conversations: [],
+      conversationMessages: {},
+      conversationStreaming: {},
+    });
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
+    vi.mocked(SaveConversationMessages).mockResolvedValue(undefined as any);
+    vi.mocked(EventsOn).mockReturnValue(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("存盘时嵌套 agent child blocks 随持久化 DTO 递归携带（后端 SetBlocks 递归脱敏）", async () => {
+    useAIStore.setState({
+      sidebarTabs: [
+        {
+          id: "sidebar-redact-1",
+          conversationId: 200,
+          title: "t",
+          createdAt: 1,
+          uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null },
+        },
+      ],
+      activeSidebarTabId: "sidebar-redact-1",
+      conversationMessages: {
+        200: [
+          {
+            role: "assistant",
+            content: "",
+            blocks: [
+              {
+                type: "agent",
+                content: "",
+                agentRole: "helper",
+                agentTask: "deploy",
+                status: "completed",
+                childBlocks: [
+                  {
+                    type: "tool",
+                    content: "",
+                    toolName: "put_asset",
+                    toolInput: '{"password":"<redacted>"}',
+                    toolCallId: "call_n1",
+                    status: "completed",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      conversationStreaming: { 200: { sending: false, pendingQueue: [] } },
+    });
+
+    await useAIStore.getState().sendFromSidebarTab("sidebar-redact-1", "继续");
+
+    const savedMsgs = vi.mocked(SaveConversationMessages).mock.calls.flatMap((c) => c[1] as any[]);
+    const agentBlock = savedMsgs.flatMap((m) => m.blocks || []).find((b) => b.type === "agent");
+    expect(agentBlock).toBeDefined();
+    expect(agentBlock.childBlocks).toHaveLength(1);
+    expect(agentBlock.childBlocks[0].type).toBe("tool");
+    expect(agentBlock.childBlocks[0].toolInput).toContain("<redacted>");
+  });
+
+  it("重载会话恢复嵌套 agent child blocks（安全值原样读回）", async () => {
+    vi.mocked(LoadConversationMessages).mockResolvedValue([
+      { role: "user", content: "hi", blocks: [] },
+      {
+        role: "assistant",
+        content: "",
+        blocks: [
+          {
+            type: "agent",
+            content: "",
+            status: "completed",
+            childBlocks: [
+              {
+                type: "tool",
+                content: "ok",
+                toolName: "put_asset",
+                toolInput: '{"password":"<redacted>"}',
+                toolCallId: "call_n2",
+                status: "completed",
+              },
+            ],
+          },
+        ],
+      },
+    ] as any);
+    useAIStore.setState({ conversations: [{ ID: 201, Title: "t" } as any] });
+
+    await useAIStore.getState().openConversationTab(201);
+
+    const loaded = useAIStore.getState().conversationMessages[201];
+    const agentBlock = loaded.flatMap((m) => m.blocks).find((b) => b.type === "agent");
+    expect(agentBlock).toBeDefined();
+    expect(agentBlock!.childBlocks).toHaveLength(1);
+    expect(agentBlock!.childBlocks![0].toolInput).toContain("<redacted>");
+  });
+
+  it("下一轮模型历史只携带安全 tool input/result，不出现原始秘密", async () => {
+    const secret = "replay-credential-sentinel";
+    useAIStore.setState({
+      modelName: "gpt-4o",
+      sidebarTabs: [
+        {
+          id: "sidebar-redact-3",
+          conversationId: 202,
+          title: "t",
+          createdAt: 1,
+          uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null },
+        },
+      ],
+      activeSidebarTabId: "sidebar-redact-3",
+      conversationMessages: {
+        202: [
+          {
+            role: "assistant",
+            content: "done",
+            blocks: [
+              {
+                type: "tool",
+                content: `{"rows":1,"token":"<redacted>"}`,
+                toolName: "query",
+                toolInput: '{"password":"<redacted>"}',
+                toolCallId: "call_n3",
+                status: "completed",
+              },
+              { type: "text", content: "done" },
+            ],
+          },
+        ],
+      },
+      conversationStreaming: { 202: { sending: false, pendingQueue: [] } },
+    });
+
+    await useAIStore.getState().sendFromSidebarTab("sidebar-redact-3", "再看");
+
+    const args = vi.mocked(SendAIMessage).mock.calls.at(-1)!;
+    const apiMsgs = args[1] as any[];
+    const serialized = JSON.stringify(apiMsgs);
+    expect(serialized).toContain("<redacted>");
+    expect(serialized).not.toContain(secret);
+    const toolAssistant = apiMsgs.find((m) => m.role === "assistant" && m.tool_calls);
+    expect(toolAssistant.tool_calls[0].function.arguments).toContain("<redacted>");
+    const toolMsg = apiMsgs.find((m) => m.role === "tool");
+    expect(toolMsg.content).toContain("<redacted>");
+  });
+});

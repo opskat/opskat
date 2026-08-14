@@ -66,6 +66,106 @@ func TestEventTranslator_ThinkingThenToolStart(t *testing.T) {
 	})
 }
 
+func TestEventTranslator_ToolStartRedactsCredentialInput(t *testing.T) {
+	Convey("EventPreToolUse 的 tool_input 在离开 runner 前脱敏，同时保留结构与非敏感值", t, func() {
+		secret := "live-" + "credential-sentinel" // 运行时拼接避免 gosec G101
+		out := drain(NewStreamTranslator(), agent.Event{
+			Kind: agent.EventPreToolUse,
+			Tool: &agent.ToolEvent{
+				ToolUseID: "tu_secret",
+				Name:      "put_asset",
+				Input: map[string]any{
+					"name": "prod",
+					"config": map[string]any{
+						"host":        "db.internal",
+						"password":    secret,
+						"private_key": map[string]any{"path": "/Users/x/.ssh/id_rsa", "passphrase": secret},
+					},
+				},
+			}})
+		So(out, ShouldHaveLength, 1)
+		So(out[0].Type, ShouldEqual, "tool_start")
+		So(out[0].ToolName, ShouldEqual, "put_asset")
+		So(out[0].ToolCallID, ShouldEqual, "tu_secret")
+		So(out[0].ToolInput, ShouldNotContainSubstring, secret)
+		So(out[0].ToolInput, ShouldContainSubstring, "<redacted>")
+		So(out[0].ToolInput, ShouldContainSubstring, "db.internal")
+		So(out[0].ToolInput, ShouldContainSubstring, "prod")
+	})
+}
+
+func TestEventTranslator_ToolResultRedactsCredentialContent(t *testing.T) {
+	Convey("EventPostToolUse 的 JSON 结果递归脱敏，普通文本按文本规则脱敏", t, func() {
+		secret := "result-" + "credential-sentinel" // 运行时拼接避免 gosec G101
+		out := drain(NewStreamTranslator(), agent.Event{
+			Kind: agent.EventPostToolUse,
+			Tool: &agent.ToolEvent{
+				ToolUseID: "tu_r1",
+				Name:      "query",
+				Output: &agent.ToolResultBlock{
+					Content: []agent.ContentBlock{
+						agent.TextBlock{Text: `{"rows":3,"password":"` + secret + `"}`},
+					},
+				},
+			},
+		})
+		So(out, ShouldHaveLength, 1)
+		So(out[0].Type, ShouldEqual, "tool_result")
+		So(out[0].Content, ShouldNotContainSubstring, secret)
+		So(out[0].Content, ShouldContainSubstring, "<redacted>")
+		So(out[0].Content, ShouldContainSubstring, `"rows":3`)
+	})
+
+	Convey("普通文本结果中的凭据形式也被文本规则脱敏，安全文本原样保留", t, func() {
+		out := drain(NewStreamTranslator(), agent.Event{
+			Kind: agent.EventPostToolUse,
+			Tool: &agent.ToolEvent{
+				ToolUseID: "tu_r2",
+				Name:      "exec",
+				Output: &agent.ToolResultBlock{
+					Content: []agent.ContentBlock{
+						agent.TextBlock{Text: "ok\n--password hidden-cli-secret"},
+					},
+				},
+			},
+		})
+		So(out, ShouldHaveLength, 1)
+		So(out[0].Content, ShouldNotContainSubstring, "hidden-cli-secret")
+		So(out[0].Content, ShouldContainSubstring, "ok")
+	})
+}
+
+func TestEventTranslator_RetryRedactsCause(t *testing.T) {
+	Convey("EventRetry 的 Cause 在事件外脱敏，Attempt/Delay 原样保留", t, func() {
+		out := drain(NewStreamTranslator(), agent.Event{
+			Kind: agent.EventRetry,
+			Retry: &agent.RetryEvent{
+				Attempt: 3,
+				Delay:   2 * time.Second,
+				Cause:   errors.New("auth failed: --api-key retry-secret-token"),
+			},
+		})
+		So(out, ShouldHaveLength, 1)
+		So(out[0].Type, ShouldEqual, "retry")
+		So(out[0].Error, ShouldNotContainSubstring, "retry-secret-token")
+		So(out[0].Error, ShouldContainSubstring, "<redacted>")
+		So(out[0].Content, ShouldEqual, "3")
+		So(out[0].RetryDelayMs, ShouldEqual, 2000)
+	})
+}
+
+func TestEventTranslator_ErrorRedactsMessage(t *testing.T) {
+	Convey("EventError 的消息按文本规则脱敏", t, func() {
+		out := drain(NewStreamTranslator(), agent.Event{
+			Kind:  agent.EventError,
+			Error: errors.New("connection failed: --password error-secret-pass"),
+		})
+		So(out, ShouldHaveLength, 1)
+		So(out[0].Type, ShouldEqual, "error")
+		So(out[0].Error, ShouldNotContainSubstring, "error-secret-pass")
+	})
+}
+
 func TestEventTranslator_PostToolUse(t *testing.T) {
 	Convey("EventPostToolUse → tool_result（拼出 TextBlock 内容）", t, func() {
 		out := drain(NewStreamTranslator(),

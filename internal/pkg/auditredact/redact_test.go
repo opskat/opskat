@@ -39,6 +39,59 @@ func TestTextRedactsCommonCredentialForms(t *testing.T) {
 	}
 }
 
+func TestJSONRedactsSignatureChallengeAgentEndpointVariants(t *testing.T) {
+	raw := `{
+		"host":"db.internal",
+		"signature":"sig-secret",
+		"signed_value":"signed-secret",
+		"signature_value":"sigv-secret",
+		"challenge":"chal-secret",
+		"challenge_response":"chalresp-secret",
+		"challengeAnswer":"chala-secret",
+		"agent_endpoint":"/run/agent.sock",
+		"agent_socket":"/tmp/agent.sock",
+		"agent_named_pipe":"namedpipe-secret",
+		"ssh_agent_endpoint":"SSH_AUTH_SOCK=/tmp/agent.sock",
+		"ssh_auth_sock":"/tmp/ssh-agent.sock",
+		"endpoint":"https://oss.example.com",
+		"endpoint_type":"public",
+		"agent_source_id":42,
+		"agent_key_fingerprint":"SHA256:abc123",
+		"credential_id":7
+	}`
+	got := JSON(raw)
+	for _, secret := range []string{
+		"sig-secret", "signed-secret", "sigv-secret",
+		"chal-secret", "chalresp-secret", "chala-secret",
+		"/run/agent.sock", "/tmp/agent.sock", "namedpipe-secret", "/tmp/ssh-agent.sock",
+	} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("JSON leaked %q: %s", secret, got)
+		}
+	}
+	for _, safe := range []string{
+		"db.internal", "https://oss.example.com", "public", "SHA256:abc123",
+		`"agent_source_id":42`, `"credential_id":7`,
+	} {
+		if !strings.Contains(got, safe) {
+			t.Fatalf("JSON removed safe value %q: %s", safe, got)
+		}
+	}
+}
+
+func TestTextRedactsSignatureChallengeAgentEndpointForms(t *testing.T) {
+	raw := "--agent-endpoint /Users/x/.ssh/agent.sock --challenge chal-1 signature=sig-1 challenge_response=resp-1 SSH_AUTH_SOCK=/Users/x/.ssh/sock\nagent_endpoint=/run/agent.sock"
+	got := Text(raw)
+	for _, secret := range []string{
+		"/Users/x/.ssh/agent.sock", "chal-1", "sig-1", "resp-1",
+		"/Users/x/.ssh/sock", "/run/agent.sock",
+	} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("text leaked %q: %s", secret, got)
+		}
+	}
+}
+
 func TestTextRedactsAWSPresignedURLQueryParameters(t *testing.T) {
 	tests := []struct {
 		name       string
