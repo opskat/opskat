@@ -123,7 +123,7 @@ AI Provider 表单删除 `maskedApiKey`，以返回的原始 `apiKey` 初始化�
 
 只有具体 producer 明确拥有 write-only 字段时，Audit request 使用 producer-owned projection：
 
-- AI `put_asset`：复用 `asset_put_svc.Prepared.SafeAuditArgs` / `SafeAuditArgsForResult` 和各 `assettype.AutomationContract.ApprovalFields`，省略 `password`、`private_key`、`passphrase`、`secret_access_key`、`kubeconfig`，保留类型允许的普通 config、资产身份和 typed authentication ref；prepare 失败也不得回退原始 config，至少提供不含 config 的顶层字段 projection；
+- AI `put_asset`：复用 `asset_put_svc.Prepared.SafeAuditArgs` / `SafeAuditArgsForResult` 和各 `assettype.AutomationContract.ApprovalFields`，省略 `password`、`private_key`、`passphrase`、`secret_access_key`、`kubeconfig`，保留类型允许的普通 config、资产身份和 typed authentication ref；进入 `Prepare` 前及 prepare 失败也不得回退原始 config，而使用 typed fail-closed 顶层 projection：`asset`、`name`、`type`、`description`、`icon`、`credential_name` 仅在实际为 string 时保留，`group_id` 仅在实际为工具边界支持的数值时保留，map/slice/array/struct/pointer 和其他类型非法值全部省略；该 projection 不改变原始工具输入；
 - opsctl create asset：继续使用同一 `SafeAuditArgsForResult` producer projection；删除暗示通用脱敏的命名；
 - desktop asset change：继续使用 `assetAuditView` 白名单；
 - external edit：`OpenRequest`、`SaveResult`、`Session` 继续使用显式 producer DTO，保持独立且不变；自由 map metadata 改为真正的 fail-closed allowlist，仅允许 `auto`、`windowSaves`、`rebuild`、`resolution`、`status`、`remoteBytes`、`remoteSha256`、`bytes`、`documentKey`、`readOnly`、`reuse` 这 11 个键。允许键下只有标量 string/bool/number/nil 值按原样逐字保存；map/slice/array/struct/pointer 等复合值（无论 typed 还是 untyped）整体省略，不递归放行，防止 `bakeupPath`/password 藏在复合值里绕过字段白名单。未知字段以及 `bakeupPath`、local/workspace/editor path、local hash/sample 默认省略。既有 4096/8192/2048 截断保持。
@@ -168,7 +168,7 @@ AI Provider 表单删除 `maskedApiKey`，以返回的原始 `apiKey` 初始化�
 | Shared secret input | value 不变、Eye/EyeOff、可访问性、disabled/placeholder/right action；迁移页面不丢失原行为 |
 | Structured logs | 失败路径保留 correlation 元数据，但不存在 command/detail/result/cause/raw error payload 字段 |
 | Default Audit raw payload | command/request/result/error/matched pattern 与 writer 输入一致并只受既有截断；JSON formatting 和字面 `<redacted>` 不被改写 |
-| `put_asset` Audit projection | AI 成功/失败和 opsctl create 的 request 均保留普通 config/identity/ref，但五类 write-only 字段完全不存在；实际执行仍收到原值 |
+| `put_asset` Audit projection | AI 成功/失败和 opsctl create 的 request 均保留普通 config/identity/ref，但五类 write-only 字段完全不存在；AI pre-Prepare 失败只保留类型正确的顶层标量，嵌套秘密和类型非法复合值省略；实际执行仍收到原值 |
 | Desktop/external-edit Audit projection | desktop 白名单保持；external-edit 显式 `OpenRequest`/`SaveResult`/`Session` DTO 保持独立且不变；map fail-closed allowlist 只输出批准字段，允许键下仅标量 string/bool/number/nil 值逐字保留，map/slice/array/struct/pointer 复合值（typed 或 untyped）整体省略；未知字段/`bakeupPath`/本地环境字段不存在，截断不变 |
 | Legacy cleanup | repo 中无 `auditredact` 调用、package、`RedactedValue` Audit 断言或误导性兼容逻辑 |
 
