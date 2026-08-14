@@ -2,7 +2,6 @@ package audit
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -17,73 +16,72 @@ import (
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 )
 
-func TestWriteToolCall_RedactsSensitiveRequestFieldsRecursively(t *testing.T) {
+func TestWriteToolCall_PreservesSensitiveRequestFieldsRaw(t *testing.T) {
 	repo := setupAuditRepo(t)
+	argsJSON := `{"name":"db","config":{"username":"admin","password":"db-pass","privateKey":"pem-body","nested":[{"api_key":"provider-key","authorization":"Bearer socket-token"}]}}`
 	NewDefaultAuditWriter().WriteToolCall(context.Background(), ToolCallInfo{
 		ToolName: "put_asset",
-		ArgsJSON: `{"name":"db","config":{"username":"admin","password":"db-pass","privateKey":"pem-body","nested":[{"api_key":"provider-key","authorization":"Bearer socket-token"}]}}`,
+		ArgsJSON: argsJSON,
 	})
 
 	if len(repo.logs) != 1 {
 		t.Fatalf("expected 1 audit log, got %d", len(repo.logs))
 	}
 	request := repo.logs[0].Request
+	if request != argsJSON {
+		t.Fatalf("audit request must be preserved verbatim:\ngot  %q\nwant %q", request, argsJSON)
+	}
 	for _, secret := range []string{"db-pass", "pem-body", "provider-key", "socket-token"} {
-		if strings.Contains(request, secret) {
-			t.Fatalf("audit request leaked %q: %s", secret, request)
+		if !strings.Contains(request, secret) {
+			t.Fatalf("audit request lost raw value %q: %s", secret, request)
 		}
-	}
-	var stored struct {
-		Config map[string]any `json:"config"`
-	}
-	if err := json.Unmarshal([]byte(request), &stored); err != nil {
-		t.Fatalf("decode stored audit request: %v", err)
-	}
-	if stored.Config["username"] != "admin" || stored.Config["password"] != "<redacted>" {
-		t.Fatalf("audit request lost safe context or redaction marker: %s", request)
 	}
 }
 
-func TestWriteToolCall_RedactsSensitiveResultFieldsRecursively(t *testing.T) {
+func TestWriteToolCall_PreservesSensitiveResultFieldsRaw(t *testing.T) {
 	repo := setupAuditRepo(t)
+	result := `{"id":7,"config":{"host":"db.internal","password":"result-pass","items":[{"refreshToken":"refresh-secret","secret_access_key":"oss-secret"}]}}`
 	NewDefaultAuditWriter().WriteToolCall(context.Background(), ToolCallInfo{
 		ToolName: "get_asset",
 		ArgsJSON: `{"id":7}`,
-		Result:   `{"id":7,"config":{"host":"db.internal","password":"result-pass","items":[{"refreshToken":"refresh-secret","secret_access_key":"oss-secret"}]}}`,
+		Result:   result,
 	})
 
 	if len(repo.logs) != 1 {
 		t.Fatalf("expected 1 audit log, got %d", len(repo.logs))
 	}
-	result := repo.logs[0].Result
-	for _, secret := range []string{"result-pass", "refresh-secret", "oss-secret"} {
-		if strings.Contains(result, secret) {
-			t.Fatalf("audit result leaked %q: %s", secret, result)
-		}
+	if got := repo.logs[0].Result; got != result {
+		t.Fatalf("audit result must be preserved verbatim:\ngot  %q\nwant %q", got, result)
 	}
-	if !strings.Contains(result, "db.internal") {
-		t.Fatalf("audit result lost non-sensitive context: %s", result)
+	for _, secret := range []string{"result-pass", "refresh-secret", "oss-secret", "db.internal"} {
+		if !strings.Contains(result, secret) {
+			t.Fatalf("audit result lost raw value %q: %s", secret, result)
+		}
 	}
 }
 
-// TestWriteToolCall_RedactsMatchedPatternAndAllTextColumns locks the audit/log sink
-// closure (spec task 3): every text column persisted to audit_logs — including
-// matched_pattern, which is the only one that used to be written verbatim — must go
-// through the canonical redactor. The synthetic payload spans nested-secret, PEM,
-// Authorization and signature/challenge/Agent-endpoint forms so a future column that
-// skips the redactor fails here.
-func TestWriteToolCall_RedactsMatchedPatternAndAllTextColumns(t *testing.T) {
+// TestWriteToolCall_PreservesMatchedPatternAndAllTextColumns locks the raw-by-default
+// Audit contract: every text column persisted to audit_logs — including matched_pattern
+// — is stored exactly as the writer received it, with no canonical value replacement.
+// The synthetic payload spans nested-secret, PEM, Authorization and
+// signature/challenge/Agent-endpoint forms so a future column that re-introduces the
+// canonical redactor fails here.
+func TestWriteToolCall_PreservesMatchedPatternAndAllTextColumns(t *testing.T) {
 	repo := setupAuditRepo(t)
+	command := `client --password cmd-pass --signature cmd-sig`
+	result := "-----BEGIN PRIVATE KEY-----\nres-key-body\n-----END PRIVATE KEY-----"
+	errMsg := "Authorization: Bearer err-token; challenge=err-chal"
+	pattern := "kubectl --token=mt-token --signature mt-sig --agent-endpoint /tmp/ssh-9/agent.sock delete *"
 	NewDefaultAuditWriter().WriteToolCall(context.Background(), ToolCallInfo{
 		ToolName: "exec",
 		ArgsJSON: `{"asset":"db","command":"connect"}`,
-		Command:  `client --password cmd-pass --signature cmd-sig`,
-		Result:   "-----BEGIN PRIVATE KEY-----\nres-key-body\n-----END PRIVATE KEY-----",
-		Error:    errors.New("Authorization: Bearer err-token; challenge=err-chal"),
+		Command:  command,
+		Result:   result,
+		Error:    errors.New(errMsg),
 		Decision: &aictx.CheckResult{
 			Decision:       aictx.Deny,
 			DecisionSource: aictx.SourcePolicyDeny,
-			MatchedPattern: "kubectl --token=mt-token --signature mt-sig --agent-endpoint /tmp/ssh-9/agent.sock delete *",
+			MatchedPattern: pattern,
 		},
 	})
 
@@ -91,46 +89,59 @@ func TestWriteToolCall_RedactsMatchedPatternAndAllTextColumns(t *testing.T) {
 		t.Fatalf("expected 1 audit log, got %d", len(repo.logs))
 	}
 	entry := repo.logs[0]
-	for column, value := range map[string]string{
-		"command":         entry.Command,
-		"result":          entry.Result,
-		"error":           entry.Error,
-		"matched_pattern": entry.MatchedPattern,
+	// 每个文本列都必须保留它收到的原始秘密——映射到各自所属列，而不是跨列互相检查。
+	for _, v := range []struct {
+		column  string
+		value   string
+		secrets []string
+	}{
+		{"command", entry.Command, []string{"cmd-pass", "cmd-sig"}},
+		{"result", entry.Result, []string{"res-key-body"}},
+		{"error", entry.Error, []string{"err-token", "err-chal"}},
+		{"matched_pattern", entry.MatchedPattern, []string{"mt-token", "mt-sig"}},
 	} {
-		for _, secret := range []string{"cmd-pass", "cmd-sig", "res-key-body", "err-token", "err-chal", "mt-token", "mt-sig"} {
-			if strings.Contains(value, secret) {
-				t.Fatalf("audit %s leaked %q: %s", column, secret, value)
+		for _, secret := range v.secrets {
+			if !strings.Contains(v.value, secret) {
+				t.Fatalf("audit %s lost raw value %q: %s", v.column, secret, v.value)
 			}
 		}
 	}
-	// 安全 correlation 语义保留：决策字段与匹配来源不受脱敏影响。
+	// 安全 correlation 语义保留：决策字段与匹配来源原样存储。
 	if entry.Decision != "deny" || entry.DecisionSource != aictx.SourcePolicyDeny {
-		t.Fatalf("decision fields must survive redaction, got decision=%q source=%q", entry.Decision, entry.DecisionSource)
+		t.Fatalf("decision fields must be preserved, got decision=%q source=%q", entry.Decision, entry.DecisionSource)
 	}
 }
 
-func TestWriteToolCall_RedactsRecognizableSecretsFromTextColumns(t *testing.T) {
+func TestWriteToolCall_PreservesRecognizableSecretsFromTextColumns(t *testing.T) {
 	repo := setupAuditRepo(t)
+	command := `client --password command-pass --api-key=command-key`
+	result := "-----BEGIN PRIVATE KEY-----\nprivate-key-body\n-----END PRIVATE KEY-----"
+	errMsg := "request failed: Authorization: Bearer error-token"
 	NewDefaultAuditWriter().WriteToolCall(context.Background(), ToolCallInfo{
 		ToolName: "exec",
 		ArgsJSON: `{"asset":"db","command":"connect"}`,
-		Command:  `client --password command-pass --api-key=command-key`,
-		Result:   "-----BEGIN PRIVATE KEY-----\nprivate-key-body\n-----END PRIVATE KEY-----",
-		Error:    errors.New("request failed: Authorization: Bearer error-token"),
+		Command:  command,
+		Result:   result,
+		Error:    errors.New(errMsg),
 	})
 
 	if len(repo.logs) != 1 {
 		t.Fatalf("expected 1 audit log, got %d", len(repo.logs))
 	}
 	entry := repo.logs[0]
-	for column, value := range map[string]string{
-		"command": entry.Command,
-		"result":  entry.Result,
-		"error":   entry.Error,
+	// 每个文本列都保留其收到的原始秘密——分别检查各自所属列，不做跨列断言。
+	for _, v := range []struct {
+		column  string
+		value   string
+		secrets []string
+	}{
+		{"command", entry.Command, []string{"command-pass", "command-key"}},
+		{"result", entry.Result, []string{"private-key-body"}},
+		{"error", entry.Error, []string{"error-token"}},
 	} {
-		for _, secret := range []string{"command-pass", "command-key", "private-key-body", "error-token"} {
-			if strings.Contains(value, secret) {
-				t.Fatalf("audit %s leaked %q: %s", column, secret, value)
+		for _, secret := range v.secrets {
+			if !strings.Contains(v.value, secret) {
+				t.Fatalf("audit %s lost raw value %q: %s", v.column, secret, v.value)
 			}
 		}
 	}

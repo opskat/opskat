@@ -23,7 +23,6 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
-	"github.com/opskat/opskat/internal/pkg/auditredact"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 )
@@ -140,21 +139,20 @@ func (w *DefaultAuditWriter) WriteToolCall(ctx context.Context, info ToolCallInf
 	if command == "" {
 		command = ExtractCommandForAudit(info.ToolName, args)
 	}
-	command = auditredact.Text(command)
 
 	success := 1
 	errMsg := ""
 	if info.Error != nil {
 		success = 0
-		errMsg = auditredact.Text(info.Error.Error())
+		errMsg = info.Error.Error()
 	}
 	if info.Decision != nil && info.Decision.Decision == aictx.Deny {
 		success = 0
 		if errMsg == "" {
-			errMsg = auditredact.Text(info.Decision.Message)
+			errMsg = info.Decision.Message
 		}
 		if errMsg == "" {
-			errMsg = auditredact.Result(info.Result)
+			errMsg = info.Result
 		}
 	}
 
@@ -164,8 +162,8 @@ func (w *DefaultAuditWriter) WriteToolCall(ctx context.Context, info ToolCallInf
 		AssetID:        assetID,
 		AssetName:      assetName,
 		Command:        command,
-		Request:        truncateString(auditredact.JSON(info.ArgsJSON), 4096),
-		Result:         truncateString(auditredact.Result(info.Result), 32768),
+		Request:        truncateString(info.ArgsJSON, 4096),
+		Result:         truncateString(info.Result, 32768),
 		Error:          errMsg,
 		Success:        success,
 		ConversationID: aictx.GetConversationID(ctx),
@@ -178,9 +176,9 @@ func (w *DefaultAuditWriter) WriteToolCall(ctx context.Context, info ToolCallInf
 		entry.Decision = info.Decision.DecisionString()
 		entry.DecisionSource = info.Decision.DecisionSource
 		// matched_pattern 是审计 UI 直接展示的文本列（spec Logs and audit，Task 3）：
-		// 用户编辑的 pattern 与通用命令可含任意文本，必须与 command/error 同走 canonical
-		// redactor，不能原样落库。决策来源与 allow/deny 分类不脱敏，保持 correlation。
-		entry.MatchedPattern = auditredact.Text(info.Decision.MatchedPattern)
+		// 用户编辑的 pattern 与通用命令可含任意文本，raw-by-default 下原样保存，不做
+		// 内容识别或值替换——决策来源与 allow/deny 分类保持 correlation。
+		entry.MatchedPattern = info.Decision.MatchedPattern
 	}
 
 	if repo := audit_repo.Audit(); repo != nil {
@@ -221,7 +219,7 @@ func WriteGrantSubmitAudit(ctx context.Context, assetID int64, assetName string,
 			ToolName:   "grant_submit",
 			AssetID:    assetID,
 			AssetName:  assetName,
-			Command:    auditredact.Text(strings.Join(patterns, ", ")),
+			Command:    strings.Join(patterns, ", "),
 			SessionID:  aictx.GetSessionID(ctx),
 			Decision:   "allow",
 			Success:    1,
@@ -246,7 +244,7 @@ func WriteGrantDiscardedAudit(ctx context.Context, assetID int64, assetName, com
 			ToolName:   "grant_discarded",
 			AssetID:    assetID,
 			AssetName:  assetName,
-			Command:    auditredact.Text(command),
+			Command:    command,
 			SessionID:  aictx.GetSessionID(ctx),
 			Decision:   "allow",
 			Success:    1,

@@ -62,7 +62,7 @@ func waitForExtensionAudit(t *testing.T, repo *mockAuditRepo) *audit_entity.Audi
 	return nil
 }
 
-func TestExtensionApprovalAndPluginUseRawArgumentsWhileAuditRedacts(t *testing.T) {
+func TestExtensionApprovalAndPluginUseRawArgumentsAndAuditStoresRaw(t *testing.T) {
 	redactionSentinel := strings.Repeat("review", 2) + "-extension-value"
 	executor := &oracleExtensionExecutor{
 		ext: &extension.Extension{Name: "oss", Manifest: &extension.Manifest{Name: "oss"}},
@@ -116,11 +116,12 @@ func TestExtensionApprovalAndPluginUseRawArgumentsWhileAuditRedacts(t *testing.T
 
 	entry := waitForExtensionAudit(t, repo)
 	require.Equal(t, "ai", entry.Source)
-	require.NotEqual(t, approvalCommand, entry.Command)
-	require.NotContains(t, entry.Command, redactionSentinel)
-	require.Contains(t, entry.Command, "<redacted>")
+	// 默认 writer 原样落库：审计 command/request 与审批者看到的实际主体、执行器实际
+	// 收到的参数一致，不再生成 canonical 脱敏副本。
+	require.Equal(t, approvalCommand, entry.Command)
+	require.Contains(t, entry.Command, redactionSentinel)
 	require.Contains(t, entry.Request, "production-target")
 	require.Contains(t, entry.Request, "logs/a")
-	require.NotContains(t, entry.Request, redactionSentinel)
-	require.True(t, strings.Contains(entry.Command, "redacted"))
+	require.Contains(t, entry.Request, redactionSentinel)
+	require.Contains(t, entry.Request, "--token="+redactionSentinel)
 }
