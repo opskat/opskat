@@ -1110,12 +1110,14 @@ func setupPutAssetDB(t *testing.T) *gorm.DB {
 	db.SetDefault(gdb)
 	origAsset := asset_repo.Asset()
 	origCredential := credential_repo.Credential()
+	origCredentialSvc := credential_svc.Default()
 	asset_repo.RegisterAsset(asset_repo.NewAsset())
 	credential_repo.RegisterCredential(credential_repo.NewCredential())
 	credential_svc.SetDefault(credential_svc.New("tool-put-audit-master-key", []byte("tool-put-audit-salt")))
 	t.Cleanup(func() {
 		asset_repo.RegisterAsset(origAsset)
 		credential_repo.RegisterCredential(origCredential)
+		credential_svc.SetDefault(origCredentialSvc)
 		sqlDB, sqlErr := gdb.DB()
 		if sqlErr == nil {
 			_ = sqlDB.Close()

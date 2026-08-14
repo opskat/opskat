@@ -1,7 +1,9 @@
 package assettype
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
@@ -441,6 +443,26 @@ func TestPrepareCreateRejectsCompositeRequiredScalarFields(t *testing.T) {
 			_, err := PrepareCreate(tt.assetType, tt.args)
 			require.Error(t, err, "composite required input must fail validation at the owning type boundary")
 			assert.NotContains(t, err.Error(), secret)
+		})
+	}
+}
+
+func TestPrepareUpdatePreservesBooleanDatabaseReadOnly(t *testing.T) {
+	for _, want := range []bool{true, false} {
+		t.Run(fmt.Sprintf("read_only=%t", want), func(t *testing.T) {
+			asset := &asset_entity.Asset{Name: "db", Type: asset_entity.AssetTypeDatabase}
+			require.NoError(t, asset.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+				Driver: asset_entity.DriverPostgreSQL, Host: "db.internal", Port: 5432,
+				Username: "reader", ReadOnly: !want,
+			}))
+
+			prepared, err := PrepareUpdate(asset_entity.AssetTypeDatabase, map[string]any{"read_only": want})
+			require.NoError(t, err)
+			require.NoError(t, prepared.Handler.ApplyUpdateArgs(context.Background(), asset, prepared.Config))
+
+			config, err := asset.GetDatabaseConfig()
+			require.NoError(t, err)
+			assert.Equal(t, want, config.ReadOnly, "JSON boolean read_only must survive the strict ArgString change")
 		})
 	}
 }

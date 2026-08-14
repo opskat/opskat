@@ -148,8 +148,8 @@ func (h *databaseHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Ass
 	if _, ok := args["database"]; ok {
 		cfg.Database = ArgString(args, "database")
 	}
-	if v := ArgString(args, "read_only"); v != "" {
-		cfg.ReadOnly = v == "true"
+	if _, ok := args["read_only"]; ok {
+		cfg.ReadOnly = ArgBool(args, "read_only")
 	}
 	if v := ArgInt(args, "query_timeout_seconds"); v > 0 {
 		cfg.QueryTimeoutSeconds = v

@@ -166,6 +166,12 @@ func (r *rebindRemoteStub) WriteFile(sessionID, remotePath string, data []byte) 
 	return nil
 }
 
+func (r *rebindRemoteStub) Writes() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.writes...)
+}
+
 func (r *rebindRemoteStub) lookupErrorLocked(sessionID, remotePath string) error {
 	if byPath := r.missing[sessionID]; byPath != nil {
 		if err, ok := byPath[remotePath]; ok {
@@ -415,7 +421,7 @@ func TestExternalEditSaveRejectsOversizedLocalCopy(t *testing.T) {
 	_, err := h.svc.Save(context.Background(), session.ID)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "本地副本过大")
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 }
 
 func TestExternalEditSaveRejectsLocalCopyOverConfiguredLimit(t *testing.T) {
@@ -428,7 +434,7 @@ func TestExternalEditSaveRejectsLocalCopyOverConfiguredLimit(t *testing.T) {
 	_, err := h.svc.Save(context.Background(), session.ID)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "本地副本过大")
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 }
 
 func TestExternalEditSaveRebindsToUniqueCandidateAndPersistsSessionID(t *testing.T) {
@@ -555,7 +561,7 @@ func TestExternalEditSaveDetectsRemoteChangeFromReadBytesWhenInfoHashIsStale(t *
 	require.Equal(t, recordStateConflict, result.Session.RecordState)
 	require.False(t, result.Session.Hidden)
 	require.True(t, result.Session.Dirty)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 
 	stored := h.refreshSession(t, session.ID)
 	require.Equal(t, sessionStateConflict, stored.State)
@@ -765,7 +771,9 @@ func TestExternalEditDocumentSaveSucceedsAfterOriginalTransportClosed(t *testing
 	require.NoError(t, err)
 	require.Equal(t, saveStatusSaved, result.Status)
 	require.Equal(t, "ssh-c", result.Session.SessionID)
-	assert.Equal(t, "ssh-c:/srv/app/demo.txt", h.remote.writes[len(h.remote.writes)-1])
+	writes := h.remote.Writes()
+	require.NotEmpty(t, writes)
+	assert.Equal(t, "ssh-c:/srv/app/demo.txt", writes[len(writes)-1])
 }
 
 func TestExternalEditDocumentOpenFromAnotherTransportReusesDirtyCopy(t *testing.T) {
@@ -824,7 +832,7 @@ func TestExternalEditDocumentBlocksWhenCanonicalFileCannotBeConfirmed(t *testing
 	_, err := h.svc.Save(context.Background(), session.ID)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "无法确认仍是同一份远程文件")
-	assert.Empty(t, h.remote.writes)
+	assert.Empty(t, h.remote.Writes())
 }
 
 func TestExternalEditDocumentRereadUsesAnotherTransportAfterConflict(t *testing.T) {
@@ -866,11 +874,12 @@ func TestExternalEditRereadNewDraftAutoSavesAfterFurtherEdit(t *testing.T) {
 	markDirtyLocalCopy(t, reread.Session, []byte("remote newer\nlocal follow-up\n"))
 	h.svc.reconcileLocalCopy(reread.Session.ID)
 	require.Eventually(t, func() bool {
-		return len(h.remote.writes) > 0
+		return len(h.remote.Writes()) > 0
 	}, autoSaveDebounce+time.Second, 50*time.Millisecond)
 
-	lastWrite := h.remote.writes[len(h.remote.writes)-1]
-	assert.Equal(t, "ssh-c:/srv/app/demo.txt", lastWrite)
+	writes := h.remote.Writes()
+	require.NotEmpty(t, writes)
+	assert.Equal(t, "ssh-c:/srv/app/demo.txt", writes[len(writes)-1])
 
 	stored := h.refreshSession(t, reread.Session.ID)
 	require.Equal(t, recordStateActive, stored.RecordState)
@@ -935,7 +944,7 @@ func TestExternalEditRereadNewDraftDetectsRemoteChangeWithoutLocalDirty(t *testi
 	require.Equal(t, recordStateConflict, nextConflict.Session.RecordState)
 	require.False(t, nextConflict.Session.Hidden)
 	require.True(t, nextConflict.Session.Dirty)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 
 	stored := h.refreshSession(t, reread.Session.ID)
 	require.Equal(t, sessionStateConflict, stored.State)
@@ -969,7 +978,7 @@ func TestExternalEditRefreshRereadNewDraftDetectsRemoteChangeWithoutLocalDirty(t
 	require.False(t, refreshed.Hidden)
 	require.True(t, refreshed.Dirty)
 	require.Equal(t, hashBytes([]byte("CASE68-C-REMOTE-EDIT-1\n")), sessionLocalHash(refreshed))
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 
 	stored := h.refreshSession(t, reread.Session.ID)
 	require.Equal(t, sessionStateConflict, stored.State)
@@ -1016,7 +1025,7 @@ func TestExternalEditRefreshConflictSurvivesLocalReconcile(t *testing.T) {
 	require.Equal(t, recordStateConflict, stored.RecordState)
 	require.True(t, stored.Dirty)
 	require.False(t, stored.Hidden)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 }
 
 func TestExternalEditReconnectRefreshRereadNewDraftDetectsRemoteChangeWithoutLocalDirty(t *testing.T) {
@@ -1070,7 +1079,7 @@ func TestExternalEditReconnectRefreshRereadNewDraftDetectsRemoteChangeWithoutLoc
 	require.Equal(t, recordStateConflict, refreshed.RecordState)
 	require.False(t, refreshed.Hidden)
 	require.True(t, refreshed.Dirty)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 }
 
 func TestExternalEditAutoSaveOnlyAttemptsOneStableHashOnce(t *testing.T) {
@@ -1081,12 +1090,12 @@ func TestExternalEditAutoSaveOnlyAttemptsOneStableHashOnce(t *testing.T) {
 	h.svc.reconcileLocalCopy(session.ID)
 
 	require.Eventually(t, func() bool {
-		return len(h.remote.writes) == 1
+		return len(h.remote.Writes()) == 1
 	}, 3*time.Second, 50*time.Millisecond)
 
 	h.svc.reconcileLocalCopy(session.ID)
 	time.Sleep(autoSaveDebounce + 200*time.Millisecond)
-	require.Len(t, h.remote.writes, 1)
+	require.Len(t, h.remote.Writes(), 1)
 
 	saved := h.refreshSession(t, session.ID)
 	require.Equal(t, sessionStateClean, saved.State)
@@ -1110,7 +1119,7 @@ func TestExternalEditCompareReturnsReadOnlyDiffWithoutWritingRemote(t *testing.T
 	require.True(t, diff.ReadOnly)
 	require.Equal(t, "local draft\n", diff.LocalContent)
 	require.Equal(t, "remote changed\n", diff.RemoteContent)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 	assert.Equal(t, "external_edit_compare", h.audit.lastTool())
 }
 
@@ -1338,7 +1347,7 @@ func TestExternalEditManualRestoredDraftDoesNotAutoSave(t *testing.T) {
 	markDirtyLocalCopy(t, session, []byte("restored manual\n"))
 	h.svc.reconcileLocalCopy(session.ID)
 	time.Sleep(autoSaveDebounce + 200*time.Millisecond)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 
 	manual, err := h.svc.Save(context.Background(), session.ID)
 	require.NoError(t, err)
@@ -1462,7 +1471,7 @@ func TestExternalEditAbandonedSessionCancelsPendingAutoSave(t *testing.T) {
 	h.svc.mu.Unlock()
 
 	time.Sleep(autoSaveDebounce + 200*time.Millisecond)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 
 	stored := h.refreshSession(t, session.ID)
 	require.Equal(t, recordStateAbandoned, stored.RecordState)
@@ -1520,7 +1529,7 @@ func TestExternalEditAutoSaveStillEntersConflictAfterRemoteCompare(t *testing.T)
 		}
 	}
 	require.True(t, foundConflict)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 }
 
 func TestExternalEditMergeApplySavesFinalDraftAndAdvancesHashes(t *testing.T) {
@@ -1580,7 +1589,7 @@ func TestExternalEditMergeApplyBlocksStaleRemoteSnapshot(t *testing.T) {
 	require.Equal(t, saveStatusConflict, applied.Status)
 	require.Contains(t, applied.Message, "合并期间再次变化")
 	require.NotNil(t, applied.Conflict)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 }
 
 func TestExternalEditRestartRecoveryMarksResumeRequiredWithoutAutoUpload(t *testing.T) {
@@ -1617,7 +1626,7 @@ func TestExternalEditRestartRecoveryMarksResumeRequiredWithoutAutoUpload(t *test
 
 	reopened.reconcileLocalCopy(session.ID)
 	time.Sleep(autoSaveDebounce + 200*time.Millisecond)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 
 	saved, err := reopened.Save(context.Background(), session.ID)
 	require.NoError(t, err)
@@ -1763,7 +1772,7 @@ func TestExternalEditClipboardResidueRuntimeEntryPointsCleanWithoutRunner(t *tes
 	require.Nil(t, h.svc.getSession(residue.ID))
 	require.Empty(t, h.svc.ListSessions())
 	require.Empty(t, h.svc.documentRunners)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 
 	manifest, err := os.ReadFile(filepath.Join(h.manifest, "storage", "manifest.json"))
 	require.NoError(t, err)

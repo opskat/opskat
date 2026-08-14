@@ -276,6 +276,40 @@ func TestCreateAssetCommitFailureAuditsSafeErrorAndDoesNotNotify(t *testing.T) {
 	assert.Empty(t, stdout.String())
 }
 
+func TestCreateAssetNilCommitResultFailsClosedAndIsAudited(t *testing.T) {
+	preserveCreateSeams(t)
+	oldWriter := opsctlAuditWriter
+	writer := &mockAuditWriter{}
+	opsctlAuditWriter = writer
+	t.Cleanup(func() { opsctlAuditWriter = oldWriter })
+	prepareAssetPut = func(context.Context, asset_put_svc.Request) (preparedAssetCreate, error) {
+		return &fakePreparedAssetCreate{
+			approval: map[string]any{"name": "cache", "type": "redis", "config": map[string]any{"host": "redis.internal"}},
+		}, nil
+	}
+	requireCreateApproval = func(context.Context, approval.ApprovalRequest) (ApprovalResult, error) {
+		return ApprovalResult{Decision: aictx.Allow}, nil
+	}
+	notifyCalls := 0
+	notifyAssetChanged = func() { notifyCalls++ }
+
+	var stdout, stderr bytes.Buffer
+	assert.NotPanics(t, func() {
+		code := createAsset(context.Background(), createArgs(t, "redis", validCreateConfig("redis")), "session", commandIO{
+			stdin: &bytes.Buffer{}, stdout: &stdout, stderr: &stderr,
+		})
+		assert.Equal(t, 1, code)
+	})
+
+	require.Len(t, writer.calls, 1)
+	call := writer.lastCall()
+	require.Error(t, call.Error)
+	assert.Contains(t, call.Error.Error(), "no result")
+	assert.Contains(t, stderr.String(), "no result")
+	assert.Empty(t, stdout.String())
+	assert.Zero(t, notifyCalls)
+}
+
 func TestCreateAssetOutputWriteFailureReturnsNonzeroAndReportsError(t *testing.T) {
 	preserveCreateSeams(t)
 	oldWriter := opsctlAuditWriter

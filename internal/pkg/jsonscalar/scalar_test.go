@@ -2,6 +2,7 @@ package jsonscalar
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
 	"reflect"
 	"testing"
@@ -15,6 +16,24 @@ type testBool bool
 type testInt int
 type testUint uint
 type testFloat float64
+
+type compositeMarshalingString string
+
+func (compositeMarshalingString) MarshalJSON() ([]byte, error) {
+	return []byte(`{"password":"nested"}`), nil
+}
+
+type errorMarshalingInt int
+
+func (errorMarshalingInt) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("marshal failed")
+}
+
+type scalarMarshalingString string
+
+func (scalarMarshalingString) MarshalJSON() ([]byte, error) {
+	return []byte(`"safe"`), nil
+}
 
 func TestIsScalarAcceptsEveryJSONScalarKind(t *testing.T) {
 	scalars := []any{
@@ -70,6 +89,12 @@ func TestIsScalarRejectsNonScalarKinds(t *testing.T) {
 			assert.False(t, IsScalar(value), "%T(%#v) must not be a JSON scalar", value, value)
 		})
 	}
+}
+
+func TestIsScalarHonorsCustomJSONEncoding(t *testing.T) {
+	assert.True(t, IsScalar(scalarMarshalingString("ignored")), "a scalar kind that marshals to a scalar remains safe")
+	assert.False(t, IsScalar(compositeMarshalingString("ignored")), "a scalar kind must not smuggle a composite through MarshalJSON")
+	assert.False(t, IsScalar(errorMarshalingInt(1)), "a scalar kind whose MarshalJSON fails is not marshal-safe")
 }
 
 func TestIsScalarRejectsNonFiniteAndInvalidNumbers(t *testing.T) {

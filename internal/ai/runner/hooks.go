@@ -58,7 +58,8 @@ func auditMiddleware(c *agent.ToolContext) {
 	}
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
-		logger.Default().Warn("audit middleware marshal input", zap.Error(err))
+		logger.Ctx(c.Context()).Warn("audit middleware marshal input",
+			zap.String("toolName", c.ToolName), zap.Error(err))
 	}
 
 	result, errVal := extractAuditResult(c.Output)

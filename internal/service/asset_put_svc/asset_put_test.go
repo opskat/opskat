@@ -600,6 +600,25 @@ func TestPutSSHPrivateKeyImportsManagedCredentialAndReturnsOnlySafeAssociation(t
 	}
 }
 
+func TestPrepareSSHAgentIncludesInferredAuthTypeInSafeProjection(t *testing.T) {
+	env := setupPutTest(t)
+	sourceID := seedAgentSource(t, env.ctx)
+	input := map[string]any{
+		"host": "ssh.internal", "username": "root",
+		"agent_source_id": float64(sourceID), "agent_key_fingerprint": validAgentFingerprintForPut(),
+	}
+
+	prepared, err := Prepare(env.ctx, Request{Asset: newSSHAsset("agent-box"), Config: input})
+	require.NoError(t, err)
+
+	approval := prepared.SafeApprovalDetail()
+	config, ok := approval["config"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, asset_entity.AuthTypeAgent, config["auth_type"], "approval/audit projection must reflect type-owned normalization")
+	_, supplied := input["auth_type"]
+	assert.False(t, supplied, "Prepare must not mutate caller config while projecting the normalized auth type")
+}
+
 func TestPutSSHAgentRequiresPersistedSourceCreatesNoCredentialAndReturnsTypedAuthentication(t *testing.T) {
 	env := setupPutTest(t)
 	sourceID := seedAgentSource(t, env.ctx)

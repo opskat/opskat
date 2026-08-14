@@ -107,7 +107,7 @@ func createAsset(ctx context.Context, args, config map[string]any) (string, erro
 	}
 	aictx.RecordAuditRequest(ctx, prepared.SafeAuditArgsForResult(result))
 	aictx.NotifyDataChanged("asset")
-	return putAssetResultJSON(result, "asset created successfully")
+	return asset_put_svc.ResultJSON(result, "asset created successfully")
 }
 
 // putAssetTopLevelAuditArgs 把 put_asset 顶层非 config 字段按类型 fail-closed 投影给
@@ -149,19 +149,6 @@ func auditSafeGroupID(v any) bool {
 	default:
 		return false
 	}
-}
-
-func putAssetResultJSON(result *asset_put_svc.Result, message string) (string, error) {
-	payload := struct {
-		ID             int64                            `json:"id"`
-		Authentication *asset_put_svc.AuthenticationRef `json:"authentication,omitempty"`
-		Message        string                           `json:"message"`
-	}{ID: result.ID, Authentication: result.Authentication, Message: message}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("encode asset result: %w", err)
-	}
-	return string(encoded), nil
 }
 
 func updateAsset(ctx context.Context, ref string, args, config map[string]any) (string, error) {
@@ -208,7 +195,7 @@ func updateAsset(ctx context.Context, ref string, args, config map[string]any) (
 	}
 	aictx.RecordAuditRequest(ctx, prepared.SafeAuditArgsForResult(result))
 	aictx.NotifyDataChanged("asset")
-	return putAssetResultJSON(result, "asset updated successfully")
+	return asset_put_svc.ResultJSON(result, "asset updated successfully")
 }
 
 // handlePutGroup 创建或更新分组：带 id → 更新，不带 → 创建。

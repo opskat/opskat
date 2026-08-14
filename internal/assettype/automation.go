@@ -45,6 +45,14 @@ type CredentialBinding struct {
 	Type string
 }
 
+type automationNormalizer interface {
+	NormalizeAutomationConfig(map[string]any) error
+}
+
+type automationValidator interface {
+	ValidateAutomationConfig(map[string]any) error
+}
+
 type PreparedCreate struct {
 	Handler    AssetTypeHandler
 	Config     map[string]any
@@ -84,12 +92,16 @@ func PrepareCreate(assetType string, args map[string]any) (PreparedCreate, error
 			return PreparedCreate{}, err
 		}
 	}
+	if err := normalizeAutomation(prepared); err != nil {
+		return PreparedCreate{}, err
+	}
 	if err := prepared.Handler.ValidateCreateArgs(prepared.Config); err != nil {
 		return PreparedCreate{}, err
 	}
-	prepared.Approval = approvalView(prepared.Config, contract.ApprovalFields)
-	prepared.Credential, err = credentialPlan(contract, prepared.Config)
-	return prepared, err
+	if err := validateAutomation(prepared); err != nil {
+		return PreparedCreate{}, err
+	}
+	return finalizeAutomation(prepared, contract)
 }
 
 // PrepareUpdate validates a partial update through the same type-owned field and
@@ -99,9 +111,37 @@ func PrepareUpdate(assetType string, args map[string]any) (PreparedCreate, error
 	if err != nil {
 		return PreparedCreate{}, err
 	}
+	if err := normalizeAutomation(prepared); err != nil {
+		return PreparedCreate{}, err
+	}
+	if err := validateAutomation(prepared); err != nil {
+		return PreparedCreate{}, err
+	}
+	return finalizeAutomation(prepared, contract)
+}
+
+func normalizeAutomation(prepared PreparedCreate) error {
+	if normalizer, ok := prepared.Handler.(automationNormalizer); ok {
+		return normalizer.NormalizeAutomationConfig(prepared.Config)
+	}
+	return nil
+}
+
+func validateAutomation(prepared PreparedCreate) error {
+	if validator, ok := prepared.Handler.(automationValidator); ok {
+		return validator.ValidateAutomationConfig(prepared.Config)
+	}
+	return nil
+}
+
+func finalizeAutomation(prepared PreparedCreate, contract AutomationContract) (PreparedCreate, error) {
 	prepared.Approval = approvalView(prepared.Config, contract.ApprovalFields)
-	prepared.Credential, err = credentialPlan(contract, prepared.Config)
-	return prepared, err
+	credential, err := credentialPlan(contract, prepared.Config)
+	if err != nil {
+		return PreparedCreate{}, err
+	}
+	prepared.Credential = credential
+	return prepared, nil
 }
 
 func prepareAutomation(assetType string, args map[string]any) (PreparedCreate, AutomationContract, error) {

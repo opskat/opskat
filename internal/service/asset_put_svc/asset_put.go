@@ -4,6 +4,7 @@ package asset_put_svc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -29,14 +30,6 @@ type Request struct {
 type AuthenticationRef struct {
 	Type string `json:"type"`
 	Ref  int64  `json:"ref"`
-}
-
-type automationNormalizer interface {
-	NormalizeAutomationConfig(map[string]any) error
-}
-
-type automationValidator interface {
-	ValidateAutomationConfig(map[string]any) error
 }
 
 type authenticationPreparer interface {
@@ -85,16 +78,6 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 	}
 	if err != nil {
 		return nil, err
-	}
-	if normalizer, ok := preparedCreate.Handler.(automationNormalizer); ok {
-		if err := normalizer.NormalizeAutomationConfig(preparedCreate.Config); err != nil {
-			return nil, err
-		}
-	}
-	if validator, ok := preparedCreate.Handler.(automationValidator); ok {
-		if err := validator.ValidateAutomationConfig(preparedCreate.Config); err != nil {
-			return nil, err
-		}
 	}
 	if asset.ID > 0 && preparedCreate.Credential.Kind == assettype.CredentialKindPassword && preparedCreate.Credential.Username == "" {
 		preparedCreate.Credential.Username = existingUsername(&asset, preparedCreate.Credential.UsernameField)
@@ -190,6 +173,23 @@ func Put(ctx context.Context, req Request) (*Result, error) {
 		return nil, err
 	}
 	return Commit(ctx, prepared)
+}
+
+// ResultJSON serializes the shared non-secret automation result contract.
+func ResultJSON(result *Result, message string) (string, error) {
+	if result == nil {
+		return "", fmt.Errorf("asset put commit returned no result")
+	}
+	payload := struct {
+		ID             int64              `json:"id"`
+		Authentication *AuthenticationRef `json:"authentication,omitempty"`
+		Message        string             `json:"message"`
+	}{ID: result.ID, Authentication: result.Authentication, Message: message}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("encode asset result: %w", err)
+	}
+	return string(encoded), nil
 }
 
 // SafeApprovalDetail returns only the type-owned approval field allowlist.

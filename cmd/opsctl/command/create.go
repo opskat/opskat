@@ -160,7 +160,7 @@ func createAsset(ctx context.Context, args []string, session string, streams com
 	auditArgs := prepared.SafeAuditArgsForResult(result)
 	resultJSON := ""
 	if err == nil {
-		resultJSON, err = assetPutResultJSON(result)
+		resultJSON, err = asset_put_svc.ResultJSON(result, "asset created successfully")
 	}
 	if err != nil {
 		writePutAssetAudit(ctx, "put_asset", auditArgs, resultJSON, err, approvalResult.ToCheckResult())
@@ -181,19 +181,6 @@ func writeCreateAssetError(ctx context.Context, stderr io.Writer, err error) {
 		logger.Ctx(ctx).Error("write create asset error",
 			zap.NamedError("commandError", err), zap.NamedError("writeError", writeErr))
 	}
-}
-
-func assetPutResultJSON(result *asset_put_svc.Result) (string, error) {
-	payload := struct {
-		ID             int64                            `json:"id"`
-		Authentication *asset_put_svc.AuthenticationRef `json:"authentication,omitempty"`
-		Message        string                           `json:"message"`
-	}{ID: result.ID, Authentication: result.Authentication, Message: "asset created successfully"}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("encode asset result: %w", err)
-	}
-	return string(encoded), nil
 }
 
 func prettyJSON(value string) string {
