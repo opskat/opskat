@@ -1823,8 +1823,8 @@ func TestExternalEditAuditMapAllowlistKeepsAllowedKeysVerbatim(t *testing.T) {
 }
 
 // TestExternalEditAuditMapAllowlistOmitsUnknownAndSecretFields 钉住 fail-closed 语义：
-// 未知字段、password/token/apiKey 和本地 bakeupPath/工作区路径/哈希一律省略；嵌套 map
-// 同样 fail-closed（未知 key 被滤掉），允许字段的值不被替换。
+// 未知字段、password/token/apiKey 和本地 bakeupPath/工作区路径/哈希一律省略；允许键下的
+// 嵌套 map 是复合值，整体省略，不递归放行。
 func TestExternalEditAuditMapAllowlistOmitsUnknownAndSecretFields(t *testing.T) {
 	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
 
@@ -1859,11 +1859,56 @@ func TestExternalEditAuditMapAllowlistOmitsUnknownAndSecretFields(t *testing.T) 
 		assert.NotContains(t, log.Request, leaked)
 		assert.NotContains(t, log.Result, leaked)
 	}
-	// 嵌套 map 同样 fail-closed：只保留允许字段 reuse，password/detail 被滤掉
-	assert.Contains(t, log.Request, `"status":{"reuse":true}`)
+	// 嵌套 map 是复合值，整体省略：status 不再出现在审计里，reuse/password/detail 一并滤掉
+	assert.NotContains(t, log.Request, `"status"`)
 	assert.Contains(t, log.Result, `"readOnly":true`)
 	assert.NotContains(t, log.Request, "<redacted>")
 	assert.NotContains(t, log.Result, "<redacted>")
+}
+
+// TestExternalEditAuditMapAllowlistOmitsCompositeValues 钉住 fail-closed 语义扩展到允许字段的
+// 复合值：map[string]string、具体类型 map、小结构体、切片/数组或嵌套 map 一律整体省略，
+// bakeupPath/password/localPath 藏在复合值里也不能绕过字段白名单；允许键的标量值仍逐字保留。
+func TestExternalEditAuditMapAllowlistOmitsCompositeValues(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
+
+	session := &Session{ID: "ssh-a", AssetID: 101, AssetName: "asset-101", RemotePath: "/srv/app/demo.txt"}
+	localPath := "/Users/me/.cache/opskat/workspace/sessions/ssh-a/bakeup/old"
+	request := map[string]any{
+		"auto": true,
+		"status": map[string]string{
+			"bakeupPath": localPath,
+			"password":   "nested-secret",
+		},
+		"resolution": struct {
+			LocalPath string `json:"localPath"`
+		}{LocalPath: localPath},
+		"reuse": []any{map[string]any{"bakeupPath": localPath}},
+	}
+	result := map[string]any{
+		"status": map[string]any{
+			"reuse":  true,
+			"detail": localPath,
+		},
+		"readOnly": []string{localPath},
+	}
+
+	h.svc.writeAudit(session, "external_edit_audit_allowlist_composite", true, request, result, nil)
+
+	log := h.audit.lastLog()
+	require.NotNil(t, log)
+	// 复合值整体省略：这些允许键不再出现在审计里，敏感内容不外泄
+	for _, key := range []string{`"status"`, `"resolution"`, `"reuse"`, `"readOnly"`} {
+		assert.NotContains(t, log.Request, key)
+		assert.NotContains(t, log.Result, key)
+	}
+	for _, leaked := range []string{"bakeupPath", "password", "localPath", "nested-secret", localPath, "/Users/me"} {
+		assert.NotContains(t, log.Request, leaked)
+		assert.NotContains(t, log.Result, leaked)
+	}
+	// 允许键的标量值仍逐字保留
+	assert.Contains(t, log.Request, `"auto":true`)
+	assert.Equal(t, `{"auto":true}`, log.Request)
 }
 
 // TestExternalEditAuditOmitsSensitiveProducerFields 钉住 external-edit 审计的 request/result

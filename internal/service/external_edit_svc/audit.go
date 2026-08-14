@@ -115,14 +115,10 @@ func sanitizeAuditPayload(payload any) any {
 		return sanitizeAuditSession(value)
 	case map[string]any:
 		return sanitizeAuditMap(value)
-	case []any:
-		items := make([]any, 0, len(value))
-		for _, item := range value {
-			items = append(items, sanitizeAuditPayload(item))
-		}
-		return items
 	default:
-		return payload
+		// fail-closed：白名单之外的顶层类型（切片/数组、具体类型 map、结构体/指针、裸标量）
+		// 一律整体省略，不原样透传，避免复合值里藏本地路径/凭据绕过字段白名单。
+		return nil
 	}
 }
 
@@ -179,7 +175,8 @@ func sanitizeAuditSession(session *Session) *auditSessionPayload {
 
 // auditMapAllowedFields 是 external-edit 自由 map metadata 的 fail-closed 字段白名单：
 // 只有这 11 个批准字段能进入审计，未知字段（含本地路径/哈希/样本与 bakeupPath）一律省略。
-// 这是 external_edit_svc 自己的 producer 契约，不引入通用敏感字段注册表；允许值按原样序列化。
+// 这是 external_edit_svc 自己的 producer 契约，不引入通用敏感字段注册表；允许键的值只能是
+// JSON 标量（string/bool/数字/nil）按原样序列化，复合值整体省略，不做递归放行。
 var auditMapAllowedFields = map[string]struct{}{
 	"auto":         {},
 	"windowSaves":  {},
@@ -203,9 +200,29 @@ func sanitizeAuditMap(payload map[string]any) map[string]any {
 		if _, ok := auditMapAllowedFields[key]; !ok {
 			continue
 		}
-		sanitized[key] = sanitizeAuditPayload(value)
+		// 允许键的值只能是 JSON 标量（string/bool/数字/nil），内容逐字保留；
+		// map[string]string、具体类型 map、切片/数组、结构体等复合值一律整体省略，
+		// 防止 bakeupPath/password 藏在复合值里绕过字段白名单。
+		if !isAuditScalar(value) {
+			continue
+		}
+		sanitized[key] = value
 	}
 	return sanitized
+}
+
+// isAuditScalar 判断值是否为 JSON 标量原语（string/bool/数值，含 nil）。
+// 复合值（map/slice/array/struct/pointer）不是标量，审计时整体省略。
+func isAuditScalar(value any) bool {
+	switch value.(type) {
+	case string, bool,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64, uintptr,
+		float32, float64:
+		return true
+	default:
+		return value == nil
+	}
 }
 
 func shortHash(value string) string {
