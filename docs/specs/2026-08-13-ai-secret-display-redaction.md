@@ -4,9 +4,9 @@
 > Owner: OpsKat maintainers
 > Last updated: 2026-08-14
 
-**Objective:** 删除 AI、审批和直接交互通道中的值改写，让用户、模型和审批者看到实际业务数据；安全查询通过窄 DTO 省略秘密字段，视觉型秘密输入仅控制屏幕显示；应用结构化日志不复制业务 payload。Audit 的最终数据模型另行决策，本轮保持现状。
+**Objective:** 删除 AI、审批、直接交互和通用 Audit 中的值改写，让用户、模型、审批者和审计查看者看到对应边界实际接收的数据；只有明确拥有 write-only secret 契约的 producer 生成字段白名单 Audit request。安全查询通过窄 DTO 省略秘密字段，视觉型秘密输入仅控制屏幕显示；应用结构化日志不复制业务 payload。
 
-**Hard invariant:** 执行输入、直接执行输出、AI 工具上下文、审批主体和交互历史不得被 `<redacted>` 等占位值静默改写。一个表面若允许读取数据，就返回原值；若契约不允许读取秘密，就从 DTO 中省略该字段；日志若不应保存业务内容，就不记录对应字段。视觉掩码只改变输入控件的显示方式，不改变值。
+**Hard invariant:** 执行输入、直接执行输出、AI 工具上下文、审批主体、交互历史和默认 Audit payload 不得被 `<redacted>` 等占位值静默改写。一个表面若允许读取数据，就返回原值；若具体 producer 的契约不允许某些 write-only 字段进入 Audit 或安全查询，就由该 producer 的显式 DTO/字段白名单省略字段；日志若不应保存业务内容，就不记录对应字段。视觉掩码只改变输入控件的显示方式，不改变值。
 
 ## Problem
 
@@ -19,6 +19,7 @@
 5. Redis 桌面查询历史改写写命令的值，历史不再等于用户实际执行的命令。
 6. AI Provider 同时向前端返回完整 `apiKey` 和 `maskedApiKey`；后者没有安全价值，秘密输入控件之间的显示/隐藏交互也不一致。
 7. 应用结构化日志仍可能通过 command、cause、detail 或完整 error 正文复制业务 payload；用 `<redacted>` 改写后记录仍然扩大了日志职责。
+8. 通用 Audit writer 对所有 tool 的 command/request/result/error/matched pattern 做启发式值替换，使审计行既不是原始内容，也不是工具拥有的明确安全 DTO；新增字段会依赖全局黑名单猜测。
 
 ## Actors and user stories
 
@@ -28,6 +29,7 @@
 4. As a credential query caller, I want安全查询只返回其契约允许的元数据，秘密字段完全不存在，SSH 公钥等公开材料完整返回。
 5. As a settings user, I want API key、password、token 和 passphrase 默认视觉隐藏，并可用眼睛按钮明确查看原值。
 6. As an operator, I want应用日志保留操作和 correlation 元数据，但不复制 command、args、stdout/stderr、远端响应或其他业务 payload。
+7. As an audit reviewer, I want默认工具的 command/request/result/error/pattern 保留 Audit 边界收到的原值，同时让 `put_asset` 等明确接收 write-only secret 的 producer 直接省略那些字段，而不是生成 `<redacted>`。
 
 ## Design decisions
 
@@ -42,7 +44,7 @@
 | 7 | AI Provider DTO 只保留完整 `apiKey`，删除 `maskedApiKey`；设置表单通过 password 控件默认隐藏，眼睛按钮切换显示原值。 | 当前后端已经把完整 key 发给前端，额外 masked 表示冗余。视觉控制不改变业务值。 |
 | 8 | 统一秘密输入控件：API key、password、token、passphrase 等默认隐藏并提供 Eye/EyeOff；已有实现迁移到共享组件，缺少按钮的表单补齐。 | 相同交互应复用，不在各页面重复状态和按钮布局。协议驱动的 terminal echo 控件保留其协议语义。 |
 | 9 | 应用结构化日志不记录业务 payload；保留 tool/operation、asset ID、provider/extension、attempt、duration、status、session/conversation ID 和稳定失败分类。 | 日志不需要 command、args、result 或远端错误正文。Rejected: 先脱敏再写日志——仍复制了不属于日志的数据，并依赖不可靠的内容识别。 |
-| 10 | Audit 本轮不改数据模型、写入规则、页面或迁移；其内容列是否物理删除另开规格决定。 | 用户要求先完成已确定边界，再单独处理 Audit。现有 audit canonical redaction 暂时保留，不扩展到其他表面。 |
+| 10 | Audit 默认保存 writer 收到的 command/request/result/error/matched pattern 原值并保留现有截断；不解析、重编码或执行 canonical 值脱敏。只有明确拥有 write-only secret 契约的 producer 使用字段白名单 Audit DTO：AI/opsctl `put_asset`、desktop asset change 和 external edit。 | 审计不应保存被启发式改写的近似值。Rejected: 所有工具统一扫描敏感字段——任意文本无法可靠分类，且把每个工具的契约耦合到全局黑名单。 |
 
 ## Raw AI and approval flow
 
@@ -56,7 +58,7 @@ AI 与 opsctl 审批发送原始 ApprovalItem。pending state 只保存一份真
 
 ## Direct execution and history
 
-opsctl extension execution 与普通 exec/batch 一致，将 extension executor 返回的 bytes 和 error 原样交给调用者。审批事件仍可独立记录操作元数据；本轮不让 audit projection 回写直接结果。
+opsctl extension execution 与普通 exec/batch 一致，将 extension executor 返回的 bytes 和 error 原样交给调用者。Audit 默认记录进入 writer 的原始 request/result/error；Audit 截断或特殊 producer request projection 不得回写直接执行结果。
 
 Redis `CommandHistory` 保存 `formatCommandForHistory` 对原始 args 的正常 quoting 结果，不按命令类型替换 SET/HSET/MSET/list/set/zset/stream 等写入值。历史长度、筛选、顺序和错误语义不变。
 
@@ -104,17 +106,31 @@ AI Provider 表单删除 `maskedApiKey`，以返回的原始 `apiKey` 初始化�
 
 面向用户的直接错误返回仍原样；“不写日志”不能反向改写 Wails、AI 或 opsctl 返回值。若当前错误体系没有稳定 code，本轮日志可只记录 `failed=true` 和所在操作，不得通过解析 `err.Error()` 生成分类。
 
-## Audit deferral
+## Audit raw-by-default and producer projections
 
-Audit 继续使用现有 `audit_logs` schema 和 canonical redactor，包括 command、request、result、error 与 matched pattern 的当前行为。外部编辑 audit 也暂时保持。不得因为本轮删除其他调用点而删除 `internal/pkg/auditredact`；它暂时成为 Audit 专用实现。
+`DefaultAuditWriter` 不再调用 canonical redactor：
 
-后续 Audit 规格将单独决定：
+- `Command` 保存调用方提供的 effective/canonical command；调用方未提供时仍使用既有 extractor，命令规范化语义不变；
+- `Request` 保存 writer 收到的 JSON 字符串并沿用 4096 字节截断，不解析、不重编码；
+- `Result` 保存 writer 收到的结果字符串并沿用 32768 字节截断；
+- `Error` 保存原始错误正文；
+- `MatchedPattern`、`grant_submit` pattern 和 `grant_discarded` command 原样保存；
+- asset/source/session/conversation/decision/success/correlation 字段保持现状。
 
-- 是否物理删除 payload 列；
-- 历史行迁移和清理；
-- grant pattern 展示来源；
-- failure kind/code；
-- Audit 页面列和详情布局。
+这不是取证级 byte-for-byte stdout：SSH Audit 仍使用既有 limited buffer，部分 command 仍是策略层 canonical form，stdout/stderr 仍按现有结构组合。当前截断和规范化明确保留，本轮只删除值脱敏与 JSON 重新编码。
+
+默认规则适用于 exec、batch、cp、extension、grant、group CRUD、list/get/help、OSS presign 和 local tools；即使用户主动让这些工具的命令、输出或错误包含秘密，Audit 也不进行内容识别或局部改写。
+
+只有具体 producer 明确拥有 write-only 字段时，Audit request 使用 producer-owned projection：
+
+- AI `put_asset`：复用 `asset_put_svc.Prepared.SafeAuditArgs` / `SafeAuditArgsForResult` 和各 `assettype.AutomationContract.ApprovalFields`，省略 `password`、`private_key`、`passphrase`、`secret_access_key`、`kubeconfig`，保留类型允许的普通 config、资产身份和 typed authentication ref；prepare 失败也不得回退原始 config，至少提供不含 config 的顶层字段 projection；
+- opsctl create asset：继续使用同一 `SafeAuditArgsForResult` producer projection；删除暗示通用脱敏的命名；
+- desktop asset change：继续使用 `assetAuditView` 白名单；
+- external edit：继续使用现有 session/request/result 字段 allowlist 和既有 4096/8192/2048 截断，但删除对 projected 值的 canonical 文本替换。
+
+通用 writer 不得按 tool name 分支，也不维护敏感字段注册表。AI `put_asset` 通过通用 audit-request override seam 把 producer projection 交给 middleware；没有 override 的工具自动使用原始 args。该 override 只影响 Audit，绝不成为执行、审批、ToolBlock 或会话输入。
+
+完成迁移后删除 `internal/pkg/auditredact`、全部调用点、派生测试和误导性“安全副本/脱敏”注释；不得保留无调用的兼容 shim。已有数据库中历史 `<redacted>` 字面值不可恢复，不做迁移或猜测替换。Audit schema 和页面字段保持不变，页面直接显示数据库值。
 
 ## Compatibility and UI behavior
 
@@ -125,11 +141,12 @@ Audit 继续使用现有 `audit_logs` schema 和 canonical redactor，包括 com
 - 已经持久化为 `<redacted>` 的会话历史保持该字面值，因为原值不可恢复。
 - 密码/秘密控件默认仍不可见，只有用户点击眼睛后在屏幕显示。
 - AI Provider Wails DTO 移除 `maskedApiKey`，前端生成 bindings 随 Go DTO 更新。
-- Audit UI 和数据库本轮无可见变化。
+- Audit schema 和页面结构不变；新写入的默认 tool payload 显示原值，特殊 producer request 中 write-only 字段完全不存在；旧行保持原值或既有 `<redacted>` 字面值。
 
 ## Out of scope
 
-- Audit schema、历史清理和 UI 重构。
+- Audit schema、历史行重写/清理、retention 和 UI 重构。
+- 将 Audit 升级为取证级 byte-for-byte stdout/stderr；现有 canonical command、limited buffer、组合格式和截断保持。
 - 新增 reveal/export API；本轮眼睛按钮只显示已经由当前表单持有的值，`PasswordSourceField` 已有的按需解密行为保持原契约。
 - 自动改写用户命令为 `--password-stdin`，或为所有外部命令新增 stdin secret transport。
 - 恢复已经被 `<redacted>` 覆盖的历史值。
@@ -150,9 +167,12 @@ Audit 继续使用现有 `audit_logs` schema 和 canonical redactor，包括 com
 | AI Provider DTO/form | 仅有 `apiKey`，默认视觉隐藏，眼睛展示/隐藏原值，fetch/save 使用原值 |
 | Shared secret input | value 不变、Eye/EyeOff、可访问性、disabled/placeholder/right action；迁移页面不丢失原行为 |
 | Structured logs | 失败路径保留 correlation 元数据，但不存在 command/detail/result/cause/raw error payload 字段 |
-| Audit regression | 现有 Audit redaction 测试继续通过，证明本轮没有意外改变 deferred 边界 |
+| Default Audit raw payload | command/request/result/error/matched pattern 与 writer 输入一致并只受既有截断；JSON formatting 和字面 `<redacted>` 不被改写 |
+| `put_asset` Audit projection | AI 成功/失败和 opsctl create 的 request 均保留普通 config/identity/ref，但五类 write-only 字段完全不存在；实际执行仍收到原值 |
+| Desktop/external-edit Audit projection | 现有字段 allowlist 保留，projected 值原样保存且截断不变 |
+| Legacy cleanup | repo 中无 `auditredact` 调用、package、`RedactedValue` Audit 断言或误导性兼容逻辑 |
 
-验证使用合成值和隔离数据目录。运行时检查实时 ToolBlock、审批、会话重载、下一轮模型请求、opsctl extension、Redis 历史和 AI Provider 眼睛控件均展示预期原值；同时检查应用日志没有复制这些合成 payload，Audit 按本轮 deferred 规则继续保持现状。
+验证使用合成值和隔离数据目录。运行时检查实时 ToolBlock、审批、会话重载、下一轮模型请求、opsctl extension、Redis 历史和 AI Provider 眼睛控件均展示预期原值；同时检查应用日志没有复制这些合成 payload。Audit runtime 应证明普通 exec/extension result 和 error 原样落库，AI/opsctl `put_asset` 普通 config 可见而五类 write-only 字段不存在，external-edit projection 保持字段白名单且不生成 `<redacted>`。
 
 ## Relevant links
 
