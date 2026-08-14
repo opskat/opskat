@@ -23,18 +23,33 @@ func TestCommandHistory(t *testing.T) {
 	assert.Equal(t, "GET b", assetOnly[0].Command)
 }
 
-func TestFormatCommandForHistory(t *testing.T) {
-	got := formatCommandForHistory([]any{"SET", "my key", "value with spaces"})
-
-	assert.Equal(t, `SET "my key" <redacted>`, got)
-	assert.NotContains(t, got, "value with spaces")
+func TestFormatCommandForHistoryPreservesWriteValues(t *testing.T) {
+	tests := []struct {
+		name string
+		args []any
+		want string
+	}{
+		{name: "SET", args: []any{"SET", "my key", "value with spaces"}, want: `SET "my key" "value with spaces"`},
+		{name: "SETEX", args: []any{"SETEX", "key", "10", "secret value"}, want: `SETEX key 10 "secret value"`},
+		{name: "GETSET", args: []any{"GETSET", "key", "new value"}, want: `GETSET key "new value"`},
+		{name: "HSET", args: []any{"HSET", "session", "token", "secret"}, want: `HSET session token secret`},
+		{name: "HMSET", args: []any{"HMSET", "user", "name", "alice", "pass", "p@ss"}, want: `HMSET user name alice pass p@ss`},
+		{name: "MSET", args: []any{"MSET", "k1", "v1", "k2", "v 2"}, want: `MSET k1 v1 k2 "v 2"`},
+		{name: "LPUSH", args: []any{"LPUSH", "queue", "payload", "p2"}, want: `LPUSH queue payload p2`},
+		{name: "RPUSH", args: []any{"RPUSH", "queue", "payload"}, want: `RPUSH queue payload`},
+		{name: "SADD", args: []any{"SADD", "set", "member1", "member 2"}, want: `SADD set member1 "member 2"`},
+		{name: "ZADD", args: []any{"ZADD", "zset", "1.5", "member"}, want: `ZADD zset 1.5 member`},
+		{name: "XADD", args: []any{"XADD", "events", "*", "token", "secret", "data", "hello world"}, want: `XADD events * token secret data "hello world"`},
+		{name: "GET read only", args: []any{"GET", "session:token"}, want: "GET session:token"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, formatCommandForHistory(tc.args))
+		})
+	}
 }
 
-func TestFormatCommandForHistoryRedactsWriteValues(t *testing.T) {
-	assert.Equal(t, `HSET session token <redacted>`, formatCommandForHistory([]any{"HSET", "session", "token", "secret"}))
-	assert.Equal(t, `RPUSH queue <redacted>`, formatCommandForHistory([]any{"RPUSH", "queue", "payload"}))
-	assert.Equal(t, `XADD events * token <redacted>`, formatCommandForHistory([]any{"XADD", "events", "*", "token", "secret"}))
-
-	got := formatCommandForHistory([]any{"GET", "session:token"})
-	assert.Equal(t, "GET session:token", got)
+func TestFormatCommandForHistoryQuotesArguments(t *testing.T) {
+	got := formatCommandForHistory([]any{"SET", "my key", "value with spaces"})
+	assert.Equal(t, `SET "my key" "value with spaces"`, got)
 }
