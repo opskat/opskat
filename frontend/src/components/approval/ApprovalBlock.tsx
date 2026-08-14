@@ -19,6 +19,7 @@ import { S3Icon } from "@/components/asset/brand-icons";
 import { RespondAIApproval } from "../../../wailsjs/go/ai/AI";
 import { permission } from "../../../wailsjs/go/models";
 import type { ContentBlock } from "@/stores/aiStore";
+import { hasApprovalCommandEdits } from "@/lib/approval";
 
 interface ApprovalBlockProps {
   block: ContentBlock;
@@ -90,7 +91,8 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
     resp.decision = decision;
 
     const carriesEdited = kind === "grant" || ((kind === "single" || kind === "local_tool") && decision === "allowAll");
-    if (carriesEdited && decision !== "deny") {
+    const commands = items.map((item, i) => editedCommands[i] || item.command);
+    if (carriesEdited && decision !== "deny" && hasApprovalCommandEdits(items, commands)) {
       resp.edited_items = items.map((item, i) => {
         const edited = new permission.ApprovalItem();
         edited.type = item.type;
@@ -98,7 +100,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
         edited.asset_name = item.asset_name;
         edited.group_id = item.group_id || 0;
         edited.group_name = item.group_name || "";
-        edited.command = editedCommands[i] || item.command;
+        edited.command = commands[i];
         edited.detail = item.detail || "";
         return edited;
       });

@@ -20,6 +20,19 @@ func TestJSONRedactsCredentialKeyVariantsWithoutDroppingSafeFields(t *testing.T)
 	}
 }
 
+func TestJSONRedactsPluralCredentialCollections(t *testing.T) {
+	raw := `{"tokens":["token-one"],"api_keys":["key-two"],"passwords":{"admin":"pass-three"},"client_secrets":["secret-four"],"secret_access_keys":["key-five"],"token_counts":[3]}`
+	got := JSON(raw)
+	for _, secret := range []string{"token-one", "key-two", "pass-three", "secret-four", "key-five"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("JSON leaked plural credential value %q: %s", secret, got)
+		}
+	}
+	if !strings.Contains(got, `"token_counts":[3]`) {
+		t.Fatalf("JSON removed safe token count metadata: %s", got)
+	}
+}
+
 func TestJSONInvalidPayloadFailsClosed(t *testing.T) {
 	for _, raw := range []string{
 		`{"password":"unterminated`,
@@ -42,6 +55,17 @@ func TestTextRedactsCommonCredentialForms(t *testing.T) {
 	}
 	if !strings.Contains(got, "production-target") {
 		t.Fatalf("text redaction removed a non-sensitive resource target: %s", got)
+	}
+}
+
+func TestTextRedactsTruncatedPrivateKeyBlock(t *testing.T) {
+	raw := "provider failed:\n-----BEGIN PRIVATE KEY-----\ntruncated-private-key-body"
+	got := Text(raw)
+	if strings.Contains(got, "truncated-private-key-body") || strings.Contains(got, "BEGIN PRIVATE KEY") {
+		t.Fatalf("text leaked a truncated private key block: %s", got)
+	}
+	if !strings.Contains(got, "provider failed") || !strings.Contains(got, RedactedValue) {
+		t.Fatalf("private key redaction lost safe context or marker: %s", got)
 	}
 }
 
@@ -105,6 +129,19 @@ func TestTextRedactsAuthorizationCookieAndCredentialKeyVariants(t *testing.T) {
 		if strings.Contains(got, secret) {
 			t.Fatalf("text leaked %q: %s", secret, got)
 		}
+	}
+}
+
+func TestTextRedactsQuotedCookieContainingApostropheCompletely(t *testing.T) {
+	raw := `provider failed: headers={"Cookie":"session=cookie-head'cookie-tail-secret; csrf=csrf-secret"}`
+	got := Text(raw)
+	for _, secret := range []string{"cookie-head", "cookie-tail-secret", "csrf-secret"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("quoted cookie leaked %q: %s", secret, got)
+		}
+	}
+	if !strings.Contains(got, "provider failed") || !strings.Contains(got, RedactedValue) {
+		t.Fatalf("cookie redaction lost safe context or marker: %s", got)
 	}
 }
 

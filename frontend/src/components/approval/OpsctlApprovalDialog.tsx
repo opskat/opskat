@@ -16,6 +16,7 @@ import { S3Icon } from "@/components/asset/brand-icons";
 import { RespondOpsctlApproval } from "../../../wailsjs/go/opsctl/Opsctl";
 import { permission } from "../../../wailsjs/go/models";
 import { ShieldAlert, Terminal, Database, Server, FolderOpen, Globe, Usb, Trash2, Boxes, FileUp } from "lucide-react";
+import { hasApprovalCommandEdits } from "@/lib/approval";
 
 interface ApprovalItemData {
   type: string;
@@ -289,9 +290,10 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
 
       const shouldSendEdits =
         (current.kind === "grant" && decision !== "deny") || (current.kind === "single" && decision === "allowAll");
+      const edits = editState[current.id] || {};
+      const commands = current.items.map((item, i) => edits[i] ?? item.command);
 
-      if (shouldSendEdits) {
-        const edits = editState[current.id] || {};
+      if (shouldSendEdits && hasApprovalCommandEdits(current.items, commands)) {
         resp.edited_items = current.items.map((item, i) => {
           const edited = new permission.ApprovalItem();
           edited.type = item.type;
@@ -299,7 +301,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           edited.asset_name = item.asset_name;
           edited.group_id = item.group_id || 0;
           edited.group_name = item.group_name || "";
-          edited.command = edits[i] ?? item.command;
+          edited.command = commands[i];
           edited.detail = item.detail || "";
           return edited;
         });

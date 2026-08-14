@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { OpsctlApprovalDialog } from "../components/approval/OpsctlApprovalDialog";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
+import { RespondOpsctlApproval } from "../../wailsjs/go/opsctl/Opsctl";
 
 // opsctl:approval 事件处理器按事件名捕获，测试里直接调用模拟后端 EventsEmit。
 function captureHandlers() {
@@ -95,6 +96,43 @@ describe("OpsctlApprovalDialog", () => {
     fireSingleApproval(handlers, { type: "exec", session_id: "session-1" });
 
     expect(screen.getByText("opsctlApproval.remember")).toBeInTheDocument();
+  });
+
+  it("未修改 remember pattern 时不伪造 edited_items，保留后端的系统主体收窄", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+
+    fireSingleApproval(handlers, {
+      type: "oss",
+      command: "object.read mybucket/secrets*",
+      session_id: "session-1",
+    });
+    fireEvent.click(screen.getByText("opsctlApproval.remember"));
+    fireEvent.click(screen.getByText("opsctlApproval.approve"));
+
+    const response = vi.mocked(RespondOpsctlApproval).mock.calls[0]?.[1];
+    expect(response?.decision).toBe("allowAll");
+    expect(response?.edited_items).toBeUndefined();
+  });
+
+  it("实际修改 remember pattern 时仍发送完整 edited_items", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+
+    fireSingleApproval(handlers, {
+      type: "oss",
+      command: "object.read mybucket/secrets*",
+      session_id: "session-1",
+    });
+    fireEvent.click(screen.getByText("opsctlApproval.remember"));
+    fireEvent.change(screen.getByPlaceholderText("opsctlApproval.patternPlaceholder"), {
+      target: { value: "object.read mybucket/safe/*" },
+    });
+    fireEvent.click(screen.getByText("opsctlApproval.approve"));
+
+    const response = vi.mocked(RespondOpsctlApproval).mock.calls[0]?.[1];
+    expect(response?.edited_items).toHaveLength(1);
+    expect(response?.edited_items?.[0].command).toBe("object.read mybucket/safe/*");
   });
 
   it("扩展审批（type=ext_tool）不提供 remember/allowAll", () => {

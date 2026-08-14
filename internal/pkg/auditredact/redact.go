@@ -31,7 +31,8 @@ var textRedactors = []struct {
 	// Cookie values may contain multiple semicolon-separated credentials; fail closed for
 	// the whole header line instead of redacting only the first pair. Provider errors also
 	// commonly render headers as quoted JSON fragments rather than real HTTP lines.
-	{regexp.MustCompile(`(?i)((?:set[-_]?cookie|cookie)["']?\s*:\s*["'])[^"'\r\n]*`), `${1}` + RedactedValue},
+	{regexp.MustCompile(`(?i)((?:set[-_]?cookie|cookie)["']?\s*:\s*")(?:\\.|[^"\\\r\n])*(")`), `${1}` + RedactedValue + `${2}`},
+	{regexp.MustCompile(`(?i)((?:set[-_]?cookie|cookie)["']?\s*:\s*')(?:\\.|[^'\\\r\n])*(')`), `${1}` + RedactedValue + `${2}`},
 	{regexp.MustCompile(`(?i)((?:set[-_]?cookie|cookie)["']?\s*:\s*\[\s*)[^\]]*(\])`), `${1}` + RedactedValue + `${2}`},
 	{regexp.MustCompile(`(?im)((?:^|[\s,;])(?:set[-_]?cookie|cookie)\s*:\s*)[^\r\n]+`), `${1}` + RedactedValue},
 	{regexp.MustCompile(`(?i)(["']?(?:[a-z0-9_-]*(?:password|passphrase|token|secret)|api[-_]?key|client[-_]?key(?:[-_]?data)?|private[-_]?key|secret[-_]?access[-_]?key|kubeconfig)["']?\s*:\s*)(?:"[^"]*"|'[^']*'|[^\s,;&}]+)`), `${1}` + `"` + RedactedValue + `"`},
@@ -40,6 +41,9 @@ var textRedactors = []struct {
 	{regexp.MustCompile(`(?i)(identified\s+by\s+)(?:"[^"]*"|'[^']*'|[^\s,;&]+)`), `${1}` + RedactedValue},
 	{regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://[^:/@\s]+:)[^@\s]+(@)`), `${1}` + RedactedValue + `${2}`},
 	{regexp.MustCompile(`(?is)-----BEGIN [^-\r\n]*PRIVATE KEY-----.*?-----END [^-\r\n]*PRIVATE KEY-----`), RedactedValue},
+	// Truncated provider/command errors may omit the END marker. Once a private-key
+	// header appears, the remaining opaque text is key material and must fail closed.
+	{regexp.MustCompile(`(?is)-----BEGIN [^-\r\n]*PRIVATE KEY-----.*\z`), RedactedValue},
 	{regexp.MustCompile(`(?i)((?:x-amz-signature|x-amz-credential|x-amz-security-token|signature|awsaccesskeyid)=)([^&\s]+)`), `${1}` + RedactedValue},
 	// signature / signed value / challenge 材料（JSON 冒号形式）。
 	// 仅在键名精确命中 signature/signed-value/challenge 语义时遮蔽，不碰普通 endpoint/path。
@@ -206,7 +210,9 @@ func isSensitiveKey(key string) bool {
 		canonical == "clientkeydata" || canonical == "xamzcredential" || canonical == "awsaccesskeyid" {
 		return true
 	}
-	for _, suffix := range []string{"password", "passphrase", "token", "secret", "privatekey", "privatekeys", "clientkey", "apikey",
+	for _, suffix := range []string{
+		"password", "passwords", "passphrase", "passphrases", "token", "tokens", "secret", "secrets",
+		"privatekey", "privatekeys", "clientkey", "clientkeys", "apikey", "apikeys", "kubeconfigs",
 		// signature / signed value / challenge 材料（challenge_id 等 correlation ID 以 id 结尾，不受影响）
 		"signature", "signaturevalue", "signedvalue", "challenge", "challengeresponse", "challengeanswer"} {
 		if strings.HasSuffix(canonical, suffix) {
@@ -221,5 +227,6 @@ func isSensitiveKey(key string) bool {
 			return true
 		}
 	}
-	return strings.Contains(canonical, "secret") && strings.HasSuffix(canonical, "key")
+	return strings.Contains(canonical, "secret") &&
+		(strings.HasSuffix(canonical, "key") || strings.HasSuffix(canonical, "keys"))
 }

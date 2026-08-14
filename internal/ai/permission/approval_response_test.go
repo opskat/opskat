@@ -35,6 +35,18 @@ func TestParseApprovalResponseKindCapabilities(t *testing.T) {
 	}
 }
 
+func TestParseApprovalResponseTreatsUnchangedCommandsAsSystemSubjects(t *testing.T) {
+	expected := []ApprovalItem{{Type: "oss", AssetID: 7, AssetName: "s3-prod", Command: "object.read mybucket/secrets*"}}
+	parsed, err := ParseApprovalResponse(ApprovalKindSingle, ApprovalResponse{
+		Decision:    "allowAll",
+		EditedItems: append([]ApprovalItem(nil), expected...),
+	}, expected)
+
+	require.NoError(t, err)
+	require.Equal(t, ApprovalAllowAll, parsed.Decision)
+	require.Empty(t, parsed.EditedItems)
+}
+
 func TestParseApprovalResponseRejectsEditedScopeMutation(t *testing.T) {
 	expected := []ApprovalItem{{Type: "exec", AssetID: 7, AssetName: "web-1", Command: "uptime"}}
 	parsed, err := ParseApprovalResponse(ApprovalKindSingle, ApprovalResponse{
