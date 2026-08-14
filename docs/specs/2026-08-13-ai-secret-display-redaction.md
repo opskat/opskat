@@ -126,7 +126,7 @@ AI Provider 表单删除 `maskedApiKey`，以返回的原始 `apiKey` 初始化�
 - AI `put_asset`：复用 `asset_put_svc.Prepared.SafeAuditArgs` / `SafeAuditArgsForResult` 和各 `assettype.AutomationContract.ApprovalFields`，省略 `password`、`private_key`、`passphrase`、`secret_access_key`、`kubeconfig`，保留类型允许的普通 config、资产身份和 typed authentication ref；prepare 失败也不得回退原始 config，至少提供不含 config 的顶层字段 projection；
 - opsctl create asset：继续使用同一 `SafeAuditArgsForResult` producer projection；删除暗示通用脱敏的命名；
 - desktop asset change：继续使用 `assetAuditView` 白名单；
-- external edit：继续使用现有 session/request/result 字段 allowlist 和既有 4096/8192/2048 截断，但删除对 projected 值的 canonical 文本替换。
+- external edit：`OpenRequest`、`SaveResult`、`Session` 继续使用显式 producer DTO；自由 map metadata 改为真正的 fail-closed allowlist，仅允许 `auto`、`windowSaves`、`rebuild`、`resolution`、`status`、`remoteBytes`、`remoteSha256`、`bytes`、`documentKey`、`readOnly`、`reuse`。允许字段的值原样保存；未知字段以及 `bakeupPath`、local/workspace/editor path、local hash/sample 默认省略。既有 4096/8192/2048 截断保持。
 
 通用 writer 不得按 tool name 分支，也不维护敏感字段注册表。AI `put_asset` 通过通用 audit-request override seam 把 producer projection 交给 middleware；没有 override 的工具自动使用原始 args。该 override 只影响 Audit，绝不成为执行、审批、ToolBlock 或会话输入。
 
@@ -169,10 +169,10 @@ AI Provider 表单删除 `maskedApiKey`，以返回的原始 `apiKey` 初始化�
 | Structured logs | 失败路径保留 correlation 元数据，但不存在 command/detail/result/cause/raw error payload 字段 |
 | Default Audit raw payload | command/request/result/error/matched pattern 与 writer 输入一致并只受既有截断；JSON formatting 和字面 `<redacted>` 不被改写 |
 | `put_asset` Audit projection | AI 成功/失败和 opsctl create 的 request 均保留普通 config/identity/ref，但五类 write-only 字段完全不存在；实际执行仍收到原值 |
-| Desktop/external-edit Audit projection | 现有字段 allowlist 保留，projected 值原样保存且截断不变 |
+| Desktop/external-edit Audit projection | desktop 白名单保持；external-edit typed DTO 和 map fail-closed allowlist 只输出批准字段，未知字段/`bakeupPath`/本地环境字段不存在，允许值原样保存且截断不变 |
 | Legacy cleanup | repo 中无 `auditredact` 调用、package、`RedactedValue` Audit 断言或误导性兼容逻辑 |
 
-验证使用合成值和隔离数据目录。运行时检查实时 ToolBlock、审批、会话重载、下一轮模型请求、opsctl extension、Redis 历史和 AI Provider 眼睛控件均展示预期原值；同时检查应用日志没有复制这些合成 payload。Audit runtime 应证明普通 exec/extension result 和 error 原样落库，AI/opsctl `put_asset` 普通 config 可见而五类 write-only 字段不存在，external-edit projection 保持字段白名单且不生成 `<redacted>`。
+验证使用合成值和隔离数据目录。运行时检查实时 ToolBlock、审批、会话重载、下一轮模型请求、opsctl extension、Redis 历史和 AI Provider 眼睛控件均展示预期原值；同时检查应用日志没有复制这些合成 payload。Audit runtime 应证明普通 exec/extension result 和 error 原样落库，AI/opsctl `put_asset` 普通 config 可见而五类 write-only 字段不存在，external-edit projection 只含批准字段、未知字段与本地 `bakeupPath` 不存在，允许值不生成 `<redacted>`。
 
 ## Relevant links
 
