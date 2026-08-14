@@ -695,7 +695,6 @@ export function AISettingsSection() {
                     type: editingProvider.type,
                     apiBase: editingProvider.apiBase,
                     apiKey: editingProvider.apiKey || "",
-                    maskedApiKey: editingProvider.maskedApiKey,
                     model: editingProvider.model,
                     maxOutputTokens: editingProvider.maxOutputTokens,
                     contextWindow: editingProvider.contextWindow,
@@ -704,7 +703,6 @@ export function AISettingsSection() {
                   }
                 : undefined
             }
-            isEditing={!!editingProvider}
             showTypeSelector={true}
             onSave={handleSave}
             saving={saving}

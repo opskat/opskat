@@ -17,7 +17,6 @@ type AIProviderInfo struct {
 	Type             string `json:"type"`
 	APIBase          string `json:"apiBase"`
 	APIKey           string `json:"apiKey"`
-	MaskedAPIKey     string `json:"maskedApiKey"`
 	Model            string `json:"model"`
 	MaxOutputTokens  int    `json:"maxOutputTokens"`
 	ContextWindow    int    `json:"contextWindow"`
@@ -34,7 +33,6 @@ func toProviderInfo(p *ai_provider_entity.AIProvider, apiKey string) AIProviderI
 		Type:             p.Type,
 		APIBase:          p.APIBase,
 		APIKey:           apiKey,
-		MaskedAPIKey:     maskAPIKey(apiKey),
 		Model:            p.Model,
 		MaxOutputTokens:  p.MaxOutputTokens,
 		ContextWindow:    p.ContextWindow,
