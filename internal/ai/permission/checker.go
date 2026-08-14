@@ -15,6 +15,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/grant_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	policyent "github.com/opskat/opskat/internal/model/entity/policy"
+	"github.com/opskat/opskat/internal/pkg/auditredact"
 	"github.com/opskat/opskat/internal/repository/grant_repo"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 )
@@ -322,7 +323,7 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 			// pattern 聚合展示给用户看，混进去就是本条要防的同一种"显示一条没拿到的
 			// 授权"，只是换了个地方发生。
 			logger.Ctx(ctx).Warn("always-allow approved but normalized to zero grant patterns; nothing persisted",
-				zap.Int64("assetID", assetID), zap.String("assetType", assetType), zap.String("command", command))
+				zap.Int64("assetID", assetID), zap.String("assetType", assetType), zap.String("command", auditredact.Text(command)))
 			audit.WriteGrantDiscardedAudit(ctx, assetID, assetName, command)
 		}
 		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow}

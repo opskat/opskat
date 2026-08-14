@@ -177,7 +177,10 @@ func (w *DefaultAuditWriter) WriteToolCall(ctx context.Context, info ToolCallInf
 	if info.Decision != nil && info.Decision.DecisionSource != "" {
 		entry.Decision = info.Decision.DecisionString()
 		entry.DecisionSource = info.Decision.DecisionSource
-		entry.MatchedPattern = info.Decision.MatchedPattern
+		// matched_pattern 是审计 UI 直接展示的文本列（spec Logs and audit，Task 3）：
+		// 用户编辑的 pattern 与通用命令可含任意文本，必须与 command/error 同走 canonical
+		// redactor，不能原样落库。决策来源与 allow/deny 分类不脱敏，保持 correlation。
+		entry.MatchedPattern = auditredact.Text(info.Decision.MatchedPattern)
 	}
 
 	if repo := audit_repo.Audit(); repo != nil {

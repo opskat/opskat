@@ -7,7 +7,10 @@ import (
 
 	"github.com/cago-frame/agents/agent"
 	"github.com/cago-frame/agents/provider"
+	"github.com/cago-frame/cago/pkg/logger"
 	. "github.com/smartystreets/goconvey/convey"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // drain 把 emit 串变成切片，便于断言。
@@ -151,6 +154,38 @@ func TestEventTranslator_RetryRedactsCause(t *testing.T) {
 		So(out[0].Error, ShouldContainSubstring, "<redacted>")
 		So(out[0].Content, ShouldEqual, "3")
 		So(out[0].RetryDelayMs, ShouldEqual, 2000)
+	})
+}
+
+func TestEventTranslator_RetryLogRedactsCauseKeepsCorrelation(t *testing.T) {
+	Convey("EventRetry 的运维日志 cause 脱敏，attempt/delay_ms 保留", t, func() {
+		core, logs := observer.New(zap.DebugLevel)
+		orig := logger.Default()
+		logger.SetLogger(zap.New(core))
+		t.Cleanup(func() { logger.SetLogger(orig) })
+
+		secret := "log-" + "retry-secret-token"
+		drain(NewStreamTranslator(), agent.Event{
+			Kind: agent.EventRetry,
+			Retry: &agent.RetryEvent{
+				Attempt: 4,
+				Delay:   5 * time.Second,
+				Cause:   errors.New("provider error: --api-key " + secret),
+			},
+		})
+
+		var found bool
+		for _, le := range logs.All() {
+			if le.Message != "AI provider retry" {
+				continue
+			}
+			found = true
+			cm := le.ContextMap()
+			So(cm["cause"].(string), ShouldNotContainSubstring, secret)
+			So(cm["attempt"], ShouldEqual, int64(4))
+			So(cm["delay_ms"], ShouldEqual, int64(5000))
+		}
+		So(found, ShouldBeTrue)
 	})
 }
 

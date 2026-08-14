@@ -19,6 +19,7 @@ import (
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/model/entity/ai_provider_entity"
 	"github.com/opskat/opskat/internal/model/entity/conversation_entity"
+	"github.com/opskat/opskat/internal/pkg/auditredact"
 	"github.com/opskat/opskat/internal/service/ai_provider_svc"
 	"github.com/opskat/opskat/internal/service/conversation_svc"
 
@@ -29,6 +30,17 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
+
+// safeOutwardError 把面向前端的错误正文经 canonical redactor 投影（spec Logs and audit，
+// "外发错误仍必须安全"）：provider/工具错误文本可能内嵌凭据材料（API key、PEM、
+// Authorization 等），chat.go 直接构造的 error 事件不经过 runner 的 StreamEvent 翻译器，
+// 因此必须在这里统一脱敏后再外发。非敏感文本原样保留，不影响诊断。
+func safeOutwardError(err error) string {
+	if err == nil {
+		return ""
+	}
+	return auditredact.Text(err.Error())
+}
 
 // runnerEntry 持有一个活跃会话的 cago 运行栈。
 type runnerEntry struct {
@@ -524,7 +536,7 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 	cfg.SystemPrompt = systemPrompt
 	sys, err := runner.BuildSystem(chatCtx, cfg)
 	if err != nil {
-		onEvent(runner.StreamEvent{Type: "error", Error: fmt.Sprintf("build coding system: %s", err.Error())})
+		onEvent(runner.StreamEvent{Type: "error", Error: fmt.Sprintf("build coding system: %s", safeOutwardError(err))})
 		return fmt.Errorf("build coding system: %w", err)
 	}
 
@@ -553,7 +565,7 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 			onEvent(runner.StreamEvent{Type: "stopped"})
 			return nil //nolint:nilerr // 取消是用户主动行为，不是错误
 		}
-		onEvent(runner.StreamEvent{Type: "error", Error: err.Error()})
+		onEvent(runner.StreamEvent{Type: "error", Error: safeOutwardError(err)})
 		return fmt.Errorf("send to LLM: %w", err)
 	}
 

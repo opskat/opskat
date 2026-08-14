@@ -9,6 +9,7 @@ import (
 
 	"go.uber.org/mock/gomock"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
@@ -62,6 +63,49 @@ func TestWriteToolCall_RedactsSensitiveResultFieldsRecursively(t *testing.T) {
 	}
 	if !strings.Contains(result, "db.internal") {
 		t.Fatalf("audit result lost non-sensitive context: %s", result)
+	}
+}
+
+// TestWriteToolCall_RedactsMatchedPatternAndAllTextColumns locks the audit/log sink
+// closure (spec task 3): every text column persisted to audit_logs — including
+// matched_pattern, which is the only one that used to be written verbatim — must go
+// through the canonical redactor. The synthetic payload spans nested-secret, PEM,
+// Authorization and signature/challenge/Agent-endpoint forms so a future column that
+// skips the redactor fails here.
+func TestWriteToolCall_RedactsMatchedPatternAndAllTextColumns(t *testing.T) {
+	repo := setupAuditRepo(t)
+	NewDefaultAuditWriter().WriteToolCall(context.Background(), ToolCallInfo{
+		ToolName: "exec",
+		ArgsJSON: `{"asset":"db","command":"connect"}`,
+		Command:  `client --password cmd-pass --signature cmd-sig`,
+		Result:   "-----BEGIN PRIVATE KEY-----\nres-key-body\n-----END PRIVATE KEY-----",
+		Error:    errors.New("Authorization: Bearer err-token; challenge=err-chal"),
+		Decision: &aictx.CheckResult{
+			Decision:       aictx.Deny,
+			DecisionSource: aictx.SourcePolicyDeny,
+			MatchedPattern: "kubectl --token=mt-token --signature mt-sig --agent-endpoint /tmp/ssh-9/agent.sock delete *",
+		},
+	})
+
+	if len(repo.logs) != 1 {
+		t.Fatalf("expected 1 audit log, got %d", len(repo.logs))
+	}
+	entry := repo.logs[0]
+	for column, value := range map[string]string{
+		"command":         entry.Command,
+		"result":          entry.Result,
+		"error":           entry.Error,
+		"matched_pattern": entry.MatchedPattern,
+	} {
+		for _, secret := range []string{"cmd-pass", "cmd-sig", "res-key-body", "err-token", "err-chal", "mt-token", "mt-sig"} {
+			if strings.Contains(value, secret) {
+				t.Fatalf("audit %s leaked %q: %s", column, secret, value)
+			}
+		}
+	}
+	// 安全 correlation 语义保留：决策字段与匹配来源不受脱敏影响。
+	if entry.Decision != "deny" || entry.DecisionSource != aictx.SourcePolicyDeny {
+		t.Fatalf("decision fields must survive redaction, got decision=%q source=%q", entry.Decision, entry.DecisionSource)
 	}
 }
 

@@ -107,7 +107,7 @@ func (t *EventTranslator) Translate(ev agent.Event, emit func(StreamEvent)) {
 		logger.Default().Info("AI provider retry",
 			zap.Int("attempt", attempt),
 			zap.Int("delay_ms", delayMs),
-			zap.String("cause", msg),
+			zap.String("cause", auditredact.Text(msg)),
 		)
 		emit(StreamEvent{
 			Type:         "retry",
