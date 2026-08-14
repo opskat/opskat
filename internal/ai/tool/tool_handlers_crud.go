@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -109,18 +110,45 @@ func createAsset(ctx context.Context, args, config map[string]any) (string, erro
 	return putAssetResultJSON(result, "asset created successfully")
 }
 
-// putAssetTopLevelAuditArgs 把 put_asset 顶层非 config 字段投影给 Audit，作为
-// handlePutAsset 入口的基线（record 在 putArgs/校验/lookup 之前）。config 是自由对象、
-// 可能携带 write-only 秘密，任何 Prepare 之前的失败都绝不回退原始 config；其余顶层字段
-// （资产身份/描述/分组等）至少保留。Prepare/Commit 成功后再用 producer 投影覆盖基线。
+// putAssetTopLevelAuditArgs 把 put_asset 顶层非 config 字段按类型 fail-closed 投影给
+// Audit，作为 handlePutAsset 入口的基线（record 在 putArgs/校验/lookup 之前）。config 是
+// 自由对象、可能携带 write-only 秘密，任何 Prepare 之前的失败都绝不回退原始 config；顶层
+// 字段也只有类型正确的值才进入投影：string 身份字段（asset/name/type/description/icon/
+// credential_name）仅在实际值为 string 时保留，group_id 仅在实际值为工具边界支持的数值
+// 标量（JSON float64 以及内部 Go 的 int/int64/json.Number）且能安全 JSON 编码时保留。
+// map/slice/array/struct/pointer 与一切类型非法值（含藏了嵌套秘密的复合值）整体省略——
+// 嵌套秘密不能借任何允许键进入 Audit；非有限 float64（NaN/±Inf）与非法 json.Number 会让
+// audit middleware 的 json.Marshal 失败，同样省略。Prepare/Commit 成功后再用 producer
+// 投影覆盖基线。该投影是独立 map，绝不改写 args——执行/审批/ToolBlock/历史仍见原值。
 func putAssetTopLevelAuditArgs(args map[string]any) map[string]any {
 	out := make(map[string]any)
-	for _, key := range []string{"asset", "name", "type", "group_id", "description", "icon", "credential_name"} {
-		if v, ok := args[key]; ok {
-			out[key] = v
+	for _, key := range []string{"asset", "name", "type", "description", "icon", "credential_name"} {
+		if s, ok := args[key].(string); ok {
+			out[key] = s
 		}
 	}
+	if v, ok := args["group_id"]; ok && auditSafeGroupID(v) {
+		out["group_id"] = v
+	}
 	return out
+}
+
+// auditSafeGroupID 判断 group_id 是否为工具边界支持的数值标量且能安全 JSON 编码：
+// float64 必须有限（NaN/±Inf 会让 json.Marshal 报错），json.Number 必须是合法数字字面量
+// （非法字面量同样让 json.Marshal 报错），int/int64 恒安全。其余类型（string、复合值、
+// 布尔等）不是工具边界支持的数值，一律视为不合法。
+func auditSafeGroupID(v any) bool {
+	switch n := v.(type) {
+	case float64:
+		return !math.IsNaN(n) && !math.IsInf(n, 0)
+	case int, int64:
+		return true
+	case json.Number:
+		_, err := json.Marshal(n)
+		return err == nil
+	default:
+		return false
+	}
 }
 
 func putAssetResultJSON(result *asset_put_svc.Result, message string) (string, error) {

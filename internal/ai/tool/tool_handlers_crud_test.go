@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"math"
 
 	"github.com/cago-frame/cago/database/db"
 	"github.com/glebarez/sqlite"
@@ -1259,6 +1260,170 @@ func TestHandlePutAsset_PrePrepareFailuresProjectTopLevelOnly(t *testing.T) {
 			assert.Equal(t, tc.wantValue, proj[tc.wantKey], "top-level identity must survive in the projection")
 		})
 	}
+}
+
+// TestPutAssetTopLevelAuditArgs_TypedFailClosedProjection 是 Task 11 的核心契约：
+// put_asset 顶层非 config 字段的 Audit 投影必须类型 fail-closed。string 身份字段仅在
+// 实际值为 string 时保留；map/slice/array/struct/pointer 与一切类型非法值整体省略——
+// 藏在 name/type/description 等允许键下的嵌套秘密不能借此进入 Audit。
+func TestPutAssetTopLevelAuditArgs_TypedFailClosedProjection(t *testing.T) {
+	// #nosec G101 -- secret is an intentional test fixture used to verify that nested
+	// secrets never enter the audit projection via an allowlisted key.
+	secret := "nested-secret-must-not-leak"
+	payload := struct {
+		Password string `json:"password"`
+	}{Password: secret}
+
+	args := map[string]any{
+		"asset":           map[string]any{"password": secret}, // map
+		"name":            []any{"a", secret},                 // slice
+		"type":            payload,                            // struct
+		"description":     &payload,                           // pointer
+		"icon":            map[string]any{"token": secret},    // map
+		"credential_name": []any{secret},                      // slice
+		"group_id":        map[string]any{"id": secret},       // 非法复合
+		"config":          map[string]any{"password": secret}, // config 从不投影
+	}
+	proj := putAssetTopLevelAuditArgs(args)
+
+	for _, key := range []string{"asset", "name", "type", "description", "icon", "credential_name", "group_id"} {
+		_, ok := proj[key]
+		assert.False(t, ok, "type-invalid composite %s must be omitted from the projection", key)
+	}
+	_, hasConfig := proj["config"]
+	assert.False(t, hasConfig, "config is never projected")
+
+	encoded, err := json.Marshal(proj)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), secret, "nested secret must not enter the projection via any allowlisted key")
+}
+
+// TestPutAssetTopLevelAuditArgs_PreservesTypeCorrectScalars: 类型正确的 string 身份字段
+// 与数值 group_id 按原值保留；config 从不投影；投影是独立 map，原 args 不被改写。
+func TestPutAssetTopLevelAuditArgs_PreservesTypeCorrectScalars(t *testing.T) {
+	args := map[string]any{
+		"asset":           "web-9",
+		"name":            "prod",
+		"type":            "ssh",
+		"description":     "fleet",
+		"icon":            "server",
+		"credential_name": "managed-login",
+		"group_id":        float64(7),
+		"config":          map[string]any{"password": "keep-out"},
+	}
+	proj := putAssetTopLevelAuditArgs(args)
+
+	assert.Equal(t, "web-9", proj["asset"])
+	assert.Equal(t, "prod", proj["name"])
+	assert.Equal(t, "ssh", proj["type"])
+	assert.Equal(t, "fleet", proj["description"])
+	assert.Equal(t, "server", proj["icon"])
+	assert.Equal(t, "managed-login", proj["credential_name"])
+	assert.Equal(t, float64(7), proj["group_id"])
+	_, hasConfig := proj["config"]
+	assert.False(t, hasConfig, "config must never be projected")
+	// 原 args 原样保留（投影是独立 map）。
+	assert.Equal(t, "prod", args["name"])
+	assert.Equal(t, "keep-out", args["config"].(map[string]any)["password"])
+}
+
+// TestPutAssetTopLevelAuditArgs_GroupIDAcceptsBoundaryNumerics: group_id 只在值是工具边界
+// 支持的数值标量（JSON float64 + 内部 int/int64/json.Number）时保留，且投影保持可安全
+// JSON 编码。
+func TestPutAssetTopLevelAuditArgs_GroupIDAcceptsBoundaryNumerics(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value any
+	}{
+		{name: "json float64", value: float64(7)},
+		{name: "float", value: 7.5},
+		{name: "int", value: 7},
+		{name: "int64", value: int64(7)},
+		{name: "json.Number", value: json.Number("7")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proj := putAssetTopLevelAuditArgs(map[string]any{"group_id": tc.value})
+			v, ok := proj["group_id"]
+			assert.True(t, ok, "group_id %T must be preserved", tc.value)
+			assert.Equal(t, tc.value, v)
+			_, err := json.Marshal(proj)
+			assert.NoError(t, err, "projection must stay marshal-safe")
+		})
+	}
+}
+
+// TestPutAssetTopLevelAuditArgs_GroupIDOmitsUnsafeOrInvalid: 非有限 float64（NaN/±Inf）
+// 与非法 json.Number 会让 audit middleware 的 json.Marshal 直接失败，必须省略；string
+// 与复合值/布尔/空值不是工具边界支持的数值标量，同样省略。
+func TestPutAssetTopLevelAuditArgs_GroupIDOmitsUnsafeOrInvalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{name: "NaN", value: math.NaN()},
+		{name: "+Inf", value: math.Inf(1)},
+		{name: "-Inf", value: math.Inf(-1)},
+		{name: "json.Number abc", value: json.Number("abc")},
+		{name: "json.Number NaN", value: json.Number("NaN")},
+		{name: "string", value: "7"},
+		{name: "slice", value: []any{7}},
+		{name: "map", value: map[string]any{"id": 7}},
+		{name: "bool", value: true},
+		{name: "nil", value: nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proj := putAssetTopLevelAuditArgs(map[string]any{"group_id": tc.value})
+			_, ok := proj["group_id"]
+			assert.False(t, ok, "group_id %#v must be omitted", tc.value)
+			encoded, err := json.Marshal(proj)
+			require.NoError(t, err, "projection must never be unmarshalable due to group_id")
+			assert.Equal(t, "{}", string(encoded))
+		})
+	}
+}
+
+// TestHandlePutAsset_TopLevelProjectionNeverMutatesOriginalArgs: 进入 Prepare 之前的早期
+// 失败（update lookup）中，无论顶层投影如何取舍，原始 args 必须深度不变——投影只写入独立
+// 的 audit 槽，绝不改写执行/UI/历史输入。
+func TestHandlePutAsset_TopLevelProjectionNeverMutatesOriginalArgs(t *testing.T) {
+	env := setupCRUD(t)
+	slot := aictx.NewAuditRequestSlot()
+	ctx := aictx.WithAuditRequestSlot(env.ctx, slot)
+
+	// #nosec G101 -- secret is an intentional test fixture used to verify that the
+	// top-level projection never mutates original args nor leaks nested secrets.
+	secret := "deep-unchanged-secret"
+	args := map[string]any{
+		"asset":       "no-such-box",
+		"name":        map[string]any{"password": secret},
+		"type":        []any{"ssh"},
+		"description": struct{ Token string }{Token: secret},
+		"group_id":    float64(3),
+		"config":      map[string]any{"password": secret, "host": "10.0.0.1"},
+	}
+	before, err := json.Marshal(args)
+	require.NoError(t, err)
+
+	_, err = handlePutAsset(ctx, args)
+	require.Error(t, err, "update lookup of a missing asset must fail before Prepare")
+
+	after, marshalErr := json.Marshal(args)
+	require.NoError(t, marshalErr)
+	assert.Equal(t, before, after, "original args must be deeply unchanged after an early pre-Prepare failure")
+
+	proj := aictx.GetAuditRequest(ctx)
+	require.NotNil(t, proj, "early failure must still record the top-level projection")
+	encoded, marshalErr := json.Marshal(proj)
+	require.NoError(t, marshalErr)
+	assert.NotContains(t, string(encoded), secret, "nested secret must not reach the audit projection")
+	for _, key := range []string{"name", "type", "description"} {
+		_, ok := proj[key]
+		assert.False(t, ok, "type-invalid composite %s must be omitted", key)
+	}
+	assert.Equal(t, float64(3), proj["group_id"], "type-correct numeric group_id survives")
+	_, hasConfig := proj["config"]
+	assert.False(t, hasConfig, "config is never projected on early failure")
 }
 
 // TestHandlePutAsset_CommitFailureProjectsSafeAuditArgs: Prepare 成功、Commit/仓库失败时，
