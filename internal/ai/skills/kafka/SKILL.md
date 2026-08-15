@@ -235,7 +235,7 @@ when the username or both password sources are missing.
 | `host` | string | no | Single-broker fallback used only when `brokers` is omitted |
 | `port` | number | no | Used with `host` when `brokers` is omitted; no default — pass `9092` explicitly |
 | `username` | string | no* | Required when `sasl_mechanism` is not `"none"`; unused otherwise |
-| `password` | string | no* | **Write-only.** Creates a managed password credential; required for SASL unless `credential_id` supplies it |
+| `password` | string | no* | **Write-only.** Encrypted in the asset; required for SASL unless `credential_id` supplies it |
 | `credential_id` | number | no* | Existing managed password credential ID; mutually exclusive with `password` |
 | `client_id` | string | no | Defaults to `"opskat"` |
 | `sasl_mechanism` | string | no | `"none"` (default), `"plain"`, `"scram-sha-256"`, `"scram-sha-512"` |
@@ -250,6 +250,6 @@ when the username or both password sources are missing.
 | `message_fetch_limit` | number | no | Default message count when `--limit` is omitted; `--limit` overrides it, hard cap 1000 |
 | `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches |
 
-Plaintext is never returned and is materialized under top-level `credential_name` (default:
-final asset name). The credential path covers primary Kafka SASL only; Schema Registry and
+Plaintext is never returned, is encrypted in the asset, and never creates a managed credential.
+The credential path covers primary Kafka SASL only; Schema Registry and
 Kafka Connect companion config remains desktop-managed.

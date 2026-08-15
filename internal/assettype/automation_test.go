@@ -131,32 +131,9 @@ func TestCredentialPlanAndBindingArePure(t *testing.T) {
 		}
 		prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, args)
 		require.NoError(t, err)
-		assert.Equal(t, CredentialKindPassword, prepared.Credential.Kind)
-		assert.Equal(t, "secret", prepared.Credential.Plaintext)
-		assert.Equal(t, "admin", prepared.Credential.Username)
-
-		bound, err := prepared.BindCredential(CredentialBinding{ID: 42, Type: credential_entity.TypePassword})
-		require.NoError(t, err)
-		assert.Equal(t, int64(42), bound["credential_id"])
-		assert.NotContains(t, bound, "password")
+		assert.Equal(t, CredentialKindNone, prepared.Credential.Kind)
+		assert.Equal(t, "secret", prepared.Config["password"])
 		assert.Equal(t, "secret", args["password"], "preparation and binding must not mutate caller input")
-	})
-
-	t.Run("ssh key owner", func(t *testing.T) {
-		prepared, err := PrepareCreate(asset_entity.AssetTypeSSH, map[string]any{
-			"host": "ssh.example.com", "username": "root", "private_key": "PEM", "passphrase": "key-pass",
-		})
-		require.NoError(t, err)
-		assert.Equal(t, CredentialKindSSHKey, prepared.Credential.Kind)
-		assert.Equal(t, "PEM", prepared.Credential.PrivateKey)
-		assert.Equal(t, "key-pass", prepared.Credential.Passphrase)
-
-		bound, err := prepared.BindCredential(CredentialBinding{ID: 7, Type: credential_entity.TypeSSHKey})
-		require.NoError(t, err)
-		assert.Equal(t, int64(7), bound["credential_id"])
-		assert.Equal(t, asset_entity.AuthTypeKey, bound["auth_type"])
-		assert.NotContains(t, bound, "private_key")
-		assert.NotContains(t, bound, "passphrase")
 	})
 
 	t.Run("ssh reference type owns auth inference", func(t *testing.T) {
@@ -172,16 +149,13 @@ func TestCredentialPlanAndBindingArePure(t *testing.T) {
 		assert.Equal(t, asset_entity.AuthTypeKey, bound["auth_type"])
 	})
 
-	t.Run("ssh passphrase requires imported private key", func(t *testing.T) {
-		for _, args := range []map[string]any{
-			{"host": "ssh.example.com", "username": "root", "password": "password-secret", "passphrase": "key-secret"},
-			{"host": "ssh.example.com", "username": "root", "credential_id": int64(9), "passphrase": "key-secret"},
-		} {
-			_, err := PrepareCreate(asset_entity.AssetTypeSSH, args)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "passphrase requires private_key")
-			assert.NotContains(t, err.Error(), "key-secret")
-		}
+	t.Run("ssh private material is not accepted by asset automation", func(t *testing.T) {
+		_, err := PrepareCreate(asset_entity.AssetTypeSSH, map[string]any{
+			"host": "ssh.example.com", "username": "root", "private_key": "PEM", "passphrase": "key-secret",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown config field(s): [passphrase private_key]")
+		assert.NotContains(t, err.Error(), "key-secret")
 	})
 
 	t.Run("managed credential IDs must be integral", func(t *testing.T) {
@@ -203,12 +177,8 @@ func TestCredentialPlanAndBindingArePure(t *testing.T) {
 			"endpoint": "s3.example.com", "access_key_id": "AKIA", "secret_access_key": "secret",
 		})
 		require.NoError(t, err)
-		assert.Equal(t, CredentialKindPassword, prepared.Credential.Kind)
-		assert.Equal(t, "AKIA", prepared.Credential.Username)
-		bound, err := prepared.BindCredential(CredentialBinding{ID: 3, Type: credential_entity.TypePassword})
-		require.NoError(t, err)
-		assert.NotContains(t, bound, "secret_access_key")
-		assert.Equal(t, int64(3), bound["credential_id"])
+		assert.Equal(t, CredentialKindNone, prepared.Credential.Kind)
+		assert.Equal(t, "secret", prepared.Config["secret_access_key"])
 	})
 
 	t.Run("password owners reject SSH key binding", func(t *testing.T) {

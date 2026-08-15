@@ -4,7 +4,7 @@
 > Owner: OpsKat maintainers
 > Last updated: 2026-08-13
 
-**Objective:** 让自动化调用方能够通过 opsctl 或统一 AI 工具创建任意已注册的内建资产类型，安全地创建或引用托管凭据，并通过统一的“密钥管理”查询面发现凭据、SSH 密钥和 SSH Agent 来源。
+**Objective:** 让自动化调用方能够通过 opsctl 或统一 AI 工具创建任意已注册的内建资产类型，安全地引用既有托管凭据，并通过统一的“密钥管理”查询面发现凭据、SSH 密钥和 SSH Agent 来源。
 
 **Hard invariant:** `put_asset` / `opsctl create asset` 的 producer-owned 审批与 Audit projection、安全查询 DTO、安全创建结果和应用结构化日志必须省略 password、private key、passphrase、kubeconfig、Secret Access Key、SSH Agent endpoint 等 write-only material；通用 Audit、直接命令/tool result 和其他允许读取业务内容的表面按后续修正规格保留其边界收到的原值，不生成 `<redacted>` 近似值。既有资产连接、审批和凭据解析行为不得因本次扩展而回退。
 
@@ -19,7 +19,7 @@
 ## Actors and user stories
 
 1. As an OpenCode or shell automation user, I want to create any built-in OpsKat asset through one stable opsctl contract, so that adding a protocol does not require a new script shape.
-2. As an automation user holding a plaintext password, I want to send it through stdin or an explicitly acknowledged command-line flag, so that OpsKat creates a managed credential and links it to the asset.
+2. As an automation user holding a plaintext password, I want to send it through stdin or an explicitly acknowledged command-line flag, so that OpsKat encrypts it in the asset without creating an unexpected managed credential.
 3. As a user who already manages credentials in OpsKat, I want to discover a safe reference and reuse it when creating an asset, so that the secret is not duplicated.
 4. As an OpsKat AI user, I want `put_asset` to use the same managed-credential semantics as opsctl, so that assets created by either surface are indistinguishable in the desktop app.
 5. As an SSH Agent user, I want Agent sources and identities to appear in the same credential discovery surface as passwords and SSH keys, while remaining clearly typed and non-secret.
@@ -31,10 +31,10 @@
 | 1 | `opsctl create asset` gains generic `--config` and `--config-file` JSON-object inputs and delegates type validation/application to the registered asset handler. | This makes every registered built-in type reachable without adding protocol branches to shared CLI code. Rejected: add dozens of top-level protocol flags — it duplicates each handler contract and requires editing a shared switch for every new type. |
 | 2 | Existing convenience flags remain compatible and explicitly supplied convenience values override the same non-secret keys from generic config. | Existing scripts must keep working. Rejected: remove or silently change old flags — unnecessary compatibility break. |
 | 3 | Secret sources never use normal override precedence: plaintext secret, managed credential reference, and SSH Agent identity are mutually exclusive and conflicting inputs fail. | Silently choosing one secret source can bind the wrong account and leave misleading data. Rejected: “last flag wins” for credentials. |
-| 4 | `--password-stdin`, `--password`, and plaintext secret fields accepted by AI/JSON create a managed credential, not a new inline asset secret. | This satisfies #283 and aligns automation with the desktop credential store. Rejected: continue storing automation passwords as per-asset inline ciphertext — connection-safe but not managed/reusable. |
+| 4 | `--password-stdin`, `--password`, and plaintext secret fields accepted by AI/JSON are encrypted in the asset and never create a managed credential. | Credential creation must be explicit in the desktop key manager; automation reuses it through `credential_id`. Rejected: silently create globally reusable credentials as a side effect of asset creation. |
 | 5 | `--password` is supported but visibly documented and warned as unsafe; stdin is the recommended plaintext path. | The user explicitly requested convenience support while accepting a warning. Rejected: only support `--password` — exposes secrets by default; rejected: prohibit it entirely — does not meet the confirmed interface. |
 | 6 | Per-type credential behavior is declared by the registered type owner: accepted managed credential kinds, plaintext secret field, associated username field, and incompatible auth modes. | SSH password/key/Agent and OSS Secret Access Key do not share one universal field meaning. Rejected: shared type-string branches — violates the repository registration seam and will drift. |
-| 7 | Credential materialization and asset create/update execute in one transaction after side-effect-free validation and, for opsctl, after desktop approval. | A failed asset write must not leave an orphan credential, and a failed credential write must not leave a credential-less asset. Rejected: create the credential first and clean up on error — cleanup itself can fail and is not atomic. |
+| 7 | Asset create/update executes in one transaction after side-effect-free validation and, for opsctl, after desktop approval. | Asset creation does not create credentials, so failure cannot leave an orphan credential. |
 | 8 | AI keeps the existing unified `put_asset`; no second credential-aware asset tool is added. | `put_asset` already owns all registered type configs. Rejected: add `create_asset_with_credential` — duplicates CRUD and splits the model’s decision path. |
 | 9 | Credential discovery is unified as `list_credentials` / `get_credential` and `opsctl list credentials` / `opsctl get credential`, with typed refs `credential:<id>` and `agent-source:<id>`. | Matches the desktop “密钥管理” mental model while preventing cross-table ID ambiguity. Rejected: separate Agent commands — inconsistent user surface; rejected: bare ID for detail lookup — ambiguous. |
 | 10 | Query surfaces return metadata and public identification only; they never expose secret material. | Automation needs IDs, names, usernames, fingerprints, status and usage—not decryption. Rejected: password/private-key reveal flags — creates a secret-exfiltration API for both CLI and AI. |
@@ -59,7 +59,7 @@ The selected handler remains authoritative for required fields, defaults and leg
 
 A config key that the selected handler does not declare as accepted must produce a named validation error. Generic JSON must not silently discard misspelled or unsupported fields.
 
-## Managed credential inputs
+## Authentication inputs
 
 The CLI exposes:
 
@@ -67,10 +67,9 @@ The CLI exposes:
 --credential-id <id>
 --password-stdin
 --password <value>
---credential-name <name>
 ```
 
-`--credential-id`, `--password-stdin`, and `--password` are mutually exclusive with each other and with an equivalent plaintext/reference field already present in `--config` or `--config-file`. `--credential-name` is valid only when the operation creates a managed credential from plaintext or imported private-key material; it cannot rename a referenced credential. Its default is the final asset name.
+`--credential-id`, `--password-stdin`, and `--password` are mutually exclusive with each other and with an equivalent plaintext/reference field already present in `--config` or `--config-file`. Plaintext is encrypted in the asset. Managed credentials and SSH keys must be created in the desktop key manager first and referenced by ID; asset automation never creates them.
 
 `--password-stdin` reads the secret from standard input, removes one terminal `LF` or `CRLF` line ending, preserves all other bytes, and rejects an empty result. It produces no prompt echo. `--password` accepts the same content from argv but prints a warning to stderr without including the value. Help and warning text state that the value may be visible in shell history, process listings and CI/automation logs, and recommend `--password-stdin` or `--credential-id` instead.
 
@@ -78,17 +77,17 @@ Inline `--config` containing `password` or `secret_access_key` receives the same
 
 The type-owned credential contract at approval time is:
 
-| Asset/auth shape | Accepted managed input | Plaintext materialized as | Additional rule |
+| Asset/auth shape | Accepted managed input | Plaintext storage | Additional rule |
 |---|---|---|---|
-| SSH password auth | `password` credential | managed password credential | `--password*` selects password auth; an explicit conflicting `auth_type` fails. |
-| SSH key auth | `ssh_key` credential or `private_key` config material | existing credential reference or imported managed SSH key | Credential type selects key auth when `auth_type` is omitted; passphrase remains write-only. |
+| SSH password auth | `password` credential | encrypted asset-local password | `--password*` selects password auth; an explicit conflicting `auth_type` fails. |
+| SSH key auth | existing `ssh_key` credential only | none | Create/import the key in the desktop key manager, then pass `credential_id`. `private_key` and `passphrase` are rejected automation fields. |
 | SSH Agent auth | Agent source ID + fingerprint only | no credential row | Password, private key and `credential_id` inputs are rejected. |
-| Non-SQLite database, Redis, MongoDB, etcd, Kafka primary SASL, RDP, VNC | `password` credential | managed password credential | A referenced non-password credential fails before persistence. |
-| OSS | `password` credential | managed password credential whose secret is used as Secret Access Key | `access_key_id` remains required connection metadata and is used as credential username metadata when present. |
+| Non-SQLite database, Redis, MongoDB, etcd, Kafka primary SASL, RDP, VNC | `password` credential | encrypted asset-local password | A referenced non-password credential fails before persistence. |
+| OSS | `password` credential | encrypted asset-local Secret Access Key | `access_key_id` remains required connection metadata. |
 | K8s | none | kubeconfig remains directly encrypted in asset config | Password credential flags are rejected. |
 | SQLite, Serial, Local | none | none | Password credential flags are rejected as inapplicable. |
 
-For created password credentials, username metadata comes from the type-owned account identifier (`username`, or `access_key_id` for OSS) when present; otherwise it is empty. The plaintext is encrypted by the canonical credential service and is never passed onward to the asset handler or audit writer after materialization.
+Plaintext is encrypted by the canonical credential service inside the type-owned asset config and is omitted from approval, output, and Audit projections.
 
 A referenced credential must exist and match the type/auth context before approval. For SSH, a password credential maps to password auth and an SSH-key credential maps to key auth when `auth_type` is omitted; an explicit mismatch fails. Other password-capable types accept only password credentials.
 
@@ -111,18 +110,18 @@ The successful create/update result includes the asset ID and, when applicable, 
 
 The AI continues to call `help(type)` and then the existing `put_asset` with a type-specific `config` object. All registered built-in types remain available through this one tool.
 
-`put_asset` gains optional top-level `credential_name`. On create or update:
+On create or update:
 
-- `config.password` creates a managed password credential and replaces the config field with its validated association.
-- OSS `config.secret_access_key` follows the same rule.
-- SSH `config.private_key` continues to import a managed SSH-key credential and uses `credential_name` when supplied.
+- `config.password` is encrypted in the asset and does not create a credential.
+- OSS `config.secret_access_key` follows the same asset-local rule.
+- SSH `config.private_key` and `config.passphrase` are rejected; use an existing SSH-key `credential_id`.
 - `config.credential_id` reuses an existing credential after type/auth validation.
 - plaintext material and an existing reference in the same request fail rather than choosing one.
 - K8s kubeconfig and other non-password secret fields retain their established direct-encryption semantics.
 
-AI create/update and opsctl create share the same credential-materialization boundary and per-type declarations. No CLI-only or AI-only type switch determines credential behavior.
+AI create/update and opsctl create share the same credential-reference and asset-local encryption boundary. No CLI-only or AI-only type switch determines credential behavior.
 
-The existing AI tool visibility/approval behavior is preserved. Tool descriptions and per-type help state that plaintext credential fields are write-only, become managed credentials, and must never be echoed. Audit persistence uses the producer-owned allowlist projection (`SafeAuditArgs` / `SafeAuditArgsForResult`), omitting the write-only secret fields instead of redacting the original tool arguments.
+The existing AI tool visibility/approval behavior is preserved. Tool descriptions and per-type help state that plaintext credential fields are write-only asset-local secrets and must never be echoed. Audit persistence uses the producer-owned allowlist projection (`SafeAuditArgs` / `SafeAuditArgsForResult`), omitting the write-only secret fields instead of redacting the original tool arguments.
 
 ## Unified credential discovery
 
@@ -188,7 +187,7 @@ Approval requests and desktop notifications contain only safe asset metadata. Pa
 
 opsctl converts plaintext into a managed credential inside the shared write boundary before audit serialization; audit receives only the resulting typed association. AI `put_asset` audit persists the producer-owned allowlist projection, omitting the write-only secret fields instead of replacing values; default Audit keeps the raw values it receives.
 
-Structured logs for create/materialize/query flows record start/end/fail with safe correlation fields such as asset ID, credential ID/ref, source ID and asset type. They do not record secret values, full config JSON, Agent endpoint values, private/public key blobs or kubeconfig.
+Structured logs for asset create/reference/query flows record start/end/fail with safe correlation fields such as asset ID, credential ID/ref, source ID and asset type. They do not record secret values, full config JSON, Agent endpoint values, private/public key blobs or kubeconfig.
 
 The feature adds no password reveal, private-key export, Agent signing, challenge-response or credential decryption operation to opsctl or AI.
 
@@ -216,7 +215,7 @@ Existing AI callers that pass `config.password` or OSS `secret_access_key` obser
 |---|---|---|
 | Generic opsctl create parser/normalizer | JSON object/file parsing, legacy flag precedence, unknown-key rejection, all secret-source conflicts, stdin newline handling and warning text without secret echo | Existing command parser tests under `cmd/opsctl/command`; no create-focused regression suite currently covers these contracts. |
 | Registered asset handler create boundary | Every registered built-in type is reachable through generic config without a shared type switch; handler-owned required/default/accepted-field rules remain authoritative, including SQLite and non-password rejections | Existing per-handler tests in `internal/assettype` and help-coverage tests. |
-| Shared credential materialization service | Existing credential type validation, SSH auth inference/mismatch, OSS mapping, credential naming/username metadata, AI update replacement semantics and transaction rollback on every write failure | Existing credential manager, resolver, asset service and `dbutil.WithTransactionRunner` tests. |
+| Shared asset write service | Existing credential type validation, SSH auth inference/mismatch, inline encryption, existing-reference binding and transaction rollback on every write failure | Existing credential resolver, asset service and `dbutil.WithTransactionRunner` tests. |
 | AI `put_asset` handler | Plaintext becomes a managed association, reference reuse works across supported types, unsupported/mutually exclusive inputs fail, output is non-secret | Existing `internal/ai/tool/tool_handlers_crud_test.go`. |
 | Unified credential read handlers | Typed-ref parsing, filters, safe metadata, usage lists, SSH public key detail, Agent status/identities, unavailable Agent degradation and absence of all secret/endpoint fields | Existing credential manager and SSH Agent service tests; new shared handlers serve both CLI and AI. |
 | Safe asset detail | Managed credential and Agent association structures, missing managed credential state, Agent identity availability, and no expansion in asset lists | Existing safe-view and Agent asset-detail tests. |

@@ -36,5 +36,4 @@ No host/port/username/credentials — a serial asset addresses a local device pa
 | `password` | string | no | Reserved compatibility key; any non-empty value is rejected as inapplicable |
 | `credential_id` | number | no | Reserved compatibility key; any non-zero value is rejected as inapplicable |
 
-Serial automation never creates or references managed credentials; top-level
-`credential_name` is therefore invalid.
+Serial automation never creates or references managed credentials.

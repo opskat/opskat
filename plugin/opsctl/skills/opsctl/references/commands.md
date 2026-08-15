@@ -213,16 +213,15 @@ the exact config contract. Unknown config keys fail before approval.
 - `--config '<JSON object>'` — Type-owned config object
 - `--config-file <path>` — File containing that JSON object; mutually exclusive with `--config`
 
-**Managed authentication**:
+**Authentication**:
 - `--credential-id <id>` — Reuse an existing managed credential after type/auth validation
 - `--password-stdin` — Preferred plaintext path; reads stdin without prompt/echo, removes one terminal LF/CRLF
 - `--password <value>` — Unsafe argv path; warns about shell history, process listings, and CI logs
-- `--credential-name <name>` — Name for a newly created managed password/SSH-key credential; defaults to final asset name
 - `--agent-source-id <id>` and `--agent-key-fingerprint <SHA256...>` — SSH Agent identity pair; both required
 
 Plaintext inline `--config` has the same argv risk. A plaintext `--config-file` must use
 restrictive permissions, must not be committed, and should be removed afterward. Plaintext,
-credential reference, imported private key, and Agent identity are conflicting auth sources;
+credential reference and Agent identity are conflicting auth sources;
 the command fails instead of applying override precedence.
 
 **Compatibility flags** remain accepted: `--host`, `--port`, `--username`, `--auth-type`,
@@ -232,9 +231,10 @@ Only explicitly supplied convenience flags override matching non-secret generic 
 `--kubeconfig-file` remains a K8s raw-file convenience input.
 
 The flow is parse/merge → resolve references/files and validate → desktop approval → one
-transaction materializing the credential/imported key and asset. Denial or failure commits
-neither new row. Successful JSON contains the asset ID and a safe authentication reference
-when applicable, never supplied plaintext/ciphertext.
+asset transaction. Plaintext is encrypted in the asset and never creates a managed credential;
+create credentials in the desktop key manager and pass `--credential-id` to reuse them. Denial
+or failure commits no new asset row. Successful JSON contains the asset ID and a safe
+authentication reference when applicable, never supplied plaintext/ciphertext.
 
 ```bash
 printf '%s\n' "$SSH_PASSWORD" | opsctl create asset --name "Web Server" --host 10.0.0.1 --username root --password-stdin

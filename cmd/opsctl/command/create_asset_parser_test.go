@@ -75,6 +75,7 @@ func TestParseAssetCreateGenericConfigSourcesAndErrors(t *testing.T) {
 		{name: "non object", args: []string{"--name", "x", "--config", `[]`}, want: "JSON object"},
 		{name: "null", args: []string{"--name", "x", "--config", `null`}, want: "JSON object"},
 		{name: "unreadable", args: []string{"--name", "x", "--config-file", "missing.json"}, want: "read --config-file"},
+		{name: "removed credential name", args: []string{"--name", "x", "--credential-name", "implicit"}, want: "flag provided but not defined"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -199,15 +200,6 @@ func TestParseAssetCreatePasswordFlagUsesTypeOwnedPlaintextField(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "object-secret", request.config["secret_access_key"])
 	assert.NotContains(t, request.config, "password")
-}
-
-func TestParseAssetCreateCredentialNameIsForwardedOnlyWhenVisited(t *testing.T) {
-	request, _, err := parseAssetCreateForTest(t, []string{
-		"--name", "cache", "--type", "redis", "--config", `{"host":"redis.internal","username":"default"}`,
-		"--password", "secret", "--credential-name", "shared-cache-password",
-	}, "", nil)
-	require.NoError(t, err)
-	assert.Equal(t, "shared-cache-password", request.credentialName)
 }
 
 func TestParseAssetCreatePlaintextWarningWriteFailuresAreReturned(t *testing.T) {

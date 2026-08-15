@@ -2,11 +2,8 @@ package asset_put_svc
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"strings"
@@ -27,7 +24,6 @@ import (
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	gossh "golang.org/x/crypto/ssh"
 )
 
 const failingAssetType = "asset-put-handler-failure-test"
@@ -44,19 +40,13 @@ func (*failingHandler) DefaultPolicy() any { return nil }
 func (*failingHandler) PolicyKind() string { return "" }
 func (*failingHandler) AutomationContract() assettype.AutomationContract {
 	return assettype.AutomationContract{
-		ConfigFields:   []string{"username", "password", "private_key", "passphrase", "credential_id"},
+		ConfigFields:   []string{"username", "password", "credential_id"},
 		ApprovalFields: []string{"username"},
 		CredentialPlan: func(args map[string]any) (assettype.CredentialPlan, error) {
 			if id := assettype.ArgInt64(args, "credential_id"); id > 0 {
 				return assettype.CredentialPlan{Kind: assettype.CredentialKindReference, ReferenceID: id, AcceptedTypes: []string{credential_entity.TypePassword}}, nil
 			}
-			if privateKey := assettype.ArgString(args, "private_key"); privateKey != "" {
-				return assettype.CredentialPlan{
-					Kind: assettype.CredentialKindSSHKey, PrivateKey: privateKey,
-					Passphrase: assettype.ArgString(args, "passphrase"), Username: assettype.ArgString(args, "username"),
-				}, nil
-			}
-			return assettype.CredentialPlan{Kind: assettype.CredentialKindPassword, Plaintext: assettype.ArgString(args, "password"), Username: assettype.ArgString(args, "username")}, nil
+			return assettype.CredentialPlan{Kind: assettype.CredentialKindNone}, nil
 		},
 		BindCredential: func(args map[string]any, binding assettype.CredentialBinding) (map[string]any, error) {
 			out := make(map[string]any, len(args))
@@ -64,8 +54,6 @@ func (*failingHandler) AutomationContract() assettype.AutomationContract {
 				out[key] = value
 			}
 			delete(out, "password")
-			delete(out, "private_key")
-			delete(out, "passphrase")
 			out["credential_id"] = binding.ID
 			return out, nil
 		},
@@ -146,20 +134,6 @@ func newSSHAsset(name string) *asset_entity.Asset {
 	return &asset_entity.Asset{Name: name, Type: asset_entity.AssetTypeSSH}
 }
 
-func generatedSSHPrivateKey(t *testing.T, passphrase string) string {
-	t.Helper()
-	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	require.NoError(t, err)
-	var block *pem.Block
-	if passphrase == "" {
-		block, err = gossh.MarshalPrivateKey(privateKey, "automation-test")
-	} else {
-		block, err = gossh.MarshalPrivateKeyWithPassphrase(privateKey, "automation-test", []byte(passphrase))
-	}
-	require.NoError(t, err)
-	return string(pem.EncodeToMemory(block))
-}
-
 func validAgentFingerprintForPut() string {
 	raw := make([]byte, 32)
 	for i := range raw {
@@ -221,19 +195,18 @@ func TestSafeAuditArgsForResultAddsOnlyPersistedIdentityAndAuthentication(t *tes
 	assert.NotContains(t, string(encoded), `"password":`)
 }
 
-func TestPutMaterializesCanonicalPasswordCredentials(t *testing.T) {
+func TestPutStoresPlaintextSecretsInlineAcrossPasswordOwners(t *testing.T) {
 	for _, tt := range []struct {
-		name         string
-		asset        *asset_entity.Asset
-		config       map[string]any
-		secret       string
-		wantUsername string
-		readConfig   func(*asset_entity.Asset) (int64, string, error)
+		name       string
+		asset      *asset_entity.Asset
+		config     map[string]any
+		secret     string
+		readConfig func(*asset_entity.Asset) (int64, string, error)
 	}{
 		{
 			name: "redis account metadata", asset: newRedisAsset("cache-prod"),
 			config: map[string]any{"host": "redis.internal", "username": "default", "password": "redis-secret"},
-			secret: "redis-secret", wantUsername: "default",
+			secret: "redis-secret",
 			readConfig: func(a *asset_entity.Asset) (int64, string, error) {
 				cfg, err := a.GetRedisConfig()
 				return cfg.CredentialID, cfg.Password, err
@@ -242,7 +215,7 @@ func TestPutMaterializesCanonicalPasswordCredentials(t *testing.T) {
 		{
 			name: "oss access key metadata", asset: &asset_entity.Asset{Name: "backups", Type: asset_entity.AssetTypeOSS},
 			config: map[string]any{"endpoint": "s3.internal", "access_key_id": "AKIAEXAMPLE", "secret_access_key": "oss-secret"},
-			secret: "oss-secret", wantUsername: "AKIAEXAMPLE",
+			secret: "oss-secret",
 			readConfig: func(a *asset_entity.Asset) (int64, string, error) {
 				cfg, err := a.GetOSSConfig()
 				return cfg.CredentialID, cfg.SecretAccessKey, err
@@ -253,31 +226,49 @@ func TestPutMaterializesCanonicalPasswordCredentials(t *testing.T) {
 			env := setupPutTest(t)
 			result, err := Put(env.ctx, Request{Asset: tt.asset, Config: tt.config})
 			require.NoError(t, err)
-			require.NotNil(t, result.Authentication)
-			assert.Equal(t, credential_entity.TypePassword, result.Authentication.Type)
-			assert.Positive(t, result.Authentication.Ref)
-
-			cred, err := credential_repo.Credential().Find(env.ctx, result.Authentication.Ref)
-			require.NoError(t, err)
-			assert.Equal(t, tt.asset.Name, cred.Name)
-			assert.Equal(t, tt.wantUsername, cred.Username)
-			plaintext, err := credential_svc.Default().Decrypt(cred.Password)
-			require.NoError(t, err)
-			assert.Equal(t, tt.secret, plaintext)
+			assert.Nil(t, result.Authentication)
+			_, credentialCount := env.counts(t)
+			assert.Zero(t, credentialCount)
 
 			stored, err := asset_repo.Asset().Find(env.ctx, result.Asset.ID)
 			require.NoError(t, err)
 			credentialID, inlineCiphertext, err := tt.readConfig(stored)
 			require.NoError(t, err)
-			assert.Equal(t, cred.ID, credentialID)
-			assert.Empty(t, inlineCiphertext, "managed secret must not be passed to or stored by the asset handler")
+			assert.Zero(t, credentialID)
+			assert.NotEmpty(t, inlineCiphertext)
+			plaintext, err := credential_svc.Default().Decrypt(inlineCiphertext)
+			require.NoError(t, err)
+			assert.Equal(t, tt.secret, plaintext)
 
 			encoded, err := json.Marshal(result)
 			require.NoError(t, err)
 			assert.NotContains(t, string(encoded), tt.secret)
-			assert.NotContains(t, string(encoded), cred.Password)
 		})
 	}
+}
+
+func TestPutStoresPlaintextPasswordInlineWithoutCreatingCredential(t *testing.T) {
+	env := setupPutTest(t)
+	result, err := Put(env.ctx, Request{Asset: newSSHAsset("box"), Config: map[string]any{
+		"host": "ssh.internal", "username": "root", "password": "inline-secret",
+	}})
+	require.NoError(t, err)
+	assert.Nil(t, result.Authentication)
+
+	assets, credentials := env.counts(t)
+	assert.Equal(t, int64(1), assets)
+	assert.Zero(t, credentials, "plain --password must not create a managed credential implicitly")
+
+	stored, err := asset_repo.Asset().Find(env.ctx, result.Asset.ID)
+	require.NoError(t, err)
+	cfg, err := stored.GetSSHConfig()
+	require.NoError(t, err)
+	assert.Zero(t, cfg.CredentialID)
+	assert.NotEmpty(t, cfg.Password)
+	assert.NotEqual(t, "inline-secret", cfg.Password)
+	plaintext, err := credential_svc.Default().Decrypt(cfg.Password)
+	require.NoError(t, err)
+	assert.Equal(t, "inline-secret", plaintext)
 }
 
 func TestPutValidatesReferencesAndCredentialSourceConflictsBeforeAssetWrite(t *testing.T) {
@@ -312,34 +303,24 @@ func TestPutValidatesReferencesAndCredentialSourceConflictsBeforeAssetWrite(t *t
 }
 
 func TestPutRollsBackCredentialAndAssetWritesOnEveryFailureBoundary(t *testing.T) {
-	t.Run("credential write", func(t *testing.T) {
-		env := setupPutTest(t)
-		registerWriteFailure(t, env.db, "create", "credentials")
-		_, err := Put(env.ctx, Request{Asset: newRedisAsset("cache"), Config: map[string]any{"host": "redis.internal", "username": "default", "password": "secret"}})
-		require.Error(t, err)
-		assets, credentials := env.counts(t)
-		assert.Zero(t, assets)
-		assert.Zero(t, credentials)
-	})
-
-	t.Run("handler application after credential write", func(t *testing.T) {
+	t.Run("handler application", func(t *testing.T) {
 		env := setupPutTest(t)
 		_, err := Put(env.ctx, Request{Asset: &asset_entity.Asset{Name: "bad", Type: failingAssetType}, Config: map[string]any{"username": "alice", "password": "secret"}})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "handler refused")
 		assets, credentials := env.counts(t)
 		assert.Zero(t, assets)
-		assert.Zero(t, credentials, "handler failure must roll back the credential created earlier in the transaction")
+		assert.Zero(t, credentials)
 	})
 
-	t.Run("asset create after credential write", func(t *testing.T) {
+	t.Run("asset create", func(t *testing.T) {
 		env := setupPutTest(t)
 		registerWriteFailure(t, env.db, "create", "assets")
 		_, err := Put(env.ctx, Request{Asset: newRedisAsset("cache"), Config: map[string]any{"host": "redis.internal", "username": "default", "password": "secret"}})
 		require.Error(t, err)
 		assets, credentials := env.counts(t)
 		assert.Zero(t, assets)
-		assert.Zero(t, credentials, "asset failure must roll back the credential")
+		assert.Zero(t, credentials)
 	})
 }
 
@@ -360,17 +341,6 @@ func TestPutReusesValidatedExistingCredential(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, cred.ID, cfg.CredentialID)
 	assert.Empty(t, cfg.Password)
-}
-
-func TestPutRejectsCredentialNameWithoutMaterialization(t *testing.T) {
-	env := setupPutTest(t)
-	cred := &credential_entity.Credential{Name: "shared", Type: credential_entity.TypePassword, Password: "existing-ciphertext"}
-	require.NoError(t, credential_repo.Credential().Create(env.ctx, cred))
-	_, err := Put(env.ctx, Request{Asset: newRedisAsset("cache"), CredentialName: "must-not-rename", Config: map[string]any{"host": "redis.internal", "username": "default", "credential_id": float64(cred.ID)}})
-	require.Error(t, err)
-	assets, credentialCount := env.counts(t)
-	assert.Zero(t, assets)
-	assert.Equal(t, int64(1), credentialCount)
 }
 
 func TestPrepareSQLiteUpdateRejectsPasswordCredentialsWhenDriverIsOmitted(t *testing.T) {
@@ -427,20 +397,19 @@ func TestPutDatabaseUpdatePasswordRetainsExistingDriverContext(t *testing.T) {
 	candidate := *asset
 	result, err := Put(env.ctx, Request{Asset: &candidate, Config: map[string]any{"password": "replacement-secret"}})
 	require.NoError(t, err)
-	require.NotNil(t, result.Authentication)
-	credential, err := credential_repo.Credential().Find(env.ctx, result.Authentication.Ref)
-	require.NoError(t, err)
-	assert.Equal(t, "existing-user", credential.Username)
+	assert.Nil(t, result.Authentication)
 	stored, err := asset_repo.Asset().Find(env.ctx, asset.ID)
 	require.NoError(t, err)
 	config, err := stored.GetDatabaseConfig()
 	require.NoError(t, err)
 	assert.Equal(t, asset_entity.DriverPostgreSQL, config.Driver)
-	assert.Equal(t, result.Authentication.Ref, config.CredentialID)
-	assert.Empty(t, config.Password)
+	assert.Zero(t, config.CredentialID)
+	plaintext, err := credential_svc.Default().Decrypt(config.Password)
+	require.NoError(t, err)
+	assert.Equal(t, "replacement-secret", plaintext)
 }
 
-func TestPutUpdatePlaintextDefaultsCredentialMetadataFromExistingAsset(t *testing.T) {
+func TestPutUpdatePlaintextStoresInlineWithExistingAssetContext(t *testing.T) {
 	env := setupPutTest(t)
 	asset := newRedisAsset("cache")
 	asset.Status = asset_entity.StatusActive
@@ -450,9 +419,15 @@ func TestPutUpdatePlaintextDefaultsCredentialMetadataFromExistingAsset(t *testin
 	candidate := *asset
 	result, err := Put(env.ctx, Request{Asset: &candidate, Config: map[string]any{"password": "replacement-secret"}})
 	require.NoError(t, err)
-	cred, err := credential_repo.Credential().Find(env.ctx, result.Authentication.Ref)
+	assert.Nil(t, result.Authentication)
+	stored, err := asset_repo.Asset().Find(env.ctx, asset.ID)
 	require.NoError(t, err)
-	assert.Equal(t, "existing-user", cred.Username)
+	cfg, err := stored.GetRedisConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "existing-user", cfg.Username)
+	plaintext, err := credential_svc.Default().Decrypt(cfg.Password)
+	require.NoError(t, err)
+	assert.Equal(t, "replacement-secret", plaintext)
 }
 
 func TestPutUpdateReplacesAssociationWithoutDeletingTheOldCredential(t *testing.T) {
@@ -466,19 +441,20 @@ func TestPutUpdateReplacesAssociationWithoutDeletingTheOldCredential(t *testing.
 	candidate := *asset
 	result, err := Put(env.ctx, Request{Asset: &candidate, Config: map[string]any{"password": "replacement-secret"}})
 	require.NoError(t, err)
-	require.NotNil(t, result.Authentication)
-	assert.NotEqual(t, oldCredential.ID, result.Authentication.Ref)
+	assert.Nil(t, result.Authentication)
 
 	_, err = credential_repo.Credential().Find(env.ctx, oldCredential.ID)
 	assert.NoError(t, err, "replaced credentials may be shared and must not be deleted")
 	_, credentialCount := env.counts(t)
-	assert.Equal(t, int64(2), credentialCount)
+	assert.Equal(t, int64(1), credentialCount)
 	stored, err := asset_repo.Asset().Find(env.ctx, asset.ID)
 	require.NoError(t, err)
 	cfg, err := stored.GetRedisConfig()
 	require.NoError(t, err)
-	assert.Equal(t, result.Authentication.Ref, cfg.CredentialID)
-	assert.Empty(t, cfg.Password)
+	assert.Zero(t, cfg.CredentialID)
+	plaintext, err := credential_svc.Default().Decrypt(cfg.Password)
+	require.NoError(t, err)
+	assert.Equal(t, "replacement-secret", plaintext)
 }
 
 func TestPutUpdateFailureRollsBackNewCredentialAndLeavesStoredAssociation(t *testing.T) {
@@ -541,63 +517,6 @@ func TestPrepareSSHCredentialReferenceInfersAuthAndRejectsExplicitMismatchBefore
 	require.Error(t, err)
 	assert.False(t, enteredTransaction, "explicit credential/auth mismatch must fail in Prepare before writes")
 	assert.Contains(t, err.Error(), "accepted types")
-}
-
-func TestPutSSHPrivateKeyImportsManagedCredentialAndReturnsOnlySafeAssociation(t *testing.T) {
-	for _, tt := range []struct {
-		name           string
-		assetName      string
-		credentialName string
-		wantName       string
-	}{
-		{name: "defaults to final asset name", assetName: "renamed-box", wantName: "renamed-box"},
-		{name: "honors credential_name", assetName: "box", credentialName: "deployment-key", wantName: "deployment-key"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			env := setupPutTest(t)
-			const passphrase = "write-only-passphrase"
-			privateKey := generatedSSHPrivateKey(t, passphrase)
-			prepared, err := Prepare(env.ctx, Request{Asset: newSSHAsset(tt.assetName), CredentialName: tt.credentialName, Config: map[string]any{
-				"host": "ssh.internal", "username": "root", "private_key": privateKey, "passphrase": passphrase,
-			}})
-			require.NoError(t, err)
-			for _, safeValue := range []any{prepared.SafeApprovalDetail(), prepared.SafeAuditArgs()} {
-				encoded, marshalErr := json.Marshal(safeValue)
-				require.NoError(t, marshalErr)
-				assert.NotContains(t, string(encoded), privateKey)
-				assert.NotContains(t, string(encoded), passphrase)
-			}
-			result, err := Commit(env.ctx, prepared)
-			require.NoError(t, err)
-			require.NotNil(t, result.Authentication)
-			assert.Equal(t, credential_entity.TypeSSHKey, result.Authentication.Type)
-
-			credential, err := credential_repo.Credential().Find(env.ctx, result.Authentication.Ref)
-			require.NoError(t, err)
-			assert.Equal(t, tt.wantName, credential.Name)
-			assert.Equal(t, "root", credential.Username)
-			storedPassphrase, err := credential_svc.Default().Decrypt(credential.Passphrase)
-			require.NoError(t, err)
-			assert.Equal(t, passphrase, storedPassphrase)
-
-			cfg, err := result.Asset.GetSSHConfig()
-			require.NoError(t, err)
-			assert.Equal(t, asset_entity.AuthTypeKey, cfg.AuthType)
-			assert.Equal(t, credential.ID, cfg.CredentialID)
-			assert.Empty(t, cfg.Password)
-			assert.Empty(t, cfg.PrivateKeys)
-			assert.Empty(t, cfg.PrivateKeyPassphrase)
-
-			for _, safeValue := range []any{result, map[string]any{"audit": result.Authentication}} {
-				encoded, marshalErr := json.Marshal(safeValue)
-				require.NoError(t, marshalErr)
-				assert.NotContains(t, string(encoded), privateKey)
-				assert.NotContains(t, string(encoded), passphrase)
-				assert.NotContains(t, string(encoded), credential.PrivateKey)
-				assert.NotContains(t, string(encoded), credential.Passphrase)
-			}
-		})
-	}
 }
 
 func TestPrepareSSHAgentIncludesInferredAuthTypeInSafeProjection(t *testing.T) {
@@ -679,90 +598,11 @@ func TestPutSSHAgentRequiresPersistedSourceCreatesNoCredentialAndReturnsTypedAut
 	assert.Zero(t, credentials)
 }
 
-func TestPutSSHUpdateSwitchesPasswordToKeyToAgentAndRetainsReplacedCredentials(t *testing.T) {
-	env := setupPutTest(t)
-	passwordResult, err := Put(env.ctx, Request{Asset: newSSHAsset("switch-box"), Config: map[string]any{
-		"host": "ssh.internal", "username": "root", "password": "password-secret",
-	}})
-	require.NoError(t, err)
-	oldPasswordID := passwordResult.Authentication.Ref
-
-	candidate := *passwordResult.Asset
-	keyResult, err := Put(env.ctx, Request{Asset: &candidate, Config: map[string]any{
-		"private_key": generatedSSHPrivateKey(t, ""),
-	}})
-	require.NoError(t, err)
-	require.NotNil(t, keyResult.Authentication)
-	oldKeyID := keyResult.Authentication.Ref
-	keyCfg, err := keyResult.Asset.GetSSHConfig()
-	require.NoError(t, err)
-	assert.Equal(t, asset_entity.AuthTypeKey, keyCfg.AuthType)
-	assert.Equal(t, oldKeyID, keyCfg.CredentialID)
-	assert.Empty(t, keyCfg.Password)
-	assert.Zero(t, keyCfg.AgentSourceID)
-
-	sourceID := seedAgentSource(t, env.ctx)
-	candidate = *keyResult.Asset
-	agentResult, err := Put(env.ctx, Request{Asset: &candidate, Config: map[string]any{
-		"auth_type": "agent", "agent_source_id": float64(sourceID), "agent_key_fingerprint": validAgentFingerprintForPut(),
-	}})
-	require.NoError(t, err)
-	agentCfg, err := agentResult.Asset.GetSSHConfig()
-	require.NoError(t, err)
-	assert.Equal(t, asset_entity.AuthTypeAgent, agentCfg.AuthType)
-	assert.Zero(t, agentCfg.CredentialID)
-	assert.Empty(t, agentCfg.Password)
-	assert.Empty(t, agentCfg.PrivateKeys)
-	assert.Empty(t, agentCfg.PrivateKeyPassphrase)
-	require.NotNil(t, agentResult.Authentication)
-	assert.Equal(t, AuthenticationRef{Type: "ssh_agent", Ref: sourceID}, *agentResult.Authentication)
-
-	_, err = credential_repo.Credential().Find(env.ctx, oldPasswordID)
-	assert.NoError(t, err, "replaced password credential may be shared and must remain")
-	_, err = credential_repo.Credential().Find(env.ctx, oldKeyID)
-	assert.NoError(t, err, "replaced key credential may be shared and must remain")
-	_, credentialCount := env.counts(t)
-	assert.Equal(t, int64(2), credentialCount)
-}
-
-func TestPutSSHKeyImportRollsBackOnHandlerAndAssetWriteFailure(t *testing.T) {
-	privateKey := generatedSSHPrivateKey(t, "")
-	for _, tt := range []struct {
-		name    string
-		asset   *asset_entity.Asset
-		config  map[string]any
-		prepare func(*testing.T, *putTestEnv)
-	}{
-		{
-			name: "handler update", asset: &asset_entity.Asset{Name: "bad", Type: failingAssetType, ID: 77},
-			config: map[string]any{"username": "root", "private_key": privateKey},
-		},
-		{
-			name: "asset create", asset: newSSHAsset("box"),
-			config:  map[string]any{"host": "ssh.internal", "username": "root", "private_key": privateKey},
-			prepare: func(t *testing.T, env *putTestEnv) { registerWriteFailure(t, env.db, "create", "assets") },
-		},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			env := setupPutTest(t)
-			if tt.prepare != nil {
-				tt.prepare(t, env)
-			}
-			_, err := Put(env.ctx, Request{Asset: tt.asset, Config: tt.config})
-			require.Error(t, err)
-			assert.NotContains(t, err.Error(), privateKey)
-			assets, credentials := env.counts(t)
-			assert.Zero(t, assets)
-			assert.Zero(t, credentials, "newly imported key must roll back with the failed asset operation")
-		})
-	}
-}
-
-// TestSafeAuditArgsOmitsAllFiveWriteOnlyFieldsAcrossTypes 锁定 Task 8 的 producer 投影
-// 契约：password / private_key / passphrase / secret_access_key / kubeconfig 这五类
+// TestSafeAuditArgsOmitsWriteOnlyFieldsAcrossTypes 锁定 Task 8 的 producer 投影
+// 契约：password / secret_access_key / kubeconfig 这三类
 // write-only 字段在 SafeAuditArgs 与 SafeAuditArgsForResult 中必须整体缺席（不是脱敏），
 // 而类型允许的普通 config 与资产身份保留。
-func TestSafeAuditArgsOmitsAllFiveWriteOnlyFieldsAcrossTypes(t *testing.T) {
+func TestSafeAuditArgsOmitsWriteOnlyFieldsAcrossTypes(t *testing.T) {
 	tests := []struct {
 		name       string
 		asset      *asset_entity.Asset
@@ -779,17 +619,6 @@ func TestSafeAuditArgsOmitsAllFiveWriteOnlyFieldsAcrossTypes(t *testing.T) {
 			},
 			writeOnly:  []string{"password"},
 			secretText: "pw-secret",
-			allowedKey: "host",
-		},
-		{
-			name:  "ssh key material",
-			asset: newSSHAsset("box"),
-			config: map[string]any{
-				"host": "ssh.internal", "username": "root",
-				"private_key": "pk-secret", "passphrase": "pp-secret",
-			},
-			writeOnly:  []string{"private_key", "passphrase"},
-			secretText: "pk-secret",
 			allowedKey: "host",
 		},
 		{

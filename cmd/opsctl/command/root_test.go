@@ -28,7 +28,7 @@ func TestCreateAssetUsageDocumentsGenericAndSafeCredentialInputs(t *testing.T) {
 	usage := captureStderr(t, printCreateAssetUsage)
 	for _, want := range []string{
 		"--config", "--config-file", "opsctl help <type>", "--kubeconfig-file",
-		"--credential-id", "--password-stdin", "--password", "--credential-name",
+		"--credential-id", "--password-stdin", "--password",
 		"--agent-source-id", "--agent-key-fingerprint", "shell history", "process listings", "CI",
 		"restrictive file permissions", "avoid committing", "remove it",
 	} {

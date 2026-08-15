@@ -56,8 +56,8 @@ description: "Read and write etcd keys via exec, using an etcdctl-like command s
 | field | type | required | notes |
 |---|---|---|---|
 | `endpoints` | string | yes | Comma/semicolon/newline separated `host:port` list, no scheme prefix — each entry must parse as `host:port`, so `http://`/`https://` is rejected with `etcd endpoint必须为host:port格式`: e.g. `"10.0.1.5:2379,10.0.1.6:2379"` |
-| `username` | string | no | Copied to newly created credential metadata |
-| `password` | string | no | **Write-only.** Creates a managed password credential |
+| `username` | string | no | etcd account name |
+| `password` | string | no | **Write-only.** Encrypted in the asset; does not create a credential |
 | `credential_id` | number | no | Existing managed password credential ID |
 | `tls` | bool | no | `true` to enable TLS |
 | `tls_insecure` | bool | no | `true` to skip TLS certificate verification |
@@ -69,5 +69,5 @@ description: "Read and write etcd keys via exec, using an etcdctl-like command s
 | `command_timeout_seconds` | number | no | Per-command timeout override, in seconds |
 | `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches |
 
-`password` and `credential_id` are mutually exclusive. Plaintext is never returned and is
-materialized under top-level `credential_name` (default: final asset name).
+`password` and `credential_id` are mutually exclusive. Plaintext is never returned, is
+encrypted in the asset, and never creates a managed credential.

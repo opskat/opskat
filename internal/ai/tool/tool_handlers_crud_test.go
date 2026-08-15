@@ -8,11 +8,8 @@ import (
 	"testing"
 
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"math"
 
 	"github.com/cago-frame/cago/database/db"
@@ -35,7 +32,6 @@ import (
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	gossh "golang.org/x/crypto/ssh"
 )
 
 // fakeAssetRepo is a minimal in-memory AssetRepo for the CRUD tests below.
@@ -415,7 +411,7 @@ func (e *crudTestEnv) validOSSConfig() map[string]any {
 }
 
 // 有 asset → 更新；无 asset → 创建。同一个工具，分支只由标识的有无决定。
-func TestHandlePutAsset_ManagedPasswordUsesSharedAtomicBoundary(t *testing.T) {
+func TestHandlePutAsset_PlaintextPasswordStaysAssetLocal(t *testing.T) {
 	gdb, err := gorm.Open(sqlite.Open("file:tool_put_managed?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, gdb.AutoMigrate(&asset_entity.Asset{}, &credential_entity.Credential{}))
@@ -437,38 +433,30 @@ func TestHandlePutAsset_ManagedPasswordUsesSharedAtomicBoundary(t *testing.T) {
 	plaintext := "ai-plaintext-must-not-leak"
 	// #nosec G101 -- plaintext is an intentional test fixture used to verify that managed credentials never leak.
 	out, err := handlePutAsset(context.Background(), map[string]any{
-		"name": "cache-prod", "type": "redis", "credential_name": "managed-cache-login",
+		"name": "cache-prod", "type": "redis",
 		"config": map[string]any{"host": "redis.internal", "username": "default", "password": plaintext},
 	})
 	require.NoError(t, err)
 	assert.NotContains(t, out, plaintext)
-	assert.Contains(t, out, `"authentication":{"type":"password","ref":`)
+	assert.NotContains(t, out, `"authentication"`)
 
 	var result struct {
-		ID             int64 `json:"id"`
-		Authentication struct {
-			Type string `json:"type"`
-			Ref  int64  `json:"ref"`
-		} `json:"authentication"`
+		ID int64 `json:"id"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(out), &result))
 	assert.Positive(t, result.ID)
-	assert.Equal(t, credential_entity.TypePassword, result.Authentication.Type)
-
-	cred, err := credential_repo.Credential().Find(context.Background(), result.Authentication.Ref)
-	require.NoError(t, err)
-	assert.Equal(t, "managed-cache-login", cred.Name)
-	assert.Equal(t, "default", cred.Username)
-	decrypted, err := credential_svc.Default().Decrypt(cred.Password)
-	require.NoError(t, err)
-	assert.Equal(t, plaintext, decrypted)
+	var credentialCount int64
+	require.NoError(t, gdb.Model(&credential_entity.Credential{}).Count(&credentialCount).Error)
+	assert.Zero(t, credentialCount)
 
 	asset, err := asset_repo.Asset().Find(context.Background(), result.ID)
 	require.NoError(t, err)
 	cfg, err := asset.GetRedisConfig()
 	require.NoError(t, err)
-	assert.Equal(t, cred.ID, cfg.CredentialID)
-	assert.Empty(t, cfg.Password)
+	assert.Zero(t, cfg.CredentialID)
+	decrypted, err := credential_svc.Default().Decrypt(cfg.Password)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, decrypted)
 }
 
 func TestHandlePutAsset_ManagedCredentialInputFailuresLeaveNoAsset(t *testing.T) {
@@ -538,115 +526,16 @@ func TestHandlePutAsset_CreateThenUpdate(t *testing.T) {
 	_ = out
 }
 
-func TestHandlePutAsset_SSHAuthenticationSwitchesRemainManagedAndSafe(t *testing.T) {
-	gdb, err := gorm.Open(sqlite.Open("file:tool_put_ssh_switch?mode=memory&cache=shared"), &gorm.Config{})
-	require.NoError(t, err)
-	require.NoError(t, gdb.AutoMigrate(&asset_entity.Asset{}, &credential_entity.Credential{}, &ssh_agent_source_entity.SSHAgentSource{}))
-	db.SetDefault(gdb)
-	origAsset := asset_repo.Asset()
-	origCredential := credential_repo.Credential()
-	origAgentSource := ssh_agent_source_repo.SSHAgentSource()
-	asset_repo.RegisterAsset(asset_repo.NewAsset())
-	credential_repo.RegisterCredential(credential_repo.NewCredential())
-	ssh_agent_source_repo.RegisterSSHAgentSource(ssh_agent_source_repo.New())
-	credential_svc.SetDefault(credential_svc.New("tool-put-master-key", []byte("tool-put-salt-16")))
-	t.Cleanup(func() {
-		asset_repo.RegisterAsset(origAsset)
-		credential_repo.RegisterCredential(origCredential)
-		ssh_agent_source_repo.RegisterSSHAgentSource(origAgentSource)
-		sqlDB, sqlErr := gdb.DB()
-		if sqlErr == nil {
-			_ = sqlDB.Close()
-		}
-	})
-
-	password := "ai-password-must-not-leak"
-	created, err := handlePutAsset(context.Background(), map[string]any{
-		"name": "ssh-switch", "type": "ssh",
-		"config": map[string]any{"host": "ssh.internal", "username": "root", "password": password},
-	})
-	require.NoError(t, err)
-	assert.NotContains(t, created, password)
-	assert.Contains(t, created, `"authentication":{"type":"password","ref":`)
-
-	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	require.NoError(t, err)
-	block, err := gossh.MarshalPrivateKey(privateKey, "ai-key")
-	require.NoError(t, err)
-	privateKeyPEM := string(pem.EncodeToMemory(block))
-	updated, err := handlePutAsset(context.Background(), map[string]any{
-		"asset": "ssh-switch", "credential_name": "managed-ai-key",
-		"config": map[string]any{"private_key": privateKeyPEM},
-	})
-	require.NoError(t, err)
-	assert.NotContains(t, updated, privateKeyPEM)
-	assert.Contains(t, updated, `"authentication":{"type":"ssh_key","ref":`)
-
-	source := &ssh_agent_source_entity.SSHAgentSource{Name: "offline", EndpointType: "unix", Endpoint: "/offline.sock", Createtime: 1, Updatetime: 1}
-	require.NoError(t, ssh_agent_source_repo.SSHAgentSource().Create(context.Background(), source))
-	agentUpdated, err := handlePutAsset(context.Background(), map[string]any{
-		"asset": "ssh-switch",
-		"config": map[string]any{
-			"auth_type": "agent", "agent_source_id": float64(source.ID),
-			"agent_key_fingerprint": validAgentFingerprintForTest(),
-		},
-	})
-	require.NoError(t, err)
-	assert.Contains(t, agentUpdated, fmt.Sprintf(`"authentication":{"type":"ssh_agent","ref":%d}`, source.ID))
-	assert.NotContains(t, agentUpdated, password)
-	assert.NotContains(t, agentUpdated, privateKeyPEM)
-
-	var credentialCount int64
-	require.NoError(t, gdb.Model(&credential_entity.Credential{}).Count(&credentialCount).Error)
-	assert.Equal(t, int64(2), credentialCount, "AI replacement must retain the old managed password and key credentials")
-	stored, err := asset_repo.Asset().Find(context.Background(), 1)
-	require.NoError(t, err)
-	cfg, err := stored.GetSSHConfig()
-	require.NoError(t, err)
-	assert.Equal(t, asset_entity.AuthTypeAgent, cfg.AuthType)
-	assert.Zero(t, cfg.CredentialID)
-	assert.Empty(t, cfg.Password)
-}
-
-func TestHandlePutAsset_PreservesExistingSSHPrivateKeyBehavior(t *testing.T) {
-	gdb, err := gorm.Open(sqlite.Open("file:tool_put_ssh_key?mode=memory&cache=shared"), &gorm.Config{})
-	require.NoError(t, err)
-	require.NoError(t, gdb.AutoMigrate(&asset_entity.Asset{}, &credential_entity.Credential{}))
-	db.SetDefault(gdb)
-	origAsset := asset_repo.Asset()
-	origCredential := credential_repo.Credential()
-	asset_repo.RegisterAsset(asset_repo.NewAsset())
-	credential_repo.RegisterCredential(credential_repo.NewCredential())
-	credential_svc.SetDefault(credential_svc.New("tool-put-master-key", []byte("tool-put-salt-16")))
-	t.Cleanup(func() {
-		asset_repo.RegisterAsset(origAsset)
-		credential_repo.RegisterCredential(origCredential)
-		sqlDB, sqlErr := gdb.DB()
-		if sqlErr == nil {
-			_ = sqlDB.Close()
-		}
-	})
-	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	require.NoError(t, err)
-	block, err := gossh.MarshalPrivateKey(privateKey, "ai-key")
-	require.NoError(t, err)
-	privateKeyPEM := string(pem.EncodeToMemory(block))
-
-	out, err := handlePutAsset(context.Background(), map[string]any{
+func TestHandlePutAsset_RejectsSSHPrivateMaterial(t *testing.T) {
+	env := setupCRUD(t)
+	_, err := handlePutAsset(env.ctx, map[string]any{
 		"name": "ssh-key-box", "type": "ssh",
-		"config": map[string]any{"host": "ssh.internal", "username": "root", "private_key": privateKeyPEM},
+		"config": map[string]any{"host": "ssh.internal", "username": "root", "private_key": "private-secret"},
 	})
-	require.NoError(t, err)
-	assert.NotContains(t, out, privateKeyPEM)
-	var credentialCount int64
-	require.NoError(t, gdb.Model(&credential_entity.Credential{}).Count(&credentialCount).Error)
-	assert.Equal(t, int64(1), credentialCount)
-	var asset asset_entity.Asset
-	require.NoError(t, gdb.First(&asset).Error)
-	cfg, err := asset.GetSSHConfig()
-	require.NoError(t, err)
-	assert.Equal(t, asset_entity.AuthTypeKey, cfg.AuthType)
-	assert.Positive(t, cfg.CredentialID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown config field(s): [private_key]")
+	assert.NotContains(t, err.Error(), "private-secret")
+	assert.Zero(t, env.assetCount())
 }
 
 // config 是自由对象，校验回到 assettype.ValidateCreateArgs——不是回到工具 schema。
@@ -1149,7 +1038,6 @@ func TestHandlePutAsset_SuccessAuditProjectionOmitsWriteOnlyFieldsAndExecutionGe
 	require.NoError(t, err)
 	assert.NotContains(t, string(encoded), plaintext)
 
-	// authentication 是 AuthenticationRef 结构体，先经 JSON 归一成 map 再断言。
 	var projJSON map[string]any
 	require.NoError(t, json.Unmarshal(encoded, &projJSON))
 	config, ok := projJSON["config"].(map[string]any)
@@ -1158,15 +1046,14 @@ func TestHandlePutAsset_SuccessAuditProjectionOmitsWriteOnlyFieldsAndExecutionGe
 	assert.Equal(t, "default", config["username"])
 	_, hasPassword := config["password"]
 	assert.False(t, hasPassword, "write-only password must be entirely absent, not redacted")
-	auth, ok := projJSON["authentication"].(map[string]any)
-	require.True(t, ok, "typed authentication ref must be preserved")
-	assert.Equal(t, "password", auth["type"])
-	assert.Positive(t, auth["ref"].(float64))
-
-	// 执行仍收到原值：物化出的 managed credential 可解密回明文。
-	cred, err := credential_repo.Credential().Find(context.Background(), int64(auth["ref"].(float64)))
+	_, hasAuthentication := projJSON["authentication"]
+	assert.False(t, hasAuthentication)
+	assets, err := asset_repo.Asset().List(context.Background(), asset_repo.ListOptions{})
 	require.NoError(t, err)
-	decrypted, err := credential_svc.Default().Decrypt(cred.Password)
+	require.Len(t, assets, 1)
+	stored, err := assets[0].GetRedisConfig()
+	require.NoError(t, err)
+	decrypted, err := credential_svc.Default().Decrypt(stored.Password)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, decrypted)
 }
@@ -1277,18 +1164,17 @@ func TestPutAssetTopLevelAuditArgs_TypedFailClosedProjection(t *testing.T) {
 	}{Password: secret}
 
 	args := map[string]any{
-		"asset":           map[string]any{"password": secret}, // map
-		"name":            []any{"a", secret},                 // slice
-		"type":            payload,                            // struct
-		"description":     &payload,                           // pointer
-		"icon":            map[string]any{"token": secret},    // map
-		"credential_name": []any{secret},                      // slice
-		"group_id":        map[string]any{"id": secret},       // 非法复合
-		"config":          map[string]any{"password": secret}, // config 从不投影
+		"asset":       map[string]any{"password": secret}, // map
+		"name":        []any{"a", secret},                 // slice
+		"type":        payload,                            // struct
+		"description": &payload,                           // pointer
+		"icon":        map[string]any{"token": secret},    // map
+		"group_id":    map[string]any{"id": secret},       // 非法复合
+		"config":      map[string]any{"password": secret}, // config 从不投影
 	}
 	proj := putAssetTopLevelAuditArgs(args)
 
-	for _, key := range []string{"asset", "name", "type", "description", "icon", "credential_name", "group_id"} {
+	for _, key := range []string{"asset", "name", "type", "description", "icon", "group_id"} {
 		_, ok := proj[key]
 		assert.False(t, ok, "type-invalid composite %s must be omitted from the projection", key)
 	}
@@ -1304,14 +1190,13 @@ func TestPutAssetTopLevelAuditArgs_TypedFailClosedProjection(t *testing.T) {
 // 与数值 group_id 按原值保留；config 从不投影；投影是独立 map，原 args 不被改写。
 func TestPutAssetTopLevelAuditArgs_PreservesTypeCorrectScalars(t *testing.T) {
 	args := map[string]any{
-		"asset":           "web-9",
-		"name":            "prod",
-		"type":            "ssh",
-		"description":     "fleet",
-		"icon":            "server",
-		"credential_name": "managed-login",
-		"group_id":        float64(7),
-		"config":          map[string]any{"password": "keep-out"},
+		"asset":       "web-9",
+		"name":        "prod",
+		"type":        "ssh",
+		"description": "fleet",
+		"icon":        "server",
+		"group_id":    float64(7),
+		"config":      map[string]any{"password": "keep-out"},
 	}
 	proj := putAssetTopLevelAuditArgs(args)
 
@@ -1320,7 +1205,6 @@ func TestPutAssetTopLevelAuditArgs_PreservesTypeCorrectScalars(t *testing.T) {
 	assert.Equal(t, "ssh", proj["type"])
 	assert.Equal(t, "fleet", proj["description"])
 	assert.Equal(t, "server", proj["icon"])
-	assert.Equal(t, "managed-login", proj["credential_name"])
 	assert.Equal(t, float64(7), proj["group_id"])
 	_, hasConfig := proj["config"]
 	assert.False(t, hasConfig, "config must never be projected")

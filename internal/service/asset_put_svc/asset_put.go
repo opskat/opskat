@@ -1,5 +1,5 @@
-// Package asset_put_svc owns the shared automation boundary for atomic asset and
-// managed-credential writes.
+// Package asset_put_svc owns the shared automation boundary for asset writes and
+// validated managed-credential references.
 package asset_put_svc
 
 import (
@@ -19,11 +19,10 @@ import (
 )
 
 // Request contains one create or update operation. Asset.ID == 0 creates;
-// Asset.ID > 0 updates. CredentialName applies only to plaintext materialization.
+// Asset.ID > 0 updates.
 type Request struct {
-	Asset          *asset_entity.Asset
-	Config         map[string]any
-	CredentialName string
+	Asset  *asset_entity.Asset
+	Config map[string]any
 }
 
 // AuthenticationRef is the stable, non-secret association returned to callers.
@@ -54,7 +53,6 @@ type Prepared struct {
 	config         map[string]any
 	approvalConfig map[string]any
 	credential     assettype.CredentialPlan
-	credentialName string
 	referencedType string
 	authentication *AuthenticationRef
 }
@@ -78,17 +76,6 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 	}
 	if err != nil {
 		return nil, err
-	}
-	if asset.ID > 0 && preparedCreate.Credential.Kind == assettype.CredentialKindPassword && preparedCreate.Credential.Username == "" {
-		preparedCreate.Credential.Username = existingUsername(&asset, preparedCreate.Credential.UsernameField)
-	}
-
-	credentialName := req.CredentialName
-	if credentialName == "" {
-		credentialName = asset.Name
-	}
-	if req.CredentialName != "" && preparedCreate.Credential.Kind != assettype.CredentialKindPassword && preparedCreate.Credential.Kind != assettype.CredentialKindSSHKey {
-		return nil, fmt.Errorf("credential_name is valid only when creating a managed credential")
 	}
 	var referencedType string
 	if preparedCreate.Credential.Kind == assettype.CredentialKindReference {
@@ -115,13 +102,12 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 		config:         preparedCreate.Config,
 		approvalConfig: preparedCreate.Approval,
 		credential:     preparedCreate.Credential,
-		credentialName: credentialName,
 		referencedType: referencedType,
 		authentication: authentication,
 	}, nil
 }
 
-// Commit performs credential materialization/reference validation and the asset write
+// Commit resolves any validated credential reference and performs the asset write
 // in one dbutil transaction.
 func Commit(ctx context.Context, prepared *Prepared) (*Result, error) {
 	if prepared == nil {
@@ -131,7 +117,7 @@ func Commit(ctx context.Context, prepared *Prepared) (*Result, error) {
 
 	var result *Result
 	err := dbutil.WithTransaction(ctx, func(txCtx context.Context) error {
-		config, authentication, err := prepared.materialize(txCtx)
+		config, authentication, err := prepared.resolveAuthentication(txCtx)
 		if err != nil {
 			return err
 		}
@@ -217,7 +203,7 @@ func (p *Prepared) SafeAuditArgs() map[string]any {
 }
 
 // SafeAuditArgsForResult adds only the persisted identity and safe typed association.
-// It never exposes the prepared config or materialized credential payload.
+// It never exposes the prepared config or credential payload.
 func (p *Prepared) SafeAuditArgsForResult(result *Result) map[string]any {
 	out := p.SafeAuditArgs()
 	if result == nil {
@@ -230,7 +216,7 @@ func (p *Prepared) SafeAuditArgsForResult(result *Result) map[string]any {
 	return out
 }
 
-func (p *Prepared) materialize(ctx context.Context) (map[string]any, *AuthenticationRef, error) {
+func (p *Prepared) resolveAuthentication(ctx context.Context) (map[string]any, *AuthenticationRef, error) {
 	switch p.credential.Kind {
 	case assettype.CredentialKindNone:
 		return cloneMap(p.config), p.authentication, nil
@@ -240,24 +226,8 @@ func (p *Prepared) materialize(ctx context.Context) (map[string]any, *Authentica
 			return nil, nil, err
 		}
 		return p.bind(cred)
-	case assettype.CredentialKindPassword:
-		cred, err := credential_mgr_svc.CreatePassword(ctx, credential_mgr_svc.CreatePasswordRequest{
-			Name:     p.credentialName,
-			Username: p.credential.Username,
-			Password: p.credential.Plaintext,
-		})
-		if err != nil {
-			return nil, nil, fmt.Errorf("create managed password credential: %w", err)
-		}
-		return p.bind(cred)
-	case assettype.CredentialKindSSHKey:
-		cred, err := credential_mgr_svc.ImportSSHKeyFromPEM(ctx, p.credentialName, "", p.credential.PrivateKey, p.credential.Passphrase, p.credential.Username)
-		if err != nil {
-			return nil, nil, fmt.Errorf("import managed SSH key credential: %w", err)
-		}
-		return p.bind(cred)
 	default:
-		return nil, nil, fmt.Errorf("unsupported credential materialization kind %q", p.credential.Kind)
+		return nil, nil, fmt.Errorf("unsupported credential plan kind %q", p.credential.Kind)
 	}
 }
 
@@ -298,13 +268,4 @@ func updateAutomationContext(asset *asset_entity.Asset, config map[string]any) (
 		return config, nil
 	}
 	return provider.AutomationUpdateContext(asset, config)
-}
-
-func existingUsername(asset *asset_entity.Asset, field string) string {
-	safe := map[string]any(nil)
-	if handler, ok := assettype.Get(asset.Type); ok {
-		safe = handler.SafeView(asset)
-	}
-	value, _ := safe[field].(string)
-	return value
 }

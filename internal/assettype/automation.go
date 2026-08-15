@@ -23,21 +23,14 @@ type CredentialKind string
 const (
 	CredentialKindNone      CredentialKind = "none"
 	CredentialKindReference CredentialKind = "reference"
-	CredentialKindPassword  CredentialKind = "password"
-	CredentialKindSSHKey    CredentialKind = "ssh_key"
 )
 
-// CredentialPlan is pure data for the later materialization service. Secret
+// CredentialPlan is pure data for later existing-reference validation. Secret
 // values remain write-only and never appear in PreparedCreate.Approval.
 type CredentialPlan struct {
 	Kind          CredentialKind
 	ReferenceID   int64
 	AcceptedTypes []string
-	Plaintext     string
-	PrivateKey    string
-	Passphrase    string
-	Username      string
-	UsernameField string
 }
 
 type CredentialBinding struct {
@@ -60,7 +53,7 @@ type PreparedCreate struct {
 	Credential CredentialPlan
 }
 
-// BindCredential applies a materialized credential through the selected type owner.
+// BindCredential applies a validated existing credential through the selected type owner.
 func (p PreparedCreate) BindCredential(binding CredentialBinding) (map[string]any, error) {
 	if binding.ID <= 0 {
 		return nil, fmt.Errorf("credential binding ID must be positive")
@@ -270,7 +263,7 @@ func joinRegisteredTypes() string {
 	return fmt.Sprintf("%v", RegisteredTypes())
 }
 
-func passwordCredentialPlan(args map[string]any, plaintextField, usernameField string) (CredentialPlan, error) {
+func passwordReferencePlan(args map[string]any, plaintextField string) (CredentialPlan, error) {
 	credentialID, _, err := positiveInt64Arg(args, "credential_id")
 	if err != nil {
 		return CredentialPlan{}, err
@@ -289,20 +282,14 @@ func passwordCredentialPlan(args map[string]any, plaintextField, usernameField s
 	if plaintext == "" {
 		return CredentialPlan{Kind: CredentialKindNone}, nil
 	}
-	return CredentialPlan{
-		Kind:          CredentialKindPassword,
-		Plaintext:     plaintext,
-		Username:      ArgString(args, usernameField),
-		UsernameField: usernameField,
-	}, nil
+	return CredentialPlan{Kind: CredentialKindNone}, nil
 }
 
-func bindPasswordCredential(args map[string]any, binding CredentialBinding, plaintextField string) (map[string]any, error) {
+func bindPasswordCredential(args map[string]any, binding CredentialBinding) (map[string]any, error) {
 	if binding.Type != credential_entity.TypePassword {
 		return nil, fmt.Errorf("credential type %q is not accepted; expected password", binding.Type)
 	}
 	out := cloneArgs(args)
-	delete(out, plaintextField)
 	out["credential_id"] = binding.ID
 	return out, nil
 }

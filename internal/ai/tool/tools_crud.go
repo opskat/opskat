@@ -20,21 +20,19 @@ func crudTools() []tool.Tool {
 			DescStr: "Create or update an asset through the registered type contract. Pass asset=<id-or-name> to update; omit it to create. " +
 				"Call help with the existing asset or a type name (e.g. help(asset=\"rdp\")) for exact config fields " +
 				"(registered types: " + strings.Join(permission.RegisteredHelpTypes(), ", ") + "). Unknown config fields are rejected. " +
-				"Plaintext password, OSS secret_access_key, and SSH private_key/passphrase are write-only: password/OSS material " +
-				"becomes a managed password credential and private_key becomes a managed SSH-key credential. credential_id reuses " +
-				"an existing type-checked credential; conflicting secret sources fail. K8s kubeconfig remains directly encrypted asset " +
+				"Plaintext password and OSS secret_access_key are write-only asset-local secrets. credential_id reuses " +
+				"an existing type-checked managed credential; conflicting secret sources fail. K8s kubeconfig remains directly encrypted asset " +
 				"config. Successful output contains only the asset ID and a safe authentication reference when applicable; never echo secrets.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
-					"asset":           {Type: "string", Description: "Existing asset id or name to update. Omit to create a new asset."},
-					"name":            {Type: "string", Description: "Display name. Required when creating."},
-					"type":            {Type: "string", Description: `Asset type when creating (defaults to "ssh"). When updating, this is an assertion — the type of an existing asset cannot be changed.`},
-					"group_id":        {Type: "number", Description: "Group ID to assign this asset to. Values <= 0 are ignored."},
-					"description":     {Type: "string", Description: "Description or notes. Empty string clears it."},
-					"icon":            {Type: "string", Description: "Icon name."},
-					"credential_name": {Type: "string", Description: "Name for a managed password or SSH-key credential created from write-only material. Defaults to the final asset name; invalid when no credential is created."},
-					"config":          {Type: "object", Description: "Type-specific connection fields (host, port, username, credentials, …). Plaintext credential fields are write-only. Call help(asset) for the exact field list of a given type."},
+					"asset":       {Type: "string", Description: "Existing asset id or name to update. Omit to create a new asset."},
+					"name":        {Type: "string", Description: "Display name. Required when creating."},
+					"type":        {Type: "string", Description: `Asset type when creating (defaults to "ssh"). When updating, this is an assertion — the type of an existing asset cannot be changed.`},
+					"group_id":    {Type: "number", Description: "Group ID to assign this asset to. Values <= 0 are ignored."},
+					"description": {Type: "string", Description: "Description or notes. Empty string clears it."},
+					"icon":        {Type: "string", Description: "Icon name."},
+					"config":      {Type: "object", Description: "Type-specific connection fields (host, port, username, credentials, …). Plaintext credential fields are write-only. Call help(asset) for the exact field list of a given type."},
 				},
 			},
 			IsSerial: true,

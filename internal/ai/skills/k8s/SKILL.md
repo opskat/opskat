@@ -35,5 +35,4 @@ Pass the kubectl command as `command`, with or without the leading `kubectl`:
 | `password` | string | no | Reserved compatibility key; any non-empty value is rejected as inapplicable |
 | `credential_id` | number | no | Reserved compatibility key; any non-zero value is rejected as inapplicable |
 
-Never echo kubeconfig. It remains direct encrypted asset material, unlike automation
-password/private-key fields. Use top-level `credential_name` for neither K8s path.
+Never echo kubeconfig. It remains direct encrypted asset material. K8s accepts no credential fields.

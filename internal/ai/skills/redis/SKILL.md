@@ -34,11 +34,11 @@ selection. `scope` is the only correct way to switch databases.
 |---|---|---|---|
 | `host` | string | yes | |
 | `port` | number | no | Defaults to `6379` |
-| `username` | string | yes | Use `"default"` for Redis's built-in default user; copied to new credential metadata |
-| `password` | string | no | **Write-only.** Creates a managed password credential |
+| `username` | string | yes | Use `"default"` for Redis's built-in default user |
+| `password` | string | no | **Write-only.** Encrypted in the asset; does not create a credential |
 | `credential_id` | number | no | Existing managed password credential ID |
 | `redis_db` | number | no | Default DB index (0-15) |
 | `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches |
 
-`password` and `credential_id` are mutually exclusive. Plaintext is never returned and is
-materialized under top-level `credential_name` (default: final asset name).
+`password` and `credential_id` are mutually exclusive. Plaintext is never returned, is
+encrypted in the asset, and never creates a managed credential.

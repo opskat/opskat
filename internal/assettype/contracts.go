@@ -7,13 +7,13 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 )
 
-func passwordAutomationContract(configFields, approvalFields []string, usernameField string, normalize func(map[string]any) error) AutomationContract {
+func passwordAutomationContract(configFields, approvalFields []string, normalize func(map[string]any) error) AutomationContract {
 	return newAutomationContract(configFields, approvalFields, normalize,
 		func(args map[string]any) (CredentialPlan, error) {
-			return passwordCredentialPlan(args, "password", usernameField)
+			return passwordReferencePlan(args, "password")
 		},
 		func(args map[string]any, binding CredentialBinding) (map[string]any, error) {
-			return bindPasswordCredential(args, binding, "password")
+			return bindPasswordCredential(args, binding)
 		},
 	)
 }
@@ -29,7 +29,7 @@ func normalizeDefaultPort(port int) func(map[string]any) error {
 
 func (*sshHandler) AutomationContract() AutomationContract {
 	return newAutomationContract(
-		[]string{"host", "port", "username", "auth_type", "password", "private_key", "passphrase", "credential_id", "agent_source_id", "agent_key_fingerprint", "ssh_asset_id"},
+		[]string{"host", "port", "username", "auth_type", "password", "credential_id", "agent_source_id", "agent_key_fingerprint", "ssh_asset_id"},
 		[]string{"host", "port", "username", "auth_type", "agent_source_id", "agent_key_fingerprint", "ssh_asset_id"},
 		normalizeSSHAutomation,
 		sshCredentialPlan,
@@ -43,8 +43,6 @@ func normalizeSSHAutomation(args map[string]any) error {
 	}
 	if ArgString(args, "auth_type") == "" {
 		switch {
-		case ArgString(args, "private_key") != "":
-			args["auth_type"] = asset_entity.AuthTypeKey
 		case ArgString(args, "password") != "":
 			args["auth_type"] = asset_entity.AuthTypePassword
 		}
@@ -59,13 +57,8 @@ func sshCredentialPlan(args map[string]any) (CredentialPlan, error) {
 		return CredentialPlan{}, err
 	}
 	password := ArgString(args, "password")
-	privateKey := ArgString(args, "private_key")
-	passphrase := ArgString(args, "passphrase")
-	if passphrase != "" && privateKey == "" {
-		return CredentialPlan{}, fmt.Errorf("passphrase requires private_key")
-	}
 	if authType == asset_entity.AuthTypeAgent {
-		return noCredentialPlan("password", "private_key", "passphrase", "credential_id")(args)
+		return noCredentialPlan("password", "credential_id")(args)
 	}
 	sources := 0
 	if credentialID > 0 {
@@ -74,11 +67,8 @@ func sshCredentialPlan(args map[string]any) (CredentialPlan, error) {
 	if password != "" {
 		sources++
 	}
-	if privateKey != "" {
-		sources++
-	}
 	if sources > 1 {
-		return CredentialPlan{}, fmt.Errorf("credential_id, password, and private_key are mutually exclusive")
+		return CredentialPlan{}, fmt.Errorf("credential_id and password are mutually exclusive")
 	}
 	if credentialID > 0 {
 		accepted := []string{credential_entity.TypePassword, credential_entity.TypeSSHKey}
@@ -94,22 +84,13 @@ func sshCredentialPlan(args map[string]any) (CredentialPlan, error) {
 		if authType != "" && authType != asset_entity.AuthTypePassword {
 			return CredentialPlan{}, fmt.Errorf("password conflicts with auth_type %q", authType)
 		}
-		return CredentialPlan{Kind: CredentialKindPassword, Plaintext: password, Username: ArgString(args, "username"), UsernameField: "username"}, nil
-	}
-	if privateKey != "" {
-		if authType != "" && authType != asset_entity.AuthTypeKey {
-			return CredentialPlan{}, fmt.Errorf("private_key conflicts with auth_type %q", authType)
-		}
-		return CredentialPlan{Kind: CredentialKindSSHKey, PrivateKey: privateKey, Passphrase: passphrase, Username: ArgString(args, "username"), UsernameField: "username"}, nil
+		return CredentialPlan{Kind: CredentialKindNone}, nil
 	}
 	return CredentialPlan{Kind: CredentialKindNone}, nil
 }
 
 func bindSSHCredential(args map[string]any, binding CredentialBinding) (map[string]any, error) {
 	out := cloneArgs(args)
-	delete(out, "password")
-	delete(out, "private_key")
-	delete(out, "passphrase")
 	out["credential_id"] = binding.ID
 	switch binding.Type {
 	case credential_entity.TypePassword:
@@ -161,21 +142,21 @@ func databaseCredentialPlan(args map[string]any) (CredentialPlan, error) {
 	if asset_entity.DatabaseDriver(ArgString(args, "driver")) == asset_entity.DriverSQLite {
 		return noCredentialPlan("password", "credential_id")(args)
 	}
-	return passwordCredentialPlan(args, "password", "username")
+	return passwordReferencePlan(args, "password")
 }
 
 func bindDatabaseCredential(args map[string]any, binding CredentialBinding) (map[string]any, error) {
 	if asset_entity.DatabaseDriver(ArgString(args, "driver")) == asset_entity.DriverSQLite {
 		return nil, fmt.Errorf("credential_id is not applicable to SQLite")
 	}
-	return bindPasswordCredential(args, binding, "password")
+	return bindPasswordCredential(args, binding)
 }
 
 func (*redisHandler) AutomationContract() AutomationContract {
 	return passwordAutomationContract(
 		[]string{"host", "port", "username", "password", "credential_id", "redis_db", "ssh_asset_id"},
 		[]string{"host", "port", "username", "redis_db", "ssh_asset_id"},
-		"username", normalizeDefaultPort(6379),
+		normalizeDefaultPort(6379),
 	)
 }
 
@@ -183,7 +164,7 @@ func (*mongodbHandler) AutomationContract() AutomationContract {
 	return passwordAutomationContract(
 		[]string{"host", "port", "username", "password", "credential_id", "database", "ssh_asset_id"},
 		[]string{"host", "port", "username", "database", "ssh_asset_id"},
-		"username", normalizeDefaultPort(27017),
+		normalizeDefaultPort(27017),
 	)
 }
 
@@ -191,7 +172,7 @@ func (*etcdHandler) AutomationContract() AutomationContract {
 	return passwordAutomationContract(
 		[]string{"endpoints", "username", "password", "credential_id", "ssh_asset_id", "tls", "tls_insecure", "tls_server_name", "tls_ca_file", "tls_cert_file", "tls_key_file", "dial_timeout_seconds", "command_timeout_seconds"},
 		[]string{"endpoints", "username", "ssh_asset_id", "tls", "tls_insecure", "tls_server_name", "tls_ca_file", "tls_cert_file", "tls_key_file", "dial_timeout_seconds", "command_timeout_seconds"},
-		"username", nil,
+		nil,
 	)
 }
 
@@ -199,7 +180,7 @@ func (*kafkaHandler) AutomationContract() AutomationContract {
 	return passwordAutomationContract(
 		[]string{"brokers", "host", "port", "client_id", "sasl_mechanism", "username", "password", "credential_id", "tls", "tls_insecure", "tls_server_name", "tls_ca_file", "tls_cert_file", "tls_key_file", "request_timeout_seconds", "message_preview_bytes", "message_fetch_limit", "ssh_asset_id"},
 		[]string{"brokers", "host", "port", "client_id", "sasl_mechanism", "username", "tls", "tls_insecure", "tls_server_name", "tls_ca_file", "tls_cert_file", "tls_key_file", "request_timeout_seconds", "message_preview_bytes", "message_fetch_limit", "ssh_asset_id"},
-		"username", normalizeKafkaAutomation,
+		normalizeKafkaAutomation,
 	)
 }
 
@@ -221,7 +202,7 @@ func (*rdpHandler) AutomationContract() AutomationContract {
 	return passwordAutomationContract(
 		[]string{"host", "port", "username", "password", "credential_id", "domain", "width", "height", "clipboard", "ssh_asset_id"},
 		[]string{"host", "port", "username", "domain", "width", "height", "clipboard", "ssh_asset_id"},
-		"username", normalizeRDPAutomation,
+		normalizeRDPAutomation,
 	)
 }
 
@@ -245,7 +226,7 @@ func (*vncHandler) AutomationContract() AutomationContract {
 	return passwordAutomationContract(
 		[]string{"host", "port", "username", "password", "credential_id", "file_ssh_asset_id"},
 		[]string{"host", "port", "username", "file_ssh_asset_id"},
-		"username", normalizeDefaultPort(5900),
+		normalizeDefaultPort(5900),
 	)
 }
 
@@ -255,10 +236,10 @@ func (*ossHandler) AutomationContract() AutomationContract {
 		[]string{"provider", "endpoint", "region", "access_key_id", "use_path_style", "use_ssl", "connect_timeout"},
 		nil,
 		func(args map[string]any) (CredentialPlan, error) {
-			return passwordCredentialPlan(args, "secret_access_key", "access_key_id")
+			return passwordReferencePlan(args, "secret_access_key")
 		},
 		func(args map[string]any, binding CredentialBinding) (map[string]any, error) {
-			return bindPasswordCredential(args, binding, "secret_access_key")
+			return bindPasswordCredential(args, binding)
 		},
 	)
 }

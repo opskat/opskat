@@ -29,21 +29,19 @@ Pass the shell command verbatim as `command`:
 |---|---|---|---|
 | `host` | string | yes | Hostname or IP |
 | `port` | number | no | Defaults to `22` |
-| `username` | string | yes | Login username; copied to newly created credential metadata |
+| `username` | string | yes | Login username |
 | `auth_type` | string | no | `"password"`, `"key"`, or `"agent"`; inferred from plaintext/reference/Agent inputs when omitted |
-| `password` | string | no | **Write-only.** Creates a managed password credential; never returned or stored inline by `put_asset` |
-| `private_key` | string | no | **Write-only.** PEM private key imported as a managed SSH-key credential |
-| `passphrase` | string | no | **Write-only.** Allowed only with `private_key`; never returned |
+| `password` | string | no | **Write-only.** Encrypted in the asset; never returned and does not create a credential |
 | `credential_id` | number | no | Existing managed password or SSH-key credential ID; its type infers auth when `auth_type` is omitted and must match an explicit auth type |
 | `agent_source_id` | number | yes for Agent | Existing SSH Agent source ID; the source may be offline at save time |
 | `agent_key_fingerprint` | string | yes for Agent | Canonical SHA256 identity fingerprint; both Agent fields are required and infer Agent auth when `auth_type` is omitted |
 | `ssh_asset_id` | number | no | Accepted compatibility key; the current automation handler does not persist it |
 
-`password`, `private_key`, and `credential_id` are mutually exclusive. Agent auth rejects all
-three plus `passphrase`; non-Agent auth rejects Agent fields. Use top-level
-`credential_name` only when creating a managed password/key (default: final asset name).
+`password` and `credential_id` are mutually exclusive. Agent auth rejects both; non-Agent auth
+rejects Agent fields. `private_key` and `passphrase` are not accepted by asset automation:
+create/import the SSH-key credential in the desktop key manager, then pass `credential_id`.
 Changing auth clears the old asset association but does not delete a possibly shared credential.
 
 Example:
 
-    put_asset(name="web-01", type="ssh", credential_name="web-01 root", config={"host":"10.0.0.7","username":"root","password":"..."})
+    put_asset(name="web-01", type="ssh", config={"host":"10.0.0.7","username":"root","password":"..."})

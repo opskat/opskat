@@ -33,8 +33,8 @@ Use `scope` to override the default database for this call, e.g. `scope: "analyt
 | `driver` | string | yes | `"mysql"`, `"postgresql"`, `"mssql"`, or `"sqlite"` |
 | `host` | string | non-SQLite | Hostname or IP |
 | `port` | number | no | Defaults by driver: 3306 / 5432 / 1433 |
-| `username` | string | non-SQLite | Copied to newly created credential metadata |
-| `password` | string | no | **Write-only.** For non-SQLite, creates a managed password credential |
+| `username` | string | non-SQLite | Database account name |
+| `password` | string | no | **Write-only.** For non-SQLite, encrypted in the asset; does not create a credential |
 | `credential_id` | number | no | Existing managed password credential ID; rejected for SQLite |
 | `database` | string | no | Default database |
 | `read_only` | boolean | no | Connection-level read-only mode |
@@ -44,8 +44,8 @@ Use `scope` to override the default database for this call, e.g. `scope: "analyt
 | `path` | string | SQLite only | Absolute database-file path |
 
 For non-SQLite drivers, `password` and `credential_id` are mutually exclusive. Plaintext is
-write-only and becomes a managed credential named by top-level `credential_name` (default:
-final asset name). SQLite accepts neither password source: local SQLite must not have an SSH
+write-only, encrypted in the asset, and never creates a managed credential. SQLite accepts
+neither password source: local SQLite must not have an SSH
 asset; `remote_ssh_vfs` requires one and uses a POSIX absolute remote path.
 
 Examples:

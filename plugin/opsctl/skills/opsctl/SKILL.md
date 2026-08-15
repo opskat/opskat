@@ -56,9 +56,9 @@ For plaintext credentials prefer `--password-stdin`; it removes one terminal LF/
 preserves other bytes. `--password` and plaintext inline `--config` expose values through
 argv (shell history, process listings, CI logs) and print a warning. Plaintext config files
 must use restrictive permissions, must not be committed, and should be removed after use.
-`--credential-id <numeric-id>` reuses an existing managed credential, while
-`--credential-name` names a newly materialized password/SSH key. Secret sources conflict
-rather than override each other.
+`--credential-id <numeric-id>` reuses an existing managed credential. Plaintext is encrypted
+inside the asset and never creates a credential; create managed credentials in the desktop
+key manager before referencing them. Secret sources conflict rather than override each other.
 
 SSH Agent creation uses both `--agent-source-id` and `--agent-key-fingerprint` (or the
 corresponding config keys). Agent auth rejects password/private-key/credential inputs and
@@ -76,9 +76,9 @@ Detail lookup requires a typed ref; bare IDs are ambiguous. `--credential-id` fo
 remains the numeric credential-row ID. These queries return metadata/status/usage only—no
 password, private key, passphrase, Agent endpoint, signing material, or full Agent public key.
 
-Create flow is prevalidate/resolve → desktop approval → atomic credential+asset transaction.
-A denied or failed create leaves neither new row committed; output/audit contains only safe
-metadata and an authentication reference when applicable.
+Create flow is prevalidate/resolve → desktop approval → asset transaction. A denied or failed
+create leaves no asset row committed; output/audit contains only safe metadata and an
+authentication reference only when an existing credential or Agent source is referenced.
 
 ## Approval Mechanism
 

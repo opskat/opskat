@@ -137,7 +137,7 @@ func createAsset(ctx context.Context, args []string, session string, streams com
 	}
 
 	prepared, err := prepareAssetPut(ctx, asset_put_svc.Request{
-		Asset: request.asset, Config: request.config, CredentialName: request.credentialName,
+		Asset: request.asset, Config: request.config,
 	})
 	if err != nil {
 		writeCreateAssetError(ctx, streams.stderr, err)
@@ -384,11 +384,10 @@ Generic config:
 Registered built-in types: %s
 Run 'opsctl help <type>' for that type's exact accepted/required config fields.
 
-Managed authentication:
+Authentication:
   --credential-id <id>       Reuse an existing managed credential
   --password-stdin           Read plaintext from stdin without a prompt or echo (recommended)
   --password <value>         Unsafe argv plaintext path
-  --credential-name <name>   Name a newly materialized password or SSH-key credential
   --agent-source-id <id>     SSH Agent source ID
   --agent-key-fingerprint <SHA256 fingerprint>
 
@@ -406,8 +405,8 @@ The selected type handler owns required fields, legal combinations, unknown-fiel
 and default ports. --kubeconfig-file remains the K8s raw-file convenience input.
 
 Approval:
-  Validation and reference checks run before desktop approval. Credential and asset rows
-  are committed atomically only after approval.
+  Validation and reference checks run before desktop approval. The asset is written only
+  after approval; plaintext stays encrypted in that asset and never creates a credential.
 
 Examples:
   opsctl create asset --name "Web Server" --host 10.0.0.1 --username root --password-stdin

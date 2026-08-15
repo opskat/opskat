@@ -176,7 +176,7 @@ Rules are written the same way, with `*` wildcards that do not cross `/` inside 
 |---|---|---|---|
 | `endpoint` | string | yes | Host, or `scheme://host[:port]` |
 | `access_key_id` | string | yes | |
-| `secret_access_key` | string | no | **Write-only.** Creates a managed password credential whose secret is used as the Secret Access Key |
+| `secret_access_key` | string | no | **Write-only.** Encrypted in the asset; does not create a credential |
 | `credential_id` | number | no | Existing managed password credential ID; mutually exclusive with `secret_access_key` |
 | `provider` | string | no | UI provider preset label (e.g. `"s3"`, `"minio"`); does not change connection behavior |
 | `region` | string | no | |
@@ -184,8 +184,7 @@ Rules are written the same way, with `*` wildcards that do not cross `/` inside 
 | `use_ssl` | bool | no | `true` to connect over HTTPS |
 | `connect_timeout` | number | no | Seconds; 0 uses the default |
 
-`access_key_id` is copied to newly created credential username metadata. Plaintext is never
-returned and is materialized under top-level `credential_name` (default: final asset name).
+Plaintext is never returned, is encrypted in the asset, and never creates a managed credential.
 
 Example:
 

@@ -90,9 +90,8 @@ func createAsset(ctx context.Context, args, config map[string]any) (string, erro
 		Description: aictx.ArgString(args, "description"),
 	}
 	req := asset_put_svc.Request{
-		Asset:          asset,
-		Config:         config,
-		CredentialName: aictx.ArgString(args, "credential_name"),
+		Asset:  asset,
+		Config: config,
 	}
 	prepared, err := asset_put_svc.Prepare(ctx, req)
 	if err != nil {
@@ -113,8 +112,8 @@ func createAsset(ctx context.Context, args, config map[string]any) (string, erro
 // putAssetTopLevelAuditArgs 把 put_asset 顶层非 config 字段按类型 fail-closed 投影给
 // Audit，作为 handlePutAsset 入口的基线（record 在 putArgs/校验/lookup 之前）。config 是
 // 自由对象、可能携带 write-only 秘密，任何 Prepare 之前的失败都绝不回退原始 config；顶层
-// 字段也只有类型正确的值才进入投影：string 身份字段（asset/name/type/description/icon/
-// credential_name）仅在实际值为 string 时保留，group_id 仅在实际值为工具边界支持的数值
+// 字段也只有类型正确的值才进入投影：string 身份字段（asset/name/type/description/icon）
+// 仅在实际值为 string 时保留，group_id 仅在实际值为工具边界支持的数值
 // 标量（JSON float64 以及内部 Go 的 int/int64/json.Number）且能安全 JSON 编码时保留。
 // map/slice/array/struct/pointer 与一切类型非法值（含藏了嵌套秘密的复合值）整体省略——
 // 嵌套秘密不能借任何允许键进入 Audit；非有限 float64（NaN/±Inf）与非法 json.Number 会让
@@ -122,7 +121,7 @@ func createAsset(ctx context.Context, args, config map[string]any) (string, erro
 // 投影覆盖基线。该投影是独立 map，绝不改写 args——执行/审批/ToolBlock/历史仍见原值。
 func putAssetTopLevelAuditArgs(args map[string]any) map[string]any {
 	out := make(map[string]any)
-	for _, key := range []string{"asset", "name", "type", "description", "icon", "credential_name"} {
+	for _, key := range []string{"asset", "name", "type", "description", "icon"} {
 		if s, ok := args[key].(string); ok {
 			out[key] = s
 		}
@@ -179,9 +178,8 @@ func updateAsset(ctx context.Context, ref string, args, config map[string]any) (
 	}
 
 	req := asset_put_svc.Request{
-		Asset:          asset,
-		Config:         config,
-		CredentialName: aictx.ArgString(args, "credential_name"),
+		Asset:  asset,
+		Config: config,
 	}
 	prepared, err := asset_put_svc.Prepare(ctx, req)
 	if err != nil {

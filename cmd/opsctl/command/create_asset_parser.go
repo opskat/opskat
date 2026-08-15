@@ -16,9 +16,8 @@ import (
 const maxPasswordStdinBytes = 1 << 20
 
 type assetCreateRequest struct {
-	asset          *asset_entity.Asset
-	config         map[string]any
-	credentialName string
+	asset  *asset_entity.Asset
+	config map[string]any
 }
 
 type assetCreateParserDeps struct {
@@ -53,7 +52,6 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 	credentialID := fs.Int64("credential-id", 0, "Existing managed credential ID")
 	passwordStdin := fs.Bool("password-stdin", false, "Read password from stdin")
 	password := fs.String("password", "", "Password plaintext (unsafe argv path)")
-	credentialName := fs.String("credential-name", "", "Name for a newly managed credential")
 	agentSourceID := fs.Int64("agent-source-id", 0, "SSH Agent source ID")
 	agentFingerprint := fs.String("agent-key-fingerprint", "", "SSH Agent key SHA256 fingerprint")
 	fs.Usage = printCreateAssetUsage
@@ -195,7 +193,7 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 	if visited["icon"] {
 		asset.Icon = *icon
 	}
-	return &assetCreateRequest{asset: asset, config: config, credentialName: *credentialName}, nil
+	return &assetCreateRequest{asset: asset, config: config}, nil
 }
 
 func plaintextConfigField(assetType string) string {
