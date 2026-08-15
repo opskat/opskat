@@ -55,8 +55,19 @@ export const useAssetStore = create<AssetState>()(
       fetchAssets: async (assetType = "", groupId = 0) => {
         set({ loading: true });
         try {
-          const assets = await ListAssets(assetType, groupId);
-          set({ assets: assets || [], initialized: true });
+          const assets = (await ListAssets(assetType, groupId)) || [];
+          set((state) => {
+            const hadUngroupedAssets = state.assets.some((asset) => !asset.GroupID);
+            const hasUngroupedAssets = assets.some((asset) => !asset.GroupID);
+            return {
+              assets,
+              initialized: true,
+              collapsedGroupIds:
+                state.initialized && !hadUngroupedAssets && hasUngroupedAssets
+                  ? state.collapsedGroupIds.filter((id) => id !== 0)
+                  : state.collapsedGroupIds,
+            };
+          });
         } finally {
           set({ loading: false });
         }

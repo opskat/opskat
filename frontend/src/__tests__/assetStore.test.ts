@@ -32,6 +32,39 @@ describe("assetStore", () => {
   });
 
   describe("fetchAssets", () => {
+    it("expands the virtual ungrouped folder when its first asset appears", async () => {
+      useAssetStore.setState({ assets: [], collapsedGroupIds: [0, 7], initialized: true });
+      vi.mocked(ListAssets).mockResolvedValue([{ ID: 1, Name: "New server", GroupID: 0 }] as any);
+
+      await useAssetStore.getState().fetchAssets();
+
+      expect(useAssetStore.getState().collapsedGroupIds).toEqual([7]);
+    });
+
+    it("preserves the user's ungrouped collapse while ungrouped assets already exist", async () => {
+      useAssetStore.setState({
+        assets: [{ ID: 1, Name: "Existing server", GroupID: 0 }] as any,
+        collapsedGroupIds: [0, 7],
+      });
+      vi.mocked(ListAssets).mockResolvedValue([
+        { ID: 1, Name: "Existing server", GroupID: 0 },
+        { ID: 2, Name: "New server", GroupID: 0 },
+      ] as any);
+
+      await useAssetStore.getState().fetchAssets();
+
+      expect(useAssetStore.getState().collapsedGroupIds).toEqual([0, 7]);
+    });
+
+    it("preserves a persisted ungrouped collapse on the initial load", async () => {
+      useAssetStore.setState({ assets: [], collapsedGroupIds: [0, 7], initialized: false });
+      vi.mocked(ListAssets).mockResolvedValue([{ ID: 1, Name: "Existing server", GroupID: 0 }] as any);
+
+      await useAssetStore.getState().fetchAssets();
+
+      expect(useAssetStore.getState().collapsedGroupIds).toEqual([0, 7]);
+    });
+
     it("sets loading true during fetch, false after", async () => {
       vi.mocked(ListAssets).mockResolvedValue([{ ID: 1, Name: "Server1" }] as any);
 
