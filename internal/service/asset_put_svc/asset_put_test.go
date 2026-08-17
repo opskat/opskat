@@ -302,7 +302,7 @@ func TestPutValidatesReferencesAndCredentialSourceConflictsBeforeAssetWrite(t *t
 	}
 }
 
-func TestPutRollsBackCredentialAndAssetWritesOnEveryFailureBoundary(t *testing.T) {
+func TestPutLeavesNoAssetOrCredentialRowsOnEveryFailureBoundary(t *testing.T) {
 	t.Run("handler application", func(t *testing.T) {
 		env := setupPutTest(t)
 		_, err := Put(env.ctx, Request{Asset: &asset_entity.Asset{Name: "bad", Type: failingAssetType}, Config: map[string]any{"username": "alice", "password": "secret"}})

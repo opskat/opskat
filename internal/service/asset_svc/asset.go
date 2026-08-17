@@ -21,6 +21,9 @@ type AssetSvc interface {
 	Get(ctx context.Context, id int64) (*asset_entity.Asset, error)
 	FindByName(ctx context.Context, name string) ([]*asset_entity.Asset, error)
 	List(ctx context.Context, assetType string, groupID int64) ([]*asset_entity.Asset, error)
+	AgentReferenceCount(ctx context.Context, sourceID int64) (int64, error)
+	AgentReferenceCountByFingerprint(ctx context.Context, sourceID int64) (map[string]int64, error)
+	AgentReferencingAssets(ctx context.Context, sourceID int64) ([]*asset_entity.Asset, error)
 	Create(ctx context.Context, asset *asset_entity.Asset) error
 	Update(ctx context.Context, asset *asset_entity.Asset) error
 	UpdateWithinTransaction(ctx context.Context, asset *asset_entity.Asset) error
@@ -54,6 +57,18 @@ func (s *assetSvc) List(ctx context.Context, assetType string, groupID int64) ([
 		Type:    assetType,
 		GroupID: groupID,
 	})
+}
+
+func (s *assetSvc) AgentReferenceCount(ctx context.Context, sourceID int64) (int64, error) {
+	return asset_repo.Asset().CountAgentAuthBySourceID(ctx, sourceID)
+}
+
+func (s *assetSvc) AgentReferenceCountByFingerprint(ctx context.Context, sourceID int64) (map[string]int64, error) {
+	return asset_repo.Asset().CountAgentAuthBySourceIDGroupByFingerprint(ctx, sourceID)
+}
+
+func (s *assetSvc) AgentReferencingAssets(ctx context.Context, sourceID int64) ([]*asset_entity.Asset, error) {
+	return asset_repo.Asset().ListAgentAuthBySourceID(ctx, sourceID)
 }
 
 func (s *assetSvc) Create(ctx context.Context, asset *asset_entity.Asset) error {

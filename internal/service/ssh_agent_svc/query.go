@@ -5,7 +5,7 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/model/entity/ssh_agent_source_entity"
-	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/sshagent"
 	"go.uber.org/zap"
 )
@@ -86,7 +86,7 @@ func Observe(ctx context.Context, id int64) (Observation, error) {
 		logger.Ctx(ctx).Error("ssh agent source observation failed", zap.Int64("sourceID", id), zap.Error(err))
 		return Observation{}, err
 	}
-	usages, err := asset_repo.Asset().CountAgentAuthBySourceID(ctx, id)
+	usages, err := asset_svc.Asset().AgentReferenceCount(ctx, id)
 	if err != nil {
 		logger.Ctx(ctx).Error("ssh agent source observation failed", zap.Int64("sourceID", id), zap.Error(err))
 		return Observation{}, err
@@ -111,7 +111,7 @@ func Observe(ctx context.Context, id int64) (Observation, error) {
 		logger.Ctx(ctx).Error("ssh agent source observation failed", zap.Int64("sourceID", id), zap.Error(err))
 		return Observation{}, err
 	}
-	perIdentity, err := asset_repo.Asset().CountAgentAuthBySourceIDGroupByFingerprint(ctx, id)
+	perIdentity, err := asset_svc.Asset().AgentReferenceCountByFingerprint(ctx, id)
 	if err != nil {
 		logger.Ctx(ctx).Error("ssh agent source observation failed", zap.Int64("sourceID", id), zap.Error(err))
 		return Observation{}, err

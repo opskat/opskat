@@ -99,10 +99,10 @@ For opsctl create, the observable sequence is:
 2. Resolve type, files, SSH tunnel references and typed credential references; validate all fields and secret-source conflicts without persisting data.
 3. Request the existing desktop create approval using a detail that identifies the asset type/name and safe endpoint metadata only.
 4. On denial, stop with no credential or asset row created.
-5. On approval, create/import the managed credential when needed and create the asset in one transaction.
-6. Commit both, notify the desktop data-change channel, write producer-projected audit data and return safe JSON.
+5. On approval, bind an already-validated managed credential reference or encrypt supported plaintext into the asset-local config, then create the asset in one transaction.
+6. Commit the asset, notify the desktop data-change channel, write producer-projected audit data and return safe JSON.
 
-Any validation, encryption, credential write, handler application or asset write failure returns a non-secret error and leaves neither new row committed. A referenced existing credential is never modified. Replacing a credential association through AI update does not automatically delete the old credential because it may be shared; cleanup remains an explicit user operation.
+Any validation, encryption, handler application or asset write failure returns a non-secret error and leaves no new asset row committed. Automation never creates a credential row, and a referenced existing credential is never modified. Replacing a credential association through AI update does not automatically delete the old credential because it may be shared; cleanup remains an explicit user operation.
 
 The successful create/update result includes the asset ID and, when applicable, a safe authentication reference. It never returns supplied plaintext or stored ciphertext.
 
@@ -185,7 +185,7 @@ The asset detail never returns Agent endpoint values or public-key blobs. `list_
 
 Approval requests and desktop notifications contain only safe asset metadata. Passwords and other secrets are never interpolated into approval detail or error text.
 
-opsctl converts plaintext into a managed credential inside the shared write boundary before audit serialization; audit receives only the resulting typed association. AI `put_asset` audit persists the producer-owned allowlist projection, omitting the write-only secret fields instead of replacing values; default Audit keeps the raw values it receives.
+opsctl encrypts plaintext into the asset-local config inside the shared write boundary; its audit projection omits that write-only value and includes a typed association only when the request reused an existing credential or SSH Agent source. AI `put_asset` audit persists the same producer-owned allowlist projection, omitting write-only secret fields instead of replacing values; default Audit keeps the raw values it receives.
 
 Structured logs for asset create/reference/query flows record start/end/fail with safe correlation fields such as asset ID, credential ID/ref, source ID and asset type. They do not record secret values, full config JSON, Agent endpoint values, private/public key blobs or kubeconfig.
 
@@ -195,13 +195,13 @@ The feature adds no password reveal, private-key export, Agent signing, challeng
 
 Existing `opsctl create asset` invocations using convenience flags keep their current meaning and default-port behavior. Existing K8s raw kubeconfig file input remains supported. The old output fields remain present; new authentication references are additive.
 
-Existing assets with inline encrypted passwords, keys or kubeconfig continue resolving through current credential resolvers. They are not rewritten when listed, fetched or connected. New CLI/AI plaintext password writes use managed credentials.
+Existing assets with inline encrypted passwords, keys or kubeconfig continue resolving through current credential resolvers. They are not rewritten when listed, fetched or connected. New CLI/AI plaintext password writes keep the established asset-local encrypted representation.
 
-Existing AI callers that pass `config.password` or OSS `secret_access_key` observe the same connection result but a different persisted representation: a managed credential reference instead of an inline ciphertext. Existing valid `credential_id` calls continue to work and gain type validation where it was previously absent.
+Existing AI callers that pass `config.password` or OSS `secret_access_key` retain the same connection result and asset-local encrypted representation. Existing valid `credential_id` calls continue to work and gain type validation where it was previously absent.
 
 ## Out of scope
 
-- Credential or SSH Agent source creation as a standalone command/tool; this round creates credentials only as part of asset put and reuses already configured Agent sources.
+- Credential or SSH Agent source creation through opsctl/AI; asset put only reuses credentials and Agent sources that were already configured in the desktop app.
 - Credential/source update, rename, password rotation or deletion through opsctl/AI.
 - Password, private-key, passphrase, Agent endpoint or signing-material reveal/export through opsctl/AI.
 - Automatic migration or deletion of existing inline/orphaned credentials.
