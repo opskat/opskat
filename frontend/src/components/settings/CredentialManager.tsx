@@ -994,7 +994,7 @@ function ImportKeyDialog({
                   onChange={(e) => setPemContent(e.target.value)}
                   placeholder={t("sshKey.pemPlaceholder")}
                   rows={8}
-                  className="min-h-44 font-mono text-xs"
+                  className="field-sizing-fixed min-h-44 min-w-0 font-mono text-xs"
                 />
                 {pemStatus !== "empty" && (
                   <div
