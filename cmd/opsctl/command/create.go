@@ -66,13 +66,22 @@ func cmdCreate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 			params["sort_order"] = float64(*sortOrder)
 		}
 
-		if _, err := requireApproval(ctx, approval.ApprovalRequest{
+		ctx = aictx.WithAuditSource(ctx, "opsctl")
+		ctx = withOriginCommand(ctx, "opsctl create group "+strings.Join(args[1:], " "))
+		approvalResult, err := requireApproval(ctx, approval.ApprovalRequest{
 			Type:      "create",
 			Detail:    fmt.Sprintf("opsctl create group --name %s", *name),
 			SessionID: session,
-		}); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
+		})
+		if err != nil {
+			argsJSON, marshalErr := json.Marshal(params)
+			if marshalErr != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", marshalErr)
+				return 1
+			}
+			// 拒绝（含结构化拒绝 NEEDS TTY）是真实决策，照常落审计。
+			writeOpsctlAudit(ctx, "put_group", string(argsJSON), "", err, approvalResult.ToCheckResult())
+			return writeApprovalFailure(os.Stderr, err)
 		}
 
 		return callHandler(ctx, handlers, "put_group", params)
@@ -148,12 +157,17 @@ func createAsset(ctx context.Context, args []string, session string, streams com
 		writeCreateAssetError(ctx, streams.stderr, fmt.Errorf("encode safe approval detail: %w", err))
 		return 1
 	}
+	// 原命令原文挂在 ctx 上，供 NEEDS TTY 结构化拒绝转述给人；args 是 "create asset"
+	// 之后的原始参数。
+	ctx = withOriginCommand(ctx, "opsctl create asset "+strings.Join(args, " "))
 	approvalResult, err := requireCreateApproval(ctx, approval.ApprovalRequest{
 		Type: "create", Detail: string(approvalDetail), SessionID: session,
 	})
 	if err != nil {
-		writeCreateAssetError(ctx, streams.stderr, err)
-		return 1
+		// 拒绝（含结构化拒绝 NEEDS TTY）是真实决策，照常落审计。
+		writePutAssetAudit(ctx, "put_asset", prepared.SafeAuditArgsForResult(nil), "", err,
+			approvalResult.ToCheckResult())
+		return writeApprovalFailure(streams.stderr, err)
 	}
 
 	result, err := prepared.Commit(ctx)
@@ -276,14 +290,22 @@ func cmdUpdate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 			params["icon"] = *icon
 		}
 		// Require approval
-		if _, err := requireApproval(ctx, approval.ApprovalRequest{
+		ctx = aictx.WithAuditSource(ctx, "opsctl")
+		ctx = withOriginCommand(ctx, "opsctl update asset "+strings.Join(args[2:], " "))
+		approvalResult, err := requireApproval(ctx, approval.ApprovalRequest{
 			Type:      "update",
 			AssetID:   id,
 			Detail:    fmt.Sprintf("opsctl update asset %s", args[1]),
 			SessionID: session,
-		}); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
+		})
+		if err != nil {
+			argsJSON, marshalErr := json.Marshal(params)
+			if marshalErr != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", marshalErr)
+				return 1
+			}
+			writeOpsctlAudit(ctx, "put_asset", string(argsJSON), "", err, approvalResult.ToCheckResult())
+			return writeApprovalFailure(os.Stderr, err)
 		}
 
 		return callHandler(ctx, handlers, "put_asset", params)
@@ -321,13 +343,21 @@ func cmdUpdate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 			params["sort_order"] = float64(*sortOrder)
 		}
 
-		if _, err := requireApproval(ctx, approval.ApprovalRequest{
+		ctx = aictx.WithAuditSource(ctx, "opsctl")
+		ctx = withOriginCommand(ctx, "opsctl update group "+strings.Join(args[2:], " "))
+		approvalResult, err := requireApproval(ctx, approval.ApprovalRequest{
 			Type:      "update",
 			Detail:    fmt.Sprintf("opsctl update group %s", args[1]),
 			SessionID: session,
-		}); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
+		})
+		if err != nil {
+			argsJSON, marshalErr := json.Marshal(params)
+			if marshalErr != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", marshalErr)
+				return 1
+			}
+			writeOpsctlAudit(ctx, "put_group", string(argsJSON), "", err, approvalResult.ToCheckResult())
+			return writeApprovalFailure(os.Stderr, err)
 		}
 
 		return callHandler(ctx, handlers, "put_group", params)
@@ -352,7 +382,7 @@ Run 'opsctl create asset --help' or 'opsctl create group --help' for details.
 
 func printCreateGroupUsage() {
 	fmt.Fprint(os.Stderr, `Usage:
-  opsctl [--session <id>] create group [flags]
+  opsctl create group [flags]
 
 Required Flags:
   --name <string>         Display name for the group
@@ -364,7 +394,10 @@ Optional Flags:
   --sort-order <int>      Sort order within the parent; lower comes first
 
 Approval:
-  Requires desktop app approval. Session auto-created if not specified.
+  Always requires confirmation — no rule can pre-authorize this. An interactive
+  terminal prompts here; otherwise the running desktop app is asked, and with
+  neither available opsctl exits with code 3 and a NEEDS TTY marker telling you
+  to run the command yourself.
 
 Examples:
   opsctl create group --name "Production"
@@ -374,7 +407,7 @@ Examples:
 
 func printCreateAssetUsage() {
 	fmt.Fprintf(os.Stderr, `Usage:
-  opsctl [--session <id>] create asset --name <name> [flags]
+  opsctl create asset --name <name> [flags]
 
 Generic config:
   --type <type>           Registered built-in asset type (default: ssh)
@@ -429,7 +462,7 @@ Run 'opsctl update asset <asset> --help' or 'opsctl update group <group> --help'
 
 func printUpdateGroupUsage() {
 	fmt.Fprint(os.Stderr, `Usage:
-  opsctl [--session <id>] update group <ref> [flags]
+  opsctl update group <ref> [flags]
 
 Arguments:
   ref       Group name, path, or numeric ID
@@ -442,7 +475,10 @@ Flags (only provided fields are updated, others remain unchanged):
   --sort-order <int>      New sort order (-1 = unchanged)
 
 Approval:
-  Requires desktop app approval. Session auto-created if not specified.
+  Always requires confirmation — no rule can pre-authorize this. An interactive
+  terminal prompts here; otherwise the running desktop app is asked, and with
+  neither available opsctl exits with code 3 and a NEEDS TTY marker telling you
+  to run the command yourself.
 
 Examples:
   opsctl update group 3 --name "Production"
@@ -452,7 +488,7 @@ Examples:
 
 func printUpdateAssetUsage() {
 	fmt.Fprint(os.Stderr, `Usage:
-  opsctl [--session <id>] update asset <asset> [flags]
+  opsctl update asset <asset> [flags]
 
 Arguments:
   asset     Asset name or numeric ID
@@ -467,7 +503,10 @@ Flags (only provided fields are updated, others remain unchanged):
   --icon <string>         New icon name (see 'opsctl create asset --help' for list)
 
 Approval:
-  Requires desktop app approval. Session auto-created if not specified.
+  Always requires confirmation — no rule can pre-authorize this. An interactive
+  terminal prompts here; otherwise the running desktop app is asked, and with
+  neither available opsctl exits with code 3 and a NEEDS TTY marker telling you
+  to run the command yourself.
 
 Examples:
   opsctl update asset web-server --name "New Name"

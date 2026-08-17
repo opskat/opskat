@@ -118,8 +118,8 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 
 	if err != nil {
 		writeOpsctlAudit(auditCtx, "exec", argsJSON, "", err, approvalResult.ToCheckResult())
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return 1
+		// 结构化拒绝 → 退出码 3（stderr 首行是裸标记）；其余错误保持 1。
+		return writeApprovalFailure(os.Stderr, err)
 	}
 
 	if asset.IsSSH() {
@@ -216,7 +216,7 @@ func buildExecAuditResult(exitCode int, stdout, stderr string) string {
 
 func printExecUsage() {
 	fmt.Fprint(os.Stderr, `Usage:
-  opsctl [--session <id>] exec <asset> [--type <type>] [--] <command>
+  opsctl exec <asset> [--type <type>] [--] <command>
 
 Arguments:
   asset       Asset name or numeric ID
@@ -246,12 +246,14 @@ Pipe Support (ssh assets only):
   The exit code of the remote command is propagated as opsctl's exit code.
 
 Approval:
-  This command requires approval from the running desktop app.
-  - Commands matching the asset's allow list execute without approval.
-  - Commands matching the deny list are rejected immediately.
-  - A session is auto-created if not specified. When the user approves with
-    "Remember", that command pattern is saved for the session, so later
-    commands matching it skip approval.
+  This command requires approval. Commands matching the asset's allow list
+  execute without approval; commands matching the deny list are rejected
+  immediately. Everything else needs an approver: an interactive terminal
+  (stdin and stderr both TTYs) prompts here, otherwise the running desktop
+  app is asked; with neither available opsctl exits with code 3 and a
+  NEEDS AUTHORIZATION marker telling you which 'opsctl policy allow' line
+  to run. Piped stdin (cat file | opsctl exec ...) counts as non-interactive
+  — authorize it beforehand instead.
 
 Examples:
   opsctl exec web-server --type ssh -- uptime
@@ -260,6 +262,5 @@ Examples:
   echo "hello" | opsctl exec web-server --type ssh -- cat
   opsctl exec prod-db --type database -- "SELECT * FROM users LIMIT 10"
   opsctl exec cache --type redis -- "GET session:abc123"
-  opsctl --session $ID exec web-01 --type ssh -- systemctl restart nginx
 `)
 }

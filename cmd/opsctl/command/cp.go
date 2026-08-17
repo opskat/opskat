@@ -561,8 +561,8 @@ func cpApprovalFailed(
 		return 1
 	}
 	writeOpsctlAudit(ctx, "cp", argsJSON, "", approvalErr, result.ToCheckResult())
-	fmt.Fprintf(os.Stderr, "Error: %v\n", approvalErr)
-	return 1
+	// 结构化拒绝（NEEDS AUTHORIZATION）→ 退出码 3，stderr 首行是裸标记；其余保持 1。
+	return writeApprovalFailure(os.Stderr, approvalErr)
 }
 
 // cmdCpViaProxy 通过 proxy 执行一次单文件传输。至少一端是远端由调用方保证。
@@ -620,7 +620,7 @@ func cmdCpViaProxy(proxy *sshpool.Client, src, dst *cpEndpoint) int {
 
 func printCpUsage() {
 	fmt.Fprint(os.Stderr, `Usage:
-  opsctl [--session <id>] cp [-r] <source>... <destination>
+  opsctl cp [-r] <source>... <destination>
 
 Path Format:
   Local path:      /path/to/file  or  ./relative/path
@@ -643,6 +643,9 @@ Approval:
   Every asset endpoint is authorized separately under that asset's own policy,
   before any byte is transferred. Recursive/glob transfers approve the source
   and destination directory/object-prefix scopes before listing their contents.
+  An interactive terminal prompts here; otherwise the running desktop app is
+  asked, and with neither available opsctl exits with code 3 and a NEEDS
+  AUTHORIZATION marker telling you which 'opsctl policy allow' line to run.
 
 Examples:
   opsctl cp ./config.yml web-server:/etc/app/config.yml   Upload by name
