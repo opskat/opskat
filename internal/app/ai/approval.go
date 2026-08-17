@@ -28,6 +28,7 @@ func (a *AI) makeCommandConfirmFunc() permission.CommandConfirmFunc {
 		confirmID := fmt.Sprintf("ai_%d_%d", convID, time.Now().UnixNano())
 		eventName := fmt.Sprintf("ai:event:%d", convID)
 
+		// 发往 Wails 的 items 即后端 pending 持有的原始 items，展示与执行主体逐字一致。
 		wailsRuntime.EventsEmit(a.ctx, eventName, runner.StreamEvent{
 			Type:      "approval_request",
 			Kind:      kind,
@@ -72,6 +73,7 @@ func (a *AI) makeGrantRequestFunc() permission.GrantRequestFunc {
 		confirmID := fmt.Sprintf("grant_%d_%d", convID, time.Now().UnixNano())
 		eventName := fmt.Sprintf("ai:event:%d", convID)
 
+		// 发往 Wails 的 items 与 description 即原始主体，展示与执行逐字一致。
 		wailsRuntime.EventsEmit(a.ctx, eventName, runner.StreamEvent{
 			Type:        "approval_request",
 			Kind:        permission.ApprovalKindGrant,
@@ -198,9 +200,10 @@ func (a *AI) RespondAIApproval(confirmID string, resp permission.ApprovalRespons
 	if v, ok := a.pendingAIApprovals.Load(confirmID); ok {
 		pending := v.(pendingAIApproval)
 		if _, err := permission.ParseApprovalResponse(pending.kind, resp, pending.items); err != nil {
+			// Response payload is an IPC input and may contain credential-shaped text.
+			// Keep only correlation fields; the static message already identifies validation failure.
 			logger.Ctx(a.ctx).Warn("invalid AI approval response denied",
-				zap.String("confirmID", confirmID), zap.String("kind", pending.kind),
-				zap.String("decision", resp.Decision), zap.Error(err))
+				zap.String("confirmID", confirmID), zap.String("kind", pending.kind))
 			resp = permission.ApprovalResponse{Decision: "deny"}
 		}
 		select {

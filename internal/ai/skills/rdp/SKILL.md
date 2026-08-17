@@ -15,11 +15,15 @@ surface**: `exec` is not supported for this type, and there is nothing to script
 | `host` | string | yes | Hostname or IP |
 | `port` | number | no | Defaults to 3389 |
 | `username` | string | yes | Local or domain account |
-| `password` | string | no | Stored encrypted; never echoed back |
+| `password` | string | no | **Write-only.** Encrypted in the asset; does not create a credential |
+| `credential_id` | number | no | Existing managed password credential ID; mutually exclusive with `password` |
 | `domain` | string | no | Windows domain; omit for local accounts |
 | `width` | number | no | Initial desktop width, defaults to 1280 |
 | `height` | number | no | Initial desktop height, defaults to 720 |
-| `clipboard` | string | no | `"true"` / `"false"`, defaults to true |
+| `clipboard` | boolean | no | Defaults to true |
+| `ssh_asset_id` | number | no | Accepted compatibility key; the current automation handler does not persist it |
+
+Plaintext is never returned, is encrypted in the asset, and never creates a managed credential.
 
 Example:
 

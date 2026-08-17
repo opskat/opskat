@@ -33,3 +33,7 @@ No host/port/username/credentials — a serial asset addresses a local device pa
 | `stop_bits` | string | no | `"1"` (default), `"1.5"`, or `"2"` |
 | `parity` | string | no | `"none"` (default), `"odd"`, `"even"`, `"mark"`, or `"space"` |
 | `flow_control` | string | no | `"none"` or `"hardware"` (RTS/CTS); empty means no flow control |
+| `password` | string | no | Reserved compatibility key; any non-empty value is rejected as inapplicable |
+| `credential_id` | number | no | Reserved compatibility key; any non-zero value is rejected as inapplicable |
+
+Serial automation never creates or references managed credentials.

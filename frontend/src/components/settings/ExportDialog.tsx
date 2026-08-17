@@ -2,30 +2,9 @@ import { useState, useMemo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
-import {
-  Download,
-  Shield,
-  Network,
-  Settings2,
-  Keyboard,
-  Palette,
-  Loader2,
-  Eye,
-  EyeOff,
-  Shuffle,
-  AlertTriangle,
-} from "lucide-react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-  Button,
-  Input,
-  Label,
-  Switch,
-} from "@opskat/ui";
+import { Download, Shield, Network, Settings2, Keyboard, Palette, Loader2, Shuffle, AlertTriangle } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, Button, Label, Switch } from "@opskat/ui";
+import { SecretInput } from "@/components/SecretInput";
 import { backup_svc } from "../../../wailsjs/go/models";
 import { ExportToFile } from "../../../wailsjs/go/system/System";
 import { AssetMultiSelect } from "@/components/asset/AssetMultiSelect";
@@ -317,23 +296,14 @@ export function ExportDialog({
               )}
               <Label>{t("backup.password")}</Label>
               <div className="flex gap-1">
-                <div className="relative flex-1">
-                  <Input
-                    type={showPassword ? "text" : "password"}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder={t("backup.passwordPlaceholder")}
-                    className="pr-9"
-                  />
-                  <button
-                    type="button"
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    onClick={() => setShowPassword(!showPassword)}
-                    tabIndex={-1}
-                  >
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </div>
+                <SecretInput
+                  wrapperClassName="flex-1"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder={t("backup.passwordPlaceholder")}
+                  reveal={showPassword}
+                  onRevealChange={setShowPassword}
+                />
                 <Button
                   variant="outline"
                   size="icon"

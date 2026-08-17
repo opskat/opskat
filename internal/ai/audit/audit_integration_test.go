@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/cago-frame/cago/database/db"
@@ -138,23 +137,27 @@ func TestDefaultAuditWriterPersistsToolAuditSemantics(t *testing.T) {
 		})
 	}
 
+	argsJSON := `{"name":"prod","config":{"host":"db.internal","password":"<redacted>","private_key":"stored-private-key"}}`
+	result := `{"id":7,"config":{"apiKey":"stored-result-secret"}}`
+	command := `client --token <redacted>`
+	errMsg := "Authorization: Bearer stored-error-secret"
 	writer.WriteToolCall(aictx.WithSessionID(context.Background(), "sensitive-fields"), ToolCallInfo{
 		ToolName: "put_asset",
-		ArgsJSON: `{"name":"prod","config":{"host":"db.internal","password":"stored-request-secret","private_key":"stored-private-key"}}`,
-		Result:   `{"id":7,"config":{"apiKey":"stored-result-secret"}}`,
-		Command:  `client --token stored-command-secret`,
-		Error:    errors.New("Authorization: Bearer stored-error-secret"),
+		ArgsJSON: argsJSON,
+		Result:   result,
+		Command:  command,
+		Error:    errors.New(errMsg),
 	})
 	var sensitive audit_entity.AuditLog
 	require.NoError(t, gdb.Where("session_id = ?", "sensitive-fields").First(&sensitive).Error)
-	for column, value := range map[string]string{
-		"request": sensitive.Request,
-		"result":  sensitive.Result,
-		"command": sensitive.Command,
-		"error":   sensitive.Error,
-	} {
-		require.NotContains(t, value, "stored-", "audit_logs.%s leaked credential plaintext", column)
-	}
+	// 默认 writer 原样落库：既有秘密文本与字面 <redacted> 都按原值保存（spec §“Audit
+	// raw-by-default and producer projections”）。
+	require.Equal(t, argsJSON, sensitive.Request)
+	require.Equal(t, result, sensitive.Result)
+	require.Equal(t, command, sensitive.Command)
+	require.Equal(t, errMsg, sensitive.Error)
 	require.Contains(t, sensitive.Request, "db.internal")
-	require.True(t, strings.Contains(sensitive.Request, "redacted"))
+	require.Contains(t, sensitive.Request, "<redacted>")
+	require.Contains(t, sensitive.Result, "stored-result-secret")
+	require.Contains(t, sensitive.Error, "stored-error-secret")
 }

@@ -2212,3 +2212,182 @@ describe("retry/error handling", () => {
     expect(loadedErr?.errorDetail).toBe("connection reset");
   });
 });
+
+describe("AI 会话块递归安全持久化（嵌套 agent child blocks）", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    localStorage.clear();
+    useTabStore.setState({ tabs: [], activeTabId: null });
+    useAIStore.setState({
+      tabStates: {},
+      conversations: [],
+      conversationMessages: {},
+      conversationStreaming: {},
+    });
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
+    vi.mocked(SaveConversationMessages).mockResolvedValue(undefined as any);
+    vi.mocked(EventsOn).mockReturnValue(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("存盘时嵌套 agent child blocks 随持久化 DTO 递归携带（原始值逐字写入）", async () => {
+    useAIStore.setState({
+      sidebarTabs: [
+        {
+          id: "sidebar-redact-1",
+          conversationId: 200,
+          title: "t",
+          createdAt: 1,
+          uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null },
+        },
+      ],
+      activeSidebarTabId: "sidebar-redact-1",
+      conversationMessages: {
+        200: [
+          {
+            role: "assistant",
+            content: "",
+            blocks: [
+              {
+                type: "agent",
+                content: "",
+                agentRole: "helper",
+                agentTask: "deploy",
+                status: "completed",
+                childBlocks: [
+                  {
+                    type: "tool",
+                    content: "",
+                    toolName: "put_asset",
+                    toolInput: '{"password":"frontend-credential-sentinel"}',
+                    toolCallId: "call_n1",
+                    status: "completed",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      conversationStreaming: { 200: { sending: false, pendingQueue: [] } },
+    });
+
+    await useAIStore.getState().sendFromSidebarTab("sidebar-redact-1", "继续");
+
+    const savedMsgs = vi.mocked(SaveConversationMessages).mock.calls.flatMap((c) => c[1] as any[]);
+    const agentBlock = savedMsgs.flatMap((m) => m.blocks || []).find((b) => b.type === "agent");
+    expect(agentBlock).toBeDefined();
+    expect(agentBlock.childBlocks).toHaveLength(1);
+    expect(agentBlock.childBlocks[0].type).toBe("tool");
+    expect(agentBlock.childBlocks[0].toolInput).toBe('{"password":"frontend-credential-sentinel"}');
+  });
+
+  it("重载会话恢复嵌套 agent child blocks（原始值逐字读回；旧字面 <redacted> 也原样保留）", async () => {
+    vi.mocked(LoadConversationMessages).mockResolvedValue([
+      { role: "user", content: "hi", blocks: [] },
+      {
+        role: "assistant",
+        content: "",
+        blocks: [
+          {
+            type: "agent",
+            content: "",
+            status: "completed",
+            childBlocks: [
+              {
+                type: "tool",
+                content: "ok",
+                toolName: "put_asset",
+                toolInput: '{"password":"frontend-credential-sentinel"}',
+                toolCallId: "call_n2",
+                status: "completed",
+              },
+            ],
+          },
+        ],
+      },
+    ] as any);
+    useAIStore.setState({ conversations: [{ ID: 201, Title: "t" } as any] });
+
+    await useAIStore.getState().openConversationTab(201);
+
+    const loaded = useAIStore.getState().conversationMessages[201];
+    const agentBlock = loaded.flatMap((m) => m.blocks).find((b) => b.type === "agent");
+    expect(agentBlock).toBeDefined();
+    expect(agentBlock!.childBlocks).toHaveLength(1);
+    expect(agentBlock!.childBlocks![0].toolInput).toBe('{"password":"frontend-credential-sentinel"}');
+
+    // 已持久化的字面 <redacted> 作为普通不可恢复字面值原样返回，不猜测不重写。
+    vi.mocked(LoadConversationMessages).mockResolvedValue([
+      {
+        role: "assistant",
+        content: "",
+        blocks: [
+          {
+            type: "tool",
+            content: "ok: --api-key <redacted>",
+            toolName: "put_asset",
+            toolInput: '{"password":"<redacted>"}',
+            toolCallId: "call_lit",
+            status: "completed",
+          },
+        ],
+      },
+    ] as any);
+    useAIStore.setState({ conversations: [{ ID: 203, Title: "t2" } as any] });
+    await useAIStore.getState().openConversationTab(203);
+    const literal = useAIStore.getState().conversationMessages[203];
+    const toolBlock = literal.flatMap((m) => m.blocks).find((b) => b.type === "tool");
+    expect(toolBlock!.toolInput).toBe('{"password":"<redacted>"}');
+    expect(toolBlock!.content).toBe("ok: --api-key <redacted>");
+  });
+
+  it("下一轮模型历史携带原始 tool input/result（逐字一致）", async () => {
+    useAIStore.setState({
+      modelName: "gpt-4o",
+      sidebarTabs: [
+        {
+          id: "sidebar-redact-3",
+          conversationId: 202,
+          title: "t",
+          createdAt: 1,
+          uiState: { inputDraft: { content: "" }, scrollTop: 0, editTarget: null },
+        },
+      ],
+      activeSidebarTabId: "sidebar-redact-3",
+      conversationMessages: {
+        202: [
+          {
+            role: "assistant",
+            content: "done",
+            blocks: [
+              {
+                type: "tool",
+                content: `{"rows":1,"token":"next-round-credential-sentinel"}`,
+                toolName: "query",
+                toolInput: '{"password":"next-round-credential-sentinel"}',
+                toolCallId: "call_n3",
+                status: "completed",
+              },
+              { type: "text", content: "done" },
+            ],
+          },
+        ],
+      },
+      conversationStreaming: { 202: { sending: false, pendingQueue: [] } },
+    });
+
+    await useAIStore.getState().sendFromSidebarTab("sidebar-redact-3", "再看");
+
+    const args = vi.mocked(SendAIMessage).mock.calls.at(-1)!;
+    const apiMsgs = args[1] as any[];
+    const toolAssistant = apiMsgs.find((m) => m.role === "assistant" && m.tool_calls);
+    expect(toolAssistant.tool_calls[0].function.arguments).toBe('{"password":"next-round-credential-sentinel"}');
+    const toolMsg = apiMsgs.find((m) => m.role === "tool");
+    expect(toolMsg.content).toBe(`{"rows":1,"token":"next-round-credential-sentinel"}`);
+  });
+});

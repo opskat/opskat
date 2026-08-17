@@ -2,8 +2,10 @@ package external_edit_svc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -162,6 +164,12 @@ func (r *rebindRemoteStub) WriteFile(sessionID, remotePath string, data []byte) 
 	r.files[sessionID][remotePath] = existing
 	r.writes = append(r.writes, fmt.Sprintf("%s:%s", sessionID, remotePath))
 	return nil
+}
+
+func (r *rebindRemoteStub) Writes() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.writes...)
 }
 
 func (r *rebindRemoteStub) lookupErrorLocked(sessionID, remotePath string) error {
@@ -413,7 +421,7 @@ func TestExternalEditSaveRejectsOversizedLocalCopy(t *testing.T) {
 	_, err := h.svc.Save(context.Background(), session.ID)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "本地副本过大")
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 }
 
 func TestExternalEditSaveRejectsLocalCopyOverConfiguredLimit(t *testing.T) {
@@ -426,7 +434,7 @@ func TestExternalEditSaveRejectsLocalCopyOverConfiguredLimit(t *testing.T) {
 	_, err := h.svc.Save(context.Background(), session.ID)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "本地副本过大")
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 }
 
 func TestExternalEditSaveRebindsToUniqueCandidateAndPersistsSessionID(t *testing.T) {
@@ -553,7 +561,7 @@ func TestExternalEditSaveDetectsRemoteChangeFromReadBytesWhenInfoHashIsStale(t *
 	require.Equal(t, recordStateConflict, result.Session.RecordState)
 	require.False(t, result.Session.Hidden)
 	require.True(t, result.Session.Dirty)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 
 	stored := h.refreshSession(t, session.ID)
 	require.Equal(t, sessionStateConflict, stored.State)
@@ -763,7 +771,9 @@ func TestExternalEditDocumentSaveSucceedsAfterOriginalTransportClosed(t *testing
 	require.NoError(t, err)
 	require.Equal(t, saveStatusSaved, result.Status)
 	require.Equal(t, "ssh-c", result.Session.SessionID)
-	assert.Equal(t, "ssh-c:/srv/app/demo.txt", h.remote.writes[len(h.remote.writes)-1])
+	writes := h.remote.Writes()
+	require.NotEmpty(t, writes)
+	assert.Equal(t, "ssh-c:/srv/app/demo.txt", writes[len(writes)-1])
 }
 
 func TestExternalEditDocumentOpenFromAnotherTransportReusesDirtyCopy(t *testing.T) {
@@ -822,7 +832,7 @@ func TestExternalEditDocumentBlocksWhenCanonicalFileCannotBeConfirmed(t *testing
 	_, err := h.svc.Save(context.Background(), session.ID)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "无法确认仍是同一份远程文件")
-	assert.Empty(t, h.remote.writes)
+	assert.Empty(t, h.remote.Writes())
 }
 
 func TestExternalEditDocumentRereadUsesAnotherTransportAfterConflict(t *testing.T) {
@@ -864,11 +874,12 @@ func TestExternalEditRereadNewDraftAutoSavesAfterFurtherEdit(t *testing.T) {
 	markDirtyLocalCopy(t, reread.Session, []byte("remote newer\nlocal follow-up\n"))
 	h.svc.reconcileLocalCopy(reread.Session.ID)
 	require.Eventually(t, func() bool {
-		return len(h.remote.writes) > 0
+		return len(h.remote.Writes()) > 0
 	}, autoSaveDebounce+time.Second, 50*time.Millisecond)
 
-	lastWrite := h.remote.writes[len(h.remote.writes)-1]
-	assert.Equal(t, "ssh-c:/srv/app/demo.txt", lastWrite)
+	writes := h.remote.Writes()
+	require.NotEmpty(t, writes)
+	assert.Equal(t, "ssh-c:/srv/app/demo.txt", writes[len(writes)-1])
 
 	stored := h.refreshSession(t, reread.Session.ID)
 	require.Equal(t, recordStateActive, stored.RecordState)
@@ -933,7 +944,7 @@ func TestExternalEditRereadNewDraftDetectsRemoteChangeWithoutLocalDirty(t *testi
 	require.Equal(t, recordStateConflict, nextConflict.Session.RecordState)
 	require.False(t, nextConflict.Session.Hidden)
 	require.True(t, nextConflict.Session.Dirty)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 
 	stored := h.refreshSession(t, reread.Session.ID)
 	require.Equal(t, sessionStateConflict, stored.State)
@@ -967,7 +978,7 @@ func TestExternalEditRefreshRereadNewDraftDetectsRemoteChangeWithoutLocalDirty(t
 	require.False(t, refreshed.Hidden)
 	require.True(t, refreshed.Dirty)
 	require.Equal(t, hashBytes([]byte("CASE68-C-REMOTE-EDIT-1\n")), sessionLocalHash(refreshed))
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 
 	stored := h.refreshSession(t, reread.Session.ID)
 	require.Equal(t, sessionStateConflict, stored.State)
@@ -1014,7 +1025,7 @@ func TestExternalEditRefreshConflictSurvivesLocalReconcile(t *testing.T) {
 	require.Equal(t, recordStateConflict, stored.RecordState)
 	require.True(t, stored.Dirty)
 	require.False(t, stored.Hidden)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 }
 
 func TestExternalEditReconnectRefreshRereadNewDraftDetectsRemoteChangeWithoutLocalDirty(t *testing.T) {
@@ -1068,7 +1079,7 @@ func TestExternalEditReconnectRefreshRereadNewDraftDetectsRemoteChangeWithoutLoc
 	require.Equal(t, recordStateConflict, refreshed.RecordState)
 	require.False(t, refreshed.Hidden)
 	require.True(t, refreshed.Dirty)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 }
 
 func TestExternalEditAutoSaveOnlyAttemptsOneStableHashOnce(t *testing.T) {
@@ -1079,12 +1090,12 @@ func TestExternalEditAutoSaveOnlyAttemptsOneStableHashOnce(t *testing.T) {
 	h.svc.reconcileLocalCopy(session.ID)
 
 	require.Eventually(t, func() bool {
-		return len(h.remote.writes) == 1
+		return len(h.remote.Writes()) == 1
 	}, 3*time.Second, 50*time.Millisecond)
 
 	h.svc.reconcileLocalCopy(session.ID)
 	time.Sleep(autoSaveDebounce + 200*time.Millisecond)
-	require.Len(t, h.remote.writes, 1)
+	require.Len(t, h.remote.Writes(), 1)
 
 	saved := h.refreshSession(t, session.ID)
 	require.Equal(t, sessionStateClean, saved.State)
@@ -1108,7 +1119,7 @@ func TestExternalEditCompareReturnsReadOnlyDiffWithoutWritingRemote(t *testing.T
 	require.True(t, diff.ReadOnly)
 	require.Equal(t, "local draft\n", diff.LocalContent)
 	require.Equal(t, "remote changed\n", diff.RemoteContent)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 	assert.Equal(t, "external_edit_compare", h.audit.lastTool())
 }
 
@@ -1336,7 +1347,7 @@ func TestExternalEditManualRestoredDraftDoesNotAutoSave(t *testing.T) {
 	markDirtyLocalCopy(t, session, []byte("restored manual\n"))
 	h.svc.reconcileLocalCopy(session.ID)
 	time.Sleep(autoSaveDebounce + 200*time.Millisecond)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 
 	manual, err := h.svc.Save(context.Background(), session.ID)
 	require.NoError(t, err)
@@ -1460,7 +1471,7 @@ func TestExternalEditAbandonedSessionCancelsPendingAutoSave(t *testing.T) {
 	h.svc.mu.Unlock()
 
 	time.Sleep(autoSaveDebounce + 200*time.Millisecond)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 
 	stored := h.refreshSession(t, session.ID)
 	require.Equal(t, recordStateAbandoned, stored.RecordState)
@@ -1518,7 +1529,7 @@ func TestExternalEditAutoSaveStillEntersConflictAfterRemoteCompare(t *testing.T)
 		}
 	}
 	require.True(t, foundConflict)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 }
 
 func TestExternalEditMergeApplySavesFinalDraftAndAdvancesHashes(t *testing.T) {
@@ -1578,7 +1589,7 @@ func TestExternalEditMergeApplyBlocksStaleRemoteSnapshot(t *testing.T) {
 	require.Equal(t, saveStatusConflict, applied.Status)
 	require.Contains(t, applied.Message, "合并期间再次变化")
 	require.NotNil(t, applied.Conflict)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 }
 
 func TestExternalEditRestartRecoveryMarksResumeRequiredWithoutAutoUpload(t *testing.T) {
@@ -1615,7 +1626,7 @@ func TestExternalEditRestartRecoveryMarksResumeRequiredWithoutAutoUpload(t *test
 
 	reopened.reconcileLocalCopy(session.ID)
 	time.Sleep(autoSaveDebounce + 200*time.Millisecond)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 
 	saved, err := reopened.Save(context.Background(), session.ID)
 	require.NoError(t, err)
@@ -1761,10 +1772,333 @@ func TestExternalEditClipboardResidueRuntimeEntryPointsCleanWithoutRunner(t *tes
 	require.Nil(t, h.svc.getSession(residue.ID))
 	require.Empty(t, h.svc.ListSessions())
 	require.Empty(t, h.svc.documentRunners)
-	require.Empty(t, h.remote.writes)
+	require.Empty(t, h.remote.Writes())
 
 	manifest, err := os.ReadFile(filepath.Join(h.manifest, "storage", "manifest.json"))
 	require.NoError(t, err)
 	require.NotContains(t, string(manifest), "folder/clipboard")
 	require.NotContains(t, string(manifest), "clipboard-images")
+}
+
+// TestExternalEditAuditMapAllowlistKeepsAllowedKeysVerbatim 钉住 external-edit 自由 map
+// metadata 的 fail-closed 字段白名单：11 个批准字段全部保留，值按原样序列化（即使长得像
+// 凭据也不改写），不生成 <redacted> 字面量。
+func TestExternalEditAuditMapAllowlistKeepsAllowedKeysVerbatim(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
+
+	session := &Session{ID: "ssh-a", AssetID: 101, AssetName: "asset-101", RemotePath: "/srv/app/demo.txt"}
+	request := map[string]any{
+		"auto":         true,
+		"windowSaves":  3,
+		"rebuild":      true,
+		"resolution":   "overwrite",
+		"status":       "saved",
+		"remoteBytes":  1234,
+		"remoteSha256": "abc123",
+		"bytes":        4321,
+		"documentKey":  "ssh-a:/srv/app/demo.txt",
+		"readOnly":     true,
+		"reuse":        true,
+	}
+	result := map[string]any{
+		"status":      "saved password=hunter2 token=xyz",
+		"documentKey": "ssh-a://user:pass@host/srv/app/demo.txt",
+		"resolution":  "keep",
+	}
+	actionErr := errors.New("transport failed password=hunter2 token=xyz")
+
+	h.svc.writeAudit(session, "external_edit_audit_allowlist_all", true, request, result, actionErr)
+
+	log := h.audit.lastLog()
+	require.NotNil(t, log)
+	require.Equal(t, "desktop", log.Source)
+	assert.Contains(t, log.Request, `"auto":true`)
+	assert.Contains(t, log.Request, `"windowSaves":3`)
+	assert.Contains(t, log.Request, `"rebuild":true`)
+	assert.Contains(t, log.Request, `"resolution":"overwrite"`)
+	assert.Contains(t, log.Request, `"status":"saved"`)
+	assert.Contains(t, log.Request, `"remoteBytes":1234`)
+	assert.Contains(t, log.Request, `"remoteSha256":"abc123"`)
+	assert.Contains(t, log.Request, `"bytes":4321`)
+	assert.Contains(t, log.Request, `"documentKey":"ssh-a:/srv/app/demo.txt"`)
+	assert.Contains(t, log.Request, `"readOnly":true`)
+	assert.Contains(t, log.Request, `"reuse":true`)
+	assert.Contains(t, log.Result, `"status":"saved password=hunter2 token=xyz"`)
+	assert.Contains(t, log.Result, `"documentKey":"ssh-a://user:pass@host/srv/app/demo.txt"`)
+	assert.Contains(t, log.Result, `"resolution":"keep"`)
+	assert.Contains(t, log.Error, "password=hunter2 token=xyz")
+	assert.NotContains(t, log.Command, "<redacted>")
+	assert.NotContains(t, log.Request, "<redacted>")
+	assert.NotContains(t, log.Result, "<redacted>")
+	assert.NotContains(t, log.Error, "<redacted>")
+}
+
+// TestExternalEditAuditMapAllowlistOmitsUnknownAndSecretFields 钉住 fail-closed 语义：
+// 未知字段、password/token/apiKey 和本地 bakeupPath/工作区路径/哈希一律省略；允许键下的
+// 嵌套 map 是复合值，整体省略，不递归放行。
+func TestExternalEditAuditMapAllowlistOmitsUnknownAndSecretFields(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
+
+	session := &Session{ID: "ssh-a", AssetID: 101, AssetName: "asset-101", RemotePath: "/srv/app/demo.txt"}
+	request := map[string]any{
+		"password":   "s3cr3t-ciphertext",
+		"token":      "tok-abc123",
+		"apiKey":     "ak-123",
+		"bakeupPath": "/Users/me/.cache/opskat/workspace/sessions/ssh-a/bakeup/old",
+		"localPath":  "/Users/me/.cache/opskat/workspace/sessions/ssh-a/local",
+		"status": map[string]any{
+			"reuse":    true,
+			"password": "nested-secret",
+			"detail":   "nested-unknown",
+		},
+	}
+	result := map[string]any{
+		"authToken":      "tok-xyz",
+		"originalSha256": "aaaabbbbcccc",
+		"readOnly":       true,
+	}
+
+	h.svc.writeAudit(session, "external_edit_audit_allowlist_omit", true, request, result, nil)
+
+	log := h.audit.lastLog()
+	require.NotNil(t, log)
+	for _, leaked := range []string{
+		"password", "token", "apiKey", "bakeupPath", "localPath",
+		"authToken", "originalSha256", "nested-secret", "nested-unknown",
+		"/Users/me",
+	} {
+		assert.NotContains(t, log.Request, leaked)
+		assert.NotContains(t, log.Result, leaked)
+	}
+	// 嵌套 map 是复合值，整体省略：status 不再出现在审计里，reuse/password/detail 一并滤掉
+	assert.NotContains(t, log.Request, `"status"`)
+	assert.Contains(t, log.Result, `"readOnly":true`)
+	assert.NotContains(t, log.Request, "<redacted>")
+	assert.NotContains(t, log.Result, "<redacted>")
+}
+
+// TestExternalEditAuditMapAllowlistOmitsCompositeValues 钉住 fail-closed 语义扩展到允许字段的
+// 复合值：map[string]string、具体类型 map、小结构体、切片/数组或嵌套 map 一律整体省略，
+// bakeupPath/password/localPath 藏在复合值里也不能绕过字段白名单；允许键的标量值仍逐字保留。
+func TestExternalEditAuditMapAllowlistOmitsCompositeValues(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
+
+	session := &Session{ID: "ssh-a", AssetID: 101, AssetName: "asset-101", RemotePath: "/srv/app/demo.txt"}
+	localPath := "/Users/me/.cache/opskat/workspace/sessions/ssh-a/bakeup/old"
+	request := map[string]any{
+		"auto": true,
+		"status": map[string]string{
+			"bakeupPath": localPath,
+			"password":   "nested-secret",
+		},
+		"resolution": struct {
+			LocalPath string `json:"localPath"`
+		}{LocalPath: localPath},
+		"reuse": []any{map[string]any{"bakeupPath": localPath}},
+	}
+	result := map[string]any{
+		"status": map[string]any{
+			"reuse":  true,
+			"detail": localPath,
+		},
+		"readOnly": []string{localPath},
+	}
+
+	h.svc.writeAudit(session, "external_edit_audit_allowlist_composite", true, request, result, nil)
+
+	log := h.audit.lastLog()
+	require.NotNil(t, log)
+	// 复合值整体省略：这些允许键不再出现在审计里，敏感内容不外泄
+	for _, key := range []string{`"status"`, `"resolution"`, `"reuse"`, `"readOnly"`} {
+		assert.NotContains(t, log.Request, key)
+		assert.NotContains(t, log.Result, key)
+	}
+	for _, leaked := range []string{"bakeupPath", "password", "localPath", "nested-secret", localPath, "/Users/me"} {
+		assert.NotContains(t, log.Request, leaked)
+		assert.NotContains(t, log.Result, leaked)
+	}
+	// 允许键的标量值仍逐字保留
+	assert.Contains(t, log.Request, `"auto":true`)
+	assert.Equal(t, `{"auto":true}`, log.Request)
+}
+
+// namedAudit* are named scalar aliases used to prove the external-edit audit
+// allowlist keeps named scalar kinds, not only the builtin aliases.
+type namedAuditString string
+type namedAuditBool bool
+type namedAuditInt int
+type namedAuditFloat float64
+
+// TestExternalEditAuditMapAllowlistKeepsJSONNumberAndNamedScalars 钉住 external-edit 审计
+// allowlist 对 JSON 标量的完整覆盖：json.Number 与命名标量别名（string/bool/数值）是合法
+// JSON 标量，必须逐字保留，不被误判为复合值整体省略；其它批准字段不受影响。
+func TestExternalEditAuditMapAllowlistKeepsJSONNumberAndNamedScalars(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
+
+	session := &Session{ID: "ssh-a", AssetID: 101, AssetName: "asset-101", RemotePath: "/srv/app/demo.txt"}
+	request := map[string]any{
+		"auto":        json.Number("7"),
+		"windowSaves": namedAuditInt(3),
+		"status":      namedAuditString("saved"),
+		"remoteBytes": namedAuditFloat(1234.5),
+		"reuse":       namedAuditBool(true),
+		"readOnly":    true,
+	}
+	result := map[string]any{
+		"status":      "saved",
+		"remoteBytes": json.Number("4321"),
+	}
+
+	h.svc.writeAudit(session, "external_edit_audit_json_scalar", true, request, result, nil)
+
+	log := h.audit.lastLog()
+	require.NotNil(t, log)
+	assert.Contains(t, log.Request, `"auto":7`)
+	assert.Contains(t, log.Request, `"windowSaves":3`)
+	assert.Contains(t, log.Request, `"status":"saved"`)
+	assert.Contains(t, log.Request, `"remoteBytes":1234.5`)
+	assert.Contains(t, log.Request, `"reuse":true`)
+	assert.Contains(t, log.Request, `"readOnly":true`)
+	assert.Contains(t, log.Result, `"remoteBytes":4321`)
+	assert.NotContains(t, log.Request, "<redacted>")
+}
+
+// TestExternalEditAuditMapAllowlistOmitsNonFiniteAndInvalidIndividually 钉住 external-edit
+// 审计对非有限/非法标量的 fail-closed 语义：NaN/±Inf float 与非法 json.Number 让整体
+// json.Marshal 失败，必须逐键省略而不是让 marshalAuditPayload 把整个 payload 清空；无关的
+// 批准字段继续逐字保留，复合值依旧整体省略。
+func TestExternalEditAuditMapAllowlistOmitsNonFiniteAndInvalidIndividually(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
+
+	session := &Session{ID: "ssh-a", AssetID: 101, AssetName: "asset-101", RemotePath: "/srv/app/demo.txt"}
+	request := map[string]any{
+		"auto":        true,
+		"windowSaves": math.NaN(),
+		"rebuild":     math.Inf(1),
+		"resolution":  json.Number("abc"),
+		"status":      map[string]any{"password": "nested-secret"},
+		"remoteBytes": 1234,
+	}
+
+	h.svc.writeAudit(session, "external_edit_audit_nonfinite", true, request, nil, nil)
+
+	log := h.audit.lastLog()
+	require.NotNil(t, log)
+	// 无关批准字段保留：payload 绝不被一个坏值整体清空。
+	assert.Contains(t, log.Request, `"auto":true`)
+	assert.Contains(t, log.Request, `"remoteBytes":1234`)
+	// 每个坏值只影响它自己的键：非有限/非法 number/复合值逐一省略。
+	for _, key := range []string{`"windowSaves"`, `"rebuild"`, `"resolution"`, `"status"`} {
+		assert.NotContains(t, log.Request, key)
+	}
+	assert.NotContains(t, log.Request, "nested-secret")
+}
+
+// TestExternalEditAuditOmitsSensitiveProducerFields 钉住 external-edit 审计的 request/result
+// 保持 producer 字段白名单：本地工作区路径、编辑器路径/参数和内容哈希这些环境细节被省略，
+// 远端路径、资产信息和编辑器 id 等投影字段保留。
+func TestExternalEditAuditOmitsSensitiveProducerFields(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
+
+	session := &Session{
+		ID:                 "ssh-a",
+		AssetID:            101,
+		AssetName:          "asset-101",
+		DocumentKey:        "ssh-a:/srv/app/demo.txt",
+		SessionID:          "ssh-a",
+		RemotePath:         "/srv/app/demo.txt",
+		RemoteRealPath:     "/srv/app/demo.txt",
+		LocalPath:          "/Users/me/.cache/opskat/workspace/sessions/ssh-a/local",
+		WorkspaceRoot:      "/Users/me/.cache/opskat/workspace",
+		WorkspaceDir:       "/Users/me/.cache/opskat/workspace/sessions/ssh-a",
+		EditorID:           "system-text",
+		EditorName:         "System Text",
+		EditorPath:         "/usr/bin/open",
+		EditorArgs:         []string{"--wait"},
+		OriginalSHA256:     "aaaabbbbcccc",
+		OriginalSize:       123,
+		OriginalModTime:    1700000000,
+		OriginalEncoding:   "utf-8",
+		OriginalBOM:        "",
+		OriginalByteSample: "sensitive-sample-bytes",
+		LastLocalSHA256:    "ddddeeeeffff",
+		Dirty:              false,
+		State:              "clean",
+	}
+	request := OpenRequest{AssetID: 101, SessionID: "ssh-a", RemotePath: "/srv/app/demo.txt", EditorID: "system-text"}
+	result := &SaveResult{Status: "saved", Session: session}
+
+	h.svc.writeAudit(session, "external_edit_audit_allowlist", true, request, result, nil)
+
+	log := h.audit.lastLog()
+	require.NotNil(t, log)
+	assert.Contains(t, log.Request, `"assetId":101`)
+	assert.Contains(t, log.Request, `"remotePath":"/srv/app/demo.txt"`)
+	assert.Contains(t, log.Result, `"remotePath":"/srv/app/demo.txt"`)
+	assert.Contains(t, log.Result, `"editorId":"system-text"`)
+	for _, leaked := range []string{
+		"localPath", "workspaceRoot", "workspaceDir", "editorPath", "editorArgs",
+		"originalSha256", "originalByteSample", "lastLocalSha256",
+	} {
+		assert.NotContains(t, log.Request, leaked)
+		assert.NotContains(t, log.Result, leaked)
+	}
+	assert.NotContains(t, log.Command, "/Users/me")
+}
+
+// TestExternalEditAuditKeepsTruncationLimits 钉住 external-edit 审计的 4096/8192/2048
+// 字节截断保持不变：request 截到 4096、result 截到 8192、error 截到 2048，截断发生在
+// 投影之后而不是替换值；填充使用批准字段而非会被省略的未知字段。
+func TestExternalEditAuditKeepsTruncationLimits(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-a"} })
+
+	session := &Session{ID: "ssh-a", AssetID: 101, AssetName: "asset-101", RemotePath: "/srv/app/demo.txt"}
+	request := map[string]any{"status": strings.Repeat("x", 6000)}
+	result := map[string]any{"resolution": strings.Repeat("y", 10000)}
+	actionErr := errors.New(strings.Repeat("z", 3000))
+
+	h.svc.writeAudit(session, "external_edit_audit_truncate", true, request, result, actionErr)
+
+	log := h.audit.lastLog()
+	require.NotNil(t, log)
+	assert.Len(t, log.Request, 4096)
+	assert.Len(t, log.Result, 8192)
+	assert.Len(t, log.Error, 2048)
+	assert.Contains(t, log.Request, "xxxx")
+	assert.Contains(t, log.Result, "yyyy")
+	assert.Contains(t, log.Error, "zzzz")
+}
+
+// TestExternalEditAuditRebuildOmitsLocalBakeupPath 钉住 rebuild 审计不携带本地备份路径：
+// 远端变化触发 rebuild 时，旧本地副本仍移入 bakeup（行为保留），但审计 result 不得包含
+// bakeupPath 或任何本地工作区路径。
+func TestExternalEditAuditRebuildOmitsLocalBakeupPath(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return []string{"ssh-b"} })
+	session := h.openSession(t, "ssh-b", "/srv/app/demo.txt", "/srv/app/demo.txt", []byte("hello\n"))
+
+	// 打开后远端内容变化，再次 Open 触发 rebuild：旧本地副本移入 bakeup，新副本按远端重写
+	h.remote.SetFile("ssh-b", "/srv/app/demo.txt", []byte("remote changed\n"), "/srv/app/demo.txt")
+	reopened, err := h.svc.Open(context.Background(), OpenRequest{
+		AssetID:    101,
+		SessionID:  "ssh-b",
+		RemotePath: "/srv/app/demo.txt",
+		EditorID:   "system-text",
+	})
+	require.NoError(t, err)
+	require.Equal(t, session.ID, reopened.ID)
+	require.Equal(t, hashBytes([]byte("remote changed\n")), sessionBaseHash(reopened))
+
+	// rebuild 行为保留：旧本地副本被移入 bakeup
+	bakeupFiles := readBakeupFiles(t, reopened.WorkspaceDir)
+	require.Len(t, bakeupFiles, 1)
+	require.Equal(t, []byte("hello\n"), bakeupFiles[0])
+
+	// 审计 request 保留 rebuild 标记，但 result 不得携带本地 bakeup/工作区路径
+	log := h.audit.lastLog()
+	require.NotNil(t, log)
+	require.Equal(t, "external_edit_open", log.ToolName)
+	require.Contains(t, log.Request, `"rebuild":true`)
+	assert.NotContains(t, log.Result, reopened.WorkspaceDir)
+	assert.NotContains(t, log.Result, "bakeup")
+	assert.NotContains(t, log.Result, reopened.LocalPath)
 }

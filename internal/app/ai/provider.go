@@ -17,7 +17,6 @@ type AIProviderInfo struct {
 	Type             string `json:"type"`
 	APIBase          string `json:"apiBase"`
 	APIKey           string `json:"apiKey"`
-	MaskedAPIKey     string `json:"maskedApiKey"`
 	Model            string `json:"model"`
 	MaxOutputTokens  int    `json:"maxOutputTokens"`
 	ContextWindow    int    `json:"contextWindow"`
@@ -34,7 +33,6 @@ func toProviderInfo(p *ai_provider_entity.AIProvider, apiKey string) AIProviderI
 		Type:             p.Type,
 		APIBase:          p.APIBase,
 		APIKey:           apiKey,
-		MaskedAPIKey:     maskAPIKey(apiKey),
 		Model:            p.Model,
 		MaxOutputTokens:  p.MaxOutputTokens,
 		ContextWindow:    p.ContextWindow,
@@ -75,7 +73,10 @@ func (a *AI) ListAIProviders() ([]AIProviderInfo, error) {
 	}
 	result := make([]AIProviderInfo, 0, len(list))
 	for _, p := range list {
-		decrypted, _ := ai_provider_svc.AIProvider().DecryptAPIKey(p)
+		decrypted, err := ai_provider_svc.AIProvider().DecryptAPIKey(p)
+		if err != nil {
+			return nil, fmt.Errorf("解密 Provider API Key 失败 (id=%d): %w", p.ID, err)
+		}
 		result = append(result, toProviderInfo(p, decrypted))
 	}
 	return result, nil
@@ -85,9 +86,15 @@ func (a *AI) ListAIProviders() ([]AIProviderInfo, error) {
 func (a *AI) GetActiveAIProvider() (*AIProviderInfo, error) {
 	p, err := ai_provider_svc.AIProvider().GetActive(i18n.Ctx(a.ctx, a.lang.Lang()))
 	if err != nil {
-		return nil, nil //nolint:nilerr // 无激活 provider 时返回 nil 表示未配置
+		return nil, fmt.Errorf("获取激活 Provider 失败: %w", err)
 	}
-	decrypted, _ := ai_provider_svc.AIProvider().DecryptAPIKey(p)
+	if p == nil {
+		return nil, nil
+	}
+	decrypted, err := ai_provider_svc.AIProvider().DecryptAPIKey(p)
+	if err != nil {
+		return nil, fmt.Errorf("解密 Provider API Key 失败 (id=%d): %w", p.ID, err)
+	}
 	info := toProviderInfo(p, decrypted)
 	return &info, nil
 }

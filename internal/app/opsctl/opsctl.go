@@ -45,7 +45,7 @@ type Opsctl struct {
 
 type pendingOpsctlApproval struct {
 	kind  string
-	items []permission.ApprovalItem
+	items []permission.ApprovalItem // 后端保留原始 items，用于响应校验与执行
 	ch    chan permission.ApprovalResponse
 }
 

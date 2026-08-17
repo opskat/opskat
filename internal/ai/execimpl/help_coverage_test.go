@@ -1,11 +1,16 @@
 package execimpl
 
 import (
+	"regexp"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/assettype"
 )
+
+var configFieldRow = regexp.MustCompile(`(?m)^\| \x60([^\x60]+)\x60 \|`)
 
 // 每个注册了的资产类型都必须有 help 文档——**没有豁免清单**。
 //
@@ -19,6 +24,37 @@ func TestEveryAssetTypeHasHelpDoc(t *testing.T) {
 			t.Errorf("asset type %q has no help doc; add internal/ai/skills/%s/SKILL.md and register it "+
 				"(RegisterExecutor if it has a command surface, RegisterHelpDoc if it only has config)",
 				h.Type(), h.Type())
+		}
+	}
+}
+
+// The registered handler is the executable source of truth for generic automation fields;
+// the embedded help is the independently consumed public contract used by AI and opsctl.
+// Compare their parsed field sets instead of locking prose or implementation entries.
+func TestHelpConfigFieldsMatchAutomationContracts(t *testing.T) {
+	for _, h := range assettype.All() {
+		doc, ok := permission.HelpFor(h.Type())
+		if !ok {
+			continue // TestEveryAssetTypeHasHelpDoc reports the missing document.
+		}
+		_, configSection, found := strings.Cut(doc, "## Asset config (for put_asset)")
+		if !found {
+			t.Errorf("asset type %q help has no put_asset config section", h.Type())
+			continue
+		}
+		if next := strings.Index(configSection, "\n## "); next >= 0 {
+			configSection = configSection[:next]
+		}
+		matches := configFieldRow.FindAllStringSubmatch(configSection, -1)
+		documented := make([]string, 0, len(matches))
+		for _, match := range matches {
+			documented = append(documented, match[1])
+		}
+		sort.Strings(documented)
+		expected := append([]string(nil), h.AutomationContract().ConfigFields...)
+		sort.Strings(expected)
+		if strings.Join(documented, "\x00") != strings.Join(expected, "\x00") {
+			t.Errorf("asset type %q config fields differ: handler=%v help=%v", h.Type(), expected, documented)
 		}
 	}
 }

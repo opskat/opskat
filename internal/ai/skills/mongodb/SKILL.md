@@ -61,10 +61,13 @@ Supported operations: `find`, `findOne`, `insertOne`, `insertMany`, `updateOne`,
 | field | type | required | notes |
 |---|---|---|---|
 | `host` | string | yes | |
-| `port` | number | yes | No server-side default — pass `27017` explicitly |
-| `username` | string | yes | |
-| `password` | string | no | Stored encrypted; never echoed back |
+| `port` | number | no | Defaults to `27017` |
+| `username` | string | yes | MongoDB account name |
+| `password` | string | no | **Write-only.** Encrypted in the asset; does not create a credential |
+| `credential_id` | number | no | Existing managed password credential ID |
 | `database` | string | no | Default database |
 | `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches |
 
-Auth source is fixed to `admin`; it is not configurable through `put_asset`.
+`password` and `credential_id` are mutually exclusive. Plaintext is never returned, is
+encrypted in the asset, and never creates a managed credential. Auth source is
+fixed to `admin`; it is not configurable through `put_asset`.

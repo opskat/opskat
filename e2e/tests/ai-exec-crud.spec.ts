@@ -58,7 +58,12 @@ test("put_asset creates, then updates the same row through the same tool", async
   expect(createdAudit.asset_id).toBe(row.id);
   expect(createdAudit.asset_name).toBe(name);
   expect(createdAudit.request).not.toContain(auditSecret);
-  expect(JSON.parse(createdAudit.request).config.password).toBe("<redacted>");
+  // put_asset 的 Audit request 是 producer 白名单投影：write-only 字段完全不存在，
+  // 不是 `<redacted>` 占位。
+  const createdRequest = JSON.parse(createdAudit.request);
+  expect(createdRequest.config.password).toBeUndefined();
+  // 裸密码只加密进资产配置，不会隐式创建托管凭据。
+  expect(createdRequest.authentication).toBeUndefined();
   expect(rows[before + 1].asset_name).toBe(name); // resolved from `asset` before the rename took effect
 });
 

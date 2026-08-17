@@ -393,8 +393,7 @@ func (e ossExecutor) presignObject(ctx context.Context, asset *asset_entity.Asse
 	if err != nil {
 		return "", err
 	}
-	// 返回给调用方的 URL 是完整可用的；落库那一层由 internal/pkg/auditredact 把签名
-	// 查询参数换成 <redacted>（决策 D10）。
+	// 返回给调用方的 URL 是完整可用的；审计按 raw-by-default 原样落库，不做值替换。
 	return marshalOSSResult(ctx, "object presign", map[string]any{
 		"url": url, "method": method, "expiresIn": expiry,
 	})

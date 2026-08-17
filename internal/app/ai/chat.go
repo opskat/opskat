@@ -30,6 +30,14 @@ import (
 	"gorm.io/gorm"
 )
 
+// outwardFailure preserves the provider/tool error text for the user-facing event while
+// adding operation context to the synchronous Wails error. Audit writes raw values at
+// the sink and must not rewrite either direct user-facing channel.
+func outwardFailure(prefix string, err error) (string, error) {
+	message := err.Error()
+	return message, fmt.Errorf("%s: %s", prefix, message)
+}
+
 // runnerEntry 持有一个活跃会话的 cago 运行栈。
 type runnerEntry struct {
 	sys        *coding.System
@@ -39,13 +47,6 @@ type runnerEntry struct {
 	dbCache    *helper.DatabaseClientCache
 	redisCache *helper.RedisClientCache
 	mongoCache *helper.MongoDBClientCache
-}
-
-func maskAPIKey(key string) string {
-	if len(key) <= 8 {
-		return "****"
-	}
-	return key[:4] + "****" + key[len(key)-4:]
 }
 
 // allBuiltinAssetTypeSkills 返回全部已内嵌用法文档的资产类型（skills.Types()——9 个
@@ -225,12 +226,17 @@ func (a *AI) stopEntry(e *runnerEntry) {
 
 // InitAIProvider 启动时加载激活的 Provider。
 func (a *AI) InitAIProvider() {
-	p, err := ai_provider_svc.AIProvider().GetActive(i18n.Ctx(a.ctx, a.lang.Lang()))
+	ctx := i18n.Ctx(a.ctx, a.lang.Lang())
+	p, err := ai_provider_svc.AIProvider().GetActive(ctx)
 	if err != nil {
-		return // 无激活 provider，跳过
+		logger.Ctx(ctx).Error("load active AI provider on startup", zap.Error(err))
+		return
+	}
+	if p == nil {
+		return
 	}
 	if err := a.activateProvider(p); err != nil {
-		logger.Default().Warn("activate AI provider on startup", zap.Error(err))
+		logger.Ctx(ctx).Warn("activate AI provider on startup", zap.Error(err))
 	}
 }
 
@@ -252,20 +258,19 @@ func (a *AI) CreateConversation() (*conversation_entity.Conversation, error) {
 	ctx := i18n.Ctx(a.ctx, a.lang.Lang())
 
 	// 获取激活 Provider ID
-	activeProvider, _ := ai_provider_svc.AIProvider().GetActive(ctx)
-	var providerID int64
-	if activeProvider != nil {
-		providerID = activeProvider.ID
+	activeProvider, err := ai_provider_svc.AIProvider().GetActive(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("获取激活 Provider 失败: %w", err)
+	}
+	if activeProvider == nil {
+		return nil, fmt.Errorf("激活 Provider 不存在")
 	}
 
 	conv := &conversation_entity.Conversation{
-		Title:      "新对话",
-		ProviderID: providerID,
-	}
-	// 新会话默认沿用激活 Provider 的模型/类型，让「按会话切换模型」有一份初始记录。
-	if activeProvider != nil {
-		conv.Model = activeProvider.Model
-		conv.ProviderType = activeProvider.Type
+		Title:        "新对话",
+		ProviderID:   activeProvider.ID,
+		Model:        activeProvider.Model,
+		ProviderType: activeProvider.Type,
 	}
 	if err := conversation_svc.Conversation().Create(ctx, conv); err != nil {
 		return nil, err
@@ -524,8 +529,9 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 	cfg.SystemPrompt = systemPrompt
 	sys, err := runner.BuildSystem(chatCtx, cfg)
 	if err != nil {
-		onEvent(runner.StreamEvent{Type: "error", Error: fmt.Sprintf("build coding system: %s", err.Error())})
-		return fmt.Errorf("build coding system: %w", err)
+		message, outwardErr := outwardFailure("build coding system", err)
+		onEvent(runner.StreamEvent{Type: "error", Error: fmt.Sprintf("build coding system: %s", message)})
+		return outwardErr
 	}
 
 	history, lastUserText := runner.SplitForReplay(messages)
@@ -553,13 +559,14 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 			onEvent(runner.StreamEvent{Type: "stopped"})
 			return nil //nolint:nilerr // 取消是用户主动行为，不是错误
 		}
-		onEvent(runner.StreamEvent{Type: "error", Error: err.Error()})
-		return fmt.Errorf("send to LLM: %w", err)
+		message, outwardErr := outwardFailure("send to LLM", err)
+		onEvent(runner.StreamEvent{Type: "error", Error: message})
+		return outwardErr
 	}
 
 	go func() {
 		defer close(entry.done)
-		translator := runner.NewStreamTranslator()
+		translator := runner.NewStreamTranslatorWithContext(chatCtx)
 		for ev := range events {
 			translator.Translate(ev, onEvent)
 		}

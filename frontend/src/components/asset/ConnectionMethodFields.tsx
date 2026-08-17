@@ -32,6 +32,7 @@ import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type D
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { AssetSelect } from "@/components/asset/AssetSelect";
+import { SecretInput } from "@/components/SecretInput";
 import { Field, Segmented } from "@/components/asset/fields";
 import {
   httpTunnelProxyLayer,
@@ -494,8 +495,7 @@ function ProxyChainLayerFields({
               <Input value={layer.username} onChange={(e) => onChange({ username: e.target.value })} />
             </Field>
             <Field label={t("asset.proxyPassword")} className="flex-1">
-              <Input
-                type="password"
+              <SecretInput
                 value={layer.password}
                 onChange={(e) => onChange({ password: e.target.value })}
                 placeholder={layer.encryptedPassword ? t("asset.passwordUnchanged") : ""}
@@ -518,9 +518,8 @@ function ProxyChainLayerFields({
           </Field>
           <div className="flex items-end gap-3">
             <Field label={t("asset.proxyChainHTTPToken")} required className="flex-1">
-              <Input
+              <SecretInput
                 className={cn(fieldError(errors, "token", t) && invalid)}
-                type="password"
                 value={layer.token}
                 onChange={(e) => onChange({ token: e.target.value })}
                 placeholder={layer.encryptedToken ? t("asset.passwordUnchanged") : "dbx_tunnel.php token"}

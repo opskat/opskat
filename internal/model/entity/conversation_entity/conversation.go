@@ -1,10 +1,10 @@
 package conversation_entity
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
-
-	"github.com/opskat/opskat/internal/pkg/auditredact"
+	"strings"
 )
 
 // 状态常量
@@ -99,6 +99,9 @@ type ContentBlock struct {
 	ToolInput  string `json:"toolInput,omitempty"`
 	ToolCallID string `json:"toolCallId,omitempty"` // 跨 turn 还原 tool_calls 历史；老数据无此字段，前端兜底为塌缩消息
 	Status     string `json:"status,omitempty"`     // "running" | "completed" | "error" | "canceled"
+	// ChildBlocks 是 agent 块的嵌套子块（tool 等）。持久化时原样写入，
+	// 保证实时嵌套显示与重载后的嵌套显示收到同一份原始值。
+	ChildBlocks []ContentBlock `json:"childBlocks,omitempty"`
 	// error 块字段：
 	//   ErrorKind   — "rate_limit" | "server" | "network" | "auth" | "interrupted" | "unknown"
 	//   ErrorDetail — 原始错误正文，UI 直接展示
@@ -106,7 +109,8 @@ type ContentBlock struct {
 	ErrorDetail string `json:"errorDetail,omitempty"`
 }
 
-// GetBlocks 获取前端显示块
+// GetBlocks 获取前端显示块。原值语义：加载时原样返回存储的 blocks，不做脱敏；
+// 旧行中已写死的字面 <redacted> 作为普通不可恢复字面值保留（原值不可恢复，不回猜）。
 func (m *Message) GetBlocks() ([]ContentBlock, error) {
 	if m.Blocks == "" {
 		return nil, nil
@@ -118,27 +122,20 @@ func (m *Message) GetBlocks() ([]ContentBlock, error) {
 	return blocks, nil
 }
 
-// SetBlocks 设置前端显示块
+// SetBlocks 设置前端显示块。原值语义：tool input/result、error 正文/详情与嵌套
+// agent child blocks 一律原样持久化。
 func (m *Message) SetBlocks(blocks []ContentBlock) error {
 	if len(blocks) == 0 {
 		m.Blocks = ""
 		return nil
 	}
-	// Display blocks are a persistence copy, not the live model invocation. Redact only
-	// this copy so the runner still receives the original tool arguments while chat
-	// history cannot become a plaintext side channel around credential encryption.
-	persisted := make([]ContentBlock, len(blocks))
-	copy(persisted, blocks)
-	for i := range persisted {
-		if persisted[i].ToolInput != "" {
-			persisted[i].ToolInput = auditredact.JSON(persisted[i].ToolInput)
-		}
-	}
-	data, err := json.Marshal(persisted)
-	if err != nil {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(blocks); err != nil {
 		return err
 	}
-	m.Blocks = string(data)
+	m.Blocks = strings.TrimSuffix(buf.String(), "\n")
 	return nil
 }
 

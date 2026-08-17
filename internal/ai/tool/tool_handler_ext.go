@@ -12,7 +12,6 @@ import (
 	"github.com/opskat/opskat/internal/ai/cmdline"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/policy"
-	"github.com/opskat/opskat/internal/pkg/auditredact"
 	"github.com/opskat/opskat/pkg/extension"
 )
 
@@ -95,8 +94,10 @@ func ExecuteExtensionTool(ctx context.Context, executor ExtensionToolExecutor, a
 		zap.String("tool", toolName), zap.Int64("assetID", assetID))
 	defer func() {
 		if retErr != nil {
+			// 结构化日志不记录 raw error：它可能包装用户输入或远端输出。Error 级别本身
+			// 即失败状态，保留 extension/tool/assetID 供定位，不解析 err.Error() 造分类。
 			logger.Ctx(ctx).Error("extension tool execution failed", zap.String("extension", extName),
-				zap.String("tool", toolName), zap.Int64("assetID", assetID), zap.Error(retErr))
+				zap.String("tool", toolName), zap.Int64("assetID", assetID))
 			return
 		}
 		logger.Ctx(ctx).Info("extension tool execution end", zap.String("extension", extName),
@@ -157,7 +158,9 @@ func ExecuteExtensionTool(ctx context.Context, executor ExtensionToolExecutor, a
 }
 
 func extensionInvocationSummary(extName, toolName string, argsJSON []byte) string {
-	return extName + "." + toolName + " " + auditredact.JSON(string(argsJSON))
+	// Approval and live execution share the original validated arguments. Audit owns its
+	// canonical projection when the middleware persists this same command later.
+	return extName + "." + toolName + " " + string(argsJSON)
 }
 
 func confirmExtensionTool(ctx context.Context, assetID int64, extName, toolName, command, reason string) error {

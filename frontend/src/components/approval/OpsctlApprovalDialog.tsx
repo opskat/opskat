@@ -16,6 +16,7 @@ import { S3Icon } from "@/components/asset/brand-icons";
 import { RespondOpsctlApproval } from "../../../wailsjs/go/opsctl/Opsctl";
 import { permission } from "../../../wailsjs/go/models";
 import { ShieldAlert, Terminal, Database, Server, FolderOpen, Globe, Usb, Trash2, Boxes, FileUp } from "lucide-react";
+import { hasApprovalCommandEdits } from "@/lib/approval";
 
 interface ApprovalItemData {
   type: string;
@@ -136,6 +137,8 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
     "opsctl:approval",
     useCallback(
       (data: SingleApprovalEvent) => {
+        const command = data.command || "";
+        const detail = data.detail;
         enqueue({
           id: data.confirm_id,
           // 后端按 permission registry 发送 capability kind；只有真正有 pattern
@@ -146,8 +149,8 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
               type: data.type,
               asset_id: data.asset_id,
               asset_name: data.asset_name,
-              command: data.command || "",
-              detail: data.detail,
+              command,
+              detail,
             },
           ],
           sessionID: data.session_id,
@@ -162,20 +165,21 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
     "opsctl:batch-approval",
     useCallback(
       (data: BatchApprovalEvent) => {
+        const mapped = (data.items || []).map((i) => ({
+          type: i.type,
+          asset_id: i.asset_id,
+          asset_name: i.asset_name,
+          command: i.command,
+          // detail 是一条 cp 传输唯一携带"两端基点"的地方（"opsctl cp <src> → <dst>"）。
+          // internal/app/opsctl/approval.go 的 handleBatchApproval 与 approval.BatchItem
+          // 都带了它（batch_exec 的 exec/sql/redis/mongo 混合批不产出，留空），折叠摘要
+          // 因此报得出两端基点，不止是条数。
+          detail: i.detail,
+        }));
         enqueue({
           id: data.confirm_id,
           kind: "batch",
-          items: (data.items || []).map((i) => ({
-            type: i.type,
-            asset_id: i.asset_id,
-            asset_name: i.asset_name,
-            command: i.command,
-            // detail 是一条 cp 传输唯一携带"两端基点"的地方（"opsctl cp <src> → <dst>"）。
-            // internal/app/opsctl/approval.go 的 handleBatchApproval 与 approval.BatchItem
-            // 都带了它（batch_exec 的 exec/sql/redis/mongo 混合批不产出，留空），折叠摘要
-            // 因此报得出两端基点，不止是条数。
-            detail: i.detail,
-          })),
+          items: mapped,
           sessionID: data.session_id,
           editable: false,
         });
@@ -277,9 +281,10 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
 
       const shouldSendEdits =
         (current.kind === "grant" && decision !== "deny") || (current.kind === "single" && decision === "allowAll");
+      const edits = editState[current.id] || {};
+      const commands = current.items.map((item, i) => edits[i] ?? item.command);
 
-      if (shouldSendEdits) {
-        const edits = editState[current.id] || {};
+      if (shouldSendEdits && hasApprovalCommandEdits(current.items, commands)) {
         resp.edited_items = current.items.map((item, i) => {
           const edited = new permission.ApprovalItem();
           edited.type = item.type;
@@ -287,7 +292,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           edited.asset_name = item.asset_name;
           edited.group_id = item.group_id || 0;
           edited.group_name = item.group_name || "";
-          edited.command = edits[i] ?? item.command;
+          edited.command = commands[i];
           edited.detail = item.detail || "";
           return edited;
         });

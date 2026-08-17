@@ -73,22 +73,23 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 		o.window.ActivateWindow()
 	}
 
+	expectedItems := []permission.ApprovalItem{{
+		Type: req.Type, AssetID: req.AssetID, AssetName: req.AssetName,
+		Command: req.Command, Detail: req.Detail,
+	}}
+	// 发往 Wails 的 command/detail 即原始主体，展示与执行逐字一致。
 	wailsRuntime.EventsEmit(o.ctx, "opsctl:approval", map[string]any{
 		"confirm_id": confirmID,
 		"kind":       kind,
 		"type":       req.Type,
 		"asset_id":   req.AssetID,
 		"asset_name": req.AssetName,
-		"command":    req.Command,
-		"detail":     req.Detail,
+		"command":    expectedItems[0].Command,
+		"detail":     expectedItems[0].Detail,
 		"session_id": req.SessionID,
 	})
 
 	ch := make(chan permission.ApprovalResponse, 1)
-	expectedItems := []permission.ApprovalItem{{
-		Type: req.Type, AssetID: req.AssetID, AssetName: req.AssetName,
-		Command: req.Command, Detail: req.Detail,
-	}}
 	o.pendingOpsctlApprovals.Store(confirmID, pendingOpsctlApproval{kind: kind, items: expectedItems, ch: ch})
 	defer o.pendingOpsctlApprovals.Delete(confirmID)
 
@@ -96,8 +97,9 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 	case resp := <-ch:
 		parsed, err := permission.ParseApprovalResponse(kind, resp, expectedItems)
 		if err != nil {
-			log.Warn("opsctl approval response invalid", zap.String("kind", kind),
-				zap.String("decision", resp.Decision), zap.Error(err))
+			// Response payload is an IPC input and may contain credential-shaped text.
+			// The scoped logger already carries confirmID/type/asset/session correlation.
+			log.Warn("opsctl approval response invalid", zap.String("kind", kind))
 			return approval.ApprovalResponse{Approved: false, Reason: "invalid approval response"}
 		}
 		switch parsed.Decision {
@@ -174,18 +176,21 @@ func (o *Opsctl) startSSHPoolServer() {
 func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
 	confirmID := fmt.Sprintf("batch_%d", time.Now().UnixNano())
 
-	items := make([]map[string]any, 0, len(req.BatchItems))
 	expectedItems := make([]permission.ApprovalItem, 0, len(req.BatchItems))
 	for _, item := range req.BatchItems {
-		items = append(items, map[string]any{
-			"type":       item.Type,
-			"asset_id":   item.AssetID,
-			"asset_name": item.AssetName,
-			"command":    item.Command,
-			"detail":     item.Detail,
-		})
 		expectedItems = append(expectedItems, permission.ApprovalItem{
 			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName, Command: item.Command, Detail: item.Detail,
+		})
+	}
+	// 批量事件发送原始 items，展示与执行逐字一致。
+	items := make([]map[string]any, 0, len(expectedItems))
+	for i := range expectedItems {
+		items = append(items, map[string]any{
+			"type":       expectedItems[i].Type,
+			"asset_id":   expectedItems[i].AssetID,
+			"asset_name": expectedItems[i].AssetName,
+			"command":    expectedItems[i].Command,
+			"detail":     expectedItems[i].Detail,
 		})
 	}
 
@@ -209,7 +214,7 @@ func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.Appr
 		if err != nil || parsed.Decision != permission.ApprovalAllow {
 			if err != nil {
 				logger.Ctx(o.ctx).Warn("opsctl batch approval response invalid",
-					zap.String("decision", resp.Decision), zap.Error(err))
+					zap.String("confirmID", confirmID))
 			}
 			return approval.ApprovalResponse{Approved: false, Reason: "user denied"}
 		}
@@ -221,14 +226,35 @@ func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.Appr
 	}
 }
 
+// grantItemsForPersistence 构造可在审批前保存的 grant items。原始 command/detail 原样
+// 写入 grant_items——审批者看到的主体就是最终持久化的授权主体。
+func grantItemsForPersistence(sessionID string, reqItems []approval.GrantItem) []*grant_entity.GrantItem {
+	items := make([]*grant_entity.GrantItem, 0, len(reqItems))
+	for i, item := range reqItems {
+		items = append(items, &grant_entity.GrantItem{
+			GrantSessionID: sessionID,
+			ItemIndex:      i,
+			ToolName:       item.Type,
+			AssetID:        item.AssetID,
+			AssetName:      item.AssetName,
+			GroupID:        item.GroupID,
+			GroupName:      item.GroupName,
+			Command:        item.Command,
+			Detail:         item.Detail,
+		})
+	}
+	return items
+}
+
 // handleGrantApproval 处理批量计划审批
 func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
 	ctx := i18n.Ctx(o.ctx, o.lang.Lang())
 	sessionID := req.SessionID
 
+	description := req.Description
 	session := &grant_entity.GrantSession{
 		ID:          sessionID,
-		Description: req.Description,
+		Description: description,
 		Status:      grant_entity.GrantStatusPending,
 		Createtime:  time.Now().Unix(),
 	}
@@ -238,34 +264,28 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 		}
 	}
 
-	var items []*grant_entity.GrantItem
-	for i, pi := range req.GrantItems {
-		items = append(items, &grant_entity.GrantItem{
-			GrantSessionID: sessionID,
-			ItemIndex:      i,
-			ToolName:       pi.Type,
-			AssetID:        pi.AssetID,
-			AssetName:      pi.AssetName,
-			GroupID:        pi.GroupID,
-			GroupName:      pi.GroupName,
-			Command:        pi.Command,
-			Detail:         pi.Detail,
+	expectedItems := make([]permission.ApprovalItem, 0, len(req.GrantItems))
+	for _, item := range req.GrantItems {
+		expectedItems = append(expectedItems, permission.ApprovalItem{
+			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName,
+			GroupID: item.GroupID, GroupName: item.GroupName, Command: item.Command, Detail: item.Detail,
 		})
 	}
+	// 授权事件发送原始 items；pending 保留原始 expectedItems 用于校验与执行。
+	items := grantItemsForPersistence(sessionID, req.GrantItems)
 	if err := grant_repo.Grant().CreateItems(ctx, items); err != nil {
 		return approval.ApprovalResponse{Approved: false, Reason: "failed to create grant items"}
 	}
-
-	eventItems := make([]map[string]any, 0, len(req.GrantItems))
-	for _, pi := range req.GrantItems {
+	eventItems := make([]map[string]any, 0, len(expectedItems))
+	for i := range expectedItems {
 		eventItems = append(eventItems, map[string]any{
-			"type":       pi.Type,
-			"asset_id":   pi.AssetID,
-			"asset_name": pi.AssetName,
-			"group_id":   pi.GroupID,
-			"group_name": pi.GroupName,
-			"command":    pi.Command,
-			"detail":     pi.Detail,
+			"type":       expectedItems[i].Type,
+			"asset_id":   expectedItems[i].AssetID,
+			"asset_name": expectedItems[i].AssetName,
+			"group_id":   expectedItems[i].GroupID,
+			"group_name": expectedItems[i].GroupName,
+			"command":    expectedItems[i].Command,
+			"detail":     expectedItems[i].Detail,
 		})
 	}
 
@@ -275,18 +295,11 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 
 	wailsRuntime.EventsEmit(o.ctx, "opsctl:grant-approval", map[string]any{
 		"session_id":  sessionID,
-		"description": req.Description,
+		"description": description,
 		"items":       eventItems,
 	})
 
 	ch := make(chan permission.ApprovalResponse, 1)
-	expectedItems := make([]permission.ApprovalItem, 0, len(req.GrantItems))
-	for _, item := range req.GrantItems {
-		expectedItems = append(expectedItems, permission.ApprovalItem{
-			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName,
-			GroupID: item.GroupID, GroupName: item.GroupName, Command: item.Command, Detail: item.Detail,
-		})
-	}
 	o.pendingOpsctlApprovals.Store(sessionID, pendingOpsctlApproval{kind: permission.ApprovalKindGrant, items: expectedItems, ch: ch})
 	defer o.pendingOpsctlApprovals.Delete(sessionID)
 
@@ -381,9 +394,11 @@ func (o *Opsctl) handleExtToolExec(req approval.ApprovalRequest) approval.Approv
 		return permission.ApprovalResponse{Decision: "deny"}
 	})
 	ctx = permission.WithPolicyChecker(ctx, checker)
+	// 直接执行通道：executor 返回的 bytes 与 error 原样交给调用者，不做内容改写
+	// （spec Decision 4 / Direct execution and history）。
 	result, err := o.extExecutor.ExecuteExtTool(ctx, req.Extension, req.Tool, args)
 	if err != nil {
-		return approval.ApprovalResponse{ToolError: fmt.Sprintf("call tool %s/%s: %v", req.Extension, req.Tool, err)}
+		return approval.ApprovalResponse{ToolError: err.Error()}
 	}
 
 	return approval.ApprovalResponse{Approved: true, ToolResult: string(result)}
@@ -394,9 +409,10 @@ func (o *Opsctl) RespondOpsctlApproval(confirmID string, resp permission.Approva
 	if v, ok := o.pendingOpsctlApprovals.Load(confirmID); ok {
 		pending := v.(pendingOpsctlApproval)
 		if _, err := permission.ParseApprovalResponse(pending.kind, resp, pending.items); err != nil {
+			// Response payload is an IPC input and may contain credential-shaped text.
+			// Keep only correlation fields; the static message already identifies validation failure.
 			logger.Ctx(o.ctx).Warn("invalid opsctl approval response denied",
-				zap.String("confirmID", confirmID), zap.String("kind", pending.kind),
-				zap.String("decision", resp.Decision), zap.Error(err))
+				zap.String("confirmID", confirmID), zap.String("kind", pending.kind))
 			resp = permission.ApprovalResponse{Decision: "deny"}
 		}
 		select {

@@ -41,6 +41,15 @@ func refreshesDesktopUI(toolName string) bool {
 	}
 }
 
+func notifyDesktopAssetChanged() {
+	dataDir := bootstrap.ResolvedDataDir()
+	token, tokenErr := bootstrap.ReadAuthToken(dataDir)
+	if tokenErr != nil {
+		logger.Default().Warn("read auth token", zap.Error(tokenErr))
+	}
+	approval.SendNotification(approval.SocketPath(dataDir), token, "asset")
+}
+
 func callHandler(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, toolName string, params map[string]any, decision ...*aictx.CheckResult) int {
 	handler, ok := handlers[toolName]
 	if !ok {
@@ -85,16 +94,7 @@ func callHandler(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, 
 
 	// 写操作成功后通知桌面端刷新 UI
 	if refreshesDesktopUI(toolName) {
-		dataDir := bootstrap.ResolvedDataDir()
-		token, tokenErr := bootstrap.ReadAuthToken(dataDir)
-		if tokenErr != nil {
-			logger.Default().Warn("read auth token", zap.Error(tokenErr))
-		}
-		approval.SendNotification(
-			approval.SocketPath(dataDir),
-			token,
-			"asset",
-		)
+		notifyDesktopAssetChanged()
 	}
 
 	// Pretty-print JSON output

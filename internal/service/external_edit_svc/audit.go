@@ -8,7 +8,7 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
-	"github.com/opskat/opskat/internal/pkg/auditredact"
+	"github.com/opskat/opskat/internal/pkg/jsonscalar"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"go.uber.org/zap"
 )
@@ -32,14 +32,16 @@ func (s *Service) writeAudit(session *Session, toolName string, success bool, re
 		ToolName:   toolName,
 		AssetID:    session.AssetID,
 		AssetName:  session.AssetName,
-		Command:    auditredact.Text(session.RemotePath),
-		Request:    auditredact.JSON(marshalAuditPayload(request, 4096)),
-		Result:     auditredact.Result(marshalAuditPayload(result, 8192)),
-		Error:      truncateText(auditredact.Text(errText), 2048),
+		Command:    session.RemotePath,
+		Request:    marshalAuditPayload(request, 4096),
+		Result:     marshalAuditPayload(result, 8192),
+		Error:      truncateText(errText, 2048),
 		Success:    boolToSuccess(success),
 		SessionID:  session.ID,
 		Createtime: s.now().Unix(),
 	}
+	// 投影之后的 request/result/command/error 按原值逐字落库：字段白名单由下方
+	// sanitizeAuditPayload 的 producer DTO 承担，不再做任何值替换或 JSON 重编码。
 	// desktop 审计既要给 QA/SEC 还原状态机，又不能把本地工作区路径、编辑器安装路径等敏感环境信息带进数据库。
 	if err := repo.Create(context.Background(), entry); err != nil {
 		logger.Default().Warn("write external edit audit log", zap.Error(err))
@@ -91,8 +93,9 @@ func marshalAuditPayload(payload any, limit int) string {
 }
 
 func sanitizeAuditPayload(payload any) any {
-	// 审计脱敏发生在统一入口，而不是调用方各自删字段，
-	// 这样新增审计场景时不会因为忘记过滤本地路径/哈希而把敏感信息写入库表。
+	// 审计字段白名单收敛在统一入口，而不是调用方各自删字段：
+	// 新增审计场景时不会因为忘记省略本地路径/哈希而把环境细节写入库表。
+	// 白名单只负责省略字段，保留下来的投影值按原样序列化，不再做值替换。
 	switch value := payload.(type) {
 	case nil:
 		return nil
@@ -113,14 +116,10 @@ func sanitizeAuditPayload(payload any) any {
 		return sanitizeAuditSession(value)
 	case map[string]any:
 		return sanitizeAuditMap(value)
-	case []any:
-		items := make([]any, 0, len(value))
-		for _, item := range value {
-			items = append(items, sanitizeAuditPayload(item))
-		}
-		return items
 	default:
-		return payload
+		// fail-closed：白名单之外的顶层类型（切片/数组、具体类型 map、结构体/指针、裸标量）
+		// 一律整体省略，不原样透传，避免复合值里藏本地路径/凭据绕过字段白名单。
+		return nil
 	}
 }
 
@@ -175,27 +174,45 @@ func sanitizeAuditSession(session *Session) *auditSessionPayload {
 	}
 }
 
+// auditMapAllowedFields 是 external-edit 自由 map metadata 的 fail-closed 字段白名单：
+// 只有这 11 个批准字段能进入审计，未知字段（含本地路径/哈希/样本与 bakeupPath）一律省略。
+// 这是 external_edit_svc 自己的 producer 契约，不引入通用敏感字段注册表；允许键的值只能是
+// JSON 标量（string/bool/数字/nil，含 json.Number 与命名标量别名）按原样序列化，复合值整体
+// 省略，不做递归放行；非有限 float（NaN/±Inf）与非法 json.Number 也逐键省略，避免让整个
+// payload 的 json.Marshal 失败。
+var auditMapAllowedFields = map[string]struct{}{
+	"auto":         {},
+	"windowSaves":  {},
+	"rebuild":      {},
+	"resolution":   {},
+	"status":       {},
+	"remoteBytes":  {},
+	"remoteSha256": {},
+	"bytes":        {},
+	"documentKey":  {},
+	"readOnly":     {},
+	"reuse":        {},
+}
+
 func sanitizeAuditMap(payload map[string]any) map[string]any {
 	if payload == nil {
 		return nil
 	}
 	sanitized := make(map[string]any, len(payload))
 	for key, value := range payload {
-		if isAuditSensitiveField(key) {
+		if _, ok := auditMapAllowedFields[key]; !ok {
 			continue
 		}
-		sanitized[key] = sanitizeAuditPayload(value)
+		// 允许键的值只能是 JSON 标量（string/bool/数字/nil，含 json.Number 与命名标量别名），
+		// 内容逐字保留；map[string]string、具体类型 map、切片/数组、结构体等复合值一律整体省略，
+		// 防止 bakeupPath/password 藏在复合值里绕过字段白名单。非有限 float（NaN/±Inf）与非法
+		// json.Number 会破坏整个 payload 的 json.Marshal，同样逐键省略，不让一个坏值清空其余字段。
+		if !jsonscalar.IsScalar(value) {
+			continue
+		}
+		sanitized[key] = value
 	}
 	return sanitized
-}
-
-func isAuditSensitiveField(key string) bool {
-	switch key {
-	case "localPath", "workspaceRoot", "workspaceDir", "editorPath", "editorArgs", "originalSha256", "originalByteSample", "lastLocalSha256":
-		return true
-	default:
-		return false
-	}
 }
 
 func shortHash(value string) string {

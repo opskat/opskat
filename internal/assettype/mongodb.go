@@ -31,6 +31,14 @@ func (h *mongodbHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	}
 }
 
+func (h *mongodbHandler) AuthenticationAssociation(a *asset_entity.Asset) (AuthenticationAssociation, bool, error) {
+	cfg, err := a.GetMongoDBConfig()
+	if err != nil || cfg == nil {
+		return AuthenticationAssociation{}, false, err
+	}
+	return passwordAuthenticationAssociation(cfg.CredentialID)
+}
+
 func (h *mongodbHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asset) (string, error) {
 	cfg, err := a.GetMongoDBConfig()
 	if err != nil {
@@ -49,11 +57,12 @@ func (h *mongodbHandler) PolicyKind() string { return policy.PolicyKindMongo }
 func (h *mongodbHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
 	a.SSHTunnelID = ArgInt64(args, "ssh_asset_id")
 	cfg := &asset_entity.MongoDBConfig{
-		Host:       ArgString(args, "host"),
-		Port:       ArgInt(args, "port"),
-		Username:   ArgString(args, "username"),
-		Database:   ArgString(args, "database"),
-		AuthSource: "admin",
+		Host:         ArgString(args, "host"),
+		Port:         ArgInt(args, "port"),
+		Username:     ArgString(args, "username"),
+		CredentialID: ArgInt64(args, "credential_id"),
+		Database:     ArgString(args, "database"),
+		AuthSource:   "admin",
 	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)
@@ -84,6 +93,10 @@ func (h *mongodbHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asse
 	}
 	if _, ok := args["ssh_asset_id"]; ok {
 		a.SSHTunnelID = ArgInt64(args, "ssh_asset_id")
+	}
+	if _, ok := args["credential_id"]; ok {
+		cfg.CredentialID = ArgInt64(args, "credential_id")
+		cfg.Password = ""
 	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)

@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -8,6 +9,8 @@ import (
 
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"math"
 
 	"github.com/cago-frame/cago/database/db"
 	"github.com/glebarez/sqlite"
@@ -17,13 +20,16 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
+	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/model/entity/ssh_agent_source_entity"
 	"github.com/opskat/opskat/internal/pkg/dbutil"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
+	"github.com/opskat/opskat/internal/repository/credential_repo"
 	"github.com/opskat/opskat/internal/repository/group_repo"
 	"github.com/opskat/opskat/internal/repository/ssh_agent_source_repo"
+	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -405,6 +411,88 @@ func (e *crudTestEnv) validOSSConfig() map[string]any {
 }
 
 // 有 asset → 更新；无 asset → 创建。同一个工具，分支只由标识的有无决定。
+func TestHandlePutAsset_PlaintextPasswordStaysAssetLocal(t *testing.T) {
+	gdb, err := gorm.Open(sqlite.Open("file:tool_put_managed?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, gdb.AutoMigrate(&asset_entity.Asset{}, &credential_entity.Credential{}))
+	db.SetDefault(gdb)
+	origAsset := asset_repo.Asset()
+	origCredential := credential_repo.Credential()
+	asset_repo.RegisterAsset(asset_repo.NewAsset())
+	credential_repo.RegisterCredential(credential_repo.NewCredential())
+	credential_svc.SetDefault(credential_svc.New("tool-put-master-key", []byte("tool-put-salt-16")))
+	t.Cleanup(func() {
+		asset_repo.RegisterAsset(origAsset)
+		credential_repo.RegisterCredential(origCredential)
+		sqlDB, sqlErr := gdb.DB()
+		if sqlErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	plaintext := "ai-plaintext-must-not-leak"
+	// #nosec G101 -- plaintext is an intentional test fixture used to verify that managed credentials never leak.
+	out, err := handlePutAsset(context.Background(), map[string]any{
+		"name": "cache-prod", "type": "redis",
+		"config": map[string]any{"host": "redis.internal", "username": "default", "password": plaintext},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, out, plaintext)
+	assert.NotContains(t, out, `"authentication"`)
+
+	var result struct {
+		ID int64 `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	assert.Positive(t, result.ID)
+	var credentialCount int64
+	require.NoError(t, gdb.Model(&credential_entity.Credential{}).Count(&credentialCount).Error)
+	assert.Zero(t, credentialCount)
+
+	asset, err := asset_repo.Asset().Find(context.Background(), result.ID)
+	require.NoError(t, err)
+	cfg, err := asset.GetRedisConfig()
+	require.NoError(t, err)
+	assert.Zero(t, cfg.CredentialID)
+	decrypted, err := credential_svc.Default().Decrypt(cfg.Password)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, decrypted)
+}
+
+func TestHandlePutAsset_ManagedCredentialInputFailuresLeaveNoAsset(t *testing.T) {
+	gdb, err := gorm.Open(sqlite.Open("file:tool_put_invalid_managed?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, gdb.AutoMigrate(&asset_entity.Asset{}, &credential_entity.Credential{}))
+	db.SetDefault(gdb)
+	origAsset := asset_repo.Asset()
+	origCredential := credential_repo.Credential()
+	asset_repo.RegisterAsset(asset_repo.NewAsset())
+	credential_repo.RegisterCredential(credential_repo.NewCredential())
+	credential_svc.SetDefault(credential_svc.New("tool-put-master-key", []byte("tool-put-salt-16")))
+	t.Cleanup(func() {
+		asset_repo.RegisterAsset(origAsset)
+		credential_repo.RegisterCredential(origCredential)
+		sqlDB, sqlErr := gdb.DB()
+		if sqlErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	key := &credential_entity.Credential{Name: "wrong-kind", Type: credential_entity.TypeSSHKey, PrivateKey: "ciphertext", PublicKey: "ssh-ed25519 AAAA", KeyType: credential_entity.KeyTypeED25519}
+	require.NoError(t, credential_repo.Credential().Create(context.Background(), key))
+
+	for _, config := range []map[string]any{
+		{"host": "redis.internal", "username": "default", "credential_id": float64(key.ID)},
+		{"host": "redis.internal", "username": "default", "credential_id": float64(key.ID), "password": "conflicting-secret"},
+	} {
+		_, err := handlePutAsset(context.Background(), map[string]any{"name": "invalid", "type": "redis", "config": config})
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "conflicting-secret")
+	}
+	var count int64
+	require.NoError(t, gdb.Model(&asset_entity.Asset{}).Count(&count).Error)
+	assert.Zero(t, count)
+}
+
 func TestHandlePutAsset_CreateThenUpdate(t *testing.T) {
 	env := setupCRUD(t)
 
@@ -436,6 +524,18 @@ func TestHandlePutAsset_CreateThenUpdate(t *testing.T) {
 		t.Errorf("username = %q, want %q", got, "deploy")
 	}
 	_ = out
+}
+
+func TestHandlePutAsset_RejectsSSHPrivateMaterial(t *testing.T) {
+	env := setupCRUD(t)
+	_, err := handlePutAsset(env.ctx, map[string]any{
+		"name": "ssh-key-box", "type": "ssh",
+		"config": map[string]any{"host": "ssh.internal", "username": "root", "private_key": "private-secret"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown config field(s): [private_key]")
+	assert.NotContains(t, err.Error(), "private-secret")
+	assert.Zero(t, env.assetCount())
 }
 
 // config 是自由对象，校验回到 assettype.ValidateCreateArgs——不是回到工具 schema。
@@ -866,4 +966,424 @@ func TestHandleDeleteGroup_CascadeDeletesAssetsAndAuditsEachOne(t *testing.T) {
 			t.Errorf("cascade audit row tool_name = %q, want delete_asset", l.ToolName)
 		}
 	}
+}
+
+// toolWriteFailure registers a gorm write failure callback on the shared DB, mirroring
+// asset_put_svc's own registerWriteFailure: the commit-failure test below drives a real
+// Prepare + Commit and needs the repository write to fail deterministically.
+func toolWriteFailure(t *testing.T, gdb *gorm.DB, operation, table string) {
+	t.Helper()
+	name := fmt.Sprintf("tool_put_%s_%s", operation, table)
+	callback := func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Table == table {
+			_ = tx.AddError(errors.New(table + " write failed"))
+		}
+	}
+	switch operation {
+	case "create":
+		require.NoError(t, gdb.Callback().Create().Before("gorm:create").Register(name, callback))
+	case "update":
+		require.NoError(t, gdb.Callback().Update().Before("gorm:update").Register(name, callback))
+	default:
+		t.Fatalf("unknown callback operation %q", operation)
+	}
+}
+
+// setupPutAssetDB 把真实 in-memory SQLite 装成 asset/credential 仓库，供走完整
+// Prepare+Commit 物化的 put_asset 测试使用（与既有 managed-password 测试同一套夹具）。
+func setupPutAssetDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	gdb, err := gorm.Open(sqlite.Open("file:tool_put_audit_proj?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, gdb.AutoMigrate(&asset_entity.Asset{}, &credential_entity.Credential{}))
+	db.SetDefault(gdb)
+	origAsset := asset_repo.Asset()
+	origCredential := credential_repo.Credential()
+	origCredentialSvc := credential_svc.Default()
+	asset_repo.RegisterAsset(asset_repo.NewAsset())
+	credential_repo.RegisterCredential(credential_repo.NewCredential())
+	credential_svc.SetDefault(credential_svc.New("tool-put-audit-master-key", []byte("tool-put-audit-salt")))
+	t.Cleanup(func() {
+		asset_repo.RegisterAsset(origAsset)
+		credential_repo.RegisterCredential(origCredential)
+		credential_svc.SetDefault(origCredentialSvc)
+		sqlDB, sqlErr := gdb.DB()
+		if sqlErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	return gdb
+}
+
+// TestHandlePutAsset_SuccessAuditProjectionOmitsWriteOnlyFieldsAndExecutionGetsOriginal
+// 是 Task 8 的核心契约：put_asset 成功时，handler 记录 producer 投影（普通 config +
+// 资产身份 + typed authentication ref），write-only 字段整体缺席；而实际执行仍拿到原值
+// （managed credential 可解密回明文）。
+func TestHandlePutAsset_SuccessAuditProjectionOmitsWriteOnlyFieldsAndExecutionGetsOriginal(t *testing.T) {
+	setupPutAssetDB(t)
+	plaintext := "ai-projection-must-not-leak"
+	slot := aictx.NewAuditRequestSlot()
+	ctx := aictx.WithAuditRequestSlot(context.Background(), slot)
+
+	out, err := handlePutAsset(ctx, map[string]any{
+		"name": "cache-proj", "type": "redis",
+		"config": map[string]any{"host": "redis.internal", "username": "default", "password": plaintext},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, out, plaintext)
+
+	proj := aictx.GetAuditRequest(ctx)
+	require.NotNil(t, proj, "successful put_asset must record a producer projection")
+	encoded, err := json.Marshal(proj)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), plaintext)
+
+	var projJSON map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &projJSON))
+	config, ok := projJSON["config"].(map[string]any)
+	require.True(t, ok, "ordinary config must be preserved in the projection")
+	assert.Equal(t, "redis.internal", config["host"])
+	assert.Equal(t, "default", config["username"])
+	_, hasPassword := config["password"]
+	assert.False(t, hasPassword, "write-only password must be entirely absent, not redacted")
+	_, hasAuthentication := projJSON["authentication"]
+	assert.False(t, hasAuthentication)
+	assets, err := asset_repo.Asset().List(context.Background(), asset_repo.ListOptions{})
+	require.NoError(t, err)
+	require.Len(t, assets, 1)
+	stored, err := assets[0].GetRedisConfig()
+	require.NoError(t, err)
+	decrypted, err := credential_svc.Default().Decrypt(stored.Password)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, decrypted)
+}
+
+// TestHandlePutAsset_PrepareFailureProjectsTopLevelOnly: prepare/validation 失败时没有
+// producer 投影可用，必须只投影顶层非 config 字段（name/type/asset 等），绝不回退原始
+// config（它可能携带 write-only 秘密）。
+func TestHandlePutAsset_PrepareFailureProjectsTopLevelOnly(t *testing.T) {
+	env := setupCRUD(t)
+	slot := aictx.NewAuditRequestSlot()
+	ctx := aictx.WithAuditRequestSlot(env.ctx, slot)
+
+	_, err := handlePutAsset(ctx, map[string]any{
+		"name": "broken", "type": "database",
+		"config": map[string]any{"host": "10.0.0.1", "password": "prepare-secret-must-not-leak"},
+	})
+	require.Error(t, err, "database without driver must fail validation")
+
+	proj := aictx.GetAuditRequest(ctx)
+	require.NotNil(t, proj, "prepare failure must still record a projection")
+	encoded, marshalErr := json.Marshal(proj)
+	require.NoError(t, marshalErr)
+	assert.NotContains(t, string(encoded), "prepare-secret-must-not-leak")
+	assert.NotContains(t, string(encoded), "config", "prepare failure must never project raw config")
+	assert.Equal(t, "broken", proj["name"])
+	assert.Equal(t, "database", proj["type"])
+}
+
+// TestHandlePutAsset_PrePrepareFailuresProjectTopLevelOnly: 进入 Prepare 之前的早期返回
+// （putArgs 形状校验、创建缺 name、未知类型、更新 lookup 失败）在 runner 眼里同样是
+// "没有投影"→ 回退原始 c.Input，把可能携带 write-only 秘密的 config 原样写进审计。
+// handler 必须在任何校验/lookup 之前就投影顶层非 config 字段，且原始 args/config 必须
+// 原样保留（override 只落在审计投影槽，绝不改写执行/UI/历史）。
+func TestHandlePutAsset_PrePrepareFailuresProjectTopLevelOnly(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       map[string]any
+		wantErrSub string
+		wantKey    string // 投影里应保留的顶层字段（asset/name/type）
+		wantValue  any
+	}{
+		{
+			name:       "create missing name",
+			args:       map[string]any{"type": "ssh", "config": map[string]any{"host": "10.0.0.1", "password": "missing-name-secret"}},
+			wantErrSub: "name",
+			wantKey:    "type",
+			wantValue:  "ssh",
+		},
+		{
+			name:       "create unsupported type",
+			args:       map[string]any{"name": "x", "type": "sqlite", "config": map[string]any{"host": "10.0.0.1", "password": "unknown-type-secret"}},
+			wantErrSub: "sqlite",
+			wantKey:    "name",
+			wantValue:  "x",
+		},
+		{
+			name:       "config not an object",
+			args:       map[string]any{"name": "bad", "type": "ssh", "config": "not-an-object"},
+			wantErrSub: "config",
+			wantKey:    "name",
+			wantValue:  "bad",
+		},
+		{
+			name:       "update lookup failure",
+			args:       map[string]any{"asset": "no-such-box", "config": map[string]any{"host": "10.0.0.1", "password": "lookup-secret"}},
+			wantErrSub: "no-such-box",
+			wantKey:    "asset",
+			wantValue:  "no-such-box",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := setupCRUD(t)
+			slot := aictx.NewAuditRequestSlot()
+			ctx := aictx.WithAuditRequestSlot(env.ctx, slot)
+
+			origConfig := tc.args["config"] // 快照原始 config，调用后必须原样保留
+
+			_, err := handlePutAsset(ctx, tc.args)
+			require.Error(t, err, "pre-Prepare failure must error")
+			assert.Contains(t, err.Error(), tc.wantErrSub)
+			assert.Equal(t, origConfig, tc.args["config"], "original config must be unchanged")
+			assert.Equal(t, tc.wantValue, tc.args[tc.wantKey], "original args must be unchanged")
+
+			// 投影只留顶层非 config 字段，绝不带出 secret 或 config。
+			proj := aictx.GetAuditRequest(ctx)
+			require.NotNil(t, proj, "pre-Prepare failure must still record a projection")
+			encoded, marshalErr := json.Marshal(proj)
+			require.NoError(t, marshalErr)
+			assert.NotContains(t, string(encoded), "secret", "projection must not leak write-only secret")
+			assert.NotContains(t, string(encoded), "config", "pre-Prepare failure must never project raw config")
+			assert.Equal(t, tc.wantValue, proj[tc.wantKey], "top-level identity must survive in the projection")
+		})
+	}
+}
+
+// TestPutAssetTopLevelAuditArgs_TypedFailClosedProjection 是 Task 11 的核心契约：
+// put_asset 顶层非 config 字段的 Audit 投影必须类型 fail-closed。string 身份字段仅在
+// 实际值为 string 时保留；map/slice/array/struct/pointer 与一切类型非法值整体省略——
+// 藏在 name/type/description 等允许键下的嵌套秘密不能借此进入 Audit。
+func TestPutAssetTopLevelAuditArgs_TypedFailClosedProjection(t *testing.T) {
+	// #nosec G101 -- secret is an intentional test fixture used to verify that nested
+	// secrets never enter the audit projection via an allowlisted key.
+	secret := "nested-secret-must-not-leak"
+	payload := struct {
+		Password string `json:"password"`
+	}{Password: secret}
+
+	args := map[string]any{
+		"asset":       map[string]any{"password": secret}, // map
+		"name":        []any{"a", secret},                 // slice
+		"type":        payload,                            // struct
+		"description": &payload,                           // pointer
+		"icon":        map[string]any{"token": secret},    // map
+		"group_id":    map[string]any{"id": secret},       // 非法复合
+		"config":      map[string]any{"password": secret}, // config 从不投影
+	}
+	proj := putAssetTopLevelAuditArgs(args)
+
+	for _, key := range []string{"asset", "name", "type", "description", "icon", "group_id"} {
+		_, ok := proj[key]
+		assert.False(t, ok, "type-invalid composite %s must be omitted from the projection", key)
+	}
+	_, hasConfig := proj["config"]
+	assert.False(t, hasConfig, "config is never projected")
+
+	encoded, err := json.Marshal(proj)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), secret, "nested secret must not enter the projection via any allowlisted key")
+}
+
+// TestPutAssetTopLevelAuditArgs_PreservesTypeCorrectScalars: 类型正确的 string 身份字段
+// 与数值 group_id 按原值保留；config 从不投影；投影是独立 map，原 args 不被改写。
+func TestPutAssetTopLevelAuditArgs_PreservesTypeCorrectScalars(t *testing.T) {
+	args := map[string]any{
+		"asset":       "web-9",
+		"name":        "prod",
+		"type":        "ssh",
+		"description": "fleet",
+		"icon":        "server",
+		"group_id":    float64(7),
+		"config":      map[string]any{"password": "keep-out"},
+	}
+	proj := putAssetTopLevelAuditArgs(args)
+
+	assert.Equal(t, "web-9", proj["asset"])
+	assert.Equal(t, "prod", proj["name"])
+	assert.Equal(t, "ssh", proj["type"])
+	assert.Equal(t, "fleet", proj["description"])
+	assert.Equal(t, "server", proj["icon"])
+	assert.Equal(t, float64(7), proj["group_id"])
+	_, hasConfig := proj["config"]
+	assert.False(t, hasConfig, "config must never be projected")
+	// 原 args 原样保留（投影是独立 map）。
+	assert.Equal(t, "prod", args["name"])
+	assert.Equal(t, "keep-out", args["config"].(map[string]any)["password"])
+}
+
+// TestPutAssetTopLevelAuditArgs_GroupIDAcceptsBoundaryNumerics: group_id 只在值是工具边界
+// 支持的数值标量（JSON float64 + 内部 int/int64/json.Number）时保留，且投影保持可安全
+// JSON 编码。
+func TestPutAssetTopLevelAuditArgs_GroupIDAcceptsBoundaryNumerics(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value any
+	}{
+		{name: "json float64", value: float64(7)},
+		{name: "float", value: 7.5},
+		{name: "int", value: 7},
+		{name: "int64", value: int64(7)},
+		{name: "json.Number", value: json.Number("7")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proj := putAssetTopLevelAuditArgs(map[string]any{"group_id": tc.value})
+			v, ok := proj["group_id"]
+			assert.True(t, ok, "group_id %T must be preserved", tc.value)
+			assert.Equal(t, tc.value, v)
+			_, err := json.Marshal(proj)
+			assert.NoError(t, err, "projection must stay marshal-safe")
+		})
+	}
+}
+
+// TestPutAssetTopLevelAuditArgs_GroupIDOmitsUnsafeOrInvalid: 非有限 float64（NaN/±Inf）
+// 与非法 json.Number 会让 audit middleware 的 json.Marshal 直接失败，必须省略；string
+// 与复合值/布尔/空值不是工具边界支持的数值标量，同样省略。
+func TestPutAssetTopLevelAuditArgs_GroupIDOmitsUnsafeOrInvalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{name: "NaN", value: math.NaN()},
+		{name: "+Inf", value: math.Inf(1)},
+		{name: "-Inf", value: math.Inf(-1)},
+		{name: "json.Number abc", value: json.Number("abc")},
+		{name: "json.Number NaN", value: json.Number("NaN")},
+		{name: "string", value: "7"},
+		{name: "slice", value: []any{7}},
+		{name: "map", value: map[string]any{"id": 7}},
+		{name: "bool", value: true},
+		{name: "nil", value: nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proj := putAssetTopLevelAuditArgs(map[string]any{"group_id": tc.value})
+			_, ok := proj["group_id"]
+			assert.False(t, ok, "group_id %#v must be omitted", tc.value)
+			encoded, err := json.Marshal(proj)
+			require.NoError(t, err, "projection must never be unmarshalable due to group_id")
+			assert.Equal(t, "{}", string(encoded))
+		})
+	}
+}
+
+// TestHandlePutAsset_TopLevelProjectionNeverMutatesOriginalArgs: 进入 Prepare 之前的早期
+// 失败（update lookup）中，无论顶层投影如何取舍，原始 args 必须深度不变——投影只写入独立
+// 的 audit 槽，绝不改写执行/UI/历史输入。
+func TestHandlePutAsset_TopLevelProjectionNeverMutatesOriginalArgs(t *testing.T) {
+	env := setupCRUD(t)
+	slot := aictx.NewAuditRequestSlot()
+	ctx := aictx.WithAuditRequestSlot(env.ctx, slot)
+
+	// #nosec G101 -- secret is an intentional test fixture used to verify that the
+	// top-level projection never mutates original args nor leaks nested secrets.
+	secret := "deep-unchanged-secret"
+	args := map[string]any{
+		"asset":       "no-such-box",
+		"name":        map[string]any{"password": secret},
+		"type":        []any{"ssh"},
+		"description": struct{ Token string }{Token: secret},
+		"group_id":    float64(3),
+		"config":      map[string]any{"password": secret, "host": "10.0.0.1"},
+	}
+	before, err := json.Marshal(args)
+	require.NoError(t, err)
+
+	_, err = handlePutAsset(ctx, args)
+	require.Error(t, err, "update lookup of a missing asset must fail before Prepare")
+
+	after, marshalErr := json.Marshal(args)
+	require.NoError(t, marshalErr)
+	assert.Equal(t, before, after, "original args must be deeply unchanged after an early pre-Prepare failure")
+
+	proj := aictx.GetAuditRequest(ctx)
+	require.NotNil(t, proj, "early failure must still record the top-level projection")
+	encoded, marshalErr := json.Marshal(proj)
+	require.NoError(t, marshalErr)
+	assert.NotContains(t, string(encoded), secret, "nested secret must not reach the audit projection")
+	for _, key := range []string{"name", "type", "description"} {
+		_, ok := proj[key]
+		assert.False(t, ok, "type-invalid composite %s must be omitted", key)
+	}
+	assert.Equal(t, float64(3), proj["group_id"], "type-correct numeric group_id survives")
+	_, hasConfig := proj["config"]
+	assert.False(t, hasConfig, "config is never projected on early failure")
+}
+
+// TestHandlePutAsset_CommitFailureProjectsSafeAuditArgs: Prepare 成功、Commit/仓库失败时，
+// 用 Prepared.SafeAuditArgs 投影 —— 保留普通 config 与身份，write-only 字段整体缺席。
+func TestHandlePutAsset_CommitFailureProjectsSafeAuditArgs(t *testing.T) {
+	gdb := setupPutAssetDB(t)
+	toolWriteFailure(t, gdb, "create", "assets")
+	slot := aictx.NewAuditRequestSlot()
+	ctx := aictx.WithAuditRequestSlot(context.Background(), slot)
+
+	_, err := handlePutAsset(ctx, map[string]any{
+		"name": "cache-fail", "type": "redis",
+		"config": map[string]any{"host": "redis.internal", "username": "default", "password": "commit-secret-must-not-leak"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "write failed")
+
+	proj := aictx.GetAuditRequest(ctx)
+	require.NotNil(t, proj, "commit failure must still record a projection")
+	encoded, marshalErr := json.Marshal(proj)
+	require.NoError(t, marshalErr)
+	assert.NotContains(t, string(encoded), "commit-secret-must-not-leak")
+	assert.NotContains(t, string(encoded), "password")
+	config, ok := proj["config"].(map[string]any)
+	require.True(t, ok, "ordinary config preserved on commit failure")
+	assert.Equal(t, "redis.internal", config["host"])
+	assert.Equal(t, "cache-fail", proj["name"])
+	assert.Equal(t, "redis", proj["type"])
+}
+
+// TestHandlePutAsset_CompositeConfigNeverLeaksIntoAuditProjection 钉住 AI put_asset 的
+// producer 投影边界：config 中必填标量字段为复合值时在类型边界校验失败（错误与审计投影都
+// 不含 secret）；可选审批字段的复合值在 Prepare 成功时也被 approvalView 整体省略，绝不进入
+// 审计投影——嵌套 secret 不能借任何允许键从共享 Prepare 边界流向 Audit。
+func TestHandlePutAsset_CompositeConfigNeverLeaksIntoAuditProjection(t *testing.T) {
+	env := setupCRUD(t)
+	// #nosec G101 -- 嵌套 secret 是故意用于证明复合值不能进入审计投影的夹具。
+	secret := "nested-secret-must-not-leak"
+
+	t.Run("required scalar composite fails validation without leaking", func(t *testing.T) {
+		slot := aictx.NewAuditRequestSlot()
+		ctx := aictx.WithAuditRequestSlot(env.ctx, slot)
+		_, err := handlePutAsset(ctx, map[string]any{
+			"name": "broken", "type": "redis",
+			"config": map[string]any{"host": map[string]any{"password": secret}, "username": "default"},
+		})
+		require.Error(t, err, "composite required host must fail validation")
+		assert.NotContains(t, err.Error(), secret)
+		proj := aictx.GetAuditRequest(ctx)
+		require.NotNil(t, proj, "prepare failure must still record the top-level projection")
+		encoded, marshalErr := json.Marshal(proj)
+		require.NoError(t, marshalErr)
+		assert.NotContains(t, string(encoded), secret)
+		assert.NotContains(t, string(encoded), "config")
+	})
+
+	t.Run("optional approval field composite omitted on success", func(t *testing.T) {
+		slot := aictx.NewAuditRequestSlot()
+		ctx := aictx.WithAuditRequestSlot(env.ctx, slot)
+		_, err := handlePutAsset(ctx, map[string]any{
+			"name": "box", "type": "ssh",
+			"config": map[string]any{"host": "10.0.0.1", "port": float64(22), "username": "root", "auth_type": map[string]any{"password": secret}},
+		})
+		require.NoError(t, err, "composite under an optional approval field must not fail the create")
+		proj := aictx.GetAuditRequest(ctx)
+		require.NotNil(t, proj)
+		encoded, marshalErr := json.Marshal(proj)
+		require.NoError(t, marshalErr)
+		assert.NotContains(t, string(encoded), secret)
+		var projJSON map[string]any
+		require.NoError(t, json.Unmarshal(encoded, &projJSON))
+		config, ok := projJSON["config"].(map[string]any)
+		require.True(t, ok, "ordinary config preserved in the audit projection")
+		_, hasAuthType := config["auth_type"]
+		assert.False(t, hasAuthType, "composite auth_type must be omitted from the audit projection")
+	})
 }

@@ -31,6 +31,14 @@ func (h *redisHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	}
 }
 
+func (h *redisHandler) AuthenticationAssociation(a *asset_entity.Asset) (AuthenticationAssociation, bool, error) {
+	cfg, err := a.GetRedisConfig()
+	if err != nil || cfg == nil {
+		return AuthenticationAssociation{}, false, err
+	}
+	return passwordAuthenticationAssociation(cfg.CredentialID)
+}
+
 func (h *redisHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asset) (string, error) {
 	cfg, err := a.GetRedisConfig()
 	if err != nil {
@@ -48,11 +56,12 @@ func (h *redisHandler) PolicyKind() string { return policy.PolicyKindRedis }
 
 func (h *redisHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
 	cfg := &asset_entity.RedisConfig{
-		Host:       ArgString(args, "host"),
-		Port:       ArgInt(args, "port"),
-		Username:   ArgString(args, "username"),
-		Database:   ArgInt(args, "redis_db"),
-		SSHAssetID: ArgInt64(args, "ssh_asset_id"),
+		Host:         ArgString(args, "host"),
+		Port:         ArgInt(args, "port"),
+		Username:     ArgString(args, "username"),
+		CredentialID: ArgInt64(args, "credential_id"),
+		Database:     ArgInt(args, "redis_db"),
+		SSHAssetID:   ArgInt64(args, "ssh_asset_id"),
 	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)
@@ -83,6 +92,10 @@ func (h *redisHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset,
 	}
 	if _, ok := args["ssh_asset_id"]; ok {
 		cfg.SSHAssetID = ArgInt64(args, "ssh_asset_id")
+	}
+	if _, ok := args["credential_id"]; ok {
+		cfg.CredentialID = ArgInt64(args, "credential_id")
+		cfg.Password = ""
 	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)

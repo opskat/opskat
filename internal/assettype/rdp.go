@@ -31,6 +31,14 @@ func (h *rdpHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	}
 }
 
+func (h *rdpHandler) AuthenticationAssociation(a *asset_entity.Asset) (AuthenticationAssociation, bool, error) {
+	cfg, err := a.GetRDPConfig()
+	if err != nil || cfg == nil {
+		return AuthenticationAssociation{}, false, err
+	}
+	return passwordAuthenticationAssociation(cfg.CredentialID)
+}
+
 func (h *rdpHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asset) (string, error) {
 	cfg, err := a.GetRDPConfig()
 	if err != nil {
@@ -51,13 +59,14 @@ func (h *rdpHandler) ValidateCreateArgs(args map[string]any) error {
 
 func (h *rdpHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
 	cfg := &asset_entity.RDPConfig{
-		Host:      ArgString(args, "host"),
-		Port:      ArgInt(args, "port"),
-		Username:  ArgString(args, "username"),
-		Domain:    ArgString(args, "domain"),
-		Width:     ArgInt(args, "width"),
-		Height:    ArgInt(args, "height"),
-		Clipboard: ArgBool(args, "clipboard"),
+		Host:         ArgString(args, "host"),
+		Port:         ArgInt(args, "port"),
+		Username:     ArgString(args, "username"),
+		CredentialID: ArgInt64(args, "credential_id"),
+		Domain:       ArgString(args, "domain"),
+		Width:        ArgInt(args, "width"),
+		Height:       ArgInt(args, "height"),
+		Clipboard:    ArgBool(args, "clipboard"),
 	}
 	if cfg.Port == 0 {
 		cfg.Port = h.DefaultPort()
@@ -109,6 +118,10 @@ func (h *rdpHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, a
 	}
 	if _, ok := args["clipboard"]; ok {
 		cfg.Clipboard = ArgBool(args, "clipboard")
+	}
+	if _, ok := args["credential_id"]; ok {
+		cfg.CredentialID = ArgInt64(args, "credential_id")
+		cfg.Password = ""
 	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)

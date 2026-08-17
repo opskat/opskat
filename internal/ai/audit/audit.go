@@ -23,7 +23,6 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
-	"github.com/opskat/opskat/internal/pkg/auditredact"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 )
@@ -114,7 +113,7 @@ func NewDefaultAuditWriter() *DefaultAuditWriter {
 func (w *DefaultAuditWriter) WriteToolCall(ctx context.Context, info ToolCallInfo) {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(info.ArgsJSON), &args); err != nil {
-		logger.Default().Warn("unmarshal audit args", zap.Error(err))
+		logger.Ctx(ctx).Warn("unmarshal audit args", zap.String("toolName", info.ToolName), zap.Error(err))
 	}
 
 	assetID := info.AssetID
@@ -140,21 +139,20 @@ func (w *DefaultAuditWriter) WriteToolCall(ctx context.Context, info ToolCallInf
 	if command == "" {
 		command = ExtractCommandForAudit(info.ToolName, args)
 	}
-	command = auditredact.Text(command)
 
 	success := 1
 	errMsg := ""
 	if info.Error != nil {
 		success = 0
-		errMsg = auditredact.Text(info.Error.Error())
+		errMsg = info.Error.Error()
 	}
 	if info.Decision != nil && info.Decision.Decision == aictx.Deny {
 		success = 0
 		if errMsg == "" {
-			errMsg = auditredact.Text(info.Decision.Message)
+			errMsg = info.Decision.Message
 		}
 		if errMsg == "" {
-			errMsg = auditredact.Result(info.Result)
+			errMsg = info.Result
 		}
 	}
 
@@ -164,8 +162,8 @@ func (w *DefaultAuditWriter) WriteToolCall(ctx context.Context, info ToolCallInf
 		AssetID:        assetID,
 		AssetName:      assetName,
 		Command:        command,
-		Request:        truncateString(auditredact.JSON(info.ArgsJSON), 4096),
-		Result:         truncateString(auditredact.Result(info.Result), 32768),
+		Request:        truncateString(info.ArgsJSON, 4096),
+		Result:         truncateString(info.Result, 32768),
 		Error:          errMsg,
 		Success:        success,
 		ConversationID: aictx.GetConversationID(ctx),
@@ -177,12 +175,15 @@ func (w *DefaultAuditWriter) WriteToolCall(ctx context.Context, info ToolCallInf
 	if info.Decision != nil && info.Decision.DecisionSource != "" {
 		entry.Decision = info.Decision.DecisionString()
 		entry.DecisionSource = info.Decision.DecisionSource
+		// matched_pattern 是审计 UI 直接展示的文本列（spec Logs and audit，Task 3）：
+		// 用户编辑的 pattern 与通用命令可含任意文本，raw-by-default 下原样保存，不做
+		// 内容识别或值替换——决策来源与 allow/deny 分类保持 correlation。
 		entry.MatchedPattern = info.Decision.MatchedPattern
 	}
 
 	if repo := audit_repo.Audit(); repo != nil {
 		if err := repo.Create(context.Background(), entry); err != nil {
-			logger.Default().Error("audit log write failed", zap.Error(err))
+			logger.Ctx(ctx).Error("audit log write failed", zap.String("toolName", info.ToolName), zap.Error(err))
 		}
 	}
 }
@@ -218,14 +219,14 @@ func WriteGrantSubmitAudit(ctx context.Context, assetID int64, assetName string,
 			ToolName:   "grant_submit",
 			AssetID:    assetID,
 			AssetName:  assetName,
-			Command:    auditredact.Text(strings.Join(patterns, ", ")),
+			Command:    strings.Join(patterns, ", "),
 			SessionID:  aictx.GetSessionID(ctx),
 			Decision:   "allow",
 			Success:    1,
 			Createtime: time.Now().Unix(),
 		}
 		if err := repo.Create(context.Background(), entry); err != nil {
-			logger.Default().Error("write grant submit audit", zap.Error(err))
+			logger.Ctx(ctx).Error("write grant submit audit", zap.Int64("assetID", assetID), zap.Error(err))
 		}
 	}
 }
@@ -243,14 +244,14 @@ func WriteGrantDiscardedAudit(ctx context.Context, assetID int64, assetName, com
 			ToolName:   "grant_discarded",
 			AssetID:    assetID,
 			AssetName:  assetName,
-			Command:    auditredact.Text(command),
+			Command:    command,
 			SessionID:  aictx.GetSessionID(ctx),
 			Decision:   "allow",
 			Success:    1,
 			Createtime: time.Now().Unix(),
 		}
 		if err := repo.Create(context.Background(), entry); err != nil {
-			logger.Default().Error("write grant discarded audit", zap.Error(err))
+			logger.Ctx(ctx).Error("write grant discarded audit", zap.Int64("assetID", assetID), zap.Error(err))
 		}
 	}
 }

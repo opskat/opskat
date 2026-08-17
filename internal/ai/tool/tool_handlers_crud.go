@@ -2,7 +2,9 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/repository/group_repo"
+	"github.com/opskat/opskat/internal/service/asset_put_svc"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/group_svc"
 )
@@ -46,6 +49,13 @@ func putArgs(args map[string]any) (map[string]any, error) {
 // 旧的巨型 schema 把 10 种类型的字段并集写进 JSON Schema，既是我们正在移除的类型分支的
 // 另一种写法，又漏掉了 oss——那类资产此前经 AI 完全无法创建。
 func handlePutAsset(ctx context.Context, args map[string]any) (string, error) {
+	// 一进来就落审计投影的基线：putArgs/校验/lookup 这些 Prepare 之前的早期返回没有
+	// producer 投影可用，若不先投影，runner 的 auditMiddleware 会回退到原始 c.Input，
+	// 把可能携带 write-only 秘密的 config 原样写进审计。这里只投影顶层非 config 字段
+	// （config 是自由对象、可能带秘密）；Prepare/Commit 成功后再用 producer 投影覆盖。
+	// 该投影是独立 map，绝不改写 args——执行/审批/ToolBlock/历史仍见原值。
+	aictx.RecordAuditRequest(ctx, putAssetTopLevelAuditArgs(args))
+
 	config, err := putArgs(args)
 	if err != nil {
 		return "", err
@@ -67,13 +77,9 @@ func createAsset(ctx context.Context, args, config map[string]any) (string, erro
 	if assetType == "" {
 		assetType = asset_entity.AssetTypeSSH
 	}
-	h, ok := assettype.Get(assetType)
-	if !ok {
+	if _, ok := assettype.Get(assetType); !ok {
 		return "", fmt.Errorf("unsupported asset type %q; supported: %s",
 			assetType, strings.Join(permission.RegisteredHelpTypes(), ", "))
-	}
-	if err := h.ValidateCreateArgs(config); err != nil {
-		return "", err
 	}
 
 	asset := &asset_entity.Asset{
@@ -83,14 +89,65 @@ func createAsset(ctx context.Context, args, config map[string]any) (string, erro
 		GroupID:     aictx.ArgInt64(args, "group_id"),
 		Description: aictx.ArgString(args, "description"),
 	}
-	if err := h.ApplyCreateArgs(ctx, asset, config); err != nil {
-		return "", err
+	req := asset_put_svc.Request{
+		Asset:  asset,
+		Config: config,
 	}
-	if err := asset_svc.Asset().Create(ctx, asset); err != nil {
+	prepared, err := asset_put_svc.Prepare(ctx, req)
+	if err != nil {
+		// 顶层基线已在 handlePutAsset 入口记录，这里不重复。
 		return "", fmt.Errorf("failed to create asset: %w", err)
 	}
+	result, err := asset_put_svc.Commit(ctx, prepared)
+	if err != nil {
+		// commit/仓库失败：Prepare 已产出 producer 投影（SafeAuditArgs），直接落审计。
+		aictx.RecordAuditRequest(ctx, prepared.SafeAuditArgs())
+		return "", fmt.Errorf("failed to create asset: %w", err)
+	}
+	aictx.RecordAuditRequest(ctx, prepared.SafeAuditArgsForResult(result))
 	aictx.NotifyDataChanged("asset")
-	return fmt.Sprintf(`{"id":%d,"message":"asset created successfully"}`, asset.ID), nil
+	return asset_put_svc.ResultJSON(result, "asset created successfully")
+}
+
+// putAssetTopLevelAuditArgs 把 put_asset 顶层非 config 字段按类型 fail-closed 投影给
+// Audit，作为 handlePutAsset 入口的基线（record 在 putArgs/校验/lookup 之前）。config 是
+// 自由对象、可能携带 write-only 秘密，任何 Prepare 之前的失败都绝不回退原始 config；顶层
+// 字段也只有类型正确的值才进入投影：string 身份字段（asset/name/type/description/icon）
+// 仅在实际值为 string 时保留，group_id 仅在实际值为工具边界支持的数值
+// 标量（JSON float64 以及内部 Go 的 int/int64/json.Number）且能安全 JSON 编码时保留。
+// map/slice/array/struct/pointer 与一切类型非法值（含藏了嵌套秘密的复合值）整体省略——
+// 嵌套秘密不能借任何允许键进入 Audit；非有限 float64（NaN/±Inf）与非法 json.Number 会让
+// audit middleware 的 json.Marshal 失败，同样省略。Prepare/Commit 成功后再用 producer
+// 投影覆盖基线。该投影是独立 map，绝不改写 args——执行/审批/ToolBlock/历史仍见原值。
+func putAssetTopLevelAuditArgs(args map[string]any) map[string]any {
+	out := make(map[string]any)
+	for _, key := range []string{"asset", "name", "type", "description", "icon"} {
+		if s, ok := args[key].(string); ok {
+			out[key] = s
+		}
+	}
+	if v, ok := args["group_id"]; ok && auditSafeGroupID(v) {
+		out["group_id"] = v
+	}
+	return out
+}
+
+// auditSafeGroupID 判断 group_id 是否为工具边界支持的数值标量且能安全 JSON 编码：
+// float64 必须有限（NaN/±Inf 会让 json.Marshal 报错），json.Number 必须是合法数字字面量
+// （非法字面量同样让 json.Marshal 报错），int/int64 恒安全。其余类型（string、复合值、
+// 布尔等）不是工具边界支持的数值，一律视为不合法。
+func auditSafeGroupID(v any) bool {
+	switch n := v.(type) {
+	case float64:
+		return !math.IsNaN(n) && !math.IsInf(n, 0)
+	case int, int64:
+		return true
+	case json.Number:
+		_, err := json.Marshal(n)
+		return err == nil
+	default:
+		return false
+	}
 }
 
 func updateAsset(ctx context.Context, ref string, args, config map[string]any) (string, error) {
@@ -120,16 +177,23 @@ func updateAsset(ctx context.Context, ref string, args, config map[string]any) (
 		asset.Icon = icon
 	}
 
-	if h, ok := assettype.Get(asset.Type); ok {
-		if err := h.ApplyUpdateArgs(ctx, asset, config); err != nil {
-			return "", fmt.Errorf("apply update args failed: %w", err)
-		}
+	req := asset_put_svc.Request{
+		Asset:  asset,
+		Config: config,
 	}
-	if err := asset_svc.Asset().Update(ctx, asset); err != nil {
+	prepared, err := asset_put_svc.Prepare(ctx, req)
+	if err != nil {
+		// 顶层基线已在 handlePutAsset 入口记录，这里不重复。
 		return "", fmt.Errorf("failed to update asset: %w", err)
 	}
+	result, err := asset_put_svc.Commit(ctx, prepared)
+	if err != nil {
+		aictx.RecordAuditRequest(ctx, prepared.SafeAuditArgs())
+		return "", fmt.Errorf("failed to update asset: %w", err)
+	}
+	aictx.RecordAuditRequest(ctx, prepared.SafeAuditArgsForResult(result))
 	aictx.NotifyDataChanged("asset")
-	return fmt.Sprintf(`{"id":%d,"message":"asset updated successfully"}`, asset.ID), nil
+	return asset_put_svc.ResultJSON(result, "asset updated successfully")
 }
 
 // handlePutGroup 创建或更新分组：带 id → 更新，不带 → 创建。

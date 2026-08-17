@@ -31,8 +31,10 @@ import (
 func auditMiddleware(c *agent.ToolContext) {
 	slot := &aictx.CheckResult{}
 	commandSlot := ""
+	auditRequestSlot := aictx.NewAuditRequestSlot()
 	ctx := aictx.WithCheckResultSlot(c.Context(), slot)
 	ctx = aictx.WithAuditCommandSlot(ctx, &commandSlot)
+	ctx = aictx.WithAuditRequestSlot(ctx, auditRequestSlot)
 	c.WithContext(ctx)
 
 	assetID, assetName, command := resolveAssetForAudit(c.Context(), c.ToolName, c.Input)
@@ -47,9 +49,17 @@ func auditMiddleware(c *agent.ToolContext) {
 		c.Output.IsError = true
 	}
 
-	argsJSON, err := json.Marshal(c.Input)
+	// 审计 request 默认是 writer 收到的原始参数（Task 7 raw-by-default）。producer
+	// （put_asset）在调用期间通过 aictx.RecordAuditRequest 写入了字段白名单投影时，
+	// 这里改用投影——该投影是独立 map，绝不改写 c.Input，执行/审批/ToolBlock 仍见原值。
+	args := c.Input
+	if projected := aictx.GetAuditRequest(c.Context()); projected != nil {
+		args = projected
+	}
+	argsJSON, err := json.Marshal(args)
 	if err != nil {
-		logger.Default().Warn("audit middleware marshal input", zap.Error(err))
+		logger.Ctx(c.Context()).Warn("audit middleware marshal input",
+			zap.String("toolName", c.ToolName), zap.Error(err))
 	}
 
 	result, errVal := extractAuditResult(c.Output)

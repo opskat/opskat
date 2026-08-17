@@ -2,11 +2,13 @@ package ai_provider_svc
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/opskat/opskat/internal/model/entity/ai_provider_entity"
 	"github.com/opskat/opskat/internal/repository/ai_provider_repo"
 	"github.com/opskat/opskat/internal/service/credential_svc"
+	"gorm.io/gorm"
 )
 
 type AIProviderSvc interface {
@@ -37,7 +39,11 @@ func (s *aiProviderSvc) Get(ctx context.Context, id int64) (*ai_provider_entity.
 }
 
 func (s *aiProviderSvc) GetActive(ctx context.Context) (*ai_provider_entity.AIProvider, error) {
-	return ai_provider_repo.AIProvider().GetActive(ctx)
+	provider, err := ai_provider_repo.AIProvider().GetActive(ctx)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return provider, err
 }
 
 func (s *aiProviderSvc) Create(ctx context.Context, p *ai_provider_entity.AIProvider, rawAPIKey string) error {

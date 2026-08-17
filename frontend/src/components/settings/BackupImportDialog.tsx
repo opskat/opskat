@@ -10,7 +10,6 @@ import {
   DialogTitle,
   DialogFooter,
   Button,
-  Input,
   Label,
   Switch,
   Separator,
@@ -18,6 +17,7 @@ import {
 import { PreviewImportFile } from "../../../wailsjs/go/system/System";
 import { ExecuteImportFile } from "../../../wailsjs/go/system/System";
 import { backup_svc } from "../../../wailsjs/go/models";
+import { SecretInput } from "@/components/SecretInput";
 import { useAssetStore } from "@/stores/assetStore";
 import { useShortcutStore } from "@/stores/shortcutStore";
 import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
@@ -152,8 +152,8 @@ export function BackupImportDialog({
               <span>{t("backup.encryptedFile")}</span>
             </div>
             <div className="flex items-center gap-2">
-              <Input
-                type="password"
+              <SecretInput
+                wrapperClassName="flex-1"
                 placeholder={t("backup.password")}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}

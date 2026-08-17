@@ -1,13 +1,18 @@
 package runner
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/cago-frame/agents/agent"
 	"github.com/cago-frame/agents/provider"
+	"github.com/cago-frame/cago/pkg/logger"
 	. "github.com/smartystreets/goconvey/convey"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // drain 把 emit 串变成切片，便于断言。
@@ -63,6 +68,156 @@ func TestEventTranslator_ThinkingThenToolStart(t *testing.T) {
 		So(out[2].ToolName, ShouldEqual, "exec")
 		So(out[2].ToolCallID, ShouldEqual, "tu_1")
 		So(out[2].ToolInput, ShouldContainSubstring, `"command":"uptime"`)
+	})
+}
+
+func TestEventTranslator_ToolStartPassesRawInput(t *testing.T) {
+	Convey("EventPreToolUse 的 tool_input 按原始 JSON 逐字外发，不做任何脱敏", t, func() {
+		secret := "live-" + "credential-sentinel" // 运行时拼接避免 gosec G101
+		out := drain(NewStreamTranslator(), agent.Event{
+			Kind: agent.EventPreToolUse,
+			Tool: &agent.ToolEvent{
+				ToolUseID: "tu_secret",
+				Name:      "put_asset",
+				Input: map[string]any{
+					"name": "prod",
+					"config": map[string]any{
+						"host":        "db.internal",
+						"password":    secret,
+						"private_key": map[string]any{"path": "/Users/x/.ssh/id_rsa", "passphrase": secret},
+					},
+				},
+			}})
+		So(out, ShouldHaveLength, 1)
+		So(out[0].Type, ShouldEqual, "tool_start")
+		So(out[0].ToolName, ShouldEqual, "put_asset")
+		So(out[0].ToolCallID, ShouldEqual, "tu_secret")
+		// Go json.Marshal 按键名排序；逐字断言完整输入，凭据材料原样保留。
+		So(out[0].ToolInput, ShouldEqual, `{"config":{"host":"db.internal","password":"`+secret+`","private_key":{"passphrase":"`+secret+`","path":"/Users/x/.ssh/id_rsa"}},"name":"prod"}`)
+	})
+}
+
+func TestEventTranslator_ToolStartMarshalFailureKeepsRawErrorText(t *testing.T) {
+	Convey("EventPreToolUse 输入无法序列化时外发原始序列化错误文本，不注入 redaction 字面量", t, func() {
+		out := drain(NewStreamTranslator(), agent.Event{
+			Kind: agent.EventPreToolUse,
+			Tool: &agent.ToolEvent{
+				ToolUseID: "tu_bad",
+				Name:      "broken",
+				Input:     map[string]any{"unsupported": func() {}},
+			},
+		})
+		So(out, ShouldHaveLength, 1)
+		So(out[0].ToolInput, ShouldNotEqual, "<redacted>")
+		So(out[0].ToolInput, ShouldContainSubstring, "json:")
+	})
+}
+
+func TestEventTranslator_ToolResultPassesRawContent(t *testing.T) {
+	Convey("EventPostToolUse 的 JSON 结果逐字外发，不做任何脱敏", t, func() {
+		secret := "result-" + "credential-sentinel" // 运行时拼接避免 gosec G101
+		out := drain(NewStreamTranslator(), agent.Event{
+			Kind: agent.EventPostToolUse,
+			Tool: &agent.ToolEvent{
+				ToolUseID: "tu_r1",
+				Name:      "query",
+				Output: &agent.ToolResultBlock{
+					Content: []agent.ContentBlock{
+						agent.TextBlock{Text: `{"rows":3,"password":"` + secret + `"}`},
+					},
+				},
+			},
+		})
+		So(out, ShouldHaveLength, 1)
+		So(out[0].Type, ShouldEqual, "tool_result")
+		So(out[0].Content, ShouldEqual, `{"rows":3,"password":"`+secret+`"}`)
+	})
+
+	Convey("普通文本结果逐字外发，凭据形式文本不被改写", t, func() {
+		out := drain(NewStreamTranslator(), agent.Event{
+			Kind: agent.EventPostToolUse,
+			Tool: &agent.ToolEvent{
+				ToolUseID: "tu_r2",
+				Name:      "exec",
+				Output: &agent.ToolResultBlock{
+					Content: []agent.ContentBlock{
+						agent.TextBlock{Text: "ok\n--password hidden-cli-secret"},
+					},
+				},
+			},
+		})
+		So(out, ShouldHaveLength, 1)
+		So(out[0].Content, ShouldEqual, "ok\n--password hidden-cli-secret")
+	})
+}
+
+func TestEventTranslator_RetryPassesRawCause(t *testing.T) {
+	Convey("EventRetry 的 Cause 在事件里逐字外发，Attempt/Delay 原样保留", t, func() {
+		out := drain(NewStreamTranslator(), agent.Event{
+			Kind: agent.EventRetry,
+			Retry: &agent.RetryEvent{
+				Attempt: 3,
+				Delay:   2 * time.Second,
+				Cause:   errors.New("auth failed: --api-key retry-secret-token"),
+			},
+		})
+		So(out, ShouldHaveLength, 1)
+		So(out[0].Type, ShouldEqual, "retry")
+		So(out[0].Error, ShouldEqual, "auth failed: --api-key retry-secret-token")
+		So(out[0].Content, ShouldEqual, "3")
+		So(out[0].RetryDelayMs, ShouldEqual, 2000)
+	})
+}
+
+func TestEventTranslator_RetryLogOmitsCauseKeepsCorrelation(t *testing.T) {
+	Convey("EventRetry 的运维日志不记录 cause payload，并保留 attempt/delay_ms/conv_id correlation", t, func() {
+		core, logs := observer.New(zap.DebugLevel)
+		orig := logger.Default()
+		logger.SetLogger(zap.New(core))
+		t.Cleanup(func() { logger.SetLogger(orig) })
+		ctx := logger.WithContextField(context.Background(), zap.Int64("conv_id", 42))
+
+		secret := "log-" + "retry-secret-token"
+		drain(NewStreamTranslatorWithContext(ctx), agent.Event{
+			Kind: agent.EventRetry,
+			Retry: &agent.RetryEvent{
+				Attempt: 4,
+				Delay:   5 * time.Second,
+				Cause:   errors.New("provider error: --api-key " + secret),
+			},
+		})
+
+		var found bool
+		for _, le := range logs.All() {
+			// 面向用户的 retry 事件原文已由 RetryPassesRawCause 断言；此处保证结构化日志
+			// 任何字段都不复制 cause payload。
+			for _, v := range le.ContextMap() {
+				So(fmt.Sprint(v), ShouldNotContainSubstring, secret)
+			}
+			if le.Message != "AI provider retry" {
+				continue
+			}
+			found = true
+			cm := le.ContextMap()
+			_, causeLogged := cm["cause"]
+			So(causeLogged, ShouldBeFalse) // cause payload 字段不存在
+			So(cm["attempt"], ShouldEqual, int64(4))
+			So(cm["delay_ms"], ShouldEqual, int64(5000))
+			So(cm["conv_id"], ShouldEqual, int64(42))
+		}
+		So(found, ShouldBeTrue)
+	})
+}
+
+func TestEventTranslator_ErrorPassesRawMessage(t *testing.T) {
+	Convey("EventError 的消息逐字外发，不做任何脱敏", t, func() {
+		out := drain(NewStreamTranslator(), agent.Event{
+			Kind:  agent.EventError,
+			Error: errors.New("connection failed: --password error-secret-pass"),
+		})
+		So(out, ShouldHaveLength, 1)
+		So(out[0].Type, ShouldEqual, "error")
+		So(out[0].Error, ShouldEqual, "connection failed: --password error-secret-pass")
 	})
 }
 

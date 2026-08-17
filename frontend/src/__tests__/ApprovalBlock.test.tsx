@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { ApprovalBlock } from "../components/approval/ApprovalBlock";
 import type { ContentBlock } from "../stores/aiStore";
+import { RespondAIApproval } from "../../wailsjs/go/ai/AI";
 
 function cpBlock(): ContentBlock {
   return {
@@ -46,6 +47,10 @@ function renderApproval(overrides: Partial<ContentBlock>) {
 }
 
 describe("ApprovalBlock", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("renders a cp approval with its remote path as the subject", () => {
     render(<ApprovalBlock block={cpBlock()} />);
 
@@ -81,6 +86,37 @@ describe("ApprovalBlock", () => {
     });
 
     expect(screen.getByTestId("ai-approval-remember")).toBeInTheDocument();
+  });
+
+  it("未修改 remember pattern 时不伪造 edited_items，保留后端的系统主体收窄", () => {
+    renderApproval({
+      approvalKind: "single",
+      approvalItems: [{ type: "oss", asset_id: 1, asset_name: "s3-prod", command: "object.read mybucket/secrets*" }],
+    });
+
+    fireEvent.click(screen.getByTestId("ai-approval-remember"));
+    fireEvent.click(screen.getByTestId("ai-approval-allow-all"));
+
+    const response = vi.mocked(RespondAIApproval).mock.calls[0]?.[1];
+    expect(response?.decision).toBe("allowAll");
+    expect(response?.edited_items).toBeUndefined();
+  });
+
+  it("实际修改 remember pattern 时仍发送完整 edited_items", () => {
+    renderApproval({
+      approvalKind: "single",
+      approvalItems: [{ type: "oss", asset_id: 1, asset_name: "s3-prod", command: "object.read mybucket/secrets*" }],
+    });
+
+    fireEvent.click(screen.getByTestId("ai-approval-remember"));
+    fireEvent.change(screen.getByPlaceholderText("opsctlApproval.patternPlaceholder"), {
+      target: { value: "object.read mybucket/safe/*" },
+    });
+    fireEvent.click(screen.getByTestId("ai-approval-allow-all"));
+
+    const response = vi.mocked(RespondAIApproval).mock.calls[0]?.[1];
+    expect(response?.edited_items).toHaveLength(1);
+    expect(response?.edited_items?.[0].command).toBe("object.read mybucket/safe/*");
   });
 
   it("扩展审批不提供 remember/allowAll", () => {

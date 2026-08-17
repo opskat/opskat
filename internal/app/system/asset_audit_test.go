@@ -99,6 +99,24 @@ func TestDeleteAsset_WritesDesktopAudit(t *testing.T) {
 	assert.NotContains(t, got.Request, "s3cr3t-ciphertext")
 }
 
+// TestDeleteAsset_AuditRequestVerbatimAllowlist 钉住桌面审计的 request 是 assetAuditView
+// 白名单的逐字 JSON：只含 id/name/type/group_id，原样保存（不重编码、不替换），即使
+// 资产名本身长得像凭据也按原值落库，连接配置里的口令完全不出现。
+func TestDeleteAsset_AuditRequestVerbatimAllowlist(t *testing.T) {
+	s, assetMock, auditMem := setupAssetAudit(t)
+	assetMock.EXPECT().Find(gomock.Any(), int64(7)).Return(sshAsset(t, 7, "svc--password=hunter2"), nil)
+	assetMock.EXPECT().Delete(gomock.Any(), int64(7)).Return(nil)
+
+	require.NoError(t, s.DeleteAsset(7))
+
+	require.Len(t, auditMem.logs, 1)
+	got := auditMem.logs[0]
+	assert.Equal(t, "desktop", got.Source)
+	assert.Equal(t, "delete_asset", got.ToolName)
+	assert.Equal(t, `{"id":7,"name":"svc--password=hunter2","type":"ssh","group_id":3}`, got.Request)
+	assert.NotContains(t, got.Request, "s3cr3t-ciphertext")
+}
+
 // TestCreateAsset_WritesDesktopAudit 新增走同一条链路。
 func TestCreateAsset_WritesDesktopAudit(t *testing.T) {
 	s, assetMock, auditMem := setupAssetAudit(t)

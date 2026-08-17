@@ -15,11 +15,11 @@ func assetTools() []tool.Tool {
 	return []tool.Tool{
 		&tool.RawTool{
 			NameStr: "list_assets",
-			DescStr: "List managed remote server assets. Returns an array of assets (with ID, name, type, group, etc.). This is typically the first step to discover asset IDs for other operations. Supports filtering by type and group. Use get_asset to view asset description and connection details.",
+			DescStr: "List managed assets with lightweight safe metadata. Supports filtering by any registered asset type and group. Use get_asset for one asset's description, type-specific detail, and managed authentication status; list_assets does not perform credential/Agent enrichment.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
-					"asset_type": {Type: "string", Description: `Filter by asset type. Supported: "ssh", "serial", "rdp", "vnc", "database", "redis", "mongodb", "kafka", "k8s", "etcd". Omit to return all types.`},
+					"asset_type": {Type: "string", Description: "Filter by a registered asset type. Omit to return all types."},
 					"group_id":   {Type: "number", Description: "Filter by group ID. Omit or set to 0 to list all groups."},
 				},
 			},
@@ -33,7 +33,7 @@ func assetTools() []tool.Tool {
 		},
 		&tool.RawTool{
 			NameStr: "get_asset",
-			DescStr: "Get detailed information about a specific asset, including connection fields and asset-type-specific metadata. For k8s assets, inspect namespace, context, and ssh_tunnel_id to decide whether kubectl should run through an SSH jump host. For rdp assets, inspect host, port, username, domain, width, height, and clipboard.",
+			DescStr: "Get one asset's safe detail: identity/group/description plus the safe connection fields projected for that type. When the asset references managed authentication, adds an authentication object with a typed ref and availability. Managed credentials report stored/missing; SSH Agent reports source metadata, selected fingerprint, runtime availability, and available identity metadata. Never returns password/ciphertext, private key/passphrase, kubeconfig, Agent endpoint value, signature/challenge data, or Agent public-key blobs. Existing inline-encrypted auth remains usable but has no fabricated managed ref. list_assets stays lightweight and does not perform this enrichment.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{

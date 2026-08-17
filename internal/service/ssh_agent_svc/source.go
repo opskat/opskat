@@ -9,8 +9,8 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/assetconn"
 	"github.com/opskat/opskat/internal/model/entity/ssh_agent_source_entity"
-	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/ssh_agent_source_repo"
+	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/sshagent"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -92,7 +92,7 @@ func Update(ctx context.Context, id int64, in SourceInput) (*ssh_agent_source_en
 	}
 
 	if endpointChanged {
-		assets, err := asset_repo.Asset().ListAgentAuthBySourceID(ctx, id)
+		assets, err := asset_svc.Asset().AgentReferencingAssets(ctx, id)
 		if err != nil {
 			return nil, err
 		}
@@ -110,7 +110,7 @@ func Delete(ctx context.Context, id int64) error {
 	if _, err := sourceOrErr(ctx, id); err != nil {
 		return err
 	}
-	inUse, err := asset_repo.Asset().CountAgentAuthBySourceID(ctx, id)
+	inUse, err := asset_svc.Asset().AgentReferenceCount(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -130,7 +130,7 @@ func Usage(ctx context.Context, id int64) (int64, error) {
 	if _, err := sourceOrErr(ctx, id); err != nil {
 		return 0, err
 	}
-	return asset_repo.Asset().CountAgentAuthBySourceID(ctx, id)
+	return asset_svc.Asset().AgentReferenceCount(ctx, id)
 }
 
 // Get 读取单个来源定义（完整端点，仅供来源编辑/探测界面使用）。

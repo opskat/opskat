@@ -429,7 +429,7 @@ describe("AssetTree ungrouped virtual folder", () => {
     vi.mocked(ListGroups).mockResolvedValue([]);
   });
 
-  it("renders ungrouped assets after expanding the virtual folder", async () => {
+  it("preserves the persisted virtual-folder collapse on initial load", async () => {
     const user = userEvent.setup();
     renderAssetTree();
 

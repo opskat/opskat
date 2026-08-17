@@ -347,10 +347,9 @@ func (s *Service) rebuildDocumentSessionFromRemote(
 		return nil, fmt.Errorf("创建临时工作区失败: %w", err)
 	}
 
-	var bakeupPath string
+	// 旧本地副本移入 bakeup 是行为需求，但返回的本地备份路径不得进入 Audit。
 	if source != nil {
-		bakeupPath, err = s.moveFileToBakeup(source.WorkspaceRoot, source.WorkspaceDir, source.LocalPath)
-		if err != nil {
+		if _, err = s.moveFileToBakeup(source.WorkspaceRoot, source.WorkspaceDir, source.LocalPath); err != nil {
 			return nil, err
 		}
 	}
@@ -454,10 +453,10 @@ func (s *Service) rebuildDocumentSessionFromRemote(
 		if source == nil {
 			s.cleanupSessionAfterLaunchFailure(session.ID)
 		}
-		s.writeAudit(cloned, auditTool, false, map[string]any{"rebuild": true}, map[string]any{"bakeupPath": bakeupPath}, err)
+		s.writeAudit(cloned, auditTool, false, map[string]any{"rebuild": true}, nil, err)
 		return nil, fmt.Errorf("启动外部编辑器失败: %w", err)
 	}
-	s.writeAudit(cloned, auditTool, true, map[string]any{"rebuild": true}, map[string]any{"bakeupPath": bakeupPath}, nil)
+	s.writeAudit(cloned, auditTool, true, map[string]any{"rebuild": true}, nil, nil)
 	s.emit(Event{Type: eventSessionOpened, Session: cloned})
 	return cloned, nil
 }

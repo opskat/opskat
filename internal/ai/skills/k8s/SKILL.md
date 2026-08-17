@@ -28,7 +28,11 @@ Pass the kubectl command as `command`, with or without the leading `kubectl`:
 
 | field | type | required | notes |
 |---|---|---|---|
-| `kubeconfig` | string | yes | Full kubeconfig YAML content; stored encrypted |
+| `kubeconfig` | string | yes | **Write-only.** Full YAML encrypted directly in the asset config; it does not create a managed credential |
 | `namespace` | string | no | Default namespace; must not contain whitespace or start with `-` |
 | `context` | string | no | Kubeconfig context to use; same character restrictions as `namespace` |
 | `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches |
+| `password` | string | no | Reserved compatibility key; any non-empty value is rejected as inapplicable |
+| `credential_id` | number | no | Reserved compatibility key; any non-zero value is rejected as inapplicable |
+
+Never echo kubeconfig. It remains direct encrypted asset material. K8s accepts no credential fields.

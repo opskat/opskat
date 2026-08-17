@@ -17,11 +17,12 @@ func crudTools() []tool.Tool {
 	return []tool.Tool{
 		&tool.RawTool{
 			NameStr: "put_asset",
-			DescStr: "Create or update an asset. Pass asset=<id-or-name> to update an existing one; omit it to create. " +
-				"The per-type shape of `config` is documented by help — pass the asset id/name to look up an existing " +
-				"asset's type, or pass the type name itself (e.g. help(asset=\"rdp\")) when no asset of that type " +
-				"exists yet (supported types: " + strings.Join(permission.RegisteredHelpTypes(), ", ") + "). " +
-				"Credentials inside config (password / private_key) are stored encrypted; never echo them back to the user.",
+			DescStr: "Create or update an asset through the registered type contract. Pass asset=<id-or-name> to update; omit it to create. " +
+				"Call help with the existing asset or a type name (e.g. help(asset=\"rdp\")) for exact config fields " +
+				"(registered types: " + strings.Join(permission.RegisteredHelpTypes(), ", ") + "). Unknown config fields are rejected. " +
+				"Plaintext password and OSS secret_access_key are write-only asset-local secrets. credential_id reuses " +
+				"an existing type-checked managed credential; conflicting secret sources fail. K8s kubeconfig remains directly encrypted asset " +
+				"config. Successful output contains only the asset ID and a safe authentication reference when applicable; never echo secrets.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
@@ -31,7 +32,7 @@ func crudTools() []tool.Tool {
 					"group_id":    {Type: "number", Description: "Group ID to assign this asset to. Values <= 0 are ignored."},
 					"description": {Type: "string", Description: "Description or notes. Empty string clears it."},
 					"icon":        {Type: "string", Description: "Icon name."},
-					"config":      {Type: "object", Description: "Type-specific connection fields (host, port, username, credentials, …). Call help(asset) for the exact field list of a given type."},
+					"config":      {Type: "object", Description: "Type-specific connection fields (host, port, username, credentials, …). Plaintext credential fields are write-only. Call help(asset) for the exact field list of a given type."},
 				},
 			},
 			IsSerial: true,

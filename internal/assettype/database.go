@@ -46,6 +46,14 @@ func (h *databaseHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	}
 }
 
+func (h *databaseHandler) AuthenticationAssociation(a *asset_entity.Asset) (AuthenticationAssociation, bool, error) {
+	cfg, err := a.GetDatabaseConfig()
+	if err != nil || cfg == nil {
+		return AuthenticationAssociation{}, false, err
+	}
+	return passwordAuthenticationAssociation(cfg.CredentialID)
+}
+
 func (h *databaseHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asset) (string, error) {
 	cfg, err := a.GetDatabaseConfig()
 	if err != nil {
@@ -57,7 +65,35 @@ func (h *databaseHandler) ResolvePassword(ctx context.Context, a *asset_entity.A
 func (h *databaseHandler) DefaultPolicy() any { return asset_entity.DefaultQueryPolicy() }
 func (h *databaseHandler) PolicyKind() string { return policy.PolicyKindQuery }
 
+func (h *databaseHandler) AutomationUpdateContext(a *asset_entity.Asset, args map[string]any) (map[string]any, error) {
+	if _, ok := args["driver"]; ok {
+		return args, nil
+	}
+	if _, hasPassword := args["password"]; !hasPassword {
+		if _, hasReference := args["credential_id"]; !hasReference {
+			return args, nil
+		}
+	}
+	current, err := a.GetDatabaseConfig()
+	if err != nil {
+		return nil, err
+	}
+	out := cloneArgs(args)
+	out["driver"] = string(current.Driver)
+	return out, nil
+}
+
 func (h *databaseHandler) ValidateCreateArgs(args map[string]any) error {
+	driver := asset_entity.DatabaseDriver(ArgString(args, "driver"))
+	if driver == "" {
+		return fmt.Errorf("database type requires driver parameter (mysql, postgresql, mssql, sqlite)")
+	}
+	if driver == asset_entity.DriverSQLite {
+		if ArgString(args, "path") == "" {
+			return fmt.Errorf("missing required parameter: path for SQLite")
+		}
+		return nil
+	}
 	return validateRemoteServerArgs(args)
 }
 
@@ -68,8 +104,9 @@ func (h *databaseHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Ass
 	}
 	cfg := &asset_entity.DatabaseConfig{
 		Driver:              asset_entity.DatabaseDriver(driver),
+		CredentialID:        ArgInt64(args, "credential_id"),
 		Database:            ArgString(args, "database"),
-		ReadOnly:            ArgString(args, "read_only") == "true",
+		ReadOnly:            ArgBool(args, "read_only"),
 		QueryTimeoutSeconds: ArgInt(args, "query_timeout_seconds"),
 	}
 	if cfg.Driver == asset_entity.DriverSQLite {
@@ -77,10 +114,16 @@ func (h *databaseHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Ass
 		if source := ArgString(args, "sqlite_source"); source != "" {
 			cfg.SQLiteSource = asset_entity.SQLiteSource(source)
 		}
+		if cfg.SQLiteSource == "" {
+			cfg.SQLiteSource = asset_entity.SQLiteSourceLocal
+		}
 		cfg.SSHAssetID = ArgInt64(args, "ssh_asset_id")
 	} else {
 		cfg.Host = ArgString(args, "host")
 		cfg.Port = ArgInt(args, "port")
+		if cfg.Port == 0 {
+			cfg.Port = cfg.Driver.DefaultPort()
+		}
 		cfg.Username = ArgString(args, "username")
 		cfg.SSHAssetID = ArgInt64(args, "ssh_asset_id")
 		if password := ArgString(args, "password"); password != "" {
@@ -105,8 +148,8 @@ func (h *databaseHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Ass
 	if _, ok := args["database"]; ok {
 		cfg.Database = ArgString(args, "database")
 	}
-	if v := ArgString(args, "read_only"); v != "" {
-		cfg.ReadOnly = v == "true"
+	if _, ok := args["read_only"]; ok {
+		cfg.ReadOnly = ArgBool(args, "read_only")
 	}
 	if v := ArgInt(args, "query_timeout_seconds"); v > 0 {
 		cfg.QueryTimeoutSeconds = v
@@ -138,6 +181,10 @@ func (h *databaseHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Ass
 		}
 		if _, ok := args["ssh_asset_id"]; ok {
 			cfg.SSHAssetID = ArgInt64(args, "ssh_asset_id")
+		}
+		if _, ok := args["credential_id"]; ok {
+			cfg.CredentialID = ArgInt64(args, "credential_id")
+			cfg.Password = ""
 		}
 		if password := ArgString(args, "password"); password != "" {
 			encrypted, err := credential_svc.Default().Encrypt(password)

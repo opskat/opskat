@@ -17,7 +17,12 @@ type Pinger interface {
 
 // Start launches a goroutine that sends an OpenSSH "keepalive@openssh.com"
 // global request on p every interval. It returns a stop function the caller
-// MUST invoke when shutting down. stop is idempotent.
+// MUST invoke when shutting down. stop is idempotent and waits until the
+// heartbeat goroutine has exited, so no request can outlive a returned stop.
+//
+// SendRequest may block on network I/O. Callers closing an SSH connection must
+// close the underlying client first (which unblocks SendRequest), then call
+// stop to join the heartbeat goroutine.
 //
 // An interval <= 0 disables the heartbeat: no goroutine is started and the
 // returned stop is a no-op. This lets callers honor a "keepalive off" setting
@@ -31,18 +36,31 @@ func Start(p Pinger, interval time.Duration) (stop func()) {
 		return func() {}
 	}
 
+	ticker := time.NewTicker(interval)
+	return start(p, ticker.C, ticker.Stop)
+}
+
+// start owns the heartbeat lifecycle for an already-created tick source. Start
+// supplies a time.Ticker in production; tests supply explicit ticks so lifecycle
+// and shutdown behavior are verified without wall-clock sleeps.
+func start(p Pinger, ticks <-chan time.Time, stopTicker func()) (stop func()) {
 	done := make(chan struct{})
 	var once sync.Once
-	stopFn := func() { once.Do(func() { close(done) }) }
+	var wg sync.WaitGroup
+	wg.Add(1)
+	stopFn := func() {
+		once.Do(func() { close(done) })
+		wg.Wait()
+	}
 
 	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
+		defer wg.Done()
+		defer stopTicker()
 		for {
 			select {
 			case <-done:
 				return
-			case <-ticker.C:
+			case <-ticks:
 				if _, _, err := p.SendRequest("keepalive@openssh.com", true, nil); err != nil {
 					return
 				}

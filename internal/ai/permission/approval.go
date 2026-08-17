@@ -108,13 +108,25 @@ func ParseApprovalResponse(kind string, resp ApprovalResponse, expectedItems ...
 				return ParsedApprovalResponse{Decision: ApprovalDeny},
 					fmt.Errorf("approval edited_items count %d does not match requested item count %d", len(resp.EditedItems), len(expected))
 			}
+			normalized := make([]ApprovalItem, len(resp.EditedItems))
+			changed := false
 			for i, item := range resp.EditedItems {
 				want := expected[i]
 				if item.Type != want.Type || item.AssetID != want.AssetID || item.GroupID != want.GroupID {
 					return ParsedApprovalResponse{Decision: ApprovalDeny},
 						fmt.Errorf("approval edited_items[%d] changes the requested scope", i)
 				}
+				normalized[i] = want
+				normalized[i].Command = item.Command
+				changed = changed || item.Command != want.Command
 			}
+			// EditedItems is also the origin signal for grant normalization. Old or
+			// forged frontends may echo every unchanged item; treat that as no edit so
+			// system-generated subjects still receive the stricter system projection.
+			if changed {
+				parsed.EditedItems = normalized
+			}
+			return parsed, nil
 		}
 	}
 	parsed.EditedItems = resp.EditedItems

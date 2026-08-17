@@ -103,7 +103,10 @@ wrong value, after approval and a round trip:
   content never passes through the conversation either way.
 - `object copy`, `object move` and `object delete` return `{"status":"ok",…}`.
 - `object presign` returns the signed `url`, its `method` and `expiresIn` seconds. The URL
-  is fully usable; the audit log stores it with the signature parameters redacted.
+  is fully usable. Under raw-by-default Audit the complete signed URL — signature parameters
+  included — enters the Audit result unchanged, subject only to the existing result
+  capture/truncation; nothing is redacted, so treat the URL as a capability that grants
+  access until it expires.
 
 ## Approval and policy rules
 
@@ -173,13 +176,15 @@ Rules are written the same way, with `*` wildcards that do not cross `/` inside 
 |---|---|---|---|
 | `endpoint` | string | yes | Host, or `scheme://host[:port]` |
 | `access_key_id` | string | yes | |
-| `secret_access_key` | string | no | Stored encrypted; never echoed back |
-| `credential_id` | number | no | Reference to a managed credential instead of an inline `secret_access_key`; 0 means none |
+| `secret_access_key` | string | no | **Write-only.** Encrypted in the asset; does not create a credential |
+| `credential_id` | number | no | Existing managed password credential ID; mutually exclusive with `secret_access_key` |
 | `provider` | string | no | UI provider preset label (e.g. `"s3"`, `"minio"`); does not change connection behavior |
 | `region` | string | no | |
 | `use_path_style` | bool | no | `true` to force path-style addressing (needed by most self-hosted S3-compatible services) |
 | `use_ssl` | bool | no | `true` to connect over HTTPS |
 | `connect_timeout` | number | no | Seconds; 0 uses the default |
+
+Plaintext is never returned, is encrypted in the asset, and never creates a managed credential.
 
 Example:
 

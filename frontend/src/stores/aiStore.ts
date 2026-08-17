@@ -588,6 +588,49 @@ function materializeRetryStatusAsError(msg: ChatMessage): ChatMessage {
   };
 }
 
+// toDisplayContentBlock 把 store 的 ContentBlock 转成持久化 DTO，并递归携带嵌套
+// agent child blocks。Wails 生成的 ContentBlock 构造器只拷贝已声明字段（models.ts 由
+// make dev 重新生成后才声明 childBlocks），因此 childBlocks 在构造后附加；
+// conversation_entity.SetBlocks 原样持久化嵌套块，不做脱敏。
+function toDisplayContentBlock(b: ContentBlock, includeStreaming: boolean): conversation_entity.ContentBlock {
+  const wb = new conversation_entity.ContentBlock({
+    type: b.type,
+    content: b.content,
+    toolName: b.toolName,
+    toolInput: b.toolInput,
+    toolCallId: b.toolCallId,
+    status: includeStreaming ? normalizeSnapshotStatus(b.status) : b.status,
+    errorKind: b.errorKind,
+    errorDetail: b.errorDetail,
+  });
+  if (b.childBlocks && b.childBlocks.length > 0) {
+    (wb as unknown as { childBlocks: conversation_entity.ContentBlock[] }).childBlocks = b.childBlocks.map((c) =>
+      toDisplayContentBlock(c, includeStreaming)
+    );
+  }
+  return wb;
+}
+
+// fromDisplayContentBlock 把后端返回的 ContentBlock DTO 还原成 store 的 ContentBlock，
+// 递归恢复嵌套 agent child blocks（该字段由后端序列化提供，models.ts 尚未声明）。
+function fromDisplayContentBlock(b: conversation_entity.ContentBlock): ContentBlock {
+  const children = (b as unknown as { childBlocks?: conversation_entity.ContentBlock[] }).childBlocks;
+  const block: ContentBlock = {
+    type: b.type as ContentBlock["type"],
+    content: b.content,
+    toolName: b.toolName,
+    toolInput: b.toolInput,
+    toolCallId: b.toolCallId, // #230: 还原 toolCallId 以便重载后仍能展开 tool_calls 历史
+    status: b.status as ContentBlock["status"],
+    errorKind: b.errorKind as ErrorKind | undefined,
+    errorDetail: b.errorDetail,
+  };
+  if (children && children.length > 0) {
+    block.childBlocks = children.map((c) => fromDisplayContentBlock(c));
+  }
+  return block;
+}
+
 function toDisplayMessages(msgs: ChatMessage[], includeStreaming = false): ai.ConversationDisplayMessage[] {
   // includeStreaming=true 的路径都是"非自然终态落盘"（tab 关闭 / 切会话 / 应用退出），
   // 在这里把 retryStatus 物化为 interrupted ErrorBlock；其余路径 retryStatus 自动 omit
@@ -595,29 +638,19 @@ function toDisplayMessages(msgs: ChatMessage[], includeStreaming = false): ai.Co
   const prepared = includeStreaming ? msgs.map(materializeRetryStatusAsError) : msgs;
   return prepared
     .filter((m) => includeStreaming || !m.streaming)
-    .map(
-      (m) =>
-        new ai.ConversationDisplayMessage({
-          role: m.role,
-          content: m.content,
-          blocks: m.blocks.map(
-            (b) =>
-              new conversation_entity.ContentBlock({
-                type: b.type,
-                content: b.content,
-                toolName: b.toolName,
-                toolInput: b.toolInput,
-                // #230: 持久化 toolCallId，否则重载会话后 expandToAPIMessages 无法配对
-                // tool_use↔tool_result，会退化回塌缩，工具历史再次丢失。
-                toolCallId: b.toolCallId,
-                status: includeStreaming ? normalizeSnapshotStatus(b.status) : b.status,
-                errorKind: b.errorKind,
-                errorDetail: b.errorDetail,
-              })
-          ),
-          tokenUsage: m.tokenUsage ? new conversation_entity.TokenUsage(m.tokenUsage) : undefined,
-        })
-    );
+    .map((m) => {
+      const dm = new ai.ConversationDisplayMessage({
+        role: m.role,
+        content: m.content,
+        tokenUsage: m.tokenUsage ? new conversation_entity.TokenUsage(m.tokenUsage) : undefined,
+      });
+      // blocks 在构造后覆盖：Wails 构造器的 convertValues 会把 childBlocks 丢掉，
+      // 嵌套 agent 子块必须随 DTO 一起序列化，后端 SetBlocks 原样持久化。
+      (dm as unknown as { blocks: conversation_entity.ContentBlock[] }).blocks = m.blocks.map((b) =>
+        toDisplayContentBlock(b, includeStreaming)
+      );
+      return dm;
+    });
 }
 
 function convertDisplayMessages(displayMsgs: ai.ConversationDisplayMessage[]): ChatMessage[] {
@@ -625,16 +658,7 @@ function convertDisplayMessages(displayMsgs: ai.ConversationDisplayMessage[]): C
     id: crypto.randomUUID(),
     role: dm.role as "user" | "assistant" | "tool",
     content: dm.content,
-    blocks: (dm.blocks || []).map((b: conversation_entity.ContentBlock) => ({
-      type: b.type as ContentBlock["type"],
-      content: b.content,
-      toolName: b.toolName,
-      toolInput: b.toolInput,
-      toolCallId: b.toolCallId, // #230: 还原 toolCallId 以便重载后仍能展开 tool_calls 历史
-      status: b.status as ContentBlock["status"],
-      errorKind: b.errorKind as ErrorKind | undefined,
-      errorDetail: b.errorDetail,
-    })),
+    blocks: (dm.blocks || []).map((b) => fromDisplayContentBlock(b)),
     tokenUsage: dm.tokenUsage
       ? {
           inputTokens: dm.tokenUsage.inputTokens,

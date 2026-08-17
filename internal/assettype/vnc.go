@@ -31,6 +31,14 @@ func (h *vncHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	}
 }
 
+func (h *vncHandler) AuthenticationAssociation(a *asset_entity.Asset) (AuthenticationAssociation, bool, error) {
+	cfg, err := a.GetVNCConfig()
+	if err != nil || cfg == nil {
+		return AuthenticationAssociation{}, false, err
+	}
+	return passwordAuthenticationAssociation(cfg.CredentialID)
+}
+
 func (h *vncHandler) ResolvePassword(ctx context.Context, a *asset_entity.Asset) (string, error) {
 	cfg, err := a.GetVNCConfig()
 	if err != nil {
@@ -54,6 +62,7 @@ func (h *vncHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, a
 		Host:           ArgString(args, "host"),
 		Port:           ArgInt(args, "port"),
 		Username:       ArgString(args, "username"),
+		CredentialID:   ArgInt64(args, "credential_id"),
 		FileSSHAssetID: ArgInt64(args, "file_ssh_asset_id"),
 	}
 	if cfg.Port == 0 {
@@ -85,6 +94,10 @@ func (h *vncHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, a
 	}
 	if _, ok := args["file_ssh_asset_id"]; ok {
 		cfg.FileSSHAssetID = ArgInt64(args, "file_ssh_asset_id")
+	}
+	if _, ok := args["credential_id"]; ok {
+		cfg.CredentialID = ArgInt64(args, "credential_id")
+		cfg.Password = ""
 	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)

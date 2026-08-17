@@ -16,6 +16,7 @@ import {
   Textarea,
 } from "@opskat/ui";
 import { CallExtensionAction } from "../../../wailsjs/go/extension/Extension";
+import { SecretInput } from "@/components/SecretInput";
 
 interface JSONSchemaProperty {
   type?: string;
@@ -151,13 +152,21 @@ export function ExtensionConfigForm({
             {label}
             {isRequired && <span className="text-destructive ml-0.5">*</span>}
           </Label>
-          <Input
-            id={key}
-            type={prop.format === "password" ? "password" : "text"}
-            value={String(value[key] ?? "")}
-            onChange={(e) => updateField(key, e.target.value)}
-            placeholder={placeholder || (prop.format === "password" ? "••••••••" : undefined)}
-          />
+          {prop.format === "password" ? (
+            <SecretInput
+              id={key}
+              value={String(value[key] ?? "")}
+              onChange={(e) => updateField(key, e.target.value)}
+              placeholder={placeholder || "••••••••"}
+            />
+          ) : (
+            <Input
+              id={key}
+              value={String(value[key] ?? "")}
+              onChange={(e) => updateField(key, e.target.value)}
+              placeholder={placeholder}
+            />
+          )}
           {description && <p className="text-xs text-muted-foreground">{description}</p>}
         </div>
       );

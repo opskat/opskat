@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/cago-frame/cago/pkg/logger"
-	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/sshagent"
 	"go.uber.org/zap"
 )
@@ -57,13 +57,13 @@ func Inspect(ctx context.Context, id int64) (*InspectResult, error) {
 		}
 		ids = nil
 	}
-	usages, err := asset_repo.Asset().CountAgentAuthBySourceID(ctx, id)
+	usages, err := asset_svc.Asset().AgentReferenceCount(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	// 每把身份的使用数按所选指纹单独统计：来源级 usages 是所有身份的合计，
 	// 直接套用到每一行会让同来源的每把密钥都显示相同的数字（#278）。
-	perIdentity, err := asset_repo.Asset().CountAgentAuthBySourceIDGroupByFingerprint(ctx, id)
+	perIdentity, err := asset_svc.Asset().AgentReferenceCountByFingerprint(ctx, id)
 	if err != nil {
 		return nil, err
 	}

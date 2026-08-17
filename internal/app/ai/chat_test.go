@@ -1,8 +1,26 @@
 package ai
 
 import (
+	"errors"
+	"strings"
 	"testing"
 )
+
+func TestOutwardFailurePreservesRawTextOnEventAndReturnedWailsError(t *testing.T) {
+	err := errors.New("Authorization: Basic wails-return-secret")
+	message, returned := outwardFailure("send to LLM", err)
+	for name, text := range map[string]string{"event": message, "returned error": returned.Error()} {
+		if !strings.Contains(text, "wails-return-secret") {
+			t.Fatalf("%s lost the raw provider error: %s", name, text)
+		}
+	}
+	if !strings.Contains(returned.Error(), "send to LLM") {
+		t.Fatalf("returned Wails error lost its operation context: %s", returned)
+	}
+	if returned.Error() != "send to LLM: "+err.Error() {
+		t.Fatalf("returned Wails error must be prefix + raw error text: %s", returned)
+	}
+}
 
 // TestAllBuiltinAssetTypeSkills covers the listing that feeds PromptBuilder's per-type
 // discovery section. It is deliberately independent of openTabs: the listing exists so

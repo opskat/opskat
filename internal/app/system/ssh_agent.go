@@ -18,6 +18,7 @@ import (
 
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/model/entity/ssh_agent_source_entity"
+	"github.com/opskat/opskat/internal/service/credential_query_svc"
 	"github.com/opskat/opskat/internal/service/ssh_agent_svc"
 	"github.com/opskat/opskat/internal/sshagent"
 )
@@ -146,49 +147,14 @@ func (s *System) GetAgentSourceUsage(id int64) (int64, error) {
 // 性 / 可用时的类型与备注）。不暴露端点与公钥。
 func (s *System) GetAgentAssetDetail(sourceID int64, fingerprint string) (AgentAssetDetail, error) {
 	ctx := i18n.Ctx(s.ctx, s.Lang())
-	src, err := ssh_agent_svc.Get(ctx, sourceID)
+	authentication, err := credential_query_svc.DefaultAssetAuthentication().GetAssetAuthentication(ctx, credential_query_svc.AssetAuthenticationRequest{
+		Type: credential_query_svc.TypeSSHAgent, Ref: credential_query_svc.Ref{Kind: credential_query_svc.RefAgentSource, ID: sourceID}.String(), Fingerprint: fingerprint,
+	})
 	if err != nil {
 		return AgentAssetDetail{}, err
 	}
-	detail := AgentAssetDetail{
-		SourceID:    sourceID,
-		SourceName:  src.Name,
-		Fingerprint: fingerprint,
-	}
-	res, err := ssh_agent_svc.Inspect(ctx, sourceID)
-	if err != nil {
-		// 类型化传输错误映射为运行状态；真正的内部错误（如 DB 故障）如实上报。
-		code, ok := ssh_agent_svc.CodeOf(err)
-		if !ok {
-			return AgentAssetDetail{}, err
-		}
-		detail.Availability = agentAvailabilityOfCode(code)
-		return detail, nil
-	}
-	for _, ident := range res.Identities {
-		if ident.Fingerprint == fingerprint {
-			detail.Availability = "ok"
-			detail.Type = ident.Type
-			detail.Comment = ident.Comment
-			return detail, nil
-		}
-	}
-	// 指纹不在当前身份中：来源可达但为空 → empty；持有身份但无匹配 → missing。
-	if len(res.Identities) == 0 {
-		detail.Availability = "empty"
-	} else {
-		detail.Availability = "missing"
-	}
-	return detail, nil
-}
-
-// agentAvailabilityOfCode 把类型化 Agent 错误码映射为资产详情的运行状态：仅平台
-// 不支持区分 unsupported，其余一律 unavailable。详情是展示视图，不向上抛传输级错误。
-// CodeEmpty 不在此出现：Inspect 已把可达但为空归一为空身份结果（非错误），由调用方
-// 的成功路径区分 empty 与 missing。
-func agentAvailabilityOfCode(code string) string {
-	if code == sshagent.CodePlatformUnsupported {
-		return "unsupported"
-	}
-	return "unavailable"
+	return AgentAssetDetail{
+		SourceID: sourceID, SourceName: authentication.Name, Fingerprint: fingerprint,
+		Availability: authentication.Availability, Type: authentication.KeyType, Comment: authentication.Comment,
+	}, nil
 }

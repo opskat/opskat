@@ -10,6 +10,12 @@ import (
 // （或文档明示的保留），只允许减少、不允许新增；新代码一律走规则指向的正道。
 var importBans = []importBanRule{
 	{
+		dir:       "internal/service/ssh_agent_svc/",
+		banned:    []string{"github.com/opskat/opskat/internal/repository/asset_repo"},
+		skipTests: true,
+		message:   "SSH Agent service 不得直接调用资产 repository，经 asset_svc getter 获取跨域资产数据（AGENTS.md → 依赖接口、调 getter）",
+	},
+	{
 		dir:       "internal/app/",
 		banned:    []string{"github.com/opskat/opskat/internal/repository"},
 		skipTests: true, // 测试注入 mock repo 属正常用法

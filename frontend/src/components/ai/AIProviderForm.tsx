@@ -14,6 +14,7 @@ import {
   PopoverTrigger,
   ScrollableContainer,
 } from "@opskat/ui";
+import { SecretInput } from "@/components/SecretInput";
 import { Check, ChevronsUpDown, Loader2, RefreshCw } from "lucide-react";
 import { FetchAIModels } from "../../../wailsjs/go/ai/AI";
 import { GetModelDefaults } from "../../../wailsjs/go/ai/AI";
@@ -56,13 +57,11 @@ export interface AIProviderFormProps {
     type: string;
     apiBase: string;
     apiKey: string;
-    maskedApiKey?: string;
     model: string;
     maxOutputTokens: number;
     contextWindow: number;
     reasoningEffort: ReasoningEffort;
   };
-  isEditing?: boolean;
   /** Locks the provider type (used by wizard where cards handle type selection) */
   providerType?: "openai" | "anthropic";
   showTypeSelector?: boolean;
@@ -74,7 +73,6 @@ export interface AIProviderFormProps {
 
 export function AIProviderForm({
   initialValues,
-  isEditing,
   providerType: externalType,
   showTypeSelector = true,
   onSave,
@@ -309,11 +307,11 @@ export function AIProviderForm({
 
       <div className="grid gap-2">
         <Label>{t("settings.apiKey")}</Label>
-        <Input
-          type="password"
+        <SecretInput
+          aria-label={t("settings.apiKey")}
           value={formApiKey}
           onChange={(e) => setFormApiKey(e.target.value)}
-          placeholder={isEditing && initialValues?.maskedApiKey ? initialValues.maskedApiKey : "sk-..."}
+          placeholder="sk-..."
         />
       </div>
 

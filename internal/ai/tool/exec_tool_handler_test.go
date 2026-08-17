@@ -2,11 +2,14 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/mock/gomock"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	. "github.com/smartystreets/goconvey/convey"
 
@@ -22,6 +25,7 @@ type mockExtToolExecutor struct {
 	defOK          bool
 	policyArgsSeen []byte
 	callArgsSeen   []byte
+	policyErr      error
 }
 
 func (m *mockExtToolExecutor) FindExtensionByTool(extName, toolName string) *extension.Extension {
@@ -38,6 +42,9 @@ func (m *mockExtToolExecutor) GetExtensionPolicyGroups(extName, assetType string
 
 func (m *mockExtToolExecutor) CheckToolPolicy(ctx context.Context, _, toolName string, argsJSON []byte) (string, string, error) {
 	m.policyArgsSeen = append([]byte(nil), argsJSON...)
+	if m.policyErr != nil {
+		return "", "", m.policyErr
+	}
 	return m.ext.Plugin.CheckPolicy(ctx, toolName, argsJSON)
 }
 
@@ -155,7 +162,7 @@ func TestExecToolHandler(t *testing.T) {
 			So(confirmed, ShouldBeTrue)
 			So(approvedKind, ShouldEqual, "extension")
 			So(approvedCommand, ShouldContainSubstring, "production-target")
-			So(approvedCommand, ShouldNotContainSubstring, "review-secret")
+			So(approvedCommand, ShouldContainSubstring, "review-secret")
 			So(string(executor.callArgsSeen), ShouldContainSubstring, "production-target")
 			So(string(executor.callArgsSeen), ShouldContainSubstring, "review-secret")
 		})
@@ -235,6 +242,57 @@ func TestExecuteExtensionToolValidatesDelegatedArgsBeforeApprovalAndPlugin(t *te
 	if len(executor.callArgsSeen) != 0 || len(executor.policyArgsSeen) != 0 {
 		t.Fatalf("invalid delegated args reached extension runtime: policy=%s call=%s",
 			executor.policyArgsSeen, executor.callArgsSeen)
+	}
+}
+
+func TestExecuteExtensionToolFailureLogOmitsErrorPayloadKeepsCorrelation(t *testing.T) {
+	core, logs := observer.New(zap.DebugLevel)
+	orig := logger.Default()
+	logger.SetLogger(zap.New(core))
+	t.Cleanup(func() { logger.SetLogger(orig) })
+
+	secret := "extension-log-" + "credential-sentinel"
+	executor := &mockExtToolExecutor{
+		ext: &extension.Extension{
+			Name: "oss", Manifest: &extension.Manifest{Name: "oss", Policies: extension.PoliciesDef{Type: "oss"}},
+		},
+		def: extension.ToolDef{Name: "noop", Parameters: map[string]any{
+			"type": "object", "properties": map[string]any{},
+		}},
+		defOK:     true,
+		policyErr: errors.New("Authorization: Basic " + secret),
+	}
+
+	_, err := ExecuteExtensionTool(t.Context(), executor, 1, "oss", "noop", []byte(`{}`))
+	if err == nil {
+		t.Fatal("expected extension policy failure")
+	}
+	// 面向用户的错误原文已由 TestExecToolHandler / TestExecuteExtensionToolValidating…
+	// 覆盖；此处锁定结构化日志：失败日志保留操作/资产 correlation，但不写 raw error。
+	entries := logs.FilterMessage("extension tool execution failed").All()
+	if len(entries) != 1 {
+		t.Fatalf("failure logs = %d, want 1", len(entries))
+	}
+	cm := entries[0].ContextMap()
+	if _, hasErr := cm["error"]; hasErr {
+		t.Fatalf("failure log must not record raw error payload; got error=%v", cm["error"])
+	}
+	if got := cm["extension"]; got != "oss" {
+		t.Fatalf("failure log extension = %v, want oss", got)
+	}
+	if got := cm["tool"]; got != "noop" {
+		t.Fatalf("failure log tool = %v, want noop", got)
+	}
+	if got := cm["assetID"]; got != int64(1) {
+		t.Fatalf("failure log assetID = %v, want 1", got)
+	}
+	// 结构化日志整体不得出现 payload secret。
+	for _, le := range logs.All() {
+		for _, v := range le.ContextMap() {
+			if s, ok := v.(string); ok && strings.Contains(s, secret) {
+				t.Fatalf("secret leaked into structured log field: %q", s)
+			}
+		}
 	}
 }
 
