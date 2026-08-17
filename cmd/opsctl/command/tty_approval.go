@@ -14,6 +14,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/approval"
+	"github.com/opskat/opskat/internal/repository/asset_repo"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -98,30 +99,59 @@ func normalizedApprovalSubjects(approvalType, command string) []string {
 	return permission.NormalizeGrantPatterns(approvalType, command, permission.GrantOriginSystem)
 }
 
+// ttyApprovalFace 返回这次审批的方向化审批面：CheckType 优先（cp 的单端点审批由
+// cp.go 携带 cp:read/cp:write），回落 req.Type。归一化、提示展示、照抄命令与
+// “永久允许”的规则落点都按它取——把方向面折叠成 "cp" 会丢掉方向。
+func ttyApprovalFace(req approval.ApprovalRequest) string {
+	if req.CheckType != "" {
+		return req.CheckType
+	}
+	return req.Type
+}
+
+// writeTerminalApprovalRule 落一条终端“永久允许”规则（决策 13）。非 cp 面经
+// writeAllowAlwaysRule 接缝（policy.go 的适配器）；方向化的 cp 面不能走它——那个
+// 适配器按资产自身类型选形状，方向面会绕过它的 cp 守卫、把路径写成一条 ssh 命令
+// 规则（实测如此）。这里直接以方向面为 canonical 构造目标调 writePermanentRules：
+// 它才是“与 opsctl policy allow 共用”的唯一写入路径，回显、二次确认、deny 遮蔽
+// 检测与审计一并生效，命中 permission 注册的 cp:read/cp:write 落点。
+func writeTerminalApprovalRule(ctx context.Context, req approval.ApprovalRequest, face string, patterns []string) error {
+	if face == permission.GrantToolCpRead || face == permission.GrantToolCpWrite {
+		asset, err := asset_repo.Asset().Find(ctx, req.AssetID)
+		if err != nil {
+			return err
+		}
+		return writePermanentRules(ctx, permission.RuleAllow,
+			[]policyWriteTarget{{asset: asset, canonical: face, patterns: patterns}})
+	}
+	return writeAllowAlwaysRule(ctx, req.AssetID, face, patterns)
+}
+
 // runTTYApproval 在终端上完成一次单条审批：提示写 out（stderr）、决策从 in（stdin）
 // 读入。空输入（直接回车）、EOF、SIGINT 一律判为拒绝；非白名单输入重新提示。
 // 拒绝与允许都以真实决策写回 ApprovalResult（SourceUserDeny / SourceUserAllow），
 // 供调用方照常落审计；MatchedPattern 记归一化后的主体。
 func runTTYApproval(ctx context.Context, req approval.ApprovalRequest, in io.Reader, out io.Writer) (ApprovalResult, error) {
-	patterns := normalizedApprovalSubjects(req.Type, req.Command)
-	kind := ttyApprovalKind(req.Type)
+	face := ttyApprovalFace(req)
+	patterns := normalizedApprovalSubjects(face, req.Command)
+	kind := ttyApprovalKind(face)
 	matched := strings.Join(patterns, ", ")
 
 	log := logger.Ctx(ctx).With(
-		zap.String("approvalType", req.Type),
+		zap.String("approvalType", face),
 		zap.Int64("assetID", req.AssetID),
 		zap.String("sessionID", req.SessionID),
 	)
 	log.Info("opsctl terminal approval started")
 
 	choice, denyReason := readTTYChoice(ctx, kind, in, out, func() {
-		renderTTYApprovalPrompt(ctx, req, patterns, kind, out)
+		renderTTYApprovalPrompt(ctx, req, face, patterns, kind, out)
 	})
 
 	switch choice {
 	case ttyAllowAlways:
 		// 先写规则、写成功才放行（决策 13）；失败按拒绝收场，错误如实上抛。
-		if err := writeAllowAlwaysRule(ctx, req.AssetID, req.Type, patterns); err != nil {
+		if err := writeTerminalApprovalRule(ctx, req, face, patterns); err != nil {
 			log.Error("opsctl terminal approval failed", zap.Error(err))
 			return denyTTYApproval(matched, req.SessionID), fmt.Errorf("allow always failed: %w", err)
 		}
@@ -230,14 +260,14 @@ func readTTYChoice(ctx context.Context, kind string, in io.Reader, out io.Writer
 	}
 }
 
-// renderTTYApprovalPrompt 渲染单条审批的提示：资产名/ID/类型、归一化后的主体、
-// 审批项自带的 detail，以及按 ApprovalKind 取的选项。给人读的标签跟随策略语言，
-// 选项字母恒为 ASCII 小写。
-func renderTTYApprovalPrompt(ctx context.Context, req approval.ApprovalRequest, patterns []string, kind string, out io.Writer) {
+// renderTTYApprovalPrompt 渲染单条审批的提示：资产名/ID/类型（face，含 cp 方向）、
+// 归一化后的主体、审批项自带的 detail，以及按 ApprovalKind 取的选项。给人读的标签
+// 跟随策略语言，选项字母恒为 ASCII 小写。
+func renderTTYApprovalPrompt(ctx context.Context, req approval.ApprovalRequest, face string, patterns []string, kind string, out io.Writer) {
 	fmt.Fprintln(out, policy.PolicyMsg(ctx, "Approval required", "需要审批")) //nolint:errcheck // 终端呈现尽力而为
 	if req.AssetName != "" || req.AssetID > 0 {
 		fmt.Fprintf(out, "%s %s\n", policy.PolicyMsg(ctx, "Asset:", "资产："), //nolint:errcheck // 终端呈现尽力而为
-			assetIdentity(req.AssetName, req.AssetID, req.Type))
+			assetIdentity(req.AssetName, req.AssetID, face))
 	}
 	fmt.Fprintf(out, "%s\n", policy.PolicyMsg(ctx, "Subject:", "主体：")) //nolint:errcheck // 终端呈现尽力而为
 	for _, p := range patterns {

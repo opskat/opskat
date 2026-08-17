@@ -45,7 +45,7 @@ func TestFormatNeedsAuthorization(t *testing.T) {
 		So(body, ShouldContainSubstring, "ls *")
 		So(body, ShouldContainSubstring, "systemctl status *")
 		So(body, ShouldContainSubstring,
-			"opsctl policy allow 3 --type exec --command 'systemctl restart nginx'")
+			"opsctl policy allow 3 -- 'systemctl restart nginx'")
 
 		Convey("主体里的 shell 元字符照抄时被转义", func() {
 			escaped := []refusalSubject{{
@@ -62,8 +62,8 @@ func TestFormatNeedsAuthorization(t *testing.T) {
 				{assetName: "db-1", assetID: 4, approvalType: "sql", patterns: []string{"SELECT 1"}},
 			}
 			body := formatNeedsAuthorization(context.Background(), entries, nil)
-			So(body, ShouldContainSubstring, "opsctl policy allow 3 --type exec --command 'uptime'")
-			So(body, ShouldContainSubstring, "opsctl policy allow 4 --type sql --command 'SELECT 1'")
+			So(body, ShouldContainSubstring, "opsctl policy allow 3 -- 'uptime'")
+			So(body, ShouldContainSubstring, "opsctl policy allow 4 -- 'SELECT 1'")
 		})
 
 		Convey("给人读的说明跟随策略语言", func() {
@@ -95,9 +95,15 @@ func TestFormatNeedsTTY(t *testing.T) {
 }
 
 func TestPolicyAllowCommand(t *testing.T) {
-	Convey("policyAllowCommand 恒为英文 ASCII 且可直接粘贴", t, func() {
+	Convey("policyAllowCommand 恒为英文 ASCII 且可直接粘贴（T5 落地语法：pattern 位置参数）", t, func() {
 		So(policyAllowCommand(3, "exec", "systemctl restart nginx"), ShouldEqual,
-			"opsctl policy allow 3 --type exec --command 'systemctl restart nginx'")
+			"opsctl policy allow 3 -- 'systemctl restart nginx'")
+		Convey("cp 面按方向给 --type cp:read / cp:write", func() {
+			So(policyAllowCommand(3, "cp:read", "/etc/*"), ShouldEqual,
+				"opsctl policy allow 3 --type cp:read -- '/etc/*'")
+			So(policyAllowCommand(4, "cp:write", "/var/x"), ShouldEqual,
+				"opsctl policy allow 4 --type cp:write -- '/var/x'")
+		})
 	})
 }
 
@@ -158,9 +164,18 @@ func TestRequireApprovalRefusal(t *testing.T) {
 		So(refusal.marker, ShouldEqual, "NEEDS AUTHORIZATION")
 		firstLine, _, _ := strings.Cut(err.Error(), "\n")
 		So(firstLine, ShouldEqual, "NEEDS AUTHORIZATION")
-		So(err.Error(), ShouldContainSubstring, "opsctl policy allow 2 --type exec --command 'echo hi'")
+		So(err.Error(), ShouldContainSubstring, "opsctl policy allow 2 -- 'echo hi'")
 		So(res.Decision, ShouldEqual, aictx.Deny)
 		So(res.DecisionSource, ShouldEqual, aictx.SourcePolicyDeny)
+
+		Convey("cp 主体按 CheckType 方向给出 --type cp:read 的照抄命令", func() {
+			_, err := requireApproval(env.ctx, approval.ApprovalRequest{
+				Type: "cp", CheckType: "cp:read", AssetID: 2, AssetName: "web-1",
+				Command: "/etc/app/config.yml",
+			})
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "opsctl policy allow 2 --type cp:read -- '/etc/app/config.yml'")
+		})
 
 		Convey("无主体（create/update/delete）→ NEEDS TTY，附原命令、不给 policy allow", func() {
 			ctx := withOriginCommand(env.ctx, "opsctl delete asset web-9")
@@ -240,8 +255,8 @@ func TestRequireBatchApprovalPaths(t *testing.T) {
 		var refusal *structuredRefusal
 		So(errors.As(err, &refusal), ShouldBeTrue)
 		So(refusal.marker, ShouldEqual, "NEEDS AUTHORIZATION")
-		So(err.Error(), ShouldContainSubstring, "opsctl policy allow 2 --type exec --command 'uptime'")
-		So(err.Error(), ShouldContainSubstring, "opsctl policy allow 1 --type sql --command 'SELECT 1'")
+		So(err.Error(), ShouldContainSubstring, "opsctl policy allow 2 -- 'uptime'")
+		So(err.Error(), ShouldContainSubstring, "opsctl policy allow 1 -- 'SELECT 1'")
 		So(res.Decision, ShouldEqual, aictx.Deny)
 		So(res.DecisionSource, ShouldEqual, aictx.SourcePolicyDeny)
 		So(res.SessionID, ShouldNotBeEmpty)

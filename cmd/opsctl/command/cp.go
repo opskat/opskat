@@ -473,8 +473,11 @@ func requireCpBatchApproval(ctx context.Context, subjects []cpSubject, detail st
 		case aictx.Allow:
 			allowed = result
 		default:
+			// Type 取原始审批面而非 ApprovalTypeFor 的折叠值：cp:read/cp:write 的方向
+			// 要跟着条目走（桌面弹窗的 TypeBadge 不认识的标签按原样展示），结构化拒绝
+			// 的照抄命令与终端批量提示按它给 --type cp:read/cp:write。
 			items = append(items, approval.BatchItem{
-				Type:      permission.ApprovalTypeFor(subject.approvalType),
+				Type:      subject.approvalType,
 				AssetID:   subject.assetID,
 				AssetName: subject.assetName,
 				Command:   subject.command,

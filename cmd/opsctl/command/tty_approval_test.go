@@ -263,6 +263,32 @@ func TestRunTTYBatchApproval(t *testing.T) {
 	})
 }
 
+// cp 的终端“永久允许”必须带上方向落规则：CheckType 携带 cp:read/cp:write，规则形态
+// 是 “cp:read:<glob>”（permission 注册的方向化落点）。若把方向面交给按资产类型选
+// 形状的 writeAllowAlwaysRuleImpl，路径会被写成一条 ssh 命令规则——本测试用前缀断言
+// 挡住这条歧路。
+func TestRunTTYApprovalCpDirectionAllowAlways(t *testing.T) {
+	Convey("cp 的终端永久允许按 CheckType 方向落 cp:read:/cp:write: 规则", t, func() {
+		env := newPolicyTestEnv(t)
+		env.expectSSHAsset(t, 5, "web-01", nil)
+
+		var out bytes.Buffer
+		res, err := runTTYApproval(env.ctx, approval.ApprovalRequest{
+			Type: "cp", CheckType: "cp:read", AssetID: 5, AssetName: "web-1",
+			Command: "/etc/app/config.yml", SessionID: "sess-cp",
+		}, strings.NewReader("p\n"), &out)
+
+		So(err, ShouldBeNil)
+		So(res.Decision, ShouldEqual, aictx.Allow)
+		So(res.DecisionSource, ShouldEqual, aictx.SourceUserAllow)
+		So(env.updates, ShouldHaveLength, 1)
+		p, perr := env.updates[0].GetCommandPolicy()
+		So(perr, ShouldBeNil)
+		So(p.AllowList, ShouldContain, "cp:read:/etc/app/config.yml")
+		So(p.AllowList, ShouldNotContain, "/etc/app/config.yml")
+	})
+}
+
 // preserveTTYSeams 固定终端探测为非交互并隔离流注入缝，测试互不渗漏，
 // 也保证交互式终端里跑 go test 时判据不被真实的 TTY 干扰。
 func preserveTTYSeams(t *testing.T) {

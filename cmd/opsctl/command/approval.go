@@ -203,14 +203,17 @@ func refuseApproval(ctx context.Context, req approval.ApprovalRequest, hints []s
 	var refusal *structuredRefusal
 	var matched string
 	if req.AssetID > 0 && req.Command != "" {
-		patterns := normalizedApprovalSubjects(req.Type, req.Command)
+		// face 取 CheckType（方向化：cp 的 cp:read/cp:write），回落 req.Type——照抄命令
+		// 与归一化主体都得按它给，折叠成 "cp" 会丢方向。
+		face := ttyApprovalFace(req)
+		patterns := normalizedApprovalSubjects(face, req.Command)
 		matched = strings.Join(patterns, ", ")
 		refusal = &structuredRefusal{
 			marker: needsAuthorizationMarker,
 			body: formatNeedsAuthorization(ctx, []refusalSubject{{
 				assetName:    req.AssetName,
 				assetID:      req.AssetID,
-				approvalType: req.Type,
+				approvalType: face,
 				patterns:     patterns,
 			}}, hints),
 		}
@@ -321,11 +324,14 @@ func formatNeedsTTY(ctx context.Context, req approval.ApprovalRequest, originCmd
 }
 
 // policyAllowCommand 渲染人应照抄执行的 opsctl policy allow 命令原文（shell 已转义、
-// 恒定英文 ASCII、可直接粘贴）。T5 拥有 policy 子命令的最终 CLI 语法；若落地的
-// 旗标与此不同，这里是对齐的唯一落点——所有结构化拒绝共用它。
-func policyAllowCommand(assetID int64, approvalType, pattern string) string {
-	return fmt.Sprintf("opsctl policy allow %d --type %s --command %s",
-		assetID, approvalType, shellQuote(pattern))
+// 恒定英文 ASCII、可直接粘贴），语法对齐 policy.go 落地的 CLI：pattern 是 "--" 之后
+// 的位置参数；资产目标可省略 --type（形状由资产自身类型决定）。cp 面不是资产类型，
+// --type 在这里选择方向化的规则形状，不可省略。
+func policyAllowCommand(assetID int64, face, pattern string) string {
+	if face == permission.GrantToolCpRead || face == permission.GrantToolCpWrite {
+		return fmt.Sprintf("opsctl policy allow %d --type %s -- %s", assetID, face, shellQuote(pattern))
+	}
+	return fmt.Sprintf("opsctl policy allow %d -- %s", assetID, shellQuote(pattern))
 }
 
 // shellQuote 按 POSIX 单引号规则包裹 s（内嵌的单引号用闭合-转义-重开的方式转义），
