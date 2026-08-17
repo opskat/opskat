@@ -558,12 +558,13 @@ func writeRuleAudit(ctx context.Context, side permission.RuleSide, t *policyWrit
 
 // writeAllowAlwaysRuleImpl 接通 tty_approval.go 的接缝：patterns 已由调用方按
 // GrantOriginSystem 归一化；形状由资产自身的类型决定。cp 面不带方向，无法落一条
-// 不撒谎的永久规则，如实失败（fail-closed），把方向化的命令交给人。
+// 不撒谎的永久规则，如实失败（fail-closed），把方向化的命令交给人（face 进 pattern：
+// 资产目标的 --type 是类型断言，cp 面不是资产类型，走 --type 会被拒收）。
 func writeAllowAlwaysRuleImpl(ctx context.Context, assetID int64, approvalType string, patterns []string) error {
 	if approvalType == permission.GrantToolCp {
 		return errors.New(policy.PolicyMsg(ctx,
-			"a permanent cp rule needs a direction this approval does not carry; choose allow once or deny, or run: opsctl policy allow <id> --type cp:read -- <path>",
-			"永久 cp 规则需要方向，而这次审批没有带；请选本次允许或拒绝，或执行：opsctl policy allow <id> --type cp:read -- <路径>"))
+			"a permanent cp rule needs a direction this approval does not carry; choose allow once or deny, or run: opsctl policy allow <id> -- 'cp:read:<path>'",
+			"永久 cp 规则需要方向，而这次审批没有带；请选本次允许或拒绝，或执行：opsctl policy allow <id> -- 'cp:read:<路径>'"))
 	}
 	asset, err := asset_repo.Asset().Find(ctx, assetID)
 	if err != nil {

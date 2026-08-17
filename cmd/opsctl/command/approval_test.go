@@ -13,6 +13,8 @@ import (
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 
 	. "github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // restoreAssetRepoAfter 无条件恢复 asset_repo 的全局注册。既有 harness（exec/delete
@@ -98,13 +100,87 @@ func TestPolicyAllowCommand(t *testing.T) {
 	Convey("policyAllowCommand 恒为英文 ASCII 且可直接粘贴（T5 落地语法：pattern 位置参数）", t, func() {
 		So(policyAllowCommand(3, "exec", "systemctl restart nginx"), ShouldEqual,
 			"opsctl policy allow 3 -- 'systemctl restart nginx'")
-		Convey("cp 面按方向给 --type cp:read / cp:write", func() {
+		Convey("cp 面把方向前缀放进 pattern（--type 在资产目标上是类型断言，cp 面不是资产类型）", func() {
 			So(policyAllowCommand(3, "cp:read", "/etc/*"), ShouldEqual,
-				"opsctl policy allow 3 --type cp:read -- '/etc/*'")
+				"opsctl policy allow 3 -- 'cp:read:/etc/*'")
 			So(policyAllowCommand(4, "cp:write", "/var/x"), ShouldEqual,
-				"opsctl policy allow 4 --type cp:write -- '/var/x'")
+				"opsctl policy allow 4 -- 'cp:write:/var/x'")
 		})
 	})
+}
+
+// shellSplitOpsctlLine 把 shellQuote 产出的照抄命令行拆回 policy 子命令参数（去掉
+// "opsctl policy " 前缀；单引号段按闭合-转义-重开规则还原，即 shellQuote 的逆），
+// 使照抄命令可以在测试里原样驱动 policy CLI。
+func shellSplitOpsctlLine(t *testing.T, line string) []string {
+	t.Helper()
+	rest, ok := strings.CutPrefix(line, "opsctl policy ")
+	require.True(t, ok, "line must start with 'opsctl policy ': %s", line)
+	var args []string
+	var cur strings.Builder
+	flush := func() {
+		if cur.Len() > 0 {
+			args = append(args, cur.String())
+			cur.Reset()
+		}
+	}
+	for i := 0; i < len(rest); {
+		switch rest[i] {
+		case '\'':
+			j := i + 1
+			for {
+				k := strings.IndexByte(rest[j:], '\'')
+				require.GreaterOrEqual(t, k, 0, "unbalanced quote in %q", line)
+				cur.WriteString(rest[j : j+k])
+				j += k
+				if strings.HasPrefix(rest[j:], `'\''`) {
+					cur.WriteByte('\'')
+					j += 4
+					continue
+				}
+				break
+			}
+			i = j + 1
+		case ' ', '\t':
+			flush()
+			i++
+		default:
+			cur.WriteByte(rest[i])
+			i++
+		}
+	}
+	flush()
+	return args
+}
+
+// 结构化拒绝契约（spec：NEEDS AUTHORIZATION 附带"人应当照抄执行的 opsctl policy allow
+// 命令原文，已按 shell 语法转义、可直接粘贴"）：cp 面发出的照抄行拆词后原样驱动
+// policy CLI 必须执行成功并落一条方向化 cp 规则——资产目标的 --type 是资产类型断言，
+// cp 面不是资产类型，走 --type 的照抄行会被断言拒收，等于给了人一条废命令。
+// 转义过 glob 元字符的主体（cpGrantPatterns 的 GrantOriginSystem 形态）也必须无损
+// 落库：shell 单引号原样保字节，归一化的 shell AST 往返不剥掉 `\*`。
+func TestRefusalPolicyAllowLineForCpIsPasteable(t *testing.T) {
+	cases := []struct {
+		face    string
+		pattern string
+	}{
+		{"cp:read", "/etc/app/config.yml"},
+		{"cp:write", "/etc/app/config.yml"},
+		{"cp:write", `/etc/app/typ*file`},
+	}
+	for _, tc := range cases {
+		env := newPolicyTestEnv(t)
+		env.expectSSHAsset(t, 5, "web-01", nil)
+
+		line := policyAllowCommand(5, tc.face, tc.pattern)
+		code := env.run(shellSplitOpsctlLine(t, line)...)
+
+		require.Equal(t, 0, code, "copy-paste line must execute when pasted: %s", line)
+		require.Len(t, env.updates, 1)
+		p, err := env.updates[0].GetCommandPolicy()
+		require.NoError(t, err)
+		assert.Contains(t, p.AllowList, tc.face+":"+tc.pattern)
+	}
 }
 
 // 退出码契约：结构化拒绝 → 3，stderr 首行是裸标记（无 "Error: " 前缀）；
@@ -168,13 +244,13 @@ func TestRequireApprovalRefusal(t *testing.T) {
 		So(res.Decision, ShouldEqual, aictx.Deny)
 		So(res.DecisionSource, ShouldEqual, aictx.SourcePolicyDeny)
 
-		Convey("cp 主体按 CheckType 方向给出 --type cp:read 的照抄命令", func() {
+		Convey("cp 主体按 CheckType 方向给出 face 前缀 pattern 的照抄命令", func() {
 			_, err := requireApproval(env.ctx, approval.ApprovalRequest{
 				Type: "cp", CheckType: "cp:read", AssetID: 2, AssetName: "web-1",
 				Command: "/etc/app/config.yml",
 			})
 			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "opsctl policy allow 2 --type cp:read -- '/etc/app/config.yml'")
+			So(err.Error(), ShouldContainSubstring, "opsctl policy allow 2 -- 'cp:read:/etc/app/config.yml'")
 		})
 
 		Convey("无主体（create/update/delete）→ NEEDS TTY，附原命令、不给 policy allow", func() {

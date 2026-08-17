@@ -326,10 +326,11 @@ func formatNeedsTTY(ctx context.Context, req approval.ApprovalRequest, originCmd
 // policyAllowCommand 渲染人应照抄执行的 opsctl policy allow 命令原文（shell 已转义、
 // 恒定英文 ASCII、可直接粘贴），语法对齐 policy.go 落地的 CLI：pattern 是 "--" 之后
 // 的位置参数；资产目标可省略 --type（形状由资产自身类型决定）。cp 面不是资产类型，
-// --type 在这里选择方向化的规则形状，不可省略。
+// 走 --type 会被资产目标的类型断言拒收，方向前缀必须放进 pattern——"cp:<dir>:<glob>"
+// 本就是 CommandPolicy 里方向化 cp 规则的落库形态。
 func policyAllowCommand(assetID int64, face, pattern string) string {
 	if face == permission.GrantToolCpRead || face == permission.GrantToolCpWrite {
-		return fmt.Sprintf("opsctl policy allow %d --type %s -- %s", assetID, face, shellQuote(pattern))
+		return fmt.Sprintf("opsctl policy allow %d -- %s", assetID, shellQuote(face+":"+pattern))
 	}
 	return fmt.Sprintf("opsctl policy allow %d -- %s", assetID, shellQuote(pattern))
 }
