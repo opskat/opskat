@@ -31,8 +31,8 @@ import (
 
 // opsctl policy 家族（spec「Rule management: opsctl policy」）：show 只读免 TTY；
 // allow / deny / rm 只在交互式终端中运行，非交互以退出码 3 + NEEDS TTY 拒绝且不落
-// 任何改动——这是"AI 不能给自己扩权"的唯一执行点。group / attach / detach 子族由
-// 后续任务交付。
+// 任何改动——这是"AI 不能给自己扩权"的唯一执行点。group 子族与 attach / detach
+// （policy_group.go）沿用同一门禁与回显/确认/审计骨架。
 
 // policyBroaderMark 是"结果比请求的主体更宽"的标注（决策 12）的英文文案，中文经
 // PolicyMsg 给出；它给人读，随 locale。
@@ -59,6 +59,12 @@ func cmdPolicy(ctx context.Context, args []string, session string) int {
 		return cmdPolicyWrite(ctx, permission.RuleDeny, args[1:], session)
 	case "rm":
 		return cmdPolicyRm(ctx, args[1:], session)
+	case "group":
+		return cmdPolicyGroup(ctx, args[1:], session)
+	case "attach":
+		return cmdPolicyAttachDetach(ctx, true, args[1:])
+	case "detach":
+		return cmdPolicyAttachDetach(ctx, false, args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown policy subcommand %q\n\nRun 'opsctl policy --help' for usage.\n", args[0])
 		return 1
@@ -71,6 +77,15 @@ func printPolicyUsage() {
   opsctl policy allow <asset>... | --group <group>...  [--type <asset-type>] -- <pattern>...
   opsctl policy deny  <asset>... | --group <group>...  [--type <asset-type>] -- <pattern>...
   opsctl policy rm    <asset>  | --group <group>  <id>
+  opsctl policy group list   [--type <policy-type>]
+  opsctl policy group show   <group-id>
+  opsctl policy group create --name <name> --type <policy-type>
+  opsctl policy group copy   <group-id> --name <name>
+  opsctl policy group allow  <group-id> -- <pattern>...
+  opsctl policy group deny   <group-id> -- <pattern>...
+  opsctl policy group rm     <group-id> [<entry-id>]
+  opsctl policy attach <asset> | --group <group>  <group-id>...
+  opsctl policy detach <asset> | --group <group>  <group-id>...
 
 Subcommands:
   show    Read-only view of the effective rules (no TTY needed). For an asset it
@@ -82,12 +97,20 @@ Subcommands:
   deny    Write permanent deny rules, same gating as allow.
   rm      Remove one entry listed by show: the target's own allow/deny rule or
           a grant item (g<id>). Interactive terminal only.
+  group   Manage policy groups (list/show/create/copy/allow/deny/rm); list and
+          show are read-only, the rest are interactive only. Run
+          'opsctl policy group --help' for details.
+  attach  Attach policy groups to an asset or asset group. A group whose type
+          does not match the target fails before any write. Interactive only.
+  detach  Remove policy-group references from an asset or asset group.
+          Interactive only.
 
 Options:
   --type <asset-type>  On an asset target: a type assertion (must match the
                        asset's type). On a group target: REQUIRED -- a group
                        has no type, this selects which policy shape the rules
-                       land in.
+                       land in. For 'policy group list/create' it is the policy
+                       type (command/query/redis/mongo/kafka/k8s/etcd/oss).
   --group <group>      Target an asset group instead of assets (repeatable).
 
 Examples:
@@ -98,6 +121,12 @@ Examples:
   opsctl policy deny web-01 -- 'rm -rf *'
   opsctl policy rm web-01 2
   opsctl policy rm web-01 g12
+  opsctl policy group list --type query
+  opsctl policy group copy builtin:linux-readonly --name my-readonly
+  opsctl policy group allow 5 -- 'uptime'
+  opsctl policy group rm 5 3
+  opsctl policy attach web-01 builtin:linux-readonly
+  opsctl policy attach --group production builtin:sql-readonly
 `)
 }
 
@@ -331,11 +360,7 @@ func writePermanentRules(ctx context.Context, side permission.RuleSide, targets 
 		}
 	}
 
-	ok, err := confirmRuleWrite(ctx, side, targets)
-	if err != nil {
-		return err
-	}
-	if !ok {
+	if !confirmRuleWrite(ctx, side, targets) {
 		log.Info("opsctl policy rule write declined at confirmation",
 			zap.String("side", ruleSideName(side)), zap.Int("targets", len(targets)))
 		return errors.New("declined: nothing written")
@@ -445,18 +470,37 @@ func shadowRefusal(ctx context.Context, t *policyWriteTarget, sh *permission.Sou
 	return errors.New(strings.TrimRight(sb.String(), "\n"))
 }
 
-// confirmRuleWrite 回显将要写入的规则原文并二次确认（决策 12）；结果比请求主体更宽
-// 时明确标注。y/yes 之外（含空输入与 EOF）一律不写。
-func confirmRuleWrite(ctx context.Context, side permission.RuleSide, targets []policyWriteTarget) (bool, error) {
-	in, out := policyConfirmStreams()
-	sideWord := "allow"
-	if side == permission.RuleDeny {
-		sideWord = "deny"
+// landedEcho 是回显的一组落点：目标标签 + canonical 类型 + 实际落的规则（决策 12 的
+// Broader 标注在这里渲染）。
+type landedEcho struct {
+	label     string
+	canonical string
+	landed    []permission.LandedRule
+}
+
+// askRuleConfirm 打印 prompt 并读一行；y/yes 之外（含空输入与 EOF）一律不写。
+func askRuleConfirm(in io.Reader, out io.Writer, prompt string) bool {
+	fmt.Fprintf(out, "%s ", prompt) //nolint:errcheck // 终端呈现尽力而为
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && line == "" {
+		return false
 	}
+	switch strings.TrimSpace(line) {
+	case "y", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+// confirmLandedRules 回显将要写入的规则原文并二次确认（决策 12）；结果比请求主体更宽
+// 时明确标注。policy allow/deny 与 policy group allow/deny 共用。
+func confirmLandedRules(ctx context.Context, sideWord string, groups []landedEcho) bool {
+	in, out := policyConfirmStreams()
 	fmt.Fprintf(out, "%s\n", policy.PolicyMsg(ctx, "rules to be written:", "将要写入的规则：")) //nolint:errcheck // 终端呈现尽力而为
-	for _, t := range targets {
-		fmt.Fprintf(out, "%s (%s):\n", t.label(), t.canonical) //nolint:errcheck // 终端呈现尽力而为
-		for _, l := range t.landed {
+	for _, g := range groups {
+		fmt.Fprintf(out, "%s (%s):\n", g.label, g.canonical) //nolint:errcheck // 终端呈现尽力而为
+		for _, l := range g.landed {
 			if l.Broader {
 				fmt.Fprintf(out, "  %s %s %s\n", sideWord, l.Rule, policy.PolicyMsg(ctx, policyBroaderMark, "（比请求的主体更宽）")) //nolint:errcheck // 终端呈现尽力而为
 			} else {
@@ -464,18 +508,16 @@ func confirmRuleWrite(ctx context.Context, side permission.RuleSide, targets []p
 			}
 		}
 	}
-	fmt.Fprintf(out, "%s ", policy.PolicyMsg(ctx, "write these rules? [y/N]", "写入这些规则？[y/N]")) //nolint:errcheck // 终端呈现尽力而为
+	return askRuleConfirm(in, out, policy.PolicyMsg(ctx, "write these rules? [y/N]", "写入这些规则？[y/N]"))
+}
 
-	line, err := bufio.NewReader(in).ReadString('\n')
-	if err != nil && line == "" {
-		return false, nil
+// confirmRuleWrite 是资产/组目标的回显确认薄适配：目标标签 + canonical + 落点。
+func confirmRuleWrite(ctx context.Context, side permission.RuleSide, targets []policyWriteTarget) bool {
+	groups := make([]landedEcho, 0, len(targets))
+	for _, t := range targets {
+		groups = append(groups, landedEcho{label: t.label(), canonical: t.canonical, landed: t.landed})
 	}
-	switch strings.TrimSpace(line) {
-	case "y", "yes":
-		return true, nil
-	default:
-		return false, nil
-	}
+	return confirmLandedRules(ctx, ruleSideName(side), groups)
 }
 
 func ruleSideName(side permission.RuleSide) string {
