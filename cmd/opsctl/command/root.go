@@ -124,6 +124,8 @@ func Execute() int {
 		return cmdBatch(ctx, handlers, args, resolvedSession)
 	case "grant":
 		return cmdGrant(ctx, args, resolvedSession)
+	case "policy":
+		return cmdPolicy(ctx, args, resolvedSession)
 	case "ext":
 		return cmdExt(args)
 	default:
@@ -179,6 +181,7 @@ Commands:
   delete    Delete an asset or group (always asks for desktop confirmation)
   cp        Copy files between local and remote servers (scp-style)
   batch     Execute multiple commands in parallel across assets
+  policy    Manage permanent permission rules (show / allow / deny / rm)
   grant     Submit a batch grant for approval
   ext       Manage and execute extension tools (list, exec)
   version   Print version information
