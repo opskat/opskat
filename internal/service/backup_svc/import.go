@@ -96,6 +96,13 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 					}
 					cred.PrivateKey = encrypted
 				}
+				if bc.PlainPassphrase != "" {
+					encrypted, err := crypto.Encrypt(bc.PlainPassphrase)
+					if err != nil {
+						return fmt.Errorf("加密 passphrase 失败: %w", err)
+					}
+					cred.Passphrase = encrypted
+				}
 				if err := tx.Create(&cred).Error; err != nil {
 					return fmt.Errorf("创建凭据 %s 失败: %w", cred.Name, err)
 				}

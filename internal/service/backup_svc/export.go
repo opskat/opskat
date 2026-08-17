@@ -273,6 +273,14 @@ func exportCredentials(ctx context.Context, assets []*asset_entity.Asset, crypto
 			bc.PlainPrivateKey = plain
 			bc.PrivateKey = "" // 清除密文
 		}
+		if cred.Passphrase != "" {
+			plain, err := crypto.Decrypt(cred.Passphrase)
+			if err != nil {
+				return nil, fmt.Errorf("解密凭据 %s passphrase 失败: %w", cred.Name, err)
+			}
+			bc.PlainPassphrase = plain
+			bc.Passphrase = "" // 清除密文
+		}
 		result = append(result, bc)
 	}
 	return result, nil

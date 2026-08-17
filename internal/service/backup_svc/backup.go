@@ -22,6 +22,7 @@ type BackupCredential struct {
 	credential_entity.Credential
 	PlainPassword   string `json:"plain_password,omitempty"`
 	PlainPrivateKey string `json:"plain_private_key,omitempty"`
+	PlainPassphrase string `json:"plain_passphrase,omitempty"`
 }
 
 // BackupForward 端口转发备份条目（config + rules 打包）
