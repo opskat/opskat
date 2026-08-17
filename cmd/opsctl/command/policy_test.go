@@ -522,3 +522,23 @@ func TestPolicyOutputFollowsLocaleButMarkerStaysASCII(t *testing.T) {
 	assert.Equal(t, needsTTYMarker, lines[0])
 	assert.Contains(t, env.stderrBuf.String(), "终端", "human-readable body follows locale")
 }
+
+// face 进 pattern 的照抄形态（spec 定稿：资产目标的 --type 是资产类型断言、可省略，
+// cp 的 face 属于 pattern 空间——cp:read:/cp:write: 前缀即 grant 层的方向隔离语义）：
+// `opsctl policy allow <asset> -- 'cp:write:/x'` 必须可执行，且原样落成该资产
+// CommandPolicy 里的方向化 cp 规则——不能被拒收，也不能丢前缀落成普通命令规则。
+func TestPolicyAllowFacePrefixedPatternLandsDirectionalCpRule(t *testing.T) {
+	for _, facePat := range []string{"cp:write:/etc/app/config.yml", "cp:read:/var/log/app/"} {
+		env := newPolicyTestEnv(t)
+		env.expectSSHAsset(t, 5, "web-01", nil)
+
+		code := env.run("allow", "web-01", "--", facePat)
+
+		require.Equal(t, 0, code, "face-prefixed pattern must not be rejected")
+		require.Len(t, env.updates, 1)
+		p, err := env.updates[0].GetCommandPolicy()
+		require.NoError(t, err)
+		assert.Contains(t, p.AllowList, facePat, "landed rule keeps the directional cp prefix verbatim")
+		assert.NotContains(t, p.DenyList, facePat)
+	}
+}
