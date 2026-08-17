@@ -79,8 +79,9 @@ func Execute() int {
 		return 1
 	}
 
-	// CLI 默认使用英文策略消息
-	ctx = aictx.WithPolicyLang(ctx, "en")
+	// 策略消息语言跟随系统 locale（LC_ALL → LC_MESSAGES → LANG）
+	ctx = aictx.WithPolicyLang(ctx, resolvePolicyLang(
+		os.Getenv("LC_ALL"), os.Getenv("LC_MESSAGES"), os.Getenv("LANG")))
 
 	// Load app config (MCP port, etc.)
 	resolvedDataDir := *dataDir
