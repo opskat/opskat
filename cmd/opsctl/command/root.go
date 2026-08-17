@@ -122,8 +122,6 @@ func Execute() int {
 		return cmdSSH(ctx, args)
 	case "batch":
 		return cmdBatch(ctx, handlers, args, resolvedSession)
-	case "grant":
-		return cmdGrant(ctx, args, resolvedSession)
 	case "policy":
 		return cmdPolicy(ctx, args, resolvedSession)
 	case "ext":
@@ -142,6 +140,16 @@ func applyEnvironmentOverrides(dataDir, masterKey string) (string, string) {
 		masterKey = os.Getenv("OPSKAT_MASTER_KEY")
 	}
 	return dataDir, masterKey
+}
+
+// stringSliceFlag 支持重复指定的字符串 flag（如 --group a --group b），
+// policy 族子命令的目标解析使用。
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string { return fmt.Sprintf("%v", *s) }
+func (s *stringSliceFlag) Set(val string) error {
+	*s = append(*s, val)
+	return nil
 }
 
 // isCLIUsageHelp reports whether remaining (the CLI args after global flags) means
@@ -182,7 +190,6 @@ Commands:
   cp        Copy files between local and remote servers (scp-style)
   batch     Execute multiple commands in parallel across assets
   policy    Manage permanent permission rules (show / allow / deny / rm)
-  grant     Submit a batch grant for approval
   ext       Manage and execute extension tools (list, exec)
   version   Print version information
 
