@@ -24,6 +24,14 @@ func TestTopLevelUsageNamesCredentialReadCommands(t *testing.T) {
 	require.Contains(t, usage, "opsctl get credential")
 }
 
+// session 已降为内部概念：使用说明不得再宣传已删除的 --session 全局 flag
+// 与 session 子命令。
+func TestTopLevelUsageRetiresSessionSurface(t *testing.T) {
+	usage := captureStderr(t, printUsage)
+	require.NotContains(t, usage, "--session")
+	require.NotContains(t, usage, "opsctl session")
+}
+
 func TestCreateAssetUsageDocumentsGenericAndSafeCredentialInputs(t *testing.T) {
 	usage := captureStderr(t, printCreateAssetUsage)
 	for _, want := range []string{

@@ -29,7 +29,6 @@ func Execute() int {
 	globalFlags := flag.NewFlagSet("opsctl", flag.ContinueOnError)
 	dataDir := globalFlags.String("data-dir", "", "Override the application data directory")
 	masterKey := globalFlags.String("master-key", "", "Override the master encryption key (env: OPSKAT_MASTER_KEY)")
-	sessionFlag := globalFlags.String("session", "", "Session ID for batch approval (env: OPSKAT_SESSION_ID)")
 
 	// Find the first non-flag argument (verb) position
 	verbIdx := 1
@@ -99,8 +98,8 @@ func Execute() int {
 	defer sshPool.Close()
 	ctx = helper.WithSSHPool(ctx, sshPool)
 
-	// Resolve session ID: flag > env > active-session file
-	resolvedSession := resolveSessionID(*sessionFlag)
+	// Resolve the active session ID from the data dir (machine-wide single session)
+	resolvedSession := resolveSessionID()
 
 	switch verb {
 	case "list":
@@ -125,8 +124,6 @@ func Execute() int {
 		return cmdBatch(ctx, handlers, args, resolvedSession)
 	case "grant":
 		return cmdGrant(ctx, args, resolvedSession)
-	case "session":
-		return cmdSession(args)
 	case "ext":
 		return cmdExt(args)
 	default:
@@ -183,7 +180,6 @@ Commands:
   cp        Copy files between local and remote servers (scp-style)
   batch     Execute multiple commands in parallel across assets
   grant     Submit a batch grant for approval
-  session   Manage approval sessions (start, end, status)
   ext       Manage and execute extension tools (list, exec)
   version   Print version information
 
@@ -192,20 +188,16 @@ Note:
   Use "group/name" to disambiguate when multiple assets share a name.
   Write operations (exec, cp, create, update, delete) require desktop app approval.
 
-Approval & Sessions:
-  Write operations require approval from the running desktop app. On first
-  write, a session is auto-created in .opskat/sessions/. When the user
-  approves with "Remember", that command pattern is saved for the session,
-  so later matching operations skip approval. Sessions expire after 24 hours.
+Approval:
+  Write operations require approval from the running desktop app. When the user
+  approves with "Remember", that command pattern is saved, so later matching
+  operations skip approval and expire after 24 hours.
 
 Global Flags:
   --data-dir <path>     Override the application data directory
                         (default: platform-specific, e.g. ~/Library/Application Support/opskat)
   --master-key <key>    Override the master encryption key for credential decryption
                         (env: OPSKAT_MASTER_KEY)
-  --session <id>        Session ID for approval (env: OPSKAT_SESSION_ID)
-                        Auto-created if not specified. Use 'opsctl session start'
-                        to explicitly create one.
 
 Run 'opsctl <command> --help' for more information on a specific command.
 
@@ -229,7 +221,6 @@ Examples:
   opsctl delete group 3 --delete-assets           Delete a group and its assets
   opsctl cp ./config.yml web-server:/etc/app/     Upload a file
   opsctl cp 1:/var/log/app.log ./app.log          Download a file
-  opsctl --session $ID exec web-01 -- uptime      Use explicit session
   opsctl ext list                                   List installed extensions
   opsctl ext exec oss list_buckets --args '{}'       Execute extension tool
 `)

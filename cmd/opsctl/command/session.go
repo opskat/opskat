@@ -1,78 +1,37 @@
 package command
 
 import (
-	"crypto/sha256"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/opskat/opskat/internal/bootstrap"
+
 	"github.com/cago-frame/cago/pkg/logger"
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
 const sessionMaxAge = 24 * time.Hour
 
-const opskatDir = ".opskat"
+// sessionDataDir 返回 session 文件所在的 data dir（与 opskat.db / master.key /
+// config.json 同处）。变量而非直接调用，是为了让 session 解析与写入在测试里
+// 指向 t.TempDir()，不碰真实数据目录。
+var sessionDataDir = bootstrap.ResolvedDataDir
 
-// sessionScope returns a short hash identifying the current terminal/session context.
-// Uses terminal session env vars to differentiate concurrent sessions in the same directory.
-func sessionScope() string {
-	// Check well-known terminal session env vars
-	candidates := []string{
-		"OPSKAT_SESSION_ID", // our own (desktop app injects this)
-		"TERM_SESSION_ID",   // macOS Terminal.app
-		"ITERM_SESSION_ID",  // iTerm2
-		"WT_SESSION",        // Windows Terminal
-		"WINDOWID",          // X11
-	}
-	for _, key := range candidates {
-		if v := os.Getenv(key); v != "" {
-			h := sha256.Sum256([]byte(key + "=" + v))
-			return fmt.Sprintf("%x", h[:8])
-		}
-	}
-	// Fallback: use "default" scope (single shared session)
-	return "default"
+// sessionFilePath 返回 data dir 里的唯一 session 文件路径。
+func sessionFilePath(dataDir string) string {
+	return filepath.Join(dataDir, "session.id")
 }
 
-// sessionFilePath returns the path to the session file for the current scope.
-// e.g. .opskat/sessions/a1b2c3d4e5f6
-func sessionFilePath(opskatPath string) string {
-	return filepath.Join(opskatPath, "sessions", sessionScope())
+// resolveSessionID 解析当前生效的会话 ID（data dir 级单例）。
+// 文件不存在、内容无效或按 mtime 已过 24 小时都返回空串。
+func resolveSessionID() string {
+	return readSessionFile(sessionFilePath(sessionDataDir()))
 }
 
-// findOpskatDir walks up from CWD looking for .opskat/ directory.
-// Returns empty string if not found.
-func findOpskatDir() string {
-	dir, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	for {
-		path := filepath.Join(dir, opskatDir)
-		if info, err := os.Stat(path); err == nil && info.IsDir() {
-			return path
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return ""
-}
-
-// readActiveSession reads the session ID for the current scope.
-// Returns empty string if file doesn't exist, is invalid, or has expired (24h).
-func readActiveSession() string {
-	dir := findOpskatDir()
-	if dir == "" {
-		return ""
-	}
-	path := sessionFilePath(dir)
+// readSessionFile 读取 session 文件；过期时顺带移除文件本身。
+func readSessionFile(path string) string {
 	info, err := os.Stat(path)
 	if err != nil {
 		return ""
@@ -82,10 +41,9 @@ func readActiveSession() string {
 		if err := os.Remove(path); err != nil {
 			logger.Default().Warn("remove expired session file", zap.String("path", path), zap.Error(err))
 		}
-		cleanupSessionsDir(dir)
 		return ""
 	}
-	data, err := os.ReadFile(path) //nolint:gosec // path is constructed from known .opskat dir
+	data, err := os.ReadFile(path) //nolint:gosec // path is constructed from the data dir
 	if err != nil {
 		return ""
 	}
@@ -96,131 +54,8 @@ func readActiveSession() string {
 	return id
 }
 
-// writeActiveSession writes the session ID for the current scope in CWD.
+// writeActiveSession 把会话 ID 写成 data dir 里的唯一 session 文件。
+// data dir 由 bootstrap.Init 建好，这里不重复创建。
 func writeActiveSession(id string) error {
-	sessDir := filepath.Join(opskatDir, "sessions")
-	if err := os.MkdirAll(sessDir, 0755); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(sessDir, sessionScope()), []byte(id+"\n"), 0644)
-}
-
-// resolveSessionID resolves the session ID from flag, env, or session file.
-func resolveSessionID(flagSession string) string {
-	if flagSession != "" {
-		return flagSession
-	}
-	if env := os.Getenv("OPSKAT_SESSION_ID"); env != "" {
-		return env
-	}
-	return readActiveSession()
-}
-
-// cmdSession handles the "session" verb.
-func cmdSession(args []string) int {
-	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
-		printSessionUsage()
-		if len(args) > 0 {
-			return 0
-		}
-		return 1
-	}
-
-	switch args[0] {
-	case "start":
-		return cmdSessionStart()
-	case "end":
-		return cmdSessionEnd()
-	case "status":
-		return cmdSessionStatus()
-	default:
-		fmt.Fprintf(os.Stderr, "Error: unknown session subcommand %q\n\nRun 'opsctl session --help' for usage.\n", args[0])
-		return 1
-	}
-}
-
-func cmdSessionStart() int {
-	id := uuid.New().String()
-	if err := writeActiveSession(id); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: failed to write session file: %v\n", err)
-		return 1
-	}
-	fmt.Println(id)
-	return 0
-}
-
-func cmdSessionEnd() int {
-	dir := findOpskatDir()
-	if dir == "" {
-		fmt.Fprintln(os.Stderr, "No active session.")
-		return 0
-	}
-	path := sessionFilePath(dir)
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return 1
-	}
-	cleanupSessionsDir(dir)
-	fmt.Fprintln(os.Stderr, "Session ended.")
-	return 0
-}
-
-// cleanupSessionsDir removes sessions/ if empty.
-func cleanupSessionsDir(opskatPath string) {
-	if err := os.Remove(filepath.Join(opskatPath, "sessions")); err != nil {
-		logger.Default().Warn("remove sessions directory", zap.Error(err))
-	}
-}
-
-func cmdSessionStatus() int {
-	id := readActiveSession()
-	if id == "" {
-		fmt.Fprintln(os.Stderr, "No active session.")
-		return 0
-	}
-	fmt.Println(id)
-	return 0
-}
-
-func printSessionUsage() {
-	fmt.Fprint(os.Stderr, `Usage:
-  opsctl session <subcommand>
-
-Subcommands:
-  start     Create a session and print its ID
-  end       End the current session (remove session file)
-  status    Show the current session ID
-
-Sessions scope approval of write operations. When the desktop app user approves
-with "Remember", that command pattern is saved for the session, so later
-operations matching it are approved without another dialog.
-
-Note: Sessions are auto-created on the first write operation if none exists.
-You only need 'session start' if you want to explicitly manage the lifecycle.
-
-Storage:
-  Session files are stored in .opskat/sessions/<scope> in the current directory.
-  The <scope> is derived from terminal env vars (TERM_SESSION_ID, ITERM_SESSION_ID,
-  WT_SESSION, WINDOWID) so that different terminal windows in the same directory
-  get separate sessions. Sessions expire after 24 hours.
-
-Session ID resolution priority:
-  1. --session <id> global flag (explicit)
-  2. OPSKAT_SESSION_ID environment variable (desktop app injects this)
-  3. .opskat/sessions/<scope> file (auto-created, walks up directory tree)
-
-Examples:
-  # Explicit session management
-  opsctl session start
-  opsctl exec web-01 -- uptime       # reads session from .opskat/sessions/
-  opsctl exec web-02 -- df -h        # same session, auto-approved after first allow
-  opsctl session end
-
-  # Auto session (no manual steps needed)
-  opsctl exec web-01 -- uptime       # auto-creates session on first call
-  opsctl exec web-02 -- df -h        # reuses same session
-
-  # Check current session
-  opsctl session status
-`)
+	return os.WriteFile(sessionFilePath(sessionDataDir()), []byte(id+"\n"), 0644)
 }
