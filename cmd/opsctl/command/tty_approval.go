@@ -269,9 +269,12 @@ func renderTTYApprovalPrompt(ctx context.Context, req approval.ApprovalRequest, 
 		fmt.Fprintf(out, "%s %s\n", policy.PolicyMsg(ctx, "Asset:", "资产："), //nolint:errcheck // 终端呈现尽力而为
 			assetIdentity(req.AssetName, req.AssetID, face))
 	}
-	fmt.Fprintf(out, "%s\n", policy.PolicyMsg(ctx, "Subject:", "主体：")) //nolint:errcheck // 终端呈现尽力而为
-	for _, p := range patterns {
-		fmt.Fprintf(out, "  - %s\n", p) //nolint:errcheck // 终端呈现尽力而为
+	// 无主体的操作（create/update/delete）没有可列的主体，不渲染悬空的标题。
+	if len(patterns) > 0 {
+		fmt.Fprintf(out, "%s\n", policy.PolicyMsg(ctx, "Subject:", "主体：")) //nolint:errcheck // 终端呈现尽力而为
+		for _, p := range patterns {
+			fmt.Fprintf(out, "  - %s\n", p) //nolint:errcheck // 终端呈现尽力而为
+		}
 	}
 	if req.Detail != "" {
 		fmt.Fprintf(out, "%s %s\n", policy.PolicyMsg(ctx, "Detail:", "详情："), req.Detail) //nolint:errcheck // 终端呈现尽力而为

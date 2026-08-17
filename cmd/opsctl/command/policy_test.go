@@ -542,3 +542,24 @@ func TestPolicyAllowFacePrefixedPatternLandsDirectionalCpRule(t *testing.T) {
 		assert.NotContains(t, p.DenyList, facePat)
 	}
 }
+
+// --type=x / --group=x 的内联形态不得吞掉后面的位置参数（parsePolicyGroupFlags 的
+// inline 判定是同一条约定）。
+func TestParsePolicyWriteFlagsInlineEqualsForm(t *testing.T) {
+	declared, groups, targets, err := parsePolicyWriteFlags([]string{"--type=ssh", "web-01"})
+	require.NoError(t, err)
+	assert.Equal(t, "ssh", declared)
+	assert.Empty(t, groups)
+	assert.Equal(t, []string{"web-01"}, targets)
+
+	_, groups, targets, err = parsePolicyWriteFlags([]string{"--group=prod", "web-01"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"prod"}, groups)
+	assert.Equal(t, []string{"web-01"}, targets)
+
+	declared, groups, targets, err = parsePolicyWriteFlags([]string{"web-01", "--type=ssh"})
+	require.NoError(t, err)
+	assert.Equal(t, "ssh", declared)
+	assert.Empty(t, groups)
+	assert.Equal(t, []string{"web-01"}, targets)
+}

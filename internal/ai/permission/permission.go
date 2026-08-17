@@ -647,7 +647,21 @@ func checkFileTransferPermissionForDirection(ctx context.Context, assetID int64,
 			if asset.GroupID > 0 {
 				groups = policy.ResolveGroupChain(ctx, asset.GroupID)
 			}
-			for _, rule := range collectAllowRules(collectPolicies(ctx, asset, groups)) {
+			policies := collectPolicies(ctx, asset, groups)
+			// deny 无条件先判（checkCommandPolicyPermission 的同一优先序）：方向化 cp
+			// 规则（"cp:read:/x" / "cp:write:/x" / "cp:*"）经 opsctl policy deny 落进
+			// DenyList，rule_persist 的遮蔽检测也按它生效假设——写侧与查侧同一语义。
+			for _, rule := range collectDenyRules(policies) {
+				if matchCpPolicyRule(rule, direction, remotePath) {
+					return aictx.CheckResult{
+						Decision:       aictx.Deny,
+						DecisionSource: aictx.SourcePolicyDeny,
+						MatchedPattern: rule,
+						Message:        policy.PolicyMsg(ctx, "file transfer blocked by policy", "文件传输被策略禁止"),
+					}
+				}
+			}
+			for _, rule := range collectAllowRules(policies) {
 				if matchCpPolicyRule(rule, direction, remotePath) {
 					return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourcePolicyAllow, MatchedPattern: rule}
 				}

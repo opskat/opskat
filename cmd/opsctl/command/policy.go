@@ -188,27 +188,32 @@ func parsePolicyWriteFlags(before []string) (declared string, groups, targets []
 	for i := 0; i < len(before); i++ {
 		arg := before[i]
 		var name, value string
-		var hasValue bool
+		var hasValue, inline bool
 		if eq := strings.Index(arg, "="); eq >= 0 && strings.HasPrefix(arg, "--") {
-			name, value, hasValue = arg[:eq], arg[eq+1:], true
+			name, value, hasValue, inline = arg[:eq], arg[eq+1:], true, true
 		} else if i+1 < len(before) {
 			name, value, hasValue = arg, before[i+1], true
 		} else {
 			name = arg
 		}
+		skipValue := !inline
 		switch name {
 		case "--type":
 			if !hasValue {
 				return "", nil, nil, fmt.Errorf("--type requires a value")
 			}
 			declared = value
-			i++
+			if skipValue {
+				i++
+			}
 		case "--group":
 			if !hasValue {
 				return "", nil, nil, fmt.Errorf("--group requires a value")
 			}
 			groups = append(groups, value)
-			i++
+			if skipValue {
+				i++
+			}
 		default:
 			if strings.HasPrefix(arg, "--") {
 				return "", nil, nil, fmt.Errorf("unknown flag %s", arg)

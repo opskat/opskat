@@ -225,6 +225,9 @@ func TestRunTTYApproval(t *testing.T) {
 		So(prompt, ShouldContainSubstring, "[a]")
 		So(prompt, ShouldContainSubstring, "[d]")
 		So(prompt, ShouldNotContainSubstring, "[p]")
+		// 无主体的操作不渲染悬空的“主体：”标题——标题下没有条目只会误导人。
+		So(prompt, ShouldNotContainSubstring, "Subject:")
+		So(prompt, ShouldNotContainSubstring, "主体：")
 	})
 }
 
