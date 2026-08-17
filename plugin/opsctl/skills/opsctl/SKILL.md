@@ -1,6 +1,6 @@
 ---
 name: opsctl
-description: "opskat CLI for asset management and remote operations (SSH, databases, Redis, MongoDB, Kafka, Kubernetes, etcd, file transfer). Use when: managing server assets, executing remote commands, writing opsctl scripts/automation, or working with approval/grant/session workflows. Also triggers for: deploying to servers, server diagnostics/troubleshooting, batch operations across fleet, database queries, file transfers between servers, server inventory/discovery."
+description: "opskat CLI for asset management and remote operations (SSH, databases, Redis, MongoDB, Kafka, Kubernetes, etcd, file transfer). Use when: managing server assets, executing remote commands, writing opsctl scripts/automation, or working with approval workflows and permission rules. Also triggers for: deploying to servers, server diagnostics/troubleshooting, batch operations across fleet, database queries, file transfers between servers, server inventory/discovery."
 ---
 
 # opsctl CLI Tool
@@ -11,7 +11,6 @@ Standalone CLI for asset management and remote operations without the GUI. All m
 
 - `--data-dir <path>` — Override app data directory
 - `--master-key <key>` — Master encryption key (env: `OPSKAT_MASTER_KEY`)
-- `--session <id>` — Session ID for batch approval (env: `OPSKAT_SESSION_ID`)
 
 ## Asset Resolution
 
@@ -76,29 +75,28 @@ Detail lookup requires a typed ref; bare IDs are ambiguous. `--credential-id` fo
 remains the numeric credential-row ID. These queries return metadata/status/usage only—no
 password, private key, passphrase, Agent endpoint, signing material, or full Agent public key.
 
-Create flow is prevalidate/resolve → desktop approval → asset transaction. A denied or failed
+Create flow is prevalidate/resolve → approval (terminal prompt when interactive, otherwise the desktop dialog) → asset transaction. A denied or failed
 create leaves no asset row committed; output/audit contains only safe metadata and an
 authentication reference only when an existing credential or Agent source is referenced.
 
 ## Approval Mechanism
 
-Most write operations require desktop app approval.
+Most write operations require approval. Check order: permanent policy rules (the asset's own column, its group chain, and attached policy groups) → still-valid grants → human approval.
 
-**Flow**: policy check → grant pattern match → session auto-approve → desktop app approval dialog.
+**Approver selection**: an interactive terminal (stdin and stderr both TTYs) prompts right there; otherwise the running desktop app shows its dialog; with neither available opsctl refuses with exit code 3 and a fixed marker on the first stderr line.
 
-- **Queue mode**: Multiple concurrent approval requests are queued into a single dialog. User can approve/deny individually or batch "Approve All" / "Deny All".
-- **Offline**: Policy/grant matches still auto-approve; otherwise rejects. Create/Update always need the desktop app (they carry no command, so no policy can match). CP is auto-approved when every endpoint subject matches a policy/grant, and needs the desktop app otherwise. **Delete always needs desktop app too, and cannot be pre-approved or granted even with an active session** — there is no "allow all" for it.
-- **Pre-approve patterns**: Use `grant submit` or `request_permission` tool to submit command patterns (supports `*` wildcard). Approved patterns auto-pass subsequent matching commands.
+- **Terminal prompt**: single-kind operations offer `[a]` allow once / `[p]` allow always (writes a permanent rule through the same path as `opsctl policy allow`) / `[d]` deny; every other kind offers allow once / deny. Empty input, EOF, and Ctrl-C count as deny.
+- **Desktop dialog**: concurrent requests queue into one dialog with "Approve All" / "Deny All"; "Remember" saves a 24-hour grant.
+- **Offline refusal**: `exec` / `cp` / `batch` carry a subject a rule could match, so they stop with `NEEDS AUTHORIZATION` plus a paste-ready `opsctl policy allow` line. `create` / `update` / `delete` carry no subject — no rule can ever pre-authorize them — so they stop with `NEEDS TTY`; only a human can perform them (delete additionally has no "allow always").
+- **Pre-approve patterns**: ask the user to run `opsctl policy allow <targets> -- <patterns>` in their own terminal — you cannot run it yourself (see [references/commands.md](references/commands.md)).
 
 ## Sessions
 
-Sessions auto-create on first write — do NOT manually `session start`. The approval dialog offers Deny / Remember / Allow: "Remember" saves that command pattern (editable before you confirm) for the session, so later commands matching it skip approval — it is not a blanket allow for the session. Sessions expire after 24 hours.
-
-For explicit session management, grant workflow, and details, see [references/commands.md](references/commands.md).
+Sessions are internal: one is auto-created on the first write operation per data dir and reused afterwards; it expires after 24 hours. There is no CLI surface to manage it — `--session`, `OPSKAT_SESSION_ID`, and the `session` subcommands no longer exist. The desktop dialog's "Remember" saves a 24-hour grant scoped to that session; `opsctl policy show` lists still-valid grants.
 
 ## Parallel Execution
 
-**Preferred: `opsctl batch`** — Execute multiple commands against any asset type (ssh, database, redis, mongodb, etcd, kafka, k8s, ...) in a single invocation with one approval dialog and parallel execution. This avoids approval race conditions and process-level failures.
+**Preferred: `opsctl batch`** — Execute multiple commands against any asset type (ssh, database, redis, mongodb, etcd, kafka, k8s, ...) in a single invocation with one approval step for all need-confirm commands and parallel execution. This avoids approval race conditions and process-level failures.
 
 ```bash
 # Args mode: mark every item whose type is known.
@@ -114,11 +112,11 @@ echo '{"commands":[
 
 Output is structured JSON with per-command results (`exit_code`, `stdout`, `stderr`, `error`).
 
-**Alternative: Parallel sub-agents** — For operations that `batch` doesn't support (e.g., `cp`, `create`), dispatch parallel sub-agents. The desktop app queues concurrent approval requests into a single dialog with "Approve All" / "Deny All" buttons.
+**Alternative: Parallel sub-agents** — For operations that `batch` doesn't support (e.g., `cp`, `create`), dispatch parallel sub-agents. When the desktop app is running it queues concurrent approval requests into a single dialog with "Approve All" / "Deny All" buttons; without it, each unapproved request stops with `NEEDS AUTHORIZATION` (exit 3).
 
 **Setup for sub-agents**: Ensure approval is handled before parallelizing:
-- **Option A**: Run one command first → user selects "Remember" → subsequent commands matching that saved pattern auto-approve
-- **Option B**: `grant submit` patterns for all targets upfront → all matching commands auto-approve
+- **Option A**: Ask the user to run `opsctl policy allow <targets> -- <patterns>` in their own terminal for all targets upfront — all matching commands then auto-approve. (You cannot run `policy allow` yourself: write subcommands need an interactive terminal and stop with exit 3 / `NEEDS TTY` when called non-interactively.)
+- **Option B**: Run one command first and let the user approve it with a lasting effect — in an interactive terminal "allow always" writes a permanent rule, and the desktop dialog's "Remember" saves a 24-hour grant — then subsequent matching commands auto-approve.
 
 **Parallelizable scenarios**: batch `init`, same command on N servers, multi-target file transfers, independent database queries.
 
@@ -140,7 +138,7 @@ opsctl cp 'web-01:/var/log/*.log' ./logs/                   # remote glob: quote
 
 ## Commands
 
-Core commands: `list`, `get`, `help`, `create`, `update`, `delete`, `ssh`, `exec`, `batch`, `cp`, `grant`, `session`, `ext`, `version`.
+Core commands: `list`, `get`, `help`, `create`, `update`, `delete`, `ssh`, `exec`, `batch`, `cp`, `policy`, `ext`, `version`.
 
 For full command reference with flags and examples, see [references/commands.md](references/commands.md).
 
@@ -151,6 +149,8 @@ For full command reference with flags and examples, see [references/commands.md]
 ## Error Handling
 
 - **User rejection** (output contains "USER DENIED" or "denied: user denied"): Stop the entire task immediately. Report the denied command and wait for user instructions. Do NOT retry, work around, or continue with remaining steps.
+- **NEEDS AUTHORIZATION** (first stderr line, exit code 3): No interactive terminal and the desktop app is unreachable, but a rule could authorize the subject. Stop, relay the `opsctl policy allow ...` line from the output verbatim to the user, and after the user has authorized, retry the original command. Do NOT run that authorization line yourself — it needs an interactive terminal and would itself fail with `NEEDS TTY`.
+- **NEEDS TTY** (first stderr line, exit code 3): Only a human in a terminal can perform this (rule-writing commands, or `create`/`update`/`delete`, which carry no subject any rule could match). Stop and relay the original command to the user to run themselves. Do NOT retry — once the user runs it, the operation is already done; retrying performs it a second time (a retried `create` makes a duplicate asset). Confirm the outcome with a read-only command such as `get asset`.
 - **SSH connection failure**: Report the error, check asset config with `get asset`. Do not retry blindly — ask user if host/credentials changed.
 - **Partial batch failure**: `batch` returns per-command results. Report failed commands with their errors, summarize successes. Ask user how to proceed with failures.
 - **Command not found on remote**: Suggest installing the missing tool or an alternative command. Do not assume package managers.
@@ -167,11 +167,11 @@ opsctl batch 'ssh:web-01:df -h && free -h' 'ssh:web-02:df -h && free -h' 'ssh:db
 ### Deploy Config → Restart Service
 
 ```bash
-# 1. Pre-approve the operations
-# Simple mode takes exactly ONE asset — use JSON mode to target several.
-echo '{"items":[{"type":"exec","command":"tee /etc/app/config.yml"},{"type":"exec","command":"systemctl restart app"}]}' | opsctl grant submit web-01 web-02
+# 1. Pre-approve the operations (the user runs this in their own terminal;
+#    an AI-invoked policy allow stops with exit 3 / NEEDS TTY)
+opsctl policy allow web-01 web-02 -- 'tee /etc/app/config.yml' 'systemctl restart app'
 
-# 2. Deploy (all auto-approved by grant)
+# 2. Deploy (all auto-approved by the permanent rules)
 cat config.yml | opsctl exec web-01 --type ssh -- tee /etc/app/config.yml
 cat config.yml | opsctl exec web-02 --type ssh -- tee /etc/app/config.yml
 opsctl batch 'ssh:web-01:systemctl restart app' 'ssh:web-02:systemctl restart app'

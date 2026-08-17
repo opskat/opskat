@@ -179,29 +179,37 @@ Usage:
   opsctl [global-flags] <command> [arguments]
 
 Commands:
-  list      List resources (assets, groups, or credentials)
+  list      List resources (assets, groups, credentials, or audit rows)
   get       Get detailed information about an asset or credential
   help      Show CLI usage, or 'opsctl help <asset>' for that asset type's command syntax
   ssh       Open an interactive SSH terminal session
   exec      Execute a command on any asset (ssh, database, redis, mongodb, etcd, kafka, k8s)
   create    Create a new resource (asset or group)
   update    Update an existing resource (asset or group)
-  delete    Delete an asset or group (always asks for desktop confirmation)
+  delete    Delete an asset or group (always requires human confirmation)
   cp        Copy files between local and remote servers (scp-style)
   batch     Execute multiple commands in parallel across assets
-  policy    Manage permanent permission rules (show / allow / deny / rm)
+  policy    Manage permanent permission rules (show / allow / deny / rm, group, attach / detach)
   ext       Manage and execute extension tools (list, exec)
   version   Print version information
 
 Note:
   Assets can be referenced by numeric ID or by name.
   Use "group/name" to disambiguate when multiple assets share a name.
-  Write operations (exec, cp, create, update, delete) require desktop app approval.
+  Write operations (exec, cp, create, update, delete) require approval: a prompt
+  in an interactive terminal, the desktop app's dialog when it is running, or a
+  structured refusal (exit code 3) when neither is available.
 
 Approval:
-  Write operations require approval from the running desktop app. When the user
-  approves with "Remember", that command pattern is saved, so later matching
-  operations skip approval and expire after 24 hours.
+  Write operations check permanent rules and saved temporary authorizations
+  first; anything still unconfirmed asks a human. An interactive terminal
+  prompts right there ("allow always" writes a permanent rule via the same
+  path as 'opsctl policy allow'); otherwise the desktop app shows its dialog
+  ("Remember" saves a 24-hour temporary authorization). With neither available,
+  opsctl exits with code 3: exec/cp/batch print NEEDS AUTHORIZATION plus a
+  ready-to-run 'opsctl policy allow' line; create/update/delete print
+  NEEDS TTY because no rule can pre-authorize them — run those yourself in
+  a terminal instead of retrying.
 
 Global Flags:
   --data-dir <path>     Override the application data directory
@@ -221,7 +229,7 @@ Examples:
   opsctl help web-server                          Show that asset type's command syntax
   opsctl ssh web-server                           Open interactive SSH session
   opsctl ssh production/web-01                    Disambiguate by group/name
-  opsctl exec web-server -- uptime                Run command (auto-creates session)
+  opsctl exec web-server -- uptime                Run command (approval prompts in your terminal)
   opsctl exec prod-db -- "SELECT * FROM users"    Query a database
   opsctl exec cache -- "GET session:abc"          Execute a Redis command
   opsctl exec cache --type redis -- "GET session:abc"  Assert the asset's type first
@@ -231,6 +239,9 @@ Examples:
   opsctl delete group 3 --delete-assets           Delete a group and its assets
   opsctl cp ./config.yml web-server:/etc/app/     Upload a file
   opsctl cp 1:/var/log/app.log ./app.log          Download a file
+  opsctl policy show web-server                   Show effective rules (read-only, no TTY)
+  opsctl policy allow web-server -- 'systemctl restart *'   Pre-approve commands (terminal only)
+  opsctl list audit --asset web-server --limit 50 Read stored audit rows (read-only)
   opsctl ext list                                   List installed extensions
   opsctl ext exec oss list_buckets --args '{}'       Execute extension tool
 `)
