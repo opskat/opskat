@@ -120,6 +120,7 @@ var (
 		return preparedAssetCreateAdapter{Prepared: prepared}, nil
 	}
 	requireCreateApproval = requireApproval
+	requireUpdateApproval = requireApproval
 	notifyAssetChanged    = notifyDesktopAssetChanged
 )
 
@@ -292,19 +293,26 @@ func cmdUpdate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 		// Require approval
 		ctx = aictx.WithAuditSource(ctx, "opsctl")
 		ctx = withOriginCommand(ctx, "opsctl update asset "+strings.Join(args[2:], " "))
-		approvalResult, err := requireApproval(ctx, approval.ApprovalRequest{
+		// Detail 是审批人看到的全部（spec 决策 18 / Problem 6）：桌面 OpsctlApprovalDialog
+		// 对这类请求只渲染它，终端提示（renderTTYApprovalPrompt）也照抄。params 恰好就是
+		// "目标 asset + 经 flag 指定的本次变更"，未指定的字段从不进来，直接序列化它即
+		// 审批主体，与即将派发给 put_asset 的请求体同源，不会漂移。update asset 的
+		// flag 集没有密码/密钥项，无需 create 那套 SafeApprovalDetail 去密；将来若新增
+		// 带密 flag，必须改走 asset_put_svc 的去密投影（SafeApprovalDetail 一路），不得
+		// 把密文放进 Detail。
+		approvalDetail, err := json.Marshal(params)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		approvalResult, err := requireUpdateApproval(ctx, approval.ApprovalRequest{
 			Type:      "update",
 			AssetID:   id,
-			Detail:    fmt.Sprintf("opsctl update asset %s", args[1]),
+			Detail:    string(approvalDetail),
 			SessionID: session,
 		})
 		if err != nil {
-			argsJSON, marshalErr := json.Marshal(params)
-			if marshalErr != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", marshalErr)
-				return 1
-			}
-			writeOpsctlAudit(ctx, "put_asset", string(argsJSON), "", err, approvalResult.ToCheckResult())
+			writeOpsctlAudit(ctx, "put_asset", string(approvalDetail), "", err, approvalResult.ToCheckResult())
 			return writeApprovalFailure(os.Stderr, err)
 		}
 
