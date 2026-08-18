@@ -76,6 +76,12 @@ const MONGODB_GROUPS: ConfigGroupSchema<MongoDBFormState>[] = [
         label: "asset.mongoAuthSource",
         placeholder: "asset.mongoAuthSourcePlaceholder",
       },
+      {
+        kind: "switch",
+        key: "legacyCompat",
+        label: "asset.mongoLegacyCompat",
+        description: "asset.mongoLegacyCompatHint",
+      },
     ],
   },
 ];

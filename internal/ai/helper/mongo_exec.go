@@ -29,7 +29,7 @@ func ExecMongoOnAsset(ctx context.Context, asset *asset_entity.Asset, command, _
 	if getMongoDBCache(ctx) == nil {
 		if client != nil {
 			defer func() {
-				if err := client.Disconnect(context.Background()); err != nil {
+				if err := client.Close(); err != nil {
 					logger.Default().Warn("close MongoDB connection", zap.Error(err))
 				}
 			}()

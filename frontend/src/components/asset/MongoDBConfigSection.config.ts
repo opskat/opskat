@@ -19,6 +19,7 @@ export interface MongoDBFormState extends ConnectionFormFields {
   authSource: string;
   database: string;
   tls: boolean;
+  legacyCompat: boolean;
 }
 
 export const MONGODB_DEFAULTS: MongoDBFormState = {
@@ -31,6 +32,7 @@ export const MONGODB_DEFAULTS: MongoDBFormState = {
   authSource: "",
   database: "",
   tls: false,
+  legacyCompat: false,
   ...CONNECTION_DEFAULTS,
 };
 
@@ -45,6 +47,7 @@ interface MongoDBConfig {
   database?: string;
   auth_source?: string;
   tls?: boolean;
+  legacy_compat?: boolean;
   ssh_asset_id?: number;
   proxy?: ProxyConfigJSON;
   proxy_chain?: ProxyChainJSON;
@@ -78,6 +81,7 @@ export function buildMongoDBConfig(
   if (state.authSource) cfg.auth_source = state.authSource;
   if (state.database) cfg.database = state.database;
   if (state.tls) cfg.tls = true;
+  if (state.legacyCompat) cfg.legacy_compat = true;
   if (state.connectionType === "jumphost" && includeSshAssetId && state.sshTunnelId > 0)
     cfg.ssh_asset_id = state.sshTunnelId;
   const proxy = buildProxyJSON(state, proxyPassword);
@@ -102,6 +106,7 @@ export function parseMongoDBConfig(configJSON: string, assetTunnelId = 0): Mongo
       authSource: cfg.auth_source || "",
       database: cfg.database || "",
       tls: cfg.tls || false,
+      legacyCompat: cfg.legacy_compat || false,
       ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0, cfg.proxy_chain),
     };
   } catch {

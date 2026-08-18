@@ -71,14 +71,10 @@ func (q *Query) getOrDialPanelRedis(ctx context.Context, asset *asset_entity.Ass
 
 // getOrDialPanelMongo 从面板缓存取 mongo 客户端。
 func (q *Query) getOrDialPanelMongo(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.MongoDBConfig, password string) (*connpool.MongoClientCloser, error) {
-	key := fmt.Sprintf("%d", asset.ID)
+	key := fmt.Sprintf("%d:legacy=%t", asset.ID, cfg.LegacyCompat)
 	wrapped, _, err := q.mongoPanelCache.GetOrDial(asset.ID, key, func() (*connpool.MongoClientCloser, io.Closer, error) {
 		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
-		client, closer, derr := connpool.DialMongoDB(ctx, asset, cfg, password, q.pool)
-		if derr != nil {
-			return nil, nil, derr
-		}
-		return &connpool.MongoClientCloser{Client: client}, closer, nil
+		return connpool.DialMongoDB(ctx, asset, cfg, password, q.pool)
 	})
 	if err != nil {
 		return nil, err
@@ -370,12 +366,12 @@ func (q *Query) testMongoConnection(ctx context.Context, configJSON string, plai
 
 	testAsset := &asset_entity.Asset{}
 	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
-	client, tunnel, err := connpool.DialMongoDB(ctx, testAsset, &cfg, password, q.pool)
+	mongoCloser, tunnel, err := connpool.DialMongoDB(ctx, testAsset, &cfg, password, q.pool)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if err := client.Disconnect(context.Background()); err != nil {
+		if err := mongoCloser.Close(); err != nil {
 			logger.Default().Warn("disconnect mongodb client failed", zap.Error(err))
 		}
 		if tunnel != nil {
@@ -413,7 +409,7 @@ func (q *Query) ExecuteMongo(assetID int64, operation, database, collection, que
 		return "", fmt.Errorf("连接 MongoDB 失败: %w", err)
 	}
 
-	return helper.ExecuteMongoDB(ctx, wrapped.Client, database, collection, operation, query)
+	return helper.ExecuteMongoDB(ctx, wrapped, database, collection, operation, query)
 }
 
 // ListMongoDatabases 列出指定 MongoDB 资产的所有数据库
@@ -442,7 +438,7 @@ func (q *Query) ListMongoDatabases(assetID int64) (string, error) {
 		return "", fmt.Errorf("连接 MongoDB 失败: %w", err)
 	}
 
-	names, err := helper.ListMongoDatabases(ctx, wrapped.Client)
+	names, err := helper.ListMongoDatabases(ctx, wrapped)
 	if err != nil {
 		return "", err
 	}
@@ -479,7 +475,7 @@ func (q *Query) ListMongoCollections(assetID int64, database string) (string, er
 		return "", fmt.Errorf("连接 MongoDB 失败: %w", err)
 	}
 
-	names, err := helper.ListMongoCollections(ctx, wrapped.Client, database)
+	names, err := helper.ListMongoCollections(ctx, wrapped, database)
 	if err != nil {
 		return "", err
 	}

@@ -55,6 +55,10 @@ Supported operations: `find`, `findOne`, `insertOne`, `insertMany`, `updateOne`,
   redirecting. Wrap values containing them in single quotes.
 - Unknown flags are rejected rather than ignored; only `--db` and `--query` exist.
 - The `scope` parameter is not used by MongoDB assets; use `--db` instead.
+- **Server version vs driver:** the default driver requires MongoDB **4.2+**. For
+  MongoDB **3.6–4.0**, set `legacy_compat: true` on the asset (UI: “Legacy
+  compatibility” under Advanced). Without it, connection and exec commands fail
+  against older servers.
 
 ## Asset config (for put_asset)
 
@@ -66,6 +70,7 @@ Supported operations: `find`, `findOne`, `insertOne`, `insertMany`, `updateOne`,
 | `password` | string | no | **Write-only.** Encrypted in the asset; does not create a credential |
 | `credential_id` | number | no | Existing managed password credential ID |
 | `database` | string | no | Default database |
+| `legacy_compat` | boolean | no | Use the v1 driver for MongoDB 3.6–4.0; default `false` (v2 driver, 4.2+) |
 | `ssh_asset_id` | number | no | SSH asset to tunnel through; 0 detaches |
 
 `password` and `credential_id` are mutually exclusive. Plaintext is never returned, is

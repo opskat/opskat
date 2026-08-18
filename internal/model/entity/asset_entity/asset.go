@@ -260,6 +260,7 @@ type MongoDBConfig struct {
 	Database      string            `json:"database,omitempty"`      // 默认数据库
 	AuthSource    string            `json:"auth_source,omitempty"`   // 认证源数据库
 	TLS           bool              `json:"tls,omitempty"`
+	LegacyCompat  bool              `json:"legacy_compat,omitempty"` // 旧版兼容模式：使用 v1 驱动连接 MongoDB 3.6–4.0
 	SSHAssetID    int64             `json:"ssh_asset_id,omitempty"` // Deprecated: use Asset.SSHTunnelID
 	Proxy         *ProxyConfig      `json:"proxy,omitempty"`        // SOCKS5 代理（与 SSH 隧道互斥，隧道优先）
 	ProxyChain    *ProxyChainConfig `json:"proxy_chain,omitempty"`

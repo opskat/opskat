@@ -4,115 +4,65 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 
 	"github.com/cago-frame/cago/pkg/logger"
-	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.uber.org/zap"
-
-	"github.com/opskat/opskat/internal/connpool"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/service/credential_resolver"
 )
 
-// --- MongoDB 连接缓存 ---
-
-type mongoDBCacheKeyType struct{}
-
-// MongoDBClientCache 在同一次 AI Send 中复用 MongoDB 连接
-type MongoDBClientCache = ConnCache[*connpool.MongoClientCloser]
-
-// NewMongoDBClientCache 创建 MongoDB 连接缓存
-func NewMongoDBClientCache() *MongoDBClientCache {
-	return NewConnCache[*connpool.MongoClientCloser]("MongoDB")
+var mongoOpsV1 = map[string]mongoOpSpecV1{
+	"find":            {needsCollection: true, needsDatabase: true, exec: mongoFindV1},
+	"findOne":         {needsCollection: true, needsDatabase: true, exec: mongoFindOneV1},
+	"insertOne":       {needsCollection: true, needsDatabase: true, exec: mongoInsertOneV1},
+	"insertMany":      {needsCollection: true, needsDatabase: true, exec: mongoInsertManyV1},
+	"updateOne":       {needsCollection: true, needsDatabase: true, exec: mongoUpdateOneV1},
+	"updateMany":      {needsCollection: true, needsDatabase: true, exec: mongoUpdateManyV1},
+	"deleteOne":       {needsCollection: true, needsDatabase: true, exec: mongoDeleteOneV1},
+	"deleteMany":      {needsCollection: true, needsDatabase: true, exec: mongoDeleteManyV1},
+	"aggregate":       {needsCollection: true, needsDatabase: true, exec: mongoAggregateV1},
+	"countDocuments":  {needsCollection: true, needsDatabase: true, exec: mongoCountDocumentsV1},
+	"listDatabases":   {needsCollection: false, needsDatabase: false, exec: mongoListDatabasesV1},
+	"listCollections": {needsCollection: false, needsDatabase: true, exec: mongoListCollectionsV1},
 }
 
-// WithMongoDBCache 将 MongoDB 缓存注入 context
-func WithMongoDBCache(ctx context.Context, cache *MongoDBClientCache) context.Context {
-	return context.WithValue(ctx, mongoDBCacheKeyType{}, cache)
-}
-
-func getMongoDBCache(ctx context.Context) *MongoDBClientCache {
-	if cache, ok := ctx.Value(mongoDBCacheKeyType{}).(*MongoDBClientCache); ok {
-		return cache
-	}
-	return nil
-}
-
-func getOrDialMongoDB(ctx context.Context, asset *asset_entity.Asset) (*connpool.MongoClientCloser, io.Closer, error) {
-	dialFn := func() (*connpool.MongoClientCloser, io.Closer, error) {
-		cfg, err := asset.GetMongoDBConfig()
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to get MongoDB config: %w", err)
-		}
-		password, err := credential_resolver.Default().ResolveMongoDBPassword(ctx, cfg)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to resolve credentials: %w", err)
-		}
-		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
-		return connpool.DialMongoDB(ctx, asset, cfg, password, getSSHPool(ctx))
-	}
-	if cache := getMongoDBCache(ctx); cache != nil {
-		return cache.GetOrDial(asset.ID, dialFn)
-	}
-	return dialFn()
-}
-
-// mongoOpSpec 描述一个 mongo 操作：是否要求 collection / database 参数，以及怎么执行。
-//
-// mongoOps 是 ParseMongoCommand（internal/ai/helper/mongo_command.go）与
-// ExecuteMongoDB 共用的唯一操作列表：两者过去各维护一份同样的 12 个操作名
-// （一份 map[string]bool 判断要不要 collection，一份 switch 分发执行），新增
-// 操作只改一处就会悄悄跑偏。现在两边都读这同一个 map，跑偏在结构上不可能
-// 发生——这里少一个 entry，ParseMongoCommand 和 ExecuteMongoDB 会对同一个
-// 操作名同时拒绝，不存在"一边认得一边不认得"的中间态。
-//
-// needsDatabase 供 resolveMongoCommand（internal/ai/helper/mongo_exec.go）在权限检查
-// 之前判断"这条命令没有可用的 database，必然执行失败"：本文件下方每个 mongoXxx 函数
-// 都会在 database 为空时报错，唯独 listDatabases 不需要 database。把这个判断挪到这里
-// 而不是在 resolveMongoCommand 里另建一份操作名单，理由与 needsCollection 完全一致。
-var mongoOps = map[string]mongoOpSpec{
-	"find":            {needsCollection: true, needsDatabase: true, exec: mongoFind},
-	"findOne":         {needsCollection: true, needsDatabase: true, exec: mongoFindOne},
-	"insertOne":       {needsCollection: true, needsDatabase: true, exec: mongoInsertOne},
-	"insertMany":      {needsCollection: true, needsDatabase: true, exec: mongoInsertMany},
-	"updateOne":       {needsCollection: true, needsDatabase: true, exec: mongoUpdateOne},
-	"updateMany":      {needsCollection: true, needsDatabase: true, exec: mongoUpdateMany},
-	"deleteOne":       {needsCollection: true, needsDatabase: true, exec: mongoDeleteOne},
-	"deleteMany":      {needsCollection: true, needsDatabase: true, exec: mongoDeleteMany},
-	"aggregate":       {needsCollection: true, needsDatabase: true, exec: mongoAggregate},
-	"countDocuments":  {needsCollection: true, needsDatabase: true, exec: mongoCountDocuments},
-	"listDatabases":   {needsCollection: false, needsDatabase: false, exec: mongoListDatabases},
-	"listCollections": {needsCollection: false, needsDatabase: true, exec: mongoListCollections},
-}
-
-type mongoOpSpec struct {
+type mongoOpSpecV1 struct {
 	needsCollection bool
 	needsDatabase   bool
 	exec            func(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error)
 }
 
-// ExecuteMongoDB 执行 MongoDB 操作并返回 JSON 结果
-func ExecuteMongoDB(ctx context.Context, client *connpool.MongoClientCloser, database, collection, operation, query string) (string, error) {
-	if client.Legacy {
-		return executeMongoDBV1(ctx, client.V1, database, collection, operation, query)
-	}
-	// 解析 query JSON
+func executeMongoDBV1(ctx context.Context, client *mongo.Client, database, collection, operation, query string) (string, error) {
 	queryMap, err := parseQueryMap(query)
 	if err != nil {
 		return "", fmt.Errorf("无效的查询参数: %w", err)
 	}
 
-	spec, ok := mongoOps[operation]
+	spec, ok := mongoOpsV1[operation]
 	if !ok {
 		return "", fmt.Errorf("不支持的 MongoDB 操作: %s", operation)
 	}
-	return spec.exec(ctx, client.V2, database, collection, queryMap)
+	return spec.exec(ctx, client, database, collection, queryMap)
 }
 
-func mongoListDatabases(ctx context.Context, client *mongo.Client, _, _ string, _ map[string]json.RawMessage) (string, error) {
+func listMongoDatabasesV1(ctx context.Context, client *mongo.Client) ([]string, error) {
+	names, err := client.ListDatabaseNames(ctx, bson.D{})
+	if err != nil {
+		return nil, fmt.Errorf("列出数据库失败: %w", err)
+	}
+	return names, nil
+}
+
+func listMongoCollectionsV1(ctx context.Context, client *mongo.Client, database string) ([]string, error) {
+	names, err := client.Database(database).ListCollectionNames(ctx, bson.D{})
+	if err != nil {
+		return nil, fmt.Errorf("列出集合失败: %w", err)
+	}
+	return names, nil
+}
+
+func mongoListDatabasesV1(ctx context.Context, client *mongo.Client, _, _ string, _ map[string]json.RawMessage) (string, error) {
 	names, err := client.ListDatabaseNames(ctx, bson.D{})
 	if err != nil {
 		return "", fmt.Errorf("列出数据库失败: %w", err)
@@ -120,7 +70,7 @@ func mongoListDatabases(ctx context.Context, client *mongo.Client, _, _ string, 
 	return marshalResult(map[string]any{"databases": names, "count": len(names)})
 }
 
-func mongoListCollections(ctx context.Context, client *mongo.Client, database, _ string, _ map[string]json.RawMessage) (string, error) {
+func mongoListCollectionsV1(ctx context.Context, client *mongo.Client, database, _ string, _ map[string]json.RawMessage) (string, error) {
 	if database == "" {
 		return "", fmt.Errorf("database 参数不能为空")
 	}
@@ -131,38 +81,12 @@ func mongoListCollections(ctx context.Context, client *mongo.Client, database, _
 	return marshalResult(map[string]any{"collections": names, "count": len(names)})
 }
 
-// ListMongoDatabases 列出所有数据库名称
-func ListMongoDatabases(ctx context.Context, client *connpool.MongoClientCloser) ([]string, error) {
-	if client.Legacy {
-		return listMongoDatabasesV1(ctx, client.V1)
-	}
-	names, err := client.V2.ListDatabaseNames(ctx, bson.D{})
-	if err != nil {
-		return nil, fmt.Errorf("列出数据库失败: %w", err)
-	}
-	return names, nil
-}
-
-// ListMongoCollections 列出指定数据库的所有集合名称
-func ListMongoCollections(ctx context.Context, client *connpool.MongoClientCloser, database string) ([]string, error) {
-	if client.Legacy {
-		return listMongoCollectionsV1(ctx, client.V1, database)
-	}
-	names, err := client.V2.Database(database).ListCollectionNames(ctx, bson.D{})
-	if err != nil {
-		return nil, fmt.Errorf("列出集合失败: %w", err)
-	}
-	return names, nil
-}
-
-// --- 内部操作实现 ---
-
-func mongoFind(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
+func mongoFindV1(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
 	if database == "" || collection == "" {
 		return "", fmt.Errorf("find 操作需要 database 和 collection 参数")
 	}
 
-	filter, err := toBSONDoc(queryMap, "filter")
+	filter, err := toBSONDocV1(queryMap, "filter")
 	if err != nil {
 		return "", fmt.Errorf("解析 filter 失败: %w", err)
 	}
@@ -215,7 +139,7 @@ func mongoFind(ctx context.Context, client *mongo.Client, database, collection s
 		}
 	}()
 
-	docs, err := cursorToJSON(ctx, cursor)
+	docs, err := cursorToJSONV1(ctx, cursor)
 	if err != nil {
 		return "", err
 	}
@@ -223,12 +147,12 @@ func mongoFind(ctx context.Context, client *mongo.Client, database, collection s
 	return marshalResult(map[string]any{"documents": docs, "count": len(docs)})
 }
 
-func mongoFindOne(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
+func mongoFindOneV1(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
 	if database == "" || collection == "" {
 		return "", fmt.Errorf("findOne 操作需要 database 和 collection 参数")
 	}
 
-	filter, err := toBSONDoc(queryMap, "filter")
+	filter, err := toBSONDocV1(queryMap, "filter")
 	if err != nil {
 		return "", fmt.Errorf("解析 filter 失败: %w", err)
 	}
@@ -255,7 +179,7 @@ func mongoFindOne(ctx context.Context, client *mongo.Client, database, collectio
 		return "", fmt.Errorf("MongoDB findOne 失败: %w", err)
 	}
 
-	jsonDoc, err := bsonDocToJSON(doc)
+	jsonDoc, err := bsonDocToJSONV1(doc)
 	if err != nil {
 		return "", err
 	}
@@ -263,7 +187,7 @@ func mongoFindOne(ctx context.Context, client *mongo.Client, database, collectio
 	return marshalResult(map[string]any{"document": jsonDoc})
 }
 
-func mongoInsertOne(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
+func mongoInsertOneV1(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
 	if database == "" || collection == "" {
 		return "", fmt.Errorf("insertOne 操作需要 database 和 collection 参数")
 	}
@@ -286,7 +210,7 @@ func mongoInsertOne(ctx context.Context, client *mongo.Client, database, collect
 	return marshalResult(map[string]any{"insertedId": fmt.Sprint(result.InsertedID)})
 }
 
-func mongoInsertMany(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
+func mongoInsertManyV1(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
 	if database == "" || collection == "" {
 		return "", fmt.Errorf("insertMany 操作需要 database 和 collection 参数")
 	}
@@ -324,12 +248,12 @@ func mongoInsertMany(ctx context.Context, client *mongo.Client, database, collec
 	return marshalResult(map[string]any{"insertedIds": ids, "count": len(ids)})
 }
 
-func mongoUpdateOne(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
+func mongoUpdateOneV1(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
 	if database == "" || collection == "" {
 		return "", fmt.Errorf("updateOne 操作需要 database 和 collection 参数")
 	}
 
-	filter, err := toBSONDoc(queryMap, "filter")
+	filter, err := toBSONDocV1(queryMap, "filter")
 	if err != nil {
 		return "", fmt.Errorf("解析 filter 失败: %w", err)
 	}
@@ -337,7 +261,7 @@ func mongoUpdateOne(ctx context.Context, client *mongo.Client, database, collect
 		filter = bson.D{}
 	}
 
-	update, err := toBSONDoc(queryMap, "update")
+	update, err := toBSONDocV1(queryMap, "update")
 	if err != nil {
 		return "", fmt.Errorf("解析 update 失败: %w", err)
 	}
@@ -357,12 +281,12 @@ func mongoUpdateOne(ctx context.Context, client *mongo.Client, database, collect
 	})
 }
 
-func mongoUpdateMany(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
+func mongoUpdateManyV1(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
 	if database == "" || collection == "" {
 		return "", fmt.Errorf("updateMany 操作需要 database 和 collection 参数")
 	}
 
-	filter, err := toBSONDoc(queryMap, "filter")
+	filter, err := toBSONDocV1(queryMap, "filter")
 	if err != nil {
 		return "", fmt.Errorf("解析 filter 失败: %w", err)
 	}
@@ -370,7 +294,7 @@ func mongoUpdateMany(ctx context.Context, client *mongo.Client, database, collec
 		filter = bson.D{}
 	}
 
-	update, err := toBSONDoc(queryMap, "update")
+	update, err := toBSONDocV1(queryMap, "update")
 	if err != nil {
 		return "", fmt.Errorf("解析 update 失败: %w", err)
 	}
@@ -390,12 +314,12 @@ func mongoUpdateMany(ctx context.Context, client *mongo.Client, database, collec
 	})
 }
 
-func mongoDeleteOne(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
+func mongoDeleteOneV1(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
 	if database == "" || collection == "" {
 		return "", fmt.Errorf("deleteOne 操作需要 database 和 collection 参数")
 	}
 
-	filter, err := toBSONDoc(queryMap, "filter")
+	filter, err := toBSONDocV1(queryMap, "filter")
 	if err != nil {
 		return "", fmt.Errorf("解析 filter 失败: %w", err)
 	}
@@ -412,12 +336,12 @@ func mongoDeleteOne(ctx context.Context, client *mongo.Client, database, collect
 	return marshalResult(map[string]any{"deletedCount": result.DeletedCount})
 }
 
-func mongoDeleteMany(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
+func mongoDeleteManyV1(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
 	if database == "" || collection == "" {
 		return "", fmt.Errorf("deleteMany 操作需要 database 和 collection 参数")
 	}
 
-	filter, err := toBSONDoc(queryMap, "filter")
+	filter, err := toBSONDocV1(queryMap, "filter")
 	if err != nil {
 		return "", fmt.Errorf("解析 filter 失败: %w", err)
 	}
@@ -434,7 +358,7 @@ func mongoDeleteMany(ctx context.Context, client *mongo.Client, database, collec
 	return marshalResult(map[string]any{"deletedCount": result.DeletedCount})
 }
 
-func mongoAggregate(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
+func mongoAggregateV1(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
 	if database == "" || collection == "" {
 		return "", fmt.Errorf("aggregate 操作需要 database 和 collection 参数")
 	}
@@ -469,7 +393,7 @@ func mongoAggregate(ctx context.Context, client *mongo.Client, database, collect
 		}
 	}()
 
-	docs, err := cursorToJSON(ctx, cursor)
+	docs, err := cursorToJSONV1(ctx, cursor)
 	if err != nil {
 		return "", err
 	}
@@ -477,12 +401,12 @@ func mongoAggregate(ctx context.Context, client *mongo.Client, database, collect
 	return marshalResult(map[string]any{"documents": docs, "count": len(docs)})
 }
 
-func mongoCountDocuments(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
+func mongoCountDocumentsV1(ctx context.Context, client *mongo.Client, database, collection string, queryMap map[string]json.RawMessage) (string, error) {
 	if database == "" || collection == "" {
 		return "", fmt.Errorf("countDocuments 操作需要 database 和 collection 参数")
 	}
 
-	filter, err := toBSONDoc(queryMap, "filter")
+	filter, err := toBSONDocV1(queryMap, "filter")
 	if err != nil {
 		return "", fmt.Errorf("解析 filter 失败: %w", err)
 	}
@@ -499,23 +423,7 @@ func mongoCountDocuments(ctx context.Context, client *mongo.Client, database, co
 	return marshalResult(map[string]any{"count": count})
 }
 
-// --- 辅助函数 ---
-
-// parseQueryMap 将 query JSON 字符串解析为 map[string]json.RawMessage
-func parseQueryMap(query string) (map[string]json.RawMessage, error) {
-	if query == "" || query == "{}" {
-		return make(map[string]json.RawMessage), nil
-	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(query), &m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
-// toBSONDoc 从 queryMap 中提取指定 key 的值，转换为 bson.D
-// 如果 key 不存在，返回 nil, nil
-func toBSONDoc(queryMap map[string]json.RawMessage, key string) (bson.D, error) {
+func toBSONDocV1(queryMap map[string]json.RawMessage, key string) (bson.D, error) {
 	raw, ok := queryMap[key]
 	if !ok {
 		return nil, nil
@@ -527,8 +435,7 @@ func toBSONDoc(queryMap map[string]json.RawMessage, key string) (bson.D, error) 
 	return doc, nil
 }
 
-// cursorToJSON 遍历 MongoDB cursor，将每个文档转换为 json.RawMessage
-func cursorToJSON(ctx context.Context, cursor *mongo.Cursor) ([]json.RawMessage, error) {
+func cursorToJSONV1(ctx context.Context, cursor *mongo.Cursor) ([]json.RawMessage, error) {
 	var docs []json.RawMessage
 	for cursor.Next(ctx) {
 		var doc bson.D
@@ -547,21 +454,10 @@ func cursorToJSON(ctx context.Context, cursor *mongo.Cursor) ([]json.RawMessage,
 	return docs, nil
 }
 
-// bsonDocToJSON 将 bson.D 转换为 json.RawMessage
-func bsonDocToJSON(doc bson.D) (json.RawMessage, error) {
+func bsonDocToJSONV1(doc bson.D) (json.RawMessage, error) {
 	jsonBytes, err := bson.MarshalExtJSON(doc, false, false)
 	if err != nil {
 		return nil, fmt.Errorf("转换文档为 JSON 失败: %w", err)
 	}
 	return jsonBytes, nil
-}
-
-// marshalResult 将结果 map 序列化为 JSON 字符串
-func marshalResult(result map[string]any) (string, error) {
-	data, err := json.Marshal(result)
-	if err != nil {
-		logger.Default().Error("marshal MongoDB result", zap.Error(err))
-		return "", fmt.Errorf("序列化结果失败: %w", err)
-	}
-	return string(data), nil
 }

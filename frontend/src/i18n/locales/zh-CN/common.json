@@ -624,6 +624,8 @@
     "mongoReplicaSetPlaceholder": "副本集名称（可选）",
     "mongoAuthSource": "认证源",
     "mongoAuthSourcePlaceholder": "认证数据库（如 admin）",
+    "mongoLegacyCompat": "旧版兼容模式",
+    "mongoLegacyCompatHint": "启用后可连接 MongoDB 3.6–4.0；未启用时仅支持 MongoDB 4.2 及以上版本",
     "mongoDefaultDatabase": "默认数据库",
     "mongoDefaultDatabasePlaceholder": "数据库名（可选）",
     "policyTest": "测试命令",
