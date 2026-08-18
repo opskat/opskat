@@ -251,6 +251,26 @@ describe("AIChatInput", () => {
     expect(editor.querySelector(".ai-mention")?.textContent).toBe("@Local Redis");
   });
 
+  it("退格删除 mention 时不留下触发符 @", async () => {
+    const editorRef = { current: null as Editor | null };
+    render(<AIChatInput onSubmit={vi.fn()} sendOnEnter={true} editorRef={editorRef} />);
+    await waitFor(() => expect(editorRef.current).not.toBeNull());
+    act(() => {
+      editorRef
+        .current!.chain()
+        .focus()
+        .insertContent("check ")
+        .insertContent({ type: "mention", attrs: { id: "42", label: "prod-db" } })
+        .run();
+    });
+    const editor = screen.getByRole("textbox");
+    expect(editor.querySelector(".ai-mention")).not.toBeNull();
+    fireEvent.keyDown(editor, { key: "Backspace", code: "Backspace", keyCode: 8 });
+    expect(editor.querySelector(".ai-mention")).toBeNull();
+    expect(editor.textContent).toBe("check ");
+    expect(editor.textContent).not.toContain("@");
+  });
+
   it("输入 @ 弹出 MentionList", async () => {
     render(<AIChatInput onSubmit={vi.fn()} sendOnEnter={true} />);
     const editor = screen.getByRole("textbox");

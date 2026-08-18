@@ -110,6 +110,7 @@ export function createMentionExtension(activeRef: RefObject<boolean>) {
       class: "ai-mention inline-flex items-center rounded bg-primary/10 text-primary px-1 py-0.5 text-xs font-medium",
     },
     renderLabel: ({ node }) => `@${node.attrs.label}`,
+    deleteTriggerWithBackspace: true,
     suggestion: {
       // Default prefixes are only space/start-of-line. Chinese input usually has no
       // space before @ ("查一下@web"), so allow the trigger after any character.
