@@ -28,6 +28,7 @@ func (h *mongodbHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	return map[string]any{
 		"host": cfg.Host, "port": cfg.Port,
 		"username": cfg.Username, "database": cfg.Database,
+		"legacy_compat": cfg.LegacyCompat,
 	}
 }
 
@@ -62,6 +63,7 @@ func (h *mongodbHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asse
 		Username:     ArgString(args, "username"),
 		CredentialID: ArgInt64(args, "credential_id"),
 		Database:     ArgString(args, "database"),
+		LegacyCompat: ArgBool(args, "legacy_compat"),
 		AuthSource:   "admin",
 	}
 	if password := ArgString(args, "password"); password != "" {
@@ -90,6 +92,9 @@ func (h *mongodbHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asse
 	}
 	if _, ok := args["database"]; ok {
 		cfg.Database = ArgString(args, "database")
+	}
+	if _, ok := args["legacy_compat"]; ok {
+		cfg.LegacyCompat = ArgBool(args, "legacy_compat")
 	}
 	if _, ok := args["ssh_asset_id"]; ok {
 		a.SSHTunnelID = ArgInt64(args, "ssh_asset_id")

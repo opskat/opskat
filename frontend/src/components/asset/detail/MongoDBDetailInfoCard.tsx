@@ -21,6 +21,7 @@ interface MongoDBConfig {
   credential_id?: number;
   database?: string;
   auth_source?: string;
+  legacy_compat?: boolean;
   tls?: boolean;
   ssh_asset_id?: number;
   proxy?: ProxyConfigJSON | null;
@@ -48,6 +49,7 @@ export function MongoDBDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardPr
           {cfg.database && <InfoItem label={t("asset.mongoDefaultDatabase")} value={cfg.database} mono />}
           {cfg.auth_source && <InfoItem label={t("asset.mongoAuthSource")} value={cfg.auth_source} mono />}
           {cfg.replica_set && <InfoItem label={t("asset.mongoReplicaSet")} value={cfg.replica_set} mono />}
+          {cfg.legacy_compat && <InfoItem label={t("asset.mongoLegacyCompat")} value={ENABLED_VALUE} />}
           {cfg.tls && <InfoItem label="TLS" value={ENABLED_VALUE} />}
         </DetailGrid>
         {tunnelName && <TunnelInfo label={t("asset.sshTunnel")} name={tunnelName} />}

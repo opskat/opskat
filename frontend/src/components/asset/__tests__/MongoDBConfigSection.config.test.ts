@@ -18,6 +18,7 @@ const FULL_MANUAL: MongoDBFormState = {
   authSource: "admin",
   database: "mydb",
   tls: true,
+  legacyCompat: false,
   connectionType: "jumphost",
   sshTunnelId: 5,
 };
@@ -33,6 +34,7 @@ const FULL_URI: MongoDBFormState = {
   authSource: "admin",
   database: "mydb",
   tls: true,
+  legacyCompat: false,
   connectionType: "jumphost",
   sshTunnelId: 5,
 };
@@ -191,6 +193,7 @@ describe("parseMongoDBConfig (镜像旧 loadMongoDBConfig 非凭据字段)", () 
       authSource: "admin",
       database: "mydb",
       tls: true,
+      legacyCompat: false,
       connectionType: "jumphost",
       sshTunnelId: 5,
       proxyChainLayers: [sshProxyLayer(5, "SSH Tunnel", "legacy-ssh-5")],
@@ -292,5 +295,26 @@ describe("parseMongoDBConfig (镜像旧 loadMongoDBConfig 非凭据字段)", () 
       '"proxy_chain":{"layers":[{"id":"legacy-socks5-proxy","name":"SOCKS5 Proxy","enabled":true,"type":"socks5","order":1,"host":"p.example.com","port":1081,"password":"PROXYENC"}]}}';
     const state = parseMongoDBConfig(original);
     expect(buildMongoDBConfig(state, {}, false, state.encryptedProxyPassword)).toBe(expected);
+  });
+});
+
+describe("legacy_compat", () => {
+  it("buildMongoDBConfig 在 legacyCompat=true 时写入 legacy_compat", () => {
+    const state = { ...FULL_MANUAL, legacyCompat: true };
+    expect(buildMongoDBConfig(state, {})).toContain('"legacy_compat":true');
+  });
+
+  it("buildMongoDBConfig 默认省略 legacy_compat", () => {
+    expect(buildMongoDBConfig(FULL_MANUAL, {})).not.toContain("legacy_compat");
+  });
+
+  it("parseMongoDBConfig 回填 legacyCompat", () => {
+    const parsed = parseMongoDBConfig('{"host":"h","port":27017,"legacy_compat":true}');
+    expect(parsed.legacyCompat).toBe(true);
+  });
+
+  it("parseMongoDBConfig 缺省为 false", () => {
+    const parsed = parseMongoDBConfig('{"host":"h","port":27017}');
+    expect(parsed.legacyCompat).toBe(false);
   });
 });

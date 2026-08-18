@@ -626,6 +626,8 @@
     "mongoReplicaSetPlaceholder": "Replica set name (optional)",
     "mongoAuthSource": "Auth Source",
     "mongoAuthSourcePlaceholder": "Auth database (e.g. admin)",
+    "mongoLegacyCompat": "Legacy compatibility",
+    "mongoLegacyCompatHint": "Enable to connect to MongoDB 3.6–4.0. When disabled, only MongoDB 4.2+ is supported.",
     "mongoDefaultDatabase": "Default Database",
     "mongoDefaultDatabasePlaceholder": "Database name (optional)",
     "policyTest": "Test Command",

@@ -14,19 +14,25 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/socksdial"
 	"github.com/opskat/opskat/internal/sshpool"
+	mongov1 "go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.uber.org/zap"
 )
 
-// MongoClientCloser wraps *mongo.Client to satisfy io.Closer.
+// MongoClientCloser holds either a v2 or v1 MongoDB client (never both).
 type MongoClientCloser struct {
-	*mongo.Client
+	Legacy bool
+	V2     *mongo.Client
+	V1     *mongov1.Client
 }
 
 // Close disconnects the underlying MongoDB client.
 func (m *MongoClientCloser) Close() error {
-	return m.Disconnect(context.Background())
+	if m.Legacy {
+		return m.V1.Disconnect(context.Background())
+	}
+	return m.V2.Disconnect(context.Background())
 }
 
 // mongoTunnelDialer implements options.ContextDialer for SSH tunnel routing.
@@ -99,7 +105,14 @@ func configureMongoTransport(clientOpts *options.ClientOptions, asset *asset_ent
 
 // DialMongoDB 创建 MongoDB 连接（直连、SSH 隧道或 SOCKS5 代理,隧道优先）
 // password 为已解析的明文密码，cfg.Proxy.Password 为明文,均由调用方负责解密
-func DialMongoDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.MongoDBConfig, password string, sshPool *sshpool.Pool) (*mongo.Client, io.Closer, error) {
+func DialMongoDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.MongoDBConfig, password string, sshPool *sshpool.Pool) (*MongoClientCloser, io.Closer, error) {
+	if cfg.LegacyCompat {
+		return dialMongoDBV1(ctx, asset, cfg, password, sshPool)
+	}
+	return dialMongoDBV2(ctx, asset, cfg, password, sshPool)
+}
+
+func dialMongoDBV2(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.MongoDBConfig, password string, sshPool *sshpool.Pool) (*MongoClientCloser, io.Closer, error) {
 	var uri string
 	if cfg.ConnectionURI != "" {
 		uri = injectPassword(cfg.ConnectionURI, password)
@@ -141,9 +154,9 @@ func DialMongoDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_enti
 	}
 
 	if tunnel == nil {
-		return client, nil, nil
+		return &MongoClientCloser{Legacy: false, V2: client}, nil, nil
 	}
-	return client, tunnel, nil
+	return &MongoClientCloser{Legacy: false, V2: client}, tunnel, nil
 }
 
 // buildMongoURI 从 MongoDBConfig 字段组装 MongoDB URI
