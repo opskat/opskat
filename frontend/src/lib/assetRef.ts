@@ -23,7 +23,7 @@ export function parseOpsctlAssetHref(href: string | null | undefined): number | 
 }
 
 function unescapeMarkdownLinkText(text: string): string {
-  return text.replace(/\\([\[\]\\])/g, "$1");
+  return text.replace(/\\(\\|\[|\])/g, "$1");
 }
 
 export function parseOpsctlAssetMarkdown(text: string): { name: string; id: number } | null {
@@ -34,9 +34,7 @@ export function parseOpsctlAssetMarkdown(text: string): { name: string; id: numb
   return { name: unescapeMarkdownLinkText(match[1]), id };
 }
 
-export type OpsctlAssetRefPart =
-  | { type: "text"; text: string }
-  | { type: "ref"; name: string; id: number };
+export type OpsctlAssetRefPart = { type: "text"; text: string } | { type: "ref"; name: string; id: number };
 
 export function splitOpsctlAssetRefs(text: string): OpsctlAssetRefPart[] {
   if (!text) return [];
