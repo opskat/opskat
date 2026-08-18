@@ -88,7 +88,9 @@ function createSuggestionPopup<TItem>(props: SuggestionProps<TItem>, content: El
     interactive: true,
     trigger: "manual",
     hideOnClick: false,
-    arrow: false,
+    // 箭头已由 .tippy-box[data-theme~="ai-suggestion"] 的 CSS 隐藏，勿再设 arrow:false：
+    // 它会拖慢 tippy 在 jsdom 里的弹层出现时机，使 mention/snippet 弹层测试
+    // 间歇性撞上 waitFor(1000ms) 超时（PR #291 回归）。
     theme: "ai-suggestion",
     // Side-assistant input sits at the bottom; flip up first so the list stays on screen.
     placement: "top-start",
