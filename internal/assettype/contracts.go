@@ -162,8 +162,8 @@ func (*redisHandler) AutomationContract() AutomationContract {
 
 func (*mongodbHandler) AutomationContract() AutomationContract {
 	return passwordAutomationContract(
-		[]string{"host", "port", "username", "password", "credential_id", "database", "ssh_asset_id"},
-		[]string{"host", "port", "username", "database", "ssh_asset_id"},
+		[]string{"host", "port", "username", "password", "credential_id", "database", "legacy_compat", "ssh_asset_id"},
+		[]string{"host", "port", "username", "database", "legacy_compat", "ssh_asset_id"},
 		normalizeDefaultPort(27017),
 	)
 }

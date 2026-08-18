@@ -41,6 +41,16 @@ func TestMongoDBHandler(t *testing.T) {
 			convey.So(cfg.AuthSource, convey.ShouldEqual, "admin")
 			convey.So(a.SSHTunnelID, convey.ShouldEqual, 99)
 		})
+		convey.Convey("ApplyCreateArgs sets legacy_compat", func() {
+			a := &asset_entity.Asset{Type: "mongodb"}
+			err := h.ApplyCreateArgs(context.Background(), a, map[string]any{
+				"host": "10.0.0.1", "port": float64(27017),
+				"username": "admin", "legacy_compat": true,
+			})
+			convey.So(err, convey.ShouldBeNil)
+			cfg, _ := a.GetMongoDBConfig()
+			convey.So(cfg.LegacyCompat, convey.ShouldBeTrue)
+		})
 		convey.Convey("ApplyUpdateArgs", func() {
 			a := &asset_entity.Asset{Type: "mongodb"}
 			_ = a.SetMongoDBConfig(&asset_entity.MongoDBConfig{
@@ -53,6 +63,16 @@ func TestMongoDBHandler(t *testing.T) {
 			convey.So(cfg.Port, convey.ShouldEqual, 27017)
 			convey.So(cfg.Username, convey.ShouldEqual, "admin")
 			convey.So(cfg.Database, convey.ShouldEqual, "newdb")
+		})
+		convey.Convey("ApplyUpdateArgs sets legacy_compat", func() {
+			a := &asset_entity.Asset{Type: "mongodb"}
+			_ = a.SetMongoDBConfig(&asset_entity.MongoDBConfig{
+				Host: "10.0.0.1", Port: 27017, Username: "admin", Database: "mydb",
+			})
+			err := h.ApplyUpdateArgs(context.Background(), a, map[string]any{"legacy_compat": true})
+			convey.So(err, convey.ShouldBeNil)
+			cfg, _ := a.GetMongoDBConfig()
+			convey.So(cfg.LegacyCompat, convey.ShouldBeTrue)
 		})
 	})
 }
