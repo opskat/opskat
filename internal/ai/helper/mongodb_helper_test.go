@@ -78,29 +78,22 @@ func TestParseQueryMap(t *testing.T) {
 }
 
 func TestToBSONDoc(t *testing.T) {
-	Convey("toBSONDoc 从 queryMap 提取 BSON 文档", t, func() {
-		Convey("key 不存在返回 nil", func() {
-			m := map[string]json.RawMessage{}
-			doc, err := toBSONDoc(m, "filter")
+	Convey("toBSONDoc 把 extended JSON 解析为 bson.D", t, func() {
+		Convey("nil 返回 nil", func() {
+			doc, err := toBSONDoc(nil)
 			assert.NoError(t, err)
 			assert.Nil(t, doc)
 		})
 
 		Convey("合法 JSON 对象转为 bson.D", func() {
-			m := map[string]json.RawMessage{
-				"filter": json.RawMessage(`{"name": "test", "age": 18}`),
-			}
-			doc, err := toBSONDoc(m, "filter")
+			doc, err := toBSONDoc(json.RawMessage(`{"name": "test", "age": 18}`))
 			assert.NoError(t, err)
 			assert.NotNil(t, doc)
 			assert.Len(t, doc, 2)
 		})
 
 		Convey("非法 JSON 返回错误", func() {
-			m := map[string]json.RawMessage{
-				"filter": json.RawMessage(`not-json`),
-			}
-			_, err := toBSONDoc(m, "filter")
+			_, err := toBSONDoc(json.RawMessage(`not-json`))
 			assert.Error(t, err)
 		})
 	})

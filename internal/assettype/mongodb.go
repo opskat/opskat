@@ -28,6 +28,7 @@ func (h *mongodbHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	return map[string]any{
 		"host": cfg.Host, "port": cfg.Port,
 		"username": cfg.Username, "database": cfg.Database,
+		"legacy_compat": cfg.LegacyCompat,
 	}
 }
 
