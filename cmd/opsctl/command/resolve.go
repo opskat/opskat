@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -17,7 +18,10 @@ import (
 
 // resolveAsset resolves an asset identifier (numeric ID or name).
 // Supports "group/name" for disambiguation when names are not unique.
+// Copied desktop refs ([Name](opsctl://asset/{id}) / opsctl://asset/{id}) resolve by id.
 func resolveAsset(ctx context.Context, identifier string) (*asset_entity.Asset, error) {
+	identifier = unwrapAssetRef(identifier)
+
 	// Try numeric ID first
 	if id, err := strconv.ParseInt(identifier, 10, 64); err == nil {
 		asset, err := asset_repo.Asset().Find(ctx, id)
@@ -91,6 +95,25 @@ func resolveAsset(ctx context.Context, identifier string) (*asset_entity.Asset, 
 	}
 	sb.WriteString("Use ID or group/name to disambiguate.")
 	return nil, fmt.Errorf("%s", sb.String())
+}
+
+var (
+	opsctlAssetURIRe      = regexp.MustCompile(`(?i)^opsctl://asset/(\d+)$`)
+	opsctlAssetMarkdownRe = regexp.MustCompile(`(?is)^\[[\s\S]*\]\((opsctl://asset/\d+)\)$`)
+)
+
+// unwrapAssetRef extracts a numeric id from a copied desktop markdown/URI ref.
+// Unknown shapes are returned unchanged so name / group/name lookup still runs.
+func unwrapAssetRef(identifier string) string {
+	ref := strings.TrimSpace(identifier)
+	ref = strings.Trim(ref, `"'`)
+	if m := opsctlAssetMarkdownRe.FindStringSubmatch(ref); len(m) == 2 {
+		ref = m[1]
+	}
+	if m := opsctlAssetURIRe.FindStringSubmatch(ref); len(m) == 2 {
+		return m[1]
+	}
+	return identifier
 }
 
 // resolveAssetID is a convenience wrapper returning just the ID.

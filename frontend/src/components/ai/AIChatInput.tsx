@@ -5,7 +5,7 @@ import HardBreak from "@tiptap/extension-hard-break";
 import Paragraph from "@tiptap/extension-paragraph";
 import Placeholder from "@tiptap/extension-placeholder";
 import Text from "@tiptap/extension-text";
-import { extractContentXml } from "./input/content";
+import { buildPastedOpsctlContent, extractContentXml } from "./input/content";
 import { createMentionExtension, createSnippetSuggestionExtension } from "./input/extensions";
 import {
   applyInputHistoryMessage,
@@ -148,6 +148,15 @@ function AIChatInputComponent({
           return true;
         }
         return false;
+      },
+      handlePaste: (_view, event) => {
+        if (!editor) return false;
+        const text = event.clipboardData?.getData("text/plain") ?? "";
+        const content = buildPastedOpsctlContent(text);
+        if (!content) return false;
+        event.preventDefault();
+        editor.chain().focus().insertContent(content).run();
+        return true;
       },
     },
     onUpdate: ({ editor: ed }) => {

@@ -226,6 +226,7 @@ Examples:
   opsctl get credential credential:3              Show safe credential detail and usage
   opsctl get asset web-server                     Show details by name
   opsctl get asset 1                              Show details by ID
+  opsctl get asset opsctl://asset/1               Show details from a copied ref
   opsctl help web-server                          Show that asset type's command syntax
   opsctl ssh web-server                           Open interactive SSH session
   opsctl ssh production/web-01                    Disambiguate by group/name

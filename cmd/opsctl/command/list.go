@@ -255,6 +255,8 @@ Examples:
   opsctl get asset web-server
   opsctl get asset 1
   opsctl get asset production/web-01
+  opsctl get asset opsctl://asset/1
+  opsctl get asset '[web-01](opsctl://asset/1)'
   opsctl get credential credential:3
   opsctl get credential agent-source:2
 `)

@@ -42,6 +42,17 @@ describe("shortcutStore", () => {
       expect(shortcuts["terminal.find"]).toEqual(DEFAULT_SHORTCUTS["terminal.find"]);
     });
 
+    it("has asset.copyRef default as Ctrl/Cmd+C", () => {
+      const { shortcuts } = useShortcutStore.getState();
+      expect(shortcuts["asset.copyRef"]).toEqual({
+        code: "KeyC",
+        mod: true,
+        ctrl: false,
+        shift: false,
+        alt: false,
+      });
+    });
+
     it("isRecording is false", () => {
       expect(useShortcutStore.getState().isRecording).toBe(false);
     });
@@ -178,6 +189,16 @@ describe("shortcutStore", () => {
 
     it("allows terminal.find and panel.filter to share the same default binding", () => {
       expect(findShortcutConflict("terminal.find", DEFAULT_SHORTCUTS["panel.filter"], DEFAULT_SHORTCUTS)).toBeNull();
+    });
+
+    it("allows asset.copyRef and terminal.copy to share Cmd+C on macOS-shaped bindings", () => {
+      const macCopy: ShortcutBinding = { code: "KeyC", mod: true, ctrl: false, shift: false, alt: false };
+      const shortcuts = {
+        ...DEFAULT_SHORTCUTS,
+        "asset.copyRef": macCopy,
+        "terminal.copy": macCopy,
+      };
+      expect(findShortcutConflict("asset.copyRef", macCopy, shortcuts)).toBeNull();
     });
   });
 });

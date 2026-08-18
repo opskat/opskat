@@ -39,10 +39,10 @@ describe("matchShortcut", () => {
     expect(result).toBe("terminal.copy");
   });
 
-  it("lets plain Ctrl+C pass through by default", () => {
+  it("matches plain Ctrl+C to asset.copyRef by default", () => {
     const event = makeKeyboardEvent({ code: "KeyC", ctrlKey: true });
     const result = matchShortcut(event, DEFAULT_SHORTCUTS);
-    expect(result).toBeNull();
+    expect(result).toBe("asset.copyRef");
   });
 
   it("matches Ctrl+Shift+V to terminal paste by default", () => {

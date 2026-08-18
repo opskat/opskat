@@ -4,7 +4,7 @@ import { Pencil, Trash2, TerminalSquare, Loader2 } from "lucide-react";
 import Markdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
-import { markdownComponents } from "@/components/MarkdownLink";
+import { markdownComponents, markdownUrlTransform } from "@/components/MarkdownLink";
 import { Button, Separator, ConfirmDialog, Tooltip, TooltipContent, TooltipTrigger } from "@opskat/ui";
 import { toast } from "sonner";
 import { useAssetStore } from "@/stores/assetStore";
@@ -352,6 +352,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
                 <Markdown
                   remarkPlugins={[remarkBreaks]}
                   rehypePlugins={[rehypeSanitize]}
+                  urlTransform={markdownUrlTransform}
                   components={markdownComponents}
                 >
                   {asset.Description}

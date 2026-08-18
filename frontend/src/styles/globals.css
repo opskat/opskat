@@ -377,3 +377,19 @@
   }
 
 }
+
+/* AI @ / snippet suggestion popup: keep the list's own card, hide tippy's default dark box. */
+.tippy-box[data-theme~="ai-suggestion"] {
+  background: transparent;
+  color: inherit;
+  border-radius: 0;
+  font-size: inherit;
+  line-height: inherit;
+  box-shadow: none;
+}
+.tippy-box[data-theme~="ai-suggestion"] > .tippy-arrow {
+  display: none;
+}
+.tippy-box[data-theme~="ai-suggestion"] > .tippy-content {
+  padding: 0;
+}

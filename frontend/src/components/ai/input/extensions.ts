@@ -87,7 +87,22 @@ function createSuggestionPopup<TItem>(props: SuggestionProps<TItem>, content: El
     showOnCreate: true,
     interactive: true,
     trigger: "manual",
-    placement: "bottom-start",
+    hideOnClick: false,
+    // 箭头已由 .tippy-box[data-theme~="ai-suggestion"] 的 CSS 隐藏，勿再设 arrow:false：
+    // 它会拖慢 tippy 在 jsdom 里的弹层出现时机，使 mention/snippet 弹层测试
+    // 间歇性撞上 waitFor(1000ms) 超时（PR #291 回归）。
+    theme: "ai-suggestion",
+    // Side-assistant input sits at the bottom; flip up first so the list stays on screen.
+    placement: "top-start",
+    offset: [0, 8],
+    zIndex: 80,
+    popperOptions: {
+      strategy: "fixed",
+      modifiers: [
+        { name: "flip", options: { fallbackPlacements: ["bottom-start", "top-end"] } },
+        { name: "preventOverflow", options: { padding: 8 } },
+      ],
+    },
   });
 }
 
@@ -97,7 +112,11 @@ export function createMentionExtension(activeRef: RefObject<boolean>) {
       class: "ai-mention inline-flex items-center rounded bg-primary/10 text-primary px-1 py-0.5 text-xs font-medium",
     },
     renderLabel: ({ node }) => `@${node.attrs.label}`,
+    deleteTriggerWithBackspace: true,
     suggestion: {
+      // Default prefixes are only space/start-of-line. Chinese input usually has no
+      // space before @ ("查一下@web"), so allow the trigger after any character.
+      allowedPrefixes: null,
       items: () => [] as MentionItem[],
       render: () => {
         let component: ReactRenderer<MentionListRef> | null = null;
