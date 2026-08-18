@@ -55,7 +55,7 @@ in `main.go` via `resolveBootstrap()` and `initExtensionSystem`):
 |---|---|
 | `OPSKAT_DATA_DIR=<tmp>/opskat-e2e-data-<workspaceId>` | DB, config, sockets, logs all under a throwaway dir |
 | `OPSKAT_MASTER_KEY=<fixed test key>` | passphrase for credential KDF; **bypasses the OS keychain** (`ResolveMasterKey` returns the explicit key) |
-| `OPSKAT_E2E=1` | disables the single-instance lock so the e2e app coexists with a running opskat |
+| `OPSKAT_E2E=1` | disables the single-instance lock so the e2e app coexists with a running opskat; also skips the startup *online* update check (`startAutoUpdateCheck`) — its result depends on the live release feed, and the `update:available` toast it pops over the composer would fail specs whenever upstream ships a release |
 | `OPSKAT_EXTENSIONS=0` | skips the slow WASM extension init |
 
 The bridge runs on a **dedicated port** — never Wails' default 34115 — so it never reuses, or

@@ -1679,6 +1679,14 @@ func (s *System) startAutoUpdateCheck() {
 		time.Sleep(5 * time.Second)
 		s.updateInstalledTools()
 
+		// OPSKAT_E2E=1 的验证运行（e2e / 交互沙盒）不做线上更新检查：结果取决于外网
+		// 和当时的线上最新版本，上游一发版 update:available 的右下角 toast 就会盖住
+		// composer，让 e2e 随发布日历随机失败（真实案例：v1.12.1 发布当天 ai-exec-crud
+		// 被 "New version" toast 挡住输入框超时）。
+		if os.Getenv("OPSKAT_E2E") == "1" {
+			return
+		}
+
 		cfg := bootstrap.GetConfig()
 		if cfg == nil {
 			return
