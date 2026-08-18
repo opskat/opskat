@@ -427,7 +427,8 @@ func TestListHolderRuleShapes(t *testing.T) {
 	require.NoError(t, g.SetCommandPolicy(&policyent.CommandPolicy{AllowList: []string{"uptime"}}))
 	require.NoError(t, g.SetRedisPolicy(&policyent.RedisPolicy{DenyList: []string{"FLUSHALL"}}))
 
-	shapes := ListHolderRuleShapes(g)
+	shapes, err := ListHolderRuleShapes(g)
+	require.NoError(t, err)
 	kinds := make([]string, 0, len(shapes))
 	for _, s := range shapes {
 		kinds = append(kinds, s.PolicyType)
@@ -435,4 +436,49 @@ func TestListHolderRuleShapes(t *testing.T) {
 	assert.Equal(t, []string{policy_group_entity.PolicyTypeCommand, policy_group_entity.PolicyTypeRedis}, kinds)
 	assert.Equal(t, []string{"uptime"}, shapes[0].Allow)
 	assert.Equal(t, []string{"FLUSHALL"}, shapes[1].Deny)
+}
+
+func TestListHolderRuleShapesPropagatesRegisteredShapeReadError(t *testing.T) {
+	g := &group_entity.Group{ID: 2, Name: "prod", CmdPolicy: `{not-json`}
+
+	shapes, err := ListHolderRuleShapes(g)
+
+	require.Error(t, err)
+	assert.Nil(t, shapes)
+	assert.Contains(t, err.Error(), policyent.PolicyKindCommand)
+}
+
+func TestAddAndRemovePolicyShapeRef(t *testing.T) {
+	g := &group_entity.Group{ID: 2, Name: "prod"}
+
+	require.NoError(t, AddPolicyShapeRef(g, policyent.PolicyKindQuery, "builtin:readonly"))
+	refs, err := PolicyShapeRefs(g, policyent.PolicyKindQuery)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"builtin:readonly"}, refs)
+
+	require.NoError(t, RemovePolicyShapeRef(g, policyent.PolicyKindQuery, "builtin:readonly"))
+	refs, err = PolicyShapeRefs(g, policyent.PolicyKindQuery)
+	require.NoError(t, err)
+	assert.Empty(t, refs)
+}
+
+// 策略 kind → canonical 资产类型由注册表派生，调用方不维护镜像表。
+func TestCanonicalForPolicyKind(t *testing.T) {
+	for kind, want := range map[string]string{
+		policyent.PolicyKindCommand: asset_entity.AssetTypeSSH,
+		policyent.PolicyKindQuery:   asset_entity.AssetTypeDatabase,
+		policyent.PolicyKindRedis:   asset_entity.AssetTypeRedis,
+		policyent.PolicyKindMongo:   asset_entity.AssetTypeMongoDB,
+		policyent.PolicyKindKafka:   asset_entity.AssetTypeKafka,
+		policyent.PolicyKindK8s:     asset_entity.AssetTypeK8s,
+		policyent.PolicyKindEtcd:    asset_entity.AssetTypeEtcd,
+		policyent.PolicyKindOSS:     asset_entity.AssetTypeOSS,
+	} {
+		canon, ok := CanonicalForPolicyKind(kind)
+		require.True(t, ok, kind)
+		assert.Equal(t, want, canon, kind)
+	}
+
+	_, ok := CanonicalForPolicyKind("no-such-kind")
+	assert.False(t, ok)
 }

@@ -135,3 +135,19 @@ func ParseApprovalResponse(kind string, resp ApprovalResponse, expectedItems ...
 
 // ApprovalTypeDelete 删除审批项的类型标签，前端 TypeBadge 按它取图标。
 const ApprovalTypeDelete = "delete"
+
+// ApprovalKindForType 返回一个审批类型允许的交互能力。审批语义由 permission
+// 统一拥有，桌面与 CLI 必须调用这里，避免两条审批路径各自维护映射而漂移。
+func ApprovalKindForType(approvalType string) string {
+	switch approvalType {
+	case ApprovalTypeDelete:
+		return ApprovalKindDelete
+	case "ext_tool":
+		return ApprovalKindExtension
+	default:
+		if SupportsGrantApproval(approvalType) {
+			return ApprovalKindSingle
+		}
+		return ApprovalKindOnce
+	}
+}

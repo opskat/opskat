@@ -41,12 +41,3 @@ func TestRespondOpsctlApprovalInvalidResponseFailsClosedAtBoundary(t *testing.T)
 		})
 	}
 }
-
-func TestSingleApprovalKindMatchesGrantCapability(t *testing.T) {
-	require.Equal(t, permission.ApprovalKindSingle, singleApprovalKind("exec"))
-	require.Equal(t, permission.ApprovalKindSingle, singleApprovalKind("cp"))
-	require.Equal(t, permission.ApprovalKindOnce, singleApprovalKind("create"))
-	require.Equal(t, permission.ApprovalKindOnce, singleApprovalKind("update"))
-	require.Equal(t, permission.ApprovalKindDelete, singleApprovalKind(permission.ApprovalTypeDelete))
-	require.Equal(t, permission.ApprovalKindExtension, singleApprovalKind("ext_tool"))
-}

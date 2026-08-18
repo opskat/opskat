@@ -81,23 +81,6 @@ func TestParseTTYApprovalInput(t *testing.T) {
 	})
 }
 
-// ttyApprovalKind 与桌面端 internal/app/opsctl.singleApprovalKind 同一条映射：
-// 注册了权限检查的类型（exec/sql/redis/cp/k8s…）是 single；create/update 等
-// 未注册类型是 once；delete / ext_tool 各自的 kind。
-func TestTTYApprovalKind(t *testing.T) {
-	Convey("ttyApprovalKind", t, func() {
-		So(ttyApprovalKind("exec"), ShouldEqual, permission.ApprovalKindSingle)
-		So(ttyApprovalKind("sql"), ShouldEqual, permission.ApprovalKindSingle)
-		So(ttyApprovalKind("redis"), ShouldEqual, permission.ApprovalKindSingle)
-		So(ttyApprovalKind("cp"), ShouldEqual, permission.ApprovalKindSingle)
-		So(ttyApprovalKind("k8s"), ShouldEqual, permission.ApprovalKindSingle)
-		So(ttyApprovalKind("create"), ShouldEqual, permission.ApprovalKindOnce)
-		So(ttyApprovalKind("update"), ShouldEqual, permission.ApprovalKindOnce)
-		So(ttyApprovalKind(permission.ApprovalTypeDelete), ShouldEqual, permission.ApprovalKindDelete)
-		So(ttyApprovalKind("ext_tool"), ShouldEqual, permission.ApprovalKindExtension)
-	})
-}
-
 func TestShellQuote(t *testing.T) {
 	Convey("shellQuote 产出可直接粘贴的 POSIX 引用", t, func() {
 		So(shellQuote("uptime"), ShouldEqual, `'uptime'`)

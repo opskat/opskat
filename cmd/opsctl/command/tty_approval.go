@@ -14,7 +14,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/approval"
-	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/service/policy_rule_svc"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -52,23 +52,6 @@ func parseTTYApprovalInput(kind, input string) (ttyChoice, error) {
 		}
 	}
 	return ttyDeny, errTTYApprovalRetry
-}
-
-// ttyApprovalKind 把审批类型映射到 ApprovalKind，决定终端提示给几个选项。
-// 与桌面端 internal/app/opsctl.singleApprovalKind 是同一条映射；不能直接复用后者，
-// 因为它所在的包绑着 wails 运行时，CLI 不该拖进来。两边若要改，一起改。
-func ttyApprovalKind(approvalType string) string {
-	switch approvalType {
-	case permission.ApprovalTypeDelete:
-		return permission.ApprovalKindDelete
-	case "ext_tool":
-		return permission.ApprovalKindExtension
-	default:
-		if permission.SupportsGrantApproval(approvalType) {
-			return permission.ApprovalKindSingle
-		}
-		return permission.ApprovalKindOnce
-	}
 }
 
 // writeAllowAlwaysRule 是“永久允许”的规则写入接缝（决策 13）：与 opsctl policy allow
@@ -117,12 +100,12 @@ func ttyApprovalFace(req approval.ApprovalRequest) string {
 // 检测与审计一并生效，命中 permission 注册的 cp:read/cp:write 落点。
 func writeTerminalApprovalRule(ctx context.Context, req approval.ApprovalRequest, face string, patterns []string) error {
 	if face == permission.GrantToolCpRead || face == permission.GrantToolCpWrite {
-		asset, err := asset_repo.Asset().Find(ctx, req.AssetID)
+		asset, err := policy_rule_svc.PolicyRule().FindAsset(ctx, req.AssetID)
 		if err != nil {
 			return err
 		}
 		return writePermanentRules(ctx, permission.RuleAllow,
-			[]policyWriteTarget{{asset: asset, canonical: face, patterns: patterns}})
+			[]policy_rule_svc.Target{{Asset: asset, Canonical: face, Patterns: patterns}})
 	}
 	return writeAllowAlwaysRule(ctx, req.AssetID, face, patterns)
 }
@@ -134,7 +117,7 @@ func writeTerminalApprovalRule(ctx context.Context, req approval.ApprovalRequest
 func runTTYApproval(ctx context.Context, req approval.ApprovalRequest, in io.Reader, out io.Writer) (ApprovalResult, error) {
 	face := ttyApprovalFace(req)
 	patterns := normalizedApprovalSubjects(face, req.Command)
-	kind := ttyApprovalKind(face)
+	kind := permission.ApprovalKindForType(face)
 	matched := strings.Join(patterns, ", ")
 
 	log := logger.Ctx(ctx).With(

@@ -10,6 +10,18 @@ import (
 // （或文档明示的保留），只允许减少、不允许新增；新代码一律走规则指向的正道。
 var importBans = []importBanRule{
 	{
+		files: map[string]bool{
+			"cmd/opsctl/command/policy.go":       true,
+			"cmd/opsctl/command/policy_group.go": true,
+			"cmd/opsctl/command/tty_approval.go": true,
+		},
+		banned: []string{
+			"github.com/opskat/opskat/internal/repository",
+			"github.com/opskat/opskat/internal/pkg/dbutil",
+		},
+		message: "opsctl policy 命令只负责解析与展示，业务和持久化经 policy service（AGENTS.md → bindings → service → repository）",
+	},
+	{
 		dir:       "internal/service/ssh_agent_svc/",
 		banned:    []string{"github.com/opskat/opskat/internal/repository/asset_repo"},
 		skipTests: true,

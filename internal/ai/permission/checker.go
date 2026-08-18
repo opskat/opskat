@@ -215,6 +215,24 @@ func grantItemMatchesTarget(item *grant_entity.GrantItem, assetID int64, groupID
 	return true
 }
 
+// GrantItemMatchesAsset 检查 grant item 是否匹配目标资产：AssetID 精确、GroupID 按
+// 资产组链、两者皆 0 匹配所有资产。show 的 grant 过滤与运行时成员判定共用同一语义，
+// 调用方不维护第二份实现。
+func GrantItemMatchesAsset(ctx context.Context, item *grant_entity.GrantItem, asset *asset_entity.Asset) bool {
+	if item.AssetID != 0 {
+		return item.AssetID == asset.ID
+	}
+	if item.GroupID != 0 {
+		for _, g := range policy.ResolveGroupChain(ctx, asset.GroupID) {
+			if g.ID == item.GroupID {
+				return true
+			}
+		}
+		return false
+	}
+	return true
+}
+
 // Check 检查命令是否允许执行
 func (c *CommandPolicyChecker) Check(ctx context.Context, assetID int64, command string) aictx.CheckResult {
 	result := CheckPermission(ctx, asset_entity.AssetTypeSSH, assetID, command)

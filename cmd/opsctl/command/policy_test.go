@@ -61,11 +61,13 @@ func (s *grantRepoStub) UpdateItems(_ context.Context, _ string, items []*grant_
 
 // recordingAuditWriter 捕获 opsctl 侧写下的审计行。
 type recordingAuditWriter struct {
-	rows []audit.ToolCallInfo
+	rows    []audit.ToolCallInfo
+	sources []string
 }
 
-func (w *recordingAuditWriter) WriteToolCall(_ context.Context, info audit.ToolCallInfo) {
+func (w *recordingAuditWriter) WriteToolCall(ctx context.Context, info audit.ToolCallInfo) {
 	w.rows = append(w.rows, info)
+	w.sources = append(w.sources, aictx.GetAuditSource(ctx))
 }
 
 type policyTestEnv struct {
@@ -137,7 +139,8 @@ func (env *policyTestEnv) run(args ...string) int {
 	}
 	origStdout, origStderr := os.Stdout, os.Stderr
 	os.Stdout, os.Stderr = outW, errW
-	code := cmdPolicy(aictx.WithAuditSource(env.ctx, "opsctl"), args, "sess-1")
+	// 不包 WithAuditSource：走真实分发路径，锁住 cmdPolicy 自己标 source 的契约。
+	code := cmdPolicy(env.ctx, args, "sess-1")
 	os.Stdout, os.Stderr = origStdout, origStderr
 	_ = outW.Close()
 	_ = errW.Close()
@@ -232,6 +235,8 @@ func TestPolicyAllowEchoesLandedRulesAndWritesAfterConfirm(t *testing.T) {
 
 	require.Len(t, env.auditor.rows, 1)
 	assert.Equal(t, "policy_rule", env.auditor.rows[0].ToolName)
+	require.Len(t, env.auditor.sources, 1)
+	assert.Equal(t, "opsctl", env.auditor.sources[0], "policy 审计行必须带 opsctl source")
 }
 
 func TestPolicyAllowDeclinedConfirmWritesNothing(t *testing.T) {
@@ -258,6 +263,13 @@ func TestPolicyDenyWritesDenySide(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, p.DenyList, "rm -rf *")
 	assert.NotContains(t, p.AllowList, "rm -rf *")
+
+	// 成功落库的 deny 规则在审计里是"一次成功的写操作"：决策 allow（success=1），
+	// deny 侧别由 result / args.side 表达；deny 决策会被审计写入器当成失败（success=0）。
+	require.Len(t, env.auditor.rows, 1)
+	require.NotNil(t, env.auditor.rows[0].Decision)
+	assert.Equal(t, aictx.Allow, env.auditor.rows[0].Decision.Decision)
+	assert.Equal(t, "deny", env.auditor.rows[0].Result)
 }
 
 // database 落点只表达语句类型：回显必须标注"结果比请求更宽"。

@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
 	"github.com/opskat/opskat/internal/repository/policy_group_repo"
 	"github.com/opskat/opskat/internal/repository/policy_group_repo/mock_policy_group_repo"
+	"github.com/opskat/opskat/internal/service/policy_rule_svc"
 )
 
 // --- 测试脚手架：在 T5 的 policy 环境上补 policy_group_repo 注入缝 ---
@@ -237,6 +239,12 @@ func TestPolicyGroupRmEntryRemovesOnlyThatRule(t *testing.T) {
 	assert.Equal(t, []string{"uptime", "df -h"}, cp.AllowList)
 	assert.Empty(t, cp.DenyList, "only the deny entry is removed")
 
+	// 成功撤条记成功操作：决策 allow（success=1），被撤规则留在 request.args.rule。
+	require.Len(t, env.auditor.rows, 1)
+	require.NotNil(t, env.auditor.rows[0].Decision)
+	assert.Equal(t, aictx.Allow, env.auditor.rows[0].Decision.Decision)
+	assert.Equal(t, "removed", env.auditor.rows[0].Result)
+
 	// 不存在的编号要失败且不落任何改动。
 	env.pgUpdates = nil
 	assert.Equal(t, 1, env.run("group", "rm", "5", "9"))
@@ -314,6 +322,8 @@ func TestPolicyGroupAllowShadowedByOwnDenyIsRefused(t *testing.T) {
 	assert.Equal(t, 1, code)
 	stderr := env.stderrBuf.String()
 	assert.Contains(t, stderr, "rm -rf *")
+	// 遮蔽来源必须渲染为权限组本身（决策 22），不是空 holder。
+	assert.Contains(t, stderr, "ops-copy")
 	assert.Contains(t, stderr, "opsctl policy group rm 5")
 	assert.Empty(t, env.pgUpdates)
 	assert.Empty(t, env.auditor.rows)
@@ -375,6 +385,11 @@ func TestPolicyDetachRemovesGroupRef(t *testing.T) {
 	cp, err := env.updates[0].GetCommandPolicy()
 	require.NoError(t, err)
 	assert.Equal(t, []string{"builtin:dangerous-deny"}, cp.Groups)
+	// 成功 detach 记成功操作：决策 allow（success=1），摘除的组留在 request.args.groups。
+	require.Len(t, env.auditor.rows, 1)
+	require.NotNil(t, env.auditor.rows[0].Decision)
+	assert.Equal(t, aictx.Allow, env.auditor.rows[0].Decision.Decision)
+	assert.Equal(t, "detach", env.auditor.rows[0].Result)
 }
 
 func TestPolicyDetachMissingRefFails(t *testing.T) {
@@ -451,4 +466,37 @@ func TestPolicyGroupCreateValidatesNameAndType(t *testing.T) {
 	assert.Equal(t, 1, env.run("group", "create", "--type", "redis"))
 	assert.Equal(t, 1, env.run("group", "create", "--name", "ops", "--type", "no-such-kind"))
 	assert.Empty(t, env.creates)
+}
+
+func TestWritePolicyGroupAuditReturnsMarshalError(t *testing.T) {
+	_, err := policyGroupAuditArgsJSON(map[string]any{
+		"unsupported": make(chan struct{}),
+	})
+	require.ErrorContains(t, err, "marshal policy group audit args")
+}
+
+func TestRenderPolicyGroupRefErrorFollowsLocale(t *testing.T) {
+	ctx := aictx.WithPolicyLang(context.Background(), "zh-cn")
+	target := policy_rule_svc.Target{Asset: &asset_entity.Asset{ID: 5, Name: "web-01", Type: asset_entity.AssetTypeSSH}}
+
+	stateErr := renderPolicyGroupRefError(ctx, &policy_rule_svc.GroupRefStateError{
+		Ref: policy_rule_svc.GroupRef{ID: "g1", Name: "ops", PolicyType: policyent.PolicyKindCommand}, Attach: true, Attached: true,
+	}, target)
+	require.Error(t, stateErr)
+	assert.Contains(t, stateErr.Error(), "已经挂在")
+
+	mismatch := renderPolicyGroupRefError(ctx, &policy_rule_svc.PolicyGroupRefError{
+		Target: target, Ref: policy_rule_svc.GroupRef{ID: "gq", Name: "query", PolicyType: policyent.PolicyKindQuery}, Reason: policy_rule_svc.GroupRefReasonTypeMismatch,
+	}, target)
+	require.Error(t, mismatch)
+	assert.Contains(t, mismatch.Error(), "拒绝挂载")
+
+	enErr := renderPolicyGroupRefError(context.Background(), &policy_rule_svc.GroupRefStateError{
+		Ref: policy_rule_svc.GroupRef{ID: "g1", Name: "ops", PolicyType: policyent.PolicyKindCommand}, Attach: false, Attached: false,
+	}, target)
+	require.Error(t, enErr)
+	assert.Contains(t, enErr.Error(), "is not attached")
+
+	plain := errors.New("boom")
+	require.Same(t, plain, renderPolicyGroupRefError(ctx, plain, target))
 }

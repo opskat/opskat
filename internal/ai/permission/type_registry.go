@@ -96,64 +96,64 @@ func init() {
 	commandShape := registerRuleShape(policyKindCommand, shapeSides[policyent.CommandPolicy]{
 		get: func(h policyent.Holder) (*policyent.CommandPolicy, error) { return h.GetCommandPolicy() },
 		set: func(h policyRWHolder, p *policyent.CommandPolicy) error { return h.SetCommandPolicy(p) },
-		sides: func(p *policyent.CommandPolicy) (*[]string, *[]string, []string) {
-			return &p.AllowList, &p.DenyList, p.Groups
+		sides: func(p *policyent.CommandPolicy) (*[]string, *[]string, *[]string) {
+			return &p.AllowList, &p.DenyList, &p.Groups
 		},
 		newOne: func() *policyent.CommandPolicy { return &policyent.CommandPolicy{} },
 	})
 	queryShape := registerRuleShape(policyKindQuery, shapeSides[policyent.QueryPolicy]{
 		get: func(h policyent.Holder) (*policyent.QueryPolicy, error) { return h.GetQueryPolicy() },
 		set: func(h policyRWHolder, p *policyent.QueryPolicy) error { return h.SetQueryPolicy(p) },
-		sides: func(p *policyent.QueryPolicy) (*[]string, *[]string, []string) {
-			return &p.AllowTypes, &p.DenyTypes, p.Groups
+		sides: func(p *policyent.QueryPolicy) (*[]string, *[]string, *[]string) {
+			return &p.AllowTypes, &p.DenyTypes, &p.Groups
 		},
 		newOne: func() *policyent.QueryPolicy { return &policyent.QueryPolicy{} },
 	})
 	redisShape := registerRuleShape(policyKindRedis, shapeSides[policyent.RedisPolicy]{
 		get: func(h policyent.Holder) (*policyent.RedisPolicy, error) { return h.GetRedisPolicy() },
 		set: func(h policyRWHolder, p *policyent.RedisPolicy) error { return h.SetRedisPolicy(p) },
-		sides: func(p *policyent.RedisPolicy) (*[]string, *[]string, []string) {
-			return &p.AllowList, &p.DenyList, p.Groups
+		sides: func(p *policyent.RedisPolicy) (*[]string, *[]string, *[]string) {
+			return &p.AllowList, &p.DenyList, &p.Groups
 		},
 		newOne: func() *policyent.RedisPolicy { return &policyent.RedisPolicy{} },
 	})
 	mongoShape := registerRuleShape(policyKindMongo, shapeSides[policyent.MongoPolicy]{
 		get: func(h policyent.Holder) (*policyent.MongoPolicy, error) { return h.GetMongoPolicy() },
 		set: func(h policyRWHolder, p *policyent.MongoPolicy) error { return h.SetMongoPolicy(p) },
-		sides: func(p *policyent.MongoPolicy) (*[]string, *[]string, []string) {
-			return &p.AllowTypes, &p.DenyTypes, p.Groups
+		sides: func(p *policyent.MongoPolicy) (*[]string, *[]string, *[]string) {
+			return &p.AllowTypes, &p.DenyTypes, &p.Groups
 		},
 		newOne: func() *policyent.MongoPolicy { return &policyent.MongoPolicy{} },
 	})
 	kafkaShape := registerRuleShape(policyKindKafka, shapeSides[policyent.KafkaPolicy]{
 		get: func(h policyent.Holder) (*policyent.KafkaPolicy, error) { return h.GetKafkaPolicy() },
 		set: func(h policyRWHolder, p *policyent.KafkaPolicy) error { return h.SetKafkaPolicy(p) },
-		sides: func(p *policyent.KafkaPolicy) (*[]string, *[]string, []string) {
-			return &p.AllowList, &p.DenyList, p.Groups
+		sides: func(p *policyent.KafkaPolicy) (*[]string, *[]string, *[]string) {
+			return &p.AllowList, &p.DenyList, &p.Groups
 		},
 		newOne: func() *policyent.KafkaPolicy { return &policyent.KafkaPolicy{} },
 	})
 	k8sShape := registerRuleShape(policyKindK8s, shapeSides[policyent.K8sPolicy]{
 		get: func(h policyent.Holder) (*policyent.K8sPolicy, error) { return h.GetK8sPolicy() },
 		set: func(h policyRWHolder, p *policyent.K8sPolicy) error { return h.SetK8sPolicy(p) },
-		sides: func(p *policyent.K8sPolicy) (*[]string, *[]string, []string) {
-			return &p.AllowList, &p.DenyList, p.Groups
+		sides: func(p *policyent.K8sPolicy) (*[]string, *[]string, *[]string) {
+			return &p.AllowList, &p.DenyList, &p.Groups
 		},
 		newOne: func() *policyent.K8sPolicy { return &policyent.K8sPolicy{} },
 	})
 	etcdShape := registerRuleShape(policyKindEtcd, shapeSides[policyent.EtcdPolicy]{
 		get: func(h policyent.Holder) (*policyent.EtcdPolicy, error) { return h.GetEtcdPolicy() },
 		set: func(h policyRWHolder, p *policyent.EtcdPolicy) error { return h.SetEtcdPolicy(p) },
-		sides: func(p *policyent.EtcdPolicy) (*[]string, *[]string, []string) {
-			return &p.AllowList, &p.DenyList, p.Groups
+		sides: func(p *policyent.EtcdPolicy) (*[]string, *[]string, *[]string) {
+			return &p.AllowList, &p.DenyList, &p.Groups
 		},
 		newOne: func() *policyent.EtcdPolicy { return &policyent.EtcdPolicy{} },
 	})
 	ossShape := registerRuleShape(policyKindOSS, shapeSides[policyent.OSSPolicy]{
 		get: func(h policyent.Holder) (*policyent.OSSPolicy, error) { return h.GetOSSPolicy() },
 		set: func(h policyRWHolder, p *policyent.OSSPolicy) error { return h.SetOSSPolicy(p) },
-		sides: func(p *policyent.OSSPolicy) (*[]string, *[]string, []string) {
-			return &p.AllowList, &p.DenyList, p.Groups
+		sides: func(p *policyent.OSSPolicy) (*[]string, *[]string, *[]string) {
+			return &p.AllowList, &p.DenyList, &p.Groups
 		},
 		newOne: func() *policyent.OSSPolicy { return &policyent.OSSPolicy{} },
 	})

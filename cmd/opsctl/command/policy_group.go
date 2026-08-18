@@ -15,15 +15,9 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/policy"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/model/entity/group_entity"
-	policyent "github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
-	"github.com/opskat/opskat/internal/pkg/dbutil"
-	"github.com/opskat/opskat/internal/repository/asset_repo"
-	"github.com/opskat/opskat/internal/repository/group_repo"
-	"github.com/opskat/opskat/internal/repository/policy_group_repo"
 	"github.com/opskat/opskat/internal/service/policy_group_svc"
+	"github.com/opskat/opskat/internal/service/policy_rule_svc"
 )
 
 // opsctl policy group 子族与 policy attach / detach（spec 决策 21）。三种组 ID 形态的
@@ -228,21 +222,8 @@ func knownPolicyGroupKind(kind string) bool {
 	return false
 }
 
-// policyGroupKindCanon 把组 kind 映射到注册了同形状规则落点的代表性 canonical 资产
-// 类型——permission 的落点 API 按资产类型查表，CLI 经这张表复用它读写用户组。
-var policyGroupKindCanon = map[string]string{
-	policyent.PolicyKindCommand: asset_entity.AssetTypeSSH,
-	policyent.PolicyKindQuery:   asset_entity.AssetTypeDatabase,
-	policyent.PolicyKindRedis:   asset_entity.AssetTypeRedis,
-	policyent.PolicyKindMongo:   asset_entity.AssetTypeMongoDB,
-	policyent.PolicyKindKafka:   asset_entity.AssetTypeKafka,
-	policyent.PolicyKindK8s:     asset_entity.AssetTypeK8s,
-	policyent.PolicyKindEtcd:    asset_entity.AssetTypeEtcd,
-	policyent.PolicyKindOSS:     asset_entity.AssetTypeOSS,
-}
-
 func policyGroupCanon(ctx context.Context, item *policy_group_entity.PolicyGroupItem) (string, error) {
-	canon, ok := policyGroupKindCanon[item.PolicyType]
+	canon, ok := permission.CanonicalForPolicyKind(item.PolicyType)
 	if !ok {
 		return "", errors.New(policy.PolicyFmt(ctx,
 			"policy group %s has type %q, which has no rule shape opsctl can work with",
@@ -268,108 +249,11 @@ func policyGroupItemEntity(item *policy_group_entity.PolicyGroupItem) *policy_gr
 	return pg
 }
 
-// --- PolicyGroup 的 Holder 适配（不改 internal 的前提下复用 T5 落点） ---
-
-// policyGroupHolder 把 PolicyGroup 适配成 policyent.Holder（含写面），让 permission
-// 的落点函数（AppendTypeRules / RemoveTypeRule / HolderOwnTypeRules）直接读写用户组
-// 的策略 JSON。Policy 为空串按零值形状处理（刚 create 的组）。Set 侧以 PolicyType
-// 守门：形状表配错列时宁可报错也不静默落错列。
-type policyGroupHolder struct {
-	pg *policy_group_entity.PolicyGroup
-}
-
-func policyGroupPolicyOf[T any](pg *policy_group_entity.PolicyGroup) (*T, error) {
-	p := new(T)
-	if pg.Policy == "" {
-		return p, nil
-	}
-	if err := json.Unmarshal([]byte(pg.Policy), p); err != nil {
-		return nil, fmt.Errorf("unmarshal policy group %q policy: %w", pg.Name, err)
-	}
-	return p, nil
-}
-
-func (h *policyGroupHolder) setPolicy(kind string, p any) error {
-	if h.pg.PolicyType != kind {
-		return fmt.Errorf("policy group %q has type %s; refusing to write its %s column", h.pg.Name, h.pg.PolicyType, kind)
-	}
-	data, err := json.Marshal(p)
-	if err != nil {
-		return err
-	}
-	h.pg.Policy = string(data)
-	return nil
-}
-
-func (h *policyGroupHolder) GetCommandPolicy() (*policyent.CommandPolicy, error) {
-	return policyGroupPolicyOf[policyent.CommandPolicy](h.pg)
-}
-
-func (h *policyGroupHolder) GetQueryPolicy() (*policyent.QueryPolicy, error) {
-	return policyGroupPolicyOf[policyent.QueryPolicy](h.pg)
-}
-
-func (h *policyGroupHolder) GetRedisPolicy() (*policyent.RedisPolicy, error) {
-	return policyGroupPolicyOf[policyent.RedisPolicy](h.pg)
-}
-
-func (h *policyGroupHolder) GetMongoPolicy() (*policyent.MongoPolicy, error) {
-	return policyGroupPolicyOf[policyent.MongoPolicy](h.pg)
-}
-
-func (h *policyGroupHolder) GetKafkaPolicy() (*policyent.KafkaPolicy, error) {
-	return policyGroupPolicyOf[policyent.KafkaPolicy](h.pg)
-}
-
-func (h *policyGroupHolder) GetK8sPolicy() (*policyent.K8sPolicy, error) {
-	return policyGroupPolicyOf[policyent.K8sPolicy](h.pg)
-}
-
-func (h *policyGroupHolder) GetEtcdPolicy() (*policyent.EtcdPolicy, error) {
-	return policyGroupPolicyOf[policyent.EtcdPolicy](h.pg)
-}
-
-func (h *policyGroupHolder) GetOSSPolicy() (*policyent.OSSPolicy, error) {
-	return policyGroupPolicyOf[policyent.OSSPolicy](h.pg)
-}
-
-func (h *policyGroupHolder) SetCommandPolicy(p *policyent.CommandPolicy) error {
-	return h.setPolicy(policyent.PolicyKindCommand, p)
-}
-
-func (h *policyGroupHolder) SetQueryPolicy(p *policyent.QueryPolicy) error {
-	return h.setPolicy(policyent.PolicyKindQuery, p)
-}
-
-func (h *policyGroupHolder) SetRedisPolicy(p *policyent.RedisPolicy) error {
-	return h.setPolicy(policyent.PolicyKindRedis, p)
-}
-
-func (h *policyGroupHolder) SetMongoPolicy(p *policyent.MongoPolicy) error {
-	return h.setPolicy(policyent.PolicyKindMongo, p)
-}
-
-func (h *policyGroupHolder) SetKafkaPolicy(p *policyent.KafkaPolicy) error {
-	return h.setPolicy(policyent.PolicyKindKafka, p)
-}
-
-func (h *policyGroupHolder) SetK8sPolicy(p *policyent.K8sPolicy) error {
-	return h.setPolicy(policyent.PolicyKindK8s, p)
-}
-
-func (h *policyGroupHolder) SetEtcdPolicy(p *policyent.EtcdPolicy) error {
-	return h.setPolicy(policyent.PolicyKindEtcd, p)
-}
-
-func (h *policyGroupHolder) SetOSSPolicy(p *policyent.OSSPolicy) error {
-	return h.setPolicy(policyent.PolicyKindOSS, p)
-}
-
 // --- 组自身规则的视图与条目（show 编号 / rm 定位 / 遮蔽检测共用） ---
 
 // policyGroupRuleView 构造该组自身规则的单层视图（条目全部来自 RuleSourcePolicyGroup）。
 func policyGroupRuleView(item *policy_group_entity.PolicyGroupItem, canon string) (*permission.TypeRuleView, error) {
-	allow, deny, err := permission.HolderOwnTypeRules(&policyGroupHolder{pg: policyGroupItemEntity(item)}, canon)
+	allow, deny, err := permission.HolderOwnTypeRules(permission.NewPolicyGroupHolder(policyGroupItemEntity(item)), canon)
 	if err != nil {
 		return nil, err
 	}
@@ -526,7 +410,15 @@ func cmdPolicyGroupCreate(ctx context.Context, args []string) int {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
 	}
-	writePolicyGroupAudit(ctx, "created", map[string]any{"group_id": pg.ID, "name": name, "type": typ}, false)
+	auditJSON, err := policyGroupAuditArgsJSON(map[string]any{"group_id": pg.ID, "name": name, "type": typ})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	if err := writePolicyGroupAudit(ctx, "created", auditJSON); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
 	log.Info("opsctl policy group create completed", zap.Int64("groupID", pg.ID), zap.String("name", name))
 	fmt.Fprintf(os.Stdout, "%s\n", policy.PolicyFmt(ctx, //nolint:errcheck // 终端呈现尽力而为
 		"created policy group %s (ID %d, type %s)", "已创建权限组 %s（ID %d，类型 %s）", name, pg.ID, typ))
@@ -577,9 +469,17 @@ func cmdPolicyGroupCopy(ctx context.Context, args []string) int {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
 	}
-	writePolicyGroupAudit(ctx, "copied", map[string]any{
+	auditJSON, err := policyGroupAuditArgsJSON(map[string]any{
 		"source_id": item.ID, "source_name": item.Name, "new_id": created.ID, "name": name, "type": created.PolicyType,
-	}, false)
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	if err := writePolicyGroupAudit(ctx, "copied", auditJSON); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
 	log.Info("opsctl policy group copy completed", zap.Int64("newID", created.ID), zap.String("source", item.ID))
 	fmt.Fprintf(os.Stdout, "%s\n", policy.PolicyFmt(ctx, //nolint:errcheck // 终端呈现尽力而为
 		"created policy group %s (ID %d, type %s) from %s",
@@ -642,8 +542,7 @@ func cmdPolicyGroupWrite(ctx context.Context, side permission.RuleSide, args []s
 	log.Info("opsctl policy group rule write started",
 		zap.String("side", ruleSideName(side)), zap.Int64("groupID", dbID), zap.Int("patterns", len(normalized)))
 
-	holder := &policyGroupHolder{pg: policyGroupItemEntity(item)}
-	landed, err := permission.AppendTypeRules(holder, canon, side, normalized)
+	landed, shadow, err := policy_rule_svc.PolicyRule().PlanPolicyGroupRules(ctx, dbID, canon, side, normalized)
 	if err != nil {
 		log.Error("opsctl policy group rule write failed", zap.Int64("groupID", dbID), zap.Error(err))
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -651,20 +550,11 @@ func cmdPolicyGroupWrite(ctx context.Context, side permission.RuleSide, args []s
 	}
 
 	// 决策 19：被组内生效 deny 遮蔽的 allow 自始无效，写入前拒绝并给出出路。
-	if side == permission.RuleAllow {
-		view, err := policyGroupRuleView(item, canon)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
-		}
-		for _, l := range landed {
-			if sh := permission.ShadowingDeny(view, canon, l.Rule); sh != nil {
-				log.Warn("opsctl policy group rule write blocked by shadowing deny",
-					zap.Int64("groupID", dbID), zap.String("deny", sh.Rule))
-				fmt.Fprintf(os.Stderr, "Error: %v\n", policyGroupShadowRefusal(ctx, item, sh))
-				return 1
-			}
-		}
+	if shadow != nil {
+		log.Warn("opsctl policy group rule write blocked by shadowing deny",
+			zap.Int64("groupID", dbID), zap.String("deny", shadow.Rule))
+		fmt.Fprintf(os.Stderr, "Error: %v\n", policyGroupShadowRefusal(ctx, item, shadow))
+		return 1
 	}
 
 	label := policy.PolicyFmt(ctx, "policy group %s (%s)", "权限组 %s（%s）", item.Name, item.ID)
@@ -674,29 +564,30 @@ func cmdPolicyGroupWrite(ctx context.Context, side permission.RuleSide, args []s
 		return 1
 	}
 
-	if err := dbutil.WithTransaction(ctx, func(txCtx context.Context) error {
-		fresh, err := policy_group_repo.PolicyGroup().Find(txCtx, dbID)
-		if err != nil {
-			return err
-		}
-		if _, err := permission.AppendTypeRules(&policyGroupHolder{pg: fresh}, canon, side, normalized); err != nil {
-			return err
-		}
-		return policy_group_svc.PolicyGroup().Update(txCtx, fresh)
-	}); err != nil {
+	rules := make([]string, 0, len(landed))
+	for _, l := range landed {
+		rules = append(rules, l.Rule)
+	}
+	// 审计参数在持久化之前序列化：marshal 失败时不落任何改动。
+	auditJSON, err := policyGroupAuditArgsJSON(map[string]any{
+		"group_id": dbID, "group": item.Name, "type": item.PolicyType,
+		"side": ruleSideName(side), "patterns": normalized, "rules": rules,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	if err := policy_rule_svc.PolicyRule().AppendPolicyGroupRules(ctx, dbID, canon, side, normalized); err != nil {
 		log.Error("opsctl policy group rule write failed", zap.Int64("groupID", dbID), zap.Error(err))
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
 	}
 
-	rules := make([]string, 0, len(landed))
-	for _, l := range landed {
-		rules = append(rules, l.Rule)
+	if err := writePolicyGroupAudit(ctx, ruleSideName(side), auditJSON); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
 	}
-	writePolicyGroupAudit(ctx, ruleSideName(side), map[string]any{
-		"group_id": dbID, "group": item.Name, "type": item.PolicyType,
-		"side": ruleSideName(side), "patterns": normalized, "rules": rules,
-	}, side == permission.RuleDeny)
 	log.Info("opsctl policy group rule write completed",
 		zap.String("side", ruleSideName(side)), zap.Int64("groupID", dbID))
 	return 0
@@ -763,14 +654,22 @@ func cmdPolicyGroupRm(ctx context.Context, args []string) int {
 			return 1
 		}
 		log.Info("opsctl policy group rm started", zap.Int64("groupID", dbID))
+		auditJSON, err := policyGroupAuditArgsJSON(map[string]any{
+			"group_id": dbID, "group": item.Name, "type": item.PolicyType,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
 		if err := policy_group_svc.PolicyGroup().Delete(ctx, rest[0]); err != nil {
 			log.Error("opsctl policy group rm failed", zap.Int64("groupID", dbID), zap.Error(err))
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 1
 		}
-		writePolicyGroupAudit(ctx, "deleted", map[string]any{
-			"group_id": dbID, "group": item.Name, "type": item.PolicyType,
-		}, true)
+		if err := writePolicyGroupAudit(ctx, "deleted", auditJSON); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
 		log.Info("opsctl policy group rm completed", zap.Int64("groupID", dbID))
 		return 0
 	}
@@ -796,188 +695,63 @@ func cmdPolicyGroupRm(ctx context.Context, args []string) int {
 		return 1
 	}
 	log.Info("opsctl policy group rm started", zap.Int64("groupID", dbID), zap.String("entry", rest[1]))
-	if err := dbutil.WithTransaction(ctx, func(txCtx context.Context) error {
-		fresh, err := policy_group_repo.PolicyGroup().Find(txCtx, dbID)
-		if err != nil {
-			return err
-		}
-		if err := permission.RemoveTypeRule(&policyGroupHolder{pg: fresh}, canon, entry.side, entry.src.Rule); err != nil {
-			return err
-		}
-		return policy_group_svc.PolicyGroup().Update(txCtx, fresh)
-	}); err != nil {
+	auditJSON, err := policyGroupAuditArgsJSON(map[string]any{
+		"group_id": dbID, "group": item.Name, "type": item.PolicyType,
+		"side": ruleSideName(entry.side), "rule": entry.src.Rule,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	if err := policy_rule_svc.PolicyRule().RemovePolicyGroupRule(ctx, dbID, canon, entry.side, entry.src.Rule); err != nil {
 		log.Error("opsctl policy group rm failed", zap.Int64("groupID", dbID), zap.String("entry", rest[1]), zap.Error(err))
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
 	}
-	writePolicyGroupAudit(ctx, "removed", map[string]any{
-		"group_id": dbID, "group": item.Name, "type": item.PolicyType,
-		"side": ruleSideName(entry.side), "rule": entry.src.Rule,
-	}, true)
+	if err := writePolicyGroupAudit(ctx, "removed", auditJSON); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
 	log.Info("opsctl policy group rm completed", zap.Int64("groupID", dbID), zap.String("rule", entry.src.Rule))
 	return 0
 }
 
-// --- attach / detach：holder 策略列的 Groups 引用 ---
-
-// cliPolicyWriter 是 CLI 侧的 holder 写面（镜像 permission 未导出的 policyRWHolder；
-// Asset 与 Group 都实现）。
-type cliPolicyWriter interface {
-	policyent.Holder
-	SetCommandPolicy(*policyent.CommandPolicy) error
-	SetQueryPolicy(*policyent.QueryPolicy) error
-	SetRedisPolicy(*policyent.RedisPolicy) error
-	SetMongoPolicy(*policyent.MongoPolicy) error
-	SetKafkaPolicy(*policyent.KafkaPolicy) error
-	SetK8sPolicy(*policyent.K8sPolicy) error
-	SetEtcdPolicy(*policyent.EtcdPolicy) error
-	SetOSSPolicy(*policyent.OSSPolicy) error
-}
-
-var (
-	_ cliPolicyWriter = (*asset_entity.Asset)(nil)
-	_ cliPolicyWriter = (*group_entity.Group)(nil)
-)
-
-// policyGroupRefColumn 是一个策略列的 Groups 引用读写对（attach/detach 的落点）。
-type policyGroupRefColumn struct {
-	refs  func(cliPolicyWriter) ([]string, error)
-	apply func(w cliPolicyWriter, mutate func(refs *[]string) error) error
-}
-
-func policyGroupRefColumnFor[T any](
-	get func(cliPolicyWriter) (*T, error),
-	set func(cliPolicyWriter, *T) error,
-	refs func(*T) *[]string,
-) policyGroupRefColumn {
-	return policyGroupRefColumn{
-		refs: func(w cliPolicyWriter) ([]string, error) {
-			p, err := get(w)
-			if err != nil {
-				return nil, err
-			}
-			return append([]string(nil), *refs(p)...), nil
-		},
-		apply: func(w cliPolicyWriter, mutate func(refs *[]string) error) error {
-			p, err := get(w)
-			if err != nil {
-				return err
-			}
-			if err := mutate(refs(p)); err != nil {
-				return err
-			}
-			return set(w, p)
-		},
-	}
-}
-
-// policyGroupRefColumns 按 policy kind 选择 Groups 落点列（policy/policy.go:7 的
-// Groups 字段，与 allow/deny 同一列）。
-var policyGroupRefColumns = map[string]policyGroupRefColumn{
-	policyent.PolicyKindCommand: policyGroupRefColumnFor(
-		func(w cliPolicyWriter) (*policyent.CommandPolicy, error) { return w.GetCommandPolicy() },
-		func(w cliPolicyWriter, p *policyent.CommandPolicy) error { return w.SetCommandPolicy(p) },
-		func(p *policyent.CommandPolicy) *[]string { return &p.Groups },
-	),
-	policyent.PolicyKindQuery: policyGroupRefColumnFor(
-		func(w cliPolicyWriter) (*policyent.QueryPolicy, error) { return w.GetQueryPolicy() },
-		func(w cliPolicyWriter, p *policyent.QueryPolicy) error { return w.SetQueryPolicy(p) },
-		func(p *policyent.QueryPolicy) *[]string { return &p.Groups },
-	),
-	policyent.PolicyKindRedis: policyGroupRefColumnFor(
-		func(w cliPolicyWriter) (*policyent.RedisPolicy, error) { return w.GetRedisPolicy() },
-		func(w cliPolicyWriter, p *policyent.RedisPolicy) error { return w.SetRedisPolicy(p) },
-		func(p *policyent.RedisPolicy) *[]string { return &p.Groups },
-	),
-	policyent.PolicyKindMongo: policyGroupRefColumnFor(
-		func(w cliPolicyWriter) (*policyent.MongoPolicy, error) { return w.GetMongoPolicy() },
-		func(w cliPolicyWriter, p *policyent.MongoPolicy) error { return w.SetMongoPolicy(p) },
-		func(p *policyent.MongoPolicy) *[]string { return &p.Groups },
-	),
-	policyent.PolicyKindKafka: policyGroupRefColumnFor(
-		func(w cliPolicyWriter) (*policyent.KafkaPolicy, error) { return w.GetKafkaPolicy() },
-		func(w cliPolicyWriter, p *policyent.KafkaPolicy) error { return w.SetKafkaPolicy(p) },
-		func(p *policyent.KafkaPolicy) *[]string { return &p.Groups },
-	),
-	policyent.PolicyKindK8s: policyGroupRefColumnFor(
-		func(w cliPolicyWriter) (*policyent.K8sPolicy, error) { return w.GetK8sPolicy() },
-		func(w cliPolicyWriter, p *policyent.K8sPolicy) error { return w.SetK8sPolicy(p) },
-		func(p *policyent.K8sPolicy) *[]string { return &p.Groups },
-	),
-	policyent.PolicyKindEtcd: policyGroupRefColumnFor(
-		func(w cliPolicyWriter) (*policyent.EtcdPolicy, error) { return w.GetEtcdPolicy() },
-		func(w cliPolicyWriter, p *policyent.EtcdPolicy) error { return w.SetEtcdPolicy(p) },
-		func(p *policyent.EtcdPolicy) *[]string { return &p.Groups },
-	),
-	policyent.PolicyKindOSS: policyGroupRefColumnFor(
-		func(w cliPolicyWriter) (*policyent.OSSPolicy, error) { return w.GetOSSPolicy() },
-		func(w cliPolicyWriter, p *policyent.OSSPolicy) error { return w.SetOSSPolicy(p) },
-		func(p *policyent.OSSPolicy) *[]string { return &p.Groups },
-	),
-}
-
-// attachColumnKind 决定挂载写的 Groups 列（policy kind）。资产目标：列由资产类型的
-// asset-kind 注册表决定——k8s 落 K8sPolicy 列但可挂的组按 command 表解析（type_registry.go
-// 注册语义的镜像）——且组的 PolicyType 必须匹配，否则写入前拒绝（规则挂错列等于永不
-// 生效）。组目标：列由所挂组自己的 PolicyType 决定，任何 kind 都可生效。
-func attachColumnKind(ctx context.Context, t *policyWriteTarget, item *policy_group_entity.PolicyGroupItem) (string, error) {
-	if t.asset != nil {
-		column, registered := policyent.AssetKindOf(t.asset.Type)
-		if !registered || column == "" {
-			return "", errors.New(policy.PolicyFmt(ctx,
-				"asset %s has type %s, which has no policy column a group can be attached to",
-				"资产 %s 的类型 %s 没有可挂权限组的策略列", t.asset.Name, t.asset.Type))
-		}
-		accepted := column
-		if column == policyent.PolicyKindK8s {
-			accepted = policyent.PolicyKindCommand
-		}
-		if item.PolicyType != accepted {
-			return "", errors.New(policy.PolicyFmt(ctx,
+// renderPolicyGroupRefError 把服务层 attach/detach 前置校验失败渲染成本地化消息
+// （决策 21/22）：业务判定在服务层，文案归属 CLI；未知错误原样透传。
+func renderPolicyGroupRefError(ctx context.Context, err error, target policy_rule_svc.Target) error {
+	var refErr *policy_rule_svc.PolicyGroupRefError
+	if errors.As(err, &refErr) {
+		switch refErr.Reason {
+		case policy_rule_svc.GroupRefReasonTypeMismatch:
+			return errors.New(policy.PolicyFmt(ctx,
 				"refusing to attach: policy group %s (%s) has type %s but asset %s has type %s - its rules would never take effect",
 				"拒绝挂载：权限组 %s（%s）的类型是 %s，而资产 %s 的类型是 %s——规则永远不会生效",
-				item.Name, item.ID, item.PolicyType, t.asset.Name, t.asset.Type))
-		}
-		return column, nil
-	}
-	if _, ok := policyGroupRefColumns[item.PolicyType]; !ok {
-		return "", errors.New(policy.PolicyFmt(ctx,
-			"policy group %s has type %q, which has no rule shape opsctl can attach",
-			"权限组 %s 的类型 %q 没有 opsctl 可挂载的规则形状", item.ID, item.PolicyType))
-	}
-	return item.PolicyType, nil
-}
-
-func targetPolicyWriter(t *policyWriteTarget) cliPolicyWriter {
-	if t.asset != nil {
-		return t.asset
-	}
-	return t.group
-}
-
-func freshPolicyTarget(ctx context.Context, t *policyWriteTarget) (*policyWriteTarget, error) {
-	if t.asset != nil {
-		fresh, err := asset_repo.Asset().Find(ctx, t.asset.ID)
-		if err != nil {
-			return nil, err
-		}
-		return &policyWriteTarget{asset: fresh}, nil
-	}
-	fresh, err := group_repo.Group().Find(ctx, t.group.ID)
-	if err != nil {
-		return nil, err
-	}
-	return &policyWriteTarget{group: fresh}, nil
-}
-
-func containsStr(list []string, s string) bool {
-	for _, item := range list {
-		if item == s {
-			return true
+				refErr.Ref.Name, refErr.Ref.ID, refErr.Ref.PolicyType, refErr.Target.Asset.Name, refErr.Target.Asset.Type))
+		case policy_rule_svc.GroupRefReasonNoShape:
+			return errors.New(policy.PolicyFmt(ctx,
+				"policy group %s has type %q, which has no rule shape opsctl can attach",
+				"权限组 %s 的类型 %q 没有 opsctl 可挂载的规则形状", refErr.Ref.ID, refErr.Ref.PolicyType))
+		default:
+			return errors.New(policy.PolicyFmt(ctx,
+				"asset %s has type %s, which has no policy column a group can be attached to",
+				"资产 %s 的类型 %s 没有可挂权限组的策略列", refErr.Target.Asset.Name, refErr.Target.Asset.Type))
 		}
 	}
-	return false
+	var stateErr *policy_rule_svc.GroupRefStateError
+	if errors.As(err, &stateErr) {
+		if stateErr.Attach {
+			return errors.New(policy.PolicyFmt(ctx,
+				"policy group %s (%s) is already attached to %s",
+				"权限组 %s（%s）已经挂在 %s 上", stateErr.Ref.Name, stateErr.Ref.ID, policyTargetLabel(target)))
+		}
+		return errors.New(policy.PolicyFmt(ctx,
+			"policy group %s (%s) is not attached to %s",
+			"权限组 %s（%s）没有挂在 %s 上", stateErr.Ref.Name, stateErr.Ref.ID, policyTargetLabel(target)))
+	}
+	return err
 }
+
+// --- attach / detach：holder 策略列的 Groups 引用 ---
 
 func cmdPolicyAttachDetach(ctx context.Context, attach bool, args []string) int {
 	name := "policy attach"
@@ -993,7 +767,7 @@ func cmdPolicyAttachDetach(ctx context.Context, attach bool, args []string) int 
 		return refusePolicyWrite(ctx, name)
 	}
 
-	var target policyWriteTarget
+	var target policy_rule_svc.Target
 	switch {
 	case len(groupNames) == 1 && len(rest) >= 1:
 		gid, _, err := resolveGroup(ctx, groupNames[0])
@@ -1001,19 +775,19 @@ func cmdPolicyAttachDetach(ctx context.Context, attach bool, args []string) int 
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 1
 		}
-		group, err := group_repo.Group().Find(ctx, gid)
+		group, err := policy_rule_svc.PolicyRule().FindGroup(ctx, gid)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: group not found: ID %d\n", gid)
 			return 1
 		}
-		target = policyWriteTarget{group: group}
+		target = policy_rule_svc.Target{Group: group}
 	case len(groupNames) == 0 && len(rest) >= 2:
 		asset, err := resolveAsset(ctx, rest[0])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 1
 		}
-		target = policyWriteTarget{asset: asset}
+		target = policy_rule_svc.Target{Asset: asset}
 		rest = rest[1:]
 	default:
 		fmt.Fprintf(os.Stderr, "Error: %s takes one target (<asset> or --group <group>) and one or more group ids\n", name)
@@ -1030,38 +804,14 @@ func cmdPolicyAttachDetach(ctx context.Context, attach bool, args []string) int 
 		items = append(items, item)
 	}
 
-	// 列选择与冲突预检都在写入之前：类型不匹配、已挂（attach）、未挂（detach）直接失败。
-	type attachOp struct {
-		item   *policy_group_entity.PolicyGroupItem
-		column policyGroupRefColumn
-	}
-	w := targetPolicyWriter(&target)
-	ops := make([]attachOp, 0, len(items))
+	serviceTarget := target
+	refs := make([]policy_rule_svc.GroupRef, 0, len(items))
 	for _, item := range items {
-		columnKind, err := attachColumnKind(ctx, &target, item)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
-		}
-		column := policyGroupRefColumns[columnKind]
-		current, err := column.refs(w)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
-		}
-		if attach && containsStr(current, item.ID) {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", policy.PolicyFmt(ctx,
-				"policy group %s (%s) is already attached to %s",
-				"权限组 %s（%s）已经挂在 %s 上", item.Name, item.ID, target.label()))
-			return 1
-		}
-		if !attach && !containsStr(current, item.ID) {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", policy.PolicyFmt(ctx,
-				"policy group %s (%s) is not attached to %s",
-				"权限组 %s（%s）没有挂在 %s 上", item.Name, item.ID, target.label()))
-			return 1
-		}
-		ops = append(ops, attachOp{item: item, column: column})
+		refs = append(refs, policy_rule_svc.GroupRef{ID: item.ID, Name: item.Name, PolicyType: item.PolicyType})
+	}
+	if err := policy_rule_svc.PolicyRule().ValidateGroupRefs(ctx, serviceTarget, refs, attach); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", renderPolicyGroupRefError(ctx, err, serviceTarget))
+		return 1
 	}
 
 	log := logger.Ctx(ctx)
@@ -1071,8 +821,8 @@ func cmdPolicyAttachDetach(ctx context.Context, attach bool, args []string) int 
 		echoHeader = policy.PolicyMsg(ctx, "policy groups to detach:", "将要摘除的权限组：")
 	}
 	fmt.Fprintf(out, "%s\n", echoHeader) //nolint:errcheck // 终端呈现尽力而为
-	for _, op := range ops {
-		fmt.Fprintf(out, "  %s (%s, type %s) -> %s\n", op.item.Name, op.item.ID, op.item.PolicyType, target.label()) //nolint:errcheck // 终端呈现尽力而为
+	for _, item := range items {
+		fmt.Fprintf(out, "  %s (%s, type %s) -> %s\n", item.Name, item.ID, item.PolicyType, policyTargetLabel(target)) //nolint:errcheck // 终端呈现尽力而为
 	}
 	prompt := policy.PolicyMsg(ctx, "attach these groups? [y/N]", "挂载这些组？[y/N]")
 	if !attach {
@@ -1080,7 +830,7 @@ func cmdPolicyAttachDetach(ctx context.Context, attach bool, args []string) int 
 	}
 	if !askRuleConfirm(in, out, prompt) {
 		log.Info("opsctl policy attach declined at confirmation",
-			zap.Bool("attach", attach), zap.String("target", target.label()))
+			zap.Bool("attach", attach), zap.String("target", policyTargetLabel(target)))
 		fmt.Fprintf(os.Stderr, "Error: %s\n", policy.PolicyMsg(ctx, "declined: nothing written", "已拒绝：未写入任何改动"))
 		return 1
 	}
@@ -1089,73 +839,59 @@ func cmdPolicyAttachDetach(ctx context.Context, attach bool, args []string) int 
 	if !attach {
 		verb = "detach"
 	}
-	log.Info("opsctl policy attach started", zap.String("verb", verb), zap.String("target", target.label()), zap.Int("groups", len(ops)))
-	if err := dbutil.WithTransaction(ctx, func(txCtx context.Context) error {
-		fresh, err := freshPolicyTarget(txCtx, &target)
-		if err != nil {
-			return err
-		}
-		fw := targetPolicyWriter(fresh)
-		for _, op := range ops {
-			id := op.item.ID
-			if err := op.column.apply(fw, func(refs *[]string) error {
-				if attach {
-					if !containsStr(*refs, id) {
-						*refs = append(*refs, id)
-					}
-					return nil
-				}
-				kept := make([]string, 0, len(*refs))
-				for _, r := range *refs {
-					if r == id {
-						continue
-					}
-					kept = append(kept, r)
-				}
-				*refs = kept
-				return nil
-			}); err != nil {
-				return err
-			}
-		}
-		if fresh.asset != nil {
-			return asset_repo.Asset().Update(txCtx, fresh.asset)
-		}
-		return group_repo.Group().Update(txCtx, fresh.group)
-	}); err != nil {
-		log.Error("opsctl policy attach failed", zap.String("verb", verb), zap.String("target", target.label()), zap.Error(err))
+	log.Info("opsctl policy attach started", zap.String("verb", verb), zap.String("target", policyTargetLabel(target)), zap.Int("groups", len(items)))
+
+	ids := make([]string, 0, len(items))
+	names := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+		names = append(names, item.Name)
+	}
+	auditArgs := map[string]any{"groups": ids, "group_names": names}
+	if target.Asset != nil {
+		auditArgs["asset_id"] = target.Asset.ID
+		auditArgs["asset"] = target.Asset.Name
+	} else {
+		auditArgs["group_id"] = target.Group.ID
+		auditArgs["group"] = target.Group.Name
+	}
+	auditJSON, err := policyGroupAuditArgsJSON(auditArgs)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
 	}
-
-	ids := make([]string, 0, len(ops))
-	names := make([]string, 0, len(ops))
-	for _, op := range ops {
-		ids = append(ids, op.item.ID)
-		names = append(names, op.item.Name)
+	if err := policy_rule_svc.PolicyRule().UpdateGroupRefs(ctx, serviceTarget, refs, attach); err != nil {
+		log.Error("opsctl policy attach failed", zap.String("verb", verb), zap.String("target", policyTargetLabel(target)), zap.Error(err))
+		fmt.Fprintf(os.Stderr, "Error: %v\n", renderPolicyGroupRefError(ctx, err, serviceTarget))
+		return 1
 	}
-	auditArgs := map[string]any{"groups": ids, "group_names": names}
-	if target.asset != nil {
-		auditArgs["asset_id"] = target.asset.ID
-		auditArgs["asset"] = target.asset.Name
-	} else {
-		auditArgs["group_id"] = target.group.ID
-		auditArgs["group"] = target.group.Name
+	if err := writePolicyGroupAudit(ctx, verb, auditJSON); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
 	}
-	writePolicyGroupAudit(ctx, verb, auditArgs, !attach)
-	log.Info("opsctl policy attach completed", zap.String("verb", verb), zap.String("target", target.label()))
+	log.Info("opsctl policy attach completed", zap.String("verb", verb), zap.String("target", policyTargetLabel(target)))
 	return 0
 }
 
 // --- 审计 ---
 
-// writePolicyGroupAudit 为一次成功的组操作记一行审计（与 policy_rule 同一工具名，
-// result 区分动词）。
-func writePolicyGroupAudit(ctx context.Context, result string, args map[string]any, deny bool) {
-	argsJSON, _ := json.Marshal(args)
-	decision := &aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow}
-	if deny {
-		decision = &aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny}
+// policyGroupAuditArgsJSON 序列化组操作审计参数。多数调用方在持久化之前序列化
+// （marshal 失败时不落任何改动）；create / copy 因审计参数含持久化后生成的 ID，
+// 在持久化之后序列化，其参数只含可序列化基础值，marshal 实际不会失败。
+func policyGroupAuditArgsJSON(args map[string]any) (string, error) {
+	b, err := json.Marshal(args)
+	if err != nil {
+		return "", fmt.Errorf("marshal policy group audit args: %w", err)
 	}
-	writeOpsctlAudit(ctx, "policy_rule", string(argsJSON), result, nil, decision)
+	return string(b), nil
+}
+
+// writePolicyGroupAudit 为一次成功的组操作记一行审计（与 policy_rule 同一工具名，
+// result 区分动词）。argsJSON 由调用方序列化（create / copy 在持久化后、其余在改动前）。
+func writePolicyGroupAudit(ctx context.Context, result, argsJSON string) error {
+	// 成功落库的组操作记 allow 决策（审计写入器按 Deny 决策把 success 置 0）；
+	// 操作语义（deny 侧 / 删除 / 摘除）由 result 与 args 表达。
+	decision := &aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow}
+	writeOpsctlAudit(ctx, "policy_rule", argsJSON, result, nil, decision)
+	return nil
 }

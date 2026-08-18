@@ -14,6 +14,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	policyent "github.com/opskat/opskat/internal/model/entity/policy"
+	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
 	"github.com/opskat/opskat/internal/service/policy_group_svc"
 )
 
@@ -100,6 +101,11 @@ type ruleLanding struct {
 
 var ruleLandings = make(map[string]*ruleLanding)
 
+// shapeCanonicals 记录每个策略列第一个注册的 canonical 资产类型。同列的所有
+// canonical 共享同一个 landing.shape，归一化与落库行为完全一致，取第一个即可；
+// 需要 canonical 时（如权限组按 kind 找落点）不必在 CLI/服务层维护第二张表。
+var shapeCanonicals = make(map[*shapeLanding]string)
+
 // registerRuleSink 注册一个资产类型的永久规则落点，与 registerPermissionType 的
 // grantPatterns 并列（type_registry.go 的 init 里一起注册）。重复注册 panic——注册
 // 冲突是启动期编程错误。
@@ -109,6 +115,9 @@ func registerRuleSink(canonical string, landing *ruleLanding) {
 	}
 	if landing.shape == nil || landing.land == nil || landing.match == nil {
 		panic(fmt.Sprintf("permission: invalid rule sink registration %q", canonical))
+	}
+	if _, ok := shapeCanonicals[landing.shape]; !ok {
+		shapeCanonicals[landing.shape] = canonical
 	}
 	ruleLandings[canonical] = landing
 }
@@ -186,13 +195,89 @@ func asRWHolder(holder policyent.Holder) (policyRWHolder, error) {
 	return rw, nil
 }
 
+type policyGroupHolder struct {
+	group *policy_group_entity.PolicyGroup
+}
+
+func NewPolicyGroupHolder(group *policy_group_entity.PolicyGroup) policyent.Holder {
+	return &policyGroupHolder{group: group}
+}
+func policyGroupPolicyOf[T any](g *policy_group_entity.PolicyGroup) (*T, error) {
+	p := new(T)
+	if g.Policy == "" {
+		return p, nil
+	}
+	if err := json.Unmarshal([]byte(g.Policy), p); err != nil {
+		return nil, fmt.Errorf("unmarshal policy group %q policy: %w", g.Name, err)
+	}
+	return p, nil
+}
+func (h *policyGroupHolder) set(kind string, p any) error {
+	if h.group.PolicyType != kind {
+		return fmt.Errorf("policy group %q has type %s; refusing to write its %s column", h.group.Name, h.group.PolicyType, kind)
+	}
+	b, err := json.Marshal(p)
+	if err == nil {
+		h.group.Policy = string(b)
+	}
+	return err
+}
+func (h *policyGroupHolder) GetCommandPolicy() (*policyent.CommandPolicy, error) {
+	return policyGroupPolicyOf[policyent.CommandPolicy](h.group)
+}
+func (h *policyGroupHolder) GetQueryPolicy() (*policyent.QueryPolicy, error) {
+	return policyGroupPolicyOf[policyent.QueryPolicy](h.group)
+}
+func (h *policyGroupHolder) GetRedisPolicy() (*policyent.RedisPolicy, error) {
+	return policyGroupPolicyOf[policyent.RedisPolicy](h.group)
+}
+func (h *policyGroupHolder) GetMongoPolicy() (*policyent.MongoPolicy, error) {
+	return policyGroupPolicyOf[policyent.MongoPolicy](h.group)
+}
+func (h *policyGroupHolder) GetKafkaPolicy() (*policyent.KafkaPolicy, error) {
+	return policyGroupPolicyOf[policyent.KafkaPolicy](h.group)
+}
+func (h *policyGroupHolder) GetK8sPolicy() (*policyent.K8sPolicy, error) {
+	return policyGroupPolicyOf[policyent.K8sPolicy](h.group)
+}
+func (h *policyGroupHolder) GetEtcdPolicy() (*policyent.EtcdPolicy, error) {
+	return policyGroupPolicyOf[policyent.EtcdPolicy](h.group)
+}
+func (h *policyGroupHolder) GetOSSPolicy() (*policyent.OSSPolicy, error) {
+	return policyGroupPolicyOf[policyent.OSSPolicy](h.group)
+}
+func (h *policyGroupHolder) SetCommandPolicy(p *policyent.CommandPolicy) error {
+	return h.set(policyent.PolicyKindCommand, p)
+}
+func (h *policyGroupHolder) SetQueryPolicy(p *policyent.QueryPolicy) error {
+	return h.set(policyent.PolicyKindQuery, p)
+}
+func (h *policyGroupHolder) SetRedisPolicy(p *policyent.RedisPolicy) error {
+	return h.set(policyent.PolicyKindRedis, p)
+}
+func (h *policyGroupHolder) SetMongoPolicy(p *policyent.MongoPolicy) error {
+	return h.set(policyent.PolicyKindMongo, p)
+}
+func (h *policyGroupHolder) SetKafkaPolicy(p *policyent.KafkaPolicy) error {
+	return h.set(policyent.PolicyKindKafka, p)
+}
+func (h *policyGroupHolder) SetK8sPolicy(p *policyent.K8sPolicy) error {
+	return h.set(policyent.PolicyKindK8s, p)
+}
+func (h *policyGroupHolder) SetEtcdPolicy(p *policyent.EtcdPolicy) error {
+	return h.set(policyent.PolicyKindEtcd, p)
+}
+func (h *policyGroupHolder) SetOSSPolicy(p *policyent.OSSPolicy) error {
+	return h.set(policyent.PolicyKindOSS, p)
+}
+
 // --- 形状层：一个策略列的读写 ---
 
 // shapeSides[T] 是形状 P 的访问四件套。sides 返回两侧列表的指针，append/remove 直接改列表。
 type shapeSides[T any] struct {
 	get    func(policyent.Holder) (*T, error) // 读面在 Holder 上就有
 	set    func(policyRWHolder, *T) error     // 写面补 Set 对
-	sides  func(*T) (allow, deny *[]string, refs []string)
+	sides  func(*T) (allow, deny, refs *[]string)
 	newOne func() *T
 }
 
@@ -202,9 +287,14 @@ type shapeLanding struct {
 	ownSides    func(holder policyent.Holder) (allow, deny, refs []string, err error)
 	groupSides  func(policyJSON string) (allow, deny []string, err error)
 	removeFrom  func(holder policyent.Holder, side RuleSide, rule string) error
+	refs        func(holder policyent.Holder) ([]string, error)
+	updateRefs  func(holder policyent.Holder, mutate func(*[]string) error) error
 }
 
-var ruleShapes = make(map[string]*shapeLanding)
+var (
+	ruleShapes     = make(map[string]*shapeLanding)
+	ruleShapeOrder []string
+)
 
 // registerRuleShape 注册一个策略列的读写落点（kind = policy kind 或 k8s 列）。
 func registerRuleShape[T any](kind string, s shapeSides[T]) *shapeLanding {
@@ -250,7 +340,7 @@ func registerRuleShape[T any](kind string, s shapeSides[T]) *shapeLanding {
 				return nil, nil, nil, err
 			}
 			allow, deny, refs := s.sides(p)
-			return append([]string(nil), *allow...), append([]string(nil), *deny...), refs, nil
+			return append([]string(nil), *allow...), append([]string(nil), *deny...), append([]string(nil), (*refs)...), nil
 		},
 		groupSides: func(policyJSON string) ([]string, []string, error) {
 			p := s.newOne()
@@ -289,9 +379,104 @@ func registerRuleShape[T any](kind string, s shapeSides[T]) *shapeLanding {
 			*sideList = kept
 			return s.set(rw, p)
 		},
+		refs: func(holder policyent.Holder) ([]string, error) {
+			p, err := s.get(holder)
+			if err != nil {
+				return nil, err
+			}
+			_, _, refs := s.sides(p)
+			return append([]string(nil), (*refs)...), nil
+		},
+		updateRefs: func(holder policyent.Holder, mutate func(*[]string) error) error {
+			rw, err := asRWHolder(holder)
+			if err != nil {
+				return err
+			}
+			p, err := s.get(rw)
+			if err != nil {
+				return err
+			}
+			_, _, refs := s.sides(p)
+			if err := mutate(refs); err != nil {
+				return err
+			}
+			return s.set(rw, p)
+		},
 	}
 	ruleShapes[kind] = l
+	ruleShapeOrder = append(ruleShapeOrder, kind)
 	return l
+}
+
+// PolicyShapeRefs exposes the registered policy-shape seam to services which
+// manage policy-group attachments. Callers do not duplicate the concrete
+// policy Get/Set table.
+func PolicyShapeRefs(holder policyent.Holder, policyKind string) ([]string, error) {
+	shape, ok := ruleShapes[policyKind]
+	if !ok {
+		return nil, fmt.Errorf("no permanent rule support for policy kind %q", policyKind)
+	}
+	return shape.refs(holder)
+}
+
+func updatePolicyShapeRefs(holder policyent.Holder, policyKind string, mutate func(*[]string) error) error {
+	shape, ok := ruleShapes[policyKind]
+	if !ok {
+		return fmt.Errorf("no permanent rule support for policy kind %q", policyKind)
+	}
+	return shape.updateRefs(holder, mutate)
+}
+
+// AddPolicyShapeRef appends one policy-group reference through the registered
+// shape. Duplicate validation belongs to the service use case, which checks a
+// fresh holder in its transaction before calling this narrow mutation.
+func AddPolicyShapeRef(holder policyent.Holder, policyKind, ref string) error {
+	return updatePolicyShapeRefs(holder, policyKind, func(refs *[]string) error {
+		*refs = append(*refs, ref)
+		return nil
+	})
+}
+
+// RemovePolicyShapeRef removes a policy-group reference through the registered
+// shape. Presence validation belongs to the service use case.
+func RemovePolicyShapeRef(holder policyent.Holder, policyKind, ref string) error {
+	return updatePolicyShapeRefs(holder, policyKind, func(refs *[]string) error {
+		kept := (*refs)[:0]
+		for _, current := range *refs {
+			if current != ref {
+				kept = append(kept, current)
+			}
+		}
+		*refs = kept
+		return nil
+	})
+}
+
+// PolicyShapeForType returns the holder column and policy-group type accepted
+// by a registered asset type. K8s writes its own column but consumes command groups.
+func PolicyShapeForType(canonicalType string) (column, acceptedGroupType string, ok bool) {
+	landing, ok := ruleLandingFor(canonicalType)
+	if !ok {
+		return "", "", false
+	}
+	for kind, shape := range ruleShapes {
+		if shape == landing.shape {
+			return kind, landing.refPolicyType, true
+		}
+	}
+	return "", "", false
+}
+
+// CanonicalForPolicyKind 返回注册到该策略列（policy kind）的第一个 canonical 资产
+// 类型。权限组只有 kind 没有资产类型，规则落点与归一化需要 canonical；同列的
+// canonical 共享同一落点，取注册的第一个即可，新增形状无需在调用方维护镜像表。
+func CanonicalForPolicyKind(policyKind string) (string, bool) {
+	shape, ok := ruleShapes[policyKind]
+	if !ok {
+		return "", false
+	}
+	canonical, ok := shapeCanonicals[shape]
+	return canonical, ok
 }
 
 func containsString(list []string, s string) bool {
@@ -579,33 +764,20 @@ type HolderShapeRules struct {
 	Groups     []string
 }
 
-// ListHolderRuleShapes 按 command/query/redis/mongo/kafka/k8s/etcd/oss 的固定顺序
-// 列出 holder 自身非空的形状列。这是 Holder 接口形状的枚举，不是类型分支派发。
-func ListHolderRuleShapes(holder policyent.Holder) []HolderShapeRules {
+// ListHolderRuleShapes 按形状注册顺序列出 holder 自身非空的形状列。
+// 注册表同时拥有读写落点和稳定顺序，新增形状无需再维护一份枚举镜像。
+func ListHolderRuleShapes(holder policyent.Holder) ([]HolderShapeRules, error) {
 	var shapes []HolderShapeRules
-	if p, err := holder.GetCommandPolicy(); err == nil && !p.IsEmpty() {
-		shapes = append(shapes, HolderShapeRules{policyKindCommand, p.AllowList, p.DenyList, p.Groups})
+	for _, kind := range ruleShapeOrder {
+		shape := ruleShapes[kind]
+		allow, deny, refs, err := shape.ownSides(holder)
+		if err != nil {
+			return nil, fmt.Errorf("read %s policy shape: %w", kind, err)
+		}
+		if len(allow) == 0 && len(deny) == 0 && len(refs) == 0 {
+			continue
+		}
+		shapes = append(shapes, HolderShapeRules{PolicyType: kind, Allow: allow, Deny: deny, Groups: refs})
 	}
-	if p, err := holder.GetQueryPolicy(); err == nil && !p.IsEmpty() {
-		shapes = append(shapes, HolderShapeRules{policyKindQuery, p.AllowTypes, p.DenyTypes, p.Groups})
-	}
-	if p, err := holder.GetRedisPolicy(); err == nil && !p.IsEmpty() {
-		shapes = append(shapes, HolderShapeRules{policyKindRedis, p.AllowList, p.DenyList, p.Groups})
-	}
-	if p, err := holder.GetMongoPolicy(); err == nil && !p.IsEmpty() {
-		shapes = append(shapes, HolderShapeRules{policyKindMongo, p.AllowTypes, p.DenyTypes, p.Groups})
-	}
-	if p, err := holder.GetKafkaPolicy(); err == nil && !p.IsEmpty() {
-		shapes = append(shapes, HolderShapeRules{policyKindKafka, p.AllowList, p.DenyList, p.Groups})
-	}
-	if p, err := holder.GetK8sPolicy(); err == nil && !p.IsEmpty() {
-		shapes = append(shapes, HolderShapeRules{policyKindK8s, p.AllowList, p.DenyList, p.Groups})
-	}
-	if p, err := holder.GetEtcdPolicy(); err == nil && !p.IsEmpty() {
-		shapes = append(shapes, HolderShapeRules{policyKindEtcd, p.AllowList, p.DenyList, p.Groups})
-	}
-	if p, err := holder.GetOSSPolicy(); err == nil && !p.IsEmpty() {
-		shapes = append(shapes, HolderShapeRules{policyKindOSS, p.AllowList, p.DenyList, p.Groups})
-	}
-	return shapes
+	return shapes, nil
 }

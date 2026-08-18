@@ -22,11 +22,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/grant_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
-	policyent "github.com/opskat/opskat/internal/model/entity/policy"
-	"github.com/opskat/opskat/internal/pkg/dbutil"
-	"github.com/opskat/opskat/internal/repository/asset_repo"
-	"github.com/opskat/opskat/internal/repository/grant_repo"
-	"github.com/opskat/opskat/internal/repository/group_repo"
+	"github.com/opskat/opskat/internal/service/policy_rule_svc"
 )
 
 // opsctl policy 家族（spec「Rule management: opsctl policy」）：show 只读免 TTY；
@@ -43,6 +39,9 @@ const policyBroaderMark = "(broader than the requested subject)"
 var policyConfirmStreams = func() (io.Reader, io.Writer) { return os.Stdin, os.Stderr }
 
 func cmdPolicy(ctx context.Context, args []string, session string) int {
+	// 与 create/exec/cp/delete 一致：审计行的 source 列区分 ai/opsctl/desktop，
+	// policy 写路径的审计也归 opsctl（组子族经 cmdPolicyGroup 继承同一 ctx）。
+	ctx = aictx.WithAuditSource(ctx, "opsctl")
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		printPolicyUsage()
 		if len(args) > 0 {
@@ -132,37 +131,20 @@ Examples:
 
 // --- 目标解析 ---
 
-// policyWriteTarget 是一次写入的已解析目标：资产或组 + 该目标的 canonical 类型 +
-// 按该类型归一化后的 pattern。
-type policyWriteTarget struct {
-	asset     *asset_entity.Asset
-	group     *group_entity.Group
-	canonical string
-	patterns  []string
-	landed    []permission.LandedRule
+// policyTargetLabel 渲染目标在 CLI 上的标签（回显与日志）。
+func policyTargetLabel(t policy_rule_svc.Target) string {
+	if t.Asset != nil {
+		return fmt.Sprintf("asset %s (ID %d)", t.Asset.Name, t.Asset.ID)
+	}
+	return fmt.Sprintf("group %s (ID %d)", t.Group.Name, t.Group.ID)
 }
 
-// holder 返回目标背后的策略持有者（资产或组）。
-func (t *policyWriteTarget) holder() policyent.Holder {
-	if t.asset != nil {
-		return t.asset
+// policyTargetCLIRef 渲染目标在 CLI 上的引用形式（供报错里的出路命令使用，恒定 ASCII）。
+func policyTargetCLIRef(t policy_rule_svc.Target) string {
+	if t.Asset != nil {
+		return strconv.FormatInt(t.Asset.ID, 10)
 	}
-	return t.group
-}
-
-func (t *policyWriteTarget) label() string {
-	if t.asset != nil {
-		return fmt.Sprintf("asset %s (ID %d)", t.asset.Name, t.asset.ID)
-	}
-	return fmt.Sprintf("group %s (ID %d)", t.group.Name, t.group.ID)
-}
-
-// cliRef 渲染目标在 CLI 上的引用形式（供报错里的出路命令使用，恒定 ASCII）。
-func (t *policyWriteTarget) cliRef() string {
-	if t.asset != nil {
-		return strconv.FormatInt(t.asset.ID, 10)
-	}
-	return "--group " + strconv.FormatInt(t.group.ID, 10)
+	return "--group " + strconv.FormatInt(t.Group.ID, 10)
 }
 
 // splitPolicyArgs 把原始参数按首个 "--" 切成 flag+目标 与 pattern。切分发生在 flag
@@ -226,7 +208,7 @@ func parsePolicyWriteFlags(before []string) (declared string, groups, targets []
 
 // resolvePolicyTargets 解析资产与组目标并归一化 pattern。全部校验发生在写入之前：
 // 目标不存在、类型断言不符、组目标缺 --type、归一化为空都在这里失败。
-func resolvePolicyTargets(ctx context.Context, assetNames, groupNames []string, declared string, rawPatterns []string) ([]policyWriteTarget, error) {
+func resolvePolicyTargets(ctx context.Context, assetNames, groupNames []string, declared string, rawPatterns []string) ([]policy_rule_svc.Target, error) {
 	if len(assetNames) == 0 && len(groupNames) == 0 {
 		return nil, errors.New("no target: pass assets and/or --group")
 	}
@@ -234,7 +216,7 @@ func resolvePolicyTargets(ctx context.Context, assetNames, groupNames []string, 
 		return nil, errors.New("no pattern given after '--'")
 	}
 
-	var targets []policyWriteTarget
+	var targets []policy_rule_svc.Target
 	for _, name := range assetNames {
 		asset, err := resolveAsset(ctx, name)
 		if err != nil {
@@ -244,14 +226,14 @@ func resolvePolicyTargets(ctx context.Context, assetNames, groupNames []string, 
 		if err := permission.AssertAssetType(asset, declared); err != nil {
 			return nil, err
 		}
-		targets = append(targets, policyWriteTarget{asset: asset, canonical: asset.Type})
+		targets = append(targets, policy_rule_svc.Target{Asset: asset, Canonical: asset.Type})
 	}
 	for _, name := range groupNames {
 		gid, _, err := resolveGroup(ctx, name)
 		if err != nil {
 			return nil, err
 		}
-		group, err := group_repo.Group().Find(ctx, gid)
+		group, err := policy_rule_svc.PolicyRule().FindGroup(ctx, gid)
 		if err != nil {
 			return nil, fmt.Errorf("group not found: ID %d", gid)
 		}
@@ -266,21 +248,21 @@ func resolvePolicyTargets(ctx context.Context, assetNames, groupNames []string, 
 		if !permission.TypeRulesSupported(canonical) {
 			return nil, fmt.Errorf("type %q has no permanent-rule shape; file transfers need a direction: use --type cp:read or --type cp:write", declared)
 		}
-		targets = append(targets, policyWriteTarget{group: group, canonical: canonical})
+		targets = append(targets, policy_rule_svc.Target{Group: group, Canonical: canonical})
 	}
 
 	for i := range targets {
 		normalized := make([]string, 0, len(rawPatterns))
 		for _, p := range rawPatterns {
-			norms := permission.NormalizeGrantPatterns(targets[i].canonical, p, permission.GrantOriginUser)
+			norms := permission.NormalizeGrantPatterns(targets[i].Canonical, p, permission.GrantOriginUser)
 			if len(norms) == 0 {
 				// 归一化为空是一个答案：什么都不落并报错（OSS 的目录标记场景），
 				// 不退回原串。
-				return nil, fmt.Errorf("pattern %q normalizes to nothing on type %s; nothing would be written", p, targets[i].canonical)
+				return nil, fmt.Errorf("pattern %q normalizes to nothing on type %s; nothing would be written", p, targets[i].Canonical)
 			}
 			normalized = append(normalized, norms...)
 		}
-		targets[i].patterns = normalized
+		targets[i].Patterns = normalized
 	}
 	return targets, nil
 }
@@ -335,104 +317,63 @@ func refusePolicyWrite(ctx context.Context, name string) int {
 }
 
 // writePermanentRules 是永久规则的唯一写入路径（spec 决策 13：终端提示的"永久允许"
-// 与显式 opsctl policy allow/deny 共用）。顺序：内存落点 → 遮蔽检测 → 回显与二次
-// 确认 → 一次事务内的读-改-写 → 审计。任何一步失败都不落任何改动。
-func writePermanentRules(ctx context.Context, side permission.RuleSide, targets []policyWriteTarget) error {
+// 与显式 opsctl policy allow/deny 共用）。顺序：service 计划（落点 + 遮蔽检测）→
+// 回显与二次确认 → service 一次事务内的读-改-写 → 审计。CLI 只解析、渲染与确认，
+// 落点/遮蔽/持久化业务在 policy_rule_svc，任何一步失败都不落任何改动。
+func writePermanentRules(ctx context.Context, side permission.RuleSide, targets []policy_rule_svc.Target) error {
 	log := logger.Ctx(ctx)
 	log.Info("opsctl policy rule write started",
 		zap.String("side", ruleSideName(side)), zap.Int("targets", len(targets)))
 
-	for i := range targets {
-		landed, err := permission.AppendTypeRules(targets[i].holder(), targets[i].canonical, side, targets[i].patterns)
-		if err != nil {
-			return fmt.Errorf("%s: %w", targets[i].label(), err)
-		}
-		targets[i].landed = landed
+	plans, err := policy_rule_svc.PolicyRule().PlanRules(ctx, side, targets)
+	if err != nil {
+		return err
 	}
 
 	// 决策 19：allow 被生效中的 deny 遮蔽时拒绝写入——被遮蔽的 allow 自始无效。
-	if side == permission.RuleAllow {
-		for i := range targets {
-			sh, err := shadowingDenyFor(ctx, &targets[i])
-			if err != nil {
-				return err
-			}
-			if sh != nil {
-				log.Warn("opsctl policy rule write blocked by shadowing deny",
-					zap.String("target", targets[i].label()), zap.String("deny", sh.Rule))
-				return shadowRefusal(ctx, &targets[i], sh)
-			}
+	for _, plan := range plans {
+		if plan.Shadow == nil {
+			continue
 		}
+		log.Warn("opsctl policy rule write blocked by shadowing deny",
+			zap.String("target", policyTargetLabel(plan.Target)), zap.String("deny", plan.Shadow.Rule))
+		return shadowRefusal(ctx, plan.Target, plan.Shadow)
 	}
 
-	if !confirmRuleWrite(ctx, side, targets) {
+	if !confirmRuleWrite(ctx, side, plans) {
 		log.Info("opsctl policy rule write declined at confirmation",
 			zap.String("side", ruleSideName(side)), zap.Int("targets", len(targets)))
 		return errors.New("declined: nothing written")
 	}
 
-	// 一次事务内的读-改-写：多目标/多 pattern 全或无。
-	if err := dbutil.WithTransaction(ctx, func(txCtx context.Context) error {
-		for i := range targets {
-			if err := rewriteTargetRules(txCtx, side, &targets[i]); err != nil {
-				return err
-			}
+	// 审计参数在持久化之前序列化：marshal 失败时不落任何改动。
+	auditJSONs := make([]string, 0, len(plans))
+	for _, plan := range plans {
+		argsJSON, err := ruleAuditArgsJSON(side, plan.Target, plan.Landed)
+		if err != nil {
+			return err
 		}
-		return nil
-	}); err != nil {
+		auditJSONs = append(auditJSONs, argsJSON)
+	}
+
+	// 一次事务内的读-改-写：多目标/多 pattern 全或无。
+	if err := policy_rule_svc.PolicyRule().AppendRules(ctx, side, targets); err != nil {
+		var shadowed *policy_rule_svc.ShadowedError
+		if errors.As(err, &shadowed) && shadowed.Target >= 0 && shadowed.Target < len(plans) {
+			return shadowRefusal(ctx, plans[shadowed.Target].Target, &shadowed.Deny)
+		}
 		log.Error("opsctl policy rule write failed", zap.Error(err))
 		return err
 	}
 
-	for i := range targets {
-		writeRuleAudit(ctx, side, &targets[i])
+	for i := range auditJSONs {
+		if err := writeRuleAudit(ctx, side, auditJSONs[i]); err != nil {
+			return err
+		}
 	}
 	log.Info("opsctl policy rule write completed",
 		zap.String("side", ruleSideName(side)), zap.Int("targets", len(targets)))
 	return nil
-}
-
-// rewriteTargetRules 在事务内重读 holder、重放落点并落库。事务内的重读保证读-改-写
-// 不覆盖并发改动；pattern 与落法都是确定性的，重放与回显一致。
-func rewriteTargetRules(ctx context.Context, side permission.RuleSide, t *policyWriteTarget) error {
-	if t.asset != nil {
-		fresh, err := asset_repo.Asset().Find(ctx, t.asset.ID)
-		if err != nil {
-			return err
-		}
-		if _, err := permission.AppendTypeRules(fresh, t.canonical, side, t.patterns); err != nil {
-			return err
-		}
-		return asset_repo.Asset().Update(ctx, fresh)
-	}
-	fresh, err := group_repo.Group().Find(ctx, t.group.ID)
-	if err != nil {
-		return err
-	}
-	if _, err := permission.AppendTypeRules(fresh, t.canonical, side, t.patterns); err != nil {
-		return err
-	}
-	return group_repo.Group().Update(ctx, fresh)
-}
-
-// shadowingDenyFor 收集该目标的生效规则并返回第一条遮蔽者。
-func shadowingDenyFor(ctx context.Context, t *policyWriteTarget) (*permission.SourcedRule, error) {
-	var view *permission.TypeRuleView
-	var err error
-	if t.asset != nil {
-		view, err = permission.CollectTypeRules(ctx, t.asset, t.canonical)
-	} else {
-		view, err = permission.CollectHolderTypeRules(ctx, t.group, t.canonical)
-	}
-	if err != nil {
-		return nil, err
-	}
-	for _, l := range t.landed {
-		if sh := permission.ShadowingDeny(view, t.canonical, l.Rule); sh != nil {
-			return sh, nil
-		}
-	}
-	return nil, nil
 }
 
 // sourcedRuleOrigin 渲染一条来源层（资产 / 组链上的组 / 权限组含内置组名）。
@@ -449,7 +390,7 @@ func sourcedRuleOrigin(ctx context.Context, r permission.SourcedRule) string {
 
 // shadowRefusal 构造遮蔽拒绝：点名 deny 原文、来源层，并给出出路的命令原文
 // （spec 决策 19；权限组里的遮蔽走 copy → 改副本 → detach/attach，恒定英文 ASCII）。
-func shadowRefusal(ctx context.Context, t *policyWriteTarget, sh *permission.SourcedRule) error {
+func shadowRefusal(ctx context.Context, t policy_rule_svc.Target, sh *permission.SourcedRule) error {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%s\n", policy.PolicyMsg(ctx,
 		"refusing to write: this allow rule would never take effect, it is shadowed by a deny",
@@ -463,14 +404,14 @@ func shadowRefusal(ctx context.Context, t *policyWriteTarget, sh *permission.Sou
 		fmt.Fprintf(&sb, "  opsctl policy group copy %s --name <new-name>\n", sh.PolicyGroupID)
 		sb.WriteString("  opsctl policy group show <copy-id>   # find the deny entry id\n")
 		sb.WriteString("  opsctl policy group rm <copy-id> <entry-id>\n")
-		fmt.Fprintf(&sb, "  opsctl policy detach %s %s\n", t.cliRef(), sh.PolicyGroupID)
-		sb.WriteString("  opsctl policy attach " + t.cliRef() + " <copy-id>\n")
+		fmt.Fprintf(&sb, "  opsctl policy detach %s %s\n", policyTargetCLIRef(t), sh.PolicyGroupID)
+		sb.WriteString("  opsctl policy attach " + policyTargetCLIRef(t) + " <copy-id>\n")
 	} else {
 		fmt.Fprintf(&sb, "%s\n", policy.PolicyMsg(ctx,
 			"to fix: remove the deny rule first (find the entry id via show):",
 			"出路：先撤掉这条 deny（编号用 show 查）："))
-		fmt.Fprintf(&sb, "  opsctl policy show %s\n", t.cliRef())
-		fmt.Fprintf(&sb, "  opsctl policy rm %s <entry-id>\n", t.cliRef())
+		fmt.Fprintf(&sb, "  opsctl policy show %s\n", policyTargetCLIRef(t))
+		fmt.Fprintf(&sb, "  opsctl policy rm %s <entry-id>\n", policyTargetCLIRef(t))
 	}
 	return errors.New(strings.TrimRight(sb.String(), "\n"))
 }
@@ -516,11 +457,11 @@ func confirmLandedRules(ctx context.Context, sideWord string, groups []landedEch
 	return askRuleConfirm(in, out, policy.PolicyMsg(ctx, "write these rules? [y/N]", "写入这些规则？[y/N]"))
 }
 
-// confirmRuleWrite 是资产/组目标的回显确认薄适配：目标标签 + canonical + 落点。
-func confirmRuleWrite(ctx context.Context, side permission.RuleSide, targets []policyWriteTarget) bool {
-	groups := make([]landedEcho, 0, len(targets))
-	for _, t := range targets {
-		groups = append(groups, landedEcho{label: t.label(), canonical: t.canonical, landed: t.landed})
+// confirmRuleWrite 是资产/组目标的回显确认薄适配：目标标签 + canonical + 计划落点。
+func confirmRuleWrite(ctx context.Context, side permission.RuleSide, plans []policy_rule_svc.PlannedRules) bool {
+	groups := make([]landedEcho, 0, len(plans))
+	for _, plan := range plans {
+		groups = append(groups, landedEcho{label: policyTargetLabel(plan.Target), canonical: plan.Target.Canonical, landed: plan.Landed})
 	}
 	return confirmLandedRules(ctx, ruleSideName(side), groups)
 }
@@ -532,31 +473,40 @@ func ruleSideName(side permission.RuleSide) string {
 	return "allow"
 }
 
-// writeRuleAudit 为一次成功的永久规则写入单独记一行审计（spec Security）。
-func writeRuleAudit(ctx context.Context, side permission.RuleSide, t *policyWriteTarget) {
-	rules := make([]string, 0, len(t.landed))
-	for _, l := range t.landed {
+// ruleAuditArgsJSON 序列化一次规则写入的审计参数；调用方在持久化之前调用，marshal
+// 失败时不落任何改动。落点由 service 计划返回，CLI 不重复计算。
+func ruleAuditArgsJSON(side permission.RuleSide, t policy_rule_svc.Target, landed []permission.LandedRule) (string, error) {
+	rules := make([]string, 0, len(landed))
+	for _, l := range landed {
 		rules = append(rules, l.Rule)
 	}
 	args := map[string]any{
 		"side":     ruleSideName(side),
-		"type":     t.canonical,
-		"patterns": t.patterns,
+		"type":     t.Canonical,
+		"patterns": t.Patterns,
 		"rules":    rules,
 	}
-	if t.asset != nil {
-		args["asset_id"] = t.asset.ID
-		args["asset"] = t.asset.Name
+	if t.Asset != nil {
+		args["asset_id"] = t.Asset.ID
+		args["asset"] = t.Asset.Name
 	} else {
-		args["group_id"] = t.group.ID
-		args["group"] = t.group.Name
+		args["group_id"] = t.Group.ID
+		args["group"] = t.Group.Name
 	}
-	argsJSON, _ := json.Marshal(args)
+	b, err := json.Marshal(args)
+	if err != nil {
+		return "", fmt.Errorf("marshal policy rule audit args: %w", err)
+	}
+	return string(b), nil
+}
+
+// writeRuleAudit 为一次成功的永久规则写入单独记一行审计（spec Security）。
+func writeRuleAudit(ctx context.Context, side permission.RuleSide, argsJSON string) error {
+	// 成功落库的写操作记 allow 决策（审计写入器按 Deny 决策把 success 置 0）；
+	// deny 侧别由 args.side / result 表达，不再借决策列。
 	decision := &aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow}
-	if side == permission.RuleDeny {
-		decision = &aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny}
-	}
-	writeOpsctlAudit(ctx, "policy_rule", string(argsJSON), ruleSideName(side), nil, decision)
+	writeOpsctlAudit(ctx, "policy_rule", argsJSON, ruleSideName(side), nil, decision)
+	return nil
 }
 
 // --- 终端"永久允许"接缝（决策 13）：与 policy allow 同一条写入路径 ---
@@ -571,14 +521,14 @@ func writeAllowAlwaysRuleImpl(ctx context.Context, assetID int64, approvalType s
 			"a permanent cp rule needs a direction this approval does not carry; choose allow once or deny, or run: opsctl policy allow <id> -- 'cp:read:<path>'",
 			"永久 cp 规则需要方向，而这次审批没有带；请选本次允许或拒绝，或执行：opsctl policy allow <id> -- 'cp:read:<路径>'"))
 	}
-	asset, err := asset_repo.Asset().Find(ctx, assetID)
+	asset, err := policy_rule_svc.PolicyRule().FindAsset(ctx, assetID)
 	if err != nil {
 		return err
 	}
 	if !permission.TypeRulesSupported(asset.Type) {
 		return fmt.Errorf("asset %q (type %s) has no permanent-rule support", asset.Name, asset.Type)
 	}
-	targets := []policyWriteTarget{{asset: asset, canonical: asset.Type, patterns: patterns}}
+	targets := []policy_rule_svc.Target{{Asset: asset, Canonical: asset.Type, Patterns: patterns}}
 	return writePermanentRules(ctx, permission.RuleAllow, targets)
 }
 
@@ -666,7 +616,7 @@ func assetPolicyEntries(ctx context.Context, asset *asset_entity.Asset, session 
 	// 仍有效的 grant 及剩余时间（按 session 创建时间起算 24 小时）。
 	items, remaining := activeGrantItems(ctx, session)
 	for _, item := range items {
-		if !grantItemAppliesToAsset(ctx, item, asset) {
+		if !permission.GrantItemMatchesAsset(ctx, item, asset) {
 			continue
 		}
 		entries = append(entries, policyEntry{
@@ -681,17 +631,12 @@ func activeGrantItems(ctx context.Context, session string) ([]*grant_entity.Gran
 	if session == "" {
 		return nil, 0
 	}
-	repo := grant_repo.Grant()
-	if repo == nil {
-		return nil, 0
-	}
-	items, err := repo.ListApprovedItems(ctx, session)
+	items, sess, err := policy_rule_svc.PolicyRule().ActiveGrantItems(ctx, session)
 	if err != nil {
 		logger.Ctx(ctx).Warn("list approved grant items", zap.String("sessionID", session), zap.Error(err))
 		return nil, 0
 	}
-	sess, err := repo.GetSession(ctx, session)
-	if err != nil || sess == nil {
+	if sess == nil {
 		return nil, 0
 	}
 	remaining := sessionMaxAge - time.Since(time.Unix(sess.Createtime, 0))
@@ -701,23 +646,6 @@ func activeGrantItems(ctx context.Context, session string) ([]*grant_entity.Gran
 	return items, remaining
 }
 
-// grantItemAppliesToAsset 与 permission.grantItemMatchesTarget 同一判定：AssetID 精确、
-// GroupID 按组链、两者皆 0 匹配所有资产。未导出故在此镜像，两边一起改。
-func grantItemAppliesToAsset(ctx context.Context, item *grant_entity.GrantItem, asset *asset_entity.Asset) bool {
-	if item.AssetID != 0 {
-		return item.AssetID == asset.ID
-	}
-	if item.GroupID != 0 {
-		for _, g := range policy.ResolveGroupChain(ctx, asset.GroupID) {
-			if g.ID == item.GroupID {
-				return true
-			}
-		}
-		return false
-	}
-	return true
-}
-
 func cmdPolicyShowGroup(ctx context.Context, groupNames []string) int {
 	for _, name := range groupNames {
 		gid, _, err := resolveGroup(ctx, name)
@@ -725,7 +653,7 @@ func cmdPolicyShowGroup(ctx context.Context, groupNames []string) int {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 1
 		}
-		group, err := group_repo.Group().Find(ctx, gid)
+		group, err := policy_rule_svc.PolicyRule().FindGroup(ctx, gid)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: group not found: ID %d\n", gid)
 			return 1
@@ -744,7 +672,11 @@ func cmdPolicyShowGroup(ctx context.Context, groupNames []string) int {
 func groupPolicyEntries(group *group_entity.Group) ([]policyEntry, error) {
 	var entries []policyEntry
 	next := 1
-	for _, shape := range permission.ListHolderRuleShapes(group) {
+	shapes, err := permission.ListHolderRuleShapes(group)
+	if err != nil {
+		return nil, err
+	}
+	for _, shape := range shapes {
 		for _, r := range shape.Allow {
 			entries = append(entries, policyEntry{
 				id: strconv.Itoa(next), side: permission.RuleAllow, shape: shape.PolicyType, own: true,
@@ -867,26 +799,23 @@ func rmAssetEntry(ctx context.Context, targetName, entryID, session string) erro
 		return fmt.Errorf("no entry %s for this target; run 'opsctl policy show' to list entry ids", entryID)
 	}
 	if entry.grant != nil {
-		return removeGrantItem(ctx, session, entry.grant.ID)
+		return removeGrantItem(ctx, session, entry.grant.ID, entry.grant.Command)
 	}
 	if !entry.own {
 		return errors.New("this entry lives on another layer and is not removable via rm: detach the policy group, or edit it via 'opsctl policy group'")
 	}
 	logger.Ctx(ctx).Info("opsctl policy rm started", zap.Int64("assetID", asset.ID), zap.String("entry", entryID))
-	if err := dbutil.WithTransaction(ctx, func(txCtx context.Context) error {
-		fresh, err := asset_repo.Asset().Find(txCtx, asset.ID)
-		if err != nil {
-			return err
-		}
-		if err := permission.RemoveTypeRule(fresh, asset.Type, entry.side, entry.src.Rule); err != nil {
-			return err
-		}
-		return asset_repo.Asset().Update(txCtx, fresh)
-	}); err != nil {
+	auditJSON, err := rmAuditArgsJSON(fmt.Sprintf("asset %s (ID %d)", asset.Name, asset.ID), entry.src.Rule)
+	if err != nil {
+		return err
+	}
+	if err := policy_rule_svc.PolicyRule().RemoveTypeRule(ctx, policy_rule_svc.Target{Asset: asset}, asset.Type, entry.side, entry.src.Rule); err != nil {
 		logger.Ctx(ctx).Error("opsctl policy rm failed", zap.Int64("assetID", asset.ID), zap.Error(err))
 		return err
 	}
-	writeRmAudit(ctx, fmt.Sprintf("asset %s (ID %d)", asset.Name, asset.ID), entry.src.Rule)
+	if err := writeRmAudit(ctx, auditJSON, entry.src.Rule); err != nil {
+		return err
+	}
 	logger.Ctx(ctx).Info("opsctl policy rm completed", zap.Int64("assetID", asset.ID), zap.String("rule", entry.src.Rule))
 	return nil
 }
@@ -897,7 +826,7 @@ func rmGroupEntry(ctx context.Context, groupName, entryID string) error {
 	if err != nil {
 		return err
 	}
-	group, err := group_repo.Group().Find(ctx, gid)
+	group, err := policy_rule_svc.PolicyRule().FindGroup(ctx, gid)
 	if err != nil {
 		return fmt.Errorf("group not found: ID %d", gid)
 	}
@@ -910,58 +839,39 @@ func rmGroupEntry(ctx context.Context, groupName, entryID string) error {
 		return fmt.Errorf("no entry %s for this group; run 'opsctl policy show --group' to list entry ids", entryID)
 	}
 	logger.Ctx(ctx).Info("opsctl policy rm started", zap.Int64("groupID", gid), zap.String("entry", entryID))
-	if err := dbutil.WithTransaction(ctx, func(txCtx context.Context) error {
-		fresh, err := group_repo.Group().Find(txCtx, gid)
-		if err != nil {
-			return err
-		}
-		if err := permission.RemoveShapeRule(fresh, entry.shape, entry.side, entry.src.Rule); err != nil {
-			return err
-		}
-		return group_repo.Group().Update(txCtx, fresh)
-	}); err != nil {
+	auditJSON, err := rmAuditArgsJSON(fmt.Sprintf("group %s (ID %d)", group.Name, gid), entry.src.Rule)
+	if err != nil {
+		return err
+	}
+	if err := policy_rule_svc.PolicyRule().RemoveShapeRule(ctx, policy_rule_svc.Target{Group: group}, entry.shape, entry.side, entry.src.Rule); err != nil {
 		logger.Ctx(ctx).Error("opsctl policy rm failed", zap.Int64("groupID", gid), zap.Error(err))
 		return err
 	}
-	writeRmAudit(ctx, fmt.Sprintf("group %s (ID %d)", group.Name, gid), entry.src.Rule)
+	if err := writeRmAudit(ctx, auditJSON, entry.src.Rule); err != nil {
+		return err
+	}
 	logger.Ctx(ctx).Info("opsctl policy rm completed", zap.Int64("groupID", gid), zap.String("rule", entry.src.Rule))
 	return nil
 }
 
 // removeGrantItem 撤一条 grant：session 里剩余 items 经 UpdateItems 整体重写
 // （repo 没有 per-item 删除；桌面端写下的存量行同样走这里）。
-func removeGrantItem(ctx context.Context, session string, itemID int64) error {
+func removeGrantItem(ctx context.Context, session string, itemID int64, command string) error {
 	if session == "" {
 		return errors.New("no active grant session")
 	}
-	repo := grant_repo.Grant()
-	if repo == nil {
-		return errors.New("grant repository unavailable")
-	}
-	items, err := repo.ListApprovedItems(ctx, session)
+	logger.Ctx(ctx).Info("opsctl policy rm started", zap.Int64("grantItemID", itemID))
+	auditJSON, err := rmAuditArgsJSON("grant session "+session, command)
 	if err != nil {
 		return err
 	}
-	remaining := make([]*grant_entity.GrantItem, 0, len(items))
-	var removed string
-	for _, item := range items {
-		if item.ID == itemID {
-			removed = item.Command
-			continue
-		}
-		remaining = append(remaining, item)
-	}
-	if removed == "" {
-		return fmt.Errorf("grant item %d not found in the active session", itemID)
-	}
-	logger.Ctx(ctx).Info("opsctl policy rm started", zap.Int64("grantItemID", itemID))
-	if err := dbutil.WithTransaction(ctx, func(txCtx context.Context) error {
-		return repo.UpdateItems(txCtx, session, remaining)
-	}); err != nil {
+	if _, err := policy_rule_svc.PolicyRule().RemoveGrantItem(ctx, session, itemID); err != nil {
 		logger.Ctx(ctx).Error("opsctl policy rm failed", zap.Int64("grantItemID", itemID), zap.Error(err))
 		return err
 	}
-	writeRmAudit(ctx, "grant session "+session, removed)
+	if err := writeRmAudit(ctx, auditJSON, command); err != nil {
+		return err
+	}
 	logger.Ctx(ctx).Info("opsctl policy rm completed", zap.Int64("grantItemID", itemID))
 	return nil
 }
@@ -975,8 +885,19 @@ func findPolicyEntry(entries []policyEntry, id string) (policyEntry, bool) {
 	return policyEntry{}, false
 }
 
-func writeRmAudit(ctx context.Context, target, rule string) {
-	argsJSON, _ := json.Marshal(map[string]any{"target": target, "rule": rule})
-	writeOpsctlAudit(ctx, "policy_rule", string(argsJSON), "removed", nil,
-		&aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny, MatchedPattern: rule})
+func rmAuditArgsJSON(target, rule string) (string, error) {
+	b, err := json.Marshal(map[string]any{"target": target, "rule": rule})
+	if err != nil {
+		return "", fmt.Errorf("marshal policy removal audit args: %w", err)
+	}
+	return string(b), nil
+}
+
+// writeRmAudit 为一次成功的规则移除记一行审计。argsJSON 由调用方在持久化之前
+// 序列化，marshal 失败时不落任何改动。
+func writeRmAudit(ctx context.Context, argsJSON, rule string) error {
+	// 撤条是成功的写操作：决策 allow（success=1），被撤规则在 args.rule 与 MatchedPattern。
+	writeOpsctlAudit(ctx, "policy_rule", argsJSON, "removed", nil,
+		&aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow, MatchedPattern: rule})
+	return nil
 }
