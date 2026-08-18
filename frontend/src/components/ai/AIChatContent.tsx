@@ -15,9 +15,9 @@ import {
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
-import Markdown from "react-markdown";
-import rehypeSanitize from "rehype-sanitize";
-import { markdownComponents } from "@/components/MarkdownLink";
+import Markdown, { type Options } from "react-markdown";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import { markdownComponents, markdownUrlTransform } from "@/components/MarkdownLink";
 import remarkGfm from "remark-gfm";
 import {
   Button,
@@ -52,7 +52,14 @@ import { CompactContext, useCompact } from "@/components/ai/AIChatContentContext
 
 // 常量化 Markdown 插件数组，避免每次渲染创建新引用导致 Markdown 重解析
 const mdRemarkPlugins = [remarkGfm];
-const mdRehypePlugins = [rehypeSanitize];
+const mdSanitizeSchema = {
+  ...defaultSchema,
+  protocols: {
+    ...defaultSchema.protocols,
+    href: [...(defaultSchema.protocols?.href ?? ["http", "https", "mailto"]), "opsctl"],
+  },
+};
+const mdRehypePlugins: NonNullable<Options["rehypePlugins"]> = [[rehypeSanitize, mdSanitizeSchema]];
 
 // 流式输出时整段 markdown 会按 RAF 频率重新塞进 <Markdown>。
 // react-markdown 是同步主线程解析，长文本下会直接卡住键盘 IME。
@@ -63,7 +70,12 @@ const mdRehypePlugins = [rehypeSanitize];
 const MarkdownContent = memo(function MarkdownContent({ content }: { content: string }) {
   const deferred = useDeferredValue(content);
   return (
-    <Markdown remarkPlugins={mdRemarkPlugins} rehypePlugins={mdRehypePlugins} components={markdownComponents}>
+    <Markdown
+      remarkPlugins={mdRemarkPlugins}
+      rehypePlugins={mdRehypePlugins}
+      urlTransform={markdownUrlTransform}
+      components={markdownComponents}
+    >
       {deferred}
     </Markdown>
   );

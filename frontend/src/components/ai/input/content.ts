@@ -1,4 +1,5 @@
 import { buildGroupPathMap } from "@/lib/groupPath";
+import { splitOpsctlAssetRefs } from "@/lib/assetRef";
 import { buildMentionXml, escapeXmlText, parseMentionContent } from "@/lib/mentionXml";
 import { useAssetStore } from "@/stores/assetStore";
 import type {
@@ -39,7 +40,21 @@ export function extractContentXml(doc: ProseMirrorLikeNode): string {
   let out = "";
   doc.descendants((node) => {
     if (node.type.name === "text") {
-      out += escapeXmlText(node.text ?? "");
+      for (const part of splitOpsctlAssetRefs(node.text ?? "")) {
+        if (part.type === "text") {
+          out += escapeXmlText(part.text);
+          continue;
+        }
+        const asset = lookupAsset(part.id);
+        out += buildMentionXml({
+          assetId: part.id,
+          name: asset?.Name || part.name,
+          type: asset?.Type,
+          host: asset ? hostFromConfig(asset.Config) : undefined,
+          groupPath: asset?.GroupID ? groupPathMap.get(asset.GroupID) : undefined,
+          driver: asset ? driverFromConfig(asset.Config) : undefined,
+        });
+      }
     } else if (node.type.name === "hardBreak") {
       out += "\n";
     } else if (node.type.name === "mention") {
@@ -94,6 +109,29 @@ function appendTextToParagraphs(
     }
   }
   return currentParagraphContent;
+}
+
+export function buildPastedOpsctlContent(text: string): Array<TipTapTextNode | TipTapMentionNode> | null {
+  const parts = splitOpsctlAssetRefs(text);
+  if (!parts.some((part) => part.type === "ref")) return null;
+
+  const assetStore = useAssetStore.getState();
+  const content: Array<TipTapTextNode | TipTapMentionNode> = [];
+  for (const part of parts) {
+    if (part.type === "text") {
+      if (part.text) content.push({ type: "text", text: part.text });
+      continue;
+    }
+    const asset = assetStore.assets.find((item) => item.ID === part.id);
+    content.push({
+      type: "mention",
+      attrs: {
+        id: String(part.id),
+        label: asset?.Name || part.name,
+      },
+    });
+  }
+  return content;
 }
 
 export function buildEditorDocFromMessage(message: string | AIChatInputDraft): TipTapDocNode {

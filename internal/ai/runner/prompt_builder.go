@@ -150,9 +150,9 @@ func (b *PromptBuilder) buildTabContext() string {
 }
 
 func (b *PromptBuilder) buildMentionGuidance() string {
-	return `User messages may contain inline XML mention tags such as <mention asset-id="42" type="database" target="table" database="app" table="users" driver="mysql">@app.users</mention>. Treat these tags as authoritative user-selected context, not as prose to quote back verbatim.
+	return `User messages may contain inline XML mention tags such as <mention asset-id="42" type="database" target="table" database="app" table="users" driver="mysql">@app.users</mention>. They may also contain copied desktop asset refs such as [web-01](opsctl://asset/1) or opsctl://asset/1. Treat both as authoritative user-selected context, not as prose to quote back verbatim.
 
-Use asset-id for tool calls. When target="database", scope SQL work to the database attribute. When target="table", scope SQL work to both database and table attributes, and qualify table names as needed for the driver. If you execute SQL for a mentioned database or table, keep the exact SQL visible to the user in your response or tool-call explanation so they can verify what ran.`
+Use the numeric asset-id for tool calls (the number in asset-id="..." or opsctl://asset/{id}), never the display name. When target="database", scope SQL work to the database attribute. When target="table", scope SQL work to both database and table attributes, and qualify table names as needed for the driver. If you execute SQL for a mentioned database or table, keep the exact SQL visible to the user in your response or tool-call explanation so they can verify what ran.`
 }
 
 func (b *PromptBuilder) buildKnowledgeGuidance() string {

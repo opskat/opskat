@@ -6,6 +6,10 @@
 //     @name</mention>
 //
 // 标签 attr 用双引号，名字里的 & < > " 同样转义。
+// Copied desktop refs ([Name](opsctl://asset/{id})) are accepted in plain text
+// and turned into the same mention segments as XML tags.
+
+import { splitOpsctlAssetRefs } from "./assetRef";
 
 export type MentionTarget = "asset" | "database" | "table";
 
@@ -101,6 +105,21 @@ function parseAttrs(raw: string): Partial<MentionAttrs> {
 
 // 把含 <mention> 标签的 content 解析为按出现顺序的 segments。
 // 标签之外的文本会做 XML 反转义（& < >）；mention 内文本（"@name"）剥掉 @ 后写入 name。
+function pushPlainText(segs: MentionSegment[], text: string) {
+  if (!text) return;
+  for (const part of splitOpsctlAssetRefs(text)) {
+    if (part.type === "text") {
+      if (part.text) segs.push({ type: "text", text: part.text });
+      continue;
+    }
+    segs.push({
+      type: "mention",
+      text: `@${part.name}`,
+      attrs: { assetId: part.id, name: part.name },
+    });
+  }
+}
+
 export function parseMentionContent(content: string): MentionSegment[] {
   if (!content) return [];
   const segs: MentionSegment[] = [];
@@ -109,7 +128,7 @@ export function parseMentionContent(content: string): MentionSegment[] {
   let m: RegExpExecArray | null;
   while ((m = re.exec(content)) !== null) {
     if (m.index > last) {
-      segs.push({ type: "text", text: unescapeXml(content.slice(last, m.index)) });
+      pushPlainText(segs, unescapeXml(content.slice(last, m.index)));
     }
     const attrs = parseAttrs(m[1]);
     const inner = unescapeXml(m[2]);
@@ -132,12 +151,12 @@ export function parseMentionContent(content: string): MentionSegment[] {
       });
     } else {
       // attrs 缺 asset-id：当普通文本处理，保留原貌
-      segs.push({ type: "text", text: inner });
+      pushPlainText(segs, inner);
     }
     last = re.lastIndex;
   }
   if (last < content.length) {
-    segs.push({ type: "text", text: unescapeXml(content.slice(last)) });
+    pushPlainText(segs, unescapeXml(content.slice(last)));
   }
   return segs;
 }

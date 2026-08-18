@@ -38,6 +38,7 @@ func TestPromptBuilderBuild(t *testing.T) {
 			So(got, ShouldContainSubstring, "asset-id")
 			So(got, ShouldContainSubstring, "database")
 			So(got, ShouldContainSubstring, "table")
+			So(got, ShouldContainSubstring, "opsctl://asset/")
 		})
 
 		Convey("Extension SKILL.md 被注入", func() {

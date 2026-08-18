@@ -175,4 +175,14 @@ describe("AssetTree context menu", () => {
 
     expect(menu).not.toHaveTextContent("sftp.fileManager");
   });
+
+  it("shows a copy-reference action next to clone", async () => {
+    renderTree();
+
+    fireEvent.contextMenu(screen.getByText("Asset A"));
+    const menu = await screen.findByRole("menu");
+
+    expect(menu).toHaveTextContent("asset.copyRef");
+    expect(menu).toHaveTextContent("action.copy");
+  });
 });

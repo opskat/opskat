@@ -37,6 +37,8 @@ public-key blobs. Existing inline-encrypted authentication has no fabricated man
 opsctl get asset web-server
 opsctl get asset 1
 opsctl get asset production/web-01
+opsctl get asset '[web-01](opsctl://asset/1)'
+opsctl get asset opsctl://asset/1
 ```
 
 ### `list credentials [--type password|ssh_key|ssh_agent]`

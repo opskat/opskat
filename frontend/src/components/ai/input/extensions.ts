@@ -87,7 +87,20 @@ function createSuggestionPopup<TItem>(props: SuggestionProps<TItem>, content: El
     showOnCreate: true,
     interactive: true,
     trigger: "manual",
-    placement: "bottom-start",
+    hideOnClick: false,
+    arrow: false,
+    theme: "ai-suggestion",
+    // Side-assistant input sits at the bottom; flip up first so the list stays on screen.
+    placement: "top-start",
+    offset: [0, 8],
+    zIndex: 80,
+    popperOptions: {
+      strategy: "fixed",
+      modifiers: [
+        { name: "flip", options: { fallbackPlacements: ["bottom-start", "top-end"] } },
+        { name: "preventOverflow", options: { padding: 8 } },
+      ],
+    },
   });
 }
 
@@ -98,6 +111,9 @@ export function createMentionExtension(activeRef: RefObject<boolean>) {
     },
     renderLabel: ({ node }) => `@${node.attrs.label}`,
     suggestion: {
+      // Default prefixes are only space/start-of-line. Chinese input usually has no
+      // space before @ ("查一下@web"), so allow the trigger after any character.
+      allowedPrefixes: null,
       items: () => [] as MentionItem[],
       render: () => {
         let component: ReactRenderer<MentionListRef> | null = null;

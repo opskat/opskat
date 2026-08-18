@@ -235,6 +235,22 @@ describe("AIChatInput", () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("你好"));
   });
 
+  it("粘贴 markdown 资产引用立刻变成 mention 标签", async () => {
+    useAssetStore.setState({
+      assets: [{ ID: 43, Name: "Local Redis", Type: "redis", GroupID: 0 }],
+      groups: [],
+    } as unknown as Parameters<typeof useAssetStore.setState>[0]);
+    const editorRef = { current: null as Editor | null };
+    render(<AIChatInput onSubmit={vi.fn()} sendOnEnter={true} editorRef={editorRef} />);
+    await waitFor(() => expect(editorRef.current).not.toBeNull());
+    const editor = screen.getByRole("textbox");
+    await userEvent.click(editor);
+    await userEvent.paste("[Local Redis](opsctl://asset/43)");
+    expect(editor.textContent).toContain("@Local Redis");
+    expect(editor.textContent).not.toContain("opsctl://");
+    expect(editor.querySelector(".ai-mention")?.textContent).toBe("@Local Redis");
+  });
+
   it("输入 @ 弹出 MentionList", async () => {
     render(<AIChatInput onSubmit={vi.fn()} sendOnEnter={true} />);
     const editor = screen.getByRole("textbox");
@@ -249,6 +265,20 @@ describe("AIChatInput", () => {
     const editor = screen.getByRole("textbox");
     await userEvent.click(editor);
     await userEvent.keyboard("@");
+    await waitFor(() => expect(screen.getByRole("listbox")).toBeInTheDocument());
+    expect(screen.getByRole("option").textContent).toContain("prod-db");
+  });
+
+  it("中文后面紧挨着输入 @ 也能弹出 MentionList", async () => {
+    const editorRef = { current: null as Editor | null };
+    render(<AIChatInput onSubmit={vi.fn()} sendOnEnter={true} editorRef={editorRef} />);
+    await waitFor(() => expect(editorRef.current).not.toBeNull());
+    const editor = screen.getByRole("textbox");
+    await userEvent.click(editor);
+    act(() => {
+      editorRef.current!.chain().focus().insertContent("查一下").run();
+    });
+    await userEvent.keyboard("@prod");
     await waitFor(() => expect(screen.getByRole("listbox")).toBeInTheDocument());
     expect(screen.getByRole("option").textContent).toContain("prod-db");
   });

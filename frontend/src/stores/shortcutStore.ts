@@ -33,6 +33,7 @@ export type ShortcutAction =
   | "terminal.paste"
   | "terminal.selectAll"
   | "terminal.find"
+  | "asset.copyRef"
   | "page.home"
   | "page.settings"
   | "page.sshkeys"
@@ -61,6 +62,7 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   "terminal.paste",
   "terminal.selectAll",
   "terminal.find",
+  "asset.copyRef",
   "page.home",
   "page.settings",
   "page.sshkeys",
@@ -90,6 +92,9 @@ export const DEFAULT_SHORTCUTS: Record<ShortcutAction, ShortcutBinding> = {
   "terminal.paste": { code: "KeyV", mod: true, ctrl: false, shift: !isMac, alt: false },
   "terminal.selectAll": { code: "KeyA", mod: true, ctrl: false, shift: false, alt: false },
   "terminal.find": { code: "KeyF", mod: true, ctrl: false, shift: false, alt: false },
+  // Standard copy key (Ctrl+C / Cmd+C). On macOS this overlaps terminal.copy;
+  // the keyboard handler yields to the terminal / native copy when those own focus.
+  "asset.copyRef": { code: "KeyC", mod: true, ctrl: false, shift: false, alt: false },
   "page.home": { code: "KeyH", mod: true, ctrl: false, shift: true, alt: false },
   "page.settings": { code: "Comma", mod: true, ctrl: false, shift: false, alt: false },
   "page.sshkeys": { code: "KeyK", mod: true, ctrl: false, shift: true, alt: false },
@@ -163,7 +168,9 @@ export function findShortcutConflict(
     if (candidateAction === action) continue;
     if (
       (action === "terminal.find" && candidateAction === "panel.filter") ||
-      (action === "panel.filter" && candidateAction === "terminal.find")
+      (action === "panel.filter" && candidateAction === "terminal.find") ||
+      (action === "asset.copyRef" && candidateAction === "terminal.copy") ||
+      (action === "terminal.copy" && candidateAction === "asset.copyRef")
     ) {
       continue;
     }

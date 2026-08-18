@@ -19,6 +19,7 @@ Assets can be referenced by:
 - **Numeric ID**: `opsctl get asset 1`
 - **Name**: `opsctl get asset web-server`
 - **Group/Name path**: `opsctl get asset production/web-01`
+- **Copied desktop ref**: `[web-01](opsctl://asset/1)` or `opsctl://asset/1` — always use the numeric id in the URI, not the display name
 
 ## Type Assertions
 

@@ -1,7 +1,20 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { copySelectedAssetMarkdownRef } = vi.hoisted(() => ({
+  copySelectedAssetMarkdownRef: vi.fn(),
+}));
+vi.mock("@/lib/assetRef", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/assetRef")>("@/lib/assetRef");
+  return {
+    ...actual,
+    copySelectedAssetMarkdownRef,
+  };
+});
+
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useShortcutStore, DEFAULT_SHORTCUTS, isMac, type ShortcutBinding } from "../stores/shortcutStore";
+import { useAssetStore } from "../stores/assetStore";
 
 // Build a keydown event whose modifier flags match `binding` the same way
 // eventMatchesBinding() reads them, so the test works on both macOS and non-mac.
@@ -82,5 +95,37 @@ describe("useKeyboardShortcuts — terminal scope", () => {
     document.body.appendChild(div);
     const ev = keydownFrom(div, DEFAULT_SHORTCUTS["tab.next"]);
     expect(ev.defaultPrevented).toBe(true);
+  });
+});
+
+describe("useKeyboardShortcuts — asset.copyRef", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    localStorage.clear();
+    copySelectedAssetMarkdownRef.mockReset();
+    useShortcutStore.setState({
+      shortcuts: { ...DEFAULT_SHORTCUTS },
+      isRecording: false,
+      disableShortcutsInTerminal: false,
+    });
+    useAssetStore.setState({ selectedAssetId: 1 });
+  });
+
+  it("copies the selected asset markdown ref on Ctrl/Cmd+C", () => {
+    renderShortcuts();
+    const div = document.createElement("div");
+    document.body.appendChild(div);
+    const ev = keydownFrom(div, DEFAULT_SHORTCUTS["asset.copyRef"]);
+    expect(ev.defaultPrevented).toBe(true);
+    expect(copySelectedAssetMarkdownRef).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not steal Ctrl/Cmd+C from an input", () => {
+    renderShortcuts();
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    const ev = keydownFrom(input, DEFAULT_SHORTCUTS["asset.copyRef"]);
+    expect(ev.defaultPrevented).toBe(false);
+    expect(copySelectedAssetMarkdownRef).not.toHaveBeenCalled();
   });
 });

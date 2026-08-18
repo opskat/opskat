@@ -1,8 +1,9 @@
 import { useEffect } from "react";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useTabStore } from "@/stores/tabStore";
-import { useShortcutStore, matchShortcut } from "@/stores/shortcutStore";
+import { useShortcutStore, eventMatchesBinding, matchShortcut } from "@/stores/shortcutStore";
 import { useLayoutStore } from "@/stores/layoutStore";
+import { copySelectedAssetMarkdownRef, shouldCopyAssetRef } from "@/lib/assetRef";
 
 interface ShortcutHandlers {
   onToggleAIPanel: () => void;
@@ -19,7 +20,14 @@ export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar, onToggl
       // 先计算 action：command.quickopen 需要在输入框内也能触发，
       // 必须早于"输入框内忽略"分支处理。
       const action = matchShortcut(e, shortcuts);
-      if (!action) return;
+      const copyRefBinding = shortcuts["asset.copyRef"];
+      if (copyRefBinding && eventMatchesBinding(e, copyRefBinding) && shouldCopyAssetRef(e.target)) {
+        e.preventDefault();
+        e.stopPropagation();
+        void copySelectedAssetMarkdownRef();
+        return;
+      }
+      if (!action || action === "asset.copyRef") return;
       if (action.startsWith("terminal.")) return;
 
       // command.quickopen 早期处理：在输入框内也应该能触发

@@ -16,6 +16,7 @@ import {
   ChevronsUp,
   Pencil,
   Copy,
+  Link2,
   Trash2,
   TerminalSquare,
   ExternalLink,
@@ -39,6 +40,7 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuShortcut,
   ContextMenuTrigger,
   Tooltip,
   TooltipContent,
@@ -57,10 +59,13 @@ import {
   type RowRect,
 } from "@/lib/assetTreeDnd";
 import { reorderAssetsOptimistically } from "@/lib/assetTreeReorderOptimistic";
+import { writeAssetMarkdownRef } from "@/lib/assetRef";
+import { notifyCopied } from "@/lib/notify";
 import { getAssetType } from "@/lib/assetTypes";
 import { getAssetTypeOptions, matchSelectedTypes } from "@/lib/assetTypes/options";
 import { AssetTypeFilterButton } from "@/components/asset/AssetTypeFilterButton";
 import { useAssetStore } from "@/stores/assetStore";
+import { formatBinding, useShortcutStore } from "@/stores/shortcutStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useExtensionStore } from "@/extension";
 import { useActiveAssetIds } from "@/hooks/useActiveAssetIds";
@@ -1052,6 +1057,24 @@ function AssetRowDraggable({ id, children }: { id: string; children: React.React
   );
 }
 
+function CopyAssetRefMenuItem({ asset, t }: { asset: asset_entity.Asset; t: (key: string) => string }) {
+  const binding = useShortcutStore((s) => s.shortcuts["asset.copyRef"]);
+  return (
+    <ContextMenuItem
+      data-testid="asset-context-copy-ref"
+      onClick={() => {
+        void writeAssetMarkdownRef(asset.Name, asset.ID)
+          .then(() => notifyCopied(t("asset.copyRefCopied")))
+          .catch((err) => toast.error(String(err)));
+      }}
+    >
+      <Link2 className="h-3.5 w-3.5 mr-1.5" />
+      {t("asset.copyRef")}
+      <ContextMenuShortcut>{formatBinding(binding)}</ContextMenuShortcut>
+    </ContextMenuItem>
+  );
+}
+
 function AssetRow(props: AssetRowProps) {
   return (
     <AssetRowDraggable id={`asset-${props.asset.ID}`}>
@@ -1151,6 +1174,7 @@ const AssetRowContent = React.memo(function AssetRowContent({
           <Copy className="h-3.5 w-3.5 mr-1.5" />
           {t("action.copy")}
         </ContextMenuItem>
+        <CopyAssetRefMenuItem asset={asset} t={t} />
         <ContextMenuSeparator />
         <ContextMenuItem onClick={() => onMoveAsset(asset.ID, "up")}>
           <ArrowUp className="h-3.5 w-3.5 mr-1.5" />

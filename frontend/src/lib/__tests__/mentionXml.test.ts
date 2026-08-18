@@ -146,4 +146,17 @@ describe("mentionXml", () => {
     const c = 'hi <mention asset-id="1" host="evil">@x</mention> there';
     expect(stripMentionTags(c)).toBe("hi @x there");
   });
+
+  it("parseMentionContent 把复制的 markdown 资产引用当成 mention", () => {
+    const segs = parseMentionContent("look at [web-01](opsctl://asset/1) please");
+    expect(segs).toEqual([
+      { type: "text", text: "look at " },
+      {
+        type: "mention",
+        text: "@web-01",
+        attrs: { assetId: 1, name: "web-01" },
+      },
+      { type: "text", text: " please" },
+    ]);
+  });
 });
