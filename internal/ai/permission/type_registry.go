@@ -6,7 +6,9 @@ import (
 	"sort"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	policyent "github.com/opskat/opskat/internal/model/entity/policy"
 )
 
 type permissionCheckFunc func(context.Context, int64, string) aictx.CheckResult
@@ -88,6 +90,108 @@ func init() {
 	registerPermissionType(GrantToolCp, "cp", cpGrantPatterns, checkFileTransferPermission)
 	registerPermissionType(GrantToolCpRead, "cp", cpGrantPatterns, checkFileTransferReadPermission)
 	registerPermissionType(GrantToolCpWrite, "cp", cpGrantPatterns, checkFileTransferWritePermission)
+
+	// 永久规则落点与上面的 grantPatterns 并列注册（spec 决策 11、15）：一个类型一次
+	// 注册、同时覆盖 allow 与 deny 两侧、按 holder 取 Get/SetXxxPolicy 对。
+	commandShape := registerRuleShape(policyKindCommand, shapeSides[policyent.CommandPolicy]{
+		get: func(h policyent.Holder) (*policyent.CommandPolicy, error) { return h.GetCommandPolicy() },
+		set: func(h policyRWHolder, p *policyent.CommandPolicy) error { return h.SetCommandPolicy(p) },
+		sides: func(p *policyent.CommandPolicy) (*[]string, *[]string, *[]string) {
+			return &p.AllowList, &p.DenyList, &p.Groups
+		},
+		newOne: func() *policyent.CommandPolicy { return &policyent.CommandPolicy{} },
+	})
+	queryShape := registerRuleShape(policyKindQuery, shapeSides[policyent.QueryPolicy]{
+		get: func(h policyent.Holder) (*policyent.QueryPolicy, error) { return h.GetQueryPolicy() },
+		set: func(h policyRWHolder, p *policyent.QueryPolicy) error { return h.SetQueryPolicy(p) },
+		sides: func(p *policyent.QueryPolicy) (*[]string, *[]string, *[]string) {
+			return &p.AllowTypes, &p.DenyTypes, &p.Groups
+		},
+		newOne: func() *policyent.QueryPolicy { return &policyent.QueryPolicy{} },
+	})
+	redisShape := registerRuleShape(policyKindRedis, shapeSides[policyent.RedisPolicy]{
+		get: func(h policyent.Holder) (*policyent.RedisPolicy, error) { return h.GetRedisPolicy() },
+		set: func(h policyRWHolder, p *policyent.RedisPolicy) error { return h.SetRedisPolicy(p) },
+		sides: func(p *policyent.RedisPolicy) (*[]string, *[]string, *[]string) {
+			return &p.AllowList, &p.DenyList, &p.Groups
+		},
+		newOne: func() *policyent.RedisPolicy { return &policyent.RedisPolicy{} },
+	})
+	mongoShape := registerRuleShape(policyKindMongo, shapeSides[policyent.MongoPolicy]{
+		get: func(h policyent.Holder) (*policyent.MongoPolicy, error) { return h.GetMongoPolicy() },
+		set: func(h policyRWHolder, p *policyent.MongoPolicy) error { return h.SetMongoPolicy(p) },
+		sides: func(p *policyent.MongoPolicy) (*[]string, *[]string, *[]string) {
+			return &p.AllowTypes, &p.DenyTypes, &p.Groups
+		},
+		newOne: func() *policyent.MongoPolicy { return &policyent.MongoPolicy{} },
+	})
+	kafkaShape := registerRuleShape(policyKindKafka, shapeSides[policyent.KafkaPolicy]{
+		get: func(h policyent.Holder) (*policyent.KafkaPolicy, error) { return h.GetKafkaPolicy() },
+		set: func(h policyRWHolder, p *policyent.KafkaPolicy) error { return h.SetKafkaPolicy(p) },
+		sides: func(p *policyent.KafkaPolicy) (*[]string, *[]string, *[]string) {
+			return &p.AllowList, &p.DenyList, &p.Groups
+		},
+		newOne: func() *policyent.KafkaPolicy { return &policyent.KafkaPolicy{} },
+	})
+	k8sShape := registerRuleShape(policyKindK8s, shapeSides[policyent.K8sPolicy]{
+		get: func(h policyent.Holder) (*policyent.K8sPolicy, error) { return h.GetK8sPolicy() },
+		set: func(h policyRWHolder, p *policyent.K8sPolicy) error { return h.SetK8sPolicy(p) },
+		sides: func(p *policyent.K8sPolicy) (*[]string, *[]string, *[]string) {
+			return &p.AllowList, &p.DenyList, &p.Groups
+		},
+		newOne: func() *policyent.K8sPolicy { return &policyent.K8sPolicy{} },
+	})
+	etcdShape := registerRuleShape(policyKindEtcd, shapeSides[policyent.EtcdPolicy]{
+		get: func(h policyent.Holder) (*policyent.EtcdPolicy, error) { return h.GetEtcdPolicy() },
+		set: func(h policyRWHolder, p *policyent.EtcdPolicy) error { return h.SetEtcdPolicy(p) },
+		sides: func(p *policyent.EtcdPolicy) (*[]string, *[]string, *[]string) {
+			return &p.AllowList, &p.DenyList, &p.Groups
+		},
+		newOne: func() *policyent.EtcdPolicy { return &policyent.EtcdPolicy{} },
+	})
+	ossShape := registerRuleShape(policyKindOSS, shapeSides[policyent.OSSPolicy]{
+		get: func(h policyent.Holder) (*policyent.OSSPolicy, error) { return h.GetOSSPolicy() },
+		set: func(h policyRWHolder, p *policyent.OSSPolicy) error { return h.SetOSSPolicy(p) },
+		sides: func(p *policyent.OSSPolicy) (*[]string, *[]string, *[]string) {
+			return &p.AllowList, &p.DenyList, &p.Groups
+		},
+		newOne: func() *policyent.OSSPolicy { return &policyent.OSSPolicy{} },
+	})
+	genericRuleLanding.shape = commandShape
+
+	registerRuleSink(asset_entity.AssetTypeSSH, &ruleLanding{
+		shape: commandShape, refPolicyType: policyKindCommand, land: identityLand, match: policy.MatchCommandRule})
+	registerRuleSink(asset_entity.AssetTypeSerial, &ruleLanding{
+		shape: commandShape, refPolicyType: policyKindCommand, land: identityLand, match: policy.MatchCommandRule})
+	// k8s 的 K8sPolicy 是独立列，但引用组按 command 表解析（collectK8sPolicies 用
+	// ResolveCommandGroups），并且先判组通用 CommandPolicy 层。
+	registerRuleSink(asset_entity.AssetTypeK8s, &ruleLanding{
+		shape: k8sShape, refPolicyType: policyKindCommand, land: identityLand,
+		match: policy.MatchCommandRule, generic: policy.MatchCommandRule})
+	registerRuleSink(asset_entity.AssetTypeDatabase, &ruleLanding{
+		shape: queryShape, refPolicyType: policyKindQuery, land: queryLand,
+		match: queryTypeMatch, generic: policy.MatchCommandRule})
+	registerRuleSink(asset_entity.AssetTypeRedis, &ruleLanding{
+		shape: redisShape, refPolicyType: policyKindRedis, land: identityLand,
+		match: policy.MatchRedisRule, generic: policy.MatchRedisRule})
+	registerRuleSink(asset_entity.AssetTypeEtcd, &ruleLanding{
+		shape: etcdShape, refPolicyType: policyKindEtcd, land: identityLand,
+		match: policy.MatchRedisRule, generic: policy.MatchRedisRule})
+	registerRuleSink(asset_entity.AssetTypeMongoDB, &ruleLanding{
+		shape: mongoShape, refPolicyType: policyKindMongo, land: mongoLand,
+		match: policy.MatchMongoRule, generic: policy.MatchMongoRule})
+	registerRuleSink(asset_entity.AssetTypeKafka, &ruleLanding{
+		shape: kafkaShape, refPolicyType: policyKindKafka, land: identityLand,
+		match: policy.MatchKafkaRule, generic: policy.MatchCommandRule})
+	registerRuleSink(asset_entity.AssetTypeOSS, &ruleLanding{
+		shape: ossShape, refPolicyType: policyKindOSS, land: identityLand,
+		match: policy.MatchOSSRule, generic: policy.MatchOSSRule})
+	// cp 面：规则落在 CommandPolicy 列、带方向前缀（matchCpPolicyRule 的规则语法）。
+	// 无方向的 GrantToolCp（"cp"）不注册——落点与遮蔽都需要方向，绝不猜默认形状。
+	registerRuleSink(GrantToolCpRead, &ruleLanding{
+		shape: commandShape, refPolicyType: policyKindCommand, land: cpLand("cp:read:"), match: cpDenyShadows})
+	registerRuleSink(GrantToolCpWrite, &ruleLanding{
+		shape: commandShape, refPolicyType: policyKindCommand, land: cpLand("cp:write:"), match: cpDenyShadows})
 }
 
 // --- 执行器注册表 ---

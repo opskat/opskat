@@ -60,7 +60,7 @@ func (o *Opsctl) startApprovalServer() {
 
 func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
 	confirmID := fmt.Sprintf("opsctl_%d", time.Now().UnixNano())
-	kind := singleApprovalKind(req.Type)
+	kind := permission.ApprovalKindForType(req.Type)
 	log := logger.Ctx(o.ctx).With(
 		zap.String("confirmID", confirmID),
 		zap.String("approvalType", req.Type),
@@ -145,20 +145,6 @@ func grantPatternAndOrigin(command string, edited []permission.ApprovalItem) (st
 		return edited[0].Command, permission.GrantOriginUser
 	}
 	return command, permission.GrantOriginSystem
-}
-
-func singleApprovalKind(approvalType string) string {
-	switch approvalType {
-	case permission.ApprovalTypeDelete:
-		return permission.ApprovalKindDelete
-	case "ext_tool":
-		return permission.ApprovalKindExtension
-	default:
-		if permission.SupportsGrantApproval(approvalType) {
-			return permission.ApprovalKindSingle
-		}
-		return permission.ApprovalKindOnce
-	}
 }
 
 // startSSHPoolServer 启动 SSH 连接池 proxy 服务

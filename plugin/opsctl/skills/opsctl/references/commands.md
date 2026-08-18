@@ -23,6 +23,19 @@ List all asset groups. Descriptions are not included.
 opsctl list groups
 ```
 
+### `list audit [flags]`
+
+Read-only listing of stored audit log rows: time, source, asset, tool, command summary, and decision source, newest first. **AI-usable read-only entry point** — no TTY required. Rows are presented exactly as stored, no re-redaction.
+
+**Flags**:
+- `--asset <asset>` — Filter by asset (name, group/name, or numeric ID)
+- `--limit <int>` — Maximum rows to show (default 20)
+
+```bash
+opsctl list audit
+opsctl list audit --asset web-01 --limit 50
+```
+
 ## get
 
 ### `get asset <asset>`
@@ -132,9 +145,9 @@ the command you are about to run. Omit it only when the type is genuinely
 unknown.
 
 **Approval flow**:
-1. Command policy check (allow-list/deny-list per asset)
-2. Session check (grant item consumption or session auto-approve)
-3. Desktop app approval (blocks until response)
+1. Command policy check (permanent allow/deny rules from the asset's own column, its group chain, and attached policy groups)
+2. Still-valid grant match (24-hour grants saved by the desktop dialog's "Remember")
+3. Approver selection: an interactive terminal (stdin and stderr both TTYs) prompts right there — `exec` with piped stdin does NOT count; otherwise the running desktop app shows its dialog; with neither, exit code 3 with `NEEDS AUTHORIZATION` on the first stderr line plus a paste-ready `opsctl policy allow` line
 
 ```bash
 opsctl exec web-server --type ssh -- uptime
@@ -198,7 +211,7 @@ This mirrors `exec`'s `--type` flag.
 
 **Exit code**: 0 if any command succeeded, 1 if all failed.
 
-**Approval flow**: Policy pre-check per command → single batch approval dialog for all need-confirm commands → parallel execution.
+**Approval flow**: Policy pre-check per command → one approval step for all need-confirm commands (a single terminal prompt when interactive, a single queued desktop dialog otherwise; with neither, exit code 3 with `NEEDS AUTHORIZATION` and one paste-ready `opsctl policy allow` line per subject) → parallel execution.
 
 ## create
 
@@ -230,8 +243,11 @@ the command fails instead of applying override precedence.
 Only explicitly supplied convenience flags override matching non-secret generic config keys.
 `--kubeconfig-file` remains a K8s raw-file convenience input.
 
-The flow is parse/merge → resolve references/files and validate → desktop approval → one
-asset transaction. Plaintext is encrypted in the asset and never creates a managed credential;
+The flow is parse/merge → resolve references/files and validate → approval → one
+asset transaction. Approval is always required — no rule can pre-authorize a
+create: an interactive terminal prompts there, otherwise the running desktop app
+is asked, and with neither available opsctl exits with code 3 and a NEEDS TTY
+marker telling you to run the command yourself. Plaintext is encrypted in the asset and never creates a managed credential;
 create credentials in the desktop key manager and pass `--credential-id` to reuse them. Denial
 or failure commits no new asset row. Successful JSON contains the asset ID and a safe
 authentication reference when applicable, never supplied plaintext/ciphertext.
@@ -266,7 +282,11 @@ opsctl create group --name "Web Tier" --parent-id 3
 
 ### `update asset <asset> [flags]`
 
-Update an existing asset. Only provided fields change. Requires approval.
+Update an existing asset. Only provided fields change. Requires approval — an
+interactive terminal prompts there, otherwise the running desktop app is asked;
+with neither available opsctl exits with code 3 and a NEEDS TTY marker telling
+you to run the command yourself (like `create`/`delete`, no rule can
+pre-authorize it).
 
 **Optional flags**:
 - `--name <string>` — New display name
@@ -302,9 +322,12 @@ opsctl update group staging --parent-id 1
 ## delete
 
 Dispatches to the same `delete_asset` / `delete_group` tools the AI uses
-(`internal/ai/tool/tool_handlers_crud.go`). **Always requires desktop app
-confirmation — this cannot be pre-approved or granted, even with an active
-session.** Unlike `exec`/`create`/`update`, there is no "allow all" for delete.
+(`internal/ai/tool/tool_handlers_crud.go`). **Always requires human
+confirmation — this cannot be pre-approved or granted by any rule.** An
+interactive terminal prompts there; otherwise the running desktop app is
+asked; with neither available opsctl exits with code 3 and a NEEDS TTY marker
+telling you to run the command yourself. Unlike `exec`, there is no
+"allow always" for delete — no rule form exists for it at all.
 
 ### `delete asset <asset>`
 
@@ -360,91 +383,61 @@ The path after `:` must start with `/`. When the part before the colon does name
 
 **Copying inside one object-storage asset**: `cp` streams the object down and back up through this process. Use `opsctl exec <asset> -- "object copy <bucket>/<src> --to=<bucket>/<dst>"` instead — that copies server-side.
 
-## grant
+## policy
 
-### `grant submit <asset> <pattern>...` (simple mode)
+Permanent permission-rule management. This family replaces the removed `grant submit` (its multi-target / multi-pattern shapes carry over) and is the only place permanent allow/deny rules are written from the CLI.
 
-Submit exec command patterns for a single asset. No stdin needed.
+**TTY gating — read vs write**:
+- **AI-usable read-only entry points (no TTY needed)**: `policy show`, `policy group list`, `policy group show` (and `list audit`).
+- **Write subcommands run in an interactive terminal only**: `allow` / `deny` / `rm`, the whole `group` write side (`create` / `copy` / `allow` / `deny` / `rm`), and `attach` / `detach`. Called without a TTY they exit with code 3 and a `NEEDS TTY` marker and write nothing — an AI cannot widen its own permissions. Hand the exact command line to the user to run instead.
 
-```bash
-opsctl grant submit web-01 "systemctl *" "df -h" "uptime"
-opsctl grant submit --group production "uptime" "df -h"
+```
+opsctl policy show  <asset> | --group <group>
+opsctl policy allow <asset>... | --group <group>...  [--type <asset-type>] -- <pattern>...
+opsctl policy deny  <asset>... | --group <group>...  [--type <asset-type>] -- <pattern>...
+opsctl policy rm    <asset>  | --group <group>  <id>
+opsctl policy group list   [--type <policy-type>]
+opsctl policy group show   <group-id>
+opsctl policy group create --name <name> --type <policy-type>
+opsctl policy group copy   <group-id> --name <name>
+opsctl policy group allow  <group-id> -- <pattern>...
+opsctl policy group deny   <group-id> -- <pattern>...
+opsctl policy group rm     <group-id> [<entry-id>]
+opsctl policy attach <asset> | --group <group>  <group-id>...
+opsctl policy detach <asset> | --group <group>  <group-id>...
 ```
 
-### `grant submit [options] [asset...] < input` (JSON mode)
+### `policy show <asset> | --group <group>`
 
-Complex grants from stdin with per-item asset/group overrides.
+Read-only (no TTY). For an asset it shows the **effective** merged rules — the asset's own column, its group chain, and attached policy groups, each entry marked with its layer, allow rules shadowed by a deny flagged as ineffective — plus still-valid grants with their remaining time. For `--group` it shows that group's own policy columns, for verifying a just-written group-level rule.
 
-**Options**:
-- `--group <name|id>` — Default group for items without asset/group (repeatable: `--group g1 --group g2`)
+### `policy allow|deny <targets> [--type <t>] -- <pattern>...`
 
-**Input JSON**:
-```json
-{
-  "description": "Grant description",
-  "items": [
-    {"type": "exec", "asset": "web-01", "command": "uptime"},
-    {"type": "exec", "group": "production", "command": "systemctl status *"},
-    {"type": "cp", "asset": "web-server", "detail": "upload config.yml"},
-    {"type": "exec", "command": "df -h"}
-  ]
-}
-```
+Write permanent rules. Targets are one or more assets, or `--group <group>` (repeatable) for asset groups; multiple patterns per call. Echoes the rules and asks for confirmation before writing; flags when a resulting rule is broader than the requested subject. An `allow` that would be shadowed by an in-effect deny is refused, naming the deny and its layer. Any failure in a multi-target/multi-pattern call fails the whole call — no half-written rule set.
 
-**Item fields**:
-- `type` — "exec", "cp", "create", "update"
-- `asset` — Asset name or ID (targets a single asset)
-- `group` — Group name or ID (targets all assets in the group)
-- `command` — Shell command pattern (supports `*` wildcard)
-- `detail` — Human-readable description
+**`--type` semantics differ by target**:
+- Asset target: a type assertion that must match the asset's type; the rule shape comes from the asset itself, so it can be omitted.
+- Group target: **required** — a group has no type of its own, this is the only way to select which policy shape the rules land in.
+- Patterns support `*` wildcard and are normalized like the permission check does; a normalized-empty pattern is refused rather than landing an unusable rule.
 
-Items without asset/group inherit from positional args and `--group` flags (expanded to one item per target).
+### `policy rm <asset>|--group <group> <id>`
 
-**Output**: Session ID (UUID) on approval, error on denial.
+Remove one entry listed by `show`: the target's own permanent allow/deny rule, or a grant item (`g<id>` — grants are still written by the desktop dialog and remain revocable here). Rules inherited from an attached policy group are NOT removed by `rm` — `detach` the group, or edit/copy the policy group itself.
+
+### `policy group ...` — policy groups
+
+The third rule holder. Group IDs are `builtin:<name>`, `ext:<name>`, or a numeric user-group ID. Builtin and extension groups are read-only: `list` / `show` / `copy` / `attach` / `detach` work on them; `create` / edit / `rm` are refused with the copy-first route (`copy` into a user group, edit the copy, then `attach` it). `attach` fails before any write when the group's policy type does not match the target asset's type. `group rm <group-id> <entry-id>` removes one entry (IDs come from `show`); the one-argument form deletes the whole user group.
 
 ```bash
-# Single asset
-opsctl grant submit web-01 < grant.json
-# Multiple assets (each item expanded to all targets)
-echo '{"items":[{"type":"exec","command":"uptime"}]}' | opsctl grant submit web-01 web-02 web-03
-# Per-item overrides (no expansion)
-opsctl grant submit < complex-grant.json
-# Commands matching grant patterns auto-pass
-opsctl exec web-01 --type ssh -- uptime
-```
-
-## session
-
-Sessions are auto-created on the first write operation if none exists. Explicit `session start` is only needed if you want to manage the lifecycle manually.
-
-**Storage**: `.opskat/sessions/<scope>` in CWD (walks up directory tree). Scope is derived from terminal env vars (`TERM_SESSION_ID`, `ITERM_SESSION_ID`, `WT_SESSION`, `WINDOWID`) so different terminal windows get separate sessions. **Sessions expire after 24 hours.**
-
-**Session ID resolution priority**:
-1. `--session <id>` global flag (explicit)
-2. `OPSKAT_SESSION_ID` environment variable (desktop app injects this)
-3. `.opskat/sessions/<scope>` file (auto-created, walks up directory tree)
-
-### `session start`
-
-Create a session and print its ID. Writes to `.opskat/sessions/<scope>` in CWD.
-
-### `session end`
-
-End the current active session (removes the session file).
-
-### `session status`
-
-Show the current active session ID.
-
-```bash
-# Auto session (default, no manual steps needed)
-opsctl exec web-01 --type ssh -- uptime       # auto-creates session on first call
-opsctl exec web-02 --type ssh -- df -h        # reuses same session
-
-# Explicit management (cross-terminal/scripting only)
-SESSION=$(opsctl session start)
-opsctl --session $SESSION exec web-01 --type ssh -- uptime
-opsctl session end
+opsctl policy show web-01
+opsctl policy allow web-01 -- 'systemctl restart nginx' 'df -h'
+opsctl policy allow --group production --type ssh -- 'uptime'
+opsctl policy deny web-01 -- 'rm -rf *'
+opsctl policy rm web-01 2
+opsctl policy group list --type query
+opsctl policy group copy builtin:linux-readonly --name my-readonly
+opsctl policy attach web-01 builtin:linux-readonly
+opsctl policy detach --group production builtin:sql-readonly
 ```
 
 ## version

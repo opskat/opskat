@@ -8,6 +8,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/grant_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
@@ -17,6 +18,23 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/mock/gomock"
 )
+
+func TestGrantItemMatchesAsset(t *testing.T) {
+	Convey("grant item 与目标资产的匹配语义", t, func() {
+		ctx := context.Background()
+		asset := &asset_entity.Asset{ID: 7, Name: "host", Type: asset_entity.AssetTypeSSH}
+		Convey("AssetID 精确匹配", func() {
+			So(GrantItemMatchesAsset(ctx, &grant_entity.GrantItem{AssetID: 7}, asset), ShouldBeTrue)
+			So(GrantItemMatchesAsset(ctx, &grant_entity.GrantItem{AssetID: 8}, asset), ShouldBeFalse)
+		})
+		Convey("GroupID 按组链匹配，资产不在组内时拒绝", func() {
+			So(GrantItemMatchesAsset(ctx, &grant_entity.GrantItem{GroupID: 3}, asset), ShouldBeFalse)
+		})
+		Convey("无 AssetID/GroupID 匹配所有资产", func() {
+			So(GrantItemMatchesAsset(ctx, &grant_entity.GrantItem{}, asset), ShouldBeTrue)
+		})
+	})
+}
 
 // stubGroupRepo 简易 group repo stub，返回预设的 group 链
 type stubGroupRepo struct {

@@ -25,6 +25,7 @@ type violation struct {
 // importBanRule 禁止某目录（前缀）下的文件 import 指定路径及其子包。
 type importBanRule struct {
 	dir       string          // 仓库相对路径前缀，"" 表示全仓
+	files     map[string]bool // 可选的精确文件集合；用于只约束少量生产入口
 	banned    []string        // import 路径；默认同时匹配其子包
 	exact     bool            // 仅精确匹配 banned 本身（如禁 "log" 但放行 "log/slog" 适配第三方库）
 	skipTests bool            // 是否放行 *_test.go（如测试注入 mock repo）
@@ -39,6 +40,9 @@ type parsedFile struct {
 }
 
 func (r importBanRule) applies(path string) bool {
+	if r.files != nil && !r.files[path] {
+		return false
+	}
 	if r.dir != "" && !strings.HasPrefix(path, r.dir) {
 		return false
 	}
@@ -278,6 +282,39 @@ import "github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 var _ = mock_asset_repo.New`)
 		if vs := checkImportBan(pf, rule); len(vs) != 0 {
 			t.Fatalf("want 0 violations, got %v", vs)
+		}
+	})
+
+	t.Run("精确文件集合只约束列出的生产入口", func(t *testing.T) {
+		fileRule := importBanRule{
+			files: map[string]bool{
+				"cmd/opsctl/command/policy.go":       true,
+				"cmd/opsctl/command/policy_group.go": true,
+				"cmd/opsctl/command/tty_approval.go": true,
+			},
+			banned:  []string{"github.com/opskat/opskat/internal/repository", "github.com/opskat/opskat/internal/pkg/dbutil"},
+			message: "经 policy service 访问",
+		}
+		for _, tc := range []struct {
+			path       string
+			importPath string
+		}{
+			{path: "cmd/opsctl/command/policy.go", importPath: "github.com/opskat/opskat/internal/repository/asset_repo"},
+			{path: "cmd/opsctl/command/policy_group.go", importPath: "github.com/opskat/opskat/internal/pkg/dbutil"},
+			{path: "cmd/opsctl/command/tty_approval.go", importPath: "github.com/opskat/opskat/internal/repository/asset_repo"},
+		} {
+			pf := parseSource(t, tc.path, "package command\nimport _ \""+tc.importPath+"\"")
+			if vs := checkImportBan(pf, fileRule); len(vs) != 1 {
+				t.Fatalf("%s importing %s: want 1 violation, got %v", tc.path, tc.importPath, vs)
+			}
+		}
+
+		pf := parseSource(t, "cmd/opsctl/command/asset.go",
+			`package command
+import "github.com/opskat/opskat/internal/repository/asset_repo"
+var _ = asset_repo.Asset`)
+		if vs := checkImportBan(pf, fileRule); len(vs) != 0 {
+			t.Fatalf("unlisted sibling: want 0 violations, got %v", vs)
 		}
 	})
 }

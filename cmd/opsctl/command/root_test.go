@@ -24,6 +24,21 @@ func TestTopLevelUsageNamesCredentialReadCommands(t *testing.T) {
 	require.Contains(t, usage, "opsctl get credential")
 }
 
+// session 已降为内部概念：使用说明不得再宣传已删除的 --session 全局 flag
+// 与 session 子命令。
+func TestTopLevelUsageRetiresSessionSurface(t *testing.T) {
+	usage := captureStderr(t, printUsage)
+	require.NotContains(t, usage, "--session")
+	require.NotContains(t, usage, "opsctl session")
+}
+
+// grant submit 已删除（能力由 policy allow/deny 承接）：使用说明不得再宣传
+// grant 命令，老脚本会以未知命令失败而非静默换语义，这是刻意的。
+func TestTopLevelUsageRetiresGrantSurface(t *testing.T) {
+	usage := captureStderr(t, printUsage)
+	require.NotContains(t, usage, "grant")
+}
+
 func TestCreateAssetUsageDocumentsGenericAndSafeCredentialInputs(t *testing.T) {
 	usage := captureStderr(t, printCreateAssetUsage)
 	for _, want := range []string{

@@ -225,6 +225,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 	}
 
 	// Step 4: Batch approval for need-confirm commands
+	batchRefused := false
 	if len(needConfirm) > 0 {
 		batchItems := make([]approval.BatchItem, 0, len(needConfirm))
 		for _, b := range needConfirm {
@@ -239,6 +240,13 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 
 		approvalResult, approvalErr := requireBatchApprovalFn(batchItems, session)
 		if approvalErr != nil {
+			// 结构化拒绝（不可交互且桌面端不可达）必须以 stderr 首行标记 + 退出码 3
+			// 呈现给调用方；普通拒绝（人点了拒绝）只进每条的 result。
+			var refusal *structuredRefusal
+			if errors.As(approvalErr, &refusal) {
+				batchRefused = true
+				fmt.Fprintln(os.Stderr, approvalErr)
+			}
 			// All need-confirm commands are denied — write audit for each
 			for _, b := range needConfirm {
 				cmd := resolved[b.idx]
@@ -293,12 +301,16 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 
 	// Exit 0 if batch mechanism succeeded (even if individual commands failed)
 	// Exit 1 only if ALL commands failed
+	// Exit 3 if the batch approval was a structured refusal (needs authorization)
 	allFailed := true
 	for _, r := range results {
 		if r.Error == "" && r.ExitCode == 0 {
 			allFailed = false
 			break
 		}
+	}
+	if batchRefused {
+		return refusalExitCode
 	}
 	if allFailed && len(results) > 0 {
 		return 1
@@ -426,7 +438,10 @@ func executeBatchHandler(ctx context.Context, handlers map[string]tool.ToolHandl
 // never silently change another, unrelated command's behavior.
 var requireBatchApprovalFn = requireBatchApproval
 
-// requireBatchApproval sends a single batch approval request to the desktop app.
+// requireBatchApproval sends a single batch approval request, choosing the approver
+// the same way requireApproval does (spec Approver selection): interactive terminal →
+// one prompt listing every item, all-or-nothing; unreachable desktop → structured
+// refusal (NEEDS AUTHORIZATION, exit code 3); otherwise the desktop dialog.
 func requireBatchApproval(items []approval.BatchItem, session string) (ApprovalResult, error) {
 	if session == "" {
 		id := newSessionID()
@@ -439,47 +454,58 @@ func requireBatchApproval(items []approval.BatchItem, session string) (ApprovalR
 	dataDir := bootstrap.ResolvedDataDir()
 	sockPath := approval.SocketPath(dataDir)
 
-	authToken, err := bootstrap.ReadAuthToken(dataDir)
-	if err != nil {
-		logger.Default().Warn("read auth token", zap.Error(err))
-	}
+	switch chooseApprover(isInteractive(stdinIsTerminal(), stderrIsTerminal()), func() error {
+		return dialApprovalSocket(sockPath)
+	}) {
+	case approverTerminal:
+		in, out := terminalApprovalStreams()
+		res, err := runTTYBatchApproval(envPolicyLangCtx(), items, in, out)
+		res.SessionID = session
+		return res, err
 
-	// Build detail string for the request
-	details := make([]string, 0, len(items))
-	for _, item := range items {
-		details = append(details, fmt.Sprintf("[%s] %s: %s", item.Type, item.AssetName, truncateStr(item.Command, 80)))
-	}
-
-	resp, err := approval.RequestApprovalWithToken(sockPath, authToken, approval.ApprovalRequest{
-		Type:       "batch",
-		Detail:     strings.Join(details, "\n"),
-		SessionID:  session,
-		BatchItems: items,
-	})
-	if err != nil {
-		return ApprovalResult{
-			Decision:       aictx.Deny,
-			DecisionSource: aictx.SourcePolicyDeny,
-			SessionID:      session,
-		}, fmt.Errorf("desktop app is not running: %v", err)
-	}
-	if !resp.Approved {
-		reason := resp.Reason
-		if reason == "" {
-			reason = "denied"
+	case approverDesktop:
+		authToken, err := bootstrap.ReadAuthToken(dataDir)
+		if err != nil {
+			logger.Default().Warn("read auth token", zap.Error(err))
 		}
-		return ApprovalResult{
-			Decision:       aictx.Deny,
-			DecisionSource: aictx.SourceUserDeny,
-			SessionID:      session,
-		}, fmt.Errorf("batch denied: %s", reason)
-	}
 
-	return ApprovalResult{
-		Decision:       aictx.Allow,
-		DecisionSource: aictx.SourceUserAllow,
-		SessionID:      session,
-	}, nil
+		// Build detail string for the request
+		details := make([]string, 0, len(items))
+		for _, item := range items {
+			details = append(details, fmt.Sprintf("[%s] %s: %s", item.Type, item.AssetName, truncateStr(item.Command, 80)))
+		}
+
+		resp, err := approval.RequestApprovalWithToken(sockPath, authToken, approval.ApprovalRequest{
+			Type:       "batch",
+			Detail:     strings.Join(details, "\n"),
+			SessionID:  session,
+			BatchItems: items,
+		})
+		if err != nil {
+			// 拨号在探测与请求之间失败：与不可达同一契约，结构化拒绝。
+			return refuseBatchApproval(items, session)
+		}
+		if !resp.Approved {
+			reason := resp.Reason
+			if reason == "" {
+				reason = "denied"
+			}
+			return ApprovalResult{
+				Decision:       aictx.Deny,
+				DecisionSource: aictx.SourceUserDeny,
+				SessionID:      session,
+			}, fmt.Errorf("batch denied: %s", reason)
+		}
+
+		return ApprovalResult{
+			Decision:       aictx.Allow,
+			DecisionSource: aictx.SourceUserAllow,
+			SessionID:      session,
+		}, nil
+
+	default:
+		return refuseBatchApproval(items, session)
+	}
 }
 
 // parseBatchInput parses input from either stdin JSON or positional args.
@@ -570,7 +596,7 @@ const batchAuditTool = "exec"
 
 func printBatchUsage() {
 	fmt.Fprint(os.Stderr, `Usage:
-  opsctl [--session <id>] batch [args...]
+  opsctl batch [args...]
 
 Executes multiple commands in parallel with a single approval request.
 Dispatches every item by its asset's real type (database, redis, mongodb,

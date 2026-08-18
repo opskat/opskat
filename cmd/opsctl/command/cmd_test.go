@@ -1,7 +1,6 @@
 package command
 
 import (
-	"encoding/json"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
@@ -135,73 +134,6 @@ func TestExtractTypeFlag(t *testing.T) {
 			declared, rest := extractTypeFlag([]string{})
 			So(declared, ShouldEqual, "")
 			So(rest, ShouldResemble, []string{})
-		})
-	})
-}
-
-func TestGrantSessionFlagParsing(t *testing.T) {
-	Convey("--grant-session flag 解析", t, func() {
-		Convey("有 --grant-session 时正确提取", func() {
-			args := []string{"--grant-session", "abc-123", "web-server", "--", "uptime"}
-			var grantSession string
-			remaining := args
-			if len(remaining) >= 2 && remaining[0] == "--grant-session" {
-				grantSession = remaining[1]
-				remaining = remaining[2:]
-			}
-			So(grantSession, ShouldEqual, "abc-123")
-			So(remaining, ShouldResemble, []string{"web-server", "--", "uptime"})
-		})
-
-		Convey("无 --grant-session 时不影响解析", func() {
-			args := []string{"web-server", "--", "uptime"}
-			var grantSession string
-			remaining := args
-			if len(remaining) >= 2 && remaining[0] == "--grant-session" {
-				grantSession = remaining[1]
-				remaining = remaining[2:]
-			}
-			So(grantSession, ShouldEqual, "")
-			So(remaining, ShouldResemble, []string{"web-server", "--", "uptime"})
-		})
-	})
-}
-
-func TestGrantInputParsing(t *testing.T) {
-	Convey("grant JSON 输入解析", t, func() {
-		Convey("有效 JSON", func() {
-			input := `{"description":"test grant","items":[{"type":"exec","asset":"web-01","command":"uptime"}]}`
-			var grant grantInput
-			err := json.Unmarshal([]byte(input), &grant)
-			So(err, ShouldBeNil)
-			So(grant.Description, ShouldEqual, "test grant")
-			So(len(grant.Items), ShouldEqual, 1)
-			So(grant.Items[0].Type, ShouldEqual, "exec")
-			So(grant.Items[0].Asset, ShouldEqual, "web-01")
-			So(grant.Items[0].Command, ShouldEqual, "uptime")
-		})
-
-		Convey("多项授权", func() {
-			input := `{"description":"deploy","items":[
-				{"type":"exec","asset":"web-01","command":"systemctl stop app"},
-				{"type":"cp","asset":"web-01","detail":"upload config"},
-				{"type":"exec","asset":"web-01","command":"systemctl start app"}
-			]}`
-			var grant grantInput
-			err := json.Unmarshal([]byte(input), &grant)
-			So(err, ShouldBeNil)
-			So(len(grant.Items), ShouldEqual, 3)
-			So(grant.Items[0].Type, ShouldEqual, "exec")
-			So(grant.Items[1].Type, ShouldEqual, "cp")
-			So(grant.Items[2].Command, ShouldEqual, "systemctl start app")
-		})
-
-		Convey("空 items", func() {
-			input := `{"description":"empty","items":[]}`
-			var grant grantInput
-			err := json.Unmarshal([]byte(input), &grant)
-			So(err, ShouldBeNil)
-			So(len(grant.Items), ShouldEqual, 0)
 		})
 	})
 }

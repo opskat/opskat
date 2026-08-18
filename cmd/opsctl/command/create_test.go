@@ -8,12 +8,17 @@ import (
 	"testing"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/service/asset_put_svc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.uber.org/mock/gomock"
 )
 
 type fakePreparedAssetCreate struct {
@@ -466,4 +471,98 @@ func TestCreateAssetCompositeConfigOmittedFromAuditViaRealPrepare(t *testing.T) 
 	assert.Equal(t, "10.0.0.1", config["host"])
 	_, hasAuthType := config["auth_type"]
 	assert.False(t, hasAuthType, "composite auth_type must be omitted from the opsctl audit")
+}
+
+// TestCmdUpdateAssetApprovalDetailCarriesOnlyFlagSpecifiedChanges 锁住 spec 决策 18
+// （Problem 6）：update asset 的审批主体 Detail 必须带上本次实际变更的字段，未经
+// flag 指定的字段不出现。Detail 是审批人看到的全部——桌面 OpsctlApprovalDialog 对
+// 这类请求只渲染它，终端提示（renderTTYApprovalPrompt）也照抄，所以修的是生产者
+// （cmdUpdate 构造 ApprovalRequest 的地方），不是提示侧的本地摘要。Command 依合同
+// 保持为空：非空会唤醒 requireApproval 的 Stage-2 策略/grant 检查，而 update 没有
+// 可被规则匹配的主体（spec 决策 17）。
+func TestCmdUpdateAssetApprovalDetailCarriesOnlyFlagSpecifiedChanges(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+	mockAsset.EXPECT().List(gomock.Any(), gomock.Any()).Return([]*asset_entity.Asset{
+		{ID: 9, Name: "web-9", Type: asset_entity.AssetTypeSSH},
+	}, nil).AnyTimes()
+	origAsset := asset_repo.Asset()
+	asset_repo.RegisterAsset(mockAsset)
+	t.Cleanup(func() {
+		if origAsset != nil {
+			asset_repo.RegisterAsset(origAsset)
+		}
+	})
+
+	origWriter := opsctlAuditWriter
+	opsctlAuditWriter = &mockAuditWriter{}
+	t.Cleanup(func() { opsctlAuditWriter = origWriter })
+
+	handlers := map[string]tool.ToolHandlerFunc{
+		"put_asset": func(context.Context, map[string]any) (string, error) {
+			return `{"id":9,"message":"asset updated"}`, nil
+		},
+	}
+
+	var approvalReq approval.ApprovalRequest
+	origApproval := requireUpdateApproval
+	requireUpdateApproval = func(_ context.Context, req approval.ApprovalRequest) (ApprovalResult, error) {
+		approvalReq = req
+		return ApprovalResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow, SessionID: "sess-update"}, nil
+	}
+	t.Cleanup(func() { requireUpdateApproval = origApproval })
+
+	run := func(t *testing.T, changeFlags ...string) map[string]any {
+		t.Helper()
+		approvalReq = approval.ApprovalRequest{}
+		code := cmdUpdate(context.Background(), handlers, append([]string{"asset", "web-9"}, changeFlags...), "sess-update")
+		require.Equal(t, 0, code)
+		require.Equal(t, "update", approvalReq.Type)
+		require.Equal(t, int64(9), approvalReq.AssetID)
+		require.Empty(t, approvalReq.Command, "Command must stay empty (non-empty wakes Stage-2 policy/grant checks)")
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal([]byte(approvalReq.Detail), &decoded),
+			"Detail %q must carry the change set as JSON, not just echo the command line", approvalReq.Detail)
+		return decoded
+	}
+
+	t.Run("全部变更 flag 都进入 Detail", func(t *testing.T) {
+		decoded := run(t,
+			"--name", "New Name", "--host", "10.0.0.2", "--port", "2222",
+			"--username", "root", "--description", "edge box",
+			"--group-id", "3", "--icon", "server")
+		assert.ElementsMatch(t,
+			[]string{"asset", "name", "description", "group_id", "icon", "config"}, mapKeys(decoded))
+		assert.Equal(t, "9", decoded["asset"])
+		assert.Equal(t, "New Name", decoded["name"])
+		assert.Equal(t, "edge box", decoded["description"])
+		assert.Equal(t, float64(3), decoded["group_id"])
+		assert.Equal(t, "server", decoded["icon"])
+		config, ok := decoded["config"].(map[string]any)
+		require.True(t, ok, "config must be an object, got %T", decoded["config"])
+		assert.ElementsMatch(t, []string{"host", "port", "username"}, mapKeys(config))
+		assert.Equal(t, "10.0.0.2", config["host"])
+		assert.Equal(t, float64(2222), config["port"])
+		assert.Equal(t, "root", config["username"])
+	})
+
+	t.Run("只改 group-id（0=移出组）：未经 flag 指定的字段不出现", func(t *testing.T) {
+		decoded := run(t, "--group-id", "0")
+		assert.ElementsMatch(t, []string{"asset", "group_id"}, mapKeys(decoded))
+		assert.Equal(t, float64(0), decoded["group_id"])
+	})
+
+	t.Run("不带任何变更 flag：Detail 不含变更字段", func(t *testing.T) {
+		decoded := run(t)
+		assert.ElementsMatch(t, []string{"asset"}, mapKeys(decoded))
+	})
+}
+
+func mapKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

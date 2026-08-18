@@ -2,11 +2,14 @@ package command
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
@@ -46,6 +49,7 @@ func cmdDelete(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 		printDeleteUsage()
 		return 1
 	}
+	ctx = aictx.WithAuditSource(ctx, "opsctl")
 
 	resource := args[0]
 	switch resource {
@@ -59,6 +63,8 @@ func cmdDelete(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 1
 		}
+		// 原命令原文挂在 ctx 上，供 NEEDS TTY 结构化拒绝转述给人。
+		ctx = withOriginCommand(ctx, "opsctl delete asset "+strings.Join(args[1:], " "))
 
 		approvalResult, err := deleteApprovalFn(ctx, approval.ApprovalRequest{
 			Type:      "delete",
@@ -68,8 +74,11 @@ func cmdDelete(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 			SessionID: session,
 		})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
+			// 拒绝（含结构化拒绝）是真实决策，照常落审计；结构化拒绝退出码 3。
+			writeOpsctlAudit(ctx, "delete_asset",
+				fmt.Sprintf(`{"asset":%q}`, strconv.FormatInt(asset.ID, 10)), "", err,
+				approvalResult.ToCheckResult())
+			return writeApprovalFailure(os.Stderr, err)
 		}
 
 		ctx = withPreapprovedDeleteChecker(ctx)
@@ -105,19 +114,26 @@ func cmdDelete(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 			detail = fmt.Sprintf("opsctl delete group %q AND every asset in it — this cannot be undone from the app", name)
 		}
 
+		ctx = withOriginCommand(ctx, "opsctl delete group "+strings.Join(args[1:], " "))
+
+		params := map[string]any{"id": float64(id)}
+		if *deleteAssets {
+			params["delete_assets"] = true
+		}
+
 		approvalResult, err := deleteApprovalFn(ctx, approval.ApprovalRequest{
 			Type:      "delete",
 			Detail:    detail,
 			SessionID: session,
 		})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
-		}
-
-		params := map[string]any{"id": float64(id)}
-		if *deleteAssets {
-			params["delete_assets"] = true
+			argsJSON, marshalErr := json.Marshal(params)
+			if marshalErr != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", marshalErr)
+				return 1
+			}
+			writeOpsctlAudit(ctx, "delete_group", string(argsJSON), "", err, approvalResult.ToCheckResult())
+			return writeApprovalFailure(os.Stderr, err)
 		}
 
 		ctx = withPreapprovedDeleteChecker(ctx)
@@ -154,8 +170,10 @@ Resources:
 Run 'opsctl delete group --help' for group-specific flags.
 
 Approval:
-  Always requires desktop app confirmation — this cannot be pre-approved or
-  granted, even with an active session.
+  Always requires confirmation — this cannot be pre-approved or granted by
+  any rule. An interactive terminal prompts here; otherwise the running
+  desktop app is asked, and with neither available opsctl exits with code 3
+  and a NEEDS TTY marker telling you to run the command yourself.
 
 Examples:
   opsctl delete asset old-server
@@ -177,8 +195,10 @@ Flags:
                     the app). Default: assets move to ungrouped and survive.
 
 Approval:
-  Always requires desktop app confirmation — this cannot be pre-approved or
-  granted, even with an active session.
+  Always requires confirmation — this cannot be pre-approved or granted by
+  any rule. An interactive terminal prompts here; otherwise the running
+  desktop app is asked, and with neither available opsctl exits with code 3
+  and a NEEDS TTY marker telling you to run the command yourself.
 
 Examples:
   opsctl delete group 3

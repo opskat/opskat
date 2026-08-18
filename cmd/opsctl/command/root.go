@@ -29,7 +29,6 @@ func Execute() int {
 	globalFlags := flag.NewFlagSet("opsctl", flag.ContinueOnError)
 	dataDir := globalFlags.String("data-dir", "", "Override the application data directory")
 	masterKey := globalFlags.String("master-key", "", "Override the master encryption key (env: OPSKAT_MASTER_KEY)")
-	sessionFlag := globalFlags.String("session", "", "Session ID for batch approval (env: OPSKAT_SESSION_ID)")
 
 	// Find the first non-flag argument (verb) position
 	verbIdx := 1
@@ -79,8 +78,9 @@ func Execute() int {
 		return 1
 	}
 
-	// CLI 默认使用英文策略消息
-	ctx = aictx.WithPolicyLang(ctx, "en")
+	// 策略消息语言跟随系统 locale（LC_ALL → LC_MESSAGES → LANG）
+	ctx = aictx.WithPolicyLang(ctx, resolvePolicyLang(
+		os.Getenv("LC_ALL"), os.Getenv("LC_MESSAGES"), os.Getenv("LANG")))
 
 	// Load app config (MCP port, etc.)
 	resolvedDataDir := *dataDir
@@ -98,8 +98,8 @@ func Execute() int {
 	defer sshPool.Close()
 	ctx = helper.WithSSHPool(ctx, sshPool)
 
-	// Resolve session ID: flag > env > active-session file
-	resolvedSession := resolveSessionID(*sessionFlag)
+	// Resolve the active session ID from the data dir (machine-wide single session)
+	resolvedSession := resolveSessionID()
 
 	switch verb {
 	case "list":
@@ -122,10 +122,8 @@ func Execute() int {
 		return cmdSSH(ctx, args)
 	case "batch":
 		return cmdBatch(ctx, handlers, args, resolvedSession)
-	case "grant":
-		return cmdGrant(ctx, args, resolvedSession)
-	case "session":
-		return cmdSession(args)
+	case "policy":
+		return cmdPolicy(ctx, args, resolvedSession)
 	case "ext":
 		return cmdExt(args)
 	default:
@@ -142,6 +140,16 @@ func applyEnvironmentOverrides(dataDir, masterKey string) (string, string) {
 		masterKey = os.Getenv("OPSKAT_MASTER_KEY")
 	}
 	return dataDir, masterKey
+}
+
+// stringSliceFlag 支持重复指定的字符串 flag（如 --group a --group b），
+// policy 族子命令的目标解析使用。
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string { return fmt.Sprintf("%v", *s) }
+func (s *stringSliceFlag) Set(val string) error {
+	*s = append(*s, val)
+	return nil
 }
 
 // isCLIUsageHelp reports whether remaining (the CLI args after global flags) means
@@ -171,40 +179,43 @@ Usage:
   opsctl [global-flags] <command> [arguments]
 
 Commands:
-  list      List resources (assets, groups, or credentials)
+  list      List resources (assets, groups, credentials, or audit rows)
   get       Get detailed information about an asset or credential
   help      Show CLI usage, or 'opsctl help <asset>' for that asset type's command syntax
   ssh       Open an interactive SSH terminal session
   exec      Execute a command on any asset (ssh, database, redis, mongodb, etcd, kafka, k8s)
   create    Create a new resource (asset or group)
   update    Update an existing resource (asset or group)
-  delete    Delete an asset or group (always asks for desktop confirmation)
+  delete    Delete an asset or group (always requires human confirmation)
   cp        Copy files between local and remote servers (scp-style)
   batch     Execute multiple commands in parallel across assets
-  grant     Submit a batch grant for approval
-  session   Manage approval sessions (start, end, status)
+  policy    Manage permanent permission rules (show / allow / deny / rm, group, attach / detach)
   ext       Manage and execute extension tools (list, exec)
   version   Print version information
 
 Note:
   Assets can be referenced by numeric ID or by name.
   Use "group/name" to disambiguate when multiple assets share a name.
-  Write operations (exec, cp, create, update, delete) require desktop app approval.
+  Write operations (exec, cp, create, update, delete) require approval: a prompt
+  in an interactive terminal, the desktop app's dialog when it is running, or a
+  structured refusal (exit code 3) when neither is available.
 
-Approval & Sessions:
-  Write operations require approval from the running desktop app. On first
-  write, a session is auto-created in .opskat/sessions/. When the user
-  approves with "Remember", that command pattern is saved for the session,
-  so later matching operations skip approval. Sessions expire after 24 hours.
+Approval:
+  Write operations check permanent rules and saved temporary authorizations
+  first; anything still unconfirmed asks a human. An interactive terminal
+  prompts right there ("allow always" writes a permanent rule via the same
+  path as 'opsctl policy allow'); otherwise the desktop app shows its dialog
+  ("Remember" saves a 24-hour temporary authorization). With neither available,
+  opsctl exits with code 3: exec/cp/batch print NEEDS AUTHORIZATION plus a
+  ready-to-run 'opsctl policy allow' line; create/update/delete print
+  NEEDS TTY because no rule can pre-authorize them — run those yourself in
+  a terminal instead of retrying.
 
 Global Flags:
   --data-dir <path>     Override the application data directory
                         (default: platform-specific, e.g. ~/Library/Application Support/opskat)
   --master-key <key>    Override the master encryption key for credential decryption
                         (env: OPSKAT_MASTER_KEY)
-  --session <id>        Session ID for approval (env: OPSKAT_SESSION_ID)
-                        Auto-created if not specified. Use 'opsctl session start'
-                        to explicitly create one.
 
 Run 'opsctl <command> --help' for more information on a specific command.
 
@@ -218,7 +229,7 @@ Examples:
   opsctl help web-server                          Show that asset type's command syntax
   opsctl ssh web-server                           Open interactive SSH session
   opsctl ssh production/web-01                    Disambiguate by group/name
-  opsctl exec web-server -- uptime                Run command (auto-creates session)
+  opsctl exec web-server -- uptime                Run command (approval prompts in your terminal)
   opsctl exec prod-db -- "SELECT * FROM users"    Query a database
   opsctl exec cache -- "GET session:abc"          Execute a Redis command
   opsctl exec cache --type redis -- "GET session:abc"  Assert the asset's type first
@@ -228,7 +239,9 @@ Examples:
   opsctl delete group 3 --delete-assets           Delete a group and its assets
   opsctl cp ./config.yml web-server:/etc/app/     Upload a file
   opsctl cp 1:/var/log/app.log ./app.log          Download a file
-  opsctl --session $ID exec web-01 -- uptime      Use explicit session
+  opsctl policy show web-server                   Show effective rules (read-only, no TTY)
+  opsctl policy allow web-server -- 'systemctl restart *'   Pre-approve commands (terminal only)
+  opsctl list audit --asset web-server --limit 50 Read stored audit rows (read-only)
   opsctl ext list                                   List installed extensions
   opsctl ext exec oss list_buckets --args '{}'       Execute extension tool
 `)

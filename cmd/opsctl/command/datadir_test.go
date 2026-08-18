@@ -14,7 +14,7 @@ func TestRuntimeCommandsUseResolvedDataDir(t *testing.T) {
 		"batch.go",
 		"handler.go",
 		"approval.go",
-		"grant.go",
+		"session.go",
 		"sshproxy.go",
 	}
 

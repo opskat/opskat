@@ -90,16 +90,28 @@ Before updating, read current description via `opsctl get asset <id>`:
 opsctl update asset <id> --description "<generated description>"
 ```
 
-## Batch Processing (group)
+**Unattended limitation**: `update asset` carries no subject any permission rule
+could match, so it cannot be pre-authorized. When run unattended (no interactive
+terminal and the desktop app not running) it stops with exit code 3 and a
+NEEDS TTY marker. In that case, give the exact `opsctl update asset <id>
+--description "..."` command to the user to run in their own terminal — do NOT
+retry it; once the user runs it the update is already done, and retrying would
+perform it a second time. Confirm the result with `opsctl get asset <id>`.
 
-Session auto-creates on first write, no manual setup needed:
+## Batch Processing (group)
 
 ```bash
 # For each asset in the group:
-opsctl exec <asset> -- "..."   # Phase 1 scan (auto-creates session)
+opsctl exec <asset> -- "..."   # Phase 1 scan (needs approval unless pre-authorized)
 opsctl exec <asset> -- "..."   # Phase 2 if needed
 opsctl update asset <id> --description "..."
 ```
+
+In unattended runs (no interactive terminal, desktop app not running) each
+unapproved `exec` stops with NEEDS AUTHORIZATION — relay the printed
+`opsctl policy allow` line to the user and retry after they authorize — while
+`update asset` stops with NEEDS TTY (hand the command to the user, do not
+retry; see Updating above).
 
 ## Summary Report
 

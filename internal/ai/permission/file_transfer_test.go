@@ -159,3 +159,45 @@ func TestNormalizeGrantPatterns_CpSubjectStaysAsNarrowAsTheTransfer(t *testing.T
 		})
 	})
 }
+
+// 方向化 cp 的 deny 规则必须真正拦住传输（deny 无条件先判，checkCommandPolicyPermission
+// 的同一优先序）：opsctl policy deny <asset> -- 'cp:read:/x' 落库的就是这种规则，
+// rule_persist 的遮蔽检测（cpDenyShadows）也按它生效假设。若检查器只扫 allow，
+// 这条 deny 就是一条给人虚假安全感的死规则——写侧与查侧必须同一语义。
+func TestCheckFileTransferPermission_DirectionalDenyEnforced(t *testing.T) {
+	Convey("方向化 cp deny 规则先判", t, func() {
+		ctx, mockAsset, _ := setupPolicyTest(t)
+		asset := &asset_entity.Asset{
+			ID:   1,
+			Type: asset_entity.AssetTypeSSH,
+			CmdPolicy: mustJSON(asset_entity.CommandPolicy{
+				AllowList: []string{"cp:read:/etc/*"},
+				DenyList:  []string{"cp:read:/etc/shadow"},
+			}),
+		}
+		mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+		r := CheckPermission(ctx, GrantToolCpRead, 1, "/etc/shadow")
+		So(r.Decision, ShouldEqual, aictx.Deny)
+		So(r.DecisionSource, ShouldEqual, aictx.SourcePolicyDeny)
+		So(r.MatchedPattern, ShouldEqual, "cp:read:/etc/shadow")
+
+		// 未命中 deny 的路径照常由 allow 放行。
+		So(CheckPermission(ctx, GrantToolCpRead, 1, "/etc/hosts").Decision, ShouldEqual, aictx.Allow)
+		// deny 不跨方向：读的 deny 不拦写。
+		So(CheckPermission(ctx, GrantToolCpWrite, 1, "/etc/shadow").Decision, ShouldEqual, aictx.NeedConfirm)
+	})
+
+	Convey("cp:* deny 拦下所有方向的传输", t, func() {
+		ctx, mockAsset, _ := setupPolicyTest(t)
+		asset := &asset_entity.Asset{
+			ID:        1,
+			Type:      asset_entity.AssetTypeSSH,
+			CmdPolicy: mustJSON(asset_entity.CommandPolicy{DenyList: []string{"cp:*"}}),
+		}
+		mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+
+		So(CheckPermission(ctx, GrantToolCpRead, 1, "/etc/hosts").Decision, ShouldEqual, aictx.Deny)
+		So(CheckPermission(ctx, GrantToolCpWrite, 1, "/opt/app/config.yml").Decision, ShouldEqual, aictx.Deny)
+	})
+}
