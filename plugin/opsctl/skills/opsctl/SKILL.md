@@ -52,9 +52,14 @@ inputs are mutually exclusive. Existing convenience flags (`--host`, `--port`, `
 `--driver`, K8s flags, etc.) remain compatible, and only explicitly supplied flags override
 non-secret config keys. Run `opsctl help <type>` for exact accepted fields and defaults.
 
-For plaintext credentials prefer `--password-stdin`; it removes one terminal LF/CRLF and
-preserves other bytes. `--password` and plaintext inline `--config` expose values through
-argv (shell history, process listings, CI logs) and print a warning. Plaintext config files
+`--password` is the only plaintext flag. Written bare it reads the secret from an
+interactive terminal without echo — **you cannot use that form**, because an agent session
+has no TTY and opsctl answers with exit code 3 and a `NEEDS TTY` marker. Pass the value
+instead (`--password <value>` or `--password=<value>`; a value starting with `-` requires
+the `=` form), or prefer `--credential-id`. `--password <value>` and plaintext inline
+`--config` expose values through argv (shell history, process listings, CI logs) and print
+a warning; when the user is at a terminal, hand them the bare-`--password` command to run
+themselves rather than putting their secret in argv. Plaintext config files
 must use restrictive permissions, must not be committed, and should be removed after use.
 `--credential-id <numeric-id>` reuses an existing managed credential. Plaintext is encrypted
 inside the asset and never creates a credential; create managed credentials in the desktop
@@ -194,7 +199,7 @@ opsctl cp staging:/var/backups/db.sql prod:/var/tmp/db.sql
 
 ```bash
 # Create assets → init discovery (use parallel sub-agents for create)
-printf '%s\n' "$WEB03_PASSWORD" | opsctl create asset --name web-03 --host 10.0.1.3 --username root --password-stdin
+opsctl create asset --name web-03 --host 10.0.1.3 --username root --password="$WEB03_PASSWORD"
 opsctl create asset --name web-04 --host 10.0.1.4 --username root --credential-id 4
 # Then batch init with /opsctl:init --group <group-id>
 ```

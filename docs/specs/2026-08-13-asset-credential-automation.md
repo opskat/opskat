@@ -61,6 +61,8 @@ A config key that the selected handler does not declare as accepted must produce
 
 ## Authentication inputs
 
+> **Superseded (2026-08-19):** 本节描述的 `--password-stdin` 已被移除，明文入口收敛为单个 `--password`——带值沿用本节语义，裸写则在交互式终端里无回显读取，无 TTY 时以退出码 3 + `NEEDS TTY` 拒绝。下文「stdin 是推荐的明文通道」（含决策 5）不再成立；当前契约以 `opsctl create asset --help` 与 `plugin/opsctl/skills/opsctl/` 为准。本节其余部分（互斥语义、明文加密进资产、绝不隐式创建托管凭据）保持有效。
+
 The CLI exposes:
 
 ```text

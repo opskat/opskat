@@ -9,11 +9,10 @@ import (
 	"io"
 	"strings"
 
+	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
-
-const maxPasswordStdinBytes = 1 << 20
 
 type assetCreateRequest struct {
 	asset  *asset_entity.Asset
@@ -21,13 +20,19 @@ type assetCreateRequest struct {
 }
 
 type assetCreateParserDeps struct {
-	stdin          io.Reader
-	stderr         io.Writer
-	readFile       func(string) ([]byte, error)
+	stderr   io.Writer
+	readFile func(string) ([]byte, error)
+	// promptSecret 从终端无回显读取一行密码；nil 表示当前环境不可交互，裸写
+	// --password 时应给出 NEEDS TTY 结构化拒绝而不是读取任何输入。
+	promptSecret   func(prompt string) (string, error)
 	resolveAssetID func(context.Context, string) (int64, error)
 }
 
 func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParserDeps) (*assetCreateRequest, error) {
+	if retired := retiredPasswordStdinFlag(args); retired != "" {
+		return nil, fmt.Errorf("%s has been removed: use a bare --password to type it interactively in a terminal, or --password=<value>", retired)
+	}
+	args, promptPassword, bareFollowedBy := splitPasswordPrompt(args)
 	fs := flag.NewFlagSet("create asset", flag.ContinueOnError)
 	fs.SetOutput(deps.stderr)
 	assetType := fs.String("type", "ssh", "Registered asset type")
@@ -50,11 +55,16 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 	description := fs.String("description", "", "Optional description")
 	icon := fs.String("icon", "", "Icon name")
 	credentialID := fs.Int64("credential-id", 0, "Existing managed credential ID")
-	passwordStdin := fs.Bool("password-stdin", false, "Read password from stdin")
-	password := fs.String("password", "", "Password plaintext (unsafe argv path)")
+	password := fs.String("password", "", "Password plaintext (unsafe argv path); bare --password reads it interactively")
 	agentSourceID := fs.Int64("agent-source-id", 0, "SSH Agent source ID")
 	agentFingerprint := fs.String("agent-key-fingerprint", "", "SSH Agent key SHA256 fingerprint")
 	fs.Usage = printCreateAssetUsage
+	// 预扫描把「下一个 token 以 - 开头」判成裸写，因此以 - 开头的密码值会落到这里。
+	// 该 token 不是已注册 flag 时，Go 只会报 "flag provided but not defined"，对用户
+	// 不可读——给出定向指引，且不回显该 token（它可能就是密码本身）。
+	if promptPassword && bareFollowedBy != "" && fs.Lookup(flagLookupName(bareFollowedBy)) == nil {
+		return nil, errors.New(`a bare --password must be followed by another flag or nothing; if the password starts with "-", write it as --password=<value>`)
+	}
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -96,10 +106,13 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 	if visited["credential-id"] {
 		flagSecretSources++
 	}
-	if visited["password-stdin"] && *passwordStdin {
+	if visited["password"] {
 		flagSecretSources++
 	}
-	if visited["password"] {
+	if promptPassword {
+		if visited["password"] {
+			return nil, errors.New("--password may be given once: either with a value, or bare to type it interactively")
+		}
 		flagSecretSources++
 	}
 	if flagSecretSources > 1 || (flagSecretSources > 0 && secretInConfig != "") {
@@ -131,13 +144,6 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 			return nil, fmt.Errorf("--password must not be empty")
 		}
 		config[plaintextField] = *password
-	}
-	if visited["password-stdin"] && *passwordStdin {
-		secret, err := readPasswordStdin(deps.stdin)
-		if err != nil {
-			return nil, err
-		}
-		config[plaintextField] = secret
 	}
 
 	legacy := map[string]any{
@@ -183,6 +189,26 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 		config["kubeconfig"] = string(data)
 	}
 
+	// 交互提示排在最后：--name / 互斥 / JSON / --ssh-asset / --kubeconfig-file 全部
+	// 通过之后才问，参数写错时用户不必白输一遍密码。
+	if promptPassword {
+		if _, ok := assettype.Get(*assetType); !ok {
+			return nil, fmt.Errorf("unsupported asset type %q (registered types: %s)",
+				*assetType, strings.Join(assettype.RegisteredTypes(), ", "))
+		}
+		if deps.promptSecret == nil {
+			return nil, needsTerminalForPassword(ctx)
+		}
+		secret, err := deps.promptSecret(passwordPrompt(ctx))
+		if err != nil {
+			return nil, fmt.Errorf("read --password: %w", err)
+		}
+		if secret == "" {
+			return nil, fmt.Errorf("--password must not be empty")
+		}
+		config[plaintextField] = secret
+	}
+
 	asset := &asset_entity.Asset{Name: *name, Type: *assetType}
 	if visited["group-id"] {
 		asset.GroupID = *groupID
@@ -194,6 +220,29 @@ func parseAssetCreate(ctx context.Context, args []string, deps assetCreateParser
 		asset.Icon = *icon
 	}
 	return &assetCreateRequest{asset: asset, config: config}, nil
+}
+
+// passwordPrompt 是裸写 --password 的终端提示语。
+func passwordPrompt(ctx context.Context) string {
+	return policy.PolicyMsg(ctx, "Password: ", "密码：")
+}
+
+// needsTerminalForPassword 是裸写 --password 但环境不可交互时的结构化拒绝：退出码 3
+// + stderr 首行 NEEDS TTY，与 policy 写类子命令同一形状——都是「只能由人在终端里
+// 做」。正文给出两条出路：改用 --password=<value>，或把原命令交给人自己执行。
+func needsTerminalForPassword(ctx context.Context) error {
+	var sb strings.Builder
+	sb.WriteString(policy.PolicyMsg(ctx,
+		"a bare --password must be typed in an interactive terminal, but stdin or stderr is not one",
+		"不带值的 --password 需要交互式终端，但当前 stdin 或 stderr 不是终端"))
+	sb.WriteString("\n")
+	sb.WriteString(policy.PolicyMsg(ctx,
+		"Use --password=<value> instead, or run the command yourself in your terminal.",
+		"请改用 --password=<value>，或在你自己的终端里执行该命令。"))
+	if cmd := originCommandFromCtx(ctx); cmd != "" {
+		fmt.Fprintf(&sb, "\n  %s", cmd)
+	}
+	return &structuredRefusal{marker: needsTTYMarker, body: sb.String()}
 }
 
 func plaintextConfigField(assetType string) string {
@@ -299,27 +348,59 @@ func configValuePresent(value any) bool {
 	}
 }
 
-func readPasswordStdin(reader io.Reader) (string, error) {
-	data, err := io.ReadAll(io.LimitReader(reader, maxPasswordStdinBytes+1))
-	if err != nil {
-		return "", fmt.Errorf("read --password-stdin: %w", err)
+// splitPasswordPrompt 在 flag 解析之前区分裸写与带值的 --password，并把裸写的
+// token 摘走，让 --password 在 flag 层保持普通字符串 flag。
+//
+// 这一步不能交给 flag 包：Go 的可选值 flag（IsBoolFlag）只认 --password=<value>，
+// 会把 --password <value> 的值解析成 "true" 并把真正的值丢进位置参数，破坏已发布
+// 的空格形式；摘走裸写 token 之后 --password=true / --password true 也不再与裸写
+// 混淆。裸写判据：--password 是最后一个 token，或它的下一个 token 以 "-" 开头。
+// 第三个返回值是裸写后面那个以 "-" 开头的 token（没有则为空），供调用方区分
+// 「后面确实是另一个 flag」与「密码值以 - 开头」。
+func splitPasswordPrompt(args []string) (rest []string, prompt bool, bareFollowedBy string) {
+	rest = make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--password" || args[i] == "-password" {
+			if i+1 >= len(args) {
+				prompt = true
+				continue
+			}
+			if strings.HasPrefix(args[i+1], "-") {
+				prompt = true
+				bareFollowedBy = args[i+1]
+				continue
+			}
+		}
+		rest = append(rest, args[i])
 	}
-	if len(data) > maxPasswordStdinBytes {
-		return "", fmt.Errorf("--password-stdin exceeds %d bytes", maxPasswordStdinBytes)
+	return rest, prompt, bareFollowedBy
+}
+
+// flagLookupName 把一个 argv token 还原成 flag 名，供 FlagSet.Lookup 判断它是否
+// 是已注册 flag（--host=1.2.3.4 → host）。
+func flagLookupName(arg string) string {
+	name := strings.TrimLeft(arg, "-")
+	if idx := strings.IndexByte(name, '='); idx >= 0 {
+		name = name[:idx]
 	}
-	if strings.HasSuffix(string(data), "\r\n") {
-		data = data[:len(data)-2]
-	} else if len(data) > 0 && data[len(data)-1] == '\n' {
-		data = data[:len(data)-1]
+	return name
+}
+
+// retiredPasswordStdinFlag 认出已退役的 --password-stdin 并原样回报，好把沿用者
+// 指回 --password——它在 v1.13.0 发布过并被技能文档推荐，落到 Go flag 的
+// "flag provided but not defined" 上没有任何指引价值。
+func retiredPasswordStdinFlag(args []string) string {
+	for _, arg := range args {
+		name := flagLookupName(arg)
+		if name == "password-stdin" && strings.HasPrefix(arg, "-") {
+			return "--password-stdin"
+		}
 	}
-	if len(data) == 0 {
-		return "", fmt.Errorf("--password-stdin read an empty secret")
-	}
-	return string(data), nil
+	return ""
 }
 
 func warnArgvPlaintext(stderr io.Writer) error {
-	if _, err := fmt.Fprintln(stderr, "Warning: plaintext supplied in argv may be exposed in shell history, process listings, and CI/automation logs; prefer --password-stdin or --credential-id."); err != nil {
+	if _, err := fmt.Fprintln(stderr, "Warning: plaintext supplied in argv may be exposed in shell history, process listings, and CI/automation logs; prefer bare --password to type it interactively, or --credential-id."); err != nil {
 		return fmt.Errorf("write plaintext argv warning: %w", err)
 	}
 	return nil

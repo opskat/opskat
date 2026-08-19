@@ -230,8 +230,11 @@ the exact config contract. Unknown config keys fail before approval.
 
 **Authentication**:
 - `--credential-id <id>` — Reuse an existing managed credential after type/auth validation
-- `--password-stdin` — Preferred plaintext path; reads stdin without prompt/echo, removes one terminal LF/CRLF
-- `--password <value>` — Unsafe argv path; warns about shell history, process listings, and CI logs
+- `--password` (bare) — Reads the plaintext from an interactive terminal without echo. Needs a TTY:
+  without one the command exits with code 3 and a `NEEDS TTY` marker, so an agent session cannot use it —
+  hand the command to the user to run themselves instead
+- `--password <value>` / `--password=<value>` — Unsafe argv path; warns about shell history, process
+  listings, and CI logs. A value starting with `-` must use the `=` form
 - `--agent-source-id <id>` and `--agent-key-fingerprint <SHA256...>` — SSH Agent identity pair; both required
 
 Plaintext inline `--config` has the same argv risk. A plaintext `--config-file` must use
@@ -255,7 +258,7 @@ or failure commits no new asset row. Successful JSON contains the asset ID and a
 authentication reference when applicable, never supplied plaintext/ciphertext.
 
 ```bash
-printf '%s\n' "$SSH_PASSWORD" | opsctl create asset --name "Web Server" --host 10.0.0.1 --username root --password-stdin
+opsctl create asset --name "Web Server" --host 10.0.0.1 --username root --password="$SSH_PASSWORD"
 opsctl create asset --type database --name "Prod DB" --config '{"driver":"mysql","host":"db.internal","username":"app"}' --credential-id 4
 opsctl create asset --type database --name "Local SQLite" --config '{"driver":"sqlite","path":"/var/lib/app.db"}'
 opsctl create asset --type ssh --name "Agent Host" --host host.internal --username root --agent-source-id 2 --agent-key-fingerprint SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA

@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -33,7 +34,7 @@ func cmdCreate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 	switch resource {
 	case "asset":
 		return createAsset(ctx, args[1:], session, commandIO{
-			stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr, readFile: os.ReadFile,
+			stdout: os.Stdout, stderr: os.Stderr, readFile: os.ReadFile,
 		})
 	case "group":
 		fs := flag.NewFlagSet("create group", flag.ExitOnError)
@@ -93,7 +94,6 @@ func cmdCreate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 }
 
 type commandIO struct {
-	stdin    io.Reader
 	stdout   io.Writer
 	stderr   io.Writer
 	readFile func(string) ([]byte, error)
@@ -126,9 +126,6 @@ var (
 
 func createAsset(ctx context.Context, args []string, session string, streams commandIO) int {
 	ctx = aictx.WithAuditSource(ctx, "opsctl")
-	if streams.stdin == nil {
-		streams.stdin = os.Stdin
-	}
 	if streams.stdout == nil {
 		streams.stdout = os.Stdout
 	}
@@ -138,10 +135,22 @@ func createAsset(ctx context.Context, args []string, session string, streams com
 	if streams.readFile == nil {
 		streams.readFile = os.ReadFile
 	}
-	request, err := parseAssetCreate(ctx, args, assetCreateParserDeps{
-		stdin: streams.stdin, stderr: streams.stderr, readFile: streams.readFile, resolveAssetID: resolveAssetID,
-	})
+	// 原命令原文要在解析之前挂上：裸写 --password 而环境不可交互时，解析器就要给出
+	// NEEDS TTY 结构化拒绝并把命令照抄给人。
+	ctx = withOriginCommand(ctx, "opsctl create asset "+strings.Join(args, " "))
+	deps := assetCreateParserDeps{
+		stderr: streams.stderr, readFile: streams.readFile, resolveAssetID: resolveAssetID,
+	}
+	// 与随后的终端审批用同一个可交互判据，避免「能输密码但审批被判非交互」的错位。
+	if isInteractive(stdinIsTerminal(), stderrIsTerminal()) {
+		deps.promptSecret = promptTerminalSecret
+	}
+	request, err := parseAssetCreate(ctx, args, deps)
 	if err != nil {
+		var refusal *structuredRefusal
+		if errors.As(err, &refusal) {
+			return writeApprovalFailure(streams.stderr, err)
+		}
 		writeCreateAssetError(ctx, streams.stderr, err)
 		return 1
 	}
@@ -158,9 +167,6 @@ func createAsset(ctx context.Context, args []string, session string, streams com
 		writeCreateAssetError(ctx, streams.stderr, fmt.Errorf("encode safe approval detail: %w", err))
 		return 1
 	}
-	// 原命令原文挂在 ctx 上，供 NEEDS TTY 结构化拒绝转述给人；args 是 "create asset"
-	// 之后的原始参数。
-	ctx = withOriginCommand(ctx, "opsctl create asset "+strings.Join(args, " "))
 	approvalResult, err := requireCreateApproval(ctx, approval.ApprovalRequest{
 		Type: "create", Detail: string(approvalDetail), SessionID: session,
 	})
@@ -189,6 +195,22 @@ func createAsset(ctx context.Context, args []string, session string, streams com
 		return 1
 	}
 	return 0
+}
+
+// promptTerminalSecret 在终端上无回显读取一行密码：提示写 stderr（stdout 只承载
+// 命令自身输出，结果 JSON 仍可被管道消费），读取复用 readMFAAnswer 的双路径——真
+// 终端走 term.ReadPassword，非终端 fd 退化为逐字节读行。
+func promptTerminalSecret(prompt string) (string, error) {
+	if _, err := fmt.Fprint(os.Stderr, prompt); err != nil {
+		return "", fmt.Errorf("write password prompt: %w", err)
+	}
+	secret, err := readMFAAnswer(os.Stdin, false)
+	// 无回显时用户按下的回车不会被终端回显，补一个换行，后续输出不会黏在提示行后面。
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", err
+	}
+	return secret, nil
 }
 
 func writeCreateAssetError(ctx context.Context, stderr io.Writer, err error) {
@@ -427,13 +449,17 @@ Run 'opsctl help <type>' for that type's exact accepted/required config fields.
 
 Authentication:
   --credential-id <id>       Reuse an existing managed credential
-  --password-stdin           Read plaintext from stdin without a prompt or echo (recommended)
-  --password <value>         Unsafe argv plaintext path
+  --password                 Bare: type the plaintext in your terminal, no echo (recommended)
+  --password <value>         Unsafe argv plaintext path (--password=<value> also accepted)
   --agent-source-id <id>     SSH Agent source ID
   --agent-key-fingerprint <SHA256 fingerprint>
 
-Warning: --password and plaintext inline --config values may be visible in shell history,
-process listings, and CI/automation logs. Prefer --password-stdin or --credential-id.
+A bare --password needs an interactive terminal; with none, opsctl exits with code 3 and a
+NEEDS TTY marker telling you to run the command yourself. A password starting with "-" must
+be written as --password=<value>.
+
+Warning: --password <value> and plaintext inline --config values may be visible in shell history,
+process listings, and CI/automation logs. Prefer a bare --password or --credential-id.
 For plaintext --config-file input, use restrictive file permissions, avoid committing it,
 and remove it when no longer needed.
 
@@ -450,7 +476,7 @@ Approval:
   after approval; plaintext stays encrypted in that asset and never creates a credential.
 
 Examples:
-  opsctl create asset --name "Web Server" --host 10.0.0.1 --username root --password-stdin
+  opsctl create asset --name "Web Server" --host 10.0.0.1 --username root --password
   opsctl create asset --type database --name "Prod DB" --config '{"driver":"mysql","host":"db.internal","username":"app"}' --credential-id 4
   opsctl create asset --type k8s --name "Prod Cluster" --kubeconfig-file ~/.kube/config --context prod
 `, strings.Join(assettype.RegisteredTypes(), ", "))

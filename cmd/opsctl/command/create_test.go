@@ -99,7 +99,7 @@ func TestCreateAssetParserFeedsRealSharedPrepareForEveryRegisteredBuiltin(t *tes
 			}
 			var stderr bytes.Buffer
 			request, err := parseAssetCreate(context.Background(), createArgs(t, handler.Type(), config), assetCreateParserDeps{
-				stdin: &bytes.Buffer{}, stderr: &stderr, readFile: func(string) ([]byte, error) { return nil, errors.New("unexpected read") },
+				stderr: &stderr, readFile: func(string) ([]byte, error) { return nil, errors.New("unexpected read") },
 				resolveAssetID: func(context.Context, string) (int64, error) { return 0, errors.New("unexpected resolve") },
 			})
 			require.NoError(t, err, stderr.String())
@@ -135,7 +135,7 @@ func TestCreateAssetEveryRegisteredBuiltinReachesSharedPrepareWithoutHardcodedTy
 		}
 		var stdout, stderr bytes.Buffer
 		code := createAsset(context.Background(), createArgs(t, handler.Type(), config), "session", commandIO{
-			stdin: &bytes.Buffer{}, stdout: &stdout, stderr: &stderr,
+			stdout: &stdout, stderr: &stderr,
 		})
 		assert.Equal(t, 0, code, "type=%s stderr=%s", handler.Type(), stderr.String())
 		assert.Contains(t, stdout.String(), `"id": 77`)
@@ -157,7 +157,7 @@ func TestCreateAssetLegacyConvenienceFlagsPreserveHandlerOwnedDefaultPorts(t *te
 		{name: "MongoDB", args: []string{"--type", "mongodb", "--name", "mongo", "--host", "mongo.internal", "--username", "app"}, want: 27017},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			request, _, err := parseAssetCreateForTest(t, tt.args, "", nil)
+			request, _, err := parseAssetCreateForTest(t, tt.args, nil, nil)
 			require.NoError(t, err)
 			prepared, err := asset_put_svc.Prepare(context.Background(), asset_put_svc.Request{Asset: request.asset, Config: request.config})
 			require.NoError(t, err)
@@ -195,7 +195,7 @@ func TestCreateAssetPrepareBeforeApprovalCommitAfterApprovalAndSafeMetadataOnly(
 	var stdout, stderr bytes.Buffer
 	code := createAsset(context.Background(), []string{
 		"--type", "redis", "--name", "cache", "--config", `{"host":"redis.internal","username":"default"}`, "--password", "top-secret",
-	}, "session", commandIO{stdin: &bytes.Buffer{}, stdout: &stdout, stderr: &stderr})
+	}, "session", commandIO{stdout: &stdout, stderr: &stderr})
 	require.Equal(t, 0, code, stderr.String())
 	assert.Equal(t, []string{"prepare", "approval", "commit"}, sequence)
 	assert.NotContains(t, approvalReq.Detail, "top-secret")
@@ -223,7 +223,7 @@ func TestCreateAssetInvalidReferenceMismatchAndDenialNeverCommit(t *testing.T) {
 			return ApprovalResult{}, nil
 		}
 		var stdout, stderr bytes.Buffer
-		code := createAsset(context.Background(), createArgs(t, "redis", validCreateConfig("redis")), "session", commandIO{stdin: &bytes.Buffer{}, stdout: &stdout, stderr: &stderr})
+		code := createAsset(context.Background(), createArgs(t, "redis", validCreateConfig("redis")), "session", commandIO{stdout: &stdout, stderr: &stderr})
 		assert.Equal(t, 1, code)
 		assert.Zero(t, approvalCalls)
 		assert.Contains(t, stderr.String(), "type mismatch")
@@ -241,7 +241,7 @@ func TestCreateAssetInvalidReferenceMismatchAndDenialNeverCommit(t *testing.T) {
 			return ApprovalResult{}, errors.New("operation denied")
 		}
 		var stdout, stderr bytes.Buffer
-		code := createAsset(context.Background(), createArgs(t, "redis", validCreateConfig("redis")), "session", commandIO{stdin: &bytes.Buffer{}, stdout: &stdout, stderr: &stderr})
+		code := createAsset(context.Background(), createArgs(t, "redis", validCreateConfig("redis")), "session", commandIO{stdout: &stdout, stderr: &stderr})
 		assert.Equal(t, 1, code)
 		assert.Zero(t, commitCalls)
 		assert.Contains(t, stderr.String(), "operation denied")
@@ -270,7 +270,7 @@ func TestCreateAssetCommitFailureAuditsSafeErrorAndDoesNotNotify(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := createAsset(context.Background(), []string{
 		"--type", "redis", "--name", "cache", "--config", `{"host":"redis.internal","username":"default"}`, "--password", "failure-top-secret",
-	}, "session", commandIO{stdin: &bytes.Buffer{}, stdout: &stdout, stderr: &stderr})
+	}, "session", commandIO{stdout: &stdout, stderr: &stderr})
 	require.Equal(t, 1, code)
 	require.Len(t, writer.calls, 1)
 	call := writer.lastCall()
@@ -301,7 +301,7 @@ func TestCreateAssetNilCommitResultFailsClosedAndIsAudited(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	assert.NotPanics(t, func() {
 		code := createAsset(context.Background(), createArgs(t, "redis", validCreateConfig("redis")), "session", commandIO{
-			stdin: &bytes.Buffer{}, stdout: &stdout, stderr: &stderr,
+			stdout: &stdout, stderr: &stderr,
 		})
 		assert.Equal(t, 1, code)
 	})
@@ -333,7 +333,7 @@ func TestCreateAssetOutputWriteFailureReturnsNonzeroAndReportsError(t *testing.T
 
 	var stderr bytes.Buffer
 	code := createAsset(context.Background(), createArgs(t, "redis", validCreateConfig("redis")), "session", commandIO{
-		stdin: &bytes.Buffer{}, stdout: failingWriter{err: errors.New("stdout closed")}, stderr: &stderr,
+		stdout: failingWriter{err: errors.New("stdout closed")}, stderr: &stderr,
 	})
 	assert.Equal(t, 1, code)
 	assert.Contains(t, stderr.String(), "write asset result")
@@ -360,7 +360,7 @@ func TestCreateAssetCommitAuditUsesOnlySafeArgsAndOutput(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := createAsset(context.Background(), []string{
 		"--type", "redis", "--name", "cache", "--config", `{"host":"redis.internal","username":"default"}`, "--password", "audit-top-secret",
-	}, "session", commandIO{stdin: &bytes.Buffer{}, stdout: &stdout, stderr: &stderr})
+	}, "session", commandIO{stdout: &stdout, stderr: &stderr})
 	require.Equal(t, 0, code, stderr.String())
 	require.Len(t, writer.calls, 1)
 	call := writer.lastCall()
@@ -407,7 +407,7 @@ func TestCreateAssetAuditReusesRealProducerProjection(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := createAsset(context.Background(), []string{
 		"--type", "redis", "--name", "cache", "--config", `{"host":"redis.internal","username":"default"}`, "--password", "opsctl-producer-secret",
-	}, "session", commandIO{stdin: &bytes.Buffer{}, stdout: &stdout, stderr: &stderr})
+	}, "session", commandIO{stdout: &stdout, stderr: &stderr})
 	require.Equal(t, 0, code, stderr.String())
 
 	call := writer.lastCall()
@@ -456,7 +456,7 @@ func TestCreateAssetCompositeConfigOmittedFromAuditViaRealPrepare(t *testing.T) 
 	code := createAsset(context.Background(), []string{
 		"--type", "ssh", "--name", "box",
 		"--config", `{"host":"10.0.0.1","username":"root","auth_type":{"password":"` + secret + `"}}`,
-	}, "session", commandIO{stdin: &bytes.Buffer{}, stdout: &stdout, stderr: &stderr})
+	}, "session", commandIO{stdout: &stdout, stderr: &stderr})
 	require.Equal(t, 0, code, stderr.String())
 
 	call := writer.lastCall()
