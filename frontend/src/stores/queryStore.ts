@@ -213,10 +213,11 @@ function defaultMongoState(): MongoDBTabState {
 }
 
 function toRedisMatchPattern(pattern: string): string {
-  const trimmed = pattern.trim();
-  if (!trimmed) return "*";
-  if (trimmed.includes("*") || trimmed.includes("?") || trimmed.includes("[")) return trimmed;
-  return `*${trimmed}*`;
+  return pattern.trim() || "*";
+}
+
+function hasRedisMatchWildcard(pattern: string): boolean {
+  return pattern.includes("*") || pattern.includes("?") || pattern.includes("[");
 }
 
 export interface RedisStreamEntry {
@@ -813,16 +814,17 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       },
     }));
     const requestId = (state.scanRequestId || 0) + 1;
+    const pattern = toRedisMatchPattern(state.keyFilter);
 
     try {
       const result = await RedisScanKeys({
         assetId: tab.assetId,
         db: state.currentDb,
         cursor,
-        match: toRedisMatchPattern(state.keyFilter || "*"),
+        match: pattern,
         type: "",
         count: tab.redisScanPageSize || 200,
-        exact: false,
+        exact: !hasRedisMatchWildcard(pattern),
       });
 
       set((s) => ({

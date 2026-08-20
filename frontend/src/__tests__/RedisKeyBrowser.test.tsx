@@ -294,6 +294,6 @@ describe("RedisKeyBrowser", () => {
       await Promise.resolve();
     });
 
-    expect(RedisScanKeys).toHaveBeenCalledWith(expect.objectContaining({ match: "*dispatcher*" }));
+    expect(RedisScanKeys).toHaveBeenCalledWith(expect.objectContaining({ match: "dispatcher", exact: true }));
   });
 });
