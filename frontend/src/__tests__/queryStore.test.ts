@@ -279,7 +279,7 @@ describe("queryStore redis actions", () => {
     expect(useQueryStore.getState().redisStates["query-10"].scanCursor).toBe("0");
   });
 
-  it("uses contains matching for plain redis key search", async () => {
+  it("uses exact matching for plain redis key search", async () => {
     vi.mocked(RedisScanKeys).mockResolvedValue({ cursor: "0", keys: [], hasMore: false });
 
     useQueryStore.getState().setKeyFilter("query-10", "2fe43136-1b38-43c3-b4bf-82b19c66c7bf");
@@ -499,25 +499,6 @@ describe("queryStore redis actions", () => {
         assetId: 11,
         db: 3,
         count: 500,
-      })
-    );
-  });
-
-  it("uses exact matching for plain redis key search", async () => {
-    vi.mocked(RedisScanKeys).mockResolvedValue({
-      cursor: "0",
-      keys: [],
-      hasMore: false,
-    });
-
-    useQueryStore.getState().setKeyFilter("query-10", "2fe43136-1b38-43c3-b4bf-82b19c66c7bf");
-
-    await useQueryStore.getState().scanKeys("query-10", true);
-
-    expect(RedisScanKeys).toHaveBeenCalledWith(
-      expect.objectContaining({
-        match: "2fe43136-1b38-43c3-b4bf-82b19c66c7bf",
-        exact: true,
       })
     );
   });
