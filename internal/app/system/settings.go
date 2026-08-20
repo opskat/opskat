@@ -960,6 +960,7 @@ var universalAgents = []SkillAgent{
 	{"warp", "Warp"},
 	{"rovo", "Rovo Dev"},
 	{"amp", "Amp"},
+	{"dsh", "DeepSeek Harness"},
 }
 
 // legacySkillDirs 返回旧版本装到 agent 私有目录、现已被通用目录取代的安装路径。
