@@ -5,8 +5,8 @@ import {
   Keyboard,
   Maximize2,
   Minimize2,
-  Power,
   ScreenShare,
+  Unplug,
 } from "lucide-react";
 import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, cn } from "@opskat/ui";
 import { useTranslation } from "react-i18next";
@@ -158,7 +158,7 @@ export function VNCToolbar({
           disabled={!connected}
           onClick={onDisconnect}
         >
-          <Power className="h-3.5 w-3.5" />
+          <Unplug className="h-3.5 w-3.5" />
         </Button>
       </div>
     </div>

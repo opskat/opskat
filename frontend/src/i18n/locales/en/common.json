@@ -2975,6 +2975,11 @@
     "approveServer": "Verify and connect",
     "serverVerificationFailed": "The VNC server identity is invalid, so the connection cannot continue.",
     "serverVerificationCancelled": "VNC server identity verification was cancelled.",
-    "status": { "connecting": "Connecting", "connected": "Connected", "error": "Error", "closed": "Closed" }
+    "status": {
+      "connecting": "Connecting",
+      "connected": "Connected",
+      "error": "Error",
+      "closed": "Closed"
+    }
   }
 }

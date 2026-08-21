@@ -2975,6 +2975,11 @@
     "approveServer": "确认并连接",
     "serverVerificationFailed": "VNC 服务器身份信息无效，无法继续连接。",
     "serverVerificationCancelled": "已取消 VNC 服务器身份确认。",
-    "status": { "connecting": "连接中", "connected": "已连接", "error": "连接失败", "closed": "已断开" }
+    "status": {
+      "connecting": "连接中",
+      "connected": "已连接",
+      "error": "错误",
+      "closed": "已断开"
+    }
   }
 }
