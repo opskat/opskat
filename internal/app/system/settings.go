@@ -174,10 +174,17 @@ func (s *System) PreviewRDPFiles() (*import_svc.RDPFilePreviewResult, error) {
 	if files == nil {
 		return nil, nil
 	}
-	preview, err := import_svc.PreviewRDPFiles(i18n.Ctx(s.ctx, s.Lang()), files)
+	ctx := i18n.Ctx(s.ctx, s.Lang())
+	log := logger.Ctx(ctx)
+	log.Info("rdp file import preview start", zap.Int("fileCount", len(files)))
+	preview, err := import_svc.PreviewRDPFiles(ctx, files)
 	if err != nil {
+		log.Error("rdp file import preview failed", zap.Int("fileCount", len(files)), zap.Error(err))
 		return nil, err
 	}
+	log.Info("rdp file import preview end",
+		zap.Int("fileCount", len(files)),
+		zap.Int("itemCount", len(preview.Preview.Items)))
 	return preview, nil
 }
 
@@ -187,13 +194,27 @@ func (s *System) ImportRDPSelected(sourceID string, selectedIndexes []int, overw
 	if !ok {
 		return nil, fmt.Errorf("请先选择 .rdp 文件并完成预览")
 	}
-	result, err := import_svc.ImportRDPSelected(i18n.Ctx(s.ctx, s.Lang()), files, selectedIndexes, import_svc.ImportOptions{
+	ctx := i18n.Ctx(s.ctx, s.Lang())
+	log := logger.Ctx(ctx)
+	log.Info("rdp file import start",
+		zap.String("sourceID", sourceID),
+		zap.Int("selected", len(selectedIndexes)),
+		zap.Bool("overwrite", overwrite))
+	result, err := import_svc.ImportRDPSelected(ctx, files, selectedIndexes, import_svc.ImportOptions{
 		Overwrite: overwrite,
 	})
-	if err == nil {
-		import_svc.DeleteRDPImportSession(sourceID)
+	if err != nil {
+		log.Error("rdp file import failed", zap.String("sourceID", sourceID), zap.Error(err))
+		return nil, err
 	}
-	return result, err
+	log.Info("rdp file import end",
+		zap.String("sourceID", sourceID),
+		zap.Int("total", result.Total),
+		zap.Int("success", result.Success),
+		zap.Int("skipped", result.Skipped),
+		zap.Int("failed", result.Failed))
+	import_svc.DeleteRDPImportSession(sourceID)
+	return result, nil
 }
 
 // readRDPFiles 多选 .rdp 文件并读入内存；用户取消时返回 nil
@@ -224,8 +245,9 @@ func (s *System) readRDPFiles() ([]import_svc.RDPFileData, error) {
 
 // PreviewRDPExcel 预览用户选中的 RDP 批量导入 Excel（不写数据库）
 func (s *System) PreviewRDPExcel() (*import_svc.RDPExcelPreviewResult, error) {
+	// 仅支持 OOXML 的 .xlsx；旧式二进制 .xls 不在解析能力内，不提供选择
 	data, err := s.readImportFile("选择 RDP 批量导入 Excel", []wailsRuntime.FileFilter{
-		{DisplayName: "Excel Files", Pattern: "*.xlsx;*.xls"},
+		{DisplayName: "Excel Files", Pattern: "*.xlsx"},
 		{DisplayName: "All Files", Pattern: "*"},
 	})
 	if err != nil {
@@ -234,7 +256,18 @@ func (s *System) PreviewRDPExcel() (*import_svc.RDPExcelPreviewResult, error) {
 	if data == nil {
 		return nil, nil
 	}
-	return import_svc.PreviewRDPExcel(i18n.Ctx(s.ctx, s.Lang()), data)
+	ctx := i18n.Ctx(s.ctx, s.Lang())
+	log := logger.Ctx(ctx)
+	log.Info("rdp excel import preview start", zap.Int("sizeBytes", len(data)))
+	result, err := import_svc.PreviewRDPExcel(ctx, data)
+	if err != nil {
+		log.Error("rdp excel import preview failed", zap.Int("sizeBytes", len(data)), zap.Error(err))
+		return nil, err
+	}
+	log.Info("rdp excel import preview end",
+		zap.Int("sizeBytes", len(data)),
+		zap.Int("itemCount", len(result.Preview.Items)))
+	return result, nil
 }
 
 // ImportRDPExcelSelected 导入用户选中的 Excel 行
@@ -243,20 +276,39 @@ func (s *System) ImportRDPExcelSelected(sourceID string, selectedIndexes []int, 
 	if !ok {
 		return nil, fmt.Errorf("请先选择 RDP 导入 Excel 并完成预览")
 	}
-	result, err := import_svc.ImportRDPExcelSelected(i18n.Ctx(s.ctx, s.Lang()), data, selectedIndexes, import_svc.ImportOptions{
+	ctx := i18n.Ctx(s.ctx, s.Lang())
+	log := logger.Ctx(ctx)
+	log.Info("rdp excel import start",
+		zap.String("sourceID", sourceID),
+		zap.Int("selected", len(selectedIndexes)),
+		zap.Bool("overwrite", overwrite))
+	result, err := import_svc.ImportRDPExcelSelected(ctx, data, selectedIndexes, import_svc.ImportOptions{
 		Overwrite: overwrite,
 	})
-	if err == nil {
-		import_svc.DeleteRDPExcelImportSession(sourceID)
+	if err != nil {
+		log.Error("rdp excel import failed", zap.String("sourceID", sourceID), zap.Error(err))
+		return nil, err
 	}
-	return result, err
+	log.Info("rdp excel import end",
+		zap.String("sourceID", sourceID),
+		zap.Int("total", result.Total),
+		zap.Int("success", result.Success),
+		zap.Int("skipped", result.Skipped),
+		zap.Int("failed", result.Failed))
+	import_svc.DeleteRDPExcelImportSession(sourceID)
+	return result, nil
 }
 
 // DownloadRDPExcelTemplate 生成并保存 RDP 批量导入模板
 func (s *System) DownloadRDPExcelTemplate() (string, error) {
+	ctx := i18n.Ctx(s.ctx, s.Lang())
+	log := logger.Ctx(ctx)
+	log.Info("rdp excel template download start")
 	data, err := import_svc.BuildRDPExcelTemplate()
 	if err != nil {
-		return "", fmt.Errorf("生成模板失败: %w", err)
+		err = fmt.Errorf("生成模板失败: %w", err)
+		log.Error("rdp excel template download failed", zap.Error(err))
+		return "", err
 	}
 	path, err := wailsRuntime.SaveFileDialog(s.ctx, wailsRuntime.SaveDialogOptions{
 		Title:           "保存 RDP 导入模板",
@@ -266,14 +318,23 @@ func (s *System) DownloadRDPExcelTemplate() (string, error) {
 		},
 	})
 	if err != nil {
-		return "", fmt.Errorf("打开保存对话框失败: %w", err)
+		err = fmt.Errorf("打开保存对话框失败: %w", err)
+		log.Error("rdp excel template download failed", zap.Error(err))
+		return "", err
 	}
 	if path == "" {
+		log.Info("rdp excel template download end", zap.Bool("saved", false))
 		return "", nil
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return "", fmt.Errorf("写入模板文件失败: %w", err)
+		err = fmt.Errorf("写入模板文件失败: %w", err)
+		log.Error("rdp excel template download failed", zap.Bool("saved", false), zap.Error(err))
+		return "", err
 	}
+	// 不记录用户选择的保存路径，只记录大小
+	log.Info("rdp excel template download end",
+		zap.Bool("saved", true),
+		zap.Int("sizeBytes", len(data)))
 	return path, nil
 }
 

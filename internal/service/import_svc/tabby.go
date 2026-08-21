@@ -68,7 +68,7 @@ type PreviewItem struct {
 	Port        int    `json:"port"`
 	Username    string `json:"username"`
 	AuthType    string `json:"authType"`
-	GroupID     string `json:"groupId"`     // Tabby 分组 UUID
+	GroupID     string `json:"groupId"`     // 分组标识（Tabby 分组 UUID / RDP Excel 分组名）
 	Exists      bool   `json:"exists"`      // 是否已存在
 	HasPassword bool   `json:"hasPassword"` // vault 中是否有密码
 	Reason      string `json:"reason"`      // 解析失败原因（仅失败条目有值）

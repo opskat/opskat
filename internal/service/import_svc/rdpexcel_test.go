@@ -2,6 +2,7 @@ package import_svc
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -20,6 +21,7 @@ import (
 func buildRDPExcel(t *testing.T, headers []string, rows [][]interface{}) []byte {
 	t.Helper()
 	f := excelize.NewFile()
+	defer func() { _ = f.Close() }()
 	const sheet = "Sheet1"
 	for col, h := range headers {
 		cell, err := excelize.CoordinatesToCellName(col+1, 1)
@@ -76,6 +78,56 @@ func TestParseRDPExcel(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(rows[0].Host, ShouldEqual, "10.0.0.2")
 			So(rows[0].Clipboard, ShouldBeTrue) // 缺省开启
+		})
+
+		Convey("地址端口与 DOMAIN\\user 统一规范化，独立端口列优先", func() {
+			data := buildRDPExcel(t,
+				[]string{"名称", "地址", "端口", "用户名"},
+				[][]interface{}{
+					{"embedded", "server.example.com:3390", nil, `CORP\ops`},
+					{"override", "[fe80::1]:3390", 3391, `OTHER\admin`},
+				})
+			rows, err := parseRDPExcel(data)
+			So(err, ShouldBeNil)
+			So(rows[0].Host, ShouldEqual, "server.example.com")
+			So(rows[0].Port, ShouldEqual, 3390)
+			So(rows[0].Domain, ShouldEqual, "CORP")
+			So(rows[0].Username, ShouldEqual, "ops")
+			So(rows[1].Host, ShouldEqual, "fe80::1")
+			So(rows[1].Port, ShouldEqual, 3391)
+			So(rows[1].Domain, ShouldEqual, "OTHER")
+			So(rows[1].Username, ShouldEqual, "admin")
+		})
+
+		Convey("重复逻辑表头报错", func() {
+			data := buildRDPExcel(t,
+				[]string{"地址", "Host", "用户名"},
+				[][]interface{}{{"10.0.0.1", "10.0.0.2", "ops"}})
+			_, err := parseRDPExcel(data)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "重复")
+		})
+
+		Convey("非法字段保留为行错误而不静默默认或截断", func() {
+			data := buildRDPExcel(t,
+				[]string{"名称", "地址", "端口", "用户名", "宽度", "高度", "剪贴板"},
+				[][]interface{}{
+					{"bad-port", "10.0.0.1", "3390.9", "ops", nil, nil, nil},
+					{"bad-width", "10.0.0.2", nil, "ops", 65536, nil, nil},
+					{"bad-height", "10.0.0.3", nil, "ops", nil, 0, nil},
+					{"bad-clipboard", "10.0.0.4", nil, "ops", nil, nil, "maybe"},
+					{"missing-host", nil, nil, "ops", nil, nil, nil},
+					{"missing-user", "10.0.0.6", nil, nil, nil, nil, nil},
+				})
+			rows, err := parseRDPExcel(data)
+			So(err, ShouldBeNil)
+			So(rows, ShouldHaveLength, 6)
+			So(rows[0].Reason, ShouldContainSubstring, "端口")
+			So(rows[1].Reason, ShouldContainSubstring, "宽度")
+			So(rows[2].Reason, ShouldContainSubstring, "高度")
+			So(rows[3].Reason, ShouldContainSubstring, "剪贴板")
+			So(rows[4].Reason, ShouldContainSubstring, "地址")
+			So(rows[5].Reason, ShouldContainSubstring, "用户名")
 		})
 
 		Convey("空行跳过，未识别列忽略", func() {
@@ -166,6 +218,7 @@ func TestPreviewRDPExcel(t *testing.T) {
 			[][]interface{}{
 				{"new", "生产", "10.0.0.1", nil, "ops", "secret"},
 				{"dup", nil, "10.0.0.2", nil, "ops", nil},
+				{"invalid", nil, "10.0.0.3", "bad", "ops", nil},
 			})
 		result, err := PreviewRDPExcel(context.Background(), data)
 		So(err, ShouldBeNil)
@@ -173,7 +226,7 @@ func TestPreviewRDPExcel(t *testing.T) {
 		So(result.Preview.Groups, ShouldHaveLength, 1)
 		So(result.Preview.Groups[0].Name, ShouldEqual, "生产")
 
-		So(result.Preview.Items, ShouldHaveLength, 2)
+		So(result.Preview.Items, ShouldHaveLength, 3)
 		first := result.Preview.Items[0]
 		So(first.Name, ShouldEqual, "new")
 		So(first.GroupID, ShouldEqual, "生产")
@@ -185,10 +238,15 @@ func TestPreviewRDPExcel(t *testing.T) {
 		second := result.Preview.Items[1]
 		So(second.Exists, ShouldBeTrue)
 
+		invalid := result.Preview.Items[2]
+		So(invalid.Reason, ShouldContainSubstring, "端口")
+
 		Convey("密码不出现在预览条目中", func() {
 			for _, item := range result.Preview.Items {
-				// PreviewItem 无密码字段；此处断言名称/主机不含密码原文即可
-				So(item.Name, ShouldNotContainSubstring, "secret")
+				// 序列化后断言不含密码原文，拦截未来误加的密码字段
+				raw, err := json.Marshal(item)
+				So(err, ShouldBeNil)
+				So(string(raw), ShouldNotContainSubstring, "secret")
 			}
 		})
 
@@ -213,8 +271,6 @@ func TestImportRDPExcelSelected(t *testing.T) {
 				List(gomock.Any(), asset_repo.ListOptions{Type: asset_entity.AssetTypeRDP, GroupID: 0}).
 				Return(nil, nil)
 			mockGroupRepo.EXPECT().List(gomock.Any()).Return(nil, nil)
-			var createdGroup *interface{}
-			_ = createdGroup
 			mockGroupRepo.EXPECT().
 				Create(gomock.Any(), gomock.AssignableToTypeOf(&group_entity.Group{})).
 				DoAndReturn(func(_ context.Context, g *group_entity.Group) error {
@@ -265,6 +321,10 @@ func TestImportRDPExcelSelected(t *testing.T) {
 			So(existing.SetRDPConfig(&asset_entity.RDPConfig{
 				Host: "10.0.0.8", Port: 3389, Username: "ops",
 				Password: "old-cipher", CredentialID: 42,
+				Proxy: &asset_entity.ProxyConfig{Type: "socks5", Host: "proxy.example.com", Port: 1080},
+				ProxyChain: &asset_entity.ProxyChainConfig{Layers: []asset_entity.ProxyChainLayer{{
+					Type: asset_entity.ProxyChainLayerSSH, SSHAssetID: 99,
+				}}},
 			}), ShouldBeNil)
 			mockAssetRepo.EXPECT().
 				List(gomock.Any(), asset_repo.ListOptions{Type: asset_entity.AssetTypeRDP, GroupID: 0}).
@@ -287,6 +347,10 @@ func TestImportRDPExcelSelected(t *testing.T) {
 			cfg, _ := updated.GetRDPConfig()
 			So(cfg.Password, ShouldEqual, "old-cipher")
 			So(cfg.CredentialID, ShouldEqual, 42)
+			So(cfg.Proxy, ShouldNotBeNil)
+			So(cfg.Proxy.Host, ShouldEqual, "proxy.example.com")
+			So(cfg.ProxyChain, ShouldNotBeNil)
+			So(cfg.ProxyChain.Layers[0].SSHAssetID, ShouldEqual, 99)
 
 			// 第二次覆盖且带新密码 → 旧密码与统一凭证被替换
 			existing2 := &asset_entity.Asset{ID: 8, Name: "old2", Type: asset_entity.AssetTypeRDP}
@@ -336,7 +400,7 @@ func TestImportRDPExcelSelected(t *testing.T) {
 			So(result.Errors[0].Reason, ShouldContainSubstring, "用户名")
 		})
 
-		Convey("已存在且未开启覆盖时记入跳过明细", func() {
+		Convey("已存在且未开启覆盖时在创建分组前跳过", func() {
 			mockAssetRepo, _ := setupRDPExcelRepos(t)
 
 			existing := &asset_entity.Asset{ID: 5, Name: "old", Type: asset_entity.AssetTypeRDP}
@@ -348,8 +412,8 @@ func TestImportRDPExcelSelected(t *testing.T) {
 				Return([]*asset_entity.Asset{existing}, nil)
 
 			data := buildRDPExcel(t,
-				[]string{"名称", "地址", "用户名"},
-				[][]interface{}{{"dup", "10.0.0.8", "ops"}})
+				[]string{"名称", "分组", "地址", "用户名"},
+				[][]interface{}{{"dup", "不应创建", "10.0.0.8", "ops"}})
 			result, err := ImportRDPExcelSelected(context.Background(), data, []int{0}, ImportOptions{})
 			So(err, ShouldBeNil)
 			So(result.Skipped, ShouldEqual, 1)
@@ -357,6 +421,42 @@ func TestImportRDPExcelSelected(t *testing.T) {
 			So(result.Errors[0].Name, ShouldEqual, "dup")
 			So(result.Errors[0].Status, ShouldEqual, "skipped")
 			So(result.Errors[0].Reason, ShouldNotBeEmpty)
+		})
+
+		Convey("同主机同用户名但不同域不是重复资产", func() {
+			mockAssetRepo, _ := setupRDPExcelRepos(t)
+			existing := &asset_entity.Asset{ID: 6, Name: "corp", Type: asset_entity.AssetTypeRDP}
+			So(existing.SetRDPConfig(&asset_entity.RDPConfig{
+				Host: "10.0.0.8", Port: 3389, Domain: "CORP", Username: "ops",
+			}), ShouldBeNil)
+			mockAssetRepo.EXPECT().
+				List(gomock.Any(), asset_repo.ListOptions{Type: asset_entity.AssetTypeRDP, GroupID: 0}).
+				Return([]*asset_entity.Asset{existing}, nil)
+			mockAssetRepo.EXPECT().
+				Create(gomock.Any(), gomock.AssignableToTypeOf(&asset_entity.Asset{})).
+				Return(nil)
+
+			data := buildRDPExcel(t,
+				[]string{"名称", "地址", "用户名", "域"},
+				[][]interface{}{{"other", "10.0.0.8", "ops", "OTHER"}})
+			result, err := ImportRDPExcelSelected(context.Background(), data, []int{0}, ImportOptions{})
+			So(err, ShouldBeNil)
+			So(result.Success, ShouldEqual, 1)
+			So(result.Skipped, ShouldEqual, 0)
+		})
+
+		Convey("非法行导入失败且不创建资产", func() {
+			mockAssetRepo, _ := setupRDPExcelRepos(t)
+			mockAssetRepo.EXPECT().
+				List(gomock.Any(), asset_repo.ListOptions{Type: asset_entity.AssetTypeRDP, GroupID: 0}).
+				Return(nil, nil)
+			data := buildRDPExcel(t,
+				[]string{"名称", "地址", "端口", "用户名"},
+				[][]interface{}{{"bad", "10.0.0.9", "abc", "ops"}})
+			result, err := ImportRDPExcelSelected(context.Background(), data, []int{0}, ImportOptions{})
+			So(err, ShouldBeNil)
+			So(result.Failed, ShouldEqual, 1)
+			So(result.Errors[0].Reason, ShouldContainSubstring, "端口")
 		})
 	})
 }

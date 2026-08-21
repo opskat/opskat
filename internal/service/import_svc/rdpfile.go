@@ -57,18 +57,19 @@ func parseRDPFile(content []byte) (parsedRDPEntry, error) {
 	if address == "" {
 		return entry, fmt.Errorf("缺少 full address")
 	}
-	entry.Host, entry.Port = splitRDPAddress(address)
-	entry.Domain = strings.TrimSpace(props["domain"])
-	entry.Username = strings.TrimSpace(props["username"])
-	// DOMAIN\user 形式拆分；user@domain（UPN）保持原样交给连接层处理
-	if i := strings.Index(entry.Username, `\`); i > 0 {
-		if entry.Domain == "" {
-			entry.Domain = entry.Username[:i]
-		}
-		entry.Username = entry.Username[i+1:]
+	var err error
+	entry.Host, entry.Port, err = splitRDPAddress(address)
+	if err != nil {
+		return entry, err
 	}
-	if v := parseIntProp(props, "server port"); v > 0 {
-		entry.Port = v
+	entry.Username, entry.Domain = normalizeRDPUsername(props["username"], props["domain"])
+	// server port 显式存在时必须是 1..65535 的整数；缺省则沿用 full address 解析出的端口
+	if v, ok := props["server port"]; ok {
+		port, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil || port < 1 || port > 65535 {
+			return entry, fmt.Errorf("server port 无效: %s", v)
+		}
+		entry.Port = port
 	}
 	entry.Width = parseIntProp(props, "desktopwidth")
 	entry.Height = parseIntProp(props, "desktopheight")
@@ -90,7 +91,7 @@ type parsedRDPEntry struct {
 	Clipboard bool
 }
 
-// decodeRDPText 按 BOM 判定编码：UTF-16LE（旧版 mstsc）或按 UTF-8 原样返回
+// decodeRDPText 按 BOM 判定编码：UTF-16LE（旧版 mstsc）或 UTF-8。
 func decodeRDPText(content []byte) string {
 	if len(content) >= 2 && content[0] == 0xFF && content[1] == 0xFE {
 		u16 := make([]uint16, 0, len(content)/2)
@@ -99,21 +100,49 @@ func decodeRDPText(content []byte) string {
 		}
 		return string(utf16.Decode(u16))
 	}
+	if len(content) >= 3 && content[0] == 0xEF && content[1] == 0xBB && content[2] == 0xBF {
+		content = content[3:]
+	}
 	return string(content)
 }
 
-// splitRDPAddress 拆分 full address 中可选的 host:port（IPv6 裸地址含多个冒号，
-// SplitHostPort 会报错，此时整体视为主机地址）
-func splitRDPAddress(address string) (string, int) {
-	host, portStr, err := net.SplitHostPort(address)
-	if err != nil {
-		return strings.TrimSpace(address), 0
+// splitRDPAddress 拆分可选的 host:port；裸 IPv6 保持为主机地址。
+func splitRDPAddress(address string) (string, int, error) {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return "", 0, fmt.Errorf("RDP 地址为空")
 	}
-	port, err := strconv.Atoi(portStr)
+	if strings.Count(address, ":") == 0 {
+		return address, 0, nil
+	}
+	if strings.Count(address, ":") > 1 && !strings.HasPrefix(address, "[") {
+		if net.ParseIP(address) == nil {
+			return "", 0, fmt.Errorf("RDP 地址格式无效: %s", address)
+		}
+		return address, 0, nil
+	}
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil || strings.TrimSpace(host) == "" {
+		return "", 0, fmt.Errorf("RDP 地址端口格式无效: %s", address)
+	}
+	port, err := strconv.Atoi(portText)
 	if err != nil || port <= 0 || port > 65535 {
-		return strings.TrimSpace(address), 0
+		return "", 0, fmt.Errorf("RDP 地址端口无效: %s", portText)
 	}
-	return strings.TrimSpace(host), port
+	return strings.TrimSpace(host), port, nil
+}
+
+// normalizeRDPUsername 统一处理 DOMAIN\user；显式 domain 列/属性优先。
+func normalizeRDPUsername(username, domain string) (string, string) {
+	username = strings.TrimSpace(username)
+	domain = strings.TrimSpace(domain)
+	if i := strings.Index(username, `\`); i > 0 {
+		if domain == "" {
+			domain = strings.TrimSpace(username[:i])
+		}
+		username = strings.TrimSpace(username[i+1:])
+	}
+	return username, domain
 }
 
 func parseIntProp(props map[string]string, key string) int {
@@ -124,9 +153,18 @@ func parseIntProp(props map[string]string, key string) int {
 	return port
 }
 
-// rdpAssetKey RDP 资产去重键：host:port:username
-func rdpAssetKey(host string, port int, username string) string {
-	return fmt.Sprintf("%s:%d:%s", host, port, username)
+// rdpAssetKey RDP 资产去重键：host、port、domain、username。
+func rdpAssetKey(host string, port int, domain, username string) string {
+	return fmt.Sprintf("%s\x00%d\x00%s\x00%s", host, port, domain, username)
+}
+
+func preserveRDPConfigOnOverwrite(oldCfg, newCfg *asset_entity.RDPConfig, preserveAuth bool) {
+	newCfg.Proxy = oldCfg.Proxy
+	newCfg.ProxyChain = oldCfg.ProxyChain
+	if preserveAuth {
+		newCfg.Password = oldCfg.Password
+		newCfg.CredentialID = oldCfg.CredentialID
+	}
 }
 
 func listRDPAssets(ctx context.Context) ([]*asset_entity.Asset, error) {
@@ -144,7 +182,10 @@ func existingRDPAssetMap(ctx context.Context) (map[string]*asset_entity.Asset, e
 		if err != nil || cfg == nil {
 			continue
 		}
-		existingMap[rdpAssetKey(cfg.Host, cfg.Port, cfg.Username)] = asset
+		username, domain := normalizeRDPUsername(cfg.Username, cfg.Domain)
+		// 手工创建的资产可能把 DOMAIN\user 整体存在 Username、Domain 留空；
+		// 与导入侧同一归一化，保证去重键形态一致。
+		existingMap[rdpAssetKey(cfg.Host, cfg.Port, domain, username)] = asset
 	}
 	return existingMap, nil
 }
@@ -178,15 +219,20 @@ func PreviewRDPFiles(ctx context.Context, files []RDPFileData) (*RDPFilePreviewR
 		if port == 0 {
 			port = 3389
 		}
-		items = append(items, PreviewItem{
+		item := PreviewItem{
 			Index:    i,
 			Name:     name,
 			Host:     entry.Host,
 			Port:     port,
 			Username: entry.Username,
 			AuthType: "password",
-			Exists:   existingMap[rdpAssetKey(entry.Host, port, entry.Username)] != nil,
-		})
+			Exists:   existingMap[rdpAssetKey(entry.Host, port, entry.Domain, entry.Username)] != nil,
+		}
+		// 与导入端校验对称：缺用户名的条目预览即失败，不能勾选导入
+		if entry.Username == "" {
+			item.Reason = "缺少用户名"
+		}
+		items = append(items, item)
 	}
 
 	sourceID, err := rdpImportSession.Put(files)
@@ -253,14 +299,13 @@ func ImportRDPSelected(ctx context.Context, files []RDPFileData, selectedIndexes
 			Clipboard: entry.Clipboard,
 		}
 
-		dupKey := rdpAssetKey(entry.Host, port, entry.Username)
+		dupKey := rdpAssetKey(entry.Host, port, entry.Domain, entry.Username)
 		existingAsset := existingMap[dupKey]
 		switch {
 		case existingAsset != nil && opts.Overwrite:
-			// .rdp 文件不含可用密码（pcb 为机器绑定的 DPAPI 密文），覆盖时保留已有认证
+			// .rdp 不拥有认证或代理配置，覆盖时保留已有值。
 			if oldCfg, err := existingAsset.GetRDPConfig(); err == nil && oldCfg != nil {
-				rdpCfg.Password = oldCfg.Password
-				rdpCfg.CredentialID = oldCfg.CredentialID
+				preserveRDPConfigOnOverwrite(oldCfg, rdpCfg, true)
 			}
 			existingAsset.Name = name
 			if err := existingAsset.SetRDPConfig(rdpCfg); err != nil {

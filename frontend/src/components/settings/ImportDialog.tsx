@@ -21,6 +21,9 @@ interface ImportDialogProps {
   onImport: (selectedIndexes: number[], options: ImportCallOptions) => Promise<import_svc.ImportResult>;
 }
 
+// 解析失败（reason 非空）的预览项不可导入：默认不选、全选/分组选取跳过、复选框禁用
+const isSelectable = (item: import_svc.PreviewItem) => !item.reason;
+
 export function ImportDialog({ open, onOpenChange, preview, title, onImport }: ImportDialogProps) {
   const { t } = useTranslation();
   const { refresh } = useAssetStore();
@@ -31,14 +34,14 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
   const [overwrite, setOverwrite] = useState(false);
   const [importResult, setImportResult] = useState<import_svc.ImportResult | null>(null);
 
-  // 当 preview 变化时重置选择（默认选中所有不存在的）：渲染期对比上次值，等价于原 [preview] effect
+  // 当 preview 变化时重置选择（默认选中所有不存在且合法的项）：渲染期对比上次值，等价于原 [preview] effect
   const [prevPreview, setPrevPreview] = useState<import_svc.PreviewResult | null>(null);
   if (preview !== prevPreview) {
     setPrevPreview(preview);
     if (preview) {
       const defaultSelected = new Set<number>();
       for (const item of preview.items || []) {
-        if (!item.exists) {
+        if (!item.exists && isSelectable(item)) {
           defaultSelected.add(item.index);
         }
       }
@@ -80,10 +83,10 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
   };
 
   const toggleGroup = (groupId: string) => {
-    const items = groupedItems.get(groupId) || [];
-    const allSelected = items.every((i) => selected.has(i.index));
+    const selectable = (groupedItems.get(groupId) || []).filter(isSelectable);
+    const allSelected = selectable.every((i) => selected.has(i.index));
     const next = new Set(selected);
-    for (const item of items) {
+    for (const item of selectable) {
       if (allSelected) {
         next.delete(item.index);
       } else {
@@ -104,7 +107,7 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
   };
 
   const selectAll = () => {
-    setSelected(new Set((preview.items || []).map((i) => i.index)));
+    setSelected(new Set((preview.items || []).filter(isSelectable).map((i) => i.index)));
   };
 
   const selectNone = () => {
@@ -246,8 +249,9 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
               if (items.length === 0) return null;
               const groupName = gid === "__ungrouped__" ? t("asset.ungrouped") : groupMap.get(gid) || gid;
               const expanded = expandedGroups.has(gid);
-              const allSelected = items.every((i) => selected.has(i.index));
-              const someSelected = !allSelected && items.some((i) => selected.has(i.index));
+              const selectable = items.filter(isSelectable);
+              const allSelected = selectable.length > 0 && selectable.every((i) => selected.has(i.index));
+              const someSelected = !allSelected && selectable.some((i) => selected.has(i.index));
 
               return (
                 <div key={gid}>
@@ -291,6 +295,7 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
                           <input
                             type="checkbox"
                             checked={selected.has(item.index)}
+                            disabled={Boolean(item.reason)}
                             onChange={() => toggleItem(item.index)}
                             className="rounded"
                           />

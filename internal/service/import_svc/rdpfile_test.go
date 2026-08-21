@@ -63,6 +63,12 @@ func TestParseRDPFile(t *testing.T) {
 			So(entry.Port, ShouldEqual, 3390)
 		})
 
+		Convey("明确的 host:port 端口非法时报错", func() {
+			_, err := parseRDPFile([]byte("full address:s:server.example.com:abc\nusername:s:admin\n"))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "端口")
+		})
+
 		Convey("UPN 用户名保持原样", func() {
 			entry, err := parseRDPFile([]byte("full address:s:1.2.3.4\nusername:s:ops@example.com\n"))
 			So(err, ShouldBeNil)
@@ -94,7 +100,8 @@ func TestParseRDPFile(t *testing.T) {
 
 		Convey("UTF-16LE（旧版 mstsc）编码", func() {
 			u16 := utf16.Encode([]rune(sampleRDP))
-			buf := []byte{0xFF, 0xFE}
+			buf := make([]byte, 0, 2+2*len(u16))
+			buf = append(buf, 0xFF, 0xFE)
 			for _, v := range u16 {
 				buf = append(buf, byte(v), byte(v>>8))
 			}
@@ -103,6 +110,14 @@ func TestParseRDPFile(t *testing.T) {
 			So(entry.Host, ShouldEqual, "192.168.1.50")
 			So(entry.Username, ShouldEqual, "administrator")
 			So(entry.Domain, ShouldEqual, "CORP")
+		})
+
+		Convey("UTF-8 BOM 不影响首行 full address", func() {
+			content := append([]byte{0xEF, 0xBB, 0xBF}, []byte("full address:s:10.0.0.5\nusername:s:admin\n")...)
+			entry, err := parseRDPFile(content)
+			So(err, ShouldBeNil)
+			So(entry.Host, ShouldEqual, "10.0.0.5")
+			So(entry.Username, ShouldEqual, "admin")
 		})
 	})
 }
@@ -117,7 +132,7 @@ func TestPreviewRDPFiles(t *testing.T) {
 
 		existing := &asset_entity.Asset{ID: 7, Name: "old", Type: asset_entity.AssetTypeRDP}
 		So(existing.SetRDPConfig(&asset_entity.RDPConfig{
-			Host: "192.168.1.50", Port: 3389, Username: "administrator",
+			Host: "192.168.1.50", Port: 3389, Domain: "CORP", Username: "administrator",
 		}), ShouldBeNil)
 
 		mockAssetRepo.EXPECT().
@@ -127,9 +142,10 @@ func TestPreviewRDPFiles(t *testing.T) {
 		result, err := PreviewRDPFiles(context.Background(), []RDPFileData{
 			{Filename: "/path/web-server.rdp", Content: []byte(sampleRDP)},
 			{Filename: "/path/broken.rdp", Content: []byte("username:s:admin\n")},
+			{Filename: "/path/other-domain.rdp", Content: []byte("full address:s:192.168.1.50\ndomain:s:OTHER\nusername:s:administrator\n")},
 		})
 		So(err, ShouldBeNil)
-		So(result.Preview.Items, ShouldHaveLength, 2)
+		So(result.Preview.Items, ShouldHaveLength, 3)
 
 		item := result.Preview.Items[0]
 		So(item.Name, ShouldEqual, "web-server")
@@ -141,10 +157,13 @@ func TestPreviewRDPFiles(t *testing.T) {
 		So(broken.Name, ShouldEqual, "broken")
 		So(broken.Reason, ShouldNotBeEmpty)
 
+		otherDomain := result.Preview.Items[2]
+		So(otherDomain.Exists, ShouldBeFalse)
+
 		Convey("会话缓存可按 sourceID 取回", func() {
 			files, ok := RDPImportSessionData(result.SourceID)
 			So(ok, ShouldBeTrue)
-			So(files, ShouldHaveLength, 2)
+			So(files, ShouldHaveLength, 3)
 			DeleteRDPImportSession(result.SourceID)
 			_, ok = RDPImportSessionData(result.SourceID)
 			So(ok, ShouldBeFalse)
@@ -238,8 +257,12 @@ func TestImportRDPSelected(t *testing.T) {
 			_, mockAssetRepo := setup(t)
 			existing := &asset_entity.Asset{ID: 7, Name: "old-name", Type: asset_entity.AssetTypeRDP}
 			So(existing.SetRDPConfig(&asset_entity.RDPConfig{
-				Host: "10.1.1.1", Port: 3389, Username: "ops",
+				Host: "10.1.1.1", Port: 3389, Domain: "NEW", Username: "ops",
 				Password: "cipher-blob", CredentialID: 42,
+				Proxy: &asset_entity.ProxyConfig{Type: "socks5", Host: "proxy.example.com", Port: 1080},
+				ProxyChain: &asset_entity.ProxyChainConfig{Layers: []asset_entity.ProxyChainLayer{{
+					Type: asset_entity.ProxyChainLayerSSH, SSHAssetID: 99,
+				}}},
 			}), ShouldBeNil)
 			mockAssetRepo.EXPECT().
 				List(gomock.Any(), asset_repo.ListOptions{Type: asset_entity.AssetTypeRDP, GroupID: 0}).
@@ -265,6 +288,11 @@ func TestImportRDPSelected(t *testing.T) {
 			// .rdp 无可用密码，覆盖不能清掉已有认证
 			So(cfg.Password, ShouldEqual, "cipher-blob")
 			So(cfg.CredentialID, ShouldEqual, 42)
+			So(cfg.Proxy, ShouldNotBeNil)
+			So(cfg.Proxy.Host, ShouldEqual, "proxy.example.com")
+			So(cfg.ProxyChain, ShouldNotBeNil)
+			So(cfg.ProxyChain.Layers, ShouldHaveLength, 1)
+			So(cfg.ProxyChain.Layers[0].SSHAssetID, ShouldEqual, 99)
 		})
 
 		Convey("缺用户名的条目失败并带原因", func() {
@@ -290,5 +318,101 @@ func TestImportRDPSelected(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(result.Total, ShouldEqual, 0)
 		})
+	})
+}
+
+func TestRDPFileServerPortInvalid(t *testing.T) {
+	Convey("server port 显式非法", t, func() {
+		Convey("parseRDPFile 返回明确错误", func() {
+			_, err := parseRDPFile([]byte("full address:s:1.2.3.4\nusername:s:ops\nserver port:i:70000\n"))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "server port")
+
+			_, err = parseRDPFile([]byte("full address:s:1.2.3.4\nusername:s:ops\nserver port:i:abc\n"))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "server port")
+		})
+
+		Convey("预览 Reason 非空且导入失败", func() {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			mockAssetRepo := mock_asset_repo.NewMockAssetRepo(ctrl)
+			asset_repo.RegisterAsset(mockAssetRepo)
+			t.Cleanup(func() { asset_repo.RegisterAsset(asset_repo.NewAsset()) })
+			mockAssetRepo.EXPECT().
+				List(gomock.Any(), asset_repo.ListOptions{Type: asset_entity.AssetTypeRDP, GroupID: 0}).
+				Return(nil, nil).Times(2)
+
+			files := []RDPFileData{{
+				Filename: "bad-port.rdp",
+				Content:  []byte("full address:s:1.2.3.4\nusername:s:ops\nserver port:i:70000\n"),
+			}}
+			preview, err := PreviewRDPFiles(context.Background(), files)
+			So(err, ShouldBeNil)
+			So(preview.Preview.Items, ShouldHaveLength, 1)
+			So(preview.Preview.Items[0].Reason, ShouldNotBeEmpty)
+
+			result, err := ImportRDPSelected(context.Background(), files, []int{0}, ImportOptions{})
+			So(err, ShouldBeNil)
+			So(result.Failed, ShouldEqual, 1)
+			So(result.Errors, ShouldHaveLength, 1)
+			So(result.Errors[0].Reason, ShouldContainSubstring, "server port")
+		})
+	})
+}
+
+func TestPreviewRDPFilesMissingUsername(t *testing.T) {
+	Convey("缺用户名的条目预览即提示原因", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockAssetRepo := mock_asset_repo.NewMockAssetRepo(ctrl)
+		asset_repo.RegisterAsset(mockAssetRepo)
+		t.Cleanup(func() { asset_repo.RegisterAsset(asset_repo.NewAsset()) })
+		mockAssetRepo.EXPECT().
+			List(gomock.Any(), asset_repo.ListOptions{Type: asset_entity.AssetTypeRDP, GroupID: 0}).
+			Return(nil, nil)
+
+		result, err := PreviewRDPFiles(context.Background(), []RDPFileData{
+			{Filename: "no-user.rdp", Content: []byte("full address:s:10.0.0.9\n")},
+		})
+		So(err, ShouldBeNil)
+		So(result.Preview.Items, ShouldHaveLength, 1)
+		So(result.Preview.Items[0].Reason, ShouldEqual, "缺少用户名")
+		So(result.Preview.Items[0].Host, ShouldEqual, "10.0.0.9")
+		So(result.Preview.Items[0].Port, ShouldEqual, 3389)
+	})
+}
+
+func TestExistingRDPAssetMapLegacyDomainUser(t *testing.T) {
+	Convey("存量 DOMAIN\\user 形态与导入侧去重键一致", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockAssetRepo := mock_asset_repo.NewMockAssetRepo(ctrl)
+		asset_repo.RegisterAsset(mockAssetRepo)
+		t.Cleanup(func() { asset_repo.RegisterAsset(asset_repo.NewAsset()) })
+
+		// 手工创建的资产：Username 整体填 DOMAIN\user，Domain 留空
+		existing := &asset_entity.Asset{ID: 9, Name: "manual", Type: asset_entity.AssetTypeRDP}
+		So(existing.SetRDPConfig(&asset_entity.RDPConfig{
+			Host: "192.168.1.60", Port: 3389, Username: `CORP\administrator`,
+		}), ShouldBeNil)
+		mockAssetRepo.EXPECT().
+			List(gomock.Any(), asset_repo.ListOptions{Type: asset_entity.AssetTypeRDP, GroupID: 0}).
+			Return([]*asset_entity.Asset{existing}, nil).Times(2)
+
+		files := []RDPFileData{{
+			Filename: "/path/legacy.rdp",
+			Content:  []byte("full address:s:192.168.1.60\nusername:s:CORP\\administrator\n"),
+		}}
+
+		preview, err := PreviewRDPFiles(context.Background(), files)
+		So(err, ShouldBeNil)
+		So(preview.Preview.Items, ShouldHaveLength, 1)
+		So(preview.Preview.Items[0].Exists, ShouldBeTrue)
+
+		result, err := ImportRDPSelected(context.Background(), files, []int{0}, ImportOptions{})
+		So(err, ShouldBeNil)
+		So(result.Skipped, ShouldEqual, 1)
+		So(result.Success, ShouldEqual, 0)
 	})
 }
