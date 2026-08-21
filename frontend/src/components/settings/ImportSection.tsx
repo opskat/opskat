@@ -12,17 +12,23 @@ import {
   TooltipTrigger,
 } from "@opskat/ui";
 import {
+  DownloadRDPExcelTemplate,
+  ImportRDPExcelSelected,
+  ImportRDPSelected,
   ImportSSHConfigSelected,
   ImportTabbySelected,
   ImportWindTermSelected,
+  PreviewRDPExcel,
+  PreviewRDPFiles,
   PreviewSSHConfig,
   PreviewTabbyConfig,
   PreviewWindTermConfig,
 } from "../../../wailsjs/go/system/System";
 import { import_svc } from "../../../wailsjs/go/models";
 import { ImportDialog, ImportCallOptions } from "@/components/settings/ImportDialog";
-import { CircleHelp, Import } from "lucide-react";
+import { CircleHelp, FileSpreadsheet, Import } from "lucide-react";
 import { toast } from "sonner";
+import { notifySuccess } from "@/lib/notify";
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -38,6 +44,9 @@ export function ImportSection() {
   const [tabbyLoading, setTabbyLoading] = useState(false);
   const [windTermLoading, setWindTermLoading] = useState(false);
   const [sshConfigLoading, setSSHConfigLoading] = useState(false);
+  const [rdpLoading, setRDPLoading] = useState(false);
+  const [rdpExcelLoading, setRDPExcelLoading] = useState(false);
+  const [templateLoading, setTemplateLoading] = useState(false);
 
   const handlePreviewTabby = async () => {
     setTabbyLoading(true);
@@ -99,6 +108,60 @@ export function ImportSection() {
     }
   };
 
+  const handlePreviewRDP = async () => {
+    setRDPLoading(true);
+    try {
+      const result = await PreviewRDPFiles();
+      const preview = result?.preview;
+      if (preview) {
+        setImportPreview(preview);
+        setImportDialogTitle(t("import.rdp"));
+        setImportFn(
+          () => (indexes: number[], opts: ImportCallOptions) =>
+            ImportRDPSelected(result.sourceId, indexes, opts.overwrite)
+        );
+        setImportDialogOpen(true);
+      }
+    } catch (e: unknown) {
+      toast.error(errMsg(e));
+    } finally {
+      setRDPLoading(false);
+    }
+  };
+
+  const handlePreviewRDPExcel = async () => {
+    setRDPExcelLoading(true);
+    try {
+      const result = await PreviewRDPExcel();
+      const preview = result?.preview;
+      if (preview) {
+        setImportPreview(preview);
+        setImportDialogTitle(t("import.rdpExcel"));
+        setImportFn(
+          () => (indexes: number[], opts: ImportCallOptions) =>
+            ImportRDPExcelSelected(result.sourceId, indexes, opts.overwrite)
+        );
+        setImportDialogOpen(true);
+      }
+    } catch (e: unknown) {
+      toast.error(errMsg(e));
+    } finally {
+      setRDPExcelLoading(false);
+    }
+  };
+
+  const handleDownloadTemplate = async () => {
+    setTemplateLoading(true);
+    try {
+      const path = await DownloadRDPExcelTemplate();
+      if (path) notifySuccess(t("import.rdpExcelTemplateSaved", { path }));
+    } catch (e: unknown) {
+      toast.error(errMsg(e));
+    } finally {
+      setTemplateLoading(false);
+    }
+  };
+
   return (
     <>
       <Card>
@@ -142,6 +205,26 @@ export function ImportSection() {
           <Button onClick={handlePreviewSSHConfig} disabled={sshConfigLoading} variant="outline" className="gap-1">
             <Import className="h-4 w-4" />
             {sshConfigLoading ? t("import.importing") : t("import.sshConfig")}
+          </Button>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">RDP</CardTitle>
+          <CardDescription>{t("import.rdpDesc")}</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
+          <Button onClick={handlePreviewRDP} disabled={rdpLoading} variant="outline" className="gap-1">
+            <Import className="h-4 w-4" />
+            {rdpLoading ? t("import.importing") : t("import.rdp")}
+          </Button>
+          <Button onClick={handleDownloadTemplate} disabled={templateLoading} variant="outline" className="gap-1">
+            <FileSpreadsheet className="h-4 w-4" />
+            {templateLoading ? t("import.importing") : t("import.rdpExcelTemplate")}
+          </Button>
+          <Button onClick={handlePreviewRDPExcel} disabled={rdpExcelLoading} variant="outline" className="gap-1">
+            <Import className="h-4 w-4" />
+            {rdpExcelLoading ? t("import.importing") : t("import.rdpExcel")}
           </Button>
         </CardContent>
       </Card>

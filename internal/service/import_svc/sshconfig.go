@@ -128,7 +128,7 @@ func ImportSSHConfigSelected(ctx context.Context, data []byte, selectedIndexes [
 		existingAsset := existingMap[dupKey]
 
 		if existingAsset != nil && !opts.Overwrite {
-			result.Skipped++
+			result.addSkipped(name)
 			continue
 		}
 
@@ -155,13 +155,11 @@ func ImportSSHConfigSelected(ctx context.Context, data []byte, selectedIndexes [
 			}
 			existingAsset.Name = name
 			if err := existingAsset.SetSSHConfig(sshCfg); err != nil {
-				result.Failed++
-				result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("序列化配置失败: %v", err)})
+				result.addFailed(name, fmt.Sprintf("序列化配置失败: %v", err))
 				continue
 			}
 			if err := asset_svc.Asset().Update(ctx, existingAsset); err != nil {
-				result.Failed++
-				result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("更新资产失败: %v", err)})
+				result.addFailed(name, fmt.Sprintf("更新资产失败: %v", err))
 				continue
 			}
 			aliasToID[h.alias] = existingAsset.ID
@@ -174,14 +172,12 @@ func ImportSSHConfigSelected(ctx context.Context, data []byte, selectedIndexes [
 				Icon:    "server",
 			}
 			if err := asset.SetSSHConfig(sshCfg); err != nil {
-				result.Failed++
-				result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("序列化配置失败: %v", err)})
+				result.addFailed(name, fmt.Sprintf("序列化配置失败: %v", err))
 				continue
 			}
 
 			if err := asset_svc.Asset().Create(ctx, asset); err != nil {
-				result.Failed++
-				result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("创建资产失败: %v", err)})
+				result.addFailed(name, fmt.Sprintf("创建资产失败: %v", err))
 				continue
 			}
 

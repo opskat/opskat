@@ -107,15 +107,14 @@ func ImportWindTermSelected(ctx context.Context, data []byte, selectedIndexes []
 	for _, session := range toImport {
 		entry := normalizeWindTermSession(session)
 		if entry.Host == "" {
-			result.Failed++
-			result.Errors = append(result.Errors, ImportError{Name: entry.Name, Reason: "host 为空"})
+			result.addFailed(entry.Name, "host 为空")
 			continue
 		}
 
 		dupKey := sshAssetKey(entry.Host, entry.Port, entry.Username)
 		existingAsset := existingMap[dupKey]
 		if existingAsset != nil && !opts.Overwrite {
-			result.Skipped++
+			result.addSkipped(entry.Name)
 			continue
 		}
 
@@ -124,8 +123,7 @@ func ImportWindTermSelected(ctx context.Context, data []byte, selectedIndexes []
 			var err error
 			groupID, err = ensureGroupPath(ctx, entry.GroupID, groupCache)
 			if err != nil {
-				result.Failed++
-				result.Errors = append(result.Errors, ImportError{Name: entry.Name, Reason: fmt.Sprintf("创建分组失败: %v", err)})
+				result.addFailed(entry.Name, fmt.Sprintf("创建分组失败: %v", err))
 				continue
 			}
 		}
@@ -141,8 +139,7 @@ func ImportWindTermSelected(ctx context.Context, data []byte, selectedIndexes []
 		if existingAsset != nil && opts.Overwrite {
 			oldCfg, err := existingAsset.GetSSHConfig()
 			if err != nil {
-				result.Failed++
-				result.Errors = append(result.Errors, ImportError{Name: entry.Name, Reason: fmt.Sprintf("读取已有配置失败: %v", err)})
+				result.addFailed(entry.Name, fmt.Sprintf("读取已有配置失败: %v", err))
 				continue
 			}
 			preserveSSHSecretsOnOverwrite(oldCfg, sshCfg)
@@ -151,13 +148,11 @@ func ImportWindTermSelected(ctx context.Context, data []byte, selectedIndexes []
 				existingAsset.GroupID = groupID
 			}
 			if err := existingAsset.SetSSHConfig(sshCfg); err != nil {
-				result.Failed++
-				result.Errors = append(result.Errors, ImportError{Name: entry.Name, Reason: fmt.Sprintf("序列化配置失败: %v", err)})
+				result.addFailed(entry.Name, fmt.Sprintf("序列化配置失败: %v", err))
 				continue
 			}
 			if err := asset_svc.Asset().Update(ctx, existingAsset); err != nil {
-				result.Failed++
-				result.Errors = append(result.Errors, ImportError{Name: entry.Name, Reason: fmt.Sprintf("更新资产失败: %v", err)})
+				result.addFailed(entry.Name, fmt.Sprintf("更新资产失败: %v", err))
 				continue
 			}
 			result.Success++
@@ -166,13 +161,11 @@ func ImportWindTermSelected(ctx context.Context, data []byte, selectedIndexes []
 
 		asset := &asset_entity.Asset{Name: entry.Name, Type: asset_entity.AssetTypeSSH, GroupID: groupID, Icon: "server"}
 		if err := asset.SetSSHConfig(sshCfg); err != nil {
-			result.Failed++
-			result.Errors = append(result.Errors, ImportError{Name: entry.Name, Reason: fmt.Sprintf("序列化配置失败: %v", err)})
+			result.addFailed(entry.Name, fmt.Sprintf("序列化配置失败: %v", err))
 			continue
 		}
 		if err := asset_svc.Asset().Create(ctx, asset); err != nil {
-			result.Failed++
-			result.Errors = append(result.Errors, ImportError{Name: entry.Name, Reason: fmt.Sprintf("创建资产失败: %v", err)})
+			result.addFailed(entry.Name, fmt.Sprintf("创建资产失败: %v", err))
 			continue
 		}
 		existingMap[dupKey] = asset
