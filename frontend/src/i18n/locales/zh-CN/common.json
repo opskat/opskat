@@ -878,9 +878,17 @@
     "windTermHint": "需要手动选择 WindTerm 配置目录下的 profiles/default.v10/terminal/user.sessions 文件。该导入功能只导入分组以及 IP/端口信息，用户名默认为 root。",
     "sshConfig": "从 SSH Config 导入",
     "sshConfigDesc": "导入 ~/.ssh/config 中的 SSH 连接配置",
+    "rdp": "导入 RDP 文件",
+    "rdpDesc": "选择一个或多个 mstsc 导出的 .rdp 连接文件导入，或按模板表格填写地址、端口、用户名、密码等批量导入 RDP 资产（Excel 方式首次使用建议先下载模板）",
+    "rdpExcel": "从 Excel 导入 RDP",
+    "rdpExcelTemplate": "下载模板",
+    "rdpExcelTemplateSaved": "模板已保存至 {{path}}",
     "importing": "导入中...",
     "success": "导入成功",
     "result": "共 {{total}} 条，成功 {{success}} 条，跳过 {{skipped}} 条，失败 {{failed}} 条",
+    "resultTitle": "导入结果",
+    "resultSkipped": "跳过",
+    "resultFailed": "失败",
     "noFile": "未选择文件",
     "cancelled": "已取消",
     "selectedCount": "已选 {{selected}} / {{total}} 项",
@@ -2967,6 +2975,11 @@
     "approveServer": "确认并连接",
     "serverVerificationFailed": "VNC 服务器身份信息无效，无法继续连接。",
     "serverVerificationCancelled": "已取消 VNC 服务器身份确认。",
-    "status": { "connecting": "连接中", "connected": "已连接", "error": "连接失败", "closed": "已断开" }
+    "status": {
+      "connecting": "连接中",
+      "connected": "已连接",
+      "error": "错误",
+      "closed": "已断开"
+    }
   }
 }

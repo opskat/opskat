@@ -878,9 +878,17 @@
     "windTermHint": "Manually select profiles/default.v10/terminal/user.sessions from the WindTerm config directory. This importer only imports groups plus IP/port information. The username defaults to root.",
     "sshConfig": "Import from SSH Config",
     "sshConfigDesc": "Import SSH connections from ~/.ssh/config",
+    "rdp": "Import RDP Files",
+    "rdpDesc": "Pick one or more .rdp connection files exported by mstsc, or fill in host, port, username, password and more in the template spreadsheet to bulk-import RDP assets (download the template first for the Excel flow)",
+    "rdpExcel": "Import RDP from Excel",
+    "rdpExcelTemplate": "Download Template",
+    "rdpExcelTemplateSaved": "Template saved to {{path}}",
     "importing": "Importing...",
     "success": "Import successful",
     "result": "Total {{total}}, Success {{success}}, Skipped {{skipped}}, Failed {{failed}}",
+    "resultTitle": "Import Result",
+    "resultSkipped": "Skipped",
+    "resultFailed": "Failed",
     "noFile": "No file selected",
     "cancelled": "Cancelled",
     "selectedCount": "{{selected}} / {{total}} selected",
@@ -2967,6 +2975,11 @@
     "approveServer": "Verify and connect",
     "serverVerificationFailed": "The VNC server identity is invalid, so the connection cannot continue.",
     "serverVerificationCancelled": "VNC server identity verification was cancelled.",
-    "status": { "connecting": "Connecting", "connected": "Connected", "error": "Error", "closed": "Closed" }
+    "status": {
+      "connecting": "Connecting",
+      "connected": "Connected",
+      "error": "Error",
+      "closed": "Closed"
+    }
   }
 }

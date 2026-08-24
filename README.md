@@ -54,7 +54,7 @@ Grab the latest build for your platform — **macOS, Windows, or Linux** — fro
 
 ### First run
 
-1. **Add an asset** — an SSH/RDP host, database, object-storage account, Redis, and so on — or import from your SSH config / Tabby / WindTerm.
+1. **Add an asset** — an SSH/RDP host, database, object-storage account, Redis, and so on — or import from your SSH config / Tabby / WindTerm / .rdp or Excel files.
 2. **Connect** — open a terminal or remote desktop, run a query, or browse keys, collections, buckets, and objects.
 3. *(Optional)* **Configure an AI provider**, then just tell the agent what you need.
 
@@ -86,7 +86,7 @@ Even before you turn on the AI, OpsKat is a full-featured terminal and asset man
 - Object-storage browser for buckets, folders, objects, uploads/downloads, copy/move/delete, previews, and presigned URLs
 - Port forwarding and SOCKS proxy
 - Encrypted credential storage
-- Import from SSH config / Tabby / WindTerm
+- Import from SSH config / Tabby / WindTerm / .rdp files / RDP Excel templates
 
 ### Proxy Chains
 

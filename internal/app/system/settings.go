@@ -165,6 +165,198 @@ func (s *System) ImportWindTermSelected(sourceID string, selectedIndexes []int, 
 	return result, err
 }
 
+// PreviewRDPFiles 预览用户选中的 .rdp 文件（不写数据库）
+func (s *System) PreviewRDPFiles() (*import_svc.RDPFilePreviewResult, error) {
+	files, err := s.readRDPFiles()
+	if err != nil {
+		return nil, err
+	}
+	if files == nil {
+		return nil, nil
+	}
+	ctx := i18n.Ctx(s.ctx, s.Lang())
+	log := logger.Ctx(ctx)
+	log.Info("rdp file import preview start", zap.Int("fileCount", len(files)))
+	preview, err := import_svc.PreviewRDPFiles(ctx, files)
+	if err != nil {
+		log.Error("rdp file import preview failed", zap.Int("fileCount", len(files)), zap.Error(err))
+		return nil, err
+	}
+	log.Info("rdp file import preview end",
+		zap.Int("fileCount", len(files)),
+		zap.Int("itemCount", len(preview.Preview.Items)))
+	return preview, nil
+}
+
+// ImportRDPSelected 导入用户选中的 .rdp 条目
+func (s *System) ImportRDPSelected(sourceID string, selectedIndexes []int, overwrite bool) (*import_svc.ImportResult, error) {
+	files, ok := import_svc.RDPImportSessionData(sourceID)
+	if !ok {
+		return nil, fmt.Errorf("请先选择 .rdp 文件并完成预览")
+	}
+	ctx := i18n.Ctx(s.ctx, s.Lang())
+	log := logger.Ctx(ctx)
+	log.Info("rdp file import start",
+		zap.String("sourceID", sourceID),
+		zap.Int("selected", len(selectedIndexes)),
+		zap.Bool("overwrite", overwrite))
+	result, err := import_svc.ImportRDPSelected(ctx, files, selectedIndexes, import_svc.ImportOptions{
+		Overwrite: overwrite,
+	})
+	if err != nil {
+		log.Error("rdp file import failed", zap.String("sourceID", sourceID), zap.Error(err))
+		return nil, err
+	}
+	log.Info("rdp file import end",
+		zap.String("sourceID", sourceID),
+		zap.Int("total", result.Total),
+		zap.Int("success", result.Success),
+		zap.Int("skipped", result.Skipped),
+		zap.Int("failed", result.Failed))
+	import_svc.DeleteRDPImportSession(sourceID)
+	return result, nil
+}
+
+// readRDPFiles 多选 .rdp 文件并读入内存；用户取消时返回 nil
+func (s *System) readRDPFiles() ([]import_svc.RDPFileData, error) {
+	paths, err := wailsRuntime.OpenMultipleFilesDialog(s.ctx, wailsRuntime.OpenDialogOptions{
+		Title: "选择 RDP 连接文件",
+		Filters: []wailsRuntime.FileFilter{
+			{DisplayName: "RDP Files", Pattern: "*.rdp"},
+			{DisplayName: "All Files", Pattern: "*"},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("打开文件对话框失败: %w", err)
+	}
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	files := make([]import_svc.RDPFileData, 0, len(paths))
+	for _, path := range paths {
+		content, err := os.ReadFile(path) //nolint:gosec // path is from file dialog
+		if err != nil {
+			return nil, fmt.Errorf("读取文件 %s 失败: %w", path, err)
+		}
+		files = append(files, import_svc.RDPFileData{Filename: path, Content: content})
+	}
+	return files, nil
+}
+
+// PreviewRDPExcel 预览用户选中的 RDP 批量导入 Excel（不写数据库）
+func (s *System) PreviewRDPExcel() (*import_svc.RDPExcelPreviewResult, error) {
+	// 仅支持 OOXML 的 .xlsx；旧式二进制 .xls 不在解析能力内，不提供选择
+	data, err := s.readImportFile("选择 RDP 批量导入 Excel", []wailsRuntime.FileFilter{
+		{DisplayName: "Excel Files", Pattern: "*.xlsx"},
+		{DisplayName: "All Files", Pattern: "*"},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if data == nil {
+		return nil, nil
+	}
+	ctx := i18n.Ctx(s.ctx, s.Lang())
+	log := logger.Ctx(ctx)
+	log.Info("rdp excel import preview start", zap.Int("sizeBytes", len(data)))
+	result, err := import_svc.PreviewRDPExcel(ctx, data)
+	if err != nil {
+		log.Error("rdp excel import preview failed", zap.Int("sizeBytes", len(data)), zap.Error(err))
+		return nil, err
+	}
+	log.Info("rdp excel import preview end",
+		zap.Int("sizeBytes", len(data)),
+		zap.Int("itemCount", len(result.Preview.Items)))
+	return result, nil
+}
+
+// ImportRDPExcelSelected 导入用户选中的 Excel 行
+func (s *System) ImportRDPExcelSelected(sourceID string, selectedIndexes []int, overwrite bool) (*import_svc.ImportResult, error) {
+	data, ok := import_svc.RDPExcelImportSessionData(sourceID)
+	if !ok {
+		return nil, fmt.Errorf("请先选择 RDP 导入 Excel 并完成预览")
+	}
+	ctx := i18n.Ctx(s.ctx, s.Lang())
+	log := logger.Ctx(ctx)
+	log.Info("rdp excel import start",
+		zap.String("sourceID", sourceID),
+		zap.Int("selected", len(selectedIndexes)),
+		zap.Bool("overwrite", overwrite))
+	result, err := import_svc.ImportRDPExcelSelected(ctx, data, selectedIndexes, import_svc.ImportOptions{
+		Overwrite: overwrite,
+	})
+	if err != nil {
+		log.Error("rdp excel import failed", zap.String("sourceID", sourceID), zap.Error(err))
+		return nil, err
+	}
+	log.Info("rdp excel import end",
+		zap.String("sourceID", sourceID),
+		zap.Int("total", result.Total),
+		zap.Int("success", result.Success),
+		zap.Int("skipped", result.Skipped),
+		zap.Int("failed", result.Failed))
+	import_svc.DeleteRDPExcelImportSession(sourceID)
+	return result, nil
+}
+
+// DownloadRDPExcelTemplate 生成并保存 RDP 批量导入模板
+func (s *System) DownloadRDPExcelTemplate() (string, error) {
+	ctx := i18n.Ctx(s.ctx, s.Lang())
+	log := logger.Ctx(ctx)
+	log.Info("rdp excel template download start")
+	data, err := import_svc.BuildRDPExcelTemplate()
+	if err != nil {
+		err = fmt.Errorf("生成模板失败: %w", err)
+		log.Error("rdp excel template download failed", zap.Error(err))
+		return "", err
+	}
+	path, err := wailsRuntime.SaveFileDialog(s.ctx, wailsRuntime.SaveDialogOptions{
+		Title:           "保存 RDP 导入模板",
+		DefaultFilename: "rdp-import-template.xlsx",
+		Filters: []wailsRuntime.FileFilter{
+			{DisplayName: "Excel Files", Pattern: "*.xlsx"},
+		},
+	})
+	if err != nil {
+		err = fmt.Errorf("打开保存对话框失败: %w", err)
+		log.Error("rdp excel template download failed", zap.Error(err))
+		return "", err
+	}
+	if path == "" {
+		log.Info("rdp excel template download end", zap.Bool("saved", false))
+		return "", nil
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		err = fmt.Errorf("写入模板文件失败: %w", err)
+		log.Error("rdp excel template download failed", zap.Bool("saved", false), zap.Error(err))
+		return "", err
+	}
+	// 不记录用户选择的保存路径，只记录大小
+	log.Info("rdp excel template download end",
+		zap.Bool("saved", true),
+		zap.Int("sizeBytes", len(data)))
+	return path, nil
+}
+
+// readImportFile 通用导入文件选择：用户取消时返回 nil
+func (s *System) readImportFile(title string, filters []wailsRuntime.FileFilter) ([]byte, error) {
+	filePath, err := wailsRuntime.OpenFileDialog(s.ctx, wailsRuntime.OpenDialogOptions{
+		Title:   title,
+		Filters: filters,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("打开文件对话框失败: %w", err)
+	}
+	if filePath == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(filePath) //nolint:gosec // filePath is from file dialog
+	if err != nil {
+		return nil, fmt.Errorf("读取文件失败: %w", err)
+	}
+	return data, nil
+}
+
 // readSSHConfig 读取 SSH Config 文件
 func (s *System) readSSHConfig() ([]byte, error) {
 	filePath := import_svc.DetectSSHConfigPath()

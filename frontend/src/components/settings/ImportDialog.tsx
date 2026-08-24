@@ -21,6 +21,9 @@ interface ImportDialogProps {
   onImport: (selectedIndexes: number[], options: ImportCallOptions) => Promise<import_svc.ImportResult>;
 }
 
+// 解析失败（reason 非空）的预览项不可导入：默认不选、全选/分组选取跳过、复选框禁用
+const isSelectable = (item: import_svc.PreviewItem) => !item.reason;
+
 export function ImportDialog({ open, onOpenChange, preview, title, onImport }: ImportDialogProps) {
   const { t } = useTranslation();
   const { refresh } = useAssetStore();
@@ -29,15 +32,16 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(["__all__"]));
   const [passphrase, setPassphrase] = useState("");
   const [overwrite, setOverwrite] = useState(false);
+  const [importResult, setImportResult] = useState<import_svc.ImportResult | null>(null);
 
-  // 当 preview 变化时重置选择（默认选中所有不存在的）：渲染期对比上次值，等价于原 [preview] effect
+  // 当 preview 变化时重置选择（默认选中所有不存在且合法的项）：渲染期对比上次值，等价于原 [preview] effect
   const [prevPreview, setPrevPreview] = useState<import_svc.PreviewResult | null>(null);
   if (preview !== prevPreview) {
     setPrevPreview(preview);
     if (preview) {
       const defaultSelected = new Set<number>();
       for (const item of preview.items || []) {
-        if (!item.exists) {
+        if (!item.exists && isSelectable(item)) {
           defaultSelected.add(item.index);
         }
       }
@@ -79,10 +83,10 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
   };
 
   const toggleGroup = (groupId: string) => {
-    const items = groupedItems.get(groupId) || [];
-    const allSelected = items.every((i) => selected.has(i.index));
+    const selectable = (groupedItems.get(groupId) || []).filter(isSelectable);
+    const allSelected = selectable.every((i) => selected.has(i.index));
     const next = new Set(selected);
-    for (const item of items) {
+    for (const item of selectable) {
       if (allSelected) {
         next.delete(item.index);
       } else {
@@ -103,7 +107,7 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
   };
 
   const selectAll = () => {
-    setSelected(new Set((preview.items || []).map((i) => i.index)));
+    setSelected(new Set((preview.items || []).filter(isSelectable).map((i) => i.index)));
   };
 
   const selectNone = () => {
@@ -115,16 +119,21 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
     setImporting(true);
     try {
       const result = await onImport(Array.from(selected), { passphrase, overwrite });
-      notifySuccess(
-        t("import.result", {
-          total: result.total,
-          success: result.success,
-          skipped: result.skipped,
-          failed: result.failed,
-        })
-      );
       await refresh();
-      onOpenChange(false);
+      // 有跳过或失败时弹结果明细窗口，全部成功则 toast 后关闭
+      if (result.skipped > 0 || result.failed > 0) {
+        setImportResult(result);
+      } else {
+        notifySuccess(
+          t("import.result", {
+            total: result.total,
+            success: result.success,
+            skipped: result.skipped,
+            failed: result.failed,
+          })
+        );
+        onOpenChange(false);
+      }
     } catch (e) {
       toast.error(String(e));
     } finally {
@@ -132,10 +141,68 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
     }
   };
 
+  const handleResultClose = (next: boolean) => {
+    if (!next) setImportResult(null);
+    onOpenChange(next);
+  };
+
   // 排序：有分组的在前
   const groupOrder = [...(preview.groups || []).map((g) => g.id)];
   if (groupedItems.has("__ungrouped__")) {
     groupOrder.push("__ungrouped__");
+  }
+
+  // 导入结果明细视图：展示跳过与失败条目（与预览明细同样式）
+  if (importResult) {
+    const issues = importResult.errors || [];
+    return (
+      <Dialog open={open} onOpenChange={handleResultClose}>
+        <DialogContent size="md">
+          <DialogHeader>
+            <DialogTitle>{t("import.resultTitle")}</DialogTitle>
+          </DialogHeader>
+
+          <div className="flex items-center gap-3 text-xs">
+            <span className="text-muted-foreground">
+              {t("import.result", {
+                total: importResult.total,
+                success: importResult.success,
+                skipped: importResult.skipped,
+                failed: importResult.failed,
+              })}
+            </span>
+          </div>
+
+          <ScrollArea className="max-h-[50vh] border rounded-lg">
+            <div className="p-2 space-y-0.5">
+              {issues.map((issue, i) => (
+                <div
+                  key={`${issue.name}-${i}`}
+                  className="flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-sm hover:bg-muted"
+                >
+                  <Server className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate" title={issue.name}>
+                    {issue.name}
+                  </span>
+                  <span
+                    className={`shrink-0 text-xs ${issue.status === "skipped" ? "text-warning" : "text-destructive"}`}
+                  >
+                    {issue.status === "skipped" ? t("import.resultSkipped") : t("import.resultFailed")}
+                  </span>
+                  <span className="max-w-[45%] shrink-0 truncate text-xs text-muted-foreground" title={issue.reason}>
+                    {issue.reason}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </ScrollArea>
+
+          <DialogFooter>
+            <Button onClick={() => handleResultClose(false)}>{t("action.close")}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
   }
 
   return (
@@ -182,8 +249,9 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
               if (items.length === 0) return null;
               const groupName = gid === "__ungrouped__" ? t("asset.ungrouped") : groupMap.get(gid) || gid;
               const expanded = expandedGroups.has(gid);
-              const allSelected = items.every((i) => selected.has(i.index));
-              const someSelected = !allSelected && items.some((i) => selected.has(i.index));
+              const selectable = items.filter(isSelectable);
+              const allSelected = selectable.length > 0 && selectable.every((i) => selected.has(i.index));
+              const someSelected = !allSelected && selectable.some((i) => selected.has(i.index));
 
               return (
                 <div key={gid}>
@@ -227,6 +295,7 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
                           <input
                             type="checkbox"
                             checked={selected.has(item.index)}
+                            disabled={Boolean(item.reason)}
                             onChange={() => toggleItem(item.index)}
                             className="rounded"
                           />
@@ -234,12 +303,21 @@ export function ImportDialog({ open, onOpenChange, preview, title, onImport }: I
                           <span className="min-w-0 flex-1 truncate" title={item.name}>
                             {item.name}
                           </span>
-                          <span
-                            className="max-w-[45%] shrink-0 truncate font-mono text-xs text-muted-foreground"
-                            title={`${item.host}:${item.port}`}
-                          >
-                            {item.host}:{item.port}
-                          </span>
+                          {item.reason ? (
+                            <span
+                              className="max-w-[45%] shrink-0 truncate text-xs text-destructive"
+                              title={item.reason}
+                            >
+                              {item.reason}
+                            </span>
+                          ) : (
+                            <span
+                              className="max-w-[45%] shrink-0 truncate font-mono text-xs text-muted-foreground"
+                              title={`${item.host}:${item.port}`}
+                            >
+                              {item.host}:{item.port}
+                            </span>
+                          )}
                           {item.exists && (
                             <span className={`text-xs shrink-0 ${overwrite ? "text-info" : "text-warning"}`}>
                               {overwrite ? t("import.overwrite") : t("import.exists")}

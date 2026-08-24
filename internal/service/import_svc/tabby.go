@@ -30,7 +30,28 @@ type ImportResult struct {
 // ImportError 单条导入错误
 type ImportError struct {
 	Name   string `json:"name"`
+	Status string `json:"status"` // skipped | failed
 	Reason string `json:"reason"`
+}
+
+const (
+	importStatusSkipped = "skipped"
+	importStatusFailed  = "failed"
+)
+
+// skipReason 跳过原因（已存在且未开启覆盖）
+const skipReason = "已存在，未开启覆盖"
+
+// addFailed 记录一条失败明细
+func (r *ImportResult) addFailed(name, reason string) {
+	r.Failed++
+	r.Errors = append(r.Errors, ImportError{Name: name, Status: importStatusFailed, Reason: reason})
+}
+
+// addSkipped 记录一条跳过明细
+func (r *ImportResult) addSkipped(name string) {
+	r.Skipped++
+	r.Errors = append(r.Errors, ImportError{Name: name, Status: importStatusSkipped, Reason: skipReason})
 }
 
 // PreviewGroup 预览分组
@@ -47,9 +68,10 @@ type PreviewItem struct {
 	Port        int    `json:"port"`
 	Username    string `json:"username"`
 	AuthType    string `json:"authType"`
-	GroupID     string `json:"groupId"`     // Tabby 分组 UUID
+	GroupID     string `json:"groupId"`     // 分组标识（Tabby 分组 UUID / RDP Excel 分组名）
 	Exists      bool   `json:"exists"`      // 是否已存在
 	HasPassword bool   `json:"hasPassword"` // vault 中是否有密码
+	Reason      string `json:"reason"`      // 解析失败原因（仅失败条目有值）
 }
 
 // PreviewResult 预览结果
@@ -265,8 +287,7 @@ func ImportTabbySelected(ctx context.Context, data []byte, selectedIndexes []int
 			name = fmt.Sprintf("%s@%s:%d", username, host, port)
 		}
 		if host == "" {
-			result.Failed++
-			result.Errors = append(result.Errors, ImportError{Name: name, Reason: "host 为空"})
+			result.addFailed(name, "host 为空")
 			continue
 		}
 
@@ -274,7 +295,7 @@ func ImportTabbySelected(ctx context.Context, data []byte, selectedIndexes []int
 		existingAsset := existingMap[dupKey]
 
 		if existingAsset != nil && !opts.Overwrite {
-			result.Skipped++
+			result.addSkipped(name)
 			continue
 		}
 
@@ -285,8 +306,7 @@ func ImportTabbySelected(ctx context.Context, data []byte, selectedIndexes []int
 				var err error
 				groupID, err = ensureGroupByName(ctx, groupName, groupCache)
 				if err != nil {
-					result.Failed++
-					result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("创建分组失败: %v", err)})
+					result.addFailed(name, fmt.Sprintf("创建分组失败: %v", err))
 					continue
 				}
 			}
@@ -330,13 +350,11 @@ func ImportTabbySelected(ctx context.Context, data []byte, selectedIndexes []int
 				existingAsset.GroupID = groupID
 			}
 			if err := existingAsset.SetSSHConfig(sshCfg); err != nil {
-				result.Failed++
-				result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("序列化配置失败: %v", err)})
+				result.addFailed(name, fmt.Sprintf("序列化配置失败: %v", err))
 				continue
 			}
 			if err := asset_svc.Asset().Update(ctx, existingAsset); err != nil {
-				result.Failed++
-				result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("更新资产失败: %v", err)})
+				result.addFailed(name, fmt.Sprintf("更新资产失败: %v", err))
 				continue
 			}
 			tabbyNameToID[profile.Name] = existingAsset.ID
@@ -348,14 +366,12 @@ func ImportTabbySelected(ctx context.Context, data []byte, selectedIndexes []int
 				Icon: "server",
 			}
 			if err := asset.SetSSHConfig(sshCfg); err != nil {
-				result.Failed++
-				result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("序列化配置失败: %v", err)})
+				result.addFailed(name, fmt.Sprintf("序列化配置失败: %v", err))
 				continue
 			}
 
 			if err := asset_svc.Asset().Create(ctx, asset); err != nil {
-				result.Failed++
-				result.Errors = append(result.Errors, ImportError{Name: name, Reason: fmt.Sprintf("创建资产失败: %v", err)})
+				result.addFailed(name, fmt.Sprintf("创建资产失败: %v", err))
 				continue
 			}
 

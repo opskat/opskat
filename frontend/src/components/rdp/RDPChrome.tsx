@@ -1,4 +1,4 @@
-import { Clipboard, ClipboardCheck, Keyboard, Maximize2, Minimize2, Monitor, Power } from "lucide-react";
+import { Clipboard, ClipboardCheck, Keyboard, Maximize2, Minimize2, Monitor, Unplug } from "lucide-react";
 import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, cn } from "@opskat/ui";
 import { useTranslation } from "react-i18next";
 import { Segmented } from "@/components/asset/fields";
@@ -132,7 +132,7 @@ export function RDPToolbar({
           disabled={!connected}
           onClick={onDisconnect}
         >
-          <Power className="h-3.5 w-3.5" />
+          <Unplug className="h-3.5 w-3.5" />
         </Button>
       </div>
     </div>

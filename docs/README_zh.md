@@ -54,7 +54,7 @@ SSH 与 RDP、数据库、对象存储、Redis、Kafka、Kubernetes…… 运维
 
 ### 首次使用
 
-1. **添加资产** —— SSH/RDP 主机、数据库、对象存储、Redis 等，也可以从 SSH config / Tabby / WindTerm 导入。
+1. **添加资产** —— SSH/RDP 主机、数据库、对象存储、Redis 等，也可以从 SSH config / Tabby / WindTerm / .rdp 文件或 Excel 模板导入。
 2. **连接** —— 打开终端或远程桌面、跑查询，或浏览 Key、集合、Bucket 与对象。
 3. *（可选）* **配置 AI 服务商**，然后直接跟 AI 说你想做什么。
 
@@ -86,7 +86,7 @@ _更多资产类型将通过插件模式持续扩展。_
 - 对象存储浏览器，支持 Bucket/目录/对象浏览、上传下载、复制移动、删除、预览与预签名 URL
 - 端口转发、SOCKS 代理
 - 凭据加密存储
-- 从 SSH config / Tabby / WindTerm 导入
+- 从 SSH config / Tabby / WindTerm / .rdp 文件 / RDP Excel 模板导入
 
 ### 代理链
 
