@@ -38,7 +38,7 @@ class ErrorBoundaryInner extends Component<Props, State> {
             <h1 className="text-xl font-semibold text-foreground">{t("error.boundary.title")}</h1>
             <p className="text-sm text-muted-foreground max-w-md">{t("error.boundary.message")}</p>
             {this.state.error && (
-              <pre className="text-xs text-destructive bg-muted rounded-md p-3 max-w-lg overflow-auto max-h-32">
+              <pre className="select-text text-xs text-destructive bg-muted rounded-md p-3 max-w-lg overflow-auto max-h-32">
                 {this.state.error.message}
               </pre>
             )}

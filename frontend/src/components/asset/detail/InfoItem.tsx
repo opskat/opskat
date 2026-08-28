@@ -49,7 +49,7 @@ export function InfoItem({ label, value, mono }: { label: string; value: string;
   return (
     <div>
       <span className="text-xs text-muted-foreground">{label}</span>
-      <p className={cn("mt-0.5 text-sm", mono && "font-mono")}>{value}</p>
+      <p className={cn("mt-0.5 select-text text-sm", mono && "font-mono")}>{value}</p>
     </div>
   );
 }

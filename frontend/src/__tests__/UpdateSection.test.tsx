@@ -66,4 +66,19 @@ describe("UpdateSection", () => {
     expect(RestartApp).toHaveBeenCalledTimes(1);
     expect(Quit).not.toHaveBeenCalled();
   });
+
+  it("allows users to select release notes", async () => {
+    vi.mocked(CheckForUpdate).mockResolvedValue({
+      hasUpdate: true,
+      currentVersion: "v1.0.0",
+      latestVersion: "v1.0.1",
+      releaseNotes: "Fix connection diagnostics",
+      releaseURL: "https://github.com/opskat/opskat/releases/tag/v1.0.1",
+      publishedAt: "2026-05-14T00:00:00Z",
+    });
+    render(<UpdateSection />);
+
+    await userEvent.click(screen.getByRole("button", { name: "appUpdate.checkUpdate" }));
+    expect(await screen.findByText("Fix connection diagnostics")).toHaveClass("select-text");
+  });
 });

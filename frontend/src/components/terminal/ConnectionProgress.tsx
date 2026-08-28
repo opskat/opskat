@@ -350,19 +350,19 @@ function HostKeyVerifyForm({
           <p className="text-xs text-destructive">{t("ssh.connectProgress.hostKeyChangedWarning")}</p>
         </div>
       )}
-      <div className="rounded-md border bg-muted/30 p-3 space-y-2">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+      <div className="select-text rounded-md border bg-muted/30 p-3 space-y-2">
+        <div className="select-text flex items-center gap-2 text-xs text-muted-foreground">
           <Fingerprint className="h-3.5 w-3.5" />
           <span>
             {hostKey.host}:{hostKey.port}
           </span>
           <span className="text-muted-foreground/60">({hostKey.keyType})</span>
         </div>
-        <div className="font-mono text-xs break-all text-foreground">{hostKey.fingerprint}</div>
+        <div className="select-text font-mono text-xs break-all text-foreground">{hostKey.fingerprint}</div>
         {hostKey.isChanged && hostKey.oldFingerprint && (
           <div className="border-t pt-2 mt-2">
             <div className="text-xs text-muted-foreground mb-1">{t("ssh.connectProgress.oldFingerprint")}</div>
-            <div className="font-mono text-xs break-all text-muted-foreground line-through">
+            <div className="select-text font-mono text-xs break-all text-muted-foreground line-through">
               {hostKey.oldFingerprint}
             </div>
           </div>

@@ -1,6 +1,6 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { ProxyChainDetailSection } from "@/components/asset/detail/InfoItem";
+import { InfoItem, ProxyChainDetailSection } from "@/components/asset/detail/InfoItem";
 import type { ProxyChainJSON } from "@/components/asset/proxyConfig";
 
 describe("ProxyChainDetailSection", () => {
@@ -24,5 +24,14 @@ describe("ProxyChainDetailSection", () => {
     expect(getByText(/127\.0\.0\.1:1080/)).toBeInTheDocument();
     expect(getByText("SOCKS5")).toBeInTheDocument();
     expect(getByText("SSH")).toBeInTheDocument();
+  });
+});
+
+describe("InfoItem", () => {
+  it("lets users select the displayed value without selecting its label", () => {
+    render(<InfoItem label="Host" value="db.internal:5432" mono />);
+
+    expect(document.querySelector("p")).toHaveClass("select-text");
+    expect(document.querySelector("span")).not.toHaveClass("select-text");
   });
 });

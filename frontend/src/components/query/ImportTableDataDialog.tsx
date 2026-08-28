@@ -1077,7 +1077,7 @@ export function ImportTableDataDialog({
           <span className="text-right">{t("query.importTime")}</span>
           <span>{progress.seconds.toFixed(1)}s</span>
         </div>
-        <div className="h-[210px] max-w-full overflow-auto rounded-md border bg-muted/10 p-3 font-mono text-xs">
+        <div className="h-[210px] max-w-full select-text overflow-auto rounded-md border bg-muted/10 p-3 font-mono text-xs">
           {logLines.length > 0
             ? logLines.map((line, index) => (
                 <div

@@ -98,6 +98,16 @@ describe("OpsctlApprovalDialog", () => {
     expect(screen.getByText("opsctlApproval.remember")).toBeInTheDocument();
   });
 
+  it("命令与详情正文可选中复制", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+
+    fireSingleApproval(handlers, { command: "uname -a", detail: "target: web-1" });
+
+    expect(screen.getByText("uname -a")).toHaveClass("select-text");
+    expect(screen.getByText("target: web-1")).toHaveClass("select-text");
+  });
+
   it("未修改 remember pattern 时不伪造 edited_items，保留后端的系统主体收窄", () => {
     const handlers = captureHandlers();
     render(<OpsctlApprovalDialog />);

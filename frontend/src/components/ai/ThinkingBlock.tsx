@@ -82,7 +82,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({ block }: ThinkingBloc
   return (
     <div className="my-1.5 rounded-lg border border-primary/20 bg-primary/5 text-xs overflow-hidden">
       <button
-        className="flex items-center gap-2 w-full min-w-0 px-3 py-2 h-[34px] text-left hover:bg-primary/10 transition-colors"
+        className="flex items-center gap-2 w-full min-w-0 px-3 py-2 h-[34px] text-left hover:bg-primary/10 transition-colors select-none"
         onClick={() =>
           setExpansion((current) => ({
             status: block.status,
@@ -110,7 +110,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({ block }: ThinkingBloc
           className="border-t border-primary/15 px-3 py-2 max-h-64 overflow-auto"
           onScroll={handleContentScroll}
         >
-          <pre className="whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground/80 leading-relaxed italic">
+          <pre className="select-text whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground/80 leading-relaxed italic">
             {block.content}
           </pre>
         </div>

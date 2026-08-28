@@ -64,6 +64,28 @@ function errorConnection(over: Partial<ConnectionState> = {}): ConnectionState {
   };
 }
 
+function hostKeyConnection(): ConnectionState {
+  return {
+    connectionId: "conn-1",
+    assetId: 1,
+    assetName: "Server 1",
+    transport: "ssh",
+    password: "",
+    logs: [],
+    status: "host_key_verify",
+    currentStep: "auth",
+    hostKeyVerify: {
+      verifyId: "verify-1",
+      host: "server.example.com",
+      port: 22,
+      keyType: "ssh-ed25519",
+      fingerprint: "SHA256:new-fingerprint",
+      oldFingerprint: "SHA256:old-fingerprint",
+      isChanged: true,
+    },
+  };
+}
+
 beforeEach(() => {
   useTerminalStore.setState({ connections: {}, tabData: {}, sessionSync: {}, connectingAssetIds: new Set() });
   useAssetStore.setState({ assets: [] });
@@ -71,6 +93,14 @@ beforeEach(() => {
 });
 
 describe("ConnectionProgress MFA 挑战", () => {
+  it("主机与新旧指纹可由用户原生选中复制", () => {
+    useTerminalStore.setState({ connections: { "conn-1": hostKeyConnection() } });
+    render(<ConnectionProgress connectionId="conn-1" isTabActive isPaneActive />);
+
+    expect(screen.getByText("server.example.com:22").closest("div")).toHaveClass("select-text");
+    expect(screen.getByText("SHA256:new-fingerprint")).toHaveClass("select-text");
+    expect(screen.getByText("SHA256:old-fingerprint")).toHaveClass("select-text");
+  });
   it("标签与输入框正确关联,提示按服务器顺序渲染", () => {
     useTerminalStore.setState({ connections: { "conn-1": challengeConnection() } });
     render(<ConnectionProgress connectionId="conn-1" isTabActive isPaneActive />);

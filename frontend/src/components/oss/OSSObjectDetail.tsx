@@ -80,7 +80,7 @@ export function OSSObjectDetail({
 
       <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
         <div className="flex items-center gap-1">
-          <span className="min-w-0 flex-1 break-all font-mono text-muted-foreground">{object.key}</span>
+          <span className="min-w-0 flex-1 select-text break-all font-mono text-muted-foreground">{object.key}</span>
           <button
             type="button"
             className={iconButtonClass}
@@ -104,7 +104,7 @@ export function OSSObjectDetail({
           {rows.map(([label, value]) => (
             <div key={label} className="contents">
               <dt className="text-muted-foreground">{label}</dt>
-              <dd className="break-all text-right">{value}</dd>
+              <dd className="select-text break-all text-right">{value}</dd>
             </div>
           ))}
         </dl>

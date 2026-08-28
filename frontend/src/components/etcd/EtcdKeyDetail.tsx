@@ -409,7 +409,11 @@ export function EtcdKeyDetail({
               {i > 0 && <span className="text-muted-foreground/40">{seg.sep}</span>}
               <span
                 className={
-                  seg.isLast ? "font-semibold text-foreground" : i === 0 ? "text-warning" : "text-muted-foreground"
+                  seg.isLast
+                    ? "select-text font-semibold text-foreground"
+                    : i === 0
+                      ? "select-text text-warning"
+                      : "select-text text-muted-foreground"
                 }
               >
                 {seg.name}
@@ -631,7 +635,7 @@ function MetaCol({
   return (
     <div className="flex flex-col gap-0.5" data-testid={testId}>
       <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
-      <span className={`font-mono text-[12px] font-medium ${valueClass}`}>{value}</span>
+      <span className={`select-text font-mono text-[12px] font-medium ${valueClass}`}>{value}</span>
     </div>
   );
 }

@@ -71,7 +71,7 @@ export const ToolBlock = memo(function ToolBlock({ block }: ToolBlockProps) {
       }`}
     >
       <button
-        className="flex items-center gap-2 w-full min-w-0 px-3 py-2 h-[34px] text-left hover:bg-muted/50 transition-colors"
+        className="flex items-center gap-2 w-full min-w-0 px-3 py-2 h-[34px] text-left hover:bg-muted/50 transition-colors select-none"
         onClick={() => canExpand && setExpanded(!expanded)}
         disabled={!canExpand}
       >
@@ -109,7 +109,7 @@ export const ToolBlock = memo(function ToolBlock({ block }: ToolBlockProps) {
               <div className="text-[10px] uppercase tracking-wide text-muted-foreground/60 mb-1">
                 {t("toolBlock.arguments")}
               </div>
-              <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-foreground/70 leading-relaxed">
+              <pre className="select-text whitespace-pre-wrap break-all font-mono text-[11px] text-foreground/70 leading-relaxed">
                 {formatToolInput(block.toolInput)}
               </pre>
             </div>
@@ -123,7 +123,7 @@ export const ToolBlock = memo(function ToolBlock({ block }: ToolBlockProps) {
               )}
               <pre
                 data-testid="ai-tool-output"
-                className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground leading-relaxed"
+                className="select-text whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground leading-relaxed"
               >
                 {block.content}
               </pre>

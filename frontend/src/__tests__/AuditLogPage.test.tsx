@@ -1,4 +1,5 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AuditLogPage } from "@/components/audit/AuditLogPage";
@@ -40,5 +41,48 @@ describe("AuditLogPage result status", () => {
     expect(await screen.findByText("cp")).toBeInTheDocument();
     expect(screen.getByLabelText("audit.failed")).toBeInTheDocument();
     expect(screen.queryByLabelText("audit.success")).not.toBeInTheDocument();
+  });
+
+  it("lets users select audit data and detail payloads for keyboard copy", async () => {
+    vi.mocked(ListAuditLogs).mockResolvedValue({
+      items: [
+        {
+          ID: 2,
+          Source: "opsctl",
+          ToolName: "selectable-tool",
+          AssetID: 8,
+          AssetName: "selectable-asset",
+          Command: "echo selectable-command",
+          Request: '{"request":"selectable"}',
+          Result: '{"response":"selectable"}',
+          Error: "selectable-error",
+          Success: 0,
+          ConversationID: 0,
+          GrantSessionID: "",
+          SessionID: "selectable-session",
+          Decision: "deny",
+          DecisionSource: "policy_deny",
+          MatchedPattern: "selectable-pattern",
+          Createtime: 1,
+        },
+      ],
+      total: 1,
+    } as never);
+
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+
+    const tool = await screen.findByText("selectable-tool");
+    const row = tool.closest("tr");
+    expect(row?.parentElement).toHaveClass("select-text");
+
+    await user.click(within(row as HTMLTableRowElement).getByRole("button"));
+
+    const request = screen.getByText('{"request":"selectable"}');
+    const detail = request.closest('[role="dialog"]')?.querySelector(".select-text");
+    expect(detail).toBeInTheDocument();
+    expect(request).toHaveClass("select-text");
+    expect(screen.getByText('{"response":"selectable"}')).toHaveClass("select-text");
+    expect(screen.getByText("selectable-error")).toHaveClass("select-text");
   });
 });

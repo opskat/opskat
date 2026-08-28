@@ -116,6 +116,7 @@ describe("VNCPanel", () => {
     );
 
     expect(await screen.findByText("vnc.verifyServerTitle")).toBeInTheDocument();
+    expect(document.querySelector("code")).toHaveClass("select-text");
     fireEvent.click(screen.getByTestId("vnc-verify-approve"));
     expect(approveServer).toHaveBeenCalledTimes(1);
   });

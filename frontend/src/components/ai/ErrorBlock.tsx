@@ -25,9 +25,9 @@ export const ErrorBlock = memo(function ErrorBlock({ block }: { block: ContentBl
       <div className="flex items-start gap-2">
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
         <div className="min-w-0 flex-1 space-y-1">
-          <div className="font-medium text-destructive">{title}</div>
+          <div className="select-text font-medium text-destructive">{title}</div>
           {detail && (
-            <pre className="whitespace-pre-wrap break-words text-xs text-muted-foreground font-mono leading-relaxed m-0">
+            <pre className="select-text whitespace-pre-wrap break-words text-xs text-muted-foreground font-mono leading-relaxed m-0">
               {detail}
             </pre>
           )}

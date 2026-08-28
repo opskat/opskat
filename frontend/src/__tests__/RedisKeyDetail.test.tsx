@@ -101,7 +101,7 @@ describe("RedisKeyDetail", () => {
     render(<RedisKeyDetail tabId="query-10" />);
 
     const valueBox = screen.getByTestId("redis-string-value");
-    expect(valueBox).toHaveClass("overflow-auto", "whitespace-pre");
+    expect(valueBox).toHaveClass("overflow-auto", "whitespace-pre", "select-text");
     expect(valueBox).not.toHaveClass("break-all");
     expect(within(valueBox).getByText('"a"')).toHaveClass("text-syntax-string");
     expect(within(valueBox).getByText("1")).toHaveClass("text-syntax-number");
@@ -245,6 +245,31 @@ describe("RedisStreamViewer", () => {
     );
 
     expect(screen.getByRole("button", { name: "query.loadMore" })).toBeDisabled();
+  });
+
+  it("lets users select the expanded entry JSON while preserving clickable list rows", () => {
+    render(
+      <RedisStreamViewer
+        tabId="query-10"
+        t={(key) => key}
+        info={{
+          type: "stream",
+          ttl: -1,
+          size: 0,
+          total: 1,
+          value: [{ id: "1-0", fields: { name: "Ada" } }],
+          valueCursor: "1-0",
+          valueOffset: 1,
+          hasMoreValues: false,
+          loadingMore: false,
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByText("1-0"));
+    const json = screen.getAllByText(/"name": "Ada"/).find((node) => node.tagName === "PRE");
+    expect(json).toHaveClass("select-text");
+    expect(screen.getByText("1-0").parentElement).not.toHaveClass("select-text");
   });
 });
 

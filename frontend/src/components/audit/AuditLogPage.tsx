@@ -397,7 +397,7 @@ export function AuditLogPage() {
                   <th className="px-4 py-2 font-medium w-16"></th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="select-text">
                 {logs.length === 0 && !loading && (
                   <tr>
                     <td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">
@@ -524,7 +524,7 @@ export function AuditLogPage() {
             <DialogTitle>{t("audit.detail")}</DialogTitle>
           </DialogHeader>
           {detailLog && (
-            <div className="space-y-3 text-sm">
+            <div className="space-y-3 text-sm select-text">
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <span className="text-muted-foreground">{t("audit.toolName")}:</span>{" "}
@@ -569,7 +569,7 @@ export function AuditLogPage() {
               {detailLog.Command && (
                 <div>
                   <div className="text-muted-foreground mb-1">{t("audit.command")}</div>
-                  <pre className="bg-muted p-2 rounded text-xs font-mono whitespace-pre-wrap break-all">
+                  <pre className="bg-muted p-2 rounded text-xs font-mono whitespace-pre-wrap break-all select-text">
                     {detailLog.Command}
                   </pre>
                 </div>
@@ -578,7 +578,7 @@ export function AuditLogPage() {
               {detailLog.Request && (
                 <div>
                   <div className="text-muted-foreground mb-1">{t("audit.request")}</div>
-                  <pre className="bg-muted p-2 rounded text-xs font-mono whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
+                  <pre className="bg-muted p-2 rounded text-xs font-mono whitespace-pre-wrap break-all max-h-40 overflow-y-auto select-text">
                     {detailLog.Request}
                   </pre>
                 </div>
@@ -587,7 +587,7 @@ export function AuditLogPage() {
               {detailLog.Result && (
                 <div>
                   <div className="text-muted-foreground mb-1">{t("audit.response")}</div>
-                  <pre className="bg-muted p-2 rounded text-xs font-mono whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
+                  <pre className="bg-muted p-2 rounded text-xs font-mono whitespace-pre-wrap break-all max-h-40 overflow-y-auto select-text">
                     {detailLog.Result}
                   </pre>
                 </div>
@@ -596,7 +596,7 @@ export function AuditLogPage() {
               {detailLog.Error && (
                 <div>
                   <div className="text-muted-foreground mb-1">{t("audit.error")}</div>
-                  <pre className="bg-muted p-2 rounded text-xs font-mono whitespace-pre-wrap break-all text-destructive">
+                  <pre className="bg-muted p-2 rounded text-xs font-mono whitespace-pre-wrap break-all text-destructive select-text">
                     {detailLog.Error}
                   </pre>
                 </div>

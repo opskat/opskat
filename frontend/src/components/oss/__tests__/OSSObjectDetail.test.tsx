@@ -127,4 +127,20 @@ describe("OSSObjectDetail", () => {
     expect(screen.getByTestId("oss-detail-copy-key")).toHaveClass("cursor-pointer", "focus-visible:ring-1");
     expect(screen.getByTestId("oss-detail-close")).toHaveClass("cursor-pointer", "focus-visible:ring-1");
   });
+
+  it("lets users select the object key and metadata values", () => {
+    render(
+      <OSSObjectDetail
+        object={obj()}
+        onEnsureThumbnail={vi.fn()}
+        onShare={vi.fn()}
+        onDownload={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("docs/report.pdf")).toHaveClass("select-text");
+    expect(screen.getByText("STANDARD")).toHaveClass("select-text");
+  });
 });

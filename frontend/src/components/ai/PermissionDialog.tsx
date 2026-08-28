@@ -59,8 +59,8 @@ export function PermissionDialog({ suspended = false }: { suspended?: boolean })
           </AlertDialogTitle>
           <AlertDialogDescription asChild>
             <div className="space-y-2 overflow-y-auto flex-1 min-h-0">
-              <div className="text-sm font-medium text-foreground">{request.tool_name}</div>
-              <pre className="text-xs bg-muted p-2 rounded-md overflow-auto max-h-48 whitespace-pre-wrap break-all">
+              <div className="select-text text-sm font-medium text-foreground">{request.tool_name}</div>
+              <pre className="select-text text-xs bg-muted p-2 rounded-md overflow-auto max-h-48 whitespace-pre-wrap break-all">
                 {formatInput(request)}
               </pre>
             </div>

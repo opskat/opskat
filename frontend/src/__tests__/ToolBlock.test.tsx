@@ -1,9 +1,29 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { ToolBlock } from "@/components/ai/ToolBlock";
 
 describe("ToolBlock result status", () => {
+  it("allows selecting expanded arguments and output while keeping the disclosure button non-selectable", () => {
+    render(
+      <ToolBlock
+        block={{
+          type: "tool",
+          toolName: "exec",
+          toolInput: '{"command":"uptime"}',
+          content: "load average",
+          status: "completed",
+        }}
+      />
+    );
+
+    const trigger = screen.getByRole("button");
+    expect(trigger).toHaveClass("select-none");
+    fireEvent.click(trigger);
+    expect(screen.getByText(/"command": "uptime"/)).toHaveClass("select-text");
+    expect(screen.getByTestId("ai-tool-output")).toHaveClass("select-text");
+  });
+
   it("renders an error icon for a denied tool result instead of a success icon", () => {
     render(
       <ToolBlock

@@ -448,7 +448,9 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
                   <Fingerprint className="h-3.5 w-3.5" />
                   RSA SHA-256
                 </div>
-                <code className="block break-all font-mono text-xs text-foreground">{serverFingerprint}</code>
+                <code className="select-text block break-all font-mono text-xs text-foreground">
+                  {serverFingerprint}
+                </code>
               </div>
               <div className="mt-1 flex items-center gap-2.5">
                 <Button

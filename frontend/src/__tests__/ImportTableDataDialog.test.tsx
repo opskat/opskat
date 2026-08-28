@@ -262,7 +262,9 @@ describe("ImportTableDataDialog", () => {
     await walkCsvWizardToSummary(user);
     await user.click(screen.getByRole("button", { name: "query.importWizardStart" }));
 
-    expect(await screen.findByText(/^\[ERR\].*Incorrect datetime value/)).toBeInTheDocument();
+    const errorLine = await screen.findByText(/^\[ERR\].*Incorrect datetime value/);
+    expect(errorLine).toBeInTheDocument();
+    expect(errorLine.parentElement).toHaveClass("select-text");
     expect(screen.getByText("query.importError")).toBeInTheDocument();
     expect(screen.getByText("[IMP] Processed: 1, Added: 0, Updated: 0, Deleted: 0, Errors: 1")).toBeInTheDocument();
   });

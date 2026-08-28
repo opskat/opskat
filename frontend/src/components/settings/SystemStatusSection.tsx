@@ -24,19 +24,19 @@ function StatusEntryItem({ entry }: { entry: StatusEntry }) {
   const Icon = config.icon;
 
   return (
-    <div className={`rounded-md border p-3 ${config.bg}`}>
+    <div className={`select-text rounded-md border p-3 ${config.bg}`}>
       <div className="flex items-center gap-2 cursor-pointer" onClick={() => entry.detail && setExpanded(!expanded)}>
         <Icon className={`h-4 w-4 shrink-0 ${config.color}`} />
         <span className="text-xs font-medium text-muted-foreground px-1.5 py-0.5 rounded bg-muted">{entry.source}</span>
         <span className="text-sm flex-1">{entry.message}</span>
         {entry.detail && (
-          <button className="text-muted-foreground hover:text-foreground">
+          <button className="select-none text-muted-foreground hover:text-foreground">
             {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
           </button>
         )}
       </div>
       {expanded && entry.detail && (
-        <pre className="mt-2 text-xs text-muted-foreground bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all">
+        <pre className="select-text mt-2 text-xs text-muted-foreground bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all">
           {entry.detail}
         </pre>
       )}

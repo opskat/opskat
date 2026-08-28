@@ -51,6 +51,15 @@ describe("ApprovalBlock", () => {
     vi.clearAllMocks();
   });
 
+  it("命令和展开详情可选中复制，但 summary 仍不可选", () => {
+    render(<ApprovalBlock block={cpBlock()} />);
+
+    expect(screen.getByTestId("ai-approval-command")).toHaveClass("select-text");
+    const summary = screen.getByText("ai.approvalTransferDetail");
+    expect(summary).toHaveClass("select-none");
+    expect(screen.getByText(/upload \/tmp\/payload/)).toHaveClass("select-text");
+  });
+
   it("renders a cp approval with its remote path as the subject", () => {
     render(<ApprovalBlock block={cpBlock()} />);
 

@@ -47,7 +47,7 @@ export const RetryBanner = memo(function RetryBanner({ status }: { status: ChatM
     <div
       role="status"
       aria-live="polite"
-      className="flex flex-col gap-0.5 rounded-md border border-warning/30 bg-warning/15 px-2.5 py-1 text-xs text-warning"
+      className="select-text flex flex-col gap-0.5 rounded-md border border-warning/30 bg-warning/15 px-2.5 py-1 text-xs text-warning"
     >
       <div className="flex items-center gap-1.5">
         <RotateCcw className="h-3 w-3 animate-spin-slow" aria-hidden="true" />
@@ -60,7 +60,7 @@ export const RetryBanner = memo(function RetryBanner({ status }: { status: ChatM
         {classified && <span className="font-medium">{classified.message}</span>}
       </div>
       {status.cause && (
-        <pre className="whitespace-pre-wrap break-words text-[11px] font-mono leading-relaxed m-0 opacity-80">
+        <pre className="select-text whitespace-pre-wrap break-words text-[11px] font-mono leading-relaxed m-0 opacity-80">
           {status.cause}
         </pre>
       )}

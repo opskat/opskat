@@ -190,7 +190,7 @@ export function RedisStringEditor({ tabId, t }: { tabId: string; t: (key: string
         <div className="group/str relative">
           <pre
             data-testid="redis-string-value"
-            className="max-h-[calc(100vh-260px)] min-h-24 overflow-auto whitespace-pre rounded border bg-muted/50 p-3 font-mono text-xs leading-5"
+            className="max-h-[calc(100vh-260px)] min-h-24 select-text overflow-auto whitespace-pre rounded border bg-muted/50 p-3 font-mono text-xs leading-5"
           >
             {jsonTokens
               ? jsonTokens.map((token, index) =>

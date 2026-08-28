@@ -15,7 +15,7 @@ export const AgentBlock = memo(function AgentBlock({ block }: AgentBlockProps) {
   return (
     <div className="rounded-lg border bg-muted/30 my-1">
       <button
-        className="flex items-center gap-2 w-full px-3 py-2 h-[34px] text-left text-sm hover:bg-muted/50 rounded-t-lg"
+        className="flex items-center gap-2 w-full px-3 py-2 h-[34px] text-left text-sm hover:bg-muted/50 rounded-t-lg select-none"
         onClick={() => setExpanded(!expanded)}
       >
         {expanded ? (
@@ -30,7 +30,7 @@ export const AgentBlock = memo(function AgentBlock({ block }: AgentBlockProps) {
 
       {expanded && (
         <div className="px-3 pb-2 space-y-1">
-          {block.agentTask && <p className="text-xs text-muted-foreground">{block.agentTask}</p>}
+          {block.agentTask && <p className="select-text text-xs text-muted-foreground">{block.agentTask}</p>}
 
           {block.childBlocks?.map((child, idx) => (
             <div key={idx} className="ml-2 border-l-2 border-primary/20 pl-2">
@@ -39,7 +39,9 @@ export const AgentBlock = memo(function AgentBlock({ block }: AgentBlockProps) {
           ))}
 
           {block.status === "completed" && block.content && (
-            <div className="text-xs bg-background rounded p-2 mt-1 whitespace-pre-wrap">{block.content}</div>
+            <div className="select-text text-xs bg-background rounded p-2 mt-1 whitespace-pre-wrap">
+              {block.content}
+            </div>
           )}
         </div>
       )}

@@ -181,7 +181,7 @@ export function TerminalServerStatusDialog({ open, sessionId, onOpenChange }: Te
         {/* 内容区（内部滚动） */}
         <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
           {error && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            <div className="select-text rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
               {t("terminal.serverStatus.error")}: {error}
             </div>
           )}
@@ -407,7 +407,7 @@ function InfoRow({
   return (
     <div className={className}>
       <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</dt>
-      <dd className={`mt-0.5 break-all text-sm ${mono ? "font-mono" : ""}`}>{value}</dd>
+      <dd className={`select-text mt-0.5 break-all text-sm ${mono ? "font-mono" : ""}`}>{value}</dd>
     </div>
   );
 }

@@ -8,6 +8,7 @@ import {
   GetAppVersion,
   GetDataDir,
   GetOpsctlInstallDir,
+  GetSkillPreview,
   UninstallSkill,
 } from "../../wailsjs/go/system/System";
 import { ListAIProviders } from "../../wailsjs/go/ai/AI";
@@ -35,6 +36,7 @@ describe("AISettingsSection", () => {
     vi.mocked(GetOpsctlInstallDir).mockResolvedValue("");
     vi.mocked(GetDataDir).mockResolvedValue("");
     vi.mocked(GetAppVersion).mockResolvedValue("dev");
+    vi.mocked(GetSkillPreview).mockResolvedValue("name: opsctl\ndescription: diagnostics");
   });
 
   it("opens the GitHub Releases page for manual opsctl CLI install", async () => {
@@ -43,6 +45,22 @@ describe("AISettingsSection", () => {
     await userEvent.click(screen.getByRole("button", { name: /GitHub Releases/i }));
 
     expect(BrowserOpenURL).toHaveBeenCalledWith("https://github.com/opskat/opskat/releases");
+  });
+
+  it("allows users to select the rendered CLI paths and skill preview", async () => {
+    vi.mocked(DetectOpsctl).mockResolvedValue({
+      installed: true,
+      path: "/usr/local/bin/opsctl",
+      version: "v1.2.3",
+      embedded: false,
+    });
+    vi.mocked(GetDataDir).mockResolvedValue("/var/lib/opskat");
+    render(<AISettingsSection />);
+
+    expect(await screen.findByText("/usr/local/bin/opsctl")).toHaveClass("select-text");
+    expect(await screen.findByText("/var/lib/opskat")).toHaveClass("select-text");
+    await userEvent.click(screen.getByRole("button", { name: "integration.skillPreview" }));
+    expect(await screen.findByText(/description: diagnostics/)).toHaveClass("select-text");
   });
 
   it("marks the skill card installed when only a standalone target is installed", async () => {

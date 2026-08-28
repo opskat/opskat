@@ -332,7 +332,7 @@ export function UpdateSection() {
             {updateInfo.releaseNotes && (
               <div className="space-y-1">
                 <p className="text-xs text-muted-foreground">{t("appUpdate.releaseNotes")}</p>
-                <pre className="text-xs bg-muted p-2 rounded-md overflow-auto max-h-[200px] whitespace-pre-wrap">
+                <pre className="select-text text-xs bg-muted p-2 rounded-md overflow-auto max-h-[200px] whitespace-pre-wrap">
                   {updateInfo.releaseNotes}
                 </pre>
               </div>

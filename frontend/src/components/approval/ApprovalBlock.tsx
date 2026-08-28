@@ -73,7 +73,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
         {item.asset_name && <span className="text-[11px] text-warning">{item.asset_name}</span>}
       </div>
       <div className="rounded bg-warning/5 px-2 py-[5px]">
-        <code className="block font-mono text-[10px] text-muted-foreground whitespace-pre-wrap break-all">
+        <code className="select-text block font-mono text-[10px] text-muted-foreground whitespace-pre-wrap break-all">
           {item.command}
         </code>
       </div>
@@ -179,7 +179,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                   <div className="rounded-md bg-warning/5 px-2.5 py-2">
                     <code
                       data-testid="ai-approval-command"
-                      className="block font-mono text-[11px] text-muted-foreground whitespace-pre-wrap break-all"
+                      className="select-text block font-mono text-[11px] text-muted-foreground whitespace-pre-wrap break-all"
                     >
                       {item.command}
                     </code>
@@ -208,7 +208,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
       {kind === "grant" && block.approvalDescription && (
         <div className="flex gap-1.5">
           <span className="text-[11px] font-medium text-warning shrink-0">{t("ai.approvalReasonLabel")}</span>
-          <span className="text-[11px] text-muted-foreground">{block.approvalDescription}</span>
+          <span className="select-text text-[11px] text-muted-foreground">{block.approvalDescription}</span>
         </div>
       )}
 
@@ -348,7 +348,7 @@ function detailSummaryKey(type: string): string {
 
 function DetailPre({ text }: { text: string }) {
   return (
-    <pre className="mt-1.5 max-h-48 overflow-auto rounded bg-warning/5 px-2 py-1.5 font-mono whitespace-pre-wrap break-all">
+    <pre className="select-text mt-1.5 max-h-48 overflow-auto rounded bg-warning/5 px-2 py-1.5 font-mono whitespace-pre-wrap break-all">
       {text}
     </pre>
   );

@@ -35,7 +35,7 @@ function PropertiesBody({ sessionId, target }: { sessionId: string; target: Perm
   const row = (label: string, value?: string | number | null) => (
     <div className="grid grid-cols-[7rem_1fr] gap-2 py-1 text-sm">
       <div className="text-muted-foreground">{label}</div>
-      <div className="break-all font-mono text-xs">{value ?? "-"}</div>
+      <div className="select-text break-all font-mono text-xs">{value ?? "-"}</div>
     </div>
   );
 
@@ -45,9 +45,9 @@ function PropertiesBody({ sessionId, target }: { sessionId: string; target: Perm
     <div className="space-y-3">
       <div className="flex items-center gap-2 rounded-md bg-muted/40 p-2">
         {target.entry.isDir ? <Folder className="h-4 w-4 text-primary" /> : <File className="h-4 w-4" />}
-        <div className="min-w-0 truncate font-medium">{target.entry.name}</div>
+        <div className="min-w-0 select-text truncate font-medium">{target.entry.name}</div>
       </div>
-      {error && <div className="rounded bg-destructive/10 p-2 text-xs text-destructive">{error}</div>}
+      {error && <div className="select-text rounded bg-destructive/10 p-2 text-xs text-destructive">{error}</div>}
       {!error && !props && (
         <div className="py-4 text-center text-sm text-muted-foreground">{t("sftp.properties.loading")}</div>
       )}

@@ -224,11 +224,11 @@ function IntegrationSection() {
               <div className="grid gap-1.5 text-sm">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">{t("integration.version")}</span>
-                  <span className="font-mono text-xs">{opsctlInfo.version || "unknown"}</span>
+                  <span className="select-text font-mono text-xs">{opsctlInfo.version || "unknown"}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">{t("integration.path")}</span>
-                  <span className="font-mono text-xs truncate max-w-[300px]">{opsctlInfo.path}</span>
+                  <span className="select-text font-mono text-xs truncate max-w-[300px]">{opsctlInfo.path}</span>
                 </div>
               </div>
               {appVersion && opsctlInfo.version && opsctlInfo.version !== appVersion && (
@@ -309,7 +309,7 @@ function IntegrationSection() {
           <div className="space-y-1">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">{t("integration.dataDir")}</span>
-              <span className="font-mono text-xs truncate max-w-[300px]">{dataDir}</span>
+              <span className="select-text font-mono text-xs truncate max-w-[300px]">{dataDir}</span>
             </div>
             <p className="text-xs text-muted-foreground">{t("integration.dataDirDesc")}</p>
           </div>
@@ -340,7 +340,9 @@ function IntegrationSection() {
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0">
                 <p className="text-sm font-medium">{t("integration.skillUniversalTitle")}</p>
-                <p className="text-xs text-muted-foreground font-mono truncate">{skillInfo?.universalPath ?? ""}</p>
+                <p className="select-text text-xs text-muted-foreground font-mono truncate">
+                  {skillInfo?.universalPath ?? ""}
+                </p>
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 {skillInfo?.universalInstalled && (
@@ -416,7 +418,7 @@ function IntegrationSection() {
                   <div key={s.key} className="flex items-center justify-between gap-2 text-sm">
                     <div className="min-w-0">
                       <p className="font-medium">{s.name}</p>
-                      <p className="text-xs text-muted-foreground font-mono truncate">{s.path}</p>
+                      <p className="select-text text-xs text-muted-foreground font-mono truncate">{s.path}</p>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       {s.installed && (
@@ -497,7 +499,7 @@ function IntegrationSection() {
           </div>
 
           {showPreview && (
-            <pre className="text-xs bg-muted p-3 rounded-md overflow-auto max-h-[300px] whitespace-pre-wrap">
+            <pre className="select-text text-xs bg-muted p-3 rounded-md overflow-auto max-h-[300px] whitespace-pre-wrap">
               {skillPreview}
             </pre>
           )}

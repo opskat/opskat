@@ -25,7 +25,7 @@ export function K8sCodeBlock({ code, title, maxHeight = "max-h-96", defaultColla
       </button>
       {!collapsed && (
         <pre
-          className={`bg-muted/50 rounded-lg p-3 text-xs font-mono overflow-y-auto whitespace-pre-wrap mt-3 ${maxHeight}`}
+          className={`select-text bg-muted/50 rounded-lg p-3 text-xs font-mono overflow-y-auto whitespace-pre-wrap mt-3 ${maxHeight}`}
         >
           {code}
         </pre>

@@ -216,7 +216,7 @@ function StreamEntryJsonViewer({
             </button>
           </div>
         </div>
-        <pre className="whitespace-pre-wrap break-all rounded border bg-muted/50 p-3 font-mono text-xs">
+        <pre className="select-text whitespace-pre-wrap break-all rounded border bg-muted/50 p-3 font-mono text-xs">
           {displayValue}
         </pre>
       </div>

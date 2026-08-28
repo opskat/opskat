@@ -265,10 +265,10 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
         />
       ) : (
         <div className="rounded-md bg-muted p-2 max-h-[150px] overflow-auto">
-          <code className="text-xs font-mono whitespace-pre-wrap break-all">{item.command}</code>
+          <code className="select-text text-xs font-mono whitespace-pre-wrap break-all">{item.command}</code>
         </div>
       )}
-      {item.detail && <div className="text-xs text-muted-foreground font-mono">{item.detail}</div>}
+      {item.detail && <div className="select-text text-xs text-muted-foreground font-mono">{item.detail}</div>}
     </div>
   );
 
@@ -352,7 +352,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
             </DialogHeader>
 
             <div className="space-y-2 overflow-y-auto flex-1 min-h-0">
-              {current.description && <div className="text-sm font-medium">{current.description}</div>}
+              {current.description && <div className="select-text text-sm font-medium">{current.description}</div>}
               {isBatchCollapsed ? (
                 // 既有的折叠交互（与 ApprovalBlock.tsx 同一套 <details>/<summary>）：摘要行
                 // 常驻可见，具体主体折叠在里面，展开后就是普普通通的列表——不是新的授权范围（D17）。
