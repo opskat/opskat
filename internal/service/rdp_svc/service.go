@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -80,6 +81,7 @@ type session struct {
 	clipboardDownloadMu sync.Mutex
 	fileContents        chan fileContentsResponse
 	clipboardTempDir    string
+	startedAt           time.Time
 }
 
 type fileContentsResponse struct {
@@ -167,6 +169,7 @@ func (s *Service) Connect(ctx context.Context, req ConnectRequest) (string, erro
 		streamer:     newFrameStreamer(),
 		done:         make(chan struct{}),
 		fileContents: make(chan fileContentsResponse, 1),
+		startedAt:    time.Now(),
 	}
 	s.mu.Lock()
 	s.sessions[id] = sess
@@ -483,6 +486,28 @@ func (s *Service) Close(sessionID string) error {
 		return nil
 	}
 	return sess.client.Close()
+}
+
+type SessionActivity struct {
+	SessionID string    `json:"sessionId"`
+	AssetID   int64     `json:"assetId"`
+	StartedAt time.Time `json:"startedAt"`
+}
+
+func (s *Service) ActiveSessions() []SessionActivity {
+	s.mu.Lock()
+	activities := make([]SessionActivity, 0, len(s.sessions))
+	for _, sess := range s.sessions {
+		select {
+		case <-sess.client.Done():
+			continue
+		default:
+		}
+		activities = append(activities, SessionActivity{SessionID: sess.id, AssetID: sess.assetID, StartedAt: sess.startedAt})
+	}
+	s.mu.Unlock()
+	sort.Slice(activities, func(i, j int) bool { return activities[i].SessionID < activities[j].SessionID })
+	return activities
 }
 
 func (s *Service) closeSession(sess *session) {

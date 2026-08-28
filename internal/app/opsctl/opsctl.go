@@ -91,12 +91,27 @@ func (o *Opsctl) Cleanup() {
 // interrupted by an application shutdown. Idle and half-open connections are
 // deliberately excluded.
 func (o *Opsctl) ActiveTaskCount() int {
+	return len(activeTasks(o))
+}
+
+// ActiveTasks returns one stable kind per authenticated request without
+// widening the Wails-bound Opsctl method surface.
+func ActiveTasks(o *Opsctl) []string { return activeTasks(o) }
+
+func activeTasks(o *Opsctl) []string {
+	tasks := make([]string, 0)
 	count := 0
 	if o.proxyServer != nil {
-		count += o.proxyServer.ActiveRequests()
+		count = o.proxyServer.ActiveRequests()
+		for range count {
+			tasks = append(tasks, "operation")
+		}
 	}
 	if o.approvalServer != nil {
-		count += o.approvalServer.ActiveRequests()
+		count = o.approvalServer.ActiveRequests()
+		for range count {
+			tasks = append(tasks, "approval")
+		}
 	}
-	return count
+	return tasks
 }

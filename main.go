@@ -23,6 +23,7 @@ import (
 	"github.com/opskat/opskat/internal/app/opsctl"
 	"github.com/opskat/opskat/internal/app/oss"
 	"github.com/opskat/opskat/internal/app/query"
+	quitapp "github.com/opskat/opskat/internal/app/quit"
 	"github.com/opskat/opskat/internal/app/rdp"
 	"github.com/opskat/opskat/internal/app/redis"
 	"github.com/opskat/opskat/internal/app/serial"
@@ -266,8 +267,31 @@ func main() {
 			if forceQuit.Load() {
 				return false
 			}
-			if active := opsctlB.ActiveTaskCount() + aiB.ActiveTaskCount(); active > 0 {
-				wailsRuntime.EventsEmit(wctx, "app:quit-confirm", map[string]any{"active_tasks": active})
+			var sessions []quitapp.Session
+			for _, item := range sshMgr.ActiveSessionDetails() {
+				sessions = append(sessions, quitapp.Session{Kind: "terminal", SessionID: item.SessionID, AssetID: item.AssetID, StartedAt: item.StartedAt})
+			}
+			for _, item := range localMgr.ActiveSessions() {
+				sessions = append(sessions, quitapp.Session{Kind: "terminal", SessionID: item.SessionID, AssetID: item.AssetID, StartedAt: item.StartedAt})
+			}
+			for _, item := range serialMgr.ActiveSessions() {
+				sessions = append(sessions, quitapp.Session{Kind: "terminal", SessionID: item.SessionID, AssetID: item.AssetID, StartedAt: item.StartedAt})
+			}
+			for _, item := range rdp.ActiveSessions(rdpB) {
+				sessions = append(sessions, quitapp.Session{Kind: "rdp", SessionID: item.SessionID, AssetID: item.AssetID, StartedAt: item.StartedAt})
+			}
+			for _, item := range vncMgr.ActiveSessions() {
+				sessions = append(sessions, quitapp.Session{Kind: "vnc", SessionID: item.SessionID, AssetID: item.AssetID, StartedAt: item.StartedAt})
+			}
+			activities := quitapp.BuildSessionActivities(wctx, sessions, asset_repo.Asset().Find)
+			for _, convID := range ai.ActiveTasks(aiB) {
+				activities = append(activities, quitapp.Activity{Kind: "ai", Category: "running", RefID: convID})
+			}
+			for _, taskKind := range opsctl.ActiveTasks(opsctlB) {
+				activities = append(activities, quitapp.Activity{Kind: "opsctl", Category: "running", Detail: taskKind})
+			}
+			if len(activities) > 0 {
+				wailsRuntime.EventsEmit(wctx, "app:quit-confirm", map[string]any{"activities": activities})
 				return true
 			}
 			aiB.DrainAIFlushAck()

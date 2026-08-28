@@ -194,6 +194,22 @@ func (a *AI) stopEntry(e *runnerEntry) {
 		case <-time.After(3 * time.Second):
 		}
 	}
+	releaseRunnerEntry(e)
+}
+
+// finishRunner removes a naturally completed runner without deleting a newer
+// turn that may already have replaced it for the same conversation.
+func (a *AI) finishRunner(convID int64, e *runnerEntry) {
+	if !a.runners.CompareAndDelete(convID, e) {
+		return
+	}
+	releaseRunnerEntry(e)
+}
+
+func releaseRunnerEntry(e *runnerEntry) {
+	if e == nil {
+		return
+	}
 	if e.sshCache != nil {
 		if err := e.sshCache.Close(); err != nil {
 			logger.Default().Warn("close SSH cache", zap.Error(err))
@@ -565,7 +581,10 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 	}
 
 	go func() {
-		defer close(entry.done)
+		defer func() {
+			close(entry.done)
+			a.finishRunner(convID, entry)
+		}()
 		translator := runner.NewStreamTranslatorWithContext(chatCtx)
 		for ev := range events {
 			translator.Translate(ev, onEvent)

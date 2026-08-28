@@ -77,9 +77,25 @@
     "deleteConfirmDesc": "Are you sure you want to delete forward config \"{{name}}\"? This cannot be undone."
   },
   "appQuit": {
-    "runningTitle": "Tasks are still running",
-    "runningDescription": "{{count}} task(s) are still running. Quitting now will interrupt them. Quit anyway?",
-    "quitAnyway": "Quit Anyway"
+    "activityTitle": "Active tasks and sessions remain",
+    "activitySummary": "{{running}} task(s) running and {{connections}} session(s) connected",
+    "runningGroup": "Running · cannot continue after quitting",
+    "connectionGroup": "Connected · will be disconnected on quit",
+    "runningStatus": "Running",
+    "connectedStatus": "Connected",
+    "quitActivities": "Quit and interrupt {{count}} activities",
+    "aiTask": "AI task {{number}}",
+    "opsctlTask": "opsctl task {{number}}",
+    "opsctlApproval": "Waiting for desktop approval",
+    "opsctlOperation": "Running a remote command or file transfer",
+    "conversationDetail": "Conversation {{id}}",
+    "kind": {
+      "ai": "AI",
+      "opsctl": "opsctl",
+      "terminal": "Terminal",
+      "rdp": "RDP",
+      "vnc": "VNC"
+    }
   },
   "action": {
     "confirm": "Confirm",

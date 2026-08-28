@@ -75,17 +75,19 @@ func (sc *sharedClient) release() {
 
 // Session 表示一个活跃的 SSH 终端会话
 type Session struct {
-	ID       string
-	AssetID  int64
-	shared   *sharedClient
-	session  *ssh.Session
-	stdin    io.WriteCloser
-	stdout   io.Reader
-	mu       sync.Mutex
-	closed   bool
-	onData   func(data []byte)      // 终端输出回调
-	onClosed func(sessionID string) // 会话关闭回调
-	onSync   func(sessionID string, state DirectorySyncState)
+	ID          string
+	AssetID     int64
+	shared      *sharedClient
+	session     *ssh.Session
+	stdin       io.WriteCloser
+	stdout      io.Reader
+	mu          sync.Mutex
+	closed      bool
+	onData      func(data []byte)      // 终端输出回调
+	onClosed    func(sessionID string) // 会话关闭回调
+	onSync      func(sessionID string, state DirectorySyncState)
+	interactive bool
+	startedAt   time.Time
 
 	// shellPath / shellType are detected lazily by EnableSync. Empty means no
 	// sync attempt has needed shell detection yet; "unsupported" means the
@@ -442,14 +444,16 @@ func (m *Manager) createSession(shared *sharedClient, assetID int64, cols, rows 
 	sessionID := m.nextSessionID()
 
 	sess := &Session{
-		ID:       sessionID,
-		AssetID:  assetID,
-		shared:   shared,
-		session:  session,
-		stdin:    stdin,
-		stdout:   stdout,
-		onData:   func(data []byte) { onData(sessionID, data) },
-		onClosed: onClosed,
+		ID:          sessionID,
+		AssetID:     assetID,
+		shared:      shared,
+		session:     session,
+		stdin:       stdin,
+		stdout:      stdout,
+		onData:      func(data []byte) { onData(sessionID, data) },
+		onClosed:    onClosed,
+		interactive: true,
+		startedAt:   time.Now(),
 	}
 	if onSync != nil {
 		sess.onSync = func(_ string, state DirectorySyncState) { onSync(sessionID, state) }
@@ -952,6 +956,26 @@ func (m *Manager) GetSession(id string) (*Session, bool) {
 		return nil, false
 	}
 	return v.(*Session), true
+}
+
+type SessionActivity struct {
+	SessionID string    `json:"sessionId"`
+	AssetID   int64     `json:"assetId"`
+	StartedAt time.Time `json:"startedAt"`
+}
+
+// ActiveSessionDetails returns interactive terminal sessions, excluding SFTP-only sessions.
+func (m *Manager) ActiveSessionDetails() []SessionActivity {
+	activities := make([]SessionActivity, 0)
+	m.sessions.Range(func(_, value any) bool {
+		sess, ok := value.(*Session)
+		if ok && sess != nil && sess.interactive && !sess.IsClosed() {
+			activities = append(activities, SessionActivity{SessionID: sess.ID, AssetID: sess.AssetID, StartedAt: sess.startedAt})
+		}
+		return true
+	})
+	sort.Slice(activities, func(i, j int) bool { return activities[i].SessionID < activities[j].SessionID })
+	return activities
 }
 
 // ListActiveSessionIDsByAsset 返回指定资产当前仍处于活跃态的 SSH 会话 ID。

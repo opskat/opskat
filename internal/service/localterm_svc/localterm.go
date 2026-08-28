@@ -3,6 +3,7 @@ package localterm_svc
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -51,8 +52,9 @@ type Session struct {
 	closedCh      chan struct{}
 	readerReadyCh chan struct{}
 
-	onData   func(data []byte)
-	onClosed func(sessionID string)
+	onData    func(data []byte)
+	onClosed  func(sessionID string)
+	startedAt time.Time
 }
 
 // Write 向 PTY 写入用户输入。
@@ -156,6 +158,7 @@ func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
 	sess := &Session{
 		ID: sessionID, AssetID: cfg.AssetID, proc: proc,
 		shell: cfg.Shell, args: cfg.Args, cwd: cfg.Cwd,
+		startedAt: time.Now(),
 	}
 	m.sessions.Store(sessionID, sess)
 	m.watchCallbackSetup(sess, callbackSetupGracePeriod)
@@ -299,6 +302,25 @@ func (m *Manager) GetSession(sessionID string) (*Session, bool) {
 
 // Disconnect 断开会话。
 func (m *Manager) Disconnect(sessionID string) { m.closeSession(sessionID) }
+
+type SessionActivity struct {
+	SessionID string    `json:"sessionId"`
+	AssetID   int64     `json:"assetId"`
+	StartedAt time.Time `json:"startedAt"`
+}
+
+func (m *Manager) ActiveSessions() []SessionActivity {
+	activities := make([]SessionActivity, 0)
+	m.sessions.Range(func(_, value any) bool {
+		sess, ok := value.(*Session)
+		if ok && sess != nil && !sess.IsClosed() {
+			activities = append(activities, SessionActivity{SessionID: sess.ID, AssetID: sess.AssetID, StartedAt: sess.startedAt})
+		}
+		return true
+	})
+	sort.Slice(activities, func(i, j int) bool { return activities[i].SessionID < activities[j].SessionID })
+	return activities
+}
 
 // CloseAll 关闭所有会话。
 func (m *Manager) CloseAll() {

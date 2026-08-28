@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/google/uuid"
@@ -39,6 +41,7 @@ type Session struct {
 	onEnd     func()
 	startOnce sync.Once
 	closeOnce sync.Once
+	startedAt time.Time
 }
 
 func NewManager(repo asset_repo.AssetRepo) *Manager {
@@ -97,6 +100,7 @@ func (m *Manager) connectVNC(ctx context.Context, asset *asset_entity.Asset) (*S
 		FileSSHAssetID: cfg.FileSSHAssetID,
 		assetID:        asset.ID,
 		conn:           conn,
+		startedAt:      time.Now(),
 	}
 	m.store(session)
 	return session, nil
@@ -106,6 +110,23 @@ func (m *Manager) store(session *Session) {
 	m.mu.Lock()
 	m.sessions[session.ID] = session
 	m.mu.Unlock()
+}
+
+type SessionActivity struct {
+	SessionID string    `json:"sessionId"`
+	AssetID   int64     `json:"assetId"`
+	StartedAt time.Time `json:"startedAt"`
+}
+
+func (m *Manager) ActiveSessions() []SessionActivity {
+	m.mu.Lock()
+	activities := make([]SessionActivity, 0, len(m.sessions))
+	for _, session := range m.sessions {
+		activities = append(activities, SessionActivity{SessionID: session.ID, AssetID: session.assetID, StartedAt: session.startedAt})
+	}
+	m.mu.Unlock()
+	sort.Slice(activities, func(i, j int) bool { return activities[i].SessionID < activities[j].SessionID })
+	return activities
 }
 
 // SetCallbacks 挂上 Go→FE 的数据/关闭回调,并启动读 pump(幂等)。sessionID 不存在返回错误。

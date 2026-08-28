@@ -77,9 +77,25 @@
     "deleteConfirmDesc": "确定要删除转发配置 \"{{name}}\" 吗？此操作不可撤销。"
   },
   "appQuit": {
-    "runningTitle": "仍有任务正在运行",
-    "runningDescription": "有 {{count}} 个任务正在运行。立即退出会中断这些任务，是否仍然退出？",
-    "quitAnyway": "仍然退出"
+    "activityTitle": "仍有活动任务和会话",
+    "activitySummary": "{{running}} 个任务正在执行，{{connections}} 个会话保持连接",
+    "runningGroup": "正在执行 · 退出后无法继续",
+    "connectionGroup": "保持连接 · 退出后将断开",
+    "runningStatus": "正在执行",
+    "connectedStatus": "已连接",
+    "quitActivities": "退出并中断 {{count}} 项活动",
+    "aiTask": "AI 任务 {{number}}",
+    "opsctlTask": "opsctl 任务 {{number}}",
+    "opsctlApproval": "正在等待桌面端审批",
+    "opsctlOperation": "正在执行远程命令或文件传输",
+    "conversationDetail": "会话 {{id}}",
+    "kind": {
+      "ai": "AI",
+      "opsctl": "opsctl",
+      "terminal": "终端",
+      "rdp": "RDP",
+      "vnc": "VNC"
+    }
   },
   "action": {
     "confirm": "确认",

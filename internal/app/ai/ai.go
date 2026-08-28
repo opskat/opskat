@@ -5,6 +5,7 @@ package ai
 
 import (
 	"context"
+	"sort"
 	"sync"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
@@ -99,12 +100,21 @@ func (a *AI) Cleanup() {}
 
 // ActiveTaskCount 返回仍在运行、退出后会丢失当前进度的 AI 生成任务数。
 func (a *AI) ActiveTaskCount() int {
-	count := 0
-	a.runners.Range(func(_, _ any) bool {
-		count++
+	return len(activeTasks(a))
+}
+
+// ActiveTasks returns the conversation IDs whose current AI turn is still in
+// progress without widening the Wails-bound AI method surface.
+func ActiveTasks(a *AI) []int64 { return activeTasks(a) }
+
+func activeTasks(a *AI) []int64 {
+	ids := make([]int64, 0)
+	a.runners.Range(func(key, _ any) bool {
+		ids = append(ids, key.(int64))
 		return true
 	})
-	return count
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
 }
 
 // WaitAIFlushAck 暴露给 main.go 的 OnBeforeClose，等待前端 flush 完成。

@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, lazy, Suspense } from "react"
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { ThemeProvider } from "@/components/theme-provider";
-import { ConfirmDialog, TooltipProvider, Toaster } from "@opskat/ui";
+import { TooltipProvider, Toaster } from "@opskat/ui";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { AssetTree } from "@/components/layout/AssetTree";
 import { MainPanel } from "@/components/layout/MainPanel";
@@ -17,6 +17,7 @@ import { SideTabList } from "@/components/layout/SideTabList";
 import { PermissionDialog } from "@/components/ai/PermissionDialog";
 import { OpsctlApprovalDialog } from "@/components/approval/OpsctlApprovalDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { ActiveTasksQuitDialog, type QuitActivity } from "@/components/ActiveTasksQuitDialog";
 
 // 资产表单/分组对话框：用户点"添加/编辑"才会打开，从首屏 bundle 拆出。
 const AssetForm = lazy(() => import("@/components/asset/AssetForm").then((m) => ({ default: m.AssetForm })));
@@ -32,20 +33,43 @@ import { bootstrapExtensions } from "@/extension/init";
 import { openAssetConnection } from "@/lib/openAsset";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useExternalEditStore } from "@/stores/externalEditStore";
+import { useAIStore } from "@/stores/aiStore";
 import { asset_entity, group_entity } from "../wailsjs/go/models";
 import { EventsOn, WindowToggleMaximise } from "../wailsjs/runtime/runtime";
 import { ConfirmQuit } from "../wailsjs/go/system/System";
 
 function App() {
   const { t } = useTranslation();
-  const [quitTaskCount, setQuitTaskCount] = useState<number | null>(null);
+  const [quitActivities, setQuitActivities] = useState<QuitActivity[] | null>(null);
 
   useEffect(() => {
-    const cancel = EventsOn("app:quit-confirm", (payload: { active_tasks?: number }) => {
-      setQuitTaskCount(Math.max(1, payload?.active_tasks ?? 1));
-    });
+    const cancel = EventsOn(
+      "app:quit-confirm",
+      (payload: { activities?: Array<QuitActivity & { ref_id?: number }> }) => {
+        const conversations = useAIStore.getState().conversations;
+        const activities = (payload?.activities || []).map((activity, index) => {
+          if (activity.kind === "ai") {
+            const conversation = conversations.find((item) => item.ID === activity.ref_id);
+            return {
+              ...activity,
+              title: conversation?.Title || t("appQuit.aiTask", { number: index + 1 }),
+              detail: activity.ref_id ? t("appQuit.conversationDetail", { id: activity.ref_id }) : activity.detail,
+            };
+          }
+          if (activity.kind === "opsctl") {
+            return {
+              ...activity,
+              title: t("appQuit.opsctlTask", { number: index + 1 }),
+              detail: t(activity.detail === "approval" ? "appQuit.opsctlApproval" : "appQuit.opsctlOperation"),
+            };
+          }
+          return activity;
+        });
+        if (activities.length > 0) setQuitActivities(activities);
+      }
+    );
     return () => cancel();
-  }, []);
+  }, [t]);
 
   // 异步加载数据，不阻塞首屏渲染
   useEffect(() => {
@@ -502,16 +526,12 @@ function App() {
               <GroupDialog open={groupDialogOpen} onOpenChange={setGroupDialogOpen} editGroup={editingGroup} />
             )}
           </Suspense>
-          <PermissionDialog suspended={quitTaskCount !== null} />
-          <OpsctlApprovalDialog suspended={quitTaskCount !== null} />
-          <ConfirmDialog
-            open={quitTaskCount !== null}
-            onOpenChange={(open) => !open && setQuitTaskCount(null)}
-            title={t("appQuit.runningTitle")}
-            description={t("appQuit.runningDescription", { count: quitTaskCount ?? 0 })}
-            cancelText={t("action.cancel")}
-            confirmText={t("appQuit.quitAnyway")}
-            confirmTestId="confirm-force-quit"
+          <PermissionDialog suspended={quitActivities !== null} />
+          <OpsctlApprovalDialog suspended={quitActivities !== null} />
+          <ActiveTasksQuitDialog
+            open={quitActivities !== null}
+            activities={quitActivities ?? []}
+            onOpenChange={(open) => !open && setQuitActivities(null)}
             onConfirm={() => ConfirmQuit()}
           />
           {snippetRunTarget && <SnippetAssetDrawer snippet={snippetRunTarget} onClose={clearSnippetHostPick} />}

@@ -49,6 +49,12 @@ func (r *RDP) Cleanup() {
 	}
 }
 
+// ActiveSessions exposes a read-only snapshot to the composition root without
+// widening the Wails-bound RDP method surface.
+func ActiveSessions(r *RDP) []rdp_svc.SessionActivity {
+	return r.service.ActiveSessions()
+}
+
 func (r *RDP) ConnectRDP(req rdp_svc.ConnectRequest) (string, error) {
 	ctx := i18n.Ctx(r.ctx, r.lang.Lang())
 	log := logger.Ctx(ctx)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 	"time"
 
@@ -90,6 +91,7 @@ type Session struct {
 	readerReadyCh chan struct{}
 	onData        func(data []byte)      // 终端输出回调
 	onClosed      func(sessionID string) // 会话关闭回调
+	startedAt     time.Time
 
 	// AI 命令执行辅助：当 cmdCapture 非 nil 时，readOutput 会同时向此收集器追加数据副本。
 	cmdCapture *commandCapture
@@ -354,9 +356,10 @@ func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
 	sessionID := m.nextSessionID()
 
 	sess := &Session{
-		ID:      sessionID,
-		AssetID: cfg.AssetID,
-		port:    port,
+		ID:        sessionID,
+		AssetID:   cfg.AssetID,
+		port:      port,
+		startedAt: time.Now(),
 	}
 
 	m.sessions.Store(sessionID, sess)
@@ -581,6 +584,25 @@ func (m *Manager) GetSession(sessionID string) (*Session, bool) {
 		return nil, false
 	}
 	return sess, true
+}
+
+type SessionActivity struct {
+	SessionID string    `json:"sessionId"`
+	AssetID   int64     `json:"assetId"`
+	StartedAt time.Time `json:"startedAt"`
+}
+
+func (m *Manager) ActiveSessions() []SessionActivity {
+	activities := make([]SessionActivity, 0)
+	m.sessions.Range(func(_, value any) bool {
+		sess, ok := value.(*Session)
+		if ok && sess != nil && !sess.IsClosed() {
+			activities = append(activities, SessionActivity{SessionID: sess.ID, AssetID: sess.AssetID, StartedAt: sess.startedAt})
+		}
+		return true
+	})
+	sort.Slice(activities, func(i, j int) bool { return activities[i].SessionID < activities[j].SessionID })
+	return activities
 }
 
 // GetSessionByAssetID 根据资产 ID 查找活跃的串口会话

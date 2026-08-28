@@ -6,6 +6,35 @@ import (
 	"testing"
 )
 
+func TestFinishRunnerRemovesOnlyCompletedEntry(t *testing.T) {
+	a := &AI{}
+	completed := &runnerEntry{}
+	replacement := &runnerEntry{}
+
+	a.runners.Store(int64(7), completed)
+	a.finishRunner(7, completed)
+	if got := a.ActiveTaskCount(); got != 0 {
+		t.Fatalf("completed runner remains active: got %d", got)
+	}
+
+	a.runners.Store(int64(7), replacement)
+	a.finishRunner(7, completed)
+	if got := a.ActiveTaskCount(); got != 1 {
+		t.Fatalf("stale completion removed replacement runner: got %d", got)
+	}
+}
+
+func TestActiveTasksReturnsStableConversationIDs(t *testing.T) {
+	a := &AI{}
+	a.runners.Store(int64(9), &runnerEntry{})
+	a.runners.Store(int64(2), &runnerEntry{})
+
+	got := ActiveTasks(a)
+	if len(got) != 2 || got[0] != 2 || got[1] != 9 {
+		t.Fatalf("ActiveTasks() = %v, want [2 9]", got)
+	}
+}
+
 func TestOutwardFailurePreservesRawTextOnEventAndReturnedWailsError(t *testing.T) {
 	err := errors.New("Authorization: Basic wails-return-secret")
 	message, returned := outwardFailure("send to LLM", err)
