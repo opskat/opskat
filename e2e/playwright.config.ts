@@ -67,7 +67,10 @@ export default defineConfig({
       command: mock.command,
       cwd: mock.cwd,
       port: mock.port,
-      reuseExistingServer: !process.env.CI,
+      // Protocol fixtures are executable test code and may change with a spec.
+      // Never adopt an older process left on the port: that can make a local run
+      // exercise stale mock behaviour while reporting against the current tree.
+      reuseExistingServer: false,
       stdout: "ignore" as const,
       stderr: "ignore" as const,
     })),

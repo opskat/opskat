@@ -303,6 +303,7 @@ function reapOrphanVite() {
 function mockServers() {
   const fixtures = join(repoRoot, "e2e", "fixtures");
   const p = ports();
+  const sshCommandLog = join(process.env.OPSKAT_DATA_DIR || sandboxDataDir(), "ssh-mock.commands");
   return [
     {
       name: "redis-mock",
@@ -315,7 +316,7 @@ function mockServers() {
       // `go run` a tiny x/crypto/ssh server (a project dep); it runs from the repo
       // root so the relative package path resolves inside the Go module.
       name: "ssh-mock",
-      command: `go run ./e2e/fixtures/ssh-mock ${p.sshMock}`,
+      command: `go run ./e2e/fixtures/ssh-mock ${p.sshMock} "${sshCommandLog}"`,
       cwd: repoRoot,
       port: p.sshMock,
       env: "SSH_MOCK_PORT",

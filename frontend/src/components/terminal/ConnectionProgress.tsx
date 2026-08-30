@@ -369,14 +369,26 @@ function HostKeyVerifyForm({
         )}
       </div>
       <div className="flex gap-2">
-        <Button size="sm" variant="outline" onClick={() => onAction(2)} className="flex-1">
+        <Button
+          data-testid="ssh-host-key-reject"
+          size="sm"
+          variant="outline"
+          onClick={() => onAction(2)}
+          className="flex-1"
+        >
           <X className="h-3.5 w-3.5 mr-1" />
           {t("ssh.connectProgress.hostKeyReject")}
         </Button>
-        <Button size="sm" variant="secondary" onClick={() => onAction(1)} className="flex-1">
+        <Button
+          data-testid="ssh-host-key-accept-once"
+          size="sm"
+          variant="secondary"
+          onClick={() => onAction(1)}
+          className="flex-1"
+        >
           {t("ssh.connectProgress.hostKeyAcceptOnce")}
         </Button>
-        <Button size="sm" onClick={() => onAction(0)} className="flex-1">
+        <Button data-testid="ssh-host-key-trust" size="sm" onClick={() => onAction(0)} className="flex-1">
           <Check className="h-3.5 w-3.5 mr-1" />
           {t("ssh.connectProgress.hostKeyAcceptSave")}
         </Button>

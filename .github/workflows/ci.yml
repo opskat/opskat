@@ -78,6 +78,8 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('e2e/pnpm-lock.yaml') }}
       - name: Install e2e dependencies
         run: cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright install --with-deps chromium
+      - name: Typecheck e2e
+        run: cd e2e && pnpm run typecheck
       - name: Test
         run: xvfb-run -a make test-e2e
       - name: Upload e2e artifacts

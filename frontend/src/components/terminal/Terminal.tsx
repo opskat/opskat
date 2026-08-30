@@ -365,6 +365,7 @@ export function Terminal({ sessionId, active, tabId, ref }: TerminalProps) {
         <ContextMenuTrigger className="flex-1 min-h-0">
           <div
             ref={wrapperRef}
+            data-testid={`terminal-${sessionId}`}
             className="relative h-full w-full"
             onMouseDown={() => setFloatingCopyPosition(null)}
             onMouseUp={handleTerminalMouseUp}

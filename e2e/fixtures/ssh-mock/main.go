@@ -15,15 +15,20 @@
 package main
 
 import (
+	"bufio"
 	"crypto/rand"
 	"crypto/rsa"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"golang.org/x/crypto/ssh"
 )
+
+var commandLogPath string
 
 func main() {
 	if len(os.Args) < 2 {
@@ -34,6 +39,15 @@ func main() {
 	if err != nil || port <= 0 {
 		fmt.Fprintf(os.Stderr, "ssh-mock: invalid port %q\n", os.Args[1])
 		os.Exit(1)
+	}
+	if len(os.Args) >= 3 {
+		candidate := filepath.Clean(os.Args[2])
+		if filepath.Base(candidate) != "ssh-mock.commands" {
+			fmt.Fprintln(os.Stderr, "ssh-mock: command log must be named ssh-mock.commands")
+			os.Exit(1)
+		}
+		commandLogPath = candidate
+		_ = os.Remove(commandLogPath)
 	}
 
 	signer, err := newSigner()
@@ -95,6 +109,8 @@ func handleSession(channel ssh.Channel, requests <-chan *ssh.Request) {
 	defer func() { _ = channel.Close() }()
 	for req := range requests {
 		switch req.Type {
+		case "pty-req", "window-change", "env":
+			_ = req.Reply(true, nil)
 		case "exec":
 			_ = req.Reply(true, nil)
 			// RFC 4254 §6.5: the "exec" payload is a single string field.
@@ -106,12 +122,44 @@ func handleSession(channel ssh.Channel, requests <-chan *ssh.Request) {
 			return
 		case "shell":
 			_ = req.Reply(true, nil)
-			_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{Status: 0}))
+			serveShell(channel)
 			return
 		default:
 			_ = req.Reply(false, nil)
 		}
 	}
+}
+
+// serveShell keeps the PTY open and marks every submitted line. The marker is
+// the remote oracle used by the terminal e2e: input must cross Wails and SSH
+// before it can be rendered back by xterm.
+func serveShell(channel ssh.Channel) {
+	_, _ = fmt.Fprint(channel, "mock-shell-ready\r\n$ ")
+	reader := bufio.NewReader(channel)
+	for {
+		line, err := reader.ReadString('\r')
+		if err != nil {
+			break
+		}
+		command := strings.TrimSuffix(line, "\r")
+		recordShellCommand(command)
+		_, _ = fmt.Fprintf(channel, "mock-shell-ran: %s\r\n$ ", command)
+	}
+	_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{Status: 0}))
+}
+
+func recordShellCommand(command string) {
+	if commandLogPath == "" {
+		return
+	}
+	// #nosec G304 -- main validates the harness-owned path's fixed basename;
+	// the parent is the isolated per-run data directory supplied by env.js.
+	file, err := os.OpenFile(commandLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer func() { _ = file.Close() }()
+	_, _ = fmt.Fprintln(file, command)
 }
 
 func newSigner() (ssh.Signer, error) {

@@ -1,20 +1,13 @@
 import { test, expect, type Page } from "@playwright/test";
 import { findAssetByName } from "../fixtures/db";
+import { createSSHAssetViaUI } from "../fixtures/assets";
 
 // Completes the asset CRUD lifecycle the create-only `asset-crud` spec leaves
 // open: edit (rename) and delete, each verified in the tree AND on disk via the
 // independent DB oracle. Both drive the real right-click context menu.
 
 async function createSshAsset(page: Page, name: string): Promise<void> {
-  await page.getByTestId("add-asset-button").click();
-  await expect(page.getByTestId("asset-form-dialog")).toBeVisible();
-  await page.getByTestId("asset-form-name-input").fill(name);
-  await page.getByTestId("ssh-host-input").fill("example.com");
-  await page.getByTestId("asset-form-submit").click();
-  await expect(page.getByTestId("asset-form-dialog")).toBeHidden();
-  await expect(page.getByTestId("asset-tree").getByText(name, { exact: true })).toBeVisible();
-  // Confirm it landed before we act on it, so a later failure can't be a create race.
-  await expect.poll(() => findAssetByName(name)?.status, { timeout: 10_000 }).toBe(1);
+  await createSSHAssetViaUI(page, { name, host: "example.com" });
 }
 
 test("edit renames an asset in the tree and on disk", async ({ page }) => {

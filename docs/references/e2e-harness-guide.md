@@ -128,7 +128,12 @@ context menu, each verified in the tree **and** on disk), `redis-connect` (creat
 *Redis* asset, drive its **Test Connection** against an in-harness mock Redis so the app
 actually dials and `PING`s, then persist), and `ssh-connect` (create an *SSH* asset and drive
 **Test Connection** against an in-harness mock SSH server — the app completes a real SSH
-handshake — then persist), plus the **AI exec** specs — `ai-exec` (the unified `exec` tool:
+handshake — then persist), `ssh-terminal` (approve the first host key, open a real PTY shell,
+send terminal input, and confirm the mock server received it), `sqlite-query` (create a local
+SQLite asset, open the database workspace, execute SQL, and compare the rendered result with
+the target database), and `opsctl-approval` (a non-interactive CLI process asks the desktop
+for approval, executes against Redis, and persists an audit row), plus the **AI exec** specs —
+`ai-exec` (the unified `exec` tool:
 approval dialog → real execution → audit row), `ai-exec-crud` (asset CRUD through AI tools),
 `ai-exec-gate` (nothing unexecutable reaches the approval dialog), and `ai-exec-policy`
 (policy allow / deny and grant persistence), all driven by a **scripted model** (§4.1).
