@@ -1,11 +1,19 @@
 package vnc_svc
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"io"
 	"net"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/opskat/opskat/internal/model/entity/host_key_entity"
+	"github.com/opskat/opskat/internal/service/host_key_svc"
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // 用 net.Pipe 注入假 conn(client 端给 Session,server 端扮演 VNC 服务器),
@@ -82,4 +90,82 @@ func TestManagerRetiresSessionWhenRemoteCloses(t *testing.T) {
 	if err := m.Write("remote-close", []byte("x")); err == nil || !strings.Contains(err.Error(), "会话不存在") {
 		t.Fatalf("Write after remote close = %v, want session-not-found error", err)
 	}
+}
+
+type vncHostKeyRepoFake struct {
+	stored *host_key_entity.HostKey
+}
+
+func (r *vncHostKeyRepoFake) FindByHostPortKeyType(_ context.Context, host string, port int, keyType string) (*host_key_entity.HostKey, error) {
+	if r.stored == nil || r.stored.Host != host || r.stored.Port != port || r.stored.KeyType != keyType {
+		return nil, gorm.ErrRecordNotFound
+	}
+	copy := *r.stored
+	return &copy, nil
+}
+func (r *vncHostKeyRepoFake) Upsert(_ context.Context, key *host_key_entity.HostKey) error {
+	copy := *key
+	r.stored = &copy
+	return nil
+}
+func (r *vncHostKeyRepoFake) Delete(context.Context, int64) error { return nil }
+func (r *vncHostKeyRepoFake) List(context.Context) ([]*host_key_entity.HostKey, error) {
+	return nil, nil
+}
+
+func TestManagerVNCServerKeyUsesSessionOwnedEndpoint(t *testing.T) {
+	repo := &vncHostKeyRepoFake{}
+	manager := &Manager{
+		hostKeys: host_key_svc.New(repo),
+		sessions: map[string]*Session{
+			"session": {ID: "session", host: "actual.example", port: 5912},
+		},
+	}
+	publicKey := []byte("server-rsa-public-key")
+	publicKeyB64 := base64.StdEncoding.EncodeToString(publicKey)
+	digest := sha256.Sum256(publicKey)
+	wantFingerprint := "SHA256:" + base64.RawStdEncoding.EncodeToString(digest[:])
+
+	check, err := manager.CheckVNCServerKey(context.Background(), "session", publicKeyB64)
+	require.NoError(t, err)
+	require.Equal(t, VNCServerKeyFirstUse, check.State)
+	require.Equal(t, "actual.example", check.Host)
+	require.Equal(t, 5912, check.Port)
+	require.Equal(t, wantFingerprint, check.NewFingerprint)
+
+	require.NoError(t, manager.TrustVNCServerKey(context.Background(), "session", publicKeyB64, false))
+	require.Equal(t, "actual.example", repo.stored.Host)
+	require.Equal(t, 5912, repo.stored.Port)
+	require.Equal(t, host_key_entity.KeyTypeVNCRSA, repo.stored.KeyType)
+}
+
+func TestManagerVNCServerKeyCancellationDisconnectsWithoutTrusting(t *testing.T) {
+	repo := &vncHostKeyRepoFake{}
+	manager := &Manager{
+		hostKeys: host_key_svc.New(repo),
+		sessions: map[string]*Session{
+			"session": {ID: "session", host: "cancel.example", port: 5900},
+		},
+	}
+	publicKeyB64 := base64.StdEncoding.EncodeToString([]byte("untrusted-key"))
+
+	check, err := manager.CheckVNCServerKey(context.Background(), "session", publicKeyB64)
+	require.NoError(t, err)
+	require.Equal(t, VNCServerKeyFirstUse, check.State)
+
+	manager.Disconnect("session")
+	require.Nil(t, repo.stored)
+	_, err = manager.CheckVNCServerKey(context.Background(), "session", publicKeyB64)
+	require.ErrorContains(t, err, "会话不存在")
+}
+
+func TestManagerVNCServerKeyRejectsInvalidInputAndUnknownSession(t *testing.T) {
+	manager := &Manager{hostKeys: host_key_svc.New(&vncHostKeyRepoFake{}), sessions: map[string]*Session{}}
+
+	_, err := manager.CheckVNCServerKey(context.Background(), "missing", base64.StdEncoding.EncodeToString([]byte("key")))
+	require.ErrorContains(t, err, "会话不存在")
+
+	manager.sessions["session"] = &Session{ID: "session", host: "host", port: 5900}
+	_, err = manager.CheckVNCServerKey(context.Background(), "session", "not@@base64")
+	require.ErrorContains(t, err, "公钥")
 }

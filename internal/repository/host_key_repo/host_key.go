@@ -1,5 +1,7 @@
 package host_key_repo
 
+//go:generate mockgen -source=host_key.go -destination=mock_host_key_repo/host_key.go -package=mock_host_key_repo
+
 import (
 	"context"
 
@@ -10,7 +12,7 @@ import (
 
 // HostKeyRepo 主机密钥数据访问接口
 type HostKeyRepo interface {
-	FindByHostPort(ctx context.Context, host string, port int) (*host_key_entity.HostKey, error)
+	FindByHostPortKeyType(ctx context.Context, host string, port int, keyType string) (*host_key_entity.HostKey, error)
 	Upsert(ctx context.Context, key *host_key_entity.HostKey) error
 	Delete(ctx context.Context, id int64) error
 	List(ctx context.Context) ([]*host_key_entity.HostKey, error)
@@ -36,9 +38,9 @@ func NewHostKey() HostKeyRepo {
 	return &hostKeyRepo{}
 }
 
-func (r *hostKeyRepo) FindByHostPort(ctx context.Context, host string, port int) (*host_key_entity.HostKey, error) {
+func (r *hostKeyRepo) FindByHostPortKeyType(ctx context.Context, host string, port int, keyType string) (*host_key_entity.HostKey, error) {
 	var key host_key_entity.HostKey
-	result := db.Ctx(ctx).Where("host = ? AND port = ?", host, port).First(&key)
+	result := db.Ctx(ctx).Where("host = ? AND port = ? AND key_type = ?", host, port, keyType).First(&key)
 	if result.Error != nil {
 		return nil, result.Error
 	}

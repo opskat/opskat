@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/conntest"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/vnc_svc"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"go.uber.org/zap"
 	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
@@ -40,6 +42,29 @@ func (r *VNC) ConnectVNC(assetID int64) (*vnc_svc.Session, error) {
 
 func (r *VNC) DisconnectVNC(sessionID string) {
 	r.manager.Disconnect(sessionID)
+}
+
+func (r *VNC) CheckVNCServerKey(sessionID, publicKeyB64 string) (*vnc_svc.VNCServerKeyCheck, error) {
+	logger.Ctx(r.ctx).Info("VNC server key check start", zap.String("sessionID", sessionID))
+	check, err := r.manager.CheckVNCServerKey(r.ctx, sessionID, publicKeyB64)
+	if err != nil {
+		logger.Ctx(r.ctx).Error("VNC server key check failed", zap.String("sessionID", sessionID), zap.Error(err))
+		return nil, err
+	}
+	logger.Ctx(r.ctx).Info("VNC server key check end",
+		zap.String("sessionID", sessionID), zap.String("state", string(check.State)),
+		zap.String("host", check.Host), zap.Int("port", check.Port))
+	return check, nil
+}
+
+func (r *VNC) TrustVNCServerKey(sessionID, publicKeyB64 string, replace bool) error {
+	logger.Ctx(r.ctx).Info("VNC server key trust start", zap.String("sessionID", sessionID), zap.Bool("replace", replace))
+	if err := r.manager.TrustVNCServerKey(r.ctx, sessionID, publicKeyB64, replace); err != nil {
+		logger.Ctx(r.ctx).Error("VNC server key trust failed", zap.String("sessionID", sessionID), zap.Bool("replace", replace), zap.Error(err))
+		return err
+	}
+	logger.Ctx(r.ctx).Info("VNC server key trust end", zap.String("sessionID", sessionID), zap.Bool("replace", replace))
+	return nil
 }
 
 // StartVNCStream 挂上 IPC 回调并启动读 pump。前端必须在 EventsOn 订阅

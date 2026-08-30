@@ -1,6 +1,7 @@
 package vnc
 
 import (
+	"context"
 	"testing"
 
 	"go.uber.org/mock/gomock"
@@ -28,7 +29,7 @@ func TestEncodeVNCClipboardTextUsesWindowsChineseCodePage(t *testing.T) {
 func newTestVNC(t *testing.T) *VNC {
 	ctrl := gomock.NewController(t)
 	mgr := vnc_svc.NewManager(mock_asset_repo.NewMockAssetRepo(ctrl))
-	return &VNC{manager: mgr}
+	return &VNC{ctx: context.Background(), manager: mgr}
 }
 
 func TestWriteVNCRejectsInvalidBase64(t *testing.T) {
@@ -42,5 +43,16 @@ func TestWriteVNCUnknownSession(t *testing.T) {
 	v := newTestVNC(t)
 	if err := v.WriteVNC("missing", "aGVsbG8="); err == nil {
 		t.Fatal("expected unknown-session error")
+	}
+}
+
+func TestVNCServerKeyIPCRejectsUnknownSession(t *testing.T) {
+	v := newTestVNC(t)
+
+	if _, err := v.CheckVNCServerKey("missing", "a2V5"); err == nil {
+		t.Fatal("expected check unknown-session error")
+	}
+	if err := v.TrustVNCServerKey("missing", "a2V5", false); err == nil {
+		t.Fatal("expected trust unknown-session error")
 	}
 }

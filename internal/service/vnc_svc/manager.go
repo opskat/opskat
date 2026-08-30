@@ -2,6 +2,8 @@ package vnc_svc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"sort"
@@ -12,15 +14,18 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/google/uuid"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/host_key_entity"
 	"github.com/opskat/opskat/internal/pkg/proxychain"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
+	"github.com/opskat/opskat/internal/service/host_key_svc"
 	"go.uber.org/zap"
 )
 
 type Manager struct {
 	assetRepo asset_repo.AssetRepo
 	resolver  *credential_resolver.Resolver
+	hostKeys  host_key_svc.HostKeySvc
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -35,6 +40,8 @@ type Session struct {
 	// assetID 是这个会话所属的 VNC 资产（区别于上面用于文件传输的 FileSSHAssetID）。
 	// 不导出：前端不需要它，它只用于资产被删除时按资产断开会话。
 	assetID   int64
+	host      string
+	port      int
 	conn      net.Conn
 	onData    func([]byte)
 	onClose   func()
@@ -48,6 +55,7 @@ func NewManager(repo asset_repo.AssetRepo) *Manager {
 	return &Manager{
 		assetRepo: repo,
 		resolver:  credential_resolver.Default(),
+		hostKeys:  host_key_svc.HostKey(),
 		sessions:  make(map[string]*Session),
 	}
 }
@@ -99,6 +107,8 @@ func (m *Manager) connectVNC(ctx context.Context, asset *asset_entity.Asset) (*S
 		Password:       password,
 		FileSSHAssetID: cfg.FileSSHAssetID,
 		assetID:        asset.ID,
+		host:           cfg.Host,
+		port:           cfg.Port,
 		conn:           conn,
 		startedAt:      time.Now(),
 	}
@@ -131,11 +141,9 @@ func (m *Manager) ActiveSessions() []SessionActivity {
 
 // SetCallbacks 挂上 Go→FE 的数据/关闭回调,并启动读 pump(幂等)。sessionID 不存在返回错误。
 func (m *Manager) SetCallbacks(sessionID string, onData func([]byte), onClose func()) error {
-	m.mu.Lock()
-	session := m.sessions[sessionID]
-	m.mu.Unlock()
-	if session == nil {
-		return fmt.Errorf("VNC 会话不存在: %s", sessionID)
+	session, err := m.session(sessionID)
+	if err != nil {
+		return err
 	}
 	session.start(onData, onClose, func() { m.retire(sessionID, session) })
 	return nil
@@ -143,13 +151,86 @@ func (m *Manager) SetCallbacks(sessionID string, onData func([]byte), onClose fu
 
 // Write 把前端(noVNC)发来的字节写入目标连接。
 func (m *Manager) Write(sessionID string, data []byte) error {
+	session, err := m.session(sessionID)
+	if err != nil {
+		return err
+	}
+	return session.write(data)
+}
+
+type VNCServerKeyState string
+
+const (
+	VNCServerKeyFirstUse VNCServerKeyState = "first_use"
+	VNCServerKeyMatch    VNCServerKeyState = "match"
+	VNCServerKeyChanged  VNCServerKeyState = "changed"
+)
+
+type VNCServerKeyCheck struct {
+	State          VNCServerKeyState `json:"state"`
+	Host           string            `json:"host"`
+	Port           int               `json:"port"`
+	OldFingerprint string            `json:"oldFingerprint,omitempty"`
+	NewFingerprint string            `json:"newFingerprint"`
+}
+
+func (m *Manager) CheckVNCServerKey(ctx context.Context, sessionID, publicKeyB64 string) (*VNCServerKeyCheck, error) {
+	session, err := m.session(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	presented, err := vncPresentedKey(session.host, session.port, publicKeyB64)
+	if err != nil {
+		return nil, err
+	}
+	check, err := m.hostKeys.Check(ctx, presented)
+	if err != nil {
+		return nil, err
+	}
+	return &VNCServerKeyCheck{
+		State:          VNCServerKeyState(check.State),
+		Host:           session.host,
+		Port:           session.port,
+		OldFingerprint: check.OldFingerprint,
+		NewFingerprint: check.NewFingerprint,
+	}, nil
+}
+
+func (m *Manager) TrustVNCServerKey(ctx context.Context, sessionID, publicKeyB64 string, replace bool) error {
+	session, err := m.session(sessionID)
+	if err != nil {
+		return err
+	}
+	presented, err := vncPresentedKey(session.host, session.port, publicKeyB64)
+	if err != nil {
+		return err
+	}
+	return m.hostKeys.Trust(ctx, presented, replace)
+}
+
+func (m *Manager) session(sessionID string) (*Session, error) {
 	m.mu.Lock()
 	session := m.sessions[sessionID]
 	m.mu.Unlock()
 	if session == nil {
-		return fmt.Errorf("VNC 会话不存在: %s", sessionID)
+		return nil, fmt.Errorf("VNC 会话不存在: %s", sessionID)
 	}
-	return session.write(data)
+	return session, nil
+}
+
+func vncPresentedKey(host string, port int, publicKeyB64 string) (host_key_svc.PresentedKey, error) {
+	publicKey, err := base64.StdEncoding.DecodeString(publicKeyB64)
+	if err != nil || len(publicKey) == 0 {
+		return host_key_svc.PresentedKey{}, fmt.Errorf("VNC 服务器公钥无效")
+	}
+	digest := sha256.Sum256(publicKey)
+	return host_key_svc.PresentedKey{
+		Host:        host,
+		Port:        port,
+		KeyType:     host_key_entity.KeyTypeVNCRSA,
+		PublicKey:   base64.StdEncoding.EncodeToString(publicKey),
+		Fingerprint: "SHA256:" + base64.RawStdEncoding.EncodeToString(digest[:]),
+	}, nil
 }
 
 func (m *Manager) Disconnect(sessionID string) {
