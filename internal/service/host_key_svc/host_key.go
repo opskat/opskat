@@ -144,7 +144,7 @@ func (s *hostKeySvc) Trust(ctx context.Context, key PresentedKey, replace bool) 
 		stored.LastSeen = now
 	} else {
 		if !replace {
-			logger.Ctx(ctx).Info("host key trust cancelled",
+			logger.Ctx(ctx).Info("host key trust canceled",
 				zap.String("host", key.Host), zap.Int("port", key.Port), zap.String("keyType", key.KeyType))
 			return ErrChangedKeyRequiresReplacement
 		}

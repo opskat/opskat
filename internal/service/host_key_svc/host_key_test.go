@@ -20,8 +20,8 @@ type memoryHostKeyRepo struct {
 func newMemoryHostKeyRepo(keys ...*host_key_entity.HostKey) *memoryHostKeyRepo {
 	r := &memoryHostKeyRepo{keys: make(map[string]*host_key_entity.HostKey)}
 	for _, key := range keys {
-		copy := *key
-		r.keys[hostKeyMapKey(copy.Host, copy.Port, copy.KeyType)] = &copy
+		keyCopy := *key
+		r.keys[hostKeyMapKey(keyCopy.Host, keyCopy.Port, keyCopy.KeyType)] = &keyCopy
 	}
 	return r
 }
@@ -38,8 +38,8 @@ func (r *memoryHostKeyRepo) FindByHostPortKeyType(_ context.Context, host string
 	if key == nil {
 		return nil, gorm.ErrRecordNotFound
 	}
-	copy := *key
-	return &copy, nil
+	keyCopy := *key
+	return &keyCopy, nil
 }
 
 func (r *memoryHostKeyRepo) Upsert(_ context.Context, key *host_key_entity.HostKey) error {
@@ -47,8 +47,8 @@ func (r *memoryHostKeyRepo) Upsert(_ context.Context, key *host_key_entity.HostK
 		return r.upsertErr
 	}
 	r.upserts++
-	copy := *key
-	r.keys[hostKeyMapKey(key.Host, key.Port, key.KeyType)] = &copy
+	keyCopy := *key
+	r.keys[hostKeyMapKey(key.Host, key.Port, key.KeyType)] = &keyCopy
 	return nil
 }
 

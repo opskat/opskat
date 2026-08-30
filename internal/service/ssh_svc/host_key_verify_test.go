@@ -29,15 +29,15 @@ func (r *sshHostKeyRepoFake) FindByHostPortKeyType(_ context.Context, _ string, 
 	if r.stored == nil || r.stored.KeyType != keyType {
 		return nil, gorm.ErrRecordNotFound
 	}
-	copy := *r.stored
-	return &copy, nil
+	keyCopy := *r.stored
+	return &keyCopy, nil
 }
 func (r *sshHostKeyRepoFake) Upsert(_ context.Context, key *host_key_entity.HostKey) error {
 	if r.upsertErr != nil {
 		return r.upsertErr
 	}
-	copy := *key
-	r.stored = &copy
+	keyCopy := *key
+	r.stored = &keyCopy
 	return nil
 }
 func (r *sshHostKeyRepoFake) Delete(context.Context, int64) error { return nil }

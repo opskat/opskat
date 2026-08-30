@@ -100,12 +100,12 @@ func (r *vncHostKeyRepoFake) FindByHostPortKeyType(_ context.Context, host strin
 	if r.stored == nil || r.stored.Host != host || r.stored.Port != port || r.stored.KeyType != keyType {
 		return nil, gorm.ErrRecordNotFound
 	}
-	copy := *r.stored
-	return &copy, nil
+	keyCopy := *r.stored
+	return &keyCopy, nil
 }
 func (r *vncHostKeyRepoFake) Upsert(_ context.Context, key *host_key_entity.HostKey) error {
-	copy := *key
-	r.stored = &copy
+	keyCopy := *key
+	r.stored = &keyCopy
 	return nil
 }
 func (r *vncHostKeyRepoFake) Delete(context.Context, int64) error { return nil }
