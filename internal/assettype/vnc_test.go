@@ -14,6 +14,12 @@ func TestVNCValidateCreateArgs(t *testing.T) {
 	h := &vncHandler{}
 	require.Error(t, h.ValidateCreateArgs(map[string]any{}))
 	require.NoError(t, h.ValidateCreateArgs(map[string]any{"host": "vnc.example.com"}))
+	require.NoError(t, h.ValidateCreateArgs(map[string]any{
+		"host": "vnc.example.com", "encryption": "always_on",
+	}))
+	require.ErrorContains(t, h.ValidateCreateArgs(map[string]any{
+		"host": "vnc.example.com", "encryption": "downgrade",
+	}), "downgrade")
 }
 
 func TestVNCApplyCreateArgsDefaultsAndSafeView(t *testing.T) {
@@ -31,13 +37,30 @@ func TestVNCApplyCreateArgsDefaultsAndSafeView(t *testing.T) {
 	assert.Equal(t, 5900, cfg.Port, "port should default to 5900 when omitted")
 	assert.Equal(t, "operator", cfg.Username)
 	assert.Equal(t, int64(7), cfg.FileSSHAssetID)
+	assert.Equal(t, asset_entity.VNCEncryptionServer, cfg.Encryption)
 
 	sv := h.SafeView(a)
 	assert.Equal(t, "vnc.example.com", sv["host"])
+	assert.Equal(t, asset_entity.VNCEncryptionServer, sv["encryption"])
 	_, hasPassword := sv["password"]
 	assert.False(t, hasPassword, "SafeView 不得泄露密码")
 	_, hasCredential := sv["credential_id"]
 	assert.False(t, hasCredential, "SafeView 不得泄露凭证 ID")
+}
+
+func TestVNCApplyCreateArgsPersistsEncryptionPolicy(t *testing.T) {
+	h := &vncHandler{}
+	a := &asset_entity.Asset{Type: asset_entity.AssetTypeVNC}
+	require.NoError(t, h.ApplyCreateArgs(context.Background(), a, map[string]any{
+		"host": "vnc.example.com", "encryption": "prefer_on",
+	}))
+
+	cfg, err := a.GetVNCConfig()
+	require.NoError(t, err)
+	assert.Equal(t, asset_entity.VNCEncryptionPreferOn, cfg.Encryption)
+	require.ErrorContains(t, h.ApplyCreateArgs(context.Background(), a, map[string]any{
+		"host": "vnc.example.com", "encryption": "downgrade",
+	}), "downgrade")
 }
 
 func TestVNCApplyCreateArgsEncryptsPassword(t *testing.T) {
@@ -56,6 +79,24 @@ func TestVNCApplyCreateArgsEncryptsPassword(t *testing.T) {
 	decrypted, err := credential_svc.Default().Decrypt(cfg.Password)
 	require.NoError(t, err)
 	assert.Equal(t, "s3cret", decrypted)
+}
+
+func TestVNCApplyUpdateArgsValidatesAndClearsEncryptionPolicy(t *testing.T) {
+	h := &vncHandler{}
+	a := &asset_entity.Asset{Type: asset_entity.AssetTypeVNC}
+	require.NoError(t, a.SetVNCConfig(&asset_entity.VNCConfig{
+		Host: "vnc.example.com", Encryption: asset_entity.VNCEncryptionAlwaysOn,
+	}))
+
+	require.NoError(t, h.ApplyUpdateArgs(context.Background(), a, map[string]any{"encryption": ""}))
+	cfg, err := a.GetVNCConfig()
+	require.NoError(t, err)
+	assert.Equal(t, asset_entity.VNCEncryptionServer, cfg.Encryption)
+	require.NotContains(t, a.Config, `"encryption"`)
+
+	require.ErrorContains(t, h.ApplyUpdateArgs(context.Background(), a, map[string]any{
+		"encryption": "downgrade",
+	}), "downgrade")
 }
 
 // TestVNCApplyUpdateArgsInlinePasswordClearsCredentialID 更新时新填的内联密码应清除

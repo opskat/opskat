@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { AssetSelect } from "@/components/asset/AssetSelect";
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
@@ -16,6 +17,12 @@ import {
   type VNCFormState,
 } from "./VNCConfigSection.config";
 import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import { VNC_ENCRYPTION_POLICIES, vncEncryptionLabelKey, type VNCEncryptionPolicy } from "@/lib/vncSecurity";
+
+const VNC_ENCRYPTION_HINT_KEYS: Partial<Record<VNCEncryptionPolicy, string>> = {
+  prefer_on: "vnc.encryptionPreferOnHint",
+  prefer_off: "vnc.encryptionPreferOffHint",
+};
 
 export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
   const { t } = useTranslation();
@@ -114,6 +121,38 @@ export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
               />
             </Field>
           ),
+        },
+      ],
+    },
+    {
+      key: "advanced",
+      label: "asset.tabAdvanced",
+      fields: [
+        {
+          kind: "custom",
+          render: () => {
+            const selectedHint = VNC_ENCRYPTION_HINT_KEYS[state.encryption];
+            return (
+              <Field label={t("vnc.encryptionPolicy")}>
+                <Select
+                  value={state.encryption}
+                  onValueChange={(encryption) => patch({ encryption: encryption as VNCEncryptionPolicy })}
+                >
+                  <SelectTrigger data-testid="vnc-encryption-select" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {VNC_ENCRYPTION_POLICIES.map((policy) => (
+                      <SelectItem key={policy} value={policy}>
+                        {t(vncEncryptionLabelKey(policy))}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {selectedHint && <p className="text-xs text-muted-foreground">{t(selectedHint)}</p>}
+              </Field>
+            );
+          },
         },
       ],
     },

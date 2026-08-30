@@ -72,6 +72,33 @@ func TestPrepareCreateCoversRegisteredBuiltins(t *testing.T) {
 	}
 }
 
+func TestPrepareVNCEncryptionPolicyBoundary(t *testing.T) {
+	for _, policy := range []string{"server", "always_maximum", "always_on", "prefer_on", "prefer_off"} {
+		t.Run(policy, func(t *testing.T) {
+			prepared, err := PrepareCreate(asset_entity.AssetTypeVNC, map[string]any{
+				"host": "vnc.example.com", "encryption": policy,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, policy, prepared.Config["encryption"])
+			assert.Equal(t, policy, prepared.Approval["encryption"])
+		})
+	}
+
+	for _, args := range []map[string]any{
+		{"host": "vnc.example.com"},
+		{"host": "vnc.example.com", "encryption": ""},
+	} {
+		prepared, err := PrepareCreate(asset_entity.AssetTypeVNC, args)
+		require.NoError(t, err)
+		assert.Equal(t, "server", prepared.Config["encryption"])
+	}
+
+	_, err := PrepareCreate(asset_entity.AssetTypeVNC, map[string]any{
+		"host": "vnc.example.com", "encryption": "downgrade",
+	})
+	require.ErrorContains(t, err, "downgrade")
+}
+
 func TestPrepareCreateRejectsNamedUnknownFields(t *testing.T) {
 	_, err := PrepareCreate(asset_entity.AssetTypeRedis, map[string]any{
 		"host": "redis.example.com", "username": "default",

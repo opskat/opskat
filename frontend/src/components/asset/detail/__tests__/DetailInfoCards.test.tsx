@@ -10,6 +10,7 @@ import { SerialDetailInfoCard } from "../SerialDetailInfoCard";
 import { EtcdDetailInfoCard } from "../EtcdDetailInfoCard";
 import { KafkaDetailInfoCard } from "../KafkaDetailInfoCard";
 import { OSSDetailInfoCard } from "../OSSDetailInfoCard";
+import { VNCDetailInfoCard } from "../VNCDetailInfoCard";
 
 afterEach(() => {
   cleanup();
@@ -452,6 +453,22 @@ describe("数据库族详情卡 proxy 展示", () => {
     const asset = makeAsset("redis", { host: "r", port: 6379 });
     const { queryByText } = render(<RedisDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
     expect(queryByText("proxy.example.com:1080")).not.toBeInTheDocument();
+  });
+});
+
+describe("VNCDetailInfoCard", () => {
+  it("shows the configured encryption policy and the compatible server default", () => {
+    const configured = makeAsset("vnc", {
+      host: "vnc.example.com",
+      port: 5900,
+      encryption: "always_maximum",
+    });
+    const { rerender } = render(<VNCDetailInfoCard asset={configured} sshTunnelName={noopTunnel} />);
+    expect(screen.getByText("vnc.encryptionPolicy")).toBeInTheDocument();
+    expect(screen.getByText("vnc.encryptionAlwaysMaximum")).toBeInTheDocument();
+
+    rerender(<VNCDetailInfoCard asset={makeAsset("vnc", { host: "legacy.example.com" })} sshTunnelName={noopTunnel} />);
+    expect(screen.getByText("vnc.encryptionServer")).toBeInTheDocument();
   });
 });
 

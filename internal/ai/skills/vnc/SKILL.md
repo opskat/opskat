@@ -18,8 +18,10 @@ surface**: `exec` is not supported for this type, and there is nothing to script
 | `password` | string | no | **Write-only.** Encrypted in the asset; does not create a credential |
 | `credential_id` | number | no | Existing managed password credential ID; mutually exclusive with `password` |
 | `file_ssh_asset_id` | number | no | SSH asset backing the SSH/SFTP file-transfer channel; omit to disable file transfer |
+| `encryption` | string | no | `server` (default), `always_maximum`, `always_on`, `prefer_on`, or `prefer_off` |
 
 Plaintext is never returned, is encrypted in the asset, and never creates a managed credential.
+Unknown non-empty `encryption` values are rejected; omitted or empty values keep server-order compatibility.
 
 Example:
 

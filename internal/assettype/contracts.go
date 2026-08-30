@@ -224,10 +224,23 @@ func normalizeRDPAutomation(args map[string]any) error {
 
 func (*vncHandler) AutomationContract() AutomationContract {
 	return passwordAutomationContract(
-		[]string{"host", "port", "username", "password", "credential_id", "file_ssh_asset_id"},
-		[]string{"host", "port", "username", "file_ssh_asset_id"},
-		normalizeDefaultPort(5900),
+		[]string{"host", "port", "username", "password", "credential_id", "file_ssh_asset_id", "encryption"},
+		[]string{"host", "port", "username", "file_ssh_asset_id", "encryption"},
+		normalizeVNCAutomation,
 	)
+}
+
+func normalizeVNCAutomation(args map[string]any) error {
+	if ArgInt(args, "port") == 0 {
+		args["port"] = 5900
+	}
+	if err := validateVNCEncryptionArg(args); err != nil {
+		return err
+	}
+	if ArgString(args, "encryption") == "" {
+		args["encryption"] = string(asset_entity.VNCEncryptionServer)
+	}
+	return nil
 }
 
 func (*ossHandler) AutomationContract() AutomationContract {

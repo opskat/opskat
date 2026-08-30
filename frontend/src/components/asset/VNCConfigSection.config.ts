@@ -1,4 +1,5 @@
 import type { CredentialFragment } from "./credentialConfig";
+import { normalizeVNCEncryptionPolicy, type VNCEncryptionPolicy } from "@/lib/vncSecurity";
 import {
   buildProxyChainJSON,
   parseConnectionFields,
@@ -15,6 +16,7 @@ export interface VNCFormState extends ConnectionFormFields {
   encryptedPassword: string;
   credentialId: number;
   fileSshAssetId: number;
+  encryption: VNCEncryptionPolicy;
 }
 
 interface VNCConfigJSON {
@@ -24,6 +26,7 @@ interface VNCConfigJSON {
   password?: string;
   credential_id?: number;
   file_ssh_asset_id?: number;
+  encryption?: string;
   proxy_chain?: ProxyChainJSON | null;
 }
 
@@ -35,6 +38,7 @@ export const VNC_DEFAULTS: VNCFormState = {
   encryptedPassword: "",
   credentialId: 0,
   fileSshAssetId: 0,
+  encryption: "server",
   ...parseConnectionFields(undefined, 0, undefined),
 };
 
@@ -49,6 +53,7 @@ export function parseVNCConfig(configJSON: string): VNCFormState {
     encryptedPassword: cfg.password || "",
     credentialId: cfg.credential_id || 0,
     fileSshAssetId: cfg.file_ssh_asset_id || 0,
+    encryption: normalizeVNCEncryptionPolicy(cfg.encryption),
     ...parseConnectionFields(undefined, 0, cfg.proxy_chain),
   };
 }
@@ -69,6 +74,7 @@ export async function buildVNCConfig(
   else if (state.encryptedPassword) cfg.password = state.encryptedPassword;
 
   if (state.fileSshAssetId > 0) cfg.file_ssh_asset_id = state.fileSshAssetId;
+  if (state.encryption !== "server") cfg.encryption = state.encryption;
   const proxyChainSecrets = await resolveSaveProxyChainSecrets(state.proxyChainLayers, encryptPassword);
   const chain = buildProxyChainJSON(state.proxyChainLayers, proxyChainSecrets);
   if (chain) cfg.proxy_chain = chain;
