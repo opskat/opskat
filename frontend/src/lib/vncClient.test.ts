@@ -65,6 +65,7 @@ function makeOptions(overrides: Record<string, unknown> = {}) {
   const requestServerTrust = vi.fn().mockResolvedValue(true);
   const openSource = vi.fn();
   const startTransport = vi.fn().mockResolvedValue(undefined);
+  const closeTransport = vi.fn();
   return {
     target: document.createElement("div"),
     source,
@@ -77,6 +78,7 @@ function makeOptions(overrides: Record<string, unknown> = {}) {
     requestServerTrust,
     openSource,
     startTransport,
+    closeTransport,
     ...overrides,
   };
 }
@@ -189,6 +191,7 @@ describe("startVNCClient", () => {
     );
 
     await expect(handle.result).rejects.toMatchObject({ code, securityType: 130 });
+    expect(options.closeTransport).toHaveBeenCalledTimes(1);
   });
 
   it("reports an unsatisfied credential request without sending partial credentials", async () => {
@@ -269,6 +272,7 @@ describe("startVNCClient", () => {
 
     expect(FakeRFB.latest!.disconnect).toHaveBeenCalledTimes(1);
     expect(options.source.close).toHaveBeenCalledTimes(1);
+    expect(options.closeTransport).toHaveBeenCalledTimes(1);
     expect(options.trustServerKey).not.toHaveBeenCalled();
     await expect(handle.result).rejects.toBeInstanceOf(VNCClientError);
   });

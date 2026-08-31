@@ -20,6 +20,7 @@ const { approveServer, FakeRFB } = vi.hoisted(() => {
   class FakeRFB extends EventTarget {
     static lastOptions: { credentials?: Record<string, string>; securityPolicy?: number[][] } | undefined;
     static latest: FakeRFB | undefined;
+    static constructorError: Error | undefined;
     scaleViewport = true;
     clipViewport = true;
     resizeSession = false;
@@ -32,6 +33,7 @@ const { approveServer, FakeRFB } = vi.hoisted(() => {
       options?: { credentials?: Record<string, string>; securityPolicy?: number[][] }
     ) {
       super();
+      if (FakeRFB.constructorError) throw FakeRFB.constructorError;
       FakeRFB.lastOptions = options;
       FakeRFB.latest = this;
     }
@@ -104,6 +106,7 @@ describe("VNCPanel", () => {
     approveServer.mockClear();
     FakeRFB.latest = undefined;
     FakeRFB.lastOptions = undefined;
+    FakeRFB.constructorError = undefined;
     vi.mocked(CheckVNCServerKey)
       .mockReset()
       .mockResolvedValue({
@@ -239,6 +242,15 @@ describe("VNCPanel", () => {
 
     expect(await screen.findByText(detail.name)).toBeInTheDocument();
     expect(screen.getByText(key)).toHaveClass(tone);
+  });
+
+  it("closes the backend session when noVNC construction fails", async () => {
+    FakeRFB.constructorError = new Error("invalid channel");
+    const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc", Config: "{}" });
+    render(<VNCPanel tabId="vnc-1" asset={asset} />);
+
+    await waitFor(() => expect(screen.getByText("Error: invalid channel")).toBeInTheDocument());
+    expect(DisconnectVNC).toHaveBeenCalledWith("vnc-session");
   });
 
   it("maps an unsatisfied credential request to its own localized action", async () => {

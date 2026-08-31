@@ -103,16 +103,19 @@ export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
         trustDecisionRef.current = null;
         if (mountedRef.current) setServerIdentity(null);
       };
+      const disconnectBackend = () => {
+        if (sessionID && !backendDisconnected) {
+          backendDisconnected = true;
+          void DisconnectVNC(sessionID);
+        }
+      };
       const teardown = () => {
         clearTrustPrompt();
         client?.cleanup();
         client = null;
         channel?.close();
         channel = null;
-        if (sessionID && !backendDisconnected) {
-          backendDisconnected = true;
-          void DisconnectVNC(sessionID);
-        }
+        disconnectBackend();
       };
       const run = async () => {
         const plainPassword = cred.value.password || s.password;
@@ -146,6 +149,7 @@ export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
             }),
           openSource: () => channel?.markOpen(),
           startTransport: () => StartVNCStream(session.id),
+          closeTransport: disconnectBackend,
         });
         const security = await client.result;
         if (!active) throw new VNCClientError("cancelled");

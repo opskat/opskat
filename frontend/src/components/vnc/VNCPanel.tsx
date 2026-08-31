@@ -171,6 +171,7 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
           }),
         openSource: () => channel.markOpen(),
         startTransport: () => StartVNCStream(session.id),
+        closeTransport: () => void DisconnectVNC(session.id),
         onNegotiatedSecurity: (security) => {
           if (!disposed) setNegotiatedSecurity(security);
         },
@@ -201,6 +202,7 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
       void client.result.catch(() => undefined);
     } catch (e) {
       channel.close();
+      void DisconnectVNC(session.id);
       const message = String(e);
       errorRef.current = message;
       window.queueMicrotask(() => {

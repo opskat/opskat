@@ -36,8 +36,8 @@ importers:
         specifier: ^4.7.0
         version: 4.7.0(monaco-editor@0.55.1)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@novnc/novnc':
-        specifier: github:opskat/noVNC#5930de11a152756844e086d2a5c7f7f4ab01edb8
-        version: https://codeload.github.com/opskat/noVNC/tar.gz/5930de11a152756844e086d2a5c7f7f4ab01edb8
+        specifier: github:opskat/noVNC#70d533e6eda3d7f69a4df18038a48877eaf286f9
+        version: https://codeload.github.com/opskat/noVNC/tar.gz/70d533e6eda3d7f69a4df18038a48877eaf286f9
       '@opskat/ui':
         specifier: workspace:*
         version: link:packages/ui
@@ -724,8 +724,8 @@ packages:
       react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
       react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
-  '@novnc/novnc@https://codeload.github.com/opskat/noVNC/tar.gz/5930de11a152756844e086d2a5c7f7f4ab01edb8':
-    resolution: {tarball: https://codeload.github.com/opskat/noVNC/tar.gz/5930de11a152756844e086d2a5c7f7f4ab01edb8}
+  '@novnc/novnc@https://codeload.github.com/opskat/noVNC/tar.gz/70d533e6eda3d7f69a4df18038a48877eaf286f9':
+    resolution: {tarball: https://codeload.github.com/opskat/noVNC/tar.gz/70d533e6eda3d7f69a4df18038a48877eaf286f9}
     version: 1.7.0
 
   '@pkgr/core@0.2.9':
@@ -3790,7 +3790,7 @@ snapshots:
       react: 19.2.4
       react-dom: 19.2.4(react@19.2.4)
 
-  '@novnc/novnc@https://codeload.github.com/opskat/noVNC/tar.gz/5930de11a152756844e086d2a5c7f7f4ab01edb8': {}
+  '@novnc/novnc@https://codeload.github.com/opskat/noVNC/tar.gz/70d533e6eda3d7f69a4df18038a48877eaf286f9': {}
 
   '@pkgr/core@0.2.9': {}
 

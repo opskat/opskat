@@ -75,6 +75,7 @@ export interface StartVNCClientOptions {
   requestServerTrust: (check: VNCServerKeyCheck) => Promise<boolean>;
   openSource: () => void;
   startTransport: () => Promise<void>;
+  closeTransport: () => void;
   onNegotiatedSecurity?: (security: VNCNegotiatedSecurity) => void;
   onConnected?: () => void;
   onDisconnected?: (clean: boolean) => void;
@@ -134,6 +135,7 @@ export function startVNCClient(options: StartVNCClientOptions): VNCClientHandle 
     for (const [type, listener] of listeners) rfb.removeEventListener(type, listener);
     rfb.disconnect();
     options.source.close();
+    options.closeTransport();
   };
   const fail = (error: VNCClientError) => {
     if (!active || failureReported) return;
