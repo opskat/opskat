@@ -17,7 +17,7 @@ declare module "@novnc/novnc" {
     bufferedAmount?: number;
     onopen: (() => void) | null;
     onmessage: ((event: { data: ArrayBuffer }) => void) | null;
-    onclose: (() => void) | null;
+    onclose: ((event: { code: number; reason: string; wasClean: boolean }) => void) | null;
     onerror: ((event: unknown) => void) | null;
     send(data: ArrayBuffer | ArrayBufferView): void;
     close(): void;

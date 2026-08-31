@@ -13,6 +13,16 @@ function captureHandlers() {
   return handlers;
 }
 
+function deferred() {
+  let resolve!: () => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("WailsRfbChannel", () => {
   beforeEach(() => {
     vi.mocked(EventsOn).mockReset();
@@ -60,17 +70,56 @@ describe("WailsRfbChannel", () => {
     expect(WriteVNC).toHaveBeenCalledWith("sess-1", btoa(String.fromCharCode(0x80, 0xff)));
   });
 
-  it("reports WriteVNC failures through the channel error callback", async () => {
+  it("serializes asynchronous IPC writes in send order", async () => {
     captureHandlers();
-    const failure = new Error("write failed");
-    vi.mocked(WriteVNC).mockRejectedValue(failure);
+    const first = deferred();
+    vi.mocked(WriteVNC)
+      .mockImplementationOnce(() => first.promise as never)
+      .mockResolvedValue(undefined as never);
+    const channel = new WailsRfbChannel("sess-1");
+
+    channel.send(new Uint8Array([1]));
+    channel.send(new Uint8Array([2]));
+
+    expect(WriteVNC).toHaveBeenCalledTimes(1);
+    expect(WriteVNC).toHaveBeenLastCalledWith("sess-1", "AQ==");
+    first.resolve();
+    await vi.waitFor(() => expect(WriteVNC).toHaveBeenCalledTimes(2));
+    expect(WriteVNC).toHaveBeenLastCalledWith("sess-1", "Ag==");
+  });
+
+  it("does not start queued writes after the channel closes", async () => {
+    captureHandlers();
+    const first = deferred();
+    vi.mocked(WriteVNC).mockImplementationOnce(() => first.promise as never);
+    const channel = new WailsRfbChannel("sess-1");
+
+    channel.send(new Uint8Array([1]));
+    channel.send(new Uint8Array([2]));
+    channel.close();
+    first.resolve();
+    await first.promise;
+    await Promise.resolve();
+
+    expect(WriteVNC).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the first WriteVNC failure and drops later queued writes", async () => {
+    captureHandlers();
+    const first = deferred();
+    vi.mocked(WriteVNC).mockImplementationOnce(() => first.promise as never);
     const channel = new WailsRfbChannel("sess-1");
     const onerror = vi.fn();
     channel.onerror = onerror;
 
     channel.send(new Uint8Array([1]));
+    channel.send(new Uint8Array([2]));
+    const failure = new Error("write failed");
+    first.reject(failure);
 
     await vi.waitFor(() => expect(onerror).toHaveBeenCalledWith(failure));
+    expect(onerror).toHaveBeenCalledTimes(1);
+    expect(WriteVNC).toHaveBeenCalledTimes(1);
   });
 
   it("marks open exactly once and fires onopen", () => {
@@ -84,13 +133,15 @@ describe("WailsRfbChannel", () => {
     expect(channel.readyState).toBe("open");
   });
 
-  it("fires onclose when the closed event arrives", () => {
+  it("fires onclose with an abnormal WebSocket close event when the transport closes", () => {
     const handlers = captureHandlers();
     const channel = new WailsRfbChannel("sess-1");
     const onclose = vi.fn();
     channel.onclose = onclose;
     handlers["vnc:closed:sess-1"]!();
-    expect(onclose).toHaveBeenCalledTimes(1);
+    expect(onclose).toHaveBeenCalledWith({ code: 1006, reason: "VNC transport closed", wasClean: false });
+    expect(EventsOff).toHaveBeenCalledWith("vnc:data:sess-1");
+    expect(EventsOff).toHaveBeenCalledWith("vnc:closed:sess-1");
     expect(channel.readyState).toBe("closed");
   });
 
