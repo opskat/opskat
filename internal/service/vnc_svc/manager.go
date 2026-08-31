@@ -8,6 +8,7 @@ import (
 	"net"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,10 +33,11 @@ type Manager struct {
 }
 
 type Session struct {
-	ID             string `json:"id"`
-	Username       string `json:"username,omitempty"`
-	Password       string `json:"password,omitempty"`
-	FileSSHAssetID int64  `json:"fileSshAssetId"`
+	ID             string                           `json:"id"`
+	Username       string                           `json:"username,omitempty"`
+	Password       string                           `json:"password,omitempty"`
+	FileSSHAssetID int64                            `json:"fileSshAssetId"`
+	Encryption     asset_entity.VNCEncryptionPolicy `json:"encryption"`
 
 	// assetID 是这个会话所属的 VNC 资产（区别于上面用于文件传输的 FileSSHAssetID）。
 	// 不导出：前端不需要它，它只用于资产被删除时按资产断开会话。
@@ -92,6 +94,66 @@ func (m *Manager) connectVNC(ctx context.Context, asset *asset_entity.Asset) (*S
 	if err != nil {
 		return nil, err
 	}
+	return m.dialSession(ctx, uuid.NewString(), asset.ID, cfg, password)
+}
+
+// ConnectTemporary creates the raw transport for an unsaved VNC form config.
+// RFB negotiation, authentication, server trust and ServerInit remain owned by noVNC.
+func (m *Manager) ConnectTemporary(
+	ctx context.Context,
+	sessionID string,
+	cfg *asset_entity.VNCConfig,
+	plainPassword string,
+) (*Session, error) {
+	log := logger.Ctx(ctx)
+	log.Info("VNC temporary connect start", zap.String("sessionID", sessionID))
+	if cfg == nil {
+		err := fmt.Errorf("VNC配置为空")
+		log.Error("VNC temporary connect failed", zap.String("sessionID", sessionID), zap.Error(err))
+		return nil, err
+	}
+	resolved := *cfg
+	resolved.Host = strings.TrimSpace(resolved.Host)
+	if resolved.Host == "" {
+		err := fmt.Errorf("主机地址不能为空")
+		log.Error("VNC temporary connect failed", zap.String("sessionID", sessionID), zap.Error(err))
+		return nil, err
+	}
+	if resolved.Port <= 0 || resolved.Port > 65535 {
+		err := fmt.Errorf("端口无效")
+		log.Error("VNC temporary connect failed", zap.String("sessionID", sessionID), zap.Error(err))
+		return nil, err
+	}
+	var err error
+	resolved.Encryption, err = asset_entity.NormalizeVNCEncryptionPolicy(resolved.Encryption)
+	if err != nil {
+		log.Error("VNC temporary connect failed", zap.String("sessionID", sessionID), zap.Error(err))
+		return nil, err
+	}
+	password := plainPassword
+	if password == "" {
+		password, err = m.resolver.ResolvePasswordGeneric(ctx, &resolved)
+		if err != nil {
+			log.Error("VNC temporary connect failed", zap.String("sessionID", sessionID), zap.Error(err))
+			return nil, err
+		}
+	}
+	session, err := m.dialSession(ctx, sessionID, 0, &resolved, password)
+	if err != nil {
+		log.Error("VNC temporary connect failed", zap.String("sessionID", sessionID), zap.Error(err))
+		return nil, err
+	}
+	log.Info("VNC temporary connect end", zap.String("sessionID", sessionID))
+	return session, nil
+}
+
+func (m *Manager) dialSession(
+	ctx context.Context,
+	sessionID string,
+	assetID int64,
+	cfg *asset_entity.VNCConfig,
+	password string,
+) (*Session, error) {
 	layers, err := m.resolver.ResolveProxyChain(ctx, cfg.ProxyChain, 5)
 	if err != nil {
 		return nil, err
@@ -102,11 +164,12 @@ func (m *Manager) connectVNC(ctx context.Context, asset *asset_entity.Asset) (*S
 		return nil, fmt.Errorf("连接 VNC 目标失败: %w", err)
 	}
 	session := &Session{
-		ID:             uuid.NewString(),
+		ID:             sessionID,
 		Username:       cfg.Username,
 		Password:       password,
 		FileSSHAssetID: cfg.FileSSHAssetID,
-		assetID:        asset.ID,
+		Encryption:     cfg.Encryption,
+		assetID:        assetID,
 		host:           cfg.Host,
 		port:           cfg.Port,
 		conn:           conn,

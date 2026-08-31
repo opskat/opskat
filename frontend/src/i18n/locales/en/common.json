@@ -376,6 +376,7 @@
     "credentialsHint": "Credentials will be encrypted and stored securely.",
     "testConnection": "Test Connection",
     "testConnectionSuccess": "Connection successful",
+    "testConnectionSuccessDetail": "Connection successful: {{detail}}",
     "testConnectionFailed": "Connection failed",
     "testing": "Testing...",
     "cancelTest": "Cancel",

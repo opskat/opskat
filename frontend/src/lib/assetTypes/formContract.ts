@@ -22,11 +22,26 @@ export interface AssetTestConfig {
   password: string;
 }
 
+/** 测试成功的可选实际结果摘要；父壳负责统一成功 toast。 */
+export interface AssetTestResult {
+  successDetail?: string;
+}
+
+/** section 可选提供的自定义测试生命周期；cancel 必须幂等且同步启动清理。 */
+export interface AssetTestAttempt {
+  result: Promise<AssetTestResult>;
+  cancel: () => void;
+  /** 协议可把 typed failure 映射为与正常会话一致的用户文案；undefined 走壳的通用错误。 */
+  errorMessage?: (error: unknown) => string | undefined;
+}
+
 /** 每个 ConfigSection 经 useImperativeHandle 暴露的命令式句柄。 */
 export interface AssetFormHandle {
   buildConfig: (ctx: AssetFormContext) => Promise<AssetConfigBuildResult>;
   /** 仅可测类型实现;不可测类型为 null。 */
   buildTestConfig: ((ctx: AssetFormContext) => Promise<AssetTestConfig>) | null;
+  /** 协议需要前后端协同测试时提供；父壳不识别具体资产类型。 */
+  startTest?: (ctx: AssetFormContext) => AssetTestAttempt;
 }
 
 export interface SectionValidity {

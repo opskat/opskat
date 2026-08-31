@@ -6,10 +6,12 @@ import (
 	"encoding/base64"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/host_key_entity"
 	"github.com/opskat/opskat/internal/service/host_key_svc"
 	"github.com/stretchr/testify/require"
@@ -59,6 +61,63 @@ func TestSessionPumpForwardsAndWrites(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for onClose after close")
 	}
+}
+
+func TestManagerConnectTemporaryOnlyOwnsTransportAndSelectedPolicy(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
+
+	serverConn := make(chan net.Conn, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			serverConn <- conn
+		}
+	}()
+
+	_, portText, err := net.SplitHostPort(listener.Addr().String())
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portText)
+	require.NoError(t, err)
+	manager := NewManager(nil)
+	plainPassword := strings.Join([]string{"plain", "password"}, "-")
+	invalidCiphertext := strings.Join([]string{"not", "decryptable", "ciphertext"}, "-")
+	session, err := manager.ConnectTemporary(context.Background(), "temporary-session", &asset_entity.VNCConfig{
+		Host:       "127.0.0.1",
+		Port:       port,
+		Password:   invalidCiphertext,
+		Encryption: asset_entity.VNCEncryptionAlwaysOn,
+	}, plainPassword)
+	require.NoError(t, err)
+	defer manager.Disconnect(session.ID)
+
+	server := <-serverConn
+	defer func() { _ = server.Close() }()
+	require.Equal(t, int64(0), session.assetID)
+	require.Equal(t, "127.0.0.1", session.host)
+	require.Equal(t, port, session.port)
+	require.Equal(t, asset_entity.VNCEncryptionAlwaysOn, session.Encryption)
+	require.Equal(t, plainPassword, session.Password)
+
+	require.NoError(t, server.SetReadDeadline(time.Now().Add(50*time.Millisecond)))
+	one := make([]byte, 1)
+	_, err = server.Read(one)
+	var netErr net.Error
+	require.ErrorAs(t, err, &netErr)
+	require.True(t, netErr.Timeout(), "backend transport must not perform an independent RFB handshake")
+}
+
+func TestManagerConnectTemporaryRejectsInvalidEndpointAndPolicy(t *testing.T) {
+	manager := NewManager(nil)
+
+	_, err := manager.ConnectTemporary(context.Background(), "missing-host", &asset_entity.VNCConfig{Port: 5900}, "")
+	require.ErrorContains(t, err, "主机地址")
+	_, err = manager.ConnectTemporary(context.Background(), "invalid-policy", &asset_entity.VNCConfig{
+		Host: "vnc.example.com", Port: 5900, Encryption: "future-policy",
+	}, "")
+	require.ErrorContains(t, err, "加密策略")
+	require.Empty(t, manager.ActiveSessions())
 }
 
 func TestManagerWriteUnknownSession(t *testing.T) {

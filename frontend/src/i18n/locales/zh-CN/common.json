@@ -376,6 +376,7 @@
     "credentialsHint": "凭据将加密后安全存储。",
     "testConnection": "测试连接",
     "testConnectionSuccess": "连接成功",
+    "testConnectionSuccessDetail": "连接成功：{{detail}}",
     "testConnectionFailed": "连接失败",
     "testing": "测试中...",
     "cancelTest": "取消",

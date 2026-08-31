@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
 import { useTranslation } from "react-i18next";
@@ -27,7 +27,13 @@ import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
 import { AssetTypePicker } from "@/components/asset/AssetTypePicker";
 import { getAssetTypeOptions, getAssetTypeLabel } from "@/lib/assetTypes/options";
 import { getAssetType } from "@/lib/assetTypes";
-import type { AssetFormHandle, AssetFormContext, SectionValidity } from "@/lib/assetTypes/formContract";
+import type {
+  AssetFormHandle,
+  AssetFormContext,
+  AssetTestAttempt,
+  AssetTestResult,
+  SectionValidity,
+} from "@/lib/assetTypes/formContract";
 
 interface AssetFormProps {
   open: boolean;
@@ -92,8 +98,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const [icon, setIcon] = useState("server");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
-  // 当前 in-flight 测试的 ID；切换/取消时用来 race-discard 晚到的结果。
-  const activeTestIdRef = useRef<string | null>(null);
+  // 当前 in-flight 测试；壳只依赖通用 cancel 生命周期，不识别协议类型。
+  const activeTestRef = useRef<{ token: symbol; cancel: () => void } | null>(null);
 
   // 注册化类型走通用 ConfigSection 路径:section 自持 state,经 ref 暴露 build*。
   const sectionRef = useRef<AssetFormHandle>(null);
@@ -104,21 +110,28 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const [extConfig, setExtConfig] = useState<Record<string, unknown>>({});
 
   // 复位测试状态：open 切换时一律清掉上一次表单的 testing 残留（渲染期对比），
-  // testID 残留的清理与后台测试的取消（外部系统同步）留在下方 effect。
+  // 活跃测试生命周期的清理留在下方 effect。
   const [prevOpen, setPrevOpen] = useState(open);
   if (open !== prevOpen) {
     setPrevOpen(open);
     setTesting(false);
   }
 
-  // open 切换时取消任何还在后台跑的测试（关闭对话框时直接放弃结果）。
-  useEffect(() => {
-    const lastId = activeTestIdRef.current;
-    if (lastId) {
-      void CancelTest(lastId);
-    }
-    activeTestIdRef.current = null;
+  // open 切换时取消任何还在跑的测试（关闭对话框时直接放弃结果）。
+  useLayoutEffect(() => {
+    const active = activeTestRef.current;
+    activeTestRef.current = null;
+    active?.cancel();
   }, [open]);
+
+  useEffect(
+    () => () => {
+      const active = activeTestRef.current;
+      activeTestRef.current = null;
+      active?.cancel();
+    },
+    []
+  );
 
   // 打开(或换编辑对象)时回填表单:渲染期对比上次 open/editAsset/defaultGroupId,替代 effect 里的级联 setState。
   const [prevSync, setPrevSync] = useState<{
@@ -170,40 +183,78 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
   // 静默取消正在进行的测试（用于保存/关闭对话框等退出动作）。无 in-flight 测试时是 no-op。
   const cancelActiveTest = () => {
-    const id = activeTestIdRef.current;
-    if (!id) return;
-    activeTestIdRef.current = null;
-    void CancelTest(id);
+    const active = activeTestRef.current;
+    if (!active) return;
+    activeTestRef.current = null;
+    active.cancel();
     setTesting(false);
   };
 
   const handleCancelTest = () => {
-    if (!activeTestIdRef.current) return;
+    if (!activeTestRef.current) return;
     cancelActiveTest();
     toast.info(t("asset.testCancelled"));
   };
 
   const handleGenericTestConnection = async () => {
-    const build = sectionRef.current?.buildTestConfig;
-    if (!build) return;
-    let tc;
-    try {
-      tc = await build(ctx);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
-      return;
-    }
-    const testId = newTestId();
-    activeTestIdRef.current = testId;
+    const handle = sectionRef.current;
+    if (!handle || (!handle.startTest && !handle.buildTestConfig)) return;
+
+    const token = Symbol("asset-test");
+    let cancelled = false;
+    let cancelAttempt = () => {
+      cancelled = true;
+    };
+    let errorMessage: AssetTestAttempt["errorMessage"];
+    const active = {
+      token,
+      cancel: () => {
+        cancelled = true;
+        cancelAttempt();
+      },
+    };
+    activeTestRef.current = active;
     setTesting(true);
+
     try {
-      await TestAssetConnection(testId, tc.assetType, tc.configJSON, tc.password);
-      if (activeTestIdRef.current === testId) notifySuccess(t("asset.testConnectionSuccess"));
+      let attempt: AssetTestAttempt;
+      if (handle.startTest) {
+        attempt = handle.startTest(ctx);
+      } else {
+        const testID = newTestId();
+        let testStarted = false;
+        const result = (async (): Promise<AssetTestResult> => {
+          const tc = await handle.buildTestConfig!(ctx);
+          if (cancelled) return {};
+          testStarted = true;
+          await TestAssetConnection(testID, tc.assetType, tc.configJSON, tc.password);
+          return {};
+        })();
+        attempt = {
+          result,
+          cancel: () => {
+            if (testStarted) void CancelTest(testID);
+          },
+        };
+      }
+      cancelAttempt = attempt.cancel;
+      errorMessage = attempt.errorMessage;
+      if (cancelled) attempt.cancel();
+      const result = await attempt.result;
+      if (activeTestRef.current?.token === token) {
+        notifySuccess(
+          result.successDetail
+            ? t("asset.testConnectionSuccessDetail", { detail: result.successDetail })
+            : t("asset.testConnectionSuccess")
+        );
+      }
     } catch (e) {
-      if (activeTestIdRef.current === testId) toast.error(`${t("asset.testConnectionFailed")}: ${String(e)}`);
+      if (activeTestRef.current?.token === token) {
+        toast.error(errorMessage?.(e) ?? `${t("asset.testConnectionFailed")}: ${String(e)}`);
+      }
     } finally {
-      if (activeTestIdRef.current === testId) {
-        activeTestIdRef.current = null;
+      if (activeTestRef.current?.token === token) {
+        activeTestRef.current = null;
         setTesting(false);
       }
     }
