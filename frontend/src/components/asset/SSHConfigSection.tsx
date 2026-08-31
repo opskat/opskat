@@ -527,6 +527,15 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
       label: "asset.tabAdvanced",
       fields: [
         {
+          kind: "textarea",
+          key: "startupCommand",
+          label: "asset.sshStartupCommand",
+          rows: 4,
+          mono: true,
+          testid: "ssh-startup-command-input",
+          placeholder: "asset.sshStartupCommandPlaceholder",
+        },
+        {
           kind: "custom",
           render: (s, patchState) => {
             // 创建态默认写入全局值；清空则回落为 0＝跟随全局(config 不写)。编辑态直读已存值。

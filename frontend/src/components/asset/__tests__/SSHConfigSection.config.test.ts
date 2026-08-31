@@ -207,6 +207,19 @@ describe("buildSSHConfig (锁旧 save/test 序:host→port→username→auth_typ
       );
     });
   });
+
+  describe("startupCommand 启动命令(空值不写入)", () => {
+    it("非空 → 写 startup_command", () => {
+      expect(buildSSHConfig(base({ startupCommand: "cd /data" }), NO_SECRETS)).toBe(
+        '{"host":"1.2.3.4","port":22,"username":"root","auth_type":"password","startup_command":"cd /data"}'
+      );
+    });
+    it("空值 → 省略", () => {
+      expect(buildSSHConfig(base({ startupCommand: "" }), NO_SECRETS)).toBe(
+        '{"host":"1.2.3.4","port":22,"username":"root","auth_type":"password"}'
+      );
+    });
+  });
 });
 
 describe("parseSSHConfig (镜像旧 loadSSHConfig)", () => {
@@ -285,6 +298,14 @@ describe("parseSSHConfig (镜像旧 loadSSHConfig)", () => {
     expect(parseSSHConfig('{"host":"h","port":22,"username":"u","auth_type":"password"}').restoreCwdOnReconnect).toBe(
       false
     );
+  });
+
+  it("startup_command → startupCommand;缺省为空", () => {
+    expect(
+      parseSSHConfig('{"host":"h","port":22,"username":"u","auth_type":"password","startup_command":"cd /data"}')
+        .startupCommand
+    ).toBe("cd /data");
+    expect(parseSSHConfig('{"host":"h","port":22,"username":"u","auth_type":"password"}').startupCommand).toBe("");
   });
 
   it("agent:agent_source_id/agent_key_fingerprint → agentSourceId/agentKeyFingerprint;残留互斥字段不进入 agent 态", () => {

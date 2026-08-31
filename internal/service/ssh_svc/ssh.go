@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -75,19 +76,20 @@ func (sc *sharedClient) release() {
 
 // Session 表示一个活跃的 SSH 终端会话
 type Session struct {
-	ID          string
-	AssetID     int64
-	shared      *sharedClient
-	session     *ssh.Session
-	stdin       io.WriteCloser
-	stdout      io.Reader
-	mu          sync.Mutex
-	closed      bool
-	onData      func(data []byte)      // 终端输出回调
-	onClosed    func(sessionID string) // 会话关闭回调
-	onSync      func(sessionID string, state DirectorySyncState)
-	interactive bool
-	startedAt   time.Time
+	ID             string
+	AssetID        int64
+	shared         *sharedClient
+	session        *ssh.Session
+	stdin          io.WriteCloser
+	stdout         io.Reader
+	mu             sync.Mutex
+	closed         bool
+	onData         func(data []byte)      // 终端输出回调
+	onClosed       func(sessionID string) // 会话关闭回调
+	onSync         func(sessionID string, state DirectorySyncState)
+	interactive    bool
+	startedAt      time.Time
+	startupCommand string
 
 	// shellPath / shellType are detected lazily by EnableSync. Empty means no
 	// sync attempt has needed shell detection yet; "unsupported" means the
@@ -132,6 +134,21 @@ func (s *Session) Write(data []byte) error {
 		s.ensureSyncProbe()
 	}
 	return err
+}
+
+// submitStartupCommand submits the configured command to the interactive shell.
+// The value is intentionally sent verbatim (apart from terminal line-ending
+// normalization) because it is a user-authored shell command, not a path.
+func (s *Session) submitStartupCommand(command string) error {
+	command = strings.TrimRight(command, "\r\n")
+	if strings.TrimSpace(command) == "" {
+		return nil
+	}
+	command = strings.ReplaceAll(command, "\r\n", "\n")
+	command = strings.ReplaceAll(command, "\r", "\n")
+	command = strings.ReplaceAll(command, "\n", "\r")
+	data := append([]byte(command), '\r')
+	return s.Write(data)
 }
 
 // Resize 调整终端尺寸
@@ -264,6 +281,8 @@ type ConnectConfig struct {
 	// InitialWorkdir 仅在重连路径由前端携带上次已知 cwd；首次连接为空。
 	// 实际是否恢复由 RestoreCwdOnReconnect 权威闸门决定。
 	InitialWorkdir string
+	// StartupCommand 在交互式 shell 建立后自动执行；空值不执行。
+	StartupCommand string
 }
 
 // JumpHostEntry 跳板机连接信息
@@ -337,7 +356,7 @@ func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
 
 	emitProgress(&cfg, "shell", "正在启动终端...")
 
-	sessionID, err := m.createSession(shared, cfg.AssetID, cfg.Cols, cfg.Rows, cfg.OnData, cfg.OnClosed, cfg.OnSync)
+	sessionID, err := m.createSession(shared, cfg.AssetID, cfg.Cols, cfg.Rows, cfg.OnData, cfg.OnClosed, cfg.OnSync, cfg.StartupCommand)
 	if err != nil {
 		shared.release()
 		return "", err
@@ -350,6 +369,14 @@ func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
 				logger.Default().Warn("restore cwd on reconnect failed",
 					zap.String("sessionID", sessionID), zap.String("cwd", cfg.InitialWorkdir), zap.Error(err))
 			}
+		}
+	}
+	if err := m.runStartupCommand(sessionID); err != nil {
+		m.Disconnect(sessionID)
+		return "", err
+	}
+	if cfg.RestoreCwdOnReconnect {
+		if sess, ok := m.GetSession(sessionID); ok {
 			// 捕获：延迟后自动启用目录同步，持续追踪 cwd 供下次重连。
 			go m.autoEnableDirectorySync(sess)
 		}
@@ -399,9 +426,30 @@ func (m *Manager) autoEnableDirectorySync(sess *Session) {
 	}
 }
 
+func (m *Manager) runStartupCommand(sessionID string) error {
+	sess, ok := m.GetSession(sessionID)
+	if !ok {
+		return fmt.Errorf("会话不存在: %s", sessionID)
+	}
+	if strings.TrimSpace(sess.startupCommand) == "" {
+		return nil
+	}
+
+	logger.Default().Info("ssh startup command dispatch started",
+		zap.String("sessionID", sessionID), zap.Int64("assetID", sess.AssetID))
+	if err := sess.submitStartupCommand(sess.startupCommand); err != nil {
+		logger.Default().Error("ssh startup command dispatch failed",
+			zap.String("sessionID", sessionID), zap.Int64("assetID", sess.AssetID), zap.Error(err))
+		return fmt.Errorf("执行 SSH 启动命令失败: %w", err)
+	}
+	logger.Default().Info("ssh startup command dispatch completed",
+		zap.String("sessionID", sessionID), zap.Int64("assetID", sess.AssetID))
+	return nil
+}
+
 // createSession 在 sharedClient 上创建新的 SSH 会话（PTY + shell）
 func (m *Manager) createSession(shared *sharedClient, assetID int64, cols, rows int,
-	onData func(string, []byte), onClosed func(string), onSync func(string, DirectorySyncState)) (string, error) {
+	onData func(string, []byte), onClosed func(string), onSync func(string, DirectorySyncState), startupCommand string) (string, error) {
 
 	session, err := shared.client.NewSession()
 	if err != nil {
@@ -444,16 +492,17 @@ func (m *Manager) createSession(shared *sharedClient, assetID int64, cols, rows 
 	sessionID := m.nextSessionID()
 
 	sess := &Session{
-		ID:          sessionID,
-		AssetID:     assetID,
-		shared:      shared,
-		session:     session,
-		stdin:       stdin,
-		stdout:      stdout,
-		onData:      func(data []byte) { onData(sessionID, data) },
-		onClosed:    onClosed,
-		interactive: true,
-		startedAt:   time.Now(),
+		ID:             sessionID,
+		AssetID:        assetID,
+		shared:         shared,
+		session:        session,
+		stdin:          stdin,
+		stdout:         stdout,
+		onData:         func(data []byte) { onData(sessionID, data) },
+		onClosed:       onClosed,
+		interactive:    true,
+		startedAt:      time.Now(),
+		startupCommand: startupCommand,
 	}
 	if onSync != nil {
 		sess.onSync = func(_ string, state DirectorySyncState) { onSync(sessionID, state) }
@@ -492,9 +541,13 @@ func (m *Manager) NewSessionFrom(existingSessionID string, cols, rows int,
 
 	existing.shared.acquire()
 
-	sessionID, err := m.createSession(existing.shared, existing.AssetID, cols, rows, onData, onClosed, onSync)
+	sessionID, err := m.createSession(existing.shared, existing.AssetID, cols, rows, onData, onClosed, onSync, existing.startupCommand)
 	if err != nil {
 		existing.shared.release()
+		return "", err
+	}
+	if err := m.runStartupCommand(sessionID); err != nil {
+		m.Disconnect(sessionID)
 		return "", err
 	}
 

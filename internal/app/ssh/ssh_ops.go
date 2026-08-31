@@ -79,6 +79,7 @@ func (s *SSH) ConnectSSH(req SSHConnectRequest) (string, error) {
 		KeepAliveIntervalSeconds: sshCfg.KeepAliveIntervalSeconds,
 		RestoreCwdOnReconnect:    sshCfg.RestoreCwdOnReconnect,
 		InitialWorkdir:           req.InitialWorkdir,
+		StartupCommand:           sshCfg.StartupCommand,
 		OnData: func(sid string, data []byte) {
 			wailsRuntime.EventsEmit(s.ctx, "ssh:data:"+sid, base64.StdEncoding.EncodeToString(data))
 		},
@@ -231,6 +232,7 @@ func (s *SSH) ConnectSSHAsync(req SSHConnectRequest) (string, error) {
 			KeepAliveIntervalSeconds: sshCfg.KeepAliveIntervalSeconds,
 			RestoreCwdOnReconnect:    sshCfg.RestoreCwdOnReconnect,
 			InitialWorkdir:           req.InitialWorkdir,
+			StartupCommand:           sshCfg.StartupCommand,
 			OnData: func(sid string, data []byte) {
 				wailsRuntime.EventsEmit(s.ctx, "ssh:data:"+sid, base64.StdEncoding.EncodeToString(data))
 			},

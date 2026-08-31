@@ -787,6 +787,8 @@
     "sshKeepAliveInterval": "Idle keep-alive interval",
     "sshKeepAliveIntervalPlaceholder": "Follow global default ({{seconds}}s)",
     "sshRestoreCwdOnReconnect": "Restore last directory on reconnect",
+    "sshStartupCommand": "Run command after connecting",
+    "sshStartupCommandPlaceholder": "cd /",
     "tabSchemaRegistry": "Schema Registry",
     "tabConnect": "Connect",
     "addDescription": "Add description"

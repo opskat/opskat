@@ -58,6 +58,7 @@ export type FieldDesc<S> = WithVisibility<S> &
         placeholder?: string;
         required?: boolean;
         mono?: boolean;
+        testid?: string;
       }
     | { kind: "row"; fields: FieldDesc<S>[] }
     | {
@@ -187,6 +188,7 @@ function FieldNode<S>({
       return (
         <Field label={t(field.label)} required={field.required}>
           <Textarea
+            data-testid={field.testid}
             value={String(state[field.key] ?? "")}
             rows={field.rows}
             placeholder={field.placeholder ? t(field.placeholder, { defaultValue: field.placeholder }) : undefined}

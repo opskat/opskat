@@ -520,6 +520,38 @@ func TestSession_RestoreWorkingDirectory(t *testing.T) {
 	})
 }
 
+func TestSession_SubmitStartupCommand(t *testing.T) {
+	t.Run("empty command writes nothing", func(t *testing.T) {
+		stdin := &recordingWriteCloser{}
+		sess := &Session{stdin: stdin}
+
+		err := sess.submitStartupCommand("  \r\n")
+
+		assert.NoError(t, err)
+		assert.Equal(t, 0, stdin.writeCount())
+	})
+
+	t.Run("command is submitted to the interactive shell", func(t *testing.T) {
+		stdin := &recordingWriteCloser{}
+		sess := &Session{stdin: stdin}
+
+		err := sess.submitStartupCommand("cd /data")
+
+		assert.NoError(t, err)
+		assert.Equal(t, "cd /data\r", string(stdin.lastWrite()))
+	})
+
+	t.Run("multiline command uses terminal carriage returns without adding a blank command", func(t *testing.T) {
+		stdin := &recordingWriteCloser{}
+		sess := &Session{stdin: stdin}
+
+		err := sess.submitStartupCommand("cd /data\r\ndocker compose ps\n")
+
+		assert.NoError(t, err)
+		assert.Equal(t, "cd /data\rdocker compose ps\r", string(stdin.lastWrite()))
+	})
+}
+
 func TestSession_EnableSyncDoesNotWriteUserVisibleHookSource(t *testing.T) {
 	stdin := &recordingWriteCloser{}
 	sess := &Session{

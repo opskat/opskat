@@ -124,6 +124,8 @@ type SSHConfig struct {
 	// RestoreCwdOnReconnect 开启后，该资产 SSH 终端断线手动重连时自动 cd 回上次目录，
 	// 并在连接时自动启用目录同步以持续追踪 cwd（仅 bash/zsh/ksh/mksh）。
 	RestoreCwdOnReconnect bool `json:"restore_cwd_on_reconnect,omitempty"`
+	// StartupCommand 在 SSH 交互式 shell 建立后自动执行。支持以换行分隔的多条命令。
+	StartupCommand string `json:"startup_command,omitempty"`
 	// AgentSourceID 是 Agent 模式（AuthType=agent）选用的 SSH Agent 来源 ID，
 	// 必须是正数且对应现存来源（引用完整性由服务/写入边界兜底）。
 	AgentSourceID int64 `json:"agent_source_id,omitempty"`
