@@ -99,7 +99,7 @@ describe("WailsRfbChannel", () => {
     channel.close();
     first.resolve();
     await first.promise;
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(WriteVNC).toHaveBeenCalledTimes(1);
   });
