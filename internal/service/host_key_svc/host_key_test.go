@@ -11,10 +11,11 @@ import (
 )
 
 type memoryHostKeyRepo struct {
-	keys      map[string]*host_key_entity.HostKey
-	findErr   error
-	upsertErr error
-	upserts   int
+	keys                 map[string]*host_key_entity.HostKey
+	findErr              error
+	upsertErr            error
+	upserts              int
+	beforeUpdateLastSeen func()
 }
 
 func newMemoryHostKeyRepo(keys ...*host_key_entity.HostKey) *memoryHostKeyRepo {
@@ -40,6 +41,24 @@ func (r *memoryHostKeyRepo) FindByHostPortKeyType(_ context.Context, host string
 	}
 	keyCopy := *key
 	return &keyCopy, nil
+}
+
+func (r *memoryHostKeyRepo) UpdateLastSeen(_ context.Context, id int64, lastSeen int64) error {
+	if r.upsertErr != nil {
+		return r.upsertErr
+	}
+	if r.beforeUpdateLastSeen != nil {
+		r.beforeUpdateLastSeen()
+		r.beforeUpdateLastSeen = nil
+	}
+	r.upserts++
+	for _, key := range r.keys {
+		if key.ID == id {
+			key.LastSeen = lastSeen
+			break
+		}
+	}
+	return nil
 }
 
 func (r *memoryHostKeyRepo) Upsert(_ context.Context, key *host_key_entity.HostKey) error {
@@ -109,6 +128,31 @@ func TestHostKeyServiceFirstUseMatchChangeAndCancellation(t *testing.T) {
 	require.Equal(t, "new-key", replaced.PublicKey)
 	require.Equal(t, "SHA256:new", replaced.Fingerprint)
 	require.Equal(t, int64(10), replaced.FirstSeen)
+}
+
+func TestHostKeyServiceMatchDoesNotOverwriteConcurrentReplacement(t *testing.T) {
+	ctx := context.Background()
+	stored := &host_key_entity.HostKey{
+		ID: 7, Host: "vnc.example", Port: 5901, KeyType: host_key_entity.KeyTypeVNCRSA,
+		PublicKey: "old-key", Fingerprint: "SHA256:old", FirstSeen: 10, LastSeen: 20,
+	}
+	repo := newMemoryHostKeyRepo(stored)
+	repo.beforeUpdateLastSeen = func() {
+		replacement := *stored
+		replacement.PublicKey = "replacement-key"
+		replacement.Fingerprint = "SHA256:replacement"
+		repo.keys[hostKeyMapKey(stored.Host, stored.Port, stored.KeyType)] = &replacement
+	}
+
+	_, err := New(repo).Check(ctx, PresentedKey{
+		Host: stored.Host, Port: stored.Port, KeyType: stored.KeyType,
+		PublicKey: stored.PublicKey, Fingerprint: stored.Fingerprint,
+	})
+
+	require.NoError(t, err)
+	persisted := repo.keys[hostKeyMapKey(stored.Host, stored.Port, stored.KeyType)]
+	require.Equal(t, "replacement-key", persisted.PublicKey)
+	require.Equal(t, "SHA256:replacement", persisted.Fingerprint)
 }
 
 func TestHostKeyServiceSurfacesReadAndPersistenceFailures(t *testing.T) {

@@ -162,6 +162,12 @@ func (r *vncHostKeyRepoFake) FindByHostPortKeyType(_ context.Context, host strin
 	keyCopy := *r.stored
 	return &keyCopy, nil
 }
+func (r *vncHostKeyRepoFake) UpdateLastSeen(_ context.Context, _ int64, lastSeen int64) error {
+	if r.stored != nil {
+		r.stored.LastSeen = lastSeen
+	}
+	return nil
+}
 func (r *vncHostKeyRepoFake) Upsert(_ context.Context, key *host_key_entity.HostKey) error {
 	keyCopy := *key
 	r.stored = &keyCopy

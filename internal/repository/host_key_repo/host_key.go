@@ -13,6 +13,7 @@ import (
 // HostKeyRepo 主机密钥数据访问接口
 type HostKeyRepo interface {
 	FindByHostPortKeyType(ctx context.Context, host string, port int, keyType string) (*host_key_entity.HostKey, error)
+	UpdateLastSeen(ctx context.Context, id int64, lastSeen int64) error
 	Upsert(ctx context.Context, key *host_key_entity.HostKey) error
 	Delete(ctx context.Context, id int64) error
 	List(ctx context.Context) ([]*host_key_entity.HostKey, error)
@@ -45,6 +46,10 @@ func (r *hostKeyRepo) FindByHostPortKeyType(ctx context.Context, host string, po
 		return nil, result.Error
 	}
 	return &key, nil
+}
+
+func (r *hostKeyRepo) UpdateLastSeen(ctx context.Context, id int64, lastSeen int64) error {
+	return db.Ctx(ctx).Model(&host_key_entity.HostKey{}).Where("id = ?", id).Update("last_seen", lastSeen).Error
 }
 
 func (r *hostKeyRepo) Upsert(ctx context.Context, key *host_key_entity.HostKey) error {

@@ -87,8 +87,7 @@ func (s *hostKeySvc) Check(ctx context.Context, key PresentedKey) (*CheckResult,
 	}
 
 	if stored.PublicKey == key.PublicKey {
-		stored.LastSeen = s.now().Unix()
-		if err := s.repo().Upsert(ctx, stored); err != nil {
+		if err := s.repo().UpdateLastSeen(ctx, stored.ID, s.now().Unix()); err != nil {
 			wrapped := fmt.Errorf("update host key last-seen: %w", err)
 			logger.Ctx(ctx).Error("host key check failed",
 				zap.String("host", key.Host), zap.Int("port", key.Port), zap.String("keyType", key.KeyType), zap.Error(wrapped))

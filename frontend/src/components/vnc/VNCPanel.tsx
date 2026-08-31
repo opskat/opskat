@@ -74,6 +74,7 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
   const rfbRef = useRef<RFB | null>(null);
   const clientRef = useRef<VNCClientHandle | null>(null);
   const trustDecisionRef = useRef<((trusted: boolean) => void) | null>(null);
+  const connectAttemptRef = useRef(0);
   const errorRef = useRef("");
   const scaleViewportRef = useRef(true);
   const keyboardPasteRef = useRef(false);
@@ -95,6 +96,7 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const connect = useCallback(async () => {
+    const attempt = ++connectAttemptRef.current;
     setStatus("connecting");
     setError("");
     errorRef.current = "";
@@ -109,15 +111,27 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
     rfbRef.current = null;
     try {
       const next = (await ConnectVNC(asset.ID)) as VNCSession;
+      if (attempt !== connectAttemptRef.current) {
+        void DisconnectVNC(next.id);
+        return;
+      }
       setSession(next);
       setStatus("connecting");
     } catch (e) {
+      if (attempt !== connectAttemptRef.current) return;
       const message = String(e);
       errorRef.current = message;
       setError(message);
       setStatus("error");
     }
   }, [asset.ID]);
+
+  useEffect(
+    () => () => {
+      connectAttemptRef.current++;
+    },
+    []
+  );
 
   useEffect(() => {
     const timer = window.setTimeout(() => void connect(), 0);

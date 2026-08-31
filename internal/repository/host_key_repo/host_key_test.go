@@ -33,4 +33,11 @@ func TestFindByHostPortKeyTypeIsolatesKeyTypes(t *testing.T) {
 	vncKey, err := repo.FindByHostPortKeyType(ctx, "shared.example", 5900, host_key_entity.KeyTypeVNCRSA)
 	require.NoError(t, err)
 	require.Equal(t, "vnc", vncKey.PublicKey)
+
+	require.NoError(t, repo.UpdateLastSeen(ctx, vncKey.ID, 1234))
+	updated, err := repo.FindByHostPortKeyType(ctx, "shared.example", 5900, host_key_entity.KeyTypeVNCRSA)
+	require.NoError(t, err)
+	require.Equal(t, "vnc", updated.PublicKey)
+	require.Equal(t, "SHA256:vnc", updated.Fingerprint)
+	require.Equal(t, int64(1234), updated.LastSeen)
 }

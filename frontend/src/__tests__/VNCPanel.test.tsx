@@ -191,6 +191,25 @@ describe("VNCPanel", () => {
     expect(FakeRFB.latest!.sendCredentials).toHaveBeenCalledWith({ username: "vnc-user", password: "secret" });
   });
 
+  it("disconnects a backend session that resolves after the panel unmounts", async () => {
+    let resolveConnect!: (session: unknown) => void;
+    vi.mocked(ConnectVNC).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveConnect = resolve;
+        }) as never
+    );
+    const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc", Config: "{}" });
+    const { unmount } = render(<VNCPanel tabId="vnc-1" asset={asset} />);
+
+    await waitFor(() => expect(ConnectVNC).toHaveBeenCalledWith(1));
+    unmount();
+    resolveConnect({ id: "late-session", fileSshAssetId: 0 });
+
+    await waitFor(() => expect(DisconnectVNC).toHaveBeenCalledWith("late-session"));
+    expect(StartVNCStream).not.toHaveBeenCalled();
+  });
+
   it("auto-approves an exact durable key match without prompting", async () => {
     vi.mocked(CheckVNCServerKey).mockResolvedValue({
       state: "match",

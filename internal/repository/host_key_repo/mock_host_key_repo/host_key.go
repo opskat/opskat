@@ -85,6 +85,20 @@ func (mr *MockHostKeyRepoMockRecorder) List(ctx any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "List", reflect.TypeOf((*MockHostKeyRepo)(nil).List), ctx)
 }
 
+// UpdateLastSeen mocks base method.
+func (m *MockHostKeyRepo) UpdateLastSeen(ctx context.Context, id, lastSeen int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateLastSeen", ctx, id, lastSeen)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateLastSeen indicates an expected call of UpdateLastSeen.
+func (mr *MockHostKeyRepoMockRecorder) UpdateLastSeen(ctx, id, lastSeen any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateLastSeen", reflect.TypeOf((*MockHostKeyRepo)(nil).UpdateLastSeen), ctx, id, lastSeen)
+}
+
 // Upsert mocks base method.
 func (m *MockHostKeyRepo) Upsert(ctx context.Context, key *host_key_entity.HostKey) error {
 	m.ctrl.T.Helper()

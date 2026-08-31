@@ -32,6 +32,9 @@ func (r *sshHostKeyRepoFake) FindByHostPortKeyType(_ context.Context, _ string, 
 	keyCopy := *r.stored
 	return &keyCopy, nil
 }
+func (r *sshHostKeyRepoFake) UpdateLastSeen(_ context.Context, _ int64, _ int64) error {
+	return r.upsertErr
+}
 func (r *sshHostKeyRepoFake) Upsert(_ context.Context, key *host_key_entity.HostKey) error {
 	if r.upsertErr != nil {
 		return r.upsertErr
