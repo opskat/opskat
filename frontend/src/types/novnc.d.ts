@@ -10,6 +10,12 @@ declare module "@novnc/novnc" {
     securityPolicy?: number[][];
   }
 
+  export interface RfbCloseEvent {
+    code: number;
+    reason: string;
+    wasClean: boolean;
+  }
+
   export interface RfbRawChannel {
     binaryType: string;
     protocol: string;
@@ -17,7 +23,7 @@ declare module "@novnc/novnc" {
     bufferedAmount?: number;
     onopen: (() => void) | null;
     onmessage: ((event: { data: ArrayBuffer }) => void) | null;
-    onclose: ((event: { code: number; reason: string; wasClean: boolean }) => void) | null;
+    onclose: ((event: RfbCloseEvent) => void) | null;
     onerror: ((event: unknown) => void) | null;
     send(data: ArrayBuffer | ArrayBufferView): void;
     close(): void;

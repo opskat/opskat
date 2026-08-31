@@ -1,6 +1,7 @@
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
 import { WriteVNC } from "../../wailsjs/go/vnc/VNC";
 import { createOrderedQueue } from "@/lib/orderedQueue";
+import type { RfbCloseEvent } from "@novnc/novnc";
 
 type ReadyState = "connecting" | "open" | "closing" | "closed";
 
@@ -30,14 +31,13 @@ export class WailsRfbChannel {
   readyState: ReadyState = "connecting";
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: ArrayBuffer }) => void) | null = null;
-  onclose: ((event: { code: number; reason: string; wasClean: boolean }) => void) | null = null;
+  onclose: ((event: RfbCloseEvent) => void) | null = null;
   onerror: ((event: unknown) => void) | null = null;
 
   private readonly dataEvent: string;
   private readonly closedEvent: string;
   private opened = false;
   private sendFailed = false;
-  private sendGeneration = 0;
   private readonly sendQueue = createOrderedQueue();
 
   constructor(private readonly sessionId: string) {
@@ -60,20 +60,23 @@ export class WailsRfbChannel {
   }
 
   send(data: ArrayBuffer | ArrayBufferView): void {
-    if (this.readyState === "closed" || this.sendFailed) return;
+    if (this.isClosed() || this.sendFailed) return;
     const encoded = toBase64(data);
-    const generation = this.sendGeneration;
     void this.sendQueue.push(async () => {
-      if (generation !== this.sendGeneration || this.readyState === "closed" || this.sendFailed) return;
+      if (this.isClosed() || this.sendFailed) return;
       try {
         await WriteVNC(this.sessionId, encoded);
       } catch (error) {
-        if (generation !== this.sendGeneration || this.sendFailed) return;
+        if (this.isClosed() || this.sendFailed) return;
         this.sendFailed = true;
         this.onerror?.(error);
         this.close();
       }
     });
+  }
+
+  private isClosed(): boolean {
+    return this.readyState === "closed";
   }
 
   // 由面板在 new RFB() 之后调用一次:置 open 并触发 onopen。attach 已同步跑完并以
@@ -88,7 +91,6 @@ export class WailsRfbChannel {
   close(): void {
     if (this.readyState === "closed") return;
     this.readyState = "closed";
-    this.sendGeneration++;
     EventsOff(this.dataEvent);
     EventsOff(this.closedEvent);
   }
