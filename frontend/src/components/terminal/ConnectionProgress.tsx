@@ -1,19 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  Loader2,
-  RotateCcw,
-  X,
-  Check,
-  KeyRound,
-  Server,
-  Shield,
-  TerminalSquare,
-  AlertTriangle,
-  Fingerprint,
-  Unplug,
-} from "lucide-react";
+import { Loader2, RotateCcw, X, Check, KeyRound, Server, Shield, TerminalSquare, Unplug } from "lucide-react";
 import { Button, Input } from "@opskat/ui";
+import { ServerIdentityPrompt } from "@/components/remote/ServerIdentityPrompt";
 import {
   useTerminalStore,
   type ConnectionState,
@@ -343,56 +332,26 @@ function HostKeyVerifyForm({
   const { t } = useTranslation();
 
   return (
-    <div className="w-full max-w-sm space-y-3 mb-4">
-      {hostKey.isChanged && (
-        <div className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3">
-          <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
-          <p className="text-xs text-destructive">{t("ssh.connectProgress.hostKeyChangedWarning")}</p>
-        </div>
-      )}
-      <div className="select-text rounded-md border bg-muted/30 p-3 space-y-2">
-        <div className="select-text flex items-center gap-2 text-xs text-muted-foreground">
-          <Fingerprint className="h-3.5 w-3.5" />
-          <span>
-            {hostKey.host}:{hostKey.port}
-          </span>
-          <span className="text-muted-foreground/60">({hostKey.keyType})</span>
-        </div>
-        <div className="select-text font-mono text-xs break-all text-foreground">{hostKey.fingerprint}</div>
-        {hostKey.isChanged && hostKey.oldFingerprint && (
-          <div className="border-t pt-2 mt-2">
-            <div className="text-xs text-muted-foreground mb-1">{t("ssh.connectProgress.oldFingerprint")}</div>
-            <div className="select-text font-mono text-xs break-all text-muted-foreground line-through">
-              {hostKey.oldFingerprint}
-            </div>
-          </div>
-        )}
-      </div>
-      <div className="flex gap-2">
-        <Button
-          data-testid="ssh-host-key-reject"
-          size="sm"
-          variant="outline"
-          onClick={() => onAction(2)}
-          className="flex-1"
-        >
-          <X className="h-3.5 w-3.5 mr-1" />
-          {t("ssh.connectProgress.hostKeyReject")}
-        </Button>
-        <Button
-          data-testid="ssh-host-key-accept-once"
-          size="sm"
-          variant="secondary"
-          onClick={() => onAction(1)}
-          className="flex-1"
-        >
-          {t("ssh.connectProgress.hostKeyAcceptOnce")}
-        </Button>
-        <Button data-testid="ssh-host-key-trust" size="sm" onClick={() => onAction(0)} className="flex-1">
-          <Check className="h-3.5 w-3.5 mr-1" />
-          {t("ssh.connectProgress.hostKeyAcceptSave")}
-        </Button>
-      </div>
+    <div className="mb-4 w-full max-w-sm">
+      <ServerIdentityPrompt
+        identity={{
+          host: hostKey.host,
+          port: hostKey.port,
+          keyType: hostKey.keyType,
+          fingerprint: hostKey.fingerprint,
+          oldFingerprint: hostKey.oldFingerprint,
+          isChanged: hostKey.isChanged,
+        }}
+        changedWarning={t("ssh.connectProgress.hostKeyChangedWarning")}
+        oldFingerprintLabel={t("ssh.connectProgress.oldFingerprint")}
+        rejectLabel={t("ssh.connectProgress.hostKeyReject")}
+        acceptOnceLabel={t("ssh.connectProgress.hostKeyAcceptOnce")}
+        trustLabel={t("ssh.connectProgress.hostKeyAcceptSave")}
+        onReject={() => onAction(2)}
+        onAcceptOnce={() => onAction(1)}
+        onTrust={() => onAction(0)}
+        testIdPrefix="ssh-host-key"
+      />
     </div>
   );
 }

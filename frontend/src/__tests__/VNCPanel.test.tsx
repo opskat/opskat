@@ -2,13 +2,49 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { asset_entity } from "../../wailsjs/go/models";
-import { ConnectVNC, DisconnectVNC, EncodeVNCClipboardText, StartVNCStream } from "../../wailsjs/go/vnc/VNC";
+import {
+  CheckVNCServerKey,
+  ConnectVNC,
+  DisconnectVNC,
+  EncodeVNCClipboardText,
+  StartVNCStream,
+  TrustVNCServerKey,
+} from "../../wailsjs/go/vnc/VNC";
 import { DisconnectSSH, OpenSFTPSession } from "../../wailsjs/go/ssh/SSH";
 import { ClipboardGetText, ClipboardSetText } from "../../wailsjs/runtime";
 import { VNCPanel } from "@/components/vnc/VNCPanel";
 import { toast } from "sonner";
 
-const approveServer = vi.fn();
+const { approveServer, FakeRFB } = vi.hoisted(() => {
+  const approveServer = vi.fn();
+  class FakeRFB extends EventTarget {
+    static lastOptions: { credentials?: Record<string, string>; securityPolicy?: number[][] } | undefined;
+    static latest: FakeRFB | undefined;
+    scaleViewport = true;
+    clipViewport = true;
+    resizeSession = false;
+    background = "";
+    _rfbConnectionState = "connecting";
+
+    constructor(
+      _target: HTMLElement,
+      _url: string,
+      options?: { credentials?: Record<string, string>; securityPolicy?: number[][] }
+    ) {
+      super();
+      FakeRFB.lastOptions = options;
+      FakeRFB.latest = this;
+    }
+
+    approveServer = approveServer;
+    sendCredentials = vi.fn();
+    disconnect = vi.fn();
+    clipboardPasteFrom = vi.fn();
+    sendKey = vi.fn();
+    sendCtrlAltDel = vi.fn();
+  }
+  return { approveServer, FakeRFB };
+});
 
 // Local override of the global react-i18next mock (setup.ts): that mock keeps
 // `t` a stable reference on purpose, but this file needs to flip `t`'s
@@ -21,29 +57,7 @@ vi.mock("react-i18next", () => ({
   initReactI18next: { type: "3rdParty", init: vi.fn() },
 }));
 
-class FakeRFB extends EventTarget {
-  static lastCredentials: Record<string, string> | undefined;
-  static latest: FakeRFB | undefined;
-  scaleViewport = true;
-  clipViewport = true;
-  resizeSession = false;
-  background = "";
-  _rfbConnectionState = "connecting";
-
-  constructor(_target: HTMLElement, _url: string, options: { credentials: Record<string, string> }) {
-    super();
-    FakeRFB.lastCredentials = options.credentials;
-    FakeRFB.latest = this;
-  }
-
-  approveServer = approveServer;
-  disconnect = vi.fn();
-  clipboardPasteFrom = vi.fn();
-  sendKey = vi.fn();
-  sendCtrlAltDel = vi.fn();
-}
-
-vi.mock("@novnc/novnc/lib/rfb", () => ({ default: FakeRFB }));
+vi.mock("@novnc/novnc", () => ({ default: FakeRFB }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 // Radix menus need these DOM APIs happy-dom doesn't implement (see RDPPanel.test.tsx).
@@ -54,10 +68,12 @@ beforeAll(() => {
 });
 
 vi.mock("../../wailsjs/go/vnc/VNC", () => ({
+  CheckVNCServerKey: vi.fn(),
   ConnectVNC: vi.fn(),
   DisconnectVNC: vi.fn(),
   EncodeVNCClipboardText: vi.fn(),
   StartVNCStream: vi.fn(),
+  TrustVNCServerKey: vi.fn(),
   WriteVNC: vi.fn(),
 }));
 
@@ -73,12 +89,32 @@ vi.mock("@/components/terminal/FileManagerPanel", () => ({
   FileManagerPanel: () => <div data-testid="file-manager" />,
 }));
 
+function dispatchConnected() {
+  FakeRFB.latest!.dispatchEvent(
+    new CustomEvent("negotiatedsecurity", {
+      detail: { type: 2, name: "VNCAuth", authenticationEncrypted: false, sessionEncrypted: false },
+    })
+  );
+  FakeRFB.latest!.dispatchEvent(new CustomEvent("connect"));
+}
+
 describe("VNCPanel", () => {
   beforeEach(() => {
     currentT = (key: string) => key;
     approveServer.mockClear();
     FakeRFB.latest = undefined;
-    FakeRFB.lastCredentials = undefined;
+    FakeRFB.lastOptions = undefined;
+    vi.mocked(CheckVNCServerKey)
+      .mockReset()
+      .mockResolvedValue({
+        state: "first_use",
+        host: "vnc.example.com",
+        port: 5901,
+        newFingerprint: "SHA256:new-vnc-key",
+      } as never);
+    vi.mocked(TrustVNCServerKey)
+      .mockReset()
+      .mockResolvedValue(undefined as never);
     vi.mocked(DisconnectVNC).mockReset();
     vi.mocked(StartVNCStream)
       .mockReset()
@@ -101,13 +137,33 @@ describe("VNCPanel", () => {
     } as never);
   });
 
-  it("shows the RA2 server identity prompt and continues after approval", async () => {
-    const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
+  it("durably trusts the RA2 server before approval and only then supplies credentials", async () => {
+    const order: string[] = [];
+    vi.mocked(CheckVNCServerKey).mockImplementation(async () => {
+      order.push("check");
+      return {
+        state: "first_use",
+        host: "vnc.example.com",
+        port: 5901,
+        newFingerprint: "SHA256:new-vnc-key",
+      } as never;
+    });
+    vi.mocked(TrustVNCServerKey).mockImplementation(async () => {
+      order.push("trust");
+    });
+    approveServer.mockImplementation(() => order.push("approve"));
+    const asset = new asset_entity.Asset({
+      ID: 1,
+      Name: "test-vnc",
+      Type: "vnc",
+      Config: JSON.stringify({ host: "vnc.example.com", port: 5901, encryption: "always_maximum" }),
+    });
     render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
     expect(StartVNCStream).toHaveBeenCalledWith("vnc-session");
-    expect(FakeRFB.lastCredentials).toEqual({ username: "vnc-user", password: "secret" });
+    expect(FakeRFB.lastOptions).toEqual({ securityPolicy: [[129, 133]] });
+    expect(FakeRFB.latest!.sendCredentials).not.toHaveBeenCalled();
 
     FakeRFB.latest!.dispatchEvent(
       new CustomEvent("serververification", {
@@ -116,9 +172,109 @@ describe("VNCPanel", () => {
     );
 
     expect(await screen.findByText("vnc.verifyServerTitle")).toBeInTheDocument();
-    expect(document.querySelector("code")).toHaveClass("select-text");
-    fireEvent.click(screen.getByTestId("vnc-verify-approve"));
-    expect(approveServer).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getAllByText("vnc.example.com:5901").some((node) => node.closest("div")?.classList.contains("select-text"))
+    ).toBe(true);
+    expect(screen.getByText("SHA256:new-vnc-key")).toHaveClass("select-text");
+    expect(CheckVNCServerKey).toHaveBeenCalledWith("vnc-session", "AQIDBA==");
+    expect(FakeRFB.latest!.sendCredentials).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("vnc-verify-trust"));
+    await waitFor(() => expect(approveServer).toHaveBeenCalledTimes(1));
+    expect(TrustVNCServerKey).toHaveBeenCalledWith("vnc-session", "AQIDBA==", false);
+    expect(order).toEqual(["check", "trust", "approve"]);
+
+    FakeRFB.latest!.dispatchEvent(new CustomEvent("credentialsrequired", { detail: { types: ["password"] } }));
+    expect(FakeRFB.latest!.sendCredentials).toHaveBeenCalledWith({ username: "vnc-user", password: "secret" });
+  });
+
+  it("auto-approves an exact durable key match without prompting", async () => {
+    vi.mocked(CheckVNCServerKey).mockResolvedValue({
+      state: "match",
+      host: "vnc.example.com",
+      port: 5901,
+      newFingerprint: "SHA256:trusted-vnc-key",
+    } as never);
+    const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc", Config: "{}" });
+    render(<VNCPanel tabId="vnc-1" asset={asset} />);
+
+    await waitFor(() => expect(FakeRFB.latest).toBeDefined());
+    FakeRFB.latest!.dispatchEvent(
+      new CustomEvent("serververification", { detail: { publickey: new Uint8Array([1, 2, 3, 4]) } })
+    );
+
+    await waitFor(() => expect(approveServer).toHaveBeenCalledTimes(1));
+    expect(TrustVNCServerKey).not.toHaveBeenCalled();
+    expect(screen.queryByText("vnc.verifyServerTitle")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    [
+      { type: 129, name: "RA2_256", authenticationEncrypted: true, sessionEncrypted: true, aesBits: 256 },
+      "vnc.security.sessionEncrypted",
+      "text-info",
+    ],
+    [
+      { type: 130, name: "RA2ne_256", authenticationEncrypted: true, sessionEncrypted: false, aesBits: 256 },
+      "vnc.security.authenticationOnly",
+      "text-warning",
+    ],
+    [
+      { type: 2, name: "VNCAuth", authenticationEncrypted: false, sessionEncrypted: false },
+      "vnc.security.unencrypted",
+      "text-warning",
+    ],
+  ])("renders actual negotiated protection instead of the configured preference", async (detail, key, tone) => {
+    const asset = new asset_entity.Asset({
+      ID: 1,
+      Name: "test-vnc",
+      Type: "vnc",
+      Config: JSON.stringify({ encryption: "always_maximum" }),
+    });
+    render(<VNCPanel tabId="vnc-1" asset={asset} />);
+
+    await waitFor(() => expect(FakeRFB.latest).toBeDefined());
+    FakeRFB.latest!.dispatchEvent(new CustomEvent("negotiatedsecurity", { detail }));
+    FakeRFB.latest!.dispatchEvent(new CustomEvent("connect"));
+
+    expect(await screen.findByText(detail.name)).toBeInTheDocument();
+    expect(screen.getByText(key)).toHaveClass(tone);
+  });
+
+  it("maps an unsatisfied credential request to its own localized action", async () => {
+    vi.mocked(ConnectVNC).mockResolvedValue({
+      id: "vnc-session",
+      username: "vnc-user",
+      fileSshAssetId: 0,
+    } as never);
+    const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc", Config: "{}" });
+    render(<VNCPanel tabId="vnc-1" asset={asset} />);
+
+    await waitFor(() => expect(FakeRFB.latest).toBeDefined());
+    FakeRFB.latest!.dispatchEvent(new CustomEvent("credentialsrequired", { detail: { types: ["password"] } }));
+
+    expect(await screen.findByText("vnc.failure.unsatisfiedCredentials")).toBeInTheDocument();
+    expect(FakeRFB.latest!.sendCredentials).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["policy-rejected", "vnc.failure.policyRejected"],
+    ["unsupported-security-type", "vnc.failure.unsupportedSecurityType"],
+    ["authentication-failed", "vnc.failure.authenticationFailed"],
+    ["integrity-failed", "vnc.failure.integrityFailed"],
+    ["transport-closed", "vnc.failure.transportClosed"],
+  ])("maps typed %s failures without parsing private messages", async (code, expectedMessage) => {
+    const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc", Config: "{}" });
+    const { unmount } = render(<VNCPanel tabId="vnc-1" asset={asset} />);
+
+    await waitFor(() => expect(FakeRFB.latest).toBeDefined());
+    FakeRFB.latest!.dispatchEvent(
+      new CustomEvent("connectionfailure", { detail: { code, message: "opaque protocol message" } })
+    );
+
+    expect(await screen.findByText(expectedMessage)).toBeInTheDocument();
+    expect(screen.queryByText("opaque protocol message")).not.toBeInTheDocument();
+    unmount();
   });
 
   it("decodes UTF-8 clipboard text received from a legacy VNC server", async () => {
@@ -269,7 +425,7 @@ describe("VNCPanel", () => {
     render(<VNCPanel tabId="vnc-1" asset={asset} />);
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
     FakeRFB.latest!._rfbConnectionState = "connected";
-    FakeRFB.latest!.dispatchEvent(new CustomEvent("connect"));
+    dispatchConnected();
     // The special-keys trigger is a Radix DropdownMenu: fireEvent.click doesn't open it
     // in happy-dom, so drive it with userEvent (same as VNCToolbar/RDPPanel tests). Wait
     // for the trigger to become enabled once the connect event flips status to connected.
@@ -285,7 +441,7 @@ describe("VNCPanel", () => {
     render(<VNCPanel tabId="vnc-1" asset={asset} />);
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
     FakeRFB.latest!._rfbConnectionState = "connected";
-    FakeRFB.latest!.dispatchEvent(new CustomEvent("connect"));
+    dispatchConnected();
     const trigger = await screen.findByTestId("vnc-special-keys");
     await waitFor(() => expect(trigger).toBeEnabled());
     await userEvent.click(trigger);
@@ -304,7 +460,7 @@ describe("VNCPanel", () => {
     render(<VNCPanel tabId="vnc-1" asset={asset} />);
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
     FakeRFB.latest!._rfbConnectionState = "connected";
-    FakeRFB.latest!.dispatchEvent(new CustomEvent("connect"));
+    dispatchConnected();
     const trigger = await screen.findByTestId("vnc-special-keys");
     await waitFor(() => expect(trigger).toBeEnabled());
     await userEvent.click(trigger);
@@ -320,7 +476,7 @@ describe("VNCPanel", () => {
     render(<VNCPanel tabId="vnc-1" asset={asset} />);
     await waitFor(() => expect(FakeRFB.latest).toBeDefined());
     FakeRFB.latest!._rfbConnectionState = "connected";
-    FakeRFB.latest!.dispatchEvent(new CustomEvent("connect"));
+    dispatchConnected();
     // The clipboard toggle is a plain button (not a Radix menu), so fireEvent.click is fine;
     // wait for it to become enabled once the session is connected.
     const clipboard = await screen.findByTestId("vnc-clipboard");
