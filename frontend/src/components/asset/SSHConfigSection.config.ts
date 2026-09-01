@@ -25,6 +25,7 @@ interface SSHConfig {
   proxy_chain?: ProxyChainJSON | null;
   keepalive_interval_seconds?: number;
   restore_cwd_on_reconnect?: boolean;
+  startup_command?: string;
 }
 
 /** ssh 表单子状态(凭据中的 password 走 useAssetCredential,不入此 state)。 */
@@ -51,6 +52,8 @@ export interface SSHFormState extends ConnectionFormFields {
   keepAliveIntervalSeconds: number;
   /** 开启后断线手动重连时自动 cd 回上次目录(连接时自动启用目录同步追踪 cwd)。 */
   restoreCwdOnReconnect: boolean;
+  /** SSH 交互式 shell 建立后自动执行的命令，支持换行分隔多条命令。 */
+  startupCommand: string;
 }
 
 export const SSH_DEFAULTS: SSHFormState = {
@@ -68,6 +71,7 @@ export const SSH_DEFAULTS: SSHFormState = {
   encryptedPrivateKeyPassphrase: "",
   keepAliveIntervalSeconds: 0,
   restoreCwdOnReconnect: false,
+  startupCommand: "",
   ...CONNECTION_DEFAULTS,
 };
 
@@ -137,6 +141,10 @@ export function buildSSHConfig(state: SSHFormState, opts: SSHBuildOptions): stri
     cfg.restore_cwd_on_reconnect = true;
   }
 
+  if (state.startupCommand.trim()) {
+    cfg.startup_command = state.startupCommand;
+  }
+
   return JSON.stringify(cfg);
 }
 
@@ -162,6 +170,7 @@ export function parseSSHConfig(configJSON: string, assetTunnelId = 0): SSHFormSt
       encryptedPrivateKeyPassphrase: cfg.private_key_passphrase || "",
       keepAliveIntervalSeconds: cfg.keepalive_interval_seconds || 0,
       restoreCwdOnReconnect: cfg.restore_cwd_on_reconnect || false,
+      startupCommand: cfg.startup_command || "",
       ...parseConnectionFields(cfg.proxy, tunnelId, cfg.proxy_chain),
     };
   } catch {

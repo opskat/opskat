@@ -788,6 +788,9 @@
     "sshKeepAliveInterval": "空闲保活间隔",
     "sshKeepAliveIntervalPlaceholder": "跟随全局默认（{{seconds}} 秒）",
     "sshRestoreCwdOnReconnect": "重连恢复上次目录",
+    "sshStartupCommand": "连接后执行命令",
+    "sshStartupCommandPlaceholder": "cd /",
+    "sshStartupCommandHint": "每次连接（含重连）与每个分屏窗格都会执行；同时开启「重连恢复上次目录」时，在恢复目录之后执行。",
     "tabSchemaRegistry": "Schema Registry",
     "tabConnect": "Connect",
     "addDescription": "添加备注"

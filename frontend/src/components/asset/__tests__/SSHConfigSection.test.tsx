@@ -257,10 +257,27 @@ describe("SSHConfigSection 托管凭据→用户名自动填充", () => {
   });
 });
 
-describe("SSHConfigSection 保活预填(新建跟随全局)", () => {
+describe("SSHConfigSection 高级设置", () => {
   // GetSSHConnectionSettings mock 返回全局默认 30;保活输入在「高级」标签,需先切换。
   const openAdvanced = async (u: ReturnType<typeof userEvent.setup>) =>
     u.click(await screen.findByTestId("config-tab-advanced"));
+
+  it("启动命令在高级页编辑并写入配置", async () => {
+    const u = userEvent.setup();
+    const ref = createRef<AssetFormHandle>();
+    render(<SSHConfigSection ref={ref} ctx={ctx} onValidityChange={() => {}} />);
+    await openAdvanced(u);
+
+    const input = await screen.findByTestId("ssh-startup-command-input");
+    await u.type(input, "cd /data");
+    await u.keyboard("{Enter}");
+    await u.type(input, "docker compose ps");
+
+    const built = await ref.current!.buildConfig(ctx);
+    expect((JSON.parse(built.configJSON) as { startup_command?: string }).startup_command).toBe(
+      "cd /data\ndocker compose ps"
+    );
+  });
 
   it("新建:保活输入预填全局默认(30),未改动 → buildConfig 写 keepalive_interval_seconds:30", async () => {
     const u = userEvent.setup();

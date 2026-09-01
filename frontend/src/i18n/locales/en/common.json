@@ -788,6 +788,9 @@
     "sshKeepAliveInterval": "Idle keep-alive interval",
     "sshKeepAliveIntervalPlaceholder": "Follow global default ({{seconds}}s)",
     "sshRestoreCwdOnReconnect": "Restore last directory on reconnect",
+    "sshStartupCommand": "Run command after connecting",
+    "sshStartupCommandPlaceholder": "cd /",
+    "sshStartupCommandHint": "Runs on every connect and reconnect, and in every split pane. With “Restore last directory on reconnect” enabled it runs after the directory is restored.",
     "tabSchemaRegistry": "Schema Registry",
     "tabConnect": "Connect",
     "addDescription": "Add description"
