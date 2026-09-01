@@ -552,6 +552,47 @@ func TestSession_SubmitStartupCommand(t *testing.T) {
 	})
 }
 
+func TestManager_DispatchStartupCommand(t *testing.T) {
+	original := shellSettleDelay
+	shellSettleDelay = 50 * time.Millisecond
+	t.Cleanup(func() { shellSettleDelay = original })
+	m := NewManager()
+
+	t.Run("submits only after the shell has settled", func(t *testing.T) {
+		stdin := &recordingWriteCloser{}
+		start := time.Now()
+		var submittedAfter time.Duration
+		stdin.onWrite = func([]byte) { submittedAfter = time.Since(start) }
+		sess := &Session{ID: "ssh-1", stdin: stdin, startupCommand: "cd /data"}
+
+		m.dispatchStartupCommand(sess)
+
+		assert.Equal(t, "cd /data\r", string(stdin.lastWrite()))
+		// 抢在 shell 接管 pty 之前写入，行规程会先原样回显一遍命令、shell 再回显一遍。
+		assert.GreaterOrEqual(t, submittedAfter, shellSettleDelay)
+	})
+
+	t.Run("session closed while settling writes nothing", func(t *testing.T) {
+		stdin := &recordingWriteCloser{}
+		sess := &Session{ID: "ssh-2", stdin: stdin, startupCommand: "cd /data", closed: true}
+
+		m.dispatchStartupCommand(sess)
+
+		assert.Equal(t, 0, stdin.writeCount())
+	})
+
+	t.Run("no startup command configured returns without settling", func(t *testing.T) {
+		stdin := &recordingWriteCloser{}
+		sess := &Session{ID: "ssh-3", stdin: stdin, startupCommand: "  "}
+		start := time.Now()
+
+		m.dispatchStartupCommand(sess)
+
+		assert.Equal(t, 0, stdin.writeCount())
+		assert.Less(t, time.Since(start), shellSettleDelay)
+	})
+}
+
 func TestSession_EnableSyncDoesNotWriteUserVisibleHookSource(t *testing.T) {
 	stdin := &recordingWriteCloser{}
 	sess := &Session{

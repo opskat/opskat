@@ -534,6 +534,7 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
           mono: true,
           testid: "ssh-startup-command-input",
           placeholder: "asset.sshStartupCommandPlaceholder",
+          hint: "asset.sshStartupCommandHint",
         },
         {
           kind: "custom",

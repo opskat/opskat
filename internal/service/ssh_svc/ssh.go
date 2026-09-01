@@ -281,7 +281,8 @@ type ConnectConfig struct {
 	// InitialWorkdir 仅在重连路径由前端携带上次已知 cwd；首次连接为空。
 	// 实际是否恢复由 RestoreCwdOnReconnect 权威闸门决定。
 	InitialWorkdir string
-	// StartupCommand 在交互式 shell 建立后自动执行；空值不执行。
+	// StartupCommand 在交互式 shell 稳定后自动执行；空值不执行。
+	// 每次连接（含重连）与每个分屏窗格都会执行一次。
 	StartupCommand string
 }
 
@@ -356,33 +357,29 @@ func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
 
 	emitProgress(&cfg, "shell", "正在启动终端...")
 
-	sessionID, err := m.createSession(shared, cfg.AssetID, cfg.Cols, cfg.Rows, cfg.OnData, cfg.OnClosed, cfg.OnSync, cfg.StartupCommand)
+	sess, err := m.createSession(shared, cfg.AssetID, cfg.Cols, cfg.Rows, cfg.OnData, cfg.OnClosed, cfg.OnSync, cfg.StartupCommand)
 	if err != nil {
 		shared.release()
 		return "", err
 	}
 
 	if cfg.RestoreCwdOnReconnect {
-		if sess, ok := m.GetSession(sessionID); ok {
-			// 恢复：重连时 cd 回上次目录（首次连接 InitialWorkdir 为空 → no-op）。
-			if err := sess.RestoreWorkingDirectory(cfg.InitialWorkdir); err != nil {
-				logger.Default().Warn("restore cwd on reconnect failed",
-					zap.String("sessionID", sessionID), zap.String("cwd", cfg.InitialWorkdir), zap.Error(err))
-			}
+		// 恢复：重连时 cd 回上次目录（首次连接 InitialWorkdir 为空 → no-op）。
+		if err := sess.RestoreWorkingDirectory(cfg.InitialWorkdir); err != nil {
+			logger.Default().Warn("restore cwd on reconnect failed",
+				zap.String("sessionID", sess.ID), zap.String("cwd", cfg.InitialWorkdir), zap.Error(err))
 		}
 	}
-	if err := m.runStartupCommand(sessionID); err != nil {
-		m.Disconnect(sessionID)
-		return "", err
-	}
-	if cfg.RestoreCwdOnReconnect {
-		if sess, ok := m.GetSession(sessionID); ok {
+	// 两个自动注入串在同一 goroutine 里：启动命令先落地，同步 hook 才不会插到它前面。
+	go func() {
+		m.dispatchStartupCommand(sess)
+		if cfg.RestoreCwdOnReconnect {
 			// 捕获：延迟后自动启用目录同步，持续追踪 cwd 供下次重连。
-			go m.autoEnableDirectorySync(sess)
+			m.autoEnableDirectorySync(sess)
 		}
-	}
+	}()
 
-	return sessionID, nil
+	return sess.ID, nil
 }
 
 // ConnectClient 建立仅用于 SFTP/端口转发等非终端用途的 SSH 会话 ID。
@@ -408,14 +405,15 @@ func (m *Manager) ConnectClient(cfg ConnectConfig) (string, error) {
 	return sessionID, nil
 }
 
-// autoSyncSettleDelay 是自动启用目录同步前的等待，让 sshd 的 motd/首个 prompt 先落地，
-// 避免注入的 hook 脚本与其交错。设为变量便于测试缩短。
-var autoSyncSettleDelay = 1 * time.Second
+// shellSettleDelay 是连接建立后各类自动注入（目录同步 hook、启动命令）前的等待，
+// 让 sshd 的 motd 与 shell 首个 prompt 先落地。抢在 shell 接管 pty 之前写入时，
+// 行规程会先原样回显一遍内容、shell 拿到后再回显一遍。设为变量便于测试缩短。
+var shellSettleDelay = 1 * time.Second
 
 // autoEnableDirectorySync 在会话稳定后自动启用目录同步（用于「重连恢复上次目录」的 cwd 捕获）。
 // best-effort：不支持的 shell / 超时只记 Warn，不影响会话本身。
 func (m *Manager) autoEnableDirectorySync(sess *Session) {
-	time.Sleep(autoSyncSettleDelay)
+	time.Sleep(shellSettleDelay)
 	if sess.IsClosed() {
 		return
 	}
@@ -426,34 +424,38 @@ func (m *Manager) autoEnableDirectorySync(sess *Session) {
 	}
 }
 
-func (m *Manager) runStartupCommand(sessionID string) error {
-	sess, ok := m.GetSession(sessionID)
-	if !ok {
-		return fmt.Errorf("会话不存在: %s", sessionID)
-	}
+// dispatchStartupCommand 在 shell 稳定后派发资产配置的启动命令。
+// best-effort：与「重连恢复上次目录」的 cd 一致，写入失败只记 Warn，
+// 不牵连一条已经建立好的终端连接。
+func (m *Manager) dispatchStartupCommand(sess *Session) {
 	if strings.TrimSpace(sess.startupCommand) == "" {
-		return nil
+		return
 	}
-
 	logger.Default().Info("ssh startup command dispatch started",
-		zap.String("sessionID", sessionID), zap.Int64("assetID", sess.AssetID))
+		zap.String("sessionID", sess.ID), zap.Int64("assetID", sess.AssetID))
+
+	time.Sleep(shellSettleDelay)
+	if sess.IsClosed() {
+		logger.Default().Warn("ssh startup command dispatch skipped: session closed",
+			zap.String("sessionID", sess.ID), zap.Int64("assetID", sess.AssetID))
+		return
+	}
 	if err := sess.submitStartupCommand(sess.startupCommand); err != nil {
-		logger.Default().Error("ssh startup command dispatch failed",
-			zap.String("sessionID", sessionID), zap.Int64("assetID", sess.AssetID), zap.Error(err))
-		return fmt.Errorf("执行 SSH 启动命令失败: %w", err)
+		logger.Default().Warn("ssh startup command dispatch failed",
+			zap.String("sessionID", sess.ID), zap.Int64("assetID", sess.AssetID), zap.Error(err))
+		return
 	}
 	logger.Default().Info("ssh startup command dispatch completed",
-		zap.String("sessionID", sessionID), zap.Int64("assetID", sess.AssetID))
-	return nil
+		zap.String("sessionID", sess.ID), zap.Int64("assetID", sess.AssetID))
 }
 
 // createSession 在 sharedClient 上创建新的 SSH 会话（PTY + shell）
 func (m *Manager) createSession(shared *sharedClient, assetID int64, cols, rows int,
-	onData func(string, []byte), onClosed func(string), onSync func(string, DirectorySyncState), startupCommand string) (string, error) {
+	onData func(string, []byte), onClosed func(string), onSync func(string, DirectorySyncState), startupCommand string) (*Session, error) {
 
 	session, err := shared.client.NewSession()
 	if err != nil {
-		return "", fmt.Errorf("创建会话失败: %w", err)
+		return nil, fmt.Errorf("创建会话失败: %w", err)
 	}
 
 	if cols <= 0 {
@@ -470,7 +472,7 @@ func (m *Manager) createSession(shared *sharedClient, assetID int64, cols, rows 
 		if closeErr := session.Close(); closeErr != nil {
 			logger.Default().Warn("close session after PTY request failure", zap.Error(closeErr))
 		}
-		return "", fmt.Errorf("请求PTY失败: %w", err)
+		return nil, fmt.Errorf("请求PTY失败: %w", err)
 	}
 
 	stdin, err := session.StdinPipe()
@@ -478,7 +480,7 @@ func (m *Manager) createSession(shared *sharedClient, assetID int64, cols, rows 
 		if closeErr := session.Close(); closeErr != nil {
 			logger.Default().Warn("close session after stdin pipe failure", zap.Error(closeErr))
 		}
-		return "", fmt.Errorf("获取stdin失败: %w", err)
+		return nil, fmt.Errorf("获取stdin失败: %w", err)
 	}
 
 	stdout, err := session.StdoutPipe()
@@ -486,7 +488,7 @@ func (m *Manager) createSession(shared *sharedClient, assetID int64, cols, rows 
 		if closeErr := session.Close(); closeErr != nil {
 			logger.Default().Warn("close session after stdout pipe failure", zap.Error(closeErr))
 		}
-		return "", fmt.Errorf("获取stdout失败: %w", err)
+		return nil, fmt.Errorf("获取stdout失败: %w", err)
 	}
 
 	sessionID := m.nextSessionID()
@@ -518,13 +520,13 @@ func (m *Manager) createSession(shared *sharedClient, assetID int64, cols, rows 
 		if closeErr := session.Close(); closeErr != nil {
 			logger.Default().Warn("close session after shell start failure", zap.Error(closeErr))
 		}
-		return "", fmt.Errorf("启动shell失败: %w", err)
+		return nil, fmt.Errorf("启动shell失败: %w", err)
 	}
 
 	m.sessions.Store(sessionID, sess)
 	go m.readOutput(sess)
 
-	return sessionID, nil
+	return sess, nil
 }
 
 // NewSessionFrom 在已有会话的连接上创建新会话（用于分割窗格）
@@ -541,17 +543,14 @@ func (m *Manager) NewSessionFrom(existingSessionID string, cols, rows int,
 
 	existing.shared.acquire()
 
-	sessionID, err := m.createSession(existing.shared, existing.AssetID, cols, rows, onData, onClosed, onSync, existing.startupCommand)
+	sess, err := m.createSession(existing.shared, existing.AssetID, cols, rows, onData, onClosed, onSync, existing.startupCommand)
 	if err != nil {
 		existing.shared.release()
 		return "", err
 	}
-	if err := m.runStartupCommand(sessionID); err != nil {
-		m.Disconnect(sessionID)
-		return "", err
-	}
+	go m.dispatchStartupCommand(sess)
 
-	return sessionID, nil
+	return sess.ID, nil
 }
 
 // dial 建立到目标的网络连接，支持代理和跳板机链

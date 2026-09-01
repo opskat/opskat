@@ -72,6 +72,7 @@ func TestAsset_SSHConfig(t *testing.T) {
 				Username:              "admin",
 				AuthType:              AuthTypeKey,
 				RestoreCwdOnReconnect: true,
+				StartupCommand:        "cd /data\ndocker compose ps",
 			}
 			err := a.SetSSHConfig(cfg)
 			assert.NoError(t, err)
@@ -83,6 +84,7 @@ func TestAsset_SSHConfig(t *testing.T) {
 			assert.Equal(t, cfg.Username, got.Username)
 			assert.Equal(t, cfg.AuthType, got.AuthType)
 			assert.Equal(t, cfg.RestoreCwdOnReconnect, got.RestoreCwdOnReconnect)
+			assert.Equal(t, cfg.StartupCommand, got.StartupCommand)
 		})
 
 		convey.Convey("非SSH类型调用GetSSHConfig应返回错误", func() {
