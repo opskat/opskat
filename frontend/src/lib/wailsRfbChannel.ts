@@ -1,5 +1,7 @@
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
 import { WriteVNC } from "../../wailsjs/go/vnc/VNC";
+import { createOrderedQueue } from "@/lib/orderedQueue";
+import type { RfbCloseEvent } from "@novnc/novnc";
 
 type ReadyState = "connecting" | "open" | "closing" | "closed";
 
@@ -20,8 +22,8 @@ function toBase64(data: ArrayBuffer | ArrayBufferView): string {
 
 /**
  * WebSocket 形状的假 channel,交给 noVNC 的 RFB 构造第二参(经 Websock.attach 接入)。
- * Go→FE 的 vnc:data 事件喂给 onmessage;noVNC 的 send 转成 WriteVNC。
- * 不做背压:与 local:data / k8s:log 一致,RFB 又是客户端拉取模型,天然自限速。
+ * Go→FE 的 vnc:data 事件喂给 onmessage;noVNC 的 send 按调用顺序串行转成 WriteVNC，
+ * 恢复原生 WebSocket.send 的 FIFO 语义。RFB 是客户端拉取模型，不额外暴露 bufferedAmount 背压。
  */
 export class WailsRfbChannel {
   binaryType = "arraybuffer";
@@ -29,12 +31,14 @@ export class WailsRfbChannel {
   readyState: ReadyState = "connecting";
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: ArrayBuffer }) => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event: RfbCloseEvent) => void) | null = null;
   onerror: ((event: unknown) => void) | null = null;
 
   private readonly dataEvent: string;
   private readonly closedEvent: string;
   private opened = false;
+  private sendFailed = false;
+  private readonly sendQueue = createOrderedQueue();
 
   constructor(private readonly sessionId: string) {
     this.dataEvent = `vnc:data:${sessionId}`;
@@ -45,8 +49,8 @@ export class WailsRfbChannel {
     });
     EventsOn(this.closedEvent, () => {
       if (this.readyState === "closed") return;
-      this.readyState = "closed";
-      this.onclose?.();
+      this.close();
+      this.onclose?.({ code: 1006, reason: "VNC transport closed", wasClean: false });
     });
   }
 
@@ -56,7 +60,23 @@ export class WailsRfbChannel {
   }
 
   send(data: ArrayBuffer | ArrayBufferView): void {
-    WriteVNC(this.sessionId, toBase64(data)).catch((error) => this.onerror?.(error));
+    if (this.isClosed() || this.sendFailed) return;
+    const encoded = toBase64(data);
+    void this.sendQueue.push(async () => {
+      if (this.isClosed() || this.sendFailed) return;
+      try {
+        await WriteVNC(this.sessionId, encoded);
+      } catch (error) {
+        if (this.isClosed() || this.sendFailed) return;
+        this.sendFailed = true;
+        this.onerror?.(error);
+        this.close();
+      }
+    });
+  }
+
+  private isClosed(): boolean {
+    return this.readyState === "closed";
   }
 
   // 由面板在 new RFB() 之后调用一次:置 open 并触发 onopen。attach 已同步跑完并以

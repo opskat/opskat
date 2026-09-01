@@ -7,12 +7,17 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { Fingerprint } from "lucide-react";
-import { Button } from "@opskat/ui";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
 import { asset_entity } from "../../../wailsjs/go/models";
-import { ConnectVNC, DisconnectVNC, EncodeVNCClipboardText, StartVNCStream } from "../../../wailsjs/go/vnc/VNC";
+import {
+  CheckVNCServerKey,
+  ConnectVNC,
+  DisconnectVNC,
+  EncodeVNCClipboardText,
+  StartVNCStream,
+  TrustVNCServerKey,
+} from "../../../wailsjs/go/vnc/VNC";
 import { DisconnectSSH, OpenSFTPSession } from "../../../wailsjs/go/ssh/SSH";
 import { ClipboardGetText, ClipboardSetText } from "../../../wailsjs/runtime";
 import { FileManagerPanel } from "@/components/terminal/FileManagerPanel";
@@ -20,9 +25,18 @@ import { WailsRfbChannel } from "@/lib/wailsRfbChannel";
 import { decodeVNCClipboardText, pasteVNCClipboardText } from "@/lib/vncClipboard";
 import { RemoteConnectionOverlay } from "@/components/remote/RemoteConnectionOverlay";
 import { RemoteStatusBar } from "@/components/remote/RemoteStatusBar";
+import { ServerIdentityPrompt } from "@/components/remote/ServerIdentityPrompt";
 import type { RemoteStatus } from "@/components/remote/remoteChrome";
 import { VNCToolbar, type VNCSpecialKey, type VNCViewMode } from "./VNCToolbar";
-import type RFB from "@novnc/novnc/lib/rfb";
+import type RFB from "@novnc/novnc";
+import { securityPolicyForVNCEncryption, type VNCEncryptionPolicy } from "@/lib/vncSecurity";
+import {
+  startVNCClient,
+  vncClientFailureMessageKey,
+  type VNCClientHandle,
+  type VNCNegotiatedSecurity,
+  type VNCServerKeyCheck,
+} from "@/lib/vncClient";
 
 interface VNCPanelProps {
   tabId: string;
@@ -40,12 +54,13 @@ interface VNCSession {
 interface VNCConnectionConfig {
   host?: string;
   port?: number;
+  encryption?: VNCEncryptionPolicy;
 }
 
-function parseVNCEndpoint(configJSON: string): { host: string; port: number } {
+function parseVNCConnection(configJSON: string): { host: string; port: number; encryption?: VNCEncryptionPolicy } {
   try {
     const cfg: VNCConnectionConfig = JSON.parse(configJSON || "{}");
-    return { host: cfg.host || "", port: cfg.port || 5900 };
+    return { host: cfg.host || "", port: cfg.port || 5900, encryption: cfg.encryption };
   } catch {
     return { host: "", port: 5900 };
   }
@@ -53,10 +68,13 @@ function parseVNCEndpoint(configJSON: string): { host: string; port: number } {
 
 export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
   const { t } = useTranslation();
-  const { host, port } = parseVNCEndpoint(asset.Config);
+  const { host, port, encryption } = parseVNCConnection(asset.Config);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const vncContainerRef = useRef<HTMLDivElement | null>(null);
   const rfbRef = useRef<RFB | null>(null);
+  const clientRef = useRef<VNCClientHandle | null>(null);
+  const trustDecisionRef = useRef<((trusted: boolean) => void) | null>(null);
+  const connectAttemptRef = useRef(0);
   const errorRef = useRef("");
   const scaleViewportRef = useRef(true);
   const keyboardPasteRef = useRef(false);
@@ -70,38 +88,50 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
   const [fileOpen, setFileOpen] = useState(false);
   const [fileWidth, setFileWidth] = useState(320);
   const [fileSessionId, setFileSessionId] = useState("");
-  const [serverFingerprint, setServerFingerprint] = useState("");
+  const [serverIdentity, setServerIdentity] = useState<VNCServerKeyCheck | null>(null);
+  const [negotiatedSecurity, setNegotiatedSecurity] = useState<VNCNegotiatedSecurity | null>(null);
   const [connectedAt, setConnectedAt] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [resolution, setResolution] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const connect = useCallback(async () => {
+    const attempt = ++connectAttemptRef.current;
     setStatus("connecting");
     setError("");
     errorRef.current = "";
-    setServerFingerprint("");
+    setServerIdentity(null);
+    setNegotiatedSecurity(null);
     setConnectedAt(null);
     setResolution({ width: 0, height: 0 });
-    if (rfbRef.current) {
-      try {
-        rfbRef.current.disconnect();
-      } catch {
-        // ignore stale noVNC instance cleanup
-      }
-      rfbRef.current = null;
-    }
+    trustDecisionRef.current?.(false);
+    trustDecisionRef.current = null;
+    clientRef.current?.cleanup();
+    clientRef.current = null;
+    rfbRef.current = null;
     try {
       const next = (await ConnectVNC(asset.ID)) as VNCSession;
+      if (attempt !== connectAttemptRef.current) {
+        void DisconnectVNC(next.id);
+        return;
+      }
       setSession(next);
       setStatus("connecting");
     } catch (e) {
+      if (attempt !== connectAttemptRef.current) return;
       const message = String(e);
       errorRef.current = message;
       setError(message);
       setStatus("error");
     }
   }, [asset.ID]);
+
+  useEffect(
+    () => () => {
+      connectAttemptRef.current++;
+    },
+    []
+  );
 
   useEffect(() => {
     const timer = window.setTimeout(() => void connect(), 0);
@@ -115,7 +145,6 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
   useEffect(() => {
     if (!session || !vncContainerRef.current) return;
     let disposed = false;
-    let connectionStatePoll: number | undefined;
     const container = vncContainerRef.current;
     container.innerHTML = "";
     setStatus("connecting");
@@ -135,114 +164,77 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
         if (!disposed) readResolution();
       });
     };
-    import("@novnc/novnc/lib/rfb")
-      .then(({ default: RFBClient }) => {
-        if (disposed || !container) {
-          channel.close();
-          return;
-        }
-        const rfb = new RFBClient(container, channel, {
-          credentials: { username: session.username || "", password: session.password || "" },
-        });
-        rfb.scaleViewport = scaleViewportRef.current;
-        rfb.clipViewport = true;
-        rfb.resizeSession = false;
-        rfb.background = "#000";
-        rfb.addEventListener("connect", markVNCConnected);
-        rfb.addEventListener("desktopname", markVNCConnected);
-        rfb.addEventListener("capabilities", markVNCConnected);
-        rfb.addEventListener("disconnect", (event) => {
-          const e = event as CustomEvent<{ clean?: boolean }>;
-          if (e.detail?.clean) {
-            if (!disposed) setStatus("closed");
-            return;
-          }
-          const message = errorRef.current || tRef.current("vnc.disconnected");
-          errorRef.current = message;
-          setError(message);
-          setStatus("error");
-        });
-        rfb.addEventListener("securityfailure", (event) => {
-          const e = event as CustomEvent<{ status?: number; reason?: string }>;
-          if (e.detail?.reason) {
-            console.warn("VNC security failure", { status: e.detail?.status, reason: e.detail.reason });
-          }
-          const message = tRef.current("vnc.securityFailed");
-          errorRef.current = message;
-          setError(message);
-          setStatus("error");
-        });
-        rfb.addEventListener("credentialsrequired", () => {
-          const message = tRef.current("vnc.credentialsRequired");
-          errorRef.current = message;
-          setError(message);
-          setStatus("error");
-        });
-        rfb.addEventListener("serververification", (event) => {
-          const e = event as CustomEvent<{ publickey?: Uint8Array }>;
-          const publicKey = e.detail?.publickey;
-          if (!publicKey) {
-            const message = tRef.current("vnc.serverVerificationFailed");
-            errorRef.current = message;
-            setError(message);
-            setStatus("error");
-            return;
-          }
-          void window.crypto.subtle.digest("SHA-256", new Uint8Array(publicKey)).then((digest) => {
-            if (disposed) return;
-            const fingerprint = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0"))
-              .join(":")
-              .toUpperCase();
-            setServerFingerprint(fingerprint);
-          });
-        });
-        rfb.addEventListener("clipboard", (event) => {
-          if (!clipboardEnabledRef.current) return;
-          const e = event as CustomEvent<{ text?: string }>;
-          ClipboardSetText(decodeVNCClipboardText(e.detail?.text || "")).catch((error) => toast.error(String(error)));
-        });
-        rfbRef.current = rfb;
-        // 两阶段:先 markOpen(触发 onopen → noVNC 就绪),再启动后端读 pump,
-        // 保证前端已订阅事件、noVNC 已就绪之后字节才开始流动,不丢 RFB 握手首包。
-        channel.markOpen();
-        void StartVNCStream(session.id).catch((e) => {
+    try {
+      const client = startVNCClient({
+        target: container,
+        source: channel,
+        sessionId: session.id,
+        username: session.username,
+        password: session.password,
+        securityPolicy: securityPolicyForVNCEncryption(encryption),
+        checkServerKey: CheckVNCServerKey,
+        trustServerKey: TrustVNCServerKey,
+        requestServerTrust: (check) =>
+          new Promise<boolean>((resolve) => {
+            if (disposed) {
+              resolve(false);
+              return;
+            }
+            trustDecisionRef.current = resolve;
+            setServerIdentity(check);
+          }),
+        openSource: () => channel.markOpen(),
+        startTransport: () => StartVNCStream(session.id),
+        closeTransport: () => void DisconnectVNC(session.id),
+        onNegotiatedSecurity: (security) => {
+          if (!disposed) setNegotiatedSecurity(security);
+        },
+        onConnected: markVNCConnected,
+        onDisconnected: (clean) => {
+          if (!disposed && clean) setStatus("closed");
+        },
+        onFailure: (failure) => {
           if (disposed) return;
-          const message = String(e);
+          setServerIdentity(null);
+          trustDecisionRef.current = null;
+          const message = tRef.current(vncClientFailureMessageKey(failure.code));
           errorRef.current = message;
           setError(message);
           setStatus("error");
-        });
-        connectionStatePoll = window.setInterval(() => {
-          if (!disposed && rfb._rfbConnectionState === "connected") {
-            markVNCConnected();
-            if (connectionStatePoll) window.clearInterval(connectionStatePoll);
-          }
-        }, 250);
-        window.setTimeout(() => {
-          if (connectionStatePoll) window.clearInterval(connectionStatePoll);
-        }, 15000);
-      })
-      .catch((e) => {
-        const message = String(e);
-        errorRef.current = message;
+        },
+        onClipboard: (text) => {
+          if (!clipboardEnabledRef.current) return;
+          ClipboardSetText(decodeVNCClipboardText(text)).catch((error) => toast.error(String(error)));
+        },
+      });
+      client.rfb.scaleViewport = scaleViewportRef.current;
+      client.rfb.clipViewport = true;
+      client.rfb.resizeSession = false;
+      client.rfb.background = "#000";
+      clientRef.current = client;
+      rfbRef.current = client.rfb;
+      void client.result.catch(() => undefined);
+    } catch (e) {
+      channel.close();
+      void DisconnectVNC(session.id);
+      const message = String(e);
+      errorRef.current = message;
+      window.queueMicrotask(() => {
+        if (disposed) return;
         setError(message);
         setStatus("error");
       });
+    }
     return () => {
       disposed = true;
-      channel.close();
-      if (rfbRef.current) {
-        try {
-          rfbRef.current.disconnect();
-        } catch {
-          // ignore stale noVNC instance cleanup
-        }
-        rfbRef.current = null;
-      }
-      if (connectionStatePoll) window.clearInterval(connectionStatePoll);
+      trustDecisionRef.current?.(false);
+      trustDecisionRef.current = null;
+      clientRef.current?.cleanup();
+      clientRef.current = null;
+      rfbRef.current = null;
       container.innerHTML = "";
     };
-  }, [session]);
+  }, [encryption, session]);
 
   useEffect(() => {
     const fit = viewMode === "fit";
@@ -367,35 +359,47 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
   };
 
   const disconnectSession = () => {
-    const rfb = rfbRef.current;
-    if (rfb) {
-      try {
-        rfb.disconnect();
-      } catch {
-        // ignore stale noVNC instance cleanup
-      }
-    }
+    trustDecisionRef.current?.(false);
+    trustDecisionRef.current = null;
+    setServerIdentity(null);
+    clientRef.current?.cleanup();
     if (session?.id) DisconnectVNC(session.id);
     setStatus("closed");
     setConnectedAt(null);
   };
 
   const approveVNCServer = () => {
-    setServerFingerprint("");
-    rfbRef.current?.approveServer();
+    const decide = trustDecisionRef.current;
+    trustDecisionRef.current = null;
+    setServerIdentity(null);
+    decide?.(true);
   };
 
   const cancelVNCServerVerification = () => {
-    setServerFingerprint("");
-    const message = t("vnc.serverVerificationCancelled");
-    errorRef.current = message;
-    setError(message);
-    setStatus("error");
-    rfbRef.current?.disconnect();
+    const decide = trustDecisionRef.current;
+    trustDecisionRef.current = null;
+    setServerIdentity(null);
+    decide?.(false);
   };
 
   const connected = status === "connected";
   const filesEnabled = !!session?.fileSshAssetId;
+  const securityStatus =
+    connected && negotiatedSecurity ? (
+      <span className="flex items-center gap-1.5">
+        <span className="font-mono text-foreground">{negotiatedSecurity.name}</span>
+        <span className={negotiatedSecurity.sessionEncrypted ? "text-info" : "text-warning"}>
+          {t(
+            negotiatedSecurity.sessionEncrypted
+              ? "vnc.security.sessionEncrypted"
+              : negotiatedSecurity.authenticationEncrypted
+                ? "vnc.security.authenticationOnly"
+                : "vnc.security.unencrypted",
+            { aesBits: negotiatedSecurity.aesBits }
+          )}
+        </span>
+      </span>
+    ) : null;
 
   return (
     <div ref={panelRef} className="flex h-full min-h-0 flex-col bg-background">
@@ -421,7 +425,7 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
       <div className="flex min-h-0 flex-1">
         <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-black">
           <RemoteConnectionOverlay
-            status={serverFingerprint ? "connecting" : status}
+            status={serverIdentity ? "connecting" : status}
             error={error}
             host={host}
             port={port}
@@ -438,33 +442,30 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
             editTestId="vnc-edit"
           />
 
-          {serverFingerprint && (
+          {serverIdentity && (
             <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-background px-6 text-center">
-              <Fingerprint className="h-8 w-8 text-primary" />
               <div className="text-base font-semibold text-foreground">{t("vnc.verifyServerTitle")}</div>
-              <div className="max-w-md text-sm text-muted-foreground">{t("vnc.verifyServerDesc")}</div>
-              <div className="w-full max-w-md rounded-lg border bg-muted/30 p-3 text-left">
-                <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
-                  <Fingerprint className="h-3.5 w-3.5" />
-                  RSA SHA-256
-                </div>
-                <code className="select-text block break-all font-mono text-xs text-foreground">
-                  {serverFingerprint}
-                </code>
+              <div className="max-w-md text-sm text-muted-foreground">
+                {serverIdentity.state === "changed" ? t("vnc.verifyServerChangedDesc") : t("vnc.verifyServerDesc")}
               </div>
-              <div className="mt-1 flex items-center gap-2.5">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  data-testid="vnc-verify-cancel"
-                  onClick={cancelVNCServerVerification}
-                >
-                  {t("action.cancel")}
-                </Button>
-                <Button size="sm" data-testid="vnc-verify-approve" onClick={approveVNCServer}>
-                  {t("vnc.approveServer")}
-                </Button>
-              </div>
+              <ServerIdentityPrompt
+                identity={{
+                  host: serverIdentity.host,
+                  port: serverIdentity.port,
+                  keyType: "VNC RSA SHA-256",
+                  fingerprint: serverIdentity.newFingerprint,
+                  oldFingerprint: serverIdentity.oldFingerprint,
+                  isChanged: serverIdentity.state === "changed",
+                }}
+                changedWarning={t("vnc.serverKeyChangedWarning")}
+                oldFingerprintLabel={t("vnc.oldFingerprint")}
+                rejectLabel={t("action.cancel")}
+                trustLabel={serverIdentity.state === "changed" ? t("vnc.replaceServerKey") : t("vnc.trustAndConnect")}
+                trustDestructive={serverIdentity.state === "changed"}
+                onReject={cancelVNCServerVerification}
+                onTrust={approveVNCServer}
+                testIdPrefix="vnc-verify"
+              />
             </div>
           )}
 
@@ -498,7 +499,12 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
         connected={connected}
         elapsed={elapsed}
         extra={
-          connected && clipboardEnabled ? <span className="text-info">{t("vnc.clipboardSynced")}</span> : undefined
+          securityStatus || (connected && clipboardEnabled) ? (
+            <>
+              {securityStatus}
+              {connected && clipboardEnabled && <span className="text-info">{t("vnc.clipboardSynced")}</span>}
+            </>
+          ) : undefined
         }
       />
     </div>

@@ -1,6 +1,8 @@
 package host_key_entity
 
-// HostKey SSH 主机密钥实体
+const KeyTypeVNCRSA = "vnc-rsa"
+
+// HostKey SSH 和远程协议服务器身份密钥实体
 type HostKey struct {
 	ID          int64  `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
 	Host        string `gorm:"column:host;type:varchar(255);uniqueIndex:idx_host_port_type" json:"host"`

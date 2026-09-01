@@ -366,15 +366,45 @@ type LocalConfig struct {
 	Cwd   string   `json:"cwd,omitempty"`   // 工作目录
 }
 
+// VNCEncryptionPolicy is the stable serialized VNC session-encryption policy.
+type VNCEncryptionPolicy string
+
+const (
+	VNCEncryptionServer        VNCEncryptionPolicy = "server"
+	VNCEncryptionAlwaysMaximum VNCEncryptionPolicy = "always_maximum"
+	VNCEncryptionAlwaysOn      VNCEncryptionPolicy = "always_on"
+	VNCEncryptionPreferOn      VNCEncryptionPolicy = "prefer_on"
+	VNCEncryptionPreferOff     VNCEncryptionPolicy = "prefer_off"
+)
+
+// NormalizeVNCEncryptionPolicy keeps legacy missing values server-compatible and
+// rejects unknown non-empty serialized tokens.
+func NormalizeVNCEncryptionPolicy(value VNCEncryptionPolicy) (VNCEncryptionPolicy, error) {
+	if value == "" {
+		return VNCEncryptionServer, nil
+	}
+	switch value {
+	case VNCEncryptionServer,
+		VNCEncryptionAlwaysMaximum,
+		VNCEncryptionAlwaysOn,
+		VNCEncryptionPreferOn,
+		VNCEncryptionPreferOff:
+		return value, nil
+	default:
+		return "", fmt.Errorf("未知VNC加密策略 %q", value)
+	}
+}
+
 // VNCConfig VNC 远程桌面类型的特定配置。
 type VNCConfig struct {
-	Host           string            `json:"host"`
-	Port           int               `json:"port"`
-	Username       string            `json:"username,omitempty"`
-	Password       string            `json:"password,omitempty"`
-	CredentialID   int64             `json:"credential_id,omitempty"`
-	FileSSHAssetID int64             `json:"file_ssh_asset_id,omitempty"`
-	ProxyChain     *ProxyChainConfig `json:"proxy_chain,omitempty"`
+	Host           string              `json:"host"`
+	Port           int                 `json:"port"`
+	Username       string              `json:"username,omitempty"`
+	Password       string              `json:"password,omitempty"`
+	CredentialID   int64               `json:"credential_id,omitempty"`
+	FileSSHAssetID int64               `json:"file_ssh_asset_id,omitempty"`
+	Encryption     VNCEncryptionPolicy `json:"encryption,omitempty"`
+	ProxyChain     *ProxyChainConfig   `json:"proxy_chain,omitempty"`
 }
 
 // DatabaseConfig PasswordSource implementation
@@ -693,6 +723,10 @@ func (a *Asset) GetVNCConfig() (*VNCConfig, error) {
 	}
 	if cfg.Port == 0 {
 		cfg.Port = 5900
+	}
+	cfg.Encryption, err = NormalizeVNCEncryptionPolicy(cfg.Encryption)
+	if err != nil {
+		return nil, err
 	}
 	return cfg, nil
 }

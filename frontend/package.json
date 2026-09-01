@@ -21,7 +21,7 @@
     "@iconify-icons/tdesign": "^1.2.0",
     "@iconify/react": "^6.0.2",
     "@monaco-editor/react": "^4.7.0",
-    "@novnc/novnc": "1.5.0",
+    "@novnc/novnc": "github:opskat/noVNC#de630e589149c7adc5c49675b70bff05a0292df3",
     "@opskat/ui": "workspace:*",
     "@tabler/icons-react": "^3.44.0",
     "@tailwindcss/typography": "0.5.0-alpha.3",

@@ -28,6 +28,7 @@ func (h *vncHandler) SafeView(a *asset_entity.Asset) map[string]any {
 		"port":              cfg.Port,
 		"username":          cfg.Username,
 		"file_ssh_asset_id": cfg.FileSSHAssetID,
+		"encryption":        cfg.Encryption,
 	}
 }
 
@@ -54,16 +55,39 @@ func (h *vncHandler) ValidateCreateArgs(args map[string]any) error {
 	if ArgString(args, "host") == "" {
 		return fmt.Errorf("missing required parameters: host")
 	}
+	return validateVNCEncryptionArg(args)
+}
+
+func (h *vncHandler) ValidateAutomationConfig(args map[string]any) error {
+	return validateVNCEncryptionArg(args)
+}
+
+func validateVNCEncryptionArg(args map[string]any) error {
+	value, ok := args["encryption"]
+	if !ok {
+		return nil
+	}
+	raw, ok := value.(string)
+	if !ok {
+		return fmt.Errorf("VNC encryption must be a string")
+	}
+	if _, err := asset_entity.NormalizeVNCEncryptionPolicy(asset_entity.VNCEncryptionPolicy(raw)); err != nil {
+		return err
+	}
 	return nil
 }
 
 func (h *vncHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
+	if err := validateVNCEncryptionArg(args); err != nil {
+		return err
+	}
 	cfg := &asset_entity.VNCConfig{
 		Host:           ArgString(args, "host"),
 		Port:           ArgInt(args, "port"),
 		Username:       ArgString(args, "username"),
 		CredentialID:   ArgInt64(args, "credential_id"),
 		FileSSHAssetID: ArgInt64(args, "file_ssh_asset_id"),
+		Encryption:     asset_entity.VNCEncryptionPolicy(ArgString(args, "encryption")),
 	}
 	if cfg.Port == 0 {
 		cfg.Port = h.DefaultPort()
@@ -79,6 +103,9 @@ func (h *vncHandler) ApplyCreateArgs(_ context.Context, a *asset_entity.Asset, a
 }
 
 func (h *vncHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, args map[string]any) error {
+	if err := validateVNCEncryptionArg(args); err != nil {
+		return err
+	}
 	cfg, err := a.GetVNCConfig()
 	if err != nil || cfg == nil {
 		return err
@@ -98,6 +125,9 @@ func (h *vncHandler) ApplyUpdateArgs(_ context.Context, a *asset_entity.Asset, a
 	if _, ok := args["credential_id"]; ok {
 		cfg.CredentialID = ArgInt64(args, "credential_id")
 		cfg.Password = ""
+	}
+	if _, ok := args["encryption"]; ok {
+		cfg.Encryption = asset_entity.VNCEncryptionPolicy(ArgString(args, "encryption"))
 	}
 	if password := ArgString(args, "password"); password != "" {
 		encrypted, err := credential_svc.Default().Encrypt(password)

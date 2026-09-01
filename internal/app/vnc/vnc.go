@@ -3,14 +3,14 @@ package vnc
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 
+	"github.com/cago-frame/cago/pkg/logger"
+	"github.com/google/uuid"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/service/conntest"
-	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/vnc_svc"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"go.uber.org/zap"
 	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
@@ -20,9 +20,7 @@ type VNC struct {
 }
 
 func New(appCtx context.Context, manager *vnc_svc.Manager) *VNC {
-	r := &VNC{ctx: appCtx, manager: manager}
-	conntest.Register("vnc", r.testVNCConnection)
-	return r
+	return &VNC{ctx: appCtx, manager: manager}
 }
 
 func (r *VNC) Startup(ctx context.Context) {
@@ -31,15 +29,59 @@ func (r *VNC) Startup(ctx context.Context) {
 
 func (r *VNC) Cleanup() {
 	r.manager.Cleanup()
-	conntest.Unregister("vnc")
 }
 
 func (r *VNC) ConnectVNC(assetID int64) (*vnc_svc.Session, error) {
 	return r.manager.Connect(r.ctx, assetID)
 }
 
+// ConnectVNCTemporary opens only the raw transport for an unsaved VNC form.
+// The frontend shared noVNC client owns policy negotiation, trust, authentication and ServerInit.
+func (r *VNC) ConnectVNCTemporary(configJSON, plainPassword string) (*vnc_svc.Session, error) {
+	sessionID := uuid.NewString()
+	log := logger.Ctx(r.ctx)
+	log.Info("VNC temporary IPC connect start", zap.String("sessionID", sessionID))
+	asset := &asset_entity.Asset{Type: asset_entity.AssetTypeVNC, Config: configJSON}
+	cfg, err := asset.GetVNCConfig()
+	if err != nil {
+		wrapped := fmt.Errorf("VNC配置无效: %w", err)
+		log.Error("VNC temporary IPC connect failed", zap.String("sessionID", sessionID), zap.Error(wrapped))
+		return nil, wrapped
+	}
+	session, err := r.manager.ConnectTemporary(r.ctx, sessionID, cfg, plainPassword)
+	if err != nil {
+		log.Error("VNC temporary IPC connect failed", zap.String("sessionID", sessionID), zap.Error(err))
+		return nil, err
+	}
+	log.Info("VNC temporary IPC connect end", zap.String("sessionID", sessionID))
+	return session, nil
+}
+
 func (r *VNC) DisconnectVNC(sessionID string) {
 	r.manager.Disconnect(sessionID)
+}
+
+func (r *VNC) CheckVNCServerKey(sessionID, publicKeyB64 string) (*vnc_svc.VNCServerKeyCheck, error) {
+	logger.Ctx(r.ctx).Info("VNC server key check start", zap.String("sessionID", sessionID))
+	check, err := r.manager.CheckVNCServerKey(r.ctx, sessionID, publicKeyB64)
+	if err != nil {
+		logger.Ctx(r.ctx).Error("VNC server key check failed", zap.String("sessionID", sessionID), zap.Error(err))
+		return nil, err
+	}
+	logger.Ctx(r.ctx).Info("VNC server key check end",
+		zap.String("sessionID", sessionID), zap.String("state", string(check.State)),
+		zap.String("host", check.Host), zap.Int("port", check.Port))
+	return check, nil
+}
+
+func (r *VNC) TrustVNCServerKey(sessionID, publicKeyB64 string, replace bool) error {
+	logger.Ctx(r.ctx).Info("VNC server key trust start", zap.String("sessionID", sessionID), zap.Bool("replace", replace))
+	if err := r.manager.TrustVNCServerKey(r.ctx, sessionID, publicKeyB64, replace); err != nil {
+		logger.Ctx(r.ctx).Error("VNC server key trust failed", zap.String("sessionID", sessionID), zap.Bool("replace", replace), zap.Error(err))
+		return err
+	}
+	logger.Ctx(r.ctx).Info("VNC server key trust end", zap.String("sessionID", sessionID), zap.Bool("replace", replace))
+	return nil
 }
 
 // StartVNCStream 挂上 IPC 回调并启动读 pump。前端必须在 EventsOn 订阅
@@ -75,20 +117,4 @@ func (r *VNC) EncodeVNCClipboardText(text string) ([]int, error) {
 		result[i] = int(value)
 	}
 	return result, nil
-}
-
-func (r *VNC) testVNCConnection(ctx context.Context, configJSON, plainPassword string) error {
-	var cfg asset_entity.VNCConfig
-	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
-		return fmt.Errorf("VNC配置无效: %w", err)
-	}
-	password := plainPassword
-	if password == "" {
-		resolved, err := credential_resolver.Default().ResolvePasswordGeneric(ctx, &cfg)
-		if err != nil {
-			return err
-		}
-		password = resolved
-	}
-	return r.manager.TestConfig(ctx, &cfg, password)
 }

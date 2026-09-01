@@ -2,39 +2,48 @@ package vnc_svc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/google/uuid"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/host_key_entity"
 	"github.com/opskat/opskat/internal/pkg/proxychain"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
+	"github.com/opskat/opskat/internal/service/host_key_svc"
 	"go.uber.org/zap"
 )
 
 type Manager struct {
 	assetRepo asset_repo.AssetRepo
 	resolver  *credential_resolver.Resolver
+	hostKeys  host_key_svc.HostKeySvc
 
 	mu       sync.Mutex
 	sessions map[string]*Session
 }
 
 type Session struct {
-	ID             string `json:"id"`
-	Username       string `json:"username,omitempty"`
-	Password       string `json:"password,omitempty"`
-	FileSSHAssetID int64  `json:"fileSshAssetId"`
+	ID             string                           `json:"id"`
+	Username       string                           `json:"username,omitempty"`
+	Password       string                           `json:"password,omitempty"`
+	FileSSHAssetID int64                            `json:"fileSshAssetId"`
+	Encryption     asset_entity.VNCEncryptionPolicy `json:"encryption"`
 
 	// assetID 是这个会话所属的 VNC 资产（区别于上面用于文件传输的 FileSSHAssetID）。
 	// 不导出：前端不需要它，它只用于资产被删除时按资产断开会话。
 	assetID   int64
+	host      string
+	port      int
 	conn      net.Conn
 	onData    func([]byte)
 	onClose   func()
@@ -48,6 +57,7 @@ func NewManager(repo asset_repo.AssetRepo) *Manager {
 	return &Manager{
 		assetRepo: repo,
 		resolver:  credential_resolver.Default(),
+		hostKeys:  host_key_svc.HostKey(),
 		sessions:  make(map[string]*Session),
 	}
 }
@@ -84,6 +94,66 @@ func (m *Manager) connectVNC(ctx context.Context, asset *asset_entity.Asset) (*S
 	if err != nil {
 		return nil, err
 	}
+	return m.dialSession(ctx, uuid.NewString(), asset.ID, cfg, password)
+}
+
+// ConnectTemporary creates the raw transport for an unsaved VNC form config.
+// RFB negotiation, authentication, server trust and ServerInit remain owned by noVNC.
+func (m *Manager) ConnectTemporary(
+	ctx context.Context,
+	sessionID string,
+	cfg *asset_entity.VNCConfig,
+	plainPassword string,
+) (*Session, error) {
+	log := logger.Ctx(ctx)
+	log.Info("VNC temporary connect start", zap.String("sessionID", sessionID))
+	if cfg == nil {
+		err := fmt.Errorf("VNC配置为空")
+		log.Error("VNC temporary connect failed", zap.String("sessionID", sessionID), zap.Error(err))
+		return nil, err
+	}
+	resolved := *cfg
+	resolved.Host = strings.TrimSpace(resolved.Host)
+	if resolved.Host == "" {
+		err := fmt.Errorf("主机地址不能为空")
+		log.Error("VNC temporary connect failed", zap.String("sessionID", sessionID), zap.Error(err))
+		return nil, err
+	}
+	if resolved.Port <= 0 || resolved.Port > 65535 {
+		err := fmt.Errorf("端口无效")
+		log.Error("VNC temporary connect failed", zap.String("sessionID", sessionID), zap.Error(err))
+		return nil, err
+	}
+	var err error
+	resolved.Encryption, err = asset_entity.NormalizeVNCEncryptionPolicy(resolved.Encryption)
+	if err != nil {
+		log.Error("VNC temporary connect failed", zap.String("sessionID", sessionID), zap.Error(err))
+		return nil, err
+	}
+	password := plainPassword
+	if password == "" {
+		password, err = m.resolver.ResolvePasswordGeneric(ctx, &resolved)
+		if err != nil {
+			log.Error("VNC temporary connect failed", zap.String("sessionID", sessionID), zap.Error(err))
+			return nil, err
+		}
+	}
+	session, err := m.dialSession(ctx, sessionID, 0, &resolved, password)
+	if err != nil {
+		log.Error("VNC temporary connect failed", zap.String("sessionID", sessionID), zap.Error(err))
+		return nil, err
+	}
+	log.Info("VNC temporary connect end", zap.String("sessionID", sessionID))
+	return session, nil
+}
+
+func (m *Manager) dialSession(
+	ctx context.Context,
+	sessionID string,
+	assetID int64,
+	cfg *asset_entity.VNCConfig,
+	password string,
+) (*Session, error) {
 	layers, err := m.resolver.ResolveProxyChain(ctx, cfg.ProxyChain, 5)
 	if err != nil {
 		return nil, err
@@ -94,11 +164,14 @@ func (m *Manager) connectVNC(ctx context.Context, asset *asset_entity.Asset) (*S
 		return nil, fmt.Errorf("连接 VNC 目标失败: %w", err)
 	}
 	session := &Session{
-		ID:             uuid.NewString(),
+		ID:             sessionID,
 		Username:       cfg.Username,
 		Password:       password,
 		FileSSHAssetID: cfg.FileSSHAssetID,
-		assetID:        asset.ID,
+		Encryption:     cfg.Encryption,
+		assetID:        assetID,
+		host:           cfg.Host,
+		port:           cfg.Port,
 		conn:           conn,
 		startedAt:      time.Now(),
 	}
@@ -131,11 +204,9 @@ func (m *Manager) ActiveSessions() []SessionActivity {
 
 // SetCallbacks 挂上 Go→FE 的数据/关闭回调,并启动读 pump(幂等)。sessionID 不存在返回错误。
 func (m *Manager) SetCallbacks(sessionID string, onData func([]byte), onClose func()) error {
-	m.mu.Lock()
-	session := m.sessions[sessionID]
-	m.mu.Unlock()
-	if session == nil {
-		return fmt.Errorf("VNC 会话不存在: %s", sessionID)
+	session, err := m.session(sessionID)
+	if err != nil {
+		return err
 	}
 	session.start(onData, onClose, func() { m.retire(sessionID, session) })
 	return nil
@@ -143,13 +214,86 @@ func (m *Manager) SetCallbacks(sessionID string, onData func([]byte), onClose fu
 
 // Write 把前端(noVNC)发来的字节写入目标连接。
 func (m *Manager) Write(sessionID string, data []byte) error {
+	session, err := m.session(sessionID)
+	if err != nil {
+		return err
+	}
+	return session.write(data)
+}
+
+type VNCServerKeyState string
+
+const (
+	VNCServerKeyFirstUse VNCServerKeyState = "first_use"
+	VNCServerKeyMatch    VNCServerKeyState = "match"
+	VNCServerKeyChanged  VNCServerKeyState = "changed"
+)
+
+type VNCServerKeyCheck struct {
+	State          VNCServerKeyState `json:"state"`
+	Host           string            `json:"host"`
+	Port           int               `json:"port"`
+	OldFingerprint string            `json:"oldFingerprint,omitempty"`
+	NewFingerprint string            `json:"newFingerprint"`
+}
+
+func (m *Manager) CheckVNCServerKey(ctx context.Context, sessionID, publicKeyB64 string) (*VNCServerKeyCheck, error) {
+	session, err := m.session(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	presented, err := vncPresentedKey(session.host, session.port, publicKeyB64)
+	if err != nil {
+		return nil, err
+	}
+	check, err := m.hostKeys.Check(ctx, presented)
+	if err != nil {
+		return nil, err
+	}
+	return &VNCServerKeyCheck{
+		State:          VNCServerKeyState(check.State),
+		Host:           session.host,
+		Port:           session.port,
+		OldFingerprint: check.OldFingerprint,
+		NewFingerprint: check.NewFingerprint,
+	}, nil
+}
+
+func (m *Manager) TrustVNCServerKey(ctx context.Context, sessionID, publicKeyB64 string, replace bool) error {
+	session, err := m.session(sessionID)
+	if err != nil {
+		return err
+	}
+	presented, err := vncPresentedKey(session.host, session.port, publicKeyB64)
+	if err != nil {
+		return err
+	}
+	return m.hostKeys.Trust(ctx, presented, replace)
+}
+
+func (m *Manager) session(sessionID string) (*Session, error) {
 	m.mu.Lock()
 	session := m.sessions[sessionID]
 	m.mu.Unlock()
 	if session == nil {
-		return fmt.Errorf("VNC 会话不存在: %s", sessionID)
+		return nil, fmt.Errorf("VNC 会话不存在: %s", sessionID)
 	}
-	return session.write(data)
+	return session, nil
+}
+
+func vncPresentedKey(host string, port int, publicKeyB64 string) (host_key_svc.PresentedKey, error) {
+	publicKey, err := base64.StdEncoding.DecodeString(publicKeyB64)
+	if err != nil || len(publicKey) == 0 {
+		return host_key_svc.PresentedKey{}, fmt.Errorf("VNC 服务器公钥无效")
+	}
+	digest := sha256.Sum256(publicKey)
+	return host_key_svc.PresentedKey{
+		Host:        host,
+		Port:        port,
+		KeyType:     host_key_entity.KeyTypeVNCRSA,
+		PublicKey:   base64.StdEncoding.EncodeToString(publicKey),
+		Fingerprint: "SHA256:" + base64.RawStdEncoding.EncodeToString(digest[:]),
+	}, nil
 }
 
 func (m *Manager) Disconnect(sessionID string) {

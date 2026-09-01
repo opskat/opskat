@@ -7,6 +7,7 @@ import { useAssetStore } from "@/stores/assetStore";
 import {
   CancelSSHConnect,
   RespondAuthChallenge,
+  RespondHostKeyVerify,
   UpdateAssetPassword,
   ConnectSSHAsync,
 } from "../../../../wailsjs/go/ssh/SSH";
@@ -100,6 +101,20 @@ describe("ConnectionProgress MFA 挑战", () => {
     expect(screen.getByText("server.example.com:22").closest("div")).toHaveClass("select-text");
     expect(screen.getByText("SHA256:new-fingerprint")).toHaveClass("select-text");
     expect(screen.getByText("SHA256:old-fingerprint")).toHaveClass("select-text");
+  });
+
+  it.each([
+    ["ssh-host-key-reject", 2],
+    ["ssh-host-key-accept-once", 1],
+    ["ssh-host-key-trust", 0],
+  ])("复用身份提示后 %s 仍发送 SSH 动作 %i", async (testId, action) => {
+    useTerminalStore.setState({ connections: { "conn-1": hostKeyConnection() } });
+    const u = userEvent.setup();
+    render(<ConnectionProgress connectionId="conn-1" isTabActive isPaneActive />);
+
+    await u.click(screen.getByTestId(testId));
+
+    expect(RespondHostKeyVerify).toHaveBeenCalledWith("verify-1", action);
   });
   it("标签与输入框正确关联,提示按服务器顺序渲染", () => {
     useTerminalStore.setState({ connections: { "conn-1": challengeConnection() } });
