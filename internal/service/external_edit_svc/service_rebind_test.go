@@ -1511,10 +1511,16 @@ func TestExternalEditAutoSaveStillEntersConflictAfterRemoteCompare(t *testing.T)
 	h.remote.SetFile("ssh-b", "/srv/app/demo.txt", []byte("remote changed\n"), "/srv/app/demo.txt")
 	h.svc.reconcileLocalCopy(session.ID)
 
-	require.Eventually(t, func() bool {
-		current := h.refreshSession(t, session.ID)
-		return current.State == sessionStateConflict
-	}, 2*time.Second, 20*time.Millisecond)
+	// 冲突事件是会话状态落库、审计写完之后才发出的，只等 State 会在事件到达前就放行。
+	hasConflictEvent := func() bool {
+		for _, event := range h.snapshotEvents() {
+			if event.Type == eventSessionConflict && event.Session != nil && event.Session.ID == session.ID && event.SaveResult != nil {
+				return true
+			}
+		}
+		return false
+	}
+	require.Eventually(t, hasConflictEvent, 2*time.Second, 20*time.Millisecond)
 
 	current := h.refreshSession(t, session.ID)
 	require.Equal(t, sessionStateConflict, current.State)
