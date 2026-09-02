@@ -183,18 +183,35 @@ func (r *Resolver) ResolveAgentAuthConfig(sshCfg *asset_entity.SSHConfig) (*ssh_
 	}
 	sourceID := sshCfg.AgentSourceID
 	return &ssh_svc.AgentConfig{
-		Source: func(ctx context.Context) (sshagent.Source, error) {
-			src, err := ssh_agent_svc.Get(ctx, sourceID)
-			if err != nil {
-				return sshagent.Source{}, err
-			}
-			return sshagent.Source{
-				Type:  sshagent.EndpointType(src.EndpointType),
-				Value: src.Endpoint,
-			}, nil
-		},
+		Source:      r.agentSource(sourceID),
 		Fingerprint: sshCfg.AgentKeyFingerprint,
 	}, nil
+}
+
+// ResolveAgentForwardConfig builds the lazy source resolver for SSH Agent
+// forwarding. Forwarding deliberately has no fingerprint: the remote host uses
+// the selected local Agent as an agent protocol endpoint.
+func (r *Resolver) ResolveAgentForwardConfig(sshCfg *asset_entity.SSHConfig) (*ssh_svc.AgentForwardConfig, error) {
+	if sshCfg == nil || !sshCfg.AgentForwarding {
+		return nil, nil
+	}
+	if sshCfg.AgentForwardSourceID <= 0 {
+		return nil, fmt.Errorf("SSH Agent 转发缺少来源 ID")
+	}
+	return &ssh_svc.AgentForwardConfig{Source: r.agentSource(sshCfg.AgentForwardSourceID)}, nil
+}
+
+func (r *Resolver) agentSource(sourceID int64) func(context.Context) (sshagent.Source, error) {
+	return func(ctx context.Context) (sshagent.Source, error) {
+		src, err := ssh_agent_svc.Get(ctx, sourceID)
+		if err != nil {
+			return sshagent.Source{}, err
+		}
+		return sshagent.Source{
+			Type:  sshagent.EndpointType(src.EndpointType),
+			Value: src.Endpoint,
+		}, nil
+	}
 }
 
 // agentHandshakeLayer 为代理链的 Agent SSH 层构造握手闭包：来源在握手发生时解析，

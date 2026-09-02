@@ -24,16 +24,18 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 )
 
 // sharedClient 封装 SSH 连接，支持引用计数共享
 type sharedClient struct {
-	client        *ssh.Client
-	mu            sync.Mutex
-	refCount      int
-	closers       []io.Closer // 跳板机 client 等额外资源
-	closed        bool
-	stopKeepalive func()
+	client          *ssh.Client
+	mu              sync.Mutex
+	refCount        int
+	closers         []io.Closer // 跳板机 client 等额外资源
+	closed          bool
+	stopKeepalive   func()
+	agentForwarding bool
 }
 
 func newSharedClient(client *ssh.Client, closers []io.Closer, keepAliveSeconds int) *sharedClient {
@@ -245,7 +247,9 @@ type ConnectConfig struct {
 	Ctx context.Context
 	// Agent 非 nil 时该层经 Agent 认证工厂（agent_factory.go）完成握手：精确签名器
 	// + MFA 适配 + 主机密钥契约。与 Password/Key 等常规材料互斥。
-	Agent         *AgentConfig
+	Agent *AgentConfig
+	// AgentForward 非 nil 时向每个交互式会话请求转发其来源对应的本地 SSH Agent。
+	AgentForward  *AgentForwardConfig
 	Key           string   // PEM 格式私钥（直接传入）
 	KeyPassphrase string   // 私钥密码（用于加密的私钥）
 	PrivateKeys   []string // 私钥文件路径列表
@@ -354,6 +358,15 @@ func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
 	}
 
 	shared := newSharedClient(client, extraClosers, cfg.KeepAliveIntervalSeconds)
+	if cfg.AgentForward != nil {
+		forwarder, err := enableAgentForwarding(connectCtx(cfg), client, cfg.AgentForward)
+		if err != nil {
+			shared.release()
+			return "", fmt.Errorf("启用 SSH Agent 转发失败: %w", err)
+		}
+		shared.closers = append([]io.Closer{forwarder}, shared.closers...)
+		shared.agentForwarding = true
+	}
 
 	emitProgress(&cfg, "shell", "正在启动终端...")
 
@@ -473,6 +486,14 @@ func (m *Manager) createSession(shared *sharedClient, assetID int64, cols, rows 
 			logger.Default().Warn("close session after PTY request failure", zap.Error(closeErr))
 		}
 		return nil, fmt.Errorf("请求PTY失败: %w", err)
+	}
+	if shared.agentForwarding {
+		if err := agent.RequestAgentForwarding(session); err != nil {
+			if closeErr := session.Close(); closeErr != nil {
+				logger.Default().Warn("close session after agent forwarding request failure", zap.Error(closeErr))
+			}
+			return nil, fmt.Errorf("请求 SSH Agent 转发失败: %w", err)
+		}
 	}
 
 	stdin, err := session.StdinPipe()

@@ -120,9 +120,11 @@ func validateSSHAgentContract(cfg *SSHConfig) error {
 // json_extract 大小写敏感——同一份写入两者可能解释出不同的 auth_type /
 // agent_source_id，正是写入边界要拒绝的歧义。
 var agentCanonicalKeys = map[string]string{
-	"authtype":            "auth_type",
-	"agentsourceid":       "agent_source_id",
-	"agentkeyfingerprint": "agent_key_fingerprint",
+	"authtype":             "auth_type",
+	"agentsourceid":        "agent_source_id",
+	"agentkeyfingerprint":  "agent_key_fingerprint",
+	"agentforwarding":      "agent_forwarding",
+	"agentforwardsourceid": "agent_forward_source_id",
 }
 
 func normalizeConfigKey(key string) string {

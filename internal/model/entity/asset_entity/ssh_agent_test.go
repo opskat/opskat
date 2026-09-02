@@ -134,6 +134,22 @@ func TestAsset_ValidateSSHAgentContract(t *testing.T) {
 				AgentSourceID: 7, AgentKeyFingerprint: validAgentFingerprint()}
 			assert.Error(t, agentAsset(t, cfg).Validate())
 		})
+
+		convey.Convey("启用 Agent 转发必须指定来源", func() {
+			a := agentAsset(t, &SSHConfig{
+				Host: "h", Port: 22, Username: "u", AuthType: AuthTypePassword,
+				AgentForwarding: true,
+			})
+			assert.Error(t, a.Validate())
+		})
+
+		convey.Convey("关闭 Agent 转发不得残留来源", func() {
+			a := agentAsset(t, &SSHConfig{
+				Host: "h", Port: 22, Username: "u", AuthType: AuthTypePassword,
+				AgentForwardSourceID: 7,
+			})
+			assert.Error(t, a.Validate())
+		})
 	})
 }
 
@@ -160,6 +176,8 @@ func TestCheckSSHConfigAgentWriteBoundary(t *testing.T) {
 				`{"host":"h","agentSourceId":1}`,
 				`{"host":"h","agent-source-id":1}`,
 				`{"host":"h","AgentKeyFingerprint":"SHA256:abc"}`,
+				`{"host":"h","agentForwarding":true}`,
+				`{"host":"h","agentForwardSourceId":1}`,
 			} {
 				err := CheckSSHConfigAgentWriteBoundary(raw)
 				assert.Error(t, err, "raw=%s", raw)

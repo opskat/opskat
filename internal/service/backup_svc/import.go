@@ -188,6 +188,11 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 								cfg.AgentSourceID = newID
 							}
 						}
+						if cfg.AgentForwarding && cfg.AgentForwardSourceID > 0 {
+							if newID, ok := agentSourceIDMap[cfg.AgentForwardSourceID]; ok {
+								cfg.AgentForwardSourceID = newID
+							}
+						}
 						// 重新加密内联密码
 						if data.IncludesCredentials && cfg.Password != "" && crypto != nil {
 							encrypted, encErr := crypto.Encrypt(cfg.Password)
@@ -389,11 +394,15 @@ func precheckAgentSources(data *BackupData) error {
 			// 无法解析的配置保持既有宽松导入行为，不做 Agent 预检
 			continue
 		}
-		if cfg.AuthType != asset_entity.AuthTypeAgent && cfg.AgentSourceID == 0 && cfg.AgentKeyFingerprint == "" {
+		if cfg.AuthType != asset_entity.AuthTypeAgent && cfg.AgentSourceID == 0 && cfg.AgentKeyFingerprint == "" &&
+			!cfg.AgentForwarding && cfg.AgentForwardSourceID == 0 {
 			continue
 		}
 		if cfg.AuthType == asset_entity.AuthTypeAgent && cfg.AgentSourceID > 0 && !seen[cfg.AgentSourceID] {
 			return fmt.Errorf("资产 %s 引用的 Agent 来源 %d 不在备份中", a.Name, cfg.AgentSourceID)
+		}
+		if cfg.AgentForwarding && cfg.AgentForwardSourceID > 0 && !seen[cfg.AgentForwardSourceID] {
+			return fmt.Errorf("资产 %s 引用的 Agent 转发来源 %d 不在备份中", a.Name, cfg.AgentForwardSourceID)
 		}
 		if err := a.Validate(); err != nil {
 			return fmt.Errorf("资产 %s 的 Agent 字段畸形: %w", a.Name, err)
