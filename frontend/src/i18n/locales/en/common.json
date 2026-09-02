@@ -2627,7 +2627,8 @@
     "expandFolder": "Expand folder",
     "collapseFolder": "Collapse folder",
     "loadData": "Load data",
-    "tableRestoredHint": "{{table}} restored — click or press {{shortcut}} to load"
+    "tableRestoredHint": "{{table}} restored — click or press {{shortcut}} to load",
+    "selectAllRows": "Select or clear all rows on this page"
   },
   "systemStatus": {
     "title": "Status",

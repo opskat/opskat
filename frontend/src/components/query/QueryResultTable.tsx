@@ -110,6 +110,9 @@ interface QueryResultTableProps {
 // Set so they don't collide with the literal string "null" etc.
 const NULL_KEY = "__opskat_null_sentinel__";
 const DEFAULT_COLUMN_WIDTH = 160;
+const ROW_NUMBER_MIN_WIDTH = 44;
+const ROW_NUMBER_PADDING = 24;
+const ROW_NUMBER_CHAR_WIDTH = 8;
 
 const CONTEXT_MENU_ITEM_CLASS =
   "relative flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground";
@@ -256,6 +259,8 @@ function QueryResultTableImpl({
   onSelectedCellChange,
   onSelectedRowsChange,
   onRefresh,
+  showRowNumber,
+  rowNumberOffset = 0,
   sortColumn: controlledSortCol,
   sortDir: controlledSortDir,
   onSortChange,
@@ -363,6 +368,7 @@ function QueryResultTableImpl({
   const [selectedRowIdxs, setSelectedRowIdxs] = useState<Set<number>>(() => new Set());
   const [selectedColumns, setSelectedColumns] = useState<Set<string>>(() => new Set());
   const columnSelectionAnchorRef = useRef<string | null>(null);
+  const rowSelectionAnchorRef = useRef<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [showColumnChooser, setShowColumnChooser] = useState(false);
   const [showFieldTypes, setShowFieldTypes] = useState(true);
@@ -411,6 +417,7 @@ function QueryResultTableImpl({
     setSelectedRowIdxs(new Set());
     setSelectedColumns(new Set());
     columnSelectionAnchorRef.current = null;
+    rowSelectionAnchorRef.current = null;
     onSelectedCellChange?.(null);
     onSelectedRowsChange?.([]);
     setEditingCell(null);
@@ -422,6 +429,7 @@ function QueryResultTableImpl({
     setSelectedRowIdxs(new Set());
     setSelectedColumns(new Set());
     columnSelectionAnchorRef.current = null;
+    rowSelectionAnchorRef.current = null;
     onSelectedCellChange?.(null);
     onSelectedRowsChange?.([]);
     setEditingCell(null);
@@ -434,6 +442,7 @@ function QueryResultTableImpl({
     setSelectedRowIdxs(new Set());
     setSelectedColumns(new Set());
     columnSelectionAnchorRef.current = null;
+    rowSelectionAnchorRef.current = null;
     setEditingCell(cellKey(focusCellRequest.rowIdx, focusCellRequest.col));
     onSelectedCellChange?.({ rowIdx: focusCellRequest.rowIdx, col: focusCellRequest.col });
     onSelectedRowsChange?.([]);
@@ -486,21 +495,31 @@ function QueryResultTableImpl({
       return size;
     },
   });
+  const gridColumnCount = displayColumns.length + (showRowNumber ? 1 : 0);
+  const allRowsSelected = sortedIndices.length > 0 && sortedIndices.every((i) => selectedRowIdxs.has(i));
   const virtualRows = rowVirtualizer.getVirtualItems();
   const totalRowSize = rowVirtualizer.getTotalSize();
   const paddingTop = virtualRows.length > 0 ? virtualRows[0].start : 0;
   const paddingBottom = virtualRows.length > 0 ? totalRowSize - virtualRows[virtualRows.length - 1].end : 0;
 
+  // 行号列宽随页内最大行号增长,否则深翻页(offset + 页内序号)会被 `truncate` 裁掉。
+  const rowNumberWidth = useMemo(() => {
+    if (!showRowNumber) return 0;
+    const largest = rowNumberOffset + Math.max(sortedIndices.length, 1);
+    return Math.max(ROW_NUMBER_MIN_WIDTH, ROW_NUMBER_PADDING + String(largest).length * ROW_NUMBER_CHAR_WIDTH);
+  }, [rowNumberOffset, showRowNumber, sortedIndices.length]);
+
   const frozenColumnOffsets = useMemo(() => {
     const offsets: Record<string, number> = {};
-    let left = 0;
+    // 冻结列停在行号列右侧,而不是容器左沿 —— 否则第一列会盖住行号。
+    let left = rowNumberWidth;
     for (const col of displayColumns) {
       if (!frozenColumns.has(col)) break;
       offsets[col] = left;
       left += colWidths[col] ?? DEFAULT_COLUMN_WIDTH;
     }
     return offsets;
-  }, [colWidths, displayColumns, frozenColumns]);
+  }, [colWidths, displayColumns, frozenColumns, rowNumberWidth]);
 
   // Sorting is enabled whenever we have an onSortChange callback (server-side)
   // or when we're in read-only mode (local client-side sort on the current page).
@@ -946,12 +965,67 @@ function QueryResultTableImpl({
     (origIdx: number, col: string) => {
       setSelectedCell({ origIdx, col });
       setSelectedRowIdxs(new Set());
+      rowSelectionAnchorRef.current = null;
       onSelectedCellChange?.({ rowIdx: origIdx, col });
       onSelectedRowsChange?.([]);
       containerRef.current?.focus();
     },
     [onSelectedCellChange, onSelectedRowsChange]
   );
+
+  // 行选择:与 selectColumn 同一套语义 —— 单击设定、Ctrl/Cmd 切换、Shift 从锚点取区间。
+  // 区间按 sortedIndices(当前显示顺序)取,所以排序后 Shift 选的是屏幕上连续的一段。
+  const selectRow = useCallback(
+    (origIdx: number, event?: Pick<React.MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">) => {
+      const anchor = rowSelectionAnchorRef.current;
+      const isRange = !!event?.shiftKey && anchor != null;
+      const isToggle = !!event?.ctrlKey || !!event?.metaKey;
+      let next: Set<number>;
+
+      if (isRange) {
+        const anchorIdx = sortedIndices.indexOf(anchor);
+        const targetIdx = sortedIndices.indexOf(origIdx);
+        if (anchorIdx === -1 || targetIdx === -1) {
+          next = new Set([origIdx]);
+        } else {
+          const start = Math.min(anchorIdx, targetIdx);
+          const end = Math.max(anchorIdx, targetIdx);
+          next = new Set(sortedIndices.slice(start, end + 1));
+        }
+      } else if (isToggle) {
+        next = new Set(selectedRowIdxs);
+        if (next.has(origIdx)) next.delete(origIdx);
+        else next.add(origIdx);
+        rowSelectionAnchorRef.current = origIdx;
+      } else {
+        next = new Set([origIdx]);
+        rowSelectionAnchorRef.current = origIdx;
+      }
+
+      setSelectedCell(null);
+      setSelectedColumns(new Set());
+      columnSelectionAnchorRef.current = null;
+      setSelectedRowIdxs(next);
+      onSelectedCellChange?.(null);
+      onSelectedRowsChange?.(sortedIndices.filter((i) => next.has(i)));
+      containerRef.current?.focus();
+    },
+    [onSelectedCellChange, onSelectedRowsChange, selectedRowIdxs, sortedIndices]
+  );
+
+  const toggleSelectAllRows = useCallback(() => {
+    const allSelected = sortedIndices.length > 0 && sortedIndices.every((i) => selectedRowIdxs.has(i));
+    const next = allSelected ? [] : sortedIndices;
+
+    setSelectedCell(null);
+    setSelectedColumns(new Set());
+    columnSelectionAnchorRef.current = null;
+    rowSelectionAnchorRef.current = next.length > 0 ? next[0] : null;
+    setSelectedRowIdxs(new Set(next));
+    onSelectedCellChange?.(null);
+    onSelectedRowsChange?.([...next]);
+    containerRef.current?.focus();
+  }, [onSelectedCellChange, onSelectedRowsChange, selectedRowIdxs, sortedIndices]);
 
   const selectColumn = useCallback(
     (col: string, event?: Pick<React.MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">) => {
@@ -986,6 +1060,7 @@ function QueryResultTableImpl({
 
       setSelectedCell(null);
       setSelectedRowIdxs(new Set());
+      rowSelectionAnchorRef.current = null;
       setSelectedColumns(next);
       onSelectedCellChange?.(null);
       onSelectedRowsChange?.([]);
@@ -1002,6 +1077,7 @@ function QueryResultTableImpl({
         setSelectedCell({ origIdx, col });
         if (!selectedRowIdxs.has(origIdx)) {
           setSelectedRowIdxs(new Set());
+          rowSelectionAnchorRef.current = null;
           onSelectedRowsChange?.([]);
         }
         if (!selectedColumns.has(col)) {
@@ -1069,6 +1145,7 @@ function QueryResultTableImpl({
           setSelectedRowIdxs(new Set());
           setSelectedColumns(new Set());
           columnSelectionAnchorRef.current = null;
+          rowSelectionAnchorRef.current = null;
           onSelectedCellChange?.(null);
           onSelectedRowsChange?.([]);
         }
@@ -1222,6 +1299,25 @@ function QueryResultTableImpl({
         <table className="border-separate border-spacing-0 text-xs font-mono">
           <thead className="bg-muted sticky top-0">
             <tr>
+              {showRowNumber && (
+                <th
+                  data-row-header-all
+                  title={t("query.selectAllRows")}
+                  onClick={toggleSelectAllRows}
+                  className={`sticky left-0 z-40 border border-border px-2 ${headerPaddingClass} text-center align-middle font-semibold whitespace-nowrap select-none cursor-pointer ${
+                    allRowsSelected
+                      ? "query-table-frozen-header-selected text-foreground ring-2 ring-inset ring-primary/50"
+                      : "bg-muted text-muted-foreground hover:text-foreground"
+                  }`}
+                  style={{
+                    width: `${rowNumberWidth}px`,
+                    minWidth: `${rowNumberWidth}px`,
+                    maxWidth: `${rowNumberWidth}px`,
+                  }}
+                >
+                  #
+                </th>
+              )}
               {displayColumns.map((col) => {
                 const isSorted = sortCol === col;
                 const width = colWidths[col] ?? DEFAULT_COLUMN_WIDTH;
@@ -1358,7 +1454,7 @@ function QueryResultTableImpl({
           <tbody>
             {paddingTop > 0 && (
               <tr aria-hidden="true">
-                <td colSpan={displayColumns.length} style={{ height: paddingTop, padding: 0, border: 0 }} />
+                <td colSpan={gridColumnCount} style={{ height: paddingTop, padding: 0, border: 0 }} />
               </tr>
             )}
             {virtualRows.map((virtualRow) => {
@@ -1374,6 +1470,25 @@ function QueryResultTableImpl({
                   ref={rowVirtualizer.measureElement}
                   className={idx % 2 === 0 ? "bg-background" : "bg-muted/40"}
                 >
+                  {showRowNumber && (
+                    <td
+                      data-row-header-key={origIdx}
+                      data-row-selected={isRowSelected ? "true" : undefined}
+                      onClick={(e) => selectRow(origIdx, e)}
+                      className={`sticky left-0 z-20 border border-border px-2 ${cellPaddingClass} text-center align-middle whitespace-nowrap select-none cursor-pointer ${
+                        isRowSelected
+                          ? "query-table-frozen-header-selected text-foreground"
+                          : "bg-muted text-muted-foreground hover:text-foreground"
+                      }`}
+                      style={{
+                        width: `${rowNumberWidth}px`,
+                        minWidth: `${rowNumberWidth}px`,
+                        maxWidth: `${rowNumberWidth}px`,
+                      }}
+                    >
+                      {rowNumberOffset + idx + 1}
+                    </td>
+                  )}
                   {displayColumns.map((col) => {
                     const ck = cellKey(origIdx, col);
                     const isEdited = edits?.has(ck);
@@ -1478,7 +1593,7 @@ function QueryResultTableImpl({
             })}
             {paddingBottom > 0 && (
               <tr aria-hidden="true">
-                <td colSpan={displayColumns.length} style={{ height: paddingBottom, padding: 0, border: 0 }} />
+                <td colSpan={gridColumnCount} style={{ height: paddingBottom, padding: 0, border: 0 }} />
               </tr>
             )}
           </tbody>

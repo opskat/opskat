@@ -2627,7 +2627,8 @@
     "expandFolder": "展开目录",
     "collapseFolder": "收起目录",
     "loadData": "加载数据",
-    "tableRestoredHint": "{{table}} 已恢复，点击按钮或按 {{shortcut}} 加载数据"
+    "tableRestoredHint": "{{table}} 已恢复，点击按钮或按 {{shortcut}} 加载数据",
+    "selectAllRows": "全选/取消全选本页"
   },
   "systemStatus": {
     "title": "系统状态",
