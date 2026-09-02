@@ -698,12 +698,12 @@ describe("QueryResultTable — cell context actions", () => {
 
   it("delete record invokes the delete callback with the current row", async () => {
     const user = userEvent.setup();
-    const onDeleteRow = vi.fn();
-    openMenu({ onDeleteRow });
+    const onDeleteRows = vi.fn();
+    openMenu({ onDeleteRows });
 
     await user.click(screen.getByText("query.deleteRecord"));
 
-    expect(onDeleteRow).toHaveBeenCalledWith(1);
+    expect(onDeleteRows).toHaveBeenCalledWith([1]);
   });
 
   it("generate UUID creates an edit for the current cell", async () => {
@@ -989,5 +989,90 @@ describe("QueryResultTable — row selection", () => {
 
     expect(cornerCell().style.width).toBe("80px");
     expect(gutter(0).style.width).toBe("80px");
+  });
+});
+
+describe("QueryResultTable — row context menu", () => {
+  const columns = ["id", "name"];
+  const rows = [
+    { id: 1, name: "alice" },
+    { id: 2, name: "bob" },
+    { id: 3, name: "carol" },
+  ];
+
+  beforeEach(() => cleanup());
+
+  const gutter = (origIdx: number) => document.querySelector(`[data-row-header-key="${origIdx}"]`) as HTMLElement;
+  const selectedOrigIdxs = () =>
+    Array.from(document.querySelectorAll('[data-row-header-key][data-row-selected="true"]')).map((cell) =>
+      Number(cell.getAttribute("data-row-header-key"))
+    );
+
+  function renderGrid(props: Partial<React.ComponentProps<typeof QueryResultTable>> = {}) {
+    render(<QueryResultTable columns={columns} rows={rows} editable showRowNumber {...props} />);
+  }
+
+  it("right-clicking inside the selection acts on every selected row", async () => {
+    const user = userEvent.setup();
+    const onCopyAs = vi.fn();
+    renderGrid({ onCopyAs });
+    fireEvent.click(gutter(0));
+    fireEvent.click(gutter(2), { ctrlKey: true });
+
+    fireEvent.contextMenu(gutter(2), { clientX: 20, clientY: 40 });
+    await user.hover(screen.getByText("query.copyAs"));
+    await user.click(screen.getByText("query.copyAsInsert"));
+
+    expect(onCopyAs).toHaveBeenCalledTimes(1);
+    expect(onCopyAs.mock.calls[0][1].selectedRowIndices).toEqual([0, 2]);
+  });
+
+  it("right-clicking outside the selection resets it to that row first", () => {
+    const onSelectedRowsChange = vi.fn();
+    renderGrid({ onSelectedRowsChange });
+    fireEvent.click(gutter(0));
+
+    fireEvent.contextMenu(gutter(2), { clientX: 20, clientY: 40 });
+
+    expect(selectedOrigIdxs()).toEqual([2]);
+    expect(onSelectedRowsChange).toHaveBeenLastCalledWith([2]);
+  });
+
+  it("deletes the whole selection through onDeleteRows", async () => {
+    const user = userEvent.setup();
+    const onDeleteRows = vi.fn();
+    renderGrid({ onDeleteRows });
+    fireEvent.click(gutter(0));
+    fireEvent.click(gutter(2), { ctrlKey: true });
+
+    fireEvent.contextMenu(gutter(2), { clientX: 20, clientY: 40 });
+    await user.click(screen.getByText("query.deleteRecords"));
+
+    expect(onDeleteRows).toHaveBeenCalledWith([0, 2]);
+  });
+
+  it("deletes a single right-clicked row when nothing is selected", async () => {
+    const user = userEvent.setup();
+    const onDeleteRows = vi.fn();
+    renderGrid({ onDeleteRows });
+
+    fireEvent.contextMenu(gutter(1), { clientX: 20, clientY: 40 });
+    await user.click(screen.getByText("query.deleteRecord"));
+
+    expect(onDeleteRows).toHaveBeenCalledWith([1]);
+  });
+
+  it("still deletes from the cell context menu", async () => {
+    const user = userEvent.setup();
+    const onDeleteRows = vi.fn();
+    renderGrid({ onDeleteRows });
+
+    fireEvent.contextMenu(document.querySelector('[data-cell-key="1:name"]') as HTMLElement, {
+      clientX: 20,
+      clientY: 40,
+    });
+    await user.click(screen.getByText("query.deleteRecord"));
+
+    expect(onDeleteRows).toHaveBeenCalledWith([1]);
   });
 });

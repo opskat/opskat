@@ -2257,6 +2257,7 @@
     "showComment": "Show Comment",
     "noComment": "No comment",
     "deleteRecord": "Delete Record...",
+    "deleteRecords": "Delete {{count}} selected rows...",
     "deleteRecordNoPrimaryKeyWarning": "This table has no primary key. The delete will match all visible column values and limit the operation to one row.",
     "deleteRecordSuccess": "Deleted {{affected}} row(s)",
     "copied": "Copied",

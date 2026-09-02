@@ -165,11 +165,12 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const [primaryKeys, setPrimaryKeys] = useState<string[]>([]);
   const [pkLoaded, setPkLoaded] = useState(false);
   const [deletePreview, setDeletePreview] = useState<{
-    statement: string;
+    statements: string[];
     usesPrimaryKey: boolean;
   } | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [selectedRowIdx, setSelectedRowIdx] = useState<number | null>(null);
+  const [selectedRowIdxs, setSelectedRowIdxs] = useState<number[]>([]);
   const [exportFormat, setExportFormat] = useState<TableExportFormat>("csv");
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
@@ -720,23 +721,22 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     setApplyVersion((v) => v + 1);
   }, []);
 
-  const handleDeleteRow = useCallback(
-    (rowIdx: number) => {
-      if (rowIdx >= rows.length) {
-        removeNewRow(rowIdx);
-        return;
-      }
-      const row = rows[rowIdx];
-      if (!row) return;
-      const statement = buildDeleteStatement({
-        database,
-        table,
-        columns,
-        row,
-        primaryKeys,
-        driver,
+  const handleDeleteRows = useCallback(
+    (rowIdxs: number[]) => {
+      // rows 之后的下标是尚未提交的新增行:它们只存在于客户端,没有可删的记录。
+      // 从大到小移除,避免前一次移除把后面的下标往前挪。
+      const unsaved = rowIdxs.filter((idx) => idx >= rows.length).sort((a, b) => b - a);
+      for (const idx of unsaved) removeNewRow(idx);
+
+      const persisted = rowIdxs.filter((idx) => idx < rows.length);
+      if (persisted.length === 0) return;
+      const statements = persisted.map((idx) =>
+        buildDeleteStatement({ database, table, columns, row: rows[idx], primaryKeys, driver })
+      );
+      setDeletePreview({
+        statements: statements.map((statement) => statement.sql),
+        usesPrimaryKey: statements[0].usesPrimaryKey,
       });
-      setDeletePreview({ statement: statement.sql, usesPrimaryKey: statement.usesPrimaryKey });
     },
     [columns, database, driver, primaryKeys, removeNewRow, rows, table]
   );
@@ -744,30 +744,55 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const handleConfirmDelete = useCallback(async () => {
     if (!assetId || !deletePreview) return;
     setDeleting(true);
-    try {
-      const result = await ExecuteSQL(assetId, deletePreview.statement, database);
-      const parsed: SQLResult = JSON.parse(result);
-      const affected = Number(parsed.affected_rows ?? 0);
-      notifySuccess(t("query.deleteRecordSuccess", { affected }));
-      setDeletePreview(null);
+    let affectedTotal = 0;
+    let zeroAffected = 0;
+    let errorMsg = "";
+
+    // 与 handleSubmit 一致:逐条执行并汇总,单条失败不影响其余语句。
+    for (const sql of deletePreview.statements) {
+      try {
+        const result = await ExecuteSQL(assetId, sql, database);
+        const parsed: SQLResult = JSON.parse(result);
+        const affected = Number(parsed.affected_rows ?? 0);
+        if (affected > 0) affectedTotal += affected;
+        else zeroAffected++;
+      } catch (e) {
+        errorMsg += String(e) + "\n";
+      }
+    }
+
+    setDeleting(false);
+    setDeletePreview(null);
+
+    if (affectedTotal > 0) {
+      notifySuccess(t("query.deleteRecordSuccess", { affected: affectedTotal }));
       setEdits(new Map());
       setNewRows([]);
       await fetchData(page);
       await fetchCount();
-    } catch (e) {
-      toast.error(String(e));
-    } finally {
-      setDeleting(false);
     }
+    if (zeroAffected > 0) toast.warning(t("query.updateMismatch", { count: zeroAffected }));
+    if (errorMsg) toast.error(errorMsg.trim());
   }, [assetId, database, deletePreview, fetchCount, fetchData, page, t]);
 
-  const handleDeleteSelectedRow = useCallback(() => {
-    if (selectedRowIdx == null) return;
-    handleDeleteRow(selectedRowIdx);
-  }, [handleDeleteRow, selectedRowIdx]);
+  // 状态栏的删除按钮:优先整段行选中,退回到当前单元格所在行。
+  const deletableRowIdxs = useMemo(
+    () => (selectedRowIdxs.length > 0 ? selectedRowIdxs : selectedRowIdx != null ? [selectedRowIdx] : []),
+    [selectedRowIdx, selectedRowIdxs]
+  );
+
+  const handleDeleteSelectedRows = useCallback(() => {
+    if (deletableRowIdxs.length === 0) return;
+    handleDeleteRows(deletableRowIdxs);
+  }, [deletableRowIdxs, handleDeleteRows]);
 
   const handleSelectedCellChange = useCallback((cell: { rowIdx: number } | null) => {
     setSelectedRowIdx(cell?.rowIdx ?? null);
+  }, []);
+
+  const handleSelectedRowsChange = useCallback((rowIdxs: number[]) => {
+    setSelectedRowIdxs(rowIdxs);
+    setSelectedRowIdx(null);
   }, []);
 
   const handleExport = useCallback(() => {
@@ -995,7 +1020,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const tableRows = useMemo(() => [...rows, ...newRows], [newRows, rows]);
   const pendingEditCount = edits.size + newRows.length;
   const hasEdits = pendingEditCount > 0;
-  const hasSelectedRow = selectedRowIdx != null && tableRows[selectedRowIdx] != null;
+  const deletableRowCount = deletableRowIdxs.filter((idx) => tableRows[idx] != null).length;
   // memo 用 Object.is 比较 props,这里走三元每次会在 visibleColumns 与 columns 间切引用,
   // 不 useMemo 包的话,父组件任意 re-render 都会让 QueryResultTable 收到"新"数组。
   const effectiveVisibleColumns = useMemo(
@@ -1076,10 +1101,11 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         onAddColumnFilter={handleAddColumnFilter}
         onRemoveColumnFilter={handleRemoveColumnFilter}
         onRemoveAllFilters={handleRemoveAllFilters}
-        onDeleteRow={handleDeleteRow}
+        onDeleteRows={handleDeleteRows}
         onHideColumn={handleHideColumn}
         onVisibleColumnToggle={handleVisibleColumnToggle}
         onSelectedCellChange={handleSelectedCellChange}
+        onSelectedRowsChange={handleSelectedRowsChange}
         onRefresh={handleRefresh}
         showRowNumber
         rowNumberOffset={page * pageSize}
@@ -1105,7 +1131,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         pageInput={pageInput}
         hasPrev={hasPrev}
         hasNext={hasNext}
-        hasSelectedRow={hasSelectedRow}
+        selectedRowCount={deletableRowCount}
         submitting={submitting || deleting}
         loading={loading || importing}
         refreshTitle={`${t("query.refreshTable")} (${REFRESH_SHORTCUT_LABEL})`}
@@ -1121,7 +1147,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
           if (totalPages != null) setPage(totalPages - 1);
         }}
         onAddRow={handleAddInlineRow}
-        onDeleteRow={handleDeleteSelectedRow}
+        onDeleteRows={handleDeleteSelectedRows}
         onApplyChanges={() => openSqlDialog("confirm")}
         onDiscardChanges={handleDiscard}
       />
@@ -1215,7 +1241,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         onOpenChange={(open) => {
           if (!open && !deleting) setDeletePreview(null);
         }}
-        statements={deletePreview ? [deletePreview.statement] : []}
+        statements={deletePreview?.statements ?? []}
         onConfirm={handleConfirmDelete}
         submitting={deleting}
         warning={

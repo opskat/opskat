@@ -2257,6 +2257,7 @@
     "showComment": "显示注释",
     "noComment": "无注释",
     "deleteRecord": "删除记录...",
+    "deleteRecords": "删除选中的 {{count}} 行...",
     "deleteRecordNoPrimaryKeyWarning": "此表没有主键。删除操作会匹配当前可见列的所有值，并限制只删除一行。",
     "deleteRecordSuccess": "已删除 {{affected}} 行",
     "copied": "已复制",

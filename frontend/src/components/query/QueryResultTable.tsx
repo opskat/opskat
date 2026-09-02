@@ -81,7 +81,7 @@ interface QueryResultTableProps {
   onAddColumnFilter?: (col: string) => void;
   onRemoveColumnFilter?: (col: string) => void;
   onRemoveAllFilters?: () => void;
-  onDeleteRow?: (rowIdx: number) => void;
+  onDeleteRows?: (rowIdxs: number[]) => void;
   onHideColumn?: (col: string) => void;
   onVisibleColumnToggle?: (col: string) => void;
   onSelectedCellChange?: (cell: SelectedCellContext | null) => void;
@@ -253,7 +253,7 @@ function QueryResultTableImpl({
   onAddColumnFilter,
   onRemoveColumnFilter,
   onRemoveAllFilters,
-  onDeleteRow,
+  onDeleteRows,
   onHideColumn,
   onVisibleColumnToggle,
   onSelectedCellChange,
@@ -955,11 +955,21 @@ function QueryResultTableImpl({
     setFilterSubOpen(false);
   }, [onClearFilterSort]);
 
-  const handleDeleteRow = useCallback(() => {
-    if (!ctxMenu || ctxMenu.kind === "column") return;
-    onDeleteRow?.(ctxMenu.rowIdx);
+  // 右键落在选中集内 → 删整集(按显示顺序);落在集外 → 只删右键那一行。
+  const contextRowIdxs = useMemo(() => {
+    if (!ctxMenu || ctxMenu.kind === "column") return [];
+    if (selectedRowIdxs.has(ctxMenu.rowIdx)) {
+      const inSelection = sortedIndices.filter((i) => selectedRowIdxs.has(i));
+      if (inSelection.length > 0) return inSelection;
+    }
+    return [ctxMenu.rowIdx];
+  }, [ctxMenu, selectedRowIdxs, sortedIndices]);
+
+  const handleDeleteRows = useCallback(() => {
+    if (contextRowIdxs.length === 0) return;
+    onDeleteRows?.(contextRowIdxs);
     setCtxMenu(null);
-  }, [ctxMenu, onDeleteRow]);
+  }, [contextRowIdxs, onDeleteRows]);
 
   const selectCell = useCallback(
     (origIdx: number, col: string) => {
@@ -1093,6 +1103,18 @@ function QueryResultTableImpl({
       setCtxMenu({ kind: "cell", x: e.clientX, y: e.clientY, rowIdx: origIdx, col, value });
     },
     [onSelectedCellChange, onSelectedRowsChange, selectCell, selectedRowIdxs, selectedColumns]
+  );
+
+  const handleRowContextMenu = useCallback(
+    (e: React.MouseEvent, origIdx: number) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // 右键落在选中集外时先重置为单选该行,与 handleCellContextMenu 同语义。
+      if (!selectedRowIdxs.has(origIdx)) selectRow(origIdx);
+      setCtxMenuPosition(null);
+      setCtxMenu({ kind: "row", x: e.clientX, y: e.clientY, rowIdx: origIdx });
+    },
+    [selectRow, selectedRowIdxs]
   );
 
   const handleColumnContextMenu = useCallback(
@@ -1475,6 +1497,7 @@ function QueryResultTableImpl({
                       data-row-header-key={origIdx}
                       data-row-selected={isRowSelected ? "true" : undefined}
                       onClick={(e) => selectRow(origIdx, e)}
+                      onContextMenu={(e) => handleRowContextMenu(e, origIdx)}
                       className={`sticky left-0 z-20 border border-border px-2 ${cellPaddingClass} text-center align-middle whitespace-nowrap select-none cursor-pointer ${
                         isRowSelected
                           ? "query-table-frozen-header-selected text-foreground"
@@ -1992,15 +2015,17 @@ function QueryResultTableImpl({
                     {t("query.refreshTable")}
                   </button>
                 )}
-                {ctxMenu.kind !== "column" && editable && onDeleteRow && (
+                {ctxMenu.kind !== "column" && editable && onDeleteRows && (
                   <button
                     type="button"
                     role="menuitem"
                     className={`${CONTEXT_MENU_ITEM_CLASS} text-destructive hover:text-destructive`}
-                    onClick={handleDeleteRow}
+                    onClick={handleDeleteRows}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
-                    {t("query.deleteRecord")}
+                    {contextRowIdxs.length > 1
+                      ? t("query.deleteRecords", { count: contextRowIdxs.length })
+                      : t("query.deleteRecord")}
                   </button>
                 )}
               </>
