@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight, ChevronsLeft, RefreshCw, Loader2 } from "lucide-react";
 import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { QueryResultTable } from "./QueryResultTable";
+import { cellValueToDisplayText } from "@/lib/cellValue";
 import { CodeEditor } from "@/components/CodeEditor";
 
 interface MongoDBResultViewProps {
@@ -221,8 +222,9 @@ export function MongoDBResultView({
 }
 
 // Primitives render as strings; objects/arrays get a truncated single-line JSON
-// preview. Full value is available via hover title and right-click → copy
-// (handled by QueryResultTable).
+// preview. Both are length-capped — a multi-MB text node inside a `truncate`
+// line box costs seconds of layout in Chromium. Full value is available via
+// right-click → copy (handled by QueryResultTable).
 function renderMongoCell(value: unknown): React.ReactNode {
   if (value === null || value === undefined) {
     return <span className="text-muted-foreground italic">null</span>;
@@ -232,7 +234,7 @@ function renderMongoCell(value: unknown): React.ReactNode {
     const truncated = json.length > 80 ? json.slice(0, 80) + "…" : json;
     return <span className="text-muted-foreground truncate block">{truncated}</span>;
   }
-  return <span className="truncate block">{String(value)}</span>;
+  return <span className="truncate block">{cellValueToDisplayText(value)}</span>;
 }
 
 function safeStringify(v: unknown): string {
