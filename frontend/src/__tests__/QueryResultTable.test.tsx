@@ -834,3 +834,50 @@ describe("QueryResultTable — very large cell values", () => {
     expect(input.value).toBe(big);
   });
 });
+
+describe("QueryResultTable — selection re-render scope", () => {
+  const columns = ["id", "name", "email", "city", "note"];
+  const rows = Array.from({ length: 12 }, (_, i) => ({
+    id: i,
+    name: `name-${i}`,
+    email: `u${i}@example.com`,
+    city: `city-${i}`,
+    note: `note-${i}`,
+  }));
+
+  function renderTable() {
+    const renderCell = vi.fn((value: unknown) => <span>{String(value)}</span>);
+    render(<QueryResultTable columns={columns} rows={rows} renderCell={renderCell} />);
+    return renderCell;
+  }
+
+  const cell = (rowIdx: number, col: string) =>
+    document.querySelector(`[data-cell-key="${rowIdx}:${col}"]`) as HTMLElement;
+
+  it("moving the selected cell re-renders only the cells whose state changed", () => {
+    const renderCell = renderTable();
+    const total = document.querySelectorAll("td[data-cell-key]").length;
+    expect(total).toBeGreaterThan(20); // 保证这个断言有意义
+
+    fireEvent.click(cell(0, "name"));
+    renderCell.mockClear();
+    fireEvent.click(cell(3, "city"));
+
+    // 只有"失去选中"和"获得选中"这两个格子需要重渲染。
+    expect(renderCell.mock.calls.length).toBeLessThanOrEqual(4);
+  });
+
+  it("selecting a whole column re-renders that column, not the whole table", () => {
+    const renderCell = renderTable();
+    const total = document.querySelectorAll("td[data-cell-key]").length;
+
+    fireEvent.click(screen.getByText("name"));
+    renderCell.mockClear();
+    fireEvent.click(screen.getByText("email"));
+
+    // 两列的格子换了外观,其余不动。
+    const rowsRendered = document.querySelectorAll("tr[data-index]").length;
+    expect(renderCell.mock.calls.length).toBeLessThanOrEqual(rowsRendered * 2 + 2);
+    expect(renderCell.mock.calls.length).toBeLessThan(total);
+  });
+});
