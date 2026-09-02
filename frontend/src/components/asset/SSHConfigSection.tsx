@@ -47,6 +47,43 @@ import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 
 const DEFAULT_GLOBAL_KEEPALIVE_SECONDS = 30;
 
+interface AgentSourceSelectProps {
+  sources: system_models.AgentSourceSummary[];
+  loading: boolean;
+  sourceId: number;
+  onSourceChange: (id: number) => void;
+  testid: string;
+}
+
+/** 认证和转发共用同一份 SSH Agent 来源列表及选择控件。 */
+function AgentSourceSelect({ sources, loading, sourceId, onSourceChange, testid }: AgentSourceSelectProps) {
+  const { t } = useTranslation();
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        {t("asset.agentSourceLoading")}
+      </div>
+    );
+  }
+  if (sources.length === 0) return <p className="text-xs text-muted-foreground">{t("asset.agentNoSources")}</p>;
+
+  return (
+    <Select value={sourceId > 0 ? String(sourceId) : ""} onValueChange={(v) => onSourceChange(Number(v) || 0)}>
+      <SelectTrigger className="w-full" data-testid={testid}>
+        <SelectValue placeholder={t("asset.agentSourcePlaceholder")} />
+      </SelectTrigger>
+      <SelectContent>
+        {sources.map((src) => (
+          <SelectItem key={src.id} value={String(src.id)}>
+            {src.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
   const { t } = useTranslation();
   // password-auth 凭据复用 db 族抽象;key-auth ssh_key 凭据 + 本地密钥由本 section 自持。
@@ -74,11 +111,17 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
         else if (s.agentSourceId <= 0) agentError = "asset.agentSourceRequired";
         else if (!s.agentKeyFingerprint) agentError = "asset.agentKeyRequired";
       }
-      const canUse = ok && !proxyChainError && !agentError;
+      const agentForwardError =
+        s.agentForwarding && s.agentForwardSourceId <= 0 ? "asset.agentForwardSourceRequired" : "";
+      const canUse = ok && !proxyChainError && !agentError && !agentForwardError;
       return {
         canTest: canUse,
         canSave: canUse,
-        saveDisabledReason: !ok ? "asset.formMissingHost" : proxyChainError ? proxyChainError : agentError,
+        saveDisabledReason: !ok
+          ? "asset.formMissingHost"
+          : proxyChainError
+            ? proxyChainError
+            : agentError || agentForwardError,
       };
     },
     build: async (s, ctx) => {
@@ -425,34 +468,16 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
           render: () => (
             <div className="flex flex-col gap-4">
               <Field label={t("asset.agentSource")}>
-                {agentSourceLoading ? (
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    {t("asset.agentSourceLoading")}
-                  </div>
-                ) : agentSources.length > 0 ? (
-                  <Select
-                    value={state.agentSourceId > 0 ? String(state.agentSourceId) : ""}
-                    onValueChange={(v) => {
-                      const id = Number(v);
-                      // 修改来源清除尚未保存的密钥选择;身份随新来源重新加载。
-                      patch({ agentSourceId: id || 0, agentKeyFingerprint: "", agentMissingFingerprint: "" });
-                    }}
-                  >
-                    <SelectTrigger className="w-full" data-testid="ssh-agent-source-trigger">
-                      <SelectValue placeholder={t("asset.agentSourcePlaceholder")} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {agentSources.map((src) => (
-                        <SelectItem key={src.id} value={String(src.id)}>
-                          {src.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <p className="text-xs text-muted-foreground">{t("asset.agentNoSources")}</p>
-                )}
+                <AgentSourceSelect
+                  sources={agentSources}
+                  loading={agentSourceLoading}
+                  sourceId={state.agentSourceId}
+                  onSourceChange={(id) => {
+                    // 修改来源清除尚未保存的密钥选择;身份随新来源重新加载。
+                    patch({ agentSourceId: id, agentKeyFingerprint: "", agentMissingFingerprint: "" });
+                  }}
+                  testid="ssh-agent-source-trigger"
+                />
               </Field>
 
               {state.agentMissingFingerprint && (
@@ -580,6 +605,33 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
                 data-testid="ssh-restore-cwd-switch"
               />
             </Field>
+          ),
+        },
+        {
+          kind: "custom",
+          render: (s, patchState) => (
+            <div className="flex flex-col gap-4">
+              <Field label={t("asset.sshAgentForwarding")}>
+                <Switch
+                  checked={s.agentForwarding}
+                  onCheckedChange={(v) =>
+                    patchState({ agentForwarding: v, agentForwardSourceId: v ? s.agentForwardSourceId : 0 })
+                  }
+                  data-testid="ssh-agent-forward-switch"
+                />
+              </Field>
+              {s.agentForwarding && (
+                <Field label={t("asset.sshAgentForwardSource")}>
+                  <AgentSourceSelect
+                    sources={agentSources}
+                    loading={agentSourceLoading}
+                    sourceId={s.agentForwardSourceId}
+                    onSourceChange={(id) => patchState({ agentForwardSourceId: id })}
+                    testid="ssh-agent-forward-source-trigger"
+                  />
+                </Field>
+              )}
+            </div>
           ),
         },
       ],

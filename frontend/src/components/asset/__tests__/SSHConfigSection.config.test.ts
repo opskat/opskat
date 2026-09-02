@@ -208,6 +208,20 @@ describe("buildSSHConfig (锁旧 save/test 序:host→port→username→auth_typ
     });
   });
 
+  describe("SSH Agent 转发(false 不写入)", () => {
+    it("启用并选择来源 → 写 agent_forwarding + agent_forward_source_id", () => {
+      expect(buildSSHConfig(base({ agentForwarding: true, agentForwardSourceId: 7 }), NO_SECRETS)).toBe(
+        '{"host":"1.2.3.4","port":22,"username":"root","auth_type":"password","agent_forwarding":true,"agent_forward_source_id":7}'
+      );
+    });
+
+    it("关闭 → 不写转发字段", () => {
+      expect(buildSSHConfig(base({ agentForwarding: false, agentForwardSourceId: 7 }), NO_SECRETS)).not.toContain(
+        "agent_forward"
+      );
+    });
+  });
+
   describe("startupCommand 启动命令(空值不写入)", () => {
     it("非空 → 写 startup_command", () => {
       expect(buildSSHConfig(base({ startupCommand: "cd /data" }), NO_SECRETS)).toBe(
@@ -298,6 +312,18 @@ describe("parseSSHConfig (镜像旧 loadSSHConfig)", () => {
     expect(parseSSHConfig('{"host":"h","port":22,"username":"u","auth_type":"password"}').restoreCwdOnReconnect).toBe(
       false
     );
+  });
+
+  it("agent_forwarding / agent_forward_source_id → 转发状态;缺省关闭", () => {
+    const enabled = parseSSHConfig(
+      '{"host":"h","port":22,"username":"u","auth_type":"password","agent_forwarding":true,"agent_forward_source_id":7}'
+    );
+    expect(enabled.agentForwarding).toBe(true);
+    expect(enabled.agentForwardSourceId).toBe(7);
+
+    const disabled = parseSSHConfig('{"host":"h","port":22,"username":"u","auth_type":"password"}');
+    expect(disabled.agentForwarding).toBe(false);
+    expect(disabled.agentForwardSourceId).toBe(0);
   });
 
   it("startup_command → startupCommand;缺省为空", () => {
