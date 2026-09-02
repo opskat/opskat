@@ -1973,8 +1973,6 @@
     "mongoFilter": "查询过滤",
     "mongoPipeline": "聚合管道",
     "mongoOperationType": "操作类型",
-    "mongoTableView": "表格视图",
-    "mongoJsonView": "JSON 视图",
     "mongoDocCount": "{{count}} 个文档",
     "mongoFind": "查询",
     "mongoFindOne": "查找单个",
@@ -2629,7 +2627,10 @@
     "collapseFolder": "收起目录",
     "loadData": "加载数据",
     "tableRestoredHint": "{{table}} 已恢复，点击按钮或按 {{shortcut}} 加载数据",
-    "selectAllRows": "全选/取消全选本页"
+    "selectAllRows": "全选/取消全选本页",
+    "tableView": "表格",
+    "jsonView": "JSON",
+    "resultView": "结果视图"
   },
   "systemStatus": {
     "title": "系统状态",

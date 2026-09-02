@@ -20,6 +20,8 @@ import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { ExecuteSQLPaged } from "../../../wailsjs/go/query/Query";
 import { QueryResultTable } from "./QueryResultTable";
+import { QueryResultJsonView } from "./QueryResultJsonView";
+import { QueryViewModeToggle, type QueryViewMode } from "./QueryViewModeToggle";
 import { CodeEditor } from "@/components/CodeEditor";
 import { SnippetPopover } from "@/components/snippet/SnippetPopover";
 import type { DynamicCompletionGetter } from "@/lib/monaco-completions";
@@ -93,6 +95,8 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
 
   // Pagination state
   const [page, setPage] = useState(0);
+  // 内层 tab 常驻挂载,本地 state 即"按 tab 记住"。
+  const [viewMode, setViewMode] = useState<QueryViewMode>("table");
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [pageInput, setPageInput] = useState("1");
   // Store the last executed SQL for pagination
@@ -461,6 +465,11 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
             {t("query.affectedRows")}: {affectedRows}
           </div>
         )}
+        {columns.length > 0 && (
+          <div className="flex items-center gap-2 border-b border-border bg-muted/20 px-3 py-1.5 shrink-0">
+            <QueryViewModeToggle value={viewMode} onChange={setViewMode} />
+          </div>
+        )}
         {showPagination && (
           <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-muted/30 shrink-0">
             {totalRows != null && (
@@ -548,14 +557,18 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
             </div>
           </div>
         )}
-        <QueryResultTable
-          columns={columns}
-          rows={rows}
-          loading={loading}
-          error={error ?? undefined}
-          showRowNumber
-          rowNumberOffset={page * pageSize}
-        />
+        {viewMode === "json" ? (
+          <QueryResultJsonView rows={rows} columns={columns} error={error ?? undefined} />
+        ) : (
+          <QueryResultTable
+            columns={columns}
+            rows={rows}
+            loading={loading}
+            error={error ?? undefined}
+            showRowNumber
+            rowNumberOffset={page * pageSize}
+          />
+        )}
       </div>
 
       {/* Dangerous SQL confirmation */}

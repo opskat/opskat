@@ -1973,8 +1973,6 @@
     "mongoFilter": "Query Filter",
     "mongoPipeline": "Aggregation Pipeline",
     "mongoOperationType": "Operation Type",
-    "mongoTableView": "Table View",
-    "mongoJsonView": "JSON View",
     "mongoDocCount": "{{count}} document(s)",
     "mongoFind": "Find",
     "mongoFindOne": "Find One",
@@ -2629,7 +2627,10 @@
     "collapseFolder": "Collapse folder",
     "loadData": "Load data",
     "tableRestoredHint": "{{table}} restored — click or press {{shortcut}} to load",
-    "selectAllRows": "Select or clear all rows on this page"
+    "selectAllRows": "Select or clear all rows on this page",
+    "tableView": "Table",
+    "jsonView": "JSON",
+    "resultView": "Result view"
   },
   "systemStatus": {
     "title": "Status",
