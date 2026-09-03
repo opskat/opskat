@@ -1,6 +1,6 @@
 import { memo, useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { FileCode2, Copy, TriangleAlert, Download } from "lucide-react";
+import { FileCode2, Copy, TriangleAlert, Download, PanelRight } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -31,6 +31,7 @@ import { ExportTableDataDialog } from "./ExportTableDataDialog";
 import { TableFilterBuilder } from "./TableFilterBuilder";
 import { TableDataStatusBar, TableEditorToolbar, type TableExportFormat } from "./TableEditorToolbar";
 import { QueryResultJsonView } from "./QueryResultJsonView";
+import { QueryRowDetailPanel } from "./QueryRowDetailPanel";
 import { QueryViewModeToggle, type QueryViewMode } from "./QueryViewModeToggle";
 import { toast } from "sonner";
 import { notifyCopied, notifySuccess } from "@/lib/notify";
@@ -181,6 +182,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const [rowDensity, setRowDensity] = useState<RowDensity>("default");
   // 内层 tab 常驻挂载(DatabasePanel 用 display 切换),所以本地 state 就是"按 tab 记住"。
   const [viewMode, setViewMode] = useState<QueryViewMode>("table");
+  const [rowDetailOpen, setRowDetailOpen] = useState(false);
   const [focusCellRequest, setFocusCellRequest] = useState<FocusCellRequest | null>(null);
   const requestSeq = useRef(0);
   const latestDataRequest = useRef(0);
@@ -796,7 +798,9 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
 
   const handleSelectedRowsChange = useCallback((rowIdxs: number[]) => {
     setSelectedRowIdxs(rowIdxs);
-    setSelectedRowIdx(null);
+    // 网格选中单元格时会先发 onSelectedCellChange 再发 onSelectedRowsChange([]),
+    // 无条件清空会把刚设好的当前行抹掉 —— 只有真的选了整行才接管。
+    if (rowIdxs.length > 0) setSelectedRowIdx(null);
   }, []);
 
   const handleExport = useCallback(() => {
@@ -1025,6 +1029,8 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const pendingEditCount = edits.size + newRows.length;
   const hasEdits = pendingEditCount > 0;
   const deletableRowCount = deletableRowIdxs.filter((idx) => tableRows[idx] != null).length;
+  // 详情面板跟随"当前行":选中单元格所在行,或唯一被整行选中的那行。
+  const detailRowIdx = selectedRowIdx ?? (selectedRowIdxs.length === 1 ? selectedRowIdxs[0] : null);
   // memo 用 Object.is 比较 props,这里走三元每次会在 visibleColumns 与 columns 间切引用,
   // 不 useMemo 包的话,父组件任意 re-render 都会让 QueryResultTable 收到"新"数组。
   const effectiveVisibleColumns = useMemo(
@@ -1042,6 +1048,15 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
           {t("query.viewDDL")}
         </Button>
         <QueryViewModeToggle value={viewMode} onChange={setViewMode} />
+        <Button
+          variant={rowDetailOpen ? "secondary" : "ghost"}
+          size="icon-xs"
+          aria-pressed={rowDetailOpen}
+          title={t("query.rowDetail")}
+          onClick={() => setRowDetailOpen((open) => !open)}
+        >
+          <PanelRight className="h-3.5 w-3.5" />
+        </Button>
         <TableEditorToolbar
           hasEdits={hasEdits}
           submitting={submitting || deleting}
@@ -1088,51 +1103,65 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
       )}
 
       {/* Table content */}
-      {viewMode === "json" ? (
-        <QueryResultJsonView
-          rows={tableRows}
-          columns={effectiveVisibleColumns}
-          edits={edits}
-          error={error ?? undefined}
-        />
-      ) : (
-        <QueryResultTable
-          columns={columns}
-          rows={tableRows}
-          loading={loading || importing}
-          error={error ?? undefined}
-          editable
-          edits={edits}
-          onCellEdit={handleCellEdit}
-          onSetCellValue={handleCellEdit}
-          onPasteCell={handleCellEdit}
-          onGenerateUuid={handleCellEdit}
-          onCopyAs={handleCopyAs}
-          onFilterByCellValue={handleFilterByCellValue}
-          onSortByColumn={handleSortByColumn}
-          onClearFilterSort={handleClearFilterSort}
-          onAddColumnFilter={handleAddColumnFilter}
-          onRemoveColumnFilter={handleRemoveColumnFilter}
-          onRemoveAllFilters={handleRemoveAllFilters}
-          onDeleteRows={handleDeleteRows}
-          onHideColumn={handleHideColumn}
-          onVisibleColumnToggle={handleVisibleColumnToggle}
-          onSelectedCellChange={handleSelectedCellChange}
-          onSelectedRowsChange={handleSelectedRowsChange}
-          onRefresh={handleRefresh}
-          showRowNumber
-          rowNumberOffset={page * pageSize}
-          sortColumn={sortColumn}
-          sortDir={sortDir}
-          onSortChange={handleSortChange}
-          enableColumnFilter
-          visibleColumns={effectiveVisibleColumns}
-          columnTypes={columnTypes}
-          rowDensity={rowDensity}
-          focusCellRequest={focusCellRequest}
-          renderCell={renderCell}
-        />
-      )}
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-col">
+          {viewMode === "json" ? (
+            <QueryResultJsonView
+              rows={tableRows}
+              columns={effectiveVisibleColumns}
+              edits={edits}
+              error={error ?? undefined}
+            />
+          ) : (
+            <QueryResultTable
+              columns={columns}
+              rows={tableRows}
+              loading={loading || importing}
+              error={error ?? undefined}
+              editable
+              edits={edits}
+              onCellEdit={handleCellEdit}
+              onSetCellValue={handleCellEdit}
+              onPasteCell={handleCellEdit}
+              onGenerateUuid={handleCellEdit}
+              onCopyAs={handleCopyAs}
+              onFilterByCellValue={handleFilterByCellValue}
+              onSortByColumn={handleSortByColumn}
+              onClearFilterSort={handleClearFilterSort}
+              onAddColumnFilter={handleAddColumnFilter}
+              onRemoveColumnFilter={handleRemoveColumnFilter}
+              onRemoveAllFilters={handleRemoveAllFilters}
+              onDeleteRows={handleDeleteRows}
+              onHideColumn={handleHideColumn}
+              onVisibleColumnToggle={handleVisibleColumnToggle}
+              onSelectedCellChange={handleSelectedCellChange}
+              onSelectedRowsChange={handleSelectedRowsChange}
+              onRefresh={handleRefresh}
+              showRowNumber
+              rowNumberOffset={page * pageSize}
+              sortColumn={sortColumn}
+              sortDir={sortDir}
+              onSortChange={handleSortChange}
+              enableColumnFilter
+              visibleColumns={effectiveVisibleColumns}
+              columnTypes={columnTypes}
+              rowDensity={rowDensity}
+              focusCellRequest={focusCellRequest}
+              renderCell={renderCell}
+            />
+          )}
+        </div>
+        {rowDetailOpen && (
+          <QueryRowDetailPanel
+            rows={tableRows}
+            columns={effectiveVisibleColumns}
+            rowIdx={detailRowIdx}
+            rowNumberOffset={page * pageSize}
+            edits={edits}
+            onClose={() => setRowDetailOpen(false)}
+          />
+        )}
+      </div>
 
       {/* Footer bar */}
       <TableDataStatusBar

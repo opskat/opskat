@@ -138,6 +138,15 @@ describe("TableDataTab multi-row delete", () => {
     expect(deleteCalls()).toHaveLength(0);
   });
 
+  it("keeps the status bar delete action usable for a plain cell selection", async () => {
+    await renderLoaded();
+    expect(screen.getByTitle(/^query\.deleteRecord/)).toBeDisabled();
+
+    fireEvent.click(document.querySelector('[data-cell-key="1:name"]') as HTMLElement);
+
+    await waitFor(() => expect(screen.getByTitle("query.deleteRecord")).toBeEnabled());
+  });
+
   it("enables the status bar delete action for the whole row selection", async () => {
     await renderLoaded();
     const deleteAction = screen.getByTitle(/^query\.deleteRecord/);

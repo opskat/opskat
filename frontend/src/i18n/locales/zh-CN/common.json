@@ -2630,7 +2630,10 @@
     "selectAllRows": "全选/取消全选本页",
     "tableView": "表格",
     "jsonView": "JSON",
-    "resultView": "结果视图"
+    "resultView": "结果视图",
+    "rowDetail": "行详情",
+    "rowDetailIndex": "第 {{index}} 行",
+    "rowDetailEmpty": "选中一个单元格或一行后，这里显示该行的 JSON"
   },
   "systemStatus": {
     "title": "系统状态",

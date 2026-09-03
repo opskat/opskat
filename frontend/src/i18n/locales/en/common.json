@@ -2630,7 +2630,10 @@
     "selectAllRows": "Select or clear all rows on this page",
     "tableView": "Table",
     "jsonView": "JSON",
-    "resultView": "Result view"
+    "resultView": "Result view",
+    "rowDetail": "Row detail",
+    "rowDetailIndex": "Row {{index}}",
+    "rowDetailEmpty": "Select a cell or a row to see its JSON here"
   },
   "systemStatus": {
     "title": "Status",

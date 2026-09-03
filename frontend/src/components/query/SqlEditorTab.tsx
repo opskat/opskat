@@ -1,6 +1,16 @@
 import { memo, useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { Play, Loader2, History, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, FileCode } from "lucide-react";
+import {
+  Play,
+  Loader2,
+  History,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  FileCode,
+  PanelRight,
+} from "lucide-react";
 import type * as MonacoNS from "monaco-editor";
 import {
   Button,
@@ -21,6 +31,7 @@ import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { ExecuteSQLPaged } from "../../../wailsjs/go/query/Query";
 import { QueryResultTable } from "./QueryResultTable";
 import { QueryResultJsonView } from "./QueryResultJsonView";
+import { QueryRowDetailPanel } from "./QueryRowDetailPanel";
 import { QueryViewModeToggle, type QueryViewMode } from "./QueryViewModeToggle";
 import { CodeEditor } from "@/components/CodeEditor";
 import { SnippetPopover } from "@/components/snippet/SnippetPopover";
@@ -97,6 +108,8 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
   const [page, setPage] = useState(0);
   // 内层 tab 常驻挂载,本地 state 即"按 tab 记住"。
   const [viewMode, setViewMode] = useState<QueryViewMode>("table");
+  const [rowDetailOpen, setRowDetailOpen] = useState(false);
+  const [detailRowIdx, setDetailRowIdx] = useState<number | null>(null);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [pageInput, setPageInput] = useState("1");
   // Store the last executed SQL for pagination
@@ -468,6 +481,15 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
         {columns.length > 0 && (
           <div className="flex items-center gap-2 border-b border-border bg-muted/20 px-3 py-1.5 shrink-0">
             <QueryViewModeToggle value={viewMode} onChange={setViewMode} />
+            <Button
+              variant={rowDetailOpen ? "secondary" : "ghost"}
+              size="icon-xs"
+              aria-pressed={rowDetailOpen}
+              title={t("query.rowDetail")}
+              onClick={() => setRowDetailOpen((open) => !open)}
+            >
+              <PanelRight className="h-3.5 w-3.5" />
+            </Button>
           </div>
         )}
         {showPagination && (
@@ -557,18 +579,33 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
             </div>
           </div>
         )}
-        {viewMode === "json" ? (
-          <QueryResultJsonView rows={rows} columns={columns} error={error ?? undefined} />
-        ) : (
-          <QueryResultTable
-            columns={columns}
-            rows={rows}
-            loading={loading}
-            error={error ?? undefined}
-            showRowNumber
-            rowNumberOffset={page * pageSize}
-          />
-        )}
+        <div className="flex min-h-0 flex-1">
+          <div className="flex min-w-0 flex-1 flex-col">
+            {viewMode === "json" ? (
+              <QueryResultJsonView rows={rows} columns={columns} error={error ?? undefined} />
+            ) : (
+              <QueryResultTable
+                columns={columns}
+                rows={rows}
+                loading={loading}
+                error={error ?? undefined}
+                showRowNumber
+                rowNumberOffset={page * pageSize}
+                onSelectedCellChange={(cell) => setDetailRowIdx(cell?.rowIdx ?? null)}
+                onSelectedRowsChange={(idxs) => setDetailRowIdx(idxs.length === 1 ? idxs[0] : null)}
+              />
+            )}
+          </div>
+          {rowDetailOpen && (
+            <QueryRowDetailPanel
+              rows={rows}
+              columns={columns}
+              rowIdx={detailRowIdx}
+              rowNumberOffset={page * pageSize}
+              onClose={() => setRowDetailOpen(false)}
+            />
+          )}
+        </div>
       </div>
 
       {/* Dangerous SQL confirmation */}
