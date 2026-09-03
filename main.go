@@ -52,6 +52,7 @@ import (
 	extpkg "github.com/opskat/opskat/pkg/extension"
 	skillplugin "github.com/opskat/opskat/plugin"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -227,7 +228,7 @@ func main() {
 		Emit:           externalEditEmitter.Emit,
 	})
 	if err != nil {
-		zap.L().Warn("init external edit service", zap.Error(err))
+		logger.Default().Warn("init external edit service", zap.Error(err))
 	}
 	extEditB := external_edit.New(sys, externalEditSvc, externalEditEmitter)
 
@@ -371,28 +372,28 @@ func initExtensionSystem(
 	opsctlB *opsctl.Opsctl,
 ) {
 	if os.Getenv("OPSKAT_EXTENSIONS") == "0" {
-		zap.L().Info("extension system disabled via OPSKAT_EXTENSIONS=0")
+		logger.Default().Info("extension system disabled via OPSKAT_EXTENSIONS=0")
 		return
 	}
 
 	extDir := filepath.Join(dataDir, "extensions")
 	mgr := extpkg.NewManager(extDir, func(extName string) extpkg.HostProvider {
 		return extpkg.NewDefaultHostProvider(extpkg.DefaultHostConfig{
-			Logger:       zap.L(),
+			Logger:       logger.Default(),
 			AssetConfigs: extB.NewAssetConfigGetter(),
 			FileDialogs:  extB.NewFileDialogOpener(),
 			KV:           extB.NewKVStore(extName),
 			ActionEvents: extB.NewActionEventHandler(extName),
 			TunnelDialer: extB.NewTunnelDialer(),
 		})
-	}, zap.L())
+	}, logger.Default())
 
 	extSvc := extension_svc.New(
 		mgr,
 		extension_state_repo.ExtensionState(),
 		extension_data_repo.ExtensionData(),
 		asset_repo.Asset(),
-		zap.L(),
+		logger.Default(),
 		func() { wailsRuntime.EventsEmit(wctx, "ext:reload", nil) },
 		extension.SnippetExtensionHook{},
 	)
@@ -412,7 +413,7 @@ func initExtensionSystem(
 	// 异步初始化扩展，避免阻塞 Startup（WASM 编译较慢）
 	go func() {
 		if err := extSvc.Init(appCtx); err != nil {
-			zap.L().Error("extension init failed", zap.Error(err))
+			logger.Default().Error("extension init failed", zap.Error(err))
 		}
 		// 扩展 Init 完成后刷新 snippet 分类表
 		if svc := snippet_svc.Snippet(); svc != nil {
