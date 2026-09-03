@@ -39,6 +39,10 @@ var registryMu sync.RWMutex
 
 var permissionTypes = make(map[string]*permissionTypeHandler)
 
+// commandShape 是共用的 CommandPolicy 列。它是包级变量而不是 init 里的局部：运行期
+// 注册进来的扩展类型也把永久规则落在这一列（见 rule_ext.go）。
+var commandShape *shapeLanding
+
 func registerPermissionType(canonical, approvalType string, grantPatterns GrantPatternsFunc, check permissionCheckFunc, aliases ...string) {
 	if err := addPermissionType(canonical, approvalType, grantPatterns, check, aliases...); err != nil {
 		panic(err.Error())
@@ -142,7 +146,7 @@ func init() {
 
 	// 永久规则落点与上面的 grantPatterns 并列注册（spec 决策 11、15）：一个类型一次
 	// 注册、同时覆盖 allow 与 deny 两侧、按 holder 取 Get/SetXxxPolicy 对。
-	commandShape := registerRuleShape(policyKindCommand, shapeSides[policyent.CommandPolicy]{
+	commandShape = registerRuleShape(policyKindCommand, shapeSides[policyent.CommandPolicy]{
 		get: func(h policyent.Holder) (*policyent.CommandPolicy, error) { return h.GetCommandPolicy() },
 		set: func(h policyRWHolder, p *policyent.CommandPolicy) error { return h.SetCommandPolicy(p) },
 		sides: func(p *policyent.CommandPolicy) (*[]string, *[]string, *[]string) {
@@ -207,6 +211,7 @@ func init() {
 		newOne: func() *policyent.OSSPolicy { return &policyent.OSSPolicy{} },
 	})
 	genericRuleLanding.shape = commandShape
+	genericRuleLanding.refShape = commandShape
 
 	registerRuleSink(asset_entity.AssetTypeSSH, &ruleLanding{
 		shape: commandShape, refPolicyType: policyKindCommand, land: identityLand, match: policy.MatchCommandRule})

@@ -1,4 +1,4 @@
-.PHONY: dev dev-sandbox dev-sandbox-down dev-sandbox-status run build build-embed install-app clean install build-cli install-cli lint test test-cover test-e2e test-e2e-scratch install-skill
+.PHONY: dev dev-sandbox dev-sandbox-down dev-sandbox-status run build build-embed install-app clean install build-cli install-cli build-ext lint test test-cover test-e2e test-e2e-scratch install-skill
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -76,6 +76,21 @@ build-cli:
 install-cli:
 	go install -ldflags="$(LDFLAGS)" ./cmd/opsctl/
 
+# 构建仓内示例扩展：WASI reactor（go build -buildmode=c-shared），产物连同 manifest /
+# SKILL.md / locales 一起落到 extensions/$(EXT)/dist，那正是应用要装的目录形状。
+# 装进正在运行的应用（沙箱见 docs/VERIFICATION.md）：
+#   make build-ext && opsctl ext dev $(CURDIR)/extensions/$(EXT)/dist
+# 重跑这两条就是热重载——Install 会先卸载旧模块。
+EXT ?= notebook
+build-ext:
+	@rm -rf extensions/$(EXT)/dist
+	@mkdir -p extensions/$(EXT)/dist
+	GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o extensions/$(EXT)/dist/main.wasm ./extensions/$(EXT)
+	@cp extensions/$(EXT)/manifest.json extensions/$(EXT)/SKILL.md extensions/$(EXT)/dist/
+	@cp -R extensions/$(EXT)/locales extensions/$(EXT)/dist/
+	@[ -d extensions/$(EXT)/frontend ] && cp -R extensions/$(EXT)/frontend/. extensions/$(EXT)/dist/ || true
+	@echo "Built extensions/$(EXT)/dist — install it with: opsctl ext dev $(CURDIR)/extensions/$(EXT)/dist"
+
 # 代码检查
 lint:
 	golangci-lint run --timeout 10m
@@ -146,6 +161,7 @@ install-skill:
 # 清理构建产物
 clean:
 	rm -rf build/bin frontend/dist internal/embedded/opsctl_bin \
+		extensions/*/dist \
 		coverage.out coverage.html coverage_new.out \
 		opskat opsctl \
 		frontend/package.json.md5

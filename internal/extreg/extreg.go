@@ -162,6 +162,15 @@ func registerType(l loaded, at extension.AssetTypeDef, help, description string)
 		permission.UnregisterExecutor(at.Type)
 		return fmt.Errorf("extension %q: %w", l.name, err)
 	}
+	// 永久规则落点：opsctl policy allow/deny/rm/show 走它，规则形状
+	// `ext:<policyType>:<action>`，落在共用的 CommandPolicy 列上。
+	if err := permission.RegisterExtensionRuleSink(at.Type, m.Policies.Type, m.Policies.Actions); err != nil {
+		assettype.Unregister(at.Type)
+		permission.UnregisterPolicyCheck(at.Type)
+		permission.UnregisterExecutor(at.Type)
+		skills.UnregisterDynamic(at.Type)
+		return fmt.Errorf("extension %q: %w", l.name, err)
+	}
 	defaults := append([]string(nil), m.Policies.Default...)
 	policyent.RegisterDefaultPolicy(at.Type, func() any {
 		return &policyent.CommandPolicy{Groups: defaults}
@@ -173,6 +182,7 @@ func unregisterType(assetType string) {
 	assettype.Unregister(assetType)
 	permission.UnregisterPolicyCheck(assetType)
 	permission.UnregisterExecutor(assetType)
+	permission.UnregisterRuleSink(assetType)
 	skills.UnregisterDynamic(assetType)
 	policyent.UnregisterDefaultPolicy(assetType)
 }
@@ -244,9 +254,9 @@ func execTool(l loaded) permission.ExecFunc {
 // 类型策略 → grant → NeedConfirm。
 //
 // 与内置类型的差别只在中间那一步的语言：内置类型把命令文本拿去撞规则模式，扩展则先问
-// guest 的 check_policy 这条调用请求的是哪个 action，再拿 action 去撞权限组的精确
-// allow/deny 名单（policy.CheckExtensionPolicy）。两套引擎不合并，是因为它们判定的
-// 根本不是同一种东西。
+// guest 的 check_policy 这条调用请求的是哪个 action，再拿 action 去撞 holder 自身那一列
+// 与它引用的权限组里的精确 allow/deny 名单（policy.CheckExtensionPolicy）。两套引擎
+// 不合并，是因为它们判定的根本不是同一种东西。
 //
 // 返回 NeedConfirm 之后发生什么，则与内置类型完全一致：CheckForAsset 弹审批框，
 // "全部允许"落 grant，下一条同样的命令由这里的 MatchGrant 直接放行。
@@ -265,11 +275,17 @@ func policyCheck(l loaded, assetType string) permission.PolicyCheckFunc {
 			return aictx.CheckResult{Decision: aictx.NeedConfirm}
 		}
 		if action != "" {
-			groups := permission.PolicyGroupsForAsset(ctx, assetID)
+			policyType := l.manifest.Policies.Type
+			groups, own := permission.ExtensionPolicyForAsset(ctx, assetID, policyType)
 			if len(groups) == 0 {
 				groups = l.manifest.Policies.Default
 			}
-			result := aipolicy.CheckExtensionPolicy(ctx, groups, action)
+			result := aipolicy.CheckExtensionPolicy(ctx, aipolicy.ExtensionCheck{
+				PolicyType: policyType,
+				GroupIDs:   groups,
+				Own:        own,
+				Action:     action,
+			})
 			if result.Decision != aictx.NeedConfirm {
 				return result
 			}

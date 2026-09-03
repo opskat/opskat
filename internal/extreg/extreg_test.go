@@ -80,7 +80,8 @@ func testManifest() *extension.Manifest {
 			},
 		}},
 		Policies: extension.PoliciesDef{
-			Type: "ext:acme",
+			Type:    "acme",
+			Actions: []string{"object.list", "object.write", "object.delete"},
 			Groups: []extension.PolicyGroupDef{{
 				ID:   "ext:acme:readonly",
 				I18n: extension.I18nNameDesc{Name: "read only", Description: "list and read"},
@@ -295,8 +296,16 @@ func (r *stubGrantRepo) ListApprovedItems(context.Context, string) ([]*grant_ent
 // context carrying the session id grant matching requires.
 func withGrantFixture(t *testing.T, assetID int64, assetType string) context.Context {
 	t.Helper()
+	return withGrantFixturePolicy(t, assetID, assetType,
+		&asset_entity.CommandPolicy{Groups: []string{"ext:acme:readonly"}})
+}
+
+// withGrantFixturePolicy is withGrantFixture with the asset's own command policy spelled
+// out — permanent extension rules land in that same column.
+func withGrantFixturePolicy(t *testing.T, assetID int64, assetType string, cp *asset_entity.CommandPolicy) context.Context {
+	t.Helper()
 	asset := &asset_entity.Asset{ID: assetID, Name: "acme-1", Type: assetType}
-	require.NoError(t, asset.SetCommandPolicy(&asset_entity.CommandPolicy{Groups: []string{"ext:acme:readonly"}}))
+	require.NoError(t, asset.SetCommandPolicy(cp))
 
 	origGrant := grant_repo.Grant()
 	grant_repo.RegisterGrant(&stubGrantRepo{})

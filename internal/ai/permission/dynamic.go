@@ -2,8 +2,10 @@ package permission
 
 import (
 	"context"
+	"strings"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/policy"
 )
 
 // MatchGrant 报告该资产上是否已有一条批准过的常驻授权覆盖这条命令。
@@ -21,19 +23,20 @@ func MatchGrant(ctx context.Context, assetID int64, command, approvalType string
 	return *result, true
 }
 
-// PolicyGroupsForAsset 返回资产自身与其组链上 CommandPolicy 引用的权限组 ID，按
-// 资产 → 组 → 父组的顺序去重。
+// ExtensionPolicyForAsset 收集一个扩展策略面在资产 holder 链（资产 → 组 → 父组）
+// 上的两样东西：引用的权限组 ID，以及 holder 自己那一列里属于这个策略面的永久规则
+// （已还原成裸动作名）。两者一趟走完——每条命令都要问一次，而组链要读库。
 //
-// 扩展的策略语言是 action 名，规则住在 manifest 声明的 `ext:` 权限组里，因此扩展类型的
-// 检查函数需要的正是"这个资产实际引用了哪些组"。此前 Bridge.GetExtensionPolicyGroups
-// 忽略资产、无条件返回 manifest 的默认组——用户在资产上改过权限组也没用。
-func PolicyGroupsForAsset(ctx context.Context, assetID int64) []string {
+// 之所以由本包给出：holder 链的走法（policyHoldersForAsset）与永久规则的落点形状
+// （rule_ext.go 的命名空间前缀）都是本包的知识，而扩展的判定函数住在包外。
+// 此前只有权限组这一半，因此 opsctl policy allow 写下的规则没有任何读它的地方。
+func ExtensionPolicyForAsset(ctx context.Context, assetID int64, policyType string) (groups []string, own policy.ExtensionPolicyRule) {
 	asset := resolveAssetForPolicy(ctx, assetID)
 	if asset == nil {
-		return nil
+		return nil, own
 	}
+	prefix := extRulePrefix(policyType)
 	seen := make(map[string]struct{})
-	var out []string
 	for _, holder := range policyHoldersForAsset(ctx, asset) {
 		p, err := holder.GetCommandPolicy()
 		if err != nil || p == nil {
@@ -44,8 +47,21 @@ func PolicyGroupsForAsset(ctx context.Context, assetID int64) []string {
 				continue
 			}
 			seen[id] = struct{}{}
-			out = append(out, id)
+			groups = append(groups, id)
+		}
+		own.AllowList = append(own.AllowList, extActionsOf(prefix, p.AllowList)...)
+		own.DenyList = append(own.DenyList, extActionsOf(prefix, p.DenyList)...)
+	}
+	return groups, own
+}
+
+// extActionsOf 从一列共用的命令规则里挑出属于该策略面的，并去掉命名空间前缀。
+func extActionsOf(prefix string, rules []string) []string {
+	var actions []string
+	for _, r := range rules {
+		if action, ok := strings.CutPrefix(r, prefix); ok {
+			actions = append(actions, action)
 		}
 	}
-	return out
+	return actions
 }
