@@ -2525,6 +2525,7 @@
     "updateSuccess": "成功更新 {{count}} 行",
     "updateSuccessAffected": "已提交 {{affected}} 行修改",
     "updateMismatch": "{{count}} 处修改未匹配到数据（可能已被其他会话改动），请刷新后重试",
+    "deleteMismatch": "{{count}} 行删除未匹配到数据（可能已被其他会话改动），请刷新后重试",
     "noPrimaryKey": "无主键（将使用全列匹配）",
     "noPrimaryKeyTooltip": "该表未定义主键，UPDATE 将使用所有列作为 WHERE 条件定位行",
     "deleteKey": "删除 Key",

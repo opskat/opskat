@@ -780,7 +780,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
       await fetchData(page);
       await fetchCount();
     }
-    if (zeroAffected > 0) toast.warning(t("query.updateMismatch", { count: zeroAffected }));
+    if (zeroAffected > 0) toast.warning(t("query.deleteMismatch", { count: zeroAffected }));
     if (errorMsg) toast.error(errorMsg.trim());
   }, [assetId, database, deletePreview, fetchCount, fetchData, page, t]);
 

@@ -199,12 +199,14 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
       const tablesOpen = filterLower ? true : (openTables[db] ?? true);
       if (!tablesOpen) continue;
       for (const table of tables ?? []) refs.push({ database: db, table });
+      const expandedSchemas = dbState?.expandedSchemas[db] ?? [];
       for (const group of schemas ?? []) {
+        if (!filterLower && !expandedSchemas.includes(group.schema)) continue;
         for (const node of group.tables) refs.push({ database: db, table: node.qualifiedName });
       }
     }
     return refs;
-  }, [dbState?.expandedDbs, filterLower, openTables, visibleDbs]);
+  }, [dbState?.expandedDbs, dbState?.expandedSchemas, filterLower, openTables, visibleDbs]);
 
   const visibleKeys = useMemo(
     () => visibleTableRefs.map((ref) => tableKey(ref.database, ref.table)),
@@ -223,9 +225,8 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
     [visibleKeys]
   );
 
-  /** 折叠库 / 折叠表目录 / 刷新表:该库的节点整批离开树。 */
-  const dropDatabaseFromSelection = useCallback((database: string) => {
-    const prefix = `${database}.`;
+  /** 折叠库 / 折叠表目录 / 折叠 schema / 刷新表:该前缀下的节点整批离开树。 */
+  const dropSelectionUnder = useCallback((prefix: string) => {
     setSelectedKeys((prev) => prev.filter((key) => !key.startsWith(prefix)));
   }, []);
 
@@ -521,7 +522,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                         className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
                         onClick={() => {
                           if (filterLower) return;
-                          if (isExpanded) dropDatabaseFromSelection(db);
+                          if (isExpanded) dropSelectionUnder(`${db}.`);
                           toggleDbExpand(tabId, db);
                         }}
                       >
@@ -551,7 +552,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                       <ContextMenuSeparator />
                       <ContextMenuItem
                         onClick={() => {
-                          dropDatabaseFromSelection(db);
+                          dropSelectionUnder(`${db}.`);
                           refreshTables(tabId, db);
                         }}
                       >
@@ -575,7 +576,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                             className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
                             onClick={() => {
                               if (filterLower) return;
-                              if (isTablesOpen) dropDatabaseFromSelection(db);
+                              if (isTablesOpen) dropSelectionUnder(`${db}.`);
                               setOpenTables((prev) => ({ ...prev, [db]: !(prev[db] ?? false) }));
                             }}
                           >
@@ -609,6 +610,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                                           className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
                                           onClick={() => {
                                             if (filterLower) return;
+                                            if (isSchemaExpanded) dropSelectionUnder(`${db}.${group.schema}.`);
                                             toggleSchemaExpand(tabId, db, group.schema);
                                           }}
                                         >

@@ -407,3 +407,66 @@ describe("DatabaseTree — table multi-selection", () => {
     });
   });
 });
+
+describe("DatabaseTree — schema-aware selection", () => {
+  beforeEach(() => {
+    makeDatabaseTab("query-1", "postgresql");
+    useQueryStore.setState({
+      dbStates: {
+        "query-1": {
+          databases: ["appdb"],
+          tables: { appdb: ["alpha.a1", "beta.b1", "gamma.g1"] },
+          loadingTables: {},
+          expandedDbs: ["appdb"],
+          expandedSchemas: { appdb: ["alpha", "beta", "gamma"] },
+          loadingDbs: false,
+          innerTabs: [],
+          activeInnerTabId: null,
+          error: null,
+        },
+      },
+      redisStates: {},
+      mongoStates: {},
+    });
+    vi.mocked(ExecuteSQL).mockReset();
+    vi.mocked(ExecuteSQL).mockResolvedValue(JSON.stringify({ rows: [] }));
+  });
+
+  const selectedTables = () =>
+    Array.from(document.querySelectorAll('[data-table-node][data-selected="true"]')).map((el) =>
+      el.getAttribute("data-table-node")
+    );
+
+  it("collapsing a schema drops its tables from the selection", () => {
+    render(<DatabaseTree tabId="query-1" />);
+    fireEvent.click(screen.getByText("a1"));
+    fireEvent.click(screen.getByText("b1"), { ctrlKey: true });
+
+    fireEvent.click(screen.getByText("beta"));
+    expect(selectedTables()).toEqual(["appdb.alpha.a1"]);
+
+    // Re-expanding must not resurrect it, or a later batch drop would silently cover
+    // a table the user believes they put away.
+    fireEvent.click(screen.getByText("beta"));
+    expect(selectedTables()).toEqual(["appdb.alpha.a1"]);
+  });
+
+  it("a shift range skips tables hidden inside a collapsed schema", () => {
+    render(<DatabaseTree tabId="query-1" />);
+    fireEvent.click(screen.getByText("beta"));
+
+    fireEvent.click(screen.getByText("a1"));
+    fireEvent.click(screen.getByText("g1"), { shiftKey: true });
+    expect(selectedTables()).toEqual(["appdb.alpha.a1", "appdb.gamma.g1"]);
+
+    // The batch action is the thing that matters: a hidden table caught by the range
+    // would be acted on without ever appearing on screen.
+    fireEvent.contextMenu(screen.getByText("g1"));
+    fireEvent.click(screen.getByText("query.openTables"));
+
+    expect(useQueryStore.getState().dbStates["query-1"].innerTabs.map((tab) => tab.id)).toEqual([
+      "table:appdb.alpha.a1",
+      "table:appdb.gamma.g1",
+    ]);
+  });
+});
