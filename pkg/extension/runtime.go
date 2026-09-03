@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,21 +18,108 @@ import (
 	"go.uber.org/zap"
 )
 
+// Guest ABI. The module is a WASI reactor built with
+// `GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared`: the host runs
+// _initialize once per instance and then calls guestEntry for every invocation,
+// instead of re-running a whole Go runtime startup per call.
+const (
+	guestStartFunction = "_initialize"
+	guestEntry         = "opskat_call"
+	guestMalloc        = "malloc"
+	guestFree          = "free"
+)
+
+// Response framing: one tag byte, then the payload.
+const (
+	responseTagOK  = 0
+	responseTagErr = 1
+)
+
+const (
+	// defaultMaxInstances caps how many module instances of one extension may
+	// exist. Calls beyond that queue rather than allocating unbounded memory —
+	// each instance owns a full Go heap.
+	defaultMaxInstances = 4
+	// defaultMaxInstanceCalls recycles an instance after this many calls. A
+	// reactor instance keeps guest globals between calls, so bounding its life
+	// bounds how far state can drift; at ~1.5ms to re-instantiate the amortized
+	// cost is negligible.
+	defaultMaxInstanceCalls = 512
+	// defaultToolTimeout is the ceiling for tool / policy / config calls, which
+	// are request-response. Actions are long-running by design and take their
+	// deadline from the caller's context instead.
+	defaultToolTimeout = 30 * time.Second
+)
+
 // Plugin represents a loaded WASM extension.
 type Plugin struct {
-	manifest     *Manifest
-	compiled     wazero.CompiledModule
-	runtime      wazero.Runtime
-	host         HostProvider
-	mu           sync.Mutex
-	closed       atomic.Bool
-	activeCancel atomic.Pointer[ActionCancellation]
+	manifest *Manifest
+	compiled wazero.CompiledModule
+	runtime  wazero.Runtime
+	host     HostProvider
+	opts     pluginOptions
+
+	// pool holds up to opts.maxInstances slots. A slot is either a live instance
+	// or nil, meaning "you may create one". Taking a slot is what limits
+	// concurrency; there is no lock around the call itself.
+	pool   chan *instance
+	closed atomic.Bool
+
+	actionsMu sync.Mutex
+	actions   map[*ActionCancellation]struct{}
+}
+
+type pluginOptions struct {
+	maxInstances     int
+	maxInstanceCalls int
+	toolTimeout      time.Duration
+}
+
+// PluginOption customizes plugin execution.
+type PluginOption func(*pluginOptions)
+
+// WithMaxInstances sets how many module instances may run concurrently.
+func WithMaxInstances(n int) PluginOption {
+	return func(o *pluginOptions) { o.maxInstances = n }
+}
+
+// WithMaxInstanceCalls sets how many calls an instance serves before it is recycled.
+func WithMaxInstanceCalls(n int) PluginOption {
+	return func(o *pluginOptions) { o.maxInstanceCalls = n }
+}
+
+// WithToolTimeout sets the ceiling for tool / policy / config calls.
+func WithToolTimeout(d time.Duration) PluginOption {
+	return func(o *pluginOptions) { o.toolTimeout = d }
+}
+
+// instance is one reactor module instance plus its exported entry points.
+type instance struct {
+	mod    api.Module
+	entry  api.Function
+	malloc api.Function
+	free   api.Function
+	calls  int
 }
 
 // LoadPlugin compiles a WASM binary and prepares it for execution.
 // If cache is non-nil, compiled modules are cached to disk for faster subsequent loads.
-func LoadPlugin(ctx context.Context, manifest *Manifest, wasmBytes []byte, host HostProvider, cache wazero.CompilationCache) (*Plugin, error) {
-	cfg := wazero.NewRuntimeConfig().WithMemoryLimitPages(1024)
+func LoadPlugin(ctx context.Context, manifest *Manifest, wasmBytes []byte, host HostProvider, cache wazero.CompilationCache, opts ...PluginOption) (*Plugin, error) {
+	o := pluginOptions{
+		maxInstances:     defaultMaxInstances,
+		maxInstanceCalls: defaultMaxInstanceCalls,
+		toolTimeout:      defaultToolTimeout,
+	}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	// CloseOnContextDone is what makes a deadline mean anything: without it
+	// wazero never checks the context once the guest is running, so a spinning
+	// extension would hold its pool slot until it decided to return.
+	cfg := wazero.NewRuntimeConfig().
+		WithMemoryLimitPages(1024).
+		WithCloseOnContextDone(true)
 	if cache != nil {
 		cfg = cfg.WithCompilationCache(cache)
 	}
@@ -55,12 +143,19 @@ func LoadPlugin(ctx context.Context, manifest *Manifest, wasmBytes []byte, host 
 		return nil, fmt.Errorf("compile wasm: %w", err)
 	}
 
-	return &Plugin{
+	p := &Plugin{
 		manifest: manifest,
 		compiled: compiled,
 		runtime:  r,
 		host:     host,
-	}, nil
+		opts:     o,
+		pool:     make(chan *instance, o.maxInstances),
+		actions:  make(map[*ActionCancellation]struct{}),
+	}
+	for i := 0; i < o.maxInstances; i++ {
+		p.pool <- nil
+	}
+	return p, nil
 }
 
 // CallTool calls execute_tool on the extension.
@@ -72,15 +167,14 @@ func (p *Plugin) CallTool(ctx context.Context, toolName string, args json.RawMes
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s input: %w", "execute_tool", err)
 	}
-	return p.call(ctx, "execute_tool", input)
+	return p.call(ctx, "execute_tool", input, nil, p.opts.toolTimeout)
 }
 
 // CallAction calls execute_action on the extension.
 //
-// The cancellation is installed AFTER acquiring p.mu so that concurrent
-// CallAction invocations don't race on host.activeCancel: the setup and the
-// WASM execution live in the same critical section, and the defer clears the
-// cancel before releasing the lock, so the next caller installs fresh state.
+// Unlike a tool call, an action gets no host-imposed deadline: uploads, batch
+// copies and event streams are expected to run for minutes, and the caller's
+// context is the only party that knows how long is too long.
 func (p *Plugin) CallAction(ctx context.Context, actionName string, args json.RawMessage) (json.RawMessage, error) {
 	input, err := json.Marshal(map[string]any{
 		"action": actionName,
@@ -89,29 +183,28 @@ func (p *Plugin) CallAction(ctx context.Context, actionName string, args json.Ra
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s input: %w", "execute_action", err)
 	}
-	if p.closed.Load() {
-		return nil, fmt.Errorf("plugin closed")
-	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
 
 	cancel := NewActionCancellation()
-	p.host.SetActiveCancellation(cancel)
-	p.activeCancel.Store(cancel)
+	p.actionsMu.Lock()
+	p.actions[cancel] = struct{}{}
+	p.actionsMu.Unlock()
 	defer func() {
-		p.activeCancel.Store(nil)
-		p.host.SetActiveCancellation(nil)
+		p.actionsMu.Lock()
+		delete(p.actions, cancel)
+		p.actionsMu.Unlock()
 	}()
 
-	return p.callLocked(ctx, "execute_action", input)
+	return p.call(ctx, "execute_action", input, cancel, 0)
 }
 
-// CancelActiveAction triggers cancellation of the currently running action.
-// Due to Plugin.mu serializing CallAction invocations, at most one action
-// runs per plugin at a time — this cancels that one. No-op if idle.
+// CancelActiveAction requests cancellation of every action currently running in
+// this plugin. Actions run concurrently now, and the IPC surface identifies the
+// extension rather than an individual run, so "cancel this extension's work" is
+// the only meaning the caller can express.
 func (p *Plugin) CancelActiveAction() {
-	if c := p.activeCancel.Load(); c != nil {
+	p.actionsMu.Lock()
+	defer p.actionsMu.Unlock()
+	for c := range p.actions {
 		c.Cancel()
 	}
 }
@@ -125,7 +218,7 @@ func (p *Plugin) CheckPolicy(ctx context.Context, toolName string, args json.Raw
 	if err != nil {
 		return "", "", fmt.Errorf("marshal %s input: %w", "check_policy", err)
 	}
-	result, err := p.call(ctx, "check_policy", input)
+	result, err := p.call(ctx, "check_policy", input, nil, p.opts.toolTimeout)
 	if err != nil {
 		return "", "", err
 	}
@@ -141,7 +234,7 @@ func (p *Plugin) CheckPolicy(ctx context.Context, toolName string, args json.Raw
 
 // ValidateConfig calls validate_config on the extension.
 func (p *Plugin) ValidateConfig(ctx context.Context, config json.RawMessage) ([]ValidationError, error) {
-	result, err := p.call(ctx, "validate_config", config)
+	result, err := p.call(ctx, "validate_config", config, nil, p.opts.toolTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -161,6 +254,9 @@ type ValidationError struct {
 // Close releases the WASM runtime resources.
 func (p *Plugin) Close(ctx context.Context) error {
 	p.closed.Store(true)
+	// Unblock actions that are polling ShouldStop so they can return before the
+	// runtime is torn out from under them.
+	p.CancelActiveAction()
 	return p.runtime.Close(ctx)
 }
 
@@ -169,229 +265,191 @@ func (p *Plugin) Manifest() *Manifest {
 	return p.manifest
 }
 
-// call invokes a WASM function using stdin/stdout for I/O.
-func (p *Plugin) call(ctx context.Context, fnName string, input []byte) (json.RawMessage, error) {
+// call runs one guest invocation on an instance borrowed from the pool.
+// maxDuration of 0 means "no host-imposed deadline".
+func (p *Plugin) call(ctx context.Context, fnName string, input []byte, cancel *ActionCancellation, maxDuration time.Duration) (json.RawMessage, error) {
 	if p.closed.Load() {
 		return nil, fmt.Errorf("plugin closed")
 	}
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	return p.callLocked(ctx, fnName, input)
-}
-
-// callLocked executes a WASM function. Caller must hold p.mu.
-func (p *Plugin) callLocked(ctx context.Context, fnName string, input []byte) (json.RawMessage, error) {
-	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	stdin := &bytesReader{data: input}
-	stdout := &bytesWriter{}
-	stderr := &bytesWriter{}
-
-	cfg := wazero.NewModuleConfig().
-		WithStdin(stdin).
-		WithStdout(stdout).
-		WithStderr(stderr).
-		WithArgs(fnName).
-		WithName("").
-		WithSysWalltime().
-		WithSysNanotime()
-
-	mod, err := p.runtime.InstantiateModule(callCtx, p.compiled, cfg)
+	req, err := json.Marshal(map[string]any{
+		"fn":    fnName,
+		"input": json.RawMessage(input),
+	})
 	if err != nil {
-		return nil, fmt.Errorf("instantiate module for %s: %w", fnName, err)
-	}
-	defer func() {
-		if err := mod.Close(callCtx); err != nil {
-			logger.Default().Warn("close wasm module", zap.Error(err))
-		}
-	}()
-
-	// The guest SDK encodes handler errors as {"error":"..."} on stdout.
-	// Detect this and propagate as a Go error so callers (Wails, AI bridge,
-	// devserver) can distinguish success from failure.
-	out := stdout.Bytes()
-	var errEnvelope struct {
-		Error string `json:"error"`
-	}
-	if json.Unmarshal(out, &errEnvelope) == nil && errEnvelope.Error != "" {
-		return nil, fmt.Errorf("%s", errEnvelope.Error)
+		return nil, fmt.Errorf("marshal %s envelope: %w", fnName, err)
 	}
 
+	callCtx := ctx
+	if maxDuration > 0 {
+		var stop context.CancelFunc
+		callCtx, stop = context.WithTimeout(ctx, maxDuration)
+		defer stop()
+	}
+
+	inst, err := p.acquire(callCtx)
+	if err != nil {
+		return nil, err
+	}
+
+	inv := newInvocation(cancel)
+	// wazero hands this context to every host function the guest calls, which is
+	// how a host call finds the invocation it belongs to.
+	guestCtx := withInvocation(callCtx, inv)
+
+	out, callErr := inst.invoke(guestCtx, req)
+	inv.close()
+	p.release(callCtx, inst, callErr != nil)
+
+	if callErr != nil {
+		return nil, fmt.Errorf("call %s: %w", fnName, callErr)
+	}
 	return out, nil
 }
 
-// registerHostModule registers all 13 host functions as a wazero host module named "opskat".
-// Guest and host share memory using the convention:
-//   - Guest exports malloc(size) -> ptr and free(ptr)
-//   - Return values packed as uint64: high 32 bits = ptr, low 32 bits = size
-//   - Errors returned as JSON {"error": "message"}
-func registerHostModule(ctx context.Context, r wazero.Runtime, host HostProvider) error {
-	b := r.NewHostModuleBuilder("opskat")
-
-	// host_log(level_ptr, level_len, msg_ptr, msg_len)
-	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, levelPtr, levelLen, msgPtr, msgLen uint32) {
-		level := readGuestString(mod, levelPtr, levelLen)
-		msg := readGuestString(mod, msgPtr, msgLen)
-		host.Log(level, msg)
-	}).Export("host_log")
-
-	// host_io_open(params_ptr, params_len) -> packed(result_ptr, result_len)
-	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, paramsPtr, paramsLen uint32) uint64 {
-		var params IOOpenParams
-		if err := json.Unmarshal(readGuestBytes(mod, paramsPtr, paramsLen), &params); err != nil {
-			return encodeError(ctx, mod, err)
-		}
-		handleID, meta, err := host.IOOpen(params)
-		if err != nil {
-			return encodeError(ctx, mod, err)
-		}
-		return writeGuestJSON(ctx, mod, map[string]any{"handle_id": handleID, "meta": meta})
-	}).Export("host_io_open")
-
-	// host_io_read(handle_id, size) -> packed(data_ptr, data_len)
-	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, handleID, size uint32) uint64 {
-		data, err := host.IORead(handleID, int(size))
-		if err == io.EOF {
-			// Signal EOF as empty result (size=0). The guest SDK's
-			// IOHandle.Read converts len(data)==0 into the real io.EOF.
-			// Encoding io.EOF as a JSON error would produce fmt.Errorf("EOF")
-			// on the guest, which != io.EOF and breaks io.ReadAll / AWS SDK.
-			return writeGuestBytes(ctx, mod, nil)
-		}
-		if err != nil {
-			return encodeError(ctx, mod, err)
-		}
-		return writeGuestBytes(ctx, mod, data)
-	}).Export("host_io_read")
-
-	// host_io_write(handle_id, data_ptr, data_len) -> n
-	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, handleID, dataPtr, dataLen uint32) uint32 {
-		data := readGuestBytes(mod, dataPtr, dataLen)
-		n, err := host.IOWrite(handleID, data)
-		if err != nil {
-			return 0
-		}
-		return uint32(n)
-	}).Export("host_io_write")
-
-	// host_io_flush(handle_id) -> packed(meta_ptr, meta_len)
-	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, handleID uint32) uint64 {
-		meta, err := host.IOFlush(handleID)
-		if err != nil {
-			return encodeError(ctx, mod, err)
-		}
-		return writeGuestJSON(ctx, mod, meta)
-	}).Export("host_io_flush")
-
-	// host_io_close(handle_id)
-	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, handleID uint32) {
-		if err := host.IOClose(handleID); err != nil {
-			logger.Default().Warn("close IO handle from host", zap.Uint32("handleID", handleID), zap.Error(err))
-		}
-	}).Export("host_io_close")
-
-	// host_io_set_deadline(handle_id, kind_ptr, kind_len, unix_nanos) -> packed(err_ptr, err_len) or 0 on success
-	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, handleID, kindPtr, kindLen uint32, unixNanos int64) uint64 {
-		kind := readGuestString(mod, kindPtr, kindLen)
-		if err := host.IOSetDeadline(handleID, kind, unixNanos); err != nil {
-			return encodeError(ctx, mod, err)
-		}
-		return 0
-	}).Export("host_io_set_deadline")
-
-	// host_asset_get_config(asset_id) -> packed(result_ptr, result_len)
-	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, assetID uint64) uint64 {
-		cfg, err := host.GetAssetConfig(int64(assetID))
-		if err != nil {
-			return encodeError(ctx, mod, err)
-		}
-		return writeGuestBytes(ctx, mod, cfg)
-	}).Export("host_asset_get_config")
-
-	// host_file_dialog(params_ptr, params_len) -> packed(result_ptr, result_len)
-	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, paramsPtr, paramsLen uint32) uint64 {
-		var req struct {
-			Type string        `json:"type"`
-			Opts DialogOptions `json:"opts"`
-		}
-		if err := json.Unmarshal(readGuestBytes(mod, paramsPtr, paramsLen), &req); err != nil {
-			return encodeError(ctx, mod, err)
-		}
-		result, err := host.FileDialog(req.Type, req.Opts)
-		if err != nil {
-			return encodeError(ctx, mod, err)
-		}
-		return writeGuestBytes(ctx, mod, []byte(result))
-	}).Export("host_file_dialog")
-
-	// host_kv_get(key_ptr, key_len) -> packed(val_ptr, val_len)
-	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, keyPtr, keyLen uint32) uint64 {
-		key := readGuestString(mod, keyPtr, keyLen)
-		val, err := host.KVGet(key)
-		if err != nil {
-			return encodeError(ctx, mod, err)
-		}
-		return writeGuestBytes(ctx, mod, val)
-	}).Export("host_kv_get")
-
-	// host_kv_set(key_ptr, key_len, val_ptr, val_len)
-	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, keyPtr, keyLen, valPtr, valLen uint32) {
-		key := readGuestString(mod, keyPtr, keyLen)
-		val := readGuestBytes(mod, valPtr, valLen)
-		if err := host.KVSet(key, val); err != nil {
-			logger.Default().Warn("host KV set", zap.String("key", key), zap.Error(err))
-		}
-	}).Export("host_kv_set")
-
-	// host_action_event(type_ptr, type_len, data_ptr, data_len)
-	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, typePtr, typeLen, dataPtr, dataLen uint32) {
-		eventType := readGuestString(mod, typePtr, typeLen)
-		data := readGuestBytes(mod, dataPtr, dataLen)
-		if err := host.ActionEvent(eventType, data); err != nil {
-			logger.Default().Warn("host action event", zap.String("eventType", eventType), zap.Error(err))
-		}
-	}).Export("host_action_event")
-
-	// host_action_should_stop() -> 0 or 1
-	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module) uint32 {
-		if host.ActionShouldStop() {
-			return 1
-		}
-		return 0
-	}).Export("host_action_should_stop")
-
-	_, err := b.Instantiate(ctx)
-	return err
-}
-
-// bytesReader implements io.Reader over a byte slice.
-type bytesReader struct {
-	data []byte
-	pos  int
-}
-
-func (r *bytesReader) Read(p []byte) (int, error) {
-	if r.pos >= len(r.data) {
-		return 0, io.EOF
+// acquire takes a pool slot, instantiating a module if the slot is empty.
+func (p *Plugin) acquire(ctx context.Context) (*instance, error) {
+	var slot *instance
+	select {
+	case slot = <-p.pool:
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
-	n := copy(p, r.data[r.pos:])
-	r.pos += n
-	return n, nil
+	if slot != nil {
+		return slot, nil
+	}
+	inst, err := p.newInstance(ctx)
+	if err != nil {
+		p.pool <- nil // give the slot back, otherwise one failure shrinks the pool forever
+		return nil, err
+	}
+	return inst, nil
 }
 
-// bytesWriter implements io.Writer that accumulates bytes.
-type bytesWriter struct {
-	data []byte
+// release returns an instance to the pool, discarding it when it is spent or
+// when the call left it in an unknown state.
+func (p *Plugin) release(ctx context.Context, inst *instance, poisoned bool) {
+	if poisoned || p.closed.Load() || inst.calls >= p.opts.maxInstanceCalls {
+		if err := inst.mod.Close(ctx); err != nil {
+			logger.Default().Warn("close wasm instance", zap.Error(err))
+		}
+		p.pool <- nil
+		return
+	}
+	p.pool <- inst
 }
 
-func (w *bytesWriter) Write(p []byte) (int, error) {
-	w.data = append(w.data, p...)
+func (p *Plugin) newInstance(ctx context.Context) (*instance, error) {
+	cfg := wazero.NewModuleConfig().
+		// Anonymous, so several instances of one compiled module can coexist.
+		WithName("").
+		WithStartFunctions(guestStartFunction).
+		WithStdout(&guestLogWriter{name: p.manifest.Name}).
+		WithStderr(&guestLogWriter{name: p.manifest.Name, warn: true}).
+		WithSysWalltime().
+		WithSysNanotime()
+
+	mod, err := p.runtime.InstantiateModule(ctx, p.compiled, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("instantiate module: %w", err)
+	}
+	inst := &instance{
+		mod:    mod,
+		entry:  mod.ExportedFunction(guestEntry),
+		malloc: mod.ExportedFunction(guestMalloc),
+		free:   mod.ExportedFunction(guestFree),
+	}
+	if inst.entry == nil || inst.malloc == nil || inst.free == nil {
+		if closeErr := mod.Close(ctx); closeErr != nil {
+			logger.Default().Warn("close wasm instance after export check", zap.Error(closeErr))
+		}
+		return nil, fmt.Errorf("extension does not export %s/%s/%s — rebuild it against the reactor SDK (GOOS=wasip1 go build -buildmode=c-shared)",
+			guestEntry, guestMalloc, guestFree)
+	}
+	return inst, nil
+}
+
+// invoke copies the request into guest memory, calls the entry point, and
+// returns a copy of the reply.
+func (i *instance) invoke(ctx context.Context, req []byte) (json.RawMessage, error) {
+	i.calls++
+
+	ptr, err := i.alloc(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	// The guest frees the request buffer as soon as it has copied it, so there is
+	// no host-side free here.
+
+	results, err := i.entry.Call(ctx, uint64(ptr), uint64(len(req)))
+	if err != nil {
+		return nil, err
+	}
+	if len(results) == 0 {
+		return nil, fmt.Errorf("%s returned no value", guestEntry)
+	}
+	return i.readResponse(results[0])
+}
+
+func (i *instance) alloc(ctx context.Context, data []byte) (uint32, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+	res, err := i.malloc.Call(ctx, uint64(len(data)))
+	if err != nil {
+		return 0, fmt.Errorf("guest malloc: %w", err)
+	}
+	if len(res) == 0 || res[0] == 0 {
+		return 0, fmt.Errorf("guest malloc returned null for %d bytes", len(data))
+	}
+	ptr := uint32(res[0])
+	if !i.mod.Memory().Write(ptr, data) {
+		return 0, fmt.Errorf("write %d bytes to guest memory at %d", len(data), ptr)
+	}
+	return ptr, nil
+}
+
+func (i *instance) readResponse(packed uint64) (json.RawMessage, error) {
+	ptr := uint32(packed >> 32)
+	size := uint32(packed)
+	if size == 0 {
+		return nil, fmt.Errorf("%s returned an empty response", guestEntry)
+	}
+	raw, ok := i.mod.Memory().Read(ptr, size)
+	if !ok {
+		return nil, fmt.Errorf("read %d bytes of guest response at %d", size, ptr)
+	}
+	tag, payload := raw[0], raw[1:]
+	out := make([]byte, len(payload))
+	copy(out, payload)
+	if tag == responseTagErr {
+		return nil, fmt.Errorf("%s", out)
+	}
+	if tag != responseTagOK {
+		return nil, fmt.Errorf("%s returned unknown response tag %d", guestEntry, tag)
+	}
+	return out, nil
+}
+
+// guestLogWriter forwards whatever the guest writes to stdout/stderr — panic
+// traces, stray fmt.Println debugging — into the app log instead of dropping it.
+type guestLogWriter struct {
+	name string
+	warn bool
+}
+
+func (w *guestLogWriter) Write(p []byte) (int, error) {
+	msg := strings.TrimRight(string(p), "\n")
+	if msg == "" {
+		return len(p), nil
+	}
+	l := logger.Default().With(zap.String("extension", w.name), zap.String("output", msg))
+	if w.warn {
+		l.Warn("extension guest output")
+	} else {
+		l.Debug("extension guest output")
+	}
 	return len(p), nil
 }
 
-func (w *bytesWriter) Bytes() []byte {
-	return w.data
-}
+var _ io.Writer = (*guestLogWriter)(nil)

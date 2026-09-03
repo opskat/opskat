@@ -5,21 +5,11 @@ import (
 	"fmt"
 
 	"github.com/opskat/opskat/internal/app/i18n"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
-
-// AssetTypeInfo combines built-in and extension asset types for the frontend.
-type AssetTypeInfo struct {
-	Type          string `json:"type"`
-	ExtensionName string `json:"extensionName,omitempty"`
-	DisplayName   string `json:"displayName"`
-	SSHTunnel     bool   `json:"sshTunnel"`
-	ProxyChain    bool   `json:"proxyChain"`
-}
 
 // ListInstalledExtensions returns all loaded extensions.
 func (e *Extension) ListInstalledExtensions() []extension_svc.ExtensionInfo {
@@ -39,39 +29,6 @@ func (e *Extension) GetExtensionManifest(name string) (*extension.Manifest, erro
 		return nil, fmt.Errorf("extension %q not found", name)
 	}
 	return ext.Manifest, nil
-}
-
-// GetAvailableAssetTypes returns built-in + extension asset types.
-func (e *Extension) GetAvailableAssetTypes() []AssetTypeInfo {
-	types := []AssetTypeInfo{
-		{Type: asset_entity.AssetTypeSSH, DisplayName: "SSH"},
-		{Type: asset_entity.AssetTypeDatabase, DisplayName: "Database"},
-		{Type: asset_entity.AssetTypeRedis, DisplayName: "Redis"},
-		{Type: asset_entity.AssetTypeMongoDB, DisplayName: "MongoDB", SSHTunnel: true},
-		{Type: asset_entity.AssetTypeKafka, DisplayName: "Kafka", SSHTunnel: true},
-		{Type: asset_entity.AssetTypeK8s, DisplayName: "K8S"},
-		{Type: asset_entity.AssetTypeSerial, DisplayName: "Serial"},
-		{Type: asset_entity.AssetTypeVNC, DisplayName: "VNC", SSHTunnel: true},
-		{Type: asset_entity.AssetTypeRDP, DisplayName: "RDP", SSHTunnel: true},
-	}
-	if e.service != nil {
-		bridge := e.service.Bridge()
-		lang := e.lang.Lang()
-		for _, at := range bridge.GetAssetTypes() {
-			displayName := at.I18n.Name
-			if ext := e.service.Manager().GetExtension(at.ExtensionName); ext != nil {
-				displayName = ext.Translate(lang, at.I18n.Name)
-			}
-			types = append(types, AssetTypeInfo{
-				Type:          at.Type,
-				ExtensionName: at.ExtensionName,
-				DisplayName:   displayName,
-				SSHTunnel:     at.ProxyChain,
-				ProxyChain:    at.ProxyChain,
-			})
-		}
-	}
-	return types
 }
 
 // CallExtensionAction calls an extension action and streams events via Wails Events.

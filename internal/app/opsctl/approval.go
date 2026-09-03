@@ -2,11 +2,12 @@ package opsctl
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/audit"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/approval"
@@ -356,39 +357,61 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 	}
 }
 
-// handleExtToolExec 处理 opsctl ext exec 的委托执行请求
+// handleExtToolExec 处理 opsctl 对扩展资产的委托执行请求。
+//
+// 桌面端在这里跑的是与 AI 会话完全相同的统一 exec handler：策略检查、审批弹窗、
+// "始终允许"落 grant、审计，全部由那条路径提供。本函数只负责把 opsctl 的 socket 请求
+// 翻译成一次进程内调用，并把 checker 注入 context——审批弹窗要经 requestSingleApproval
+// 回到前端。
 func (o *Opsctl) handleExtToolExec(req approval.ApprovalRequest) approval.ApprovalResponse {
 	if o.extExecutor == nil {
 		return approval.ApprovalResponse{ToolError: "extension system not initialized"}
 	}
 
-	args := req.ToolArgs
-	if len(args) == 0 {
-		args = json.RawMessage("{}")
-	}
-
 	ctx := i18n.Ctx(o.ctx, o.lang.Lang())
-	checker := permission.NewCommandPolicyChecker(func(_ context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
+	ctx = aictx.WithAuditSource(ctx, "opsctl")
+	ctx = aictx.WithSessionID(ctx, req.SessionID)
+	checker := permission.NewCommandPolicyChecker(func(_ context.Context, kind string, items []permission.ApprovalItem) permission.ApprovalResponse {
 		item := items[0]
 		resp := o.requestSingleApproval(approval.ApprovalRequest{
 			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName,
-			Command: item.Command, Detail: item.Detail,
+			Command: item.Command, Detail: item.Detail, SessionID: req.SessionID,
 		})
 		if resp.Approved {
+			// requestSingleApproval 已经在 allowAll 分支落过 grant（同一条
+			// SaveGrantPatternsForApproval 路径），所以这里只回 allow：再回一次
+			// allowAll 会让 HandleConfirm 把同一条 pattern 重复落库。
 			return permission.ApprovalResponse{Decision: "allow"}
 		}
 		return permission.ApprovalResponse{Decision: "deny"}
 	})
 	ctx = permission.WithPolicyChecker(ctx, checker)
-	// 直接执行通道：executor 返回的 bytes 与 error 原样交给调用者，不做内容改写
-	// （spec Decision 4 / Direct execution and history）。
-	result, err := o.extExecutor.ExecuteExtTool(ctx, req.Extension, req.Tool, args)
+
+	// 审计行由**做出决策的进程**写：策略判定、审批结果与规范化命令都只在这里存在，
+	// opsctl 侧只知道最终的结果字符串。command slot 让统一 exec 的规范化形式落库，
+	// 与 AI 会话那条路径一致。
+	var decision aictx.CheckResult
+	ctx = aictx.WithCheckResultSlot(ctx, &decision)
+	auditCommand := req.Command
+	ctx = aictx.WithAuditCommandSlot(ctx, &auditCommand)
+
+	result, err := o.extExecutor.ExecuteExtTool(ctx, req.AssetID, req.Command)
+	extAuditWriter.WriteToolCall(ctx, audit.ToolCallInfo{
+		ToolName: "exec",
+		ArgsJSON: fmt.Sprintf(`{"asset_id":%d,"command":%q}`, req.AssetID, req.Command),
+		Command:  auditCommand,
+		Result:   result,
+		Error:    err,
+		Decision: &decision,
+	})
 	if err != nil {
 		return approval.ApprovalResponse{ToolError: err.Error()}
 	}
-
-	return approval.ApprovalResponse{Approved: true, ToolResult: string(result)}
+	return approval.ApprovalResponse{Approved: true, ToolResult: result}
 }
+
+// extAuditWriter 与 opsctl CLI 侧用的是同一个默认写入器实现，两条路径落同一组列语义。
+var extAuditWriter audit.AuditWriter = audit.NewDefaultAuditWriter()
 
 // RespondOpsctlApproval 前端响应 opsctl 审批请求（统一入口）
 func (o *Opsctl) RespondOpsctlApproval(confirmID string, resp permission.ApprovalResponse) {

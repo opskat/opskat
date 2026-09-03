@@ -5,25 +5,20 @@ import "encoding/json"
 
 // HostProvider defines the capabilities that the host provides to extensions.
 // Main App and DevServer each provide their own implementation.
+//
+// Every method is stateless with respect to a single call: the runtime owns the
+// per-invocation IO handle table and the action cancellation flag, so a provider
+// never has to reason about which concurrent call it is serving.
 type HostProvider interface {
-	IOOpen(params IOOpenParams) (uint32, IOMeta, error)
-	IORead(handleID uint32, size int) ([]byte, error)
-	IOWrite(handleID uint32, data []byte) (int, error)
-	IOFlush(handleID uint32) (*IOMeta, error)
-	IOClose(handleID uint32) error
-	// IOSetDeadline sets read/write/both deadline on a handle.
-	// unixNanos is an absolute deadline in Unix nanoseconds; 0 clears any existing deadline.
-	// kind ∈ {"read","write","both"}. Returns an error if the underlying handle type does not support deadlines.
-	IOSetDeadline(handleID uint32, kind string, unixNanos int64) error
+	// OpenIO opens a stream. The runtime registers the returned resource in the
+	// calling invocation's handle table and closes it when that call ends.
+	OpenIO(params IOOpenParams) (*IOResource, error)
 	GetAssetConfig(assetID int64) (json.RawMessage, error)
 	FileDialog(dialogType string, opts DialogOptions) (string, error)
 	Log(level, msg string)
 	KVGet(key string) ([]byte, error)
 	KVSet(key string, value []byte) error
 	ActionEvent(eventType string, data json.RawMessage) error
-	ActionShouldStop() bool
-	SetActiveCancellation(c *ActionCancellation)
-	CloseAll()
 }
 
 type IOOpenParams struct {

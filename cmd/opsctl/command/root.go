@@ -243,7 +243,7 @@ Examples:
   opsctl policy show web-server                   Show effective rules (read-only, no TTY)
   opsctl policy allow web-server -- 'systemctl restart *'   Pre-approve commands (terminal only)
   opsctl list audit --asset web-server --limit 50 Read stored audit rows (read-only)
-  opsctl ext list                                   List installed extensions
-  opsctl ext exec oss list_buckets --args '{}'       Execute extension tool
+  opsctl ext list                                 List installed extensions
+  opsctl exec my-bucket -- list_objects --bucket=logs   Run an extension tool on its asset
 `)
 }

@@ -66,10 +66,11 @@ func main() {
 		logger.Fatal("create data dir", zap.Error(err))
 	}
 
-	// Create host + plugin
-	host := NewDevServerHost(dataDir)
+	// Create host + plugin. The capability wrapper is not optional: without it
+	// the extension behaves differently here than once installed.
+	host, capHost := newExtensionHost(m, *extDir, dataDir)
 	ctx := context.Background()
-	plugin, err := extension.LoadPlugin(ctx, m, wasmBytes, host, nil)
+	plugin, err := extension.LoadPlugin(ctx, m, wasmBytes, capHost, nil)
 	if err != nil {
 		logger.Fatal("load plugin", zap.Error(err))
 	}

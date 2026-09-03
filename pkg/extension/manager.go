@@ -11,7 +11,6 @@ import (
 	"sync"
 
 	"github.com/cago-frame/cago/pkg/logger"
-	"github.com/fsnotify/fsnotify"
 	"github.com/opskat/opskat/pkg/skillmd"
 	"github.com/tetratelabs/wazero"
 	"go.uber.org/zap"
@@ -193,62 +192,6 @@ func (m *Manager) Shutdown(ctx context.Context) {
 	}
 }
 
-// Watch monitors the extensions directory for changes and calls onChange.
-// The caller is responsible for handling the reload logic.
-func (m *Manager) Watch(ctx context.Context, onChange func()) error {
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return fmt.Errorf("create watcher: %w", err)
-	}
-
-	if err := os.MkdirAll(m.dir, 0755); err != nil {
-		if closeErr := watcher.Close(); closeErr != nil {
-			logger.Default().Warn("close watcher after mkdir error", zap.Error(closeErr))
-		}
-		return fmt.Errorf("create extensions dir: %w", err)
-	}
-
-	if err := watcher.Add(m.dir); err != nil {
-		if closeErr := watcher.Close(); closeErr != nil {
-			logger.Default().Warn("close watcher after add error", zap.Error(closeErr))
-		}
-		return fmt.Errorf("watch extensions dir: %w", err)
-	}
-
-	go func() {
-		defer func() {
-			if err := watcher.Close(); err != nil {
-				logger.Default().Warn("close filesystem watcher", zap.Error(err))
-			}
-		}()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case event, ok := <-watcher.Events:
-				if !ok {
-					return
-				}
-				if event.Op&(fsnotify.Create|fsnotify.Remove|fsnotify.Write|fsnotify.Rename) != 0 {
-					m.logger.Info("extension directory changed",
-						zap.String("file", event.Name),
-						zap.String("op", event.Op.String()))
-					if onChange != nil {
-						onChange()
-					}
-				}
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
-				m.logger.Error("fsnotify error", zap.Error(err))
-			}
-		}
-	}()
-
-	return nil
-}
-
 // LoadManifestInfo reads a manifest from disk without loading the WASM plugin.
 func LoadManifestInfo(dir string) (*ManifestInfo, error) {
 	manifestPath := filepath.Join(dir, "manifest.json")
@@ -328,7 +271,6 @@ func (m *Manager) LoadExtension(ctx context.Context, dir string) (*Manifest, err
 	host = NewCapabilityHost(host, manifest, dir) // enforce capabilities declared in manifest
 	plugin, err := LoadPlugin(ctx, manifest, wasmBytes, host, m.wasmCache)
 	if err != nil {
-		host.CloseAll()
 		return nil, fmt.Errorf("load plugin: %w", err)
 	}
 

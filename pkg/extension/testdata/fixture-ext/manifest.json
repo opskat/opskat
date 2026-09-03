@@ -1,0 +1,72 @@
+{
+  "name": "fixture-ext",
+  "version": "1.0.0",
+  "hostABI": "1.0",
+  "i18n": {
+    "displayName": "Fixture Extension",
+    "description": "Minimal extension used by pkg/extension end-to-end tests"
+  },
+  "capabilities": {
+    "fs": {
+      "read": [
+        "${EXT_DIR}/**"
+      ],
+      "write": [
+        "${EXT_DIR}/**"
+      ]
+    }
+  },
+  "backend": {
+    "runtime": "wasm",
+    "binary": "main.wasm"
+  },
+  "tools": [
+    {
+      "name": "echo",
+      "description": "Echo the arguments back",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  ],
+  "assetTypes": [
+    {
+      "type": "fixture",
+      "i18n": {
+        "name": "Fixture"
+      },
+      "configSchema": {
+        "type": "object",
+        "properties": {
+          "endpoint": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  ],
+  "policies": {
+    "type": "fixture",
+    "actions": [
+      "read"
+    ],
+    "groups": [
+      {
+        "id": "ext:fixture:read",
+        "i18n": {
+          "name": "Read",
+          "description": "Read-only"
+        },
+        "policy": {
+          "allowList": [
+            "read"
+          ]
+        }
+      }
+    ],
+    "default": [
+      "ext:fixture:read"
+    ]
+  }
+}

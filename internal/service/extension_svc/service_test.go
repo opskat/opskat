@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"testing"
 
+	"github.com/opskat/opskat/internal/assettype"
+	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo/mock_extension_data_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo/mock_extension_state_repo"
@@ -19,6 +22,46 @@ import (
 	"go.uber.org/mock/gomock"
 	"go.uber.org/zap"
 )
+
+// testConfigSchema is the smallest configSchema a manifest can declare: asset types must
+// describe at least one config property (Manifest.validateAssetScope), because the asset
+// handler derived from it owns the generic create contract.
+func testConfigSchema() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"endpoint": map[string]any{"type": "string"}},
+	}
+}
+
+// registeredAssetTypes reports which of the service's loaded extensions actually reached
+// the shared asset-type registry. The assertion deliberately lands on internal/assettype
+// rather than on the bridge: extension asset types now go into the same table built-in
+// types use, so "registered" means visible there — the bridge only tracks what is loaded.
+func registeredAssetTypes(svc *Service) []string {
+	out := make([]string, 0)
+	for _, name := range svc.Bridge().ListNames() {
+		ext := svc.Manager().GetExtension(name)
+		if ext == nil {
+			continue
+		}
+		for _, at := range ext.Manifest.AssetTypes {
+			if _, ok := assettype.Get(at.Type); ok {
+				out = append(out, at.Type)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// closeService 关掉服务并把它登记进进程级注册表的条目撤掉——注册表跨测试函数存活，
+// 留着会让下一个用例撞上"同名资产类型已注册"。
+func closeService(ctx context.Context, svc *Service) {
+	for _, name := range svc.Bridge().ListNames() {
+		extreg.Unregister(name)
+	}
+	svc.Close(ctx)
+}
 
 // minimalWASM is the smallest valid WASM module (magic + version header).
 var minimalWASM = []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
@@ -32,8 +75,10 @@ func writeTestExtension(dir, name string) {
 		"hostABI": "1.0",
 		"backend": map[string]any{"runtime": "wasm", "binary": "main.wasm"},
 		"assetTypes": []map[string]any{
-			{"type": name, "i18n": map[string]any{"name": name + ".name"}},
+			{"type": name, "i18n": map[string]any{"name": name + ".name"},
+				"configSchema": testConfigSchema()},
 		},
+		"policies": map[string]any{"type": "ext:" + name},
 		"tools": []map[string]any{
 			{
 				"name":       "test_tool",
@@ -60,8 +105,9 @@ func writeTestExtensionWithSnippets(dir, name, assetType, seedKey string) {
 		"hostABI": "1.0",
 		"backend": map[string]any{"runtime": "wasm", "binary": "main.wasm"},
 		"assetTypes": []map[string]any{
-			{"type": assetType, "i18n": map[string]any{"name": assetType}},
+			{"type": assetType, "i18n": map[string]any{"name": assetType}, "configSchema": testConfigSchema()},
 		},
+		"policies": map[string]any{"type": "ext:" + name},
 		"snippets": map[string]any{
 			"categories": []map[string]any{
 				{"id": catID, "assetType": assetType, "i18n": map[string]any{"name": catID}},
@@ -133,23 +179,27 @@ func TestService(t *testing.T) {
 		dataRepo := mock_extension_data_repo.NewMockExtensionDataRepo(ctrl)
 		logger := zap.NewNop()
 
-		var bridgeChanged int
 		var reloadCalled int
 		svc := New(
 			newTestManager(dir),
 			stateRepo, dataRepo, nil, logger,
-			func(b *extension.Bridge) { bridgeChanged++ },
 			func() { reloadCalled++ },
 			nil, // snippetHook=nil: existing tests don't exercise snippet integration
 		)
+		// 注册表是进程级的：每个 Convey 叶子跑完都得把这一轮登记的扩展撤掉，
+		// 否则下一个叶子会撞上"同名资产类型已注册"。
+		Reset(func() {
+			for _, name := range svc.Bridge().ListNames() {
+				extreg.Unregister(name)
+			}
+		})
 
 		Convey("Init with no extensions", func() {
 			stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
 
 			err := svc.Init(ctx)
 			So(err, ShouldBeNil)
-			So(svc.Bridge().GetAssetTypes(), ShouldBeEmpty)
-			So(bridgeChanged, ShouldEqual, 1)
+			So(registeredAssetTypes(svc), ShouldBeEmpty)
 		})
 
 		Convey("Init loads extension and applies DB disabled state", func() {
@@ -163,7 +213,7 @@ func TestService(t *testing.T) {
 			So(err, ShouldBeNil)
 
 			// ext-a should be unloaded because DB says disabled
-			So(svc.Bridge().GetAssetTypes(), ShouldBeEmpty)
+			So(registeredAssetTypes(svc), ShouldBeEmpty)
 			So(svc.Manager().GetExtension("ext-a"), ShouldBeNil)
 		})
 
@@ -175,9 +225,7 @@ func TestService(t *testing.T) {
 			err := svc.Init(ctx)
 			So(err, ShouldBeNil)
 
-			types := svc.Bridge().GetAssetTypes()
-			So(len(types), ShouldEqual, 1)
-			So(types[0].Type, ShouldEqual, "ext-b")
+			So(registeredAssetTypes(svc), ShouldResemble, []string{"ext-b"})
 		})
 
 		Convey("Reload closes and reinitializes", func() {
@@ -186,15 +234,13 @@ func TestService(t *testing.T) {
 
 			err := svc.Init(ctx)
 			So(err, ShouldBeNil)
-			So(len(svc.Bridge().GetAssetTypes()), ShouldEqual, 1)
+			So(len(registeredAssetTypes(svc)), ShouldEqual, 1)
 
-			bridgeChanged = 0
 			reloadCalled = 0
 
 			err = svc.Reload(ctx)
 			So(err, ShouldBeNil)
-			So(len(svc.Bridge().GetAssetTypes()), ShouldEqual, 1)
-			So(bridgeChanged, ShouldEqual, 1)
+			So(len(registeredAssetTypes(svc)), ShouldEqual, 1)
 			So(reloadCalled, ShouldEqual, 1)
 		})
 
@@ -204,14 +250,14 @@ func TestService(t *testing.T) {
 
 			err := svc.Init(ctx)
 			So(err, ShouldBeNil)
-			So(len(svc.Bridge().GetAssetTypes()), ShouldEqual, 1)
+			So(len(registeredAssetTypes(svc)), ShouldEqual, 1)
 
 			stateRepo.EXPECT().Find(gomock.Any(), "ext-d").Return(nil, fmt.Errorf("not found"))
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 
 			err = svc.Disable(ctx, "ext-d")
 			So(err, ShouldBeNil)
-			So(svc.Bridge().GetAssetTypes(), ShouldBeEmpty)
+			So(registeredAssetTypes(svc), ShouldBeEmpty)
 			So(svc.Manager().GetExtension("ext-d"), ShouldBeNil)
 		})
 
@@ -223,14 +269,14 @@ func TestService(t *testing.T) {
 
 			err := svc.Init(ctx)
 			So(err, ShouldBeNil)
-			So(svc.Bridge().GetAssetTypes(), ShouldBeEmpty)
+			So(registeredAssetTypes(svc), ShouldBeEmpty)
 
 			stateRepo.EXPECT().Find(gomock.Any(), "ext-e").Return(nil, fmt.Errorf("not found"))
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 
 			err = svc.Enable(ctx, "ext-e")
 			So(err, ShouldBeNil)
-			So(len(svc.Bridge().GetAssetTypes()), ShouldEqual, 1)
+			So(len(registeredAssetTypes(svc)), ShouldEqual, 1)
 		})
 
 		Convey("Uninstall removes extension", func() {
@@ -245,7 +291,7 @@ func TestService(t *testing.T) {
 
 			err = svc.Uninstall(ctx, "ext-f", true, false)
 			So(err, ShouldBeNil)
-			So(svc.Bridge().GetAssetTypes(), ShouldBeEmpty)
+			So(registeredAssetTypes(svc), ShouldBeEmpty)
 		})
 
 		Convey("Uninstall without cleanData skips data deletion", func() {
@@ -298,12 +344,12 @@ func TestService_SnippetIntegration(t *testing.T) {
 			// Manager points to a persistent target dir; source is separate.
 			targetDir := t.TempDir()
 			sourceDir := t.TempDir()
-			writeTestExtensionWithSnippets(sourceDir, "kafka-ext", "kafka", "list-topics")
+			writeTestExtensionWithSnippets(sourceDir, "kafka-ext", "kafka-ext", "list-topics")
 
 			mgr := newTestManager(targetDir)
 			svc := New(mgr, stateRepo, dataRepo, nil, logger,
-				func(*extension.Bridge) {}, func() {}, hook)
-			defer svc.Close(ctx)
+				func() {}, hook)
+			defer closeService(ctx, svc)
 
 			stateRepo.EXPECT().Find(gomock.Any(), "kafka-ext").Return(nil, fmt.Errorf("not found"))
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
@@ -328,8 +374,8 @@ func TestService_SnippetIntegration(t *testing.T) {
 
 			mgr := newTestManager(targetDir)
 			svc := New(mgr, stateRepo, dataRepo, nil, logger,
-				func(*extension.Bridge) {}, func() {}, hook)
-			defer svc.Close(ctx)
+				func() {}, hook)
+			defer closeService(ctx, svc)
 
 			stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
 			So(svc.Init(ctx), ShouldBeNil)
@@ -362,8 +408,8 @@ func TestService_SnippetIntegration(t *testing.T) {
 
 			mgr := newTestManager(targetDir)
 			svc := New(mgr, stateRepo, dataRepo, nil, logger,
-				func(*extension.Bridge) {}, func() {}, hook)
-			defer svc.Close(ctx)
+				func() {}, hook)
+			defer closeService(ctx, svc)
 
 			stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
 			So(svc.Init(ctx), ShouldBeNil)
@@ -388,8 +434,8 @@ func TestService_SnippetIntegration(t *testing.T) {
 
 			mgr := newTestManager(targetDir)
 			svc := New(mgr, stateRepo, dataRepo, nil, logger,
-				func(*extension.Bridge) {}, func() {}, nil)
-			defer svc.Close(ctx)
+				func() {}, nil)
+			defer closeService(ctx, svc)
 
 			stateRepo.EXPECT().Find(gomock.Any(), "simple").Return(nil, fmt.Errorf("not found"))
 			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)

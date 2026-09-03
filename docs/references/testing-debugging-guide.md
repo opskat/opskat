@@ -288,8 +288,9 @@ opsctl exec prod-db -- "SELECT 1"          # query a database asset — same ver
 opsctl exec cache -- "PING"                # Redis command
 opsctl cp ./file web-server:/tmp/          # scp-style transfer
 opsctl delete asset old-server             # always asks the desktop app for confirmation
-opsctl ext list                            # installed extensions
-opsctl ext exec oss list_buckets --args '{}'
+opsctl ext list                            # installed extensions (with enabled state)
+opsctl exec my-bucket -- list_objects --bucket=logs   # extension tool: same exec verb,
+                                           # executed by the running desktop app
 ```
 
 Global flags worth knowing for testing:

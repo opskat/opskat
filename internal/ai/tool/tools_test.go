@@ -38,8 +38,6 @@ func TestTools_RegistryShape(t *testing.T) {
 			// exec
 			"cp",
 			"request_permission", "batch_exec",
-			// extension
-			"ext_exec",
 			// unified
 			"exec", "help",
 		}
@@ -66,7 +64,6 @@ func TestTools_RegistryShape(t *testing.T) {
 			serialNames := []string{
 				"cp",
 				"request_permission",
-				"ext_exec",
 				"exec",
 				"put_asset", "put_group",
 				"delete_asset", "delete_group",

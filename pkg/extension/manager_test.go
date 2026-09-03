@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/zap"
@@ -26,6 +25,13 @@ func writeMinimalExtension(t *testing.T, extDir, extName string) {
 		"version": "1.0.0",
 		"hostABI": "1.0",
 		"backend": map[string]any{"runtime": "wasm", "binary": "main.wasm"},
+		// assetTypes + policies.type 是加载期强制项（Manifest.validateAssetScope）：
+		// 扩展工具只能经资产上的 exec 抵达，没有资产类型就没有入口。
+		"assetTypes": []any{map[string]any{
+			"type": extName, "i18n": map[string]any{"name": "n"},
+			"configSchema": map[string]any{"type": "object", "properties": map[string]any{"endpoint": map[string]any{"type": "string"}}},
+		}},
+		"policies": map[string]any{"type": extName},
 	}
 	data, err := json.Marshal(manifest)
 	if err != nil {
@@ -67,6 +73,11 @@ func TestManager(t *testing.T) {
 				"version": "1.0.0",
 				"hostABI": "1.0",
 				"backend": map[string]any{"runtime": "wasm", "binary": "main.wasm"},
+				"assetTypes": []any{map[string]any{
+					"type": "test-ext", "i18n": map[string]any{"name": "n"},
+					"configSchema": map[string]any{"type": "object", "properties": map[string]any{"endpoint": map[string]any{"type": "string"}}},
+				}},
+				"policies": map[string]any{"type": "test-ext"},
 			}
 			data, _ := json.Marshal(manifest)
 			So(os.WriteFile(filepath.Join(extDir, "manifest.json"), data, 0644), ShouldBeNil)
@@ -191,30 +202,6 @@ func TestManager(t *testing.T) {
 			ext := mgr.GetExtension("big-skill")
 			So(ext, ShouldNotBeNil)
 			So(len(ext.SkillMD), ShouldBeGreaterThan, 4*1024)
-		})
-
-		Convey("Watch calls onChange on filesystem event", func() {
-			watchCtx, watchCancel := context.WithCancel(ctx)
-			defer watchCancel()
-
-			called := make(chan struct{}, 1)
-			err := mgr.Watch(watchCtx, func() {
-				select {
-				case called <- struct{}{}:
-				default:
-				}
-			})
-			So(err, ShouldBeNil)
-
-			// Trigger a filesystem event
-			So(os.WriteFile(filepath.Join(dir, "trigger.txt"), []byte("x"), 0644), ShouldBeNil)
-
-			select {
-			case <-called:
-				// success
-			case <-time.After(2 * time.Second):
-				So("onChange not called", ShouldEqual, "")
-			}
 		})
 
 		Reset(func() {

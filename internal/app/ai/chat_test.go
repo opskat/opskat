@@ -58,7 +58,7 @@ func TestOutwardFailurePreservesRawTextOnEventAndReturnedWailsError(t *testing.T
 // only an explicit help call does; see internal/ai/tool.DocGate.)
 func TestAllBuiltinAssetTypeSkills(t *testing.T) {
 	t.Run("every built-in type is included, with no tabs involved", func(t *testing.T) {
-		got := allBuiltinAssetTypeSkills()
+		got := allAssetTypeSkills()
 		// The 8 exec types (with "## Command syntax") plus the 4 doc-only types
 		// (rdp/vnc/oss/local, registered via permission.RegisterHelpDoc — config-only,
 		// no command surface) all have a skills.Description and must be discoverable
@@ -84,7 +84,7 @@ func TestAllBuiltinAssetTypeSkills(t *testing.T) {
 		// derived from the embedded SKILL.md set, not from the asset-type registry.
 		// (vnc used to stand in here; it now has a doc-only SKILL.md — see
 		// internal/ai/skills/vnc — so it moved to the "included" case above.)
-		got := allBuiltinAssetTypeSkills()
+		got := allAssetTypeSkills()
 		if _, ok := got["bogus"]; ok {
 			t.Fatalf("bogus is not a real asset type; must not be included, got %v", got)
 		}

@@ -327,13 +327,49 @@ func (m *Manifest) validate() error {
 	if err := m.validateSnippets(); err != nil {
 		return err
 	}
+	if err := m.validateAssetScope(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateAssetScope 强制"扩展必须属于某个资产类型"。
+//
+// 曾经存在"无资产扩展"这个类别：不声明 assetTypes / policies.type 的扩展照样加载，
+// 它的工具只能经一个专用的扩展派发工具调用，而那个工具对它做的唯一一件事是弹一次不可复用的确认框
+// ——没有策略、没有 grant、没有审批面。这个类别被取消之后，扩展工具走的是与内置类型
+// 完全相同的 exec/help/策略/grant 路径，而那条路径的入口是**资产**。因此声明缺失不再是
+// "少一个可选字段"，而是"这个扩展没有任何可达的入口"，必须在加载期就说清楚。
+func (m *Manifest) validateAssetScope() error {
+	if len(m.AssetTypes) == 0 {
+		return fmt.Errorf("manifest: assetTypes must declare at least one asset type — extension tools are reached through exec on an asset")
+	}
+	seen := make(map[string]struct{}, len(m.AssetTypes))
+	for i, at := range m.AssetTypes {
+		if at.Type == "" {
+			return fmt.Errorf("manifest: assetTypes[%d].type is required", i)
+		}
+		if !nameRe.MatchString(at.Type) {
+			return fmt.Errorf("manifest: assetTypes[%d].type must match %s (got %q)", i, nameRe.String(), at.Type)
+		}
+		if _, dup := seen[at.Type]; dup {
+			return fmt.Errorf("manifest: duplicate asset type %q", at.Type)
+		}
+		seen[at.Type] = struct{}{}
+		if len(ConfigSchemaProperties(at.ConfigSchema)) == 0 {
+			return fmt.Errorf("manifest: assetTypes[%q].configSchema must declare properties", at.Type)
+		}
+	}
+	if m.Policies.Type == "" {
+		return fmt.Errorf("manifest: policies.type is required — it names the policy face the extension's asset types are checked under")
+	}
 	return nil
 }
 
 // supportedParamTypes 是 flag DSL 能表达的参数类型。
 // 现存两个真实 manifest 只用到 string / integer / array<string>；
 // number / boolean 一并支持（它们的转换是同一形状），object 不支持——
-// 嵌套结构走 ext_exec 的 --json 逃生口，而不是发明一套嵌套 flag 语法。
+// 嵌套结构走 exec 命令的 --json 逃生口，而不是发明一套嵌套 flag 语法。
 var supportedParamTypes = map[string]bool{
 	"string": true, "integer": true, "number": true, "boolean": true, "array": true,
 }
@@ -341,7 +377,7 @@ var supportedParamTypes = map[string]bool{
 // validateTools validates tools[].parameters.
 //
 // This field was never validated — nor read by any code — before this change:
-// ext_exec's flag DSL (task 9) is its first consumer. Promoting a field that was
+// the extension exec flag DSL is its first consumer. Promoting a field that was
 // never exercised into a load-bearing contract requires giving it load-time
 // validation in the same change: otherwise a manifest that omits parameters would
 // install silently, only to surface as a runtime error that reads like a parser

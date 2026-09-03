@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/policy"
@@ -31,11 +32,22 @@ type permissionTypeHandler struct {
 	check         permissionCheckFunc
 }
 
+// registryMu 保护本文件的两张注册表（permissionTypes / execEntries）。内置类型在 init()
+// 里一次写完，扩展提供的类型则在用户启用/禁用扩展时增删，与 AI 会话、opsctl socket 上
+// 正在跑的读取并发。
+var registryMu sync.RWMutex
+
 var permissionTypes = make(map[string]*permissionTypeHandler)
 
 func registerPermissionType(canonical, approvalType string, grantPatterns GrantPatternsFunc, check permissionCheckFunc, aliases ...string) {
+	if err := addPermissionType(canonical, approvalType, grantPatterns, check, aliases...); err != nil {
+		panic(err.Error())
+	}
+}
+
+func addPermissionType(canonical, approvalType string, grantPatterns GrantPatternsFunc, check permissionCheckFunc, aliases ...string) error {
 	if canonical == "" || approvalType == "" || check == nil {
-		panic("permission: invalid type registration")
+		return fmt.Errorf("permission: invalid type registration")
 	}
 	handler := &permissionTypeHandler{
 		canonical:     canonical,
@@ -43,15 +55,52 @@ func registerPermissionType(canonical, approvalType string, grantPatterns GrantP
 		grantPatterns: grantPatterns,
 		check:         check,
 	}
-	for _, name := range append([]string{canonical}, aliases...) {
+	names := append([]string{canonical}, aliases...)
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	for _, name := range names {
 		if _, exists := permissionTypes[name]; exists {
-			panic(fmt.Sprintf("permission: duplicate type registration %q", name))
+			return fmt.Errorf("permission: duplicate type registration %q", name)
 		}
+	}
+	for _, name := range names {
 		permissionTypes[name] = handler
 	}
+	return nil
+}
+
+// PolicyCheckFunc 是一个资产类型自带的策略判定：给定资产与（已规范化的）命令，
+// 返回 Allow / Deny / NeedConfirm。
+//
+// 它存在的理由与 CanonicalizeFunc / PrecheckFunc / PolicyStringsFunc 相同——判定逻辑
+// 住在持有协议代码的包里，本包只声明入口——但方向更硬：扩展提供的资产类型的判定要调
+// WASM guest 的 check_policy，而那份代码在 pkg/extension 里，加载时才存在。
+//
+// 注册进来之后，该类型走的是**同一条** CheckForAsset：NeedConfirm 会经 HandleConfirm
+// 弹审批框，"全部允许"照常落 grant，下一次同类命令由 grant 匹配直接放行。绕开这条路
+// 自己调 ConfirmFunc 的写法（曾经的 ext_exec）恰恰是把 grant 整条丢掉的原因。
+type PolicyCheckFunc func(ctx context.Context, assetID int64, command string) aictx.CheckResult
+
+// RegisterPolicyCheck 注册一个运行期可再移除的资产类型的策略检查。审批面标签取类型名
+// 本身（与 ApprovalTypeFor 对未注册类型的回落一致），grant pattern 整串存一条。
+// 冲突返回错误而不是 panic：冲突来自用户装了两个声明同一类型的扩展。
+func RegisterPolicyCheck(canonical string, check PolicyCheckFunc) error {
+	if check == nil {
+		return fmt.Errorf("permission: invalid policy check registration %q", canonical)
+	}
+	return addPermissionType(canonical, canonical, nil, permissionCheckFunc(check))
+}
+
+// UnregisterPolicyCheck 移除一个由 RegisterPolicyCheck 注册的类型。
+func UnregisterPolicyCheck(canonical string) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	delete(permissionTypes, canonical)
 }
 
 func permissionTypeFor(name string) (*permissionTypeHandler, bool) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	handler, ok := permissionTypes[name]
 	return handler, ok
 }
@@ -238,7 +287,7 @@ func RegisterPolicyStrings(canonical string, fn PolicyStringsFunc) {
 }
 
 // UnregisterPolicyStringsForTest 移除一个已注册的派生函数，仅供测试清理使用——
-// 与 UnregisterExecutorForTest 同一理由：`-count>1` 会重跑同一个测试函数，
+// 与 UnregisterExecutor 同一理由：`-count>1` 会重跑同一个测试函数，
 // 而生产注册路径的 panic-on-duplicate 是有意保留的。
 func UnregisterPolicyStringsForTest(canonical string) {
 	delete(policyStringFuncs, canonical)
@@ -275,17 +324,28 @@ var execEntries = make(map[string]*execEntry)
 // HelpFor 仍然返回 ("", true)，help_coverage_test.go 的 TestEveryAssetTypeHasHelpDoc
 // 只检查 ok、不检查内容，因此测试保持全绿，而模型实际拿到的用法文档是空的。
 func RegisterExecutor(canonical string, exec ExecFunc, help string, canonicalize ...CanonicalizeFunc) {
-	if canonical == "" || exec == nil || help == "" {
-		panic("permission: invalid executor registration")
+	if err := RegisterDynamicExecutor(canonical, exec, help, canonicalize...); err != nil {
+		panic(err.Error())
 	}
-	if _, exists := execEntries[canonical]; exists {
-		panic(fmt.Sprintf("permission: duplicate executor registration %q", canonical))
+}
+
+// RegisterDynamicExecutor 与 RegisterExecutor 写同一张表，只是把重复/非法注册报成错误
+// 而不是 panic：扩展提供的资产类型是用户在运行期启用/禁用的，一次冲突不该让应用崩掉。
+func RegisterDynamicExecutor(canonical string, exec ExecFunc, help string, canonicalize ...CanonicalizeFunc) error {
+	if canonical == "" || exec == nil || help == "" {
+		return fmt.Errorf("permission: invalid executor registration")
 	}
 	var canon CanonicalizeFunc
 	if len(canonicalize) > 0 {
 		canon = canonicalize[0]
 	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if _, exists := execEntries[canonical]; exists {
+		return fmt.Errorf("permission: duplicate executor registration %q", canonical)
+	}
 	execEntries[canonical] = &execEntry{exec: exec, help: help, canonicalize: canon}
+	return nil
 }
 
 // RegisterHelpDoc 只注册用法文档，不注册执行器——给没有命令面、但可以被 put_asset
@@ -298,6 +358,8 @@ func RegisterHelpDoc(canonical, help string) {
 	if canonical == "" || help == "" {
 		panic("permission: invalid help-doc registration")
 	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	if _, exists := execEntries[canonical]; exists {
 		panic(fmt.Sprintf("permission: duplicate help-doc registration %q", canonical))
 	}
@@ -307,16 +369,23 @@ func RegisterHelpDoc(canonical, help string) {
 // ExecutorFor 返回该资产类型的执行器。doc-only 条目（exec == nil）报 (nil, false)——
 // 调用方不能查到一个 nil 函数再去调用它。
 func ExecutorFor(assetType string) (ExecFunc, bool) {
-	entry, ok := execEntries[assetType]
+	entry, ok := execEntryFor(assetType)
 	if !ok || entry.exec == nil {
 		return nil, false
 	}
 	return entry.exec, true
 }
 
+func execEntryFor(assetType string) (*execEntry, bool) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	entry, ok := execEntries[assetType]
+	return entry, ok
+}
+
 // HelpFor 返回该资产类型的用法文档。
 func HelpFor(assetType string) (string, bool) {
-	entry, ok := execEntries[assetType]
+	entry, ok := execEntryFor(assetType)
 	if !ok {
 		return "", false
 	}
@@ -326,7 +395,7 @@ func HelpFor(assetType string) (string, bool) {
 // CanonicalizeFor 返回该资产类型注册的命令规范化钩子（如有）。没有注册规范化钩子
 // 的类型（多数类型）返回 (nil, false)——调用方应按原样校验与执行。
 func CanonicalizeFor(assetType string) (CanonicalizeFunc, bool) {
-	entry, ok := execEntries[assetType]
+	entry, ok := execEntryFor(assetType)
 	if !ok || entry.canonicalize == nil {
 		return nil, false
 	}
@@ -338,6 +407,8 @@ func CanonicalizeFor(assetType string) (CanonicalizeFunc, bool) {
 // 一样。重复注册 panic，与 RegisterExecutor 的重复注册检查同一原则：注册冲突是启动期
 // 编程错误，不该被静默覆盖。
 func RegisterPrecheck(canonical string, precheck PrecheckFunc) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	entry, ok := execEntries[canonical]
 	if !ok {
 		panic(fmt.Sprintf("permission: RegisterPrecheck on unregistered executor %q", canonical))
@@ -352,25 +423,29 @@ func RegisterPrecheck(canonical string, precheck PrecheckFunc) {
 // （绝大多数类型）返回 (nil, false)——调用方不应把 false 当成"允许"以外的任何含义，
 // 只是"没有额外检查要跑"。
 func PrecheckFor(assetType string) (PrecheckFunc, bool) {
-	entry, ok := execEntries[assetType]
+	entry, ok := execEntryFor(assetType)
 	if !ok || entry.precheck == nil {
 		return nil, false
 	}
 	return entry.precheck, true
 }
 
-// UnregisterExecutorForTest 移除一个已注册的执行器。仅供包外测试使用：测试想验证
-// "check 用规范化命令、exec 用原始命令"这类跨类型行为时，需要注册一个临时的假类型
-// 并在结束后清理（同一个测试 binary 内 `-count>1` 会重复执行同一个测试函数，
-// RegisterExecutor 撞见重复注册会 panic）。RegisterExecutor 本身的 panic-on-duplicate
-// 是有意的——那是给生产 init() 用的，编程期冲突不该被这个函数悄悄放过。
-func UnregisterExecutorForTest(canonical string) {
+// UnregisterExecutor 移除一个已注册的执行器或用法文档。
+//
+// 生产调用方是扩展卸载/禁用（internal/extreg）：扩展提供的资产类型随扩展一起来去。
+// 测试也用它清理临时注册的假类型——同一个测试 binary 内 `-count>1` 会重复执行同一个
+// 测试函数，而 RegisterExecutor 的 panic-on-duplicate 是有意保留给生产 init() 的。
+func UnregisterExecutor(canonical string) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	delete(execEntries, canonical)
 }
 
 // RegisteredExecTypes 返回**能执行命令**的资产类型，已排序。doc-only 条目不在其中——
 // 这份清单会进模型看到的 exec 工具描述，把只有配置文档的类型列进去等于承诺一个做不到的能力。
 func RegisteredExecTypes() []string {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	types := make([]string, 0, len(execEntries))
 	for name, entry := range execEntries {
 		if entry.exec == nil {
@@ -385,6 +460,8 @@ func RegisteredExecTypes() []string {
 // RegisteredHelpTypes 返回有用法文档的资产类型（有执行器的 + doc-only 的），已排序。
 // put_asset 的错误信息与 prompt 的类型清单用它。
 func RegisteredHelpTypes() []string {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	types := make([]string, 0, len(execEntries))
 	for name := range execEntries {
 		types = append(types, name)

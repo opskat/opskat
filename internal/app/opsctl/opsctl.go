@@ -22,10 +22,13 @@ type WindowActivator interface {
 	ActivateWindow()
 }
 
-// ExtToolExecutor 在 opsctl Unix socket 收到 ext_tool 请求时回调到 ai/extension binder。
-// 由 main.go 注入：通常实现是 extension binder 的 service.Bridge().CallTool 包装。
+// ExtToolExecutor 在 opsctl Unix socket 收到扩展资产的执行请求时把执行交回桌面进程。
+//
+// 只有扩展资产走这条路，理由是执行位置而不是语义：WASM 运行时只存在于桌面进程。
+// 命令串与 `opsctl exec <asset> -- <command>` 里的完全一样，桌面端跑的也是同一个统一
+// exec handler，因此策略、审批、grant、审计与内置类型逐字一致。
 type ExtToolExecutor interface {
-	ExecuteExtTool(ctx context.Context, extName, tool string, args []byte) ([]byte, error)
+	ExecuteExtTool(ctx context.Context, assetID int64, command string) (string, error)
 }
 
 // Opsctl binder。

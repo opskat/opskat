@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/audit"
@@ -14,6 +15,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
+	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/sshpool"
 
@@ -69,6 +71,19 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	if command == "" {
 		printExecUsage()
 		return 1
+	}
+
+	// 扩展提供的资产类型：命令交回桌面进程执行。理由是执行位置而不是语义——WASM 运行时、
+	// 扩展的宿主能力与解密后的资产配置只存在于桌面进程里。桌面端跑的是同一个统一 exec
+	// handler，策略/审批/grant/审计因此与内置类型逐字一致，也由那一端落库。
+	//
+	// 先看内置注册表：内置类型优先，且不用为每一条内置命令去扫一遍扩展目录。这也和
+	// 桌面端的冲突规则一致——一个想占用内置类型名的扩展在加载时就会被拒绝注册，
+	// opsctl 不能因为磁盘上躺着这样一个 manifest 就改道。
+	if _, builtin := assettype.Get(asset.Type); !builtin {
+		if extName, ok := extensionAssetTypeOwners()[asset.Type]; ok {
+			return execViaDesktop(asset, extName, command, session)
+		}
 	}
 
 	// Executor lookup / canonicalize / precheck — all side-effect-free, all must run
@@ -224,9 +239,12 @@ Arguments:
               Use '--' to separate the command from opsctl flags.
               Everything after '--' is joined into a single command string.
               Dispatched by the asset's real type: ssh keeps its streaming
-              channel (pipes, exit code); the other types (database, redis,
-              mongodb, etcd, kafka, k8s, oss) run through the unified exec
-              handler.
+              channel (pipes, exit code); the other built-in types (database,
+              redis, mongodb, etcd, kafka, k8s, oss) run through the unified
+              exec handler; an extension-provided type is executed by the
+              running desktop app, which owns the WASM runtime.
+              For an extension asset the command is "<tool> --flag=value";
+              run 'opsctl help <asset>' for its tool and flag reference.
 
 Flags:
   --type <type>   Optional assertion: fails fast if the asset is not of this
@@ -262,5 +280,27 @@ Examples:
   echo "hello" | opsctl exec web-server --type ssh -- cat
   opsctl exec prod-db --type database -- "SELECT * FROM users LIMIT 10"
   opsctl exec cache --type redis -- "GET session:abc123"
+  opsctl exec my-bucket -- list_objects --bucket=logs --maxKeys=100
 `)
+}
+
+// execViaDesktop 把一条扩展资产上的命令交给运行中的桌面端执行。
+//
+// 桌面端不在时 fail closed：本进程既没有 WASM 运行时，也没有扩展的策略引擎，
+// 在这里"本地跑一下"等于同时绕开两者。
+func execViaDesktop(asset *asset_entity.Asset, extName, command, session string) int {
+	result, err := delegateExtExecFn(asset.ID, asset.Name, command, session)
+	if err != nil {
+		if strings.Contains(err.Error(), "cannot connect") {
+			fmt.Fprintf(os.Stderr,
+				"Error: asset %q is type=%s, provided by extension %q; the desktop app must be running to execute it\n",
+				asset.Name, asset.Type, extName)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	// 结果原样输出，供管道与脚本消费。
+	fmt.Print(result)
+	return 0
 }

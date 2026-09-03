@@ -484,7 +484,7 @@ func TestCmdBatch_OrderingAndCanonicalizeGateMatchesCmdExec(t *testing.T) {
 // prefix (sql/redis) and the unprefixed default both just pass the raw command straight
 // to the "exec" handler. That JSON-blob format is incompatible with the DSL
 // (`find app.users {...}`) the same mongodb asset accepts everywhere else (opsctl exec,
-// bare/unprefixed batch entries, the AI ext_exec tool) — three docs (batch.go's own
+// bare/unprefixed batch entries, the AI exec tool) — three docs (batch.go's own
 // usage, SKILL.md, commands.md) all say the type prefix is "assertion only", but the
 // code still branched on it here.
 //

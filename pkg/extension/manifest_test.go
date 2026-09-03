@@ -130,7 +130,7 @@ func TestParseManifest(t *testing.T) {
 		})
 
 		Convey("should accept valid name characters", func() {
-			data := []byte(`{"name": "my-ext_1", "version": "1.0.0", "hostABI":"1.0"}`)
+			data := []byte(`{"name": "my-ext_1", "version": "1.0.0", "hostABI":"1.0", "assetTypes": [{"type": "x", "i18n": {"name": "n"}, "configSchema": {"type":"object","properties":{"endpoint":{"type":"string"}}}}], "policies": {"type": "x"}}`)
 			_, err := ParseManifest(data)
 			So(err, ShouldBeNil)
 		})
@@ -140,6 +140,8 @@ func TestParseManifest(t *testing.T) {
 				"name": "oss",
 				"version": "1.0.0",
 				"hostABI": "1.0",
+				"assetTypes": [{"type": "oss", "i18n": {"name": "n"}, "configSchema": {"type":"object","properties":{"endpoint":{"type":"string"}}}}],
+				"policies": {"type": "oss"},
 				"frontend": {
 					"pages": [{
 						"id": "connect",
@@ -183,7 +185,9 @@ func TestParseManifest(t *testing.T) {
 
 		Convey("should accept manifest without snippets block", func() {
 			data := []byte(`{
-				"name": "x", "version": "1.0.0", "hostABI": "1.0"
+				"name": "x", "version": "1.0.0", "hostABI": "1.0",
+				"assetTypes": [{"type": "x", "i18n": {"name": "n"}, "configSchema": {"type":"object","properties":{"endpoint":{"type":"string"}}}}],
+				"policies": {"type": "x"}
 			}`)
 			m, err := ParseManifest(data)
 			So(err, ShouldBeNil)
@@ -194,7 +198,8 @@ func TestParseManifest(t *testing.T) {
 		Convey("should accept valid snippets block", func() {
 			data := []byte(`{
 				"name": "kafka-ext", "version": "1.0.0", "hostABI": "1.0",
-				"assetTypes": [{"type": "kafka", "i18n": {"name": "Kafka"}}],
+				"assetTypes": [{"type": "kafka", "i18n": {"name": "Kafka"}, "configSchema": {"type":"object","properties":{"brokers":{"type":"string"}}}}],
+				"policies": {"type": "kafka"},
 				"snippets": {
 					"categories": [{"id": "kafka", "assetType": "kafka", "i18n": {"name": "category.kafka"}}],
 					"seed": [
@@ -337,7 +342,11 @@ func TestParseManifest(t *testing.T) {
 }
 
 func TestParseManifest_ToolsValidation(t *testing.T) {
-	base := `{"name":"x","version":"1.0.0","hostABI":"1.0"`
+	// 每个 manifest 都必须声明 assetTypes + policies.type（见 validateAssetScope），
+	// 所以工具校验的最小 manifest 也带上它们。
+	base := `{"name":"x","version":"1.0.0","hostABI":"1.0",` +
+		`"assetTypes":[{"type":"x","i18n":{"name":"n"},"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}}}],` +
+		`"policies":{"type":"x"}`
 
 	Convey("ParseManifest tools[].parameters validation", t, func() {
 		Convey("should accept a manifest without any tools", func() {
@@ -417,7 +426,7 @@ func TestParseManifest_ToolsValidation(t *testing.T) {
 		})
 
 		Convey("should reject a genuinely unsupported property type", func() {
-			// "object" is deliberately unsupported: nested structures go through ext_exec's
+			// "object" is deliberately unsupported: nested structures go through exec's
 			// --json escape hatch instead of inventing a nested flag syntax.
 			_, err := ParseManifest([]byte(base +
 				`,"tools":[{"name":"t","parameters":{"type":"object","properties":{"nested":{"type":"object"}}}}]}`))

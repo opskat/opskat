@@ -1,20 +1,26 @@
 package command
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+	"sort"
 
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/bootstrap"
+	"github.com/opskat/opskat/internal/repository/extension_state_repo"
+	"github.com/opskat/opskat/pkg/extension"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 )
 
 var delegateExtExecFn = delegateExtExec
+
+// extensionsDirFn 定位扩展目录。变量化是为了可测，与本包 execApprovalFn 等同一套路。
+var extensionsDirFn = func() string { return filepath.Join(bootstrap.ResolvedDataDir(), "extensions") }
 
 func cmdExt(args []string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
@@ -25,140 +31,147 @@ func cmdExt(args []string) int {
 		return 1
 	}
 
-	sub := args[0]
-	subArgs := args[1:]
-
-	switch sub {
+	switch args[0] {
 	case "list":
 		return cmdExtList()
-	case "exec":
-		return cmdExtExec(subArgs)
 	default:
-		fmt.Fprintf(os.Stderr, "Error: unknown ext subcommand %q\n\nRun 'opsctl ext --help' for usage.\n", sub)
+		fmt.Fprintf(os.Stderr, "Error: unknown ext subcommand %q\n\nRun 'opsctl ext --help' for usage.\n", args[0])
 		return 1
 	}
 }
 
-// cmdExtList lists installed extensions by scanning manifest files.
-func cmdExtList() int {
-	extDir := filepath.Join(bootstrap.ResolvedDataDir(), "extensions")
+// installedExtension is the opsctl-side view of one extension directory.
+type installedExtension struct {
+	Name        string   `json:"name"`
+	Version     string   `json:"version"`
+	DisplayName string   `json:"displayName,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Enabled     bool     `json:"enabled"`
+	AssetTypes  []string `json:"assetTypes,omitempty"`
+	Tools       []string `json:"tools,omitempty"`
+}
 
+// scanInstalledExtensions reads every extension directory through the real manifest
+// parser and applies the enabled/disabled state the desktop app persists.
+//
+// It used to hand-roll a second manifest parser (an anonymous struct pulling four
+// fields) that also ignored enabled state, so `opsctl ext list` happily listed
+// extensions the user had switched off and silently accepted manifests the app itself
+// would refuse. Both are the same mistake: a second, laxer reader of a contract that
+// already has one owner.
+func scanInstalledExtensions() ([]installedExtension, error) {
+	extDir := extensionsDirFn()
 	entries, err := os.ReadDir(extDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fmt.Println("[]")
-			return 0
+			return nil, nil
 		}
-		fmt.Fprintf(os.Stderr, "Error: read extensions directory: %v\n", err)
-		return 1
+		return nil, fmt.Errorf("read extensions directory: %w", err)
 	}
 
-	type extInfo struct {
-		Name        string   `json:"name"`
-		Version     string   `json:"version"`
-		DisplayName string   `json:"displayName,omitempty"`
-		Description string   `json:"description,omitempty"`
-		Tools       []string `json:"tools,omitempty"`
-	}
+	disabled := disabledExtensionNames()
 
-	var results []extInfo
+	results := make([]installedExtension, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		manifestPath := filepath.Join(extDir, entry.Name(), "manifest.json")
-		data, err := os.ReadFile(manifestPath) //nolint:gosec // path constructed from ReadDir within extensions directory
+		info, err := extension.LoadManifestInfo(filepath.Join(extDir, entry.Name()))
 		if err != nil {
-			continue // skip dirs without manifest
-		}
-		var manifest struct {
-			Name    string `json:"name"`
-			Version string `json:"version"`
-			I18n    struct {
-				DisplayName string `json:"displayName"`
-				Description string `json:"description"`
-			} `json:"i18n"`
-			Tools []struct {
-				Name string `json:"name"`
-			} `json:"tools"`
-		}
-		if err := json.Unmarshal(data, &manifest); err != nil {
+			// A directory without a readable/valid manifest is not an extension; the
+			// desktop app skips it the same way.
 			continue
 		}
-		info := extInfo{
-			Name:        manifest.Name,
-			Version:     manifest.Version,
-			DisplayName: manifest.I18n.DisplayName,
-			Description: manifest.I18n.Description,
+		m := info.Manifest
+		item := installedExtension{
+			Name:        m.Name,
+			Version:     m.Version,
+			DisplayName: info.Translate("en", m.I18n.DisplayName),
+			Description: info.Translate("en", m.I18n.Description),
+			Enabled:     !disabled[m.Name],
 		}
-		for _, t := range manifest.Tools {
-			info.Tools = append(info.Tools, t.Name)
+		for _, at := range m.AssetTypes {
+			item.AssetTypes = append(item.AssetTypes, at.Type)
 		}
-		results = append(results, info)
+		for _, t := range m.Tools {
+			item.Tools = append(item.Tools, t.Name)
+		}
+		results = append(results, item)
 	}
+	sort.Slice(results, func(i, j int) bool { return results[i].Name < results[j].Name })
+	return results, nil
+}
 
-	if results == nil {
-		results = []extInfo{}
+// disabledExtensionNames reads the persisted enabled/disabled state. An unreadable DB
+// is reported as "nothing disabled" — the same default the desktop app applies to an
+// extension with no state row — and logged, not silently swallowed into a wrong answer
+// about a specific extension.
+func disabledExtensionNames() map[string]bool {
+	repo := extension_state_repo.ExtensionState()
+	if repo == nil {
+		return nil
 	}
-	out, _ := json.MarshalIndent(results, "", "  ")
+	states, err := repo.FindAll(context.Background())
+	if err != nil {
+		logger.Default().Warn("read extension state", zap.Error(err))
+		return nil
+	}
+	out := make(map[string]bool, len(states))
+	for _, s := range states {
+		if !s.Enabled {
+			out[s.Name] = true
+		}
+	}
+	return out
+}
+
+// extensionAssetTypeOwners maps every enabled extension's asset types to its extension
+// name. Disabled extensions are excluded: their asset types are not registered in the
+// running app either, so a command against one must fail like any unknown type.
+func extensionAssetTypeOwners() map[string]string {
+	items, err := scanInstalledExtensions()
+	if err != nil {
+		logger.Default().Warn("scan installed extensions", zap.Error(err))
+		return nil
+	}
+	owners := make(map[string]string)
+	for _, item := range items {
+		if !item.Enabled {
+			continue
+		}
+		for _, at := range item.AssetTypes {
+			owners[at] = item.Name
+		}
+	}
+	return owners
+}
+
+func cmdExtList() int {
+	results, err := scanInstalledExtensions()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	if results == nil {
+		results = []installedExtension{}
+	}
+	out, err := json.MarshalIndent(results, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: encode extension list: %v\n", err)
+		return 1
+	}
 	fmt.Println(string(out))
 	return 0
 }
 
-// cmdExtExec delegates extension execution to the desktop app, which owns policy checks and approval.
-func cmdExtExec(args []string) int {
-	if len(args) < 2 || args[0] == "-h" || args[0] == "--help" {
-		printExtExecUsage()
-		if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
-			return 0
-		}
-		return 1
-	}
-
-	extName := args[0]
-	toolName := args[1]
-
-	// Parse --args flag from remaining args
-	var toolArgs = json.RawMessage("{}")
-	for i := 2; i < len(args); i++ {
-		if args[i] == "--args" && i+1 < len(args) {
-			toolArgs = json.RawMessage(args[i+1])
-			break
-		}
-		// Support --args='{...}' form
-		if strings.HasPrefix(args[i], "--args=") {
-			toolArgs = json.RawMessage(strings.TrimPrefix(args[i], "--args="))
-			break
-		}
-	}
-
-	// Validate JSON
-	if !json.Valid(toolArgs) {
-		fmt.Fprintf(os.Stderr, "Error: --args must be valid JSON\n")
-		return 1
-	}
-
-	// Try delegate mode first (desktop app running)
-	result, err := delegateExtExecFn(extName, toolName, toolArgs)
-	if err == nil {
-		printToolResult(result)
-		return 0
-	}
-
-	// Extension policy and user confirmation are owned by the desktop app. Running
-	// the WASM locally here would bypass both, so offline execution fails closed.
-	if strings.Contains(err.Error(), "cannot connect") {
-		fmt.Fprintln(os.Stderr, "Error: desktop app is required for extension policy checks and approval")
-		return 1
-	}
-
-	// Delegation succeeded but tool execution failed
-	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-	return 1
-}
-
-// delegateExtExec sends an ext_tool request to the desktop app via approval socket.
-func delegateExtExec(extName, toolName string, toolArgs json.RawMessage) (string, error) {
+// delegateExtExec hands one exec on an extension asset to the running desktop app.
+//
+// The reason is execution location, not semantics: the WASM runtime, the extension's
+// host capabilities and its decrypted asset config only exist inside the desktop
+// process. The command string is exactly the one the user typed after `--`, and the app
+// runs it through the same unified exec handler an AI session would, so policy, the
+// approval dialog, grants and audit are identical.
+func delegateExtExec(assetID int64, assetName, command, session string) (string, error) {
 	dataDir := bootstrap.ResolvedDataDir()
 	sockPath := approval.SocketPath(dataDir)
 
@@ -169,60 +182,36 @@ func delegateExtExec(extName, toolName string, toolArgs json.RawMessage) (string
 
 	resp, err := approval.RequestApprovalWithToken(sockPath, token, approval.ApprovalRequest{
 		Type:      "ext_tool",
-		Extension: extName,
-		Tool:      toolName,
-		ToolArgs:  toolArgs,
+		AssetID:   assetID,
+		AssetName: assetName,
+		Command:   command,
+		SessionID: session,
 	})
 	if err != nil {
 		return "", err
 	}
-
 	if resp.ToolError != "" {
 		return "", fmt.Errorf("%s", resp.ToolError)
 	}
-
 	return resp.ToolResult, nil
-}
-
-// printToolResult writes the extension executor result unchanged for piping and scripts.
-func printToolResult(result string) {
-	fmt.Print(result)
 }
 
 func printExtUsage() {
 	fmt.Fprint(os.Stderr, `Usage:
-  opsctl ext <subcommand> [arguments]
+  opsctl ext <subcommand>
 
 Subcommands:
-  list                              List installed extensions
-  exec <extension> <tool> [--args]  Execute an extension tool
+  list    List installed extensions with their asset types, tools, and enabled state
 
-ext exec requires the desktop app because extension policy checks and approval are owned by it.
+To run an extension tool, use exec against one of the extension's assets:
+
+  opsctl exec <asset> -- <tool> --flag=value
+
+That is the same command built-in asset types use; the asset's type selects the
+extension. Run 'opsctl help <asset>' to see the tool and flag reference.
 
 Examples:
   opsctl ext list
-  opsctl ext exec oss list_buckets --args '{"asset_id": 1}'
-  opsctl ext exec oss upload_file --args='{"asset_id": 1, "bucket": "my-bucket", "key": "file.txt"}'
-`)
-}
-
-func printExtExecUsage() {
-	fmt.Fprint(os.Stderr, `Usage:
-  opsctl ext exec <extension> <tool> [--args '<json>']
-
-Arguments:
-  extension   Extension name (e.g., "oss")
-  tool        Tool name within the extension (e.g., "list_buckets")
-  --args      Tool arguments as a JSON object (default: "{}")
-
-Execution Mode:
-  The tool is executed by the desktop app via delegation (using the app's loaded
-  extensions and credentials). The desktop app is required: it owns extension
-  policy checks and approval, so if it is not running the command fails closed
-  rather than running the WASM locally and bypassing both.
-
-Examples:
-  opsctl ext exec oss list_buckets --args '{"asset_id": 1}'
-  opsctl ext exec kubernetes get_pods --args '{"asset_id": 2, "namespace": "default"}'
+  opsctl exec my-bucket -- list_objects --bucket=logs --maxKeys=100
 `)
 }

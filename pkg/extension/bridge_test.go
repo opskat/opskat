@@ -4,127 +4,41 @@ import (
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
-
-	"github.com/opskat/opskat/internal/model/entity/policy"
 )
 
 func TestBridge(t *testing.T) {
 	Convey("Bridge", t, func() {
 		bridge := NewBridge()
 
-		manifest := &Manifest{
-			Name:    "oss",
-			Version: "1.0.0",
-			AssetTypes: []AssetTypeDef{
-				{Type: "oss", I18n: I18nName{Name: "assetType.oss.name"}},
-			},
-			Tools: []ToolDef{
-				{Name: "list_buckets", I18n: I18nDesc{Description: "tools.list_buckets.description"}},
-			},
-			Policies: PoliciesDef{
-				Type:    "oss",
-				Actions: []string{"list", "read", "write"},
-				Groups: []PolicyGroupDef{
-					{
-						ID:     "ext:oss:readonly",
-						I18n:   I18nNameDesc{Name: "n", Description: "d"},
-						Policy: map[string]any{"allow_list": []any{"list", "read"}},
-					},
-				},
-				Default: []string{"ext:oss:readonly"},
-			},
-		}
 		ext := &Extension{
-			Name:     "oss",
-			Manifest: manifest,
-			SkillMD:  "# OSS Tools\nUse ext_exec...",
+			Name: "oss",
+			Manifest: &Manifest{
+				Name:       "oss",
+				Version:    "1.0.0",
+				AssetTypes: []AssetTypeDef{{Type: "oss", I18n: I18nName{Name: "assetType.oss.name"}}},
+				Policies:   PoliciesDef{Type: "ext:oss"},
+			},
 		}
-
 		bridge.Register(ext)
 
-		Convey("GetAssetTypes returns registered types", func() {
-			types := bridge.GetAssetTypes()
-			So(len(types), ShouldEqual, 1)
-			So(types[0].Type, ShouldEqual, "oss")
-			So(types[0].ExtensionName, ShouldEqual, "oss")
+		Convey("Get returns a loaded extension by name", func() {
+			So(bridge.Get("oss"), ShouldEqual, ext)
+			So(bridge.Get("nope"), ShouldBeNil)
 		})
 
-		Convey("GetPolicyGroups returns registered groups", func() {
-			groups := bridge.GetPolicyGroups()
-			So(len(groups), ShouldEqual, 1)
-			So(groups[0].ID, ShouldEqual, "ext:oss:readonly")
+		Convey("ListNames reports loaded extensions", func() {
+			So(bridge.ListNames(), ShouldResemble, []string{"oss"})
 		})
 
-		Convey("GetDefaultPolicyGroups returns defaults", func() {
-			defaults := bridge.GetDefaultPolicyGroups("oss")
-			So(defaults, ShouldResemble, []string{"ext:oss:readonly"})
+		Convey("GetExtensionByAssetType resolves the owning extension", func() {
+			So(bridge.GetExtensionByAssetType("oss"), ShouldEqual, ext)
+			So(bridge.GetExtensionByAssetType("ssh"), ShouldBeNil)
 		})
 
-		Convey("GetSkillMD returns SKILL.md for asset type", func() {
-			md := bridge.GetSkillMD("oss")
-			So(md, ShouldContainSubstring, "OSS Tools")
-		})
-
-		Convey("GetSkillMD returns empty for unknown type", func() {
-			md := bridge.GetSkillMD("unknown")
-			So(md, ShouldBeEmpty)
-		})
-
-		Convey("GetExtensionPolicyGroups returns defaults for known type", func() {
-			groups := bridge.GetExtensionPolicyGroups("oss", "oss", 1)
-			So(groups, ShouldResemble, []string{"ext:oss:readonly"})
-		})
-
-		Convey("GetExtensionPolicyGroups returns nil for unknown type", func() {
-			groups := bridge.GetExtensionPolicyGroups("oss", "unknown", 1)
-			So(groups, ShouldBeNil)
-		})
-
-		Convey("FindExtensionByTool returns extension by tool", func() {
-			found := bridge.FindExtensionByTool("oss", "list_buckets")
-			So(found, ShouldNotBeNil)
-			So(found.Name, ShouldEqual, "oss")
-		})
-
-		Convey("FindExtensionByTool returns nil for unknown tool", func() {
-			found := bridge.FindExtensionByTool("oss", "nonexistent")
-			So(found, ShouldBeNil)
-		})
-
-		Convey("FindToolDef returns the tool declaration", func() {
-			def, ok := bridge.FindToolDef("oss", "list_buckets")
-			So(ok, ShouldBeTrue)
-			So(def.Name, ShouldEqual, "list_buckets")
-			So(def.I18n.Description, ShouldEqual, "tools.list_buckets.description")
-		})
-
-		Convey("FindToolDef returns false for unknown extension", func() {
-			_, ok := bridge.FindToolDef("nonexistent-ext", "list_buckets")
-			So(ok, ShouldBeFalse)
-		})
-
-		Convey("FindToolDef returns false for unknown tool", func() {
-			_, ok := bridge.FindToolDef("oss", "nonexistent-tool")
-			So(ok, ShouldBeFalse)
-		})
-
-		Convey("Register syncs default policy to policy registry", func() {
-			p, ok := policy.GetDefaultPolicyOf("oss")
-			So(ok, ShouldBeTrue)
-			cp, ok := p.(*policy.CommandPolicy)
-			So(ok, ShouldBeTrue)
-			So(cp.Groups, ShouldResemble, []string{"ext:oss:readonly"})
-		})
-
-		Convey("Unregister removes from policy registry", func() {
+		Convey("Unregister drops the extension", func() {
 			bridge.Unregister("oss")
-			_, ok := policy.GetDefaultPolicyOf("oss")
-			So(ok, ShouldBeFalse)
-		})
-
-		Convey("Unregister removes extension", func() {
-			bridge.Unregister("oss")
-			So(bridge.GetAssetTypes(), ShouldBeEmpty)
+			So(bridge.ListNames(), ShouldBeEmpty)
+			So(bridge.GetExtensionByAssetType("oss"), ShouldBeNil)
 		})
 	})
 }

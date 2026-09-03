@@ -204,13 +204,7 @@ func (s *Server) handleCheckPolicy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListKV(w http.ResponseWriter, _ *http.Request) {
-	s.host.kvMu.Lock()
-	kv := make(map[string]string, len(s.host.kv))
-	for k, v := range s.host.kv {
-		kv[k] = string(v)
-	}
-	s.host.kvMu.Unlock()
-	writeJSON(w, http.StatusOK, kv)
+	writeJSON(w, http.StatusOK, s.host.kv.Snapshot())
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
