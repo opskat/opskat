@@ -239,12 +239,12 @@ Arguments:
               ways. A single word is that string verbatim, so quoting the whole
               command passes shell syntax through untouched:
                 opsctl exec web-01 -- 'tail -n50 /var/log/app.log | grep ERR'
-              Two or more words are argv, and each is re-quoted so a value your
-              own shell already unquoted survives the re-split downstream:
-                opsctl exec web-01 -- grep "foo bar" file   →  grep 'foo bar' file
-              In that form a metacharacter inside a word is literal, not
-              interpreted by the remote shell — use the single-word form for
-              pipes, redirection and remote globbing.
+              Two or more words are joined back into one string. Only a word
+              containing whitespace is re-quoted, so the boundary your own
+              shell consumed survives the re-split downstream:
+                opsctl exec web-01 -- grep "foo bar" *.log  →  grep 'foo bar' *.log
+              Everything else is passed through, so globs, pipes and
+              redirection still reach the remote shell as they always have.
               Dispatched by the asset's real type: ssh keeps its streaming
               channel (pipes, exit code); the other built-in types (database,
               redis, mongodb, etcd, kafka, k8s, oss) run through the unified

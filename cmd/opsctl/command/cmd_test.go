@@ -113,6 +113,15 @@ func TestExtractCommand(t *testing.T) {
 			So(words, ShouldResemble, []string{"note_put", "--content=restart via systemctl"})
 		})
 
+		Convey("should leave shell metacharacters alone when the word has no whitespace", func() {
+			// Only the word boundaries the local shell consumed need re-encoding.
+			// A glob carries no lost boundary, and ssh(1) itself lets it reach the
+			// remote shell — quoting it here would silently change what a working
+			// `opsctl exec host -- ls *.log` does.
+			So(extractCommand([]string{"--", "ls", "*.log"}), ShouldEqual, "ls *.log")
+			So(extractCommand([]string{"--", "grep", "foo bar", "*.log"}), ShouldEqual, "grep 'foo bar' *.log")
+		})
+
 		Convey("should keep a lone word verbatim", func() {
 			// One word after "--" *is* the command string — the documented form for
 			// every DSL opsctl forwards to (`opsctl exec prod-db -- "SELECT * FROM t"`).

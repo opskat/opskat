@@ -41,11 +41,20 @@ func extractCommand(args []string) string {
 		}
 		return parts[0]
 	}
-	quoted := make([]string, len(parts))
+	joined := make([]string, len(parts))
 	for i, part := range parts {
-		quoted[i] = cmdline.QuoteIfNeeded(part)
+		// Re-encode only what the join would destroy: the boundary inside a word the
+		// local shell already unquoted. A word without whitespace survives the round
+		// trip as itself, so quoting it would not preserve anything — it would change
+		// meaning, turning `-- ls *.log` (globbed by the remote shell, as ssh(1) does)
+		// into a literal.
+		if strings.ContainsAny(part, " \t\n") {
+			joined[i] = cmdline.QuoteIfNeeded(part)
+			continue
+		}
+		joined[i] = part
 	}
-	return strings.Join(quoted, " ")
+	return strings.Join(joined, " ")
 }
 
 // extractTypeFlag pulls an optional "--type <value>" (or "--type=<value>") token out of
