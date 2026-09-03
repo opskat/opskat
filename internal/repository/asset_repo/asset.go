@@ -23,13 +23,16 @@ type AssetRepo interface {
 	UpdateSortOrder(ctx context.Context, id int64, sortOrder int) error
 	UpdateGroupID(ctx context.Context, id, groupID int64) error
 	CountByTypes(ctx context.Context, types []string) (int64, error)
-	// CountAgentAuthBySourceID 统计引用了指定 SSH Agent 来源的活动 SSH 资产数
-	// （config 中 auth_type=agent 且 agent_source_id 匹配）。
+	// CountAgentAuthBySourceID 统计引用了指定 SSH Agent 来源的活动 SSH 资产数：
+	// Agent 认证（auth_type=agent 且 agent_source_id 匹配）与 Agent 转发
+	// （agent_forwarding 且 agent_forward_source_id 匹配）都算引用。
 	CountAgentAuthBySourceID(ctx context.Context, sourceID int64) (int64, error)
-	// CountAgentAuthBySourceIDGroupByFingerprint 把引用了指定来源的活动 SSH 资产
-	// 按所选身份指纹（agent_key_fingerprint）分组计数，用于逐把密钥展示使用数。
+	// CountAgentAuthBySourceIDGroupByFingerprint 把 Agent 认证引用了指定来源的活动
+	// SSH 资产按所选身份指纹（agent_key_fingerprint）分组计数，用于逐把密钥展示使用数。
+	// Agent 转发不选择单把密钥，不计入本查询。
 	CountAgentAuthBySourceIDGroupByFingerprint(ctx context.Context, sourceID int64) (map[string]int64, error)
-	// ListAgentAuthBySourceID 列出引用了指定 SSH Agent 来源的活动 SSH 资产。
+	// ListAgentAuthBySourceID 列出引用了指定 SSH Agent 来源的活动 SSH 资产
+	// （口径同 CountAgentAuthBySourceID，含 Agent 转发引用）。
 	ListAgentAuthBySourceID(ctx context.Context, sourceID int64) ([]*asset_entity.Asset, error)
 }
 

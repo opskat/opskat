@@ -105,7 +105,7 @@ func Update(ctx context.Context, id int64, in SourceInput) (*ssh_agent_source_en
 	return existing, nil
 }
 
-// Delete 删除来源。活动 Agent 认证 SSH 资产引用该来源时拒绝删除。
+// Delete 删除来源。活动 SSH 资产以 Agent 认证或 Agent 转发引用该来源时拒绝删除。
 func Delete(ctx context.Context, id int64) error {
 	if _, err := sourceOrErr(ctx, id); err != nil {
 		return err
