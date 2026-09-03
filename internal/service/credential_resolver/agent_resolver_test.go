@@ -95,3 +95,71 @@ func TestResolveAgentAuthConfig(t *testing.T) {
 		})
 	})
 }
+
+func TestResolveAgentForwardConfig(t *testing.T) {
+	convey.Convey("从 SSHConfig 解析 Agent 转发配置", t, func() {
+		convey.Convey("未开启转发返回 nil（即使残留来源 ID 也不得启用）", func() {
+			r := Default()
+			cfg, err := r.ResolveAgentForwardConfig(&asset_entity.SSHConfig{
+				Host: "h", Port: 22, Username: "u", AuthType: "password",
+				AgentForwarding: false, AgentForwardSourceID: 7,
+			})
+			assert.NoError(t, err)
+			assert.Nil(t, cfg)
+		})
+
+		convey.Convey("开启转发但缺少来源 ID 报错", func() {
+			r := Default()
+			_, err := r.ResolveAgentForwardConfig(&asset_entity.SSHConfig{
+				Host: "h", Port: 22, Username: "u", AuthType: "password",
+				AgentForwarding: true,
+			})
+			assert.Error(t, err)
+		})
+
+		convey.Convey("来源在建立连接后解析（懒闭包），且取的是转发来源而非认证来源", func() {
+			ctx := setupAgentResolverTest(t)
+			r := Default()
+
+			authSrc := &ssh_agent_source_entity.SSHAgentSource{
+				Name: "auth", EndpointType: "unix_socket", Endpoint: "/tmp/auth.sock",
+			}
+			require.NoError(t, ssh_agent_source_repo.SSHAgentSource().Create(ctx, authSrc))
+			forwardSrc := &ssh_agent_source_entity.SSHAgentSource{
+				Name: "forward", EndpointType: "environment", Endpoint: "SSH_AUTH_SOCK",
+			}
+			require.NoError(t, ssh_agent_source_repo.SSHAgentSource().Create(ctx, forwardSrc))
+			require.NotEqual(t, authSrc.ID, forwardSrc.ID)
+
+			cfg, err := r.ResolveAgentForwardConfig(&asset_entity.SSHConfig{
+				Host: "h", Port: 22, Username: "u", AuthType: "agent",
+				AgentSourceID: authSrc.ID, AgentKeyFingerprint: "SHA256:aaaa",
+				AgentForwarding: true, AgentForwardSourceID: forwardSrc.ID,
+			})
+			assert.NoError(t, err)
+			assert.NotNil(t, cfg)
+
+			src, err := cfg.Source(ctx)
+			assert.NoError(t, err)
+			assert.Equal(t, sshagent.EndpointTypeEnvironment, src.Type)
+			assert.Equal(t, "SSH_AUTH_SOCK", src.Value)
+		})
+
+		convey.Convey("来源缺失时懒解析返回错误（不得静默返回零值来源）", func() {
+			ctx := setupAgentResolverTest(t)
+			r := Default()
+			cfg, err := r.ResolveAgentForwardConfig(&asset_entity.SSHConfig{
+				Host: "h", Port: 22, Username: "u", AuthType: "password",
+				AgentForwarding: true, AgentForwardSourceID: 999,
+			})
+			assert.NoError(t, err)
+			assert.NotNil(t, cfg)
+
+			_, err = cfg.Source(ctx)
+			assert.Error(t, err)
+			code, ok := ssh_agent_svc.CodeOf(err)
+			assert.True(t, ok)
+			assert.Equal(t, "ssh_agent_source_not_found", code)
+		})
+	})
+}
