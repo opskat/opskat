@@ -14,6 +14,8 @@ package ssh_svc
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
 	"slices"
 
@@ -45,24 +47,73 @@ type AgentForwardConfig struct {
 	Source func(ctx context.Context) (sshagent.Source, error)
 }
 
-// enableAgentForwarding opens the configured local Agent and registers it as
-// the handler for auth-agent@openssh.com channels on client. The returned Agent
-// owns the local transport and must outlive all sessions sharing client.
-func enableAgentForwarding(ctx context.Context, client *ssh.Client, cfg *AgentForwardConfig) (*sshagent.Agent, error) {
+// agentForwardChannelType is the channel the remote opens when a process in a
+// forwarded session talks to the local SSH Agent.
+const agentForwardChannelType = "auth-agent@openssh.com"
+
+// enableAgentForwarding registers the handler for auth-agent@openssh.com
+// channels on client. Like OpenSSH, every forwarded channel dials the local
+// Agent endpoint on its own: a restarted local Agent is picked up by the next
+// channel, and a request parked on a hardware key touch cannot block the other
+// agent operations of the session.
+//
+// The endpoint of the saved source is resolved once here, and one Agent is
+// opened and immediately closed as a probe, so an unavailable or misconfigured
+// source fails the connect loudly instead of silently breaking every later
+// agent request. Forwarding owns no long-lived transport afterwards.
+func enableAgentForwarding(ctx context.Context, client *ssh.Client, cfg *AgentForwardConfig) error {
 	source, err := cfg.Source(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	forwarder, err := sshagent.Open(ctx, source)
+	probe, err := sshagent.Open(ctx, source)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err := agent.ForwardToAgent(client, forwarder.Forwarder()); err != nil {
-		closeAgentLog(ctx, forwarder)
-		return nil, err
+	closeAgentLog(ctx, probe)
+
+	channels := client.HandleChannelOpen(agentForwardChannelType)
+	if channels == nil {
+		return errors.New("ssh agent forwarding is already registered on this connection")
 	}
+	// Channels are opened by the remote long after the connect finishes, so the
+	// per-channel dials must not inherit the connect-scoped cancellation that
+	// CancelSSHConnect triggers. WithoutCancel keeps the cago logger values of
+	// ctx and drops only its cancellation.
+	go serveAgentChannels(context.WithoutCancel(ctx), channels, source)
 	logger.Ctx(ctx).Info("ssh agent forwarding handler registered")
-	return forwarder, nil
+	return nil
+}
+
+// serveAgentChannels serves every auth-agent@openssh.com channel the remote
+// opens. It returns once the SSH client is closed — x/crypto closes channels
+// then, so forwarding needs no separate shutdown path.
+func serveAgentChannels(ctx context.Context, channels <-chan ssh.NewChannel, source sshagent.Source) {
+	for newChannel := range channels {
+		channel, reqs, err := newChannel.Accept()
+		if err != nil {
+			logger.Ctx(ctx).Warn("accept forwarded ssh agent channel", zap.Error(err))
+			continue
+		}
+		go ssh.DiscardRequests(reqs)
+		go serveAgentChannel(ctx, channel, source)
+	}
+}
+
+// serveAgentChannel dials the local Agent for this channel alone and serves the
+// agent protocol over it. A local Agent that cannot be reached fails only this
+// channel: the session and its later agent requests stay usable.
+func serveAgentChannel(ctx context.Context, channel ssh.Channel, source sshagent.Source) {
+	defer closeChannelLog(ctx, channel)
+	ag, err := sshagent.Open(ctx, source)
+	if err != nil {
+		logger.Ctx(ctx).Warn("open local ssh agent for forwarded channel", zap.Error(err))
+		return
+	}
+	defer closeAgentLog(ctx, ag)
+	if err := agent.ServeAgent(ag.Forwarder(), channel); err != nil && !errors.Is(err, io.EOF) {
+		logger.Ctx(ctx).Warn("serve forwarded ssh agent channel", zap.Error(err))
+	}
 }
 
 // MakeAgentHostKeyCallback 构建 Agent 模式的主机密钥回调。verifyFn 缺失时返回 nil，
@@ -215,6 +266,14 @@ func AgentClientConn(ctx context.Context, ac *AgentConfig, username string, hk s
 func closeConnLog(ctx context.Context, conn net.Conn) {
 	if err := conn.Close(); err != nil {
 		logger.Ctx(ctx).Warn("close raw connection after agent handshake setup failure", zap.Error(err))
+	}
+}
+
+// closeChannelLog closes a forwarded agent channel. The remote closing its end
+// first is the normal end of an agent request, so io.EOF is not a failure.
+func closeChannelLog(ctx context.Context, channel ssh.Channel) {
+	if err := channel.Close(); err != nil && !errors.Is(err, io.EOF) {
+		logger.Ctx(ctx).Warn("close forwarded ssh agent channel", zap.Error(err))
 	}
 }
 
