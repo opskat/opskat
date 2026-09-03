@@ -2537,9 +2537,9 @@
     "dropTable": "删除表",
     "truncateTable": "清空表",
     "dropTableConfirmTitle": "确认删除表？",
-    "dropTableConfirmDesc": "确定删除表 {{table}}？此操作无法撤销，将永久删除表结构与全部数据。",
+    "dropTableConfirmDesc": "确定删除以下 {{count}} 张表？此操作无法撤销，将永久删除表结构与全部数据。",
     "truncateTableConfirmTitle": "确认清空表？",
-    "truncateTableConfirmDesc": "确定清空表 {{table}}？将永久删除表中的所有数据，但保留表结构。",
+    "truncateTableConfirmDesc": "确定清空以下 {{count}} 张表？将永久删除表中的所有数据，但保留表结构。",
     "dropTableSuccess": "已删除表 {{table}}",
     "truncateTableSuccess": "已清空表 {{table}}",
     "editValue": "编辑",
@@ -2633,7 +2633,11 @@
     "resultView": "结果视图",
     "rowDetail": "行详情",
     "rowDetailIndex": "第 {{index}} 行",
-    "rowDetailEmpty": "选中一个单元格或一行后，这里显示该行的 JSON"
+    "rowDetailEmpty": "选中一个单元格或一行后，这里显示该行的 JSON",
+    "openTables": "打开 {{count}} 张表",
+    "truncateTables": "清空 {{count}} 张表...",
+    "dropTables": "删除 {{count}} 张表...",
+    "batchTableActionNote": "每张表单独执行一条语句；某一张失败不会中断其余表。"
   },
   "systemStatus": {
     "title": "系统状态",

@@ -2536,10 +2536,10 @@
     "dangerousSqlDesc": "This statement contains a destructive operation (DELETE/DROP/TRUNCATE/ALTER). Are you sure you want to execute it?",
     "dropTable": "Drop Table",
     "truncateTable": "Truncate Table",
-    "dropTableConfirmTitle": "Drop table?",
-    "dropTableConfirmDesc": "Drop table {{table}}? This cannot be undone — both the table definition and all data will be permanently removed.",
-    "truncateTableConfirmTitle": "Truncate table?",
-    "truncateTableConfirmDesc": "Truncate table {{table}}? All rows will be permanently removed, but the table structure will be kept.",
+    "dropTableConfirmTitle": "Confirm drop",
+    "dropTableConfirmDesc": "Drop the {{count}} tables listed below? This cannot be undone — both the table definitions and all data will be permanently removed.",
+    "truncateTableConfirmTitle": "Confirm truncate",
+    "truncateTableConfirmDesc": "Truncate the {{count}} tables listed below? All rows will be permanently removed, but the table structures will be kept.",
     "dropTableSuccess": "Table {{table}} dropped",
     "truncateTableSuccess": "Table {{table}} truncated",
     "editValue": "Edit",
@@ -2633,7 +2633,11 @@
     "resultView": "Result view",
     "rowDetail": "Row detail",
     "rowDetailIndex": "Row {{index}}",
-    "rowDetailEmpty": "Select a cell or a row to see its JSON here"
+    "rowDetailEmpty": "Select a cell or a row to see its JSON here",
+    "openTables": "Open {{count}} tables",
+    "truncateTables": "Truncate {{count}} tables...",
+    "dropTables": "Drop {{count}} tables...",
+    "batchTableActionNote": "Each table runs its own statement; one failure does not stop the rest."
   },
   "systemStatus": {
     "title": "Status",
