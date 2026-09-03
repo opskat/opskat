@@ -25,7 +25,7 @@ dev:
 # 验证沙箱：在隔离数据目录上把真实应用跑起来并保持后台运行，附带一个无头 Chromium。
 # 启动后用 e2e/drive.mjs 操作、e2e/oracle.mjs 读取副作用——一次性验证不再需要写 spec。
 # 端口/数据目录按 checkout 分配，多个 worktree 可同时验证。流程见 docs/VERIFICATION.md。
-# ARGS=--reset 清空沙箱数据，ARGS=--mocks 顺带起协议 mock，ARGS=--headed 显示浏览器。
+# ARGS=--reset 清空沙箱数据，ARGS=--mocks 顺带起协议 mock，ARGS=--extensions 装上仓内扩展并开启扩展系统，ARGS=--headed 显示浏览器。
 dev-sandbox:
 	node e2e/sandbox.mjs up $(ARGS)
 

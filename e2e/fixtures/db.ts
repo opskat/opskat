@@ -17,6 +17,16 @@ export interface AssetRow {
   status: number;
 }
 
+/** What the app wrote for one asset — config / policy / owning extension. */
+export interface AssetPersistenceRow {
+  id: number;
+  name: string;
+  type: string;
+  config: string;
+  command_policy: string;
+  extension_name: string;
+}
+
 export interface AuditRow {
   id: number;
   source: string;
@@ -60,6 +70,9 @@ export interface AIProviderRow {
 export { dbPath, maxAuditId };
 
 export const findAssetByName = queries.findAssetByName as (name: string) => AssetRow | undefined;
+export const findAssetPersistenceByName = queries.findAssetPersistenceByName as (
+  name: string
+) => AssetPersistenceRow | undefined;
 export const listAssets = queries.listAssets as () => AssetRow[];
 export const findAuditLogs = queries.findAuditLogs as (
   filter?: { assetName?: string; toolName?: string; sinceId?: number }

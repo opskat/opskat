@@ -1159,7 +1159,10 @@ const AssetRowContent = React.memo(function AssetRowContent({
           </ContextMenuItem>
         )}
         {onOpenInfoTab && (
-          <ContextMenuItem onClick={() => onOpenInfoTab("asset", asset.ID, asset.Name, asset.Icon)}>
+          <ContextMenuItem
+            data-testid="asset-context-detail"
+            onClick={() => onOpenInfoTab("asset", asset.ID, asset.Name, asset.Icon)}
+          >
             <Eye className="h-3.5 w-3.5 mr-1.5" />
             {t("action.editPermission")}
           </ContextMenuItem>
