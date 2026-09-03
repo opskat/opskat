@@ -44,7 +44,8 @@ export interface ExtPolicies {
 export interface ExtFrontend {
   entry: string;
   styles: string;
-  pages: ExtPage[];
+  /** `null` for an extension with no pages: Go marshals an empty slice as null. */
+  pages: ExtPage[] | null;
 }
 
 export interface ExtPage {

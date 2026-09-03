@@ -72,4 +72,16 @@ describe("extension asset type definition", () => {
     expect(def.canConnect).toBe(false);
     expect(def.pageId).toBeUndefined();
   });
+
+  it("registers a backend-only extension, whose frontend block arrives with pages: null", () => {
+    // Go marshals an empty []PageDef as null, so every extension without frontend
+    // pages — the in-repo `notebook` reference extension included — delivers
+    // `frontend: { entry: "", styles: "", pages: null }`. Reading `.pages` as an array
+    // threw here, and the throw was swallowed by refreshExtensions' catch: the type
+    // reached no registry and no picker.
+    const backendOnly = { ...acme, frontend: { entry: "", styles: "", pages: null } } as unknown as ExtManifest;
+    registerExtensionAssetTypes("acme", backendOnly);
+    const def = getAssetType("acme-store")!;
+    expect(def.canConnect).toBe(false);
+  });
 });

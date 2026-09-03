@@ -43,7 +43,7 @@ function buildDefinition(
   const ns = `ext-${extensionName}`;
   const schema = rawSchema as ExtensionConfigSchema | undefined;
   // slot="asset.connect" 是 manifest 里声明"双击这个资产打开哪个页面"的方式。
-  const connectPage = manifest.frontend?.pages.find((p) => p.slot === "asset.connect");
+  const connectPage = manifest.frontend?.pages?.find((p) => p.slot === "asset.connect");
 
   return {
     type,
