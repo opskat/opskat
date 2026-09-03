@@ -20,15 +20,15 @@ notes for.
 
 ## Calling the tools
 
-Every tool takes `--asset_id`, the numeric id of the notebook asset you are working
-with — the tools have no ambient notion of "the current asset".
+The notebook a call works on is the asset you ran `exec` against; no tool takes an
+asset id.
 
 ```
-exec <asset> -- note_list --asset_id=12
-exec <asset> -- note_list --asset_id=12 --prefix=runbook/
-exec <asset> -- note_get --asset_id=12 --key=runbook/failover
-exec <asset> -- note_put --asset_id=12 --key=runbook/failover --content="1. drain 2. promote" --tags=runbook,db
-exec <asset> -- note_delete --asset_id=12 --key=scratch
+exec <asset> -- note_list
+exec <asset> -- note_list --prefix=runbook/
+exec <asset> -- note_get --key=runbook/failover
+exec <asset> -- note_put --key=runbook/failover --content="1. drain 2. promote" --tags=runbook,db
+exec <asset> -- note_delete --key=scratch
 ```
 
 Note keys are paths by convention, not by rule: `runbook/failover` and

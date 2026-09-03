@@ -41,13 +41,17 @@ func (e *Extension) GetExtensionManifest(name string) (*extension.Manifest, erro
 // it to stop this run and no other. The frontend mints it because the frontend is
 // the party that has to correlate — it needs the token before the call it is
 // about to make returns.
-func (e *Extension) CallExtensionAction(extName, action, argsJSON, invocationID string) (string, error) {
+func (e *Extension) CallExtensionAction(extName, action, argsJSON, invocationID string, assetID int64) (string, error) {
 	plugin, err := e.actionPlugin(extName)
 	if err != nil {
 		return "", err
 	}
 	if invocationID == "" {
 		return "", fmt.Errorf("invocation id is required to run an action")
+	}
+	asset, err := e.assetRef(assetID)
+	if err != nil {
+		return "", err
 	}
 
 	var args json.RawMessage
@@ -64,7 +68,7 @@ func (e *Extension) CallExtensionAction(extName, action, argsJSON, invocationID 
 	)
 	log.Info("extension action started")
 
-	result, err := plugin.CallAction(i18n.Ctx(e.ctx, e.lang.Lang()), invocationID, action, args)
+	result, err := plugin.CallAction(i18n.Ctx(e.ctx, e.lang.Lang()), invocationID, action, args, asset)
 	if err != nil {
 		log.Error("extension action failed", zap.Error(err))
 		return "", fmt.Errorf("call action %s/%s: %w", extName, action, err)
@@ -114,8 +118,13 @@ func (e *Extension) actionPlugin(extName string) (*extension.Plugin, error) {
 	return ext.Plugin, nil
 }
 
-// CallExtensionTool calls an extension tool (for frontend config testing etc.)
-func (e *Extension) CallExtensionTool(extName, tool string, argsJSON string) (string, error) {
+// CallExtensionTool calls an extension tool from the extension's own frontend
+// page, against the asset that page was opened on.
+//
+// assetID is how the asset reaches the guest: a tool takes no asset argument, so
+// a page that leaves this 0 gets a call the guest reports as unscoped rather than
+// one that silently reads whatever asset the arguments happened to name.
+func (e *Extension) CallExtensionTool(extName, tool string, argsJSON string, assetID int64) (string, error) {
 	if e.service == nil {
 		return "", fmt.Errorf("extension system not initialized")
 	}
@@ -134,11 +143,30 @@ func (e *Extension) CallExtensionTool(extName, tool string, argsJSON string) (st
 		args = json.RawMessage("{}")
 	}
 
-	result, err := ext.Plugin.CallTool(i18n.Ctx(e.ctx, e.lang.Lang()), tool, args)
+	asset, err := e.assetRef(assetID)
+	if err != nil {
+		return "", err
+	}
+
+	result, err := ext.Plugin.CallTool(i18n.Ctx(e.ctx, e.lang.Lang()), tool, args, asset)
 	if err != nil {
 		return "", fmt.Errorf("call tool %s/%s: %w", extName, tool, err)
 	}
 	return string(result), nil
+}
+
+// assetRef names the asset a frontend-initiated call runs against. A 0 id is the
+// frontend saying it has none — the asset configuration form runs `test_connection`
+// on a configuration that has not been saved yet — and the guest is told so.
+func (e *Extension) assetRef(assetID int64) (*extension.AssetRef, error) {
+	if assetID == 0 {
+		return nil, nil
+	}
+	asset, err := e.service.GetHostAssetConfig(i18n.Ctx(e.ctx, e.lang.Lang()), assetID)
+	if err != nil {
+		return nil, err
+	}
+	return &extension.AssetRef{ID: assetID, Name: asset.Name, Type: asset.Type}, nil
 }
 
 // GetDecryptedExtensionConfig returns the asset config with password fields decrypted.

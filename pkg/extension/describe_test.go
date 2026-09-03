@@ -91,7 +91,7 @@ func TestLoadExtensionReadsTheFunctionalFaceFromTheGuest(t *testing.T) {
 		Convey("and the tools it declared are callable", func() {
 			ext := mgr.GetExtension("fixture-ext")
 			So(ext, ShouldNotBeNil)
-			out, err := ext.Plugin.CallTool(ctx, "echo", json.RawMessage(`{"msg":"hi"}`))
+			out, err := ext.Plugin.CallTool(ctx, "echo", json.RawMessage(`{"msg":"hi"}`), nil)
 			So(err, ShouldBeNil)
 			So(string(out), ShouldContainSubstring, `"msg":"hi"`)
 		})

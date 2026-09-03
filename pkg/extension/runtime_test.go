@@ -34,7 +34,7 @@ func TestLoadPlugin(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(p.Manifest().Name, ShouldEqual, "test")
 
-			_, err = p.CallTool(ctx, "anything", json.RawMessage(`{}`))
+			_, err = p.CallTool(ctx, "anything", json.RawMessage(`{}`), nil)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "does not export opskat_call")
 
@@ -63,7 +63,14 @@ func newFixturePlugin(t *testing.T, host HostProvider, extDir string, opts ...Pl
 
 func callTool(t *testing.T, p *Plugin, tool string, args any) map[string]any {
 	t.Helper()
-	raw, err := p.CallTool(context.Background(), tool, mustJSON(t, args))
+	return callToolOn(t, p, nil, tool, args)
+}
+
+// callToolOn is callTool for a call the host scoped to an asset, which is what
+// every exec-driven call is.
+func callToolOn(t *testing.T, p *Plugin, asset *AssetRef, tool string, args any) map[string]any {
+	t.Helper()
+	raw, err := p.CallTool(context.Background(), tool, mustJSON(t, args), asset)
 	if err != nil {
 		t.Fatalf("call tool %s: %v", tool, err)
 	}
@@ -96,7 +103,7 @@ func TestPluginCallsFixture(t *testing.T) {
 		})
 
 		Convey("a handler error surfaces as a Go error", func() {
-			_, err := p.CallTool(ctx, "fail", json.RawMessage(`{}`))
+			_, err := p.CallTool(ctx, "fail", json.RawMessage(`{}`), nil)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "deliberate failure")
 		})
@@ -107,7 +114,7 @@ func TestPluginCallsFixture(t *testing.T) {
 		})
 
 		Convey("a guest panic fails one call without killing the instance", func() {
-			_, err := p.CallTool(ctx, "panic", json.RawMessage(`{}`))
+			_, err := p.CallTool(ctx, "panic", json.RawMessage(`{}`), nil)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "boom")
 
@@ -116,21 +123,30 @@ func TestPluginCallsFixture(t *testing.T) {
 		})
 
 		Convey("an unknown tool is reported by name", func() {
-			_, err := p.CallTool(ctx, "nope", json.RawMessage(`{}`))
+			_, err := p.CallTool(ctx, "nope", json.RawMessage(`{}`), nil)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "unknown tool: nope")
 		})
 
 		Convey("host capabilities are reachable from the guest", func() {
 			host.configs[7] = json.RawMessage(`{"endpoint":"x"}`)
-			out := callTool(t, p, "asset_config", map[string]any{"asset_id": 7})
+			out := callToolOn(t, p, &AssetRef{ID: 7, Name: "notes", Type: "fixture"}, "asset_config", map[string]any{})
 			So(out["config"], ShouldResemble, map[string]any{"endpoint": "x"})
+			// The asset came from the call envelope, not from the arguments: the
+			// guest was told which asset it is running against.
+			So(out["asset"], ShouldResemble, map[string]any{"id": float64(7), "name": "notes", "type": "fixture"})
 
 			out = callTool(t, p, "kv_roundtrip", map[string]any{"key": "k", "value": "v"})
 			So(out["value"], ShouldEqual, "v")
 
 			callTool(t, p, "log", map[string]any{"level": "warn", "msg": "hi"})
 			So(host.logs, ShouldContain, "warn:hi")
+		})
+
+		Convey("a call the host did not scope to an asset says so", func() {
+			_, err := p.CallTool(ctx, "asset_config", json.RawMessage(`{}`), nil)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "not scoped to an asset")
 		})
 
 		Convey("policy and config validation go through the same entry point", func() {
@@ -193,7 +209,7 @@ func TestPluginConcurrentCallsAreIsolated(t *testing.T) {
 				go func(i int) {
 					defer wg.Done()
 					raw, err := p.CallTool(context.Background(), "read_file", mustJSON(t,
-						map[string]any{"path": filepath.Join(extDir, fmt.Sprintf("f%d.txt", i))}))
+						map[string]any{"path": filepath.Join(extDir, fmt.Sprintf("f%d.txt", i))}), nil)
 					if err != nil {
 						errs[i] = err
 						return
@@ -228,7 +244,7 @@ func TestPluginCallsRunConcurrently(t *testing.T) {
 		for i := 0; i < n; i++ {
 			go func(i int) {
 				_, err := p.CallTool(context.Background(), "kv_roundtrip", mustJSON(t,
-					map[string]any{"key": fmt.Sprintf("k%d", i), "value": "v"}))
+					map[string]any{"key": fmt.Sprintf("k%d", i), "value": "v"}), nil)
 				done <- err
 			}(i)
 		}
@@ -280,7 +296,7 @@ func TestPluginWriteErrorReachesGuest(t *testing.T) {
 		Convey("the guest sees the error instead of a short write", func() {
 			_, err := p.CallTool(context.Background(), "write_file", mustJSON(t, map[string]any{
 				"path": filepath.Join(extDir, "broken.fail"), "content": "payload",
-			}))
+			}), nil)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "simulated write failure")
 		})
@@ -317,7 +333,7 @@ func TestPluginCapabilityEnforcement(t *testing.T) {
 		})
 
 		Convey("a read outside it is rejected before the host opens anything", func() {
-			_, err := p.CallTool(context.Background(), "read_file", mustJSON(t, map[string]any{"path": outside}))
+			_, err := p.CallTool(context.Background(), "read_file", mustJSON(t, map[string]any{"path": outside}), nil)
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "fs read denied")
 			So(host.resources, ShouldBeEmpty)
@@ -351,7 +367,7 @@ func TestPluginActionCancellation(t *testing.T) {
 			So(len(host.eventsFor("upload-1")), ShouldBeGreaterThan, 0)
 
 			Convey("and the next action starts with a clean cancellation flag", func() {
-				raw, err := p.CallAction(context.Background(), "upload-2", "should_stop", json.RawMessage(`{}`))
+				raw, err := p.CallAction(context.Background(), "upload-2", "should_stop", json.RawMessage(`{}`), nil)
 				So(err, ShouldBeNil)
 				var out map[string]any
 				So(json.Unmarshal(raw, &out), ShouldBeNil)
@@ -433,7 +449,7 @@ type actionResult struct {
 func runStream(t *testing.T, p *Plugin, invocationID string, count, delayMS int) actionResult {
 	t.Helper()
 	raw, err := p.CallAction(context.Background(), invocationID, "stream",
-		mustJSON(t, map[string]any{"count": count, "delay_ms": delayMS}))
+		mustJSON(t, map[string]any{"count": count, "delay_ms": delayMS}), nil)
 	var out map[string]any
 	if err == nil {
 		err = json.Unmarshal(raw, &out)
@@ -463,12 +479,12 @@ func TestToolTimeoutDoesNotBindActions(t *testing.T) {
 		p := newFixturePlugin(t, newRecordedHost(), t.TempDir(), WithToolTimeout(150*time.Millisecond))
 
 		Convey("a tool that runs longer is interrupted", func() {
-			_, err := p.CallTool(context.Background(), "spin", mustJSON(t, map[string]any{"ms": 3000}))
+			_, err := p.CallTool(context.Background(), "spin", mustJSON(t, map[string]any{"ms": 3000}), nil)
 			So(err, ShouldNotBeNil)
 		})
 
 		Convey("the same work as an action is allowed to finish", func() {
-			raw, err := p.CallAction(context.Background(), "slow-1", "spin", mustJSON(t, map[string]any{"ms": 400}))
+			raw, err := p.CallAction(context.Background(), "slow-1", "spin", mustJSON(t, map[string]any{"ms": 400}), nil)
 			So(err, ShouldBeNil)
 			var out map[string]any
 			So(json.Unmarshal(raw, &out), ShouldBeNil)
@@ -478,7 +494,7 @@ func TestToolTimeoutDoesNotBindActions(t *testing.T) {
 		Convey("an action still obeys the deadline its caller set", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 			defer cancel()
-			_, err := p.CallAction(ctx, "slow-2", "spin", mustJSON(t, map[string]any{"ms": 3000}))
+			_, err := p.CallAction(ctx, "slow-2", "spin", mustJSON(t, map[string]any{"ms": 3000}), nil)
 			So(err, ShouldNotBeNil)
 		})
 	})
@@ -515,7 +531,7 @@ func benchmarkFixtureTool(b *testing.B, opts ...PluginOption) {
 	args := json.RawMessage(`{}`)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := p.CallTool(ctx, "seq", args); err != nil {
+		if _, err := p.CallTool(ctx, "seq", args, nil); err != nil {
 			b.Fatal(err)
 		}
 	}

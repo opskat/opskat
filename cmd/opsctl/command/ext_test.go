@@ -11,6 +11,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/opskat/opskat/internal/ai/permission"
+	"github.com/opskat/opskat/internal/assettype"
+	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
@@ -156,15 +159,76 @@ func TestScanInstalledExtensionsReportsDisabledState(t *testing.T) {
 	assert.False(t, got[0].Enabled, "a disabled extension must be listed as disabled, not as enabled")
 
 	// A disabled extension's asset types are not registered in the running app either,
-	// so exec must not try to route to it.
-	assert.Empty(t, extensionAssetTypeOwners())
+	// so opsctl must not register them locally.
+	registerExtensionAssetTypes()
+	_, registered := assettype.Get("acme-store")
+	assert.False(t, registered)
 }
 
-func TestExtensionAssetTypeOwnersMapsEnabledTypes(t *testing.T) {
+// --- local registration ------------------------------------------------------
+
+// forgetExtension undoes what registerExtensionAssetTypes wrote, so a test does not
+// leak an asset type into the next one (registration refuses duplicates).
+func forgetExtension(t *testing.T, name string) {
+	t.Helper()
+	t.Cleanup(func() { extreg.Unregister(name) })
+}
+
+func TestRegisterExtensionAssetTypesMakesTheTypeUsableWithoutWASM(t *testing.T) {
 	dir := withExtensionDir(t)
 	writeExtManifest(t, installDescribeStub(t), dir, "acme", "acme-store")
+	forgetExtension(t, "acme")
 
-	assert.Equal(t, map[string]string{"acme-store": "acme"}, extensionAssetTypeOwners())
+	registerExtensionAssetTypes()
+
+	// create/update/list resolve the type through this registry: without it
+	// `opsctl create asset --type acme-store` reports an unsupported asset type while
+	// the desktop app on the same machine accepts it.
+	handler, ok := assettype.Get("acme-store")
+	require.True(t, ok)
+	assert.Equal(t, "acme-store", handler.Type())
+	owner, ok := assettype.ExtensionOwnerOf("acme-store")
+	require.True(t, ok)
+	assert.Equal(t, "acme", owner, "exec routes to the desktop app by this answer")
+
+	// `opsctl help acme-store` renders the tool/parameter table describe() reported.
+	help, ok := permission.HelpFor("acme-store")
+	require.True(t, ok)
+	assert.Contains(t, help, "list_objects")
+
+	// `opsctl policy show/allow/deny` need a permanent-rule landing for the type.
+	assert.True(t, permission.TypeRulesSupported("acme-store"))
+
+	// …but execution is not local: the WASM runtime, the host capabilities and the
+	// decrypted asset config only exist in the desktop process.
+	assert.NotContains(t, permission.RegisteredExecTypes(), "acme-store")
+}
+
+func TestRegisterExtensionAssetTypesReportsAMissingDescriptorInsteadOfRegisteringNothing(t *testing.T) {
+	dir := withExtensionDir(t)
+	stub := installDescribeStub(t)
+	writeExtManifest(t, stub, dir, "acme", "acme-store")
+	// This machine has never loaded the extension: the manifest is the security
+	// contract only, so nothing local knows what the extension can do.
+	require.NoError(t, stub.DeleteDescriptor("acme"))
+	forgetExtension(t, "acme")
+
+	var reported []error
+	orig := extregRegisterFn
+	extregRegisterFn = func(info *extension.ManifestInfo) error {
+		err := orig(info)
+		reported = append(reported, err)
+		return err
+	}
+	t.Cleanup(func() { extregRegisterFn = orig })
+
+	registerExtensionAssetTypes()
+
+	require.Len(t, reported, 1)
+	require.Error(t, reported[0], "a cache miss must be surfaced, not swallowed into a later unknown-type error")
+	assert.Contains(t, reported[0].Error(), "acme")
+	_, registered := assettype.Get("acme-store")
+	assert.False(t, registered)
 }
 
 // --- delegation --------------------------------------------------------------

@@ -22,7 +22,7 @@ func TestTestHost(t *testing.T) {
 			th := NewTestHost()
 			defer th.Close()
 
-			result, err := th.CallTool("echo", map[string]string{"msg": "hi"})
+			result, err := th.CallTool(Asset{}, "echo", map[string]string{"msg": "hi"})
 			So(err, ShouldBeNil)
 
 			var out map[string]string
@@ -45,7 +45,7 @@ func TestTestHost(t *testing.T) {
 			th := NewTestHost(WithAssetConfig(1, cfg))
 			defer th.Close()
 
-			result, err := th.CallTool("config_test", map[string]any{})
+			result, err := th.CallTool(Asset{ID: 1}, "config_test", map[string]any{})
 			So(err, ShouldBeNil)
 
 			b, _ := json.Marshal(result)
@@ -78,7 +78,7 @@ func TestTestHost(t *testing.T) {
 			}))
 			defer th.Close()
 
-			result, err := th.CallTool("http_test", map[string]any{})
+			result, err := th.CallTool(Asset{}, "http_test", map[string]any{})
 			So(err, ShouldBeNil)
 
 			b, _ := json.Marshal(result)
@@ -102,7 +102,7 @@ func TestTestHost(t *testing.T) {
 			th := NewTestHost()
 			defer th.Close()
 
-			result, err := th.CallTool("kv_test", map[string]any{})
+			result, err := th.CallTool(Asset{}, "kv_test", map[string]any{})
 			So(err, ShouldBeNil)
 
 			b, _ := json.Marshal(result)
@@ -123,7 +123,7 @@ func TestTestHost(t *testing.T) {
 			defer th.Close()
 
 			var events []TestEvent
-			result, err := th.CallAction("upload", map[string]any{}, func(e TestEvent) {
+			result, err := th.CallAction(Asset{}, "upload", map[string]any{}, func(e TestEvent) {
 				events = append(events, e)
 			})
 			So(err, ShouldBeNil)

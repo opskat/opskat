@@ -39,30 +39,26 @@ type notebookConfig struct {
 // parameter table it renders in `help` and parses `--flag=value` against, and the
 // handler receives the same struct — so a renamed field renames the flag.
 //
-// asset_id is a declared parameter rather than ambient context because the host
-// does not pass the asset to a tool call; a tool that needs the asset's config
-// has to be told which asset it is running against.
+// None of them names an asset. The asset a call runs against is the `exec` target,
+// which the host puts in the call envelope and the handler reads off ctx.Asset;
+// declaring it as a flag is refused at registration.
 
 type listArgs struct {
-	AssetID int64  `json:"asset_id" desc:"ID of the notebook asset this call runs against"`
-	Prefix  string `json:"prefix,omitempty" desc:"Only list notes whose key starts with this prefix"`
+	Prefix string `json:"prefix,omitempty" desc:"Only list notes whose key starts with this prefix"`
 }
 
 type getArgs struct {
-	AssetID int64  `json:"asset_id" desc:"ID of the notebook asset this call runs against"`
-	Key     string `json:"key" desc:"Key of the note to read"`
+	Key string `json:"key" desc:"Key of the note to read"`
 }
 
 type putArgs struct {
-	AssetID int64    `json:"asset_id" desc:"ID of the notebook asset this call runs against"`
 	Key     string   `json:"key" desc:"Key of the note to create or overwrite"`
 	Content string   `json:"content" desc:"Note body"`
 	Tags    []string `json:"tags,omitempty" desc:"Optional labels, e.g. --tags=runbook,postgres"`
 }
 
 type deleteArgs struct {
-	AssetID int64  `json:"asset_id" desc:"ID of the notebook asset this call runs against"`
-	Key     string `json:"key" desc:"Key of the note to delete"`
+	Key string `json:"key" desc:"Key of the note to delete"`
 }
 
 func init() {
@@ -111,8 +107,8 @@ type noteSummary struct {
 	UpdatedAt string   `json:"updatedAt"`
 }
 
-func listNotes(_ *opskat.ToolContext, args listArgs) (any, error) {
-	cfg, doc, err := open(args.AssetID)
+func listNotes(ctx *opskat.ToolContext, args listArgs) (any, error) {
+	cfg, doc, err := open(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -133,8 +129,8 @@ func listNotes(_ *opskat.ToolContext, args listArgs) (any, error) {
 	}, nil
 }
 
-func getNote(_ *opskat.ToolContext, args getArgs) (any, error) {
-	cfg, doc, err := open(args.AssetID)
+func getNote(ctx *opskat.ToolContext, args getArgs) (any, error) {
+	cfg, doc, err := open(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -145,8 +141,8 @@ func getNote(_ *opskat.ToolContext, args getArgs) (any, error) {
 	return n, nil
 }
 
-func putNote(_ *opskat.ToolContext, args putArgs) (any, error) {
-	cfg, doc, err := open(args.AssetID)
+func putNote(ctx *opskat.ToolContext, args putArgs) (any, error) {
+	cfg, doc, err := open(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -179,8 +175,8 @@ func putNote(_ *opskat.ToolContext, args putArgs) (any, error) {
 	}, nil
 }
 
-func deleteNote(_ *opskat.ToolContext, args deleteArgs) (any, error) {
-	cfg, doc, err := open(args.AssetID)
+func deleteNote(ctx *opskat.ToolContext, args deleteArgs) (any, error) {
+	cfg, doc, err := open(ctx)
 	if err != nil {
 		return nil, err
 	}

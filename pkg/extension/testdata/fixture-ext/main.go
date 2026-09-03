@@ -43,10 +43,6 @@ type kvArgs struct {
 	Value string `json:"value" desc:"Value to store"`
 }
 
-type assetConfigArgs struct {
-	AssetID int64 `json:"asset_id" desc:"Asset whose config to read"`
-}
-
 type logArgs struct {
 	Level string `json:"level" desc:"Log level"`
 	Msg   string `json:"msg" desc:"Message to log"`
@@ -145,12 +141,15 @@ func init() {
 		return map[string]any{"value": string(got)}, nil
 	}).Policy("write")
 
-	opskat.Tool("asset_config", func(_ *opskat.ToolContext, args assetConfigArgs) (any, error) {
-		cfg, err := opskat.GetAssetConfig(args.AssetID)
+	// asset_config takes no arguments: the asset a tool runs against is the exec
+	// target the host injects, so the guest reads it off the context instead of
+	// being told which asset it is working on.
+	opskat.Tool("asset_config", func(ctx *opskat.ToolContext, _ noArgs) (any, error) {
+		cfg, err := ctx.AssetConfig()
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"config": json.RawMessage(cfg)}, nil
+		return map[string]any{"config": json.RawMessage(cfg), "asset": ctx.Asset}, nil
 	}).Policy("read")
 
 	opskat.Tool("log", func(_ *opskat.ToolContext, args logArgs) (any, error) {

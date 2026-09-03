@@ -28,6 +28,46 @@ func TestDispatch(t *testing.T) {
 			So(out["pong"], ShouldEqual, "ok")
 		})
 
+		Convey("execute_tool hands the handler the asset the host named", func() {
+			var seen Asset
+			Tool("who", func(ctx *ToolContext, _ struct{}) (any, error) {
+				seen = ctx.Asset
+				return map[string]string{"ok": "1"}, nil
+			}).Policy("read")
+
+			_, err := dispatch("execute_tool", []byte(`{"tool":"who","args":{},"asset":{"id":12,"name":"prod notes","type":"notebook"}}`))
+			So(err, ShouldBeNil)
+			So(seen, ShouldResemble, Asset{ID: 12, Name: "prod notes", Type: "notebook"})
+		})
+
+		Convey("execute_action hands the handler the asset the host named", func() {
+			var seen Asset
+			RegisterAction("who", func(ctx *ActionContext) (any, error) {
+				seen = ctx.Asset
+				return nil, nil
+			})
+
+			_, err := dispatch("execute_action", []byte(`{"action":"who","args":{},"asset":{"id":3,"name":"n","type":"notebook"}}`))
+			So(err, ShouldBeNil)
+			So(seen, ShouldResemble, Asset{ID: 3, Name: "n", Type: "notebook"})
+		})
+
+		Convey("a call the host did not scope to an asset cannot read a config", func() {
+			var configErr error
+			Tool("cfg", func(ctx *ToolContext, _ struct{}) (any, error) {
+				_, configErr = ctx.AssetConfig()
+				return map[string]string{"ok": "1"}, nil
+			}).Policy("read")
+
+			th := NewTestHost()
+			defer th.Close()
+
+			_, err := dispatch("execute_tool", []byte(`{"tool":"cfg","args":{}}`))
+			So(err, ShouldBeNil)
+			So(configErr, ShouldNotBeNil)
+			So(configErr.Error(), ShouldContainSubstring, "not scoped to an asset")
+		})
+
 		Convey("unknown function returns error", func() {
 			_, err := dispatch("unknown_fn", nil)
 			So(err, ShouldNotBeNil)
@@ -52,7 +92,7 @@ func TestActionContextShouldStop(t *testing.T) {
 			return nil, nil
 		})
 
-		_, err := th.CallAction("cancel_test", json.RawMessage("{}"), func(TestEvent) {})
+		_, err := th.CallAction(Asset{}, "cancel_test", json.RawMessage("{}"), func(TestEvent) {})
 		So(err, ShouldBeNil)
 		So(captured, ShouldBeTrue)
 	})

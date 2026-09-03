@@ -29,12 +29,14 @@ type fakePlugin struct {
 	callErr   error
 	lastTool  string
 	lastArgs  json.RawMessage
+	lastAsset *extension.AssetRef
 	result    string
 }
 
-func (p *fakePlugin) CallTool(_ context.Context, toolName string, args json.RawMessage) (json.RawMessage, error) {
+func (p *fakePlugin) CallTool(_ context.Context, toolName string, args json.RawMessage, asset *extension.AssetRef) (json.RawMessage, error) {
 	p.lastTool = toolName
 	p.lastArgs = append(json.RawMessage(nil), args...)
+	p.lastAsset = asset
 	if p.callErr != nil {
 		return nil, p.callErr
 	}
@@ -192,12 +194,15 @@ func TestExecutorConvertsFlagsToTypedArguments(t *testing.T) {
 	exec, ok := permission.ExecutorFor("acme-store")
 	require.True(t, ok)
 
-	out, err := exec(context.Background(), &asset_entity.Asset{ID: 1, Type: "acme-store"},
+	out, err := exec(context.Background(), &asset_entity.Asset{ID: 1, Name: "prod store", Type: "acme-store"},
 		"list_objects --bucket=prod --maxKeys=10 --keys=a,b", "")
 	require.NoError(t, err)
 	assert.Equal(t, `{"objects":2}`, out)
 	assert.Equal(t, "list_objects", plugin.lastTool)
 	assert.JSONEq(t, `{"bucket":"prod","maxKeys":10,"keys":["a","b"]}`, string(plugin.lastArgs))
+	// The exec target reaches the guest as the call's asset, not as an argument
+	// the command had to repeat.
+	assert.Equal(t, &extension.AssetRef{ID: 1, Name: "prod store", Type: "acme-store"}, plugin.lastAsset)
 }
 
 func TestCanonicalizeIsStableAndRejectsBadCommandsBeforeApproval(t *testing.T) {

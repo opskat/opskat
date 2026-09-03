@@ -79,12 +79,15 @@ func (h *TestHost) Close() {
 	SetHostStub(nil)
 }
 
-// CallTool invokes a registered tool handler.
-func (h *TestHost) CallTool(name string, args any) (any, error) {
+// CallTool invokes a registered tool handler against asset, the way the host
+// invokes it for `exec <asset> -- <tool>`. Pass the zero Asset for a call that is
+// not scoped to one.
+func (h *TestHost) CallTool(asset Asset, name string, args any) (any, error) {
 	argsJSON, _ := json.Marshal(args)
 	input, _ := json.Marshal(map[string]any{
-		"tool": name,
-		"args": json.RawMessage(argsJSON),
+		"tool":  name,
+		"args":  json.RawMessage(argsJSON),
+		"asset": asset,
 	})
 	result, err := dispatch("execute_tool", input)
 	if err != nil {
@@ -97,8 +100,9 @@ func (h *TestHost) CallTool(name string, args any) (any, error) {
 	return out, nil
 }
 
-// CallAction invokes a registered action handler with event capture.
-func (h *TestHost) CallAction(name string, args any, onEvent func(TestEvent)) (any, error) {
+// CallAction invokes a registered action handler with event capture, scoped to
+// asset (the zero Asset for an action the caller has no asset for).
+func (h *TestHost) CallAction(asset Asset, name string, args any, onEvent func(TestEvent)) (any, error) {
 	h.mu.Lock()
 	h.events = nil
 	h.eventCb = onEvent
@@ -108,6 +112,7 @@ func (h *TestHost) CallAction(name string, args any, onEvent func(TestEvent)) (a
 	input, _ := json.Marshal(map[string]any{
 		"action": name,
 		"args":   json.RawMessage(argsJSON),
+		"asset":  asset,
 	})
 	result, err := dispatch("execute_action", input)
 	if err != nil {

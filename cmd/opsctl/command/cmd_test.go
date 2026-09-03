@@ -3,6 +3,8 @@ package command
 import (
 	"testing"
 
+	"github.com/opskat/opskat/internal/ai/cmdline"
+
 	. "github.com/smartystreets/goconvey/convey"
 )
 
@@ -92,6 +94,31 @@ func TestExtractCommand(t *testing.T) {
 		Convey("should use first -- only", func() {
 			cmd := extractCommand([]string{"--", "echo", "--", "hello"})
 			So(cmd, ShouldEqual, "echo -- hello")
+		})
+
+		Convey("should survive a re-split by the shell parser downstream", func() {
+			// The user's shell already split the command into argv; every consumer of
+			// the joined string re-splits it with a real shell parser (the extension
+			// flag DSL and the k8s/etcd/kafka canonicalizers via cmdline.Words, a
+			// remote shell for ssh). A plain join loses the quoting the shell removed,
+			// so a value with a space silently becomes two words.
+			cmd := extractCommand([]string{"--", "grep", "foo bar", "file"})
+			words, err := cmdline.Words(cmd)
+			So(err, ShouldBeNil)
+			So(words, ShouldResemble, []string{"grep", "foo bar", "file"})
+
+			cmd = extractCommand([]string{"--", "note_put", "--content=restart via systemctl"})
+			words, err = cmdline.Words(cmd)
+			So(err, ShouldBeNil)
+			So(words, ShouldResemble, []string{"note_put", "--content=restart via systemctl"})
+		})
+
+		Convey("should keep a lone word verbatim", func() {
+			// One word after "--" *is* the command string — the documented form for
+			// every DSL opsctl forwards to (`opsctl exec prod-db -- "SELECT * FROM t"`).
+			// Quoting it would hand the database a literal `'SELECT * FROM t'`.
+			So(extractCommand([]string{"--", "SELECT * FROM users"}), ShouldEqual, "SELECT * FROM users")
+			So(extractCommand([]string{"ls | wc -l"}), ShouldEqual, "ls | wc -l")
 		})
 	})
 }

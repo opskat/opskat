@@ -25,9 +25,14 @@ func dispatch(fnName string, input []byte) (json.RawMessage, error) {
 
 // toolCall is the shape of both execute_tool and check_policy input: the host
 // asks the same question about the same call, once to classify it and once to run it.
+//
+// asset is only on the execute_tool side of that pair — check_policy is answered
+// from the tool's own registration, and the asset half of the decision (which
+// permission groups are granted on it) is the host's.
 type toolCall struct {
-	Tool string          `json:"tool"`
-	Args json.RawMessage `json:"args"`
+	Tool  string          `json:"tool"`
+	Args  json.RawMessage `json:"args"`
+	Asset Asset           `json:"asset"`
 }
 
 func parseToolCall(input []byte) (*toolEntry, toolCall, error) {
@@ -47,7 +52,7 @@ func dispatchTool(input []byte) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	result, err := entry.invoke(&ToolContext{Tool: req.Tool, Args: req.Args})
+	result, err := entry.invoke(&ToolContext{Tool: req.Tool, Args: req.Args, Asset: req.Asset})
 	if err != nil {
 		return nil, err
 	}
@@ -58,6 +63,7 @@ func dispatchAction(input []byte) (json.RawMessage, error) {
 	var req struct {
 		Action string          `json:"action"`
 		Args   json.RawMessage `json:"args"`
+		Asset  Asset           `json:"asset"`
 	}
 	if err := json.Unmarshal(input, &req); err != nil {
 		return nil, fmt.Errorf("parse action request: %w", err)
@@ -69,6 +75,7 @@ func dispatchAction(input []byte) (json.RawMessage, error) {
 	result, err := handler(&ActionContext{
 		Action: req.Action,
 		Args:   req.Args,
+		Asset:  req.Asset,
 		Events: newEventWriter(),
 	})
 	if err != nil {

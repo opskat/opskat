@@ -10,6 +10,7 @@ import (
 
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/bootstrap"
+	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
 	"github.com/opskat/opskat/pkg/extension"
 
@@ -21,6 +22,9 @@ var delegateExtExecFn = delegateExtExec
 
 // devInstallFn 变量化同 delegateExtExecFn：让 cmdExtDev 的判断可测，不必真起一个桌面端。
 var devInstallFn = requestExtDevInstall
+
+// extregRegisterFn 是"仅描述注册"的接缝，同上一套路。
+var extregRegisterFn = extreg.RegisterDescribeOnly
 
 // extensionsDirFn 定位扩展目录。变量化是为了可测，与本包 execApprovalFn 等同一套路。
 var extensionsDirFn = func() string { return filepath.Join(bootstrap.ResolvedDataDir(), "extensions") }
@@ -65,6 +69,42 @@ type installedExtension struct {
 // would refuse. Both are the same mistake: a second, laxer reader of a contract that
 // already has one owner.
 func scanInstalledExtensions() ([]installedExtension, error) {
+	scanned, err := scanExtensionDirs()
+	if err != nil {
+		return nil, err
+	}
+	results := make([]installedExtension, 0, len(scanned))
+	for _, ext := range scanned {
+		m := ext.info.Manifest
+		item := installedExtension{
+			Name:        m.Name,
+			Version:     m.Version,
+			DisplayName: ext.info.Translate("en", m.I18n.DisplayName),
+			Description: ext.info.Translate("en", m.I18n.Description),
+			Enabled:     ext.enabled,
+		}
+		for _, at := range m.AssetTypes {
+			item.AssetTypes = append(item.AssetTypes, at.Type)
+		}
+		for _, t := range m.Tools {
+			item.Tools = append(item.Tools, t.Name)
+		}
+		results = append(results, item)
+	}
+	return results, nil
+}
+
+// scannedExtension is one extension directory read without a WASM runtime, plus the
+// enabled/disabled state the desktop app persists.
+type scannedExtension struct {
+	info    *extension.ManifestInfo
+	enabled bool
+}
+
+// scanExtensionDirs reads every extension directory through the real manifest parser,
+// sorted by name. It is the single scan behind both `ext list` and the startup
+// registration below, so the two cannot disagree about what is installed.
+func scanExtensionDirs() ([]scannedExtension, error) {
 	extDir := extensionsDirFn()
 	entries, err := os.ReadDir(extDir)
 	if err != nil {
@@ -76,7 +116,7 @@ func scanInstalledExtensions() ([]installedExtension, error) {
 
 	disabled := disabledExtensionNames()
 
-	results := make([]installedExtension, 0, len(entries))
+	results := make([]scannedExtension, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -87,24 +127,42 @@ func scanInstalledExtensions() ([]installedExtension, error) {
 			// desktop app skips it the same way.
 			continue
 		}
-		m := info.Manifest
-		item := installedExtension{
-			Name:        m.Name,
-			Version:     m.Version,
-			DisplayName: info.Translate("en", m.I18n.DisplayName),
-			Description: info.Translate("en", m.I18n.Description),
-			Enabled:     !disabled[m.Name],
-		}
-		for _, at := range m.AssetTypes {
-			item.AssetTypes = append(item.AssetTypes, at.Type)
-		}
-		for _, t := range m.Tools {
-			item.Tools = append(item.Tools, t.Name)
-		}
-		results = append(results, item)
+		results = append(results, scannedExtension{info: info, enabled: !disabled[info.Name]})
 	}
-	sort.Slice(results, func(i, j int) bool { return results[i].Name < results[j].Name })
+	sort.Slice(results, func(i, j int) bool { return results[i].info.Name < results[j].info.Name })
 	return results, nil
+}
+
+// registerExtensionAssetTypes wires every enabled extension's non-executing face into
+// this process's registries, from the descriptor the desktop app cached the last time
+// it loaded that extension (extension_describe). No WASM is compiled or run.
+//
+// Without it opsctl is blind to extension asset types while the app on the same
+// machine is not: `create asset --type notebook` reports an unsupported type, `help
+// notebook` lists only the built-ins and `policy show` on an extension asset refuses
+// with "no permanent rule support". `exec` was the exception only because it delegates
+// to the desktop app instead of resolving anything locally.
+//
+// Failures are reported and skipped rather than fatal: a single unregisterable
+// extension (a name collision with a built-in type, a describe() answer this binary is
+// too old to accept) must not take down every unrelated opsctl command. A cache miss
+// is reported the same way — it is a real, fixable degradation ("load it once in the
+// desktop app"), not something to swallow into a later "unknown asset type".
+func registerExtensionAssetTypes() {
+	scanned, err := scanExtensionDirs()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		return
+	}
+	for _, ext := range scanned {
+		if !ext.enabled {
+			// A disabled extension is not registered in the running app either.
+			continue
+		}
+		if err := extregRegisterFn(ext.info); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		}
+	}
 }
 
 // disabledExtensionNames reads the persisted enabled/disabled state. An unreadable DB
@@ -128,27 +186,6 @@ func disabledExtensionNames() map[string]bool {
 		}
 	}
 	return out
-}
-
-// extensionAssetTypeOwners maps every enabled extension's asset types to its extension
-// name. Disabled extensions are excluded: their asset types are not registered in the
-// running app either, so a command against one must fail like any unknown type.
-func extensionAssetTypeOwners() map[string]string {
-	items, err := scanInstalledExtensions()
-	if err != nil {
-		logger.Default().Warn("scan installed extensions", zap.Error(err))
-		return nil
-	}
-	owners := make(map[string]string)
-	for _, item := range items {
-		if !item.Enabled {
-			continue
-		}
-		for _, at := range item.AssetTypes {
-			owners[at] = item.Name
-		}
-	}
-	return owners
 }
 
 func cmdExtList() int {

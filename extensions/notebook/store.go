@@ -25,10 +25,10 @@ type notebookDoc struct {
 	Notes map[string]note `json:"notes"`
 }
 
-// open resolves the asset's configuration and loads its notebook. Every tool
-// starts here, so the asset config is read at exactly one place.
-func open(assetID int64) (notebookConfig, *notebookDoc, error) {
-	cfg, err := loadConfig(assetID)
+// open resolves the configuration of the asset the call runs against and loads its
+// notebook. Every tool starts here, so the asset config is read at exactly one place.
+func open(ctx *opskat.ToolContext) (notebookConfig, *notebookDoc, error) {
+	cfg, err := loadConfig(ctx)
 	if err != nil {
 		return cfg, nil, err
 	}
@@ -39,21 +39,21 @@ func open(assetID int64) (notebookConfig, *notebookDoc, error) {
 	return cfg, doc, nil
 }
 
-// loadConfig reads the asset's configuration from the host and holds it to the
-// same rules the configuration form is checked against. The config arrives across
-// the WASM boundary, which is where a guest checks its inputs.
-func loadConfig(assetID int64) (notebookConfig, error) {
-	raw, err := opskat.GetAssetConfig(assetID)
+// loadConfig reads the configuration of the exec target from the host and holds it
+// to the same rules the configuration form is checked against. The config arrives
+// across the WASM boundary, which is where a guest checks its inputs.
+func loadConfig(ctx *opskat.ToolContext) (notebookConfig, error) {
+	raw, err := ctx.AssetConfig()
 	if err != nil {
-		return notebookConfig{}, fmt.Errorf("read config of asset %d: %w", assetID, err)
+		return notebookConfig{}, fmt.Errorf("read config of asset %d: %w", ctx.Asset.ID, err)
 	}
 	var cfg notebookConfig
 	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return notebookConfig{}, fmt.Errorf("parse config of asset %d: %w", assetID, err)
+		return notebookConfig{}, fmt.Errorf("parse config of asset %d: %w", ctx.Asset.ID, err)
 	}
 	if errs := validateConfig(cfg); len(errs) > 0 {
-		return notebookConfig{}, fmt.Errorf("asset %d has an invalid notebook config: %s %s",
-			assetID, errs[0].Field, errs[0].Message)
+		return notebookConfig{}, fmt.Errorf("asset %q has an invalid notebook config: %s %s",
+			ctx.Asset.Name, errs[0].Field, errs[0].Message)
 	}
 	return cfg, nil
 }

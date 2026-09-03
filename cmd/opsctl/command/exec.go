@@ -77,13 +77,11 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	// 扩展的宿主能力与解密后的资产配置只存在于桌面进程里。桌面端跑的是同一个统一 exec
 	// handler，策略/审批/grant/审计因此与内置类型逐字一致，也由那一端落库。
 	//
-	// 先看内置注册表：内置类型优先，且不用为每一条内置命令去扫一遍扩展目录。这也和
-	// 桌面端的冲突规则一致——一个想占用内置类型名的扩展在加载时就会被拒绝注册，
-	// opsctl 不能因为磁盘上躺着这样一个 manifest 就改道。
-	if _, builtin := assettype.Get(asset.Type); !builtin {
-		if extName, ok := extensionAssetTypeOwners()[asset.Type]; ok {
-			return execViaDesktop(asset, extName, command, session)
-		}
+	// 归属直接问资产类型注册表（启动时由 registerExtensionAssetTypes 按缓存的 describe()
+	// 接线）：内置类型天然报 ("", false)，因为注册表拒绝让扩展占用一个内置类型名——
+	// 与桌面端的冲突规则同一条，opsctl 不会因为磁盘上躺着这样一个 manifest 就改道。
+	if extName, ok := assettype.ExtensionOwnerOf(asset.Type); ok {
+		return execViaDesktop(asset, extName, command, session)
 	}
 
 	// Executor lookup / canonicalize / precheck — all side-effect-free, all must run
@@ -237,7 +235,16 @@ Arguments:
   asset       Asset name or numeric ID
   command     Command to execute on the remote asset.
               Use '--' to separate the command from opsctl flags.
-              Everything after '--' is joined into a single command string.
+              Everything after '--' becomes one command string, in one of two
+              ways. A single word is that string verbatim, so quoting the whole
+              command passes shell syntax through untouched:
+                opsctl exec web-01 -- 'tail -n50 /var/log/app.log | grep ERR'
+              Two or more words are argv, and each is re-quoted so a value your
+              own shell already unquoted survives the re-split downstream:
+                opsctl exec web-01 -- grep "foo bar" file   →  grep 'foo bar' file
+              In that form a metacharacter inside a word is literal, not
+              interpreted by the remote shell — use the single-word form for
+              pipes, redirection and remote globbing.
               Dispatched by the asset's real type: ssh keeps its streaming
               channel (pipes, exit code); the other built-in types (database,
               redis, mongodb, etcd, kafka, k8s, oss) run through the unified
@@ -278,6 +285,8 @@ Examples:
   opsctl exec 1 --type ssh -- ls -la /var/log
   opsctl exec production/web-01 --type ssh -- cat /etc/hosts
   echo "hello" | opsctl exec web-server --type ssh -- cat
+  opsctl exec web-server --type ssh -- grep "connection refused" /var/log/app.log
+  opsctl exec web-server --type ssh -- 'ls /var/log/*.log | wc -l'
   opsctl exec prod-db --type database -- "SELECT * FROM users LIMIT 10"
   opsctl exec cache --type redis -- "GET session:abc123"
   opsctl exec my-bucket -- list_objects --bucket=logs --maxKeys=100

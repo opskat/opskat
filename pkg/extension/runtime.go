@@ -172,12 +172,35 @@ func (p *Plugin) Describe(ctx context.Context) (json.RawMessage, error) {
 	return p.call(ctx, newInvocation(p.nextInvocationID(), nil), "describe", nil, p.opts.toolTimeout)
 }
 
-// CallTool calls execute_tool on the extension.
-func (p *Plugin) CallTool(ctx context.Context, toolName string, args json.RawMessage) (json.RawMessage, error) {
-	input, err := json.Marshal(map[string]any{
-		"tool": toolName,
-		"args": json.RawMessage(args),
-	})
+// AssetRef names the asset a call runs against.
+//
+// It travels in the call envelope rather than in the arguments because the asset
+// is not something the caller's arguments get to choose: for a tool it is the
+// `exec` target the host resolved and checked the policy against, and a second
+// asset id hidden in the arguments would reach an asset the user never granted.
+// Tools therefore may not declare one (descriptor.go refuses it), and the guest
+// reads it off its ToolContext.
+type AssetRef struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+
+// callEnvelope is the input of execute_tool and execute_action: what to run, its
+// arguments, and the asset it runs against. asset is omitted when the caller has
+// none — the frontend testing a configuration form has no saved asset yet — and
+// the guest reports that rather than guessing.
+type callEnvelope struct {
+	Tool   string          `json:"tool,omitempty"`
+	Action string          `json:"action,omitempty"`
+	Args   json.RawMessage `json:"args"`
+	Asset  *AssetRef       `json:"asset,omitempty"`
+}
+
+// CallTool calls execute_tool on the extension, scoped to asset (nil when the
+// caller has no asset).
+func (p *Plugin) CallTool(ctx context.Context, toolName string, args json.RawMessage, asset *AssetRef) (json.RawMessage, error) {
+	input, err := json.Marshal(callEnvelope{Tool: toolName, Args: args, Asset: asset})
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s input: %w", "execute_tool", err)
 	}
@@ -194,11 +217,8 @@ func (p *Plugin) CallTool(ctx context.Context, toolName string, args json.RawMes
 // Unlike a tool call, an action gets no host-imposed deadline: uploads, batch
 // copies and event streams are expected to run for minutes, and the caller's
 // context is the only party that knows how long is too long.
-func (p *Plugin) CallAction(ctx context.Context, invocationID, actionName string, args json.RawMessage) (json.RawMessage, error) {
-	input, err := json.Marshal(map[string]any{
-		"action": actionName,
-		"args":   json.RawMessage(args),
-	})
+func (p *Plugin) CallAction(ctx context.Context, invocationID, actionName string, args json.RawMessage, asset *AssetRef) (json.RawMessage, error) {
+	input, err := json.Marshal(callEnvelope{Action: actionName, Args: args, Asset: asset})
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s input: %w", "execute_action", err)
 	}
@@ -263,6 +283,11 @@ func (p *Plugin) nextInvocationID() string {
 }
 
 // CheckPolicy calls check_policy on the extension.
+//
+// No asset travels with it: the guest answers from the tool's own registration
+// (its policy action and the resource derived from the arguments), and the asset
+// side of the decision — which permission groups are granted on it — is the
+// host's own (internal/extreg).
 func (p *Plugin) CheckPolicy(ctx context.Context, toolName string, args json.RawMessage) (action, resource string, err error) {
 	input, err := json.Marshal(map[string]any{
 		"tool": toolName,

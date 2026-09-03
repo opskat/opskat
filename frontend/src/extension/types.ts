@@ -65,7 +65,17 @@ export interface ExtEvent {
   data: unknown;
 }
 
+// `assetId` is how a call names the asset it runs against. Extension tools take no
+// asset argument — the backend puts the asset in the call envelope — so a page that
+// works on an asset passes the `assetId` prop it was rendered with. Leaving it out
+// means "this call has no asset", which is what testing an unsaved configuration is.
 export interface ExtAPI {
-  callTool(extName: string, tool: string, args: unknown): Promise<unknown>;
-  executeAction(extName: string, action: string, args: unknown, onEvent?: (e: ExtEvent) => void): Promise<unknown>;
+  callTool(extName: string, tool: string, args: unknown, assetId?: number): Promise<unknown>;
+  executeAction(
+    extName: string,
+    action: string,
+    args: unknown,
+    onEvent?: (e: ExtEvent) => void,
+    assetId?: number
+  ): Promise<unknown>;
 }

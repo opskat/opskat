@@ -41,7 +41,7 @@ const helpLang = "en"
 // 收窄到两个方法而不是直接吃 *Plugin，是为了让策略/执行这两条闭包可以在没有 wazero
 // 运行时的情况下被测试驱动——它们承载的是策略与 grant 的行为契约，不是 WASM 加载。
 type pluginCaller interface {
-	CallTool(ctx context.Context, toolName string, args json.RawMessage) (json.RawMessage, error)
+	CallTool(ctx context.Context, toolName string, args json.RawMessage, asset *extension.AssetRef) (json.RawMessage, error)
 	CheckPolicy(ctx context.Context, toolName string, args json.RawMessage) (action, resource string, err error)
 }
 
@@ -91,20 +91,9 @@ func register(l loaded, help, description string) error {
 		done = append(done, at.Type)
 	}
 
-	for _, pg := range m.Policies.Groups {
-		policyJSON, err := json.Marshal(pg.Policy)
-		if err != nil {
-			rollback()
-			return fmt.Errorf("extension %q policy group %q: %w", l.name, pg.ID, err)
-		}
-		policy_group_entity.RegisterExtensionGroup(&policy_group_entity.PolicyGroup{
-			BuiltinID:     pg.ID,
-			Name:          pg.I18n.Name,
-			Description:   pg.I18n.Description,
-			PolicyType:    m.Policies.Type,
-			Policy:        string(policyJSON),
-			ExtensionName: l.name,
-		})
+	if err := registerPolicyGroups(l.name, m); err != nil {
+		rollback()
+		return err
 	}
 
 	registered[l.name] = done
@@ -132,16 +121,7 @@ func Unregister(name string) {
 
 func registerType(l loaded, at extension.AssetTypeDef, help, description string) error {
 	m := l.manifest
-	spec := assettype.ExtensionTypeSpec{
-		Type:                at.Type,
-		ExtensionName:       l.name,
-		ConfigFields:        extension.ConfigSchemaProperties(at.ConfigSchema),
-		RequiredFields:      extension.ConfigSchemaRequired(at.ConfigSchema),
-		SecretFields:        extension.PasswordFieldsFromSchema(at.ConfigSchema),
-		PolicyKind:          m.Policies.Type,
-		DefaultPolicyGroups: m.Policies.Default,
-	}
-	if err := assettype.RegisterExtensionType(spec); err != nil {
+	if err := assettype.RegisterExtensionType(extensionTypeSpec(l.name, m, at)); err != nil {
 		return fmt.Errorf("extension %q: %w", l.name, err)
 	}
 	if err := permission.RegisterPolicyCheck(at.Type, policyCheck(l, at.Type)); err != nil {
@@ -239,7 +219,11 @@ func execTool(l loaded) permission.ExecFunc {
 		log := logger.Ctx(ctx).With(zap.String("extension", l.name),
 			zap.String("tool", toolName), zap.Int64("assetID", asset.ID))
 		log.Info("extension tool execution start")
-		result, err := l.plugin.CallTool(ctx, toolName, argsJSON)
+		// The exec target travels in the call envelope, not in the arguments: it is
+		// the asset the policy check above just ran against, so a tool cannot be
+		// pointed at a different one by what the model wrote on the command line.
+		result, err := l.plugin.CallTool(ctx, toolName, argsJSON,
+			&extension.AssetRef{ID: asset.ID, Name: asset.Name, Type: asset.Type})
 		if err != nil {
 			// 不记 raw error：它可能包装用户输入或远端输出。Error 级别本身即失败状态。
 			log.Error("extension tool execution failed")

@@ -7,7 +7,7 @@ const pendingCalls = new Map<string, (result: string) => void>();
 
 vi.mock("../../wailsjs/go/extension/Extension", () => ({
   CallExtensionAction: vi.fn(
-    (_ext: string, _action: string, _args: string, invocationId: string) =>
+    (_ext: string, _action: string, _args: string, invocationId: string, _assetId: number) =>
       new Promise<string>((resolve) => pendingCalls.set(invocationId, resolve))
   ),
   CallExtensionTool: vi.fn(async () => "{}"),
@@ -27,7 +27,7 @@ vi.mock("../../wailsjs/runtime/runtime", () => ({
   EventsOff: vi.fn((name: string) => listeners.delete(name)),
 }));
 
-import { CallExtensionAction, CancelExtensionAction } from "../../wailsjs/go/extension/Extension";
+import { CallExtensionAction, CallExtensionTool, CancelExtensionAction } from "../../wailsjs/go/extension/Extension";
 import { createExtensionAPI } from "../extension/api";
 
 function emit(payload: { extension: string; invocationId: string; eventType: string; data: unknown }) {
@@ -99,9 +99,32 @@ describe("extension action API", () => {
     const api = createExtensionAPI();
     const run = api.startAction("oss", "upload", { file: "x" });
 
-    expect(CallExtensionAction).toHaveBeenCalledWith("oss", "upload", JSON.stringify({ file: "x" }), run.invocationId);
+    expect(CallExtensionAction).toHaveBeenCalledWith(
+      "oss",
+      "upload",
+      JSON.stringify({ file: "x" }),
+      run.invocationId,
+      0
+    );
 
     pendingCalls.get(run.invocationId)?.('{"ok":true}');
     await expect(run.result).resolves.toEqual({ ok: true });
+  });
+
+  // A page opened on an asset names it; the guest reads it off the call envelope
+  // rather than from an argument the page had to repeat.
+  it("names the asset a call runs against, and says so when there is none", async () => {
+    const api = createExtensionAPI();
+
+    await api.callTool("notebook", "note_list", {}, 12);
+    expect(CallExtensionTool).toHaveBeenCalledWith("notebook", "note_list", "{}", 12);
+
+    await api.callTool("notebook", "note_list", {});
+    expect(CallExtensionTool).toHaveBeenLastCalledWith("notebook", "note_list", "{}", 0);
+
+    const run = api.startAction("notebook", "sync", {}, undefined, 12);
+    expect(CallExtensionAction).toHaveBeenCalledWith("notebook", "sync", "{}", run.invocationId, 12);
+    pendingCalls.get(run.invocationId)?.("{}");
+    await run.result;
   });
 });

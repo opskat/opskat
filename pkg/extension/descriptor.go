@@ -94,6 +94,16 @@ func (d *Descriptor) validateAssetScope() error {
 	return nil
 }
 
+// injectedAssetParam is the one parameter name a tool may not declare: the asset
+// a tool runs against is the `exec` target, put into the call envelope by the
+// host (AssetRef) and read off the guest's ToolContext.
+//
+// It is refused rather than overridden because policy, approval and grant are all
+// keyed on the exec target: a tool that could be handed a different asset id in
+// its arguments would reach an asset the user never granted, and "sometimes the
+// flag wins" is not a rule anyone can audit.
+const injectedAssetParam = "asset_id"
+
 // supportedParamTypes is what the exec flag DSL can express. object is not
 // supported: a nested value goes through the command's --json escape hatch rather
 // than inventing a nested flag syntax.
@@ -131,6 +141,9 @@ func (d *Descriptor) validateTools() error {
 			return fmt.Errorf("describe(): tools[%q].parameters.properties must be an object", t.Name)
 		}
 		for name, raw := range props {
+			if name == injectedAssetParam {
+				return fmt.Errorf("describe(): tools[%q] declares parameter %q — the asset a tool runs against is the exec target, injected by the host; read it from the tool context instead of accepting it as a flag", t.Name, name)
+			}
 			prop, ok := raw.(map[string]any)
 			if !ok {
 				return fmt.Errorf("describe(): tools[%q].parameters.properties.%s must be an object", t.Name, name)

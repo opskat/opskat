@@ -17,7 +17,13 @@ export interface ExtActionRun {
 // once — `executeAction` alone can only await, which is enough for a one-shot
 // call and not enough for an upload queue.
 export interface ExtActionAPI extends ExtAPI {
-  startAction(extName: string, action: string, args: unknown, onEvent?: (e: ExtEvent) => void): ExtActionRun;
+  startAction(
+    extName: string,
+    action: string,
+    args: unknown,
+    onEvent?: (e: ExtEvent) => void,
+    assetId?: number
+  ): ExtActionRun;
 }
 
 // crypto.randomUUID is available in every WebView the app supports; a collision
@@ -36,13 +42,19 @@ interface ActionEventPayload {
 
 export function createExtensionAPI(): ExtActionAPI {
   const api: ExtActionAPI = {
-    async callTool(extName: string, tool: string, args: unknown): Promise<unknown> {
+    async callTool(extName: string, tool: string, args: unknown, assetId?: number): Promise<unknown> {
       const argsJSON = JSON.stringify(args ?? {});
-      const result = await CallExtensionTool(extName, tool, argsJSON);
+      const result = await CallExtensionTool(extName, tool, argsJSON, assetId ?? 0);
       return parseResult(result);
     },
 
-    startAction(extName: string, action: string, args: unknown, onEvent?: (e: ExtEvent) => void): ExtActionRun {
+    startAction(
+      extName: string,
+      action: string,
+      args: unknown,
+      onEvent?: (e: ExtEvent) => void,
+      assetId?: number
+    ): ExtActionRun {
       const invocationId = newInvocationId();
       let unsubscribe: (() => void) | undefined;
 
@@ -60,7 +72,7 @@ export function createExtensionAPI(): ExtActionAPI {
       const result = (async () => {
         try {
           const argsJSON = JSON.stringify(args ?? {});
-          return parseResult(await CallExtensionAction(extName, action, argsJSON, invocationId));
+          return parseResult(await CallExtensionAction(extName, action, argsJSON, invocationId, assetId ?? 0));
         } finally {
           unsubscribe?.();
         }
@@ -73,8 +85,14 @@ export function createExtensionAPI(): ExtActionAPI {
       };
     },
 
-    executeAction(extName: string, action: string, args: unknown, onEvent?: (e: ExtEvent) => void): Promise<unknown> {
-      return api.startAction(extName, action, args, onEvent).result;
+    executeAction(
+      extName: string,
+      action: string,
+      args: unknown,
+      onEvent?: (e: ExtEvent) => void,
+      assetId?: number
+    ): Promise<unknown> {
+      return api.startAction(extName, action, args, onEvent, assetId).result;
     },
   };
   return api;

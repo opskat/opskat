@@ -360,15 +360,28 @@ func RegisterDynamicExecutor(canonical string, exec ExecFunc, help string, canon
 // 而 ExecutorFor / RegisteredExecTypes 会跳过 exec == nil 的条目——
 // exec 对这些类型必须报"尚不支持"，不能查到一个 nil 函数再 panic。
 func RegisterHelpDoc(canonical, help string) {
+	if err := RegisterDynamicHelpDoc(canonical, help); err != nil {
+		panic(err.Error())
+	}
+}
+
+// RegisterDynamicHelpDoc 与 RegisterHelpDoc 写同一张表，只是把重复/非法注册报成错误
+// 而不是 panic——与 RegisterDynamicExecutor 同一理由，用在同一个地方：扩展提供的资产
+// 类型是用户在运行期启用/禁用的。
+//
+// 它的生产调用方是 internal/extreg 的"仅描述注册"（opsctl）：那个进程没有 WASM 运行时，
+// 执行要交回桌面端，但用法文档全部来自缓存的 describe() 数据，本来就该在本地答得出来。
+func RegisterDynamicHelpDoc(canonical, help string) error {
 	if canonical == "" || help == "" {
-		panic("permission: invalid help-doc registration")
+		return fmt.Errorf("permission: invalid help-doc registration")
 	}
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	if _, exists := execEntries[canonical]; exists {
-		panic(fmt.Sprintf("permission: duplicate help-doc registration %q", canonical))
+		return fmt.Errorf("permission: duplicate help-doc registration %q", canonical)
 	}
 	execEntries[canonical] = &execEntry{help: help}
+	return nil
 }
 
 // ExecutorFor 返回该资产类型的执行器。doc-only 条目（exec == nil）报 (nil, false)——

@@ -81,6 +81,28 @@ func (h *extensionHandler) DefaultPort() int { return 0 }
 // ExtensionName 让宿主侧在不认识具体类型的情况下回答"这个类型归谁"。
 func (h *extensionHandler) ExtensionName() string { return h.spec.ExtensionName }
 
+type extensionOwned interface {
+	ExtensionName() string
+}
+
+// ExtensionOwnerOf 回答"这个资产类型归哪个扩展"。内置类型返回 ("", false)——注册表
+// 拒绝让扩展占用一个已存在的类型名（RegisterExtensionType 冲突即失败），所以本函数
+// 同时也是"这个类型必须交给扩展处理吗"的答案。
+//
+// 它是一个注册表查询而不是调用方各自维护的一张 类型→扩展 表：opsctl 曾经为了给 exec
+// 选路自己扫一遍扩展目录再拼一张，那张表与本注册表是两个会分叉的真相来源。
+func ExtensionOwnerOf(assetType string) (string, bool) {
+	h, ok := Get(assetType)
+	if !ok {
+		return "", false
+	}
+	owner, ok := h.(extensionOwned)
+	if !ok {
+		return "", false
+	}
+	return owner.ExtensionName(), true
+}
+
 // SafeView 返回去掉 format:"password" 字段之后的配置。配置解析失败原样报空 map，
 // 与其他类型的 SafeView 一致（该方法没有 error 返回位）。
 func (h *extensionHandler) SafeView(a *asset_entity.Asset) map[string]any {

@@ -120,6 +120,12 @@ func SnippetSeed(s Seed) { snippetSeeds = append(snippetSeeds, s) }
 // declaration; they all mutate the entry that dispatch and describe already share.
 type ToolReg[T any] struct{ e *toolEntry }
 
+// injectedAssetParam is the parameter name a tool may not declare: the asset a
+// tool runs against is the `exec` target the host puts in the call envelope, and
+// the handler reads it from ctx.Asset. Accepting it as a flag too would give the
+// caller a second asset to name — one no policy check ever saw.
+const injectedAssetParam = "asset_id"
+
 // Tool registers a tool and reflects its parameter schema from T.
 //
 // T must be a struct whose fields the exec flag DSL can express (string, bool,
@@ -133,9 +139,13 @@ func Tool[T any](name string, handler func(ctx *ToolContext, args T) (any, error
 	if _, dup := tools[name]; dup {
 		panic(fmt.Sprintf("opskat: tool %q is already registered", name))
 	}
+	schema := reflectSchema(reflect.TypeFor[T](), fmt.Sprintf("tool %q arguments", name), schemaModeParams)
+	if _, declared := schema["properties"].(map[string]any)[injectedAssetParam]; declared {
+		panic(fmt.Sprintf("opskat: tool %q declares parameter %q — the asset a tool runs against is the exec target, injected by the host; read ctx.Asset instead", name, injectedAssetParam))
+	}
 	entry := &toolEntry{
 		name:   name,
-		schema: reflectSchema(reflect.TypeFor[T](), fmt.Sprintf("tool %q arguments", name), schemaModeParams),
+		schema: schema,
 		invoke: func(ctx *ToolContext) (any, error) {
 			args, err := decodeArgs[T](ctx.Args)
 			if err != nil {

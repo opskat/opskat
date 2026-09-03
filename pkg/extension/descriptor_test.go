@@ -76,6 +76,13 @@ func TestParseDescriptorTools(t *testing.T) {
 			So(len(d.Tools), ShouldEqual, 3)
 		})
 
+		Convey("a tool that declares the injected asset as a flag", func() {
+			_, err := ParseDescriptor(desc(`"tools":[{"name":"t","policyAction":"read","parameters":{"type":"object","properties":{"asset_id":{"type":"integer"}}}}]`))
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "asset_id")
+			So(err.Error(), ShouldContainSubstring, "exec target")
+		})
+
 		Convey("a tool with no policy action", func() {
 			_, err := ParseDescriptor(desc(`"tools":[{"name":"t","parameters":{"type":"object","properties":{}}}]`))
 			So(err, ShouldNotBeNil)

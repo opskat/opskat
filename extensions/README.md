@@ -105,7 +105,6 @@ renames the flag; there is no second declaration to keep in step.
 
 ```go
 type putArgs struct {
-    AssetID int64    `json:"asset_id" desc:"ID of the notebook asset this call runs against"`
     Key     string   `json:"key" desc:"Key of the note to create or overwrite"`
     Tags    []string `json:"tags,omitempty" desc:"Optional labels"`
 }
@@ -121,12 +120,29 @@ type putArgs struct {
   keys, and `format:"password"` marks a secret the host encrypts, `enum:"a,b"` renders
   a select.
 
-### Tools have no ambient asset
+### The asset comes from the host, not from the arguments
 
-A tool call carries only its arguments. If a tool needs the asset it is running
-against — its config, its notebook name — declare an `asset_id` parameter and read the
-config with `opskat.GetAssetConfig(assetID)`, as `notebook` does. Say so in `SKILL.md`
-too; the model has to pass it.
+`exec <asset> -- <tool>` already names an asset, so the host puts it in the call
+envelope and the handler reads it off the context:
+
+```go
+func listNotes(ctx *opskat.ToolContext, args listArgs) (any, error) {
+    raw, err := ctx.AssetConfig() // config of the exec target, passwords decrypted
+    ...                           // ctx.Asset is {ID, Name, Type}
+}
+```
+
+A tool **may not declare an `asset_id` parameter**: registration panics and the host
+refuses the `describe()` answer. Policy, approval and grant are all keyed on the exec
+target, so a second asset id supplied in the arguments would reach an asset the user
+never granted — there is no "the flag wins" case to reason about.
+
+`ctx.AssetConfig()` fails when the call is not scoped to an asset. That happens for
+the one caller that legitimately has none: the asset configuration form runs an
+extension **action** (`test_connection`) on a configuration that has not been saved
+yet. An extension page that *does* work on a saved asset passes its `assetId` prop —
+`api.callTool(ext, tool, args, assetId)` / `api.executeAction(ext, action, args,
+onEvent, assetId)` — and the handler reads it from `ctx.Asset` the same way.
 
 ### The policy face
 
@@ -175,7 +191,7 @@ Then drive it like any other asset type:
 
 ```bash
 opsctl help <asset>                                     # SKILL.md + the parameter table
-opsctl exec <asset> -- note_list --asset_id=<id>
+opsctl exec <asset> -- note_list
 ```
 
 ## Testing
@@ -184,9 +200,10 @@ opsctl exec <asset> -- note_list --asset_id=<id>
 a test calls a tool the way the WASM entry point does — no wazero, no build step:
 
 ```go
-host := opskat.NewTestHost(opskat.WithAssetConfig(7, notebookConfig{Notebook: "team"}))
+asset := opskat.Asset{ID: 7, Name: "team runbooks", Type: "notebook"}
+host := opskat.NewTestHost(opskat.WithAssetConfig(asset.ID, notebookConfig{Notebook: "team"}))
 defer host.Close()
-result, err := host.CallTool("note_put", putArgs{AssetID: 7, Key: "k", Content: "v"})
+result, err := host.CallTool(asset, "note_put", putArgs{Key: "k", Content: "v"})
 ```
 
 `WithMockHTTP`, `WithMockTCP` and `WithActionCancel` stand in for the other host
