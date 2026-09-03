@@ -49,6 +49,14 @@ describe("resultRowsToJson", () => {
     expect(parsed[0].name).not.toContain("…");
   });
 
+  it("keeps every column of a pending new row, whose unfilled cells are undefined", () => {
+    // JSON cannot represent undefined — without a fallback the column disappears from the
+    // document entirely, so the JSON view would not show what the grid shows.
+    expect(JSON.parse(resultRowsToJson([{}], columns))).toEqual([{ id: "", name: "" }]);
+    // A persisted NULL is JSON-representable and must stay null, not become "".
+    expect(JSON.parse(resultRowsToJson([{ id: null, name: null }], columns))).toEqual([{ id: null, name: null }]);
+  });
+
   it("renders an empty result as an empty array", () => {
     expect(resultRowsToJson([], columns)).toBe("[]");
   });

@@ -151,6 +151,18 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
     setPageInput(String(page + 1));
   }, [page]);
 
+  // 必须是稳定引用:网格在这两个回调的引用变化时会重置选中态,内联箭头会让每次
+  // 父组件 re-render 都把刚选中的单元格清掉,行详情面板永远停在空态。
+  const handleSelectedCellChange = useCallback((cell: { rowIdx: number } | null) => {
+    setDetailRowIdx(cell?.rowIdx ?? null);
+  }, []);
+
+  // 网格选中单元格时会先发 onSelectedCellChange 再发 onSelectedRowsChange([]),
+  // 无条件接管会把刚设好的当前行抹掉 —— 只有真的选了整行才接管。
+  const handleSelectedRowsChange = useCallback((rowIdxs: number[]) => {
+    if (rowIdxs.length > 0) setDetailRowIdx(rowIdxs.length === 1 ? rowIdxs[0] : null);
+  }, []);
+
   const isDangerousSQL = useCallback((text: string) => {
     const upper = text.toUpperCase().replace(/\s+/g, " ").trim();
     return /^(DELETE|DROP|TRUNCATE|ALTER)\b/.test(upper);
@@ -591,8 +603,8 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
                 error={error ?? undefined}
                 showRowNumber
                 rowNumberOffset={page * pageSize}
-                onSelectedCellChange={(cell) => setDetailRowIdx(cell?.rowIdx ?? null)}
-                onSelectedRowsChange={(idxs) => setDetailRowIdx(idxs.length === 1 ? idxs[0] : null)}
+                onSelectedCellChange={handleSelectedCellChange}
+                onSelectedRowsChange={handleSelectedRowsChange}
               />
             )}
           </div>

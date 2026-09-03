@@ -750,6 +750,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const handleConfirmDelete = useCallback(async () => {
     if (!assetId || !deletePreview) return;
     setDeleting(true);
+    let succeeded = 0;
     let affectedTotal = 0;
     let zeroAffected = 0;
     let errorMsg = "";
@@ -760,6 +761,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         const result = await ExecuteSQL(assetId, sql, database);
         const parsed: SQLResult = JSON.parse(result);
         const affected = Number(parsed.affected_rows ?? 0);
+        succeeded++;
         if (affected > 0) affectedTotal += affected;
         else zeroAffected++;
       } catch (e) {
@@ -770,8 +772,9 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     setDeleting(false);
     setDeletePreview(null);
 
-    if (affectedTotal > 0) {
-      notifySuccess(t("query.deleteRecordSuccess", { affected: affectedTotal }));
+    if (affectedTotal > 0) notifySuccess(t("query.deleteRecordSuccess", { affected: affectedTotal }));
+    // 只要有语句执行成功就刷新:命中 0 行也说明服务端数据与网格已经不一致。
+    if (succeeded > 0) {
       setEdits(new Map());
       setNewRows([]);
       await fetchData(page);

@@ -2540,6 +2540,8 @@
     "dropTableConfirmDesc": "确定删除以下 {{count}} 张表？此操作无法撤销，将永久删除表结构与全部数据。",
     "truncateTableConfirmTitle": "确认清空表？",
     "truncateTableConfirmDesc": "确定清空以下 {{count}} 张表？将永久删除表中的所有数据，但保留表结构。",
+    "dropTablesSuccess": "已删除 {{count}} 张表",
+    "truncateTablesSuccess": "已清空 {{count}} 张表",
     "dropTableSuccess": "已删除表 {{table}}",
     "truncateTableSuccess": "已清空表 {{table}}",
     "editValue": "编辑",

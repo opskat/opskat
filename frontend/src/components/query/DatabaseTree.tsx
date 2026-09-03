@@ -211,7 +211,25 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
     [visibleTableRefs]
   );
 
-  // 折叠、筛选、刷新都会改变可见集合;不再可见的节点从选中集里剔除。
+  // 离开树的节点要真的从选中集里删掉。只在渲染时过滤是不够的 —— 重新展开或清掉筛选
+  // 会把它们原样复活,之后的批量清空 / 删除就会悄悄多带上几张表。
+
+  /** 改筛选:按改之前树上可见的节点剪枝,用户看得见的留下,被筛掉的不再回来。 */
+  const changeFilter = useCallback(
+    (value: string) => {
+      setSelectedKeys((prev) => prev.filter((key) => visibleKeys.includes(key)));
+      setFilter(value);
+    },
+    [visibleKeys]
+  );
+
+  /** 折叠库 / 折叠表目录 / 刷新表:该库的节点整批离开树。 */
+  const dropDatabaseFromSelection = useCallback((database: string) => {
+    const prefix = `${database}.`;
+    setSelectedKeys((prev) => prev.filter((key) => !key.startsWith(prefix)));
+  }, []);
+
+  // 选中集按树的显示顺序排列 —— 批量操作照此顺序执行。
   const selectedVisibleKeys = useMemo(
     () => visibleKeys.filter((key) => selectedKeys.includes(key)),
     [selectedKeys, visibleKeys]
@@ -285,11 +303,15 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
     }
 
     if (succeeded.length > 0) {
+      // 批量时报成功的张数(名字列表在确认框里刚看过);单张仍报表名。
       notifySuccess(
-        t(type === "drop" ? "query.dropTableSuccess" : "query.truncateTableSuccess", {
-          table: succeeded.map((ref) => `${ref.database}.${ref.table}`).join(", "),
-          count: succeeded.length,
-        })
+        succeeded.length > 1
+          ? t(type === "drop" ? "query.dropTablesSuccess" : "query.truncateTablesSuccess", {
+              count: succeeded.length,
+            })
+          : t(type === "drop" ? "query.dropTableSuccess" : "query.truncateTableSuccess", {
+              table: succeeded[0].table,
+            })
       );
       if (type === "drop") {
         const droppedKeys = succeeded.map((ref) => tableKey(ref.database, ref.table));
@@ -398,10 +420,8 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
             size="icon"
             className="h-6 w-6"
             onClick={() => {
-              setShowFilter((v) => {
-                if (v) setFilter("");
-                return !v;
-              });
+              if (showFilter) changeFilter("");
+              setShowFilter((v) => !v);
             }}
             title={t("query.filterTables")}
           >
@@ -452,10 +472,10 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
               className="h-7 pl-7 text-xs"
               placeholder={t("query.filterTables")}
               value={filter}
-              onChange={(e) => setFilter(e.target.value)}
+              onChange={(e) => changeFilter(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Escape") {
-                  setFilter("");
+                  changeFilter("");
                   setShowFilter(false);
                 }
               }}
@@ -501,6 +521,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                         className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
                         onClick={() => {
                           if (filterLower) return;
+                          if (isExpanded) dropDatabaseFromSelection(db);
                           toggleDbExpand(tabId, db);
                         }}
                       >
@@ -528,7 +549,12 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                         {t("query.addTable")}
                       </ContextMenuItem>
                       <ContextMenuSeparator />
-                      <ContextMenuItem onClick={() => refreshTables(tabId, db)}>
+                      <ContextMenuItem
+                        onClick={() => {
+                          dropDatabaseFromSelection(db);
+                          refreshTables(tabId, db);
+                        }}
+                      >
                         <RefreshCw className="h-3.5 w-3.5" />
                         {t("query.refreshTables")}
                       </ContextMenuItem>
@@ -549,6 +575,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                             className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
                             onClick={() => {
                               if (filterLower) return;
+                              if (isTablesOpen) dropDatabaseFromSelection(db);
                               setOpenTables((prev) => ({ ...prev, [db]: !(prev[db] ?? false) }));
                             }}
                           >

@@ -1,3 +1,5 @@
+import { cellValueToText } from "./cellValue";
+
 /**
  * 把结果行序列化成展示用 JSON。
  *
@@ -15,7 +17,10 @@ export function resultRowsToJson(
     const document: Record<string, unknown> = {};
     for (const column of columns) {
       const key = `${rowIdx}:${column}`;
-      document[column] = edits?.has(key) ? edits.get(key) : row[column];
+      const value = edits?.has(key) ? edits.get(key) : row[column];
+      // 尚未填写的新增行单元格是 undefined,JSON 表示不了它 —— JSON.stringify 会把整个键
+      // 丢掉,列就凭空少了一个。这类值退回 cellValueToText(与网格同一套文本规则,只是不截断)。
+      document[column] = value === undefined ? cellValueToText(value) : value;
     }
     return document;
   });

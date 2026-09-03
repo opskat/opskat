@@ -294,6 +294,40 @@ describe("DatabaseTree — table multi-selection", () => {
     fireEvent.change(screen.getByPlaceholderText("query.filterTables"), { target: { value: "orders" } });
 
     expect(selectedTables()).toEqual(["appdb.orders"]);
+
+    // Dropped means dropped: clearing the filter must not resurrect `users`, or a later
+    // batch action would silently cover a table the user believes they deselected.
+    fireEvent.change(screen.getByPlaceholderText("query.filterTables"), { target: { value: "" } });
+
+    expect(selectedTables()).toEqual(["appdb.orders"]);
+  });
+
+  it("collapsing a database drops its tables from the selection", () => {
+    render(<DatabaseTree tabId="query-1" />);
+    fireEvent.click(node("users"));
+    fireEvent.click(node("logs_2024"), { ctrlKey: true });
+
+    fireEvent.click(node("appdb"));
+    fireEvent.click(node("appdb"));
+
+    expect(selectedTables()).toEqual(["archivedb.logs_2024"]);
+  });
+
+  it("refreshing a database's tables drops its tables from the selection", async () => {
+    // The reload brings the very same tables back, so a selection that merely hid
+    // itself while loading would reappear here.
+    vi.mocked(ExecuteSQL).mockResolvedValue(
+      JSON.stringify({ rows: [{ name: "users" }, { name: "orders" }, { name: "logs" }] })
+    );
+    render(<DatabaseTree tabId="query-1" />);
+    fireEvent.click(node("users"));
+    fireEvent.click(node("logs_2024"), { ctrlKey: true });
+
+    fireEvent.contextMenu(node("appdb"));
+    fireEvent.click(screen.getByText("query.refreshTables"));
+
+    await waitFor(() => expect(node("users")).toBeTruthy());
+    expect(selectedTables()).toEqual(["archivedb.logs_2024"]);
   });
 
   it("opens every selected table from the context menu", () => {

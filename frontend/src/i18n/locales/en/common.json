@@ -2540,6 +2540,8 @@
     "dropTableConfirmDesc": "Drop the {{count}} tables listed below? This cannot be undone — both the table definitions and all data will be permanently removed.",
     "truncateTableConfirmTitle": "Confirm truncate",
     "truncateTableConfirmDesc": "Truncate the {{count}} tables listed below? All rows will be permanently removed, but the table structures will be kept.",
+    "dropTablesSuccess": "Dropped {{count}} tables",
+    "truncateTablesSuccess": "Truncated {{count}} tables",
     "dropTableSuccess": "Table {{table}} dropped",
     "truncateTableSuccess": "Table {{table}} truncated",
     "editValue": "Edit",
