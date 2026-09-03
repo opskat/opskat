@@ -2,7 +2,7 @@ import { beforeEach, describe, it, expect, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryResultTable } from "@/components/query/QueryResultTable";
-import { cellValueToText } from "@/lib/cellValue";
+import { CELL_DISPLAY_MAX_CHARS, cellValueToDisplayText, cellValueToText } from "@/lib/cellValue";
 
 const { toastError, toastSuccess } = vi.hoisted(() => ({
   toastError: vi.fn(),
@@ -285,17 +285,24 @@ describe("QueryResultTable — cell context actions", () => {
     expect(idCell.style.width).toBe("160px");
     expect(idCell.style.minWidth).toBe("160px");
     expect(idCell.style.maxWidth).toBe("160px");
-    expect(idCell.style.left).toBe("0px");
-    expect(idHeader.style.left).toBe("0px");
+    expect(idCell.style.left).toBe("44px");
+    expect(idHeader.style.left).toBe("44px");
     expect(nameHeader).not.toHaveClass("sticky");
     expect(nameHeader.style.left).toBe("");
   });
 
-  it("does not render the row number column even when requested", () => {
+  it("renders the row number gutter only when it is requested", () => {
+    render(<QueryResultTable columns={columns} rows={rows} editable />);
+    expect(document.querySelector("[data-row-header-key]")).toBeNull();
+
+    cleanup();
     render(<QueryResultTable columns={columns} rows={rows} editable showRowNumber rowNumberOffset={20} />);
 
-    expect(screen.queryByText("#")).not.toBeInTheDocument();
-    expect(document.querySelector("[data-row-header-key]")).toBeNull();
+    expect(document.querySelectorAll("[data-row-header-key]")).toHaveLength(rows.length);
+    expect(Array.from(document.querySelectorAll("[data-row-header-key]")).map((cell) => cell.textContent)).toEqual([
+      "21",
+      "22",
+    ]);
     expect(
       Array.from(document.querySelectorAll("[data-column-header-key]")).map((header) => header.textContent)
     ).toEqual(expect.arrayContaining(["id", "name"]));
@@ -315,7 +322,7 @@ describe("QueryResultTable — cell context actions", () => {
 
     expect(idCell).toHaveClass("sticky");
     expect(idCell).not.toHaveClass("relative");
-    expect(idCell.style.left).toBe("0px");
+    expect(idCell.style.left).toBe("44px");
   });
 
   it("moves only frozen columns to the left frozen area", async () => {
@@ -338,11 +345,11 @@ describe("QueryResultTable — cell context actions", () => {
     const cCell = document.querySelector('[data-cell-key="0:c"]') as HTMLElement;
 
     expect(aCell).toHaveClass("sticky");
-    expect(aCell.style.left).toBe("0px");
+    expect(aCell.style.left).toBe("44px");
     expect(bCell).not.toHaveClass("sticky");
     expect(bCell.style.left).toBe("");
     expect(cCell).toHaveClass("sticky");
-    expect(cCell.style.left).toBe("160px");
+    expect(cCell.style.left).toBe("204px");
   });
 
   it("moves the second column to the left frozen area without freezing the first", async () => {
@@ -379,13 +386,11 @@ describe("QueryResultTable — cell context actions", () => {
     // name IS frozen and moves to the left frozen area.
     expect(nameHeader).toHaveClass("sticky");
     expect(nameCell).toHaveClass("sticky");
-    expect(nameHeader.style.left).toBe("0px");
-    expect(nameCell.style.left).toBe("0px");
+    expect(nameHeader.style.left).toBe("44px");
+    expect(nameCell.style.left).toBe("44px");
 
     // sex is NOT frozen
     expect(sexCell).not.toHaveClass("sticky");
-
-    expect(document.querySelector("[data-row-header-key]")).toBeNull();
   });
 
   it("uses opaque selected backgrounds for frozen selected columns", async () => {
@@ -693,12 +698,12 @@ describe("QueryResultTable — cell context actions", () => {
 
   it("delete record invokes the delete callback with the current row", async () => {
     const user = userEvent.setup();
-    const onDeleteRow = vi.fn();
-    openMenu({ onDeleteRow });
+    const onDeleteRows = vi.fn();
+    openMenu({ onDeleteRows });
 
     await user.click(screen.getByText("query.deleteRecord"));
 
-    expect(onDeleteRow).toHaveBeenCalledWith(1);
+    expect(onDeleteRows).toHaveBeenCalledWith([1]);
   });
 
   it("generate UUID creates an edit for the current cell", async () => {
@@ -754,5 +759,320 @@ describe("QueryResultTable — cell context actions", () => {
 
     rerender(<QueryResultTable columns={columns} rows={rows} rowDensity="comfortable" />);
     expect(document.querySelector('[data-cell-key="0:name"]')).toHaveClass("py-2");
+  });
+});
+
+describe("cellValueToDisplayText", () => {
+  it("passes short values through unchanged", () => {
+    expect(cellValueToDisplayText("hello")).toBe("hello");
+    expect(cellValueToDisplayText(42)).toBe("42");
+    expect(cellValueToDisplayText(null)).toBe("");
+    expect(cellValueToDisplayText({ a: 1 })).toBe('{"a":1}');
+  });
+
+  it("caps a value at the display limit and marks the cut", () => {
+    const out = cellValueToDisplayText("x".repeat(200_000));
+    expect(out).toHaveLength(CELL_DISPLAY_MAX_CHARS + 1);
+    expect(out.endsWith("…")).toBe(true);
+  });
+
+  it("caps stringified objects as well", () => {
+    const out = cellValueToDisplayText({ blob: "x".repeat(200_000) });
+    expect(out).toHaveLength(CELL_DISPLAY_MAX_CHARS + 1);
+  });
+
+  it("keeps a value exactly at the limit intact", () => {
+    const exact = "x".repeat(CELL_DISPLAY_MAX_CHARS);
+    expect(cellValueToDisplayText(exact)).toBe(exact);
+  });
+});
+
+describe("QueryResultTable — very large cell values", () => {
+  const big = "x".repeat(200_000);
+  const columns = ["id", "payload"];
+  const rows = [
+    { id: 1, payload: big },
+    { id: 2, payload: "small" },
+  ];
+
+  it("puts only a bounded slice of the value into the cell DOM", () => {
+    render(<QueryResultTable columns={columns} rows={rows} />);
+    const cell = document.querySelector('[data-cell-key="0:payload"]') as HTMLElement;
+    expect(cell.textContent!.length).toBeLessThanOrEqual(CELL_DISPLAY_MAX_CHARS + 1);
+  });
+
+  it("bounds the cell tooltip too", () => {
+    render(<QueryResultTable columns={columns} rows={rows} />);
+    const cell = document.querySelector('[data-cell-key="0:payload"]') as HTMLElement;
+    expect(cell.getAttribute("title")!.length).toBeLessThanOrEqual(CELL_DISPLAY_MAX_CHARS + 1);
+  });
+
+  it("still copies the untruncated value", () => {
+    render(<QueryResultTable columns={columns} rows={rows} editable />);
+    fireEvent.contextMenu(document.querySelector('[data-cell-key="0:payload"]') as HTMLElement, {
+      clientX: 40,
+      clientY: 50,
+    });
+    fireEvent.click(screen.getByText("query.copyValue"));
+
+    expect(writeText).toHaveBeenCalledWith(big);
+  });
+
+  it("keeps the filter popover labels bounded", async () => {
+    const user = userEvent.setup();
+    render(<QueryResultTable columns={columns} rows={rows} enableColumnFilter />);
+    await user.click(screen.getAllByTitle("query.filterColumn")[1]);
+
+    const popover = await screen.findByRole("dialog");
+    for (const label of popover.querySelectorAll("label")) {
+      expect(label.textContent!.length).toBeLessThanOrEqual(CELL_DISPLAY_MAX_CHARS + 20);
+    }
+  });
+
+  it("still edits against the untruncated value", async () => {
+    const onSetCellValue = vi.fn();
+    render(<QueryResultTable columns={columns} rows={rows} editable onSetCellValue={onSetCellValue} />);
+    const cell = document.querySelector('[data-cell-key="0:payload"]') as HTMLElement;
+    fireEvent.doubleClick(cell);
+
+    const input = cell.querySelector("input") as HTMLInputElement;
+    expect(input.value).toBe(big);
+  });
+});
+
+describe("QueryResultTable — row selection", () => {
+  const columns = ["id", "name"];
+  const rows = [
+    { id: 1, name: "alice" },
+    { id: 2, name: "bob" },
+    { id: 3, name: "carol" },
+  ];
+
+  beforeEach(() => cleanup());
+
+  /** Gutter cell of the row that started at `origIdx` in `rows`. */
+  const gutter = (origIdx: number) => document.querySelector(`[data-row-header-key="${origIdx}"]`) as HTMLElement;
+  const cornerCell = () => document.querySelector("[data-row-header-all]") as HTMLElement;
+  const selectedOrigIdxs = () =>
+    Array.from(document.querySelectorAll('[data-row-header-key][data-row-selected="true"]')).map((cell) =>
+      Number(cell.getAttribute("data-row-header-key"))
+    );
+
+  function renderGrid(props: Partial<React.ComponentProps<typeof QueryResultTable>> = {}) {
+    render(<QueryResultTable columns={columns} rows={rows} showRowNumber {...props} />);
+  }
+
+  it("numbers rows by display position so paging stays continuous", () => {
+    renderGrid({ rowNumberOffset: 100 });
+
+    expect(Array.from(document.querySelectorAll("[data-row-header-key]")).map((c) => c.textContent)).toEqual([
+      "101",
+      "102",
+      "103",
+    ]);
+  });
+
+  it("clicking a row number selects that row and drops any cell selection", () => {
+    const onSelectedCellChange = vi.fn();
+    renderGrid({ onSelectedCellChange });
+    fireEvent.click(document.querySelector('[data-cell-key="0:name"]') as HTMLElement);
+    onSelectedCellChange.mockClear();
+
+    fireEvent.click(gutter(1));
+
+    expect(selectedOrigIdxs()).toEqual([1]);
+    expect(document.querySelectorAll('[data-cell-key="1:id"][data-row-selected="true"]')).toHaveLength(1);
+    expect(onSelectedCellChange).toHaveBeenCalledWith(null);
+  });
+
+  it("ctrl-clicking toggles individual rows in and out of the selection", () => {
+    renderGrid();
+
+    fireEvent.click(gutter(0));
+    fireEvent.click(gutter(2), { ctrlKey: true });
+    expect(selectedOrigIdxs()).toEqual([0, 2]);
+
+    fireEvent.click(gutter(0), { ctrlKey: true });
+    expect(selectedOrigIdxs()).toEqual([2]);
+  });
+
+  it("shift-clicking selects the range in display order, not in row order", async () => {
+    const user = userEvent.setup();
+    // Names permute the rows under sort, so a display-order range and a row-order
+    // range cover different sets — a reversal alone would not tell them apart.
+    cleanup();
+    render(
+      <QueryResultTable
+        columns={columns}
+        rows={[
+          { id: 1, name: "carol" },
+          { id: 2, name: "alice" },
+          { id: 3, name: "bob" },
+        ]}
+        showRowNumber
+      />
+    );
+    fireEvent.click(screen.getByTitle("query.columnActions:name"));
+    await user.click(screen.getByText("query.sortAsc"));
+
+    // Display order is now [1, 2, 0]. Anchoring on the first displayed row and
+    // extending to the last covers every row; a row-order range would stop at 1.
+    fireEvent.click(gutter(1));
+    fireEvent.click(gutter(0), { shiftKey: true });
+
+    expect(selectedOrigIdxs()).toEqual([1, 2, 0]);
+  });
+
+  it("the corner cell selects every row on the page and clears it again", () => {
+    const onSelectedRowsChange = vi.fn();
+    renderGrid({ onSelectedRowsChange });
+
+    fireEvent.click(cornerCell());
+    expect(selectedOrigIdxs()).toEqual([0, 1, 2]);
+    expect(onSelectedRowsChange).toHaveBeenLastCalledWith([0, 1, 2]);
+
+    fireEvent.click(cornerCell());
+    expect(selectedOrigIdxs()).toEqual([]);
+    expect(onSelectedRowsChange).toHaveBeenLastCalledWith([]);
+  });
+
+  it("row selection and column selection stay mutually exclusive", () => {
+    renderGrid();
+
+    fireEvent.click(gutter(0));
+    expect(selectedOrigIdxs()).toEqual([0]);
+
+    fireEvent.click(screen.getByText("name"));
+    expect(selectedOrigIdxs()).toEqual([]);
+    expect(document.querySelectorAll('[data-column-selected="name"]').length).toBeGreaterThan(0);
+
+    fireEvent.click(gutter(0));
+    expect(selectedOrigIdxs()).toEqual([0]);
+    expect(document.querySelector('[data-column-selected="name"]')).toBeNull();
+  });
+
+  it("Escape clears the row selection", () => {
+    const onSelectedRowsChange = vi.fn();
+    renderGrid({ onSelectedRowsChange });
+    fireEvent.click(gutter(0));
+    fireEvent.click(gutter(2), { ctrlKey: true });
+
+    fireEvent.keyDown(document.querySelector(".query-table-scroll") as HTMLElement, { key: "Escape" });
+
+    expect(selectedOrigIdxs()).toEqual([]);
+    expect(onSelectedRowsChange).toHaveBeenLastCalledWith([]);
+  });
+
+  it("changing the row set clears the row selection", () => {
+    const onSelectedRowsChange = vi.fn();
+    const { rerender } = render(
+      <QueryResultTable columns={columns} rows={rows} showRowNumber onSelectedRowsChange={onSelectedRowsChange} />
+    );
+    fireEvent.click(gutter(0));
+    expect(selectedOrigIdxs()).toEqual([0]);
+
+    rerender(
+      <QueryResultTable
+        columns={columns}
+        rows={[{ id: 9, name: "dave" }]}
+        showRowNumber
+        onSelectedRowsChange={onSelectedRowsChange}
+      />
+    );
+
+    expect(selectedOrigIdxs()).toEqual([]);
+    expect(onSelectedRowsChange).toHaveBeenLastCalledWith([]);
+  });
+
+  it("widens the gutter so large page offsets are not clipped", () => {
+    renderGrid({ rowNumberOffset: 1_000_000 });
+
+    expect(cornerCell().style.width).toBe("80px");
+    expect(gutter(0).style.width).toBe("80px");
+  });
+});
+
+describe("QueryResultTable — row context menu", () => {
+  const columns = ["id", "name"];
+  const rows = [
+    { id: 1, name: "alice" },
+    { id: 2, name: "bob" },
+    { id: 3, name: "carol" },
+  ];
+
+  beforeEach(() => cleanup());
+
+  const gutter = (origIdx: number) => document.querySelector(`[data-row-header-key="${origIdx}"]`) as HTMLElement;
+  const selectedOrigIdxs = () =>
+    Array.from(document.querySelectorAll('[data-row-header-key][data-row-selected="true"]')).map((cell) =>
+      Number(cell.getAttribute("data-row-header-key"))
+    );
+
+  function renderGrid(props: Partial<React.ComponentProps<typeof QueryResultTable>> = {}) {
+    render(<QueryResultTable columns={columns} rows={rows} editable showRowNumber {...props} />);
+  }
+
+  it("right-clicking inside the selection acts on every selected row", async () => {
+    const user = userEvent.setup();
+    const onCopyAs = vi.fn();
+    renderGrid({ onCopyAs });
+    fireEvent.click(gutter(0));
+    fireEvent.click(gutter(2), { ctrlKey: true });
+
+    fireEvent.contextMenu(gutter(2), { clientX: 20, clientY: 40 });
+    await user.hover(screen.getByText("query.copyAs"));
+    await user.click(screen.getByText("query.copyAsInsert"));
+
+    expect(onCopyAs).toHaveBeenCalledTimes(1);
+    expect(onCopyAs.mock.calls[0][1].selectedRowIndices).toEqual([0, 2]);
+  });
+
+  it("right-clicking outside the selection resets it to that row first", () => {
+    const onSelectedRowsChange = vi.fn();
+    renderGrid({ onSelectedRowsChange });
+    fireEvent.click(gutter(0));
+
+    fireEvent.contextMenu(gutter(2), { clientX: 20, clientY: 40 });
+
+    expect(selectedOrigIdxs()).toEqual([2]);
+    expect(onSelectedRowsChange).toHaveBeenLastCalledWith([2]);
+  });
+
+  it("deletes the whole selection through onDeleteRows", async () => {
+    const user = userEvent.setup();
+    const onDeleteRows = vi.fn();
+    renderGrid({ onDeleteRows });
+    fireEvent.click(gutter(0));
+    fireEvent.click(gutter(2), { ctrlKey: true });
+
+    fireEvent.contextMenu(gutter(2), { clientX: 20, clientY: 40 });
+    await user.click(screen.getByText("query.deleteRecords"));
+
+    expect(onDeleteRows).toHaveBeenCalledWith([0, 2]);
+  });
+
+  it("deletes a single right-clicked row when nothing is selected", async () => {
+    const user = userEvent.setup();
+    const onDeleteRows = vi.fn();
+    renderGrid({ onDeleteRows });
+
+    fireEvent.contextMenu(gutter(1), { clientX: 20, clientY: 40 });
+    await user.click(screen.getByText("query.deleteRecord"));
+
+    expect(onDeleteRows).toHaveBeenCalledWith([1]);
+  });
+
+  it("still deletes from the cell context menu", async () => {
+    const user = userEvent.setup();
+    const onDeleteRows = vi.fn();
+    renderGrid({ onDeleteRows });
+
+    fireEvent.contextMenu(document.querySelector('[data-cell-key="1:name"]') as HTMLElement, {
+      clientX: 20,
+      clientY: 40,
+    });
+    await user.click(screen.getByText("query.deleteRecord"));
+
+    expect(onDeleteRows).toHaveBeenCalledWith([1]);
   });
 });

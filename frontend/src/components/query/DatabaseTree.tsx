@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
@@ -53,6 +53,15 @@ interface SchemaGroup {
   schema: string;
   schemaMatch: boolean;
   tables: TableNode[];
+}
+
+interface TableRef {
+  database: string;
+  table: string;
+}
+
+function tableKey(database: string, table: string): string {
+  return `${database}.${table}`;
 }
 
 interface VisibleDb {
@@ -117,8 +126,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const [structureTarget, setStructureTarget] = useState<{ db: string; table: string } | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
     type: "drop" | "truncate";
-    database: string;
-    table: string;
+    targets: TableRef[];
   } | null>(null);
   const [executingAction, setExecutingAction] = useState(false);
 
@@ -130,7 +138,9 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const dbState = dbStates[tabId];
   const [filter, setFilter] = useState("");
   const [showFilter, setShowFilter] = useState(false);
-  const [selected, setSelected] = useState<{ db: string; table: string } | null>(null);
+  // 选中集用 "db.table" 作键;顺序即用户可见的树顺序,批量操作照此执行。
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const selectionAnchorRef = useRef<string | null>(null);
   const [openTables, setOpenTables] = useState<Record<string, boolean>>({});
 
   // Auto-load only when there's nothing cached. Restored tabs come in with
@@ -180,47 +190,169 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
     return out;
   }, [dbState, driver, filterLower]);
 
+  // 树上此刻真正可见的表节点,顺序与渲染顺序一致 —— Shift 取区间和筛选后剪枝都以它为准。
+  const visibleTableRefs = useMemo(() => {
+    const refs: TableRef[] = [];
+    for (const { db, tables, schemas } of visibleDbs) {
+      const expanded = filterLower ? true : (dbState?.expandedDbs ?? []).includes(db);
+      if (!expanded) continue;
+      const tablesOpen = filterLower ? true : (openTables[db] ?? true);
+      if (!tablesOpen) continue;
+      for (const table of tables ?? []) refs.push({ database: db, table });
+      const expandedSchemas = dbState?.expandedSchemas[db] ?? [];
+      for (const group of schemas ?? []) {
+        if (!filterLower && !expandedSchemas.includes(group.schema)) continue;
+        for (const node of group.tables) refs.push({ database: db, table: node.qualifiedName });
+      }
+    }
+    return refs;
+  }, [dbState?.expandedDbs, dbState?.expandedSchemas, filterLower, openTables, visibleDbs]);
+
+  const visibleKeys = useMemo(
+    () => visibleTableRefs.map((ref) => tableKey(ref.database, ref.table)),
+    [visibleTableRefs]
+  );
+
+  // 离开树的节点要真的从选中集里删掉。只在渲染时过滤是不够的 —— 重新展开或清掉筛选
+  // 会把它们原样复活,之后的批量清空 / 删除就会悄悄多带上几张表。
+
+  /** 改筛选:按改之前树上可见的节点剪枝,用户看得见的留下,被筛掉的不再回来。 */
+  const changeFilter = useCallback(
+    (value: string) => {
+      setSelectedKeys((prev) => prev.filter((key) => visibleKeys.includes(key)));
+      setFilter(value);
+    },
+    [visibleKeys]
+  );
+
+  /** 折叠库 / 折叠表目录 / 折叠 schema / 刷新表:该前缀下的节点整批离开树。 */
+  const dropSelectionUnder = useCallback((prefix: string) => {
+    setSelectedKeys((prev) => prev.filter((key) => !key.startsWith(prefix)));
+  }, []);
+
+  // 选中集按树的显示顺序排列 —— 批量操作照此顺序执行。
+  const selectedVisibleKeys = useMemo(
+    () => visibleKeys.filter((key) => selectedKeys.includes(key)),
+    [selectedKeys, visibleKeys]
+  );
+
+  const selectedRefs = useMemo(
+    () => visibleTableRefs.filter((ref) => selectedKeys.includes(tableKey(ref.database, ref.table))),
+    [selectedKeys, visibleTableRefs]
+  );
+
+  const selectTable = useCallback(
+    (database: string, table: string, event?: Pick<React.MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">) => {
+      const key = tableKey(database, table);
+      const anchorKey = selectionAnchorRef.current;
+      const isRange = !!event?.shiftKey && anchorKey != null;
+      const isToggle = !!event?.ctrlKey || !!event?.metaKey;
+
+      if (isRange) {
+        const from = visibleKeys.indexOf(anchorKey);
+        const to = visibleKeys.indexOf(key);
+        if (from === -1 || to === -1) {
+          setSelectedKeys([key]);
+          selectionAnchorRef.current = key;
+          return;
+        }
+        setSelectedKeys(visibleKeys.slice(Math.min(from, to), Math.max(from, to) + 1));
+        return;
+      }
+
+      if (isToggle) {
+        setSelectedKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+      } else {
+        setSelectedKeys([key]);
+      }
+      selectionAnchorRef.current = key;
+    },
+    [visibleKeys]
+  );
+
+  /** 右键命中选中集则整集生效,否则先重置为单选该表(与结果网格同语义)。 */
+  const contextTargets = useCallback(
+    (database: string, table: string): TableRef[] => {
+      if (selectedVisibleKeys.includes(tableKey(database, table)) && selectedRefs.length > 0) return selectedRefs;
+      return [{ database, table }];
+    },
+    [selectedRefs, selectedVisibleKeys]
+  );
+
   const handleConfirmAction = async () => {
     if (!confirmAction || !tabMeta?.assetId) return;
-    const { type, database, table } = confirmAction;
-    const qualified = quoteTableRef(database, table, driver);
-    const sql =
-      type === "drop"
-        ? `DROP TABLE ${qualified}`
-        : driver === "sqlite"
-          ? `DELETE FROM ${qualified}`
-          : `TRUNCATE TABLE ${qualified}`;
+    const { type, targets } = confirmAction;
     setExecutingAction(true);
-    try {
-      await ExecuteSQL(tabMeta.assetId, sql, database);
-      notifySuccess(t(type === "drop" ? "query.dropTableSuccess" : "query.truncateTableSuccess", { table }));
-      if (type === "drop") {
-        if (selected?.db === database && selected?.table === table) setSelected(null);
-        await refreshTables(tabId, database);
+
+    // 逐表一条语句,每条带自己的 database —— 选中集可以跨库。单表失败不中断其余。
+    const succeeded: TableRef[] = [];
+    let errorMsg = "";
+    for (const target of targets) {
+      const qualified = quoteTableRef(target.database, target.table, driver);
+      const sql =
+        type === "drop"
+          ? `DROP TABLE ${qualified}`
+          : driver === "sqlite"
+            ? `DELETE FROM ${qualified}`
+            : `TRUNCATE TABLE ${qualified}`;
+      try {
+        await ExecuteSQL(tabMeta.assetId, sql, target.database);
+        succeeded.push(target);
+      } catch (err) {
+        errorMsg += `${target.database}.${target.table}: ${String(err)}\n`;
       }
-      setConfirmAction(null);
-    } catch (err) {
-      toast.error(String(err));
-    } finally {
-      setExecutingAction(false);
     }
+
+    if (succeeded.length > 0) {
+      // 批量时报成功的张数(名字列表在确认框里刚看过);单张仍报表名。
+      notifySuccess(
+        succeeded.length > 1
+          ? t(type === "drop" ? "query.dropTablesSuccess" : "query.truncateTablesSuccess", {
+              count: succeeded.length,
+            })
+          : t(type === "drop" ? "query.dropTableSuccess" : "query.truncateTableSuccess", {
+              table: succeeded[0].table,
+            })
+      );
+      if (type === "drop") {
+        const droppedKeys = succeeded.map((ref) => tableKey(ref.database, ref.table));
+        setSelectedKeys((prev) => prev.filter((key) => !droppedKeys.includes(key)));
+        for (const database of Array.from(new Set(succeeded.map((ref) => ref.database)))) {
+          await refreshTables(tabId, database);
+        }
+      }
+    }
+    if (errorMsg) toast.error(errorMsg.trim());
+
+    setExecutingAction(false);
+    setConfirmAction(null);
   };
 
   if (!dbState) return null;
 
   const { expandedDbs, loadingDbs, error } = dbState;
   const renderTableItem = (db: string, tbl: string, label = tbl) => {
-    const isSelected = selected?.db === db && selected?.table === tbl;
+    const key = tableKey(db, tbl);
+    const isSelected = selectedVisibleKeys.includes(key);
+    // 右键会先把选中集调整好(命中则保留、未命中则重置为这一张),菜单内容随后渲染,
+    // 所以这里按当前选中集算出的作用范围就是菜单实际生效的范围。
+    const targets = contextTargets(db, tbl);
+    const isBatch = targets.length > 1;
     return (
       <ContextMenu key={tbl}>
         <ContextMenuTrigger className="block w-full">
           <div
+            data-table-node={key}
+            data-selected={isSelected ? "true" : undefined}
             className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer transition-colors duration-150 ${
               isSelected ? "bg-accent text-accent-foreground" : "hover:bg-accent"
             }`}
-            onClick={() => setSelected({ db, table: tbl })}
+            onClick={(e) => selectTable(db, tbl, e)}
+            onContextMenu={() => {
+              if (!selectedVisibleKeys.includes(key)) selectTable(db, tbl);
+            }}
             onDoubleClick={() => {
-              setSelected({ db, table: tbl });
+              selectTable(db, tbl);
               openTableTab(tabId, db, tbl);
             }}
           >
@@ -229,15 +361,20 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuItem onClick={() => openTableTab(tabId, db, tbl)}>
+          <ContextMenuItem
+            onClick={() => {
+              for (const target of targets) openTableTab(tabId, target.database, target.table);
+            }}
+          >
             <Table2 className="h-3.5 w-3.5" />
-            {t("query.openTable")}
+            {isBatch ? t("query.openTables", { count: targets.length }) : t("query.openTable")}
           </ContextMenuItem>
-          <ContextMenuItem onClick={() => setStructureTarget({ db, table: tbl })}>
+          <ContextMenuItem disabled={isBatch} onClick={() => setStructureTarget({ db, table: tbl })}>
             <Columns3 className="h-3.5 w-3.5" />
             {t("query.viewStructure")}
           </ContextMenuItem>
           <ContextMenuItem
+            disabled={isBatch}
             onClick={() => {
               setAlterDatabase(db);
               setAlterTableName(tbl);
@@ -248,6 +385,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
             {t("query.alterTable")}
           </ContextMenuItem>
           <ContextMenuItem
+            disabled={isBatch}
             onClick={() => {
               const tableName = quoteTableRef(db, tbl, driver);
               openSqlTab(tabId, db, buildStarterSelectSql(tableName, driver, 100));
@@ -257,19 +395,13 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
             {t("query.newSql")}
           </ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem
-            variant="destructive"
-            onClick={() => setConfirmAction({ type: "truncate", database: db, table: tbl })}
-          >
+          <ContextMenuItem variant="destructive" onClick={() => setConfirmAction({ type: "truncate", targets })}>
             <Eraser className="h-3.5 w-3.5" />
-            {t("query.truncateTable")}
+            {isBatch ? t("query.truncateTables", { count: targets.length }) : t("query.truncateTable")}
           </ContextMenuItem>
-          <ContextMenuItem
-            variant="destructive"
-            onClick={() => setConfirmAction({ type: "drop", database: db, table: tbl })}
-          >
+          <ContextMenuItem variant="destructive" onClick={() => setConfirmAction({ type: "drop", targets })}>
             <Trash2 className="h-3.5 w-3.5" />
-            {t("query.dropTable")}
+            {isBatch ? t("query.dropTables", { count: targets.length }) : t("query.dropTable")}
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
@@ -289,10 +421,8 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
             size="icon"
             className="h-6 w-6"
             onClick={() => {
-              setShowFilter((v) => {
-                if (v) setFilter("");
-                return !v;
-              });
+              if (showFilter) changeFilter("");
+              setShowFilter((v) => !v);
             }}
             title={t("query.filterTables")}
           >
@@ -343,10 +473,10 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
               className="h-7 pl-7 text-xs"
               placeholder={t("query.filterTables")}
               value={filter}
-              onChange={(e) => setFilter(e.target.value)}
+              onChange={(e) => changeFilter(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Escape") {
-                  setFilter("");
+                  changeFilter("");
                   setShowFilter(false);
                 }
               }}
@@ -392,6 +522,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                         className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
                         onClick={() => {
                           if (filterLower) return;
+                          if (isExpanded) dropSelectionUnder(`${db}.`);
                           toggleDbExpand(tabId, db);
                         }}
                       >
@@ -419,7 +550,12 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                         {t("query.addTable")}
                       </ContextMenuItem>
                       <ContextMenuSeparator />
-                      <ContextMenuItem onClick={() => refreshTables(tabId, db)}>
+                      <ContextMenuItem
+                        onClick={() => {
+                          dropSelectionUnder(`${db}.`);
+                          refreshTables(tabId, db);
+                        }}
+                      >
                         <RefreshCw className="h-3.5 w-3.5" />
                         {t("query.refreshTables")}
                       </ContextMenuItem>
@@ -440,6 +576,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                             className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
                             onClick={() => {
                               if (filterLower) return;
+                              if (isTablesOpen) dropSelectionUnder(`${db}.`);
                               setOpenTables((prev) => ({ ...prev, [db]: !(prev[db] ?? false) }));
                             }}
                           >
@@ -473,6 +610,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                                           className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
                                           onClick={() => {
                                             if (filterLower) return;
+                                            if (isSchemaExpanded) dropSelectionUnder(`${db}.${group.schema}.`);
                                             toggleSchemaExpand(tabId, db, group.schema);
                                           }}
                                         >
@@ -585,12 +723,29 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
           if (!open && !executingAction) setConfirmAction(null);
         }}
         title={t(confirmAction?.type === "drop" ? "query.dropTableConfirmTitle" : "query.truncateTableConfirmTitle")}
-        description={t(
-          confirmAction?.type === "drop" ? "query.dropTableConfirmDesc" : "query.truncateTableConfirmDesc",
-          { table: confirmAction?.table ?? "" }
-        )}
+        description={
+          <div className="space-y-2">
+            <p>
+              {t(confirmAction?.type === "drop" ? "query.dropTableConfirmDesc" : "query.truncateTableConfirmDesc", {
+                count: confirmAction?.targets.length ?? 0,
+              })}
+            </p>
+            <ul className="max-h-40 space-y-1 overflow-auto rounded-md border border-border bg-muted/30 p-2 font-mono text-xs">
+              {confirmAction?.targets.map((target) => (
+                <li key={tableKey(target.database, target.table)}>{`${target.database}.${target.table}`}</li>
+              ))}
+            </ul>
+            <p className="text-xs text-muted-foreground">{t("query.batchTableActionNote")}</p>
+          </div>
+        }
         cancelText={t("action.cancel")}
-        confirmText={t(confirmAction?.type === "drop" ? "query.dropTable" : "query.truncateTable")}
+        confirmText={
+          (confirmAction?.targets.length ?? 0) > 1
+            ? t(confirmAction?.type === "drop" ? "query.dropTables" : "query.truncateTables", {
+                count: confirmAction?.targets.length ?? 0,
+              })
+            : t(confirmAction?.type === "drop" ? "query.dropTable" : "query.truncateTable")
+        }
         onConfirm={handleConfirmAction}
       />
     </div>

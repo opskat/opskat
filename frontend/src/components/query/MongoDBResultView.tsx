@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight, ChevronsLeft, RefreshCw, Loader2 } from "lucide-react";
 import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { QueryResultTable } from "./QueryResultTable";
+import { QueryViewModeToggle, type QueryViewMode } from "./QueryViewModeToggle";
+import { cellValueToDisplayText } from "@/lib/cellValue";
 import { CodeEditor } from "@/components/CodeEditor";
 
 interface MongoDBResultViewProps {
@@ -20,8 +22,6 @@ interface MongoDBResultViewProps {
   refreshShortcutLabel?: string;
 }
 
-type ViewMode = "table" | "json";
-
 const PAGE_SIZES = [20, 50, 100, 200];
 
 export function MongoDBResultView({
@@ -35,7 +35,7 @@ export function MongoDBResultView({
   refreshShortcutLabel,
 }: MongoDBResultViewProps) {
   const { t } = useTranslation();
-  const [viewMode, setViewMode] = useState<ViewMode>("table");
+  const [viewMode, setViewMode] = useState<QueryViewMode>("table");
 
   const parsed = useMemo(() => {
     if (!data) return null;
@@ -99,24 +99,7 @@ export function MongoDBResultView({
     <div className="flex flex-col h-full">
       {/* Top bar: view mode toggle */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-muted/20 shrink-0">
-        <div className="flex border border-border rounded-md overflow-hidden">
-          <button
-            className={`px-2 py-0.5 text-xs transition-colors ${
-              viewMode === "table" ? "bg-primary text-primary-foreground" : "hover:bg-muted"
-            }`}
-            onClick={() => setViewMode("table")}
-          >
-            {t("query.mongoTableView")}
-          </button>
-          <button
-            className={`px-2 py-0.5 text-xs transition-colors ${
-              viewMode === "json" ? "bg-primary text-primary-foreground" : "hover:bg-muted"
-            }`}
-            onClick={() => setViewMode("json")}
-          >
-            {t("query.mongoJsonView")}
-          </button>
-        </div>
+        <QueryViewModeToggle value={viewMode} onChange={setViewMode} />
       </div>
 
       {/* Table / JSON content */}
@@ -221,8 +204,9 @@ export function MongoDBResultView({
 }
 
 // Primitives render as strings; objects/arrays get a truncated single-line JSON
-// preview. Full value is available via hover title and right-click → copy
-// (handled by QueryResultTable).
+// preview. Both are length-capped — a multi-MB text node inside a `truncate`
+// line box costs seconds of layout in Chromium. Full value is available via
+// right-click → copy (handled by QueryResultTable).
 function renderMongoCell(value: unknown): React.ReactNode {
   if (value === null || value === undefined) {
     return <span className="text-muted-foreground italic">null</span>;
@@ -232,7 +216,7 @@ function renderMongoCell(value: unknown): React.ReactNode {
     const truncated = json.length > 80 ? json.slice(0, 80) + "…" : json;
     return <span className="text-muted-foreground truncate block">{truncated}</span>;
   }
-  return <span className="truncate block">{String(value)}</span>;
+  return <span className="truncate block">{cellValueToDisplayText(value)}</span>;
 }
 
 function safeStringify(v: unknown): string {

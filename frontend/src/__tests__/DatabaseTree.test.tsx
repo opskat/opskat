@@ -236,3 +236,237 @@ describe("DatabaseTree", () => {
     });
   });
 });
+
+describe("DatabaseTree — table multi-selection", () => {
+  beforeEach(() => {
+    makeDatabaseTab();
+    useQueryStore.setState({
+      dbStates: {
+        "query-1": {
+          databases: ["appdb", "archivedb"],
+          tables: { appdb: ["users", "orders", "logs"], archivedb: ["logs_2024"] },
+          loadingTables: {},
+          expandedDbs: ["appdb", "archivedb"],
+          expandedSchemas: {},
+          loadingDbs: false,
+          innerTabs: [],
+          activeInnerTabId: null,
+          error: null,
+        },
+      },
+      redisStates: {},
+      mongoStates: {},
+    });
+    vi.mocked(ExecuteSQL).mockReset();
+    vi.mocked(ExecuteSQL).mockResolvedValue(JSON.stringify({ rows: [] }));
+  });
+
+  const node = (table: string) => screen.getByText(table);
+  const selectedTables = () =>
+    Array.from(document.querySelectorAll('[data-table-node][data-selected="true"]')).map((el) =>
+      el.getAttribute("data-table-node")
+    );
+
+  it("ctrl-clicking selects tables across databases", () => {
+    render(<DatabaseTree tabId="query-1" />);
+
+    fireEvent.click(node("orders"));
+    fireEvent.click(node("logs_2024"), { ctrlKey: true });
+
+    expect(selectedTables()).toEqual(["appdb.orders", "archivedb.logs_2024"]);
+  });
+
+  it("shift-clicking selects the visible range within a database", () => {
+    render(<DatabaseTree tabId="query-1" />);
+
+    fireEvent.click(node("users"));
+    fireEvent.click(node("logs"), { shiftKey: true });
+
+    expect(selectedTables()).toEqual(["appdb.users", "appdb.orders", "appdb.logs"]);
+  });
+
+  it("a filter change drops tables that are no longer visible", () => {
+    render(<DatabaseTree tabId="query-1" />);
+    fireEvent.click(node("users"));
+    fireEvent.click(node("orders"), { ctrlKey: true });
+
+    fireEvent.click(screen.getByTitle("query.filterTables"));
+    fireEvent.change(screen.getByPlaceholderText("query.filterTables"), { target: { value: "orders" } });
+
+    expect(selectedTables()).toEqual(["appdb.orders"]);
+
+    // Dropped means dropped: clearing the filter must not resurrect `users`, or a later
+    // batch action would silently cover a table the user believes they deselected.
+    fireEvent.change(screen.getByPlaceholderText("query.filterTables"), { target: { value: "" } });
+
+    expect(selectedTables()).toEqual(["appdb.orders"]);
+  });
+
+  it("collapsing a database drops its tables from the selection", () => {
+    render(<DatabaseTree tabId="query-1" />);
+    fireEvent.click(node("users"));
+    fireEvent.click(node("logs_2024"), { ctrlKey: true });
+
+    fireEvent.click(node("appdb"));
+    fireEvent.click(node("appdb"));
+
+    expect(selectedTables()).toEqual(["archivedb.logs_2024"]);
+  });
+
+  it("refreshing a database's tables drops its tables from the selection", async () => {
+    // The reload brings the very same tables back, so a selection that merely hid
+    // itself while loading would reappear here.
+    vi.mocked(ExecuteSQL).mockResolvedValue(
+      JSON.stringify({ rows: [{ name: "users" }, { name: "orders" }, { name: "logs" }] })
+    );
+    render(<DatabaseTree tabId="query-1" />);
+    fireEvent.click(node("users"));
+    fireEvent.click(node("logs_2024"), { ctrlKey: true });
+
+    fireEvent.contextMenu(node("appdb"));
+    fireEvent.click(screen.getByText("query.refreshTables"));
+
+    await waitFor(() => expect(node("users")).toBeTruthy());
+    expect(selectedTables()).toEqual(["archivedb.logs_2024"]);
+  });
+
+  it("opens every selected table from the context menu", () => {
+    render(<DatabaseTree tabId="query-1" />);
+    fireEvent.click(node("users"));
+    fireEvent.click(node("logs_2024"), { ctrlKey: true });
+
+    fireEvent.contextMenu(node("logs_2024"));
+    fireEvent.click(screen.getByText("query.openTables"));
+
+    expect(useQueryStore.getState().dbStates["query-1"].innerTabs.map((t) => t.id)).toEqual([
+      "table:appdb.users",
+      "table:archivedb.logs_2024",
+    ]);
+  });
+
+  it("right-clicking outside the selection resets it to that table", () => {
+    render(<DatabaseTree tabId="query-1" />);
+    fireEvent.click(node("users"));
+
+    fireEvent.contextMenu(node("orders"));
+
+    expect(selectedTables()).toEqual(["appdb.orders"]);
+    expect(screen.queryByText("query.openTables")).not.toBeInTheDocument();
+    expect(screen.getByText("query.viewStructure")).toBeInTheDocument();
+  });
+
+  it("disables single-table actions while several tables are selected", () => {
+    render(<DatabaseTree tabId="query-1" />);
+    fireEvent.click(node("users"));
+    fireEvent.click(node("orders"), { ctrlKey: true });
+
+    fireEvent.contextMenu(node("orders"));
+
+    expect(screen.getByText("query.viewStructure").closest('[role="menuitem"]')).toHaveAttribute("data-disabled");
+    expect(screen.getByText("query.alterTable").closest('[role="menuitem"]')).toHaveAttribute("data-disabled");
+  });
+
+  it("drops each selected table against its own database", async () => {
+    render(<DatabaseTree tabId="query-1" />);
+    fireEvent.click(node("logs"));
+    fireEvent.click(node("logs_2024"), { ctrlKey: true });
+
+    fireEvent.contextMenu(node("logs_2024"));
+    fireEvent.click(screen.getByText("query.dropTables"));
+
+    // The confirmation names every affected table, qualified by its database.
+    expect(screen.getByText("appdb.logs")).toBeInTheDocument();
+    expect(screen.getByText("archivedb.logs_2024")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "query.dropTables" }));
+
+    await waitFor(() => {
+      const drops = vi.mocked(ExecuteSQL).mock.calls.filter(([, sql]) => String(sql).startsWith("DROP TABLE"));
+      expect(drops).toHaveLength(2);
+      expect(drops[0][2]).toBe("appdb");
+      expect(drops[1][2]).toBe("archivedb");
+    });
+  });
+
+  it("keeps dropping the remaining tables when one fails", async () => {
+    vi.mocked(ExecuteSQL).mockImplementation(async (_id, sql) => {
+      if (String(sql).includes("logs_2024")) throw new Error("permission denied");
+      return JSON.stringify({ rows: [] });
+    });
+    render(<DatabaseTree tabId="query-1" />);
+    fireEvent.click(node("logs"));
+    fireEvent.click(node("logs_2024"), { ctrlKey: true });
+
+    fireEvent.contextMenu(node("logs_2024"));
+    fireEvent.click(screen.getByText("query.dropTables"));
+    fireEvent.click(screen.getByRole("button", { name: "query.dropTables" }));
+
+    await waitFor(() => {
+      const drops = vi.mocked(ExecuteSQL).mock.calls.filter(([, sql]) => String(sql).startsWith("DROP TABLE"));
+      expect(drops).toHaveLength(2);
+    });
+  });
+});
+
+describe("DatabaseTree — schema-aware selection", () => {
+  beforeEach(() => {
+    makeDatabaseTab("query-1", "postgresql");
+    useQueryStore.setState({
+      dbStates: {
+        "query-1": {
+          databases: ["appdb"],
+          tables: { appdb: ["alpha.a1", "beta.b1", "gamma.g1"] },
+          loadingTables: {},
+          expandedDbs: ["appdb"],
+          expandedSchemas: { appdb: ["alpha", "beta", "gamma"] },
+          loadingDbs: false,
+          innerTabs: [],
+          activeInnerTabId: null,
+          error: null,
+        },
+      },
+      redisStates: {},
+      mongoStates: {},
+    });
+    vi.mocked(ExecuteSQL).mockReset();
+    vi.mocked(ExecuteSQL).mockResolvedValue(JSON.stringify({ rows: [] }));
+  });
+
+  const selectedTables = () =>
+    Array.from(document.querySelectorAll('[data-table-node][data-selected="true"]')).map((el) =>
+      el.getAttribute("data-table-node")
+    );
+
+  it("collapsing a schema drops its tables from the selection", () => {
+    render(<DatabaseTree tabId="query-1" />);
+    fireEvent.click(screen.getByText("a1"));
+    fireEvent.click(screen.getByText("b1"), { ctrlKey: true });
+
+    fireEvent.click(screen.getByText("beta"));
+    expect(selectedTables()).toEqual(["appdb.alpha.a1"]);
+
+    // Re-expanding must not resurrect it, or a later batch drop would silently cover
+    // a table the user believes they put away.
+    fireEvent.click(screen.getByText("beta"));
+    expect(selectedTables()).toEqual(["appdb.alpha.a1"]);
+  });
+
+  it("a shift range skips tables hidden inside a collapsed schema", () => {
+    render(<DatabaseTree tabId="query-1" />);
+    fireEvent.click(screen.getByText("beta"));
+
+    fireEvent.click(screen.getByText("a1"));
+    fireEvent.click(screen.getByText("g1"), { shiftKey: true });
+    expect(selectedTables()).toEqual(["appdb.alpha.a1", "appdb.gamma.g1"]);
+
+    // The batch action is the thing that matters: a hidden table caught by the range
+    // would be acted on without ever appearing on screen.
+    fireEvent.contextMenu(screen.getByText("g1"));
+    fireEvent.click(screen.getByText("query.openTables"));
+
+    expect(useQueryStore.getState().dbStates["query-1"].innerTabs.map((tab) => tab.id)).toEqual([
+      "table:appdb.alpha.a1",
+      "table:appdb.gamma.g1",
+    ]);
+  });
+});

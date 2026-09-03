@@ -26,7 +26,7 @@ import { Popover, PopoverContent, PopoverTrigger, computeContextMenuPosition } f
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
-import { cellValueToText } from "@/lib/cellValue";
+import { cellValueToDisplayText, cellValueToText } from "@/lib/cellValue";
 import type { CellValueFilterOperator } from "@/lib/tableSql";
 import { TABLE_FILTER_OPERATOR_LABEL_KEYS, TABLE_FILTER_OPERATOR_OPTIONS } from "@/lib/tableFilterOperators";
 
@@ -81,7 +81,7 @@ interface QueryResultTableProps {
   onAddColumnFilter?: (col: string) => void;
   onRemoveColumnFilter?: (col: string) => void;
   onRemoveAllFilters?: () => void;
-  onDeleteRow?: (rowIdx: number) => void;
+  onDeleteRows?: (rowIdxs: number[]) => void;
   onHideColumn?: (col: string) => void;
   onVisibleColumnToggle?: (col: string) => void;
   onSelectedCellChange?: (cell: SelectedCellContext | null) => void;
@@ -110,6 +110,9 @@ interface QueryResultTableProps {
 // Set so they don't collide with the literal string "null" etc.
 const NULL_KEY = "__opskat_null_sentinel__";
 const DEFAULT_COLUMN_WIDTH = 160;
+const ROW_NUMBER_MIN_WIDTH = 44;
+const ROW_NUMBER_PADDING = 24;
+const ROW_NUMBER_CHAR_WIDTH = 8;
 
 const CONTEXT_MENU_ITEM_CLASS =
   "relative flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground";
@@ -250,12 +253,14 @@ function QueryResultTableImpl({
   onAddColumnFilter,
   onRemoveColumnFilter,
   onRemoveAllFilters,
-  onDeleteRow,
+  onDeleteRows,
   onHideColumn,
   onVisibleColumnToggle,
   onSelectedCellChange,
   onSelectedRowsChange,
   onRefresh,
+  showRowNumber,
+  rowNumberOffset = 0,
   sortColumn: controlledSortCol,
   sortDir: controlledSortDir,
   onSortChange,
@@ -363,6 +368,7 @@ function QueryResultTableImpl({
   const [selectedRowIdxs, setSelectedRowIdxs] = useState<Set<number>>(() => new Set());
   const [selectedColumns, setSelectedColumns] = useState<Set<string>>(() => new Set());
   const columnSelectionAnchorRef = useRef<string | null>(null);
+  const rowSelectionAnchorRef = useRef<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [showColumnChooser, setShowColumnChooser] = useState(false);
   const [showFieldTypes, setShowFieldTypes] = useState(true);
@@ -411,6 +417,7 @@ function QueryResultTableImpl({
     setSelectedRowIdxs(new Set());
     setSelectedColumns(new Set());
     columnSelectionAnchorRef.current = null;
+    rowSelectionAnchorRef.current = null;
     onSelectedCellChange?.(null);
     onSelectedRowsChange?.([]);
     setEditingCell(null);
@@ -422,6 +429,7 @@ function QueryResultTableImpl({
     setSelectedRowIdxs(new Set());
     setSelectedColumns(new Set());
     columnSelectionAnchorRef.current = null;
+    rowSelectionAnchorRef.current = null;
     onSelectedCellChange?.(null);
     onSelectedRowsChange?.([]);
     setEditingCell(null);
@@ -434,6 +442,7 @@ function QueryResultTableImpl({
     setSelectedRowIdxs(new Set());
     setSelectedColumns(new Set());
     columnSelectionAnchorRef.current = null;
+    rowSelectionAnchorRef.current = null;
     setEditingCell(cellKey(focusCellRequest.rowIdx, focusCellRequest.col));
     onSelectedCellChange?.({ rowIdx: focusCellRequest.rowIdx, col: focusCellRequest.col });
     onSelectedRowsChange?.([]);
@@ -486,21 +495,31 @@ function QueryResultTableImpl({
       return size;
     },
   });
+  const gridColumnCount = displayColumns.length + (showRowNumber ? 1 : 0);
+  const allRowsSelected = sortedIndices.length > 0 && sortedIndices.every((i) => selectedRowIdxs.has(i));
   const virtualRows = rowVirtualizer.getVirtualItems();
   const totalRowSize = rowVirtualizer.getTotalSize();
   const paddingTop = virtualRows.length > 0 ? virtualRows[0].start : 0;
   const paddingBottom = virtualRows.length > 0 ? totalRowSize - virtualRows[virtualRows.length - 1].end : 0;
 
+  // 行号列宽随页内最大行号增长,否则深翻页(offset + 页内序号)会被 `truncate` 裁掉。
+  const rowNumberWidth = useMemo(() => {
+    if (!showRowNumber) return 0;
+    const largest = rowNumberOffset + Math.max(sortedIndices.length, 1);
+    return Math.max(ROW_NUMBER_MIN_WIDTH, ROW_NUMBER_PADDING + String(largest).length * ROW_NUMBER_CHAR_WIDTH);
+  }, [rowNumberOffset, showRowNumber, sortedIndices.length]);
+
   const frozenColumnOffsets = useMemo(() => {
     const offsets: Record<string, number> = {};
-    let left = 0;
+    // 冻结列停在行号列右侧,而不是容器左沿 —— 否则第一列会盖住行号。
+    let left = rowNumberWidth;
     for (const col of displayColumns) {
       if (!frozenColumns.has(col)) break;
       offsets[col] = left;
       left += colWidths[col] ?? DEFAULT_COLUMN_WIDTH;
     }
     return offsets;
-  }, [colWidths, displayColumns, frozenColumns]);
+  }, [colWidths, displayColumns, frozenColumns, rowNumberWidth]);
 
   // Sorting is enabled whenever we have an onSortChange callback (server-side)
   // or when we're in read-only mode (local client-side sort on the current page).
@@ -936,22 +955,87 @@ function QueryResultTableImpl({
     setFilterSubOpen(false);
   }, [onClearFilterSort]);
 
-  const handleDeleteRow = useCallback(() => {
-    if (!ctxMenu || ctxMenu.kind === "column") return;
-    onDeleteRow?.(ctxMenu.rowIdx);
+  // 右键落在选中集内 → 删整集(按显示顺序);落在集外 → 只删右键那一行。
+  const contextRowIdxs = useMemo(() => {
+    if (!ctxMenu || ctxMenu.kind === "column") return [];
+    if (selectedRowIdxs.has(ctxMenu.rowIdx)) {
+      const inSelection = sortedIndices.filter((i) => selectedRowIdxs.has(i));
+      if (inSelection.length > 0) return inSelection;
+    }
+    return [ctxMenu.rowIdx];
+  }, [ctxMenu, selectedRowIdxs, sortedIndices]);
+
+  const handleDeleteRows = useCallback(() => {
+    if (contextRowIdxs.length === 0) return;
+    onDeleteRows?.(contextRowIdxs);
     setCtxMenu(null);
-  }, [ctxMenu, onDeleteRow]);
+  }, [contextRowIdxs, onDeleteRows]);
 
   const selectCell = useCallback(
     (origIdx: number, col: string) => {
       setSelectedCell({ origIdx, col });
       setSelectedRowIdxs(new Set());
+      rowSelectionAnchorRef.current = null;
       onSelectedCellChange?.({ rowIdx: origIdx, col });
       onSelectedRowsChange?.([]);
       containerRef.current?.focus();
     },
     [onSelectedCellChange, onSelectedRowsChange]
   );
+
+  // 行选择:与 selectColumn 同一套语义 —— 单击设定、Ctrl/Cmd 切换、Shift 从锚点取区间。
+  // 区间按 sortedIndices(当前显示顺序)取,所以排序后 Shift 选的是屏幕上连续的一段。
+  const selectRow = useCallback(
+    (origIdx: number, event?: Pick<React.MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">) => {
+      const anchor = rowSelectionAnchorRef.current;
+      const isRange = !!event?.shiftKey && anchor != null;
+      const isToggle = !!event?.ctrlKey || !!event?.metaKey;
+      let next: Set<number>;
+
+      if (isRange) {
+        const anchorIdx = sortedIndices.indexOf(anchor);
+        const targetIdx = sortedIndices.indexOf(origIdx);
+        if (anchorIdx === -1 || targetIdx === -1) {
+          next = new Set([origIdx]);
+        } else {
+          const start = Math.min(anchorIdx, targetIdx);
+          const end = Math.max(anchorIdx, targetIdx);
+          next = new Set(sortedIndices.slice(start, end + 1));
+        }
+      } else if (isToggle) {
+        next = new Set(selectedRowIdxs);
+        if (next.has(origIdx)) next.delete(origIdx);
+        else next.add(origIdx);
+        rowSelectionAnchorRef.current = origIdx;
+      } else {
+        next = new Set([origIdx]);
+        rowSelectionAnchorRef.current = origIdx;
+      }
+
+      setSelectedCell(null);
+      setSelectedColumns(new Set());
+      columnSelectionAnchorRef.current = null;
+      setSelectedRowIdxs(next);
+      onSelectedCellChange?.(null);
+      onSelectedRowsChange?.(sortedIndices.filter((i) => next.has(i)));
+      containerRef.current?.focus();
+    },
+    [onSelectedCellChange, onSelectedRowsChange, selectedRowIdxs, sortedIndices]
+  );
+
+  const toggleSelectAllRows = useCallback(() => {
+    const allSelected = sortedIndices.length > 0 && sortedIndices.every((i) => selectedRowIdxs.has(i));
+    const next = allSelected ? [] : sortedIndices;
+
+    setSelectedCell(null);
+    setSelectedColumns(new Set());
+    columnSelectionAnchorRef.current = null;
+    rowSelectionAnchorRef.current = next.length > 0 ? next[0] : null;
+    setSelectedRowIdxs(new Set(next));
+    onSelectedCellChange?.(null);
+    onSelectedRowsChange?.([...next]);
+    containerRef.current?.focus();
+  }, [onSelectedCellChange, onSelectedRowsChange, selectedRowIdxs, sortedIndices]);
 
   const selectColumn = useCallback(
     (col: string, event?: Pick<React.MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">) => {
@@ -986,6 +1070,7 @@ function QueryResultTableImpl({
 
       setSelectedCell(null);
       setSelectedRowIdxs(new Set());
+      rowSelectionAnchorRef.current = null;
       setSelectedColumns(next);
       onSelectedCellChange?.(null);
       onSelectedRowsChange?.([]);
@@ -1002,6 +1087,7 @@ function QueryResultTableImpl({
         setSelectedCell({ origIdx, col });
         if (!selectedRowIdxs.has(origIdx)) {
           setSelectedRowIdxs(new Set());
+          rowSelectionAnchorRef.current = null;
           onSelectedRowsChange?.([]);
         }
         if (!selectedColumns.has(col)) {
@@ -1017,6 +1103,18 @@ function QueryResultTableImpl({
       setCtxMenu({ kind: "cell", x: e.clientX, y: e.clientY, rowIdx: origIdx, col, value });
     },
     [onSelectedCellChange, onSelectedRowsChange, selectCell, selectedRowIdxs, selectedColumns]
+  );
+
+  const handleRowContextMenu = useCallback(
+    (e: React.MouseEvent, origIdx: number) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // 右键落在选中集外时先重置为单选该行,与 handleCellContextMenu 同语义。
+      if (!selectedRowIdxs.has(origIdx)) selectRow(origIdx);
+      setCtxMenuPosition(null);
+      setCtxMenu({ kind: "row", x: e.clientX, y: e.clientY, rowIdx: origIdx });
+    },
+    [selectRow, selectedRowIdxs]
   );
 
   const handleColumnContextMenu = useCallback(
@@ -1069,6 +1167,7 @@ function QueryResultTableImpl({
           setSelectedRowIdxs(new Set());
           setSelectedColumns(new Set());
           columnSelectionAnchorRef.current = null;
+          rowSelectionAnchorRef.current = null;
           onSelectedCellChange?.(null);
           onSelectedRowsChange?.([]);
         }
@@ -1222,6 +1321,25 @@ function QueryResultTableImpl({
         <table className="border-separate border-spacing-0 text-xs font-mono">
           <thead className="bg-muted sticky top-0">
             <tr>
+              {showRowNumber && (
+                <th
+                  data-row-header-all
+                  title={t("query.selectAllRows")}
+                  onClick={toggleSelectAllRows}
+                  className={`sticky left-0 z-40 border border-border px-2 ${headerPaddingClass} text-center align-middle font-semibold whitespace-nowrap select-none cursor-pointer ${
+                    allRowsSelected
+                      ? "query-table-frozen-header-selected text-foreground ring-2 ring-inset ring-primary/50"
+                      : "bg-muted text-muted-foreground hover:text-foreground"
+                  }`}
+                  style={{
+                    width: `${rowNumberWidth}px`,
+                    minWidth: `${rowNumberWidth}px`,
+                    maxWidth: `${rowNumberWidth}px`,
+                  }}
+                >
+                  #
+                </th>
+              )}
               {displayColumns.map((col) => {
                 const isSorted = sortCol === col;
                 const width = colWidths[col] ?? DEFAULT_COLUMN_WIDTH;
@@ -1358,7 +1476,7 @@ function QueryResultTableImpl({
           <tbody>
             {paddingTop > 0 && (
               <tr aria-hidden="true">
-                <td colSpan={displayColumns.length} style={{ height: paddingTop, padding: 0, border: 0 }} />
+                <td colSpan={gridColumnCount} style={{ height: paddingTop, padding: 0, border: 0 }} />
               </tr>
             )}
             {virtualRows.map((virtualRow) => {
@@ -1374,6 +1492,26 @@ function QueryResultTableImpl({
                   ref={rowVirtualizer.measureElement}
                   className={idx % 2 === 0 ? "bg-background" : "bg-muted/40"}
                 >
+                  {showRowNumber && (
+                    <td
+                      data-row-header-key={origIdx}
+                      data-row-selected={isRowSelected ? "true" : undefined}
+                      onClick={(e) => selectRow(origIdx, e)}
+                      onContextMenu={(e) => handleRowContextMenu(e, origIdx)}
+                      className={`sticky left-0 z-20 border border-border px-2 ${cellPaddingClass} text-center align-middle whitespace-nowrap select-none cursor-pointer ${
+                        isRowSelected
+                          ? "query-table-frozen-header-selected text-foreground"
+                          : "bg-muted text-muted-foreground hover:text-foreground"
+                      }`}
+                      style={{
+                        width: `${rowNumberWidth}px`,
+                        minWidth: `${rowNumberWidth}px`,
+                        maxWidth: `${rowNumberWidth}px`,
+                      }}
+                    >
+                      {rowNumberOffset + idx + 1}
+                    </td>
+                  )}
                   {displayColumns.map((col) => {
                     const ck = cellKey(origIdx, col);
                     const isEdited = edits?.has(ck);
@@ -1418,7 +1556,7 @@ function QueryResultTableImpl({
                           maxWidth: `${width}px`,
                           ...(isFrozen ? { left: `${frozenLeft}px` } : {}),
                         }}
-                        title={displayValue == null ? "NULL" : cellValueToText(displayValue)}
+                        title={displayValue == null ? "NULL" : cellValueToDisplayText(displayValue)}
                         onClick={() => handleCellClick(origIdx, col)}
                         onDoubleClick={() => {
                           if (!editable) return;
@@ -1452,7 +1590,7 @@ function QueryResultTableImpl({
                               ) : displayValue == null ? (
                                 <span className="text-muted-foreground italic">NULL</span>
                               ) : (
-                                <span className="truncate block">{cellValueToText(displayValue)}</span>
+                                <span className="truncate block">{cellValueToDisplayText(displayValue)}</span>
                               )}
                             </div>
                             {showDateAction && (
@@ -1478,7 +1616,7 @@ function QueryResultTableImpl({
             })}
             {paddingBottom > 0 && (
               <tr aria-hidden="true">
-                <td colSpan={displayColumns.length} style={{ height: paddingBottom, padding: 0, border: 0 }} />
+                <td colSpan={gridColumnCount} style={{ height: paddingBottom, padding: 0, border: 0 }} />
               </tr>
             )}
           </tbody>
@@ -1877,15 +2015,17 @@ function QueryResultTableImpl({
                     {t("query.refreshTable")}
                   </button>
                 )}
-                {ctxMenu.kind !== "column" && editable && onDeleteRow && (
+                {ctxMenu.kind !== "column" && editable && onDeleteRows && (
                   <button
                     type="button"
                     role="menuitem"
                     className={`${CONTEXT_MENU_ITEM_CLASS} text-destructive hover:text-destructive`}
-                    onClick={handleDeleteRow}
+                    onClick={handleDeleteRows}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
-                    {t("query.deleteRecord")}
+                    {contextRowIdxs.length > 1
+                      ? t("query.deleteRecords", { count: contextRowIdxs.length })
+                      : t("query.deleteRecord")}
                   </button>
                 )}
               </>
@@ -2037,14 +2177,23 @@ function ColumnValuePanel({ col, entries, selected, onChange }: ColumnValuePanel
   const allKeys = useMemo(() => entries.map((e) => e.key), [entries]);
   const allChecked = allKeys.length > 0 && selectedSet.size === allKeys.length;
 
+  // 每个候选值的展示文本 + 小写检索键只算一次。以前是在 filter 回调里对原值
+  // cellValueToText().toLowerCase(),大字段(TEXT / JSON / BLOB)下每敲一个字符
+  // 就要把整列的字节重新分配一遍。检索范围与展示文本一致 —— 看不到的部分不参与匹配。
+  const decorated = useMemo(
+    () =>
+      entries.map((e) => {
+        const text = cellValueToDisplayText(e.value);
+        return { ...e, text, searchKey: text.toLowerCase() };
+      }),
+    [entries]
+  );
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return entries;
-    return entries.filter((e) => {
-      if (e.value == null) return "null".includes(q);
-      return cellValueToText(e.value).toLowerCase().includes(q);
-    });
-  }, [entries, search]);
+    if (!q) return decorated;
+    return decorated.filter((e) => (e.value == null ? "null".includes(q) : e.searchKey.includes(q)));
+  }, [decorated, search]);
 
   const showSearch = entries.length > 5;
 
@@ -2118,7 +2267,7 @@ function ColumnValuePanel({ col, entries, selected, onChange }: ColumnValuePanel
         ) : (
           filtered.map((entry) => {
             const checked = selectedSet.has(entry.key);
-            const text = cellValueToText(entry.value);
+            const text = entry.text;
             const label =
               entry.value == null ? (
                 <span className="text-muted-foreground italic">NULL</span>

@@ -1,6 +1,16 @@
 import { memo, useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { Play, Loader2, History, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, FileCode } from "lucide-react";
+import {
+  Play,
+  Loader2,
+  History,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  FileCode,
+  PanelRight,
+} from "lucide-react";
 import type * as MonacoNS from "monaco-editor";
 import {
   Button,
@@ -20,6 +30,9 @@ import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { ExecuteSQLPaged } from "../../../wailsjs/go/query/Query";
 import { QueryResultTable } from "./QueryResultTable";
+import { QueryResultJsonView } from "./QueryResultJsonView";
+import { QueryRowDetailPanel } from "./QueryRowDetailPanel";
+import { QueryViewModeToggle, type QueryViewMode } from "./QueryViewModeToggle";
 import { CodeEditor } from "@/components/CodeEditor";
 import { SnippetPopover } from "@/components/snippet/SnippetPopover";
 import type { DynamicCompletionGetter } from "@/lib/monaco-completions";
@@ -93,6 +106,10 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
 
   // Pagination state
   const [page, setPage] = useState(0);
+  // 内层 tab 常驻挂载,本地 state 即"按 tab 记住"。
+  const [viewMode, setViewMode] = useState<QueryViewMode>("table");
+  const [rowDetailOpen, setRowDetailOpen] = useState(false);
+  const [detailRowIdx, setDetailRowIdx] = useState<number | null>(null);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [pageInput, setPageInput] = useState("1");
   // Store the last executed SQL for pagination
@@ -133,6 +150,18 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
   useEffect(() => {
     setPageInput(String(page + 1));
   }, [page]);
+
+  // 必须是稳定引用:网格在这两个回调的引用变化时会重置选中态,内联箭头会让每次
+  // 父组件 re-render 都把刚选中的单元格清掉,行详情面板永远停在空态。
+  const handleSelectedCellChange = useCallback((cell: { rowIdx: number } | null) => {
+    setDetailRowIdx(cell?.rowIdx ?? null);
+  }, []);
+
+  // 网格选中单元格时会先发 onSelectedCellChange 再发 onSelectedRowsChange([]),
+  // 无条件接管会把刚设好的当前行抹掉 —— 只有真的选了整行才接管。
+  const handleSelectedRowsChange = useCallback((rowIdxs: number[]) => {
+    if (rowIdxs.length > 0) setDetailRowIdx(rowIdxs.length === 1 ? rowIdxs[0] : null);
+  }, []);
 
   const isDangerousSQL = useCallback((text: string) => {
     const upper = text.toUpperCase().replace(/\s+/g, " ").trim();
@@ -461,6 +490,20 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
             {t("query.affectedRows")}: {affectedRows}
           </div>
         )}
+        {columns.length > 0 && (
+          <div className="flex items-center gap-2 border-b border-border bg-muted/20 px-3 py-1.5 shrink-0">
+            <QueryViewModeToggle value={viewMode} onChange={setViewMode} />
+            <Button
+              variant={rowDetailOpen ? "secondary" : "ghost"}
+              size="icon-xs"
+              aria-pressed={rowDetailOpen}
+              title={t("query.rowDetail")}
+              onClick={() => setRowDetailOpen((open) => !open)}
+            >
+              <PanelRight className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        )}
         {showPagination && (
           <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-muted/30 shrink-0">
             {totalRows != null && (
@@ -548,14 +591,33 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
             </div>
           </div>
         )}
-        <QueryResultTable
-          columns={columns}
-          rows={rows}
-          loading={loading}
-          error={error ?? undefined}
-          showRowNumber
-          rowNumberOffset={page * pageSize}
-        />
+        <div className="flex min-h-0 flex-1">
+          <div className="flex min-w-0 flex-1 flex-col">
+            {viewMode === "json" ? (
+              <QueryResultJsonView rows={rows} columns={columns} error={error ?? undefined} />
+            ) : (
+              <QueryResultTable
+                columns={columns}
+                rows={rows}
+                loading={loading}
+                error={error ?? undefined}
+                showRowNumber
+                rowNumberOffset={page * pageSize}
+                onSelectedCellChange={handleSelectedCellChange}
+                onSelectedRowsChange={handleSelectedRowsChange}
+              />
+            )}
+          </div>
+          {rowDetailOpen && (
+            <QueryRowDetailPanel
+              rows={rows}
+              columns={columns}
+              rowIdx={detailRowIdx}
+              rowNumberOffset={page * pageSize}
+              onClose={() => setRowDetailOpen(false)}
+            />
+          )}
+        </div>
       </div>
 
       {/* Dangerous SQL confirmation */}
