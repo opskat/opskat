@@ -186,7 +186,12 @@ func (s *System) enforceSSHAgentContract(ctx context.Context, asset *asset_entit
 		return nil //nolint:nilerr // config 无法解析时交给 asset_svc 常规校验报出具体错误
 	}
 	if cfg != nil && cfg.AuthType == asset_entity.AuthTypeAgent && cfg.AgentSourceID > 0 {
-		return ssh_agent_svc.RequireSourceExists(ctx, cfg.AgentSourceID)
+		if err := ssh_agent_svc.RequireSourceExists(ctx, cfg.AgentSourceID); err != nil {
+			return err
+		}
+	}
+	if cfg != nil && cfg.AgentForwarding && cfg.AgentForwardSourceID > 0 {
+		return ssh_agent_svc.RequireSourceExists(ctx, cfg.AgentForwardSourceID)
 	}
 	return nil
 }

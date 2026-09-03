@@ -23,6 +23,7 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 )
 
 // AgentConfig 描述一个 SSH 层的 Agent 认证配置。Source 是懒解析闭包：在真正拨号 /
@@ -35,6 +36,33 @@ type AgentConfig struct {
 	Fingerprint string
 	// MFA 是交互式挑战适配器；nil = 非交互（新建连接需 MFA 时返回 ssh_agent_mfa_required）。
 	MFA sshagent.InteractiveCaller
+}
+
+// AgentForwardConfig describes the local SSH Agent endpoint forwarded to remote
+// interactive sessions. Source is lazy for the same reason as AgentConfig:
+// opening a local Agent is deferred until the SSH client is established.
+type AgentForwardConfig struct {
+	Source func(ctx context.Context) (sshagent.Source, error)
+}
+
+// enableAgentForwarding opens the configured local Agent and registers it as
+// the handler for auth-agent@openssh.com channels on client. The returned Agent
+// owns the local transport and must outlive all sessions sharing client.
+func enableAgentForwarding(ctx context.Context, client *ssh.Client, cfg *AgentForwardConfig) (*sshagent.Agent, error) {
+	source, err := cfg.Source(ctx)
+	if err != nil {
+		return nil, err
+	}
+	forwarder, err := sshagent.Open(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	if err := agent.ForwardToAgent(client, forwarder.Forwarder()); err != nil {
+		closeAgentLog(ctx, forwarder)
+		return nil, err
+	}
+	logger.Ctx(ctx).Info("ssh agent forwarding handler registered")
+	return forwarder, nil
 }
 
 // MakeAgentHostKeyCallback 构建 Agent 模式的主机密钥回调。verifyFn 缺失时返回 nil，
