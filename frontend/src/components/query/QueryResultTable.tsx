@@ -26,7 +26,7 @@ import { Popover, PopoverContent, PopoverTrigger, computeContextMenuPosition } f
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
-import { cellValueToText } from "@/lib/cellValue";
+import { cellValueToDisplayText, cellValueToText } from "@/lib/cellValue";
 import type { CellValueFilterOperator } from "@/lib/tableSql";
 import { TABLE_FILTER_OPERATOR_LABEL_KEYS, TABLE_FILTER_OPERATOR_OPTIONS } from "@/lib/tableFilterOperators";
 
@@ -1418,7 +1418,7 @@ function QueryResultTableImpl({
                           maxWidth: `${width}px`,
                           ...(isFrozen ? { left: `${frozenLeft}px` } : {}),
                         }}
-                        title={displayValue == null ? "NULL" : cellValueToText(displayValue)}
+                        title={displayValue == null ? "NULL" : cellValueToDisplayText(displayValue)}
                         onClick={() => handleCellClick(origIdx, col)}
                         onDoubleClick={() => {
                           if (!editable) return;
@@ -1452,7 +1452,7 @@ function QueryResultTableImpl({
                               ) : displayValue == null ? (
                                 <span className="text-muted-foreground italic">NULL</span>
                               ) : (
-                                <span className="truncate block">{cellValueToText(displayValue)}</span>
+                                <span className="truncate block">{cellValueToDisplayText(displayValue)}</span>
                               )}
                             </div>
                             {showDateAction && (
@@ -2037,14 +2037,23 @@ function ColumnValuePanel({ col, entries, selected, onChange }: ColumnValuePanel
   const allKeys = useMemo(() => entries.map((e) => e.key), [entries]);
   const allChecked = allKeys.length > 0 && selectedSet.size === allKeys.length;
 
+  // 每个候选值的展示文本 + 小写检索键只算一次。以前是在 filter 回调里对原值
+  // cellValueToText().toLowerCase(),大字段(TEXT / JSON / BLOB)下每敲一个字符
+  // 就要把整列的字节重新分配一遍。检索范围与展示文本一致 —— 看不到的部分不参与匹配。
+  const decorated = useMemo(
+    () =>
+      entries.map((e) => {
+        const text = cellValueToDisplayText(e.value);
+        return { ...e, text, searchKey: text.toLowerCase() };
+      }),
+    [entries]
+  );
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return entries;
-    return entries.filter((e) => {
-      if (e.value == null) return "null".includes(q);
-      return cellValueToText(e.value).toLowerCase().includes(q);
-    });
-  }, [entries, search]);
+    if (!q) return decorated;
+    return decorated.filter((e) => (e.value == null ? "null".includes(q) : e.searchKey.includes(q)));
+  }, [decorated, search]);
 
   const showSearch = entries.length > 5;
 
@@ -2118,7 +2127,7 @@ function ColumnValuePanel({ col, entries, selected, onChange }: ColumnValuePanel
         ) : (
           filtered.map((entry) => {
             const checked = selectedSet.has(entry.key);
-            const text = cellValueToText(entry.value);
+            const text = entry.text;
             const label =
               entry.value == null ? (
                 <span className="text-muted-foreground italic">NULL</span>

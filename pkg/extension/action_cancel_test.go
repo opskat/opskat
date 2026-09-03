@@ -32,8 +32,8 @@ func TestActionCancellation(t *testing.T) {
 // mutex serialized every call.
 func TestInvocationCancellationIsScoped(t *testing.T) {
 	Convey("Given two concurrent invocations of one plugin", t, func() {
-		a := newInvocation(NewActionCancellation())
-		b := newInvocation(NewActionCancellation())
+		a := newInvocation("inv-a", NewActionCancellation())
+		b := newInvocation("inv-b", NewActionCancellation())
 		defer a.close()
 		defer b.close()
 
@@ -50,7 +50,7 @@ func TestInvocationCancellationIsScoped(t *testing.T) {
 	})
 
 	Convey("An invocation with no cancellation never reports stop", t, func() {
-		inv := newInvocation(nil)
+		inv := newInvocation("inv-tool", nil)
 		defer inv.close()
 		So(inv.shouldStop(), ShouldBeFalse)
 	})
@@ -60,8 +60,8 @@ func TestInvocationCancellationIsScoped(t *testing.T) {
 // the invocation that opened them, and start over for the next one.
 func TestInvocationHandlesAreScoped(t *testing.T) {
 	Convey("Given two invocations that each open a handle", t, func() {
-		a := newInvocation(nil)
-		b := newInvocation(nil)
+		a := newInvocation("inv-a", nil)
+		b := newInvocation("inv-b", nil)
 		defer a.close()
 		defer b.close()
 

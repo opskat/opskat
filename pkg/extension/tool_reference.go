@@ -6,14 +6,16 @@ import (
 	"strings"
 )
 
-// ToolReference renders the manifest's tools[] block as the command-syntax section of
-// the extension's help document.
+// ToolReference renders the tools the guest reported through describe() as the
+// command-syntax section of the extension's help document.
 //
 // tools[].parameters used to be read by exactly one consumer — the flag DSL that turns
 // `--flag=value` into typed JSON — and by nothing the model could see. The model had to
 // guess flag names and types from the extension's prose, which is exactly the failure
 // mode the built-in types' SKILL.md avoids by spelling out their syntax. Rendering the
-// declaration the parser already enforces means the two can never disagree.
+// declaration the parser already enforces means the two can never disagree — and since
+// that declaration is now reflected from the handler's own argument type, neither can
+// drift from the code that runs.
 //
 // Call it on a Localized manifest so the i18n keys in tools[].i18n.description are
 // resolved; on a raw manifest the keys are printed as-is, which is still honest but

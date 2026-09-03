@@ -15,7 +15,7 @@ import {
   Switch,
   Textarea,
 } from "@opskat/ui";
-import { CallExtensionAction } from "../../../wailsjs/go/extension/Extension";
+import { createExtensionAPI } from "@/extension/api";
 import { SecretInput } from "@/components/SecretInput";
 
 interface JSONSchemaProperty {
@@ -69,7 +69,7 @@ export function ExtensionConfigForm({
   const handleTestConnection = useCallback(async () => {
     setTesting(true);
     try {
-      await CallExtensionAction(extensionName, "test_connection", JSON.stringify(value));
+      await createExtensionAPI().executeAction(extensionName, "test_connection", value);
       notifySuccess(tCommon("asset.testConnectionSuccess"));
     } catch (e) {
       toast.error(`${tCommon("asset.testConnectionFailed")}: ${String(e)}`);

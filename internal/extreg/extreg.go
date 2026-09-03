@@ -190,7 +190,7 @@ func skillDescription(ext *extension.Extension) string {
 }
 
 // helpDocument 是 help(asset) 对扩展类型返回的内容：SKILL.md 正文 + 由 manifest
-// tools[].parameters 渲染出的工具/参数表。
+// describe() 报上来的 tools[].parameters 渲染出的工具/参数表。
 //
 // 这两半各自补对方的洞：SKILL.md 是散文，说得清"这个扩展是干什么的"，但曾经是模型能拿到
 // 的**唯一**信息，flag 名与类型只能靠猜；参数表是权威的（同一份声明被 parseCommand 强制

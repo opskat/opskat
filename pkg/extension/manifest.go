@@ -14,10 +14,16 @@ import (
 // Extensions must declare a compatible hostABI in their manifest.
 // Bump the minor version when adding new host functions (backward compatible);
 // bump the major version when removing or changing existing host function signatures.
-const HostABIVersion = "1.0"
+//
+// 2.0 is the reactor contract: the module is a WASI reactor exporting
+// opskat_call / malloc / free, it imports exactly host_call + host_io, and it
+// answers describe(). A 1.x extension satisfies none of those, so it is refused
+// here — at parse time, where the message can name what to do — rather than
+// failing later with a missing export.
+const HostABIVersion = "2.0"
 
 // SupportedHostABIs lists all host ABI versions the runtime accepts.
-var SupportedHostABIs = []string{"1.0"}
+var SupportedHostABIs = []string{"2.0"}
 
 var (
 	semverRe         = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
@@ -52,20 +58,50 @@ const (
 	CredentialAccessRead = "read"
 )
 
+// Manifest is the host's complete view of one extension: the security contract it
+// reads from manifest.json plus the functional face the guest reports through
+// describe(). Only the first half is written by hand — see manifestFile.
 type Manifest struct {
+	// -- security contract, from manifest.json --
 	Name          string          `json:"name"`
 	Version       string          `json:"version"`
-	Icon          string          `json:"icon"`
 	MinAppVersion string          `json:"minAppVersion"`
 	HostABI       string          `json:"hostABI"`
-	Capabilities  Capabilities    `json:"capabilities"`
-	I18n          ManifestI18n    `json:"i18n"`
 	Backend       ManifestBackend `json:"backend"`
-	AssetTypes    []AssetTypeDef  `json:"assetTypes"`
-	Tools         []ToolDef       `json:"tools"`
-	Policies      PoliciesDef     `json:"policies"`
-	Frontend      FrontendDef     `json:"frontend"`
-	Snippets      SnippetsDef     `json:"snippets"`
+	Capabilities  Capabilities    `json:"capabilities"`
+
+	// -- functional face, from describe() (see descriptor.go) --
+	Icon       string         `json:"icon"`
+	I18n       ManifestI18n   `json:"i18n"`
+	AssetTypes []AssetTypeDef `json:"assetTypes"`
+	Tools      []ToolDef      `json:"tools"`
+	Policies   PoliciesDef    `json:"policies"`
+	Frontend   FrontendDef    `json:"frontend"`
+	Snippets   SnippetsDef    `json:"snippets"`
+}
+
+// manifestFile is what manifest.json is allowed to say.
+//
+// It is deliberately the whole security contract and nothing else: the capability
+// grants are what a user must be able to audit *before* the extension's code runs,
+// so they can never come from the code itself. Everything a running extension can
+// tell the host about itself — its tools, asset types, policy groups, pages,
+// snippets, display strings — is read back from describe() instead of being
+// declared a second time here.
+type manifestFile struct {
+	Name          string          `json:"name"`
+	Version       string          `json:"version"`
+	MinAppVersion string          `json:"minAppVersion"`
+	HostABI       string          `json:"hostABI"`
+	Backend       ManifestBackend `json:"backend"`
+	Capabilities  Capabilities    `json:"capabilities"`
+}
+
+// retiredManifestKeys are the blocks that moved into describe(). A manifest that
+// still carries one is refused rather than silently ignored: a stale block that
+// looks authoritative but is never read is exactly the drift this change removes.
+var retiredManifestKeys = []string{
+	"icon", "i18n", "assetTypes", "tools", "policies", "frontend", "snippets",
 }
 
 // SnippetsDef declares snippet categories and seed snippets contributed by this extension.
@@ -159,6 +195,11 @@ type ToolDef struct {
 	Name       string         `json:"name"`
 	I18n       I18nDesc       `json:"i18n"`
 	Parameters map[string]any `json:"parameters"`
+	// PolicyAction is the action this tool requests; the asset's permission groups
+	// are matched against it. It is declared at the tool's registration in the
+	// guest, which is also what makes the guest's policy answer unable to drift
+	// from its tool table.
+	PolicyAction string `json:"policyAction,omitempty"`
 }
 
 type I18nDesc struct {
@@ -191,15 +232,40 @@ type PageDef struct {
 	Component string   `json:"component"`
 }
 
+// ParseManifest reads the security contract from manifest.json. The returned
+// Manifest carries no functional face yet — that arrives with (*Manifest).apply
+// once describe() has been read, either from the guest or from the cache.
 func ParseManifest(data []byte) (*Manifest, error) {
-	var m Manifest
-	if err := json.Unmarshal(data, &m); err != nil {
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(data, &keys); err != nil {
 		return nil, fmt.Errorf("parse manifest: %w", err)
+	}
+	var retired []string
+	for _, k := range retiredManifestKeys {
+		if _, present := keys[k]; present {
+			retired = append(retired, k)
+		}
+	}
+	if len(retired) > 0 {
+		return nil, fmt.Errorf("manifest: %s moved into describe() — declare them in the guest and rebuild against the reactor SDK", strings.Join(retired, ", "))
+	}
+
+	var f manifestFile
+	if err := json.Unmarshal(data, &f); err != nil {
+		return nil, fmt.Errorf("parse manifest: %w", err)
+	}
+	m := &Manifest{
+		Name:          f.Name,
+		Version:       f.Version,
+		MinAppVersion: f.MinAppVersion,
+		HostABI:       f.HostABI,
+		Backend:       f.Backend,
+		Capabilities:  f.Capabilities,
 	}
 	if err := m.validate(); err != nil {
 		return nil, err
 	}
-	return &m, nil
+	return m, nil
 }
 
 // Localized returns a shallow copy of the manifest with all i18n string fields
@@ -313,202 +379,8 @@ func (m *Manifest) validate() error {
 	if !credentialRe.MatchString(m.Capabilities.Credentials) {
 		return fmt.Errorf("manifest: capabilities.credentials must be \"\" or \"read\" (got %q)", m.Capabilities.Credentials)
 	}
-	for _, g := range m.Policies.Groups {
-		if !strings.HasPrefix(g.ID, "ext:") {
-			return fmt.Errorf("manifest: policy group ID must start with ext: (got %q)", g.ID)
-		}
-		if !policyIDRe.MatchString(g.ID) {
-			return fmt.Errorf("manifest: policy group ID has invalid characters (got %q)", g.ID)
-		}
-	}
-	if err := m.validateTools(); err != nil {
-		return err
-	}
-	if err := m.validateSnippets(); err != nil {
-		return err
-	}
-	if err := m.validateAssetScope(); err != nil {
-		return err
-	}
-	return nil
-}
-
-// validateAssetScope 强制"扩展必须属于某个资产类型"。
-//
-// 曾经存在"无资产扩展"这个类别：不声明 assetTypes / policies.type 的扩展照样加载，
-// 它的工具只能经一个专用的扩展派发工具调用，而那个工具对它做的唯一一件事是弹一次不可复用的确认框
-// ——没有策略、没有 grant、没有审批面。这个类别被取消之后，扩展工具走的是与内置类型
-// 完全相同的 exec/help/策略/grant 路径，而那条路径的入口是**资产**。因此声明缺失不再是
-// "少一个可选字段"，而是"这个扩展没有任何可达的入口"，必须在加载期就说清楚。
-func (m *Manifest) validateAssetScope() error {
-	if len(m.AssetTypes) == 0 {
-		return fmt.Errorf("manifest: assetTypes must declare at least one asset type — extension tools are reached through exec on an asset")
-	}
-	seen := make(map[string]struct{}, len(m.AssetTypes))
-	for i, at := range m.AssetTypes {
-		if at.Type == "" {
-			return fmt.Errorf("manifest: assetTypes[%d].type is required", i)
-		}
-		if !nameRe.MatchString(at.Type) {
-			return fmt.Errorf("manifest: assetTypes[%d].type must match %s (got %q)", i, nameRe.String(), at.Type)
-		}
-		if _, dup := seen[at.Type]; dup {
-			return fmt.Errorf("manifest: duplicate asset type %q", at.Type)
-		}
-		seen[at.Type] = struct{}{}
-		if len(ConfigSchemaProperties(at.ConfigSchema)) == 0 {
-			return fmt.Errorf("manifest: assetTypes[%q].configSchema must declare properties", at.Type)
-		}
-	}
-	if m.Policies.Type == "" {
-		return fmt.Errorf("manifest: policies.type is required — it names the policy face the extension's asset types are checked under")
-	}
-	return nil
-}
-
-// supportedParamTypes 是 flag DSL 能表达的参数类型。
-// 现存两个真实 manifest 只用到 string / integer / array<string>；
-// number / boolean 一并支持（它们的转换是同一形状），object 不支持——
-// 嵌套结构走 exec 命令的 --json 逃生口，而不是发明一套嵌套 flag 语法。
-var supportedParamTypes = map[string]bool{
-	"string": true, "integer": true, "number": true, "boolean": true, "array": true,
-}
-
-// validateTools validates tools[].parameters.
-//
-// This field was never validated — nor read by any code — before this change:
-// the extension exec flag DSL is its first consumer. Promoting a field that was
-// never exercised into a load-bearing contract requires giving it load-time
-// validation in the same change: otherwise a manifest that omits parameters would
-// install silently, only to surface as a runtime error that reads like a parser
-// bug the day a model actually calls the tool.
-func (m *Manifest) validateTools() error {
-	seen := make(map[string]bool, len(m.Tools))
-	for i, t := range m.Tools {
-		if t.Name == "" {
-			return fmt.Errorf("manifest: tools[%d].name is required", i)
-		}
-		if seen[t.Name] {
-			// Bridge.toolIndex is a map; a duplicate name would silently keep only one entry,
-			// and which one survives depends on iteration order.
-			return fmt.Errorf("manifest: duplicate tool name %q", t.Name)
-		}
-		seen[t.Name] = true
-
-		if t.Parameters == nil {
-			return fmt.Errorf("manifest: tools[%q].parameters is required (use {\"type\":\"object\",\"properties\":{}} for a no-arg tool)", t.Name)
-		}
-		if typ, _ := t.Parameters["type"].(string); typ != "object" {
-			return fmt.Errorf("manifest: tools[%q].parameters.type must be \"object\", got %q", t.Name, typ)
-		}
-		props, ok := t.Parameters["properties"].(map[string]any)
-		if !ok {
-			return fmt.Errorf("manifest: tools[%q].parameters.properties must be an object", t.Name)
-		}
-		for name, raw := range props {
-			prop, ok := raw.(map[string]any)
-			if !ok {
-				return fmt.Errorf("manifest: tools[%q].parameters.properties.%s must be an object", t.Name, name)
-			}
-			typ, _ := prop["type"].(string)
-			if typ == "" {
-				return fmt.Errorf("manifest: tools[%q].parameters.properties.%s has no type", t.Name, name)
-			}
-			if !supportedParamTypes[typ] {
-				return fmt.Errorf("manifest: tools[%q].parameters.properties.%s has unsupported type %q (supported: string, integer, number, boolean, array)", t.Name, name, typ)
-			}
-			if typ == "array" {
-				rawItems, exists := prop["items"]
-				if !exists {
-					return fmt.Errorf("manifest: tools[%q].parameters.properties.%s is an array without items", t.Name, name)
-				}
-				items, ok := rawItems.(map[string]any)
-				if !ok {
-					return fmt.Errorf("manifest: tools[%q].parameters.properties.%s.items must be an object, got %T", t.Name, name, rawItems)
-				}
-				if it, _ := items["type"].(string); it != "string" {
-					return fmt.Errorf("manifest: tools[%q].parameters.properties.%s: only array<string> is supported, got array<%s>", t.Name, name, it)
-				}
-			}
-		}
-		if rawReq, exists := t.Parameters["required"]; exists {
-			req, ok := rawReq.([]any)
-			if !ok {
-				return fmt.Errorf("manifest: tools[%q].parameters.required must be an array, got %T", t.Name, rawReq)
-			}
-			for _, r := range req {
-				name, _ := r.(string)
-				if _, exists := props[name]; !exists {
-					return fmt.Errorf("manifest: tools[%q].parameters.required references undeclared property %q", t.Name, name)
-				}
-			}
-		}
-	}
-	return nil
-}
-
-// validateSnippets validates the snippets.categories and snippets.seed blocks.
-// Both are optional; an empty block passes.
-func (m *Manifest) validateSnippets() error {
-	// assetTypes declared by this manifest; used to validate category.assetType.
-	assetTypeSet := make(map[string]struct{}, len(m.AssetTypes))
-	for _, at := range m.AssetTypes {
-		if at.Type != "" {
-			assetTypeSet[at.Type] = struct{}{}
-		}
-	}
-
-	// Validate categories.
-	catIDs := make(map[string]struct{}, len(m.Snippets.Categories))
-	for _, c := range m.Snippets.Categories {
-		if c.ID == "" {
-			return fmt.Errorf("manifest: snippets.categories[].id is required")
-		}
-		if !snippetCatIDRe.MatchString(c.ID) {
-			return fmt.Errorf("manifest: snippets.categories[].id must match %s (got %q)", snippetCatIDRe.String(), c.ID)
-		}
-		if IsBuiltinSnippetCategoryID(c.ID) {
-			return fmt.Errorf("manifest: snippets.categories[].id %q collides with a builtin category", c.ID)
-		}
-		if _, dup := catIDs[c.ID]; dup {
-			return fmt.Errorf("manifest: duplicate snippets.categories[].id %q", c.ID)
-		}
-		catIDs[c.ID] = struct{}{}
-		if c.AssetType == "" {
-			return fmt.Errorf("manifest: snippets.categories[%q].assetType is required", c.ID)
-		}
-		if _, ok := assetTypeSet[c.AssetType]; !ok {
-			return fmt.Errorf("manifest: snippets.categories[%q].assetType %q must be declared in assetTypes[]", c.ID, c.AssetType)
-		}
-	}
-
-	// Validate seed snippets.
-	seedKeys := make(map[string]struct{}, len(m.Snippets.Seed))
-	for _, s := range m.Snippets.Seed {
-		if s.Key == "" {
-			return fmt.Errorf("manifest: snippets.seed[].key is required")
-		}
-		if !snippetSeedKeyRe.MatchString(s.Key) {
-			return fmt.Errorf("manifest: snippets.seed[].key must match %s (got %q)", snippetSeedKeyRe.String(), s.Key)
-		}
-		if _, dup := seedKeys[s.Key]; dup {
-			return fmt.Errorf("manifest: duplicate snippets.seed[].key %q", s.Key)
-		}
-		seedKeys[s.Key] = struct{}{}
-		if strings.TrimSpace(s.Name) == "" {
-			return fmt.Errorf("manifest: snippets.seed[%q].name is required", s.Key)
-		}
-		if strings.TrimSpace(s.Content) == "" {
-			return fmt.Errorf("manifest: snippets.seed[%q].content is required", s.Key)
-		}
-		if s.Category == "" {
-			return fmt.Errorf("manifest: snippets.seed[%q].category is required", s.Key)
-		}
-		isBuiltin := IsBuiltinSnippetCategoryID(s.Category)
-		_, isLocal := catIDs[s.Category]
-		if !isBuiltin && !isLocal {
-			return fmt.Errorf("manifest: snippets.seed[%q].category %q is neither builtin nor declared in this manifest", s.Key, s.Category)
-		}
+	if m.Backend.Binary == "" {
+		return fmt.Errorf("manifest: backend.binary is required — it names the WASM module the host loads")
 	}
 	return nil
 }

@@ -13,11 +13,11 @@ func TestTestHost(t *testing.T) {
 	Convey("TestHost", t, func() {
 		Convey("CallTool dispatches to registered handler", func() {
 			resetRegistries()
-			RegisterTool("echo", func(ctx *ToolContext) (any, error) {
-				var args struct{ Msg string }
-				_ = json.Unmarshal(ctx.Args, &args)
+			Tool("echo", func(_ *ToolContext, args struct {
+				Msg string `json:"msg"`
+			}) (any, error) {
 				return map[string]string{"echo": args.Msg}, nil
-			})
+			}).Policy("read")
 
 			th := NewTestHost()
 			defer th.Close()
@@ -33,7 +33,7 @@ func TestTestHost(t *testing.T) {
 
 		Convey("SetAssetConfig and GetAssetConfig", func() {
 			resetRegistries()
-			RegisterTool("config_test", func(ctx *ToolContext) (any, error) {
+			Tool("config_test", func(ctx *ToolContext, _ struct{}) (any, error) {
 				cfg, err := GetAssetConfig(1)
 				if err != nil {
 					return nil, err
@@ -56,7 +56,7 @@ func TestTestHost(t *testing.T) {
 
 		Convey("MockHTTP intercepts HTTP requests", func() {
 			resetRegistries()
-			RegisterTool("http_test", func(ctx *ToolContext) (any, error) {
+			Tool("http_test", func(ctx *ToolContext, _ struct{}) (any, error) {
 				transport := NewHTTPTransport()
 				client := &http.Client{Transport: transport}
 				resp, err := client.Get("http://mock/data")
@@ -90,7 +90,7 @@ func TestTestHost(t *testing.T) {
 
 		Convey("KVGet/KVSet persistence", func() {
 			resetRegistries()
-			RegisterTool("kv_test", func(ctx *ToolContext) (any, error) {
+			Tool("kv_test", func(ctx *ToolContext, _ struct{}) (any, error) {
 				_ = KVSet("counter", []byte("42"))
 				val, err := KVGet("counter")
 				if err != nil {

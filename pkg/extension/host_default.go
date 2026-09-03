@@ -30,7 +30,7 @@ type KVStore interface {
 }
 
 type ActionEventHandler interface {
-	OnActionEvent(eventType string, data json.RawMessage) error
+	OnActionEvent(invocationID, eventType string, data json.RawMessage) error
 }
 
 type DefaultHostConfig struct {
@@ -143,9 +143,9 @@ func (h *DefaultHostProvider) KVSet(key string, value []byte) error {
 	return h.cfg.KV.Set(key, value)
 }
 
-func (h *DefaultHostProvider) ActionEvent(eventType string, data json.RawMessage) error {
+func (h *DefaultHostProvider) ActionEvent(invocationID, eventType string, data json.RawMessage) error {
 	if h.cfg.ActionEvents == nil {
 		return nil
 	}
-	return h.cfg.ActionEvents.OnActionEvent(eventType, data)
+	return h.cfg.ActionEvents.OnActionEvent(invocationID, eventType, data)
 }

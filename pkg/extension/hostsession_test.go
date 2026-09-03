@@ -10,7 +10,7 @@ type hostSession struct {
 }
 
 func newHostSession(host HostProvider) *hostSession {
-	return &hostSession{host: host, inv: newInvocation(nil)}
+	return &hostSession{host: host, inv: newInvocation("test-invocation", nil)}
 }
 
 func (s *hostSession) Open(params IOOpenParams) (uint32, IOMeta, error) {

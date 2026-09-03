@@ -1,4 +1,4 @@
-.PHONY: dev dev-sandbox dev-sandbox-down dev-sandbox-status run build build-embed install-app clean install build-cli install-cli lint test test-cover test-e2e test-e2e-scratch install-skill devserver build-devserver-ui
+.PHONY: dev dev-sandbox dev-sandbox-down dev-sandbox-status run build build-embed install-app clean install build-cli install-cli lint test test-cover test-e2e test-e2e-scratch install-skill
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -86,7 +86,7 @@ lint-fix:
 
 # 运行测试
 test:
-	go test ./internal/... ./cmd/opsctl/... ./pkg/... ./cmd/devserver/...
+	go test ./internal/... ./cmd/opsctl/... ./pkg/...
 
 # E2E：Playwright 驱动真实 wails dev 跑 GUI 端到端。详见 docs/references/e2e-harness-guide.md。
 # 一次性装依赖 + 浏览器：cd e2e && pnpm run setup（CI 在独立步骤里装，故这里不重复）。
@@ -101,25 +101,10 @@ test-e2e-scratch:
 
 # 测试覆盖率（生成 HTML 报告并在浏览器打开）
 test-cover:
-	go test -coverprofile=coverage.out ./internal/... ./cmd/opsctl/... ./pkg/... ./cmd/devserver/...
+	go test -coverprofile=coverage.out ./internal/... ./cmd/opsctl/... ./pkg/...
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "覆盖率报告已生成: coverage.html"
 	@open coverage.html 2>/dev/null || xdg-open coverage.html 2>/dev/null || echo "请手动打开 coverage.html"
-
-# 构建 DevServer UI 前端
-build-devserver-ui:
-	cd frontend/packages/devserver-ui && pnpm build
-	@touch cmd/devserver/embed.go
-
-# 运行扩展 DevServer（需指定 EXT=扩展名，如 make devserver EXT=oss）
-devserver: build-devserver-ui
-ifndef EXT
-	$(error EXT is required. Usage: make devserver EXT=oss)
-endif
-	$(MAKE) -C ../extensions build EXT=$(EXT)
-	go run ./cmd/devserver/ \
-		--ext-dir ../extensions/extensions/$(EXT)/dist \
-		--manifest ../extensions/extensions/$(EXT)/manifest.json
 
 # 安装 Claude Code plugin（创建 symlink，注册 marketplace + plugin）
 install-skill:
@@ -162,5 +147,5 @@ install-skill:
 clean:
 	rm -rf build/bin frontend/dist internal/embedded/opsctl_bin \
 		coverage.out coverage.html coverage_new.out \
-		opskat opsctl devserver \
+		opskat opsctl \
 		frontend/package.json.md5

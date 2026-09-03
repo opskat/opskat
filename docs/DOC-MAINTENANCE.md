@@ -67,9 +67,9 @@ Verify each one against the code. Common claim types in opskat and how to check 
 Three traps that keep biting (opskat has hit all of them):
 
 1. **Working tree ≠ committed.** Bare `rg` / `ls` also match **untracked** files, so feature-branch / sibling-repo code reads as "shipped" — exactly the leakage failure above. Always use `git grep` / `git ls-files` / `git ls-tree` so only **committed** code counts.
-2. **Same name, different thing.** In opskat "command policy" is at least three things: `internal/ai/policy/command_rule.go` (shell-command rule matching), the `command_policy` column on the assets table (JSON config), and `asset_entity.DefaultCommandPolicy()` (default-policy constructor — itself a re-export of `policy.DefaultCommandPolicy` in `internal/model/entity/policy`) — don't conflate them. Same on the frontend: `@opskat/ui` (`packages/ui`, the main app) ≠ `packages/devserver-ui` (embedded by `cmd/devserver`).
+2. **Same name, different thing.** In opskat "command policy" is at least three things: `internal/ai/policy/command_rule.go` (shell-command rule matching), the `command_policy` column on the assets table (JSON config), and `asset_entity.DefaultCommandPolicy()` (default-policy constructor — itself a re-export of `policy.DefaultCommandPolicy` in `internal/model/entity/policy`) — don't conflate them.
 3. **Counts drift silently.** Enumerate the counts of asset types / migrations / locales / stores from the canonical source — don't trust prose in the docs or memory. E.g. `etcd` was added to the asset types later, so any list that hardcodes a number or omits `etcd` is stale.
-4. **Generated ≠ source of truth.** `frontend/wailsjs/**`, `internal/embedded/opsctl_bin`, and `frontend/packages/devserver-ui/dist/` are all **generated and gitignored** — `git ls-files` can't find them at all. Verify the **producer** behind them: for Wails bindings look at the Go side in `internal/app/*.go`, don't treat the generated `.ts` as truth; for mocks look at the `go generate ./...` source. Generated-files list: see [DEVELOP.md → Generated / auto-managed files](./DEVELOP.md#️-generated--auto-managed-files).
+4. **Generated ≠ source of truth.** `frontend/wailsjs/**` and `internal/embedded/opsctl_bin` are both **generated and gitignored** — `git ls-files` can't find them at all. Verify the **producer** behind them: for Wails bindings look at the Go side in `internal/app/*.go`, don't treat the generated `.ts` as truth; for mocks look at the `go generate ./...` source. Generated-files list: see [DEVELOP.md → Generated / auto-managed files](./DEVELOP.md#️-generated--auto-managed-files).
 
 ## One-shot verification
 
@@ -89,7 +89,7 @@ echo "== soft-delete constants =="; git grep -n "StatusActive *=\|StatusDeleted 
 echo "== make targets (eyeball against every 'make x' in the docs) =="
 git grep -nE '^[a-z][a-z0-9-]*:' -- Makefile
 echo "== generated artifacts: NOT tracked → verify the PRODUCER, not the file =="
-for p in frontend/wailsjs internal/embedded/opsctl_bin frontend/packages/devserver-ui/dist; do
+for p in frontend/wailsjs internal/embedded/opsctl_bin; do
   git ls-files --error-unmatch "$p" >/dev/null 2>&1 \
     && echo "TRACKED?!  $p (DEVELOP.md says it's generated — double-check)" \
     || echo "generated  $p — check the producer (internal/app/*.go / go generate / vite build)"

@@ -2,7 +2,7 @@ import { beforeEach, describe, it, expect, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryResultTable } from "@/components/query/QueryResultTable";
-import { cellValueToText } from "@/lib/cellValue";
+import { CELL_DISPLAY_MAX_CHARS, cellValueToDisplayText, cellValueToText } from "@/lib/cellValue";
 
 const { toastError, toastSuccess } = vi.hoisted(() => ({
   toastError: vi.fn(),
@@ -754,5 +754,83 @@ describe("QueryResultTable — cell context actions", () => {
 
     rerender(<QueryResultTable columns={columns} rows={rows} rowDensity="comfortable" />);
     expect(document.querySelector('[data-cell-key="0:name"]')).toHaveClass("py-2");
+  });
+});
+
+describe("cellValueToDisplayText", () => {
+  it("passes short values through unchanged", () => {
+    expect(cellValueToDisplayText("hello")).toBe("hello");
+    expect(cellValueToDisplayText(42)).toBe("42");
+    expect(cellValueToDisplayText(null)).toBe("");
+    expect(cellValueToDisplayText({ a: 1 })).toBe('{"a":1}');
+  });
+
+  it("caps a value at the display limit and marks the cut", () => {
+    const out = cellValueToDisplayText("x".repeat(200_000));
+    expect(out).toHaveLength(CELL_DISPLAY_MAX_CHARS + 1);
+    expect(out.endsWith("…")).toBe(true);
+  });
+
+  it("caps stringified objects as well", () => {
+    const out = cellValueToDisplayText({ blob: "x".repeat(200_000) });
+    expect(out).toHaveLength(CELL_DISPLAY_MAX_CHARS + 1);
+  });
+
+  it("keeps a value exactly at the limit intact", () => {
+    const exact = "x".repeat(CELL_DISPLAY_MAX_CHARS);
+    expect(cellValueToDisplayText(exact)).toBe(exact);
+  });
+});
+
+describe("QueryResultTable — very large cell values", () => {
+  const big = "x".repeat(200_000);
+  const columns = ["id", "payload"];
+  const rows = [
+    { id: 1, payload: big },
+    { id: 2, payload: "small" },
+  ];
+
+  it("puts only a bounded slice of the value into the cell DOM", () => {
+    render(<QueryResultTable columns={columns} rows={rows} />);
+    const cell = document.querySelector('[data-cell-key="0:payload"]') as HTMLElement;
+    expect(cell.textContent!.length).toBeLessThanOrEqual(CELL_DISPLAY_MAX_CHARS + 1);
+  });
+
+  it("bounds the cell tooltip too", () => {
+    render(<QueryResultTable columns={columns} rows={rows} />);
+    const cell = document.querySelector('[data-cell-key="0:payload"]') as HTMLElement;
+    expect(cell.getAttribute("title")!.length).toBeLessThanOrEqual(CELL_DISPLAY_MAX_CHARS + 1);
+  });
+
+  it("still copies the untruncated value", () => {
+    render(<QueryResultTable columns={columns} rows={rows} editable />);
+    fireEvent.contextMenu(document.querySelector('[data-cell-key="0:payload"]') as HTMLElement, {
+      clientX: 40,
+      clientY: 50,
+    });
+    fireEvent.click(screen.getByText("query.copyValue"));
+
+    expect(writeText).toHaveBeenCalledWith(big);
+  });
+
+  it("keeps the filter popover labels bounded", async () => {
+    const user = userEvent.setup();
+    render(<QueryResultTable columns={columns} rows={rows} enableColumnFilter />);
+    await user.click(screen.getAllByTitle("query.filterColumn")[1]);
+
+    const popover = await screen.findByRole("dialog");
+    for (const label of popover.querySelectorAll("label")) {
+      expect(label.textContent!.length).toBeLessThanOrEqual(CELL_DISPLAY_MAX_CHARS + 20);
+    }
+  });
+
+  it("still edits against the untruncated value", async () => {
+    const onSetCellValue = vi.fn();
+    render(<QueryResultTable columns={columns} rows={rows} editable onSetCellValue={onSetCellValue} />);
+    const cell = document.querySelector('[data-cell-key="0:payload"]') as HTMLElement;
+    fireEvent.doubleClick(cell);
+
+    const input = cell.querySelector("input") as HTMLInputElement;
+    expect(input.value).toBe(big);
   });
 });

@@ -14,6 +14,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
+	"github.com/opskat/opskat/pkg/extension"
 )
 
 // --- fixtures ----------------------------------------------------------------
@@ -36,15 +37,57 @@ func (r *stubStateRepo) Update(context.Context, *extension_state_entity.Extensio
 }
 func (r *stubStateRepo) Delete(context.Context, string) error { return nil }
 
-func writeExtManifest(t *testing.T, dir, name, assetType string) {
+// minimalWASM is the smallest valid WASM module (magic + version header). opsctl
+// never runs it — it only hashes it to look the extension up in the descriptor cache.
+var minimalWASM = []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+
+// describeCacheStub replays what the desktop app cached when it last loaded the
+// extension. opsctl has no WASM runtime, so this cache is the only way it learns an
+// extension's asset types and tools.
+type describeCacheStub struct{ payloads map[string]string }
+
+func (s *describeCacheStub) LoadDescriptor(name string) (string, []byte, error) {
+	payload, ok := s.payloads[name]
+	if !ok {
+		return "", nil, nil
+	}
+	return extension.WasmHash(minimalWASM), []byte(payload), nil
+}
+
+func (s *describeCacheStub) StoreDescriptor(string, string, []byte) error { return nil }
+
+func (s *describeCacheStub) DeleteDescriptor(name string) error {
+	delete(s.payloads, name)
+	return nil
+}
+
+func installDescribeStub(t *testing.T) *describeCacheStub {
+	t.Helper()
+	stub := &describeCacheStub{payloads: map[string]string{}}
+	extension.SetDescribeCache(stub)
+	t.Cleanup(func() { extension.SetDescribeCache(nil) })
+	return stub
+}
+
+// writeExtManifest writes the manifest (the security contract) plus the descriptor
+// the app would have cached for it (asset types, tools, policy face).
+func writeExtManifest(t *testing.T, stub *describeCacheStub, dir, name, assetType string) {
 	t.Helper()
 	extDir := filepath.Join(dir, name)
 	require.NoError(t, os.MkdirAll(extDir, 0o755))
 	manifest := map[string]any{
 		"name":    name,
 		"version": "1.0.0",
-		"hostABI": "1.0",
-		"i18n":    map[string]any{"displayName": name + " display", "description": name + " description"},
+		"hostABI": extension.HostABIVersion,
+		"backend": map[string]any{"runtime": "wasm", "binary": "main.wasm"},
+	}
+	data, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(extDir, "manifest.json"), data, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(extDir, "main.wasm"), minimalWASM, 0o600))
+
+	descriptor, err := json.Marshal(map[string]any{
+		"i18n": map[string]any{"displayName": name + " display", "description": name + " description"},
 		"assetTypes": []map[string]any{{
 			"type": assetType,
 			"i18n": map[string]any{"name": assetType},
@@ -54,14 +97,14 @@ func writeExtManifest(t *testing.T, dir, name, assetType string) {
 			},
 		}},
 		"tools": []map[string]any{{
-			"name":       "list_objects",
-			"parameters": map[string]any{"type": "object", "properties": map[string]any{}},
+			"name":         "list_objects",
+			"policyAction": "list",
+			"parameters":   map[string]any{"type": "object", "properties": map[string]any{}},
 		}},
 		"policies": map[string]any{"type": "ext:" + name},
-	}
-	data, err := json.Marshal(manifest)
+	})
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(extDir, "manifest.json"), data, 0o600))
+	stub.payloads[name] = string(descriptor)
 }
 
 // withExtensionDir points the scanner at a temp extensions dir and installs the given
@@ -84,9 +127,11 @@ func withExtensionDir(t *testing.T, states ...*extension_state_entity.ExtensionS
 
 func TestScanInstalledExtensionsUsesTheRealManifestParser(t *testing.T) {
 	dir := withExtensionDir(t)
-	writeExtManifest(t, dir, "acme", "acme-store")
-	// A directory whose manifest the app itself would refuse (no assetTypes) must not be
-	// listed either: opsctl used to hand-roll a laxer parser and list it anyway.
+	stub := installDescribeStub(t)
+	writeExtManifest(t, stub, dir, "acme", "acme-store")
+	// A directory whose manifest the app itself would refuse (here: built against the
+	// retired 1.x host ABI) must not be listed either: opsctl used to hand-roll a laxer
+	// parser and list it anyway.
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "bogus"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "bogus", "manifest.json"),
 		[]byte(`{"name":"bogus","version":"1.0.0","hostABI":"1.0"}`), 0o600))
@@ -103,7 +148,7 @@ func TestScanInstalledExtensionsUsesTheRealManifestParser(t *testing.T) {
 
 func TestScanInstalledExtensionsReportsDisabledState(t *testing.T) {
 	dir := withExtensionDir(t, &extension_state_entity.ExtensionState{Name: "acme", Enabled: false})
-	writeExtManifest(t, dir, "acme", "acme-store")
+	writeExtManifest(t, installDescribeStub(t), dir, "acme", "acme-store")
 
 	got, err := scanInstalledExtensions()
 	require.NoError(t, err)
@@ -117,7 +162,7 @@ func TestScanInstalledExtensionsReportsDisabledState(t *testing.T) {
 
 func TestExtensionAssetTypeOwnersMapsEnabledTypes(t *testing.T) {
 	dir := withExtensionDir(t)
-	writeExtManifest(t, dir, "acme", "acme-store")
+	writeExtManifest(t, installDescribeStub(t), dir, "acme", "acme-store")
 
 	assert.Equal(t, map[string]string{"acme-store": "acme"}, extensionAssetTypeOwners())
 }
@@ -151,4 +196,75 @@ func TestExecViaDesktopPassesTheCommandThroughVerbatim(t *testing.T) {
 	// The desktop side canonicalizes and policy-checks; opsctl must not rewrite the
 	// command on the way there, or approval would show something else than was typed.
 	assert.Equal(t, "list_objects --bucket=logs", gotCommand)
+}
+
+// --- ext dev -----------------------------------------------------------------
+
+// stubDevInstall replaces the socket round trip so the tests observe what opsctl
+// decided to send, not whether a desktop app happens to be running.
+func stubDevInstall(t *testing.T, fn func(sourceDir string) (string, string, error)) *string {
+	t.Helper()
+	var got string
+	orig := devInstallFn
+	devInstallFn = func(sourceDir string) (string, string, error) {
+		got = sourceDir
+		return fn(sourceDir)
+	}
+	t.Cleanup(func() { devInstallFn = orig })
+	return &got
+}
+
+func TestExtDevSendsTheResolvedAbsoluteDirectory(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{}`), 0o600))
+	sent := stubDevInstall(t, func(string) (string, string, error) { return "acme", "1.0.0", nil })
+
+	require.Equal(t, 0, cmdExtDev([]string{dir}))
+	// The desktop process resolves paths against its own working directory, so a
+	// relative path typed here would land somewhere else entirely.
+	assert.True(t, filepath.IsAbs(*sent))
+	assert.Equal(t, dir, *sent)
+}
+
+func TestExtDevRefusesInProduction(t *testing.T) {
+	t.Setenv("OPSKAT_ENV", "production")
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{}`), 0o600))
+	sent := stubDevInstall(t, func(string) (string, string, error) { return "acme", "1.0.0", nil })
+
+	assert.Equal(t, 1, cmdExtDev([]string{dir}))
+	assert.Empty(t, *sent, "nothing may be sent once the command refuses")
+}
+
+func TestExtDevRejectsADirectoryWithoutAManifest(t *testing.T) {
+	sent := stubDevInstall(t, func(string) (string, string, error) { return "acme", "1.0.0", nil })
+
+	assert.Equal(t, 1, cmdExtDev([]string{t.TempDir()}))
+	assert.Empty(t, *sent)
+}
+
+func TestExtDevReportsAFailedInstall(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{}`), 0o600))
+	stubDevInstall(t, func(string) (string, string, error) {
+		return "", "", errors.New("cannot connect to approval socket")
+	})
+
+	assert.Equal(t, 1, cmdExtDev([]string{dir}))
+}
+
+func TestExtDevNeedsADirectory(t *testing.T) {
+	sent := stubDevInstall(t, func(string) (string, string, error) { return "acme", "1.0.0", nil })
+
+	assert.Equal(t, 1, cmdExtDev(nil))
+	assert.Empty(t, *sent)
+}
+
+func TestExtRoutesDevToTheDevSubcommand(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{}`), 0o600))
+	sent := stubDevInstall(t, func(string) (string, string, error) { return "acme", "1.0.0", nil })
+
+	require.Equal(t, 0, cmdExt([]string{"dev", dir}))
+	assert.Equal(t, dir, *sent)
 }

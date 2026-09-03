@@ -82,8 +82,9 @@ type recordedHost struct {
 }
 
 type recordedEvent struct {
-	Type string
-	Data json.RawMessage
+	Invocation string
+	Type       string
+	Data       json.RawMessage
 }
 
 type trackedCloser struct {
@@ -168,17 +169,24 @@ func (h *recordedHost) KVSet(key string, value []byte) error {
 	return nil
 }
 
-func (h *recordedHost) ActionEvent(eventType string, data json.RawMessage) error {
+func (h *recordedHost) ActionEvent(invocationID, eventType string, data json.RawMessage) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.events = append(h.events, recordedEvent{Type: eventType, Data: data})
+	h.events = append(h.events, recordedEvent{Invocation: invocationID, Type: eventType, Data: data})
 	return nil
 }
 
-func (h *recordedHost) snapshotEvents() []recordedEvent {
+// eventsFor returns the events one invocation produced, in order.
+func (h *recordedHost) eventsFor(invocationID string) []recordedEvent {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return append([]recordedEvent(nil), h.events...)
+	var out []recordedEvent
+	for _, e := range h.events {
+		if e.Invocation == invocationID {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 func (h *recordedHost) closedCount() int {

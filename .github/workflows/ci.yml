@@ -22,8 +22,6 @@ jobs:
           go-version-file: go.mod
       - name: Create frontend dist placeholder
         run: mkdir -p frontend/dist && touch frontend/dist/.gitkeep
-      - name: Create devserver static placeholder
-        run: mkdir -p cmd/devserver/static/assets && echo "placeholder" > cmd/devserver/static/assets/placeholder.txt
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
@@ -38,8 +36,6 @@ jobs:
           go-version-file: go.mod
       - name: Create frontend dist placeholder
         run: mkdir -p frontend/dist && touch frontend/dist/.gitkeep
-      - name: Create devserver static placeholder
-        run: mkdir -p cmd/devserver/static/assets && echo "placeholder" > cmd/devserver/static/assets/placeholder.txt
       - run: go test ./...
 
   e2e:

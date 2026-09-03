@@ -154,11 +154,14 @@ func (s *Service) Disable(ctx context.Context, name string) error {
 //
 // Flow:
 //  1. manager.Install parses manifest + copies files + loads WASM.
-//  2. Cross-extension snippet category id conflict check: if the new manifest declares
+//  2. unregister the previous registration of this name — installing over an
+//     existing extension is the ordinary upgrade path, and manager.Install
+//     unloads the old module without knowing about the app-wide registries.
+//  3. Cross-extension snippet category id conflict check: if the new manifest declares
 //     a snippets.categories[].id that collides with another currently installed
 //     extension's category, roll back via manager.Uninstall and return an error.
-//  3. snippet hook: RefreshCategories → SyncExtensionSeeds.
-//  4. bridge.Register, notify, persist enabled state.
+//  4. snippet hook: RefreshCategories → SyncExtensionSeeds.
+//  5. bridge.Register, notify, persist enabled state.
 func (s *Service) Install(ctx context.Context, sourcePath string) (*extension.Manifest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -167,6 +170,12 @@ func (s *Service) Install(ctx context.Context, sourcePath string) (*extension.Ma
 	if err != nil {
 		return nil, fmt.Errorf("install extension: %w", err)
 	}
+
+	// manager.Install has already unloaded whatever was running under this name,
+	// so the app-wide registries now point at a module that is gone. Registration
+	// is keyed by name and refuses a name it already holds, so the old entry has
+	// to go before the new one can be registered below.
+	s.unregister(manifest.Name)
 
 	// Cross-extension category id dedup (after install+load, before bridge.Register).
 	// Intra-manifest duplicates are already rejected by manifest.validate().

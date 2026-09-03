@@ -400,6 +400,7 @@ func initExtensionSystem(
 	extB.SetService(extSvc)
 	aiB.SetExtensionService(extSvc)
 	opsctlB.SetExtToolExecutor(desktopExecExecutor{})
+	opsctlB.SetExtDevInstaller(desktopExtDevInstaller{ext: extB})
 
 	// 接入 snippet 分类注册表
 	if svc := snippet_svc.Snippet(); svc != nil {
@@ -427,6 +428,14 @@ type desktopExecExecutor struct{}
 
 func (desktopExecExecutor) ExecuteExtTool(ctx context.Context, assetID int64, command string) (string, error) {
 	return aitool.ExecOnAsset(ctx, assetID, command)
+}
+
+// desktopExtDevInstaller 把 `opsctl ext dev` 的安装请求交回扩展 binder，跑的是
+// "从目录安装"那一条 extension_svc.Install。
+type desktopExtDevInstaller struct{ ext *extension.Extension }
+
+func (i desktopExtDevInstaller) InstallExtensionDir(ctx context.Context, sourceDir string) (string, string, error) {
+	return extension.InstallExtensionDir(i.ext, ctx, sourceDir)
 }
 
 func initialWindowSize(cfg *bootstrap.AppConfig) (int, int) {

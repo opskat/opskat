@@ -332,34 +332,14 @@ func TestPluginActionCancellation(t *testing.T) {
 		host := newRecordedHost()
 		p := newFixturePlugin(t, host, t.TempDir())
 
-		type result struct {
-			out map[string]any
-			err error
-		}
-		results := make(chan result, 1)
-		go func() {
-			raw, err := p.CallAction(context.Background(), "stream", mustJSON(t,
-				map[string]any{"count": 100000, "delay_ms": 1}))
-			var out map[string]any
-			if err == nil {
-				err = json.Unmarshal(raw, &out)
-			}
-			results <- result{out: out, err: err}
-		}()
+		results := make(chan actionResult, 1)
+		go func() { results <- runStream(t, p, "upload-1", 100000, 1) }()
 
 		Convey("canceling it makes the guest return early", func() {
-			deadline := time.After(30 * time.Second)
-			for len(host.snapshotEvents()) == 0 {
-				select {
-				case <-deadline:
-					t.Fatal("action never emitted an event")
-				default:
-					time.Sleep(time.Millisecond)
-				}
-			}
-			p.CancelActiveAction()
+			waitForEvents(t, host, "upload-1", 1)
+			So(p.CancelAction("upload-1"), ShouldBeTrue)
 
-			var got result
+			var got actionResult
 			select {
 			case got = <-results:
 			case <-time.After(30 * time.Second):
@@ -368,17 +348,112 @@ func TestPluginActionCancellation(t *testing.T) {
 			So(got.err, ShouldBeNil)
 			So(got.out["stopped"], ShouldEqual, true)
 			So(got.out["sent"], ShouldBeLessThan, float64(100000))
-			So(len(host.snapshotEvents()), ShouldBeGreaterThan, 0)
+			So(len(host.eventsFor("upload-1")), ShouldBeGreaterThan, 0)
 
 			Convey("and the next action starts with a clean cancellation flag", func() {
-				raw, err := p.CallAction(context.Background(), "should_stop", json.RawMessage(`{}`))
+				raw, err := p.CallAction(context.Background(), "upload-2", "should_stop", json.RawMessage(`{}`))
 				So(err, ShouldBeNil)
 				var out map[string]any
 				So(json.Unmarshal(raw, &out), ShouldBeNil)
 				So(out["stopped"], ShouldEqual, false)
 			})
+
+			Convey("and canceling an invocation that is not running says so", func() {
+				So(p.CancelAction("upload-1"), ShouldBeFalse)
+			})
 		})
 	})
+}
+
+// TestPluginCancelsOnlyTheNamedAction is the regression guard for the bug the
+// reactor instance pool introduced. While Plugin.mu serialized calls, "cancel
+// this extension" could only ever mean the single action in flight; once several
+// run at once the same request stopped every one of them — cancel one file in an
+// OSS multi-file upload and the whole queue died. The same root cause showed up
+// a second way in the event stream, so both are asserted here.
+func TestPluginCancelsOnlyTheNamedAction(t *testing.T) {
+	Convey("Given two actions of one extension running at the same time", t, func() {
+		host := newRecordedHost()
+		p := newFixturePlugin(t, host, t.TempDir())
+
+		doomed := make(chan actionResult, 1)
+		survivor := make(chan actionResult, 1)
+		go func() { doomed <- runStream(t, p, "upload-doomed", 100000, 1) }()
+		go func() { survivor <- runStream(t, p, "upload-survivor", 100000, 1) }()
+
+		waitForEvents(t, host, "upload-doomed", 1)
+		waitForEvents(t, host, "upload-survivor", 1)
+
+		Convey("canceling one stops it and leaves the other running", func() {
+			So(p.CancelAction("upload-doomed"), ShouldBeTrue)
+
+			var stopped actionResult
+			select {
+			case stopped = <-doomed:
+			case <-time.After(30 * time.Second):
+				t.Fatal("the canceled action never returned")
+			}
+			So(stopped.err, ShouldBeNil)
+			So(stopped.out["stopped"], ShouldEqual, true)
+
+			// The survivor is still making progress after the other one is gone.
+			before := len(host.eventsFor("upload-survivor"))
+			waitForEvents(t, host, "upload-survivor", before+3)
+			select {
+			case r := <-survivor:
+				t.Fatalf("the untouched action stopped too: %+v (err=%v)", r.out, r.err)
+			default:
+			}
+
+			Convey("and its events keep flowing under its own invocation id", func() {
+				// Nothing new may appear under the canceled id after it returned.
+				doomedCount := len(host.eventsFor("upload-doomed"))
+				waitForEvents(t, host, "upload-survivor", len(host.eventsFor("upload-survivor"))+3)
+				So(len(host.eventsFor("upload-doomed")), ShouldEqual, doomedCount)
+
+				So(p.CancelAction("upload-survivor"), ShouldBeTrue)
+				select {
+				case r := <-survivor:
+					So(r.err, ShouldBeNil)
+					So(r.out["stopped"], ShouldEqual, true)
+				case <-time.After(30 * time.Second):
+					t.Fatal("the second action did not stop after cancellation")
+				}
+			})
+		})
+	})
+}
+
+type actionResult struct {
+	out map[string]any
+	err error
+}
+
+// runStream drives the fixture's "stream" action under an explicit invocation id.
+func runStream(t *testing.T, p *Plugin, invocationID string, count, delayMS int) actionResult {
+	t.Helper()
+	raw, err := p.CallAction(context.Background(), invocationID, "stream",
+		mustJSON(t, map[string]any{"count": count, "delay_ms": delayMS}))
+	var out map[string]any
+	if err == nil {
+		err = json.Unmarshal(raw, &out)
+	}
+	return actionResult{out: out, err: err}
+}
+
+// waitForEvents blocks until one invocation has emitted at least n events.
+func waitForEvents(t *testing.T, host *recordedHost, invocationID string, n int) {
+	t.Helper()
+	deadline := time.After(30 * time.Second)
+	for len(host.eventsFor(invocationID)) < n {
+		select {
+		case <-deadline:
+			t.Fatalf("invocation %s emitted %d events, wanted %d",
+				invocationID, len(host.eventsFor(invocationID)), n)
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
 }
 
 // TestToolTimeoutDoesNotBindActions is the reason tool and action calls stopped
@@ -393,7 +468,7 @@ func TestToolTimeoutDoesNotBindActions(t *testing.T) {
 		})
 
 		Convey("the same work as an action is allowed to finish", func() {
-			raw, err := p.CallAction(context.Background(), "spin", mustJSON(t, map[string]any{"ms": 400}))
+			raw, err := p.CallAction(context.Background(), "slow-1", "spin", mustJSON(t, map[string]any{"ms": 400}))
 			So(err, ShouldBeNil)
 			var out map[string]any
 			So(json.Unmarshal(raw, &out), ShouldBeNil)
@@ -403,7 +478,7 @@ func TestToolTimeoutDoesNotBindActions(t *testing.T) {
 		Convey("an action still obeys the deadline its caller set", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 			defer cancel()
-			_, err := p.CallAction(ctx, "spin", mustJSON(t, map[string]any{"ms": 3000}))
+			_, err := p.CallAction(ctx, "slow-2", "spin", mustJSON(t, map[string]any{"ms": 3000}))
 			So(err, ShouldNotBeNil)
 		})
 	})

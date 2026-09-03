@@ -303,7 +303,7 @@ func jsonTypeName(token any) string {
 }
 
 // convertFlag 按 manifest 声明的类型转换 flag 值。类型不是可选的——
-// pkg/extension 的加载期校验（Manifest.validateTools）保证每个属性都带 type，
+// pkg/extension 的加载期校验（Descriptor.validateTools）保证每个属性都带 type，
 // 所以这里的 default 分支只可能被将来新增的类型触发，报错而非静默透传字符串。
 func convertFlag(raw, typ string) (any, error) {
 	switch typ {

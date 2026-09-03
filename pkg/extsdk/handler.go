@@ -8,6 +8,8 @@ import (
 // dispatch routes a function call to the registered handler.
 func dispatch(fnName string, input []byte) (json.RawMessage, error) {
 	switch fnName {
+	case "describe":
+		return dispatchDescribe()
 	case "execute_tool":
 		return dispatchTool(input)
 	case "execute_action":
@@ -21,19 +23,31 @@ func dispatch(fnName string, input []byte) (json.RawMessage, error) {
 	}
 }
 
-func dispatchTool(input []byte) (json.RawMessage, error) {
-	var req struct {
-		Tool string          `json:"tool"`
-		Args json.RawMessage `json:"args"`
-	}
+// toolCall is the shape of both execute_tool and check_policy input: the host
+// asks the same question about the same call, once to classify it and once to run it.
+type toolCall struct {
+	Tool string          `json:"tool"`
+	Args json.RawMessage `json:"args"`
+}
+
+func parseToolCall(input []byte) (*toolEntry, toolCall, error) {
+	var req toolCall
 	if err := json.Unmarshal(input, &req); err != nil {
-		return nil, fmt.Errorf("parse tool request: %w", err)
+		return nil, req, fmt.Errorf("parse tool request: %w", err)
 	}
-	handler, ok := tools[req.Tool]
+	entry, ok := tools[req.Tool]
 	if !ok {
-		return nil, fmt.Errorf("unknown tool: %s", req.Tool)
+		return nil, req, fmt.Errorf("unknown tool: %s", req.Tool)
 	}
-	result, err := handler(&ToolContext{Tool: req.Tool, Args: req.Args})
+	return entry, req, nil
+}
+
+func dispatchTool(input []byte) (json.RawMessage, error) {
+	entry, req, err := parseToolCall(input)
+	if err != nil {
+		return nil, err
+	}
+	result, err := entry.invoke(&ToolContext{Tool: req.Tool, Args: req.Args})
 	if err != nil {
 		return nil, err
 	}
@@ -63,20 +77,20 @@ func dispatchAction(input []byte) (json.RawMessage, error) {
 	return json.Marshal(result)
 }
 
+// dispatchPolicy answers from the tool's own registration. The action a tool
+// requests is part of declaring the tool, so there is no per-tool switch here to
+// fall out of step with the handler table.
 func dispatchPolicy(input []byte) (json.RawMessage, error) {
-	if policyChecker == nil {
-		return nil, fmt.Errorf("no policy checker registered")
+	entry, req, err := parseToolCall(input)
+	if err != nil {
+		return nil, err
 	}
-	var req struct {
-		Tool string          `json:"tool"`
-		Args json.RawMessage `json:"args"`
+	resource := ""
+	if entry.resource != nil {
+		resource = entry.resource(req.Args)
 	}
-	if err := json.Unmarshal(input, &req); err != nil {
-		return nil, fmt.Errorf("parse policy request: %w", err)
-	}
-	action, resource := policyChecker(req.Tool, req.Args)
 	return json.Marshal(map[string]string{
-		"action":   action,
+		"action":   entry.action,
 		"resource": resource,
 	})
 }

@@ -191,7 +191,7 @@ transient `opskat.db-journal` appears mid-write. Read it **without ever writing 
 | `grant_sessions` / `grant_items` | Approval sessions and granted items | session id, expiry, granted patterns |
 | `conversations` / `conversation_messages` | AI chat history | conversation id, role, content |
 | `ai_providers` | Configured AI providers | — |
-| `extension_state` / `extension_data` | Installed extension state + per-extension KV | — |
+| `extension_state` / `extension_data` / `extension_describe` | Installed extension state, per-extension KV, and the cached `describe()` answer (keyed by wasm hash) | — |
 | `host_keys` | Known SSH host keys | — |
 | `snippets` | Saved command snippets | — |
 | `forward_configs` / `forward_rules` | Port forwarding | — |
@@ -253,7 +253,7 @@ Environment toggles for the desktop app:
   with an isolated data directory and required by the hermetic e2e harness.
 - `OPSKAT_EXTENSIONS=0` — start with the extension system disabled (isolate
   extension-related behavior).
-- `OPSKAT_ENV=production` — production mode (e.g. `make devserver` refuses to run).
+- `OPSKAT_ENV=production` — production mode (e.g. `opsctl ext dev` refuses to run).
 
 The GUI has no `--data-dir` command-line flag; use `OPSKAT_DATA_DIR` instead. Prefer a
 throwaway directory for destructive verification. If you must use the default data
@@ -330,7 +330,7 @@ Always prefer a failing test that reproduces the issue before changing impl (see
 
 ```bash
 # Go
-make test                                  # Go tests: internal/, cmd/opsctl, pkg/, cmd/devserver (CI runs `go test ./...`)
+make test                                  # Go tests: internal/, cmd/opsctl, pkg/ (CI runs `go test ./...`)
 go test ./internal/ai/...                  # package scope
 go test ./internal/ai/ -run TestName       # single test
 make test-cover                            # coverage HTML

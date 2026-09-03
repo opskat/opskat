@@ -19,6 +19,9 @@ import (
 
 var delegateExtExecFn = delegateExtExec
 
+// devInstallFn 变量化同 delegateExtExecFn：让 cmdExtDev 的判断可测，不必真起一个桌面端。
+var devInstallFn = requestExtDevInstall
+
 // extensionsDirFn 定位扩展目录。变量化是为了可测，与本包 execApprovalFn 等同一套路。
 var extensionsDirFn = func() string { return filepath.Join(bootstrap.ResolvedDataDir(), "extensions") }
 
@@ -34,6 +37,8 @@ func cmdExt(args []string) int {
 	switch args[0] {
 	case "list":
 		return cmdExtList()
+	case "dev":
+		return cmdExtDev(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown ext subcommand %q\n\nRun 'opsctl ext --help' for usage.\n", args[0])
 		return 1
@@ -196,12 +201,101 @@ func delegateExtExec(assetID int64, assetName, command, session string) (string,
 	return resp.ToolResult, nil
 }
 
+// cmdExtDev 把一个未打包的扩展目录装进运行中的桌面应用。
+//
+// 它取代了 cmd/devserver：那是第二套宿主加第二套 UI，一致性只能靠纪律维持，也确实
+// 跑偏过（dev 下曾整个不包能力面）。这里没有旁路——安装、加载、注册全部发生在桌面
+// 进程里那一套代码上，opsctl 只送一个目录路径过去。重跑一次即热重载：Install 会先
+// Unload 旧的再装新的并通知前端刷新，所以 `<build> && opsctl ext dev <dir>` 就是
+// 开发回路。
+//
+// 目标数据目录就是 opsctl 的 --data-dir / OPSKAT_DATA_DIR，指向 make dev-sandbox
+// 那个隔离目录即可（docs/VERIFICATION.md）；不另造一套沙箱路径推导。
+func cmdExtDev(args []string) int {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
+		printExtDevUsage()
+		if len(args) > 0 {
+			return 0
+		}
+		return 1
+	}
+
+	// 装的是未经审阅的 WASM，能力由它自己的 manifest 声明。这道门禁原本长在
+	// cmd/devserver 上，随命令一起搬过来；真正兜底的是桌面端同名检查。
+	if os.Getenv("OPSKAT_ENV") == "production" {
+		fmt.Fprintln(os.Stderr, "Error: opsctl ext dev cannot run when OPSKAT_ENV=production")
+		return 1
+	}
+
+	sourceDir, err := filepath.Abs(args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: resolve %s: %v\n", args[0], err)
+		return 1
+	}
+	// 桌面进程按它自己的工作目录解析路径，所以这里必须先绝对化；顺带确认目录里确实
+	// 有 manifest.json，好过让用户等一次 socket 往返才知道路径打错了。
+	if _, err := os.Stat(filepath.Join(sourceDir, "manifest.json")); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s is not an extension directory (no manifest.json)\n", sourceDir)
+		return 1
+	}
+
+	name, version, err := devInstallFn(sourceDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	fmt.Printf("Installed %s %s from %s into the running app\n", name, version, sourceDir)
+	return 0
+}
+
+// requestExtDevInstall 让运行中的桌面进程装这个目录。
+//
+// 与 delegateExtExec 同一条理由：注册表、WASM 运行时、能力面都只存在于桌面进程，
+// opsctl 自己装一份就等于第二套加载路径。
+func requestExtDevInstall(sourceDir string) (string, string, error) {
+	dataDir := bootstrap.ResolvedDataDir()
+	token, err := bootstrap.ReadAuthToken(dataDir)
+	if err != nil {
+		logger.Default().Warn("read auth token", zap.Error(err))
+	}
+
+	resp, err := approval.RequestApprovalWithToken(approval.SocketPath(dataDir), token, approval.ApprovalRequest{
+		Type: "ext_dev_install",
+		Path: sourceDir,
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("%w on data dir %s — start it with `make dev-sandbox` (docs/VERIFICATION.md)", err, dataDir)
+	}
+	if !resp.Approved {
+		return "", "", fmt.Errorf("%s", resp.Reason)
+	}
+	return resp.Extension, resp.Version, nil
+}
+
+func printExtDevUsage() {
+	fmt.Fprint(os.Stderr, `Usage:
+  opsctl ext dev <dir>
+
+Installs an unpacked extension directory into the running desktop app and
+reloads it in place — the same install the app's "install from directory"
+button performs, so a dev build loads exactly like a shipped one.
+
+Re-run it after each build; that is the hot-reload loop:
+
+  make -C ../extensions build EXT=oss && opsctl ext dev ../extensions/extensions/oss/dist
+
+Point --data-dir (or OPSKAT_DATA_DIR) at the verification sandbox the app is
+running on — see docs/VERIFICATION.md. Refused when OPSKAT_ENV=production.
+`)
+}
+
 func printExtUsage() {
 	fmt.Fprint(os.Stderr, `Usage:
   opsctl ext <subcommand>
 
 Subcommands:
   list    List installed extensions with their asset types, tools, and enabled state
+  dev     Install an unpacked extension directory into the running app (development)
 
 To run an extension tool, use exec against one of the extension's assets:
 
@@ -212,6 +306,7 @@ extension. Run 'opsctl help <asset>' to see the tool and flag reference.
 
 Examples:
   opsctl ext list
+  opsctl ext dev ../extensions/extensions/oss/dist
   opsctl exec my-bucket -- list_objects --bucket=logs --maxKeys=100
 `)
 }

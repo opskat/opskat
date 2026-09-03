@@ -18,7 +18,10 @@ type HostProvider interface {
 	Log(level, msg string)
 	KVGet(key string) ([]byte, error)
 	KVSet(key string, value []byte) error
-	ActionEvent(eventType string, data json.RawMessage) error
+	// ActionEvent forwards one event from a running action. invocationID names
+	// the run it came from — without it a listener watching an extension with
+	// two actions in flight cannot tell whose progress it is reading.
+	ActionEvent(invocationID, eventType string, data json.RawMessage) error
 }
 
 type IOOpenParams struct {

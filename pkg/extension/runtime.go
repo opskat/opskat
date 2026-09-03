@@ -65,8 +65,15 @@ type Plugin struct {
 	pool   chan *instance
 	closed atomic.Bool
 
+	// actions maps an in-flight action's invocation id to its cancellation flag.
+	// Keyed by id rather than held as a single field because several actions of
+	// one extension run at the same time and each is canceled on its own.
 	actionsMu sync.Mutex
-	actions   map[*ActionCancellation]struct{}
+	actions   map[string]*ActionCancellation
+
+	// callSeq names invocations that nobody cancels — tools, policy and config
+	// calls. They still need an id because the guest may emit events from them.
+	callSeq atomic.Uint64
 }
 
 type pluginOptions struct {
@@ -150,12 +157,19 @@ func LoadPlugin(ctx context.Context, manifest *Manifest, wasmBytes []byte, host 
 		host:     host,
 		opts:     o,
 		pool:     make(chan *instance, o.maxInstances),
-		actions:  make(map[*ActionCancellation]struct{}),
+		actions:  make(map[string]*ActionCancellation),
 	}
 	for i := 0; i < o.maxInstances; i++ {
 		p.pool <- nil
 	}
 	return p, nil
+}
+
+// Describe asks the guest to report what it can do: its tools and their parameter
+// schemas, asset types, policy groups, pages and snippets. See descriptor.go for
+// why those declarations live in the guest rather than in manifest.json.
+func (p *Plugin) Describe(ctx context.Context) (json.RawMessage, error) {
+	return p.call(ctx, newInvocation(p.nextInvocationID(), nil), "describe", nil, p.opts.toolTimeout)
 }
 
 // CallTool calls execute_tool on the extension.
@@ -167,15 +181,20 @@ func (p *Plugin) CallTool(ctx context.Context, toolName string, args json.RawMes
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s input: %w", "execute_tool", err)
 	}
-	return p.call(ctx, "execute_tool", input, nil, p.opts.toolTimeout)
+	return p.call(ctx, newInvocation(p.nextInvocationID(), nil), "execute_tool", input, p.opts.toolTimeout)
 }
 
 // CallAction calls execute_action on the extension.
 //
+// invocationID is the caller's handle on this one run: CancelAction takes it,
+// and every event the action emits carries it, so a caller with several actions
+// of the same extension in flight can stop one and route the rest. It is opaque
+// to the runtime and must be unique among this plugin's running actions.
+//
 // Unlike a tool call, an action gets no host-imposed deadline: uploads, batch
 // copies and event streams are expected to run for minutes, and the caller's
 // context is the only party that knows how long is too long.
-func (p *Plugin) CallAction(ctx context.Context, actionName string, args json.RawMessage) (json.RawMessage, error) {
+func (p *Plugin) CallAction(ctx context.Context, invocationID, actionName string, args json.RawMessage) (json.RawMessage, error) {
 	input, err := json.Marshal(map[string]any{
 		"action": actionName,
 		"args":   json.RawMessage(args),
@@ -185,28 +204,62 @@ func (p *Plugin) CallAction(ctx context.Context, actionName string, args json.Ra
 	}
 
 	cancel := NewActionCancellation()
-	p.actionsMu.Lock()
-	p.actions[cancel] = struct{}{}
-	p.actionsMu.Unlock()
-	defer func() {
-		p.actionsMu.Lock()
-		delete(p.actions, cancel)
-		p.actionsMu.Unlock()
-	}()
+	if err := p.trackAction(invocationID, cancel); err != nil {
+		return nil, err
+	}
+	defer p.untrackAction(invocationID)
 
-	return p.call(ctx, "execute_action", input, cancel, 0)
+	return p.call(ctx, newInvocation(invocationID, cancel), "execute_action", input, 0)
 }
 
-// CancelActiveAction requests cancellation of every action currently running in
-// this plugin. Actions run concurrently now, and the IPC surface identifies the
-// extension rather than an individual run, so "cancel this extension's work" is
-// the only meaning the caller can express.
-func (p *Plugin) CancelActiveAction() {
+// CancelAction requests cancellation of the one action running under
+// invocationID, and reports whether such an action was running. Actions are
+// concurrent, so a caller that means "stop this upload" has to be able to say
+// which one.
+func (p *Plugin) CancelAction(invocationID string) bool {
+	p.actionsMu.Lock()
+	cancel, ok := p.actions[invocationID]
+	p.actionsMu.Unlock()
+	if !ok {
+		return false
+	}
+	cancel.Cancel()
+	return true
+}
+
+// trackAction registers a run under its invocation id. A duplicate id is
+// rejected rather than overwritten: two runs sharing one id would make both
+// cancellation and event routing ambiguous, which is the bug this id exists to
+// remove.
+func (p *Plugin) trackAction(invocationID string, cancel *ActionCancellation) error {
 	p.actionsMu.Lock()
 	defer p.actionsMu.Unlock()
-	for c := range p.actions {
+	if _, exists := p.actions[invocationID]; exists {
+		return fmt.Errorf("action invocation %q is already running", invocationID)
+	}
+	p.actions[invocationID] = cancel
+	return nil
+}
+
+func (p *Plugin) untrackAction(invocationID string) {
+	p.actionsMu.Lock()
+	defer p.actionsMu.Unlock()
+	delete(p.actions, invocationID)
+}
+
+// cancelAllActions stops every running action. Only shutdown means this.
+func (p *Plugin) cancelAllActions() {
+	p.actionsMu.Lock()
+	defer p.actionsMu.Unlock()
+	for _, c := range p.actions {
 		c.Cancel()
 	}
+}
+
+// nextInvocationID names a call that has no caller-supplied id. The plugin name
+// keeps it readable in a log line next to an action's id.
+func (p *Plugin) nextInvocationID() string {
+	return fmt.Sprintf("%s#%d", p.manifest.Name, p.callSeq.Add(1))
 }
 
 // CheckPolicy calls check_policy on the extension.
@@ -218,7 +271,7 @@ func (p *Plugin) CheckPolicy(ctx context.Context, toolName string, args json.Raw
 	if err != nil {
 		return "", "", fmt.Errorf("marshal %s input: %w", "check_policy", err)
 	}
-	result, err := p.call(ctx, "check_policy", input, nil, p.opts.toolTimeout)
+	result, err := p.call(ctx, newInvocation(p.nextInvocationID(), nil), "check_policy", input, p.opts.toolTimeout)
 	if err != nil {
 		return "", "", err
 	}
@@ -234,7 +287,7 @@ func (p *Plugin) CheckPolicy(ctx context.Context, toolName string, args json.Raw
 
 // ValidateConfig calls validate_config on the extension.
 func (p *Plugin) ValidateConfig(ctx context.Context, config json.RawMessage) ([]ValidationError, error) {
-	result, err := p.call(ctx, "validate_config", config, nil, p.opts.toolTimeout)
+	result, err := p.call(ctx, newInvocation(p.nextInvocationID(), nil), "validate_config", config, p.opts.toolTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +309,7 @@ func (p *Plugin) Close(ctx context.Context) error {
 	p.closed.Store(true)
 	// Unblock actions that are polling ShouldStop so they can return before the
 	// runtime is torn out from under them.
-	p.CancelActiveAction()
+	p.cancelAllActions()
 	return p.runtime.Close(ctx)
 }
 
@@ -267,7 +320,7 @@ func (p *Plugin) Manifest() *Manifest {
 
 // call runs one guest invocation on an instance borrowed from the pool.
 // maxDuration of 0 means "no host-imposed deadline".
-func (p *Plugin) call(ctx context.Context, fnName string, input []byte, cancel *ActionCancellation, maxDuration time.Duration) (json.RawMessage, error) {
+func (p *Plugin) call(ctx context.Context, inv *invocation, fnName string, input []byte, maxDuration time.Duration) (json.RawMessage, error) {
 	if p.closed.Load() {
 		return nil, fmt.Errorf("plugin closed")
 	}
@@ -292,7 +345,6 @@ func (p *Plugin) call(ctx context.Context, fnName string, input []byte, cancel *
 		return nil, err
 	}
 
-	inv := newInvocation(cancel)
 	// wazero hands this context to every host function the guest calls, which is
 	// how a host call finds the invocation it belongs to.
 	guestCtx := withInvocation(callCtx, inv)

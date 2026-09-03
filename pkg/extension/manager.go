@@ -192,7 +192,13 @@ func (m *Manager) Shutdown(ctx context.Context) {
 	}
 }
 
-// LoadManifestInfo reads a manifest from disk without loading the WASM plugin.
+// LoadManifestInfo reads an extension directory without compiling or running its
+// WASM module: the manifest gives the security contract, the descriptor cache gives
+// the functional face. It is the entry point for callers that have no runtime at
+// all (opsctl) or that are looking at an extension which is not loaded.
+//
+// A cache miss leaves the functional face empty — that only happens for an
+// extension this machine has never loaded, since every load populates the cache.
 func LoadManifestInfo(dir string) (*ManifestInfo, error) {
 	manifestPath := filepath.Join(dir, "manifest.json")
 	data, err := os.ReadFile(manifestPath) //nolint:gosec // extension directories are trusted
@@ -203,7 +209,26 @@ func LoadManifestInfo(dir string) (*ManifestInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	applyCachedDescriptor(manifest, dir)
 	return &ManifestInfo{Name: manifest.Name, Dir: dir, Manifest: manifest, Locales: LoadLocales(dir)}, nil
+}
+
+// applyCachedDescriptor merges the cached describe() answer for the extension in
+// dir, if the cache holds one for the wasm binary currently on disk.
+func applyCachedDescriptor(manifest *Manifest, dir string) {
+	wasmBytes, err := os.ReadFile(filepath.Join(dir, manifest.Backend.Binary)) //nolint:gosec // path constructed from trusted extension directory
+	if err != nil {
+		logger.Default().Warn("read wasm binary for descriptor lookup",
+			zap.String("extension", manifest.Name), zap.Error(err))
+		return
+	}
+	desc := cachedDescriptor(manifest.Name, WasmHash(wasmBytes))
+	if desc == nil {
+		logger.Default().Warn("no cached descriptor for extension; load it once to populate the cache",
+			zap.String("extension", manifest.Name))
+		return
+	}
+	manifest.apply(desc)
 }
 
 func (m *Manager) installLock(name string) *sync.Mutex {
@@ -215,6 +240,31 @@ func (m *Manager) installLock(name string) *sync.Mutex {
 		m.installLocks[name] = mu
 	}
 	return mu
+}
+
+// describeInto fills the manifest's functional face from the guest.
+//
+// The guest is asked only when the cache has no answer for this exact wasm binary;
+// a hit skips the call entirely, which is what keeps listing extensions off the
+// WASM path. The answer is validated either way — a cached payload crosses the same
+// boundary as a fresh one.
+func (m *Manager) describeInto(ctx context.Context, manifest *Manifest, plugin *Plugin, wasmBytes []byte) error {
+	hash := WasmHash(wasmBytes)
+	if desc := cachedDescriptor(manifest.Name, hash); desc != nil {
+		manifest.apply(desc)
+		return nil
+	}
+	payload, err := plugin.Describe(ctx)
+	if err != nil {
+		return fmt.Errorf("describe extension %q: %w", manifest.Name, err)
+	}
+	desc, err := ParseDescriptor(payload)
+	if err != nil {
+		return fmt.Errorf("extension %q: %w", manifest.Name, err)
+	}
+	manifest.apply(desc)
+	storeDescriptor(manifest.Name, hash, payload)
+	return nil
 }
 
 func (m *Manager) LoadExtension(ctx context.Context, dir string) (*Manifest, error) {
@@ -274,6 +324,13 @@ func (m *Manager) LoadExtension(ctx context.Context, dir string) (*Manifest, err
 		return nil, fmt.Errorf("load plugin: %w", err)
 	}
 
+	if err := m.describeInto(ctx, manifest, plugin, wasmBytes); err != nil {
+		if closeErr := plugin.Close(ctx); closeErr != nil {
+			m.logger.Warn("close plugin after describe failure", zap.String("name", manifest.Name), zap.Error(closeErr))
+		}
+		return nil, err
+	}
+
 	ext := &Extension{
 		Name:             manifest.Name,
 		Dir:              dir,
@@ -300,7 +357,7 @@ type ManifestInfo struct {
 	Locales  map[string]map[string]string
 }
 
-// ScanManifests reads manifests from disk without loading WASM plugins.
+// ScanManifests reads every extension directory without loading WASM plugins.
 func (m *Manager) ScanManifests() ([]*ManifestInfo, error) {
 	entries, err := os.ReadDir(m.dir)
 	if err != nil {
@@ -325,6 +382,13 @@ func (m *Manager) ScanManifests() ([]*ManifestInfo, error) {
 		if err != nil {
 			m.logger.Warn("skip extension manifest", zap.String("dir", entry.Name()), zap.Error(err))
 			continue
+		}
+		// A loaded extension already holds the answer the guest gave this run; only
+		// a disabled one has to fall back to what the cache remembers.
+		if ext := m.GetExtension(manifest.Name); ext != nil {
+			manifest = ext.Manifest
+		} else {
+			applyCachedDescriptor(manifest, extDir)
 		}
 		result = append(result, &ManifestInfo{
 			Name:     manifest.Name,
@@ -393,21 +457,27 @@ func (m *Manager) Install(ctx context.Context, sourcePath string) (*Manifest, er
 		return nil, fmt.Errorf("copy extension: %w", err)
 	}
 
-	// Load the extension
-	if _, err := m.LoadExtension(ctx, destDir); err != nil {
+	// Load the extension. The loaded manifest — not the one parsed off the source
+	// directory above — is what callers get back: only that one carries the
+	// functional face describe() supplied.
+	loaded, err := m.LoadExtension(ctx, destDir)
+	if err != nil {
 		if removeErr := os.RemoveAll(destDir); removeErr != nil {
 			logger.Default().Warn("remove extension dir after load failure", zap.String("dir", destDir), zap.Error(removeErr))
 		}
 		return nil, fmt.Errorf("load extension: %w", err)
 	}
 
-	return manifest, nil
+	return loaded, nil
 }
 
 // Uninstall stops and removes an extension from disk.
 func (m *Manager) Uninstall(ctx context.Context, name string) error {
 	// Unload if loaded (ignore error if not loaded)
 	_ = m.Unload(ctx, name)
+
+	// The cached descriptor describes files that are about to stop existing.
+	deleteDescriptor(name)
 
 	// Remove extension directory
 	extDir := filepath.Join(m.dir, name)

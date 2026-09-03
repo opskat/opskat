@@ -1,6 +1,7 @@
 package extension
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -8,7 +9,9 @@ import (
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"go.uber.org/zap"
 )
 
 // ListInstalledExtensions returns all loaded extensions.
@@ -32,16 +35,19 @@ func (e *Extension) GetExtensionManifest(name string) (*extension.Manifest, erro
 }
 
 // CallExtensionAction calls an extension action and streams events via Wails Events.
-func (e *Extension) CallExtensionAction(extName, action string, argsJSON string) (string, error) {
-	if e.service == nil {
-		return "", fmt.Errorf("extension system not initialized")
+//
+// invocationID is the caller's correlation token for this one run: it comes back
+// on every "ext:action:event" this action emits, and CancelExtensionAction takes
+// it to stop this run and no other. The frontend mints it because the frontend is
+// the party that has to correlate — it needs the token before the call it is
+// about to make returns.
+func (e *Extension) CallExtensionAction(extName, action, argsJSON, invocationID string) (string, error) {
+	plugin, err := e.actionPlugin(extName)
+	if err != nil {
+		return "", err
 	}
-	ext := e.service.Manager().GetExtension(extName)
-	if ext == nil {
-		return "", fmt.Errorf("extension %q not loaded", extName)
-	}
-	if ext.Plugin == nil {
-		return "", fmt.Errorf("extension %q has no backend plugin", extName)
+	if invocationID == "" {
+		return "", fmt.Errorf("invocation id is required to run an action")
 	}
 
 	var args json.RawMessage
@@ -51,27 +57,61 @@ func (e *Extension) CallExtensionAction(extName, action string, argsJSON string)
 		args = json.RawMessage("{}")
 	}
 
-	result, err := ext.Plugin.CallAction(i18n.Ctx(e.ctx, e.lang.Lang()), action, args)
+	log := logger.Ctx(e.ctx).With(
+		zap.String("extension", extName),
+		zap.String("action", action),
+		zap.String("invocationID", invocationID),
+	)
+	log.Info("extension action started")
+
+	result, err := plugin.CallAction(i18n.Ctx(e.ctx, e.lang.Lang()), invocationID, action, args)
 	if err != nil {
+		log.Error("extension action failed", zap.Error(err))
 		return "", fmt.Errorf("call action %s/%s: %w", extName, action, err)
 	}
+	log.Info("extension action completed")
 	return string(result), nil
 }
 
-// CancelExtensionAction triggers cancellation of the currently running action.
-func (e *Extension) CancelExtensionAction(extName string) error {
+// CancelExtensionAction stops the one action run identified by invocationID.
+//
+// It used to take only the extension name, which stopped every action that
+// extension had in flight — harmless while a plugin-wide lock made "in flight"
+// mean one, wrong once the instance pool let several uploads run at once.
+func (e *Extension) CancelExtensionAction(extName, invocationID string) error {
+	plugin, err := e.actionPlugin(extName)
+	if err != nil {
+		return err
+	}
+	if invocationID == "" {
+		return fmt.Errorf("invocation id is required to cancel an action")
+	}
+	log := logger.Ctx(e.ctx).With(
+		zap.String("extension", extName),
+		zap.String("invocationID", invocationID),
+	)
+	if !plugin.CancelAction(invocationID) {
+		log.Warn("extension action cancel found nothing running")
+		return fmt.Errorf("extension %q has no running action %q", extName, invocationID)
+	}
+	log.Info("extension action cancel requested")
+	return nil
+}
+
+// actionPlugin resolves the loaded plugin behind an extension name, which is the
+// same three-step check every action entry point needs.
+func (e *Extension) actionPlugin(extName string) (*extension.Plugin, error) {
 	if e.service == nil {
-		return fmt.Errorf("extension system not initialized")
+		return nil, fmt.Errorf("extension system not initialized")
 	}
 	ext := e.service.Manager().GetExtension(extName)
 	if ext == nil {
-		return fmt.Errorf("extension %q not loaded", extName)
+		return nil, fmt.Errorf("extension %q not loaded", extName)
 	}
 	if ext.Plugin == nil {
-		return fmt.Errorf("extension %q has no backend plugin", extName)
+		return nil, fmt.Errorf("extension %q has no backend plugin", extName)
 	}
-	ext.Plugin.CancelActiveAction()
-	return nil
+	return ext.Plugin, nil
 }
 
 // CallExtensionTool calls an extension tool (for frontend config testing etc.)
@@ -219,4 +259,24 @@ func (e *Extension) ReloadExtensions() error {
 		return fmt.Errorf("extension system not initialized")
 	}
 	return e.service.Reload(i18n.Ctx(e.ctx, e.lang.Lang()))
+}
+
+// InstallExtensionDir installs an unpacked extension directory and returns what
+// landed. It backs `opsctl ext dev`, which is why it is a package-level function
+// rather than a method: every exported method on this binder becomes a Wails
+// binding, and "install whatever directory I name, no dialog" is not something
+// the frontend should be able to ask for.
+//
+// The path itself is deliberately the same one the "install from directory"
+// button takes — one install implementation, so a dev build cannot load through
+// a laxer route than a shipped one.
+func InstallExtensionDir(e *Extension, ctx context.Context, sourceDir string) (string, string, error) {
+	if e.service == nil {
+		return "", "", fmt.Errorf("extension system not initialized")
+	}
+	manifest, err := e.service.Install(i18n.Ctx(ctx, e.lang.Lang()), sourceDir)
+	if err != nil {
+		return "", "", err
+	}
+	return manifest.Name, manifest.Version, nil
 }

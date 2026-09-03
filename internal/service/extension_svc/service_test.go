@@ -23,9 +23,9 @@ import (
 	"go.uber.org/zap"
 )
 
-// testConfigSchema is the smallest configSchema a manifest can declare: asset types must
-// describe at least one config property (Manifest.validateAssetScope), because the asset
-// handler derived from it owns the generic create contract.
+// testConfigSchema is the smallest configSchema an asset type can declare: it must
+// describe at least one config property (Descriptor.validateAssetScope), because the
+// asset handler derived from it owns the generic create contract.
 func testConfigSchema() map[string]any {
 	return map[string]any{
 		"type":       "object",
@@ -66,14 +66,71 @@ func closeService(ctx context.Context, svc *Service) {
 // minimalWASM is the smallest valid WASM module (magic + version header).
 var minimalWASM = []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
 
-func writeTestExtension(dir, name string) {
+// describeCacheStub stands in for the guest's describe(). A manifest no longer
+// declares asset types, tools, policies or snippets — those come from the module —
+// so the tests seed the descriptor cache the way a first real load would, and the
+// stub WASM above never has to run.
+type describeCacheStub struct {
+	mu       sync.Mutex
+	payloads map[string]string
+}
+
+func installDescribeStub(t *testing.T) *describeCacheStub {
+	t.Helper()
+	s := &describeCacheStub{payloads: map[string]string{}}
+	extension.SetDescribeCache(s)
+	t.Cleanup(func() { extension.SetDescribeCache(nil) })
+	return s
+}
+
+func (s *describeCacheStub) put(name string, descriptor map[string]any) {
+	data, err := json.Marshal(descriptor)
+	if err != nil {
+		panic(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.payloads[name] = string(data)
+}
+
+func (s *describeCacheStub) LoadDescriptor(name string) (string, []byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	payload, ok := s.payloads[name]
+	if !ok {
+		return "", nil, nil
+	}
+	return extension.WasmHash(minimalWASM), []byte(payload), nil
+}
+
+func (s *describeCacheStub) StoreDescriptor(string, string, []byte) error { return nil }
+
+func (s *describeCacheStub) DeleteDescriptor(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.payloads, name)
+	return nil
+}
+
+// writeSlimManifest writes the security contract half — all a manifest may carry.
+func writeSlimManifest(dir, name string) {
 	extDir := filepath.Join(dir, name)
 	_ = os.MkdirAll(extDir, 0755)
 	manifest := map[string]any{
 		"name":    name,
 		"version": "1.0.0",
-		"hostABI": "1.0",
+		"hostABI": extension.HostABIVersion,
 		"backend": map[string]any{"runtime": "wasm", "binary": "main.wasm"},
+	}
+	data, _ := json.Marshal(manifest)
+	_ = os.WriteFile(filepath.Join(extDir, "manifest.json"), data, 0644)
+	_ = os.WriteFile(filepath.Join(extDir, "main.wasm"), minimalWASM, 0644)
+}
+
+func writeTestExtension(stub *describeCacheStub, dir, name string) {
+	writeSlimManifest(dir, name)
+	stub.put(name, map[string]any{
+		"i18n": map[string]any{"displayName": name, "description": name},
 		"assetTypes": []map[string]any{
 			{"type": name, "i18n": map[string]any{"name": name + ".name"},
 				"configSchema": testConfigSchema()},
@@ -81,29 +138,21 @@ func writeTestExtension(dir, name string) {
 		"policies": map[string]any{"type": "ext:" + name},
 		"tools": []map[string]any{
 			{
-				"name":       "test_tool",
+				"name": "test_tool", "policyAction": "read",
 				"i18n":       map[string]any{"description": "a tool"},
 				"parameters": map[string]any{"type": "object", "properties": map[string]any{}},
 			},
 		},
-	}
-	data, _ := json.Marshal(manifest)
-	_ = os.WriteFile(filepath.Join(extDir, "manifest.json"), data, 0644)
-	_ = os.WriteFile(filepath.Join(extDir, "main.wasm"), minimalWASM, 0644)
+	})
 }
 
-// writeTestExtensionWithSnippets writes an extension manifest declaring a single
-// snippet category + seed. assetType is matched so manifest validation passes.
-func writeTestExtensionWithSnippets(dir, name, assetType, seedKey string) {
+// writeTestExtensionWithSnippets declares a single snippet category + seed.
+// assetType is matched so descriptor validation passes.
+func writeTestExtensionWithSnippets(stub *describeCacheStub, dir, name, assetType, seedKey string) {
 	const catID = "kafka"
-
-	extDir := filepath.Join(dir, name)
-	_ = os.MkdirAll(extDir, 0755)
-	manifest := map[string]any{
-		"name":    name,
-		"version": "1.0.0",
-		"hostABI": "1.0",
-		"backend": map[string]any{"runtime": "wasm", "binary": "main.wasm"},
+	writeSlimManifest(dir, name)
+	stub.put(name, map[string]any{
+		"i18n": map[string]any{"displayName": name, "description": name},
 		"assetTypes": []map[string]any{
 			{"type": assetType, "i18n": map[string]any{"name": assetType}, "configSchema": testConfigSchema()},
 		},
@@ -116,10 +165,7 @@ func writeTestExtensionWithSnippets(dir, name, assetType, seedKey string) {
 				{"key": seedKey, "name": seedKey, "category": catID, "content": "echo " + seedKey},
 			},
 		},
-	}
-	data, _ := json.Marshal(manifest)
-	_ = os.WriteFile(filepath.Join(extDir, "manifest.json"), data, 0644)
-	_ = os.WriteFile(filepath.Join(extDir, "main.wasm"), minimalWASM, 0644)
+	})
 }
 
 // fakeSnippetHook captures invocations for snippet-hook-related tests.
@@ -170,6 +216,7 @@ func newTestManager(dir string) *extension.Manager {
 }
 
 func TestService(t *testing.T) {
+	stub := installDescribeStub(t)
 	Convey("Service", t, func() {
 		ctrl := gomock.NewController(t)
 		ctx := context.Background()
@@ -203,7 +250,7 @@ func TestService(t *testing.T) {
 		})
 
 		Convey("Init loads extension and applies DB disabled state", func() {
-			writeTestExtension(dir, "ext-a")
+			writeTestExtension(stub, dir, "ext-a")
 
 			stateRepo.EXPECT().FindAll(gomock.Any()).Return([]*extension_state_entity.ExtensionState{
 				{Name: "ext-a", Enabled: false},
@@ -218,7 +265,7 @@ func TestService(t *testing.T) {
 		})
 
 		Convey("Init loads enabled extension", func() {
-			writeTestExtension(dir, "ext-b")
+			writeTestExtension(stub, dir, "ext-b")
 
 			stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
 
@@ -229,7 +276,7 @@ func TestService(t *testing.T) {
 		})
 
 		Convey("Reload closes and reinitializes", func() {
-			writeTestExtension(dir, "ext-c")
+			writeTestExtension(stub, dir, "ext-c")
 			stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil).Times(2)
 
 			err := svc.Init(ctx)
@@ -244,8 +291,35 @@ func TestService(t *testing.T) {
 			So(reloadCalled, ShouldEqual, 1)
 		})
 
+		// Reinstalling over an existing extension is the ordinary upgrade: the
+		// extension page's "install from directory" and every rebuild of a local
+		// extension take this path. Install used to leave the previous extreg /
+		// bridge registration in place while manager.Install unloaded the module,
+		// so the second install died on "already registered" and the app was left
+		// with an asset type pointing at a module that no longer exists.
+		Convey("Install over an already installed extension replaces it", func() {
+			sourceDir := t.TempDir()
+			writeTestExtension(stub, sourceDir, "ext-upgrade")
+			stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
+			So(svc.Init(ctx), ShouldBeNil)
+
+			stateRepo.EXPECT().Find(gomock.Any(), "ext-upgrade").Return(nil, fmt.Errorf("not found")).AnyTimes()
+			stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+			_, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-upgrade"))
+			So(err, ShouldBeNil)
+			So(registeredAssetTypes(svc), ShouldResemble, []string{"ext-upgrade"})
+
+			m, err := svc.Install(ctx, filepath.Join(sourceDir, "ext-upgrade"))
+			So(err, ShouldBeNil)
+			So(m.Name, ShouldEqual, "ext-upgrade")
+			// Still registered exactly once, and still reachable.
+			So(registeredAssetTypes(svc), ShouldResemble, []string{"ext-upgrade"})
+			So(svc.Manager().GetExtension("ext-upgrade"), ShouldNotBeNil)
+		})
+
 		Convey("Disable unregisters and unloads", func() {
-			writeTestExtension(dir, "ext-d")
+			writeTestExtension(stub, dir, "ext-d")
 			stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
 
 			err := svc.Init(ctx)
@@ -262,7 +336,7 @@ func TestService(t *testing.T) {
 		})
 
 		Convey("Enable loads and registers", func() {
-			writeTestExtension(dir, "ext-e")
+			writeTestExtension(stub, dir, "ext-e")
 			stateRepo.EXPECT().FindAll(gomock.Any()).Return([]*extension_state_entity.ExtensionState{
 				{Name: "ext-e", Enabled: false},
 			}, nil)
@@ -280,7 +354,7 @@ func TestService(t *testing.T) {
 		})
 
 		Convey("Uninstall removes extension", func() {
-			writeTestExtension(dir, "ext-f")
+			writeTestExtension(stub, dir, "ext-f")
 			stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
 
 			err := svc.Init(ctx)
@@ -295,7 +369,7 @@ func TestService(t *testing.T) {
 		})
 
 		Convey("Uninstall without cleanData skips data deletion", func() {
-			writeTestExtension(dir, "ext-g")
+			writeTestExtension(stub, dir, "ext-g")
 			stateRepo.EXPECT().FindAll(gomock.Any()).Return(nil, nil)
 
 			err := svc.Init(ctx)
@@ -309,7 +383,7 @@ func TestService(t *testing.T) {
 		})
 
 		Convey("ListInstalled returns enabled and disabled", func() {
-			writeTestExtension(dir, "ext-h")
+			writeTestExtension(stub, dir, "ext-h")
 			stateRepo.EXPECT().FindAll(gomock.Any()).Return([]*extension_state_entity.ExtensionState{
 				{Name: "ext-h", Enabled: false},
 			}, nil)
@@ -330,6 +404,7 @@ func TestService(t *testing.T) {
 }
 
 func TestService_SnippetIntegration(t *testing.T) {
+	stub := installDescribeStub(t)
 	Convey("Service (snippet integration)", t, func() {
 		ctrl := gomock.NewController(t)
 		ctx := context.Background()
@@ -344,7 +419,7 @@ func TestService_SnippetIntegration(t *testing.T) {
 			// Manager points to a persistent target dir; source is separate.
 			targetDir := t.TempDir()
 			sourceDir := t.TempDir()
-			writeTestExtensionWithSnippets(sourceDir, "kafka-ext", "kafka-ext", "list-topics")
+			writeTestExtensionWithSnippets(stub, sourceDir, "kafka-ext", "kafka-ext", "list-topics")
 
 			mgr := newTestManager(targetDir)
 			svc := New(mgr, stateRepo, dataRepo, nil, logger,
@@ -370,7 +445,7 @@ func TestService_SnippetIntegration(t *testing.T) {
 
 			targetDir := t.TempDir()
 			// Pre-install an extension that already owns category "kafka".
-			writeTestExtensionWithSnippets(targetDir, "kafka-a", "kafka-a", "k1")
+			writeTestExtensionWithSnippets(stub, targetDir, "kafka-a", "kafka-a", "k1")
 
 			mgr := newTestManager(targetDir)
 			svc := New(mgr, stateRepo, dataRepo, nil, logger,
@@ -384,7 +459,7 @@ func TestService_SnippetIntegration(t *testing.T) {
 
 			// Now try to install a second extension that re-declares the same id.
 			sourceDir := t.TempDir()
-			writeTestExtensionWithSnippets(sourceDir, "kafka-b", "kafka-b", "k2")
+			writeTestExtensionWithSnippets(stub, sourceDir, "kafka-b", "kafka-b", "k2")
 
 			_, err := svc.Install(ctx, filepath.Join(sourceDir, "kafka-b"))
 			So(err, ShouldNotBeNil)
@@ -404,7 +479,7 @@ func TestService_SnippetIntegration(t *testing.T) {
 			hook := &fakeSnippetHook{}
 
 			targetDir := t.TempDir()
-			writeTestExtensionWithSnippets(targetDir, "kafka-x", "kafka-x", "k1")
+			writeTestExtensionWithSnippets(stub, targetDir, "kafka-x", "kafka-x", "k1")
 
 			mgr := newTestManager(targetDir)
 			svc := New(mgr, stateRepo, dataRepo, nil, logger,
@@ -430,7 +505,7 @@ func TestService_SnippetIntegration(t *testing.T) {
 		Convey("Install with nil snippetHook is a no-op", func() {
 			targetDir := t.TempDir()
 			sourceDir := t.TempDir()
-			writeTestExtension(sourceDir, "simple")
+			writeTestExtension(stub, sourceDir, "simple")
 
 			mgr := newTestManager(targetDir)
 			svc := New(mgr, stateRepo, dataRepo, nil, logger,

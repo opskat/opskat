@@ -1,7 +1,6 @@
 build/bin
 node_modules
 frontend/dist
-frontend/packages/devserver-ui/dist/
 
 # Node
 frontend/wailsjs/
@@ -33,7 +32,6 @@ coverage.html
 
 coverage_new.out
 
-/devserver
 .dev-kit/
 .superpowers/
 /docs/superpowers/specs/

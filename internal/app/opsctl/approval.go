@@ -47,6 +47,11 @@ func (o *Opsctl) startApprovalServer() {
 			return o.handleExtToolExec(req)
 		}
 
+		// 扩展开发安装（opsctl ext dev）
+		if req.Type == "ext_dev_install" {
+			return o.handleExtDevInstall(req)
+		}
+
 		return o.requestSingleApproval(req)
 	}
 

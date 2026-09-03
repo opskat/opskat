@@ -3,6 +3,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TableFilterBuilder } from "@/components/query/TableFilterBuilder";
 import { createFilterCondition, type TableFilterItem, type TableSortItem } from "@/lib/tableFilter";
+import { CELL_DISPLAY_MAX_CHARS, cellValueToDisplayText } from "@/lib/cellValue";
 
 describe("TableFilterBuilder", () => {
   it("shows distinct suggested values and writes the selected value into the condition", async () => {
@@ -340,5 +341,41 @@ describe("TableFilterBuilder", () => {
     await user.click(screen.getByTitle("query.toggleSortDirection:id"));
 
     expect(onSortsChange).toHaveBeenLastCalledWith([expect.objectContaining({ column: "id", dir: "desc" })]);
+  });
+});
+
+describe("TableFilterBuilder — very large values", () => {
+  const big = "x".repeat(200_000);
+
+  it("bounds the suggestion labels and still selects the untruncated value", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+
+    render(
+      <TableFilterBuilder
+        columns={["id", "body"]}
+        rows={[
+          { id: 1, body: big },
+          { id: 2, body: "small" },
+        ]}
+        filters={[createFilterCondition("f-body", "body")]}
+        sorts={[]}
+        driver="mysql"
+        onChange={onChange}
+        onSortsChange={vi.fn()}
+        onApply={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByTitle("query.chooseFilterValue"));
+    const panel = await screen.findByRole("dialog");
+    expect(panel.textContent!.length).toBeLessThan(CELL_DISPLAY_MAX_CHARS * 3);
+
+    const option = within(panel).getByText(cellValueToDisplayText(big));
+    await user.click(option);
+
+    expect(onChange).toHaveBeenLastCalledWith([
+      expect.objectContaining({ kind: "condition", column: "body", value: big }),
+    ]);
   });
 });

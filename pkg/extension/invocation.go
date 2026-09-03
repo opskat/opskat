@@ -15,12 +15,16 @@ import (
 // another's file descriptor, and a plugin-wide cancellation would stop every
 // action at once.
 type invocation struct {
+	// id names this run for the whole system: the caller cancels by it, and every
+	// action event the guest emits is stamped with it so a listener can tell two
+	// concurrent runs of the same extension apart.
+	id     string
 	io     *IOHandleManager
 	cancel *ActionCancellation // nil for calls that are not actions
 }
 
-func newInvocation(cancel *ActionCancellation) *invocation {
-	return &invocation{io: NewIOHandleManager(), cancel: cancel}
+func newInvocation(id string, cancel *ActionCancellation) *invocation {
+	return &invocation{id: id, io: NewIOHandleManager(), cancel: cancel}
 }
 
 // close releases everything the guest left open.

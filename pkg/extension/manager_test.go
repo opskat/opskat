@@ -13,25 +13,66 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
-// writeMinimalExtension writes a manifest.json + minimal valid WASM module for
-// extName under extDir, without any SKILL.md.
+// stubWasm is a valid but empty WASM module: enough to compile, not a reactor.
+// Tests that only exercise manager bookkeeping pair it with a canned descriptor in
+// the cache, so no guest ever has to run.
+var stubWasm = []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+
+// cannedDescriptor is the describe() answer the fake cache serves for stubWasm.
+const cannedDescriptor = `{"i18n":{"displayName":"d","description":"x"},` +
+	`"assetTypes":[{"type":"stub","i18n":{"name":"n"},` +
+	`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}}}],` +
+	`"policies":{"type":"stub"}}`
+
+// fakeDescribeCache answers for every extension with the same canned descriptor,
+// keyed to the hash of whatever wasm bytes it was built with.
+type fakeDescribeCache struct {
+	hash    string
+	payload string
+	stored  map[string]string // extension name → hash written back
+	loads   int
+}
+
+func newFakeDescribeCache(wasmBytes []byte, payload string) *fakeDescribeCache {
+	return &fakeDescribeCache{hash: WasmHash(wasmBytes), payload: payload, stored: map[string]string{}}
+}
+
+func (c *fakeDescribeCache) LoadDescriptor(string) (string, []byte, error) {
+	c.loads++
+	return c.hash, []byte(c.payload), nil
+}
+
+func (c *fakeDescribeCache) StoreDescriptor(name, hash string, _ []byte) error {
+	c.stored[name] = hash
+	return nil
+}
+
+func (c *fakeDescribeCache) DeleteDescriptor(name string) error {
+	delete(c.stored, name)
+	return nil
+}
+
+// useDescribeCache installs a descriptor cache for the duration of one test.
+func useDescribeCache(t *testing.T, c DescribeCache) {
+	t.Helper()
+	SetDescribeCache(c)
+	t.Cleanup(func() { SetDescribeCache(nil) })
+}
+
+// writeMinimalExtension writes a manifest.json + a stub WASM module for extName
+// under extDir, without any SKILL.md.
 func writeMinimalExtension(t *testing.T, extDir, extName string) {
 	t.Helper()
 	if err := os.MkdirAll(extDir, 0755); err != nil {
 		t.Fatalf("mkdir extension dir: %v", err)
 	}
+	// The manifest is the security contract only: asset types, tools and the policy
+	// face come from describe() (here: the cache).
 	manifest := map[string]any{
 		"name":    extName,
 		"version": "1.0.0",
-		"hostABI": "1.0",
+		"hostABI": HostABIVersion,
 		"backend": map[string]any{"runtime": "wasm", "binary": "main.wasm"},
-		// assetTypes + policies.type 是加载期强制项（Manifest.validateAssetScope）：
-		// 扩展工具只能经资产上的 exec 抵达，没有资产类型就没有入口。
-		"assetTypes": []any{map[string]any{
-			"type": extName, "i18n": map[string]any{"name": "n"},
-			"configSchema": map[string]any{"type": "object", "properties": map[string]any{"endpoint": map[string]any{"type": "string"}}},
-		}},
-		"policies": map[string]any{"type": extName},
 	}
 	data, err := json.Marshal(manifest)
 	if err != nil {
@@ -40,8 +81,7 @@ func writeMinimalExtension(t *testing.T, extDir, extName string) {
 	if err := os.WriteFile(filepath.Join(extDir, "manifest.json"), data, 0644); err != nil {
 		t.Fatalf("write manifest.json: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(extDir, "main.wasm"),
-		[]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(extDir, "main.wasm"), stubWasm, 0644); err != nil {
 		t.Fatalf("write main.wasm: %v", err)
 	}
 }
@@ -56,6 +96,7 @@ func TestManager(t *testing.T) {
 			return NewDefaultHostProvider(DefaultHostConfig{Logger: logger})
 		}
 
+		useDescribeCache(t, newFakeDescribeCache(stubWasm, cannedDescriptor))
 		mgr := NewManager(dir, newHost, logger)
 
 		Convey("Scan with no extensions", func() {
@@ -65,31 +106,18 @@ func TestManager(t *testing.T) {
 		})
 
 		Convey("Scan discovers valid extension", func() {
-			extDir := filepath.Join(dir, "test-ext")
-			_ = os.MkdirAll(extDir, 0755)
-
-			manifest := map[string]any{
-				"name":    "test-ext",
-				"version": "1.0.0",
-				"hostABI": "1.0",
-				"backend": map[string]any{"runtime": "wasm", "binary": "main.wasm"},
-				"assetTypes": []any{map[string]any{
-					"type": "test-ext", "i18n": map[string]any{"name": "n"},
-					"configSchema": map[string]any{"type": "object", "properties": map[string]any{"endpoint": map[string]any{"type": "string"}}},
-				}},
-				"policies": map[string]any{"type": "test-ext"},
-			}
-			data, _ := json.Marshal(manifest)
-			So(os.WriteFile(filepath.Join(extDir, "manifest.json"), data, 0644), ShouldBeNil)
-
-			// Minimal valid WASM module
-			So(os.WriteFile(filepath.Join(extDir, "main.wasm"),
-				[]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}, 0644), ShouldBeNil)
+			writeMinimalExtension(t, filepath.Join(dir, "test-ext"), "test-ext")
 
 			exts, err := mgr.Scan(ctx)
 			So(err, ShouldBeNil)
 			So(len(exts), ShouldEqual, 1)
 			So(exts[0].Name, ShouldEqual, "test-ext")
+
+			Convey("and its functional face is merged in from describe()", func() {
+				So(exts[0].AssetTypes, ShouldHaveLength, 1)
+				So(exts[0].AssetTypes[0].Type, ShouldEqual, "stub")
+				So(exts[0].Policies.Type, ShouldEqual, "stub")
+			})
 		})
 
 		Convey("Scan skips directories without manifest", func() {
