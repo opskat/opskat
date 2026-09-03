@@ -359,12 +359,12 @@ func (m *Manager) Connect(cfg ConnectConfig) (string, error) {
 
 	shared := newSharedClient(client, extraClosers, cfg.KeepAliveIntervalSeconds)
 	if cfg.AgentForward != nil {
-		forwarder, err := enableAgentForwarding(connectCtx(cfg), client, cfg.AgentForward)
-		if err != nil {
+		// 转发不持有长连接：每个 auth-agent 通道自行拨号本地 Agent，处理 goroutine
+		// 随 client 关闭自然退出，因此无需登记 closer。
+		if err := enableAgentForwarding(connectCtx(cfg), client, cfg.AgentForward); err != nil {
 			shared.release()
 			return "", fmt.Errorf("启用 SSH Agent 转发失败: %w", err)
 		}
-		shared.closers = append([]io.Closer{forwarder}, shared.closers...)
 		shared.agentForwarding = true
 	}
 
@@ -488,11 +488,12 @@ func (m *Manager) createSession(shared *sharedClient, assetID int64, cols, rows 
 		return nil, fmt.Errorf("请求PTY失败: %w", err)
 	}
 	if shared.agentForwarding {
+		// 远端策略（AllowAgentForwarding no）会拒绝该请求。这是服务器的策略结果而非
+		// 本地故障：与 `ssh -A` 一致，告警后继续——终端照常打开，只是这个会话里用不到
+		// 被转发的 Agent。
 		if err := agent.RequestAgentForwarding(session); err != nil {
-			if closeErr := session.Close(); closeErr != nil {
-				logger.Default().Warn("close session after agent forwarding request failure", zap.Error(closeErr))
-			}
-			return nil, fmt.Errorf("请求 SSH Agent 转发失败: %w", err)
+			logger.Default().Warn("ssh agent forwarding request rejected by server",
+				zap.Int64("assetID", assetID), zap.Error(err))
 		}
 	}
 
