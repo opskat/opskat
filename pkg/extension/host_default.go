@@ -4,9 +4,7 @@ package extension
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
-	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -32,7 +30,7 @@ type KVStore interface {
 }
 
 type ActionEventHandler interface {
-	OnActionEvent(eventType string, data json.RawMessage) error
+	OnActionEvent(invocationID, eventType string, data json.RawMessage) error
 }
 
 type DefaultHostConfig struct {
@@ -46,22 +44,17 @@ type DefaultHostConfig struct {
 }
 
 type DefaultHostProvider struct {
-	cfg          DefaultHostConfig
-	io           *IOHandleManager
-	activeCancel atomic.Pointer[ActionCancellation]
+	cfg DefaultHostConfig
 }
 
 func NewDefaultHostProvider(cfg DefaultHostConfig) *DefaultHostProvider {
-	return &DefaultHostProvider{
-		cfg: cfg,
-		io:  NewIOHandleManager(),
-	}
+	return &DefaultHostProvider{cfg: cfg}
 }
 
-func (h *DefaultHostProvider) IOOpen(params IOOpenParams) (uint32, IOMeta, error) {
+func (h *DefaultHostProvider) OpenIO(params IOOpenParams) (*IOResource, error) {
 	switch params.Type {
 	case "file":
-		return h.io.OpenFile(params.Path, params.Mode)
+		return OpenFileResource(params.Path, params.Mode)
 	case "http":
 		var dial DialFunc
 		if h.cfg.AssetSSHTunnelID > 0 && h.cfg.TunnelDialer != nil {
@@ -70,17 +63,17 @@ func (h *DefaultHostProvider) IOOpen(params IOOpenParams) (uint32, IOMeta, error
 				return h.cfg.TunnelDialer.Dial(tunnelID, addr)
 			}
 		}
-		return h.io.OpenHTTP(params, dial)
+		return OpenHTTPResource(params, dial)
 	case "tcp":
 		return h.openTCP(params)
 	default:
-		return 0, IOMeta{}, fmt.Errorf("unknown IO type: %q", params.Type)
+		return nil, fmt.Errorf("unknown IO type: %q", params.Type)
 	}
 }
 
-func (h *DefaultHostProvider) openTCP(params IOOpenParams) (uint32, IOMeta, error) {
+func (h *DefaultHostProvider) openTCP(params IOOpenParams) (*IOResource, error) {
 	if params.Addr == "" {
-		return 0, IOMeta{}, fmt.Errorf("tcp: addr is required")
+		return nil, fmt.Errorf("tcp: addr is required")
 	}
 	timeout := time.Duration(params.Timeout) * time.Millisecond
 	if timeout == 0 {
@@ -92,59 +85,16 @@ func (h *DefaultHostProvider) openTCP(params IOOpenParams) (uint32, IOMeta, erro
 	if h.cfg.AssetSSHTunnelID > 0 && h.cfg.TunnelDialer != nil {
 		// NOTE: params.Timeout is not honored on the tunnel path — TunnelDialer.Dial
 		// uses its own default dial timeout. Callers that need tighter control should
-		// set a deadline on the resulting handle via IOSetDeadline.
+		// set a deadline on the resulting handle via host_io_set_deadline.
 		conn, err = h.cfg.TunnelDialer.Dial(h.cfg.AssetSSHTunnelID, params.Addr)
 	} else {
 		dialer := &net.Dialer{Timeout: timeout}
 		conn, err = dialer.Dial("tcp", params.Addr)
 	}
 	if err != nil {
-		return 0, IOMeta{}, err
-	}
-
-	id, err := h.io.Register(conn, conn, conn, IOMeta{})
-	if err != nil {
-		_ = conn.Close()
-		return 0, IOMeta{}, err
-	}
-	return id, IOMeta{}, nil
-}
-
-func (h *DefaultHostProvider) IORead(handleID uint32, size int) ([]byte, error) {
-	buf := make([]byte, size)
-	n, err := h.io.Read(handleID, buf)
-	if n > 0 {
-		// Only io.EOF is safe to delay — the guest will get it on the next Read when n==0.
-		if err == nil || err == io.EOF {
-			return buf[:n], nil
-		}
-		// Real error occurred — surface it so the guest sees the failure rather than silent truncation.
-		return nil, fmt.Errorf("read handle %d: %w (had %d bytes)", handleID, err, n)
-	}
-	if err != nil {
 		return nil, err
 	}
-	return buf[:0], nil
-}
-
-func (h *DefaultHostProvider) IOWrite(handleID uint32, data []byte) (int, error) {
-	return h.io.Write(handleID, data)
-}
-
-func (h *DefaultHostProvider) IOFlush(handleID uint32) (*IOMeta, error) {
-	return h.io.Flush(handleID)
-}
-
-func (h *DefaultHostProvider) IOClose(handleID uint32) error {
-	return h.io.Close(handleID)
-}
-
-func (h *DefaultHostProvider) IOSetDeadline(handleID uint32, kind string, unixNanos int64) error {
-	var t time.Time
-	if unixNanos != 0 {
-		t = time.Unix(0, unixNanos)
-	}
-	return h.io.SetDeadline(handleID, kind, t)
+	return NewConnResource(conn), nil
 }
 
 func (h *DefaultHostProvider) GetAssetConfig(assetID int64) (json.RawMessage, error) {
@@ -193,22 +143,9 @@ func (h *DefaultHostProvider) KVSet(key string, value []byte) error {
 	return h.cfg.KV.Set(key, value)
 }
 
-func (h *DefaultHostProvider) ActionEvent(eventType string, data json.RawMessage) error {
+func (h *DefaultHostProvider) ActionEvent(invocationID, eventType string, data json.RawMessage) error {
 	if h.cfg.ActionEvents == nil {
 		return nil
 	}
-	return h.cfg.ActionEvents.OnActionEvent(eventType, data)
-}
-
-func (h *DefaultHostProvider) ActionShouldStop() bool {
-	c := h.activeCancel.Load()
-	return c != nil && c.ShouldStop()
-}
-
-func (h *DefaultHostProvider) SetActiveCancellation(c *ActionCancellation) {
-	h.activeCancel.Store(c)
-}
-
-func (h *DefaultHostProvider) CloseAll() {
-	h.io.CloseAll()
+	return h.cfg.ActionEvents.OnActionEvent(invocationID, eventType, data)
 }

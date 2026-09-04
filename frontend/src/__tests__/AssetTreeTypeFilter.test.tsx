@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { TooltipProvider } from "@opskat/ui";
 import { AssetTypeFilterButton } from "@/components/asset/AssetTypeFilterButton";
 import { getAssetTypeOptions } from "@/lib/assetTypes/options";
+import { registerExtensionAssetTypes, unregisterExtensionAssetTypes } from "@/extension/assetTypes";
+import type { ExtManifest } from "@/extension/types";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -12,7 +14,7 @@ vi.mock("react-i18next", () => ({
 }));
 
 describe("AssetTypeFilterButton", () => {
-  const builtinOpts = getAssetTypeOptions({});
+  const builtinOpts = getAssetTypeOptions();
   const builtinValues = builtinOpts.map((o) => o.value);
 
   beforeEach(() => {
@@ -114,17 +116,14 @@ describe("AssetTypeFilterButton", () => {
 
   it("renders Extensions section header when extension options are present", async () => {
     const user = userEvent.setup();
-    const opts = getAssetTypeOptions({
-      k8sExt: {
-        manifest: {
-          name: "k8sExt",
-          version: "1",
-          icon: "Server",
-          i18n: { displayName: "Kubernetes", description: "" },
-          assetTypes: [{ type: "kubernetes", i18n: { name: "Kubernetes" } }],
-        },
-      },
-    } as never);
+    registerExtensionAssetTypes("k8sExt", {
+      name: "k8sExt",
+      version: "1",
+      icon: "Server",
+      i18n: { displayName: "Kubernetes", description: "" },
+      assetTypes: [{ type: "kubernetes-ext", i18n: { name: "Kubernetes" } }],
+    } as ExtManifest);
+    const opts = getAssetTypeOptions();
     render(
       <TooltipProvider>
         <AssetTypeFilterButton value={[]} options={opts} onChange={() => {}} />
@@ -133,6 +132,7 @@ describe("AssetTypeFilterButton", () => {
     await user.click(screen.getByRole("button", { name: /asset.filterByType/i }));
     expect(screen.getByText("asset.filterExtensions")).toBeTruthy();
     expect(screen.getByText("Kubernetes")).toBeTruthy();
+    unregisterExtensionAssetTypes("k8sExt");
   });
 
   it("does not render Extensions section header when no extension options", async () => {

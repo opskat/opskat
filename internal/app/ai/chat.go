@@ -49,9 +49,10 @@ type runnerEntry struct {
 	mongoCache *helper.MongoDBClientCache
 }
 
-// allBuiltinAssetTypeSkills 返回全部已内嵌用法文档的资产类型（skills.Types()——9 个
-// exec 类型 + rdp/vnc/local 3 个 doc-only 类型，见 permission.RegisterHelpDoc）的
-// 一行技能描述（skills.Description），用于 PromptBuilder 的技能清单。
+// allAssetTypeSkills 返回全部有用法文档的资产类型（skills.Types()——内嵌的 9 个 exec
+// 类型 + rdp/vnc/local 3 个 doc-only 类型，见 permission.RegisterHelpDoc，外加已启用
+// 扩展在加载期登记的类型）的一行技能描述（skills.Description），用于 PromptBuilder
+// 的技能清单。
 //
 // 无条件全量返回，不看 openTabs：这份清单是**发现**用的，让模型知道 help 存在、以及
 // exec 覆盖了哪些类型。doc-only 类型（有 help 无 exec）也混在这同一份返回值里——
@@ -61,9 +62,9 @@ type runnerEntry struct {
 // 类型，成本可以忽略。
 //
 // 它**不**满足 exec 的门禁——门禁只认模型显式调用过 help（见 tool.DocGate 的注释）。
-// 未内嵌文档、仅由已安装 extension 提供的资产类型不在这里，走的是另一条 extension
-// SKILL.md 注入路径（见下方 bridge.GetSkillMDWithExtension）。
-func allBuiltinAssetTypeSkills() map[string]string {
+// 扩展提供的类型不再走单独的 SKILL.md 注入：它们在加载期经 internal/extreg 登记进同一张
+// skills 表，因此和内置类型一样只在这里露一行、正文靠 help(asset) 取。
+func allAssetTypeSkills() map[string]string {
 	out := make(map[string]string)
 	for _, assetType := range skills.Types() {
 		if desc, ok := skills.Description(assetType); ok {
@@ -452,31 +453,12 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 	}
 	builder := runner.NewPromptBuilder(lang, aiCtx)
 
-	// Inject extension SKILL.md based on connected asset types
-	if a.extSvc != nil {
-		bridge := a.extSvc.Bridge()
-		mds := make(map[string]string)
-		seen := make(map[string]bool)
-		for _, tab := range aiCtx.OpenTabs {
-			if seen[tab.Type] {
-				continue
-			}
-			seen[tab.Type] = true
-			if skillMD := bridge.GetSkillMDWithExtension(tab.Type); skillMD.Content != "" {
-				mds[skillMD.ExtensionName] = skillMD.Content
-			}
-		}
-		if len(mds) > 0 {
-			builder.SetExtensionSkillMDs(mds)
-		}
-	}
-
-	// Inject the compact per-type skill listing for built-in asset types. This is
+	// Inject the compact per-type skill listing for every documented asset type. This is
 	// discovery only — it tells the model that help(asset) exists and which types exec
 	// covers. It deliberately does NOT mark anything documented on the doc gate: the only
 	// thing that satisfies the gate is an explicit help(asset) call, handled inside
 	// handleHelp (internal/ai/tool/tool_handlers_unified.go).
-	builder.SetAssetTypeSkills(allBuiltinAssetTypeSkills())
+	builder.SetAssetTypeSkills(allAssetTypeSkills())
 
 	systemPrompt := builder.Build()
 

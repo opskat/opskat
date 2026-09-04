@@ -3,22 +3,10 @@ package extension
 
 import (
 	"context"
-	"encoding/json"
+	"time"
 
 	"github.com/tetratelabs/wazero/api"
 )
-
-// readGuestString reads a string from guest memory at (ptr, size).
-func readGuestString(mod api.Module, ptr, size uint32) string {
-	if size == 0 {
-		return ""
-	}
-	data, ok := mod.Memory().Read(ptr, size)
-	if !ok {
-		return ""
-	}
-	return string(data)
-}
 
 // readGuestBytes reads bytes from guest memory and makes a copy.
 func readGuestBytes(mod api.Module, ptr, size uint32) []byte {
@@ -34,37 +22,38 @@ func readGuestBytes(mod api.Module, ptr, size uint32) []byte {
 	return cp
 }
 
-// writeGuestBytes allocates guest memory via malloc and writes data.
-// Returns packed (ptr, size) as uint64. Returns 0 on failure.
-func writeGuestBytes(ctx context.Context, mod api.Module, data []byte) uint64 {
-	if len(data) == 0 {
-		return 0
+// writeHostReply allocates guest memory and writes a tagged reply into it,
+// returning packed (ptr, size) as uint64. 0 means the reply could not be
+// delivered at all, which the guest reports rather than mistaking for a result.
+func writeHostReply(ctx context.Context, mod api.Module, payload []byte, callErr error) uint64 {
+	tag := byte(hostReplyTagOK)
+	if callErr != nil {
+		tag, payload = hostReplyTagErr, []byte(callErr.Error())
 	}
+	buf := make([]byte, 0, len(payload)+1)
+	buf = append(buf, tag)
+	buf = append(buf, payload...)
+
 	malloc := mod.ExportedFunction("malloc")
 	if malloc == nil {
 		return 0
 	}
-	results, err := malloc.Call(ctx, uint64(len(data)))
+	results, err := malloc.Call(ctx, uint64(len(buf)))
 	if err != nil || len(results) == 0 || results[0] == 0 {
 		return 0
 	}
 	ptr := uint32(results[0])
-	if !mod.Memory().Write(ptr, data) {
+	if !mod.Memory().Write(ptr, buf) {
 		return 0
 	}
-	return uint64(ptr)<<32 | uint64(len(data))
+	return uint64(ptr)<<32 | uint64(len(buf))
 }
 
-// writeGuestJSON marshals v to JSON and writes to guest memory.
-func writeGuestJSON(ctx context.Context, mod api.Module, v any) uint64 {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return 0
+// deadlineTime converts an absolute Unix-nanosecond deadline from the guest into
+// a time.Time. 0 means "clear the deadline", which is the zero Time.
+func deadlineTime(unixNanos int64) time.Time {
+	if unixNanos == 0 {
+		return time.Time{}
 	}
-	return writeGuestBytes(ctx, mod, data)
-}
-
-// encodeError writes {"error": "msg"} to guest memory.
-func encodeError(ctx context.Context, mod api.Module, err error) uint64 {
-	return writeGuestJSON(ctx, mod, map[string]string{"error": err.Error()})
+	return time.Unix(0, unixNanos)
 }

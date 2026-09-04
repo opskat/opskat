@@ -53,7 +53,7 @@ export async function loadExtension(name: string, manifest: ExtManifest): Promis
 
   // Extract page components
   const components: Record<string, ComponentType<{ assetId?: number }>> = {};
-  for (const page of frontend.pages) {
+  for (const page of frontend.pages ?? []) {
     if (mod[page.component]) {
       components[page.component] = mod[page.component];
     }

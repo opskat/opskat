@@ -26,7 +26,7 @@ const GroupDialog = lazy(() => import("@/components/asset/GroupDialog").then((m)
 import { useAssetStore } from "@/stores/assetStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useSFTPStore } from "@/stores/sftpStore";
-import { getAssetType } from "@/lib/assetTypes";
+import { getAssetType, pageTabPrefix } from "@/lib/assetTypes";
 import { useTabStore } from "@/stores/tabStore";
 import { useSnippetStore } from "@/stores/snippetStore";
 import { bootstrapExtensions } from "@/extension/init";
@@ -315,11 +315,16 @@ function App() {
     if (!def?.canConnectInNewTab) return;
     if (def.connectAction === "page" && def.pageId) {
       useTabStore.getState().openTab({
-        id: `${def.pageId}-${asset.ID}-${Date.now()}`,
+        id: `${pageTabPrefix(def)}-${asset.ID}-${Date.now()}`,
         type: "page",
         label: asset.Name,
         icon: asset.Icon || def.pageIcon,
-        meta: { type: "page", pageId: def.pageId, assetId: asset.ID },
+        meta: {
+          type: "page",
+          pageId: def.pageId,
+          assetId: asset.ID,
+          ...(def.extensionName ? { extensionName: def.extensionName } : {}),
+        },
       });
       return;
     }

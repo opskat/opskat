@@ -20,12 +20,9 @@ import { GroupSelect } from "@/components/asset/GroupSelect";
 import { useAssetStore } from "@/stores/assetStore";
 import { asset_entity } from "../../../wailsjs/go/models";
 import { EncryptPassword } from "../../../wailsjs/go/system/System";
-import { GetDecryptedExtensionConfig } from "../../../wailsjs/go/extension/Extension";
 import { CancelTest, TestAssetConnection } from "../../../wailsjs/go/system/System";
-import { useExtensionStore } from "@/extension";
-import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
 import { AssetTypePicker } from "@/components/asset/AssetTypePicker";
-import { getAssetTypeOptions, getAssetTypeLabel } from "@/lib/assetTypes/options";
+import { useAssetTypeOptions, getAssetTypeLabel } from "@/lib/assetTypes/options";
 import { getAssetType } from "@/lib/assetTypes";
 import type {
   AssetFormHandle,
@@ -85,8 +82,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const { t } = useTranslation();
   const { createAsset, updateAsset } = useAssetStore();
 
-  const extensions = useExtensionStore((s) => s.extensions);
-  const assetTypeOptions = useMemo(() => getAssetTypeOptions(extensions), [extensions]);
+  const assetTypeOptions = useAssetTypeOptions();
 
   // Asset type
   const [assetType, setAssetType] = useState<AssetType>("ssh");
@@ -105,9 +101,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const sectionRef = useRef<AssetFormHandle>(null);
   const [validity, setValidity] = useState<SectionValidity>({ canTest: false, canSave: false });
   const ctx: AssetFormContext = useMemo(() => ({ isEdit: !!editAsset, encryptPassword: EncryptPassword }), [editAsset]);
-
-  // Extension config
-  const [extConfig, setExtConfig] = useState<Record<string, unknown>>({});
 
   // 复位测试状态：open 切换时一律清掉上一次表单的 testing 残留（渲染期对比），
   // 活跃测试生命周期的清理留在下方 effect。
@@ -150,27 +143,15 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         setIcon(editAsset.Icon || DEFAULT_ICONS[editType] || "server");
         setDescription(editAsset.Description);
 
-        if (getAssetType(editType)?.ConfigSection) {
-          // 已注册化类型:config 回填由 section 经 editAsset prop 完成,壳跳过
-        } else {
-          // Extension type: load decrypted config
-          const extInfo = useExtensionStore.getState().getExtensionForAssetType(editType);
-          if (extInfo && editAsset.ID) {
-            GetDecryptedExtensionConfig(editAsset.ID, extInfo.name)
-              .then((cfg) => setExtConfig(JSON.parse(cfg || "{}")))
-              .catch(() => setExtConfig(JSON.parse(editAsset.Config || "{}")));
-          } else {
-            setExtConfig(JSON.parse(editAsset.Config || "{}"));
-          }
-        }
+        // config 回填一律由 ConfigSection 经 editAsset prop 完成——扩展类型的 section
+        // 也是注册出来的（见 extension/assetTypes.ts），壳不再认识任何具体类型。
       } else {
         setAssetType("ssh");
         setName("");
         setGroupId(defaultGroupId);
         setIcon("server");
         setDescription("");
-        // 注册化类型 section 经 key={assetType} 重挂载自初始化,壳只清扩展 config。
-        setExtConfig({});
+        // ConfigSection 经 key={assetType} 重挂载自初始化。
       }
     }
   }
@@ -281,46 +262,16 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     // 用户决定保存：放弃任何正在进行的测试，避免和保存竞争或弹出过期的 toast。
     cancelActiveTest();
 
-    const def = getAssetType(assetType);
-    if (def?.ConfigSection) {
-      if (!sectionRef.current) return;
-      let built;
-      try {
-        built = await sectionRef.current.buildConfig(ctx);
-      } catch (e) {
-        toast.error(e instanceof Error ? e.message : String(e));
-        return;
-      }
-      const asset = new asset_entity.Asset({
-        ...(editAsset || {}),
-        Name: name,
-        Type: assetType,
-        GroupID: groupId,
-        Icon: icon,
-        Description: description,
-        Config: built.configJSON,
-        sshTunnelId: built.sshTunnelId,
-      });
-      await persistAsset(asset);
+    // 所有资产类型都经注册表的 ConfigSection 序列化配置——扩展类型的 section 由
+    // extension/assetTypes.ts 从它的 configSchema 生成，加密 password 字段也在那里。
+    if (!sectionRef.current) return;
+    let built;
+    try {
+      built = await sectionRef.current.buildConfig(ctx);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
       return;
     }
-
-    // Extension type: encrypt password fields from configSchema before saving
-    const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
-    const schema = extInfo?.manifest.assetTypes?.find((at) => at.type === assetType)?.configSchema as
-      | { properties?: Record<string, { format?: string }> }
-      | undefined;
-    const configCopy = { ...extConfig };
-    if (schema?.properties) {
-      for (const [key, prop] of Object.entries(schema.properties)) {
-        if (prop.format === "password" && configCopy[key]) {
-          const encrypted = await EncryptPassword(String(configCopy[key]));
-          if (encrypted === undefined) return;
-          configCopy[key] = encrypted;
-        }
-      }
-    }
-
     const asset = new asset_entity.Asset({
       ...(editAsset || {}),
       Name: name,
@@ -328,26 +279,23 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       GroupID: groupId,
       Icon: icon,
       Description: description,
-      Config: JSON.stringify(configCopy),
-      sshTunnelId: 0, // 扩展类型无隧道
+      Config: built.configJSON,
+      sshTunnelId: built.sshTunnelId,
     });
-
     await persistAsset(asset);
   };
 
   const typeLabel = getAssetTypeLabel(assetType, t, assetTypeOptions);
   const sectionDef = getAssetType(assetType);
 
-  const isTestableAssetType = sectionDef?.ConfigSection ? !!sectionDef.testable : false;
+  const isTestableAssetType = !!sectionDef?.testable;
 
   const isTestConnectionDisabled = testing || !validity.canTest;
 
-  const saveDisabledReason = !name.trim()
-    ? "asset.formMissingName"
-    : sectionDef?.ConfigSection
-      ? (validity.saveDisabledReason ?? "")
-      : "";
-  const saveDisabled = saving || !!saveDisabledReason || (!!sectionDef?.ConfigSection && !validity.canSave);
+  // 未注册的类型（资产所属扩展已卸载）没有配置区块可挂载，因此 validity 停在初始的
+  // canSave:false，保存按钮自然是禁用的——不必再为它写一条分支。
+  const saveDisabledReason = !name.trim() ? "asset.formMissingName" : (validity.saveDisabledReason ?? "");
+  const saveDisabled = saving || !!saveDisabledReason || !validity.canSave;
 
   const testConnectionButton = !isTestableAssetType ? null : testing ? (
     <Button
@@ -437,7 +385,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               </Field>
             </div>
 
-            {/* 注册化类型:通用 ConfigSection 路径 */}
+            {/* 每种类型的配置区块都来自注册表（内置手写、扩展由 configSchema 生成） */}
             {sectionDef?.ConfigSection && (
               <sectionDef.ConfigSection
                 key={assetType}
@@ -448,24 +396,6 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
                 onIconChange={setIcon}
               />
             )}
-
-            {/* Extension type config */}
-            {!sectionDef?.ConfigSection &&
-              (() => {
-                const extInfo = useExtensionStore.getState().getExtensionForAssetType(assetType);
-                if (!extInfo) return null;
-                const assetTypeDef = extInfo.manifest.assetTypes?.find((at) => at.type === assetType);
-                if (!assetTypeDef?.configSchema) return null;
-                return (
-                  <ExtensionConfigForm
-                    extensionName={extInfo.name}
-                    configSchema={assetTypeDef.configSchema as Record<string, unknown>}
-                    value={extConfig}
-                    onChange={setExtConfig}
-                    hasBackend={!!extInfo.manifest.backend}
-                  />
-                );
-              })()}
 
             {/* Description(折叠成一行,贴近 footer) */}
             <DescriptionBar value={description} onChange={setDescription} />

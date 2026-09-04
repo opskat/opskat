@@ -61,8 +61,7 @@ export default tseslint.config(
     },
   },
   {
-    // 设计系统作用域（主应用 src + @opskat/ui）：palette 类名禁令只在 globals.css token 体系内生效；
-    // packages/devserver-ui 是独立嵌入的开发工具 UI，不共享 token，不在此列。
+    // 设计系统作用域（主应用 src + @opskat/ui）：palette 类名禁令只在 globals.css token 体系内生效。
     files: ["src/**/*.{ts,tsx}", "packages/ui/src/**/*.{ts,tsx}"],
     rules: {
       "no-restricted-syntax": ["error", ...react19Restrictions, ...paletteRestrictions],

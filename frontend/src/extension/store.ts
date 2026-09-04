@@ -1,5 +1,6 @@
 // frontend/src/extension/store.ts
 import { create } from "zustand";
+import { registerExtensionAssetTypes, unregisterExtensionAssetTypes } from "./assetTypes";
 import type { ExtManifest, LoadedExtension } from "./types";
 
 interface ExtensionEntry {
@@ -14,11 +15,9 @@ interface ExtensionState {
   register: (name: string, manifest: ExtManifest) => void;
   unregister: (name: string) => void;
   setLoaded: (name: string, loaded: LoadedExtension) => void;
-  getExtensionForAssetType: (assetType: string) => { name: string; manifest: ExtManifest } | undefined;
-  isExtensionAssetType: (assetType: string) => boolean;
 }
 
-export const useExtensionStore = create<ExtensionState>((set, get) => ({
+export const useExtensionStore = create<ExtensionState>((set) => ({
   ready: false,
   extensions: {},
 
@@ -28,6 +27,9 @@ export const useExtensionStore = create<ExtensionState>((set, get) => ({
 
   register(name, manifest) {
     set((s) => ({ extensions: { ...s.extensions, [name]: { manifest } } }));
+    // 资产类型进的是内置类型那张注册表（见 ./assetTypes）。挂在这里而不是调用方，
+    // 是为了让"扩展已加载"与"它的资产类型可用"永远同时成立——分开写迟早会漂移。
+    registerExtensionAssetTypes(name, manifest);
   },
 
   unregister(name) {
@@ -35,6 +37,7 @@ export const useExtensionStore = create<ExtensionState>((set, get) => ({
       const { [name]: _, ...rest } = s.extensions;
       return { extensions: rest };
     });
+    unregisterExtensionAssetTypes(name);
   },
 
   setLoaded(name, loaded) {
@@ -43,18 +46,5 @@ export const useExtensionStore = create<ExtensionState>((set, get) => ({
       if (!entry) return s;
       return { extensions: { ...s.extensions, [name]: { ...entry, loaded } } };
     });
-  },
-
-  getExtensionForAssetType(assetType) {
-    for (const [name, entry] of Object.entries(get().extensions)) {
-      if (entry.manifest.assetTypes?.some((at) => at.type === assetType)) {
-        return { name, manifest: entry.manifest };
-      }
-    }
-    return undefined;
-  },
-
-  isExtensionAssetType(assetType) {
-    return get().getExtensionForAssetType(assetType) !== undefined;
   },
 }));

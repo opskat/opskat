@@ -8,12 +8,9 @@ import { markdownComponents, markdownUrlTransform } from "@/components/MarkdownL
 import { Button, Separator, ConfirmDialog, Tooltip, TooltipContent, TooltipTrigger } from "@opskat/ui";
 import { toast } from "sonner";
 import { useAssetStore } from "@/stores/assetStore";
-import { useExtensionStore } from "@/extension";
-import { getAssetType, isBuiltinType } from "@/lib/assetTypes";
+import { useAssetTypeDef } from "@/lib/assetTypes";
 import { AssetIcon } from "@/components/asset/AssetIcon";
 import { CommandPolicyCard } from "@/components/asset/CommandPolicyCard";
-import { DetailGrid, DetailSection, InfoItem } from "@/components/asset/detail/InfoItem";
-import { DISABLED_VALUE, ENABLED_VALUE, MASKED_SECRET, parseDetailConfig } from "@/components/asset/detail/utils";
 import { asset_entity } from "../../../wailsjs/go/models";
 import { GetDefaultPolicy } from "../../../wailsjs/go/system/System";
 
@@ -34,6 +31,10 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
   const [policyFields, setPolicyFields] = useState<Record<string, string[]>>({});
   const [policyGroups, setPolicyGroups] = useState<string[]>([]);
 
+  // 订阅注册表：扩展加载完成时它的资产类型才注册进来，这里要跟着重渲染。
+  // 定义还没到位期间只是少一张类型卡，不是全屏 loading——通用信息照常可读。
+  const def = useAssetTypeDef(asset.Type);
+
   // 资产切换 / 策略变化时回填本地编辑态：渲染期对比上次值，替代 effect 里的级联 setState。
   const [prevSync, setPrevSync] = useState<{ id?: number; cmdPolicy?: string; type?: string }>({});
   if (asset.ID !== prevSync.id || asset.CmdPolicy !== prevSync.cmdPolicy || asset.Type !== prevSync.type) {
@@ -41,20 +42,11 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
     try {
       const parsed = JSON.parse(asset.CmdPolicy || "{}");
       setPolicyGroups(parsed.groups || []);
-      const def = getAssetType(asset.Type);
-      if (def?.policy) {
-        const fields: Record<string, string[]> = {};
-        for (const f of def.policy.fields) {
-          fields[f.key] = parsed[f.key] || [];
-        }
-        setPolicyFields(fields);
-      } else if (!isBuiltinType(asset.Type)) {
-        // Extension types fallback
-        setPolicyFields({
-          allow_list: parsed.allow_list || [],
-          deny_list: parsed.deny_list || [],
-        });
+      const fields: Record<string, string[]> = {};
+      for (const f of def?.policy?.fields ?? []) {
+        fields[f.key] = parsed[f.key] || [];
       }
+      setPolicyFields(fields);
     } catch {
       setPolicyFields({});
       setPolicyGroups([]);
@@ -96,12 +88,9 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
       const parsed = JSON.parse(defaultJSON);
       const groups = parsed.groups || [];
       setPolicyGroups(groups);
-      const def = getAssetType(asset.Type);
       const fields: Record<string, string[]> = {};
-      if (def?.policy) {
-        for (const f of def.policy.fields) {
-          fields[f.key] = parsed[f.key] || [];
-        }
+      for (const f of def?.policy?.fields ?? []) {
+        fields[f.key] = parsed[f.key] || [];
       }
       setPolicyFields(fields);
       await savePolicy(fields, groups);
@@ -109,22 +98,6 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
       toast.error(String(e));
     }
   };
-
-  // Extension asset info — subscribe to ready so we re-render when extensions load
-  const extensionReady = useExtensionStore((s) => s.ready);
-  const extInfo = extensionReady ? useExtensionStore.getState().getExtensionForAssetType(asset.Type) : undefined;
-  const extAssetTypeDef = extInfo?.manifest.assetTypes?.find((at) => at.type === asset.Type);
-  const hasConnectPage = !!extInfo?.manifest.frontend?.pages.find((p) => p.slot === "asset.connect");
-  const isExtensionType = !isBuiltinType(asset.Type);
-
-  // Show loading while extensions are initializing for extension asset types
-  if (isExtensionType && !extensionReady) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
 
   const sshTunnelName = (id?: number) => {
     if (!id) return null;
@@ -144,7 +117,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
           </div>
         </div>
         <div className="flex gap-1.5">
-          {(getAssetType(asset.Type)?.canConnect || hasConnectPage) && (
+          {def?.canConnect && (
             <Button size="sm" className="h-8 gap-1.5" onClick={onConnect} disabled={isConnecting}>
               {isConnecting ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -188,63 +161,17 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
         onConfirm={onDelete}
       />
       <div className="flex-1 p-4 space-y-4 overflow-y-auto">
-        {/* Builtin type Detail Info Card */}
-        {(() => {
-          const def = getAssetType(asset.Type);
-          if (!def) return null;
-          const Card = def.DetailInfoCard;
-          return <Card asset={asset} sshTunnelName={sshTunnelName} />;
-        })()}
+        {/* 类型详情卡：内置类型手写，扩展类型由它的 configSchema 生成（同一个槽位） */}
+        {def && <def.DetailInfoCard asset={asset} sshTunnelName={sshTunnelName} />}
 
-        {/* Extension Config Info */}
-        {extAssetTypeDef?.configSchema &&
-          (() => {
-            const schema = extAssetTypeDef.configSchema as {
-              propertyOrder?: string[];
-              properties?: Record<string, { title?: string; format?: string; type?: string }>;
-            };
-            const props = schema.properties ?? {};
-            const order = schema.propertyOrder;
-            const keys = order ? order.filter((k) => k in props) : Object.keys(props);
-            const parsed = parseDetailConfig<Record<string, unknown>>(asset.Config) ?? {};
-            return (
-              <DetailSection title={extInfo?.manifest.i18n.displayName || asset.Type}>
-                <DetailGrid>
-                  {keys.map((key) => {
-                    const prop = props[key];
-                    if (!prop) return null;
-                    const val = parsed[key];
-                    if (val === undefined || val === null || val === "") return null;
-                    return (
-                      <InfoItem
-                        key={key}
-                        label={prop.title || key}
-                        value={
-                          prop.format === "password"
-                            ? MASKED_SECRET
-                            : prop.type === "boolean"
-                              ? val
-                                ? ENABLED_VALUE
-                                : DISABLED_VALUE
-                              : String(val)
-                        }
-                        mono={prop.type !== "boolean"}
-                      />
-                    );
-                  })}
-                </DetailGrid>
-              </DetailSection>
-            );
-          })()}
-
-        {/* Builtin type Policy Card */}
+        {/* 策略卡：内置类型与扩展类型走同一段渲染，差别只在定义里 */}
         {(() => {
-          const def = getAssetType(asset.Type);
-          if (!def?.policy) return null;
-          const pol = def.policy;
+          const pol = def?.policy;
+          if (!pol) return null;
+          const tr = (key: string) => (pol.ns ? t(key, { ns: pol.ns, defaultValue: asset.Type }) : t(key));
           return (
             <CommandPolicyCard
-              title={t(pol.titleKey)}
+              title={tr(pol.titleKey)}
               policyType={pol.policyType}
               lists={pol.fields.map((f) => ({
                 key: f.key,
@@ -263,7 +190,8 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
                   setPolicyFields(next);
                   handleSavePolicyFields(next);
                 },
-                placeholder: t(f.placeholderKey),
+                // 占位符二选一：内置类型给 i18n key，扩展给 manifest 列出的 action 名。
+                placeholder: f.placeholder ?? (f.placeholderKey ? t(f.placeholderKey) : ""),
                 variant: f.variant,
               }))}
               buildPolicyJSON={() =>
@@ -272,7 +200,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
                   ...(policyGroups.length > 0 ? { groups: policyGroups } : {}),
                 })
               }
-              hint={t(pol.hintKey)}
+              hint={pol.hintKey ? t(pol.hintKey) : undefined}
               saving={savingPolicy}
               assetID={asset.ID}
               onReset={handleResetPolicy}
@@ -281,67 +209,6 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
             />
           );
         })()}
-
-        {/* Extension Policy */}
-        {extInfo?.manifest.policies && isExtensionType && (
-          <CommandPolicyCard
-            title={extInfo.manifest.i18n.displayName || asset.Type}
-            policyType={extInfo.manifest.policies.type}
-            lists={[
-              {
-                key: "allow_list",
-                label: t("asset.cmdPolicyAllowList"),
-                items: policyFields["allow_list"] || [],
-                onAdd: (vals: string[]) => {
-                  const next = { ...policyFields, allow_list: [...(policyFields["allow_list"] || []), ...vals] };
-                  setPolicyFields(next);
-                  handleSavePolicyFields(next);
-                },
-                onRemove: (i) => {
-                  const next = {
-                    ...policyFields,
-                    allow_list: (policyFields["allow_list"] || []).filter((_, idx) => idx !== i),
-                  };
-                  setPolicyFields(next);
-                  handleSavePolicyFields(next);
-                },
-                placeholder: extInfo.manifest.policies.actions.join(", "),
-                variant: "allow",
-              },
-              {
-                key: "deny_list",
-                label: t("asset.cmdPolicyDenyList"),
-                items: policyFields["deny_list"] || [],
-                onAdd: (vals: string[]) => {
-                  const next = { ...policyFields, deny_list: [...(policyFields["deny_list"] || []), ...vals] };
-                  setPolicyFields(next);
-                  handleSavePolicyFields(next);
-                },
-                onRemove: (i) => {
-                  const next = {
-                    ...policyFields,
-                    deny_list: (policyFields["deny_list"] || []).filter((_, idx) => idx !== i),
-                  };
-                  setPolicyFields(next);
-                  handleSavePolicyFields(next);
-                },
-                placeholder: extInfo.manifest.policies.actions.join(", "),
-                variant: "deny",
-              },
-            ]}
-            buildPolicyJSON={() =>
-              JSON.stringify({
-                ...Object.fromEntries(Object.entries(policyFields).filter(([, v]) => v.length > 0)),
-                ...(policyGroups.length > 0 ? { groups: policyGroups } : {}),
-              })
-            }
-            saving={savingPolicy}
-            assetID={asset.ID}
-            onReset={handleResetPolicy}
-            referencedGroups={policyGroups}
-            onGroupsChange={handleGroupsChange}
-          />
-        )}
 
         {asset.Description && (
           <>

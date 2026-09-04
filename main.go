@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"embed"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -53,6 +52,7 @@ import (
 	extpkg "github.com/opskat/opskat/pkg/extension"
 	skillplugin "github.com/opskat/opskat/plugin"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -228,7 +228,7 @@ func main() {
 		Emit:           externalEditEmitter.Emit,
 	})
 	if err != nil {
-		zap.L().Warn("init external edit service", zap.Error(err))
+		logger.Default().Warn("init external edit service", zap.Error(err))
 	}
 	extEditB := external_edit.New(sys, externalEditSvc, externalEditEmitter)
 
@@ -372,36 +372,36 @@ func initExtensionSystem(
 	opsctlB *opsctl.Opsctl,
 ) {
 	if os.Getenv("OPSKAT_EXTENSIONS") == "0" {
-		zap.L().Info("extension system disabled via OPSKAT_EXTENSIONS=0")
+		logger.Default().Info("extension system disabled via OPSKAT_EXTENSIONS=0")
 		return
 	}
 
 	extDir := filepath.Join(dataDir, "extensions")
 	mgr := extpkg.NewManager(extDir, func(extName string) extpkg.HostProvider {
 		return extpkg.NewDefaultHostProvider(extpkg.DefaultHostConfig{
-			Logger:       zap.L(),
+			Logger:       logger.Default(),
 			AssetConfigs: extB.NewAssetConfigGetter(),
 			FileDialogs:  extB.NewFileDialogOpener(),
 			KV:           extB.NewKVStore(extName),
 			ActionEvents: extB.NewActionEventHandler(extName),
 			TunnelDialer: extB.NewTunnelDialer(),
 		})
-	}, zap.L())
+	}, logger.Default())
 
 	extSvc := extension_svc.New(
 		mgr,
 		extension_state_repo.ExtensionState(),
 		extension_data_repo.ExtensionData(),
 		asset_repo.Asset(),
-		zap.L(),
-		func(b *extpkg.Bridge) { aitool.SetExecToolExecutor(b) },
+		logger.Default(),
 		func() { wailsRuntime.EventsEmit(wctx, "ext:reload", nil) },
 		extension.SnippetExtensionHook{},
 	)
 
 	extB.SetService(extSvc)
 	aiB.SetExtensionService(extSvc)
-	opsctlB.SetExtToolExecutor(&bridgeExtExecutor{bridge: extSvc.Bridge})
+	opsctlB.SetExtToolExecutor(desktopExecExecutor{})
+	opsctlB.SetExtDevInstaller(desktopExtDevInstaller{ext: extB})
 
 	// 接入 snippet 分类注册表
 	if svc := snippet_svc.Snippet(); svc != nil {
@@ -413,46 +413,31 @@ func initExtensionSystem(
 	// 异步初始化扩展，避免阻塞 Startup（WASM 编译较慢）
 	go func() {
 		if err := extSvc.Init(appCtx); err != nil {
-			zap.L().Error("extension init failed", zap.Error(err))
+			logger.Default().Error("extension init failed", zap.Error(err))
 		}
 		// 扩展 Init 完成后刷新 snippet 分类表
 		if svc := snippet_svc.Snippet(); svc != nil {
 			svc.RefreshCategories()
 		}
 		wailsRuntime.EventsEmit(wctx, "ext:ready", nil)
-
-		if err := extSvc.StartWatch(appCtx); err != nil {
-			zap.L().Warn("extension watcher failed", zap.Error(err))
-		}
 	}()
 }
 
-// bridgeExtExecutor 把 extension_svc.Service.Bridge() 包装成 opsctl.ExtToolExecutor。
-type bridgeExtExecutor struct {
-	bridge func() *extpkg.Bridge
+// desktopExecExecutor 把统一 exec handler 交给 opsctl binder：opsctl 对扩展资产的命令
+// 由桌面进程执行（WASM 运行时只在这里），走的仍然是同一个 handler。
+type desktopExecExecutor struct{}
+
+func (desktopExecExecutor) ExecuteExtTool(ctx context.Context, assetID int64, command string) (string, error) {
+	return aitool.ExecOnAsset(ctx, assetID, command)
 }
 
-func (b *bridgeExtExecutor) ExecuteExtTool(ctx context.Context, extName, tool string, args []byte) ([]byte, error) {
-	br := b.bridge()
-	if br == nil {
-		return nil, errExtNotInit
-	}
-	var input struct {
-		AssetID int64 `json:"asset_id"`
-	}
-	if err := json.Unmarshal(args, &input); err != nil {
-		return nil, fmt.Errorf("decode extension tool args: %w", err)
-	}
-	return aitool.ExecuteExtensionTool(ctx, br, input.AssetID, extName, tool, args)
+// desktopExtDevInstaller 把 `opsctl ext dev` 的安装请求交回扩展 binder，跑的是
+// "从目录安装"那一条 extension_svc.Install。
+type desktopExtDevInstaller struct{ ext *extension.Extension }
+
+func (i desktopExtDevInstaller) InstallExtensionDir(ctx context.Context, sourceDir string) (string, string, error) {
+	return extension.InstallExtensionDir(i.ext, ctx, sourceDir)
 }
-
-var (
-	errExtNotInit = errExt("extension system not initialized")
-)
-
-type errExt string
-
-func (e errExt) Error() string { return string(e) }
 
 func initialWindowSize(cfg *bootstrap.AppConfig) (int, int) {
 	width := defaultWindowWidth

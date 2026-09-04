@@ -62,12 +62,11 @@ import { reorderAssetsOptimistically } from "@/lib/assetTreeReorderOptimistic";
 import { writeAssetMarkdownRef } from "@/lib/assetRef";
 import { notifyCopied } from "@/lib/notify";
 import { getAssetType } from "@/lib/assetTypes";
-import { getAssetTypeOptions, matchSelectedTypes } from "@/lib/assetTypes/options";
+import { useAssetTypeOptions, matchSelectedTypes } from "@/lib/assetTypes/options";
 import { AssetTypeFilterButton } from "@/components/asset/AssetTypeFilterButton";
 import { useAssetStore } from "@/stores/assetStore";
 import { formatBinding, useShortcutStore } from "@/stores/shortcutStore";
 import { useTerminalStore } from "@/stores/terminalStore";
-import { useExtensionStore } from "@/extension";
 import { useActiveAssetIds } from "@/hooks/useActiveAssetIds";
 import { MoveAsset } from "../../../wailsjs/go/system/System";
 import { MoveGroup, ReorderAsset, ReorderGroup } from "../../../wailsjs/go/system/System";
@@ -237,7 +236,6 @@ export function AssetTree({
     refresh,
   } = useAssetStore();
   const connectingAssetIds = useTerminalStore((s) => s.connectingAssetIds);
-  const extensions = useExtensionStore((s) => s.extensions);
   const activeAssetIds = useActiveAssetIds();
   const [filter, setFilter] = useState("");
   const [selectedTypes, setSelectedTypes] = useState<string[]>(loadFilter);
@@ -267,7 +265,7 @@ export function AssetTree({
     saveHideEmpty(hideEmptyGroups);
   }, [hideEmptyGroups]);
 
-  const typeOptions = useMemo(() => getAssetTypeOptions(extensions), [extensions]);
+  const typeOptions = useAssetTypeOptions();
 
   const filteredAssets = useMemo(() => {
     const typeFilteredAssets = matchSelectedTypes(assets, selectedTypes, typeOptions);
@@ -1161,7 +1159,10 @@ const AssetRowContent = React.memo(function AssetRowContent({
           </ContextMenuItem>
         )}
         {onOpenInfoTab && (
-          <ContextMenuItem onClick={() => onOpenInfoTab("asset", asset.ID, asset.Name, asset.Icon)}>
+          <ContextMenuItem
+            data-testid="asset-context-detail"
+            onClick={() => onOpenInfoTab("asset", asset.ID, asset.Name, asset.Icon)}
+          >
             <Eye className="h-3.5 w-3.5 mr-1.5" />
             {t("action.editPermission")}
           </ContextMenuItem>

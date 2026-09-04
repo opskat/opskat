@@ -20,7 +20,7 @@ make build-cli                           # Standalone opsctl
 make install-cli                         # Install opsctl to GOPATH/bin
 
 # Test
-make test                                # Go tests (internal/, cmd/opsctl, pkg/, cmd/devserver; CI runs the broader `go test ./...`)
+make test                                # Go tests (internal/, cmd/opsctl, pkg/; CI runs the broader `go test ./...`)
 go test ./internal/ai/...                # Package scope
 go test ./internal/ai/ -run TestName     # Single Go test
 make test-cover                          # Coverage HTML
@@ -33,8 +33,8 @@ make lint / make lint-fix                # golangci-lint
 cd frontend && pnpm lint / pnpm lint:fix
 
 # Extensions / plugin
-make devserver EXT=<name>                # Single-extension dev (refuses if OPSKAT_ENV=production)
-make build-devserver-ui                  # Rebuild embedded devserver UI
+opsctl ext dev <dir>                     # Install a local extension build into the running app
+                                         # (re-run after each build = reload; refuses if OPSKAT_ENV=production)
 make install-skill                       # Register opsctl plugin marketplace
 ```
 
@@ -98,8 +98,7 @@ Diagnosing production issues relies on logs. Log every cross-boundary / cross-pr
 | `frontend/wailsjs/runtime/*` | Wails runtime shim | ships with Wails CLI |
 | `internal/**/mock_*/` | `mockgen` | `go generate ./...` |
 | `internal/embedded/opsctl_bin` | `make build-cli-embed` | `make build-embed` |
-| `frontend/packages/devserver-ui/dist/` | Vite (embedded by `cmd/devserver`) | `make build-devserver-ui` |
 
 Lockfiles (`go.sum`, `frontend/pnpm-lock.yaml`) — never hand-edit; use `go mod tidy` / `pnpm add|remove|install`.
 
-Build artifacts and caches are gitignored and safe to remove with `make clean`: `build/bin/`, `frontend/dist/`, coverage files, `tsconfig.tsbuildinfo`, `package.json.md5`, and the top-level `opskat` / `opsctl` / `devserver` binaries.
+Build artifacts and caches are gitignored and safe to remove with `make clean`: `build/bin/`, `frontend/dist/`, coverage files, `tsconfig.tsbuildinfo`, `package.json.md5`, and the top-level `opskat` / `opsctl` binaries.

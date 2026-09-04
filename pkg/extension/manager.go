@@ -3,7 +3,6 @@ package extension
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,8 +10,6 @@ import (
 	"sync"
 
 	"github.com/cago-frame/cago/pkg/logger"
-	"github.com/fsnotify/fsnotify"
-	"github.com/opskat/opskat/pkg/skillmd"
 	"github.com/tetratelabs/wazero"
 	"go.uber.org/zap"
 )
@@ -193,63 +190,13 @@ func (m *Manager) Shutdown(ctx context.Context) {
 	}
 }
 
-// Watch monitors the extensions directory for changes and calls onChange.
-// The caller is responsible for handling the reload logic.
-func (m *Manager) Watch(ctx context.Context, onChange func()) error {
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return fmt.Errorf("create watcher: %w", err)
-	}
-
-	if err := os.MkdirAll(m.dir, 0755); err != nil {
-		if closeErr := watcher.Close(); closeErr != nil {
-			logger.Default().Warn("close watcher after mkdir error", zap.Error(closeErr))
-		}
-		return fmt.Errorf("create extensions dir: %w", err)
-	}
-
-	if err := watcher.Add(m.dir); err != nil {
-		if closeErr := watcher.Close(); closeErr != nil {
-			logger.Default().Warn("close watcher after add error", zap.Error(closeErr))
-		}
-		return fmt.Errorf("watch extensions dir: %w", err)
-	}
-
-	go func() {
-		defer func() {
-			if err := watcher.Close(); err != nil {
-				logger.Default().Warn("close filesystem watcher", zap.Error(err))
-			}
-		}()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case event, ok := <-watcher.Events:
-				if !ok {
-					return
-				}
-				if event.Op&(fsnotify.Create|fsnotify.Remove|fsnotify.Write|fsnotify.Rename) != 0 {
-					m.logger.Info("extension directory changed",
-						zap.String("file", event.Name),
-						zap.String("op", event.Op.String()))
-					if onChange != nil {
-						onChange()
-					}
-				}
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
-				m.logger.Error("fsnotify error", zap.Error(err))
-			}
-		}
-	}()
-
-	return nil
-}
-
-// LoadManifestInfo reads a manifest from disk without loading the WASM plugin.
+// LoadManifestInfo reads an extension directory without compiling or running its
+// WASM module: the manifest gives the security contract, the descriptor cache gives
+// the functional face. It is the entry point for callers that have no runtime at
+// all (opsctl) or that are looking at an extension which is not loaded.
+//
+// A cache miss leaves the functional face empty — that only happens for an
+// extension this machine has never loaded, since every load populates the cache.
 func LoadManifestInfo(dir string) (*ManifestInfo, error) {
 	manifestPath := filepath.Join(dir, "manifest.json")
 	data, err := os.ReadFile(manifestPath) //nolint:gosec // extension directories are trusted
@@ -260,7 +207,39 @@ func LoadManifestInfo(dir string) (*ManifestInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ManifestInfo{Name: manifest.Name, Dir: dir, Manifest: manifest, Locales: LoadLocales(dir)}, nil
+	applyCachedDescriptor(manifest, dir)
+	return newManifestInfo(manifest, dir), nil
+}
+
+// newManifestInfo assembles the no-runtime view of one extension directory.
+func newManifestInfo(manifest *Manifest, dir string) *ManifestInfo {
+	skillMD, skillDescription := skillMDInfo(dir, manifest.Name)
+	return &ManifestInfo{
+		Name:             manifest.Name,
+		Dir:              dir,
+		Manifest:         manifest,
+		Locales:          LoadLocales(dir),
+		SkillMD:          skillMD,
+		SkillDescription: skillDescription,
+	}
+}
+
+// applyCachedDescriptor merges the cached describe() answer for the extension in
+// dir, if the cache holds one for the wasm binary currently on disk.
+func applyCachedDescriptor(manifest *Manifest, dir string) {
+	wasmBytes, err := os.ReadFile(filepath.Join(dir, manifest.Backend.Binary)) //nolint:gosec // path constructed from trusted extension directory
+	if err != nil {
+		logger.Default().Warn("read wasm binary for descriptor lookup",
+			zap.String("extension", manifest.Name), zap.Error(err))
+		return
+	}
+	desc := cachedDescriptor(manifest.Name, WasmHash(wasmBytes))
+	if desc == nil {
+		logger.Default().Warn("no cached descriptor for extension; load it once to populate the cache",
+			zap.String("extension", manifest.Name))
+		return
+	}
+	manifest.apply(desc)
 }
 
 func (m *Manager) installLock(name string) *sync.Mutex {
@@ -272,6 +251,31 @@ func (m *Manager) installLock(name string) *sync.Mutex {
 		m.installLocks[name] = mu
 	}
 	return mu
+}
+
+// describeInto fills the manifest's functional face from the guest.
+//
+// The guest is asked only when the cache has no answer for this exact wasm binary;
+// a hit skips the call entirely, which is what keeps listing extensions off the
+// WASM path. The answer is validated either way — a cached payload crosses the same
+// boundary as a fresh one.
+func (m *Manager) describeInto(ctx context.Context, manifest *Manifest, plugin *Plugin, wasmBytes []byte) error {
+	hash := WasmHash(wasmBytes)
+	if desc := cachedDescriptor(manifest.Name, hash); desc != nil {
+		manifest.apply(desc)
+		return nil
+	}
+	payload, err := plugin.Describe(ctx)
+	if err != nil {
+		return fmt.Errorf("describe extension %q: %w", manifest.Name, err)
+	}
+	desc, err := ParseDescriptor(payload)
+	if err != nil {
+		return fmt.Errorf("extension %q: %w", manifest.Name, err)
+	}
+	manifest.apply(desc)
+	storeDescriptor(manifest.Name, hash, payload)
+	return nil
 }
 
 func (m *Manager) LoadExtension(ctx context.Context, dir string) (*Manifest, error) {
@@ -292,44 +296,23 @@ func (m *Manager) LoadExtension(ctx context.Context, dir string) (*Manifest, err
 		return nil, fmt.Errorf("read wasm binary: %w", err)
 	}
 
-	// SKILL.md 可选；当它存在且带 frontmatter 时，frontmatter 必须合规。
-	//
-	// 此前这里有一个 4 KiB 硬上限，理由是整份正文会进系统提示词。上限是错的解法：
-	// 它把"文档写长了"变成"整个扩展加载失败"，而真正该做的是解析 frontmatter、
-	// 让 description 进清单、正文只在相关 Tab 打开时注入（bridge → chat.go → prompt_builder）。
-	// 上限去掉，严格性移到格式上：frontmatter 解析失败响亮失败。
-	//
-	// 但"没有 frontmatter"本身不算格式错误：扩展 SKILL.md 早于 frontmatter 约定
-	// 存在（已发布的 extensions/oss/SKILL.md 就是裸 Markdown，首行是 `# OSS ...`），
-	// 我们不能反向修改另一个仓库来配合本仓的严格化。内置 skill（internal/ai/skills）
-	// 是本仓完全控制的一手内容，缺 frontmatter 就该 panic；扩展是边界之外的第三方
-	// 内容，边界处的规则是「宽进严出」——没有 frontmatter 就退化成整份原文当正文
-	// （等价于此前的行为，只是去掉了 4 KiB 上限），真正写坏了 frontmatter（写了
-	// 开头分隔符但没写全）才响亮失败。
-	skillMD := ""
-	skillDescription := ""
-	if data, err := os.ReadFile(filepath.Join(dir, "SKILL.md")); err == nil { //nolint:gosec // path constructed from trusted extension directory
-		raw := string(data)
-		parsed, perr := skillmd.Parse(raw)
-		switch {
-		case perr == nil:
-			skillMD = parsed.Body
-			skillDescription = parsed.Description
-		case errors.Is(perr, skillmd.ErrNoFrontmatter):
-			skillMD = raw
-			m.logger.Warn("extension SKILL.md has no frontmatter, using raw body with no description",
-				zap.String("extension", manifest.Name))
-		default:
-			return nil, fmt.Errorf("SKILL.md: %w", perr)
-		}
+	skillMD, skillDescription, err := readSkillMD(dir, manifest.Name, m.logger)
+	if err != nil {
+		return nil, err
 	}
 
 	host := m.newHost(manifest.Name)
 	host = NewCapabilityHost(host, manifest, dir) // enforce capabilities declared in manifest
 	plugin, err := LoadPlugin(ctx, manifest, wasmBytes, host, m.wasmCache)
 	if err != nil {
-		host.CloseAll()
 		return nil, fmt.Errorf("load plugin: %w", err)
+	}
+
+	if err := m.describeInto(ctx, manifest, plugin, wasmBytes); err != nil {
+		if closeErr := plugin.Close(ctx); closeErr != nil {
+			m.logger.Warn("close plugin after describe failure", zap.String("name", manifest.Name), zap.Error(closeErr))
+		}
+		return nil, err
 	}
 
 	ext := &Extension{
@@ -350,15 +333,20 @@ func (m *Manager) LoadExtension(ctx context.Context, dir string) (*Manifest, err
 	return manifest, nil
 }
 
-// ManifestInfo holds manifest data for an extension that may not be loaded.
+// ManifestInfo holds everything a host can learn about an extension without running
+// it: the manifest's security contract, the cached describe() answer merged onto it,
+// the shipped documentation and the locale tables. It is what a process with no WASM
+// runtime at all (opsctl) has to work from.
 type ManifestInfo struct {
-	Name     string
-	Dir      string
-	Manifest *Manifest
-	Locales  map[string]map[string]string
+	Name             string
+	Dir              string
+	Manifest         *Manifest
+	Locales          map[string]map[string]string
+	SkillMD          string // Body of SKILL.md (frontmatter stripped)
+	SkillDescription string // description from SKILL.md frontmatter, if any
 }
 
-// ScanManifests reads manifests from disk without loading WASM plugins.
+// ScanManifests reads every extension directory without loading WASM plugins.
 func (m *Manager) ScanManifests() ([]*ManifestInfo, error) {
 	entries, err := os.ReadDir(m.dir)
 	if err != nil {
@@ -384,12 +372,14 @@ func (m *Manager) ScanManifests() ([]*ManifestInfo, error) {
 			m.logger.Warn("skip extension manifest", zap.String("dir", entry.Name()), zap.Error(err))
 			continue
 		}
-		result = append(result, &ManifestInfo{
-			Name:     manifest.Name,
-			Dir:      extDir,
-			Manifest: manifest,
-			Locales:  LoadLocales(extDir),
-		})
+		// A loaded extension already holds the answer the guest gave this run; only
+		// a disabled one has to fall back to what the cache remembers.
+		if ext := m.GetExtension(manifest.Name); ext != nil {
+			manifest = ext.Manifest
+		} else {
+			applyCachedDescriptor(manifest, extDir)
+		}
+		result = append(result, newManifestInfo(manifest, extDir))
 	}
 	return result, nil
 }
@@ -451,21 +441,27 @@ func (m *Manager) Install(ctx context.Context, sourcePath string) (*Manifest, er
 		return nil, fmt.Errorf("copy extension: %w", err)
 	}
 
-	// Load the extension
-	if _, err := m.LoadExtension(ctx, destDir); err != nil {
+	// Load the extension. The loaded manifest — not the one parsed off the source
+	// directory above — is what callers get back: only that one carries the
+	// functional face describe() supplied.
+	loaded, err := m.LoadExtension(ctx, destDir)
+	if err != nil {
 		if removeErr := os.RemoveAll(destDir); removeErr != nil {
 			logger.Default().Warn("remove extension dir after load failure", zap.String("dir", destDir), zap.Error(removeErr))
 		}
 		return nil, fmt.Errorf("load extension: %w", err)
 	}
 
-	return manifest, nil
+	return loaded, nil
 }
 
 // Uninstall stops and removes an extension from disk.
 func (m *Manager) Uninstall(ctx context.Context, name string) error {
 	// Unload if loaded (ignore error if not loaded)
 	_ = m.Unload(ctx, name)
+
+	// The cached descriptor describes files that are about to stop existing.
+	deleteDescriptor(name)
 
 	// Remove extension directory
 	extDir := filepath.Join(m.dir, name)

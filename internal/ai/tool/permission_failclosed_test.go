@@ -26,7 +26,7 @@ func registerFailClosedFixture(t *testing.T, assetType string) (context.Context,
 		},
 		"fake help doc for "+assetType,
 		nil)
-	t.Cleanup(func() { permission.UnregisterExecutorForTest(assetType) })
+	t.Cleanup(func() { permission.UnregisterExecutor(assetType) })
 
 	m := setupUnified(t)
 	asset := &asset_entity.Asset{ID: 42, Name: "fake-asset", Type: assetType}

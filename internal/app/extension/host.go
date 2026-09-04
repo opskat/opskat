@@ -110,11 +110,17 @@ type actionEventHandler struct {
 	extName string
 }
 
-func (h *actionEventHandler) OnActionEvent(eventType string, data json.RawMessage) error {
+// OnActionEvent forwards one action event to the frontend.
+//
+// invocationId rides along because one handler serves every concurrent run of
+// this extension: without it a listener sees the extension's events merged into
+// one stream and attributes another upload's progress to its own.
+func (h *actionEventHandler) OnActionEvent(invocationID, eventType string, data json.RawMessage) error {
 	wailsRuntime.EventsEmit(h.ctx, "ext:action:event", map[string]any{
-		"extension": h.extName,
-		"eventType": eventType,
-		"data":      json.RawMessage(data),
+		"extension":    h.extName,
+		"invocationId": invocationID,
+		"eventType":    eventType,
+		"data":         json.RawMessage(data),
 	})
 	return nil
 }

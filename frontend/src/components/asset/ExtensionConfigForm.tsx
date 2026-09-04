@@ -15,7 +15,7 @@ import {
   Switch,
   Textarea,
 } from "@opskat/ui";
-import { CallExtensionAction } from "../../../wailsjs/go/extension/Extension";
+import { createExtensionAPI } from "@/extension/api";
 import { SecretInput } from "@/components/SecretInput";
 
 interface JSONSchemaProperty {
@@ -69,7 +69,7 @@ export function ExtensionConfigForm({
   const handleTestConnection = useCallback(async () => {
     setTesting(true);
     try {
-      await CallExtensionAction(extensionName, "test_connection", JSON.stringify(value));
+      await createExtensionAPI().executeAction(extensionName, "test_connection", value);
       notifySuccess(tCommon("asset.testConnectionSuccess"));
     } catch (e) {
       toast.error(`${tCommon("asset.testConnectionFailed")}: ${String(e)}`);
@@ -120,6 +120,31 @@ export function ExtensionConfigForm({
               {description && <p className="text-xs text-muted-foreground">{description}</p>}
             </div>
             <Switch checked={!!value[key]} onCheckedChange={(v) => updateField(key, v)} />
+          </div>
+        );
+      }
+
+      // Numeric → number input that stores a number. The configSchema is the same
+      // declaration the guest unmarshals into its Go struct, so storing "5" for an
+      // `integer` property saves an asset every later tool call rejects with
+      // `cannot unmarshal string into Go struct field ... of type int`.
+      if (prop.type === "integer" || prop.type === "number") {
+        return (
+          <div key={key} className="grid gap-2">
+            <Label htmlFor={key}>
+              {label}
+              {isRequired && <span className="text-destructive ml-0.5">*</span>}
+            </Label>
+            <Input
+              id={key}
+              type="number"
+              value={value[key] === undefined || value[key] === null ? "" : String(value[key])}
+              // Empty means "not set", not 0: the property is dropped from the config
+              // rather than saved as a value the user never chose.
+              onChange={(e) => updateField(key, e.target.value === "" ? undefined : Number(e.target.value))}
+              placeholder={placeholder}
+            />
+            {description && <p className="text-xs text-muted-foreground">{description}</p>}
           </div>
         );
       }

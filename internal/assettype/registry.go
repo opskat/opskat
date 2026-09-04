@@ -72,17 +72,48 @@ var (
 	registry = map[string]AssetTypeHandler{}
 )
 
+// Register 注册内置资产类型处理器。冲突或缺少自动化契约直接 panic —— 内置注册发生在
+// init()，两者都是启动期编程错误，不该被静默覆盖。
+//
+// 运行期可增删的类型（扩展提供的资产类型）走 RegisterDynamic / Unregister：那条路上的
+// 冲突来自用户装了两个声明同一类型的扩展，必须被响亮拒绝，但不能让整个应用崩掉。
 func Register(h AssetTypeHandler) {
+	if err := register(h); err != nil {
+		panic("assettype: " + err.Error())
+	}
+}
+
+// RegisterDynamic 注册一个运行期可再移除的资产类型处理器，冲突返回错误。
+func RegisterDynamic(h AssetTypeHandler) error {
+	return register(h)
+}
+
+// Unregister 移除一个已注册的资产类型处理器，连同它写进 entity/policy 的 asset-kind
+// 映射。只有 RegisterDynamic 注册进来的类型会被移除——内置类型没有任何调用方会去
+// 注销它们。
+func Unregister(assetType string) {
+	mu.Lock()
+	delete(registry, assetType)
+	mu.Unlock()
+	policy.UnregisterAssetKind(assetType)
+}
+
+func register(h AssetTypeHandler) error {
 	contract := h.AutomationContract()
 	if len(contract.ConfigFields) == 0 {
-		panic(fmt.Sprintf("asset type %q must declare automation config fields", h.Type()))
+		return fmt.Errorf("asset type %q must declare automation config fields", h.Type())
 	}
 	mu.Lock()
+	if _, exists := registry[h.Type()]; exists {
+		mu.Unlock()
+		return fmt.Errorf("asset type %q is already registered", h.Type())
+	}
 	registry[h.Type()] = h
 	mu.Unlock()
 	if kind := h.PolicyKind(); kind != "" {
 		policy.RegisterAssetKind(h.Type(), kind)
 	}
+	return nil
 }
 
 func Get(assetType string) (AssetTypeHandler, bool) {

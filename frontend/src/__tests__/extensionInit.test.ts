@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useExtensionStore } from "../extension/store";
+import { getAssetType } from "@/lib/assetTypes";
 import { ListInstalledExtensions } from "../../wailsjs/go/extension/Extension";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
 
@@ -21,10 +22,15 @@ const manifest = {
     styles: "style.css",
     pages: [{ id: "browser", slot: "asset.connect", i18n: { name: "Browser" }, component: "BrowserPage" }],
   },
-  assetTypes: [{ type: "oss", i18n: { name: "OSS" } }],
+  // 类型名故意不撞内置类型：后端会拒绝这种扩展加载（assettype 注册冲突），
+  // 前端因此也永远收不到它。
+  assetTypes: [{ type: "oss-ext", i18n: { name: "OSS" } }],
 };
 
 function resetStore() {
+  for (const name of Object.keys(useExtensionStore.getState().extensions)) {
+    useExtensionStore.getState().unregister(name);
+  }
   useExtensionStore.setState({ ready: false, extensions: {} });
 }
 
@@ -51,15 +57,14 @@ describe("extension store", () => {
     expect(useExtensionStore.getState().extensions["oss"]).toBeUndefined();
   });
 
-  it("getExtensionForAssetType finds correct extension", () => {
+  it("registering an extension makes its asset types reachable through the shared registry", () => {
+    // 注册扩展与"它的资产类型可用"是同一件事：消费点只读注册表，不再问 extension store。
+    expect(getAssetType("oss-ext")).toBeUndefined();
     useExtensionStore.getState().register("oss", manifest as any);
-    const result = useExtensionStore.getState().getExtensionForAssetType("oss");
-    expect(result).toBeDefined();
-    expect(result!.name).toBe("oss");
-  });
+    expect(getAssetType("oss-ext")?.extensionName).toBe("oss");
 
-  it("isExtensionAssetType returns false for built-in type", () => {
-    expect(useExtensionStore.getState().isExtensionAssetType("ssh")).toBe(false);
+    useExtensionStore.getState().unregister("oss");
+    expect(getAssetType("oss-ext")).toBeUndefined();
   });
 });
 

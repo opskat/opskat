@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 
+	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
@@ -37,8 +37,7 @@ type Service struct {
 	snippetHook SnippetExtensionHook
 	logger      *zap.Logger
 
-	onBridgeChanged func(bridge *extension.Bridge)
-	onReload        func()
+	onReload func()
 
 	mu       sync.Mutex
 	initDone atomic.Bool
@@ -52,20 +51,18 @@ func New(
 	dataRepo extension_data_repo.ExtensionDataRepo,
 	assetRepo asset_repo.AssetRepo,
 	logger *zap.Logger,
-	onBridgeChanged func(bridge *extension.Bridge),
 	onReload func(),
 	snippetHook SnippetExtensionHook,
 ) *Service {
 	return &Service{
-		manager:         manager,
-		bridge:          extension.NewBridge(),
-		stateRepo:       stateRepo,
-		dataRepo:        dataRepo,
-		assetRepo:       assetRepo,
-		snippetHook:     snippetHook,
-		logger:          logger,
-		onBridgeChanged: onBridgeChanged,
-		onReload:        onReload,
+		manager:     manager,
+		bridge:      extension.NewBridge(),
+		stateRepo:   stateRepo,
+		dataRepo:    dataRepo,
+		assetRepo:   assetRepo,
+		snippetHook: snippetHook,
+		logger:      logger,
+		onReload:    onReload,
 	}
 }
 
@@ -93,26 +90,6 @@ func (s *Service) Reload(ctx context.Context) error {
 	s.loadAndApplyState(ctx)
 	s.notifyReload()
 	return nil
-}
-
-// StartWatch begins filesystem monitoring with debounced reload.
-func (s *Service) StartWatch(ctx context.Context) error {
-	var (
-		timerMu sync.Mutex
-		timer   *time.Timer
-	)
-	return s.manager.Watch(ctx, func() {
-		timerMu.Lock()
-		defer timerMu.Unlock()
-		if timer != nil {
-			timer.Stop()
-		}
-		timer = time.AfterFunc(500*time.Millisecond, func() {
-			if err := s.Reload(ctx); err != nil {
-				s.logger.Error("debounced reload failed", zap.Error(err))
-			}
-		})
-	})
 }
 
 // Enable loads a disabled extension and registers it.
@@ -143,12 +120,16 @@ func (s *Service) Enable(ctx context.Context, name string) error {
 	}
 
 	if ext := s.manager.GetExtension(name); ext != nil {
-		s.bridge.Register(ext)
+		if err := s.register(ext); err != nil {
+			if uErr := s.manager.Unload(ctx, name); uErr != nil {
+				s.logger.Warn("unload after failed registration", zap.String("name", name), zap.Error(uErr))
+			}
+			return err
+		}
 	}
 	if s.snippetHook != nil {
 		s.snippetHook.RefreshCategories()
 	}
-	s.notifyBridgeChanged()
 	s.ensureState(ctx, name, true)
 	s.notifyReload()
 	return nil
@@ -159,12 +140,11 @@ func (s *Service) Disable(ctx context.Context, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.bridge.Unregister(name)
+	s.unregister(name)
 	_ = s.manager.Unload(ctx, name)
 	if s.snippetHook != nil {
 		s.snippetHook.RefreshCategories()
 	}
-	s.notifyBridgeChanged()
 	s.ensureState(ctx, name, false)
 	s.notifyReload()
 	return nil
@@ -174,11 +154,14 @@ func (s *Service) Disable(ctx context.Context, name string) error {
 //
 // Flow:
 //  1. manager.Install parses manifest + copies files + loads WASM.
-//  2. Cross-extension snippet category id conflict check: if the new manifest declares
+//  2. unregister the previous registration of this name — installing over an
+//     existing extension is the ordinary upgrade path, and manager.Install
+//     unloads the old module without knowing about the app-wide registries.
+//  3. Cross-extension snippet category id conflict check: if the new manifest declares
 //     a snippets.categories[].id that collides with another currently installed
 //     extension's category, roll back via manager.Uninstall and return an error.
-//  3. snippet hook: RefreshCategories → SyncExtensionSeeds.
-//  4. bridge.Register, notify, persist enabled state.
+//  4. snippet hook: RefreshCategories → SyncExtensionSeeds.
+//  5. bridge.Register, notify, persist enabled state.
 func (s *Service) Install(ctx context.Context, sourcePath string) (*extension.Manifest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -187,6 +170,12 @@ func (s *Service) Install(ctx context.Context, sourcePath string) (*extension.Ma
 	if err != nil {
 		return nil, fmt.Errorf("install extension: %w", err)
 	}
+
+	// manager.Install has already unloaded whatever was running under this name,
+	// so the app-wide registries now point at a module that is gone. Registration
+	// is keyed by name and refuses a name it already holds, so the old entry has
+	// to go before the new one can be registered below.
+	s.unregister(manifest.Name)
 
 	// Cross-extension category id dedup (after install+load, before bridge.Register).
 	// Intra-manifest duplicates are already rejected by manifest.validate().
@@ -215,9 +204,13 @@ func (s *Service) Install(ctx context.Context, sourcePath string) (*extension.Ma
 	}
 
 	if ext := s.manager.GetExtension(manifest.Name); ext != nil {
-		s.bridge.Register(ext)
+		if err := s.register(ext); err != nil {
+			if rbErr := s.manager.Uninstall(ctx, manifest.Name); rbErr != nil {
+				return nil, fmt.Errorf("%w; rollback also failed: %v", err, rbErr)
+			}
+			return nil, err
+		}
 	}
-	s.notifyBridgeChanged()
 	s.ensureState(ctx, manifest.Name, true)
 	s.notifyReload()
 	return manifest, nil
@@ -335,8 +328,7 @@ func (s *Service) Uninstall(ctx context.Context, name string, cleanData bool, fo
 		}
 	}
 
-	s.bridge.Unregister(name)
-	s.notifyBridgeChanged()
+	s.unregister(name)
 
 	if err := s.manager.Uninstall(ctx, name); err != nil {
 		return fmt.Errorf("uninstall extension: %w", err)
@@ -439,10 +431,12 @@ func (s *Service) Close(ctx context.Context) {
 
 // loadAndApplyState is the single source of truth: scan, register bridge, apply DB state.
 func (s *Service) loadAndApplyState(ctx context.Context) {
-	// Unregister old bridge entries from package-global registries before replacing the bridge.
+	// Drop the previous generation from the app-wide registries before rebuilding:
+	// extreg keys on extension name, so a reload that re-registers the same asset type
+	// would otherwise be refused as a conflict with its own previous incarnation.
 	if s.bridge != nil {
 		for _, name := range s.bridge.ListNames() {
-			s.bridge.Unregister(name)
+			s.unregister(name)
 		}
 	}
 
@@ -451,19 +445,44 @@ func (s *Service) loadAndApplyState(ctx context.Context) {
 	}
 
 	s.bridge = extension.NewBridge()
-	for _, ext := range s.manager.ListExtensions() {
-		s.bridge.Register(ext)
-	}
 
+	disabled := make(map[string]struct{})
 	states, _ := s.stateRepo.FindAll(context.Background())
 	for _, state := range states {
 		if !state.Enabled {
-			s.bridge.Unregister(state.Name)
-			_ = s.manager.Unload(ctx, state.Name)
+			disabled[state.Name] = struct{}{}
 		}
 	}
 
-	s.notifyBridgeChanged()
+	for _, ext := range s.manager.ListExtensions() {
+		if _, off := disabled[ext.Name]; off {
+			_ = s.manager.Unload(ctx, ext.Name)
+			continue
+		}
+		if err := s.register(ext); err != nil {
+			// A conflicting extension is refused, not silently half-loaded: its asset
+			// type would appear in the type picker while exec had no executor for it.
+			s.logger.Error("extension registration refused", zap.String("name", ext.Name), zap.Error(err))
+			_ = s.manager.Unload(ctx, ext.Name)
+		}
+	}
+
+}
+
+// register wires one loaded extension into the app-wide registries and, only if that
+// succeeds, records it in the bridge. The bridge is the "loaded and reachable" table;
+// there is no half-registered state for it to represent.
+func (s *Service) register(ext *extension.Extension) error {
+	if err := extreg.Register(ext); err != nil {
+		return err
+	}
+	s.bridge.Register(ext)
+	return nil
+}
+
+func (s *Service) unregister(name string) {
+	extreg.Unregister(name)
+	s.bridge.Unregister(name)
 }
 
 func (s *Service) ensureState(ctx context.Context, name string, enabled bool) {
@@ -479,12 +498,6 @@ func (s *Service) ensureState(ctx context.Context, name string, enabled bool) {
 	state.Enabled = enabled
 	if err := s.stateRepo.Update(ctx, state); err != nil {
 		s.logger.Warn("update extension state", zap.String("name", name), zap.Error(err))
-	}
-}
-
-func (s *Service) notifyBridgeChanged() {
-	if s.onBridgeChanged != nil {
-		s.onBridgeChanged(s.bridge)
 	}
 }
 
