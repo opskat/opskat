@@ -53,7 +53,7 @@ import {
   type TableSortItem,
 } from "@/lib/tableFilter";
 import { filterOperatorNeedsRange } from "@/lib/tableFilterOperators";
-import { cellValueToText } from "@/lib/cellValue";
+import { cellValueToDisplayText } from "@/lib/cellValue";
 
 interface TableDataTabProps {
   tabId: string;
@@ -985,7 +985,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         return <span className="text-muted-foreground/70 italic">(Default)</span>;
       }
       if (value == null) return <span className="text-muted-foreground italic">NULL</span>;
-      return <span className="truncate block">{cellValueToText(value)}</span>;
+      return <span className="truncate block">{cellValueToDisplayText(value)}</span>;
     },
     [rowsLength]
   );

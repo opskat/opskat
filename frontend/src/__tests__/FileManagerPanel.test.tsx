@@ -1217,6 +1217,61 @@ describe("FileManagerPanel", () => {
     expect(screen.queryByText("externalEdit.recovery.title")).not.toBeInTheDocument();
   });
 
+  it("selects one row on click, toggles with ctrl-click, and takes a range on shift-click", async () => {
+    vi.mocked(SFTPListDir).mockResolvedValue([
+      { name: "a.log", isDir: false, size: 1, modTime: 0 },
+      { name: "b.log", isDir: false, size: 2, modTime: 0 },
+      { name: "c.log", isDir: false, size: 3, modTime: 0 },
+      { name: "d.log", isDir: false, size: 4, modTime: 0 },
+    ]);
+
+    render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("a.log")).toBeInTheDocument());
+
+    const row = (name: string) => screen.getByText(name).closest("[data-sftp-entry-row]") as HTMLElement;
+    const selectedNames = () =>
+      Array.from(document.querySelectorAll("[data-sftp-entry-row]"))
+        .filter((el) => el.className.includes("bg-primary/15"))
+        .map((el) => el.textContent?.match(/^[a-d]\.log/)?.[0])
+        .filter(Boolean);
+
+    fireEvent.click(row("b.log"));
+    expect(selectedNames()).toEqual(["b.log"]);
+
+    // ctrl-click adds, then removes the same row
+    fireEvent.click(row("d.log"), { ctrlKey: true });
+    expect(selectedNames()).toEqual(["b.log", "d.log"]);
+    fireEvent.click(row("d.log"), { ctrlKey: true });
+    expect(selectedNames()).toEqual(["b.log"]);
+
+    // plain click collapses back to a single row
+    fireEvent.click(row("a.log"));
+    expect(selectedNames()).toEqual(["a.log"]);
+
+    // shift-click takes the whole range from the last clicked row
+    fireEvent.click(row("c.log"), { shiftKey: true });
+    expect(selectedNames()).toEqual(["a.log", "b.log", "c.log"]);
+  });
+
+  it("clears the selection when clicking empty space below the rows", async () => {
+    vi.mocked(SFTPListDir).mockResolvedValue([{ name: "a.log", isDir: false, size: 1, modTime: 0 }]);
+
+    const { container } = render(
+      <FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />
+    );
+    await waitFor(() => expect(screen.getByText("a.log")).toBeInTheDocument());
+
+    const row = screen.getByText("a.log").closest("[data-sftp-entry-row]") as HTMLElement;
+    fireEvent.click(row);
+    expect(row.className).toContain("bg-primary/15");
+
+    const scroller = container.querySelector("[data-sftp-entry-row]")!.closest("div.text-xs")!.parentElement!;
+    fireEvent.click(scroller);
+    expect((screen.getByText("a.log").closest("[data-sftp-entry-row]") as HTMLElement).className).not.toContain(
+      "bg-primary/15"
+    );
+  });
+
   it("moves a dragged file into a dropped folder", async () => {
     vi.mocked(SFTPListDir).mockResolvedValue([
       { name: "logs", isDir: true, size: 0, modTime: 0 },

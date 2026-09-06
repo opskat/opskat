@@ -28,7 +28,7 @@ import {
   SelectValue,
   computeContextMenuPosition,
 } from "@opskat/ui";
-import { cellValueToText } from "@/lib/cellValue";
+import { cellValueToDisplayText, cellValueToText } from "@/lib/cellValue";
 import {
   addFilterCondition,
   addFilterGroup,
@@ -108,7 +108,7 @@ function distinctValues(rows: Record<string, unknown>[], column: string): Distin
       map.set(key, {
         key,
         value: value == null ? null : value,
-        label: value == null ? "NULL" : cellValueToText(value),
+        label: value == null ? "NULL" : cellValueToDisplayText(value),
         count: 1,
       });
     }
@@ -912,7 +912,7 @@ function FilterValuePicker({ value, rows, column, onChange }: FilterValuePickerP
   const [open, setOpen] = useState(false);
   const [customValue, setCustomValue] = useState("");
   const [search, setSearch] = useState("");
-  const label = value === undefined ? "?" : value == null ? "NULL" : cellValueToText(value);
+  const label = value === undefined ? "?" : value == null ? "NULL" : cellValueToDisplayText(value);
   // distinctValues 是 O(rows) 全表扫描;只在 popover 打开后才计算,关闭后丢弃。
   // 否则父组件每次 re-render 都会因 rows 引用变化触发整列重算,大表上 ~几十~几百 ms。
   const suggestions = useMemo<DistinctValue[]>(() => (open ? distinctValues(rows, column) : []), [open, rows, column]);
