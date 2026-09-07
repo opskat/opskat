@@ -23,13 +23,16 @@ type AssetRepo interface {
 	UpdateSortOrder(ctx context.Context, id int64, sortOrder int) error
 	UpdateGroupID(ctx context.Context, id, groupID int64) error
 	CountByTypes(ctx context.Context, types []string) (int64, error)
-	// CountAgentAuthBySourceID 统计引用了指定 SSH Agent 来源的活动 SSH 资产数
-	// （config 中 auth_type=agent 且 agent_source_id 匹配）。
+	// CountAgentAuthBySourceID 统计引用了指定 SSH Agent 来源的活动 SSH 资产数：
+	// Agent 认证（auth_type=agent 且 agent_source_id 匹配）与 Agent 转发
+	// （agent_forwarding 且 agent_forward_source_id 匹配）都算引用。
 	CountAgentAuthBySourceID(ctx context.Context, sourceID int64) (int64, error)
-	// CountAgentAuthBySourceIDGroupByFingerprint 把引用了指定来源的活动 SSH 资产
-	// 按所选身份指纹（agent_key_fingerprint）分组计数，用于逐把密钥展示使用数。
+	// CountAgentAuthBySourceIDGroupByFingerprint 把 Agent 认证引用了指定来源的活动
+	// SSH 资产按所选身份指纹（agent_key_fingerprint）分组计数，用于逐把密钥展示使用数。
+	// Agent 转发不选择单把密钥，不计入本查询。
 	CountAgentAuthBySourceIDGroupByFingerprint(ctx context.Context, sourceID int64) (map[string]int64, error)
-	// ListAgentAuthBySourceID 列出引用了指定 SSH Agent 来源的活动 SSH 资产。
+	// ListAgentAuthBySourceID 列出引用了指定 SSH Agent 来源的活动 SSH 资产
+	// （口径同 CountAgentAuthBySourceID，含 Agent 转发引用）。
 	ListAgentAuthBySourceID(ctx context.Context, sourceID int64) ([]*asset_entity.Asset, error)
 }
 
@@ -162,10 +165,18 @@ func (r *assetRepo) CountByTypes(ctx context.Context, types []string) (int64, er
 }
 
 // agentSourceAssetQuery 是“引用指定 SSH Agent 来源的活动 SSH 资产”的查询条件。
-// agent_source_id 与 auth_type 都以 JSON 存在 assets.config 单列，任务 5 才把
-// 这两个字段加进 SSHConfig 结构体；这里先按既有 json_extract 模式（同
-// FindByCredentialID）查询。
+// 来源既可用于 Agent 认证，也可用于 Agent 转发；两者都会让来源删除或端点变更影响
+// 已保存资产，因此必须一起纳入引用查询。
 func agentSourceAssetQuery(ctx context.Context, sourceID int64) *gorm.DB {
+	return db.Ctx(ctx).
+		Where("status = ? AND type = ?", asset_entity.StatusActive, asset_entity.AssetTypeSSH).
+		Where(`(json_extract(config, '$.auth_type') = ? AND json_extract(config, '$.agent_source_id') = ?)
+			OR (json_extract(config, '$.agent_forwarding') = 1 AND json_extract(config, '$.agent_forward_source_id') = ?)`, "agent", sourceID, sourceID)
+}
+
+// agentAuthSourceAssetQuery 是按身份指纹统计使用数专用条件；转发不选择单把密钥，
+// 因此不能混入该分组查询。
+func agentAuthSourceAssetQuery(ctx context.Context, sourceID int64) *gorm.DB {
 	return db.Ctx(ctx).
 		Where("status = ? AND type = ?", asset_entity.StatusActive, asset_entity.AssetTypeSSH).
 		Where("json_extract(config, '$.auth_type') = ?", "agent").
@@ -186,7 +197,7 @@ func (r *assetRepo) CountAgentAuthBySourceIDGroupByFingerprint(ctx context.Conte
 		Fingerprint string
 		Total       int64
 	}
-	if err := agentSourceAssetQuery(ctx, sourceID).Model(&asset_entity.Asset{}).
+	if err := agentAuthSourceAssetQuery(ctx, sourceID).Model(&asset_entity.Asset{}).
 		Select(fingerprintExpr + " AS fingerprint, COUNT(*) AS total").
 		Group(fingerprintExpr).
 		Scan(&rows).Error; err != nil {

@@ -132,6 +132,10 @@ type SSHConfig struct {
 	// AgentKeyFingerprint 是 Agent 模式选用的规范 SHA256 公钥指纹
 	// （大写 SHA256: 前缀、32 字节、base64 无填充、重编码一致）。
 	AgentKeyFingerprint string `json:"agent_key_fingerprint,omitempty"`
+	// AgentForwarding 开启后，远端终端会话可通过 AgentForwardSourceID 使用本地 SSH Agent。
+	AgentForwarding bool `json:"agent_forwarding,omitempty"`
+	// AgentForwardSourceID 是 SSH Agent 转发使用的来源 ID；仅 AgentForwarding=true 时有效。
+	AgentForwardSourceID int64 `json:"agent_forward_source_id,omitempty"`
 }
 
 // RDPConfig RDP 类型的特定配置。
@@ -939,6 +943,13 @@ func (a *Asset) validateSSH() error {
 	}
 	if err := validateSSHAgentContract(cfg); err != nil {
 		return err
+	}
+	if cfg.AgentForwarding {
+		if cfg.AgentForwardSourceID <= 0 {
+			return errors.New("SSH Agent 转发必须指定有效的来源 ID")
+		}
+	} else if cfg.AgentForwardSourceID != 0 {
+		return errors.New("关闭 SSH Agent 转发时不得携带 Agent 转发来源字段")
 	}
 	return ValidateProxyChain(EffectiveProxyChain(cfg.ProxyChain, a.SSHTunnelID, cfg.Proxy))
 }

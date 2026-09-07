@@ -26,6 +26,8 @@ interface SSHConfig {
   keepalive_interval_seconds?: number;
   restore_cwd_on_reconnect?: boolean;
   startup_command?: string;
+  agent_forwarding?: boolean;
+  agent_forward_source_id?: number;
 }
 
 /** ssh 表单子状态(凭据中的 password 走 useAssetCredential,不入此 state)。 */
@@ -54,6 +56,10 @@ export interface SSHFormState extends ConnectionFormFields {
   restoreCwdOnReconnect: boolean;
   /** SSH 交互式 shell 建立后自动执行的命令，支持换行分隔多条命令。 */
   startupCommand: string;
+  /** 是否向远端转发指定 SSH Agent。 */
+  agentForwarding: boolean;
+  /** 转发使用的 SSH Agent 来源。0 = 未选。 */
+  agentForwardSourceId: number;
 }
 
 export const SSH_DEFAULTS: SSHFormState = {
@@ -72,6 +78,8 @@ export const SSH_DEFAULTS: SSHFormState = {
   keepAliveIntervalSeconds: 0,
   restoreCwdOnReconnect: false,
   startupCommand: "",
+  agentForwarding: false,
+  agentForwardSourceId: 0,
   ...CONNECTION_DEFAULTS,
 };
 
@@ -118,6 +126,11 @@ export function buildSSHConfig(state: SSHFormState, opts: SSHBuildOptions): stri
       cfg.agent_source_id = state.agentSourceId;
       cfg.agent_key_fingerprint = state.agentKeyFingerprint;
     }
+  }
+
+  if (state.agentForwarding && state.agentForwardSourceId > 0) {
+    cfg.agent_forwarding = true;
+    cfg.agent_forward_source_id = state.agentForwardSourceId;
   }
 
   if (opts.includeJumpHost && state.connectionType === "jumphost" && state.sshTunnelId > 0) {
@@ -171,6 +184,8 @@ export function parseSSHConfig(configJSON: string, assetTunnelId = 0): SSHFormSt
       keepAliveIntervalSeconds: cfg.keepalive_interval_seconds || 0,
       restoreCwdOnReconnect: cfg.restore_cwd_on_reconnect || false,
       startupCommand: cfg.startup_command || "",
+      agentForwarding: cfg.agent_forwarding || false,
+      agentForwardSourceId: cfg.agent_forwarding ? cfg.agent_forward_source_id || 0 : 0,
       ...parseConnectionFields(cfg.proxy, tunnelId, cfg.proxy_chain),
     };
   } catch {

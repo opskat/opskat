@@ -26,6 +26,8 @@ func init() {
 	}
 	modelPrefixDefaults = []prefixDefault{
 		// OpenAI GPT-5.x
+		{"gpt-6-astra", d(128000, 1050000)},
+		{"gpt-6", d(128000, 1050000)},
 		{"gpt-5.4-pro", d(128000, 1050000)},
 		{"gpt-5.4-mini", d(128000, 400000)},
 		{"gpt-5.4-nano", d(128000, 400000)},
@@ -46,6 +48,10 @@ func init() {
 		{"o3", d(100000, 200000)},
 
 		// Anthropic (Opus/Sonnet 1M context GA, Haiku 200K)
+		{"claude-fable-5.1", d(128000, 1000000)},
+		{"claude-fable-5-1", d(128000, 1000000)},
+		{"claude-mythos-5.1", d(128000, 1000000)},
+		{"claude-mythos-5-1", d(128000, 1000000)},
 		{"claude-opus-4", d(128000, 1000000)},
 		{"claude-sonnet-4", d(64000, 1000000)},
 		{"claude-haiku-4", d(64000, 200000)},

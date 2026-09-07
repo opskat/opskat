@@ -347,6 +347,23 @@ describe("SSHConfigSection 高级设置", () => {
     const input = await screen.findByTestId("ssh-keepalive-input");
     expect(input).toHaveValue(null);
   });
+
+  it("启用 SSH-Agent 转发后展示来源选择，并将选择写入配置", async () => {
+    agentSources = [{ id: 7, name: "Forwarding Agent", endpoint_type: "unix_socket" } as system.AgentSourceSummary];
+    const u = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    const ref = createRef<AssetFormHandle>();
+    render(<SSHConfigSection ref={ref} ctx={ctx} onValidityChange={() => {}} />);
+    await openAdvanced(u);
+
+    expect(screen.queryByTestId("ssh-agent-forward-source-trigger")).not.toBeInTheDocument();
+    await u.click(screen.getByTestId("ssh-agent-forward-switch"));
+    const trigger = await screen.findByTestId("ssh-agent-forward-source-trigger");
+    await u.click(trigger);
+    await u.click(await screen.findByRole("option", { name: "Forwarding Agent" }));
+
+    const config = JSON.parse((await ref.current!.buildConfig(ctx)).configJSON);
+    expect(config).toMatchObject({ agent_forwarding: true, agent_forward_source_id: 7 });
+  });
 });
 
 describe("SSHConfigSection Agent 认证", () => {

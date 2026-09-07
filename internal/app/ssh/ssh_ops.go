@@ -95,6 +95,11 @@ func (s *SSH) ConnectSSH(req SSHConnectRequest) (string, error) {
 		return "", err
 	}
 	connectCfg.Agent = agentCfg
+	agentForwardCfg, err := credential_resolver.Default().ResolveAgentForwardConfig(sshCfg)
+	if err != nil {
+		return "", err
+	}
+	connectCfg.AgentForward = agentForwardCfg
 
 	jumpHostID := asset.SSHTunnelID
 	if jumpHostID == 0 {
@@ -303,6 +308,12 @@ func (s *SSH) ConnectSSHAsync(req SSHConnectRequest) (string, error) {
 			}
 		}
 		connectCfg.Agent = agentCfg
+		agentForwardCfg, err := credential_resolver.Default().ResolveAgentForwardConfig(sshCfg)
+		if err != nil {
+			emitEvent(SSHConnectEvent{Type: "error", Error: fmt.Sprintf("解析 Agent 转发配置失败: %s", err.Error())})
+			return
+		}
+		connectCfg.AgentForward = agentForwardCfg
 		connectCfg.Ctx = connCtx
 
 		jumpHostID := asset.SSHTunnelID

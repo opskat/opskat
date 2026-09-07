@@ -47,10 +47,12 @@ func TestAssetRepo_AgentAuthSourceQueries(t *testing.T) {
 	createAsset(t, ctx, r, "agent-other", `{"host":"h3","port":22,"username":"u","auth_type":"agent","agent_source_id":2}`)
 	// password 认证、非 agent，不应计入。
 	createAsset(t, ctx, r, "password", `{"host":"h4","port":22,"username":"u","auth_type":"password"}`)
+	// Agent 转发同样持有来源引用：删除来源与端点变更必须能看到它。
+	forwardID := createAsset(t, ctx, r, "forward", `{"host":"h5","port":22,"username":"u","auth_type":"password","agent_forwarding":true,"agent_forward_source_id":1}`)
 
 	count, err := r.CountAgentAuthBySourceID(ctx, 1)
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), count)
+	assert.Equal(t, int64(3), count)
 
 	count, err = r.CountAgentAuthBySourceID(ctx, 99)
 	require.NoError(t, err)
@@ -58,12 +60,12 @@ func TestAssetRepo_AgentAuthSourceQueries(t *testing.T) {
 
 	assets, err := r.ListAgentAuthBySourceID(ctx, 1)
 	require.NoError(t, err)
-	require.Len(t, assets, 2)
+	require.Len(t, assets, 3)
 	got := make([]int64, 0, len(assets))
 	for _, a := range assets {
 		got = append(got, a.ID)
 	}
-	assert.ElementsMatch(t, []int64{id1, id2}, got)
+	assert.ElementsMatch(t, []int64{id1, id2, forwardID}, got)
 }
 
 func TestAssetRepo_AgentAuthSourceIgnoresDeleted(t *testing.T) {

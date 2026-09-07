@@ -103,6 +103,12 @@ func (a *Agent) Close() error {
 	return a.closeErr
 }
 
+// Forwarder returns the protocol client used to serve remote SSH agent requests.
+// The caller must retain and close this Agent for as long as forwarding is active.
+func (a *Agent) Forwarder() agent.ExtendedAgent {
+	return a.client
+}
+
 // closeLog closes the transport, logging any close error. Every call site is
 // already returning a typed protocol error, so a failed close is logged rather
 // than masking the primary failure.

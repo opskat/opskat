@@ -61,8 +61,9 @@ func Inspect(ctx context.Context, id int64) (*InspectResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	// 每把身份的使用数按所选指纹单独统计：来源级 usages 是所有身份的合计，
-	// 直接套用到每一行会让同来源的每把密钥都显示相同的数字（#278）。
+	// 每把身份的使用数按所选指纹单独统计：直接把来源级 usages 套到每一行，会让同来源
+	// 的每把密钥都显示相同的数字（#278）。两者口径本就不同——来源级 usages 还含不选择
+	// 单把密钥的 Agent 转发引用，并不等于各身份使用数之和。
 	perIdentity, err := asset_svc.Asset().AgentReferenceCountByFingerprint(ctx, id)
 	if err != nil {
 		return nil, err

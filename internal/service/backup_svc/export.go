@@ -402,17 +402,22 @@ func exportAgentSources(ctx context.Context, assets []*asset_entity.Asset, parti
 		return ssh_agent_source_repo.SSHAgentSource().List(ctx)
 	}
 
-	// 收集被导出 Agent 认证 SSH 资产引用的来源 ID
+	// 收集被导出 Agent 认证或 Agent 转发 SSH 资产引用的来源 ID。
 	sourceIDs := make(map[int64]bool)
 	for _, a := range assets {
 		if !a.IsSSH() || a.Config == "" {
 			continue
 		}
 		cfg, err := a.GetSSHConfig()
-		if err != nil || cfg.AuthType != asset_entity.AuthTypeAgent || cfg.AgentSourceID <= 0 {
+		if err != nil {
 			continue
 		}
-		sourceIDs[cfg.AgentSourceID] = true
+		if cfg.AuthType == asset_entity.AuthTypeAgent && cfg.AgentSourceID > 0 {
+			sourceIDs[cfg.AgentSourceID] = true
+		}
+		if cfg.AgentForwarding && cfg.AgentForwardSourceID > 0 {
+			sourceIDs[cfg.AgentForwardSourceID] = true
+		}
 	}
 	if len(sourceIDs) == 0 {
 		return nil, nil

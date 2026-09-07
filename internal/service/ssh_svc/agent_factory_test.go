@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -142,9 +143,50 @@ func newTestKeyPair(t *testing.T) (ed25519.PrivateKey, ssh.PublicKey) {
 type testAgentServer struct {
 	ln   net.Listener
 	path string
+
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+// stop 关闭监听与所有已建立连接，模拟本地 Agent 退出/重启。关闭 unix 监听会解除
+// socket 文件占用，因此可以立即在同一路径上重新提供服务。
+func (s *testAgentServer) stop() {
+	_ = s.ln.Close()
+	s.mu.Lock()
+	conns := s.conns
+	s.conns = nil
+	s.mu.Unlock()
+	for _, c := range conns {
+		_ = c.Close()
+	}
+}
+
+func (s *testAgentServer) track(conn net.Conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.conns = append(s.conns, conn)
 }
 
 func newKeyringAgent(t *testing.T, keys ...agent.AddedKey) (*testAgentServer, chan struct{}) {
+	t.Helper()
+	return serveKeyringAgent(t, tempSocketPath(t), keys...)
+}
+
+// tempSocketPath 返回一个短的临时 unix socket 路径。t.TempDir() 会把测试名编进目录，
+// 在 macOS 上很容易超过 sun_path 的 104 字节上限（bind: invalid argument）。
+func tempSocketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "oka")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, "a")
+}
+
+// serveKeyringAgent 在指定 unix socket 路径上提供内存 keyring agent。返回的 channel
+// 在**第一条**连接被服务完毕（对端关闭）时触发。
+func serveKeyringAgent(t *testing.T, path string, keys ...agent.AddedKey) (*testAgentServer, chan struct{}) {
 	t.Helper()
 	kr := agent.NewKeyring()
 	for _, k := range keys {
@@ -152,27 +194,29 @@ func newKeyringAgent(t *testing.T, keys ...agent.AddedKey) (*testAgentServer, ch
 			t.Fatalf("add key: %v", err)
 		}
 	}
-	path := filepath.Join(t.TempDir(), "a")
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatalf("listen unix: %v", err)
 	}
+	s := &testAgentServer{ln: ln, path: path}
 	connClosed := make(chan struct{})
+	var firstClosed sync.Once
 	go func() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
+			s.track(conn)
 			go func() {
-				defer close(connClosed)
+				defer firstClosed.Do(func() { close(connClosed) })
 				defer func() { _ = conn.Close() }()
 				_ = agent.ServeAgent(kr, conn)
 			}()
 		}
 	}()
-	t.Cleanup(func() { _ = ln.Close() })
-	return &testAgentServer{ln: ln, path: path}, connClosed
+	t.Cleanup(s.stop)
+	return s, connClosed
 }
 
 func waitClose(ch chan struct{}, d time.Duration) bool {
