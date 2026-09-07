@@ -108,6 +108,42 @@ describe("RedisKeyDetail", () => {
     expect(within(valueBox).getByText("true")).toHaveClass("text-syntax-boolean");
   });
 
+  it("renders the same value as raw / hex / base64 when switching view modes", () => {
+    useQueryStore.setState((s) => ({
+      redisStates: {
+        ...s.redisStates,
+        "query-10": {
+          ...s.redisStates["query-10"],
+          selectedKey: "bin:1",
+          keyInfo: {
+            type: "string",
+            ttl: -1,
+            size: 5,
+            total: -1,
+            value: "hi 中",
+            valueCursor: "",
+            valueOffset: 0,
+            hasMoreValues: false,
+            loadingMore: false,
+          },
+        },
+      },
+    }));
+
+    render(<RedisKeyDetail tabId="query-10" />);
+
+    expect(screen.getByTestId("redis-string-value").textContent).toBe("hi 中");
+
+    fireEvent.click(screen.getByText("Hex"));
+    expect(screen.getByTestId("redis-string-value").textContent).toBe("686920e4b8ad");
+
+    fireEvent.click(screen.getByText("Base64"));
+    expect(screen.getByTestId("redis-string-value").textContent).toBe("aGkg5Lit");
+
+    fireEvent.click(screen.getByText("query.rawText"));
+    expect(screen.getByTestId("redis-string-value").textContent).toBe("hi 中");
+  });
+
   it("executes command input with quoted arguments preserved", async () => {
     vi.mocked(ExecuteRedisArgs).mockResolvedValue(JSON.stringify({ type: "string", value: "OK" }));
 
