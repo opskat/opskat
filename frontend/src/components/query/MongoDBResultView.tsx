@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight, ChevronsLeft, RefreshCw, Loader2 } from "lucide-react";
 import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { QueryResultTable } from "./QueryResultTable";
+import { QueryViewModeToggle, type QueryViewMode } from "./QueryViewModeToggle";
 import { cellValueToDisplayText } from "@/lib/cellValue";
 import { CodeEditor } from "@/components/CodeEditor";
 
@@ -21,8 +22,6 @@ interface MongoDBResultViewProps {
   refreshShortcutLabel?: string;
 }
 
-type ViewMode = "table" | "json";
-
 const PAGE_SIZES = [20, 50, 100, 200];
 
 export function MongoDBResultView({
@@ -36,7 +35,7 @@ export function MongoDBResultView({
   refreshShortcutLabel,
 }: MongoDBResultViewProps) {
   const { t } = useTranslation();
-  const [viewMode, setViewMode] = useState<ViewMode>("table");
+  const [viewMode, setViewMode] = useState<QueryViewMode>("table");
 
   const parsed = useMemo(() => {
     if (!data) return null;
@@ -100,24 +99,7 @@ export function MongoDBResultView({
     <div className="flex flex-col h-full">
       {/* Top bar: view mode toggle */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-muted/20 shrink-0">
-        <div className="flex border border-border rounded-md overflow-hidden">
-          <button
-            className={`px-2 py-0.5 text-xs transition-colors ${
-              viewMode === "table" ? "bg-primary text-primary-foreground" : "hover:bg-muted"
-            }`}
-            onClick={() => setViewMode("table")}
-          >
-            {t("query.mongoTableView")}
-          </button>
-          <button
-            className={`px-2 py-0.5 text-xs transition-colors ${
-              viewMode === "json" ? "bg-primary text-primary-foreground" : "hover:bg-muted"
-            }`}
-            onClick={() => setViewMode("json")}
-          >
-            {t("query.mongoJsonView")}
-          </button>
-        </div>
+        <QueryViewModeToggle value={viewMode} onChange={setViewMode} />
       </div>
 
       {/* Table / JSON content */}

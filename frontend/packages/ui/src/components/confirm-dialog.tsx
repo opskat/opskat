@@ -42,7 +42,12 @@ export function ConfirmDialog({
       <AlertDialogContent onOverlayClick={() => onOpenChange(false)}>
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
-          <AlertDialogDescription>{description}</AlertDialogDescription>
+          {/* Radix renders Description as a <p>, but `description` is a ReactNode and callers
+              legitimately pass lists / multiple paragraphs — block content inside <p> is invalid
+              HTML and React warns on every open. Render the description as a <div> instead. */}
+          <AlertDialogDescription asChild>
+            <div>{description}</div>
+          </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>{resolvedCancelText}</AlertDialogCancel>

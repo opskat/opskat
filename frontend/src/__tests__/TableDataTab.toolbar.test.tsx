@@ -83,7 +83,7 @@ describe("TableDataTab toolbar", () => {
         pageInput="1"
         hasPrev={false}
         hasNext
-        hasSelectedRow={false}
+        selectedRowCount={0}
         submitting={false}
         loading={false}
         refreshTitle="query.refreshTable"
@@ -97,7 +97,7 @@ describe("TableDataTab toolbar", () => {
         onNextPage={vi.fn()}
         onLastPage={vi.fn()}
         onAddRow={onAddRow}
-        onDeleteRow={vi.fn()}
+        onDeleteRows={vi.fn()}
         onApplyChanges={vi.fn()}
         onDiscardChanges={vi.fn()}
       />
@@ -131,7 +131,7 @@ describe("TableDataTab toolbar", () => {
         pageInput="1"
         hasPrev={false}
         hasNext
-        hasSelectedRow
+        selectedRowCount={1}
         submitting={false}
         loading={false}
         refreshTitle="query.refreshTable"
@@ -145,7 +145,7 @@ describe("TableDataTab toolbar", () => {
         onNextPage={vi.fn()}
         onLastPage={vi.fn()}
         onAddRow={vi.fn()}
-        onDeleteRow={vi.fn()}
+        onDeleteRows={vi.fn()}
         onApplyChanges={onApplyChanges}
         onDiscardChanges={onDiscardChanges}
       />
@@ -173,7 +173,7 @@ describe("TableDataTab toolbar", () => {
         pageInput="1"
         hasPrev={false}
         hasNext
-        hasSelectedRow={false}
+        selectedRowCount={0}
         submitting={false}
         loading={false}
         refreshTitle="query.refreshTable"
@@ -187,7 +187,7 @@ describe("TableDataTab toolbar", () => {
         onNextPage={vi.fn()}
         onLastPage={vi.fn()}
         onAddRow={vi.fn()}
-        onDeleteRow={vi.fn()}
+        onDeleteRows={vi.fn()}
         onApplyChanges={vi.fn()}
         onDiscardChanges={vi.fn()}
       />

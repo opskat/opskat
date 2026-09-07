@@ -206,7 +206,7 @@ interface TableDataStatusBarProps {
   pageInput: string;
   hasPrev: boolean;
   hasNext: boolean;
-  hasSelectedRow: boolean;
+  selectedRowCount: number;
   submitting: boolean;
   loading: boolean;
   refreshTitle: string;
@@ -220,7 +220,7 @@ interface TableDataStatusBarProps {
   onNextPage: () => void;
   onLastPage: () => void;
   onAddRow: () => void;
-  onDeleteRow: () => void;
+  onDeleteRows: () => void;
   onApplyChanges: () => void;
   onDiscardChanges: () => void;
 }
@@ -235,7 +235,7 @@ export function TableDataStatusBar({
   pageInput,
   hasPrev,
   hasNext,
-  hasSelectedRow,
+  selectedRowCount,
   submitting,
   loading,
   refreshTitle,
@@ -249,7 +249,7 @@ export function TableDataStatusBar({
   onNextPage,
   onLastPage,
   onAddRow,
-  onDeleteRow,
+  onDeleteRows,
   onApplyChanges,
   onDiscardChanges,
 }: TableDataStatusBarProps) {
@@ -293,9 +293,9 @@ export function TableDataStatusBar({
           variant="ghost"
           size="icon-xs"
           className={actionTone}
-          onClick={onDeleteRow}
-          disabled={!hasSelectedRow || loading || submitting}
-          title={t("query.deleteRecord")}
+          onClick={onDeleteRows}
+          disabled={selectedRowCount === 0 || loading || submitting}
+          title={selectedRowCount > 1 ? t("query.deleteRecords", { count: selectedRowCount }) : t("query.deleteRecord")}
         >
           <Minus className="h-3.5 w-3.5" />
         </Button>
