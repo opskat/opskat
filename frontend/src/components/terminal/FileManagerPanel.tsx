@@ -289,9 +289,12 @@ export function FileManagerPanel({
   // 内置编辑器 tab 自己就是这个会话的冲突界面(顶部横幅 + 合并/差异/重读/覆盖):
   // 这里的 pending 对话框会 portal 到 body,不受编辑器 tab 覆盖住面板的影响,弹出来就是
   // 一次带着另一套动作的模态劫持。承载它的 tab 还开着时,冲突留给那个 tab 呈现。
+  // 会话在保存在途时被移除，markSessionState 会返回 nil(session.go:797-804)，
+  // SaveResult.session 因此可能缺席；没有会话就认不出归属哪个编辑器 tab，交给面板呈现。
+  const conflictOwningSession = safePendingConflict?.session;
   const conflictOwnedByEditorTab = useTabStore((s) =>
-    safePendingConflict
-      ? findEditorTabId(s.tabs, safePendingConflict.session.assetId, safePendingConflict.session.remotePath) !== null
+    conflictOwningSession
+      ? findEditorTabId(s.tabs, conflictOwningSession.assetId, conflictOwningSession.remotePath) !== null
       : false
   );
 

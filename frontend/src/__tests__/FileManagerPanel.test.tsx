@@ -1324,6 +1324,22 @@ describe("FileManagerPanel", () => {
     ).not.toBeInTheDocument();
   });
 
+  // markSessionState 在会话已被移除时返回 nil，SaveResult.Session 因此可能缺席
+  // （session.go:797-804）；面板拿它去找编辑器 tab 时不能崩在渲染里。
+  it("still renders the pending dialog when the conflict result carries no session", async () => {
+    useExternalEditStore.setState({
+      sessions: {},
+      pendingConflict: {
+        status: "remote_missing",
+        message: "远程文件不存在",
+      },
+    });
+
+    render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    expect(await screen.findByTestId("external-edit-pending-dialog")).toBeInTheDocument();
+  });
+
   it("shows runtime non-conflict pending in the same three-action matrix", async () => {
     const user = userEvent.setup();
     const pending = makeExternalEditSession({
