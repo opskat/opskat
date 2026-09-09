@@ -15,6 +15,7 @@ import {
   refreshExternalEditSession,
   resolveExternalEditConflict,
   saveExternalEditSession,
+  saveExternalEditSessionText,
 } from "@/lib/externalEditApi";
 
 export interface ExternalEditDocumentView {
@@ -65,6 +66,8 @@ interface ExternalEditState {
   selectedError: ExternalEditSession | null;
   fetchSessions: () => Promise<void>;
   saveSession: (sessionId: string) => Promise<ExternalEditSaveResult>;
+  /** 内置编辑器的显式保存：文本来自编辑器而不是本地副本，其余走同一条含冲突检测的保存路径。 */
+  saveSessionText: (sessionId: string, text: string) => Promise<ExternalEditSaveResult>;
   refreshSession: (sessionId: string) => Promise<ExternalEditSession>;
   compareSession: (sessionId: string) => Promise<ExternalEditCompareResult>;
   prepareMerge: (sessionId: string) => Promise<ExternalEditMergePrepareResult>;
@@ -406,6 +409,20 @@ function compareRemoteMissingResultToSaveResult(result: ExternalEditCompareResul
   };
 }
 
+// 保存类调用（本地副本保存 / 内置编辑器文本保存）对返回结果的处理完全一致：
+// 收下新会话，并且只有需要用户二次决策的冲突才升级成 pendingConflict。
+function applySaveResult(state: ExternalEditState, result: ExternalEditSaveResult) {
+  return {
+    sessions: upsertSession(state, result.session),
+    ...scrubExternalEditRuntimeState(state, result.session),
+    pendingConflict:
+      !isExternalEditClipboardResidueSaveResult(result) &&
+      (result.status === "conflict_remote_changed" || result.status === "remote_missing")
+        ? result
+        : null,
+  };
+}
+
 function sessionToRefreshConflictResult(session: ExternalEditSession): ExternalEditSaveResult {
   const remoteMissing = session.state === "remote_missing";
   return {
@@ -451,15 +468,18 @@ export const useExternalEditStore = create<ExternalEditState>((set) => ({
     set({ savingSessionId: sessionId });
     try {
       const result = await saveExternalEditSession(sessionId);
-      set((state) => ({
-        sessions: upsertSession(state, result.session),
-        ...scrubExternalEditRuntimeState(state, result.session),
-        pendingConflict:
-          !isExternalEditClipboardResidueSaveResult(result) &&
-          (result.status === "conflict_remote_changed" || result.status === "remote_missing")
-            ? result
-            : null,
-      }));
+      set((state) => applySaveResult(state, result));
+      return result;
+    } finally {
+      set({ savingSessionId: null });
+    }
+  },
+
+  saveSessionText: async (sessionId, text) => {
+    set({ savingSessionId: sessionId });
+    try {
+      const result = await saveExternalEditSessionText(sessionId, text);
+      set((state) => applySaveResult(state, result));
       return result;
     } finally {
       set({ savingSessionId: null });

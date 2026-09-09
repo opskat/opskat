@@ -15,6 +15,7 @@ import {
   RecoverExternalEditSession,
   RefreshExternalEditSession,
   SaveExternalEditSession,
+  SaveExternalEditSessionText,
 } from "../../wailsjs/go/external_edit/ExternalEdit";
 
 function makeSession(partial: Partial<ExternalEditSession> & { id: string }): ExternalEditSession {
@@ -731,5 +732,51 @@ describe("external edit clipboard residue runtime state", () => {
     expect(state.compareResult).toBeNull();
     expect(state.mergeResult).toBeNull();
     expect(state.selectedError).toBeNull();
+  });
+});
+
+describe("saveSessionText", () => {
+  it("hands the editor text to the text save binding and reports the saved result", async () => {
+    const saved = makeSession({ id: "builtin-1", state: "clean", dirty: false, updatedAt: 40 });
+    vi.mocked(SaveExternalEditSessionText).mockResolvedValue({
+      status: "saved",
+      message: "远程文件已保存",
+      session: saved,
+    } as never);
+
+    const result = await useExternalEditStore.getState().saveSessionText("builtin-1", "line-1\nline-2\n");
+
+    expect(SaveExternalEditSessionText).toHaveBeenCalledWith({ sessionId: "builtin-1", text: "line-1\nline-2\n" });
+    expect(result.status).toBe("saved");
+    const state = useExternalEditStore.getState();
+    expect(state.sessions["builtin-1"]).toEqual(saved);
+    expect(state.pendingConflict).toBeNull();
+    expect(state.savingSessionId).toBeNull();
+  });
+
+  it("keeps a remote-drift conflict as the pending decision instead of writing", async () => {
+    const conflicted = makeSession({ id: "builtin-2", state: "conflict", recordState: "conflict" });
+    vi.mocked(SaveExternalEditSessionText).mockResolvedValue({
+      status: "conflict_remote_changed",
+      message: "远程文件已有新版本",
+      session: conflicted,
+      conflict: { documentKey: conflicted.documentKey, primaryDraftSessionId: conflicted.id },
+    } as never);
+
+    const result = await useExternalEditStore.getState().saveSessionText("builtin-2", "changed");
+
+    expect(result.status).toBe("conflict_remote_changed");
+    const state = useExternalEditStore.getState();
+    expect(state.pendingConflict?.session?.id).toBe("builtin-2");
+    expect(state.savingSessionId).toBeNull();
+  });
+
+  it("surfaces a rejected write instead of swallowing it, and stops showing progress", async () => {
+    vi.mocked(SaveExternalEditSessionText).mockRejectedValue(new Error("保存远程文件失败: permission denied"));
+
+    await expect(useExternalEditStore.getState().saveSessionText("builtin-3", "changed")).rejects.toThrow(
+      "permission denied"
+    );
+    expect(useExternalEditStore.getState().savingSessionId).toBeNull();
   });
 });

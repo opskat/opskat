@@ -127,9 +127,19 @@ function _fireRestoreHooks() {
 interface TabStoreState {
   tabs: Tab[];
   activeTabId: string | null;
+  /** 有未落盘改动的 tab；关闭这些 tab 前必须先向用户确认。 */
+  unsavedTabIds: string[];
+  /** closeTab 因未保存改动被拦下的 tab，由承载该 tab 的界面弹出确认。 */
+  pendingCloseTabId: string | null;
+  /** 本次启动从 localStorage 恢复出来的 tab；恢复态需要重新校验远端。 */
+  restoredTabIds: string[];
 
   openTab: (tab: Tab, activate?: boolean) => void;
   closeTab: (id: string) => void;
+  /** 用户已经就未保存改动做出决定后，跳过确认直接关闭。 */
+  forceCloseTab: (id: string) => void;
+  setTabUnsaved: (id: string, unsaved: boolean) => void;
+  cancelPendingClose: () => void;
   activateTab: (id: string) => void;
   updateTab: (id: string, patch: Partial<Pick<Tab, "label" | "icon" | "iconColor" | "meta">>) => void;
   replaceTabId: (oldId: string, newId: string) => void;
@@ -143,6 +153,9 @@ interface TabStoreState {
 export const useTabStore = create<TabStoreState>((set, get) => ({
   tabs: [],
   activeTabId: null,
+  unsavedTabIds: [],
+  pendingCloseTabId: null,
+  restoredTabIds: [],
 
   openTab: (tab, activate = true) => {
     const { tabs } = get();
@@ -171,6 +184,15 @@ export const useTabStore = create<TabStoreState>((set, get) => ({
   },
 
   closeTab: (id) => {
+    // 有未保存改动时不关：把 tab 切到前台，由承载它的界面接管「保存 / 不保存 / 取消」的决定。
+    if (get().unsavedTabIds.includes(id)) {
+      set({ pendingCloseTabId: id, activeTabId: id });
+      return;
+    }
+    get().forceCloseTab(id);
+  },
+
+  forceCloseTab: (id) => {
     const { tabs, activeTabId } = get();
     const idx = tabs.findIndex((t) => t.id === id);
     if (idx === -1) return;
@@ -193,8 +215,25 @@ export const useTabStore = create<TabStoreState>((set, get) => ({
         newActiveId = newTabs[newTabs.length - 1].id;
       }
     }
-    set({ tabs: newTabs, activeTabId: newActiveId });
+    set((s) => ({
+      tabs: newTabs,
+      activeTabId: newActiveId,
+      unsavedTabIds: s.unsavedTabIds.filter((tabId) => tabId !== id),
+      pendingCloseTabId: s.pendingCloseTabId === id ? null : s.pendingCloseTabId,
+    }));
   },
+
+  setTabUnsaved: (id, unsaved) => {
+    set((s) => {
+      const has = s.unsavedTabIds.includes(id);
+      if (has === unsaved) return s;
+      return {
+        unsavedTabIds: unsaved ? [...s.unsavedTabIds, id] : s.unsavedTabIds.filter((tabId) => tabId !== id),
+      };
+    });
+  },
+
+  cancelPendingClose: () => set({ pendingCloseTabId: null }),
 
   activateTab: (id) => {
     set({ activeTabId: id });
@@ -242,7 +281,7 @@ export const useTabStore = create<TabStoreState>((set, get) => ({
     for (const tab of closingTabs) {
       for (const hook of closeHooks) hook(tab);
     }
-    set({ tabs: tabs.filter((t) => t.id === id), activeTabId: id });
+    set((s) => ({ tabs: tabs.filter((t) => t.id === id), activeTabId: id, ...forgetClosedTabs(s, closingTabs) }));
   },
 
   closeLeftTabs: (id) => {
@@ -255,7 +294,11 @@ export const useTabStore = create<TabStoreState>((set, get) => ({
     }
     const newTabs = tabs.slice(idx);
     const activeStillOpen = newTabs.some((t) => t.id === activeTabId);
-    set({ tabs: newTabs, activeTabId: activeStillOpen ? activeTabId : id });
+    set((s) => ({
+      tabs: newTabs,
+      activeTabId: activeStillOpen ? activeTabId : id,
+      ...forgetClosedTabs(s, closingTabs),
+    }));
   },
 
   closeRightTabs: (id) => {
@@ -268,15 +311,40 @@ export const useTabStore = create<TabStoreState>((set, get) => ({
     }
     const newTabs = tabs.slice(0, idx + 1);
     const activeStillOpen = newTabs.some((t) => t.id === activeTabId);
-    set({ tabs: newTabs, activeTabId: activeStillOpen ? activeTabId : id });
+    set((s) => ({
+      tabs: newTabs,
+      activeTabId: activeStillOpen ? activeTabId : id,
+      ...forgetClosedTabs(s, closingTabs),
+    }));
   },
 }));
+
+// 批量关闭不走 closeTab，未保存标记与待确认关闭必须在这里一并丢弃，否则会留下指向已消失 tab 的记录。
+function forgetClosedTabs(state: TabStoreState, closed: Tab[]) {
+  const closedIds = new Set(closed.map((tab) => tab.id));
+  return {
+    unsavedTabIds: state.unsavedTabIds.filter((id) => !closedIds.has(id)),
+    pendingCloseTabId:
+      state.pendingCloseTabId && closedIds.has(state.pendingCloseTabId) ? null : state.pendingCloseTabId,
+  };
+}
 
 // === Tab openers ===
 
 /** 设置页只有一个 tab；重复调用由 openTab 的同 id 去重直接聚焦。 */
 export function openSettingsTab(label: string) {
   useTabStore.getState().openTab({ id: "settings", type: "page", label, meta: { type: "page", pageId: "settings" } });
+}
+
+/**
+ * 编辑器 tab 的身份是「资产 + 远程路径」，不是会话 id ——
+ * 冲突后重新读取会重建会话，tab 必须跟着换绑而不是被当成另一个 tab。
+ */
+export function findEditorTabId(tabs: Tab[], assetId: number, remotePath: string): string | null {
+  const existing = tabs.find(
+    (tab) => tab.meta.type === "editor" && tab.meta.assetId === assetId && tab.meta.remotePath === remotePath
+  );
+  return existing ? existing.id : null;
 }
 
 /**
@@ -291,12 +359,10 @@ export async function openRemoteFileEditorTab(params: {
 }): Promise<string> {
   const { assetId, remotePath, createSession } = params;
   const store = useTabStore.getState();
-  const existing = store.tabs.find(
-    (tab) => tab.meta.type === "editor" && tab.meta.assetId === assetId && tab.meta.remotePath === remotePath
-  );
-  if (existing) {
-    store.activateTab(existing.id);
-    return existing.id;
+  const existingId = findEditorTabId(store.tabs, assetId, remotePath);
+  if (existingId) {
+    store.activateTab(existingId);
+    return existingId;
   }
 
   const { sessionId, assetName } = await createSession();
@@ -553,7 +619,7 @@ function _migrateOldKeys(): SavedTabStore | null {
       if (data.tabs && Array.isArray(data.tabs)) {
         const normalized = { tabs: data.tabs, activeTabId: data.activeTabId };
         const restored = applyStartupPreference(normalized);
-        useTabStore.setState(restored);
+        useTabStore.setState({ ...restored, restoredTabIds: restored.tabs.map((tab) => tab.id) });
         if (restored !== normalized) {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(restored));
         }
@@ -570,7 +636,7 @@ function _migrateOldKeys(): SavedTabStore | null {
   const migrated = _migrateOldKeys();
   if (migrated) {
     const restored = applyStartupPreference(migrated);
-    useTabStore.setState(restored);
+    useTabStore.setState({ ...restored, restoredTabIds: restored.tabs.map((tab) => tab.id) });
     // Save in new format immediately
     localStorage.setItem(STORAGE_KEY, JSON.stringify(restored));
   }

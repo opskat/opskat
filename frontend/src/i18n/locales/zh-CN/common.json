@@ -1537,7 +1537,17 @@
       "download": "下载到本地",
       "openExternal": "用外部编辑器打开",
       "noExternalEditor": "没有可用的外部编辑器，请先在设置里添加。",
-      "loadFailed": "读取文件内容失败"
+      "loadFailed": "读取文件内容失败",
+      "unsaved": "未保存",
+      "savingRemote": "正在写回远端…",
+      "savedAt": "已于 {{time}} 写回远端",
+      "localChangesKept": "本地改动已保留。",
+      "overwriteConfirmTitle": "用本地内容覆盖远程文件？",
+      "overwriteConfirmDesc": "远程文件在本次编辑期间已经变更。覆盖会丢弃远程上的新版本，且无法撤销。",
+      "closeUnsavedTitle": "有未保存的改动",
+      "closeUnsavedDesc": "这个文件还有没有写回远端的改动。选择「不保存」时本地副本仍会按工作区保留策略留存，可从外部编辑会话列表恢复。",
+      "saveAndClose": "保存并关闭",
+      "discardAndClose": "不保存"
     },
     "pending": {
       "entry": "外部编辑待处理",

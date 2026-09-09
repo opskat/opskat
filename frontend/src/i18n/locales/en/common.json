@@ -1537,7 +1537,17 @@
       "download": "Download",
       "openExternal": "Open with external editor",
       "noExternalEditor": "No external editor is available. Add one in settings first.",
-      "loadFailed": "Failed to read the file contents"
+      "loadFailed": "Failed to read the file contents",
+      "unsaved": "Unsaved",
+      "savingRemote": "Writing back to the remote…",
+      "savedAt": "Written back at {{time}}",
+      "localChangesKept": "Your local changes are kept.",
+      "overwriteConfirmTitle": "Overwrite the remote file?",
+      "overwriteConfirmDesc": "The remote file changed while you were editing. Overwriting discards the newer remote version and cannot be undone.",
+      "closeUnsavedTitle": "Unsaved changes",
+      "closeUnsavedDesc": "This file has changes that were never written back. If you close without saving, the local copy is still kept under the workspace retention policy and can be resumed from the external edit sessions.",
+      "saveAndClose": "Save and close",
+      "discardAndClose": "Don't save"
     },
     "pending": {
       "entry": "External Edit Pending",
