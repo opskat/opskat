@@ -34,10 +34,6 @@ export function normalizeRemotePath(basePath: string, nextPath: string): string 
   return "/" + normalized.join("/");
 }
 
-export function getEntryPath(currentPath: string, entry: sftp_svc.FileEntry): string {
-  return currentPath === "/" ? "/" + entry.name : currentPath + "/" + entry.name;
-}
-
 export function getParentPath(currentPath: string): string {
   return currentPath.replace(/\/[^/]+\/?$/, "") || "/";
 }
@@ -54,8 +50,9 @@ export function canMovePathToDirectory(sourcePath: string, targetDirPath: string
   const target = normalizeRemotePath("/", targetDirPath);
   if (!source || source === "/" || !target) return false;
   if (source === target) return false;
-  // target 是 source 自身所在目录或更高的祖先目录 —— 含直接父目录(已在这)在内一律拒绝。
-  if (source.startsWith(`${target}/`)) return false;
+  // target 就是 source 自己所在的目录 —— 已经在那儿了,这一放什么也不会发生。
+  // 更高的祖先目录不在此列:树里祖先与 ".." 都可见,拖到上面就是"往上挪一层/几层"这个正当动作。
+  if (getParentPath(source) === target) return false;
   // target 落在 source 自己的子树里 —— 不能把目录挪进它自己的后代。
   return !target.startsWith(`${source}/`);
 }

@@ -1588,6 +1588,32 @@ describe("FileManagerPanel", () => {
       elementFromPoint.mockRestore();
     }
   });
+
+  it("moves a file up one level when it is pointer-dragged onto the .. row", async () => {
+    mockDirListings({ "/srv/app": [fileEntry("app.log")] });
+
+    render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+    await screen.findByText("app.log");
+
+    const fileRow = rowOf("app.log");
+    const parentRow = rowOf("..");
+    const elementFromPoint = vi.spyOn(document, "elementFromPoint").mockReturnValue(parentRow);
+
+    try {
+      fireEvent.pointerDown(fileRow, { button: 0, buttons: 1, clientX: 10, clientY: 10, pointerId: 1 });
+      fireEvent.pointerMove(fileRow, { buttons: 1, clientX: 48, clientY: 48, pointerId: 1 });
+      // 落点在 ".." 上时也要说清这一放会执行什么，和目录行一致。
+      expect(within(parentRow).getByTestId("sftp-drop-hint")).toBeInTheDocument();
+      fireEvent.pointerUp(fileRow, { button: 0, clientX: 48, clientY: 48, pointerId: 1 });
+
+      await waitFor(() => {
+        expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/app/app.log", "/srv/app.log");
+      });
+    } finally {
+      elementFromPoint.mockRestore();
+    }
+  });
+
   describe("directory tree", () => {
     it("expands a directory in place without changing the current path", async () => {
       mockDirListings({
@@ -1968,7 +1994,7 @@ describe("FileManagerPanel", () => {
       expect(screen.queryByTestId("sftp-drop-hint")).toBeNull();
     });
 
-    it("rejects dropping a directory onto itself or its own ancestor", async () => {
+    it("rejects dropping a directory onto itself or onto the directory it already lives in", async () => {
       mockDirListings({
         "/srv/app": [dirEntry("a")],
         "/srv/app/a": [dirEntry("b")],
@@ -1989,7 +2015,7 @@ describe("FileManagerPanel", () => {
       expect(bRow.className).not.toContain("bg-primary/10");
       fireEvent.drop(bRow, { dataTransfer });
 
-      // dropping "b" onto its own ancestor "a"
+      // dropping "b" onto "a", the directory it is already in
       dataTransfer = createDragDataTransfer();
       fireEvent.dragStart(bRow, { dataTransfer });
       fireEvent.dragOver(segmentA, { dataTransfer });

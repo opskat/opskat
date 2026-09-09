@@ -30,11 +30,6 @@ export interface SftpTreeRow {
   message: string | null;
 }
 
-export interface SftpTreeEntryRow extends SftpTreeRow {
-  entry: sftp_svc.FileEntry;
-  state: "entry";
-}
-
 export function isSftpTreeEntryRow<T extends SftpTreeRow>(
   row: T
 ): row is T & { entry: sftp_svc.FileEntry; state: "entry" } {
