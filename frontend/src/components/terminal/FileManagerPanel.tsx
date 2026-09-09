@@ -286,15 +286,17 @@ export function FileManagerPanel({
     void loadDir(sessionSync.cwd);
   }, [currentPath, directoryFollowMode, isOpen, loadDir, sessionSync?.cwd, sessionSync?.cwdKnown]);
 
-  // 内置编辑器 tab 自己就是这个会话的冲突界面(顶部横幅 + 合并/差异/重读/覆盖):
-  // 这里的 pending 对话框会 portal 到 body,不受编辑器 tab 覆盖住面板的影响,弹出来就是
-  // 一次带着另一套动作的模态劫持。承载它的 tab 还开着时,冲突留给那个 tab 呈现。
-  // 会话在保存在途时被移除，markSessionState 会返回 nil(session.go:797-804)，
-  // SaveResult.session 因此可能缺席；没有会话就认不出归属哪个编辑器 tab，交给面板呈现。
+  // 这里的 pending 对话框会 portal 到 body,不受编辑器 tab 覆盖住面板的影响,弹错了就是
+  // 一次盖住真正呈现界面的模态劫持。两种情况下这次冲突不该由面板弹出来:
+  //   - 它归属一个开着的内置编辑器 tab: 那个 tab 自己就是冲突界面(顶部横幅 + 合并/差异/
+  //     重读/覆盖),面板弹的是另一套动作;
+  //   - 它根本没带会话: 会话在保存在途时被移除时 markSessionState 返回 nil
+  //     (session.go:797-804,markRemoteMissingConflict 即如此),pendingItems 按 session
+  //     建项,于是弹出来的是一个空对话框 —— 发起这次保存的界面已经拿着 SaveResult 自己呈现了。
   const conflictOwningSession = safePendingConflict?.session;
-  const conflictOwnedByEditorTab = useTabStore((s) =>
+  const conflictPresentedByPanel = useTabStore((s) =>
     conflictOwningSession
-      ? findEditorTabId(s.tabs, conflictOwningSession.assetId, conflictOwningSession.remotePath) !== null
+      ? findEditorTabId(s.tabs, conflictOwningSession.assetId, conflictOwningSession.remotePath) === null
       : false
   );
 
@@ -302,7 +304,7 @@ export function FileManagerPanel({
   const [prevPendingConflict, setPrevPendingConflict] = useState<typeof safePendingConflict | undefined>(undefined);
   if (safePendingConflict !== prevPendingConflict) {
     setPrevPendingConflict(safePendingConflict);
-    if (safePendingConflict && !conflictOwnedByEditorTab) {
+    if (safePendingConflict && conflictPresentedByPanel) {
       setPendingDialogOpen(true);
     }
   }

@@ -1325,8 +1325,10 @@ describe("FileManagerPanel", () => {
   });
 
   // markSessionState 在会话已被移除时返回 nil，SaveResult.Session 因此可能缺席
-  // （session.go:797-804）；面板拿它去找编辑器 tab 时不能崩在渲染里。
-  it("still renders the pending dialog when the conflict result carries no session", async () => {
+  // （session.go:797-804，markRemoteMissingConflict 就会这样返回）。面板拿它去找编辑器 tab
+  // 时不能崩在渲染里；同时 pendingItems 按 session 建项，没有 session 就没有条目，
+  // 弹出来只会是一个空对话框 portal 到 body 上盖住真正在呈现这次失败的界面。
+  it("does not open an empty pending dialog for a conflict result that carries no session", async () => {
     useExternalEditStore.setState({
       sessions: {},
       pendingConflict: {
@@ -1337,7 +1339,8 @@ describe("FileManagerPanel", () => {
 
     render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
 
-    expect(await screen.findByTestId("external-edit-pending-dialog")).toBeInTheDocument();
+    expect(await screen.findByTestId("sftp-status-bar")).toBeInTheDocument();
+    expect(screen.queryByTestId("external-edit-pending-dialog")).not.toBeInTheDocument();
   });
 
   it("shows runtime non-conflict pending in the same three-action matrix", async () => {
