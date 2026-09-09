@@ -140,7 +140,7 @@ End to end — `opsctl create asset`: parse generic `--config` or `--config-file
 
 `frontend/` is a **pnpm workspace** (Vite 6, Tailwind 4, shadcn/ui over Radix, Zustand 5). The root app lives in `frontend/src/`; `frontend/packages/ui` is the shared `@opskat/ui` component library (consumed by both the app and `devserver-ui`); `frontend/packages/devserver-ui` is the separate UI embedded by `cmd/devserver`.
 
-- **No React Router.** Navigation is a custom tab system in `tabStore`; tab kinds are the `TabType` union `"terminal" | "ai" | "query" | "page" | "info"`, each with its own metadata. Tab state persists to localStorage for session restore.
+- **No React Router.** Navigation is a custom tab system in `tabStore`; tab kinds are the `TabType` union `"terminal" | "ai" | "query" | "page" | "info" | "editor"`, each with its own metadata. Tab state persists to localStorage for session restore.
 - **One Zustand store per domain** in `frontend/src/stores/` (enumerate with `git ls-files 'frontend/src/stores/*.ts'`). Components depend on stores/hooks, not on sibling components' internals; shared domain state and selectors live in stores. A stateful pane may own its view-local IPC/event lifecycle when that lifecycle is not shared, as `RDPPanel` and `VNCPanel` do for one mounted RDP or VNC session.
 - **Backend bridge:** the generated, gitignored `frontend/wailsjs/go/<domain>/*` bindings call into the matching `internal/app/<domain>` binder; backend→frontend push uses `EventsOn` / `EventsOff` against events the app emits.
 - **i18n:** i18next with locales `frontend/src/i18n/locales/{zh-CN,en}/common.json`, single namespace `common`, keys via `t("key.subkey")`.

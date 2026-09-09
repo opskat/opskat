@@ -6,7 +6,13 @@ import { FileManagerPanel } from "../components/terminal/FileManagerPanel";
 import { useTerminalStore, type TerminalDirectorySyncState } from "../stores/terminalStore";
 import { useSFTPStore, type SFTPTransfer } from "../stores/sftpStore";
 import { useExternalEditStore } from "../stores/externalEditStore";
-import { type ExternalEditMergePrepareResult, type ExternalEditSession } from "../lib/externalEditApi";
+import { useTabStore, type EditorTabMeta } from "../stores/tabStore";
+import {
+  builtInEditorID,
+  type ExternalEditMergePrepareResult,
+  type ExternalEditSession,
+  type ExternalEditSettings,
+} from "../lib/externalEditApi";
 import { ChangeSSHDirectory, SFTPListDir, SFTPRename, SFTPUpload, SFTPUploadDir } from "../../wailsjs/go/ssh/SSH";
 import { sftp_svc } from "../../wailsjs/go/models";
 import { OpenExternalEdit, PrepareExternalEditMerge } from "../../wailsjs/go/external_edit/ExternalEdit";
@@ -22,8 +28,9 @@ const { codeDiffViewerMock, codeEditorMountMock } = vi.hoisted(() => ({
   codeDiffViewerMock: vi.fn(),
   codeEditorMountMock: vi.fn(),
 }));
-const { prepareExternalEditMergeMock } = vi.hoisted(() => ({
+const { prepareExternalEditMergeMock, getExternalEditSettingsMock } = vi.hoisted(() => ({
   prepareExternalEditMergeMock: vi.fn(),
+  getExternalEditSettingsMock: vi.fn(),
 }));
 
 vi.mock("sonner", () => ({
@@ -38,6 +45,7 @@ vi.mock("../lib/externalEditApi", async () => {
   return {
     ...actual,
     prepareExternalEditMerge: prepareExternalEditMergeMock,
+    getExternalEditSettings: getExternalEditSettingsMock,
   };
 });
 
@@ -160,6 +168,27 @@ function makeExternalEditSession(partial: Partial<ExternalEditSession> & { id: s
   };
 }
 
+function makeExternalEditSettings(defaultEditorId: string): ExternalEditSettings {
+  return {
+    defaultEditorId,
+    workspaceRoot: "/tmp/opskat-sensitive",
+    cleanupRetentionDays: 7,
+    maxReadFileSizeMB: 1,
+    editors: [
+      { id: builtInEditorID, name: "OpsKat", path: "", builtIn: true, available: true, default: false },
+      {
+        id: "system-text",
+        name: "System Text Editor",
+        path: "/opt/sensitive/editor",
+        builtIn: true,
+        available: true,
+        default: false,
+      },
+    ].map((editor) => ({ ...editor, default: editor.id === defaultEditorId })),
+    customEditors: [],
+  };
+}
+
 const realExternalEditPrepareMerge = useExternalEditStore.getState().prepareMerge;
 function makeTransfer(
   partial: Partial<SFTPTransfer> & Pick<SFTPTransfer, "transferId" | "tabId" | "sessionId">
@@ -265,6 +294,8 @@ describe("FileManagerPanel", () => {
       },
     });
     vi.mocked(PrepareExternalEditMerge).mockResolvedValue(undefined as never);
+    getExternalEditSettingsMock.mockResolvedValue(makeExternalEditSettings("system-text"));
+    useTabStore.setState({ tabs: [], activeTabId: null });
     useTerminalStore.setState({
       tabData: {
         tab1: {
@@ -1029,6 +1060,150 @@ describe("FileManagerPanel", () => {
     expect(OpenExternalEdit).toHaveBeenCalled();
     expect(screen.queryByText(/\/srv\/app\/secrets\.txt/)).not.toBeInTheDocument();
     expect(screen.queryByText(/2097152 bytes/)).not.toBeInTheDocument();
+  });
+
+  it("opens the built-in editor tab when it is the default editor", async () => {
+    const user = userEvent.setup();
+    getExternalEditSettingsMock.mockResolvedValue(makeExternalEditSettings(builtInEditorID));
+    vi.mocked(OpenExternalEdit).mockResolvedValue(
+      makeExternalEditSession({ id: "edit-1", editorId: builtInEditorID }) as never
+    );
+    vi.mocked(SFTPListDir).mockResolvedValue([{ name: "demo.txt", isDir: false, size: 12, modTime: 0 }]);
+
+    render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    await user.dblClick(await screen.findByText("demo.txt"));
+
+    await waitFor(() => expect(useTabStore.getState().tabs).toHaveLength(1));
+    expect(OpenExternalEdit).toHaveBeenCalledWith({
+      assetId: 101,
+      sessionId: "s1",
+      remotePath: "/srv/app/demo.txt",
+      editorId: builtInEditorID,
+    });
+    const [tab] = useTabStore.getState().tabs;
+    expect(tab.type).toBe("editor");
+    expect(tab.label).toBe("demo.txt");
+    expect(tab.meta).toEqual<EditorTabMeta>({
+      type: "editor",
+      sessionId: "edit-1",
+      assetId: 101,
+      assetName: "asset-101",
+      remotePath: "/srv/app/demo.txt",
+    });
+    expect(useTabStore.getState().activeTabId).toBe(tab.id);
+  });
+
+  it("focuses the existing editor tab instead of opening a second session", async () => {
+    const user = userEvent.setup();
+    getExternalEditSettingsMock.mockResolvedValue(makeExternalEditSettings(builtInEditorID));
+    vi.mocked(OpenExternalEdit).mockResolvedValue(
+      makeExternalEditSession({ id: "edit-1", editorId: builtInEditorID }) as never
+    );
+    vi.mocked(SFTPListDir).mockResolvedValue([{ name: "demo.txt", isDir: false, size: 12, modTime: 0 }]);
+
+    render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    await user.dblClick(await screen.findByText("demo.txt"));
+    await waitFor(() => expect(useTabStore.getState().tabs).toHaveLength(1));
+    useTabStore.setState({ activeTabId: null });
+    await user.dblClick(screen.getByText("demo.txt"));
+
+    await waitFor(() => expect(useTabStore.getState().activeTabId).toBe("editor-edit-1"));
+    expect(OpenExternalEdit).toHaveBeenCalledTimes(1);
+    expect(useTabStore.getState().tabs).toHaveLength(1);
+  });
+
+  it("still launches an external editor from the context menu while the built-in one is default", async () => {
+    const user = userEvent.setup();
+    getExternalEditSettingsMock.mockResolvedValue(makeExternalEditSettings(builtInEditorID));
+    vi.mocked(OpenExternalEdit).mockResolvedValue(makeExternalEditSession({ id: "edit-1" }) as never);
+    vi.mocked(SFTPListDir).mockResolvedValue([{ name: "demo.txt", isDir: false, size: 12, modTime: 0 }]);
+
+    render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    fireEvent.contextMenu(await screen.findByText("demo.txt"), { clientX: 24, clientY: 24 });
+    await screen.findByRole("button", { name: "externalEdit.actions.open" });
+    await new Promise((resolve) => window.setTimeout(resolve, 175));
+    await user.click(screen.getByRole("button", { name: "externalEdit.actions.open" }));
+
+    await waitFor(() =>
+      expect(OpenExternalEdit).toHaveBeenCalledWith({
+        assetId: 101,
+        sessionId: "s1",
+        remotePath: "/srv/app/demo.txt",
+        editorId: "system-text",
+      })
+    );
+    expect(useTabStore.getState().tabs).toHaveLength(0);
+  });
+
+  it("offers settings, download and the external editor when the built-in editor cannot open the file", async () => {
+    const user = userEvent.setup();
+    getExternalEditSettingsMock.mockResolvedValue(makeExternalEditSettings(builtInEditorID));
+    vi.mocked(OpenExternalEdit).mockRejectedValueOnce(
+      new Error("读取远程文件失败: 远程文件过大，无法完整读取: /srv/app/secrets.txt (2097152 bytes > 1048576 bytes)")
+    );
+    vi.mocked(SFTPListDir).mockResolvedValue([{ name: "secrets.txt", isDir: false, size: 2097152, modTime: 0 }]);
+
+    render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    await user.dblClick(await screen.findByText("secrets.txt"));
+
+    const dialog = await screen.findByTestId("built-in-editor-blocked");
+    expect(within(dialog).getByText("externalEdit.builtIn.oversizeReason")).toBeInTheDocument();
+    expect(useTabStore.getState().tabs).toHaveLength(0);
+    expect(screen.queryByText(/2097152 bytes/)).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "externalEdit.builtIn.download" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "externalEdit.builtIn.goToSettings" })).toBeInTheDocument();
+
+    vi.mocked(OpenExternalEdit).mockResolvedValue(makeExternalEditSession({ id: "edit-1" }) as never);
+    await user.click(within(dialog).getByRole("button", { name: "externalEdit.builtIn.openExternal" }));
+
+    await waitFor(() =>
+      expect(OpenExternalEdit).toHaveBeenLastCalledWith({
+        assetId: 101,
+        sessionId: "s1",
+        remotePath: "/srv/app/secrets.txt",
+        editorId: "system-text",
+      })
+    );
+    expect(useTabStore.getState().tabs.some((tab) => tab.type === "editor")).toBe(false);
+  });
+
+  it("names the undecodable reason instead of the raw backend error", async () => {
+    const user = userEvent.setup();
+    getExternalEditSettingsMock.mockResolvedValue(makeExternalEditSettings(builtInEditorID));
+    vi.mocked(OpenExternalEdit).mockRejectedValueOnce(new Error("当前文件不是可编辑文本文件"));
+    vi.mocked(SFTPListDir).mockResolvedValue([{ name: "app.bin", isDir: false, size: 12, modTime: 0 }]);
+
+    render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    await user.dblClick(await screen.findByText("app.bin"));
+
+    const dialog = await screen.findByTestId("built-in-editor-blocked");
+    expect(within(dialog).getByText("externalEdit.builtIn.undecodableReason")).toBeInTheDocument();
+    expect(useTabStore.getState().tabs).toHaveLength(0);
+  });
+
+  it("keeps double-click on the external editor path unchanged", async () => {
+    const user = userEvent.setup();
+    vi.mocked(OpenExternalEdit).mockResolvedValue(makeExternalEditSession({ id: "edit-1" }) as never);
+    vi.mocked(SFTPListDir).mockResolvedValue([{ name: "demo.txt", isDir: false, size: 12, modTime: 0 }]);
+
+    render(<FileManagerPanel assetId={101} tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    await user.dblClick(await screen.findByText("demo.txt"));
+
+    await waitFor(() =>
+      expect(OpenExternalEdit).toHaveBeenCalledWith({
+        assetId: 101,
+        sessionId: "s1",
+        remotePath: "/srv/app/demo.txt",
+        editorId: undefined,
+      })
+    );
+    expect(useTabStore.getState().tabs).toHaveLength(0);
   });
 
   it("sanitizes apply merge failures before showing them in the file view", async () => {

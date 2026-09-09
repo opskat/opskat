@@ -5,7 +5,14 @@ import logoLight from "@/assets/images/logo.png";
 import logoDark from "@/assets/images/logo-dark.png";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useAssetStore } from "@/stores/assetStore";
-import { useTabStore, type QueryTabMeta, type PageTabMeta, type InfoTabMeta } from "@/stores/tabStore";
+import {
+  openSettingsTab,
+  useTabStore,
+  type EditorTabMeta,
+  type QueryTabMeta,
+  type PageTabMeta,
+  type InfoTabMeta,
+} from "@/stores/tabStore";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { useShortcutStore, formatBinding, type ShortcutAction } from "@/stores/shortcutStore";
 import { asset_entity } from "../../../wailsjs/go/models";
@@ -46,6 +53,9 @@ const OSSBrowserPanel = lazy(() =>
 );
 const K8sClusterPage = lazy(() =>
   import("@/components/k8s/K8sClusterPage").then((m) => ({ default: m.K8sClusterPage }))
+);
+const RemoteFileEditorTab = lazy(() =>
+  import("@/components/terminal/editor/RemoteFileEditorTab").then((m) => ({ default: m.RemoteFileEditorTab }))
 );
 const VNCPanel = lazy(() => import("@/components/vnc/VNCPanel").then((m) => ({ default: m.VNCPanel })));
 const RDPPanel = lazy(() => import("@/components/rdp/RDPPanel").then((m) => ({ default: m.RDPPanel })));
@@ -89,21 +99,6 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset, topBarHi
   const tabBarLayout = useLayoutStore((s) => s.tabBarLayout);
   const shortcuts = useShortcutStore((s) => s.shortcuts);
 
-  const openSettingsTab = () => {
-    const tabStore = useTabStore.getState();
-    const existing = tabStore.tabs.find((tab) => tab.id === "settings");
-    if (existing) {
-      tabStore.activateTab("settings");
-    } else {
-      tabStore.openTab({
-        id: "settings",
-        type: "page",
-        label: t("nav.settings"),
-        meta: { type: "page", pageId: "settings" },
-      });
-    }
-  };
-
   const SHORTCUT_HINTS: ReadonlyArray<readonly [ShortcutAction, string]> = [
     ["panel.ai", "panelAi"],
     ["panel.filter", "panelFilter"],
@@ -117,6 +112,7 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset, topBarHi
   const terminalTabs = tabs.filter((tab) => tab.type === "terminal");
   const aiTabs = tabs.filter((tab) => tab.type === "ai");
   const queryTabs = tabs.filter((tab) => tab.type === "query");
+  const editorTabs = tabs.filter((tab) => tab.type === "editor");
   const remotePaneTabs = tabs.filter(
     (tab) => tab.type === "page" && REMOTE_PANE_PAGE_IDS.has((tab.meta as PageTabMeta).pageId)
   );
@@ -354,6 +350,23 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset, topBarHi
           );
         })}
 
+        {/* Editor tabs: display-based so Monaco keeps its model, scroll and undo stack
+            while the user switches to another tab. 内置编辑器 tab 占满主区，不挂文件面板。 */}
+        {editorTabs.map((tab) => {
+          const isActive = activeTabId === tab.id;
+          return (
+            <div
+              key={tab.id}
+              className="absolute inset-0 bg-background"
+              style={{ display: isActive ? "block" : "none" }}
+            >
+              <LazySurface>
+                <RemoteFileEditorTab meta={tab.meta as EditorTabMeta} />
+              </LazySurface>
+            </div>
+          );
+        })}
+
         {/* Page and info tabs: rendered only when active */}
         {activeTab && activeTab.type === "info" && (
           <div className="absolute inset-0 bg-background">
@@ -404,7 +417,7 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset, topBarHi
 
               <button
                 type="button"
-                onClick={openSettingsTab}
+                onClick={() => openSettingsTab(t("nav.settings"))}
                 className="text-xs text-muted-foreground/70 transition-colors hover:text-foreground"
               >
                 {t("app.shortcuts.all")} →

@@ -3,7 +3,7 @@ import { useRecentAssetStore } from "./recentAssetStore";
 
 // === Tab Types ===
 
-export type TabType = "terminal" | "ai" | "query" | "page" | "info";
+export type TabType = "terminal" | "ai" | "query" | "page" | "info" | "editor";
 
 export interface TerminalTabMeta {
   type: "terminal";
@@ -49,7 +49,16 @@ export interface InfoTabMeta {
   icon?: string;
 }
 
-export type TabMeta = TerminalTabMeta | AITabMeta | QueryTabMeta | PageTabMeta | InfoTabMeta;
+/** 内置编辑器承载的远程文件 tab：sessionId 是 external-edit 会话，不是 SSH 会话。 */
+export interface EditorTabMeta {
+  type: "editor";
+  sessionId: string;
+  assetId: number;
+  assetName: string;
+  remotePath: string;
+}
+
+export type TabMeta = TerminalTabMeta | AITabMeta | QueryTabMeta | PageTabMeta | InfoTabMeta | EditorTabMeta;
 
 export interface Tab {
   id: string;
@@ -262,6 +271,46 @@ export const useTabStore = create<TabStoreState>((set, get) => ({
     set({ tabs: newTabs, activeTabId: activeStillOpen ? activeTabId : id });
   },
 }));
+
+// === Tab openers ===
+
+/** 设置页只有一个 tab；重复调用由 openTab 的同 id 去重直接聚焦。 */
+export function openSettingsTab(label: string) {
+  useTabStore.getState().openTab({ id: "settings", type: "page", label, meta: { type: "page", pageId: "settings" } });
+}
+
+/**
+ * 打开（或聚焦）内置编辑器承载的远程文件 tab。
+ * 同一资产的同一路径已经有 tab 时直接聚焦，`createSession` 不会被调用 ——
+ * 「不重复建立会话」这一点由这里保证，调用方只负责真正需要新会话时怎么建。
+ */
+export async function openRemoteFileEditorTab(params: {
+  assetId: number;
+  remotePath: string;
+  createSession: () => Promise<{ sessionId: string; assetName: string }>;
+}): Promise<string> {
+  const { assetId, remotePath, createSession } = params;
+  const store = useTabStore.getState();
+  const existing = store.tabs.find(
+    (tab) => tab.meta.type === "editor" && tab.meta.assetId === assetId && tab.meta.remotePath === remotePath
+  );
+  if (existing) {
+    store.activateTab(existing.id);
+    return existing.id;
+  }
+
+  const { sessionId, assetName } = await createSession();
+  const id = `editor-${sessionId}`;
+  // 标题取远程路径的文件名；remotePath 是后端返回的绝对路径，无需再做规范化。
+  const label = remotePath.split("/").filter(Boolean).at(-1) ?? remotePath;
+  useTabStore.getState().openTab({
+    id,
+    type: "editor",
+    label,
+    meta: { type: "editor", sessionId, assetId, assetName, remotePath },
+  });
+  return id;
+}
 
 // === Persistence ===
 

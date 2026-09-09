@@ -1511,7 +1511,7 @@
       "recreateUnavailableActiveDraft": "A newer active draft already exists. Continue from that draft instead."
     },
     "actions": {
-      "open": "Edit Externally",
+      "open": "Open with external editor",
       "sync": "Save to Remote",
       "refresh": "Refresh Remote State",
       "compare": "Compare",
@@ -1527,6 +1527,17 @@
       "saveMerge": "Save Merged Draft",
       "hideRecord": "Close Record (Keep Local Draft)",
       "deleteLocal": "Delete Record and Local Draft"
+    },
+    "builtIn": {
+      "blockedTitle": "Can't open in the built-in editor",
+      "oversizeReason": "This file is larger than the external-edit read limit, so it can't be read as text.",
+      "undecodableReason": "This file can't be decoded as text with the detected encoding.",
+      "openFailedReason": "Opening failed. Try again later or use another way to open it.",
+      "goToSettings": "Open settings",
+      "download": "Download",
+      "openExternal": "Open with external editor",
+      "noExternalEditor": "No external editor is available. Add one in settings first.",
+      "loadFailed": "Failed to read the file contents"
     },
     "pending": {
       "entry": "External Edit Pending",

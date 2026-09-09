@@ -1511,7 +1511,7 @@
       "recreateUnavailableActiveDraft": "当前已经有更新的活动稿，请改在该稿上继续处理。"
     },
     "actions": {
-      "open": "外部编辑",
+      "open": "用外部编辑器打开",
       "sync": "保存到远程",
       "refresh": "刷新远程状态",
       "compare": "比对差异",
@@ -1527,6 +1527,17 @@
       "saveMerge": "保存合并稿",
       "hideRecord": "关闭记录（保留本地副本）",
       "deleteLocal": "删除记录并删除本地副本"
+    },
+    "builtIn": {
+      "blockedTitle": "无法用内置编辑器打开",
+      "oversizeReason": "文件超过外部编辑的最大读取上限，无法读取为文本。",
+      "undecodableReason": "文件内容无法按已探测到的编码解码为文本。",
+      "openFailedReason": "打开失败，请稍后重试或换一种打开方式。",
+      "goToSettings": "前往设置",
+      "download": "下载到本地",
+      "openExternal": "用外部编辑器打开",
+      "noExternalEditor": "没有可用的外部编辑器，请先在设置里添加。",
+      "loadFailed": "读取文件内容失败"
     },
     "pending": {
       "entry": "外部编辑待处理",

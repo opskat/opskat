@@ -19,13 +19,20 @@ import {
 } from "@opskat/ui";
 import { SFTPCreateFile, SFTPDelete, SFTPGetwd, SFTPMkdir, SFTPPaste, SFTPRename } from "../../../wailsjs/go/ssh/SSH";
 import { sftp_svc } from "../../../wailsjs/go/models";
-import { openExternalEdit, type ExternalEditMergePrepareResult, type ExternalEditSession } from "@/lib/externalEditApi";
+import {
+  builtInEditorID,
+  getExternalEditSettings,
+  openExternalEdit,
+  type ExternalEditMergePrepareResult,
+  type ExternalEditSession,
+} from "@/lib/externalEditApi";
 import {
   buildExternalEditAttentionItems,
   isExternalEditClipboardResidueSession,
   useExternalEditStore,
 } from "@/stores/externalEditStore";
 import { useSFTPStore } from "@/stores/sftpStore";
+import { openRemoteFileEditorTab, openSettingsTab } from "@/stores/tabStore";
 import { ExternalEditCompareWorkbench } from "./external-edit/CompareWorkbench";
 import { ExternalEditMergeWorkbench } from "./external-edit/MergeWorkbench";
 import { ExternalEditPendingDialog, type ExternalEditPendingItem } from "./external-edit/PendingDialog";
@@ -72,6 +79,17 @@ function isExternalEditOversizeError(error: unknown) {
     message.includes("读取过程中超过大小上限") ||
     message.includes("无法完整读取")
   );
+}
+
+// 内置编辑器打不开时给出的原因：读取上限与文本/编码判定都在后端，这里只把它的结论
+// 翻译成一句用户能据以行动的说明，不把带路径与字节数的原始错误抛到界面上。
+function builtInOpenReasonKey(error: unknown): string {
+  if (isExternalEditOversizeError(error)) return "externalEdit.builtIn.oversizeReason";
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("不是可编辑文本文件") || message.includes("编码暂不支持")) {
+    return "externalEdit.builtIn.undecodableReason";
+  }
+  return "externalEdit.builtIn.openFailedReason";
 }
 
 let globalClipboard: ClipboardState | null = null;
@@ -147,6 +165,7 @@ export function FileManagerPanel({
   const [preparedMergeResult, setPreparedMergeResult] = useState<ExternalEditMergePrepareResult | null>(null);
   const [pendingDialogOpen, setPendingDialogOpen] = useState(false);
   const [activeSyncMode, setActiveSyncMode] = useState<DirectorySyncMenuMode>(null);
+  const [builtInBlock, setBuiltInBlock] = useState<{ remotePath: string; reasonKey: string } | null>(null);
 
   const startUpload = useSFTPStore((s) => s.startUpload);
   const startUploadDir = useSFTPStore((s) => s.startUploadDir);
@@ -392,7 +411,7 @@ export function FileManagerPanel({
   const canExternalEdit = useCallback((entry: sftp_svc.FileEntry) => !entry.isDir, []);
 
   const handleOpenExternalEdit = useCallback(
-    async (remotePath: string) => {
+    async (remotePath: string, editorId?: string) => {
       // 兼容旧调用方：只有终端页真正绑定资产后才允许进入外部编辑链路，
       // 这样可以让历史测试和非终端场景继续复用组件，而不需要把 assetId 适配带回测试侧。
       if (!assetId) {
@@ -403,12 +422,85 @@ export function FileManagerPanel({
           assetId,
           sessionId,
           remotePath,
+          editorId,
         });
       } catch (error) {
         setError(isExternalEditOversizeError(error) ? EXTERNAL_EDIT_OVERSIZE_ERROR_KEY : String(error));
       }
     },
     [assetId, sessionId, setError]
+  );
+
+  const loadEditorSettings = useCallback(async () => {
+    try {
+      return await getExternalEditSettings();
+    } catch {
+      setError(t(EXTERNAL_EDIT_SAFE_ERROR_KEY));
+      return null;
+    }
+  }, [setError, t]);
+
+  // 内置编辑器：同一资产同一路径已经有 tab 时只聚焦、不再新建会话；
+  // 超限或不可解码时不进入编辑器，改在入口给出原因与出路。
+  const handleOpenBuiltInEditor = useCallback(
+    async (remotePath: string) => {
+      if (!assetId) {
+        return;
+      }
+      try {
+        await openRemoteFileEditorTab({
+          assetId,
+          remotePath,
+          createSession: async () => {
+            const session = await openExternalEdit({ assetId, sessionId, remotePath, editorId: builtInEditorID });
+            return { sessionId: session.id, assetName: session.assetName };
+          },
+        });
+      } catch (error) {
+        setBuiltInBlock({ remotePath, reasonKey: builtInOpenReasonKey(error) });
+      }
+    },
+    [assetId, sessionId]
+  );
+
+  // 「用外部编辑器打开」始终拉起外部编辑器：默认项是内置编辑器时显式指定一个可用的外部编辑器，
+  // 否则后端会把空 editorId 解析回内置项。
+  const handleOpenWithExternalEditor = useCallback(
+    async (remotePath: string) => {
+      if (!assetId) {
+        return;
+      }
+      const settings = await loadEditorSettings();
+      if (!settings) return;
+      if (settings.defaultEditorId !== builtInEditorID) {
+        await handleOpenExternalEdit(remotePath);
+        return;
+      }
+      const external = settings.editors.find((editor) => editor.available && editor.id !== builtInEditorID);
+      if (!external) {
+        setError(t("externalEdit.builtIn.noExternalEditor"));
+        return;
+      }
+      await handleOpenExternalEdit(remotePath, external.id);
+    },
+    [assetId, handleOpenExternalEdit, loadEditorSettings, setError, t]
+  );
+
+  // 双击按「默认编辑器」设置分流：内置编辑器开应用内的编辑器 tab，外部编辑器行为不变。
+  const handleOpenByDefaultEditor = useCallback(
+    async (remotePath: string) => {
+      if (!assetId) {
+        return;
+      }
+      const settings = await loadEditorSettings();
+      if (!settings) return;
+      if (settings.defaultEditorId === builtInEditorID) {
+        await handleOpenBuiltInEditor(remotePath);
+        return;
+      }
+      await handleOpenExternalEdit(remotePath);
+    },
+    [assetId, handleOpenBuiltInEditor, handleOpenExternalEdit, loadEditorSettings]
   );
 
   const handlePrepareMerge = useCallback(
@@ -589,9 +681,14 @@ export function FileManagerPanel({
         case "download":
           if (entry && targetPath) startDownload(transferTarget, targetPath);
           break;
+        case "edit":
+          if (entry && targetPath) {
+            void handleOpenBuiltInEditor(targetPath);
+          }
+          break;
         case "externalEdit":
           if (entry && targetPath) {
-            void handleOpenExternalEdit(targetPath);
+            void handleOpenWithExternalEditor(targetPath);
           }
           break;
         case "downloadDir":
@@ -669,7 +766,8 @@ export function FileManagerPanel({
       copyFilePaths,
       copyOrCut,
       entryByPath,
-      handleOpenExternalEdit,
+      handleOpenBuiltInEditor,
+      handleOpenWithExternalEditor,
       navigateToPath,
       openPermission,
       openProperties,
@@ -809,7 +907,7 @@ export function FileManagerPanel({
               currentPath={currentPath}
               error={error}
               loading={loading}
-              onExternalOpen={handleOpenExternalEdit}
+              onExternalOpen={handleOpenByDefaultEditor}
               onGoUp={goUp}
               onMoveEntriesToDirectory={moveEntriesToDirectory}
               onNavigate={(path) => void navigateToPath(path)}
@@ -978,6 +1076,46 @@ export function FileManagerPanel({
         onSaved={() => void refreshTree()}
       />
       <PropertiesDialog sessionId={sessionId} target={propertiesTarget} onClose={() => setPropertiesTarget(null)} />
+      <Dialog open={!!builtInBlock} onOpenChange={(open) => !open && setBuiltInBlock(null)}>
+        <DialogContent className="max-w-md" data-testid="built-in-editor-blocked">
+          <DialogHeader>
+            <DialogTitle>{t("externalEdit.builtIn.blockedTitle")}</DialogTitle>
+            <DialogDescription>{builtInBlock ? t(builtInBlock.reasonKey) : ""}</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                openSettingsTab(t("nav.settings"));
+                setBuiltInBlock(null);
+              }}
+            >
+              {t("externalEdit.builtIn.goToSettings")}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                if (builtInBlock) startDownload(transferTarget, builtInBlock.remotePath);
+                setBuiltInBlock(null);
+              }}
+            >
+              {t("externalEdit.builtIn.download")}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                const blocked = builtInBlock;
+                setBuiltInBlock(null);
+                if (blocked) void handleOpenWithExternalEditor(blocked.remotePath);
+              }}
+            >
+              {t("externalEdit.builtIn.openExternal")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
