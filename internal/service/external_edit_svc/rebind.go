@@ -202,6 +202,7 @@ func (s *Service) documentCandidateSessionIDs(session *Session) []string {
 
 // documentProbeOutcome 区分探测单个候选会话时的两类否定结论。二者的出路不同：
 // 不可达要求用户重连该资产，「已不是同一份文件」要求重新打开文件，因此不能合并成一个布尔。
+// 它只在 error 为 nil 时有意义：探测直接失败时结论由 error 自己带，调用方先看 error。
 type documentProbeOutcome int
 
 const (
@@ -225,7 +226,9 @@ func (s *Service) inspectDocumentTransport(
 	if err != nil {
 		if isRemoteMissingError(err) {
 			if !canConfirmRemotePathWithoutStat(session) {
-				return nil, documentProbeUnreachable, fmt.Errorf("当前远程文件位置已变化，无法确认是否仍是同一份文件；%s", externalEditReconnectHint)
+				// 与 resolveDocumentTransport / validateOverwriteTransport 用同一句结论：
+				// 分成两句写法只会让 buildErrorSnapshot 的分类漏掉这一条，用户拿到兜底文案。
+				return nil, documentProbeUnreachable, fmt.Errorf("当前文件位置已变化，无法确认仍是同一份远程文件；%s", externalEditReconnectHint)
 			}
 			return &documentTransport{
 				SessionID:     candidateID,

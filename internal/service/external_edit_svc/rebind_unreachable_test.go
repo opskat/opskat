@@ -1,6 +1,7 @@
 package external_edit_svc
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -50,4 +51,23 @@ func TestRefreshUnreachableCandidateDoesNotMaskPathIdentityFailure(t *testing.T)
 	_, err := h.svc.Refresh(session.ID)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "当前文件位置已变化")
+}
+
+// 经软链打开的文件在远端消失时同样是「无法确认仍是同一份远程文件」这一类结论：
+// 它必须走进 buildErrorSnapshot 的分类里，而不是掉到兜底的「同步失败，请稍后重试」。
+func TestSaveRecordsClassifiedSnapshotWhenSymlinkedRemoteVanishes(t *testing.T) {
+	h := newRebindHarness(t, func(int64) []string { return nil })
+	session := h.openSession(t, "ssh-1", "/srv/link.conf", "/srv/real.conf", []byte("alpha\n"))
+	markDirtyLocalCopy(t, session, []byte("alpha dirty\n"))
+
+	h.remote.SetError("ssh-1", "/srv/link.conf", errors.New("no such file"))
+
+	_, err := h.svc.Save(context.Background(), session.ID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "无法确认仍是同一份远程文件")
+
+	snapshot := h.refreshSession(t, session.ID).LastError
+	require.NotNil(t, snapshot)
+	require.Equal(t, "当前文件暂时无法继续同步", snapshot.Summary)
+	require.Equal(t, externalEditReconnectHint, snapshot.Suggestion)
 }

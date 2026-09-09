@@ -126,11 +126,12 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
   const [remoteUnconfirmed, setRemoteUnconfirmed] = useState(() =>
     useTabStore.getState().restoredTabIds.includes(tabId ?? "")
   );
-  // 重读的 promise 存在 ref 里，而不是「进 effect 就把标记置否」：effect 被重跑时
+  // 在途的那次重读连同它问的是哪个会话一起存，而不是「进 effect 就把标记置否」：effect 被重跑时
   // （StrictMode 的二次挂载就是）第一次的 await 会被 cancelled 丢弃，若那时标记已经消费掉，
   // 第二次就直接跳过重读，结果是请求发了、冲突却永远显示不出来。存 promise 让重跑复用同一次
-  // 请求：只问远端一次，且哪一次 effect 活到最后都能拿到结论。
-  const recheckPromiseRef = useRef<Promise<ExternalEditSession> | null>(null);
+  // 请求：只问远端一次，且哪一次 effect 活到最后都能拿到结论。带上会话 id 是因为 reread 会把
+  // tab 换绑到新会话，旧会话的在途结论不能拿来给新会话下结论。
+  const recheckRef = useRef<{ sessionId: string; promise: Promise<ExternalEditSession> } | null>(null);
   // 重读是否在途要自己记：store 的 savingSessionId 同样会被保存 / 比对 / 合并指到本会话，
   // 借用它会让未确认横幅在保存期间谎报「正在重新读取远端」，并且锁死手动重读按钮。
   const [rechecking, setRechecking] = useState(false);
@@ -172,21 +173,26 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
 
   const recheckRemote = useCallback(
     async (isCancelled: () => boolean) => {
-      const pending = (recheckPromiseRef.current ??= refreshSession(meta.sessionId));
+      let inflight = recheckRef.current;
+      if (!inflight || inflight.sessionId !== meta.sessionId) {
+        inflight = { sessionId: meta.sessionId, promise: refreshSession(meta.sessionId) };
+        recheckRef.current = inflight;
+      }
       setRechecking(true);
       try {
-        const session = await pending;
+        const session = await inflight.promise;
         if (isCancelled()) return;
-        recheckPromiseRef.current = null;
         setRemoteUnconfirmed(false);
         setOutcome({ key: loadKey, state: remoteCheckOutcome(session.state) });
       } catch (error) {
         if (isCancelled()) return;
-        recheckPromiseRef.current = null;
         // 失败不是结论：远端状态仍然未确认（等下一个可用会话或用户手动重读），
         // 失败原因按后端给出的分类原样呈现，本地改动一行不动。
         setOutcome({ key: loadKey, state: { kind: "failed", message: errorMessage(error) } });
       } finally {
+        // 这一次请求已经有结论，不论消费它的那次 effect 是否已被丢弃都要清掉：
+        // 留着它会让重连后的自动重读复用一个已 settle 的 promise，也就是永远不再真的问远端。
+        if (recheckRef.current === inflight) recheckRef.current = null;
         setRechecking(false);
       }
     },
@@ -206,8 +212,8 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
   }, [recheckRemote, remoteUnconfirmed, sessionAvailable]);
 
   const handleRecheckRemote = useCallback(() => {
-    // 手动重读要真的再问一次远端，而不是复用上一次已经完成的那个 promise。
-    recheckPromiseRef.current = null;
+    // 手动重读要真的再问一次远端，而不是搭上一次还在途的请求。
+    recheckRef.current = null;
     void recheckRemote(() => false);
   }, [recheckRemote]);
 

@@ -746,6 +746,70 @@ describe("RemoteFileEditorTab", () => {
     expect(useTabStore.getState().unsavedTabIds).toContain("editor-sess-1");
   });
 
+  // 掉线只是把窗格标成未连接，终端 tab 还在 —— 这正是「重连后自动重读」要面对的形状。
+  function setTerminalPaneConnected(connected: boolean) {
+    act(() => {
+      useTerminalStore.setState((state) => {
+        const data = state.tabData["term-1"];
+        return {
+          tabData: {
+            ...state.tabData,
+            "term-1": { ...data, panes: { "ssh-1": { ...data.panes["ssh-1"], connected } } },
+          },
+        };
+      });
+    });
+  }
+
+  // 中途被放弃的那次重读不能被下一次复用：会话掉线时它必然失败，而复用一个已经出结论的
+  // promise 等于拿旧结论冒充新结论 —— 重连之后的自动重读就再也不会真的问远端。
+  it("asks the remote again after a re-read was abandoned mid-flight", async () => {
+    let rejectFirst: (error: Error) => void = () => {};
+    refreshSessionMock.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectFirst = reject;
+        })
+    );
+    refreshSessionMock.mockResolvedValue(makeSession({ state: "clean" }));
+    await renderRestoredEditor();
+
+    connectTerminalForAsset(7);
+    await waitFor(() => expect(refreshSessionMock).toHaveBeenCalledTimes(1));
+
+    setTerminalPaneConnected(false);
+    await act(async () => {
+      rejectFirst(new Error("当前远程文件已不可访问；请先重新连接该资产的终端会话后再继续同步"));
+    });
+
+    setTerminalPaneConnected(true);
+
+    await waitFor(() => expect(refreshSessionMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByTestId("remote-file-editor-unconfirmed")).not.toBeInTheDocument());
+    expect(screen.queryByTestId("remote-file-editor-error")).not.toBeInTheDocument();
+  });
+
+  // reread 会把 tab 换绑到新会话：还在途的那次重读问的是旧会话，
+  // 复用它就是拿旧会话的结论给新会话下结论。
+  it("re-reads the new session after the tab rebinds while a re-read is in flight", async () => {
+    refreshSessionMock.mockImplementationOnce(() => new Promise(() => {}));
+    refreshSessionMock.mockResolvedValue(makeSession({ id: "sess-2", state: "clean" }));
+    await renderRestoredEditor();
+
+    connectTerminalForAsset(7);
+    await waitFor(() => expect(refreshSessionMock).toHaveBeenCalledWith("sess-1"));
+
+    act(() => {
+      useTabStore.setState((state) => ({
+        tabs: state.tabs.map((tab) =>
+          tab.id === "editor-sess-1" ? { ...tab, meta: { ...(tab.meta as EditorTabMeta), sessionId: "sess-2" } } : tab
+        ),
+      }));
+    });
+
+    await waitFor(() => expect(refreshSessionMock).toHaveBeenCalledWith("sess-2"));
+  });
+
   it("routes a vanished remote to its own banner rather than the failure one", async () => {
     refreshSessionMock.mockResolvedValue(makeSession({ state: "remote_missing", dirty: true }));
     await renderRestoredEditor();
