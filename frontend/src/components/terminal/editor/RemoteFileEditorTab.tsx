@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, FileText, Loader2, Save } from "lucide-react";
+import { AlertTriangle, CircleHelp, FileText, Loader2, Save } from "lucide-react";
 import type * as MonacoNS from "monaco-editor";
 import type { OnMount } from "@monaco-editor/react";
 import {
@@ -24,6 +24,7 @@ import {
 } from "@/lib/externalEditApi";
 import { useExternalEditStore } from "@/stores/externalEditStore";
 import { findEditorTabId, useTabStore, type EditorTabMeta } from "@/stores/tabStore";
+import { getTerminalActiveAssetIds, useTerminalStore } from "@/stores/terminalStore";
 import { ExternalEditCompareWorkbench } from "../external-edit/CompareWorkbench";
 import { ExternalEditMergeWorkbench } from "../external-edit/MergeWorkbench";
 
@@ -59,6 +60,13 @@ type SaveOutcome =
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** 重读拿到的会话状态落到与保存时同一套结论上：冲突走同样的四条出路，远端消失走同一条重建出路。 */
+function remoteCheckOutcome(state: ExternalEditSession["state"]): SaveOutcome {
+  if (state === "conflict") return { kind: "conflict" };
+  if (state === "remote_missing") return { kind: "remoteMissing" };
+  return { kind: "idle" };
 }
 
 // 改动行沿用三栏合并里「本地改动」的槽位配色，不另造一套差异视觉。
@@ -114,8 +122,11 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
   const mergeResult = useExternalEditStore((s) => s.mergeResult);
 
   // 重启恢复出来的 tab 必须重新比对远端基线：静默拿旧内容继续编辑就是在准备一次覆盖。
-  const recheckRemoteRef = useRef(useTabStore.getState().restoredTabIds.includes(tabId ?? ""));
-  // 重读的 promise 存在 ref 里，而不是「进 effect 就把 recheckRemoteRef 置否」：effect 被重跑时
+  // 在重读给出结论之前它既不是干净态也不是冲突态，而是显式的「远端状态未确认」。
+  const [remoteUnconfirmed, setRemoteUnconfirmed] = useState(() =>
+    useTabStore.getState().restoredTabIds.includes(tabId ?? "")
+  );
+  // 重读的 promise 存在 ref 里，而不是「进 effect 就把标记置否」：effect 被重跑时
   // （StrictMode 的二次挂载就是）第一次的 await 会被 cancelled 丢弃，若那时标记已经消费掉，
   // 第二次就直接跳过重读，结果是请求发了、冲突却永远显示不出来。存 promise 让重跑复用同一次
   // 请求：只问远端一次，且哪一次 effect 活到最后都能拿到结论。
@@ -132,23 +143,6 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
-      if (recheckRemoteRef.current) {
-        recheckPromiseRef.current ??= refreshSession(meta.sessionId);
-        try {
-          const session = await recheckPromiseRef.current;
-          if (cancelled) return;
-          recheckRemoteRef.current = false;
-          if (session.state === "conflict") {
-            setOutcome({ key: loadKey, state: { kind: "conflict" } });
-          } else if (session.state === "remote_missing") {
-            setOutcome({ key: loadKey, state: { kind: "remoteMissing" } });
-          }
-        } catch (error) {
-          if (cancelled) return;
-          recheckRemoteRef.current = false;
-          setOutcome({ key: loadKey, state: { kind: "failed", message: errorMessage(error) } });
-        }
-      }
       try {
         const value = await readExternalEditSessionText(meta.sessionId);
         if (!cancelled) setLoaded({ key: loadKey, text: value, baseline: value, failed: false });
@@ -161,7 +155,55 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
     return () => {
       cancelled = true;
     };
-  }, [loadKey, meta.sessionId, refreshSession]);
+  }, [loadKey, meta.sessionId]);
+
+  // 「该资产有没有可用会话」用终端已连接资产集合这一个现成信号（决策 12）：
+  // 订阅它依赖的两个切片，才能在终端刚连上的那一刻拿到变化，而不是只在挂载时读一次。
+  const terminalTabData = useTerminalStore((s) => s.tabData);
+  const openTabs = useTabStore((s) => s.tabs);
+  const sessionAvailable = useMemo(
+    () => getTerminalActiveAssetIds().has(meta.assetId),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [meta.assetId, openTabs, terminalTabData]
+  );
+
+  const recheckRemote = useCallback(
+    async (isCancelled: () => boolean) => {
+      const pending = (recheckPromiseRef.current ??= refreshSession(meta.sessionId));
+      try {
+        const session = await pending;
+        if (isCancelled()) return;
+        recheckPromiseRef.current = null;
+        setRemoteUnconfirmed(false);
+        setOutcome({ key: loadKey, state: remoteCheckOutcome(session.state) });
+      } catch (error) {
+        if (isCancelled()) return;
+        recheckPromiseRef.current = null;
+        // 失败不是结论：远端状态仍然未确认（等下一个可用会话或用户手动重读），
+        // 失败原因按后端给出的分类原样呈现，本地改动一行不动。
+        setOutcome({ key: loadKey, state: { kind: "failed", message: errorMessage(error) } });
+      }
+    },
+    [loadKey, meta.sessionId, refreshSession]
+  );
+
+  // 不新建连接：一直等到该资产出现可用会话才自动重读（会话不可达时重读本就必然失败）。
+  useEffect(() => {
+    if (!remoteUnconfirmed || !sessionAvailable) return;
+    let cancelled = false;
+    void (async () => {
+      await recheckRemote(() => cancelled);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [recheckRemote, remoteUnconfirmed, sessionAvailable]);
+
+  const handleRecheckRemote = useCallback(() => {
+    // 手动重读要真的再问一次远端，而不是复用上一次已经完成的那个 promise。
+    recheckPromiseRef.current = null;
+    void recheckRemote(() => false);
+  }, [recheckRemote]);
 
   useEffect(() => {
     if (!tabId) return;
@@ -316,6 +358,8 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
   }, [forceCloseTab, tabId]);
 
   const saving = saveState.kind === "saving";
+  // 重读期间 store 会把 savingSessionId 指到本会话上：拿它当在途标记，不再另立一个。
+  const rechecking = remoteUnconfirmed && savingSessionId === meta.sessionId;
   const ownsCompare = compareResult?.primaryDraftSessionId === meta.sessionId;
   const ownsMerge = mergeResult?.primaryDraftSessionId === meta.sessionId;
 
@@ -358,6 +402,27 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
           </Button>
         </div>
       </div>
+
+      {remoteUnconfirmed && (
+        <div
+          className="flex flex-wrap items-center gap-2 border-b bg-muted/60 px-3 py-2 text-xs"
+          data-testid="remote-file-editor-unconfirmed"
+        >
+          <CircleHelp className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="font-medium text-foreground">{t("externalEdit.builtIn.unconfirmedTitle")}</span>
+          {/* 会话可用却仍未确认，说明刚失败过：原因由下面的失败横幅说清楚，这里不再重复一句。 */}
+          {rechecking ? (
+            <span className="text-muted-foreground">{t("externalEdit.builtIn.unconfirmedChecking")}</span>
+          ) : (
+            !sessionAvailable && (
+              <span className="text-muted-foreground">{t("externalEdit.builtIn.unconfirmedWaiting")}</span>
+            )
+          )}
+          <Button className="ml-auto" disabled={rechecking} onClick={handleRecheckRemote} size="xs" variant="outline">
+            {t("externalEdit.actions.refresh")}
+          </Button>
+        </div>
+      )}
 
       {saveState.kind === "conflict" && (
         <div

@@ -10,6 +10,7 @@ import { RemoteFileEditorTab } from "@/components/terminal/editor/RemoteFileEdit
 import { useAssetStore } from "@/stores/assetStore";
 import { useExternalEditStore } from "@/stores/externalEditStore";
 import { useLayoutStore } from "@/stores/layoutStore";
+import { useTerminalStore } from "@/stores/terminalStore";
 import { openRemoteFileEditorTab, useTabStore, type EditorTabMeta, type Tab } from "@/stores/tabStore";
 
 const {
@@ -193,6 +194,7 @@ describe("RemoteFileEditorTab", () => {
       pendingCloseTabId: null,
       restoredTabIds: [],
     });
+    useTerminalStore.setState({ tabData: {}, connections: {}, connectingAssetIds: new Set() });
     useExternalEditStore.setState({
       sessions: {},
       savingSessionId: null,
@@ -583,47 +585,151 @@ describe("RemoteFileEditorTab", () => {
     }
   });
 
-  it("re-reads the remote on restore and opens in conflict state when the baseline moved", async () => {
-    refreshSessionMock.mockResolvedValue(makeSession({ state: "conflict", dirty: true }));
+  // 恢复时的重读需要一个可用会话，而恢复那一刻通常没有（决策 12）：拿到结论之前
+  // tab 必须显式呈现「远端状态未确认」，而不是装成干净态，也不自己去新建连接。
+  function connectTerminalForAsset(assetId: number) {
+    act(() => {
+      useTabStore.setState((state) => ({
+        tabs: [
+          ...state.tabs,
+          {
+            id: "term-1",
+            type: "terminal",
+            label: "prod-web-1",
+            meta: {
+              type: "terminal",
+              assetId,
+              assetName: "prod-web-1",
+              assetIcon: "",
+              host: "10.0.0.1",
+              port: 22,
+              username: "root",
+            },
+          },
+        ],
+      }));
+      useTerminalStore.setState({
+        tabData: {
+          "term-1": {
+            splitTree: { type: "terminal", sessionId: "ssh-1" },
+            activePaneId: "ssh-1",
+            panes: { "ssh-1": { sessionId: "ssh-1", transport: "ssh", connected: true, connectedAt: 1 } },
+            directoryFollowMode: "off",
+          },
+        },
+      });
+    });
+  }
+
+  async function renderRestoredEditor() {
     useTabStore.setState({
       tabs: [editorTab()],
       activeTabId: "editor-sess-1",
       restoredTabIds: ["editor-sess-1"],
     });
-
     render(
       <StrictMode>
-        <RemoteFileEditorTab meta={editorMeta()} />
+        <EditorHost />
       </StrictMode>
     );
+    await screen.findByTestId("remote-file-editor-content");
+  }
+
+  it("presents a restored tab as unconfirmed and waits instead of opening a connection", async () => {
+    await renderRestoredEditor();
+
+    const banner = screen.getByTestId("remote-file-editor-unconfirmed");
+    expect(banner).toHaveTextContent("externalEdit.builtIn.unconfirmedTitle");
+    expect(banner).toHaveTextContent("externalEdit.builtIn.unconfirmedWaiting");
+    expect(refreshSessionMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("remote-file-editor-conflict")).not.toBeInTheDocument();
+  });
+
+  it("re-reads once the asset gains a connected session and opens the same four exits on conflict", async () => {
+    refreshSessionMock.mockResolvedValue(makeSession({ state: "conflict", dirty: true }));
+    await renderRestoredEditor();
+    typeInEditor("changed\n");
+    expect(screen.getByTestId("remote-file-editor-unconfirmed")).toBeInTheDocument();
+
+    connectTerminalForAsset(7);
 
     await waitFor(() => expect(refreshSessionMock).toHaveBeenCalledWith("sess-1"));
     expect(await screen.findByTestId("remote-file-editor-conflict")).toBeInTheDocument();
+    for (const exit of ["merge", "compare", "reread", "overwrite"]) {
+      expect(screen.getByText(`externalEdit.actions.${exit}`)).toBeInTheDocument();
+    }
+    // 结论已经拿到：不再是「未确认」，而本地改动原样留在编辑器里。
+    expect(screen.queryByTestId("remote-file-editor-unconfirmed")).not.toBeInTheDocument();
+    expect(screen.getByTestId("remote-file-editor-content")).toHaveTextContent("changed");
+    // 一次恢复只该问远端一次：StrictMode 的二次挂载不能变成第二次重读。
     expect(refreshSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops the unconfirmed presentation when the re-read finds the remote unchanged", async () => {
+    refreshSessionMock.mockResolvedValue(makeSession({ state: "clean" }));
+    await renderRestoredEditor();
+    expect(screen.getByTestId("remote-file-editor-unconfirmed")).toBeInTheDocument();
+
+    connectTerminalForAsset(7);
+
+    await waitFor(() => expect(screen.queryByTestId("remote-file-editor-unconfirmed")).not.toBeInTheDocument());
+    expect(screen.queryByTestId("remote-file-editor-conflict")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("remote-file-editor-error")).not.toBeInTheDocument();
+  });
+
+  it("re-reads on demand from the unconfirmed state", async () => {
+    refreshSessionMock.mockResolvedValue(makeSession({ state: "clean" }));
+    await renderRestoredEditor();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("externalEdit.actions.refresh"));
+    });
+
+    expect(refreshSessionMock).toHaveBeenCalledWith("sess-1");
+    await waitFor(() => expect(screen.queryByTestId("remote-file-editor-unconfirmed")).not.toBeInTheDocument());
   });
 
   // 真机复现（2026-09-09 运行时验证）：恢复时的重读被会话身份校验拒绝，
   // 审计里留下了 external_edit_refresh 失败，编辑器上却什么都没出现 —— 用户以为已同步。
-  it("surfaces a failed restore re-read instead of presenting the stale draft as clean", async () => {
-    refreshSessionMock.mockRejectedValue(
+  it("keeps a moved remote path apart from an unreachable session and stays unconfirmed on both", async () => {
+    refreshSessionMock.mockRejectedValueOnce(
       new Error("当前文件位置已变化，无法确认仍是同一份远程文件；请在同一资产中重新打开该远程文件后再继续同步")
     );
-    useTabStore.setState({
-      tabs: [editorTab()],
-      activeTabId: "editor-sess-1",
-      restoredTabIds: ["editor-sess-1"],
+    await renderRestoredEditor();
+    typeInEditor("changed\n");
+
+    connectTerminalForAsset(7);
+
+    expect(await screen.findByText(/当前文件位置已变化/)).toBeInTheDocument();
+    // 失败不是结论：远端状态仍然未确认，本地改动仍在。
+    expect(screen.getByTestId("remote-file-editor-unconfirmed")).toBeInTheDocument();
+    expect(screen.getByTestId("remote-file-editor-content")).toHaveTextContent("changed");
+    expect(refreshSessionMock).toHaveBeenCalledTimes(1);
+
+    refreshSessionMock.mockRejectedValueOnce(new Error("当前远程文件已不可访问；请重新连接该资产后重试"));
+    await act(async () => {
+      fireEvent.click(screen.getByText("externalEdit.actions.refresh"));
     });
 
-    render(
-      <StrictMode>
-        <RemoteFileEditorTab meta={editorMeta()} />
-      </StrictMode>
-    );
+    expect(await screen.findByText(/请重新连接该资产后重试/)).toBeInTheDocument();
+    expect(screen.queryByText(/当前文件位置已变化/)).not.toBeInTheDocument();
+    expect(screen.getByTestId("remote-file-editor-unconfirmed")).toBeInTheDocument();
+    expect(screen.getByTestId("remote-file-editor-content")).toHaveTextContent("changed");
+    expect(useTabStore.getState().unsavedTabIds).toContain("editor-sess-1");
+  });
 
-    await waitFor(() => expect(refreshSessionMock).toHaveBeenCalledWith("sess-1"));
-    expect(await screen.findByText(/当前文件位置已变化/)).toBeInTheDocument();
-    // 一次恢复只该问远端一次：StrictMode 的二次挂载不能变成第二次重读。
-    expect(refreshSessionMock).toHaveBeenCalledTimes(1);
+  it("routes a vanished remote to its own banner rather than the failure one", async () => {
+    refreshSessionMock.mockResolvedValue(makeSession({ state: "remote_missing", dirty: true }));
+    await renderRestoredEditor();
+    typeInEditor("changed\n");
+    expect(screen.getByTestId("remote-file-editor-unconfirmed")).toBeInTheDocument();
+
+    connectTerminalForAsset(7);
+
+    expect(await screen.findByTestId("remote-file-editor-remote-missing")).toBeInTheDocument();
+    expect(screen.queryByTestId("remote-file-editor-error")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("remote-file-editor-conflict")).not.toBeInTheDocument();
+    expect(screen.getByTestId("remote-file-editor-content")).toHaveTextContent("changed");
   });
 
   it("does not re-read the remote for a freshly opened editor tab", async () => {
